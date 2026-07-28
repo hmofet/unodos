@@ -141,6 +141,19 @@ static const char *ip4(const unsigned char *p, char *tmp)
     return tmp;
 }
 
+/* The NIC the stack is currently bound to, remembered as we bind it. The
+ * `iwl netup` hook below borrows the stack for a WiFi suite and has to hand it
+ * back to EXACTLY this adapter - re-probing a USB NIC to find it again is what
+ * brings its RX up dead (see the note in pc64_http.c pc64_net_up). */
+static uno_nic_t *g_bound_nic;
+static const unsigned char *g_bound_mac;
+
+static void bind_stack(uno_nic_t *nic, const unsigned char *mac)
+{
+    g_bound_nic = nic; g_bound_mac = mac;
+    net_init(nic, mac);
+}
+
 /* Returns 1 if the suite got a lease (link + DHCP), regardless of ping/DNS. */
 static int ip_suite(uno_nic_t *nic, const unsigned char *mac, const char *what,
                     int link_wait_ms)
@@ -151,7 +164,7 @@ static int ip_suite(uno_nic_t *nic, const unsigned char *mac, const char *what,
 
     uno_dbg_net_trace("%s: mac %02x:%02x:%02x:%02x:%02x:%02x", what,
                       mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-    net_init(nic, mac);
+    bind_stack(nic, mac);
 
     uno_dbg_check("net:link");
     t0 = uno_dbg_uptime_ms();
@@ -229,6 +242,77 @@ static int ip_suite(uno_nic_t *nic, const unsigned char *mac, const char *what,
                             what, net_dns_sent(), net_dns_rx(), net_dns_badid(), net_dns_neg());
       } }
     return 1;
+}
+
+/* ---- `iwl netup` hook: lend the IP stack to WiFi for one suite -------------
+ * The stack binds ONE nic, and on the WiFi rig that nic is the USB ethernet
+ * carrying the URC control channel - so a WiFi DHCP test means borrowing it.
+ * This runs the suite, writes a one-line summary into `out` (the caller stashes
+ * it: URC is down for the duration, so nothing logged here would survive), and
+ * unless `stay` is set hands the stack back to the adapter it came from, which
+ * is what lets the remote link redial afterwards.
+ *
+ * Declared weak in iwlwifi.c, so the driver links in production builds where
+ * this harness is not compiled in at all. */
+int pc64_wifi_ipsuite(uno_nic_t *nic, const unsigned char *mac, int stay,
+                      char *out, int cap);
+int pc64_wifi_ipsuite(uno_nic_t *nic, const unsigned char *mac, int stay,
+                      char *out, int cap)
+{
+    uno_nic_t *back = g_bound_nic;
+    const unsigned char *backmac = g_bound_mac;
+    unsigned long long t0;
+    char t[16];
+    int n = 0, i, pings = 0, leased;
+    unsigned char a[4] = { 0, 0, 0, 0 };
+
+    if (!nic || !mac || !out || cap < 96) return -1;
+    uno_dbg_net_trace("wifi-ip: borrowing the IP stack for a WiFi suite "
+                      "(URC is down until it is handed back)");
+    bind_stack(nic, mac);
+    net_dhcp_start();
+    t0 = uno_dbg_uptime_ms();
+    while (!net_dhcp_done() && (int)(uno_dbg_uptime_ms() - t0) < 12000) pump(20);
+    leased = net_dhcp_done();
+    n += snprintf(out + n, (size_t)(cap - n), "wifi: dhcp=%s", leased ? "LEASE" : "NONE");
+    if (leased) {
+        n += snprintf(out + n, (size_t)(cap - n), " ip=%s", ip4(net_ip(), t));
+        n += snprintf(out + n, (size_t)(cap - n), " gw=%s", ip4(net_gw(), t));
+        n += snprintf(out + n, (size_t)(cap - n), " dns=%s", ip4(net_dns(), t));
+        for (i = 0; i < 3; i++) {
+            t0 = uno_dbg_uptime_ms();
+            net_ping(net_gw());
+            while (!net_ping_replied() && (int)(uno_dbg_uptime_ms() - t0) < 2000) pump(10);
+            if (net_ping_replied()) pings++;
+        }
+        n += snprintf(out + n, (size_t)(cap - n), " ping=%d/3", pings);
+        if (net_dns_query("api.anthropic.com", a))
+            n += snprintf(out + n, (size_t)(cap - n), " dnsq=%s", ip4(a, t));
+        else
+            n += snprintf(out + n, (size_t)(cap - n), " dnsq=FAIL");
+    }
+    n += snprintf(out + n, (size_t)(cap - n), " [tx=%lu rx=%lu arp=%lu ip=%lu]",
+                  (unsigned long)net_tx_frames(), (unsigned long)net_rx_frames(),
+                  (unsigned long)net_rx_arp(),    (unsigned long)net_rx_ip());
+    if (stay) {
+        n += snprintf(out + n, (size_t)(cap - n), "; stack LEFT on WiFi");
+        uno_dbg_net_trace("wifi-ip: %s", out);
+        return n;
+    }
+    /* hand the stack back to the management adapter and re-lease, so the URC
+     * link's medium_up() (pc64_net_up -> net_dhcp_done) goes true and it redials */
+    if (back && backmac) {
+        bind_stack(back, backmac);
+        net_dhcp_start();
+        t0 = uno_dbg_uptime_ms();
+        while (!net_dhcp_done() && (int)(uno_dbg_uptime_ms() - t0) < 15000) pump(20);
+        n += snprintf(out + n, (size_t)(cap - n), "; mgmt nic back=%s",
+                      net_dhcp_done() ? ip4(net_ip(), t) : "NO LEASE");
+    } else {
+        n += snprintf(out + n, (size_t)(cap - n), "; no mgmt nic remembered - stack left on WiFi");
+    }
+    uno_dbg_net_trace("wifi-ip: %s", out);
+    return n;
 }
 
 /* ---- inventory ------------------------------------------------------------ */

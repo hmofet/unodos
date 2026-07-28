@@ -181,9 +181,18 @@ static void net_step(void)
     }
 }
 
+static void wifi_do_scan(void);      /* fwd: the deferred halves of the WiFi UI */
+static void wifi_do_join(void);
+static void repaint(void);
+
 static void network_tick(void)
 {
     int i;
+    /* the deferred halves of the WiFi UI: the pane with "Scanning..." /
+     * "Joining..." on it has been painted by now, so the blocking driver call
+     * can run without the screen lying about what the machine is doing */
+    if (gScanPend) { wifi_do_scan(); repaint(); return; }
+    if (gJoinPend) { wifi_do_join(); repaint(); return; }
     if (gStep == S_NONIC || gStep == S_DONE) { net_poll(); return; }
     for (i = 0; i < 4; i++) net_poll();      /* pump the stack */
     net_step();
@@ -204,6 +213,42 @@ static void row(short x, short y, const char *label, int res, const char *extra)
 static UiBtn gNetBtn;                       /* mouse-reachable "Re-run tests" */
 static UiBtn gWifiBtn;                       /* "Connect WiFi" (Intel iwlwifi) */
 
+/* ---- WiFi join UI --------------------------------------------------------
+ * Pick a network from a live scan, type its password, join. Three panes in the
+ * WiFi block: the status line (default), the scan list, and the password
+ * prompt. Scanning and joining take seconds of blocking driver work, so both
+ * are deferred to the next tick - the pane repaints first, then the work runs,
+ * which is what makes "Scanning..." and "Joining..." actually appear. */
+#define AP_MAX 10
+enum { W_STATUS = 0, W_LIST, W_PASS };
+static int      gWMode, gApN, gApSel, gScanPend, gJoinPend;
+static iwl_ap_t gAps[AP_MAX];
+static char     gPsk[72];
+static int      gPskLen;
+static char     gWifiMsg[80];
+static UiBtn    gScanBtn, gApBtn[AP_MAX], gJoinBtn, gBackBtn;
+
+static void fmt_i(int v, char *o)               /* signed decimal */
+{
+    if (v < 0) { o[0] = '-'; fmt_u((unsigned)(-v), o + 1); }
+    else fmt_u((unsigned)v, o);
+}
+
+/* one scan-result row: "NimmuNet            -54dBm ch11" */
+static void ap_row(short x, short y, const iwl_ap_t *a, Boolean sel)
+{
+    char line[64], num[12];
+    int i = 0, j;
+    for (j = 0; a->ssid[j] && i < 24; j++) line[i++] = a->ssid[j];
+    while (i < 25) line[i++] = ' ';
+    if (a->rssi) { fmt_i(a->rssi, num); for (j = 0; num[j]; j++) line[i++] = num[j];
+                   line[i++] = 'd'; line[i++] = 'B'; line[i++] = 'm'; }
+    line[i++] = ' '; line[i++] = 'c'; line[i++] = 'h';
+    fmt_u(a->chan, num); for (j = 0; num[j]; j++) line[i++] = num[j];
+    line[i] = 0;
+    text_at(x, y, line, sel ? C_CYAN : C_WHITE, C_BLUE, sel);
+}
+
 /* draw the WiFi status block (Intel / Realtek / Marvell); returns the y past it */
 static short wifi_draw(short x, short y)
 {
@@ -217,9 +262,49 @@ static short wifi_draw(short x, short y)
     if (iwl_present())          iwl_status_str(gWifiStat, sizeof gWifiStat);
     else if (rtwifi_present())  rtwifi_status_str(gWifiStat, sizeof gWifiStat);
     else                        mrvlwifi_status_str(gWifiStat, sizeof gWifiStat);
-    text_at(x, y, gWifiStat[0] ? gWifiStat : "Detected - press Connect to join.",
-            C_CYAN, C_BLUE, false); y += 18;
-    gWifiBtn.x = x; gWifiBtn.y = y; gWifiBtn.w = 110; gWifiBtn.h = 16;
+
+    if (gWMode == W_LIST) {
+        int i;
+        text_at(x, y, gScanPend ? "Scanning for networks..." :
+                gApN ? "Pick a network (click, or 1-9):" : "No networks found.",
+                C_CYAN, C_BLUE, false);
+        y += 16;
+        for (i = 0; i < gApN && i < AP_MAX; i++) {
+            gApBtn[i].x = x; gApBtn[i].y = (short)(y - 10);
+            gApBtn[i].w = 300; gApBtn[i].h = 13;
+            ap_row(x, y, &gAps[i], (Boolean)(i == gApSel));
+            y += 13;
+        }
+        y += 6;
+        gBackBtn.x = x; gBackBtn.y = y; gBackBtn.w = 60; gBackBtn.h = 16;
+        ui_button(&gBackBtn, "Back", false);
+        gScanBtn.x = (short)(x + 70); gScanBtn.y = y; gScanBtn.w = 70; gScanBtn.h = 16;
+        ui_button(&gScanBtn, "Re-scan", false);
+        return (short)(y + 22);
+    }
+    if (gWMode == W_PASS) {
+        char mask[40];
+        int i, n = gPskLen > 32 ? 32 : gPskLen;
+        text_at(x, y, "Password for:", C_WHITE, C_BLUE, false);
+        text_at((short)(x + 100), y, gAps[gApSel].ssid, C_CYAN, C_BLUE, true); y += 16;
+        for (i = 0; i < n; i++) mask[i] = '*';
+        mask[n] = '_'; mask[n + 1] = 0;
+        text_at(x, y, mask, C_CYAN, C_BLUE, false); y += 16;
+        text_at(x, y, gJoinPend ? "Joining..." : "Type the passphrase, Enter to join, Esc to cancel.",
+                C_WHITE, C_BLUE, false); y += 18;
+        gJoinBtn.x = x; gJoinBtn.y = y; gJoinBtn.w = 60; gJoinBtn.h = 16;
+        ui_button(&gJoinBtn, "Join", false);
+        gBackBtn.x = (short)(x + 70); gBackBtn.y = y; gBackBtn.w = 70; gBackBtn.h = 16;
+        ui_button(&gBackBtn, "Cancel", false);
+        return (short)(y + 22);
+    }
+    text_at(x, y, gWifiStat[0] ? gWifiStat : "Detected - press Scan to find networks.",
+            C_CYAN, C_BLUE, false); y += 16;
+    if (gWifiMsg[0]) { text_at(x, y, gWifiMsg, C_MAG, C_BLUE, false); y += 16; }
+    else y += 2;
+    gScanBtn.x = x; gScanBtn.y = y; gScanBtn.w = 110; gScanBtn.h = 16;
+    ui_button(&gScanBtn, "Scan networks", false);
+    gWifiBtn.x = (short)(x + 120); gWifiBtn.y = y; gWifiBtn.w = 110; gWifiBtn.h = 16;
     ui_button(&gWifiBtn, "Connect WiFi", false);
     return (short)(y + 20);
 }
@@ -262,21 +347,109 @@ static void wifi_connect(void)
     else if (mrvlwifi_present()){ mrvlwifi_nic(); mrvlwifi_status_str(gWifiStat, sizeof gWifiStat); }
 }
 
+static void repaint(void)
+{
+    UnoWin *w = find_app_window(APP_NETWORK);
+    if (w) draw_window(w);
+}
+
+/* The deferred halves of the two blocking driver calls (see wifi_draw). */
+static void wifi_do_scan(void)
+{
+    gApN = iwl_scan_aps(gAps, AP_MAX);
+    gApSel = 0;
+    gScanPend = 0;
+    if (!gApN) strcpy(gWifiMsg, "Scan found no networks.");
+}
+
+static void wifi_do_join(void)
+{
+    int rc;
+    gPsk[gPskLen] = 0;
+    rc = iwl_join_ssid(gAps[gApSel].ssid, gPsk);
+    gJoinPend = 0;
+    gWMode = W_STATUS;
+    iwl_status_str(gWifiStat, sizeof gWifiStat);
+    if (rc == 0) {
+        /* Joined: give the IP stack to WiFi and lease, so the user sees an
+         * address rather than just "associated". This is the same single-nic
+         * stack the wired test uses, so it takes the binding over. */
+        uno_nic_t *nic = iwl_nic();
+        if (nic) {
+            int i;
+            net_init(nic, iwl_mac());
+            net_dhcp_start();
+            for (i = 0; i < 2400 && !net_dhcp_done(); i++) net_poll();
+            if (net_dhcp_done()) {
+                char ip[20];
+                fmt_ip(ip, net_ip());
+                strcpy(gWifiMsg, "Joined - IP ");
+                strcat(gWifiMsg, ip);
+                gRes[0] = R_OK; gRes[4] = R_OK; fmt_ip(gLease, net_ip());
+                gStep = S_DONE;
+            } else strcpy(gWifiMsg, "Joined, but no DHCP lease yet.");
+        }
+    } else {
+        strcpy(gWifiMsg, "Join failed - check the password and try again.");
+    }
+    { int i; for (i = 0; i < (int)sizeof gPsk; i++) gPsk[i] = 0; }
+    gPskLen = 0;
+}
+
+static void wifi_start_scan(void)
+{
+    if (!iwl_present()) { wifi_connect(); return; }   /* other cards: legacy path */
+    gWMode = W_LIST; gScanPend = 1; gApN = 0; gWifiMsg[0] = 0;
+}
+
 static void network_click(UnoWin *w, Point p)
 {
-    if (ui_hit(&gNetBtn, p)) { net_reset(); gStarted = 1; draw_window(w); }
-    else if (ui_hit(&gWifiBtn, p)) { wifi_connect(); draw_window(w); }
+    if (ui_hit(&gNetBtn, p)) { net_reset(); gStarted = 1; draw_window(w); return; }
+    if (gWMode == W_LIST) {
+        int i;
+        for (i = 0; i < gApN && i < AP_MAX; i++)
+            if (ui_hit(&gApBtn[i], p)) {
+                gApSel = i; gWMode = W_PASS; gPskLen = 0; gPsk[0] = 0;
+                draw_window(w); return;
+            }
+        if (ui_hit(&gScanBtn, p)) { gScanPend = 1; draw_window(w); return; }
+        if (ui_hit(&gBackBtn, p)) { gWMode = W_STATUS; draw_window(w); return; }
+        return;
+    }
+    if (gWMode == W_PASS) {
+        if (ui_hit(&gJoinBtn, p)) { gJoinPend = 1; draw_window(w); return; }
+        if (ui_hit(&gBackBtn, p)) { gWMode = W_LIST; draw_window(w); return; }
+        return;
+    }
+    if (ui_hit(&gScanBtn, p)) { wifi_start_scan(); draw_window(w); return; }
+    if (ui_hit(&gWifiBtn, p)) { wifi_connect(); draw_window(w); return; }
 }
 
 static Boolean network_key(char ch, short code, Boolean cmd)
 {
     (void)code; (void)cmd;
-    if (ch == 'r' || ch == 'R') { net_reset(); gStarted = 1;
-        { UnoWin *w = find_app_window(APP_NETWORK); if (w) draw_window(w); }
-        return true; }
-    if (ch == 'w' || ch == 'W') { wifi_connect();
-        { UnoWin *w = find_app_window(APP_NETWORK); if (w) draw_window(w); }
-        return true; }
+    /* the password field owns the keyboard while it is up */
+    if (gWMode == W_PASS && !gJoinPend) {
+        if (ch == 13 || ch == 3)  { gJoinPend = 1; repaint(); return true; }
+        if (ch == 27)             { gWMode = W_LIST; repaint(); return true; }
+        if (ch == 8 || ch == 127) { if (gPskLen) gPsk[--gPskLen] = 0; repaint(); return true; }
+        if (ch >= 32 && ch < 127 && gPskLen < (int)sizeof gPsk - 2) {
+            gPsk[gPskLen++] = ch; gPsk[gPskLen] = 0; repaint(); return true;
+        }
+        return true;                       /* swallow everything else while typing */
+    }
+    if (gWMode == W_LIST) {
+        if (ch >= '1' && ch <= '9' && (ch - '1') < gApN) {
+            gApSel = ch - '1'; gWMode = W_PASS; gPskLen = 0; gPsk[0] = 0;
+            repaint(); return true;
+        }
+        if (ch == 27) { gWMode = W_STATUS; repaint(); return true; }
+        if (ch == 's' || ch == 'S') { gScanPend = 1; repaint(); return true; }
+        return false;
+    }
+    if (ch == 'r' || ch == 'R') { net_reset(); gStarted = 1; repaint(); return true; }
+    if (ch == 'w' || ch == 'W') { wifi_connect(); repaint(); return true; }
+    if (ch == 's' || ch == 'S') { wifi_start_scan(); repaint(); return true; }
     return false;
 }
 
