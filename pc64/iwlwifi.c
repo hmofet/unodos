@@ -2778,8 +2778,15 @@ static void handle_eapol(const u8 *eapol, int len)
     int r;
     if (len <= 0) return;
     r = wpa_sm_rx_eapol(&g_wpa, eapol, len, reply, sizeof reply);
-    uno_dbg_net_trace("wifi: EAPOL in (%d bytes, type=%02x desc=%02x) -> sm state %d, reply %d",
-                      len, len > 1 ? eapol[1] : 0, len > 4 ? eapol[4] : 0, g_wpa.state, r);
+    /* key_info (big-endian, at EAPOL offset 5) says which message this is:
+     * bit 3 PAIRWISE, bit 6 INSTALL, bit 7 ACK, bit 8 MIC, bit 12 ENCRYPTED.
+     * 1/4 = ACK, no MIC.  3/4 = ACK|MIC(|ENCRYPTED).  Without it a retried 1/4
+     * and a MIC-failing 3/4 look identical in the log. */
+    uno_dbg_net_trace("wifi: EAPOL in (%d bytes, type=%02x desc=%02x ki=%04x %s) -> state %d, reply %d",
+                      len, len > 1 ? eapol[1] : 0, len > 4 ? eapol[4] : 0,
+                      len > 6 ? ((eapol[5] << 8) | eapol[6]) : 0,
+                      (len > 6 && (eapol[5] & 0x01)) ? "3/4" : "1/4",
+                      g_wpa.state, r);
     if (r <= 0) return;
     /* TX the EAPOL reply as a data frame (in the clear, high priority) before
        installing keys */
@@ -3197,19 +3204,31 @@ static int assoc_setup(void)
 }
 
 /* Tell the fw we are now associated with aid, and arm the WPA2 supplicant. */
-static void assoc_mark_associated(int aid)
+/* Arm the WPA2 supplicant. MUST run BEFORE the association request goes out:
+ * the AP sends EAPOL 1/4 the instant it has sent the association response, so
+ * message 1 is handled inside mvm_assoc()'s own RX wait. Arming afterwards
+ * re-ran wpa_sm_init(), which reset the state machine and generated a FRESH
+ * SNonce - invalidating the 2/4 we had just transmitted, so the AP saw a bad
+ * MIC and deauthed us (metal, 2026-07-28). */
+static void wpa_arm(void)
 {
     u8 pmk[32];
+    wpa_pmk_from_psk(g_cfg_ssid, (int)strlen(g_cfg_ssid), g_cfg_psk, pmk);
+    wpa_sm_init(&g_wpa, pmk, g_mac, g_bssid);
+    g_wpa_active = 1; g_keys_installed = 0;
+    strncpy(g_ssid_str, g_cfg_ssid, sizeof g_ssid_str - 1);
+    uno_dbg_net_trace("wifi: WPA2 supplicant armed for \"%s\" (PMK derived)", g_cfg_ssid);
+}
+
+/* Tell the fw we are associated. Deliberately does NOT touch the supplicant. */
+static void assoc_mark_associated(int aid)
+{
     if (fw_has_mld_api()) {
         mld_mac_cfg(2 /*MODIFY*/, 1 /*assoc*/, aid);
         mld_sta_cfg(g_bssid, aid, 0 /*not authorized until the 4-way ends*/);
     } else {
         mvm_mac_ctxt(g_bssid, 1, aid, 2 /*MODIFY*/);
     }
-    wpa_pmk_from_psk(g_cfg_ssid, (int)strlen(g_cfg_ssid), g_cfg_psk, pmk);
-    wpa_sm_init(&g_wpa, pmk, g_mac, g_bssid);
-    g_wpa_active = 1; g_keys_installed = 0;
-    strncpy(g_ssid_str, g_cfg_ssid, sizeof g_ssid_str - 1);
 }
 
 /* Full connect on a stock boot: scan -> pick the configured SSID -> mac/link/sta
@@ -3243,6 +3262,7 @@ static int find_and_join(void)
     r = mvm_auth();
     uno_dbg_net_trace("wifi: join: auth -> %d (0=ok, >0 AP status, -1 no resp)", r);
     if (r != 0) return -1;
+    wpa_arm();                  /* before the request: EAPOL 1/4 lands inside mvm_assoc() */
     r = mvm_assoc();
     uno_dbg_net_trace("wifi: join: assoc -> %d (>=0 AID)", r);
     if (r < 0) return -1;
@@ -3785,7 +3805,7 @@ static int mld_steps(int n, char *out, int cap)
         uno_dbg_net_trace("wifi: mld8: auth -> %d", r);
         strcpy(out, r == 0 ? "ok mld8: Open-System auth accepted"
                            : (r < 0 ? "err mld8: no auth response" : "err mld8: AP rejected auth")); break; }
-    case 9: { int r = mvm_assoc();
+    case 9: { int r; wpa_arm(); r = mvm_assoc();
         uno_dbg_net_trace("wifi: mld9: assoc -> %d", r);
         if (r >= 0) {
             assoc_mark_associated(r);
@@ -3971,6 +3991,7 @@ int iwl_dbg_cmd(const char *line, char *out, int cap)
     if (!strncmp(line, "assoc", 5)) {
         int r;
         if (!g_bar || !g_alive || g_data_qid < 0) { strcpy(out, "err run iwl join + auth first"); return (int)strlen(out); }
+        wpa_arm();              /* before the request: EAPOL 1/4 lands inside mvm_assoc() */
         r = mvm_assoc();
         uno_dbg_net_trace("wifi: assoc -> %d (>=0 AID, <0 fail)", r);
         if (r >= 0) {
