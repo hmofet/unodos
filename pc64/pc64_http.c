@@ -51,7 +51,13 @@ static int net_dhcp_after_link(uno_nic_t *nic)
      * (and the REQUEST) every ~1.5 s, so a lost OFFER/ACK recovers. Wait ~9 s. */
     net_dhcp_start();
     for (i = 0; i < 1800 && !net_dhcp_done(); i++) { net_poll(); uno_pc64_delay_ms(5); }
-    return 1;
+    /* Report whether we actually LEASED, not merely that we tried. This used to
+     * `return 1` unconditionally, so pc64_net_up() claimed success on a NIC with
+     * link but no address: callers sailed past their "no network" branch and
+     * failed later at the first DNS lookup instead, which is what made the
+     * ZimaBlade's dead link present itself as "DNS lookup failed" with no lease
+     * behind it (2026-07-27). */
+    return net_dhcp_done();
 }
 
 int pc64_net_up(void)
@@ -59,7 +65,13 @@ int pc64_net_up(void)
     uno_nic_t *nic, *fb = 0;
     const unsigned char *fbmac = 0;
     int i, nw = (int)(sizeof g_wired / sizeof g_wired[0]);
-    if (g_net_inited) return net_link() || 1;   /* already up (link may flap) */
+    /* Already bound. Report the LEASE, not just that we bound something: this
+     * used to `return net_link() || 1`, i.e. 1 unconditionally, which put the
+     * same optimistic answer back for every caller after the first and undid
+     * the honest result from net_dhcp_after_link below. Still latched on
+     * g_net_inited so we never re-net_init a bound adapter (re-initialising a
+     * USB NIC brings its RX up dead - see the note above). */
+    if (g_net_inited) return net_dhcp_done();
 
     /* Reuse a stack that already holds a DHCP lease. The boot eth TEST brings
      * the ASIX up and leases with WORKING RX; re-net_init'ing it here starts a
@@ -121,9 +133,19 @@ static int net_try_lease(uno_nic_t *nic, const unsigned char *mac, int *budget)
     int i;
     if (*budget <= 0) return 0;
     net_init(nic, mac);
-    /* wait for link (autoneg) - up to ~1 s, but never past the shared budget */
-    if (nic->link)
-        for (i = 0; i < 200 && *budget > 0 && !nic->link(nic->ctx); i++) { uno_pc64_delay_ms(5); *budget -= 5; }
+    /* Wait for link (autoneg) - up to ~3 s, never past the shared budget. The
+     * old ~1 s cap was below what gigabit autoneg actually takes (2-5 s is
+     * normal), so a perfectly good wired NIC could be declared linkless and
+     * skipped. pc64_net_up's net_dhcp_after_link already waits ~3 s; the eager
+     * boot path should not be stingier than the lazy one it runs ahead of.
+     *
+     * And if the link never comes up, return NOW instead of spending the DHCP
+     * window broadcasting into a dead PHY - that hands the unused budget to the
+     * next device rather than burning it here. */
+    if (nic->link) {
+        for (i = 0; i < 600 && *budget > 0 && !nic->link(nic->ctx); i++) { uno_pc64_delay_ms(5); *budget -= 5; }
+        if (!nic->link(nic->ctx)) return 0;
+    }
     /* DHCP - up to ~3 s; net_poll retransmits DISCOVER/REQUEST as it pumps */
     net_dhcp_start();
     for (i = 0; i < 600 && *budget > 0 && !net_dhcp_done(); i++) { net_poll(); uno_pc64_delay_ms(5); *budget -= 5; }
@@ -269,7 +291,10 @@ static int http_get_once(const char *url, char *body, int bodymax,
     if (path[0] == 0) strcpy(path, "/");
     if (host[0] == 0) { if (statusmax) strncpy(status,"Empty host",statusmax-1); return -2; }
 
-    if (!pc64_net_up()) { if (statusmax) strncpy(status,"No network link (no NIC, or WiFi not joined - check WIFI.CFG + firmware)",statusmax-1); return -3; }
+    /* now that pc64_net_up() reports the lease rather than just the bind, this
+     * branch also catches "NIC up, link up, but no address", so say so - the
+     * old wording blamed a missing NIC for what was usually a missing lease */
+    if (!pc64_net_up()) { if (statusmax) strncpy(status,"No network (no NIC, no link, or no DHCP lease - check the cable, or WIFI.CFG + firmware)",statusmax-1); return -3; }
 
     /* resolve */
     if (!is_ipv4(host, ip)) {
