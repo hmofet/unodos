@@ -1869,9 +1869,51 @@ static void reflow(void)
 void uno_screen_changed(void) { if (UI.nwin) reflow(); }
 
 /* ---- calendar date picker (a popup over the unoui calendar core) --------- */
+/* The calendar core offers prev/next MONTH only, so correcting the year meant
+ * twelve clicks per year - and fourteen years of them on a box whose CMOS
+ * battery is dead. This adds a year strip BELOW the calendar rather than
+ * extending unoui_calendar_hit: the core owns its own rect and hit regions, so
+ * drawing outside them is how to add this without reaching into another
+ * subsystem's layout. */
+#define CAL_YEARH 22
+
+static int cal_in(unoui_rect q, int x, int y)
+{ return x >= q.x && y >= q.y && x < q.x + q.w && y < q.y + q.h; }
+
+static void cal_year_rects(unoui_rect r, unoui_rect *m10, unoui_rect *m1,
+                           unoui_rect *p1, unoui_rect *p10)
+{
+    int y = r.y + r.h - CAL_YEARH, bw = 30, cx = r.x + r.w / 2, h = CAL_YEARH - 4;
+    m10->x = cx - 2*bw - 26; m10->y = y; m10->w = bw; m10->h = h;
+    m1->x  = cx - bw - 26;   m1->y  = y; m1->w  = bw; m1->h  = h;
+    p1->x  = cx + 26;        p1->y  = y; p1->w  = bw; p1->h  = h;
+    p10->x = cx + bw + 26;   p10->y = y; p10->w = bw; p10->h = h;
+}
+
 static void cal_draw(struct unoui_widget *w, unoui_rect r, void *ctx)
-{ (void)w; (void)ctx; g_cal_rect = r;
-  unoui_calendar_draw(UI.theme, r, g_cal_y, g_cal_mo, g_cal_sel); }
+{
+    unoui_rect cal = r, b[4];
+    const char *lab[4];
+    char buf[8];
+    int i, v;
+    (void)w; (void)ctx;
+    cal.h -= CAL_YEARH;
+    g_cal_rect = cal;                       /* the core's rect excludes the strip */
+    unoui_calendar_draw(UI.theme, cal, g_cal_y, g_cal_mo, g_cal_sel);
+
+    cal_year_rects(r, &b[0], &b[1], &b[2], &b[3]);
+    lab[0] = "-10"; lab[1] = "-1"; lab[2] = "+1"; lab[3] = "+10";
+    for (i = 0; i < 4; i++) {
+        fb_fill_rect(b[i].x, b[i].y, b[i].w, b[i].h, UI.theme->pal.face);
+        fb_frame_rect(b[i].x, b[i].y, b[i].w, b[i].h, UI.theme->pal.text_dim);
+        fb_text(b[i].x + (b[i].w - fb_text_w(lab[i])) / 2,
+                b[i].y + (b[i].h - fb_text_h()) / 2, lab[i], UI.theme->pal.text, -1);
+    }
+    v = g_cal_y; buf[4] = 0;
+    for (i = 3; i >= 0; i--) { buf[i] = (char)('0' + v % 10); v /= 10; }
+    fb_text(r.x + r.w/2 - fb_text_w(buf)/2,
+            b[1].y + (b[1].h - fb_text_h())/2, buf, UI.theme->pal.text, -1);
+}
 
 static void cal_apply_and_close(void)
 {
@@ -1888,7 +1930,24 @@ static void cal_apply_and_close(void)
 static int cal_event(struct unoui_widget *w, const void *ev, void *ctx)
 {
     const unoui_event *e = (const unoui_event *)ev; (void)w; (void)ctx;
+    /* Keyboard is the fast path: Up/Down step a YEAR, Left/Right a month, so a
+     * badly wrong clock is a few keypresses instead of a click marathon. */
+    if (e->kind == UI_EV_KEY) {
+        if (e->key == UI_KEY_UP)    { g_cal_y++; g_dirty = 1; return 1; }
+        if (e->key == UI_KEY_DOWN)  { if (g_cal_y > 1970) g_cal_y--; g_dirty = 1; return 1; }
+        if (e->key == UI_KEY_RIGHT) { if (++g_cal_mo > 12) { g_cal_mo = 1; g_cal_y++; } g_dirty = 1; return 1; }
+        if (e->key == UI_KEY_LEFT)  { if (--g_cal_mo < 1) { g_cal_mo = 12; g_cal_y--; } g_dirty = 1; return 1; }
+        if (e->key == UI_KEY_ENTER) { cal_apply_and_close(); return 1; }
+        return 0;
+    }
     if (e->kind != UI_EV_MOUSE_DOWN) return 0;
+    {   unoui_rect full = g_cal_rect, b[4];
+        full.h += CAL_YEARH;                  /* g_cal_rect excludes the strip */
+        cal_year_rects(full, &b[0], &b[1], &b[2], &b[3]);
+        if (cal_in(b[0], e->x, e->y)) { g_cal_y = g_cal_y > 1980 ? g_cal_y - 10 : 1970; g_dirty = 1; return 1; }
+        if (cal_in(b[1], e->x, e->y)) { if (g_cal_y > 1970) g_cal_y--; g_dirty = 1; return 1; }
+        if (cal_in(b[2], e->x, e->y)) { g_cal_y++; g_dirty = 1; return 1; }
+        if (cal_in(b[3], e->x, e->y)) { g_cal_y += 10; g_dirty = 1; return 1; } }
     { int hit = unoui_calendar_hit(g_cal_rect, g_cal_y, g_cal_mo, e->x, e->y);
       if (hit == UI_CAL_PREV) { if (--g_cal_mo < 1) { g_cal_mo = 12; g_cal_y--; } g_dirty = 1; return 1; }
       if (hit == UI_CAL_NEXT) { if (++g_cal_mo > 12) { g_cal_mo = 1;  g_cal_y++; } g_dirty = 1; return 1; }
@@ -1900,7 +1959,7 @@ static unoui_canvas g_cal_cv = { cal_draw, cal_event, 0 };
 static void open_calendar(void)
 {
     const unoui_metrics *m = &UI.theme->m;
-    int cw = 210, chh = 176, yy = 2026, mo = 1, dd = 1, hh = 0, mi = 0;
+    int cw = 210, chh = 176 + CAL_YEARH, yy = 2026, mo = 1, dd = 1, hh = 0, mi = 0;
     if (g_cal_open) { remove_win(&g_cal); g_cal_open = 0; }
     uno_pc64_time(&yy, &mo, &dd, &hh, &mi, 0);
     g_cal_y = yy; g_cal_mo = mo; g_cal_sel = dd;
