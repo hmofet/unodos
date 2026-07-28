@@ -1,7 +1,9 @@
 # Intel AX201 WiFi (F12) bring-up — handoff
 
-Status: 2026-07-27 (round 23 - the link-based association API is IMPLEMENTED on
-branch `iwlwifi-linkapi`; both builds green, METAL-PENDING).
+Status: 2026-07-27 (round 23 - **the airtime wall is DOWN**. SESSION_PROTECTION
+is accepted on metal, the radio is parked on-channel and RX works. The link API
+is ported and metal-verified end to end. New blocker: TX has never actually
+transmitted - the auth frame draws no TX-status notification).
 Target: Lenovo ThinkPad X13 Yoga, Intel **AX201** (CNVi, gen2 22000-family,
 QuZ-a0-hr-b0). Firmware `QuZ-a0-hr-b0-77.ucode`. Ethernet is fully solved; this
 is the WiFi tail.
@@ -58,11 +60,100 @@ one-command-per-round-trip rationale — a wedge eats in-flight URC log frames):
 MODIFY(active), `5` STA_CONFIG, `6` txq_alloc, `7` SESSION_PROTECTION, `8` auth,
 `9` assoc. Run `iwl scan` first so steps 3-5 have a real BSSID/channel.
 
-**Metal procedure for this branch:** `iwl rerun` → `iwl mvm 1`/`2`/`4` → `iwl
-scan` → `iwl mld 1`..`9` (or the one-shot `iwl join` → `iwl auth` → `iwl assoc`
-→ `iwl eapol`), `iwl fwerr` after any assert. The decisive observation is
-**step 7**: SESSION_PROTECTION should now return `csr2808=0` instead of the
-LMAC-FATAL `data1=0x400`, because the link it references finally exists.
+### METAL RESULT — SESSION_PROTECTION is ACCEPTED; the cause was RLC_CONFIG_CMD
+
+Driven live over URC. Every command is now accepted (`csr2808=00000000`):
+
+| step | command | result |
+|---|---|---|
+| `mld 1` | `MAC_CONFIG_CMD` 52 B | ok |
+| `mld 2` | `LINK_CONFIG_CMD` ADD 208 B | ok |
+| `mld 3` | `PHY_CONTEXT_CMD` + **`RLC_CONFIG_CMD`** | ok |
+| `mld 4` | `LINK_CONFIG` phy-bind **then** activate | ok |
+| `mld 5` | `STA_CONFIG_CMD` 96 B | ok |
+| `mld 6` | `SCD_QUEUE_CONFIG` | qid=1 |
+| `mld 7` | **`SESSION_PROTECTION_CMD`** | **ok — `csr2808=0`** |
+
+**The fix was `RLC_CONFIG_CMD` (DATA_PATH 0x08, 32 B, cmd ver 2 in the wide
+header), sent immediately after every `PHY_CONTEXT_CMD`.** It binds the radio
+chain config to the PHY context - the layer between "a PHY context exists" and
+"the LMAC can schedule on it", which is exactly where the `data1=0x400` assert
+sat. Proof it is the airtime fix, not a coincidence: auth without any session
+protection saw **0 RX packets in 800 ms** before RLC and **20 RX packets** after.
+The radio was never on-channel; now it is.
+
+**How it was found (method note).** Round 22 summarised the working Linux trace
+as per-command COUNTS. Reading the same file's **ordered** sequence showed what
+really precedes the first `0x03.0x05`: `0x01.0x08` PHY_CONTEXT is immediately
+followed by `0x05.0x08` RLC_CONFIG, both times. The artifact had the answer for
+five rounds; nobody had read it in order.
+
+Caveat worth keeping: v6.7's `iwl_mvm_phy_send_rlc` gates RLC on the fw
+advertising DATA_PATH 0x08 at cmd_ver >= 2, and this ucode's version TLV does
+NOT list it - yet the working driver sends it on this exact firmware. Device
+ground truth beat the version gate.
+
+### Three hypotheses DISPROVEN on metal this round — do not re-chase
+
+1. **Round 22's stated root cause was WRONG.** SESSION_PROTECTION failed
+   identically with a real, active, phy-bound link (same `0x101f` / `0x400`).
+   The missing LINK was never the cause. The `id_and_color` was never wrong
+   either: `iwl_mvm_get_session_prot_id` uses the raw mac id for cmd ver < 2
+   (this fw), and mac id == fw_link_id == 0 here anyway.
+2. **Antenna masks were not the cause** (though they WERE wrong and are fixed):
+   `phy_sku=0x00330018` -> valid_tx/rx_ant = 0x3 on this 2x2 part; we hardcoded
+   0x1 and sent `rxchain=0x0402` where Linux sends `0x1406`.
+3. **BT coex and regulatory were not the cause.** `BT_CONFIG` is accepted and
+   changes nothing. `MCC_UPDATE` queried with `MCC_SOURCE_GET_CURRENT` returns
+   **status 1 = MCC_RESP_SAME_CHAN_PROFILE**: the fw already HAD a regulatory
+   profile. (Sending `MCC_SOURCE_DEFAULT` instead returns status 4 = ILLEGAL -
+   that was a driver bug, not a fw state.)
+
+### NEW BLOCKER — TX has never actually transmitted
+
+With session protection accepted and the radio on-channel, `iwl auth` TXes the
+Open-System auth frame and gets **no response, and no TX-status notification
+either** (no `grp=0 cmd=0x1c` REPLY_TX comes back; the only RX is a beacon).
+Nothing in this driver has ever successfully transmitted, so the TX path itself
+is unproven: `tx_enqueue`'s TFD build, the byte-count table format, and the
+doorbell for the fw-assigned gen2 queue (qid 1 from `SCD_QUEUE_CONFIG`) are all
+suspect. **That is the next slice** - and it is a real slice, not a tweak.
+
+Start by making TX observable: log every notification the fw returns after an
+enqueue, and check the TFD/bc-table against `iwl_pcie_gen2_build_tfd` +
+`iwl_pcie_gen2_update_byte_tbl` for a device with `TFD_FORMAT_LONG` (our
+context-info `control_flags = 0x980` sets it).
+
+### Two more traps found this round
+
+- **Do not send SESSION_PROTECTION twice.** A second ADD while one is registered
+  gives a DIFFERENT LMAC assert (`error_id=0x4216`, `data1=0x1e data2=0x1900`).
+  Linux skips the command when a time event is already running, or cancels with
+  action REMOVE first. So `iwl mld 7` followed by `iwl auth` always asserts -
+  use `iwl mld 1`..`6` then `iwl auth` (which does session-prot + auth back to
+  back, which is also the only way the ~900 TU window is still open when the
+  frame goes out; two separate URC commands are ~20 s apart and the window is
+  long gone).
+- **After ANY LMAC assert, `iwl rerun` does NOT restore the scanner** - two
+  scans in a row return 0 APs / 0 RBs. A full `reboot` is required.
+
+### Scan channel data is unreliable (open, affects AP selection)
+
+Successive scans disagree about the channel of the SAME BSSID (`e8:d3:eb:51:8c:8f`
+reported ch=11 in one scan and ch=1 in another), and one run put 16 of 24 APs on
+ch=1 with several at ch=0. `scan_record_beacon` takes the channel from the DS
+Parameter Set (IE id 3), which 5 GHz APs often omit - and NimmuNet is a
+multi-BSSID mesh spanning both bands (the working Linux trace associated on
+**chan 149 / 5 GHz**). If the picked channel is wrong the auth frame goes out on
+the wrong channel and nothing answers, which is indistinguishable from the TX
+bug above. Prefer the channel from the RX descriptor (the channel the scanner
+was actually parked on when the beacon arrived) over the DS IE.
+
+### Metal procedure for this branch
+
+`iwl rerun` → `iwl mvm 1`/`2`/`e`/`4` → `iwl scan` → `iwl mld 1`..`6` →
+`iwl auth`. `iwl caps` dumps the fw capability bits + antenna masks on a running
+box (no reflash needed). `iwl fwerr` after any assert.
 
 ## Round 22 (2026-07-27) — ROOT CAUSE: this fw drives association with the NEW link-based command API; UnoDOS uses the legacy MVM one
 
