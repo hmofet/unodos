@@ -1,15 +1,29 @@
 # Intel AX201 WiFi (F12) bring-up — handoff
 
-Status: 2026-07-28 (round 25 - the encrypted DATA path is written and builds,
-**metal-pending**. Round 24's WPA2 connection completes: auth -> assoc (AID 1)
--> full 4-way -> CCMP pairwise key + GTK -> station authorized).
+Status: 2026-07-28 (round 25 - **THE DATA PATH WORKS ON METAL**: a DHCP lease,
+3/3 pings to the gateway and a DNS answer over the encrypted WiFi link. What is
+left is a firmware assert when the link is left undrained, and the GUI join).
 
-## Round 25 (2026-07-28) — the data path, written but NOT yet proven on metal
+## Round 25 (2026-07-28) — DHCP, ping and DNS over WiFi, on metal
 
-Branch `iwlwifi-dhcp`. Everything below is source-level reasoning against the
-Linux driver plus the round-24 metal traces; **nothing here has run on the
-Yoga yet** (the boot stick was not available to reflash). Treat every claim as
-a hypothesis with its verification step attached.
+Branch `iwlwifi-dhcp`. The metal result, verbatim from `iwl netres` after the IP
+stack was lent to the WiFi NIC:
+
+```
+wifi: dhcp=LEASE ip=192.168.10.20 gw=192.168.10.1 dns=192.168.2.1
+      ping=3/3 dnsq=160.79.104.10 [tx=9 rx=13 arp=5 ip=8]
+      ; mgmt nic back=192.168.2.254
+```
+
+and `iwl status` then read:
+
+```
+WiFi joined "NimmuNet" bssid e8:d3:eb:51:8c:8f ch 11 -66dBm aid 1 CCMP keys in tx 9 rx 13
+```
+
+That is the whole chain: frames encrypted with the pairwise key going out, the
+AP forwarding them, replies coming back CCMP-decrypted through `wifi_to_eth`
+into `g_dataq`, and unonet's DHCP/ICMP/DNS running on top.
 
 ### What was wrong with the data path
 
@@ -56,7 +70,48 @@ a hypothesis with its verification step attached.
   which 5 GHz APs omit. The RX descriptor's `channel` byte (desc+34, the channel
   the scanner was parked on) wins now; the DS IE is only a fallback.
 
-### How to prove it on metal (the point of the round)
+### What the metal run taught us (read this before the next one)
+
+- **`iwl data` lied, twice.** It reported "no data frames" on a link that then
+  passed real DHCP. Two reasons, both now fixed: its ARP request used sender
+  0.0.0.0 (an RFC-5227 probe, which is not reliably answered - it sends from a
+  MAC-derived 169.254.x.y now), and a few seconds of listening on this WiFi
+  segment carries no broadcast at all. **Trust `iwl netup`, not `iwl data`.**
+- **Which mesh node you pick is not luck, it is the node.**
+  `e8:d3:eb:47:4e:cf` is consistently the strongest NimmuNet BSS (-27 dBm) and
+  consistently refuses: it ACKs the auth frame at the MAC layer, never sends an
+  auth response, and deauths after the assoc request. `e8:d3:eb:51:8c:8f`
+  (-66 dBm) completes every time. So RSSI-based picking, right as it is in
+  general, picks the wrong node here - **`iwl pick <n>` on 51:8c:8f is still
+  needed**, and the real fix is to retry the next candidate when auth times out.
+- **The fw asserts if the RX ring is left undrained.** Minutes after the
+  successful suite, `iwl csr 2808` read `02000000`, with LMAC
+  ADVANCED_SYSASSERT `0x22ce` (pc `004c0a3c`, data1 `0x78`). Joined but with the
+  IP stack bound elsewhere, nothing calls `iwl_recv`, the fw runs out of free
+  RBs and dies. `iwl_dbg_cmd` drains the ring on every command now; a proper fix
+  needs a tick hook. NOTE: the identical signature appeared after `iwl mld a`
+  earlier in the same session, so **`mld a` may not be the cause of that assert
+  either** - round 24's suspicion of the QoS/beacon-timing MODIFY is unproven.
+- `iwl rerun` still does not restore the scanner (the next scan returns 0 APs);
+  the URC `reboot` verb does, and it needs no physical trip to the machine.
+- The ethernet dongle stalled its lease on one reboot, as the rig notes warn.
+
+### The sequence that worked, end to end
+
+```
+reboot                       (URC verb; after a rerun the scanner stays dead)
+iwl rerun
+iwl mvm 1 / 2 / e / 4
+iwl scan                     -> read the NimmuNet BSSIDs out of the NET log
+iwl pick <n>                 -> the one that is 51:8c:8f
+iwl mld 1 .. 6
+iwl auth / iwl assoc / iwl eapol      (appended together)
+iwl status                   -> "joined ... CCMP keys in"
+iwl netup                    -> ~30 s; URC is down while the stack is on WiFi
+iwl netres                   -> the result line above
+```
+
+### How the data path is exercised
 
 The IP stack binds ONE nic and on this rig that nic is the USB ethernet
 carrying URC - rebinding it to WiFi cuts the only line to the box. So:
@@ -82,7 +137,8 @@ before reflashing anything.
 
 ### Also this round
 
-- **The Network app can join a network from the GUI**: Scan networks -> pick an
+- **The Control Panel's Network tab can join a network from the GUI**
+  (the standalone Network app stopped being launchable on 2026-07-26): Scan networks -> pick an
   SSID (strongest BSS per SSID, with RSSI + channel) -> type the password ->
   Join, then it leases over WiFi and shows the address. Backed by two new
   exports, `iwl_scan_aps()` and `iwl_join_ssid()` (appended to the `KX()` seam).
