@@ -448,14 +448,20 @@ class UnoAutoLink:
             raise RuntimeError("the fresh volume did not mount")
         # collect files + the set of directories they need, shallowest first
         files, dirs = [], set()
+        # Derive directory names from the NATIVE relpath, before converting to
+        # the device's backslash form. Taking os.path.dirname() of an already
+        # backslashed path returns "" on any POSIX host (posixpath splits on "/"
+        # only), so `dirs` came out empty, no mkdir was ever issued, and every
+        # push to a nested path failed. Silent on Windows, broken on the Linux
+        # boxes that actually drive these installs.
         for root, _, fs in os.walk(esp_dir):
             for fn in fs:
                 lp = os.path.join(root, fn)
-                rel = os.path.relpath(lp, esp_dir).replace("/", "\\")
-                files.append((lp, rel))
+                rel = os.path.relpath(lp, esp_dir)
+                files.append((lp, rel.replace(os.sep, "\\")))
                 d = os.path.dirname(rel)
                 while d:
-                    dirs.add(d); d = os.path.dirname(d)
+                    dirs.add(d.replace(os.sep, "\\")); d = os.path.dirname(d)
         for d in sorted(dirs, key=lambda s: s.count("\\")):
             self.mkdir(vol, d)
         for i, (lp, rel) in enumerate(files):
