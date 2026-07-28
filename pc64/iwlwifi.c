@@ -577,6 +577,16 @@ static u32 le32(const u8 *p){ return (u32)p[0]|((u32)p[1]<<8)|((u32)p[2]<<16)|((
 
 static int fw_has_capa(int bit){ return (g_fw.capa[bit>>3] >> (bit&7)) & 1; }
 
+/* Valid antenna masks, straight out of the firmware's PHY_SKU TLV - the same
+ * fw->valid_tx_ant / valid_rx_ant Linux derives in iwl_parse_tlv_firmware:
+ *   FW_PHY_CFG_TX_CHAIN = bits 16-19, FW_PHY_CFG_RX_CHAIN = bits 20-23.
+ * On this AX201 phy_sku = 0x00330018, so BOTH are 0x3 (a 2x2 part). Hardcoding
+ * antenna A only (0x1) told the PHY that half its chains do not exist, which
+ * nothing notices until something asks the LMAC to schedule real airtime. */
+static u32 fw_valid_tx_ant(void){ u32 a = (g_fw.phy_sku >> 16) & 0xf; return a ? a : 1; }
+static u32 fw_valid_rx_ant(void){ u32 a = (g_fw.phy_sku >> 20) & 0xf; return a ? a : 1; }
+
+
 static int parse_ucode(const u8 *buf, u32 n)
 {
     u32 off;
@@ -1062,38 +1072,94 @@ static int send_cmd(u8 group, u8 opcode, u8 version, const void *payload, int pl
     return idx & 0xff;
 }
 
-/* Enqueue an 802.11 frame on the data TX queue wrapped in a TX_CMD. gen1 uses
- * iwl_tx_cmd_v6 (56-byte params), gen2/gen3 use the shorter v9/gen3 header; the
- * frame's bytes follow the header. Encryption is done by the card from the
- * installed CCMP key (sec_ctl / the station's key). `high_pri` marks EAPOL so
- * it isn't starved during the handshake. Metal-pending: the TX_CMD field detail
- * varies by firmware version (fwapi ref Part 6). */
+/* 802.11 MAC header length for a frame we are about to transmit: 24, +2 for a
+ * QoS data subtype. Used both to place the TX_CMD's copy of the header and to
+ * decide whether the fw needs the 2-byte pad marker. */
+static int hdrlen_80211(const u8 *frame)
+{
+    u16 fc = (u16)(frame[0] | (frame[1] << 8));
+    int type = (fc >> 2) & 3, subtype = (fc >> 4) & 0xF;
+    return (type == 2 && (subtype & 8)) ? 26 : 24;      /* QoS data carries QC */
+}
+
+/* Enqueue an 802.11 frame on the data TX queue wrapped in a TX_CMD.
+ *
+ * gen2 wire layout of the DMA'd buffer, per iwl_txq_gen2_build_tx:
+ *
+ *   [ iwl_cmd_header 4 B ][ iwl_tx_cmd_gen2 20 B ][ 802.11 hdr ][pad][ body ]
+ *
+ * The COMMAND HEADER IS PART OF IT. Omitting it (which this function used to do,
+ * starting straight at iwl_tx_cmd_gen2) makes the fw read the frame length as
+ * {cmd, group_id}: a 30-byte auth frame arrives as cmd 0x1e group 0 =
+ * TXPATH_FLUSH, so nothing is ever transmitted and no TX status comes back.
+ * That is exactly what metal showed - 0 REPLY_TX notifications, ever.
+ *
+ * Other details that have to be right, all from iwl_mvm_set_tx_params +
+ * iwl_txq_gen2_tx:
+ *  - hdr.sequence carries the QUEUE id, not just the TFD index.
+ *  - the byte-count entry is the 802.11 frame length (tx_cmd->len), NOT the
+ *    total TFD payload.
+ *  - IWL_TX_FLAGS_CMD_RATE must be set or the fw looks up a rate-scaling table
+ *    we never configured (no TLC_MNG_CONFIG_CMD).
+ *  - IWL_TX_FLAGS_ENCRYPT_DIS must be set until a key is installed, or the fw
+ *    tries to encrypt auth/assoc/EAPOL with a key that does not exist.
+ *  - this fw reports TX_CMD cmd_ver 9 (> 8), so rate_n_flags is the **v2**
+ *    encoding: bits 0-3 a rate INDEX (not a PLCP), bits 8-10 a modulation type,
+ *    bits 14-15 the antenna. 1 Mbps CCK on antenna A is 0x4000, where the old
+ *    v1 encoding we used (0x420a) decodes as HT garbage.
+ */
+static int g_keys_installed;
 static void tx_enqueue(const u8 *frame, int flen, int high_pri)
 {
     int idx = g_tx_wr & (TXQ_N - 1);
     u8 *out = g_tx_buf[idx];
-    int hdrlen, tb0, total, qid;
-    if (flen <= 0 || flen > 2048 - 64) return;
+    int tb0, total, qid, h80211, pad, body;
+    u16 seq;
+    if (flen <= 24 || flen > 2048 - 64) return;
+    qid = g_data_qid >= 0 ? g_data_qid : 10;     /* DATA pool base until fw assigns */
+    h80211 = hdrlen_80211(frame);
+    if (h80211 > flen) h80211 = flen;
+    body = flen - h80211;
 
     memset(out, 0, 64);
     if (g_gen2) {
-        /* iwl_tx_cmd_v9: len@0, offload_assist@2, flags@4, dram_info@8, r_n_f@16 */
-        out[0] = (u8)flen; out[1] = (u8)(flen >> 8);
-        if (high_pri) out[4] = (1u<<2);          /* IWL_TX_FLAGS_HIGH_PRI */
-        { u32 rnf = 10 | (1u<<9) | (1u<<14);      /* 1M CCK, ant A (safe mgmt rate) */
-          out[16]=(u8)rnf; out[17]=(u8)(rnf>>8); out[18]=(u8)(rnf>>16); out[19]=(u8)(rnf>>24); }
-        hdrlen = 20;
+        u32 rnf, ant = fw_valid_tx_ant();
+        u16 off = 0, flags;
+        pad = (h80211 & 3) ? 2 : 0;              /* TX_CMD_OFFLD_PAD territory */
+        seq = (u16)(((qid & 0x1f) << 8) | (idx & 0xff));
+        /* iwl_cmd_header: cmd, group_id, sequence */
+        out[0] = 0x1c;                           /* TX_CMD */
+        out[1] = 0;                              /* LEGACY group */
+        out[2] = (u8)seq; out[3] = (u8)(seq >> 8);
+        /* iwl_tx_cmd_gen2 @4: len, offload_assist, flags, dram_info[8], rate_n_flags */
+        out[4] = (u8)flen; out[5] = (u8)(flen >> 8);
+        if (pad) off |= (1u << 13);              /* TX_CMD_OFFLD_PAD */
+        out[6] = (u8)off; out[7] = (u8)(off >> 8);
+        flags = (1u << 0);                       /* IWL_TX_FLAGS_CMD_RATE */
+        if (!g_keys_installed || ((frame[0] >> 2) & 3) != 2)
+            flags |= (1u << 1);                  /* IWL_TX_FLAGS_ENCRYPT_DIS */
+        if (high_pri) flags |= (1u << 2);        /* IWL_TX_FLAGS_HIGH_PRI */
+        *(u32*)(out + 8) = flags;
+        /* dram_info @12..19 stays zero (no PN/key offload yet) */
+        ant = ant & (~ant + 1);                  /* lowest valid TX antenna */
+        rnf = 0 /*rate idx 0 = 1 Mbps*/ | (0u << 8) /*RATE_MCS_CCK*/ | (ant << 14);
+        *(u32*)(out + 20) = rnf;
+        /* the 802.11 header sits in the command, then (pad), then the body */
+        memcpy(out + 24, frame, h80211);
+        if (pad) memset(out + 24 + h80211, 0, pad);
+        memcpy(out + 24 + h80211 + pad, frame + h80211, body);
+        total = 24 + h80211 + pad + body;
     } else {
         /* iwl_tx_cmd_v6 params: len@0, tx_flags@4, rate_n_flags@12, sta_id@16 */
+        pad = 0;
         out[0] = (u8)flen; out[1] = (u8)(flen >> 8);
         { u32 fl = (1u<<3); *(u32*)(out+4) = fl; }   /* TX_CMD_FLG_ACK */
         { u32 rnf = 10 | (1u<<9) | (1u<<14); *(u32*)(out+12) = rnf; }
         out[16] = AP_STA_ID;
         out[17] = high_pri ? 0 : (2 | 0x10);         /* sec_ctl CCM|KEY_FROM_TABLE for data */
-        hdrlen = 56;
+        memcpy(out + 56, frame, flen);
+        total = 56 + flen;
     }
-    memcpy(out + hdrlen, frame, flen);
-    total = hdrlen + flen;
 
     tb0 = total < FIRST_TB ? total : FIRST_TB;
     memcpy(g_tx_firsttb[idx], out, tb0);
@@ -1105,7 +1171,8 @@ static void tx_enqueue(const u8 *frame, int flen, int high_pri)
         if (total > tb0) tfd_set_tb_gen2(t, phys(out + tb0), total - tb0);
         nchunks = ((int)(sizeof(u16) + t->num_tbs*sizeof(struct tfh_tb)) + 63)/64 - 1;
         if (nchunks < 0) nchunks = 0;
-        g_tx_bc[idx] = (u16)(((total + 3)/4) | (nchunks << 12));
+        /* byte count = the OVER-THE-AIR frame length in dwords, not the TFD total */
+        g_tx_bc[idx] = (u16)(((flen + 3)/4) | (nchunks << 12));
     } else {
         struct tfd *t = (struct tfd *)(g_tx_ring + idx*128);
         memset(t, 0, sizeof *t);
@@ -1113,7 +1180,9 @@ static void tx_enqueue(const u8 *frame, int flen, int high_pri)
         if (total > tb0) tfd_set_tb_gen1(t, phys(out + tb0), total - tb0);
         g_tx_bc[idx] = (u16)((total + 3)/4);
     }
-    qid = g_data_qid >= 0 ? g_data_qid : 10;     /* DATA pool base until fw assigns */
+    uno_dbg_net_trace("wifi: TX q=%d idx=%d seq=%04x flen=%d hdr=%d pad=%d tfd=%d bc=%04x",
+                      qid, idx, (unsigned)(((qid & 0x1f) << 8) | (idx & 0xff)),
+                      flen, h80211, pad, total, g_tx_bc[idx]);
     g_tx_wr = (g_tx_wr + 1) & (TXQ_N - 1);
     if (g_gen2) w32(HBUS_TARG_WRPTR, g_tx_wr | (qid << 16));
     else        w32(HBUS_TARG_WRPTR, g_tx_wr | (qid << 8));
@@ -1943,15 +2012,6 @@ static void tx_start_gen1(void)
 static int fw_has_mld_api(void) { return fw_has_capa(110); }
 
 /* small init commands */
-/* Valid antenna masks, straight out of the firmware's PHY_SKU TLV - the same
- * fw->valid_tx_ant / valid_rx_ant Linux derives in iwl_parse_tlv_firmware:
- *   FW_PHY_CFG_TX_CHAIN = bits 16-19, FW_PHY_CFG_RX_CHAIN = bits 20-23.
- * On this AX201 phy_sku = 0x00330018, so BOTH are 0x3 (a 2x2 part). Hardcoding
- * antenna A only (0x1) told the PHY that half its chains do not exist, which
- * nothing notices until something asks the LMAC to schedule real airtime. */
-static u32 fw_valid_tx_ant(void){ u32 a = (g_fw.phy_sku >> 16) & 0xf; return a ? a : 1; }
-static u32 fw_valid_rx_ant(void){ u32 a = (g_fw.phy_sku >> 20) & 0xf; return a ? a : 1; }
-
 static void mvm_tx_ant(u32 valid){ u32 c=valid; send_cmd(GRP_LONG,0x98,0,&c,4); wait_cmd_done(50);}
 static void mvm_power_table(void){ u32 c=0; send_cmd(GRP_LONG,0x77,0,&c,4); wait_cmd_done(50);}
 
@@ -2619,7 +2679,8 @@ static void handle_data_frame(const u8 *frame, int len)
 }
 
 static wpa_sm_t g_wpa;
-static int g_wpa_active, g_keys_installed;
+static int g_wpa_active;    /* g_keys_installed is declared up at tx_enqueue,
+                             * which needs it to decide IWL_TX_FLAGS_ENCRYPT_DIS */
 static void handle_eapol(const u8 *frame, int len)
 {
     u8 reply[600];
