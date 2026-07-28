@@ -543,7 +543,11 @@ int rtl8152_present(unsigned short *vid, unsigned short *pid)
     n = uno_xhci_dev_count();
     for (i = 0; i < n; i++) {
         const uno_usb_dev *d = uno_xhci_dev(i);
-        if (d && is_rtl_vid(d->vendor)) {
+        /* same device-class guard as rtl8152_nic() - a Realtek-VID hub is not
+         * a NIC, and reporting one present here makes the caller believe in an
+         * adapter that the bind will then fail to claim */
+        if (d && is_rtl_vid(d->vendor) &&
+            (d->dev_class == 0x00 || d->dev_class == 0xff)) {
             if (vid) *vid = d->vendor;
             if (pid) *pid = d->product;
             return 1;
@@ -562,7 +566,20 @@ uno_nic_t *rtl8152_nic(void)
     n = uno_xhci_dev_count();
     for (i = 0; i < n; i++) {
         const uno_usb_dev *d = uno_xhci_dev(i);
-        if (d && is_rtl_vid(d->vendor)) { g_dev = i; g_vid = d->vendor; g_pid = d->product; g_found = 1; break; }
+        /* VID alone is not enough. is_rtl_vid() deliberately covers laptop and
+         * dock makers, so it also matches hubs, card readers and keyboards from
+         * those vendors - and matching one here CLAIMS it and breaks the scan,
+         * so a real NIC further down the list is never reached. The ZimaBlade
+         * enumerates 0bda:0411 and 0bda:5411, both Realtek-VID HUBS, ahead of
+         * everything else, so any Realtek USB NIC on that box would have been
+         * shadowed by a hub. The attached/UsbIo path below has always required
+         * a vendor-specific interface for exactly this reason; require the
+         * device-level equivalent here. RTL815x report either 0xff or 0x00
+         * (class declared per-interface); a hub is 0x09, storage 0x08, HID 0x03. */
+        if (d && is_rtl_vid(d->vendor) &&
+            (d->dev_class == 0x00 || d->dev_class == 0xff)) {
+            g_dev = i; g_vid = d->vendor; g_pid = d->product; g_found = 1; break;
+        }
     }
     if (!g_found) {                    /* attached: the firmware's USB stack */
         n = uno_usbio_count();
