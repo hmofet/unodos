@@ -66,7 +66,13 @@ def build_disk():
             dst = "::/" + (fn if rel == "." else rel.replace(os.sep, "/") + "/" + fn)
             sh(["mcopy", "-i", FAT, "-o", src, dst],
                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    sh(["mcopy", "-i", FAT, "-o", cfg, "::/STRESS.CFG"],
+    # MUST be DEBUG.CFG, not STRESS.CFG: the debug build SHIPS a DEBUG.CFG on
+    # the ESP (build.sh), and dbg_cfg_read (pc64_stress.c) reads DEBUG.CFG
+    # first and only falls back to the legacy STRESS.CFG when DEBUG.CFG is
+    # absent - so a STRESS.CFG written here is SHADOWED and every key in it
+    # is silently ignored. That is what left this harness's guest booting a
+    # plain desktop under the shipped `passes=3` and never powering off.
+    sh(["mcopy", "-i", FAT, "-o", cfg, "::/DEBUG.CFG"],
        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     with open(FAT, "rb") as pf, open(DISK, "r+b") as df:
         df.seek(part_start * SECTOR)

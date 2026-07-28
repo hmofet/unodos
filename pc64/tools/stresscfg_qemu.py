@@ -14,6 +14,15 @@ on a real GPT+FAT32 disk (the spectest_qemu recipe) twice:
      exiting inside the timeout IS the assertion.
 
 Exit 0 iff both behave.
+
+EXPECTED-RED as of 2026-07-28, and not because of the OS's key handling: BOTH
+scenarios exercise the continuous fuzz driver, which was REMOVED on 2026-07-21
+at the user's request (pc64_stress_tick early-returns and its pc64_uui.c call
+site is commented out). So `nostress` can no longer produce a "fuzz driver
+disabled" line and `passes=1` can no longer ARM anything. This gate needs to be
+retired or rewritten against the keys that survived (poweroff / nonet / spec /
+noshutdown) - a call for the harness owner, not a mechanical fix. It is left
+running and honestly failing rather than quietly reporting green.
 """
 import os, sys, subprocess, time
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -51,8 +60,13 @@ def build_disk(cfg_text):
             dst = "::/" + (fn if rel == "." else rel.replace(os.sep, "/") + "/" + fn)
             sh(["mcopy", "-i", FAT, "-o", src, dst],
                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    # overlay the scenario config, image-only (never into build/esp)
-    sh(["mcopy", "-i", FAT, "-o", cfg, "::/STRESS.CFG"],
+    # MUST be DEBUG.CFG, not STRESS.CFG: the debug build SHIPS a DEBUG.CFG on
+    # the ESP (build.sh), and dbg_cfg_read (pc64_stress.c) reads DEBUG.CFG
+    # first and only falls back to the legacy STRESS.CFG when DEBUG.CFG is
+    # absent - so a STRESS.CFG written here is SHADOWED and every key in it
+    # is silently ignored. That is what left this harness's guest booting a
+    # plain desktop under the shipped `passes=3` and never powering off.
+    sh(["mcopy", "-i", FAT, "-o", cfg, "::/DEBUG.CFG"],
        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     with open(FAT, "rb") as pf, open(DISK, "r+b") as df:
         df.seek(2048 * SECTOR)
@@ -85,9 +99,17 @@ def boot(timeout_s):
     return off, log
 
 def main():
-    if not os.path.exists(os.path.join(ESP, "BOOTENV.TXT")) and \
-       not os.path.exists(os.path.join(ESP, "STRESS.CFG")):
+    # The staged-debug-build probe. It looked for BOOTENV.TXT or STRESS.CFG and
+    # NEITHER can be present any more: build.sh deletes BOOTENV.TXT when staging
+    # (it is dev-run telemetry) and the config it ships was renamed
+    # STRESS.CFG -> DEBUG.CFG (2026-07-26). So this gate refused to run at all,
+    # on every debug build. BUILD.TXT is the reliable marker - build.sh writes it
+    # for debug builds only.
+    if not any(os.path.exists(os.path.join(ESP, f))
+               for f in ("BUILD.TXT", "DEBUG.CFG", "BOOTENV.TXT", "STRESS.CFG")):
         print("no debug build staged - run UNO_DEBUG=1 UNO_DBGCON=1 ./build.sh first"); return 1
+    print("NOTE: both scenarios test the fuzz driver, REMOVED 2026-07-21 - "
+          "expect FAIL until this gate is retired or rewritten (see docstring)")
     fails = 0
 
     # -- scenario 1: nostress = the real OFF switch --------------------------
