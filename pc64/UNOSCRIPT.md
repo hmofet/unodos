@@ -264,8 +264,8 @@ so the security store lands on a writable volume.
   `unoauto_hook` registry with a safe LOG-emitting shim (no Python callback in
   kernel context): `hook.add("fs.write")` → `hook: fs.write` on the SCRIPT LOG
   channel over URC. Tappable points are the fixed fire set (`fs.read`/`fs.write`,
-  `libc.malloc`, `mod.load`/`mod.unload`, `uui.action`); an unknown point is
-  `EINVAL`. QEMU-verified tier 2 + gated (`tools/unoscript_qemu.py`).
+  `libc.malloc`, `mod.load`/`mod.unload`, `net.rx`/`net.tx`, `uui.action`); an
+  unknown point is `EINVAL`. QEMU-verified tier 2 + gated (`tools/unoscript_qemu.py`).
 
 **The surface-wiring roadmap is complete** (`UNOSCRIPT-NEXT-STEPS.md` §1–6): every
 `usc_*` surface is wired or a documented non-goal, none is a bare stub. The

@@ -54,8 +54,8 @@
  *   "libc.malloc"        UnoAutoAllocEv   set .fail=1 to make it return 0
  *   "fs.read" "fs.write" UnoAutoFsEv      trace-only
  *   "mod.load" "mod.unload"  UnoAutoModEv trace-only (.ok = outcome)
- *   "net.tx" "net.rx"    (requested from the net owner - see
- *                         UNOAUTOMATE-REQUESTS.md)
+ *   "net.tx" "net.rx"    long *           trace-only, = frame length in bytes
+ *                                       (one fire per frame across the seam)
  *   "uui.action"         lands with DRIVE (Phase D)
  *
  * Hook fns run synchronously inside the producer and MUST NOT allocate
