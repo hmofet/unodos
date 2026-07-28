@@ -1204,6 +1204,7 @@ static int g_dq_head, g_dq_tail;
 
 static void handle_data_frame(const u8 *frame, int len, int snap_off);  /* fwd (802.11->eth) */
 static void handle_eapol(const u8 *eapol, int len);        /* fwd (EAPOL hdr, not the 802.11 frame) */
+static void nic_publish(void);                             /* fwd (bind the uno_nic_t) */
 static void scan_record_beacon(const u8 *frame, int fl, int rssi, int dchan);  /* fwd (beacon parse) */
 static void mgmt_capture(const u8 *frame, int fl, u16 fc);  /* fwd (auth/assoc resp) */
 static u8  g_mgmt_rx[512];     /* last mgmt frame addressed to us (auth/assoc/deauth) */
@@ -2926,6 +2927,11 @@ static void handle_eapol(const u8 *eapol, int len)
             mvm_add_sta(g_bssid, 1, (1u<<14)|(1u<<15));        /* authorize */
         }
         g_joined = 1;
+        /* Publish the nic service the moment the link is usable, whatever drove
+         * the join - the step-by-step debug verbs (mld/auth/assoc/eapol) reach
+         * this point without ever going through iwl_nic(), and send/recv both
+         * gate on g_bound, so the data path was dead after a manual join. */
+        nic_publish();
         uno_dbg_net_trace("wifi: 4-way handshake DONE - CCMP keys installed "
                           "(gtk_len=%d idx=%d), station authorized",
                           g_wpa.gtk_len, g_wpa.gtk_idx);
@@ -3481,6 +3487,14 @@ static int iwl_link(void *ctx)
     return g_joined;
 }
 
+/* Publish the family nic service. Idempotent; called both from the bring-up and
+ * from the handshake completion (a join driven by the debug verbs). */
+static void nic_publish(void)
+{
+    g_nic.ctx = 0; g_nic.send = iwl_send; g_nic.recv = iwl_recv; g_nic.link = iwl_link;
+    g_bound = 1;
+}
+
 /* =====================================================================
  * 14. bring-up entry points
  * ===================================================================== */
@@ -3683,8 +3697,7 @@ uno_nic_t *iwl_nic(void)
     if (g_no_join) return 0;
     if (find_and_join() < 0) { st_set("WiFi: join failed"); uno_dbg_net_trace("wifi: FAIL join"); return 0; }
 
-    g_nic.ctx = 0; g_nic.send = iwl_send; g_nic.recv = iwl_recv; g_nic.link = iwl_link;
-    g_bound = 1;
+    nic_publish();
     st_set("WiFi bound: "); st_cat(g_ssid_str[0]?g_ssid_str:g_cfg_ssid);
     st_cat(g_joined ? " (joined)" : " (associating)");
     return &g_nic;
@@ -3766,8 +3779,7 @@ int iwl_join_ssid(const char *ssid, const char *psk)
     uno_dbg_net_trace("wifi: join request for \"%s\" (psk_len=%d)",
                       g_cfg_ssid, (int)strlen(g_cfg_psk));
     if (find_and_join() < 0) { st_set("WiFi: join failed"); return -1; }
-    g_nic.ctx = 0; g_nic.send = iwl_send; g_nic.recv = iwl_recv; g_nic.link = iwl_link;
-    g_bound = 1;
+    nic_publish();
     return g_joined ? 0 : -1;
 }
 
@@ -4133,6 +4145,27 @@ static int probe_data(const u8 target_ip[4], int listen_ms, char *out, int cap)
     return (int)strlen(out);
 }
 
+/* ---- `iwl netup` / `netwifi` / `netres` ----------------------------------
+ * Run the real IP suite (DHCP, ping, DNS) over the WiFi link. The IP stack
+ * binds one nic, so this borrows it from the adapter carrying URC and (unless
+ * asked to stay) hands it straight back - the harness in pc64_nettest.c owns
+ * that dance because it is the file that knows every NIC. Weak-stubbed so the
+ * driver still links in production builds, which do not compile the harness.
+ *
+ * The result is STASHED rather than returned live: URC is down for the ~30 s
+ * the suite runs, so the reply to `iwl netup` cannot reach anyone. Read it back
+ * with `iwl netres` once the link is up again. */
+int pc64_wifi_ipsuite(uno_nic_t *nic, const unsigned char *mac, int stay,
+                      char *out, int cap);
+__attribute__((weak)) int pc64_wifi_ipsuite(uno_nic_t *nic, const unsigned char *mac,
+                                            int stay, char *out, int cap)
+{
+    (void)nic; (void)mac; (void)stay; (void)cap;
+    if (out && cap > 0) strcpy(out, "ip suite harness not built (UNO_DEBUG only)");
+    return -1;
+}
+static char g_netres[320];
+
 /* Dump what the firmware told us about itself: the capability bits the join
  * path branches on, the PHY_SKU-derived antenna masks, and the raw capa/api
  * bitmaps. Cheap, read-only, and it answers "does this fw advertise X?" without
@@ -4321,6 +4354,22 @@ int iwl_dbg_cmd(const char *line, char *out, int cap)
             if (*q == 0x2e) q++;
         }
         return probe_data(any ? ip : 0, any ? 1500 : 4000, out, cap);
+    }
+    /* "iwl netres" - the stashed result of the last netup/netwifi run. */
+    if (!strncmp(line, "netres", 6)) {
+        strcpy(out, g_netres[0] ? g_netres : "no IP suite has run yet (iwl netup)");
+        return (int)strlen(out);
+    }
+    /* "iwl netup" - real DHCP/ping/DNS over WiFi, then hand the stack back to
+     * the management NIC. "iwl netwifi" leaves it on WiFi (URC redials over the
+     * WiFi link - only do that once netup has shown a lease). */
+    if (!strncmp(line, "netup", 5) || !strncmp(line, "netwifi", 7)) {
+        int stay = (line[3] == 0x77);              /* netWifi */
+        if (!g_joined) { strcpy(out, "err not joined - connect first"); return (int)strlen(out); }
+        g_netres[0] = 0;
+        pc64_wifi_ipsuite(&g_nic, g_mac, stay, g_netres, (int)sizeof g_netres);
+        strcpy(out, g_netres[0] ? g_netres : "err ip suite produced nothing");
+        return (int)strlen(out);
     }
     /* "iwl qos <0|1>" - plain data frames vs QoS data frames. Our assoc request
      * carries no WMM IE (so the AP admits us as non-QoS) and the fw queue is on

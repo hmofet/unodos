@@ -417,9 +417,15 @@ static void queue_data(const u8 *frame,int len)
     memcpy(g_dataq[g_dq_head].buf,eth,n); g_dataq[g_dq_head].len=n; g_dq_head=nx;
 }
 static void tx_data_frame(const u8 *frame,int flen,int is_eapol);
-static void handle_eapol(const u8 *frame,int len)
+/* `eapol` points at the EAPOL HEADER, not at the 802.11 frame: wpa_sm_rx_eapol's
+ * first guard is frame[1] == 0x03 (EAPOL-Key), so handing it the whole frame
+ * makes it return 0 instantly and the 4-way never starts. That exact bug cost
+ * iwlwifi a metal round (WIFI-F12-HANDOFF round 24); both call sites below now
+ * skip the MAC header and the 8-byte LLC/SNAP the same way. UNVERIFIED on
+ * hardware - there is no rtw88/rtw89 card here to test against. */
+static void handle_eapol(const u8 *eapol,int len)
 {
-    u8 reply[600]; int r = wpa_sm_rx_eapol(&g_wpa, frame, len, reply, sizeof reply);
+    u8 reply[600]; int r = wpa_sm_rx_eapol(&g_wpa, eapol, len, reply, sizeof reply);
     if (r<=0) return;
     { u8 eth[600],tx80211[720]; int el,n;
       memcpy(eth,g_bssid,6); memcpy(eth+6,g_mac,6); eth[12]=0x88; eth[13]=0x8E;
@@ -448,7 +454,7 @@ static void rx_process(const u8 *page)
         { u16 fc=(u16)(frame[0]|(frame[1]<<8)); int hl=24+(((fc>>4)&0xF)==8?2:0);
           if (plen>hl+8 && !memcmp(frame+hl,SNAP,6)) {
               u16 et=(u16)((frame[hl+6]<<8)|frame[hl+7]);
-              if (et==0x888E) handle_eapol(frame,plen); else queue_data(frame,plen);
+              if (et==0x888E) handle_eapol(frame+hl+8,plen-hl-8); else queue_data(frame,plen);
           } }
     } else {
         u32 d0=le32(page);
@@ -459,7 +465,7 @@ static void rx_process(const u8 *page)
         { u16 fc=(u16)(frame[0]|(frame[1]<<8)); int hl=24+(((fc>>4)&0xF)==8?2:0);
           if (plen>hl+8 && !memcmp(frame+hl,SNAP,6)) {
               u16 et=(u16)((frame[hl+6]<<8)|frame[hl+7]);
-              if (et==0x888E) handle_eapol(frame,plen); else queue_data(frame,plen);
+              if (et==0x888E) handle_eapol(frame+hl+8,plen-hl-8); else queue_data(frame,plen);
           } }
     }
 }
