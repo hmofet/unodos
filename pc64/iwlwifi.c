@@ -2110,8 +2110,10 @@ static void mvm_init_unified(void)
  * iwl_set_hw_address_from_csr(): try the OEM-fused STRAP pair first and fall
  * back to the OTP pair, with the same byte flip (iwl_flip_hw_address).
  *
- *   family <  22000 : OTP 0x380/0x384,   STRAP 0x388/0x38c
- *   family >= 22000 : OTP 0x30380/0x30384, STRAP 0x30388/0x3038c
+ * The base is Linux's per-config `cfg->mac_addr_from_csr`, with OTP at +0/+4 and
+ * STRAP at +8/+0xc. It is **0x380 for the AX200/AX201-class 22000 parts** and
+ * 0x30380 only from AX210 on - keying it off "family >= 22000" reads an address
+ * this device does not decode and returns 0xffffffff (metal, 2026-07-28).
  *
  * THIS WAS NEVER DONE. g_mac stayed all-zero, so every frame we transmitted
  * carried source address 00:00:00:00:00:00, MAC_CONFIG/LINK_CONFIG programmed
@@ -2122,7 +2124,7 @@ static void mvm_init_unified(void)
  * why metal showed TX_STATUS_SUCCESS and no reply. */
 static void read_mac_addr(void)
 {
-    u32 base = (g_family >= FAM_22000) ? 0x30380u : 0x380u;
+    u32 base = (g_family >= FAM_AX210) ? 0x30380u : 0x380u;
     u32 a[2];
     int try_;
     for (try_ = 0; try_ < 2; try_++) {
