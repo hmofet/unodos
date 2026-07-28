@@ -2297,12 +2297,14 @@ static void read_mac_addr(void)
 /* PHY_CONTEXT_CMD ADD on a 2.4GHz channel (v3+, 32 bytes) */
 static void mvm_rlc_config(void);
 static u32 g_phy_id = 0x0000;   /* id 0, color 0 */
+static int g_phy_chan;          /* the channel that context is currently on */
 static u32 g_mac_id = 0x0100;   /* id 1, color 1 (nonzero color) */
 static void mvm_phy_ctxt(int chan, int action)
 {
     struct { u32 id_color, action; u32 channel; u8 band,width,ctrl,rsv;
              u32 lmac_id, rxchain, dsp; u8 sec,r3[3]; } c;
     int hb = chan > 14;                 /* 5 GHz */
+    if (action != 3 /*REMOVE*/) g_phy_chan = chan;
     memset(&c, 0, sizeof c);
     c.id_color = g_phy_id; c.action = action;
     c.channel = chan;
@@ -2781,6 +2783,27 @@ static int mvm_txq_alloc(int sta_id, int tid, int size)
         return g_data_qid;
     }
     return -1;
+}
+
+/* SCD_QUEUE_CONFIG_CMD with operation = IWL_SCD_QUEUE_REMOVE (1). The union in
+ * iwl_scd_queue_cfg_cmd makes the remove form {operation, sta_mask, tid} - all
+ * u32 - inside the same 36-byte envelope the ADD uses. Needed to re-point the
+ * station at another AP: the queue belongs to the station, and once the
+ * station's address changes the fw quietly stops transmitting on it (metal: the
+ * first frame comes back not-ACKed, the next produces no TX response at all)
+ * while refusing to allocate a second one for the same sta/TID. */
+static void mvm_txq_free(int sta_id, int tid)
+{
+    struct __attribute__((packed)) { u32 operation, sta_mask, tid; u8 pad[24]; } c;
+    memset(&c, 0, sizeof c);
+    c.operation = 1;                              /* IWL_SCD_QUEUE_REMOVE */
+    c.sta_mask = (u32)(1u << sta_id);
+    c.tid = (u32)tid;
+    uno_dbg_net_trace("wifi: SCD_QUEUE remove sta=%d tid=%d (qid was %d) len=%d",
+                      sta_id, tid, g_data_qid, (int)sizeof c);
+    send_cmd(GRP_DATAPATH, 0x17, 0, &c, (int)sizeof c);
+    wait_cmd_done(100);
+    g_data_qid = -1;
 }
 
 /* SCAN_CFG_CMD (v5+ small form) */
@@ -3453,6 +3476,32 @@ static int join_selected(void)
     return 0;
 }
 
+/* Re-point the live contexts at a different BSS, without restarting the radio.
+ *
+ * This is the retry path. Restarting the radio is NOT a recovery on this fw - it
+ * reloads, reports ALIVE, then SW_ERRs on the next command - whereas re-pointing
+ * keeps it healthy: STA_CONFIG accepts a new peer (it has no add/modify flag,
+ * re-sending updates it) and a second SESSION_PROTECTION is accepted too. The
+ * one thing that does not survive is the TX queue, hence the free + realloc.
+ * Returns 0 when the station is ready to auth again. */
+static int retarget_ap(int new_chan)
+{
+    int q;
+    if (!fw_has_mld_api()) return -1;              /* legacy path has no equivalent */
+    if (new_chan && new_chan != g_phy_chan) {
+        mvm_phy_ctxt(new_chan, 2 /*MODIFY*/);
+        if (r32(CSR_MSIX_HW_INT_CAUSES_AD)) return -1;
+    }
+    mld_sta_cfg(g_bssid, 0, 0);                    /* the new peer */
+    if (r32(CSR_MSIX_HW_INT_CAUSES_AD)) return -1;
+    mvm_txq_free(AP_STA_ID, 15);
+    q = mvm_txq_alloc(AP_STA_ID, 15, TXQ_N);
+    uno_dbg_net_trace("wifi: retarget: fresh TX queue -> qid=%d csr2808=%08x",
+                      q, r32(CSR_MSIX_HW_INT_CAUSES_AD));
+    if (q < 0 || r32(CSR_MSIX_HW_INT_CAUSES_AD)) return -1;
+    return 0;
+}
+
 /* Restart the radio: halt the running fw, re-load it, and redo the post-ALIVE
  * init - WITHOUT joining. Needed between join attempts: a failed attempt leaves
  * live MAC/LINK/PHY contexts and the fw asserts if they are added again. */
@@ -3490,6 +3539,33 @@ static int radio_restart(void)
     return 0;
 }
 
+/* A second (or third) attempt at a different BSS, re-using the live contexts. */
+static int join_retry(void)
+{
+    int r;
+    if (retarget_ap(g_join_chan) < 0) {
+        uno_dbg_net_trace("wifi: join: could not re-point the contexts at the next BSS");
+        return -1;
+    }
+    mvm_assoc_window();
+    if (r32(CSR_MSIX_HW_INT_CAUSES_AD)) {
+        uno_dbg_net_trace("wifi: join: session-prot asserted the fw on the retry");
+        return -1;
+    }
+    r = mvm_auth();
+    uno_dbg_net_trace("wifi: join: retry auth -> %d", r);
+    if (r != 0) return -1;
+    wpa_arm();
+    r = mvm_assoc();
+    uno_dbg_net_trace("wifi: join: retry assoc -> %d (>=0 AID)", r);
+    if (r < 0) return -1;
+    assoc_mark_associated(r);
+    { int ms = rx_pump_ms(4000, 1);
+      uno_dbg_net_trace("wifi: join: retry 4-way %s after %d ms (keys=%d)",
+                        g_joined ? "COMPLETE" : "did NOT complete", ms, g_keys_installed); }
+    return 0;
+}
+
 /* Full connect: scan once, then try the SSID's BSSs strongest-first until one
  * of them actually completes a 4-way.
  *
@@ -3522,14 +3598,19 @@ static int find_and_join(void)
                           g_bssid[0],g_bssid[1],g_bssid[2],g_bssid[3],g_bssid[4],g_bssid[5],
                           g_join_chan, g_scan_aps[idx].rssi, g_join_bi, g_join_dtim,
                           fw_has_mld_api());
-        if (join_selected() == 0 && g_joined) return 0;
-        uno_dbg_net_trace("wifi: join: %02x:%02x:%02x:%02x:%02x:%02x did not complete - "
-                          "restarting the radio to try the next BSS",
+        if (attempt == 0) { if (join_selected() == 0 && g_joined) return 0; }
+        else               { if (join_retry() == 0 && g_joined) return 0; }
+        uno_dbg_net_trace("wifi: join: %02x:%02x:%02x:%02x:%02x:%02x did not complete",
                           g_bssid[0],g_bssid[1],g_bssid[2],g_bssid[3],g_bssid[4],g_bssid[5]);
-        if (attempt + 1 < JOIN_TRIES && radio_restart() < 0) {
-            uno_dbg_net_trace("wifi: join: radio restart failed - giving up");
+        if (attempt + 1 >= JOIN_TRIES) break;
+        if (r32(CSR_MSIX_HW_INT_CAUSES_AD)) {
+            /* the fw died somewhere in that attempt; re-pointing cannot work and
+             * a restart comes up asserted too, so stop rather than pretend */
+            uno_dbg_net_trace("wifi: join: fw asserted - only a reboot recovers; giving up");
             return -1;
         }
+        /* select_ap() for the next candidate happens at the top of the loop;
+         * the contexts stay live and get re-pointed there. */
     }
     return -1;
 }
@@ -4470,6 +4551,25 @@ int iwl_dbg_cmd(const char *line, char *out, int cap)
             if (*q == 0x2e) q++;
         }
         return probe_data(any ? ip : 0, any ? 1500 : 4000, out, cap);
+    }
+    /* "iwl retarget <n>" - point the LIVE contexts at scan result n and make the
+     * station ready to auth again, without restarting the radio: STA_CONFIG with
+     * the new peer, then free + re-allocate its TX queue (the queue does not
+     * survive the station changing address). Follow with `iwl auth`. */
+    if (!strncmp(line, "retarget", 8)) {
+        const char *q = line + 8; int n = 0, any = 0;
+        while (*q == 0x20) q++;
+        while (*q >= 0x30 && *q <= 0x39) { n = n*10 + (*q - 0x30); q++; any = 1; }
+        if (!g_bar || !g_alive) { strcpy(out, "err not ALIVE"); return (int)strlen(out); }
+        if (!any || n >= g_scan_ap_n) { strcpy(out, "err usage: iwl retarget <n> (from the last scan)");
+                                        return (int)strlen(out); }
+        select_ap(n);
+        uno_dbg_net_trace("wifi: retarget -> [%d] %02x:%02x:%02x:%02x:%02x:%02x chan %d \"%s\"",
+                          n, g_bssid[0],g_bssid[1],g_bssid[2],g_bssid[3],g_bssid[4],g_bssid[5],
+                          g_join_chan, g_scan_aps[n].ssid);
+        if (retarget_ap(g_join_chan) == 0) strcpy(out, "ok retarget: station re-pointed, fresh TX queue - now 'iwl auth'");
+        else                               strcpy(out, "err retarget: failed (detail in NET log)");
+        return (int)strlen(out);
     }
     /* "iwl netres" - the stashed result of the last netup/netwifi run. */
     if (!strncmp(line, "netres", 6)) {
