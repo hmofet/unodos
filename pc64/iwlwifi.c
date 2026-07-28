@@ -1208,6 +1208,8 @@ static void scan_record_beacon(const u8 *frame, int fl);   /* fwd (scan beacon p
 static void mgmt_capture(const u8 *frame, int fl, u16 fc);  /* fwd (auth/assoc resp) */
 static u8  g_mgmt_rx[512];     /* last mgmt frame addressed to us (auth/assoc/deauth) */
 static int g_mgmt_diag, g_mgmt_diag_n;   /* log RX grp/cmd during auth/assoc wait */
+static int g_mgmt_diag_other;            /* budget for the interesting (non-beacon) ones */
+static int g_txresp_n;                   /* REPLY_TX dumps emitted */
 static int g_mgmt_rx_len;
 static u8  g_mgmt_rx_subtype;
 static int g_scanning;   /* beacons are only harvested while a scan is active */
@@ -1227,8 +1229,16 @@ static void rx_process_rb(const u8 *rb, int cap,
             if (g_scan_rb_total <= 12)
                 uno_dbg_net_trace("wifi: scan pkt#%d grp=%d cmd=%02x len=%d",
                                   g_scan_rb_total, pkt->group_id, pkt->cmd, plen); }
-        if (g_mgmt_diag && g_mgmt_diag_n < 20) { g_mgmt_diag_n++;
-            uno_dbg_net_trace("wifi: rxpkt grp=%d cmd=%02x len=%d", pkt->group_id, pkt->cmd, plen); }
+        /* Diagnostic during the auth/assoc wait. Beacons arrive at ~25/s and used
+         * to exhaust a flat 20-entry budget before anything interesting showed up,
+         * which hid the REPLY_TX. So count RX_MPDUs but only LOG the notifications
+         * that matter (anything that is not a received 802.11 frame). */
+        if (g_mgmt_diag) {
+            if (pkt->group_id == 0 && pkt->cmd == 0xc1) g_mgmt_diag_n++;
+            else if (g_mgmt_diag_other < 12) { g_mgmt_diag_other++;
+                uno_dbg_net_trace("wifi: rxnotif grp=%d cmd=%02x len=%d",
+                                  pkt->group_id, pkt->cmd, plen); }
+        }
         if (found && !*found && pkt->group_id == want_group && pkt->cmd == want_cmd) {
             *found = pkt->data; *found_len = plen - 4;
         }
@@ -1238,7 +1248,8 @@ static void rx_process_rb(const u8 *rb, int cap,
          * frame_count@0, failure_rts@2, failure_frame@3, initial_rate@4 are
          * stable across all of them; the agg_tx_status (TX_STATUS_SUCCESS=0x01,
          * TX_STATUS_DIRECT_DONE=0x02, failures above 0x80) sits in the tail. */
-        if (pkt->group_id == 0 && pkt->cmd == 0x1c && g_mgmt_diag) {
+        if (pkt->group_id == 0 && pkt->cmd == 0x1c && g_txresp_n < 4) {
+            g_txresp_n++;
             const u8 *d = pkt->data; int n = plen - 4, i;
             if (n > 48) n = 48;
             uno_dbg_net_trace("wifi: TXRESP frames=%d btkill=%d fail_rts=%d fail_frame=%d rate=%08x",
@@ -1278,6 +1289,19 @@ static void rx_process_rb(const u8 *rb, int cap,
                 u16 fc = (u16)(frame[0] | (frame[1] << 8));
                 int qos = ((fc >> 4) & 0xF) == 8;
                 if (((fc >> 2) & 3) == 0) {          /* type = management */
+                    /* Log EVERY non-beacon mgmt frame while waiting, before any
+                     * addr1 filtering, so "the AP never replied" can be told
+                     * apart from "it replied and we rejected it". */
+                    int st_ = (fc >> 4) & 0xF;
+                    if (g_mgmt_diag && st_ != 8 && st_ != 5 && g_mgmt_diag_other < 12) {
+                        g_mgmt_diag_other++;
+                        uno_dbg_net_trace("wifi: mgmt subtype=%d len=%d a1=%02x:%02x:%02x:%02x:%02x:%02x"
+                                          " a2=%02x:%02x:%02x:%02x:%02x:%02x mine=%d",
+                                          st_, fl,
+                                          frame[4],frame[5],frame[6],frame[7],frame[8],frame[9],
+                                          frame[10],frame[11],frame[12],frame[13],frame[14],frame[15],
+                                          !memcmp(frame + 4, g_mac, 6));
+                    }
                     if (g_scanning) scan_record_beacon(frame, fl);
                     else            mgmt_capture(frame, fl, fc);
                 }
@@ -3071,7 +3095,7 @@ static int mvm_auth(void)
     f[24] = 0; f[25] = 0;               /* auth algorithm = Open System */
     f[26] = 1; f[27] = 0;               /* auth transaction seq = 1 */
     f[28] = 0; f[29] = 0;               /* status code = 0 */
-    g_mgmt_rx_len = 0; g_mgmt_diag = 1; g_mgmt_diag_n = 0;
+    g_mgmt_rx_len = 0; g_mgmt_diag = 1; g_mgmt_diag_n = 0; g_mgmt_diag_other = 0; g_txresp_n = 0;
     tx_enqueue(f, 30, 1);
     { int rc = wait_mgmt(11, 800); g_mgmt_diag = 0;
       uno_dbg_net_trace("wifi: auth: %d rx pkts seen during wait, mgmt=%d", g_mgmt_diag_n, rc==0);
