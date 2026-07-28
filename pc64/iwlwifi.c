@@ -3458,13 +3458,36 @@ static int join_selected(void)
  * live MAC/LINK/PHY contexts and the fw asserts if they are added again. */
 static int radio_restart(void)
 {
-    if (g_bar && g_fw_loaded) device_stop();
+    u32 h;
+    if (g_bar && g_fw_loaded) {
+        device_stop();
+        /* Clear the latched MSI-X causes before reloading. Bit 25 of
+         * CSR_MSIX_HW_INT_CAUSES_AD is SW_ERR (the fw-assert flag) and bit 0 is
+         * ALIVE; neither is ever cleared otherwise, so a stale one makes
+         * wait_alive believe a fresh ALIVE arrived and makes the health check
+         * report an assert that already happened. */
+        w32(CSR_MSIX_HW_INT_CAUSES_AD, 0xFFFFFFFFu);
+        w32(CSR_MSIX_FH_INT_CAUSES_AD, 0xFFFFFFFFu);
+        w32(CSR_INT, 0xFFFFFFFFu);
+    }
     g_bound = 0; g_joined = 0; g_alive = 0; g_mvm_done = 0; g_ctx_built = 0;
     g_keys_installed = 0; g_wpa_active = 0; g_data_qid = -1;
     g_mvm_arm = 1; g_no_join = 1;
     iwl_nic();
     g_no_join = 0;
-    return (g_alive && g_mvm_done) ? 0 : -1;
+    if (!g_alive || !g_mvm_done) return -1;
+    /* METAL, round 25: the reload reports ALIVE but the fw then SW_ERRs on the
+     * first command after it (csr2808 = 0x02000000 the moment MAC_CONFIG goes
+     * out), i.e. restarting the radio on top of a half-finished association is
+     * NOT a working recovery - only a reboot is. Check for it rather than
+     * spraying commands at a dead firmware. */
+    h = r32(CSR_MSIX_HW_INT_CAUSES_AD);
+    if (h) {
+        uno_dbg_net_trace("wifi: radio restart came up ASSERTED (csr2808=%08x) - "
+                          "only a reboot recovers this; giving up on retries", h);
+        return -1;
+    }
+    return 0;
 }
 
 /* Full connect: scan once, then try the SSID's BSSs strongest-first until one
@@ -4498,7 +4521,16 @@ int iwl_dbg_cmd(const char *line, char *out, int cap)
             if (*q == 0x7c) q++;
             k = 0; while (*q && k < (int)sizeof psk - 1) psk[k++] = *q++;
             psk[k] = 0;
-        } else { strcpy(ssid, g_cfg_ssid); strcpy(psk, g_cfg_psk); }
+        } else {
+            /* No argument = "use WIFI.CFG" - but the file is only read inside
+             * iwl_nic(), so on a cold box g_cfg_ssid is still empty here and the
+             * join bailed instantly ("err connect:" with no trace at all).
+             * Bring the radio up first; that reads the credentials. */
+            if (!g_cfg_ssid[0]) radio_up();
+            strcpy(ssid, g_cfg_ssid); strcpy(psk, g_cfg_psk);
+            if (!ssid[0]) { strcpy(out, "err connect: no ssid (WIFI.CFG/WIFI.TXT missing?)");
+                            return (int)strlen(out); }
+        }
         if (iwl_join_ssid(ssid, psk) == 0) iwl_status_str(out, cap);
         else { strcpy(out, "err connect: "); iwl_status_str(out + 13, cap - 13); }
         return (int)strlen(out);
