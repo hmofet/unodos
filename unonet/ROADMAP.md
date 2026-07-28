@@ -5,6 +5,17 @@ mission needs. **Read the ownership note first — it changes who does what.**
 
 ## Ownership (per the networking contract — not negotiable here)
 
+> **Correction (2026-07-28).** The "unoautomate owns the transport stack"
+> handoff this section was written against was **superseded the same day** by
+> the RE-HOME entry at the top of `pc64/UNOAUTOMATE-REQUESTS.md`: `unonet`
+> (net.c / tls.* / netsock / netdisc) and `unostorage` are **neutral shared
+> subsystems** — whoever's task owns them edits them, no single feature agent
+> owns them (AGENTS.md §1). So items 1-3 below are not "requests to
+> unoautomate"; they are unonet-lane work for whoever holds the lane. The
+> seam split (transport above `uno_nic_t`, drivers below) is unchanged and
+> still correct. Item 4 is settled by the same entry: the files stay in
+> `pc64/`, under shared ownership, and `unonet/` remains the seam home.
+
 `pc64/NETSTACK.md` + the 2026-07-22 handoff in `pc64/UNOAUTOMATE-REQUESTS.md`
 set the whole coexistence contract for networking:
 
@@ -40,7 +51,7 @@ see "Explicitly out of scope."
 - **TCP core** — active/passive open, `TCP_LISTEN`/accept, retransmit, window
   advertisement, S-NET-15 overlap accounting. Sufficient on a clean LAN.
 - **TLS** — BearSSL, real crypto: CA-chain validation (`tls_connect_ca`) +
-  pinned-key mode (`tls_connect`), SNI. Weak spot is the RNG feeding it (item 1).
+  pinned-key mode (`tls_connect`), SNI. The RNG feeding it was the weak spot; item 1 closed it.
 - **Discovery + remote channel** — `netdisc` zero-config + the URC link, both
   QEMU-verified. A NIC-independent UART transport is requested (r8169 Request 2,
   OPEN) — the right robustness move for a box you can't reach over the NIC.
@@ -50,7 +61,29 @@ see "Explicitly out of scope."
 
 ## The work — 4 items, correctly attributed
 
-### 1. RNG / entropy  (security — highest value) — REQUEST → unoautomate
+### 1. RNG / entropy  (security — highest value) — **DONE 2026-07-28**
+
+Both asks landed, in the unonet lane. The collector moved into its own file
+`pc64/tls_entropy.{c,h}` so the health test is testable without QEMU:
+
+- **(a) fail closed** — `tls_connect`/`tls_connect_ca` now check the source
+  *before opening a socket* and return `TLS_ENOENTROPY` when none qualifies.
+  Nothing is ever injected from a seed we cannot defend; the TSC-LCG is gone.
+- **(b) a real source for RDRAND-less boxes** — CPU timing jitter: rdtsc
+  deltas of a data-dependent walk over a 64 KB (larger-than-L1) working set,
+  conditioned through BearSSL's SHA-256, credited at 1 bit/sample. It counts
+  only after an online health test (repetition run, change rate, distinct
+  low-bit values), so a frozen / step-locked / too-coarse clock yields NO
+  source rather than a repeatable seed. RDRAND is likewise only trusted after
+  an *actual* success, not merely a CPUID bit.
+- The seam-side offer (NIC/IRQ inter-arrival timing) was **not** needed: the
+  frame counters are folded in as uncredited diversity, so there is no new
+  `uno_nic` surface to maintain. That offer can stay closed.
+- Gates: `tools/tls_entropy_test.sh` (6 synthetic-CPU scenarios incl. the
+  three dead-clock cases) + SPECTEST **S-TLS-10/11**. Contract: SPEC.md
+  S-TLS-06/10/11.
+
+<details><summary>original item</summary>
 
 `tls.c` seeds BearSSL from a TSC-mix the code itself flags **"NOT
 cryptographically strong"** (`pc64/tls.c:65`) whenever `RDRAND` is absent, and it
@@ -66,6 +99,7 @@ already exists for the introspection half.
 entropy source that lives on the driver/seam side; if unoautomate wants it, I can
 expose an accumulator through the `uno_nic`/seam surface for `get_entropy()` to
 mix in. Offered in the request; the core fix stays unoautomate's.
+</details>
 
 ### 2. Multi-client server loop — REQUEST → unoautomate
 
@@ -95,9 +129,9 @@ a scheduled item.
 
 ## Sequence
 
-Items 1 → 3 → 2 as **requests** (unoautomate lands them on its schedule; 1 first
-for value). Item 4 is parked pending a contract decision. Nothing here edits
-transport-stack files directly.
+Item **1 is done** (2026-07-28). Items 3 then 2 remain, and per the correction
+at the top they are ordinary unonet-lane slices, not requests filed elsewhere.
+Item 4 is settled: the transport files stay in `pc64/` under shared ownership.
 
 ## Explicitly out of scope (LAN mission)
 
