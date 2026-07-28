@@ -1219,6 +1219,7 @@ static const u8 SNAP[6] = { 0xAA,0xAA,0x03,0x00,0x00,0x00 };
 static u8  g_bssid[6];                                 /* the AP we joined */
 static u32 g_rx_data_n, g_rx_data_drop, g_tx_data_n;   /* data-path counters */
 static int g_rx_data_log;      /* log the next N received data frames (debug) */
+static int g_rx_mic = -1;      /* does the fw leave the CCMP MIC on? -1 = not learned yet */
 static int g_last_rssi;        /* strongest energy seen on a frame from our AP */
 
 /* process one received RB: walk packed iwl_rx_packet records */
@@ -1341,7 +1342,20 @@ static void rx_process_rb(const u8 *rb, int cap,
                 if (fl > hl + 16 && memcmp(frame + hl, SNAP, 6) &&
                     !memcmp(frame + hl + 8, SNAP, 6)) {
                     poff = hl + 8; enc = 1;               /* CCMP/TKIP ext-IV header */
-                    if (dlen > poff + 16) dlen -= 8;      /* trailing CCMP MIC */
+                    /* Trailing MIC: whether the fw leaves it on is a property of
+                     * the firmware, and guessing wrong either truncates a packet
+                     * by 8 bytes or leaves 8 stray ones. The payload settles it -
+                     * an IPv4 total_length (or ARP's fixed 28) says how much of
+                     * what follows is real - so learn it once from the first
+                     * frame that carries a length and apply that answer after. */
+                    { int avail = fl - poff - 8;
+                      u16 pet = (u16)((frame[poff+6] << 8) | frame[poff+7]);
+                      int want = -1;
+                      if (pet == 0x0800 && avail >= 20)
+                          want = (frame[poff+10] << 8) | frame[poff+11];
+                      else if (pet == 0x0806 && avail >= 28) want = 28;
+                      if (want > 0 && want <= avail) g_rx_mic = (avail - 8 >= want);
+                      if (g_rx_mic == 1 && dlen > poff + 16) dlen -= 8; }
                 }
                 if (dlen > poff + 8 && !memcmp(frame + poff, SNAP, 6)) {
                     u16 et = (u16)((frame[poff + 6] << 8) | frame[poff + 7]);
@@ -1443,6 +1457,7 @@ static int rx_pump_ms(int ms, int until_joined)
     for (t = 0; t < ms; t++) {
         rx_pump_once();
         if (until_joined && g_joined) return t;
+        if ((t & 0xff) == 0) uno_dbg_heartbeat();   /* a long pump must not trip the wd */
         mdelay_(1);
     }
     return ms;
@@ -4097,6 +4112,8 @@ static int probe_data(const u8 target_ip[4], int listen_ms, char *out, int cap)
     (void)cap;
     if (!g_joined) { strcpy(out, "err not joined - run the join sequence first"); return (int)strlen(out); }
     g_rx_data_log = 12;
+    g_txresp_n = 0;             /* re-arm the REPLY_TX dumps: TX_STATUS says whether
+                                 * the AP ACKed our frame even if nothing answers */
     /* drain anything already queued so the counts below are about THIS probe */
     while (g_dq_tail != g_dq_head) g_dq_tail = (g_dq_tail + 1) % DATAQ;
     if (target_ip) {
@@ -4131,9 +4148,9 @@ static int probe_data(const u8 target_ip[4], int listen_ms, char *out, int cap)
         got++;
         g_dq_tail = (g_dq_tail + 1) % DATAQ;
     }
-    uno_dbg_net_trace("wifi: probe: data frames rx=%d (queued %d, dropped %d) tx=%d rssi=%d",
+    uno_dbg_net_trace("wifi: probe: data frames rx=%d (queued %d, dropped %d) tx=%d rssi=%d mic=%d",
                       (int)(g_rx_data_n - rx0), got, (int)(g_rx_data_drop - drop0),
-                      (int)g_tx_data_n, g_last_rssi);
+                      (int)g_tx_data_n, g_last_rssi, g_rx_mic);
     { char *o = out; const char *p = got ? "ok probe: data frames received (NET log): "
                                          : "err probe: NO data frames received: ";
       int v = got, m = 0, j; char d[8];
