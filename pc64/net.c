@@ -2,6 +2,7 @@
  * UnoDOS/pc64 - compact TCP/IP stack (see net.h).
  * ======================================================================== */
 #include "net.h"
+#include "unoauto.h"     /* net.tx / net.rx tap points; compiles away in prod */
 #include <string.h>
 
 /* ---- static config: matches QEMU SLIRP (-netdev user) defaults ---------- */
@@ -60,10 +61,16 @@ static u8 g_tx[FRM];
  * DHCP replies aren't parsed. Reset each net_init. */
 static u32 g_tx_frames, g_rx_frames, g_rx_arp, g_rx_ip;
 static int g_link_mbps;               /* negotiated link speed, 0 = unknown */
+/* The "net.tx" / "net.rx" tap points (unoauto.h): one fire per frame that
+ * actually crossed the seam, payload `long *` = the frame length in bytes.
+ * Deliberately here and not per-byte - a hook fn runs synchronously inside the
+ * producer, so frame granularity is the contract. Both fires compile away
+ * entirely in a production build (unoauto.h's no-op macro consumes its args). */
 static int nic_tx(int flen)
 { int r; if (!g_nic || flen <= 0) return -1;
   r = g_nic->send(g_nic->ctx, g_tx, flen);
-  if (r >= 0) g_tx_frames++;            /* count sends that left the driver, not attempts */
+  if (r >= 0) { long ev = flen;         /* count sends that left the driver, not attempts */
+                g_tx_frames++; unoauto_hook_fire("net.tx", &ev); }
   return r; }
 u32 net_tx_frames(void) { return g_tx_frames; }
 u32 net_rx_frames(void) { return g_rx_frames; }
@@ -931,6 +938,12 @@ int net_dns_query(const char *host, u8 out[4])
     g_dns_sent = g_dns_rx = g_dns_badid = g_dns_neg = 0;
     for (tries = 0; tries < 4; tries++) {       /* (re)send, then wait */
         int waited;
+        /* Cooperative wall-clock budget (unoauto_deadline_left_ms): the TEST
+         * runner cannot preempt a synchronous wait, so a dead resolver used to
+         * hold the whole SPECTEST batch past its budget and read as a hang.
+         * 0 = out of budget; -1 = none armed, which is every production build
+         * (the macro folds to a constant there and this compiles out). */
+        if (unoauto_deadline_left_ms() == 0) return 0;
         /* back off before a retry: a home-router forwarder that answered the
          * previous try negatively (cold cache, recursion still running
          * upstream) needs a beat before it can answer positively. */
@@ -940,6 +953,7 @@ int net_dns_query(const char *host, u8 out[4])
         for (waited = 0; waited < 120; waited++) {
             u8 r[512]; u8 src[4]; u16 sp; int n, i, qd, an;
             net_poll(); uno_pc64_delay_ms(8);
+            if (unoauto_deadline_left_ms() == 0) return 0;   /* budget, as above */
             n = net_udp_recv(sport, r, sizeof r, src, &sp);
             if (n < 12) continue;
             g_dns_rx++;
@@ -984,9 +998,9 @@ void net_poll(void)
     if (!g_nic) return;
     g_ticks++;
     while ((n = g_nic->recv(g_nic->ctx, rx, FRM)) > 0) {
-        u16 type;
+        u16 type; long ev = n;
         if (n < 14) continue;
-        g_rx_frames++;
+        g_rx_frames++; unoauto_hook_fire("net.rx", &ev);
         type = rd16(rx + 12);
         if (type == 0x0806) { g_rx_arp++; arp_recv(rx + 14, n - 14); }
         else if (type == 0x0800) { g_rx_ip++; ip_recv(rx + 14, n - 14); }
