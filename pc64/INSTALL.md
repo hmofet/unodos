@@ -43,7 +43,30 @@ To undo on any machine: delete `\EFI\UNODOS\` from the ESP and remove the
 
 `python3 tools/install_test.py [disk|esp]` (WSL/Linux; `UNO_KVM=1` to use KVM)
 boots the USB image + a scratch disk in QEMU/OVMF, drives the Install app by
-keyboard, then reboots from the scratch disk alone and screenshots the desktop.
-The `esp` phase additionally builds a foreign-content ESP first and verifies
-offline (mtools) that the foreign files survived. Both phases pass on WSL
-(TCG) and devbuntu (KVM) as of 2026-07-19.
+keyboard, then reboots from the scratch disk alone. Needs
+`build/unodos-uefi.img` (`python3 tools/mkuefi.py 256`); it now says so plainly
+instead of failing on a QMP socket that never opened.
+
+**Both phases assert** (they did not always - see below):
+- **offline (mtools):** whole-disk => `\EFI\BOOT\BOOTX64.EFI` + `APPS\*.UNO` on
+  the target; ESP => the same under `\EFI\UNODOS\`, plus the foreign marker intact.
+  The partition extent is read from the target's GPT, since after a whole-disk
+  clone the ESP is the *source* stick's size.
+- **from-disk boot:** the frame after booting the disk alone must actually be a
+  desktop. Measured as the fraction of non-black pixels (a booted desktop covers
+  the frame at ~100%; the UEFI shell is a black screen with a few lines of text at
+  ~1%), which survives a theme change in a way brightness alone would not.
+
+The scratch disk is sized from the USB image + 64 MiB, because `install_disk()`
+refuses a target smaller than the source's used extent + 33 sectors.
+
+> **Why the asserts.** Until 2026-07-28 the `disk` phase returned success
+> unconditionally and checked nothing, so it stayed green through three stacked
+> breakages: the scratch disk was a hardcoded 256 MiB that the app listed as
+> `[too small]` and refused; the Start-menu index was hardcoded, so after the
+> Network app was dropped the test opened **Music** instead of Install; and the
+> whole-disk confirm gate had grown a type-`ERASE` box that two bare `i` presses
+> no longer satisfy. The committed screenshots show all of it — nobody was
+> looking, because the exit code said pass. Menu positions now come from the
+> shell's own `kAppNames[]`, and the confirm sequence matches
+> `tools/install_confirm_test.py`, which is the spec for that gate.
