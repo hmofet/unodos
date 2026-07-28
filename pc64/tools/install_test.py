@@ -21,7 +21,7 @@ build/unodos-uefi.img (python3 tools/mkuefi.py after ./build.sh).
 NVRAM (build/inst-vars.fd) persists across the install boot and the from-disk
 boot, so the Boot#### / BootOrder entry written by the installer is live.
 """
-import json, os, socket, subprocess, sys, time
+import json, os, re, socket, subprocess, sys, time
 
 PC64 = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 os.chdir(PC64)
@@ -32,7 +32,39 @@ QMP_SOCK = "/tmp/unodos-inst-qmp.sock"
 USB_IMG = "build/unodos-uefi.img"
 DISK_IMG = "build/inst-disk.img"
 VARS = "build/inst-vars.fd"
-DISK_MIB = 256
+
+# The target disk must be BIGGER than the source stick: install_disk() refuses a
+# target whose LastBlock < g_src_need + 33 (installer.c), where g_src_need is the
+# source GPT's last used sector + 1, and it needs room to relocate the backup GPT.
+# This used to be a hardcoded 256 MiB, which a 256 MiB stick can never satisfy -
+# so the Install app listed the target as "[too small]", refused it, and the disk
+# phase then "passed" having installed nothing (see the assertion note in
+# run_phase). Derive it from the actual image instead, so the test cannot go stale
+# when the stick is rebuilt at a different size.
+DISK_MARGIN_MIB = 64
+
+
+def disk_mib():
+    usb_mib = (os.path.getsize(USB_IMG) + (1 << 20) - 1) >> 20
+    return usb_mib + DISK_MARGIN_MIB
+
+
+def require_prereqs():
+    """Fail with a usable message instead of an unhandled ConnectionRefusedError.
+
+    QEMU exits immediately when a -drive file is missing, so the first symptom
+    used to be Qmp() failing to connect to a socket nothing was ever listening
+    on - which says nothing about the actual cause."""
+    missing = [p for p in (OVMF_CODE, OVMF_VARS, USB_IMG) if not os.path.exists(p)]
+    if missing:
+        print("FAIL: missing prerequisite(s):")
+        for p in missing:
+            print("   " + p)
+        if USB_IMG in missing:
+            print("\nBuild the USB image first:  python3 tools/mkuefi.py 256")
+            print("(after ./build.sh - see the module docstring)")
+        return False
+    return True
 
 
 class Qmp:
@@ -142,10 +174,27 @@ def start_qemu(with_usb):
     return subprocess.Popen(argv, stderr=open("build/inst-qemu.log", "ab"))
 
 
+def menu_apps():
+    """The Start-menu order, read from the shell's OWN table.
+
+    These positions were hardcoded, and they drift: dropping the Network app
+    (3aa37d1) moved Install and this test then opened whatever now sat at index 6
+    - Music - so it drove the wrong app for weeks. Nothing noticed, because the
+    disk phase asserted nothing. Derive from kAppNames so both sides share one
+    source of truth."""
+    with open("pc64_uui.c", encoding="utf-8", errors="replace") as f:
+        src = f.read()
+    m = re.search(r"kAppNames\[NNATIVE\]\s*=\s*\{(.*?)\}", src, re.S)
+    if not m:
+        raise RuntimeError("cannot find kAppNames[] in pc64_uui.c")
+    return re.findall(r'"([^"]+)"', m.group(1))
+
+
 def open_install(q):
+    idx = menu_apps().index("Install")     # menu order = app order
     combo(q, "ctrl", "esc")                # Start menu
     time.sleep(0.8)
-    keys(q, *(["down"] * 6))               # menu order = app order; Install = 6
+    keys(q, *(["down"] * idx))
     keys(q, "ret")
     time.sleep(1.5)
 
@@ -156,13 +205,31 @@ BTN_INSTALL = (503, 278)
 BTN_RESCAN = (220, 278)
 
 
+def type_text(q, s):
+    for ch in s:
+        keys(q, ch.lower())
+        time.sleep(0.10)
+
+
 def run_install(q, tag, double_confirm):
     shot(q, tag + "_win")
-    keys(q, "i")                           # Install (keyboard accelerator)
-    time.sleep(0.5)
     if double_confirm:
+        # Whole-disk install is gated on TYPING the word ERASE into a confirm box
+        # (see tools/install_confirm_test.py, which is the spec for this gate).
+        # Two bare `i` presses no longer commit anything - which is what this test
+        # was still doing, so it armed nothing and installed nothing.
+        keys(q, "c")                       # C puts the caret in the confirm box
+        time.sleep(0.5)
+        type_text(q, "erase")
+        time.sleep(0.4)
+        keys(q, "esc")                     # leave the box; accelerators return
+        time.sleep(0.4)
         shot(q, tag + "_armed")
-        keys(q, "i")                       # confirm the erase
+        keys(q, "i")                       # arms
+        time.sleep(0.8)
+        keys(q, "i")                       # commits
+    else:
+        keys(q, "i")                       # ESP install: single accelerator
     # the copy runs synchronously; poll with shots until it settles
     time.sleep(4)
     for i in range(24):
@@ -175,29 +242,115 @@ def run_install(q, tag, double_confirm):
 
 
 def phase_boot_from_disk(tag):
+    """Boot the internal disk ALONE and assert UnoDOS actually comes up.
+
+    Returns True/False - it used to return nothing and the caller ignored it,
+    so a disk that dropped straight to the UEFI shell still "passed"."""
+    ok = False
     qemu = start_qemu(with_usb=False)
     try:
         q = Qmp(QMP_SOCK)
         print("from-disk boot; waiting...")
         time.sleep(20)
-        shot(q, tag + "_fromdisk")
+        ok = shot_assert_desktop(q, tag + "_fromdisk")
         # decoupling proof: apps are .UNO modules, so opening one on the
         # installed system exercises the loader against the installed volume
         # (\EFI\UNODOS\APPS on an ESP install, the cloned APPS\ on whole-disk).
         combo(q, "ctrl", "esc")            # Start menu
         time.sleep(0.8)
-        keys(q, *(["down"] * 7))           # menu order = app order; Dostris = 7
+        # first entry past the native apps = the first legacy (.UNO) app, Dostris
+        keys(q, *(["down"] * len(menu_apps())))
         keys(q, "ret")
         time.sleep(2.0)
         shot(q, tag + "_fromdisk_app")
         q.cmd("quit")
     finally:
         qemu.wait(timeout=15)
+    return ok
+
+
+def part_extent(img):
+    """(first_lba, sectors) of GPT partition entry 1, or None if there isn't one.
+
+    Read from the disk rather than recomputed from a constant: after a whole-disk
+    clone the ESP is the SOURCE stick's size, not the target's, so any arithmetic
+    based on the target geometry extracts the wrong byte range."""
+    with open(img, "rb") as f:
+        f.seek(2 * 512)
+        e = f.read(128)
+    if len(e) < 128 or e[:16] == b"\x00" * 16:
+        return None
+    first = int.from_bytes(e[32:40], "little")
+    last = int.from_bytes(e[40:48], "little")
+    return (first, last - first + 1) if last >= first else None
+
+
+def extract_part(img, dest):
+    ext = part_extent(img)
+    if not ext:
+        return False
+    first, sectors = ext
+    with open(img, "rb") as f:
+        f.seek(first * 512)
+        data = f.read(sectors * 512)
+    with open(dest, "wb") as f:
+        f.write(data)
+    return True
+
+
+def ppm_ink(path):
+    """Fraction of non-black pixels in a P6 PPM, and mean luminance.
+
+    Distinguishes "the installed disk booted UnoDOS" from "it dropped to the UEFI
+    shell", with no image library. The shell is a black screen with a few lines of
+    text (~3% ink); any desktop, light or dark, covers essentially the whole frame.
+    Ink fraction is used for the verdict because it survives a theme change in a
+    way that mean brightness would not."""
+    with open(path, "rb") as f:
+        data = f.read()
+    fields, i = [], 2                       # skip the "P6" magic
+    while len(fields) < 3 and i < len(data):
+        while i < len(data) and data[i:i + 1].isspace():
+            i += 1
+        if data[i:i + 1] == b"#":           # comment line
+            while i < len(data) and data[i:i + 1] != b"\n":
+                i += 1
+            continue
+        j = i
+        while j < len(data) and not data[j:j + 1].isspace():
+            j += 1
+        fields.append(int(data[i:j]))
+        i = j
+    px = data[i + 1:]                       # single whitespace byte after maxval
+    ink = lum = n = 0
+    for k in range(0, len(px) - 2, 3 * 97):  # sample: 1 MPx is plenty at 1/97
+        r, g, b = px[k], px[k + 1], px[k + 2]
+        if r > 8 or g > 8 or b > 8:
+            ink += 1
+        lum += r + g + b
+        n += 1
+    return (ink / float(n), lum / (3.0 * n)) if n else (0.0, 0.0)
+
+
+def shot_assert_desktop(q, tag):
+    """screenshot + assert the frame actually shows a booted desktop"""
+    ppm = "shots/%s.ppm" % tag
+    q.cmd("screendump", filename=ppm)
+    time.sleep(0.4)
+    ink, lum = ppm_ink(ppm)
+    subprocess.run([sys.executable, "tools/ppm2png.py", ppm, "shots/%s.png" % tag],
+                   check=True)
+    os.remove(ppm)
+    ok = ink >= 0.50
+    print("shot: shots/%s.png  ink %.0f%% luma %.0f  -> %s"
+          % (tag, ink * 100, lum,
+             "desktop" if ok else "NOT A DESKTOP (UEFI shell / black screen)"))
+    return ok
 
 
 def make_blank_disk():
     with open(DISK_IMG, "wb") as f:
-        f.truncate(DISK_MIB * 1024 * 1024)
+        f.truncate(disk_mib() * 1024 * 1024)
 
 
 def make_esp_disk():
@@ -209,7 +362,7 @@ def make_esp_disk():
                     DISK_IMG], check=True,
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     fat = "/tmp/uno_inst_esp.img"
-    part_sectors = DISK_MIB * 2048 - 2048 - 33
+    part_sectors = part_extent(DISK_IMG)[1]
     subprocess.run(["mformat", "-C", "-i", fat, "-T", str(part_sectors),
                     "-h", "64", "-s", "32", "-F", "-v", "OTHEROS", "::"], check=True)
     subprocess.run(["mmd", "-i", fat, "::/EFI"], check=True)
@@ -226,24 +379,35 @@ def make_esp_disk():
     os.remove(fat)
 
 
-def verify_esp_disk():
-    """post-install: foreign marker intact + \\EFI\\UNODOS\\BOOTX64.EFI present"""
+APPS = ["DOSTRIS", "PACMAN", "OUTLAST", "MUSIC", "TRACKER", "PAINT", "NETWORK"]
+
+
+def verify_paths(label, paths):
+    """offline (mtools) check that the installed volume holds `paths`"""
     fat = "/tmp/uno_inst_esp.img"
-    part_sectors = DISK_MIB * 2048 - 2048 - 33
-    with open(DISK_IMG, "rb") as f:
-        f.seek(2048 * 512)
-        data = f.read(part_sectors * 512)
-    with open(fat, "wb") as f:
-        f.write(data)
+    if not extract_part(DISK_IMG, fat):
+        print("[%s] FAIL: no GPT partition on the target - nothing was installed" % label)
+        return False
     ok = True
-    apps = ["DOSTRIS", "PACMAN", "OUTLAST", "MUSIC", "TRACKER", "PAINT", "NETWORK"]
-    for path in (["::/EFI/OTHER/MARKER.TXT", "::/EFI/UNODOS/BOOTX64.EFI"] +
-                 ["::/EFI/UNODOS/APPS/%s.UNO" % a for a in apps]):
+    for path in paths:
         r = subprocess.run(["mdir", "-i", fat, path], capture_output=True)
-        print("%-36s %s" % (path, "OK" if r.returncode == 0 else "MISSING"))
+        print("%-40s %s" % (path, "OK" if r.returncode == 0 else "MISSING"))
         ok = ok and r.returncode == 0
     os.remove(fat)
     return ok
+
+
+def verify_esp_disk():
+    """post-install: foreign marker intact + \\EFI\\UNODOS\\BOOTX64.EFI present"""
+    return verify_paths("esp", ["::/EFI/OTHER/MARKER.TXT", "::/EFI/UNODOS/BOOTX64.EFI"] +
+                        ["::/EFI/UNODOS/APPS/%s.UNO" % a for a in APPS])
+
+
+def verify_disk_clone():
+    """post-install (whole disk): the clone boots via the removable-media path,
+    so \\EFI\\BOOT\\BOOTX64.EFI and the APPS\\ modules must be on the target."""
+    return verify_paths("disk", ["::/EFI/BOOT/BOOTX64.EFI"] +
+                        ["::/APPS/%s.UNO" % a for a in APPS])
 
 
 def run_phase(mode):
@@ -264,19 +428,31 @@ def run_phase(mode):
         q.cmd("quit")
     finally:
         qemu.wait(timeout=15)
-    if mode == "esp" and not verify_esp_disk():
-        print("[esp] OFFLINE VERIFY FAILED")
+    # Offline verify BOTH modes. The disk phase used to check nothing at all and
+    # then return True unconditionally, so it stayed green while the Install app
+    # was refusing the target outright ("[too small]") and installing nothing.
+    verified = verify_esp_disk() if mode == "esp" else verify_disk_clone()
+    if not verified:
+        print("[%s] OFFLINE VERIFY FAILED" % mode)
         return False
-    phase_boot_from_disk("inst_" + mode)
+    booted = phase_boot_from_disk("inst_" + mode)
+    if not booted:
+        print("[%s] FROM-DISK BOOT FAILED - the installed disk did not reach the desktop" % mode)
+        return False
+    print("[%s] PASS - installed, and the disk boots UnoDOS on its own" % mode)
     return True
 
 
 def main():
+    if not require_prereqs():
+        sys.exit(2)
     os.makedirs("shots", exist_ok=True)
     modes = sys.argv[1:] or ["disk", "esp"]
     for m in modes:
         if not run_phase(m):
+            print(">> install-test FAILED (%s)" % m)
             sys.exit(1)
+    print(">> install-test OK (%s)" % ", ".join(modes))
 
 
 if __name__ == "__main__":
