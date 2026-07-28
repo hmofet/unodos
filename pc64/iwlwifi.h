@@ -53,6 +53,19 @@ int iwl_join_ssid(const char *ssid, const char *psk);
  *   prw <hexreg> <hexval>  write a PRPH reg (grab) -> "ok"
  *   rerun                  full bring-up retry     -> iwl_status_str
  *   status                 no side effects         -> iwl_status_str
+ * Association + data path:
+ *   scan / pick <n>        scan, then target the n-th AP by hand
+ *   mvm <n> / mld <n>      the bring-up and link-API steppers
+ *   auth / assoc / eapol   one step of the join each
+ *   connect [ssid|psk]     the WHOLE join in one command (WIFI.CFG if omitted)
+ *   data [a.b.c.d]         prove the encrypted data path (ARP + listen) WITHOUT
+ *                          touching the IP stack, which is bound elsewhere
+ *   netup / netwifi        the real DHCP/ping/DNS suite over WiFi; netwifi
+ *                          leaves the stack on WiFi, netup hands it back
+ *   netres                 the stashed result of the last netup (URC is down
+ *                          while it runs, so its own reply reaches nobody)
+ *   qos <0|1>              plain vs QoS data frames on TX
+ *   band <24|5|any>        which band scan_pick() may choose from
  * Returns reply length, or -1 (unknown command / card not mapped). Debug
  * tooling only - never called by the production stack. */
 int  iwl_dbg_cmd(const char *line, char *out, int cap);
