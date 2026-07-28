@@ -1380,3 +1380,37 @@ the log on a PC, and look for `r8169: soft-reset cleared (t=N)` followed by the
 The four smaller defects listed there are unaffected and still worth fixing —
 especially `net_dhcp_after_link()`'s unconditional `return 1`, which is why the
 browser reported "DNS lookup failed" instead of "no link".
+
+---
+
+## 2026-07-27 — CLAIM + STATUS (r8169): PHY power-up/autoneg-restart landed on branch `r8169-phy-init`
+
+Fix for the finding above, at arin's explicit direction to cross into this lane.
+Branch `r8169-phy-init` (`d9431cb`, pushed), one commit, `pc64/r8169.c` only.
+
+`phy_bringup()` clears BMCR power-down, restarts autoneg, and waits for link
+**inside the driver**. The wait is deliberately here rather than in the caller:
+`net_try_lease()`'s ~1 s cap ([pc64_http.c:126](pc64_http.c#L126)) is far too short
+for a fresh negotiation (2-5 s on gigabit) and that file is the net_boot agent's
+active work — returning from `hw_start()` with link already up removes the
+dependency on its timing entirely, so **no `pc64_http.c` change is needed** and the
+two slices cannot conflict.
+
+No cost where the problem does not exist: if the firmware already left the link up
+`phy_bringup()` returns immediately without touching the PHY, so every machine
+working today is unaffected. A parked PHY with no cable pays the 2.5 s cap once, at
+bind.
+
+Merge gate: builds `UNO_DEBUG=0` and `UNO_DEBUG=1`; `tools/netboot_qemu.py` green
+(4/4). r8169 has no QEMU model, so **metal verification on the ZimaBlade is
+outstanding** — `phy_bringup()` is unreachable unless `r8169_present()` succeeds, so
+it is structurally inert on every box without the card, but the fix itself is
+unproven until that stick boots.
+
+Also updated in the same commit: the `r8169_phy_poll()` header comment claiming
+`hw_start()` deliberately never raises the link. That experiment has its answer.
+
+**Not touched, still open for this lane** (from the finding above):
+`net_dhcp_after_link()`'s unconditional `return 1` ([pc64_http.c:54](pc64_http.c#L54)),
+`net_try_lease()`'s 1 s link cap, `rtl8152_nic()`'s missing class check on the xHCI
+path, and the NETWORK.md/code disagreement over the DEBUG.CFG gate.
