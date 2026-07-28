@@ -1203,7 +1203,7 @@ static struct { u8 buf[1600]; int len; } g_dataq[DATAQ];
 static int g_dq_head, g_dq_tail;
 
 static void handle_data_frame(const u8 *frame, int len);   /* fwd (802.11->eth) */
-static void handle_eapol(const u8 *frame, int len);        /* fwd */
+static void handle_eapol(const u8 *eapol, int len);        /* fwd (EAPOL hdr, not the 802.11 frame) */
 static void scan_record_beacon(const u8 *frame, int fl);   /* fwd (scan beacon parse) */
 static void mgmt_capture(const u8 *frame, int fl, u16 fc);  /* fwd (auth/assoc resp) */
 static u8  g_mgmt_rx[512];     /* last mgmt frame addressed to us (auth/assoc/deauth) */
@@ -1309,7 +1309,14 @@ static void rx_process_rb(const u8 *rb, int cap,
                 if (fl > hl + 8) {
                     const u8 *llc = frame + hl;
                     u16 et = (u16)((llc[6] << 8) | llc[7]);
-                    if (!memcmp(llc, SNAP, 6) && et == 0x888E) handle_eapol(frame, fl);
+                    /* wpa_sm_rx_eapol() parses from the EAPOL HEADER, not the
+                     * 802.11 header - its first check is frame[1] == 0x03
+                     * (EAPOL-Key). Handing it the whole frame made it bail
+                     * instantly ("EAPOL frame in (131 bytes) -> sm state 0,
+                     * reply 0" on metal), so the AP got no 2/4 and deauthed us.
+                     * Skip the MAC header and the 8-byte LLC/SNAP+ethertype. */
+                    if (!memcmp(llc, SNAP, 6) && et == 0x888E)
+                        handle_eapol(llc + 8, fl - hl - 8);
                     else if (!memcmp(llc, SNAP, 6))            handle_data_frame(frame, fl);
                 }
             }
@@ -2763,12 +2770,16 @@ static void handle_data_frame(const u8 *frame, int len)
 static wpa_sm_t g_wpa;
 static int g_wpa_active;    /* g_keys_installed is declared up at tx_enqueue,
                              * which needs it to decide IWL_TX_FLAGS_ENCRYPT_DIS */
-static void handle_eapol(const u8 *frame, int len)
+/* `eapol` points at the EAPOL header (after the 802.11 MAC header and
+ * LLC/SNAP), which is what wpa_sm_rx_eapol expects - see the call site. */
+static void handle_eapol(const u8 *eapol, int len)
 {
     u8 reply[600];
-    int r = wpa_sm_rx_eapol(&g_wpa, frame, len, reply, sizeof reply);
-    uno_dbg_net_trace("wifi: EAPOL frame in (%d bytes) -> sm state %d, reply %d",
-                      len, g_wpa.state, r);
+    int r;
+    if (len <= 0) return;
+    r = wpa_sm_rx_eapol(&g_wpa, eapol, len, reply, sizeof reply);
+    uno_dbg_net_trace("wifi: EAPOL in (%d bytes, type=%02x desc=%02x) -> sm state %d, reply %d",
+                      len, len > 1 ? eapol[1] : 0, len > 4 ? eapol[4] : 0, g_wpa.state, r);
     if (r <= 0) return;
     /* TX the EAPOL reply as a data frame (in the clear, high priority) before
        installing keys */
