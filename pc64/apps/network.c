@@ -55,6 +55,17 @@ static char gLease[20], gMacStr[20];
 static char gUdpEcho[24], gTcpEcho[24], gTlsInfo[40];
 static char gWifiStat[196];          /* iwl_status_str() readout */
 
+/* WiFi join UI state (see wifi_draw below) */
+#define AP_MAX 10
+enum { W_STATUS = 0, W_LIST, W_PASS };
+static int      gWMode, gApN, gApSel, gScanPend, gJoinPend;
+static iwl_ap_t gAps[AP_MAX];
+static char     gPsk[72];
+static int      gPskLen;
+static char     gWifiMsg[80];
+static UiBtn    gScanBtn, gApBtn[AP_MAX], gJoinBtn, gBackBtn;
+
+
 static void hex2(char *o, unsigned v) {
     const char *h = "0123456789ABCDEF";
     o[0] = h[(v >> 4) & 15]; o[1] = h[v & 15];
@@ -219,15 +230,6 @@ static UiBtn gWifiBtn;                       /* "Connect WiFi" (Intel iwlwifi) *
  * prompt. Scanning and joining take seconds of blocking driver work, so both
  * are deferred to the next tick - the pane repaints first, then the work runs,
  * which is what makes "Scanning..." and "Joining..." actually appear. */
-#define AP_MAX 10
-enum { W_STATUS = 0, W_LIST, W_PASS };
-static int      gWMode, gApN, gApSel, gScanPend, gJoinPend;
-static iwl_ap_t gAps[AP_MAX];
-static char     gPsk[72];
-static int      gPskLen;
-static char     gWifiMsg[80];
-static UiBtn    gScanBtn, gApBtn[AP_MAX], gJoinBtn, gBackBtn;
-
 static void fmt_i(int v, char *o)               /* signed decimal */
 {
     if (v < 0) { o[0] = '-'; fmt_u((unsigned)(-v), o + 1); }
