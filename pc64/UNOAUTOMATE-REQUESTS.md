@@ -1576,3 +1576,68 @@ commands onto MAC_CONF `MAC_CONFIG_CMD` 0x08 / `LINK_CONFIG_CMD` 0x09 /
 `STA_CONFIG_CMD` 0x0a, which is what this QuZ-77 firmware actually drives
 association with (see `pc64/WIFI-F12-HANDOFF.md` round 22). Only `pc64/iwlwifi.c`
 and that handoff doc are touched; no shared choke-point edits.
+
+---
+
+## 2026-07-28 — FINDING (→ installer): no whole-disk target is enumerated when the boot medium is QEMU `vvfat`
+
+Found while regenerating the user manual's Install screenshot. Low user impact
+(nobody boots `vvfat` on metal), but it blocks a docs figure and it may point at
+an over-broad boot-disk exclusion, so it is worth a look by the owning lane.
+
+### Repro
+
+- **Works** — `tools/install_test.py disk`: boot medium is the USB image over
+  `usb-storage`, target is a bare `-drive format=raw`. The Install app lists
+  `Disk 320 MB  fixed  [ERASES ALL]` and the install completes.
+- **Fails** — `docs_shots.py install`: boot medium is
+  `-drive format=vvfat,file=fat:rw:build/esp`, plus the same kind of bare
+  `-drive format=raw` scratch disk. The app renders **"No install targets found."**
+
+The scratch disk is definitely attached in the failing case. `query-block` over
+QMP on that exact command line:
+
+```
+device=ide0-hd0   file=json:{... "driver": "vvfat", "dir": "build/esp" ...}
+device=ide1-hd0   file=build/docs-scratch.img
+```
+
+So QEMU presents both; only the enumeration in the guest comes back empty.
+
+### Where it must be going wrong
+
+The whole-disk scan is [installer.c:332-346](installer.c#L332). For a 512 MiB
+blank raw disk every filter should pass on paper:
+
+- [:336](installer.c#L336) `!Media || LogicalPartition || !MediaPresent` — a raw
+  AHCI disk is none of those.
+- [:339](installer.c#L339) `LastBlock < 2048` — LastBlock is 1048575.
+- [:338](installer.c#L338) `dp_prefix(dp, g_boot_dp)` — the "boot USB" exclusion.
+  **This is the suspect.** `g_boot_dp` is `dp_of(LoadedImage->DeviceHandle)`
+  ([:199-200](installer.c#L199)). Under `vvfat` the boot device path is a SATA
+  path rather than a USB one, so if it resolves short or degenerate, the prefix
+  test can match a *sibling* SATA disk and quietly skip it. Under the USB boot
+  the two paths share no prefix, which is exactly why that case works.
+
+That is a hypothesis, not a diagnosis - I did not instrument the guest. A single
+`uno_dbg_log` of `g_boot_dp` plus each candidate's path in the scan loop would
+settle it in one boot.
+
+### Why it matters beyond the emulator
+
+If the exclusion really is prefix-matching too loosely, the same shape could hide
+a legitimate target on real hardware whose boot device happens to share a path
+prefix with another disk - e.g. two disks behind one controller. On the ZimaBlade
+the install target and a live ZFS disk sit on the same SATA controller one index
+apart, so a mis-scoped exclusion there would be user-visible.
+
+Also a coverage gap: `install_test.py` only ever exercises the USB-boot path, so
+nothing currently tests installing from any other boot medium.
+
+### Consequence for the manual (no action needed from this lane)
+
+`docs/build_site.py`'s Install figure now says plainly that the emulator offers no
+installable disk and describes what a real PC shows instead. Attaching a scratch
+disk to `docs_shots.py` was tried and reverted - it does not populate the list and
+it perturbs every other scene. If this gets fixed, the harness can grow a scratch
+disk and the figure can show a real selected target.
