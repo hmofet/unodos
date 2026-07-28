@@ -26,6 +26,24 @@ const unsigned char *iwl_mac(void);
  * that stopped bring-up) for the Network app + diagnostics. */
 void iwl_status_str(char *buf, int cap);
 
+/* ---- runtime network selection (the Network app's join UI) ---------------
+ * One entry per network found by a scan. `rssi` is dBm from the RX descriptor
+ * (0 = unknown), `chan` the channel the scanner heard it on. */
+typedef struct {
+    char          ssid[33];
+    unsigned char bssid[6];
+    unsigned char chan;
+    signed char   rssi;
+} iwl_ap_t;
+
+/* Scan and fill up to `max` entries, strongest first, one row per SSID.
+ * Brings the card up first if needed; does NOT join. Returns the count. */
+int iwl_scan_aps(iwl_ap_t *out, int max);
+
+/* Join an SSID with a WPA2-PSK passphrase (overriding WIFI.CFG for this boot).
+ * Blocks for the scan + association + 4-way handshake (~10 s). 0 = joined. */
+int iwl_join_ssid(const char *ssid, const char *psk);
+
 /* Interactive F12 debug entry point (for the unoautomate remote channel -
  * see the 2026-07-22 request in UNOAUTOMATE-REQUESTS.md). Parses ONE command
  * line, acts on the live card, writes a NUL-terminated reply into out:

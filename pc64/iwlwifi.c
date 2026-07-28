@@ -1202,9 +1202,9 @@ struct rx_packet { u32 len_n_flags; u8 cmd; u8 group_id; u16 sequence; u8 data[]
 static struct { u8 buf[1600]; int len; } g_dataq[DATAQ];
 static int g_dq_head, g_dq_tail;
 
-static void handle_data_frame(const u8 *frame, int len);   /* fwd (802.11->eth) */
+static void handle_data_frame(const u8 *frame, int len, int snap_off);  /* fwd (802.11->eth) */
 static void handle_eapol(const u8 *eapol, int len);        /* fwd (EAPOL hdr, not the 802.11 frame) */
-static void scan_record_beacon(const u8 *frame, int fl);   /* fwd (scan beacon parse) */
+static void scan_record_beacon(const u8 *frame, int fl, int rssi, int dchan);  /* fwd (beacon parse) */
 static void mgmt_capture(const u8 *frame, int fl, u16 fc);  /* fwd (auth/assoc resp) */
 static u8  g_mgmt_rx[512];     /* last mgmt frame addressed to us (auth/assoc/deauth) */
 static int g_mgmt_diag, g_mgmt_diag_n;   /* log RX grp/cmd during auth/assoc wait */
@@ -1215,6 +1215,10 @@ static u8  g_mgmt_rx_subtype;
 static int g_scanning;   /* beacons are only harvested while a scan is active */
 static int g_scan_mpdu_seen, g_scan_beacon_calls, g_scan_rb_total;   /* scan diagnostics */
 static const u8 SNAP[6] = { 0xAA,0xAA,0x03,0x00,0x00,0x00 };
+static u8  g_bssid[6];                                 /* the AP we joined */
+static u32 g_rx_data_n, g_rx_data_drop, g_tx_data_n;   /* data-path counters */
+static int g_rx_data_log;      /* log the next N received data frames (debug) */
+static int g_last_rssi;        /* strongest energy seen on a frame from our AP */
 
 /* process one received RB: walk packed iwl_rx_packet records */
 static void rx_process_rb(const u8 *rb, int cap,
@@ -1263,6 +1267,7 @@ static void rx_process_rb(const u8 *rb, int cap,
            of what we're waiting for, so the handshake makes progress. */
         if (pkt->group_id == 0 && pkt->cmd == 0xc1) {         /* REPLY_RX_MPDU */
             const u8 *frame; int fl, machdr;
+            int rssi = 0, dchan = 0;
             if (g_scanning) g_scan_mpdu_seen++;
             if (g_mq_rx) {
                 /* iwl_rx_mpdu_desc: mpdu_len@0, mac_flags2@3 (PAD 0x20,
@@ -1276,6 +1281,19 @@ static void rx_process_rb(const u8 *rb, int cap,
                 int pad = (pkt->data[3] & 0x20) ? 2 : 0;
                 frame = pkt->data + descsz + pad; fl = mlen;
                 machdr = (pkt->data[3] & 0x1f) * 2;
+                /* iwl_rx_mpdu_desc_v1 sits at DW7 = desc+20: rss_hash@20,
+                 * filter_match@24, rate_n_flags@28, energy_a@32, energy_b@33,
+                 * channel@34. RSSI dBm = -max(energy_a, energy_b) (iwlwifi
+                 * rxmq.c), and `channel` is the channel the SCANNER WAS PARKED
+                 * ON when the frame arrived - the reliable source the DS
+                 * Parameter Set is not (5 GHz APs omit IE 3 entirely, which is
+                 * why successive scans disagreed about the same BSSID). */
+                if (g_family < FAM_AX210 && descsz == 48) {
+                    int ea = pkt->data[32] ? -(int)pkt->data[32] : -128;
+                    int eb = pkt->data[33] ? -(int)pkt->data[33] : -128;
+                    rssi  = ea > eb ? ea : eb;         /* dBm; closest to 0 wins */
+                    dchan = pkt->data[34];
+                }
             } else {
                 /* iwl_rx_mpdu_res_start(4) + frame + status(4) */
                 int mlen = pkt->data[0] | (pkt->data[1] << 8);
@@ -1302,22 +1320,56 @@ static void rx_process_rb(const u8 *rb, int cap,
                                           frame[10],frame[11],frame[12],frame[13],frame[14],frame[15],
                                           !memcmp(frame + 4, g_mac, 6));
                     }
-                    if (g_scanning) scan_record_beacon(frame, fl);
+                    if (g_scanning) scan_record_beacon(frame, fl, rssi, dchan);
                     else            mgmt_capture(frame, fl, fc);
                 }
+                if (rssi && !memcmp(frame + 10, g_bssid, 6)) g_last_rssi = rssi;
+                {
+                /* Payload offset. With hardware CCMP the firmware decrypts in
+                 * place but strips NOTHING: the 8-byte CCMP header still sits
+                 * between the MAC header and the LLC/SNAP, and the 8-byte MIC is
+                 * still on the tail (mac80211 removes both in
+                 * ieee80211_crypto_ccmp_decrypt - iwlwifi only sets
+                 * RX_FLAG_DECRYPTED and reports crypt_len = 8). Probing for the
+                 * SNAP at both offsets covers either behaviour instead of
+                 * guessing: before this, every encrypted data frame failed the
+                 * SNAP test at hdr+0 and was dropped without a trace, which is
+                 * why no byte of data ever reached the stack. */
                 int hl = machdr ? machdr : (qos ? 26 : 24);
-                if (fl > hl + 8) {
-                    const u8 *llc = frame + hl;
-                    u16 et = (u16)((llc[6] << 8) | llc[7]);
+                int poff = hl, dlen = fl, enc = 0;
+                if (fl > hl + 16 && memcmp(frame + hl, SNAP, 6) &&
+                    !memcmp(frame + hl + 8, SNAP, 6)) {
+                    poff = hl + 8; enc = 1;               /* CCMP/TKIP ext-IV header */
+                    if (dlen > poff + 16) dlen -= 8;      /* trailing CCMP MIC */
+                }
+                if (dlen > poff + 8 && !memcmp(frame + poff, SNAP, 6)) {
+                    u16 et = (u16)((frame[poff + 6] << 8) | frame[poff + 7]);
+                    if (g_rx_data_log > 0 && ((fc >> 2) & 3) == 2) {
+                        g_rx_data_log--;
+                        uno_dbg_net_trace("wifi: RXDATA fc=%04x len=%d hdr=%d enc=%d et=%04x "
+                                          "sa=%02x:%02x:%02x:%02x:%02x:%02x rssi=%d",
+                                          fc, fl, hl, enc, et,
+                                          frame[16],frame[17],frame[18],frame[19],frame[20],frame[21],
+                                          rssi);
+                    }
                     /* wpa_sm_rx_eapol() parses from the EAPOL HEADER, not the
                      * 802.11 header - its first check is frame[1] == 0x03
                      * (EAPOL-Key). Handing it the whole frame made it bail
                      * instantly ("EAPOL frame in (131 bytes) -> sm state 0,
                      * reply 0" on metal), so the AP got no 2/4 and deauthed us.
-                     * Skip the MAC header and the 8-byte LLC/SNAP+ethertype. */
-                    if (!memcmp(llc, SNAP, 6) && et == 0x888E)
-                        handle_eapol(llc + 8, fl - hl - 8);
-                    else if (!memcmp(llc, SNAP, 6))            handle_data_frame(frame, fl);
+                     * Skip the MAC header, any CCMP header, and the LLC/SNAP. */
+                    if (et == 0x888E) handle_eapol(frame + poff + 8, dlen - poff - 8);
+                    else              handle_data_frame(frame, dlen, poff);
+                } else if (((fc >> 2) & 3) == 2 && fl > hl) {
+                    g_rx_data_drop++;
+                    if (g_rx_data_log > 0) {
+                        g_rx_data_log--;
+                        uno_dbg_net_trace("wifi: RXDATA DROP fc=%04x len=%d hdr=%d "
+                                          "b0=%02x %02x %02x %02x %02x %02x %02x %02x", fc, fl, hl,
+                                          frame[hl],frame[hl+1],frame[hl+2],frame[hl+3],
+                                          frame[hl+4],frame[hl+5],frame[hl+6],frame[hl+7]);
+                    }
+                }
                 }
             }
         }
@@ -1362,6 +1414,37 @@ static int wait_cmd_done(int timeout_ms)
         mdelay_(1);
     }
     return -1;
+}
+
+/* Drain every RB the fw has closed, dispatching each frame (EAPOL -> the
+ * supplicant, data -> g_dataq, mgmt -> mgmt_capture). This is the one RX pump:
+ * wait_mgmt, iwl_recv, iwl_link and the eapol/data debug verbs all go through
+ * it, so the ring is advanced and restocked identically everywhere. */
+static void rx_pump_once(void)
+{
+    u16 closed = rx_closed() & (RXQ_N - 1);
+    while (g_rx_read != closed) {
+        const u8 *found = 0; int fl = 0;
+        int vid = g_mq_rx ? (int)(g_rbd_used[g_rx_read] & 0xFFF) : (g_rx_read + 1);
+        const u8 *rb = (vid >= 1 && vid <= RXQ_N) ? g_rb[vid-1] : g_rb[g_rx_read];
+        rx_process_rb(rb, RB_SIZE, -1, -1, &found, &fl);
+        g_rx_read = (g_rx_read + 1) & (RXQ_N - 1);
+    }
+    rx_restock();
+    if (g_gen2) w32(CSR_MSIX_AUTOMASK_ST_AD, 1);
+}
+
+/* Pump for up to ms. `until_joined` stops early once the 4-way handshake has
+ * installed keys. Returns the ms actually spent. */
+static int rx_pump_ms(int ms, int until_joined)
+{
+    int t;
+    for (t = 0; t < ms; t++) {
+        rx_pump_once();
+        if (until_joined && g_joined) return t;
+        mdelay_(1);
+    }
+    return ms;
 }
 
 /* =====================================================================
@@ -2137,6 +2220,22 @@ static void mvm_init_unified(void)
     read_mac_addr();
 }
 
+/* The whole post-ALIVE init, idempotent, so the boot path, the GUI scan path
+ * and `iwl connect` all enter the join from the same fw state. */
+static int g_mvm_done;
+static int g_no_join;      /* radio_up(): bring the fw up but do not join */
+static void mvm_init_all(void)
+{
+    if (g_mvm_done) return;
+    if (!g_gen2) tx_start_gen1();
+    mvm_init_unified();
+    mvm_tx_ant(fw_valid_tx_ant());
+    if (fw_has_capa(12)) mvm_dqa_enable();
+    mvm_power_table();
+    g_mvm_done = 1;
+    uno_dbg_net_trace("wifi: MVM init sequence queued (nvm/phy/tx-ant/power)");
+}
+
 /* Read our own MAC address out of the card, mirroring
  * iwl_set_hw_address_from_csr(): try the OEM-fused STRAP pair first and fall
  * back to the OTP pair, with the same byte flip (iwl_flip_hw_address).
@@ -2187,17 +2286,20 @@ static void mvm_phy_ctxt(int chan, int action)
 {
     struct { u32 id_color, action; u32 channel; u8 band,width,ctrl,rsv;
              u32 lmac_id, rxchain, dsp; u8 sec,r3[3]; } c;
+    int hb = chan > 14;                 /* 5 GHz */
     memset(&c, 0, sizeof c);
     c.id_color = g_phy_id; c.action = action;
-    c.channel = chan; c.band = 1 /*PHY_BAND_24*/; c.width = 0 /*20MHz*/;
-    c.lmac_id = 0;                      /* IWL_LMAC_24G_INDEX */
+    c.channel = chan;
+    c.band = hb ? 0 /*PHY_BAND_5*/ : 1 /*PHY_BAND_24*/;
+    c.width = 0 /*20MHz*/;
+    c.lmac_id = hb ? 1 /*IWL_LMAC_5G_INDEX*/ : 0 /*IWL_LMAC_24G_INDEX*/;
     /* iwl_mvm_phy_ctxt_cmd_data: valid_rx_ant << VALID_POS(1) |
      * idle_cnt << CNT_POS(10) | active_cnt << MIMO_CNT_POS(12). We were sending
      * valid=1 and NO mimo_cnt; on this 2x2 part Linux sends valid=3, cnt=1,
      * mimo_cnt=1 (0x1406). */
     c.rxchain = (fw_valid_rx_ant() << 1) | (1u << 10) | (1u << 12);
-    uno_dbg_net_trace("wifi: PHY_CONTEXT action=%d chan=%d band=2.4 rxchain=%08x len=%d",
-                      action, chan, c.rxchain, (int)sizeof c);
+    uno_dbg_net_trace("wifi: PHY_CONTEXT action=%d chan=%d band=%s lmac=%d rxchain=%08x len=%d",
+                      action, chan, hb ? "5" : "2.4", (int)c.lmac_id, c.rxchain, (int)sizeof c);
     send_cmd(GRP_LONG, 0x8, 0, &c, sizeof c); wait_cmd_done(100);
     if (action != 3 /*REMOVE*/) mvm_rlc_config();
 }
@@ -2708,9 +2810,16 @@ static int read_config(int vol)
 /* =====================================================================
  * 11. 802.11 <-> Ethernet translation, TX/RX data
  * ===================================================================== */
-static u8 g_bssid[6];
+/* g_bssid is declared up at the RX dispatch (it tags frames from our AP) */
 static u16 g_seq_no;
 static u16 g_aid;                        /* association id, set by mvm_assoc() */
+
+/* Data frames go out as PLAIN data (subtype 0), not QoS data: our association
+ * request carries no WMM/HT IE, so the AP admits us as a non-QoS station, and
+ * the fw data queue is allocated on TID 15 (IWL_MAX_TID_COUNT), which is
+ * iwlwifi's non-QoS queue. `iwl qos 1` flips this at runtime so a wrong guess
+ * costs a URC line instead of a USB reflash. */
+static int g_tx_qos;
 
 /* build a QoS-data 802.11 header (ToDS) + LLC/SNAP for an Ethernet frame,
    returns total 802.11 payload length written to out (after the tx cmd). */
@@ -2718,33 +2827,36 @@ static int eth_to_80211(const u8 *eth, int ethlen, u8 *out)
 {
     u8 *p = out;
     u16 ethertype = (u16)((eth[12]<<8) | eth[13]);
-    /* frame control: type data(2) subtype qosdata(8) => 0x88, ToDS => 0x01 */
-    *p++ = 0x88; *p++ = 0x01;
+    /* frame control: type data(2), subtype data(0) or qos-data(8); ToDS => 0x01 */
+    *p++ = g_tx_qos ? 0x88 : 0x08; *p++ = 0x01;
     *p++ = 0; *p++ = 0;                 /* duration */
     memcpy(p, g_bssid, 6); p += 6;      /* addr1 = BSSID */
     memcpy(p, g_mac, 6);   p += 6;      /* addr2 = SA (us) */
     memcpy(p, eth, 6);     p += 6;      /* addr3 = DA */
     *p++ = (u8)(g_seq_no<<4); *p++ = (u8)(g_seq_no>>4); g_seq_no++;  /* seq ctl */
-    *p++ = 0; *p++ = 0;                 /* QoS control (TID 0) */
+    if (g_tx_qos) { *p++ = 0; *p++ = 0; }   /* QoS control (TID 0) */
     memcpy(p, SNAP, 6); p += 6;         /* LLC/SNAP */
     *p++ = (u8)(ethertype>>8); *p++ = (u8)ethertype;
     memcpy(p, eth + 14, ethlen - 14); p += ethlen - 14;
     return (int)(p - out);
 }
 
-/* 802.11 data frame (FromDS) -> Ethernet, into out (>= len). Returns eth len. */
-static int wifi_to_eth(const u8 *f, int len, u8 *out)
+/* 802.11 data frame -> Ethernet, into out (>= len). `snap` is the offset of the
+ * LLC/SNAP header the RX dispatch already located (past the MAC header and any
+ * CCMP header). Returns eth len, or -1. */
+static int wifi_to_eth(const u8 *f, int len, int snap, u8 *out)
 {
-    int hdr = 24;
     u16 fc = (u16)(f[0] | (f[1]<<8));
-    int qos = ((fc>>4)&0xF) == 8;      /* QoS data subtype */
+    int tods = (fc & 0x0100) != 0, fromds = (fc & 0x0200) != 0;
     const u8 *da, *sa;
-    int snap;
-    if (qos) hdr += 2;
-    if (len < hdr + 8) return -1;
-    /* addr layout for FromDS: addr1=DA, addr2=BSSID, addr3=SA */
-    da = f + 4; sa = f + 16;
-    snap = hdr;
+    if (len < snap + 8) return -1;
+    /* address layout by ToDS/FromDS: from the AP it is FromDS (a1=DA a2=BSSID
+     * a3=SA); an IBSS/peer frame is neither (a1=DA a2=SA). 4-address (WDS) is
+     * not a shape a STA sees, so it is refused rather than mis-parsed. */
+    if (fromds && !tods)       { da = f + 4;  sa = f + 16; }
+    else if (!fromds && !tods) { da = f + 4;  sa = f + 10; }
+    else if (tods && !fromds)  { da = f + 16; sa = f + 10; }
+    else return -1;
     if (memcmp(f + snap, SNAP, 6) != 0) return -1;
     { u16 et = (u16)((f[snap+6]<<8)|f[snap+7]);
       memcpy(out, da, 6); memcpy(out+6, sa, 6);
@@ -2754,17 +2866,18 @@ static int wifi_to_eth(const u8 *f, int len, u8 *out)
 }
 
 /* queue a decrypted 802.11 data frame for recv() (called from rx processing) */
-static void handle_data_frame(const u8 *frame, int len)
+static void handle_data_frame(const u8 *frame, int len, int snap_off)
 {
     u8 eth[1600];
-    int n = wifi_to_eth(frame, len, eth);
+    int n = wifi_to_eth(frame, len, snap_off, eth);
     int nx;
-    if (n <= 0 || n > 1600) return;
+    if (n <= 0 || n > 1600) { g_rx_data_drop++; return; }
     nx = (g_dq_head + 1) % DATAQ;
-    if (nx == g_dq_tail) return;        /* full, drop */
+    if (nx == g_dq_tail) { g_rx_data_drop++; return; }    /* full, drop */
     memcpy(g_dataq[g_dq_head].buf, eth, n);
     g_dataq[g_dq_head].len = n;
     g_dq_head = nx;
+    g_rx_data_n++;
 }
 
 static wpa_sm_t g_wpa;
@@ -2847,10 +2960,19 @@ typedef char _sc_umac_sz_check[(sizeof(struct sc_umac) == 1940) ? 1 : -1];
 
 #define SCAN_AP_MAX 24
 static struct scan_ap { u8 bssid[6]; u8 chan; u8 ssid_len; char ssid[33]; int seen;
-                        u16 bi; u8 dtim; } g_scan_aps[SCAN_AP_MAX];
+                        u16 bi; u8 dtim; signed char rssi; } g_scan_aps[SCAN_AP_MAX];
 static int g_scan_ap_n;
+/* Which band scan_pick() may choose from: 0 = 2.4 GHz only (the proven path -
+ * mvm_phy_ctxt has only ever been driven on band 2.4 / LMAC 0), 1 = 5 GHz only,
+ * 2 = either. `iwl band <24|5|any>` flips it live. */
+static int g_band_pref;
 
-static void scan_record_beacon(const u8 *frame, int fl)
+/* Record one beacon / probe response. `rssi` and `dchan` come from the RX
+ * descriptor: dchan is the channel the scanner was PARKED ON, which is ground
+ * truth, unlike the DS Parameter Set (IE 3) that 5 GHz APs omit - that omission
+ * is why successive scans reported the same BSSID on ch 11 and then ch 1. The
+ * DS IE is kept only as a fallback for the descriptor-less (gen1) path. */
+static void scan_record_beacon(const u8 *frame, int fl, int rssi, int dchan)
 {
     u16 fc; int subtype, ielen, i;
     const u8 *bssid, *ie, *ssid = 0; int ssid_len = 0; u8 chan = 0, dtim = 0;
@@ -2875,17 +2997,19 @@ static void scan_record_beacon(const u8 *frame, int fl)
         else if (id == 5 && ln >= 2) dtim = ie[i + 3];   /* TIM: count, PERIOD, ... */
         i += 2 + ln;
     }
+    if (dchan) chan = (u8)dchan;                      /* descriptor beats the DS IE */
     for (i = 0; i < g_scan_ap_n; i++)
         if (!memcmp(g_scan_aps[i].bssid, bssid, 6)) {
             g_scan_aps[i].seen++;
             if (chan) g_scan_aps[i].chan = chan;
             if (bi) g_scan_aps[i].bi = bi;
             if (dtim) g_scan_aps[i].dtim = dtim;
+            if (rssi && rssi > g_scan_aps[i].rssi) g_scan_aps[i].rssi = (signed char)rssi;
             return; }
     if (g_scan_ap_n >= SCAN_AP_MAX) return;
     { struct scan_ap *a = &g_scan_aps[g_scan_ap_n++];
       memcpy(a->bssid, bssid, 6); a->chan = chan; a->seen = 1; a->ssid_len = (u8)ssid_len;
-      a->bi = bi; a->dtim = dtim;
+      a->bi = bi; a->dtim = dtim; a->rssi = (signed char)rssi;
       if (ssid && ssid_len <= 32) { memcpy(a->ssid, ssid, ssid_len); a->ssid[ssid_len] = 0; }
       else a->ssid[0] = 0; }
 }
@@ -3043,15 +3167,39 @@ static int mvm_scan_passive(int dwell_ms)
  * g_join_chan (prefers the most-often-seen BSSID for that SSID, a rough signal
  * proxy). Returns 0 if the SSID is in range, -1 otherwise. */
 static u8 g_join_chan;
+static int band_ok(int chan)
+{
+    if (g_band_pref == 2) return 1;
+    if (g_band_pref == 1) return chan > 14;
+    return chan >= 1 && chan <= 14;
+}
 static int scan_pick(void)
 {
-    int i, best = -1, sl = (int)strlen(g_cfg_ssid);
-    for (i = 0; i < g_scan_ap_n; i++)
-        if (sl > 0 && g_scan_aps[i].ssid_len == sl &&
-            !memcmp(g_scan_aps[i].ssid, g_cfg_ssid, sl) &&
-            (best < 0 || g_scan_aps[i].seen > g_scan_aps[best].seen))
-            best = i;
+    int i, best = -1, sl = (int)strlen(g_cfg_ssid), pass;
+    /* Strongest signal wins, not most beacons seen. NimmuNet is a multi-BSSID
+     * mesh: beacon count is a scan-timing artefact, so picking on it was a coin
+     * flip between mesh nodes - and only one of them (e8:d3:eb:51:8c:8f) has
+     * ever completed an auth. RSSI is what a real STA picks on. Pass 1 honours
+     * the band preference; pass 2 ignores it rather than failing to find an
+     * SSID that is only on the other band. */
+    for (pass = 0; pass < 2 && best < 0; pass++)
+        for (i = 0; i < g_scan_ap_n; i++) {
+            if (sl <= 0 || g_scan_aps[i].ssid_len != sl ||
+                memcmp(g_scan_aps[i].ssid, g_cfg_ssid, sl)) continue;
+            if (pass == 0 && !band_ok(g_scan_aps[i].chan)) continue;
+            if (best < 0 ||
+                g_scan_aps[i].rssi > g_scan_aps[best].rssi ||
+                (g_scan_aps[i].rssi == g_scan_aps[best].rssi &&
+                 g_scan_aps[i].seen > g_scan_aps[best].seen))
+                best = i;
+        }
     if (best < 0) return -1;
+    uno_dbg_net_trace("wifi: pick: strongest \"%s\" is [%d] %02x:%02x:%02x:%02x:%02x:%02x "
+                      "ch=%d rssi=%d seen=%d", g_cfg_ssid, best,
+                      g_scan_aps[best].bssid[0], g_scan_aps[best].bssid[1],
+                      g_scan_aps[best].bssid[2], g_scan_aps[best].bssid[3],
+                      g_scan_aps[best].bssid[4], g_scan_aps[best].bssid[5],
+                      g_scan_aps[best].chan, g_scan_aps[best].rssi, g_scan_aps[best].seen);
     memcpy(g_bssid, g_scan_aps[best].bssid, 6);
     g_join_chan = g_scan_aps[best].chan;
     /* Beacon timing for LINK_CONFIG_CMD; fall back to the usual 100 TU / DTIM 1
@@ -3082,16 +3230,7 @@ static int wait_mgmt(int subtype, int timeout_ms)
 {
     int t;
     for (t = 0; t < timeout_ms; t++) {
-        u16 closed = rx_closed() & (RXQ_N - 1);
-        while (g_rx_read != closed) {
-            const u8 *found = 0; int fl = 0;
-            int vid = g_mq_rx ? (int)(g_rbd_used[g_rx_read] & 0xFFF) : (g_rx_read + 1);
-            const u8 *rb = (vid >= 1 && vid <= RXQ_N) ? g_rb[vid-1] : g_rb[g_rx_read];
-            rx_process_rb(rb, RB_SIZE, -1, -1, &found, &fl);
-            g_rx_read = (g_rx_read + 1) & (RXQ_N - 1);
-        }
-        rx_restock();
-        if (g_gen2) w32(CSR_MSIX_AUTOMASK_ST_AD, 1);
+        rx_pump_once();
         if (g_mgmt_rx_len && g_mgmt_rx_subtype == subtype) return 0;
         mdelay_(1);
     }
@@ -3171,9 +3310,11 @@ static int mvm_assoc(void)
  *    LINK_CONFIG(MODIFY: active + phy + rates + qos) -> STA_CONFIG.
  *  - legacy: PHY_CONTEXT -> MAC_CONTEXT -> BINDING -> ADD_STA.
  * TIME_QUOTA is legacy-only; the link carries the fw's scheduling now. */
+static int g_ctx_built;     /* fw mac/link/phy contexts exist (re-ADD asserts) */
 static int assoc_setup(void)
 {
     u32 h; int q;
+    g_ctx_built = 1;
 #define TRACE_CSR(what) do { h = r32(CSR_MSIX_HW_INT_CAUSES_AD); \
         uno_dbg_net_trace("wifi: join: after " what " csr2808=%08x", h); } while (0)
     if (fw_has_mld_api()) {
@@ -3236,23 +3377,17 @@ static void assoc_mark_associated(int aid)
     }
 }
 
-/* Full connect on a stock boot: scan -> pick the configured SSID -> mac/link/sta
- * setup -> auth window -> Open-System auth -> assoc. The 4-way handshake then
- * runs from handle_eapol() as iwl_recv() pumps the RX ring. */
-static int find_and_join(void)
+/* Join the AP already selected into g_bssid / g_join_chan: mac/link/sta setup ->
+ * airtime -> Open-System auth -> assoc -> pump the RX ring until the 4-way
+ * handshake has installed the CCMP keys. Returns 0 once associated (g_joined
+ * says whether the keys made it), <0 on a failure that leaves nothing joined.
+ *
+ * The 4-way is pumped HERE, not left to the caller: every caller that waits for
+ * link (ip_suite, net_dhcp_after_link, the Network app) polls link() and not
+ * recv(), so a handshake left in flight would never be driven to completion. */
+static int join_selected(void)
 {
     int q, r;
-    mvm_scan_cfg();
-    mvm_scan_passive(5000);
-    if (scan_pick() < 0) {
-        uno_dbg_net_trace("wifi: join: SSID \"%s\" not found in %d scanned APs",
-                          g_cfg_ssid, g_scan_ap_n);
-        return -1;
-    }
-    uno_dbg_net_trace("wifi: join: picked \"%s\" bssid %02x:%02x:%02x:%02x:%02x:%02x "
-                      "chan %d bi %d dtim %d (link-api=%d)", g_cfg_ssid,
-                      g_bssid[0],g_bssid[1],g_bssid[2],g_bssid[3],g_bssid[4],g_bssid[5],
-                      g_join_chan, g_join_bi, g_join_dtim, fw_has_mld_api());
     q = assoc_setup();
     if (q < 0) { uno_dbg_net_trace("wifi: join: no TX queue - cannot auth"); return -1; }
 
@@ -3272,9 +3407,29 @@ static int find_and_join(void)
     uno_dbg_net_trace("wifi: join: assoc -> %d (>=0 AID)", r);
     if (r < 0) return -1;
     assoc_mark_associated(r);
-    uno_dbg_net_trace("wifi: join: associated with \"%s\" aid=%d, WPA2 supplicant "
-                      "armed (PMK derived) - pumping RX for the 4-way", g_cfg_ssid, r);
+    uno_dbg_net_trace("wifi: join: associated with \"%s\" aid=%d - pumping RX for the 4-way",
+                      g_cfg_ssid, r);
+    { int ms = rx_pump_ms(4000, 1);
+      uno_dbg_net_trace("wifi: join: 4-way %s after %d ms (keys=%d)",
+                        g_joined ? "COMPLETE" : "did NOT complete", ms, g_keys_installed); }
     return 0;
+}
+
+/* Full connect on a stock boot: scan -> pick the configured SSID -> join. */
+static int find_and_join(void)
+{
+    mvm_scan_cfg();
+    mvm_scan_passive(5000);
+    if (scan_pick() < 0) {
+        uno_dbg_net_trace("wifi: join: SSID \"%s\" not found in %d scanned APs",
+                          g_cfg_ssid, g_scan_ap_n);
+        return -1;
+    }
+    uno_dbg_net_trace("wifi: join: picked \"%s\" bssid %02x:%02x:%02x:%02x:%02x:%02x "
+                      "chan %d rssi %d bi %d dtim %d (link-api=%d)", g_cfg_ssid,
+                      g_bssid[0],g_bssid[1],g_bssid[2],g_bssid[3],g_bssid[4],g_bssid[5],
+                      g_join_chan, g_last_rssi, g_join_bi, g_join_dtim, fw_has_mld_api());
+    return join_selected();
 }
 
 /* =====================================================================
@@ -3292,6 +3447,7 @@ static int iwl_send(void *ctx, const void *pkt, int len)
     /* Wrap in a TX_CMD on the data queue; the card encrypts from the installed
        CCMP key. gen1/gen2/gen3 TX_CMD layouts differ (fwapi ref Part 6). */
     tx_enqueue(tx80211, n, 0);
+    g_tx_data_n++;
     return len;
 }
 
@@ -3302,16 +3458,7 @@ static int iwl_recv(void *ctx, void *pkt, int cap)
     /* pump the RX ring so notifications (EAPOL, data, mgmt) get processed;
        rx_process_rb dispatches data frames to handle_data_frame and EAPOL to
        handle_eapol (which drives the 4-way handshake + key install). */
-    { u16 closed = rx_closed() & (RXQ_N - 1);
-      while (g_rx_read != closed) {
-          const u8 *found = 0; int fl = 0;
-          int vid = g_mq_rx ? (int)(g_rbd_used[g_rx_read] & 0xFFF) : (g_rx_read + 1);
-          const u8 *rb = (vid >= 1 && vid <= RXQ_N) ? g_rb[vid-1] : g_rb[g_rx_read];
-          rx_process_rb(rb, RB_SIZE, -1, -1, &found, &fl);
-          g_rx_read = (g_rx_read + 1) & (RXQ_N - 1);
-      }
-      rx_restock();
-      if (g_gen2) w32(CSR_MSIX_AUTOMASK_ST_AD, 1); }
+    rx_pump_once();
     if (g_dq_tail != g_dq_head) {
         int n = g_dataq[g_dq_tail].len;
         if (n > cap) n = cap;
@@ -3322,7 +3469,17 @@ static int iwl_recv(void *ctx, void *pkt, int cap)
     return 0;
 }
 
-static int iwl_link(void *ctx) { (void)ctx; return g_bound && g_joined; }
+/* Link = associated AND keyed. The 4-way handshake runs out of the RX pump, and
+ * the caller that waits for link (ip_suite, net_dhcp_after_link) does NOT poll
+ * recv while it waits - so pump here, or a handshake still in flight can never
+ * finish and the link never comes up. */
+static int iwl_link(void *ctx)
+{
+    (void)ctx;
+    if (!g_bound) return 0;
+    if (!g_joined && g_wpa_active) rx_pump_ms(50, 1);
+    return g_joined;
+}
 
 /* =====================================================================
  * 14. bring-up entry points
@@ -3519,16 +3676,11 @@ uno_nic_t *iwl_nic(void)
         return 0;
     }
 
-    if (!g_gen2) tx_start_gen1();
+    mvm_init_all();
 
-    /* post-alive init (unified path; AC split path adds INIT image + calib) */
-    mvm_init_unified();
-    mvm_tx_ant(fw_valid_tx_ant());
-    if (fw_has_capa(12)) mvm_dqa_enable();
-    mvm_power_table();
-    uno_dbg_net_trace("wifi: MVM init sequence queued (nvm/phy/tx-ant/power)");
-
-    /* connect */
+    /* connect (skipped when the caller only wanted the radio up - the GUI scan
+     * path, which picks its own network afterwards) */
+    if (g_no_join) return 0;
     if (find_and_join() < 0) { st_set("WiFi: join failed"); uno_dbg_net_trace("wifi: FAIL join"); return 0; }
 
     g_nic.ctx = 0; g_nic.send = iwl_send; g_nic.recv = iwl_recv; g_nic.link = iwl_link;
@@ -3539,6 +3691,85 @@ uno_nic_t *iwl_nic(void)
 }
 
 const unsigned char *iwl_mac(void) { return g_mac; }
+
+/* ---- runtime network selection (the Network app's join UI) ---------------
+ * Bring the card up to a scannable state WITHOUT joining anything: firmware
+ * ALIVE + the post-ALIVE MVM init. Idempotent. */
+static int radio_up(void)
+{
+    if (g_alive && g_mvm_done) return 0;
+    g_mvm_arm = 1;                       /* past the boot-path MVM gate */
+    g_no_join = 1;
+    iwl_nic();
+    g_no_join = 0;
+    return (g_alive && g_mvm_done) ? 0 : -1;
+}
+
+/* Scan and report one entry per BSS, strongest first. Returns the count. */
+int iwl_scan_aps(iwl_ap_t *out, int max)
+{
+    int i, j, n = 0;
+    if (!out || max <= 0) return 0;
+    if (radio_up() < 0) return 0;
+    mvm_scan_cfg();
+    mvm_scan_passive(5000);
+    for (i = 0; i < g_scan_ap_n && n < max; i++) {
+        if (!g_scan_aps[i].ssid[0]) continue;             /* hidden BSS */
+        /* fold the mesh: one row per SSID, keeping the strongest */
+        for (j = 0; j < n; j++)
+            if (!strcmp(out[j].ssid, g_scan_aps[i].ssid)) break;
+        if (j < n) {
+            if (g_scan_aps[i].rssi > out[j].rssi) {
+                memcpy(out[j].bssid, g_scan_aps[i].bssid, 6);
+                out[j].chan = g_scan_aps[i].chan;
+                out[j].rssi = g_scan_aps[i].rssi;
+            }
+            continue;
+        }
+        memset(&out[n], 0, sizeof out[n]);
+        strncpy(out[n].ssid, g_scan_aps[i].ssid, sizeof out[n].ssid - 1);
+        memcpy(out[n].bssid, g_scan_aps[i].bssid, 6);
+        out[n].chan = g_scan_aps[i].chan;
+        out[n].rssi = g_scan_aps[i].rssi;
+        n++;
+    }
+    for (i = 0; i < n; i++)                                /* strongest first */
+        for (j = i + 1; j < n; j++)
+            if (out[j].rssi > out[i].rssi) { iwl_ap_t t = out[i]; out[i] = out[j]; out[j] = t; }
+    uno_dbg_net_trace("wifi: scan for the UI: %d BSS -> %d networks", g_scan_ap_n, n);
+    return n;
+}
+
+/* Join `ssid` with `psk` (WPA2-PSK; empty psk = open, untested). Runs the same
+ * scan -> pick -> auth -> assoc -> 4-way path as the boot join, then publishes
+ * the nic. 0 = joined, <0 = failed (iwl_status_str says how far it got). */
+int iwl_join_ssid(const char *ssid, const char *psk)
+{
+    if (!ssid || !ssid[0]) return -1;
+    /* A second join cannot reuse the first one's fw contexts: PHY_CONTEXT ADD on
+     * a live context, or a phy-bind on an active link, asserts the LMAC (round
+     * 24). Restart the radio instead - a few seconds, and always recoverable. */
+    if (g_ctx_built) {
+        uno_dbg_net_trace("wifi: join: fw contexts from an earlier join are live - "
+                          "restarting the radio before re-joining");
+        if (g_bar && g_fw_loaded) device_stop();
+        g_bound = 0; g_alive = 0; g_mvm_done = 0; g_ctx_built = 0;
+    }
+    /* a fresh join must not inherit the previous one's keys or supplicant */
+    g_joined = 0; g_keys_installed = 0; g_wpa_active = 0; g_data_qid = -1;
+    g_dq_head = g_dq_tail = 0;
+    if (radio_up() < 0) return -1;
+    strncpy(g_cfg_ssid, ssid, sizeof g_cfg_ssid - 1);
+    g_cfg_ssid[sizeof g_cfg_ssid - 1] = 0;
+    strncpy(g_cfg_psk, psk ? psk : "", sizeof g_cfg_psk - 1);
+    g_cfg_psk[sizeof g_cfg_psk - 1] = 0;
+    uno_dbg_net_trace("wifi: join request for \"%s\" (psk_len=%d)",
+                      g_cfg_ssid, (int)strlen(g_cfg_psk));
+    if (find_and_join() < 0) { st_set("WiFi: join failed"); return -1; }
+    g_nic.ctx = 0; g_nic.send = iwl_send; g_nic.recv = iwl_recv; g_nic.link = iwl_link;
+    g_bound = 1;
+    return g_joined ? 0 : -1;
+}
 
 /* ---- interactive F12 debug entry point (see iwlwifi.h) ------------------- */
 static int hex_u32(const char **p, u32 *out)
@@ -3838,6 +4069,70 @@ static int mld_steps(int n, char *out, int cap)
     return (int)strlen(out);
 }
 
+/* ---- data-path probe (`iwl data`, `iwl arp`) -----------------------------
+ * The IP stack binds ONE nic (net_init), and on this rig that nic is the USB
+ * ethernet carrying the URC control channel - rebinding it to WiFi would cut
+ * the only line to the box mid-experiment. So the data path is proven here
+ * instead: raw 802.11 frames straight through tx_enqueue/handle_data_frame,
+ * with the stack untouched. An ARP request/reply exercises exactly what a DHCP
+ * DISCOVER would (TX encrypt with the pairwise key, AP forwards, reply comes
+ * back GTK/CCMP-decrypted and reaches the RX queue) in one round trip. */
+static int probe_data(const u8 target_ip[4], int listen_ms, char *out, int cap)
+{
+    u8 eth[64], tx[128];
+    u32 rx0 = g_rx_data_n, drop0 = g_rx_data_drop;
+    int i, n, got = 0;
+    (void)cap;
+    if (!g_joined) { strcpy(out, "err not joined - run the join sequence first"); return (int)strlen(out); }
+    g_rx_data_log = 12;
+    /* drain anything already queued so the counts below are about THIS probe */
+    while (g_dq_tail != g_dq_head) g_dq_tail = (g_dq_tail + 1) % DATAQ;
+    if (target_ip) {
+        memset(eth, 0xff, 6);                       /* broadcast */
+        memcpy(eth + 6, g_mac, 6);
+        eth[12] = 0x08; eth[13] = 0x06;             /* ARP */
+        eth[14] = 0x00; eth[15] = 0x01;             /* htype ethernet */
+        eth[16] = 0x08; eth[17] = 0x00;             /* ptype IPv4 */
+        eth[18] = 6; eth[19] = 4; eth[20] = 0; eth[21] = 1;   /* request */
+        memcpy(eth + 22, g_mac, 6);
+        memset(eth + 28, 0, 4);                     /* spa 0.0.0.0 (ARP probe) */
+        memset(eth + 32, 0, 6);
+        memcpy(eth + 38, target_ip, 4);
+        for (i = 0; i < 3; i++) {
+            n = eth_to_80211(eth, 42, tx);
+            tx_enqueue(tx, n, 0);
+            g_tx_data_n++;
+            uno_dbg_net_trace("wifi: probe: ARP who-has %d.%d.%d.%d (frame %d, 802.11 len %d)",
+                              target_ip[0], target_ip[1], target_ip[2], target_ip[3], i + 1, n);
+            rx_pump_ms(600, 0);
+        }
+    }
+    rx_pump_ms(listen_ms, 0);
+    /* report what landed in the recv queue */
+    while (g_dq_tail != g_dq_head) {
+        const u8 *e = g_dataq[g_dq_tail].buf; int el = g_dataq[g_dq_tail].len;
+        if (got < 8)
+            uno_dbg_net_trace("wifi: probe: rx eth %02x:%02x:%02x:%02x:%02x:%02x <- "
+                              "%02x:%02x:%02x:%02x:%02x:%02x type=%02x%02x len=%d",
+                              e[0],e[1],e[2],e[3],e[4],e[5], e[6],e[7],e[8],e[9],e[10],e[11],
+                              e[12], e[13], el);
+        got++;
+        g_dq_tail = (g_dq_tail + 1) % DATAQ;
+    }
+    uno_dbg_net_trace("wifi: probe: data frames rx=%d (queued %d, dropped %d) tx=%d rssi=%d",
+                      (int)(g_rx_data_n - rx0), got, (int)(g_rx_data_drop - drop0),
+                      (int)g_tx_data_n, g_last_rssi);
+    { char *o = out; const char *p = got ? "ok probe: data frames received (NET log): "
+                                         : "err probe: NO data frames received: ";
+      int v = got, m = 0, j; char d[8];
+      while (*p) *o++ = *p++;
+      if (!v) d[m++] = '0'; else while (v) { d[m++] = (char)('0' + v % 10); v /= 10; }
+      for (j = m - 1; j >= 0; j--) *o++ = d[j];
+      p = " queued"; while (*p) *o++ = *p++; *o = 0; }
+    g_rx_data_log = 0;
+    return (int)strlen(out);
+}
+
 /* Dump what the firmware told us about itself: the capability bits the join
  * path branches on, the PHY_SKU-derived antenna masks, and the raw capa/api
  * bitmaps. Cheap, read-only, and it answers "does this fw advertise X?" without
@@ -3937,7 +4232,8 @@ int iwl_dbg_cmd(const char *line, char *out, int cap)
             uno_dbg_net_trace("wifi: rerun: firmware was live - halting DMA (device_stop) before re-init");
             device_stop();
         }
-        g_bound = 0; g_joined = 0; g_alive = 0;       /* force a full retry */
+        g_bound = 0; g_joined = 0; g_alive = 0; g_mvm_done = 0;   /* force a full retry */
+        g_keys_installed = 0; g_wpa_active = 0; g_data_qid = -1; g_ctx_built = 0;
         iwl_nic();
         iwl_status_str(out, cap);
         return (int)strlen(out);
@@ -4007,21 +4303,62 @@ int iwl_dbg_cmd(const char *line, char *out, int cap)
     }
     if (!strncmp(line, "eapol", 5)) {
         /* pump RX for a few seconds so the AP EAPOL 4-way frames get handled */
-        int t;
-        for (t = 0; t < 4000 && !g_joined; t++) {
-            u16 closed = rx_closed() & (RXQ_N - 1);
-            while (g_rx_read != closed) {
-                const u8 *found = 0; int fl = 0;
-                int vid = g_mq_rx ? (int)(g_rbd_used[g_rx_read] & 0xFFF) : (g_rx_read + 1);
-                const u8 *rb = (vid >= 1 && vid <= RXQ_N) ? g_rb[vid-1] : g_rb[g_rx_read];
-                rx_process_rb(rb, RB_SIZE, -1, -1, &found, &fl);
-                g_rx_read = (g_rx_read + 1) & (RXQ_N - 1);
-            }
-            rx_restock();
-            if (g_gen2) w32(CSR_MSIX_AUTOMASK_ST_AD, 1);
-            mdelay_(1);
-        }
+        rx_pump_ms(4000, 1);
         strcpy(out, g_joined ? "ok eapol: 4-way DONE, station authorized" : "err eapol: no/incomplete handshake (NET log)");
+        return (int)strlen(out);
+    }
+    /* "iwl data [a.b.c.d]" - prove the encrypted data path without touching the
+     * IP stack (which is bound to the ethernet carrying this very command). With
+     * an IP it ARPs for it; without one it just listens for broadcast traffic. */
+    if (!strncmp(line, "data", 4)) {
+        const char *q = line + 4; u8 ip[4]; int k, any = 0;
+        while (*q == 0x20) q++;
+        for (k = 0; k < 4 && *q; k++) {
+            int v = 0, d = 0;
+            while (*q >= 0x30 && *q <= 0x39) { v = v*10 + (*q - 0x30); q++; d = 1; }
+            if (!d) break;
+            ip[k] = (u8)v; if (k == 3) any = 1;
+            if (*q == 0x2e) q++;
+        }
+        return probe_data(any ? ip : 0, any ? 1500 : 4000, out, cap);
+    }
+    /* "iwl qos <0|1>" - plain data frames vs QoS data frames. Our assoc request
+     * carries no WMM IE (so the AP admits us as non-QoS) and the fw queue is on
+     * TID 15, hence plain by default; this flips it without a reflash. */
+    if (!strncmp(line, "qos", 3)) {
+        const char *q = line + 3;
+        while (*q == 0x20) q++;
+        if (*q == 0x30 || *q == 0x31) g_tx_qos = (*q == 0x31);
+        strcpy(out, g_tx_qos ? "ok qos: TX as QoS data (subtype 8, 26 B hdr)"
+                             : "ok qos: TX as plain data (subtype 0, 24 B hdr)");
+        return (int)strlen(out);
+    }
+    /* "iwl band <24|5|any>" - which band scan_pick() may choose from. */
+    if (!strncmp(line, "band", 4)) {
+        const char *q = line + 4;
+        while (*q == 0x20) q++;
+        if (!strncmp(q, "24", 2))      g_band_pref = 0;
+        else if (*q == 0x35)           g_band_pref = 1;
+        else if (!strncmp(q, "any", 3)) g_band_pref = 2;
+        strcpy(out, g_band_pref == 0 ? "ok band: 2.4 GHz only" :
+                    g_band_pref == 1 ? "ok band: 5 GHz only" : "ok band: either");
+        return (int)strlen(out);
+    }
+    /* "iwl connect [ssid|psk]" - the whole join in ONE command, the same path
+     * the Network app's join button takes. With no argument it uses WIFI.CFG. */
+    if (!strncmp(line, "connect", 7)) {
+        const char *q = line + 7; char ssid[36], psk[80]; int k = 0;
+        while (*q == 0x20) q++;
+        if (*q) {
+            while (*q && *q != 0x7c && k < (int)sizeof ssid - 1) ssid[k++] = *q++;
+            while (k > 0 && ssid[k-1] == 0x20) k--;
+            ssid[k] = 0;
+            if (*q == 0x7c) q++;
+            k = 0; while (*q && k < (int)sizeof psk - 1) psk[k++] = *q++;
+            psk[k] = 0;
+        } else { strcpy(ssid, g_cfg_ssid); strcpy(psk, g_cfg_psk); }
+        if (iwl_join_ssid(ssid, psk) == 0) iwl_status_str(out, cap);
+        else { strcpy(out, "err connect: "); iwl_status_str(out + 13, cap - 13); }
         return (int)strlen(out);
     }
     if (!strncmp(line, "scan", 4)) {
@@ -4166,10 +4503,47 @@ hexout:
     return 8;
 }
 
+/* ---- status line -------------------------------------------------------- */
+static void ss_cat(char *b, int cap, int *i, const char *s)
+{ while (*s && *i < cap - 1) b[(*i)++] = *s++; b[*i] = 0; }
+static void ss_dec(char *b, int cap, int *i, int v)
+{ char t[12]; int m = 0;
+  if (v < 0) { if (*i < cap - 1) b[(*i)++] = '-'; v = -v; }
+  if (!v) t[m++] = '0';
+  while (v) { t[m++] = (char)('0' + v % 10); v /= 10; }
+  while (m && *i < cap - 1) b[(*i)++] = t[--m];
+  b[*i] = 0; }
+static void ss_mac(char *b, int cap, int *i, const u8 *m)
+{ const char *h = "0123456789abcdef"; int k;
+  for (k = 0; k < 6; k++) {
+      if (*i < cap - 2) { b[(*i)++] = h[m[k] >> 4]; b[(*i)++] = h[m[k] & 15]; }
+      if (k < 5 && *i < cap - 1) b[(*i)++] = ':';
+  }
+  b[*i] = 0; }
+
+/* The live association state, not the last bring-up STAGE message. g_status is
+ * where a bring-up FAILURE (or the pre-MVM gate) is recorded, and returning it
+ * unconditionally is why a fully joined card still reported "MVM bring-up
+ * gated; 'iwl mvm' to continue" on metal (round 24). */
 void iwl_status_str(char *buf, int cap)
 {
     int i = 0;
     if (cap <= 0) return;
+    if (g_alive && (g_joined || g_wpa_active)) {
+        ss_cat(buf, cap, &i, g_joined ? "WiFi joined \"" : "WiFi associating \"");
+        ss_cat(buf, cap, &i, g_ssid_str[0] ? g_ssid_str : g_cfg_ssid);
+        ss_cat(buf, cap, &i, "\" bssid ");
+        ss_mac(buf, cap, &i, g_bssid);
+        ss_cat(buf, cap, &i, " ch ");   ss_dec(buf, cap, &i, g_join_chan);
+        if (g_last_rssi) { ss_cat(buf, cap, &i, " "); ss_dec(buf, cap, &i, g_last_rssi);
+                           ss_cat(buf, cap, &i, "dBm"); }
+        ss_cat(buf, cap, &i, " aid ");  ss_dec(buf, cap, &i, g_aid);
+        ss_cat(buf, cap, &i, g_keys_installed ? " CCMP keys in" : " 4-way pending");
+        ss_cat(buf, cap, &i, " tx ");   ss_dec(buf, cap, &i, (int)g_tx_data_n);
+        ss_cat(buf, cap, &i, " rx ");   ss_dec(buf, cap, &i, (int)g_rx_data_n);
+        if (g_rx_data_drop) { ss_cat(buf, cap, &i, " drop "); ss_dec(buf, cap, &i, (int)g_rx_data_drop); }
+        return;
+    }
     while (g_status[i] && i < cap-1) { buf[i] = g_status[i]; i++; }
     buf[i] = 0;
 }
