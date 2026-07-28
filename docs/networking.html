@@ -106,9 +106,10 @@ laptops with an Ethernet socket:</p>
       laptop LOM chips (the <em>e1000e</em> family)</li>
   <li><strong>Intel I210 / I211 / I350</strong> and the 8257x server parts (the <em>igb</em> family)</li>
 </ul>
-<p>A driver for <strong>Realtek</strong> wired chips (RTL8168 / 8111 / 8125) is included but has not been
-verified on hardware yet.</p>
-<div class="note"><b>Emulator-verified</b>The wired Intel drivers are verified in the emulator against the QEMU e1000 / e1000e / igb models. Most test laptops have no wired port, so the built-in NIC on a given real machine may not have been exercised end to end - if the built-in port does not come up, a supported USB Ethernet adapter (below) is the reliable path.</div>
+<p><strong>Realtek</strong> wired chips (RTL8168 / 8111 / 8125) are supported too - the port built into most
+desktop boards and small-form-factor PCs. This one is <strong>verified on real hardware</strong>: a ZimaBlade
+with an onboard RTL8168 links at gigabit, takes a DHCP address and browses, with no adapter plugged in.</p>
+<div class="note"><b>How this is verified</b>The Intel drivers are verified in the emulator against the QEMU e1000 / e1000e / igb models, and the Realtek driver on a real machine. Most test <em>laptops</em> have no wired port, so the built-in NIC on any given laptop may not have been exercised end to end - if a built-in port does not come up, a supported USB Ethernet adapter (below) is the reliable path.</div>
 
 <h2 id="status">Checking the connection</h2>
 <p>The <strong>Network</strong> tab in the <a href="appearance.html#control">Control Panel</a> shows the live

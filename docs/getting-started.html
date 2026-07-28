@@ -181,11 +181,19 @@ menu) can put UnoDOS on the computer itself, so it boots without the stick:</p>
       menu. <strong>Nothing is deleted</strong> - Windows keeps booting as before, and you can undo it
       by deleting the <code>\EFI\UNODOS</code> folder.</li>
   <li><strong>Onto a whole disk</strong> (the <em>Disk</em> rows): the entire disk is erased and
-      becomes a UnoDOS disk. This is destructive and asks you to confirm twice.</li>
+      becomes a UnoDOS disk. This one cannot be done by accident - you have to type the word
+      <strong>ERASE</strong> first (below).</li>
 </ul>
 <p>Pick a target with <kbd>↑</kbd>/<kbd>↓</kbd> and press <kbd>I</kbd> to install
 (<kbd>R</kbd> rescans). The system files, fonts, documents and all the apps are copied along.</p>
-<figure class="shot-sm"><button type="button" class="zoom" data-full="assets/img/install.png" aria-label="Enlarge: The Install app: pick a target, press I. Rows marked keeps data are non-destructive."><img src="assets/img/install.png" alt="The Install app: pick a target, press I. Rows marked keeps data are non-destructive." loading="lazy"></button><figcaption>The <b>Install</b> app: pick a target, press <kbd>I</kbd>. Rows marked <i>keeps data</i> are non-destructive.</figcaption></figure>
+<p>For a <strong>whole disk</strong>, one more step stands between you and an erased drive:</p>
+<ol>
+  <li>Press <kbd>C</kbd> to put the caret in the confirm box (<kbd>Esc</kbd> leaves it again).</li>
+  <li>Type <strong>ERASE</strong>.</li>
+  <li>Press <kbd>I</kbd> to arm, then <kbd>I</kbd> again to commit.</li>
+</ol>
+<div class="note warn"><b>A whole-disk install erases everything on that disk</b>Typing <b>ERASE</b> is the only thing that unlocks a whole-disk install, and it applies to the selected row only - change the selection and you type it again. A row listed <b>[too small]</b>, <b>[read-only]</b> or <b>[not 512B/s]</b> cannot be installed to at all. If you change your mind, press <kbd>Esc</kbd> and close the window; nothing is written until the second <kbd>I</kbd>.</div>
+<figure class="shot-sm"><button type="button" class="zoom" data-full="assets/img/install.png" aria-label="Enlarge: The Install app. The key line across the top is the whole procedure, and the type ERASE box above the buttons is the gate on a whole-disk install - until that word is typed, I does nothing. This shot is from the emulator, which offers no disk UnoDOS can install to, so the list is empty; on a real PC each eligible disk and EFI partition appears as a row."><img src="assets/img/install.png" alt="The Install app. The key line across the top is the whole procedure, and the type ERASE box above the buttons is the gate on a whole-disk install - until that word is typed, I does nothing. This shot is from the emulator, which offers no disk UnoDOS can install to, so the list is empty; on a real PC each eligible disk and EFI partition appears as a row." loading="lazy"></button><figcaption>The <b>Install</b> app. The key line across the top is the whole procedure, and the <b>type ERASE</b> box above the buttons is the gate on a whole-disk install - until that word is typed, <kbd>I</kbd> does nothing. This shot is from the emulator, which offers no disk UnoDOS can install to, so the list is empty; on a real PC each eligible disk and EFI partition appears as a row.</figcaption></figure>
 
 <h2 id="firstboot">First boot</h2>
 <p>A splash screen with a loading bar appears while UnoDOS starts up, then a short start-up chime
