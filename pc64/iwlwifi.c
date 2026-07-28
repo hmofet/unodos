@@ -1232,6 +1232,22 @@ static void rx_process_rb(const u8 *rb, int cap,
         if (found && !*found && pkt->group_id == want_group && pkt->cmd == want_cmd) {
             *found = pkt->data; *found_len = plen - 4;
         }
+        /* REPLY_TX (TX response). Hex-dump it rather than decode blind: this fw
+         * reports TX_CMD notif_ver 7, and the iwl_mvm_tx_resp layout has moved
+         * across versions, so the raw bytes are what we can actually trust.
+         * frame_count@0, failure_rts@2, failure_frame@3, initial_rate@4 are
+         * stable across all of them; the agg_tx_status (TX_STATUS_SUCCESS=0x01,
+         * TX_STATUS_DIRECT_DONE=0x02, failures above 0x80) sits in the tail. */
+        if (pkt->group_id == 0 && pkt->cmd == 0x1c && g_mgmt_diag) {
+            const u8 *d = pkt->data; int n = plen - 4, i;
+            if (n > 48) n = 48;
+            uno_dbg_net_trace("wifi: TXRESP frames=%d btkill=%d fail_rts=%d fail_frame=%d rate=%08x",
+                              d[0], d[1], d[2], d[3],
+                              (unsigned)(d[4] | (d[5]<<8) | (d[6]<<16) | ((u32)d[7]<<24)));
+            for (i = 0; i + 8 <= n; i += 8)
+                uno_dbg_net_trace("wifi: TXRESP +%02d: %02x %02x %02x %02x %02x %02x %02x %02x",
+                                  i, d[i],d[i+1],d[i+2],d[i+3],d[i+4],d[i+5],d[i+6],d[i+7]);
+        }
         /* RX MPDU (a received 802.11 frame) — dispatch EAPOL vs data regardless
            of what we're waiting for, so the handshake makes progress. */
         if (pkt->group_id == 0 && pkt->cmd == 0xc1) {         /* REPLY_RX_MPDU */
@@ -3931,6 +3947,36 @@ int iwl_dbg_cmd(const char *line, char *out, int cap)
         return (int)strlen(out);
     }
     if (!strncmp(line, "caps", 4)) return caps_dump(out, cap);
+    /* "iwl pick <n>" - target the n-th AP from the last scan instead of whatever
+     * scan_pick() chose. NimmuNet is a multi-BSSID mesh across both bands and the
+     * DS-Parameter-Set channel we harvest has proven unreliable, so being able to
+     * try each candidate over URC beats a USB reflash per guess. */
+    if (!strncmp(line, "pick", 4)) {
+        const char *q = line + 4; int n = 0, any = 0;
+        while (*q == 0x20) q++;
+        while (*q >= 0x30 && *q <= 0x39) { n = n*10 + (*q - 0x30); q++; any = 1; }
+        if (!any || n >= g_scan_ap_n) {
+            int i;
+            for (i = 0; i < g_scan_ap_n; i++)
+                uno_dbg_net_trace("wifi: pick[%d] %02x:%02x:%02x:%02x:%02x:%02x ch=%d seen=%d ssid=\"%s\"",
+                                  i, g_scan_aps[i].bssid[0], g_scan_aps[i].bssid[1],
+                                  g_scan_aps[i].bssid[2], g_scan_aps[i].bssid[3],
+                                  g_scan_aps[i].bssid[4], g_scan_aps[i].bssid[5],
+                                  g_scan_aps[i].chan, g_scan_aps[i].seen, g_scan_aps[i].ssid);
+            strcpy(out, "usage: iwl pick <n> - candidates listed in the NET log");
+            return (int)strlen(out);
+        }
+        memcpy(g_bssid, g_scan_aps[n].bssid, 6);
+        g_join_chan = g_scan_aps[n].chan ? g_scan_aps[n].chan : 1;
+        g_join_bi = g_scan_aps[n].bi ? g_scan_aps[n].bi : 100;
+        g_join_dtim = g_scan_aps[n].dtim ? g_scan_aps[n].dtim : 1;
+        uno_dbg_net_trace("wifi: pick: %02x:%02x:%02x:%02x:%02x:%02x chan %d \"%s\" - "
+                          "re-run 'iwl mld 3'..'6' then 'iwl auth'",
+                          g_bssid[0],g_bssid[1],g_bssid[2],g_bssid[3],g_bssid[4],g_bssid[5],
+                          g_join_chan, g_scan_aps[n].ssid);
+        strcpy(out, "ok pick: target set (detail in NET log)");
+        return (int)strlen(out);
+    }
     if (!strncmp(line, "mld", 3)) {              /* "iwl mld <n>" - link-API bisect */
         const char *q = line + 3;
         while (*q == 0x20) q++;
