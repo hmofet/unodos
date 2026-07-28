@@ -1463,3 +1463,72 @@ real hazard here, not theoretical. The same boot log enumerates
 `usb[0] 0bda:0411 class 09/00` and `usb[1] 0bda:5411 class 09/00` — two Realtek-VID
 **hubs**. The UsbIo path's `cls != 0xff` guard correctly skips them; the xHCI path
 has no such guard and would bind a hub as a NIC the moment `-DUNO_XHCI` ships.
+
+---
+
+## 2026-07-28 — FINDING (→ unoautomate / installer): two defects that made `install <disk>` unusable on the ZimaBlade
+
+Hit while reinstalling the ZimaBlade's internal disk from current master over URC.
+Both are reproducible and neither is in my lane to fix.
+
+### 1. `install <disk>` cannot finish on a large disk — `prepdisk` outruns the freeze watchdog
+
+`do_install()` calls `unostorage_prepare_esp(b, "UNODOS")`, which lays the ESP
+across the **whole** disk. On this box that is a 500 GB FAT32 volume: ~15.3 M
+clusters -> ~61 MB of FAT, written twice. That blocks the shell's main loop well
+past the debug freeze watchdog's 20 s (`g_wd_timeout_s`, [uno_debug.c:135](uno_debug.c#L135)),
+so the watchdog resets the box mid-format.
+
+Observed: `install 1` -> no response -> box resets ~59 s later and re-dials. The
+GPT had been rewritten (ESP entry spanning LBA 2048..976756735) but LBA 2048 was
+**all zeros** — the format never completed, so the disk was left unbootable with
+its previous install already destroyed. That is the dangerous part: the erase
+lands, the format does not, and the machine no longer has an OS.
+
+The same op on the *old* 31.5 GB geometry is ~1 M clusters / ~4 MB of FAT and
+completes fine, which is why this never showed up before — the previous install
+got there by whole-disk **clone** from a 31.5 GB stick, not by `prepdisk`.
+
+Worked around by building the geometry by hand over URC — `gptinit 1`,
+`mkpart 1 800 3A977FF esp UNO-ESP`, `mkfs 1 800 3A97000 UNODOS` — i.e. a 31.5 GB
+ESP rather than 500 GB. `mkfs` still exceeded the bridge's ~15 s response timeout
+but did **not** trip the watchdog, and completed (valid `MSWIN4.1`/`FAT32`/`55AA`
+VBR, label `UNODOS`).
+
+Worth considering for the owning lane: pet the heartbeat from inside the mkfs
+inner loop, and/or cap the ESP that `prepdisk` creates instead of always taking
+the whole disk (nothing here needs 500 GB of ESP).
+
+### 2. `install_dir()` in `tools/unoauto_remote.py` creates NO directories on a POSIX host
+
+[tools/unoauto_remote.py:454](tools/unoauto_remote.py#L454):
+
+```python
+rel = os.path.relpath(lp, esp_dir).replace("/", "\\")
+files.append((lp, rel))
+d = os.path.dirname(rel)          # <-- rel is already backslash-separated
+```
+
+`os.path.dirname()` on Linux/macOS knows nothing about `\`, so it returns `""`
+for every nested path, `dirs` comes out **empty**, no `mkdir` is issued, and every
+push to a nested path fails. Silent on Windows (where `ntpath.dirname` splits on
+`\`), so it only breaks on the Linux hosts that actually drive these boxes —
+devbuntu in this case. Confirmed live: my first run printed `creating 0 dirs`
+against a tree with 11 of them.
+
+Fix is one line — take `dirname` from the native relpath *before* converting:
+
+```python
+rel_native = os.path.relpath(lp, esp_dir)
+files.append((lp, rel_native.replace(os.sep, "\\")))
+d = os.path.dirname(rel_native)
+while d:
+    dirs.add(d.replace(os.sep, "\\")); d = os.path.dirname(d)
+```
+
+### Outcome
+Internal disk (`fw1`) reinstalled with `debug-059a64f-20260728-0425` (current
+master): 11 dirs + 71 files / 12.5 MB pushed, `\EFI\BOOT\BOOTX64.EFI` verified at
+1883204 bytes (byte-exact vs source), boot entry authored, `reboot` synced the
+write-back FAT cache. The box came back with `disks` reporting `fw1 ... is_boot=1`
+and dialed home on its own; `eth status` = `present=1 up=1 link=1 PHYstatus=93`.
