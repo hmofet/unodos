@@ -238,7 +238,10 @@ def build_disk():
             src = os.path.join(root, fn)
             dst = "::/" + (fn if rel == "." else rel.replace(os.sep, "/") + "/" + fn)
             rq.sh(["mcopy", "-i", FAT, "-o", src, dst], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    rq.sh(["mcopy", "-i", FAT, "-o", cfg, "::/STRESS.CFG"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    # MUST be DEBUG.CFG, not STRESS.CFG - the shipped DEBUG.CFG shadows the
+    # legacy name (dbg_cfg_read, pc64_stress.c), so a STRESS.CFG here is
+    # silently ignored.
+    rq.sh(["mcopy", "-i", FAT, "-o", cfg, "::/DEBUG.CFG"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     with open(FAT, "rb") as pf, open(DISK, "r+b") as df:
         df.seek(part_start * SECTOR)
         while True:

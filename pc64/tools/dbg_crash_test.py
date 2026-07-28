@@ -78,7 +78,11 @@ def build_disk():
                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     # overlay the armed test config on top of the shipped default, image-only
     if cfg:
-        sh(["mcopy", "-i", fat, "-o", cfg, "::/STRESS.CFG"],
+        # MUST be DEBUG.CFG, not STRESS.CFG: the debug build SHIPS a DEBUG.CFG
+        # on the ESP and dbg_cfg_read (pc64_stress.c) reads that FIRST, falling
+        # back to the legacy STRESS.CFG only when DEBUG.CFG is absent - so a
+        # STRESS.CFG written here is shadowed and silently ignored.
+        sh(["mcopy", "-i", fat, "-o", cfg, "::/DEBUG.CFG"],
            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     # splice the partition image into the GPT disk at the partition LBA
     with open(fat, "rb") as pf, open(DISK, "r+b") as df:
