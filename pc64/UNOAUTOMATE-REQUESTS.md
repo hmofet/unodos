@@ -1185,3 +1185,198 @@ on request to pin the register details.
 **Stopgap meanwhile.** WiFi association is paused; the box stays on a stock build
 where all wedge-prone iwl paths are gated behind explicit verbs, so a plain boot
 is safe and the guard already covers every non-IRQs-off wedge.
+
+---
+
+## 2026-07-27 — FINDING (→ unonet / NIC drivers): ZimaBlade has no network when booted from a USB stick, works from the internal install — the differentiator is ATTACHED vs DETACHED, not `pc64_net_boot()`
+
+Filed as a finding, not a patch: `pc64_net_boot()` and `r8169` are the NIC lane's
+active work. Everything below is read-only analysis of master @ `74b140d`.
+
+### Symptom
+ZimaBlade (192.168.2.118, MAC `00:e0:4c:30:5b:d4`, onboard Realtek r8169, the only
+NIC) booted from a USB stick built from current master: no ping, no URC dial-in,
+browser says "DNS lookup failed". The same box on the older build already installed
+on its internal disk was dialling the URC bridge and resolving DNS the same day.
+
+### The two hypotheses in the report, resolved
+
+**"Something ahead of r8169 in `g_wired[]` burns the 8 s budget" — DISPROVED.**
+All five entries ahead of r8169 return `0` cleanly on this box, and the probe call
+`g_wired[i].n()` is outside the budget accounting anyway (`budget` is only
+decremented inside `net_try_lease`, which is never reached for a NULL nic):
+- `e1000_nic` — `pci_find(0x8086, 0x100E/0x100F)`, no Intel NIC here → 0
+- `e1000e_nic` / `igb_nic` — `*_present()` VID/DID tables → 0
+- `ax88179_nic` — ASIX VID `0x0b95` only → 0
+- `rtl8152_nic` — xHCI path is inert (no `-DUNO_XHCI` in `build.sh`); the UsbIo
+  path requires `cls == 0xff`, and the boot stick is class `0x08` → 0
+
+So r8169 gets the full 8000 ms. Budget starvation is not the cause.
+
+**"On failure the stack is left `net_init`'d and poisons the later lazy
+`pc64_net_up()`" — DISPROVED for r8169.** `net_init()` only resets net.c software
+state (ARP cache, sockets, DHCP state, counters); it touches no hardware. And
+`r8169_nic()` is idempotent (`if (g_up) return &g_nic;`), so `hw_start()` does not
+re-run on the second bind. `g_net_inited` is correctly left 0 on failure, so
+`pc64_net_up()` does get its turn. Same for `ax88179`/`rtl8152` (`if (g_bound)`).
+
+**`pc64_net_boot()` is largely exonerated by the symptom itself.** The browser
+fetch calls `pc64_net_up()` ([pc64_http.c:272](pc64_http.c#L272)), which runs
+`net_dhcp_after_link()` — a *3 s* link wait plus a *9 s* DHCP window, far more
+generous than net_boot's 1 s + 3 s. That ran and still produced no lease. The NIC
+cannot receive in this configuration; no amount of budget fixes it.
+
+### Leading hypothesis: the stick-booted box never detaches, so the firmware's own
+### driver is still bound to the r8169 while our driver drives it
+
+`try_detach()` ([uefi_main.c:803](uefi_main.c#L803)) refuses when
+`boot_device_is_usb() && !uno_usbmsc_supported()`. `uno_usbmsc_supported()` is
+`uno_xhci_supported()`, which is the `#ifndef UNO_XHCI` stub returning 0 —
+and `-DUNO_XHCI` is **not** in `build.sh`'s `CFLAGS`/`UCF`. So:
+
+- **USB-stick boot → detach refused, box stays firmware-ATTACHED for its whole life.**
+- **Internal-disk boot → `uno_fat_native_eligible()` passes (AHCI/SDHCI carrying
+  our `BOOTX64.EFI`) → ExitBootServices → DETACHED.**
+
+`try_detach()` runs inside `uno_pc64_init()` *before* the shell main loop, so this
+is settled long before `pc64_net_boot()` fires at frame 35 — the eager/lazy
+ordering is not the variable.
+
+While attached, the ZimaBlade's UEFI still has its Realtek UNDI/SNP driver bound to
+`00:1f.6`-class onboard NIC, with a live timer event servicing it. `hw_start()`
+([r8169.c](r8169.c)) soft-resets the chip and programs its own RX/TX ring addresses;
+a firmware driver still polling the same registers re-touches the RX path behind us.
+That is the classic `tx>0 rx=0` signature already recorded in this driver's lore,
+and it explains attached-fails / detached-works exactly.
+
+**The remedy already exists in-tree and is simply not wired to any NIC.**
+`uno_pc64_pci_disconnect(bus, dev, fn)` ([uefi_main.c:624](uefi_main.c#L624)) is
+`gBS->DisconnectController` over the matching `EFI_PCI_IO` handle. Its own comment
+says it is "Needed for xHCI: the firmware's USB stack keeps touching the controller
+otherwise" — the identical failure mode. Today its **only** caller is
+[xhci.c:679](xhci.c#L679). Suggested one-liner for the NIC lane to evaluate: call
+it on the NIC's bus/dev/fn at the top of `r8169_nic()` (and the other PCI NICs)
+before `hw_start()`, when `!uno_pc64_detached()`.
+
+### Confirming it in one boot, with no rebuild
+Boot the stick and open **System**. [pc64_uui.c:752](pc64_uui.c#L752) prints
+`"DETACHED (native): "` vs `"Native FS: "` in a production build. If it reads
+`Native FS:` the box is attached and this hypothesis holds. `gDetachBlocked` is
+also set on this path and surfaced in the same window.
+
+### Note on the proposed A/B
+"Pull the stick, boot the internal disk" changes **two** variables at once — the
+build *and* the boot medium (hence the attach state). It cannot isolate the build.
+The clean A/Bs are: (a) the System-window check above, or (b) install the current
+build to the internal disk and boot that.
+
+### Four smaller defects found while reading (all in the NIC/unonet lane)
+
+1. **`net_dhcp_after_link()` always `return 1`** ([pc64_http.c:54](pc64_http.c#L54)) —
+   it reports success whether or not `net_dhcp_done()`. So `pc64_net_up()` claims
+   "up" on a NIC with no lease, the browser skips its "No network link" message and
+   fails later at DNS instead. This is precisely why the visible symptom was "DNS
+   lookup failed" with no lease behind it. Returning `net_dhcp_done()` would put the
+   error where the fault is.
+2. **`rtl8152_nic()`'s native-xHCI path matches on VID alone** — no class check,
+   while its attached-path sibling `usbio_match()` requires `cls == 0xff` and its
+   comment explains exactly why ("the VID list covers laptop/dock makers whose ids
+   also appear on keyboards and hubs"). `is_rtl_vid()` includes `0x0bda`, which is
+   all over USB flash drives, card readers and hubs. Inert today (no `-DUNO_XHCI`),
+   but it arms the moment xHCI ships — which is also the change that would let a
+   USB-booted box detach, i.e. it lands on exactly this machine.
+3. **[NETWORK.md](NETWORK.md) and the code disagree** on when net_boot runs: the doc
+   says a debug build runs it "only when there is no `DEBUG.CFG`"; the code
+   ([pc64_uui.c:2650](pc64_uui.c#L2650)) has no DEBUG.CFG check, only `nonet`. The
+   "no-op if already leased" guard covers the stated hazard, but the doc is wrong.
+4. **`net_try_lease()`'s 1 s link wait is short for gigabit autoneg** (2–5 s is
+   normal), and DHCP DISCOVER is sent regardless — so on a slow-autoneg wired NIC
+   the 3 s DHCP window can largely elapse before the link is even up. Not the cause
+   here, but it makes the eager path strictly weaker than the lazy one it precedes.
+   Note also the budget can never bind on a one-NIC box: the per-device loop caps
+   (200 and 600 iterations) stop at ~4 s of the 8000 ms.
+
+### Also worth a cold power-cycle first
+The r8169 notes say RX state does not always survive a warm reset. Worth ruling out
+before spending a build.
+
+---
+
+## 2026-07-27 — FINDING (→ r8169 / unonet), SUPERSEDES the attached-vs-detached hypothesis above: `hw_start()` never powers the PHY up, so a stick boot inherits a parked PHY and the NIC never links
+
+The earlier entry today proposed firmware-driver contention while attached. **That
+was the wrong mechanism** — it predicts `tx > 0, rx = 0`, and the box shows neither.
+Two hard observations from the ZimaBlade taken together settle it:
+
+1. **The tray LAN chip is HIDDEN.** `fmt_net()` hides it only when `net_link()` is
+   false, i.e. `r8169_link()` returned 0 — the link never asserted. Had the NIC
+   linked and merely failed to lease, the tooltip would read
+   `link up, NO DHCP lease (tx N rx M)`.
+2. **Zero frames from `00:e0:4c:30:5b:d4`** across a full boot captured on devbuntu
+   (`tcpdump -i enx8cae4cddab9f`, 7 min spanning a cold boot): 0 packets from that
+   MAC, while 2113 packets of other LAN traffic were captured in the same window.
+   The NIC never transmitted.
+
+So this is not a lease problem, not a budget problem, and not RX contention. **The
+link never comes up at all.**
+
+### Root cause, stated by the driver itself
+
+[r8169.c:276](r8169.c#L276):
+
+> `hw_start()` **deliberately never powers the PHY up or restarts autoneg**, so on
+> real silicon fresh out of UEFI (which parks the PHY) this is where we learn,
+> empirically, whether link ever asserts on its own.
+
+`phy_write()` exists ([r8169.c:375](r8169.c#L375)) but its only caller is the `eth`
+debug verb ([r8169.c:473](r8169.c#L473)). There is no BMCR write, no power-down
+clear and no autoneg restart anywhere in the bring-up path. The driver inherits
+whatever PHY state the firmware left behind.
+
+That makes link state a function of **what the UEFI boot manager happened to do
+before handing off**, which is exactly the stick-vs-internal variable:
+
+- Boot lands on the internal disk after the boot manager has walked/connected its
+  network boot option → the firmware's Realtek driver ran, PHY is powered and
+  linked → our driver rides a live link → **networking works** (this is the older
+  build's apparent success; the build was never the variable).
+- Boot hands straight off to a USB stick's `BOOTX64.EFI` without ever connecting
+  the NIC → **PHY still parked** → `link_up()` false forever → `net_try_lease()`
+  burns its 1 s link wait, fires DHCP into a dead PHY, nothing reaches the wire.
+
+The bring-up comment says this design was to learn empirically whether link asserts
+on its own. On this box, from a stick boot, the answer is **no**.
+
+### Suggested fix (r8169 lane's call)
+
+In `hw_start()`, after the soft reset clears, own the PHY instead of inheriting it:
+clear BMCR (reg 0) bit 11 (power-down), set bit 12 (autoneg enable) + bit 9
+(restart autoneg) — `phy_write(0, 0x1200)` — then let the link wait run. Note
+`phy_write` is defined below `hw_start`, so it needs a forward declaration.
+
+**Pair it with a longer link wait.** `net_try_lease()`'s 1 s cap
+([pc64_http.c:126](pc64_http.c#L126)) is already short for gigabit autoneg and
+becomes actively wrong once we restart autoneg ourselves — a fresh negotiation is
+2–5 s. `pc64_net_up()`'s `net_dhcp_after_link()` already waits 3 s and is the
+better model.
+
+### Caveat I cannot close from here
+
+A failed `hw_start()` (soft reset never clearing → `r8169_nic()` returns 0 → no NIC
+bound) produces an *identical* external signature: hidden tray chip, zero frames.
+The parked-PHY reading is strongly favoured because it is the driver's documented
+design, but the two are only distinguishable from the debug trace.
+
+**Cheap offline discriminator, no network needed:** flash a `UNO_DEBUG=1` stick.
+The box stays firmware-attached (confirmed: System reads `Native FS:`, so
+`try_detach()` refused per [uefi_main.c:803](uefi_main.c#L803) — USB boot with no
+`-DUNO_XHCI` in `build.sh`), so the ESP stays writable and
+`uno_dbg_write_bootlog()` lands telemetry on the stick itself. Pull the stick, read
+the log on a PC, and look for `r8169: soft-reset cleared (t=N)` followed by the
+`r8169_phy_poll()` lines — `PHYstatus=..` / `final link=DOWN` confirms parked PHY;
+`soft-reset never cleared` confirms the other branch.
+
+### Still standing from the earlier entry
+The four smaller defects listed there are unaffected and still worth fixing —
+especially `net_dhcp_after_link()`'s unconditional `return 1`, which is why the
+browser reported "DNS lookup failed" instead of "no link".
