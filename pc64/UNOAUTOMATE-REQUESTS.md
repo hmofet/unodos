@@ -1414,3 +1414,52 @@ Also updated in the same commit: the `r8169_phy_poll()` header comment claiming
 `net_dhcp_after_link()`'s unconditional `return 1` ([pc64_http.c:54](pc64_http.c#L54)),
 `net_try_lease()`'s 1 s link cap, `rtl8152_nic()`'s missing class check on the xHCI
 path, and the NETWORK.md/code disagreement over the DEBUG.CFG gate.
+
+---
+
+## 2026-07-28 — CORRECTION (r8169): the parked-PHY root cause is REFUTED by the ZimaBlade's own telemetry
+
+The Verbatim test stick carried a `CRASH/DEFAULTS/BOOTLOG.TXT` from a debug boot
+of this very box (MAC `00:e0:4c:30:5b:d4`, `machine: DEFAULTS`, build
+`debug-fbec1a5b-20260727-1916`, `detached: 0` — so USB-booted and firmware-attached,
+the exact configuration I claimed cannot link):
+
+```
+[  5.630] r8169: soft-reset cleared (t=0)
+[  5.633] r8169: MAC 00:e0:4c:30:5b:d4 - polling PHYstatus ~4s
+[  5.635] r8169:  +0ms PHYstatus=93 link=1 speed=1000
+[  9.637] r8169:  PHY poll done - final link=UP
+[ 11.146] remote: link up
+```
+
+**Link up at gigabit at +0ms, out of firmware, on a USB-stick boot.** The URC dial
+to devbuntu (`192.168.2.100:5098`) then succeeded and held for ~26 minutes. The PHY
+is not parked on this box, so "USB boot ⇒ parked PHY" is wrong as stated, and
+`phy_bringup()` — which returns immediately when link is already up — would be a
+**no-op here**. The branch is not harmful, but it is not demonstrated to fix
+anything and should NOT land on the strength of my earlier reasoning.
+
+What the earlier evidence does still establish, unchanged: the failing boot had
+`net_link()` false (tray chip hidden) and put zero frames on the wire. Both boots
+are USB, attached, same box, same NIC. So the difference is **not** the boot medium.
+
+**New leading axis: production vs debug.** The failing stick is a production build;
+the working log above is a debug build. The one r8169-relevant difference between
+them is that `r8169_phy_poll()` is compiled out in production — so a debug
+`r8169_nic()` sits in that poll for ~4 s before returning, and a production one
+returns immediately into `net_try_lease()`'s ~1 s link wait. That is a plausible
+mechanism and it is testable, but I have not proven it, and the +0ms reading above
+argues the link does not actually need that time. Treat it as the next hypothesis
+to kill, not as an answer.
+
+**Instrument now on the stick** (branch build `debug-local-20260728-0402`, written
+to the Verbatim): `phy_bringup()` traces the PHY state at `hw_start()` time, which
+is the same instant a production build sees it. `PHY already linked out of firmware,
+no restart` means the PHY is fine and the cause is downstream; `PHY parked
+(BMCR=..)` would revive the original theory.
+
+**Separately confirmed on this box:** the `rtl8152_nic()` xHCI VID-only match is a
+real hazard here, not theoretical. The same boot log enumerates
+`usb[0] 0bda:0411 class 09/00` and `usb[1] 0bda:5411 class 09/00` — two Realtek-VID
+**hubs**. The UsbIo path's `cls != 0xff` guard correctly skips them; the xHCI path
+has no such guard and would bind a hub as a NIC the moment `-DUNO_XHCI` ships.
