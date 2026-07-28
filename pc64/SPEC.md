@@ -1045,7 +1045,7 @@ BROWSER, JS, STUDIO, PHOTOS, PAINT, GAME, INST, MAC, PY, LIBC.
   ceiling — see S-WIFI-08). This is the boot-time automation of S-WIFI-08's
   join contract, expected red until the MLME tail lands.
 
-## S-TLS — TLS client (`tls.c`, `tls_ca.c`)
+## S-TLS — TLS client (`tls.c`, `tls_entropy.c`, `tls_ca.c`)
 
 - **S-TLS-01** [auto] `tls_version()` MUST report TLS 1.2 (0x0303) on an
   established session; the cipher roster is BearSSL's full client profile.
@@ -1062,9 +1062,11 @@ BROWSER, JS, STUDIO, PHOTOS, PAINT, GAME, INST, MAC, PY, LIBC.
   ~3 s SYN deadline, reads ~4 s, writes ~8 s.
 - **S-TLS-05** [auto] Session resumption MUST be disabled (client_reset
   with resume=0) — every connect is a full handshake.
-- **S-TLS-06** [auto] Entropy MUST come from RDRAND when CPUID advertises
-  it; the TSC-LCG fallback is permitted only when RDRAND is absent and
-  `tls_have_rdrand()` reports which one is live.
+- **S-TLS-06** [auto] Entropy MUST come from RDRAND when the CPU has a
+  WORKING one (CPUID advertising it is not enough — the probe requires an
+  actual success). The former TSC-LCG fallback is **withdrawn**: it was
+  "not cryptographically strong" by its own comment and was injected
+  anyway, so an RDRAND-less box handshook on a weak seed. See S-TLS-10/11.
 - **S-TLS-07** [assert] One TLS session at a time: the single global
   context means `tls_connect` while `g_open` MUST refuse or tear down
   first, and `tls_cipher/version/last_error` MUST NOT be trusted after
@@ -1074,6 +1076,17 @@ BROWSER, JS, STUDIO, PHOTOS, PAINT, GAME, INST, MAC, PY, LIBC.
   closed, whole-web-down symptom documented).
 - **S-TLS-09** [auto] TLS reads/writes MUST pump `net_poll` internally and
   never busy-hang past their deadlines when the peer goes silent.
+- **S-TLS-10** [auto] Entropy MUST fail CLOSED. With no source that passes
+  its health test, `tls_connect`/`tls_connect_ca` MUST return
+  `TLS_ENOENTROPY` **before opening a socket** and MUST NOT inject a seed.
+  `tls_entropy_source()`/`tls_entropy_name()` report which source is live
+  (`rdrand`, `jitter`, or `none`).
+- **S-TLS-11** [auto] A source that reports itself live MUST NOT repeat: two
+  32-byte draws MUST differ (`tls_entropy_selftest()` → 1). The jitter
+  collector MUST reject a clock that carries no entropy — frozen,
+  step-locked, or too few distinct delta values — rather than condition it
+  into a plausible-looking seed. Host gate: `tools/tls_entropy_test.sh`
+  (6 synthetic-CPU scenarios); on-device: SPECTEST S-TLS-10/11.
 
 ## S-HTTP — HTTP client (`pc64_http.c`)
 

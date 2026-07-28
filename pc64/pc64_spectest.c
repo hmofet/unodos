@@ -251,6 +251,34 @@ static void test_net(void)
      * (fail), never hang or return a bogus address. */
     { unsigned char a[4]; int r = net_dns_query("nonexistent.invalid", a);
       CHECK("S-NET-19", r == 0); }
+
+    /* S-TLS-10: entropy fails CLOSED. Either the box has a source we can name,
+     * or tls_connect refuses with TLS_ENOENTROPY - what must never happen again
+     * is a handshake seeded from a fallback the code itself calls weak. The
+     * refusal is checked without a link: it is decided before any socket. */
+    {
+        int src = tls_entropy_source();
+        int ok  = (src == TLS_ENT_RDRAND || src == TLS_ENT_JITTER);
+        if (!ok) {
+            static const unsigned char nowhere[4] = { 10, 0, 0, 254 };
+            ok = (src == TLS_ENT_NONE &&
+                  tls_connect(nowhere, 443, "spectest") == TLS_ENOENTROPY);
+            if (ok) emit("S-TLS-10", 1, "no entropy source - tls_connect refuses (fail closed)");
+            else    BAD("S-TLS-10", "no entropy source and tls_connect did NOT refuse");
+        } else {
+            emit("S-TLS-10", 1, "entropy source: %s", tls_entropy_name());
+        }
+    }
+
+    /* S-TLS-11: a source that reports itself live MUST NOT repeat. -1 means it
+     * handed back the same 32 bytes twice, i.e. the health test let a dead
+     * counter through; 0 (no source) is consistent with S-TLS-10 above. */
+    {
+        int st = tls_entropy_selftest();
+        if (st == 1)      OK("S-TLS-11");
+        else if (st == 0) SKIP("S-TLS-11", "no entropy source (fail-closed path, see S-TLS-10)");
+        else              BAD("S-TLS-11", "entropy source repeated a seed (%s)", tls_entropy_name());
+    }
 }
 
 /* ===================================================================== FONT */
