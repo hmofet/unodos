@@ -4,6 +4,7 @@
 #include "bearssl.h"
 #include "tls.h"
 #include "tls_ca.h"      /* bundled CA trust anchors for HTTPS */
+#include "unoauto.h"     /* cooperative test deadline; compiles away in prod */
 #include <string.h>
 #include <stdint.h>
 
@@ -27,53 +28,6 @@ void uno_dbg_log(const char *fmt, ...);
 #define TLSTRACE(...) ((void)0)
 #endif
 
-/* ---- entropy: RDRAND if present, else a TSC mix (demo-grade fallback) ---- */
-static unsigned cpuid_ecx1(void)
-{
-    unsigned a, b, c, d;
-    __asm__ volatile ("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d)
-                              : "a"(1u), "c"(0u));
-    return c;
-}
-static int rdrand64(unsigned long long *out)
-{
-    unsigned char ok;
-    unsigned long long v;
-    __asm__ volatile ("rdrand %0; setc %1" : "=r"(v), "=qm"(ok));
-    *out = v;
-    return ok;
-}
-static unsigned long long rdtsc(void)
-{
-    unsigned a, d;
-    __asm__ volatile ("rdtsc" : "=a"(a), "=d"(d));
-    return ((unsigned long long)d << 32) | a;
-}
-
-static int g_rdrand;
-static void get_entropy(unsigned char *out, int n)
-{
-    int i;
-    g_rdrand = (cpuid_ecx1() >> 30) & 1;
-    if (g_rdrand) {
-        for (i = 0; i < n; i += 8) {
-            unsigned long long v = 0; int t = 64;
-            while (!rdrand64(&v) && t--) ;
-            memcpy(out + i, &v, (n - i >= 8) ? 8 : (n - i));
-        }
-    } else {
-        /* NOT cryptographically strong - documented; only to exercise the
-           handshake where no hardware RNG exists. A real deployment wires a
-           proper entropy source here. */
-        unsigned long long s = rdtsc() ^ 0x9E3779B97F4A7C15ULL;
-        for (i = 0; i < n; i++) {
-            s = s * 6364136223846793005ULL + 1442695040888963407ULL;
-            s ^= rdtsc();
-            out[i] = (unsigned char)(s >> 40);
-        }
-    }
-}
-
 /* sysrng.c is excluded (it pulls CPU intrinsics); ssl_engine calls this to
    look for a system seeder. We return "none" and inject entropy directly. */
 br_prng_seeder br_prng_seeder_system(const char **name)
@@ -81,6 +35,17 @@ br_prng_seeder br_prng_seeder_system(const char **name)
     if (name) *name = "none";
     return 0;
 }
+
+/* ---- cooperative test deadline ------------------------------------------
+ * unoauto's TEST runner arms a per-check wall-clock budget, but a synchronous
+ * runner cannot preempt a wait loop that is blocked inside one call - so the
+ * live network checks (S-AI-01/02, S-NET-30) could sit here past the budget and
+ * the whole SPECTEST batch reported "guest did not power off (hang?)". The
+ * runner exports unoauto_deadline_left_ms() precisely so the long waits opt in
+ * and bail; this is that half. 0 = out of budget, -1 = no budget armed (the
+ * production case, where the macro folds it to a constant -1 and the test
+ * compiles out entirely). */
+#define TLS_OUT_OF_BUDGET() (unoauto_deadline_left_ms() == 0)
 
 /* ---- low-level record transport over the pc64 TCP stack ----------------- */
 static int low_read(void *ctx, unsigned char *buf, size_t len)
@@ -102,6 +67,8 @@ static int low_read(void *ctx, unsigned char *buf, size_t len)
               TLSTRACE("tls: low_read EOF (tcp state %d after %d ms)", st, ms); return -1; } }
         uno_pc64_delay_ms(1);                   /* pace the idle wait to ~1ms/poll */
         if (++ms > 4000) { TLSTRACE("tls: low_read -1 (4s idle deadline)"); return -1; }
+        if (TLS_OUT_OF_BUDGET()) {
+            TLSTRACE("tls: low_read -1 (test budget exhausted after %d ms)", ms); return -1; }
         if (--tries <= 0) return -1;
     }
 }
@@ -126,6 +93,9 @@ static int low_write(void *ctx, const unsigned char *buf, size_t len)
             uno_pc64_delay_ms(1);
             if (++ms > 8000) { TLSTRACE("tls: low_write %d/%d (8s deadline)", off, (int)len);
                                return (off > 0) ? off : -1; }   /* ~8s deadline */
+            if (TLS_OUT_OF_BUDGET()) {
+                TLSTRACE("tls: low_write %d/%d (test budget exhausted)", off, (int)len);
+                return (off > 0) ? off : -1; }
         }
         if (--tries <= 0) return (off > 0) ? off : -1;
     }
@@ -140,14 +110,19 @@ static br_sslio_context        g_io;
 static unsigned char           g_iobuf[BR_SSL_BUFSIZE_MONO];
 static int g_open;
 
-int tls_have_rdrand(void) { return g_rdrand; }
-
 int tls_connect(const u8 dst[4], u16 port, const char *sni)
 {
     unsigned char seed[32];
     br_ec_public_key pk;
     long t;
 
+    /* Checked BEFORE the socket exists: a box with no usable RNG must never
+     * open a connection it cannot secure, and the caller gets a distinct
+     * reason instead of a generic handshake failure. */
+    if (tls_entropy_source() == TLS_ENT_NONE) {
+        TLSTRACE("tls: refusing connect - no usable entropy source");
+        return TLS_ENOENTROPY;
+    }
     if (net_tcp_connect(dst, port) != 0) return -1;
     t = 4000000;                                /* hard iteration ceiling (backstop) */
     { int ms = 0;
@@ -156,6 +131,7 @@ int tls_connect(const u8 dst[4], u16 port, const char *sni)
         { int st = net_tcp_state(); if (st == TCP_DONE || st == TCP_CLOSED) return -2; }
         uno_pc64_delay_ms(1);
         if (++ms > 3000) return -2;             /* ~3s deadline: SYN went unanswered */
+        if (TLS_OUT_OF_BUDGET()) return -2;     /* the test's budget ran out first */
         if (--t <= 0) return -2;
       } }
 
@@ -169,8 +145,9 @@ int tls_connect(const u8 dst[4], u16 port, const char *sni)
     br_ssl_engine_set_x509(&g_sc.eng, &g_kk.vtable);
 
     br_ssl_engine_set_buffer(&g_sc.eng, g_iobuf, sizeof g_iobuf, 0);
-    get_entropy(seed, sizeof seed);
+    if (!tls_entropy_get(seed, sizeof seed)) return TLS_ENOENTROPY;  /* source died */
     br_ssl_engine_inject_entropy(&g_sc.eng, seed, sizeof seed);
+    memset(seed, 0, sizeof seed);
 
     if (br_ssl_client_reset(&g_sc, sni, 0) != 1) return -3;
     br_sslio_init(&g_io, &g_sc.eng, low_read, 0, low_write, 0);
@@ -205,6 +182,10 @@ int tls_connect_ca(const u8 dst[4], u16 port, const char *sni)
     uint32_t days, secs;
     long t;
 
+    if (tls_entropy_source() == TLS_ENT_NONE) {          /* fail closed - see tls_entropy.h */
+        TLSTRACE("tls: refusing connect_ca - no usable entropy source");
+        return TLS_ENOENTROPY;
+    }
     if (net_tcp_connect(dst, port) != 0) return -1;
     t = 4000000;                                /* hard iteration ceiling (backstop) */
     { int ms = 0;
@@ -213,14 +194,16 @@ int tls_connect_ca(const u8 dst[4], u16 port, const char *sni)
         { int st = net_tcp_state(); if (st == TCP_DONE || st == TCP_CLOSED) return -2; }
         uno_pc64_delay_ms(1);
         if (++ms > 3000) return -2;             /* ~3s deadline: SYN went unanswered */
+        if (TLS_OUT_OF_BUDGET()) return -2;     /* the test's budget ran out first */
         if (--t <= 0) return -2;
       } }
     br_ssl_client_init_full(&g_sc, &g_xm, uno_tls_tas, uno_tls_tas_num);  /* trust the roots */
     tls_now(&days, &secs);
     br_x509_minimal_set_time(&g_xm, days, secs);            /* validity window */
     br_ssl_engine_set_buffer(&g_sc.eng, g_iobuf, sizeof g_iobuf, 0);
-    get_entropy(seed, sizeof seed);
+    if (!tls_entropy_get(seed, sizeof seed)) return TLS_ENOENTROPY;  /* source died */
     br_ssl_engine_inject_entropy(&g_sc.eng, seed, sizeof seed);
+    memset(seed, 0, sizeof seed);
     if (br_ssl_client_reset(&g_sc, sni, 0) != 1) return -3;
     br_sslio_init(&g_io, &g_sc.eng, low_read, 0, low_write, 0);
     g_open = 1;
