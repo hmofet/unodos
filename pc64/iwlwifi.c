@@ -3129,9 +3129,14 @@ static int mvm_assoc(void)
     u8 f[128]; int n = 24;
     static const u8 sr[8]  = { 0x82,0x84,0x8b,0x96,0x0c,0x12,0x18,0x24 }; /* 1..18M */
     static const u8 er[4]  = { 0x30,0x48,0x60,0x6c };                     /* 24..54M */
-    static const u8 rsn[20]= { 0x30,0x12, 0x01,0x00, 0x00,0x0f,0xac,0x04,
-                               0x01,0x00, 0x00,0x0f,0xac,0x04, 0x01,0x00,
-                               0x00,0x0f,0xac,0x02 };   /* v1, CCMP grp+pair, PSK akm */
+    /* The RSN IE here MUST be byte-identical to the one the supplicant puts in
+     * EAPOL 2/4: the authenticator compares them and deauthenticates on any
+     * difference. This used to be a private 20-byte literal (RSNE body 0x12)
+     * while wpa_build_rsn_ie() emits 22 bytes (body 0x14, including the 2-byte
+     * RSN capabilities field) - so every 4-way died right after our 2/4 went
+     * out, with the AP sending deauth (metal, 2026-07-28). Build both from the
+     * one function so they cannot drift again. */
+    u8 rsn[24]; int rsn_len = wpa_build_rsn_ie(rsn);
     int sl = (int)strlen(g_cfg_ssid);
     memset(f, 0, sizeof f);
     f[0] = 0x00;                        /* FC: mgmt(0) / subtype assoc-req(0) */
@@ -3145,7 +3150,7 @@ static int mvm_assoc(void)
     f[n++] = 0x00; f[n++] = (u8)sl; memcpy(f + n, g_cfg_ssid, sl); n += sl;   /* SSID */
     f[n++] = 0x01; f[n++] = 8; memcpy(f + n, sr, 8); n += 8;                  /* rates */
     f[n++] = 0x32; f[n++] = 4; memcpy(f + n, er, 4); n += 4;                  /* ext rates */
-    memcpy(f + n, rsn, 20); n += 20;                                          /* RSN */
+    memcpy(f + n, rsn, rsn_len); n += rsn_len;                                /* RSN */
     g_mgmt_rx_len = 0;
     tx_enqueue(f, n, 1);
     if (wait_mgmt(1, 800) < 0) return -1;
