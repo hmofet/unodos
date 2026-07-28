@@ -858,11 +858,19 @@ menu) can put UnoDOS on the computer itself, so it boots without the stick:</p>
       menu. <strong>Nothing is deleted</strong> - Windows keeps booting as before, and you can undo it
       by deleting the <code>\\EFI\\UNODOS</code> folder.</li>
   <li><strong>Onto a whole disk</strong> (the <em>Disk</em> rows): the entire disk is erased and
-      becomes a UnoDOS disk. This is destructive and asks you to confirm twice.</li>
+      becomes a UnoDOS disk. This one cannot be done by accident - you have to type the word
+      <strong>ERASE</strong> first (below).</li>
 </ul>
 <p>Pick a target with <kbd>↑</kbd>/<kbd>↓</kbd> and press <kbd>I</kbd> to install
 (<kbd>R</kbd> rescans). The system files, fonts, documents and all the apps are copied along.</p>
-{fig("install.png", "The <b>Install</b> app: pick a target, press <kbd>I</kbd>. Rows marked <i>keeps data</i> are non-destructive.", cls="shot-sm")}
+<p>For a <strong>whole disk</strong>, one more step stands between you and an erased drive:</p>
+<ol>
+  <li>Press <kbd>C</kbd> to put the caret in the confirm box (<kbd>Esc</kbd> leaves it again).</li>
+  <li>Type <strong>ERASE</strong>.</li>
+  <li>Press <kbd>I</kbd> to arm, then <kbd>I</kbd> again to commit.</li>
+</ol>
+{note('Typing <b>ERASE</b> is the only thing that unlocks a whole-disk install, and it applies to the selected row only - change the selection and you type it again. A row listed <b>[too small]</b>, <b>[read-only]</b> or <b>[not 512B/s]</b> cannot be installed to at all. If you change your mind, press <kbd>Esc</kbd> and close the window; nothing is written until the second <kbd>I</kbd>.', kind="warn", title="A whole-disk install erases everything on that disk")}
+{fig("install.png", "The <b>Install</b> app. The key line across the top is the whole procedure, and the <b>type ERASE</b> box above the buttons is the gate on a whole-disk install - until that word is typed, <kbd>I</kbd> does nothing. This shot is from the emulator, which offers no disk UnoDOS can install to, so the list is empty; on a real PC each eligible disk and EFI partition appears as a row.", cls="shot-sm")}
 
 <h2 id="firstboot">First boot</h2>
 <p>A splash screen with a loading bar appears while UnoDOS starts up, then a short start-up chime
@@ -1156,9 +1164,10 @@ laptops with an Ethernet socket:</p>
       laptop LOM chips (the <em>e1000e</em> family)</li>
   <li><strong>Intel I210 / I211 / I350</strong> and the 8257x server parts (the <em>igb</em> family)</li>
 </ul>
-<p>A driver for <strong>Realtek</strong> wired chips (RTL8168 / 8111 / 8125) is included but has not been
-verified on hardware yet.</p>
-{note('The wired Intel drivers are verified in the emulator against the QEMU e1000 / e1000e / igb models. Most test laptops have no wired port, so the built-in NIC on a given real machine may not have been exercised end to end - if the built-in port does not come up, a supported USB Ethernet adapter (below) is the reliable path.', title="Emulator-verified")}
+<p><strong>Realtek</strong> wired chips (RTL8168 / 8111 / 8125) are supported too - the port built into most
+desktop boards and small-form-factor PCs. This one is <strong>verified on real hardware</strong>: a ZimaBlade
+with an onboard RTL8168 links at gigabit, takes a DHCP address and browses, with no adapter plugged in.</p>
+{note('The Intel drivers are verified in the emulator against the QEMU e1000 / e1000e / igb models, and the Realtek driver on a real machine. Most test <em>laptops</em> have no wired port, so the built-in NIC on any given laptop may not have been exercised end to end - if a built-in port does not come up, a supported USB Ethernet adapter (below) is the reliable path.', title="How this is verified")}
 
 <h2 id="status">Checking the connection</h2>
 <p>The <strong>Network</strong> tab in the <a href="appearance.html#control">Control Panel</a> shows the live
