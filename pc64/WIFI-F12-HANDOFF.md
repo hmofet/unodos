@@ -1,8 +1,9 @@
 # Intel AX201 WiFi (F12) bring-up — handoff
 
-Status: 2026-07-28 (round 24 - **AUTH AND ASSOCIATION SUCCEED ON METAL**. TX
-works, the AP accepts our Open-System auth and returns AID 1, and the WPA2
-4-way handshake starts. Remaining: the handshake does not complete past 2/4).
+Status: 2026-07-28 (round 24 - **THE WPA2 CONNECTION COMPLETES ON METAL**.
+auth -> assoc (AID 1) -> full 4-way handshake -> CCMP pairwise key + GTK
+installed -> station authorized. Remaining: no data path demonstrated yet, and
+the AP choice must be forced with `iwl pick`).
 
 ## Round 24 (2026-07-28) — TX fixed; auth + assoc succeed; 4-way still incomplete
 
@@ -96,10 +97,31 @@ EAPOL in (99 bytes, type=03 desc=02 ki=008a 1/4) -> reply 121   (2/4 built + TXe
 ...then the AP deauths (mgmt subtype=12)
 ```
 
-The RSN IE fix (5) went in after the last successful auth/assoc run and has NOT
-yet been tested through a complete handshake - the two runs since were lost to an
-AP-selection problem and then an ethernet failure. **That is the next thing to
-verify.**
+**VERIFIED COMPLETE** once the RSN IE fix (5) was tested end to end:
+
+```
+EAPOL in (99 bytes,  ki=008a 1/4) -> state 1, reply 121   2/4 sent
+EAPOL in (163 bytes, ki=13ca 3/4) -> state 2, reply 99    3/4 verified, 4/4 sent
+SEC_KEY idx=0 mcast=0 flags=02                            pairwise CCMP key
+SEC_KEY idx=2 mcast=1 flags=4a                            GTK
+STA_CONFIG sta=0 link=0 aid=1 auth=1                      station authorized
+4-way handshake DONE - CCMP keys installed (gtk_len=16 idx=2)
+```
+
+`ki=13ca` = version 2 | Pairwise | Install | ACK | MIC | Secure | Encrypted, a
+genuine 3/4. The RSN IE mismatch really was the last blocker.
+
+### What is NOT done
+
+1. **No data path has been demonstrated.** Association and key install are
+   proven; nothing has been sent or received over the encrypted link. The box
+   runs `net-eth-only`, so the IP stack is not bound to the WiFi NIC. Getting a
+   DHCP lease and a ping over WiFi is the next slice.
+2. **`iwl status` still prints the pre-`mvm` gate string** even when joined -
+   a stale status message, not a connection fault, but it should report the
+   real association state.
+3. **A stock boot is still a coin flip on AP choice** (see the BSSID trap
+   below). `find_and_join()` uses `scan_pick()`, which picks by beacon count.
 
 ### Traps and rig notes learned this round
 
