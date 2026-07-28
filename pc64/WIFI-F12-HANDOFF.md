@@ -123,6 +123,37 @@ arrows move within a tab strip, Enter activates), so the whole UI is drivable
 from the host. `pc64/tools/`-style helper used here: `~/urc_shot.py` on devbuntu
 (send a command through the bridge files; `screen grab`/`screen read` -> PNG).
 
+### Retrying a refused AP: what metal says (round 25, last flash)
+
+The retry landed and ran, and the result maps the ground for the next round:
+
+- **Attempt 1 is clean.** Full setup against `47:4e:cf`, fw healthy the whole way
+  (`csr2808=0` after every command), auth times out. So a refused AP costs
+  nothing and leaves the firmware fine.
+- **`radio_restart()` is NOT a recovery.** The reload reports ALIVE, and then the
+  fw SW_ERRs on the very next command - `csr2808=02000000`
+  (`MSIX_HW_INT_CAUSES_REG_SW_ERR`) the moment `MAC_CONFIG` goes out. Attempts 2
+  and 3 were talking to a dead firmware. It now clears the latched MSI-X causes
+  before reloading and checks the fw's health after, and gives up if it came up
+  asserted. **Only a reboot recovers this.**
+- **Retargeting IN PLACE keeps the fw healthy**, which is the promising path:
+  `iwl pick <n>` then `iwl mld 5` (STA_CONFIG re-sent with the new peer) leaves
+  `csr2808=0`.
+- **A second SESSION_PROTECTION does NOT assert.** `iwl auth` after the retarget
+  sent it again and the fw stayed clean - so round 24's "never send
+  SESSION_PROTECTION twice" is **not** true on this fw (that assert must have
+  had another cause).
+- **But the second auth is not ACKed**: `TXRESP` tail `83 00 00 00` (a failure
+  status; the successful runs read `01 00 00 00`), where attempt 1's identical
+  frame to a fresh context was ACKed. So something in the fw still points at the
+  old AP. Next suspects, in order: `LINK_CONFIG`'s `ref_bssid_addr` (we send
+  zeros), and a link deactivate -> reactivate cycle around the retarget.
+
+Also fixed: `iwl connect` with no argument read `g_cfg_ssid` before anything had
+loaded WIFI.CFG (that happens inside `iwl_nic`), so it returned `err connect:`
+with no trace at all. Pass credentials explicitly meanwhile:
+`iwl connect NimmuNet|<passphrase>`.
+
 ### The sequence that worked, end to end
 
 ```
