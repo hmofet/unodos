@@ -158,7 +158,10 @@ static void net_step(void)
                 strcpy(gTlsInfo, (v == 0x0303) ? "TLS1.2 cs=" :
                                  (v == 0x0304) ? "TLS1.3 cs=" : "TLS cs=");
                 fmt_u(c, num); strcat(gTlsInfo, num);
-                strcat(gTlsInfo, tls_have_rdrand() ? " rdrand" : " tsc");
+                /* name the live entropy source. The old " tsc" arm was a lie
+                   the moment tls.c stopped seeding from a TSC-LCG - there is no
+                   weak fallback now, so this reads rdrand or jitter. */
+                strcat(gTlsInfo, " "); strcat(gTlsInfo, tls_entropy_name());
                 gRes[5] = R_OK;
             } else {
                 strcpy(gTlsInfo, "err ");
@@ -166,6 +169,10 @@ static void net_step(void)
                 gRes[5] = R_FAIL;
             }
             tls_close();
+        } else if (rc == TLS_ENOENTROPY) {
+            /* refused before the socket: no usable RNG on this machine */
+            strcpy(gTlsInfo, "refused: no entropy source");
+            gRes[5] = R_FAIL;
         } else { gRes[5] = R_FAIL; }
         gStep = S_DONE;
         break;

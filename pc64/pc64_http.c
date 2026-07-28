@@ -304,6 +304,12 @@ static int http_get_once(const char *url, char *body, int bodymax,
     /* connect (plain TCP, or TLS with CA validation for https) */
     if (secure) {
         int rc = tls_connect_ca(ip, (unsigned short)port, host);
+        /* A refusal for want of entropy never reached BearSSL, so there is no
+         * BR_ERR_* to quote and "TLS connect failed (BearSSL err 0)" would
+         * point the reader at the wrong layer. Name the real cause. */
+        if (rc == TLS_ENOENTROPY) {
+            if (statusmax) strncpy(status, "TLS refused: no entropy source on this machine", statusmax-1);
+            return -5; }
         if (rc != 0) { set_tls_err(status, statusmax, "TLS connect failed"); return -5; }
     } else {
         if (net_tcp_connect(ip, (unsigned short)port) < 0) { if (statusmax) strncpy(status,"TCP connect failed",statusmax-1); return -5; }
