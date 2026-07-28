@@ -36,15 +36,21 @@ fast path for everything after boot.
 `pc64_net_boot()` ([pc64_http.c](pc64_http.c)) is the **eager boot** path, so an
 installed OS has the network ready without waiting for an app to ask. It walks the
 same table but treats each device as pass/fail on whether it actually **leases**
-within a shared time budget (~8 s total; ~1 s link + ~3 s DHCP per device), and
+within a shared time budget (~8 s total; ~3 s link + ~3 s DHCP per device), and
 **skips any that fails** - so a link-up-but-receive-dead NIC (e.g. the ZimaBlade's
 onboard Realtek under bring-up) or a cableless port is tried, skipped, and the
 next device gets its turn, and the whole thing is bounded so it can never hang
-boot. WiFi is reached only if no wired device leased (its probe is a multi-second
-join). It runs in **every production** boot; in a **debug** build it runs only
-when there is **no `DEBUG.CFG`** - because when one is present the debug boot net
-test ([pc64_nettest.c](pc64_nettest.c)) already owns bring-up, and running both
-would double-`net_init` a USB adapter and kill its RX. `nonet` suppresses it.
+boot. A device whose link never comes up inside its slice is abandoned without
+spending the DHCP window on it, so the remaining budget goes to the next device.
+WiFi is reached only if no wired device leased (its probe is a multi-second
+join). It runs on **every** boot, production or debug; the only suppressor is
+`nonet`. (This section previously claimed a debug build runs it only when there
+is **no `DEBUG.CFG`**. That was never what the code did, and the box that needed
+it most disproved it: the ZimaBlade leases from `pc64_net_boot` *with* a
+`DEBUG.CFG` present, because its boot net test skips a machine with no USB
+adapter and hands over having brought nothing up. The double-`net_init` hazard
+the claim was guarding against is already handled - `pc64_net_boot` no-ops when
+the stack already holds a lease.)
 Gate: [tools/netboot_qemu.py](tools/netboot_qemu.py) boots a debug e1000 image
 with `DEBUG.CFG` removed and asserts the guest leases at boot with nothing else
 armed.
