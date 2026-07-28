@@ -1532,3 +1532,39 @@ master): 11 dirs + 71 files / 12.5 MB pushed, `\EFI\BOOT\BOOTX64.EFI` verified a
 1883204 bytes (byte-exact vs source), boot entry authored, `reboot` synced the
 write-back FAT cache. The box came back with `disks` reporting `fw1 ... is_boot=1`
 and dialed home on its own; `eth status` = `present=1 up=1 link=1 PHYstatus=93`.
+
+---
+
+## 2026-07-28 — STATUS: every defect filed above is fixed on branch `req-fixes`
+
+Five commits, one per lane, off `origin/master` (`1164fea`). Pushed, not merged.
+
+| # | Defect | Fix | Commit |
+|---|---|---|---|
+| 1 | `uno_fat_mkfs` zeroes the FAT region one sector per write -> `prepdisk` on a large disk outruns the 20 s freeze watchdog and leaves a repartitioned-but-unformatted disk | batch 32 sectors/write from a static buffer + `uno_dbg_heartbeat()` in the loop | `03fab84` |
+| 2 | `net_dhcp_after_link()` / `pc64_net_up()`'s inited path return success without a lease | both return `net_dhcp_done()`; browser message names all three causes | `a6cc746` |
+| 3 | `net_try_lease()`'s ~1 s link wait is below gigabit autoneg | ~3 s, and a linkless device returns immediately instead of spending its DHCP window | `a6cc746` |
+| 4 | `rtl8152` xHCI path matches on VID alone and *breaks* the scan, so a Realtek-VID hub hides a real NIC | require device class `0x00`/`0xff`, in `rtl8152_nic()` and `rtl8152_present()` | `3034018` |
+| 5 | `install_dir()` calls `os.path.dirname` on a backslashed path -> no dirs created on POSIX | take `dirname` from the native relpath, convert after | `00ec7e5` |
+| 6 | NETWORK.md claims a debug build gates `pc64_net_boot` on `DEBUG.CFG` | corrected; timings updated | `20fa41c` |
+
+**Gates.** Builds `UNO_DEBUG=0` and `UNO_DEBUG=1`. `tools/netboot_qemu.py` 4/4.
+`tools/remote_qemu.py` fully green — and it is the gate that actually covers #1:
+`prepdisk (GPT + ESP + FAT32)`, `fresh FAT32 volume mounted`, `push a file onto
+the fresh volume`, byte-exact read-back, `mkdir + push into a created subdir`.
+
+**Two things noticed while gating, NOT fixed (not mine, and out of scope):**
+
+1. **`tools/install_test.py disk` does not assert anything.** `run_phase()`
+   returns `True` unconditionally for the `disk` phase after
+   `phase_boot_from_disk()`, which only screenshots. On BOTH master and this
+   branch the from-disk screenshot is the **UEFI Interactive Shell**, not the
+   UnoDOS desktop — i.e. the installed disk is not booting, and the gate has been
+   exiting 0 through it. Only the `esp` phase has a real check
+   (`verify_esp_disk`). Pre-existing; flagging because a green run here currently
+   means less than it looks like. (INSTALL.md still says both phases passed on
+   2026-07-19, so this may be a regression since.)
+2. **`install_test.py` needs `build/unodos-uefi.img`** (from `tools/mkuefi.py`)
+   and dies with an unhandled `ConnectionRefusedError` on the QMP socket when it
+   is absent, because QEMU exits at once and the script never checks. A fresh
+   worktree always hits this. Worth a clear "run tools/mkuefi.py first" error.
