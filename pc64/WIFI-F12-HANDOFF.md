@@ -1,9 +1,131 @@
 # Intel AX201 WiFi (F12) bring-up — handoff
 
-Status: 2026-07-27 (round 23 - **the airtime wall is DOWN**. SESSION_PROTECTION
-is accepted on metal, the radio is parked on-channel and RX works. The link API
-is ported and metal-verified end to end. New blocker: TX has never actually
-transmitted - the auth frame draws no TX-status notification).
+Status: 2026-07-28 (round 24 - **AUTH AND ASSOCIATION SUCCEED ON METAL**. TX
+works, the AP accepts our Open-System auth and returns AID 1, and the WPA2
+4-way handshake starts. Remaining: the handshake does not complete past 2/4).
+
+## Round 24 (2026-07-28) — TX fixed; auth + assoc succeed; 4-way still incomplete
+
+Five independently-necessary defects were found and fixed this round. Each one
+alone would have blocked association, and each was confirmed on metal.
+
+### 1. TX never transmitted — the missing `iwl_cmd_header`
+
+`tx_enqueue()` built the TX buffer starting at `iwl_tx_cmd_gen2`. The real gen2
+layout (`iwl_txq_gen2_build_tx`, which copies from `&dev_cmd->hdr`) is:
+
+```
+[ iwl_cmd_header 4 B ][ iwl_tx_cmd_gen2 20 B ][ 802.11 hdr ][pad][ body ]
+```
+
+Without the header the fw read the frame LENGTH as `{cmd, group_id}` - a 30-byte
+auth frame arrived as cmd `0x1e` group 0 = **TXPATH_FLUSH**. The card was being
+told to flush its TX path every time we asked it to transmit. `send_cmd()` has
+always built this header correctly, which is exactly why every command worked
+and TX never did.
+
+Four more TX defects rode behind it, all from `iwl_mvm_set_tx_params` +
+`iwl_txq_gen2_tx`:
+- `hdr.sequence` must carry `QUEUE_TO_SEQ(qid) | INDEX_TO_SEQ(idx)`.
+- the byte-count entry is `tx_cmd->len`, the OVER-THE-AIR length, not the TFD total.
+- `IWL_TX_FLAGS_CMD_RATE` must be set or the fw consults a rate-scaling table we
+  never configure (no `TLC_MNG_CONFIG_CMD`).
+- `IWL_TX_FLAGS_ENCRYPT_DIS` must be set until keys exist.
+- this fw reports **TX_CMD cmd_ver 9**, so `rate_n_flags` is the **v2** encoding
+  (bits 0-3 a rate INDEX, 8-10 modulation type, 14-15 antenna). 1 Mbps CCK on
+  ant A is `0x4000`; the v1 value `0x420a` decodes as HT garbage.
+
+Success signal: `rxpkt grp=0 cmd=1c` (REPLY_TX), which had never once appeared.
+
+### 2. `g_mac` was never populated — our MAC was 00:00:00:00:00:00
+
+Declared and read in six places (auth frame addr2, `MAC_CONFIG.local_mld_addr`,
+`LINK_CONFIG.local_link_addr`, the supplicant's own-address, `mgmt_capture`'s
+addr1 match) and **written nowhere**.
+
+This produced a genuinely misleading success signal: the AP's hardware ACKs any
+unicast frame addressed to it regardless of source, so `TX_STATUS_SUCCESS` was
+real but meant only "the radio heard you", not "the AP accepted your identity".
+No AP runs an auth exchange with an all-zero station, and `mgmt_capture` could
+never have matched a reply anyway.
+
+`read_mac_addr()` mirrors `iwl_set_hw_address_from_csr`: STRAP pair first, OTP
+fallback, `iwl_flip_hw_address` byte order. **The base is Linux's per-config
+`cfg->mac_addr_from_csr` = 0x380 on AX200/AX201-class 22000 parts**, and 0x30380
+only from AX210 on - keying it off "family >= 22000" reads an undecoded address
+and returns 0xffffffff. Verified live with `iwl csr` before reflashing:
+`0x380=0x18264971`, `0x384=0x00009157` -> **18:26:49:71:91:57**, matching the
+card identity. STRAP (0x388/0x38c) is empty on this part.
+
+### 3. EAPOL was handed the wrong pointer
+
+`wpa_sm_rx_eapol()` parses from the **EAPOL header** (first guard:
+`frame[1] != 0x03`). iwlwifi passed the whole 802.11 frame, so `frame[1]` was the
+second byte of the frame control and it returned 0 instantly - "sm state 0,
+reply 0" while the AP retried and then deauthed. Fixed by skipping the MAC
+header plus the 8-byte LLC/SNAP. **`rtwifi.c` has the identical bug at two call
+sites** (`handle_eapol(frame,plen)`); `mrvlwifi.c` is correct. rtwifi was left
+alone - no hardware here to verify against - but it is a real latent bug.
+
+### 4. The supplicant was armed AFTER the assoc request
+
+The AP sends EAPOL 1/4 the instant it has sent the association response, so
+message 1 is handled **inside `mvm_assoc()`'s own RX wait**. Arming afterwards
+re-ran `wpa_sm_init()`, resetting the state machine and generating a fresh
+SNonce - invalidating the 2/4 already on the air. Split into `wpa_arm()` (called
+BEFORE `mvm_assoc()` at all three call sites) and `assoc_mark_associated()`
+(fw-side only, never touches the supplicant).
+
+### 5. Assoc request and EAPOL 2/4 carried DIFFERENT RSN IEs
+
+```
+assoc request (mvm_assoc)      30 12 ... = RSNE body 18, NO capabilities field
+EAPOL 2/4 (wpa_build_rsn_ie)   30 14 ... = RSNE body 20, WITH capabilities
+```
+
+802.11 requires them to be byte-identical; the authenticator compares them and
+deauthenticates on any difference. `mvm_assoc()` now calls `wpa_build_rsn_ie()`
+so they cannot drift. Confirmed on metal: the assoc frame grew 74 -> 76 bytes.
+
+### Where it stands
+
+```
+auth  -> 0    Open-System accepted   (mgmt subtype=11, mine=1)
+assoc -> 1    AID 1                  (mgmt subtype=1, 197 bytes)
+EAPOL in (99 bytes, type=03 desc=02 ki=008a 1/4) -> reply 121   (2/4 built + TXed)
+...then the AP deauths (mgmt subtype=12)
+```
+
+The RSN IE fix (5) went in after the last successful auth/assoc run and has NOT
+yet been tested through a complete handshake - the two runs since were lost to an
+AP-selection problem and then an ethernet failure. **That is the next thing to
+verify.**
+
+### Traps and rig notes learned this round
+
+- **`iwl pick <n>` must be used BEFORE `mld 1..6`, never after.** Re-running
+  `mld 3`/`mld 4` on existing contexts (PHY_CONTEXT ADD on a live context, a
+  phy-bind on an active link) asserts the fw. The struct comment is explicit:
+  phy id / link address / listen_lmac "can be modified only until the link
+  becomes active".
+- **Which NimmuNet BSSID the scan picks varies run to run, and it matters.**
+  Auth has only ever succeeded against `e8:d3:eb:51:8c:8f`; it failed twice
+  against `e8:d3:eb:47:4e:cf`. Control the AP choice with `iwl pick`, do not let
+  `scan_pick()` decide.
+- **Batch `auth`/`assoc`/`eapol` as consecutive URC lines.** One command at a
+  time is ~10-20 s apart and the AP times out its auth state; batching is what
+  first produced a successful assoc response.
+- **Never send SESSION_PROTECTION twice** (a second ADD gives LMAC
+  `error_id=0x4216`), and after ANY LMAC assert `iwl rerun` does not restore the
+  scanner - only a full `reboot` does.
+- The ethernet dongle stalls its DHCP lease on most reboots and needs a physical
+  re-seat; on 2026-07-28 it progressed to "eth failed" and would not initialise.
+
+### Correct metal procedure
+
+`rerun` -> `mvm 1`/`2`/`e`/`4` -> `scan` -> **`pick <n>`** -> `mld 1`..`6` ->
+then `auth`, `assoc`, `eapol` appended together. `iwl caps` dumps capability bits,
+antenna masks and our MAC on a running box; `iwl fwerr` after any assert.
 Target: Lenovo ThinkPad X13 Yoga, Intel **AX201** (CNVi, gen2 22000-family,
 QuZ-a0-hr-b0). Firmware `QuZ-a0-hr-b0-77.ucode`. Ethernet is fully solved; this
 is the WiFi tail.
