@@ -21,6 +21,8 @@
 #include "igb.h"          /* Intel igb wired GbE (I210/I211/82576) */
 #include "r8169.h"        /* Realtek RTL8168/8111 wired GbE */
 
+void uno_pc64_delay_ms(int ms);   /* kernel export: the firmware Stall */
+
 /* The gateway (ping + TFTP-over-UDP target) comes from net_gw() so the test
    follows the DHCP-provided gateway on real hardware instead of a SLIRP-only
    literal; under QEMU SLIRP that gateway is 10.0.2.2 with a built-in TFTP
@@ -381,7 +383,9 @@ static void wifi_do_join(void)
             int i;
             net_init(nic, iwl_mac());
             net_dhcp_start();
-            for (i = 0; i < 2400 && !net_dhcp_done(); i++) net_poll();
+            /* same cadence as pc64_net_up's net_dhcp_after_link: ~9 s, with the
+             * 5 ms delay that lets net_poll's dhcp_tick retransmit */
+            for (i = 0; i < 1800 && !net_dhcp_done(); i++) { net_poll(); uno_pc64_delay_ms(5); }
             if (net_dhcp_done()) {
                 char ip[20];
                 fmt_ip(ip, net_ip());
