@@ -1644,6 +1644,7 @@ disk and the figure can show a real selected target.
 
 ---
 
+
 ## 2026-07-28 — STATUS: both remaining OPEN requests are closed; an audit of the rest; and one new finding
 
 Branch `unonet-taps-entropy` off `origin/master` (`e69ab91`), six commits, one
@@ -1860,3 +1861,19 @@ than it looked.
 
 Also unchanged: the "SPECTEST N/0/M" figures in this file were **not**
 reproducible before this fix. They are again — 67/0/4 as of today.
+## 2026-07-28 — CLAIM: iwlwifi data path + the Network app's join UI (NIC drivers lane)
+
+Taking the WiFi data path on `iwlwifi.c` (branch `iwlwifi-dhcp`): encrypted RX/TX,
+the scan/pick quality fixes, and the scan + join API the Network app's
+"pick an SSID, type the password" UI calls. Touches, outside my own files:
+
+- `pc64_modload.c` kExports: **appended** `KX(iwl_scan_aps), KX(iwl_join_ssid)`
+  through the registration seam (no reorder).
+- `pc64_nettest.c`: added `pc64_wifi_ipsuite()`, the harness-side half of the
+  `iwl netup` verb. The IP stack binds ONE nic and on the WiFi rig that nic is
+  the USB ethernet carrying URC, so a WiFi DHCP test has to borrow the stack and
+  hand it back; the file that knows every NIC owns that, and the driver only
+  declares the hook (weak, so production still links).
+- No new URC verb: everything is a subcommand of the existing `iwl` pass-through.
+
+Nothing in unoautomate's contract changes.
