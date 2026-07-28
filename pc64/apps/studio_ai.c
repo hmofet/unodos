@@ -35,6 +35,9 @@ int   tls_write(const void *data, int len);
 int   tls_read(void *buf, int cap);
 void  tls_close(void);
 int   tls_have_rdrand(void);
+int   tls_entropy_source(void);       /* TLS_ENT_* (tls.h) */
+#define TLS_ENT_NONE   0
+#define TLS_ENOENTROPY (-4)
 
 int   uno_fs_volumes(void);
 int   uno_fs_writable(int vol);
@@ -279,8 +282,12 @@ static int do_request(const char *usermsg)
     if (!cfg_key[cfg_provider][0] && !cfg_host[0]) {
         conv_addz(ROLE_SYS, "No API key. Set one: /key <your-key> then /save"); return -1; }
     if (!pc64_net_up()) { conv_addz(ROLE_SYS, "No network link (need a wired NIC)."); return -1; }
-    if (!tls_have_rdrand())
-        conv_addz(ROLE_SYS, "Warning: no RDRAND - TLS entropy is weak here.");
+    /* tls.c fails CLOSED with no usable RNG, so say so here rather than let
+       the connect below come back as a generic failure. A jitter source is a
+       real source - only TLS_ENT_NONE is fatal. */
+    if (tls_entropy_source() == TLS_ENT_NONE) {
+        conv_addz(ROLE_SYS, "No usable entropy source - TLS is refused on this machine.");
+        return -1; }
 
     /* host is always the real provider name: it is the TLS SNI and the name the
      * cert is validated against.  cfg_host only redirects the destination IP/port
@@ -290,8 +297,11 @@ static int do_request(const char *usermsg)
     if (cfg_host[0]) parse_hostport(cfg_host, ip, &port);
     else if (!net_dns_query(host, ip)) { conv_addz(ROLE_SYS, "DNS lookup failed."); return -1; }
 
-    if (tls_connect_ca(ip, (unsigned short)port, host) != 0)
-        { conv_addz(ROLE_SYS, "TLS connect failed (cert not trusted / clock wrong)."); return -1; }
+    { int rc = tls_connect_ca(ip, (unsigned short)port, host);
+      if (rc == TLS_ENOENTROPY)
+          { conv_addz(ROLE_SYS, "TLS refused: no usable entropy source on this machine."); return -1; }
+      if (rc != 0)
+          { conv_addz(ROLE_SYS, "TLS connect failed (cert not trusted / clock wrong)."); return -1; } }
 
     build_request(usermsg, resp_buf, RESP_CAP, &blen);   /* body -> resp scratch */
 
