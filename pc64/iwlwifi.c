@@ -3194,39 +3194,56 @@ static int band_ok(int chan)
     if (g_band_pref == 1) return chan > 14;
     return chan >= 1 && chan <= 14;
 }
+/* The n-th strongest BSS carrying the configured SSID (n = 0 is the strongest),
+ * or -1 when there is no n-th one. Split out of scan_pick() so a refused AP can
+ * be retried against the next candidate - on a mesh, "strongest" is not the same
+ * as "will talk to us" (NimmuNet's e8:d3:eb:47:4e:cf is the loudest BSS on the
+ * air here and refuses every auth, while e8:d3:eb:51:8c:8f 36 dB down completes
+ * every time). */
+static int scan_pick_nth(int n)
+{
+    unsigned taken = 0;                 /* SCAN_AP_MAX <= 24, one bit each */
+    int i, chosen = -1, sl = (int)strlen(g_cfg_ssid), pass, k;
+    for (k = 0; k <= n; k++) {
+        int best = -1;
+        for (pass = 0; pass < 2 && best < 0; pass++)
+            for (i = 0; i < g_scan_ap_n; i++) {
+                if (taken & (1u << i)) continue;
+                if (sl <= 0 || g_scan_aps[i].ssid_len != sl ||
+                    memcmp(g_scan_aps[i].ssid, g_cfg_ssid, sl)) continue;
+                if (pass == 0 && !band_ok(g_scan_aps[i].chan)) continue;
+                if (best < 0 || g_scan_aps[i].rssi > g_scan_aps[best].rssi ||
+                    (g_scan_aps[i].rssi == g_scan_aps[best].rssi &&
+                     g_scan_aps[i].seen > g_scan_aps[best].seen))
+                    best = i;
+            }
+        if (best < 0) return -1;
+        chosen = best;
+        taken |= (1u << best);
+    }
+    return chosen;
+}
+
+/* Point the join at scan result `idx`. */
+static void select_ap(int idx)
+{
+    memcpy(g_bssid, g_scan_aps[idx].bssid, 6);
+    g_join_chan = g_scan_aps[idx].chan ? g_scan_aps[idx].chan : 1;
+    g_join_bi   = g_scan_aps[idx].bi ? g_scan_aps[idx].bi : 100;
+    g_join_dtim = g_scan_aps[idx].dtim ? g_scan_aps[idx].dtim : 1;
+}
+
 static int scan_pick(void)
 {
-    int i, best = -1, sl = (int)strlen(g_cfg_ssid), pass;
-    /* Strongest signal wins, not most beacons seen. NimmuNet is a multi-BSSID
-     * mesh: beacon count is a scan-timing artefact, so picking on it was a coin
-     * flip between mesh nodes - and only one of them (e8:d3:eb:51:8c:8f) has
-     * ever completed an auth. RSSI is what a real STA picks on. Pass 1 honours
-     * the band preference; pass 2 ignores it rather than failing to find an
-     * SSID that is only on the other band. */
-    for (pass = 0; pass < 2 && best < 0; pass++)
-        for (i = 0; i < g_scan_ap_n; i++) {
-            if (sl <= 0 || g_scan_aps[i].ssid_len != sl ||
-                memcmp(g_scan_aps[i].ssid, g_cfg_ssid, sl)) continue;
-            if (pass == 0 && !band_ok(g_scan_aps[i].chan)) continue;
-            if (best < 0 ||
-                g_scan_aps[i].rssi > g_scan_aps[best].rssi ||
-                (g_scan_aps[i].rssi == g_scan_aps[best].rssi &&
-                 g_scan_aps[i].seen > g_scan_aps[best].seen))
-                best = i;
-        }
+    int best = scan_pick_nth(0);
     if (best < 0) return -1;
+    select_ap(best);
     uno_dbg_net_trace("wifi: pick: strongest \"%s\" is [%d] %02x:%02x:%02x:%02x:%02x:%02x "
                       "ch=%d rssi=%d seen=%d", g_cfg_ssid, best,
                       g_scan_aps[best].bssid[0], g_scan_aps[best].bssid[1],
                       g_scan_aps[best].bssid[2], g_scan_aps[best].bssid[3],
                       g_scan_aps[best].bssid[4], g_scan_aps[best].bssid[5],
                       g_scan_aps[best].chan, g_scan_aps[best].rssi, g_scan_aps[best].seen);
-    memcpy(g_bssid, g_scan_aps[best].bssid, 6);
-    g_join_chan = g_scan_aps[best].chan;
-    /* Beacon timing for LINK_CONFIG_CMD; fall back to the usual 100 TU / DTIM 1
-     * if the beacon carried no TIM (probe responses do not). */
-    g_join_bi = g_scan_aps[best].bi ? g_scan_aps[best].bi : 100;
-    g_join_dtim = g_scan_aps[best].dtim ? g_scan_aps[best].dtim : 1;
     return 0;
 }
 
@@ -3436,21 +3453,62 @@ static int join_selected(void)
     return 0;
 }
 
-/* Full connect on a stock boot: scan -> pick the configured SSID -> join. */
+/* Restart the radio: halt the running fw, re-load it, and redo the post-ALIVE
+ * init - WITHOUT joining. Needed between join attempts: a failed attempt leaves
+ * live MAC/LINK/PHY contexts and the fw asserts if they are added again. */
+static int radio_restart(void)
+{
+    if (g_bar && g_fw_loaded) device_stop();
+    g_bound = 0; g_joined = 0; g_alive = 0; g_mvm_done = 0; g_ctx_built = 0;
+    g_keys_installed = 0; g_wpa_active = 0; g_data_qid = -1;
+    g_mvm_arm = 1; g_no_join = 1;
+    iwl_nic();
+    g_no_join = 0;
+    return (g_alive && g_mvm_done) ? 0 : -1;
+}
+
+/* Full connect: scan once, then try the SSID's BSSs strongest-first until one
+ * of them actually completes a 4-way.
+ *
+ * One scan, several attempts, and NO rescan between them: the fw's scanner does
+ * not survive the radio restart each retry needs (two scans in a row come back
+ * with 0 APs), but the candidate list from the first scan does - it lives in
+ * g_scan_aps, which only a new scan clears. The retry exists because "loudest"
+ * and "will associate" are different properties on a mesh: NimmuNet's
+ * e8:d3:eb:47:4e:cf is the strongest BSS on the air, ACKs the auth frame at the
+ * MAC layer, never answers it, and deauths after the assoc request - every
+ * time. Picking on RSSI alone made a stock join a coin flip. */
+#define JOIN_TRIES 3
 static int find_and_join(void)
 {
+    int attempt, idx;
     mvm_scan_cfg();
     mvm_scan_passive(5000);
-    if (scan_pick() < 0) {
-        uno_dbg_net_trace("wifi: join: SSID \"%s\" not found in %d scanned APs",
-                          g_cfg_ssid, g_scan_ap_n);
-        return -1;
+    for (attempt = 0; attempt < JOIN_TRIES; attempt++) {
+        idx = scan_pick_nth(attempt);
+        if (idx < 0) {
+            uno_dbg_net_trace(attempt ? "wifi: join: no further \"%s\" candidate after %d tries"
+                                      : "wifi: join: SSID \"%s\" not found in %d scanned APs",
+                              g_cfg_ssid, attempt ? attempt : g_scan_ap_n);
+            return -1;
+        }
+        select_ap(idx);
+        uno_dbg_net_trace("wifi: join: try %d/%d \"%s\" bssid %02x:%02x:%02x:%02x:%02x:%02x "
+                          "chan %d rssi %d bi %d dtim %d (link-api=%d)",
+                          attempt + 1, JOIN_TRIES, g_cfg_ssid,
+                          g_bssid[0],g_bssid[1],g_bssid[2],g_bssid[3],g_bssid[4],g_bssid[5],
+                          g_join_chan, g_scan_aps[idx].rssi, g_join_bi, g_join_dtim,
+                          fw_has_mld_api());
+        if (join_selected() == 0 && g_joined) return 0;
+        uno_dbg_net_trace("wifi: join: %02x:%02x:%02x:%02x:%02x:%02x did not complete - "
+                          "restarting the radio to try the next BSS",
+                          g_bssid[0],g_bssid[1],g_bssid[2],g_bssid[3],g_bssid[4],g_bssid[5]);
+        if (attempt + 1 < JOIN_TRIES && radio_restart() < 0) {
+            uno_dbg_net_trace("wifi: join: radio restart failed - giving up");
+            return -1;
+        }
     }
-    uno_dbg_net_trace("wifi: join: picked \"%s\" bssid %02x:%02x:%02x:%02x:%02x:%02x "
-                      "chan %d rssi %d bi %d dtim %d (link-api=%d)", g_cfg_ssid,
-                      g_bssid[0],g_bssid[1],g_bssid[2],g_bssid[3],g_bssid[4],g_bssid[5],
-                      g_join_chan, g_last_rssi, g_join_bi, g_join_dtim, fw_has_mld_api());
-    return join_selected();
+    return -1;
 }
 
 /* =====================================================================
@@ -3737,6 +3795,7 @@ static int radio_up(void)
     g_no_join = 0;
     return (g_alive && g_mvm_done) ? 0 : -1;
 }
+
 
 /* Scan and report one entry per BSS, strongest first. Returns the count. */
 int iwl_scan_aps(iwl_ap_t *out, int max)
