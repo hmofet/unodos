@@ -1737,6 +1737,12 @@ not a stopgap, it is the whole story.
 
 ### FINDING (→ harness / shell lane): `tools/spectest_qemu.py` cannot pass on master, and the failure is NOT in SPECTEST
 
+> **SUPERSEDED by my own CORRECTION at the end of this file (2026-07-28).**
+> The symptom was real; the root cause below is WRONG. It is not a wedge:
+> the harness was writing `STRESS.CFG`, which the shipped `DEBUG.CFG`
+> shadows since the 2026-07-26 rename, so `spec`/`poweroff`/`nonet` never
+> reached the OS. Fixed; SPECTEST is 67/0/4 in 18 s.
+
 Found while trying to run the gate for the new S-TLS-10/11 checks. Reproduced
 on a **pristine `origin/master` worktree** before my branch existed, so none of
 this is mine.
@@ -1768,3 +1774,89 @@ Two consequences worth having on the record:
 I did not bisect which call in the frame loop wedges — that is the shell /
 harness lane and my branch is unonet. The repro is two commands on master;
 happy to hand over the screenshots.
+
+---
+
+## 2026-07-28 — CORRECTION (mine, supersedes my own finding above): SPECTEST was never wedged; eight harnesses were writing a config the OS stopped reading
+
+Retracting the root cause in my "FINDING (→ harness / shell lane)" entry above.
+The symptom was real and reproducible; my explanation of it was wrong, in two
+ways, and the actual cause is in the harness, not the OS.
+
+### What it really is
+
+The debug config was renamed **STRESS.CFG → DEBUG.CFG on 2026-07-26**, and
+`build.sh` now **ships** a default `DEBUG.CFG` (`passes=3`) on the debug ESP.
+`dbg_cfg_read` ([pc64_stress.c:108](pc64_stress.c#L108)) reads `DEBUG.CFG`
+first and falls back to the legacy `STRESS.CFG` only when `DEBUG.CFG` is absent
+on that volume. Every one of these harnesses copies `build/esp` wholesale —
+shipped `DEBUG.CFG` included — and then wrote its own config as `STRESS.CFG`,
+where it was **shadowed and silently ignored**.
+
+So `spec`, `poweroff` and `nonet` never reached the OS. The guest booted a
+plain desktop under `passes=3`, ran normally, and had no reason to power off.
+`remote_qemu.py` was fixed at the time of the rename and `netboot_qemu.py`
+deletes the shipped file — which is exactly why those two were green while the
+others were not, a discrepancy I should have chased first.
+
+Fixed on branch `f64-wedge` (`61c29c7`): eight harnesses now write
+`DEBUG.CFG` — spectest, automate, guard, hwwdt, netdisc, serial, stresscfg,
+dbg_crash_test.
+
+**`stresscfg_qemu.py` carried the rename in a second place too:** its
+staged-debug-build probe looked for `BOOTENV.TXT` or `STRESS.CFG`, and neither
+can exist any more (build.sh deletes the former as dev-run telemetry, the
+latter is the old name), so that gate refused to run *at all* on every debug
+build — it printed "no debug build staged" and returned before doing anything.
+It checks `BUILD.TXT` now.
+
+### Result
+
+`tools/spectest_qemu.py` on the fixed harness: **67 PASS, 0 FAIL, 4 SKIP,
+`>> SPECTEST clean`, in 18 seconds** — against the 900 s timeout with nothing
+salvageable that I reported. That includes the new S-TLS-10/11 entropy
+contracts passing on-device (`entropy source: rdrand`), which is what I had
+been unable to gate. Also re-verified after the fix: `guard_qemu` OK,
+`hwwdt_qemu` OK (both TCO scenarios), `serial_qemu` OK, `automate_qemu` 16/16,
+`netdisc_qemu` OK.
+
+### Where my reading went wrong, since the method matters more than the bug
+
+1. **"The frame counter is frozen at f64."** It is not a frame counter, it is
+   **fps**. The box was rendering at ~64 fps at 96 % idle the whole time. The
+   proof was in my own screenshots and I misread it: the tray clock advances
+   19:18:31 → 19:24:50 across the same 380 s in which I claimed nothing moved.
+2. **"The freeze watchdog never fires."** Correct, and it was correct *not* to
+   fire: nothing was frozen.
+
+What settled it was sampling RIP through the QEMU monitor. The CPU sat mostly
+in a tiny EDK2 PE polling the ACPI PM timer at port 0x608 with `RDI=0xdfb8`
+ticks ≈ **16 ms** — a firmware `Stall` for one 60 Hz frame, i.e. the healthiest
+possible thing to find — and the rest of the time in our own image (RVA
+symbolized as `fb_fill_rect+0x9d`, `uno_main+0x157a`). A box that alternates
+between painting and a 16 ms frame delay is not wedged; it is idle.
+
+### Two gates that DO fail, for a different reason I have not touched
+
+Neither is the config rename and neither is a regression to chase:
+`stresscfg_qemu.py` (both scenarios) and `dbg_crash_test.py`'s debugcon half
+drive the **continuous fuzz driver, removed at source on 2026-07-21** at the
+user's request. `nostress` can no longer log itself disabled, `passes=1` can no
+longer ARM, and `allow-force` can no longer force a fault. `stresscfg_qemu.py`
+now says this in its docstring and prints it at startup so it reads as
+"testing a deleted feature", not as a code regression. Retiring or rewriting
+those two against the surviving keys (`poweroff`/`nonet`/`spec`/`noshutdown`)
+is a call for the harness owner.
+
+### What still stands from the original finding
+
+Only this, and it is worth keeping: **SPECTEST.TXT is written through the
+write-back native-FAT cache**, so it reaches the disk only on the sync that
+`poweroff`/`reboot` performs. Any harness that kills the guest still salvages
+nothing, so the 2026-07-21 salvage path cannot fire on a genuinely hung guest.
+A `uno_fat_sync()` alongside the periodic `uno_dbg_write_crashfile` would
+restore its intent. Now that the gate runs in 18 s that is much less urgent
+than it looked.
+
+Also unchanged: the "SPECTEST N/0/M" figures in this file were **not**
+reproducible before this fix. They are again — 67/0/4 as of today.
