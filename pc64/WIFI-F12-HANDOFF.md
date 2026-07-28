@@ -96,6 +96,33 @@ into `g_dataq`, and unonet's DHCP/ICMP/DNS running on top.
   the URC `reboot` verb does, and it needs no physical trip to the machine.
 - The ethernet dongle stalled its lease on one reboot, as the rig notes warn.
 
+### The GUI join, driven over URC (round 25, second flash)
+
+The join UI lives in the **Control Panel's Network tab** (the standalone Network
+app stopped being launchable on 2026-07-26). Driven entirely from the dev host
+with the URC `key` verb + `screen grab`, on the real machine:
+
+- the tab renders the WiFi block under the wired status (`WiFi: <live status>`,
+  a network list, a Password field, Scan and Join);
+- **Scan works from cold**: it brought the card up (`card pci=02f0` ->
+  `firmware ALIVE`), scanned, and folded 24 BSSs into 8 networks, listed
+  strongest-first with RSSI and channel (`NimmuNet -30 dBm ch 11`, `SKYNET
+  -32 dBm ch 11`, ...);
+- typing into the Password field works; Join runs the whole driver path
+  (`join request for "NimmuNet" (psk_len=19)`).
+
+The join itself then failed for the reason above - it picked the loudest BSS,
+`47:4e:cf`, which refuses - which is what the strongest-first-with-retry change
+(`find_and_join` walking candidates, `radio_restart` between attempts) is for.
+**That retry is built and metal-PENDING**: the Yoga was not available to reflash
+again before the session ended.
+
+Rig note: `pointer` injection had no visible effect on this box, but `key`
+injection works, and unoui does full keyboard navigation (Tab cycles focus,
+arrows move within a tab strip, Enter activates), so the whole UI is drivable
+from the host. `pc64/tools/`-style helper used here: `~/urc_shot.py` on devbuntu
+(send a command through the bridge files; `screen grab`/`screen read` -> PNG).
+
 ### The sequence that worked, end to end
 
 ```
