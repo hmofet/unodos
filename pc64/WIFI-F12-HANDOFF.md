@@ -5,7 +5,7 @@ auth -> assoc (AID 1) -> full 4-way handshake -> CCMP pairwise key + GTK
 installed -> station authorized. Remaining: no data path demonstrated yet, and
 the AP choice must be forced with `iwl pick`).
 
-## Round 24 (2026-07-28) — TX fixed; auth + assoc succeed; 4-way still incomplete
+## Round 24 (2026-07-28) — TX fixed; the WPA2 connection COMPLETES on metal
 
 Five independently-necessary defects were found and fixed this round. Each one
 alone would have blocked association, and each was confirmed on metal.
@@ -89,6 +89,9 @@ deauthenticates on any difference. `mvm_assoc()` now calls `wpa_build_rsn_ie()`
 so they cannot drift. Confirmed on metal: the assoc frame grew 74 -> 76 bytes.
 
 ### Where it stands
+
+Intermediate state after fixes 1-4, with the RSN IEs still mismatched - the
+handshake started but died the moment our 2/4 arrived:
 
 ```
 auth  -> 0    Open-System accepted   (mgmt subtype=11, mine=1)
