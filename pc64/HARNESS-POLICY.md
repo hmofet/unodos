@@ -119,6 +119,21 @@ since that is where the capability (and the churn — see §0) now lives.
 Newest first; each dated. A `UNOAUTO_API` bump marks a breaking change — read
 the entry before building (§0).
 
+- **2026-07-28 - (no bump, additive)**: the **`net.tx` / `net.rx` tap points
+  are live** — the 2026-07-21 request to the net owner, delivered from the
+  unonet lane. One `unoauto_hook_fire()` per frame that crossed the
+  `uno_nic_t` seam, payload `long *` = frame length; sites are `nic_tx()` and
+  `net_poll()` in `net.c`. Production fires compile away as before. Two small
+  edits landed in unoautomate's own files rather than as a request (AGENTS §4,
+  both additive): the `unoauto.h` payload table now documents the pair instead
+  of pointing at the request, and `unoscript.c`'s `hook_known_point()` list
+  gained `net.rx`/`net.tx` so `hook.add("net.tx")` resolves instead of
+  returning `EINVAL`. Also delivered in the same round: the **cooperative
+  in-call deadline** you asked for under the 2026-07-21 wall-clock-budget entry
+  — `tls.c`'s connect/read/write waits and `net.c`'s `net_dns_query` now poll
+  `unoauto_deadline_left_ms()` and bail, so a stalled live check fails ITS
+  check instead of holding the batch.
+
 - **2026-07-24 - (no bump, additive, EXPERIMENTAL verbs)**: **host-attested
   guard** — a dead-man's switch to arm before a risky verb (the wedge class:
   `iwl mvm` → `iwl rerun` into never-run firmware, which hangs the box and stops

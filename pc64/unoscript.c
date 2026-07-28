@@ -374,7 +374,8 @@ int usc_proc_inspect(int pid, usc_proc_ent *out)
 static const char *hook_known_point(const char *p)
 {
     static const char *const PTS[] = { "fs.read", "fs.write", "libc.malloc",
-                                       "mod.load", "mod.unload", "uui.action", 0 };
+                                       "mod.load", "mod.unload", "net.rx", "net.tx",
+                                       "uui.action", 0 };
     int i;
     for (i = 0; PTS[i]; i++) if (!strcmp(PTS[i], p)) return PTS[i];
     return 0;
