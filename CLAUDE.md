@@ -75,8 +75,11 @@ whole disk as one FAT32 volume** either way.
   `mtrr-wc`, stress passes, auto power-off). WiFi/Eth toggles map to
   `net-force-wifi` / `net-eth-only` / `nonet`.
 
-Intel WiFi firmware (`fw-blobs/`) is bundled into the DEBUG tree only (licence:
-no redistribution), so the production image is clean. The raw dd/Rufus image
+Intel WiFi firmware (`fw-blobs/`) is bundled into **both** trees as of
+2026-07-29 (user ruling): a production stick with a dead radio is not a
+shippable OS, and the blobs on your own stick are not redistribution. The
+licence constraint applies when an image is PUBLISHED - build those with
+`UNO_NOFW=1 ./build.sh`. The raw dd/Rufus image
 is the production build. `build.sh` populates `build/esp` incrementally, so the
 flasher wipes it before each of the two builds. Deploy is unchanged
 (`build-flasher.ps1` → `deploy-to-share.ps1`).
