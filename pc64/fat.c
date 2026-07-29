@@ -16,6 +16,7 @@
 #include "fat.h"
 #include "blkdev.h"
 #include "pc64_pci.h"       /* uno_fat_native_eligible: AHCI-class lookup */
+#include "usbboot.h"        /* ...and whether a USB boot volume survives detach */
 #include "string.h"
 #include "uno_debug.h"      /* uno_dbg_heartbeat: no-op macro in prod builds */
 #include <stdint.h>
@@ -238,34 +239,50 @@ void uno_fat_remount(void)
     uno_fat_init();
 }
 
-/* The detach gate: 1 only if a volume a native driver will still reach
- * after the firmware dies (its controller PCI dev/fn is an AHCI- or
- * NVMe-class function pc64's drivers bind) actually CARRIES OUR SYSTEM (a
- * UnoDOS BOOTX64.EFI).  A merely-present foreign FAT partition must not
- * count - a USB-booted system would detach away its own boot volume and
- * the firmware-dependent Install app. */
-int uno_fat_native_eligible(void)
+/* does volume `i` carry a UnoDOS BOOTX64.EFI? */
+static int vol_carries_system(int i)
 {
     static const char *marks[] = { "EFI\\UNODOS\\BOOTX64.EFI",
                                    "EFI\\BOOT\\BOOTX64.EFI" };
+    unsigned char sig[2];
+    int m;
+    for (m = 0; m < 2; m++)
+        if (uno_fat_read(i, marks[m], sig, 2) == 2 && sig[0] == 'M' && sig[1] == 'Z')
+            return 1;
+    return 0;
+}
+
+/* The detach gate: 1 only if a volume a native driver will still reach
+ * after the firmware dies actually CARRIES OUR SYSTEM (a UnoDOS
+ * BOOTX64.EFI).  A merely-present foreign FAT partition must not count - a
+ * USB-booted system would detach away its own boot volume and the
+ * firmware-dependent Install app. */
+int uno_fat_native_eligible(void)
+{
     static const unsigned char cls[3][2] = { { 0x01, 0x06 },   /* AHCI  */
                                              { 0x01, 0x08 },   /* NVMe  */
                                              { 0x08, 0x05 } }; /* SDHCI */
     pci_dev ctl;
-    int c, i, m;
-    unsigned char sig[2];
+    int c, i;
     for (c = 0; c < 3; c++) {
         if (!pci_find_class(cls[c][0], cls[c][1], &ctl)) continue;
         for (i = 0; i < g_nvol; i++) {
             if (!g_vol[i].dev || g_vol[i].dev->pci_dev != ctl.dev ||
                 g_vol[i].dev->pci_fn != ctl.fn)
                 continue;
-            for (m = 0; m < 2; m++)
-                if (uno_fat_read(i, marks[m], sig, 2) == 2 &&
-                    sig[0] == 'M' && sig[1] == 'Z')
-                    return 1;
+            if (vol_carries_system(i)) return 1;
         }
     }
+    /* USB (P4/F8).  Matching a PCI class here would be wrong: pci_find_class
+     * returns the FIRST serial-bus/USB function, which on a box with an EHCI
+     * companion is not the xHCI the stick is on.  usbboot's preflight has
+     * already established that the BOOT device is a BOT interface behind an
+     * xHCI function - exactly what usbmsc.c reclaims post-detach - so the
+     * eligible volume is simply the one on the disk we booted from. */
+    if (uno_usbboot_native_ok())
+        for (i = 0; i < g_nvol; i++)
+            if (g_vol[i].dev && g_vol[i].dev->is_boot && vol_carries_system(i))
+                return 1;
     return 0;
 }
 
