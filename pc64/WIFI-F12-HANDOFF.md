@@ -123,6 +123,49 @@ arrows move within a tab strip, Enter activates), so the whole UI is drivable
 from the host. `pc64/tools/`-style helper used here: `~/urc_shot.py` on devbuntu
 (send a command through the bridge files; `screen grab`/`screen read` -> PNG).
 
+### Retry PROVEN on metal — and what the APs actually do (round 25, final flash)
+
+**The retry mechanism works.** `iwl retarget <n>` re-points the live contexts and
+rebuilds the queue, and a full second association completed on it:
+
+```
+STA_CONFIG ... peer=e8:d3:eb:51:8c:8f
+SCD_QUEUE remove sta=0 tid=15 (qid was 1)
+retarget: fresh TX queue -> qid=1 csr2808=00000000
+auth -> 0 ... assoc -> 1 ... 4-way handshake DONE - CCMP keys installed
+iwl status: WiFi joined "NimmuNet" bssid e8:d3:eb:51:8c:8f ch 11 -68dBm aid 1 CCMP keys in
+```
+
+The TX queue really was the missing piece: it belongs to the station, and once
+the station's address changes the fw stops transmitting on it and refuses to
+allocate a second one for the same sta/TID. Free it (`SCD_QUEUE_CONFIG`
+operation 1) and allocate a fresh one, and a second auth is answered.
+
+**`ref_bssid_addr` was the wrong suspect** and was NOT changed: Linux sets it
+only for a nontransmitted multi-BSSID link (`ibss_bssid_addr` is ADHOC-only), so
+a station link carries no BSSID at all - the AP identity reaches the fw through
+`STA_CONFIG`'s `peer_link_address`.
+
+**Two things still open, both worth a session:**
+
+1. **After a retargeted join, the data path does not carry.** DHCP came back
+   `dhcp=NONE [tx=8 rx=0]`, and `iwl status` showed `tx 8 rx 0 drop 8
+   [fw ASSERTED]` - so frames DID arrive and were dropped by the SNAP probe, i.e.
+   they decrypted to garbage. Prime suspect: the previous association's CCMP keys
+   are still installed on the same station, so the hardware decrypts with the
+   wrong one. The retarget should remove the old keys (SEC_KEY remove) before the
+   new 4-way installs fresh ones. A first-attempt join carries data fine.
+2. **The APs are individually flaky, run to run** - this reframes "47:4e:cf
+   always refuses". In the final run it ACCEPTED auth (`auth -> 0`) and then
+   never answered the association request (our request WAS ACKed). Earlier it
+   ignored auth entirely. `30:29:2b:70:4f:cf` auth'd from a fresh setup and then
+   refused a retargeted auth minutes later. `51:8c:8f` has completed most often.
+   So our association is marginal/timing-sensitive rather than one AP being bad;
+   candidates for why: the short session-protection window, our 1 Mbps CCK TX
+   rate, or mesh client-steering. **Batching auth/assoc/eapol still matters** -
+   an assoc sent ~38 s after its auth is past the AP's auth-state timeout and
+   gets no reply.
+
 ### Retrying a refused AP: what metal says (round 25, last flash)
 
 The retry landed and ran, and the result maps the ground for the next round:
