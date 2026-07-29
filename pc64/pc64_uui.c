@@ -914,15 +914,19 @@ static void build_acpistat(void)
  * partition scanning + FAT read/write; the sector TRANSPORT is firmware Block
  * IO while attached, and the native AHCI driver once detached (M3). */
 /* Sized for the worst case: "DETACHED (native): " + driver name + disk count +
- * "  FAT vols N (" + three 11-char labels with commas + ")" is ~90 bytes; 160
- * leaves headroom so the unbounded ap_str/ap_int appends below cannot overrun. */
-static char g_nat[160];
+ * "  FAT vols N (" + three 11-char labels with commas + ")" is ~90 bytes, plus
+ * the trailing detach reason (bounded at 64 below); 256 leaves headroom so the
+ * unbounded ap_str/ap_int appends below cannot overrun. */
+static char g_nat[256];
 static void build_natstat(void)
 {
     int nblk = uno_blk_count(), i, nnat = 0, nfat = uno_fat_volumes();
+    int blocked = 0, stranded = 0;
+    const char *why = 0;
     char *p;
     const char *nat0 = 0;                /* first native driver's name (ahci0/nvme0) */
     int uno_pc64_detached(void);
+    void uno_pc64_detach_status(int *blocked, int *stranded, const char **why);
     for (i = 0; i < nblk; i++) { uno_bdev *b = uno_blk_get(i);
         if (b && b->native) { nnat++; if (!nat0) nat0 = b->name; } }
     p = ap_str(g_nat, uno_pc64_detached() ? "DETACHED (native): "
@@ -937,6 +941,15 @@ static void build_natstat(void)
             if (l && l[0] && l[0] != ' ') { int k; for (k = 0; k < 11 && l[k] && l[k] != ' '; k++) *p++ = l[k]; }
             else p = ap_str(p, "?"); }
         *p++ = ')'; }
+    /* ...and WHY the machine is where it is. "Native FS:" alone never said
+     * whether staying attached was a decision or an accident, which is the
+     * first question anyone asks of a box that did not detach. */
+    uno_pc64_detach_status(&blocked, &stranded, &why);
+    if (why && why[0]) {
+        int k;
+        p = ap_str(p, stranded ? "  STRANDED: " : blocked ? "  held: " : "  ");
+        for (k = 0; k < 64 && why[k]; k++) *p++ = why[k];
+    }
     *p = 0;
 }
 
