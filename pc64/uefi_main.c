@@ -831,6 +831,24 @@ static int try_detach(void)
             dbg_puts(why); dbg_puts("\n");
             return 0;
         }
+        /* OPT-IN, for now.  The preflight can prove the stick is the right
+         * SHAPE (BOT interface, xHCI controller, matched to the boot path) but
+         * not that sustained reads will work, because proving that means
+         * driving the device - and the only way to drive it is to take the
+         * controller, which is the irreversible step itself.
+         *
+         * That distinction is not theoretical: on a SuperSpeed stick
+         * (bulk mps 1024) QEMU's model returns errors on some READ(10)s, and
+         * xhci.c has neither SS endpoint-companion burst sizing nor xHCI
+         * Reset-Endpoint recovery, so a failed transfer leaves the endpoint
+         * wedged. First read works, a later one does not, and past
+         * ExitBootServices there is no way back. See pc64/USB.md.
+         *
+         * So the machinery ships and the default posture does not change: a
+         * USB boot stays attached unless DETACH.CFG says `usb`. Flip the
+         * default when the xHCI work lands and metal has confirmed it. */
+        if (!cfg_word("usb"))
+            REFUSE("USB-boot detach is opt-in (DETACH.CFG: usb)", 1);
         dbg_puts("detach: USB boot volume is reclaimable - "); dbg_puts(why); dbg_puts("\n");
     }
     if (!uno_fat_native_eligible())
@@ -858,6 +876,17 @@ static int try_detach(void)
             uno_blk_detach();                 /* native AHCI/NVMe/SDHCI/MSC    */
             uno_fat_remount();                /* same disks, native transport  */
             uno_fs_remap();
+            /* A USB stick is not ready the instant its endpoints are
+             * configured - it has just been handed to a different host driver
+             * mid-life, and the first READ(10) after that can come back short
+             * while the device settles. The mount is a one-shot: if it reads
+             * nothing it caches an empty volume set and the system volume is
+             * gone for good. So give it a few more goes before believing it. */
+            for (t = 0; t < 3 && !uno_fat_native_eligible(); t++) {
+                uno_pc64_delay_ms(100);
+                uno_fat_remount();
+                uno_fs_remap();
+            }
             /* I2C-HID kbd/pad were already native (polled the same either way).
              * USB HID: firmware no longer owns xHCI, so claim external USB
              * keyboards/mice now (harmless no-op if none / already up). */
@@ -869,9 +898,11 @@ static int try_detach(void)
              * machine that says WHY it is broken beats one that just is. */
             if (!uno_fat_native_eligible()) {
                 gDetachStranded = 1;
-                gDetachWhy = "system volume did not return on native drivers";
+                gDetachWhy = uno_usbboot_is_usb() ? uno_usbmsc_why()
+                                                  : "system volume did not return";
                 dbg_puts("DETACHED BUT STRANDED: the system volume did not come "
-                         "back on native drivers\n");
+                         "back on native drivers - usbmsc: ");
+                dbg_puts(uno_usbmsc_why()); dbg_puts("\n");
             } else {
                 gDetachWhy = "running on our own drivers";
             }
