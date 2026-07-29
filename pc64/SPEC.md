@@ -1268,6 +1268,25 @@ BROWSER, JS, STUDIO, PHOTOS, PAINT, GAME, INST, MAC, PY, LIBC.
   fuzz page set.
 - **S-BROWSER-06** [auto] HTTPS pages go through the CA-validated TLS path
   only (no pinned-key escape hatch from a URL).
+- **S-BROWSER-07** [auto] Every reachable thing is ONE location string -
+  `uno:start` / `uno:welcome` / `uno:sample` / `uno:script`,
+  `file:<vol>:<name>`, `path:<path>`, `http://`, `https://` - and every
+  entry point (address bar, link, start page, bookmark, history, the Help
+  deep-link) MUST navigate through the same loader. A bare host typed into
+  the address bar is retried as `http://<host>`.
+- **S-BROWSER-08** [auto] History is PER TAB: back and forward stacks of
+  HISTN (16) entries each, oldest dropped on overflow; following a link or
+  entering an address pushes the current location onto back and clears
+  forward; back/forward never load through the network cache-free path
+  twice for the same click. Closing the last tab MUST leave one open.
+- **S-BROWSER-09** [auto] Bookmarks persist to `BOOKMARK.TXT` (one
+  `loc|title` line each, MAXBM 32) on the first writable volume; a
+  read-only system keeps them in RAM and MUST NOT fail the add.
+- **S-BROWSER-10** [auto] The flow renderer MUST record a link map as it
+  paints (rect in document space -> href), so a click at (x, y+scroll) and
+  the Left/Right/Enter keyboard path follow exactly the ink that was drawn.
+  Under `BROWSER_ENGINE=uw` the map is empty and the DOM's own <a> elements
+  drive the same keys.
 
 ## S-JS — the JS engine (`js.c`)
 

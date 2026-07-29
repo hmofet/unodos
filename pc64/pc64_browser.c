@@ -48,10 +48,39 @@ typedef struct { int scale, bold, ital, under, mono; fb_px color; } bstyle;
 static int fx, fy, fleft, fright, fscroll, flh;
 static unoui_rect fclip;
 
+/* ---- the link map, built as the page paints ------------------------------
+ * The flow painter drew links but kept no record of WHERE, so outside the
+ * unoweb engine path (the default build) a link could be neither clicked nor
+ * keyboard-selected. Every painted word of a link now contributes a rect in
+ * DOCUMENT space (the unscrolled y), so one hit test works at any scroll. */
+#define BR_MAXLINK 192
+#define BR_MAXHREF 64
+#define BR_HREFMAX 200
+typedef struct { short x, y, w, h, href; } blinkrect;
+static blinkrect g_link[BR_MAXLINK];
+static int  g_nlink;
+static char g_href[BR_MAXHREF][BR_HREFMAX];
+static int  g_nhref;
+static int  g_link_cur = -1;      /* href index being painted (-1 = plain text) */
+static int  g_link_sel = -1;      /* keyboard-selected link                     */
+
+static int link_add(const char *s, int len)
+{
+    int i;
+    if (len <= 0 || len >= BR_HREFMAX) return -1;
+    for (i = 0; i < g_nhref; i++)                    /* one entry per target */
+        if (!strncmp(g_href[i], s, (size_t)len) && !g_href[i][len]) return i;
+    if (g_nhref >= BR_MAXHREF) return -1;
+    memcpy(g_href[g_nhref], s, (size_t)len);
+    g_href[g_nhref][len] = 0;
+    return g_nhref++;
+}
+
 static void fl_reset(unoui_rect r, int scroll, int pad)
 {
     fleft = r.x + pad; fright = r.x + r.w - pad;
     fx = fleft; fy = r.y + pad; fscroll = scroll; fclip = r; flh = 12;
+    g_nlink = 0; g_nhref = 0; g_link_cur = -1;
 }
 static void fl_nl(void) { fx = fleft; fy += flh; flh = 12; }
 static void fl_gap(int h) { if (fx > fleft) fl_nl(); fy += h; }
@@ -75,8 +104,15 @@ static void fl_word(const char *buf, int indent, bstyle *s)
     if (lh > flh) flh = lh;
     if (fx + ww > fright && fx > fleft + indent) fl_nl();
     if (fx == fleft) fx = fleft + indent;
+    if (g_link_cur >= 0 && g_nlink < BR_MAXLINK) {       /* clickable ink */
+        blinkrect *L = &g_link[g_nlink++];
+        L->x = (short)fx; L->y = (short)fy;
+        L->w = (short)ww; L->h = (short)lh; L->href = (short)g_link_cur;
+    }
     dy = fy - fscroll;
     if (dy > fclip.y - lh && dy < fclip.y + fclip.h) {          /* visible row */
+        if (g_link_cur >= 0 && g_link_cur == g_link_sel)         /* selected */
+            fb_fill_rect(fx - 1, dy - 1, ww + 2, ch + 2, FB_RGB(215, 228, 250));
         if (s->mono) fb_fill_rect(fx - 1, dy - 1, ww + 2, ch + 2, PG_CODEBG);
         uno_font_draw_styled(slot, px, st, fx, dy, buf, s->color, -1);
         if (s->under) { int bl = uno_font_baseline_px(slot, px);
@@ -118,10 +154,17 @@ static void md_inline(const char *s, int len, int indent, bstyle base)
                 cur.mono ^= 1; cur.color = cur.mono ? PG_CODE : base.color;
             }
             else if (s[i] == '[') {                              /* [text](url) */
-                int te = i + 1; while (te < len && s[te] != ']') te++;
+                int te = i + 1, us = 0, ue = 0;
+                while (te < len && s[te] != ']') te++;
+                if (te + 1 < len && s[te + 1] == '(') {          /* the target */
+                    us = te + 2; ue = us;
+                    while (ue < len && s[ue] != ')') ue++;
+                }
+                g_link_cur = (ue > us) ? link_add(s + us, ue - us) : -1;
                 { bstyle lk = base; lk.color = PG_LINK; lk.under = 1;
                   fl_text(s + i + 1, te - (i + 1), indent, &lk); }
-                i = te; if (i + 1 < len && s[i + 1] == '(') { while (i < len && s[i] != ')') i++; }
+                g_link_cur = -1;
+                i = (ue > te) ? ue : te;
             }
             start = i + 1;
         }
@@ -273,7 +316,15 @@ static void walk_dom(uw_doc *d, uw_node *parent, bstyle st, int li, int pre)
             if (!strcmp(g,"b") || !strcmp(g,"strong")) s.bold = 1;
             else if (!strcmp(g,"i") || !strcmp(g,"em")) { s.ital = 1; s.color = FB_RGB(70,70,95); }
             else if (!strcmp(g,"code") || !strcmp(g,"tt")) { s.mono = 1; s.color = PG_CODE; }
-            else if (!strcmp(g,"a")) { s.color = PG_LINK; s.under = 1; }
+            else if (!strcmp(g,"a")) {
+                const char *href = uw_attr(d, n, "href");
+                int save = g_link_cur;
+                s.color = PG_LINK; s.under = 1;
+                if (href && *href) g_link_cur = link_add(href, (int)strlen(href));
+                walk_dom(d, n, s, li, pre);
+                g_link_cur = save;
+                continue;
+            }
             else if (!strcmp(g,"br")) { fl_nl(); continue; }
             else if (!strcmp(g,"hr")) {
                 int yy;
@@ -352,7 +403,8 @@ static int uwm_lineh(void *u, const uw_style *s)
 
 static int  g_uw_w;                 /* width the current layout was built for */
 static int  g_uw_h;                 /* its resulting document height           */
-static int  g_link_sel = -1;        /* keyboard-selected link, or -1           */
+                                    /* (g_link_sel is shared with the flow
+                                     * painter's link map, declared above)     */
 
 /* ---- images: unomedia behind the uw_images hook ---------------------------
  * unoweb reserves the box; the decoding happens HERE, which is the whole
@@ -525,21 +577,87 @@ static void render_html(const char *src, unoui_rect r, int scroll)
     walk_dom(g_dom, uw_body(g_dom) ? uw_body(g_dom) : uw_document(g_dom), base, 0, 0);
 }
 
-/* =================== the browser app (canvas) ============================= */
-#define DOC_MAX 32768
-static char g_doc[DOC_MAX];
-static int  g_is_html, g_scroll, g_view;      /* g_view: 0 list, 1 document */
-static char g_title[48] = "UnoDOS Browser";
-static char g_url[256] = "https://";           /* address bar buffer */
-static char g_status[128];                     /* last fetch status / hint */
-static int  g_addr;                            /* 1 = editing the address bar */
-static unoui_rect g_rect;                      /* last-drawn rect (Loading present) */
+/* =================== the browser app (canvas) =============================
+ *
+ * The shell hands this app ONE unoui canvas that fills its window, so the
+ * browser draws its own chrome inside it - and it is real chrome, not a title
+ * strip: a tab strip, a toolbar (back / forward / reload / home / bookmark),
+ * an editable address bar, drop-down Bookmarks and History panels, and a
+ * status line.
+ *
+ *   +---------------------------------------------------------+
+ *   | Welcome  x | example.com  x | +                         |  tabs
+ *   | < > @ [ https://...                    ] * Marks  Hist  |  toolbar
+ *   |                                                         |
+ *   |   the page, the start page, or a panel over them        |  content
+ *   |                                                         |
+ *   | status / hovered link                                   |  status
+ *   +---------------------------------------------------------+
+ *
+ * Everything the user can reach is ONE LOCATION STRING, which is what the
+ * tabs, the history stacks, the bookmarks file and the address bar all store:
+ *
+ *   uno:start            the start page (built-ins + what the disks hold)
+ *   uno:welcome/sample/script   the built-in demo documents
+ *   file:<vol>:<name>    a file on a local volume
+ *   path:<path>          a document opened by path (the Help deep-links)
+ *   http:// https://     the network (pc64_http, CA-validated TLS)
+ *
+ * so navigation, history and bookmarks are one code path rather than four.
+ * ========================================================================= */
+#include "pc64_icons.h"                 /* pc64_shell_theme() for the panels */
 
-/* the file list: built-in demos + whatever the file system offers */
-#define MAXFILES 40
+#define DOC_MAX   32768
+#define LOCMAX    256
+#define TITMAX    48
+#define MAXTABS   6
+#define HISTN     16                    /* back / forward depth per tab       */
+#define MAXBM     32                    /* bookmarks                          */
+#define MAXHIST   48                    /* global history                     */
+#define BM_FILE   "BOOKMARK.TXT"
+
+typedef struct {
+    int   used;
+    char  loc[LOCMAX];
+    char  title[TITMAX];
+    char *doc;                          /* DOC_MAX, allocated on first use    */
+    int   is_html, scroll;
+    int   start;                        /* 1 = showing the start page         */
+    int   sel, top;                     /* start page: selection + first row  */
+    char  back[HISTN][LOCMAX]; int nback;
+    char  fwd [HISTN][LOCMAX]; int nfwd;
+} btab;
+
+static btab g_tab[MAXTABS];
+static int  g_ntab, g_cur;
+
+static char g_status[128];
+static char g_hint[128];                /* hover text, beats g_status         */
+static unoui_rect g_rect;               /* last-drawn canvas rect             */
+
+/* the address bar (its own tiny editor: caret, insert, delete) */
+static char g_addr[LOCMAX];
+static int  g_addr_focus, g_addr_caret;
+
+/* drop-down panels */
+enum { PANEL_NONE = 0, PANEL_MARKS, PANEL_HIST };
+static int g_panel, g_panel_sel, g_panel_top;
+
+/* bookmarks (persisted) + history (this session) */
+static char g_bm_loc[MAXBM][LOCMAX], g_bm_lbl[MAXBM][TITMAX + LOCMAX];
+static const char *g_bm_ptr[MAXBM];
+static int  g_nbm;
+static char g_hs_loc[MAXHIST][LOCMAX], g_hs_lbl[MAXHIST][TITMAX + LOCMAX];
+static const char *g_hs_ptr[MAXHIST];
+static int  g_nhs;
+
+/* the start page's file list */
+#define MAXFILES 64
 static char g_names[MAXFILES][32];
+static char g_rows[MAXFILES][40];
+static const char *g_row_ptr[MAXFILES];
 static int  g_vol[MAXFILES];                  /* -1 = built-in demo */
-static int  g_nfiles, g_sel;
+static int  g_nfiles;
 
 static const char kWelcome[] =
 "# UnoDOS Browser\n\n"
@@ -550,21 +668,30 @@ static const char kWelcome[] =
 "- Headings, **bold**, *italic*, `inline code`\n"
 "- Bullet lists and paragraphs with word-wrap\n"
 "- Runs `<script>` blocks (see the **Script.html** demo)\n"
-"- Loads files from the local disks (see the file list)\n"
+"- Loads files from the local disks (see the start page)\n"
 "- **Network**: type a `http://` or `https://` URL in the address bar and press "
-"Enter (Up from the file list focuses the bar). HTTPS is CA-validated (TLS 1.2)"
-" against a bundled root store, using the system clock.\n\n"
+"Enter. HTTPS is CA-validated (TLS 1.2) against a bundled root store, using the "
+"system clock.\n\n"
 "---\n\n"
 "## Try it\n\n"
-"Press **Backspace** to return to the file list, pick a `.md` / `.html` / `.txt`\n"
-"file and press Enter. Scroll with the Up / Down / PgUp / PgDn keys.\n\n"
+"- [The HTML sample](uno:sample) - tags, lists, a rule and a code block\n"
+"- [The JavaScript demo](uno:script) - a `<script>` block that writes the page\n"
+"- [The start page](uno:start) - every document on the local disks\n\n"
+"## Getting around\n\n"
+"- Click a **link** to follow it; `Left` / `Right` step through a page's links "
+"and `Enter` follows the selected one.\n"
+"- `Backspace` goes **back**, the toolbar arrows go back and forward.\n"
+"- `Ctrl-T` opens a **tab**, `Ctrl-L` jumps to the address bar, `Ctrl-D` "
+"**bookmarks** the page, `F5` reloads.\n"
+"- Scroll with the wheel or `Up` / `Down` / `PgUp` / `PgDn`.\n\n"
 "> UnoDOS runs bare-metal on x86-64 UEFI - this page is drawn by the same\n"
 "> software framebuffer that draws the whole desktop.\n";
 
 static const char kSample[] =
 "<h1>HTML sample</h1>"
 "<p>This page is <b>HTML</b>, rendered by the same engine. It supports "
-"<i>emphasis</i>, <code>code spans</code>, and <a href='none'>links</a>.</p>"
+"<i>emphasis</i>, <code>code spans</code>, and <a href='uno:welcome'>links</a> "
+"(that one goes back to the welcome page).</p>"
 "<h2>A list</h2><ul><li>first item</li><li>second item</li><li>third item</li></ul>"
 "<hr><pre>  pre-formatted text\n  keeps its   spacing</pre>"
 "<p>Unknown tags are ignored; their text still shows.</p>";
@@ -588,7 +715,18 @@ static const char kScript[] =
 "</script>"
 "<hr><p>Everything above the rule was produced at open time by the script.</p>";
 
-static long fs_load(int vol, const char *name, char *buf, long max);   /* fwd */
+static void navigate(const char *loc, int push);
+
+/* ---- small string helpers ------------------------------------------------ */
+static void sput(char *dst, int cap, const char *src)
+{
+    int i = 0;
+    if (cap <= 0) return;
+    while (src && src[i] && i < cap - 1) { dst[i] = src[i]; i++; }
+    dst[i] = 0;
+}
+static char *sapp(char *p, const char *end, const char *s)
+{ while (s && *s && p < end - 1) *p++ = *s++; *p = 0; return p; }
 
 /* Extensions are matched case-INSENSITIVELY: FAT hands back 8.3 names in
  * upper case, so a case-sensitive compare recognised "page.html" but not the
@@ -605,23 +743,24 @@ static int ext_is(const char *name, const char *ext)
     }
     return 1;
 }
+static int name_is_html(const char *name)
+{ return ext_is(name, ".html") || ext_is(name, ".htm"); }
 
-static void detect_kind(const char *name)
-{ g_is_html = ext_is(name, ".html") || ext_is(name, ".htm"); }
-
-/* Run <script> blocks in g_doc: replace each with its document.write output and
- * collect console.log lines into a "console" panel appended at the end. A tiny
- * tree-walking interpreter (js.c) does the work; this is the HTML<->JS glue. */
+/* ---- <script> expansion --------------------------------------------------
+ * Run <script> blocks in the tab's document: replace each with its
+ * document.write output and collect console.log lines into a "console" panel
+ * appended at the end. A tiny tree-walking interpreter (js.c) does the work;
+ * this is the HTML<->JS glue. */
 static int ci(char c){ return (c>='A'&&c<='Z') ? c+32 : c; }
-static int tag_at(const char *p, const char *name)   /* case-insensitive "<name" / "</name" */
+static int tag_at(const char *p, const char *name)   /* case-insensitive "<name" */
 { while (*name){ if (ci(*p)!=*name) return 0; p++; name++; } return 1; }
 
-static void js_expand(void)
+static void js_expand(char *doc)
 {
     static char out[DOC_MAX];
     static char code[8192], wbuf[8192], logbuf[4096], lbuf[2048];
     int oi = 0, haslog = 0;
-    const char *p = g_doc;
+    const char *p = doc;
     logbuf[0] = 0;
     while (*p && oi < DOC_MAX-1) {
         if (p[0]=='<' && tag_at(p+1,"script")) {
@@ -656,276 +795,1223 @@ static void js_expand(void)
             memcpy(out+oi,f,fl2); oi+=fl2; out[oi]=0;
         }
     }
-    memcpy(g_doc, out, oi+1);
+    memcpy(doc, out, (size_t)oi+1);
 }
 
-static void open_entry(int idx)
+/* ---- the start page's list ----------------------------------------------- */
+static void refresh_files(void)
 {
-    if (idx < 0 || idx >= g_nfiles) return;
-    g_scroll = 0;
-    if (g_vol[idx] < 0) {                          /* built-in demo */
-        const char *d = (idx == 0) ? kWelcome : (idx == 1) ? kSample : kScript;
-        strncpy(g_doc, d, DOC_MAX-1); g_doc[DOC_MAX-1]=0;
-        g_is_html = (idx >= 1);
-    } else {
-        long n = fs_load(g_vol[idx], g_names[idx], g_doc, DOC_MAX-1);
-        if (n < 0) n = 0; g_doc[n] = 0;
-        detect_kind(g_names[idx]);
-    }
-    if (g_is_html) js_expand();                    /* run any <script> blocks */
-    strncpy(g_title, g_names[idx], 47); g_title[47]=0;
-    g_view = 1;
-}
-
-static void refresh_list(void)
-{
-    int v, nv;
+    int v, nv, i;
     g_nfiles = 0;
-    strcpy(g_names[g_nfiles], "Welcome.md");  g_vol[g_nfiles++] = -1;
-    strcpy(g_names[g_nfiles], "Sample.html"); g_vol[g_nfiles++] = -1;
-    strcpy(g_names[g_nfiles], "Script.html"); g_vol[g_nfiles++] = -1;
+    sput(g_names[g_nfiles], 32, "Welcome.md");  g_vol[g_nfiles++] = -1;
+    sput(g_names[g_nfiles], 32, "Sample.html"); g_vol[g_nfiles++] = -1;
+    sput(g_names[g_nfiles], 32, "Script.html"); g_vol[g_nfiles++] = -1;
     nv = uno_fs_volumes();
     for (v = 0; v < nv && g_nfiles < MAXFILES; v++) {
-        char nm[32]; int i, cnt = uno_fs_list_begin(v);
+        char nm[32]; int cnt = uno_fs_list_begin(v);
         for (i = 0; i < cnt && g_nfiles < MAXFILES; i++)
             if (uno_fs_list_get(v, i, nm, sizeof nm)) {
-                strncpy(g_names[g_nfiles], nm, 31); g_names[g_nfiles][31]=0;
+                sput(g_names[g_nfiles], 32, nm);
                 g_vol[g_nfiles++] = v;
             }
     }
-    if (g_sel >= g_nfiles) g_sel = g_nfiles - 1;
-    if (g_sel < 0) g_sel = 0;
+    for (i = 0; i < g_nfiles; i++) {                  /* one row label each */
+        char *p = g_rows[i], *end = g_rows[i] + sizeof g_rows[i];
+        p = sapp(p, end, g_vol[i] < 0 ? "*  " : "   ");
+        sapp(p, end, g_names[i]);
+        g_row_ptr[i] = g_rows[i];
+    }
 }
 
-static long fs_load(int vol, const char *name, char *buf, long max)
-{ return uno_fs_read(vol, name, (unsigned char *)buf, max); }
+/* ---- bookmarks + history ------------------------------------------------- *
+ * Bookmarks live in ONE line-per-entry file (loc|title) on the first writable
+ * volume, so they survive a reboot; history is this session's. Both are shown
+ * through the same scrolling list the toolkit gives every app. */
+static void relabel(char *dst, int cap, const char *title, const char *loc)
+{
+    char *p = dst, *end = dst + cap;
+    p = sapp(p, end, (title && *title) ? title : loc);
+    if (title && *title && loc && *loc) { p = sapp(p, end, "   -  "); sapp(p, end, loc); }
+}
 
-/* open a local document by path (subdirectories fine: "DOCS\\API.MD") -
- * the Help menu's entry point.  Searches every volume; a miss shows an
- * inline note instead of a page. */
-void pc64_browser_open_path(const char *path)
+static void bm_relabel(void)
+{ int i; for (i = 0; i < g_nbm; i++) g_bm_ptr[i] = g_bm_lbl[i]; }
+
+static int bm_volume(void)
 {
     int v, nv = uno_fs_volumes();
+    for (v = 0; v < nv; v++) if (uno_fs_writable(v)) return v;
+    return -1;
+}
+
+static void bm_save(void)
+{
+    static char buf[MAXBM * (LOCMAX + TITMAX + 4)];
+    char *p = buf, *end = buf + sizeof buf;
+    int i, v = bm_volume();
+    if (v < 0) return;                       /* read-only system: RAM only */
+    for (i = 0; i < g_nbm; i++) {
+        char title[TITMAX]; int k = 0;
+        const char *l = g_bm_lbl[i];
+        while (l[k] && k < TITMAX - 1 && !(l[k] == ' ' && l[k+1] == ' ')) { title[k] = l[k]; k++; }
+        title[k] = 0;
+        p = sapp(p, end, g_bm_loc[i]);
+        p = sapp(p, end, "|");
+        p = sapp(p, end, title);
+        p = sapp(p, end, "\n");
+    }
+    uno_fs_write(v, BM_FILE, (const unsigned char *)buf, (long)(p - buf));
+}
+
+static void bm_load(void)
+{
+    static char buf[MAXBM * (LOCMAX + TITMAX + 4)];
+    int v, nv = uno_fs_volumes();
     long n = -1;
+    char *p;
+    g_nbm = 0;
     for (v = 0; v < nv && n < 0; v++)
-        n = uno_fs_read(v, path, (unsigned char *)g_doc, DOC_MAX - 1);
-    g_scroll = 0;
-    if (n < 0) {
-        strcpy(g_doc, "# Not found\n\nNo volume carries `");
-        strncpy(g_doc + strlen(g_doc), path, 80);
-        strcat(g_doc, "`.\n");
-        g_is_html = 0;
-    } else {
-        g_doc[n] = 0;
-        detect_kind(path);
-        if (g_is_html) js_expand();
+        n = uno_fs_read(v, BM_FILE, (unsigned char *)buf, (long)sizeof buf - 1);
+    if (n <= 0) { bm_relabel(); return; }
+    buf[n] = 0;
+    p = buf;
+    while (*p && g_nbm < MAXBM) {
+        char *loc = p, *title = 0, *nl;
+        for (nl = p; *nl && *nl != '\n'; nl++) if (*nl == '|' && !title) { *nl = 0; title = nl + 1; }
+        if (*nl) { *nl = 0; p = nl + 1; } else p = nl;
+        if (*loc == '\r' || !*loc) continue;
+        { char *cr = loc; while (*cr) { if (*cr == '\r') *cr = 0; else cr++; } }
+        if (title) { char *cr = title; while (*cr) { if (*cr == '\r') *cr = 0; else cr++; } }
+        sput(g_bm_loc[g_nbm], LOCMAX, loc);
+        relabel(g_bm_lbl[g_nbm], sizeof g_bm_lbl[0], title, loc);
+        g_nbm++;
     }
-    { const char *base = path, *p;
-      for (p = path; *p; p++) if (*p == '\\') base = p + 1;
-      strncpy(g_title, base, 47); g_title[47] = 0; }
-    g_view = 1;
+    bm_relabel();
 }
 
-/* ---- network fetch ------------------------------------------------------- */
-static void url_kind(const char *url)          /* pick MD vs HTML from suffix */
-{
-    int n = (int)strlen(url), q = n;
-    int i; for (i = 0; i < n; i++) if (url[i]=='?' || url[i]=='#') { q = i; break; }
-    g_is_html = 1;                              /* default: HTML (handles plain text) */
-    if (q >= 3 && !strncmp(url+q-3, ".md", 3)) g_is_html = 0;
-    else if (q >= 4 && !strncmp(url+q-4, ".txt", 4)) g_is_html = 0;
-}
+static int bm_index(const char *loc)
+{ int i; for (i = 0; i < g_nbm; i++) if (!strcmp(g_bm_loc[i], loc)) return i; return -1; }
 
-static void loading_frame(void)                 /* one presented "Loading" frame */
+/* Ctrl-D / the star: bookmark the page, or un-bookmark it if it already is */
+static void bm_toggle(void)
 {
-    unoui_rect r = g_rect;
-    fb_fill_rect(r.x, r.y, r.w, r.h, PG_BG);
-    fb_fill_rect(r.x, r.y, r.w, 20, FB_RGB(40, 60, 110));
-    fb_text(r.x + 8, r.y + 6, "Loading...", FB_RGB(255,255,255), -1);
-    fb_text(r.x + 12, r.y + 44, g_url, PG_LINK, -1);
-    uno_pc64_present();
-}
-
-static void fetch_url(void)
-{
-    int n;
-    loading_frame();                            /* show progress before we block */
-    n = pc64_http_get(g_url, g_doc, DOC_MAX-1, g_status, sizeof g_status);
-    g_scroll = 0;
-    if (n < 0) {                                /* build an error page */
-        char *d = g_doc; int o = 0;
-        const char *a = "<h1>Couldn't load the page</h1><p><b>URL:</b> ";
-        const char *b = "</p><p><b>Reason:</b> ";
-        const char *c = "</p><hr><p>The address bar takes <code>http://host/path</code> "
-                        "or <code>https://</code>. HTTPS and DNS need a working link (QEMU "
-                        "SLIRP provides both; the X1 has no wired NIC).</p>";
-        #define APP(s) do { int l=(int)strlen(s); if(o+l<DOC_MAX-1){memcpy(d+o,s,l);o+=l;} } while(0)
-        APP(a); APP(g_url); APP(b); APP(g_status[0]?g_status:"unknown"); APP(c);
-        #undef APP
-        d[o] = 0; g_is_html = 1;
+    btab *t = &g_tab[g_cur];
+    int at = bm_index(t->loc);
+    if (at >= 0) {
+        int i;
+        for (i = at; i < g_nbm - 1; i++) {
+            sput(g_bm_loc[i], LOCMAX, g_bm_loc[i+1]);
+            sput(g_bm_lbl[i], sizeof g_bm_lbl[0], g_bm_lbl[i+1]);
+        }
+        g_nbm--;
+        sput(g_status, sizeof g_status, "Bookmark removed.");
+    } else if (g_nbm < MAXBM) {
+        sput(g_bm_loc[g_nbm], LOCMAX, t->loc);
+        relabel(g_bm_lbl[g_nbm], sizeof g_bm_lbl[0], t->title, t->loc);
+        g_nbm++;
+        sput(g_status, sizeof g_status, "Bookmarked.");
     } else {
-        url_kind(g_url);
-        if (g_is_html) js_expand();
+        sput(g_status, sizeof g_status, "Bookmark list is full.");
     }
-    strncpy(g_title, g_url, 47); g_title[47] = 0;
-    g_view = 1;
+    bm_relabel();
+    bm_save();
 }
 
-/* ---- rendering ----------------------------------------------------------- */
-static void br_draw(struct unoui_widget *w, unoui_rect r, void *ctx)
+static void hist_add(const char *loc, const char *title)
 {
-    (void)w; (void)ctx;
-    g_rect = r;
-    fb_fill_rect(r.x, r.y, r.w, r.h, PG_BG);
-    if (g_view == 0) {                              /* file list + address bar */
-        int i, ay = r.y + 24, top;
-        fb_fill_rect(r.x, r.y, r.w, 20, FB_RGB(40, 60, 110));
-        fb_text(r.x + 8, r.y + 6, "UnoDOS Browser", FB_RGB(255,255,255), -1);
-        /* address bar */
-        fb_fill_rect(r.x + 6, ay, r.w - 12, 18, FB_RGB(255,255,255));
-        fb_frame_rect(r.x + 6, ay, r.w - 12, 18, g_addr ? PG_LINK : PG_RULE);
-        fb_text(r.x + 12, ay + 5, g_url, PG_TEXT, -1);
-        if (g_addr) { int cx = r.x + 12 + fb_text_w(g_url);
-                      fb_vline(cx, ay + 3, 12, PG_TEXT); }
-        fb_text(r.x + 8, ay + 22,
-                g_status[0] ? g_status
-                            : "Type a URL + Enter  -  or Down to the file list",
-                g_status[0] ? PG_QUOTE : FB_RGB(120,120,130), -1);
-        top = ay + 40;
-        for (i = 0; i < g_nfiles; i++) {
-            int y = top + i * 16;
-            if (y > r.y + r.h - 12) break;
-            if (!g_addr && i == g_sel) fb_fill_rect(r.x + 2, y - 2, r.w - 4, 15, FB_RGB(210, 225, 250));
-            fb_text(r.x + 24, y, g_names[i], PG_TEXT, -1);
-            fb_text(r.x + 8, y, g_vol[i] < 0 ? "*" : ">", g_vol[i]<0?PG_LINK:PG_QUOTE, -1);
+    int i;
+    if (!loc || !*loc || !strcmp(loc, "uno:start")) return;
+    for (i = 0; i < g_nhs; i++)                       /* move an old visit up */
+        if (!strcmp(g_hs_loc[i], loc)) {
+            for (; i > 0; i--) {
+                sput(g_hs_loc[i], LOCMAX, g_hs_loc[i-1]);
+                sput(g_hs_lbl[i], sizeof g_hs_lbl[0], g_hs_lbl[i-1]);
+            }
+            sput(g_hs_loc[0], LOCMAX, loc);
+            relabel(g_hs_lbl[0], sizeof g_hs_lbl[0], title, loc);
+            return;
+        }
+    if (g_nhs < MAXHIST) g_nhs++;
+    for (i = g_nhs - 1; i > 0; i--) {                 /* newest first */
+        sput(g_hs_loc[i], LOCMAX, g_hs_loc[i-1]);
+        sput(g_hs_lbl[i], sizeof g_hs_lbl[0], g_hs_lbl[i-1]);
+    }
+    sput(g_hs_loc[0], LOCMAX, loc);
+    relabel(g_hs_lbl[0], sizeof g_hs_lbl[0], title, loc);
+    for (i = 0; i < g_nhs; i++) g_hs_ptr[i] = g_hs_lbl[i];
+}
+
+/* ---- tabs ---------------------------------------------------------------- */
+static char *tab_doc(btab *t)
+{
+    if (!t->doc) {
+        t->doc = (char *)malloc(DOC_MAX);
+        if (t->doc) t->doc[0] = 0;
+    }
+    return t->doc;
+}
+
+static int tab_new(const char *loc)
+{
+    int i;
+    for (i = 0; i < MAXTABS; i++) if (!g_tab[i].used) break;
+    if (i == MAXTABS) { sput(g_status, sizeof g_status, "Six tabs is the limit."); return -1; }
+    g_tab[i].used = 1; g_tab[i].nback = g_tab[i].nfwd = 0;
+    g_tab[i].scroll = 0; g_tab[i].sel = g_tab[i].top = 0;
+    g_tab[i].loc[0] = 0;
+    sput(g_tab[i].title, TITMAX, "New tab");
+    if (i >= g_ntab) g_ntab = i + 1;
+    g_cur = i;
+    g_link_sel = -1;
+    navigate(loc ? loc : "uno:start", 0);
+    return i;
+}
+
+static void tab_close(int i)
+{
+    int k, alive = 0;
+    if (i < 0 || i >= MAXTABS || !g_tab[i].used) return;
+    for (k = 0; k < MAXTABS; k++) if (g_tab[k].used) alive++;
+    if (alive <= 1) { navigate("uno:start", 1); return; }   /* never zero tabs */
+    if (g_tab[i].doc) { free(g_tab[i].doc); g_tab[i].doc = 0; }
+    g_tab[i].used = 0;
+    while (g_ntab > 0 && !g_tab[g_ntab-1].used) g_ntab--;
+    if (g_cur == i) {
+        for (k = i; k >= 0; k--) if (g_tab[k].used) { g_cur = k; break; }
+        if (!g_tab[g_cur].used)
+            for (k = 0; k < MAXTABS; k++) if (g_tab[k].used) { g_cur = k; break; }
+    }
+    g_link_sel = -1;
+}
+
+/* ---- loading a location -------------------------------------------------- */
+static void loading_frame(const char *what);
+
+static int loc_is_net(const char *loc)
+{ return !strncmp(loc, "http://", 7) || !strncmp(loc, "https://", 8); }
+
+/* "file:<vol>:<name>" -> vol + name */
+static int loc_file(const char *loc, const char **name)
+{
+    int v = 0; const char *p = loc + 5;
+    if (strncmp(loc, "file:", 5)) return -1;
+    while (*p >= '0' && *p <= '9') { v = v * 10 + (*p - '0'); p++; }
+    if (*p != ':') return -1;
+    *name = p + 1;
+    return v;
+}
+
+static void title_from_loc(btab *t, const char *loc)
+{
+    const char *base = loc, *p;
+    if (!strncmp(loc, "file:", 5)) { const char *nm; if (loc_file(loc, &nm) >= 0) base = nm; }
+    else if (!strncmp(loc, "path:", 5)) base = loc + 5;
+    for (p = base; *p; p++) if (*p == '\\' || *p == '/') base = p + 1;
+    sput(t->title, TITMAX, *base ? base : loc);
+}
+
+static void doc_set(btab *t, const char *src, int html)
+{
+    char *d = tab_doc(t);
+    if (!d) return;
+    sput(d, DOC_MAX, src);
+    t->is_html = html;
+    if (html) js_expand(d);
+}
+
+static void doc_error(btab *t, const char *what, const char *why)
+{
+    char *d = tab_doc(t), *p, *end;
+    if (!d) return;
+    p = d; end = d + DOC_MAX;
+    p = sapp(p, end, "<h1>Couldn't load the page</h1><p><b>Where:</b> ");
+    p = sapp(p, end, what);
+    p = sapp(p, end, "</p><p><b>Reason:</b> ");
+    p = sapp(p, end, why && *why ? why : "unknown");
+    sapp(p, end, "</p><hr><p>The address bar takes <code>http://host/path</code> or "
+                 "<code>https://</code>, and the start page lists what the local "
+                 "disks hold. <a href='uno:start'>Back to the start page</a>.</p>");
+    t->is_html = 1;
+}
+
+/* the one loader: every scheme lands here, so history, bookmarks and the
+ * address bar all navigate through the same door */
+static void load_loc(btab *t, const char *loc)
+{
+    t->scroll = 0;
+    t->start = 0;
+    g_link_sel = -1;
+    sput(t->loc, LOCMAX, loc);
+    title_from_loc(t, loc);
+    sput(g_status, sizeof g_status,
+         "Left / Right: links   Enter: follow   Backspace: back");
+
+    if (!strcmp(loc, "uno:start")) {
+        refresh_files();
+        t->start = 1;
+        if (t->sel >= g_nfiles) t->sel = g_nfiles ? g_nfiles - 1 : 0;
+        sput(t->title, TITMAX, "Start");
+        sput(g_status, sizeof g_status,
+             "Pick a document, or type an address and press Enter.");
+        return;
+    }
+    if (!strcmp(loc, "uno:welcome")) { doc_set(t, kWelcome, 0); sput(t->title, TITMAX, "Welcome"); return; }
+    if (!strcmp(loc, "uno:sample"))  { doc_set(t, kSample, 1);  sput(t->title, TITMAX, "HTML sample"); return; }
+    if (!strcmp(loc, "uno:script"))  { doc_set(t, kScript, 1);  sput(t->title, TITMAX, "JavaScript"); return; }
+
+    if (!strncmp(loc, "file:", 5) || !strncmp(loc, "path:", 5)) {
+        char *d = tab_doc(t);
+        const char *name = loc + 5;
+        long n = -1;
+        int v = -1;
+        if (!d) return;
+        if (!strncmp(loc, "file:", 5)) {
+            v = loc_file(loc, &name);
+            if (v >= 0) n = uno_fs_read(v, name, (unsigned char *)d, DOC_MAX - 1);
+        } else {
+            int k, nv = uno_fs_volumes();                    /* search every volume */
+            for (k = 0; k < nv && n < 0; k++)
+                n = uno_fs_read(k, name, (unsigned char *)d, DOC_MAX - 1);
+        }
+        if (n < 0) { doc_error(t, name, "no volume carries that file"); return; }
+        d[n] = 0;
+        t->is_html = name_is_html(name);
+        if (t->is_html) js_expand(d);
+        return;
+    }
+
+    if (loc_is_net(loc)) {
+        char *d = tab_doc(t);
+        int n, q, i;
+        if (!d) return;
+        loading_frame(loc);                     /* show progress before we block */
+        n = pc64_http_get(loc, d, DOC_MAX - 1, g_status, sizeof g_status);
+        if (n < 0) { doc_error(t, loc, g_status); return; }
+        /* pick MD vs HTML from the suffix; HTML is the default (it also
+         * renders plain text sensibly) */
+        q = (int)strlen(loc);
+        for (i = 0; i < q; i++) if (loc[i]=='?' || loc[i]=='#') { q = i; break; }
+        t->is_html = 1;
+        if (q >= 3 && !strncmp(loc+q-3, ".md", 3)) t->is_html = 0;
+        else if (q >= 4 && !strncmp(loc+q-4, ".txt", 4)) t->is_html = 0;
+        if (t->is_html) js_expand(d);
+        return;
+    }
+
+    /* bare host or path typed into the address bar: try it as http:// */
+    {
+        char url[LOCMAX];
+        char *p = url, *end = url + sizeof url;
+        p = sapp(p, end, "http://");
+        sapp(p, end, loc);
+        load_loc(t, url);
+    }
+}
+
+/* resolve a link href against the page it came from */
+static void resolve(const char *href, const char *base, char *out, int cap)
+{
+    if (!href || !*href) { sput(out, cap, base); return; }
+    if (loc_is_net(href) || !strncmp(href, "uno:", 4) ||
+        !strncmp(href, "file:", 5) || !strncmp(href, "path:", 5)) {
+        sput(out, cap, href); return;
+    }
+    if (loc_is_net(base)) {                       /* relative to a web page */
+        char *p = out, *end = out + cap;
+        if (href[0] == '/') {                     /* site root */
+            const char *s = base + (base[4] == 's' ? 8 : 7);
+            const char *slash = s; while (*slash && *slash != '/') slash++;
+            { int hostlen = (int)(slash - base);
+              int k; for (k = 0; k < hostlen && p < end - 1; k++) *p++ = base[k];
+              *p = 0; }
+            sapp(p, end, href);
+        } else {                                  /* alongside the current page */
+            int cut = (int)strlen(base), k;
+            while (cut > 0 && base[cut-1] != '/') cut--;
+            for (k = 0; k < cut && p < end - 1; k++) *p++ = base[k];
+            *p = 0;
+            sapp(p, end, href);
         }
         return;
     }
-    /* document view: title bar + body */
-    fb_fill_rect(r.x, r.y, r.w, 18, FB_RGB(40, 60, 110));
-    fb_text(r.x + 8, r.y + 5, g_title, FB_RGB(255,255,255), -1);
-    fb_text(r.x + r.w - 130, r.y + 5, "Bksp: files", FB_RGB(180,200,235), -1);
-#ifdef UW_ENGINE
-    if (g_status[0]) fb_text(r.x + 8, r.y + r.h - 14, g_status, PG_QUOTE, -1);
-#endif
-    { unoui_rect body = { r.x, r.y + 20, r.w, r.h - 20 };
-      if (g_is_html) render_html(g_doc, body, g_scroll);
-      else           render_md(g_doc, body, g_scroll);
-      /* track content height for scroll clamping */
-      { int total = (fy + flh) - body.y; if (g_scroll > total - body.h) g_scroll = total - body.h;
-        if (g_scroll < 0) g_scroll = 0; } }
+    if (!strncmp(base, "file:", 5)) {             /* a sibling file */
+        const char *nm; int v = loc_file(base, &nm);
+        char *p = out, *end = out + cap;
+        if (v >= 0) {
+            char vs[8]; int k = 0, vv = v;
+            if (!vv) vs[k++] = '0';
+            while (vv) { vs[k++] = (char)('0' + vv % 10); vv /= 10; }
+            p = sapp(p, end, "file:");
+            while (k) { if (p < end - 1) *p++ = vs[--k]; else k = 0; }
+            *p = 0;
+            p = sapp(p, end, ":");
+            sapp(p, end, href);
+            return;
+        }
+    }
+    sput(out, cap, href);
+}
+
+static void navigate(const char *loc, int push)
+{
+    btab *t = &g_tab[g_cur];
+    if (push && t->loc[0]) {
+        if (t->nback == HISTN) {                  /* drop the oldest */
+            int i; for (i = 0; i < HISTN - 1; i++) sput(t->back[i], LOCMAX, t->back[i+1]);
+            t->nback--;
+        }
+        sput(t->back[t->nback++], LOCMAX, t->loc);
+        t->nfwd = 0;
+    }
+    load_loc(t, loc);
+    g_hint[0] = 0;                     /* the old link target is gone */
+    hist_add(t->loc, t->title);
+    if (!g_addr_focus) { sput(g_addr, LOCMAX, t->loc); g_addr_caret = (int)strlen(g_addr); }
+}
+
+static void go_back(void)
+{
+    btab *t = &g_tab[g_cur];
+    if (!t->nback) { sput(g_status, sizeof g_status, "No page to go back to."); return; }
+    if (t->nfwd < HISTN) sput(t->fwd[t->nfwd++], LOCMAX, t->loc);
+    { char to[LOCMAX]; sput(to, LOCMAX, t->back[--t->nback]); load_loc(t, to); }
+    if (!g_addr_focus) { sput(g_addr, LOCMAX, t->loc); g_addr_caret = (int)strlen(g_addr); }
+}
+
+static void go_fwd(void)
+{
+    btab *t = &g_tab[g_cur];
+    if (!t->nfwd) { sput(g_status, sizeof g_status, "No page to go forward to."); return; }
+    if (t->nback < HISTN) sput(t->back[t->nback++], LOCMAX, t->loc);
+    { char to[LOCMAX]; sput(to, LOCMAX, t->fwd[--t->nfwd]); load_loc(t, to); }
+    if (!g_addr_focus) { sput(g_addr, LOCMAX, t->loc); g_addr_caret = (int)strlen(g_addr); }
+}
+
+/* ---- chrome geometry -----------------------------------------------------
+ * One function per band, all derived from the font, so the chrome scales with
+ * the UI font and the draw code and the hit test can never disagree. */
+static int ch_tabh(void)  { return fb_text_h() + 9; }
+static int ch_barh(void)  { return fb_text_h() + 12; }
+static int ch_stath(void) { return fb_text_h() + 5; }
+static int ch_btnw(void)  { return fb_text_h() + 12; }   /* square icon button */
+
+static unoui_rect band_tabs(unoui_rect r)
+{ unoui_rect b = { r.x, r.y, r.w, ch_tabh() }; return b; }
+static unoui_rect band_bar(unoui_rect r)
+{ unoui_rect b = { r.x, r.y + ch_tabh(), r.w, ch_barh() }; return b; }
+static unoui_rect band_body(unoui_rect r)
+{
+    unoui_rect b = { r.x, r.y + ch_tabh() + ch_barh(), r.w,
+                     r.h - ch_tabh() - ch_barh() - ch_stath() };
+    if (b.h < 20) b.h = 20;
+    return b;
+}
+static unoui_rect band_stat(unoui_rect r)
+{ unoui_rect b = { r.x, r.y + r.h - ch_stath(), r.w, ch_stath() }; return b; }
+
+/* toolbar slots: 4 nav buttons, the address field, then 3 on the right */
+enum { TB_BACK = 0, TB_FWD, TB_RELOAD, TB_HOME, TB_STAR, TB_MARKS, TB_HIST, TB_N };
+
+static int tb_rightw(void)
+{ return ch_btnw() + 8 + fb_text_w("Marks") + 12 + fb_text_w("History") + 12; }
+
+static unoui_rect tb_rect(unoui_rect r, int which)
+{
+    unoui_rect b = band_bar(r), o;
+    int bw = ch_btnw(), pad = 3, y = b.y + 3, h = b.h - 6;
+    int rx = b.x + b.w - 4;
+    o.y = y; o.h = h;
+    switch (which) {
+    case TB_BACK:   o.x = b.x + 4;                    o.w = bw; break;
+    case TB_FWD:    o.x = b.x + 4 + (bw + pad);       o.w = bw; break;
+    case TB_RELOAD: o.x = b.x + 4 + 2 * (bw + pad);   o.w = bw; break;
+    case TB_HOME:   o.x = b.x + 4 + 3 * (bw + pad);   o.w = bw; break;
+    case TB_HIST:   o.w = fb_text_w("History") + 12;  o.x = rx - o.w; break;
+    case TB_MARKS:  o.w = fb_text_w("Marks") + 12;
+                    o.x = rx - (fb_text_w("History") + 12) - 4 - o.w; break;
+    case TB_STAR:   o.w = bw;
+                    o.x = rx - (fb_text_w("History") + 12) - 4
+                             - (fb_text_w("Marks") + 12) - 4 - o.w; break;
+    default: {      /* the address field: everything in between */
+        int lx = b.x + 4 + 4 * (bw + pad) + 4;
+        o.x = lx; o.w = (rx - tb_rightw() - 8) - lx;
+        if (o.w < 40) o.w = 40;
+        break; }
+    }
+    return o;
+}
+#define TB_ADDR TB_N          /* tb_rect's default case = the address field */
+
+/* tab strip: one rect per open tab, plus the "+" button */
+static int tab_width(unoui_rect r)
+{
+    int alive = 0, i, w;
+    for (i = 0; i < MAXTABS; i++) if (g_tab[i].used) alive++;
+    if (alive < 1) alive = 1;
+    w = (r.w - ch_tabh() - 8) / alive;
+    if (w > 130) w = 130;
+    if (w < 46)  w = 46;
+    return w;
+}
+
+static unoui_rect tab_rect(unoui_rect r, int idx)      /* idx = slot, not tab # */
+{
+    unoui_rect b = band_tabs(r), o;
+    o.x = b.x + 2 + idx * tab_width(r); o.y = b.y + 2;
+    o.w = tab_width(r) - 2; o.h = b.h - 2;
+    return o;
+}
+static unoui_rect tab_plus_rect(unoui_rect r)
+{
+    int alive = 0, i;
+    unoui_rect b = band_tabs(r), o;
+    for (i = 0; i < MAXTABS; i++) if (g_tab[i].used) alive++;
+    o.x = b.x + 2 + alive * tab_width(r) + 2; o.y = b.y + 3;
+    o.w = b.h - 6; o.h = b.h - 6;
+    return o;
+}
+
+/* the drop-down panel (bookmarks / history), anchored under its button */
+static unoui_rect panel_rect(unoui_rect r)
+{
+    unoui_rect b = band_bar(r), o;
+    int w = r.w - 24, rows = 8;
+    if (w > 380) w = 380;
+    o.w = w;
+    o.x = r.x + r.w - w - 6;
+    o.y = b.y + b.h + 1;
+    o.h = rows * (fb_text_h() + 3) + 8 + fb_text_h() + 6;
+    if (o.h > r.h - (o.y - r.y) - ch_stath() - 4) o.h = r.h - (o.y - r.y) - ch_stath() - 4;
+    return o;
+}
+static unoui_rect panel_list_rect(unoui_rect r)
+{
+    unoui_rect p = panel_rect(r), o;
+    int head = fb_text_h() + 6;
+    o.x = p.x + 4; o.y = p.y + head; o.w = p.w - 8; o.h = p.h - head - 4;
+    return o;
+}
+
+/* ---- chrome painting ----------------------------------------------------- */
+#define CH_FACE   FB_RGB(238, 240, 244)
+#define CH_EDGE   FB_RGB(186, 190, 198)
+#define CH_TEXT   FB_RGB(35, 38, 46)
+#define CH_DIM    FB_RGB(120, 126, 136)
+#define CH_ACTIVE FB_RGB(252, 252, 253)
+#define CH_HOT    FB_RGB(222, 232, 248)
+
+static int g_hot = -1;                 /* toolbar slot under the pointer, -1 */
+static int g_hot_tab = -1, g_hot_close = 0, g_hot_plus = 0;
+
+static void btn_box(unoui_rect r, int hot, int on)
+{
+    fb_fill_rect(r.x, r.y, r.w, r.h, hot ? CH_HOT : (on ? CH_ACTIVE : CH_FACE));
+    fb_frame_rect(r.x, r.y, r.w, r.h, CH_EDGE);
+}
+
+static void glyph_arrow(unoui_rect r, int left, fb_px col)
+{
+    int cx = r.x + r.w / 2, cy = r.y + r.h / 2, i;
+    /* column i is 2i+1 tall, so the TIP is the shortest column: put it on the
+     * side the arrow points at */
+    for (i = 0; i < 5; i++)
+        fb_vline(cx + (left ? i - 2 : 2 - i), cy - i, 2 * i + 1, col);
+}
+static void glyph_reload(unoui_rect r, fb_px col)
+{
+    int cx = r.x + r.w / 2, cy = r.y + r.h / 2, i;
+    for (i = 0; i < 12; i++) {                      /* a broken ring */
+        static const signed char ox[12] = { 0, 2, 4, 5, 4, 2, 0,-2,-4,-5,-4,-2 };
+        static const signed char oy[12] = {-5,-4,-2, 0, 2, 4, 5, 4, 2, 0,-2,-4 };
+        if (i == 2) continue;
+        fb_fill_rect(cx + ox[i], cy + oy[i], 2, 2, col);
+    }
+    fb_fill_rect(cx + 2, cy - 6, 4, 2, col);        /* the arrow head */
+    fb_fill_rect(cx + 4, cy - 6, 2, 4, col);
+}
+static void glyph_home(unoui_rect r, fb_px col)
+{
+    int cx = r.x + r.w / 2, cy = r.y + r.h / 2, i;
+    for (i = 0; i < 5; i++) fb_hline(cx - i, cy - 5 + i, 2 * i + 1, col);
+    fb_frame_rect(cx - 3, cy, 7, 6, col);
+}
+/* a bookmark RIBBON, not a star: at ten pixels a five-point star is mush,
+ * while a ribbon (a tag with a notched foot) still reads as itself */
+static void glyph_star(unoui_rect r, fb_px col, int filled)
+{
+    int cx = r.x + r.w / 2, cy = r.y + r.h / 2, i;
+    int w = 9, h = 12, x0 = cx - w / 2, y0 = cy - h / 2;
+    if (filled) fb_fill_rect(x0, y0, w, h - 3, col);
+    else {
+        fb_frame_rect(x0, y0, w, h - 3, col);
+        fb_vline(x0, y0, h - 3, col); fb_vline(x0 + w - 1, y0, h - 3, col);
+    }
+    for (i = 0; i < 4; i++) {                       /* the notched foot */
+        int y = y0 + h - 4 + i, len = w / 2 - i;
+        if (len <= 0) break;
+        if (filled) {
+            fb_hline(x0, y, len, col);
+            fb_hline(x0 + w - len, y, len, col);
+        } else {
+            fb_pixel(x0 + len - 1, y, col);
+            fb_pixel(x0 + w - len, y, col);
+        }
+    }
+}
+
+static void draw_tabs(unoui_rect r)
+{
+    unoui_rect b = band_tabs(r), pl;
+    int i, slot = 0;
+    fb_fill_rect(b.x, b.y, b.w, b.h, CH_FACE);
+    fb_hline(b.x, b.y + b.h - 1, b.w, CH_EDGE);
+    for (i = 0; i < MAXTABS; i++) {
+        unoui_rect t;
+        int active = (i == g_cur), tw;
+        if (!g_tab[i].used) continue;
+        t = tab_rect(r, slot++);
+        fb_fill_rect(t.x, t.y, t.w, t.h, active ? CH_ACTIVE :
+                     (g_hot_tab == i ? CH_HOT : CH_FACE));
+        fb_frame_rect(t.x, t.y, t.w, t.h, CH_EDGE);
+        if (active) fb_hline(t.x + 1, t.y + t.h - 1, t.w - 2, CH_ACTIVE);
+        tw = t.w - 22;
+        {   char lbl[24]; int k = 0;
+            const char *s = g_tab[i].title;
+            while (s[k] && k < (int)sizeof lbl - 1 &&
+                   fb_text_w(lbl) < tw) { lbl[k] = s[k]; k++; lbl[k] = 0; }
+            fb_text(t.x + 6, t.y + (t.h - fb_text_h()) / 2, lbl,
+                    active ? CH_TEXT : CH_DIM, -1); }
+        {   int cx = t.x + t.w - 12, cy = t.y + t.h / 2, k;   /* the close X */
+            fb_px c = (g_hot_tab == i && g_hot_close) ? FB_RGB(200,60,60) : CH_DIM;
+            for (k = -3; k <= 3; k++) { fb_pixel(cx + k, cy + k, c); fb_pixel(cx + k, cy - k, c); } }
+    }
+    pl = tab_plus_rect(r);
+    btn_box(pl, g_hot_plus, 0);
+    fb_hline(pl.x + 3, pl.y + pl.h / 2, pl.w - 6, CH_TEXT);
+    fb_vline(pl.x + pl.w / 2, pl.y + 3, pl.h - 6, CH_TEXT);
+}
+
+static void draw_toolbar(unoui_rect r)
+{
+    unoui_rect b = band_bar(r), o;
+    btab *t = &g_tab[g_cur];
+    fb_fill_rect(b.x, b.y, b.w, b.h, CH_FACE);
+    fb_hline(b.x, b.y + b.h - 1, b.w, CH_EDGE);
+
+    o = tb_rect(r, TB_BACK);   btn_box(o, g_hot == TB_BACK, 0);
+    glyph_arrow(o, 1, t->nback ? CH_TEXT : CH_DIM);
+    o = tb_rect(r, TB_FWD);    btn_box(o, g_hot == TB_FWD, 0);
+    glyph_arrow(o, 0, t->nfwd ? CH_TEXT : CH_DIM);
+    o = tb_rect(r, TB_RELOAD); btn_box(o, g_hot == TB_RELOAD, 0);
+    glyph_reload(o, CH_TEXT);
+    o = tb_rect(r, TB_HOME);   btn_box(o, g_hot == TB_HOME, 0);
+    glyph_home(o, CH_TEXT);
+
+    o = tb_rect(r, TB_STAR);   btn_box(o, g_hot == TB_STAR, 0);
+    glyph_star(o, bm_index(t->loc) >= 0 ? FB_RGB(226, 170, 30) : CH_DIM,
+               bm_index(t->loc) >= 0);
+    o = tb_rect(r, TB_MARKS);  btn_box(o, g_hot == TB_MARKS, g_panel == PANEL_MARKS);
+    fb_text(o.x + 6, o.y + (o.h - fb_text_h()) / 2, "Marks", CH_TEXT, -1);
+    o = tb_rect(r, TB_HIST);   btn_box(o, g_hot == TB_HIST, g_panel == PANEL_HIST);
+    fb_text(o.x + 6, o.y + (o.h - fb_text_h()) / 2, "History", CH_TEXT, -1);
+
+    /* the address field */
+    o = tb_rect(r, TB_ADDR);
+    fb_fill_rect(o.x, o.y, o.w, o.h, FB_RGB(255,255,255));
+    fb_frame_rect(o.x, o.y, o.w, o.h, g_addr_focus ? PG_LINK : CH_EDGE);
+    {   int ty = o.y + (o.h - fb_text_h()) / 2;
+        const char *s = g_addr;
+        int off = 0, cw;
+        /* keep the caret in view: scroll the text left until it fits */
+        while (s[off] && (cw = fb_text_w(s + off)) > o.w - 10) {
+            if (fb_text_w(s + off) - fb_text_w(s + off + 1) <= 0) break;
+            off++;
+        }
+        fb_text(o.x + 5, ty, s + off, CH_TEXT, -1);
+        if (g_addr_focus) {
+            char pre[LOCMAX];
+            int k = g_addr_caret - off; if (k < 0) k = 0;
+            sput(pre, LOCMAX, s + off);
+            if (k < (int)sizeof pre) pre[k] = 0;
+            fb_vline(o.x + 5 + fb_text_w(pre), o.y + 3, o.h - 6, CH_TEXT);
+        }
+    }
+}
+
+static void draw_status(unoui_rect r)
+{
+    unoui_rect b = band_stat(r);
+    const char *s = g_hint[0] ? g_hint : g_status;
+    fb_fill_rect(b.x, b.y, b.w, b.h, CH_FACE);
+    fb_hline(b.x, b.y, b.w, CH_EDGE);
+    fb_text(b.x + 6, b.y + 2, s, g_hint[0] ? PG_LINK : CH_DIM, -1);
+}
+
+static void draw_panel(unoui_rect r)
+{
+    const struct unoui_theme *th = pc64_shell_theme();
+    unoui_rect p = panel_rect(r), l = panel_list_rect(r);
+    const char **items = (g_panel == PANEL_MARKS) ? g_bm_ptr : g_hs_ptr;
+    int n = (g_panel == PANEL_MARKS) ? g_nbm : g_nhs;
+    fb_fill_rect(p.x, p.y, p.w, p.h, CH_FACE);
+    fb_frame_rect(p.x, p.y, p.w, p.h, CH_EDGE);
+    fb_text(p.x + 6, p.y + 3,
+            g_panel == PANEL_MARKS ? "Bookmarks  (Ctrl-D adds this page)"
+                                   : "History  (this session)", CH_TEXT, -1);
+    if (!n) {
+        fb_text(l.x + 6, l.y + 4,
+                g_panel == PANEL_MARKS ? "No bookmarks yet." : "Nothing visited yet.",
+                CH_DIM, -1);
+        return;
+    }
+    if (th) unoui_list_draw(th, l, items, n, g_panel_sel, g_panel_top);
+}
+
+static unoui_rect start_list_rect(unoui_rect r);
+
+/* the start page: the built-in documents plus whatever the disks hold, in a
+ * scrolling list (the toolkit's, so the wheel / bar / keys all work) */
+static void draw_start(unoui_rect r)
+{
+    const struct unoui_theme *th = pc64_shell_theme();
+    btab *t = &g_tab[g_cur];
+    unoui_rect body = band_body(r), l;
+    fb_fill_rect(body.x, body.y, body.w, body.h, PG_BG);
+    fb_text(body.x + 10, body.y + 6, "Documents on this machine", PG_HEAD, -1);
+    l = start_list_rect(r);
+    t->top = unoui_list_reveal(l, g_nfiles, t->sel, t->top);
+    if (th) unoui_list_draw(th, l, g_row_ptr, g_nfiles, t->sel, t->top);
+    fb_text(body.x + 10, body.y + body.h - fb_text_h() - 4,
+            "Enter opens the highlighted document.  * = built in.", CH_DIM, -1);
+}
+
+/* the list sits between the heading and the hint line at the foot */
+static unoui_rect start_list_rect(unoui_rect r)
+{
+    unoui_rect body = band_body(r), l;
+    int hh = fb_text_h() + 6, foot = fb_text_h() + 10;
+    l.x = body.x + 8; l.y = body.y + hh + 6;
+    l.w = body.w - 16; l.h = body.h - hh - 6 - foot;
+    if (l.h < 24) l.h = 24;
+    return l;
+}
+
+static void loading_frame(const char *what)          /* one presented frame */
+{
+    unoui_rect r = g_rect, body;
+    if (r.w <= 0) return;
+    body = band_body(r);
+    draw_tabs(r); draw_toolbar(r);
+    fb_fill_rect(body.x, body.y, body.w, body.h, PG_BG);
+    fb_text(body.x + 12, body.y + 16, "Loading...", PG_HEAD, -1);
+    fb_text(body.x + 12, body.y + 16 + fb_text_h() + 6, what, PG_LINK, -1);
+    sput(g_status, sizeof g_status, "Loading...");
+    draw_status(r);
+    uno_pc64_present();
+}
+
+static void br_draw(struct unoui_widget *w, unoui_rect r, void *ctx)
+{
+    btab *t;
+    (void)w; (void)ctx;
+    g_rect = r;
+    if (!g_ntab) tab_new("uno:start");
+    t = &g_tab[g_cur];
+
+    draw_tabs(r);
+    draw_toolbar(r);
+
+    if (t->start) draw_start(r);
+    else {
+        unoui_rect body = band_body(r);
+        fb_fill_rect(body.x, body.y, body.w, body.h, PG_BG);
+        if (t->doc) {
+            /* clip to the body: a page line that starts above the top of the
+             * view is still painted (only fully off-screen rows are skipped),
+             * so without this the document draws over the toolbar */
+            fb_set_clip(body.x, body.y, body.w, body.h);
+            if (t->is_html) render_html(t->doc, body, t->scroll);
+            else            render_md(t->doc, body, t->scroll);
+            fb_set_clip(r.x, r.y, r.w, r.h);
+            /* track content height for scroll clamping */
+            { int total = (fy + flh) - body.y;
+              if (t->scroll > total - body.h) t->scroll = total - body.h;
+              if (t->scroll < 0) t->scroll = 0; }
+        }
+    }
+    if (g_panel) draw_panel(r);
+    draw_status(r);
+}
+
+/* ---- input --------------------------------------------------------------- */
+static void addr_focus(int on)
+{
+    g_addr_focus = on;
+    if (on) { sput(g_addr, LOCMAX, g_tab[g_cur].loc); g_addr_caret = (int)strlen(g_addr); }
+}
+
+static void addr_insert(int chv)
+{
+    int len = (int)strlen(g_addr), i;
+    if (len >= LOCMAX - 1) return;
+    for (i = len; i > g_addr_caret; i--) g_addr[i] = g_addr[i-1];
+    g_addr[g_addr_caret++] = (char)chv;
+    g_addr[len + 1] = 0;
+}
+static void addr_delete(int before)
+{
+    int len = (int)strlen(g_addr), i, at = before ? g_addr_caret - 1 : g_addr_caret;
+    if (at < 0 || at >= len) return;
+    for (i = at; i < len; i++) g_addr[i] = g_addr[i+1];
+    if (before) g_addr_caret--;
+}
+
+static void panel_open(int which)
+{
+    g_panel = (g_panel == which) ? PANEL_NONE : which;
+    g_panel_sel = 0; g_panel_top = 0;
+}
+
+static void panel_activate(void)
+{
+    const char *loc = 0;
+    if (g_panel == PANEL_MARKS && g_panel_sel < g_nbm) loc = g_bm_loc[g_panel_sel];
+    if (g_panel == PANEL_HIST  && g_panel_sel < g_nhs) loc = g_hs_loc[g_panel_sel];
+    g_panel = PANEL_NONE;
+    if (loc) navigate(loc, 1);
+}
+
+static void open_start_row(int idx)
+{
+    char loc[LOCMAX];
+    if (idx < 0 || idx >= g_nfiles) return;
+    if (g_vol[idx] < 0) {
+        sput(loc, LOCMAX, idx == 0 ? "uno:welcome" : idx == 1 ? "uno:sample" : "uno:script");
+    } else {
+        char *p = loc, *end = loc + LOCMAX;
+        char vs[8]; int k = 0, v = g_vol[idx];
+        if (!v) vs[k++] = '0';
+        while (v) { vs[k++] = (char)('0' + v % 10); v /= 10; }
+        p = sapp(p, end, "file:");
+        while (k) { if (p < end - 1) *p++ = vs[--k]; else k = 0; }
+        *p = 0;
+        p = sapp(p, end, ":");
+        sapp(p, end, g_names[idx]);
+    }
+    navigate(loc, 1);
+}
+
+/* follow the link at document position (px, py); 1 if one was there */
+static int follow_link_at(int px, int py)
+{
+    int i;
+    for (i = 0; i < g_nlink; i++) {
+        blinkrect *L = &g_link[i];
+        if (px >= L->x && px < L->x + L->w && py >= L->y - 2 && py < L->y + L->h) {
+            char to[LOCMAX];
+            resolve(g_href[L->href], g_tab[g_cur].loc, to, LOCMAX);
+            navigate(to, 1);
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int link_hint_at(int px, int py)
+{
+    int i;
+    for (i = 0; i < g_nlink; i++) {
+        blinkrect *L = &g_link[i];
+        if (px >= L->x && px < L->x + L->w && py >= L->y - 2 && py < L->y + L->h) {
+            sput(g_hint, sizeof g_hint, g_href[L->href]);
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* Left / Right step through a page's links, Enter follows the selected one.
+ * Keyboard link navigation is the PRIMARY path here: it needs no pointing
+ * device, which matters on a machine whose trackpad may not be up yet - and
+ * QEMU delivers no pointer input to this guest at all, so it is also the only
+ * path a harness can drive. */
+/* The engine renderer (BROWSER_ENGINE=uw) paints from the display list, so the
+ * flow painter's link map is empty there. Fall back to the DOM's own <a>
+ * elements, which keeps the keyboard path alive under both renderers. */
+static const char *dom_link_at(int idx)
+{
+    uw_node *links[64];
+    int n;
+    if (!g_dom) return 0;
+    n = uw_elements_by_tag(g_dom, NULL, "a", links, 64);
+    if (idx < 0 || idx >= n) return 0;
+    return uw_attr(g_dom, links[idx], "href");
+}
+static const char *dom_link_cycle(int dir)
+{
+    uw_node *links[64];
+    int n, guard = 0;
+    if (!g_dom) return 0;
+    n = uw_elements_by_tag(g_dom, NULL, "a", links, 64);
+    if (n <= 0) return 0;
+    do {
+        g_link_sel += dir;
+        if (g_link_sel >= n) g_link_sel = 0;
+        if (g_link_sel < 0) g_link_sel = n - 1;
+    } while (!uw_attr(g_dom, links[g_link_sel], "href") && ++guard < n);
+    return uw_attr(g_dom, links[g_link_sel], "href");
+}
+
+static int link_step(int dir)
+{
+    btab *t = &g_tab[g_cur];
+    unoui_rect body = band_body(g_rect);
+    int i;
+    if (!g_nhref) {
+        const char *h = dom_link_cycle(dir);
+        if (!h) return 0;
+        sput(g_hint, sizeof g_hint, h);
+        return 1;
+    }
+    g_link_sel += dir;
+    if (g_link_sel >= g_nhref) g_link_sel = 0;
+    if (g_link_sel < 0) g_link_sel = g_nhref - 1;
+    sput(g_hint, sizeof g_hint, g_href[g_link_sel]);
+    for (i = 0; i < g_nlink; i++) {              /* scroll it into view */
+        blinkrect *L = &g_link[i];
+        if (L->href != g_link_sel) continue;
+        if (L->y - t->scroll < body.y)
+            t->scroll = L->y - body.y - 8;
+        else if (L->y + L->h - t->scroll > body.y + body.h)
+            t->scroll = L->y + L->h - (body.y + body.h) + 8;
+        if (t->scroll < 0) t->scroll = 0;
+        break;
+    }
+    return 1;
+}
+
+static void scroll_by(int dy)
+{
+    btab *t = &g_tab[g_cur];
+    t->scroll += dy;
+    if (t->scroll < 0) t->scroll = 0;
 }
 
 static int br_event(struct unoui_widget *w, const void *ev, void *ctx)
 {
-    const unoui_event *e = (const unoui_event *)ev; (void)w; (void)ctx;
-    if (g_view == 0) {                              /* file list + address bar */
-        if (e->kind == UI_EV_CHAR && e->ch >= 32 && e->ch < 127) {
-            if (!g_addr) { g_addr = 1; g_url[0] = 0; }   /* typing focuses the bar */
-            { int l = (int)strlen(g_url); if (l < (int)sizeof(g_url)-1) { g_url[l] = (char)e->ch; g_url[l+1] = 0; } }
+    const unoui_event *e = (const unoui_event *)ev;
+    btab *t = &g_tab[g_cur];
+    unoui_rect r = g_rect;
+    (void)w; (void)ctx;
+
+    /* ---- the address bar owns the keyboard while it has focus ---- */
+    if (g_addr_focus) {
+        if (e->kind == UI_EV_CHAR && e->ch >= 32 && e->ch < 127) { addr_insert(e->ch); return 1; }
+        if (e->kind == UI_EV_KEY) {
+            switch (e->key) {
+            case UI_KEY_BACKSPACE: addr_delete(1); return 1;
+            case UI_KEY_DELETE:    addr_delete(0); return 1;
+            case UI_KEY_LEFT:      if (g_addr_caret > 0) g_addr_caret--; return 1;
+            case UI_KEY_RIGHT:     if (g_addr[g_addr_caret]) g_addr_caret++; return 1;
+            case UI_KEY_HOME:      g_addr_caret = 0; return 1;
+            case UI_KEY_END:       g_addr_caret = (int)strlen(g_addr); return 1;
+            case UI_KEY_ESC:       addr_focus(0); return 1;
+            case UI_KEY_ENTER:
+                g_addr_focus = 0;
+                if (g_addr[0]) navigate(g_addr, 1);
+                return 1;
+            default: return 1;                     /* swallow the rest */
+            }
+        }
+    }
+
+    /* ---- a panel owns the keyboard while it is open ---- */
+    if (g_panel && e->kind == UI_EV_KEY) {
+        int n = (g_panel == PANEL_MARKS) ? g_nbm : g_nhs;
+        unoui_rect l = panel_list_rect(r);
+        switch (e->key) {
+        case UI_KEY_UP:    if (g_panel_sel > 0) g_panel_sel--; break;
+        case UI_KEY_DOWN:  if (g_panel_sel < n - 1) g_panel_sel++; break;
+        case UI_KEY_PGUP:  g_panel_sel -= unoui_list_rows(l); break;
+        case UI_KEY_PGDN:  g_panel_sel += unoui_list_rows(l); break;
+        case UI_KEY_HOME:  g_panel_sel = 0; break;
+        case UI_KEY_END:   g_panel_sel = n - 1; break;
+        case UI_KEY_ENTER: panel_activate(); return 1;
+        case UI_KEY_ESC:   g_panel = PANEL_NONE; return 1;
+        default: return 1;
+        }
+        if (g_panel_sel < 0) g_panel_sel = 0;
+        if (g_panel_sel > n - 1) g_panel_sel = n - 1;
+        g_panel_top = unoui_list_reveal(l, n, g_panel_sel, g_panel_top);
+        return 1;
+    }
+
+    if (e->kind == UI_EV_CHAR && e->ch >= 32 && e->ch < 127) {
+        addr_focus(1);                       /* typing goes to the address bar */
+        sput(g_addr, LOCMAX, ""); g_addr_caret = 0;
+        addr_insert(e->ch);
+        return 1;
+    }
+
+    if (e->kind == UI_EV_KEY) {
+        if (e->mods & UI_MOD_CTRL) {         /* Ctrl-Left / Ctrl-Right = history */
+            if (e->key == UI_KEY_LEFT)  { go_back(); return 1; }
+            if (e->key == UI_KEY_RIGHT) { go_fwd();  return 1; }
+        }
+        if (t->start) {                      /* the start page's list */
+            unoui_rect l = start_list_rect(r);
+            switch (e->key) {
+            case UI_KEY_UP:    if (t->sel > 0) t->sel--; break;
+            case UI_KEY_DOWN:  if (t->sel < g_nfiles - 1) t->sel++; break;
+            case UI_KEY_PGUP:  t->sel -= unoui_list_rows(l); break;
+            case UI_KEY_PGDN:  t->sel += unoui_list_rows(l); break;
+            case UI_KEY_HOME:  t->sel = 0; break;
+            case UI_KEY_END:   t->sel = g_nfiles - 1; break;
+            case UI_KEY_ENTER: open_start_row(t->sel); return 1;
+            case UI_KEY_BACKSPACE: go_back(); return 1;
+            default: return 0;
+            }
+            if (t->sel < 0) t->sel = 0;
+            if (t->sel > g_nfiles - 1) t->sel = g_nfiles - 1;
+            t->top = unoui_list_reveal(l, g_nfiles, t->sel, t->top);
             return 1;
         }
-        if (e->kind == UI_EV_KEY) {
-            if (g_addr) {
-                if (e->key == UI_KEY_BACKSPACE) { int l=(int)strlen(g_url); if (l>0) g_url[l-1]=0; return 1; }
-                if (e->key == UI_KEY_ENTER)     { if (g_url[0]) fetch_url(); return 1; }
-                if (e->key == UI_KEY_ESC || e->key == UI_KEY_DOWN) { g_addr = 0; return 1; }
-                return 1;                       /* swallow other keys while editing */
+        switch (e->key) {                    /* a document */
+        case UI_KEY_DOWN:  scroll_by(24);  return 1;
+        case UI_KEY_UP:    scroll_by(-24); return 1;
+        case UI_KEY_PGDN:  scroll_by(180); return 1;
+        case UI_KEY_PGUP:  scroll_by(-180);return 1;
+        case UI_KEY_HOME:  t->scroll = 0;  return 1;
+        case UI_KEY_BACKSPACE: go_back();  return 1;
+        case UI_KEY_RIGHT: return link_step(1);
+        case UI_KEY_LEFT:  return link_step(-1);
+        case UI_KEY_ENTER: {
+            const char *href = (g_link_sel >= 0 && g_link_sel < g_nhref)
+                               ? g_href[g_link_sel] : dom_link_at(g_link_sel);
+            if (href && *href && href[0] != '#') {
+                char to[LOCMAX];
+                resolve(href, t->loc, to, LOCMAX);
+                navigate(to, 1);
+                return 1;
             }
-            if (e->key == UI_KEY_UP)   { if (g_sel > 0) g_sel--; else g_addr = 1; return 1; }
-            if (e->key == UI_KEY_DOWN && g_sel < g_nfiles-1) { g_sel++; return 1; }
-            if (e->key == UI_KEY_ENTER) { open_entry(g_sel); return 1; }
+            return 0; }
+        case UI_KEY_ESC:   g_link_sel = -1; return 1;
+        default: return 0;
         }
-        if (e->kind == UI_EV_MOUSE_DOWN) {      /* click bar or a file row (metal) */
-            unoui_rect r = g_rect; int ay = r.y + 24, top = ay + 40;
-            if (e->y >= ay && e->y < ay + 18) { g_addr = 1; return 1; }
-            { int row = (e->y - top) / 16;
-              if (row >= 0 && row < g_nfiles && e->y >= top) { g_addr = 0; g_sel = row; open_entry(row); return 1; } }
+    }
+
+    if (e->kind == UI_EV_WHEEL) {
+        unoui_rect body = band_body(r);
+        if (g_panel) {
+            unoui_rect l = panel_list_rect(r);
+            int n = (g_panel == PANEL_MARKS) ? g_nbm : g_nhs;
+            g_panel_top += e->wheel * 3;
+            { int mt = unoui_list_maxtop(l, n);
+              if (g_panel_top > mt) g_panel_top = mt;
+              if (g_panel_top < 0) g_panel_top = 0; }
+            return 1;
+        }
+        if (t->start) {
+            unoui_rect l = start_list_rect(r);
+            int mt = unoui_list_maxtop(l, g_nfiles);
+            t->top += e->wheel * 3;
+            if (t->top > mt) t->top = mt;
+            if (t->top < 0) t->top = 0;
+            return 1;
+        }
+        (void)body;
+        scroll_by(e->wheel * 24);
+        return 1;
+    }
+
+    if (e->kind == UI_EV_MOUSE_MOVE) {
+        int i, slot = 0;
+        g_hot = -1; g_hot_tab = -1; g_hot_close = 0; g_hot_plus = 0;
+        g_hint[0] = 0;
+        for (i = 0; i < TB_N; i++) {
+            unoui_rect o = tb_rect(r, i);
+            if (e->x >= o.x && e->x < o.x + o.w && e->y >= o.y && e->y < o.y + o.h) {
+                static const char *kTip[TB_N] = {
+                    "Back (Backspace)", "Forward", "Reload (F5)", "Start page",
+                    "Bookmark this page (Ctrl-D)", "Bookmarks (Ctrl-B)",
+                    "History (Ctrl-H)" };
+                g_hot = i; sput(g_hint, sizeof g_hint, kTip[i]);
+                return 1;
+            }
+        }
+        for (i = 0; i < MAXTABS; i++) {
+            unoui_rect o;
+            if (!g_tab[i].used) continue;
+            o = tab_rect(r, slot++);
+            if (e->x >= o.x && e->x < o.x + o.w && e->y >= o.y && e->y < o.y + o.h) {
+                g_hot_tab = i;
+                g_hot_close = (e->x >= o.x + o.w - 18);
+                sput(g_hint, sizeof g_hint, g_hot_close ? "Close this tab" : g_tab[i].loc);
+                return 1;
+            }
+        }
+        {   unoui_rect pl = tab_plus_rect(r);
+            if (e->x >= pl.x && e->x < pl.x + pl.w && e->y >= pl.y && e->y < pl.y + pl.h) {
+                g_hot_plus = 1; sput(g_hint, sizeof g_hint, "New tab (Ctrl-T)"); return 1;
+            } }
+        if (!t->start && !g_panel) {                  /* a link under the pointer */
+            unoui_rect body = band_body(r);
+            if (e->y >= body.y && e->y < body.y + body.h)
+                link_hint_at(e->x, e->y + t->scroll);
         }
         return 0;
     }
+
+    if (e->kind == UI_EV_MOUSE_DOWN) {
+        int i, slot = 0;
+        unoui_rect body = band_body(r);
+
+        if (g_panel) {                                /* the open panel first */
+            unoui_rect p = panel_rect(r), l = panel_list_rect(r);
+            int n = (g_panel == PANEL_MARKS) ? g_nbm : g_nhs;
+            int inside = (e->x >= p.x && e->x < p.x + p.w &&
+                          e->y >= p.y && e->y < p.y + p.h);
+            if (inside) {
+                if (n && e->y >= l.y && e->y < l.y + l.h) {
+                    unoui_rect bar = unoui_list_bar(l, n);
+                    if (bar.w && e->x >= bar.x) {     /* its scrollbar */
+                        int mt = unoui_list_maxtop(l, n);
+                        g_panel_top += (e->y < bar.y + bar.h / 2) ? -1 : 1;
+                        if (g_panel_top > mt) g_panel_top = mt;
+                        if (g_panel_top < 0) g_panel_top = 0;
+                        return 1;
+                    }
+                    g_panel_sel = unoui_list_index_at(l, n, g_panel_top, e->y);
+                    panel_activate();
+                }
+                return 1;
+            }
+            g_panel = PANEL_NONE;                     /* click-out dismisses */
+            /* and fall through, so the click still does what it was aimed at */
+        }
+
+        for (i = 0; i < TB_N; i++) {                  /* toolbar */
+            unoui_rect o = tb_rect(r, i);
+            if (e->x < o.x || e->x >= o.x + o.w || e->y < o.y || e->y >= o.y + o.h) continue;
+            switch (i) {
+            case TB_BACK:   go_back(); break;
+            case TB_FWD:    go_fwd();  break;
+            case TB_RELOAD: load_loc(t, t->loc); break;
+            case TB_HOME:   navigate("uno:start", 1); break;
+            case TB_STAR:   bm_toggle(); break;
+            case TB_MARKS:  panel_open(PANEL_MARKS); break;
+            case TB_HIST:   panel_open(PANEL_HIST); break;
+            }
+            return 1;
+        }
+        {   unoui_rect o = tb_rect(r, TB_ADDR);       /* the address field */
+            if (e->x >= o.x && e->x < o.x + o.w && e->y >= o.y && e->y < o.y + o.h) {
+                addr_focus(1);
+                return 1;
+            } }
+        for (i = 0; i < MAXTABS; i++) {               /* tabs */
+            unoui_rect o;
+            if (!g_tab[i].used) continue;
+            o = tab_rect(r, slot++);
+            if (e->x < o.x || e->x >= o.x + o.w || e->y < o.y || e->y >= o.y + o.h) continue;
+            if (e->x >= o.x + o.w - 18) tab_close(i);
+            else { g_cur = i; g_link_sel = -1;
+                   if (!g_addr_focus) { sput(g_addr, LOCMAX, g_tab[i].loc);
+                                        g_addr_caret = (int)strlen(g_addr); } }
+            return 1;
+        }
+        {   unoui_rect pl = tab_plus_rect(r);         /* the + button */
+            if (e->x >= pl.x && e->x < pl.x + pl.w && e->y >= pl.y && e->y < pl.y + pl.h) {
+                tab_new("uno:start"); return 1;
+            } }
+
+        if (e->y >= body.y && e->y < body.y + body.h) {
+            if (g_addr_focus) addr_focus(0);
+            if (t->start) {                           /* the start page's list */
+                unoui_rect l = start_list_rect(r);
+                unoui_rect bar = unoui_list_bar(l, g_nfiles);
+                if (e->y < l.y || e->y >= l.y + l.h) return 1;
+                if (bar.w && e->x >= bar.x) {
+                    int mt = unoui_list_maxtop(l, g_nfiles);
+                    t->top += (e->y < bar.y + bar.h / 2) ? -1 : 1;
+                    if (t->top > mt) t->top = mt;
+                    if (t->top < 0) t->top = 0;
+                    return 1;
+                }
+                t->sel = unoui_list_index_at(l, g_nfiles, t->top, e->y);
+                open_start_row(t->sel);
+                return 1;
+            }
 #ifdef UW_ENGINE
-    /* KEYBOARD link navigation: Right/Left step through the document's links
-     * and Enter follows the selected one.
-     *
-     * This exists because the pointer path cannot be verified here at all -
-     * QEMU delivers no mouse input to this guest (no cursor appears even with
-     * a USB tablet), so a click test proves nothing either way. Keyboard
-     * activation is drivable by the same harness that works for everything
-     * else, and it is a better primary path regardless: it needs no pointing
-     * device, which matters on a machine whose trackpad may not be up yet.
-     * The mouse path below is kept and stays unverified until either the
-     * harness or real hardware can exercise it. */
-    if (e->kind == UI_EV_KEY && g_dom &&
-        (e->key == UI_KEY_RIGHT || e->key == UI_KEY_LEFT || e->key == UI_KEY_ENTER)) {
-        uw_node *links[64];
-        int n = uw_elements_by_tag(g_dom, NULL, "a", links, 64);
-        int i, have = 0;
-        for (i = 0; i < n && i < 64; i++) if (uw_attr(g_dom, links[i], "href")) have++;
-        if (have) {
-            if (e->key == UI_KEY_ENTER) {
-                if (g_link_sel >= 0 && g_link_sel < n) {
-                    const char *href = uw_attr(g_dom, links[g_link_sel], "href");
+            /* the engine owns page geometry when it is the renderer: ask the
+             * display list what is under the pointer */
+            if (g_dom) {
+                uw_node *n = uw_hit_test(g_dom, e->x - r.x, e->y - r.y + t->scroll);
+                uw_node *a = uw_link_at(g_dom, n);
+                if (a) {
+                    const char *href = uw_attr(g_dom, a, "href");
                     if (href && *href && href[0] != '#') {
-                        strncpy(g_url, href, sizeof g_url - 1);
-                        g_url[sizeof g_url - 1] = 0;
-                        g_link_sel = -1;
-                        fetch_url();
+                        char to[LOCMAX];
+                        resolve(href, t->loc, to, LOCMAX);
+                        navigate(to, 1);
                         return 1;
                     }
                 }
-            } else {
-                int step = (e->key == UI_KEY_RIGHT) ? 1 : -1;
-                int guard = 0;
-                do {
-                    g_link_sel += step;
-                    if (g_link_sel >= n) g_link_sel = 0;
-                    if (g_link_sel < 0) g_link_sel = n - 1;
-                } while (!uw_attr(g_dom, links[g_link_sel], "href") && ++guard < n);
-                {   const char *href = uw_attr(g_dom, links[g_link_sel], "href");
-                    char lb[128];
-                    int k = 0;
-                    const char *pfx = "Link: ";
-                    while (pfx[k] && k < (int)sizeof lb - 1) { lb[k] = pfx[k]; k++; }
-                    while (href && *href && k < (int)sizeof lb - 1) lb[k++] = *href++;
-                    lb[k] = 0;
-                    strncpy(g_status, lb, sizeof g_status - 1);
-                    g_status[sizeof g_status - 1] = 0; }
-                return 1;
             }
-        }
-    }
-    /* A click in the document: ask the engine what is under the pointer and
-     * follow a link if that is what it turns out to be. The display list is
-     * the ONE geometry source for both painting and pointing, so a link's
-     * clickable area always matches its ink. */
-    if (e->kind == UI_EV_MOUSE_DOWN && g_dom) {
-        unoui_rect r = g_rect;
-        uw_node *n = uw_hit_test(g_dom, e->x - r.x, e->y - r.y + g_scroll);
-        uw_node *a = uw_link_at(g_dom, n);
-        if (a) {
-            const char *href = uw_attr(g_dom, a, "href");
-            if (href && *href && href[0] != '#') {
-                strncpy(g_url, href, sizeof g_url - 1);
-                g_url[sizeof g_url - 1] = 0;
-                fetch_url();
-                return 1;
-            }
-        }
-    }
 #endif
-    if (e->kind == UI_EV_KEY) {                      /* document */
-        if (e->key == UI_KEY_DOWN)      { g_scroll += 24; return 1; }
-        if (e->key == UI_KEY_UP)        { g_scroll -= 24; if (g_scroll<0) g_scroll=0; return 1; }
-        if (e->key == UI_KEY_PGDN)      { g_scroll += 180; return 1; }
-        if (e->key == UI_KEY_PGUP)      { g_scroll -= 180; if (g_scroll<0) g_scroll=0; return 1; }
-        if (e->key == UI_KEY_BACKSPACE) { g_view = 0; refresh_list(); return 1; }
+            return follow_link_at(e->x, e->y + t->scroll);
+        }
+        return 0;
     }
-    if (e->kind == UI_EV_WHEEL) { g_scroll += e->wheel * 24; if (g_scroll<0) g_scroll=0; return 1; }
+    return 0;
+}
+
+/* accelerators, routed by the shell while the browser window is in front (a
+ * canvas never sees Ctrl-modified characters otherwise). 1 = consumed. */
+int pc64_browser_key(int uni, int scan, int ctrl)
+{
+    btab *t = &g_tab[g_cur];
+    if (scan == 0x0F) { load_loc(t, t->loc); return 1; }            /* F5 */
+    if (!ctrl) return 0;
+    switch (uni) {
+    case 'l': case 'L': g_panel = PANEL_NONE; addr_focus(1);
+                        g_addr_caret = (int)strlen(g_addr); return 1;
+    case 't': case 'T': g_panel = PANEL_NONE; tab_new("uno:start"); return 1;
+    case 'd': case 'D': bm_toggle(); return 1;
+    case 'b': case 'B': panel_open(PANEL_MARKS); return 1;
+    case 'h': case 'H': panel_open(PANEL_HIST); return 1;
+    case 'r': case 'R': load_loc(t, t->loc); return 1;
+    default: break;
+    }
+    if (scan == 0x0E) { tab_close(g_cur); return 1; }               /* Ctrl-F4 */
     return 0;
 }
 
 static unoui_canvas g_browser = { br_draw, br_event, 0 };
 
 unoui_canvas *pc64_browser_canvas(void) { return &g_browser; }
-void pc64_browser_open(void) { g_sel = 0; g_view = 0; refresh_list(); }
+
+void pc64_browser_open(void)
+{
+    if (!g_nbm && !g_nhs) bm_load();          /* first open: the saved marks */
+    refresh_files();
+    if (!g_ntab) tab_new("uno:start");
+    g_panel = PANEL_NONE;
+    g_addr_focus = 0;
+    sput(g_addr, LOCMAX, g_tab[g_cur].loc);
+    g_addr_caret = (int)strlen(g_addr);
+}
+
+/* open a local document by path (subdirectories fine: "DOCS\\API.MD") - the
+ * Help menu's entry point. It lands in the current tab like any other
+ * navigation, so Back returns to whatever was on screen. */
+void pc64_browser_open_path(const char *path)
+{
+    char loc[LOCMAX];
+    char *p = loc, *end = loc + LOCMAX;
+    if (!g_nbm && !g_nhs) bm_load();
+    if (!g_ntab) tab_new("uno:start");
+    p = sapp(p, end, "path:");
+    sapp(p, end, path);
+    navigate(loc, 1);
+}
