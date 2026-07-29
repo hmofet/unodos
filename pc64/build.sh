@@ -302,17 +302,21 @@ if [ "$1" != "legacy" ]; then
     mkdir -p build/esp/DOCS
     cp docs_esp/LICENSES.MD build/esp/DOCS/
 
-    # ---- Intel WiFi firmware (TESTING only) --------------------------------
-    # The iwlwifi driver loads FIRMWARE\IWL*.UCO from the ESP. Intel's licence
-    # forbids redistribution, so the blobs are NOT in the repo (fw-blobs/ is
-    # gitignored). If a developer has populated fw-blobs/ (via the fetch tool or
-    # tools/fetch-fw.sh), bundle them so a flashed test stick can bring WiFi up
-    # without a separate copy step. A clean clone has no fw-blobs/ -> no bundle.
-    # DEBUG builds only: Intel's licence forbids redistribution, so the
-    # firmware belongs on TEST sticks (the debug build's wifi test), never in a
-    # production image people might pass around.
-    if [ "$UNO_DEBUG" != "0" ] && ls fw-blobs/*.UCO >/dev/null 2>&1; then
-        echo "[fw] bundling Intel WiFi firmware from fw-blobs/ (debug/test image)"
+    # ---- Intel WiFi firmware ----------------------------------------------
+    # The iwlwifi driver loads FIRMWARE\IWL*.UCO from the ESP, so an image
+    # without them cannot bring WiFi up at all. The blobs are NOT in the repo
+    # (Intel's licence forbids redistribution; fw-blobs/ is gitignored), so
+    # this bundles whatever the developer staged there - via tools/fetch-fw.sh
+    # or uno-wifi-fw.py - and a clean clone simply has none.
+    #
+    # 2026-07-29 (user ruling): PRODUCTION images get them too. Restricting
+    # this to debug builds meant every production stick booted with a dead
+    # radio, which is not a shippable OS - and the blobs on YOUR stick are
+    # your own copy, not redistribution. The licence constraint applies when
+    # an image is PUBLISHED: do not upload a built image containing them.
+    # Set UNO_NOFW=1 to build a firmware-free image for that case.
+    if [ "${UNO_NOFW:-0}" = "0" ] && ls fw-blobs/*.UCO >/dev/null 2>&1; then
+        echo "[fw] bundling Intel WiFi firmware from fw-blobs/ (UNO_NOFW=1 to omit)"
         mkdir -p build/esp/FIRMWARE
         cp fw-blobs/*.UCO build/esp/FIRMWARE/ 2>/dev/null || true
         cp fw-blobs/*.PNV build/esp/FIRMWARE/ 2>/dev/null || true
