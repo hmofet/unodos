@@ -1,8 +1,33 @@
 # Detach completion — finish removing firmware from the running system (pc64)
 
-Status: PLANNED, run AFTER unodevices phases 1-2
-(docs/UNODEVICES-PLAN.md). New drivers here are written as registry
-drivers, and phase D's detach predicate is a registry query.
+Status: **Phase A mostly done (2026-07-29, branch `detach-usb`)**; B, C, D
+still open. New drivers here are written as registry drivers, and phase D's
+detach predicate is a registry query.
+
+## Phase A progress, 2026-07-29
+
+Landed: `-DUNO_XHCI` ships in every build (`uno_xhci_init()` now refuses to
+touch hardware until `uno_pc64_detached()`, which is what made that safe);
+`usbboot.c` decides before EBS whether the stick is reclaimable;
+`uno_fat_native_eligible()` accepts a USB system volume; `usbmsc` binds the
+identified boot device and marks it `is_boot`; the detach path verifies the
+system volume actually came back and says so if it did not; `DETACH.CFG`
+(`off` / `nousb` / `usb`) is a no-rebuild override. A USB-booted machine
+detaching and running on its own drivers is QEMU-verified end to end.
+
+Also, and not foreseen by this plan: **the GUI installer had to go native.**
+It refused outright when detached, so the moment a stick boot detaches, "boot
+the stick, run Install" — the only way UnoDOS gets onto a machine — would have
+broken. It now routes through `unostorage_prepare_esp()` + `uno_fs_copytree()`
+when detached, the same pieces the URC `install <disk>` verb used. The lesson
+generalises: **anything gated on `uno_pc64_detached()` is a feature that
+disappears the day the machine detaches.** Grep for that call before flipping
+any posture.
+
+**Still opt-in**, and this is the remaining Phase A work: `xhci.c` has no
+SuperSpeed endpoint-companion burst sizing and no xHCI Reset-Endpoint /
+Set-TR-Dequeue recovery, so a SuperSpeed stick (bulk mps 1024) wedges its
+endpoint on the first transfer error. See `pc64/USB.md`.
 
 ## Where detachment actually stands (verified 2026-07-23)
 

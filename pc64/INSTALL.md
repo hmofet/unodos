@@ -70,3 +70,29 @@ refuses a target smaller than the source's used extent + 33 sectors.
 > looking, because the exit code said pass. Menu positions now come from the
 > shell's own `kAppNames[]`, and the confirm sequence matches
 > `tools/install_confirm_test.py`, which is the spec for that gate.
+
+## Installing from a detached system (2026-07-29)
+
+Everything above describes the firmware path: Simple File System for the
+file-level install, Block IO for the whole-disk clone, runtime `SetVariable`
+for the `Boot####` entry. A machine that has detached (ExitBootServices, see
+`pc64/USB.md` and `docs/DETACH-COMPLETION-PLAN.md`) has none of those, and the
+installer used to simply refuse.
+
+It no longer does. When `uno_pc64_detached()`, `uno_inst_scan()` /
+`uno_inst_install()` enumerate and write through the native stack instead —
+`blkdev` for disks, `unostorage_prepare_esp()` to author the GPT + ESP +
+FAT32, `uno_fs_copytree()` to clone the tree, `uno_fat_sync()` to persist. Same
+two target kinds, same UI, same safety rules (the boot disk is never a target;
+whole-disk installs still need the typed `ERASE` confirmation).
+
+**The one difference: no NVRAM boot entry.** Runtime `SetVariable` is declined
+after ExitBootServices (`uno_pc64_set_bootnext`), which the URC `install`
+verb already lives with. So a detached install boots by the removable-media
+fallback path `\EFI\BOOT\BOOTX64.EFI`:
+
+- **Whole-disk install** — fine. The disk has nothing else on it, and firmware
+  falls back to the removable path.
+- **ESP install alongside another OS** — the other OS's boot entry keeps
+  winning. Pick UnoDOS from the firmware boot menu, or install while attached
+  (a stick boot stays attached by default today).

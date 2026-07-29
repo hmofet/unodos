@@ -1910,15 +1910,37 @@ or give SPECTEST a static ui).
 slice branch `detach-usb`. This is Phase A of `docs/DETACH-COMPLETION-PLAN.md`.
 
 **What landed.** `-DUNO_XHCI` now ships in every build, and a USB-stick boot
-detaches: QEMU `-device usb-storage` over `qemu-xhci`, real GPT+FAT32 image via
-`tools/mkuefi.py`, `tools/diskboot_test.py` — `usbmsc: BOT device up, 262144
-sectors, boot=1`, `detached: ExitBootServices done`, desktop alive on our own
-drivers, no strand.
+CAN detach — verified end to end in QEMU (`-device usb-storage` over
+`qemu-xhci`, real GPT+FAT32 image via `tools/mkuefi.py`,
+`tools/diskboot_test.py`): `usbmsc: BOT device up, 262144 sectors, boot=1`,
+`detached: ExitBootServices done`, desktop alive on our own drivers, no strand.
 
 The flag was only ever off because `uno_xhci_init()` disconnects the firmware's
 USB stack, which while attached is the stack carrying the boot volume.
 `uno_xhci_init()` now refuses to touch hardware until `uno_pc64_detached()`, so
 the native stack is inert while attached and there is nothing left to gate.
+
+**But it is OPT-IN (`DETACH.CFG`: `usb`), and the default posture is
+unchanged.** That green run reproduces only sometimes. Chasing it down: QEMU's
+`usb-storage` enumerates as SuperSpeed (bulk max packet 1024) and some
+`READ(10)`s come back with a transfer error. `xhci.c` has neither SS
+endpoint-companion burst sizing nor xHCI **Reset Endpoint / Set TR Dequeue
+Pointer** recovery, so one failed transfer wedges the endpoint — first read
+fine, a later one not, and past ExitBootServices there is no way back. Two
+identical-logic builds behaved differently, which is what put me onto it.
+
+Fixed properly along the way (all in-tree now, all correct regardless):
+BOT DMA no longer targets the stack (`g_cbw`/`g_csw`/`g_bounce`, 64-byte
+aligned — same lesson as the M1 AHCI/IoAlign buffers); `bot_cmd()` validates
+the CSW **tag** and drains a desynchronised pipe instead of handing the caller
+the previous command's data; a short or failed data phase is no longer reported
+as success (that is how a read of nothing became 512 bytes of zeros that FAT
+mounted as an empty volume); and `uno_usbmsc_why()` gives a production-visible
+account of a failed bind, because post-detach there is no log to write to.
+
+**Next step, clearly scoped:** SS endpoint companion (descriptor type 0x30 →
+`bMaxBurst` → endpoint context Max Burst Size) plus Reset-Endpoint recovery in
+`xhci.c`. Then flip the opt-in, then metal on the ZimaBlade per the plan.
 
 ### Note 1 (→ unofs): `uno_fat_native_eligible()` gained a USB arm
 
@@ -1929,15 +1951,34 @@ first serial-bus/USB function, which on a box with an EHCI companion is not the
 xHCI the stick is on. Refactored the marker probe into `vol_carries_system()`;
 the AHCI/NVMe/SDHCI arms are byte-for-byte the same behaviour.
 
-### Note 2 (→ unoautomate / debug harness): the `UNO_NO_DETACH` default is now stale
+### Note 2 (→ unoautomate / debug harness): `UNO_NO_DETACH`'s rationale has moved
 
 `build.sh` disables detach in the debug build "because the native stack has no
 USB mass-storage driver, so ExitBootServices on a USB-booted system strands its
-own boot volume" (finding F8). That premise no longer holds — the driver exists
-and the QEMU gate above runs the debug build with `UNO_DETACH=1` and keeps its
-telemetry. Flipping the default is yours to make, since it changes what every
-harness boot does; `DETACH.CFG` (`off` / `nousb`) is now a no-rebuild override
-if you want a per-stick escape hatch either way.
+own boot volume" (finding F8). The driver now exists, but per the opt-in above
+the reason to keep the default is the xHCI gap, not the missing driver — worth
+rewording when you next touch it, and worth revisiting entirely once the SS
+work lands. `DETACH.CFG` (`off` / `nousb` / `usb`) is a no-rebuild override in
+either direction, so a harness stick no longer needs a special build to pick a
+posture.
+
+### Note 3 (→ installer): the GUI installer now has a native path
+
+`uno_inst_scan()` / `uno_inst_install()` used to refuse outright when detached
+("Install needs the firmware - reboot to install"). Since a detached machine is
+now a thing that happens on a stick boot, and "boot the stick, run Install" is
+how UnoDOS gets onto a machine at all, that refusal would have been a
+functional regression. The detached path routes through the same native pieces
+the URC `install <disk>` verb already used — `unostorage_prepare_esp()`,
+`uno_fs_copytree()`, `uno_fat_sync()` — plus a native version of the
+file-level ESP install. `tools/install_test.py` passes both phases.
+
+One real gap, and it is the same one URC has: no NVRAM `Boot####` entry, since
+the port declines runtime `SetVariable` after ExitBootServices
+(`uno_pc64_set_bootnext`). Whole-disk installs boot by the removable-media
+fallback path; an ESP install alongside another OS needs a boot-menu pick. If
+you want to revisit the post-EBS SetVariable policy, that is your call, not
+something to slip in here.
 
 ### Also fixed in passing (detach lane)
 

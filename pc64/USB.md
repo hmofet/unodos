@@ -75,7 +75,47 @@ the cached value.
 READ(10), WRITE(10), REQUEST SENSE — the subset every flash stick implements.
 512-byte logical blocks only; anything else is rejected loudly. It registers
 with `blkdev` as a native backend, so `uno_blk_detach()` picks it up alongside
-AHCI/NVMe/SDHCI.
+AHCI/NVMe/SDHCI, and it binds the device `usbboot` identified rather than
+whichever one enumerated first.
+
+Three rules it learned the hard way, all of which used to fail silently:
+
+- **DMA never targets the stack.** `xhci.c` puts the caller's pointer straight
+  into the TRB, so a local array is a DMA into the firmware-provided stack at
+  whatever address the build's frame layout produced. `g_cbw` / `g_csw` /
+  `g_bounce` are static and 64-byte aligned, and the data phase bounces through
+  `g_bounce` because callers pass FAT cache lines and sense arrays that are
+  DMA-fit only by luck.
+- **The CSW tag is checked.** BOT tags every command precisely so a
+  desynchronised pipe is detectable; without the check a stale CSW makes the
+  current command "succeed" while the caller reads the previous one's data.
+- **A short data phase is not success.** Falling through to the CSW after a
+  failed bulk-IN is how a read of nothing became 512 bytes of zeros that FAT
+  then mounted as an empty volume.
+
+`uno_usbmsc_why()` names the failure. Post-detach there is no console and no
+volume to log to, so the string has to exist in production builds too.
+
+## KNOWN GAP: SuperSpeed, and no endpoint error recovery
+
+**USB-boot detach is opt-in (`DETACH.CFG`: `usb`) because of this.**
+
+QEMU's `usb-storage` on `qemu-xhci` enumerates as SuperSpeed — bulk max packet
+1024 — and some `READ(10)`s come back with a transfer error. `xhci.c` is
+missing two things a SuperSpeed device needs:
+
+1. **Endpoint companion descriptors** (type `0x30`). `bMaxBurst` has to reach
+   the endpoint context's Max Burst Size; today it is left at 0.
+2. **Error recovery.** After a transfer error the endpoint is halted in the
+   CONTROLLER, and the spec's way out is `Reset Endpoint` followed by
+   `Set TR Dequeue Pointer`. `usbmsc`'s `clear_halt()` sends the USB-level
+   CLEAR_FEATURE, which the device hears and the host controller does not — so
+   the ring stays wedged and every later transfer on that endpoint fails.
+
+The symptom is distinctive: the first `READ(10)` works, a later one does not,
+and two builds with identical logic behave differently. Fix both, confirm in
+QEMU, confirm on the ZimaBlade (a desktop, not a laptop — if it goes wrong
+there is no way back past ExitBootServices), then flip the opt-in.
 
 ## Stability
 
