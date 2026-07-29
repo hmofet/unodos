@@ -69,6 +69,38 @@ device inherits `is_boot` — which the storage safety gate needs, because
 The answer is computed once while attached and latched; every read after EBS is
 the cached value.
 
+## Two things the native stack cannot reach
+
+Both preflights enforce these, and both were learned the hard way:
+
+- **Anything behind a hub.** `xhci.c` enumerates ROOT-HUB PORTS ONLY; there is
+  no hub driver. The firmware will happily report a keyboard or a stick on an
+  external hub that we could never claim. Device paths carry one `USB()` node
+  per tier, so `depth == 1` is the test.
+- **Anything not on an xHCI function.** `usbmsc` and `usbhid` ride `xhci.c`
+  alone, so an EHCI companion (class `0C`/`03`, prog-if `20`) does not count.
+
+## Input: the gate that could not be satisfied
+
+`native_kbd_for_detach()` refuses to leave the firmware without a native
+keyboard - the shell is keyboard-driven and firmware ConIn dies with EBS. But
+`uno_usb_hid_kbd_present()` only becomes true once `xhci.c` owns the
+controller, and `xhci.c` only takes the controller *after* ExitBootServices.
+On a machine whose only keyboard is USB that is unsatisfiable: no detach until
+the keyboard exists, no keyboard until the detach. **Every desktop with
+USB-only input was permanently attached** - which the ZimaBlade demonstrated on
+2026-07-29 (`detached: 0`, `ps2 kbd=0`, `i2c-hid present=0`, `usb-hid kbd=0`,
+with a Logitech receiver plugged in).
+
+`uno_usbboot_hid_kbd()` breaks the cycle the same way the boot volume does: a
+HID interface with the **boot subclass** (`03`/`01`), protocol `01` for a
+keyboard or `02` for a mouse, on a root-hub port of an xHCI controller, is
+exactly what `uno_usb_hid_init()` claims at detach. Boot subclass matters
+because the native driver speaks boot protocol and nothing else.
+
+A debug boot log now prints the verdict, because the bound counts never could:
+`usb-hid preflight: kbd=1 ptr=0 (USB boot keyboard on an xHCI root port)`.
+
 ## usbmsc: Bulk-Only Transport
 
 `usbmsc.c` is CBW/CSW framing plus INQUIRY, TEST UNIT READY, READ CAPACITY(10),
