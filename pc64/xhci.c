@@ -38,6 +38,7 @@ int uno_usb_bulk_in_poll(int dev) { (void)dev; return -1; }
 /* detach the firmware's USB driver from this controller first (uefi_main) */
 int uno_pc64_pci_disconnect(int bus, int dev, int fn);
 int uno_pc64_detached(void);
+void uno_pc64_delay_ms(int ms);   /* TSC-backed once detached - a real ms */
 
 typedef unsigned char  u8;
 typedef unsigned short u16;
@@ -102,6 +103,9 @@ typedef struct { u64 param; u32 status; u32 control; } __attribute__((packed)) t
 #define TR_ENABLE_SLOT 9
 #define TR_ADDRESS_DEV 11
 #define TR_CONFIG_EP   12
+#define TR_RESET_EP    14      /* endpoint Halted -> Stopped                 */
+#define TR_STOP_EP     15      /* abort whatever is running on the ring      */
+#define TR_SET_TR_DEQ  16      /* re-point the transfer ring's dequeue cursor */
 #define TR_NOOP_CMD    23
 #define TR_XFER_EVENT  32
 #define TR_CMD_COMPLETE 33
@@ -178,6 +182,7 @@ static void wr32(volatile u8 *b, u32 o, u32 v) { *(volatile u32 *)(b+o)=v; }
 static u64 rd64(volatile u8 *b, u32 o) { return *(volatile u64 *)(b+o); }
 static void wr64(volatile u8 *b, u32 o, u64 v) { *(volatile u64 *)(b+o)=v; }
 static void spin(volatile int n){ while(n-->0) __asm__ volatile(""); }
+static void mdelay(int ms);
 
 /* find the xHCI controller: PCI class 0x0C, subclass 0x03, prog-if 0x30 */
 static int find_xhci(pci_dev *out)
@@ -197,7 +202,15 @@ static int find_xhci(pci_dev *out)
 }
 
 /* poll the event ring for the next event whose cycle matches our consumer
- * state; copy it out. Returns 1 if an event arrived, 0 on timeout. */
+ * state; copy it out. Returns 1 if an event arrived, 0 on timeout.
+ *
+ * `budget` is a SPIN COUNT, not a duration, which makes it a poor deadline:
+ * how long 5,000,000 iterations of this loop actually take depends on the
+ * compiler's optimisation level and the machine. That is not academic - it is
+ * why a USB mass-storage read completed in a debug build and timed out in a
+ * production build of the same source, the debug build's slacker code
+ * accidentally granting several times the wall-clock patience. Use it for
+ * "check the ring", and poll_event_ms() below for anything with a deadline. */
 static int poll_event(trb_t *out, int budget)
 {
     while (budget-- > 0) {
@@ -210,6 +223,27 @@ static int poll_event(trb_t *out, int budget)
             return 1;
         }
         spin(200);
+    }
+    return 0;
+}
+
+/* ...the same wait, expressed in milliseconds.
+ *
+ * A device gets a real deadline: a flash stick servicing a READ(10) can take
+ * tens of milliseconds, and an emulated one backed by a host file can take
+ * longer still. Timing out early is worse than waiting - the transfer is
+ * STILL RUNNING, so its completion arrives later and lands in whoever polls
+ * next, and the endpoint has to be torn down to get back in step. */
+static int poll_event_ms(trb_t *out, int ms)
+{
+    int t;
+    for (t = 0; t <= ms; t++) {
+        if (poll_event(out, 64)) return 1;      /* one sweep of the ring */
+        /* uno_pc64_delay_ms, not the local mdelay(): mdelay is a calibrated
+         * spin whose real duration depends on the optimiser, which is the very
+         * thing that made this driver's deadlines fictional. This one is TSC-
+         * backed, so "5 seconds" means five seconds in every build. */
+        uno_pc64_delay_ms(1);
     }
     return 0;
 }
@@ -233,7 +267,7 @@ static int run_command(u64 param, u32 control, int *slot_out)
     wr32(g_db, 0, 0);                        /* doorbell 0 = command ring */
     { int strays = 0;                        /* non-matching events consumed */
     for (;;) {
-        if (!poll_event(&ev, 2000000)) return 0;
+        if (!poll_event_ms(&ev, 1000)) return 0;   /* command completion: 1 s */
         /* only OUR command's completion (match the TRB pointer) - skip stale or
          * other events so a leftover completion can't be mistaken for this one */
         if (TRB_GET_TYPE(ev.control) == TR_CMD_COMPLETE && ev.param == mytrb) {
@@ -260,6 +294,7 @@ static void xd_i(int v){ char b[12]; int i=0; unsigned u; if(v<0){xd_c('-');u=(u
 static void xd_h(unsigned v){ const char *h="0123456789abcdef"; int i; xd("0x"); for(i=28;i>=0;i-=4) xd_c(h[(v>>i)&0xF]); }
 #else
 #define xd(s)   ((void)0)
+#define xd_c(c) ((void)0)
 #define xd_i(v) ((void)0)
 #define xd_h(v) ((void)0)
 #endif
@@ -313,15 +348,16 @@ static int route_event(const trb_t *ev)
     return 1;
 }
 
-/* wait for the next transfer event; returns the completion code (1/13 = ok),
- * fills the residual (untransferred bytes of the last TRB). -1 on timeout.
- * Events that belong to outstanding async TRBs are stashed, not returned. */
-static int poll_xfer(int *residual, int budget)
+/* wait up to `ms` milliseconds for the next transfer event; returns the
+ * completion code (1/13 = ok), fills the residual (untransferred bytes of the
+ * last TRB). -1 on timeout. Events that belong to outstanding async TRBs are
+ * stashed, not returned. */
+static int poll_xfer(int *residual, int ms)
 {
     trb_t ev;
     int strays = 0;                          /* non-matching events consumed */
     for (;;) {
-        if (!poll_event(&ev, budget)) return -1;
+        if (!poll_event_ms(&ev, ms)) return -1;
         if (TRB_GET_TYPE(ev.control) != TR_XFER_EVENT) {
             if (++strays > 4096) return -1;   /* PSC storm keeps the ring full */
             continue;
@@ -370,7 +406,7 @@ static int control_xfer(int di, u8 rt, u8 req, u16 val, u16 idx, u8 *buf, int le
     ep_push(g_ep0[di], &g_ep0_i[di], &g_ep0_cyc[di], EP0_RING_SZ,
             0, 0, TRB_TYPE(4) | ((len && in) ? 0 : (1u<<16)) | (1u<<5));  /* Status (opp dir, IOC) */
     wr32(g_db, slot*4, 1);                        /* slot doorbell, EP0 (DCI 1) */
-    cc = poll_xfer(&resid, 3000000);
+    cc = poll_xfer(&resid, 2000);        /* control: 2 s per USB spec-ish */
     g_dbg_cc = cc; g_dbg_resid = resid;
     return (cc == CC_SUCCESS || cc == 13) ? (len - resid) : -1;
 }
@@ -434,15 +470,68 @@ static void enumerate_port(int port)
     g_ndevs++;
 }
 
-/* ---- USB transfer API for class drivers (dev = index in the device list) -- */
-static void setup_ep(int di, int dci, int eptype, int mps, trb_t *ring)
+/* ---- USB transfer API for class drivers (dev = index in the device list) --
+ *
+ * Endpoint Context DW1: MaxPacketSize 31:16, MaxBurstSize 15:8, EPType 5:3,
+ * CErr 2:1. MaxBurstSize left at 0 is correct for Full/High Speed bulk and
+ * WRONG for SuperSpeed, where the device may burst up to bMaxBurst+1 packets
+ * per service opportunity - see ss_burst() below. */
+static void setup_ep(int di, int dci, int eptype, int mps, int burst, trb_t *ring)
 {
     int st = g_csz ? 64 : 32, off = (dci + 1) * st;
     u64 tr = (u64)(uintptr_t)ring | 1u;                    /* dequeue ptr + DCS */
-    ctx_wr(g_inctx[di], off+4, ((u32)mps<<16) | ((u32)eptype<<3) | (3u<<1)); /* MPS, type, CErr=3 */
+    if (burst < 0)   burst = 0;
+    if (burst > 15)  burst = 15;                           /* field is 8 bits, spec caps SS at 15 */
+    ctx_wr(g_inctx[di], off+4, ((u32)mps<<16) | ((u32)burst<<8)
+                             | ((u32)eptype<<3) | (3u<<1)); /* MPS, burst, type, CErr=3 */
     ctx_wr(g_inctx[di], off+8,  (u32)tr);
     ctx_wr(g_inctx[di], off+12, (u32)(tr>>32));
     ctx_wr(g_inctx[di], off+16, 1024);                     /* average TRB length */
+}
+
+/* ---- endpoint error recovery (xHCI 4.6.8) --------------------------------
+ * A transfer error (STALL, Babble, Transaction Error) leaves the endpoint
+ * HALTED inside the host controller, and the ring's dequeue cursor pointing at
+ * the TRB that died. Nothing on that endpoint will ever complete again until
+ * the controller is told to move on - so the class driver's CLEAR_FEATURE
+ * (which only the DEVICE hears) recovers half the problem and leaves the other
+ * half wedged. The symptom is exactly what a USB boot showed: the first
+ * READ(10) works, one errors, and every read after that fails forever.
+ *
+ * The sequence: Reset Endpoint (Halted -> Stopped), then Set TR Dequeue
+ * Pointer to restart the ring cleanly, then drain any event the dead transfer
+ * left behind so the NEXT transfer doesn't dequeue it and believe it.
+ *
+ * After a TIMEOUT the transfer may still be running, so it takes Stop Endpoint
+ * first - resetting a running endpoint is a context-state error, and the TRB
+ * would complete later into someone else's poll. */
+static void ep_recover(int di, int dci, trb_t *ring, int *enq, int *cyc, int timed_out)
+{
+    int slot = g_devs[di].slot, i;
+    u64 deq;
+    trb_t ev;
+    if (!slot || !dci) return;
+    /* completion codes are ignored throughout: "the endpoint was not in the
+     * state I assumed" is not a reason to leave it wedged. */
+    if (timed_out)
+        run_command(0, TRB_TYPE(TR_STOP_EP)  | ((u32)dci<<16) | ((u32)slot<<24), 0);
+    else
+        run_command(0, TRB_TYPE(TR_RESET_EP) | ((u32)dci<<16) | ((u32)slot<<24), 0);
+
+    for (i = 0; i < BULK_RING_SZ; i++) { ring[i].param = 0; ring[i].status = 0;
+                                         ring[i].control = 0; }
+    *enq = 0; *cyc = 1;
+    deq = (u64)(uintptr_t)ring | 1u;                        /* new cursor + DCS */
+    run_command(deq, TRB_TYPE(TR_SET_TR_DEQ) | ((u32)dci<<16) | ((u32)slot<<24), 0);
+
+    /* A transfer event for the TRB we just abandoned may still be queued.
+     * Leaving it there hands the next caller a completion for a transfer that
+     * no longer exists - the same class of lie the CSW tag check catches one
+     * layer up in usbmsc. */
+    for (i = 0; i < EVT_RING_SZ; i++) {
+        if (!poll_event(&ev, 2000)) break;
+        if (TRB_GET_TYPE(ev.control) == TR_XFER_EVENT) route_event(&ev);
+    }
 }
 
 int uno_usb_control(int dev, unsigned char rt, unsigned char req,
@@ -456,11 +545,52 @@ int uno_usb_get_config(int dev, void *buf, int len)
 int uno_usb_set_config(int dev, int cfg)
 { return uno_usb_control(dev, 0x00, 9, (unsigned short)cfg, 0, 0, 0); } /* SET_CONFIGURATION */
 
+/* bMaxBurst for one endpoint, from its SuperSpeed Endpoint Companion.
+ *
+ * A SuperSpeed device's config descriptor puts a companion descriptor (type
+ * 0x30) immediately after each endpoint descriptor, and its bMaxBurst says how
+ * many packets beyond the first the device may send per service opportunity.
+ * The host controller has to be told, or it services one packet where the
+ * device sends several and the transfer errors out. A 1024-byte bulk max
+ * packet is the tell that a device came up SuperSpeed.
+ *
+ * Done here rather than through the setup_bulk signature because burst is a
+ * property of the device, not of the class driver's intent - every caller
+ * (mass storage, the two USB NICs) gets it right without knowing it exists.
+ * Full/High Speed devices have no companion, and 0 is the correct answer. */
+static int ss_burst(int di, int ep_addr)
+{
+    static u8 cfg[512];
+    int n, total, i, last_ep = -1;
+    if (di < 0 || di >= g_ndevs || g_devs[di].speed != 4) return 0;
+    n = uno_usb_get_config(di, cfg, (int)sizeof cfg);
+    if (n < 9) return 0;
+    total = cfg[2] | (cfg[3] << 8);
+    if (total > n) total = n;
+    for (i = 0; i + 2 <= total; ) {
+        int len = cfg[i], type = cfg[i+1];
+        if (len < 2) break;
+        if (type == 0x05 && i + 3 <= total)            /* ENDPOINT            */
+            last_ep = cfg[i+2];
+        else if (type == 0x30 && i + 3 <= total &&     /* SS EP COMPANION     */
+                 last_ep == (ep_addr & 0xFF))
+            return cfg[i+2];                           /* bMaxBurst           */
+        i += len;
+    }
+    return 0;
+}
+
 int uno_usb_setup_bulk(int dev, int in_addr, int out_addr, int in_mps, int out_mps)
 {
-    int di = dev, slot, in_dci, out_dci, maxdci, st, i, cc;
+    int di = dev, slot, in_dci, out_dci, maxdci, st, i, cc, in_burst, out_burst;
     u32 sdw0, sdw1;
     if (dev < 0 || dev >= g_ndevs) return -1;
+    /* Ask the device about itself FIRST. ss_burst() runs control transfers, and
+     * a control transfer in the middle of building the input context - after
+     * the rings have been reset but before Configure Endpoint - is a transfer
+     * issued against half-configured state. Do the talking, then the setup. */
+    in_burst  = ss_burst(dev, in_addr);
+    out_burst = ss_burst(dev, out_addr);
     slot = g_devs[di].slot;
     in_dci  = (in_addr  & 0xF) * 2 + 1;                    /* IN  endpoint DCI */
     out_dci = (out_addr & 0xF) * 2 + 0;                    /* OUT endpoint DCI */
@@ -482,14 +612,21 @@ int uno_usb_setup_bulk(int dev, int in_addr, int out_addr, int in_mps, int out_m
         g_bout[di][i].param=0; g_bout[di][i].status=0; g_bout[di][i].control=0;
     }
     g_bin_i[di]=0; g_bin_cyc[di]=1; g_bout_i[di]=0; g_bout_cyc[di]=1;
-    setup_ep(di, in_dci,  6 /*Bulk In*/,  in_mps,  g_bin[di]);
-    setup_ep(di, out_dci, 2 /*Bulk Out*/, out_mps, g_bout[di]);
+    xd("[xhci] bulk ep speed="); xd_i(g_devs[di].speed);
+    xd(" mps="); xd_i(in_mps); xd(" burst="); xd_i(in_burst); xd_c(10);
+    setup_ep(di, in_dci,  6 /*Bulk In*/,  in_mps,  in_burst,  g_bin[di]);
+    setup_ep(di, out_dci, 2 /*Bulk Out*/, out_mps, out_burst, g_bout[di]);
     cc = run_command((u64)(uintptr_t)g_inctx[di], TRB_TYPE(TR_CONFIG_EP) | ((u32)slot<<24), 0);
     if (cc != CC_SUCCESS) return -1;
     g_bin_dci[di] = in_dci; g_bout_dci[di] = out_dci;
     return 0;
 }
 
+/* A bulk transfer that ends in an error must not just be reported to the
+ * caller - the endpoint is halted in the controller and the ring cursor is
+ * parked on the dead TRB, so without recovery the NEXT transfer on this
+ * endpoint fails too, and every one after it. Recover before returning, so a
+ * caller's retry has something working to retry on. */
 int uno_usb_bulk_out(int dev, void *data, int len)
 {
     int resid = 0, cc;
@@ -497,8 +634,11 @@ int uno_usb_bulk_out(int dev, void *data, int len)
     ep_push(g_bout[dev], &g_bout_i[dev], &g_bout_cyc[dev], BULK_RING_SZ,
             (u64)(uintptr_t)data, (u32)len, TRB_TYPE(TR_NORMAL) | (1u<<5)/*IOC*/);
     wr32(g_db, g_devs[dev].slot*4, g_bout_dci[dev]);
-    cc = poll_xfer(&resid, 5000000);
-    return (cc == CC_SUCCESS || cc == 13) ? (len - resid) : -1;
+    cc = poll_xfer(&resid, 5000);        /* bulk: a slow stick can take seconds */
+    if (cc == CC_SUCCESS || cc == 13) return len - resid;
+    ep_recover(dev, g_bout_dci[dev], g_bout[dev], &g_bout_i[dev], &g_bout_cyc[dev],
+               cc < 0);
+    return -1;
 }
 int uno_usb_bulk_in(int dev, void *data, int len)
 {
@@ -507,8 +647,19 @@ int uno_usb_bulk_in(int dev, void *data, int len)
     ep_push(g_bin[dev], &g_bin_i[dev], &g_bin_cyc[dev], BULK_RING_SZ,
             (u64)(uintptr_t)data, (u32)len, TRB_TYPE(TR_NORMAL) | (1u<<5)/*IOC*/ | (1u<<2)/*ISP*/);
     wr32(g_db, g_devs[dev].slot*4, g_bin_dci[dev]);
-    cc = poll_xfer(&resid, 5000000);
-    return (cc == CC_SUCCESS || cc == 13) ? (len - resid) : -1;
+    cc = poll_xfer(&resid, 5000);        /* bulk: a slow stick can take seconds */
+    if (cc == CC_SUCCESS || cc == 13) return len - resid;
+    /* cc -1 = we gave up waiting (endpoint state 1 = still Running means the
+     * device simply had not answered yet); anything else is a real error
+     * completion. The distinction is the whole diagnosis, so print both. */
+    xd("[xhci] bulk-in failed cc="); xd_i(cc); xd(" len="); xd_i(len);
+    { int st2 = g_csz ? 64 : 32;
+      u32 e0 = *(volatile u32 *)(g_devctx[dev] + (g_bin_dci[dev] + 1) * st2);
+      xd(" epstate="); xd_i((int)(e0 & 7)); }
+    xd_c(10);
+    ep_recover(dev, g_bin_dci[dev], g_bin[dev], &g_bin_i[dev], &g_bin_cyc[dev],
+               cc < 0);
+    return -1;
 }
 
 /* Async bulk-IN for the NIC recv path: arm posts one TRB and returns at once;
@@ -573,7 +724,7 @@ int uno_usb_setup_intr_in(int dev, int in_addr, int mps)
         g_bin[di][i].param=0; g_bin[di][i].status=0; g_bin[di][i].control=0;
     }
     g_bin_i[di]=0; g_bin_cyc[di]=1;
-    setup_ep(di, in_dci, 7 /*Interrupt In*/, mps, g_bin[di]);
+    setup_ep(di, in_dci, 7 /*Interrupt In*/, mps, ss_burst(di, in_addr), g_bin[di]);
     cc = run_command((u64)(uintptr_t)g_inctx[di], TRB_TYPE(TR_CONFIG_EP) | ((u32)slot<<24), 0);
     if (cc != CC_SUCCESS) return -1;
     g_intr_dci[di] = in_dci; g_intr_mps[di] = mps;
