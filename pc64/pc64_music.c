@@ -204,7 +204,7 @@ static void mu_relist(void)
     if (mu_sel >= mu_n) mu_sel = mu_n - 1;
     if (mu_sel < 0) mu_sel = 0;
     if (mu_w_list) { mu_w_list->items = mu_items; mu_w_list->nitems = mu_n;
-                     mu_w_list->sel = mu_sel; mu_w_list->value = mu_sel; }
+                     unoui_list_set_sel(mu_w_list, mu_sel); }
 }
 
 static void join_path(const char *name, char *out, int max)
@@ -298,7 +298,7 @@ static int mu_step(int dir)
         if (idx >= mu_n) idx = 0;
         if (mu_is_tunes() || !mu_e[idx].is_dir) {
             mu_sel = idx;
-            if (mu_w_list) { mu_w_list->sel = idx; mu_w_list->value = idx; }
+            if (mu_w_list) unoui_list_set_sel(mu_w_list, idx);
             return mu_play_index(idx);
         }
     }
@@ -485,11 +485,11 @@ int pc64_music_key(int uni, int scan)
     switch (scan) {
     case 0x01:                                            /* up              */
         if (mu_sel > 0) mu_sel--;
-        if (mu_w_list) { mu_w_list->sel = mu_sel; mu_w_list->value = mu_sel; }
+        if (mu_w_list) { unoui_list_set_sel(mu_w_list, mu_sel); }
         break;
     case 0x02:                                            /* down            */
         if (mu_sel < mu_n - 1) mu_sel++;
-        if (mu_w_list) { mu_w_list->sel = mu_sel; mu_w_list->value = mu_sel; }
+        if (mu_w_list) { unoui_list_set_sel(mu_w_list, mu_sel); }
         break;
     case 0x04:                                            /* left  - seek -5 */
     case 0x03: {                                          /* right - seek +5 */
