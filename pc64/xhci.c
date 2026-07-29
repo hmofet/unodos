@@ -556,8 +556,8 @@ static int hub_port_status(int di, int port, u32 *st_out)
     *st_out = (u32)b[0] | ((u32)b[1] << 8) | ((u32)b[2] << 16) | ((u32)b[3] << 24);
     return 1;
 }
-static void hub_set(int di, int port, int feat)
-{ (void)control_xfer(di, 0x23, 3, (u16)feat, (u16)port, 0, 0); }
+static int hub_set(int di, int port, int feat)
+{ return control_xfer(di, 0x23, 3, (u16)feat, (u16)port, 0, 0) >= 0; }
 static void hub_clear(int di, int port, int feat)
 { (void)control_xfer(di, 0x23, 1, (u16)feat, (u16)port, 0, 0); }
 
@@ -566,11 +566,24 @@ static void hub_scan(int hub_di)
     static u8 hd[16];
     int ss = (g_devs[hub_di].speed == 4);
     int nports, i, tier = g_dev_tier[hub_di] + 1;
-    int pwr_ms;
+    int pwr_ms, powered = 0;
 
     /* 5 nibbles of route string is the architectural limit, and a device on the
      * 5th tier still needs its own nibble - stop before authoring nonsense. */
     if (tier > 5) { xd("[xhci] hub too deep, stopping\n"); return; }
+
+    /* CONFIGURE THE HUB FIRST. A hub does not power its downstream ports until
+     * it is in the Configured state - port power is a property of the
+     * configuration, and in the Address state a class request to it may simply
+     * STALL. Skipping this is why the ZimaBlade came up detached with a dark
+     * mouse, a dead keyboard and no boot volume: every port behind the hub had
+     * no VBUS. QEMU's hub model powers up regardless and hid the omission
+     * completely, which is exactly the kind of thing only metal tells you. */
+    if (uno_usb_set_config(hub_di, 1) < 0) {
+        xd("[xhci] hub SET_CONFIGURATION failed\n");
+        return;
+    }
+    mdelay(5);
 
     if (control_xfer(hub_di, 0xA0, 6, (u16)((ss ? HUB_DESC_SS : HUB_DESC_USB2) << 8),
                      0, hd, ss ? 12 : 9) < 0) {
@@ -587,7 +600,11 @@ static void hub_scan(int hub_di)
     xd("[xhci] hub slot="); xd_i(g_devs[hub_di].slot);
     xd(" ports="); xd_i(nports); xd(" tier="); xd_i(tier); xd("\n");
 
-    for (i = 1; i <= nports; i++) hub_set(hub_di, i, PORT_POWER);
+    /* Powering the ports is the whole point of getting this far, so notice when
+     * it does not take rather than walking a set of dead ports afterwards. */
+    for (i = 1; i <= nports; i++) if (hub_set(hub_di, i, PORT_POWER)) powered++;
+    if (!powered) { xd("[xhci] hub powered no ports\n"); return; }
+    if (powered != nports) { xd("[xhci] hub powered only "); xd_i(powered); xd(" ports\n"); }
     mdelay(pwr_ms);
 
     for (i = 1; i <= nports; i++) {
