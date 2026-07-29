@@ -17,7 +17,7 @@ detaching and running on its own drivers is QEMU-verified end to end.
 
 Also, and not foreseen by this plan: **the GUI installer had to go native.**
 It refused outright when detached, so the moment a stick boot detaches, "boot
-the stick, run Install" — the only way UnoDOS gets onto a machine — would have
+the stick, run Install", the only way UnoDOS gets onto a machine, would have
 broken. It now routes through `unostorage_prepare_esp()` + `uno_fs_copytree()`
 when detached, the same pieces the URC `install <disk>` verb used. The lesson
 generalises: **anything gated on `uno_pc64_detached()` is a feature that

@@ -80,7 +80,7 @@ for the `Boot####` entry. A machine that has detached (ExitBootServices, see
 installer used to simply refuse.
 
 It no longer does. When `uno_pc64_detached()`, `uno_inst_scan()` /
-`uno_inst_install()` enumerate and write through the native stack instead —
+`uno_inst_install()` enumerate and write through the native stack instead -
 `blkdev` for disks, `unostorage_prepare_esp()` to author the GPT + ESP +
 FAT32, `uno_fs_copytree()` to clone the tree, `uno_fat_sync()` to persist. Same
 two target kinds, same UI, same safety rules (the boot disk is never a target;
@@ -91,8 +91,8 @@ after ExitBootServices (`uno_pc64_set_bootnext`), which the URC `install`
 verb already lives with. So a detached install boots by the removable-media
 fallback path `\EFI\BOOT\BOOTX64.EFI`:
 
-- **Whole-disk install** — fine. The disk has nothing else on it, and firmware
+- **Whole-disk install**, fine. The disk has nothing else on it, and firmware
   falls back to the removable path.
-- **ESP install alongside another OS** — the other OS's boot entry keeps
+- **ESP install alongside another OS**, the other OS's boot entry keeps
   winning. Pick UnoDOS from the firmware boot menu, or install while attached
   (a stick boot stays attached by default today).

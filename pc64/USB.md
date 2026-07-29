@@ -1,4 +1,4 @@
-# USB — subsystem contract (pc64)
+# USB, subsystem contract (pc64)
 
 Owner of `xhci.*`, `usbio.*`, `usbhid.*`, `usbmsc.*`, `usbboot.*`.
 Consumers: unofs (`uno_fat_native_eligible`), the detach path in `uefi_main.c`,
@@ -11,13 +11,13 @@ entirely on whether the firmware is still alive:
 
 | | attached (boot services live) | detached (post-ExitBootServices) |
 |---|---|---|
-| transport | `usbio.c` — `EFI_USB_IO_PROTOCOL` | `xhci.c` — `uno_usb_*` |
+| transport | `usbio.c`, `EFI_USB_IO_PROTOCOL` | `xhci.c`, `uno_usb_*` |
 | owns the controller | the firmware | us |
 | what it can do | control + bulk on interfaces the firmware enumerated | anything |
 
 `uno_xhci_init()` begins by calling `uno_pc64_pci_disconnect()`, which rips the
 firmware's USB stack off the controller. While attached that stack is carrying
-the USB boot volume and, on many laptops, the keyboard — so taking it is how
+the USB boot volume and, on many laptops, the keyboard, so taking it is how
 you lose the machine you are standing on. **`uno_xhci_init()` therefore returns
 0 unless `uno_pc64_detached()`.** It is also idempotent: three callers
 (`main()`, `usbmsc`, `usbhid`) each ask for the controller, and only the first
@@ -43,7 +43,7 @@ keyboards and mice.
 ## usbboot: is the USB boot volume reclaimable?
 
 Detach is a one-way door. On a USB-stick boot the system volume only exists on
-the far side if `usbmsc` can claim the stick — and that has to be decided
+the far side if `usbmsc` can claim the stick, and that has to be decided
 BEFORE the door closes, without taking the controller away from the firmware
 we are still standing on.
 
@@ -53,7 +53,7 @@ the firmware's live MSC driver is never disturbed):
 1. the boot image's device path contains a `MESSAGING/USB` node, and
 2. the build has the native stack (`uno_xhci_supported()`), and
 3. the first `PCI()` node of that path is a class `0C`/`03`/**prog-if `30`**
-   function — an xHCI. EHCI (prog-if `20`) is not something `usbmsc` can drive,
+   function, an xHCI. EHCI (prog-if `20`) is not something `usbmsc` can drive,
    so the prog-if check is not optional, and
 4. an `EFI_USB_IO` interface of class `08` / subclass `06` / protocol `50`
    (SCSI transparent, Bulk-Only Transport) with both bulk endpoints, that
@@ -63,22 +63,44 @@ the firmware's live MSC driver is never disturbed):
 Two unmatched BOT candidates is a guess, and a guess costs the machine, so it
 answers no. `uno_usbboot_target()` hands the winner's VID:PID to `usbmsc` so it
 binds *that* device rather than whichever enumerates first, and the bound
-device inherits `is_boot` — which the storage safety gate needs, because
+device inherits `is_boot`, which the storage safety gate needs, because
 `fw_scan()`'s own `is_boot` marking dies with the firmware.
 
 The answer is computed once while attached and latched; every read after EBS is
 the cached value.
 
-## Two things the native stack cannot reach
+## Hubs
 
-Both preflights enforce these, and both were learned the hard way:
+`xhci.c` walks hubs. It has to: the ZimaBlade has a **single USB port**, so a
+hub is not an accessory there, it is the only way to have a keyboard and a boot
+stick at the same time, and until the driver landed, both were unreachable and
+the machine could never detach.
 
-- **Anything behind a hub.** `xhci.c` enumerates ROOT-HUB PORTS ONLY; there is
-  no hub driver. The firmware will happily report a keyboard or a stick on an
-  external hub that we could never claim. Device paths carry one `USB()` node
-  per tier, so `depth == 1` is the test.
-- **Anything not on an xHCI function.** `usbmsc` and `usbhid` ride `xhci.c`
-  alone, so an EHCI companion (class `0C`/`03`, prog-if `20`) does not count.
+xHCI addresses a device by **where it is**, not by walking to it. The slot
+context carries the root-hub port the chain hangs off plus a 20-bit **Route
+String** of 4-bit port numbers, one nibble per tier. So addressing a device
+three hubs deep is the same command as one on a root port. The work is in the
+hub class (USB 2.0 §11.24): read the hub descriptor for `bNbrPorts`, power the
+ports and wait `bPwrOn2PwrGood`, then per connected port reset, wait for enable,
+read the speed out of the port status, and enumerate.
+
+Three things that are easy to miss and fatal to omit:
+
+- **The controller must be told a slot is a hub.** Set the Hub bit and Number
+  of Ports in its slot context (Configure Endpoint with only `A0`), or Address
+  Device for anything downstream is rejected, the controller will not route
+  through something it believes is an ordinary peripheral.
+- **Transaction Translators.** A low- or full-speed device behind a
+  high-speed hub is reached by split transactions, so the slot context needs TT
+  Hub Slot ID and TT Port Number. Without them the device answers nothing.
+  Devices deeper down inherit the TT of the hub that owns it.
+- **Five tiers is the architectural limit**, the route string is five nibbles.
+  Deeper than that cannot be addressed at all, so the preflights range-check
+  depth (1 = root port … 6 = five hubs up) rather than trusting it.
+
+The remaining limit both preflights still enforce: **anything not on an xHCI
+function**. `usbmsc` and `usbhid` ride `xhci.c` alone, so an EHCI companion
+(class `0C`/`03`, prog-if `20`) does not count.
 
 ## Input: the gate that could not be satisfied
 
@@ -104,7 +126,7 @@ A debug boot log now prints the verdict, because the bound counts never could:
 ## usbmsc: Bulk-Only Transport
 
 `usbmsc.c` is CBW/CSW framing plus INQUIRY, TEST UNIT READY, READ CAPACITY(10),
-READ(10), WRITE(10), REQUEST SENSE — the subset every flash stick implements.
+READ(10), WRITE(10), REQUEST SENSE, the subset every flash stick implements.
 512-byte logical blocks only; anything else is rejected loudly. It registers
 with `blkdev` as a native backend, so `uno_blk_detach()` picks it up alongside
 AHCI/NVMe/SDHCI, and it binds the device `usbboot` identified rather than
@@ -135,7 +157,7 @@ presented as one baffling symptom: a read that worked in a debug build and
 timed out in a production build of the same source.
 
 **Deadlines must be durations, not spin counts.** `poll_xfer`'s old
-`5000000` was loop iterations, so the real wait depended on the optimiser —
+`5000000` was loop iterations, so the real wait depended on the optimiser -
 the debug build accidentally granted several times the patience. A 512-byte
 `READ(10)` needs the device to do actual I/O; production gave up before the
 answer arrived, and the completed event was sitting in the ring moments later.
@@ -146,12 +168,12 @@ bulk 5 s, commands 1 s. **If you add a wait to this driver, use real time.**
 **A transfer error halts the endpoint IN THE CONTROLLER.** `clear_halt()`'s
 USB-level CLEAR_FEATURE is heard only by the device; the host controller keeps
 the endpoint Halted with the ring cursor parked on the dead TRB, so every
-later transfer fails too — one error, then the next CBW never goes out, then
+later transfer fails too, one error, then the next CBW never goes out, then
 nothing. `ep_recover()` runs the spec's sequence: **Reset Endpoint** (Halted →
 Stopped), **Set TR Dequeue Pointer** to restart the ring, then drain the
 abandoned transfer's event so the next caller is not handed a completion for a
 transfer that no longer exists. After a *timeout* it uses **Stop Endpoint**
-first — there the transfer may still be running, and resetting a running
+first, there the transfer may still be running, and resetting a running
 endpoint is a context-state error.
 
 **SuperSpeed needs Max Burst Size.** `ss_burst()` reads `bMaxBurst` from the SS
@@ -159,7 +181,7 @@ Endpoint Companion descriptor (type `0x30`, immediately after each endpoint
 descriptor) and programs it into the endpoint context. Zero is right for
 Full/High Speed bulk and wrong for SuperSpeed. It is done inside the driver
 rather than through the `setup_bulk` signature because burst is a property of
-the device, not of the class driver's intent — and the descriptor fetch runs
+the device, not of the class driver's intent, and the descriptor fetch runs
 *before* any controller state is touched, since a control transfer half way
 through building an input context is a transfer against a half-configured
 endpoint.
@@ -168,7 +190,7 @@ Diagnosing the next one: on failure the driver prints `cc` and the endpoint
 state. `cc=-1` with `epstate=1` (Running) means we gave up waiting and the
 device had simply not answered; any other `cc` is a real error completion.
 
-**Still opt-in.** QEMU is green — 5 of 5 USB-storage boots detach with the
+**Still opt-in.** QEMU is green, 5 of 5 USB-storage boots detach with the
 system volume intact, plus `install_test` (both phases) and `storage_test`
 read/write, all post-detach. The remaining gate is metal: the ZimaBlade, a
 desktop rather than a laptop, because past ExitBootServices there is no way
@@ -181,6 +203,6 @@ API, `uno_usbio_*`, `uno_usbmsc_supported/init`, `uno_usbboot_*`.
 
 Changelog:
 
-- **2026-07-29** — `uno_xhci_init()` gained the attached-mode refusal and
+- **2026-07-29**, `uno_xhci_init()` gained the attached-mode refusal and
   idempotence; `usbboot.*` added; `uno_usbio_iface()` / `uno_usbio_devpath()`
   added; `-DUNO_XHCI` now on by default.
