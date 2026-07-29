@@ -495,6 +495,22 @@ static int firmware_volume(void)
     return -1;
 }
 
+/* The volume that actually holds the firmware image. This used to be assumed
+ * to be the volume whose config file carries the credentials, which conflated
+ * two unrelated questions - WHERE THE CREDS ARE and WHERE THE FIRMWARE IS - and
+ * meant a stick with firmware but no WIFI.CFG could not bring the radio up at
+ * all, so the Control Panel's Scan found nothing on a perfectly good card. */
+static int fw_volume(void)
+{
+    int n = uno_fs_volumes(), i;
+    for (i = 0; i < n; i++)
+        if (uno_fs_kind(i) == 2 || uno_fs_kind(i) == 1) {   /* firmware SFS / native FAT */
+            if (uno_fs_size(i, g_fwfile) > 0) return i;
+            if (uno_fs_size(i, g_fwfile + 9) > 0) return i;  /* flat root: no FIRMWARE\ */
+        }
+    return -1;
+}
+
 /* =====================================================================
  * 3. DMA arena (identity mapped: phys == virt)
  * ===================================================================== */
@@ -3771,19 +3787,35 @@ uno_nic_t *iwl_nic(void)
     uno_dbg_net_trace("wifi: card pci=%04x fam=%d gen2=%d fw=%s",
                       g_devid, g_family, g_gen2, g_fwfile);
 
-    vol = firmware_volume();
+    /* Credentials: needed to JOIN, NOT to bring the radio up and scan. The GUI
+     * scans first and asks for the password afterwards, which is the whole
+     * point of the Control Panel's network pane - so a missing WIFI.CFG must
+     * not stop the radio (metal: "no networks found" on a box with a working
+     * card and no config file). g_no_join marks exactly that bring-up. */
+    {
+        int cred_vol = firmware_volume();
+        if (cred_vol >= 0 && read_config(cred_vol) >= 0) {
+            uno_dbg_net_trace("wifi: creds from %s: ssid=\"%s\" psk_len=%d",
+                              g_cfgname, g_cfg_ssid, (int)strlen(g_cfg_psk));
+        } else if (!g_no_join) {
+            st_set(cred_vol < 0 ? "WiFi: no WIFI.CFG on the ESP"
+                                : "WiFi: WIFI.CFG has no ssid=");
+            uno_dbg_net_trace("wifi: FAIL no usable credentials (cfg vol %d) - "
+                              "a boot join needs ssid=", cred_vol);
+            return 0;
+        } else {
+            g_cfg_ssid[0] = g_cfg_psk[0] = 0;
+            uno_dbg_net_trace("wifi: no stored credentials - radio-only bring-up "
+                              "(scan / GUI join)");
+        }
+    }
+
+    vol = fw_volume();
     if (vol < 0) {
-        st_set("WiFi: no WIFI.CFG on the ESP");
-        uno_dbg_net_trace("wifi: FAIL no WIFI.CFG/WIFI.TXT on any volume - no credentials");
+        st_set("WiFi: firmware not found ("); st_cat(g_fwfile); st_cat(")");
+        uno_dbg_net_trace("wifi: FAIL %s on no volume (uno-wifi-fw.py stages it)", g_fwfile);
         return 0;
     }
-    if (read_config(vol) < 0) {
-        st_set("WiFi: WIFI.CFG has no ssid=");
-        uno_dbg_net_trace("wifi: FAIL %s (vol %d) has no ssid= line", g_cfgname, vol);
-        return 0;
-    }
-    uno_dbg_net_trace("wifi: creds from %s: ssid=\"%s\" psk_len=%d",
-                      g_cfgname, g_cfg_ssid, (int)strlen(g_cfg_psk));
 
     /* read the .ucode image (strip the FIRMWARE\ prefix for the FAT reader if
        it exposes only a flat root; try both) */
@@ -3914,7 +3946,10 @@ uno_nic_t *iwl_nic(void)
 
     /* connect (skipped when the caller only wanted the radio up - the GUI scan
      * path, which picks its own network afterwards) */
-    if (g_no_join) return 0;
+    if (g_no_join) {
+        st_set("WiFi: radio up - press Scan to list networks");
+        return 0;
+    }
     if (find_and_join() < 0) { st_set("WiFi: join failed"); uno_dbg_net_trace("wifi: FAIL join"); return 0; }
 
     nic_publish();
