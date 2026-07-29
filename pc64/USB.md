@@ -84,8 +84,15 @@ hub class (USB 2.0 §11.24): read the hub descriptor for `bNbrPorts`, power the
 ports and wait `bPwrOn2PwrGood`, then per connected port reset, wait for enable,
 read the speed out of the port status, and enumerate.
 
-Three things that are easy to miss and fatal to omit:
+Four things that are easy to miss and fatal to omit:
 
+- **CONFIGURE THE HUB FIRST.** A hub does not power its downstream ports until
+  it is in the Configured state, and in the Address state a class request to it
+  may simply STALL. Skip `SET_CONFIGURATION` and every port behind the hub
+  stays dark: no keyboard, no mouse, no boot volume. **QEMU's hub model powers
+  up regardless and hides this completely** (three green runs on a driver that
+  could never have worked on silicon), so treat a green QEMU hub result as
+  necessary and nowhere near sufficient.
 - **The controller must be told a slot is a hub.** Set the Hub bit and Number
   of Ports in its slot context (Configure Endpoint with only `A0`), or Address
   Device for anything downstream is rejected, the controller will not route
