@@ -1903,14 +1903,14 @@ or give SPECTEST a static ui).
 
 ---
 
-## 2026-07-29 — CLAIM (usb stack) + two cross-lane notes: USB-booted machines now detach
+## 2026-07-29, CLAIM (usb stack) + two cross-lane notes: USB-booted machines now detach
 
 **CLAIM:** taking the `usb stack` lane (new AGENTS.md registry row: `xhci.*`,
 `usbio.*`, `usbhid.*`, `usbmsc.*`, `usbboot.*`; contract in `pc64/USB.md`),
 slice branch `detach-usb`. This is Phase A of `docs/DETACH-COMPLETION-PLAN.md`.
 
 **What landed.** `-DUNO_XHCI` now ships in every build, and a USB-stick boot
-CAN detach — verified end to end in QEMU (`-device usb-storage` over
+CAN detach, verified end to end in QEMU (`-device usb-storage` over
 `qemu-xhci`, real GPT+FAT32 image via `tools/mkuefi.py`,
 `tools/diskboot_test.py`): `usbmsc: BOT device up, 262144 sectors, boot=1`,
 `detached: ExitBootServices done`, desktop alive on our own drivers, no strand.
@@ -1925,13 +1925,13 @@ unchanged.** That green run reproduces only sometimes. Chasing it down: QEMU's
 `usb-storage` enumerates as SuperSpeed (bulk max packet 1024) and some
 `READ(10)`s come back with a transfer error. `xhci.c` has neither SS
 endpoint-companion burst sizing nor xHCI **Reset Endpoint / Set TR Dequeue
-Pointer** recovery, so one failed transfer wedges the endpoint — first read
+Pointer** recovery, so one failed transfer wedges the endpoint, first read
 fine, a later one not, and past ExitBootServices there is no way back. Two
 identical-logic builds behaved differently, which is what put me onto it.
 
 Fixed properly along the way (all in-tree now, all correct regardless):
 BOT DMA no longer targets the stack (`g_cbw`/`g_csw`/`g_bounce`, 64-byte
-aligned — same lesson as the M1 AHCI/IoAlign buffers); `bot_cmd()` validates
+aligned, same lesson as the M1 AHCI/IoAlign buffers); `bot_cmd()` validates
 the CSW **tag** and drains a desynchronised pipe instead of handing the caller
 the previous command's data; a short or failed data phase is no longer reported
 as success (that is how a read of nothing became 512 bytes of zeros that FAT
@@ -1956,7 +1956,7 @@ the AHCI/NVMe/SDHCI arms are byte-for-byte the same behaviour.
 `build.sh` disables detach in the debug build "because the native stack has no
 USB mass-storage driver, so ExitBootServices on a USB-booted system strands its
 own boot volume" (finding F8). The driver now exists, but per the opt-in above
-the reason to keep the default is the xHCI gap, not the missing driver — worth
+the reason to keep the default is the xHCI gap, not the missing driver, worth
 rewording when you next touch it, and worth revisiting entirely once the SS
 work lands. `DETACH.CFG` (`off` / `nousb` / `usb`) is a no-rebuild override in
 either direction, so a harness stick no longer needs a special build to pick a
@@ -1969,8 +1969,8 @@ posture.
 now a thing that happens on a stick boot, and "boot the stick, run Install" is
 how UnoDOS gets onto a machine at all, that refusal would have been a
 functional regression. The detached path routes through the same native pieces
-the URC `install <disk>` verb already used — `unostorage_prepare_esp()`,
-`uno_fs_copytree()`, `uno_fat_sync()` — plus a native version of the
+the URC `install <disk>` verb already used, `unostorage_prepare_esp()`,
+`uno_fs_copytree()`, `uno_fat_sync()`, plus a native version of the
 file-level ESP install. `tools/install_test.py` passes both phases.
 
 One real gap, and it is the same one URC has: no NVRAM `Boot####` entry, since
@@ -1983,19 +1983,19 @@ something to slip in here.
 ### Also fixed in passing (detach lane)
 
 `uno_pc64_pci_disconnect()` called `gBS->DisconnectController` unconditionally.
-Post-EBS that is freed memory — it showed up as `#UD` at a stale RIP with
+Post-EBS that is freed memory, it showed up as `#UD` at a stale RIP with
 `uno_xhci_init+0x118` on the stack the first time xHCI came up detached. It now
 returns 0 when detached, like `uno_pc64_boot_dp()` already did.
 
 ---
 
-## 2026-07-29 (later) — usb stack: the xHCI gap is closed; QEMU green, metal is the last gate
+## 2026-07-29 (later), usb stack: the xHCI gap is closed; QEMU green, metal is the last gate
 
 Follow-up to the claim above. The three faults behind the SuperSpeed
 flakiness are fixed in `xhci.c`:
 
 1. **Deadlines were spin counts.** `poll_xfer`'s `5000000` was loop
-   iterations, so the real wait depended on the optimiser — which is the
+   iterations, so the real wait depended on the optimiser, which is the
    entire "debug build works, production build doesn't" mystery. A 512-byte
    `READ(10)` needs the device to do real I/O; production gave up first, and
    the successful event was in the ring moments later. `poll_event_ms()` now
@@ -2016,18 +2016,18 @@ passes both suites unchanged.
 
 **Still opt-in**, deliberately. QEMU exercised an emulated SuperSpeed stick;
 metal is a different device, and past ExitBootServices there is no way back.
-The flip wants a ZimaBlade run (desktop, not a laptop, per the plan) — that is
+The flip wants a ZimaBlade run (desktop, not a laptop, per the plan), that is
 the only thing left between here and USB-boot detach on by default.
 
 ---
 
-## 2026-07-29 (metal) — ZimaBlade run 1: the detach gate could not be satisfied on a USB-only desktop
+## 2026-07-29 (metal), ZimaBlade run 1: the detach gate could not be satisfied on a USB-only desktop
 
 First real metal boot of the USB-detach work. Result: **the box declined to
 detach**, and the reason was not storage.
 
 `BOOTLOG.TXT` from the stick (build `debug-209191b-20260729-1449`, the right
-one — run 0 booted the internal disk, which is the documented trap on this box,
+one, run 0 booted the internal disk, which is the documented trap on this box,
 so always check the build id before reading anything into a result):
 
 ```
@@ -2040,7 +2040,7 @@ usb-hid: kbd=0 mouse=0
 
 `detach_blocked=0` identifies the gate: every refusal except the keyboard one
 sets it. The ZimaBlade's only keyboard is USB (`046d:c548 class 03/01`), and
-USB HID is a detached-mode source by construction — so the gate wanted a
+USB HID is a detached-mode source by construction, so the gate wanted a
 keyboard that could not exist until the gate opened. Fixed by predicting it
 from the firmware's descriptors, same pattern as the boot volume.
 
@@ -2055,11 +2055,43 @@ That box's earlier internal-disk boot ran the wired test to completion **while
 firmware-attached**: DHCP lease in 1042 ms, three gateway pings, DNS resolved,
 `== net test done: WIRED PASS ==`. That is evidence against the standing theory
 that r8169 RX breaks because a stick-booted box stays attached and the
-firmware's UNDI driver fights ours — attached alone is clearly not sufficient
+firmware's UNDI driver fights ours, attached alone is clearly not sufficient
 to break it. Not conclusive for the stick-boot case (different boot medium),
 but the hypothesis is weaker than it was.
 
 ### Unrelated but real: the ZimaBlade's clock is about a day slow
 
 It wrote files today stamped `2026-07-28 14:49`. CMOS battery, probably. It
-makes `BOOTS.TXT` timestamps untrustworthy for ordering runs — use the build id.
+makes `BOOTS.TXT` timestamps untrustworthy for ordering runs, use the build id.
+
+---
+
+## 2026-07-29 (metal, run 2) -> hub driver: the ZimaBlade has ONE USB port
+
+Run 2 dialled in over the bridge (`remote=` in DEBUG.CFG, which run 1 was
+missing) and answered for itself:
+
+```
+usbboot: hid kbd=0 ptr=0 (USB keyboard is behind a hub)
+usbboot: usb=1 bot=0 matched=0 ok=0 (boot stick is behind a hub)
+disks -> fw0 fw1 fw2 fw3          (firmware Block IO: still attached)
+```
+
+Both the keyboard AND the boot stick are behind one Realtek RTS5411
+(`0bda:0411` USB3 + `0bda:5411` USB2, one chip, two faces). Arin: the box has
+a **single USB port**, so the hub is not optional there.
+
+The hub-depth check added earlier the same day earned its keep immediately.
+Without it the storage preflight would have answered "the one BOT device is
+the boot stick, ok=1" and, had the keyboard gate passed, the box would have
+called ExitBootServices and only then discovered usbmsc could not reach its
+own boot volume. No way back from there.
+
+`xhci.c` now walks hubs (route string, hub slot-context Hub bit + port count,
+TT fields for low/full-speed behind a high-speed hub, five-tier limit), and
+the preflights range-check depth instead of refusing it. QEMU reproduces the
+ZimaBlade's shape exactly with `-device usb-hub` carrying both the stick and
+the keyboard: 3 of 3 detach clean.
+
+Next: the same stick back on the ZimaBlade. If it detaches there, the opt-in
+can be reconsidered.
