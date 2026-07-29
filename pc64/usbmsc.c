@@ -30,6 +30,8 @@ static int g_dev = -1;                 /* xHCI device index                  */
 static int g_ifnum;                    /* interface number (class requests)  */
 static int g_in_ep, g_out_ep;          /* bulk endpoint addresses            */
 static int g_bound;
+static const char *g_why = "not attempted";
+static const char *g_boot_why;         /* the targeted boot device's reason  */
 static u64 g_sectors;
 static u32 g_tag = 0x554D5343;         /* 'UMSC', incremented per command    */
 
@@ -41,16 +43,57 @@ static void clear_halt(int ep)
                     0 /*ENDPOINT_HALT*/, (u16)ep, 0, 0);
 }
 
+/* ---- bring-up trace ------------------------------------------------------
+ * Post-detach there is no console, no log file (the volume we would write it
+ * to is the one that just failed to come back) and no way to retry. On the
+ * bench that leaves exactly one channel: QEMU's debugcon, and a serial line on
+ * metal. Compiled out unless -DUNO_DBGCON, which is also the only build where
+ * touching port 0x402 is safe. */
+#ifdef UNO_DBGCON
+static void tr(const char *s)
+{
+    while (*s) { __asm__ volatile ("outb %0, %1" : : "a"((unsigned char)*s++), "Nd"((unsigned short)0x402)); }
+}
+static void tri(const char *s, long v)
+{
+    char b[24]; int i = 0, neg = v < 0;
+    unsigned long u = (unsigned long)(neg ? -v : v);
+    tr(s);
+    do { b[i++] = (char)('0' + (u % 10)); u /= 10; } while (u && i < 20);
+    if (neg) b[i++] = '-';
+    while (i) { char c = b[--i];
+        __asm__ volatile ("outb %0, %1" : : "a"((unsigned char)c), "Nd"((unsigned short)0x402)); }
+    tr("\n");
+}
+#else
+#define tr(s)      ((void)0)
+#define tri(s, v)  ((void)0)
+#endif
+
 /* ---- BOT plumbing --------------------------------------------------------- */
 #define CBW_SIG 0x43425355u
 #define CSW_SIG 0x53425355u
 
+/* DMA buffers, never the stack.
+ *
+ * xhci.c puts the caller's pointer straight into the TRB as the controller's
+ * DMA address, so every buffer handed to uno_usb_bulk_* is one the hardware
+ * writes to directly. A local array makes that a DMA into the firmware-
+ * provided stack, at whatever address and alignment the current build's frame
+ * layout happens to produce - which is how this worked in one build and hung
+ * in another with identical logic. Static, cache-line aligned, permanent.
+ * (Same lesson as the AHCI/IoAlign sector buffers in the M1 storage work.) */
+static __attribute__((aligned(64))) u8 g_cbw[31];
+static __attribute__((aligned(64))) u8 g_csw[13];
+#define MSC_CHUNK 64u                              /* sectors per transfer     */
+static __attribute__((aligned(64))) u8 g_bounce[MSC_CHUNK * 512];
+
 static int bot_cmd(const u8 *cb, int cblen, void *data, int dlen, int dir_in)
 {
-    u8 cbw[31], csw[13];
-    int n, tries;
+    u8 *cbw = g_cbw, *csw = g_csw;
+    int n = 0, tries, short_data = 0;
     u32 tag = ++g_tag;
-    memset(cbw, 0, sizeof cbw);
+    memset(cbw, 0, 31);
     cbw[0]='U'; cbw[1]='S'; cbw[2]='B'; cbw[3]='C';
     cbw[4]=(u8)tag; cbw[5]=(u8)(tag>>8); cbw[6]=(u8)(tag>>16); cbw[7]=(u8)(tag>>24);
     cbw[8]=(u8)dlen; cbw[9]=(u8)(dlen>>8); cbw[10]=(u8)(dlen>>16); cbw[11]=(u8)(dlen>>24);
@@ -59,20 +102,46 @@ static int bot_cmd(const u8 *cb, int cblen, void *data, int dlen, int dir_in)
     cbw[14] = (u8)cblen;
     memcpy(cbw + 15, cb, (size_t)cblen);
 
-    if (uno_usb_bulk_out(g_dev, cbw, 31) != 31) return -1;
+    if (uno_usb_bulk_out(g_dev, cbw, 31) != 31) { tri("usbmsc: CBW out failed, op=", cb[0]); return -1; }
     if (dlen > 0) {
-        if (dir_in) { if (uno_usb_bulk_in(g_dev, data, dlen) < 0) clear_halt(g_in_ep); }
-        else        { if (uno_usb_bulk_out(g_dev, data, dlen) != dlen) clear_halt(g_out_ep); }
+        /* the data phase rides the bounce too - callers pass FAT cache lines,
+         * SCSI sense arrays and whatever else, none of it DMA-fit by luck */
+        int got;
+        if (dlen > (int)sizeof g_bounce) return -1;
+        if (dir_in) {
+            got = uno_usb_bulk_in(g_dev, g_bounce, dlen);
+            if (got < dlen) { tri("usbmsc: short IN, op=", cb[0]); tri("  wanted=", dlen); tri("  got=", got); }
+            /* A short or failed data phase is NOT success. Falling through to
+             * the CSW here is how a read of nothing became 512 bytes of zeros
+             * that FAT then mounted as an empty volume. */
+            if (got < dlen) { clear_halt(g_in_ep); short_data = 1; }
+            if (got > 0)    memcpy(data, g_bounce, (size_t)got);
+        } else {
+            memcpy(g_bounce, data, (size_t)dlen);
+            got = uno_usb_bulk_out(g_dev, g_bounce, dlen);
+            if (got != dlen) { clear_halt(g_out_ep); short_data = 1; }
+        }
     }
-    /* CSW; if the data phase STALLed the IN endpoint the device parks the CSW
-     * behind the halt - clear it and retry once (the standard BOT recovery). */
+    /* CSW.  Two things go wrong here and both used to pass silently:
+     *   - the data phase STALLed, so the device parks the CSW behind the halt
+     *     (clear it and read again - the standard BOT recovery), and
+     *   - the CSW that arrives belongs to an EARLIER command. BOT tags every
+     *     command precisely so a desynchronised pipe can be detected, and
+     *     without the check a stale CSW makes this command "succeed" while the
+     *     caller reads whatever the previous one left in the buffer. Drain
+     *     until the tag matches, then continue. */
     for (tries = 0; tries < 2; tries++) {
         n = uno_usb_bulk_in(g_dev, csw, 13);
-        if (n == 13) break;
-        clear_halt(g_in_ep);
+        if (n != 13) { tri("usbmsc: CSW read n=", n); clear_halt(g_in_ep); continue; }
+        if ((u32)(csw[0]|(csw[1]<<8)|(csw[2]<<16)|((u32)csw[3]<<24)) != CSW_SIG)
+            continue;                              /* not a CSW at all: drain  */
+        if ((u32)(csw[4]|(csw[5]<<8)|(csw[6]<<16)|((u32)csw[7]<<24)) == tag)
+            break;                                 /* ours                     */
     }
     if (n != 13) return -1;
     if ((u32)(csw[0]|(csw[1]<<8)|(csw[2]<<16)|((u32)csw[3]<<24)) != CSW_SIG) return -1;
+    if ((u32)(csw[4]|(csw[5]<<8)|(csw[6]<<16)|((u32)csw[7]<<24)) != tag)     return -1;
+    if (csw[12] == 0 && short_data) return 1;      /* device says ok, we know better */
     return csw[12];                                /* 0 ok, 1 failed, 2 phase */
 }
 
@@ -111,8 +180,6 @@ static int scsi_read_capacity(u64 *sectors)
 }
 
 /* ---- blkdev backend -------------------------------------------------------- */
-#define MSC_CHUNK 64u                              /* sectors per transfer     */
-
 static int msc_rw(u64 lba, u32 n, void *buf, int write)
 {
     u8 *p = (u8 *)buf;
@@ -150,10 +217,10 @@ static int msc_write(uno_bdev *d, u64 lba, u32 n, const void *buf)
 static int find_bot_interface(int dev, int *ifnum, int *in_ep, int *out_ep,
                               int *in_mps, int *out_mps, int *cfgval)
 {
-    static u8 cfg[512];
+    static __attribute__((aligned(64))) u8 cfg[512];
     int n = uno_usb_get_config(dev, cfg, sizeof cfg);
     int total, i, in_msc = 0, got_in = 0, got_out = 0;
-    if (n < 9) return -1;
+    if (n < 9) return -2;                          /* descriptor fetch failed */
     *cfgval = cfg[5];
     total = cfg[2] | (cfg[3] << 8); if (total > (int)sizeof cfg) total = n;
     for (i = 0; i + 2 <= total; ) {
@@ -192,33 +259,58 @@ int uno_usbmsc_init(void)
     unsigned short want_vid = 0, want_pid = 0;
     int i, n, pass, targeted;
     if (g_bound) return 1;
-    if (!uno_xhci_init()) return 0;
+    if (!uno_xhci_init()) { g_why = "xHCI controller did not come up"; return 0; }
     targeted = uno_usbboot_target(&want_vid, &want_pid);
     n = uno_xhci_dev_count();
-    for (pass = targeted ? 0 : 1; pass < 2; pass++)
+    if (!n) { g_why = "xHCI enumerated no devices"; return 0; }
+    g_why = "no mass-storage device among the enumerated ones";
+    for (pass = targeted ? 0 : 1; pass < 2; pass++) {
         for (i = 0; i < n; i++) {
             const uno_usb_dev *d = uno_xhci_dev(i);
             if (pass == 0 && (!d || d->vendor != want_vid || d->product != want_pid))
                 continue;
             if (try_bind(i, pass == 0)) return 1;
         }
+        /* Keep the BOOT device's reason. Pass 1 walks every device including
+         * keyboards and hubs, whose "not mass storage" is true and useless -
+         * it must not overwrite the account of why the stick itself failed. */
+        if (pass == 0 && g_why) { g_boot_why = g_why; }
+    }
+    if (g_boot_why) g_why = g_boot_why;
     return 0;
 }
+
+#define FAIL(msg) do { g_why = (msg); return 0; } while (0)
 
 static int try_bind(int i, int want_boot)
 {
     int ifnum = 0, in_ep = 0, out_ep = 0, in_mps = 512, out_mps = 512, cfgval = 1;
-    if (find_bot_interface(i, &ifnum, &in_ep, &out_ep, &in_mps, &out_mps, &cfgval) < 0)
-        return 0;
+    int f = find_bot_interface(i, &ifnum, &in_ep, &out_ep, &in_mps, &out_mps, &cfgval);
+    if (f == -2) FAIL("GET_DESCRIPTOR(config) failed");
+    if (f <  0)  FAIL("no BOT interface in the config descriptor");
     g_dev = i; g_ifnum = ifnum;
-    if (uno_usb_set_config(g_dev, cfgval) < 0) return 0;
-    if (uno_usb_setup_bulk(g_dev, in_ep, out_ep, in_mps, out_mps) < 0) return 0;
+    if (uno_usb_set_config(g_dev, cfgval) < 0) FAIL("SET_CONFIGURATION failed");
+    tri("usbmsc: binding dev=", i); tri("  bulk in ep=", in_ep); tri("  bulk out ep=", out_ep);
+    tri("  max packet=", in_mps);      /* 1024 => SuperSpeed; see USB.md */
+    if (uno_usb_setup_bulk(g_dev, in_ep, out_ep, in_mps, out_mps) < 0)
+        FAIL("bulk endpoints would not configure");
     g_in_ep = in_ep; g_out_ep = out_ep;            /* for BOT halt recovery */
     /* Get Max LUN (optional; many sticks STALL it - ignore the result) */
     { u8 luns = 0;
       uno_usb_control(g_dev, 0xA1, 0xFE, 0, (u16)g_ifnum, &luns, 1); }
-    if (scsi_ready() < 0)          { uno_dbg_log("usbmsc: unit never ready"); return 0; }
-    if (scsi_read_capacity(&g_sectors) < 0) return 0;
+    if (scsi_ready() < 0)          { uno_dbg_log("usbmsc: unit never ready");
+                                     FAIL("unit never became ready"); }
+    if (scsi_read_capacity(&g_sectors) < 0) FAIL("READ CAPACITY failed");
+    /* Prove the data path before handing this device to the filesystem. A
+     * bind that answers descriptors but cannot move a sector is worse than no
+     * bind at all: blkdev would register it, FAT would mount nothing, and the
+     * system volume would be "gone" with no explanation. LBA 0 of anything we
+     * boot from is a partition sector, so the signature is a free check. */
+    {
+        static u8 lba0[512];
+        if (!msc_rw(0, 1, lba0, 0))                  FAIL("first READ(10) failed");
+        if (lba0[510] != 0x55 || lba0[511] != 0xAA)  FAIL("no partition signature at LBA 0");
+    }
     {
         uno_bdev d;
         memset(&d, 0, sizeof d);
@@ -231,9 +323,13 @@ static int try_bind(int i, int want_boot)
          * so carry it across here, on the one device we can prove is it. */
         d.is_boot = want_boot;
         d.read = msc_read; d.write = msc_write;
-        if (!uno_blk_register(&d)) return 0;
+        if (!uno_blk_register(&d)) FAIL("block-device registry full");
     }
     uno_dbg_log("usbmsc: BOT device up, %llu sectors, boot=%d", g_sectors, want_boot);
+    g_why = "up";
     g_bound = 1;
     return 1;
 }
+#undef FAIL
+
+const char *uno_usbmsc_why(void) { return g_why; }
