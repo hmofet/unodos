@@ -142,13 +142,15 @@ static void a_field(const unoui_theme *t, unoui_rect r, const char *s,
     }
 }
 
-static void a_list(const unoui_theme *t, unoui_rect r, const char **it, int n, int sel)
+static void a_list(const unoui_theme *t, unoui_rect r, const char **it, int n,
+                   int sel, int top)
 {
-    /* row pitch + origin must mirror the input layer's set_list() so a click
-     * selects the row under the pointer */
+    /* row pitch + origin must mirror the input layer's unoui_list_index_at() so
+     * a click selects the row under the pointer; `top` is the first row the
+     * core wants shown (it owns the scrollbar). */
     int i, row = ui_row_h(), y, fh = fb_text_h();
     aa_border(r.x, r.y, r.w, r.h, 6, 1, t->pal.win_frame, t->pal.field_bg);
-    for (i = 0, y = r.y + 4; i < n && y + row <= r.y + r.h - 3; i++, y += row) {
+    for (i = top, y = r.y + 4; i < n && y + row <= r.y + r.h - 3; i++, y += row) {
         fb_px fg = t->pal.field_text;
         if (i == sel) { aa_fill(r.x+4, y-1, r.w-8, row, 5, t->pal.accent); fg = t->pal.accent_text; }
         fb_text(r.x + 9, y + (row - 1 - fh)/2, it[i], fg, -1);

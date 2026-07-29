@@ -83,7 +83,11 @@ typedef struct unoui_draw {
     void (*label)   (const struct unoui_theme *, unoui_rect, const char *, int flags);
     void (*progress)(const struct unoui_theme *, unoui_rect, int val, int max);
     void (*vscroll) (const struct unoui_theme *, unoui_rect, int val, int max);
-    void (*list)    (const struct unoui_theme *, unoui_rect, const char **, int n, int sel);
+    /* list: draw rows `top`..  of `n` inside the rect. The CORE owns scrolling
+     * (it clamps `top` and paints the inline scrollbar through `vscroll` in a
+     * strip it has already taken off the right edge), so a theme only styles
+     * the rows it is handed - see unoui_list_draw(). */
+    void (*list)    (const struct unoui_theme *, unoui_rect, const char **, int n, int sel, int top);
     void (*group)   (const struct unoui_theme *, unoui_rect, const char *);
     void (*sep)     (const struct unoui_theme *, unoui_rect);
     void (*icon)    (const struct unoui_theme *, unoui_rect, const char *, int flags);

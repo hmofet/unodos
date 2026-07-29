@@ -117,7 +117,7 @@ events) or tweak fields.
 | **Dropdown / combo** | `unoui_add_dropdown(win, x, y, w, items, n, sel)` |
 | **Tab strip** | `unoui_add_tabs(win, x, y, w, items, n, sel)` |
 | **Menu bar** | `unoui_add_menubar(win, unoui_menu*, n)` |
-| List box | `unoui_add_list(win, x, y, w, h, items, n, sel)` |
+| **Scrolling list box** | `unoui_add_list(win, x, y, w, h, items, n, sel)` |
 | Group box / separator / desktop icon | `unoui_add_group / _sep / _icon(…)` |
 
 Widget geometry is **relative to the window's content area**; the toolkit
@@ -177,6 +177,14 @@ is nonzero when a widget activated or changed; `value` carries the new state
   z-order**.
 - Scrollbar arrows + **thumb drag** + mouse wheel; **slider knob drag**; list
   and tab selection; spinner steppers.
+- **List scrolling.** A list longer than its box shows a WINDOW of its items
+  (`value` = the first visible row) with an inline scrollbar on its right
+  edge: wheel, bar arrows, thumb drag, and `Up`/`Down`/`PgUp`/`PgDn`/`Home`/
+  `End` (which keep the selection in view). Selection reports the ABSOLUTE
+  index, so an app never pages a long list by hand. The geometry is public
+  (`unoui_list_rows / _maxtop / _index_at / _reveal / _bar / _draw`), so a
+  UI_CANVAS app can host the same list inside its own rect; a theme's `list`
+  hook simply draws the rows it is handed, starting at `top`.
 - **Menu bar** and **dropdown** popups — overlay drawn last, commit on click-in,
   dismiss on click-out or `Esc`.
 - **Focus** and **Tab / Shift-Tab traversal**; `Enter` / `Space` activation;

@@ -827,6 +827,14 @@ BROWSER, JS, STUDIO, PHOTOS, PAINT, GAME, INST, MAC, PY, LIBC.
   widgets to the content rect; resize respects `min_w/min_h`.
 - **S-UUI-21** [auto] Caret blink derives from TICK events only
   ((ticks/18)&1) — no wall clock in the toolkit.
+- **S-UUI-22** [auto] A UI_LIST longer than its box SCROLLS: `value` is the
+  first visible row, the wheel and the inline scrollbar move it (never the
+  selection), and a click selects the row UNDER the pointer in the scrolled
+  view — `unoui_list_index_at(rect, n, value, y)`, the same geometry the
+  painter uses. No item may be unreachable.
+- **S-UUI-23** [auto] Keyboard navigation of a UI_LIST keeps the selection
+  in view: arrows step a row, PgUp/PgDn a screenful, Home/End the ends, and
+  every one of them re-clamps `value` through `unoui_list_reveal`.
 
 ## S-SHELL — desktop shell (`pc64_uui.c`, `pc64_uui_apps.c`)
 

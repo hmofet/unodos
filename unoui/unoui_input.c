@@ -288,14 +288,46 @@ static unoui_action set_slider(unoui_ui *ui, int x)
     if (v > w->vmax) v = w->vmax;
     w->value = v; return change(w);
 }
+/* click / drag inside the ROWS of a list: select the row under the pointer.
+ * The list is scrolled, so the row is relative to the widget's first visible
+ * row (w->value) - the one geometry helper the painter uses. */
 static unoui_action set_list(unoui_ui *ui, int y)
 {
     unoui_window *win = ui->win[ui->cap_win]; unoui_widget *w = &win->w[ui->cap_wi];
     unoui_rect r = unoui_widget_rect(ui->theme, win, w);
-    int idx = (y - (r.y + 3)) / ui_row_h();
-    if (idx < 0) idx = 0;
-    if (idx > w->nitems - 1) idx = w->nitems - 1;
+    int idx = unoui_list_index_at(r, w->nitems, w->value, y);
     w->sel = idx; { unoui_action a = change(w); a.value = idx; return a; }
+}
+
+/* drag on a list's inline scrollbar thumb: map y to the first visible row.
+ * Scrolling changes no app-visible VALUE (the selection stands), so this
+ * reports NO_ACT; the shell repaints on the input event itself. */
+static unoui_action set_listbar(unoui_ui *ui, int y)
+{
+    unoui_window *win = ui->win[ui->cap_win]; unoui_widget *w = &win->w[ui->cap_wi];
+    unoui_rect r = unoui_widget_rect(ui->theme, win, w);
+    int mt = unoui_list_maxtop(r, w->nitems);
+    int bw = UI_LIST_BAR_W, track = r.h - 2 * bw, v;
+    /* the LAST track pixel means "the last row", so a drag to the bottom of the
+     * bar really does reach the end of the list (a /track map stops one row
+     * short of it) */
+    v = track > 1 ? mt * (y - (r.y + bw)) / (track - 1) : 0;
+    if (v < 0) v = 0;
+    if (v > mt) v = mt;
+    w->value = v;
+    { unoui_action a = NO_ACT; return a; }
+}
+
+/* scroll a list by `d` rows, clamped. NO_ACT for the same reason as above. */
+static unoui_action scroll_list(unoui_ui *ui, unoui_window *win,
+                                unoui_widget *w, int d)
+{
+    unoui_rect r = unoui_widget_rect(ui->theme, win, w);
+    int mt = unoui_list_maxtop(r, w->nitems), v = w->value + d;
+    if (v > mt) v = mt;
+    if (v < 0) v = 0;
+    w->value = v;
+    { unoui_action a = NO_ACT; return a; }
 }
 
 /* ------------------------------------------------------- press a widget --- */
@@ -355,8 +387,19 @@ static unoui_action press_widget(unoui_ui *ui, unoui_window *win, int hi,
         }
         return NO_ACT;
 
-    case UI_LIST:
+    case UI_LIST: {
+        unoui_rect bar = unoui_list_bar(r, w->nitems);
+        if (bar.w && ev->x >= bar.x) {           /* the inline scrollbar */
+            if (ev->y < bar.y + UI_LIST_BAR_W) {          /* up arrow   */
+                ui->cap_mode = UI_CAP_NONE; return scroll_list(ui, win, w, -1);
+            }
+            if (ev->y > bar.y + bar.h - UI_LIST_BAR_W) {  /* down arrow */
+                ui->cap_mode = UI_CAP_NONE; return scroll_list(ui, win, w, 1);
+            }
+            ui->cap_mode = UI_CAP_LISTBAR; return set_listbar(ui, ev->y);
+        }
         ui->cap_mode = UI_CAP_LIST; return set_list(ui, ev->y);
+    }
 
     case UI_TABS: {
         int x = r.x, k;
@@ -502,7 +545,28 @@ static unoui_action key_event(unoui_ui *ui, const unoui_event *ev)
         if (ev->key == UI_KEY_LEFT && w->sel > 0)            { w->sel--; { unoui_action a = change(w); a.value = w->sel; return a; } }
         if (ev->key == UI_KEY_RIGHT && w->sel < w->nitems-1) { w->sel++; { unoui_action a = change(w); a.value = w->sel; return a; } }
         break;
-    case UI_LIST: case UI_DROPDOWN:
+    case UI_LIST: {
+        /* the list scrolls, so every key that moves the selection also pulls it
+         * back into view; PgUp/PgDn step a screenful, Home/End go to the ends. */
+        unoui_rect r = unoui_widget_rect(ui->theme, ui->win[ui->focus_win], w);
+        int rows = unoui_list_rows(r), ns = w->sel;
+        switch (ev->key) {
+        case UI_KEY_UP:   ns--;         break;
+        case UI_KEY_DOWN: ns++;         break;
+        case UI_KEY_PGUP: ns -= rows;   break;
+        case UI_KEY_PGDN: ns += rows;   break;
+        case UI_KEY_HOME: ns = 0;       break;
+        case UI_KEY_END:  ns = w->nitems - 1; break;
+        default: return NO_ACT;
+        }
+        if (ns < 0) ns = 0;
+        if (ns > w->nitems - 1) ns = w->nitems - 1;
+        if (ns == w->sel) return NO_ACT;
+        w->sel = ns;
+        w->value = unoui_list_reveal(r, w->nitems, ns, w->value);
+        { unoui_action a = change(w); a.value = ns; return a; }
+    }
+    case UI_DROPDOWN:
         if (ev->key == UI_KEY_UP && w->sel > 0)              { w->sel--; { unoui_action a = change(w); a.value = w->sel; return a; } }
         if (ev->key == UI_KEY_DOWN && w->sel < w->nitems-1)  { w->sel++; { unoui_action a = change(w); a.value = w->sel; return a; } }
         break;
@@ -579,6 +643,8 @@ static unoui_action handle_inner(unoui_ui *ui, const unoui_event *ev)
                 if (w->value > w->vmax) w->value = w->vmax;
                 return change(w);
             }
+            if (w->kind == UI_LIST)                  /* 3 rows a notch */
+                return scroll_list(ui, ui->win[ui->hot_win], w, ev->wheel * 3);
         }
         return NO_ACT;
     }
@@ -614,6 +680,7 @@ static unoui_action handle_inner(unoui_ui *ui, const unoui_event *ev)
         case UI_CAP_HTHUMB: return set_hscroll(ui, ev->x);
         case UI_CAP_SLIDER: return set_slider(ui, ev->x);
         case UI_CAP_LIST:   return set_list(ui, ev->y);
+        case UI_CAP_LISTBAR: return set_listbar(ui, ev->y);
         case UI_CAP_TEXT: {
             unoui_window *win = ui->win[ui->cap_win];
             unoui_widget *w = &win->w[ui->cap_wi];

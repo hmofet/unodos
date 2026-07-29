@@ -89,7 +89,8 @@ Window (frame + title bar + close/zoom/caption chrome), menu bar (with popup
 menus), label, push button (default/pressed/disabled), checkbox, radio, **single-
 line edit field** and **multi-line text area** (caret, selection, scrolling),
 progress bar, vertical + horizontal scrollbars, slider, numeric spinner,
-dropdown/combo (with popup), tab strip, list box (with selection), group box,
+dropdown/combo (with popup), tab strip, scrolling list box (selection +
+inline scrollbar), group box,
 separator, and a desktop icon. All states drawn from `UI_F_*` flags.
 
 ## Interactivity — write once, behaves the same everywhere
@@ -113,7 +114,8 @@ for (;;) {
 ```
 
 Handled uniformly across platforms: mouse hover/click/drag, **window move with
-z-order**, scrollbar/slider thumb drag, list & tab selection, menu and dropdown
+z-order**, scrollbar/slider thumb drag, list scrolling (wheel / bar / keys) &
+tab selection, menu and dropdown
 popups, focus + **Tab traversal**, keyboard activation, and **full multi-line
 text editing** — caret, mouse caret-placement and drag-select, Shift-arrow
 selection, Home/End, Backspace/Delete, word-wrap-free scrolling. `unoui_input.c`
