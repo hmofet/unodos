@@ -127,7 +127,10 @@ static u8    g_scratch_buf[MAX_SCRATCH][4096] __attribute__((aligned(4096)));
 
 /* per-device: input context (control+slot+ep0), output device context, and an
  * EP0 (control) transfer ring, all 64-byte aligned. */
-#define MAX_DEV 8
+/* A hub chain multiplies devices fast: the test box alone has a hub (two
+ * faces), a keyboard/mouse dongle and a boot stick. 8 was enough when only
+ * root ports enumerated. */
+#define MAX_DEV 16
 #define EP0_RING_SZ 16
 /* 64-byte contexts with a max device-context index of 31 need
  * (1 input-control + 1 slot + 31 endpoint) * 64 = 2112 bytes; the old 2048
@@ -138,6 +141,10 @@ static trb_t g_ep0[MAX_DEV][EP0_RING_SZ] __attribute__((aligned(64)));
 static int   g_ep0_i[MAX_DEV], g_ep0_cyc[MAX_DEV];
 static u8    g_descbuf[256] __attribute__((aligned(64)));
 static uno_usb_dev g_devs[MAX_DEV];
+/* where each device sits: route string, hub tier (0 = on a root port) and the
+ * root-hub port its whole chain hangs off. Kept beside g_devs rather than in
+ * it so the public uno_usb_dev stays what class drivers already consume. */
+static int g_dev_route[MAX_DEV], g_dev_tier[MAX_DEV], g_dev_rport[MAX_DEV];
 
 /* bulk transfer rings (one in + one out per device, set up by Configure EP) */
 #define BULK_RING_SZ 32
@@ -414,19 +421,35 @@ static int control_xfer(int di, u8 rt, u8 req, u16 val, u16 idx, u8 *buf, int le
 static int get_device_descriptor(int di, int slot, u8 *out, int len)
 { (void)slot; return control_xfer(di, 0x80, 6, 0x0100, 0, out, len) >= 0; }
 
-static void enumerate_port(int port)
+/* ---- device enumeration, including everything behind a hub ----------------
+ *
+ * xHCI addresses a device by WHERE IT IS, not by walking to it: the slot
+ * context carries the root-hub port the whole chain hangs off, plus a 20-bit
+ * Route String of 4-bit port numbers, one nibble per hub tier. So enumerating
+ * a device three hubs deep is the same command as one on a root port - the
+ * work is getting the hub to power and reset its downstream ports first, and
+ * filling in the route.
+ *
+ * `route`/`tier` describe the parent: tier 0 = directly on a root port (route
+ * 0), and a child of a hub at tier T takes route |= port << (4*T), tier T+1.
+ * tt_slot/tt_port carry the Transaction Translator for a low/full-speed device
+ * behind a high-speed hub - without them the controller has no idea how to
+ * split-transact to it, and the device answers nothing. */
+static void hub_scan(int hub_di);              /* recursion: hub -> its ports */
+
+static int enumerate_dev(int root_port, u32 route, int tier, int speed,
+                         int tt_slot, int tt_port)
 {
-    int slot = 0, cc, di, speed, mps, st, i;
-    if (g_ndevs >= MAX_DEV) return;
+    int slot = 0, cc, di, mps, st, i;
+    if (g_ndevs >= MAX_DEV) return -1;
     di = g_ndevs;
-    speed = PORTSC_SPEED(rd32(g_op, OP_PORTSC(port)));
     g_dbg_speed = speed;
 
     cc = run_command(0, TRB_TYPE(TR_ENABLE_SLOT), &slot);
     g_dbg_slot = (cc == CC_SUCCESS) ? slot : -(int)cc;
     g_dbg_sts  = rd32(g_op, OP_USBSTS);
     g_dbg_ev0  = g_evt[0].control;
-    if (cc != CC_SUCCESS || slot == 0 || slot > g_maxslots) return;
+    if (cc != CC_SUCCESS || slot == 0 || slot > g_maxslots) return -1;
 
     for (i = 0; i < EP0_RING_SZ; i++) { g_ep0[di][i].param=0; g_ep0[di][i].status=0; g_ep0[di][i].control=0; }
     g_ep0_i[di] = 0; g_ep0_cyc[di] = 1;
@@ -434,8 +457,14 @@ static void enumerate_port(int port)
 
     st = g_csz ? 64 : 32; mps = mps_for_speed(speed);
     ctx_wr(g_inctx[di], 4, 0x3);                                 /* add flags A0|A1 */
-    ctx_wr(g_inctx[di], st,    (1u<<27) | ((u32)speed<<20));     /* slot: 1 ctx entry, speed */
-    ctx_wr(g_inctx[di], st+4,  ((u32)port<<16));                 /* slot: root hub port */
+    /* slot DW0: Route String 19:0, Speed 23:20, Context Entries 31:27 */
+    ctx_wr(g_inctx[di], st,    (1u<<27) | ((u32)speed<<20) | (route & 0xFFFFFu));
+    /* slot DW1: Root Hub Port Number 23:16 */
+    ctx_wr(g_inctx[di], st+4,  ((u32)root_port<<16));
+    /* slot DW2: TT Hub Slot ID 7:0, TT Port Number 15:8 - only meaningful for a
+     * low/full-speed device reached through a high-speed hub's TT. */
+    if (tt_slot)
+        ctx_wr(g_inctx[di], st+8, (u32)(tt_slot & 0xFF) | ((u32)(tt_port & 0xFF) << 8));
     ctx_wr(g_inctx[di], 2*st+4, ((u32)mps<<16) | (4u<<3) | (3u<<1)); /* EP0: Control, CErr=3, MPS */
     { u64 tr = (u64)(uintptr_t)g_ep0[di] | 1u;                   /* TR dequeue ptr + DCS */
       ctx_wr(g_inctx[di], 2*st+8,  (u32)tr);
@@ -445,29 +474,163 @@ static void enumerate_port(int port)
     g_dcbaa[slot] = (u64)(uintptr_t)g_devctx[di];               /* output ctx, before Address Device */
     cc = run_command((u64)(uintptr_t)g_inctx[di], TRB_TYPE(TR_ADDRESS_DEV) | ((u32)slot<<24), 0);
     g_dbg_addr = (int)cc;
-    if (cc != CC_SUCCESS) return;
+    if (cc != CC_SUCCESS) return -1;
     mdelay(2);                                                  /* let the address settle */
 
     /* publish slot/port/speed BEFORE the descriptor fetch: control_xfer reads
      * g_devs[di].slot to ring the right doorbell (it's a full transfer API now,
      * not the old slot-parameter helper). */
-    g_devs[di].slot = slot; g_devs[di].port = port; g_devs[di].speed = speed;
+    g_devs[di].slot = slot; g_devs[di].port = root_port; g_devs[di].speed = speed;
+    g_dev_route[di] = (int)route; g_dev_tier[di] = tier; g_dev_rport[di] = root_port;
 
     for (i = 0; i < 18; i++) g_descbuf[i] = 0;
     g_dbg_desc = get_device_descriptor(di, slot, g_descbuf, 18) ? g_descbuf[1] : -1;
     g_dbg_sts = rd32(g_op, OP_USBSTS);           /* post-transfer status (HCE shows here) */
-    xd("[xhci] port="); xd_i(port); xd(" slot="); xd_i(slot);
-    xd(" addr_cc="); xd_i((int)cc); xd(" desc_cc="); xd_i(g_dbg_cc);
-    xd(" resid="); xd_i(g_dbg_resid); xd(" bDescType="); xd_i(g_dbg_desc);
+    xd("[xhci] rport="); xd_i(root_port); xd(" route="); xd_h((unsigned)route);
+    xd(" tier="); xd_i(tier); xd(" slot="); xd_i(slot);
+    xd(" spd="); xd_i(speed); xd(" desc_cc="); xd_i(g_dbg_cc);
+    xd(" bDescType="); xd_i(g_dbg_desc);
     xd(" vid="); xd_h((unsigned)(g_descbuf[8]|(g_descbuf[9]<<8)));
     xd(" pid="); xd_h((unsigned)(g_descbuf[10]|(g_descbuf[11]<<8))); xd("\n");
-    if (g_dbg_desc != 1) return;                                /* must be a device descriptor */
+    if (g_dbg_desc != 1) return -1;                             /* must be a device descriptor */
     g_devs[di].vendor  = (u16)(g_descbuf[8]  | (g_descbuf[9]  << 8));
     g_devs[di].product = (u16)(g_descbuf[10] | (g_descbuf[11] << 8));
     g_devs[di].dev_class    = g_descbuf[4];
     g_devs[di].dev_subclass = g_descbuf[5];
     g_devs[di].dev_proto    = g_descbuf[6];
     g_ndevs++;
+    if (g_devs[di].dev_class == 0x09) hub_scan(di);              /* it is a hub */
+    return di;
+}
+
+/* ---- USB hub class ---------------------------------------------------------
+ * A hub is just a device with a class-specific descriptor and per-port feature
+ * requests. Everything downstream of it is invisible until we power its ports
+ * and reset each one - the firmware did that during ITS enumeration, but we
+ * reset the controller out from under it, so we have to do it again ourselves.
+ *
+ * Requests are the standard hub set (USB 2.0 §11.24):
+ *   GET_DESCRIPTOR(hub)  0xA0 / 6 / type<<8      -> bNbrPorts, power-on delay
+ *   GET_STATUS(port)     0xA3 / 0 / idx=port     -> wPortStatus, wPortChange
+ *   SET_FEATURE(port)    0x23 / 3 / feature      -> PORT_POWER, PORT_RESET
+ *   CLEAR_FEATURE(port)  0x23 / 1 / feature      -> the C_* change bits
+ * ======================================================================== */
+#define HUB_DESC_USB2   0x29
+#define HUB_DESC_SS     0x2A
+#define PORT_RESET      4
+#define PORT_POWER      8
+#define C_PORT_CONN     16
+#define C_PORT_RESET    20
+
+#define PS_CONNECTION   (1u<<0)
+#define PS_ENABLE       (1u<<1)
+#define PS_RESET        (1u<<4)
+#define PS_LOWSPEED     (1u<<9)
+#define PS_HIGHSPEED    (1u<<10)
+
+/* Tell the CONTROLLER this slot is a hub. Without the Hub bit and port count
+ * in its slot context, Address Device for anything downstream is rejected -
+ * the controller will not route to a device behind something it thinks is an
+ * ordinary peripheral. Configure Endpoint with only A0 set updates the slot
+ * context and leaves the endpoints alone. */
+static int hub_configure(int di, int nports)
+{
+    int st = g_csz ? 64 : 32, slot = g_devs[di].slot, i;
+    u32 sdw0, sdw1;
+    for (i = 0; i < (int)sizeof g_inctx[di]; i++) g_inctx[di][i] = 0;
+    ctx_wr(g_inctx[di], 4, 1u);                       /* A0: slot context only */
+    sdw0 = *(volatile u32 *)(g_devctx[di] + 0);
+    sdw1 = *(volatile u32 *)(g_devctx[di] + 4);
+    sdw0 |= (1u << 26);                               /* Hub                   */
+    sdw1 = (sdw1 & ~(0xFFu << 24)) | ((u32)(nports & 0xFF) << 24);  /* NumPorts */
+    ctx_wr(g_inctx[di], st + 0, sdw0);
+    ctx_wr(g_inctx[di], st + 4, sdw1);
+    return run_command((u64)(uintptr_t)g_inctx[di],
+                       TRB_TYPE(TR_CONFIG_EP) | ((u32)slot << 24), 0) == CC_SUCCESS;
+}
+
+static int hub_port_status(int di, int port, u32 *st_out)
+{
+    u8 b[4] = { 0, 0, 0, 0 };
+    if (control_xfer(di, 0xA3, 0, 0, (u16)port, b, 4) < 0) return 0;
+    *st_out = (u32)b[0] | ((u32)b[1] << 8) | ((u32)b[2] << 16) | ((u32)b[3] << 24);
+    return 1;
+}
+static void hub_set(int di, int port, int feat)
+{ (void)control_xfer(di, 0x23, 3, (u16)feat, (u16)port, 0, 0); }
+static void hub_clear(int di, int port, int feat)
+{ (void)control_xfer(di, 0x23, 1, (u16)feat, (u16)port, 0, 0); }
+
+static void hub_scan(int hub_di)
+{
+    static u8 hd[16];
+    int ss = (g_devs[hub_di].speed == 4);
+    int nports, i, tier = g_dev_tier[hub_di] + 1;
+    int pwr_ms;
+
+    /* 5 nibbles of route string is the architectural limit, and a device on the
+     * 5th tier still needs its own nibble - stop before authoring nonsense. */
+    if (tier > 5) { xd("[xhci] hub too deep, stopping\n"); return; }
+
+    if (control_xfer(hub_di, 0xA0, 6, (u16)((ss ? HUB_DESC_SS : HUB_DESC_USB2) << 8),
+                     0, hd, ss ? 12 : 9) < 0) {
+        xd("[xhci] hub descriptor failed\n");
+        return;
+    }
+    nports = hd[2];
+    pwr_ms = hd[5] * 2;                    /* bPwrOn2PwrGood, 2 ms units */
+    if (nports < 1 || nports > 15) return; /* a route nibble holds 1..15 */
+    if (pwr_ms < 20) pwr_ms = 20;          /* spec floor, and cheap insurance */
+
+    if (!hub_configure(hub_di, nports)) { xd("[xhci] hub slot config failed\n"); return; }
+
+    xd("[xhci] hub slot="); xd_i(g_devs[hub_di].slot);
+    xd(" ports="); xd_i(nports); xd(" tier="); xd_i(tier); xd("\n");
+
+    for (i = 1; i <= nports; i++) hub_set(hub_di, i, PORT_POWER);
+    mdelay(pwr_ms);
+
+    for (i = 1; i <= nports; i++) {
+        u32 ps = 0, route;
+        int spd, t, tts = 0, ttp = 0;
+        if (!hub_port_status(hub_di, i, &ps)) continue;
+        if (!(ps & PS_CONNECTION)) continue;
+        hub_clear(hub_di, i, C_PORT_CONN);
+
+        hub_set(hub_di, i, PORT_RESET);
+        for (t = 0; t < 100; t++) {        /* reset completes in ~10-20 ms */
+            mdelay(2);
+            if (!hub_port_status(hub_di, i, &ps)) break;
+            if (!(ps & PS_RESET) && (ps & PS_ENABLE)) break;
+        }
+        hub_clear(hub_di, i, C_PORT_RESET);
+        if (!(ps & PS_ENABLE)) { xd("[xhci] hub port not enabled\n"); continue; }
+        mdelay(10);                        /* USB reset recovery */
+
+        /* Speed comes from the port, not the hub: a USB2 hub reports low/high
+         * in its status bits and full speed by their absence. Downstream of a
+         * SuperSpeed hub everything is SuperSpeed by construction. */
+        spd = ss ? 4 : (ps & PS_LOWSPEED) ? 2 : (ps & PS_HIGHSPEED) ? 3 : 1;
+
+        /* A low- or full-speed device behind a high-speed hub is reached by
+         * split transactions through that hub's Transaction Translator, and
+         * the controller has to be told which hub and port to split through.
+         * Inherit the parent's TT if we are already downstream of one. */
+        if (spd == 1 || spd == 2) {
+            if (g_devs[hub_di].speed == 3) { tts = g_devs[hub_di].slot; ttp = i; }
+            else { int st2 = g_csz ? 64 : 32;
+                   u32 p2 = *(volatile u32 *)(g_devctx[hub_di] + st2 + 8);
+                   tts = (int)(p2 & 0xFF); ttp = (int)((p2 >> 8) & 0xFF); }
+        }
+
+        route = (u32)g_dev_route[hub_di] | ((u32)(i & 0xF) << (4 * g_dev_tier[hub_di]));
+        (void)enumerate_dev(g_dev_rport[hub_di], route, tier, spd, tts, ttp);
+    }
+}
+
+static void enumerate_port(int port)
+{
+    (void)enumerate_dev(port, 0, 0, PORTSC_SPEED(rd32(g_op, OP_PORTSC(port))), 0, 0);
 }
 
 /* ---- USB transfer API for class drivers (dev = index in the device list) --
