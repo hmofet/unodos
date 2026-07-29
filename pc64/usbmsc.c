@@ -13,6 +13,7 @@
  * out (!UNO_XHCI) or while firmware-attached.
  * ======================================================================== */
 #include "usbmsc.h"
+#include "usbboot.h"
 #include "blkdev.h"
 #include "xhci.h"
 #include "uno_debug.h"
@@ -177,38 +178,62 @@ static int find_bot_interface(int dev, int *ifnum, int *in_ep, int *out_ep,
 
 int uno_usbmsc_supported(void) { return uno_xhci_supported(); }
 
+/* Bind the boot stick, not "whichever mass-storage device enumerated first".
+ *
+ * On a USB boot the whole point of this driver is to get the SYSTEM volume
+ * back, and usbboot identified that device by USB id while the firmware could
+ * still tell us which one it was. So: one pass restricted to that id, then a
+ * second unrestricted pass for every other case (an internal-disk boot with a
+ * data stick attached, or a firmware that gave us no usable identity). */
+static int try_bind(int i, int want_boot);
+
 int uno_usbmsc_init(void)
 {
-    int i, n;
+    unsigned short want_vid = 0, want_pid = 0;
+    int i, n, pass, targeted;
     if (g_bound) return 1;
     if (!uno_xhci_init()) return 0;
+    targeted = uno_usbboot_target(&want_vid, &want_pid);
     n = uno_xhci_dev_count();
-    for (i = 0; i < n; i++) {
-        int ifnum = 0, in_ep = 0, out_ep = 0, in_mps = 512, out_mps = 512, cfgval = 1;
-        if (find_bot_interface(i, &ifnum, &in_ep, &out_ep, &in_mps, &out_mps, &cfgval) < 0)
-            continue;
-        g_dev = i; g_ifnum = ifnum;
-        if (uno_usb_set_config(g_dev, cfgval) < 0) continue;
-        if (uno_usb_setup_bulk(g_dev, in_ep, out_ep, in_mps, out_mps) < 0) continue;
-        g_in_ep = in_ep; g_out_ep = out_ep;        /* for BOT halt recovery */
-        /* Get Max LUN (optional; many sticks STALL it - ignore the result) */
-        { u8 luns = 0;
-          uno_usb_control(g_dev, 0xA1, 0xFE, 0, (u16)g_ifnum, &luns, 1); }
-        if (scsi_ready() < 0)          { uno_dbg_log("usbmsc: unit never ready"); continue; }
-        if (scsi_read_capacity(&g_sectors) < 0) continue;
-        {
-            uno_bdev d;
-            memset(&d, 0, sizeof d);
-            d.native = 1;
-            d.sectors = g_sectors;
-            strcpy(d.name, "usb0");
-            d.pci_dev = -1; d.pci_fn = -1;
-            d.read = msc_read; d.write = msc_write;
-            if (!uno_blk_register(&d)) return 0;
+    for (pass = targeted ? 0 : 1; pass < 2; pass++)
+        for (i = 0; i < n; i++) {
+            const uno_usb_dev *d = uno_xhci_dev(i);
+            if (pass == 0 && (!d || d->vendor != want_vid || d->product != want_pid))
+                continue;
+            if (try_bind(i, pass == 0)) return 1;
         }
-        uno_dbg_log("usbmsc: BOT device up, %llu sectors", g_sectors);
-        g_bound = 1;
-        return 1;
-    }
     return 0;
+}
+
+static int try_bind(int i, int want_boot)
+{
+    int ifnum = 0, in_ep = 0, out_ep = 0, in_mps = 512, out_mps = 512, cfgval = 1;
+    if (find_bot_interface(i, &ifnum, &in_ep, &out_ep, &in_mps, &out_mps, &cfgval) < 0)
+        return 0;
+    g_dev = i; g_ifnum = ifnum;
+    if (uno_usb_set_config(g_dev, cfgval) < 0) return 0;
+    if (uno_usb_setup_bulk(g_dev, in_ep, out_ep, in_mps, out_mps) < 0) return 0;
+    g_in_ep = in_ep; g_out_ep = out_ep;            /* for BOT halt recovery */
+    /* Get Max LUN (optional; many sticks STALL it - ignore the result) */
+    { u8 luns = 0;
+      uno_usb_control(g_dev, 0xA1, 0xFE, 0, (u16)g_ifnum, &luns, 1); }
+    if (scsi_ready() < 0)          { uno_dbg_log("usbmsc: unit never ready"); return 0; }
+    if (scsi_read_capacity(&g_sectors) < 0) return 0;
+    {
+        uno_bdev d;
+        memset(&d, 0, sizeof d);
+        d.native  = 1;
+        d.sectors = g_sectors;
+        strcpy(d.name, "usb0");
+        d.pci_dev = -1; d.pci_fn = -1;
+        /* The storage safety gate refuses to wipe the disk we booted from, and
+         * after detach fw_scan's is_boot marking is gone with the firmware -
+         * so carry it across here, on the one device we can prove is it. */
+        d.is_boot = want_boot;
+        d.read = msc_read; d.write = msc_write;
+        if (!uno_blk_register(&d)) return 0;
+    }
+    uno_dbg_log("usbmsc: BOT device up, %llu sectors, boot=%d", g_sectors, want_boot);
+    g_bound = 1;
+    return 1;
 }
