@@ -67,12 +67,17 @@ static int dp_has_usb(const unsigned char *p)
 /* How many USB tiers deep is this device?  One USB() node per hub level, so a
  * device plugged straight into a root-hub port has exactly one.
  *
- * This matters more than it looks: xhci.c enumerates ROOT-HUB PORTS ONLY - it
- * has no hub driver - so anything behind an external hub is invisible to the
- * native stack no matter how plainly the firmware can see it. A preflight that
- * ignored depth would cheerfully promise a keyboard or a boot volume that
- * could never be claimed, which is the exact failure the gates exist to
- * prevent. Returns 0 for a malformed path. */
+ * xhci.c walks hubs now, so depth is a RANGE check rather than a refusal: the
+ * xHCI route string is five 4-bit nibbles, so five hubs is the architectural
+ * limit and anything past it cannot be addressed at all. (Before the hub
+ * driver landed this had to be depth == 1, which is what kept the ZimaBlade
+ * attached - its keyboard AND its boot stick are both behind one hub, because
+ * the machine has a single USB port.) Returns 0 for a malformed path. */
+/* xhci.c's route string holds five hub tiers; depth counts the device's own
+ * USB() node too, so 1 (root port) .. 6 (five hubs up) is addressable. */
+#define USB_MAX_DEPTH 6
+static int usb_depth_ok(int d) { return d >= 1 && d <= USB_MAX_DEPTH; }
+
 static int dp_usb_depth(const unsigned char *p)
 {
     int n = 0, guard = 64, depth = 0;
@@ -164,8 +169,8 @@ static void evaluate(void)
         if (cls != 0x08 || sub != 0x06 || proto != 0x50) continue;   /* SCSI/BOT */
         if (uno_usbio_bulk_eps(i, &in_ep, &out_ep) < 0) continue;    /* needs both */
         if (uno_usbio_devpath(i, &dp) == 0 &&
-            dp_usb_depth((const unsigned char *)dp) != 1) {
-            g_deep++;                        /* behind a hub: we cannot reach it */
+            !usb_depth_ok(dp_usb_depth((const unsigned char *)dp))) {
+            g_deep++;                        /* deeper than we can address */
             continue;
         }
         g_nbot++;
@@ -180,7 +185,7 @@ static void evaluate(void)
 
     if (g_matched)        { g_ok = 1; g_why = "boot stick is BOT/xHCI (path matched)"; }
     else if (g_nbot == 1) { g_ok = 1; g_why = "the one BOT device is the boot stick"; }
-    else if (g_nbot == 0) g_why = g_deep ? "boot stick is behind a hub (no hub driver)"
+    else if (g_nbot == 0) g_why = g_deep ? "boot stick is too many hubs deep to address"
                                         : "boot device is not a BOT mass-storage interface";
     else                  g_why = "several BOT devices, none matched the boot path";
     if (!g_ok) { g_vid = 0; g_pid = 0; }
@@ -238,15 +243,15 @@ static void hid_evaluate(void)
         if (uno_usbio_iface(i, &cls, &sub, &proto) < 0) continue;
         if (cls != 0x03 || sub != 0x01) continue;      /* HID, boot subclass    */
         if (uno_usbio_devpath(i, &dp) < 0) continue;
-        if (dp_usb_depth((const unsigned char *)dp) != 1) { deep++; continue; }
+        if (!usb_depth_ok(dp_usb_depth((const unsigned char *)dp))) { deep++; continue; }
         if (!dp_pci((const unsigned char *)dp, &cdev, &cfn) || !xhci_at(cdev, cfn))
             continue;                                  /* not on an xHCI        */
         if (proto == 1) g_hid_kbd = 1;                 /* boot keyboard         */
         if (proto == 2) g_hid_ptr = 1;                 /* boot mouse            */
     }
-    g_hid_why = g_hid_kbd ? "USB boot keyboard on an xHCI root port"
-              : deep      ? "USB keyboard is behind a hub (no hub driver)"
-                          : "no USB boot keyboard on a root port";
+    g_hid_why = g_hid_kbd ? "USB boot keyboard reachable on the xHCI"
+              : deep      ? "USB keyboard is too many hubs deep to address"
+                          : "no USB boot keyboard the native stack can reach";
 }
 
 static void hid_ensure(void)
