@@ -2018,3 +2018,48 @@ passes both suites unchanged.
 metal is a different device, and past ExitBootServices there is no way back.
 The flip wants a ZimaBlade run (desktop, not a laptop, per the plan) — that is
 the only thing left between here and USB-boot detach on by default.
+
+---
+
+## 2026-07-29 (metal) — ZimaBlade run 1: the detach gate could not be satisfied on a USB-only desktop
+
+First real metal boot of the USB-detach work. Result: **the box declined to
+detach**, and the reason was not storage.
+
+`BOOTLOG.TXT` from the stick (build `debug-209191b-20260729-1449`, the right
+one — run 0 booted the internal disk, which is the documented trap on this box,
+so always check the build id before reading anything into a result):
+
+```
+detached: 0        last_checkpoint: init:detach @ 4893ms
+pointer: fw_simple=2 fw_abs=1 detach_blocked=0
+ps2: kbd=0 aux=0 auxport=0 auxid=-1
+i2c-hid: ctrls=0 present=0
+usb-hid: kbd=0 mouse=0
+```
+
+`detach_blocked=0` identifies the gate: every refusal except the keyboard one
+sets it. The ZimaBlade's only keyboard is USB (`046d:c548 class 03/01`), and
+USB HID is a detached-mode source by construction — so the gate wanted a
+keyboard that could not exist until the gate opened. Fixed by predicting it
+from the firmware's descriptors, same pattern as the boot volume.
+
+Found alongside: the preflights ignored **hub depth**, and `xhci.c` enumerates
+root-hub ports only. This box has two Realtek hubs on it, so a stick or
+keyboard behind one would have been promised and then not delivered. Now
+refused explicitly, on the storage arm as well.
+
+### Also worth recording (→ NIC lane)
+
+That box's earlier internal-disk boot ran the wired test to completion **while
+firmware-attached**: DHCP lease in 1042 ms, three gateway pings, DNS resolved,
+`== net test done: WIRED PASS ==`. That is evidence against the standing theory
+that r8169 RX breaks because a stick-booted box stays attached and the
+firmware's UNDI driver fights ours — attached alone is clearly not sufficient
+to break it. Not conclusive for the stick-boot case (different boot medium),
+but the hypothesis is weaker than it was.
+
+### Unrelated but real: the ZimaBlade's clock is about a day slow
+
+It wrote files today stamped `2026-07-28 14:49`. CMOS battery, probably. It
+makes `BOOTS.TXT` timestamps untrustworthy for ordering runs — use the build id.
