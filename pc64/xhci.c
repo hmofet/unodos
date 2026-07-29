@@ -153,9 +153,25 @@ static trb_t g_bout[MAX_DEV][BULK_RING_SZ] __attribute__((aligned(64)));
 static int   g_bin_i[MAX_DEV], g_bin_cyc[MAX_DEV], g_bin_dci[MAX_DEV];
 static int   g_bout_i[MAX_DEV], g_bout_cyc[MAX_DEV], g_bout_dci[MAX_DEV];
 
-/* interrupt-IN endpoint (HID) - one outstanding TRB into a per-device buffer,
- * polled non-blocking each frame; reuses the g_bin ring of that device slot. */
-static int   g_intr_dci[MAX_DEV], g_intr_mps[MAX_DEV];
+/* Interrupt-IN endpoints (HID): a POOL, not one per device.
+ *
+ * A wireless keyboard/mouse combo is ONE usb device with TWO HID interfaces,
+ * so one interrupt endpoint per device silently loses one of them: the second
+ * setup overwrote the first's endpoint and both pollers then read whichever
+ * survived. On the ZimaBlade that showed up as a mouse that lit up and moved
+ * nothing. Each endpoint now gets its own ring, its own buffer and its own
+ * async slot, and callers hold a handle rather than a device index.
+ *
+ * They also stop borrowing g_bin: sharing the bulk ring meant a device doing
+ * both bulk and interrupt transfers would have trampled itself. */
+#define MAX_INTR     8
+#define INTR_RING_SZ 16
+static trb_t g_ir[MAX_INTR][INTR_RING_SZ] __attribute__((aligned(64)));
+static u8    g_ibuf[MAX_INTR][64]         __attribute__((aligned(64)));
+static int   g_i_used[MAX_INTR], g_i_dev[MAX_INTR], g_i_dci[MAX_INTR];
+static int   g_i_mps[MAX_INTR], g_i_ri[MAX_INTR], g_i_cyc[MAX_INTR];
+static u64   g_i_atrb[MAX_INTR];         /* posted TRB address; 0 = none */
+static u32   g_i_asts[MAX_INTR];         /* stashed completion; 0 = none */
 
 /* Outstanding ASYNC transfers (the HID interrupt-IN and the NIC's armed
  * bulk-IN). All consumers share interrupter 0's single event ring, so a
@@ -164,13 +180,12 @@ static int   g_intr_dci[MAX_DEV], g_intr_mps[MAX_DEV];
  * transfer event is therefore ROUTED: if its TRB pointer matches a registered
  * async transfer, the completion is stashed for that transfer's owner instead
  * of being returned to (or dropped by) whoever happened to dequeue it. */
-enum { ASY_INTR = 0, ASY_BIN = 1 };
+enum { ASY_BIN = 1 };            /* interrupt endpoints have their own pool */
 static u64 g_async_trb[MAX_DEV][2];      /* posted TRB address; 0 = none     */
 static u32 g_async_sts[MAX_DEV][2];      /* stashed ev.status; 0 = none (a   */
                                          /* real completion has cc>=1 in     */
                                          /* bits 24-31, so 0 is free)        */
 static int g_abin_len[MAX_DEV];          /* armed bulk-IN posted length      */
-static u8    g_hidbuf[MAX_DEV][64] __attribute__((aligned(64)));
 
 /* ---- state --------------------------------------------------------------- */
 static volatile u8 *g_cap;         /* MMIO base */
@@ -352,6 +367,12 @@ static int route_event(const trb_t *ev)
                 g_async_trb[d][k] = 0;
                 return 0;
             }
+    for (d = 0; d < MAX_INTR; d++)
+        if (g_i_atrb[d] && ev->param == g_i_atrb[d]) {
+            g_i_asts[d] = ev->status;
+            g_i_atrb[d] = 0;
+            return 0;
+        }
     return 1;
 }
 
@@ -870,25 +891,45 @@ int uno_usb_bulk_in_poll(int dev)
     { int n = g_abin_len[dev] - resid; return n > 0 ? n : -1; }
 }
 
-/* post one interrupt-IN TRB into the device's HID buffer + ring the doorbell */
-static void intr_post(int dev)
+/* post one interrupt-IN TRB into this endpoint's own buffer + ring the doorbell */
+static void intr_post(int h)
 {
-    g_async_trb[dev][ASY_INTR] = (u64)(uintptr_t)&g_bin[dev][g_bin_i[dev]];
-    g_async_sts[dev][ASY_INTR] = 0;
-    ep_push(g_bin[dev], &g_bin_i[dev], &g_bin_cyc[dev], BULK_RING_SZ,
-            (u64)(uintptr_t)g_hidbuf[dev], (u32)g_intr_mps[dev],
+    int dev = g_i_dev[h];
+    g_i_atrb[h] = (u64)(uintptr_t)&g_ir[h][g_i_ri[h]];
+    g_i_asts[h] = 0;
+    ep_push(g_ir[h], &g_i_ri[h], &g_i_cyc[h], INTR_RING_SZ,
+            (u64)(uintptr_t)g_ibuf[h], (u32)g_i_mps[h],
             TRB_TYPE(TR_NORMAL) | (1u<<5)/*IOC*/ | (1u<<2)/*ISP short-packet ok*/);
-    wr32(g_db, g_devs[dev].slot*4, g_intr_dci[dev]);
+    wr32(g_db, g_devs[dev].slot*4, g_i_dci[h]);
+}
+
+/* non-blocking drain for one interrupt endpoint; 0 = still outstanding */
+static int intr_poll(int h, int *residual)
+{
+    trb_t ev;
+    int guard = EVT_RING_SZ + 4;
+    while (!g_i_asts[h] && guard-- > 0) {
+        if (!poll_event(&ev, 1000)) break;
+        if (TRB_GET_TYPE(ev.control) != TR_XFER_EVENT) continue;
+        route_event(&ev);
+    }
+    if (!g_i_asts[h]) return 0;
+    { u32 st = g_i_asts[h];
+      g_i_asts[h] = 0;
+      if (residual) *residual = (int)(st & 0xFFFFFF);
+      return (int)(st >> 24) & 0xFF; }
 }
 
 /* Configure a single interrupt-IN endpoint (HID). in_addr = bEndpointAddress
  * (e.g. 0x81); mps from the endpoint descriptor. Posts the first TRB. */
 int uno_usb_setup_intr_in(int dev, int in_addr, int mps)
 {
-    int di = dev, slot, in_dci, st, i, cc;
+    int di = dev, slot, in_dci, st, i, cc, h, cur;
     u32 sdw0, sdw1;
     if (dev < 0 || dev >= g_ndevs) return -1;
-    if (mps <= 0 || mps > (int)sizeof g_hidbuf[0]) mps = (int)sizeof g_hidbuf[0];
+    if (mps <= 0 || mps > (int)sizeof g_ibuf[0]) mps = (int)sizeof g_ibuf[0];
+    for (h = 0; h < MAX_INTR && g_i_used[h]; h++) ;
+    if (h >= MAX_INTR) return -1;
     slot = g_devs[di].slot;
     in_dci = (in_addr & 0xF) * 2 + 1;                     /* IN endpoint DCI */
     if (in_dci > 31) return -1;
@@ -897,34 +938,40 @@ int uno_usb_setup_intr_in(int dev, int in_addr, int mps)
     ctx_wr(g_inctx[di], 4, 1u | (1u<<in_dci));            /* add slot + the EP */
     sdw0 = *(volatile u32 *)(g_devctx[di] + 0);
     sdw1 = *(volatile u32 *)(g_devctx[di] + 4);
-    sdw0 = (sdw0 & ~(0x1Fu<<27)) | ((u32)in_dci<<27);     /* context entries = max DCI */
+    /* Context Entries must cover the HIGHEST configured DCI. Assigning the new
+     * one outright would shrink the context when a device's second endpoint
+     * has a lower DCI than its first - which is exactly the combo-dongle case
+     * this pool exists for. */
+    cur = (int)((sdw0 >> 27) & 0x1F);
+    if (in_dci > cur) cur = in_dci;
+    sdw0 = (sdw0 & ~(0x1Fu<<27)) | ((u32)cur<<27);
     ctx_wr(g_inctx[di], st+0, sdw0);
     ctx_wr(g_inctx[di], st+4, sdw1);
-    for (i = 0; i < BULK_RING_SZ; i++) {
-        g_bin[di][i].param=0; g_bin[di][i].status=0; g_bin[di][i].control=0;
+    for (i = 0; i < INTR_RING_SZ; i++) {
+        g_ir[h][i].param=0; g_ir[h][i].status=0; g_ir[h][i].control=0;
     }
-    g_bin_i[di]=0; g_bin_cyc[di]=1;
-    setup_ep(di, in_dci, 7 /*Interrupt In*/, mps, ss_burst(di, in_addr), g_bin[di]);
+    g_i_ri[h]=0; g_i_cyc[h]=1;
+    setup_ep(di, in_dci, 7 /*Interrupt In*/, mps, ss_burst(di, in_addr), g_ir[h]);
     cc = run_command((u64)(uintptr_t)g_inctx[di], TRB_TYPE(TR_CONFIG_EP) | ((u32)slot<<24), 0);
     if (cc != CC_SUCCESS) return -1;
-    g_intr_dci[di] = in_dci; g_intr_mps[di] = mps;
-    intr_post(di);                                        /* first outstanding TRB */
-    return 0;
+    g_i_used[h] = 1; g_i_dev[h] = di; g_i_dci[h] = in_dci; g_i_mps[h] = mps;
+    intr_post(h);                                         /* first outstanding TRB */
+    return h;                                             /* the caller's handle */
 }
 
 /* Non-blocking: if the outstanding interrupt-IN transfer completed, copy the
  * report into `data`, re-post, and return its byte count; 0 if none yet; -1 on
  * error. Keeps exactly one TRB outstanding, so it never desyncs the ring. */
-int uno_usb_intr_in(int dev, void *data, int maxlen)
+int uno_usb_intr_in(int h, void *data, int maxlen)
 {
     int resid = 0, cc, n, i;
-    if (dev < 0 || dev >= g_ndevs || !g_intr_dci[dev]) return -1;
-    cc = async_poll(dev, ASY_INTR, &resid);               /* non-blocking */
+    if (h < 0 || h >= MAX_INTR || !g_i_used[h]) return -1;
+    cc = intr_poll(h, &resid);                            /* non-blocking */
     if (cc != CC_SUCCESS && cc != 13) return 0;           /* no report this frame */
-    n = g_intr_mps[dev] - resid;
+    n = g_i_mps[h] - resid;
     if (n > maxlen) n = maxlen;
-    for (i = 0; i < n; i++) ((u8 *)data)[i] = g_hidbuf[dev][i];
-    intr_post(dev);                                       /* re-arm */
+    for (i = 0; i < n; i++) ((u8 *)data)[i] = g_ibuf[h][i];
+    intr_post(h);                                         /* re-arm */
     return n;
 }
 

@@ -47,10 +47,15 @@ int  uno_usb_bulk_in(int dev, void *data, int len);        /* returns bytes rece
 int  uno_usb_bulk_in_arm(int dev, void *data, int len);
 int  uno_usb_bulk_in_poll(int dev);
 
-/* HID interrupt-IN endpoint. setup posts the first transfer; intr_in is a
- * NON-BLOCKING poll returning the report length (0 = none ready yet, -1 err). */
+/* HID interrupt-IN endpoints. setup claims one, posts the first transfer and
+ * returns a HANDLE (>=0) or -1; intr_in polls THAT endpoint, non-blocking,
+ * returning the report length (0 = none ready yet, -1 err).
+ *
+ * A handle rather than a device index because one device can have several:
+ * a wireless keyboard/mouse combo is a single device with two HID interfaces,
+ * and keying on the device silently kept only the last one configured. */
 int  uno_usb_setup_intr_in(int dev, int in_ep_addr, int mps);
-int  uno_usb_intr_in(int dev, void *data, int maxlen);
+int  uno_usb_intr_in(int handle, void *data, int maxlen);
 
 /* Diagnostics for the System app. */
 void uno_xhci_status(int *present, int *nports, int *ndevs, unsigned *err);
