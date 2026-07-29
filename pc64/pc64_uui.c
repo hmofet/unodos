@@ -2620,6 +2620,16 @@ static int pump_input(void)
             else used = 0;
             if (used) { g_dirty = 1; continue; }
         }
+        /* Browser focused: its Ctrl accelerators (L address bar, T new tab,
+           D bookmark, B/H panels, R / F5 reload, Ctrl-F4 close tab). A canvas
+           app never sees a Ctrl-modified character - CHAR events carry no
+           mods - so the shell has to route them, the same way it does for the
+           Editor and Studio. */
+        if (!g_launch_open && !UI.full && g_open[EX_BROWSER] &&
+            UI.focus_win >= 0 && UI.focus_win < UI.nwin &&
+            UI.win[UI.focus_win] == &g_win[EX_BROWSER]) {
+            if (pc64_browser_key(uni, scan, ctrl)) { g_dirty = 1; continue; }
+        }
         /* Music focused: same keyboard-drive rationale as Install above -
            the player must be fully operable with no pointer at all. */
         if (!g_launch_open && !UI.full && g_open[APP_MUSIC] &&
