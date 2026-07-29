@@ -8,6 +8,7 @@
 int  uno_usb_hid_init(void) { return 0; }
 int  uno_usb_hid_kbd_poll(uno_usb_key_fn e, void *c) { (void)e;(void)c; return 0; }
 int  uno_usb_hid_mouse_poll(int *dx, int *dy, int *b) { (void)dx;(void)dy;(void)b; return 0; }
+int  uno_usb_hid_wheel(void)       { return 0; }
 int  uno_usb_hid_present(void)     { return 0; }
 int  uno_usb_hid_kbd_present(void) { return 0; }
 void uno_usb_hid_status(int *nk, int *nm) { if (nk)*nk=0; if (nm)*nm=0; }
@@ -123,6 +124,8 @@ int uno_usb_hid_kbd_poll(uno_usb_key_fn emit, void *ctx)
     return any;
 }
 
+static int g_wheel;                    /* notches since the last read */
+
 int uno_usb_hid_mouse_poll(int *dx, int *dy, int *btn)
 {
     int i, any = 0, ax = 0, ay = 0, ab = 0;
@@ -136,6 +139,9 @@ int uno_usb_hid_mouse_poll(int *dx, int *dy, int *btn)
             ab |= rep[0] & 0x07;
             ax += (signed char)rep[1];
             ay += (signed char)rep[2];
+            /* byte 3 is the wheel on every mouse that has one (the boot
+             * report is 3 bytes, but wheel mice append it); + = down */
+            if (n >= 4) g_wheel += (signed char)rep[3];
         }
     }
     if (!any) return 0;
@@ -143,6 +149,7 @@ int uno_usb_hid_mouse_poll(int *dx, int *dy, int *btn)
     return 1;
 }
 
+int uno_usb_hid_wheel(void)       { int z = g_wheel; g_wheel = 0; return z; }
 int uno_usb_hid_present(void)     { return g_neps > 0; }
 int uno_usb_hid_kbd_present(void) { return g_nkbd > 0; }
 void uno_usb_hid_status(int *nk, int *nm) { if (nk)*nk=g_nkbd; if (nm)*nm=g_nmouse; }

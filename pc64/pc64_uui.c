@@ -2475,6 +2475,16 @@ static int pump_input(void)
                 real = 1;
         }
     }
+    /* the wheel: one UI_EV_WHEEL at the pointer, which unoui routes to whatever
+       is hovered (a scrolling list, a scrollbar, or a canvas app - the Browser,
+       Editor, Files and Photos all take it) */
+    { int wz = uno_pc64_wheel();
+      if (wz) {
+          memset(&ev, 0, sizeof ev);
+          ev.kind = UI_EV_WHEEL; ev.x = mx; ev.y = my; ev.wheel = wz;
+          feed(&ev); any = 1; real = 1;
+      } }
+
     /* Only the LEFT button drives the widget layer. unoui has one notion of
        "the mouse button", so feeding it a right-click would activate whatever
        is under the pointer - the opposite of what a context gesture should do. */

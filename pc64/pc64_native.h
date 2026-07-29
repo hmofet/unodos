@@ -33,5 +33,6 @@ int  uno_ps2_init(void);
 void uno_ps2_pump(void);
 int  uno_ps2_next_key(int *scan, int *uni, int *ctrl);
 int  uno_ps2_mouse(int *dx, int *dy, int *btn);
+int  uno_ps2_mouse_wheel(void);   /* notches since the last call (+ = down) */
 
 #endif
