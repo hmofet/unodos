@@ -121,6 +121,22 @@ int main(void)
     ev_key(UI_KEY_UP);
     CHECK("Up moves one row", lw->sel == rows - 1);
 
+    printf("thumb proportion\n");
+    {   /* the thumb must be the visible FRACTION of the list, not a bar-
+         * filling slab: a 6-of-40 view is ~15% of the track. The painter
+         * derives it from vmax, so check the value the core hands it. */
+        unoui_rect bar = unoui_list_bar(r, n);
+        int track = bar.h - 2 * UI_LIST_BAR_W;
+        int mpx = track * unoui_list_maxtop(r, n) / rows;
+        int thumb = mpx > 0 ? (track * track) / (track + mpx) : track;
+        int want = track * rows / n;
+        printf("  track %d px, thumb %d px, want ~%d px\n", track, thumb, want);
+        CHECK("thumb is the visible fraction of the list",
+              thumb <= want + 2 && thumb >= want - 2);
+        CHECK("a longer list gives a shorter thumb",
+              (track * track) / (track + (track * (200 - rows) / rows)) < thumb);
+    }
+
     printf("inline scrollbar\n");
     lw->value = 5; lw->sel = 5;
     { unoui_rect bar = unoui_list_bar(r, n);
