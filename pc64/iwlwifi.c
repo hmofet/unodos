@@ -3769,7 +3769,7 @@ static int iommu_disable(char *out, int cap);   /* defined after iwl_nic (F12 fi
 
 uno_nic_t *iwl_nic(void)
 {
-    int vol;
+    int vol, cred_vol;
     long fn;
     if (g_bound) return &g_nic;
 #if UNO_DEBUG
@@ -3793,7 +3793,7 @@ uno_nic_t *iwl_nic(void)
      * not stop the radio (metal: "no networks found" on a box with a working
      * card and no config file). g_no_join marks exactly that bring-up. */
     {
-        int cred_vol = firmware_volume();
+        cred_vol = firmware_volume();
         if (cred_vol >= 0 && read_config(cred_vol) >= 0) {
             uno_dbg_net_trace("wifi: creds from %s: ssid=\"%s\" psk_len=%d",
                               g_cfgname, g_cfg_ssid, (int)strlen(g_cfg_psk));
@@ -3810,21 +3810,28 @@ uno_nic_t *iwl_nic(void)
         }
     }
 
-    vol = fw_volume();
-    if (vol < 0) {
-        st_set("WiFi: firmware not found ("); st_cat(g_fwfile); st_cat(")");
-        uno_dbg_net_trace("wifi: FAIL %s on no volume (uno-wifi-fw.py stages it)", g_fwfile);
-        return 0;
-    }
-
-    /* read the .ucode image (strip the FIRMWARE\ prefix for the FAT reader if
-       it exposes only a flat root; try both) */
-    fn = uno_fs_read(vol, g_fwfile, g_fwbuf, FW_FILE_MAX);
-    if (fn <= 0) fn = uno_fs_read(vol, g_fwfile + 9, g_fwbuf, FW_FILE_MAX);
-    if (fn <= 0) {
-        st_set("WiFi: firmware not found ("); st_cat(g_fwfile); st_cat(")");
-        uno_dbg_net_trace("wifi: FAIL firmware %s not on the ESP (uno-wifi-fw.py stages it)", g_fwfile);
-        return 0;
+    /* read the .ucode image. Candidates in order: the volume that actually
+       holds the file, then the config volume (what this used to assume), so a
+       filesystem whose size query and read query disagree cannot cost us the
+       radio. Each is tried with the full FIRMWARE\ path and with the flat root
+       name, since the FAT reader may expose either. */
+    {
+        int cand[2], nc = 0, ci;
+        int fv = fw_volume();
+        if (fv >= 0)                       cand[nc++] = fv;
+        if (cred_vol >= 0 && cred_vol != fv) cand[nc++] = cred_vol;
+        vol = -1; fn = 0;
+        for (ci = 0; ci < nc && fn <= 0; ci++) {
+            vol = cand[ci];
+            fn = uno_fs_read(vol, g_fwfile, g_fwbuf, FW_FILE_MAX);
+            if (fn <= 0) fn = uno_fs_read(vol, g_fwfile + 9, g_fwbuf, FW_FILE_MAX);
+        }
+        if (fn <= 0) {
+            st_set("WiFi: firmware not found ("); st_cat(g_fwfile); st_cat(")");
+            uno_dbg_net_trace("wifi: FAIL firmware %s on no volume (%d candidates) - "
+                              "uno-wifi-fw.py stages it", g_fwfile, nc);
+            return 0;
+        }
     }
     if (parse_ucode(g_fwbuf, (u32)fn) < 0) {
         st_set("WiFi: bad .ucode TLV");
