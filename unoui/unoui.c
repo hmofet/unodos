@@ -928,7 +928,22 @@ void unoui_list_draw(const unoui_theme *t, unoui_rect r, const char **items,
     if (top < 0) top = 0;
     if (bar.w) body.w -= bar.w;
     PICK(list)(t, body, items, n, sel, top);
-    if (bar.w) PICK(vscroll)(t, bar, top, mt);
+    if (bar.w) {
+        /* A scrollbar painter sizes its thumb as track/(track+vmax), i.e. it
+         * reads vmax in the SAME UNITS as the track's pixel height. A list's
+         * scroll range is in ROWS (a dozen or so), which next to a track of a
+         * hundred-odd pixels makes the thumb fill almost the whole bar however
+         * long the list is (metal: "the draggable part fills the entire
+         * height"). Convert the row range into that pixel domain, so the thumb
+         * ends up the honest rows/n fraction of the track. */
+        int rows = unoui_list_rows(r);
+        int track = bar.h - 2 * UI_LIST_BAR_W;
+        int vpx, mpx;
+        if (track < 8) track = 8;
+        mpx = track * mt / rows;                    /* thumb = rows/n of track */
+        vpx = mt > 0 ? mpx * top / mt : 0;          /* same fraction travelled */
+        PICK(vscroll)(t, bar, vpx, mpx);
+    }
 }
 
 static void draw_one(const unoui_draw *d, const unoui_theme *t,
