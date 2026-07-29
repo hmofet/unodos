@@ -8,6 +8,7 @@ int   uno_pc64_detached(void);
 #define USBIO_MAX 32
 
 static EFI_USB_IO_PROTOCOL *g_dev[USBIO_MAX];
+static EFI_HANDLE           g_hnd[USBIO_MAX];   /* for the device path */
 static int g_n;
 
 static EFI_BOOT_SERVICES *bs(void)
@@ -31,6 +32,7 @@ int uno_usbio_count(void)
     for (i = 0; i < n && g_n < USBIO_MAX; i++) {
         void *p;
         if (EFI_ERROR(BS->HandleProtocol(hs[i], &guid, &p))) continue;
+        g_hnd[g_n]   = hs[i];
         g_dev[g_n++] = (EFI_USB_IO_PROTOCOL *)p;
     }
     BS->FreePool(hs);
@@ -52,6 +54,38 @@ int uno_usbio_info(int i, unsigned short *vid, unsigned short *pid,
         if (if_class)    *if_class    = id.InterfaceClass;
         if (if_subclass) *if_subclass = id.InterfaceSubClass;
     }
+    return 0;
+}
+
+/* The full interface triple. uno_usbio_info() stops at class/subclass, which
+ * cannot tell Bulk-Only Transport (proto 0x50) from the ancient CBI protocols
+ * that share subclass 0x06 - a distinction the detach preflight has to make,
+ * because usbmsc.c speaks BOT and nothing else. */
+int uno_usbio_iface(int i, unsigned char *cls, unsigned char *sub,
+                    unsigned char *proto)
+{
+    EFI_USB_INTERFACE_DESCRIPTOR id;
+    if (i < 0 || i >= g_n || !bs()) return -1;
+    if (EFI_ERROR(g_dev[i]->UsbGetInterfaceDescriptor(g_dev[i], &id))) return -1;
+    if (cls)   *cls   = id.InterfaceClass;
+    if (sub)   *sub   = id.InterfaceSubClass;
+    if (proto) *proto = id.InterfaceProtocol;
+    return 0;
+}
+
+/* This interface's EFI device path (NOT copied - valid while boot services
+ * are). Callers prefix-match it against the boot image's path to tell WHICH
+ * USB device is the one carrying the running system. */
+int uno_usbio_devpath(int i, void **dp)
+{
+    static EFI_GUID dpg = { 0x09576e91, 0x6d3f, 0x11d2,
+        { 0x8e, 0x39, 0x00, 0xa0, 0xc9, 0x69, 0x72, 0x3b } };
+    EFI_BOOT_SERVICES *BS = bs();
+    void *p = 0;
+    if (dp) *dp = 0;
+    if (i < 0 || i >= g_n || !BS || !g_hnd[i]) return -1;
+    if (EFI_ERROR(BS->HandleProtocol(g_hnd[i], &dpg, &p)) || !p) return -1;
+    if (dp) *dp = p;
     return 0;
 }
 

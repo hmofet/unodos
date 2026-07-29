@@ -19,6 +19,11 @@
 int uno_usbio_count(void);              /* enumerate; returns device count */
 int uno_usbio_info(int i, unsigned short *vid, unsigned short *pid,
                    unsigned char *if_class, unsigned char *if_subclass);
+/* class/subclass/protocol of the interface (proto is what info() omits). */
+int uno_usbio_iface(int i, unsigned char *cls, unsigned char *sub,
+                    unsigned char *proto);
+/* the interface's EFI_DEVICE_PATH (borrowed pointer, boot-services lifetime) */
+int uno_usbio_devpath(int i, void **dp);
 int uno_usbio_control(int i, unsigned char bmRequestType, unsigned char bRequest,
                       unsigned short wValue, unsigned short wIndex,
                       void *data, int len);
