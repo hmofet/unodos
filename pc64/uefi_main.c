@@ -703,11 +703,26 @@ static unsigned char gMMap[65536];      /* memory-map scratch for the EBS key */
 
 /* A native KEYBOARD that survives ExitBootServices must cover this machine, or
  * a detached system is unusable (the shell is keyboard-driven and firmware
- * ConIn dies with EBS). That's the i8042 (PS/2), a bound I2C-HID keyboard, or a
- * bound USB HID keyboard. A native pointer is a bonus, not required. */
+ * ConIn dies with EBS). That's the i8042 (PS/2), a bound I2C-HID keyboard, a
+ * bound USB HID keyboard - or one we can PROVE we will bind at detach.
+ *
+ * That last arm is not a nicety. USB HID is a detached-mode source by
+ * construction: xhci.c refuses the controller until the firmware is gone, so
+ * uno_usb_hid_kbd_present() is necessarily 0 while this gate runs. Without a
+ * prediction, a machine whose only keyboard is USB could never satisfy the
+ * gate and could never detach - we would not leave the firmware until the
+ * keyboard existed, and the keyboard could not exist until we left. That is
+ * every desktop with USB-only input, including the ZimaBlade this programme
+ * tests on (metal, 2026-07-29: `detached: 0`, ps2 kbd=0, i2c-hid present=0,
+ * usb-hid kbd=0 - refused here, with a USB keyboard plugged in).
+ *
+ * uno_usbboot_hid_kbd() answers it the same way the boot volume is answered:
+ * from the firmware's own descriptors, for a device the native stack will
+ * actually be able to reach. A native pointer is a bonus, not required. */
 static int native_kbd_for_detach(void)
 {
-    return uno_ps2_present() || uno_i2c_hid_kbd_present() || uno_usb_hid_kbd_present();
+    return uno_ps2_present() || uno_i2c_hid_kbd_present() ||
+           uno_usb_hid_kbd_present() || uno_usbboot_hid_kbd();
 }
 
 /* ...and a native POINTER must too, if the firmware is currently providing
@@ -727,7 +742,7 @@ static int native_kbd_for_detach(void)
  * keyboard's EC and says nothing about whether a mouse is attached. */
 static int native_ptr_for_detach(void)
 {
-    return uno_i2c_hid_present() || uno_usb_hid_present();
+    return uno_i2c_hid_present() || uno_usb_hid_present() || uno_usbboot_hid_ptr();
 }
 
 /* Would detaching strand this machine with no pointer at all?
@@ -811,7 +826,12 @@ static int try_detach(void)
                                 dbg_puts("detach: " msg "\n"); return 0; } while (0)
     if (gDetached) return 1;
     if (gUseBlt || !gVram)        REFUSE("no linear framebuffer", 0);
-    if (!native_kbd_for_detach()) REFUSE("no native keyboard", 0);
+    if (!native_kbd_for_detach()) {
+        const char *hw = ""; uno_usbboot_hid_status(0, 0, &hw);
+        gDetachWhy = hw; gDetachBlocked = 1;   /* say WHICH keyboard we wanted */
+        dbg_puts("detach: no native keyboard - "); dbg_puts(hw); dbg_puts("\n");
+        return 0;
+    }
     /* refuse to trade a working firmware pointer for no pointer at all */
     if (detach_would_strand_pointer()) REFUSE("would lose the only pointer", 1);
     if (!uno_native_tsc_ok())     REFUSE("no TSC time base", 0);
