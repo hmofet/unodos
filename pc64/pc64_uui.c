@@ -394,7 +394,7 @@ static int         g_cp_ap_n, g_cp_ap_sel;
  * scroll, so I can't choose my network"). The toolkit does it now. */
 static char        g_cp_psk[72];
 static unoui_text  g_cp_psk_t;
-static char        g_cp_wifi_msg[72] = "Press Scan to look for networks.";
+static char        g_cp_wifi_msg[220] = "Press Scan to look for networks.";
 static char        g_cp_wifi_more[48];
 static char        g_cp_wifi_pwlbl[56];
 static char        g_cp_wifi_stat[196];
@@ -433,8 +433,20 @@ static void cp_wifi_scan(void)
         g_cp_ap_ptr[i] = g_cp_ap_lbl[i];
     }
     g_cp_ap_sel = 0;
-    cp_wifi_note(g_cp_ap_n ? "Pick a network, type its password, then Join."
-                           : "No networks found - is the card blocked by rfkill?");
+    if (g_cp_ap_n) {
+        cp_wifi_note("Pick a network, type its password, then Join.");
+    } else {
+        /* An empty scan almost never means "the air is empty" - it means the
+         * radio never came up, and the driver already knows why. Guessing
+         * ("blocked by rfkill?") sent a real debugging session down the wrong
+         * path; report what the driver says instead. */
+        char msg[220]; char *p = ap_str(msg, "No networks found - ");
+        char st[160];
+        iwl_status_str(st, sizeof st);
+        p = ap_str(p, st[0] ? st : "the radio did not come up.");
+        *p = 0;
+        cp_wifi_note(msg);
+    }
     rebuild_ctrl_window();
 }
 
