@@ -33,9 +33,10 @@ static void uh_dbgn(int n) { (void)n; }
 
 /* one claimed HID interrupt endpoint */
 typedef struct {
-    int  dev;                  /* index into the xHCI device list */
-    int  is_kbd;               /* 1 keyboard, 0 mouse             */
-    hid_kbd_state kbd;         /* keyboard edge state             */
+    int  dev;                  /* index into the xHCI device list          */
+    int  h;                    /* xhci interrupt-endpoint handle           */
+    int  is_kbd;               /* 1 keyboard, 0 mouse                      */
+    hid_kbd_state kbd;         /* keyboard edge state                      */
 } hidep;
 
 #define MAX_HIDEP 8
@@ -77,9 +78,10 @@ static void claim_device(int dev)
             int mps = cfg[i + 4] | (cfg[i + 5] << 8);
             (void)cur_sub;
             if (want && (attr & 0x03) == 0x03 && (addr & 0x80) && g_neps < MAX_HIDEP) {
-                if (uno_usb_setup_intr_in(dev, addr, mps) == 0) {
+                int h = uno_usb_setup_intr_in(dev, addr, mps);
+                if (h >= 0) {
                     hidep *e = &g_eps[g_neps++];
-                    e->dev = dev; e->is_kbd = (cur_proto == 1);
+                    e->dev = dev; e->h = h; e->is_kbd = (cur_proto == 1);
                     hid_kbd_reset(&e->kbd);
                     set_boot(dev, cur_iface);
                     if (e->is_kbd) g_nkbd++; else g_nmouse++;
@@ -117,7 +119,7 @@ int uno_usb_hid_kbd_poll(uno_usb_key_fn emit, void *ctx)
         int n;
         if (!g_eps[i].is_kbd) continue;
         any = 1;
-        n = uno_usb_intr_in(g_eps[i].dev, rep, sizeof rep);
+        n = uno_usb_intr_in(g_eps[i].h, rep, sizeof rep);
         if (n >= 8)                                    /* boot kbd report = 8 B */
             hid_kbd_report(&g_eps[i].kbd, rep, (hid_key_fn)emit, ctx);
     }
@@ -134,7 +136,7 @@ int uno_usb_hid_mouse_poll(int *dx, int *dy, int *btn)
         int n;
         if (g_eps[i].is_kbd) continue;
         any = 1;
-        n = uno_usb_intr_in(g_eps[i].dev, rep, sizeof rep);
+        n = uno_usb_intr_in(g_eps[i].h, rep, sizeof rep);
         if (n >= 3) {                                  /* boot mouse: btn,dx,dy */
             ab |= rep[0] & 0x07;
             ax += (signed char)rep[1];
