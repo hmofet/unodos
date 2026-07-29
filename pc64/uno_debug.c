@@ -42,6 +42,8 @@ int  uno_pc64_dbg_blt_bench(unsigned long long *cycles, unsigned long *bytes);
 void uno_pc64_dbg_bench_cleanup(void);
 void uno_i2c_hid_status(int *nbars, int *nctrl, int *present, int *addr, int *parsed);
 void uno_usb_hid_status(int *nkbd, int *nmouse);
+/* the detach gate's prediction of what USB HID will be claimable (usbboot.c) */
+void uno_usbboot_hid_status(int *kbd, int *ptr, const char **why);
 void uno_ps2_status(int *kbd, int *aux, int *auxport, int *auxid);
 
 /* generated symbol table (tools/mksyms.py -> build/dbg_syms.c; the stub in
@@ -1340,6 +1342,15 @@ void uno_dbg_envblock(void)
             nctrl, present, addr, parsed, uno_i2c_hid_acpi_hits());
         env("ps2: kbd=%d aux=%d auxport=%d auxid=%d\n", kbd, aux, auxport, auxid);
         env("usb-hid: kbd=%d mouse=%d\n", unk, unm);
+        /* ...and what the detach gate PREDICTS it will be able to claim. The
+         * bound counts above are always 0 before ExitBootServices (USB HID is
+         * a detached-mode source), so on a USB-only machine they say nothing
+         * about whether detach can proceed. This line does - it is what a
+         * metal boot log needs to explain a refusal. */
+        {   int pk = 0, pp = 0; const char *pw = 0;
+            uno_usbboot_hid_status(&pk, &pp, &pw);
+            env("usb-hid preflight: kbd=%d ptr=%d (%s)\n", pk, pp, pw ? pw : "");
+        }
     }
 
     {   /* storage inventory */
