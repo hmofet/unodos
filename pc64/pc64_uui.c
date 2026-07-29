@@ -295,7 +295,7 @@ enum { ID_THEME = 1, ID_RES, ID_DARK, ID_WRAP, ID_VOL, ID_SCALE, ID_ABOUT,
        ID_ILIST, ID_IDEF, ID_IRESCAN, ID_IGO, ID_ICONF, ID_LIDSLP,
        ID_DFLOW, ID_DSORT, ID_PSPEED, ID_DSNAP, ID_DLOCK, ID_DARRANGE,
        ID_LIC, ID_ACCT, ID_WALL, ID_CLOCKFMT, ID_BATTMODE,
-       ID_CPTAB, ID_NETREFRESH, ID_SESSION,
+       ID_CPTAB, ID_NETREFRESH, ID_NETRENEW, ID_SESSION,
        ID_WIFISCAN, ID_WIFILIST, ID_WIFIPSK, ID_WIFIJOIN,
        ID_START = 90, ID_SHUTDOWN = 91, ID_RESTART = 92,
        ID_LAUNCH0 = 100,                  /* desktop icons + launcher: +app     */
@@ -450,24 +450,50 @@ static void cp_wifi_scan(void)
     rebuild_ctrl_window();
 }
 
+/* "<what> ... (N s)" - the join blocks the shell for seconds at a time, so
+ * every phase says what it is doing AND keeps a running clock, otherwise a
+ * working join is indistinguishable from a hung machine (metal: "it looks like
+ * it's frozen"). */
+static void cp_wifi_phase(const char *what, int secs)
+{
+    char msg[120];
+    char *p = ap_str(msg, what);
+    if (secs >= 0) { p = ap_str(p, "  ("); p = ap_int(p, secs); p = ap_str(p, " s)"); }
+    *p = 0;
+    cp_wifi_note(msg);
+}
+
 static void cp_wifi_join(void)
 {
     uno_nic_t *nic;
     int i;
     if (g_cp_ap_n <= 0) { cp_wifi_note("Scan first."); return; }
     g_cp_psk[g_cp_psk_t.len] = 0;
-    cp_wifi_note("Joining...");
+    { char msg[120]; char *p = ap_str(msg, "Joining \"");
+      p = ap_str(p, g_cp_aps[g_cp_ap_sel].ssid);
+      p = ap_str(p, "\" - associating and running the 4-way handshake...");
+      *p = 0; cp_wifi_note(msg); }
     if (iwl_join_ssid(g_cp_aps[g_cp_ap_sel].ssid, g_cp_psk) != 0) {
         cp_wifi_note("Join failed - check the password (details in the NET log).");
     } else {
-        cp_wifi_note("Joined - asking for an address...");
+        cp_wifi_phase("Joined. Asking the network for an address (DHCP)", 0);
         nic = iwl_nic();
         if (nic) {
             net_init(nic, iwl_mac());       /* the stack binds one nic: WiFi now */
             net_dhcp_start();
-            for (i = 0; i < 1800 && !net_dhcp_done(); i++) { net_poll(); uno_pc64_delay_ms(5); }
+            /* 20 s, not 9: a DHCP server behind a fresh WPA2 association often
+             * needs more than one DISCOVER, and the retransmit timer only
+             * advances while net_poll() runs. Repaint twice a second so the
+             * screen is visibly alive the whole time. */
+            for (i = 0; i < 4000 && !net_dhcp_done(); i++) {
+                net_poll(); uno_pc64_delay_ms(5);
+                if (i && (i % 100) == 0)
+                    cp_wifi_phase("Asking the network for an address (DHCP)", i / 200);
+            }
         }
-        cp_wifi_note(net_dhcp_done() ? "Connected." : "Joined, but no address yet.");
+        cp_wifi_note(net_dhcp_done()
+            ? "Connected."
+            : "Joined, but no address yet - still asking in the background.");
     }
     for (i = 0; i < (int)sizeof g_cp_psk; i++) g_cp_psk[i] = 0;   /* do not keep it */
     g_cp_psk_t.len = g_cp_psk_t.caret = g_cp_psk_t.sel = 0;
@@ -570,7 +596,9 @@ static void build_ctrl(unoui_window *w)
         for (i = 0; i < 5; i++) { unoui_add_label(w, 8, y + lofs, g_cp_net[i]); y += row; }
         y += 2;
         x = unoui_add_button(w, 8, y, 110, "Refresh", 0); x->id = ID_NETREFRESH;
-        unoui_add_label(w, 130, y + lofs, "DHCP is automatic.");
+        x = unoui_add_button(w, 126, y, 110, "Renew IP", 0); x->id = ID_NETRENEW;
+        unoui_add_label(w, 248, y + lofs, up && net_dhcp_done()
+                        ? "DHCP is automatic." : "No lease? Try Renew IP.");
         y += bh + 8;
         /* ---- WiFi: scan, pick, type the password, join ---- */
         if (iwl_present()) {
@@ -2409,6 +2437,19 @@ static void on_action(const unoui_action *a)
     case ID_CPTAB: if (a->value >= 0 && a->value < CT_N) {   /* Control Panel tab */
                        g_ctrl_tab = a->value; rebuild_ctrl_window(); } break;
     case ID_NETREFRESH: rebuild_ctrl_window(); break;        /* re-read live net status */
+    case ID_NETRENEW: {                                     /* ask for a lease again */
+        int i;
+        cp_wifi_phase("Asking the network for an address (DHCP)", 0);
+        net_dhcp_start();
+        for (i = 0; i < 4000 && !net_dhcp_done(); i++) {
+            net_poll(); uno_pc64_delay_ms(5);
+            if (i && (i % 100) == 0)
+                cp_wifi_phase("Asking the network for an address (DHCP)", i / 200);
+        }
+        cp_wifi_note(net_dhcp_done() ? "Connected."
+                                     : "Still no address - the network did not answer.");
+        rebuild_ctrl_window();
+        break; }
     case ID_WIFILIST:  if (a->value >= 0 && a->value < g_cp_ap_n) {
                            g_cp_ap_sel = a->value;
                            cp_wifi_target_label();  /* in place: no rebuild, so
@@ -2846,6 +2887,22 @@ int main(void)
          * fuzz driver ran even when unticked / looped forever. Disconnected here
          * AND hard-disabled in pc64_stress.c so no DEBUG.CFG value can revive
          * it. Conformance + net tests above are unaffected. */
+        /* Keep the net stack breathing. Nothing else pumps it from the frame
+         * loop - net_poll() only ran inside blocking loops (a fetch, TLS, the
+         * join dialog) - so DHCP's retransmit timer froze the moment such a
+         * loop ended, and a lease that would have arrived a second later never
+         * did. That is why a joined WiFi link could sit with no IP address
+         * forever. No-op with no NIC bound (S-NET-02). */
+        { int np; for (np = 0; np < 4; np++) net_poll(); }
+        /* a lease that lands out here still has to reach the screen: refresh
+         * the Control Panel's network pane on the transition */
+        { static int last_lease = -1;
+          int lease = net_dhcp_done();
+          if (lease != last_lease) {
+              last_lease = lease;
+              if (g_open[APP_CTRL] && g_ctrl_tab == CT_NETWORK) rebuild_ctrl_window();
+          } }
+
         uno_pc64_poll();
 #ifdef UNO_ACPI
         {
