@@ -37,6 +37,7 @@ int uno_usb_bulk_in_poll(int dev) { (void)dev; return -1; }
 
 /* detach the firmware's USB driver from this controller first (uefi_main) */
 int uno_pc64_pci_disconnect(int bus, int dev, int fn);
+int uno_pc64_detached(void);
 
 typedef unsigned char  u8;
 typedef unsigned short u16;
@@ -670,10 +671,33 @@ static int xhci_bringup(void)
 
 int uno_xhci_supported(void) { return 1; }
 
+/* Taking the controller is a one-way door while the firmware is alive.
+ *
+ * uno_pc64_pci_disconnect() below rips the firmware's own USB stack off this
+ * xHCI - which is the stack currently carrying the USB boot volume, the
+ * firmware keyboard on a laptop with no i8042, and (on a stick boot) the
+ * Block IO the running system is reading its modules from. Doing that BEFORE
+ * ExitBootServices is how you lose the machine you are standing on.
+ *
+ * So the native stack is DETACHED-mode by construction: compiled into every
+ * build, inert until firmware ownership has ended. Attached-mode USB goes
+ * through usbio.c (EFI_USB_IO, no ownership change) instead.
+ *
+ * UNO_XHCI_EAGER (implied by the older UNO_USBHID_TEST) opts a test build out,
+ * so QEMU can exercise the native path attached - pair it with -DUNO_NO_DETACH,
+ * never ship it. */
+#if defined(UNO_USBHID_TEST) && !defined(UNO_XHCI_EAGER)
+#define UNO_XHCI_EAGER 1
+#endif
+
 int uno_xhci_init(void)
 {
     pci_dev d; u64 bar; u32 hcs1, hcc; int attempt;
 
+    if (g_present) return 1;          /* idempotent: 3 callers, one bring-up */
+#ifndef UNO_XHCI_EAGER
+    if (!uno_pc64_detached()) return 0;
+#endif
     g_err = 1;
     if (!find_xhci(&d)) return 0;
     g_dbg_disc = uno_pc64_pci_disconnect(d.bus, d.dev, d.fn);   /* take it from the firmware first */
