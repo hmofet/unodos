@@ -286,6 +286,7 @@ void uno_pc64_scene_restore(void); /* restore the snapshot before drawing the ou
 void uno_pc64_lowres(int on);   /* low-res render mode (full-screen 3D) */
 int  uno_pc64_next_key(int *scan, int *uni, int *ctrl);  /* raw key stream (unoui) */
 void uno_pc64_mouse(int *x, int *y, int *btn);           /* fb-space mouse + button */
+int  uno_pc64_wheel(void);            /* wheel notches since last call (+ = down) */
 void uno_pc64_delay_ms(int ms);                          /* firmware Stall (idle pacing) */
 void uno_pc64_res_set(int idx);      /* Settings resolution (shell reuse) */
 int  uno_pc64_res_count(void);

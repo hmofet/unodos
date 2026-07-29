@@ -144,6 +144,7 @@ void uno_native_reset(void)
 #define ST_AUX   0x20
 
 static int gPs2Kbd, gPs2Aux;                   /* brought-up flags             */
+static int gPs2Wheel;                          /* 4-byte packets with a wheel  */
 static int gPs2AuxPort;                        /* 0xA9 aux-port self-test ok   */
 static int gPs2AuxId = -1;                     /* 0xF2 device id, -1 = no answer */
 
@@ -211,6 +212,16 @@ int uno_ps2_init(void)
      * Recorded for the System readout - on a ThinkPad the TrackPoint answers
      * here even when the touchpad is off on I2C entirely. */
     if (aux_cmd(0xF2)) { int id = dat_in(); gPs2AuxId = (id >= 0) ? id : -1; }
+    /* the Microsoft IntelliMouse knock: sample rate 200, 100, 80 makes a wheel
+     * mouse switch to device id 3 and 4-byte packets. A mouse without a wheel
+     * keeps answering 0, so this is safe to try on anything. */
+    if (aux_cmd(0xF3) && aux_cmd(200) &&       /* each byte goes through 0xD4  */
+        aux_cmd(0xF3) && aux_cmd(100) &&
+        aux_cmd(0xF3) && aux_cmd(80)  && aux_cmd(0xF2)) {
+        int id = dat_in();
+        if (id >= 0) { gPs2AuxId = id; gPs2Wheel = (id == 3 || id == 4); }
+    }
+    if (aux_cmd(0xF3)) aux_cmd(100);           /* back to a sane sample rate   */
     gPs2Aux = aux_cmd(0xF4);                   /* stream reporting on          */
     return gPs2Kbd;
 }
@@ -298,17 +309,27 @@ static void kbd_byte(unsigned char b)
     kq_push(0, uni, gCtrl);
 }
 
-/* ---- mouse packet assembly ------------------------------------------------ */
-static unsigned char gMPk[3];
-static int gMPn, gMdx, gMdy, gMBtn, gMNew;
+/* ---- mouse packet assembly ------------------------------------------------ *
+ * A wheel mouse (device id 3, see the knock in uno_ps2_init) sends FOUR bytes:
+ * the fourth is a signed wheel delta, positive when the wheel is rolled toward
+ * the user. gPs2Wheel picks the packet length, so a plain 3-byte mouse is
+ * unaffected. */
+static unsigned char gMPk[4];
+static int gMPn, gMdx, gMdy, gMdz, gMBtn, gMNew;
 
 static void aux_byte(unsigned char b)
 {
+    int plen = gPs2Wheel ? 4 : 3;
     if (gMPn == 0 && !(b & 0x08)) return;      /* resync on the sync bit       */
     gMPk[gMPn++] = b;
-    if (gMPn < 3) return;
+    if (gMPn < plen) return;
     gMPn = 0;
     if (gMPk[0] & 0xC0) return;                /* overflow - drop              */
+    if (gPs2Wheel) {
+        int z = (int)(signed char)((gMPk[3] & 0x08) ? (gMPk[3] | 0xF0)
+                                                    : (gMPk[3] & 0x0F));
+        gMdz += z;                             /* + = toward the user (down)   */
+    }
     gMdx += (int)gMPk[1] - ((gMPk[0] & 0x10) ? 256 : 0);
     gMdy -= (int)gMPk[2] - ((gMPk[0] & 0x20) ? 256 : 0);   /* PS/2 y is up    */
     /* Keep the buttons SEPARATE (bit0 left, bit1 right, bit2 middle) rather
@@ -347,3 +368,8 @@ int uno_ps2_mouse(int *dx, int *dy, int *btn)
     gMdx = gMdy = 0; gMNew = 0;
     return had;
 }
+
+/* accumulated wheel notches since the last call (+ = scroll down); 0 on a
+ * mouse with no wheel, which never sets gPs2Wheel */
+int uno_ps2_mouse_wheel(void)
+{ int z = gMdz; gMdz = 0; return z; }

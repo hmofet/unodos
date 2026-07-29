@@ -28,6 +28,9 @@ int  uno_usb_hid_kbd_poll(uno_usb_key_fn emit, void *ctx);
  * Returns 1 if a mouse is present (dx/dy/btn written), 0 if none. */
 int  uno_usb_hid_mouse_poll(int *dx, int *dy, int *btn);
 
+/* wheel notches accumulated by the polls above, cleared on read (+ = down) */
+int  uno_usb_hid_wheel(void);
+
 int  uno_usb_hid_present(void);       /* any HID endpoint claimed        */
 int  uno_usb_hid_kbd_present(void);   /* at least one keyboard           */
 void uno_usb_hid_status(int *nkbd, int *nmouse);

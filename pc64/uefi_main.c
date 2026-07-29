@@ -90,6 +90,7 @@ static EFI_SIMPLE_POINTER_PROTOCOL   *gPtr[MAXPTR];
 static EFI_ABSOLUTE_POINTER_PROTOCOL *gAbs[MAXPTR];
 static int gNPtr, gNAbs;
 static int gAccX[MAXPTR], gAccY[MAXPTR];    /* sub-pixel remainders per device */
+static int gAccZ[MAXPTR];                   /* sub-notch wheel remainder       */
 
 /* ---- present-target geometry ---------------------------------------------
  * The desktop framebuffer (uno_fb_w x uno_fb_h) is FRACTIONALLY scaled to
@@ -179,6 +180,11 @@ void uno_pc64_scene_restore(void)
 /* ---- cursor state --------------------------------------------------------- */
 static int g_cx = 320, g_cy = 240;      /* re-clamped when geometry is set */
 static int g_have_pointer = 0;
+/* Mouse-wheel notches accumulated by poll_pointer, drained by the shell into
+ * UI_EV_WHEEL. Positive = scrolled DOWN (toward the user), the direction unoui
+ * expects. Every pointer path feeds it: the firmware Simple Pointer's Z axis
+ * before detach, and the native PS/2 + USB HID mice after. */
+static int g_wheel_acc = 0;
 static int g_prev_mb = 0;
 /* Trackpad pointer speed, as a percentage: 100 means a full swipe of the pad
  * moves the cursor half a screen, 300 means one and a half. Adjustable from
@@ -1033,6 +1039,10 @@ int uno_pc64_next_key(int *scan, int *uni, int *ctrl)
 }
 void uno_pc64_mouse(int *x, int *y, int *btn) { *x = g_cx; *y = g_cy; *btn = g_prev_mb; }
 
+/* wheel notches since the last call (+ = down); the shell turns these into
+ * UI_EV_WHEEL, which is what scrolls lists, documents and the browser. */
+int uno_pc64_wheel(void) { int z = g_wheel_acc; g_wheel_acc = 0; return z; }
+
 /* Live pointer sample for a legacy blocking drag (Paint's GetMouse/StillDown
  * spin). Those apps loop reading the mouse WITHOUT returning to the main event
  * pump, so nothing would otherwise refresh the cursor - here we pump the pointer
@@ -1272,6 +1282,16 @@ static void poll_pointer(void)
         EFI_SIMPLE_POINTER_STATE st;
         if (gPtr[i]->GetState(gPtr[i], &st) != EFI_SUCCESS) continue;
         gPtrBtn[i] = (st.LeftButton ? 1 : 0) | (st.RightButton ? 2 : 0); /* latch */
+        if (st.RelativeMovementZ) {          /* the wheel, in Z resolution units */
+            int zdiv = (int)(gPtr[i]->Mode->ResolutionZ ? gPtr[i]->Mode->ResolutionZ : 1);
+            int notch;
+            gAccZ[i] += (int)st.RelativeMovementZ;
+            notch = gAccZ[i] / zdiv;
+            gAccZ[i] -= notch * zdiv;
+            /* EFI reports Z positive when the wheel is rolled FORWARD (away),
+             * which scrolls the view UP - unoui's wheel is + for down. */
+            g_wheel_acc -= notch;
+        }
         if (!moved && (st.RelativeMovementX || st.RelativeMovementY)) {
             int div = (int)(gPtr[i]->Mode->ResolutionX ? gPtr[i]->Mode->ResolutionX : 1);
             int mv;
@@ -1289,6 +1309,7 @@ static void poll_pointer(void)
         int dx, dy, pb;
         uno_ps2_pump();
         uno_ps2_mouse(&dx, &dy, &pb);
+        g_wheel_acc += uno_ps2_mouse_wheel();   /* IntelliMouse Z, + = down */
         if (dx || dy) {
             g_cx += dx; g_cy += dy;
             clamp_cursor();
@@ -1308,6 +1329,7 @@ static void poll_pointer(void)
             }
             mb |= ub;
         }
+        g_wheel_acc += uno_usb_hid_wheel();     /* boot-report byte 3 */
     }
 
     /* a click on ANY device's ANY button counts (clickpads report the whole
