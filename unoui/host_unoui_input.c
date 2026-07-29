@@ -28,6 +28,7 @@ static void ev_down(int x,int y)     { unoui_event e; memset(&e,0,sizeof e); e.k
 static void ev_up(int x,int y)       { unoui_event e; memset(&e,0,sizeof e); e.kind=UI_EV_MOUSE_UP;   e.x=x; e.y=y; unoui_handle(&UI,&e); }
 static void ev_char(int c)           { unoui_event e; memset(&e,0,sizeof e); e.kind=UI_EV_CHAR; e.ch=c; unoui_handle(&UI,&e); }
 static void ev_key(int k,int mods)   { unoui_event e; memset(&e,0,sizeof e); e.kind=UI_EV_KEY; e.key=k; e.mods=mods; unoui_handle(&UI,&e); }
+static void ev_wheel(int x,int y,int n) { unoui_event e; memset(&e,0,sizeof e); e.kind=UI_EV_WHEEL; e.x=x; e.y=y; e.wheel=n; unoui_handle(&UI,&e); }
 
 static void click(int x,int y)       { ev_move(x,y); ev_down(x,y); ev_up(x,y); }
 static void type_str(const char *s)  { for (; *s; s++) { if (*s=='\n') ev_key(UI_KEY_ENTER,0); else ev_char((unsigned char)*s); } }
@@ -111,6 +112,14 @@ int main(int argc, char **argv)
     /* list selection (click 'themes.dat', a few rows down) */
     click(300, 300);
     snap(dir, "list: row selected");
+
+    /* the list is longer than its box: the wheel scrolls it (inline scrollbar
+       on the right edge), and a row that was off the bottom is now clickable */
+    ev_move(300, 300);
+    ev_wheel(300, 300, 2);
+    snap(dir, "list: wheel-scrolled past the box");
+    click(300, 300);
+    snap(dir, "list: row picked from the scrolled view");
 
     /* drag the Tools window (also proves z-order: it was on top) */
     drag(500, 79, 360, 150);

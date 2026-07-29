@@ -214,6 +214,32 @@ unoui_widget *unoui_add_icon  (unoui_window *, int x, int y, const char *text);
 unoui_widget *unoui_add_canvas(unoui_window *, int x, int y, int w, int h,
                                unoui_canvas *c);
 
+/* ---- scrolling lists (UI_LIST) -------------------------------------------
+ * A list shows a WINDOW of its items instead of clipping at the box edge, so a
+ * list longer than its rect is fully reachable: the toolkit keeps the first
+ * visible row in the widget's `value`, paints an inline scrollbar on the right
+ * edge when the list overflows, and drives it from the wheel, the bar (arrows +
+ * thumb drag) and the keyboard (arrows / PgUp / PgDn / Home / End, which keep
+ * the selection in view). An app just calls unoui_add_list() with the full item
+ * array and reads the selected index out of unoui_action.value.
+ *
+ * The same geometry is public so a UI_CANVAS app - which owns raw pixels, not
+ * widgets - can host an identical list inside its own rect: draw it with
+ * unoui_list_draw(), map a click with unoui_list_index_at() / unoui_list_bar(),
+ * and keep the view honest with unoui_list_reveal(). */
+#define UI_LIST_BAR_W 12                  /* inline scrollbar width, px         */
+/* widget flag: the app moved `sel` itself, so the next draw scrolls that row
+ * into view and clears the bit. Set it through unoui_list_set_sel(). */
+#define UI_WF_LIST_REVEAL (1 << 13)
+void unoui_list_set_sel(unoui_widget *w, int sel);  /* select + scroll into view */
+int  unoui_list_rows  (unoui_rect r);              /* rows visible in `r`       */
+int  unoui_list_maxtop(unoui_rect r, int n);       /* largest legal first row   */
+int  unoui_list_index_at(unoui_rect r, int n, int top, int y);  /* row under y  */
+int  unoui_list_reveal(unoui_rect r, int n, int sel, int top);  /* clamped top  */
+unoui_rect unoui_list_bar(unoui_rect r, int n);    /* bar strip; .w 0 = none    */
+void unoui_list_draw  (const struct unoui_theme *, unoui_rect r,
+                       const char **items, int n, int sel, int top);
+
 /* compute a window's canonical content origin from the theme metrics. Window
  * painters AND hit-testing use this, so what you see is what you can click. */
 void unoui_content_origin(const struct unoui_theme *, const unoui_window *,
@@ -250,7 +276,8 @@ typedef struct {
 /* mouse-capture / drag modes (shared by the input + render layers) */
 enum {
     UI_CAP_NONE = 0, UI_CAP_WINDOW, UI_CAP_BUTTON, UI_CAP_VTHUMB, UI_CAP_HTHUMB,
-    UI_CAP_SLIDER, UI_CAP_TEXT, UI_CAP_LIST, UI_CAP_RESIZE
+    UI_CAP_SLIDER, UI_CAP_TEXT, UI_CAP_LIST, UI_CAP_RESIZE,
+    UI_CAP_LISTBAR               /* dragging a list's inline scrollbar thumb    */
 };
 
 /* result of feeding one event: did a widget activate / change? */

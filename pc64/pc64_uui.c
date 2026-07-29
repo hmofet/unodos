@@ -296,7 +296,7 @@ enum { ID_THEME = 1, ID_RES, ID_DARK, ID_WRAP, ID_VOL, ID_SCALE, ID_ABOUT,
        ID_DFLOW, ID_DSORT, ID_PSPEED, ID_DSNAP, ID_DLOCK, ID_DARRANGE,
        ID_LIC, ID_ACCT, ID_WALL, ID_CLOCKFMT, ID_BATTMODE,
        ID_CPTAB, ID_NETREFRESH, ID_SESSION,
-       ID_WIFISCAN, ID_WIFILIST, ID_WIFIPSK, ID_WIFIJOIN, ID_WIFIMORE,
+       ID_WIFISCAN, ID_WIFILIST, ID_WIFIPSK, ID_WIFIJOIN,
        ID_START = 90, ID_SHUTDOWN = 91, ID_RESTART = 92,
        ID_LAUNCH0 = 100,                  /* desktop icons + launcher: +app     */
        ID_TASK0   = 200 };                /* taskbar window buttons: +app       */
@@ -382,24 +382,32 @@ static void rebuild_ctrl_window(void);
  * "working" line first and presents it directly, the same trick the installer's
  * progress uses. WIFI.CFG still works; this is the runtime alternative. */
 #define CP_WIFI_MAX 16          /* networks kept from a scan (strongest first) */
-#define CP_WIFI_ROWS 6          /* rows visible at once - see g_cp_ap_top below */
+#define CP_WIFI_ROWS 6          /* rows of the network list shown at once      */
 static iwl_ap_t    g_cp_aps[CP_WIFI_MAX];
 static char        g_cp_ap_lbl[CP_WIFI_MAX][44];
 static const char *g_cp_ap_ptr[CP_WIFI_MAX];
 static int         g_cp_ap_n, g_cp_ap_sel;
-/* First visible row. unoui's list widget has NO scrolling - its painter starts
- * at the top of the rect and its hit test maps y straight to an index - so a
- * list longer than its box is simply unreachable (metal, X1 Carbon: "the list
- * of found SSIDs doesn't scroll, so I can't choose my network"). Rather than
- * reach into the toolkit, page the list here: the widget only ever sees the
- * CP_WIFI_ROWS entries starting at g_cp_ap_top, and a More button advances it. */
-static int         g_cp_ap_top;
+/* The network list SCROLLS (unoui_add_list + wheel / scrollbar / arrow keys),
+ * so every SSID a scan found is reachable. It used to be paged by hand here -
+ * a "More" button that advanced a window of CP_WIFI_ROWS - because unoui lists
+ * could not scroll at all (metal, X1 Carbon: "the list of found SSIDs doesn't
+ * scroll, so I can't choose my network"). The toolkit does it now. */
 static char        g_cp_psk[72];
 static unoui_text  g_cp_psk_t;
 static char        g_cp_wifi_msg[72] = "Press Scan to look for networks.";
-static char        g_cp_wifi_more[24];
+static char        g_cp_wifi_more[48];
 static char        g_cp_wifi_pwlbl[56];
 static char        g_cp_wifi_stat[196];
+
+/* "Network:  <ssid>" - the join target. Written into a persistent buffer the
+ * label widget points at, so moving the selection updates the text in place. */
+static void cp_wifi_target_label(void)
+{
+    char *p = ap_str(g_cp_wifi_pwlbl, "Network:  ");
+    p = ap_str(p, (g_cp_ap_n > 0 && g_cp_ap_sel >= 0 && g_cp_ap_sel < g_cp_ap_n)
+                  ? g_cp_aps[g_cp_ap_sel].ssid : "-");
+    *p = 0;
+}
 
 /* update the status line and paint it NOW (we are about to block) */
 static void cp_wifi_note(const char *s)
@@ -424,7 +432,7 @@ static void cp_wifi_scan(void)
         *p = 0;
         g_cp_ap_ptr[i] = g_cp_ap_lbl[i];
     }
-    g_cp_ap_sel = 0; g_cp_ap_top = 0;
+    g_cp_ap_sel = 0;
     cp_wifi_note(g_cp_ap_n ? "Pick a network, type its password, then Join."
                            : "No networks found - is the card blocked by rfkill?");
     rebuild_ctrl_window();
@@ -562,30 +570,32 @@ static void build_ctrl(unoui_window *w)
                             g_cp_wifi_stat[0] ? g_cp_wifi_stat : "Intel WiFi card present.");
             y += fh + 8;
             if (g_cp_ap_n > 0) {
-                int shown = g_cp_ap_n - g_cp_ap_top;
-                if (shown > CP_WIFI_ROWS) shown = CP_WIFI_ROWS;
-                x = unoui_add_list(w, 8, y, cw - 16, shown * (fh + 4) + 6,
-                                   &g_cp_ap_ptr[g_cp_ap_top], shown,
-                                   g_cp_ap_sel - g_cp_ap_top);
+                int rows = g_cp_ap_n < CP_WIFI_ROWS ? g_cp_ap_n : CP_WIFI_ROWS;
+                int lh = rows * (fh + 4) + 6;
+                /* the whole scan goes into ONE scrolling list: wheel, the
+                 * inline scrollbar and the arrow keys reach the rest */
+                x = unoui_add_list(w, 8, y, cw - 16, lh,
+                                   g_cp_ap_ptr, g_cp_ap_n, g_cp_ap_sel);
                 x->id = ID_WIFILIST;
-                y += shown * (fh + 4) + 12;
-                if (g_cp_ap_n > CP_WIFI_ROWS) {
-                    char *p = ap_str(g_cp_wifi_more, "More (");
-                    p = ap_int(p, g_cp_ap_top + shown); *p++ = '/';
-                    p = ap_int(p, g_cp_ap_n); *p++ = ')'; *p = 0;
-                    x = unoui_add_button(w, 8, y, fb_text_w(g_cp_wifi_more) + 20,
-                                         g_cp_wifi_more, 0);
-                    x->id = ID_WIFIMORE;
-                    y += bh + 6;
+                unoui_list_set_sel(x, g_cp_ap_sel);   /* keep it in view */
+                y += lh + 6;
+                if (g_cp_ap_n > rows) {
+                    char *p = ap_int(g_cp_wifi_more, g_cp_ap_n);
+                    p = ap_str(p, " networks - scroll for the rest"); *p = 0;
+                    unoui_add_label(w, 8, y + lofs, g_cp_wifi_more);
+                    y += fh + 6;
                 }
             }
-            /* name the target: with the list paged, the highlighted row can be
-             * off-page, and "Password:" alone would not say for what */
-            { char *p = ap_str(g_cp_wifi_pwlbl, "Password");
-              if (g_cp_ap_n > 0) { p = ap_str(p, " for "); p = ap_str(p, g_cp_aps[g_cp_ap_sel].ssid); }
-              *p++ = ':'; *p = 0; }
-            pw = fb_text_w(g_cp_wifi_pwlbl) + 10;
+            /* name the target on its OWN line: the highlighted row can be
+             * scrolled out of sight, and the label is rewritten in place when
+             * the selection moves (no window rebuild, so the list keeps its
+             * scroll position), which a "Password for X:" prefix could not do
+             * without re-laying the field out. */
+            cp_wifi_target_label();
             unoui_add_label(w, 8, y + lofs, g_cp_wifi_pwlbl);
+            y += fh + 6;
+            pw = fb_text_w("Password:") + 10;
+            unoui_add_label(w, 8, y + lofs, "Password:");
             unoui_text_init(&g_cp_psk_t, g_cp_psk, sizeof g_cp_psk, 0);
             g_cp_psk_t.len = (int)strlen(g_cp_psk);
             g_cp_psk_t.caret = g_cp_psk_t.sel = g_cp_psk_t.len;
@@ -988,7 +998,8 @@ static void inst_rescan(void)
     }
     g_inst_sel = g_inst_n ? 0 : -1;
     inst_disarm();
-    if (g_inst_list_w) { g_inst_list_w->nitems = g_inst_n; g_inst_list_w->value = g_inst_sel; }
+    if (g_inst_list_w) { g_inst_list_w->nitems = g_inst_n;
+                         unoui_list_set_sel(g_inst_list_w, g_inst_sel); }
     if (g_inst_prog_w) g_inst_prog_w->value = 0;
     strcpy(g_inst_stat, g_inst_n ? "Select a target, then Install."
                                  : "No install targets found.");
@@ -1008,7 +1019,7 @@ static void inst_select(int n)
     if (n < 0 || n >= g_inst_n) return;
     g_inst_sel = n;
     inst_disarm();
-    if (g_inst_list_w) g_inst_list_w->value = n;
+    if (g_inst_list_w) unoui_list_set_sel(g_inst_list_w, n);
     strcpy(g_inst_stat, uno_inst_kind(n) == UNO_INST_DISK
            ? "ERASES the whole disk: type " INST_CONFIRM_WORD ", then Install."
            : "Non-destructive: adds \\EFI\\UNODOS + a boot entry.");
@@ -2386,13 +2397,11 @@ static void on_action(const unoui_action *a)
     case ID_CPTAB: if (a->value >= 0 && a->value < CT_N) {   /* Control Panel tab */
                        g_ctrl_tab = a->value; rebuild_ctrl_window(); } break;
     case ID_NETREFRESH: rebuild_ctrl_window(); break;        /* re-read live net status */
-    case ID_WIFILIST:  { int i = g_cp_ap_top + a->value;      /* the list only sees the page */
-                         if (i >= 0 && i < g_cp_ap_n) g_cp_ap_sel = i; } break;
-    case ID_WIFIMORE:  g_cp_ap_top += CP_WIFI_ROWS;
-                       if (g_cp_ap_top >= g_cp_ap_n) g_cp_ap_top = 0;   /* wrap */
-                       if (g_cp_ap_sel < g_cp_ap_top ||
-                           g_cp_ap_sel >= g_cp_ap_top + CP_WIFI_ROWS) g_cp_ap_sel = g_cp_ap_top;
-                       rebuild_ctrl_window(); break;
+    case ID_WIFILIST:  if (a->value >= 0 && a->value < g_cp_ap_n) {
+                           g_cp_ap_sel = a->value;
+                           cp_wifi_target_label();  /* in place: no rebuild, so
+                                                       the list keeps its view */
+                       } break;
     case ID_WIFISCAN:  cp_wifi_scan(); break;
     case ID_WIFIJOIN:  cp_wifi_join(); break;
     case ID_WIFIPSK:   break;                               /* typing; nothing to do */

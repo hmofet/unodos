@@ -7,9 +7,13 @@ static char g_body[512];
 static char g_name[64];
 static unoui_text g_body_t, g_name_t;
 
+/* deliberately longer than the list box: the box scrolls, so every entry is
+ * reachable and the storyboard shows the inline scrollbar */
 static const char *g_files[]  = { "boot.sys", "kernel.bin", "unoui.c",
                                   "themes.dat", "readme.txt", "config.ini",
-                                  "splash.raw" };
+                                  "splash.raw", "fb.c", "uno3d.c", "notes.md",
+                                  "palette.pal", "font8x8.h", "install.log",
+                                  "session.dat", "wallpaper.raw", "todo.txt" };
 static const char *g_format[] = { "Plain text", "Markdown", "RTF", "HTML" };
 static const char *g_tabs[]   = { "Edit", "Files", "About" };
 
@@ -52,7 +56,9 @@ void demo_app_build(unoui_window *ed, unoui_window *pal)
     unoui_add_check(ed, 110, 204, "Dark mode", 0);          ed->w[ed->nw-1].id = ID_DARK;
 
     unoui_add_label(ed, 234, 200, "Files:");
-    w = unoui_add_list(ed, 234, 212, 124, 92, g_files, 7, 1); w->id = ID_FILES;
+    w = unoui_add_list(ed, 234, 212, 124, 92, g_files,
+                       (int)(sizeof g_files / sizeof g_files[0]), 1);
+    w->id = ID_FILES;
 
     unoui_add_label(ed, 0, 222, "Scroll:");
     unoui_add_hscroll(ed, 0, 234, 210, 40, 100);

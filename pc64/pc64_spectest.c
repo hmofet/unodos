@@ -427,6 +427,48 @@ static void test_unoui(void)
         }
         CHECK("S-UUI-11", txt.len <= txt.cap - 1 && tbuf[sizeof tbuf - 1] == 0);
     }
+
+    /* S-UUI-22 / S-UUI-23: a list longer than its box scrolls, and every row
+     * stays reachable - the WiFi network list was unusable on metal because a
+     * list clipped at its box edge and a click mapped y straight to 0..rows. */
+    {
+        unoui_ui u4; unoui_window lw; unoui_widget *l;
+        static const char *items[40];
+        static char ibuf[40][8];
+        unoui_rect r; unoui_event ev; unoui_action act;
+        int k, rows;
+        for (k = 0; k < 40; k++) {
+            ibuf[k][0] = 'r'; ibuf[k][1] = (char)('0' + k / 10);
+            ibuf[k][2] = (char)('0' + k % 10); ibuf[k][3] = 0;
+            items[k] = ibuf[k];
+        }
+        unoui_ui_init(&u4, t, 1024, 768);
+        unoui_window_init(&lw, "list", 40, 40, 300, 200);
+        l = unoui_add_list(&lw, 10, 10, 160, 70, items, 40, 0); l->id = 55;
+        unoui_ui_add(&u4, &lw);
+        u4.focus_win = 0; u4.focus_wi = 0;
+        r = unoui_widget_rect(t, &lw, l);
+        rows = unoui_list_rows(r);
+
+        /* wheel down, then click the third visible row: the action must carry
+         * the ABSOLUTE index, and the scroll itself must not move `sel` */
+        memset(&ev, 0, sizeof ev); ev.kind = UI_EV_MOUSE_MOVE;
+        ev.x = r.x + 4; ev.y = r.y + 4; unoui_handle(&u4, &ev);
+        ev.kind = UI_EV_WHEEL; ev.wheel = 4; unoui_handle(&u4, &ev);   /* +12 rows */
+        memset(&ev, 0, sizeof ev); ev.kind = UI_EV_MOUSE_DOWN;
+        ev.x = r.x + 4; ev.y = r.y + 4 + 2 * ui_row_h();
+        act = unoui_handle(&u4, &ev);
+        ev.kind = UI_EV_MOUSE_UP; unoui_handle(&u4, &ev);
+        CHECK("S-UUI-22", l->value == 12 && act.changed && act.id == 55 &&
+                          act.value == 14 && l->sel == 14 &&
+                          unoui_list_maxtop(r, 40) == 40 - rows);
+
+        memset(&ev, 0, sizeof ev); ev.kind = UI_EV_KEY; ev.key = UI_KEY_END;
+        act = unoui_handle(&u4, &ev);
+        k = (act.value == 39 && l->value == 40 - rows);
+        ev.key = UI_KEY_HOME; unoui_handle(&u4, &ev);
+        CHECK("S-UUI-23", k && l->sel == 0 && l->value == 0);
+    }
 }
 
 /* ===================================================================== UNO3D */

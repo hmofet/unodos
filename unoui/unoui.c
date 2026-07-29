@@ -653,13 +653,14 @@ static void d_vscroll(const unoui_theme *t, unoui_rect r, int v, int vm)
       } }
 }
 
-static void d_list(const unoui_theme *t, unoui_rect r, const char **it, int n, int sel)
+static void d_list(const unoui_theme *t, unoui_rect r, const char **it, int n,
+                   int sel, int top)
 {
     int i, row = ui_row_h(), y;
     unoui_rect in;
     fb_fill_rect(r.x, r.y, r.w, r.h, t->pal.field_bg);
     in = ui_bevel(r, t, 1, -1);
-    for (i = 0, y = in.y + 2; i < n && y + row <= in.y + in.h; i++, y += row) {
+    for (i = top, y = in.y + 2; i < n && y + row <= in.y + in.h; i++, y += row) {
         fb_px fg = t->pal.field_text;
         if (i == sel) {
             fb_fill_rect(in.x, y - 1, in.w, row, t->pal.accent);
@@ -861,6 +862,75 @@ unoui_rect unoui_widget_rect(const unoui_theme *t, const unoui_window *win,
       { unoui_rect r = { ox + w->r.x, oy + w->r.y, w->r.w, w->r.h }; return r; } }
 }
 
+/* ---- scrolling lists ------------------------------------------------------
+ * A list box shows a WINDOW of its items: `top` is the first visible row. All
+ * of the geometry lives here so the painter, the hit test and the input layer
+ * agree by construction, and so a CANVAS app (which has no widgets, only a
+ * rect) can host the same scrolling list - see unoui.h.  */
+
+int unoui_list_rows(unoui_rect r)
+{
+    int rows = (r.h - 4) / ui_row_h();
+    return rows < 1 ? 1 : rows;
+}
+
+int unoui_list_maxtop(unoui_rect r, int n)
+{
+    int mt = n - unoui_list_rows(r);
+    return mt > 0 ? mt : 0;
+}
+
+int unoui_list_index_at(unoui_rect r, int n, int top, int y)
+{
+    int i = (y - (r.y + 3)) / ui_row_h();
+    if (i < 0) i = 0;
+    if (i > unoui_list_rows(r) - 1) i = unoui_list_rows(r) - 1;
+    i += top;
+    if (i > n - 1) i = n - 1;
+    if (i < 0) i = 0;
+    return i;
+}
+
+int unoui_list_reveal(unoui_rect r, int n, int sel, int top)
+{
+    int rows = unoui_list_rows(r), mt = unoui_list_maxtop(r, n);
+    if (sel >= 0 && sel < n) {
+        if (sel < top) top = sel;
+        else if (sel > top + rows - 1) top = sel - rows + 1;
+    }
+    if (top > mt) top = mt;
+    if (top < 0) top = 0;
+    return top;
+}
+
+void unoui_list_set_sel(unoui_widget *w, int sel)
+{
+    if (!w) return;
+    w->sel = sel;
+    w->flags |= UI_WF_LIST_REVEAL;      /* the next draw scrolls it into view */
+}
+
+/* the scrollbar strip, or a zero-width rect when the list does not overflow */
+unoui_rect unoui_list_bar(unoui_rect r, int n)
+{
+    unoui_rect bar = { r.x + r.w - UI_LIST_BAR_W, r.y, UI_LIST_BAR_W, r.h };
+    if (unoui_list_maxtop(r, n) <= 0 || r.w <= 2 * UI_LIST_BAR_W) bar.w = 0;
+    return bar;
+}
+
+void unoui_list_draw(const unoui_theme *t, unoui_rect r, const char **items,
+                     int n, int sel, int top)
+{
+    const unoui_draw *d = t->draw ? t->draw : &unoui_default_draw;
+    unoui_rect bar = unoui_list_bar(r, n), body = r;
+    int mt = unoui_list_maxtop(r, n);
+    if (top > mt) top = mt;
+    if (top < 0) top = 0;
+    if (bar.w) body.w -= bar.w;
+    PICK(list)(t, body, items, n, sel, top);
+    if (bar.w) PICK(vscroll)(t, bar, top, mt);
+}
+
 static void draw_one(const unoui_draw *d, const unoui_theme *t,
                      const unoui_window *win, unoui_widget *w, int eff, int menuopen)
 {
@@ -882,7 +952,11 @@ static void draw_one(const unoui_draw *d, const unoui_theme *t,
                           eff); break;
     case UI_TABS:     PICK(tabs)(t, r, w->items, w->nitems, w->sel, eff); break;
     case UI_MENUBAR:  PICK(menubar)(t, r, w->menus, w->nmenus, menuopen, -1); break;
-    case UI_LIST:     PICK(list)(t, r, w->items, w->nitems, w->sel); break;
+    case UI_LIST:     w->value = unoui_list_reveal(r, w->nitems,
+                          (w->flags & UI_WF_LIST_REVEAL) ? w->sel : -1, w->value);
+                      w->flags &= ~UI_WF_LIST_REVEAL;
+                      unoui_list_draw(t, r, w->items, w->nitems, w->sel, w->value);
+                      break;
     case UI_GROUP:    PICK(group)(t, r, w->text); break;
     case UI_SEP:      PICK(sep)(t, r); break;
     case UI_ICON:     if (unoui_icon_art) unoui_icon_art(w->icon, r, w->text, eff);
