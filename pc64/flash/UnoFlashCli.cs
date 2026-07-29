@@ -78,11 +78,18 @@ static class Program
                        Native.OPEN_EXISTING, Native.FILE_FLAG_WRITE_THROUGH, IntPtr.Zero)) {
                 if (disk.IsInvalid) {
                     Say("ABORT: cannot open " + dev + " err=" + Marshal.GetLastWin32Error()); return 4; }
-                // ownsHandle:false - otherwise disposing the FileStream closes
-                // `disk`, and the IOCTL_DISK_UPDATE_PROPERTIES below then
-                // throws ObjectDisposedException AFTER a perfectly good write,
-                // which reads like a failed flash when it wasn't.
-                using (var outs = new FileStream(disk, FileAccess.Write, 1 << 20, false))
+                // The FileStream must NOT own `disk`: disposing it closes the
+                // handle, and the IOCTL_DISK_UPDATE_PROPERTIES below then throws
+                // ObjectDisposedException AFTER a perfectly good write, which
+                // reads exactly like a failed flash. (It did, on carbon
+                // 2026-07-28 - the image was byte-perfect on the stick.)
+                // There is no ownsHandle parameter on the SafeFileHandle
+                // constructors: the `false` here is isAsync, which is what the
+                // old comment mistook it for. Hand the stream its own
+                // NON-owning wrapper instead, leaving `disk` owned by the using
+                // above - the one thing that actually keeps it alive.
+                using (var dup  = new SafeFileHandle(disk.DangerousGetHandle(), false))
+                using (var outs = new FileStream(dup, FileAccess.Write, 1 << 20, false))
                 using (var ins  = File.OpenRead(img)) {
                     byte[] buf = new byte[1 << 20];
                     long done = 0; int n, pct = -1;
