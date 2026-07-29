@@ -96,26 +96,51 @@ Three rules it learned the hard way, all of which used to fail silently:
 `uno_usbmsc_why()` names the failure. Post-detach there is no console and no
 volume to log to, so the string has to exist in production builds too.
 
-## KNOWN GAP: SuperSpeed, and no endpoint error recovery
+## SuperSpeed, endpoint recovery, and deadlines (fixed 2026-07-29)
 
-**USB-boot detach is opt-in (`DETACH.CFG`: `usb`) because of this.**
+Three faults that together made a USB boot volume unreliable, and which
+presented as one baffling symptom: a read that worked in a debug build and
+timed out in a production build of the same source.
 
-QEMU's `usb-storage` on `qemu-xhci` enumerates as SuperSpeed — bulk max packet
-1024 — and some `READ(10)`s come back with a transfer error. `xhci.c` is
-missing two things a SuperSpeed device needs:
+**Deadlines must be durations, not spin counts.** `poll_xfer`'s old
+`5000000` was loop iterations, so the real wait depended on the optimiser —
+the debug build accidentally granted several times the patience. A 512-byte
+`READ(10)` needs the device to do actual I/O; production gave up before the
+answer arrived, and the completed event was sitting in the ring moments later.
+`poll_event_ms()` now waits in TSC-backed milliseconds via
+`uno_pc64_delay_ms()`, NOT the local `mdelay()` calibrated spin. Control 2 s,
+bulk 5 s, commands 1 s. **If you add a wait to this driver, use real time.**
 
-1. **Endpoint companion descriptors** (type `0x30`). `bMaxBurst` has to reach
-   the endpoint context's Max Burst Size; today it is left at 0.
-2. **Error recovery.** After a transfer error the endpoint is halted in the
-   CONTROLLER, and the spec's way out is `Reset Endpoint` followed by
-   `Set TR Dequeue Pointer`. `usbmsc`'s `clear_halt()` sends the USB-level
-   CLEAR_FEATURE, which the device hears and the host controller does not — so
-   the ring stays wedged and every later transfer on that endpoint fails.
+**A transfer error halts the endpoint IN THE CONTROLLER.** `clear_halt()`'s
+USB-level CLEAR_FEATURE is heard only by the device; the host controller keeps
+the endpoint Halted with the ring cursor parked on the dead TRB, so every
+later transfer fails too — one error, then the next CBW never goes out, then
+nothing. `ep_recover()` runs the spec's sequence: **Reset Endpoint** (Halted →
+Stopped), **Set TR Dequeue Pointer** to restart the ring, then drain the
+abandoned transfer's event so the next caller is not handed a completion for a
+transfer that no longer exists. After a *timeout* it uses **Stop Endpoint**
+first — there the transfer may still be running, and resetting a running
+endpoint is a context-state error.
 
-The symptom is distinctive: the first `READ(10)` works, a later one does not,
-and two builds with identical logic behave differently. Fix both, confirm in
-QEMU, confirm on the ZimaBlade (a desktop, not a laptop — if it goes wrong
-there is no way back past ExitBootServices), then flip the opt-in.
+**SuperSpeed needs Max Burst Size.** `ss_burst()` reads `bMaxBurst` from the SS
+Endpoint Companion descriptor (type `0x30`, immediately after each endpoint
+descriptor) and programs it into the endpoint context. Zero is right for
+Full/High Speed bulk and wrong for SuperSpeed. It is done inside the driver
+rather than through the `setup_bulk` signature because burst is a property of
+the device, not of the class driver's intent — and the descriptor fetch runs
+*before* any controller state is touched, since a control transfer half way
+through building an input context is a transfer against a half-configured
+endpoint.
+
+Diagnosing the next one: on failure the driver prints `cc` and the endpoint
+state. `cc=-1` with `epstate=1` (Running) means we gave up waiting and the
+device had simply not answered; any other `cc` is a real error completion.
+
+**Still opt-in.** QEMU is green — 5 of 5 USB-storage boots detach with the
+system volume intact, plus `install_test` (both phases) and `storage_test`
+read/write, all post-detach. The remaining gate is metal: the ZimaBlade, a
+desktop rather than a laptop, because past ExitBootServices there is no way
+back if a real stick behaves differently from an emulated one.
 
 ## Stability
 
