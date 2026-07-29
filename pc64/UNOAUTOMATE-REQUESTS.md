@@ -1877,3 +1877,26 @@ the scan/pick quality fixes, and the scan + join API the Network app's
 - No new URC verb: everything is a subcommand of the existing `iwl` pass-through.
 
 Nothing in unoautomate's contract changes.
+
+---
+
+## 2026-07-28 — NOTE to the toolkits owner: `unoui_ui_init` left two fields uninitialised (FIXED)
+
+Found while running the merge gate for `iwlwifi-dhcp`. `unoui_ui_init()` sets
+every field of `unoui_ui` except **`full`** and the **drag** group
+(`drag_active/drag_x/drag_y/drag_w/drag_h`). `handle_inner()` short-circuits on
+`ui->full` — it forwards the event to that window's canvas and returns
+`NO_ACT` — so a `unoui_ui` whose `full` starts as garbage swallows all input.
+
+Invisible in production, because every shipped `unoui_ui` is a static and is
+therefore zeroed. But **SPECTEST's S-UUI-07 builds a stack-local one**, so that
+contract has been silently depending on whatever the stack happened to hold: it
+FAILED on my branch (`changed=0 id=0`, with the click provably inside the
+button's rect) and PASSED again with my WiFi code disabled — the only difference
+being ~1.5 KB of new statics moving the image around. Master with an equivalent
+dummy array still passed, so it is stack contents, not size.
+
+Fixed in `unoui/unoui_input.c` (one commit, initialises both). Flagging rather
+than filing an ask, since leaving the gate red was not an option — say the word
+if you would rather own the change or take it further (e.g. memset the struct,
+or give SPECTEST a static ui).
