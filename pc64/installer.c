@@ -18,12 +18,18 @@
 #include "uefi.h"
 #include "string.h"
 #include "installer.h"
-#include "unostorage.h"     /* shared CRC-32 (one copy for the GPT checksum) */
+#include "unostorage.h"     /* shared CRC-32, and the native GPT/ESP authoring */
+#include "blkdev.h"         /* native disks, once the firmware is gone         */
+#include "pc64_fs.h"
+#include "fat.h"
 
 /* uefi_main.c */
 void *uno_pc64_st(void);
 void *uno_pc64_image_handle(void);
 int   uno_pc64_detached(void);
+
+void *malloc(unsigned long);
+void  free(void *);
 
 /* pc64_modload.c - the .UNO app-module roster (copied on ESP installs) */
 int         uno_mod_count(void);
@@ -109,6 +115,8 @@ typedef struct {
     int kind, usable;
     EFI_HANDLE   h;                          /* SFS handle (ESP targets)       */
     EFI_BLOCK_IO *bio;                       /* whole-disk targets             */
+    void *bdev;                              /* native: uno_bdev (both kinds)  */
+    int   vol;                               /* native: uno_fs volume, ESP only */
     char desc[72];
 } target;
 
@@ -295,15 +303,229 @@ static void desc_disk(target *t)
     *p = 0;
 }
 
+/* ===========================================================================
+ * The native (detached) installer
+ *
+ * Everything above this point is firmware plumbing, which is fine right up
+ * until the machine stops having any. A USB-booted system now detaches (P4),
+ * and "boot the stick, run Install" is how UnoDOS gets onto a machine at all -
+ * so the installer cannot be the one subsystem that still needs the firmware.
+ *
+ * The native pieces already existed for the remote `install <disk>` verb;
+ * this routes the GUI through the same ones: unostorage authors the GPT + ESP
+ * + FAT32, uno_fs_copytree clones the tree, uno_fat_sync persists it.
+ *
+ * The one thing that genuinely cannot be done here is the NVRAM Boot####
+ * entry: SetVariable is a runtime service the port declines to call after
+ * ExitBootServices (uno_pc64_set_bootnext). A whole-disk install boots by the
+ * removable-media fallback path instead, exactly as the URC install does. An
+ * ESP install alongside another OS says so in its description, because there
+ * the firmware's existing boot entry will keep winning.
+ * ======================================================================== */
+static long   g_nat_bytes;               /* bytes copied, for the summary     */
+
+static uno_bdev *vol_bdev(int v) { return (uno_bdev *)uno_fs_vol_bdev(v); }
+
+static void nat_desc_disk(target *t)
+{
+    uno_bdev *b = (uno_bdev *)t->bdev;
+    char *p = t->desc;
+    p = aps(p, "Disk ");
+    p = ap_size(p, b->sectors * 512ull);
+    p = aps(p, b->name[0] == 'u' ? "  removable" : "  fixed");
+    t->usable = 1;
+    if (b->sectors < 65536) { p = aps(p, "  [too small]"); t->usable = 0; }
+    else                      p = aps(p, "  [ERASES ALL]");
+    *p = 0;
+}
+
+static void nat_desc_esp(target *t)
+{
+    uno_bdev *b = (uno_bdev *)t->bdev;
+    const char *label = uno_fat_label(uno_fs_fat_index(t->vol));
+    char *p = t->desc;
+    int has_efi = uno_fs_isdir(t->vol, "EFI");
+    p = aps(p, "Volume ");
+    if (label && label[0] && label[0] != ' ') {
+        int k; *p++ = '"';
+        for (k = 0; k < 11 && label[k] && label[k] != ' '; k++) *p++ = label[k];
+        p = aps(p, "\" ");
+    }
+    p = ap_size(p, b ? b->sectors * 512ull : 0);
+    p = aps(p, has_efi ? "  ESP (has \\EFI)" : "  FAT");
+    p = aps(p, "  [keeps data]");
+    *p = 0;
+    t->usable = uno_fs_writable(t->vol);
+    if (!t->usable) { p = aps(p, "  [read-only]"); *p = 0; }
+}
+
+static int nat_scan(void)
+{
+    int nv = uno_fs_volumes(), nb = uno_blk_count(), i;
+    uno_bdev *boot = 0;
+    g_nt = 0; g_err[0] = 0;
+    for (i = 0; i < nb; i++) { uno_bdev *b = uno_blk_get(i); if (b && b->is_boot) boot = b; }
+
+    /* file-level targets: every native FAT volume that is not on our own disk */
+    for (i = 0; i < nv && g_nt < MAXT; i++) {
+        uno_bdev *b;
+        if (uno_fs_kind(i) != 1) continue;             /* native FAT only      */
+        b = vol_bdev(i);
+        if (!b || b == boot) continue;                 /* never the boot disk  */
+        g_t[g_nt].kind = UNO_INST_ESP;
+        g_t[g_nt].h = 0; g_t[g_nt].bio = 0;
+        g_t[g_nt].bdev = b; g_t[g_nt].vol = i;
+        nat_desc_esp(&g_t[g_nt]);
+        g_nt++;
+    }
+    /* whole-disk targets: every native disk that is not our own */
+    for (i = 0; i < nb && g_nt < MAXT; i++) {
+        uno_bdev *b = uno_blk_get(i);
+        if (!b || !b->native || b->is_boot) continue;
+        g_t[g_nt].kind = UNO_INST_DISK;
+        g_t[g_nt].h = 0; g_t[g_nt].bio = 0;
+        g_t[g_nt].bdev = b; g_t[g_nt].vol = -1;
+        nat_desc_disk(&g_t[g_nt]);
+        g_nt++;
+    }
+    if (!g_nt) err("no other disk found - nothing to install to");
+    return g_nt;
+}
+
+/* the volume the running system came from (it carries the tree we copy) */
+static int nat_src_vol(int not_vol)
+{
+    int nv = uno_fs_volumes(), v;
+    for (v = 0; v < nv; v++)
+        if (v != not_vol && uno_fs_kind(v) == 1 &&
+            uno_fs_size(v, "\\EFI\\BOOT\\BOOTX64.EFI") >= 0)
+            return v;
+    return -1;
+}
+
+/* one file, whole - uno_fs_write has no append, so `cap` has to cover the
+ * largest thing we copy (BOOTX64.EFI, a couple of MB). Returns 1 copied,
+ * 0 source missing (soft), -1 write failed. */
+static int nat_copy(int sv, const char *sp, int dv, const char *dp,
+                    unsigned char *buf, long cap)
+{
+    long got = uno_fs_size(sv, sp);
+    if (got < 0) return 0;
+    if (got > cap) { err("a file is larger than the copy buffer"); return -1; }
+    got = uno_fs_read(sv, sp, buf, cap);
+    if (got < 0) return 0;
+    return uno_fs_write(dv, dp, buf, got) ? 1 : -1;
+}
+
+static int nat_install_esp(target *t, unsigned char *buf, long cap,
+                           void (*progress)(int, const char *))
+{
+    static const char *aux[] = { "CHICAGO.TTF", "SANS.TTF", "MONO.TTF", "UBUNTU.TTF",
+                                 "HELLO.MD", "PAGE.HTML" };
+    int sv = nat_src_vol(t->vol), i;
+    char dst[64], src[64];
+    if (sv < 0) { err("cannot find the running system's volume"); return 0; }
+
+    if (progress) progress(5, "Creating \\EFI\\UNODOS");
+    uno_fs_mkdir(t->vol, "EFI");                      /* "already exists" is ok */
+    uno_fs_mkdir(t->vol, "EFI\\UNODOS");
+    if (!uno_fs_isdir(t->vol, "EFI\\UNODOS")) {
+        err("mkdir \\EFI\\UNODOS failed (volume read-only?)");
+        return 0;
+    }
+
+    if (progress) progress(15, "Copying BOOTX64.EFI");
+    if (nat_copy(sv, "EFI\\BOOT\\BOOTX64.EFI", t->vol, "EFI\\UNODOS\\BOOTX64.EFI",
+                 buf, cap) != 1) {
+        if (!g_err[0]) err("copying BOOTX64.EFI failed");
+        return 0;
+    }
+    for (i = 0; i < (int)(sizeof aux / sizeof aux[0]); i++) {
+        char *p = aps(dst, "EFI\\UNODOS\\"); p = aps(p, aux[i]); *p = 0;
+        if (progress) progress(25 + i * 8, aux[i]);
+        if (nat_copy(sv, aux[i], t->vol, dst, buf, cap) < 0) return 0;
+    }
+
+    if (progress) progress(78, "App modules");
+    uno_fs_mkdir(t->vol, "EFI\\UNODOS\\APPS");
+    for (i = 0; i < uno_mod_count(); i++) {
+        const char *f = uno_mod_file(i);
+        char *p;
+        int r;
+        if (!f) continue;
+        p = aps(src, "APPS\\"); p = aps(p, f); *p = 0;
+        p = aps(dst, "EFI\\UNODOS\\APPS\\"); p = aps(p, f); *p = 0;
+        r = nat_copy(sv, src, t->vol, dst, buf, cap);
+        if (r == 0) {                                  /* installed layout      */
+            p = aps(src, "EFI\\UNODOS\\APPS\\"); p = aps(p, f); *p = 0;
+            r = nat_copy(sv, src, t->vol, dst, buf, cap);
+        }
+        if (r < 0) return 0;
+    }
+
+    /* removable-media fallback, only where no other OS owns it */
+    if (uno_fs_size(t->vol, "EFI\\BOOT\\BOOTX64.EFI") < 0) {
+        if (progress) progress(88, "Fallback \\EFI\\BOOT");
+        uno_fs_mkdir(t->vol, "EFI\\BOOT");
+        nat_copy(sv, "EFI\\BOOT\\BOOTX64.EFI", t->vol, "EFI\\BOOT\\BOOTX64.EFI",
+                 buf, cap);
+    }
+    uno_fat_sync();
+    if (progress) progress(100, "Done (no boot entry - detached)");
+    return 1;
+}
+
+static int nat_install_disk(target *t, unsigned char *buf, long cap,
+                            void (*progress)(int, const char *))
+{
+    uno_bdev *b = (uno_bdev *)t->bdev;
+    int nv, v, src = -1, dst = -1, files;
+
+    if (progress) progress(5, "Preparing the disk");
+    if (!unostorage_prepare_esp(b, "UNODOS")) {
+        err("prepare failed (too small / read-only?)");
+        return 0;
+    }
+    uno_fat_remount();                      /* the new FAT32 has to mount     */
+    uno_fs_remap();
+
+    /* Volume indices moved under us; re-find both ends by block device. */
+    nv = uno_fs_volumes();
+    for (v = 0; v < nv; v++) if (vol_bdev(v) == b) dst = v;
+    if (dst < 0) { err("target volume not found after prepare"); return 0; }
+    src = nat_src_vol(dst);
+    if (src < 0) { err("cannot find the running system's volume"); return 0; }
+
+    if (progress) progress(20, "Copying the system");
+    files = uno_fs_copytree(src, dst, buf, cap, &g_nat_bytes);
+    if (files < 0) { err("clone failed"); return 0; }
+    uno_fat_sync();
+    if (progress) progress(100, "Done (removable-path boot - detached)");
+    return files > 0;
+}
+
+/* Largest single file we must hold whole: BOOTX64.EFI is ~2 MB in a debug
+ * build. Taken from the heap for the duration of the install rather than
+ * parked in .bss, which every boot would pay for. */
+#define NAT_CAP (4u << 20)
+
+static int nat_install(target *t, void (*progress)(int, const char *))
+{
+    unsigned char *buf = (unsigned char *)malloc(NAT_CAP);
+    int ok;
+    if (!buf) { err("out of memory for the copy buffer"); return 0; }
+    ok = (t->kind == UNO_INST_ESP) ? nat_install_esp(t, buf, NAT_CAP, progress)
+                                   : nat_install_disk(t, buf, NAT_CAP, progress);
+    free(buf);
+    return ok;
+}
+
 int uno_inst_scan(void)
 {
     EFI_HANDLE *hs = 0; UINTN n = 0, i;
     EFI_BLOCK_IO *src;
     g_nt = 0; g_err[0] = 0;
-    if (uno_pc64_detached()) {              /* fw SFS/Block IO/handles are gone */
-        err("Install needs the firmware - reboot to install");
-        return 0;
-    }
+    if (uno_pc64_detached()) return nat_scan();
     if (!bind()) return 0;
 
     src = src_disk();                       /* also powers the size check      */
@@ -655,10 +877,10 @@ int uno_inst_install(int i, int make_default,
                      void (*progress)(int, const char *))
 {
     g_err[0] = 0;
-    if (uno_pc64_detached()) { err("Install needs the firmware - reboot to install"); return 0; }
-    if (!bind()) return 0;
     if (i < 0 || i >= g_nt) { err("no target selected"); return 0; }
     if (!g_t[i].usable) { err("target not usable (see its listing)"); return 0; }
+    if (uno_pc64_detached()) return nat_install(&g_t[i], progress);
+    if (!bind()) return 0;
     return g_t[i].kind == UNO_INST_ESP
         ? install_esp(&g_t[i], make_default, progress)
         : install_disk(&g_t[i], make_default, progress);
