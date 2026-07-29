@@ -2095,3 +2095,39 @@ the keyboard: 3 of 3 detach clean.
 
 Next: the same stick back on the ZimaBlade. If it detaches there, the opt-in
 can be reconsidered.
+
+---
+
+## 2026-07-29 (metal, run 3) -> the hub driver detached the box, into a brick
+
+Run 3 booted the hub build (`debug-109d48d`) on the ZimaBlade. The input gate
+opened, correctly: `usbboot: hid kbd=1 ptr=1 (USB boot keyboard reachable on
+the xHCI)`. Then it detached, and the machine went dark: no keyboard, no
+mouse (an optical one that stopped lighting up, i.e. no VBUS), no boot volume.
+
+Cause, mine: `hub_scan()` never issued `SET_CONFIGURATION`. A hub does not
+power its downstream ports until it is Configured. Every port behind it had no
+VBUS, so nothing the preflight had promised actually arrived.
+
+The stick tells the story precisely. The boot reached `init:detach @ 4208ms`,
+wrote its pre-detach telemetry, and never wrote another byte: `NETLOG.TXT` on
+that stick is still from the PREVIOUS build even though the box ran for hours
+and answered pings the whole time. It could not read `DEBUG.CFG` either, which
+is why it never dialled the bridge and looked simply absent.
+
+Two things worth carrying forward:
+
+- **QEMU's hub model powers ports regardless of configuration state.** It went
+  green three times on a driver that could not work on hardware. Every other
+  QEMU result in this driver deserves the same suspicion.
+- **The detach gate now opens on a PREDICTION** (what the firmware's
+  descriptors say we will be able to claim), and a prediction is only as good
+  as the bring-up behind it. There is no way to prove it pre-EBS, because
+  proving it means taking the controller, which is the irreversible step. The
+  `DETACH.CFG` opt-in is the containment, and it held: this was a box that had
+  opted in.
+
+Fixed in `76f11c0` (configure first, and check that port power took) and
+`203bd51` (a stranded machine now paints "detach failed - power off and remove
+the USB stick" on the framebuffer, which is hardware we still own, instead of
+sitting there looking like a brick).
