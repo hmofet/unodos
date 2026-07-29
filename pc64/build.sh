@@ -125,7 +125,14 @@ if [ "$1" != "legacy" ]; then
     # UNO_ACPI: the unoacpi AML/ACPI stack (vendored uACPI + shared handlers +
     # the pc64 host layer) - battery %/lid via _BST/_LID on real laptops.
     # Read-only, NO_ACPI_MODE, every EC wait bounded -> inert/safe on QEMU.
-    UCF="$CFLAGS $DBGDEF -DUNO_UUI -DUNO_I2C_TRACKPAD -DUNO_BG_CACHE -DUNO_ACPI \
+    # UNO_XHCI: the native USB stack (xHCI host + HID + mass storage). It used
+    # to be opt-in because uno_xhci_init() takes the controller away from the
+    # firmware, which is fatal while the firmware is still carrying the boot
+    # volume. xhci.c now refuses to touch hardware until uno_pc64_detached(),
+    # so the stack is inert while attached and ships in every build - which is
+    # what lets a USB-booted machine reclaim its own stick at detach (F8/P4)
+    # and what gives detached machines USB keyboards and mice.
+    UCF="$CFLAGS $DBGDEF -DUNO_UUI -DUNO_I2C_TRACKPAD -DUNO_BG_CACHE -DUNO_ACPI -DUNO_XHCI \
          -I../unoui -I../unosound -I../unomedia -I../unoacpi -I../unoacpi/uacpi/include"
     OBJS=""
     # UnoSound live sequencer (game/app audio over the PC-speaker voice)
@@ -144,7 +151,7 @@ if [ "$1" != "legacy" ]; then
     # paths compile either way, so neither can rot; the flow painter stays
     # the default until the engine path has been through real pages.
     if [ "${BROWSER_ENGINE:-}" = "uw" ]; then UCF="$UCF -DUW_ENGINE"; fi
-    for f in fb mac_compat pc64_libc pc64_io pc64_pci uno_devmgr pc64_math pc64_fs blkdev ahci nvme sdhci fat unostorage hid_kbd i2c_hid xhci usbio usbmsc usbhid pc64_mtrr ax88179 rtl8152 iwlwifi rtwifi mrvlwifi wifi_wpa uefi_main pc64_native pc64_uui pc64_uui_apps pc64_write pc64_files pc64_music pc64_clock pc64_media pc64_modload pc64_games js pc64_http pc64_font pc64_browser pc64_icons e1000 e1000e igb r8169 net netdisc tls tls_entropy tls_ca acpi_host installer snd_pcm hdaudio ac97 unosecure unoscript unoscript_path pc64_accounts; do
+    for f in fb mac_compat pc64_libc pc64_io pc64_pci uno_devmgr pc64_math pc64_fs blkdev ahci nvme sdhci fat unostorage hid_kbd i2c_hid xhci usbio usbboot usbmsc usbhid pc64_mtrr ax88179 rtl8152 iwlwifi rtwifi mrvlwifi wifi_wpa uefi_main pc64_native pc64_uui pc64_uui_apps pc64_write pc64_files pc64_music pc64_clock pc64_media pc64_modload pc64_games js pc64_http pc64_font pc64_browser pc64_icons e1000 e1000e igb r8169 net netdisc tls tls_entropy tls_ca acpi_host installer snd_pcm hdaudio ac97 unosecure unoscript unoscript_path pc64_accounts; do
         pc "$CC" $UCF $DBGSAN -c -o "build/$f.o" "$f.c"; OBJS="$OBJS build/$f.o"
     done
     # unojs: the JavaScript engine, its own subsystem (unojs/UNOJS.md).  Plain
@@ -583,7 +590,7 @@ fi
 
 echo "[2/3] compiling the LEGACY core + subsystems + apps..."
 OBJS=""
-for f in fb mac_compat pc64_io pc64_libc pc64_math pc64_modload_static pc64_pci pc64_fs blkdev ahci nvme sdhci fat tls_ca e1000 net tls tls_entropy hid_kbd i2c_hid xhci usbmsc usbhid pc64_mtrr uefi_main pc64_native unodos snd_pcm hdaudio ac97; do
+for f in fb mac_compat pc64_io pc64_libc pc64_math pc64_modload_static pc64_pci pc64_fs blkdev ahci nvme sdhci fat tls_ca e1000 net tls tls_entropy hid_kbd i2c_hid xhci usbio usbboot usbmsc usbhid pc64_mtrr uefi_main pc64_native unodos snd_pcm hdaudio ac97; do
     "$CC" $CFLAGS -c -o "build/$f.o" "$f.c"
     OBJS="$OBJS build/$f.o"
 done
