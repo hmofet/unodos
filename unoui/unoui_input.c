@@ -25,6 +25,14 @@ void unoui_ui_init(unoui_ui *ui, const unoui_theme *t, int sw, int sh)
     ui->popup_win = ui->popup_wi = -1; ui->popup_menu = -1;
     ui->popup_items = 0; ui->popup_n = 0; ui->popup_hot = -1;
     ui->ticks = 0;
+    /* These two were left UNINITIALISED, which is only invisible because every
+     * shipped unoui_ui is a static. A stack-local one starts with garbage, and
+     * a non-NULL `full` makes handle_inner() hand every event to a fullscreen
+     * canvas that does not exist and return NO_ACT - so a button never fires.
+     * SPECTEST's S-UUI-07 builds exactly such a ui, which is why that contract
+     * passed or failed depending on what the stack happened to hold. */
+    ui->full = 0;
+    ui->drag_active = ui->drag_x = ui->drag_y = ui->drag_w = ui->drag_h = 0;
     for (i = 0; i < UNOUI_MAX_WINDOWS; i++) ui->win[i] = 0;
     unoui_bg_invalidate();
 }
