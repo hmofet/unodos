@@ -64,6 +64,28 @@ static int dp_has_usb(const unsigned char *p)
     return 0;
 }
 
+/* How many USB tiers deep is this device?  One USB() node per hub level, so a
+ * device plugged straight into a root-hub port has exactly one.
+ *
+ * This matters more than it looks: xhci.c enumerates ROOT-HUB PORTS ONLY - it
+ * has no hub driver - so anything behind an external hub is invisible to the
+ * native stack no matter how plainly the firmware can see it. A preflight that
+ * ignored depth would cheerfully promise a keyboard or a boot volume that
+ * could never be claimed, which is the exact failure the gates exist to
+ * prevent. Returns 0 for a malformed path. */
+static int dp_usb_depth(const unsigned char *p)
+{
+    int n = 0, guard = 64, depth = 0;
+    if (!p) return 0;
+    while (p[n] != DP_END) {
+        int l = dp_nodelen(p + n);
+        if (l < 4 || --guard < 0) return 0;
+        if (p[n] == DP_MSG && p[n + 1] == DP_MSG_USB) depth++;
+        n += l;
+    }
+    return depth;
+}
+
 /* the first PCI() node of a path = the host controller the device hangs off */
 static int dp_pci(const unsigned char *p, int *dev, int *fn)
 {
@@ -105,7 +127,7 @@ static int xhci_at(int dev, int fn)
 }
 
 /* ---- the verdict ---------------------------------------------------------- */
-static int   g_done, g_is_usb, g_ok, g_nbot, g_matched;
+static int   g_done, g_is_usb, g_ok, g_nbot, g_matched, g_deep;
 static unsigned short g_vid, g_pid;     /* the boot stick's USB id */
 static const char *g_why = "not evaluated";
 
@@ -141,6 +163,11 @@ static void evaluate(void)
         if (uno_usbio_iface(i, &cls, &sub, &proto) < 0) continue;
         if (cls != 0x08 || sub != 0x06 || proto != 0x50) continue;   /* SCSI/BOT */
         if (uno_usbio_bulk_eps(i, &in_ep, &out_ep) < 0) continue;    /* needs both */
+        if (uno_usbio_devpath(i, &dp) == 0 &&
+            dp_usb_depth((const unsigned char *)dp) != 1) {
+            g_deep++;                        /* behind a hub: we cannot reach it */
+            continue;
+        }
         g_nbot++;
         uno_usbio_info(i, &vid, &pid, 0, 0);
         if (g_nbot == 1) { g_vid = vid; g_pid = pid; }   /* the sole candidate */
@@ -153,7 +180,8 @@ static void evaluate(void)
 
     if (g_matched)        { g_ok = 1; g_why = "boot stick is BOT/xHCI (path matched)"; }
     else if (g_nbot == 1) { g_ok = 1; g_why = "the one BOT device is the boot stick"; }
-    else if (g_nbot == 0) g_why = "boot device is not a BOT mass-storage interface";
+    else if (g_nbot == 0) g_why = g_deep ? "boot stick is behind a hub (no hub driver)"
+                                        : "boot device is not a BOT mass-storage interface";
     else                  g_why = "several BOT devices, none matched the boot path";
     if (!g_ok) { g_vid = 0; g_pid = 0; }
 }
@@ -171,6 +199,73 @@ static void ensure(void)
 
 int uno_usbboot_is_usb(void)    { ensure(); return g_is_usb; }
 int uno_usbboot_native_ok(void) { ensure(); return g_ok; }
+
+/* ===========================================================================
+ * ...and the same question for INPUT.
+ *
+ * The detach gate refuses to leave the firmware without a native keyboard,
+ * because the shell is keyboard-driven and firmware ConIn dies with EBS. That
+ * is right, but as written it was unsatisfiable on a machine whose only
+ * keyboard is USB: `uno_usb_hid_kbd_present()` can only be true once xhci.c
+ * owns the controller, and xhci.c only takes the controller after EBS. So we
+ * would not leave the firmware until the keyboard existed, and the keyboard
+ * could not exist until we left the firmware - and every desktop with USB-only
+ * input (the ZimaBlade, most desktops) was permanently attached.
+ *
+ * The way out is the one usbmsc already uses for the boot volume: ask the
+ * FIRMWARE's descriptors what the native stack will be able to claim. A HID
+ * interface with the boot subclass, on a root-hub port of an xHCI controller,
+ * is exactly what uno_usb_hid_init() claims at detach.
+ *
+ * Both conditions are load-bearing. Boot subclass (03/01) because the native
+ * driver speaks boot protocol and nothing else; root-hub port because xhci.c
+ * enumerates root ports only, so a keyboard behind a hub is one we can see and
+ * cannot have.
+ * ======================================================================== */
+static int g_hid_done, g_hid_kbd, g_hid_ptr;
+static const char *g_hid_why = "not evaluated";
+
+static void hid_evaluate(void)
+{
+    int n, i, deep = 0;
+    g_hid_done = 1;
+    if (!uno_xhci_supported()) { g_hid_why = "no native USB stack in this build"; return; }
+    n = uno_usbio_count();
+    for (i = 0; i < n; i++) {
+        unsigned char cls = 0, sub = 0, proto = 0;
+        int cdev = -1, cfn = -1;
+        void *dp = 0;
+        if (uno_usbio_iface(i, &cls, &sub, &proto) < 0) continue;
+        if (cls != 0x03 || sub != 0x01) continue;      /* HID, boot subclass    */
+        if (uno_usbio_devpath(i, &dp) < 0) continue;
+        if (dp_usb_depth((const unsigned char *)dp) != 1) { deep++; continue; }
+        if (!dp_pci((const unsigned char *)dp, &cdev, &cfn) || !xhci_at(cdev, cfn))
+            continue;                                  /* not on an xHCI        */
+        if (proto == 1) g_hid_kbd = 1;                 /* boot keyboard         */
+        if (proto == 2) g_hid_ptr = 1;                 /* boot mouse            */
+    }
+    g_hid_why = g_hid_kbd ? "USB boot keyboard on an xHCI root port"
+              : deep      ? "USB keyboard is behind a hub (no hub driver)"
+                          : "no USB boot keyboard on a root port";
+}
+
+static void hid_ensure(void)
+{
+    if (!g_hid_done && !uno_pc64_detached()) {
+        hid_evaluate();
+        uno_dbg_log("usbboot: hid kbd=%d ptr=%d (%s)", g_hid_kbd, g_hid_ptr, g_hid_why);
+    }
+}
+
+int uno_usbboot_hid_kbd(void) { hid_ensure(); return g_hid_kbd; }
+int uno_usbboot_hid_ptr(void) { hid_ensure(); return g_hid_ptr; }
+void uno_usbboot_hid_status(int *kbd, int *ptr, const char **why)
+{
+    hid_ensure();
+    if (kbd) *kbd = g_hid_kbd;
+    if (ptr) *ptr = g_hid_ptr;
+    if (why) *why = g_hid_why;
+}
 
 int uno_usbboot_target(unsigned short *vid, unsigned short *pid)
 {

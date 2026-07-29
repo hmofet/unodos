@@ -37,4 +37,15 @@ void uno_usbboot_status(int *is_usb, int *nbot, int *matched, const char **why);
  * Returns 1 when an id is known (i.e. uno_usbboot_native_ok()). */
 int uno_usbboot_target(unsigned short *vid, unsigned short *pid);
 
+/* Will a USB HID boot keyboard / mouse exist once we own the controller?
+ *
+ * The detach gate cannot ask uno_usb_hid_kbd_present(): that only becomes true
+ * after ExitBootServices, which is the step it is gating. These answer the same
+ * question from the firmware's descriptors instead - a HID boot-subclass
+ * interface on a root-hub port of an xHCI controller is precisely what
+ * uno_usb_hid_init() claims at detach. Attached-only; latched like the rest. */
+int uno_usbboot_hid_kbd(void);
+int uno_usbboot_hid_ptr(void);
+void uno_usbboot_hid_status(int *kbd, int *ptr, const char **why);
+
 #endif
