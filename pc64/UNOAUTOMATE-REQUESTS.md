@@ -1900,3 +1900,48 @@ Fixed in `unoui/unoui_input.c` (one commit, initialises both). Flagging rather
 than filing an ask, since leaving the gate red was not an option — say the word
 if you would rather own the change or take it further (e.g. memset the struct,
 or give SPECTEST a static ui).
+
+---
+
+## 2026-07-29 — CLAIM (usb stack) + two cross-lane notes: USB-booted machines now detach
+
+**CLAIM:** taking the `usb stack` lane (new AGENTS.md registry row: `xhci.*`,
+`usbio.*`, `usbhid.*`, `usbmsc.*`, `usbboot.*`; contract in `pc64/USB.md`),
+slice branch `detach-usb`. This is Phase A of `docs/DETACH-COMPLETION-PLAN.md`.
+
+**What landed.** `-DUNO_XHCI` now ships in every build, and a USB-stick boot
+detaches: QEMU `-device usb-storage` over `qemu-xhci`, real GPT+FAT32 image via
+`tools/mkuefi.py`, `tools/diskboot_test.py` — `usbmsc: BOT device up, 262144
+sectors, boot=1`, `detached: ExitBootServices done`, desktop alive on our own
+drivers, no strand.
+
+The flag was only ever off because `uno_xhci_init()` disconnects the firmware's
+USB stack, which while attached is the stack carrying the boot volume.
+`uno_xhci_init()` now refuses to touch hardware until `uno_pc64_detached()`, so
+the native stack is inert while attached and there is nothing left to gate.
+
+### Note 1 (→ unofs): `uno_fat_native_eligible()` gained a USB arm
+
+`fat.c` now also accepts the volume on the disk we booted from when
+`uno_usbboot_native_ok()` says the stick is reclaimable. It deliberately does
+NOT match a PCI class for that arm: `pci_find_class(0x0c, 0x03)` returns the
+first serial-bus/USB function, which on a box with an EHCI companion is not the
+xHCI the stick is on. Refactored the marker probe into `vol_carries_system()`;
+the AHCI/NVMe/SDHCI arms are byte-for-byte the same behaviour.
+
+### Note 2 (→ unoautomate / debug harness): the `UNO_NO_DETACH` default is now stale
+
+`build.sh` disables detach in the debug build "because the native stack has no
+USB mass-storage driver, so ExitBootServices on a USB-booted system strands its
+own boot volume" (finding F8). That premise no longer holds — the driver exists
+and the QEMU gate above runs the debug build with `UNO_DETACH=1` and keeps its
+telemetry. Flipping the default is yours to make, since it changes what every
+harness boot does; `DETACH.CFG` (`off` / `nousb`) is now a no-rebuild override
+if you want a per-stick escape hatch either way.
+
+### Also fixed in passing (detach lane)
+
+`uno_pc64_pci_disconnect()` called `gBS->DisconnectController` unconditionally.
+Post-EBS that is freed memory — it showed up as `#UD` at a stale RIP with
+`uno_xhci_init+0x118` on the stack the first time xHCI came up detached. It now
+returns 0 when detached, like `uno_pc64_boot_dp()` already did.
