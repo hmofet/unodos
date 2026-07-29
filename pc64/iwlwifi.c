@@ -1109,6 +1109,7 @@ static int hdrlen_80211(const u8 *frame)
  *    v1 encoding we used (0x420a) decodes as HT garbage.
  */
 static int g_keys_installed;
+static int g_key_gtk_idx = -1;   /* GTK index live on the station, -1 = none */
 static void tx_enqueue(const u8 *frame, int flen, int high_pri)
 {
     int idx = g_tx_wr & (TXQ_N - 1);
@@ -2745,6 +2746,34 @@ static void mld_sec_key(const u8 *key, int keylen, int keyidx, int mcast)
     wait_cmd_done(100);
 }
 
+/* SEC_KEY_CMD with action REMOVE (3). The union's remove form is
+ * {sta_mask, key_id, key_flags} inside the same envelope the ADD uses, and the
+ * flags must match those the key was installed with (iwl_mvm_sec_key_del).
+ *
+ * Keys belong to the STATION, so re-pointing the station at another AP leaves
+ * the previous association's CCMP keys live and the hardware then decrypts the
+ * new AP's frames with the wrong one - on metal that showed up as frames
+ * arriving and being discarded as garbage (`tx 8 rx 0 drop 8`) after an
+ * otherwise complete retargeted join. */
+static void mld_sec_key_remove(int keyidx, int mcast)
+{
+    struct __attribute__((packed)) {
+        u32 action, sta_mask, key_id, key_flags;
+        u8 key[32], tkip_mic_rx[8], tkip_mic_tx[8];
+        u64 rx_seq, tx_seq;
+    } c;
+    memset(&c, 0, sizeof c);
+    c.action = 3;                       /* FW_CTXT_ACTION_REMOVE */
+    c.sta_mask = (u32)(1u << AP_STA_ID);
+    c.key_id = (u32)keyidx;
+    c.key_flags = 0x02;                 /* CCMP - must match the installed key */
+    if (mcast) c.key_flags |= 0x40 | 0x08;   /* MCAST_KEY | NO_TX */
+    uno_dbg_net_trace("wifi: SEC_KEY REMOVE idx=%d mcast=%d flags=%02x len=%d",
+                      keyidx, mcast, (unsigned)c.key_flags, (int)sizeof c);
+    send_cmd(GRP_DATAPATH, DP_SEC_KEY, 0, &c, (int)sizeof c);
+    wait_cmd_done(100);
+}
+
 /* Allocate one TX queue for (sta_id, tid) via SCD_QUEUE_CFG (queue_alloc_cmd_ver
  * 0 = the pre-AX210 path: LEGACY-group cmd 0x1d, iwl_tx_queue_cfg_cmd, 20 B).
  * Points the fw at our existing TFD ring (g_tx_ring) + byte-count table (g_tx_bc,
@@ -2955,7 +2984,8 @@ static void handle_eapol(const u8 *eapol, int len)
              * STA_CONFIG_CMD (now authorized, so the MFP bit drops) instead of
              * ADD_STA_KEY + an ADD_STA MODIFY */
             mld_sec_key(g_wpa.ptk + 32, 16, 0, 0);             /* pairwise TK */
-            if (g_wpa.gtk_len) mld_sec_key(g_wpa.gtk, g_wpa.gtk_len, g_wpa.gtk_idx, 1);
+            if (g_wpa.gtk_len) { mld_sec_key(g_wpa.gtk, g_wpa.gtk_len, g_wpa.gtk_idx, 1);
+                                 g_key_gtk_idx = g_wpa.gtk_idx; }
             g_keys_installed = 1;
             mld_sta_cfg(g_bssid, g_aid, 1 /*authorized*/);
         } else {
@@ -3492,6 +3522,19 @@ static int retarget_ap(int new_chan)
         mvm_phy_ctxt(new_chan, 2 /*MODIFY*/);
         if (r32(CSR_MSIX_HW_INT_CAUSES_AD)) return -1;
     }
+    /* The old association's keys are still on this station - drop them BEFORE
+     * re-pointing it, or the hw decrypts the new AP's frames with the wrong key
+     * and every one of them arrives as garbage. */
+    if (g_keys_installed) {
+        mld_sec_key_remove(0, 0);                  /* pairwise */
+        if (g_key_gtk_idx >= 0) mld_sec_key_remove(g_key_gtk_idx, 1);
+        g_keys_installed = 0; g_key_gtk_idx = -1;
+        if (r32(CSR_MSIX_HW_INT_CAUSES_AD)) {
+            uno_dbg_net_trace("wifi: retarget: SEC_KEY remove asserted the fw");
+            return -1;
+        }
+    }
+    g_joined = 0; g_wpa_active = 0;                /* leaving the old BSS */
     mld_sta_cfg(g_bssid, 0, 0);                    /* the new peer */
     if (r32(CSR_MSIX_HW_INT_CAUSES_AD)) return -1;
     mvm_txq_free(AP_STA_ID, 15);
@@ -3520,7 +3563,7 @@ static int radio_restart(void)
         w32(CSR_INT, 0xFFFFFFFFu);
     }
     g_bound = 0; g_joined = 0; g_alive = 0; g_mvm_done = 0; g_ctx_built = 0;
-    g_keys_installed = 0; g_wpa_active = 0; g_data_qid = -1;
+    g_keys_installed = 0; g_key_gtk_idx = -1; g_wpa_active = 0; g_data_qid = -1;
     g_mvm_arm = 1; g_no_join = 1;
     iwl_nic();
     g_no_join = 0;
@@ -3952,8 +3995,8 @@ int iwl_join_ssid(const char *ssid, const char *psk)
         g_bound = 0; g_alive = 0; g_mvm_done = 0; g_ctx_built = 0;
     }
     /* a fresh join must not inherit the previous one's keys or supplicant */
-    g_joined = 0; g_keys_installed = 0; g_wpa_active = 0; g_data_qid = -1;
-    g_dq_head = g_dq_tail = 0;
+    g_joined = 0; g_keys_installed = 0; g_key_gtk_idx = -1; g_wpa_active = 0;
+    g_data_qid = -1; g_dq_head = g_dq_tail = 0;
     if (radio_up() < 0) return -1;
     strncpy(g_cfg_ssid, ssid, sizeof g_cfg_ssid - 1);
     g_cfg_ssid[sizeof g_cfg_ssid - 1] = 0;
@@ -4463,7 +4506,7 @@ int iwl_dbg_cmd(const char *line, char *out, int cap)
             device_stop();
         }
         g_bound = 0; g_joined = 0; g_alive = 0; g_mvm_done = 0;   /* force a full retry */
-        g_keys_installed = 0; g_wpa_active = 0; g_data_qid = -1; g_ctx_built = 0;
+        g_keys_installed = 0; g_key_gtk_idx = -1; g_wpa_active = 0; g_data_qid = -1; g_ctx_built = 0;
         iwl_nic();
         iwl_status_str(out, cap);
         return (int)strlen(out);
