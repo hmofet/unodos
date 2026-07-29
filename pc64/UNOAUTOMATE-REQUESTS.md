@@ -1986,3 +1986,35 @@ something to slip in here.
 Post-EBS that is freed memory — it showed up as `#UD` at a stale RIP with
 `uno_xhci_init+0x118` on the stack the first time xHCI came up detached. It now
 returns 0 when detached, like `uno_pc64_boot_dp()` already did.
+
+---
+
+## 2026-07-29 (later) — usb stack: the xHCI gap is closed; QEMU green, metal is the last gate
+
+Follow-up to the claim above. The three faults behind the SuperSpeed
+flakiness are fixed in `xhci.c`:
+
+1. **Deadlines were spin counts.** `poll_xfer`'s `5000000` was loop
+   iterations, so the real wait depended on the optimiser — which is the
+   entire "debug build works, production build doesn't" mystery. A 512-byte
+   `READ(10)` needs the device to do real I/O; production gave up first, and
+   the successful event was in the ring moments later. `poll_event_ms()` now
+   waits in TSC-backed milliseconds (`uno_pc64_delay_ms`, not the local
+   calibrated-spin `mdelay`). **Anyone adding a wait to a pc64 driver: check
+   whether your timeout is a duration or a spin count.**
+2. **No endpoint recovery.** An error leaves the endpoint Halted in the
+   CONTROLLER; `clear_halt()` is heard only by the device. `ep_recover()` does
+   Reset Endpoint → Set TR Dequeue Pointer → drain the abandoned event (Stop
+   Endpoint first after a timeout, where the transfer may still be running).
+3. **No SuperSpeed burst sizing.** `ss_burst()` reads `bMaxBurst` from the SS
+   Endpoint Companion descriptor into the endpoint context.
+
+**Gate:** 5/5 USB-storage boots detach with the system volume intact;
+`install_test` passes both phases and `storage_test` passes read+write, all
+post-detach on the native stack; and the default (no `DETACH.CFG`) path still
+passes both suites unchanged.
+
+**Still opt-in**, deliberately. QEMU exercised an emulated SuperSpeed stick;
+metal is a different device, and past ExitBootServices there is no way back.
+The flip wants a ZimaBlade run (desktop, not a laptop, per the plan) — that is
+the only thing left between here and USB-boot detach on by default.
