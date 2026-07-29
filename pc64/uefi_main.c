@@ -40,6 +40,7 @@
 #include "i2c_hid.h"        /* native I2C-HID trackpad + keyboard */
 #include "usbhid.h"         /* native USB HID kbd/mouse (inert unless -DUNO_XHCI) */
 #include "usbmsc.h"         /* native USB mass storage (F8: USB boot + detach) */
+#include "usbboot.h"        /* ...and whether THIS machine's boot stick survives */
 #include "pc64_mtrr.h"      /* P3 opt-in: WC framebuffer MTRR rebuild */
 #include <string.h>         /* memcpy (freestanding, from pc64_libc.c) */
 #include "fat.h"            /* native block + FAT stack bring-up */
@@ -227,9 +228,20 @@ static void con_puts(const char *s)
 static EFI_HANDLE gIH;                  /* our image handle (installer needs it) */
 static int gDetached;                   /* 1 after ExitBootServices (M3)        */
 static int gDetachBlocked;              /* held attached to keep the pointer    */
+static int gDetachStranded;             /* detached, but the system volume died */
+static const char *gDetachWhy = "not evaluated";  /* the deciding gate, in words */
 void *uno_pc64_st(void)           { return gST; }
 void *uno_pc64_image_handle(void) { return gIH; }
 int   uno_pc64_detached(void)     { return gDetached; }
+/* Why this machine is, or is not, running on its own drivers.  Every gate in
+ * try_detach() records its verdict here, so a glance at the System window
+ * explains the machine instead of leaving "still attached" a mystery. */
+void  uno_pc64_detach_status(int *blocked, int *stranded, const char **why)
+{
+    if (blocked)  *blocked  = gDetachBlocked;
+    if (stranded) *stranded = gDetachStranded;
+    if (why)      *why      = gDetachWhy;
+}
 /* input diagnostics for the System window: how many firmware pointer
  * instances the machine offered, and whether detach was held off to keep the
  * only working one alive. Until now nothing anywhere reported which pointer
@@ -620,7 +632,12 @@ static void connect_all(void)
 /* Detach the firmware's own driver from a PCI device (bus/dev/fn) so a native
  * driver can take it over without the firmware fighting it. Needed for xHCI:
  * the firmware's USB stack keeps touching the controller otherwise, causing
- * intermittent HC errors when our driver reprograms it. */
+ * intermittent HC errors when our driver reprograms it.
+ *
+ * Post-detach this is both impossible and pointless - DisconnectController is
+ * a BOOT service, so calling it after ExitBootServices jumps into freed memory
+ * (#UD at a stale address, which is exactly how it announced itself), and
+ * there is no firmware driver left to disconnect. Report "nothing to do". */
 typedef struct _EFI_PCI_IO_PROTOCOL {
     void *pad[14];                                 /* PollMem..Flush (14 members) */
     EFI_STATUS (*GetLocation)(struct _EFI_PCI_IO_PROTOCOL *,
@@ -631,10 +648,11 @@ int uno_pc64_pci_disconnect(int bus, int dev, int fn)
 {
     static EFI_GUID pio = { 0x4cf5b200, 0x68b8, 0x4ca5,
         { 0x9e, 0xec, 0xb2, 0x3e, 0x3f, 0x50, 0x02, 0x9a } };
-    EFI_STATUS (*disc)(EFI_HANDLE, EFI_HANDLE, EFI_HANDLE) =
-        (EFI_STATUS (*)(EFI_HANDLE, EFI_HANDLE, EFI_HANDLE))gBS->DisconnectController;
+    EFI_STATUS (*disc)(EFI_HANDLE, EFI_HANDLE, EFI_HANDLE);
     UINTN n = 0, i; EFI_HANDLE *hs = 0; int done = 0;
-    if (!gBS || EFI_ERROR(gBS->LocateHandleBuffer(EFI_LOCATE_BY_PROTOCOL, &pio, 0, &n, &hs)))
+    if (gDetached || !gBS) return 0;
+    disc = (EFI_STATUS (*)(EFI_HANDLE, EFI_HANDLE, EFI_HANDLE))gBS->DisconnectController;
+    if (EFI_ERROR(gBS->LocateHandleBuffer(EFI_LOCATE_BY_PROTOCOL, &pio, 0, &n, &hs)))
         return 0;
     for (i = 0; i < n; i++) {
         EFI_PCI_IO_PROTOCOL *p; UINTN s, b, d, f;
@@ -734,37 +752,6 @@ static int detach_would_strand_pointer(void)
     return nctrl > 0;
 }
 
-/* F8: does the volume we BOOTED from ride over USB? uno_fat_native_eligible
- * asks "is SOME UnoDOS volume natively reachable", which is the wrong
- * question on a machine with UnoDOS installed internally: booting the USB
- * stick there satisfied the gate, detach killed firmware Block IO, and the
- * running system lost its own boot volume (Latitude, 2026-07-20 - all
- * telemetry and module loads died silently). Walk the boot image's device
- * path and look for a MESSAGING/USB node. */
-static int boot_device_is_usb(void)
-{
-    static EFI_GUID li_guid = { 0x5b1b31a1, 0x9562, 0x11d2,
-        { 0x8e, 0x3f, 0x00, 0xa0, 0xc9, 0x69, 0x72, 0x3b } };   /* LoadedImage */
-    static EFI_GUID dp_guid = { 0x09576e91, 0x6d3f, 0x11d2,
-        { 0x8e, 0x39, 0x00, 0xa0, 0xc9, 0x69, 0x72, 0x3b } };   /* DevicePath  */
-    typedef struct { UINT32 Revision; EFI_HANDLE ParentHandle;
-                     void *SystemTable; EFI_HANDLE DeviceHandle; } LImin;
-    LImin *li = 0;
-    unsigned char *dp = 0;
-    int guard = 64;
-    if (EFI_ERROR(gBS->HandleProtocol(gIH, &li_guid, (void **)&li)) || !li)
-        return 0;
-    if (EFI_ERROR(gBS->HandleProtocol(li->DeviceHandle, &dp_guid, (void **)&dp)) || !dp)
-        return 0;
-    while (guard-- && dp[0] != 0x7f) {          /* 0x7f = END device path    */
-        int len = dp[2] | (dp[3] << 8);
-        if (len < 4) break;
-        if (dp[0] == 3 && dp[1] == 5) return 1; /* MESSAGING(3) / USB(5)     */
-        dp += len;
-    }
-    return 0;
-}
-
 /* The boot PARTITION's device path (LoadedImage->DeviceHandle), or NULL.  The
  * storage safety gate (blkdev is_boot / unostorage) prefix-matches a whole-disk
  * path against this to refuse wiping the disk UnoDOS booted from. */
@@ -783,35 +770,72 @@ void *uno_pc64_boot_dp(void)
     return dp;
 }
 
+/* DETACH.CFG - the operator's override, read off any mounted volume.
+ *
+ * Detach is irreversible and its gates are all inference; the escape hatch for
+ * a machine the inference gets wrong is a file you can drop on the stick from
+ * any other computer, with no rebuild. One word per line, first match wins:
+ *
+ *   off      never detach on this machine (equivalent to -DUNO_NO_DETACH)
+ *   nousb    detach normally, but never on a USB-booted system (the pre-P4
+ *            behaviour - the conservative setting while USB MSC is young)
+ *   on       force the default (present so a file can say "yes, deliberately")
+ */
+static int cfg_word(const char *w)
+{
+    unsigned char buf[128];
+    int v, n = uno_fs_volumes();
+    for (v = 0; v < n; v++) {
+        long got = uno_fs_read(v, "DETACH.CFG", buf, (long)sizeof buf - 1);
+        long i;
+        if (got < 0) continue;
+        buf[got] = 0;
+        for (i = 0; i < got; i++) {                 /* whitespace-separated */
+            const char *p = w;
+            long j = i;
+            if (i && buf[i - 1] > ' ') continue;    /* mid-token            */
+            while (*p && buf[j] == (unsigned char)*p) { p++; j++; }
+            if (!*p && buf[j] <= ' ') return 1;
+        }
+        return 0;                                   /* file found, word absent */
+    }
+    return 0;
+}
+
 static int try_detach(void)
 {
     typedef EFI_STATUS (*GMM_FN)(UINTN *, void *, UINTN *, UINTN *, UINT32 *);
     typedef EFI_STATUS (*EBS_FN)(EFI_HANDLE, UINTN);
     int t, had_i8042;
+#define REFUSE(msg, block) do { gDetachWhy = (msg); gDetachBlocked = (block); \
+                                dbg_puts("detach: " msg "\n"); return 0; } while (0)
     if (gDetached) return 1;
-    if (gUseBlt || !gVram)        { dbg_puts("detach: no linear FB\n");    return 0; }
-    if (!native_kbd_for_detach()) { dbg_puts("detach: no native keyboard\n"); return 0; }
+    if (gUseBlt || !gVram)        REFUSE("no linear framebuffer", 0);
+    if (!native_kbd_for_detach()) REFUSE("no native keyboard", 0);
     /* refuse to trade a working firmware pointer for no pointer at all */
-    if (detach_would_strand_pointer()) {
-        dbg_puts("detach: would lose the only pointer\n");
-        gDetachBlocked = 1;                   /* surfaced in the System window */
-        return 0;
-    }
-    if (!uno_native_tsc_ok())     { dbg_puts("detach: no TSC base\n");     return 0; }
+    if (detach_would_strand_pointer()) REFUSE("would lose the only pointer", 1);
+    if (!uno_native_tsc_ok())     REFUSE("no TSC time base", 0);
     (void)uno_fs_volumes();     /* force the native FAT mount (fw transport) */
-    if (!uno_fat_native_eligible()) {
-        dbg_puts("detach: no AHCI-backed FAT volume\n");
-        return 0;
-    }
+    if (cfg_word("off"))          REFUSE("DETACH.CFG says off", 1);
     /* F8: "some volume survives" is not enough - the volume we BOOTED from
-     * must survive. A USB boot volume outlives detach only if the native
-     * USB mass-storage path exists to reclaim it (usbmsc.c over xHCI). */
-    if (boot_device_is_usb() && !uno_usbmsc_supported()) {
-        dbg_puts("detach: USB boot volume would be stranded (no native USB "
-                 "mass storage in this build)\n");
-        gDetachBlocked = 1;
-        return 0;
+     * must survive.  A USB boot volume outlives detach only when the native
+     * USB mass-storage path can reclaim it: usbmsc.c over xhci.c, and only on
+     * the exact device shape usbboot's preflight confirmed. */
+    if (uno_usbboot_is_usb()) {
+        const char *why = "";
+        uno_usbboot_status(0, 0, 0, &why);
+        if (cfg_word("nousb")) REFUSE("DETACH.CFG says nousb", 1);
+        if (!uno_usbboot_native_ok()) {
+            gDetachWhy = why; gDetachBlocked = 1;
+            dbg_puts("detach: USB boot volume would be stranded - ");
+            dbg_puts(why); dbg_puts("\n");
+            return 0;
+        }
+        dbg_puts("detach: USB boot volume is reclaimable - "); dbg_puts(why); dbg_puts("\n");
     }
+    if (!uno_fat_native_eligible())
+        REFUSE("no native-reachable volume carries the system", 0);
+#undef REFUSE
     had_i8042 = uno_ps2_present();
     uno_fat_sync();             /* flush write-back lines while fw Block IO lives */
     { void uno_modload_reserve(void); uno_modload_reserve(); }
@@ -826,17 +850,36 @@ static int try_detach(void)
             gBltFast = 0;                     /* Blt needs boot services       */
             gKeyEx = 0; gNAbs = gNPtr = 0;    /* firmware input died with EBS  */
             if (had_i8042) uno_ps2_init();    /* the i8042 is ours now         */
+            /* STORAGE FIRST.  On a USB boot the system volume only exists
+             * again once usbmsc has claimed the stick (uno_blk_detach brings
+             * it up), and everything downstream - module loads, telemetry,
+             * the shell's own files - depends on it.  Input can wait a few
+             * milliseconds; the boot volume cannot. */
+            uno_blk_detach();                 /* native AHCI/NVMe/SDHCI/MSC    */
+            uno_fat_remount();                /* same disks, native transport  */
+            uno_fs_remap();
             /* I2C-HID kbd/pad were already native (polled the same either way).
              * USB HID: firmware no longer owns xHCI, so claim external USB
              * keyboards/mice now (harmless no-op if none / already up). */
             uno_usb_hid_init();
-            uno_blk_detach();                 /* native AHCI takes the bus     */
-            uno_fat_remount();                /* same disks, native transport  */
-            uno_fs_remap();
+            /* Did the system volume actually come back?  Every gate above is
+             * inference about hardware we could not touch while the firmware
+             * held it, so the one authoritative check is possible only here,
+             * on the far side of the door.  There is no way back - but a
+             * machine that says WHY it is broken beats one that just is. */
+            if (!uno_fat_native_eligible()) {
+                gDetachStranded = 1;
+                gDetachWhy = "system volume did not return on native drivers";
+                dbg_puts("DETACHED BUT STRANDED: the system volume did not come "
+                         "back on native drivers\n");
+            } else {
+                gDetachWhy = "running on our own drivers";
+            }
             dbg_puts("detached: ExitBootServices done - native storage/input/timers\n");
             return 1;
         }
     }
+    gDetachWhy = "ExitBootServices refused";
     dbg_puts("detach: ExitBootServices failed - staying attached\n");
     return 0;
 }
