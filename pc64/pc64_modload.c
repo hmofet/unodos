@@ -153,6 +153,10 @@ static const struct { const char *name; void *addr; } kExports[] = {
     KX(unoui_add_canvas),  KX(unoui_add_vscroll),KX(unoui_add_group),
     KX(unoui_text_init),   KX(unoui_text_set),   KX(unoui_widget_fill),
     KX(unoui_widget_rect), KX(unoui_content_origin),
+    /* scrolling lists: set_sel for widgets, the geometry for canvas apps */
+    KX(unoui_list_set_sel), KX(unoui_list_draw),  KX(unoui_list_rows),
+    KX(unoui_list_maxtop),  KX(unoui_list_index_at), KX(unoui_list_reveal),
+    KX(unoui_list_bar),
     /* framebuffer + fonts */
     KX(fb_fill_rect), KX(fb_hline), KX(fb_vline), KX(fb_blit), KX(fb_text),
     KX(fb_text_w),    KX(fb_text_h), KX(fb_width), KX(fb_height),
