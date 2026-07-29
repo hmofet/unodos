@@ -1,6 +1,9 @@
 # Intel AX201 WiFi (F12) bring-up — handoff
 
-Status: 2026-07-28 (round 25 - **THE DATA PATH WORKS ON METAL**: a DHCP lease,
+Status: 2026-07-28 (round 25 - **THE DATA PATH WORKS ON METAL, AND A NETWORK WAS
+JOINED FROM THE GUI** on a second AX201, the X1 Carbon: Control Panel > Network
+> Scan > pick > password > Join. Landed to master.) (round 25 detail below -
+**THE DATA PATH WORKS ON METAL**: a DHCP lease,
 3/3 pings to the gateway and a DNS answer over the encrypted WiFi link. What is
 left is a firmware assert when the link is left undrained, and the GUI join).
 
@@ -122,6 +125,31 @@ injection works, and unoui does full keyboard navigation (Tab cycles focus,
 arrows move within a tab strip, Enter activates), so the whole UI is drivable
 from the host. `pc64/tools/`-style helper used here: `~/urc_shot.py` on devbuntu
 (send a command through the bridge files; `screen grab`/`screen read` -> PNG).
+
+### The GUI join works on a second AX201 (X1 Carbon, 2026-07-28)
+
+Flashed to the Carbon over SSH (it is a Windows box with an elevated sshd, so
+the stick never has to move: `pc64/flash/UnoFlashCli.exe <disk> <img> <status>
+"STORE N GO"`, image shipped gzipped at ~10 MB). Booted with **no URC** - that
+machine has no ethernet dongle, and an armed `remote=` would call
+`pc64_net_up()` every few seconds, fall through to WiFi and re-run the whole
+firmware bring-up, fighting the join you are driving by hand.
+
+**arin joined their network from the UI.** That is the last unverified piece of
+the join path closed, on hardware other than the Yoga.
+
+Two notes for whoever reads this next:
+
+- **unoui lists cannot scroll.** The first Carbon boot could not reach the
+  network below the visible rows: `UI_LIST` has no scroll state - the painter
+  starts at the top of the rect, `set_list()` maps y straight to an index - so a
+  list longer than its box is unreachable by mouse and eye alike. The Control
+  Panel pages around it (6 rows + a More button that wraps, 16 networks kept);
+  the toolkit itself is untouched and still has the limitation.
+- **What the Carbon run does NOT tell us**: whether the retry path ran. With no
+  URC there is no log, so if the first candidate had refused we would not know
+  whether the SEC_KEY removal + queue rebuild carried it. Those remain
+  metal-unproven; the Yoga rig with URC is where to prove them.
 
 ### Retry PROVEN on metal — and what the APs actually do (round 25, final flash)
 
