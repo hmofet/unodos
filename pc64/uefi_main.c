@@ -920,6 +920,13 @@ static int try_detach(void)
                 gDetachStranded = 1;
                 gDetachWhy = uno_usbboot_is_usb() ? uno_usbmsc_why()
                                                   : "system volume did not return";
+                /* SAY SO ON THE SCREEN. A stranded machine has no storage to
+                 * log to and, if its input was USB, no way to be asked - it
+                 * just sits there looking dead, which is exactly how the
+                 * ZimaBlade spent an afternoon on 2026-07-29. The framebuffer
+                 * is hardware we still own, so use it: the operator needs to
+                 * know this is a known state with a known way out, not a brick. */
+                splash_step(100, "detach failed - power off and remove the USB stick");
                 dbg_puts("DETACHED BUT STRANDED: the system volume did not come "
                          "back on native drivers - usbmsc: ");
                 dbg_puts(uno_usbmsc_why()); dbg_puts("\n");
