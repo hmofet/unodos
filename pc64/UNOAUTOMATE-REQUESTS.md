@@ -2466,3 +2466,60 @@ Two things to check while in there, since they share the mechanism: the
 KEYBOARD path has the same one-report-per-poll shape (fast typing could drop
 characters rather than merely lag), and the wheel accumulates from the same
 single read.
+
+---
+
+## 2026-07-30 (metal) — CORRECTION: the HID queue was mine, and my floaty diagnosis was probably wrong
+
+Three builds on the ZimaBlade, and the differential settles both questions.
+
+| Build | HID polling | Operator report |
+|---|---|---|
+| `583a585` phases B/C/D + devices 2,4 | one transfer in flight | "mouse very floaty" |
+| `hidpoll` (reverted) | four in flight + drain loop | "better, still a bit floaty" — **then launching the Editor killed mouse AND keyboard** |
+| `3242b02` = the revert | one transfer in flight, IDENTICAL to the first | "editor works better, mouse and keyboard feel good" |
+
+### 1. The wedge was the queue change, and it is reverted
+
+Input survives launching an app on the reverted build. The first and third
+builds have byte-identical HID code, so nothing pre-existing explains it: the
+four-deep interrupt queue in `xhci.c` did.
+
+Mechanism, still UNPROVEN and worth writing down before anyone retries it:
+launching an app reads a `.UNO` from the boot stick, which post-detach is
+`usbmsc` bulk traffic on the same xHCI and the same shared event ring. During
+that read, `route_event` stashes HID completions. The consume-at-the-head FIFO
+assumes completions arrive in post order; if one errors or the endpoint halts
+mid-read, the head waits forever on something that will never complete and
+input is dead permanently. The one-transfer code re-posted unconditionally on
+every read and so could not get stuck that way.
+
+**Anyone retrying this needs a recovery path** (a head that has waited N frames
+gets abandoned and the queue re-armed), and really needs the xHCI error counter
+and queue depth readable over URC first. There is no verb for either today.
+Guessing cost a working machine once.
+
+### 2. My "1000 Hz against 60 fps" explanation for the floatiness does not survive
+
+I was confident about it. The first and third builds run the same polling code
+and got "very floaty" and "feel good" respectively, so the report is not a
+stable function of that code, and a mechanism that predicts a constant 16:1
+report loss cannot explain a difference that appears without one.
+
+What actually changed between them is phase 3, which only adds a descriptor
+walk at init. So either the perception varies with what else the box is doing,
+or the floatiness has a different cause I have not found. Treat the dropped-
+report theory as **unconfirmed**, not as background knowledge.
+
+The underlying observation is still true and still worth fixing one day: ONE
+transfer in flight does mean the controller only fetches one report per host
+poll. Whether that is what anyone can feel is now an open question.
+
+### 3. New, unexplained: launching an app takes a few moments
+
+Operator notes the Editor is slow to open. Post-detach that is `pc64_modload`
+reading a `.UNO` off the USB stick through `usbmsc`, so it shares a path with
+the 2 MB `put` that used to take minutes before the `fat_alloc` O(n²) fix
+(2026-07-22). Worth a look with the same lens: it may be another
+rescan-per-cluster shape, or simply the cost of a synchronous multi-hundred-KB
+read with no readahead. Not filed as a defect, just measured once and noticed.
