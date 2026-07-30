@@ -470,6 +470,42 @@ static UnoAppEntry mod_load(const char *file)
     return (UnoAppEntry)e;
 }
 
+/* ---- loadable DRIVERS (unodevices phase 4) --------------------------------
+ * A driver lives at \DRIVERS\<NAME>.UNO on a specific volume - specific,
+ * because devmgr scans volumes itself and a driver found on volume 2 must be
+ * loaded from volume 2, not from whichever volume happens to answer first.
+ * That is the one difference from mod_read()'s search-every-volume behaviour,
+ * which is right for the fixed app roster and wrong here.
+ *
+ * `vol` is a fat.c volume index, NOT a uno_fs one, and the distinction is not
+ * cosmetic: uno_fs_* is a MAP over the RAM disk, the FAT volumes and the
+ * firmware filesystem, so its volume 0 is the RAM disk while fat.c's volume 0
+ * is the first real FAT partition. Listing with one namespace and reading with
+ * the other reads the wrong disk, silently - which is exactly what the first
+ * version of this did, and what the phase-4 gate caught.
+ *
+ * UNO_MODF_DRV (0x0008) is checked because the entry SIGNATURE differs: a
+ * driver entry takes a services pointer and returns a module descriptor, so
+ * calling an ordinary app through it would pass a pointer where the app
+ * expects nothing and interpret its return value as a struct address. The flag
+ * is the only thing standing between "someone copied an app into \DRIVERS\"
+ * and a jump through a bad pointer. */
+void *uno_mod_load_drv(int vol, const char *file)
+{
+    unsigned short flags = 0;
+    void *e;
+    char p[80];
+    long n;
+    if (!file || !*file) return 0;
+    strcpy(p, "DRIVERS\\"); strcat(p, file);
+    n = uno_fat_read(vol, p, gModBuf, MODBUF_MAX);
+    if (n <= 0) return 0;
+    mdbg("modload(drv): "); mdbg(file); mdbg("\n");
+    e = mod_instantiate(n, &flags, 0, 0, 0, 0);
+    if (e && !(flags & 0x0008)) { mdbg("modload: not a driver module\n"); e = 0; }
+    return e;
+}
+
 /* ---- unoui-class modules (Studio) ----------------------------------------- */
 int uno_mod_present(const char *file)
 {

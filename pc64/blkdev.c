@@ -182,9 +182,23 @@ void uno_blk_init(void)
 /* M3 detach: firmware Block IO just died with ExitBootServices - drop every
  * registered device and re-populate from the native drivers, which are now
  * the only ones on the bus.  Callers then uno_fat_remount(). */
+/* unodevices bind pass, weak so the legacy core list (which has blkdev but
+ * not uno_devmgr) still links; the strong definition wins the moment the
+ * device manager is in the image. */
+__attribute__((weak)) int devmgr_bind_all(void) { return 0; }
+
 void uno_blk_detach(void)
 {
     g_ndev = 0;
+    /* The storage probes decline while the firmware owns their controllers
+     * (reprogramming one underneath firmware Block IO once corrupted an
+     * installer clone mid-write). We are past ExitBootServices now, so give
+     * the registry the pass in which they can finally accept - before the
+     * inits below run, so each one finds its device already recorded.
+     *
+     * Through a weak seam, because unodevices is not in every build's link
+     * (the legacy core source list) and blkdev is. */
+    devmgr_bind_all();
     uno_ahci_init();
     uno_nvme_init();
     uno_sdhci_init();
