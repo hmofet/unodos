@@ -1376,6 +1376,17 @@ void uno_dbg_envblock(void)
             unsigned xe = 0;
             uno_xhci_status(&pr, &np, &ndd, &xe);
             env("xhci: present=%d ports=%d devs=%d err=%u\n", pr, np, nd, xe);
+            /* Per hub port, not just per device that made it. A device that
+             * never enumerated leaves no trace in a device list, so "three
+             * devices where six were expected" says something is wrong and
+             * nothing about where. */
+            {   unsigned hp[16]; int k;
+                uno_xhci_hub_ports(hp, 16);
+                for (k = 1; k < 16; k++)
+                    if (hp[k])
+                        env("  hubport[%d] sts=%08x%s\n", k, hp[k] & 0x7FFFFFFFu,
+                            (hp[k] & 0x80000000u) ? "  CONNECTED BUT NOT ENUMERATED" : "");
+            }
             for (i = 0; i < nd; i++) {
                 const uno_usb_dev *d = uno_xhci_dev(i);
                 if (!d) continue;
