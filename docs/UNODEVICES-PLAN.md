@@ -1,11 +1,34 @@
 # unodevices, Device Manager implementation plan (pc64)
 
-Status: **Phase 1 DONE (2026-07-23, branch `unodevices`)**: registry, recursive
-PCI enumeration, introspection and both gates have landed; see the "as landed"
-sections and the changelog in `pc64/DEVICES.md`, which is the contract and wins
-over this document wherever they disagree. Phases 2-4 are still PLANNED. Run
-this plan BEFORE the detach-completion plan (docs/DETACH-COMPLETION-PLAN.md,
-which builds its drivers on this registry).
+Status, 2026-07-30:
+
+| Phase | State |
+|---|---|
+| 1, PCI enumerator + tree + introspection | **DONE** (2026-07-23), on master |
+| 2, driver registry + binding | **DONE** (branch `detach-bcd`), QEMU-green |
+| 3, USB into the same tree | **still PLANNED** |
+| 4, loadable `.UNO` drivers + hotplug | **DONE for PCI** (branch `detach-bcd`); the USB hotplug half needs phase 3 |
+
+`pc64/DEVICES.md` is the contract and wins over this document wherever they
+disagree; its "as landed" sections and changelog are authoritative.
+
+**Three places the work departed from this plan, all recorded in DEVICES.md
+rather than left to be discovered:**
+
+1. **No `priority` field** (plan decision 3 held; an earlier DEVICES.md draft
+   had one). Specificity plus probe-decline replaces it.
+2. **Adoption did not delete each driver's legacy `pci_find`.** The registry is
+   consulted first and the scan remains the fallback, because deleting it
+   changes WHEN a driver touches hardware on paths only metal can exercise.
+3. **Phase 4's hotplug is PCI-only and nothing polls it.** `devmgr_rescan()`
+   diffs the tree and honours the remove contract, but the case that actually
+   happens on these machines is USB, and USB is not in the tree until phase 3.
+
+This plan was meant to run BEFORE the detach-completion plan
+(docs/DETACH-COMPLETION-PLAN.md). It did not: detach phases B/C/D landed first
+on the same branch, which is why the detach gate answers "does a driver own
+this device" by asking the service owners rather than by reading bind state.
+Now that phase 2 exists, that substitution is available - see DETACH.md §4.
 
 Two phase-1 decisions differ from the sketch below, deliberately: enumeration is
 recursive **plus** a flat sweep of unreached busses (multi-root machines,

@@ -1,5 +1,29 @@
 # unodevices - implementation progress
 
+> **SUPERSEDED IN PART, 2026-07-30 (branch `detach-bcd`): phases 2 and 4 are
+> BUILT and QEMU-green.** The sections below describing them as "DESIGNED, not
+> yet built" are of their moment. What actually landed, and where it differs:
+>
+> - **Phase 2 is on master's successor branch, not just designed.** The
+>   `UNO_DRIVER` seam, specificity matching, probe-decline and the fixpoint
+>   `devmgr_bind_all()` are in `uno_devmgr.c`; `UNO_DEVMGR_API` is 2. The
+>   sample driver this doc describes as living inside `uno_devmgr.c` under
+>   `UNO_DEBUG` does NOT exist in that form - the phase-4 work made it a real
+>   loadable module instead, `\DRIVERS\SAMPLE.UNO`, which is a stronger proof
+>   because it exercises the loader as well as the registry.
+> - **Driver adoption happened here rather than per-lane**, for the built-in
+>   PCI drivers (e1000, ahci, nvme, sdhci, hdaudio, ac97, r8169), with one
+>   deviation from the recipe below: the legacy `pci_find` call was NOT deleted.
+>   The registry is consulted first and the scan is the fallback. Deleting it
+>   changes when a driver touches hardware on paths only metal can exercise.
+>   See DEVICES.md 5.
+> - **Phase 3 is still not built**, and phase 4's USB hotplug half depends on
+>   it: `devmgr_rescan()` diffs the PCI tree and nothing calls it periodically.
+>   The mechanism and the remove contract are in place for phase 3 to use.
+>
+> Verified by `tools/devmgr_qemu.py`, which now asserts real bindings per
+> function rather than their absence.
+
 > **Salvaged from the `unodevices` branch, 2026-07-30.** The branch is gone; the
 > work reached master by a different route and master's `uno_devmgr.c` is well
 > ahead of what this describes (641 lines to the branch's 433, including
