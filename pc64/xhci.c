@@ -111,6 +111,7 @@ typedef struct { u64 param; u32 status; u32 control; } __attribute__((packed)) t
 #define TR_ENABLE_SLOT 9
 #define TR_ADDRESS_DEV 11
 #define TR_CONFIG_EP   12
+#define TR_EVAL_CTX    13      /* re-evaluate a context (EP0 max packet)     */
 #define TR_RESET_EP    14      /* endpoint Halted -> Stopped                 */
 #define TR_STOP_EP     15      /* abort whatever is running on the ring      */
 #define TR_SET_TR_DEQ  16      /* re-point the transfer ring's dequeue cursor */
@@ -514,6 +515,40 @@ static int enumerate_dev(int root_port, u32 route, int tier, int speed,
      * not the old slot-parameter helper). */
     g_devs[di].slot = slot; g_devs[di].port = root_port; g_devs[di].speed = speed;
     g_dev_route[di] = (int)route; g_dev_tier[di] = tier; g_dev_rport[di] = root_port;
+
+    /* FULL SPEED is the only speed whose EP0 max packet is not fixed: it may be
+     * 8, 16, 32 or 64, and the only way to learn it is to read the descriptor.
+     * High speed is always 64 and low speed always 8, which is exactly why
+     * those two worked and full-speed devices did not - an endpoint context
+     * claiming 8 while the device packetises at 64 errors out as soon as the
+     * transfer needs more than one packet, so the 18-byte descriptor fetch
+     * failed and the device was written off as absent.
+     *
+     * The spec's answer: read the first 8 bytes, which is safe at MPS 8 for any
+     * device, take bMaxPacketSize0 from offset 7, and Evaluate Context to
+     * correct EP0 before reading anything longer. (ZimaBlade, 2026-07-30: two
+     * full-speed HID devices on hub ports 3 and 4, both reporting connected,
+     * powered and enabled, both refusing to enumerate.) */
+    if (speed == 1) {
+        for (i = 0; i < 8; i++) g_descbuf[i] = 0;
+        if (get_device_descriptor(di, slot, g_descbuf, 8)) {
+            int real = g_descbuf[7];
+            if (real == 16 || real == 32 || real == 64) {
+                int off = 2 * st;
+                for (i = 0; i < (int)sizeof g_inctx[di]; i++) g_inctx[di][i] = 0;
+                ctx_wr(g_inctx[di], 4, 0x2);            /* A1: the EP0 context */
+                for (i = 0; i < st; i++)                /* copy it, then patch */
+                    g_inctx[di][off + i] = g_devctx[di][off + i];
+                { u32 e1 = *(volatile u32 *)(g_devctx[di] + off + 4);
+                  ctx_wr(g_inctx[di], off + 4, (e1 & 0xFFFFu) | ((u32)real << 16)); }
+                if (run_command((u64)(uintptr_t)g_inctx[di],
+                                TRB_TYPE(TR_EVAL_CTX) | ((u32)slot << 24), 0)
+                    == CC_SUCCESS)
+                    mps = real;
+                xd("[xhci] fs ep0 mps "); xd_i(mps); xd_c(10);
+            }
+        }
+    }
 
     for (i = 0; i < 18; i++) g_descbuf[i] = 0;
     g_dbg_desc = get_device_descriptor(di, slot, g_descbuf, 18) ? g_descbuf[1] : -1;
