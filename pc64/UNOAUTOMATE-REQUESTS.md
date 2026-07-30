@@ -2131,3 +2131,43 @@ Fixed in `76f11c0` (configure first, and check that port power took) and
 `203bd51` (a stranded machine now paints "detach failed - power off and remove
 the USB stick" on the framebuffer, which is hardware we still own, instead of
 sitting there looking like a brick).
+
+---
+
+## 2026-07-30 (metal) -> DETACH COMPLETE ON THE ZIMABLADE
+
+The box runs with no firmware: storage, network, keyboard and mouse all on our
+own drivers, with every USB device behind a hub because it has one USB port.
+
+```
+xhci: present=1 ports=2 devs=5 err=0
+  hubport[1] sts=00100503        hubport[3] sts=00100103   hubport[4] sts=00100103
+  usbdev[1] 18a5:0250 speed=3    <- Verbatim boot stick
+  usbdev[2] 046d:c548 speed=1    <- Logitech unifying receiver (MX Keys + MX mouse)
+  usbdev[3] 1532:00a3 speed=1    <- Razer Cobra
+  usbdev[4] 0bda:0411 speed=4    <- USB3 hub face
+usb-hid: kbd=3 mouse=2
+disks: emmc0, usb0 (native, is_boot)
+```
+
+Four faults, each hidden behind the last, none of them findable in QEMU:
+
+1. hub never SET_CONFIGURATION'd, so it powered no ports (this one stranded the
+   box: detached with no input and no boot volume)
+2. multi-TT hub (`class 09/00/02`) with the MTT bit clear, so split transactions
+   to full/low-speed devices went to the wrong Transaction Translator
+3. full-speed EP0 max packet guessed as 8 when the device used 64, so the
+   18-byte descriptor read failed and healthy devices looked absent
+4. port scan bugs: DMA into a stack buffer, and a reset wait built from a
+   calibrated spin rather than real time
+
+**The lesson worth keeping: QEMU's USB models hid all three of the first
+three.** Its hub powers ports regardless of configuration state, it is
+single-TT, and its HID devices report `bMaxPacketSize0 = 8`. Three consecutive
+"green in QEMU" results on code that could not work on silicon.
+
+**And the process lesson:** what finally broke the deadlock was making the
+machine report per-hub-port status into the env block. Once
+`hubport[3] sts=00100103 CONNECTED BUT NOT ENUMERATED` was readable, the speed
+bits named the cause in a single read. That measurement should have been built
+several rounds earlier instead of inferring from what was missing.
