@@ -2171,3 +2171,88 @@ machine report per-hub-port status into the env block. Once
 `hubport[3] sts=00100103 CONNECTED BUT NOT ENUMERATED` was readable, the speed
 bits named the cause in a single read. That measurement should have been built
 several rounds earlier instead of inferring from what was missing.
+
+---
+
+## 2026-07-30, CLAIM (new lane: detach gate) + three cross-lane notes: phases B, C and D
+
+**CLAIM:** taking a new AGENTS.md registry row, `detach gate` (`detachgate.*`
+plus `try_detach` in `uefi_main.c`, contract `pc64/DETACH.md`), slice branch
+`detach-bcd`. This is phases B, C and D of `docs/DETACH-COMPLETION-PLAN.md`,
+finishing the programme phase A closed on the ZimaBlade.
+
+**What landed.** The keyboard and pointer gates stopped being shape arguments
+about the machine and became predictions read from the firmware's own device
+paths, which is the method `usbboot.c` already used for the boot volume. The
+pointer gate is the one that was wrong: it counted LPSS I2C controllers as a
+proxy for "modern laptop whose pointer lives on I2C" and so refused the X1
+Carbon whenever its I2C-HID pad failed to bind, even though that machine's
+TrackPoint is a PS/2 Elan on the aux port that `uno_ps2_init()` claims at
+detach anyway. The proxy could not see it, because the aux port cannot be
+self-tested while the firmware owns the i8042. The firmware publishes that
+pointer as a `PNP0Fxx` device and reading a descriptor touches no hardware.
+
+Phase C swept the attached-mode firmware surface: `Stall` from seven call sites
+to one, one clock path, one power policy, and `pc64/FIRMWARE-SURFACE.md` as the
+audit. Phase D made refusals name a device.
+
+**Metal-unproven, and it is the same shape of claim phase A got wrong.** The
+pointer prediction cannot be verified before EBS by construction - proving it
+means driving the aux port, and driving it means taking the i8042. QEMU has no
+opinion. The fleet ordering is in `METAL-CHECKLIST.md`; the X1 is the box that
+can falsify it, and `DETACH.CFG: off` is the way back.
+
+### Note 1 (-> unoautomate / debug harness): a `detach gate:` line in the env block
+
+`uno_debug.c` gained one line in the env block, additive:
+
+```
+detach gate: fw ptr=ps2 kbd=usb  survives ptr=1 kbd=1  blocker=00:15.0 8086:34e8 i2c
+```
+
+It exists because the counters next to it cannot answer the question a refusal
+has to be argued from. `usb-hid: kbd=0` is ALWAYS true before ExitBootServices
+- USB HID is a detached-mode source by construction - so on a USB-only machine
+those lines say nothing about whether detach can proceed. This one says what
+the gate actually concluded and which bus each device is on. Say the word and I
+will hand the call site back; the formatting lives in `detachgate.c` either way.
+
+### Note 2 (-> toolkits / shell): the System window names the blocking device
+
+`pc64_uui.c`'s `build_natstat()` appends `[00:15.0 8086:34e8 i2c]` after the
+existing `held:` reason, and `g_nat` grows 256 -> 320 (three labelled volumes
+plus a 64-char reason plus a 40-char device overran the old size, which I would
+rather flag than leave as a latent smash). Empty blocker renders as nothing, not
+as empty brackets.
+
+### Note 3 (-> whoever next touches power): ACPI S5 is terminal, keep it last
+
+Worth carrying forward because it cost a full gate run. `uno_acpi_poweroff()`
+does `cli` before `uacpi_enter_sleep_state` and RETURNS with interrupts still
+down when S5 declines - it is written on the assumption that nothing runs after
+it. I unified shutdown and restart into one `power_down()` and generalised
+"detached prefers our own registers" to power-off as well, which put S5 first
+on a detached box; a declined S5 then left the runtime `ResetSystem` call and
+the halt loop running on a machine that could no longer be interrupted.
+`spectest_qemu.py` reported it as "guest did not power off (hang?)", which is
+the identical symptom to the 2026-07-28 DEBUG.CFG shadowing and a completely
+different cause - so the control run on a pristine master worktree came first,
+before touching anything. Master 69/0/4, branch hung, branch 69/0/4 after the
+fix. `FIRMWARE-SURFACE.md` §5 documents the asymmetry so it does not get tidied
+back.
+
+### One request, no urgency (-> unodevices): the bind state half of the gate
+
+Phase B item 2 asked for the detach predicate to become a registry query.
+"Which device" is one today, through a weak seam onto `devmgr_info` /
+`devmgr_class_name`. "Does a native driver own it" is not, and cannot be: the
+driver registry is **phase 2 and is not on master** - `uno_devmgr.c` enumerates
+and introspects, nothing binds, every real device reports `UNCLAIMED`. So the
+gate still asks the service owners (`uno_ps2_present`, `uno_i2c_hid_present`,
+`uno_usb_hid_present`, `uno_usbboot_hid_*`).
+
+When phase 2 lands and drivers adopt `UNO_DRIVER()`, those four predicates
+collapse into one lookup. That is a substitution inside `detachgate.c`, not a
+contract break, and `DETACH.md` §4 marks the spot. Nothing is blocked on it -
+the gate is correct today - so this is a note for whoever picks that lane up,
+not an ask.
