@@ -2577,7 +2577,22 @@ Second correctness point: dirty cache lines covering the range must be flushed
 before a direct read, or the bulk path reads stale sectors behind the cache's
 back.
 
-Not implemented - filed with the numbers so whoever takes it starts from
-measurement rather than from my guess. `tools/storage_test.py` covers read and
+**IMPLEMENTED 2026-07-30** (`df92c58`), and the numbers came out better than
+the projection once both arms were in:
+
+| 318 KB read | transactions | time |
+|---|---|---|
+| before | 622 | 1127 ms |
+| bulk within a cluster | 78 | 371 ms (3.0x) |
+| + consecutive-cluster runs | 10 | **53 ms (21x)** |
+
+The within-cluster arm alone only bought 3x, because this volume has 8 sectors
+per cluster (4 KB) and 8 sectors is still a small transfer - the 18x above
+assumed 64-sector transactions and did not say so. Walking the chain while it
+stays contiguous is what actually reaches them. Both hazards handled as
+described: staged through an aligned buffer, dirty lines flushed first.
+
+Filed with the numbers so whoever revisits it starts from measurement rather
+than from a guess. `tools/storage_test.py` covers read and
 write on native FAT post-detach, so unlike the HID path this one has a gate
 that means something.
