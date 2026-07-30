@@ -158,45 +158,131 @@ distinct claimants).
 
 ---
 
-## 5. Driver model + binding  `[EXPERIMENTAL, Phase 2]`
+## 5. Driver model + binding  `[STABLE, Phase 2]` (as landed)
 
 ```c
-typedef struct uno_match {            /* wildcard: 0xFFFF (ids) / 0xFF (class) */
-    u16 ven, dev; u8 cls, sub, prog; u16 flags;
+typedef struct uno_match {
+    unsigned char  kind;                 /* UNO_MATCH_PCI_ID | _PCI_CLASS     */
+    unsigned short vendor, device;       /* _PCI_ID                            */
+    unsigned char  cls, subcls, prog_if; /* _PCI_CLASS                         */
+    unsigned char  have_progif;          /* 0 = class/subclass only            */
 } uno_match;
 
 typedef struct uno_driver {
-    const char *name; uno_bustype bus;
-    const uno_match *match;           /* NULL-terminated table               */
-    int  (*probe)(uno_device *);      /* claim + init; publish a capability   */
-    void (*remove)(uno_device *);
-    u8   priority;                    /* tie-break; higher wins               */
+    const char      *name;               /* single token: it IS the listing column */
+    unsigned char    bus;                /* uno_bustype                        */
+    unsigned short   api;                /* UNO_DEVMGR_API it was built to     */
+    const uno_match *match;              /* UNO_MATCH_END-terminated           */
+    int  (*probe)(uno_device *);         /* 1 = claimed, 0 = "not mine"        */
+    void (*remove)(uno_device *);        /* may be NULL                        */
 } uno_driver;
 ```
 
-- **Self-registration via a linker set** (AGENTS.md §2 names this seam): `UNO_DRIVER(x)`
-  drops `&x` into a `.uno_drivers` section the manager walks, no central list to edit
-  when a driver is added.
-- **Match precedence:** exact `ven:dev` > `cls/sub/prog` > `cls`-only; ties by
-  `priority`. First successful `probe()` binds.
-- **Pipeline** (`devmgr_bind_all()`): order by dependency (bridges/controllers before
-  children; xHCI before USB devices) → for each `DEV_UNBOUND`, best match → `probe()`
-  → `DEV_BOUND` (+ capability published) or stays `DEV_UNBOUND`/`DEV_FAILED`, **visibly**.
-- **Existing drivers migrate additively:** each gains a `match[]` + a `probe()` wrapper
-  around its current init and a `UNO_DRIVER(...)` line. `pci_find` stays as a compat
-  shim so nothing breaks mid-migration; the driver's own file is the only edit.
+**There is no priority field, and that is a decision rather than an omission.**
+The earlier draft of this section had one. Priority numbers are a coordination
+problem between files that do not know about each other: every new driver has
+to guess a number relative to drivers it has never seen, and the number means
+nothing locally. Specificity plus probe-decline expresses the same thing with
+only local knowledge, which is what plan decision 3 locked.
 
-## 6. Loadable `.UNO` drivers  `[EXPERIMENTAL, Phase 4]`
+- **Self-registration** through the `UNO_DRIVER(x)` seam (AGENTS.md §2): a
+  driver opts in with one line in its own file, and no central list is edited.
+  The idiom is COFF grouped sections (`.unodrv$a` / `$m` / `$z`), NOT the ELF
+  "custom section + `KEEP()`" advice, because this kernel is PE/COFF via mingw
+  ld with `-nostdlib` and no linker script. Constructor registration is not
+  available either: there is no CRT, so `__attribute__((constructor))` never
+  runs. The manager iterates between the markers and SKIPS NULL slots, since
+  the linker may pad between contributions.
+- **Match precedence:** exact `vendor:device` (3) > `class/subclass/prog-if`
+  (2) > `class/subclass` (1). The best entry in a driver's own table wins, so a
+  driver may list an exact id AND a class fallback without the fallback
+  weakening it.
+- **Probe-decline is the tie-break.** `devmgr_bind_all()` offers a device to
+  each matching driver most-specific-first until one returns 1. A declining
+  probe is normal, not an error, and must be side-effect-free. This is how
+  drivers sharing a class sort themselves out.
+- **The bind loop runs to a FIXPOINT**, not in dependency order: a pass that
+  binds nothing ends it. Binding a controller may create children (plan
+  decision 2) whose drivers deserve a pass of their own. It is idempotent and
+  re-runnable, which is what lets `uno_blk_detach()` re-run it.
 
-A driver may ship as a `.UNO` in `\DRIVERS\` with a manifest header (name, bus, match
-table, api-version, `probe`/`remove` offsets), reusing the existing module loader. For
-an unclaimed device the manager scans `\DRIVERS\` manifests, loads the matching module,
-and calls `probe()`. Enables shipping/updating drivers out of band (pairs with the A/B
-`put` flow) and third-party drivers.
+### Probes must not touch hardware they do not yet own
+
+The two shapes that matter, both load-bearing:
+
+- **Lazy devices (NICs, WiFi).** The probe RECORDS the node and returns 1;
+  bring-up stays in `pc64_net_up()`. Adoption must not make a radio eager.
+- **Storage (`ahci`, `nvme`, `sdhci`).** The probe DECLINES while
+  `uno_pc64_detached()` is false. While attached the firmware owns those
+  controllers and is moving sectors through them; reprogramming one underneath
+  it is not theoretical damage, it once corrupted an installer clone mid-write
+  (see `blkdev.c`). An UNCLAIMED listing while attached is the honest answer,
+  and `uno_blk_detach()` re-runs `devmgr_bind_all()` past ExitBootServices so
+  they bind exactly when the hardware becomes ours.
+
+### What adoption did NOT do, and why
+
+The plan said each driver's legacy `pci_find` call should be deleted in the
+same commit as its match table. That has not been done, and the reason is
+scope of proof rather than tidiness: deleting the scan changes WHEN a driver
+touches hardware, on paths only metal can exercise (r8169 on the ZimaBlade,
+e1000e/igb and the WiFi parts on laptops). The registry is now consulted
+FIRST and the scan remains as the fallback, so a machine where a bind pass has
+run uses the registry and one where it has not behaves exactly as before.
+Finishing the deletion is a per-lane, metal-gated step.
+
+## 6. Loadable `.UNO` drivers  `[STABLE, Phase 4]` (as landed)
+
+A driver ships as `\DRIVERS\<NAME>.UNO`, flagged `UNO_MODF_DRV` (0x0008) in
+its module header, and is loaded after the built-ins have had their turn, so a
+shipped driver always beats a dropped-in one for the same device.
+
+```c
+typedef const uno_drv_module *(*UnoDrvEntry)(const uno_drv_services *svc);
+```
+
+- **A versioned services struct, and NO dynamic symbol resolution.** The
+  module receives `uno_drv_services` (config read/write, `map_bar`,
+  `dma_alloc`, `msi_enable`, `delay_ms`, `rdtsc`, `log`) and resolves nothing
+  by name. `UNO_DRVSVC_API` versions the struct.
+- **Two independent version gates, and both earn their keep.** The MODULE
+  declares which services struct it was built against; the DRIVER record
+  declares which registry contract. A driver built against an older services
+  struct would read function pointers at the wrong offsets, and that is not a
+  failure that reports itself.
+- **The manager owns MSI.** Drivers never touch `_PRT` or INTx routing: every
+  machine in this fleet has a history of unusable legacy IRQs, so the house
+  style is MSI everywhere and a driver that cannot get one should poll rather
+  than trust a line it has no reason to trust.
+- **`dma_alloc` is a bump arena, 64-byte aligned, never freed.** A driver's DMA
+  buffers live as long as the driver. The alignment requirement is the BOT
+  lesson from `usbmsc.c` restated as a service: DMA must never target the stack.
+
+## 7. Hotplug and the remove contract  `[STABLE, Phase 4]` (as landed)
+
+`devmgr_rescan()` re-enumerates and diffs against the tree. Devices still
+present keep their bindings (`devmgr_enumerate()` has always carried them);
+devices that have gone get their driver's `remove()` and are counted as
+departures; arrivals bind on the way out.
+
+**The contract for a driver, which the manager cannot enforce:** after
+`remove()` returns, the driver must not touch that device's MMIO again. The
+precedent is the trackpad detach-gate bug, where a pointer outlived the thing
+it pointed at.
+
+A departing driver is handed a synthetic node carrying its ADDRESS and nothing
+else. That is deliberate: `drvdata` pointed into a table slot the re-scan has
+already rebuilt, so passing it back would be passing back a dangling
+reference. `remove()` may trust the address; it may trust nothing else.
+
+**Nothing calls `devmgr_rescan()` periodically yet.** PCI hotplug on these
+machines is rare enough that a timer would be pure overhead, and USB hotplug -
+the case that actually happens - needs USB in the tree, which is phase 3. The
+mechanism and the contract are here so phase 3 has something to plug into.
 
 ---
 
-## 7. Introspection, the point of Phase 1  `[STABLE]` (as landed)
+## 8. Introspection, the point of Phase 1  `[STABLE]` (as landed)
 
 The **line format is unodevices'** to define; URC forwards it verbatim and does not
 parse it. One line per PCI function:
@@ -238,7 +324,7 @@ column), and the driver column is always present.
 
 ---
 
-## 8. Rollout (each phase lands small and green, AGENTS.md §3)
+## 9. Rollout (each phase lands small and green, AGENTS.md §3)
 
 | Phase | Slice | Payoff |
 |---|---|---|
@@ -247,7 +333,7 @@ column), and the driver column is always present.
 | **3** | USB enumerator into the same registry; migrate HID / AX88179 | USB devices first-class + visible |
 | **4** | Loadable `\DRIVERS\*.UNO` + hotplug re-scan | Ship/third-party drivers; PCIe/USB hotplug |
 
-## 9. Territory (AGENTS.md §1-2)
+## 10. Territory (AGENTS.md §1-2)
 
 Own: `uno_devmgr.{c,h}`, `DEVICES.md`, `tools/devmgr_test.c`, `tools/devmgr_test.sh`,
 `tools/devmgr_qemu.py`. Consume unchanged: `pc64_pci.c`, `xhci.c`,
@@ -260,6 +346,15 @@ the `.uno_drivers` linker set. The URC `devices` verb is unoautomate's (landed).
 ---
 
 ## Changelog
+
+- **2026-07-30, `UNO_DEVMGR_API 2`.** Phases 2 and 4. The driver registry
+  (`UNO_DRIVER` seam, specificity matching, probe-decline, fixpoint
+  `devmgr_bind_all`), loadable `\DRIVERS\*.UNO` behind a versioned services
+  struct, and `devmgr_rescan` with the remove contract. Additive: every
+  phase-1 entry point keeps its signature. It is a BUMP rather than a silent
+  addition because `state` can now be BOUND and `drv` non-NULL, which the
+  phase-1 contract promised never happened. §5 also drops the `priority`
+  field the earlier draft carried - see the note there.
 
 - **2026-07-24, additive: `devmgr_add_platform()` (no API bump).** Platform
   devices (a logical block inside a PCI function) can now be registered as sticky
