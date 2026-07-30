@@ -44,6 +44,7 @@ void uno_i2c_hid_status(int *nbars, int *nctrl, int *present, int *addr, int *pa
 void uno_usb_hid_status(int *nkbd, int *nmouse);
 /* the detach gate's prediction of what USB HID will be claimable (usbboot.c) */
 void uno_usbboot_hid_status(int *kbd, int *ptr, const char **why);
+int  uno_dg_status_str(char *buf, int cap);     /* the detach gate's reading */
 #include "xhci.h"     /* the enumerated USB device list, for the env block */
 void uno_ps2_status(int *kbd, int *aux, int *auxport, int *auxid);
 
@@ -1366,6 +1367,15 @@ void uno_dbg_envblock(void)
         {   int pk = 0, pp = 0; const char *pw = 0;
             uno_usbboot_hid_status(&pk, &pp, &pw);
             env("usb-hid preflight: kbd=%d ptr=%d (%s)\n", pk, pp, pw ? pw : "");
+        }
+        /* The detach gate's own reading: which bus the firmware's keyboard and
+         * pointer are actually on, whether each survives EBS, and the device
+         * blamed for a refusal. The counters above say what is bound NOW; this
+         * says what the gate concluded, which is the thing a refusal has to be
+         * argued from. */
+        {   char dg[160];
+            uno_dg_status_str(dg, (int)sizeof dg);
+            env("detach gate: %s\n", dg);
         }
         /* Every USB device the native stack enumerated, with where it sits.
          * Without this, "the mouse does not move" is indistinguishable from a

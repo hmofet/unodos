@@ -22,6 +22,7 @@
 #include "pc64_font.h"       /* TrueType text engine (system font) */
 #include "unosound.h"        /* UnoSound live sequencer (game/app audio) */
 #include "xhci.h"            /* USB host controller (gated -DUNO_XHCI) */
+#include "detachgate.h"      /* which device is holding this machine attached */
 #include "uno_debug.h"       /* debug build: heartbeat/HUD/stress (no-ops otherwise) */
 #include "unoauto.h"         /* unoautomate taps + DRIVE accessors (no-ops in prod) */
 #include "unoauto_remote.h"  /* remote dev-PC link pump (no-op in prod) */
@@ -917,7 +918,9 @@ static void build_acpistat(void)
  * "  FAT vols N (" + three 11-char labels with commas + ")" is ~90 bytes, plus
  * the trailing detach reason (bounded at 64 below); 256 leaves headroom so the
  * unbounded ap_str/ap_int appends below cannot overrun. */
-static char g_nat[256];
+/* 320, not 256: the worst case is a detached box with three labelled volumes,
+ * a 64-char reason and a 40-char blocker device, which overran the old size. */
+static char g_nat[320];
 static void build_natstat(void)
 {
     int nblk = uno_blk_count(), i, nnat = 0, nfat = uno_fat_volumes();
@@ -949,6 +952,20 @@ static void build_natstat(void)
         int k;
         p = ap_str(p, stranded ? "  STRANDED: " : blocked ? "  held: " : "  ");
         for (k = 0; k < 64 && why[k]; k++) *p++ = why[k];
+    }
+    /* ...and WHICH device is holding it (phase D of the detach plan). "held:
+     * would lose the only pointer" tells you the class of problem; the PCI
+     * function tells you what to go and look at. Empty when the device manager
+     * is not in this build or the device is not in its tree - render nothing
+     * rather than an empty pair of brackets. */
+    if (blocked) {
+        const char *dev = uno_dg_blocker();
+        if (dev && dev[0]) {
+            int k;
+            p = ap_str(p, " [");
+            for (k = 0; k < 40 && dev[k]; k++) *p++ = dev[k];
+            *p++ = ']';
+        }
     }
     *p = 0;
 }
