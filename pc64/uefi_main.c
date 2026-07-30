@@ -42,6 +42,7 @@
 #include "usbmsc.h"         /* native USB mass storage (F8: USB boot + detach) */
 #include "usbboot.h"        /* ...and whether THIS machine's boot stick survives */
 #include "detachgate.h"     /* ...and whether its keyboard and pointer do too */
+#include "uno_devmgr.h"     /* unodevices: enumerate + bind (phases 2, 4) */
 #include "pc64_mtrr.h"      /* P3 opt-in: WC framebuffer MTRR rebuild */
 #include <string.h>         /* memcpy (freestanding, from pc64_libc.c) */
 #include "fat.h"            /* native block + FAT stack bring-up */
@@ -1024,6 +1025,16 @@ void uno_pc64_init(void)
                                        before anything later can fail silently */
     uno_dbg_flush_residue();        /* debug build: persist any crash/hang report
                                        the PREVIOUS boot left in the RAM stash */
+    /* unodevices: enumerate, bind the built-in drivers, then let \DRIVERS\
+     * have its turn (phases 2 and 4). Here rather than earlier because
+     * devmgr_load_drivers() reads files, so the FAT stack above has to exist.
+     *
+     * Binding is cheap and touches no hardware: every built-in probe either
+     * records its device or declines. The storage probes decline on purpose
+     * while the firmware still owns their controllers; uno_blk_detach() gives
+     * them the pass where they can accept. */
+    devmgr_bind_all();
+    devmgr_load_drivers();
 #ifdef UNO_STORTEST
     uno_fat_selftest();             /* WRTEST.REQ -> WRTEST.OK (harness write proof) */
 #endif
