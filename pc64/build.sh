@@ -151,7 +151,7 @@ if [ "$1" != "legacy" ]; then
     # paths compile either way, so neither can rot; the flow painter stays
     # the default until the engine path has been through real pages.
     if [ "${BROWSER_ENGINE:-}" = "uw" ]; then UCF="$UCF -DUW_ENGINE"; fi
-    for f in fb mac_compat pc64_libc pc64_io pc64_pci uno_devmgr pc64_math pc64_fs blkdev ahci nvme sdhci fat unostorage hid_kbd i2c_hid xhci usbio usbboot usbmsc usbhid pc64_mtrr ax88179 rtl8152 iwlwifi rtwifi mrvlwifi wifi_wpa uefi_main pc64_native pc64_uui pc64_uui_apps pc64_write pc64_files pc64_music pc64_clock pc64_media pc64_modload pc64_games js pc64_http pc64_font pc64_browser pc64_icons e1000 e1000e igb r8169 net netdisc tls tls_entropy tls_ca acpi_host installer snd_pcm hdaudio ac97 unosecure unoscript unoscript_path pc64_accounts; do
+    for f in fb mac_compat pc64_libc pc64_io pc64_pci uno_devmgr pc64_math pc64_fs blkdev ahci nvme sdhci fat unostorage hid_kbd i2c_hid xhci usbio usbboot usbmsc usbhid detachgate pc64_mtrr ax88179 rtl8152 iwlwifi rtwifi mrvlwifi wifi_wpa uefi_main pc64_native pc64_uui pc64_uui_apps pc64_write pc64_files pc64_music pc64_clock pc64_media pc64_modload pc64_games js pc64_http pc64_font pc64_browser pc64_icons e1000 e1000e igb r8169 net netdisc tls tls_entropy tls_ca acpi_host installer snd_pcm hdaudio ac97 unosecure unoscript unoscript_path pc64_accounts; do
         pc "$CC" $UCF $DBGSAN -c -o "build/$f.o" "$f.c"; OBJS="$OBJS build/$f.o"
     done
     # unojs: the JavaScript engine, its own subsystem (unojs/UNOJS.md).  Plain
@@ -590,7 +590,7 @@ fi
 
 echo "[2/3] compiling the LEGACY core + subsystems + apps..."
 OBJS=""
-for f in fb mac_compat pc64_io pc64_libc pc64_math pc64_modload_static pc64_pci pc64_fs blkdev ahci nvme sdhci fat tls_ca e1000 net tls tls_entropy hid_kbd i2c_hid xhci usbio usbboot usbmsc usbhid pc64_mtrr uefi_main pc64_native unodos snd_pcm hdaudio ac97; do
+for f in fb mac_compat pc64_io pc64_libc pc64_math pc64_modload_static pc64_pci pc64_fs blkdev ahci nvme sdhci fat tls_ca e1000 net tls tls_entropy hid_kbd i2c_hid xhci usbio usbboot usbmsc usbhid detachgate pc64_mtrr uefi_main pc64_native unodos snd_pcm hdaudio ac97; do
     "$CC" $CFLAGS -c -o "build/$f.o" "$f.c"
     OBJS="$OBJS build/$f.o"
 done
