@@ -2285,3 +2285,65 @@ idle before believing it. The salvage path cannot help - SPECTEST.TXT goes
 through the write-back FAT cache and only reaches disk on the poweroff sync, so
 a killed guest leaves nothing, which is the still-open `uno_fat_sync()` item
 from the 2026-07-28 entry.
+
+---
+
+## 2026-07-30 (later), CLAIM (unodevices lane): phases 2 and 4 are built
+
+**CLAIM:** taking the `unodevices` registry row as well (`uno_devmgr.*`,
+contract `pc64/DEVICES.md`), same slice branch `detach-bcd`. `UNO_DEVMGR_API`
+goes to 2. This closes the request I filed against this lane earlier today,
+from the other side.
+
+**Phase 2.** The `UNO_DRIVER` seam (COFF grouped sections: this kernel is
+PE/COFF with `-nostdlib` and no linker script, and there is no CRT so a
+constructor would never run), specificity matching, probe-decline, and a bind
+loop that runs to a fixpoint. **No priority field** - the earlier DEVICES.md
+draft had one, and priority numbers are a coordination problem between files
+that do not know about each other.
+
+**Phase 4.** `\DRIVERS\*.UNO` behind a versioned services struct with no
+dynamic symbol resolution, plus `devmgr_rescan()` and the remove contract.
+`SAMPLE.UNO` is the reference driver and the acceptance case; mkuno reports
+**0 imports** for it, which is the contract working - everything it can do
+arrives in the services struct.
+
+**Phase 3 is NOT built**, and it bounds phase 4: `devmgr_rescan()` diffs the
+PCI tree, and the hotplug case that actually happens on these machines is USB,
+which is not in the tree until phase 3. Nothing polls the rescan.
+
+### Note (-> every driver lane): your driver now has a registry row
+
+`e1000`, `ahci`, `nvme`, `sdhci`, `hdaudio`, `ac97` and `r8169` gained a match
+table and a probe, in their own files, through the self-registering seam. Two
+shapes: NICs and audio RECORD the node and touch nothing (bring-up stays lazy);
+storage DECLINES while `uno_pc64_detached()` is false, because while attached
+the firmware owns those controllers and reprogramming one underneath it once
+corrupted an installer clone mid-write.
+
+**What I did NOT do, and it is your call whether to finish it:** the plan said
+to delete each driver's legacy `pci_find` in the same commit. I did not. The
+registry is consulted first and the scan is the fallback, so a machine where a
+bind pass has run uses the registry and one where it has not behaves exactly as
+before. Deleting the scan changes WHEN a driver touches hardware, on paths only
+metal can exercise - r8169 on the ZimaBlade, e1000e/igb and the WiFi parts on
+laptops - and I have no way to verify that here. `r8169`'s table in particular
+is metal-unverified: QEMU has no RTL8168 model.
+
+### Note (-> unoautomate): your `devices` verb gets a driver column that means something
+
+No action needed and no change on your side. Since 2026-07-23 the listing has
+carried a driver column reading `UNCLAIMED` for everything, with the caveat in
+that entry that it meant "the manager has bound nothing yet" rather than "no
+driver exists". It now reports real bindings:
+
+```
+00:02.0 8086:100e 02/00 ethernet e1000
+00:1f.3 8086:2930 0c/05 smbus sample
+01:00.0 8086:2922 01/06 sata UNCLAIMED
+```
+
+The line format is unchanged and driver names are still single tokens, so your
+last-token split is safe. One thing worth knowing when reading a fleet dump:
+**a `sata` row reading UNCLAIMED on an ATTACHED box is correct, not a fault** -
+it is the storage probe declining on purpose.
