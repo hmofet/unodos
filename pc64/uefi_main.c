@@ -285,7 +285,7 @@ static void stripe_at(UINT32 y0, int idx, UINT32 bgra)
         for (x = x0; x < x1; x++) gVram[y * gStride + x] = bgra;
 }
 static void stage_stripe(int idx, UINT32 bgra)
-{ stripe_at(0, idx, bgra); gBS->Stall(250000); }
+{ stripe_at(0, idx, bgra); uno_pc64_delay_ms(250); }
 static void stage_mark2(int idx, UINT32 bgra)
 { stripe_at(10, idx, bgra); }
 
@@ -351,7 +351,7 @@ static void splash_step(int done, const char *msg)
     g_splash_msg = msg;             /* white "what's loading" text under the bar */
     splash_draw(done);
     uno_pc64_present();
-    gBS->Stall(done >= SPLASH_STEPS ? 700000 : 400000);
+    uno_pc64_delay_ms(done >= SPLASH_STEPS ? 700 : 400);
 }
 
 /* Name the bring-up step currently running, under the loading bar.
@@ -957,9 +957,21 @@ void uno_pc64_init(void)
     static EFI_GUID absGuid = EFI_ABSOLUTE_POINTER_PROTOCOL_GUID;
     int i;
 
+    /* TSC time base FIRST (phase C). It used to be calibrated near the end of
+     * init, which left every delay before that point - the splash, the bring-up
+     * stripes, the startup chime - riding firmware Stall for no reason. It only
+     * ever needed gBS, which we have had since efi_main, so doing it here makes
+     * uno_pc64_delay_ms native for the whole of the rest of the boot and leaves
+     * exactly one firmware Stall in the system: this one. */
+    {
+        unsigned long long t0 = uno_native_rdtsc();
+        gBS->Stall(50000);
+        uno_native_tsc_set((uno_native_rdtsc() - t0) / 50000);
+    }
+
     if (EFI_ERROR(gBS->LocateProtocol(&gopGuid, 0, (void **)&gGop)) || !gGop) {
         con_puts("pc64: no GOP - cannot continue\r\n");
-        for (;;) gBS->Stall(1000000);
+        for (;;) __asm__ volatile ("hlt");
     }
 
     set_geometry(-1);               /* keep the native mode, auto zoom */
@@ -1031,14 +1043,6 @@ void uno_pc64_init(void)
      * the SCREEN is the only channel that can say where it wedged. */
     splash_stage(4, "startup chime");
     uno_pc64_chime();               /* startup chime: loading complete */
-
-    /* TSC time base: calibrate against Stall while it still exists (M3) */
-    splash_stage(4, "calibrating timer");
-    {
-        unsigned long long t0 = uno_native_rdtsc();
-        gBS->Stall(50000);
-        uno_native_tsc_set((uno_native_rdtsc() - t0) / 50000);
-    }
 
     dbg_puts("unodos-pc64: init done\n");
 
@@ -1166,11 +1170,16 @@ int uno_pc64_mac_mouse(short *h, short *v)
     if (v) *v = (short)g_cy;
     return g_prev_mb;
 }
+/* One delay path (phase C). The TSC is calibrated at the very top of
+ * uno_pc64_init(), before anything else asks for a delay, so from that point
+ * on every wait in the system - attached or not - is ours. firmware Stall
+ * survives only as the pre-calibration bootstrap, which is a window of exactly
+ * one call (the calibration's own). */
 void uno_pc64_delay_ms(int ms)
 {
     if (ms <= 0) return;
-    if (gDetached)   uno_native_delay_us((unsigned long)ms * 1000);
-    else if (gBS)    gBS->Stall((UINTN)ms * 1000);
+    if (uno_native_tsc_ok())      uno_native_delay_us((unsigned long)ms * 1000);
+    else if (!gDetached && gBS)   gBS->Stall((UINTN)ms * 1000);
 }
 
 #ifdef UNO_DEBUG
@@ -1708,48 +1717,82 @@ void uno_pc64_snd_quiet(void)
  * ======================================================================== */
 static EFI_RUNTIME_SERVICES *rts(void) { return (EFI_RUNTIME_SERVICES *)gST->RuntimeServices; }
 
-void uno_pc64_shutdown(void)
+/* ONE power policy for both operations (phase C of the detach plan; the two
+ * used to disagree about ordering and about which fallback they had).
+ *
+ * The rule, in one sentence: while ATTACHED prefer the firmware, once DETACHED
+ * prefer our own registers - and either way finish with the other one before
+ * halting.
+ *
+ * The plan's line was "prefer native CF9 with runtime ResetSystem as fallback",
+ * and native-first unconditionally is NOT what landed here. ResetSystem, while
+ * the firmware is alive, is also its chance to flush a pending NVRAM write and
+ * run whatever the platform does on the way down; CF9 is a hard platform reset
+ * that skips all of it. Reordering that to save a branch would trade a real
+ * (if rare) correctness property for tidiness. Post-EBS the argument reverses -
+ * there is no firmware left to do any of that, and the runtime service is a
+ * best-effort call into code whose boot-time half is gone - so native goes
+ * first there. That is one policy expressed once, which is what the plan was
+ * actually asking for.
+ *
+ * `off` selects power-off (ACPI S5 / EfiResetShutdown) over reset (CF9 /
+ * EfiResetCold). Never returns. */
+static void power_down(int off)
 {
+    int det = gDetached;
     uno_dbg_mark_clean();           /* debug build: not a crash, don't salvage */
-    /* ResetSystem is a RUNTIME service - legal after ExitBootServices while
-       we stay in physical addressing. */
-    rts()->ResetSystem(EfiResetShutdown, 0, 0, 0);
-    /* Some firmware ignores EFI_RESET_SHUTDOWN and just returns (the Surface
-       Laptop Go stalls on "Shutting down" forever this way). Fall back to a
-       real ACPI S5 register write, which powers the machine off directly. */
+    if (det) {                      /* ---- native first ---- */
+        if (off) {
 #ifdef UNO_ACPI
-    uno_acpi_poweroff();
+            uno_acpi_poweroff();
 #endif
-    /* neither worked: halt quietly (the screen keeps the last frame, so it's
-       safe to switch off by hand) */
-    for (;;) __asm__ volatile ("hlt");
-}
-void uno_pc64_restart(void)
-{
-    uno_dbg_mark_clean();
-    if (gDetached) uno_native_reset();           /* CF9 + i8042 pulse */
-    rts()->ResetSystem(EfiResetCold, 0, 0, 0);
+        } else {
+            uno_native_reset_try();                 /* CF9; returns if ignored */
+        }
+    }
+    /* ResetSystem is a RUNTIME service, so this is legal on both sides of
+       ExitBootServices while we stay in physical addressing. Some firmware
+       ignores EFI_RESET_SHUTDOWN and simply returns - the Surface Laptop Go
+       hangs on "Shutting down" this way - which is why nothing below assumes
+       it worked. */
+    rts()->ResetSystem(off ? EfiResetShutdown : EfiResetCold, 0, 0, 0);
+    if (!det) {                     /* ---- native second ---- */
+        if (off) {
+#ifdef UNO_ACPI
+            uno_acpi_poweroff();
+#endif
+        } else {
+            uno_native_reset();                     /* CF9 + i8042, then halt */
+        }
+    }
+    /* nothing worked: halt quietly. The screen keeps the last frame, so the
+       machine is safe to switch off by hand and says as much. */
     for (;;) __asm__ volatile ("hlt");
 }
 
-/* wall-clock time; firmware RTC while attached, CMOS once detached */
+void uno_pc64_shutdown(void) { power_down(1); }
+void uno_pc64_restart(void)  { power_down(0); }
+
+/* Wall-clock time: the CMOS RTC, always (phase C, "exactly one clock path").
+ *
+ * This used to read firmware GetTime while attached and the CMOS once
+ * detached, which meant the clock could STEP at the moment of detach - the two
+ * sources are the same silicon, but the firmware applies its own timezone and
+ * daylight-saving fields on top and we do not. A machine whose clock jumps
+ * halfway through boot is a machine whose logs cannot be ordered, and the
+ * ZimaBlade's day-slow CMOS battery already made timestamps hard enough to
+ * trust (see the metal notes in pc64/UNOAUTOMATE-REQUESTS.md).
+ *
+ * The RTC is real hardware on every x86 target including QEMU, and post-detach
+ * it was already the only source, so unifying costs nothing and removes a
+ * runtime-service dependency from the attached window as well. */
 int uno_pc64_time(int *y, int *mo, int *d, int *h, int *mi, int *s)
 {
-    EFI_TIME t;
-    if (gDetached) return uno_native_rtc_read(y, mo, d, h, mi, s);
-    if (rts()->GetTime(&t, 0) != EFI_SUCCESS) return 0;
-    if (y)  *y  = t.Year;   if (mo) *mo = t.Month;  if (d)  *d  = t.Day;
-    if (h)  *h  = t.Hour;   if (mi) *mi = t.Minute; if (s)  *s  = t.Second;
-    return 1;
+    return uno_native_rtc_read(y, mo, d, h, mi, s);
 }
 int uno_pc64_set_time(int y, int mo, int d, int h, int mi, int s)
 {
-    EFI_TIME t;
-    if (gDetached) return uno_native_rtc_write(y, mo, d, h, mi, s);
-    if (rts()->GetTime(&t, 0) != EFI_SUCCESS) return 0;   /* keep tz/dst fields */
-    t.Year = (UINT16)y; t.Month = (UINT8)mo; t.Day = (UINT8)d;
-    t.Hour = (UINT8)h;  t.Minute = (UINT8)mi; t.Second = (UINT8)s; t.Nanosecond = 0;
-    return rts()->SetTime(&t) == EFI_SUCCESS;
+    return uno_native_rtc_write(y, mo, d, h, mi, s);
 }
 
 #ifdef UNO_DEBUG
@@ -1871,10 +1914,10 @@ void uno_pc64_chime(void)
     int i, j;
     for (i = 0; i < 4; i++) {
         uno_pc64_snd_note(notes[i]);
-        for (j = 0; j < 10; j++) { gBS->Stall(11000); uno_snd_poll(); }
+        for (j = 0; j < 10; j++) { uno_pc64_delay_ms(11); uno_snd_poll(); }
     }
     uno_pc64_snd_quiet();
-    for (j = 0; j < 4; j++) { gBS->Stall(11000); uno_snd_poll(); }  /* release tail */
+    for (j = 0; j < 4; j++) { uno_pc64_delay_ms(11); uno_snd_poll(); }  /* release tail */
 }
 
 /* Physical base of the active GOP framebuffer, 0 if there is none.  Read-only

@@ -125,13 +125,26 @@ void uno_native_port_out(unsigned port, int width, unsigned val)
     else if (width == 4) { __asm__ volatile("outl %0,%1"::"a"((unsigned int)val), "Nd"(p)); }
 }
 
-/* ---- reset ---------------------------------------------------------------- */
-void uno_native_reset(void)
+/* ---- reset ----------------------------------------------------------------
+ * Two entry points over one mechanism.  uno_native_reset_try() attempts the
+ * PCH reset-control port and RETURNS if the board ignored it, so a caller can
+ * fall through to another method; uno_native_reset() is the terminal form that
+ * also pulses the i8042 and then halts.  The split exists because the single
+ * power policy in uefi_main.c wants to order native and firmware resets
+ * differently depending on whether the firmware is still there, and a reset
+ * routine that never returns cannot be first in any such order. */
+int uno_native_reset_try(void)
 {
     n_outb(0xCF9, 0x02);                       /* arm                          */
     uno_native_delay_us(50);
     n_outb(0xCF9, 0x06);                       /* hard reset                   */
     uno_native_delay_us(200000);
+    return 0;                                  /* still here: it did not take  */
+}
+
+void uno_native_reset(void)
+{
+    uno_native_reset_try();
     n_outb(0x64, 0xFE);                        /* fallback: i8042 pulse        */
     for (;;) __asm__ volatile ("hlt");
 }
