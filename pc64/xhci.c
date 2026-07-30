@@ -180,12 +180,32 @@ static int   g_bout_i[MAX_DEV], g_bout_cyc[MAX_DEV], g_bout_dci[MAX_DEV];
 /* last hub scan's per-port status word, for the debug env block: bit 31 is our
  * own marker for "connected and reset, but the device would not enumerate". */
 static u32 g_hubport_sts[16];
+/* HOW MANY TRANSFERS TO KEEP IN FLIGHT per interrupt endpoint.
+ *
+ * One was the bug. The controller only polls an interrupt endpoint while a TRB
+ * is posted, so with a single outstanding transfer the device is read exactly
+ * once per host poll and every report it produced in between is never fetched
+ * - not queued anywhere, simply never asked for. The shell polls once a frame,
+ * so a 1000 Hz mouse against a 60 fps loop delivered one report in sixteen and
+ * the pointer crawled; a keyboard lost whole keystrokes, because
+ * hid_kbd_report() diffs against the LAST report it saw and a press plus
+ * release falling between two polls left no trace at all.
+ *
+ * With a queue the controller fetches on its own schedule and one drain per
+ * frame collects them in order. Four is where the ring size and the per-slot
+ * buffers stop being free; the drain loop in usbhid.c means going deeper is a
+ * constant change rather than a structural one. */
+#define INTR_Q       4
 static trb_t g_ir[MAX_INTR][INTR_RING_SZ] __attribute__((aligned(64)));
-static u8    g_ibuf[MAX_INTR][64]         __attribute__((aligned(64)));
+static u8    g_ibuf[MAX_INTR][INTR_Q][64] __attribute__((aligned(64)));
 static int   g_i_used[MAX_INTR], g_i_dev[MAX_INTR], g_i_dci[MAX_INTR];
 static int   g_i_mps[MAX_INTR], g_i_ri[MAX_INTR], g_i_cyc[MAX_INTR];
-static u64   g_i_atrb[MAX_INTR];         /* posted TRB address; 0 = none */
-static u32   g_i_asts[MAX_INTR];         /* stashed completion; 0 = none */
+/* Per queue slot: the posted TRB address (0 = free) and the completion stashed
+ * for it (0 = none). Transfers on one ring complete IN ORDER, so the slots are
+ * a FIFO - post at the tail, consume at the head. */
+static u64   g_i_atrb[MAX_INTR][INTR_Q];
+static u32   g_i_asts[MAX_INTR][INTR_Q];
+static int   g_i_qh[MAX_INTR], g_i_qt[MAX_INTR];
 
 /* Outstanding ASYNC transfers (the HID interrupt-IN and the NIC's armed
  * bulk-IN). All consumers share interrupter 0's single event ring, so a
@@ -381,12 +401,15 @@ static int route_event(const trb_t *ev)
                 g_async_trb[d][k] = 0;
                 return 0;
             }
-    for (d = 0; d < MAX_INTR; d++)
-        if (g_i_atrb[d] && ev->param == g_i_atrb[d]) {
-            g_i_asts[d] = ev->status;
-            g_i_atrb[d] = 0;
-            return 0;
-        }
+    for (d = 0; d < MAX_INTR; d++) {
+        int q;
+        for (q = 0; q < INTR_Q; q++)
+            if (g_i_atrb[d][q] && ev->param == g_i_atrb[d][q]) {
+                g_i_asts[d][q] = ev->status;
+                g_i_atrb[d][q] = 0;
+                return 0;
+            }
+    }
     return 1;
 }
 
@@ -985,31 +1008,46 @@ int uno_usb_bulk_in_poll(int dev)
 }
 
 /* post one interrupt-IN TRB into this endpoint's own buffer + ring the doorbell */
+/* Post ONE transfer into the tail slot, if that slot is free. A slot is busy
+ * while its TRB is outstanding OR while its completion is stashed and not yet
+ * consumed - reusing it in either state overwrites a report nobody has read. */
 static void intr_post(int h)
 {
-    int dev = g_i_dev[h];
-    g_i_atrb[h] = (u64)(uintptr_t)&g_ir[h][g_i_ri[h]];
-    g_i_asts[h] = 0;
+    int dev = g_i_dev[h], q = g_i_qt[h];
+    if (g_i_atrb[h][q] || g_i_asts[h][q]) return;
+    g_i_atrb[h][q] = (u64)(uintptr_t)&g_ir[h][g_i_ri[h]];
     ep_push(g_ir[h], &g_i_ri[h], &g_i_cyc[h], INTR_RING_SZ,
-            (u64)(uintptr_t)g_ibuf[h], (u32)g_i_mps[h],
+            (u64)(uintptr_t)g_ibuf[h][q], (u32)g_i_mps[h],
             TRB_TYPE(TR_NORMAL) | (1u<<5)/*IOC*/ | (1u<<2)/*ISP short-packet ok*/);
+    g_i_qt[h] = (q + 1) % INTR_Q;
     wr32(g_db, g_devs[dev].slot*4, g_i_dci[h]);
 }
 
+/* Top the queue back up, so the endpoint spends as little time as possible
+ * with nothing posted. */
+static void intr_refill(int h)
+{
+    int k;
+    for (k = 0; k < INTR_Q; k++) intr_post(h);
+}
+
 /* non-blocking drain for one interrupt endpoint; 0 = still outstanding */
-static int intr_poll(int h, int *residual)
+static int intr_poll(int h, int *residual, int *slot)
 {
     trb_t ev;
     int guard = EVT_RING_SZ + 4;
-    while (!g_i_asts[h] && guard-- > 0) {
+    int q = g_i_qh[h];
+    while (!g_i_asts[h][q] && guard-- > 0) {
         if (!poll_event(&ev, 1000)) break;
         if (TRB_GET_TYPE(ev.control) != TR_XFER_EVENT) continue;
         route_event(&ev);
     }
-    if (!g_i_asts[h]) return 0;
-    { u32 st = g_i_asts[h];
-      g_i_asts[h] = 0;
+    if (!g_i_asts[h][q]) return 0;
+    { u32 st = g_i_asts[h][q];
+      g_i_asts[h][q] = 0;
+      g_i_qh[h] = (q + 1) % INTR_Q;
       if (residual) *residual = (int)(st & 0xFFFFFF);
+      if (slot)     *slot = q;
       return (int)(st >> 24) & 0xFF; }
 }
 
@@ -1020,7 +1058,9 @@ int uno_usb_setup_intr_in(int dev, int in_addr, int mps)
     int di = dev, slot, in_dci, st, i, cc, h, cur;
     u32 sdw0, sdw1;
     if (dev < 0 || dev >= g_ndevs) return -1;
-    if (mps <= 0 || mps > (int)sizeof g_ibuf[0]) mps = (int)sizeof g_ibuf[0];
+    /* sizeof g_ibuf[0] is the whole QUEUE now, not one buffer - clamp to a
+     * single slot or a long report runs past its buffer into the next one. */
+    if (mps <= 0 || mps > (int)sizeof g_ibuf[0][0]) mps = (int)sizeof g_ibuf[0][0];
     for (h = 0; h < MAX_INTR && g_i_used[h]; h++) ;
     if (h >= MAX_INTR) return -1;
     slot = g_devs[di].slot;
@@ -1048,7 +1088,9 @@ int uno_usb_setup_intr_in(int dev, int in_addr, int mps)
     cc = run_command((u64)(uintptr_t)g_inctx[di], TRB_TYPE(TR_CONFIG_EP) | ((u32)slot<<24), 0);
     if (cc != CC_SUCCESS) return -1;
     g_i_used[h] = 1; g_i_dev[h] = di; g_i_dci[h] = in_dci; g_i_mps[h] = mps;
-    intr_post(h);                                         /* first outstanding TRB */
+    g_i_qh[h] = g_i_qt[h] = 0;
+    for (i = 0; i < INTR_Q; i++) { g_i_atrb[h][i] = 0; g_i_asts[h][i] = 0; }
+    intr_refill(h);                              /* fill the queue, not one TRB */
     return h;                                             /* the caller's handle */
 }
 
@@ -1057,14 +1099,17 @@ int uno_usb_setup_intr_in(int dev, int in_addr, int mps)
  * error. Keeps exactly one TRB outstanding, so it never desyncs the ring. */
 int uno_usb_intr_in(int h, void *data, int maxlen)
 {
-    int resid = 0, cc, n, i;
+    int resid = 0, cc, n, i, q = 0;
     if (h < 0 || h >= MAX_INTR || !g_i_used[h]) return -1;
-    cc = intr_poll(h, &resid);                            /* non-blocking */
-    if (cc != CC_SUCCESS && cc != 13) return 0;           /* no report this frame */
+    cc = intr_poll(h, &resid, &q);                        /* non-blocking */
+    if (cc != CC_SUCCESS && cc != 13) {
+        intr_refill(h);                /* nothing ready: keep the queue armed */
+        return 0;
+    }
     n = g_i_mps[h] - resid;
     if (n > maxlen) n = maxlen;
-    for (i = 0; i < n; i++) ((u8 *)data)[i] = g_ibuf[h][i];
-    intr_post(h);                                         /* re-arm */
+    for (i = 0; i < n; i++) ((u8 *)data)[i] = g_ibuf[h][q][i];
+    intr_refill(h);                    /* replace the one just consumed       */
     return n;
 }
 
