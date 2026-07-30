@@ -86,10 +86,37 @@ def main():
         check(any(r["name"] == "sata" for r in behind),
               "the AHCI behind the bridge decodes as sata")
 
-        # phase 1 binds nothing: every row must say UNCLAIMED, and none may
-        # claim a driver the manager has not actually bound
-        check(all(r["driver"] is None for r in rows),
-              "phase 1 reports no bindings (all UNCLAIMED)")
+        # PHASE 2: the registry binds now, so the assertion that used to read
+        # "nothing is bound" is inverted. What it must NOT become is "something
+        # is bound somewhere" - that would pass on a machine binding the wrong
+        # device - so each claim is checked against the function it belongs to.
+        eth = [r for r in rows if r["name"] == "ethernet"]
+        check(bool(eth) and eth[0]["driver"] == "e1000",
+              "e1000 is BOUND to the ethernet function",
+              eth[0]["raw"] if eth else "no ethernet row")
+
+        # ...and the storage probes must have DECLINED, because this guest is
+        # still firmware-attached and the firmware still owns that controller.
+        # A bound sata row here would mean the gate that protects the
+        # installer clone from being corrupted mid-write is not working.
+        sata = [r for r in rows if r["name"] == "sata"]
+        check(bool(sata) and sata[0]["driver"] is None,
+              "ahci DECLINED while attached (firmware still owns it)",
+              sata[0]["raw"] if sata else "no sata row")
+
+        # PHASE 4: SAMPLE.UNO ships in \DRIVERS\ and claims the SMBus function,
+        # which every built-in declines. A bound smbus row is the whole
+        # loadable-driver path proven end to end: the module was found on the
+        # ESP, passed both version gates, handed back a driver record, and won
+        # a device through the ordinary bind loop.
+        smb = [r for r in rows if r["name"] == "smbus"]
+        check(bool(smb) and smb[0]["driver"] == "sample",
+              "SAMPLE.UNO loaded from \DRIVERS\ and BOUND the smbus function",
+              smb[0]["raw"] if smb else "no smbus row")
+
+        # a device nobody claims still has to be visible and honest
+        check(any(r["driver"] is None for r in rows),
+              "unclaimed devices still list as UNCLAIMED")
         check(all(len(r["name"].split()) == 1 for r in rows),
               "every class name is a single token (URC last-token parse)")
 
