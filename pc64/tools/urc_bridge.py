@@ -113,6 +113,15 @@ class _LiveLink(UnoAutoLink):
         super()._dispatch(line)
 
     def adopt(self, conn):
+        """Drive this link over an already-accepted socket.
+
+        attach_stream() is the library's own name for this and is what the
+        serial path uses, so prefer it; the fallback covers an older deployed
+        unoauto_remote.py that predates it."""
+        attach = getattr(self, "attach_stream", None)
+        if attach is not None:
+            attach(conn)
+            return
         self._sock = conn
         self._connected.set()
         threading.Thread(target=self._reader, args=(conn,), daemon=True).start()
