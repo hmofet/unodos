@@ -17,7 +17,13 @@ Command forms (in any cmd.txt):
     "push <vol> <path> <localfile>"  A/B OS update (chunked)
     anything else                    a URC command (iwl/reboot/vols/...)
 
-Usage: python3 urc_bridge.py [port] [root]     (defaults: 5099, ~/urc)
+Usage: python3 urc_bridge.py [ports] [root]    (defaults: 5099, ~/urc)
+       ports is one port or several: "5099" or "5099,5098"
+
+Several ports because boxes carry their dial-out address in their own DEBUG.CFG
+(`remote=<ip>:<port>`), so consolidating bridges must not require reaching every
+box first to repoint it. Listen where they already dial; they all land in the
+same place regardless of which port they used.
 
 Why this is no longer one process per box
 -----------------------------------------
@@ -249,8 +255,8 @@ class Box:
 
 
 class Bridge:
-    def __init__(self, port, root):
-        self.port = port
+    def __init__(self, ports, root):
+        self.ports = ports
         self.root = os.path.expanduser(root)
         os.makedirs(self.root, exist_ok=True)
         self.log_path = os.path.join(self.root, "bridge.log")
@@ -298,14 +304,26 @@ class Bridge:
 
     # ---- accepting --------------------------------------------------------
     def serve(self):
-        srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        srv.bind(("0.0.0.0", self.port))
-        srv.listen(8)        # was 1: a queued dial-in must not be refused
-        self.log("bridge up on :%d, root %s" % (self.port, self.root))
-        threading.Thread(target=self._accept_loop, args=(srv,), daemon=True).start()
+        opened = []
+        for port in self.ports:
+            try:
+                srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                srv.bind(("0.0.0.0", port))
+                srv.listen(8)    # was 1: a queued dial-in must not be refused
+            except OSError as e:
+                self.log("cannot listen on :%d: %s" % (port, e))
+                continue
+            opened.append(port)
+            threading.Thread(target=self._accept_loop, args=(srv, port),
+                             daemon=True).start()
+        if not opened:
+            self.log("no ports could be opened, giving up")
+            raise SystemExit(1)
+        self.log("bridge up on %s, root %s"
+                 % (",".join(":%d" % p for p in opened), self.root))
 
-    def _accept_loop(self, srv):
+    def _accept_loop(self, srv, port):
         """Does nothing but accept. Everything a connection needs afterwards
         happens on its own thread, so no box can wedge the listener."""
         while True:
@@ -316,7 +334,8 @@ class Bridge:
                 time.sleep(1.0)
                 continue
             name = self.names.get(peer[0], peer[0].replace(".", "-"))
-            self.log("accepted %s:%d as '%s'" % (peer[0], peer[1], name))
+            self.log("accepted %s:%d on :%d as '%s'"
+                     % (peer[0], peer[1], port, name))
             try:
                 self.box(name).attach(conn, peer)
             except Exception as e:                               # noqa: BLE001
@@ -384,9 +403,10 @@ class Bridge:
 
 
 def main():
-    port = int(sys.argv[1]) if len(sys.argv) > 1 else 5099
+    spec = sys.argv[1] if len(sys.argv) > 1 else "5099"
+    ports = [int(p) for p in spec.split(",") if p.strip()]
     root = sys.argv[2] if len(sys.argv) > 2 else "~/urc"
-    Bridge(port, root).run()
+    Bridge(ports, root).run()
 
 
 if __name__ == "__main__":
