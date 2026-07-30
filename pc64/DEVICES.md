@@ -345,6 +345,29 @@ the `.uno_drivers` linker set. The URC `devices` verb is unoautomate's (landed).
 
 ---
 
+## Known limitation: a USB location is not unique
+
+`u<tier>:<port>.<iface>` takes `port` from the device's ROOT-hub port, so every
+device behind the same hub shares it. The ZimaBlade makes this obvious - it has
+one USB port, so its boot stick, its receiver and the hub itself all read
+`u1:01.-`:
+
+```
+u1:01.- 0bda:5411 09/00 hub          UNCLAIMED
+u1:01.- 18a5:0250 00/00 usb-dev      UNCLAIMED
+u2:01.0 18a5:0250 08/06 mass-storage usbmsc
+u1:01.- 046d:c548 00/00 usb-dev      UNCLAIMED
+u2:01.0 046d:c548 03/01 hid          usbhid
+u2:01.1 046d:c548 03/01 hid          usbhid
+```
+
+The ids still identify the hardware and the tier still says how deep it sits,
+so a listing is readable - but the location column cannot be used as a key.
+`xhci.c` already tracks a per-device route string (`g_dev_route`), which is the
+thing that actually disambiguates; wiring it through is a small change nobody
+has needed yet. Recorded so the next person does not assume uniqueness and
+build something on it.
+
 ## Changelog
 
 - **2026-07-30, `UNO_DEVMGR_API 2`.** Phases 2 and 4. The driver registry
