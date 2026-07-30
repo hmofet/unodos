@@ -6,8 +6,8 @@ Status, 2026-07-30:
 |---|---|
 | 1, PCI enumerator + tree + introspection | **DONE** (2026-07-23), on master |
 | 2, driver registry + binding | **DONE** (branch `detach-bcd`), QEMU-green |
-| 3, USB into the same tree | **still PLANNED** |
-| 4, loadable `.UNO` drivers + hotplug | **DONE for PCI** (branch `detach-bcd`); the USB hotplug half needs phase 3 |
+| 3, USB into the same tree | **DONE** (branch `usbtree`), QEMU-green |
+| 4, loadable `.UNO` drivers + hotplug | **DONE** (branch `detach-bcd`); USB departure now handled via `devmgr_drop_usb_children`, nothing polls a rescan yet |
 
 `pc64/DEVICES.md` is the contract and wins over this document wherever they
 disagree; its "as landed" sections and changelog are authoritative.
@@ -20,9 +20,11 @@ rather than left to be discovered:**
 2. **Adoption did not delete each driver's legacy `pci_find`.** The registry is
    consulted first and the scan remains the fallback, because deleting it
    changes WHEN a driver touches hardware on paths only metal can exercise.
-3. **Phase 4's hotplug is PCI-only and nothing polls it.** `devmgr_rescan()`
-   diffs the tree and honours the remove contract, but the case that actually
-   happens on these machines is USB, and USB is not in the tree until phase 3.
+3. **Nothing polls for hotplug.** `devmgr_rescan()` diffs the PCI tree and
+   `devmgr_drop_usb_children()` handles USB departure on republish, both
+   honouring the remove contract - but no timer or port-change event calls
+   either. Arrival and departure are handled when something asks; noticing
+   without being asked is the remaining piece.
 
 This plan was meant to run BEFORE the detach-completion plan
 (docs/DETACH-COMPLETION-PLAN.md). It did not: detach phases B/C/D landed first
@@ -150,6 +152,29 @@ debug-stress notes), networking up in QEMU (e1000) and on the ZimaBlade
 now shows drivers bound against each function.
 
 ## Phase 3, USB into the same tree
+
+> **RESULT, 2026-07-30 (branch `usbtree`). DONE**, gate
+> `tools/usbtree_qemu.py`: usb-kbd, usb-mouse, and a usb-storage behind a hub,
+> all published, the two HID interfaces each bound to usbhid and the MSC
+> interface to usbmsc.
+>
+> **The driver migrations are RECORD-ONLY**, which is the one place this
+> departs from the plan below. usbhid's claim path is what gives a detached
+> machine its keyboard and usbmsc's is what reclaims its boot volume, both
+> behind a hub on the ZimaBlade with no way back past ExitBootServices. Their
+> match tables make the bindings visible; driving the claim from the interface
+> node instead is the next slice and wants a machine in front of it.
+>
+> **A hub is published but is not yet a driver that creates children.** xhci.c
+> already walks hubs internally (it had to, to detach that box at all), so the
+> tree gets the devices behind a hub without the hub-as-driver indirection the
+> plan describes. Worth doing when a second hub-shaped case turns up; not worth
+> restructuring working metal-proven code for on its own.
+>
+> The gate caught two real defects on its first run, both of them the listing
+> describing USB nodes in PCI vocabulary: class 03 rendered as "display"
+> instead of "hid", and a USB node printing a fictional "05:00.0" from the
+> overlapping address union. Both fixed; both asserted now.
 
 - Factor the descriptor walk out of `xhci.c` into the devmgr's USB
   enumeration path, invoked by the xHCI driver post-bind (drivers create
