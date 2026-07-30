@@ -448,6 +448,23 @@ if [ "$1" != "legacy" ]; then
         ls -l build/esp/APPS/PYRT.UNO
     fi
 
+    # ---- SAMPLE.UNO: the reference LOADABLE DRIVER (unodevices phase 4) ----
+    # Proves the whole loadable-driver path end to end: a module in \DRIVERS    # flagged UNO_MODF_DRV (8), receiving the versioned services struct and
+    # binding a device the built-ins all declined. It claims the SMBus function
+    # because nothing needs it - a sample that bound something load-bearing
+    # would be a sample that can break the machine.
+    #
+    # Imports NOTHING from the kernel (everything it can do arrives in the
+    # services struct), so unlike the apps above it needs no thunks and no
+    # kexports check.
+    if [ "${UNO_SAMPLEDRV:-1}" != "0" ]; then
+        echo "[3c2] building SAMPLE.UNO (the reference loadable driver)..."
+        mkdir -p build/drivers build/esp/DRIVERS
+        "$CC" $UCF -c -o "build/drivers/sample.o" "drivers/sample.c"
+        "$CC" -shared -nostdlib -e uno_drv_main -Wl,--exclude-all-symbols             -o "build/drivers/sample.dll" "build/drivers/sample.o"
+        "$PY" tools/mkuno.py convert "build/drivers/sample.dll"             "build/esp/DRIVERS/SAMPLE.UNO" 8
+    fi
+
     # ---- PHOTOS.UNO: the image viewer, a unoui-CLASS module ----------------
     # The app plus the whole unomedia image-decoding library (top-level
     # unomedia/ - PNG incl. its own inflate, baseline JPEG, GIF, BMP, TGA,
