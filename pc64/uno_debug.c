@@ -44,6 +44,7 @@ void uno_i2c_hid_status(int *nbars, int *nctrl, int *present, int *addr, int *pa
 void uno_usb_hid_status(int *nkbd, int *nmouse);
 /* the detach gate's prediction of what USB HID will be claimable (usbboot.c) */
 void uno_usbboot_hid_status(int *kbd, int *ptr, const char **why);
+#include "xhci.h"     /* the enumerated USB device list, for the env block */
 void uno_ps2_status(int *kbd, int *aux, int *auxport, int *auxid);
 
 /* generated symbol table (tools/mksyms.py -> build/dbg_syms.c; the stub in
@@ -460,6 +461,8 @@ static void stash_report(int kind)
 
 /* pick (and cache) the FAT volume that holds CRASH\ - the boot volume in the
  * flasher's whole-disk layout.  Called from safe context at boot. */
+static unsigned g_crash_vol_backoff;   /* see crash_vol / uno_dbg_storage_remapped */
+
 static int crash_vol(void)
 {
     /* P2.2: cache FAILURE too (with a bounded retry), not just success. On a
@@ -468,10 +471,9 @@ static int crash_vol(void)
      * exactly the repeated firmware-BlockIO grind that made the MacBook feel
      * "extremely slow". Retry only every 64th failed call so late-appearing
      * storage still gets picked up. */
-    static unsigned fail_backoff;
     int v, n;
     if (g_crash_vol >= 0) return g_crash_vol;
-    if (fail_backoff) { fail_backoff--; return -1; }
+    if (g_crash_vol_backoff) { g_crash_vol_backoff--; return -1; }
     n = uno_fat_volumes();
     for (v = 0; v < n; v++) {
         /* uno_fat_list returns 0 for both "empty" and "missing", so probe the
@@ -483,7 +485,7 @@ static int crash_vol(void)
         if (g_crash_vol >= 0) break;
         if (uno_fat_mkdir(v, "CRASH")) { g_crash_vol = v; break; }
     }
-    if (g_crash_vol < 0) fail_backoff = 63;
+    if (g_crash_vol < 0) g_crash_vol_backoff = 63;
     return g_crash_vol;
 }
 
@@ -1088,8 +1090,22 @@ void dbg_timer_c(void)
     lapic_wr(0xB0, 0);
 }
 
+/* The volume the telemetry goes to is CACHED as a fat.c volume index, and
+ * uno_fat_remount() renumbers those - so after detach the cached index names a
+ * different volume, or none. Every post-detach write then went somewhere
+ * useless, which is why BOOTENV.TXT could sit on disk saying "detached: 0"
+ * having been written after the detach. Drop the cache whenever storage is
+ * remapped and let it re-find the volume. */
+void uno_dbg_storage_remapped(void);
+void uno_dbg_storage_remapped(void)
+{
+    g_crash_vol = -1;
+    g_crash_vol_backoff = 0;
+}
+
 void uno_dbg_on_detach(void)
 {
+    uno_dbg_storage_remapped();     /* the volume set just changed under us */
     uint16_t cs = cur_cs();
     int v;
     unsigned long long apic_base;
@@ -1350,6 +1366,23 @@ void uno_dbg_envblock(void)
         {   int pk = 0, pp = 0; const char *pw = 0;
             uno_usbboot_hid_status(&pk, &pp, &pw);
             env("usb-hid preflight: kbd=%d ptr=%d (%s)\n", pk, pp, pw ? pw : "");
+        }
+        /* Every USB device the native stack enumerated, with where it sits.
+         * Without this, "the mouse does not move" is indistinguishable from a
+         * dongle that never enumerated, one that enumerated but whose second
+         * HID interface was not claimed, and one claimed but not routed - and
+         * guessing between those has cost this project several round trips. */
+        {   int nd = uno_xhci_dev_count(), i, pr = 0, np = 0, ndd = 0;
+            unsigned xe = 0;
+            uno_xhci_status(&pr, &np, &ndd, &xe);
+            env("xhci: present=%d ports=%d devs=%d err=%u\n", pr, np, nd, xe);
+            for (i = 0; i < nd; i++) {
+                const uno_usb_dev *d = uno_xhci_dev(i);
+                if (!d) continue;
+                env("  usbdev[%d] %04x:%04x class=%02x/%02x/%02x slot=%d port=%d speed=%d\n",
+                    i, d->vendor, d->product, d->dev_class, d->dev_subclass,
+                    d->dev_proto, d->slot, d->port, d->speed);
+            }
         }
     }
 
