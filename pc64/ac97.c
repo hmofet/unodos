@@ -16,6 +16,7 @@
  * probe instead of hanging boot.
  * ======================================================================== */
 #include "pc64_pci.h"
+#include "uno_devmgr.h"
 #include "ac97.h"
 #include <stdint.h>
 
@@ -56,6 +57,18 @@ static short  gRing[RING_FRAMES * 2] __attribute__((aligned(8)));
 
 static uint16_t gNam, gNabm;
 static int gUp;
+
+/* ---- unodevices registry adoption (phase 2) ------------------------------- */
+static uno_device *g_node;
+static int ac97_probe(uno_device *d) { g_node = d; (void)g_node; return 1; }
+static const uno_match ac97_match[] = {
+    { UNO_MATCH_PCI_CLASS, 0, 0, 0x04, 0x01, 0, 0 },   /* multimedia / audio */
+    { UNO_MATCH_END,       0, 0, 0,    0,    0, 0 }
+};
+static const uno_driver ac97_drv = {
+    "ac97", UNO_BUS_PCI, UNO_DEVMGR_API, ac97_match, ac97_probe, 0
+};
+UNO_DRIVER(ac97_drv);
 
 int uno_ac97_init(void)
 {

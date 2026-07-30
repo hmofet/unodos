@@ -16,6 +16,7 @@
  * frame. Enough for ARP/IP/ICMP/UDP/TCP at interactive rates.
  * ======================================================================== */
 #include "pc64_pci.h"
+#include "uno_devmgr.h"
 #include "uno_nic.h"
 #include <stdint.h>
 
@@ -211,13 +212,42 @@ static int e1000_link(void *ctx)
 
 static uno_nic_t g_nic;
 
+/* ---- unodevices registry adoption (phase 2) -------------------------------
+ * The manager offers us the function; we RECORD it and claim it. Bring-up
+ * stays where it was, in e1000_nic(), because a NIC here is brought up lazily
+ * by pc64_net_up() and the plan is explicit that adoption must not make that
+ * eager (DEVICES.md §5, the lazy-NIC shape).
+ *
+ * So the probe touches no hardware at all, which is also what makes it safe to
+ * run while the firmware is still driving the card. */
+static uno_device *g_node;
+static int e1000_probe(uno_device *d) { g_node = d; return 1; }
+static const uno_match e1000_match[] = {
+    { UNO_MATCH_PCI_ID, 0x8086, 0x100E, 0, 0, 0, 0 },   /* 82540EM (QEMU)   */
+    { UNO_MATCH_PCI_ID, 0x8086, 0x100F, 0, 0, 0, 0 },   /* 82545EM          */
+    { UNO_MATCH_END,    0,      0,      0, 0, 0, 0 }
+};
+static const uno_driver e1000_drv = {
+    "e1000", UNO_BUS_PCI, UNO_DEVMGR_API, e1000_match, e1000_probe, 0
+};
+UNO_DRIVER(e1000_drv);
+
 /* bring the card up; returns a nic or NULL if none present */
 uno_nic_t *e1000_nic(void)
 {
     pci_dev d;
     int i;
-    if (!pci_find(0x8086, 0x100E, &d) &&        /* 82540EM (QEMU default) */
-        !pci_find(0x8086, 0x100F, &d))          /* 82545EM */
+    /* Prefer the registry's answer, fall back to the scan. Both name the same
+     * function - the ids below ARE the match table - so this is not a
+     * behaviour change; it is the registry becoming the source of truth on
+     * machines where a bind pass has already run. The fallback stays because
+     * e1000_nic() can be reached before one has. */
+    if (g_node) {
+        d.bus = g_node->addr.pci.bus; d.dev = g_node->addr.pci.dev;
+        d.fn  = g_node->addr.pci.fn;
+        d.vendor = g_node->vendor;    d.device = g_node->device;
+    } else if (!pci_find(0x8086, 0x100E, &d) &&  /* 82540EM (QEMU default) */
+               !pci_find(0x8086, 0x100F, &d))    /* 82545EM */
         return 0;                                /* 82574L (0x10D3) -> e1000e.c */
 
     pci_enable_bus_master(&d);

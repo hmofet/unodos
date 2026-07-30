@@ -23,6 +23,8 @@
  * ======================================================================== */
 #include "blkdev.h"
 #include "pc64_pci.h"
+#include "uno_devmgr.h"
+int uno_pc64_detached(void);   /* uefi_main.c: the storage probe gate */
 #include "string.h"
 #include <stdint.h>
 
@@ -190,6 +192,35 @@ static int identify(unsigned cns, unsigned nsid)
 }
 
 int uno_nvme_present(void) { return gPresent; }
+
+
+/* ---- unodevices registry adoption (phase 2) -------------------------------
+ * This probe DECLINES while the firmware is still attached, and that refusal
+ * is the whole point.
+ *
+ * While UnoDOS is attached, the firmware owns this controller and is actively
+ * moving sectors through it for Block IO. Reprogramming it underneath the
+ * firmware is not theoretical damage: it once corrupted an installer clone
+ * mid-write (see blkdev.c). So the honest registry answer while attached is
+ * UNCLAIMED, which is exactly what a declining probe leaves behind.
+ *
+ * uno_blk_detach() re-runs devmgr_bind_all() on the far side of
+ * ExitBootServices, and this probe accepts from then on. */
+static uno_device *g_node;
+static int nvme_probe(uno_device *d)
+{
+    if (!uno_pc64_detached()) return 0;
+    g_node = d;
+    return 1;
+}
+static const uno_match nvme_match[] = {
+    { UNO_MATCH_PCI_CLASS, 0, 0, 0x01, 0x08, 0, 0 },   /* mass storage / NVMe */
+    { UNO_MATCH_END,       0, 0, 0,    0,    0, 0 }
+};
+static const uno_driver nvme_drv = {
+    "nvme", UNO_BUS_PCI, UNO_DEVMGR_API, nvme_match, nvme_probe, 0
+};
+UNO_DRIVER(nvme_drv);
 
 int uno_nvme_init(void)
 {
