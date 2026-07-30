@@ -851,24 +851,20 @@ static int try_detach(void)
             dbg_puts(why); dbg_puts("\n");
             return 0;
         }
-        /* OPT-IN, for now.  The preflight can prove the stick is the right
-         * SHAPE (BOT interface, xHCI controller, matched to the boot path) but
-         * not that sustained reads will work, because proving that means
-         * driving the device - and the only way to drive it is to take the
-         * controller, which is the irreversible step itself.
+        /* A USB boot detaches by DEFAULT as of 2026-07-30, confirmed on metal:
+         * the ZimaBlade runs with no firmware, storage and network and keyboard
+         * and mouse all native, with every USB device behind a hub because that
+         * box has a single port. Getting there took SuperSpeed burst sizing and
+         * endpoint recovery, real-time deadlines, hub enumeration, multi-TT
+         * programming and the full-speed EP0 max packet - see pc64/USB.md.
          *
-         * That distinction is not theoretical: on a SuperSpeed stick
-         * (bulk mps 1024) QEMU's model returns errors on some READ(10)s, and
-         * xhci.c has neither SS endpoint-companion burst sizing nor xHCI
-         * Reset-Endpoint recovery, so a failed transfer leaves the endpoint
-         * wedged. First read works, a later one does not, and past
-         * ExitBootServices there is no way back. See pc64/USB.md.
-         *
-         * So the machinery ships and the default posture does not change: a
-         * USB boot stays attached unless DETACH.CFG says `usb`. Flip the
-         * default when the xHCI work lands and metal has confirmed it. */
-        if (!cfg_word("usb"))
-            REFUSE("USB-boot detach is opt-in (DETACH.CFG: usb)", 1);
+         * What has NOT changed is the shape of the risk: the preflight proves
+         * the stick is the right SHAPE, never that sustained reads will work,
+         * because proving that means driving the device and driving it means
+         * taking the controller, which is the irreversible step itself. Past
+         * ExitBootServices there is no way back. `DETACH.CFG: nousb` is the
+         * escape hatch for a machine this gets wrong, and it needs no rebuild -
+         * drop the file on the stick from any other computer. */
         dbg_puts("detach: USB boot volume is reclaimable - "); dbg_puts(why); dbg_puts("\n");
     }
     if (!uno_fat_native_eligible())
