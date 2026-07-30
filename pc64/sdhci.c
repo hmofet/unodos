@@ -26,6 +26,8 @@
  * ======================================================================== */
 #include "blkdev.h"
 #include "pc64_pci.h"
+#include "uno_devmgr.h"
+int uno_pc64_detached(void);   /* uefi_main.c: the storage probe gate */
 #include "string.h"
 #include <stdint.h>
 
@@ -296,6 +298,35 @@ static int drv_write(uno_bdev *b, unsigned long long lba, unsigned int n, const 
 
 /* ---- bring-up ------------------------------------------------------------- */
 int uno_sdhci_present(void) { return g_present; }
+
+
+/* ---- unodevices registry adoption (phase 2) -------------------------------
+ * This probe DECLINES while the firmware is still attached, and that refusal
+ * is the whole point.
+ *
+ * While UnoDOS is attached, the firmware owns this controller and is actively
+ * moving sectors through it for Block IO. Reprogramming it underneath the
+ * firmware is not theoretical damage: it once corrupted an installer clone
+ * mid-write (see blkdev.c). So the honest registry answer while attached is
+ * UNCLAIMED, which is exactly what a declining probe leaves behind.
+ *
+ * uno_blk_detach() re-runs devmgr_bind_all() on the far side of
+ * ExitBootServices, and this probe accepts from then on. */
+static uno_device *g_node;
+static int sdhci_probe(uno_device *d)
+{
+    if (!uno_pc64_detached()) return 0;
+    g_node = d;
+    return 1;
+}
+static const uno_match sdhci_match[] = {
+    { UNO_MATCH_PCI_CLASS, 0, 0, 0x08, 0x05, 0, 0 },   /* system / SD host */
+    { UNO_MATCH_END,       0, 0, 0,    0,    0, 0 }
+};
+static const uno_driver sdhci_drv = {
+    "sdhci", UNO_BUS_PCI, UNO_DEVMGR_API, sdhci_match, sdhci_probe, 0
+};
+UNO_DRIVER(sdhci_drv);
 
 int uno_sdhci_init(void)
 {

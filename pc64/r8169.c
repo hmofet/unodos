@@ -20,6 +20,7 @@
  * ======================================================================== */
 #include "r8169.h"
 #include "pc64_pci.h"
+#include "uno_devmgr.h"
 #include "uno_debug.h"          /* uno_dbg_net_trace: on-screen in UNO_DEBUG, no-op in prod */
 #include <stdint.h>
 #include <string.h>
@@ -323,6 +324,26 @@ int r8169_present(void)
     }
     return 0;
 }
+
+/* ---- unodevices registry adoption (phase 2) -------------------------------
+ * Record-only probe: it claims the function for the listing and touches no
+ * hardware. Bring-up stays where it is, which for this driver is lazy (first
+ * network use) - the plan is explicit that adoption must not make WiFi or a
+ * NIC eager. METAL-UNVERIFIED: this part is not reachable under QEMU, so the
+ * table below is the only claim being made and the bring-up path is byte-for-
+ * byte what it was. */
+static uno_device *g_node;
+static int r8169_probe(uno_device *d) { g_node = d; (void)g_node; return 1; }
+static const uno_match r8169_match[] = {
+    { UNO_MATCH_PCI_ID, 0x10EC, 0x8168, 0, 0, 0, 0 },  /* RTL8111/8168/8411  */
+    { UNO_MATCH_PCI_ID, 0x10EC, 0x8161, 0, 0, 0, 0 },
+    { UNO_MATCH_PCI_ID, 0x10EC, 0x8136, 0, 0, 0, 0 },  /* RTL8101/8102       */
+    { UNO_MATCH_END,    0,      0,      0, 0, 0, 0 }
+};
+static const uno_driver r8169_drv = {
+    "r8169", UNO_BUS_PCI, UNO_DEVMGR_API, r8169_match, r8169_probe, 0
+};
+UNO_DRIVER(r8169_drv);
 
 uno_nic_t *r8169_nic(void)
 {

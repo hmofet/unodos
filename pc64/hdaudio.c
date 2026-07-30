@@ -19,6 +19,7 @@
  * codec fails probe instead of hanging boot.
  * ======================================================================== */
 #include "pc64_pci.h"
+#include "uno_devmgr.h"
 #include "hdaudio.h"
 #include <stdint.h>
 
@@ -329,6 +330,20 @@ static int stream_start(void)
     sw8 (SD_CTL0, 0x2);                          /* RUN                        */
     return 1;
 }
+
+/* ---- unodevices registry adoption (phase 2) -------------------------------
+ * Record-only: the probe claims the function for the listing; bring-up stays
+ * in uno_hda_init(), which the shell calls when it wants audio. */
+static uno_device *g_node;
+static int hda_probe(uno_device *d) { g_node = d; (void)g_node; return 1; }
+static const uno_match hda_match[] = {
+    { UNO_MATCH_PCI_CLASS, 0, 0, 0x04, 0x03, 0, 0 },   /* multimedia / HD Audio */
+    { UNO_MATCH_END,       0, 0, 0,    0,    0, 0 }
+};
+static const uno_driver hda_drv = {
+    "hda", UNO_BUS_PCI, UNO_DEVMGR_API, hda_match, hda_probe, 0
+};
+UNO_DRIVER(hda_drv);
 
 int uno_hda_init(void)
 {
