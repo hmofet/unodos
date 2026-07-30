@@ -2382,3 +2382,87 @@ is not.
 
 Until it is fixed, a SPECTEST failure is not evidence of anything on its own.
 That cost me a bisect and then a second one.
+
+---
+
+## 2026-07-30 (metal), ZimaBlade: phases B/C/D and unodevices 2+4 all pass
+
+Build `debug-583a585-20260730-1918` (master @ `583a585`, `UNO_DEBUG=1
+UNO_DETACH=1`), pushed to the stick over the URC bridge and rebooted. Operator
+confirmed every checklist item. **This is the first metal run of the detach
+gate, the phase-C power/clock rework, and the driver registry.**
+
+The device tree, which is the phase-2 headline and was QEMU-only until now:
+
+```
+00:0e.0 8086:5a98 04/03 hda          hda
+00:12.0 8086:5ae3 01/06 sata         ahci
+00:1c.0 8086:5acc 08/05 sd-host      sdhci
+00:1f.1 8086:5ad4 0c/05 smbus        sample
+02:00.0 10ec:8168 02/00 ethernet     r8169
+disks: 0 emmc0 61071360 1 0 | 1 usb0 61440000 1 1
+```
+
+Three things this settles that I had flagged as unverified:
+
+- **`r8169`'s match table is correct on real silicon.** QEMU has no RTL8168
+  model, so the table was a guess until this row appeared.
+- **The storage probes' attached/detached gate works on metal.** `ahci` and
+  `sdhci` are BOUND here because the box is detached; on an attached box they
+  decline, which is what keeps the firmware's Block IO from being reprogrammed
+  underneath it.
+- **`SAMPLE.UNO` binds from `\DRIVERS\` on hardware**, so the loadable-driver
+  path - module found, both version gates passed, driver record returned,
+  device won through the ordinary bind loop - is not a QEMU artefact.
+
+**NOT tested on this box: phase 3 (USB in the tree).** It landed after this
+image was built. The stick is running the phase-2/4 build, so a `devices`
+listing from it has no `u<tier>:<port>.<iface>` rows and that is expected, not
+a fault.
+
+### FINDING 1 (-> unonet / browser): a wrong clock breaks TLS, and this box has one
+
+The browser fails TLS to google.com with a certificate error, and the box's
+date is wrong. That is almost certainly cause and effect: the chain was
+fetched, parsed and validated far enough to compare notBefore/notAfter, and
+failed on dates. **It is evidence the network stack works**, not evidence it
+does not - DNS, TCP, the TLS handshake and the certificate parse all had to
+succeed to get that far.
+
+The clock is wrong because this box's CMOS battery is flat (recorded
+2026-07-29: it writes files stamped about a day slow). Phase C made the clock
+the CMOS RTC on both sides of detach, so the skew is now visible attached as
+well as detached - the same wrong time, consistently, rather than a jump at
+detach.
+
+Worth deciding rather than leaving: a machine with a dead CMOS battery cannot
+validate any certificate, and "your clock is wrong" is a much better error than
+"certificate invalid". Options, cheapest first: surface the suspicion in the
+browser's error text when notBefore is in the future by more than a day; let
+DHCP/NTP set the clock (there is no NTP client yet); or accept it as a
+hardware fault and put a new battery in the box. Not filed as a defect in
+anything - the TLS code did exactly the right thing.
+
+### FINDING 2 (-> usb stack): the pointer is floaty once detached, and here is why
+
+Operator reports the mouse is "very floaty" post-detach on the ZimaBlade.
+Diagnosis from the code, HIGH CONFIDENCE but unmeasured:
+
+`uno_usb_hid_mouse_poll()` (usbhid.c) reads **one interrupt-IN report per
+endpoint per call**, and `poll_pointer()` (uefi_main.c) calls it **once per
+frame**. A USB boot mouse reports at its own rate, which for the Razer Cobra on
+this box (`1532:00a3`, enumerated in the 2026-07-30 detach log) is very likely
+1000 Hz. Against a ~60 fps shell loop that is roughly 16 reports queued per
+frame and one drained, so the cursor replays your hand motion at a fraction of
+the speed and keeps travelling after you stop. That is exactly what "floaty"
+describes, and it is not smoothing or acceleration - there is none in this
+path; `g_cx += dx` is applied raw.
+
+The fix is a loop rather than a single read: drain `uno_usb_intr_in` until it
+returns 0, accumulating deltas, so one frame consumes every report that
+arrived during it. Small, and it belongs in the usb stack lane.
+
+Two things to check while in there, since they share the mechanism: the
+KEYBOARD path has the same one-report-per-poll shape (fast typing could drop
+characters rather than merely lag), and the wheel accumulates from the same
+single read.
