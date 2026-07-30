@@ -18,6 +18,8 @@
  * the firmware still owns the hardware. */
 #include "pc64_pci.h"
 #include "uno_devmgr.h"
+#include "fat.h"            /* phase 4: listing \DRIVERS\ for loadable drivers */
+#include "uno_debug.h"      /* svc_log; a no-op macro in production */
 
 /* Physical base of the active GOP framebuffer (uefi_main.c), 0 if unknown.
  * Only consumed by devmgr_size_bars() to refuse the scanout BAR. */
@@ -72,6 +74,14 @@ static int s_dec(char *b, int cap, int at, unsigned long long v) {
     while (i-- > 0 && at < cap - 1) b[at++] = t[i];
     b[at] = 0;
     return at;
+}
+
+/* Driver names are short single tokens, so a local compare beats pulling in
+ * string.h for one call site. */
+static int s_eq(const char *a, const char *b) {
+    if (!a || !b) return 0;
+    while (*a && *a == *b) { a++; b++; }
+    return *a == *b;
 }
 
 /* --- class decode ---------------------------------------------------------- */
@@ -638,4 +648,373 @@ int devmgr_info(int idx, unsigned int *out, int nmax)
     out[13] = (unsigned int)(int)d->parent;
     out[14] = d->irq_line;
     return DEVMGR_ROW_N;
+}
+
+/* ===========================================================================
+ * PHASE 2 - the driver registry, matching, and the fixpoint bind loop
+ * ======================================================================== */
+
+/* The linker set.  Entries land in `.unodrv$m`; these two markers land either
+ * side of them because the COFF linker orders grouped sections by their `$`
+ * suffix.  Iterating the span and SKIPPING NULLs is deliberate: the linker is
+ * free to pad between contributions, and a padded slot reads as zero. */
+__attribute__((used, section(".unodrv$a")))
+static const uno_driver *const g_drv_a[1] = { 0 };
+__attribute__((used, section(".unodrv$z")))
+static const uno_driver *const g_drv_z[1] = { 0 };
+
+/* Runtime-registered drivers (phase 4's loadable ones, and tests). */
+#define DEVMGR_DRV_MAX 16
+static const uno_driver *g_rt_drv[DEVMGR_DRV_MAX];
+static int g_rt_n;
+
+static int builtin_count(void)
+{
+    const uno_driver *const *p;
+    int n = 0;
+    for (p = g_drv_a + 1; p < g_drv_z; p++) if (*p) n++;
+    return n;
+}
+
+static const uno_driver *builtin_at(int i)
+{
+    const uno_driver *const *p;
+    int n = 0;
+    for (p = g_drv_a + 1; p < g_drv_z; p++) {
+        if (!*p) continue;
+        if (n == i) return *p;
+        n++;
+    }
+    return 0;
+}
+
+int devmgr_driver_count(void) { return builtin_count() + g_rt_n; }
+
+static const uno_driver *driver_at(int i)
+{
+    int nb = builtin_count();
+    if (i < 0) return 0;
+    if (i < nb) return builtin_at(i);
+    i -= nb;
+    return (i < g_rt_n) ? g_rt_drv[i] : 0;
+}
+
+const char *devmgr_driver_at(int i)
+{
+    const uno_driver *d = driver_at(i);
+    return d ? d->name : 0;
+}
+
+int devmgr_register(const uno_driver *drv)
+{
+    int i;
+    if (!drv || !drv->probe || !drv->match) return 0;
+    if (drv->api != UNO_DEVMGR_API) return 0;   /* built for another contract */
+    for (i = 0; i < devmgr_driver_count(); i++) {
+        const uno_driver *e = driver_at(i);
+        if (e && e->name && drv->name && s_eq(e->name, drv->name)) return 0;  /* already have it */
+    }
+    if (g_rt_n >= DEVMGR_DRV_MAX) return 0;
+    g_rt_drv[g_rt_n++] = drv;
+    return 1;
+}
+
+/* How specifically does this driver match this device?  0 = not at all.
+ * The BEST entry in the table wins, so a driver may list both an exact id and
+ * a class fallback without the fallback weakening it. */
+static int match_score(const uno_driver *drv, const uno_device *d)
+{
+    const uno_match *m;
+    int best = 0;
+    if (!drv || !drv->match || drv->bus != d->bus_type) return 0;
+    for (m = drv->match; m->kind != UNO_MATCH_END; m++) {
+        int s = 0;
+        if (m->kind == UNO_MATCH_PCI_ID) {
+            if (m->vendor == d->vendor && m->device == d->device) s = UNO_SPEC_ID;
+        } else if (m->kind == UNO_MATCH_PCI_CLASS) {
+            if (m->cls == d->cls && m->subcls == d->subcls) {
+                if (m->have_progif)
+                    s = (m->prog_if == d->prog_if) ? UNO_SPEC_CLASSPI : 0;
+                else
+                    s = UNO_SPEC_CLASS;
+            }
+        }
+        if (s > best) best = s;
+    }
+    return best;
+}
+
+/* Offer one device to every driver that matches it, most specific first, until
+ * one accepts.  A declining probe is not an error and not a log line: "not
+ * mine" is the normal way two drivers that share a class sort themselves out
+ * (the NIC lane relies on exactly this). */
+static int bind_one(uno_device *d)
+{
+    int tried[DEVMGR_DRV_MAX + 8];
+    int ntried = 0, i, n = devmgr_driver_count();
+    for (;;) {
+        const uno_driver *best = 0;
+        int bestscore = 0, bestidx = -1;
+        for (i = 0; i < n; i++) {
+            const uno_driver *drv = driver_at(i);
+            int s, j, skip = 0;
+            if (!drv) continue;
+            for (j = 0; j < ntried; j++) if (tried[j] == i) { skip = 1; break; }
+            if (skip) continue;
+            s = match_score(drv, d);
+            if (s > bestscore) { bestscore = s; best = drv; bestidx = i; }
+        }
+        if (!best) return 0;                    /* nothing (left) matches      */
+        if (ntried < (int)(sizeof tried / sizeof tried[0])) tried[ntried++] = bestidx;
+        else return 0;
+        if (best->probe(d)) {
+            d->state = UNO_DEV_BOUND;
+            d->drv   = best->name;
+            return 1;
+        }
+        /* declined: fall through and offer the next-most-specific candidate */
+    }
+}
+
+int devmgr_bind_all(void)
+{
+    int total = 0, pass;
+    if (!g_scanned) devmgr_enumerate();
+    /* Fixpoint, not a fixed count: binding a controller may create children
+     * (plan decision 2) whose drivers deserve a pass of their own. The cap is
+     * a runaway guard, not the expected depth - a machine reaching it has a
+     * driver whose probe creates a device on every call. */
+    for (pass = 0; pass < 8; pass++) {
+        int changed = 0, i;
+        for (i = 0; i < g_n; i++) {
+            if (g_dev[i].state != UNO_DEV_UNBOUND) continue;
+            if (bind_one(&g_dev[i])) changed++;
+        }
+        total += changed;
+        if (!changed) break;
+    }
+    return total;
+}
+
+static const uno_driver *driver_by_name(const char *name)
+{
+    int i, n = devmgr_driver_count();
+    if (!name) return 0;
+    for (i = 0; i < n; i++) {
+        const uno_driver *d = driver_at(i);
+        if (d && d->name && s_eq(d->name, name)) return d;
+    }
+    return 0;
+}
+
+int devmgr_release(int idx)
+{
+    uno_device *d = devmgr_get(idx);
+    const uno_driver *drv;
+    if (!d || d->state != UNO_DEV_BOUND) return 0;
+    drv = driver_by_name(d->drv);
+    if (drv && drv->remove) drv->remove(d);
+    d->drv = 0; d->drvdata = 0;
+    d->state = UNO_DEV_UNBOUND;
+    return 1;
+}
+
+/* ===========================================================================
+ * PHASE 4 - hotplug rescan, the driver services, and loadable .UNO drivers
+ * ======================================================================== */
+
+/* Hotplug, the departure half.  devmgr_enumerate() is idempotent and carries
+ * bindings across a re-scan (carry_binding), so a device that is STILL there
+ * keeps its driver - and a device that has gone would otherwise leave a stale
+ * BOUND node behind.  This diffs that: anything bound before the scan and
+ * absent after gets its remove() called and is counted as a departure.
+ *
+ * The contract that matters is the driver's, and it is the lesson the trackpad
+ * detach-gate bug taught: after remove() returns, the driver must not touch
+ * that device's MMIO again.  The manager cannot enforce it, so it is written
+ * down (DEVICES.md 7) and remove() is called before the node is reused. */
+int devmgr_rescan(void)
+{
+    struct { unsigned char bus, dev, fn; const char *drv; } was[UNO_DEV_MAX];
+    int i, j, n_was = 0, changes = 0, n_before = g_n;
+
+    if (!g_scanned) { devmgr_enumerate(); return devmgr_bind_all(); }
+
+    for (i = 0; i < n_before && n_was < UNO_DEV_MAX; i++) {
+        if (g_dev[i].state != UNO_DEV_BOUND) continue;
+        if (g_dev[i].bus_type != UNO_BUS_PCI) continue;
+        was[n_was].bus = g_dev[i].addr.pci.bus;
+        was[n_was].dev = g_dev[i].addr.pci.dev;
+        was[n_was].fn  = g_dev[i].addr.pci.fn;
+        was[n_was].drv = g_dev[i].drv;
+        n_was++;
+    }
+
+    devmgr_enumerate();                 /* rebuilds the table, carries bindings */
+
+    for (j = 0; j < n_was; j++) {       /* departures: bound before, absent now */
+        int still = 0;
+        for (i = 0; i < g_n; i++) {
+            if (g_dev[i].bus_type != UNO_BUS_PCI) continue;
+            if (g_dev[i].addr.pci.bus == was[j].bus &&
+                g_dev[i].addr.pci.dev == was[j].dev &&
+                g_dev[i].addr.pci.fn  == was[j].fn) { still = 1; break; }
+        }
+        if (still) continue;
+        {   const uno_driver *drv = driver_by_name(was[j].drv);
+            /* The node is gone from the table, so a departing driver gets a
+             * synthetic stand-in carrying its ADDRESS and nothing else.  That
+             * is deliberate: drvdata pointed into a table slot the re-scan has
+             * already rebuilt, so handing it back would be handing back a
+             * dangling reference.  The contract says remove() may trust the
+             * address and must not trust anything else. */
+            if (drv && drv->remove) {
+                uno_device tmp;
+                unsigned char *p = (unsigned char *)&tmp;
+                int k;
+                for (k = 0; k < (int)sizeof tmp; k++) p[k] = 0;
+                tmp.bus_type     = UNO_BUS_PCI;
+                tmp.parent       = UNO_DEV_NOPARENT;
+                tmp.addr.pci.bus = was[j].bus;
+                tmp.addr.pci.dev = was[j].dev;
+                tmp.addr.pci.fn  = was[j].fn;
+                tmp.state        = UNO_DEV_GONE;
+                tmp.drv          = was[j].drv;
+                drv->remove(&tmp);
+            }
+        }
+        changes++;
+    }
+
+    changes += devmgr_bind_all();       /* arrivals bind on the way out */
+    return changes;
+}
+
+/* --- the services struct handed to a loadable driver ----------------------- */
+
+void uno_pc64_delay_ms(int ms);                    /* uefi_main.c   */
+unsigned long long uno_native_rdtsc(void);         /* pc64_native.c */
+/* uno_debug.h compiles uno_dbg_log away to a no-op in production, so the
+ * services log is free there rather than an unresolved symbol. */
+
+static unsigned int svc_cfg_read32(const uno_device *d, int off)
+{
+    pci_dev pd;
+    if (!d || d->bus_type != UNO_BUS_PCI) return 0xFFFFFFFFu;
+    pd.bus = d->addr.pci.bus; pd.dev = d->addr.pci.dev; pd.fn = d->addr.pci.fn;
+    pd.vendor = d->vendor; pd.device = d->device;
+    return pci_cfg_read32(&pd, off);
+}
+
+static void svc_cfg_write32(const uno_device *d, int off, unsigned int v)
+{
+    pci_dev pd;
+    if (!d || d->bus_type != UNO_BUS_PCI) return;
+    pd.bus = d->addr.pci.bus; pd.dev = d->addr.pci.dev; pd.fn = d->addr.pci.fn;
+    pd.vendor = d->vendor; pd.device = d->device;
+    pci_cfg_write32(&pd, off, v);
+}
+
+/* Hand back a usable pointer to a BAR and turn its decode on.  Identity-mapped
+ * on this platform, so there is no page table to touch - but drivers go through
+ * here anyway, so a future paged port has exactly one place to change and the
+ * refusals below are unavoidable rather than per-driver etiquette. */
+static void *svc_map_bar(uno_device *d, int bar, unsigned long long *len)
+{
+    unsigned int cmd;
+    if (len) *len = 0;
+    if (!d || d->bus_type != UNO_BUS_PCI || bar < 0 || bar > 5) return 0;
+    if (!(d->bar_flags[bar] & UNO_BAR_PRESENT)) return 0;
+    if (d->bar_flags[bar] & UNO_BAR_IO) return 0;      /* I/O ports are not mapped */
+    if (!d->bar[bar]) return 0;
+    cmd = svc_cfg_read32(d, 0x04) & 0xFFFFu;
+    svc_cfg_write32(d, 0x04, cmd | 0x6u);              /* memory decode + bus master */
+    if (len && (d->bar_flags[bar] & UNO_BAR_SIZED)) *len = d->bar_sz[bar];
+    return (void *)(unsigned long long)d->bar[bar];
+}
+
+/* A bump arena, never freed.  A driver's DMA buffers live as long as the driver
+ * does, and a general allocator reachable post-EBS is a far larger promise than
+ * phase 4 needs to make.  64-byte alignment is the BOT lesson from usbmsc.c
+ * restated as a service: DMA must never target the stack. */
+#define DRV_DMA_BYTES 65536
+static unsigned char g_drv_dma[DRV_DMA_BYTES] __attribute__((aligned(64)));
+static unsigned long g_drv_dma_at;
+
+static void *svc_dma_alloc(unsigned long bytes)
+{
+    unsigned long at = (g_drv_dma_at + 63u) & ~63ul;
+    if (!bytes || bytes > DRV_DMA_BYTES || at + bytes > DRV_DMA_BYTES) return 0;
+    g_drv_dma_at = at + bytes;
+    return &g_drv_dma[at];
+}
+
+/* MSI, owned by the manager so no driver ever touches _PRT or INTx routing.
+ * Every machine in this fleet has a history of unusable legacy IRQs, so the
+ * house style is MSI everywhere, and a driver that cannot get one should poll
+ * rather than fall back to a line it has no reason to trust. */
+static int svc_msi_enable(uno_device *d, int vector)
+{
+    unsigned int dw, mc;
+    int off;
+    if (!d || d->bus_type != UNO_BUS_PCI || !d->cap_msi) return 0;
+    off = d->cap_msi;
+    dw = svc_cfg_read32(d, off);
+    mc = dw >> 16;                                     /* message control */
+    svc_cfg_write32(d, off + 0x04, 0xFEE00000u);       /* LAPIC 0 */
+    if (mc & 0x0080u) {                                /* 64-bit capable */
+        svc_cfg_write32(d, off + 0x08, 0);
+        svc_cfg_write32(d, off + 0x0C, (unsigned int)(vector & 0xFF));
+    } else {
+        svc_cfg_write32(d, off + 0x08, (unsigned int)(vector & 0xFF));
+    }
+    mc &= ~0x0070u;                                    /* one vector allocated */
+    mc |= 0x0001u;                                     /* MSI enable           */
+    svc_cfg_write32(d, off, (dw & 0xFFFFu) | (mc << 16));
+    return 1;
+}
+
+static void svc_log(const char *s) { uno_dbg_log("%s", s ? s : ""); }
+
+static const uno_drv_services g_svc = {
+    UNO_DRVSVC_API,
+    svc_cfg_read32, svc_cfg_write32, svc_map_bar, svc_dma_alloc,
+    svc_msi_enable, uno_pc64_delay_ms, uno_native_rdtsc, svc_log
+};
+
+/* --- loading \DRIVERS\*.UNO ------------------------------------------------ */
+
+int uno_fat_volumes(void);
+int uno_fat_list_ex(int vol, const char *dir, uno_fat_entry *ents, int maxn);
+/* Returns void* rather than UnoDrvEntry so pc64_modload.c needs no include of
+ * this header: the loader knows how to place a module, not what a driver is. */
+void *uno_mod_load_drv(int vol, const char *file);         /* pc64_modload.c */
+
+#define DRV_SCAN_MAX 12
+
+int devmgr_load_drivers(void)
+{
+    int nv = uno_fat_volumes(), v, loaded = 0;
+    for (v = 0; v < nv; v++) {
+        uno_fat_entry ent[DRV_SCAN_MAX];
+        int n = uno_fat_list_ex(v, "DRIVERS", ent, DRV_SCAN_MAX), i;
+        if (n <= 0) continue;
+        for (i = 0; i < n; i++) {
+            UnoDrvEntry e;
+            const uno_drv_module *m;
+            if (ent[i].is_dir || ent[i].size <= 0) continue;
+            e = (UnoDrvEntry)uno_mod_load_drv(v, ent[i].name);
+            if (!e) continue;
+            m = e(&g_svc);
+            /* TWO independent version gates, and both earn their keep: the
+             * MODULE says which services struct it was compiled against, the
+             * DRIVER record says which registry contract.  A driver built for
+             * an older services struct would read function pointers at the
+             * wrong offsets, and that is not a failure that reports itself. */
+            if (!m || m->api != UNO_DRVSVC_API || !m->drv) continue;
+            if (devmgr_register(m->drv)) loaded++;
+        }
+    }
+    if (loaded) devmgr_bind_all();
+    return loaded;
 }

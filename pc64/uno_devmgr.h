@@ -14,8 +14,14 @@
 #define UNO_DEVMGR_H
 
 /* Bumped on any breaking change to the surface below, with a dated DEVICES.md
- * changelog entry (AGENTS.md §6).  1 = the phase-1 registry. */
-#define UNO_DEVMGR_API 1
+ * changelog entry (AGENTS.md §6).  1 = the phase-1 registry, 2 = the driver
+ * registry + fixpoint binding (phase 2) and loadable drivers (phase 4).
+ *
+ * The bump is ADDITIVE: every phase-1 entry point keeps its signature and
+ * meaning, so a phase-1 consumer needs no change.  It is a bump rather than a
+ * silent addition because `state` can now be BOUND and `drv` non-NULL, and the
+ * phase-1 contract promised those never happened. */
+#define UNO_DEVMGR_API 2
 
 /* Table capacity.  A dense server board is ~60 functions; the X1 is ~30. */
 #define UNO_DEV_MAX      128
@@ -135,5 +141,155 @@ int devmgr_size_bars(int idx);
 int devmgr_add_platform(int backing, unsigned char cls, unsigned char sub,
                         unsigned long long io_base, unsigned long long io_len,
                         const char *drv);
+
+/* ===========================================================================
+ * PHASE 2 - the driver registry
+ *
+ * A driver declares what it can drive (a match table) and how to take it
+ * (probe).  The manager matches, orders candidates by SPECIFICITY, and offers
+ * each in turn until one accepts.  There is deliberately no priority field:
+ * priority numbers are a coordination problem between files that do not know
+ * about each other, and specificity plus probe-decline expresses the same
+ * thing locally.  See DEVICES.md §5.
+ * ======================================================================== */
+
+/* Match entry kinds.  A table is terminated by a UNO_MATCH_END entry. */
+enum {
+    UNO_MATCH_END = 0,
+    UNO_MATCH_PCI_ID,      /* vendor + device exact                        */
+    UNO_MATCH_PCI_CLASS    /* cls + subcls, and prog_if when have_progif   */
+};
+
+typedef struct uno_match {
+    unsigned char  kind;
+    unsigned short vendor, device;      /* UNO_MATCH_PCI_ID                */
+    unsigned char  cls, subcls, prog_if;/* UNO_MATCH_PCI_CLASS             */
+    unsigned char  have_progif;
+} uno_match;
+
+/* Specificity, high wins.  Exactly the precedence the plan locked:
+ * exact id > class/subclass/prog-if > class/subclass. */
+#define UNO_SPEC_ID       3
+#define UNO_SPEC_CLASSPI  2
+#define UNO_SPEC_CLASS    1
+
+struct uno_device;
+
+typedef struct uno_driver {
+    const char      *name;          /* single token: it is the listing column */
+    unsigned char    bus;           /* uno_bustype                            */
+    unsigned short   api;           /* UNO_DEVMGR_API this driver was built to */
+    const uno_match *match;         /* UNO_MATCH_END-terminated                */
+    /* Take the device, or decline.  1 = claimed (state becomes BOUND), 0 =
+     * "not mine, try the next candidate".  A probe MUST be side-effect-free
+     * when it declines, and must tolerate being called again on a later pass. */
+    int  (*probe)(struct uno_device *d);
+    /* Release it.  May be NULL.  After this returns the driver must not touch
+     * the device's MMIO again - see the hotplug contract in DEVICES.md §7. */
+    void (*remove)(struct uno_device *d);
+} uno_driver;
+
+/* Self-registration, the AGENTS.md §2 seam: a driver opts in by putting this
+ * line in ITS OWN file, and nothing central is edited.
+ *
+ * The idiom is COFF grouped sections, NOT the ELF "custom section + KEEP()"
+ * advice: this kernel is PE/COFF via mingw ld with -nostdlib and no linker
+ * script.  The linker concatenates `.unodrv$a`, `.unodrv$m` and `.unodrv$z` in
+ * `$`-suffix order, so the markers in uno_devmgr.c bracket the entries.
+ * Constructor-based registration is NOT an option here: there is no CRT, so
+ * __attribute__((constructor)) never runs. */
+#define UNO_DRIVER(sym)                                                  \
+    __attribute__((used, section(".unodrv$m")))                          \
+    static const uno_driver *const sym##__reg = &sym
+
+/* Bind every UNBOUND device that some driver claims, to a FIXPOINT: a pass
+ * that binds nothing ends it.  Multi-pass rather than topologically ordered
+ * because binding a controller can create children (plan decision 2), and a
+ * child's driver must get its turn in a later pass.
+ *
+ * Idempotent and re-runnable: already-BOUND devices are skipped, so callers
+ * re-run it whenever the world changes (the big one is uno_blk_detach(), where
+ * storage controllers become ours for the first time).  Returns the number of
+ * devices newly bound. */
+int devmgr_bind_all(void);
+
+/* Release a device: calls the driver's remove() (if any), clears the binding,
+ * and leaves the node UNBOUND.  Used by hotplug and by an operator forcing a
+ * rebind.  Returns 1 if something was released. */
+int devmgr_release(int idx);
+
+/* Re-scan the bus and diff against the tree (phase 4 hotplug).  Devices that
+ * vanished are marked UNO_DEV_GONE and their drivers get remove(); new devices
+ * are added UNBOUND.  Then binds to a fixpoint.  Returns the number of changes
+ * (arrivals + departures).  Cheap enough to call from a timer, but nothing
+ * calls it periodically yet - see DEVICES.md §7. */
+int devmgr_rescan(void);
+
+/* How many drivers are registered (built-in + loaded), for introspection. */
+int devmgr_driver_count(void);
+const char *devmgr_driver_at(int i);
+
+/* ===========================================================================
+ * PHASE 4 - loadable drivers
+ *
+ * A driver shipped as \DRIVERS\<NAME>.UNO exports one symbol through the
+ * module entry point: a pointer to its uno_drv_module.  It receives a
+ * VERSIONED SERVICES STRUCT and resolves nothing dynamically, so a driver
+ * built against api N either matches the running services struct or is
+ * refused outright.
+ * ======================================================================== */
+
+#define UNO_DRVSVC_API 1
+
+/* UnoModHdr.flags for a driver module, alongside UNO_MODF_UUI (0x0001) and the
+ * Python tiers (0x0002 / 0x0004).  Build one with:
+ *   python3 tools/mkuno.py convert foo.dll DRIVERS/FOO.UNO 8
+ * The loader refuses a module without it, so an app dropped into \DRIVERS\
+ * cannot be called through the driver entry signature. */
+#define UNO_MODF_DRV 0x0008
+
+typedef struct uno_drv_services {
+    unsigned short api;                    /* UNO_DRVSVC_API                 */
+    /* config space */
+    unsigned int (*cfg_read32)(const struct uno_device *d, int off);
+    void         (*cfg_write32)(const struct uno_device *d, int off, unsigned int v);
+    /* MMIO: the BAR is already in the node; this hands back a usable pointer
+     * and enables decode.  No mapping is required on this platform (identity),
+     * so it is a decode-enable plus a validity check, but drivers must go
+     * through it so a future paged port has one place to change. */
+    void        *(*map_bar)(struct uno_device *d, int bar, unsigned long long *len);
+    /* DMA-safe allocation: identity-mapped, 64-byte aligned, never freed.
+     * (The BOT lesson from usbmsc.c: DMA must not target the stack.) */
+    void        *(*dma_alloc)(unsigned long bytes);
+    /* MSI/MSI-X.  The manager owns this so drivers never touch _PRT or INTx
+     * routing: every platform in this fleet has a history of unusable legacy
+     * IRQs, so the house style is MSI everywhere.  Returns 0 on failure. */
+    int          (*msi_enable)(struct uno_device *d, int vector);
+    /* time + log */
+    void         (*delay_ms)(int ms);
+    unsigned long long (*rdtsc)(void);
+    void         (*log)(const char *s);
+} uno_drv_services;
+
+/* What a .UNO driver's entry point returns. */
+typedef struct uno_drv_module {
+    unsigned short   api;           /* UNO_DRVSVC_API it was built against   */
+    const uno_driver *drv;
+} uno_drv_module;
+
+/* A loadable driver's entry point signature. */
+typedef const uno_drv_module *(*UnoDrvEntry)(const uno_drv_services *svc);
+
+/* Load every \DRIVERS\*.UNO that some UNCLAIMED device might want, register
+ * them, and bind.  Safe to call more than once; a driver already registered
+ * under the same name is not loaded twice.  Returns the number of drivers
+ * registered.  Runs AFTER the built-ins have had their turn, so a shipped
+ * driver always beats a dropped-in one for the same device. */
+int devmgr_load_drivers(void);
+
+/* Register a driver at runtime (what devmgr_load_drivers uses, and what a
+ * test can use directly).  Returns 0 if the table is full or the api does not
+ * match. */
+int devmgr_register(const uno_driver *drv);
 
 #endif /* UNO_DEVMGR_H */
