@@ -822,6 +822,17 @@ static int try_detach(void)
 #define REFUSE(msg, block) do { gDetachWhy = (msg); gDetachBlocked = (block); \
                                 dbg_puts("detach: " msg "\n"); return 0; } while (0)
     if (gDetached) return 1;
+    /* Log what the gate SEES before logging what it decided. The ZimaBlade
+     * rounds turned on exactly this: three sessions were spent inferring a
+     * cause from what was missing, and the deadlock broke the moment the
+     * machine reported per-port state directly. A refusal one line further
+     * down is only diagnosable next to the reading it came from - and this
+     * reaches the kernel log, which a killed guest still has, rather than the
+     * env block, which only survives a clean power-off. */
+    {   char dg[160];
+        uno_dg_status_str(dg, (int)sizeof dg);
+        dbg_puts("detach gate: "); dbg_puts(dg); dbg_puts("\n");
+    }
     if (gUseBlt || !gVram)        REFUSE("no linear framebuffer", 0);
     if (!native_kbd_for_detach()) {
         const char *hw = ""; uno_usbboot_hid_status(0, 0, &hw);

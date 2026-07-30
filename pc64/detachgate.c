@@ -14,6 +14,9 @@
 
 void *uno_pc64_st(void);              /* EFI_SYSTEM_TABLE   (uefi_main.c) */
 int   uno_pc64_detached(void);
+/* how many firmware pointer instances collect() found, splitter fallback
+ * included - the authority on "is there a pointer here at all" */
+void  uno_pc64_ptr_status(int *nsimple, int *nabs, int *blocked);
 
 /* ---- unodevices, consumed through a weak seam -----------------------------
  * The device manager answers "which PCI function is this, in the operator's
@@ -118,14 +121,17 @@ static int transport_for(EFI_GUID *guid, int want_ptr)
     EFI_SYSTEM_TABLE  *st = (EFI_SYSTEM_TABLE *)uno_pc64_st();
     EFI_HANDLE *hs = 0;
     UINTN n = 0, i;
-    int best = UNO_DGT_ABSENT;
+    int best = UNO_DGT_ABSENT, skipped_splitter = 0;
     if (!BS) return UNO_DGT_ABSENT;
     if (EFI_ERROR(BS->LocateHandleBuffer(EFI_LOCATE_BY_PROTOCOL, guid, 0, &n, &hs)))
         return UNO_DGT_ABSENT;
     for (i = 0; i < n; i++) {
         void *dp = 0;
         int t;
-        if (st && hs[i] == st->ConsoleInHandle) continue;    /* the splitter */
+        if (st && hs[i] == st->ConsoleInHandle) {            /* the splitter */
+            skipped_splitter = 1;
+            continue;
+        }
         if (EFI_ERROR(BS->HandleProtocol(hs[i], &dp_guid, &dp)) || !dp) {
             if (best == UNO_DGT_ABSENT) best = UNO_DGT_UNKNOWN;
             continue;
@@ -136,6 +142,14 @@ static int transport_for(EFI_GUID *guid, int want_ptr)
         else if (best == UNO_DGT_ABSENT || best == UNO_DGT_UNKNOWN) best = t;
     }
     BS->FreePool(hs);
+    /* "The only instance was the splitter" is UNKNOWN, not ABSENT. Behaviour
+     * is the same either way (uno_dg_would_strand_pointer treats both as case
+     * 4), but the LABEL must not say "no pointer here" next to an instance
+     * count of 1 - that contradiction is what sent the first version of this
+     * file down the wrong path, and the whole value of the status line is that
+     * it can be read at face value on a machine nobody can attach a debugger
+     * to. */
+    if (best == UNO_DGT_ABSENT && skipped_splitter) return UNO_DGT_UNKNOWN;
     return best;
 }
 
@@ -193,10 +207,47 @@ int uno_dg_kbd_survives(void)
     return uno_usbboot_hid_kbd();
 }
 
+/* Would detaching leave this machine with NO pointer at all?
+ *
+ * THE TRANSPORT IS NOT THE AUTHORITY ON WHETHER A POINTER EXISTS. It cannot
+ * be: some firmware publishes its pointer instances only through the ConIn
+ * SPLITTER, an aggregate handle with no device path of its own, so there is
+ * nothing to classify even though a pointer is live and moving the cursor.
+ * uefi_main's collect() already knows this - it falls back to the splitter
+ * when no device handles exist - and its gNPtr/gNAbs counts are therefore the
+ * authority. Asking the classifier instead reports "nothing to lose" on
+ * exactly the machines where something is about to be lost, which is the
+ * dangerous direction to be wrong in. (Caught by QEMU's own boot log:
+ * `pointer: fw_simple=1 fw_abs=1` against `detach gate: fw ptr=none`.)
+ *
+ * So the transport REFINES the question, it does not answer it:
+ *
+ *  1. no firmware pointer at all      -> nothing to lose, detach
+ *  2. something native survives       -> detach (this is the phase B win: a
+ *                                        PNP0Fxx transport means the i8042 aux
+ *                                        mouse, which uno_ps2_init() claims)
+ *  3. transport known, nothing native -> the pointer really does die, refuse
+ *  4. transport UNKNOWN (splitter)    -> we cannot tell, so fall back to the
+ *                                        pre-phase-B heuristic, which the plan
+ *                                        asked to keep for exactly this case
+ *
+ * Case 4 is why the LPSS-counting argument is still here rather than deleted
+ * outright: on a machine with I2C controllers and no bound I2C-HID pointer,
+ * the thing moving the cursor is most likely a firmware protocol that EBS will
+ * kill. A PS/2-mouse desktop has no LPSS controller and is unaffected, so this
+ * cannot regress the machines that detach happily today - which now includes
+ * every QEMU guest, whose pointers are splitter-only. */
 int uno_dg_would_strand_pointer(void)
 {
-    if (uno_dg_fw_ptr_transport() == UNO_DGT_ABSENT) return 0;  /* none to lose */
-    return !uno_dg_ptr_survives();
+    int nsimple = 0, nabs = 0, nctrl = 0;
+    uno_pc64_ptr_status(&nsimple, &nabs, 0);
+    if (!nsimple && !nabs)      return 0;       /* 1: no pointer to lose      */
+    if (uno_dg_ptr_survives())  return 0;       /* 2: something native covers */
+    if (uno_dg_fw_ptr_transport() != UNO_DGT_UNKNOWN &&
+        uno_dg_fw_ptr_transport() != UNO_DGT_ABSENT)
+        return 1;                               /* 3: named transport, no heir */
+    uno_i2c_hid_status(0, &nctrl, 0, 0, 0);     /* 4: the old shape argument   */
+    return nctrl > 0;
 }
 
 /* ---- blocker attribution --------------------------------------------------- */
@@ -268,10 +319,21 @@ int uno_dg_status_str(char *buf, int cap)
 {
     char *p = buf, *end = buf + cap;
     if (cap <= 1) { if (cap == 1) buf[0] = 0; return 0; }
-    p = ap_str(p, "fw ptr=", end);      p = ap_str(p, tname(uno_dg_fw_ptr_transport()), end);
+    {   /* the instance counts belong next to the transports: a machine whose
+         * pointer is splitter-only reads `inst=1/1` with `ptr=unknown`, and
+         * without both halves that pair looks like a contradiction rather than
+         * like the documented case 4 in uno_dg_would_strand_pointer(). */
+        int ns = 0, na = 0;
+        uno_pc64_ptr_status(&ns, &na, 0);
+        p = ap_str(p, "fw inst=", end); p = ap_dec(p, (unsigned)ns, end);
+        *p++ = '/';                     p = ap_dec(p, (unsigned)na, end);
+        p = ap_str(p, " ptr=", end);
+    }
+    p = ap_str(p, tname(uno_dg_fw_ptr_transport()), end);
     p = ap_str(p, " kbd=", end);        p = ap_str(p, tname(uno_dg_fw_kbd_transport()), end);
     p = ap_str(p, "  survives ptr=", end); p = ap_dec(p, (unsigned)uno_dg_ptr_survives(), end);
     p = ap_str(p, " kbd=", end);        p = ap_dec(p, (unsigned)uno_dg_kbd_survives(), end);
+    p = ap_str(p, " strand=", end);     p = ap_dec(p, (unsigned)uno_dg_would_strand_pointer(), end);
     if (g_blocker[0]) { p = ap_str(p, "  blocker=", end); p = ap_str(p, g_blocker, end); }
     *p = 0;
     return (int)(p - buf);
@@ -285,24 +347,31 @@ int uno_dg_status_str(char *buf, int cap)
  * this reports rather than refuses - but it must not report silence. */
 int uno_dg_ptr_arrived(const char **why)
 {
-    int predicted = 0;
+    int t = uno_dg_fw_ptr_transport();
+    int predicted;
     if (why) *why = "";
     if (!uno_pc64_detached()) return 1;             /* nothing to check yet */
-    if (uno_dg_fw_ptr_transport() == UNO_DGT_ABSENT) return 1;
-    switch (uno_dg_fw_ptr_transport()) {
-    case UNO_DGT_PS2:  predicted = 1; break;
-    case UNO_DGT_USB:  predicted = 1; break;
-    default:           predicted = uno_i2c_hid_present(); break;
-    }
-    if (!predicted) return 1;                       /* we promised nothing  */
+
+    /* Only complain about a promise we actually made. The gate lets a machine
+     * through on three different grounds and this must mirror them exactly,
+     * or it cries wolf: a QEMU guest detaches with a live usb-tablet that
+     * NOTHING ever undertook to claim (the tablet has no boot protocol, so
+     * neither usbboot's preflight nor usbhid wants it), and reporting that as
+     * a broken prediction would put a permanent false failure in the System
+     * window of every emulator run. */
+    predicted = (t == UNO_DGT_PS2 && uno_ps2_present())
+             || uno_usbboot_hid_ptr()
+             || uno_i2c_hid_present();
+    if (!predicted) return 1;
+
     if (uno_i2c_hid_present() || uno_usb_hid_present()) return 1;
     {
         int aux = 0;
         uno_ps2_status(0, &aux, 0, 0);
         if (aux) return 1;
     }
-    if (why) *why = uno_dg_fw_ptr_transport() == UNO_DGT_PS2
+    if (why) *why = t == UNO_DGT_PS2
                   ? "the i8042 aux mouse did not answer after detach"
-                  : "the predicted USB pointer did not enumerate after detach";
+                  : "the predicted pointer did not arrive after detach";
     return 0;
 }
