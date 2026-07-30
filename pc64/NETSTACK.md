@@ -1,14 +1,14 @@
 # pc64 network stack (NETSTACK.md)
 
-The transport stack that sits above the NIC drivers — Ethernet / ARP / IPv4 /
+The transport stack that sits above the NIC drivers, Ethernet / ARP / IPv4 /
 ICMP / UDP / TCP / DHCP-client / DNS, plus a multi-connection **socket layer**,
 **broadcast**, and **zero-config discovery**. This is the pc64 implementation of
-the **`unonet`** system subsystem — a **neutral shared system API**, on the same
+the **`unonet`** system subsystem, a **neutral shared system API**, on the same
 footing as `unofs` / `uno3d` / `unosound`. It is **not** owned by any single
 feature agent: whoever's task needs to evolve the transport stack edits it, and
 its many consumers (`unoauto_remote`, `pc64_http`, `pc64_modload`, tls, and the
 roadmapped browser/JS + AI apps) build against its public headers. Re-homed out
-of unoautomate on 2026-07-22 — see the note in `UNOAUTOMATE-REQUESTS.md`.
+of unoautomate on 2026-07-22, see the note in `UNOAUTOMATE-REQUESTS.md`.
 
 ## Layers & ownership
 
@@ -17,7 +17,7 @@ of unoautomate on 2026-07-22 — see the note in `UNOAUTOMATE-REQUESTS.md`.
   ────────────────────────────────────────────────
   netsock.h  socket table (net_socket/bind/listen/     \
              accept/connect/send/recv/sendto/...)        |  transport stack
-  net.c      ARP · IPv4 · ICMP · UDP · TCP · DHCP · DNS   |  (unonet — shared)
+  net.c      ARP · IPv4 · ICMP · UDP · TCP · DHCP · DNS   |  (unonet, shared)
   netdisc.c  UNODISC discovery over UDP broadcast        /
   ────────────────────────────────────────────────
   uno_nic_t  { send, recv, link }   <- THE SEAM         <- driver agent owns
@@ -29,12 +29,12 @@ The stack consumes only `g_nic->send/recv/link` (`uno_nic.h`). Everything above
 that line is the shared `unonet` transport stack; the NIC drivers below it are
 the driver agent's. This is the whole coexistence contract for networking.
 unoautomate is one consumer among many (its `unoauto_remote` URC link dials out
-over these sockets) — it does **not** own the layer.
+over these sockets), it does **not** own the layer.
 
 ## Sockets (`netsock.h`)
 
 A fixed table of `NSOCK` (12) slots, each an `SOCK_TCP` connection or an
-`SOCK_UDP` port. BSD-ish, non-blocking — drive with `net_poll()` and poll state.
+`SOCK_UDP` port. BSD-ish, non-blocking, drive with `net_poll()` and poll state.
 
 | call | effect |
 |------|--------|
@@ -87,14 +87,14 @@ so a host-side tool can enumerate the UnoDOS boxes on the LAN.
 
 ## Test harnesses
 
-- `tools/netsock_qemu.py` — multi-connection + listen/accept over SLIRP +
+- `tools/netsock_qemu.py`: multi-connection + listen/accept over SLIRP +
   hostfwd, driven by the debug `nst` URC verb. Proves N live sockets, two
   outbound ESTABLISHED, and one accepted inbound, all beside the remote link.
-- `tools/netdisc_qemu.py` — discovery over a **real L2 segment** (SLIRP never
+- `tools/netdisc_qemu.py`: discovery over a **real L2 segment** (SLIRP never
   forwards broadcast): QEMU's `socket` netdev tunnels raw Ethernet to a host
   peer implementing ARP + a minimal DHCP server + UNODISC. Proves the guest
   leases, broadcasts a PROBE, records a host OFFER, and answers a host PROBE.
-- `tools/remote_qemu.py` — the existing remote-channel gate, unchanged/green.
+- `tools/remote_qemu.py`: the existing remote-channel gate, unchanged/green.
 
 ## Deferred: remote-channel integration
 

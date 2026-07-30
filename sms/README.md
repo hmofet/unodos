@@ -2,36 +2,36 @@
 
 The **first UnoDOS port built fresh on the contract-driven + greenfield-window
 architecture** (CONTRACT-ARCH §13). The SMS has a true **Z80**, so it consumes the
-Contract's existing `gen/z80/` world (sjasmplus) directly — no new CPU dialect, no
+Contract's existing `gen/z80/` world (sjasmplus) directly, no new CPU dialect, no
 new assembler emitter. Screen geometry and the window/event layout come from
 `[world.sms]` in `unodef/unodef.toml` via unogen (`gen/sms/sys_gen.inc`), so they
 can never drift from the Contract.
 
-## Status — M1 · M2 · M3 + game + audio ✅ (emulator-verified)
+## Status, M1 · M2 · M3 + game + audio ✅ (emulator-verified)
 
-- **M1 — desktop** (`build/desktop.png`): Z80 + VDP bring-up from scratch, the
+- **M1, desktop** (`build/desktop.png`): Z80 + VDP bring-up from scratch, the
   shared 8×8 font + the x86 icon donors uploaded as VDP tiles, the inverted
   **"UnoDOS 3"** title bar and the labelled icon grid, plus the hardware-sprite
   cursor.
-- **M2 — window manager + input + events** (`build/wm.png`): a VBlank-driven
+- **M2, window manager + input + events** (`build/wm.png`): a VBlank-driven
   cooperative loop; a d-pad-steered hardware-sprite cursor; the Contract event
-  queue (`ev_post`/`ev_get`, `EV_MOUSE`); and a tile window manager — create,
+  queue (`ev_post`/`ev_get`, `EV_MOUSE`); and a tile window manager, create,
   draw (title bar + X close box + border chrome), focus-raise, **drag** by the
-  title bar, close, all z-ordered — reached by clicking the desktop icons.
-- **M3 — app sweep** (`build/wm.png`): **SysInfo** (hardware readout), **Clock**
+  title bar, close, all z-ordered, reached by clicking the desktop icons.
+- **M3, app sweep** (`build/wm.png`): **SysInfo** (hardware readout), **Clock**
   (live `HH:MM:SS`, ticked by the COOP scheduler floor), **Notepad**, **Files**,
   **Theme** (cycles the desktop palette live by reprogramming CRAM), and
   **Music** have real content; the remaining icons open framed placeholder
   windows.
 - **Dostris** (`build/dostris.png`): a from-scratch playable falling-blocks game
-  — 7 tetrominoes × 4 rotations, move/rotate/soft-drop, gravity, lock, line
+, 7 tetrominoes × 4 rotations, move/rotate/soft-drop, gravity, lock, line
   clear, scoring, game over. When its window is topmost it owns the d-pad.
 - **PSG audio + Music** (`build/music.png`): the SN76489 PSG (port `$7F`) plays a
   tune on channel 0; the Music window shows the live note + a progress bar. The
   *audible* timbre is an ear-check (as for every UnoDOS port's audio).
 
 The `wm.png`/`dostris.png`/`music.png` shots come from AUTOTEST builds that drive
-a scripted pad sequence through the *same* input path — the ROM simulates the
+a scripted pad sequence through the *same* input path, the ROM simulates the
 pad, nothing is faked.
 
 ### Not yet ported (clear next steps toward Genesis parity)
@@ -44,7 +44,7 @@ WTITLE`, `MAXWIN=4`) in cell coordinates; z-order is a side list (`zlist`,
 top..bottom). The whole scene is re-composed on the name table whenever something
 changes (`v_dirty`), back-to-front; the cursor is sprite 0 so it floats above the
 cell world without a redraw. Per the PORT-SPEC §6 audit rules the VBlank ISR only
-ticks + sets a flag — the main loop owns every VDP access.
+ticks + sets a flag, the main loop owns every VDP access.
 
 ## Hardware brought up (from scratch)
 
@@ -59,8 +59,8 @@ ticks + sets a flag — the main loop owns every VDP access.
 | Sprites | cursor = sprite 0, 8×16 (R1 bit1), pattern base `$0000`, SAT at `$3F00` |
 | Input | control pad on port `$DC` (active-low); d-pad → cursor, trigger 1 = click, trigger 2 = close |
 | Audio | SN76489 PSG on I/O port `$7F` (3 tone + 1 noise); the Music app drives channel 0 |
-| Mapper | Sega `$FFFC–$FFFF` paging (banks 0/1/2); code lives in banks 0–1 |
-| RAM | 8 KB work RAM `$C000–$DFFF` (cleared at boot); stack at `$DFF0` |
+| Mapper | Sega `$FFFC-$FFFF` paging (banks 0/1/2); code lives in banks 0-1 |
+| RAM | 8 KB work RAM `$C000-$DFFF` (cleared at boot); stack at `$DFF0` |
 | ROM | 32 KB `.sms` image with the `TMR SEGA` header at `$7FF0` |
 
 ## Display model
@@ -86,24 +86,24 @@ powershell -ExecutionPolicy Bypass -File sms/run.ps1 -Rom build\unodos_mu.sms   
 
 The AUTOTEST variant drives a scripted pad sequence into the *same* input path
 (`auto_input` replaces the live `$DC` read), so one screenshot proves the WM end to
-end — the ROM simulates the pad, nothing is faked.
+end, the ROM simulates the pad, nothing is faked.
 
 - `mkdata.py` generates `gen_data.inc` (tiles + palette) from the shared assets
-  (`kernel/font8x8.asm`, `build/*.bin` icon donors — run `make floppy144` first if
+  (`kernel/font8x8.asm`, `build/*.bin` icon donors, run `make floppy144` first if
   the donors are missing).
 - `build.sh` runs mkdata then `sjasmplus --raw` into a contiguous 32 KB ROM.
 - `run.ps1` launches BlastEm with the SDL **software** renderer (so the
-  focus-independent PrintWindow grab works over RDP — see `~/.claude/CLAUDE.md`) and
+  focus-independent PrintWindow grab works over RDP, see `~/.claude/CLAUDE.md`) and
   saves `build/desktop.png`.
 
 ## Toolchain
 
 - **sjasmplus 1.23.1** (`C:\Users\arin\z80-tools\sjasmplus-1.23.1.win`).
-- **BlastEm 0.6.2** (`C:\Users\arin\genesis-tools\blastem-win32-0.6.2`) — boots
+- **BlastEm 0.6.2** (`C:\Users\arin\genesis-tools\blastem-win32-0.6.2`), boots
   `.sms` in Master System mode; capture needs `SDL_RENDER_DRIVER=software`.
 
 ## Why SMS (not Game Boy)
 
 The SMS is a *true Z80*, so it reuses `gen/z80/` as-is. The Game Boy is a Sharp
 **LR35902** (a Z80 relative, not a Z80) and would need rgbds + a new `gbz80`
-dialect — a separate port.
+dialect, a separate port.

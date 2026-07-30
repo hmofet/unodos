@@ -4,14 +4,14 @@
 The PowerPC port boots over Open Firmware (no Mac OS): OF enters the client program
 with the IEEE-1275 client-interface entry in r5, and the kernel makes a few OF calls
 to find the `screen` device and read its framebuffer address + linebytes, then draws
-into that surface. A real Mac renders to a display no headless grab can read, so —
-like every other fresh port — this verifies headlessly on a from-scratch core:
+into that surface. A real Mac renders to a display no headless grab can read, so -
+like every other fresh port, this verifies headlessly on a from-scratch core:
 
   * run the real PowerPC payload on a Unicorn PPC32 big-endian core,
   * EMULATE the Open Firmware client interface: r5 points at a one-instruction `blr`
     trampoline; a code hook there reads the CI argument array (r3), services
     `finddevice` / `getprop` (handing back a fixed framebuffer base + pitch), and
-    returns — so fb_init gets a real surface to draw into,
+    returns, so fb_init gets a real surface to draw into,
   * run an instruction budget (wait_vblank is a spin loop, so frames advance and the
     AUTOTEST pad plays out), then render the framebuffer to a PNG.
 
@@ -28,7 +28,7 @@ RAM_BASE = 0x00000000
 RAM_SIZE = 0x02000000           # 32 MB covers low mem + kernel + stack + vars + FB
 FB_PA    = 0x01000000
 OF_ENTRY = 0x00000100           # the OF client-interface trampoline (a single blr)
-SOUND_PAGE = 0x80800000         # codec PCM data port (16-bit BE samples) — emulated
+SOUND_PAGE = 0x80800000         # codec PCM data port (16-bit BE samples), emulated
 WAV_RATE = 8000
 MAX_SAMPLES = WAV_RATE * 8
 

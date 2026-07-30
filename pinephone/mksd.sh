@@ -1,10 +1,10 @@
 #!/bin/sh
-# UnoDOS / PinePhone (Allwinner A64) — build a SELF-BOOTING microSD card.
+# UnoDOS / PinePhone (Allwinner A64), build a SELF-BOOTING microSD card.
 #
 # The kernel build (build.sh) only produces a flat payload, build/unodos.bin, that
 # must be loaded at 0x40080000 AFTER something has brought up DRAM and the DSI panel.
-# This script builds that "something" — mainline U-Boot + ARM Trusted Firmware for the
-# A64 — plus a boot script, and assembles a bootable SD image:
+# This script builds that "something", mainline U-Boot + ARM Trusted Firmware for the
+# A64, plus a boot script, and assembles a bootable SD image:
 #
 #   BROM -> SPL (8 KB offset) -> U-Boot (lights the DSI panel) -> distro_bootcmd
 #        -> finds boot.scr on the FAT partition -> loads unodos.bin -> go 0x40080000
@@ -24,7 +24,7 @@
 #   IMG_MB=<n>     image size in MiB (default 960; the FAT partition spans it)
 #   CROSS=<prefix> use an existing aarch64 cross prefix instead of auto-fetching one
 #
-# The one real-hardware unknown is cache coherency at `go` — see boot.cmd and the
+# The one real-hardware unknown is cache coherency at `go`: see boot.cmd and the
 # README "Self-booting microSD" section.
 set -e
 cd "$(dirname "$0")"
@@ -100,8 +100,8 @@ cmd_fw() {
 }
 
 cmd_image() {
-  [ -f "$FW" ] || { echo "missing $FW — run './mksd.sh fw' first"; exit 1; }
-  [ -f "$HERE/build/unodos.bin" ] || { echo "missing build/unodos.bin — run './build.sh' first"; exit 1; }
+  [ -f "$FW" ] || { echo "missing $FW, run './mksd.sh fw' first"; exit 1; }
+  [ -f "$HERE/build/unodos.bin" ] || { echo "missing build/unodos.bin, run './build.sh' first"; exit 1; }
   command -v mkimage >/dev/null || { echo "need u-boot-tools (mkimage)"; exit 1; }
 
   echo "[img] compiling boot.scr from boot.cmd..."
@@ -130,7 +130,7 @@ cmd_image() {
 cmd_write() {
   DEV="$1"
   [ -b "$DEV" ] || { echo "usage: ./mksd.sh write /dev/sdX  (block device)"; exit 1; }
-  [ -f "$IMG" ] || { echo "missing $IMG — run './mksd.sh image' first"; exit 1; }
+  [ -f "$IMG" ] || { echo "missing $IMG, run './mksd.sh image' first"; exit 1; }
   # Guard: refuse anything that isn't a removable/USB disk.
   RM=$(lsblk -ndo RM "$DEV"); TRAN=$(lsblk -ndo TRAN "$DEV")
   echo "target $DEV: RM=$RM TRAN=$TRAN MODEL='$(lsblk -ndo MODEL "$DEV" | xargs)' SIZE=$(lsblk -ndo SIZE "$DEV")"

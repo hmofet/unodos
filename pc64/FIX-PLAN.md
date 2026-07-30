@@ -1,4 +1,4 @@
-# pc64 — proposed fixes and optimizations
+# pc64, proposed fixes and optimizations
 
 Analysis of the metal findings in [METAL-FINDINGS.md](METAL-FINDINGS.md), scoped
 to the **Surface Laptop Go, X1 Carbon Gen 8 and X13 Yoga Gen 3** (the Latitude
@@ -32,11 +32,11 @@ approximately nothing. Only two things can help:
 2. write fewer bytes to VRAM.
 
 Everything in P0/P3 below is one of those two. **Do not start with the
-renderer** — that is the intuitive move and the measurements say it is wasted.
+renderer**: that is the intuitive move and the measurements say it is wasted.
 
 ---
 
-## P0 — Write fewer bytes to VRAM (safe, large, do first)
+## P0, Write fewer bytes to VRAM (safe, large, do first)
 
 > **STATUS: P0.1-P0.3 IMPLEMENTED and MEASURED ON METAL. P0.4 dropped (see
 > below). Same machine, same deterministic 3-pass workload, X13 Yoga:**
@@ -49,12 +49,12 @@ renderer** — that is the intuitive move and the measurements say it is wasted.
 >
 > **Whole-run wall clock: 121.3 s -> 70.4 s (1.72x) for identical work.**
 > `render_avg` is unchanged (2924->2893, 75762->75548, 3186->3154), exactly as
-> designed — these changes touch only bytes-written, not render cost. Zero
+> designed, these changes touch only bytes-written, not render cost. Zero
 > crashes; the model holds.
 >
 > **Honest read on the shortfall:** I estimated 5-20x for P0.1 and we got ~2.2x.
 > The stress workload opens and closes windows constantly, so most frames dirty
-> large areas and the span tracking has little to trim — pass 1, the pass with
+> large areas and the span tracking has little to trim, pass 1, the pass with
 > the fewest dirty rows, is also the one that gained most (3.38x). Real
 > interactive use (typing, caret blink, hover) should do better than this
 > synthetic run shows, and a good chunk of the measured 2.2x is likely P0.3's
@@ -85,7 +85,7 @@ correct approach is to invert with the same 16.16 factor used to build the map.
 
 ### P0.2 Stop upscaling full-screen low-res content  ·  est. **16x for Runner3D**
 `uno_pc64_lowres()` drops the desktop to 1/4 x 1/4 so 3D renders ~1/16 the
-pixels — but `uno_pc64_present()` then scales it back up and writes the **full
+pixels, but `uno_pc64_present()` then scales it back up and writes the **full
 panel area** to VRAM. The optimisation targets render cost, which we now know is
 3 ms, and leaves the 250 ms untouched. It is aimed at the wrong half of the frame.
 
@@ -105,13 +105,13 @@ for (x = 0; x < gOutW; x++) dst[x] = gRow[x];
 On UC memory every store is its own bus transaction, so transaction *count*
 dominates. Writing 64 bits (2 px) per store roughly halves them; 128-bit SSE
 stores (`movdqu`, the buffer is 16-byte alignable) may do better. Measure with
-the existing `fb bench` harness — it already reports KB/s, so this is directly
+the existing `fb bench` harness, it already reports KB/s, so this is directly
 verifiable per machine.
 
 Do **not** expect non-temporal stores to help: on a UC region the NT hint is
 ignored, they do not write-combine.
 
-### P0.4 ~~Don't repaint the whole screen for fullscreen apps~~ — DROPPED
+### P0.4 ~~Don't repaint the whole screen for fullscreen apps~~, DROPPED
 On a closer read this was wrong. `if (UI.full) g_dirty = 1;` forces a re-RENDER,
 but the shadow comparison downstream still rejects every unchanged row, so it
 costs the 3 ms half of the frame and **not** the 250 ms half. Removing it would
@@ -124,7 +124,7 @@ without touching a single MTRR.
 
 ---
 
-## P1 — Unblock input, and a crash fix (small, high value)
+## P1, Unblock input, and a crash fix (small, high value)
 
 ### P1.1 F4: drive I2C-HID discovery from ACPI, not PCI guessing
 Present state across machines:
@@ -136,10 +136,10 @@ Present state across machines:
 | X13 Yoga (touch!) | **0** | 0 | 0 | 0 |
 
 Two distinct failures, and the table separates them cleanly:
-- Where controllers **are** found, no device binds and `addr=0` — we never
+- Where controllers **are** found, no device binds and `addr=0`: we never
   discover the device's I2C slave address, so nothing can bind.
 - On the Yoga we find **zero controllers**, on a machine that certainly has I2C
-  touch — so the controller enumeration itself is wrong there, not just binding.
+  touch, so the controller enumeration itself is wrong there, not just binding.
 
 Both have the same correct answer: **enumerate from ACPI**. An I2C-HID device is
 declared in the ACPI namespace with `_HID` = `PNP0C50` (or `ACPI0C50`) and a
@@ -162,18 +162,18 @@ keyboard binds, so firmware ConIn is dropped) and dissolves F6's detach block.
 int pen26 = x << 6;      /* UB when x < 0 */
 ```
 
-Fix: `int pen26 = x * 64;` — well-defined for negatives. Then **clip**: skip
+Fix: `int pen26 = x * 64;`: well-defined for negatives. Then **clip**: skip
 glyphs entirely left of the surface and partially clip the first visible one,
 so negative x is not merely defined but correct.
 
-Audit the callers that can go negative — the centred idiom
+Audit the callers that can go negative, the centred idiom
 `fb_text(cx - fb_text_w(s)/2, ...)` used by the splash and dialogs is negative
 whenever the string is wider than the surface. `prov_glyph()` has the same
 `x << 6`. In a release build this is *silent* UB, not a trap.
 
 ---
 
-## P2 — Correctness and safety (small)
+## P2, Correctness and safety (small)
 
 ### P2.1 F8: make the detach gate boot-volume aware
 `uno_fat_native_eligible()` asks "is *some* UnoDOS-bearing volume natively
@@ -183,7 +183,7 @@ still reach the volume we booted from?"** The boot device is already known:
 device is not AHCI/NVMe/SDHCI-backed (i.e. it is USB), refuse to detach.
 
 Without this, any user who installs UnoDOS and later boots a USB stick loses
-their boot volume mid-session — S1, and it also silently kills all app/module
+their boot volume mid-session, S1, and it also silently kills all app/module
 loading, not just telemetry.
 
 ### P2.2 `crash_vol()` negative caching
@@ -194,14 +194,14 @@ calls it from a 30 s heartbeat. Cache the failure or bound the retries.
 ### P2.3 F10 cosmetics
 - The `fb bench` paints the bottom 64 rows of the panel; when the desktop is
   letterboxed those rows are never repainted and the test pattern stays on
-  screen all session. It reads as framebuffer corruption in photos — bad, since
+  screen all session. It reads as framebuffer corruption in photos, bad, since
   corruption is what we are hunting. Clear the rows after benching, or bench
   into an offscreen/soon-overdrawn region.
 - The splash `DEBUG / STRESS BUILD` banner collides with the loading bar.
 
 ---
 
-## P3 — The 100x fix: a write-combining framebuffer (high value, real risk)
+## P3, The 100x fix: a write-combining framebuffer (high value, real risk)
 
 This is the *correct* answer to F3 and subsumes most of P0, but it is the one
 place where getting it wrong destabilises the machine, so it should come after
@@ -222,15 +222,15 @@ Two approaches that do **not** work, already established:
 
 So the UC range must stop covering the framebuffer. Sketch:
 
-1. Enumerate real device MMIO precisely — we already have `pc64_pci.c`, so walk
+1. Enumerate real device MMIO precisely, we already have `pc64_pci.c`, so walk
    every function's BARs and build the set of ranges that genuinely require UC.
 2. Rebuild the variable MTRR set: UC only over those BAR ranges, WC over the
    framebuffer extent (`GOP FrameBufferBase/Size`), default WB. MTRR ranges are
-   power-of-2 aligned/sized, so carving a hole costs several entries — check
+   power-of-2 aligned/sized, so carving a hole costs several entries, check
    `IA32_MTRRCAP.VCNT` (usually 8-10) for headroom before committing.
 3. Apply with the documented sequence: `cli`; `CR0.CD=1, NW=0`; `WBINVD`; clear
    `IA32_MTRR_DEF_TYPE.E`; reprogram pairs; `WBINVD`; set `E`; `CR0.CD=0`; `sti`.
-4. Re-run the existing `fb bench` immediately and log before/after — we already
+4. Re-run the existing `fb bench` immediately and log before/after, we already
    have the instrument, so success is measurable on the spot.
 
 **Ship it opt-in first** (flag file / `STRESS.CFG` key, default off) so a bad
@@ -240,7 +240,7 @@ bottleneck at all.
 
 Cheaper thing to try first, ~free: **time `GOP Blt()` against direct writes on a
 UC machine.** The firmware blitter may DMA. The `gUseBlt` path already exists, so
-this is a measurement, not an implementation — and if Blt wins it is a large,
+this is a measurement, not an implementation, and if Blt wins it is a large,
 zero-risk gain.
 
 > **IMPLEMENTED.** The boot-env block now carries a `blt bench:` line measured
@@ -248,12 +248,12 @@ zero-risk gain.
 > verdict: *BLT IS FASTER* / *direct wins* / *comparable*. QEMU says
 > "comparable" but its framebuffer is not uncached, so only a metal reading
 > decides it. If a real machine reports BLT IS FASTER, switching the present
-> path is a config change against code that already exists — most of P3's win
+> path is a config change against code that already exists, most of P3's win
 > with none of P3's risk.
 
 ---
 
-## P4 — Enabler: USB mass storage over xHCI
+## P4, Enabler: USB mass storage over xHCI
 
 `xhci.c` currently serves HID only. A bulk-only-transport MSC driver would:
 - let a USB-booted system survive detach (the real fix behind P2.1),
@@ -267,9 +267,9 @@ Largest item here; sequence it after P0-P2.
 
 ## Suggested order
 
-1. **P0.1 + P0.2 + P0.3** — safe, measurable, and they attack the only thing
+1. **P0.1 + P0.2 + P0.3**: safe, measurable, and they attack the only thing
    that costs time. Verify each with `fb bench` + the PF perf line.
-2. **P1.2** (one line, prevents crashes), then **P1.1** (ACPI I2C-HID — the
+2. **P1.2** (one line, prevents crashes), then **P1.1** (ACPI I2C-HID, the
    single change that fixes input on every machine and dissolves F6).
 3. **P2.1/P2.2/P2.3**.
 4. **P3**, opt-in, operator present. Try the `Blt()` measurement first.
@@ -277,7 +277,7 @@ Largest item here; sequence it after P0-P2.
 
 ## How to verify any of it
 
-The harness already measures everything needed — no new instrumentation:
+The harness already measures everything needed, no new instrumentation:
 - `BOOTENV.TXT` -> `fb bench` KB/s (P0.3, P3)
 - `CRASH\PF###.TXT` -> `render_avg` / `present_avg` / `fps` (P0.1, P0.2, P0.4)
 - `BOOTENV.TXT` -> `i2c-hid ctrls/present/addr/desc_parsed` (P1.1)

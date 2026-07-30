@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Generate gg/gen_data.inc from the shared UnoDOS assets (Sega Game Gear).
 
-The Game Gear is SMS silicon — the same Z80 + 315-5124 VDP, so tiles are the
+The Game Gear is SMS silicon, the same Z80 + 315-5124 VDP, so tiles are the
 SAME 4 BITPLANE format as the SMS port (each row = 4 bytes plane0..plane3, 32
 bytes/tile). The ONE hardware difference we exercise here is CRAM: the GG stores
 **12-bit** colour (2 bytes per entry: low = %GGGGRRRR, high = %0000BBBB) instead
 of the SMS's 6-bit single byte. And the GG LCD shows only the centre 160x144 of
-the 256x192 frame, so this port uses the Game Boy's 20x18 `minimal` layout — a
+the 256x192 frame, so this port uses the Game Boy's 20x18 `minimal` layout, a
 vertical mini-icon list, drawn at a (6,3) cell offset into the visible window.
 
 Tile map (loaded contiguously from VRAM tile 0):

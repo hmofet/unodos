@@ -2,8 +2,8 @@
 """ROM-free Raspberry Pi (AArch64) test harness for UnoDOS/rpi (Unicorn ARM64).
 
 A real Pi renders to an HDMI surface the firmware allocates and that no headless
-RDP grab can read. So — exactly as the GBA port runs its ARM ROM on Unicorn, and
-the C64/Apple II ports use a py65 core — this verifies the port headlessly: it runs
+RDP grab can read. So, exactly as the GBA port runs its ARM ROM on Unicorn, and
+the C64/Apple II ports use a py65 core, this verifies the port headlessly: it runs
 the real kernel8.img on a Unicorn Cortex-A (AArch64), EMULATES the two MMIO channels
 the kernel actually touches, and renders the resulting framebuffer to a PNG.
 
@@ -32,7 +32,7 @@ FB_PA    = 0x08000000
 FB_SIZE  = (W * H * 4 + 0xFFFF) & ~0xFFFF
 PERI_SINK_A_BASE = 0x3F100000  # clock + GPIO writes land here (ignored)
 PERI_SINK_A_SIZE = 0x00101000  # [0x3F100000, 0x3F201000)
-UART_PAGE  = 0x3F201000        # PL011 (input) — emulated
+UART_PAGE  = 0x3F201000        # PL011 (input), emulated
 PERI_SINK_B_BASE = 0x3F202000  # PWM writes land here (ignored)
 PERI_SINK_B_SIZE = 0x000FE000  # [0x3F202000, 0x3F300000)
 TIMER_PAGE = 0x3F003000

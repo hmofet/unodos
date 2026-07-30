@@ -350,7 +350,7 @@ class UnoAutoLink:
         own line, since the format belongs to unodevices, not to URC.
 
         Splitting the trailing column assumes the class name is a single token
-        (`display`, `ethernet` — what uno_devmgr.h specifies); a class name with
+        (`display`, `ethernet`: what uno_devmgr.h specifies); a class name with
         a space in it would be mis-split, so trust `raw` over `name`/`driver` if
         that format ever changes."""
         out = []

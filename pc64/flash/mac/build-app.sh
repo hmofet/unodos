@@ -40,7 +40,7 @@ if [ "$SKIP_BUILD" -eq 0 ]; then
   echo "[img] packing UEFI disk image (mkuefi.py $SIZE_MIB MiB)…"
   ( cd "$PC64" && python3 tools/mkuefi.py "$SIZE_MIB" )
 fi
-[ -f "$IMG" ] || { echo "ERROR: $IMG not found — run without --skip-build." >&2; exit 1; }
+[ -f "$IMG" ] || { echo "ERROR: $IMG not found, run without --skip-build." >&2; exit 1; }
 
 # --- 2. gzip the image (the writer streams it decompressed to the raw device) ---
 mkdir -p staging
@@ -58,7 +58,7 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/images"
 cp "$BIN/$APPNAME" "$APP/Contents/MacOS/$APPNAME"
 
-# Privileged raw writer — root-exec'd via Authorization Services. zlib (-lz) ships
+# Privileged raw writer, root-exec'd via Authorization Services. zlib (-lz) ships
 # with macOS. Lives in Resources/ and is signed alongside the app below.
 cc -O2 -Wall -arch arm64 -arch x86_64 -o "$APP/Contents/Resources/uno-writer" writer.c -lz
 
@@ -67,7 +67,7 @@ echo "Architectures: app=$(lipo -archs "$APP/Contents/MacOS/$APPNAME") writer=$(
 # Embedded disk image (single, gzip), mirroring the Windows exe's embedded resource.
 cp staging/unodos.img.gz "$APP/Contents/Resources/images/unodos.img.gz"
 
-# App icon — iconset (if generated) else derive from the Windows .ico; best-effort.
+# App icon, iconset (if generated) else derive from the Windows .ico; best-effort.
 if [ ! -d "$APPNAME.iconset" ] && [ -f ../unodos.ico ]; then
   echo "[icon] deriving iconset from ../unodos.ico via sips…"
   mkdir -p "$APPNAME.iconset"
@@ -123,7 +123,7 @@ if security find-certificate -c "$SIGN_ID" >/dev/null 2>&1; then
     if [ -n "${SLATE_KEYCHAIN_PW:-}" ]; then
       security unlock-keychain -p "$SLATE_KEYCHAIN_PW" "$LOGIN_KC" 2>/dev/null || true
     elif [ -t 0 ]; then
-      echo "Unlocking the login keychain for code signing — enter your macOS login password:"
+      echo "Unlocking the login keychain for code signing, enter your macOS login password:"
       security unlock-keychain "$LOGIN_KC" || true
     fi
     _sign_all || true

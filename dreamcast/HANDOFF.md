@@ -1,8 +1,8 @@
-# UnoDOS/Dreamcast — handoff
+# UnoDOS/Dreamcast, handoff
 
 Where the port stands and what to do next. Companion to [README.md](README.md).
 
-## §1 — Strategy (same as PS2)
+## §1, Strategy (same as PS2)
 
 Port the portable C core [../mac/unodos.c](../mac/unodos.c) by swapping the
 platform layer, not rewriting. The core + the **Mac-compat shim**
@@ -13,14 +13,14 @@ framebuffer [fb.*](fb.h) are shared, byte-for-byte, with the PS2 port; only
 `uno_dc_init()` / `uno_dc_poll()` / `uno_dc_present()` (in [dc_main.c](dc_main.c)),
 mirroring the PS2's `uno_ee_*`.
 
-## §2 — What's done (at parity, emulator-verified)
+## §2, What's done (at parity, emulator-verified)
 
 - **Runs in Flycast** at native 640×480 / 60 fps, booted from `build/unodos-dc.cdi`
   via REIOS (HLE BIOS, no Sega BIOS file). Captured `shots/dc_*.png`: desktop +
   all 11 icons, Pac-Man, Dostris, Tracker, Paint, Theme, Files, OutLast, the
   Music+Files+Notepad stack.
 - **VMU storage verified in-emulator**: the MCSAVE autotest types into Notepad,
-  saves to `/vmu/a1`, clears, and reads back — the reloaded text appears
+  saves to `/vmu/a1`, clears, and reads back, the reloaded text appears
   (`shots/dc_vmu.png`). So Create/FSWrite/FSOpen/FSRead over the KOS `/vmu` VFS
   round-trip.
 - **AICA audio wired** ([dc_main.c](dc_main.c) `uno_dc_snd_note/quiet`,
@@ -38,7 +38,7 @@ mirroring the PS2's `uno_ee_*`.
 - **Emulator rig**: [tools/emu_run.sh](tools/emu_run.sh) +
   [tools/capture_apps.sh](tools/capture_apps.sh) (Flycast under Xvfb + llvmpipe).
 
-## §3 — Remaining / caveats
+## §3, Remaining / caveats
 
 - **Real hardware** is the only unverified frontier (CD-R or dc-tool/BBA),
   including the audio ear-check. Everything emulator-verifiable is done.
@@ -48,10 +48,10 @@ mirroring the PS2's `uno_ee_*`.
   A real Dreamcast / GPU display has neither issue.
 - **Keyboard arrows** route through the controller d-pad today; a DC keyboard
   handles text entry but not its own arrow keys yet.
-- **`main(void)` vs KOS `main(argc,argv)`** — KOS calls `main(argc,argv)`; the
+- **`main(void)` vs KOS `main(argc,argv)`**: KOS calls `main(argc,argv)`; the
   core's `main(void)` ignores the args (works on SH4, confirmed by the run).
 
-## §4 — Next
+## §4, Next
 
 1. Real hardware: burn `build/unodos-dc.cdi` to CD-R (or dc-tool/BBA), confirm
    boot + the audio ear-check.

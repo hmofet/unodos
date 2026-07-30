@@ -2,8 +2,8 @@
 """Generate gb/build/tiles.bin + gb/gb_data.inc from the shared UnoDOS assets.
 
 Game Boy CHR tiles are 8x8 @ 2bpp = 16 bytes, but the format is INTERLEAVED by
-row (NOT planar like the NES): each of the 8 rows is two bytes — byte0 = low
-bitplane, byte1 = high bitplane — and a pixel's colour index 0..3 is
+row (NOT planar like the NES): each of the 8 rows is two bytes, byte0 = low
+bitplane, byte1 = high bitplane, and a pixel's colour index 0..3 is
 (hi_bit<<1)|lo_bit. The BG palette (BGP on DMG, or BG palette RAM on GBC) colours
 the indices. There is no fixed backdrop quirk like the NES, so the "inverted"
 title font is just a second font set (fg=index0 on bg=index1).
@@ -21,7 +21,7 @@ Tile map (loaded contiguously to VRAM $8000, BG uses the $8000 base):
 Palette: the GB is the Contract's MINIMAL profile on a 160x144 LCD. On DMG it is
 4 greys via BGP; on GBC we write a real 4-colour BG palette (the UnoDOS theme:
 blue / white / cyan / magenta) so the same ROM is colour on a Color and greyscale
-on an original — detected at runtime.
+on an original, detected at runtime.
 
 Usage: python gb/mkdata.py   (from the repo root)
 """
@@ -166,7 +166,7 @@ for p in piece_order:
 NOTE_HZ = {"C4": 262, "D4": 294, "E4": 330, "F4": 349, "G4": 392, "A4": 440,
            "B4": 494, "C5": 523, "D5": 587}
 Q, H = 26, 52        # quarter / half note, in 60Hz frames
-TUNE = [  # Ode to Joy — the same melody the NES/SMS ports play
+TUNE = [  # Ode to Joy, the same melody the NES/SMS ports play
     ("E4", Q), ("E4", Q), ("F4", Q), ("G4", Q), ("G4", Q), ("F4", Q),
     ("E4", Q), ("D4", Q), ("C4", Q), ("C4", Q), ("D4", Q), ("E4", Q),
     ("E4", H), ("D4", Q), ("D4", H),
@@ -183,7 +183,7 @@ music_song = [(round(2048 - 131072 / NOTE_HZ[n]) & 0x7FF, d) for n, d in TUNE]
 def bgr555(r, g, b):
     return (b << 10) | (g << 5) | r
 NTHEMES = 4
-# (BGP byte, [4 BGR555 colours])  — index0 desktop, 1 white, 2 accent1, 3 accent2
+# (BGP byte, [4 BGR555 colours]), index0 desktop, 1 white, 2 accent1, 3 accent2
 THEMES = [
     (0x93, [bgr555(4, 8, 24),  bgr555(31, 31, 31), bgr555(0, 28, 28),  bgr555(28, 0, 28)]),   # blue
     (0xE4, [bgr555(2, 14, 4),  bgr555(31, 31, 31), bgr555(12, 28, 8),  bgr555(28, 30, 4)]),   # green
@@ -198,7 +198,7 @@ for _, t in tiles:
     blob += bytes(t)
 open(TILE_OUT, "wb").write(blob)
 
-# ---- emit gb_equ.inc (DEF constants — included early; rgbds needs them first) ---
+# ---- emit gb_equ.inc (DEF constants, included early; rgbds needs them first) ---
 FONT_BASE, INV_BASE, WHITE_TILE, ICON_BASE = 1, 96, 191, 192
 T_SOLW, T_SOLC, T_SOLM = SOLID_BASE, SOLID_BASE + 1, SOLID_BASE + 2
 piece_tiles = [T_SOLC, T_SOLM, T_SOLW, T_SOLC, T_SOLM, T_SOLW, T_SOLC]  # I O T S Z J L

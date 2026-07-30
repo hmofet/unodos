@@ -13,8 +13,8 @@ param(
 )
 
 # ─── Self-Elevate to Administrator ──────────────────────────────────────────
-if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
-    [Security.Principal.WindowsBuiltInRole]::Administrator)) {
+if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]:GetCurrent()).IsInRole(
+    [Security.Principal.WindowsBuiltInRole]:Administrator)) {
     # Rebuild the argument list for the elevated process
     $argList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`"")
     if ($ImagePath)        { $argList += '-ImagePath',   "`"$ImagePath`"" }
@@ -40,29 +40,29 @@ $projectDir = Split-Path -Parent $scriptDir
 
 function Write-At {
     param([int]$X, [int]$Y, [string]$Text,
-          [ConsoleColor]$FG = [Console]::ForegroundColor,
-          [ConsoleColor]$BG = [Console]::BackgroundColor)
-    [Console]::SetCursorPosition($X, $Y)
-    $oldFG = [Console]::ForegroundColor
-    $oldBG = [Console]::BackgroundColor
-    [Console]::ForegroundColor = $FG
-    [Console]::BackgroundColor = $BG
-    [Console]::Write($Text)
-    [Console]::ForegroundColor = $oldFG
-    [Console]::BackgroundColor = $oldBG
+          [ConsoleColor]$FG = [Console]:ForegroundColor,
+          [ConsoleColor]$BG = [Console]:BackgroundColor)
+    [Console]:SetCursorPosition($X, $Y)
+    $oldFG = [Console]:ForegroundColor
+    $oldBG = [Console]:BackgroundColor
+    [Console]:ForegroundColor = $FG
+    [Console]:BackgroundColor = $BG
+    [Console]:Write($Text)
+    [Console]:ForegroundColor = $oldFG
+    [Console]:BackgroundColor = $oldBG
 }
 
 function Clear-Row {
     param([int]$Y, [int]$StartX = 0)
-    $w = [Console]::WindowWidth
+    $w = [Console]:WindowWidth
     Write-At $StartX $Y (" " * ($w - $StartX))
 }
 
 function Format-Size {
     param([long]$Bytes)
     if ($Bytes -le 0) { return "? MB" }
-    $gb = [math]::Round($Bytes / 1GB, 1)
-    $mb = [math]::Round($Bytes / 1MB, 1)
+    $gb = [math]:Round($Bytes / 1GB, 1)
+    $mb = [math]:Round($Bytes / 1MB, 1)
     if ($gb -ge 1) { return "$gb GB" } else { return "$mb MB" }
 }
 
@@ -80,8 +80,8 @@ function Draw-Banner {
         "|        UnoDOS Disk Writer               |",
         "+========================================+"
     )
-    $w = [Console]::WindowWidth
-    $pad = [Math]::Max(0, [int](($w - $lines[0].Length) / 2))
+    $w = [Console]:WindowWidth
+    $pad = [Math]:Max(0, [int](($w - $lines[0].Length) / 2))
     for ($i = 0; $i -lt $lines.Count; $i++) {
         Write-At $pad ($Y + $i) $lines[$i] Yellow
     }
@@ -93,7 +93,7 @@ function Draw-Banner {
 function Get-FloppyDrives {
     $floppies = @()
 
-    # Method 1: WMI Win32_LogicalDisk — look for removable drives with small size or A:/B: letters
+    # Method 1: WMI Win32_LogicalDisk, look for removable drives with small size or A:/B: letters
     try {
         $logicalDisks = Get-CimInstance Win32_LogicalDisk -ErrorAction SilentlyContinue | Where-Object {
             ($_.DeviceID -match '^[AB]:$') -or
@@ -115,7 +115,7 @@ function Get-FloppyDrives {
         }
     } catch {}
 
-    # Method 2: WMI Win32_DiskDrive — look for floppy media type
+    # Method 2: WMI Win32_DiskDrive, look for floppy media type
     try {
         $physFloppy = Get-CimInstance Win32_DiskDrive -ErrorAction SilentlyContinue | Where-Object {
             $_.MediaType -like '*Floppy*'
@@ -198,10 +198,10 @@ function Get-AllWriteTargets {
 function Get-ImageInfo {
     param([string]$Path)
     $info = Get-Item $Path
-    $bytes = [System.IO.File]::ReadAllBytes($Path)
-    $text = [System.Text.Encoding]::ASCII.GetString($bytes)
-    $vMatch = [regex]::Match($text, 'UnoDOS v[\d.]+')
-    $bMatch = [regex]::Match($text, 'Build: \d+')
+    $bytes = [System.IO.File]:ReadAllBytes($Path)
+    $text = [System.Text.Encoding]:ASCII.GetString($bytes)
+    $vMatch = [regex]:Match($text, 'UnoDOS v[\d.]+')
+    $bMatch = [regex]:Match($text, 'Build: \d+')
     return [PSCustomObject]@{
         Path       = $Path
         FileName   = $info.Name
@@ -256,9 +256,9 @@ function Render-ImageList {
         $desc = Get-ImageDescription (Split-Path -Leaf $img.Path)
         $verStr = "$ver $bld".Trim()
 
-        $lineW = [Math]::Min(78, [Console]::WindowWidth - 3)
+        $lineW = [Math]:Min(78, [Console]:WindowWidth - 3)
         # Two-column layout: name+size on left, version+desc on right
-        $descCol = 8 + 20 + 8 + [Math]::Max(26, $verStr.Length + 1)
+        $descCol = 8 + 20 + 8 + [Math]:Max(26, $verStr.Length + 1)
         if ($descCol -gt $lineW - 10) { $descCol = $lineW - 10 }
         if ($i -eq $Sel) {
             Write-At 3 $y (" " * $lineW) Black White
@@ -291,14 +291,14 @@ function Render-DriveList {
         $bus = if ($d.BusType) { "$($d.BusType)".PadRight(8) } else { "?".PadRight(8) }
 
         # Floppy drives: WMI reports filesystem capacity (smaller than raw device),
-        # so skip the too-small check — raw floppy device is always 1.44MB
+        # so skip the too-small check, raw floppy device is always 1.44MB
         $tooSmall = ($d.TargetType -ne "Floppy" -and $d.Size -gt 0 -and $d.Size -lt $ImageSize)
         $isLarge = ($d.Size -gt 256GB)
         $suffix = ""
         if ($tooSmall) { $suffix = "(too small)" }
         elseif ($isLarge) { $suffix = "[!] >256GB" }
 
-        $lineW = [Math]::Min(78, [Console]::WindowWidth - 3)
+        $lineW = [Math]:Min(78, [Console]:WindowWidth - 3)
 
         if ($i -eq $Sel) {
             Write-At 3 $y (" " * $lineW) Black White
@@ -366,14 +366,14 @@ function Render-Buttons {
 
 # ─── Main ────────────────────────────────────────────────────────────────────
 
-$origBG = [Console]::BackgroundColor
-$origFG = [Console]::ForegroundColor
-$origCursorVisible = [Console]::CursorVisible
-[Console]::CursorVisible = $false
+$origBG = [Console]:BackgroundColor
+$origFG = [Console]:ForegroundColor
+$origCursorVisible = [Console]:CursorVisible
+[Console]:CursorVisible = $false
 
 try {
     # ── Screen 1: Startup ────────────────────────────────────────────────────
-    [Console]::Clear()
+    [Console]:Clear()
     $row = Draw-Banner
     $row++
 
@@ -388,7 +388,7 @@ try {
             Write-At 3 $row "ERROR: Image not found: $ImagePath" Red
             $row += 2
             Write-At 3 $row "Press any key to exit..." DarkGray
-            [Console]::ReadKey($true) | Out-Null
+            [Console]:ReadKey($true) | Out-Null
             exit 1
         }
         $ImagePath = (Resolve-Path $ImagePath).Path
@@ -436,7 +436,7 @@ try {
 
             "image" {
                 # ── Screen: Image Selection ──────────────────────────────
-                [Console]::Clear()
+                [Console]:Clear()
                 $row = Draw-Banner
                 $row++
 
@@ -454,7 +454,7 @@ try {
                         Write-At 3 $row "Run 'git pull' to get latest binaries." Yellow
                         $row += 2
                         Write-At 3 $row "Press any key to exit..." DarkGray
-                        [Console]::ReadKey($true) | Out-Null
+                        [Console]:ReadKey($true) | Out-Null
                         exit 1
                     }
                     Write-At 3 $row "Loading image info..." Cyan
@@ -471,7 +471,7 @@ try {
 
                 $screenDone = $false
                 while (-not $screenDone) {
-                    $key = [Console]::ReadKey($true)
+                    $key = [Console]:ReadKey($true)
                     if ($key.Key -eq 'UpArrow' -and $imgSel -gt 0) {
                         $imgSel--
                         Render-ImageList $imageInfos $imgSel $listTop
@@ -486,8 +486,8 @@ try {
                         $screenDone = $true
                     }
                     elseif ($key.Key -eq 'Escape') {
-                        [Console]::Clear()
-                        [Console]::CursorVisible = $origCursorVisible
+                        [Console]:Clear()
+                        [Console]:CursorVisible = $origCursorVisible
                         Write-Host "Exited."
                         exit 0
                     }
@@ -507,9 +507,9 @@ try {
                         }
                         Start-Sleep -Milliseconds 1500
                         # Relaunch script so it picks up any updated code from git
-                        [Console]::CursorVisible = $origCursorVisible
-                        [Console]::ForegroundColor = $origFG
-                        [Console]::BackgroundColor = $origBG
+                        [Console]:CursorVisible = $origCursorVisible
+                        [Console]:ForegroundColor = $origFG
+                        [Console]:BackgroundColor = $origBG
                         & "$scriptDir\write.ps1"
                         exit 0
                     }
@@ -518,11 +518,11 @@ try {
 
             "drive" {
                 # ── Screen: Drive Selection ──────────────────────────────
-                [Console]::Clear()
+                [Console]:Clear()
                 $row = Draw-Banner
                 $row++
 
-                $imageSizeMB = [math]::Round($selectedImage.Size / 1MB, 1)
+                $imageSizeMB = [math]:Round($selectedImage.Size / 1MB, 1)
                 $canGoBack = ($firstScreen -eq "image")
                 $stepNum = if ($canGoBack) { 2 } else { 1 }
                 $stepTotal = if ($canGoBack) { 3 } else { 2 }
@@ -552,8 +552,8 @@ try {
                 Write-At 50 $row "Size" DarkCyan
                 Write-At 61 $row "Bus" DarkCyan
                 $row++
-                $w = [Console]::WindowWidth
-                Write-At 3 $row ("-" * [Math]::Min(74, $w - 6)) DarkGray
+                $w = [Console]:WindowWidth
+                Write-At 3 $row ("-" * [Math]:Min(74, $w - 6)) DarkGray
                 $row++
 
                 $targets = @(Get-AllWriteTargets)
@@ -571,7 +571,7 @@ try {
                     }
                     $noDrivesDone = $false
                     while (-not $noDrivesDone) {
-                        $key = [Console]::ReadKey($true)
+                        $key = [Console]:ReadKey($true)
                         if ($key.Key -eq 'R') {
                             $navScreen = "drive"
                             $noDrivesDone = $true
@@ -581,8 +581,8 @@ try {
                             $noDrivesDone = $true
                         }
                         elseif ($key.Key -eq 'Escape') {
-                            [Console]::Clear()
-                            [Console]::CursorVisible = $origCursorVisible
+                            [Console]:Clear()
+                            [Console]:CursorVisible = $origCursorVisible
                             Write-Host "Exited."
                             exit 0
                         }
@@ -597,7 +597,7 @@ try {
 
                 $screenDone = $false
                 while (-not $screenDone) {
-                    $key = [Console]::ReadKey($true)
+                    $key = [Console]:ReadKey($true)
                     if ($key.Key -eq 'UpArrow' -and $drvSel -gt 0) {
                         $drvSel--
                         Render-DriveList $targets $drvSel $listTop $selectedImage.Size
@@ -608,7 +608,7 @@ try {
                     }
                     elseif ($key.Key -eq 'Enter') {
                         $t = $targets[$drvSel]
-                        # Block if drive too small (skip for floppies — WMI reports FS capacity, not raw)
+                        # Block if drive too small (skip for floppies, WMI reports FS capacity, not raw)
                         if ($t.TargetType -ne "Floppy" -and $t.Size -gt 0 -and $t.Size -lt $selectedImage.Size) {
                             # Flash error, don't proceed
                         } else {
@@ -622,8 +622,8 @@ try {
                         $screenDone = $true
                     }
                     elseif ($key.Key -eq 'Escape') {
-                        [Console]::Clear()
-                        [Console]::CursorVisible = $origCursorVisible
+                        [Console]:Clear()
+                        [Console]:CursorVisible = $origCursorVisible
                         Write-Host "Operation cancelled."
                         exit 0
                     }
@@ -636,11 +636,11 @@ try {
 
             "confirm" {
                 # ── Screen: Confirmation ─────────────────────────────────
-                [Console]::Clear()
+                [Console]:Clear()
                 $row = Draw-Banner
                 $row++
 
-                $imageSizeMB = [math]::Round($selectedImage.Size / 1MB, 1)
+                $imageSizeMB = [math]:Round($selectedImage.Size / 1MB, 1)
                 $canGoBackToDrive = (-not $DriveLetter -and $DiskNumber -lt 0)
 
                 # Step indicator
@@ -710,7 +710,7 @@ try {
 
                 $screenDone = $false
                 while (-not $screenDone) {
-                    $key = [Console]::ReadKey($true)
+                    $key = [Console]:ReadKey($true)
                     if ($key.Key -eq 'LeftArrow' -or $key.Key -eq 'RightArrow') {
                         $btnSel = 1 - $btnSel
                         Render-Buttons $btnSel $btnRow
@@ -723,8 +723,8 @@ try {
                         $screenDone = $true
                     }
                     elseif ($key.Key -eq 'N' -or $key.Key -eq 'Escape') {
-                        [Console]::Clear()
-                        [Console]::CursorVisible = $origCursorVisible
+                        [Console]:Clear()
+                        [Console]:CursorVisible = $origCursorVisible
                         Write-Host "Operation cancelled."
                         exit 0
                     }
@@ -738,9 +738,9 @@ try {
                             $navScreen = "write"
                             $screenDone = $true
                         } else {
-                            # "No" selected — cancel
-                            [Console]::Clear()
-                            [Console]::CursorVisible = $origCursorVisible
+                            # "No" selected, cancel
+                            [Console]:Clear()
+                            [Console]:CursorVisible = $origCursorVisible
                             Write-Host "Operation cancelled."
                             exit 0
                         }
@@ -765,7 +765,7 @@ try {
         $confirmed = $false
         $btn2Done = $false
         while (-not $btn2Done) {
-            $key = [Console]::ReadKey($true)
+            $key = [Console]:ReadKey($true)
             if ($key.Key -eq 'LeftArrow' -or $key.Key -eq 'RightArrow') {
                 $btn2Sel = 1 - $btn2Sel
                 Render-Buttons $btn2Sel $btn2Row
@@ -786,15 +786,15 @@ try {
         }
 
         if (-not $confirmed) {
-            [Console]::Clear()
-            [Console]::CursorVisible = $origCursorVisible
+            [Console]:Clear()
+            [Console]:CursorVisible = $origCursorVisible
             Write-Host "Operation cancelled."
             exit 0
         }
     }
 
     # Set variables needed by write screen
-    $imageSizeMB = [math]::Round($selectedImage.Size / 1MB, 1)
+    $imageSizeMB = [math]:Round($selectedImage.Size / 1MB, 1)
     $targetLabel = if ($selectedTarget.TargetType -eq "Floppy") {
         "$($selectedTarget.Letter): - $($selectedTarget.Name)"
     } else {
@@ -802,7 +802,7 @@ try {
     }
 
     # ── Screen 5: Writing ────────────────────────────────────────────────────
-    [Console]::Clear()
+    [Console]:Clear()
     $row = Draw-Banner
     $row++
 
@@ -826,18 +826,18 @@ try {
         $row++
 
         $barLeft = 5
-        $barWidth = [Math]::Min(50, [Console]::WindowWidth - 20)
+        $barWidth = [Math]:Min(50, [Console]:WindowWidth - 20)
         $barRow = $row
         $row++
         $statusRow = $row
         $row++
 
         try {
-            $stream = [System.IO.File]::Open(
+            $stream = [System.IO.File]:Open(
                 $selectedTarget.WritePath,
-                [System.IO.FileMode]::Open,
-                [System.IO.FileAccess]::Write,
-                [System.IO.FileShare]::None
+                [System.IO.FileMode]:Open,
+                [System.IO.FileAccess]:Write,
+                [System.IO.FileShare]:None
             )
 
             $chunkSize = 1024 * 1024  # 1MB
@@ -848,7 +848,7 @@ try {
 
             while ($bytesWritten -lt $totalBytes) {
                 $remaining = $totalBytes - $bytesWritten
-                $writeSize = [Math]::Min($chunkSize, $remaining)
+                $writeSize = [Math]:Min($chunkSize, $remaining)
                 $stream.Write($imageBytes, $bytesWritten, $writeSize)
                 $bytesWritten += $writeSize
 
@@ -860,9 +860,9 @@ try {
 
                 $elapsed = ((Get-Date) - $startTime).TotalSeconds
                 if ($elapsed -gt 0) {
-                    $speed = [math]::Round($bytesWritten / 1MB / $elapsed, 1)
-                    $mbDone = [math]::Round($bytesWritten / 1MB, 1)
-                    $mbTotal = [math]::Round($totalBytes / 1MB, 1)
+                    $speed = [math]:Round($bytesWritten / 1MB / $elapsed, 1)
+                    $mbDone = [math]:Round($bytesWritten / 1MB, 1)
+                    $mbTotal = [math]:Round($totalBytes / 1MB, 1)
                     Write-At 5 $statusRow "$mbDone / $mbTotal MB   ($speed MB/s)     " DarkGray
                 }
             }
@@ -881,7 +881,7 @@ try {
             Write-At 5 $row $_.Exception.Message Red
             $row += 2
             Write-At 5 $row "Press any key to exit..." DarkGray
-            [Console]::ReadKey($true) | Out-Null
+            [Console]:ReadKey($true) | Out-Null
             exit 1
         }
 
@@ -898,18 +898,18 @@ try {
         $row++
 
         $barLeft = 5
-        $barWidth = [Math]::Min(50, [Console]::WindowWidth - 20)
+        $barWidth = [Math]:Min(50, [Console]:WindowWidth - 20)
         $barRow = $row
         $row++
         $statusRow = $row
         $row++
 
         try {
-            $stream = [System.IO.File]::Open(
+            $stream = [System.IO.File]:Open(
                 $selectedTarget.WritePath,
-                [System.IO.FileMode]::Open,
-                [System.IO.FileAccess]::Write,
-                [System.IO.FileShare]::None
+                [System.IO.FileMode]:Open,
+                [System.IO.FileAccess]:Write,
+                [System.IO.FileShare]:None
             )
 
             $chunkSize = 32 * 1024  # 32KB chunks for floppy (smaller for progress updates)
@@ -920,7 +920,7 @@ try {
 
             while ($bytesWritten -lt $totalBytes) {
                 $remaining = $totalBytes - $bytesWritten
-                $writeSize = [Math]::Min($chunkSize, $remaining)
+                $writeSize = [Math]:Min($chunkSize, $remaining)
                 $stream.Write($imageBytes, $bytesWritten, $writeSize)
                 $bytesWritten += $writeSize
 
@@ -932,9 +932,9 @@ try {
 
                 $elapsed = ((Get-Date) - $startTime).TotalSeconds
                 if ($elapsed -gt 0) {
-                    $speed = [math]::Round($bytesWritten / 1KB / $elapsed, 1)
-                    $mbDone = [math]::Round($bytesWritten / 1KB, 1)
-                    $mbTotal = [math]::Round($totalBytes / 1KB, 1)
+                    $speed = [math]:Round($bytesWritten / 1KB / $elapsed, 1)
+                    $mbDone = [math]:Round($bytesWritten / 1KB, 1)
+                    $mbTotal = [math]:Round($totalBytes / 1KB, 1)
                     Write-At 5 $statusRow "$mbDone / $mbTotal KB   ($speed KB/s)     " DarkGray
                 }
             }
@@ -953,7 +953,7 @@ try {
             Write-At 5 $row $_.Exception.Message Red
             $row += 2
             Write-At 5 $row "Press any key to exit..." DarkGray
-            [Console]::ReadKey($true) | Out-Null
+            [Console]:ReadKey($true) | Out-Null
             exit 1
         }
     }
@@ -963,25 +963,25 @@ try {
         Write-At 5 $row "Verifying..." Cyan
 
         try {
-            $readStream = [System.IO.File]::Open(
+            $readStream = [System.IO.File]:Open(
                 $selectedTarget.WritePath,
-                [System.IO.FileMode]::Open,
-                [System.IO.FileAccess]::Read,
-                [System.IO.FileShare]::ReadWrite
+                [System.IO.FileMode]:Open,
+                [System.IO.FileAccess]:Read,
+                [System.IO.FileShare]:ReadWrite
             )
 
             # Read first 100 sectors (51200 bytes) for floppy, first 1MB for HD
-            $verifySize = if ($selectedTarget.TargetType -eq "Floppy") { 51200 } else { [Math]::Min(1MB, $totalBytes) }
+            $verifySize = if ($selectedTarget.TargetType -eq "Floppy") { 51200 } else { [Math]:Min(1MB, $totalBytes) }
             $readBuffer = New-Object byte[] $verifySize
             $bytesRead = $readStream.Read($readBuffer, 0, $verifySize)
             $readStream.Close()
 
             $differences = 0
-            for ($i = 0; $i -lt [Math]::Min($bytesRead, $verifySize); $i++) {
+            for ($i = 0; $i -lt [Math]:Min($bytesRead, $verifySize); $i++) {
                 if ($readBuffer[$i] -ne $imageBytes[$i]) {
                     $differences++
                     if ($differences -le 5) {
-                        $sector = [Math]::Floor($i / 512)
+                        $sector = [Math]:Floor($i / 512)
                         $offset = $i % 512
                         $row++
                         Write-At 7 $row "Byte $i (sector $sector +$offset): expected 0x$($imageBytes[$i].ToString('X2')), got 0x$($readBuffer[$i].ToString('X2'))" DarkYellow
@@ -1001,7 +1001,7 @@ try {
     }
 
     # ── Success ──────────────────────────────────────────────────────────────
-    $mbWritten = [math]::Round($totalBytes / 1MB, 1)
+    $mbWritten = [math]:Round($totalBytes / 1MB, 1)
     Write-At 3 $row "+========================================+" Green
     $row++
     $successMsg = "     Write Complete! ($mbWritten MB)"
@@ -1038,7 +1038,7 @@ try {
     Write-At 5 $row "Enter = write another   Esc = exit" DarkGray
     $loopBack = $false
     while ($true) {
-        $key = [Console]::ReadKey($true)
+        $key = [Console]:ReadKey($true)
         if ($key.Key -eq 'Escape') { break }
         if ($key.Key -eq 'Enter') { $loopBack = $true; break }
     }
@@ -1053,7 +1053,7 @@ try {
     }  # End outer write loop
 
 } finally {
-    [Console]::CursorVisible = $origCursorVisible
-    [Console]::ForegroundColor = $origFG
-    [Console]::BackgroundColor = $origBG
+    [Console]:CursorVisible = $origCursorVisible
+    [Console]:ForegroundColor = $origFG
+    [Console]:BackgroundColor = $origBG
 }

@@ -1,4 +1,4 @@
-# launch-flash.ps1 — start the flasher DETACHED so it survives the ssh session closing.
+# launch-flash.ps1, start the flasher DETACHED so it survives the ssh session closing.
 param(
   [int]$DiskNumber = 2,
   [string]$Image = "C:\Users\arin\pine-fresh.img"

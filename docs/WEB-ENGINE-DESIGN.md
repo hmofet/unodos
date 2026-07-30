@@ -1,4 +1,4 @@
-# UnoDOS web engine — full HTML/CSS/JS design
+# UnoDOS web engine, full HTML/CSS/JS design
 
 Status: DESIGN (2026-07-27). Nothing here is built. The current browser
 (`pc64/pc64_browser.c` + `pc64/js.c`) stays in production until milestone M5
@@ -65,16 +65,16 @@ Three deliverables, one seam:
    unoweb paints through fb.h + uno_font; images through unomedia (consumed).
 ```
 
-- **`unojs/`** — a standalone ECMAScript engine. Public header `unojs.h` has
+- **`unojs/`**: a standalone ECMAScript engine. Public header `unojs.h` has
   zero web vocabulary: values, objects, functions, evaluation, host objects,
   GC roots, interrupts. It must link and pass its test suite with no unoweb
-  present. (Side benefit: it becomes available to any other consumer — e.g.
-  Studio's console — as a neutral API, without this project owning those uses.)
-- **`unoweb/`** — DOM store, HTML parser, CSS engine, layout, paint. Public
+  present. (Side benefit: it becomes available to any other consumer, e.g.
+  Studio's console, as a neutral API, without this project owning those uses.)
+- **`unoweb/`**: DOM store, HTML parser, CSS engine, layout, paint. Public
   header `unoweb.h` has zero JS vocabulary. It must render a page completely
-  with no JS engine linked (`<script>` contents simply go unexecuted — the
-  NoScript build, which is also the fast path for M2–M4 development).
-- **`webjs.c`** — the glue. Implements the DOM bindings as unojs host objects
+  with no JS engine linked (`<script>` contents simply go unexecuted, the
+  NoScript build, which is also the fast path for M2-M4 development).
+- **`webjs.c`**: the glue. Implements the DOM bindings as unojs host objects
   calling unoweb C functions. Replaceable/deletable without touching either lib.
 
 **Packaging.** The whole engine ships as `APPS/BROWSER.UNO` (the `STUDIO.UNO`
@@ -91,7 +91,7 @@ files `unoweb/*`, `pc64/webjs.c`). The existing "browser" row keeps
 
 ---
 
-## 3. unojs — the JavaScript engine
+## 3. unojs, the JavaScript engine
 
 Replaces `js.c` (577-line tree-walker, statement subset) with a real VM.
 
@@ -122,7 +122,7 @@ source ──lexer──▶ tokens ──parser──▶ AST ──compiler─�
 - **Mark-sweep, non-moving** (embedder-friendly: raw `ujs_val`s in C locals are
   pinned via a handle scope API, `ujs_scope_open/close`, V8-style).
 - Allocation: size-class free lists over 64 KB chunks obtained from the OS
-  `malloc`. Per-VM cap (default 8 MB) — hitting it triggers GC, then a JS
+  `malloc`. Per-VM cap (default 8 MB), hitting it triggers GC, then a JS
   `RangeError`, never OS heap exhaustion.
 - Strings immutable UTF-8, hashed; atoms (interned strings) for property names,
   shared table with the compiler.
@@ -169,20 +169,20 @@ Size estimate: ~13 k LOC C. Host-tested (§15) against a curated test262 subset.
 
 ---
 
-## 4. unoweb — DOM core
+## 4. unoweb, DOM core
 
 - **Node** = 48-byte arena record: type (document/element/text/comment/
   doctype), parent / first-child / last-child / prev / next pointers, and a
   per-type payload pointer. Element payload: interned tag atom, attribute
-  vector, `computed_style*`, `box*`, `ujs wrapper` slot (opaque `void*` — the
+  vector, `computed_style*`, `box*`, `ujs wrapper` slot (opaque `void*`: the
   DOM does not know what a wrapper is; webjs.c uses it).
 - **Arena per document.** Bump allocation; navigation frees the whole arena in
-  O(1). Detached nodes are *not* reclaimed until navigation — bounded by the
+  O(1). Detached nodes are *not* reclaimed until navigation, bounded by the
   arena cap (default 16 MB → OOM error page). This is a deliberate trade:
   no per-node free lists, no dangling-pointer class of bugs. A DOM-churning
   SPA eventually hits the cap and gets the error page; acceptable for this
   browser's mission, and documented in the contract.
-- Atomized tag/attribute/class names — one interner shared by HTML parser, CSS
+- Atomized tag/attribute/class names, one interner shared by HTML parser, CSS
   matcher, and `getElementsByTagName`.
 - Indexes: `id → node` hash maintained on mutation (for `getElementById` and
   `#fragment` scrolling).
@@ -198,7 +198,7 @@ Size estimate: ~13 k LOC C. Host-tested (§15) against a curated test262 subset.
 Spec-shaped, subset-sized. Two stages, both **push/streaming** (bytes arrive
 from the network incrementally):
 
-- **Tokenizer**: the WHATWG state machine's core states — data, tag open/name,
+- **Tokenizer**: the WHATWG state machine's core states, data, tag open/name,
   attributes (all quote states), self-closing, comments (proper `-->` logic),
   doctype (swallowed), RCDATA (`<title>`, `<textarea>`), RAWTEXT (`<style>`),
   script data (with `</script>` detection incl. the escaped states real pages
@@ -208,13 +208,13 @@ from the network incrementally):
   actually requires: implied `<html>/<head>/<body>`; `<p>`/`<li>`/`<dt>`/`<dd>`
   /heading auto-close; table modes with foster-parenting of stray text; a
   simplified active-formatting-elements list (reconstruct `<b>/<i>/<a>` across
-  block boundaries; the full adoption-agency algorithm is NOT implemented —
+  block boundaries; the full adoption-agency algorithm is NOT implemented -
   mis-nested formatting degrades gracefully instead of matching the spec
   tree exactly).
 - **Script handling**: on `</script>`, the builder emits
   `UW_EV_SCRIPT(node, src, len)` through the host-callback table and pauses
   (classic blocking-script semantics). `document.write` during that callback
-  feeds `uw_parser_insert()` — an insertion-point stack splices written text
+  feeds `uw_parser_insert()`: an insertion-point stack splices written text
   into the input stream, spec-style. If no callback is registered (NoScript
   build), the script text is simply dropped and parsing continues.
 - **Fragment mode** (`uw_parse_fragment`) for `innerHTML`.
@@ -269,18 +269,17 @@ Size estimate: ~4.5 k LOC.
   anonymous block boxes wrap stray inline runs (the spec's fixup), list-item
   markers synthesized.
 - Geometry: **int32 device pixels** (fb is integer; `uno_font` measures in
-  int px — no fixed-point until proven needed).
+  int px, no fixed-point until proven needed).
 - **Block formatting**: top-down width resolution (auto/px/%, `box-sizing`),
   bottom-up height; margin collapsing between vertical siblings (the simple
-  adjacent case only — no clearance interaction until M6 floats land).
+  adjacent case only, no clearance interaction until M6 floats land).
 - **Inline formatting**: line boxes built greedily; words measured via
   `uno_font_text_w_styled` (bold/italic/size from computed style); nested
   inline boxes carry border/padding fragments across line breaks;
   `white-space: pre/nowrap` honored; `text-align: left|center|right|justify`
   (justify = inter-word); baseline alignment with `vertical-align` offsets;
   `line-height` per spec (half-leading).
-- **Replaced elements**: `<img>` via **unomedia** (`um_image_open/frame` —
-  decoders already exist and are licensed); intrinsic size from
+- **Replaced elements**: `<img>` via **unomedia** (`um_image_open/frame`: decoders already exist and are licensed); intrinsic size from
   `um_image_info`, scaled by CSS w/h (nearest-neighbor blit v1). `<input>`,
   `<button>`, `<textarea>`, `<select>` are replaced boxes drawn by the engine
   (unoui-look) with focus/editing handled in the app layer (M6).
@@ -299,11 +298,11 @@ Size estimate: ~5 k LOC.
   `CLIP_PUSH/POP`, in paint order (background → borders → children → inline
   content), stacking contexts by tree order until `z-index` lands in M6.
 - The canvas draw replays the list translated by scroll offset, clipped to the
-  viewport — **scrolling never relayouts**, it re-replays. Full-viewport
+  viewport, **scrolling never relayouts**, it re-replays. Full-viewport
   replay per dirty frame (the current app already full-repaints; fb fills and
   glyph blits are cheap at 1280×800).
 - Hit testing walks the same list backwards (topmost first) mapping a point to
-  the owning DOM node — one geometry source for paint and events.
+  the owning DOM node, one geometry source for paint and events.
 - Links: `TEXT_RUN`s carry the nearest `<a>` ancestor for underline/color from
   CSS and for the hit-test → navigation path.
 
@@ -311,7 +310,7 @@ Size estimate: ~1 k LOC.
 
 ---
 
-## 9. The binding layer (`webjs.c`) — the seam
+## 9. The binding layer (`webjs.c`), the seam
 
 The only component that sees both worlds. ~3 k LOC of mechanical glue:
 
@@ -319,16 +318,16 @@ The only component that sees both worlds. ~3 k LOC of mechanical glue:
   `"UnoDOS-pc64"`), `setTimeout/clearTimeout/setInterval`, `alert` (status-bar
   banner), `addEventListener`.
 - `document`: `getElementById`, `querySelector(All)` (delegates to the CSS
-  selector matcher — one selector engine, two consumers), `createElement`,
+  selector matcher, one selector engine, two consumers), `createElement`,
   `createTextNode`, `write` (parser insertion point), `body/head/title`,
   `cookie` (reads `""`, writes ignored, logged).
 - `Element` wrappers created **lazily** on first JS touch, cached in the DOM
   node's wrapper slot, registered as GC roots until the node's document dies
-  (nodes are arena-owned, so wrapper lifetime ≤ document lifetime — no cycles
+  (nodes are arena-owned, so wrapper lifetime ≤ document lifetime, no cycles
   to collect across the boundary). Surface: `innerHTML` (get: serializer;
   set: fragment parse + subtree replace), `textContent`, `className/classList`,
   `style.x` (writes into an inline-declaration block → RESTYLE), `getAttribute/
-  setAttribute`, tree accessors, `offsetWidth/Height` (forces layout flush —
+  setAttribute`, tree accessors, `offsetWidth/Height` (forces layout flush -
   the classic sync-layout point, documented), `addEventListener`.
 - **Events**: capture → target → bubble; `Event` objects with
   `preventDefault/stopPropagation`; wired from unoui input in the app layer.
@@ -348,8 +347,8 @@ The only component that sees both worlds. ~3 k LOC of mechanical glue:
   buffer-the-world `pc64_http_get` remains for small fetches (and the REQUESTS
   file gets a note that it's now a convenience wrapper).
 - **Fetch queue** over `netsock` (NSOCK=12): the document connection plus up
-  to 3 parallel subresource connections (stylesheets first — first layout
-  blocks on pending CSS or a 3 s timeout — then images in viewport order,
+  to 3 parallel subresource connections (stylesheets first, first layout
+  blocks on pending CSS or a 3 s timeout, then images in viewport order,
   lazily as scrolling reveals them).
 - **Constraint (today):** `tls.c` wraps the single legacy TCP slot, so only
   ONE HTTPS stream can be live at a time. v1 rule: HTTPS pages fetch
@@ -360,7 +359,7 @@ The only component that sees both worlds. ~3 k LOC of mechanical glue:
 - `Connection: close` per fetch in v1; keep-alive is a later request for the
   same reason (needs per-socket TLS to matter).
 - Limits: 2 MB HTML, 4 MB per image, 512 KB per stylesheet/script, 16 MB
-  arena, 8 MB JS heap — each overflow degrades (truncate parse / skip
+  arena, 8 MB JS heap, each overflow degrades (truncate parse / skip
   resource / OOM page), never crashes.
 
 ---
@@ -375,7 +374,7 @@ The only component that sees both worlds. ~3 k LOC of mechanical glue:
 
 ---
 
-## 12. Event loop — one frame tick
+## 12. Event loop, one frame tick
 
 Integrated into the unoui frame loop (the browser canvas's tick):
 
@@ -417,21 +416,21 @@ This is a ring-0, no-MMU-protection OS executing untrusted programs (page JS)
 against untrusted data (page bytes). There is no sandbox to hide behind, so
 the design leans on:
 
-1. **Fuel + heap caps** (§3.1, §3.2) — availability: scripts cannot hang the
+1. **Fuel + heap caps** (§3.1, §3.2), availability: scripts cannot hang the
    OS or exhaust the OS heap.
-2. **No ambient authority in the bindings** — webjs.c exposes exactly the DOM
+2. **No ambient authority in the bindings**: webjs.c exposes exactly the DOM
    of *this* document. No file system, no `uno_fs`, no URC, no exec, no raw
    sockets. `fetch()`/XHR are absent in v1 (when added: same-origin only).
-3. **Every length checked** — parser, decoder, and binding code treat all page
+3. **Every length checked**: parser, decoder, and binding code treat all page
    content as adversarial (the existing `REQ_PUT` precedent is the house
    style). Fuzzing the tokenizer/parser on the host build (§15) is a merge
    gate for parser changes.
-4. **unosecure audit hook** — navigation events logged through the existing
+4. **unosecure audit hook**: navigation events logged through the existing
    audit surface (their API, consumed not modified) so network egress from
    the browser is visible.
 
 The honest statement for the contract doc: UnoDOS treats browsing as
-*courtesy, not containment* — a malicious page exploiting an engine bug owns
+*courtesy, not containment*, a malicious page exploiting an engine bug owns
 the machine, exactly like a malicious .UNO app. The mitigations above raise
 the bar; they do not create a security boundary.
 
@@ -451,7 +450,7 @@ Layered, mostly OFF the OS (the `acpipower`/`unomedia` host-test pattern):
   (afl-style file corpus in-repo, minutes not hours).
 - **In-OS**: `pc64_spectest.c` gains S-WEB checks (golden pages on the ESP,
   layout invariants asserted in-engine); `harness.py` grows a `webtest`
-  scenario — boot QEMU + SLIRP, drive the browser to local golden pages served
+  scenario, boot QEMU + SLIRP, drive the browser to local golden pages served
   over `guestfwd`, screenshot-diff. Live-site smoke (google.com redirect
   chain, example.com) stays a manual/documented check since the internet
   isn't deterministic.
@@ -459,7 +458,7 @@ Layered, mostly OFF the OS (the `acpipower`/`unomedia` host-test pattern):
 
 ---
 
-## 16. Milestones — landable slices (AGENTS.md-sized)
+## 16. Milestones, landable slices (AGENTS.md-sized)
 
 Each milestone is one or a few short branches; master stays green throughout;
 the shipping browser is untouched until M4's flag flip.
@@ -467,7 +466,7 @@ the shipping browser is untouched until M4's flag flip.
 | M | Deliverable | Exit criteria |
 |---|---|---|
 | **M1** | `unojs/` engine + host suite; `js_run()` compat shim replaces `js.c` | spectest S-JS green; Script.html demo identical; js.c deleted |
-| **M2** | `unoweb/` DOM + HTML parser (NoScript build) | host golden DOM dumps green; browser renders via a bridge that walks the DOM with the OLD flow painter — screenshots match current pages |
+| **M2** | `unoweb/` DOM + HTML parser (NoScript build) | host golden DOM dumps green; browser renders via a bridge that walks the DOM with the OLD flow painter, screenshots match current pages |
 | **M3** | CSS parse + cascade + block layout + paint list | golden box/display-list dumps; demo pages pixel-compared in QEMU |
 | **M4** | Inline formatting, images (unomedia), links/hit-test; app wired behind `BROWSER_ENGINE=uw` build flag | real article-class pages render; old renderer still default |
 | **M5** | webjs.c bindings, events, timers, innerHTML; **flag flips, old renderer + flow painter deleted** | interactive golden pages; JS-built content visible on live text-first sites |
@@ -475,7 +474,7 @@ the shipping browser is untouched until M4's flag flip.
 | **M7** | progressive render during fetch, style sharing, keep-alive + parallel TLS (if unonet delivered per-socket TLS), perf pass | page-load time targets on ZimaBlade metal |
 
 Rough sizing: unojs ~13 k, unoweb ~14 k, webjs ~3 k, app/net rework ~2 k LOC.
-`BROWSER.UNO` estimated 300–400 KB — well inside the module loader's range
+`BROWSER.UNO` estimated 300-400 KB, well inside the module loader's range
 (PYRT.UNO is 310 KB today).
 
 ---
@@ -491,8 +490,8 @@ Rough sizing: unojs ~13 k, unoweb ~14 k, webjs ~3 k, app/net rework ~2 k LOC.
   error page; a compacting "copy live DOM to fresh arena" GC is sketched as a
   contingency, not planned.
 - **Single-slot TLS** serializes HTTPS subresources until unonet grows
-  per-socket TLS — filed as a request when M4 starts, not blocked on.
+  per-socket TLS, filed as a request when M4 starts, not blocked on.
 - **Font coverage**: no font fallback chain yet for glyphs the bundled TTFs
   lack; boxes render as `uno_font`'s notdef. Acceptable v1.
-- Open: whether `unojs` should also back `unoscript`'s JS tier someday — out
+- Open: whether `unojs` should also back `unoscript`'s JS tier someday, out
   of scope here; the neutral-API split makes it *possible* without deciding it.

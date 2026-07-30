@@ -11,7 +11,7 @@ target, **I** installs, **R** rescans.
 
 | Listing | What happens |
 |---|---|
-| `Volume "..."  ESP (has \EFI)  [keeps data]` | **Non-destructive.** Copies the running system into `\EFI\UNODOS\` on that FAT/ESP volume (BOOTX64.EFI + fonts + docs + the `APPS\*.UNO` app modules), adds a `UnoDOS` UEFI boot entry (NVRAM `Boot####` + `BootOrder`), and — only if the volume has no `\EFI\BOOT\BOOTX64.EFI` already — a removable-media fallback copy. Nothing is deleted; an existing Windows install keeps booting. |
+| `Volume "..."  ESP (has \EFI)  [keeps data]` | **Non-destructive.** Copies the running system into `\EFI\UNODOS\` on that FAT/ESP volume (BOOTX64.EFI + fonts + docs + the `APPS\*.UNO` app modules), adds a `UnoDOS` UEFI boot entry (NVRAM `Boot####` + `BootOrder`), and, only if the volume has no `\EFI\BOOT\BOOTX64.EFI` already, a removable-media fallback copy. Nothing is deleted; an existing Windows install keeps booting. |
 | `Disk ...  [ERASES ALL]` | **Destructive.** Clones the boot USB's GPT + ESP onto that disk, relocates the backup GPT to the disk's real end (CRCs recomputed), and adds the boot entry. The Install button asks twice. |
 
 "Boot UnoDOS by default" prepends the boot entry to `BootOrder`; unticked, it
@@ -28,7 +28,7 @@ non-512-byte-sector or too-small disks are listed but refused.
 3. Open **Install**. Expected list: the Windows ESP as
    `Volume "..." 260 MB ESP (has \EFI) [keeps data]`, Windows' main NTFS
    partition does NOT appear (not FAT), and the internal SSD as
-   `Disk ... fixed [ERASES ALL]` — **do not** pick the disk unless you mean to
+   `Disk ... fixed [ERASES ALL]`: **do not** pick the disk unless you mean to
    wipe Windows.
 4. Select the ESP volume, press **I**. Non-destructive: Windows stays.
 5. Remove the stick, reboot → UnoDOS should come up (it is first in BootOrder).
@@ -66,7 +66,7 @@ refuses a target smaller than the source's used extent + 33 sectors.
 > `[too small]` and refused; the Start-menu index was hardcoded, so after the
 > Network app was dropped the test opened **Music** instead of Install; and the
 > whole-disk confirm gate had grown a type-`ERASE` box that two bare `i` presses
-> no longer satisfy. The committed screenshots show all of it — nobody was
+> no longer satisfy. The committed screenshots show all of it, nobody was
 > looking, because the exit code said pass. Menu positions now come from the
 > shell's own `kAppNames[]`, and the confirm sequence matches
 > `tools/install_confirm_test.py`, which is the spec for that gate.

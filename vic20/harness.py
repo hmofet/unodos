@@ -4,7 +4,7 @@
 Like the C64/Apple II ports, this verifies headlessly: it loads the .prg at
 $1201, jumps straight to `start` ($120D), services the VIC raster ($9004, so the
 kernel's wait_frame advances) and the joystick ports ($9111/$9120, returning
-"nothing pressed" — the AUTOTEST ROMs drive the pad themselves), runs the 6502,
+"nothing pressed", the AUTOTEST ROMs drive the pad themselves), runs the 6502,
 then renders the 22x23 character matrix (screen $1E00 + colour RAM $9600 + the
 char set at $3000 + the $900F background) to a PNG through the VIC palette.
 

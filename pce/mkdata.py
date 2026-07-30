@@ -116,7 +116,7 @@ TUNE=[("E4",Q),("E4",Q),("F4",Q),("G4",Q),("G4",Q),("F4",Q),("E4",Q),("D4",Q),("
 music_song=[(round(PSG_CLK/(32*NOTE_HZ[n]))&0xFFF,d) for n,d in TUNE]
 
 # VCE palette: 9-bit colour, GGG RRR BBB layout (G bits 8-6, R bits 5-3, B bits 2-0)
-# — the real HuC6260 order, verified empirically on Mednafen (gold-standard PCE
+#, the real HuC6260 order, verified empirically on Mednafen (gold-standard PCE
 # emulator): writing colour0=$0007 rendered BLUE and colour1=$01C0 rendered GREEN,
 # so the low field is blue, the high field green. 16-colour palette 0.
 def vce(r,g,b): return (g<<6)|(r<<3)|b      # r,g,b in 0..7

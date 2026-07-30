@@ -1,6 +1,6 @@
-# unosound — the audio subsystem voice/score floor (Phase 9, CONTRACT-ARCH §6)
+# unosound, the audio subsystem voice/score floor (Phase 9, CONTRACT-ARCH §6)
 
-The floor sits at the **voice/note** altitude, not PCM — the §6 "audio-altitude
+The floor sits at the **voice/note** altitude, not PCM, the §6 "audio-altitude
 trap": SID/Paula/DOC/SPC700/PSG are *synthesis* chips, not PCM DACs. A **score** of
 notes is the write-once input (the Tracker song format is byte-identical on every
 port). Chiptune backends realize voices natively; PCM platforms software-synth the

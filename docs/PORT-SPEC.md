@@ -2,7 +2,7 @@
 
 **Purpose:** the platform-independent contract a UnoDOS port must honor.
 Extracted from the x86 reference implementation. Where this file and the
-x86 source disagree, the source wins — report the discrepancy and update
+x86 source disagree, the source wins, report the discrepancy and update
 this file.
 
 Companion references: `docs/API_REFERENCE.md` (per-call semantics) and
@@ -15,31 +15,31 @@ architecture).
 
 - GUI-first: the machine boots directly into a windowed desktop. No shell,
   no DOS layer.
-- Default visual: 320×200, 4 colors — palette index 0 = blue desktop
+- Default visual: 320×200, 4 colors, palette index 0 = blue desktop
   (#0000AA), 1 = cyan (#00AAAA), 2 = magenta (#AA00AA), 3 = white
   (#FFFFFF). Ports with palettes match these RGB values; monochrome ports
   re-theme (white-on-black + dither) but keep metrics.
-- **Palette extension (2026-06-11):** indices 0–3 remain the themed UI
+- **Palette extension (2026-06-11):** indices 0-3 remain the themed UI
   colors (see Theming below); ports may extend the palette to their
   platform maximum for app/game content (x86 VGA: DAC via API 105;
-  Amiga: 5 bitplanes / 32 colors, entries 4–31 fixed game palette,
-  17–19 shared with the cursor sprite; Mac color: direct RGB). UI
+  Amiga: 5 bitplanes / 32 colors, entries 4-31 fixed game palette,
+  17-19 shared with the cursor sprite; Mac color: direct RGB). UI
   chrome must keep using the themed indices so theme presets restyle
   every port identically. Caution: transparent text over a non-zero
-  backdrop ORs color bits — use opaque text on extended-color surfaces.
+  backdrop ORs color bits, use opaque text on extended-color surfaces.
 - **Theming:** every color-capable port ships the same 8 preset
   palettes (Classic VGA, Midnight, Forest, Sunset, Ocean, Slate, Candy,
-  Amber) for UI colors 0–3, plus per-channel custom editing where the
+  Amber) for UI colors 0-3, plus per-channel custom editing where the
   hardware allows (Theme app on 68K, Settings on x86).
 - **Splash:** boot shows a platform-themed "UnoDOS 3" splash (~2 s
   minimum hold) with platform-identity artwork before the desktop.
-- Desktop: menu-bar title row (y 0–11 reserved — drag clamp protects it),
+- Desktop: menu-bar title row (y 0-11 reserved, drag clamp protects it),
   icon grid (80 px column pitch, icons at col·80+32, labels at icon_x−8,
   label width clipped to the cell), version string bottom-left, build
   bottom-right.
 - Default font: 8×8, **advance = 8** (the 12-px advance was a bug; see
   audit). Small font 4×6 (advance = width+2). Title bars render text
-  inverted. Fonts are data — export the glyph tables byte-identical.
+  inverted. Fonts are data, export the glyph tables byte-identical.
 - Mouse cursor: 8×14 arrow, drawn above everything (hardware sprite where
   available; XOR/save-under otherwise).
 
@@ -49,7 +49,7 @@ architecture).
   owner task, x, y, width, height, flags (TITLE=bit0, BORDER=bit1,
   FRAMELESS_FULLSCREEN=bit2), z-order, title (truncated to fit), content
   scale.
-- **Z-order is 0–15, topmost = 15.** Invariants (audit-paid, mandatory):
+- **Z-order is 0-15, topmost = 15.** Invariants (audit-paid, mandatory):
   - Raising a window demotes only windows with z **above** its old z by
     exactly 1; the raised window takes z=15. Never demote below-z windows
     (this leaked z-levels until everything collided at 0).
@@ -66,7 +66,7 @@ architecture).
   free its slot/memory, destroy its windows, **close its file handles**,
   silence audio.
 - Click-to-raise: a press on the title bar OR body of a non-topmost
-  window raises it (z-aware hit test — topmost match wins, not first
+  window raises it (z-aware hit test, topmost match wins, not first
   match). Pressing the topmost window's body is a no-op for the WM.
 
 ## 3. Events & input
@@ -122,15 +122,15 @@ architecture).
   disk interchange) and place position-independent 68K code at 0x50.
 - Syscall ABI: x86 = INT 0x80, function number in AH, args AL/BX/CX/DX/
   SI/DI, CF = error + AX = code. 68K = TRAP #0, function in D0 high byte
-  (or D7 — fix at port time and document), args D1–D4/A0–A1, error in
+  (or D7, fix at port time and document), args D1-D4/A0-A1, error in
   CCR carry + D0. 105 functions; semantics per API_REFERENCE.md.
 
 ## 5. Filesystem
 
 - FAT12, 512-byte sectors, 1 sector/cluster on the boot floppy.
-- x86 1.44 MB floppy layout: boot LBA 0 · stage2 1–4 · kernel 5–108 ·
+- x86 1.44 MB floppy layout: boot LBA 0 · stage2 1-4 · kernel 5-108 ·
   BPB reserved sectors = 110 · FAT at 111 · root dir at 129 (224
-  entries) · data at 143. These constants exist in FIVE places on x86 —
+  entries) · data at 143. These constants exist in FIVE places on x86 -
   ports must define them **once**.
 - All multi-byte on-disk fields are **little-endian**; big-endian ports
   use byte-order accessors at the FS boundary only.
@@ -140,7 +140,7 @@ architecture).
   device reads (huge win on real floppies); bounce-buffer only the
   partial tail.
 
-## 6. Design rules (the audit tax — do not relearn these)
+## 6. Design rules (the audit tax, do not relearn these)
 
 1. Atomic cursor hide+lock (cursor_protect_begin pattern).
 2. ISRs set flags; task context draws. Deferred sync keeps its dirty
@@ -157,7 +157,7 @@ architecture).
    self-exit, close-button, load-time eviction).
 8. Centralize disk geometry; read sector runs, not single sectors.
 9. Keep the API table address/IDs stable; additions append.
-10. Every queue/table is fixed-size — design the "full" behavior
+10. Every queue/table is fixed-size, design the "full" behavior
     explicitly (drop policy, error code) rather than discovering it.
 
 
@@ -170,14 +170,14 @@ architecture).
 | x86 (reference) | `kernel/`, `apps/`, `boot/` | v3.26.0+, 8086-clean |
 | Amiga 68000 | `amiga/` | bare-metal; milestone 3 |
 | Mac System 7 (color) | `mac/` (`UnoDOS7`) | Toolbox-based; milestone 2 |
-| Mac System 1–6 (mono) | `mac/` (`UnoDOSClassic`) | Toolbox-based; milestone 2 |
+| Mac System 1-6 (mono) | `mac/` (`UnoDOSClassic`) | Toolbox-based; milestone 2 |
 | Sega Genesis 68000 | `genesis/` | bare-metal, VDP cell desktop; milestone 1 |
 | Sony PS2 (R5900) | `ps2/` | portable C core over a software FB → GS; milestone 2 |
 | Sega Dreamcast (SH-4) | `dreamcast/` | portable C core over a software FB → DC framebuffer (KallistiOS); milestone 1, host-verified |
-| Apple IIGS (65C816) | `iigs/` | bare-metal Super Hi-Res; full app parity (M0–M3), ROM-free Python-65816 harness |
+| Apple IIGS (65C816) | `iigs/` | bare-metal Super Hi-Res; full app parity (M0-M3), ROM-free Python-65816 harness |
 
 Deviations to reconcile in later milestones: the Mac and Genesis ports
 use a single cooperative event loop (the Amiga has the milestone-3
 scheduler), the Genesis has no storage yet (SRAM saves planned; its
 Notepad F1-save is a no-op) and quantizes windows to 8 px cells, and
-the 68K Notepads cap their edit buffers (2–4 KB) below the x86 app's.
+the 68K Notepads cap their edit buffers (2-4 KB) below the x86 app's.

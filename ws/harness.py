@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """ROM-free Bandai WonderSwan test harness (Unicorn x86-16 / V30MZ core).
 
-The WonderSwan CPU is an NEC V30MZ — an 80186-class x86 — so, exactly like the
+The WonderSwan CPU is an NEC V30MZ, an 80186-class x86, so, exactly like the
 GBA port runs its real ARM ROM on a Unicorn ARM7TDMI and the MacPlus port uses a
 Unicorn 68K, this verifies the port headlessly by running the REAL WonderSwan ROM
 on a Unicorn x86 core in 16-bit real mode. It:
@@ -78,7 +78,7 @@ def main():
 
     def on_in(uc, port, size, ud):
         p = port & 0xFFFF
-        if p == 0x03:                                  # LINE_CUR — toggle across the vblank line (144)
+        if p == 0x03:                                  # LINE_CUR, toggle across the vblank line (144)
             line[0] ^= 1
             return 80 if line[0] else 160
         if p == 0xB5:                                  # KEYPAD: low nibble = selected group's keys

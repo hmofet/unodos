@@ -1,6 +1,6 @@
 # UnoDOS / Bandai WonderSwan (NEC V30MZ)
 
-The **eighth** fresh contract-driven port — and the **first x86 handheld**. The
+The **eighth** fresh contract-driven port, and the **first x86 handheld**. The
 WonderSwan's CPU is an **NEC V30MZ**, an 80186-class x86, i.e. the same
 instruction family as the reference kernel (`kernel/kernel.asm`). So this port is
 written in **nasm** (16-bit real mode) and consumes the Contract's x86 surface
@@ -12,28 +12,28 @@ The WonderSwan is a **hardware tile** machine: 8×8 2bpp planar tiles live in th
 entries (`tile# | palette<<9 | flips`) selects them; the LCD shows the top-left
 **28×18** tiles (224×144). "Drawing" is a single word store into the map. Colour is
 the per-tile **palette** resolving through the mono **shade pool** (ports
-`0x1C-0x1F`), so the Theme app recolours the entire screen by rewriting the pool —
+`0x1C-0x1F`), so the Theme app recolours the entire screen by rewriting the pool -
 no tile data changes. Tile index == ASCII for the font, so the kernel just writes a
 character's code into the map.
 
-## Status — M1 · M2 · M3 all shipped ✅
+## Status, M1 · M2 · M3 all shipped ✅
 
 Verified headlessly on a **Unicorn x86 core** (`ws/harness.py`) running the real
-WonderSwan ROM in 16-bit real mode — exactly as the GBA port is verified on a
+WonderSwan ROM in 16-bit real mode, exactly as the GBA port is verified on a
 Unicorn ARM core and the MacPlus port on a Unicorn 68K. The harness maps the
 cartridge ROM at the top of the 1 MB space so the V30MZ **reset vector `0xFFFF0`**
 lands in it (the genuine JMP-FAR boot path), services the I/O ports the kernel
 touches, and renders the SCR1 tilemap to a PNG. The AUTOTEST ROMs drive the keypad
 through the same input path; nothing is faked (`build/*.png`):
 
-- **M1 — launcher** (`build/desktop.png`): boot, tile/palette upload, the inverted
+- **M1, launcher** (`build/desktop.png`): boot, tile/palette upload, the inverted
   "UnoDOS 3" title bar, an 11-item icon list.
-- **M2 — navigation** (`build/nav.png`): the keypad on port `0xB5` (group-select),
+- **M2, navigation** (`build/nav.png`): the keypad on port `0xB5` (group-select),
   a line-counter-synced (`0x03`) frame loop, an Up/Down selection highlight (the
   selected row inverts), **A** launches the app full-screen / **B** returns.
-- **M3 — apps** (`build/{app,clock,theme,music,dostris}.png`): SysInfo, live Clock
+- **M3, apps** (`build/{app,clock,theme,music,dostris}.png`): SysInfo, live Clock
   (HH:MM:SS off the frame counter), Notepad, Files, Theme (cycles the shade pool),
-  Music (the WonderSwan sound channel), and **Dostris** — the falling-blocks game
+  Music (the WonderSwan sound channel), and **Dostris**: the falling-blocks game
   with a tile well. Tracker / OutLast / Pac-Man / Paint open framed placeholders.
 
 ## Hardware brought up (from scratch)
@@ -46,7 +46,7 @@ through the same input path; nothing is faked (`build/*.png`):
 | Display ctrl | port `0x00` (SCR1 enable), `0x07` (map base), `0x10/0x11` (scroll), `0x14` (LCD on) |
 | Input | keypad port `0xB5`: write a group select (`0x20`=X-pad, `0x40`=buttons), read the low nibble |
 | Timing | the line counter `0x03` (≥144 = vblank) |
-| Audio | sound channel 1 — wavetable at `0x0040`, period `0x80/0x81`, ctrl `0x90/0x91` |
+| Audio | sound channel 1, wavetable at `0x0040`, period `0x80/0x81`, ctrl `0x90/0x91` |
 | RAM | 16 KB internal: vars `0x0100`, stack `→0x2000`, tilemap `0x0800`, tiles `0x2000` |
 | Boot | 64 KB ROM mapped flush to `0xFFFFF`; reset vector `0xFFFF0` = JMP FAR to `start`; 16-byte footer header (mono flag, checksum) |
 
@@ -71,9 +71,9 @@ python ws/harness.py ws/build/unodos.ws ws/build/desktop.png
   reset-path + tile-render pipeline.
 
 ## Toolchain
-- **nasm** (`C:\Users\arin\nasm-tools\…\nasm.exe`) — the same x86 assembler the
+- **nasm** (`C:\Users\arin\nasm-tools\…\nasm.exe`), the same x86 assembler the
   reference `kernel/` uses.
-- **Unicorn** (Python) — the CPU core for the ROM-free headless harness.
+- **Unicorn** (Python), the CPU core for the ROM-free headless harness.
 
 A real WonderSwan (or an accurate emulator such as Mednafen) is the remaining tail:
 the harness models the display registers + keypad + reset path faithfully, but the

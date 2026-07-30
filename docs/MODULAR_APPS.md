@@ -1,21 +1,21 @@
-# UnoDOS shared C core — runtime app modules (Mac / PS2 / Dreamcast)
+# UnoDOS shared C core, runtime app modules (Mac / PS2 / Dreamcast)
 
 The three ports (mac/, ps2/, dreamcast/) share the portable core `unodos.c`.
 This change makes the runtime-app-loading architecture **REAL in the actual
 core**: the app function bodies and the compile-time `switch(proc)` dispatch are
 removed from `unodos.c`; the core now dispatches every window through an
 **AppInterface** vtable populated by a generic **loader**, and the 11 apps are
-separate modules loaded from storage — the C analogue of the C64 port's
+separate modules loaded from storage, the C analogue of the C64 port's
 `kernel_api.inc` + JMP-table contract.
 
-(Earlier this was only a SIDECAR demonstrator — `demo_kernel.c` + 5 apps — that
+(Earlier this was only a SIDECAR demonstrator, `demo_kernel.c` + 5 apps, that
 proved the ABI without touching `unodos.c`.  That is now superseded: the real
 `unodos.c` itself is app-free.  `demo_kernel.c`/`build_modular.sh` remain as the
 original 5-app demonstrator; `build_real.sh` builds the REAL refactored core.)
 
-## ABI (shared verbatim by kernel + every app)  — `uno_app.h`  (identical in all 3 ports)
+## ABI (shared verbatim by kernel + every app), `uno_app.h`  (identical in all 3 ports)
 
-- `KernelApi` — the callbacks an app may invoke: the UnoDOS widget helpers
+- `KernelApi`: the callbacks an app may invoke: the UnoDOS widget helpers
   (`uno_fill`/`uno_box`/`uno_invert`/`text_at`/`text_at_max`/`fill_rgb`),
   formatting (`fmt_u`/`put2`), time (`now_secs`), the window manager
   (`draw_window`/`find_app_window`/`launch_app`/`repaint_all`/`topmost_proc`),
@@ -24,23 +24,23 @@ original 5-app demonstrator; `build_real.sh` builds the REAL refactored core.)
   `start`/`stop` + the game-music engine `gm_start`/`gm_stop`).  Raw
   Toolbox/`mac_compat` primitives (SetRect, MoveTo, RGBForeColor, PaintRect,
   TickCount, NewPtr, File/Sound managers) are ordinary external symbols resolved
-  at load — not duplicated in the struct.
-- `AppInterface` — the per-app vtable the WM dispatches through:
+  at load, not duplicated in the struct.
+- `AppInterface`: the per-app vtable the WM dispatches through:
   `{ draw, key, click, tick, opened, closed, win_title, win_rect[4] }`.
 - Each app module exports one entry: `const AppInterface *uno_app_main(const KernelApi *k)`.
 
-## Loader  — `app_loader.c` (#included by the kernel; contains NO app code)
+## Loader, `app_loader.c` (#included by the kernel; contains NO app code)
 
 `app_loader_init()` (called once from `main()`) fills the `KernelApi` from the
 kernel's own helpers.  `app_iface(proc)` loads on demand: calls the platform
 hook `UnoAppEntry uno_load_module(short proc)`, invokes the returned entry with
 the `KernelApi`, caches the `AppInterface`.  `draw_app_content` / `app_key` /
 `app_click` / `app_opened` / `app_close` / `app_title` / `app_default_rect` (the
-names the WM already calls) dispatch purely through the cached pointers —
+names the WM already calls) dispatch purely through the cached pointers -
 **no `switch` on app identity anywhere in the kernel**.  Per-frame ticks go
 through `tick_all_apps()` → each window's `AppInterface.tick`.
 
-## The 11 app modules  — `apps/*.c`  (shared verbatim across the 3 ports)
+## The 11 app modules, `apps/*.c`  (shared verbatim across the 3 ports)
 
 `sysinfo clock files notepad music dostris outlast pacman tracker paint theme`,
 ids `APP_SYSINFO..APP_THEME` (0..10).  Each `#include "apps/uno_mod.h"` which
@@ -48,7 +48,7 @@ maps the kernel helpers onto the `KernelApi` pointer so the bodies port
 near-verbatim from the old core.  Module-local audio/storage notes:
 - **music/tracker** drive the kernel's single synth channel via the KernelApi
   primitives (Music owns its song sequencer; Tracker plays the row's first
-  active note — the full 4-channel Sound-Manager mix stays a native-build extra).
+  active note, the full 4-channel Sound-Manager mix stays a native-build extra).
 - **dostris/outlast** carry their own game-music note tables and hand the
   pointer to `gm_start()` (the kernel keeps only the pointer + the engine).
 - **files/notepad/tracker/paint** persist over the portable FAT surface
@@ -64,13 +64,13 @@ The same source compiles two ways:
 
 | Platform | Hook file | Storage path | Status |
 |---|---|---|---|
-| pc64 (x86-64 UEFI) | `pc64/pc64_modload.c` | `APPS\<NAME>.UNO` / `EFI\UNODOS\APPS\<NAME>.UNO` on any FAT volume | **REAL & QEMU-VERIFIED end-to-end** — flattened-PE `.UNO` (tools/mkuno.py: rebase table + named `jmp *slot(%rip)` import thunks resolved against the kernel export table); NO app code in the kernel image (build-asserted); loads survive the M3 firmware detach (pre-reserved executable arena + native AHCI). See `pc64/MODULES.md` |
-| Host shim (WSL gcc) | `host_modload.c` | `apps_store/appNN.so` via `dlopen` | **REAL & HOST-RUN-VERIFIED** — genuine runtime load + pointer dispatch of all 11, screenshot-rendered |
-| PS2 (EE) | `ee_modload.c` | `mc0:/UnoDOS/Apps/appNN.uno` via libmc File Mgr | BUILD-WIRED; storage read REAL on hw; EE-overlay relocate = TODO (`UNO_EE_OVERLAY`) — registry links the modules in meanwhile |
-| Dreamcast | `dc_modload.c` | `/cd/UNODOS/APPS/APPNN.KLF` via KOS `library_open`/`elf_load` | **GENUINE runtime load+relocate from CD** — see the DC note below |
+| pc64 (x86-64 UEFI) | `pc64/pc64_modload.c` | `APPS\<NAME>.UNO` / `EFI\UNODOS\APPS\<NAME>.UNO` on any FAT volume | **REAL & QEMU-VERIFIED end-to-end**: flattened-PE `.UNO` (tools/mkuno.py: rebase table + named `jmp *slot(%rip)` import thunks resolved against the kernel export table); NO app code in the kernel image (build-asserted); loads survive the M3 firmware detach (pre-reserved executable arena + native AHCI). See `pc64/MODULES.md` |
+| Host shim (WSL gcc) | `host_modload.c` | `apps_store/appNN.so` via `dlopen` | **REAL & HOST-RUN-VERIFIED**: genuine runtime load + pointer dispatch of all 11, screenshot-rendered |
+| PS2 (EE) | `ee_modload.c` | `mc0:/UnoDOS/Apps/appNN.uno` via libmc File Mgr | BUILD-WIRED; storage read REAL on hw; EE-overlay relocate = TODO (`UNO_EE_OVERLAY`), registry links the modules in meanwhile |
+| Dreamcast | `dc_modload.c` | `/cd/UNODOS/APPS/APPNN.KLF` via KOS `library_open`/`elf_load` | **GENUINE runtime load+relocate from CD**: see the DC note below |
 | Mac | `mac_modload.c` | `APPNN.UNO` on the FAT12 PC volume (or 'CODE' resource) | BUILD-WIRED; storage read REAL via `fat12_read`; CODE-resource PIC relocate needs Retro68 = TODO |
 
-## Dreamcast — genuine CD module loading (`dc_modload.c`)
+## Dreamcast, genuine CD module loading (`dc_modload.c`)
 
 The DC native build does **NOT** link any app into `1ST_READ.BIN`.  Each of the
 11 apps is built as a separate **relocatable-ELF module** `build/app_NN.klf`
@@ -118,7 +118,7 @@ relocated image (`SH4 branch instruction in delay slot` / `SH4 exception when
 blocked`), and Flycast's SH4 interpreter (`Dynarec.Enabled=no`) is far too slow
 to reach an app within a practical headless capture window.  This is an
 emulator/HLE-BIOS constraint on running runtime-relocated code, not a defect in
-the load path — on real hardware (or a full-BIOS run) KOS `library_open`
+the load path, on real hardware (or a full-BIOS run) KOS `library_open`
 modules execute normally.  The mechanism is therefore genuinely implemented and
 verified up to (and including) load+relocate+resolve; the running-app screenshot
 is the only piece blocked by this environment.
@@ -128,7 +128,7 @@ is the only piece blocked by this environment.
 `./build_real.sh` (the REAL core, not the demo) on the host:
 1. **refactors** `unodos.c` from the pristine `tools/unodos_orig_*.c`;
 2. **builds the REAL core** with **zero app code** (`nm build/unodos.o` shows no
-   app symbols — the build FAILS if any leak), `-rdynamic` so modules resolve it;
+   app symbols, the build FAILS if any leak), `-rdynamic` so modules resolve it;
 3. builds **all 11 apps as separate `.so`** modules into `apps_store/` (each
    `nm -D` shows exactly one `uno_app_main`);
 4. runs: the core `dlopen`s each module from storage, dispatches through the
@@ -140,7 +140,7 @@ Flycast (`shots/dc_native_desktop.png`).
 
 ## Deviations / stubbed (honest)
 
-- **PS2/Mac native targets are BUILD-WIRED** — the relocate-and-call overlay
+- **PS2/Mac native targets are BUILD-WIRED**: the relocate-and-call overlay
   (`UNO_EE_OVERLAY`/Mac CODE-resource) is the part that still needs those
   toolchains.  **Dreamcast is the one native target where the relocate-and-call
   is GENUINE** (KOS `elf_load`), with the running-app screenshot blocked only by

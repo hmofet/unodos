@@ -1,4 +1,4 @@
-# run.ps1 — launch the GBA ROM in mGBA and capture the framebuffer.
+# run.ps1, launch the GBA ROM in mGBA and capture the framebuffer.
 #
 # mGBA renders through a surface a GDI/PrintWindow grab may read as black; if so
 # we fall back to mGBA's own screenshot. We grab the window with the focus-
@@ -36,5 +36,5 @@ using System;using System.Runtime.InteropServices;
 public class Fg { [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h); }
 "@
 $p = Get-Process mGBA | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
-if ($p) { [Fg]::SetForegroundWindow($p.MainWindowHandle) | Out-Null; Start-Sleep -Milliseconds 1500 }
+if ($p) { [Fg]:SetForegroundWindow($p.MainWindowHandle) | Out-Null; Start-Sleep -Milliseconds 1500 }
 & powershell -ExecutionPolicy Bypass -File $capture -Out $outPath -Window mGBA

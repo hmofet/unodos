@@ -1,11 +1,11 @@
-# UnoDOS pc64 — Behavioral Specification (SPEC)
+# UnoDOS pc64, Behavioral Specification (SPEC)
 
 This document is the testable behavioral contract for the pc64 port (UEFI
 x86-64) plus the shared `../unoui` toolkit. It drives two consumers:
 
-- **Runtime asserts** — contracts tagged `[assert]` name the code site that
+- **Runtime asserts**: contracts tagged `[assert]` name the code site that
   should enforce them (`uno_dbg_panic`/`uno_dbg_note` in debug builds).
-- **SPECTEST** — a boot-runnable conformance test that executes every
+- **SPECTEST**: a boot-runnable conformance test that executes every
   contract tagged `[auto]` on bare metal and writes one line per contract,
   `S-XXX-NN PASS` / `S-XXX-NN FAIL <detail>`, to `CRASH\<MACHINE>\SPECTEST.TXT`
   (same SMBIOS machine-tag folder the debug harness uses).
@@ -14,9 +14,9 @@ x86-64) plus the shared `../unoui` toolkit. It drives two consumers:
 contracts keep their number with a `RETIRED` note rather than being reused.
 
 **Tags** (exactly one per contract):
-- `[auto]` — verifiable by an in-OS self-test with no human present.
-- `[assert]` — best enforced as a runtime assert at a named code site.
-- `[manual]` — needs a human or specific physical hardware (looks/sounds
+- `[auto]`: verifiable by an in-OS self-test with no human present.
+- `[assert]`: best enforced as a runtime assert at a named code site.
+- `[manual]`: needs a human or specific physical hardware (looks/sounds
   right, real link partner, real panel).
 
 **Language**: MUST / NEVER statements only. `check:` lines are hints for the
@@ -30,17 +30,17 @@ BROWSER, JS, STUDIO, PHOTOS, PAINT, GAME, INST, MAC, PY, LIBC.
 
 ---
 
-## S-FAT — native FAT16/32 driver (`fat.c`)
+## S-FAT, native FAT16/32 driver (`fat.c`)
 
 - **S-FAT-01** [auto] `uno_fat_init()` MUST be idempotent: a second call
   MUST NOT rescan disks or change `uno_fat_volumes()`.
   check: call twice, compare volume count and serials.
 - **S-FAT-02** [auto] `mount_at` MUST reject a BPB whose bytes-per-sector is
   not 512, whose sectors-per-cluster is 0, whose FAT count is 0, or whose
-  sector lacks the 0x55AA signature — the volume MUST NOT appear in the table.
+  sector lacks the 0x55AA signature, the volume MUST NOT appear in the table.
   check: RAM-backed fake bdev with each corruption; expect volume count 0.
 - **S-FAT-03** [auto] `mount_at` MUST reject a crafted BPB whose TotalSectors
-  is ≤ the metadata span (reserved + FATs + root) — the unsigned underflow to
+  is ≤ the metadata span (reserved + FATs + root), the unsigned underflow to
   ~4G clusters MUST NOT occur (`fat.c` guard at the `tot <= meta` check).
 - **S-FAT-04** [auto] `mount_at` MUST reject volumes classifying as FAT12
   (non-FAT32 with < 4085 clusters) and volumes with > 0x0FFFFFF6 clusters.
@@ -69,13 +69,13 @@ BROWSER, JS, STUDIO, PHOTOS, PAINT, GAME, INST, MAC, PY, LIBC.
 - **S-FAT-12** [auto] `uno_fat_write` MUST make the file durable before
   returning 1: it ends with `cache_sync()` + `cache_drop()`, so a read-back
   through a fresh cache (or another consumer) sees exactly `len` bytes equal
-  to the input. check: write N random bytes, read back, memcmp — the
+  to the input. check: write N random bytes, read back, memcmp, the
   canonical FAT round-trip test, run for len ∈ {0, 1, 511, 512, 513, one
   cluster, cluster+1, ~1 MB}.
 - **S-FAT-13** [auto] Overwriting an existing file MUST free the old cluster
-  chain (FAT entries return to 0) and reuse the directory entry — repeated
+  chain (FAT entries return to 0) and reuse the directory entry, repeated
   overwrite of one path MUST NOT leak clusters.
-  check: write/overwrite 100×, then count free FAT entries — stable.
+  check: write/overwrite 100×, then count free FAT entries, stable.
 - **S-FAT-14** [auto] On allocation failure mid-write (disk full),
   `uno_fat_write` MUST return 0 and free the partial chain it built.
 - **S-FAT-15** [assert] A freshly created directory entry MUST be marked
@@ -98,20 +98,20 @@ BROWSER, JS, STUDIO, PHOTOS, PAINT, GAME, INST, MAC, PY, LIBC.
 - **S-FAT-19** [auto] Any write, delete, rename, or remount MUST invalidate
   the sequential-read cursor (`uno_fat_seq_flush`); a stale cursor MUST NEVER
   serve bytes from a moved chain. check: stream half a file, overwrite it,
-  continue streaming — bytes must match the NEW content.
+  continue streaming, bytes must match the NEW content.
 - **S-FAT-20** [auto] `pack83` MUST uppercase names, pad to 8+3, and reject a
   name whose packed first byte is a space; path walking accepts both `\` and
   `/` separators and skips leading separators.
-  NOTE: current code may violate the intent for over-length components —
+  NOTE: current code may violate the intent for over-length components -
   `fat.c pack83` silently truncates >8-char stems / >3-char extensions, so
   "LONGNAME1.TXT" and "LONGNAME2.TXT" alias to the same 8.3 entry; intended
   behavior is to reject over-length components.
 - **S-FAT-21** [auto] `uno_fat_delete` MUST return 1 only when the entry
-  existed; it marks the entry 0xE5, frees the full chain, and syncs — a
+  existed; it marks the entry 0xE5, frees the full chain, and syncs, a
   subsequent `uno_fat_size` of that path MUST return -1.
 - **S-FAT-22** [auto] `uno_fat_mkdir` MUST fail (return 0, touch nothing
   visible) when the entry already exists, when the parent is missing, or on
-  disk-full — the disk-full path MUST un-create the just-allocated slot.
+  disk-full, the disk-full path MUST un-create the just-allocated slot.
   On success the new directory MUST contain valid "." (self) and ".."
   entries, with ".." cluster 0 when the parent is the root (FAT spec).
 - **S-FAT-23** [auto] `uno_fat_rename` MUST reject a `newname` containing a
@@ -138,29 +138,29 @@ BROWSER, JS, STUDIO, PHOTOS, PAINT, GAME, INST, MAC, PY, LIBC.
 - **S-FAT-28** [auto] Overwriting an existing file MUST NOT lose the old
   contents when the disk fills: the directory entry must reference either the
   complete old chain or the complete new chain, never freed clusters.
-  NOTE: current code may violate this — `fat.c uno_fat_write` frees the old
+  NOTE: current code may violate this, `fat.c uno_fat_write` frees the old
   chain BEFORE allocating the new one; on ENOSPC it returns 0 with the entry
   still pointing at now-free clusters (dangling chain, stale size). Intended:
   allocate+write new chain first, then swap and free.
 - **S-FAT-29** [auto] `uno_fat_write` and `uno_fat_delete` MUST refuse a path
   that resolves to a DIRECTORY entry (attr 0x10).
-  NOTE: current code may violate this — `uno_fat_write` performs no attribute
+  NOTE: current code may violate this, `uno_fat_write` performs no attribute
   check after `dir_find`, so writing a file over a subdirectory name frees the
   directory's own cluster chain and rewrites the entry as a file (silent
   directory destruction).
 - **S-FAT-30** [auto] Writing into a full FAT16 SUBDIRECTORY MUST grow its
   cluster chain (only the FAT16 fixed root is legitimately un-growable).
-  NOTE: current code may violate this — `fat.c dir_alloc_slot` gates the
+  NOTE: current code may violate this, `fat.c dir_alloc_slot` gates the
   grow branch on `v->fat32`, so full FAT16 subdirs fail creation.
 - **S-FAT-31** [auto] Volume metadata addressing MUST either use 64-bit LBAs
   or refuse to mount a partition whose data region extends past 2^32 sectors.
-  NOTE: current code may violate this — `fat_start`/`data_start`/`clus_lba`
+  NOTE: current code may violate this, `fat_start`/`data_start`/`clus_lba`
   are computed in `uint32_t` from `(uint32_t)start`, mis-addressing volumes
   beyond 2 TiB; the `data_start >= dev->sectors` sanity check compares the
   truncated value.
 - **S-FAT-32** [auto] A transient sector-read failure while walking a chain
   MUST surface as an error/short-read, NEVER as a clean end-of-chain.
-  NOTE: current code may violate this — `fat.c fat_get` returns the EOC
+  NOTE: current code may violate this, `fat.c fat_get` returns the EOC
   sentinel when `cache_get` fails, so an IO error silently truncates the file.
 - **S-FAT-33** [auto] A FAT entry pointing outside [2, clusters+2) that is
   not an EOC value MUST terminate the walk (treated as corruption), not
@@ -172,7 +172,7 @@ BROWSER, JS, STUDIO, PHOTOS, PAINT, GAME, INST, MAC, PY, LIBC.
   false-match; paths that long do not occur with 8.3 components but the
   compare should still be exact.
 
-## S-BLK — block-device layer (`blkdev.c`, `ahci.c`, `nvme.c`, `sdhci.c`)
+## S-BLK, block-device layer (`blkdev.c`, `ahci.c`, `nvme.c`, `sdhci.c`)
 
 - **S-BLK-01** [assert] The device registry MUST NEVER exceed MAXBLK (12);
   `uno_blk_register` returns 0 when full. site: `blkdev.c uno_blk_register`.
@@ -181,7 +181,7 @@ BROWSER, JS, STUDIO, PHOTOS, PAINT, GAME, INST, MAC, PY, LIBC.
   non-NULL `read`.
 - **S-BLK-03** [auto] While firmware-attached, `uno_blk_init` MUST NOT bring
   up native AHCI/NVMe/SDHCI (the firmware owns the controllers; reprogramming
-  them corrupts firmware Block IO mid-write) — attached storage goes through
+  them corrupts firmware Block IO mid-write), attached storage goes through
   `fw_scan` wrappers only (exception: `UNO_SDHCI_TEST` QEMU builds).
 - **S-BLK-04** [auto] `fw_scan` MUST wrap only whole-disk handles
   (`LogicalPartition == 0`), present media, BlockSize 512, and MUST skip any
@@ -196,12 +196,12 @@ BROWSER, JS, STUDIO, PHOTOS, PAINT, GAME, INST, MAC, PY, LIBC.
   end-node).
 - **S-BLK-08** [manual] Native AHCI/NVMe/SDHCI reads of a sector written
   pre-detach through firmware Block IO MUST return identical bytes
-  (same-disk transport equivalence) — verified on metal via the detach
+  (same-disk transport equivalence), verified on metal via the detach
   storage round-trip.
 
 - **S-BLK-09** [auto] AHCI MUST bind by PCI class 01/06 via BAR5, run
   single-slot polled commands (PxIE=0, PRDTL=1), transfer at most
-  CHUNK_SECT (128) sectors per command, and bound every wait by SPIN_MAX —
+  CHUNK_SECT (128) sectors per command, and bound every wait by SPIN_MAX -
   a dead port MUST fail the probe, never hang boot.
 - **S-BLK-10** [auto] AHCI port bring-up MUST require device-present
   (PxSSTS.DET==3) and a SATA-disk signature (PxSIG==0x00000101, no ATAPI);
@@ -209,12 +209,12 @@ BROWSER, JS, STUDIO, PHOTOS, PAINT, GAME, INST, MAC, PY, LIBC.
   caller.
 - **S-BLK-11** [manual] A write acknowledged by the storage stack MUST be
   durable across power-off once `uno_fat_sync` has run.
-  NOTE: current code may violate this — neither `ahci.c` (no FLUSH CACHE
+  NOTE: current code may violate this, neither `ahci.c` (no FLUSH CACHE
   0xE7) nor `nvme.c` (no Flush opcode 0x00) issues a drive cache flush after
   writes, so a volatile write cache can lose synced telemetry on power cut.
 - **S-BLK-12** [assert] AHCI SHOULD set FRE and wait for PxCMD.FR before
   setting ST (spec ordering). NOTE: current `ahci.c` sets SUD|POD|FRE then
-  ST immediately — tolerated polled, latent on slow HBAs.
+  ST immediately, tolerated polled, latent on slow HBAs.
 - **S-BLK-13** [auto] NVMe MUST bind by PCI class 01/08, use one admin + one
   I/O queue pair (QDEPTH 16) with correct CQE phase tracking, honour the
   doorbell stride from CAP.DSTRD, and register only 512-byte-LBA namespaces
@@ -224,7 +224,7 @@ BROWSER, JS, STUDIO, PHOTOS, PAINT, GAME, INST, MAC, PY, LIBC.
   are page-aligned continuations; transfer size MUST respect MDTS.
 - **S-BLK-15** [assert] An NVMe command timeout MUST NOT leave the
   submission queue desynchronized. NOTE: current `nvme.c` returns 0 on
-  timeout with the SQ tail/doorbell already advanced and no reset path —
+  timeout with the SQ tail/doorbell already advanced and no reset path -
   subsequent commands mismatch phase. site: `nvme.c` completion wait.
 - **S-BLK-16** [assert] The NVMe Set-Features (Number of Queues) result MUST
   be checked before creating the I/O queues. NOTE: current code ignores the
@@ -236,7 +236,7 @@ BROWSER, JS, STUDIO, PHOTOS, PAINT, GAME, INST, MAC, PY, LIBC.
   byte-addressed cards.
 - **S-BLK-18** [auto] SDHCI byte-addressed argument math MUST NOT truncate:
   `lba*512` computed in 64-bit for any card the driver accepts.
-  NOTE: current `sdhci.c` computes `(uint32_t)(lba*SECT)` — wraps past 4 GB
+  NOTE: current `sdhci.c` computes `(uint32_t)(lba*SECT)`: wraps past 4 GB
   on byte-addressed media.
 - **S-BLK-19** [auto] All three native drivers MUST be idempotent
   (`*_init` re-callable; `sdhci` re-registers the live medium on the M3
@@ -247,7 +247,7 @@ BROWSER, JS, STUDIO, PHOTOS, PAINT, GAME, INST, MAC, PY, LIBC.
   a natively-claimed disk (masked downstream by the FAT-serial dedup in
   `pc64_fs.c`).
 
-## S-FS — unified filesystem facade (`pc64_fs.c`)
+## S-FS, unified filesystem facade (`pc64_fs.c`)
 
 - **S-FS-01** [auto] Volume 0 MUST always exist and be the RAM disk
   (`uno_fs_volumes() >= 1`, `uno_fs_kind(0) == 0`).
@@ -269,17 +269,17 @@ BROWSER, JS, STUDIO, PHOTOS, PAINT, GAME, INST, MAC, PY, LIBC.
 
 - **S-FS-07** [auto] A FAT volume reachable both natively and through
   firmware SFS MUST appear once. NOTE: current `pc64_fs.c` dedups by BPB
-  serial and skips the check when the serial is 0 — a zero-volume-id disk
+  serial and skips the check when the serial is 0, a zero-volume-id disk
   lists twice; intended: fall back to a secondary key (label + size).
 - **S-FS-08** [auto] After detach, stale firmware-SFS volumes MUST answer
   -1/0 on every call (`fw_dead` guard), including the cached listing.
   NOTE: `uno_fs_list_get` serves the pre-detach snapshot cache without a
-  `fw_dead` check until remap — reads-after-detach see a stale listing.
+  `fw_dead` check until remap, reads-after-detach see a stale listing.
 - **S-FS-09** [auto] `uno_fs_list_begin` MUST report truncation somehow
   detectable by the caller (count > cache capacity). NOTE: current code
   silently caps the snapshot at 64 names of ≤12 chars.
 
-## S-FB — software framebuffer (`fb.c`, `fb.h`)
+## S-FB, software framebuffer (`fb.c`, `fb.h`)
 
 - **S-FB-01** [auto] Every drawing primitive MUST clip to the intersection of
   the active clip window and the screen: for any (x,y,w,h) including
@@ -319,7 +319,7 @@ BROWSER, JS, STUDIO, PHOTOS, PAINT, GAME, INST, MAC, PY, LIBC.
   through `provider->text` when non-NULL else the per-glyph loop, and
   measurement (`text_w`) MUST match what `text`/`glyph` advances.
 - **S-FB-12** [auto] `fb_set_font(NULL)` MUST restore the built-in bitmap
-  font (provider deregistration is total — draw, measure, and height all
+  font (provider deregistration is total, draw, measure, and height all
   fall back together).
 - **S-FB-13** [auto] `fb_width()`/`fb_height()` MUST equal the current
   runtime desktop size (`uno_fb_w`/`uno_fb_h`) and never exceed
@@ -328,10 +328,10 @@ BROWSER, JS, STUDIO, PHOTOS, PAINT, GAME, INST, MAC, PY, LIBC.
   each font pixel as a scale×scale block through the clipped
   `fb_fill_rect` path (it never touches the TTF provider).
 
-## S-NET — TCP/IP core (`net.c`, `net.h`)
+## S-NET, TCP/IP core (`net.c`, `net.h`)
 
 - **S-NET-01** [auto] `net_init` MUST fully reset stack state: ARP cache,
-  UDP queues, the TCP block, DHCP state, and ticks — a re-init after a NIC
+  UDP queues, the TCP block, DHCP state, and ticks, a re-init after a NIC
   swap MUST NOT leak connections or cached MACs.
 - **S-NET-02** [auto] With no NIC (`g_nic == NULL`), `net_poll` and
   `net_link` MUST be safe no-ops (link reports 0).
@@ -355,7 +355,7 @@ BROWSER, JS, STUDIO, PHOTOS, PAINT, GAME, INST, MAC, PY, LIBC.
   echoed (truncated to 64 bytes) and a correct checksum; `net_ping` /
   `net_ping_replied` MUST match on the 0x4944 id, and a ping sent before ARP
   resolution MUST auto-retry from `net_poll` once ARP answers.
-  NOTE: current code may violate memory-safety intent — `net.c net_ping`
+  NOTE: current code may violate memory-safety intent, `net.c net_ping`
   stores the caller's `ip` POINTER in `g_ping_dst` for the retry; a caller
   passing a stack buffer that dies before ARP resolves makes the deferred
   retry read freed stack. Intended: copy the 4 bytes.
@@ -380,7 +380,7 @@ BROWSER, JS, STUDIO, PHOTOS, PAINT, GAME, INST, MAC, PY, LIBC.
   (`tcp_tick` seq arithmetic must leave snd_nxt unchanged).
   check: loopback NIC that drops the first transmission.
 - **S-NET-15** [auto] In-order data MUST be appended to the rxq (8192 B) and
-  only the bytes actually stored ACKed — `rcv_nxt` MUST never advance past
+  only the bytes actually stored ACKed, `rcv_nxt` MUST never advance past
   the queue cut, so a truncated tail is recovered from the peer's retransmit
   (partial-overlap segments are trimmed at rcv_nxt). `net_tcp_recv` MUST
   drain FIFO with partial reads preserved (memmove of the remainder).
@@ -393,7 +393,7 @@ BROWSER, JS, STUDIO, PHOTOS, PAINT, GAME, INST, MAC, PY, LIBC.
   fixed xid 0x554E4F21, sending via broadcast Ethernet + 0.0.0.0 source
   (never via ARP), and on ACK MUST install yiaddr, option 3 (gw) and option
   6 (dns).
-  NOTE: current code may violate liveness intent — there is NO
+  NOTE: current code may violate liveness intent, there is NO
   retransmit/timeout for a lost DISCOVER/OFFER/REQUEST (`net.c` has no dhcp
   timer), so one dropped packet stalls `net_dhcp_done()` forever. Intended:
   periodic re-DISCOVER while unbound.
@@ -427,19 +427,19 @@ BROWSER, JS, STUDIO, PHOTOS, PAINT, GAME, INST, MAC, PY, LIBC.
   clobber slot 0. NOTE: current code retransmits forever with no backoff,
   and a full ARP cache always evicts entry 0.
 - **S-NET-26** [auto] `net_tcp_connect`'s return value MUST be meaningful or
-  documented as always-0 — callers checking `< 0` (e.g. `pc64_http.c`) are
+  documented as always-0, callers checking `< 0` (e.g. `pc64_http.c`) are
   dead code today; connection failure is only observable via state timeout.
 - **S-NET-30** [auto, live] With a bound NIC and link up, a DHCP lease MUST
   bind, and one plain-TCP round-trip (a DNS query for example.com over TCP,
   RFC 7766 framing, to the lease's resolver or gateway on :53) MUST complete
   connect → send → recv → close against the real peer. SKIP (named reason)
   when no NIC binds or the link is down; a live link that cannot lease is a
-  FAIL carrying the tx/rx/arp/ip frame counters — the AX88179 failure class.
+  FAIL carrying the tx/rx/arp/ip frame counters, the AX88179 failure class.
   (This is the boot-time S-NIC-12 chain on whatever NIC is present. The old
   netstub line called it "S-NET-20", which collides with the RX-drain
-  contract above — renumbered to 30.)
+  contract above, renumbered to 30.)
 
-## S-MOD — .UNO module loader (`pc64_modload.c`, `app_loader.c`)
+## S-MOD, .UNO module loader (`pc64_modload.c`, `app_loader.c`)
 
 - **S-MOD-01** [auto] A module MUST be refused whole (entry pointer NULL, no
   partial link) when ANY of: file shorter than the 48-byte header, size ≥
@@ -467,14 +467,14 @@ BROWSER, JS, STUDIO, PHOTOS, PAINT, GAME, INST, MAC, PY, LIBC.
   refused by `uno_mod_load_uui`, a non-PY module refused by
   `uno_mod_load_pyrt`, and a user app (Studio build-run) MUST be classic
   tier only.
-  NOTE: current code may violate the resource intent on these refusals —
+  NOTE: current code may violate the resource intent on these refusals -
   `pc64_modload.c mod_load` / `uno_mod_load_uui` / `uno_mod_load_pyrt`
   return 0 AFTER a successful `mod_instantiate` without freeing the
   instantiated pages (leak per refused load). Intended: free on refusal.
 - **S-MOD-08** [auto] Module pages MUST be allocated as EfiLoaderCode while
   attached (executable under firmware NX policy); once detached, loads MUST
   come from the pre-reserved 4 MB arena and MUST fail cleanly (NULL) when
-  the arena is exhausted — never fall back to non-executable heap.
+  the arena is exhausted, never fall back to non-executable heap.
 - **S-MOD-09** [auto] `uno_modload_reserve` MUST be called before
   ExitBootServices so the arena + 512 KB user slot exist post-detach;
   detached user-app loads MUST land in the SAME fixed slot every rebuild
@@ -488,7 +488,7 @@ BROWSER, JS, STUDIO, PHOTOS, PAINT, GAME, INST, MAC, PY, LIBC.
   flag, size, CRC over file_size) before its payload pointer is handed to
   PYRT; the payload pointer is transient (valid only until the next
   modload/gModBuf use).
-  NOTE: current code may violate the size check — `pc64_modload.c
+  NOTE: current code may violate the size check, `pc64_modload.c
   uno_mod_load_pyapp` computes `(long)sizeof *h + h->file_size > n` where
   `long` is 32-bit, so file_size ≈ 0xFFFFFFFF wraps and passes, then
   `mod_crc32(..., (long)file_size)` runs with a negative length (loop skipped)
@@ -503,7 +503,7 @@ BROWSER, JS, STUDIO, PHOTOS, PAINT, GAME, INST, MAC, PY, LIBC.
   allocation is ever physically reclaimed (documented arena semantics), and
   fixed-slot loads stay resident by design.
 
-## S-BOOT — boot, present path, detach (`uefi_main.c`)
+## S-BOOT, boot, present path, detach (`uefi_main.c`)
 
 - **S-BOOT-01** [auto] `efi_main` MUST disable the firmware watchdog
   (`SetWatchdogTimer(0,...)`) and install the debug early hooks
@@ -555,7 +555,7 @@ BROWSER, JS, STUDIO, PHOTOS, PAINT, GAME, INST, MAC, PY, LIBC.
   calibration happens over a 50 ms Stall during init.
 - **S-BOOT-13** [manual] Detach MUST NOT strand the volume the system
   actually booted from.
-  NOTE: current code may violate this (METAL-FINDINGS F8) —
+  NOTE: current code may violate this (METAL-FINDINGS F8) -
   `try_detach` gates on `uno_fat_native_eligible()` ("some UnoDOS volume is
   natively reachable"), not "the BOOT volume survives"; a USB-booted system
   with UnoDOS also on the internal disk detaches away its own boot volume.
@@ -563,7 +563,7 @@ BROWSER, JS, STUDIO, PHOTOS, PAINT, GAME, INST, MAC, PY, LIBC.
   armed: `uno_dbg_on_detach()` when detached (own IDT + LAPIC), else
   `uno_dbg_watchdog_start()` (firmware timer event).
 
-## S-DBG — debug harness (`uno_debug.c`, `uno_debug.h`)
+## S-DBG, debug harness (`uno_debug.c`, `uno_debug.h`)
 
 - **S-DBG-01** [auto] The RAM stash MUST carry magic 'UDBG' + version 1 in
   a 64 KB block claimed at a fixed physical address ({0x01F00000,
@@ -600,7 +600,7 @@ BROWSER, JS, STUDIO, PHOTOS, PAINT, GAME, INST, MAC, PY, LIBC.
 - **S-DBG-09** [auto] The watchdog MUST fire when the main-loop heartbeat
   is >20 s stale, checked every 2 s attached (firmware timer event) /
   ~1 s detached (LAPIC); `uno_dbg_heartbeat()` once per shell frame is the
-  ONLY reset. On fire it writes an HG report — to disk only when detached
+  ONLY reset. On fire it writes an HG report, to disk only when detached
   (attached timer TPL cannot touch Block IO: stash + reset instead).
 - **S-DBG-10** [auto] `uno_dbg_net_trace` MUST feed the watchdog heartbeat
   (WiFi bring-up legitimately blocks >20 s; a watchdog reset mid-join would
@@ -630,7 +630,7 @@ BROWSER, JS, STUDIO, PHOTOS, PAINT, GAME, INST, MAC, PY, LIBC.
   scan for the first unused number.
 - **S-DBG-17** [auto] `uno_dbg_force(k)` MUST produce the matching report
   family end-to-end (0 #PF -> CR, 1 #UD -> CR/UBSAN, 2 #DE -> CR, 3 stack
-  smash -> PN, 4 hang -> HG, 5 panic -> PN) followed by reset — this is
+  smash -> PN, 4 hang -> HG, 5 panic -> PN) followed by reset, this is
   SPECTEST's own meta-test of the harness.
 - **S-DBG-18** [auto] OOM injection (`uno_dbg_oom_every=N`) MUST make every
   Nth malloc return NULL without crashing the shell (paired with the
@@ -644,18 +644,18 @@ BROWSER, JS, STUDIO, PHOTOS, PAINT, GAME, INST, MAC, PY, LIBC.
   rescan storage on every log line.
 - **S-DBG-21** [manual] The watchdog MUST allow slow first paints: arming
   seeds one heartbeat (20 s grace).
-  NOTE: possible violation (METAL-FINDINGS F9) — on a machine with ~250 ms
+  NOTE: possible violation (METAL-FINDINGS F9), on a machine with ~250 ms
   present the first shell heartbeat can land >20 s after arming, producing
   a spurious HG + reset loop.
 - **S-DBG-22** [auto] Boot-loop protection: `uno_dbg_crash_count()` MUST
   reflect the report files present at boot, and consumers (stress) damp
   behavior at >=8.
 
-## S-STRESS — stress driver (`pc64_stress.c`)
+## S-STRESS, stress driver (`pc64_stress.c`)
 
 - **S-STRESS-01** [auto] The driver MUST stay unarmed unless `STRESS.CFG`
   exists on some volume; config keys match whole tokens on NON-comment
-  lines only (a key inside a `#` comment must not arm anything — the F1
+  lines only (a key inside a `#` comment must not arm anything, the F1
   regression).
 - **S-STRESS-02** [auto] Arming MUST wait ~120 frames for storage to
   settle; thereafter one action runs every `speed` frames (fast=1, default
@@ -681,7 +681,7 @@ BROWSER, JS, STUDIO, PHOTOS, PAINT, GAME, INST, MAC, PY, LIBC.
 - **S-STRESS-09** [auto] The stress driver MUST NOT start acting before the
   one-shot network test has run (nettest ticks first in the shell loop).
 
-## S-NTST — boot network self-test (`pc64_nettest.c`)
+## S-NTST, boot network self-test (`pc64_nettest.c`)
 
 - **S-NTST-01** [auto] The test runs at most ONCE per boot, ~30 frames in;
   later `pc64_nettest_tick` calls MUST be free.
@@ -705,7 +705,7 @@ BROWSER, JS, STUDIO, PHOTOS, PAINT, GAME, INST, MAC, PY, LIBC.
   handles and PCI NICs (class 02/00 wired, 02/80 WiFi) before binding
   anything.
 
-## S-FONT — TrueType text engine (`pc64_font.c`)
+## S-FONT, TrueType text engine (`pc64_font.c`)
 
 - **S-FONT-01** [auto] Font loading MUST fill one of 4 slots (Chicago,
   Sans, Mono, Ubuntu) from a volume root then `EFI\UNODOS\`, and MUST
@@ -716,7 +716,7 @@ BROWSER, JS, STUDIO, PHOTOS, PAINT, GAME, INST, MAC, PY, LIBC.
   provider hooks MUST fall back to 8-px-per-char bitmap metrics.
 - **S-FONT-03** [auto] Measurement and drawing MUST agree exactly: the same
   pen walker (kerning applied before the draw/measure branch) produces
-  `uno_font_text_w_styled(s) == final_pen_x - start_x` for every string —
+  `uno_font_text_w_styled(s) == final_pen_x - start_x` for every string -
   caret positioning depends on this. check: random ASCII strings, compare
   draw-advance vs text_w.
 - **S-FONT-04** [auto] The glyph cache MUST cover exactly ASCII 32..126 in
@@ -727,12 +727,12 @@ BROWSER, JS, STUDIO, PHOTOS, PAINT, GAME, INST, MAC, PY, LIBC.
   are capped at 40x40 px.
   NOTE: intended behavior for shipped documents is at least Latin-1
   visibility; bytes 128..255 currently vanish silently (no UTF-8 decode,
-  no .notdef box) — flagged as a divergence, not a crash.
+  no .notdef box), flagged as a divergence, not a crash.
 - **S-FONT-06** [auto] Effective pixel size MUST clamp to 8..40 after UI
   scale; the bitmap-native Chicago face at 100% scale disables subpixel
   rendering.
 - **S-FONT-07** [assert] The per-glyph raster arena (512 KB) is reset per
-  glyph and MUST satisfy every stb allocation or the glyph is skipped —
+  glyph and MUST satisfy every stb allocation or the glyph is skipped -
   never a partial raster from a stale pointer. site: `pc64_font.c` arena
   alloc fail path.
 - **S-FONT-08** [auto] Bold rendering (+1 px second strike) MUST also widen
@@ -740,11 +740,11 @@ BROWSER, JS, STUDIO, PHOTOS, PAINT, GAME, INST, MAC, PY, LIBC.
   NOT change the advance.
 - **S-FONT-09** [assert] Text drawing MUST be safe for any on-screen x,
   including negative pen positions from centered strings wider than the
-  surface. NOTE: METAL-FINDINGS F7 — a `x<<6` on a negative x in the
+  surface. NOTE: METAL-FINDINGS F7, a `x<<6` on a negative x in the
   renderer is UB (UBSan #UD in debug builds); callers are only partially
   audited. site: `pc64_font.c` pen setup.
 
-## S-UUI — unoui toolkit (`../unoui/unoui.c`, `unoui_input.c`)
+## S-UUI, unoui toolkit (`../unoui/unoui.c`, `unoui_input.c`)
 
 - **S-UUI-01** [auto] The window list holds at most UNOUI_MAX_WINDOWS (24);
   `unoui_ui_add` MUST return 0 (window not added, no state change) when
@@ -754,14 +754,14 @@ BROWSER, JS, STUDIO, PHOTOS, PAINT, GAME, INST, MAC, PY, LIBC.
   a click-raise moves a window only within its band; `unoui_ui_add`
   inserts band-sorted.
   check: after any event sequence, assert the band ordering invariant over
-  `ui->win[]` — a cheap every-frame assert.
+  `ui->win[]`: a cheap every-frame assert.
 - **S-UUI-03** [auto] Focus MUST always be valid: `focus_win` in
   [-1, nwin) and `focus_wi` in [-1, win->nw); adding a normal window
   focuses it (`focus_wi = -1`).
 - **S-UUI-04** [auto] Widgets per window are capped at UNOUI_MAX_WIDGETS
   (64). Adding beyond the cap MUST fail safely.
   NOTE: current `unoui.c push()` returns `&win->w[63]` on overflow WITHOUT
-  incrementing nw or clearing the slot — every further add silently
+  incrementing nw or clearing the slot, every further add silently
   corrupts slot 63 with stale `id`/`edit`/`canvas` fields. Intended: return
   a scratch widget or refuse; at minimum memset the returned slot.
 - **S-UUI-05** [auto] The toolkit MUST be a pure function of the event
@@ -798,7 +798,7 @@ BROWSER, JS, STUDIO, PHOTOS, PAINT, GAME, INST, MAC, PY, LIBC.
   mouse-modal: the next MOUSE_DOWN either commits an item inside the popup
   rect or dismisses it; popup hit rows MUST match the drawn rows exactly.
   NOTE: hit-test anchors rows at `popup_r.y+2` while drawing anchors at
-  `+3` — a 1-px band where hover highlight and committed item disagree.
+  `+3`: a 1-px band where hover highlight and committed item disagree.
 - **S-UUI-14** [auto] `unoui_fullscreen(ui, win)` MUST route ALL input to
   that window's first UI_CANVAS and suppress desktop/chrome rendering;
   `unoui_fullscreen(ui, NULL)` restores the normal desktop.
@@ -807,7 +807,7 @@ BROWSER, JS, STUDIO, PHOTOS, PAINT, GAME, INST, MAC, PY, LIBC.
   can paint outside its window; the clip is restored after each window.
 - **S-UUI-16** [auto] Every theme vtable entry is optional: a theme with
   `draw == NULL` or any NULL member MUST render via the built-in defaults
-  (PICK fallback) — themes can never null-deref the renderer.
+  (PICK fallback), themes can never null-deref the renderer.
 - **S-UUI-17** [auto] Per-window font overrides (`font_slot !=
   UI_FONT_INHERIT`) MUST wrap BOTH drawing and hit-testing in
   font push/pop so clicks are measured with the face that was drawn.
@@ -815,28 +815,28 @@ BROWSER, JS, STUDIO, PHOTOS, PAINT, GAME, INST, MAC, PY, LIBC.
   positional indices: focus, hot, capture, and popup owner.
   NOTE: the shell's `remove_win` only clamps `focus_win` at the top end and
   never adjusts `cap_win/hot_win/popup_win` (and `unoui_ui_add` adjusts
-  only focus) — after a close, stale indices can point at a different
+  only focus), after a close, stale indices can point at a different
   window (focus lands on the taskbar; a live capture dereferences the
   wrong window). Intended: shift every index > removed position down by
   one and clear any that pointed at the removed window.
   site: `pc64_uui.c remove_win` / `unoui_input.c unoui_ui_add`.
 - **S-UUI-19** [auto] Radio grouping is defined over CONTIGUOUS runs of
   UI_RADIO widgets; checking one clears exactly its contiguous neighbours
-  (documented layout constraint — a non-radio widget splits the group).
+  (documented layout constraint, a non-radio widget splits the group).
 - **S-UUI-20** [auto] `unoui_reflow_window` MUST stretch only UI_WF_FILL
   widgets to the content rect; resize respects `min_w/min_h`.
 - **S-UUI-21** [auto] Caret blink derives from TICK events only
-  ((ticks/18)&1) — no wall clock in the toolkit.
+  ((ticks/18)&1), no wall clock in the toolkit.
 - **S-UUI-22** [auto] A UI_LIST longer than its box SCROLLS: `value` is the
   first visible row, the wheel and the inline scrollbar move it (never the
   selection), and a click selects the row UNDER the pointer in the scrolled
-  view — `unoui_list_index_at(rect, n, value, y)`, the same geometry the
+  view, `unoui_list_index_at(rect, n, value, y)`, the same geometry the
   painter uses. No item may be unreachable.
 - **S-UUI-23** [auto] Keyboard navigation of a UI_LIST keeps the selection
   in view: arrows step a row, PgUp/PgDn a screenful, Home/End the ends, and
   every one of them re-clamps `value` through `unoui_list_reveal`.
 
-## S-SHELL — desktop shell (`pc64_uui.c`, `pc64_uui_apps.c`)
+## S-SHELL, desktop shell (`pc64_uui.c`, `pc64_uui_apps.c`)
 
 - **S-SHELL-01** [auto] The app roster is fixed at NAPPS = 7 native + 6
   bridge + 6 extra slots; `.UNO`-backed entries (Studio, Photos, PYRT) are
@@ -845,7 +845,7 @@ BROWSER, JS, STUDIO, PHOTOS, PAINT, GAME, INST, MAC, PY, LIBC.
 - **S-SHELL-02** [auto] `open_app` MUST be idempotent per app: windows are
   built once (`g_built`), reopened windows are clamped to the work area,
   and when `unoui_ui_add` fails (table full) the launch MUST abort cleanly
-  — no `g_open` flag, no open hooks, retryable later.
+, no `g_open` flag, no open hooks, retryable later.
 - **S-SHELL-03** [auto] Closing an app MUST run its class teardown hook
   (game close / music stop / module `closed` / python unload / bridge
   close), drop fullscreen if held, remove the window, and rebuild the
@@ -870,7 +870,7 @@ BROWSER, JS, STUDIO, PHOTOS, PAINT, GAME, INST, MAC, PY, LIBC.
   toolkit (a completed drag never also launches); icons snap to the free
   grid cell nearest the drop.
   NOTE: a sub-threshold (<=3 px) click-drag nudges the icon's rect without
-  restoring it — icons can creep by up to 3 px per click. Intended:
+  restoring it, icons can creep by up to 3 px per click. Intended:
   restore the rect when the drag never crossed the threshold.
 - **S-SHELL-10** [auto] The shell present policy MUST skip repaint+present
   entirely on frames where nothing marked `g_dirty` (cursor-only moves
@@ -892,10 +892,10 @@ BROWSER, JS, STUDIO, PHOTOS, PAINT, GAME, INST, MAC, PY, LIBC.
   enter the low-power loop, and wake on lid-open/key/click with the scene
   intact.
 - **S-SHELL-15** [auto] Fullscreen native games MUST restore the desktop
-  (and `uno_pc64_lowres(0)` where used) on close — no stuck fullscreen
+  (and `uno_pc64_lowres(0)` where used) on close, no stuck fullscreen
   after a game exits.
 
-## S-USB — xHCI + USB HID (`xhci.c`, `usbio.c`, `usbhid.c`)
+## S-USB, xHCI + USB HID (`xhci.c`, `usbio.c`, `usbhid.c`)
 
 - **S-USB-01** [auto] xHCI init MUST bind PCI class 0C/03/30, disconnect
   the firmware driver first, and retry the bringup up to 5 times to clear
@@ -908,7 +908,7 @@ BROWSER, JS, STUDIO, PHOTOS, PAINT, GAME, INST, MAC, PY, LIBC.
   without touching PED/PP (SuperSpeed PSC-storm guard); command and
   transfer polls bound stray events at 4096.
 - **S-USB-04** [auto] Event routing MUST deliver async (interrupt-IN)
-  completions to their registered device slots — a synchronous waiter MUST
+  completions to their registered device slots, a synchronous waiter MUST
   NEVER consume another device's completion.
 - **S-USB-05** [auto] HID claiming walks the config descriptor for
   class-3 boot interfaces (protocol 1 kbd / 2 mouse), requires an
@@ -919,13 +919,13 @@ BROWSER, JS, STUDIO, PHOTOS, PAINT, GAME, INST, MAC, PY, LIBC.
 - **S-USB-07** [assert] EP0 max-packet MUST match the device: full-speed
   devices advertising MPS 64 SHOULD have the EP0 context updated after the
   first 8/18-byte descriptor read. NOTE: current `xhci.c` keeps
-  mps_for_speed(8) for FS devices — fine for boot HID, a divergence from
+  mps_for_speed(8) for FS devices, fine for boot HID, a divergence from
   full enumeration. site: `xhci.c enumerate_port`.
 - **S-USB-08** [auto] `usbio.c` (attached EFI_USB_IO transport) MUST return
-  failure for every call once detached — USB NICs must observe a dead
+  failure for every call once detached, USB NICs must observe a dead
   transport, not a hang.
 
-## S-INP — keyboards and pointers (`hid_kbd.c`, `i2c_hid.c`)
+## S-INP, keyboards and pointers (`hid_kbd.c`, `i2c_hid.c`)
 
 - **S-INP-01** [auto] Boot-keyboard reports MUST be edge-detected against
   the previous report (no key repeats from level state); the 0x01 rollover
@@ -945,7 +945,7 @@ BROWSER, JS, STUDIO, PHOTOS, PAINT, GAME, INST, MAC, PY, LIBC.
   reported via `uno_i2c_hid_timing`.
 - **S-INP-05** [manual] I2C-HID MUST bind the trackpad on the X1 Carbon
   Gen 8 and Surface Laptop Go.
-  NOTE: current code fails on every tested machine (METAL-FINDINGS F4 —
+  NOTE: current code fails on every tested machine (METAL-FINDINGS F4 -
   controllers found, no device); FIX-PLAN P1.1 calls for ACPI PNP0C50
   enumeration instead of PCI BDF guessing, which is unimplemented.
 - **S-INP-06** [auto] Absolute-to-relative conversion MUST swallow >4000-
@@ -958,10 +958,10 @@ BROWSER, JS, STUDIO, PHOTOS, PAINT, GAME, INST, MAC, PY, LIBC.
   0x44570140 the controller MUST be skipped, never blind-poked.
   site: `i2c_hid.c` reset-release path.
 
-## S-NIC — wired NIC drivers (`e1000.c`, `e1000e.c`, `igb.c`, `r8169.c`, `rtl8152.c`, `ax88179.c`, `uno_nic.h`)
+## S-NIC, wired NIC drivers (`e1000.c`, `e1000e.c`, `igb.c`, `r8169.c`, `rtl8152.c`, `ax88179.c`, `uno_nic.h`)
 
 - **S-NIC-01** [assert] Every published `uno_nic_t` MUST have all three
-  function pointers (send/recv/link) non-NULL — `net.c` calls them
+  function pointers (send/recv/link) non-NULL, `net.c` calls them
   unconditionally. site: each driver's `*_nic()` before returning, or a
   check in `net_init`.
 - **S-NIC-02** [auto] `send` MUST return >= 0 on acceptance and reject
@@ -974,7 +974,7 @@ BROWSER, JS, STUDIO, PHOTOS, PAINT, GAME, INST, MAC, PY, LIBC.
   8086:100E/100F; e1000e the 82571..I219 table (PCH parts take the
   SWFLAG/ULP path); igb I210/I211/82575..I350. A NIC absent from the table
   MUST leave `*_present() == 0` and register nothing.
-- **S-NIC-05** [auto] igb bring-up MUST kick PHY autoneg via MDIC —
+- **S-NIC-05** [auto] igb bring-up MUST kick PHY autoneg via MDIC -
   QEMU's igb model gates RX on STATUS.LU (the documented gotcha); without
   the kick, link never rises.
 - **S-NIC-06** [auto] MAC address MUST come from EEPROM/RAL-RAH (e1000),
@@ -982,14 +982,14 @@ BROWSER, JS, STUDIO, PHOTOS, PAINT, GAME, INST, MAC, PY, LIBC.
   driver MUST NOT publish an all-zero MAC as valid.
 - **S-NIC-07** [assert] e1000 unicast filter setup: the RAH0 write that
   sets AV MUST target 0x5404. NOTE: `e1000.c` defines REG_RAH0 as 0x5408
-  (RAL1 on 8254x) while e1000e/igb use 0x5404 — masked today only by
+  (RAL1 on 8254x) while e1000e/igb use 0x5404, masked today only by
   promiscuous mode. site: `e1000.c` REG_RAH0.
 - **S-NIC-08** [auto] r8169: TX frames MUST be padded to 60 bytes; RX
   strips the 4-byte FCS; the 8125-family register relocation is selected
   by device id + TxConfig XID; DescOwn handshakes use compiler barriers.
-  (End-to-end TX/RX on real silicon remains metal-pending — no QEMU model.)
+  (End-to-end TX/RX on real silicon remains metal-pending, no QEMU model.)
 - **S-NIC-09** [auto] ax88179: link state MUST be read from the SECOND
-  BMSR read (latching register — the documented always-up bug); RX
+  BMSR read (latching register, the documented always-up bug); RX
   descriptor counts and offsets MUST be re-validated against the received
   bulk length on every packet pop (device-supplied data is untrusted).
 - **S-NIC-10** [auto] rtl8152: family/version MUST be confirmed via the
@@ -1005,7 +1005,7 @@ BROWSER, JS, STUDIO, PHOTOS, PAINT, GAME, INST, MAC, PY, LIBC.
   resolve, ICMP echo to the gateway, DNS query, single TCP
   connect/send/recv/close (this is the QEMU-verified regression suite).
 
-## S-WIFI — WiFi drivers + WPA2 (`iwlwifi.c`, `rtwifi.c`, `mrvlwifi.c`, `wifi_wpa.c`)
+## S-WIFI, WiFi drivers + WPA2 (`iwlwifi.c`, `rtwifi.c`, `mrvlwifi.c`, `wifi_wpa.c`)
 
 - **S-WIFI-01** [auto] All three drivers MUST be inert-safe with no
   hardware, no firmware file, or no credentials: `*_present() == 0` /
@@ -1016,7 +1016,7 @@ BROWSER, JS, STUDIO, PHOTOS, PAINT, GAME, INST, MAC, PY, LIBC.
   `WIFI.TXT` (`ssid=`, `psk=`). A missing file MUST be reported in
   `*_status_str`, never faulted on.
 - **S-WIFI-03** [auto] `wpa_pmk_from_psk` MUST be PBKDF2-HMAC-SHA1, 4096
-  rounds, SSID as salt — byte-exact against the published WPA2 test
+  rounds, SSID as salt, byte-exact against the published WPA2 test
   vectors. check: the IEEE "password"/"IEEE" vector at boot.
 - **S-WIFI-04** [auto] The supplicant state machine MUST follow
   IDLE -> (msg1: derive PTK, reply msg2+RSN IE) -> SENT_2 -> (msg3: verify
@@ -1033,7 +1033,7 @@ BROWSER, JS, STUDIO, PHOTOS, PAINT, GAME, INST, MAC, PY, LIBC.
   commands; RF-kill MUST abort the bring-up with a clear status.
 - **S-WIFI-08** [manual] A real join (scan -> auth -> assoc -> EAPOL ->
   DHCP) MUST complete on metal.
-  NOTE: unimplemented today on all three drivers — iwlwifi stops after
+  NOTE: unimplemented today on all three drivers, iwlwifi stops after
   ALIVE/MVM init (`find_and_join` assumes bssid=broadcast/chan 1 and says
   so), rtwifi's firmware download body and power-on tables are stubbed,
   mrvlwifi stubs scan/associate. This is the known metal ceiling.
@@ -1050,28 +1050,28 @@ BROWSER, JS, STUDIO, PHOTOS, PAINT, GAME, INST, MAC, PY, LIBC.
   within 12 s. SKIP (named reason) when either prerequisite is absent;
   a bring-up that stops early FAILs with `iwl_status_str` so the report
   names the real blocker (firmware missing / no ALIVE / RF-kill / MLME
-  ceiling — see S-WIFI-08). This is the boot-time automation of S-WIFI-08's
+  ceiling, see S-WIFI-08). This is the boot-time automation of S-WIFI-08's
   join contract, expected red until the MLME tail lands.
 
-## S-TLS — TLS client (`tls.c`, `tls_entropy.c`, `tls_ca.c`)
+## S-TLS, TLS client (`tls.c`, `tls_entropy.c`, `tls_ca.c`)
 
 - **S-TLS-01** [auto] `tls_version()` MUST report TLS 1.2 (0x0303) on an
   established session; the cipher roster is BearSSL's full client profile.
 - **S-TLS-02** [auto] `tls_connect` (pinned mode) MUST validate the peer
   against the compiled-in P-256 public key ONLY (no chain/time/name
-  checks — dev servers); `tls_connect_ca` MUST validate the full chain
+  checks, dev servers); `tls_connect_ca` MUST validate the full chain
   against the embedded trust store with SNI name checking and the UEFI
   RTC as validity time.
 - **S-TLS-03** [auto] The embedded trust store MUST contain exactly the 14
-  generated anchors (mktrust.py output) — SPECTEST asserts
+  generated anchors (mktrust.py output), SPECTEST asserts
   `uno_tls_tas_num == 14`.
 - **S-TLS-04** [auto] All TLS failures MUST fail closed with a negative
   return and a BR_ERR_* reason via `tls_last_error()`; connect enforces a
   ~3 s SYN deadline, reads ~4 s, writes ~8 s.
 - **S-TLS-05** [auto] Session resumption MUST be disabled (client_reset
-  with resume=0) — every connect is a full handshake.
+  with resume=0), every connect is a full handshake.
 - **S-TLS-06** [auto] Entropy MUST come from RDRAND when the CPU has a
-  WORKING one (CPUID advertising it is not enough — the probe requires an
+  WORKING one (CPUID advertising it is not enough, the probe requires an
   actual success). The former TSC-LCG fallback is **withdrawn**: it was
   "not cryptographically strong" by its own comment and was injected
   anyway, so an RDRAND-less box handshook on a weak seed. See S-TLS-10/11.
@@ -1091,12 +1091,12 @@ BROWSER, JS, STUDIO, PHOTOS, PAINT, GAME, INST, MAC, PY, LIBC.
   (`rdrand`, `jitter`, or `none`).
 - **S-TLS-11** [auto] A source that reports itself live MUST NOT repeat: two
   32-byte draws MUST differ (`tls_entropy_selftest()` → 1). The jitter
-  collector MUST reject a clock that carries no entropy — frozen,
-  step-locked, or too few distinct delta values — rather than condition it
+  collector MUST reject a clock that carries no entropy, frozen,
+  step-locked, or too few distinct delta values, rather than condition it
   into a plausible-looking seed. Host gate: `tools/tls_entropy_test.sh`
   (6 synthetic-CPU scenarios); on-device: SPECTEST S-TLS-10/11.
 
-## S-HTTP — HTTP client (`pc64_http.c`)
+## S-HTTP, HTTP client (`pc64_http.c`)
 
 - **S-HTTP-01** [auto] `pc64_net_up()` MUST probe NICs in the fixed order
   e1000, e1000e, igb, r8169, ax88179, rtl8152, iwl, rtwifi, mrvl; bind the
@@ -1110,17 +1110,17 @@ BROWSER, JS, STUDIO, PHOTOS, PAINT, GAME, INST, MAC, PY, LIBC.
   too long; body length >= 0 on success.
 - **S-HTTP-04** [auto] The response splits at the first blank line; the
   status line is returned (truncated) via `status`; redirects are NOT
-  followed and chunked transfer coding is NOT decoded (documented — the
+  followed and chunked transfer coding is NOT decoded (documented, the
   browser shows what arrived).
 - **S-HTTP-05** [auto] Responses larger than the 48 KB buffer MUST be
   truncated safely (no overflow), receive idle timeout ~3 s.
 - **S-HTTP-06** [assert] Connect failure detection MUST NOT rely on
-  `net_tcp_connect`'s return (always 0, see S-NET-26) — only on the state
+  `net_tcp_connect`'s return (always 0, see S-NET-26), only on the state
   timeout. site: `pc64_http.c` connect loop.
 - **S-HTTP-07** [auto] `pc64_http_get` MUST leave the single TCP
   connection closed (state CLOSED/DONE) on every exit path.
 
-## S-SND — audio (`snd_pcm.c`, `hdaudio.c`, `ac97.c`)
+## S-SND, audio (`snd_pcm.c`, `hdaudio.c`, `ac97.c`)
 
 - **S-SND-01** [auto] `uno_snd_init` MUST probe HDA (PCI class 04/03)
   first, then AC'97 (04/01), else leave the PC-speaker path active;
@@ -1129,7 +1129,7 @@ BROWSER, JS, STUDIO, PHOTOS, PAINT, GAME, INST, MAC, PY, LIBC.
   `uno_snd_poll` keeps writes LEAD_FRAMES (~200 ms) ahead of the hardware
   read pointer, with sfence before DMA-visible writes.
 - **S-SND-03** [auto] Underrun MUST be benign: a starved stream FIFO plays
-  silence and recovers on the next tick — the shell never stalls on audio.
+  silence and recovers on the next tick, the shell never stalls on audio.
 - **S-SND-04** [auto] If DMA overtakes the write pointer, the writer MUST
   resync just ahead of the read pointer (one audible glitch, no permanent
   offset).
@@ -1141,23 +1141,23 @@ BROWSER, JS, STUDIO, PHOTOS, PAINT, GAME, INST, MAC, PY, LIBC.
   without killing the stream (seek support); pause holds the DAC on
   silence.
 - **S-SND-07** [auto] Note attack/release MUST ramp over ~8 ms (RAMP 24)
-  — no clicks on note on/off; volume 0..100 scales AMP_MAX.
+, no clicks on note on/off; volume 0..100 scales AMP_MAX.
 - **S-SND-08** [auto] All controller waits are SPIN_MAX-bounded: a dead
   codec/controller fails the probe rather than hanging boot; HDA falls
   back to immediate-command mode when CORB is dead, and to LPIB when the
   position buffer is dead.
 - **S-SND-09** [manual] Audio MUST keep playing across detach (static
-  identity-mapped DMA buffers, polled) — verified by ear on metal.
+  identity-mapped DMA buffers, polled), verified by ear on metal.
 
-## S-ACPI — ACPI host (`acpi_host.c` + `../unoacpi`)
+## S-ACPI, ACPI host (`acpi_host.c` + `../unoacpi`)
 
 - **S-ACPI-01** [auto] `uno_acpi_start` MUST be idempotent, find the RSDP
   from the EFI config table (ACPI 2.0 GUID preferred), and run entirely
-  from an 8 MiB arena — interpreter OOM is contained, never a kernel heap
+  from an 8 MiB arena, interpreter OOM is contained, never a kernel heap
   exhaustion.
 - **S-ACPI-02** [auto] The host is single-threaded by contract:
   mutex/event/spinlock callbacks are no-ops and deferred work runs
-  synchronously — SPECTEST asserts no callback ever blocks.
+  synchronously, SPECTEST asserts no callback ever blocks.
 - **S-ACPI-03** [auto] Address spaces supported are SystemMemory
   (identity map), SystemIO (port I/O), and PCI_Config via mechanism #1
   segment 0 only; EC/SMBus waits are TSC-bounded (timeout, not hang).
@@ -1167,7 +1167,7 @@ BROWSER, JS, STUDIO, PHOTOS, PAINT, GAME, INST, MAC, PY, LIBC.
 - **S-ACPI-05** [manual] Battery percentage MUST track the real charge
   within a few percent on the calibrated machines (per-machine table).
 
-## S-WRITE — the editor (`pc64_write.c`)
+## S-WRITE, the editor (`pc64_write.c`)
 
 - **S-WRITE-01** [auto] The document model caps at WR_MAX-1 (32767) chars
   with a parallel per-char u16 style array; insertion at the cap MUST
@@ -1181,7 +1181,7 @@ BROWSER, JS, STUDIO, PHOTOS, PAINT, GAME, INST, MAC, PY, LIBC.
   (documented lossy path). Loading a .TXT normalizes CRLF -> LF, tab ->
   space, and drops non-printable bytes.
 - **S-WRITE-04** [auto] The save buffer is worst-case sized
-  (8 + WR_MAX + 4*WR_MAX + 16) — a maximally-fragmented style run set MUST
+  (8 + WR_MAX + 4*WR_MAX + 16), a maximally-fragmented style run set MUST
   NOT overflow it (statically provable, SPECTEST does the arithmetic).
 - **S-WRITE-05** [auto] Saving to a read-only volume MUST fail visibly
   (status "Save FAILED"), never silently discard.
@@ -1194,7 +1194,7 @@ BROWSER, JS, STUDIO, PHOTOS, PAINT, GAME, INST, MAC, PY, LIBC.
 - **S-WRITE-08** [auto] Clipboard operations clamp at CLIP_MAX (8192)
   without corrupting the document.
 
-## S-FILES — file manager (`pc64_files.c`)
+## S-FILES, file manager (`pc64_files.c`)
 
 - **S-FILES-01** [auto] Each pane lists at most FM_MAXE (96) entries; FAT
   volumes get subdirectory navigation, flat stores are root-only.
@@ -1215,25 +1215,25 @@ BROWSER, JS, STUDIO, PHOTOS, PAINT, GAME, INST, MAC, PY, LIBC.
   descending directories MUST stop (not truncate-and-corrupt) when the
   joined path would overflow.
 
-## S-MUSIC — music player (`pc64_music.c`, `pc64_media.c`)
+## S-MUSIC, music player (`pc64_music.c`, `pc64_media.c`)
 
 - **S-MUSIC-01** [auto] Source slot 0 is the 8 built-in square-voice tunes;
   file playback accepts only names `um_audio_is()` recognizes (WAV / MIDI
   / MP3 / AAC via unomedia).
 - **S-MUSIC-02** [auto] A malformed or undecodable file MUST surface
-  `um_error()`'s reason in the status line and leave the player idle —
+  `um_error()`'s reason in the status line and leave the player idle -
   never crash, never garbage audio. check: corpus of truncated/corrupted
   headers.
 - **S-MUSIC-03** [auto] The decode pump MUST be bounded per tick (fill
   FIFO while space, 4096-frame chunks) so a slow decode underruns to
   silence instead of stalling the shell (pairs with S-SND-03).
 - **S-MUSIC-04** [auto] `pc64_media` streams through one 64 KB sliding
-  window over `uno_fs_read_at` — no whole-file allocation; a short read
+  window over `uno_fs_read_at`: no whole-file allocation; a short read
   invalidates the window and returns partial cleanly.
 - **S-MUSIC-05** [auto] Seek maps the 0..1000 slider through
   `duration_ms`; end-of-track auto-advances (or stops on the last track).
 
-## S-CLOCK — clock app (`pc64_clock.c`)
+## S-CLOCK, clock app (`pc64_clock.c`)
 
 - **S-CLOCK-01** [auto] Time source is the firmware RTC via
   `uno_pc64_time()`, treated as local; UTC = RTC - offset(minutes); the
@@ -1245,11 +1245,11 @@ BROWSER, JS, STUDIO, PHOTOS, PAINT, GAME, INST, MAC, PY, LIBC.
   changes.
 - **S-CLOCK-04** [auto] The midnight carry is deliberately coarse (d=31/1
   regardless of month, solar-declination use only); the DISPLAYED
-  date near month boundaries under large offsets may be off by one day —
+  date near month boundaries under large offsets may be off by one day -
   documented limitation, SPECTEST only asserts no crash across the
   rollover.
 
-## S-BROWSER — browser (`pc64_browser.c`)
+## S-BROWSER, browser (`pc64_browser.c`)
 
 - **S-BROWSER-01** [auto] The document buffer caps at DOC_MAX (32768);
   fetch fills it via `pc64_http_get`, truncating oversized bodies safely.
@@ -1288,18 +1288,18 @@ BROWSER, JS, STUDIO, PHOTOS, PAINT, GAME, INST, MAC, PY, LIBC.
   Under `BROWSER_ENGINE=uw` the map is empty and the DOM's own <a> elements
   drive the same keys.
 
-## S-JS — the JS engine (`js.c`)
+## S-JS, the JS engine (`js.c`)
 
 - **S-JS-01** [auto] `js_run` MUST be self-contained per run: 512 KB bump
   arena reset each run, no GC, no state carryover between runs.
 - **S-JS-02** [auto] Runaway scripts MUST be stopped by the loop guard
   (1e6 iterations per loop) and the stack probe (48 KB limit trips
-  "nesting too deep" before the real stack faults) — no script may hang or
+  "nesting too deep" before the real stack faults), no script may hang or
   fault the shell.
   check: `while(1);` and deep recursion both return with an error string.
 - **S-JS-03** [auto] Supported types are exactly undefined/null/bool/
   number(double)/string/array/function; no object literals, prototypes,
-  exceptions, or mutable closures — scripts using them get parse/eval
+  exceptions, or mutable closures, scripts using them get parse/eval
   errors, not UB.
 - **S-JS-04** [auto] The stdlib surface is fixed: console.log,
   document.write, Math.{floor,ceil,round,abs,sqrt,max,min,random},
@@ -1310,11 +1310,11 @@ BROWSER, JS, STUDIO, PHOTOS, PAINT, GAME, INST, MAC, PY, LIBC.
   1023-char string literals) MUST be enforced without memory unsafety.
   NOTE: today every one of these limits SILENTLY truncates or drops
   (string literals clipped, `push` past capacity no-ops, the 97th binding
-  vanishes, indexed stores beyond capacity are ignored) — intended
+  vanishes, indexed stores beyond capacity are ignored), intended
   behavior is a reported script error; memory safety holds either way.
 - **S-JS-06** [assert] Arena exhaustion MUST abort parsing/eval promptly.
   NOTE: `ar_alloc` on OOM returns the arena base and only sets `g_oom`,
-  which the parser loops don't check — a huge script builds overlapping
+  which the parser loops don't check, a huge script builds overlapping
   AST nodes (bounded, but garbage results) before the deferred OOM
   message. site: `js.c ar_alloc` callers / parse loops.
 - **S-JS-07** [auto] Frame reclamation for scalar returns keeps deep
@@ -1322,9 +1322,9 @@ BROWSER, JS, STUDIO, PHOTOS, PAINT, GAME, INST, MAC, PY, LIBC.
   (relocation correctness). check: 1000-deep recursion returning a
   string.
 - **S-JS-08** [auto] `parseInt` truncates via numeric prefix parse (no
-  radix support, "0x10" -> 0) — documented, tests pin the behavior.
+  radix support, "0x10" -> 0), documented, tests pin the behavior.
 
-## S-STUDIO — IDE + UnoC compiler (`apps/studio*.c`, `apps/ucc*.c`)
+## S-STUDIO, IDE + UnoC compiler (`apps/studio*.c`, `apps/ucc*.c`)
 
 - **S-STUDIO-01** [auto] Buffers are fixed: 192 KB source, 3 MB compiler
   arena, 256 KB module output, 32 KB clipboard, 128 project files;
@@ -1333,7 +1333,7 @@ BROWSER, JS, STUDIO, PHOTOS, PAINT, GAME, INST, MAC, PY, LIBC.
   boot services); `.py` sources pack a PYAPP container (byte-identical to
   mkuno.py's output, zlib CRC32) instead of invoking ucc.
 - **S-STUDIO-03** [auto] ucc MUST collect up to 16 diagnostics with
-  file:line:col and return -1 — a compile error never longjmps past
+  file:line:col and return -1, a compile error never longjmps past
   cleanup into the shell; clicking a diagnostic jumps the editor to it.
 - **S-STUDIO-04** [auto] The UnoC subset is enforced by clean errors, not
   crashes: no floats, varargs, bitfields, goto, function-like macros, or
@@ -1352,22 +1352,22 @@ BROWSER, JS, STUDIO, PHOTOS, PAINT, GAME, INST, MAC, PY, LIBC.
   follows hardware semantics: INT64_MIN / -1 raises #DE (module faults,
   crash-reported).
   NOTE: divergence from the compile-time folder, which guards the same
-  expression — intended: emit the guard at runtime too (or document UB).
+  expression, intended: emit the guard at runtime too (or document UB).
   site: `ucc_x64.c alu` ND_DIV/ND_MOD.
 - **S-STUDIO-08** [auto] `studio_json` emission MUST bound-check and escape
   control characters; the AI client MUST de-chunk HTTP in place,
   null-check every malloc, and never allow disk config to disable cert
-  validation (host override redirects the IP only — SNI/cert unchanged).
+  validation (host override redirects the IP only, SNI/cert unchanged).
 - **S-STUDIO-09** [auto] AI keys live in plaintext AI.CFG (documented);
   absence of the file disables the assistant cleanly.
 - **S-STUDIO-10** [manual] The blocking AI request stalls the shell for
-  its duration (stated v1 limitation) — watchdog must not fire (the TLS
+  its duration (stated v1 limitation), watchdog must not fire (the TLS
   path pumps under the 20 s ceiling or feeds heartbeat).
 
-## S-PHOTOS — photo viewer (`apps/photos.c`)
+## S-PHOTOS, photo viewer (`apps/photos.c`)
 
 - **S-PHOTOS-01** [auto] Every decode failure surfaces `um_error()`'s
-  precise reason (including named declines: progressive JPEG, WebP) —
+  precise reason (including named declines: progressive JPEG, WebP) -
   never a crash or a generic message.
 - **S-PHOTOS-02** [auto] Image sizing MUST reject w/h < 1 and w*h*4 >
   256 MB computed in u64 (LLP64 overflow guard), and OOM-check the frame
@@ -1377,7 +1377,7 @@ BROWSER, JS, STUDIO, PHOTOS, PAINT, GAME, INST, MAC, PY, LIBC.
 - **S-PHOTOS-04** [auto] The checkerboard-under-alpha is pre-composited
   into the scaled cache (fb_blit contract: no blending in the hot loop).
 
-## S-PAINT — paint app (`apps/paint.c`)
+## S-PAINT, paint app (`apps/paint.c`)
 
 - **S-PAINT-01** [auto] The canvas is exactly 408x240 byte-per-pixel;
   every tool writes through the bounds-checked `pt_set_px`; save/load is
@@ -1391,7 +1391,7 @@ BROWSER, JS, STUDIO, PHOTOS, PAINT, GAME, INST, MAC, PY, LIBC.
 - **S-PAINT-04** [auto] Brush sizes are pencil 1 / brush 4 / eraser 8;
   color port uses the 256-entry palette, mono port the 10 dither patterns.
 
-## S-GAME — games (`pc64_games.c`, `apps/dostris|pacman|outlast|runner.c`)
+## S-GAME, games (`pc64_games.c`, `apps/dostris|pacman|outlast|runner.c`)
 
 - **S-GAME-01** [auto] Dostris: 10x20 board; `dt_fits` MUST bounds-check
   every candidate cell before any write (spawn, rotate, drop, lock);
@@ -1407,20 +1407,19 @@ BROWSER, JS, STUDIO, PHOTOS, PAINT, GAME, INST, MAC, PY, LIBC.
 - **S-GAME-04** [auto] Runner3D MUST enter fullscreen + lowres on open and
   restore both on close (pairs with S-SHELL-15).
 - **S-GAME-05** [auto] No game may write outside its board/canvas arrays
-  for ANY input sequence — the stress key-storm phase is the harness for
+  for ANY input sequence, the stress key-storm phase is the harness for
   this.
 - **S-GAME-06** [auto] Built-in games pace by frame counters (~30 Hz
   gates); the Toolbox-tier variants pace by TickCount deltas (see
   S-MAC-05 for the TickCount caveat).
 
-## S-INST — installer (`installer.c`)
+## S-INST, installer (`installer.c`)
 
 - **S-INST-01** [auto] `uno_inst_scan` MUST refuse to run detached, cap
   targets at 12, and NEVER offer the boot USB (or its sibling partitions)
-  as a target — excluded by device-path prefix match.
+  as a target, excluded by device-path prefix match.
 - **S-INST-02** [auto] ESP install is non-destructive by contract: it
-  creates/overwrites only under `\EFI\UNODOS\` plus `\EFI\BOOT\BOOTX64.EFI`
-  — and the latter ONLY if it does not already exist (protects other
+  creates/overwrites only under `\EFI\UNODOS\` plus `\EFI\BOOT\BOOTX64.EFI`: and the latter ONLY if it does not already exist (protects other
   OSes' fallback loaders).
 - **S-INST-03** [auto] Every installed file MUST be copy-verified
   chunk-by-chunk (written == read count) and flushed; missing aux files
@@ -1437,18 +1436,18 @@ BROWSER, JS, STUDIO, PHOTOS, PAINT, GAME, INST, MAC, PY, LIBC.
   (end-to-end, real firmware NVRAM).
 - **S-INST-07** [assert] `write_boot_entry` MUST bound the device-path
   prefix against its 1024-byte buffer. NOTE: current code memcpy's a
-  firmware-supplied prefix with no `losz <= sizeof lo` check — a long
+  firmware-supplied prefix with no `losz <= sizeof lo` check, a long
   legitimate path overflows. site: `installer.c write_boot_entry`.
 - **S-INST-08** [assert] GPT header CRC recomputation MUST range-check
   HeaderSize (<= 512) before crc32 over it. NOTE: current code trusts the
-  source header's HeaderSize field — a bogus value reads past the 512-byte
+  source header's HeaderSize field, a bogus value reads past the 512-byte
   buffer. site: `installer.c` clone header patch.
 - **S-INST-09** [auto] The clone SHOULD read back and verify the written
   region (a controller once corrupted a clone mid-write). NOTE: current
-  code trusts WriteBlocks success — no verify pass exists. Intended:
+  code trusts WriteBlocks success, no verify pass exists. Intended:
   optional verify pass, at minimum over GPT + first FAT.
 
-## S-MAC — Toolbox bridge (`mac_compat.c`)
+## S-MAC, Toolbox bridge (`mac_compat.c`)
 
 - **S-MAC-01** [auto] Rect semantics are half-open (`PtInRect`: pt.h <
   right, pt.v < bottom); SetRect/OffsetRect/InsetRect are pure.
@@ -1456,22 +1455,22 @@ BROWSER, JS, STUDIO, PHOTOS, PAINT, GAME, INST, MAC, PY, LIBC.
   via fb_invert_rect; FillRect's direct fb writes MUST stay
   bounds-checked; FrameArc is a documented no-op.
 - **S-MAC-03** [auto] DrawText/TextWidth MUST agree (both walk real glyph
-  widths, <= 255-char chunks) — Toolbox apps position carets by
+  widths, <= 255-char chunks), Toolbox apps position carets by
   TextWidth.
 - **S-MAC-04** [auto] The event queue holds 32 events and drops on
   overflow (never blocks); NewPtr(0) allocates 1 byte; DisposePtr frees.
 - **S-MAC-05** [auto] `TickCount()` in this shim is a per-call counter,
-  NOT wall time. NOTE: divergence from Toolbox semantics — Toolbox-tier
+  NOT wall time. NOTE: divergence from Toolbox semantics, Toolbox-tier
   apps pacing by TickCount deltas run at call-frequency speed; intended:
   back TickCount with the shell frame clock (60ths of a second).
 - **S-MAC-06** [auto] `Random()` is the documented LCG; RGBForeColor
   quantizes 16-bit components via >>8.
 
-## S-PY — Python runtime (`apps/pyrt.c`, `pyhost.h`, `upy/`)
+## S-PY, Python runtime (`apps/pyrt.c`, `pyhost.h`, `upy/`)
 
 - **S-PY-01** [auto] PYRT MUST set a 64 KB interpreter stack limit and run
   every app callback (build/draw/action/key/tick/opened/closed) inside an
-  NLR fence — a raising Python app prints a traceback to the output pane
+  NLR fence, a raising Python app prints a traceback to the output pane
   and NEVER unwinds into the kernel.
 - **S-PY-02** [auto] A PYAPP container is data, not code: it is never
   instantiated/executed as native (S-MOD-12), only handed to PYRT as
@@ -1481,10 +1480,10 @@ BROWSER, JS, STUDIO, PHOTOS, PAINT, GAME, INST, MAC, PY, LIBC.
 - **S-PY-04** [auto] tick() return semantics: repaint unless an explicit
   falsey non-None is returned.
 - **S-PY-05** [auto] Cached mp_obj_t values held across calls MUST be
-  registered as GC roots (MP_REGISTER_ROOT_POINTER — the documented
+  registered as GC roots (MP_REGISTER_ROOT_POINTER, the documented
   collection bug class).
 
-## S-LIBC — freestanding libc/math (`pc64_libc.c`, `pc64_math.c`)
+## S-LIBC, freestanding libc/math (`pc64_libc.c`, `pc64_math.c`)
 
 - **S-LIBC-01** [auto] `snprintf`/`vsnprintf` MUST always NUL-terminate
   when cap > 0 and return the would-be length (C99), supporting
@@ -1500,7 +1499,7 @@ BROWSER, JS, STUDIO, PHOTOS, PAINT, GAME, INST, MAC, PY, LIBC.
   `calloc` is overflow-checked.
 - **S-LIBC-04** [auto] `realloc` grows/shrinks correctly; NOTE: the copy
   uses the old BLOCK size (>= the caller's logical size), so grown buffers
-  can carry stale tail bytes — harmless but pinned by test.
+  can carry stale tail bytes, harmless but pinned by test.
 - **S-LIBC-05** [auto] `memcpy` word-copies only when src/dst share
   alignment phase; `memmove` is byte-wise but overlap-safe in both
   directions; `memset` word-fills after aligning.
@@ -1516,7 +1515,7 @@ BROWSER, JS, STUDIO, PHOTOS, PAINT, GAME, INST, MAC, PY, LIBC.
 
 ---
 
-## S-3D — uno3d software 3D pipeline (`../uno3d`)
+## S-3D, uno3d software 3D pipeline (`../uno3d`)
 
 Matrix/vertex transform state is file-static with no accessors, so contracts
 are checked end-to-end through the software backend + `u3d_last_tris()`.
@@ -1534,7 +1533,7 @@ are checked end-to-end through the software backend + `u3d_last_tris()`.
 - **S-3D-06** [manual] Gouraud interpolation and depth ordering produce the
   right pixels (needs fb inspection / a display).
 
-## S-MEDIA — unomedia audio decoders (`../unomedia`, kernel-linked half)
+## S-MEDIA, unomedia audio decoders (`../unomedia`, kernel-linked half)
 
 The audio decoders (WAV/MIDI/MP3/AAC) are linked into the kernel; the image
 decoders ship inside PHOTOS.UNO and are host-tested only.
@@ -1552,24 +1551,24 @@ decoders ship inside PHOTOS.UNO and are host-tested only.
 - **S-MEDIA-07** [auto] Garbage input MUST be rejected cleanly (open returns 0,
   no crash, no hang).
 - **S-MEDIA-08** [manual] Image decoders (PNG/JPEG/…) live in PHOTOS.UNO
-  (module), not the kernel — host-tested.
+  (module), not the kernel, host-tested.
 
-## S-AI — Studio AI assistant (live checks; SKIP without a link)
+## S-AI, Studio AI assistant (live checks; SKIP without a link)
 
 - **S-AI-01** [auto, live] The assistant's transport MUST reach the provider:
   DNS-resolve `api.anthropic.com` and complete a CA-validated TLS ≥ 1.2
-  handshake to :443 with the real SNI (`tls_connect_ca` — the exact call
+  handshake to :443 with the real SNI (`tls_connect_ca`: the exact call
   `studio_ai.c` makes). Proves end-to-end reachability including certs.
   SKIP with a named reason when no NIC/link/lease exists.
 - **S-AI-02** [auto, live] A request → response round-trip MUST complete
   through that same pipe: an HTTPS exchange with the provider returning an
   HTTP status line and a non-empty body. No API key is on a test stick, so
-  the expected answer is the provider's 401 + JSON error body — which is the
+  the expected answer is the provider's 401 + JSON error body, which is the
   round-trip proof; only transport failures fail the contract. (The render
   half lives in STUDIO.UNO and stays app-tested; keys live in plaintext
   `AI.CFG`, S-STUDIO-09.)
 
-## S-INT — interactive checks (operator-confirmed; `interactive` opt-in)
+## S-INT, interactive checks (operator-confirmed; `interactive` opt-in)
 
 The paths synthetic injection cannot prove. Run only when the STRESS.CFG
 `interactive` key is set (the flasher's "include interactive tests" box), so an
@@ -1579,7 +1578,7 @@ a timeout rather than hanging.
 - **S-INT-01** [interactive] The PHYSICAL keyboard MUST reach the OS on this
   machine: a prompted keypress arrives through `poll_keyboard`→`map_key` (the
   same funnel injection uses, so only a human press proves the firmware/HID
-  bring-up works here — the class of bug that hit the Surface + Intel-Mac
+  bring-up works here, the class of bug that hit the Surface + Intel-Mac
   keyboards). Latched via the debug capture hook `uno_pc64_dbg_key_wait`.
 - **S-INT-02** [interactive] The DISPLAY MUST show correct colour + legible
   text: labelled red/green/blue bars drawn straight to the framebuffer (the fb
@@ -1590,8 +1589,8 @@ a timeout rather than hanging.
   and the codecs are metal-pending. Becomes real once audio is confirmed on metal.
 
 > **SPECTEST coverage (2026-07-21):** the conformance suite is organised into
-> selectable AREAS — **storage · system · frameworks · apps · network** (plus the
-> opt-in **interactive** area) — armed as bare `spec` (all) or `spec=<areas>`.
+> selectable AREAS, **storage · system · frameworks · apps · network** (plus the
+> opt-in **interactive** area), armed as bare `spec` (all) or `spec=<areas>`.
 > It runs 58 [auto] checks + deliberate SKIPs across FAT/NET/FONT/LIBC/JS/UUI/3D/
 > SND/MEDIA/WRITE/MUSIC/STUDIO/PY/DBG, exercising the toolkits (unoui widget
 > lifecycle + events, uno3d raster, unosound sequencer), the audio decoders (WAV
@@ -1609,17 +1608,17 @@ a timeout rather than hanging.
 
 Several divergences below were FIXED this session and are now regression-checked
 by SPECTEST on real hardware (`pc64_spectest.c`, STRESS.CFG `spec`):
-- **S-FAT-28** FIXED — old chain freed only after the new chain + entry commit.
+- **S-FAT-28** FIXED, old chain freed only after the new chain + entry commit.
   SPECTEST S-FAT-28 (overwrite-bigger, read-back-exact) passes.
-- **S-NET-08** FIXED — `net_ping` copies the dst into a static buffer.
-- **S-NET-19** FIXED — DNS response transaction id verified.
-- **S-FONT-09 / F7** FIXED — `text_pen`/`prov_glyph` multiply instead of `x<<6`.
-- **S-MOD-12** FIXED — 64-bit size compare in `uno_mod_load_pyapp` + the .UNO loader.
-- **S-UUI-04** FIXED — widget overflow returns a scratch cell, never a live slot.
-- **S-INST-07** FIXED — boot-entry device-path length checked before memcpy.
+- **S-NET-08** FIXED, `net_ping` copies the dst into a static buffer.
+- **S-NET-19** FIXED, DNS response transaction id verified.
+- **S-FONT-09 / F7** FIXED, `text_pen`/`prov_glyph` multiply instead of `x<<6`.
+- **S-MOD-12** FIXED, 64-bit size compare in `uno_mod_load_pyapp` + the .UNO loader.
+- **S-UUI-04** FIXED, widget overflow returns a scratch cell, never a live slot.
+- **S-INST-07** FIXED, boot-entry device-path length checked before memcpy.
 
 New divergences FOUND this session (SPECTEST caught them on metal/QEMU):
-- **S-LIBC-06** FIXED (2026-07-21) — `pc64_libc.c vsnprintf`: a TRUNCATING `%s`
+- **S-LIBC-06** FIXED (2026-07-21), `pc64_libc.c vsnprintf`: a TRUNCATING `%s`
   hung the machine. Root cause was NOT UBSan: the `PUT(ch)` macro gated the
   whole `buf[o]=ch; o++` on `o+1<cap`, and `%s` called it `PUT(*s++)`, so once
   the buffer filled the `s++` side effect stopped firing and `while(*s)` spun
@@ -1627,7 +1626,7 @@ New divergences FOUND this session (SPECTEST caught them on metal/QEMU):
   `PUT` now evaluates its argument exactly once, before the space check. SPECTEST
   S-LIBC-06 now EXECUTES the truncating case (reaching the assert proves no hang);
   verified on host and in QEMU.
-- **S-JS-05/07** — `js.c`: `document.write(number)` outputs correctly but a
+- **S-JS-05/07**: `js.c`: `document.write(number)` outputs correctly but a
   string literal / `"a"+"b"` does not reach `out` (numeric coercion or the
   string-literal truncation noted below). Only the safety contract (clean
   return, no fault) is asserted.
@@ -1639,167 +1638,167 @@ Every `NOTE:` above, collected. Line numbers are as-read on branch
 (Items marked FIXED above are struck from active status but kept for history.)
 
 ### Storage
-- **S-FAT-20** — `fat.c pack83` (~365): over-length 8.3 components silently
+- **S-FAT-20**: `fat.c pack83` (~365): over-length 8.3 components silently
   truncate, so distinct long names alias to one entry. Intended: reject.
-- **S-FAT-28** — `fat.c uno_fat_write` (~651-674): old chain freed BEFORE
+- **S-FAT-28**: `fat.c uno_fat_write` (~651-674): old chain freed BEFORE
   the new one is allocated; ENOSPC mid-write leaves the directory entry
   pointing at freed clusters (file corrupted, size stale).
-- **S-FAT-29** — `fat.c uno_fat_write` (~651): no directory-attribute check
+- **S-FAT-29**: `fat.c uno_fat_write` (~651): no directory-attribute check
   after `dir_find`; writing a file over a subdirectory name destroys the
   directory.
-- **S-FAT-30** — `fat.c dir_alloc_slot` (~715): grow-branch gated on
+- **S-FAT-30**: `fat.c dir_alloc_slot` (~715): grow-branch gated on
   `v->fat32`, so a full FAT16 SUBDIRECTORY can never grow.
-- **S-FAT-31** — `fat.c` mount fields (~112-143, 298): fat_start /
+- **S-FAT-31**: `fat.c` mount fields (~112-143, 298): fat_start /
   data_start / clus_lba computed in uint32 from `(uint32_t)start`; volumes
   past 2 TiB mis-address; the device-bounds sanity check compares the
   truncated value.
-- **S-FAT-32** — `fat.c fat_get` (~270,275): cache_get failure returns the
-  EOC sentinel — a transient IO error silently truncates a file instead of
+- **S-FAT-32**: `fat.c fat_get` (~270,275): cache_get failure returns the
+  EOC sentinel, a transient IO error silently truncates a file instead of
   erroring.
-- **S-FAT-33** — `fat.c dir_next`/chain walkers (~357): no upper-bound
+- **S-FAT-33**: `fat.c dir_next`/chain walkers (~357): no upper-bound
   validation of a next-cluster value below the EOC threshold; only
   MAXCLUS_WALK bounds a corrupt chain.
-- **S-FAT-34** — `fat.c seq_hit/seq_save` (~564-577): sequential-cursor
+- **S-FAT-34**: `fat.c seq_hit/seq_save` (~564-577): sequential-cursor
   path compare truncates at 79 chars (false-match possible in principle).
-- **S-BLK-11** — `ahci.c` (~137-147) and `nvme.c` (~168-178): no
+- **S-BLK-11**: `ahci.c` (~137-147) and `nvme.c` (~168-178): no
   FLUSH-CACHE / NVMe Flush after writes; a drive's volatile write cache can
   lose synced telemetry on power cut. The single most impactful gap for a
   crash-report OS.
-- **S-BLK-12** — `ahci.c` port start (~178-180): sets FRE then ST without
+- **S-BLK-12**: `ahci.c` port start (~178-180): sets FRE then ST without
   waiting for PxCMD.FR (spec ordering); tolerated polled, latent on slow
   HBAs.
-- **S-BLK-15** — `nvme.c` completion wait (~104): a timed-out command
-  leaves SQ tail/doorbell advanced with no reset path — subsequent
+- **S-BLK-15**: `nvme.c` completion wait (~104): a timed-out command
+  leaves SQ tail/doorbell advanced with no reset path, subsequent
   commands desync phase.
-- **S-BLK-16** — `nvme.c` init (~234-237): Set-Features (Number of Queues)
+- **S-BLK-16**: `nvme.c` init (~234-237): Set-Features (Number of Queues)
   status ignored; a controller granting 0 I/O queues would still proceed.
-- **S-BLK-18** — `sdhci.c` (~264): byte-addressed argument computed as
-  `(uint32_t)(lba*512)` — wraps past 4 GB.
-- **S-BLK-20** — `blkdev.c fw_scan` (~111-114): controller dedup skipped
+- **S-BLK-18**: `sdhci.c` (~264): byte-addressed argument computed as
+  `(uint32_t)(lba*512)`: wraps past 4 GB.
+- **S-BLK-20**: `blkdev.c fw_scan` (~111-114): controller dedup skipped
   when the firmware device path has no PCI node (pdev = -1); a disk can be
   double-registered (masked by pc64_fs serial dedup).
-- **S-FS-07** — `pc64_fs.c` (~70): native-vs-firmware volume dedup keys on
-  BPB serial and skips serial==0 — such a volume lists twice.
-- **S-FS-08** — `pc64_fs.c uno_fs_list_get` (~133): no fw_dead check; a
+- **S-FS-07**: `pc64_fs.c` (~70): native-vs-firmware volume dedup keys on
+  BPB serial and skips serial==0, such a volume lists twice.
+- **S-FS-08**: `pc64_fs.c uno_fs_list_get` (~133): no fw_dead check; a
   pre-detach firmware listing snapshot stays readable until remap.
-- **S-FS-09** — `pc64_fs.c list_begin` (~116-119): listing silently capped
+- **S-FS-09**: `pc64_fs.c list_begin` (~116-119): listing silently capped
   at 64 names of <= 12 chars, no truncation signal.
 
 ### Boot / debug harness
-- **S-BOOT-13** — `uefi_main.c try_detach` (~730) [METAL-FINDINGS F8]:
+- **S-BOOT-13**: `uefi_main.c try_detach` (~730) [METAL-FINDINGS F8]:
   detach gate tests "some UnoDOS volume natively reachable", not "the
-  volume we BOOTED from survives" — a USB-booted system with an internal
+  volume we BOOTED from survives", a USB-booted system with an internal
   install detaches away its own boot volume.
-- **S-DBG-16** — `uno_debug.c next_seq` (~628-635): report numbering is
+- **S-DBG-16**: `uno_debug.c next_seq` (~628-635): report numbering is
   dir-count+1; deleting an old report makes the next one OVERWRITE an
   existing number.
-- **S-DBG-21** — `uno_debug.c uno_dbg_watchdog_start` (~1034-1051)
+- **S-DBG-21**: `uno_debug.c uno_dbg_watchdog_start` (~1034-1051)
   [METAL-FINDINGS F9]: only one seeded heartbeat at arm; a machine with
   ~250 ms presents can take > 20 s to the first shell heartbeat →
   spurious HG + reset loop.
 
 ### Module loader
-- **S-MOD-07** — `pc64_modload.c mod_load` (~396-402), `uno_mod_load_uui`
+- **S-MOD-07**: `pc64_modload.c mod_load` (~396-402), `uno_mod_load_uui`
   (~426), `uno_mod_load_pyrt` (~441): tier-flag refusals happen AFTER a
-  successful instantiate and never free the pages — leak per refused
+  successful instantiate and never free the pages, leak per refused
   load.
-- **S-MOD-12** — `pc64_modload.c uno_mod_load_pyapp` (~465): size check
+- **S-MOD-12**: `pc64_modload.c uno_mod_load_pyapp` (~465): size check
   `(long)sizeof *h + h->file_size > n` wraps in 32-bit `long` (LLP64);
   file_size ~0xFFFFFFFF passes, mod_crc32 runs with a negative length
   (skipped), `*len` becomes -1. Intended: 64-bit `file_size <= n - 48` as
   the mod_instantiate path already does.
 
 ### Graphics / UI
-- **S-FONT-05** — `pc64_font.c` (~276-311): bytes 128..255 render as blank
-  advances (ASCII-only cache, no UTF-8, no .notdef) — accented text
+- **S-FONT-05**: `pc64_font.c` (~276-311): bytes 128..255 render as blank
+  advances (ASCII-only cache, no UTF-8, no .notdef), accented text
   silently vanishes in TTF-skinned UI.
-- **S-FONT-09** — `pc64_font.c` (~307) [METAL-FINDINGS F7]: `x<<6` on a
+- **S-FONT-09**: `pc64_font.c` (~307) [METAL-FINDINGS F7]: `x<<6` on a
   negative pen x is UB (UBSan #UD in debug); centered strings wider than
   the surface reach it; callers only partially audited.
-- **S-UUI-04** — `unoui/unoui.c push` (~57-67): widget overflow returns
-  `&win->w[63]` without nw++ or memset — silent slot-63 corruption with
+- **S-UUI-04**: `unoui/unoui.c push` (~57-67): widget overflow returns
+  `&win->w[63]` without nw++ or memset, silent slot-63 corruption with
   stale id/edit/canvas fields.
-- **S-UUI-10** — `unoui/unoui_input.c clamp_win` (~162-168): drag-commit
-  clamps to screen_h-16, not the work area — windows can be parked under
+- **S-UUI-10**: `unoui/unoui_input.c clamp_win` (~162-168): drag-commit
+  clamps to screen_h-16, not the work area, windows can be parked under
   the always-on-top taskbar.
-- **S-UUI-13** — `unoui_input.c` (~625,637) vs `unoui.c d_popup` (~817):
-  popup hit rows anchored at y+2, drawn at y+3 — 1-px hover/commit
+- **S-UUI-13**: `unoui_input.c` (~625,637) vs `unoui.c d_popup` (~817):
+  popup hit rows anchored at y+2, drawn at y+3, 1-px hover/commit
   disagreement band.
-- **S-UUI-18** — `pc64_uui.c remove_win` (~820-829) and
+- **S-UUI-18**: `pc64_uui.c remove_win` (~820-829) and
   `unoui_input.c unoui_ui_add` (~48-53): window removal/insert fixes only
   focus_win (and only at the top end); cap/hot/popup indices (and
-  mid-list focus) go stale — focus lands on the taskbar after closing the
+  mid-list focus) go stale, focus lands on the taskbar after closing the
   focused app; a live capture can dereference the wrong window.
-- **S-SHELL-09** — `pc64_uui.c` icon drag (~1670-1726): a sub-3-px
-  click-drag nudges the icon rect and never restores it — icons creep up
+- **S-SHELL-09**: `pc64_uui.c` icon drag (~1670-1726): a sub-3-px
+  click-drag nudges the icon rect and never restores it, icons creep up
   to 3 px per click.
 
 ### Input / USB
-- **S-INP-05** — `i2c_hid.c` [METAL-FINDINGS F4]: the PCI-BDF-guess probe
+- **S-INP-05**: `i2c_hid.c` [METAL-FINDINGS F4]: the PCI-BDF-guess probe
   binds the trackpad on NO tested machine (X1: 2 controllers/0 devices,
   Surface: 3/0, Yoga: 0 controllers); the ACPI PNP0C50 enumeration the fix
-  plan calls for is unimplemented. Knock-on: F6 — no laptop detaches.
-- **S-USB-07** — `xhci.c enumerate_port` (~283): EP0 MPS stays
+  plan calls for is unimplemented. Knock-on: F6, no laptop detaches.
+- **S-USB-07**: `xhci.c enumerate_port` (~283): EP0 MPS stays
   mps_for_speed(8) for full-speed devices; the descriptor's real MPS is
   never programmed back (fine for boot HID, short of full enumeration).
 
 ### Network
-- **S-NET-08** — `net.c net_ping` (~163): stores the caller's POINTER for
+- **S-NET-08**: `net.c net_ping` (~163): stores the caller's POINTER for
   the deferred post-ARP retry; a dead stack buffer is re-read in
   net_poll. Intended: copy 4 bytes.
-- **S-NET-15** — FIXED 2026-07-21 (`net.c tcp_input`): rcv_nxt now advances
+- **S-NET-15**: FIXED 2026-07-21 (`net.c tcp_input`): rcv_nxt now advances
   only past bytes actually stored, the truncated tail is taken from the
   peer's retransmit (with overlap trim), and FIN counts only at exactly
-  rcv_nxt. Was: full-dlen ACK — bytes past the buffer acknowledged-and-lost;
+  rcv_nxt. Was: full-dlen ACK, bytes past the buffer acknowledged-and-lost;
   surfaced as every real-host TLS handshake dying (S-AI-01) once the live
   checks landed.
-- **S-NET-17** — `net.c` DHCP (~454-460): no retransmit/timeout anywhere
-  in the DISCOVER/REQUEST exchange — one lost packet stalls
+- **S-NET-17**: `net.c` DHCP (~454-460): no retransmit/timeout anywhere
+  in the DISCOVER/REQUEST exchange, one lost packet stalls
   net_dhcp_done() forever.
-- **S-NET-19** — `net.c net_dns_query` (~580): response transaction ID
+- **S-NET-19**: `net.c net_dns_query` (~580): response transaction ID
   never verified (only the source port filters).
-- **S-NET-23** — FIXED 2026-07-21 (`net.c tcp_out`): the window is now the
+- **S-NET-23**: FIXED 2026-07-21 (`net.c tcp_out`): the window is now the
   rxq's actual free space (and `net_tcp_recv` sends a window update when a
   collapsed window reopens); rxq grown 2048 → 8192 so a CA certificate
   flight fits. Was: fixed 4096 over a 2048-byte rxq.
-- **S-NET-24** — `net.c ip_recv` (~514): limited-broadcast test checks
+- **S-NET-24**: `net.c ip_recv` (~514): limited-broadcast test checks
   only the first two octets (255.255.x.x accepted).
-- **S-NET-25** — `net.c tcp_tick` (~392-407) / `arp_put` (~61): TCP
+- **S-NET-25**: `net.c tcp_tick` (~392-407) / `arp_put` (~61): TCP
   retransmits forever with no backoff or give-up; a full ARP cache always
   evicts slot 0.
-- **S-NET-26** — `net.c net_tcp_connect` (~307): always returns 0, making
+- **S-NET-26**: `net.c net_tcp_connect` (~307): always returns 0, making
   `pc64_http.c`'s `< 0` check (~109) dead code.
-- **S-NIC-07** — `e1000.c` (~48): REG_RAH0 defined as 0x5408 (RAL1 on
-  8254x) vs 0x5404 in e1000e/igb — the AV bit lands in the wrong register;
+- **S-NIC-07**: `e1000.c` (~48): REG_RAH0 defined as 0x5408 (RAL1 on
+  8254x) vs 0x5404 in e1000e/igb, the AV bit lands in the wrong register;
   masked today only by promiscuous mode.
-- **S-WIFI-08** — `iwlwifi.c find_and_join` (~1318-1330), `rtwifi.c`
+- **S-WIFI-08**: `iwlwifi.c find_and_join` (~1318-1330), `rtwifi.c`
   (~244, 639), `mrvlwifi.c connect` (~460): scan/auth/assoc unimplemented
-  on all three drivers — a real join cannot complete; iwlwifi's ceiling is
+  on all three drivers, a real join cannot complete; iwlwifi's ceiling is
   firmware ALIVE + MVM init.
-- **S-WIFI-09** — `iwlwifi.c mvm_init_unified` (~1068-1071) and
-  `rtwifi.c`: g_mac never populated from NVM/hardware — 802.11 frames
+- **S-WIFI-09**: `iwlwifi.c mvm_init_unified` (~1068-1071) and
+  `rtwifi.c`: g_mac never populated from NVM/hardware, 802.11 frames
   would source from 00:00:00:00:00:00 (mrvlwifi does read a real MAC).
 
 ### Apps
-- **S-WRITE-07** — `pc64_write.c lay_push` (~140): layout silently stops
+- **S-WRITE-07**: `pc64_write.c lay_push` (~140): layout silently stops
   at 4096 wrapped lines; content beyond is invisible in the view with no
   indicator (buffer/save unaffected).
-- **S-JS-05** — `js.c` (~158-163 string literals, ~385 sc_def, ~413
+- **S-JS-05**: `js.c` (~158-163 string literals, ~385 sc_def, ~413
   BT_PUSH, ~439 indexed store): every structural limit silently
   truncates/drops instead of raising a script error (memory-safe but
   wrong results).
-- **S-JS-06** — `js.c ar_alloc` (~25) + parse loops (~337, ~555): arena
+- **S-JS-06**: `js.c ar_alloc` (~25) + parse loops (~337, ~555): arena
   OOM returns the arena base and only sets g_oom, which the parser loops
-  do not check — overlapping AST nodes (bounded garbage) before the
+  do not check, overlapping AST nodes (bounded garbage) before the
   deferred OOM report.
-- **S-STUDIO-07** — `ucc_x64.c alu` (~217-229): runtime idiv has no
+- **S-STUDIO-07**: `ucc_x64.c alu` (~217-229): runtime idiv has no
   INT64_MIN/-1 guard while the constant folder guards the same expression
-  (`ucc.c` ~842-848) — compile-time/runtime divergence; the module faults
+  (`ucc.c` ~842-848), compile-time/runtime divergence; the module faults
   with #DE.
-- **S-MAC-05** — `mac_compat.c TickCount` (~248): returns a per-call
-  counter, not 60ths of a second — Toolbox-tier apps pace by call
+- **S-MAC-05**: `mac_compat.c TickCount` (~248): returns a per-call
+  counter, not 60ths of a second, Toolbox-tier apps pace by call
   frequency, not time.
-- **S-CLOCK-04** — `pc64_clock.c` (~129-131): coarse midnight carry
+- **S-CLOCK-04**: `pc64_clock.c` (~129-131): coarse midnight carry
   (d=31/1 regardless of month) can misreport the displayed date by one
   day near month boundaries under large UTC offsets (documented,
   declination-only intent).
@@ -1807,30 +1806,30 @@ Every `NOTE:` above, collected. Line numbers are as-read on branch
   SIGNED char drops bytes >= 128 (non-ASCII input silently ignored).
 
 ### Installer
-- **S-INST-07** — `installer.c write_boot_entry` (~451-468): the
+- **S-INST-07**: `installer.c write_boot_entry` (~451-468): the
   firmware-supplied device-path prefix is memcpy'd into `lo[1024]` with no
-  size check — a long legitimate path overflows.
-- **S-INST-08** — `installer.c` clone header patch (~623-631): crc32 runs
-  over the source GPT's own HeaderSize field unchecked — a bogus
+  size check, a long legitimate path overflows.
+- **S-INST-08**: `installer.c` clone header patch (~623-631): crc32 runs
+  over the source GPT's own HeaderSize field unchecked, a bogus
   HeaderSize reads past the 512-byte buffer.
-- **S-INST-09** — `installer.c` clone (~614-634): no read-back verify of
+- **S-INST-09**: `installer.c` clone (~614-634): no read-back verify of
   the cloned region despite a known mid-write corruption incident;
   WriteBlocks success is trusted.
 
 ### libc
-- **S-LIBC-04** — `pc64_libc.c realloc` (~220-230): copies the old BLOCK
+- **S-LIBC-04**: `pc64_libc.c realloc` (~220-230): copies the old BLOCK
   size (not the logical size), so grown buffers carry stale tail bytes;
   in-place grow within the block returns uninitialized tail. Harmless
   today; pinned by test.
 
 ### Minor code-health notes (no contract)
-- `iwlwifi.c` (~606, ~965, ~1162): dead/garbled expressions — a seq
+- `iwlwifi.c` (~606, ~965, ~1162): dead/garbled expressions, a seq
   computed with `CMDQ_N & 0`, an always-true `|| 1` condition (PNVM base
   never actually programmed on gen3), and a precedence-broken queue-mask
   write that always stores 0.
 - `igb.c` (~218): dead `len < 0` check on a u16-derived value.
 - `blkdev.c` (~119): `sectors = LastBlock + 1` unguarded (wraps only on an
   absurd LastBlock of UINT64_MAX).
-- `hdaudio.c cmd_corb` (~122): no solicited-response validation — an
+- `hdaudio.c cmd_corb` (~122): no solicited-response validation, an
   unsolicited codec response can be taken as a command reply (bounded by
   SPIN_MAX).

@@ -1,8 +1,8 @@
-# Aurora rollout — handoff / continuation prompt
+# Aurora rollout, handoff / continuation prompt
 
 Continue bringing the **unoui Aurora theme** to the UnoDOS ports. Repo:
 `github.com/hmofet/unodos`, branch **`pc64-usb-flasher`**. **Read
-[`PLAN-aurora-rollout.md`](PLAN-aurora-rollout.md) first** — it's the
+[`PLAN-aurora-rollout.md`](PLAN-aurora-rollout.md) first**: it's the
 authoritative plan (per-port tiers, architecture, phases). This doc is the
 current state + how to execute on a machine with enough RAM to build the heavy
 cross-toolchains that were blocked before.
@@ -11,23 +11,23 @@ cross-toolchains that were blocked before.
 emulator (screendump), not just building**; commit per port; push to
 `pc64-usb-flasher`.
 
-## Already done — do NOT redo (see `git log`)
+## Already done, do NOT redo (see `git log`)
 
 - **Phase 0** (`7bcd7ec`): the compositing foundation.
-  - `UNO_BG_CACHE` capability (was a pc64 hardcode) in `unoui/unoui.c` — the
+  - `UNO_BG_CACHE` capability (was a pc64 hardcode) in `unoui/unoui.c`: the
     cached desktop background is now opt-in per port.
   - `unoui_aurora_lite` flag in `unoui/themes/theme_aurora.c`: `0` = full (soft
     drop shadow + AA rounded corners); `1` = lite/static (**zero per-frame
-    alpha** — `soft_shadow` skipped, corners squared).
+    alpha**: `soft_shadow` skipped, corners squared).
   - "Aurora lite" checkbox in the pc64 Control panel. Render-verified in QEMU.
 - **Phase 1 ps2** (`9679da6`): `./build.sh ee uui` builds unoui + Aurora on the
   EE. Build+link verified (`unodos-ps2-uui.elf`, MIPS N32) and **GS
-  render-verified in PCSX2** — the EE ELF boots and presents the Aurora desktop
+  render-verified in PCSX2**: the EE ELF boots and presents the Aurora desktop
   (About + Display windows, soft-shadow chrome, rounded corners, widgets) on the
   real GS pipeline. Capture recipe: `ps2/tools/run_pcsx2_windowed.ps1` (windowed
   + DWM-composited so `CopyFromScreen` reads the GPU frame; the fullscreen
   `run_pcsx2.ps1` only works when RDP is connected AND reads black under
-  fullscreen-exclusive — use the windowed one). ps2 `.gitignore`s `shots/`, so
+  fullscreen-exclusive, use the windowed one). ps2 `.gitignore`s `shots/`, so
   no shot is committed (port policy).
 - **Phase 1 dreamcast** (this branch): `./build.sh dc uui` builds the SH4 KOS
   ELF `unodos-dc-uui.elf` + a bootable image (`.iso`/`.cdi`). Files:
@@ -38,9 +38,8 @@ emulator (screendump), not just building**; commit per port; push to
   Aurora content render-verified two ways: (1) `./build.sh uui-host` →
   `dreamcast/shots/aurora.png` (the SAME unoui+theme_aurora+fb_aa software path
   the DC runs; only the present differs, fb→565); (2) **flycast v2.6
-  render-verified on the PowerVR2 pipeline** → `dreamcast/shots/aurora_flycast.png`
-  — the SH4 ELF boots and presents Aurora FULL, no visible RGB565 banding at 480p.
-  Recipe: flycast boots the DC **`.elf` directly** (HLE BIOS, windowed) — the
+  render-verified on the PowerVR2 pipeline** → `dreamcast/shots/aurora_flycast.png`: the SH4 ELF boots and presents Aurora FULL, no visible RGB565 banding at 480p.
+  Recipe: flycast boots the DC **`.elf` directly** (HLE BIOS, windowed), the
   genisoimage `.iso` fallback did NOT boot in flycast; install `mkdcdisc` for a
   `.cdi` if a disc image is needed. flycast lives at `C:\Users\arin\dc-tools\flycast`.
 
@@ -48,7 +47,7 @@ emulator (screendump), not just building**; commit per port; push to
 
 1. The port drives a chunky ARGB/XRGB `fb.c`, but its `fb.c` usually lacks the
    alpha/gradient/rounded primitives → add `<port>/fb_aa.c` (copy
-   `ps2/fb_aa.c` — portable software ops) and declare in the port's `fb.h`:
+   `ps2/fb_aa.c`: portable software ops) and declare in the port's `fb.h`:
    `FB_CORNER_*`, `FB_BUF_PIX`, and `fb_pixel` / `fb_blend_pixel` /
    `fb_blend_rect` / `fb_grad_v` / `fb_round_rect_a` / `fb_set_clip` /
    `fb_reset_clip`.
@@ -69,7 +68,7 @@ v2.x, flycast) present through a **GPU swapchain** `PrintWindow` can't read, and
 **fullscreen-exclusive** reads black. The recipe that works: **RDP connected +
 emulator windowed** (so the frame composites through DWM) + `CopyFromScreen` of
 the window rect. If the RDP session is *disconnected*, `CopyFromScreen` returns
-"handle invalid" — reconnect, or enable the installed-but-inactive virtual
+"handle invalid", reconnect, or enable the installed-but-inactive virtual
 display driver (`VirtualDrivers.Virtual-Display-Driver`, a one-time admin step
 per `~/.claude/CLAUDE.md`). Belt-and-suspenders: every port also gets a
 host-identical render (`uui-host`, byte-identical software path) so verification
@@ -77,7 +76,7 @@ never *depends* on the capture working.
 
 ## Remaining work, in order
 
-- **Phase 2 — rpi → pinephone → ppcmac** (bigger lift): these are bare-metal
+- **Phase 2, rpi → pinephone → ppcmac** (bigger lift): these are bare-metal
   **assembly** today, but each already stands up a 640×480 **32-bit XRGB8888**
   framebuffer in its `kernel.s`. Bring up a freestanding C world (reuse pc64's
   `pc64_libc`/heap pattern), point an `fb.c` at the framebuffer base/pitch the
@@ -88,7 +87,7 @@ never *depends* on the capture working.
   (unoui chunky fb → `CopyBits` at 8-bit); Aurora at `DEPTH_8` dithered on a
   256-color Mac. Toggle.
 - **Phase 3 gba / x86 (STATIC toggle, no live composite):**
-  - **gba**: a **baked static Aurora wallpaper** — precompute the 240×160
+  - **gba**: a **baked static Aurora wallpaper**: precompute the 240×160
     BGR555 gradient+blobs at build time → DMA to VRAM; opaque chrome. Likely a
     faux-Aurora wallpaper behind the existing asm UI (256 KB RAM won't hold full
     unoui). `arm-none-eabi` is available.
@@ -111,13 +110,13 @@ never *depends* on the capture working.
   baked bg (or, for gba/x86, a build-time-baked wallpaper).
 - **Aurora is a boot-applied toggle** on marginal platforms (video-mode / memory
   / UI-swap changes want a reboot).
-- **Every port keeps its existing UI as the default/fallback** — Aurora is
+- **Every port keeps its existing UI as the default/fallback**: Aurora is
   additive + toggleable, never a replacement.
 
 ## Coordination
 
 A separate **perf pass** (drag damage-rect; see `AUDIT-*.md` and the branch
-history) may push changes to `unoui.c` / `pc64_uui.c` on this same branch —
+history) may push changes to `unoui.c` / `pc64_uui.c` on this same branch -
 rebase/reconcile if so. The 8 GB dev box could not run the perf-pass toolchain
 builds and Aurora builds at once (WSL VM crashed under memory pressure); on a
 bigger machine that's a non-issue.

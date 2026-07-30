@@ -1,9 +1,9 @@
-# unojs — subsystem contract
+# unojs, subsystem contract
 
 **Owner:** the unojs row in [`/AGENTS.md`](../AGENTS.md) §1.
 **Public surface:** [`unojs.h`](unojs.h). Everything else in this directory is
 internal and may change without notice.
-**Contract version:** 0.1 — `[EXPERIMENTAL]` until M1 lands on `master`.
+**Contract version:** 0.1, `[EXPERIMENTAL]` until M1 lands on `master`.
 
 unojs is a standalone JavaScript engine: a bytecode VM with a garbage-collected
 heap and fuel-based preemption. It is the JS half of the engine split described
@@ -58,7 +58,7 @@ kept = ujs_scope_close(vm, &s, o);     /* o survives; the rest is garbage */
 ```
 
 A raw `ujs_val` held across an allocation with no scope may be collected. The
-collector is non-moving, so pointers stay valid — but a value that nothing
+collector is non-moving, so pointers stay valid, but a value that nothing
 roots is *freed*.
 
 This is not a theoretical hazard. The engine's own VM had this bug in every
@@ -79,7 +79,7 @@ load-bearing.
 | `UJS_YIELD` | the fuel slice ran out mid-run; call `ujs_resume()` |
 | `UJS_OOM` | the heap ceiling was hit and collection could not free enough |
 
-### Fuel — why it exists
+### Fuel, why it exists
 
 UnoDOS runs page scripts in ring 0 on a single-threaded OS. A `while(1)` in an
 untrusted page must not be able to wedge the desktop. The VM therefore charges
@@ -105,7 +105,7 @@ callbacks short.
 
 | Knob | Default | Behaviour at the limit |
 |---|---|---|
-| `heap_max` | 8 MB | collect, then raise a JS `RangeError` — never grow |
+| `heap_max` | 8 MB | collect, then raise a JS `RangeError`: never grow |
 | call depth | 256 frames | `RangeError: maximum call depth exceeded` |
 | operand stack | 4096 slots | `RangeError: stack overflow` |
 
@@ -125,7 +125,7 @@ names); template literals **without** interpolation; `Object`, `Array`,
 `String`, `Number`, `Boolean`, `Math`, `JSON.stringify`, `Error`/`TypeError`/
 `RangeError`, `parseInt`/`parseFloat`/`isNaN`/`isFinite`.
 
-**Known gaps — the honest list.** These are deliberate v0.1 omissions, each
+**Known gaps, the honest list.** These are deliberate v0.1 omissions, each
 scheduled or explicitly out of scope. None of them is a silent failure: they
 either work in a documented reduced way or raise a clear error.
 
@@ -234,7 +234,7 @@ obvious implementation falls into:
 
 ## Changelog
 
-- **0.1** (2026-07-27) — first cut. Engine core, library, host test suite.
+- **0.1** (2026-07-27), first cut. Engine core, library, host test suite.
   Replaces `pc64/js.c` (a 577-line tree-walking subset) via a `js_run()`
   compatibility shim. `[EXPERIMENTAL]`: the surface may still move before M1
   lands on `master`.

@@ -1,7 +1,7 @@
-# UnoDOS USB Installer — macOS (pc64)
+# UnoDOS USB Installer, macOS (pc64)
 
 A single self-contained **macOS** app that writes the bootable UnoDOS/pc64 UEFI
-image to a USB drive — the macOS twin of the Windows flasher in
+image to a USB drive, the macOS twin of the Windows flasher in
 [`pc64/flash/`](../), ported from the Writer's Unlock mac flasher and simplified
 to pc64's UEFI-only, single-image world (no BIOS/Legacy build, no FAT32-vs-exFAT
 choice).

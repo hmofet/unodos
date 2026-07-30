@@ -1,5 +1,5 @@
 #!/bin/bash
-# stage_run.sh <AppName> [bpp] [size] — stage an .APPL (+sidecars) and run it
+# stage_run.sh <AppName> [bpp] [size], stage an .APPL (+sidecars) and run it
 set -e
 export DISPLAY=:0
 APP="$1"

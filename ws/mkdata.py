@@ -6,7 +6,7 @@ software framebuffer this bakes real tile PATTERNS the kernel DMA-copies into th
 internal RAM tile area (0x2000). Tile index == ASCII for the font (so the kernel
 just writes a char's code into the SCR1 map), plus a solid block tile and a set of
 8x8 launcher icons. Colour comes from the per-tile palette field, so the Theme app
-recolours everything by rewriting the mono shade-pool (ports 0x1C-0x1F) — no tile
+recolours everything by rewriting the mono shade-pool (ports 0x1C-0x1F), no tile
 data changes. Also emits the shared Dostris piece tables and the tone tune.
 
 Usage: python ws/mkdata.py   (from the repo root or ws/)

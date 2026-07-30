@@ -1,15 +1,15 @@
 # UnoDOS Remote Desktop client (`unoremote`)
 
 A Windows GUI client for driving a running UnoDOS pc64 machine over **URC** (the
-unoautomate remote channel — see [`../REMOTE.md`](../REMOTE.md)). It wraps URC in
+unoautomate remote channel, see [`../REMOTE.md`](../REMOTE.md)). It wraps URC in
 a GUI: a **live view** of the device screen, **mouse + keyboard forwarding**,
 **session recording**, a **log pane** fed by the URC LOG stream, and a raw
 command box.
 
 Remote desktop is just two URC halves working together: `key`/`pointer` (input,
 IN) and the `screen` verb (framebuffer out, OUT). This client polls `screen grab
-delta` VNC-style — the device sends only the tiles that changed since the last
-grab — composites them onto a persistent canvas, and maps clicks/keystrokes back
+delta` VNC-style, the device sends only the tiles that changed since the last
+grab, composites them onto a persistent canvas, and maps clicks/keystrokes back
 to framebuffer coordinates. (It seeds the canvas with one full `screen grab` on
 connect, then streams deltas; a scale change or a big change transparently comes
 back as a full keyframe.)
@@ -21,7 +21,7 @@ pc64\remote\build-remote.ps1                      # -> build\UnoRemote.exe
 pc64\remote\build-remote.ps1 -Ffmpeg C:\ff\ffmpeg.exe   # bundle ffmpeg for MP4
 ```
 
-WinForms + the in-box .NET Framework 4.x `csc` — a single self-contained
+WinForms + the in-box .NET Framework 4.x `csc`: a single self-contained
 `winexe`, exactly like the flasher (`pc64/flash/`). No MSBuild, no XAML compiler,
 no NuGet. (WPF was the original intent but would force MSBuild/XAML compilation
 and break the `csc` single-exe model; WinForms keeps the repo's toolchain.)
@@ -35,12 +35,12 @@ client **listens**:
 
 1. Run `UnoRemote.exe`, set the port (default 5099), click **Listen**.
 2. On the device stick's `DEBUG.CFG` (formerly `STRESS.CFG`), set `remote=<this-pc-ip>:5099`
-   (QEMU SLIRP guest: `remote=10.0.2.2:5099`) — or just `discover` to skip the
-   address — and boot a **debug** build.
+   (QEMU SLIRP guest: `remote=10.0.2.2:5099`), or just `discover` to skip the
+   address, and boot a **debug** build.
 
 **B. You dial the device (`Scan…`).** If the device's `DEBUG.CFG` has `listen`
 (server mode), click **Scan…**: the client broadcasts on the LAN, lists the
-boxes in listen mode, and dials the one you pick — no address to type, and you
+boxes in listen mode, and dials the one you pick, no address to type, and you
 choose which box. (Then continue at step 3 below.)
 
 Once connected either way:
@@ -52,7 +52,7 @@ Once connected either way:
 5. The command box sends any raw URC line (`probe`, `vols`, `launch 0`,
    `py print(6*7)`, `reboot`; `/msg …` for a free-form message).
 
-URC is **plaintext, LAN-only, UNO_DEBUG-only** — do not expose the listener to an
+URC is **plaintext, LAN-only, UNO_DEBUG-only**: do not expose the listener to an
 untrusted network.
 
 ## Files
@@ -68,13 +68,13 @@ untrusted network.
 
 ## Follow-up slices
 
-- ~~Dirty-rect / delta frame streaming for higher FPS.~~ **Done** — `screen grab
+- ~~Dirty-rect / delta frame streaming for higher FPS.~~ **Done**: `screen grab
   delta` sends only changed tiles; the client composites onto a persistent canvas.
-- ~~Server-side capture (record on the device itself).~~ **Done** — the **"on
+- ~~Server-side capture (record on the device itself).~~ **Done**: the **"on
   device"** box records on the device tick at a steady fps (its own snapshot);
   Stop pulls the ring and reconstructs the frames into an MP4 / PNG sequence.
 - ~~A clickable command-GUI for the URC verbs, growing from the raw command
-  box.~~ **Done** — a verb bar under the log runs read-only verbs immediately,
+  box.~~ **Done**: a verb bar under the log runs read-only verbs immediately,
   prefills the box for verbs that take an argument (`launch…`, `guard…`, …), and
   confirms `reboot`/`poweroff`. The raw box remains for anything else.
 - A macOS client (Avalonia) reusing `Urc.cs` / `Qoi.cs`.

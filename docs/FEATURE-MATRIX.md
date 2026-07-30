@@ -1,17 +1,17 @@
 # UnoDOS feature matrix
 
 How the targets compare, feature by feature. x86 is the reference
-implementation; every other target is a port — the 68K/6502/65816 ports
+implementation; every other target is a port, the 68K/6502/65816 ports
 are native rewrites against [PORT-SPEC.md](PORT-SPEC.md), and the PS2 /
 Dreamcast ports reuse the portable C core ([../mac/unodos.c](../mac/unodos.c))
 over a Mac-compat shim. Updated 2026-07-17 (x86 v3.31.0 build 420; the
-new-ports program — Apple II, IIGS, SNES, PS2, Dreamcast — and the
+new-ports program, Apple II, IIGS, SNES, PS2, Dreamcast, and the
 standalone MacPlus OS are all at app parity; the **Modern PC (pc64)**
 x86-64 UEFI world is the current flagship).
 
 Column key: **x86** = IBM PC reference (incl. the 8088 hardware-fidelity
 build), **Amg** = Amiga, **M7** = Mac System 7 (hosted Toolbox), **M1-6** =
-Mac System 1–6 (hosted Toolbox), **MacP** = MacPlus standalone OS
+Mac System 1-6 (hosted Toolbox), **MacP** = MacPlus standalone OS
 (bare-metal), **Gen** = Sega Genesis, **A2** = Apple II, **IIGS** = Apple
 IIGS, **SNES** = Super Nintendo, **PS2** = Sony PlayStation 2, **DC** =
 Sega Dreamcast, **PC64** = Modern PC (pc64), bare-metal x86-64 UEFI
@@ -22,33 +22,33 @@ running the unoui desktop shell.
 | Port | Status | Harness / emulator | Real hardware |
 |---|---|---|---|
 | **x86 PC** | reference, feature-complete | QEMU (scripted scenarios) | ✅ tested (8088→486, PS/2 L40, Eee PC) |
-| **x86 8088/XT** | M0–M2 done, M3 mostly | MartyPC + GLaBIOS (cycle-accurate 8088) | ⏳ physical XT pending |
+| **x86 8088/XT** | M0-M2 done, M3 mostly | MartyPC + GLaBIOS (cycle-accurate 8088) | ⏳ physical XT pending |
 | **Amiga** | M3+ | WinUAE + AROS ROM (AUTOTEST builds) | ⏳ A500 smoke test pending |
 | **Mac System 7** | M3 | Executor (ROM-free) | ⏳ Mac II-class pending |
-| **Mac System 1–6** | M3 (minus color Theme) | Executor | ⏳ Mac Plus pending |
+| **Mac System 1-6** | M3 (minus color Theme) | Executor | ⏳ Mac Plus pending |
 | **MacPlus (OS)** | M3, full app parity | Unicorn harness + Mini vMac / vMac II | ✅ real Mac SE (FloppyEmu) |
 | **Sega Genesis** | M6+ | BlastEm (15 AUTOTEST builds) | ⚠️ boots on flashcart (2026-06-12); PS/2 / tape / Sega CD adapters not yet exercised |
-| **Apple II** | M1–M3 done | py65 ROM-free harness; `.woz`/`.nib` built | ⏳ AppleWin/FloppyEmu (IIc) pending |
-| **Apple IIGS** | M0–M3, full parity | from-scratch py65816 core, 9 suites green | ⏳ GSplus/KEGS/MAME + audio-ear pending |
-| **Super Nintendo** | M0–M3 done | Mesen2 F12 captures | 🟡 conditional pass on a SupaBoy clone (FXPak Pro): boots + navigable, but icons text-only & no audio; authentic SNES pending |
-| **Sony PS2** | M0–M3 done | PCSX2 (boot @60fps) | ⏳ real PS2; USB+audio coded but not emulator-exercisable |
+| **Apple II** | M1-M3 done | py65 ROM-free harness; `.woz`/`.nib` built | ⏳ AppleWin/FloppyEmu (IIc) pending |
+| **Apple IIGS** | M0-M3, full parity | from-scratch py65816 core, 9 suites green | ⏳ GSplus/KEGS/MAME + audio-ear pending |
+| **Super Nintendo** | M0-M3 done | Mesen2 F12 captures | 🟡 conditional pass on a SupaBoy clone (FXPak Pro): boots + navigable, but icons text-only & no audio; authentic SNES pending |
+| **Sony PS2** | M0-M3 done | PCSX2 (boot @60fps) | ⏳ real PS2; USB+audio coded but not emulator-exercisable |
 | **Sega Dreamcast** | at parity | Flycast @60fps + VMU round-trip | ⏳ CD-R / dc-tool + audio-ear pending |
 | **Modern PC (pc64)** | flagship x86-64 UEFI world; unoui desktop shell at full app parity + net/TLS/browser/3D | QEMU + OVMF (`harness.py` QMP send-key/screendump; `nettest.py` net + TLS) | ✅ **Lenovo X1 Carbon Gen 8** (USB-stick ESP boot; theme + resolution switching) |
-| **Sega Master System** *(3.1-fresh)* | M1–M3 + Dostris game + PSG audio | BlastEm (AUTOTEST scripted-pad builds) | ⏳ real SMS + audio-ear pending |
-| **Nintendo NES** *(3.1-fresh)* | **full 11-app parity** (M1–M3 + Dostris/Tracker/OutLast/Pac-Man/Paint, `minimal` profile) | **headless py65 PPU harness** (`nes/harness.py` → full 256×240 PNG, no Mesen/RDP dep) + Mesen2 | ✅ **real AV Famicom** (base 7 + Dostris: 2A03 APU + `$4016` confirmed); the 4 parity apps are emulator-verified, HW re-test pending |
-| **Game Boy / Color** *(3.1-fresh)* | M1–M3 + Dostris + APU audio (`minimal`, DMG+GBC colour) | Mesen2/GBC (software-render grab, AUTOTEST scripted-pad) | ⏳ real DMG/GBC pending |
-| **Sega Game Gear** *(3.1-fresh)* | M1–M3 + Dostris + PSG audio (`minimal`, 12-bit colour) | Mesen2/GG (software-render grab, AUTOTEST scripted-pad) | ⏳ real GG pending |
-| **Game Boy Advance** *(3.1-fresh)* | M1–M3 + Dostris + APU audio (`minimal`, Mode-3 framebuffer) | Unicorn ARM7TDMI core (ROM-free harness, AUTOTEST scripted-pad) | ⏳ real GBA + audio-ear pending |
-| **Commodore VIC-20** *(3.1-fresh)* | M1–M3 + Dostris + VIC audio (`minimal`, 22×23 char cells) | py65 ROM-free harness (AUTOTEST scripted-joystick) | ⏳ real VIC-20 / VICE pending |
-| **Bandai WonderSwan** *(3.1-fresh)* | M1–M3 + Dostris + sound channel (`minimal`, 224×144 mono tiles) | Unicorn x86/V30MZ core (ROM-free harness, AUTOTEST scripted-pad) | ⏳ real WonderSwan + audio-ear pending |
-| **NEC PC Engine** *(3.1-fresh)* | M1–M3 + Dostris + PSG audio (`minimal`, 256×224 4bpp tiles) | Mednafen savestate/framebuffer (py65 harness superseded — can't model HuC6280 zp/stack relocation) | ✅ **real Turbo EverDrive v2.5** — boots + input + sound, **under TEOS** (the stock Krikzz v2 OS rejects the ROM with "Error 32"); stock-OS compat is the only open item |
-| **Raspberry Pi** *(3.1-fresh)* | M1–M3 + Dostris + **PWM square-wave audio** + **PL011 UART input** (`minimal`, 640×480 32bpp mailbox FB) | Unicorn AArch64 core (mailbox + system timer + PL011 RX; PWM→WAV reconstruction; AUTOTEST + live serial input) | ✅ **boots to desktop on a real Pi 3** (2026-06-17); open: background renders brown (XRGB/BGR pixel-order swap) + USB-HID input (UART-serial only) |
-| **PinePhone** *(3.1-fresh)* | M1–M3 + Dostris + **PCM tone synth** + **A64 UART input** (`minimal`, 480×640 portrait 32bpp DE2 FB) | Unicorn AArch64 core (DE2 sink + `cntpct_el0` + 16550 RX + I2S-FIFO PCM→WAV; AUTOTEST + live serial input) | ❌ **does not boot on real PinePhone** (2026-06-17); prime suspects = the U-Boot `go` cache-coherency caveat + DE2/DSI bring-up — needs a serial-console debug pass |
-| **PowerPC Mac** *(3.1-fresh)* | M1–M3 + Dostris + **PCM tone synth** + **Open-Firmware keyboard input** (`minimal`, 640×480 32bpp OF FB) | Unicorn PPC32 big-endian core (OF client interface incl. `read` + codec-port PCM→WAV; AUTOTEST + live console input) | ⏳ real Mac (native ADB; codec delivery) pending |
+| **Sega Master System** *(3.1-fresh)* | M1-M3 + Dostris game + PSG audio | BlastEm (AUTOTEST scripted-pad builds) | ⏳ real SMS + audio-ear pending |
+| **Nintendo NES** *(3.1-fresh)* | **full 11-app parity** (M1-M3 + Dostris/Tracker/OutLast/Pac-Man/Paint, `minimal` profile) | **headless py65 PPU harness** (`nes/harness.py` → full 256×240 PNG, no Mesen/RDP dep) + Mesen2 | ✅ **real AV Famicom** (base 7 + Dostris: 2A03 APU + `$4016` confirmed); the 4 parity apps are emulator-verified, HW re-test pending |
+| **Game Boy / Color** *(3.1-fresh)* | M1-M3 + Dostris + APU audio (`minimal`, DMG+GBC colour) | Mesen2/GBC (software-render grab, AUTOTEST scripted-pad) | ⏳ real DMG/GBC pending |
+| **Sega Game Gear** *(3.1-fresh)* | M1-M3 + Dostris + PSG audio (`minimal`, 12-bit colour) | Mesen2/GG (software-render grab, AUTOTEST scripted-pad) | ⏳ real GG pending |
+| **Game Boy Advance** *(3.1-fresh)* | M1-M3 + Dostris + APU audio (`minimal`, Mode-3 framebuffer) | Unicorn ARM7TDMI core (ROM-free harness, AUTOTEST scripted-pad) | ⏳ real GBA + audio-ear pending |
+| **Commodore VIC-20** *(3.1-fresh)* | M1-M3 + Dostris + VIC audio (`minimal`, 22×23 char cells) | py65 ROM-free harness (AUTOTEST scripted-joystick) | ⏳ real VIC-20 / VICE pending |
+| **Bandai WonderSwan** *(3.1-fresh)* | M1-M3 + Dostris + sound channel (`minimal`, 224×144 mono tiles) | Unicorn x86/V30MZ core (ROM-free harness, AUTOTEST scripted-pad) | ⏳ real WonderSwan + audio-ear pending |
+| **NEC PC Engine** *(3.1-fresh)* | M1-M3 + Dostris + PSG audio (`minimal`, 256×224 4bpp tiles) | Mednafen savestate/framebuffer (py65 harness superseded, can't model HuC6280 zp/stack relocation) | ✅ **real Turbo EverDrive v2.5**: boots + input + sound, **under TEOS** (the stock Krikzz v2 OS rejects the ROM with "Error 32"); stock-OS compat is the only open item |
+| **Raspberry Pi** *(3.1-fresh)* | M1-M3 + Dostris + **PWM square-wave audio** + **PL011 UART input** (`minimal`, 640×480 32bpp mailbox FB) | Unicorn AArch64 core (mailbox + system timer + PL011 RX; PWM→WAV reconstruction; AUTOTEST + live serial input) | ✅ **boots to desktop on a real Pi 3** (2026-06-17); open: background renders brown (XRGB/BGR pixel-order swap) + USB-HID input (UART-serial only) |
+| **PinePhone** *(3.1-fresh)* | M1-M3 + Dostris + **PCM tone synth** + **A64 UART input** (`minimal`, 480×640 portrait 32bpp DE2 FB) | Unicorn AArch64 core (DE2 sink + `cntpct_el0` + 16550 RX + I2S-FIFO PCM→WAV; AUTOTEST + live serial input) | ❌ **does not boot on real PinePhone** (2026-06-17); prime suspects = the U-Boot `go` cache-coherency caveat + DE2/DSI bring-up, needs a serial-console debug pass |
+| **PowerPC Mac** *(3.1-fresh)* | M1-M3 + Dostris + **PCM tone synth** + **Open-Firmware keyboard input** (`minimal`, 640×480 32bpp OF FB) | Unicorn PPC32 big-endian core (OF client interface incl. `read` + codec-port PCM→WAV; AUTOTEST + live console input) | ⏳ real Mac (native ADB; codec delivery) pending |
 
 The last eleven are built **fresh on the 3.1 contract-driven architecture** (not
 legacy ports): SMS is a windowed Z80 port; NES is the `minimal`-profile 6502
-launcher; Game Boy is the `minimal`-profile SM83 port — the first to add a *new*
+launcher; Game Boy is the `minimal`-profile SM83 port, the first to add a *new*
 generator dialect (`gbz80`/rgbds); Game Gear is `minimal` on SMS silicon, reusing
 `gen/z80/` with the GB's 20×18 layout; **Game Boy Advance** is the first **ARM**
 world (a new `arm`/GNU-as dialect), drawing a software Mode-3 framebuffer;
@@ -60,7 +60,7 @@ first **AArch64 / 64-bit** world (`aarch64`/GNU-as), drawing a software framebuf
 the VideoCore firmware allocates over the mailbox; **PinePhone** reuses that
 AArch64 core on the Allwinner A64, programming the DE2 mixer UI layer to scan out a
 portrait framebuffer; and **PowerPC Mac** is the first big-endian **PowerPC** world
-(a new `ppc`/GNU-as dialect), the first to boot over **Open Firmware** — it makes OF
+(a new `ppc`/GNU-as dialect), the first to boot over **Open Firmware**: it makes OF
 client calls to get its framebuffer. The seven newest are each
 verified on a **ROM-free instruction-level harness** (Unicorn ARM / py65 / Unicorn
 x86 / py65+HuC6280 / Unicorn AArch64 / Unicorn PPC) where a focus-independent emulator
@@ -94,7 +94,7 @@ metal, not in the harness.
 ¹ Apple II ships poll-and-dispatch; a per-task cooperative scheduler was
 prototyped and proven (`scheduler.i`, `-DSCHED_PROTO=1`) but the
 full-screen single-app model doesn't need a live scheduler.
-² SNES is cooperative-by-ticks — a documented verdict: the 65816 bank-0
+² SNES is cooperative-by-ticks, a documented verdict: the 65816 bank-0
 stack constraint leaves no room for per-task stacks, so every app's
 `*_tick` runs from the main loop.
 
@@ -110,8 +110,8 @@ stack constraint leaves no room for per-task stacks, so every app's
 
 | | **x86** | **Amg** | **M7** | **M1-6** | **MacP** | **Gen** | **A2** | **IIGS** | **SNES** | **PS2** | **DC** | **PC64** |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| Filesystem(s) | FAT12 floppy + FAT16 HD, full R/W | FAT12 on DF1 (PC-interchangeable) | HFS + PC FAT12 floppy R/W | HFS + PC FAT12 floppy R/W | FAT12 + disk-loaded apps | USV1 mini-FS in 8KB battery SRAM | mini-FS (track/sector, GCR — FAT12 doesn't fit) | FAT12 over SmartPort blocks (persistent) | USV1 SRAM mini-FS | memory card (libmc) | VMU (KOS VFS) | RAM disk (vol 0) + FAT/FAT32 via UEFI Simple File System (read); RAM FAT12 R/W in-session |
-| Extra media | SETTINGS.CFG persistence | — | subdir nav | subdir nav | — | tape/WAV (1-bit AFSK via PSG); Sega CD backup RAM (Mode-1) | — | — | — | — | flush-on-close buffer | reads real ESP/FAT disks; write/persist pending NVMe/AHCI |
+| Filesystem(s) | FAT12 floppy + FAT16 HD, full R/W | FAT12 on DF1 (PC-interchangeable) | HFS + PC FAT12 floppy R/W | HFS + PC FAT12 floppy R/W | FAT12 + disk-loaded apps | USV1 mini-FS in 8KB battery SRAM | mini-FS (track/sector, GCR, FAT12 doesn't fit) | FAT12 over SmartPort blocks (persistent) | USV1 SRAM mini-FS | memory card (libmc) | VMU (KOS VFS) | RAM disk (vol 0) + FAT/FAT32 via UEFI Simple File System (read); RAM FAT12 R/W in-session |
+| Extra media | SETTINGS.CFG persistence | - | subdir nav | subdir nav | - | tape/WAV (1-bit AFSK via PSG); Sega CD backup RAM (Mode-1) | - |, | - |, | flush-on-close buffer | reads real ESP/FAT disks; write/persist pending NVMe/AHCI |
 
 ## Audio
 
@@ -127,7 +127,7 @@ with audio live).
 
 ## Applications
 
-`✓` = present; `—` = N/A for the platform.
+`✓` = present; `-` = N/A for the platform.
 
 | App | **x86** | **Amg** | **M7** | **M1-6** | **MacP** | **Gen** | **A2** | **IIGS** | **SNES** | **PS2** | **DC** | **PC64** |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
@@ -136,13 +136,13 @@ with audio live).
 | Files | ✓ (columns, copy, rename) | ✓ | ✓ (subdirs) | ✓ (subdirs) | ✓ | ✓ (multi-volume) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ (RAM + FAT volumes) |
 | Notepad | ✓ (selection, clipboard, undo) | ✓ (caret, status bar) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ (append) | ✓ | ✓ | ✓ (Editor: menubar, Save/Open) |
 | Music | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Theme | ✓ (8 presets) | ✓ (4096) | ✓ (256) | — (1-bit) | ✓ (1-bit dither schemes) | ✓ (512) | ✓ (dither) | ✓ (4096) | ✓ (CGRAM) | ✓ (32-bit) | ✓ (32-bit) | ✓ (10: Aurora Light/Dark + 8 retro) |
+| Theme | ✓ (8 presets) | ✓ (4096) | ✓ (256) |, (1-bit) | ✓ (1-bit dither schemes) | ✓ (512) | ✓ (dither) | ✓ (4096) | ✓ (CGRAM) | ✓ (32-bit) | ✓ (32-bit) | ✓ (10: Aurora Light/Dark + 8 retro) |
 | Tracker | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Dostris | ✓ (+ VGA) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ (native) |
 | OutLast | ✓ (+ VGA) | ✓ | ✓ | ✓ | ✓ | ✓ | ⚠️ ~4fps proto | ✓ | ✓ (linear road) | ✓ | ✓ | ✓ (native) |
 | Pac-Man | ✓ (+ VGA) | ✓ | ✓ | ✓ | ✓ | ✓ (HW-sprite actors) | ✓ (1MHz adaptation) | ✓ | ✓ (BG-tile actors) | ✓ | ✓ | ✓ (native) |
 | Paint | ✓ (4 CGA / 256 VGA) | ✓ (4096) | ✓ (256) | ✓ (1-bit + dithers) | ✓ (1-bit) | ✓ (512) | ✓ (dither) | ✓ (4096) | ✓ (pencil, fixed palette) | ✓ (32-bit) | ✓ (32-bit) | ✓ (32-bit) |
-| Settings / MkBoot / Mouse Test / Hello / Runner3D | ✓ | — | — | — | — | — | — | — | — | — | — | ✓ (Control Panel + Runner3D) |
+| Settings / MkBoot / Mouse Test / Hello / Runner3D | ✓ | - |, | - |, | - |, | - |, | - |, | ✓ (Control Panel + Runner3D) |
 
 The 8 theme preset palettes (Classic VGA, Midnight, Forest, Sunset,
 Ocean, Slate, Candy, Amber) are shared across every color-capable
@@ -152,35 +152,35 @@ platform allows. The Tracker pattern (32×4) is byte-identical on every
 platform, though the on-disk filename varies (`SONG.TRK` on x86/Mac/
 Genesis; `SONG.UNO` on Amiga/Apple II).
 
-## Modern PC (pc64) — additional capabilities
+## Modern PC (pc64), additional capabilities
 
 The pc64 world is the first target to add whole capability classes that no
 earlier port had, so they have no row in the grids above. All are verified in
 QEMU + OVMF; networking/TLS are additionally checked headlessly by `nettest.py`.
 
-- **Networking** — the family's **first native driver + TCP/IP stack**: a native
+- **Networking**: the family's **first native driver + TCP/IP stack**: a native
   Intel **e1000** NIC driver (PCI scan, bus-master, EEPROM MAC, RX/TX rings) under
-  a from-scratch stack — ARP, IPv4, ICMP echo, UDP, minimal TCP, plus a **DHCP**
+  a from-scratch stack, ARP, IPv4, ICMP echo, UDP, minimal TCP, plus a **DHCP**
   client and **DNS** resolver. Static config matches QEMU SLIRP; DHCP overrides it.
-- **TLS 1.2 + HTTPS** — **BearSSL** (freestanding, no dynamic allocation, no OS
+- **TLS 1.2 + HTTPS**: **BearSSL** (freestanding, no dynamic allocation, no OS
   deps), in two trust modes: pinned-key (fixed endpoint) and **CA-validated**
   (~14 bundled root CAs, cert validity clocked from the UEFI RTC). BearSSL is
   1.2-only (no 1.3). We roll none of our own crypto.
-- **Web browser** — a native unoui canvas app rendering **HTML + Markdown + basic
+- **Web browser**: a native unoui canvas app rendering **HTML + Markdown + basic
   CSS** (single immediate-mode flow) with a from-scratch **JavaScript interpreter**
   (`js.c`, arena-allocated tree-walker) that runs `<script>` blocks via
   `document.write` / `console.log`. Loads pages from disk and over **HTTP/HTTPS**
   through an address bar.
-- **unoui as the default shell** — unlike every other port, unoui is not just a
+- **unoui as the default shell**: unlike every other port, unoui is not just a
   library here but the **entire UI**: themed desktop, window manager, taskbar,
   scrollable Start menu, system-tray wall-clock, **10 live-switchable themes**
   (Aurora Light/Dark + 8 retro), **resizable windows** with reflow, a **calendar
   date-picker**, **live resolution switching** (FILL-scaled), and optional
   **TrueType** system/document fonts (subpixel AA). Every control is reachable by
   pointer *or* keyboard.
-- **USB / xHCI** — xHCI USB bring-up foundation (the HID class driver is part of
+- **USB / xHCI**: xHCI USB bring-up foundation (the HID class driver is part of
   the pending driver tail).
-- **3D** — uno3d's software rasteriser runs **Runner3D** full-screen at the desktop
+- **3D**: uno3d's software rasteriser runs **Runner3D** full-screen at the desktop
   resolution (the same `uno3d_game.c` as the PS2/DC ports); an **Intel-iGPU backend
   is scaffolded** (`u3d_backend_intel`) and today delegates to the soft rasteriser.
 
@@ -188,7 +188,7 @@ QEMU + OVMF; networking/TLS are additionally checked headlessly by `nettest.py`.
 xHCI HID class driver, NVMe/AHCI block (persistence), real Intel-GPU 3D, and an
 AX88179 USB-Ethernet NIC (for the X1, which has no wired port).
 
-## 3D — Uno3D
+## 3D, Uno3D
 
 A separate write-once 3D library ([../uno3d/](../uno3d/),
 [UNO3D.md](UNO3D.md)) with a swappable per-platform rasteriser backend.
@@ -200,10 +200,10 @@ kernel's `INT 0x80` graphics API instead of the C library. Backend slots
 for PS3 / PC / GameCube / Xbox are planned (comments only, not yet
 implemented).
 
-## UI toolkit — unoui
+## UI toolkit, unoui
 
 A separate write-once widget toolkit ([../unoui/](../unoui/),
-[UNOUI.md](UNOUI.md)) for the C-based ports + host — the look-and-feel
+[UNOUI.md](UNOUI.md)) for the C-based ports + host, the look-and-feel
 analogue of Uno3D: a portable core over `fb.h` plus a swappable **theme**
 vtable (palette + metrics + chrome painters, per-painter NULL-fallback).
 ~20 widgets including menu bar, tabs, slider, spinner, dropdown, and a

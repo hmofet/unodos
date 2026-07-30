@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """ROM-free Nintendo Entertainment System test harness for the UnoDOS/NES port
-(py65 6502 core). The companion to c64/harness.py — a fast, deterministic,
+(py65 6502 core). The companion to c64/harness.py, a fast, deterministic,
 display-independent way to verify the PPU output of an AUTOTEST .nes build
 without Mesen (whose GPU-surface capture is RDP-flaky; see the port README).
 
-What it emulates (the slice the UnoDOS kernel touches — see nes/kernel.s):
+What it emulates (the slice the UnoDOS kernel touches, see nes/kernel.s):
   - PRG: the 32 KB at $8000 from the iNES file (header skipped).
   - CHR: the 8 KB pattern data; pattern table 0 (first 4 KB) holds the tiles.
   - PPU registers:
@@ -16,10 +16,10 @@ What it emulates (the slice the UnoDOS kernel touches — see nes/kernel.s):
                         palette $3F00-$3F1F) and auto-increment the pointer by 1
                         (the kernel always runs with PPUCTRL inc=+1).
       $2000/$2001      writes tracked (NMI-enable / rendering mask) but otherwise
-                        inert — the harness drives NMI itself.
+                        inert, the harness drives NMI itself.
   - NMI: the kernel's main loop spins in wait_vbl on v_vbl, which only the NMI
     sets. The harness fires one NMI per emulated frame (push PC+P, jump $FFFA),
-    which both releases wait_vbl and advances the 60 Hz v_tick — exactly the
+    which both releases wait_vbl and advances the 60 Hz v_tick, exactly the
     real per-frame cadence.
   - $4015/$4000-$4003 APU writes are counted (apu_writes) so a test can assert
     the Music app actually programmed a tone. $4016 reads return 0 (AUTOTEST

@@ -1,7 +1,7 @@
-# unoui — the UnoDOS cross-platform UI toolkit
+# unoui, the UnoDOS cross-platform UI toolkit
 
 unoui is a small widget toolkit that lets an application's window UI be **written
-once** and then rendered *and driven* on every UnoDOS target — with a unified
+once** and then rendered *and driven* on every UnoDOS target, with a unified
 look by default, or a per-platform **theme** to make it look native. It lives in
 [`unoui/`](../unoui/).
 
@@ -9,16 +9,16 @@ It is the same idea as [Uno3D](UNO3D.md), applied to look-and-feel instead of 3D
 a portable C core over the shared `fb.h` software framebuffer, plus a swappable
 vtable. Uno3D swaps the rasteriser **backend**; unoui swaps the **theme**. And
 just as Uno3D's geometry is platform-independent, unoui's *behaviour* is
-platform-independent — it is a pure function of an abstract event stream, so the
+platform-independent, it is a pure function of an abstract event stream, so the
 only per-platform code an app needs is a tiny input adapter and the framebuffer
 present.
 
-> **Two different "GUI toolkits" in UnoDOS — don't confuse them.** The bare-metal
+> **Two different "GUI toolkits" in UnoDOS, don't confuse them.** The bare-metal
 > x86 kernel has its *own* native widget library exposed through the `INT 0x80`
 > API (see the "GUI Toolkit" section of the root [README](../README.md)). That
 > one is hand-written assembly, lives in the kernel, and is what the shipping
 > asm apps use. **unoui is a separate, portable C library** for the C-based ports
-> (PS2, Dreamcast, the shared Mac/console core, …) and the host — the C analogue
+> (PS2, Dreamcast, the shared Mac/console core, …) and the host, the C analogue
 > of the kernel toolkit, written once and themeable. See
 > [§8](#8-relationship-to-the-kernel-native-widgets).
 
@@ -34,7 +34,7 @@ unoui splits a UI program into parts that name no platform and parts that do:
   portable core  (unoui.c)                <- layout, depth-aware drawing helpers,
         |                                     default painters, render dispatch
   portable input  (unoui_input.c)         <- hit-test, focus, drag, text editing,
-        |                                     menus — a pure fn of unoui_event
+        |                                     menus, a pure fn of unoui_event
         +--> theme vtable (unoui_theme.h)  <- palette + metrics + chrome painters
         +--> fb.h primitives               <- the shared software framebuffer
   ----------------------------------------------------------------------------
@@ -45,10 +45,10 @@ unoui splits a UI program into parts that name no platform and parts that do:
 
 The two halves of "write once, port with minimal effort":
 
-1. **Looks the same / re-skins per platform** — a *theme* is colours you can
+1. **Looks the same / re-skins per platform**: a *theme* is colours you can
    change AND graphics you can override. The default theme gives a unified look
    everywhere; a platform theme reproduces a native look.
-2. **Behaves the same everywhere** — all interaction (drag, focus, menus,
+2. **Behaves the same everywhere**: all interaction (drag, focus, menus,
    multi-line text editing) derives from the abstract `unoui_event` stream. A
    port translates its hardware into those events; the resulting behaviour is
    identical on every platform.
@@ -85,8 +85,7 @@ void app_frame(void)                 /* called once per video frame by the glue 
 }
 ```
 
-Swap the look by passing a different theme — `unoui_ui_theme(&ui, &theme_win31)`
-— with no other change.
+Swap the look by passing a different theme, `unoui_ui_theme(&ui, &theme_win31)`: with no other change.
 
 Build the host proof: `cd unoui && ./build.sh` →
 [`build/themes.png`](../unoui/build) (one window under every theme) and
@@ -139,7 +138,7 @@ The app owns the `char` buffer; the toolkit edits it in place and tracks
 `caret`, `sel` (selection anchor) and scroll offsets. `multiline` stores `\n` in
 the buffer.
 
-### 3.3 The event model — the portability contract
+### 3.3 The event model, the portability contract
 
 ```c
 typedef struct {
@@ -166,7 +165,7 @@ unoui_render_ui(&ui);                    /* desktop + windows (z-order) + popups
 unoui_ui_theme(&ui, other_theme);        /* re-skin live, no other change    */
 ```
 
-`unoui_handle` returns `unoui_action { changed, id, kind, value }` — `changed`
+`unoui_handle` returns `unoui_action { changed, id, kind, value }`: `changed`
 is nonzero when a widget activated or changed; `value` carries the new state
 (toggle, slider/scroll position, selected index; for a menu pick,
 `menu*256 + item`).
@@ -185,7 +184,7 @@ is nonzero when a widget activated or changed; `value` carries the new state
   (`unoui_list_rows / _maxtop / _index_at / _reveal / _bar / _draw`), so a
   UI_CANVAS app can host the same list inside its own rect; a theme's `list`
   hook simply draws the rows it is handed, starting at `top`.
-- **Menu bar** and **dropdown** popups — overlay drawn last, commit on click-in,
+- **Menu bar** and **dropdown** popups, overlay drawn last, commit on click-in,
   dismiss on click-out or `Esc`.
 - **Focus** and **Tab / Shift-Tab traversal**; `Enter` / `Space` activation;
   arrow-key navigation for sliders, spinners, tabs, lists.
@@ -199,17 +198,17 @@ is nonzero when a widget activated or changed; `value` carries the new state
 
 ---
 
-## 4. Themes — colour AND graphics
+## 4. Themes, colour AND graphics
 
 A `unoui_theme` is three things ([`unoui_theme.h`](../unoui/unoui_theme.h)):
 
-1. **`unoui_palette`** — semantic colour *roles* (`title_bg`, `button_face`,
+1. **`unoui_palette`**: semantic colour *roles* (`title_bg`, `button_face`,
    bevel `light`/`shadow`/`dark`, `accent`, `field_bg`, …), never literal
    colours. Swap the struct and every widget recolours. *(palette theming.)*
-2. **`unoui_metrics`** — sizes (`title_h`, `frame_w`, `bevel`, `radius`,
+2. **`unoui_metrics`**: sizes (`title_h`, `frame_w`, `bevel`, `radius`,
    `shadow_off`, `title_center`) and the target colour **depth**
    (`UNOUI_DEPTH_FULL/8/4/1`).
-3. **`const unoui_draw *draw`** — a vtable of chrome painters. Leave any entry
+3. **`const unoui_draw *draw`**: a vtable of chrome painters. Leave any entry
    `NULL` and the portable default is used; override one and that widget gets
    entirely custom **graphics**. `draw = NULL` entirely → an all-default,
    palette-only theme. *(graphics theming.)*
@@ -219,7 +218,7 @@ A `unoui_theme` is three things ([`unoui_theme.h`](../unoui/unoui_theme.h)):
 Shaded fills go through `ui_shade(x,y,w,h, theme, a, b, shade)` (5 shades). At
 full depth it blends `a`→`b`; at 4-bit it snaps and lightly dithers; at 1-bit it
 becomes a 4×4 ordered-dither **stipple**. So the same write-once chrome renders
-correctly on a 1-bit Mac Plus *and* a 32-bit PS2 — the Mac Plus theme's iconic
+correctly on a 1-bit Mac Plus *and* a 32-bit PS2, the Mac Plus theme's iconic
 50% grey desktop and the 4-bit themes' mid-tones all come out of this one call.
 Helpers: `ui_px`, `ui_stipple`, `ui_bevel` (raised/sunken, returns the inset
 rect), `ui_round_frame` / `ui_round_fill` (corner-clipped rounded rects),
@@ -232,21 +231,21 @@ resolution works (640×448 PS2, 640×480 Dreamcast, …).
 
 | Theme | Depth | What it exercises |
 |---|---|---|
-| `theme_unodos`  | full  | the unified house look — **palette only**, all-default painters |
+| `theme_unodos`  | full  | the unified house look, **palette only**, all-default painters |
 | `theme_macos7`  | full  | rounded white windows, pinstripe title, close/zoom boxes, rounded default ring |
-| `theme_macplus` | 1-bit | strict B&W — the dither/stipple path, racing-stripe title, drop shadow |
-| `theme_win31`   | 4-bit | grey 3D — blue caption bar with control/min/max boxes, double-bevel buttons |
-| `theme_amiga`   | 4-bit | Workbench 1.x — palette + a title-bar override (depth gadget) |
-| `theme_c64`     | 4-bit | two-blue VIC screen — **palette only** |
-| `theme_apple2`  | 1-bit | green-phosphor mono — **palette only** |
-| `theme_next`    | 8-bit | NeXTSTEP chiselled greyscale — palette + a wider bevel metric |
+| `theme_macplus` | 1-bit | strict B&W, the dither/stipple path, racing-stripe title, drop shadow |
+| `theme_win31`   | 4-bit | grey 3D, blue caption bar with control/min/max boxes, double-bevel buttons |
+| `theme_amiga`   | 4-bit | Workbench 1.x, palette + a title-bar override (depth gadget) |
+| `theme_c64`     | 4-bit | two-blue VIC screen, **palette only** |
+| `theme_apple2`  | 1-bit | green-phosphor mono, **palette only** |
+| `theme_next`    | 8-bit | NeXTSTEP chiselled greyscale, palette + a wider bevel metric |
 
 ---
 
 ## 5. Writing an app
 
 Build the widget tree once (it names no platform), then let the toolkit drive it.
-[`unoui_app.c`](../unoui/unoui_app.c) is the worked example — two windows
+[`unoui_app.c`](../unoui/unoui_app.c) is the worked example, two windows
 exercising every widget. The skeleton:
 
 ```c
@@ -275,7 +274,7 @@ port_present(fb);
 
 ## 6. Adding a new theme
 
-One file, no core or app edits — the same contract as adding a Uno3D backend:
+One file, no core or app edits, the same contract as adding a Uno3D backend:
 
 ```c
 /* themes/theme_foo.c */
@@ -298,11 +297,11 @@ the palette + metrics with `draw = 0`.
 Because the toolkit is pure C over `fb.h` and behaviour is a function of
 `unoui_event`, a port writes only two small things:
 
-1. **Input adapter** — translate native mouse/keyboard into `unoui_event` and
+1. **Input adapter**: translate native mouse/keyboard into `unoui_event` and
    call `unoui_handle()`. Map buttons/movement to `MOUSE_*`, printable keys to
    `CHAR`, navigation/editing keys to `KEY` with the `UI_KEY_*` virtuals, and
    modifier state to `mods`. Optionally feed a `TICK` per frame for caret blink.
-2. **Present** — after `unoui_render_ui()`, upload `fb` to the display (the port
+2. **Present**: after `unoui_render_ui()`, upload `fb` to the display (the port
    already does this for everything else: PS2 textures it to the GS, Dreamcast
    copies it to the PVR, the host writes a PNG).
 
@@ -320,7 +319,7 @@ port produces from the same gestures.
 The bare-metal x86 UnoDOS kernel ships its own widget library in assembly,
 exposed through `INT 0x80` (Button, Checkbox, Scrollbar, Menu Bar, File dialogs,
 word-wrap, …) and used by the shipping `.asm` apps. unoui does **not** replace
-it and is not compiled into the asm kernel — UnoDOS apps there are 16-bit `.BIN`
+it and is not compiled into the asm kernel, UnoDOS apps there are 16-bit `.BIN`
 files, not C (the same reason the Uno3D *library* can't be used by the x86 game,
 which is hand-written asm over the kernel API instead).
 
@@ -334,7 +333,7 @@ that make "write once, run on every C port" hold.
 
 ## 9. Limitations / not yet done
 
-- Not yet wired into each port's glue `main()` — every port still needs its ~20-
+- Not yet wired into each port's glue `main()`: every port still needs its ~20-
   line `unoui_event` adapter and `fb` present hookup. This is the intended
   "minimal porting effort," not missing capability.
 - Render-only verification so far is on the host (software `fb` → PNG); the same
@@ -349,7 +348,7 @@ that make "write once, run on every C port" hold.
 
 ## See also
 
-- [`unoui/README.md`](../unoui/README.md) — the toolkit's own readme + images
-- [docs/UNO3D.md](UNO3D.md) — the sibling write-once library (3D), same pattern
-- [`unoui/unoui.h`](../unoui/unoui.h), [`unoui/unoui_theme.h`](../unoui/unoui_theme.h) — the full API
-- root [README](../README.md) "GUI Toolkit" — the kernel-native asm widget set
+- [`unoui/README.md`](../unoui/README.md), the toolkit's own readme + images
+- [docs/UNO3D.md](UNO3D.md), the sibling write-once library (3D), same pattern
+- [`unoui/unoui.h`](../unoui/unoui.h), [`unoui/unoui_theme.h`](../unoui/unoui_theme.h), the full API
+- root [README](../README.md) "GUI Toolkit", the kernel-native asm widget set
