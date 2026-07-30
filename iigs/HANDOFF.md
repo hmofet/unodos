@@ -1,19 +1,19 @@
-# Apple IIGS port — implementation handoff
+# Apple IIGS port, implementation handoff
 
-## DISK-LOADED APPS — SHIPPED (2026-06-15)
+## DISK-LOADED APPS, SHIPPED (2026-06-15)
 
 The apps no longer compile into the kernel: every interactive app is a
 SEPARATE binary read at runtime from the FAT12 volume into its own fixed
 bank-0 region, and the window manager dispatches each window's draw/key/tick/
 start through that app's loaded JMP vector table.  True multi-app residency
 (not load-on-focus): several apps stay resident at once and all tick every
-frame — the cooperative scheduler is preserved (scheduler.py PASS: Dostris +
+frame, the cooperative scheduler is preserved (scheduler.py PASS: Dostris +
 Pac-Man resident concurrently, both advancing).  Kernel shrank 11636 -> **6328
 bytes** (5.3 KB of app code left the kernel).
 
 **The ABI (the deferred "diskapp" contract, C64-flavoured but one region per
 app):** each app is a raw binary at a fixed `.org` (sys.inc `SLOT_*`) whose
-first bytes are a JMP vector table — `jmp draw`(+0, S2=window offset) /
+first bytes are a JMP vector table, `jmp draw`(+0, S2=window offset) /
 `jmp key`(+3, S0=ascii) / `jmp tick`(+6, per-frame, scans wintab for its own
 proc) / `jmp start`(+9, win_create open hook).  The kernel exports its API
 entry points (`mkapi.py` reads the ld65 `-Ln` label dump -> `build/
@@ -37,25 +37,25 @@ from v_dir_list doesn't hurt loading.
 last moved here from dostris.i), `fmt_dec/div16/put2dig/putchar`, the WM hooks
 apps drive (`redraw_topmost/repaint_all/ent_x/zent_x/launch_app/
 return_to_desktop`), the **Ensoniq DOC engine** (`doc_init/snd_note/snd_off`,
-moved here from snd.i — Music/Tracker call it), FAT12 storage (fs.i), and
+moved here from snd.i, Music/Tracker call it), FAT12 storage (fs.i), and
 **SysInfo (proc 0) + Clock (proc 1)** as built-in static info windows (no
 disk binary; `app_vec_tab` entry 0 ⇒ kernel-drawn).
 
-**Files:** new — `sys.inc` (shared equates), `mkapi.py`, `filesnp.s/theme.s/
+**Files:** new, `sys.inc` (shared equates), `mkapi.py`, `filesnp.s/theme.s/
 music.s/dostris.s/paint.s/tracker.s/pacman.s/outlast.s` (app wrappers).
-Modified — `kernel.s` (loader + vector dispatch + DOC engine + fillcell;
+Modified, `kernel.s` (loader + vector dispatch + DOC engine + fillcell;
 equates now from sys.inc), `fs.i` (.APP filter, equates from sys.inc),
 `*.i` (state equates moved to sys.inc; fillcell/DOC removed), `build.sh`
 (assemble kernel -> export API -> assemble each app at its org -> pack as
-`.APP`).  The harness needs NO change — apps load through real `fat_read_file`
+`.APP`).  The harness needs NO change, apps load through real `fat_read_file`
 over the block driver it already serves.  Verify: all 9 suites PASS;
 `shots/diskapps_multi.png` shows two disk-loaded windows stacked + ticking;
 runtime probe confirms the slot bytes are byte-identical to the on-disk
 `.APP` (empty before launch).  Trap banked: inserting the `.APP` filter into
-`fat_list_root` pushed its branches past ±127 — use `bne :+/jmp` (the IIGS
+`fat_list_root` pushed its branches past ±127, use `bne :+/jmp` (the IIGS
 long-branch idiom).
 
-## FULL APP PARITY — SHIPPED (2026-06-15, build 420)
+## FULL APP PARITY, SHIPPED (2026-06-15, build 420)
 
 All 11 UnoDOS apps + the cooperative scheduler are implemented and verified
 headlessly. App files (each `proc N`, dispatched from `kernel.s`): Files
@@ -69,7 +69,7 @@ self-test all green.
 **The app pattern (reuse for any new app):** an `.i` file with `proc_draw`
 (S2 = window entry offset) + optional `proc_key` (S0 = ascii) + optional
 `proc_tick` (per frame, scans the window table for its own `proc` and acts;
-only the topmost redraws but all advance — this IS the cooperative
+only the topmost redraws but all advance, this IS the cooperative
 scheduler) + `proc_start` (called from the `win_create` hook on open).  Wire
 five spots in `kernel.s`: `.include`, `app_draw_content` dispatch,
 `app_key` dispatch, the main-loop `*_tick` call, the `win_create` start
@@ -80,66 +80,65 @@ FS dir-list (>$440) and in dedicated bank-0 buffers ($8000+, $9A00+).
 
 **Game traps banked:** a per-row/index helper that `sta`s into a caller's
 live temp corrupts it (Dostris `row_base_idx` → `DT1/DT2`; gave it private
-`DTR0/DTR1`).  `f:label,x` already adds the label base — index with the
+`DTR0/DTR1`).  `f:label,x` already adds the label base, index with the
 OFFSET only (Theme black-screen).  `STZ` has no long mode.  Many-case key
-dispatch overflows ±127 branches — `bne :+/jmp`.  Mouse apps (Paint) must
+dispatch overflows ±127 branches, `bne :+/jmp`.  Mouse apps (Paint) must
 suppress the held launch-click until release.
 
 **REMAINING (hardware-blocked tail, the cross-port norm):** real-hardware
-validation — by-hand in GSplus/KEGS/MAME (needs the user's IIGS ROM), then
-FloppyEmu in SmartPort 3.5″ mode — and audio-by-ear (DOC sound is not
+validation, by-hand in GSplus/KEGS/MAME (needs the user's IIGS ROM), then
+FloppyEmu in SmartPort 3.5″ mode, and audio-by-ear (DOC sound is not
 harness-reproducible; the control path is asserted via the DOC register log).
 
-## M3 — SHIPPED (2026-06-15, build 415): the two signature features
+## M3, SHIPPED (2026-06-15, build 415): the two signature features
 
 The two most IIGS-distinctive capabilities are done and verified; the colour
 games + scheduler remain (below).  `tests/m3.py` → `M3 PASS`.
 
-- **Theme (`theme.i`, proc 3) — 4096-colour SHR:** the 8 shared UI presets
+- **Theme (`theme.i`, proc 3), 4096-colour SHR:** the 8 shared UI presets
   (Classic/Midnight/Forest/Sunset/Ocean/Slate/Candy/Amber) live-rewrite SHR
   palette line 0 (`$E1:9E00`).  Because SHR looks up the palette per pixel at
-  scan-out, one palette poke recolours the *entire* desktop instantly — no
+  scan-out, one palette poke recolours the *entire* desktop instantly, no
   repaint of pixels needed.  `shots/m3_theme.png` shows the whole UI in Sunset.
-  (Trap banked: `f:label,x` already adds the base — load X with the *offset*
+  (Trap banked: `f:label,x` already adds the base, load X with the *offset*
   only, not `label+offset`, or you double-address into zeros.)
 - **Ensoniq DOC audio (`snd.i`, Music = proc 4):** the marquee IIGS sound
-  chip (32 oscillators, 64 KB sound RAM) via the sound GLU — `$C03E/$C03F`
+  chip (32 oscillators, 64 KB sound RAM) via the sound GLU, `$C03E/$C03F`
   address, `$C03C` control (bit5 reg/RAM, bit6 autoinc), `$C03D` data.
   `doc_init` halts all oscillators, sets the osc-enable scan, and loads a
   256-byte wavetable into DOC RAM; `snd_note`/`snd_off` program/halt an
   oscillator (freq lo/hi, volume, wavetable ptr, size, control=free-run);
   Music sequences a melody on oscillator 0 with a per-frame `music_tick`.
-  Audio is NOT harness-verifiable (no DOC synthesis — sound never is across
+  Audio is NOT harness-verifiable (no DOC synthesis, sound never is across
   these ports), but the harness logs every GLU register write, so `tests/m3.py`
   asserts osc-0 is programmed with the melody's frequency words.  `STZ` has no
-  long mode — use `lda #0/sta f:`.
+  long mode, use `lda #0/sta f:`.
 
-**M3 REMAINING (to full parity):** the colour apps — Dostris, Pac-Man,
-OutLast, Paint — and Music's sibling **Tracker**, plus the **scheduler**.
+**M3 REMAINING (to full parity):** the colour apps, Dostris, Pac-Man,
+OutLast, Paint, and Music's sibling **Tracker**, plus the **scheduler**.
 These are straight 16-colour SHR ports of the shared logic (`snes/games.inc`,
 `macplus/pacman.i`/`paint.i`/`tracker.i` are templates); the renderer
 primitives (`fill_cells`/`draw_char`/the cell grid), the per-frame app-tick
-hook (`music_tick` is the pattern — add `game_tick`), the event/key routing,
+hook (`music_tick` is the pattern, add `game_tick`), the event/key routing,
 and the DOC engine are all in place, so each is an additive app file + a
 dispatch/icon/app_def entry (procs 5/6 are free; extend `MAXWIN` past 6 if
 many windows must coexist).  Scheduler: port `macplus/scheduler.i` semantics
 (the apple2 verdict was option-3 poll-and-dispatch for a single-app model).
 
-## M2 — SHIPPED (2026-06-15, build 414)
+## M2, SHIPPED (2026-06-15, build 414)
 
 FAT12 storage over the SmartPort/ProDOS block driver, with Files + Notepad
 and real persistence.  `tests/m2.py` → `M2 PASS` (`shots/m2_files.png`,
 `m2_notepad.png`, `m2_persist.png`).
 
 - **blk_io (`fs.i`):** calls the slot firmware's ProDOS block driver (entry
-  + unit stashed by `boot.s` at `$0300-$0302`) in **6502 emulation mode** —
-  `sec/xce` around the call, capture the result carry, `clc/xce` back to
+  + unit stashed by `boot.s` at `$0300-$0302`) in **6502 emulation mode**: `sec/xce` around the call, capture the result carry, `clc/xce` back to
   native.  Works against real firmware and the harness WDM stub identically.
   Read **and** write (cmd 1/2).
 - **FAT12 (`fs.i`), root-dir scope:** `fat_mount` caches the whole 3-sector
   FAT into FATBUF (12-bit entries never straddle a sector); `fat_list_root`,
   `fat_read_file` (single + multi-cluster, verified past the 1 KB cluster
-  boundary with CHAIN.TXT), and a full write path — `fat_alloc_chain`,
+  boundary with CHAIN.TXT), and a full write path, `fat_alloc_chain`,
   `fat_free_chain`, `fat_set_entry`, `fat_flush` (both FAT copies), and
   `fat_save_file` (overwrite-by-name or first free dir slot).  Geometry is
   fixed and synced with `mkfs.py` (PORT-SPEC §6 rule 8): 512 B sectors,
@@ -154,17 +153,17 @@ and real persistence.  `tests/m2.py` → `M2 PASS` (`shots/m2_files.png`,
   reboot-and-reread.
 
 **THE bug banked:** `blk_io` first used `F0/F1` as scratch, but the FAT
-walkers keep the *current cluster* in `F0` across `blk_io` calls — so
+walkers keep the *current cluster* in `F0` across `blk_io` calls, so
 multi-cluster reads/saves corrupted the chain and looped (single-cluster
 ops escaped it). `blk_io` now uses private `BLK0/BLK1`. Audit every helper
 that holds state across a `blk_io`/`jsr` for scratch aliasing (the apple2
 `fs.i` zero-page collision class, restated on the 65816).
 
 **M2 remaining (deferred):** disk-loaded apps (the macplus `diskapp.i` ABI)
-— the storage primitives are all in place to add it; not needed for the
+- the storage primitives are all in place to add it; not needed for the
 Files/Notepad surface.
 
-## M1 — SHIPPED (2026-06-15, build 412)
+## M1, SHIPPED (2026-06-15, build 412)
 
 The SNES M1 surface re-expressed on SHR: a colour desktop (menu bar, icon
 grid, version line), the full PORT-SPEC §2 window manager (16-slot table,
@@ -179,7 +178,7 @@ PASS` (`shots/m1_desktop.png`, `m1_sysinfo.png`, `m1_clock.png`).
 bank-0 RAM; the SHR framebuffer in bank `$E1` is reached only through the
 24-bit pointers `GP`/`mtmp` (`[GP],y` stores, bank byte preset to `$E1`)
 and long-indexed `f:SHRPIXL,x` stores.  The first cut left DBR=$E1 and put
-all WM state in slow Mega-II RAM — self-consistent but a real hardware
+all WM state in slow Mega-II RAM, self-consistent but a real hardware
 speed regression; the pointer approach keeps the WM fast.
 
 **Harness M1 additions:** a `wdm #$02` at the top of the main loop is the
@@ -189,7 +188,7 @@ signed-delta **ADB mouse FIFO** (`$C024` data, `$C027` status: bit7 pending,
 bit0 button) with `move_to`/`click`.  A text **script runner** (`run_script`:
 `boot/wait/key/move/click/shot`) mirrors the apple2 rig.  Clock ticks off
 `v_frame` (60 frames/s; a true `$C019` vblank gate is the hardware-pass
-refinement — noted, not yet wired).
+refinement, noted, not yet wired).
 
 **Cell model:** windows/icons use 8×8-px cell coordinates; `fill_cells`,
 `draw_str`, `draw_char` convert to SHR pixel-byte coords (cx*4 bytes, cy*8
@@ -197,26 +196,26 @@ rows) and call `fill_band`/`render_glyph`.  Attributes map to (fg,bg) pairs
 (`attr_fg/attr_bg`): NORM white-on-blue, INV blue-on-white (title bars/menu),
 ACC cyan-on-blue, KEY white-on-deepblue.
 
-**Next: M2** — `smartport.i` (blk_read/write reusing the boot ProDOS driver
+**Next: M2**: `smartport.i` (blk_read/write reusing the boot ProDOS driver
 entry), FAT12 (reuse `macplus/mkfs.py` + a 65816 fat12 core), Files +
 Notepad, disk-loaded app ABI.  The harness ProDOS driver already does
 WRITE + `--writeback`.
 
-## M0 — SHIPPED (2026-06-15, build 411)
+## M0, SHIPPED (2026-06-15, build 411)
 
 `./build.sh` produces `build/unodos_iigs.po` (800 KB ProDOS-order image)
 that boots through the firmware block driver to a **Super Hi-Res splash**
 (`shots/m0.png`): blue desktop, grey menu bar "UnoDOS 3 / Apple IIGS",
-and a framed cyan window with a deep-blue title bar — all in 16-colour
+and a framed cyan window with a deep-blue title bar, all in 16-colour
 SHR, rendered by a 4bpp text engine that expands the shared 8×8 font.
 
-**Harness verdict (the M0 wildcard, resolved): path 1 — a from-scratch
+**Harness verdict (the M0 wildcard, resolved): path 1, a from-scratch
 Python 65816 core.** No usable `py65816` exists and MAME/a IIGS ROM are
 not available here, so `cpu65816.py` is a new functionally-correct (not
 cycle-accurate) 65C816 interpreter: native + emulation modes, M/X width
 tracking, the full addressing-mode/opcode set, MVN/MVP, and a **WDM trap**
 the harness uses to play firmware. It self-tests (`python cpu65816.py` →
-`SELFTEST OK`). `harness.py` is the ROM-free rig built on it — block-0
+`SELFTEST OK`). `harness.py` is the ROM-free rig built on it, block-0
 autoload, the ProDOS block driver (read **and** write, `--writeback` for
 M2), the `$C0xx` soft-switch page, and SHR→PNG. This is fully CI-able with
 zero ROM dependency, same as `apple2/harness.py`. GSplus/KEGS/MAME remain
@@ -230,7 +229,7 @@ FloppyEmu in SmartPort mode.
   2=write), `$43`=unit, `$44/45`=buffer (bank 0), `$46/47`=block; carry
   set = error. `boot.s` drives exactly this, so it runs against real
   firmware and the harness WDM stub identically.
-- **NEWVIDEO `$C029` = `$C1`** enables SHR (bit7) — confirmed; the
+- **NEWVIDEO `$C029` = `$C1`** enables SHR (bit7), confirmed; the
   harness asserts bit7 before rendering.
 - Kernel **load address `$00:2000`**, runs native with 16-bit X/Y +
   8-bit A, **DBR=`$E1`** while drawing; SHR layout exactly as §1 states
@@ -244,11 +243,11 @@ FloppyEmu in SmartPort mode.
 cc65 `ca65 --cpu 65816` + `ld65` at `C:\Users\arin\snes-tools\bin`
 (shared with the SNES port). **Gotcha banked here:** a `.include` of
 generated data BEFORE the first `.segment` lands the data at the CODE
-origin `$2000`, so the boot `jmp $2000` hits font bytes — keep emitted
+origin `$2000`, so the boot `jmp $2000` hits font bytes, keep emitted
 data in an explicit `.segment "RODATA"`. Long branches in the glyph
 loop overflow ±127 (4 macro expansions): use `beq +/jmp`.
 
-**Next: M1** — SHR desktop + WM + ADB mouse/keyboard + SysInfo/Clock
+**Next: M1**: SHR desktop + WM + ADB mouse/keyboard + SysInfo/Clock
 (see §3). The renderer (`fill_band`, `draw_char`, `draw_string`,
 `set_color`, `set_pos`, `calc_gp`) and `calc_gp`'s y*160 are the M1
 primitives; add `$C000/$C010` keyboard polling and the mouse path to
@@ -256,10 +255,10 @@ the harness, plus a `wait/shot/key/mouse` script runner over `Harness`.
 
 ---
 
-# Original plan (M0–M3)
+# Original plan (M0-M3)
 
 Audience: the engineer building the UnoDOS/IIGS port, milestone by
-milestone (M0–M3). Authoritative direction:
+milestone (M0-M3). Authoritative direction:
 [../docs/PORTS-PLAN.md](../docs/PORTS-PLAN.md) §2; the platform
 contract is [../docs/PORT-SPEC.md](../docs/PORT-SPEC.md). Work one
 milestone at a time, land each as **code + regression script +
@@ -268,7 +267,7 @@ this file + PORTS-PLAN when a milestone closes. Do not start M(n+1)
 in the M(n) commit.
 
 **The big picture:** this port is the macplus story replayed on a new
-CPU — firmware bootstraps us, firmware gives us block I/O, firmware
+CPU, firmware bootstraps us, firmware gives us block I/O, firmware
 maintains input state we mirror. Read `macplus/README.md` first: the
 boot-chain/ROM-assisted/harness architecture there is the template.
 The 65816 toolchain this port creates is reused by the SNES port
@@ -280,22 +279,22 @@ documented.
 ## 1. Envelope (engineering facts)
 
 - **CPU:** 65C816 @ 2.8 MHz, native 16-bit mode after boot (boot
-  firmware hands control in 6502 emulation mode — your boot stage does
-  `clc / xce`). RAM 256 KB–8 MB; design for the 1 MB floor and detect
+  firmware hands control in 6502 emulation mode, your boot stage does
+  `clc / xce`). RAM 256 KB-8 MB; design for the 1 MB floor and detect
   more.
 - **Video:** Super Hi-Res 320×200, 16 colors per scanline from 4096
   (4 bits/pixel, 2 px/byte, **160 bytes/row, high nibble = left
-  pixel**). Pixel data `$E1:2000–$9CFF` (32,000 bytes), scanline
-  control bytes (SCBs) `$E1:9D00`, palettes `$E1:9E00–$9FFF` (16
+  pixel**). Pixel data `$E1:2000-$9CFF` (32,000 bytes), scanline
+  control bytes (SCBs) `$E1:9D00`, palettes `$E1:9E00-$9FFF` (16
   palettes × 16 colors × 2 bytes, `$0RGB` little-endian). Enable SHR
   via the NEWVIDEO register `$C029` (set bit 7; commonly `$C1` is
-  written — **verify the exact value in the KEGS/GSplus source at
+  written, **verify the exact value in the KEGS/GSplus source at
   M0** and record it here).
 - **Input:** ADB keyboard + mouse with FIRMWARE support. The keyboard
-  arrives through the classic `$C000`/`$C010` latch — same protocol
+  arrives through the classic `$C000`/`$C010` latch, same protocol
   the Apple II port polls. The mouse is maintained by the ADB
   microcontroller; deltas/button are readable from the ADB GLU
-  (`$C024` mouse data, `$C027` status — exact bit semantics to be
+  (`$C024` mouse data, `$C027` status, exact bit semantics to be
   verified at M1 against the IIGS Hardware Reference / emulator
   source; the fallback is firmware Event Manager mirroring, the
   macplus ROM-assisted pattern).
@@ -303,13 +302,13 @@ documented.
   accessed through the sound GLU (`$C03C` control, `$C03D` data,
   `$C03E/$C03F` address). M3 only.
 - **Storage:** 800 KB 3.5" disks (1600 × 512-byte blocks) behind
-  **SmartPort/ProDOS block firmware** — a true ".Sony equivalent".
+  **SmartPort/ProDOS block firmware**: a true ".Sony equivalent".
   No GCR hand-rolling on this port; the firmware is the disk driver.
 - **Timing:** the VGC provides vblank state (readable at `$C019`) and
-  a one-second interrupt; M1 can poll `$C019` for a real 60 Hz tick —
+  a one-second interrupt; M1 can poll `$C019` for a real 60 Hz tick -
   no soft-clock hacks needed (unlike the Apple II).
 
-## 2. M0 — toolchain + boot PoC + harness decision
+## 2. M0, toolchain + boot PoC + harness decision
 
 **Goal:** an 800 KB disk image that boots in an emulator to an SHR
 splash (solid color + a drawn pattern is enough), produced by a
@@ -347,14 +346,14 @@ on it:
    fits its address budget.
 
 Pick the kernel load address at M0 and document it here (suggest:
-bank 0 high, e.g. `$00:6000+`, or bank 1 with shadowing — bank 0
+bank 0 high, e.g. `$00:6000+`, or bank 1 with shadowing, bank 0
 keeps the boot-stage copy loop trivial while the image is small;
 revisit if the kernel outgrows bank 0's free space).
 
 **SHR writes:** for M1 simplicity write pixels directly to bank `$E1`
 (long addressing, `sta $E12000,x` style with the data-bank or
 absolute-long forms). It is slower (Mega II side) than shadowed
-bank-01 writes — fine for M1; revisit for M3 games if repaints drag.
+bank-01 writes, fine for M1; revisit for M3 games if repaints drag.
 
 ### 2c. Harness decision (write the verdict into this file)
 
@@ -362,13 +361,13 @@ The plan offers two paths; evaluate in this order, timeboxed:
 
 1. **ROM-free Python harness** (the house pattern, like
    `apple2/harness.py`): needs a Python 65816 core. Investigate
-   whether a usable one exists (`py65816` or similar — quality
+   whether a usable one exists (`py65816` or similar, quality
    unverified; gate on running a known 65816 test suite). The harness
    plays the firmware: block-0 autoload, a fake `$Cn00` ProDOS driver
    entry that traps into Python and serves blocks from the image,
    `$C000/$C010` keyboard, seeded mouse registers, SHR → PNG
    (160 bytes/row, high-nibble-left, palette 0 from `$E1:9E00`).
-   If a solid core exists this is the best outcome — same scripting
+   If a solid core exists this is the best outcome, same scripting
    (`wait/shot/key/mouse`), no ROM dependency, CI-able.
 2. **Scriptable emulator** (the Genesis/BlastEm pattern): MAME's
    `apple2gs` driver has full Lua scripting (screenshots, input
@@ -387,32 +386,32 @@ to the SHR splash in the chosen emulator; the harness (whichever
 path) can boot the same image headlessly and emit a splash PNG; the
 decision + verified boot facts are written into this file; commit.
 
-## 3. M1 — SHR desktop + WM + mouse/keyboard + SysInfo/Clock
+## 3. M1, SHR desktop + WM + mouse/keyboard + SysInfo/Clock
 
 The macplus M1 surface, in color, with a real pointer from day one.
 
 - **Kernel skeleton:** UDM1 discovery header at the load address
-  (`jmp start2`, magic `"UDM1"`, vars pointer — the convention from
+  (`jmp start2`, magic `"UDM1"`, vars pointer, the convention from
   `apple2/HANDOFF.md` §5 / macplus), vars block with documented
   offsets (`frame_ctr`, `mouse_x/y`, `sel_icon`, `zcount`,
   `clock_secs`, `top_win`), BSS clear, AUTOTEST build switch.
-- **Palette/theme:** SHR palette 0 entries 0–3 = the UnoDOS UI colors
+- **Palette/theme:** SHR palette 0 entries 0-3 = the UnoDOS UI colors
   (blue `$00A`, cyan `$0AA`, magenta `$A0A`, white `$FFF` in `$0RGB`)
-  per PORT-SPEC §1 — entries 4+ free for app/game content later.
-- **Renderer:** 4bpp primitives — fill_rect, frame_rect, draw_char /
+  per PORT-SPEC §1, entries 4+ free for app/game content later.
+- **Renderer:** 4bpp primitives, fill_rect, frame_rect, draw_char /
   draw_string (the shared 8×8 font via a `mkfont.py`-style generator
   from `amiga/gen_data.i`; 2 px/byte means glyph rendering writes 4
   bytes/row; x-coordinates need no cell alignment but byte-aligned
   fast paths are worth it), desktop pattern, menu bar, icons (pull
   icon art from the x86 `.BIN` headers the way `genesis/mkdata.py`
   does).
-- **Window manager:** the full PORT-SPEC §2 contract — 16-window
-  table, z 0–15 topmost=15, raise/destroy renormalization invariants,
+- **Window manager:** the full PORT-SPEC §2 contract, 16-window
+  table, z 0-15 topmost=15, raise/destroy renormalization invariants,
   topmost-only content drawing, title-bar drag with XOR outline,
   close box, drag clamps. Port the macplus `kernel.asm` structure
   (its WM is the proven 68K expression of the same spec).
 - **Input:** keyboard from `$C000`/`$C010` (poll per tick, translate
-  to the canonical UnoDOS raw codes — arrows `$4C–$4F`, the 68K-family
+  to the canonical UnoDOS raw codes, arrows `$4C-$4F`, the 68K-family
   convention, so app key handlers stay portable). Mouse per the M0/M1
   verification: ADB GLU registers if they pan out, else firmware
   Event Manager mirroring. Apply PORT-SPEC §3 law: press-time latch +
@@ -420,7 +419,7 @@ The macplus M1 surface, in color, with a real pointer from day one.
 - **Apps:** SysInfo (IIGS detect: `sec / jsr $FE1F`, carry clear ⇒
   IIGS, plus ROM version; show CPU/RAM/machine) and Clock (vblank
   ticks via `$C019` polling; show HH:MM:SS uptime).
-- **Harness/tests:** `tests/m1.script` mirroring macplus m1 — boot,
+- **Harness/tests:** `tests/m1.script` mirroring macplus m1, boot,
   desktop shot, icon select via keys AND a mouse click path
   (`mouse x y` / `click` script commands), open/drag/close a window,
   clock advance shot.
@@ -428,22 +427,22 @@ The macplus M1 surface, in color, with a real pointer from day one.
 **M1 exit criteria:** script passes headlessly; screenshots show the
 color desktop; by-hand boot in GSplus/KEGS matches; commit + README.
 
-## 4. M2 — storage: FAT12 + Files/Notepad + disk-loaded apps
+## 4. M2, storage: FAT12 + Files/Notepad + disk-loaded apps
 
 The macplus M2 shape with SmartPort instead of .Sony:
 
 - **`smartport.i`** (the `macplus/sony.i` analogue): `blk_read(lba,
   dest)` / `blk_write(lba, src)` over the firmware ProDOS driver
-  already used at boot (same `$42–$47` protocol; keep a copy of the
+  already used at boot (same `$42-$47` protocol; keep a copy of the
   entry address from boot). Volume sector N = disk block
   `FS_START_BLOCK + N`; pick `FS_START_BLOCK` past the kernel image
   (macplus uses 256 ⇒ 128 KB reserved; same number works here) and
   keep it in sync with `mkfs.py`.
-- **FAT12:** the on-disk layout is the x86 one (PORT-SPEC §5) — reuse
+- **FAT12:** the on-disk layout is the x86 one (PORT-SPEC §5), reuse
   `macplus/mkfs.py` (parameterize offsets) to build the volume, and
   write the 65816 FAT12 core mirroring `macplus/fat12.i` /
   `amiga/fat12.i` (CPU-portable logic; all on-disk fields
-  little-endian, which the 65816 is natively — simpler than the 68K
+  little-endian, which the 65816 is natively, simpler than the 68K
   version). Geometry constants defined ONCE (PORT-SPEC §6 rule 8);
   read cluster runs, not single sectors.
 - **Files + Notepad:** port behavior from macplus (list root dir,
@@ -453,31 +452,31 @@ The macplus M2 shape with SmartPort instead of .Sony:
   (`macplus/diskapp.i` is the template): launcher reads an app image
   from the FAT12 volume to a fixed load address, calls entry with a
   draw/key selector and a pointer to a kernel jump table (pass it in
-  a register or direct-page slot — document the chosen ABI here);
+  a register or direct-page slot, document the chosen ABI here);
   app is position-independent. Port `demo_app` as the proof.
 - **Tests:** m2 script = mount, list, open, edit, save, close,
   reopen-and-verify, then load + drive the disk app. The harness's
   Python ProDOS driver must support **write** for this (persist with
   a `--writeback` flag, like the Apple II M2 rig).
 
-## 5. M3 — parity: color apps + Ensoniq + scheduler
+## 5. M3, parity: color apps + Ensoniq + scheduler
 
 - **Games/Paint/Theme:** Dostris, OutLast, Pac-Man, Paint from the
   shared logic (`macplus/games.i`, `pacman.i`, `paint.i` for
-  structure; the Amiga/Genesis color schemes for palettes — 16-color
+  structure; the Amiga/Genesis color schemes for palettes, 16-color
   palettes make these straight ports, no 1-bit adaptation). Theme =
   the 8 shared presets (PORT-SPEC §1) rewriting the themed palette
   entries live, plus per-channel RGB editing (4-bit channels).
 - **Ensoniq audio:** the richest sound chip in the family. Engine:
   load square(ish) wavetables into DOC RAM, map Music + Tracker
-  channels to oscillators (Tracker: 4 channels → 4 oscillators —
+  channels to oscillators (Tracker: 4 channels → 4 oscillators -
   byte-identical pattern format, real polyphony at last; Music: the
   shared Canon in D table). Define the DOC register init from the
   Hardware Reference / KEGS source at implementation time; gate the
   whole engine behind one `snd_*` interface like `macplus/snd.i`.
 - **Scheduler:** port `macplus/scheduler.i` semantics (per-window
   tasks, private stacks, one-slot mailboxes, bounded yield-retry).
-  The 65816 makes this easy — 16-bit SP, stacks anywhere in bank 0;
+  The 65816 makes this easy, 16-bit SP, stacks anywhere in bank 0;
   size per-task stacks 2 KB like the 68K ports.
 - **Tests/README:** m3 script per app (the genesis/macplus m3
   scripts are the shape); README gets the full parity table.
@@ -485,7 +484,7 @@ The macplus M2 shape with SmartPort instead of .Sony:
 ## 6. Risks & open questions
 
 - **Boot/firmware facts (§2b) are stated from documentation, not yet
-  verified in this repo** — M0's first job is proving them in the
+  verified in this repo**: M0's first job is proving them in the
   emulator and correcting this file. Same for `$C029` and the mouse
   registers (`$C024/$C027`).
 - **Python 65816 core quality** is the M0 wildcard; timebox the

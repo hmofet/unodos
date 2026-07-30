@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Generate rpi/build/gfx.s from the shared UnoDOS assets (Raspberry Pi / AArch64).
 
-The Pi port draws into the firmware-allocated **mailbox framebuffer** — a flat
+The Pi port draws into the firmware-allocated **mailbox framebuffer**: a flat
 640x480, 32bpp XRGB8888 surface (depth 32, allocated at boot via the VideoCore
 property channel). So, exactly like the GBA Mode-3 port, there are no hardware
 tiles: we plot an 8x8 bitmap font and 16x16 icons pixel by pixel, each pixel's

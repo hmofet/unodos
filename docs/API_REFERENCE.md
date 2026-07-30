@@ -1325,11 +1325,11 @@ Creates a modal dialog window with a scrollable file list. Supports keyboard nav
 
 ---
 
-*UnoDOS v3.32.0 Build 425 — 106 API functions (indices 0-105)*
+*UnoDOS v3.32.0 Build 425, 106 API functions (indices 0-105)*
 
 ---
 
-> **Note:** APIs 91–104 (BCD/string helpers, font metrics, sprite draw,
+> **Note:** APIs 91-104 (BCD/string helpers, font metrics, sprite draw,
 > video-mode switch/get, content scale/size, save dialog, scrollbar
 > hit-test, mouse visibility, scaled sprite, blit, read-pixel) are listed
 > in the Quick Reference Table above with their kernel entry points;
@@ -1346,7 +1346,7 @@ on the next switch to a VGA/VESA mode.
 
 **Input:**
 - `SI` = pointer (caller segment) to 12 bytes: 4 × (R, G, B), 6-bit
-  values (0–63), palette slots 0–3 = desktop, accent, accent2, text
+  values (0-63), palette slots 0-3 = desktop, accent, accent2, text
 
 **Output:**
 - `CF` = 0 (always succeeds)

@@ -1,9 +1,9 @@
-# pc64 images — the Photos app + unomedia
+# pc64 images, the Photos app + unomedia
 
 The pc64 counterpart of AUDIO.md's media chain, for pictures: **Photos** is a
 unoui-class `.UNO` module (`APPS\PHOTOS.UNO`, the second after Studio) and
 the first consumer of **unomedia**, the top-level media-foundation library
-(`../unomedia/` — see its README for the decoder inventory; since phase 2
+(`../unomedia/`: see its README for the decoder inventory; since phase 2
 the audio decoders live there too and Music is its second consumer).
 
 ```
@@ -26,7 +26,7 @@ w*h RGBA frame (kernel heap) ──► viewport-scaled cache ──► one fb_bl
   pointer, drag pans, `1:1`/`Fit`/`+`/`-` on the toolbar, 10%-800%.
 - **Scaling**: box average on downscale (photos stay smooth at fit), nearest
   on upscale (pixels stay honest at 400%). The result is cached
-  viewport-sized and pre-composited — alpha over a checkerboard — so a
+  viewport-sized and pre-composited, alpha over a checkerboard, so a
   repaint of an unchanged view is a single clipped `fb_blit` (the one kernel
   export this feature added).
 - **Animation**: GIFs play through the module `frame()` hook, paced by each
@@ -44,23 +44,22 @@ The decoded frame (w×h RGBA) and the viewport cache come from the kernel
 heap via the module's `malloc` import; unomedia's own working state
 (inflate window, Huffman tables, LZW dictionary) is `um_alloc`'d and freed
 on close. Dimension guards cap at 16384² / 64 Mpx before any allocation, so
-a fuzzed header fails cleanly. The module's .bss stays small — the arena
+a fuzzed header fails cleanly. The module's .bss stays small, the arena
 budget in pc64_modload.c is unchanged.
 
 ## Out-of-box content
 
-`build.sh` stages `pictures/` → `ESP:\PICTURES\` — seven files, one per
+`build.sh` stages `pictures/` → `ESP:\PICTURES\`: seven files, one per
 decoder family, all drawn procedurally by `tools/mkdemo_pics.py` (CC0, no
 third-party art; see `pictures/README.TXT`). Photos opens on the first
 volume that shows anything.
 
 ## Verification
 
-- **Decoders, host-side (the fast path)**: `python3 ../unomedia/test/run_tests.py`
-  — gcc + ASan/UBSan build, pixel-exact vs ImageMagick for lossless formats,
+- **Decoders, host-side (the fast path)**: `python3 ../unomedia/test/run_tests.py`: gcc + ASan/UBSan build, pixel-exact vs ImageMagick for lossless formats,
   PSNR ≥ 40 dB for JPEG, frame-by-frame vs `-coalesce` for animated GIF,
   plus refusal/truncation cases.
-- **In-OS**: `python3 tools/photos_test.py` — boots the shell in QEMU, opens
+- **In-OS**: `python3 tools/photos_test.py`: boots the shell in QEMU, opens
   Photos through the Start menu, walks the staged PICTURES set with the
   Right key (each format decodes on-screen), screenshots each.
 

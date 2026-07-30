@@ -1,25 +1,25 @@
-# UnoDOS/PS2 — Sony PlayStation 2 port (milestone 3)
+# UnoDOS/PS2, Sony PlayStation 2 port (milestone 3)
 
-UnoDOS/PS2 is a FreeMcBoot-launched ELF with full hardware access —
+UnoDOS/PS2 is a FreeMcBoot-launched ELF with full hardware access -
 "firmware-hosted bare-metal," the richest target in the family. The
 strategy ([HANDOFF.md](HANDOFF.md), [../docs/PORTS-PLAN.md](../docs/PORTS-PLAN.md)
-§4) is to **port the C core** in [../mac/unodos.c](../mac/unodos.c) — the
+§4) is to **port the C core** in [../mac/unodos.c](../mac/unodos.c), the
 complete UnoDOS (11 apps, window manager, event model, cooperative
-scheduler, device-abstracted FAT12) — by swapping the platform layer, not
+scheduler, device-abstracted FAT12), by swapping the platform layer, not
 rewriting.
 
 **Status: M1 + M2 + M3 features done.** The whole desktop / window manager / all
-11 apps run — verified both on the host shim (`build.sh desktop`, `shots/m1_*.png`)
+11 apps run, verified both on the host shim (`build.sh desktop`, `shots/m1_*.png`)
 and on the **emulated PS2 GS** in PCSX2 (`shots/m1_pcsx2_pacman.png`). The port is
 [../mac/unodos.c](../mac/unodos.c) copied to [unodos.c](unodos.c) over a
 **Mac-compat shim** ([mac_compat.h](mac_compat.h)/[mac_compat.c](mac_compat.c) +
 [mac_io.c](mac_io.c)) that re-implements the ~40 Toolbox calls it uses over
 `fb.*`. **M2 storage** persists Files/Notepad to the **PS2 memory card** via
-libmc — verified to survive a power cycle in PCSX2 (`shots/m2_pcsx2_*.png`). **M3**
+libmc, verified to survive a power cycle in PCSX2 (`shots/m2_pcsx2_*.png`). **M3**
 brings Theme (32-bit colour) + the scheduler through the shim, **USB keyboard +
 mouse** ([ee_usb.c](ee_usb.c)) and **SPU2 audio via audsrv** ([ee_audio.c](ee_audio.c)).
 Boot verified at 60 fps in PCSX2 with all of it loaded (`shots/m3_audio_boot.png`);
-the USB/audio *function* and a real-hardware run are the only things left — see
+the USB/audio *function* and a real-hardware run are the only things left, see
 [Next](#next).
 
 ## Platform design: software framebuffer, GS as a blitter
@@ -29,7 +29,7 @@ in EE RAM (~1.1 MB of 32 MB), via the plain-C primitives in
 [fb.c](fb.c)/[fb.h](fb.h) (`fb_fill_rect`/`fb_frame_rect`/`fb_invert_rect`/
 `fb_text`/`fb_big_text` + the 4-colour PORT-SPEC palette). Each vsync the EE
 target uploads the buffer to GS VRAM as one textured fullscreen sprite
-([main.c](main.c)) — the GS does init + texture upload + flip, nothing more.
+([main.c](main.c)), the GS does init + texture upload + flip, nothing more.
 
 Why: `unodos.c` draws *incrementally* (event-driven partial repaints, XOR
 drag outlines, invert highlights). A software FB preserves those semantics
@@ -40,21 +40,21 @@ wrappers will sit directly on these primitives.
 ## Toolchain status on this dev machine
 
 The **PS2 toolchain is installed and the EE ELF builds.** The prebuilt
-ps2dev release (`ps2dev-ubuntu-latest`, v2.0.0 — ee-gcc + PS2SDK + gsKit) is
+ps2dev release (`ps2dev-ubuntu-latest`, v2.0.0, ee-gcc + PS2SDK + gsKit) is
 unpacked under WSL at `~/ps2dev/ps2dev`; `./build.sh ee` regenerates the
 font and links `build/unodos-ps2.elf` (a real MIPS R5900 / N32 executable).
 Docker was unavailable, so the prebuilt release replaced the ps2dev image.
 
 **Running it: VERIFIED on the emulated GS.** PCSX2 **v2.6.3** + a **4 MB PS2
 BIOS** (`ps2-0200a-20040614.bin`, NTSC-US) boots `build/unodos-ps2.elf` and
-renders the M0 splash through the real GS pipeline — `shots/m0_pcsx2.png`,
+renders the M0 splash through the real GS pipeline, `shots/m0_pcsx2.png`,
 captured by `tools/run_pcsx2.ps1`. So `main.c`'s GS/pad runtime path (gsKit
 init, 640×448 FB→GS blit, primitives, font) is now hardware-path-verified, not
-just host-shim-verified. (The 4 MB PS2 BIOS was the missing piece — the earlier
+just host-shim-verified. (The 4 MB PS2 BIOS was the missing piece, the earlier
 `Sony BIOS` folder held only **512 KB PlayStation *1* BIOSes**, which PCSX2
 rejects.) **Rig gotcha:** PCSX2 v2.x validates `[UI] SettingsVersion` and pops a
-*"Settings failed to load / incorrect version"* modal — which silently blocks
-the boot — unless `PCSX2.ini` carries `SettingsVersion = 1`; `run_pcsx2.ps1`
+*"Settings failed to load / incorrect version"* modal, which silently blocks
+the boot, unless `PCSX2.ini` carries `SettingsVersion = 1`; `run_pcsx2.ps1`
 writes a known-good ini when that key is missing. Real hardware (FMCB) is still
 the remaining frontier.
 
@@ -62,8 +62,8 @@ Also fully verified is the handoff's **host shim** (HANDOFF §3, "the
 family's fastest inner loop"): the software-FB code (`fb.c` + `uno_splash.c`)
 builds with WSL gcc 13 and renders to a PNG (`./build.sh host` →
 `shots/m0_splash.png`). The EE target shares `fb.c` + `uno_splash.c`
-*verbatim*, so everything the host shim proves — font, palette, every
-drawing primitive, the whole splash — also carries to the PS2 unchanged.
+*verbatim*, so everything the host shim proves, font, palette, every
+drawing primitive, the whole splash, also carries to the PS2 unchanged.
 
 ## Building
 
@@ -96,10 +96,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File ps2\tools\run_pcsx2.ps1
 ```
 
 Prereqs: PCSX2 **v2.6.3** portable + a **4 MB PS2 BIOS** in `pcsx2\bios\`. The
-script self-heals `PCSX2.ini` (writes `[UI] SettingsVersion = 1` if missing —
+script self-heals `PCSX2.ini` (writes `[UI] SettingsVersion = 1` if missing -
 without it PCSX2 v2.x rejects the config and blocks the boot) and launches
 `pcsx2-qt.exe -fullscreen -fastboot -elf <elf>`. **512 KB BIOSes are PS1, not
-PS2** — PCSX2 rejects them.
+PS2**: PCSX2 rejects them.
 
 ### Installing the toolchain (what this machine did)
 
@@ -112,18 +112,18 @@ mkdir -p ~/ps2dev && tar xzf ps2dev.tgz -C ~/ps2dev   # -> ~/ps2dev/ps2dev/{ee,i
 ```
 
 `build.sh` first runs `../amiga/mkdata.py` + [mkfont_c.py](mkfont_c.py) to
-emit `build/font_data.h` (the shared 8×8 font as a C array — same font every
+emit `build/font_data.h` (the shared 8×8 font as a C array, same font every
 other port consumes). [tools/ppm2png.py](tools/ppm2png.py) converts the host
 shim's PPM dump to PNG with only the stdlib.
 
-## M0 — hello-GS (this milestone)
+## M0, hello-GS (this milestone)
 
 - **Software framebuffer + primitives** (`fb.c`): fill / frame / invert /
   hline / vline / 8×8 text / scaled text, clipped, over a 640×448 RGBA32
   buffer. The 4-colour gamut (blue desktop, cyan + magenta accents, white).
 - **Splash** (`uno_splash.c`): UnoDOS-blue desktop, menu bar, a double-framed
   title panel with the big "UnoDOS" wordmark, the palette swatches, and the
-  arrow cursor — the M0 "hello-GS" screen, **rendered and screenshotted on
+  arrow cursor, the M0 "hello-GS" screen, **rendered and screenshotted on
   the PC** (`shots/m0_splash.png`) so the FB + font pipeline is proven.
 - **EE target** (`main.c`): GS init (640×448 NTSC interlaced, double
   buffered), FB→GS textured-sprite blit per vsync, DualShock 2 read via
@@ -131,9 +131,9 @@ shim's PPM dump to PNG with only the stdlib.
   with the installed toolchain (gsKit/libpad linked) and **runs on the
   emulated GS** in PCSX2 (`shots/m0_pcsx2.png`); real-hardware run pending.
 
-## M1 — the desktop (this milestone)
+## M1, the desktop (this milestone)
 
-`mac/unodos.c` (4139 lines — the complete UnoDOS) runs on the PS2 through the
+`mac/unodos.c` (4139 lines, the complete UnoDOS) runs on the PS2 through the
 **Mac-compat shim**, host-verified and confirmed on the emulated GS.
 
 - **Shim** (`mac_compat.*`, `mac_io.c`): one implicit full-screen GrafPort over
@@ -145,32 +145,32 @@ shim's PPM dump to PNG with only the stdlib.
   `ctx_switch` under `__m68k__`; a portable kernel-driven scheduler elsewhere).
 - **Verified:** desktop + all 11 apps (Sys Info, Clock, Files, Notepad, Music,
   Dostris, OutLast, Pac-Man, Tracker, Paint, Theme/32-bit colour) + the FAT12
-  RAM-disk write→read round-trip into Notepad — `shots/m1_*.png` on the host,
+  RAM-disk write→read round-trip into Notepad, `shots/m1_*.png` on the host,
   `shots/m1_pcsx2_pacman.png` on the emulated PS2 GS.
 
-### Pad-as-pointer (EE button map — `ee_platform.c`)
+### Pad-as-pointer (EE button map, `ee_platform.c`)
 
 | Input | Role |
 |---|---|
-| D-pad | arrow keys — desktop icon nav / in-app movement |
-| Cross / Circle | Return — launch icon / confirm |
-| Start | Esc — close focused window |
+| D-pad | arrow keys, desktop icon nav / in-app movement |
+| Cross / Circle | Return, launch icon / confirm |
+| Start | Esc, close focused window |
 
 ### USB keyboard + mouse (`ee_usb.c`)
 
-A USB keyboard and mouse work alongside the pad — both feed the same event
+A USB keyboard and mouse work alongside the pad, both feed the same event
 queue. The IOP drivers (`usbd` + `ps2kbd` + `ps2mouse`) are **embedded into the
 ELF** (`bin2c`), so no external module files are needed.
 
 | Input | Role |
 |---|---|
-| USB keyboard | real typing into Notepad etc. — RAW HID, full US keymap, arrows/Return/Esc/Backspace/Tab + shifted symbols; Ctrl/Win = Command |
-| USB mouse | absolute pointer (clamped to screen) — left button = click/drag; a small arrow cursor is drawn as a GS overlay |
+| USB keyboard | real typing into Notepad etc., RAW HID, full US keymap, arrows/Return/Esc/Backspace/Tab + shifted symbols; Ctrl/Win = Command |
+| USB mouse | absolute pointer (clamped to screen), left button = click/drag; a small arrow cursor is drawn as a GS overlay |
 
 > The keyboard/mouse **function** can't be exercised in PCSX2 (no USB HID
 > injection), so it's verified on real hardware only. The device init runs on a
 > background EE thread so a USB-less boot (e.g. PCSX2) still reaches the desktop
-> — see HANDOFF for the boot gotcha.
+>, see HANDOFF for the boot gotcha.
 
 ### Audio (`ee_audio.c`)
 
@@ -178,7 +178,7 @@ The Sound Manager is realised as an actual square-wave synth on the SPU2 via
 **audsrv** (`audsrv.irx` embedded with `bin2c`; **LIBSD** from `rom0`). Music's
 Canon in D and the Tracker patterns play: `SndDoImmediate`'s `noteCmd`/`quietCmd`
 drive up to 8 phase-accumulator voices (MIDI→Hz), mixed to 16-bit / 22050 Hz /
-stereo and pumped once per frame (non-blocking — only the free ring space is
+stereo and pumped once per frame (non-blocking, only the free ring space is
 filled).
 
 > Like USB, audsrv inits over SIF RPC that PCSX2's fastboot HLE never answers, so
@@ -191,7 +191,7 @@ filled).
 | File | Role |
 |---|---|
 | `fb.c` / `fb.h` | software framebuffer + drawing primitives (shared host+EE) |
-| `mac_compat.h` / `.c` | **Mac Toolbox shim** — QuickDraw/events/memory over `fb.*` |
+| `mac_compat.h` / `.c` | **Mac Toolbox shim**: QuickDraw/events/memory over `fb.*` |
 | `mac_io.c` | File Manager (directory tree) + Sound Manager (routes to `ee_audio.c` on EE) |
 | `unodos.c` | the portable UnoDOS core (copied from `mac/unodos.c`) |
 | `host_desktop.c` | host shim: run the desktop, dump `fb` → PPM (host-only) |
@@ -205,10 +205,10 @@ filled).
 | `tools/run_pcsx2.ps1` | boot an ELF in PCSX2 + screenshot the GS |
 | `Makefile` / `build.sh` | EE (PS2SDK) / host build |
 
-## M2 — memory-card storage (done on the EE)
+## M2, memory-card storage (done on the EE)
 
 The EE File Manager persists to the **PS2 memory card** via libmc, so
-Files/Notepad save and load on hardware and across boots — verified in PCSX2
+Files/Notepad save and load on hardware and across boots, verified in PCSX2
 (`shots/m2_pcsx2_mcsave.png` shows the saved data reloaded byte-for-byte after a
 write; the load-on-fresh-boot path runs the same `mcGetDir`/`mcRead` code).
 `ee_platform.c` brings up MCMAN/MCSERV +
@@ -218,16 +218,16 @@ write; the load-on-fresh-boot path runs the same `mcGetDir`/`mcRead` code).
 
 ## Next
 
-- **EE audio** — DONE (`ee_audio.c`): a square-wave synth on the SPU2 via
+- **EE audio**: DONE (`ee_audio.c`): a square-wave synth on the SPU2 via
   **audsrv** (embedded `audsrv.irx` + `rom0:LIBSD`), pumped per-frame from
   `SndDoImmediate`. Theme (32-bit colour) and the cooperative scheduler already
   came along through the shim. The sound itself is hardware-only to verify (no
-  SPU2-via-audsrv under PCSX2 fastboot) — an ear-check like the MacPlus SE audio.
-- **USB keyboard + mouse** — DONE (`ee_usb.c`): embedded `usbd`/`ps2kbd`/
+  SPU2-via-audsrv under PCSX2 fastboot), an ear-check like the MacPlus SE audio.
+- **USB keyboard + mouse**: DONE (`ee_usb.c`): embedded `usbd`/`ps2kbd`/
   `ps2mouse`, RAW-HID keymap, absolute mouse + GS cursor overlay. Function is
   hardware-only to verify (PCSX2 has no USB HID); boot is proven (init runs on a
   background I/O thread so a USB-less boot still reaches the desktop).
-- **Real hardware** — run on a PS2 via FMCB (`BOOT.ELF` on the memory card, or
+- **Real hardware**: run on a PS2 via FMCB (`BOOT.ELF` on the memory card, or
   uLaunchELF from USB) and confirm DualShock 2 navigation, **the USB
   keyboard/mouse, and audio** on metal. The
   PCSX2-vs-metal watch list: interlace flicker (the 512×448 fallback in

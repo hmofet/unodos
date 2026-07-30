@@ -1,4 +1,4 @@
-# retro-shot — headless libretro render-verify for the retro ports
+# retro-shot, headless libretro render-verify for the retro ports
 
 Renders a built ROM to a PNG **with no display and no root**, for the ports that
 have no in-repo `harness.py` and no accurate standalone emulator on the dev box:
@@ -12,11 +12,11 @@ the `AUTOTEST_*` variant, render N frames, and pixel-diff against a baseline bui
 from the pre-change source. A correct redraw refactor is **byte-identical**.
 
 ## Files
-- `retro_shot.c` — ~200-line libretro frontend: dlopen a core, load a ROM, run N
+- `retro_shot.c`: ~200-line libretro frontend: dlopen a core, load a ROM, run N
   frames with no input (the AUTOTEST ROMs self-drive), capture the last
   `video_refresh` frame, write a PPM. Handles 0RGB1555 / RGB565 / XRGB8888.
-- `ppm2png.py` — PPM → PNG (stdlib only).
-- `shot.sh <genesis|snes|gb|.so> <rom> <out.png> [frames]` — wraps the two.
+- `ppm2png.py`: PPM → PNG (stdlib only).
+- `shot.sh <genesis|snes|gb|.so> <rom> <out.png> [frames]`: wraps the two.
 
 ## Setup (once)
 ```sh
@@ -44,6 +44,6 @@ cmp /tmp/base.ppm /tmp/fix.ppm   # identical == the refactor preserves every pix
 ROM extensions the cores autodetect: genesis `.gen`, sms `.sms`, gg `.gg`, snes
 `.sfc`, gb `.gb`.
 
-> DC (Flycast) and PS2 (PCSX2) use their own rigs — `dreamcast/tools/emu_run.sh` /
+> DC (Flycast) and PS2 (PCSX2) use their own rigs, `dreamcast/tools/emu_run.sh` /
 > `capture_apps.sh` and `ps2/tools/run_pcsx2_windowed.ps1`. Mac uses
 > `mac/shots/runshot.sh` (Executor). This directory is only the retro-console rig.

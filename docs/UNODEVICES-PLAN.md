@@ -1,6 +1,6 @@
-# unodevices — Device Manager implementation plan (pc64)
+# unodevices, Device Manager implementation plan (pc64)
 
-Status: **Phase 1 DONE (2026-07-23, branch `unodevices`)** — registry, recursive
+Status: **Phase 1 DONE (2026-07-23, branch `unodevices`)**: registry, recursive
 PCI enumeration, introspection and both gates have landed; see the "as landed"
 sections and the changelog in `pc64/DEVICES.md`, which is the contract and wins
 over this document wherever they disagree. Phases 2-4 are still PLANNED. Run
@@ -10,7 +10,7 @@ which builds its drivers on this registry).
 Two phase-1 decisions differ from the sketch below, deliberately: enumeration is
 recursive **plus** a flat sweep of unreached busses (multi-root machines,
 firmware-unconfigured bridges), and **BAR sizing is opt-in per device instead of
-part of the scan** — phase 1 runs attached, with firmware drivers live on these
+part of the scan**: phase 1 runs attached, with firmware drivers live on these
 controllers, so a scan performs no config-space writes at all.
 
 ## Goal
@@ -23,13 +23,13 @@ per machine, which device is keeping that machine attached to firmware.
 
 ## Current state (verified 2026-07-23)
 
-- `pc64/pc64_pci.c` — flat scan of buses 0..255 in `pci_find()` /
+- `pc64/pc64_pci.c`: flat scan of buses 0..255 in `pci_find()` /
   `pci_find_class()`. NOTE: on UEFI-booted machines this flat scan already
   reaches devices behind bridges (firmware assigns secondary bus numbers), so
   do not expect the recursive enumerator to reveal new devices on our fleet.
   Recursion is still required: it builds the parent/child tree and handles
   unconfigured bridges + future hotplug.
-- `pc64/xhci.c` — finds the controller itself, enumerates ports, fetches
+- `pc64/xhci.c`: finds the controller itself, enumerates ports, fetches
   descriptors, and already has control transfers, SET_CONFIGURATION, and bulk
   rings (`uno_usb_setup_bulk`, `uno_usb_bulk_in/out`, async bulk-IN).
 - Native drivers today (each with its own hardcoded probe): ahci, nvme, sdhci,
@@ -69,7 +69,7 @@ These were reviewed and agreed; do not re-litigate them mid-implementation.
    the registry (phase 2), its legacy init call is deleted IN THE SAME
    COMMIT, never left running in parallel (double-claim hazard).
 
-## Phase 1 — PCI enumerator + tree + introspection (read-only)
+## Phase 1, PCI enumerator + tree + introspection (read-only)
 
 New files `pc64/uno_devmgr.c` / `uno_devmgr.h`; extend `pc64_pci.c`.
 
@@ -105,7 +105,7 @@ e1000, xHCI, AHCI...) with correct BAR sizes; boot behavior is otherwise
 byte-identical (no binding, no register writes beyond the guarded BAR
 probe); capture the device list on the harness via `tools/qemu_test.py`.
 
-## Phase 2 — driver registry + binding for built-in drivers
+## Phase 2, driver registry + binding for built-in drivers
 
 - `UNO_DRIVER(x)` linker-set macro (see "Toolchain traps" for the COFF
   idiom) emitting a `uno_driver` record: name, bus, match table pointer,
@@ -126,7 +126,7 @@ debug-stress notes), networking up in QEMU (e1000) and on the ZimaBlade
 (r8169 via the URC bridge), storage detach still works, and `uno.devices()`
 now shows drivers bound against each function.
 
-## Phase 3 — USB into the same tree
+## Phase 3, USB into the same tree
 
 - Factor the descriptor walk out of `xhci.c` into the devmgr's USB
   enumeration path, invoked by the xHCI driver post-bind (drivers create
@@ -144,7 +144,7 @@ Acceptance: QEMU with `-device usb-kbd -device usb-mouse -device usb-hub
 UNCLAIMED until the MSC driver from the detach plan lands); HID input and
 the USB NIC keep working.
 
-## Phase 4 — loadable .UNO drivers + hotplug
+## Phase 4, loadable .UNO drivers + hotplug
 
 - Driver-as-.UNO in `\DRIVERS\`: manifest header (name, bus, match table,
   api-version, probe/remove offsets), scanned for UNCLAIMED devices after

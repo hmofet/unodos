@@ -3,7 +3,7 @@
 
 NES CHR tiles are 8x8 @ 2bpp = 16 bytes: 8 bytes of bitplane 0 (low bit of each
 pixel) then 8 bytes of bitplane 1 (high bit). A pixel's colour index 0..3 picks
-a colour from the background palette — EXCEPT index 0, which the PPU always
+a colour from the background palette, EXCEPT index 0, which the PPU always
 renders as the universal backdrop ($3F00). So "inverted" title-bar text can't be
 a palette swap (its white background would be index 0 = backdrop); we generate a
 real inverted font whose foreground is index 0 (the blue backdrop) on an index-1
@@ -61,12 +61,12 @@ for g in range(95):
     rows = [[1 if r & (0x80 >> b) else 0 for b in range(8)] for r in font[g*8:(g+1)*8]]
     tiles.append((f"'{chr(32+g)}'", nes_tile(rows)))
 
-# inverted font: fg=0 (blue) on bg=1 (white) — title bar
+# inverted font: fg=0 (blue) on bg=1 (white), title bar
 for g in range(95):
     rows = [[0 if r & (0x80 >> b) else 1 for b in range(8)] for r in font[g*8:(g+1)*8]]
     tiles.append((f"inv '{chr(32+g)}'", nes_tile(rows)))
 
-# white block (all index 1) — title-bar background
+# white block (all index 1), title-bar background
 tiles.append(("white block", nes_tile([[1] * 8] * 8)))
 
 # ---- icons from the x86 .BIN headers (2bpp chunky, same donors as SMS) ----------
@@ -120,7 +120,7 @@ tiles.append(("solid magenta(3)", nes_tile([[3] * 8] * 8)))   # T_SOLM
 # Paint cursor: a hollow white box outline (index1 border, index0 interior) so
 # the cell under it shows through. The Pac-Man actors/dots are 8x8 background
 # tiles (the port has no sprite layer): dot = small centre, power = blob,
-# pac-man = filled disc, ghost = domed body — all drawn in palette index 1, the
+# pac-man = filled disc, ghost = domed body, all drawn in palette index 1, the
 # per-app Pac-Man palette tinting them (see pacman.inc).
 EXTRA_BASE = len(tiles)
 _box = [[1] * 8] + [[1, 0, 0, 0, 0, 0, 0, 1]] * 6 + [[1] * 8]
@@ -143,7 +143,7 @@ assert len(tiles) <= 256, f"{len(tiles)} tiles exceeds pattern table 0"
 
 # ---- Dostris tetromino tables --------------------------------------------------
 # Each piece = 4 rotations, each a 4x4 grid; emitted as 4 words (bit15 = row0col0,
-# scanning L->R, T->B) — the exact shape the SMS port's get_mask/piece_collide
+# scanning L->R, T->B), the exact shape the SMS port's get_mask/piece_collide
 # consume, ported to 6502 here. Each piece also carries a board-cell tile.
 PIECES = {
     "I": ["....", "####", "....", "...."],
@@ -178,7 +178,7 @@ CPU_HZ = 1789773.0
 NOTE_HZ = {"C4": 262, "D4": 294, "E4": 330, "F4": 349, "G4": 392, "A4": 440,
            "B4": 494, "C5": 523, "D5": 587}
 Q, H = 26, 52        # quarter / half note, in 60Hz frames
-TUNE = [  # Ode to Joy (Beethoven) — the same melody the SMS port plays
+TUNE = [  # Ode to Joy (Beethoven), the same melody the SMS port plays
     ("E4", Q), ("E4", Q), ("F4", Q), ("G4", Q), ("G4", Q), ("F4", Q),
     ("E4", Q), ("D4", Q), ("C4", Q), ("C4", Q), ("D4", Q), ("E4", Q),
     ("E4", H), ("D4", Q), ("D4", H),

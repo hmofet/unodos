@@ -1,4 +1,4 @@
-# pc64 native input — taking keyboard & mouse from the firmware
+# pc64 native input, taking keyboard & mouse from the firmware
 
 Every x86 keyboard/mouse speaks one of three transports; pc64 has a native
 driver for each, plus the firmware path as a universal fallback while attached.
@@ -16,7 +16,7 @@ USB and I2C-HID keyboards both deliver the same 8-byte boot report
 (`[modifiers][reserved][keycode0..5]`, HID Usage-Table keyboard-page usages).
 `hid_kbd_report()` diffs each report against the previous to emit **key-down
 edges** as `(scan, uni, ctrl)` in the EFI SimpleTextIn space `map_key()`
-already speaks — so both transports feed the existing key ring unchanged. It
+already speaks, so both transports feed the existing key ring unchanged. It
 tracks Caps Lock and maps arrows/esc/del to EFI scan codes.
 
 ## I2C-HID: keyboard + pointer (`i2c_hid.c`)
@@ -37,7 +37,7 @@ The Surface has both on one controller at different addresses.
 On the `xhci.c` host stack: parses each device's config descriptor for HID boot
 interfaces (class 3, protocol 1=keyboard / 2=mouse), sets BOOT protocol
 (`SET_PROTOCOL 0`) + `SET_IDLE 0`, and arms the interrupt-IN endpoint. `xhci.c`
-gained `uno_usb_setup_intr_in` / `uno_usb_intr_in` — a **non-blocking** poll that
+gained `uno_usb_setup_intr_in` / `uno_usb_intr_in`: a **non-blocking** poll that
 keeps exactly one TRB outstanding (post → check-completion → re-post), so a
 frame never stalls waiting for a keypress.
 
@@ -45,14 +45,13 @@ Because bringing up native xHCI takes the controller from the firmware, USB HID
 is a **detached-mode** source in production (brought up in `try_detach` after
 ExitBootServices). `-DUNO_USBHID_TEST` brings it up eagerly for QEMU.
 
-## SCL timing — why the X1 Carbon's trackpad never bound
+## SCL timing, why the X1 Carbon's trackpad never bound
 
 The DesignWare core counts SCL high/low in cycles of the **LPSS input clock**,
 and that clock is a property of the SoC readable from no register: Bay Trail
 100 MHz, Sunrise Point 120, Apollo Lake 133, Cannon/Comet/Ice/Tiger Lake 216.
 The driver shipped one hardcoded HCNT/LCNT pair written for ~133 MHz. On a
-Comet Lake X1 Carbon Gen 8 those same counts clock SCL at roughly **1.4 MHz** —
-three and a half times the bus specification — so the Synaptics pad never
+Comet Lake X1 Carbon Gen 8 those same counts clock SCL at roughly **1.4 MHz**: three and a half times the bus specification, so the Synaptics pad never
 answers, which is indistinguishable from an empty bus. That is exactly the
 `2 DW ctrl / 2 bars, HID device: not found` readout the machine reported.
 
@@ -71,7 +70,7 @@ require.
 ## The router + detach gate
 
 `poll_keyboard`: if a native keyboard is bound (I2C-HID or USB HID), drive from
-it and **stop polling firmware ConIn** — on a touch device that's what keeps the
+it and **stop polling firmware ConIn**: on a touch device that's what keeps the
 firmware on-screen keyboard drawn. Else PS/2 (detached) or firmware ConIn.
 `poll_pointer`: native I2C-HID pointer (1:1, no smoothing) → native USB mouse →
 firmware Absolute/Simple Pointer (now a lighter, target-weighted filter, since
@@ -81,14 +80,14 @@ from "requires i8042" to "requires **any** native keyboard that survives EBS".
 **The gate now also protects the pointer.** It used to treat a native pointer
 as "a bonus, not required", which is true until it isn't: `ExitBootServices`
 sets `gNAbs = gNPtr = 0`, so a machine whose only working pointer came from
-firmware SimplePointer loses it permanently at detach — keyboard fine, mouse
+firmware SimplePointer loses it permanently at detach, keyboard fine, mouse
 gone. `detach_would_strand_pointer()` refuses that specific trade: a firmware
 pointer is live, nothing native would survive, **and** LPSS I2C controllers are
 present (so it is a laptop whose pointer belongs on I2C). A PS/2-mouse desktop
 has no LPSS controller and is unaffected. When the gate holds a machine
 attached, the System window says so.
 
-The System window now also reports what actually bound — firmware pointer
+The System window now also reports what actually bound, firmware pointer
 instance counts, PS/2 keyboard/aux state, the aux port's 0xA9 self-test result
 and its 0xF2 device id. None of that was observable before, which is why a
 dead trackpad on real hardware could not be diagnosed at all.

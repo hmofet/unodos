@@ -1,4 +1,4 @@
-# Intel AX201 WiFi (F12) bring-up — handoff
+# Intel AX201 WiFi (F12) bring-up, handoff
 
 Status: 2026-07-28 (round 25 - **THE DATA PATH WORKS ON METAL, AND A NETWORK WAS
 JOINED FROM THE GUI** on a second AX201, the X1 Carbon: Control Panel > Network
@@ -7,7 +7,7 @@ JOINED FROM THE GUI** on a second AX201, the X1 Carbon: Control Panel > Network
 3/3 pings to the gateway and a DNS answer over the encrypted WiFi link. What is
 left is a firmware assert when the link is left undrained, and the GUI join).
 
-## Round 25 (2026-07-28) — DHCP, ping and DNS over WiFi, on metal
+## Round 25 (2026-07-28), DHCP, ping and DNS over WiFi, on metal
 
 Branch `iwlwifi-dhcp`. The metal result, verbatim from `iwl netres` after the IP
 stack was lent to the WiFi NIC:
@@ -151,7 +151,7 @@ Two notes for whoever reads this next:
   whether the SEC_KEY removal + queue rebuild carried it. Those remain
   metal-unproven; the Yoga rig with URC is where to prove them.
 
-### Retry PROVEN on metal — and what the APs actually do (round 25, final flash)
+### Retry PROVEN on metal, and what the APs actually do (round 25, final flash)
 
 **The retry mechanism works.** `iwl retarget <n>` re-points the live contexts and
 rebuilds the queue, and a full second association completed on it:
@@ -277,12 +277,12 @@ before reflashing anything.
 - `rtwifi.c` had the identical EAPOL-pointer bug at both call sites; fixed,
   still **unverified** (no Realtek WiFi hardware here).
 
-## Round 24 (2026-07-28) — TX fixed; the WPA2 connection COMPLETES on metal
+## Round 24 (2026-07-28), TX fixed; the WPA2 connection COMPLETES on metal
 
 Five independently-necessary defects were found and fixed this round. Each one
 alone would have blocked association, and each was confirmed on metal.
 
-### 1. TX never transmitted — the missing `iwl_cmd_header`
+### 1. TX never transmitted, the missing `iwl_cmd_header`
 
 `tx_enqueue()` built the TX buffer starting at `iwl_tx_cmd_gen2`. The real gen2
 layout (`iwl_txq_gen2_build_tx`, which copies from `&dev_cmd->hdr`) is:
@@ -310,7 +310,7 @@ Four more TX defects rode behind it, all from `iwl_mvm_set_tx_params` +
 
 Success signal: `rxpkt grp=0 cmd=1c` (REPLY_TX), which had never once appeared.
 
-### 2. `g_mac` was never populated — our MAC was 00:00:00:00:00:00
+### 2. `g_mac` was never populated, our MAC was 00:00:00:00:00:00
 
 Declared and read in six places (auth frame addr2, `MAC_CONFIG.local_mld_addr`,
 `LINK_CONFIG.local_link_addr`, the supplicant's own-address, `mgmt_capture`'s
@@ -427,7 +427,7 @@ Target: Lenovo ThinkPad X13 Yoga, Intel **AX201** (CNVi, gen2 22000-family,
 QuZ-a0-hr-b0). Firmware `QuZ-a0-hr-b0-77.ucode`. Ethernet is fully solved; this
 is the WiFi tail.
 
-## Round 23 (2026-07-27) — the link API is IMPLEMENTED (branch `iwlwifi-linkapi`), metal-pending
+## Round 23 (2026-07-27), the link API is IMPLEMENTED (branch `iwlwifi-linkapi`), metal-pending
 
 Round 22's plan is written. `pc64/iwlwifi.c` now has the MAC_CONF-group
 association path and picks it whenever the fw advertises **capa 110**
@@ -450,12 +450,12 @@ length-checks every command:
 **New `assoc_setup()` order** (mirrors iwlmvm `mld-mac.c` / `link.c` / `mld-sta.c`):
 `MAC_CONFIG(ADD)` → `LINK_CONFIG(ADD, phy=FW_CTXT_INVALID)` → `PHY_CONTEXT(ADD)`
 → `LINK_CONFIG(MODIFY: active + phy + rates + qos + beacon timing)` →
-`STA_CONFIG(AP peer)` → `SCD_QUEUE_CONFIG`. **No BINDING, no TIME_QUOTA** — the
+`STA_CONFIG(AP peer)` → `SCD_QUEUE_CONFIG`. **No BINDING, no TIME_QUOTA**: the
 link replaces both.
 
 **Correction to round 22's step 4.** `iwl_mvm_get_session_prot_id` uses the raw
 `mvmvif->id` for SESSION_PROTECTION_CMD **ver < 2** and the `fw_link_id` only
-from ver 2 up. This fw's 0x05 is ver 1, so the mac id is correct — and with one
+from ver 2 up. This fw's 0x05 is ver 1, so the mac id is correct, and with one
 mac and one link both values are **0** anyway. The id was never the bug: the
 missing LINK was. Also worth knowing: the driver *chooses* `fw_link_id` itself
 (`iwl_mvm_get_free_fw_link_id`, ffz over a driver-side bitmap); the fw does not
@@ -474,12 +474,12 @@ Other pieces that had to move with it:
   auth window → Open-System auth → assoc → supplicant armed.
 
 **New bisect verb: `iwl mld <1-9>`** (mirrors `iwl mvm <n>`, same
-one-command-per-round-trip rationale — a wedge eats in-flight URC log frames):
+one-command-per-round-trip rationale, a wedge eats in-flight URC log frames):
 `1` MAC_CONFIG, `2` LINK_CONFIG ADD, `3` PHY_CONTEXT, `4` LINK_CONFIG
 MODIFY(active), `5` STA_CONFIG, `6` txq_alloc, `7` SESSION_PROTECTION, `8` auth,
 `9` assoc. Run `iwl scan` first so steps 3-5 have a real BSSID/channel.
 
-### METAL RESULT — SESSION_PROTECTION is ACCEPTED; the cause was RLC_CONFIG_CMD
+### METAL RESULT, SESSION_PROTECTION is ACCEPTED; the cause was RLC_CONFIG_CMD
 
 Driven live over URC. Every command is now accepted (`csr2808=00000000`):
 
@@ -491,7 +491,7 @@ Driven live over URC. Every command is now accepted (`csr2808=00000000`):
 | `mld 4` | `LINK_CONFIG` phy-bind **then** activate | ok |
 | `mld 5` | `STA_CONFIG_CMD` 96 B | ok |
 | `mld 6` | `SCD_QUEUE_CONFIG` | qid=1 |
-| `mld 7` | **`SESSION_PROTECTION_CMD`** | **ok — `csr2808=0`** |
+| `mld 7` | **`SESSION_PROTECTION_CMD`** | **ok, `csr2808=0`** |
 
 **The fix was `RLC_CONFIG_CMD` (DATA_PATH 0x08, 32 B, cmd ver 2 in the wide
 header), sent immediately after every `PHY_CONTEXT_CMD`.** It binds the radio
@@ -512,7 +512,7 @@ advertising DATA_PATH 0x08 at cmd_ver >= 2, and this ucode's version TLV does
 NOT list it - yet the working driver sends it on this exact firmware. Device
 ground truth beat the version gate.
 
-### Three hypotheses DISPROVEN on metal this round — do not re-chase
+### Three hypotheses DISPROVEN on metal this round, do not re-chase
 
 1. **Round 22's stated root cause was WRONG.** SESSION_PROTECTION failed
    identically with a real, active, phy-bound link (same `0x101f` / `0x400`).
@@ -528,7 +528,7 @@ ground truth beat the version gate.
    profile. (Sending `MCC_SOURCE_DEFAULT` instead returns status 4 = ILLEGAL -
    that was a driver bug, not a fw state.)
 
-### NEW BLOCKER — TX has never actually transmitted
+### NEW BLOCKER, TX has never actually transmitted
 
 With session protection accepted and the radio on-channel, `iwl auth` TXes the
 Open-System auth frame and gets **no response, and no TX-status notification
@@ -574,7 +574,7 @@ was actually parked on when the beacon arrived) over the DS IE.
 `iwl auth`. `iwl caps` dumps the fw capability bits + antenna masks on a running
 box (no reflash needed). `iwl fwerr` after any assert.
 
-## Round 22 (2026-07-27) — ROOT CAUSE: this fw drives association with the NEW link-based command API; UnoDOS uses the legacy MVM one
+## Round 22 (2026-07-27), ROOT CAUSE: this fw drives association with the NEW link-based command API; UnoDOS uses the legacy MVM one
 
 Captured a **working Linux ASSOCIATION** command trace of THIS Yoga's AX201
 connecting to NimmuNet, and diffed the command IDs against what UnoDOS sends.
@@ -611,23 +611,23 @@ never sends `LINK_CONFIG_CMD` (it set up the mac via the legacy `MAC_CONTEXT_CMD
 0x28), so the session-protection request points at a link the fw does not have →
 LMAC assert. The command, capability (capa54) and 24-byte length are all correct;
 what is missing is the link the new-API setup would have created. So airtime was
-never really the bug — the whole legacy association path is. The fw ACCEPTS the
+never really the bug, the whole legacy association path is. The fw ACCEPTS the
 legacy mac_ctxt/add_sta (csr2808=0) but they don't build the link state the rest
 of the association (session-prot, and real auth/assoc RX) needs.
 
-### The real work (next session) — port the association path to the new command API
+### The real work (next session), port the association path to the new command API
 
 Replace the legacy join commands with the MAC_CONF-group ones, in this order:
-1. **`MAC_CONFIG_CMD` (0x03/0x08)** — `struct iwl_mac_config_cmd`. Creates the MAC.
+1. **`MAC_CONFIG_CMD` (0x03/0x08)**: `struct iwl_mac_config_cmd`. Creates the MAC.
    CMD_VERSIONS: ver 1 on this fw.
-2. **`LINK_CONFIG_CMD` (0x03/0x09)** — `struct iwl_link_config_cmd`. Creates the
-   link and returns/uses a **fw_link_id** — the id SESSION_PROTECTION needs.
-3. **`STA_CONFIG_CMD` (0x03/0x0a)** — `struct iwl_sta_config_cmd`. The AP peer STA
+2. **`LINK_CONFIG_CMD` (0x03/0x09)**: `struct iwl_link_config_cmd`. Creates the
+   link and returns/uses a **fw_link_id**: the id SESSION_PROTECTION needs.
+3. **`STA_CONFIG_CMD` (0x03/0x0a)**: `struct iwl_sta_config_cmd`. The AP peer STA
    (replaces ADD_STA 0x18).
-4. **`SESSION_PROTECTION_CMD` (0x03/0x05)** — keep the 24-byte struct, but set
+4. **`SESSION_PROTECTION_CMD` (0x03/0x05)**: keep the 24-byte struct, but set
    `id_and_color` to the **fw_link_id** from step 2 (not the raw mac id 0). This is
    almost certainly what clears `data1=0x400`.
-5. `SCD_QUEUE_CONFIG_CMD` (0x05/0x17) — unchanged, already works.
+5. `SCD_QUEUE_CONFIG_CMD` (0x05/0x17), unchanged, already works.
 
 Structs live in Linux `drivers/net/wireless/intel/iwlwifi/fw/api/mac-cfg.h`
 (`iwl_mac_config_cmd`, `iwl_link_config_cmd`, `iwl_sta_config_cmd`) - fetch via
@@ -638,7 +638,7 @@ exact command SEQUENCE + that it works. NOTE: this is a substantial rewrite of t
 `iwl join` path (`mvm_mac_ctxt`/`mvm_binding`/`mvm_add_sta` -> the three new cmds),
 not a one-liner - budget a focused session + a few metal reflash iterations.
 
-### Rig note carried forward — the box boots a READ-ONLY USB ESP
+### Rig note carried forward, the box boots a READ-ONLY USB ESP
 
 The Yoga boots a USB stick whose ESP is firmware-SFS = **read-only in pc64_fs**, so
 the URC A/B kernel push CANNOT update the live boot kernel (`push 1 ...` hits the
@@ -650,7 +650,7 @@ dd `build/unodos-uefi.img` to the stick (model-guarded `/tmp/flash_ab.sh`;
 before imaging. To get fast A/B push instead, boot a writable-ESP install (internal
 disk). Device nodes shuffle between sessions - ALWAYS re-identify by model.
 
-## Round 21 (2026-07-27) — SESSION_PROTECTION verified on metal: right cmd, right length (24 B), but LMAC-FATALs (data1=0x400). Airtime is the wall.
+## Round 21 (2026-07-27), SESSION_PROTECTION verified on metal: right cmd, right length (24 B), but LMAC-FATALs (data1=0x400). Airtime is the wall.
 
 Reflashed the boot sticks (both, A/B) with each fix and re-drove the full chain.
 Two metal iterations pinned the airtime command precisely:
@@ -658,7 +658,7 @@ Two metal iterations pinned the airtime command precisely:
 1. **20-byte SESSION_PROTECTION → length assert.** `iwl auth` logs
    `session-prot: MAC_CONF 0x5 len=20 capa54=1` then asserts; `iwl fwerr`: UMAC
    ADVANCED_SYSASSERT `201002fd` on cmd `0x0305`, **`data2=0x18` (expected 24) /
-   `data3=0x14` (got 20)** — a pure length mismatch. So this fw wants **24 bytes**,
+   `data3=0x14` (got 20)**: a pure length mismatch. So this fw wants **24 bytes**,
    not the 20 of SESSION_PROTECTION_CMD_API_S_VER_1 as I'd first read. Linux
    `struct iwl_session_prot_cmd` (VER_1 **and** VER_2) is in fact 6 u32 = 24 B
    (id_and_color, action, conf_id, duration_tu, repetition_count, interval).
@@ -666,7 +666,7 @@ Two metal iterations pinned the airtime command precisely:
    `len=24 capa54=1`, then LMAC `error_id=0x101f` (ADVANCED_SYSASSERT) pc
    `004c0a3c`, cascading to UMAC `NMI_INTERRUPT_LMAC_FATAL` on cmd `0x0305` with
    **`data1=0x00000400`**. This is the SAME `0x400` signature the original
-   session-prot attempts hit (85aeff9) — so the full real-join context did NOT
+   session-prot attempts hit (85aeff9), so the full real-join context did NOT
    fix it, and the id was already ruled out then (both raw 0 and color-encoded
    `g_mac_id` give `0x400`). Length + command + capability are all now correct;
    the fw still rejects the request itself. `0x101f`/`0x400` are Intel-internal,
@@ -675,12 +675,12 @@ Two metal iterations pinned the airtime command precisely:
 **Where this leaves it:** the entire association SETUP is solid on metal (F12
 ALIVE, scan→24 APs→real BSSID, phy/mac/binding/add_sta/TX-queue all `csr2808=0`).
 The ONE remaining wall is reserving the on-channel auth window: TIME_EVENT_CMD
-is absent on this fw (SYSASSERT), and SESSION_PROTECTION_CMD — correct command,
-correct 24-byte length, capa54=1 — LMAC-FATALs with `data1=0x400`. Committed
+is absent on this fw (SYSASSERT), and SESSION_PROTECTION_CMD, correct command,
+correct 24-byte length, capa54=1, LMAC-FATALs with `data1=0x400`. Committed
 state: `iwlwifi.c` sends the correct 24-byte session-prot; it asserts.
 
 **Two candidate next steps (both need a fresh session; each metal iteration is a
-full USB reflash — the box boots a read-only USB ESP, see the rig note below):**
+full USB reflash, the box boots a read-only USB ESP, see the rig note below):**
 1. **Test whether the auth window is even needed.** Make `iwl auth` SKIP
    session-prot and just TX the auth frame, logging join-state RX counts. If the
    radio is already parked on-channel by phy_ctxt+binding and auth draws a
@@ -692,11 +692,11 @@ full USB reflash — the box boots a read-only USB ESP, see the rig note below):
    SESSION_PROTECTION_CMD bytes + the mac-context/link state around it. Diff the
    conf_id / id_and_color / duration and the preceding command sequence. The
    `0x400` almost certainly means the mac-context or link is in a state the fw
-   won't schedule protection for — the association trace is the only way to see
+   won't schedule protection for, the association trace is the only way to see
    what the working driver does differently. (git.kernel.org is Anubis-blocked;
    use raw.githubusercontent.com/torvalds/linux for source.)
 
-## Round 20 (2026-07-27) — association setup all works on metal; the wedge is the airtime command; SESSION_PROTECTION struct fixed (UNVERIFIED)
+## Round 20 (2026-07-27), association setup all works on metal; the wedge is the airtime command; SESSION_PROTECTION struct fixed (UNVERIFIED)
 
 Drove the Yoga live over URC (:5098). Reproduced the whole chain end to end:
 `iwl rerun` -> ALIVE (F12 confirmed solved), `iwl mvm 1/2/4` (init/tx_ant/power)
@@ -704,13 +704,13 @@ Drove the Yoga live over URC (:5098). Reproduced the whole chain end to end:
 REAL NimmuNet BSSID `e8:d3:eb:51:4d:6f` chan 11, and phy_ctxt / mac_ctxt /
 binding / **add_sta / txq_alloc all return with `csr2808=0`** (no assert; TX
 queue qid=1). So every setup command works against real firmware with a real AP.
-This is well past round 19 (which wedged at ADD_STA on a broadcast BSSID — the
+This is well past round 19 (which wedged at ADD_STA on a broadcast BSSID, the
 real-scan path fixes that).
 
 **The blocker is now precisely the auth-window airtime command, and BOTH prior
 approaches were wrong for this fw:**
 
-- **TIME_EVENT_CMD (LONG 0x29) — what commit `3cd66d3` switched to — SYSASSERTs.**
+- **TIME_EVENT_CMD (LONG 0x29), what commit `3cd66d3` switched to, SYSASSERTs.**
   `iwl auth` -> `csr2808=02000000`; `iwl fwerr` shows UMAC `error_id=201002ff`
   (ADVANCED_SYSASSERT), **`cmd=000c0129`** (group 1 / opcode 0x29 = TIME_EVENT),
   cascading to LMAC `NMI_INTERRUPT_UMAC_FATAL`. Crucially, **CMD_VERSIONS for
@@ -731,7 +731,7 @@ and NEVER falls back to TIME_EVENT. **NOT yet metal-verified** (see rig note).
 
 **Rig gotcha that blocked verification (important for next session):** the Yoga
 booted from a **USB stick** this session. A USB stick's ESP enumerates as a
-**firmware-SFS volume, which pc64_fs makes READ-ONLY** — so the A/B kernel push
+**firmware-SFS volume, which pc64_fs makes READ-ONLY**: so the A/B kernel push
 CANNOT update the live boot kernel. `push 1 …` writes native-FAT vol 1 (the
 INTERNAL SSD's UNODOS, a non-boot disk here), which VERIFYs and persists but does
 not change what boots. `disks`: fw0 `is_boot=1` (the boot stick), fw1, fw2
@@ -744,13 +744,13 @@ rerun -> mvm 1/2/4 -> join -> auth; expect `csr2808=0` after session-prot (not
 
 Other rig notes: eth dongle DHCP frequently stalls (amber LAN) on each reboot and
 needs a physical re-seat to get a lease; the URC link also flaps. The software
-`guard <s> reboot` fires if no command is serviced within `<s>` — don't leave it
+`guard <s> reboot` fires if no command is serviced within `<s>`: don't leave it
 armed while reading output (it rebooted the box mid-analysis once).
 
-## TL;DR — the diagnosis was REFRAMED (Round 15)
+## TL;DR, the diagnosis was REFRAMED (Round 15)
 
 For 14 rounds the failure was read as *"the boot ROM never starts / the device
-does zero DMA"* — based only on `FH_INT` / `UCODE_LOAD_STATUS` / `CPU_INIT_RUN`
+does zero DMA"*, based only on `FH_INT` / `UCODE_LOAD_STATUS` / `CPU_INIT_RUN`
 all reading 0. **That was wrong.** The internal-CPU registers were never read.
 Live reads over the URC `iwl prr` verb show the boot-ROM processors **run and
 then PARK**:
@@ -769,7 +769,7 @@ before completing the firmware-load handshake**. `fh_after_kick=0` is a red
 herring (it watches one FH channel, not the ROM's context-info DMA). This is a
 **firmware-image / secure-boot** failure class, not a transport problem.
 
-## Round 19 (2026-07-24) — post-ALIVE MVM bisected; wedge = ADD_STA (scaffold, not transport)
+## Round 19 (2026-07-24), post-ALIVE MVM bisected; wedge = ADD_STA (scaffold, not transport)
 
 F12 (reaching ALIVE) is closed. The next slice is the post-ALIVE MVM/join
 sequence, gated behind `iwl mvm`. Using a stepped `iwl mvm <n>` verb (mirrors
@@ -803,13 +803,13 @@ via handle_eapol(). `find_and_join()` today is explicitly scaffolded for all of
 that (it says so in its own trace).
 
 **Operational:** the ADD_STA wedge is the **interrupts-off / tight-spin class the
-software guard CANNOT catch** — steps 1..9b were each auto-recovered by the guard
+software guard CANNOT catch**: steps 1..9b were each auto-recovered by the guard
 (~80 s, no hands), but 9c did not reset and needed a physical power cycle. This is
 a concrete on-metal repro for the PCH **TCO hardware watchdog** (branch
 `hwwdt-tco`); merging that would make even this class self-recovering.
 
 **Latent bug to fix in the ADD_STA rework:** `*(u32*)(c+40) =
-(1u<<g_data_qid>0?0:0)` in `mvm_add_sta` — nonsensical expression + UB shift by
+(1u<<g_data_qid>0?0:0)` in `mvm_add_sta`: nonsensical expression + UB shift by
 `g_data_qid == -1`. Evaluates to 0 on x86 so it is not the wedge, but wrong.
 
 **How to reproduce / continue:** flash a UNO_DEBUG build, `iwl rerun` (parks at
@@ -817,7 +817,7 @@ the ALIVE gate), `guard 40 reboot`, then `iwl mvm 1..8` + `iwl mvm a` + `iwl mvm
 b` all return; `iwl mvm c` wedges. Verbs: `iwl mvm <1-9>` and `iwl mvm <a-d>`
 (9-split). Bare `iwl mvm` arms the inline full run for a stock boot.
 
-## Round 18 (2026-07-23) — SOLVED (diagnosis): the firmware was ALIVE the whole time
+## Round 18 (2026-07-23), SOLVED (diagnosis): the firmware was ALIVE the whole time
 
 F12 was a **measurement error**, not a load failure. This device runs in MSI-X
 mode, where causes are reported in `CSR_MSIX_HW/FH_INT_CAUSES_AD` and the legacy
@@ -830,21 +830,21 @@ CSR_MSIX_HW_INT_CAUSES_AD (0x2808) = 0x00000001   <- bit 0 = ALIVE
 CSR_MSIX_AUTOMASK_ST_AD   (0x2810) = 0x00000200   <- vector 9 automasked
 ```
 
-Both match the ground-truth ftrace exactly. There was never a pre-ALIVE park —
+Both match the ground-truth ftrace exactly. There was never a pre-ALIVE park -
 which is precisely why every load-path suspect kept checking out correct. The
 "frozen PCs" of round 16 are firmware idling *after* ALIVE because the host
 never answered.
 
 Corroborating (opt-in `iwl msix`): the device delivered a real MSI-X message to
-host RAM, `msix_scratch = 0x4d510009` — vector 9, the same vector Linux takes
+host RAM, `msix_scratch = 0x4d510009`: vector 9, the same vector Linux takes
 ALIVE on. DMA, bus mastering and IOMMU state were all fine. **The cause bit is
 set with or without that table**, so the PCI Function Mask blocked only message
 *delivery*; `msix_table_setup()` is a diagnostic, not the fix.
 
 ### The remaining work, and exactly where it is
 
-Driven live over URC with `iwl csw`/`iwl prr` — no reflash, one register at a
-time — the three post-ALIVE steps are each **safe and effective**:
+Driven live over URC with `iwl csw`/`iwl prr`: no reflash, one register at a
+time, the three post-ALIVE steps are each **safe and effective**:
 
 | write | result |
 |---|---|
@@ -853,14 +853,14 @@ time — the three post-ALIVE steps are each **safe and effective**:
 | `iwl csw 2810 200` (release automask) | `0x2810` -> 0 |
 
 The machine stayed healthy through all three. So the wedge that killed two
-builds this round was **not** the register sequence — it is the host-side RX
+builds this round was **not** the register sequence, it is the host-side RX
 *read* path that runs straight after: `wait_notif()` walking the ring and
 `rx_process_rb()` parsing firmware-written RB contents for the first time ever
 (plus `rx_restock()` looping once `g_alive` is set). That code has never seen
 real data. Harden the RB parse (bounds-check every length/offset before
 following it) before re-enabling the path in `wait_alive()`.
 
-`0x7f8` is `(2048-1) & ~7`, so the 2048-entry ring is required — the earlier
+`0x7f8` is `(2048-1) & ~7`, so the 2048-entry ring is required, the earlier
 256-entry ring could not have produced the doorbell value the ftrace shows.
 
 ### Rig notes learned the hard way
@@ -868,12 +868,12 @@ following it) before re-enabling the path in `wait_alive()`.
 - **URC log frames in flight are LOST when the machine wedges**, so a crash in
   the code under test tells you nothing about where it died. Prefer driving
   single registers with `iwl csw`/`prr` over flashing a build with a new code
-  path — it isolates the failure and costs seconds instead of ~5 minutes.
+  path, it isolates the failure and costs seconds instead of ~5 minutes.
 - A yellow **"LAN?"** systray means it booted fine and only ethernet is down;
   that is not a hang. A real wedge shows as `ss -tn | grep 5098` ESTAB with a
   non-zero Send-Q.
 
-## Round 17 (2026-07-23) — three standing suspects RETIRED, method changed
+## Round 17 (2026-07-23), three standing suspects RETIRED, method changed
 
 Every remaining "prime suspect" in this document has now been checked against
 ground truth rather than recalled source, and all three are **correct in our
@@ -894,7 +894,7 @@ driver**. Do not re-chase them:
    `fw-blobs/IWLAX201.UCO` is **byte-identical** to Debian's
    `iwlwifi-QuZ-a0-hr-b0-77.ucode` (md5 `df80001381d87035b7d270220cb73bd5`), and
    an independent parse (`tools/iwl_ucode_sections.py`) gives RT `num_sec=51`,
-   `lmac=14 umac=15 paging=20`, separators at section index 14 and 30 — exactly
+   `lmac=14 umac=15 paging=20`, separators at section index 14 and 30, exactly
    what `place_fw_dram()` logs on metal. `struct iwl_context_info_dram` really is
    `umac[64], lmac[64], virtual_img[64]` and `ci_dram` matches. **This retires
    the "firmware-image / secure-boot" leading hypothesis above.**
@@ -903,14 +903,14 @@ One genuine divergence was found and is **benign**: Linux sets
 `CSR_GP_CNTRL |= 0x04000000` (`RFKILL_WAKE_L1A_EN`) before the kick and we do
 not (ours reads `0x08040005`, the trace `0x0c040005`). It is set inside
 `iwl_enable_rfkill_int()` purely so a powered-down device can wake the PCIe bus
-for RF-kill interrupts — it cannot park running firmware. Worth closing for
+for RF-kill interrupts, it cannot park running firmware. Worth closing for
 fidelity, not as a fix.
 
 ### Why the method changed
 
 Sixteen rounds audited this load path one register at a time against recalled
 Linux source. Each round "verified" a subsystem, moved the diagnosis, and missed
-the divergence — and two of round 16's own suspects were wrong. Everything
+the divergence, and two of round 16's own suspects were wrong. Everything
 reachable by inspection is now verified correct, so the divergence is in the
 ~250 accesses *before* the kick, where no one has looked systematically.
 
@@ -933,27 +933,27 @@ So: stop reading, start recording.
 ### Concrete NEXT step
 
 Boot a `UNO_DEBUG=1` build on the Yoga, `iwl rerun`, `iwl iotrace`, then run
-`iwl_iodiff.py`. Work the MISSING rows before the kick first — those are things
+`iwl_iodiff.py`. Work the MISSING rows before the kick first, those are things
 Linux does to this silicon that we never do, and one of them is the park.
 
-## Ruled out — do NOT re-chase
+## Ruled out, do NOT re-chase
 
-- **MSI-X config** — REQUIRED and DONE. Proven necessary via the ground-truth
+- **MSI-X config**: REQUIRED and DONE. Proven necessary via the ground-truth
   ftrace; the CPU only runs *because* of it (UREG_CHICK bit25 + IVAR table + FH/HW
   masks + PCI-config MSI-X).
-- **IOMMU / VT-d** — TES + PMR both disabled on metal (`iwl dmar`), no effect.
-- **Bus mastering** — confirmed on.
-- **Cache coherency** — `wbinvd`+`mfence` before the kick (v7), no effect
+- **IOMMU / VT-d**: TES + PMR both disabled on metal (`iwl dmar`), no effect.
+- **Bus mastering**: confirmed on.
+- **Cache coherency**: `wbinvd`+`mfence` before the kick (v7), no effect
   (discarded).
-- **Context-info struct + control_flags** — byte-correct vs Linux master
+- **Context-info struct + control_flags**: byte-correct vs Linux master
   (`pcie/iwl-context-info.h`): `control_flags = 0x980` = `TFD_FORMAT_LONG(0x100)
   | CB_SIZE(8<<4) | RB_SIZE_4K(4<<9)`; struct layout matches field-for-field;
   dram order `umac/lmac/virtual` matches.
-- **MMIO kick sequence** — matches the working Linux ftrace: interrupt masks
+- **MMIO kick sequence**: matches the working Linux ftrace: interrupt masks
   (`io[0x280c]=fffffffe`, `io[0x2804]=fe00`) → `CTXT_INFO_BA` (`io[0x40]`, 64-bit)
   → LTR prph (`a0348c=0xf`, `a03480=88fa88fa`) → doorbell (`a05c44=1`).
 
-## RETIRED in round 17 — former leading hypothesis (fw image / secure boot)
+## RETIRED in round 17, former leading hypothesis (fw image / secure boot)
 
 `SB` = Secure Boot; SB-CPU status nonzero + CPUs parked in *distinct* regions ⇒
 the ROM runs secure-boot over the firmware sections we place in
@@ -963,7 +963,7 @@ the ROM runs secure-boot over the firmware sections we place in
 (secure-boot certificate) section**, or wrong section DATA fails auth exactly
 like this.
 
-## DONE in round 17 — the ucode-parse step this asked for
+## DONE in round 17, the ucode-parse step this asked for
 
 Dump our `.ucode` parser's section offsets/sizes/counts (the TLV parse feeding
 `place_fw_dram`) and **diff against a Linux-side parse of the SAME
@@ -971,8 +971,8 @@ Dump our `.ucode` parser's section offsets/sizes/counts (the TLV parse feeding
 to `iwl_pcie_ctxt_info_init_fw_sec` in Linux `pcie/ctxt-info.c`). Confirm the
 LMAC/UMAC/CSS split and each section's dram address match. The context-info and
 fw sections live in host RAM (device DMA), so they are **invisible in the MMIO
-ftrace** — a source/parse diff is the only way to see them. Note: `SB=0x5754`
-and the parked PC are Intel-internal codes with **no open decode** — don't chase
+ftrace**: a source/parse diff is the only way to see them. Note: `SB=0x5754`
+and the parked PC are Intel-internal codes with **no open decode**: don't chase
 those values directly.
 
 ## How to drive the Yoga (no reflash for register work)
@@ -1004,11 +1004,11 @@ those values directly.
 
 ## Key files
 
-- `pc64/iwlwifi.c` — the driver. `load_fw_gen2()` ~L1299 (kick sequence),
-  `place_fw_dram()` ~L1199 (fw section placement — **prime suspect**), the
+- `pc64/iwlwifi.c`: the driver. `load_fw_gen2()` ~L1299 (kick sequence),
+  `place_fw_dram()` ~L1199 (fw section placement, **prime suspect**), the
   ALIVE-timeout autopsy ~L1500s, `iwl_dbg_cmd()` ~L2292.
-- `pc64/iwlwifi.h` — register/struct defs.
-- `pc64/NETWORK.md` — firmware file layout + `WIFI.CFG`/`WIFI.TXT` creds.
+- `pc64/iwlwifi.h`: register/struct defs.
+- `pc64/NETWORK.md`: firmware file layout + `WIFI.CFG`/`WIFI.TXT` creds.
 - ESP firmware: `FIRMWARE\IWLAX201.UCO` (from Debian `firmware-iwlwifi`).
 
 ## Known remaining gap after ALIVE (for later)

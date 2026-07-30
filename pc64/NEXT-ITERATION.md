@@ -1,21 +1,21 @@
-# pc64 — next iteration: "Networking to first lease"
+# pc64, next iteration: "Networking to first lease"
 
 > **2026-07-22 STATUS: the lease is REAL.** Yoga + AX88179A metal run:
 > link UP 182 ms, DHCP lease 1039 ms (192.168.2.157), gateway pings 10-15 ms
-> — the medium-mode fix holds and RX is fully alive. Phases 1-2 DONE on
+>, the medium-mode fix holds and RX is fully alive. Phases 1-2 DONE on
 > metal. Last eth gap was DNS: our DHCP parameter-request list (opt 55)
 > never asked for option 6, so real routers omitted it and the resolver
 > stayed at the SLIRP default (ack diag: len=300 opt3=1 opt6=0). FIXED
 > (request 1/3/6 + fall back to the gateway as resolver when opt 6 is
-> absent) — metal-verify on the next eth round, then Phase 3 (TLS over the
+> absent), metal-verify on the next eth round, then Phase 3 (TLS over the
 > real link) should complete itself via S-AI-01/02. WiFi (Phase 5 / F12) is
-> mid-campaign — see the F12 rounds in METAL-FINDINGS.md.
+> mid-campaign, see the F12 rounds in METAL-FINDINGS.md.
 
 Handoff for the next session. The debug/test campaign (`pc64-debug-stress`) has
 landed on **master** and the branch is retired. `master`'s default build is now
 the **production** OS; opt into the harness with `UNO_DEBUG=1 ./build.sh`.
 
-Read first: `pc64/METAL-FINDINGS.md` (F1–F15), `pc64/SPEC.md` (contracts +
+Read first: `pc64/METAL-FINDINGS.md` (F1-F15), `pc64/SPEC.md` (contracts +
 fix status), `pc64/DEBUG.md` (how to run the harness + the STRESS.CFG keys).
 
 ## Why networking
@@ -24,18 +24,17 @@ Everything in pc64 works on metal *except* networking, and networking is the
 keystone: it blocks the Studio AI assistant and the LAN/WiFi conformance checks
 (all currently `SKIP`-pending-networking in SPECTEST). The most tractable win is
 the **AX88179 USB ethernet**: it already enumerates, resets, reads a valid MAC,
-and brings the link up — only **DHCP fails** (Yoga round: link up in 1 ms, no
+and brings the link up, only **DHCP fails** (Yoga round: link up in 1 ms, no
 lease in 12 s). This session added link-level frame counters so the *next* boot
 localizes that failure instead of guessing.
 
-## Phase 1 — Localize the eth DHCP failure  ✅ DONE (X13 Yoga, 2026-07-21)
+## Phase 1, Localize the eth DHCP failure  ✅ DONE (X13 Yoga, 2026-07-21)
 
 Yoga NETLOG: link UP 0 ms, then **`FAIL DHCP … tx=1261 rx=0 arp=0 ip=0`** →
-the `tx>0 rx==0` branch: we transmit continuously and receive **nothing** —
-not one frame, not even broadcast ARP. TX, the USB control path (valid MAC
+the `tx>0 rx==0` branch: we transmit continuously and receive **nothing**: not one frame, not even broadcast ARP. TX, the USB control path (valid MAC
 read), and the LAN are all fine; the failure is entirely on RX.
 
-## Phase 2 — Fix the localized side in `ax88179.c`  ✅ FIXED (metal-pending verify)
+## Phase 2, Fix the localized side in `ax88179.c`  ✅ FIXED (metal-pending verify)
 
 Root cause was NOT `ax_recv`'s descriptor parse (that would be `rx>0 ip==0`).
 It was the **MAC medium mode**: `ax_reset()` hardcoded gigabit + full-duplex
@@ -54,32 +53,32 @@ NETLOG. **QEMU has no AX88179 → metal-pending.** If RX is STILL 0 after this,
 the next suspect drops to `ax_recv` (descriptor array / `pkt_len`/`step` /
 2-byte pad) and then the TX header's `0x80008000` pad-bit case.
 
-## Phase 3 — Bring up the rest of the stack on the real link
+## Phase 3, Bring up the rest of the stack on the real link
 
 Once a lease lands, `ip_suite` (pc64_nettest.c) already runs ping → DNS. Extend
 to a **TLS handshake** to a known host (BearSSL is linked) to prove end-to-end
 reachability including certs.
 
-## Phase 4 — Convert the networking SKIPs to real conformance tests  ✅ BUILT
+## Phase 4, Convert the networking SKIPs to real conformance tests  ✅ BUILT
 
 DONE (2026-07-21): `test_netstub()` is now `test_netlive()` in
-`pc64_spectest.c` — real link-gated checks that PASS/FAIL on a connected
+`pc64_spectest.c`: real link-gated checks that PASS/FAIL on a connected
 machine and SKIP with a named reason otherwise:
 `S-NET-30` (DHCP lease + TCP round-trip; the stub's "S-NET-20" label collided
 with SPEC.md's RX-drain contract, hence the renumber), `S-WIFI-20` (live join
 to a lease; FAILs with `iwl_status_str` until the MLME tail lands),
 `S-AI-01/02` (DNS → CA-validated TLS to api.anthropic.com, then a full HTTPS
-request→response through it — a 401 + JSON body is the expected proof, no key
+request→response through it, a 401 + JSON body is the expected proof, no key
 needed). `tools/spectest_qemu.py` now boots with a SLIRP e1000 so S-NET-30 and
 S-AI-01/02 run for real in the QEMU regression (needs the build host online).
-A link-up-but-no-lease machine now shows a FAIL with the frame counters — the
-Phase 1 localization — instead of a SKIP.
+A link-up-but-no-lease machine now shows a FAIL with the frame counters, the
+Phase 1 localization, instead of a SKIP.
 
 Building these immediately caught (and fixed) three real transport bugs the
-stack had never been driven through before — all three would have bitten the
+stack had never been driven through before, all three would have bitten the
 Browser/AI on metal too:
 - `net.c` S-NET-15/23: fixed 4096 window over a 2048 rxq, and rcv_nxt ACKing
-  bytes that missed the queue — every >2 KB TLS certificate flight arrived
+  bytes that missed the queue, every >2 KB TLS certificate flight arrived
   corrupt. Window is now the rxq's real free space (rxq grown to 8 KB), only
   stored bytes are ACKed, overlap-trimmed retransmits recover the tail.
 - `tls.c low_read`: when one poll batch delivered the last data segment AND
@@ -87,16 +86,16 @@ Browser/AI on metal too:
   the just-arrived bytes and reported EOF.
 - `tls.c tls_close`: `br_sslio_close()` loops forever against a torn-down
   connection when the peer's close_notify was already received (ssl_io.c's
-  RFC 5246 carve-out skips the engine-fail) — 20 s spin, watchdog reset.
+  RFC 5246 carve-out skips the engine-fail), 20 s spin, watchdog reset.
   Replaced with a bounded polite close. Phase 3's "TLS handshake to a known
   host" is hereby proven end-to-end in QEMU (S-AI-01/02); metal awaits the
   Phase 1/2 eth fix.
 
-## Phase 5 — WiFi (F12), same method, with a card present
+## Phase 5, WiFi (F12), same method, with a card present
 
 The `wait_alive` autopsy is in place (per-family register signatures). Iterate
 the **AX201 gen2 kick** and the **AX210 stuck-SW_RESET / TOP handshake** until
-firmware reaches ALIVE, then run Phases 3–4 over WiFi. Needs a machine with the
+firmware reaches ALIVE, then run Phases 3-4 over WiFi. Needs a machine with the
 card in hand (the Latitude has an AX210).
 
 ## Fold-in quick metal reads (same batch, near-free)

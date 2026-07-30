@@ -1,4 +1,4 @@
-# UnoDOS — agent instructions
+# UnoDOS, agent instructions
 
 ## READ FIRST: [`/AGENTS.md`](AGENTS.md)
 
@@ -8,14 +8,14 @@ registry, shared choke-points, branch/merge discipline, claims/requests). It app
 symmetrically to all agents, including the unoautomate agent. The notes below in this
 file are project state and history; AGENTS.md is the process you follow.
 
-## Fresh-port parity — state as of 2026-07-20
+## Fresh-port parity, state as of 2026-07-20
 
 The 2026-07-19 audit concluded the June parity work was "never committed and is
 lost". **That was wrong.** It was committed and pushed on
 `parity-push-fresh-ports`, a branch the survey missed, and it is now **merged to
 master**.
 
-- **sms, nes, gba, rpi, pinephone, ppcmac are at 11 of 11 apps** — Tracker,
+- **sms, nes, gba, rpi, pinephone, ppcmac are at 11 of 11 apps**: Tracker,
   OutLast, Pac-Man and Paint are real and wired into dispatch. All six build.
 - **gb, gg, vic20, ws, pce still ship 7 of 11** (those four are launcher
   placeholders). Storage persistence is outstanding across the whole fresh tier.
@@ -23,7 +23,7 @@ master**.
   by master and holds nothing worth recovering. Do not merge it; it is a
   deletion candidate.
 - `docs/FEATURE-MATRIX.md` is stale (no C64 column, pc64 storage row predates
-  the native drivers, fresh-port rows now understate six ports) — fix it as
+  the native drivers, fresh-port rows now understate six ports), fix it as
   parity lands.
 
 [`docs/PARITY-HANDOFF.md`](docs/PARITY-HANDOFF.md) carries the full history,
@@ -89,6 +89,6 @@ clone-over-link, see `pc64/REMOTE.md`), a running box no longer depends on a
 freshly-staged USB flasher to receive a new build.
 
 The flasher (`pc64\flash\build-flasher.ps1` → `deploy-to-share.ps1`, embedding
-both prod + debug ESP trees per the rule above) still exists and works — use it
-when you specifically want a bootable USB stick — but rebuilding/publishing it is
+both prod + debug ESP trees per the rule above) still exists and works, use it
+when you specifically want a bootable USB stick, but rebuilding/publishing it is
 now **opt-in**, not an automatic step after `build.sh`.

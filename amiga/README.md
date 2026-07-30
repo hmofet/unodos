@@ -1,4 +1,4 @@
-# UnoDOS/68K — Amiga port (milestone 3)
+# UnoDOS/68K, Amiga port (milestone 3)
 
 A bare-metal Motorola 68000 port of UnoDOS for A500-class Amigas
 (OCS/ECS, 512 KB chip RAM), per the platform contract in
@@ -8,17 +8,17 @@ runtime), and runs the UnoDOS desktop with in-kernel apps.
 
 ## What it does
 
-- **Boot splash** — striped Amiga-checkmark art with "UnoDOS 3" rendered
+- **Boot splash**: striped Amiga-checkmark art with "UnoDOS 3" rendered
   at 2× and "for Commodore Amiga" (~2 s, raster-timed).
-- **Display** — 320×200 in **5 bitplanes (32 colors)**, the OCS lowres
-  maximum. Copper-driven: palette entries 0–3 are the themed UI colors,
-  4–31 a fixed extended palette for the games (17–19 double as the
+- **Display**: 320×200 in **5 bitplanes (32 colors)**, the OCS lowres
+  maximum. Copper-driven: palette entries 0-3 are the themed UI colors,
+  4-31 a fixed extended palette for the games (17-19 double as the
   hardware-sprite cursor registers). Per-plane software fill/text
   primitives; hardware-sprite mouse cursor.
-- **Window manager** — frames, title bars, close box, z-order with
+- **Window manager**: frames, title bars, close box, z-order with
   click-to-raise, clamped XOR-outline drag; the focus-routed,
   press-time-stamped event model from the spec.
-- **Audio** — 4-channel Paula: square-wave sequencers for the Music app
+- **Audio**: 4-channel Paula: square-wave sequencers for the Music app
   and game music, all four DMA channels in the Tracker.
 
 ## Apps (11 desktop icons, two rows)
@@ -30,12 +30,12 @@ runtime), and runs the UnoDOS desktop with in-kernel apps.
 | **Files** | ROM-disk browser; Enter opens in Notepad |
 | **Notepad** | caret editor, left/right/up/down with goal-column memory, vertical scroll, live `Ln/Co/bytes` status bar, F1 save (RAM until FAT12) |
 | **Music** | Canon in D on Paula (same arrangement as `apps/music.asm`) |
-| **Theme** | the 8 shared preset palettes + per-channel custom RGB editing of UI colors 0–3, applied live through the copper list |
-| **Dostris** | port of `apps/tetris.asm` — same piece tables/scoring/speed curve, the seven VGA piece colors, Korobeiniki on Paula |
-| **OutLast** | port of `apps/outlast.asm` — same track/perspective/traffic/physics, full-color scenery, Sunset Drive on Paula |
-| **Pac-Man** | port of `apps/pacman.asm` — full 28×25 maze, three-ghost AI (Blinky/Pinky/Clyde), scatter/chase schedule, frightened mode; incremental tile rendering |
+| **Theme** | the 8 shared preset palettes + per-channel custom RGB editing of UI colors 0-3, applied live through the copper list |
+| **Dostris** | port of `apps/tetris.asm`: same piece tables/scoring/speed curve, the seven VGA piece colors, Korobeiniki on Paula |
+| **OutLast** | port of `apps/outlast.asm`: same track/perspective/traffic/physics, full-color scenery, Sunset Drive on Paula |
+| **Pac-Man** | port of `apps/pacman.asm`: full 28×25 maze, three-ghost AI (Blinky/Pinky/Clyde), scatter/chase schedule, frightened mode; incremental tile rendering |
 | **Tracker** | write + play 4-channel MOD-style music: ProTracker periods (C-2..B-3), 32-row pattern editor, 4 chip-synthesized instruments (square/saw/triangle/noise), demo song, instant edit preview. Keys: arrows move, q/w note, e instrument, x clear, d demo, Space play/stop |
-| **Paint** | MacPaint-style editor: pencil/brush/eraser/line/rect/filled rect/oval/filled oval/flood fill/spray, white canvas, rubber-band shape preview. The pen strip shows all 32 hardware pens; r/g/b tune the selected pen's 12-bit channels live through the copper, so **all 4096 OCS colors** are reachable (UI pens 0–3 locked; the game palette restores on close). s/l saves PAINT.UNO to the DF1 FAT12 disk |
+| **Paint** | MacPaint-style editor: pencil/brush/eraser/line/rect/filled rect/oval/filled oval/flood fill/spray, white canvas, rubber-band shape preview. The pen strip shows all 32 hardware pens; r/g/b tune the selected pen's 12-bit channels live through the copper, so **all 4096 OCS colors** are reachable (UI pens 0-3 locked; the game palette restores on close). s/l saves PAINT.UNO to the DF1 FAT12 disk |
 
 ## Build
 
@@ -75,7 +75,7 @@ the Files/Notepad/Music stack.
 
 ## Run
 
-WinUAE with the built-in AROS ROM (no Kickstart needed) — config in
+WinUAE with the built-in AROS ROM (no Kickstart needed), config in
 `uae/unodos.uae`; `uae/autotest.ps1` and `uae/snapwin.ps1` drive
 headless screenshot runs.
 
@@ -87,7 +87,7 @@ is a frame-deterministic renderer built on a Unicorn 68000 core (the same
 approach as `macplus/harness.py`): it hunk-loads `build/UnoDOS68K_test`, models
 just enough of the hardware (a `jmp (a5)` Supervisor stub, a free-running beam so
 the splash's `splash_wait_frames` terminates, TBE-ready serial, and an
-auto-advancing `ticks` so `fdd_delay` returns — the cursor it also drives is a
+auto-advancing `ticks` so `fdd_delay` returns, the cursor it also drives is a
 hardware sprite, absent from the bitplanes), runs the boot + the synchronous
 autotest scene, and halts at the `UNODOS68K: ATDONE` serial marker (emitted right
 before `main_loop`, so the framebuffer is final and the tick-driven main loop
@@ -101,7 +101,7 @@ python3 uae/render.py build/UnoDOS68K_test out.png
 
 Two runs of the same build are byte-identical, so a redraw refactor is verified
 by rendering `AUTOTEST` builds from the pre- and post-change source and `cmp`-ing
-the PNGs — the discipline used for genesis/snes/c64. No display, GPU, or RDP
+the PNGs, the discipline used for genesis/snes/c64. No display, GPU, or RDP
 session required.
 
 ## Architecture
@@ -119,13 +119,13 @@ sprite data `$76800`, square-wave + tracker instrument samples
 
 ## Disk-loaded apps (FAT12 on DF1)
 
-Four apps — **Files, Theme, Dostris, Pac-Man** — are no longer assembled
+Four apps, **Files, Theme, Dostris, Pac-Man**: are no longer assembled
 into the kernel. They are separate raw binaries (`*_app.asm`, built
 `-Fbin` at a fixed slot) that the kernel reads off the DF1 FAT12 disk at
 runtime (via the existing `fat_read_file`) into per-window slot regions
 at `$50000`, then dispatches each window's draw/key/tick through the
 app's 4-entry JMP table (`open/draw/key/tick`). Several app windows can
-be open at once — the windowed multitasking UX is preserved; a window's
+be open at once, the windowed multitasking UX is preserved; a window's
 app code is loaded when it opens (load-on-open).
 
 Because the kernel is a hunk executable that AmigaDOS relocates to an
@@ -172,9 +172,9 @@ themselves are unchanged - the generic task body dispatches to them.
 - Tracker: one 32-row pattern, fixed instrument volumes, no effect
   column yet; .MOD import/export needs FAT12.
 - The vblank tick runs fast under WinUAE's default pacing for this
-  config (uptime advances ~4× wall-clock) — a `TICKS_SEC` calibration
+  config (uptime advances ~4× wall-clock), a `TICKS_SEC` calibration
   item, not a logic bug.
-- Text/fills are CPU RMW (no blitter yet — the big OCS win). Game
+- Text/fills are CPU RMW (no blitter yet, the big OCS win). Game
   windows repaint visibly; Pac-Man already uses dirty-tile rendering.
 - 640-wide OCS hires (16 colors max) would need PORT-SPEC content
   scaling through the WM; lowres 32-color is the current ceiling.

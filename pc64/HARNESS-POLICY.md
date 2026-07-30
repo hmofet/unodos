@@ -18,10 +18,10 @@ below, where networking and storage were handed back).
 API you may consume. The section below tells you how to stay mergeable with it and
 current with an interface that is **actively changing**.
 
-## 0. Stability: best-effort, NOT guaranteed — re-check the contract often
+## 0. Stability: best-effort, NOT guaranteed, re-check the contract often
 
 unoautomate is under active development. I try to keep the interface stable,
-but **there is no guarantee, and breaking changes WILL happen** — new features,
+but **there is no guarantee, and breaking changes WILL happen**: new features,
 renamed or re-shaped calls, changed semantics, wire-protocol revisions. The
 contract is the single source of truth, and it moves:
 
@@ -38,12 +38,12 @@ contract is the single source of truth, and it moves:
 
 **Your standing rule: after any pull, re-read `unoauto.h` and this changelog
 before you build.** If `UNOAUTO_API` moved, assume something you rely on may
-have changed and read the entry — the compiler catches C signature breaks but
+have changed and read the entry, the compiler catches C signature breaks but
 NOT a semantic or wire-protocol change. Do not cache assumptions about
 unoautomate across a rebase.
 
 Need a capability, or hit a break you can't absorb? Append a dated note to
-**`UNOAUTOMATE-REQUESTS.md`** — I read it and act on it.
+**`UNOAUTOMATE-REQUESTS.md`**: I read it and act on it.
 
 ## 1. unoautomate's files
 
@@ -68,8 +68,8 @@ and on-device storage authoring (`unostorage.*`, `uno_fat_mkfs`) are neutral
 subsystems with their own owners. unoautomate files requests against them like any
 agent. See the 2026-07-22 "OWNERSHIP re-home" changelog entry below.
 
-**Frozen core — additive-only (rules in §2):** the shared debug/test harness
-unoautomate is built on and still wired through —
+**Frozen core, additive-only (rules in §2):** the shared debug/test harness
+unoautomate is built on and still wired through -
 - `pc64_nettest.c`, `pc64_spectest.c`, `pc64_stress.c`
 - `uno_debug.h`, `uno_debug.c`
 - `uefi_main.c` (harness/wiring parts), `pc64_uui.c` (debug-shell parts)
@@ -84,9 +84,9 @@ version I am moving or rewriting.
 1. **Append, never restructure.** Add new tests, trace calls, and diagnostics
    at the END of the relevant section or file. Do not rename, reorder, split,
    or move existing functions; do not reformat untouched code.
-2. **Go through the existing entry points** — `uno_dbg_log`,
+2. **Go through the existing entry points**: `uno_dbg_log`,
    `uno_dbg_net_trace`, `uno_dbg_check`, `uno_dbg_note`, `UNO_ASSERT`,
-   `uno_dbg_progress`, the suite tables in `pc64_spectest.c` — **or, preferably,
+   `uno_dbg_progress`, the suite tables in `pc64_spectest.c`: **or, preferably,
    the `unoauto_*` API** where it now covers your need (see §4).
 3. **No signature or semantic changes to anything declared in `uno_debug.h`.**
    Adding a NEW declaration is allowed (append to the relevant section);
@@ -95,7 +95,7 @@ version I am moving or rewriting.
    new config key, new watchdog behaviour, a new tap point, a new URC verb)? Do
    NOT build it into the harness yourself. Append a dated entry to
    `UNOAUTOMATE-REQUESTS.md` describing what you need and why, use the closest
-   existing primitive as a stopgap, and move on — I provide it properly.
+   existing primitive as a stopgap, and move on, I provide it properly.
 
 ## 3. Commit hygiene (harness-specific)
 
@@ -104,23 +104,23 @@ small and often). Subsystem-specific: **prefix a frozen-core / harness commit wi
 `harness:`** (e.g. `harness: nettest - <what> diagnostic`) so it is easy to spot and
 replay, and never mix a harness edit with your own subsystem's change in one commit.
 
-## 4. Registering diagnostics — target the `unoauto_*` API
+## 4. Registering diagnostics, target the `unoauto_*` API
 
 The harness refactor has landed: LOG / TEST / PROBE / HOOK / DRIVE and the
 remote channel are live. New diagnostics and automation should go through the
-`unoauto_*` API — `unoauto_log`, `unoauto_sink_add`, `unoauto_test_register` /
-`unoauto_test_run`, `unoauto_probe`, `unoauto_hook_*` — rather than editing
+`unoauto_*` API, `unoauto_log`, `unoauto_sink_add`, `unoauto_test_register` /
+`unoauto_test_run`, `unoauto_probe`, `unoauto_hook_*`: rather than editing
 harness internals. The legacy `uno_dbg_*` entry points still work as thin
 wrappers, so older code keeps compiling; but target `unoauto_*` for new work,
-since that is where the capability (and the churn — see §0) now lives.
+since that is where the capability (and the churn, see §0) now lives.
 
 ## API changelog
 
-Newest first; each dated. A `UNOAUTO_API` bump marks a breaking change — read
+Newest first; each dated. A `UNOAUTO_API` bump marks a breaking change, read
 the entry before building (§0).
 
 - **2026-07-28 - (no bump, additive)**: the **`net.tx` / `net.rx` tap points
-  are live** — the 2026-07-21 request to the net owner, delivered from the
+  are live**: the 2026-07-21 request to the net owner, delivered from the
   unonet lane. One `unoauto_hook_fire()` per frame that crossed the
   `uno_nic_t` seam, payload `long *` = frame length; sites are `nic_tx()` and
   `net_poll()` in `net.c`. Production fires compile away as before. Two small
@@ -130,18 +130,18 @@ the entry before building (§0).
   gained `net.rx`/`net.tx` so `hook.add("net.tx")` resolves instead of
   returning `EINVAL`. Also delivered in the same round: the **cooperative
   in-call deadline** you asked for under the 2026-07-21 wall-clock-budget entry
-  — `tls.c`'s connect/read/write waits and `net.c`'s `net_dns_query` now poll
+, `tls.c`'s connect/read/write waits and `net.c`'s `net_dns_query` now poll
   `unoauto_deadline_left_ms()` and bail, so a stalled live check fails ITS
   check instead of holding the batch.
 
 - **2026-07-24 - (no bump, additive, EXPERIMENTAL verbs)**: **host-attested
-  guard** — a dead-man's switch to arm before a risky verb (the wedge class:
+  guard**: a dead-man's switch to arm before a risky verb (the wedge class:
   `iwl mvm` → `iwl rerun` into never-run firmware, which hangs the box and stops
   URC, forcing a physical power cycle). New URC verbs **`guard <timeout-s>
   [reboot]`** / **`pet`** / **`safe [token]`** (`unoauto_remote.c`): if the box
   can't service an inbound URC command within the window, it hard-resets and
   re-dials home. "Call home" = ANY inbound command (implicit `uno_dbg_guard_pet()`
-  at dispatch entry — a full URC round-trip, strictly stronger than the freeze
+  at dispatch entry, a full URC round-trip, strictly stronger than the freeze
   watchdog's main-loop heartbeat, which `uno_dbg_net_trace()` deliberately feeds
   during WiFi bring-up and so can't detect a wedge in the debugged path). The
   guard keeps its OWN deadline, refreshed only by URC activity, never by
@@ -162,18 +162,18 @@ the entry before building (§0).
   `UNOAUTO_API` bump (additive; C API unchanged). REMOTE.md documents the verbs +
   the guard section.
 - **2026-07-23 - (no bump, additive, EXPERIMENTAL verb)**: new URC verb
-  **`devices`** — read-only PCI device listing, so "what hardware is on this box,
+  **`devices`**: read-only PCI device listing, so "what hardware is on this box,
   and what has no driver?" is answerable on a headless machine over the link
   (answers the 2026-07-23 planning-agent request in `UNOAUTOMATE-REQUESTS.md`;
   feeds `docs/DETACH-COMPLETION-PLAN.md` phases B/D). Additive pass-through in
   `unoauto_remote.c` to unodevices' `devmgr_list_str(buf, cap)`, streamed one
   `ok` line per device (the `py` verb's newline-split loop). UNO_DEBUG-only,
-  no `arm` gate — it mutates nothing. **The line format belongs to unodevices,
+  no `arm` gate, it mutates nothing. **The line format belongs to unodevices,
   not to URC**: we split its dump and forward it verbatim, so phase 2's
   bound-driver / `UNCLAIMED` column will appear over the link with no change to
   this subsystem. `devmgr_list_str` is declared locally and **weak-stubbed**
   (same pattern as `r8169_dbg_cmd`) since `uno_devmgr.*` is still on branch
-  `unodevices` — the tree links green today, replies `err device manager not
+  `unodevices`: the tree links green today, replies `err device manager not
   built (unodevices pending)`, and upgrades transparently when the strong
   definition lands. Host: `UnoAutoLink.devices()` returns dicts
   (`loc`/`vendor`/`device`/`cls`/`name`/`driver`/`raw`), tolerating both the
@@ -197,7 +197,7 @@ the entry before building (§0).
   *(Clarification added 2026-07-23, so this is not misread against the `install`
   verb entry: `makeboot`'s SetVariable works because it runs **attached**, which
   is why the verb is attached-only. It does not contradict the 2026-07-23 finding
-  that runtime SetVariable is refused **post-detach** — that is why `install`,
+  that runtime SetVariable is refused **post-detach**: that is why `install`,
   which runs post-detach like all URC traffic, writes no NVRAM entry and relies
   on the firmware removable-media path instead.)*
 - **2026-07-22 - (no bump, new transport backend, EXPERIMENTAL)**: **NIC-
@@ -225,17 +225,16 @@ the entry before building (§0).
   system subsystems. The transport stack (`net.c/.h`, `tls.*`, `netsock.h`,
   `netdisc.*`) is the pc64 face of **`unonet`**; `unostorage.c/.h` + `uno_fat_mkfs`
   are a peer of **`unofs`**. Both are now governed by the normal "whoever's task
-  owns it edits it" rule, NOT this contract — networking especially, since http,
+  owns it edits it" rule, NOT this contract, networking especially, since http,
   modload, tls and the roadmapped browser/JS + AI apps all consume it heavily, so
   parking it under the automation agent was wrong. The 2026-07-22 "unoautomate
   owns the transport stack" handoff is **superseded**. No code or API change: the
   `uno_nic_t` seam, `net.h`/`netsock.h`/`unostorage.h` contracts, and every caller
   are byte-for-byte unchanged; this is an ownership/territory relabel only.
   unoautomate keeps the harness (LOG/TEST/PROBE/HOOK/DRIVE), `unoauto_remote` (the
-  URC channel — a *consumer* of `unonet`), and the URC verbs, and consumes both
+  URC channel, a *consumer* of `unonet`), and the URC verbs, and consumes both
   subsystems' public APIs like any other agent. See §1 "Not mine either."
-- **2026-07-22 - (no bump, additive, EXPERIMENTAL verb)**: new URC verb **`disc`**
-  — query-only readout of zero-config discovery (netdisc) state, so a dev PC can
+- **2026-07-22 - (no bump, additive, EXPERIMENTAL verb)**: new URC verb **`disc`**: query-only readout of zero-config discovery (netdisc) state, so a dev PC can
   ask "is discovery armed, did pc64 record a host OFFER, and which host:port did
   it latch?" without watching the wire. Replies `active=<0/1>` / `have_host=<0/1>`
   / `host=<ip>:<port>` (only when found) / `link=<state>`. Pure read of the
@@ -245,10 +244,9 @@ the entry before building (§0).
   a real `disc` round-trip over the auto-dialed URC link on its raw-Ethernet L2 hub
   (its TCP peer gained just enough seq/ack bookkeeping to send one command and read
   the RSP frames) and asserts `active=1`, `have_host=1`, `host==` the advertised
-  OFFER — 9/9 gate checks green. Closes the "disc URC verb" leftover from the
+  OFFER, 9/9 gate checks green. Closes the "disc URC verb" leftover from the
   transport-stack handoff.
-- **2026-07-22 - (no bump, additive, EXPERIMENTAL verb)**: new URC verb **`eth`**
-  — live wired-NIC (Realtek r8169) register/bring-up debug, the exact wired
+- **2026-07-22 - (no bump, additive, EXPERIMENTAL verb)**: new URC verb **`eth`**: live wired-NIC (Realtek r8169) register/bring-up debug, the exact wired
   sibling of the `iwl` WiFi verb. Additive pass-through in `unoauto_remote.c` to
   `r8169_dbg_cmd(line, out, cap)` (subcmds `status`/`reg`/`wreg`/`phy`/`wphy`/
   `rerun`/`link`/`mac`), UNO_DEBUG-only. The driver-side `r8169_dbg_cmd` is the
@@ -260,7 +258,7 @@ the entry before building (§0).
   Request 2 (a NIC-independent UART/USB-CDC transport) remains open.
 - **2026-07-23 - (no bump, r8169 driver hook LANDS)**: the strong `r8169_dbg_cmd`
   (status/reg/wreg/phy/wphy/link/mac/rerun; MMIO + PHYAR peek/poke) now lands in
-  `r8169.c`, so the `eth` verb drives the Realtek live — the weak fallback above
+  `r8169.c`, so the `eth` verb drives the Realtek live, the weak fallback above
   is superseded. Enables register-by-register bring-up over URC on the Zimaboard
   (ASIX USB-eth carries the link; serial URC is the fallback carrier).
 - **2026-07-22 - (no bump, new framework + EXPERIMENTAL verbs)**: on-device disk

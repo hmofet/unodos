@@ -81,7 +81,7 @@ firmware boot menu. `\CRASH`, `\DEBUG.CFG`, the fuzz corpus and
 
 The stress driver is **armed by the presence of `\DEBUG.CFG`**. A freshly
 flashed stick ships `passes=3`. Keys are matched as whole tokens on
-**non-comment** lines (a key mentioned in a `#` comment does nothing — that was
+**non-comment** lines (a key mentioned in a `#` comment does nothing, that was
 finding F1, which armed `allow-force` on every "safe" stick):
 
 - `passes=N` - stop after N passes, then POWER OFF automatically (see below).
@@ -136,13 +136,13 @@ Developer options OFF flashes the clean production build (no DEBUG.CFG at all).
 
 **The boot test phase shows a live progress banner.** The whole phase (MTRR
 experiment → SPECTEST → net test) runs synchronously inside one shell tick, so
-the desktop is up but input and repaint are blocked for a minute or more —
+the desktop is up but input and repaint are blocked for a minute or more -
 which used to read as a hang (a Yoga operator pulled the disk mid-run). A
 full-width amber strip at the top of the screen now ticks through every stage
 from inside the blocking code ("BOOT TESTS  conformance: S-WRITE-11 PASS (47
 done)", the WiFi/eth bring-up trace lines, the MTRR steps) and hands the strip
 back to the shell when the phase ends. If you see the banner, the machine is
-working, not hung — wait for it to clear before expecting input.
+working, not hung, wait for it to clear before expecting input.
 
 **"Reconfigure tests (no erase)" is version-gated.** The keys above are
 interpreted by the OS *already on the stick*, which Reconfigure deliberately
@@ -238,7 +238,7 @@ traps you.
 
 An attached machine cannot write from the firmware timer callback (wrong TPL to
 touch Block IO), so a hang report rides the warm-reset RAM stash. **On the
-Surface, let the machine reboot after a freeze — don't power it off — or the
+Surface, let the machine reboot after a freeze, don't power it off, or the
 hang report is lost.** Crash reports are safe either way.
 
 For each of the X1 / Surface / Latitude:

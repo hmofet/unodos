@@ -1,4 +1,4 @@
-# UnoDOS 3 (x86) — run on real hardware
+# UnoDOS 3 (x86), run on real hardware
 
 The x86 port is the first full UnoDOS port on the contract-driven architecture:
 every constant, struct, FAT12 geometry, and now the **window-manager addressing**
@@ -7,14 +7,14 @@ and **QEMU-verified** (boots to the desktop; window manager opens/closes windows
 and launches apps). This is the image to test on real hardware.
 
 ## The image
-- **`build/unodos-144.img`** — a raw 1.44 MB bootable floppy image (FAT12, with the
+- **`build/unodos-144.img`**: a raw 1.44 MB bootable floppy image (FAT12, with the
   desktop, window manager, and all bundled apps).
 - Build it yourself: `make floppy144` (needs `nasm` on PATH; the repo's is at
   `~/AppData/Local/bin/NASM`).
 
 ## Requirements
 - A **386 or later** PC (the kernel runs in 16-bit real mode, 320×200 VGA mode 13h).
-- Mouse: **PS/2** or **Microsoft serial (COM1)** — both supported.
+- Mouse: **PS/2** or **Microsoft serial (COM1)**: both supported.
 - A way to boot a floppy image (see below).
 
 ## Booting it
@@ -32,7 +32,7 @@ it, boot the PC from A:. This is the most reliable real-hardware path today.
 Many BIOSes can boot a 1.44 MB image via **floppy emulation**. Tools like Rufus
 (select the .img, "DD"/"floppy" mode) can write it; in the BIOS pick the USB as a
 floppy/removable device. (UEFI-only machines without CSM won't boot a real-mode
-floppy — use a machine with legacy/CSM boot, or option D.)
+floppy, use a machine with legacy/CSM boot, or option D.)
 
 ### D. QEMU (to reproduce the verification, no hardware needed)
 ```
@@ -53,18 +53,18 @@ the titlebar **X** or the **OK** button closes it.
   (the trust anchor asserts they match; rebuild is byte-identical).
 - The window-manager **index→address arithmetic** is generated from the greenfield
   window model (`unodef/wmgen.py`, `[wmodel.platform.x86nasm]` → the `win_entry_addr`
-  macro) — the same model that drives the other five windowing ports. Wiring it was
+  macro), the same model that drives the other five windowing ports. Wiring it was
   proven byte-identical (`e433e02b…`), so this image is the known-good behavior,
   now generated from the single source.
 - The window-entry **layout** is now the **UnoDOS 3.1 clean layout**: the Contract's
-  `[struct] win_entry` is the compact **16 B** entry (down from 32 B) — `owner` joins
+  `[struct] win_entry` is the compact **16 B** entry (down from 32 B), `owner` joins
   the hot prefix, the **title is a pointer** into a kernel title pool (no more 12-byte
   inline buffer or 11-char limit), and `content_scale`/`flags` move to the tail.
   z-order stays an in-entry rank byte (a valid per-platform realization of the z
-  relation). `kernel.asm` needed **no code edits** — it consumes the offsets and the
+  relation). `kernel.asm` needed **no code edits**: it consumes the offsets and the
   `win_entry_addr` stride macro symbolically, so regenerating the Contract flipped the
   whole layout. This is behavior-changing vs the legacy 32 B entry, and is **QEMU-
   verified** (boot, open/close/reopen windows, drag, z-order, three distinct titles).
-  This is the first port shipping the 3.1 clean window layout — the very thing to
+  This is the first port shipping the 3.1 clean window layout, the very thing to
   exercise on real hardware. (`file_handle`/directory entries stay 32 B; only the
   window entry changed.)

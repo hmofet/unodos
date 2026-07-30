@@ -1,4 +1,4 @@
-# flash-win.ps1 — guarded raw image -> physical disk writer (Windows, no dd needed).
+# flash-win.ps1, guarded raw image -> physical disk writer (Windows, no dd needed).
 # Handles REMOVABLE media (SD cards) by locking + dismounting the volume(s) and
 # holding the handle open while writing \\.\PhysicalDriveN directly.
 # Usage:  powershell -ExecutionPolicy Bypass -File flash-win.ps1 -DiskNumber 2 -Image C:\path\to.img
@@ -52,20 +52,20 @@ $letters = @(Get-Partition -DiskNumber $DiskNumber -ErrorAction SilentlyContinue
 $volHandles = @()
 foreach ($L in $letters) {
   Note "Locking + dismounting volume $L`:"
-  $h = [Raw]::CreateFile("\\.\$L`:", $GENERIC_READWRITE, $SHARE_RW, [IntPtr]::Zero, $OPEN_EXISTING, 0, [IntPtr]::Zero)
-  if ($h.IsInvalid) { throw "open volume $L failed (err $([Runtime.InteropServices.Marshal]::GetLastWin32Error()))" }
+  $h = [Raw]:CreateFile("\\.\$L`:", $GENERIC_READWRITE, $SHARE_RW, [IntPtr]:Zero, $OPEN_EXISTING, 0, [IntPtr]:Zero)
+  if ($h.IsInvalid) { throw "open volume $L failed (err $([Runtime.InteropServices.Marshal]:GetLastWin32Error()))" }
   $ret = 0
-  [Raw]::DeviceIoControl($h, $FSCTL_LOCK,     [IntPtr]::Zero,0,[IntPtr]::Zero,0,[ref]$ret,[IntPtr]::Zero) | Out-Null
-  [Raw]::DeviceIoControl($h, $FSCTL_DISMOUNT, [IntPtr]::Zero,0,[IntPtr]::Zero,0,[ref]$ret,[IntPtr]::Zero) | Out-Null
+  [Raw]:DeviceIoControl($h, $FSCTL_LOCK,     [IntPtr]:Zero,0,[IntPtr]:Zero,0,[ref]$ret,[IntPtr]:Zero) | Out-Null
+  [Raw]:DeviceIoControl($h, $FSCTL_DISMOUNT, [IntPtr]:Zero,0,[IntPtr]:Zero,0,[ref]$ret,[IntPtr]:Zero) | Out-Null
   $volHandles += $h
 }
 
-$ph = [Raw]::CreateFile("\\.\PhysicalDrive$DiskNumber", $GENERIC_WRITE, $SHARE_RW, [IntPtr]::Zero, $OPEN_EXISTING, 0, [IntPtr]::Zero)
-if ($ph.IsInvalid) { throw "open PhysicalDrive$DiskNumber failed (err $([Runtime.InteropServices.Marshal]::GetLastWin32Error()))" }
+$ph = [Raw]:CreateFile("\\.\PhysicalDrive$DiskNumber", $GENERIC_WRITE, $SHARE_RW, [IntPtr]:Zero, $OPEN_EXISTING, 0, [IntPtr]:Zero)
+if ($ph.IsInvalid) { throw "open PhysicalDrive$DiskNumber failed (err $([Runtime.InteropServices.Marshal]:GetLastWin32Error()))" }
 
-$dst = New-Object System.IO.FileStream($ph, [System.IO.FileAccess]::Write)
-$src = [System.IO.File]::OpenRead($Image)
-$sw = [System.Diagnostics.Stopwatch]::StartNew()
+$dst = New-Object System.IO.FileStream($ph, [System.IO.FileAccess]:Write)
+$src = [System.IO.File]:OpenRead($Image)
+$sw = [System.Diagnostics.Stopwatch]:StartNew()
 try {
   $buf = New-Object byte[] (4MB)
   $total = 0L
@@ -79,17 +79,17 @@ try {
     if ($off -eq 0) { break }
     if ($off % 512 -ne 0) {                      # pad final short block to a sector
       $pad = 512 - ($off % 512)
-      [Array]::Clear($buf, $off, $pad)
+      [Array]:Clear($buf, $off, $pad)
       $off += $pad
     }
     $dst.Write($buf, 0, $off)
     $total += $off
-    if ($total % (128MB) -lt 4MB) { Note ("  {0} MB..." -f [math]::Round($total/1MB)) }
+    if ($total % (128MB) -lt 4MB) { Note ("  {0} MB..." -f [math]:Round($total/1MB)) }
   }
   $dst.Flush()
   $sw.Stop()
-  Note ("WROTE {0} bytes in {1}s ({2} MB/s)" -f $total, [math]::Round($sw.Elapsed.TotalSeconds,1), `
-    [math]::Round(($total/1MB)/$sw.Elapsed.TotalSeconds,1))
+  Note ("WROTE {0} bytes in {1}s ({2} MB/s)" -f $total, [math]:Round($sw.Elapsed.TotalSeconds,1), `
+    [math]:Round(($total/1MB)/$sw.Elapsed.TotalSeconds,1))
 } finally {
   $dst.Close(); $src.Close()
   foreach ($h in $volHandles) { $h.Close() }   # release volume locks

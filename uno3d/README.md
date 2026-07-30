@@ -1,6 +1,6 @@
-# uno3d — a portable 3D graphics library for UnoDOS
+# uno3d, a portable 3D graphics library for UnoDOS
 
-> **Full guide:** [docs/UNO3D.md](../docs/UNO3D.md) — overview, complete API
+> **Full guide:** [docs/UNO3D.md](../docs/UNO3D.md), overview, complete API
 > reference, and a walkthrough of how to write a game with Uno3D. This file is
 > the quick reference + file list.
 
@@ -10,17 +10,17 @@ doesn't. The same application code (`uno3d_demo.c`) runs unchanged on:
 
 | Backend | Hardware | File | Status |
 |---|---|---|---|
-| `soft` | none — CPU rasteriser into the framebuffer | `uno3d_soft.c` | ✅ verified on host |
+| `soft` | none, CPU rasteriser into the framebuffer | `uno3d_soft.c` | ✅ verified on host |
 | `ps2-gs` | PlayStation 2 Graphics Synthesizer (gsKit) | `uno3d_ps2.c` | ✅ verified in PCSX2 @ 60 fps |
 | `dc-pvr` | Dreamcast PowerVR2 (KallistiOS) | `uno3d_dc.c` | ✅ verified in Flycast (PVR hardware) |
 
 The bare-metal **UnoDOS-x86** OS runs its own native 3D app
 ([`apps/runner3d.asm`](../apps/runner3d.asm)) over the kernel API rather than this
-C library — see [docs/UNO3D.md §8](../docs/UNO3D.md#8-unodos-x86--a-native-app-not-the-c-library).
+C library, see [docs/UNO3D.md §8](../docs/UNO3D.md#8-unodos-x86--a-native-app-not-the-c-library).
 
 ## The game: UnoDOS Runner
 
-`uno3d_game.c` is a complete little 3D game — an obstacle dodger. You pilot a
+`uno3d_game.c` is a complete little 3D game, an obstacle dodger. You pilot a
 ship down a corridor; walls of blocks rush toward you, each with one gap; steer
 to line up and pass through, clip a block and you crash. The corridor speeds up;
 gap-to-gap jumps are bounded so it stays fair. An attract-mode autopilot plays on
@@ -45,23 +45,23 @@ platform's ~40-line glue maps real input (DualShock 2 / maple) and presents.
 ### The PC 386+ version is a native UnoDOS app, not a DOS program
 
 UnoDOS is its own bare-metal OS, and a 386 has no 3D hardware, so the PC version
-of the game is **[`apps/runner3d.asm`](../apps/runner3d.asm)** — a native UnoDOS
+of the game is **[`apps/runner3d.asm`](../apps/runner3d.asm)**: a native UnoDOS
 application that talks only to the UnoDOS kernel via `INT 0x80` (set VGA mode,
 draw, read events). It uses the same game design and the same perspective math,
 hand-written in 8086 assembly (UnoDOS apps are flat NASM `.BIN`s, not C, so the C
-`uno3d` library can't be reused there — and its 256 KB buffers wouldn't fit a
+`uno3d` library can't be reused there, and its 256 KB buffers wouldn't fit a
 64 KB app segment anyway). Because the camera never rotates, each wall block
 projects to an axis-aligned rectangle, so the whole solid 3D corridor is drawn
-with the kernel's filled-rect API in painter's order — no FPU, no framebuffer
+with the kernel's filled-rect API in painter's order, no FPU, no framebuffer
 poking. It assembles for the 8088 (runs on every UnoDOS machine; snappy on a
 386+). Verified booting the UnoDOS floppy and launching the app from the desktop
-in QEMU (`build/run3d_qemu.png`). Build: it ships in the OS image — `make
+in QEMU (`build/run3d_qemu.png`). Build: it ships in the OS image, `make
 build/unodos-144.img` from the repo root puts `RUN3D.BIN` on the floppy and the
 launcher auto-discovers it.
 
 > **Yes, the PS2 does hardware-accelerated 3D.** The UnoDOS PS2 port normally
 > uses the GS only as a blitter; this library drives it as the hardware triangle
-> rasteriser it is — hardware z-buffer, hardware gouraud — at 60 fps.
+> rasteriser it is, hardware z-buffer, hardware gouraud, at 60 fps.
 
 ## Architecture
 
@@ -79,8 +79,8 @@ adding a machine never touches the core or any application.
 
 The front-end transforms model-space geometry into **screen-space triangles**
 (`u3d_stri`: pixel x/y, depth 0..1, gouraud colour) and hands them to the active
-backend. A backend therefore only ever does four things — clear, draw one
-triangle, flush, present — which map cleanly onto every triangle pipeline (a CPU
+backend. A backend therefore only ever does four things, clear, draw one
+triangle, flush, present, which map cleanly onto every triangle pipeline (a CPU
 rasteriser, gsKit prims, PVR vertex lists, GX display lists, a D3D/GL draw).
 
 ## Adding a platform (PS3, PC, GameCube, Xbox, …)
@@ -96,7 +96,7 @@ The design is built for this. To bring uno3d to a new machine:
 
 No change to `uno3d.c` or to any application. Sketches for the planned targets:
 
-- **PS3** (`u3d_backend_ps3`): RSX via libgcm/librsx — compile a vertex/fragment
+- **PS3** (`u3d_backend_ps3`): RSX via libgcm/librsx, compile a vertex/fragment
   shader pair that just passes through position + colour; `tri` appends to a
   vertex buffer, `flush` kicks the command buffer, `present` flips.
 - **PC, Pentium+** (`u3d_backend_pc`): a Direct3D/OpenGL backend for machines
@@ -105,7 +105,7 @@ No change to `uno3d.c` or to any application. Sketches for the planned targets:
 - **GameCube** (`u3d_backend_gc`): GX display lists via libogc/devkitPPC.
 - **Xbox (original)** (`u3d_backend_xbox`): Direct3D8 / nxdk.
 
-Backends can coexist in one build and be picked at runtime — e.g. a PC build
+Backends can coexist in one build and be picked at runtime, e.g. a PC build
 links both the GPU backend and `soft`, probes for hardware, and falls back.
 
 ## API (uno3d.h)
@@ -134,7 +134,7 @@ conventions). Geometry is gouraud-shaded and depth-tested; back faces culled.
 ./build.sh dc          # Dreamcast PVR (KallistiOS)  -> build/uno3d-cube-dc.elf
 ```
 
-`uno3d.c`, `uno3d_demo.c` and `uno3d.h` are byte-identical across all three —
+`uno3d.c`, `uno3d_demo.c` and `uno3d.h` are byte-identical across all three -
 only the backend file and a ~30-line platform `main` differ. That is the proof
 the abstraction works: one application, three rasterisers, two of them real 3D
 hardware.

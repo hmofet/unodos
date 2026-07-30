@@ -1,4 +1,4 @@
-# md5-disk.ps1 — MD5 the first N bytes of a physical disk (to confirm a flash landed).
+# md5-disk.ps1, MD5 the first N bytes of a physical disk (to confirm a flash landed).
 param(
   [Parameter(Mandatory=$true)][int]$DiskNumber,
   [Parameter(Mandatory=$true)][long]$Length,
@@ -15,14 +15,14 @@ public static class RawM {
       IntPtr sec, uint disp, uint flags, IntPtr templ);
 }
 "@
-$h = [RawM]::CreateFile("\\.\PhysicalDrive$DiskNumber", [uint32]2147483648, [uint32]3, [IntPtr]::Zero, [uint32]3, 0, [IntPtr]::Zero)
-if ($h.IsInvalid) { throw "open read failed (err $([Runtime.InteropServices.Marshal]::GetLastWin32Error()))" }
-$fs  = New-Object System.IO.FileStream($h, [System.IO.FileAccess]::Read)
-$md5 = [System.Security.Cryptography.MD5]::Create()
+$h = [RawM]:CreateFile("\\.\PhysicalDrive$DiskNumber", [uint32]2147483648, [uint32]3, [IntPtr]:Zero, [uint32]3, 0, [IntPtr]:Zero)
+if ($h.IsInvalid) { throw "open read failed (err $([Runtime.InteropServices.Marshal]:GetLastWin32Error()))" }
+$fs  = New-Object System.IO.FileStream($h, [System.IO.FileAccess]:Read)
+$md5 = [System.Security.Cryptography.MD5]:Create()
 $buf = New-Object byte[] (4MB)
 $remain = $Length
 while ($remain -gt 0) {
-  $want = [math]::Min([long]$buf.Length, $remain)
+  $want = [math]:Min([long]$buf.Length, $remain)
   $off = 0
   while ($off -lt $want) { $n = $fs.Read($buf,$off,[int]($want-$off)); if ($n -eq 0){break}; $off += $n }
   if ($off -eq 0) { break }
@@ -30,7 +30,7 @@ while ($remain -gt 0) {
   $remain -= $off
 }
 $md5.TransformFinalBlock((New-Object byte[] 0),0,0) | Out-Null
-$hash = ([BitConverter]::ToString($md5.Hash) -replace '-','').ToLower()
+$hash = ([BitConverter]:ToString($md5.Hash) -replace '-','').ToLower()
 $fs.Close()
 $msg = "disk$DiskNumber first $Length bytes MD5 = $hash"
 Write-Host $msg

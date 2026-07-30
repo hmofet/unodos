@@ -10,7 +10,7 @@ as the rest of unoautomate); in production every entry point compiles away.
 
 **pc64 dials OUT** to a listener on the dev PC. You put the dev PC's address in
 the stick's `DEBUG.CFG` (renamed from `STRESS.CFG` on 2026-07-26; the build ships
-a `DEBUG.CFG`, so put keys there — a `STRESS.CFG` is now shadowed by it):
+a `DEBUG.CFG`, so put keys there, a `STRESS.CFG` is now shadowed by it):
 
 ```
 remote=<ip>:<port>       # static address (TCP over the LAN)
@@ -30,20 +30,20 @@ connection drops it reconnects with a short backoff.
 > **Zero-config discovery.** With `discover` set and no `remote=` key, pc64
 > broadcasts a UNODISC PROBE on the LAN (`netdisc`, see `NETSTACK.md`); a dev PC
 > running the listener answers with an OFFER carrying its ip:port, and pc64
-> dials it automatically — no address to type. (The old ARP/broadcast limitation
+> dials it automatically, no address to type. (The old ARP/broadcast limitation
 > that deferred this is fixed: `net_udp_broadcast` now hand-builds a true
 > broadcast frame, and `ip_recv` accepts inbound broadcast.)
 
 > **Multiple connections.** The remote link now runs on its **own socket**
 > (`net_socket`, from the multi-connection layer in `netsock.h`), not the shared
-> legacy `net_tcp_*` slot — so the Browser / AI apps can hold a TCP connection
+> legacy `net_tcp_*` slot, so the Browser / AI apps can hold a TCP connection
 > at the same time as an active link. The stack (`net.c`) supports many
 > simultaneous connections and can `listen`/`accept` inbound ones.
 
 > **Server / listen mode (`listen`).** URC normally has the box dial OUT, which
 > suits a headless box with a changing DHCP address (it calls home when ready).
 > But because the stack can `listen`/`accept`, the box can instead be a **server**
-> that the dev PC dials INTO — the "browse the LAN and connect to a box" model.
+> that the dev PC dials INTO, the "browse the LAN and connect to a box" model.
 > With `listen` (bare = port 5099) or `listen=<port>` the box binds+listens
 > (`net_listen`/`net_accept`, the `TP_TCP_LISTEN` transport in `unoauto_remote.c`)
 > and accepts one inbound URC connection; the listener **persists** across client
@@ -52,7 +52,7 @@ connection drops it reconnects with a short backoff.
 > `remote=`/`discover`/`remote-serial` and takes precedence. It also arms
 > `netdisc` as a **responder** advertising the box's `ip:listen-port` (via
 > `netdisc_listen`), so a scanning client can **discover** which boxes it can
-> dial in to (a dial-out `discover` box advertises port `0` — nothing to dial).
+> dial in to (a dial-out `discover` box advertises port `0`: nothing to dial).
 > The WinForms client's **Scan…** button broadcasts a PROBE, lists the listening
 > boxes, and dials the one you pick. Gate: `tools/listen_qemu.py`.
 
@@ -65,7 +65,7 @@ connection drops it reconnects with a short backoff.
 The link normally rides TCP over the LAN. But when the machine's **only NIC is
 the one you're debugging** (e.g. a ZimaBlade whose onboard Realtek is down), URC
 can't ride it. For that, the same URC line protocol runs over a **16550 UART**
-instead — a serial cable to the dev PC, no working network required. This is a
+instead, a serial cable to the dev PC, no working network required. This is a
 transport backend (`unoauto_serial.c`) behind the same framing/dispatch/queue
 layer; every verb works identically over serial.
 
@@ -89,7 +89,7 @@ stream with `recv()`/`sendall()` (e.g. a QEMU serial TCP socket).
 
 > **Pick a UART the firmware isn't using as its console.** The debug build runs
 > *attached* (UEFI stays alive so it can write its USB stick), and UEFI's serial
-> console driver polls its console UART for input — **stealing bytes from URC's
+> console driver polls its console UART for input, **stealing bytes from URC's
 > RX FIFO** and corrupting frames. On QEMU+OVMF that console is COM1 *and* COM2,
 > so an attached-firmware box must use **COM3 (`remote-serial=3e8`)** or another
 > non-console port. If your firmware only consoles COM1, COM2 is fine; if unsure,
@@ -97,7 +97,7 @@ stream with `recv()`/`sendall()` (e.g. a QEMU serial TCP socket).
 
 > **Not for multi-MB pushes.** A 16550 has a 16-byte RX FIFO, so a sustained
 > inbound flood (an A/B kernel `put`) can overrun it. Serial is for interactive
-> control — `eth`/`iwl` register debug, `probe`, the drive verbs. Do big `put`
+> control, `eth`/`iwl` register debug, `probe`, the drive verbs. Do big `put`
 > pushes over TCP.
 
 ## Protocol (URC)
@@ -145,14 +145,14 @@ unchanged.
 | `vols` | list volumes | one `ok` line per volume: `vol kind writable name` (kind `0`=RAM `1`=native-FAT `2`=firmware-SFS) |
 | `put <vol> <path> <off-hex> <b64>` | base64-decode the chunk into a RAM staging buffer at `<off>` (`0` = start a new upload) | `ok <bytes-decoded>` |
 | `put <vol> <path> done <total-hex>` | finalize: write the staged buffer to disk in one `uno_fs_write`, then verify the on-disk size == total | `ok verified <total>` / `err size-mismatch…` |
-| `mkdir <vol> <path>` | create ONE directory on a mounted volume (parent must already exist; native-FAT only). No `arm` gate — volume-level like `put`. Lets `put` target a nested path (e.g. `\EFI\BOOT\`) a level at a time. Idempotent. | `ok created` / `ok exists` / `err mkdir failed…` |
+| `mkdir <vol> <path>` | create ONE directory on a mounted volume (parent must already exist; native-FAT only). No `arm` gate, volume-level like `put`. Lets `put` target a nested path (e.g. `\EFI\BOOT\`) a level at a time. Idempotent. | `ok created` / `ok exists` / `err mkdir failed…` |
 | `install <disk> [default]` | *(armed)* clone the running OS onto `<disk>` in one op: prepdisk (GPT+ESP+FAT32) + native clone of the boot ESP's whole tree. Disk boots via the firmware removable-media path `\EFI\BOOT\BOOTX64.EFI`. Writes **no** NVRAM `Boot####` entry (runtime SetVariable is refused post-detach), so `default` is inert here. | `ok prepared`, `ok cloning`, `ok installed <n> files <bytes> bytes…` / `err…` |
 | `poweroff` | shut the machine down after the queue drains | `ok bye` |
 | `reboot` | reset the machine after the queue drains (`uno_native_reset`) | `ok bye` |
 | `guard <timeout-s> [reboot]` | arm the dead-man's switch: if the box can't service an inbound URC command within `<timeout-s>`, the debug watchdog hard-resets it (and it re-dials home). Any later command refreshes the deadline; `safe` stands it down. v1 action = reboot | `ok armed <t>s action=reboot token=<n>` / `err usage…` |
 | `pet` | explicit keep-alive (any command refreshes implicitly; this is the no-op one for a long op) | `ok petted` / `ok not-armed` |
 | `safe [token]` | disarm the guard (the op returned). If a token is given it must match the one from `guard` | `ok disarmed` / `err bad-token` |
-| `bootnext <n>` | set the UEFI `BootNext` variable to `Boot####` = `n` (needs runtime SetVariable — attached only) | `ok set` / `err unavailable` |
+| `bootnext <n>` | set the UEFI `BootNext` variable to `Boot####` = `n` (needs runtime SetVariable, attached only) | `ok set` / `err unavailable` |
 | `disks` | list raw disks | one `ok` line per disk: `idx name sectors writable is_boot` |
 | `readsec <disk> <lba-hex> [n]` | read `n` (≤4) raw sectors | base64 of the sectors, streamed as `ok` lines |
 | `arm <disk>` | arm destructive ops for `<disk>` this session (auto-disarms after ONE); **refuses the boot disk** | `ok armed <name> <sectors> sectors` / `err refused…` |
@@ -163,26 +163,26 @@ unchanged.
 | `mkfs <disk> <first-hex> <sectors-hex> <label>` | *(armed)* format a region FAT32 (`uno_fat_mkfs`) + remount | `ok formatted` |
 | `prepdisk <disk> <label>` | *(armed)* the one-shot: fresh GPT + one ESP + FAT32 format + remount | `ok prepared` |
 | `makeboot <disk> [desc] [efi-path]` | author a UEFI boot entry for the ESP on `<disk>` (defaults: `UnoDOS`, `\EFI\BOOT\BOOTX64.EFI`, made default); attached only | `ok boot-entry added` |
-| `iwl <subcmd…>` | live Intel-WiFi register/bring-up debug (F12) — `csr`/`csw`/`prr`/`prw`/`rerun`/`status` (pass-through to `iwl_dbg_cmd`) | the report, then `ok`/`err` |
-| `eth <subcmd…>` | live wired-NIC (Realtek r8169) register/bring-up debug — the wired sibling of `iwl`: `status`/`reg`/`wreg`/`phy`/`wphy`/`rerun`/`link`/`mac` (pass-through to `r8169_dbg_cmd`) | the report, then `ok`/`err` |
-| `disc` | query zero-config discovery state (netdisc) — is it armed, did pc64 record a host OFFER, and which host it latched | `ok active=<0/1>`, `ok have_host=<0/1>`, `ok host=<ip>:<port>` (only when found), `ok link=<state>` |
-| `devices` | read-only PCI device listing (pass-through to unodevices' `devmgr_list_str`). Mutates nothing — no `arm` gate | one `ok` line per device, e.g. `01:00.0 8086:5A85 03/00 display`; `err device manager not built…` until unodevices lands |
-| `hwwdt <subcmd…>` | PCH TCO hardware watchdog (unodevices' `uno_hw_wdt_cmd`) — the guard's IRQs-off backstop. `status` (present/gen/TCOBASE + raw `GEN_PMCON_A` `fw=0x..` dump); `arm <s>`/`pet`/`disarm` drive the TCO directly (**safe**: an armed-but-unpetted TCO resets in ~`<s>`, and if NO_REBOOT wasn't truly cleared it simply doesn't — never a hard hang); `selftest <s>`/`wedge` cli-spin to trigger the IRQs-off wedge (never returns; only the TCO recovers) | the report, then `ok`/`err` |
+| `iwl <subcmd…>` | live Intel-WiFi register/bring-up debug (F12), `csr`/`csw`/`prr`/`prw`/`rerun`/`status` (pass-through to `iwl_dbg_cmd`) | the report, then `ok`/`err` |
+| `eth <subcmd…>` | live wired-NIC (Realtek r8169) register/bring-up debug, the wired sibling of `iwl`: `status`/`reg`/`wreg`/`phy`/`wphy`/`rerun`/`link`/`mac` (pass-through to `r8169_dbg_cmd`) | the report, then `ok`/`err` |
+| `disc` | query zero-config discovery state (netdisc), is it armed, did pc64 record a host OFFER, and which host it latched | `ok active=<0/1>`, `ok have_host=<0/1>`, `ok host=<ip>:<port>` (only when found), `ok link=<state>` |
+| `devices` | read-only PCI device listing (pass-through to unodevices' `devmgr_list_str`). Mutates nothing, no `arm` gate | one `ok` line per device, e.g. `01:00.0 8086:5A85 03/00 display`; `err device manager not built…` until unodevices lands |
+| `hwwdt <subcmd…>` | PCH TCO hardware watchdog (unodevices' `uno_hw_wdt_cmd`), the guard's IRQs-off backstop. `status` (present/gen/TCOBASE + raw `GEN_PMCON_A` `fw=0x..` dump); `arm <s>`/`pet`/`disarm` drive the TCO directly (**safe**: an armed-but-unpetted TCO resets in ~`<s>`, and if NO_REBOOT wasn't truly cleared it simply doesn't, never a hard hang); `selftest <s>`/`wedge` cli-spin to trigger the IRQs-off wedge (never returns; only the TCO recovers) | the report, then `ok`/`err` |
 
 > **Durability.** The native FAT cache is write-back, and post-detach nothing
 > flushes it on its own. `poweroff`/`reboot` therefore `uno_fat_sync()` (flush all
 > dirty lines to disk) **before** powering off, so remote `put`/`mkdir` writes
-> survive the power cycle — essential when the next step is booting the disk you
+> survive the power cycle, essential when the next step is booting the disk you
 > just wrote. Don't cut power without one of these verbs, or unflushed writes are
 > lost.
 
-> **`devices` — the format is unodevices', not URC's.** The verb is a pure
+> **`devices`: the format is unodevices', not URC's.** The verb is a pure
 > pass-through: it calls `devmgr_list_str()` and splits the returned dump on
 > newlines, one `ok` line per device. It does not parse, reorder, or reformat
 > those lines, so when unodevices phase 2 appends a bound-driver / `UNCLAIMED`
 > column, it appears over the link with no change to `unoauto_remote.c`. Until
 > that subsystem lands on master a **weak stub** answers, so the verb is always
-> wired and always dispatches — it replies `err device manager not built
+> wired and always dispatches, it replies `err device manager not built
 > (unodevices pending)` rather than `err unknown-verb`, and upgrades itself the
 > moment the strong symbol links in. The listing is capped at the 4 KB report
 > buffer. Read-only by construction: no `arm` gate, nothing is written.
@@ -190,7 +190,7 @@ unchanged.
 ## Remote desktop (`screen` + `key`/`pointer`)
 
 URC already injects input (`key`, `pointer`); `screen` is the missing OUT half,
-so the whole loop — see the device screen, click and type on it — rides the one
+so the whole loop, see the device screen, click and type on it, rides the one
 channel. `screen grab` snapshots the software framebuffer (`fb.h` `fb[]`),
 QOI-encodes it (lossless, tiny on UnoDOS's flat-colour desktop; encoder in
 `unoauto_screen.c`), and streams it base64 exactly like `readsec`. A client polls
@@ -206,22 +206,22 @@ link.pointer(W // 2, H // 2, 1)           # click the middle of the screen
 
 `scale` downsamples nearest-neighbour (`2` => half w/h, a quarter of the pixels)
 so a busy or hi-res screen still fits the device's 2 MB encode buffer; an
-overflow replies `err too-big (raise scale)`. **TCP only** — a frame is far too
+overflow replies `err too-big (raise scale)`. **TCP only**: a frame is far too
 large for the 16-byte serial FIFO (see the transport note above).
 
 **Delta streaming (`screen grab delta`).** Polling a full frame every tick is
 wasteful on UnoDOS's near-static desktop. `grab delta` keeps a **per-tile hash
 snapshot** of the previous grab (32×32 emitted-pixel tiles; a hash array, *not* a
-multi-MB previous-frame buffer — `fb[]` is up to 1920×1200) and encodes only the
+multi-MB previous-frame buffer, `fb[]` is up to 1920×1200) and encodes only the
 tiles whose hash changed, as one vertical QOI strip, with a trailing manifest of
 their row-major indices (`col = idx % cols`, `row = idx / cols`). A static frame
 sends `nch 0` and zero payload. It **auto-sends a full `frame` keyframe** when it
-can't delta — the first grab, a scale change, or a change so large the strip
-won't fit — so the client's single reader handles both `frame …` and `delta …`
+can't delta, the first grab, a scale change, or a change so large the strip
+won't fit, so the client's single reader handles both `frame …` and `delta …`
 replies, and the client keeps a persistent canvas it composites onto. Because the
 device refreshes its snapshot on every grab (full or delta), the client must seed
 its canvas with a full `grab` right after connecting (it can't delta against a
-snapshot it doesn't share) — the WinForms client does this automatically.
+snapshot it doesn't share), the WinForms client does this automatically.
 
 The GUI client is **`pc64/remote/`** (`UnoRemote.exe`, a WinForms single-exe built
 by `build-remote.ps1`): live view, mouse/keyboard forwarding, session recording
@@ -241,7 +241,7 @@ WinForms client, tick the **"on device"** box next to Record.
 
 ## The guard (dead-man's switch for risky verbs)
 
-Some verbs push the device CPU into code that has never run before — the classic
+Some verbs push the device CPU into code that has never run before, the classic
 case is driving a NIC bring-up interactively (`iwl mvm` then `iwl rerun` into the
 never-executed post-ALIVE sequence). When that wedges, the URC server stops
 answering and the box needs a physical power cycle. The **guard** turns that into
@@ -258,23 +258,23 @@ safe                   # if it RETURNED instead, stand the guard down
 
 - **"Call home" is any inbound command.** Reaching the URC dispatcher proves the
   box is alive end to end (NIC RX + net + dispatch + main loop), so *any* command
-  refreshes the deadline — a strictly stronger liveness proof than "the main loop
+  refreshes the deadline, a strictly stronger liveness proof than "the main loop
   ticked." Refresh is on receipt, so the risky verb gets its full window. `pet` is
   the explicit no-op keep-alive for a legitimately long op. **Crucially, the
   guard's deadline is NOT the freeze-watchdog heartbeat** (`uno_dbg_net_trace()`
   feeds that during WiFi bring-up, so it can't detect a wedge in the very path
-  being debugged) — the guard has its own deadline that only inbound URC activity
+  being debugged), the guard has its own deadline that only inbound URC activity
   refreshes.
 - **Three firing paths, so whichever context is still alive fires it:** the
-  main-loop heartbeat (a *healthy* box whose host went silent — host crash /
+  main-loop heartbeat (a *healthy* box whose host went silent, host crash /
   network partition), our own LAPIC timer ISR (detached + wedged main loop), and
   the firmware timer event + UEFI `SetWatchdogTimer` (attached box on real
   hardware). All converge on the existing `wd_fire` → `trap_reset` hard reset.
 - **Not covered (v1):** a tight spin with interrupts disabled (no ISR, no main
-  loop, no TPL cycle) needs the PCH TCO hardware watchdog — separate silicon,
+  loop, no TPL cycle) needs the PCH TCO hardware watchdog, separate silicon,
   filed as a request, out of scope here.
 - **v1 action is `reboot`.** The arg slot accepts `reboot` explicitly (and is
-  where a future `revert` — roll back to known-good on next boot — will go). An
+  where a future `revert`: roll back to known-good on next boot, will go). An
   armed guard with no host traffic **will reset a healthy box** after the timeout:
   that is the intended semantics, so arm it around a specific op and `safe` it (or
   use the host `with link.guarded(15): …` helper, which arms then stands down on
@@ -283,16 +283,16 @@ safe                   # if it RETURNED instead, stand the guard down
 ## A/B OS update (push a new BOOTX64.EFI over the link)
 
 Iterating on a driver (e.g. WiFi) against a live machine normally means physically
-reflashing a USB stick each round. Instead, run **two** UnoDOS sticks — **A** (the
-running, known-good OS) and **B** (a spare) — and push only the rebuilt
+reflashing a USB stick each round. Instead, run **two** UnoDOS sticks, **A** (the
+running, known-good OS) and **B** (a spare), and push only the rebuilt
 `EFI\BOOT\BOOTX64.EFI` (~1.5 MB) to stick B over the link, then reboot into B. A
 driver change touches only that one file; firmware / apps / config on the stick are
 untouched, and A stays as the fallback.
 
 The upload is **RAM-staged and written in one shot at `done`**, so a partial or
-interrupted transfer never touches stick B — it stays a valid boot disk. The write
+interrupted transfer never touches stick B, it stays a valid boot disk. The write
 goes through `uno_fs_write`, which now writes **firmware-SFS volumes too** (via
-`uno_efifs_write`) — so an *attached* machine (the driver box builds
+`uno_efifs_write`), so an *attached* machine (the driver box builds
 `-DUNO_NO_DETACH`) can write its USB stick, which appears as a `kind 2` volume.
 
 From the dev PC:
@@ -309,7 +309,7 @@ python tools/unoauto_remote.py --push 2 'EFI\BOOT\BOOTX64.EFI' build/BOOTX64.EFI
 Or from the library: `link.push_file(2, r'EFI\BOOT\BOOTX64.EFI', 'build/BOOTX64.EFI')`
 returns `True` when verified; then `link.bootnext(n)` / `link.reboot()`.
 
-> **Security — `put`/`reboot`/`bootnext` widen the blast radius.** They are arbitrary
+> **Security, `put`/`reboot`/`bootnext` widen the blast radius.** They are arbitrary
 > file write + reset + boot-target change, and (like the whole channel) are
 > **UNO_DEBUG-only** and **plaintext, LAN-only**. Never expose the listener to an
 > untrusted network. `put` caps a single upload at 8 MB (the staging buffer).
@@ -346,7 +346,7 @@ python tools/unoauto_remote.py --prepdisk 1 UNODOS
 ### Laying down a bootable tree (headless, no console)
 
 `prepdisk` gives a formatted volume; `put` pushes files; **`mkdir`** creates the
-directories in between — the piece that was missing before. A USB stick boots via
+directories in between, the piece that was missing before. A USB stick boots via
 the firmware's **removable-media fallback** `\EFI\BOOT\BOOTX64.EFI`, so no NVRAM
 `Boot####` entry is needed (it is exactly how the boot USB itself boots):
 
@@ -362,12 +362,12 @@ reboot                       # flushed to disk first (see the durability note)
 `mkdir` creates ONE level at a time, so build nested paths parent-first. It is
 idempotent (`ok exists` if the dir is already there), so re-running the recipe is
 safe. All of this runs post-detach on the native FAT stack, so it needs no
-firmware — unlike the on-device Install app, which requires booting to firmware.
+firmware, unlike the on-device Install app, which requires booting to firmware.
 
 ### One-shot: `install <disk>`
 
 The manual recipe above is what `install` automates on-device. It **clones the
-running OS onto the disk in a single armed verb** — prepdisk, then a native
+running OS onto the disk in a single armed verb**: prepdisk, then a native
 copy of the whole boot ESP tree (loader + `APPS\` + fonts + everything) straight
 disk-to-disk, so no OS bytes cross the network:
 
@@ -482,7 +482,7 @@ production PYRT these are inert stubs, like the rest of `unoauto`.)
 - **`tools/serial_qemu.py`** - the same round-trip with **no network at all**:
   boots with a `remote-serial` DEBUG.CFG and **no NIC device**, driven over the
   guest's COM3 bridged to a TCP socket. Proves the NIC-independent transport
-  (the ZimaBlade r8169 case). Uses COM3, not COM1/COM2 — see the console-UART
+  (the ZimaBlade r8169 case). Uses COM3, not COM1/COM2, see the console-UART
   caveat under "NIC-independent transport" above.
 - **`tools/listen_qemu.py`** - end-to-end gate for **listen mode**: boots a
   `listen=5099` DEBUG.CFG, forwards a host port to the guest's listener with QEMU

@@ -1,15 +1,15 @@
-# unosecure — specification (for the implementing agent)
+# unosecure, specification (for the implementing agent)
 
 **You are building `unosecure`, the UnoDOS security subsystem: user accounts,
 RBAC, and privilege escalation.** It is a first-class OS subsystem (peer of
 `unofs` / `unonet` / `unosched`), production, always-on, fail-closed. Its first
 consumer is `unoscript` (the Python OS-scripting surface), which is already
-stubbed against your contract and blocked on you — but you are NOT scriptable's
+stubbed against your contract and blocked on you, but you are NOT scriptable's
 appendage; you are the system's authority on identity and permission, and other
 subsystems (login, installer, fs ACLs, remote link) will consume you too.
 
 This spec is a contract, not an implementation. Where it says "you decide,"
-design it; where it gives a C signature, match it exactly — `unoscript` calls it.
+design it; where it gives a C signature, match it exactly, `unoscript` calls it.
 
 ---
 
@@ -22,11 +22,11 @@ events.
 
 **You do NOT own:** the surfaces being protected. `unoscript` (and others) call
 you to ask "may this actor do X?"; they perform X themselves. You never touch
-UI/fs/memory — you adjudicate.
+UI/fs/memory, you adjudicate.
 
 **Files (suggested):** `pc64/unosecure.h` (the contract below), `pc64/unosecure.c`
 (engine), storage via `unofs`, consent UI via `unoui`. Add to `build.sh` in the
-same change that wires `unoscript` in. Bump nothing in `unoscript.h` — you
+same change that wires `unoscript` in. Bump nothing in `unoscript.h`: you
 *provide* the `unosec_*` symbols it already declares.
 
 ## 2. The capability vocabulary you adjudicate
@@ -38,12 +38,12 @@ stable string name** (`unoscript_cap_name()`), so your role tables and policy
 files survive additions to the enum. Do not hardcode enum values.
 
 Design your own account/role capabilities too (e.g. `sec.user.create`,
-`sec.role.assign`) in your own namespace — those are yours, not `unoscript`'s.
+`sec.role.assign`) in your own namespace, those are yours, not `unoscript`'s.
 
 ## 3. The seam you MUST implement (exact signatures)
 
 `unoscript` links these weakly today (fail-closed). When you provide strong
-definitions, they take over transparently — no change on the `unoscript` side.
+definitions, they take over transparently, no change on the `unoscript` side.
 Signatures are in `unoscript.h`; repeated here with the required semantics:
 
 ```c
@@ -63,7 +63,7 @@ escalations. Side-effect free (used by UIs to grey out actions).
 int unosec_require(usc_cap_t cap);              /* 1 if CURRENT ctx may use cap NOW */
 ```
 The hot-path decision: `unosec_check(current_user, cap)` **OR** an active,
-unexpired escalation grant for `cap` in the current session. No prompting here —
+unexpired escalation grant for `cap` in the current session. No prompting here -
 this must be non-blocking and fast. (Prompting happens in `unosec_request`.)
 
 ```c
@@ -73,7 +73,7 @@ Raise the current session's authority for `cap`. This is where policy and consen
 live. Decision inputs (you design the policy engine):
 - the caller's static roles (an admin may auto-grant);
 - the script's **trust class** and **signed manifest** (§5);
-- **interactive consent** — draw a sheet via `unoui` ("Script X wants `mem.read`.
+- **interactive consent**: draw a sheet via `unoui` ("Script X wants `mem.read`.
   Allow once / for this session / deny"). Consent is required for KERNEL tier and
   for ADMIN tier absent a granting role; you decide finer policy.
 - Scope: `ONCE` (single op), `SESSION` (until the session ends), `TIMED`
@@ -84,9 +84,9 @@ fast path (explicit `u.request(...)`, or a one-shot for an ADMIN op).
 ```c
 void unosec_drop(int grant);           /* relinquish an escalation early */
 void unosec_audit(usc_cap_t cap, const char *detail, int allowed);
-int  unosec_present(void);             /* return 1 — you exist */
+int  unosec_present(void);             /* return 1, you exist */
 ```
-`unosec_audit` receives every tier≥2 attempt (allowed or denied) — persist it
+`unosec_audit` receives every tier≥2 attempt (allowed or denied), persist it
 (append to a tamper-evident log via `unofs`) and optionally forward to the
 `unoauto` LOG channel. `unosec_present()` returning 1 is how `unoscript` (and its
 `u.secured()` Python call) knows a real adjudicator is linked.
@@ -96,7 +96,7 @@ int  unosec_present(void);             /* return 1 — you exist */
 Design the API; suggested shape:
 
 - **Accounts:** create / delete / list users; each has a `usc_uid_t`, a name, a
-  password **hash** (never plaintext — you choose the KDF; salt per user), and a
+  password **hash** (never plaintext, you choose the KDF; salt per user), and a
   set of roles. Persist via `unofs` in a root-only store. A bootstrap path
   creates the first admin on a fresh install (installer consumes this).
 - **Authentication:** verify a credential → establish a **session** bound to a
@@ -107,12 +107,12 @@ Design the API; suggested shape:
   thread" binding with `unosched` (thread→session) and `unoscript` (it tags a
   script with the launching session). Define that binding call, e.g.
   `unosec_enter_session(handle)` / `unosec_leave()`, or a thread-local the
-  scheduler sets on context switch — **your design, but document it**, because
+  scheduler sets on context switch, **your design, but document it**, because
   `unoscript` needs to set identity when it starts a script.
 
 ## 5. Trust classes & signed manifests
 
-A script is not just "user U" — it is "user U running code of trust class T."
+A script is not just "user U", it is "user U running code of trust class T."
 Define at least: `INTERACTIVE` (typed at a live prompt), `INSTALLED` (a stored
 `.py`/app the user launched), `SANDBOX` (untrusted/downloaded), `REMOTE` (arrived
 over the `unoauto_remote`/URC link). Policy keys off (uid, class, requested cap):
@@ -163,9 +163,9 @@ auto-grant for a role (developer machine). Every prompt outcome is audited.
 
 ## 9. Coordinate with
 
-- **unoscript** (this repo, `unoscript.h`) — your first consumer; contract frozen
+- **unoscript** (this repo, `unoscript.h`), your first consumer; contract frozen
   above. File anything you need from it back through UNOAUTOMATE-REQUESTS.md.
-- **unosched** — thread→session binding for `unosec_current_user`.
-- **unofs** — the account/audit store and (later) file ACLs keyed on your uids.
-- **unoui** — the consent sheet.
-- **installer / login** — bootstrap admin + the authenticate entry point.
+- **unosched**: thread→session binding for `unosec_current_user`.
+- **unofs**: the account/audit store and (later) file ACLs keyed on your uids.
+- **unoui**: the consent sheet.
+- **installer / login**: bootstrap admin + the authenticate entry point.

@@ -2,7 +2,7 @@
 
 Scripts for writing UnoDOS images to physical media.
 
-## write.ps1 — Unified Disk Image Writer
+## write.ps1, Unified Disk Image Writer
 
 Interactive TUI that writes any UnoDOS image to any target drive. Replaces the old `floppy.ps1`, `hd.ps1`, and `apps.ps1` scripts.
 
@@ -49,7 +49,7 @@ Interactive TUI that writes any UnoDOS image to any target drive. Replaces the o
 
 ## Legacy Wrappers
 
-The old scripts still work — they now call `write.ps1` internally:
+The old scripts still work, they now call `write.ps1` internally:
 
 | Script | Equivalent |
 |--------|-----------|

@@ -1,4 +1,4 @@
-# pc64 audio — HD Audio + AC'97 PCM (with PC-speaker fallback)
+# pc64 audio, HD Audio + AC'97 PCM (with PC-speaker fallback)
 
 Modern PCs have no PC speaker, so the PIT-channel-2 square wave the Sound
 Manager used to gate was silent on exactly the machines pc64 targets. This
@@ -53,18 +53,18 @@ loop, so `uno_pc64_chime` pumps the ring itself in 11 ms slices.
 
 ## AC'97 bring-up (ac97.c)
 
-- BAR0 = mixer (NAM), BAR1 = bus master (NABM) — both I/O BARs; the driver
+- BAR0 = mixer (NAM), BAR1 = bus master (NABM), both I/O BARs; the driver
   also sets PCI command bit 0 (I/O decode).
 - Cold-reset deassert, wait for primary-codec-ready, mixer reset, master +
   PCM-out to 0 dB unmuted. No VRA: the 48 kHz power-on default is exactly
   the PCM layer's rate.
 - BDL entry lengths are in **samples**, not frames or bytes.
 
-## The sample stream — playing files, not just notes
+## The sample stream, playing files, not just notes
 
 The square voice above is a *synthesiser*: one note at a time, generated
-straight into the ring. Playing a file needs the opposite — arbitrary sample
-data pushed in from outside — so `snd_pcm.c` grew a second source that takes
+straight into the ring. Playing a file needs the opposite, arbitrary sample
+data pushed in from outside, so `snd_pcm.c` grew a second source that takes
 the ring while it is open (the square voice is muted for the duration):
 
 ```
@@ -144,7 +144,7 @@ RECOGNISES a file but cannot play it say so; the Music app shows that instead
 of a generic failure, because "no decoder in this build" and "malformed" are
 very different things to tell someone.
 
-MIDI carries no audio, so its "decoder" is really a synthesiser — there is no
+MIDI carries no audio, so its "decoder" is really a synthesiser, there is no
 soundfont (a GM sample set dwarfs the 1 MB boot image), so instruments are
 approximated per GM family. Seeking replays the event stream with rendering
 suppressed, because programs/controllers/tempo are all stateful.
@@ -158,7 +158,7 @@ python3 tools/music_test.py both     # WAV + MIDI + MP3, end to end in QEMU
 Boots with `-audiodev wav`, opens Music, switches to the ESP volume, plays a
 staged file and asserts the captured audio: a steady tone is judged on its
 median frequency, a melody on the *spread* of pitches (a stuck note would pass
-a "was it loud" check). Keyboard-driven — the machine detaches under QEMU, so
+a "was it loud" check). Keyboard-driven, the machine detaches under QEMU, so
 the firmware AbsolutePointer is gone and only a relative PS/2 mouse survives.
 
 The decoders also build natively for host-side unit testing; that is the fast
@@ -166,7 +166,7 @@ path when changing one, since it isolates codec bugs from OS plumbing.
 
 ## Volume
 
-The Control Panel slider (ID_VOL) drives `uno_snd_volume(0..100)` — linear
+The Control Panel slider (ID_VOL) drives `uno_snd_volume(0..100)`: linear
 gain on the synth amplitude, live even while a note is sounding. The System
 window shows which backend is active (`Audio: HD Audio (PCM 48k s16 stereo)`
 / `AC'97` / `PC speaker (PIT ch2)`).
@@ -175,7 +175,7 @@ window shows which backend is active (`Audio: HD Audio (PCM 48k s16 stereo)`
 
 `uno_snd_init` runs pre-detach, but neither driver touches firmware services
 afterwards, so the ring keeps streaming across `ExitBootServices` untouched
-— verified: the audio test plays the Music app *after* the detach line
+- verified: the audio test plays the Music app *after* the detach line
 appears on the debug console.
 
 ## Verification
@@ -194,10 +194,10 @@ PC-speaker fallback path.
 ## Metal-pending
 
 - Real HDA codec bring-up (a laptop Realtek/Conexant path is deeper than
-  QEMU's 2-widget codec — the DFS + amp-unmute is written for it, but only
+  QEMU's 2-widget codec, the DFS + amp-unmute is written for it, but only
   QEMU-verified so far). If a machine stays silent, check the System window
   first: probe failure falls back to the PC speaker line.
 - AC'97 on a real ICH board (pre-2007 hardware).
 - LPIB accuracy on non-Intel HDA controllers (VIA/AMD sometimes need the
-  DMA position buffer instead; not implemented — the symptom would be a
+  DMA position buffer instead; not implemented, the symptom would be a
   wobbling write-ahead, i.e. crackle).

@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
-"""UnoDOS conformance — PORT-SPEC §6 made executable (CONTRACT-ARCH Phase 2 / §15.2).
+"""UnoDOS conformance, PORT-SPEC §6 made executable (CONTRACT-ARCH Phase 2 / §15.2).
 
 Host-only, stdlib-only. Two layers:
 
-  A. STRUCTURAL conformance — static invariants checked against the Contract, the
+  A. STRUCTURAL conformance, static invariants checked against the Contract, the
      generated x86 surface, and kernel.asm (audit-tax rules 8, 9, 10-structure).
 
-  B. BEHAVIORAL conformance — the §6 policy invariants (z-order, event focus/stale,
+  B. BEHAVIORAL conformance, the §6 policy invariants (z-order, event focus/stale,
      the fixed-size tombstone queue, edge-only mouse, owner-based reaping) as
      EXECUTABLE REFERENCE MODELS + golden vectors. Each invariant is paired with the
      HISTORICAL BUGGY behavior PORT-SPEC warns about; the runner asserts the
-     reference passes every vector AND the buggy version fails at least one — proving
+     reference passes every vector AND the buggy version fails at least one, proving
      the vectors discriminate (they are not vacuous).
 
 These reference models are the host oracle every world's implementation will later be
@@ -36,9 +36,9 @@ def record(rule, name, ok, detail=""):
 # A. STRUCTURAL CONFORMANCE
 # ===========================================================================
 
-# Rule 9 — "Keep the API table address/IDs stable; additions append." The frozen
+# Rule 9, "Keep the API table address/IDs stable; additions append." The frozen
 # baseline below is the append-only anchor: existing ordinals must never renumber;
-# new calls may only extend the tail. (Snapshot taken Phase 0 — UnoDOS v3.32 / 106.)
+# new calls may only extend the tail. (Snapshot taken Phase 0, UnoDOS v3.32 / 106.)
 BASELINE_ORDINALS = {
     0:"gfx_draw_pixel",13:"fs_mount",14:"fs_open",20:"win_create",27:"fs_readdir",
     34:"app_yield",41:"speaker_tone",48:"gfx_set_font",84:"clip_copy",
@@ -56,7 +56,7 @@ def check_rule9_appendonly(d):
     record(9, "append-only (no renumber of baseline)", not drift, str(drift))
 
 def check_rule10_struct(d):
-    # "Every queue/table is fixed-size — design the 'full' behavior explicitly."
+    # "Every queue/table is fixed-size, design the 'full' behavior explicitly."
     structs = {s["name"]: s for s in d["struct"]}
     for nm, want_count in [("event", 32), ("win_entry", 16), ("file_handle", 16)]:
         s = structs.get(nm, {})
@@ -92,7 +92,7 @@ def check_rule8_geometry(d):
     # surface must equal kernel.asm's literals (the Phase-1 trust anchor, re-run here).
     record(8, "single fat12 geometry block in Contract", "fat12" in d["const"], "")
     # the OS-area layout must sum to fs_start_sector (the "110" single-sourced across
-    # boot.asm + stage2.asm + the image tools — the FAT12 "five places", now one).
+    # boot.asm + stage2.asm + the image tools, the FAT12 "five places", now one).
     bl = d["const"].get("boot_layout")
     if bl:
         s = bl["boot_sectors"] + bl["stage2_sectors"] + bl["kernel_sectors"] + bl["spare_sectors"]
@@ -124,7 +124,7 @@ def check_rule8_geometry(d):
         record(8, "generated x86 FAT12 geometry == known-good", False, "gen/kernel missing")
 
 # ===========================================================================
-# B. BEHAVIORAL CONFORMANCE — reference models + vectors + discrimination
+# B. BEHAVIORAL CONFORMANCE, reference models + vectors + discrimination
 # ===========================================================================
 
 # --- Rule 6: Z-order (PORT-SPEC §2) ----------------------------------------
@@ -194,7 +194,7 @@ NONE = 0xFF
 def deliver_ref(stamp, focused, consumer):
     # stamp = focused task at post time; focused = current focused task.
     # Deliver a task-stamped event only if it is FOR the consumer AND that task is
-    # still focused (else it is stale — focus moved while it sat queued). A NONE
+    # still focused (else it is stale, focus moved while it sat queued). A NONE
     # stamp delivers to any poller only while nothing is focused.
     if stamp == NONE:
         return "deliver" if focused == NONE else "discard"
@@ -296,7 +296,7 @@ def dfocus_buggy(i, n, key):
     return i
 def run_dfocus():
     n = 4
-    # walk to the bottom then press DOWN again — must stay clamped at n-1
+    # walk to the bottom then press DOWN again, must stay clamped at n-1
     i = 0
     for k in ["DOWN","DOWN","DOWN","DOWN"]: i = dfocus_ref(i, n, k)
     record(8, "directional focus clamps at last (no wrap)", i == n - 1, "i=%d" % i)
@@ -319,7 +319,7 @@ def check_profiles(d):
             record(9, "port %s (minimal) has no POINTER cap" % name, "POINTER" not in caps, str(caps))
         if pf == "single_app":
             # single_app ports run one app at a time and require no multi-window
-            # WM — which is WHY the 6502 ports legitimately carry no window-entry
+            # WM, which is WHY the 6502 ports legitimately carry no window-entry
             # struct for a [world.*] to source. Assert that's honest, not faked.
             pdef = prof.get(pf, {})
             record(9, "port %s (single_app) is one-app, requires no WM" % name,
@@ -340,7 +340,7 @@ def run_reaping():
 # --- Greenfield window model (§11 redux): logical invariants verified over a
 # physical realization THROUGH the accessor boundary. The point: the same
 # invariant models hold regardless of layout (here a Python stand-in for the SoA
-# columns wmgen emits), so correctness is checked on logical behaviour — not on
+# columns wmgen emits), so correctness is checked on logical behaviour, not on
 # any platform's byte offsets. Paired with discrimination (a buggy realization). -
 def check_wmodel(d):
     wm = d.get("wmodel")
@@ -414,7 +414,7 @@ def main():
         print(line)
     print("\n%d/%d conformance checks passed (PORT-SPEC §6 covered: 3,5,6,7,8,9,10)." % (npass, ntot))
     print("Not host-testable (HW/timing): rule 1 (atomic cursor hide+lock, IF masking), "
-          "rule 2 partial (ISR-defer timing). rule 4 (press latch/seq) — vectors TODO.")
+          "rule 2 partial (ISR-defer timing). rule 4 (press latch/seq), vectors TODO.")
     sys.exit(0 if npass == ntot else 1)
 
 if __name__ == "__main__":

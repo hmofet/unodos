@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Generate pinephone/build/gfx.s from the shared UnoDOS assets (PinePhone / AArch64).
 
-The Pi port draws into the firmware-allocated **mailbox framebuffer** — a flat
+The Pi port draws into the firmware-allocated **mailbox framebuffer**: a flat
 640x480, 32bpp XRGB8888 surface (depth 32, allocated at boot via the VideoCore
 property channel). So, exactly like the GBA Mode-3 port, there are no hardware
 tiles: we plot an 8x8 bitmap font and 16x16 icons pixel by pixel, each pixel's
@@ -172,14 +172,14 @@ ST7703 = [
 # => the fault is the post-DISPON HS *video* delivery, not the DCS config.
 #
 # These are DCS reads (data type 0x06, one command byte, no params). NOTE: the ST7703
-# manufacturer command-set regs (SETMIPI 0xBA, SETGIP1/2 0xE9/0xEA, ...) are write-only —
-# they cannot be read back over DCS — so we read the standard MIPI DCS readable set that the
+# manufacturer command-set regs (SETMIPI 0xBA, SETGIP1/2 0xE9/0xEA, ...) are write-only -
+# they cannot be read back over DCS, so we read the standard MIPI DCS readable set that the
 # panel does expose: power-mode (RDDPM 0x0A), address-mode/MADCTL (RDDMADCTL 0x0B), pixel-
 # format (RDDCOLMOD 0x0C), image-mode (RDDIM 0x0D), signal-mode (RDDSM 0x0E), self-diagnostic
 # (RDDSDR 0x0F), plus the 3 ID bytes (RDID1/2/3 0xDA/0xDB/0xDC = a link-sanity baseline that
 # should match regardless of init state). RDDSM/RDDPM/RDDSDR are the most diagnostic: they
 # reflect whether the panel believes it has a valid display/signal after our cold init.
-# Each read-request header is {DI=0x06, reg, 0x00, ECC} — same Hamming ECC as the write path
+# Each read-request header is {DI=0x06, reg, 0x00, ECC}, same Hamming ECC as the write path
 # (mipi_ecc), emitted as one little-endian .word for the asm reader to spill into DSI CMD_TX.
 DSI_READ_REGS = [0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0xDA, 0xDB, 0xDC]
 

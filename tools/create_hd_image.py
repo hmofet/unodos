@@ -24,7 +24,7 @@ import sys
 import struct
 import os
 
-# Disk geometry — matches the CHS drive type MartyPC's XT-IDE accepts
+# Disk geometry, matches the CHS drive type MartyPC's XT-IDE accepts
 # (615/4/26 = 63,960 sectors ~= 31.2MB), so the image can be wrapped in a VHD
 # the emulated XT-IDE controller will mount. Real XT-IDE accepts this too.
 SECTOR_SIZE = 512

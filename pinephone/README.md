@@ -1,6 +1,6 @@
 # UnoDOS / PinePhone (Allwinner A64, AArch64)
 
-The **tenth** fresh contract-driven port — and the **second AArch64 world**. It
+The **tenth** fresh contract-driven port, and the **second AArch64 world**. It
 **reuses the Raspberry Pi AArch64 core** (the same GNU-as/GAS dialect, the same
 software-framebuffer primitives, the same Dostris and app logic), retargeted to the
 **Allwinner A64** SoC (4× Cortex-A53) and a **portrait** phone panel (480×640).
@@ -9,19 +9,19 @@ at a time, directional nav.
 
 Two things differ from the Pi, both honest to the silicon:
 
-- **Display.** The A64 has no GPU mailbox — and, unlike the Pi (where VideoCore
+- **Display.** The A64 has no GPU mailbox, and, unlike the Pi (where VideoCore
   firmware lights HDMI before the kernel), **nothing in the PinePhone boot chain lights
-  the DSI panel** (not mainline U-Boot, not Megi's fork, not Tow-Boot — see
+  the DSI panel** (not mainline U-Boot, not Megi's fork, not Tow-Boot, see
   [PINEPHONE-BRINGUP.md](PINEPHONE-BRINGUP.md) §3/§6). So the payload does the **full
   bare-metal MIPI-DSI bring-up itself** (`panel.inc.s`, "Path A"): CCU PLLs/gates, the
   AXP803 PMIC over the Reduced Serial Bus, the MIPI-DSI host + D-PHY, the ~20-command
-  ST7703 panel init, TCON0 at the panel's native 720×1440, and the PWM backlight — then
+  ST7703 panel init, TCON0 at the panel's native 720×1440, and the PWM backlight, then
   programs the **Display Engine 2.0 (DE2)** mixer **UI overlay** to scan out our 480×640
   XRGB8888 framebuffer (`PINE_FB = 0x40400000`) at the panel's top-left.
 - **Timing.** Per-frame pacing reads the **ARM architectural generic timer**
-  (`cntpct_el0`) directly via `mrs` — no MMIO at all, real-hardware-correct.
+  (`cntpct_el0`) directly via `mrs`: no MMIO at all, real-hardware-correct.
 
-## Status — M1 · M2 · M3 all shipped ✅
+## Status, M1 · M2 · M3 all shipped ✅
 
 Verified headlessly on a **Unicorn Cortex-A core** (`pinephone/harness.py`) running
 the real payload. Because the kernel uses a fixed DRAM framebuffer and the generic
@@ -30,20 +30,19 @@ it maps DRAM + a RAM sink over the DE2 register block, runs the budget so the
 AUTOTEST pad plays out, and renders the DE2 framebuffer to a PNG. Nothing is faked
 (`pinephone/shots/*.png`):
 
-- **M1 — launcher** (`shots/m1_boot.png`): boot → DE2 UI-layer scanout → the
-  inverted "UnoDOS 3 – PinePhone (Allwinner A64)" title bar and a 4-column, 11-icon
+- **M1, launcher** (`shots/m1_boot.png`): boot → DE2 UI-layer scanout → the
+  inverted "UnoDOS 3 - PinePhone (Allwinner A64)" title bar and a 4-column, 11-icon
   colour grid, in portrait.
-- **M2 — navigation** (`shots/m2_nav.png`): a generic-timer-paced loop, a d-pad
+- **M2, navigation** (`shots/m2_nav.png`): a generic-timer-paced loop, a d-pad
   selection highlight (the selected label inverts), **A** launches / **B** returns.
-- **M3 — apps** (`shots/m3_*.png`): SysInfo, live **Clock** (HH:MM:SS), Notepad,
+- **M3, apps** (`shots/m3_*.png`): SysInfo, live **Clock** (HH:MM:SS), Notepad,
   Files, **Theme** (cycles the 32-bit palette), **Music** (UI + note timeline), and
-  **Dostris** — the falling-blocks game in a centred portrait well.
+  **Dostris**: the falling-blocks game in a centred portrait well.
 
 > **Real input + audio.** The interactive (non-AUTOTEST) build reads a real
 > **A64 UART0 serial console** (16550, on the headphone jack): `WASD` = d-pad,
 > `Enter`/`Space` = A, `Backspace` = B. The harness emulates the 16550 RX, so this
-> path is verified end-to-end (`shots/live_nav.png`, `shots/live_notepad.png` —
-> navigation + app launch from injected serial input). The capacitive touch panel is
+> path is verified end-to-end (`shots/live_nav.png`, `shots/live_notepad.png`: > navigation + app launch from injected serial input). The capacitive touch panel is
 > a heavier future driver. The Music app **synthesises square-wave PCM in software**
 > (a phase accumulator) and feeds the samples to the A64 **I2S0 TX FIFO**; the harness
 > captures those writes as the actual audio stream and confirms it plays "Ode to Joy"
@@ -54,7 +53,7 @@ AUTOTEST pad plays out, and renders the DE2 framebuffer to a PNG. Nothing is fak
 
 | Part | Detail |
 |---|---|
-| CPU | **Allwinner A64** — 4× ARM Cortex-A53 (**AArch64**); secondary cores parked via `mpidr_el1` |
+| CPU | **Allwinner A64**: 4× ARM Cortex-A53 (**AArch64**); secondary cores parked via `mpidr_el1` |
 | Panel | **Full DSI bring-up in the payload** (`panel.inc.s`): CCU (PLL_DE/VIDEO0/MIPI, DE/TCON0/DSI/D-PHY gates+resets), RSB driver → AXP803 rails (DLDO2 = MIPI power), MIPI-DSI host (`0x01CA0000`) + D-PHY (`0x01CA1000`) analog LDOs, ST7703 (XBD599) init via 20 precomputed DCS packets, TCON0 (`0x01C0C000`) 720×1440, PWM backlight (PL10/PH10). All distilled from NuttX (lupyuen) + Linux sun50i-a64 |
 | Video | **Display Engine 2.0** mixer 0 (`0x01100000`): global + blender programmed to the panel's native 720×1440; our 480×640 framebuffer is the UI overlay layer (XRGB8888) at top-left, top address = `PINE_FB` |
 | Surface | 480×640 **portrait**, 32bpp XRGB8888 linear framebuffer in DRAM at `0x40400000` |
@@ -75,10 +74,10 @@ python pinephone/harness.py pinephone/build/unodos.bin pinephone/shots/m1_boot.p
 ```
 
 > **Harness scope.** The harness runs the **full DSI bring-up** (`panel_init`) before
-> drawing — it sinks the CCU/RSB/DSI/D-PHY/TCON0 MMIO and returns poll-satisfying
+> drawing, it sinks the CCU/RSB/DSI/D-PHY/TCON0 MMIO and returns poll-satisfying
 > values (PLL-locked, RSB transfer-over, DSI sequencer-done), so a green render proves
 > the bring-up is well-formed, encodes correctly, and never hangs (all polls bounded).
-> It has **no panel/DSI/clock model**, so it cannot prove the panel *lights* — that is
+> It has **no panel/DSI/clock model**, so it cannot prove the panel *lights*, that is
 > hardware-only (use `paneldbg` + `fel.sh run`, below).
 
 Toolchain: `aarch64-linux-gnu-{as,ld,objcopy}` (binutils 2.42, via WSL) + `python`
@@ -87,7 +86,7 @@ U-Boot (`go 0x40080000`) after the panel is up.
 
 ## Self-booting microSD (`mksd.sh`)
 
-`unodos.bin` is a flat payload — it assumes DRAM and the DSI panel are already up and
+`unodos.bin` is a flat payload, it assumes DRAM and the DSI panel are already up and
 just wants to run at `0x40080000`. To make a card that boots straight into UnoDOS on a
 bare PinePhone, we add the rest of the boot chain:
 
@@ -97,7 +96,7 @@ BROM → SPL (8 KB offset) → U-Boot (brings up DRAM + DSI panel)
      → fatload unodos.bin @0x40080000 → go
 ```
 
-`mksd.sh` (run **on a Linux box** — it needs `parted`/`mkfs.vfat`/`losetup`/`mkimage`,
+`mksd.sh` (run **on a Linux box**: it needs `parted`/`mkfs.vfat`/`losetup`/`mkimage`,
 and `sudo` + a card reader to write; this is not a WSL script like `build.sh`) builds
 mainline **U-Boot + ARM Trusted Firmware** for the A64 and assembles the image:
 
@@ -115,14 +114,13 @@ What it does, and why each piece:
   crosstool (no `apt`/`sudo`); set `CROSS=` to use your own. `swig`+`pyelftools`
   (U-Boot host tools) go in a venv to dodge PEP-668.
 - **ATF**: `PLAT=sun50i_a64 bl31` → the secure monitor U-Boot loads.
-- **U-Boot**: `pinephone_defconfig` (which resolves `CONFIG_VIDEO/PANEL/BACKLIGHT=y` —
-  it lights the XBD599 DSI panel, the whole reason we use it). Two tweaks: disable the
+- **U-Boot**: `pinephone_defconfig` (which resolves `CONFIG_VIDEO/PANEL/BACKLIGHT=y`: it lights the XBD599 DSI panel, the whole reason we use it). Two tweaks: disable the
   `mkeficapsule` host tool (wants gnutls headers, unneeded) and **enable `CMD_CACHE`**
   (needed by `boot.scr`, below). The `u-boot-sunxi-with-spl.bin` SPL+FIT is written at
   the 8 KB offset; the `eGON.BT0` SPL magic lands at byte 8196 and it ends well before
   the 1 MiB partition start.
 - **Card layout**: MBR, one FAT32 partition (label `UNODOS`, 1 MiB→end) holding
-  `unodos.bin` + `boot.scr`; SPL/U-Boot occupy the 8 KB–1 MiB gap.
+  `unodos.bin` + `boot.scr`; SPL/U-Boot occupy the 8 KB-1 MiB gap.
 - **`boot.cmd`** (compiled to `boot.scr` by `mkimage`): `fatload`s the payload and
   jumps to it. This U-Boot uses `distro_bootcmd`, which scans each device for
   `boot.scr` at the FAT root and runs it with `${devtype}/${devnum}/${distro_bootpart}`
@@ -132,7 +130,7 @@ What it does, and why each piece:
 
 U-Boot's `go` does **not** flush or disable caches (unlike `booti`). The payload then
 runs with U-Boot's MMU + caches still on, never re-enables or flushes them, and the
-DE2 engine scans the framebuffer out of DRAM via DMA — so cached FB writes could read
+DE2 engine scans the framebuffer out of DRAM via DMA, so cached FB writes could read
 back as stale DRAM (garbage on the panel). `boot.cmd` therefore runs
 `dcache flush; dcache off; icache off` right before `go`, so the payload runs
 cache-coherent. This is the one thing the harness can't exercise (it has no caches and
@@ -142,10 +140,10 @@ pinpoints where it stops.
 
 ## No-serial bring-up debugging (FEL over USB)
 
-The earlier "screen stays fully dark" had a known root cause — **no stage lit the DSI
+The earlier "screen stays fully dark" had a known root cause, **no stage lit the DSI
 panel** (the boot chain never does; §3/§6 of [PINEPHONE-BRINGUP.md](PINEPHONE-BRINGUP.md)).
 That is now **addressed in the payload itself** (`panel.inc.s`, Path A). The fastest way
-to test it on hardware is **FEL mode over USB-OTG** — no SD write per iteration:
+to test it on hardware is **FEL mode over USB-OTG**: no SD write per iteration:
 
 ```sh
 # on devbuntu, phone connected by USB-C:
@@ -155,7 +153,7 @@ sh pinephone/build.sh paneldbg          # DSI bring-up with the PD18 LED stage b
 ```
 
 `fel.sh run` uses the SPL only to bring up DRAM (FEL can't run a DRAM payload cold),
-then loads `unodos.bin` straight to `0x40080000` and jumps — **the panel bring-up runs
+then loads `unodos.bin` straight to `0x40080000` and jumps, **the panel bring-up runs
 in our payload, with no U-Boot in the path.** Watch the panel (does it light?) and the
 green **PD18 LED**: the `paneldbg` build blinks a stage count between blocks (1 = clocks,
 2 = PMIC, 3 = reset/DSI/D-PHY, 4 = reset-high, 5 = ST7703 init, 6 = TCON0/HS/backlight),
@@ -194,8 +192,8 @@ payload paints the whole top-left field a solid colour at each boot stage, holdi
 
 | Colour | Reached |
 |---|---|
-| **RED**   | `fb_init` returned — the framebuffer is writable |
-| **GREEN** | `fs_init` returned — the USV1 disk is up |
+| **RED**   | `fb_init` returned, the framebuffer is writable |
+| **GREEN** | `fs_init` returned, the USV1 disk is up |
 | **BLUE**  | about to draw the launcher |
 | desktop   | full boot |
 
@@ -208,7 +206,7 @@ brown-background bug) and the palette words need their R/B bytes swapped.
 - **`_start` now disables the MMU + D/I-caches itself** (EL-aware: A64 hands off in
   EL2 after ATF). The DE2 engine scans the framebuffer out of DRAM by DMA, so this
   removes the dependency on U-Boot's unverified `dcache off` in `boot.cmd`.
-- **`fb_init` now *adopts* U-Boot's live framebuffer** — it reads back the UI-layer
+- **`fb_init` now *adopts* U-Boot's live framebuffer**: it reads back the UI-layer
   top-address + pitch U-Boot already programmed (its console is on-screen) and draws
   into that buffer, instead of reprogramming the DE2 mixer output size to 480×640 while
   the TCON clocks the native 720×1440 panel (a likely blank-screen cause). It falls

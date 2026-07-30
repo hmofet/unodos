@@ -8,7 +8,7 @@
   page to logical $2000 and the stack to $2100. py65's 6502 core hardwires those
   to $0000/$0100 and the relocation lives in the CPU's addressing-mode logic, not
   the memory bus, so a py65 memory model can't intercept it (zp `lda $00` and
-  absolute `lda $0000` both arrive as mem[0x0000] — indistinguishable). That is
+  absolute `lda $0000` both arrive as mem[0x0000], indistinguishable). That is
   precisely the bug that rendered fine here but black-screened on real hardware:
   the kernel now maps RAM at MPR1 ($2000) and I/O at MPR0 ($0000), and forces the
   VDC ($0000-$0003) accesses to absolute with `a:` so ca65 doesn't fold them to
@@ -18,7 +18,7 @@
 
 
 Mesen renders the PCE through a GPU surface a GDI/PrintWindow grab reads as black,
-and its F12 capture is focus-flaky over RDP — so, exactly like the C64/Apple II/
+and its F12 capture is focus-flaky over RDP, so, exactly like the C64/Apple II/
 VIC-20 ports run on a py65 6502 core and the GBA/WonderSwan ports on Unicorn, this
 verifies the port headlessly by running the REAL HuCard ROM on a py65 65C02 core
 extended with the few HuC6280 opcodes the kernel uses (TAM bank-mapping, CSH/CSL
@@ -29,8 +29,8 @@ speed) plus the HuC6280 MMU. It:
     bank B at file[B*0x2000]); at reset MPR7=0 so the reset vector $FFFE lands in
     bank 0 (the .cfg places the $E000 boot bank first in the file),
   * models the HuC6270 VDC write path (port $2000 selects a register; $2002/$2003
-    write its data low/high) — MAWR sets the VRAM pointer, VWR writes a word and
-    auto-increments — and the HuC6280 VCE colour table ($2402/$2404), and answers
+    write its data low/high), MAWR sets the VRAM pointer, VWR writes a word and
+    auto-increments, and the HuC6280 VCE colour table ($2402/$2404), and answers
     the VDC status read with the vblank bit set so `wait_vbl` advances,
   * then decodes the BAT (32x28 of 4bpp planar tiles from VRAM, each cell's CG
     pattern at (entry&0xFFF)<<4, colour through the 9-bit VCE palette GGGRRRBBB) to
@@ -186,7 +186,7 @@ def main():
     stuck = 0
     for i in range(budget):
         mpu.step()
-        # (no hard stop on a tight wait loop — wait_vbl exits via the status bit)
+        # (no hard stop on a tight wait loop, wait_vbl exits via the status bit)
     render(mem, out_path)
     print("wrote %s (256x224) after %d steps; pc=%04X mpr=%s" %
           (out_path, budget, mpu.pc, [hex(b) for b in mem.mpr]))

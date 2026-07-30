@@ -1,12 +1,12 @@
 # UnoDOS Roadmap
 
 *Updated 2026-07-17. This file tracks **open** work only. Completed milestones are
-recorded in [CHANGELOG.md](CHANGELOG.md) and the per-port READMEs/HANDOFFs — they are
+recorded in [CHANGELOG.md](CHANGELOG.md) and the per-port READMEs/HANDOFFs, they are
 not repeated here.*
 
 ## Direction
 
-The forward line is converging on two write-once, retarget-per-platform layers — the
+The forward line is converging on two write-once, retarget-per-platform layers, the
 **[`unodef/`](unodef/) Contract** (screen/window/event geometry every world generates
 from) and the **[`unoui/`](unoui/) toolkit** (the whole UI as swappable-theme widgets).
 The **[`pc64/`](pc64/) Modern PC world** (x86-64 / UEFI) is the furthest-developed
@@ -16,7 +16,7 @@ expected to adopt. The 8-bit/console ports keep a minimal native path.
 
 ---
 
-## pc64 — Modern PC (x86-64 / UEFI) — the active frontier
+## pc64, Modern PC (x86-64 / UEFI), the active frontier
 
 Shipped and verified on real hardware (Lenovo X1 Carbon Gen 8): the `unoui` desktop
 shell, e1000 NIC + from-scratch TCP/IP, TLS 1.2 / HTTPS (BearSSL), a JS-capable browser,
@@ -28,18 +28,18 @@ shell, e1000 NIC + from-scratch TCP/IP, TLS 1.2 / HTTPS (BearSSL), a JS-capable 
       lights up on the X1 (which has no wired e1000; Intel Wi-Fi only). xHCI USB core
       (Phases A+B) is done; this is the class driver on top.
 - [ ] **xHCI HID** (USB keyboard/mouse) class driver on the USB core.
-- [ ] **USBLEGSUP** BIOS→OS handoff (xECP) — may be required for xHCI on real Intel
+- [ ] **USBLEGSUP** BIOS→OS handoff (xECP), may be required for xHCI on real Intel
       controllers (QEMU works without it).
-- [ ] **ExitBootServices** — take full ownership from firmware (currently UEFI-as-BIOS
+- [ ] **ExitBootServices**: take full ownership from firmware (currently UEFI-as-BIOS
       with boot services alive).
-- [ ] **NVMe / AHCI block driver** — real disk storage (today: RAM-FAT + UEFI Simple FS).
+- [ ] **NVMe / AHCI block driver**: real disk storage (today: RAM-FAT + UEFI Simple FS).
 - [ ] **Real Intel-GPU 3D backend** for `uno3d` (today: soft rasteriser + honest
       Intel-iGPU soft-fallback scaffold).
-- [ ] **I2C-HID trackpad** on-metal bring-up — driver ships gated/self-configuring;
+- [ ] **I2C-HID trackpad** on-metal bring-up, driver ships gated/self-configuring;
       needs the X1 diagnostic readout iterated (LPSS reset-release landed; parser tuning
       pending real report dumps).
 - [ ] Metal re-test pass of the latest build (mouse-driven apps, PC-speaker audio, RTC
-      set, HTTPS-needs-NIC) — see the checklist.
+      set, HTTPS-needs-NIC), see the checklist.
 
 ---
 
@@ -49,7 +49,7 @@ shell, e1000 NIC + from-scratch TCP/IP, TLS 1.2 / HTTPS (BearSSL), a JS-capable 
 A new app (alongside the built-in-tune **Music** app) that plays music **files**, routed
 to the best sound hardware on each platform and scaled down gracefully.
 - [ ] Formats: **WAV/AU** (PCM, every platform), **MIDI/SMF** (synth-capable HW), **MP3**
-      (PS2 / Dreamcast only — fixed-point decoder), **console-native** (Amiga **MOD**,
+      (PS2 / Dreamcast only, fixed-point decoder), **console-native** (Amiga **MOD**,
       Genesis **VGM**, SNES **SPC**, C64 **SID**, PS2 **VAG**, DC **ADX**).
 - [ ] PC sound cards: **AdLib OPL2/OPL3**, **SoundBlaster** (DSP + DMA PCM), **GUS**
       (wavetable). Probe SB → GUS → AdLib → PC-speaker.
@@ -57,7 +57,7 @@ to the best sound hardware on each platform and scaled down gracefully.
       PSG **+ the unused YM2612 FM** (Genesis), SPU2 (PS2), AICA (DC); 1-bit PWM fallback.
 - [ ] Architecture: portable core (probe → decoder → sink) + per-device **audio-sink
       vtable** with `caps`; mirrors the Uno3D backend pattern.
-- [ ] **Prereq — Music multi-song parity:** finish the remaining built-in Music apps
+- [ ] **Prereq, Music multi-song parity:** finish the remaining built-in Music apps
       (Amiga, MacPlus, Apple II, SNES, IIGS, C64). Done: x86 (10), Mac 7 / Mac 1-6 /
       PS2 / Dreamcast (8, shared C core), Genesis (8, PSG).
 
@@ -66,10 +66,10 @@ The C-side ports are covered by **`unoui`** (the pc64 shell + PS2/Dreamcast). Th
 remaining work is the **bare-metal asm ports**:
 - [ ] Bring a shared, themeable widget model (buttons, stepper/arrow controls, lists,
       scrollbars) to the asm ports (Amiga, MacPlus, Genesis, Apple II, SNES, IIGS, C64),
-      replacing ad-hoc text-char controls — authored once per concept, themed per platform.
+      replacing ad-hoc text-char controls, authored once per concept, themed per platform.
 
 ### Kernel / Window Manager (x86 reference OS)
-- [ ] Modal window flag (`WIN_FLAG_MODAL`) — block focus changes while modal.
+- [ ] Modal window flag (`WIN_FLAG_MODAL`), block focus changes while modal.
 - [ ] Window minimize / maximize.
 - [ ] Preemptive multitasking / threading (currently cooperative).
 - [ ] Animated sprite support (multi-frame sprite API).
@@ -96,7 +96,7 @@ remaining work is the **bare-metal asm ports**:
 ### APIs
 - [ ] Multi-byte-wide sprite support (>8px width).
 - [ ] 2bpp color sprite API (like icons, variable size).
-- [ ] Update [docs/API_REFERENCE.md](docs/API_REFERENCE.md) for APIs 91–104 (and API 28's
+- [ ] Update [docs/API_REFERENCE.md](docs/API_REFERENCE.md) for APIs 91-104 (and API 28's
       SI/DI/AH/AL press-latch returns, API 63 ticks-since-boot).
 
 ### Documentation
@@ -109,16 +109,16 @@ remaining work is the **bare-metal asm ports**:
 
 ### 8088 / IBM PC-XT (feature parity achieved on a cycle-accurate XT; see [docs/PORT-8088.md](docs/PORT-8088.md))
 - [~] **FAT16-on-8088** (DOS-interchangeable CF): boot chain is 8086-clean and verified.
-      Remaining — [ ] convert the kernel FAT16 driver (~104 sites across
+      Remaining, [ ] convert the kernel FAT16 driver (~104 sites across
       read/write/mount/open/cluster/FAT/alloc/readdir/create/delete/rename) to 8086 and
       drop the pre-286 mount gate → desktop + apps + save from a FAT16 CF.
 - [ ] **Physical IBM PC/XT pass** (real INT 13h write timing, cross-boot floppy
-      persistence) — the final real-hardware step.
+      persistence), the final real-hardware step.
 - [ ] Optional: dirty-region fill fast path for full-screen game repaint at 4.77 MHz.
 - [ ] Launcher `select_icon` draws over open windows (z-order, cosmetic, low priority).
 - [ ] Background window content not repainted until raised (single-topmost clipping model).
 
-### Known issue — root-dir entries past 16 break app launch
+### Known issue, root-dir entries past 16 break app launch
 The low-res launcher has 16 icon slots and the last is its own Refresh icon, so only 15
 apps fit; app #16+ collides with the refresh slot. **Workaround shipped** (MOUSE.BIN and
 MKBOOT.BIN kept off the default image so Tracker + Paint fit; both still build via
@@ -127,12 +127,12 @@ MKBOOT.BIN kept off the default image so Tracker + Paint fit; both still build v
 ### Amiga (bare-metal)
 - [ ] FAT12 polish: delete, rename, free-space display, dir-full UX, Tracker `.MOD`
       export, write-verify pass.
-- [ ] Blitter fast paths (text row-blit, fills) — the big OCS win.
+- [ ] Blitter fast paths (text row-blit, fills), the big OCS win.
 - [ ] `TICKS_SEC` calibration (vblank pacing runs fast under the WinUAE test config) + NTSC detect.
 - [ ] 640-wide OCS hires option (16 colors; needs WM-wide content scaling per PORT-SPEC).
 - [ ] Workbench-style chrome (blue/orange/white gadget look).
 
-### Mac System 1–7 (Toolbox, hosted)
+### Mac System 1-7 (Toolbox, hosted)
 - [ ] Offscreen GWorld double-buffering for flicker-free repaints.
 - [ ] Audio ear-check on real hardware / sound-enabled emulator (sequencers are register-verified).
 - [ ] Real-hardware smoke tests (A500; Mac Plus + Mac II-class).
@@ -171,7 +171,7 @@ MKBOOT.BIN kept off the default image so Tracker + Paint fit; both still build v
       layer; pad-as-pointer + soft keyboard always, USB kbd/mouse when present; memory-card
       storage. Core + apps are host-shim/PCSX2-verified; remaining is on-device PS2 validation.
 
-### SNES / Apple IIGS (emulator-verified — real-hardware remaining)
+### SNES / Apple IIGS (emulator-verified, real-hardware remaining)
 - [ ] SNES: real hardware (flashcart + SNES Mouse) + audio ear-check
       (backlog in [snes/HANDOFF.md](snes/HANDOFF.md)).
 - [ ] IIGS: real hardware (GSplus/KEGS/MAME then FloppyEmu SmartPort) + audio ear-check

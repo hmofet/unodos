@@ -1,4 +1,4 @@
-# unosecure — the UnoDOS security subsystem (design)
+# unosecure, the UnoDOS security subsystem (design)
 
 **Status: LIVE.** `unosecure.{c,h}` implement the `unosec_*` seam from
 `UNOSECURE-SPEC.md` (the contract) plus the accounts / RBAC / session / policy /
@@ -13,7 +13,7 @@ login / the installer / fs ACLs / the remote link consume it too.
 
 `unoscript.c` ships weak, fail-closed fallbacks for the `unosec_*` symbols (tier
 0 allow, everything else deny, `unosec_present()`→0). `unosecure.c` provides the
-**strong** definitions; at link they win and the gate upgrades transparently —
+**strong** definitions; at link they win and the gate upgrades transparently -
 the r8169 weak-fallback pattern. The seven seam functions and their exact
 semantics are frozen in `UNOSECURE-SPEC.md §3`:
 
@@ -22,19 +22,19 @@ semantics are frozen in `UNOSECURE-SPEC.md §3`:
 | `unosec_current_user()` | uid of the current thread's bound session (hot path) |
 | `unosec_check(u,cap)` | pure RBAC: does `u` hold `cap` by role? (side-effect free) |
 | `unosec_require(cap)` | live: current ctx holds `cap` statically **or** via an active grant |
-| `unosec_request(cap,scope,ttl)` | raise authority — policy + consent live here |
+| `unosec_request(cap,scope,ttl)` | raise authority, policy + consent live here |
 | `unosec_drop(grant)` | relinquish an escalation early |
 | `unosec_audit(cap,detail,allowed)` | sink for every tier≥2 attempt |
-| `unosec_present()` | returns 1 — a real adjudicator is linked |
+| `unosec_present()` | returns 1, a real adjudicator is linked |
 
 ## Identities
 
-- **uid 0 (`UNOSEC_UID_SYSTEM`)** — the kernel; holds every capability. Never a
+- **uid 0 (`UNOSEC_UID_SYSTEM`)**: the kernel; holds every capability. Never a
   login you hand out; the first admin is a *distinct* account (uid ≥ 1).
-- **`UNOSEC_UID_NONE`** — the unauthenticated context (no session bound). Holds
+- **`UNOSEC_UID_NONE`**: the unauthenticated context (no session bound). Holds
   nothing above AMBIENT, so a script with no login is exactly the fail-closed
   floor `unoscript` already shipped.
-- **accounts** — uid ≥ 1, a name, a salted password hash, and a set of roles.
+- **accounts**: uid ≥ 1, a name, a salted password hash, and a set of roles.
 
 ## RBAC
 
@@ -42,9 +42,9 @@ Roles are named sets of capability **names** (opaque strings via
 `unoscript_cap_name()`), so the tables survive additions to `usc_cap_t` and can
 also hold `unosecure`'s own `sec.*` caps. Built-ins seeded on a fresh store:
 
-- **admin** — every `usc` cap tier 0–2 + all `sec.*` management caps.
-- **user** — tier 0–1 (`ui.*`, `app.ctrl`, `fs.user`, `settings`, …).
-- **guest** — tier 0 only.
+- **admin**: every `usc` cap tier 0-2 + all `sec.*` management caps.
+- **user**: tier 0-1 (`ui.*`, `app.ctrl`, `fs.user`, `settings`, …).
+- **guest**: tier 0 only.
 
 `unosec_check(u,cap)` = uid 0 → yes; AMBIENT → yes; else any assigned role holds
 the cap name. `unosec_require(cap)` adds the trust-class cap (SANDBOX gets only
@@ -93,7 +93,7 @@ The trust store maps key id → a 32-byte secret (`unosec_trust_add_key`, persis
 root-only). Verify = recompute HMAC-SHA256 and constant-time compare. **HMAC**
 keeps the crypto self-contained; an **ECDSA** trust store (BearSSL `br_ecdsa_*`,
 already vendored) is a drop-in for the verify step and the on-disk key if
-asymmetric trust is wanted — swap `hmac256`/`fromhex` for a `br_ecdsa_vrfy` call
+asymmetric trust is wanted, swap `hmac256`/`fromhex` for a `br_ecdsa_vrfy` call
 and store a public key.
 
 ## Thread → session binding
@@ -110,7 +110,7 @@ unosec_leave();            /* pop to the previous binding */
 `enter`/`leave` nest (a script that launches a helper) as a small bounded stack.
 The cooperative scheduler (`unosched`) re-asserts the binding on context switch
 by calling `unosec_enter_session` for the task it resumes and `unosec_leave` when
-it suspends — so identity follows the running task. `unoscript` sets identity
+it suspends, so identity follows the running task. `unoscript` sets identity
 this way when it launches a script (tagging it with the launching session).
 **Open coordination with `unosched`** (filed via `UNOAUTOMATE-REQUESTS.md`): the
 scheduler must call the binding on switch; until it does, the binding follows the
@@ -148,7 +148,7 @@ and ends at the current running head), never the chain head.
 ## Bootstrap
 
 On a fresh install (no accounts), `unosec_bootstrap_admin(name, pw)` creates the
-first admin (and refuses once any account exists) — the installer's entry point.
+first admin (and refuses once any account exists), the installer's entry point.
 Thereafter the admin logs in and provisions users; kernel/system code that needs
 to provision runs inside a `UNOSEC_UID_SYSTEM` session.
 

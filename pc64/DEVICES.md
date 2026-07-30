@@ -1,7 +1,7 @@
-# DEVICES.md — the `unodevices` subsystem contract
+# DEVICES.md, the `unodevices` subsystem contract
 
 **Owner:** unodevices (branch `unodevices`, `uno_devmgr.{c,h}`).
-**API version:** `UNO_DEVMGR_API 1` — Phase 1 has landed, so the enumeration and
+**API version:** `UNO_DEVMGR_API 1`: Phase 1 has landed, so the enumeration and
 registry surface (§2, §3, §7) is `[STABLE]`; the driver/binding surface (§5, §6)
 is still `[EXPERIMENTAL]` design. Breaking changes bump this number and get a
 dated changelog entry at the bottom (AGENTS.md §6).
@@ -9,7 +9,7 @@ dated changelog entry at the bottom (AGENTS.md §6).
 `unodevices` is the PCI/USB **device tree + driver registry**: it enumerates every
 device on the machine once, then matches and binds drivers to them. It owns the
 *discovery and binding* mechanism; it does **not** own any driver, bus-access
-primitive, or capability seam — those it consumes.
+primitive, or capability seam, those it consumes.
 
 ---
 
@@ -88,17 +88,17 @@ BAR sizes previously probed.
 
 **Platform devices.** `devmgr_add_platform(backing, cls, sub, io_base, io_len, drv)`
 registers a `UNO_BUS_PLATFORM` node for a logical block that lives *inside* a PCI
-function rather than being its own function — the first user is the PCH TCO watchdog
+function rather than being its own function, the first user is the PCH TCO watchdog
 (`uno_hw_wdt`, HWWATCHDOG.md), which is decoded by the LPC function but is not itself
 enumerable. The node inherits the backing function's `bb:dd.f`/`ven:dev`, links to it
 as parent, records `[io_base, io_base+io_len)` as an I/O BAR, and lists as **BOUND** to
-`drv` — so it is the first device the registry reports with a real driver (phase-1 PCI
+`drv`: so it is the first device the registry reports with a real driver (phase-1 PCI
 enumeration binds nothing; §7). The registration is **sticky**: re-applied at the end of
 each `devmgr_enumerate()`, so a re-scan does not drop it, and idempotent (re-registering
 the same backing+driver does not duplicate). Additive to `UNO_DEVMGR_API 1`: no struct or
 ABI change (`UNO_BUS_PLATFORM` was always in the bus-type enum).
 
-**Capacity.** `UNO_DEV_MAX` (128) is a static table — nothing allocates this early.
+**Capacity.** `UNO_DEV_MAX` (128) is a static table, nothing allocates this early.
 A scan that fills it sets `devmgr_overflow()`, so a truncated listing is detectable
 instead of silently short.
 
@@ -112,7 +112,7 @@ module-safe view; keep its column order append-only.
 ## 3. PCI enumeration  `[STABLE]` (as landed)
 
 In `uno_devmgr.c`, **consuming** `pc64_pci.c`'s existing accessors
-(`pci_cfg_read32/16`, `pci_cfg_write32`) — the shared PCI file is **not** edited.
+(`pci_cfg_read32/16`, `pci_cfg_write32`), the shared PCI file is **not** edited.
 
 - **Recursive** by bridge: start at bus 0; for each type-1 header follow its
   secondary bus number and recurse, recording the parent link. A bus-number bitmap
@@ -126,13 +126,13 @@ In `uno_devmgr.c`, **consuming** `pc64_pci.c`'s existing accessors
   header type, IRQ line/pin, the **capability list** (`0x34` → chained, bounded
   guard) recording PM/MSI/MSI-X/PCIe and their offsets, and the **BAR bases** with
   their kind (I/O, 64-bit pair, prefetchable). The multi-function bit gates
-  functions 1..7 — probing them unconditionally duplicates parts that alias
+  functions 1..7, probing them unconditionally duplicates parts that alias
   function 0 across all eight.
 
 ### BAR sizing is opt-in, and deliberately not part of a scan
 
 Sizing a BAR means writing all-ones and reading back the mask, which parks a bogus
-address in the BAR for a few config cycles. Every OS does this at boot — while IT
+address in the BAR for a few config cycles. Every OS does this at boot, while IT
 owns the hardware. Phase 1 runs **attached**: UEFI boot services are alive and
 firmware drivers are still driving these controllers, so a decode gap on an
 in-flight AHCI or xHCI is exactly the class of thing that wedges a real machine.
@@ -149,7 +149,7 @@ firmware had recorded.
 
 ## 4. USB enumeration  `[EXPERIMENTAL, Phase 3]`
 
-Factor the descriptor walk out of `xhci.c` (consumed, not restructured — a request to
+Factor the descriptor walk out of `xhci.c` (consumed, not restructured, a request to
 its owner if a hook is needed): for each root-hub port → reset/address → read
 **device + config + interface descriptors**, recurse through hubs. Emit one
 `uno_device` per interface keyed on `idVendor:idProduct` + the
@@ -175,7 +175,7 @@ typedef struct uno_driver {
 ```
 
 - **Self-registration via a linker set** (AGENTS.md §2 names this seam): `UNO_DRIVER(x)`
-  drops `&x` into a `.uno_drivers` section the manager walks — no central list to edit
+  drops `&x` into a `.uno_drivers` section the manager walks, no central list to edit
   when a driver is added.
 - **Match precedence:** exact `ven:dev` > `cls/sub/prog` > `cls`-only; ties by
   `priority`. First successful `probe()` binds.
@@ -196,7 +196,7 @@ and calls `probe()`. Enables shipping/updating drivers out of band (pairs with t
 
 ---
 
-## 7. Introspection — the point of Phase 1  `[STABLE]` (as landed)
+## 7. Introspection, the point of Phase 1  `[STABLE]` (as landed)
 
 The **line format is unodevices'** to define; URC forwards it verbatim and does not
 parse it. One line per PCI function:
@@ -211,43 +211,43 @@ Two constraints on that format, both load-bearing: the class name is always a
 **single token** (the URC host parser reads the last whitespace token as the driver
 column), and the driver column is always present.
 
-> **What `UNCLAIMED` means in phase 1.** It means *the manager has bound nothing* —
+> **What `UNCLAIMED` means in phase 1.** It means *the manager has bound nothing* -
 > which is true of every device, because binding does not exist until phase 2. It
 > does **not** mean "UnoDOS has no driver for this part": the legacy pull-drivers
 > still find their own hardware by `pci_find()` and are unaffected. Read a phase-1
 > dump as the machine's inventory, not as a coverage report.
 
-- **`uno.devices()`** — the listing above as a string. **`uno.pci()`** — the same
+- **`uno.devices()`**: the listing above as a string. **`uno.pci()`**: the same
   registry parsed: a list of `(loc, ven, dev, cls, sub, progif, driver_or_None)`.
   Both appended to the `mod_uno.c` module table (additive seam). `uno.usb()` arrives
   with phase 3.
-- **URC `devices` verb** — landed on master 2026-07-23 (unoautomate), a weak-symbol
+- **URC `devices` verb**: landed on master 2026-07-23 (unoautomate), a weak-symbol
   pass-through to `devmgr_list_str`, so it upgraded itself from the "unodevices
   pending" stub to real rows the moment this branch's strong definition linked in.
-- **A "Device Manager" unoui app** — a tree of devices, each bound driver or
-  `no driver — 8086:5A85 class 0x03 (display)` spelled out. Later phase.
+- **A "Device Manager" unoui app**: a tree of devices, each bound driver or
+  `no driver, 8086:5A85 class 0x03 (display)` spelled out. Later phase.
 
 ### Gates
 
-- `tools/devmgr_test.sh` — the enumerator linked against a **synthetic** config
+- `tools/devmgr_test.sh`: the enumerator linked against a **synthetic** config
   space and run natively (seconds, no QEMU): topology, multi-function handling,
   64-bit BAR pairs, capability walks, listing format, truncation safety, re-scan
   idempotence, and that enumeration writes nothing. Run it after every edit.
-- `tools/devmgr_qemu.py` — the same enumerator against QEMU's q35 built with a
+- `tools/devmgr_qemu.py`: the same enumerator against QEMU's q35 built with a
   PCIe root port and a controller behind it, driven over URC.
 
 ---
 
-## 8. Rollout (each phase lands small and green — AGENTS.md §3)
+## 8. Rollout (each phase lands small and green, AGENTS.md §3)
 
 | Phase | Slice | Payoff |
 |---|---|---|
-| **1 ✅ DONE 2026-07-23** | `uno_devmgr.{c,h}` PCI enumerator + registry + `uno.devices()`/`uno.pci()` (read-only) | The real driver-less map of the ZimaBlade — answers the immediate question |
+| **1 ✅ DONE 2026-07-23** | `uno_devmgr.{c,h}` PCI enumerator + registry + `uno.devices()`/`uno.pci()` (read-only) | The real driver-less map of the ZimaBlade, answers the immediate question |
 | **2** | `uno_driver` + `UNO_DRIVER` linker set; migrate r8169/e1000 to match tables | New PCI driver = a match table, not a probe-list edit |
 | **3** | USB enumerator into the same registry; migrate HID / AX88179 | USB devices first-class + visible |
 | **4** | Loadable `\DRIVERS\*.UNO` + hotplug re-scan | Ship/third-party drivers; PCIe/USB hotplug |
 
-## 9. Territory (AGENTS.md §1–2)
+## 9. Territory (AGENTS.md §1-2)
 
 Own: `uno_devmgr.{c,h}`, `DEVICES.md`, `tools/devmgr_test.c`, `tools/devmgr_test.sh`,
 `tools/devmgr_qemu.py`. Consume unchanged: `pc64_pci.c`, `xhci.c`,
@@ -261,7 +261,7 @@ the `.uno_drivers` linker set. The URC `devices` verb is unoautomate's (landed).
 
 ## Changelog
 
-- **2026-07-24 — additive: `devmgr_add_platform()` (no API bump).** Platform
+- **2026-07-24, additive: `devmgr_add_platform()` (no API bump).** Platform
   devices (a logical block inside a PCI function) can now be registered as sticky
   `UNO_BUS_PLATFORM` nodes; the first user is the PCH TCO watchdog (`uno_hw_wdt`,
   HWWATCHDOG.md), which lists as `08/80 system tco-wdt` under the LPC function and
@@ -269,16 +269,16 @@ the `.uno_drivers` linker set. The URC `devices` verb is unoautomate's (landed).
   no struct/ABI change, existing PCI rows unchanged. Host gate `devmgr_test.c`
   covers creation, the inherited-location listing, re-scan stickiness, and
   no-duplicate re-registration.
-- **2026-07-23 — UNO_DEVMGR_API 1 (Phase 1 landed):** the registry is real.
+- **2026-07-23, UNO_DEVMGR_API 1 (Phase 1 landed):** the registry is real.
   `uno_device` gained `parent`, `hdr_type`, `sec_bus`, IRQ line/pin, capability
   offsets and `bar_flags[]`; `devmgr_enumerate()` returns the count; added
   `devmgr_find_class`, `devmgr_driver_name`, `devmgr_overflow`, `devmgr_detail_str`,
   `devmgr_info`, `devmgr_size_bars`. Two deliberate departures from the original
   design above, both now documented in place: enumeration is recursive **plus** a
   flat sweep (multi-root machines and unconfigured bridges), and **BAR sizing is
-  opt-in per device rather than part of a scan** — phase 1 runs while firmware still
+  opt-in per device rather than part of a scan**: phase 1 runs while firmware still
   drives the hardware, so a scan writes nothing at all. The listing gained the
   driver column (`UNCLAIMED` throughout phase 1; see §7 for exactly what that
   claims). §2, §3 and §7 are `[STABLE]`; §5 and §6 remain design.
-- **2026-07-23 — UNO_DEVMGR_API 0 (initial design):** subsystem claimed, contract
+- **2026-07-23, UNO_DEVMGR_API 0 (initial design):** subsystem claimed, contract
   written. No code yet; Phase 1 (`uno_devmgr` PCI enumerator + `uno.devices()`) next.

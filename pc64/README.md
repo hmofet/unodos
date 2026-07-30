@@ -1,7 +1,7 @@
-# UnoDOS / pc64 — modern PC (x86-64, UEFI)
+# UnoDOS / pc64, modern PC (x86-64, UEFI)
 
 The **first modern-PC world**: UnoDOS booting **bare-metal on any 64-bit UEFI
-PC** — essentially every x86 machine since ~2007, the hardware the 16-bit
+PC**: essentially every x86 machine since ~2007, the hardware the 16-bit
 real-mode reference kernel can never reach (no BIOS, no INT 13h/10h/15h,
 peripherals that only exist above the 1 MB line). The default UI is the
 cross-platform **unoui** widget toolkit as a full themed desktop shell; a
@@ -26,14 +26,14 @@ nothing native can reach), or when `DETACH.CFG` says not to. See
 
 ## Status
 
-**`./build.sh` boots straight into the unoui shell** — a themed widget desktop
+**`./build.sh` boots straight into the unoui shell**: a themed widget desktop
 that defaults to **Aurora**, a modern flat/rounded look (soft shadows, an accent
 title underline, a frosted taskbar), with 9 other live-switchable themes
-(Aurora Light/Dark + the 8 retro looks) — a splash screen, window manager,
+(Aurora Light/Dark + the 8 retro looks), a splash screen, window manager,
 retained-mode toolkit, taskbar, desktop icons, a scrollable programs menu and a
 system-tray clock. It carries the whole app roster: the native widget apps, the
 migrated creative tools + games, Runner3D, the Network self-test, and the web
-browser (which now loads pages over HTTP) — plus the net/TLS/3D drivers. The
+browser (which now loads pages over HTTP), plus the net/TLS/3D drivers. The
 default image is ~657 KB (most of it BearSSL + uno3d); the pure shell + toolkit
 is a small fraction of that. **Validated on a
 Lenovo ThinkPad X1 Carbon Gen 8** (USB-stick ESP boot): boots, TrackPoint +
@@ -49,11 +49,11 @@ port, so its boot stick and its keyboard and mice all arrive through a hub,
 which made it the harder version of the test and the one that found four
 successive USB bugs QEMU could not.
 
-Everything below the shell is verified headlessly by `harness.py` — QEMU is
+Everything below the shell is verified headlessly by `harness.py`: QEMU is
 natively scriptable (QMP `send-key` + `screendump`), so the *real* image boots
 the *real* firmware on every run; no ROM-free CPU-core harness needed.
 
-`./build.sh legacy` builds the **previous** shell — the `unodos.c` core + an
+`./build.sh legacy` builds the **previous** shell, the `unodos.c` core + an
 icon desktop + the 14 hand-drawn family apps + the drivers below (networking,
 TLS, 3D). It was the source for the app migration into unoui windows, which is
 now complete (the games, creative tools, Network and Runner3D all run in the
@@ -62,16 +62,16 @@ and all the drivers; only the UI layer differs.
 
 ## Layout: the platform, the two shells, the drivers
 
-- **Platform (both builds)** — `uefi.h` / `uefi_main.c` (handwritten minimal
+- **Platform (both builds)**: `uefi.h` / `uefi_main.c` (handwritten minimal
   UEFI surface, no gnu-efi/EDK2: GOP present, conin/pointer poll + smoothing, PC
-  speaker, fill-scaling, plus the UEFI **runtime services** it now uses — the
-  real-time clock `GetTime`/`SetTime`, `ResetSystem` for shut down / restart —
+  speaker, fill-scaling, plus the UEFI **runtime services** it now uses, the
+  real-time clock `GetTime`/`SetTime`, `ResetSystem` for shut down / restart -
   and the **Simple File System** protocol for FAT volumes), `fb.*` (software
   framebuffer), `pc64_libc.c` / `pc64_math.c` (freestanding libc + float math,
   own `include/*.h`, no host libc), `pc64_io.c` (RAM-disk File Manager +
   PC-speaker Sound Manager), `pc64_fs.c` (unified RAM + FAT namespace),
   `pc64_pci.c` (PCI config scan).
-- **Default shell (unoui)** — `pc64_uui.c` (desktop/taskbar/programs menu/tray) +
+- **Default shell (unoui)**: `pc64_uui.c` (desktop/taskbar/programs menu/tray) +
   the cross-platform `../unoui/` toolkit + 10 themes (Aurora Light/Dark +
   `theme_aurora.c`, plus 8 retro looks), with `pc64_uui_apps.c` (the
   `mac_compat` bridge for the creative tools + Network), `pc64_games.c` (native
@@ -79,11 +79,11 @@ and all the drivers; only the UI layer differs.
   `js.c` + `pc64_http.c` (the web browser, file system, JS engine and HTTP),
   `pc64_icons.c` (procedural icons) and `../unosound/unosound_seq.c` (audio).
   See "unoui shell" and "Web browser" below.
-- **Legacy shell** — `unodos.c` (WM + icon desktop + module dispatch) +
+- **Legacy shell**: `unodos.c` (WM + icon desktop + module dispatch) +
   `mac_compat.c` (Mac-Toolbox/QuickDraw shim) + `app_loader.c` +
   `pc64_modload.c` + `apps/*.c` (14 apps incl. `settings.c`, `network.c`,
   `runner.c`). Built only by `./build.sh legacy`.
-- **Drivers (linked by the build that needs them)** — `e1000.c` (native NIC),
+- **Drivers (linked by the build that needs them)**: `e1000.c` (native NIC),
   `net.c` (TCP/IP stack), `tls.c` + `bearssl/` (TLS), `../uno3d/*` (3D),
   `i2c_hid.c` (native trackpad, opt-in), and the USB stack: `xhci.c` (host
   controller, hubs), `usbmsc.c` (mass storage), `usbhid.c` (keyboard/mouse),
@@ -95,7 +95,7 @@ and all the drivers; only the UI layer differs.
 
 The e1000 driver finds the card by PCI scan (8086:100E/100F/10D3), turns on
 bus-mastering, reads the MAC from EEPROM, and drives 16-deep RX/TX legacy
-descriptor rings by MMIO — publishing the family's `uno_nic_t`
+descriptor rings by MMIO, publishing the family's `uno_nic_t`
 (`send`/`recv`/`link`). `net.c` sits on top: ARP with a small cache, IPv4
 with checksums, ICMP echo (both directions), UDP with a few bound ports, a
 DHCP client, and a minimal TCP (active open, one in-flight segment,
@@ -107,15 +107,15 @@ the whole stack headlessly against SLIRP: DHCP
 lease, ping the gateway, a **UDP** round-trip via SLIRP's built-in TFTP
 server (RRQ → DATA), and a **TCP** connect+echo to a `guestfwd` host `cat`.
 A packet-capture (`filter-dump`) pass confirmed the wire traffic during
-bring-up — which is how the LLP64 footgun below was caught.
+bring-up, which is how the LLP64 footgun below was caught.
 
-> **The bring-up bug worth remembering:** mingw is **LLP64** — `long` is
+> **The bring-up bug worth remembering:** mingw is **LLP64**: `long` is
 > **32-bit**. The descriptor struct used `unsigned long` for the 64-bit DMA
 > address, so each descriptor was 12 bytes not 16; the NIC read the ring
 > completely misaligned and transmitted multi-KB zero frames. Fixed by using
 > `unsigned long long` / `uintptr_t` for every DMA address. On real hardware
 > loaded above 4 GB the same truncation would have been fatal, not just
-> corrupting — the 32-bit cast is now gone everywhere.
+> corrupting, the 32-bit cast is now gone everywhere.
 
 ## Detaching from the firmware
 
@@ -180,7 +180,7 @@ which changes no ownership. Full contract in [USB.md](USB.md).
 
 It finds the controller by PCI class
 `0C/03` prog-if `30`, detaches the firmware's USB driver first
-(`gBS->DisconnectController` on the matching `EFI_PCI_IO` handle — essential,
+(`gBS->DisconnectController` on the matching `EFI_PCI_IO` handle, essential,
 or the firmware fights it), resets and runs it (CNR wait → HCRST → CONFIG →
 scratchpad → DCBAA → command ring → event ring/ERST on interrupter 0 → RUN),
 powers/resets the root ports, and enumerates each connected device:
@@ -199,32 +199,32 @@ Ethernet** (VID `0x0b95`). It reads registers via `AX_ACCESS_MAC` vendor
 control transfers, discovers the bulk endpoints from the config descriptor,
 resets the PHY/clocks, reads the MAC, sets gigabit/full-duplex, and moves
 frames over the bulk endpoints (8-byte TX header; RX aggregation trailer with
-per-packet descriptors). It publishes a `uno_nic_t`, so `pc64_net_up()` — and
-therefore the whole TCP/IP + TLS/HTTPS + browser stack — falls back to it when
+per-packet descriptors). It publishes a `uno_nic_t`, so `pc64_net_up()`: and
+therefore the whole TCP/IP + TLS/HTTPS + browser stack, falls back to it when
 no `e1000` is present.
 
 **Verified in QEMU** (`-device qemu-xhci,id=xhci -device usb-net,bus=xhci.0`):
 the controller inits and enumerates attached devices cleanly (the USB-net
 gadget reads `0525:a4a2`, a tablet `0627:0001`; both complete Address Device +
 GET_DESCRIPTOR). QEMU has no ASIX chip, so the AX88179 register init and the
-RX/TX framing are **metal-only** to verify — that is the job of the incoming
+RX/TX framing are **metal-only** to verify, that is the job of the incoming
 adapter. `usbtest.py` boots QEMU with a USB-net gadget on the xHCI bus, and
 `-DUNO_DBGCON` traces per-port `slot`/`addr_cc`/`desc_cc`/`residual`/VID:PID to
 the QEMU debug console. The System app also shows `USB xHCI: up, N port, M dev`
 plus a diagnostic line, and an `ASIX vid:pid` line when an adapter is found.
 
 > **On real Intel xHCI** the BIOS→OS ownership handoff (**USBLEGSUP**, an xHCI
-> extended capability) is **not yet implemented** — if QEMU enumerates but a
+> extended capability) is **not yet implemented**: if QEMU enumerates but a
 > physical machine does not, that is the likely cause.
 
-## unoui shell — the DEFAULT UI (`./build.sh`)
+## unoui shell, the DEFAULT UI (`./build.sh`)
 
 `pc64_uui.c` is the shell: it makes the cross-platform **unoui** widget
-toolkit the entire UnoDOS UI — a themed desktop + window manager +
+toolkit the entire UnoDOS UI, a themed desktop + window manager +
 retained-mode widgets (dropdowns, checkboxes, sliders, spinners, buttons,
 menubars, multi-line text areas, fields, lists, scrollbars, tabs), rendered
 into `fb` and scaled to the panel. It replaces the ad-hoc per-app drawing and
-key-combo reliance — **every control is reachable by pointer OR keyboard**
+key-combo reliance, **every control is reachable by pointer OR keyboard**
 (Tab focus, arrows, Enter), so it needs no mouse.
 
 - **Desktop furniture**: **right-click the desktop** for a **scrollable
@@ -239,26 +239,26 @@ key-combo reliance — **every control is reachable by pointer OR keyboard**
   **Ctrl-W** closes the focused window, **F2** / **Ctrl-Tab** cycles windows.
   Each window carries a **title-bar close box**, and dragging a window moves a
   light outline (no full-window redraw storm).
-- **The app roster**: six native widget apps — a **Control Panel** (live theme
+- **The app roster**: six native widget apps, a **Control Panel** (live theme
   dropdown → re-skins the desktop across all 10 themes; a **Dark mode** toggle
   that swaps Aurora Light↔Dark; live resolution dropdown; **date/time spinners**
   that set the UEFI clock; checkboxes/slider),
   an **Editor** (File/Edit menubar, multi-line editing, Save/Open/New wired to
   the RAM-disk File Manager), a **Files** list, a **System** panel, a **Clock**
   (analog face + world map with the day/night terminator) and a **Music**
-  player (WAV/MIDI from disk) — plus the migrated **creative tools** (Paint,
+  player (WAV/MIDI from disk), plus the migrated **creative tools** (Paint,
   Tracker), the native **games** (Dostris, Pacman, Outlast), **Runner3D**, the
   **Network** self-test, and the **web browser**. Windows are sized to the theme
   metrics so no widget overflows the frame.
 - **Startup**: a **splash screen** with a loading bar paints while the shell and
   drivers come up, then a short **startup chime** (UnoSound) plays as the
   desktop appears.
-- **Aurora — the modern default theme** (`themes/theme_aurora.c`, light + dark):
+- **Aurora, the modern default theme** (`themes/theme_aurora.c`, light + dark):
   a unique design language drawing from Windows 11 (rounded, mica-ish), macOS
   (clean surfaces, left close, translucency) and Material (tonal surfaces, one
-  strong accent). It's a **graphics theme** — a custom painter vtable built on
+  strong accent). It's a **graphics theme**: a custom painter vtable built on
   new `fb` primitives (alpha blend, vertical gradient, anti-aliased rounded
-  rects — all additive and clip-safe, so the retro themes are byte-identical):
+  rects, all additive and clip-safe, so the retro themes are byte-identical):
   soft drop shadows, AA-rounded windows, flat widgets, an **accent underline
   beneath the active title bar** (the signature), a subtle aurora-gradient
   desktop, and a **frosted rounded taskbar** with an accent Start pill. The
@@ -266,7 +266,7 @@ key-combo reliance — **every control is reachable by pointer OR keyboard**
   (`shots/aurora_light.png`, `shots/aurora_dark.png`).
 - **TrueType text** (`pc64_font.c` + vendored `stb_truetype.h`): an optional
   font engine that registers an `fb` text provider (`fb_set_font`), so picking a
-  TTF re-skins **all** UI text — titles, labels, buttons, lists —
+  TTF re-skins **all** UI text, titles, labels, buttons, lists -
   proportionally and anti-aliased, with **subpixel (LCD) AA**. Three open faces
   (DejaVu Sans / Sans Mono, Ubuntu) ship on the ESP and load on demand from the
   FAT volume. The Control Panel has a system-wide **Font** picker; the Editor
@@ -278,15 +278,15 @@ key-combo reliance — **every control is reachable by pointer OR keyboard**
 - **Resizable windows** (`UI_WIN_RESIZE`): a bottom-right grip live-resizes a
   window (clamped to per-window `min_w/min_h`); widgets flagged `UI_WF_FILL`
   stretch to the content rect on resize (`unoui_reflow_window`), so canvas apps
-  **reflow dynamically** — the browser re-wraps its text to the new width, the
+  **reflow dynamically**: the browser re-wraps its text to the new width, the
   games rescale, Paint/Tracker/Music get a bigger drawable area
   (`shots/resize_grip.png`).
 - **Calendar date-picker**: `unoui_calendar_draw` / `_hit` (+ `days_in_month`,
   `day_of_week`) are a reusable date-picker core in the toolkit; the Control
-  Panel's **Pick date...** button opens a month-grid popup over them — chevrons
+  Panel's **Pick date...** button opens a month-grid popup over them, chevrons
   page months, clicking a day sets the clock (`shots/calendar.png`).
 - **Canvas + fullscreen** (toolkit features, benefit every port): `UI_CANVAS`
-  is an app-drawn widget — the toolkit does the chrome/focus/drag, the app
+  is an app-drawn widget, the toolkit does the chrome/focus/drag, the app
   owns the pixels inside the rect (games / paint / tracker / browser), with a
   `draw` and an `event` callback. `unoui_fullscreen(ui, win)` makes a window's
   canvas fill the whole screen with no chrome and routes all input to it (Esc
@@ -299,7 +299,7 @@ key-combo reliance — **every control is reachable by pointer OR keyboard**
 - **Clip-to-window**: `fb` grew a clip window (`fb_set_clip`/`fb_reset_clip`);
   the renderer confines each window's widgets (and a canvas's own drawing) to
   its content rect, so an over-sized widget or a too-long label is cut at the
-  frame instead of bleeding onto the desktop — overflow is impossible by
+  frame instead of bleeding onto the desktop, overflow is impossible by
   construction, not by per-window hand-tuning. Chrome (frame/titlebar/shadow)
   draws unclipped since those painters are authored not to overflow.
 - The only pc64-specific code is a ~40-line event adapter (UEFI input →
@@ -311,7 +311,7 @@ key-combo reliance — **every control is reachable by pointer OR keyboard**
 The app migration is **complete**: every family app runs in the default shell.
 The creative tools and Network are custom-render canvases (`pc64_uui_apps.c`
 bridges them to a `mac_compat` Toolbox over `fb`); the **games are a native
-rewrite** (`pc64_games.c`) — Dostris/Pacman/Outlast draw into whatever rect
+rewrite** (`pc64_games.c`), Dostris/Pacman/Outlast draw into whatever rect
 they're handed, so the *same* canvas fills a window or the full screen with no
 letterboxing, and Runner3D drives `uno3d` directly. **All audio is unified on
 UnoSound** (`unosound_seq.c`, a single-voice PC-speaker sequencer): the games,
@@ -320,7 +320,7 @@ mixer path instead of per-app speaker banging. With the migration done,
 `./build.sh legacy` (and its source) is now only kept as reference and could be
 deleted. High-spec ports (PS2, Dreamcast, the ARM/PPC boards) can adopt the same
 unoui shell; only the tiny targets (NES 2 KB, Game Boy 8 KB, C64) keep the
-minimal legacy path — the toolkit won't fit.
+minimal legacy path, the toolkit won't fit.
 
 ## Web browser + file system (`pc64_browser.c`, `pc64_fs.c`, `js.c`)
 
@@ -331,32 +331,32 @@ interpreter (`js.c`) executes each `<script>` block, splicing its
 `document.write` output into the page and collecting `console.log` into a
 "console" panel at the foot of the document.
 
-- **js.c** — arena-allocated (no `malloc`), freestanding (only `string.h` from
+- **js.c**: arena-allocated (no `malloc`), freestanding (only `string.h` from
   `pc64_libc`; `Math.sqrt` is Newton's method, `Math.random` an xorshift). A
   lexer + recursive-descent parser to an AST + tree-walking evaluator: numbers/
   strings/booleans, `var`, arithmetic/logical/comparison/`+=`/`++`, `if`/`for`/
   `while`/ternary, functions + recursion, arrays (`.length`/`.push`),
   `console.log`, `document.write`, `Math.*`, `String`/`Number`/`parseInt`. ⚠
   Function calls **mark/release** the arena on return (copying out simple return
-  values), so deep recursion is O(depth) not O(calls) — `fib(24)` (46 k calls)
+  values), so deep recursion is O(depth) not O(calls), `fib(24)` (46 k calls)
   runs in the 512 KB arena. It has a `-DJS_TEST` host harness for native
   testing before it ever touches the EFI image.
-- **File system** (`pc64_fs.c`) — a unified read-only namespace. Volume 0 is the
+- **File system** (`pc64_fs.c`), a unified read-only namespace. Volume 0 is the
   RAM disk (`uno_ramfs_*`); volumes 1.. are the FAT / FAT32 / local disks the
   firmware mounted, reached through the UEFI **Simple File System** protocol
   (the same firmware-as-BIOS approach used for GOP and the pointer). The browser
   lists RAM files and ESP/FAT files side by side; Enter opens, Backspace
   returns, arrows/PgUp/PgDn scroll.
-- **Network** (`pc64_http.c`) — the browser loads pages over the wire, not just
+- **Network** (`pc64_http.c`), the browser loads pages over the wire, not just
   from disk. An **address bar** (Up from the file list focuses it) takes a
   `http://host[:port]/path` URL; `pc64_http_get` brings the link up on demand
   (`pc64_net_up`: e1000 + DHCP, shared with the Network app), resolves the host
   by **DNS** (`net_dns_query`, UDP/53; DHCP now learns the resolver + gateway
-  from options 6/3), TCP-connects, sends a HTTP/1.0 GET and renders the reply —
+  from options 6/3), TCP-connects, sends a HTTP/1.0 GET and renders the reply -
   including any `<script>`.
-- **HTTPS** (`tls.c` + `tls_ca.c`) — `https://` URLs go over **CA-validated TLS
+- **HTTPS** (`tls.c` + `tls_ca.c`), `https://` URLs go over **CA-validated TLS
   1.2**: `tls_connect_ca` keeps BearSSL's `br_x509_minimal` engine with a
-  bundled root store (14 common CAs — ISRG/Let's Encrypt, DigiCert, GlobalSign,
+  bundled root store (14 common CAs, ISRG/Let's Encrypt, DigiCert, GlobalSign,
   USERTrust, Amazon, Google GTS, …, generated by `mktrust.py`) and sets the
   validation clock from the **UEFI RTC** (so certificate validity windows are
   checked). BearSSL is TLS 1.2 (no 1.3), which nearly all sites still accept;
@@ -367,38 +367,38 @@ table + a sum/`sqrt` line via `document.write`, `console.log` in the console
 panel); an `http://…` page fetched via SLIRP renders with its JavaScript running
 (`shots/browser_network.png`); and an `https://…` page completes a **full TLS 1.2
 handshake + chain validation + RTC validity check** and renders (verified with a
-guestfwd TLS server whose cert chains to a test root injected into the bundle —
+guestfwd TLS server whose cert chains to a test root injected into the bundle -
 `shots/browser_https.png`). The X1 has no wired NIC, so on metal the browser
 rides a **USB Ethernet adapter** over the xHCI stack below (`ax88179.c` →
 `uno_nic_t`, tried after e1000 by `pc64_net_up`); Wi-Fi is the remaining gap.
 
-## Native I2C-HID trackpad (foundation — needs hardware bring-up)
+## Native I2C-HID trackpad (foundation, needs hardware bring-up)
 
 Modern laptop trackpads (2015+, incl. the X1 Carbon Gen 8) are **I2C-HID**
 devices behind an Intel LPSS DesignWare I2C controller, described in ACPI. A
 native driver replaces the firmware's (jerky) Absolute Pointer with direct
-control. `i2c_hid.c` has the two reusable, spec-defined layers — the
+control. `i2c_hid.c` has the two reusable, spec-defined layers, the
 **DesignWare I2C master** and **HID-over-I2C** (descriptor / SET_POWER / RESET
-/ input-report read) — plus a first-pass report parser and a raw-dump hook.
+/ input-report read), plus a first-pass report parser and a raw-dump hook.
 
 **Honest status**: this is *unverifiable in QEMU* (no emulated I2C touchpad),
-so it is **gated behind `-DUNO_I2C_TRACKPAD` and OFF by default** — the shipped
+so it is **gated behind `-DUNO_I2C_TRACKPAD` and OFF by default**: the shipped
 build is byte-for-byte unaffected (it compiles to inert stubs; `present()`
 returns 0 and the firmware-pointer path is used). Bring-up needs two device
 facts that normally come from ACPI/AML (not parsed yet):
 
 1. From Linux on the same machine: the **LPSS I2C controller** (auto-found if
    PCI-visible; else set `I2C_HID_BASE` from `dmesg | grep i2c_designware`),
-   the **slave address** (`i2cdetect` — Synaptics ~0x2c, Elan ~0x15/0x2a), and
+   the **slave address** (`i2cdetect`: Synaptics ~0x2c, Elan ~0x15/0x2a), and
    the **HID descriptor register** (almost always 0x0020).
 2. Build `UNO_EXTRA='-DUNO_I2C_TRACKPAD -DI2C_HID_ADDR=0x2c ...' ./build.sh`,
-   boot, and capture real report bytes via `uno_i2c_hid_dump()` — the report
+   boot, and capture real report bytes via `uno_i2c_hid_dump()`: the report
    layout is device-specific (defined by the HID report descriptor), so the
    parser gets refined from those bytes.
 
 The firmware-pointer path was also fixed independently (latched buttons so
 held clicks register; only the first pointer instance drives the cursor so a
-touchpad and TrackPoint don't fight) and **smoothed** — a 2-pole low-pass over
+touchpad and TrackPoint don't fight) and **smoothed**: a 2-pole low-pass over
 the raw deltas plus a small dead-zone and axis snap, so it tracks cleanly on
 most pads with no per-device tuning. That alone may resolve the jerky-pad /
 dead-button symptoms on machines where the firmware exposes the pad; the native
@@ -407,8 +407,8 @@ I2C-HID driver above is the eventual replacement for hardware that needs it.
 ## TLS (BearSSL)
 
 TLS is **BearSSL** (`bearssl/`), chosen for security over convenience: it is
-constant-time by design, a small audited single-author codebase, and — decisive
-for us — freestanding with **no dynamic allocation and no OS dependencies**, so
+constant-time by design, a small audited single-author codebase, and, decisive
+for us, freestanding with **no dynamic allocation and no OS dependencies**, so
 it drops into the `-ffreestanding -nostdlib` build where mbedTLS/OpenSSL would
 not. We roll **none** of our own crypto.
 
@@ -418,45 +418,45 @@ not. We roll **none** of our own crypto.
   portable equivalents are built). ~286 BearSSL sources compile unmodified
   with the same mingw flags as the rest of the port.
 - **Trust = pinned key** (`br_x509_knownkey`): the client pins the server's
-  P-256 public key, so no CA store and **no system clock** are needed — a
+  P-256 public key, so no CA store and **no system clock** are needed, a
   strong, simple model for a fixed endpoint, and a clean fit for a machine
   with no RTC wired yet.
 - **Entropy**: `tls.c` seeds BearSSL's PRNG from **RDRAND** when the CPU
   advertises it (CPUID leaf 1, ECX bit 30), else a documented TSC-mix
-  fallback (demo-grade — a real deployment wires a proper source here).
+  fallback (demo-grade, a real deployment wires a proper source here).
 - **Transport**: `tls.c` drives the BearSSL record engine (`br_sslio`) over
   `net_tcp_send/recv`, fragmenting to the stack's one-segment-in-flight TCP.
 - **Verified**: `nettest.py` runs a per-connection TLS echo server on the
   host (reachable via SLIRP `guestfwd`), and the Network app completes a full
   **TLS 1.2** handshake negotiating **ECDHE-ECDSA-AES128-GCM-SHA256**,
-  validates the pinned key, and round-trips encrypted application data — with
+  validates the pinned key, and round-trips encrypted application data, with
   `-cpu max` exposing RDRAND. (`no-TLS-1.3` only because the test pins TLS
   1.2 to match a fixed suite; BearSSL itself supports 1.2.)
 
 `tls_test/` holds the throwaway EC key/cert and the stdio-TLS test server;
 regenerate with `gen.sh` and re-pin `PINNED_EC_Q` in `tls.c`.
 
-## 3D — uno3d ported (software rasteriser; Intel backend scaffolded)
+## 3D, uno3d ported (software rasteriser; Intel backend scaffolded)
 
 uno3d's portable pipeline (`uno3d.c`) + software rasteriser (`uno3d_soft.c`)
 now build freestanding on pc64 (the z-buffer is sized to the runtime fb
 ceiling; the math comes from `pc64_math.c`). The **write-once** UnoDOS Runner
-game runs full-screen at the current desktop resolution — the *same*
+game runs full-screen at the current desktop resolution, the *same*
 `uno3d_game.c` the PS2 (GS) and Dreamcast (PVR) ports run, proving the
 backend abstraction across two real-3D consoles and now bare-metal x86-64.
 
 `uno3d_intel.c` is the **Intel-iGPU backend scaffold**: `u3d_backend_intel`
 probes PCI for an Intel display device (8086, class 0x03) and today delegates
-every draw to the software rasteriser (identical output, CPU-timed) — so
+every draw to the software rasteriser (identical output, CPU-timed), so
 selecting "intel" always renders correctly. A real hardware path (Gen command
 streamer: GTT/GEM buffers, a 3DPRIMITIVE batch, depth target, a display-engine
 flip) is the same *native driver tail* as xHCI/NVMe; when it lands, only the
-four backend hooks change — no app or pipeline edits. This is deliberately
+four backend hooks change, no app or pipeline edits. This is deliberately
 honest: the vtable is the contract, the hardware path swaps in behind it.
 
 ## Toolchain & build
 
-UEFI applications are PE32+ images in the MS x64 calling convention — the
+UEFI applications are PE32+ images in the MS x64 calling convention, the
 mingw cross compiler's native output, so the whole port builds with stock
 Ubuntu packages, no EDK2:
 
@@ -486,17 +486,16 @@ disabled. Validated on the X1 Carbon Gen 8; any 64-bit UEFI PC is in scope.
 
 - **⚠ Full resolution support without SetMode, FILL-scaled**: laptop eDP
   panels accept a 640×480 SetMode at the API level and then stop scanning out
-  (black panel — the X1 Carbon did exactly this). So the GOP mode is KEPT and
+  (black panel, the X1 Carbon did exactly this). So the GOP mode is KEPT and
   the desktop resolution changes instead: the **Settings app** offers the
   standard desktop-OS list, the framebuffer is runtime-sized (`uno_fb_w/h`,
-  ceiling 1920×1200), and present **fractionally scales it to FILL the panel**
-  — nearest-neighbour, aspect preserved, centred (16.16 fixed-point source
+  ceiling 1920×1200), and present **fractionally scales it to FILL the panel**: nearest-neighbour, aspect preserved, centred (16.16 fixed-point source
   maps, `gColMap`/`gRowMap`). So a *low* resolution fills the screen as a big
   chunky UI instead of sitting in a small letterboxed box. The core re-reads
   its screen rect via `uno_screen_changed()` and repaints, rescuing stranded
   windows. Boot default is ~half the panel (fills exactly at 2×). **F10**
   cycles GOP modes for external monitors. `uno_pc64_lowres()` drops the fb to
-  ~¼ the panel for full-screen 3D (Runner), then the same scaler upscales it —
+  ~¼ the panel for full-screen 3D (Runner), then the same scaler upscales it -
   ~16× fewer pixels for the software rasteriser, the difference between a
   slideshow and a playable game.
 - **⚠ QEMU's USB models are not evidence**: three consecutive USB fixes went
@@ -520,13 +519,13 @@ disabled. Validated on the X1 Carbon Gen 8; any 64-bit UEFI PC is in scope.
   the current build's frame layout produced. This is why `usbmsc` worked in one
   build and hung in another with identical logic. Static and aligned, always.
 - **⚠ No legacy-port debug I/O on metal**: QEMU-debugcon writes (port
-  0x402) hung the X1 Carbon — legacy-port I/O can be SMM-trapped and vendor
+  0x402) hung the X1 Carbon, legacy-port I/O can be SMM-trapped and vendor
   SMI handlers mishandle unclaimed ports. Compiled out unless `-DUNO_DBGCON`.
 - **⚠ Budgeted input drains**: firmware exists whose `ReadKeyStrokeEx`
   returns SUCCESS forever with phantom keystroke data; drain-until-NOT_READY
   is a hang. All drains are capped per frame.
 - **Bring-up markers**: two stripe rows paint at the top of the screen as
-  init and the first frame progress — the pc64 equivalent of the x86 boot
+  init and the first frame progress, the pc64 equivalent of the x86 boot
   chain's diagnostic letters. Row 1 red/green/cyan/white = platform init;
   row 2 gray/yellow/magenta/orange = core init + first polls; the gray
   segment turns light blue when the first frame presents.
@@ -536,18 +535,18 @@ disabled. Validated on the X1 Carbon Gen 8; any 64-bit UEFI PC is in scope.
 - **Keyboard**: `SimpleTextInputEx` on the ConIn handle when present (gives
   Ctrl/Shift state; Ctrl carries the Mac `cmdKey`, and Ctrl+letter control
   codes are normalized back to letters), plain `ReadKeyStroke` fallback.
-- **Watchdog**: `SetWatchdogTimer(0,...)` first thing — UEFI otherwise
+- **Watchdog**: `SetWatchdogTimer(0,...)` first thing, UEFI otherwise
   resets the machine ~5 minutes into any app that hasn't exited.
 - **⚠ Mouse (TrackPoint-validated on the X1)**: every Simple/Absolute
   Pointer *device* instance is polled, after a BDS-style `ConnectController`
-  sweep — but the ConIn splitter aggregate is a fallback ONLY: it re-reports
+  sweep, but the ConIn splitter aggregate is a fallback ONLY: it re-reports
   the same devices, and polling both applied every movement twice (the
   "jerky TrackPoint"). Relative motion uses sub-count accumulators (a plain
   delta/Resolution divide rounds slow motion to zero). Note QEMU can't
   exercise this leg: Ubuntu's OVMF ships no pointer driver.
 - **⚠ Dirty-row present**: rows are diffed against a shadow buffer and only
   changed rows hit VRAM. Full-screen uncached-VRAM rewrites made the first
-  metal build's frame loop — and with it the input poll rate — crawl; an
+  metal build's frame loop, and with it the input poll rate, crawl; an
   idle desktop now presents nearly for free, which is most of what makes
   the pointer feel smooth.
 - **RAM disk + RAM FAT12**: `pc64_io.c` serves the File Manager from memory
@@ -558,13 +557,13 @@ disabled. Validated on the X1 Carbon Gen 8; any 64-bit UEFI PC is in scope.
 - **Unified file system** (`pc64_fs.c`): a single read-only namespace over the
   RAM disk (volume 0) **and** the firmware-mounted FAT / FAT32 / local disks
   (volumes 1..), the latter reached through the UEFI **Simple File System**
-  protocol — so the browser and Files can already *read* real on-disk files
+  protocol, so the browser and Files can already *read* real on-disk files
   (e.g. the ESP) with no native block driver. Write/persistence still waits on
   the NVMe/AHCI tail below.
 
 ## The driver tail (where unobus/unonet meet real PC hardware)
 
-1. **e1000** (`nic`) — ✅ **done**: `unonet`'s first real PC link + a
+1. **e1000** (`nic`), ✅ **done**: `unonet`'s first real PC link + a
    from-scratch TCP/IP stack (see Networking above). virtio-net is the next
    easy addition; a `HEADLESS+NET` build of this world is the family's
    server story.
@@ -582,7 +581,7 @@ disabled. Validated on the X1 Carbon Gen 8; any 64-bit UEFI PC is in scope.
    persistence landed, and apps are storage-loaded `.UNO` modules exactly as on
    PS2/DC. USB mass storage (`usbmsc.c`) joined them so a USB-booted machine
    keeps its boot volume after detaching.
-5. **Intel iGPU 3D** (`uno3d_intel.c`) — the Gen command-streamer path behind
+5. **Intel iGPU 3D** (`uno3d_intel.c`), the Gen command-streamer path behind
    the already-wired `u3d_backend_intel` vtable (see 3D above).
 6. **Intel HDA** (`audio`) ✅ **done**: `hdaudio.c` with an `ac97.c` fallback
    under `snd_pcm.c`, probed in that order. Metal codec coverage is the

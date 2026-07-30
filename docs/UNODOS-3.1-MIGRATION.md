@@ -1,4 +1,4 @@
-# UnoDOS 3.1 — migration status & handoff
+# UnoDOS 3.1, migration status & handoff
 
 **Two lines, one history.** UnoDOS has forked into a stable legacy line and a
 forward contract-driven line. This document is the handoff for resuming the
@@ -36,7 +36,7 @@ unodef/                 the Contract (Layer 0) + tooling
                         profile manifest + 3.1 ordinal map; `--check` = trust anchor
   wmgen.py              GREENFIELD window model: derives a per-platform physical
                         window layout (SoA/AoS, widths, accessors) from the logical
-                        [wmodel] — the 3.1 window ABI engine. -> gen/wm/<platform>/
+                        [wmodel], the 3.1 window ABI engine. -> gen/wm/<platform>/
   WMODEL.md             the window-model RFC + verification + 40-yr arch survey
   conformance/          PORT-SPEC §6 made executable (52/52, with bug-discrimination)
   gen/                  GENERATED per-world surfaces (do not edit); gen/wm/ = windows
@@ -57,13 +57,13 @@ Wired into shipped code (sourcing constants from the Contract, byte-identical):
 (All seven reachable-toolchain asm ports now, across three dialects: vasm 68K =
 amiga/genesis/macplus, ca65 65816 = snes/iigs, dasm 6502 = c64/apple2. IIGS also
 single-sources its divergent FAT12 geometry + 16-byte directory entry. The 6502
-ports are `single_app` — no window-entry struct / event queue by design — so they
+ports are `single_app`: no window-entry struct / event queue by design, so they
 source only the genuine overlap, the cell screen geometry; their no-WM shape is
 Contract-declared via `[port.c64]`/`[port.apple2]` + conformance-checked.)
 
 ### New ports built FRESH on the 3.1 architecture
 Two ports were then built from scratch on the contract-driven + greenfield-window
-architecture (not migrated from legacy) — the proof that a new target costs a
+architecture (not migrated from legacy), the proof that a new target costs a
 small, generated surface:
 
 ```
@@ -101,21 +101,21 @@ ppcmac/ PowerPC Mac (32-bit PowerPC, GNU as)  -- FIRST PowerPC (big-endian) worl
   (Tetris), and **SN76489 PSG** audio. Verified in BlastEm via AUTOTEST scripted-pad
   builds (`sms/build/{desktop,wm,dostris,music}.png`).
 - **NES** is the Contract's **`minimal` profile** flagship (2 KB RAM, no WM,
-  directional nav — the other end of the profile spectrum). It consumes `gen/6502/`
+  directional nav, the other end of the profile spectrum). It consumes `gen/6502/`
   + `[world.nes]` (256×240 PPU), reusing the dasm toolchain. **M1** launcher
   (inverted title bar + 11 icons in CHR-ROM); **M2** the standard pad on `$4016` +
   a vblank-NMI loop + a directional selection highlight (A launches full-screen, B
-  returns — the §8 pointer-less model, *not* a WM); **M3** full-screen apps
+  returns, the §8 pointer-less model, *not* a WM); **M3** full-screen apps
   (SysInfo, live Clock, Notepad, Files, Theme-cycles-palette, Music on the 2A03 APU)
   + a from-scratch **Dostris** (the SMS falling-blocks algorithm ported to 6502). A
   PPU-free NMI + main-loop vblank partials keep updates flicker-free. Verified in
   Mesen2 (`nes/build/{desktop,nav,app,clock,dostris,theme,music}.png`) **and validated
-  on a real AV Famicom** (HVC-101) — the 2A03 APU audio and the `$4016` controller both
+  on a real AV Famicom** (HVC-101), the 2A03 APU audio and the `$4016` controller both
   work on hardware. This is the **first fresh-3.1 port to run on physical silicon**.
-- **Game Boy / Color** is the **first Sharp-SM83 (`gbz80`) world** — a genuinely new
+- **Game Boy / Color** is the **first Sharp-SM83 (`gbz80`) world**: a genuinely new
   unogen dialect (rgbds, `DEF NAME EQU value`), consuming `gen/gbz80/` + `[world.gb]`.
   Also `minimal` profile (8 KB RAM, no WM), but the launcher is a **vertical list**
-  with 8×8 mini-icons (the 160×144 LCD suits a list, not a grid — the same Contract,
+  with 8×8 mini-icons (the 160×144 LCD suits a list, not a grid, the same Contract,
   a port-chosen layout). M1 launcher; M2 the joypad on `$FF00` + a vblank-interrupt
   loop + an Up/Down selection highlight (A launches full-screen, B returns); M3 apps
   (SysInfo, live Clock, Notepad, Files, Theme-cycles-BG-palette, Music on the GB APU)
@@ -124,16 +124,16 @@ ppcmac/ PowerPC Mac (32-bit PowerPC, GNU as)  -- FIRST PowerPC (big-endian) worl
   (`gb/build/{desktop,nav,app,clock,dostris,theme,music}.png`).
 - **Game Gear** is a study in *reuse*: SMS silicon (the same Z80 + 315-5124 VDP), so
   it consumes the same `gen/z80/` world and reuses the SMS hardware bring-up, 4bpp
-  tiles, SN76489 PSG, and Dostris — but its LCD shows only the centre 160×144 = 20×18,
+  tiles, SN76489 PSG, and Dostris, but its LCD shows only the centre 160×144 = 20×18,
   exactly the Game Boy's panel, so it wears the **GB's `minimal` layout** (a vertical
   mini-icon list, drawn at a (6,3) offset). SMS hardware, Game-Boy-sized screen. The
-  one hardware delta vs. the SMS is 12-bit CRAM colour. M1–M3 + Dostris (full colour)
+  one hardware delta vs. the SMS is 12-bit CRAM colour. M1-M3 + Dostris (full colour)
   + PSG, Mesen2/GG-verified (`gg/build/{desktop,nav,app,clock,dostris,theme,music}.png`).
 
-- **Game Boy Advance** is the **first ARM world** — a genuinely new unogen dialect
+- **Game Boy Advance** is the **first ARM world**: a genuinely new unogen dialect
   (`arm`/GNU as, `.equ NAME, val`), consuming `[world.gba]`. The GBA hardware exceeds
   the minimal profile, but this is a `minimal` UnoDOS instance drawn into a flat
-  **Mode-3 framebuffer** (240×160, 16bpp) with no hardware tiles — an 8×8 font + 16×16
+  **Mode-3 framebuffer** (240×160, 16bpp) with no hardware tiles, an 8×8 font + 16×16
   icons plotted pixel-by-pixel, each pixel's palette index in a 16-entry IWRAM table
   (Theme swaps the table). M1 launcher (4-col icon grid); M2 `REG_KEYINPUT` + a
   VCOUNT-polled loop + a d-pad highlight; M3 apps + Dostris on the square channel.
@@ -146,8 +146,8 @@ ppcmac/ PowerPC Mac (32-bit PowerPC, GNU as)  -- FIRST PowerPC (big-endian) worl
   M3 apps (live Clock, Theme-cycles-`$900F`-bg, Music on the VIC oscillator) + Dostris in
   colour. Verified on a **py65** ROM-free 6502 core
   (`vic20/build/{desktop,nav,app,clock,dostris,theme,music}.png`).
-- **WonderSwan** is the **first x86 handheld**: its NEC V30MZ is an 80186-class CPU — the
-  same family as the reference kernel — so it is built with **nasm** (16-bit real mode)
+- **WonderSwan** is the **first x86 handheld**: its NEC V30MZ is an 80186-class CPU, the
+  same family as the reference kernel, so it is built with **nasm** (16-bit real mode)
   and consumes the Contract's x86 surface + `[world.ws]`. A `minimal` **hardware-tile**
   launcher: 8×8 2bpp planar tiles in the 16 KB internal RAM (`0x2000`) + a 32×32 SCR1
   tilemap (`0x0800`), 224×144 mono LCD; tile colour resolves per-tile-palette → mono
@@ -168,7 +168,7 @@ ppcmac/ PowerPC Mac (32-bit PowerPC, GNU as)  -- FIRST PowerPC (big-endian) worl
   PCE through a GPU surface a GDI grab reads as black, so it is verified on a **ROM-free
   HuC6280 harness** (py65 65C02 + the TAM/CSH opcodes + the MMU + a VDC/VCE model)
   (`pce/build/{desktop,nav,app,clock,theme,music,dostris}.png`).
-- **Raspberry Pi** is the **first AArch64 (64-bit) world** — the same `aarch64`/GNU-as
+- **Raspberry Pi** is the **first AArch64 (64-bit) world**: the same `aarch64`/GNU-as
   (GAS) dialect, but a genuinely new register width over the GBA's 32-bit ARM7TDMI (no
   conditional execution → `csel`, `stp`/`ldp` frames, 64-bit FB pointers), consuming
   `[world.rpi]`. `minimal`: there is no fixed framebuffer, so at boot the kernel asks the
@@ -180,7 +180,7 @@ ppcmac/ PowerPC Mac (32-bit PowerPC, GNU as)  -- FIRST PowerPC (big-endian) worl
   Dostris. A real Pi renders to an HDMI surface no headless grab can read, so it is verified
   on a **Unicorn AArch64** core that emulates the mailbox + system-timer MMIO and renders the
   firmware-allocated framebuffer (`rpi/shots/{m1_boot,m2_nav,m3_sysinfo,m3_clock,m3_theme,m3_music,m3_dostris}.png`).
-- **PinePhone** is the **second AArch64 world** — it reuses the Pi's AArch64 core (same GAS
+- **PinePhone** is the **second AArch64 world**: it reuses the Pi's AArch64 core (same GAS
   dialect, primitives, Dostris + app logic), retargeted to the **Allwinner A64** SoC and a
   **portrait** 480×640 panel, consuming `[world.pinephone]`. The A64 has no GPU mailbox, so
   (assuming the SPL/U-Boot stage brought up DRAM + the TCON0/MIPI-DSI panel clocks, as the Pi
@@ -190,11 +190,11 @@ ppcmac/ PowerPC Mac (32-bit PowerPC, GNU as)  -- FIRST PowerPC (big-endian) worl
   UI) + Dostris. Verified on a **Unicorn AArch64** core (DRAM + a DE2 RAM sink; the generic
   timer advances on its own) rendering the DE2 framebuffer
   (`pinephone/shots/{m1_boot,m2_nav,m3_sysinfo,m3_clock,m3_theme,m3_music,m3_dostris}.png`).
-- **PowerPC Mac** is the **first PowerPC (big-endian) world** — a brand-new ISA needing
+- **PowerPC Mac** is the **first PowerPC (big-endian) world**: a brand-new ISA needing
   a new `ppc`/GNU-as dialect (`#` line comments) and a from-scratch harness, consuming
   `[world.ppcmac]`. It is also the first port to boot over **Open Firmware** (no Mac OS):
   OF enters `_start` with the IEEE-1275 client-interface entry in r5, and the kernel makes
-  OF client calls — `finddevice "screen"`, then `getprop "address"` + `"linebytes"` — to
+  OF client calls, `finddevice "screen"`, then `getprop "address"` + `"linebytes"`: to
   obtain a 640×480 32bpp linear framebuffer, then draws into it directly (big-endian, so a
   `stw` of `0xFFRRGGBB` lands as `FF RR GG BB`). M1 launcher; M2 d-pad highlight; M3 apps
   (live Clock, Theme, Music UI) + Dostris. Verified on a **Unicorn PPC32 big-endian** core
@@ -206,7 +206,7 @@ ppcmac/ PowerPC Mac (32-bit PowerPC, GNU as)  -- FIRST PowerPC (big-endian) worl
 
 Together they exercise the full span of `unogen`'s reach: a **window-profile** Z80 port,
 **minimal-profile** ports on 6502, SM83, Z80, **ARM** (a new dialect), **x86**, and the
-**HuC6280** — four of them (GBA, VIC-20, WonderSwan, PC Engine) verified on a **ROM-free
+**HuC6280**: four of them (GBA, VIC-20, WonderSwan, PC Engine) verified on a **ROM-free
 instruction-level harness** (Unicorn ARM / py65 / Unicorn x86 / py65+HuC6280) running the
 real ROM, the pattern for any target whose emulator can't be captured headlessly under RDP.
 
@@ -219,7 +219,7 @@ python unodef/conformance/conformance.py   # 43/43 PORT-SPEC §6 vectors
 nasm  → kernel.bin, boot.bin, stage2.bin   (x86, three sites)
 vasm  → amiga + genesis + macplus kernels  (68K, three ports)
 ca65+ld65 → snes .sfc + iigs .po           (65816, two ports)
-dasm  → c64 .prg/.d64 + apple2 .dsk        (6502, two ports — single_app)
+dasm  → c64 .prg/.d64 + apple2 .dsk        (6502, two ports, single_app)
 # host C subsystems:
 sh unofs/build.sh ; sh uno2d/build.sh ; sh unosound/build.sh
 sh unobus/build.sh ; sh unonet/build.sh ; sh unosched/build.sh   # TSan needs `setarch -R`
@@ -238,19 +238,19 @@ vasm, ca65) + the C header (`_Static_assert`s).
 - **Host core + hardware/SDK-blocked tail (4):** 5 hybrid policy (needs vbcc/WinUAE)
   · 8 display/profiles (now also *emulator-proven*: the SMS windowed desktop +
   the NES `minimal` directional-nav launcher + apps, see below) · 10 SMP/OFFLOAD pilots (Saturn/PS3) · 11
-  drivers/buses (PCI/USB) · 13 new targets + networking — **four fresh ports landed**
-  (SMS Z80, NES 6502, Game Boy SM83, Game Gear Z80 — all M1–M3 + game + audio), console
+  drivers/buses (PCI/USB) · 13 new targets + networking, **four fresh ports landed**
+  (SMS Z80, NES 6502, Game Boy SM83, Game Gear Z80, all M1-M3 + game + audio), console
   SDK backends still blocked.
-- **Phase 12 (ship 3.1 ABI): PILOTED + SHIPPED on x86** — the greenfield window
+- **Phase 12 (ship 3.1 ABI): PILOTED + SHIPPED on x86**: the greenfield window
   model + the clean 16 B `win_entry`, QEMU + real-hardware + cycle-accurate-8088
   validated. The other windowing ports already run the compact 16 B layout. (Event
   record + file_handle remain candidates for the same logical-model treatment.)
 
-## The 3.1 window ABI — DECIDED + piloted (was the one open decision)
+## The 3.1 window ABI, DECIDED + piloted (was the one open decision)
 
 The ports shipped genuinely divergent window ABIs (x86's 32-byte entry vs the
 compact 16-byte entry the others use). The resolution was **neither "32 nor 16"**:
-a **greenfield window model** (`unodef/WMODEL.md`, `unodef/wmgen.py`, `[wmodel]`) —
+a **greenfield window model** (`unodef/WMODEL.md`, `unodef/wmgen.py`, `[wmodel]`) -
 one *logical* model (named fields + kinds + tier + relations + invariants, **no
 offsets**) from which the *physical* layout is **derived per platform** (SoA floor /
 AoS / field widths / capacity) and reached only through generated **zero-cost
@@ -271,7 +271,7 @@ save-under cursor fix shipped alongside. The other ports already use the compact
 
 ## Status & next directions
 
-Since this migration doc was first written the forward line has gone much further —
+Since this migration doc was first written the forward line has gone much further -
 most notably the **[`pc64/`](../pc64/) Modern PC (x86-64 / UEFI) world** with real
 networking, TLS/HTTPS, a JS-capable browser, `uno3d` 3D, and a full `unoui` desktop
 shell, verified on real hardware. For the current, maintained view:

@@ -1,18 +1,18 @@
-# Uno3D — the UnoDOS portable 3D graphics library
+# Uno3D, the UnoDOS portable 3D graphics library
 
 Uno3D is a tiny 3D graphics library that lets a 3D application be **written once**
-and run on every UnoDOS target — using real 3D hardware where it exists and a
+and run on every UnoDOS target, using real 3D hardware where it exists and a
 software rasteriser where it doesn't. It lives in [`uno3d/`](../uno3d/).
 
 The same application code drives:
 
 | Backend | Hardware | Where |
 |---|---|---|
-| `soft` | none — CPU rasteriser into a framebuffer | every port (universal fallback) + host PC |
+| `soft` | none, CPU rasteriser into a framebuffer | every port (universal fallback) + host PC |
 | `ps2-gs` | PlayStation 2 Graphics Synthesizer (gsKit) | hardware-accelerated 3D |
 | `dc-pvr` | Dreamcast PowerVR2 (KallistiOS) | hardware-accelerated 3D |
 
-> **The native UnoDOS-x86 case is special** — see [UnoDOS x86 (a native app, not
+> **The native UnoDOS-x86 case is special**: see [UnoDOS x86 (a native app, not
 > the C library)](#unodos-x86-a-native-app-not-the-c-library) at the end. The
 > bare-metal UnoDOS OS runs 16-bit assembly apps, not C, so its 3D game is a
 > hand-written native app that uses the same *design* over the kernel's own
@@ -36,7 +36,7 @@ Uno3D splits a 3D program into two halves:
 The **front-end** is identical everywhere. It transforms your model-space
 triangles through the current model-view and projection matrices, divides by w,
 maps to the screen, culls back faces, drops triangles behind the near plane, and
-hands the survivors — now **screen-space triangles** — to the active backend.
+hands the survivors, now **screen-space triangles**: to the active backend.
 
 A **backend** only ever does four things: clear the frame, rasterise one
 screen-space triangle, flush, present. That maps cleanly onto a CPU rasteriser,
@@ -145,7 +145,7 @@ about its own origin, *then* moves it.
 - Right-handed: **+X** right, **+Y** up, **−Z** into the screen.
 - Column-major matrices (OpenGL layout).
 - Front faces wind **counter-clockwise** in model space; back faces are culled.
-- Colours are per-vertex `unsigned char` 0–255, interpolated (gouraud).
+- Colours are per-vertex `unsigned char` 0-255, interpolated (gouraud).
 
 ---
 
@@ -206,7 +206,7 @@ Each glue file maps real input to `game_input`, runs `update`/`render`, and
 presents. The whole game *logic* is shared; only this differs:
 
 ```c
-/* PS2 (uno3d_ps2_game.c) — DualShock 2 */
+/* PS2 (uno3d_ps2_game.c), DualShock 2 */
 u3d_use_backend(&u3d_backend_ps2);
 game_init(640, 448);  u3d_init(640, 448);
 for (;;) {
@@ -228,17 +228,17 @@ zero changes to `uno3d_game.c`.
 ### 4.4 Tips that make a game feel right
 
 - **Attract mode.** Have the game auto-play (a simple AI steering toward the
-  goal) until the player first touches a control. It self-demos on any machine —
+  goal) until the player first touches a control. It self-demos on any machine -
   invaluable when an emulator can't inject input. Runner exposes
   `game_ai_target()` for exactly this.
 - **Keep it fair and finite.** Bound per-step difficulty (Runner limits how far
-  an obstacle gap can move between walls, and caps the speed ramp) so the game —
-  and the autopilot — can always survive. A frozen "game over" frame is usually
+  an obstacle gap can move between walls, and caps the speed ramp) so the game -
+  and the autopilot, can always survive. A frozen "game over" frame is usually
   an *unfair-difficulty* bug, not a renderer bug.
 - **Avoid the z-buffer when you can.** A single convex object (a cube) needs only
   back-face culling. A scene of separate objects with a known depth order (a
   corridor of walls) can be drawn **far-to-near** (painter's order) and look
-  correct without any depth buffer — cheaper on every backend.
+  correct without any depth buffer, cheaper on every backend.
 - **Determinism helps testing.** Seed your RNG from a fixed value (or the tick
   counter) so a headless run is reproducible for screenshots.
 
@@ -267,7 +267,7 @@ cd uno3d
 
 ## 6. Adding a new platform
 
-The design is built for this. To bring Uno3D to a new machine — **PS3 (RSX),
+The design is built for this. To bring Uno3D to a new machine, **PS3 (RSX),
 GPU-equipped PC (Direct3D/OpenGL), GameCube (GX), original Xbox (D3D8), …**:
 
 1. Write `uno3d_<plat>.c` implementing the six `u3d_backend` functions
@@ -280,7 +280,7 @@ GPU-equipped PC (Direct3D/OpenGL), GameCube (GX), original Xbox (D3D8), …**:
 **No change to `uno3d.c` or to any application.** A backend receives geometry
 already transformed to screen space (`u3d_stri`: pixel x/y, depth 0..1, gouraud
 colour), so it only maps "draw this triangle" onto the hardware. Backends can
-coexist in one build and be selected at runtime — e.g. a PC links both a Direct3D
+coexist in one build and be selected at runtime, e.g. a PC links both a Direct3D
 backend and `soft`, probes for a GPU, and falls back.
 
 A machine with **no** 3D hardware (an old PC, an Amiga, a Mac) needs no new
@@ -293,19 +293,19 @@ framebuffer it already has.
 
 - Flat/gouraud-shaded triangles only; **no textures yet** (`U3D_CAP_TEXTURE` is
   reserved). The software backend interpolates colour affinely (no
-  perspective-correct divide per pixel) — fine for the solid look UnoDOS 3D apps
+  perspective-correct divide per pixel), fine for the solid look UnoDOS 3D apps
   use.
 - One model-view "slot" (no matrix stack); set it fresh per object.
 - The software backend's z-buffer is sized to the framebuffer at compile time.
 
 ---
 
-## 8. UnoDOS x86 — a native app, not the C library
+## 8. UnoDOS x86, a native app, not the C library
 
 UnoDOS itself (the bare-metal x86 OS) is **not** a C target: its applications are
 flat 16-bit NASM `.BIN` files that call the kernel via `INT 0x80`
 ([APP_DEVELOPMENT.md](APP_DEVELOPMENT.md)). So the C `uno3d` library above does
-**not** run there — and couldn't anyway (its 256 KB framebuffer/z-buffer wouldn't
+**not** run there, and couldn't anyway (its 256 KB framebuffer/z-buffer wouldn't
 fit a 64 KB app segment).
 
 Instead the UnoDOS-x86 version of the game is a **native application**,
@@ -319,7 +319,7 @@ graphics API. Key points:
 - Because the camera never rotates and walls face the camera, each wall block
   projects to an **axis-aligned rectangle**, so the whole solid 3D corridor is
   drawn with the kernel's `gfx_draw_filled_rect_color` in painter's order
-  (far→near) — 16-bit fixed point, no FPU, no framebuffer poking.
+  (far→near), 16-bit fixed point, no FPU, no framebuffer poking.
 - Assembles for the 8088, so it runs on **every** UnoDOS machine (and is snappy
   on a 386+). It ships in the OS image (`make build/unodos-144.img`) and the
   desktop launcher auto-discovers it from its icon header.
@@ -332,7 +332,7 @@ asm app** serves the bare-metal OS. Both render the same game.
 
 ## See also
 
-- [`uno3d/README.md`](../uno3d/README.md) — the library's own quick reference + file list.
-- [APP_DEVELOPMENT.md](APP_DEVELOPMENT.md) — writing native UnoDOS apps (the x86 path).
-- [API_REFERENCE.md](API_REFERENCE.md) — the UnoDOS `INT 0x80` kernel API the native app uses.
-- [PORTS-PLAN.md](PORTS-PLAN.md) — the multi-platform porting program.
+- [`uno3d/README.md`](../uno3d/README.md), the library's own quick reference + file list.
+- [APP_DEVELOPMENT.md](APP_DEVELOPMENT.md), writing native UnoDOS apps (the x86 path).
+- [API_REFERENCE.md](API_REFERENCE.md), the UnoDOS `INT 0x80` kernel API the native app uses.
+- [PORTS-PLAN.md](PORTS-PLAN.md), the multi-platform porting program.

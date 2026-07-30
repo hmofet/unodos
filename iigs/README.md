@@ -1,4 +1,4 @@
-# UnoDOS 3 — Apple IIGS port
+# UnoDOS 3, Apple IIGS port
 
 A native **65C816 / Super Hi-Res** port of UnoDOS 3 for the Apple IIGS,
 taking advantage of the IIGS hardware the plain Apple II lacks: the 16-bit
@@ -15,27 +15,26 @@ VGC vertical-blank tick, and (at M3) the Ensoniq DOC sound chip.
 | M2 | Storage: SmartPort block I/O + FAT12 + Files/Notepad (persistent) | ✅ shipped |
 | **M3** | Full app parity: Theme + DOC (Music/Tracker) + Dostris/Pac-Man/OutLast/Paint + scheduler | ✅ shipped (build 420) |
 
-**All 11 apps and the cooperative scheduler are implemented and verified** —
-SysInfo, Clock, Files, Notepad, Theme, Music, Tracker, Dostris, Pac-Man,
+**All 11 apps and the cooperative scheduler are implemented and verified**: SysInfo, Clock, Files, Notepad, Theme, Music, Tracker, Dostris, Pac-Man,
 OutLast, and Paint.
 
 ![M1 Super Hi-Res desktop](shots/m1_desktop.png)
 ![M2 Files + Notepad](shots/m2_notepad.png)
-![M3 Theme — the whole desktop recoloured](shots/m3_theme.png)
-![Dostris — colour Tetris on SHR](shots/m3_dostris.png)
-![Paint — mouse-driven SHR canvas](shots/m3_paint.png)
-![Tracker — 4-voice DOC sequencer](shots/m3_tracker.png)
-![Pac-Man — maze chase on SHR](shots/m3_pacman.png)
-![OutLast — pseudo-3D road racer](shots/m3_outlast.png)
+![M3 Theme, the whole desktop recoloured](shots/m3_theme.png)
+![Dostris, colour Tetris on SHR](shots/m3_dostris.png)
+![Paint, mouse-driven SHR canvas](shots/m3_paint.png)
+![Tracker, 4-voice DOC sequencer](shots/m3_tracker.png)
+![Pac-Man, maze chase on SHR](shots/m3_pacman.png)
+![OutLast, pseudo-3D road racer](shots/m3_outlast.png)
 
 ## What M3 delivers
 
 * **4096-colour theming.** The Theme app cycles the 8 shared UI presets,
   each a single write to SHR palette line 0 that recolours the *entire*
-  desktop instantly — the Super Hi-Res palette is looked up per pixel at
+  desktop instantly, the Super Hi-Res palette is looked up per pixel at
   scan-out, so no pixels are redrawn.
-* **Ensoniq DOC audio.** The marquee IIGS sound chip — 32 oscillators and
-  64 KB of dedicated sound RAM — driven through the sound GLU. Music loads a
+* **Ensoniq DOC audio.** The marquee IIGS sound chip, 32 oscillators and
+  64 KB of dedicated sound RAM, driven through the sound GLU. Music loads a
   wavetable into DOC RAM and sequences a melody on an oscillator. (Sound
   isn't reproducible in the ROM-free harness, but every DOC register write
   is logged and asserted.)
@@ -47,7 +46,7 @@ OutLast, and Paint.
   driver (called in 6502 emulation mode from the native kernel).
 * **Files + Notepad.** Files lists the root directory; opening a file loads
   it into Notepad (single- and multi-cluster reads). Notepad edits the text
-  and **Ctrl-S writes it back to disk** — verified to persist across a full
+  and **Ctrl-S writes it back to disk**: verified to persist across a full
   reboot of the disk image.
 
 ## What M1 delivers
@@ -55,8 +54,8 @@ OutLast, and Paint.
 * **A real colour desktop.** Menu bar, an icon grid, and the version/build
   line, all in 16-colour Super Hi-Res, drawn by a 4bpp text/rect engine
   that expands the shared UnoDOS 8×8 font (`NEWVIDEO ($C029)=$C1`).
-* **A full window manager.** The PORT-SPEC §2 contract — a 16-window table
-  (6 live), z-order with raise-on-click, title-bar drag, and a close box —
+* **A full window manager.** The PORT-SPEC §2 contract, a 16-window table
+  (6 live), z-order with raise-on-click, title-bar drag, and a close box -
   ported from the proven SNES expression onto cell coordinates (8×8 cells,
   40×25 on 320×200).
 * **A real pointer + keyboard.** A polled ADB mouse drives a save-under
@@ -65,7 +64,7 @@ OutLast, and Paint.
   arrow-keys + Return; ESC closes the topmost window.
 * **SysInfo + Clock.** Machine identity and a live `HH:MM:SS` uptime clock
   that ticks once a second.
-* **Built on the M0 foundation** — the same ProDOS block-boot chain
+* **Built on the M0 foundation**: the same ProDOS block-boot chain
   (firmware loads block 0 → kernel to `$00:2000` → native mode) and the
   ROM-free `cpu65816.py` + `harness.py` rig, now with a frame-stepping
   script runner that injects keys and mouse input and renders SHR → PNG.
@@ -98,9 +97,9 @@ python tests/scheduler.py # cooperative sched   -> SCHEDULER PASS
 
 ## Running it for real
 
-* **Emulator (by hand):** GSplus, KEGS, or MAME `apple2gs` — all need a
+* **Emulator (by hand):** GSplus, KEGS, or MAME `apple2gs`: all need a
   IIGS ROM image you supply. Boot `build/unodos_iigs.po` as a 3.5" disk.
-* **Real hardware:** FloppyEmu in **SmartPort (3.5″) mode** — UnoDOS/IIGS
+* **Real hardware:** FloppyEmu in **SmartPort (3.5″) mode**: UnoDOS/IIGS
   is an 800 KB ProDOS-order image, the opposite of the 140 KB 5.25″ Apple
   II port.
 
@@ -109,7 +108,7 @@ python tests/scheduler.py # cooperative sched   -> SCHEDULER PASS
 | File | Role |
 |------|------|
 | `boot.s` | block-0 ProDOS boot stage (loads the kernel, goes native, jumps) |
-| `kernel.s` | the kernel — SHR desktop, window manager, input, apps |
+| `kernel.s` | the kernel, SHR desktop, window manager, input, apps |
 | `fs.i` | FAT12 storage over SmartPort (`blk_io` + the FAT12 core) |
 | `apps.i` | the Files + Notepad apps |
 | `theme.i` / `snd.i` | Theme presets / Ensoniq DOC engine + Music |
@@ -122,4 +121,4 @@ python tests/scheduler.py # cooperative sched   -> SCHEDULER PASS
 | `harness.py` | ROM-free firmware shim + script runner + SHR→PNG renderer |
 | `tests/*.py` | headless regressions (one per milestone + app) |
 
-See `HANDOFF.md` for the verified boot contract and the M1–M3 plan.
+See `HANDOFF.md` for the verified boot contract and the M1-M3 plan.

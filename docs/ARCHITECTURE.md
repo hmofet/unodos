@@ -272,15 +272,15 @@ Segment:Offset = 0x1000:0x0000
 Linear address = (0x1000 × 16) + 0x0000 = 0x10000 = 64KB
 ```
 
-1. **Clean segmentation** — a single segment (0x1000) covers the entire
+1. **Clean segmentation**: a single segment (0x1000) covers the entire
    kernel; DS, ES and CS are all 0x1000 during kernel execution, so no
    segment manipulation is needed for kernel-internal addressing.
-2. **Room to grow** — the kernel can expand toward the full 64KB segment
+2. **Room to grow**: the kernel can expand toward the full 64KB segment
    (up to 0x2000:0000) without colliding with the heap, which lives in
    its own dedicated segment at 0x8000 (moved there in Build 401; the old
    0x1400 heap overlapped the kernel image once the kernel grew past
    16KB).
-3. **Future compatibility** — aligned for a potential protected-mode
+3. **Future compatibility**: aligned for a potential protected-mode
    transition.
 
 The scratch buffer at 0x9000 holds the system clipboard (4KB at

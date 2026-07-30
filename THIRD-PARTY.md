@@ -4,12 +4,12 @@ Every component in this repository that belongs to another entity, in one
 table. This file is the **source of truth** the build checks against:
 `tools/check_licenses.py` (run by `pc64/build.sh` before it stages the ESP)
 asserts that every `key` below appears in the shipped notice document,
-`pc64/docs_esp/LICENSES.MD` — so adding a component here without carrying
+`pc64/docs_esp/LICENSES.MD`: so adding a component here without carrying
 its notice fails the build, and adding a component to the tree without
 adding it here is a review error this table exists to make visible.
 
 Rules when adding a row:
-1. `key` is the literal string the checker greps for in LICENSES.MD —
+1. `key` is the literal string the checker greps for in LICENSES.MD -
    pick the component's natural name and never change it once shipped.
 2. Add the component's section (and, where the license requires it, the
    license TEXT) to `pc64/docs_esp/LICENSES.MD` in the same commit.
@@ -29,10 +29,10 @@ Rules when adding a row:
 | DejaVu | DejaVu Sans / Sans Mono fonts | (c) 2003 Bitstream Inc.; DejaVu changes public domain; Arev glyphs (c) Tavmjong Bah | Bitstream Vera license (+ Arev terms) | `pc64/fonts/Sans.ttf`, `pc64/fonts/Mono.ttf` | ESP (`SANS.TTF`, `MONO.TTF`) |
 | Ubuntu Font | Ubuntu font | Canonical Ltd | Ubuntu Font Licence 1.0 | `pc64/fonts/Ubuntu.ttf` | ESP (`UBUNTU.TTF`) |
 | Natural Earth | 110m land mask (the Clock's world map) | Natural Earth (naturalearthdata.com) | Public domain | fetched/cached by `pc64/tools/mkworldmap.py` → `pc64/build/world_map.h` | pc64 kernel image |
-| KallistiOS | Dreamcast OS/runtime the DC port links against | KallistiOS project | KOS license (BSD-style) | NOT vendored — external toolchain dependency of `dreamcast/` | Dreamcast images only (not pc64) |
+| KallistiOS | Dreamcast OS/runtime the DC port links against | KallistiOS project | KOS license (BSD-style) | NOT vendored, external toolchain dependency of `dreamcast/` | Dreamcast images only (not pc64) |
 | MicroPython | the Python 3 interpreter inside PYRT.UNO | (c) 2013-2024 Damien P. George and contributors | MIT | `pc64/upy/` (LICENSE kept) | ESP (`PYRT.UNO`, when the optional Python runtime is built) |
-| Freedoom | free Doom-compatible IWAD — Duum's default game data | The Freedoom project | BSD 3-clause | NOT committed (`pc64/wads/`, developer-supplied) | ESP (`DOOM1.WAD`, only when a WAD is present) |
+| Freedoom | free Doom-compatible IWAD, Duum's default game data | The Freedoom project | BSD 3-clause | NOT committed (`pc64/wads/`, developer-supplied) | ESP (`DOOM1.WAD`, only when a WAD is present) |
 
-Everything not listed here — the kernel, the shell, every port, unoui /
+Everything not listed here, the kernel, the shell, every port, unoui /
 uno3d / unosound / unomedia and all of their decoders, the demo media and
-pictures — is this project's own work (CC BY-NC 4.0; demo content CC0).
+pictures, is this project's own work (CC BY-NC 4.0; demo content CC0).

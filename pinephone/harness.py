@@ -3,7 +3,7 @@
 
 Like the Pi port runs its kernel on a Unicorn Cortex-A, this verifies the PinePhone
 port headlessly. The A64 is simpler to model than the Pi here: there is no GPU
-mailbox and no peripheral-timer poll — the kernel programs the DE2 mixer UI layer
+mailbox and no peripheral-timer poll, the kernel programs the DE2 mixer UI layer
 to scan out a fixed DRAM framebuffer (PINE_FB), and paces frames off the ARM
 architectural generic timer (cntpct_el0), which Unicorn advances on its own. So the
 harness just:
@@ -27,10 +27,10 @@ DRAM_SZ  = 0x01000000           # 16 MB covers kernel + stack + vars + framebuff
 PINE_FB  = 0x40400000
 DE2_BASE = 0x01000000           # display engine register block (sunk to RAM)
 DE2_SZ   = 0x00200000
-UART_PAGE = 0x01C28000          # A64 UART0 (16550, input) — emulated
+UART_PAGE = 0x01C28000          # A64 UART0 (16550, input), emulated
 OFF_UART_RBR = 0x01C28000 - UART_PAGE   # 0x00
 OFF_UART_LSR = 0x01C28014 - UART_PAGE   # 0x14
-I2S_PAGE  = 0x01C22000          # A64 I2S0 (audio TX FIFO) — emulated
+I2S_PAGE  = 0x01C22000          # A64 I2S0 (audio TX FIFO), emulated
 OFF_I2S_TXFIFO = 0x01C22020 - I2S_PAGE  # 0x20
 WAV_RATE  = 8000
 MAX_SAMPLES = WAV_RATE * 8       # cap the capture at 8 s (the tune then loops)
@@ -140,7 +140,7 @@ def uart_write(uc, offset, size, value, ud):
 # *polls*, return values that satisfy the poll so it proceeds (and never spins to
 # its bounded timeout). This makes the milestone renders a real regression of the
 # bring-up: it must run end-to-end without faulting or hanging. (It does NOT verify
-# the panel lights — only hardware can.)
+# the panel lights, only hardware can.)
 def ccu_read(uc, offset, size, ud):      # CCU @ 0x01C20000 (+ PIO @ +0x800)
     if offset == 0x48:
         return 0x10000000                # PLL_DE locked (bit 28)

@@ -1,4 +1,4 @@
-# UnoDOS/Genesis — Sega Mega Drive / Genesis port
+# UnoDOS/Genesis, Sega Mega Drive / Genesis port
 
 Bare-metal UnoDOS 3 desktop for the Sega Mega Drive / Genesis (68000 @
 7.67 MHz, VDP tile graphics, 64 KB work RAM), built from the same
@@ -10,19 +10,19 @@ portable design as the Amiga and Mac ports (`docs/PORT-SPEC.md`).
 (drag, raise, close, z-order), pad-as-mouse with a hardware-sprite
 cursor, on-screen soft keyboard, PS/2 keyboard/mouse drivers (wired
 for real hardware), Notepad, and the Music test app (PSG Canon in D).
-**Milestone 2 (2026-06-11):** the game ports — Dostris, OutLast and
+**Milestone 2 (2026-06-11):** the game ports, Dostris, OutLast and
 Pac-Man (same tables/physics/AI as the x86 originals; Pac-Man's actors
 are hardware sprites over the cell maze) with the shared game songs on
 PSG channel 1, and a game-mode pad layout (a game topmost flips the
 d-pad to arrow keys with hold-repeat, A = action, X = new game,
 Y = pause).
-**Milestones 4/4.5 (2026-06-11):** real storage — 8KB battery SRAM
+**Milestones 4/4.5 (2026-06-11):** real storage, 8KB battery SRAM
 with the USV1 mini-filesystem, a Files app, working Notepad F1-save,
 and tape/WAV storage (KCS 1200-baud AFSK: the PSG writes through the
 headphone jack, a one-comparator adapter reads; `mktape.py` makes the
 PC the tape deck). Full storage architecture (SRAM, tape, Sega CD BRAM,
 and the deferred SD-card spec): [docs/STORAGE.md](../docs/STORAGE.md).
-**Milestones 3/5/6 (2026-06-12)** — full feature parity with the
+**Milestones 3/5/6 (2026-06-12)**: full feature parity with the
 Amiga port: the **Theme app** (the 8 shared preset palettes + 3-bit
 RGB custom editing, applied by rewriting the themed CRAM entries),
 the **Tracker** (the Amiga 32-row/4-channel pattern editor on the
@@ -34,13 +34,13 @@ Files app grows a volume toggle), and the **cooperative scheduler**
 stack, ported from `amiga/scheduler.i`).
 **Paint (2026-06-12)**: the MacPaint-style editor on a canvas of 240
 unique VDP tiles (the Genesis has no bitmap mode) with a
-byte-per-pixel backing store in the spare $FF0000 RAM bank — pencil,
+byte-per-pixel backing store in the spare $FF0000 RAM bank, pencil,
 brush, eraser, line, rect, filled rect, oval, filled oval, flood
 fill, spray; white canvas; the pen strip holds palette line 3 and
 r/g/b tune the selected entry live in CRAM, reaching **all 512
 Genesis colors**. Canvas saves to tape ('t'/'y'). Pad-first
 controls: A = draw, Y = next tool, X = next pen, B = soft keyboard.
-Verified in BlastEm and **on real hardware (2026-06-12)** — the
+Verified in BlastEm and **on real hardware (2026-06-12)**: the
 cartridge boots and runs on a physical console.
 
 ## Display model
@@ -49,7 +49,7 @@ H40 (320×224 = 40×28 cells). Everything is composed on plane A as
 (palette, tile) cells, so windows snap to the 8 px grid; the mouse
 cursor is a hardware sprite and stays pixel-smooth. The four UI
 attribute schemes (normal / inverted / accent / soft-key) are the four
-VDP palette lines, each derived from the four UnoDOS theme colors —
+VDP palette lines, each derived from the four UnoDOS theme colors -
 the Theme app restyles the whole port by rewriting the themed CRAM
 entries (the 8 shared presets, or per-channel 3-bit RGB editing).
 
@@ -68,16 +68,16 @@ entries (the 8 shared presets, or per-channel 3-bit RGB editing).
 
 X/Y/Z need a 6-button pad; everything else works on a 3-button pad.
 The soft keyboard covers the rest: full QWERTY, Shift (sticky), F1,
-arrows, Esc — clicked keys post through the same event queue as a real
+arrows, Esc, clicked keys post through the same event queue as a real
 keyboard, with the same raw codes as the Amiga port, so apps are
 byte-portable across the 68K family.
 
 **In-app pad keys** (the apps map the synthesized X/Y keys): Files
 X = delete, Tracker X = clear cell, Paint Y = next tool / X = next
 pen. Footer labels name pad buttons; bare letters (q/w, r/g/b, s/l…)
-are soft-keyboard taps — press B to open it.
+are soft-keyboard taps, press B to open it.
 
-**Game mode:** while a game window is topmost the pad remaps — d-pad =
+**Game mode:** while a game window is topmost the pad remaps, d-pad =
 arrow keys (press + hold-repeat), A = Space (drop/action), B = soft
 keyboard, C = Enter, Start = Esc (close), X = 'n' (new game),
 Y = 'p' (pause). The cursor parks until a non-game window is topmost.
@@ -86,16 +86,16 @@ Y = 'p' (pause). The cursor parks until a non-game window is topmost.
 
 The Genesis has no keyboard, so PS/2 devices wire **directly to the two
 control ports**, bit-banged by the 68000. The I/O controller exposes
-every port pin (D0–D3, TL, TR, TH) as programmable I/O via the
+every port pin (D0-D3, TL, TR, TH) as programmable I/O via the
 `$A10003/05` data and `$A10009/0B` control registers, and **port 2's TH
-line can raise the level-2 EXT interrupt** — which is the basis of the
+line can raise the level-2 EXT interrupt**: which is the basis of the
 community-precedent wiring (see Sources). The adapter is passive (PS/2
 devices have internal pull-ups, the MD inputs are pulled up too, and the
 console supplies 5 V):
 
 | DE-9 pin | MD signal | PS/2 signal | Notes |
 |---|---|---|---|
-| 1 | D0 ("Up") | DATA | bidirectional — host commands drive low / float high via the CTRL register (open-collector emulation) |
+| 1 | D0 ("Up") | DATA | bidirectional, host commands drive low / float high via the CTRL register (open-collector emulation) |
 | 5 | +5V | +5V | the port supplies power |
 | 7 | TH | CLOCK | port 2 raises EXT/HL interrupt on transition; port 1 is polled |
 | 8 | GND | GND | |
@@ -106,9 +106,9 @@ console supplies 5 V):
   codes handled), feeding the UnoDOS event queue with the PORT-SPEC focus
   stamp.
 - **Port 1 = mouse**: TH on port 1 cannot interrupt, so the driver uses
-  PS/2 host-inhibit — CLK is held low except for a per-vblank receive
+  PS/2 host-inhibit, CLK is held low except for a per-vblank receive
   window; 3-byte stream packets assemble across windows and decimate
-  cleanly from the mouse's 40–100 samples/s to the 50/60 Hz desktop. At
+  cleanly from the mouse's 40-100 samples/s to the 50/60 Hz desktop. At
   boot the kernel probes port 1 with `$F4` (enable reporting); if no ACK
   comes back it falls back to pad mode, so stock hardware just works.
 - **Fallback path**: the same driver structure can speak Sik's documented
@@ -122,10 +122,10 @@ in BlastEm; the physical wiring itself is a real-hardware test.
 
 **Sources for the control-port wiring:**
 
-- SpritesMind, "Megadrive/Genesis clone with a keyboard?" — HardWareMan
+- SpritesMind, "Megadrive/Genesis clone with a keyboard?", HardWareMan
   on attaching a standard PS/2 keyboard via port 2 + the EXT interrupt
   (gendev.spritesmind.net/forum/viewtopic.php?t=525).
-- SpritesMind, "XBAND, Mega Net 2, and Mega Drive Keyboards" — Sik's
+- SpritesMind, "XBAND, Mega Net 2, and Mega Drive Keyboards", Sik's
   notes on the official keyboard protocol (port 2, TH/TR handshake,
   4-bit bus) (gendev.spritesmind.net/forum/viewtopic.php?t=2556).
 - ConsoleMods wiki, Genesis connector pinouts (DE-9: 5 = +5V, 8 = GND,
@@ -179,7 +179,7 @@ the caller PC + coordinates rendered in hex on the bottom row.
 
 - All VDP access happens in main-loop context; ISRs only update state
   (PORT-SPEC §6). The vblank ISR acknowledges the interrupt with a VDP
-  status read — safe because every control-port write in the kernel is
+  status read, safe because every control-port write in the kernel is
   a single atomic `move.l`.
 - The vblank ISR reads the pad (standard TH-toggle sequence, 6-button
   aware), applies d-pad movement to the cursor state, and latches
@@ -187,22 +187,22 @@ the caller PC + coordinates rendered in hex on the bottom row.
   consumes the latch in the main loop (PORT-SPEC §3).
 - Events: one 32-entry queue, `EV_KEY` data = (raw<<8)|ascii with the
   Amiga port's raw codes (arrows `$4C-$4F`, F1 `$50`).
-- Variables live at `$FF8000`, addressed `offset(a4)` — the RAM
+- Variables live at `$FF8000`, addressed `offset(a4)`: the RAM
   edition of the Amiga port's `vars(pc)` convention.
 - Storage: 8KB battery SRAM (USV1 mini-FS, Files app, Notepad F1),
   tape/WAV (KCS AFSK via the PSG + a comparator adapter), and Sega CD
   backup RAM via Mode 1 (`bram.i`: Sub-CPU BIOS boot + `_BURAM` stub,
   mailbox RPC, Word-RAM staging; the Files app's `v` key cycles the
-  volume when a CD attachment is detected) — see
+  volume when a CD attachment is detected), see
   [docs/STORAGE.md](../docs/STORAGE.md).
-- Scheduler (`scheduler.i`): cooperative tasks over the window table —
+- Scheduler (`scheduler.i`): cooperative tasks over the window table -
   task 0 is the kernel (input, drag, audio services); each window's
   app proc runs in its own task with a private 2KB stack at $FF4000+
   and a one-slot mailbox (keys + frame ticks). Key posts yield-retry
   so input bursts survive the single-slot mailbox.
 - The Sega CD probe arms a bus-error recovery: with no attachment,
   $400000+ reads are open bus on hardware but a 68000 bus error under
-  BlastEm — the `berr` vector unwinds to the no-CD path instead of
+  BlastEm, the `berr` vector unwinds to the no-CD path instead of
   crashing the boot.
 
 ## Verified (BlastEm 0.6.2)
@@ -229,7 +229,7 @@ the caller PC + coordinates rendered in hex on the bottom row.
   mktape.py round-trips a 2047-byte file through a 44.1kHz WAV
 - Sega CD BRAM: the same save/wipe/reopen round trip over the
   injectable RPC transport (name normalization, payload header,
-  volume toggle) — the BIOS-trap path itself needs a CD-capable
+  volume toggle), the BIOS-trap path itself needs a CD-capable
   emulator (Genesis Plus GX / Ares) or real hardware
 - Theme: preset apply recolors the whole desktop live (Forest in the
   AUTOTEST); the custom editor reads back the right channel values
@@ -245,7 +245,7 @@ the caller PC + coordinates rendered in hex on the bottom row.
   on real hardware: find_window_at returned hits with stale flags,
   so every window click fell through to the desktop)
 
-**Real hardware: validated 2026-06-12 — the port runs on a physical
+**Real hardware: validated 2026-06-12, the port runs on a physical
 console.** Still to exercise (adapter hardware): PS/2 keyboard/mouse
 wiring, the tape comparator, and the Sega CD Mode-1 path end-to-end
 (sub BIOS decompress + BURAM against a real attachment).

@@ -46,14 +46,14 @@ def main():
     def mqd(*args):   # makeqstrdefs.py
         run([PY, os.path.join(py_src, "makeqstrdefs.py")] + list(args))
 
-    # 1. version header (py/py.mk:227) — no .git in the vendored tree, so seed
+    # 1. version header (py/py.mk:227), no .git in the vendored tree, so seed
     #    a version file makeversionhdr.py falls back to.
     open(os.path.join(top, "MICROPY_VERSION"), "w").write("v1.24.1\n") \
         if not os.path.exists(os.path.join(top, ".git")) else None
     run([PY, os.path.join(py_src, "makeversionhdr.py"), os.path.join(gen, "mpversion.h")],
         cwd=top)
 
-    # 2. qstr.i.last — preprocess every source hunting QSTR/MP_REGISTER_* uses
+    # 2. qstr.i.last, preprocess every source hunting QSTR/MP_REGISTER_* uses
     #    (py/mkrules.mk:122). "pp" mode: pp <cpp...> output <f> cflags <...>
     #    cxxflags <...> sources <...> dependencies <...> changed_sources <...>
     qi = os.path.join(gen, "qstr.i.last")

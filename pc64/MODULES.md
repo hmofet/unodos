@@ -1,8 +1,8 @@
-# pc64 dynamic apps — the `.UNO` module format
+# pc64 dynamic apps, the `.UNO` module format
 
 Since the decoupling milestone M2, **no app code is linked into the pc64
 kernel image**. Every app ships as a `.UNO` file and is loaded from storage
-on first launch — the modern-PC analogue of the C64 port loading `.PRG` apps
+on first launch, the modern-PC analogue of the C64 port loading `.PRG` apps
 through its JMP table. Two build-time asserts enforce it: the kernel image
 must contain no `uno_app_main_*` symbol, and every module import must appear
 in the kernel export table.
@@ -15,7 +15,7 @@ in the kernel export table.
 | installed system | `EFI\UNODOS\APPS\<NAME>.UNO` |
 
 The loader (`pc64_modload.c`) scans every mounted volume for the first path,
-then volumes 1.. for the second — the same convention the font loader uses.
+then volumes 1.. for the second, the same convention the font loader uses.
 The ESP installer copies the `APPS` directory; the whole-disk installer
 clones it implicitly. A missing module degrades gracefully: the window shows
 "module not found: APPS\\<NAME>.UNO".
@@ -26,8 +26,8 @@ citizens): **Studio** (the IDE) and **Photos** (the image viewer, carrying
 the whole unomedia decoder library inside the module - see IMAGES.md).
 (**Music left this list**: it is now a native unoui app, `pc64_music.c`. The
 legacy module drew itself with the Mac-Toolbox primitives against a fixed
-four-colour palette — that is where its hardcoded blue background came from,
-and why no theme change ever affected it. See AUDIO.md.) (Runner3D and the Browser are native shell canvases — they drive
+four-colour palette, that is where its hardcoded blue background came from,
+and why no theme change ever affected it. See AUDIO.md.) (Runner3D and the Browser are native shell canvases, they drive
 uno3d / the HTML engine directly and have no AppInterface counterpart.
 The classic games' native canvases in `pc64_games.c` are no longer routed;
 the `.UNO` bridge versions run instead, so ALL apps load from storage.)
@@ -38,9 +38,9 @@ A `.UNO` is a flattened PE32+ DLL: a 48-byte header, the section image laid
 out at its RVAs (trailing zeros trimmed; bss stays virtual), then the two
 tables the in-kernel loader needs:
 
-- **relocations** — u32 RVAs of u64 cells to rebase by `base - pref_base`
+- **relocations**: u32 RVAs of u64 cells to rebase by `base - pref_base`
   (extracted from the PE `.reloc` DIR64 entries),
-- **imports** — the `.unoimp` section: 32-byte `{char name[24]; u64 slot;}`
+- **imports**: the `.unoimp` section: 32-byte `{char name[24]; u64 slot;}`
   records the loader resolves against the kernel export table `kExports[]`
   in `pc64_modload.c`.
 
@@ -63,14 +63,14 @@ cc -shared -nostdlib -e uno_app_main_<app> app.o thunks.o -> app.dll
 mkuno.py convert app.dll -> APPS/<NAME>.UNO
 ```
 
-Adding an export: add a `KX(name)` line in `pc64_modload.c` — build.sh greps
+Adding an export: add a `KX(name)` line in `pc64_modload.c`: build.sh greps
 that table for the import check, and the kernel link fails on a typo.
 
 ## Verification
 
-- `python3 harness.py unoapps` — boots the shell in QEMU and opens all 7
+- `python3 harness.py unoapps`: boots the shell in QEMU and opens all 7
   module apps through the Start menu, one screenshot each.
-- `python3 tools/install_test.py` — end-to-end: install to a disk (both
+- `python3 tools/install_test.py`: end-to-end: install to a disk (both
   modes), reboot from the installed disk alone, verify the module files on
   the installed ESP offline (mtools) and open a `.UNO` app on the installed
   system.

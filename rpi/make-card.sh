@@ -1,6 +1,6 @@
 #!/bin/sh
 # ============================================================================
-# make-card.sh — build a COMPLETE bootable UnoDOS/Pi microSD image.
+# make-card.sh, build a COMPLETE bootable UnoDOS/Pi microSD image.
 #
 # A Raspberry Pi boots from a FAT partition that must contain the closed-source
 # VideoCore firmware (the GPU is the boot CPU) PLUS our kernel + config.txt.
@@ -29,7 +29,7 @@ PART_MB=256
 FW_BASE=https://raw.githubusercontent.com/raspberrypi/firmware/master/boot
 
 # Closed VideoCore blobs (cannot be self-built): Pi 3 = bootcode/start/fixup,
-# Pi 4 = start4/fixup4 (Pi 4 has no bootcode.bin — it's in the SoC).
+# Pi 4 = start4/fixup4 (Pi 4 has no bootcode.bin, it's in the SoC).
 # DTBs + the disable-bt overlay are REQUIRED for dtoverlay=disable-bt to take
 # effect (it reroutes the PL011 to GPIO14/15 for the serial console; without
 # them the overlay is silently ignored and GPIO14/15 stays on the mini-UART).
@@ -75,12 +75,12 @@ echo "[3/4] formatting a $PART_MB MiB FAT32 partition image..."
 rm -f "$PART"
 # block-count for mkfs.vfat is in 1 KiB blocks
 mkfs.vfat -F 32 -n UNODOS -C "$PART" $((PART_MB * 1024)) >/dev/null
-mcopy -i "$PART" config.txt ::config.txt
-mcopy -i "$PART" build/kernel8.img ::kernel8.img
-mcopy -i "$PART" build/kernel8-pi4.img ::kernel8-pi4.img
-for f in $FW_FILES; do mcopy -i "$PART" "$FW_DIR/$f" "::$f"; done
-mmd   -i "$PART" ::overlays
-for o in $OVERLAYS; do mcopy -i "$PART" "$FW_DIR/overlays/$o" "::overlays/$o"; done
+mcopy -i "$PART" config.txt :config.txt
+mcopy -i "$PART" build/kernel8.img :kernel8.img
+mcopy -i "$PART" build/kernel8-pi4.img :kernel8-pi4.img
+for f in $FW_FILES; do mcopy -i "$PART" "$FW_DIR/$f" ":$f"; done
+mmd   -i "$PART" :overlays
+for o in $OVERLAYS; do mcopy -i "$PART" "$FW_DIR/overlays/$o" ":overlays/$o"; done
 
 echo "[4/4] assembling MBR image + partition..."
 rm -f "$IMG"

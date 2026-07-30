@@ -46,7 +46,7 @@ def planar(pixrows):
 
 tiles = []   # (comment, [32 bytes])
 
-# tile 0: solid desktop blue (index 2) — name table clears to this
+# tile 0: solid desktop blue (index 2), name table clears to this
 tiles.append(("blank/desktop", planar([[2] * 8] * 8)))
 
 # normal font: fg=1 (white) on bg=2 (blue), opaque cell
@@ -57,7 +57,7 @@ for g in range(95):
     ch = chr(32 + g)
     tiles.append(("'%s'" % (ch if ch != "'" else "quote"), planar(rows)))
 
-# inverted font: fg=2 (blue) on bg=1 (white) — title bar text
+# inverted font: fg=2 (blue) on bg=1 (white), title bar text
 for g in range(95):
     rows = []
     for r in font[g * 8:(g + 1) * 8]:
@@ -115,7 +115,7 @@ for name, binfile in ICONS:
     for i, t in enumerate(icon_tiles(binfile)):
         tiles.append((f"icon {name} {i}", t))
 
-# paint icon: synthesized (no x86 donor) — same 2bpp chunky semantics
+# paint icon: synthesized (no x86 donor), same 2bpp chunky semantics
 PAINT_ICON = [
     "0000000000033000", "0000000000333000", "0000000003330000", "0000000033300000",
     "0000000333000000", "0000011330000000", "0000111100000000", "0000111000000000",

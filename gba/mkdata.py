@@ -2,7 +2,7 @@
 """Generate gba/build/gfx.s from the shared UnoDOS assets (Game Boy Advance).
 
 The GBA port draws into a flat **Mode 3** framebuffer (240x160, 16bpp BGR555),
-so there are no hardware tiles — we plot an 8x8 bitmap font and 16x16 icons pixel
+so there are no hardware tiles, we plot an 8x8 bitmap font and 16x16 icons pixel
 by pixel, looking each pixel's palette INDEX up in a 16-entry BGR555 palette held
 in IWRAM (so the Theme app can recolour by swapping the table + redrawing). This
 emits GNU-as (`arm-none-eabi-as`) data: the font, the icons (as index bytes), the

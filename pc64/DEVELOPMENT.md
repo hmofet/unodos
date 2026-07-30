@@ -1,11 +1,11 @@
-# UnoDOS / pc64 — development environment setup
+# UnoDOS / pc64, development environment setup
 
 How to recreate the full dev environment for the pc64 (x86-64 / UEFI) world on a
 fresh machine, on **Linux** or **Windows**, and the build → test → deploy loop.
 
 pc64 is a **UEFI application** (a PE32+ image) cross-compiled with mingw-w64 and
 booted either in **QEMU + OVMF** or on real hardware from a FAT32 USB stick.
-There is no EDK2 and no gnu-efi — the mingw target's native output *is* a valid
+There is no EDK2 and no gnu-efi, the mingw target's native output *is* a valid
 UEFI binary.
 
 ---
@@ -43,7 +43,7 @@ Everything below runs from the `pc64/` subdirectory unless noted.
 
 ---
 
-## 2. Linux setup (native, or inside WSL — identical)
+## 2. Linux setup (native, or inside WSL, identical)
 
 ```sh
 sudo apt update
@@ -61,7 +61,7 @@ python3 -c 'import PIL; print("Pillow OK")'
 ```
 
 > If `OVMF.fd` isn't at `/usr/share/ovmf/OVMF.fd`, find it with
-> `dpkg -L ovmf | grep -i OVMF` — some distros split it into
+> `dpkg -L ovmf | grep -i OVMF`: some distros split it into
 > `OVMF_CODE.fd` + `OVMF_VARS.fd`. Point QEMU's `-bios` (or `-drive
 > if=pflash`) at whatever your distro ships.
 
@@ -85,7 +85,7 @@ wsl --install -d Ubuntu-24.04
 Reboot if prompted, launch "Ubuntu" once to create your Linux user, then follow
 **§2** *inside* the Ubuntu shell (`sudo apt install ...`). Clone the repo inside
 the WSL filesystem (e.g. `~/unodos`) for speed, or under `/mnt/c/...` if you
-want it visible to Windows tools — the build works either way, but native WSL
+want it visible to Windows tools, the build works either way, but native WSL
 paths build noticeably faster.
 
 ### 3b. Building & testing
@@ -98,12 +98,12 @@ The ESP is a small file tree, so "writing the stick" just means putting
 `build/esp/EFI/BOOT/BOOTX64.EFI` (plus the sample/font files) onto a **FAT32**
 USB stick under `\EFI\BOOT\`.
 
-Easiest — File Explorer:
+Easiest, File Explorer:
 1. Format the USB stick as **FAT32**.
 2. Copy the contents of `build/esp/` onto the stick so it ends up with
    `EFI\BOOT\BOOTX64.EFI` at the root.
 
-Scripted (PowerShell, run **as Administrator** — it mounts the ESP partition and
+Scripted (PowerShell, run **as Administrator**: it mounts the ESP partition and
 copies the fresh `BOOTX64.EFI`): adapt `write-stick.ps1` from the scratchpad, or
 just:
 
@@ -159,14 +159,14 @@ qemu-system-x86_64 -bios /usr/share/ovmf/OVMF.fd \
   -m 256 -vga std -rtc base=localtime
 ```
 
-`fat:rw:build/esp` exposes the ESP tree as a virtual FAT drive — no disk image
+`fat:rw:build/esp` exposes the ESP tree as a virtual FAT drive, no disk image
 to build. Add networking for the browser / Network app:
 
 ```sh
   -device e1000,netdev=n0 -netdev user,id=n0 -cpu max
 ```
 
-> **Note:** OVMF ships **no pointer driver**, so QEMU has no mouse — the desktop
+> **Note:** OVMF ships **no pointer driver**, so QEMU has no mouse, the desktop
 > is **keyboard-only** in emulation (Ctrl-Esc = Start menu, arrows + Enter,
 > Tab/Ctrl-Tab, F2). Anything mouse-driven (Paint drawing, window-resize grip,
 > the calendar day-click) can only be exercised on real hardware.
@@ -183,8 +183,8 @@ python3 nettest.py             # net + TLS self-test vs QEMU SLIRP (legacy build
 
 To script your own boot + keypresses + screenshot, connect to QEMU's QMP socket
 (`-qmp tcp:127.0.0.1:4444,server,nowait`), send `qmp_capabilities`, then
-`send-key` / `screendump` commands. A fresh-varstore OVMF boot takes **~40–75 s**
-before the desktop appears — wait that long before the first screenshot.
+`send-key` / `screendump` commands. A fresh-varstore OVMF boot takes **~40-75 s**
+before the desktop appears, wait that long before the first screenshot.
 
 **Testing the browser's network fetch without a host web server:** QEMU SLIRP's
 `guestfwd` runs a per-connection host command (no listening socket needed):
@@ -209,7 +209,7 @@ the request and writes a fixed HTTP/1.0 response.)
 
 Validated on a Lenovo ThinkPad X1 Carbon Gen 8; any 64-bit UEFI PC is in scope.
 See [`METAL-CHECKLIST.md`](METAL-CHECKLIST.md) for what to verify on hardware
-(the things QEMU can't test — mouse, real RTC, PC-speaker audio, power control).
+(the things QEMU can't test, mouse, real RTC, PC-speaker audio, power control).
 
 ---
 
@@ -234,11 +234,11 @@ Commit as you go; the pc64 world lives on `master` of
   `../unosound`, `../amiga`, and `kernel/`. A bare `pc64/` checkout won't build.
 - **`long` is 32-bit** under mingw (LLP64). Use `unsigned long long` /
   `uintptr_t` for anything that must be 64-bit (DMA addresses, pointers cast to
-  ints) — a truncated `long` was the original e1000 DMA bug.
+  ints), a truncated `long` was the original e1000 DMA bug.
 - **Freestanding.** No host libc; the build is `-ffreestanding -nostdinc`.
   Use the port's own `include/*.h`, `pc64_libc.c`, `pc64_math.c`.
 - **OVMF has no mouse.** Mouse-driven features are metal-only to verify.
 - **Kill stale QEMU** between headless runs (`pkill -9 qemu-system-x86`); a
   leftover instance holding the QMP port makes the next run look like a hang.
-- **QMP sockets** must live on a native FS, not a `/mnt/c` drvfs path — put any
+- **QMP sockets** must live on a native FS, not a `/mnt/c` drvfs path, put any
   unix-socket under `/tmp` (or just use the `tcp:` QMP form).

@@ -11,29 +11,28 @@ Close the lid → the screen blanks and the CPU idles; open it (or press a key) 
 wake and repaint. Uses the shared ACPI stack's new `acpi_lid_event()` edge
 primitive (synced from `hmofet/acpipower` @ `884d18c`), the same pattern the
 contract names for Writer's Unlock. Read-only ACPI (no GPE/SCI): the shell polls
-the lid edge (`_LID` cached ~1 Hz) in its main loop — `CLOSE` blanks the
+the lid edge (`_LID` cached ~1 Hz) in its main loop, `CLOSE` blanks the
 framebuffer + low-power idles, `OPEN`/key wakes. Inert on machines with no lid
 and toggleable from the Control Panel ("Lid sleep", on by default). Verified in
 QEMU with a toggling-lid SSDT (`tools/testlid.asl`, `harness.py lidsleep`): the
 screen blanks and restores in lockstep with the synthetic lid.
 
-## [pc64 native input — take keyboard & mouse from the firmware] - 2026-07-19
+## [pc64 native input, take keyboard & mouse from the firmware] - 2026-07-19
 
 Native drivers for all three x86 input transports, so pc64 no longer depends on
 the firmware for keyboard/mouse (which on touch devices like the Surface is what
 keeps the firmware on-screen keyboard drawn, and whose Absolute-Pointer path was
 "floaty"). See [pc64/INPUT.md](pc64/INPUT.md).
 
-- **`pc64/hid_kbd.c`** — shared boot-keyboard translator: an 8-byte HID boot
+- **`pc64/hid_kbd.c`**: shared boot-keyboard translator: an 8-byte HID boot
   report → key-down edge events in the EFI `(scan, unicode)` space the key ring
   already uses. Used by both USB and I2C-HID keyboards; tracks Caps Lock.
-- **`pc64/i2c_hid.c`** — now discovers a **keyboard AND a pointer** (was
+- **`pc64/i2c_hid.c`**: now discovers a **keyboard AND a pointer** (was
   pointer-only), classifying each I2C-HID device from its report descriptor.
   Fixes a **64-bit-BAR truncation** (`(unsigned long)` cast dropped an above-4GB
-  LPSS BAR on this LLP64 target) that gave the Surface `0 DW ctrl / N bars` —
-  the same wall the SAM battery work hit. This is the floaty-mouse fix: native
+  LPSS BAR on this LLP64 target) that gave the Surface `0 DW ctrl / N bars`: the same wall the SAM battery work hit. This is the floaty-mouse fix: native
   pointer maps 1:1, bypassing the firmware EMA.
-- **`pc64/usbhid.c`** + `xhci.c` interrupt-IN endpoints — USB HID boot driver
+- **`pc64/usbhid.c`** + `xhci.c` interrupt-IN endpoints, USB HID boot driver
   (keyboard + mouse): config-descriptor scan, `SET_PROTOCOL(boot)`, and a
   non-blocking interrupt-IN poll that keeps one TRB outstanding. A detached-mode
   source in production (`-DUNO_USBHID_TEST` for eager QEMU testing).
@@ -48,15 +47,15 @@ keeps the firmware on-screen keyboard drawn, and whose Absolute-Pointer path was
   model and real USB key routing is a QEMU limit, so both are metal-pending
   (Surface). Full Surface OSK removal still needs native NVMe to detach.
 
-## [pc64 firmware detach — UnoDOS runs on its own drivers (M3)] - 2026-07-19
+## [pc64 firmware detach, UnoDOS runs on its own drivers (M3)] - 2026-07-19
 
 Milestone 3, the end of the decoupling arc: when the native stack covers the
 machine, pc64 calls **ExitBootServices at the end of boot** and runs with no
-firmware in the picture — native AHCI moves sectors, a polled i8042 PS/2 driver
+firmware in the picture, native AHCI moves sectors, a polled i8042 PS/2 driver
 supplies keyboard + mouse, the TSC paces frames and delays, the CMOS RTC tells
 time, CF9 resets. The System window shows `DETACHED (native)`.
 
-- **`pc64/pc64_native.c`** — the native platform layer: calibrated-TSC delays,
+- **`pc64/pc64_native.c`**: the native platform layer: calibrated-TSC delays,
   CMOS RTC read/write, a bounded polled i8042 driver (scan-set-1 keyboard with
   shift/ctrl/caps decode + 3-byte mouse packets), CF9+i8042 reset. All port
   I/O; every wait bounded.
@@ -65,7 +64,7 @@ time, CF9 resets. The System window shows `DETACHED (native)`.
   controller (`uno_fat_native_eligible` checks for a UnoDOS `BOOTX64.EFI`, so
   a machine merely *having* a FAT disk doesn't detach away its own USB boot
   volume or the firmware-dependent Install app). Laptops without an i8042
-  (Surface) simply stay attached — every service falls back to firmware
+  (Surface) simply stay attached, every service falls back to firmware
   exactly as before. `-DUNO_NO_DETACH` opts a build out.
 - **Detach-aware routing everywhere**: input polls, `uno_pc64_delay_ms`,
   present pacing, wall clock, reset/shutdown, uACPI stalls, GOP mode cycling
@@ -75,35 +74,35 @@ time, CF9 resets. The System window shows `DETACHED (native)`.
 - The write-back FAT cache is synced before `ExitBootServices`, then blkdev
   re-registers native AHCI disks and the volumes remount natively.
 - Also: the unoui window table grew 8 → 24 with `unoui_ui_add` reporting
-  failure and `open_app` rolling back — five-plus open windows no longer
+  failure and `open_app` rolling back, five-plus open windows no longer
   silently swallow new ones.
 - Verified headless: boots detach on QEMU (q35 AHCI + PS/2), all 7 `.UNO`
   apps open post-detach via the PS/2 path, `install_test.py` end-to-end both
-  modes — the USB-boot phase stays attached (installer works), the installed
+  modes, the USB-boot phase stays attached (installer works), the installed
   system detaches on its own disk.
 
-## [pc64 dynamic apps — every app is a .UNO module loaded from storage] - 2026-07-19
+## [pc64 dynamic apps, every app is a .UNO module loaded from storage] - 2026-07-19
 
 Milestone 2 of decoupling pc64 from EFI firmware: **no app code is linked into
 the kernel image**. Each of the 7 apps (Dostris, Pac-Man, OutLast, Music,
-Tracker, Paint, Network) ships as a `.UNO` file — a flattened PE32+ DLL with a
-relocation table and named import slots — and is loaded from storage on first
+Tracker, Paint, Network) ships as a `.UNO` file, a flattened PE32+ DLL with a
+relocation table and named import slots, and is loaded from storage on first
 launch, the modern-PC analogue of the C64 port's JMP-table `.PRG` loading
 ([pc64/MODULES.md](pc64/MODULES.md)).
 
-- **`pc64/tools/mkuno.py`** — builds modules: generates `jmp *slot(%rip)`
+- **`pc64/tools/mkuno.py`**: builds modules: generates `jmp *slot(%rip)`
   thunks for every undefined symbol (imports are functions only, no import
   libs, no PE machinery at runtime), then flattens the linked DLL into the
   `.UNO` container (48-byte header, image, DIR64 reloc RVAs, `.unoimp`
   name/slot records, CRC32).
-- **`pc64/pc64_modload.c`** — the in-kernel loader: read from `APPS\` on any
+- **`pc64/pc64_modload.c`**: the in-kernel loader: read from `APPS\` on any
   volume (or `EFI\UNODOS\APPS\` on an installed system), CRC check,
   `AllocatePages(EfiLoaderCode)`, rebase, resolve imports against the
   `kExports[]` table. Missing module = a "module not found" window, no crash.
   (The old static registry survives as `pc64_modload_static.c` for the frozen
   legacy build, whose M1-era link breakage is also fixed.)
 - The classic games now run through the bridge as modules too (the native
-  `pc64_games.c` canvases are no longer routed) — ALL apps load from storage;
+  `pc64_games.c` canvases are no longer routed), ALL apps load from storage;
   only Runner3D and the Browser remain native shell canvases.
 - Two build asserts keep it honest: no `uno_app_main_*` symbol in the kernel
   image; every module import present in the kernel export table.
@@ -113,26 +112,26 @@ launch, the modern-PC analogue of the C64 port's JMP-table `.PRG` loading
   `harness.py unoapps` (all 7 apps, one screenshot each) and the
   missing-module negative test.
 
-## [pc64 native storage — run the filesystem from any FAT32, no firmware FAT] - 2026-07-19
+## [pc64 native storage, run the filesystem from any FAT32, no firmware FAT] - 2026-07-19
 
 Milestone 1 of decoupling pc64 from EFI firmware: UnoDOS now owns partition
 scanning and FAT16/32 read+write itself, over its own block layer
 ([pc64/STORAGE.md](pc64/STORAGE.md)). The firmware no longer parses the
-filesystem — it only (optionally) moves sectors.
+filesystem, it only (optionally) moves sectors.
 
-- **`pc64/blkdev.{c,h}`** — a 512-byte-sector block-device registry.
-- **`pc64/ahci.c`** — a native AHCI driver (PCI class 01/06, ABAR, polled
+- **`pc64/blkdev.{c,h}`**: a 512-byte-sector block-device registry.
+- **`pc64/ahci.c`**: a native AHCI driver (PCI class 01/06, ABAR, polled
   READ/WRITE DMA EXT, static command-list/FIS, no interrupts).
-- **`pc64/fat.{c,h}`** — native FAT16/32 read/write/create/delete/list, with
+- **`pc64/fat.{c,h}`**: native FAT16/32 read/write/create/delete/list, with
   GPT + MBR + superfloppy partition discovery. Mounts **every** FAT16/32
-  partition — a firmware ESP and a plain basic-data FAT32 are identical — which
+  partition, a firmware ESP and a plain basic-data FAT32 are identical, which
   is what lets UnoDOS live on any FAT32 volume, not just "the ESP the firmware
   exposed". Fonts, docs, and (in M2) apps come from there.
 - **`pc64_fs.c`** gains a real `uno_fs_write`/`uno_fs_writable` API (the fs
   surface was read-only before); Notepad/Editor saves persist to a writable FAT
   volume. The System window shows a `Native FS:` line.
 
-Architecture note — **one driver per controller**: while boot services are live
+Architecture note, **one driver per controller**: while boot services are live
 the firmware owns the AHCI/NVMe controllers, so the block layer takes the sector
 transport from firmware Block IO (reprogramming a port out from under firmware
 corrupted an installer clone). The native AHCI driver activates only once the OS
@@ -141,11 +140,11 @@ detaches from firmware (a later milestone). Verified headless
 a marker and a gated boot-time self-test proves write+delete on a plain FAT32
 basic-data disk; the install-to-disk flow stays regression-clean.
 
-## [pc64 installer — put UnoDOS on a local disk] - 2026-07-19
+## [pc64 installer, put UnoDOS on a local disk] - 2026-07-19
 
 A new **Install** app in the pc64 shell installs the running system to a local
 disk ([pc64/INSTALL.md](pc64/INSTALL.md)): non-destructively into an existing
-FAT/ESP volume (`\EFI\UNODOS\` + a `UnoDOS` NVRAM boot entry — Windows keeps
+FAT/ESP volume (`\EFI\UNODOS\` + a `UnoDOS` NVRAM boot entry, Windows keeps
 booting), or destructively by cloning the boot USB's GPT+ESP onto a whole disk
 with the backup GPT relocated to the disk's real end. Backend
 ([pc64/installer.c](pc64/installer.c)) runs on firmware plumbing alone: Simple
@@ -158,17 +157,17 @@ installed system finds them. Verified headless both ways
 desktop, on WSL QEMU (TCG) and devbuntu (KVM); the ESP flow proves foreign
 `\EFI` content survives. Hardware target: Surface Laptop Go 1 (ESP mode).
 
-## [unoacpi — AML/ACPI interpreter: battery + lid on pc64] - 2026-07-18
+## [unoacpi, AML/ACPI interpreter: battery + lid on pc64] - 2026-07-18
 
 pc64 now runs a real AML interpreter: **unoacpi** ([unoacpi/](unoacpi/)), the
 portable ACPI power stack shared verbatim with Writer's Unlock (vendored
 [uACPI](https://github.com/uACPI/uACPI) 6.0.0 + arena heap + EmbeddedController
 and SMBus/GenericSerialBus op-region handlers + battery/lid consumer API).
 UnoDOS implements only the thin host layer ([pc64/acpi_host.c](pc64/acpi_host.c)
-— the ~25 `uacpi_kernel_*` callbacks: RSDP from the EFI config table, identity
+- the ~25 `uacpi_kernel_*` callbacks: RSDP from the EFI config table, identity
 map, TSC nanosecond clock, port I/O, PCI mech #1, single-threaded stubs).
 
-- **Battery % in the taskbar tray** (AML `_BST`/`_BIF`, cached ~2 s) — appears
+- **Battery % in the taskbar tray** (AML `_BST`/`_BIF`, cached ~2 s), appears
   only when ACPI reports a battery, so QEMU/desktops show no chip.
 - **System window readout**: bring-up status, namespace nodes, battery, lid
   (`_LID`), EC state, arena high-water.
@@ -181,10 +180,10 @@ map, TSC nanosecond clock, port I/O, PCI mech #1, single-threaded stubs).
   `PNP0C0A`/`PNP0C0D` SSDT ([pc64/tools/testbat.asl](pc64/tools/testbat.asl))
   and screenshots the 50% tray chip + System readout; plain boot stays clean.
 
-## [unoui — cross-platform UI toolkit (write-once widgets, themes, portable input)] - 2026-06-15
+## [unoui, cross-platform UI toolkit (write-once widgets, themes, portable input)] - 2026-06-15
 
 A new portable C widget toolkit, **unoui** ([unoui/](unoui/), guide in
-[docs/UNOUI.md](docs/UNOUI.md)), for the C-based ports and the host — the
+[docs/UNOUI.md](docs/UNOUI.md)), for the C-based ports and the host, the
 look-and-feel analogue of [Uno3D](docs/UNO3D.md): a portable core over the
 shared `fb.h` software framebuffer plus a swappable vtable. An app builds a
 window's widget tree **once**; a **theme** restyles all of it.
@@ -192,18 +191,18 @@ window's widget tree **once**; a **theme** restyles all of it.
 - **Write once, theme many.** A theme is a `unoui_palette` (semantic colour
   roles), `unoui_metrics` (sizes + target colour depth) and a `unoui_draw`
   vtable of chrome painters with per-painter NULL-fallback to the portable
-  defaults — so a theme can change *colours*, *graphics*, or both. Depth-aware
+  defaults, so a theme can change *colours*, *graphics*, or both. Depth-aware
   via `ui_shade` ordered dither, so write-once chrome renders correctly from
   1-bit to truecolour.
 - **Eight themes** ship and are host-verified by rendering the *same* window
   under each into a contact sheet (`unoui/build/themes.png`): the unified
-  `theme_unodos`, plus native reproductions — Mac OS 7, a 1-bit Mac Plus,
+  `theme_unodos`, plus native reproductions, Mac OS 7, a 1-bit Mac Plus,
   Windows 3.1, Amiga Workbench, Commodore 64, Apple II (green mono), NeXTSTEP.
 - **~20 widgets:** window/menu-bar/tabs, label, button, checkbox, radio,
   editable single-line field and **multi-line text area** (caret, selection,
   scrolling), progress bar, vertical + horizontal scrollbars, slider, numeric
   spinner, dropdown/combo, list box, group box, separator, desktop icon.
-- **Portable input** ([unoui_input.c](unoui/unoui_input.c)) — all behaviour is a
+- **Portable input** ([unoui_input.c](unoui/unoui_input.c)), all behaviour is a
   pure function of an abstract `unoui_event` stream: window drag with z-order,
   focus + Tab traversal, scrollbar/slider thumb drag, menus and dropdown popups,
   and full multi-line text editing (caret, mouse caret-placement + drag-select,
@@ -211,18 +210,18 @@ window's widget tree **once**; a **theme** restyles all of it.
   adapter mapping native mouse/keyboard to `unoui_event` plus the `fb` present.
   Verified by driving the write-once app with a *scripted* event stream into a
   14-frame storyboard (`unoui/build/storyboard.png`), whose last frames re-skin
-  the identical live state under other themes — proving input and theming
+  the identical live state under other themes, proving input and theming
   compose. Builds clean under `-Wall`/`-Wextra`; reuses `ps2/fb.c` + the shared
   8×8 font, exactly as the Uno3D host target does. Not yet wired into the port
   glue `main()`s (each needs its ~20-line event adapter); it is the C-port
   toolkit plus host proof.
 
-## [Cross-platform migration — apps now LOAD FROM STORAGE] - 2026-06-15 (Build 425)
+## [Cross-platform migration, apps now LOAD FROM STORAGE] - 2026-06-15 (Build 425)
 
 Every UnoDOS port that has storage now **loads its apps from disk at runtime as
 separate binaries**, instead of compiling them into a "giant kernel with apps
 built in." The kernels shrink dramatically; the apps become real on-disk files
-linked to the kernel only by an extracted API table — the pattern the x86
+linked to the kernel only by an extracted API table, the pattern the x86
 reference port has always used (kernel API #18 loads apps from disk; even the
 launcher is a disk file) and that the C64 port pioneered with
 `mkapi.py`/`kernel_api.inc`, now generalised across the family.
@@ -236,69 +235,69 @@ Two architecture models were used per platform:
 
 Per port:
 
-- **C64** — full-screen model. **All** apps are now separate binaries on the
+- **C64**: full-screen model. **All** apps are now separate binaries on the
   `.d64`, loaded to `$5000` through the `$DE00` loader port; the kernel contains
-  **no app code**. 10 app binaries — SysInfo(0), Clock(1), Files+Notepad(2,
+  **no app code**. 10 app binaries, SysInfo(0), Clock(1), Files+Notepad(2,
   bundled), Theme(3), Dostris(4), Music(5), Pac-Man(6), Tracker(7), Paint(8),
   OutLast(9). Kernel `.prg` **8603 → 3775 bytes (~56% smaller)**. 11/11 harness
   regression scripts pass. (Supersedes the earlier C64 entry, which had Theme,
-  Dostris and Music shipping inline — they are disk-loaded now too.)
-- **Apple II** — full-screen model. 8 app binaries loaded from disk via the GCR
+  Dostris and Music shipping inline, they are disk-loaded now too.)
+- **Apple II**: full-screen model. 8 app binaries loaded from disk via the GCR
   RWTS into a fixed `$6000` region (`files_notepad`, `theme`, `dostris`,
   `pacman`, `music`, `tracker`, `paint`, `outlast`). SysInfo + Clock remain
   small kernel-drawn launcher windows (not separate apps). Kernel **14669 →
   5194 bytes**. 12/12 regression scripts pass. Real RWTS load path (works on
   hardware, no harness hook).
-- **Apple IIGS** — windowed multitasking preserved. 8 `.APP` binaries read at
+- **Apple IIGS**: windowed multitasking preserved. 8 `.APP` binaries read at
   runtime from the FAT12/SmartPort volume into per-app bank-0 slots; multiple
   apps stay resident (3 verified ticking concurrently) and the WM dispatches
   each window through the app's loaded JMP vectors. SysInfo/Clock stay
   kernel-resident. Kernel **11636 → 6335 bytes**. 9/9 regression suites pass.
-- **MacPlus** — windowed multitasking, multi-resident. 9 `.APP` binaries on the
+- **MacPlus**: windowed multitasking, multi-resident. 9 `.APP` binaries on the
   FAT12 (.Sony) disk, loaded into 16 KB slots on demand. SysInfo/Clock and the
   audio sequencers stay kernel-side by design. Kernel **30932 → 16774 bytes
   (−46%)**. ROM-free Unicorn harness regressions pass.
-- **Amiga** — windowed, load-on-open. 9 `.APP` binaries on the DF1 FAT12 disk,
+- **Amiga**: windowed, load-on-open. 9 `.APP` binaries on the DF1 FAT12 disk,
   loaded into per-window `$50000` slots; the kernel publishes a fixed API vector
   table at `$77000` that apps call by ordinal. SysInfo/Clock stay
   kernel-resident. Kernel hunk-exe **30620 → 22872 bytes (−25%)**. Verified
-  booting in WinUAE (AROS ROM) — the Files app, itself loaded from disk, lists
+  booting in WinUAE (AROS ROM), the Files app, itself loaded from disk, lists
   the `.APP` files on DF1.
-- **Mac System 7 / PS2 / Dreamcast** — shared portable C core. The real
+- **Mac System 7 / PS2 / Dreamcast**: shared portable C core. The real
   `unodos.c` (all three copies) was refactored to be **app-free** (e.g. PS2
   4295 → 1605 lines); the compile-time `switch(proc)` dispatch became a runtime
   function-pointer `AppInterface` table fed by a generic loader, and all 11 apps
   are now separate loadable modules. **Host-verified:** the app-free core
   `dlopen`s all 11 modules from storage and renders them as a multi-window
   desktop, and `nm` confirms zero app symbols in the core. Native targets are
-  **build-wired** to load modules from their real storage — Mac:
+  **build-wired** to load modules from their real storage, Mac:
   FAT12/CODE-resource; PS2: `mc0:/UnoDOS/Apps/`; Dreamcast: `/cd/UNODOS/APPS/`
-  (ISO9660) — and host-shim-verified; **on-device/emulator verification
+  (ISO9660), and host-shim-verified; **on-device/emulator verification
   (Retro68+Executor / PCSX2 / Flycast) is in progress / pending.** No native
   emulator verification is claimed yet.
 - **SNES and Genesis are deliberately left built-in:** cartridge ROM is the
-  correct delivery medium — there is no removable or writable code storage, and
+  correct delivery medium, there is no removable or writable code storage, and
   (on the SNES) no audio-input path, so loading apps from storage has nothing to
   load from.
 
 VERSION → **3.32.0425**, BUILD_NUMBER → **425**.
 
-## [Commodore 64 port — M2 + M3: full 11-app parity] - 2026-06-15
+## [Commodore 64 port, M2 + M3: full 11-app parity] - 2026-06-15
 
 The C64 port reaches **full app parity** with the Apple II roster, and gains the
 disk-loaded-app architecture the mature ports use.
 
-- **M2 — storage + text apps.** Full CIA keyboard-matrix decode (a `keymap`
+- **M2, storage + text apps.** Full CIA keyboard-matrix decode (a `keymap`
   table for letters/digits/symbols + DEL/F1/RUN-STOP), an `app_mode` dispatch,
   a **USV1 byte-heap mini-FS** (`fs.i`) in a harness-persisted RAM region, and
-  **Files + Notepad** — edits survive a power cycle (`tests/m2_persist.script`).
+  **Files + Notepad**: edits survive a power cycle (`tests/m2_persist.script`).
   The C64 has no NVRAM, so the FS region is persisted like the SRAM-backed
   Genesis/SNES ports; a 1541/IEC driver is the real-hardware follow-up.
-- **M3 — the full roster.** **Theme** (re-tints the whole desktop — trivial on
+- **M3, the full roster.** **Theme** (re-tints the whole desktop, trivial on
   the per-cell-colour VIC), **Dostris** (colour tetrominoes), **Music** (Ode to
-  Joy on the SID — a real synth, no 1-bit busy-loop), **Pac-Man**, **Tracker**
+  Joy on the SID, a real synth, no 1-bit busy-loop), **Pac-Man**, **Tracker**
   (3 SID voices), **Paint** (16-colour canvas) and **OutLast** (colour-band
-  pseudo-3D racer) — **all ship as disk-loaded apps** (see the 2026-06-15
+  pseudo-3D racer), **all ship as disk-loaded apps** (see the 2026-06-15
   cross-platform migration entry above; the kernel contains no app code).
 - **Disk-loaded apps.** Every app is a separate binary assembled at `$5000`,
   loaded on demand and linked to the kernel only by the API addresses
@@ -312,23 +311,23 @@ disk-loaded-app architecture the mature ports use.
   model means there is nothing to schedule concurrently (the Apple II port's
   prototype already proved stack-partitioning is *feasible* if ever needed).
 
-11 apps total — SysInfo, Clock, Files, Notepad, Theme, Dostris, Music, Pac-Man,
-Tracker, Paint, OutLast — each with a `tests/*.script` regression
+11 apps total, SysInfo, Clock, Files, Notepad, Theme, Dostris, Music, Pac-Man,
+Tracker, Paint, OutLast, each with a `tests/*.script` regression
 (`c64/shots/*.png`). See [c64/HANDOFF.md](c64/HANDOFF.md).
 
-## [Commodore 64 port — milestone 1] - 2026-06-15
+## [Commodore 64 port, milestone 1] - 2026-06-15
 
 A new bare-metal target joins the family: the **Commodore 64** (6510), in
 `c64/`. Unlike the 1-bit Apple II port it leans into the C64's actual hardware.
 
 - **Colour hi-res desktop.** Banks the VIC-II into a 320×200 hi-res bitmap
   (VIC bank 1, bitmap `$6000`, screen RAM `$4000`) with **two colours per 8×8
-  cell from screen RAM** — a genuinely 16-colour desktop, menu bar, windows
+  cell from screen RAM**: a genuinely 16-colour desktop, menu bar, windows
   (blue focused / grey unfocused title bars) and blue-highlight icons, not a
   monochrome one. The shared 8×8 font drops in byte-for-byte (bit-7-left matches
   the C64 bitmap).
 - **A real hardware clock.** The Clock app reads the **CIA #1 Time-of-Day**
-  registers (BCD) with the chip's hours-latch / tenths-release behaviour — an
+  registers (BCD) with the chip's hours-latch / tenths-release behaviour, an
   actual clock, not the Apple II's calibrated soft tick.
 - **PAL/NTSC auto-detection** from the raster counter (`$D012` + `$D011` bit 8),
   reporting the right CPU clock and VIC-II part (6569 vs 6567).
@@ -339,13 +338,13 @@ A new bare-metal target joins the family: the **Commodore 64** (6510), in
 - **Toolchain + harness.** `dasm` assembles `kernel.s` (`org $0801`); `mkprg.py`
   emits a `.prg` and a real 1541 `.d64` (BAM + directory + interleaved chain).
   A **ROM-free py65 harness** models the VIC raster, CIA matrix + TOD and SID,
-  and renders the bitmap + per-cell colour to RGB PNG — `tests/m1.script`
+  and renders the bitmap + per-cell colour to RGB PNG, `tests/m1.script`
   (+ `m1_ntsc.script`) verify boot, PAL/NTSC, WM, the live clock and the blip
   (`c64/shots/m1_*.png`). Remaining: M2 (1541 storage, Files/Notepad), M3 (app
   roster on the three SID voices), real hardware (VICE → SD2IEC). See
   [c64/HANDOFF.md](c64/HANDOFF.md).
 
-## [Uno3D — portable 3D library + a 3D game across platforms] - 2026-06-15
+## [Uno3D, portable 3D library + a 3D game across platforms] - 2026-06-15
 
 UnoDOS gains hardware-accelerated 3D and a write-once 3D library.
 
@@ -353,8 +352,8 @@ UnoDOS gains hardware-accelerated 3D and a write-once 3D library.
   per-platform rasteriser backend (a `u3d_backend` vtable). The portable
   front-end does matrix math, transform, projection, back-face culling and
   near-plane clipping; backends just clear/rasterise/flush/present. Backends:
-  `soft` (CPU rasteriser into the framebuffer — universal), `ps2-gs` (PS2
-  Graphics Synthesizer via gsKit — real hardware 3D), `dc-pvr` (Dreamcast
+  `soft` (CPU rasteriser into the framebuffer, universal), `ps2-gs` (PS2
+  Graphics Synthesizer via gsKit, real hardware 3D), `dc-pvr` (Dreamcast
   PowerVR2 via KallistiOS). Designed so a new platform is one new file.
 - **A 3D game, "UnoDOS Runner"** (`uno3d/uno3d_game.c`): an obstacle-dodger
   written once against the Uno3D API + an abstract input struct; the same logic
@@ -365,11 +364,11 @@ UnoDOS gains hardware-accelerated 3D and a write-once 3D library.
   app that draws the same 3D corridor through the kernel's `INT 0x80` graphics
   API (VGA mode 13h, fixed-point perspective, filled-rect painter's order, 8088-
   compatible). Ships in the floppy image; the desktop launcher auto-discovers it.
-- **Docs:** new [docs/UNO3D.md](docs/UNO3D.md) — overview, full API reference,
+- **Docs:** new [docs/UNO3D.md](docs/UNO3D.md), overview, full API reference,
   and a guide to writing games with Uno3D; cross-linked from the root README and
   APP_DEVELOPMENT.
 
-## [Apple IIGS port — FULL APP PARITY: OutLast + cooperative scheduler] - 2026-06-15 (Build 420)
+## [Apple IIGS port, FULL APP PARITY: OutLast + cooperative scheduler] - 2026-06-15 (Build 420)
 
 The IIGS port reaches **complete app parity** - all 11 UnoDOS apps plus the
 cooperative scheduler, every one implemented and verified headlessly.
@@ -390,7 +389,7 @@ cooperative scheduler, every one implemented and verified headlessly.
   hand, then FloppyEmu SmartPort) and audio-by-ear (DOC sound isn't harness-
   reproducible) - the cross-port hardware-blocked tail.
 
-## [Apple IIGS port — Pac-Man (maze chase on Super Hi-Res)] - 2026-06-15 (Build 419)
+## [Apple IIGS port, Pac-Man (maze chase on Super Hi-Res)] - 2026-06-15 (Build 419)
 
 `iigs/pacman.i` (proc 9): a 13x11 maze of 8x8 cells, tile-stepped pac (arrow
 keys, queued turns) eating dots for score, two ghosts that greedily chase
@@ -400,7 +399,7 @@ corridors (`iigs/shots/m3_pacman.png`). `tests/pacman.py` -> `PACMAN PASS`
 (launch / eat dots / ghost chase / collision). Remaining for full parity:
 OutLast (pseudo-3D racer) + scheduler.
 
-## [Apple IIGS port — Tracker (4-voice DOC pattern sequencer)] - 2026-06-15 (Build 418)
+## [Apple IIGS port, Tracker (4-voice DOC pattern sequencer)] - 2026-06-15 (Build 418)
 
 `iigs/tracker.i` (proc 8): a 16-step x 4-channel pattern grid edited with the
 arrows + number keys, P toggles playback, and `tracker_tick` plays each step's
@@ -409,7 +408,7 @@ four channels on DOC oscillators 0-3 - real polyphony on the IIGS
 cursor / 4-voice DOC playback verified via the harness DOC log). Remaining for
 full parity: Pac-Man, OutLast, scheduler.
 
-## [Apple IIGS port — Paint (mouse-driven Super Hi-Res colour canvas)] - 2026-06-15 (Build 417)
+## [Apple IIGS port, Paint (mouse-driven Super Hi-Res colour canvas)] - 2026-06-15 (Build 417)
 
 `iigs/paint.i` (proc 6): a 36x18 fat-pixel canvas, an 8-colour ink palette,
 drag-to-paint (`paint_tick` paints the cell under the cursor while the button is
@@ -418,41 +417,41 @@ held over the canvas), number keys 1-8 pick the ink, C clears
 that launches Paint is suppressed until released so it doesn't draw a stray cell.
 Remaining for full parity: Pac-Man, OutLast, Tracker, scheduler.
 
-## [Apple IIGS port — Dostris (colour Tetris on Super Hi-Res)] - 2026-06-15 (Build 416)
+## [Apple IIGS port, Dostris (colour Tetris on Super Hi-Res)] - 2026-06-15 (Build 416)
 
-First colour game on the IIGS port: `iigs/dostris.i` (proc 5) — a 10x18 well of
+First colour game on the IIGS port: `iigs/dostris.i` (proc 5), a 10x18 well of
 8x8 SHR cells, 7 tetrominoes x 4 rotations, per-frame gravity (`game_tick`),
 keyboard controls (arrows + space hard-drop), line clear + scoring, all in the
 16-colour SHR game palette (`iigs/shots/m3_dostris.png`). `tests/dostris.py` ->
 `DOSTRIS PASS` (move/rotate/drop/gravity/line-clear). Bug banked: a board
-row-index helper aliased a caller's live temps (`DT1/DT2`) — gave it private
+row-index helper aliased a caller's live temps (`DT1/DT2`), gave it private
 scratch. Remaining for full parity: Pac-Man, OutLast, Paint, Tracker, scheduler.
 
-## [snes: milestone 3 complete — SPC700 audio + Music/Theme/Tracker/Paint + scheduler] - 2026-06-15
+## [snes: milestone 3 complete, SPC700 audio + Music/Theme/Tracker/Paint + scheduler] - 2026-06-15
 
-M3 closes the SNES port (M0–M3 done). The centrepiece is the SPC700 audio
+M3 closes the SNES port (M0-M3 done). The centrepiece is the SPC700 audio
 driver; on top of it land the four M3 apps and the cooperative scheduler.
 
-- **SPC700 audio core** (`spc700.py`, `sound.inc`) — ca65 can't target the
+- **SPC700 audio core** (`spc700.py`, `sound.inc`), ca65 can't target the
   SPC700, so a tiny two-pass Python SPC700 assembler builds the driver (a
   mailbox poll loop + DSP register writes), a square-wave BRR sample, and a
   MIDI→DSP-pitch table, emitted into gen_data.inc. The 65816 side does the
-  IPL handshake upload on $2140–$2143, jumps the driver, and talks to it over
+  IPL handshake upload on $2140-$2143, jumps the driver, and talks to it over
   a token-acked mailbox; every wait is timeout-bounded. Verified by ack
   ("Audio: SPC700 OK"); tone-by-ear is the hardware pass.
-- **Music** (proc 3) — Canon in D on DSP voice 0.
-- **Theme** (proc 8) — 8 presets + a BGR555 RGB editor. CGRAM is write-only
+- **Music** (proc 3), Canon in D on DSP voice 0.
+- **Theme** (proc 8), 8 presets + a BGR555 RGB editor. CGRAM is write-only
   outside vblank, so apply_theme edits a WRAM palette shadow and the NMI DMAs
   it to CGRAM (FlushPalette).
-- **Tracker** (proc 9) — a 32×4 pattern sequencer on DSP voices 0–3, with
+- **Tracker** (proc 9), a 32×4 pattern sequencer on DSP voices 0-3, with
   SONG.TRK save/load via the USV1 SRAM.
-- **Paint** (proc 10) — a per-pixel **canvas of unique tiles** (no bitmap
+- **Paint** (proc 10), a per-pixel **canvas of unique tiles** (no bitmap
   mode on the SNES): pixels are painted into a planar-tile shadow in bank
   $7F and dirty tiles are DMA'd to VRAM by the NMI at ≤24/frame.
-- **Scheduler** (`sched.inc`) — cooperative *by ticks*. The 65816 stack must
+- **Scheduler** (`sched.inc`), cooperative *by ticks*. The 65816 stack must
   live in bank 0, whose low 8 KB is full here (~736 B free), so the Genesis
   per-task-stack model can't fit; sched_run runs every app's *_tick from the
-  main loop instead — same behaviour, no context switch. A documented verdict.
+  main loop instead, same behaviour, no context switch. A documented verdict.
 
 Deviations (HANDOFF): square-wave-only audio, the Tracker's tone-not-noise
 4th channel, Paint's pencil-only/fixed-palette toolset, the tick-model
@@ -460,7 +459,7 @@ scheduler. Recurring traps fixed: the ca65 width trap (`.a8` at branch-target
 labels after a `rep`), long-indexing is X-only (the dirty ring), STZ has no
 long mode (bank-$7F clears use LDA #0/STA).
 
-## [Apple IIGS port — M3: 4096-colour Theme + Ensoniq DOC audio] - 2026-06-15 (Build 415)
+## [Apple IIGS port, M3: 4096-colour Theme + Ensoniq DOC audio] - 2026-06-15 (Build 415)
 
 The two most IIGS-distinctive hardware features land.
 
@@ -468,47 +467,47 @@ The two most IIGS-distinctive hardware features land.
   SHR palette line 0 (`$E1:9E00`); because Super Hi-Res looks up the palette per
   pixel at scan-out, one palette poke recolours the entire desktop instantly
   with no pixel redraw (`iigs/shots/m3_theme.png`).
-- **Ensoniq DOC audio (`iigs/snd.i`):** the marquee IIGS sound chip — 32
-  oscillators, 64 KB dedicated sound RAM — driven through the sound GLU
-  (`$C03C`–`$C03F`). `doc_init` halts the oscillators and loads a wavetable into
+- **Ensoniq DOC audio (`iigs/snd.i`):** the marquee IIGS sound chip, 32
+  oscillators, 64 KB dedicated sound RAM, driven through the sound GLU
+  (`$C03C`-`$C03F`). `doc_init` halts the oscillators and loads a wavetable into
   DOC RAM; the Music app sequences a melody on oscillator 0 with a per-frame
   tick. Audio isn't reproducible in the ROM-free harness (no DOC synthesis), but
   every GLU register write is logged and asserted, so the oscillator-programming
   path is verified. `tests/m3.py` → `M3 PASS`.
 - Remaining for full parity: the colour games (Dostris/Pac-Man/OutLast/Paint) +
-  Tracker + scheduler — additive app files over the now-complete renderer,
+  Tracker + scheduler, additive app files over the now-complete renderer,
   input, storage and audio foundations.
 
-## [Apple IIGS port — M2: FAT12 storage over SmartPort + Files/Notepad] - 2026-06-15 (Build 414)
+## [Apple IIGS port, M2: FAT12 storage over SmartPort + Files/Notepad] - 2026-06-15 (Build 414)
 
 The IIGS port gains persistent storage: a real FAT12 volume on the 800 KB disk,
 read and written through the SmartPort/ProDOS block firmware.
 
 - **blk_io + FAT12 core (`iigs/fs.i`):** the kernel calls the slot firmware's
   ProDOS block driver (entry + unit stashed by `boot.s`) in 6502 emulation mode
-  (`sec/xce` … `clc/xce`), then mounts a FAT12 volume — `fat_mount` (caches the
+  (`sec/xce` … `clc/xce`), then mounts a FAT12 volume, `fat_mount` (caches the
   3-sector FAT), `fat_list_root`, `fat_read_file` (single + multi-cluster), and
   a full write path (`fat_alloc_chain`/`fat_free_chain`/`fat_set_entry`/
   `fat_flush`/`fat_save_file`). Geometry is fixed and synced once with
   `mkfs.py`; little-endian fields read natively.
 - **Files + Notepad (`iigs/apps.i`):** Files lists the root directory and opens
   the selected file into Notepad; Notepad is an append editor whose **Ctrl-S
-  writes the buffer back to disk** — verified to persist across a full reboot of
+  writes the buffer back to disk**: verified to persist across a full reboot of
   the image (`tests/m2.py` → `M2 PASS`, with `--writeback`).
 - **Disk tooling:** `iigs/mkfs.py` writes the FAT12 volume at block 256;
   `mkdsk.py` reserves it. Bug banked: `blk_io` must not alias the FAT walkers'
-  cluster temp (`F0`) — multi-cluster ops looped until it used private scratch.
+  cluster temp (`F0`), multi-cluster ops looped until it used private scratch.
   Next: M3 (colour apps + Ensoniq DOC audio + scheduler). Disk-loaded apps
   deferred.
 
-## [dreamcast: emulator-verified at parity — runs in Flycast + AICA audio] - 2026-06-15 (Build 413)
+## [dreamcast: emulator-verified at parity, runs in Flycast + AICA audio] - 2026-06-15 (Build 413)
 
 The Dreamcast port now **runs**, not just compiles: it boots in the **Flycast**
 emulator at native 640×480 / 60 fps and reaches feature parity with the family.
 
 - **Booted + captured in Flycast** (REIOS HLE BIOS, no Sega BIOS file): the
   desktop + all 11 app icons, Pac-Man, Dostris, Tracker, Paint, Theme, Files,
-  OutLast, and the Music+Files+Notepad stack — `dreamcast/shots/dc_*.png`, grabbed
+  OutLast, and the Music+Files+Notepad stack, `dreamcast/shots/dc_*.png`, grabbed
   from the emulated PowerVR (not the host shim).
 - **VMU storage verified in-emulator**: the Notepad save→clear→reload autotest
   writes to `/vmu/a1` and reads the bytes back; the restored text proves the KOS
@@ -528,14 +527,14 @@ emulator at native 640×480 / 60 fps and reaches feature parity with the family.
 - New: `dreamcast/dc_main.c` AICA synth + `dreamcast/tools/{emu_run.sh,
   capture_apps.sh}`. Remaining: real hardware (incl. the audio ear-check).
 
-## [Apple IIGS port — M1: Super Hi-Res desktop + window manager] - 2026-06-15 (Build 412)
+## [Apple IIGS port, M1: Super Hi-Res desktop + window manager] - 2026-06-15 (Build 412)
 
 The IIGS port boots past the splash into a real, mouse-driven colour desktop
 (`iigs/shots/m1_desktop.png`).
 
 - **SHR desktop + window manager:** menu bar, icon grid, version line, and the
-  full PORT-SPEC §2 WM — a 16-slot window table (6 live), z-order with
-  raise-on-click, title-bar drag, and a close box — ported from the proven SNES
+  full PORT-SPEC §2 WM, a 16-slot window table (6 live), z-order with
+  raise-on-click, title-bar drag, and a close box, ported from the proven SNES
   expression onto an 8×8 cell grid (40×25 on 320×200), all in 16-colour Super
   Hi-Res via a 4bpp text/rect engine over the shared 8×8 font.
 - **Real pointer + keyboard:** a polled ADB mouse drives a save-under software
@@ -545,7 +544,7 @@ The IIGS port boots past the splash into a real, mouse-driven colour desktop
 - **SysInfo + Clock:** machine identity and a live `HH:MM:SS` uptime clock.
 - **Fast bank-0 state:** kernel-normal DBR=$00, so all WM state and tables live
   in fast bank-0 RAM; the bank-$E1 SHR framebuffer is reached via 24-bit
-  pointers and long-indexed stores (DBR never moves) — avoiding a Mega-II-RAM
+  pointers and long-indexed stores (DBR never moves), avoiding a Mega-II-RAM
   speed regression.
 - **Harness:** a `wdm #$02` frame marker (a NOP on real silicon) lets the
   ROM-free rig step frame-by-frame, inject keys, and feed a signed-delta ADB
@@ -553,7 +552,7 @@ The IIGS port boots past the splash into a real, mouse-driven colour desktop
   mirrors the apple2 rig. Regression `iigs/tests/m1.py` → `M1 PASS`. Next: M2
   (SmartPort + FAT12 + Files/Notepad).
 
-## [8088 port — boot off a CompactFlash card on an XT-IDE adapter] - 2026-06-15
+## [8088 port, boot off a CompactFlash card on an XT-IDE adapter] - 2026-06-15
 
 UnoDOS now boots and runs from a CF card on an XT-IDE controller on a real 8088.
 The hard-disk path (mbr/vbr/stage2_hd + the kernel FAT16 driver) is 386-only by
@@ -581,25 +580,25 @@ FAT12 stack; full FAT16-on-8088 is a tracked follow-up.
   with a DOS-formatted CF; host write-back via MartyPC's GUI menu. See
   `docs/PORT-8088.md`.
 
-## [snes: milestone 2 complete — Dostris, OutLast, Pac-Man] - 2026-06-15
+## [snes: milestone 2 complete, Dostris, OutLast, Pac-Man] - 2026-06-15
 
 M2's three shared games join the storage core, closing M2. All in
 `snes/games.inc`, cell-rendered on the shadow+DMA model, verified in Mesen2
 via the F12 framebuffer rig.
 
-- **Dostris** (proc 4) — the Genesis piece tables, scoring and physics; the
+- **Dostris** (proc 4), the Genesis piece tables, scoring and physics; the
   game-mode pad remap (d-pad with hold-repeat, A = hard drop, X = new,
   Y = pause) and a Score/Lines/Level panel.
-- **OutLast** (proc 5) — a linear-perspective scrolling racer: converging
+- **OutLast** (proc 5), a linear-perspective scrolling racer: converging
   grass/road/stripe bands (half-width = `row − HORIZ`, divide-free), a
   steerable car, and a Spd/Time HUD. DEVIATION from Genesis: no per-row 1/z
-  raster, road curve, or oncoming traffic — the 65816 has no fast software
+  raster, road curve, or oncoming traffic, the 65816 has no fast software
   16/16 divide.
-- **Pac-Man** (proc 6) — the full x86 ghost AI (Blinky direct, Pinky
+- **Pac-Man** (proc 6), the full x86 ghost AI (Blinky direct, Pinky
   4-ahead, Clyde hybrid, scatter/chase schedule, frightened eat-chain)
   intact, recast to tile coordinates. DEVIATION: actors are CELL-GRID BG
   tiles (new shaped pac/ghost/dot/pellet/gate tiles in `mkdata.py`), not
-  pixel-smooth OAM sprites — one tile per step, collisions by tile equality.
+  pixel-smooth OAM sprites, one tile per step, collisions by tile equality.
   The 28×25 maze + a 1-row HUD fill the 30×28 window. Seventh desktop icon.
 
 Trap fixed: the Pac-Man state block first overlapped the 2 KB Notepad buffer
@@ -607,9 +606,9 @@ at `$0400-$0BFF` (`notepad_set_demo` seeded `$534F` into the hi-score);
 repacked into free WRAM at `$0CC8-$0FE5`, above the Dostris board and below
 the tilemap shadow.
 
-## [ps2: EE audio — square-wave synth on the SPU2 via audsrv] - 2026-06-15
+## [ps2: EE audio, square-wave synth on the SPU2 via audsrv] - 2026-06-15
 
-The PS2 Sound Manager is no longer a silent stub — Music's Canon in D and the
+The PS2 Sound Manager is no longer a silent stub, Music's Canon in D and the
 Tracker patterns now play through the SPU2. New file `ps2/ee_audio.c`; the PS2
 port reaches feature parity with the mature targets (only a real-hardware run
 remains).
@@ -623,7 +622,7 @@ remains).
   `uno_ee_present` and only writes `audsrv_available()` bytes, so it never stalls
   the loop and stays single-threaded on the SIF bus with the USB poll.
 - **Boot safety + a unified I/O thread.** `audsrv_init` spins on SIF RPC until the
-  IOP audio server answers — which never happens under PCSX2's fastboot HLE, so
+  IOP audio server answers, which never happens under PCSX2's fastboot HLE, so
   on the main thread it black-screened the boot (exactly like the USB
   `PS2KbdInit`/`PS2MouseInit` binds). Both bring-ups now run on one **low-priority
   I/O thread** (`io_init_thread`) holding a shared **SIF lock**; the per-frame
@@ -633,10 +632,10 @@ remains).
   its own thread (added earlier today) into this shared one.
 - **Verified:** full desktop boots in PCSX2 at FPS 60 with audsrv + all three USB
   modules loaded and the I/O thread running (`ps2/shots/m3_audio_boot.png`). The
-  audio output itself is hardware-only to verify — PCSX2 can't drive
+  audio output itself is hardware-only to verify, PCSX2 can't drive
   SPU2-via-audsrv under fastboot, the same ear-check ceiling as the other ports.
 
-## [Apple IIGS port — M0: 65C816 native boot + Super Hi-Res splash] - 2026-06-15 (Build 411)
+## [Apple IIGS port, M0: 65C816 native boot + Super Hi-Res splash] - 2026-06-15 (Build 411)
 
 First milestone of the **Apple IIGS** port (`iigs/`): a native 65C816 / Super
 Hi-Res reimagining of UnoDOS that uses the IIGS hardware the plain Apple II
@@ -647,7 +646,7 @@ disk that boots to a 16-colour SHR splash (`iigs/shots/m0.png`).
   enters at `$0801` in 6502 emulation mode; the boot stage finds the slot's
   ProDOS block driver (`$Cn00+[$CnFF]`), reads the kernel from blocks 1..K to
   `$00:2000`, switches to native 16-bit mode (`clc/xce`, `rep #$30`), and jumps
-  in. No GCR — the SmartPort firmware is the disk driver (the ".Sony equivalent").
+  in. No GCR, the SmartPort firmware is the disk driver (the ".Sony equivalent").
 - **Super Hi-Res, in colour:** `NEWVIDEO ($C029)=$C1` enables SHR; the kernel
   paints a desktop, menu bar, and a framed window with a 4bpp text engine that
   expands the shared UnoDOS 8×8 font (320×200, 160 B/row, high-nibble = left px,
@@ -656,18 +655,18 @@ disk that boots to a 16-colour SHR splash (`iigs/shots/m0.png`).
   and no IIGS ROM/MAME is on hand, so `iigs/cpu65816.py` is a new
   functionally-correct 65C816 interpreter (native+emulation, M/X widths, full
   opcode/addressing set, MVN/MVP, WDM trap; self-tests). `iigs/harness.py` plays
-  the firmware around it — block autoload, the ProDOS driver (read + write,
-  `--writeback`), the `$C0xx` soft-switch page — and renders SHR → PNG. CI-able
+  the firmware around it, block autoload, the ProDOS driver (read + write,
+  `--writeback`), the `$C0xx` soft-switch page, and renders SHR → PNG. CI-able
   with zero ROM dependency. GSplus/KEGS/MAME stay the by-hand rigs; real hardware
   is FloppyEmu in SmartPort mode.
 - **Toolchain:** cc65 `ca65 --cpu 65816` + `ld65` (shared with the SNES port).
   Regression `iigs/tests/m0.py` → `M0 PASS`. Next: M1 (desktop + WM + ADB
   mouse/keyboard + SysInfo/Clock).
 
-## [8088 port — feature parity on a cycle-accurate IBM PC/XT] - 2026-06-15 (Build 410)
+## [8088 port, feature parity on a cycle-accurate IBM PC/XT] - 2026-06-15 (Build 410)
 
 The x86 reference build now runs at **full feature parity on a genuine Intel
-8088**, verified in MartyPC (cycle-accurate, open GLaBIOS). Closing out M0–M3.
+8088**, verified in MartyPC (cycle-accurate, open GLaBIOS). Closing out M0-M3.
 
 - **App sweep (M1):** SysInfo, Settings, Files, Paint, Clock, Notepad, Music,
   Tracker and Pac-Man all launch and render on the emulated XT through the
@@ -676,9 +675,9 @@ The x86 reference build now runs at **full feature parity on a genuine Intel
   and **write** (Notepad save → "XTTEST", title confirms the write) both verified
   on the 8088.
 - **Sound:** the PC-speaker apps (Music "Für Elise", Tracker pattern editor) run
-  — audio itself isn't screenshot-verifiable, the standard cross-port caveat.
+, audio itself isn't screenshot-verifiable, the standard cross-port caveat.
 - **Performance (M3):** the `draw_char` CGA row-blit fast path
-  (`draw_char_cga_fast` — one MUL/row, one RMW/VRAM-byte) was already in place and
+  (`draw_char_cga_fast`: one MUL/row, one RMW/VRAM-byte) was already in place and
   is active in CGA mode; all XT text renders through it. The earlier TODO entry
   was stale.
 - **Documented deviations (real envelope, not fake parity):** VGA apps (mode 13h/
@@ -686,14 +685,14 @@ The x86 reference build now runs at **full feature parity on a genuine Intel
   (`m2_vga_out_of_envelope.png`); minimum RAM is 256K (desktop) / 640K (full);
   full-screen game pixel-fill is slow at 4.77 MHz (inherent, like the Apple II at
   1 MHz). **Remaining:** cross-boot floppy persistence (MartyPC writes back only
-  via its GUI menu) + a physical IBM PC/XT pass — the same hardware-blocked
+  via its GUI menu) + a physical IBM PC/XT pass, the same hardware-blocked
   final step as every other port. See `docs/PORT-8088.md`.
 
-## [dreamcast: new port — M1 desktop + VMU storage, ELF compiles] - 2026-06-15 (Build 412)
+## [dreamcast: new port, M1 desktop + VMU storage, ELF compiles] - 2026-06-15 (Build 412)
 
 A new port: **UnoDOS on the Sega Dreamcast** (Hitachi SH-4 / PowerVR2, via
-KallistiOS). It reuses the PS2 port's portable-C-core strategy almost verbatim —
-the same [mac/unodos.c](mac/unodos.c) core over the same Mac-compat shim — and
+KallistiOS). It reuses the PS2 port's portable-C-core strategy almost verbatim -
+the same [mac/unodos.c](mac/unodos.c) core over the same Mac-compat shim, and
 swaps only the present and input layers. New directory `dreamcast/`.
 
 - **Software framebuffer at native 640×480.** All drawing is the shared
@@ -701,21 +700,21 @@ swaps only the present and input layers. New directory `dreamcast/`.
   derives geometry from `gScreen`, so the desktop fills the Dreamcast's native
   640×480 with no letterboxing (vs the PS2's 640×448). Each vblank
   `dreamcast/dc_main.c` converts the ARGB8888 buffer to **RGB565** and copies it
-  into the DC framebuffer (`vram_s`), then overlays the arrow cursor — the
+  into the DC framebuffer (`vram_s`), then overlays the arrow cursor, the
   PowerVR2 is left idle ("FB as the blitter," the PS2 GS design).
 - **Mac-compat shim shared.** `dreamcast/mac_compat.c`/`.h` are identical to the
   PS2 port; `dreamcast/unodos.c` is the core + `#ifdef UNO_DC` hooks
   (`uno_dc_init`/`poll`/`present`) mirroring the EE hooks.
 - **Maple input** (`dc_main.c`): controller d-pad → arrow keys, A/Start →
   Return/Esc, the analog stick + a Dreamcast mouse → the pointer (trigger/left
-  button clicks), a Dreamcast keyboard → typed text — all posted into the shim's
+  button clicks), a Dreamcast keyboard → typed text, all posted into the shim's
   event queue so the core's normal `GetNextEvent` loop consumes them.
 - **M2 VMU storage** (`mac_io.c` DC branch): Files/Notepad/Tracker/Paint persist
   to the VMU (`/vmu/a1`) via the KOS VFS, using a flush-on-close RAM buffer per
-  handle (whole-file save/load — matches UnoDOS's app model and the VMU's block
+  handle (whole-file save/load, matches UnoDOS's app model and the VMU's block
   flash). The HOST stdio backend stays byte-identical to PS2's.
 - **Verified on the host shim** at 640×480: splash, desktop, window manager and
-  all 11 apps render to PNGs (`dreamcast/shots/m1_*.png`) via WSL gcc — the exact
+  all 11 apps render to PNGs (`dreamcast/shots/m1_*.png`) via WSL gcc, the exact
   code the DC ELF compiles.
 - **The DC ELF compiles + links clean against KallistiOS.** The toolchain was
   built from source under WSL (`utils/kos-chain` → `Makefile.dreamcast.cfg` →
@@ -723,7 +722,7 @@ swaps only the present and input layers. New directory `dreamcast/`.
   `build/unodos-dc.elf` (a real SH-4 ELF, entry `0x8c010000`) and `build.sh iso`
   packages `build/unodos-dc.iso` (a bootable selfboot image: scrambled
   `1ST_READ.BIN` + a homebrew `IP.BIN`, wrapped by `genisoimage`). Only benign
-  warnings. **Not yet observed booting** — no DC emulator (Flycast/lxdream/
+  warnings. **Not yet observed booting**: no DC emulator (Flycast/lxdream/
   redream) on the dev machine. M3 audio (AICA) is stubbed.
 - Toolchain gotcha recorded: the KOS toolchain builder moved from `utils/dc-chain`
   (removed) to `utils/kos-chain`; the stock `environ.sh.sample` hard-codes
@@ -736,7 +735,7 @@ swaps only the present and input layers. New directory `dreamcast/`.
 ## [ps2: USB keyboard + mouse] - 2026-06-15
 
 The PS2 desktop now takes input from a real USB keyboard and mouse, alongside
-the DualShock 2 — both feed the same Mac-compat event queue. New file
+the DualShock 2, both feed the same Mac-compat event queue. New file
 `ps2/ee_usb.c`.
 
 - **Self-contained drivers.** The three IOP modules (`usbd`, `ps2kbd`,
@@ -744,8 +743,8 @@ the DualShock 2 — both feed the same Mac-compat event queue. New file
   `build/*_irx.c`) and loaded with `SifExecModuleBuffer`, so a FreeMcBoot launch
   needs no external module files. Links `-lkbd -lmouse`.
 - **Keyboard** runs in RAW (USB-HID-usage) mode; `hid_translate` owns a full US
-  keymap — letters, digits, shifted symbols, arrows, Return/Esc/Backspace/Tab/
-  Space — and maps Ctrl/Win to the Mac Command modifier. Events post into the
+  keymap, letters, digits, shifted symbols, arrows, Return/Esc/Backspace/Tab/
+  Space, and maps Ctrl/Win to the Mac Command modifier. Events post into the
   shim queue, so the core's normal `GetNextEvent` loop consumes them (real
   typing into Notepad).
 - **Mouse** runs in ABS mode clamped to the framebuffer, fed through
@@ -755,7 +754,7 @@ the DualShock 2 — both feed the same Mac-compat event queue. New file
   of the blitted framebuffer), leaving unodos.c's software-FB XOR/incremental
   drawing untouched.
 - **Boot safety.** `PS2KbdInit`/`PS2MouseInit` spin inside libkbd/libmouse until
-  each IOP driver's RPC server registers — immediate on real hardware, but
+  each IOP driver's RPC server registers, immediate on real hardware, but
   PCSX2 has no USB HLE so they never return, which black-screened the boot
   (they ran before the splash). Fixed by running the device init on a dedicated
   EE thread one priority notch below the main loop: the desktop boots and stays
@@ -764,21 +763,21 @@ the DualShock 2 — both feed the same Mac-compat event queue. New file
   single-threaded.
 - **Verified:** the full desktop boots in PCSX2 with all three modules loaded +
   the init thread running (`ps2/shots/m3_usb_boot.png`). The keyboard/mouse
-  *function* is hardware-only — PCSX2 can't inject USB HID input.
+  *function* is hardware-only, PCSX2 can't inject USB HID input.
 
-## [8088 port M1/M2 — Microsoft serial mouse on COM1 + RAM floor] - 2026-06-14 (Build 409)
+## [8088 port M1/M2, Microsoft serial mouse on COM1 + RAM floor] - 2026-06-14 (Build 409)
 
 Building on M0, the XT now has a working pointer and an honest RAM spec.
 
 - **Microsoft serial mouse on COM1 (the XT pointing device).** A real IBM PC/XT
   has no PS/2 port, so UnoDOS's AT-class mouse paths (INT 15h/C2, KBC/IRQ12)
-  never engaged — the cursor was static. New kernel code:
-  - `install_serial_mouse` — programs the COM1 UART (1200 baud, 7N1), power-
+  never engaged, the cursor was static. New kernel code:
+  - `install_serial_mouse`: programs the COM1 UART (1200 baud, 7N1), power-
     cycles the mouse via DTR/RTS, probes for the `'M'` identifier, then arms
     IRQ4 (INT 0x0C) and unmasks it on the PIC. On a pre-AT machine
     `install_mouse` now falls through from `.skip_kbc` to this probe instead of
     giving up (`mouse_diag='C'`).
-  - `int_0C_handler` — the IRQ4 ISR: decodes the 3-byte Microsoft packet
+  - `int_0C_handler`: the IRQ4 ISR: decodes the 3-byte Microsoft packet
     (sync-bit framing, signed 8-bit X/Y deltas, L/R buttons) into the shared
     `mouse_x/y` + `mouse_buttons`, reusing the existing deferred-cursor
     (`cursor_dirty`) and button-change event model from the PS/2 handlers.
@@ -787,43 +786,43 @@ Building on M0, the XT now has a working pointer and an honest RAM spec.
     direction and a **double-click launches Settings** (`tools/xt/shots/
     m2_mouse_*.png`).
 - **RAM floor corrected.** The 128K machine (`unodos_xt_128k`) boots the kernel
-  but cannot load the launcher (it lives at segment `0x2000` = linear 128–192K),
+  but cannot load the launcher (it lives at segment `0x2000` = linear 128-192K),
   so the desktop never appears. The README/FEATURES "128 KB minimum" claim was
   false; corrected to **256 KB (desktop + one app) / 640 KB (full 5-app
   multitasking)**. See `docs/PORT-8088.md`.
 - The kernel mid-file API-table pad was bumped 0x3800→0x3C00 for the new code.
 
-## [8088 port M0 — UnoDOS boots on a cycle-accurate IBM PC/XT (8088)] - 2026-06-14
+## [8088 port M0, UnoDOS boots on a cycle-accurate IBM PC/XT (8088)] - 2026-06-14
 
 The x86 reference build already *is* the 8088 target, but for its whole life it
-was only ever **run** on QEMU — a 486-class CPU that silently hides every real
+was only ever **run** on QEMU, a 486-class CPU that silently hides every real
 8088 / IBM PC-XT behaviour. The 2026-06 audit's `cpu 8086` pass was only ever
 assembler-verified. M0 stands up the missing "real emulator" tier and proves
 the build on genuine 8088 silicon.
 
 - **Rig** (`tools/xt/`): MartyPC 0.4.1 (cycle-accurate 8088, validated against
-  real hardware) booting the open **GLaBIOS** — ROM-free, the same house rule
+  real hardware) booting the open **GLaBIOS**: ROM-free, the same house rule
   as the macplus/Genesis/SNES ports. Machine `unodos_xt` = IBM 5160 (XT), 8088
   @ 4.77 MHz, 640K, CGA, 1.44M floppies, MS serial mouse on COM1. Capture via
-  MartyPC's own framebuffer screenshot (`shot_xt.ps1`) — clean under RDP, no
+  MartyPC's own framebuffer screenshot (`shot_xt.ps1`), clean under RDP, no
   GPU-window-grab-is-black trap.
 - **Result:** the primary `build/unodos-144.img` boots **end-to-end on the
-  emulated XT** — boot sector → "Reset disk / Load stage2 / Loading kernel…" →
+  emulated XT**: boot sector → "Reset disk / Load stage2 / Loading kernel…" →
   the 104-sector kernel → the CGA "UnoDOS 3" splash → the 4-colour desktop →
   Enter launches **SysInfo** ("Boot: Floppy", "Tasks: 2 running"). The INT 0x80
-  dispatcher, launcher, window manager and cooperative scheduler — all flagged
-  186+/386+ by the audit — run correctly on real 8088 silicon, and the
+  dispatcher, launcher, window manager and cooperative scheduler, all flagged
+  186+/386+ by the audit, run correctly on real 8088 silicon, and the
   **keyboard works through the XT 8255 PPI path**. Shots in `tools/xt/shots/`.
-- **Findings** (feed M1/M2): the README "128 KB minimum" is wrong — the launcher
+- **Findings** (feed M1/M2): the README "128 KB minimum" is wrong, the launcher
   at `0x2000` needs RAM through ~192K and the full feature set (heap `0x8000`,
   clipboard/dialogs `0x9000`) needs 640K; the desktop + one app fit in 256K.
-  The serial mouse is undriven (cursor static — UnoDOS's mouse paths are AT-only
+  The serial mouse is undriven (cursor static, UnoDOS's mouse paths are AT-only
   INT 15h/C2 + KBC). Boot to desktop takes ~30 s at real 4.77 MHz (the M3
   `draw_char` fast-path target). See `docs/PORT-8088.md`.
 - No OS source changed in M0 (rig + validation + docs only), so the build number
   is unchanged.
 
-## [snes: milestone 2 (storage core) — SRAM USV1 mini-FS + Notepad + Files] - 2026-06-15
+## [snes: milestone 2 (storage core), SRAM USV1 mini-FS + Notepad + Files] - 2026-06-15
 
 M2's storage core: the battery SRAM filesystem and its two apps.
 
@@ -855,7 +854,7 @@ Deviation: the Notepad is append-style (no full caret/line nav yet) - the
 storage round-trip is what M2 proves. The M2 games (Dostris / Pac-Man /
 OutLast) are the remaining M2 work.
 
-## [snes: milestone 1 — tile desktop, window manager, apps, soft keyboard] - 2026-06-14
+## [snes: milestone 1, tile desktop, window manager, apps, soft keyboard] - 2026-06-14
 
 The SNES port grows a real desktop. The Genesis M1 surface
 (genesis/kernel.asm + softkbd.i) is re-expressed in 65816 on the SNES
@@ -895,38 +894,38 @@ accurate PPU framebuffer to disk (focus forced via AttachThreadInput) - the
 reference render. `build/m1.png` shows the full desktop including the cyan
 soft keyboard, exactly correct.
 
-## [snes: milestone 0 — LoROM skeleton boots to the splash] - 2026-06-14
+## [snes: milestone 0, LoROM skeleton boots to the splash] - 2026-06-14
 
 The SNES port opens: a 65816 LoROM cartridge boots in Mesen2 to the
 "UnoDOS 3" tile splash and reacts to the joypad. This is the Genesis port's
 twin, re-expressed in 65816 (HANDOFF.md), and it stands up the shared cc65
 toolchain (ca65/ld65) and the foundation every later milestone hangs off.
 
-- **`kernel.asm`** — native-mode bring-up (`clc/xce`, `rep #$38`), forced-
+- **`kernel.asm`**: native-mode bring-up (`clc/xce`, `rep #$38`), forced-
   blank PPU init, DMA upload of the tile blob + palette, Mode 1 / BG1, and
   the **shadow + DMA** render architecture (HANDOFF §2): the main loop
   writes a WRAM tilemap shadow at `$7E:1000`, the **vblank NMI** DMAs it to
-  VRAM, acks, waits out the auto-joypad read, and latches `JOY1` — no
+  VRAM, acks, waits out the auto-joypad read, and latches `JOY1`: no
   app/WM logic in the ISR (PORT-SPEC §6 rule 2). The live controller word
   renders as `PAD:xxxx`.
-- **`mkdata.py`** — the shared `kernel/font8x8.asm` → SNES **4bpp planar**
-  tiles (32 B/tile) + a **BGR555** palette (entries 0–4 = the UnoDOS UI
+- **`mkdata.py`**: the shared `kernel/font8x8.asm` → SNES **4bpp planar**
+  tiles (32 B/tile) + a **BGR555** palette (entries 0-4 = the UnoDOS UI
   colours). 256×224 ⇒ **32×28 cells**, the documented narrower-by-8 metric
   vs. Genesis's 40×28.
-- **`build.sh` / `lorom.cfg`** — cc65 build to a checksum-patched 32 KB
+- **`build.sh` / `lorom.cfg`**: cc65 build to a checksum-patched 32 KB
   LoROM `.sfc`, with an `AUTOTEST` variant that self-injects a synthetic
   joypad value in the NMI.
-- **Rig** (`setup_mesen.ps1` / `run_mesen.ps1`) — Mesen2 forced to its
+- **Rig** (`setup_mesen.ps1` / `run_mesen.ps1`), Mesen2 forced to its
   software renderer (PrintWindow can't grab the GPU surface on this
   headless desktop) + window capture; input verified by the AUTOTEST build
   (the Genesis fallback), since Mesen's CLI doesn't autoload Lua.
 - **Verified in Mesen2:** `build/desktop.png` (interactive, `PAD:0000`) and
-  `build/autotest.png` (`PAD:C0A0`, `* AUTOTEST *`) — the read → shadow →
+  `build/autotest.png` (`PAD:C0A0`, `* AUTOTEST *`), the read → shadow →
   DMA → display pipeline end to end. Two traps recorded in HANDOFF.md for
   M1: ca65's parameterised-`.define` half-stride evaluation, and the
   write-twice BG scroll registers.
 
-## [ps2: milestone 2 — memory-card storage on the EE] - 2026-06-14
+## [ps2: milestone 2, memory-card storage on the EE] - 2026-06-14
 
 The EE File Manager now persists to the **PS2 memory card** via libmc, so
 Files/Notepad save and load on real hardware and across boots.
@@ -934,24 +933,24 @@ Files/Notepad save and load on real hardware and across boots.
 - `ee_platform.c` loads `rom0:MCMAN/MCSERV`, runs `mcInit`, and brings up
   `/UnoDOS` (formatting the card only when `mcMkDir` reports `sceMcResNoFormat`,
   so an already-written card is never wiped).
-- `mac_io.c` (EE branch) uses the libmc file API — `mcOpen` with
+- `mac_io.c` (EE branch) uses the libmc file API, `mcOpen` with
   `sceMcFileCreateFile`, `mcRead`/`mcWrite`/`mcClose`/`mcDelete`, `mcGetDir` for
-  the catalog. (The PS2 MC isn't a POSIX FS — `open(O_CREAT)` makes a non-
+  the catalog. (The PS2 MC isn't a POSIX FS, `open(O_CREAT)` makes a non-
   round-tripping directory entry; `mcOpen` makes a real save-file.)
 - **Verified in PCSX2** (`shots/m2_pcsx2_*.png`): a 55-byte Notepad doc writes
-  to the card, reloads byte-for-byte after the buffer is wiped, and — in a
-  separate no-save run after a force-kill — loads back from the card, proving
+  to the card, reloads byte-for-byte after the buffer is wiped, and, in a
+  separate no-save run after a force-kill, loads back from the card, proving
   persistence across power cycles. The host build keeps the `uno_disk/`
   directory backend; both share the same File Manager code path.
 
-## [ps2: milestone 1 — the desktop arrives (C core + Mac-compat shim)] - 2026-06-14
+## [ps2: milestone 1, the desktop arrives (C core + Mac-compat shim)] - 2026-06-14
 
-The portable C core (`mac/unodos.c`, 4139 lines — 11 apps + window manager +
+The portable C core (`mac/unodos.c`, 4139 lines, 11 apps + window manager +
 event model + scheduler + FAT12) now runs on the PS2 by **swapping the platform
 layer**, not rewriting (HANDOFF §1 strategy).
 
 - **Mac-compat shim** (`mac_compat.h`/`.c`): the ~40 Mac Toolbox calls the core
-  uses, re-implemented over the software framebuffer `fb.*` — one implicit
+  uses, re-implemented over the software framebuffer `fb.*`: one implicit
   full-screen GrafPort, QuickDraw rect/oval/line/text (Bresenham `LineTo`, 8×8
   `DrawText` at the pen baseline, `PaintOval`), pen + fore/back colour +
   transfer-mode state, a platform-fed event queue, a deterministic `TickCount`
@@ -964,11 +963,11 @@ layer**, not rewriting (HANDOFF §1 strategy).
   dozen Toolbox headers collapse to one `#include "mac_compat.h"`; Pascal
   literals (`"\pNAME"`) become octal-length C strings (gcc has no `\p`); the
   68K coroutine scheduler (`ctx_switch` asm) is guarded under `__m68k__` with a
-  portable **kernel-driven (poll-and-dispatch) scheduler** for PS2/host — the
+  portable **kernel-driven (poll-and-dispatch) scheduler** for PS2/host, the
   Apple II model, identical app semantics.
 - **Two front ends, both verified.** `host_desktop.c` builds the whole desktop
   with WSL gcc → PPM (the fast inner loop); `./build.sh desktop [FEATURE]`
-  renders `shots/m1_*.png` — desktop + all 11 apps + the FAT12 write/read
+  renders `shots/m1_*.png`: desktop + all 11 apps + the FAT12 write/read
   round-trip into Notepad all confirmed. `ee_platform.c` is the real EE target:
   GS-presents `fb` each vsync and maps the DualShock 2 to UnoDOS key events;
   `./build.sh ee [FEATURE]` links a real R5900 ELF and the desktop + Pac-Man
@@ -979,18 +978,18 @@ So **M1** (desktop/WM/apps) is verified on the host *and* the emulated PS2;
 through the shim. (Memory-card storage landed in M2 below; remaining: EE audio
 via audsrv, and a USB keyboard.)
 
-## [ps2: milestone 0 — software-FB foundation + EE ELF builds] - 2026-06-14
+## [ps2: milestone 0, software-FB foundation + EE ELF builds] - 2026-06-14
 
 First milestone of the **Sony PS2 port** (`ps2/`), strategy = port the
 portable C core (`mac/unodos.c`) by swapping the platform layer.
 
 - Software framebuffer (`fb.c`/`fb.h`): 640×448×32 in EE RAM + drawing
   primitives (fill/frame/invert-XOR/8×8 text/scaled text) over the 4-colour
-  PORT-SPEC gamut — the layer the whole port draws through; the GS is reduced
+  PORT-SPEC gamut, the layer the whole port draws through; the GS is reduced
   to a per-vsync textured-quad blit.
 - Shared font → C array (`mkfont_c.py`); hello-GS splash (`uno_splash.c`).
 - **Host shim** (`host_main.c` + `tools/ppm2png.py`): builds the FB code with
-  a host compiler (WSL gcc) and renders `shots/m0_splash.png` — the splash is
+  a host compiler (WSL gcc) and renders `shots/m0_splash.png`: the splash is
   verified on the PC, and the EE target shares the FB/splash code verbatim.
 - EE target (`main.c`: gsKit GS init + FB→GS blit + DualShock 2 via SIO2MAN/
   PADMAN). **Builds** to `build/unodos-ps2.elf` (real MIPS R5900 ELF) with the
@@ -1001,19 +1000,19 @@ portable C core (`mac/unodos.c`) by swapping the platform layer.
   refuses the config and blocks the boot. M1 (the C-core desktop) is unblocked
   and host-shim-iterable.
 
-## [apple2: milestone 3 — full app roster + feasibility verdicts] - 2026-06-14
+## [apple2: milestone 3, full app roster + feasibility verdicts] - 2026-06-14
 
 The **Apple II port** (`apple2/`) reaches M3: a 10-icon desktop on the 1 MHz
 6502, all harness-verified.
 
 - New apps: **Theme** (6 dither presets over a mutable `pat_tab`), **Dostris**
-  (10×20 puzzle), **Pac-Man** (the 1 MHz adaptation — 13×13 maze, two
+  (10×20 puzzle), **Pac-Man** (the 1 MHz adaptation, 13×13 maze, two
   Manhattan-steer ghosts, tile-stepped 7px actors), **Music** (Canon in D on
   the `$C030` speaker, blocking square-wave staff player), **Tracker** (shared
   32×4 pattern format, single-voice playback, SONG.UNO save/load), **Paint**
   (32×34 fat-pixel cells, four dither inks, PAINT.UNO save/load).
 - **OutLast** feasibility: ships as a ~4 fps prototype (28-band half-res road
-  raster — measured, just under the 5 fps bar but steering-responsive).
+  raster, measured, just under the 5 fps bar but steering-responsive).
 - **Scheduler** verdict: stack-partitioning proven (40 cooperative switches,
   canaries intact), but the shipping kernel keeps poll-and-dispatch.
 - `tests/m3.script` + 7 per-app scripts + scheduler proto, all green.
@@ -1024,7 +1023,7 @@ The **Apple II port** (`apple2/`) reaches M3: a 10-icon desktop on the 1 MHz
 Sound was silent on the real SE: `snd.i` wrote the PWM buffer but never
 enabled the hardware there and set "volume" on the wrong VIA port (PB0-2 are
 the RTC lines; volume is Port A 0-2, enable is Port B bit 7). Added
-`snd_hw_on` — interrupt-masked, ORs PA0-2 = 7 and ANDs PB7 = 0 once at boot,
+`snd_hw_on`: interrupt-masked, ORs PA0-2 = 7 and ANDs PB7 = 0 once at boot,
 never touching PA4 (overlay) or PB3-5/SR (ADB), so the SE input path is
 undisturbed. Harness-verified (square wave reaches the buffer, PB7=0,
 volume=7); needs a hardware ear-check on the SE.
@@ -1032,14 +1031,14 @@ volume=7); needs a hardware ear-check on the SE.
 ## [macplus: validated on real Mac SE hardware] - 2026-06-13
 
 **The standalone Mac OS now boots and runs on a real Mac SE** (via
-FloppyEmu) — boot chain, desktop, and the ROM-assisted ADB input path all
+FloppyEmu), boot chain, desktop, and the ROM-assisted ADB input path all
 live on hardware. Getting there meant fixing two faults the emulators never
 surfaced; they boot through a far more initialised low-memory environment
 than a bare ROM-assisted boot. Same `unodos_macplus.dsk` boots Plus and SE.
 
 ### Fixed: `FAULT @ 00403F72` / `ACCESS 00000005` on the SE
 The first `_GetOSEvent` of each main-loop pass walked the ROM's
-`EventQueue` ($14A), which is uninitialised on a System-less boot —
+`EventQueue` ($14A), which is uninitialised on a System-less boot -
 `qHead` held garbage `$FFFFFFFF`, so the ROM's queue scan computed
 `$FFFFFFFF + 6 = $00000005` (odd) and address-errored inside ROM. We now
 initialise the OS Event Manager in the ROM-assisted boot path: point
@@ -1053,11 +1052,11 @@ empty-queue branch and never reaches the faulting load).
 ### Fixed: ADB input dead on the SE (mouse + keyboard)
 With the desktop up, ADB was silent. Two causes: (1) autopoll self-chains
 through each transaction's completion interrupt, and our long
-interrupt-masked boot breaks the chain — fixed by calling `_ADBReInit`
+interrupt-masked boot breaks the chain, fixed by calling `_ADBReInit`
 ($A07B) once interrupts are enabled. (2) The mouse was read from
 `RawMouse` ($82C), but the SE ADB mouse handler accumulates deltas into
 `MTemp` ($828) and leaves the `MTemp → RawMouse` copy to the VBL cursor
-task, which we disable to paint our own cursor — fixed by reading `MTemp`
+task, which we disable to paint our own cursor, fixed by reading `MTemp`
 directly with our own clamp + write-back. Keyboard latency also tightened:
 the idle loop drains the ROM `EventQueue` ($14C) immediately rather than on
 the once-per-second refresh. SE input low-mem map: button = `MBState`
@@ -1068,13 +1067,13 @@ the once-per-second refresh. SE input low-mem map: button = `MBState`
 The chained ROM level-1 handler's per-tick work assumes System-level init.
 Pre-empted so it can't fault once `_GetOSEvent` stops crashing and the VBL
 actually runs: the ROM cursor task is disabled (`CrsrCouple`/`CrsrNew` at
-$8CF/$8CE = 0 — we paint our own cursor) and the stack-into-heap sniffer is
+$8CF/$8CE = 0, we paint our own cursor) and the stack-into-heap sniffer is
 satisfied by pointing `ApplZone` ($2AA) at a zeroed fake zone.
 
 ### Crash-dump fault screen
-Bus/address/illegal faults now paint a full dump — PC, faulting access
+Bus/address/illegal faults now paint a full dump, PC, faulting access
 address, SSW (bit 4 = read/write), the opcode word (IR), and all
-D0-D7/A0-A7 — instead of just the PC. This is what made finding #2
+D0-D7/A0-A7, instead of just the PC. This is what made finding #2
 diagnosable from hardware alone.
 
 ### Fixed earlier: Sad Mac `0F/00000001` at boot (BootDrive)
@@ -1086,8 +1085,8 @@ failed, $43 = `UDM1` magic missing) instead of the ambiguous `1`.
 
 ## [macplus milestone 3: FULL APP PARITY] - 2026-06-12
 
-The standalone Mac OS now carries the complete shared UnoDOS app roster —
-the same 11 apps as the Amiga, Genesis, hosted-Mac and x86 ports — plus
+The standalone Mac OS now carries the complete shared UnoDOS app roster -
+the same 11 apps as the Amiga, Genesis, hosted-Mac and x86 ports, plus
 sound and the cooperative scheduler. Everything below is harness-verified
 (4 regression scripts); the sound ear-check is a real-hardware item.
 
@@ -1108,12 +1107,12 @@ physics run as task ticks; tick_wanted defeats the idle gate only while a
 game (or song) is live.
 
 ### Paint (8), Music (9), Tracker (10), Theme (11)
-Paint with the platform's true gamut — the four dither inks — and
+Paint with the platform's true gamut, the four dither inks, and
 byte-exact PAINT.UNO round-trips; Music plays Canon in D on the square
 voice with background playback; Tracker edits the byte-identical shared
 pattern format with leftmost-voice playback (the x86 PC-speaker model)
 and SONG.UNO persistence; Theme selects dither schemes through the
-now-mutable pat_tab — six presets including a full video invert, applied
+now-mutable pat_tab, six presets including a full video invert, applied
 live with a whole-screen repaint as the preview.
 
 ### Cooperative scheduler (scheduler.i)
@@ -1129,7 +1128,7 @@ in the same register.
 ### Kernel
 Large buffers (Paint canvas, FAT caches, Notepad buffer, game state)
 moved out of the image to fixed-RAM KBSS equates ($30000+), zeroed at
-boot — image ~30 KB and every vars label safely pc-relative. pat_tab is
+boot, image ~30 KB and every vars label safely pc-relative. pat_tab is
 mutable (Theme); clear_screen derives the desktop fill from it.
 
 ## [macplus milestone 2: floppy filesystem + Files/Notepad + disk apps] - 2026-06-12
@@ -1137,14 +1136,14 @@ mutable (Theme); clear_screen derives the desktop fill from it.
 ### macplus: the UnoDOS floppy filesystem (M2)
 
 The standalone Mac OS gains storage. Past the kernel image, the 800K boot
-floppy now carries a plain **FAT12 volume** (at sector 256) — the same
+floppy now carries a plain **FAT12 volume** (at sector 256), the same
 on-disk layout the x86 reference port uses, so the disk is PC-readable.
 The kernel reads *and writes* it through the ROM .Sony driver via the same
 `_Read`/`_Write` A-traps the boot blocks use (`sony.i`, a flat 512-byte
 logical-sector device), driving the portable 68K FAT12 core (`fat12.i`)
 shared with the Amiga port.
 
-- **Files** (proc 2) lists the root directory — arrows select, Enter opens
+- **Files** (proc 2) lists the root directory, arrows select, Enter opens
   a file in Notepad, `r` re-mounts/refreshes. The volume is lazily mounted
   the first time the window paints.
 - **Notepad** (proc 3) views and edits text with caret/line navigation and
@@ -1181,24 +1180,24 @@ writes the FAT12 volume (the `disk/*.TXT` content plus the assembled
 The standalone Mac OS now runs across the whole compact-Mac span, not just
 the Plus. At boot the kernel reads the ROM version word (`ROMBase+8`) and
 picks its input strategy: Plus (`$75`) keeps the self-owned M0110 keyboard
-and SCC quadrature mouse; **SE and later** switch to *ROM-assisted mode* —
+and SCC quadrature mouse; **SE and later** switch to *ROM-assisted mode* -
 chain the ROM's level-1 handler (its ADB stack stays alive) and mirror the
 low-memory state it maintains (`Ticks`, `RawMouse`, `MBState`, the OS event
 queue via `SysEvtMask` + `_GetOSEvent`). The Mac II class gets a 640×480
 geometry build (`./build.sh mac2`); the default 512×342 image boots Plus
 **and** SE unchanged. Validated in a self-built Mini vMac II with a real
-IIcx ROM (boot, drag, full ADB keyboard) — the same path the SE will use.
+IIcx ROM (boot, drag, full ADB keyboard), the same path the SE will use.
 
 ### Platform-authentic window chrome
 
 Each port's chrome now matches its native look:
 
-- **Macs** (standalone + hosted System 7/Classic): System 7 chrome — drop
+- **Macs** (standalone + hosted System 7/Classic): System 7 chrome, drop
   shadows, pinstriped active-only title bar, square close box on a white
   patch, centered title.
-- **Amiga**: Workbench look — blue drag bar with white left-aligned title
+- **Amiga**: Workbench look, blue drag bar with white left-aligned title
   when active / white bar when inactive, orange-centered close gadget.
-- **x86**: already platform-authentic — the `widget_style` system renders
+- **x86**: already platform-authentic, the `widget_style` system renders
   Windows-3.x 3D bevels on VGA and a flat 4-color variant on CGA/8088.
 
 Shared fix: opening a second window now repaints all windows so the
@@ -1206,7 +1205,7 @@ previously-active one loses its active-state title styling.
 
 ### Roadmap
 
-Apple II and Apple IIGS ports added to the roadmap (TODO.md) — not started.
+Apple II and Apple IIGS ports added to the roadmap (TODO.md), not started.
 
 ## [MacPlus standalone OS, milestone 1] - 2026-06-12
 
@@ -1214,7 +1213,7 @@ Apple II and Apple IIGS ports added to the roadmap (TODO.md) — not started.
 
 The Mac line is now a true operating system, not a Toolbox application.
 Custom boot blocks ('LK'/$4418, position-independent) are bootstrapped by
-the Mac ROM — the exact analog of the BIOS bootstrapping the x86 port —
+the Mac ROM, the exact analog of the BIOS bootstrapping the x86 port -
 and pull the kernel off raw floppy sectors with a single .Sony _Read,
 the only ROM service UnoDOS uses. The kernel owns the machine: own
 stack, own vector table, VIA CA1 tick, M0110/M0110A keyboard driver over
@@ -1226,7 +1225,7 @@ incl. the tst-before-rts click guard), SysInfo + Clock.
 
 Because Mini vMac/MAME need copyrighted Apple ROMs, the port ships a
 ROM-free verification harness (macplus/harness.py): a Unicorn/QEMU 68000
-core where the harness plays the ROM — Start Manager, A-line _Read
+core where the harness plays the ROM, Start Manager, A-line _Read
 against the disk image, register-level VIA/SCC emulation, PNG
 screenshots, scripted mouse/keyboard. The whole M1 surface is verified
 through real injected input (tests/m1.script). Real-hardware validation
@@ -1234,7 +1233,7 @@ pending (quadrature polarity + keyboard cadence are the flagged
 calibration points).
 
 Fixed during bring-up: kb_byte dropped key events whose canonical raw
-code had no ASCII (arrows) — `or.b` set flags on the low byte only and
+code had no ASCII (arrows), `or.b` set flags on the low byte only and
 the following beq bailed; same flags-vs-branch family as the
 find_window_at click-through bug. An explicit tst.w now guards it.
 
@@ -1244,7 +1243,7 @@ find_window_at click-through bug. An explicit tst.w now guards it.
   returned window HITS with stale condition flags (the final bounds
   compare is negative for any hit), so the caller's `bmi` sent every
   window click to the desktop. Latent since milestone 1 on both
-  bare-metal 68K ports — the AUTOTESTs drive key handlers directly
+  bare-metal 68K ports, the AUTOTESTs drive key handlers directly
   and only ever clicked a desktop icon, so the first real window
   click happened on physical Genesis hardware. Fixed with an
   explicit `tst.w d2` at the routine's exit; AUTOTEST_CLICK now also
@@ -1292,13 +1291,13 @@ find_window_at click-through bug. An explicit tst.w now guards it.
 
 - **Theme app** (`genesis/theme.i`, proc 8): the 8 preset palettes
   shared with every other port, stored pre-converted to Genesis CRAM
-  words ($0RGB → $0BGR, 3-bit channels — preset 1 reproduces the boot
+  words ($0RGB → $0BGR, 3-bit channels, preset 1 reproduces the boot
   palette exactly), applied live by rewriting the themed entries of
   all four palette lines; r/g/b keys edit the active colors one 3-bit
   channel at a time, like the Amiga's 4-bit editor scaled to Genesis
   color depth. Game colors (entries 5-15) stay fixed.
 - **Tracker** (`genesis/tracker.i`, proc 9): the Amiga 32-row ×
-  4-channel pattern editor on the PSG — channels 1-3 are the square
+  4-channel pattern editor on the PSG, channels 1-3 are the square
   tone generators (PSG values = the ProTracker periods scaled by the
   clock ratio, so pitches match the Amiga within cents), channel 4 is
   the noise generator (the note picks the rate, hits decay per
@@ -1307,7 +1306,7 @@ find_window_at click-through bug. An explicit tst.w now guards it.
   write/read the pattern over the tape interface (`tape.i` grew
   parameterized `tape_save_blk` / `tape_load_core` engines).
 - **Sega CD backup RAM, Mode 1** (`genesis/bram.i`, milestone 5): the
-  cartridge boots the CD attachment as a peripheral — expansion probe,
+  cartridge boots the CD attachment as a peripheral, expansion probe,
   Kosinski-decompress the Sub-CPU BIOS out of the main BIOS ROM
   ($415800/$416000/$41AD00/$40D500 candidates), upload a ~300-byte SP
   stub at $6000, and speak a LIST/READ/WRITE/DELETE RPC over the
@@ -1322,7 +1321,7 @@ find_window_at click-through bug. An explicit tst.w now guards it.
   over a RAM-backed fake in BlastEm; the BIOS-trap path needs a
   CD-capable emulator or real hardware. Two emulator traps fixed
   along the way: BlastEm raises a 68000 **bus error** for $400000
-  reads with no CD (real hardware returns open bus) — the probe arms
+  reads with no CD (real hardware returns open bus), the probe arms
   a bus-error recovery vector that unwinds to the no-CD path; and the
   write-protect register write must be byte-wide to keep the
   bank/DMNA bits.
@@ -1331,7 +1330,7 @@ find_window_at click-through bug. An explicit tst.w now guards it.
   task with a private 2KB stack ($FF4000 block) and a one-slot
   mailbox; the kernel task pumps input, drag, audio services and
   desktop. Keys post with a bounded yield-retry (`task_post_key`) so
-  soft-keyboard and PS/2 bursts survive the single-slot mailbox —
+  soft-keyboard and PS/2 bursts survive the single-slot mailbox -
   verified by the existing kbd/ps2 AUTOTESTs running unchanged
   through the task machinery, and by Dostris gravity ticking via the
   mailbox.
@@ -1347,7 +1346,7 @@ find_window_at click-through bug. An explicit tst.w now guards it.
 
 ## [Genesis milestones 4 + 4.5] - 2026-06-11
 
-### Sega Genesis / Mega Drive: storage — SRAM saves and tape/WAV
+### Sega Genesis / Mega Drive: storage, SRAM saves and tape/WAV
 
 Storage architecture (all four tiers) documented in
 docs/GENESIS-STORAGE.md; Sega CD backup RAM (Mode 1 + BIOS BURAM) and
@@ -1362,11 +1361,11 @@ SD-over-SPI are spec'd there for later milestones.
   for opened ones). Verified in BlastEm: save → wipe → reopen round
   trip (AUTOTEST_SRAM). Two traps: SRAM indexing must use `(a0,d0.w)`
   (a stale high word in a `.l` index wanders off-bus), and `$A130F1`
-  is written once at boot — per-access toggling left SRAM unmapped
+  is written once at boot, per-access toggling left SRAM unmapped
   under BlastEm (open-bus $FF reads that cascaded into a wild copy
   and a stack smash, diagnosed by the new on-screen exception dump).
 - **Tape / WAV over audio** (`genesis/tape.i`): the classic 1-bit
-  tape interface — the console has no ADC, so reads go through a
+  tape interface, the console has no ADC, so reads go through a
   one-comparator adapter (port 2 pin 1) and writes need no hardware
   at all (the PSG plays KCS 1200-baud AFSK out the headphone jack).
   Poll-count timebase, ~20s per 2KB. The bit/block decoder is an
@@ -1377,7 +1376,7 @@ SD-over-SPI are spec'd there for later milestones.
   round trip is byte-exact. Files app: `w` writes the Notepad buffer
   to tape, `r` loads a block back.
 - `err` now renders the exception stack frame in hex on the bottom
-  row (magenta-border beacon + faulting PC) — on-screen forensics
+  row (magenta-border beacon + faulting PC), on-screen forensics
   for a platform with no debugger stdin.
 
 ## [Genesis milestone 2] - 2026-06-11
@@ -1392,13 +1391,13 @@ SD-over-SPI are spec'd there for later milestones.
   ports' 50 Hz to the 60 Hz NTSC vblank.
 - Cell rendering through `gcol`, a 32-entry map from the Amiga
   extended-palette indexes to (attr | solid-tile) name words on VDP
-  palette lines 2/3 — converted channel-wise (Amiga `$0RGB` vs Genesis
+  palette lines 2/3, converted channel-wise (Amiga `$0RGB` vs Genesis
   `$0BGR`). OutLast re-runs the donor's per-strip road math once per
   cell row in the same pixel space, so the curve/traffic/collision
   behavior is identical.
 - **Pac-Man actors are hardware sprites** (1-4, chained after the
   cursor sprite): pixel-smooth motion over the cell maze with no
-  repaint-under-actor logic at all — only eaten-dot cells redraw.
+  repaint-under-actor logic at all, only eaten-dot cells redraw.
   Sprites park off-screen whenever the Pac-Man window isn't topmost.
 - **Game music on PSG channel 1** (`gm_*`): Korobeiniki and Sunset
   Drive parsed from the x86 sources by `mkdata.py` into PSG tone
@@ -1426,7 +1425,7 @@ SD-over-SPI are spec'd there for later milestones.
   event queue + press-time click latch per PORT-SPEC §3/§6, app icons
   converted from the x86 `.BIN` headers. ISRs never touch the VDP
   except the status-read interrupt acknowledge.
-- **Pad as mouse**: standard 3/6-button pad on port 1 — d-pad moves
+- **Pad as mouse**: standard 3/6-button pad on port 1, d-pad moves
   the cursor with held-time acceleration (Z = turbo), A = click/drag,
   B = soft keyboard, C = Enter, Start = Esc, X = Backspace, Y = Space.
 - **Soft keyboard** (`genesis/softkbd.i`): kernel overlay (bottom 6
@@ -1691,40 +1690,39 @@ docs/audit-2026-06-digest.md (every finding with verified patches).
 ### Fixed - Crashes & Memory Corruption
 
 - **win_create drew its resize-grip pixels into the KERNEL CODE segment**
-  (ES never set to video memory in win_draw_stub's grip block) — for some
+  (ES never set to video memory in win_draw_stub's grip block), for some
   window geometries (e.g. 160x100) the four grip dots read-modify-wrote live
   kernel instructions; apps calling API 22 directly sprayed their own
   segment. Root cause of "random" crashes and corrupted window handles.
 - **fat12_read popped one word too many** at .not_supported (7 pops for 6
-  pushes) — any FAT12 read at file position != 0 returned through a
+  pushes), any FAT12 read at file position != 0 returned through a
   corrupted stack and jumped to garbage. Also added a zero-byte/EOF fast
   path so read-until-0 loops terminate.
-- **Kernel load was at 100% capacity with zero growth headroom** — kernel
+- **Kernel load was at 100% capacity with zero growth headroom**: kernel
   area expanded from 88 to 104 sectors (52KB) across the whole chain
   (stage2, BPB reserved sectors 94→110, add_floppy_fs.py, mkboot, fat12
-  mount offsets — which were hardcoded, not BPB-derived). The kernel image
+  mount offsets, which were hardcoded, not BPB-derived). The kernel image
   pad now fails the build if the kernel outgrows the area.
-- **ES was not part of the task context** — clobbered across every
+- **ES was not part of the task context**: clobbered across every
   yield/context switch; cross-task segment corruption for any app holding
   ES across a syscall. Saved/restored on all five context paths.
-- **Stale INT 0x80 dispatcher flags survived RETF app exit** — the next
+- **Stale INT 0x80 dispatcher flags survived RETF app exit**: the next
   task resumed with the dead app's coordinate-translation/cursor-lock
   state, corrupting its registers. Flags now consumed one-shot.
 - **mkboot wrote a stale filesystem size** (2810 sectors, three layouts
-  old) — now derived from the layout constants.
+  old), now derived from the layout constants.
 
 ### Fixed - Window Manager (create/destroy/z-order verified)
 
-- **Z-order values drifted to 0 and collided** — every create/focus demoted
+- **Z-order values drifted to 0 and collided**: every create/focus demoted
   all windows but destroy never renormalized, so after ~7 launch/close
   cycles hit-testing, painting, and promotion disagreed about stacking.
   Focus now demotes only windows above the raised one; destroy closes the
   z-gap. Invariant: visible windows hold dense distinct z {16-N..15}.
-- **win_resize repainted only the desktop** — shrinking a window erased
+- **win_resize repainted only the desktop**: shrinking a window erased
   any window it overlapped. Now uses redraw_affected_windows like move.
-- **win_focus (API 23) raised windows logically but never repainted** —
-  stale title-bar states, stale pixels on top.
-- **Resize-handle hit-test ignored occlusion** — clicking the body of a
+- **win_focus (API 23) raised windows logically but never repainted**: stale title-bar states, stale pixels on top.
+- **Resize-handle hit-test ignored occlusion**: clicking the body of a
   topmost window could start resizing a window underneath it.
 - **Z-clipped WIN_REDRAW events left permanent holes** in background
   windows; **window titles overwrote the [X] close button** (now clipped).
@@ -1733,20 +1731,19 @@ docs/audit-2026-06-digest.md (every finding with verified patches).
 
 ### Fixed - Input & Events
 
-- **post_event had no interrupt masking** — task-context posts raced
+- **post_event had no interrupt masking**: task-context posts raced
   IRQ1/IRQ12 posts and silently lost keystrokes/clicks exactly when window
   activity coincided with typing. Now pushf/cli...popf protected.
-- **Single global event-queue head caused head-of-line blocking** — one
+- **Single global event-queue head caused head-of-line blocking**: one
   task's pending event stalled keyboard/mouse for every task, then the
   31-slot queue filled and dropped input. event_get now forward-scans with
   tombstones; consecutive mouse events are coalesced at post time.
 - **event_wait (API 10) / kbd_wait_key (API 12) busy-waited without
-  yielding** — one blocked task froze the whole cooperative system.
+  yielding**: one blocked task froze the whole cooperative system.
 - **Scancode table read out of bounds** for scancodes 0x60-0x7F.
-- **XT (8255 PPI) keyboard acknowledge was missing** — on a real PC/XT the
+- **XT (8255 PPI) keyboard acknowledge was missing**: on a real PC/XT the
   keyboard died after the first keystroke. Port 0x61 bit-7 pulse added.
-- **Arrow/nav keys required E0 scancodes XT keyboards never send** —
-  NumLock-aware routing of bare numpad codes 0x47-0x53 to the special-key
+- **Arrow/nav keys required E0 scancodes XT keyboards never send**: NumLock-aware routing of bare numpad codes 0x47-0x53 to the special-key
   map; NumLock toggle tracked, seeded from the BIOS flag byte.
 - **IRQ12 swallowed keyboard bytes** when the KBC AUX bit was clear; mouse
   packet stream now self-heals after a lost byte (idle re-arm + sync-bit
@@ -1754,15 +1751,14 @@ docs/audit-2026-06-digest.md (every finding with verified patches).
 
 ### Fixed - Graphics (visual anomalies)
 
-- **Default 8x8 font had a 12px advance** — all default text 50% wider
+- **Default 8x8 font had a 12px advance**: all default text 50% wider
   than intended; primary cause of the boot-visible overlapping desktop
   icon labels (plus 10-char label truncation in launcher + kernel).
-- **CGA scroll clear-all path fell through into VESA bank-switching code**
-  — garbage fills + undefined INT 10h calls in the default video mode.
+- **CGA scroll clear-all path fell through into VESA bank-switching code**: garbage fills + undefined INT 10h calls in the default video mode.
 - **VESA scroll corrupted rows straddling 64KB bank boundaries**;
   vesa_fill_rect skipped a bank when a row started exactly on a boundary;
   vesa_set_bank now honors the VESA window granularity.
-- **Glyphs bled up to 7px past window borders** — draw_char/draw_char_inverted
+- **Glyphs bled up to 7px past window borders**: draw_char/draw_char_inverted
   now enforce the clip rect at row/pixel level (char & wrap APIs included).
 - **gfx_blit_rect copied forward regardless of overlap** (smearing) and
   produced black fills in VESA/mode-12h (read_pixel unimplemented there).
@@ -1779,7 +1775,7 @@ docs/audit-2026-06-digest.md (every finding with verified patches).
 ### Performance
 
 - gfx_fill_color CGA path: hybrid fill (masked edges + rep stosb middle)
-  replaces per-pixel plotting for misaligned fills — ~10-40x faster window
+  replaces per-pixel plotting for misaligned fills, ~10-40x faster window
   repaints in the default mode (partially applied; see handoff doc).
 - 8px font advance removes the 4-gap-pixel-per-char fill (~33% fewer plots
   per character system-wide).
@@ -1794,7 +1790,7 @@ docs/audit-2026-06-digest.md (every finding with verified patches).
 
 ### Known Remaining Work
 
-See docs/AUDIT-HANDOFF-2026-06.md — notably: the 8088 conversion has NOT
+See docs/AUDIT-HANDOFF-2026-06.md, notably: the 8088 conversion has NOT
 been applied yet (the OS still requires a 386+ despite the README claim),
 the cursor hide/lock race fix (35 sites) is pending, and several confirmed
 medium findings remain open.
@@ -1805,13 +1801,13 @@ medium findings remain open.
 
 The kernel heap was unusable since the kernel outgrew 16KB: the heap segment
 (0x1400) overlapped the kernel image (0x1000:0000, now 44KB), so the first
-`malloc` corrupted live kernel code — and three further bugs meant it never
+`malloc` corrupted live kernel code, and three further bugs meant it never
 successfully returned memory anyway. This release relocates the heap and
 makes malloc/free actually work.
 
 ### Fixed (Build 401) - Heap Relocation
 
-- **Heap overlapped the kernel image** — heap segment moved from 0x1400
+- **Heap overlapped the kernel image**: heap segment moved from 0x1400
   (linear 0x14000, inside the 44KB kernel at 0x10000-0x1AFFF) to a dedicated
   segment 0x8000 (linear 0x80000, 60KB). The kernel can now grow to its full
   64KB segment without colliding with the heap. New `HEAP_SEGMENT`/`HEAP_SIZE`
@@ -1819,11 +1815,11 @@ makes malloc/free actually work.
   - Root cause: v3.6.0 documented moving the heap to 0x1600 when the kernel
     grew past 16KB, but the code change was never applied; the kernel has
     since grown to 44KB (88 sectors), deepening the overlap.
-- **First-fit size check used signed comparison** (`jge`) — the initial
+- **First-fit size check used signed comparison** (`jge`), the initial
   0xF000-byte (60KB) free block read as negative, so `mem_alloc` always
   returned NULL (while still corrupting the kernel via heap lazy-init).
   Changed to unsigned (`jae`).
-- **`heap_initialized` flag read/written through the heap segment** — the
+- **`heap_initialized` flag read/written through the heap segment**: the
   flag is kernel data, but DS points at the heap when it is accessed; now
   uses `cs:` segment overrides.
 
@@ -1848,7 +1844,7 @@ makes malloc/free actually work.
 
 - New QEMU harness in test-artifacts/heap/: a test app (run as LAUNCHER.BIN)
   exercises INT 0x80 API 7/8, then run_heap_test.sh inspects guest memory via
-  the QEMU monitor — heap block headers at linear 0x80000, and the old heap
+  the QEMU monitor, heap block headers at linear 0x80000, and the old heap
   site 0x14000 compared byte-for-byte against build/kernel.bin to prove the
   kernel image is no longer modified.
 
@@ -1857,10 +1853,10 @@ makes malloc/free actually work.
 ### Added (Builds 202-212) - FAT12 Write, GUI Toolkit, Settings Persistence
 
 - **FAT12 Write Support** (Build 202)
-  - `fs_create_stub` (API 45) — Create new file on FAT12 floppy
-  - `fs_write_stub` (API 46) — Write data to open file
-  - `fs_delete_stub` (API 47) — Delete file from FAT12 floppy
-  - `fs_write_sector_stub` (API 44) — Write raw sector to disk
+  - `fs_create_stub` (API 45), Create new file on FAT12 floppy
+  - `fs_write_stub` (API 46), Write data to open file
+  - `fs_delete_stub` (API 47), Delete file from FAT12 floppy
+  - `fs_write_sector_stub` (API 44), Write raw sector to disk
   - Full FAT12 cluster chain allocation for multi-cluster files
 
 - **Boot Floppy Creator (MkBoot)** (Builds 202-204)
@@ -1940,7 +1936,7 @@ makes malloc/free actually work.
   preserve general-purpose registers across context switches, so CX
   (note duration) was clobbered by the launcher. Fixed with pusha/popa.
 - **App Launch Crash** (Build 198): Adding pusha/popa to yield broke
-  new task startup — `popa` consumed return addresses instead of
+  new task startup, `popa` consumed return addresses instead of
   register values. Fixed by adding dummy pusha frame (8 zero words)
   to initial task stack built by `app_start_stub`.
 - **Initial Context Switch Loop** (Build 201): `auto_load_launcher`
@@ -2019,7 +2015,7 @@ makes malloc/free actually work.
   - Boots from hard drives, CF cards, and USB flash drives (via BIOS emulation)
 
 - **Boot Drive Query API** (Build 161)
-  - New API 43: get_boot_drive — returns boot drive number in AL
+  - New API 43: get_boot_drive, returns boot drive number in AL
   - Enables apps to detect floppy (0x00) vs hard drive (0x80) boot
 
 ### Fixed (Build 161)
@@ -2077,7 +2073,7 @@ makes malloc/free actually work.
 - Build 153: Floppy read retry logic for reliable loading on real hardware
 - Build 154: App load error code diagnostic in launcher
 - Build 155: Background windows losing content due to overzealous z-order clipping
-- Build 157: Post-drag z-order — desktop icons and background frames showing through moved window
+- Build 157: Post-drag z-order, desktop icons and background frames showing through moved window
 - Build 158: Per-draw-call z-order clipping (point-inside-topmost check)
 - Build 159: Simplified to full background draw blocking (fixes multi-pixel bleed-through)
 

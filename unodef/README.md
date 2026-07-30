@@ -1,13 +1,13 @@
-# UNODEF — the UnoDOS Contract (Layer 0)
+# UNODEF, the UnoDOS Contract (Layer 0)
 
 This directory holds **`unodef.toml`**, the single machine-readable definition of
 the UnoDOS ABI surface: the syscall call gate, the on-disk and in-memory structs,
 the constants (FAT12 geometry, font metrics, palette), and the enums. Per
-[docs/CONTRACT-ARCH.md](../docs/CONTRACT-ARCH.md) §3, this is **Layer 0** — the
+[docs/CONTRACT-ARCH.md](../docs/CONTRACT-ARCH.md) §3, this is **Layer 0**: the
 contract every world is generated from or checked against. x86 (`kernel/`) is
 demoted from "the definition" to **first consumer + conformance oracle**.
 
-## unogen — emitting the per-world surfaces
+## unogen, emitting the per-world surfaces
 
 [`unogen.py`](unogen.py) reads `unodef.toml` and emits the contract surface into
 [`gen/`](gen/) for 6 worlds (the CPU families covering every shipped + planned
@@ -17,7 +17,7 @@ world it emits constants/offsets/enums (`unodef.*`); for worlds with a declared
 m68k); plus a world-neutral `manifest.json` for conformance/docs. Run `python
 unodef/unogen.py --check` to emit and assert the x86 output matches `kernel.asm`'s
 literals (the trust anchor). See [`gen/README.md`](gen/README.md). It emits only
-the *shape* of the boundary (CONTRACT-ARCH §3.2) — never syscall bodies or CPU
+the *shape* of the boundary (CONTRACT-ARCH §3.2), never syscall bodies or CPU
 logic.
 
 ## Status: Phase 0 (authoring)
@@ -25,15 +25,15 @@ logic.
 This is the *first* UNODEF: it encodes **what already ships** on x86, with **no
 behavior change**. It is transcribed from the live source of truth:
 
-- `kernel/kernel.asm` — `kernel_api_table` (the 106 call-gate slots), the struct
+- `kernel/kernel.asm`: `kernel_api_table` (the 106 call-gate slots), the struct
   equates (`WIN_*`, `FILE_ENTRY_SIZE`, `event_queue`), the FAT12 mount routine and
   data defaults, and `font_table` / `draw_font_advance`.
-- `docs/PORT-SPEC.md` — the prose contract (the platform-independent law).
-- `docs/API_REFERENCE.md` — per-call register signatures.
+- `docs/PORT-SPEC.md`: the prose contract (the platform-independent law).
+- `docs/API_REFERENCE.md`: per-call register signatures.
 
 Phase 1 (`unogen` MVP) will emit a C header + NASM equates from this file,
 regenerate the five-places FAT12 geometry + the font-advance constant, and prove
-the x86 build is **byte-identical** — which is what makes the generator (and this
+the x86 build is **byte-identical**: which is what makes the generator (and this
 file) trustworthy (CONTRACT-ARCH §15, §16).
 
 ## Why TOML (and not a bespoke DSL)
@@ -53,7 +53,7 @@ is a net liability:
    arrays-of-tables; constants are tables; enums are tables. The mapping is direct.
 3. **The DSL's only real win is inline field syntax** (`state:u8@0`). We keep that
    compactness with a *one-line mini-grammar* for the single compound value
-   (struct fields), parsed by ~10 lines of regex — not a whole language. See below.
+   (struct fields), parsed by ~10 lines of regex, not a whole language. See below.
 
 If authoring friction ever proves real, a thin sugar layer that **desugars to this
 same TOML** can be added later without invalidating any consumer. Start boring.
@@ -75,14 +75,14 @@ Each struct field is a single string:
 
 ## Conventions
 
-- **Ordinals are the *current shipping* flat numbering (0–105).** The categorized
+- **Ordinals are the *current shipping* flat numbering (0-105).** The categorized
   ordinal scheme of CONTRACT-ARCH §11 (`0x00 gfx`, `0x30 window`, …) is a **3.1
   target**, not what ships today; each syscall carries a `category` so Phase 12 can
   re-map without re-deriving groupings.
 - **`verified`** on each syscall: `true` = register signature transcribed and
   cross-checked against source/API_REFERENCE. **All 106 are now `verified=true`**
-  (the 12 calls API_REFERENCE leaves as "reg-level write-up pending" — ords
-  91–100, 102, 104 — were transcribed from their `kernel.asm` handler-header
+  (the 12 calls API_REFERENCE leaves as "reg-level write-up pending", ords
+  91-100, 102, 104, were transcribed from their `kernel.asm` handler-header
   comments, which is the authority anyway). Phase 1 conformance re-checks them
   against the live dispatch.
 - See `[discrepancies]` in `unodef.toml` for the doc contradictions this file

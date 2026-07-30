@@ -19,7 +19,7 @@ import struct
 import os
 
 def _load_fat12():
-    """FAT12 geometry from the single source of truth — the Contract (CONTRACT-ARCH
+    """FAT12 geometry from the single source of truth, the Contract (CONTRACT-ARCH
     §12). Was hand-duplicated here; now read from unodef/unodef.toml so it can't drift."""
     import tomllib
     here = os.path.dirname(os.path.abspath(__file__))
@@ -52,7 +52,7 @@ def add_fat12_filesystem(image_path, files):
     print(f"OS area: sectors 0-{OS_SECTORS-1}")
     print(f"Filesystem: sectors {FS_START_SECTOR}-{total_sectors-1} ({fs_sectors} sectors)")
 
-    # FAT12 parameters for the filesystem area — from the Contract (single source)
+    # FAT12 parameters for the filesystem area, from the Contract (single source)
     SECTORS_PER_CLUSTER = _F["sectors_per_cluster"]
     RESERVED_SECTORS = _F["reserved_sectors"]  # within filesystem
     NUM_FATS = _F["num_fats"]

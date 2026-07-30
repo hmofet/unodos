@@ -1,4 +1,4 @@
-# run.ps1 — launch the SMS ROM in BlastEm and capture a focus-independent
+# run.ps1, launch the SMS ROM in BlastEm and capture a focus-independent
 # screenshot (PrintWindow with white-retry; BlastEm's surface intermittently
 # yields an all-white grab). RDP-aware per ~/.claude/CLAUDE.md: forces the SDL
 # software renderer so PrintWindow can read the client area.
@@ -31,21 +31,21 @@ public class W32 {
 "@
 $p = Get-Process blastem | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
 $h = $p.MainWindowHandle
-[W32]::SetForegroundWindow($h) | Out-Null
+[W32]:SetForegroundWindow($h) | Out-Null
 $r = New-Object W32+RECT
-[W32]::GetWindowRect($h, [ref]$r) | Out-Null
+[W32]:GetWindowRect($h, [ref]$r) | Out-Null
 $w = $r.Right - $r.Left; $hh = $r.Bottom - $r.Top
 for ($i = 0; $i -lt 24; $i++) {
   Start-Sleep -Milliseconds 400
   $bmp = New-Object System.Drawing.Bitmap($w, $hh)
-  $g = [System.Drawing.Graphics]::FromImage($bmp)
-  $hdc = $g.GetHdc(); [W32]::PrintWindow($h, $hdc, 2) | Out-Null; $g.ReleaseHdc($hdc); $g.Dispose()
+  $g = [System.Drawing.Graphics]:FromImage($bmp)
+  $hdc = $g.GetHdc(); [W32]:PrintWindow($h, $hdc, 2) | Out-Null; $g.ReleaseHdc($hdc); $g.Dispose()
   $white = $true
   foreach ($fx in 0.3,0.5,0.7) { foreach ($fy in 0.3,0.5,0.7) {
     $px = $bmp.GetPixel([int]($w*$fx), [int]($hh*$fy))
     if ($px.R -lt 250 -or $px.G -lt 250 -or $px.B -lt 250) { $white = $false }
   } }
-  if (-not $white) { $bmp.Save($outPath, [System.Drawing.Imaging.ImageFormat]::Png); $bmp.Dispose()
+  if (-not $white) { $bmp.Save($outPath, [System.Drawing.Imaging.ImageFormat]:Png); $bmp.Dispose()
     Write-Output "saved $outPath ($w x $hh) after $($i+1) tries"; exit 0 }
   $bmp.Dispose()
 }

@@ -1,4 +1,4 @@
-# Detach completion — finish removing firmware from the running system (pc64)
+# Detach completion, finish removing firmware from the running system (pc64)
 
 Status: **Phase A mostly done (2026-07-29, branch `detach-usb`)**; B, C, D
 still open. New drivers here are written as registry drivers, and phase D's
@@ -61,7 +61,7 @@ transcoder / DDI programming, per vendor) is explicitly out of scope. The
 only cost of no display driver: no resolution switching, and BltOnly
 machines cannot detach.
 
-## Phase A — USB mass storage (the big one)
+## Phase A, USB mass storage (the big one)
 
 Un-blocks every USB-stick boot. The hard plumbing already exists in
 `xhci.c`: control transfers, SET_CONFIGURATION, bulk rings
@@ -69,7 +69,7 @@ Un-blocks every USB-stick boot. The hard plumbing already exists in
 proven by the AX88179 NIC). The new driver is Bulk-Only Transport plus a
 minimal SCSI set.
 
-1. `pc64/usbmsc.c` — registry driver matching interface class 08 / subclass
+1. `pc64/usbmsc.c`: registry driver matching interface class 08 / subclass
    06 (SCSI transparent) / protocol 50 (BOT):
    - CBW/CSW framing over bulk-out/bulk-in, tag counter, CSW status check,
      bulk-only mass storage reset + clear-halt recovery path.
@@ -105,7 +105,7 @@ Acceptance: QEMU usb-storage boot detaches, storage self-test passes
 post-detach, WRTEST proof file survives a reboot; ZimaBlade detaches on its
 Verbatim stick with all disks visible and net up.
 
-## Phase B — input gates
+## Phase B, input gates
 
 1. **X1 pointer**: two independent outs, either clears the gate honestly:
    - The metal-pending I2C-HID fix (LPSS 216 MHz clock divisor + detach-gate
@@ -121,7 +121,7 @@ Verbatim stick with all disks visible and net up.
    `detach_would_strand_pointer()`'s LPSS-counting heuristic once the query
    exists; keep its conservative behavior as the fallback if the tree is
    somehow empty.
-3. **Surface Laptop Go keyboard — investigate before promising.** We skip
+3. **Surface Laptop Go keyboard, investigate before promising.** We skip
    USB/PS2 takeover on Microsoft SMBIOS today, and the internal keyboard
    most likely rides the Surface Aggregator Module (we already talk to SAM
    for battery). If it is not a USB HID device, the Surface cannot detach
@@ -130,7 +130,7 @@ Verbatim stick with all disks visible and net up.
    here: a definitive answer (unodevices tree dump + descriptor walk on the
    Surface) plus a one-page sizing if a SAM driver is needed.
 
-## Phase C — attached-mode firmware sweep
+## Phase C, attached-mode firmware sweep
 
 For machines that still run attached (and the pre-detach window on all
 machines), shrink firmware usage to the unavoidable minimum:
@@ -151,7 +151,7 @@ machines), shrink firmware usage to the unavoidable minimum:
   attached-only, or runtime-service). "Traditional OS" parity means this
   list is short and intentional, not zero.
 
-## Phase D — flip the posture + fleet checklist
+## Phase D, flip the posture + fleet checklist
 
 - Default becomes: ALWAYS detach unless (no linear FB) or (no native
   keyboard after phase B) or (registry query says a critical device is

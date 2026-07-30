@@ -1,8 +1,8 @@
-# unoweb — subsystem contract
+# unoweb, subsystem contract
 
 **Owner:** the unoweb row in [`/AGENTS.md`](../AGENTS.md) section 1.
 **Public surface:** [`unoweb.h`](unoweb.h). Everything else here is internal.
-**Contract version:** 0.1 — `[EXPERIMENTAL]` until M2 lands on `master`.
+**Contract version:** 0.1, `[EXPERIMENTAL]` until M2 lands on `master`.
 
 unoweb is the web core: the DOM store and HTML parser today; CSS, layout and
 paint from M3. It is the other half of the split in
@@ -13,9 +13,9 @@ JavaScript half and landed in M1.
 
 **unoweb knows nothing about JavaScript.** No `ujs_val` in this header, no
 script evaluation, no engine dependency. It must parse and render a document
-with no JS engine linked at all — the "NoScript build", which is exactly how
+with no JS engine linked at all, the "NoScript build", which is exactly how
 the test suite runs and how `test/Makefile` is written. Scripts reach the
-outside through **one** callback (`uw_hooks::script`); the embedder decides
+outside through **one** callback (`uw_hooks:script`); the embedder decides
 whether anything happens.
 
 That is what makes `pc64/webjs.c` (M5) the single file in the system that sees
@@ -37,7 +37,7 @@ flagged rather than growing without bound.
 | Knob | Default | At the limit |
 |---|---|---|
 | `arena_max` | 16 MB | parse stops, `uw_doc_truncated()` returns 1 |
-| `max_depth` | 256 | same — deep nesting is a classic DoS shape |
+| `max_depth` | 256 | same, deep nesting is a classic DoS shape |
 | pending input | 4 MB | same |
 
 ## Parsing
@@ -76,7 +76,7 @@ table; ASCII case-insensitive tag and attribute names.
 3. **No charset detection.** UTF-8 is assumed; `<meta charset>` is parsed into
    the DOM but not acted on. windows-1252 fallback is M2b.
 4. **No `<template>`, no foreign content** (SVG/MathML namespaces).
-5. **Fragment parsing ignores context-sensitive rules** — `uw_parse_fragment`
+5. **Fragment parsing ignores context-sensitive rules**: `uw_parse_fragment`
    parses into the context element directly, so a `<tr>` fragment in a `<div>`
    context is not corrected the way the spec prescribes.
 6. **`uw_get_element_by_id` scans linearly.** The index is an array, not a
@@ -120,7 +120,7 @@ exact and reproducible.
 
 ### Images and hit testing
 
-unoweb decodes nothing. `uw_images::resolve` hands back an intrinsic size and
+unoweb decodes nothing. `uw_images:resolve` hands back an intrinsic size and
 an opaque handle that comes straight back in `UW_CMD_IMAGE`; returning 0 makes
 the image an empty replaced box, which is what a broken or still-loading image
 should be. pc64 currently paints the reserved box as an outline - the layout is
@@ -147,7 +147,7 @@ matches its ink.
 
 ## Testing
 
-`unoweb/test/` builds with plain gcc and **no unojs** — if it ever needs the JS
+`unoweb/test/` builds with plain gcc and **no unojs**: if it ever needs the JS
 engine, the split has been broken.
 
 ```bash
@@ -169,7 +169,7 @@ passing tests will not reveal on their own.
 
 ## Changelog
 
-- **0.1** (2026-07-27) — first cut: DOM store, streaming HTML parser, the
+- **0.1** (2026-07-27), first cut: DOM store, streaming HTML parser, the
   browser bridge, CSS parsing/cascade, block layout and the display list. `pc64_browser.c` now renders by walking a real DOM instead of
   scanning tag text inline, which is what gives it correct nesting through
   unclosed tags, character references, quoted attributes containing `>`, and

@@ -2,7 +2,7 @@
 
 pc64 owns its filesystem. Partition scanning and FAT16/32 read+write are done by
 UnoDOS code over its own block layer; the UEFI firmware no longer parses the
-filesystem — while attached it only moves sectors, and once the OS detaches
+filesystem, while attached it only moves sectors, and once the OS detaches
 (a later milestone) even that becomes native. The practical result: **UnoDOS
 runs from any FAT32 partition on any disk, not just the ESP the firmware
 happened to expose.**
@@ -35,21 +35,21 @@ read-only here.
 While UEFI boot services are live, the **firmware** owns the AHCI/NVMe
 controllers. If a native driver reprograms one (stops a port, repoints the
 command list/queues to its own buffers, restarts), it breaks the firmware's own
-Block IO — which corrupted an installer disk clone mid-write. So:
+Block IO, which corrupted an installer disk clone mid-write. So:
 
 - **Attached** (boot services live): `blkdev` uses the **EFI Block IO backend**
   for every disk. Our FAT code still does all partition + filesystem work; only
   the sector transport is firmware.
-- **Detached** (after `ExitBootServices` — M3, SHIPPED): the native drivers
+- **Detached** (after `ExitBootServices`: M3, SHIPPED): the native drivers
   (`ahci.c` for SATA, `nvme.c` for PCIe SSDs, `sdhci.c` for eMMC/SD) are the
   only things on the bus and firmware Block IO is gone.
 
 The gate is `uno_pc64_detached()` (in `uefi_main.c`).  The detach itself is
 automatic at the end of boot when the native stack covers the machine: linear
 framebuffer + a native keyboard + a calibrated TSC + **a UnoDOS system volume
-on a controller a native driver binds — AHCI (01/06), NVMe (01/08) or SDHCI
+on a controller a native driver binds, AHCI (01/06), NVMe (01/08) or SDHCI
 (08/05)**
-(`uno_fat_native_eligible()` — a foreign FAT partition alone must not count,
+(`uno_fat_native_eligible()`: a foreign FAT partition alone must not count,
 or a USB-booted system would detach away its own boot volume and the
 firmware-dependent Install app).  The sequence is `uno_fat_sync()` (flush the
 write-back cache over the dying transport) → `GetMemoryMap`+`ExitBootServices`
@@ -67,12 +67,12 @@ opens a `.UNO` off the NVMe ESP (read path), saves in the Editor and pulls
 `NOTES.TXT` back out of the raw image with mtools (write path).
 
 `sdhci.c` (the Surface Laptop Go's eMMC is the target; SD cards come along
-for free) does the standard dual identity probe — SD (CMD8 + ACMD41) first,
-then eMMC/MMC (CMD1, host-assigned RCA, EXT_CSD capacity for > 2 GB) — and a
+for free) does the standard dual identity probe, SD (CMD8 + ACMD41) first,
+then eMMC/MMC (CMD1, host-assigned RCA, EXT_CSD capacity for > 2 GB), and a
 shared data plane: 4-bit bus at 25 MHz, single-block CMD17/CMD24 with PIO
 through the buffer-data port (no DMA descriptors; multi-block/SDMA is the
 upgrade if it ever matters). Byte- and block-addressed cards both handled.
-Verify: `python3 tools/sdhci_test.py` (WSL, SD path — build with
+Verify: `python3 tools/sdhci_test.py` (WSL, SD path, build with
 `UNO_EXTRA='-DUNO_SDHCI_TEST -DUNO_DBGCON'`) and `python tools\emmc_test_win.py`
 (Windows QEMU ≥ 9.1, whose `-device emmc` models the MMC handshake; WSL's
 QEMU 8.2 has SD only). Both boot from a USB stick with the image on the
@@ -80,13 +80,13 @@ card, so the card is the ONLY gate-eligible volume: they prove the 08/05
 gate line, detach-time re-registration, post-detach `.UNO` loads, and a
 raw-verified Editor save. `-DUNO_SDHCI_TEST` exists because OVMF ships no
 SdMmc driver (the card is firmware-invisible in QEMU, so the eager attached
-bring-up stands in for the firmware eMMC volume a real machine provides —
+bring-up stands in for the firmware eMMC volume a real machine provides -
 and is safe there for the same reason: nobody else drives the controller).
 
 **The dirty-line lesson (found by the NVMe test):** `uno_fat_write`'s create path
 once wrote the new 8.3 name into a cache line *without* marking it dirty;
 `fat_alloc`'s free-scan then churned the 8-line cache, evicting the clean line
-and silently discarding the name — the final entry-fill stamped cluster/size
+and silently discarding the name, the final entry-fill stamped cluster/size
 into a slot whose name was zeroed, i.e. an invisible file + leaked chain, on
 every post-detach save on ANY native transport. If you touch a cache line's
 bytes, `cache_put()` it in the same breath.
@@ -98,7 +98,7 @@ buffer. An **unaligned** sector buffer silently returns `0xFF`-filled garbage
 (not an error) on some controllers/firmware. `fat.c`'s sector cache therefore
 aligns its line buffers (`uint8_t buf[512] __attribute__((aligned(128)))`).
 Symptom if you ever regress it: a raw `bdev->read(lba)` returns correct data but
-the cached read of the same LBA returns `0xFF` — mount succeeds (label comes
+the cached read of the same LBA returns `0xFF`: mount succeeds (label comes
 from the BPB via a stack buffer) but every file read fails.
 
 ## Verifying (headless)
@@ -108,8 +108,8 @@ from the BPB via a stack buffer) but every file read fails.
 boots the USB image plus a plain FAT32 **basic-data** (type 0700, *not* an ESP)
 disk on the q35 AHCI controller. It confirms:
 
-- **read** — a `MARKER.TXT` placed offline survives and is readable;
-- **write + delete** — a gated boot-time self-test (`uno_fat_selftest()`, built
+- **read**: a `MARKER.TXT` placed offline survives and is readable;
+- **write + delete**: a gated boot-time self-test (`uno_fat_selftest()`, built
   only with `-DUNO_STORTEST`, inert unless a `WRTEST.REQ` file is present) turns
   `WRTEST.REQ` into `WRTEST.OK` and removes the request; mtools confirms offline.
 

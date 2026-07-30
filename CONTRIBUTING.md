@@ -32,11 +32,11 @@ make run-hd
 
 ### Project Layout
 
-- `kernel/kernel.asm` — The entire kernel (one large assembly file)
-- `apps/*.asm` — Each application is a standalone NASM source file
-- `boot/*.asm` — Boot chain (MBR, VBR, stage2 loaders)
-- `tools/*.py` — Build tools (image creation, filesystem)
-- `docs/` — Technical documentation
+- `kernel/kernel.asm`: The entire kernel (one large assembly file)
+- `apps/*.asm`: Each application is a standalone NASM source file
+- `boot/*.asm`: Boot chain (MBR, VBR, stage2 loaders)
+- `tools/*.py`: Build tools (image creation, filesystem)
+- `docs/`: Technical documentation
 
 ### How It Works
 
@@ -46,10 +46,10 @@ The kernel communicates with apps through `INT 0x80` system calls (similar in co
 
 ### Good First Contributions
 
-- **New applications** — Write a new app using the existing API. See [docs/APP_DEVELOPMENT.md](docs/APP_DEVELOPMENT.md) for the full guide and [docs/API_REFERENCE.md](docs/API_REFERENCE.md) for available system calls.
-- **Icon artwork** — Apps use 16x16 2bpp CGA icons. The existing ones are functional but could be improved.
-- **Documentation** — Corrections, clarifications, or tutorials.
-- **Screenshots** — The README needs screenshots from real hardware or QEMU.
+- **New applications**: Write a new app using the existing API. See [docs/APP_DEVELOPMENT.md](docs/APP_DEVELOPMENT.md) for the full guide and [docs/API_REFERENCE.md](docs/API_REFERENCE.md) for available system calls.
+- **Icon artwork**: Apps use 16x16 2bpp CGA icons. The existing ones are functional but could be improved.
+- **Documentation**: Corrections, clarifications, or tutorials.
+- **Screenshots**: The README needs screenshots from real hardware or QEMU.
 
 ### Larger Contributions
 
@@ -60,7 +60,7 @@ The kernel communicates with apps through `INT 0x80` system calls (similar in co
 ## Code Style
 
 - x86 assembly uses Intel syntax (NASM)
-- Comments explain *why*, not *what* — `; Skip header` not `; Jump past 80 bytes`
+- Comments explain *why*, not *what*, `; Skip header` not `; Jump past 80 bytes`
 - Labels use `snake_case`
 - Constants use `UPPER_CASE`
 - Local labels start with `.` (e.g., `.loop:`, `.exit:`)
@@ -87,7 +87,7 @@ If you have real vintage hardware, testing there is even better. Report the hard
 
 ## Build Numbers
 
-The `BUILD_NUMBER` file tracks sequential builds. Don't increment it in your PR — the maintainer handles build numbering.
+The `BUILD_NUMBER` file tracks sequential builds. Don't increment it in your PR, the maintainer handles build numbering.
 
 ## License
 

@@ -1,15 +1,15 @@
 #!/bin/sh
-# UnoDOS / PinePhone (Allwinner A64) — FEL (USB) debug kit.
+# UnoDOS / PinePhone (Allwinner A64), FEL (USB) debug kit.
 # =============================================================================
 # The PinePhone has NO dedicated debug port: the only no-serial signal channel is
 # the SoC's FEL mode (USB OTG BootROM protocol). When the BROM finds no valid boot
 # medium it listens for commands on USB; `sunxi-tools` (sunxi-fel) drives it. This
-# lets us bisect a "fully dark, won't boot" phone with nothing but a USB-C cable —
+# lets us bisect a "fully dark, won't boot" phone with nothing but a USB-C cable -
 # no UART, no serial adapter.
 #
 # How to put the phone in FEL (button-free):  flash `fel-sdboot.sunxi` to the SPL
 # slot of a microSD (this script's `felcard`), insert it, power on. The BROM runs
-# that tiny SPL which immediately enters FEL. The screen STAYS DARK in FEL — that
+# that tiny SPL which immediately enters FEL. The screen STAYS DARK in FEL, that
 # is expected; the phone is alive and listening on USB. Connect USB to this box.
 #
 # Then bisect, in order:
@@ -52,7 +52,7 @@ cmd_probe() {
   i=0
   while [ $i -lt 60 ]; do
     if sunxi-fel version 2>/dev/null; then
-      echo "[probe] *** SoC ALIVE in FEL — power + USB-OTG OK ***"
+      echo "[probe] *** SoC ALIVE in FEL, power + USB-OTG OK ***"
       return 0
     fi
     i=$((i+1)); sleep 1
@@ -72,7 +72,7 @@ cmd_uboot() {
 
 # run: the FAST bare-payload dev loop now that the payload lights the panel itself
 # (Path A). FEL can't run a DRAM payload cold (DRAM is dark in the BROM), so we use
-# the SPL to bring DRAM up, then load + execute unodos.bin straight into RAM — NO SD
+# the SPL to bring DRAM up, then load + execute unodos.bin straight into RAM, NO SD
 # write per iteration. `sunxi-fel spl <fw>` runs the SPL (it inits DRAM and returns
 # to FEL via the eGON thunk); then we write the payload to the arm64 load address and
 # jump. The panel bring-up (clocks/PMIC/DSI/D-PHY/ST7703/TCON0/backlight) runs in the
@@ -82,7 +82,7 @@ cmd_run() {
   PAYLOAD="${2:-$HERE/build/unodos.bin}"
   [ -f "$PAYLOAD" ] || PAYLOAD="$HERE/build/unodos_paneldbg.bin"   # fall back to the LED-staged build
   [ -f "$PAYLOAD" ] || { echo "no payload: build with ./build.sh (or ./build.sh paneldbg)"; exit 1; }
-  [ -f "$FW" ] || { echo "missing SPL/U-Boot $FW (build with ./mksd.sh fw) — needed to init DRAM"; exit 1; }
+  [ -f "$FW" ] || { echo "missing SPL/U-Boot $FW (build with ./mksd.sh fw), needed to init DRAM"; exit 1; }
   echo "[run] SPL DRAM init: $FW"
   sunxi-fel spl "$FW"
   echo "[run] load $PAYLOAD @ 0x40080000 and execute"
@@ -95,7 +95,7 @@ cmd_run() {
 
 cmd_payload() {
   # Run our U-Boot from RAM; it then runs distro_bootcmd, which scans the inserted
-  # card and finds boot.scr + unodos.bin (present even on a felcard — fel-sdboot only
+  # card and finds boot.scr + unodos.bin (present even on a felcard, fel-sdboot only
   # overwrites the SPL slot, the FAT partition is intact). End result: the POST
   # beacon (build a POST payload first: ./build.sh post, then put unodos_post.bin on
   # the card as unodos.bin, or use the normal payload).
@@ -110,8 +110,8 @@ cmd_felcard() {
   BASE="$HERE/build/pinephone-unodos.img"
   # Fall back to the mksd.sh build tree (e.g. on devbuntu where the repo isn't checked out).
   [ -f "$BASE" ] || { BASE="$WORK/pine.img"; IMG="$WORK/pine-felcard.img"; }
-  [ -f "$FELSDBOOT" ] || { echo "missing $FELSDBOOT — fetch fel-sdboot.sunxi from sunxi-tools"; exit 1; }
-  [ -f "$BASE" ] || { echo "missing base image $BASE — run ./mksd.sh image first"; exit 1; }
+  [ -f "$FELSDBOOT" ] || { echo "missing $FELSDBOOT, fetch fel-sdboot.sunxi from sunxi-tools"; exit 1; }
+  [ -f "$BASE" ] || { echo "missing base image $BASE, run ./mksd.sh image first"; exit 1; }
   cp "$BASE" "$IMG"
   # fel-sdboot occupies the same sector-16 SPL slot; overwrite just that, keep FAT.
   dd if="$FELSDBOOT" of="$IMG" bs=1024 seek=8 conv=notrunc,fsync status=none

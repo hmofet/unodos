@@ -17,7 +17,7 @@ python docs/build_site.py     # regenerates docs/*.html + assets/style.css + .no
 ```
 
 Images live in [`assets/img/`](assets/img/) and are **not** produced by
-`build_site.py` — they come from the capture tools below and are committed
+`build_site.py`: they come from the capture tools below and are committed
 alongside the HTML.
 
 ### House style (user-facing pages)
