@@ -89,6 +89,38 @@ static cline *cache_get(uno_bdev *dev, uint64_t lba)
     return &g_ch[victim];
 }
 static void cache_put(cline *c) { c->dirty = 1; }
+
+/* ---- bulk sequential reads -------------------------------------------------
+ * The sector cache moves ONE sector per device call, which is right for
+ * directory walks and FAT chain hops (scattered single sectors, high reuse)
+ * and catastrophic for file data. Measured on the ZimaBlade over usbmsc:
+ * 1.75 ms per sector plus 38 ms fixed, dead linear, so a 318 KB module cost
+ * 1.1 s - 286 KB/s on a bus good for tens of MB/s. Every 512 bytes was a whole
+ * Bulk-Only transaction (CBW out, data in, CSW in).
+ *
+ * uno_bdev.read has always taken a sector COUNT and usbmsc has always chunked
+ * at 64 sectors; nothing ever asked it for more than one. This is that ask.
+ *
+ * STAGED through an aligned buffer rather than read straight into the caller's,
+ * deliberately. The cache line above is 128-byte aligned because EFI Block IO
+ * honours Media->IoAlign and native AHCI DMAs out of the buffer it is given, so
+ * an unaligned destination silently returns 0xFF garbage on some controllers -
+ * and a caller's `buf + total` lands wherever it lands. One memcpy over data we
+ * just spent milliseconds fetching is not measurable; a silent bad read is. */
+#define FAT_BULK_SEC 64                     /* 32 KB, matching usbmsc's chunk */
+static uint8_t g_bulk[FAT_BULK_SEC * SECT] __attribute__((aligned(128)));
+
+/* Write back any DIRTY line inside [lba, lba+n) before we read those sectors
+ * straight off the device - otherwise the bulk path reads stale contents
+ * behind the cache's back. Clean lines need nothing: they already match disk. */
+static void cache_flush_range(uno_bdev *dev, uint64_t lba, uint32_t n)
+{
+    int i;
+    for (i = 0; i < CH_N; i++)
+        if (g_ch[i].valid && g_ch[i].dirty && g_ch[i].dev == dev &&
+            g_ch[i].lba >= lba && g_ch[i].lba < lba + n)
+            cache_flush_line(&g_ch[i]);
+}
 static void cache_sync(void) { int i; for (i = 0; i < CH_N; i++) cache_flush_line(&g_ch[i]); }
 static void cache_drop(uno_bdev *dev)   /* invalidate a device's lines after raw IO */
 { int i; for (i = 0; i < CH_N; i++) if (g_ch[i].dev == dev) { cache_flush_line(&g_ch[i]); g_ch[i].valid = 0; } }
@@ -657,8 +689,71 @@ long uno_fat_read_at(int vol, const char *path, long off,
 
     guard = 0;
     while (total < max && clus >= 2 && !fat_eoc(v, clus) && guard++ < MAXCLUS_WALK) {
-        uint32_t s;
-        for (s = skip_sec; s < v->sec_per_clus && total < max; s++) {
+        uint32_t s = skip_sec;
+        /* BULK ARM: take the whole remaining run of this cluster in one device
+         * transaction. Only when we are sector-aligned (skip_byte == 0) and
+         * want at least two sectors - a single sector is what the cache is for,
+         * and routing it here would lose the reuse that makes directory walks
+         * cheap.
+         *
+         * Within one cluster only. Coalescing across CONSECUTIVE clusters would
+         * go further on a fragmented volume, but it needs the chain walked
+         * ahead of the read and this arm alone divides the transaction count by
+         * sectors-per-cluster, which on a FAT32 volume is 8 to 64. */
+        if (skip_byte == 0) {
+            long wantsec = (max - total) / SECT;
+            uint32_t nsec;
+            /* CONSECUTIVE-CLUSTER RUN, the arm that actually pays. Within one
+             * cluster the transaction is capped at sectors-per-cluster, and
+             * this volume has 8 (4 KB clusters) - measured 1127 ms -> 371 ms,
+             * only 3x, because 8 sectors is still a small transfer. Walking
+             * the chain while it stays contiguous gets to the 64-sector
+             * transaction usbmsc was always willing to do.
+             *
+             * WHOLE CLUSTERS ONLY, deliberately: it means the advance is just
+             * "the cluster after the run" with no partial-cluster bookkeeping,
+             * which is where this kind of loop goes wrong. A tail shorter than
+             * a cluster, or a read starting mid-cluster, falls through to the
+             * paths below unchanged. */
+            uint32_t maxcl = FAT_BULK_SEC / v->sec_per_clus;
+            if (s == 0 && maxcl >= 1 && wantsec >= (long)v->sec_per_clus) {
+                uint32_t ncl = 1, last = clus, nxt;
+                while (ncl < maxcl &&
+                       (long)((ncl + 1) * v->sec_per_clus) <= wantsec) {
+                    nxt = fat_get(v, last);
+                    if (nxt != last + 1 || nxt < 2 || fat_eoc(v, nxt)) break;
+                    last = nxt; ncl++;
+                }
+                nsec = ncl * v->sec_per_clus;
+                {
+                    uint64_t lba = clus_lba(v, clus);
+                    cache_flush_range(v->dev, lba, nsec);
+                    if (v->dev->read(v->dev, lba, nsec, g_bulk)) {
+                        memcpy(buf + total, g_bulk, (size_t)nsec * SECT);
+                        total += (long)nsec * SECT;
+                        clus = fat_get(v, last);   /* the cluster AFTER the run */
+                        skip_sec = 0;
+                        continue;                  /* outer loop, chain advanced */
+                    }
+                    /* a failed bulk read falls through to the arms below */
+                }
+            }
+            nsec = v->sec_per_clus - s;
+            if ((long)nsec > wantsec)   nsec = (uint32_t)wantsec;
+            if (nsec > FAT_BULK_SEC)    nsec = FAT_BULK_SEC;
+            if (nsec >= 2) {
+                uint64_t lba = clus_lba(v, clus) + s;
+                cache_flush_range(v->dev, lba, nsec);
+                if (v->dev->read(v->dev, lba, nsec, g_bulk)) {
+                    memcpy(buf + total, g_bulk, (size_t)nsec * SECT);
+                    total += (long)nsec * SECT;
+                    s += nsec;
+                }
+                /* a failed bulk read falls through to the per-sector path,
+                 * which reports the error exactly as it always did */
+            }
+        }
+        for (; s < v->sec_per_clus && total < max; s++) {
             cline *cc = cache_get(v->dev, clus_lba(v, clus) + s);
             long n = SECT - skip_byte;
             if (n > max - total) n = max - total;
