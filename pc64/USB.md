@@ -130,6 +130,22 @@ because the native driver speaks boot protocol and nothing else.
 A debug boot log now prints the verdict, because the bound counts never could:
 `usb-hid preflight: kbd=1 ptr=0 (USB boot keyboard on an xHCI root port)`.
 
+## Full speed needs its real EP0 max packet
+
+`mps_for_speed()` can only guess for one speed. High speed EP0 is always 64 and
+low speed always 8, but FULL speed may be 8, 16, 32 or 64 and is knowable only
+by reading the descriptor. Guessing 8 works right up until a transfer needs a
+second packet: an 18-byte device-descriptor fetch against a device that
+packetises at 64 errors out, and a healthy device looks absent.
+
+So `enumerate_dev()` does the spec's two-step for full speed: read the first 8
+bytes (safe at MPS 8 for anything), take `bMaxPacketSize0` from offset 7, and
+issue **Evaluate Context** to correct EP0 before any longer read.
+
+This is why a hub full of devices can come up with only its high-speed member
+present. On the ZimaBlade that was a boot stick enumerating while a keyboard
+and two mice did not, all three on healthy ports.
+
 ## usbmsc: Bulk-Only Transport
 
 `usbmsc.c` is CBW/CSW framing plus INQUIRY, TEST UNIT READY, READ CAPACITY(10),
@@ -196,6 +212,19 @@ endpoint.
 Diagnosing the next one: on failure the driver prints `cc` and the endpoint
 state. `cc=-1` with `epstate=1` (Running) means we gave up waiting and the
 device had simply not answered; any other `cc` is a real error completion.
+
+**METAL CONFIRMED 2026-07-30 (ZimaBlade):** detached, with the boot stick,
+a Logitech unifying receiver and a Razer mouse all enumerated behind one hub
+(`devs=5`), `usb-hid: kbd=3 mouse=2`, and keyboard and mouse both working. That
+box has a single USB port, so a hub is mandatory there and every one of these
+faults had to be fixed before it could detach at all.
+
+**What QEMU could not test, three times running:** its hub powers ports
+regardless of configuration state, it is single-TT, and its HID devices report
+`bMaxPacketSize0 = 8`. So the hub SET_CONFIGURATION, the multi-TT programming
+and the full-speed EP0 fix all went green in the emulator on code that could
+not work on hardware. Treat a green QEMU USB result as necessary and nowhere
+near sufficient.
 
 **Still opt-in.** QEMU is green, 5 of 5 USB-storage boots detach with the
 system volume intact, plus `install_test` (both phases) and `storage_test`
