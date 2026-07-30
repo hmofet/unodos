@@ -1735,36 +1735,33 @@ static EFI_RUNTIME_SERVICES *rts(void) { return (EFI_RUNTIME_SERVICES *)gST->Run
  * first there. That is one policy expressed once, which is what the plan was
  * actually asking for.
  *
- * `off` selects power-off (ACPI S5 / EfiResetShutdown) over reset (CF9 /
+ * ONE ASYMMETRY, and it is not a lapse. The rule above applies to RESET only.
+ * Power-off always tries the firmware first, because ACPI S5 entry is terminal
+ * BY CONSTRUCTION: uno_acpi_poweroff() takes interrupts down with `cli` before
+ * uacpi_enter_sleep_state, and on failure it returns with them still down.
+ * Anything running after it - a runtime-service call, a halt loop - then runs
+ * on a machine that can no longer be interrupted, which turns a failed
+ * shutdown into a hang. So S5 stays last, where the code that wrote it assumed
+ * it would be. Reordering it to satisfy a symmetry is how this function got
+ * its first bug.
+ *
+ * `off` selects power-off (EfiResetShutdown / ACPI S5) over reset (CF9 /
  * EfiResetCold). Never returns. */
 static void power_down(int off)
 {
-    int det = gDetached;
     uno_dbg_mark_clean();           /* debug build: not a crash, don't salvage */
-    if (det) {                      /* ---- native first ---- */
-        if (off) {
-#ifdef UNO_ACPI
-            uno_acpi_poweroff();
-#endif
-        } else {
-            uno_native_reset_try();                 /* CF9; returns if ignored */
-        }
-    }
+    if (!off && gDetached)
+        uno_native_reset_try();     /* detached: our own CF9 first, returns if ignored */
     /* ResetSystem is a RUNTIME service, so this is legal on both sides of
        ExitBootServices while we stay in physical addressing. Some firmware
        ignores EFI_RESET_SHUTDOWN and simply returns - the Surface Laptop Go
        hangs on "Shutting down" this way - which is why nothing below assumes
        it worked. */
     rts()->ResetSystem(off ? EfiResetShutdown : EfiResetCold, 0, 0, 0);
-    if (!det) {                     /* ---- native second ---- */
-        if (off) {
+    if (!off) uno_native_reset();   /* CF9 + i8042 pulse, then halt */
 #ifdef UNO_ACPI
-            uno_acpi_poweroff();
+    uno_acpi_poweroff();            /* terminal: leaves interrupts off */
 #endif
-        } else {
-            uno_native_reset();                     /* CF9 + i8042, then halt */
-        }
-    }
     /* nothing worked: halt quietly. The screen keeps the last frame, so the
        machine is safe to switch off by hand and says as much. */
     for (;;) __asm__ volatile ("hlt");

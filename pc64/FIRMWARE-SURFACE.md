@@ -98,15 +98,24 @@ Three things were using the firmware for no reason:
 - **Power.** Shutdown and restart disagreed about ordering and about which
   fallback they had: restart only tried CF9 when already detached, shutdown
   only tried ACPI S5 after `ResetSystem` returned. They are one `power_down()`
-  with one rule now: **attached prefers the firmware, detached prefers our own
-  registers, and either way the other one is tried before halting.**
+  now, with one rule for **reset**: detached tries our own CF9 first, then the
+  runtime service, then the terminal CF9-plus-i8042 form.
 
-  Note this is deliberately NOT the plan's "prefer native CF9" as written.
-  While the firmware is alive, `ResetSystem` is also its chance to flush a
-  pending NVRAM write and run whatever the platform does on the way down; CF9
-  is a hard platform reset that skips all of it. Post-EBS the argument reverses
-  and native goes first. One policy, expressed once, which is what the plan was
-  asking for.
+  This is deliberately NOT the plan's flat "prefer native CF9". While the
+  firmware is alive, `ResetSystem` is also its chance to flush a pending NVRAM
+  write and run whatever the platform does on the way down; CF9 is a hard
+  platform reset that skips all of it.
+
+  **Power-off keeps ACPI S5 last, and that asymmetry is load-bearing.**
+  `uno_acpi_poweroff()` takes interrupts down with `cli` before
+  `uacpi_enter_sleep_state`, and on failure returns with them still down - it
+  is written on the assumption that nothing runs after it. The first version of
+  this function generalised "detached prefers native" to shutdown as well, put
+  S5 first on a detached box, and hung the SPECTEST guest: S5 declined, the
+  runtime `ResetSystem` after it did not power off either, and the halt loop
+  then ran on a machine that could no longer be interrupted. 69 PASS became a
+  30-minute nothing. Symmetry is not worth a hang; S5 stays where its author
+  put it.
 
 Also removed: the no-GOP panic loop span `for(;;) gBS->Stall(1000000)`, which
 burned firmware calls forever on a machine that was already dead. It halts.
