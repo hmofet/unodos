@@ -24,7 +24,11 @@ generalises: **anything gated on `uno_pc64_detached()` is a feature that
 disappears the day the machine detaches.** Grep for that call before flipping
 any posture.
 
-**Still opt-in**, and this is the remaining Phase A work: `xhci.c` has no
+**PHASE A DONE 2026-07-30.** USB-boot detach is the default; metal-confirmed on
+the ZimaBlade (no firmware: storage, network, keyboard and mouse all native,
+every USB device behind a hub). Superseded note follows.
+
+**Was opt-in, and this was the remaining Phase A work:** `xhci.c` has no
 SuperSpeed endpoint-companion burst sizing and no xHCI Reset-Endpoint /
 Set-TR-Dequeue recovery, so a SuperSpeed stick (bulk mps 1024) wedges its
 endpoint on the first transfer error. See `pc64/USB.md`.

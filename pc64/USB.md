@@ -226,7 +226,15 @@ and the full-speed EP0 fix all went green in the emulator on code that could
 not work on hardware. Treat a green QEMU USB result as necessary and nowhere
 near sufficient.
 
-**Still opt-in.** QEMU is green, 5 of 5 USB-storage boots detach with the
+**USB-boot detach is the DEFAULT as of 2026-07-30.** `DETACH.CFG: nousb`
+keeps a machine attached, `off` disables detach entirely, and neither needs a
+rebuild: drop the file on the stick from any other computer. The risk that
+motivated the opt-in has not changed shape, only likelihood - the preflight
+proves the stick's SHAPE, never that sustained reads will work, because proving
+that means taking the controller, which is the irreversible step. There is no
+way back past ExitBootServices.
+
+Superseded note, kept for the reasoning: QEMU is green, 5 of 5 USB-storage boots detach with the
 system volume intact, plus `install_test` (both phases) and `storage_test`
 read/write, all post-detach. The remaining gate is metal: the ZimaBlade, a
 desktop rather than a laptop, because past ExitBootServices there is no way
