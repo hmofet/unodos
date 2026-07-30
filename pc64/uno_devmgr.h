@@ -92,6 +92,11 @@ uno_device *devmgr_find_class(unsigned char cls, unsigned char sub);
  * whitespace and takes the last token as the driver column. */
 const char *devmgr_class_name(unsigned char cls, unsigned char sub);
 
+/* The same, for USB nodes. A DIFFERENT namespace: USB class 03 is HID where
+ * PCI class 03 is display, so a USB device routed through the PCI table
+ * misnames itself. Single tokens, same contract. */
+const char *devmgr_usb_class_name(unsigned char cls, unsigned char sub);
+
 /* Bound driver name, or NULL while unbound (always NULL in phase 1). */
 const char *devmgr_driver_name(int idx);
 

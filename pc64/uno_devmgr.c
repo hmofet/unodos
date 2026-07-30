@@ -129,6 +129,41 @@ const char *devmgr_class_name(unsigned char cls, unsigned char sub)
     }
 }
 
+/* USB class codes are a DIFFERENT namespace from PCI ones, and reusing the PCI
+ * table for them is not a cosmetic slip: USB class 03 is HID and PCI class 03
+ * is display, so a USB keyboard listed itself as "display" until the phase-3
+ * gate caught it. A fleet dump that misnames the hardware is worse than one
+ * that says nothing.
+ *
+ * Single tokens, same contract as the PCI names (the URC last-token parse). */
+const char *devmgr_usb_class_name(unsigned char cls, unsigned char sub)
+{
+    (void)sub;
+    switch (cls) {
+    case 0x00: return "usb-dev";        /* per-interface class; see the node's
+                                           interface children for the truth   */
+    case 0x01: return "usb-audio";
+    case 0x02: return "cdc";
+    case 0x03: return "hid";
+    case 0x05: return "physical";
+    case 0x06: return "image";
+    case 0x07: return "printer";
+    case 0x08: return "mass-storage";
+    case 0x09: return "hub";
+    case 0x0A: return "cdc-data";
+    case 0x0B: return "smartcard";
+    case 0x0D: return "content-security";
+    case 0x0E: return "video";
+    case 0x0F: return "healthcare";
+    case 0xDC: return "diagnostic";
+    case 0xE0: return "wireless";
+    case 0xEF: return "misc";
+    case 0xFE: return "app-specific";
+    case 0xFF: return "vendor";
+    default:   return "usb-other";
+    }
+}
+
 /* --- enumeration ----------------------------------------------------------- */
 
 /* Preserve a bound driver across a re-scan: same address, same ids = same
@@ -512,6 +547,25 @@ int devmgr_size_bars(int idx)
 
 static int emit_loc(char *b, int cap, int at, const uno_device *d)
 {
+    /* A USB node has no bus:device.function, and printing the PCI union member
+     * for one prints whatever happens to overlap - which read as a plausible
+     * "05:00.0" and is entirely fiction. USB nodes get their OWN shape,
+     * `u<tier>:<port>.<iface>`, with `-` for a device node's interface field.
+     *
+     * It keeps the token count and the `:`/`.` punctuation of a PCI location,
+     * so a host parser splitting on whitespace still finds the driver in the
+     * last column - but it can never be mistaken for a PCI address, which is
+     * the point. */
+    if (d->bus_type == UNO_BUS_USB) {
+        at = s_cat(b, cap, at, "u");
+        at = s_dec(b, cap, at, d->addr.usb.depth);
+        at = s_cat(b, cap, at, ":");
+        at = s_hex(b, cap, at, d->addr.usb.path[0], 2);
+        at = s_cat(b, cap, at, ".");
+        if (d->addr.usb.ifnum < 0) at = s_cat(b, cap, at, "-");
+        else                       at = s_dec(b, cap, at, (unsigned)d->addr.usb.ifnum);
+        return at;
+    }
     at = s_hex(b, cap, at, d->addr.pci.bus, 2);
     at = s_cat(b, cap, at, ":");
     at = s_hex(b, cap, at, d->addr.pci.dev, 2);
@@ -538,7 +592,9 @@ int devmgr_list_str(char *buf, int cap)
         at = s_cat(buf, cap, at, "/");
         at = s_hex(buf, cap, at, d->subcls, 2);
         at = s_cat(buf, cap, at, " ");
-        at = s_cat(buf, cap, at, devmgr_class_name(d->cls, d->subcls));
+        at = s_cat(buf, cap, at, d->bus_type == UNO_BUS_USB
+                                 ? devmgr_usb_class_name(d->cls, d->subcls)
+                                 : devmgr_class_name(d->cls, d->subcls));
         at = s_cat(buf, cap, at, " ");
         /* Last token = the driver column.  Phase 1 binds nothing, so this is
          * UNCLAIMED for every device: it reports what the MANAGER has bound,

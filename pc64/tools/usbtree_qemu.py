@@ -24,6 +24,8 @@ import os, subprocess, sys, time
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import remote_qemu as rq                      # noqa: E402
+
+USTICK = "/tmp/usbtree_stick.img"
 from unoauto_remote import UnoAutoLink        # noqa: E402
 
 # One of every shape phase 3 has to represent: a boot keyboard and a boot mouse
@@ -35,9 +37,17 @@ TOPOLOGY = [
     "-device", "usb-kbd,bus=xhci.0",
     "-device", "usb-mouse,bus=xhci.0",
     "-device", "usb-hub,id=hub1,bus=xhci.0,port=3",
-    "-drive",  "if=none,id=ustick,format=raw,file=" + rq.DISK,
+    "-drive",  "if=none,id=ustick,format=raw,file=" + USTICK,
     "-device", "usb-storage,bus=xhci.0,port=3.1,drive=ustick",
 ]
+
+# A SEPARATE scratch image for the USB stick. Pointing it at rq.DISK - which
+# boot() already attaches - makes QEMU refuse to open the same file twice and
+# it never starts, which surfaces as "pc64 never dialed in" and looks exactly
+# like an OS fault. It is not one.
+def make_ustick():
+    with open(USTICK, "wb") as f:
+        f.truncate(16 << 20)
 
 fails = []
 
@@ -66,6 +76,7 @@ def main():
         print("FAIL: no build at build/esp")
         return 1
     rq.build_disk()
+    make_ustick()
     link = UnoAutoLink("127.0.0.1", rq.PORT)
     link.listen()
     vm = boot(TOPOLOGY)
@@ -100,8 +111,17 @@ def main():
         # The device BEHIND THE HUB has to be there too. A flat enumerator can
         # list it; only a tree can say it is a tier deeper, and the ZimaBlade
         # is a machine where everything is behind a hub.
-        msc = [r for r in rows if r["name"] == "mass-storage" or
-               (r["driver"] == "usbmsc")]
+        msc = [r for r in rows if r["name"] == "mass-storage"]
+
+        # A USB row must NOT look like a PCI address: the union overlaps, and
+        # printing the PCI member for a USB node produced a plausible-looking
+        # "05:00.0" that was pure fiction.
+        usbrows = [r for r in rows if r["loc"].startswith("u")]
+        check(len(usbrows) >= 6, "USB nodes use a USB location, not a fake PCI one",
+              "%d u-rows" % len(usbrows))
+
+        # the hub itself, as a device the tree can name
+        check(any(r["name"] == "hub" for r in rows), "the hub is published as a hub")
         check(bool(msc), "the mass-storage interface behind the hub is published",
               ", ".join(r["raw"] for r in msc) if msc else "absent")
 
