@@ -16,7 +16,15 @@ void uno_xhci_status(int *p, int *n, int *d, unsigned *e)
 { if (p)*p=0; if (n)*n=0; if (d)*d=0; if (e)*e=0; }
 void uno_xhci_diag(int *s, int *a, int *d, int *sp)
 { if (s)*s=0; if (a)*a=0; if (d)*d=0; if (sp)*sp=0; }
+/* the last hub scan's per-port status words, for the debug env block */
+void uno_xhci_hub_ports(unsigned *out, int max)
+{
+    int i;
+    for (i = 0; i < max && i < 16; i++) out[i] = g_hubport_sts[i];
+}
+
 void uno_xhci_diag2(unsigned *sts, unsigned *ev0, int *disc) { if (sts)*sts=0; if (ev0)*ev0=0; if (disc)*disc=0; }
+void uno_xhci_hub_ports(unsigned *out, int max) { int i; for (i=0;i<max;i++) out[i]=0; }
 int uno_usb_control(int dev, unsigned char rt, unsigned char req, unsigned short val,
                     unsigned short idx, void *data, int len)
 { (void)dev;(void)rt;(void)req;(void)val;(void)idx;(void)data;(void)len; return -1; }
@@ -166,6 +174,9 @@ static int   g_bout_i[MAX_DEV], g_bout_cyc[MAX_DEV], g_bout_dci[MAX_DEV];
  * both bulk and interrupt transfers would have trampled itself. */
 #define MAX_INTR     8
 #define INTR_RING_SZ 16
+/* last hub scan's per-port status word, for the debug env block: bit 31 is our
+ * own marker for "connected and reset, but the device would not enumerate". */
+static u32 g_hubport_sts[16];
 static trb_t g_ir[MAX_INTR][INTR_RING_SZ] __attribute__((aligned(64)));
 static u8    g_ibuf[MAX_INTR][64]         __attribute__((aligned(64)));
 static int   g_i_used[MAX_INTR], g_i_dev[MAX_INTR], g_i_dci[MAX_INTR];
@@ -554,27 +565,48 @@ static int enumerate_dev(int root_port, u32 route, int tier, int speed,
  * the controller will not route to a device behind something it thinks is an
  * ordinary peripheral. Configure Endpoint with only A0 set updates the slot
  * context and leaves the endpoints alone. */
-static int hub_configure(int di, int nports)
+static int hub_configure(int di, int nports, int mtt, int ttt)
 {
     int st = g_csz ? 64 : 32, slot = g_devs[di].slot, i;
-    u32 sdw0, sdw1;
+    u32 sdw0, sdw1, sdw2;
     for (i = 0; i < (int)sizeof g_inctx[di]; i++) g_inctx[di][i] = 0;
     ctx_wr(g_inctx[di], 4, 1u);                       /* A0: slot context only */
     sdw0 = *(volatile u32 *)(g_devctx[di] + 0);
     sdw1 = *(volatile u32 *)(g_devctx[di] + 4);
+    sdw2 = *(volatile u32 *)(g_devctx[di] + 8);
     sdw0 |= (1u << 26);                               /* Hub                   */
+    /* MTT: a multi-TT hub (bDeviceProtocol 2) has one Transaction Translator
+     * PER PORT rather than one shared. Leave this clear on such a hub and the
+     * controller addresses split transactions to the wrong translator, so every
+     * FULL- and LOW-speed device behind it fails while high-speed devices sail
+     * through untouched. That asymmetry is the signature: on the ZimaBlade the
+     * boot stick (high speed) enumerated and a keyboard and two mice (full/low)
+     * did not, behind a hub reporting class 09/00/02. */
+    if (mtt) sdw0 |=  (1u << 25);
+    else     sdw0 &= ~(1u << 25);
     sdw1 = (sdw1 & ~(0xFFu << 24)) | ((u32)(nports & 0xFF) << 24);  /* NumPorts */
+    /* TT Think Time (slot DW2 17:16), from wHubCharacteristics 6:5 - how long
+     * the TT needs between transactions. Understating it corrupts split traffic. */
+    sdw2 = (sdw2 & ~(3u << 16)) | ((u32)(ttt & 3) << 16);
     ctx_wr(g_inctx[di], st + 0, sdw0);
     ctx_wr(g_inctx[di], st + 4, sdw1);
+    ctx_wr(g_inctx[di], st + 8, sdw2);
     return run_command((u64)(uintptr_t)g_inctx[di],
                        TRB_TYPE(TR_CONFIG_EP) | ((u32)slot << 24), 0) == CC_SUCCESS;
 }
 
+/* The controller DMAs straight into whatever buffer we hand control_xfer, so
+ * this cannot be a local: a stack buffer's address and alignment vary with the
+ * call depth and the build, which is the same trap that made usbmsc work in one
+ * build and hang in another. Static and aligned. */
+static __attribute__((aligned(64))) u8 g_hubsts[8];
+
 static int hub_port_status(int di, int port, u32 *st_out)
 {
-    u8 b[4] = { 0, 0, 0, 0 };
-    if (control_xfer(di, 0xA3, 0, 0, (u16)port, b, 4) < 0) return 0;
-    *st_out = (u32)b[0] | ((u32)b[1] << 8) | ((u32)b[2] << 16) | ((u32)b[3] << 24);
+    g_hubsts[0] = g_hubsts[1] = g_hubsts[2] = g_hubsts[3] = 0;
+    if (control_xfer(di, 0xA3, 0, 0, (u16)port, g_hubsts, 4) < 0) return 0;
+    *st_out = (u32)g_hubsts[0] | ((u32)g_hubsts[1] << 8)
+            | ((u32)g_hubsts[2] << 16) | ((u32)g_hubsts[3] << 24);
     return 1;
 }
 static int hub_set(int di, int port, int feat)
@@ -587,7 +619,7 @@ static void hub_scan(int hub_di)
     static u8 hd[16];
     int ss = (g_devs[hub_di].speed == 4);
     int nports, i, tier = g_dev_tier[hub_di] + 1;
-    int pwr_ms, powered = 0;
+    int pwr_ms, powered = 0, mtt = 0, ttt = 0;
 
     /* 5 nibbles of route string is the architectural limit, and a device on the
      * 5th tier still needs its own nibble - stop before authoring nonsense. */
@@ -604,7 +636,7 @@ static void hub_scan(int hub_di)
         xd("[xhci] hub SET_CONFIGURATION failed\n");
         return;
     }
-    mdelay(5);
+    uno_pc64_delay_ms(5);
 
     if (control_xfer(hub_di, 0xA0, 6, (u16)((ss ? HUB_DESC_SS : HUB_DESC_USB2) << 8),
                      0, hd, ss ? 12 : 9) < 0) {
@@ -615,18 +647,25 @@ static void hub_scan(int hub_di)
     pwr_ms = hd[5] * 2;                    /* bPwrOn2PwrGood, 2 ms units */
     if (nports < 1 || nports > 15) return; /* a route nibble holds 1..15 */
     if (pwr_ms < 20) pwr_ms = 20;          /* spec floor, and cheap insurance */
+    /* wHubCharacteristics 6:5 = TT Think Time; bDeviceProtocol 2 = multi-TT */
+    ttt = (((int)hd[3] | ((int)hd[4] << 8)) >> 5) & 3;
+    mtt = (!ss && g_devs[hub_di].dev_proto == 2);
 
-    if (!hub_configure(hub_di, nports)) { xd("[xhci] hub slot config failed\n"); return; }
+    if (!hub_configure(hub_di, nports, mtt, ttt)) {
+        xd("[xhci] hub slot config failed\n");
+        return;
+    }
 
     xd("[xhci] hub slot="); xd_i(g_devs[hub_di].slot);
-    xd(" ports="); xd_i(nports); xd(" tier="); xd_i(tier); xd("\n");
+    xd(" ports="); xd_i(nports); xd(" tier="); xd_i(tier);
+    xd(" mtt="); xd_i(mtt); xd(" ttt="); xd_i(ttt); xd_c(10);
 
     /* Powering the ports is the whole point of getting this far, so notice when
      * it does not take rather than walking a set of dead ports afterwards. */
     for (i = 1; i <= nports; i++) if (hub_set(hub_di, i, PORT_POWER)) powered++;
     if (!powered) { xd("[xhci] hub powered no ports\n"); return; }
     if (powered != nports) { xd("[xhci] hub powered only "); xd_i(powered); xd(" ports\n"); }
-    mdelay(pwr_ms);
+    uno_pc64_delay_ms(pwr_ms);
 
     for (i = 1; i <= nports; i++) {
         u32 ps = 0, route;
@@ -635,15 +674,26 @@ static void hub_scan(int hub_di)
         if (!(ps & PS_CONNECTION)) continue;
         hub_clear(hub_di, i, C_PORT_CONN);
 
+        /* Reset, and wait in REAL time. mdelay() is a calibrated spin whose
+         * duration depends on the optimiser, so a nominal "200 ms" built from
+         * it can be a small fraction of that - the same fiction that made bulk
+         * transfers time out before the device had answered. A hub port reset
+         * is spec'd at 10-20 ms, but a slow device can take considerably
+         * longer, so allow a real half second before writing the port off. */
         hub_set(hub_di, i, PORT_RESET);
-        for (t = 0; t < 100; t++) {        /* reset completes in ~10-20 ms */
-            mdelay(2);
+        for (t = 0; t < 250; t++) {
+            uno_pc64_delay_ms(2);
             if (!hub_port_status(hub_di, i, &ps)) break;
             if (!(ps & PS_RESET) && (ps & PS_ENABLE)) break;
         }
         hub_clear(hub_di, i, C_PORT_RESET);
-        if (!(ps & PS_ENABLE)) { xd("[xhci] hub port not enabled\n"); continue; }
-        mdelay(10);                        /* USB reset recovery */
+        g_hubport_sts[i & 15] = ps;                    /* for the env block */
+        if (!(ps & PS_ENABLE)) {
+            xd("[xhci] hub port "); xd_i(i); xd(" not enabled, sts=");
+            xd_h(ps); xd_c(10);
+            continue;                                  /* a dead port is not a dead hub */
+        }
+        uno_pc64_delay_ms(10);                         /* USB reset recovery */
 
         /* Speed comes from the port, not the hub: a USB2 hub reports low/high
          * in its status bits and full speed by their absence. Downstream of a
@@ -662,7 +712,13 @@ static void hub_scan(int hub_di)
         }
 
         route = (u32)g_dev_route[hub_di] | ((u32)(i & 0xF) << (4 * g_dev_tier[hub_di]));
-        (void)enumerate_dev(g_dev_rport[hub_di], route, tier, spd, tts, ttp);
+        if (enumerate_dev(g_dev_rport[hub_di], route, tier, spd, tts, ttp) < 0) {
+            xd("[xhci] hub port "); xd_i(i); xd(" enumerate failed spd=");
+            xd_i(spd); xd(" tt="); xd_i(tts); xd(":"); xd_i(ttp); xd_c(10);
+            g_hubport_sts[i & 15] |= (1u << 31);   /* mark: seen but not claimed */
+        }
+        /* keep going regardless: one uncooperative device must not cost us the
+         * rest of the hub, which is how a keyboard and two mice went missing */
     }
 }
 
@@ -1127,6 +1183,13 @@ void uno_xhci_diag(int *slot, int *addr_cc, int *desc, int *speed)
     if (desc)    *desc    = g_dbg_desc;
     if (speed)   *speed   = g_dbg_speed;
 }
+/* the last hub scan's per-port status words, for the debug env block */
+void uno_xhci_hub_ports(unsigned *out, int max)
+{
+    int i;
+    for (i = 0; i < max && i < 16; i++) out[i] = g_hubport_sts[i];
+}
+
 void uno_xhci_diag2(unsigned *sts, unsigned *ev0, int *disc)
 { if (sts) *sts = g_dbg_sts; if (ev0) *ev0 = g_dbg_ev0; if (disc) *disc = g_dbg_disc; }
 
