@@ -41,6 +41,7 @@
 #include "usbhid.h"         /* native USB HID kbd/mouse (inert unless -DUNO_XHCI) */
 #include "usbmsc.h"         /* native USB mass storage (F8: USB boot + detach) */
 #include "usbboot.h"        /* ...and whether THIS machine's boot stick survives */
+#include "detachgate.h"     /* ...and whether its keyboard and pointer do too */
 #include "pc64_mtrr.h"      /* P3 opt-in: WC framebuffer MTRR rebuild */
 #include <string.h>         /* memcpy (freestanding, from pc64_libc.c) */
 #include "fat.h"            /* native block + FAT stack bring-up */
@@ -719,11 +720,7 @@ static unsigned char gMMap[65536];      /* memory-map scratch for the EBS key */
  * uno_usbboot_hid_kbd() answers it the same way the boot volume is answered:
  * from the firmware's own descriptors, for a device the native stack will
  * actually be able to reach. A native pointer is a bonus, not required. */
-static int native_kbd_for_detach(void)
-{
-    return uno_ps2_present() || uno_i2c_hid_kbd_present() ||
-           uno_usb_hid_kbd_present() || uno_usbboot_hid_kbd();
-}
+static int native_kbd_for_detach(void) { return uno_dg_kbd_survives(); }
 
 /* ...and a native POINTER must too, if the firmware is currently providing
  * one. This used to be waved through as "a bonus, not required", which is
@@ -739,32 +736,32 @@ static int native_kbd_for_detach(void)
  *
  * The i8042 aux port counts only when its self-test passes - a bare
  * uno_ps2_present() says the CONTROLLER answers, which on a laptop is the
- * keyboard's EC and says nothing about whether a mouse is attached. */
-static int native_ptr_for_detach(void)
-{
-    return uno_i2c_hid_present() || uno_usb_hid_present() || uno_usbboot_hid_ptr();
-}
-
-/* Would detaching strand this machine with no pointer at all?
+ * keyboard's EC and says nothing about whether a mouse is attached.
  *
- * The i8042 aux port cannot be interrogated here - the firmware still owns
- * the controller pre-detach, and a bare uno_ps2_present() only says the
- * CONTROLLER answers, which on a laptop is the keyboard's EC. So the test
- * cannot be "is there a PS/2 mouse"; it has to be a shape argument.
+ * PHASE B (docs/DETACH-COMPLETION-PLAN.md): both gates moved into
+ * detachgate.c, which decides them from the firmware's own DEVICE PATHS
+ * instead of from a shape argument about the machine. What went away:
  *
- * The narrow case worth refusing is exactly the one that bites: a machine
- * with LPSS I2C controllers present (so it is a modern laptop whose pointer
- * lives on I2C) where no I2C-HID pointer bound, and the only thing currently
- * moving the cursor is a firmware protocol that EBS will kill. A PS/2-mouse
- * desktop has no LPSS controller at all and is unaffected, so this cannot
- * regress the machines that detach happily today. */
-static int detach_would_strand_pointer(void)
+ *  - the pointer gate used to count LPSS I2C controllers as a proxy for
+ *    "modern laptop whose pointer lives on I2C", and so refused the X1 Carbon
+ *    whenever its I2C-HID pad failed to bind - even though that machine's
+ *    OTHER pointer, the TrackPoint, is a PS/2 Elan on the aux port that
+ *    uno_ps2_init() claims at detach anyway. The proxy could not see it: the
+ *    aux port cannot be self-tested while the firmware owns the i8042. The
+ *    firmware's own descriptor says it outright, publishing that pointer as a
+ *    PNP0Fxx device, and reading a descriptor touches no hardware at all.
+ *
+ *  - the keyboard gate keeps every arm it had, including usbboot's prediction
+ *    for USB-only machines (without which a USB-keyboard desktop could never
+ *    satisfy it: the keyboard cannot exist until we detach, and we would not
+ *    detach until the keyboard existed).
+ *
+ * Naming the BLOCKING DEVICE is phase D of the same plan: a glance at the
+ * System window should say which part of the machine is holding it attached,
+ * not merely that something is. */
+static void detach_blame(unsigned char cls, unsigned char sub)
 {
-    int nctrl = 0;
-    if (!gNPtr && !gNAbs)          return 0;   /* no pointer to lose anyway   */
-    if (native_ptr_for_detach())   return 0;   /* something native survives   */
-    uno_i2c_hid_status(0, &nctrl, 0, 0, 0);
-    return nctrl > 0;
+    uno_dg_set_blocker(uno_dg_dev_str(cls, sub));
 }
 
 /* The boot PARTITION's device path (LoadedImage->DeviceHandle), or NULL.  The
@@ -828,12 +825,18 @@ static int try_detach(void)
     if (gUseBlt || !gVram)        REFUSE("no linear framebuffer", 0);
     if (!native_kbd_for_detach()) {
         const char *hw = ""; uno_usbboot_hid_status(0, 0, &hw);
+        /* the keyboard we could not claim is on whichever bus the firmware is
+         * reading it from: the xHCI for USB, an LPSS I2C controller otherwise */
+        detach_blame(0x0C, uno_dg_fw_kbd_transport() == UNO_DGT_USB ? 0x03 : 0x80);
         gDetachWhy = hw; gDetachBlocked = 1;   /* say WHICH keyboard we wanted */
         dbg_puts("detach: no native keyboard - "); dbg_puts(hw); dbg_puts("\n");
         return 0;
     }
     /* refuse to trade a working firmware pointer for no pointer at all */
-    if (detach_would_strand_pointer()) REFUSE("would lose the only pointer", 1);
+    if (uno_dg_would_strand_pointer()) {
+        detach_blame(0x0C, uno_dg_fw_ptr_transport() == UNO_DGT_USB ? 0x03 : 0x80);
+        REFUSE("would lose the only pointer", 1);
+    }
     if (!uno_native_tsc_ok())     REFUSE("no TSC time base", 0);
     (void)uno_fs_volumes();     /* force the native FAT mount (fw transport) */
     if (cfg_word("off"))          REFUSE("DETACH.CFG says off", 1);
@@ -846,6 +849,7 @@ static int try_detach(void)
         uno_usbboot_status(0, 0, 0, &why);
         if (cfg_word("nousb")) REFUSE("DETACH.CFG says nousb", 1);
         if (!uno_usbboot_native_ok()) {
+            detach_blame(0x0C, 0x03);           /* the USB host controller */
             gDetachWhy = why; gDetachBlocked = 1;
             dbg_puts("detach: USB boot volume would be stranded - ");
             dbg_puts(why); dbg_puts("\n");
@@ -927,7 +931,15 @@ static int try_detach(void)
                          "back on native drivers - usbmsc: ");
                 dbg_puts(uno_usbmsc_why()); dbg_puts("\n");
             } else {
-                gDetachWhy = "running on our own drivers";
+                /* The pointer gate is a prediction too, and the same argument
+                 * applies to it: check on this side of the door and SAY so.
+                 * Unlike the boot volume this is not fatal - the shell is
+                 * keyboard-driven - so it colours the System window rather
+                 * than declaring the machine stranded. */
+                const char *pwhy = "";
+                gDetachWhy = uno_dg_ptr_arrived(&pwhy) ? "running on our own drivers"
+                                                       : pwhy;
+                if (pwhy[0]) { dbg_puts("detach: "); dbg_puts(pwhy); dbg_puts("\n"); }
             }
             dbg_puts("detached: ExitBootServices done - native storage/input/timers\n");
             return 1;
