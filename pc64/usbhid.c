@@ -138,34 +138,17 @@ int uno_usb_hid_init(void)
     return g_neps;
 }
 
-/* Drain EVERY queued report, not one.
- *
- * For the keyboard this is correctness, not smoothness: hid_kbd_report() works
- * out what was pressed and released by DIFFING against the last report it saw,
- * so a report that is never read is not a late keystroke, it is a lost one. A
- * key pressed and released between two polls left no trace at all.
- *
- * The loop is bounded. This is the input path on a machine that may have no
- * firmware left to fall back on, so a device that floods must not be able to
- * hold the frame loop; past the cap the rest wait for the next frame, which
- * degrades to the old behaviour instead of hanging. */
-#define HID_DRAIN_MAX 32
-
 int uno_usb_hid_kbd_poll(uno_usb_key_fn emit, void *ctx)
 {
     int i, any = 0;
     for (i = 0; i < g_neps; i++) {
-        int guard;
+        u8 rep[16];
+        int n;
         if (!g_eps[i].is_kbd) continue;
         any = 1;
-        for (guard = 0; guard < HID_DRAIN_MAX; guard++) {
-            u8 rep[16];
-            int n = uno_usb_intr_in(g_eps[i].h, rep, sizeof rep);
-            if (n <= 0) break;                         /* queue empty, or error */
-            if (n >= 8)                                /* boot kbd report = 8 B */
-                hid_kbd_report(&g_eps[i].kbd, rep, (hid_key_fn)emit, ctx);
-            /* a short report is not a boot report: skip it, keep draining */
-        }
+        n = uno_usb_intr_in(g_eps[i].h, rep, sizeof rep);
+        if (n >= 8)                                    /* boot kbd report = 8 B */
+            hid_kbd_report(&g_eps[i].kbd, rep, (hid_key_fn)emit, ctx);
     }
     return any;
 }
@@ -176,30 +159,19 @@ int uno_usb_hid_mouse_poll(int *dx, int *dy, int *btn)
 {
     int i, any = 0, ax = 0, ay = 0, ab = 0;
     for (i = 0; i < g_neps; i++) {
-        int guard, last_btn = 0, saw = 0;
+        u8 rep[16];
+        int n;
         if (g_eps[i].is_kbd) continue;
         any = 1;
-        for (guard = 0; guard < HID_DRAIN_MAX; guard++) {
-            u8 rep[16];
-            int n = uno_usb_intr_in(g_eps[i].h, rep, sizeof rep);
-            if (n <= 0) break;                         /* queue empty, or error */
-            if (n < 3) continue;                       /* not a boot report     */
-            /* MOTION ACCUMULATES, BUTTONS DO NOT. Deltas are increments, so
-             * summing them is the whole point of draining. Buttons are a
-             * LEVEL - "is it down now" - and the answer is the newest report's,
-             * not the OR of every report in the frame. OR-ing would hold a
-             * button down for a frame after it was released, which is a
-             * phantom drag; the press it might otherwise catch would have to
-             * have lasted under 16 ms, which no hand and no switch does. */
-            last_btn = rep[0] & 0x07; saw = 1;
+        n = uno_usb_intr_in(g_eps[i].h, rep, sizeof rep);
+        if (n >= 3) {                                  /* boot mouse: btn,dx,dy */
+            ab |= rep[0] & 0x07;
             ax += (signed char)rep[1];
             ay += (signed char)rep[2];
             /* byte 3 is the wheel on every mouse that has one (the boot
              * report is 3 bytes, but wheel mice append it); + = down */
             if (n >= 4) g_wheel += (signed char)rep[3];
         }
-        if (saw) ab |= last_btn;       /* across ENDPOINTS the OR still holds:
-                                          two mice, either one's button counts */
     }
     if (!any) return 0;
     *dx = ax; *dy = ay; *btn = ab;
