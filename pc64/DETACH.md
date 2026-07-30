@@ -76,8 +76,46 @@ see the TrackPoint at all: it counted LPSS I2C controllers as a proxy for
 it outright, because the firmware itself declares that pointer a `PNP0Fxx`
 device.
 
-`uno_dg_would_strand_pointer()` composes them: false when the firmware has no
-pointer either (nothing to lose), false when one survives, true otherwise.
+## 3a. The transport is not the authority on whether a pointer EXISTS
+
+This is the subtlest thing in the file and it was wrong in the first version,
+so it is worth stating flatly: **`uno_dg_fw_ptr_transport()` cannot tell you
+whether the machine has a pointer.**
+
+Some firmware publishes its pointer instances only through the ConIn
+*splitter*, an aggregate handle with no device path of its own. There is then
+nothing to classify, even though a pointer is live and moving the cursor.
+`collect()` in `uefi_main.c` already knows this and falls back to the splitter
+when no device handles exist, which is why its `gNPtr` / `gNAbs` counts are the
+authority and the classifier is not.
+
+The first version asked the classifier, and QEMU's own boot log caught it
+within one run:
+
+```
+pointer: fw_simple=1 fw_abs=1        <- a pointer exists
+detach gate: fw ptr=none             <- ...and the gate could not see it
+```
+
+"Nothing to lose" on a machine that is about to lose something is the dangerous
+direction to be wrong in, and it fails silently. So the transport REFINES the
+question rather than answering it, and `uno_dg_would_strand_pointer()` reads:
+
+1. no firmware pointer at all (`!gNPtr && !gNAbs`) - nothing to lose, detach
+2. something native survives - detach (this is the phase B win)
+3. transport known, nothing native - the pointer really does die, refuse
+4. transport UNKNOWN (splitter-only) - we cannot tell, so fall back to the
+   pre-phase-B LPSS-counting heuristic
+
+Case 4 is why that heuristic is still in the tree rather than deleted outright,
+and it is the fallback the plan asked to keep. On a machine with I2C
+controllers and no bound I2C-HID pointer, the thing moving the cursor is most
+likely a firmware protocol EBS will kill; a PS/2-mouse desktop has no LPSS
+controller and is unaffected. Every QEMU guest lands in case 4 with `nctrl == 0`
+and detaches, exactly as it did before phase B.
+
+The status string prints both halves (`fw inst=1/1 ptr=unknown`) for this
+reason: seen alone, either number looks like a contradiction.
 
 ## 4. What this gate does NOT do, and the seam that will change
 
@@ -132,5 +170,6 @@ never as a device called "".
 
 - **2026-07-30, `UNO_DETACHGATE_API 1`.** First release. Phase B of the detach
   completion plan: the keyboard and pointer gates move out of `uefi_main.c`,
-  the LPSS-counting pointer heuristic is deleted in favour of device-path
-  classification, and refusals name a device (phase D).
+  device-path classification replaces the LPSS-counting pointer heuristic as
+  the PRIMARY test (it survives as the case-4 fallback, see §3a), and refusals
+  name a device (phase D).
