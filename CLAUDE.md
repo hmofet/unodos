@@ -32,34 +32,29 @@ including the correction above; read it before resuming parity work.
 **The procedural lesson:** before concluding work is lost, check every branch
 and every remote, not just the mainline.
 
-## `pc64-usb-flasher` branch — needs a diffed look before merge/delete (2026-07-20)
+## `pc64-usb-flasher` branch - RESOLVED, safe to delete (2026-07-30)
 
-Local branch `pc64-usb-flasher` (tip `21d2bb7`) shows as 14 commits ahead of
-master and 52 ahead of its own `origin/pc64-usb-flasher`. A first pass found
-that every one of those 14 commits' *stated* content already exists on master
-under a different hash (right-click launcher, Clock app with world map,
-`flash/UnoFlashCli.cs`, the X1 trackpad fix, the dreamcast/ps2 module-loader
-fix, `pc64/tools/install_confirm_test.py`) — master evidently reimplemented the
-same features independently after the `unomedia` library refactor, and this
-branch predates that refactor (its media work still assumes local
-`dec_wav.c`/`dec_midi.c`/`dec_mp3.c`, which master deleted in favor of
-`unomedia/`). `git merge-tree` against master conflicts on `pc64_media.c`,
-`pc64_music.c`, `pc64_uui.c`, `pc64_uui_apps.c`, `pc64_icons.c`, `AUDIO.md`,
-`MODULES.md`, `build.sh`, plus regenerated docs/screenshots and one tracked
-binary (`ppcmac/build/unodos.bin`, which probably should not be tracked at
-all).
+The open question here (was its content really subsumed by master?) is closed.
+Checked three ways rather than by commit message:
 
-That check was commit-message-level, not a real file-by-file diff — it is
-plausible but NOT confirmed that 100% of the branch's content is subsumed.
-**Before merging or deleting this branch**, diff it against master file by
-file (not just `git log --grep`) to make sure nothing genuinely unique is
-still sitting on it. Likely candidates to check closely: the X1 trackpad fix
-(master's i2c-hid work moved further, but confirm no behavior regressed) and
-anything under `dreamcast/`/`ps2/` not already covered by `f02fc57`.
+- **Patch equivalence.** `git cherry origin/master pc64-usb-flasher` marks 9 of
+  its 11 commits as already upstream, including both of the ones this note
+  singled out as needing a close look: the X1 trackpad fix (`6fc5980b`) and the
+  dreamcast/ps2 module-loader fix (`21d2bb77`).
+- **File by file.** The only files existing on the branch and not on master were
+  `pc64/dec_aac.c`, `dec_midi.c`, `dec_mp3.c`, `dec_wav.c`, `mp3_tables.h` and
+  `tools/mkmp3tables.py` - exactly the pre-`unomedia` decoder architecture this
+  note warned that merging would resurrect. Master replaces all six one for one
+  with `unomedia/um_aac.c`, `um_midi.c`, `um_mp3.c`, `um_wav.c`, `aac_tables.h`,
+  `mp3_tables.h` and both table generators.
+- **The two non-equivalent commits.** `71e7c643` is that dead media stack.
+  `1c24462f` is 102 files of screenshots regenerated from a fortnight-old build
+  plus click-to-enlarge, which master already has in `docs/build_site.py`.
 
-If the diff confirms full supersession, delete the branch (local +
-`origin/pc64-usb-flasher`) rather than merging - merging would resurrect the
-dead pre-`unomedia` decoder architecture in `pc64_media.c`/`pc64_music.c`.
+So there is nothing to merge and a clear reason not to merge. The branch is
+safe to delete, local and `origin/pc64-usb-flasher`, whenever someone wants the
+tidy-up; nothing on it is unrecoverable, since every commit is either upstream
+already or content master deliberately replaced.
 
 ## Standing rule (2026-07-21): the flasher embeds BOTH production + debug builds
 
