@@ -2523,3 +2523,61 @@ the 2 MB `put` that used to take minutes before the `fat_alloc` O(n²) fix
 (2026-07-22). Worth a look with the same lens: it may be another
 rescan-per-cluster shape, or simply the cost of a synchronous multi-hundred-KB
 read with no readahead. Not filed as a defect, just measured once and noticed.
+
+---
+
+## 2026-07-30 — MEASURED (→ unofs): app launch is slow because every read is ONE sector
+
+Chased the "launching an app takes a few moments" note. It is not the module
+loader, the relocation pass or the import resolution. It is the filesystem read
+path issuing one 512-byte device transaction per sector.
+
+**Measured on the ZimaBlade**, detached, boot stick over usbmsc, timed with the
+URC `uptime` verb either side of a `py` read:
+
+| bytes | sectors | ms |
+|---|---|---|
+| 4 096 | 8 | 52 |
+| 65 536 | 128 | 263 |
+| 318 220 | 622 | 1127 |
+
+Least squares over the three: **1.75 ms per sector, 38 ms fixed**. Dead linear,
+which is the signature of a fixed per-transaction cost rather than anything
+size-dependent. That is **286 KB/s on a USB 2.0 bus that should do tens of
+MB/s** - roughly one percent of the link.
+
+**Why.** `uno_fat_read_at`'s inner loop calls `cache_get()` once per sector, and
+`cache_get()` calls `dev->read(dev, lba, 1, buf)` - always exactly one sector.
+For usbmsc that is a whole Bulk-Only transaction each time: CBW out, 512 bytes
+in, CSW in. 1.75 ms is a very believable round trip for three synchronous
+transfers on a polled driver behind a hub.
+
+The device layer is not the problem and never was: `uno_bdev.read` already takes
+a sector COUNT, and `usbmsc` already chunks at `MSC_CHUNK` = 64 sectors (32 KB)
+per READ(10). Nothing asks it for more than one.
+
+**What it costs.** PYRT.UNO is 318 KB, so ~1.1 s of pure I/O before the loader
+has done anything. Same shape for every app.
+
+**The fix, and the one hazard.** Give the read path a bulk arm: for a run of
+whole sectors, one `dev->read(dev, lba, n, ...)` instead of n cache lookups.
+At 64 sectors a transaction that is ~63 ms for the same 318 KB, an 18x
+improvement, and it is all round-trip elimination rather than cleverness.
+
+The hazard is **buffer alignment**, and it has bitten this codebase before. The
+sector cache's line is 128-byte aligned on purpose - the comment in fat.c says
+EFI Block IO honours `Media->IoAlign` and native AHCI DMAs straight out of it,
+so an unaligned sector buffer silently returns 0xFF garbage on some
+controllers. A bulk read into `buf + total` at an arbitrary offset would hand
+the driver exactly that. Staging through an aligned buffer and memcpy-ing out
+is the safe shape; reading straight into the caller's buffer only when it
+happens to be aligned is the fast one, and the two can coexist.
+
+Second correctness point: dirty cache lines covering the range must be flushed
+before a direct read, or the bulk path reads stale sectors behind the cache's
+back.
+
+Not implemented - filed with the numbers so whoever takes it starts from
+measurement rather than from my guess. `tools/storage_test.py` covers read and
+write on native FAT post-detach, so unlike the HID path this one has a gate
+that means something.
