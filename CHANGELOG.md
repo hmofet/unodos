@@ -5,6 +5,54 @@ All notable changes to UnoDOS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [pc64 firmware detach completed, and a device manager that binds] - 2026-07-30
+
+Two programmes finished on the same day, and one metal run proved both.
+
+### Detach: phases B, C and D (docs/DETACH-COMPLETION-PLAN.md)
+
+- **The input gates stopped guessing.** The keyboard and pointer detach gates
+  were shape arguments about the machine; they now read the transport out of
+  the firmware's own device paths. The pointer gate was the wrong one: it
+  counted LPSS I2C controllers as a proxy for "modern laptop" and refused the
+  X1 Carbon whenever its I2C-HID pad failed to bind, even though that machine's
+  TrackPoint is a PS/2 Elan the i8042 driver claims at detach anyway. New
+  subsystem `detachgate.c`, contract in [pc64/DETACH.md](pc64/DETACH.md).
+- **Refusals name the device** that would lose its service, in the System
+  window and the debug env block.
+- **One timer, one clock, one power policy.** Firmware `Stall` went from seven
+  call sites to one (the TSC calibration moved to the top of init, so the
+  splash, stripes and chime run on our own timer). The clock is the CMOS RTC on
+  both sides of detach, so it no longer steps at the moment of detach. Shutdown
+  and restart are one function. Full audit:
+  [pc64/FIRMWARE-SURFACE.md](pc64/FIRMWARE-SURFACE.md), 26 call sites, each
+  classified.
+
+### unodevices: phases 2, 3 and 4 (docs/UNODEVICES-PLAN.md)
+
+- **A driver registry that binds** (`UNO_DEVMGR_API 3`): the `UNO_DRIVER`
+  self-registration seam, specificity matching with probe-decline, and a bind
+  loop that runs to a fixpoint. No priority field, deliberately.
+- **The built-in PCI drivers adopted it.** NICs and audio record their device
+  and stay lazy; storage DECLINES while the firmware still owns its controller
+  and binds at detach.
+- **USB is in the same tree**: one node per device, one child per interface, so
+  a composite device binds per interface instead of whole.
+- **Loadable drivers**: `\DRIVERS\*.UNO` behind a versioned services struct
+  with no dynamic symbol resolution. `SAMPLE.UNO` is the reference driver.
+- **Hotplug**: `devmgr_rescan()` for PCI, `devmgr_drop_usb_children()` for USB
+  departure, both honouring a written remove contract. Nothing polls either
+  yet.
+
+### Verified
+
+QEMU: `usbtree_qemu`, `devmgr_qemu`, `storage_test`, `install_test`, SPECTEST
+69/0/4. Metal: the ZimaBlade ran the lot on 2026-07-30 and passed every
+checklist item, with `r8169`, `ahci`, `sdhci`, `hda` and `sample` all bound -
+which took r8169's match table and the loadable-driver path off the unverified
+list. Four fleet machines remain, and the X1 Carbon is the one that can
+falsify the pointer gate.
+
 ## [pc64 lid-close sleep] - 2026-07-19
 
 Close the lid → the screen blanks and the CPU idles; open it (or press a key) →

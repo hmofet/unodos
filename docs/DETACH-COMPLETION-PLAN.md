@@ -10,7 +10,15 @@ code-complete, fleet validation outstanding.** Details per phase below; the
 | B, input gates | **CODE DONE** (branch `detach-bcd`). Gates decided from device paths, not shape; `detachgate.c` + [pc64/DETACH.md](../pc64/DETACH.md). The X1 claim is METAL-PENDING and could be wrong, see §B below |
 | B3, Surface keyboard | **NOT ANSWERED**, and deliberately not guessed at: [docs/SURFACE-KEYBOARD.md](SURFACE-KEYBOARD.md) has the one boot that settles it and a conditional sizing |
 | C, firmware sweep | **DONE**. Firmware `Stall` down to one call site, one clock, one power policy; the audit is [pc64/FIRMWARE-SURFACE.md](../pc64/FIRMWARE-SURFACE.md) |
-| D, posture + fleet | **CODE DONE** (refusals name a device). Per-machine validation is the checklist in [pc64/METAL-CHECKLIST.md](../pc64/METAL-CHECKLIST.md) and needs the hardware |
+| D, posture + fleet | **CODE DONE; ZimaBlade VALIDATED 2026-07-30** (all checklist items, operator-confirmed). Yoga, X1 and Surface still outstanding - and the X1 is the one that can falsify phase B, so the pointer claim remains unproven |
+
+**What metal has and has not seen.** The ZimaBlade ran the whole thing on
+2026-07-30 and passed: detach, native storage and network, keyboard and mouse
+behind a hub, the clock, restart, and a device tree with five drivers bound.
+That is one machine of five, and deliberately the easiest one - it is a desktop
+that already detached. **The X1 Carbon is the box that can falsify phase B**,
+because its pointer claim is the prediction QEMU cannot test, and it has not
+been booted.
 
 **Two things this programme did NOT do, stated plainly so nobody assumes
 otherwise.** Phase B item 2 asked for the gate to become a unodevices registry

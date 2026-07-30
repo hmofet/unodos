@@ -183,11 +183,18 @@ the plan asks for, **in this order**, easiest rollback first. Every box: boot
 `CRASH\<machine>\BOOTLOG.TXT`, and capture `uno.devices()` (or the URC
 `devices` verb) into `docs/fleet/<machine>.txt` as the hardware inventory.
 
-- [ ] **ZimaBlade** (USB boot + r8169, the box that detached first). This is a
-      REGRESSION check, not new ground: it detached on 2026-07-30 before any of
-      this, so it must still detach, and the `detach gate:` line should read
-      `fw ptr=usb kbd=usb  survives ptr=1 kbd=1`. Drivable headless over the
-      URC bridge (:5099), which is why it goes first.
+- [x] **ZimaBlade** (USB boot + r8169) - **PASSED 2026-07-30**, build
+      `debug-583a585-20260730-1918`. Still detaches; keyboard, mouse, apps,
+      network, clock and restart all confirmed by the operator. The device tree
+      showed `r8169`, `ahci`, `sdhci`, `hda` and `sample` all BOUND (see the
+      metal entry in UNOAUTOMATE-REQUESTS.md), which is what took r8169's match
+      table and the loadable-driver path off the unverified list.
+      **Phase 3 was NOT in this image** - it landed afterwards, so a `devices`
+      listing from that stick has no USB rows, which is expected.
+      Two findings came out of it, neither a detach fault: TLS fails on
+      certificate DATES because the CMOS battery is flat, and the pointer is
+      floaty post-detach (one HID report drained per frame against a 1000 Hz
+      mouse). Both written up in the requests file.
 - [ ] **X13 Yoga** (NVMe + ethernet, already detaches today). Regression check.
       Also the one machine that can exercise the PCH TCO watchdog metal pass
       still outstanding in UNOAUTOMATE-REQUESTS.md, if someone is there anyway.
