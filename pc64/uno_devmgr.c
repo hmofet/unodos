@@ -731,6 +731,16 @@ static int match_score(const uno_driver *drv, const uno_device *d)
         int s = 0;
         if (m->kind == UNO_MATCH_PCI_ID) {
             if (m->vendor == d->vendor && m->device == d->device) s = UNO_SPEC_ID;
+        } else if (m->kind == UNO_MATCH_USB_ID) {
+            if (m->vendor == d->vendor && m->device == d->device) s = UNO_SPEC_ID;
+        } else if (m->kind == UNO_MATCH_USB_IF) {
+            /* An interface triple only ever matches an INTERFACE node: a
+             * device node carries the device-level triple, which is 00/00/00
+             * on every composite device, and matching that would hand a
+             * keyboard driver the whole receiver. */
+            if (d->addr.usb.ifnum >= 0 && m->cls == d->cls && m->subcls == d->subcls)
+                s = m->have_progif ? (m->prog_if == d->prog_if ? UNO_SPEC_CLASSPI : 0)
+                                   : UNO_SPEC_CLASS;
         } else if (m->kind == UNO_MATCH_PCI_CLASS) {
             if (m->cls == d->cls && m->subcls == d->subcls) {
                 if (m->have_progif)
@@ -974,7 +984,7 @@ static int svc_msi_enable(uno_device *d, int vector)
     return 1;
 }
 
-static void svc_log(const char *s) { uno_dbg_log("%s", s ? s : ""); }
+static void svc_log(const char *s) { (void)s; uno_dbg_log("%s", s ? s : ""); }
 
 static const uno_drv_services g_svc = {
     UNO_DRVSVC_API,
@@ -1017,4 +1027,103 @@ int devmgr_load_drivers(void)
     }
     if (loaded) devmgr_bind_all();
     return loaded;
+}
+
+/* ===========================================================================
+ * PHASE 3 - USB devices in the same tree
+ *
+ * The xHCI driver publishes what it enumerated; the manager just holds the
+ * nodes and binds them. No USB knowledge lives here beyond the shape of an
+ * address, which is the point of "drivers create children": a hub is an
+ * ordinary driver adding more children, not a special case in an enumerator.
+ * ======================================================================== */
+
+static uno_device *usb_new(int parent, unsigned char cls, unsigned char sub,
+                           unsigned char proto, short xdev, short ifnum)
+{
+    uno_device *d;
+    int i;
+    if (g_n >= UNO_DEV_MAX) { g_overflow = 1; return 0; }
+    d = &g_dev[g_n];
+    { unsigned char *p = (unsigned char *)d;
+      for (i = 0; i < (int)sizeof *d; i++) p[i] = 0; }
+    d->bus_type = UNO_BUS_USB;
+    d->parent   = (short)parent;
+    d->cls = cls; d->subcls = sub; d->prog_if = proto;
+    d->addr.usb.xdev  = xdev;
+    d->addr.usb.ifnum = ifnum;
+    d->state = UNO_DEV_UNBOUND;
+    /* Depth is the parent's plus one, so a listing can show tiers without the
+     * caller having to track them. A PCI parent (the controller) is tier 0. */
+    if (parent >= 0 && parent < g_n && g_dev[parent].bus_type == UNO_BUS_USB)
+        d->addr.usb.depth = (unsigned char)(g_dev[parent].addr.usb.depth + 1);
+    else
+        d->addr.usb.depth = 1;
+    g_n++;
+    return d;
+}
+
+int devmgr_add_usb_dev(int parent, int xdev, int port, int speed,
+                       unsigned short vid, unsigned short pid,
+                       unsigned char cls, unsigned char sub, unsigned char proto)
+{
+    uno_device *d;
+    if (!g_scanned) devmgr_enumerate();
+    d = usb_new(parent, cls, sub, proto, (short)xdev, -1);
+    if (!d) return -1;
+    d->vendor = vid; d->device = pid;
+    d->addr.usb.path[0] = (unsigned char)port;
+    d->irq_line = (unsigned char)speed;      /* speed has no other home; the
+                                                listing shows it, nothing keys
+                                                a decision on it */
+    return g_n - 1;
+}
+
+int devmgr_add_usb_if(int devidx, int ifnum,
+                      unsigned char cls, unsigned char sub, unsigned char proto)
+{
+    uno_device *d, *parent;
+    if (devidx < 0 || devidx >= g_n) return -1;
+    parent = &g_dev[devidx];
+    if (parent->bus_type != UNO_BUS_USB) return -1;
+    d = usb_new(devidx, cls, sub, proto, parent->addr.usb.xdev, (short)ifnum);
+    if (!d) return -1;
+    /* An interface carries its device's ids so a listing row identifies the
+     * hardware rather than just its class - "046d:c548 hid" beats "0000:0000
+     * hid" when you are reading a fleet dump trying to find one keyboard. */
+    d->vendor = parent->vendor; d->device = parent->device;
+    d->addr.usb.path[0] = parent->addr.usb.path[0];
+    return g_n - 1;
+}
+
+int devmgr_drop_usb_children(int parent)
+{
+    int i, j, dropped = 0;
+    /* Walk backwards: interfaces sit after their device, so removing from the
+     * end keeps indices below the cursor stable while we compact. */
+    for (i = g_n - 1; i >= 0; i--) {
+        uno_device *d = &g_dev[i];
+        int under;
+        if (d->bus_type != UNO_BUS_USB) continue;
+        under = (d->parent == parent);
+        if (!under && d->parent >= 0 && d->parent < g_n &&
+            g_dev[d->parent].bus_type == UNO_BUS_USB &&
+            g_dev[d->parent].parent == parent)
+            under = 1;                        /* an interface of one of ours */
+        if (!under) continue;
+        if (d->state == UNO_DEV_BOUND) {
+            const uno_driver *drv = driver_by_name(d->drv);
+            d->state = UNO_DEV_GONE;          /* set BEFORE remove(), so a
+                                                 driver that looks at the node
+                                                 sees the truth */
+            if (drv && drv->remove) drv->remove(d);
+        }
+        /* compact the table, fixing up parent links that shift with it */
+        for (j = i; j < g_n - 1; j++) g_dev[j] = g_dev[j + 1];
+        g_n--;
+        for (j = 0; j < g_n; j++)
+            if (g_dev[j].parent > i) g_dev[j].parent--;
+        dropped++;
+    }
+    return dropped;
 }

@@ -21,7 +21,7 @@
  * meaning, so a phase-1 consumer needs no change.  It is a bump rather than a
  * silent addition because `state` can now be BOUND and `drv` non-NULL, and the
  * phase-1 contract promised those never happened. */
-#define UNO_DEVMGR_API 2
+#define UNO_DEVMGR_API 3
 
 /* Table capacity.  A dense server board is ~60 functions; the X1 is ~30. */
 #define UNO_DEV_MAX      128
@@ -52,7 +52,11 @@ typedef struct uno_device {
                                           /* UNO_DEV_NOPARENT at the root          */
     union {
         struct { unsigned char bus, dev, fn; } pci;
-        struct { unsigned char path[6], depth; } usb;   /* phase 3 */
+        struct {
+            unsigned char path[6], depth;   /* hub route, tiers from the root  */
+            short xdev;                     /* index into the xHCI device list */
+            short ifnum;                    /* bInterfaceNumber, -1 on a device */
+        } usb;
     } addr;
     unsigned short vendor, device;
     unsigned short subsys_vendor, subsys_id;
@@ -157,7 +161,9 @@ int devmgr_add_platform(int backing, unsigned char cls, unsigned char sub,
 enum {
     UNO_MATCH_END = 0,
     UNO_MATCH_PCI_ID,      /* vendor + device exact                        */
-    UNO_MATCH_PCI_CLASS    /* cls + subcls, and prog_if when have_progif   */
+    UNO_MATCH_PCI_CLASS,   /* cls + subcls, and prog_if when have_progif   */
+    UNO_MATCH_USB_ID,      /* idVendor + idProduct exact                    */
+    UNO_MATCH_USB_IF       /* interface class/subclass/protocol             */
 };
 
 typedef struct uno_match {
@@ -228,6 +234,39 @@ int devmgr_rescan(void);
 /* How many drivers are registered (built-in + loaded), for introspection. */
 int devmgr_driver_count(void);
 const char *devmgr_driver_at(int i);
+
+/* ===========================================================================
+ * PHASE 3 - USB devices in the same tree
+ *
+ * Drivers create children (plan decision 2). The xHCI driver publishes one
+ * DEVICE node per enumerated USB device, parented to the controller's own PCI
+ * node, and one INTERFACE node per interface under that device.
+ *
+ * The split is not cosmetic. The device node owns the address and the
+ * configuration; interface nodes never issue SET_CONFIGURATION. A composite
+ * device - a wireless receiver presenting a keyboard AND a mouse, which is
+ * exactly what the ZimaBlade has - is then one device with two interface
+ * children, and each child binds its own driver without the two of them
+ * fighting over the configuration.
+ * ======================================================================== */
+
+/* Add a USB device node under `parent` (the controller's registry index).
+ * `xdev` is the index the xHCI transfer API uses, recorded so a driver bound
+ * to this node can actually talk to it. Returns the new index, or -1. */
+int devmgr_add_usb_dev(int parent, int xdev, int port, int speed,
+                       unsigned short vid, unsigned short pid,
+                       unsigned char cls, unsigned char sub, unsigned char proto);
+
+/* Add an interface node under a USB device node. Inherits the device's xdev
+ * so an interface driver can issue transfers without walking back up. */
+int devmgr_add_usb_if(int devidx, int ifnum,
+                      unsigned char cls, unsigned char sub, unsigned char proto);
+
+/* Drop every USB node under `parent` and their interface children, calling
+ * remove() on anything bound. The xHCI driver calls this before republishing
+ * after a re-enumeration, so a device that went away does not linger BOUND -
+ * which is USB hotplug's departure half (DEVICES.md 7). Returns nodes removed. */
+int devmgr_drop_usb_children(int parent);
 
 /* ===========================================================================
  * PHASE 4 - loadable drivers
