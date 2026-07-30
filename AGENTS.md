@@ -36,6 +36,7 @@ re-home"). Ownership is of the CODE; the whole OS is a shared goal.
 | unonet (ARP/IP/TCP/UDP/DHCP/DNS/TLS/sockets/discovery) | `NETSTACK.md`, `NETWORK.md` | `net.*`, `tls.*`, `tls_ca.*`, `netsock.h`, `netdisc.*` |
 | NIC drivers (below the `uno_nic_t` seam) | per driver | `e1000*`, `e1000e*`, `igb*`, `r8169*`, `ax88179*`, `rtl8152*`, `iwlwifi*`, `rtwifi*`, `mrvlwifi*` |
 | usb stack (xHCI host, UsbIo, HID, mass storage, boot preflight) | `pc64/USB.md` | `xhci.*`, `usbio.*`, `usbhid.*`, `usbmsc.*`, `usbboot.*` |
+| detach gate (pre-EBS eligibility + blocker attribution) | `pc64/DETACH.md` | `detachgate.*`, `try_detach` in `uefi_main.c` |
 | unostorage (GPT/ESP/FAT authoring) | `STORAGE.md` | `unostorage.*`, `uno_fat_mkfs` in `fat.c` |
 | unofs (filesystems + block devices) | `STORAGE.md` | `fat.*`, `pc64_fs.*`, `blkdev.*`, `ahci/nvme/sdhci` |
 | unosecure (identity / RBAC / audit) | `UNOSECURE-SPEC.md`, `UNOSECURE.md` | `unosecure.*`, `pc64_accounts.*` |
