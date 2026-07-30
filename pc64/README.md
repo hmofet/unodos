@@ -12,11 +12,17 @@ for its framebuffer; the PowerPC Mac boots as an Open Firmware client and
 keeps the CI alive; pc64 does the identical thing with UEFI: GOP hands the
 kernel a linear 32bpp framebuffer, Simple Text Input (Ex) hands it the
 keyboard with modifier state, the Simple/Absolute Pointer protocols hand it
-a mouse where the firmware binds one, and **boot services stay alive** — UEFI
-plays exactly the role INT 10h/13h/15h play for the x86 reference kernel.
-`ExitBootServices` + native drivers (xHCI, NVMe/AHCI, e1000) are the
-*driver tail*, not a bring-up requirement — and they are the point at which
-`unobus`/`unonet` get their first real PC hardware backends.
+a mouse where the firmware binds one. UEFI plays exactly the role INT
+10h/13h/15h play for the x86 reference kernel.
+
+**That is now the BOOT path, not the resting state.** As of 2026-07-30 pc64
+calls `ExitBootServices` by default and finishes the boot on its own drivers:
+native AHCI/NVMe/SDHCI/USB storage, PS2 and I2C-HID and USB HID input, a
+TSC time base, the CMOS clock. Firmware-as-BIOS gets the machine up; the
+machine then leaves. A box stays attached only when a gate says detaching
+would strand it (no linear framebuffer, no native keyboard, a boot volume
+nothing native can reach), or when `DETACH.CFG` says not to. See
+[Detaching from the firmware](#detaching-from-the-firmware) below.
 
 ## Status
 
@@ -35,6 +41,13 @@ keyboard (and a smoothed firmware-pointer path) drive it, live theme and
 resolution switching. The metal pass hardened three emulator-invisible firmware
 traps into the layer (see Design notes): the 640×480 SetMode eDP black-panel
 trap, an SMM-trapped debug port, and phantom-keystroke firmware.
+
+**Also validated detached on a ZimaBlade** (2026-07-30): booted from a USB
+stick, `ExitBootServices`, and then running entirely on its own drivers with
+storage, network, keyboard and mouse all native. That box has a single USB
+port, so its boot stick and its keyboard and mice all arrive through a hub,
+which made it the harder version of the test and the one that found four
+successive USB bugs QEMU could not.
 
 Everything below the shell is verified headlessly by `harness.py` — QEMU is
 natively scriptable (QMP `send-key` + `screendump`), so the *real* image boots
@@ -72,8 +85,11 @@ and all the drivers; only the UI layer differs.
   `runner.c`). Built only by `./build.sh legacy`.
 - **Drivers (linked by the build that needs them)** — `e1000.c` (native NIC),
   `net.c` (TCP/IP stack), `tls.c` + `bearssl/` (TLS), `../uno3d/*` (3D),
-  `i2c_hid.c` (native trackpad, opt-in), `xhci.c` + `ax88179.c` (USB host +
-  USB Ethernet, opt-in `-DUNO_XHCI`). Documented in their own sections.
+  `i2c_hid.c` (native trackpad, opt-in), and the USB stack: `xhci.c` (host
+  controller, hubs), `usbmsc.c` (mass storage), `usbhid.c` (keyboard/mouse),
+  `usbboot.c` (detach preflight), `usbio.c` (attached-mode transport),
+  `ax88179.c` + `rtl8152.c` (USB Ethernet). The USB stack ships in every
+  build. Documented in their own sections and in [USB.md](USB.md).
 
 ## Networking (native e1000 + hand-rolled TCP/IP)
 
@@ -101,12 +117,68 @@ bring-up — which is how the LLP64 footgun below was caught.
 > loaded above 4 GB the same truncation would have been fatal, not just
 > corrupting — the 32-bit cast is now gone everywhere.
 
-## USB (xHCI host controller + USB Ethernet)
+## Detaching from the firmware
 
-The X1 Carbon has no wired NIC, so networking on metal needs a **USB Ethernet
-adapter** — which needs a **USB host stack**. `xhci.c` is a polled xHCI (USB
-3.0) driver, gated behind **`-DUNO_XHCI`** (inert stubs otherwise, so the
-shipped image is byte-identical). It finds the controller by PCI class
+`try_detach()` runs at the end of `uno_pc64_init()`. When it succeeds,
+`ExitBootServices` kills the firmware and the machine finishes on its own
+drivers: storage remounts on native AHCI/NVMe/SDHCI/USB-MSC, input moves to
+PS/2 plus I2C-HID plus USB HID, timing moves to the TSC, the clock to CMOS.
+Networking never used firmware at all. The framebuffer keeps scanning out of
+the GOP-negotiated linear buffer, which is hardware state rather than a
+firmware service, and is exactly what Windows' Basic Display Adapter does. A
+native modeset driver is an explicit non-goal.
+
+**Every gate is inference, and the door is one-way.** Nothing can be proven
+about hardware the firmware still owns, and past `ExitBootServices` there is no
+way back. So each gate refuses rather than guesses, and each records why in a
+string the System window shows, so a machine that stayed attached explains
+itself at a glance:
+
+| gate | refuses when |
+|---|---|
+| linear framebuffer | firmware is Blt-only (rare on x86; stays gated) |
+| native keyboard | no PS/2, no I2C-HID, and no USB HID we can prove we will claim |
+| pointer | a firmware pointer exists and nothing native would replace it |
+| TSC | no calibrated time base |
+| system volume | no natively-reachable volume carries our `BOOTX64.EFI` |
+| USB boot volume | the stick is not a BOT device on an xHCI we can reclaim |
+
+A USB-booted machine detaches by default. `usbboot.c` decides beforehand, from
+the firmware's own descriptors and device paths, whether `usbmsc` will be able
+to reclaim the stick; that answer is latched while the firmware is alive and
+read back afterwards.
+
+**`DETACH.CFG` is the escape hatch, and it needs no rebuild.** That is the
+point:  a machine this gets wrong cannot be fixed from itself. Drop the
+file on the stick from any other computer:
+
+    off      never detach on this machine
+    nousb    detach normally, but never on a USB-booted system
+
+(`usb` used to opt a machine IN to USB-boot detach. It became the default on
+2026-07-30 and the word is no longer read; a stick still carrying it is
+harmless.)
+
+If detach does lose the system volume, the machine says
+`detach failed - power off and remove the USB stick` on the framebuffer rather
+than sitting there looking dead.
+
+## USB (xHCI host, hubs, mass storage, HID, Ethernet)
+
+The USB stack started because the X1 Carbon has no wired NIC, so networking on
+metal needed a USB Ethernet adapter, which needed a host stack. It has since
+become load-bearing for far more: the boot volume of any USB-booted machine,
+and the keyboard and mouse of any machine without PS/2 or I2C-HID.
+
+`xhci.c` is a polled xHCI (USB 3.0) driver and **ships in every build**. It was
+once `-DUNO_XHCI` opt-in, because bringing it up takes the controller away from
+the firmware, which while attached is the firmware carrying the boot volume and
+often the keyboard. It now refuses to touch hardware until
+`uno_pc64_detached()`, so it is inert while attached and safe to compile in
+everywhere; attached-mode USB goes through `usbio.c` (EFI_USB_IO) instead,
+which changes no ownership. Full contract in [USB.md](USB.md).
+
+It finds the controller by PCI class
 `0C/03` prog-if `30`, detaches the firmware's USB driver first
 (`gBS->DisconnectController` on the matching `EFI_PCI_IO` handle — essential,
 or the firmware fights it), resets and runs it (CNR wait → HCRST → CONFIG →
@@ -427,6 +499,26 @@ disabled. Validated on the X1 Carbon Gen 8; any 64-bit UEFI PC is in scope.
   ~¼ the panel for full-screen 3D (Runner), then the same scaler upscales it —
   ~16× fewer pixels for the software rasteriser, the difference between a
   slideshow and a playable game.
+- **⚠ QEMU's USB models are not evidence**: three consecutive USB fixes went
+  green in QEMU on code that could not work on silicon. Its hub powers its
+  downstream ports regardless of configuration state, hiding a missing
+  `SET_CONFIGURATION` that left every port on a real hub without VBUS. Its hub
+  is single-TT, hiding an unset MTT bit that made every full/low-speed device
+  behind a real multi-TT hub unreachable. Its HID devices report
+  `bMaxPacketSize0 = 8`, hiding that full speed is the one speed whose EP0 max
+  packet must be READ (high speed is always 64, low speed always 8) before any
+  transfer longer than a packet. Treat a green QEMU USB result as necessary and
+  nowhere near sufficient.
+- **⚠ A deadline must be a duration, not a spin count**: `poll_xfer` waited
+  "5000000", which was loop iterations, so how long the driver actually waited
+  depended on the optimiser. A debug build's slacker code granted several times
+  the patience of a production one, and a USB read that completed in one timed
+  out in the other. Waits are TSC-backed milliseconds now. Audit any new wait
+  for this shape.
+- **⚠ DMA never targets the stack**: the controller writes the buffer handed to
+  it directly, so a local array is a DMA into whatever address and alignment
+  the current build's frame layout produced. This is why `usbmsc` worked in one
+  build and hung in another with identical logic. Static and aligned, always.
 - **⚠ No legacy-port debug I/O on metal**: QEMU-debugcon writes (port
   0x402) hung the X1 Carbon — legacy-port I/O can be SMM-trapped and vendor
   SMI handlers mishandle unclaimed ports. Compiled out unless `-DUNO_DBGCON`.
@@ -476,20 +568,25 @@ disabled. Validated on the X1 Carbon Gen 8; any 64-bit UEFI PC is in scope.
    from-scratch TCP/IP stack (see Networking above). virtio-net is the next
    easy addition; a `HEADLESS+NET` build of this world is the family's
    server story.
-2. **ExitBootServices** + own long-mode setup (GDT/IDT, APIC timer, PCIe
-   ECAM via ACPI MCFG) — graduates the port from firmware-hosted to
-   self-hosted (and makes DMA independent of the firmware identity map).
-3. **xHCI** (`input`/`nic`) — ✅ **host stack + USB Ethernet done** (QEMU-verified
-   enumeration; `xhci.c` + `ax88179.c`, opt-in `-DUNO_XHCI`), pending on-metal
-   verification of the AX88179 framing + real-Intel USBLEGSUP handoff. Still to
-   come on top: **USB HID** (keyboard/mouse without firmware help, unblocking the
-   mouse on every machine).
-4. **NVMe, then AHCI** (`block`) — real persistence: the FAT12 code in the
-   core (and `unofs`) gets a device; apps go storage-loaded like PS2/DC
-   (`pc64_modload.c` shrinks to a FAT read).
+2. **ExitBootServices** ✅ **done, and now the default.** The port is
+   self-hosted after boot: native storage, input and timers, with the firmware
+   gone. Metal-confirmed on the ZimaBlade 2026-07-30, a box whose single USB
+   port means its boot stick, keyboard and mouse all arrive through a hub.
+3. **xHCI** (`input`/`nic`/`block`) ✅ **done**: host stack, hub enumeration
+   (route strings, multi-TT), USB mass storage (`usbmsc.c`, the boot volume of
+   a USB-booted machine), USB HID keyboard and mouse (`usbhid.c`), and USB
+   Ethernet (`ax88179.c`, `rtl8152.c`). Metal-verified. Remaining: real-Intel
+   USBLEGSUP handoff, and AX88179 framing on metal.
+4. **NVMe, AHCI, SDHCI/eMMC** (`block`) ✅ **done**: `nvme.c`, `ahci.c`,
+   `sdhci.c` under `blkdev.c`, with `fat.c` doing the filesystem. Real
+   persistence landed, and apps are storage-loaded `.UNO` modules exactly as on
+   PS2/DC. USB mass storage (`usbmsc.c`) joined them so a USB-booted machine
+   keeps its boot volume after detaching.
 5. **Intel iGPU 3D** (`uno3d_intel.c`) — the Gen command-streamer path behind
    the already-wired `u3d_backend_intel` vtable (see 3D above).
-6. **Intel HDA** (`audio`) — beyond the PC speaker.
+6. **Intel HDA** (`audio`) ✅ **done**: `hdaudio.c` with an `ac97.c` fallback
+   under `snd_pcm.c`, probed in that order. Metal codec coverage is the
+   remaining gap, not the driver.
 
 ## Files
 
@@ -529,8 +626,13 @@ pc64/
 ├── tls.c tls.h bearssl/ tls_test/  # BearSSL TLS client (pinned key + CA/HTTPS)
 ├── tls_ca.c tls_ca.h mktrust.py    # bundled CA trust anchors (generated) for HTTPS
 ├── i2c_hid.c i2c_hid.h # native I2C-HID trackpad (opt-in, -DUNO_I2C_TRACKPAD)
-├── xhci.c xhci.h       # polled xHCI USB host + transfer API (opt-in, -DUNO_XHCI)
+├── xhci.c xhci.h       # polled xHCI USB host: transfers, hubs, endpoint recovery
+├── usbmsc.c usbmsc.h   # USB mass storage (BOT/SCSI) -> blkdev, the boot stick
+├── usbhid.c usbhid.h   # USB HID boot keyboard + mouse
+├── usbboot.c usbboot.h # detach preflight: will the USB boot volume/input survive?
+├── usbio.c usbio.h     # attached-mode USB over EFI_USB_IO (no ownership change)
 ├── ax88179.c ax88179.h # ASIX AX88179 USB Gigabit Ethernet -> uno_nic_t
+├── rtl8152.c rtl8152.h # Realtek USB Ethernet (docks/dongles) -> uno_nic_t
 ├── usbtest.py          # QEMU xHCI enumeration test (usb-net on the xHCI bus)
 └── shots/              # harness-captured evidence
 ```
