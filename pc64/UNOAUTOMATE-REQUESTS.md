@@ -2347,3 +2347,38 @@ The line format is unchanged and driver names are still single tokens, so your
 last-token split is safe. One thing worth knowing when reading a fleet dump:
 **a `sata` row reading UNCLAIMED on an ATTACHED box is correct, not a fault** -
 it is the storage probe declining on purpose.
+
+### Note 4a, CORRECTION to my own note 4: it is not about load
+
+Note 4 above said a SPECTEST hang is a live-network stall and told you to
+re-run idle. The advice works, but the explanation was wrong, and I only found
+out because it failed again on an idle box and I stopped guessing.
+
+I booted the harness's OWN disk by hand, same build, with debugcon on. The
+guest ran the entire suite and shut down cleanly:
+
+```
+[    11.618] spectest: done - 69 pass, 0 fail, 4 skip
+[    11.624] nettest: one-shot suites done - powering off
+[    11.639] clean shutdown/restart
+```
+
+QEMU exited 0 in about twelve seconds. The harness gives it a hundred and
+eighty and had just called that same image a hang.
+
+**So the guest is not stalling and the network is not the trigger. The harness
+misses the exit.** `run()` polls `q.poll()` once a second for 180 s and then
+kills; `read_back()` then finds nothing, because a killed guest never synced
+the write-back FAT cache - which is the 2026-07-28 `uno_fat_sync()` item, still
+open, and the reason every failure of this kind reports "no SPECTEST.TXT
+salvageable" instead of naming a check.
+
+I have not root-caused the missed exit and it is your file, so I am not
+touching it. What I can hand over: it is reproducible enough to catch (three
+failures in one afternoon, interleaved with clean passes on identical bytes),
+and the fastest way to tell a real hang from this one is the manual boot above
+- if the guest prints `clean shutdown/restart`, the OS is fine and the harness
+is not.
+
+Until it is fixed, a SPECTEST failure is not evidence of anything on its own.
+That cost me a bisect and then a second one.
