@@ -5,12 +5,14 @@
  * DMA is identity-mapped (UEFI boot services alive => a static .bss buffer's
  * address is its physical address), the same trick e1000 uses. */
 #include "xhci.h"
+#include "uno_devmgr.h"   /* phase 3: publish the USB tree */
 
 #ifndef UNO_XHCI
 
 int  uno_xhci_supported(void) { return 0; }
 int  uno_xhci_init(void) { return 0; }
 int  uno_xhci_dev_count(void) { return 0; }
+void uno_xhci_publish_tree(void) { }
 const uno_usb_dev *uno_xhci_dev(int i) { (void)i; return 0; }
 void uno_xhci_status(int *p, int *n, int *d, unsigned *e)
 { if (p)*p=0; if (n)*n=0; if (d)*d=0; if (e)*e=0; }
@@ -1229,3 +1231,83 @@ void uno_xhci_diag2(unsigned *sts, unsigned *ev0, int *disc)
 { if (sts) *sts = g_dbg_sts; if (ev0) *ev0 = g_dbg_ev0; if (disc) *disc = g_dbg_disc; }
 
 #endif /* UNO_XHCI */
+
+/* ===========================================================================
+ * unodevices phase 3 - publish what we enumerated into the device tree
+ *
+ * "Drivers create children" (UNODEVICES-PLAN decision 2): the manager knows
+ * nothing about USB beyond the shape of an address, and this is the code that
+ * turns a bring-up into tree nodes. One node per device, one child per
+ * interface, then a bind pass so interface drivers get their turn.
+ *
+ * Republishing is destructive on purpose. uno_xhci_init() is idempotent but a
+ * re-enumeration after a hub scan can produce a different device set, and a
+ * node left BOUND for hardware that has gone is exactly the stale state the
+ * remove contract exists to prevent - so the old children are dropped (with
+ * their drivers' remove() called) before the new ones go in. That is USB
+ * hotplug's departure half, and it is why devmgr_rescan() does not need to
+ * understand USB.
+ * ======================================================================== */
+void uno_xhci_publish_tree(void)
+{
+    uno_device *ctrl;
+    int cidx = -1, i, n;
+
+    if (!g_present) return;
+    /* The controller's own PCI node is the parent. Class 0C/03 is USB; the
+     * prog-if is not checked because find_xhci() already insisted on 0x30. */
+    ctrl = devmgr_find_class(0x0C, 0x03);
+    if (!ctrl) return;
+    { int k, cn = devmgr_count();
+      for (k = 0; k < cn; k++) if (devmgr_get(k) == ctrl) { cidx = k; break; } }
+    if (cidx < 0) return;
+
+    devmgr_drop_usb_children(cidx);
+
+    n = uno_xhci_dev_count();
+    for (i = 0; i < n; i++) {
+        const uno_usb_dev *u = uno_xhci_dev(i);
+        u8 cfg[256];
+        int devidx, total, at;
+        if (!u || !u->slot) continue;
+        devidx = devmgr_add_usb_dev(cidx, i, u->port, u->speed,
+                                    u->vendor, u->product,
+                                    u->dev_class, u->dev_subclass, u->dev_proto);
+        if (devidx < 0) break;                     /* table full */
+
+        /* Interfaces. A read-only descriptor walk: no SET_CONFIGURATION here,
+         * because the DEVICE owns configuration and the class driver that
+         * claims an interface is the one that should choose it. Publishing
+         * must not change the state of hardware nobody has claimed yet. */
+        if (uno_usb_get_config(i, cfg, sizeof cfg) < 9) continue;
+        total = cfg[2] | (cfg[3] << 8);
+        if (total > (int)sizeof cfg) total = (int)sizeof cfg;
+        at = 0;
+        while (at + 2 <= total) {
+            int blen = cfg[at], btype = cfg[at + 1];
+            if (blen < 2 || at + blen > total) break;
+            if (btype == 0x04 && blen >= 9)         /* INTERFACE descriptor */
+                devmgr_add_usb_if(devidx, cfg[at + 2],
+                                  cfg[at + 5], cfg[at + 6], cfg[at + 7]);
+            at += blen;
+        }
+    }
+    devmgr_bind_all();
+}
+
+/* ---- the controller itself, as a registry driver --------------------------
+ * Record-only, like the NICs: uno_xhci_init() stays the bring-up and stays
+ * where its three callers already invoke it (detach, usbhid, usbmsc). Binding
+ * a controller must not mean powering it up - on this OS the whole reason the
+ * xHCI stack can ship enabled is that it refuses to touch hardware until the
+ * firmware is gone. */
+static uno_device *g_xhci_node;
+static int xhci_probe(uno_device *d) { g_xhci_node = d; (void)g_xhci_node; return 1; }
+static const uno_match xhci_match[] = {
+    { UNO_MATCH_PCI_CLASS, 0, 0, 0x0C, 0x03, 0x30, 1 },   /* USB, xHCI prog-if */
+    { UNO_MATCH_END,       0, 0, 0,    0,    0,    0 }
+};
+static const uno_driver xhci_drv = {
+    "xhci", UNO_BUS_PCI, UNO_DEVMGR_API, xhci_match, xhci_probe, 0
+};
+UNO_DRIVER(xhci_drv);

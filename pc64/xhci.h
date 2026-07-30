@@ -28,6 +28,13 @@ typedef struct {
 } uno_usb_dev;
 
 int  uno_xhci_dev_count(void);
+
+/* unodevices phase 3: publish the enumerated devices and their interfaces
+ * into the device tree under this controller, then bind. Idempotent and
+ * destructive - existing USB children are dropped (remove() called on any
+ * bound driver) before republishing, so nothing lingers BOUND for hardware
+ * that has gone. No-op unless the controller came up. */
+void uno_xhci_publish_tree(void);
 const uno_usb_dev *uno_xhci_dev(int i);
 
 /* USB transfer API for class drivers (dev = index into the enumerated list). */

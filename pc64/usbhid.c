@@ -2,6 +2,7 @@
  * UnoDOS/pc64 - USB HID boot-protocol driver (see usbhid.h).
  * ======================================================================== */
 #include "usbhid.h"
+#include "uno_devmgr.h"
 
 #ifndef UNO_XHCI
 
@@ -93,6 +94,27 @@ static void claim_device(int dev)
     }
 }
 
+/* ---- unodevices registry adoption (phase 3) -------------------------------
+ * INTERFACE-level match: HID (03), boot subclass (01), protocol 1 keyboard /
+ * 2 mouse - exactly what claim_device() below accepts, expressed as a table.
+ *
+ * Record-only, deliberately. This driver's claim path is what gives a detached
+ * machine its keyboard, and on the ZimaBlade that path runs behind a hub with
+ * no way back if it breaks. So the table makes the binding VISIBLE in the tree
+ * while claim_device() stays byte-for-byte the code that has been proven on
+ * metal. Driving the claim from the interface node instead is the next slice,
+ * and it wants a machine in front of it. */
+static int hid_probe(uno_device *d) { (void)d; return 1; }
+static const uno_match hid_match[] = {
+    { UNO_MATCH_USB_IF, 0, 0, 0x03, 0x01, 1, 1 },     /* boot keyboard */
+    { UNO_MATCH_USB_IF, 0, 0, 0x03, 0x01, 2, 1 },     /* boot mouse    */
+    { UNO_MATCH_END,    0, 0, 0,    0,    0, 0 }
+};
+static const uno_driver hid_drv = {
+    "usbhid", UNO_BUS_USB, UNO_DEVMGR_API, hid_match, hid_probe, 0
+};
+UNO_DRIVER(hid_drv);
+
 int uno_usb_hid_init(void)
 {
     int n, i;
@@ -108,6 +130,11 @@ int uno_usb_hid_init(void)
     }
     uh_dbg("usbhid: claimed kbd="); uh_dbgn(g_nkbd);
     uh_dbg(" mouse="); uh_dbgn(g_nmouse); uh_dbg("\n");
+    /* unodevices phase 3: publish the tree HERE rather than inside
+     * uno_xhci_init(), because claim_device() above issues SET_CONFIGURATION
+     * and a tree published before that would list the interfaces of an
+     * unconfigured device. */
+    uno_xhci_publish_tree();
     return g_neps;
 }
 

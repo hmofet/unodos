@@ -13,6 +13,7 @@
  * out (!UNO_XHCI) or while firmware-attached.
  * ======================================================================== */
 #include "usbmsc.h"
+#include "uno_devmgr.h"
 #include "usbboot.h"
 #include "blkdev.h"
 #include "xhci.h"
@@ -253,6 +254,21 @@ int uno_usbmsc_supported(void) { return uno_xhci_supported(); }
  * second unrestricted pass for every other case (an internal-disk boot with a
  * data stick attached, or a firmware that gave us no usable identity). */
 static int try_bind(int i, int want_boot);
+
+/* ---- unodevices registry adoption (phase 3) -------------------------------
+ * Mass storage, SCSI transparent, Bulk-Only Transport - the one interface
+ * triple this driver speaks. Record-only for the same reason as usbhid: this
+ * is the path that reclaims the boot volume at detach, and past
+ * ExitBootServices there is no way back. */
+static int msc_probe(uno_device *d) { (void)d; return 1; }
+static const uno_match msc_match[] = {
+    { UNO_MATCH_USB_IF, 0, 0, 0x08, 0x06, 0x50, 1 },  /* MSC / SCSI / BOT */
+    { UNO_MATCH_END,    0, 0, 0,    0,    0,    0 }
+};
+static const uno_driver msc_drv = {
+    "usbmsc", UNO_BUS_USB, UNO_DEVMGR_API, msc_match, msc_probe, 0
+};
+UNO_DRIVER(msc_drv);
 
 int uno_usbmsc_init(void)
 {
