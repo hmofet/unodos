@@ -2256,3 +2256,32 @@ collapse into one lookup. That is a substitution inside `detachgate.c`, not a
 contract break, and `DETACH.md` §4 marks the spot. Nothing is blocked on it -
 the gate is correct today - so this is a note for whoever picks that lane up,
 not an ask.
+
+### Note 4 (-> harness owner): SPECTEST's live-network false hang is alive and well, and it costs a bisect
+
+Recording a measurement, not asking for anything. The 2026-07-22 entry above
+predicted that a connectivity hiccup in `S-AI-01`/`S-AI-02` (real DNS + TLS +
+HTTPS to api.anthropic.com) would stall the guest and read as a whole-batch
+hang. It does, and on a BUSY BOX it is reproducible rather than rare:
+
+| Run | Box | Result |
+|---|---|---|
+| branch, builds running concurrently | loaded | `FAIL: guest did not power off (hang?)` |
+| same binary, second attempt, other work still running | loaded | same |
+| same binary, nothing else running | idle | **69 PASS, 0 FAIL, 4 SKIP, clean** |
+
+Same bytes, opposite verdicts. I spent a bisect on this before checking load,
+because the failure is indistinguishable from a real regression - which is
+exactly what the original entry warned. The runner budget from 2026-07-21 does
+not catch it: the stall is INSIDE one live call, and the cooperative deadline
+that would catch it (`unoauto_deadline_left_ms()` polled from `tls_connect` /
+`tls_read` / `net_dns_query`) was added on the tls.c side, so either it is not
+armed for the SPECTEST path or the wait that stalls is elsewhere. Worth a look
+next time someone is in there.
+
+The practical guidance until then, which is not written down anywhere a person
+would find it: **do not trust a SPECTEST hang from a loaded machine.** Re-run it
+idle before believing it. The salvage path cannot help - SPECTEST.TXT goes
+through the write-back FAT cache and only reaches disk on the poweroff sync, so
+a killed guest leaves nothing, which is the still-open `uno_fat_sync()` item
+from the 2026-07-28 entry.
