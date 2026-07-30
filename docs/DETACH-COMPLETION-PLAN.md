@@ -1,8 +1,28 @@
 # Detach completion, finish removing firmware from the running system (pc64)
 
-Status: **Phase A mostly done (2026-07-29, branch `detach-usb`)**; B, C, D
-still open. New drivers here are written as registry drivers, and phase D's
-detach predicate is a registry query.
+Status: **A done on metal. B and C code-complete and QEMU-green. D
+code-complete, fleet validation outstanding.** Details per phase below; the
+2026-07-30 state in one screen:
+
+| Phase | State |
+|---|---|
+| A, USB mass storage | **DONE**, metal-confirmed on the ZimaBlade 2026-07-30 |
+| B, input gates | **CODE DONE** (branch `detach-bcd`). Gates decided from device paths, not shape; `detachgate.c` + [pc64/DETACH.md](../pc64/DETACH.md). The X1 claim is METAL-PENDING and could be wrong, see §B below |
+| B3, Surface keyboard | **NOT ANSWERED**, and deliberately not guessed at: [docs/SURFACE-KEYBOARD.md](SURFACE-KEYBOARD.md) has the one boot that settles it and a conditional sizing |
+| C, firmware sweep | **DONE**. Firmware `Stall` down to one call site, one clock, one power policy; the audit is [pc64/FIRMWARE-SURFACE.md](../pc64/FIRMWARE-SURFACE.md) |
+| D, posture + fleet | **CODE DONE** (refusals name a device). Per-machine validation is the checklist in [pc64/METAL-CHECKLIST.md](../pc64/METAL-CHECKLIST.md) and needs the hardware |
+
+**Two things this programme did NOT do, stated plainly so nobody assumes
+otherwise.** Phase B item 2 asked for the gate to become a unodevices registry
+query; half of it is (which device), half of it is not (whether a driver is
+bound), because the driver registry is unodevices **phase 2 and is not on
+master** - `uno_devmgr.c` enumerates, nothing binds, and every real device
+reports `UNCLAIMED`. A gate keyed to bind state today would refuse every
+machine in the fleet. DETACH.md §4 is explicit about the substitution that
+lands when phase 2 does. And nothing here has been near real hardware: the USB
+work of 2026-07-29 spent three consecutive green QEMU runs on a driver that
+could not work on silicon, and phase B's pointer prediction is exactly the same
+shape of claim.
 
 ## Phase A progress, 2026-07-29
 
@@ -107,6 +127,29 @@ Verbatim stick with all disks visible and net up.
 
 ## Phase B, input gates
 
+> **RESULT, 2026-07-30 (branch `detach-bcd`).** Items 1 and 2 landed as
+> `detachgate.c` (contract: [pc64/DETACH.md](../pc64/DETACH.md)); item 3 is
+> answered with a decision procedure rather than an answer, see below.
+>
+> The route taken for item 1 was the SECOND out, not the first, and it turned
+> out to be the general one. Rather than wait on the metal I2C-HID fix, the
+> gate reads the transport of the firmware's pointer out of its DEVICE PATH: a
+> `PNP0Fxx` ACPI node means the i8042 aux port, which `uno_ps2_init()` claims
+> at detach. So the X1 should detach whether or not its touchpad binds, and no
+> hardware is touched to decide it. **This is a prediction and it is
+> metal-pending** - the same category of claim QEMU signed off on three times
+> during phase A before hardware refused it. `DETACH.CFG: off` is the way back.
+>
+> Item 2 is half done, and the plan was wrong about what blocked the other
+> half. "Which device" is a registry query; "has a native driver bound" is NOT,
+> because the driver registry is unodevices phase 2 and is not on master. See
+> the status table at the top and DETACH.md §4.
+>
+> The LPSS-counting heuristic is deleted, as asked. It is not kept as a
+> fallback: an empty device tree now yields an empty blocker STRING, while the
+> gate itself falls through to the service owners, who answer with or without
+> the registry.
+
 1. **X1 pointer**: two independent outs, either clears the gate honestly:
    - The metal-pending I2C-HID fix (LPSS 216 MHz clock divisor + detach-gate
      pointer guard, see the trackpad notes): once confirmed on metal, the
@@ -132,6 +175,19 @@ Verbatim stick with all disks visible and net up.
 
 ## Phase C, attached-mode firmware sweep
 
+> **RESULT, 2026-07-30. Done**, deliverable is
+> [pc64/FIRMWARE-SURFACE.md](../pc64/FIRMWARE-SURFACE.md): 26 remaining call
+> sites, each classified. Firmware `Stall` went from seven call sites to one
+> (the TSC calibration moved to the top of `uno_pc64_init`, so the splash,
+> stripes and chime run on our own timer), the clock is the CMOS RTC on both
+> sides of detach, and shutdown/restart are one `power_down()`.
+>
+> One instruction here was NOT followed, deliberately. "Prefer native CF9 with
+> runtime ResetSystem as fallback" holds for reset; generalising it to
+> power-off hung the SPECTEST guest, because `uno_acpi_poweroff()` disables
+> interrupts and returns on failure - it is terminal by construction and has to
+> stay last. FIRMWARE-SURFACE.md §5 records that so nobody re-tidies it.
+
 For machines that still run attached (and the pre-detach window on all
 machines), shrink firmware usage to the unavoidable minimum:
 
@@ -152,6 +208,21 @@ machines), shrink firmware usage to the unavoidable minimum:
   list is short and intentional, not zero.
 
 ## Phase D, flip the posture + fleet checklist
+
+> **RESULT, 2026-07-30. Code done; the fleet pass needs the hardware.**
+> Refusals now name the PCI function whose service would be lost, in the System
+> window and in the debug env block.
+>
+> The posture flip itself turned out to be mostly a non-event, because A and B
+> had already done it: detach is the default and the gates refuse only on a
+> lost critical service. What B changed is that two of those refusals were
+> being triggered by shape arguments rather than by anything actually being
+> lost. There was no switch left to throw.
+>
+> The per-machine ordering, with what each box actually tests, is the "Phase D
+> fleet validation" section of
+> [pc64/METAL-CHECKLIST.md](../pc64/METAL-CHECKLIST.md). ZimaBlade and Yoga are
+> regression checks; the X1 is the one that can falsify phase B.
 
 - Default becomes: ALWAYS detach unless (no linear FB) or (no native
   keyboard after phase B) or (registry query says a critical device is

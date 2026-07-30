@@ -175,6 +175,41 @@ CMOS clock). Metal is where the gate's conservatism actually matters:
 - [ ] If a machine misbehaves detached, `-DUNO_NO_DETACH` is the escape hatch
       (and file what broke, likely NX page tables or an AHCI quirk).
 
+### Phase D fleet validation (detach completion, 2026-07-30)
+
+Phases B and C are code-complete and QEMU-green; this is the per-machine pass
+the plan asks for, **in this order**, easiest rollback first. Every box: boot
+`UNO_DEBUG=1`, read the `detach gate:` line out of the env block in
+`CRASH\<machine>\BOOTLOG.TXT`, and capture `uno.devices()` (or the URC
+`devices` verb) into `docs/fleet/<machine>.txt` as the hardware inventory.
+
+- [ ] **ZimaBlade** (USB boot + r8169, the box that detached first). This is a
+      REGRESSION check, not new ground: it detached on 2026-07-30 before any of
+      this, so it must still detach, and the `detach gate:` line should read
+      `fw ptr=usb kbd=usb  survives ptr=1 kbd=1`. Drivable headless over the
+      URC bridge (:5099), which is why it goes first.
+- [ ] **X13 Yoga** (NVMe + ethernet, already detaches today). Regression check.
+      Also the one machine that can exercise the PCH TCO watchdog metal pass
+      still outstanding in UNOAUTOMATE-REQUESTS.md, if someone is there anyway.
+- [ ] **X1 Carbon Gen 8** - **the phase B claim, and the one that could be
+      wrong.** Its I2C-HID trackpad may or may not bind; the point of the new
+      gate is that the machine should detach EITHER WAY, because the TrackPoint
+      is a PS/2 Elan on the aux port that the device path identifies. Expect
+      `fw ptr=ps2 ... survives ptr=1`, a detach, and a working TrackPoint after
+      it. If the pointer dies, the System window will say so
+      (`the i8042 aux mouse did not answer after detach`) - that is the
+      prediction failing honestly, and `DETACH.CFG: off` is the way back.
+      **Read pc64/DETACH.md §5 before running this one.** The prediction cannot
+      be proven pre-EBS by construction, which is exactly the shape of thing
+      QEMU signed off on three times during the USB work and hardware then
+      refused.
+- [ ] **Surface Laptop Go** (eMMC). Answers the open keyboard question in one
+      boot; the decision table is in [docs/SURFACE-KEYBOARD.md](../docs/SURFACE-KEYBOARD.md).
+      Do not build anything until that table has been read against a real log.
+- [ ] **Any i8042 desktop with a PS/2 mouse.** The cheapest confirmation that
+      the PS/2 arm of the pointer gate does what it claims, on a machine where
+      being wrong costs nothing.
+
 ## Newest, xHCI USB stack + AX88179 USB Ethernet (networking for the X1)
 
 The USB host-controller driver + transfer API + the AX88179 USB Gigabit
