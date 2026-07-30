@@ -40,7 +40,7 @@ re-home"). Ownership is of the CODE; the whole OS is a shared goal.
 | unofs (filesystems + block devices) | `STORAGE.md` | `fat.*`, `pc64_fs.*`, `blkdev.*`, `ahci/nvme/sdhci` |
 | unosecure (identity / RBAC / audit) | `UNOSECURE-SPEC.md`, `UNOSECURE.md` | `unosecure.*`, `pc64_accounts.*` |
 | unoscript (scripting surface) | `UNOSCRIPT.md` | `unoscript.*`, `upy_port/mod_unoscript.c` |
-| unodevices (PCI device tree + driver registry) | branch `unodevices` | `uno_devmgr.*` |
+| unodevices (PCI device tree + driver registry) | `pc64/DEVICES.md` | `uno_devmgr.*` |
 | installer (install-to-disk + boot entries) | `INSTALL.md` | `installer.c` |
 | unomedia (image / audio decoders) | `IMAGES.md`, `AUDIO.md` | `unomedia/` |
 | pc64-python / PYRT | SDK docs | `upy_port/`, `apps/pyrt.c`, `pyhost.h` |
