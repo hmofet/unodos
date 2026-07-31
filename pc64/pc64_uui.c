@@ -2073,15 +2073,23 @@ static void sw_draw(struct unoui_widget *w, unoui_rect r, void *ctx)
 static unoui_canvas g_sw_cv = { sw_draw, 0, 0 };
 
 /* rebuild the candidate list: MRU order first, then any open app the MRU has
- * not seen yet (apps opened before the stack existed, or restored windows). */
+ * not seen yet (apps opened before the stack existed, or restored windows).
+ *
+ * Scoped to the CURRENT desktop, the same guard the taskbar chips use. A
+ * switcher that reaches other desktops turns every Alt-Tab into a possible
+ * desktop switch, which is exactly what a user separating work across
+ * desktops is trying to avoid; the pager and Ctrl-F1..F4 are how you leave. */
+static int sw_candidate(int a)
+{ return g_open[a] && g_desk_of[a] == g_cur_desk; }
+
 static void sw_fill(void)
 {
     int i, a;
     g_sw_n = 0;
     for (i = 0; i < g_nmru && g_sw_n < NAPPS; i++)
-        if (g_open[g_mru[i]]) g_sw_list[g_sw_n++] = g_mru[i];
+        if (sw_candidate(g_mru[i])) g_sw_list[g_sw_n++] = g_mru[i];
     for (a = 0; a < NAPPS && g_sw_n < NAPPS; a++) {
-        if (!g_open[a]) continue;
+        if (!sw_candidate(a)) continue;
         for (i = 0; i < g_sw_n; i++) if (g_sw_list[i] == a) break;
         if (i == g_sw_n) g_sw_list[g_sw_n++] = (short)a;
     }
@@ -2099,7 +2107,10 @@ static void sw_commit(void)
 {
     int a = (g_sw_sel >= 0 && g_sw_sel < g_sw_n) ? g_sw_list[g_sw_sel] : -1;
     sw_close();
-    if (a >= 0 && g_open[a]) open_app(a);        /* raises, unparks, focuses */
+    /* re-test the candidate: a desktop switch while the overlay was open can
+       strand an entry elsewhere, and committing to it would drag the user back
+       to a desktop they just left. */
+    if (a >= 0 && sw_candidate(a)) open_app(a);  /* raises, unparks, focuses */
 }
 
 /* one Alt+Tab (or F2 / Ctrl-Tab) press: open the overlay, or step it.

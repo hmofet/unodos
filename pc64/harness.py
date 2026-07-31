@@ -1380,6 +1380,26 @@ def wm_e():
         check("Ctrl+F1 brings desktop 1's Editor back, alone",
               like(bbox, ebox), "%s vs %s" % (bbox, ebox))
 
+        # ---- the switcher is SCOPED to the current desktop -----------------
+        # Desktop 1 holds only the Editor while Files sits on desktop 2. A
+        # switcher that reached across desktops would have two candidates here
+        # and would paint its overlay; a scoped one has exactly one and paints
+        # nothing. That difference is the whole assertion - it is what tells a
+        # scoped switcher from a global one, and nothing else in the suite
+        # would notice if this regressed.
+        swband = (SCREEN_W // 4, SCREEN_H // 2 - 60 * SCALE,
+                  SCREEN_W - SCREEN_W // 4, SCREEN_H // 2 + 60 * SCALE)
+        key_evt(q, "alt", True)
+        time.sleep(0.2)
+        tap(q, "tab")
+        time.sleep(0.4)
+        grab(q, "wm_e_05b_alt_tab_d1")
+        sw1 = diff_frac("wm_e_05_back_d1", "wm_e_05b_alt_tab_d1", swband)
+        key_evt(q, "alt", False)
+        time.sleep(0.9)
+        check("Alt-Tab raises no overlay for a lone window on this desktop",
+              sw1 < 0.01, "%.4f" % sw1)
+
         # ---- Alt+Ctrl+F2: move the focused Editor to 2, and follow it -----
         key_evt(q, "alt", True); key_evt(q, "ctrl", True)
         time.sleep(0.25)
@@ -1397,6 +1417,26 @@ def wm_e():
               abs(ubox[0] - fbox[0]) <= 10 and
               abs((ubox[0] + ubox[2]) - (ebox[0] + ebox[2])) <= 10,
               "%s vs %s / %s" % (ubox, fbox, ebox))
+
+        # ...and the other half of the scoping assertion: now that BOTH windows
+        # share desktop 2, the same gesture must raise the overlay. Without
+        # this a switcher broken to always-empty would pass the check above.
+        key_evt(q, "alt", True)
+        time.sleep(0.2)
+        tap(q, "tab")
+        time.sleep(0.4)
+        grab(q, "wm_e_06b_alt_tab_d2")
+        sw2 = diff_frac("wm_e_06_moved_d2", "wm_e_06b_alt_tab_d2", swband)
+        # Esc, NOT an Alt release: releasing Alt commits the switch and would
+        # hand focus to the other window, which the Ctrl-M step below depends
+        # on. Cancelling leaves the focus exactly as this probe found it.
+        tap(q, "esc")
+        time.sleep(0.3)
+        key_evt(q, "alt", False)
+        time.sleep(1.0)
+        check("Alt-Tab DOES raise it once both windows share a desktop",
+              sw2 > 0.02, "%.4f" % sw2)
+
         ctrl_fn(1)
         m.park()
         grab(q, "wm_e_07_d1_empty_now")
