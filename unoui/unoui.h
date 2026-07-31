@@ -416,4 +416,14 @@ void          unoui_fullscreen(unoui_ui *, unoui_window *win);
 void unoui_desktop(const struct unoui_theme *theme, int screen_w, int screen_h);
 void unoui_render (unoui_window *win, const struct unoui_theme *theme);  /* static */
 
+/* ---- title-bar window controls ------------------------------------------- *
+ * The minimize / maximize boxes a theme opts into via unoui_metrics.minbox /
+ * .maxbox. The generic painter and the hit-test both derive their geometry
+ * from here, so a click can only land where a button was drawn. The returned
+ * rect has .w == 0 when the button is absent (theme opted out, or a BARE
+ * window, which has no chrome at all). */
+enum { UI_TB_MIN = 0, UI_TB_MAX = 1 };
+unoui_rect unoui_titlebtn_rect(const struct unoui_theme *, const unoui_window *,
+                               int which);
+
 #endif /* UNOUI_H */
