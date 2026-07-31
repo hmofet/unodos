@@ -22,6 +22,7 @@ echo "[bios] boot sector $(wc -c < build/bios_boot.bin) B, stage2 $(wc -c < buil
 
 [ "$1" = "test" ] || [ "$1" = "run" ] || exit 0
 
+
 # The BIOS payload links FLAT at 0x100000 with no relocations: stage2 copies the
 # image there byte for byte and jumps in, so the load address has to be the link
 # address. --disable-reloc-section keeps a .reloc out of the image (nothing will

@@ -1,12 +1,13 @@
 # BIOS boot for pc64, a phased plan
 
-Status: **A DONE, QEMU-verified.** Details per phase below.
+Status: **A and B DONE, QEMU-verified - the desktop boots from a BIOS.**
+Details per phase below.
 
 | Phase | State |
 |---|---|
 | A, the loader reaches long mode | **DONE**, QEMU + SeaBIOS: `tools/mkbios.sh test` then `tools/bios_qemu.py` paints 1920x1200 from 64-bit C |
-| B, the kernel boots from it | IN PROGRESS |
-| C, storage + input with no firmware at all | NOT STARTED |
+| B, the kernel boots from it | **DONE**, QEMU + SeaBIOS: the full desktop, `build/unodos-bios.img` |
+| C, storage + input with no firmware at all | PARTIAL: i8042 and the native block stack come up; ACPI, the module arena and the installer's BIOS target are outstanding |
 | D, the old-machine tier (P4 / Core) | NOT STARTED |
 | E, one image that boots both ways | NOT STARTED |
 
@@ -147,8 +148,41 @@ commented where they live:
   flat at `0x100000` and is objcopied to a raw binary with a small header
   carrying the load size and the `.bss` size for stage2 to zero.
 
-**Gate:** the desktop, on QEMU with `-bios` SeaBIOS, booted from a disk image
-with no ESP.
+**Gate: MET 2026-07-31.** `build/unodos-bios.img`, booted under SeaBIOS on a
+plain IDE disk with no ESP and no UEFI firmware anywhere: the desktop, its
+icons and taskbar, the clock running off the CMOS RTC, and the network up on
+the native e1000 driver. `shots/bios_desktop.png`. The UEFI gate
+(`harness.py boot`) is unchanged, which is the other half of the promise.
+
+How it landed, and it is less code than the phase deserves:
+
+- **`gBI` is the whole switch.** One pointer in `uefi_main.c`, non-NULL on a
+  BIOS boot, and it doubles as "which front end started this machine". Every
+  firmware block in `uno_pc64_init` is SKIPPED rather than replaced, because a
+  BIOS boot is a machine that was detached from birth - `gST` is NULL and
+  `gDetached` is 1 before any of our code runs, which is the posture the detach
+  programme spent months reaching.
+- **The kernel is one build with two links.** `build.sh` links the same `$OBJS`
+  a second time flat at `0x100000` with `-e uno_bios_main`, so a BIOS image can
+  never be a stale build of a UEFI kernel.
+- **Zeroing `.bss` is ours now.** A PE's `.bss` occupies no file bytes and
+  stage2 copies file bytes, so on entry every zero-initialised static held
+  whatever the last user of that RAM left - the 32 MB heap, every driver flag,
+  and `gBI` itself. `bios_zero_bss()` reads the image's own PE headers, which
+  stage2 loaded along with everything else, and clears each section's tail
+  before a single global is touched.
+- **PIT channel 2 replaces `Stall`.** CPUID's TSC-frequency leaf does not exist
+  before Skylake, which is most of the target list; the 8253 method works
+  everywhere and is silent (speaker data bit stays clear).
+
+**Not done in phase B, and named so nobody assumes otherwise:** ACPI does not
+start on this path. `uno_acpi_start()` needs a 10 ms `Stall` and an 8 MB
+`AllocatePool`, which is the same question the module loader's `AllocatePages`
+asks - where does a BIOS boot get a large region from the E820 map - so they
+are answered together in phase C rather than growing a static 8 MB array that
+the UEFI path would also carry. The cost is battery percentage and lid state,
+on a target list that is mostly desktops and machines old enough to predate
+both. `uno_bios_find_rsdp()` already works; it simply has no consumer yet.
 
 ## Phase C, storage and input with no firmware at all
 

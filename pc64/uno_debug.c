@@ -1512,7 +1512,21 @@ typedef EFI_STATUS (*AP_FN)(int Type, int MemType, UINTN Pages,
 static DbgStash *try_stash_at(unsigned long long addr)
 {
     EFI_PHYSICAL_ADDRESS mem = addr;
-    EFI_BOOT_SERVICES *bs = g_st->BootServices;
+    EFI_BOOT_SERVICES *bs;
+    /* BIOS boot: no allocator to ask, and none needed. The AllocatePages call
+     * below is not what makes the address usable - it is what stops the
+     * FIRMWARE from handing the same page to something else. Without firmware
+     * there is no other claimant: the kernel is at 1 MB, its heap is inside its
+     * own image, and these addresses sit above both. Taking the address
+     * directly is the correct behaviour here, not a shortcut around a missing
+     * service.
+     *
+     * (This is also the site that took the debug build down on the first BIOS
+     * boot: it was the one g_st dereference in uno_dbg_early's path with no
+     * guard, so g_st->BootServices read the real-mode IVT at physical 0x60 and
+     * called into it.) */
+    if (!g_st) return (DbgStash *)(uintptr_t)addr;
+    bs = g_st->BootServices;
     /* AllocateAddress(2) / EfiLoaderData(2) */
     if (((AP_FN)bs->AllocatePages)(2, 2, STASH_PAGES, &mem) != EFI_SUCCESS)
         return 0;
@@ -1524,11 +1538,17 @@ void uno_dbg_early(void *SystemTable)
     int i;
     g_st = SystemTable;
     g_tsc0 = uno_native_rdtsc();
-    {   /* rough local TSC rate now (init recalibrates the shared one later) */
+    if (g_st) {   /* rough local TSC rate now (init recalibrates it later) */
         unsigned long long t0 = uno_native_rdtsc();
         g_st->BootServices->Stall(10000);
         g_tsc_per_ms = (uno_native_rdtsc() - t0) / 10;
         if (!g_tsc_per_ms) g_tsc_per_ms = 1000000;
+    } else {
+        /* BIOS boot: no Stall exists, and this runs before the PIT calibration
+         * in uno_pc64_init. A placeholder is correct rather than lazy - the
+         * only consumer this early is log timestamping, and init overwrites it
+         * with the measured value a moment later. */
+        g_tsc_per_ms = 1000000;
     }
     image_extent();
 

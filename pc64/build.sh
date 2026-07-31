@@ -151,7 +151,7 @@ if [ "$1" != "legacy" ]; then
     # paths compile either way, so neither can rot; the flow painter stays
     # the default until the engine path has been through real pages.
     if [ "${BROWSER_ENGINE:-}" = "uw" ]; then UCF="$UCF -DUW_ENGINE"; fi
-    for f in fb mac_compat pc64_libc pc64_io pc64_pci uno_devmgr pc64_math pc64_fs blkdev ahci nvme sdhci fat unostorage hid_kbd i2c_hid xhci usbio usbboot usbmsc usbhid detachgate unoamp_out unoamp_in unoamp_skin unoamp_vis unoamp_dsp unoamp_enc unoamp_mod unoamp_app unoamp_ui pc64_mtrr ax88179 rtl8152 iwlwifi rtwifi mrvlwifi wifi_wpa uefi_main pc64_native pc64_uui pc64_uui_apps pc64_write pc64_files pc64_music pc64_clock pc64_media pc64_modload pc64_games js pc64_http pc64_font pc64_browser pc64_icons e1000 e1000e igb r8169 net netdisc tls tls_entropy tls_ca acpi_host installer snd_pcm hdaudio ac97 unosecure unoscript unoscript_path pc64_accounts; do
+    for f in fb mac_compat pc64_libc pc64_io pc64_pci uno_devmgr pc64_math pc64_fs blkdev ahci nvme sdhci fat unostorage hid_kbd i2c_hid xhci usbio usbboot usbmsc usbhid detachgate unoamp_out unoamp_in unoamp_skin unoamp_vis unoamp_dsp unoamp_enc unoamp_mod unoamp_app unoamp_ui pc64_mtrr ax88179 rtl8152 iwlwifi rtwifi mrvlwifi wifi_wpa uefi_main bios_entry pc64_native pc64_uui pc64_uui_apps pc64_write pc64_files pc64_music pc64_clock pc64_media pc64_modload pc64_games js pc64_http pc64_font pc64_browser pc64_icons e1000 e1000e igb r8169 net netdisc tls tls_entropy tls_ca acpi_host installer snd_pcm hdaudio ac97 unosecure unoscript unoscript_path pc64_accounts; do
         pc "$CC" $UCF $DBGSAN -c -o "build/$f.o" "$f.c"; OBJS="$OBJS build/$f.o"
     done
     # unojs: the JavaScript engine, its own subsystem (unojs/UNOJS.md).  Plain
@@ -275,6 +275,10 @@ if [ "$1" != "legacy" ]; then
         "$PY" tools/mksyms.py build/BOOTX64.EFI build/dbg_syms.c build/SYMBOLS.TXT "$NM"
         "$CC" $UCF -c -o "build/dbg_syms.o" "build/dbg_syms.c"
         "$CC" $LINK -o build/BOOTX64.EFI $OBJS build/dbg_syms.o -lgcc
+        # the BIOS link below needs the same extra object: uno_debug.c
+        # references the baked symbol table unconditionally, so a link without
+        # it fails on four undefined refs
+        LINK_EXTRA="build/dbg_syms.o"
         # assert .text RVAs did not move (else the baked symbols are wrong)
         "$NM" -n build/BOOTX64.EFI | awk '$2=="T"||$2=="t"{print $1}' | sort > build/syms_pass2.txt
         if ! cmp -s build/syms_pass1.txt build/syms_pass2.txt; then
@@ -288,6 +292,24 @@ if [ "$1" != "legacy" ]; then
         "$CC" $LINK -o build/BOOTX64.EFI $OBJS -lgcc
     fi
     mkdir -p build/esp/EFI/BOOT; cp build/BOOTX64.EFI build/esp/EFI/BOOT/BOOTX64.EFI
+
+    # ---- the legacy-BIOS image, from the SAME objects --------------------
+    # Same kernel, second link: flat at 0x100000, entry uno_bios_main, file
+    # alignment equal to section alignment so the file is a byte-for-byte image
+    # of memory (boot/bios_stage2.asm copies bytes; it is not a PE loader).
+    # Built from $OBJS, so the two front ends can never drift apart - a BIOS
+    # image is never a stale build of a UEFI kernel.  See docs/BIOS-BOOT-PLAN.md.
+    if [ "${UNO_NOBIOS:-0}" = "0" ]; then
+        echo "[bios] linking the legacy-BIOS image..."
+        "$CC" -nostdlib -e uno_bios_main \
+              -Wl,--image-base,0x100000 -Wl,--disable-reloc-section \
+              -Wl,--section-alignment,0x1000 -Wl,--file-alignment,0x1000 \
+              -o build/UNODOS.SYS $OBJS ${LINK_EXTRA:-} -lgcc
+        nasm -f bin -o build/bios_boot.bin   boot/bios_boot.asm
+        nasm -f bin -o build/bios_stage2.bin boot/bios_stage2.asm
+        "$PY" tools/mkbios.py build/bios_boot.bin build/bios_stage2.bin \
+                              build/UNODOS.SYS build/unodos-bios.img
+    fi
     # sample docs on the ESP (a real FAT volume) for the browser to open
     printf '# Hello from the disk\n\nThis file lives on the **FAT ESP**, read via the\nEFI Simple File System - the browser opened it from a *local disk*, not the\nRAM disk.\n\n- FAT12/16/32 supported (firmware driver)\n- read-only for now\n\n> UnoDOS pc64\n' > build/esp/HELLO.MD
     printf '<h1>Disk HTML</h1><p>An <b>HTML</b> file loaded from the FAT volume by the pc64 browser.</p><ul><li>local disk</li><li>FAT32</li></ul>' > build/esp/PAGE.HTML
