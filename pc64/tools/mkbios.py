@@ -3,11 +3,15 @@
 
     python3 tools/mkbios.py <boot.bin> <stage2.bin> <kernel.bin> <out.img>
 
+The result boots BOTH WAYS from one file - see PART_TYPE_ESP below.
+
 Layout (512-byte sectors), matching boot/bios_boot.asm and boot/bios_stage2.asm:
 
-    0        boot sector
+    0        boot sector + MBR partition table
     1..16    stage2
     17..     the kernel image, loaded verbatim to physical 0x100000
+    16384..  one FAT32 partition, type 0xEF: the ESP to UEFI firmware, the OS
+             volume to the running system, and invisible to the BIOS path
 
 TWO VALUES ARE PATCHED INTO STAGE2, and both have to be, because a 16-bit
 loader cannot work either of them out for itself:
@@ -45,7 +49,23 @@ MIN_IMAGE = 8 * 1024 * 1024      # see the padding note in main()
 # built to date, which buys room to grow without ever moving the partition -
 # and moving it would invalidate every image already written to a stick.
 RESERVED_SECTORS = 16384         # 8 MiB
-PART_TYPE_FAT32_LBA = 0x0C
+
+# 0xEF = EFI System Partition, and this ONE BYTE is what makes the image boot
+# both ways. UEFI firmware scanning an MBR-partitioned disk looks for type 0xEF
+# and runs \EFI\BOOT\BOOTX64.EFI from it; a BIOS ignores the type entirely and
+# runs the code in the boot sector, which loads the kernel from the reserved
+# area by raw LBA. So the same FAT volume is the ESP to one firmware and just
+# the OS volume to the other, with no duplicated tree and nothing to keep in
+# sync. pc64's own FAT layer already accepts 0xEF (fat.c), so the running system
+# mounts it either way.
+#
+# MBR rather than a hybrid GPT deliberately. A hybrid GPT - a protective MBR
+# rewritten to hold real entries - is what Boot Camp and rEFInd do, and it is a
+# spec violation that some firmware rejects and some partitioning tools
+# helpfully "repair". An MBR disk with an 0xEF partition is inside the UEFI
+# spec, which permits MBR-partitioned media, and is what isohybrid images have
+# used for years.
+PART_TYPE_ESP = 0xEF
 
 
 def pe_entry_va(image: bytes) -> int:
@@ -76,7 +96,7 @@ def mbr_entry(first_lba: int, sectors: int) -> bytes:
     """
     return (bytes([0x80])                    # bootable
             + bytes([0xFE, 0xFF, 0xFF])      # start CHS: use LBA
-            + bytes([PART_TYPE_FAT32_LBA])
+            + bytes([PART_TYPE_ESP])
             + bytes([0xFE, 0xFF, 0xFF])      # end CHS: use LBA
             + struct.pack("<II", first_lba, sectors))
 
@@ -192,8 +212,8 @@ def main() -> int:
         img[RESERVED_SECTORS * SECTOR:RESERVED_SECTORS * SECTOR + len(data)] = data
         os.remove(fat)
         img[0x1BE:0x1CE] = mbr_entry(RESERVED_SECTORS, part_sectors)
-        fat_note = "FAT32 at LBA %d (%d MiB)" % (RESERVED_SECTORS,
-                                                 part_sectors // 2048)
+        fat_note = "ESP/FAT32 at LBA %d (%d MiB), boots BIOS + UEFI" % (
+            RESERVED_SECTORS, part_sectors // 2048)
 
     with open(outf, "wb") as f:
         f.write(img)

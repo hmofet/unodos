@@ -621,7 +621,7 @@ if [ "$1" != "legacy" ]; then
         nasm -f bin -o build/bios_boot.bin   boot/bios_boot.asm
         nasm -f bin -o build/bios_stage2.bin boot/bios_stage2.asm
         "$PY" tools/mkbios.py build/bios_boot.bin build/bios_stage2.bin \
-                              build/UNODOS.SYS build/unodos-bios.img build/esp
+                              build/UNODOS.SYS build/unodos-hybrid.img build/esp
     fi
 
     ls -l build/BOOTX64.EFI; echo "done: unoui shell (default) -> build/esp/"
