@@ -3033,3 +3033,40 @@ d, follow)` is the entry point for "Move to desktop N" - pass `follow = 0` to
 send a window away without leaving. `wm_target_app()` is the focus-with-fallback
 helper a context menu wants. And `wm_b` now locates the pager before hunting for
 a chip; the overflow `>>` chip should reuse that two-frame trick.
+
+## 2026-07-31 - LANDED (toolkits lane): live drag, cached (WM phase C follow-up)
+
+The opaque drag cost phase A measured (2.4x the rubber band, judged
+irreducible) is down to 1.55x, and the drag no longer paints across the
+taskbar. Per drag frame, one box, 1280x800, the Editor at 70 % of the screen,
+`UNO_DEBUG=1` under QEMU:
+
+    rubber band (outline)          49 692 kcyc   (paint     171)
+    opaque, uncached              108 405 kcyc   (paint  44 856)
+    opaque, cached                 77 139 kcyc   (paint  14 798)
+
+**The premise was half right and the measurement is the interesting part.** A
+dragged window's content cannot change, so caching its pixels and blitting them
+is free money - but the widget pass was never the expensive half. Stubbing
+`soft_shadow` out and re-running put 31 Mcyc of that ~45-50 Mcyc paint on Aurora's
+drop shadow alone: six expanding alpha layers over the WHOLE window area,
+recomposited at every position because what is behind the window changes. The
+widgets, frame and title bar together were the rest.
+
+So the shape is: blit the cached window EXCEPT its four corner squares (the
+anti-aliased arcs have to composite against the restored scene, not against
+stale pixels), then repaint the chrome clipped to those corners plus four bands
+outside the window - ~21 k pixels of ring instead of ~178 k of window.
+`unoui_render_window_chrome()` is the one new export. The cache is dropped and
+re-taken whenever the window changes size mid-drag, which is what dragging off
+a snap does.
+
+The taskbar fix is a second cache, not a re-render: the bar's painter blends,
+so re-rendering it over the dragged window shows the window through it. The
+scene snapshot already has it composited correctly, so those pixels are kept
+and blitted back.
+
+**Gates**: `pc64/build.sh` at `UNO_DEBUG=0` and `UNO_DEBUG=1`; `unoui/build.sh`;
+`wm_a`, `wm_b`, `wm_c` and `WM_REQUIRE_EDGE=1 wm_d` all PASS on
+`UNO_DETACH=1 UNO_DEBUG=1`. Corrections 25-26 added to the spec's §13, and §3's
+"the 1.5x budget is not reachable" note is marked superseded.
