@@ -2886,3 +2886,52 @@ drive the PS/2 mouse on a detached boot.
 `unoui/build.sh` (host contact sheet + storyboard, all 8 themes);
 `python3 harness.py wm_a` on the production build AND on
 `UNO_DEBUG=1 UNO_DETACH=1`, both PASS on all 11 assertions.
+
+---
+
+## 2026-07-31 - WM phase B LANDED (toolkits lane): titlebar minimize/maximize
+
+Commits `6a994345`..`bdd8cae0` plus this note. Depends on phase A's
+`UI_ACT_MIN`/`UI_ACT_MAX`, `unoui_window.snap`/`restore_r` and
+`render_one_window()`, and on phase D's `wm_park()`/`wm_unpark()` and MRU
+stack; nothing of either was duplicated.
+
+**unoui.** `unoui_metrics` gains `minbox` / `maxbox` (appended; 0 = this theme
+has no such button, which is what every theme that never sets them reads). ONE
+generic painter draws the boxes from the palette, exactly like the resize grip
+- no per-theme artwork - and it is called from `render_one_window()`, so the
+buttons are correct in the live-drag single-window repaint too.
+`unoui_titlebtn_rect()` is the single source of geometry for both the painter
+and the hit-test, so a click can only land where a button was drawn. Title-bar
+precedence is now close, min, max, double-click, drag: a button press returns
+before the double-click tracker, so clicking a box twice is two button presses
+and never a maximize. Opted in: Aurora Light/Dark, UnoDOS, Win 3.1, NeXTSTEP.
+Opted out with explicit 0s and a reason in each file: Mac Plus, Mac OS 7, C64,
+Apple II, Amiga. Win 3.1's decorative caption buttons are retired in favour of
+the real ones.
+
+**Shell.** Minimize is policy over phase D's park primitives - no second
+"hidden" flag. Routes in: the `UI_ACT_MIN` box, the taskbar chip toggle
+(focused parks, parked or unfocused comes forward), `Ctrl-M` (the
+ctrl-reachable twin of Alt+Down; no 0x0D alias, that is Enter; gated off while
+a text field has the caret), and the remote focus/close verbs, which now
+unpark first. Parked chips draw dimmed with no accent underline. `minN=1`
+joins `geomN=`/`snapN=` in SHELL.CFG; an absent key reads as 0, so older files
+behave exactly as before. `UI_ACT_MAX` goes through phase A's existing handler
+-> `wm_snap()` -> `unoui_snap_apply()`: one path for the box, the double-click
+and Alt+Up.
+
+**Gates** (all green): `pc64/build.sh` at `UNO_DEBUG=0` and `UNO_DEBUG=1`;
+`unoui/build.sh` (the contact sheet shows the buttons on UnoDOS, Win 3.1 and
+NeXTSTEP and none on the five that opt out); `python3 harness.py wm_b` PASS,
+13 checks, on `UNO_DETACH=1 UNO_DEBUG=1`. `wm_a` and `wm_d`
+(`WM_REQUIRE_EDGE=1`) re-run as regressions on the same build, both PASS.
+
+**The clicks are real now.** Phase A's PS/2 pointer recipe (correction 13.10)
+retires phase B's "metal-only" caveat: `wm_b` clicks the actual minimize and
+maximize boxes and the actual taskbar chip, and asserts `minN=` over a power
+cycle on the real FAT image. Two traps behind that, recorded as corrections
+13.13 and 13.14: a chip handler cannot ask `focused_app()` who had focus (the
+press already raised the taskbar - use `g_mru[0]`), and a window's diff bbox
+starts at its drop shadow, so aim clicks at chrome whose position you can
+derive rather than hunt for.
