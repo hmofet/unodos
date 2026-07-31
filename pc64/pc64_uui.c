@@ -3640,6 +3640,164 @@ static void drag_scene_without(unoui_window *win)
     g_hidden_app = -1;
 }
 
+/* ---- live drag: the dragged window's pixels, cached ------------------------
+ * A window's CONTENT cannot change while its title bar is being dragged, so
+ * re-running the widget pass every frame is wasted work. Cache the rendered
+ * window once at drag start and blit it thereafter.
+ *
+ * What a move DOES invalidate is the translucent perimeter - the drop shadow
+ * (six expanding alpha layers) and the anti-aliased corner arcs - because those
+ * are composited against whatever is behind the window, and behind it is
+ * different at every position. Measured on this build, that perimeter is also
+ * where most of the paint went: 49.8 Mcyc per drag frame, of which 31 Mcyc was
+ * the shadow alone. So the cached blit deliberately SKIPS the four corner
+ * squares, and the perimeter is repainted CLIPPED to a thin ring: the shadow
+ * still costs six passes, but over ~21 k pixels of ring instead of ~178 k
+ * pixels of window.
+ *
+ * Falls back to a full unoui_render_window whenever the cache is unusable (no
+ * memory, or the window changed size mid-drag, which happens when a drag
+ * un-snaps a snapped window). */
+extern void *malloc(unsigned long);      /* pc64_libc.c; no libc header here   */
+extern void  free(void *);
+
+static fb_px *g_dragpix;                 /* cached window image, row-major     */
+static int g_dragpix_cap;                /* pixels the buffer can hold         */
+static int g_dragpix_w, g_dragpix_h;     /* the rect it was captured at        */
+
+/* how far past win->r the theme's shadow reaches, and the corner radius the
+ * anti-aliased arcs occupy. Generous by a few pixels on purpose: too wide only
+ * repaints ring that did not need it, too narrow leaves a stale halo. */
+static int drag_ring_px(void) { return UI.theme->m.shadow_off + 6; }
+static int drag_corner_px(void)
+{
+    int rad = UI.theme->m.radius + 2, lim;
+    if (rad < 2) rad = 2;
+    lim = (UI.theme->m.frame_w + 2);
+    if (rad < lim) rad = lim;
+    return rad;
+}
+
+static void drag_cache_drop(void)
+{
+    if (g_dragpix) { free(g_dragpix); g_dragpix = 0; }
+    g_dragpix_cap = g_dragpix_w = g_dragpix_h = 0;
+}
+
+/* Copy the window just drawn at win->r out of the framebuffer. */
+static void drag_cache_take(const unoui_window *win)
+{
+    int w = win->r.w, h = win->r.h, y;
+    if (w <= 0 || h <= 0 || win->r.x < 0 || win->r.y < 0 ||
+        win->r.x + w > FB_W || win->r.y + h > FB_H) { drag_cache_drop(); return; }
+    if (g_dragpix_cap < w * h) {
+        drag_cache_drop();
+        g_dragpix = (fb_px *)malloc((unsigned long)w * h * sizeof(fb_px));
+        if (!g_dragpix) return;
+        g_dragpix_cap = w * h;
+    }
+    for (y = 0; y < h; y++)
+        memcpy(g_dragpix + (long)y * w, fb + (long)(win->r.y + y) * FB_W + win->r.x,
+               (unsigned long)w * sizeof(fb_px));
+    g_dragpix_w = w; g_dragpix_h = h;
+}
+
+/* Repaint the chrome clipped to one box. */
+static void drag_chrome_in(unoui_window *win, int x, int y, int w, int h)
+{
+    if (w <= 0 || h <= 0) return;
+    fb_set_clip(x, y, w, h);
+    unoui_render_window_chrome(&UI, win);
+    fb_reset_clip();
+}
+
+/* Put the cached window back at its new rect. 0 = the cache was unusable and
+ * the caller must render the window the slow way. */
+static int drag_blit_window(unoui_window *win)
+{
+    int x = win->r.x, y = win->r.y, w = win->r.w, h = win->r.h;
+    int s = drag_ring_px(), c = drag_corner_px();
+    if (!g_dragpix || g_dragpix_w != w || g_dragpix_h != h) return 0;
+    if (c * 2 > w || c * 2 > h) return 0;          /* window smaller than its own corners */
+    /* Everything but the four corner squares is opaque, so it blits verbatim.
+       The corners are left showing the restored scene, which is exactly the
+       background the arcs below must composite against. */
+    fb_blit(x + c, y,         w - 2 * c, c,         g_dragpix + c, w);
+    fb_blit(x,     y + c,     w,         h - 2 * c, g_dragpix + (long)c * w, w);
+    fb_blit(x + c, y + h - c, w - 2 * c, c,
+            g_dragpix + (long)(h - c) * w + c, w);
+    /* the four corner arcs, then the shadow ring outside the window */
+    drag_chrome_in(win, x,         y,         c, c);
+    drag_chrome_in(win, x + w - c, y,         c, c);
+    drag_chrome_in(win, x,         y + h - c, c, c);
+    drag_chrome_in(win, x + w - c, y + h - c, c, c);
+    drag_chrome_in(win, x - s,     y - s,     w + 2 * s, s);
+    drag_chrome_in(win, x - s,     y + h,     w + 2 * s, s);
+    drag_chrome_in(win, x - s,     y,         s,         h);
+    drag_chrome_in(win, x + w,     y,         s,         h);
+    return 1;
+}
+
+/* Windows pinned ABOVE the dragged one - the taskbar, a popover - must stay
+ * above it. The scene snapshot is taken once and the dragged window is drawn
+ * over it every frame, so nothing put them back: a window dragged to the
+ * bottom of the screen painted straight across the taskbar.
+ *
+ * They are RE-BLITTED, not re-rendered. The taskbar's own painter blends (it
+ * is a translucent bar), so drawing it again over the window shows the window
+ * through it. The snapshot already holds them correctly composited over the
+ * desktop, so the fix is to keep those pixels and put them back. One union
+ * rect covers the lot; the desktop it may also span is part of the same static
+ * scene, so blitting it back is a no-op there. */
+static fb_px *g_dragtop;
+static int g_dragtop_cap;
+static unoui_rect g_dragtop_r;
+
+static void drag_top_drop(void)
+{
+    if (g_dragtop) { free(g_dragtop); g_dragtop = 0; }
+    g_dragtop_cap = 0; g_dragtop_r.w = g_dragtop_r.h = 0;
+}
+
+/* Call with the fb holding the scene WITHOUT the dragged window. */
+static void drag_top_take(int wi)
+{
+    unoui_rect u; int k, first = 1, y;
+    drag_top_drop();
+    u.x = u.y = u.w = u.h = 0;
+    for (k = wi + 1; k < UI.nwin; k++) {
+        unoui_rect o = UI.win[k]->r;
+        if (o.w <= 0 || o.h <= 0) continue;
+        if (first) { u = o; first = 0; continue; }
+        if (o.x < u.x)                 { u.w += u.x - o.x; u.x = o.x; }
+        if (o.y < u.y)                 { u.h += u.y - o.y; u.y = o.y; }
+        if (o.x + o.w > u.x + u.w)     u.w = o.x + o.w - u.x;
+        if (o.y + o.h > u.y + u.h)     u.h = o.y + o.h - u.y;
+    }
+    if (first) return;                              /* nothing pinned above */
+    if (u.x < 0) { u.w += u.x; u.x = 0; }
+    if (u.y < 0) { u.h += u.y; u.y = 0; }
+    if (u.x + u.w > FB_W) u.w = FB_W - u.x;
+    if (u.y + u.h > FB_H) u.h = FB_H - u.y;
+    if (u.w <= 0 || u.h <= 0) return;
+    g_dragtop = (fb_px *)malloc((unsigned long)u.w * u.h * sizeof(fb_px));
+    if (!g_dragtop) return;
+    g_dragtop_cap = u.w * u.h;
+    for (y = 0; y < u.h; y++)
+        memcpy(g_dragtop + (long)y * u.w, fb + (long)(u.y + y) * FB_W + u.x,
+               (unsigned long)u.w * sizeof(fb_px));
+    g_dragtop_r = u;
+}
+
+static void drag_top_put(unoui_rect r)
+{
+    unoui_rect u = g_dragtop_r;
+    if (!g_dragtop || u.w <= 0) return;
+    if (r.x >= u.x + u.w || u.x >= r.x + r.w ||
+        r.y >= u.y + u.h || u.y >= r.y + r.h) return;   /* window nowhere near */
+    fb_blit(u.x, u.y, u.w, u.h, g_dragtop, u.w);
+}
+
 /* the legacy app index currently in front (fullscreen or focused), or -1 */
 static int active_legacy(void)
 {
@@ -3865,8 +4023,14 @@ int main(void)
                 }
                 uno_pc64_scene_save();
                 if (UI.drag_active) unoui_draw_drag_outline(&UI);
-                else if (dw)      { unoui_draw_snap_preview(&UI);
-                                    unoui_render_window(&UI, dw); }
+                else if (dw)      { /* the fb still holds the scene WITHOUT the
+                                       dragged window: exactly the state both
+                                       caches want to be taken from. */
+                                    drag_top_take(UI.cap_win);
+                                    unoui_draw_snap_preview(&UI);
+                                    unoui_render_window(&UI, dw);
+                                    drag_cache_take(dw);
+                                    drag_top_put(dw->r); }
                 uno_pc64_present();
                 g_dirty = 0;
             } else if (g_dirty) {                /* the drag moved */
@@ -3877,8 +4041,17 @@ int main(void)
                    where the window is going, so the window itself must stay
                    the thing you are looking at. */
                 if (UI.drag_active) unoui_draw_drag_outline(&UI);
-                else if (dw)      { unoui_draw_snap_preview(&UI);
-                                    unoui_render_window(&UI, dw); }
+                else if (dw)      {
+                    unoui_draw_snap_preview(&UI);
+                    if (!drag_blit_window(dw)) {   /* cache unusable: the slow
+                                                      way, and re-take it (the
+                                                      window resized when the
+                                                      drag un-snapped it) */
+                        unoui_render_window(&UI, dw);
+                        drag_cache_take(dw);
+                    }
+                    drag_top_put(dw->r);
+                }
                 drag_paint_note(drag_cyc_now() - t1);
                 uno_pc64_present();
                 drag_cyc_note(drag_cyc_now() - t0);
@@ -3890,6 +4063,8 @@ int main(void)
             if (was_dragging) {                  /* drag ended: full repaint to
                                                     commit shadows + occlusion */
                 g_dirty = 1;
+                drag_cache_drop();               /* content is live again */
+                drag_top_drop();
                 drag_cyc_report(UI.live_drag ? "live" : "outline");
                 session_save();                  /* the new position is session state */
             }
