@@ -222,12 +222,35 @@ What this phase actually turned out to be:
   BIOS. That line was hardcoded, and the System window is exactly where someone
   looks to find out what a machine is doing.
 
-**Still open: the installer's BIOS target.** `Install` writes an ESP and a
-`Boot####` variable, and `SetVariable` does not exist here; the BIOS equivalent
-is writing the MBR, stage2 and the kernel to the reserved area of the target
-disk. `tools/mkbios.py` already knows that layout, so the work is porting it
-into `installer.c` rather than designing it. Until then a BIOS machine is
-installed by writing the image to its disk from another computer.
+**The installer's BIOS target: DONE 2026-07-31.** `Install` now authors the
+MBR shape when the running machine booted from a BIOS
+(`unostorage_prepare_mbr` + `unostorage_write_bootchain`), and
+`tools/bios_install_test.py` proves it the only way that counts: install onto a
+blank second disk, then **boot that disk as the only disk**. It comes up
+(`shots/bios_inst_booted.png`), and the same disk also boots under OVMF
+(`shots/bios_inst_uefi.png`), because its partition is typed 0xEF.
+
+Three things worth carrying:
+
+- **GPT and this boot chain are mutually exclusive**, which is why the shape is
+  chosen rather than added: a GPT's primary header sits at LBA 1 and its entry
+  array at LBA 2-33, exactly where stage2 goes. A disk is one shape or the
+  other. A UEFI boot keeps authoring GPT, unchanged - the MBR shape is the more
+  capable of the two, but it is chosen only where it is necessary rather than
+  everywhere it would work.
+- **The chain travels with the system.** `tools/mkbios.py` stages the boot
+  sector, the ALREADY-PATCHED stage2 and the kernel at `\BOOT\` on the volume,
+  so the installer copies three blobs to three LBAs with no PE parsing and no
+  arithmetic that could disagree with the image builder's.
+- **`prepare_mbr` leaves the disk deliberately BIOS-inert** - a zeroed boot
+  sector with a valid partition table - and the chain goes down last, after the
+  tree. A disk that says "boot me" before the system it would boot is on it is
+  worse than one that does not claim to.
+
+The test's own lesson: it originally waited a fixed 20 s for the copy, which
+expired mid-install and produced a disk that "booted" to a hang - a failure
+indistinguishable from a broken boot chain. It now polls the target file for the
+boot sector, because QEMU writes through and the chain is written last.
 
 ## Phase D, the old-machine tier
 

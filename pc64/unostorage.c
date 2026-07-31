@@ -197,6 +197,126 @@ int unostorage_gpt_finalize_clone(unostorage_dev *d)
     return write_gpt(d, dg);
 }
 
+/* ===========================================================================
+ * The legacy-BIOS shape: MBR + reserved boot area + one 0xEF FAT32 partition.
+ * See the block comment in unostorage.h; the layout matches tools/mkbios.py so
+ * a disk authored here and an image built there are interchangeable.
+ * ======================================================================== */
+#define MBR_PART_OFF   0x1BE
+#define MBR_PART_ESP   0xEF
+
+/* One MBR partition entry. The CHS fields are the 0xFE/0xFF/0xFF "beyond CHS,
+ * use LBA" sentinel rather than a computed geometry: everything that reads this
+ * disk reads the LBA fields, and a computed CHS triple is wrong for any disk
+ * over 8 GiB and right nowhere that matters. */
+static void mbr_entry(unsigned char *e, unsigned int first, unsigned int count)
+{
+    e[0] = 0x80;                                  /* bootable */
+    e[1] = 0xFE; e[2] = 0xFF; e[3] = 0xFF;        /* start CHS: use LBA */
+    e[4] = MBR_PART_ESP;
+    e[5] = 0xFE; e[6] = 0xFF; e[7] = 0xFF;        /* end CHS: use LBA */
+    e[8]  = (unsigned char)(first & 0xFF);
+    e[9]  = (unsigned char)((first >> 8) & 0xFF);
+    e[10] = (unsigned char)((first >> 16) & 0xFF);
+    e[11] = (unsigned char)((first >> 24) & 0xFF);
+    e[12] = (unsigned char)(count & 0xFF);
+    e[13] = (unsigned char)((count >> 8) & 0xFF);
+    e[14] = (unsigned char)((count >> 16) & 0xFF);
+    e[15] = (unsigned char)((count >> 24) & 0xFF);
+}
+
+int unostorage_prepare_mbr(uno_bdev *dev, const char *label)
+{
+    unostorage_dev d;
+    static unsigned char sec[512];
+    unsigned long long diskSectors, volSectors;
+    const unsigned long long MAX_SECTORS = 0xFFFFFFFFull;  /* FAT32 + MBR are 32-bit */
+    /* The reserved area plus a volume worth having. mkbios.py refuses to build
+     * an image whose kernel would run past the reserved area; the same bound
+     * applies here, but the kernel is not in hand at this point, so the check
+     * lives in unostorage_write_bootchain(). */
+    const unsigned long long MIN_SECTORS =
+        UNOSTORAGE_BIOS_RESERVED + 96ull * 1024 * 1024 / 512;
+
+    if (!dev || !dev->write) return 0;
+    d = unostorage_from_bdev(dev);
+    diskSectors = d.sectors;
+    if (diskSectors < MIN_SECTORS) return 0;
+
+    volSectors = diskSectors - UNOSTORAGE_BIOS_RESERVED;
+    if (volSectors > MAX_SECTORS) volSectors = MAX_SECTORS;
+
+    /* A ZEROED boot sector with just a partition table, deliberately. The real
+     * boot code arrives in unostorage_write_bootchain(); until it does this
+     * disk is UEFI-bootable and BIOS-inert, which is the honest intermediate
+     * state. A disk that says "boot me" and cannot is worse than one that does
+     * not claim to. */
+    memset(sec, 0, sizeof sec);
+    mbr_entry(sec + MBR_PART_OFF, UNOSTORAGE_BIOS_RESERVED,
+              (unsigned int)volSectors);
+    sec[510] = 0x55; sec[511] = 0xAA;
+    if (!d.write(d.ctx, 0, 1, sec)) return 0;
+
+    return uno_fat_mkfs(dev, UNOSTORAGE_BIOS_RESERVED, volSectors, label);
+}
+
+int unostorage_write_bootchain(uno_bdev *dev,
+                               const unsigned char *boot, unsigned long boot_len,
+                               const unsigned char *stage2, unsigned long stage2_len,
+                               const unsigned char *kernel, unsigned long kernel_len)
+{
+    unostorage_dev d;
+    static unsigned char sec[512];
+    static unsigned char buf[UNOSTORAGE_BIOS_STAGE2_SECS * 512];
+    unsigned long long lba;
+    unsigned long off;
+
+    if (!dev || !dev->write || !boot || !stage2 || !kernel) return 0;
+    if (boot_len != 512) return 0;
+    if (boot[510] != 0x55 || boot[511] != 0xAA) return 0;   /* not a boot sector */
+    if (stage2_len == 0 || stage2_len > sizeof buf) return 0;
+    if (kernel_len == 0) return 0;
+
+    d = unostorage_from_bdev(dev);
+
+    /* The kernel must fit in the reserved area, or it would run into the
+     * filesystem - and the corruption would appear later, somewhere else, as a
+     * damaged file. Refuse now, where the cause is still visible. */
+    if (UNOSTORAGE_BIOS_KERNEL_LBA + (kernel_len + 511) / 512
+        > UNOSTORAGE_BIOS_RESERVED)
+        return 0;
+
+    /* THE PARTITION TABLE ON THE DISK WINS. The boot sector we were handed is
+     * the build's, and its table is empty; the disk's was authored by
+     * unostorage_prepare_mbr and describes the volume that was just formatted.
+     * Copying the first 446 bytes only is what lets the boot code be installed
+     * without knowing, or being able to damage, the partitioning. */
+    if (!d.read(d.ctx, 0, 1, sec)) return 0;
+    memcpy(sec, boot, MBR_PART_OFF);
+    sec[510] = 0x55; sec[511] = 0xAA;
+    if (!d.write(d.ctx, 0, 1, sec)) return 0;
+
+    memset(buf, 0, sizeof buf);
+    memcpy(buf, stage2, stage2_len);
+    if (!d.write(d.ctx, UNOSTORAGE_BIOS_STAGE2_LBA,
+                 UNOSTORAGE_BIOS_STAGE2_SECS, buf))
+        return 0;
+
+    /* The kernel, a sector-padded chunk at a time. */
+    lba = UNOSTORAGE_BIOS_KERNEL_LBA;
+    for (off = 0; off < kernel_len; off += sizeof buf) {
+        unsigned long n = kernel_len - off;
+        unsigned int secs;
+        if (n > sizeof buf) n = sizeof buf;
+        memset(buf, 0, sizeof buf);
+        memcpy(buf, kernel + off, n);
+        secs = (unsigned int)((n + 511) / 512);
+        if (!d.write(d.ctx, lba, secs, buf)) return 0;
+        lba += secs;
+    }
+    return 1;
+}
+
 int unostorage_find_esp(unostorage_dev *d, unsigned long long *first,
                         unsigned long long *last, unsigned char guid[16])
 {
