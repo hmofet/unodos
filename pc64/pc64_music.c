@@ -25,6 +25,7 @@
 #include "pc64_fs.h"
 #include "pc64_media.h"
 #include "snd_pcm.h"
+#include "unoamp.h"
 #include "fat.h"
 #include "pc64_icons.h"     /* pc64_shell_theme */
 #include "unosound.h"
@@ -281,6 +282,17 @@ static int mu_play_index(int idx)
         return 0;
     }
     mu_describe(mu_e[idx].name);
+    /* UnoAmp: the sink has to be able to CARRY this before the transport
+     * starts. Without the check a machine with no DAC ran the transport, the
+     * level meter and the progress readout into a ring that did not exist -
+     * silence with no indication the machine could not play it. */
+    if (!(unoamp_caps() & UNOAMP_CAP_PCM)) {
+        const unoamp_out *o = unoamp_current_out();
+        strcpy(mu_now, "Cannot play that file");
+        strcpy(mu_meta, o ? "the selected output carries no sampled audio"
+                          : "no audio hardware found");
+        return 0;
+    }
     uno_snd_stream_begin(mu_info.rate, mu_info.channels);
     mu_track = idx;
     mu_state = ST_PLAY;
