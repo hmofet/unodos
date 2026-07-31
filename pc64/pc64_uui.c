@@ -2745,6 +2745,18 @@ static void wm_minimize_all(void)
     g_dirty = 1;
 }
 
+/* Send `a`'s whole link group to desktop `d`. The fourth thing a set does
+ * together (after move, raise and minimize/restore): a group split across two
+ * desktops would be a group in name only. Nothing follows it - see the menu
+ * builder - so wm_desk_move's `follow` is 0 for every member. */
+static void wm_group_desk_move(int a, int d, int follow)
+{
+    int set[NAPPS], n, i;
+    n = wm_group_set(a, set);
+    for (i = 0; i < n; i++) wm_desk_move(set[i], d, i == n - 1 ? follow : 0);
+    rebuild_taskbar();
+}
+
 /* join / leave a link group (0 = leave). Group membership is session state
  * like geometry, so it is saved the same way. */
 static void wm_group_join(int a, int gid)
@@ -2806,6 +2818,7 @@ static void pop_activate(int row)
     case POP_SNAPL:    wm_snap(a, WM_SNAP_L); break;
     case POP_SNAPR:    wm_snap(a, WM_SNAP_R); break;
     case POP_GROUP:    wm_group_join(a, arg); break;
+    case POP_DESK:     wm_group_desk_move(a, arg, 0); break;
     case POP_CLOSE:    close_app(a); break;
     case POP_ACTIVATE: if (g_parked[arg]) restore_app(arg); else open_app(arg); break;
     case POP_TILE:     wm_tile(); break;
@@ -2881,6 +2894,16 @@ static void pop_window_menu(int a, int x, int y)
     pop_add("Maximize",   POP_MAX,   0, -1);
     pop_add("Snap left",  POP_SNAPL, 0, -1);
     pop_add("Snap right", POP_SNAPR, 0, -1);
+    pop_add(0, POP_SEP, 0, -1);
+    /* phase E's desktops. SENDING, not following: a menu item aimed at one
+     * window should move that window, and leave you looking at the desktop you
+     * were on - which is also what wm_desk_move's `follow` argument exists to
+     * let this decide (Alt+Ctrl+Fn is the follow form). The desktop the window
+     * already lives on is marked, and moving to it is a harmless no-op. */
+    pop_add(g_desk_of[a] == 0 ? "To desktop 1 *" : "To desktop 1", POP_DESK, 0, -1);
+    pop_add(g_desk_of[a] == 1 ? "To desktop 2 *" : "To desktop 2", POP_DESK, 1, -1);
+    pop_add(g_desk_of[a] == 2 ? "To desktop 3 *" : "To desktop 3", POP_DESK, 2, -1);
+    pop_add(g_desk_of[a] == 3 ? "To desktop 4 *" : "To desktop 4", POP_DESK, 3, -1);
     pop_add(0, POP_SEP, 0, -1);
     pop_add(g_group[a] == 0 ? "Group: none *" : "Group: none", POP_GROUP, 0, -1);
     pop_add(g_group[a] == 1 ? "Group: A *"    : "Group: A",    POP_GROUP, 1, -1);
@@ -3979,7 +4002,8 @@ static int pump_input(void)
             !(scan == 0x0E && !(mods & UI_MOD_ALT) && g_open[EX_BROWSER] &&
               UI.focus_win >= 0 && UI.focus_win < UI.nwin &&
               UI.win[UI.focus_win] == &g_win[EX_BROWSER])) {
-            if (mods & UI_MOD_ALT) wm_desk_move(wm_target_app(), scan - 0x0B, 1);
+            if (mods & UI_MOD_ALT)                       /* the set goes too */
+                wm_group_desk_move(wm_target_app(), scan - 0x0B, 1);
             else                   wm_desk_switch(scan - 0x0B);
             continue;
         }
