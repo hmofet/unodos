@@ -1194,6 +1194,48 @@ void unoui_bg_invalidate(void) { }
 
 void (*unoui_profile_win)(const char *title, int begin);
 
+/* corner grip: three diagonal ridges (light over shadow), the classic "this
+ * corner drags" affordance - clearer than the old faint dot cluster the user
+ * couldn't find. */
+static void draw_resize_grip(const unoui_theme *t, const unoui_window *win)
+{
+    int fw = t->m.frame_w;
+    int bx = win->r.x + win->r.w - fw, by = win->r.y + win->r.h - fw, k;
+    if (!(win->flags & UI_WIN_RESIZE) || (win->flags & UI_WIN_BARE)) return;
+    for (k = 0; k < 3; k++) {
+        int o = 4 + k * 4, j;
+        for (j = 0; j < o; j++) {
+            fb_pixel(bx - o + j - 1, by - 1 - j, t->pal.light);
+            fb_pixel(bx - o + j,     by - 1 - j, t->pal.shadow);
+        }
+    }
+}
+
+/* Everything of a window that is NOT its widgets: shadow, frame, title bar,
+ * title-bar buttons, resize grip. Honours the caller's clip, so a platform
+ * holding a cached image of the window's opaque interior can repaint just the
+ * translucent perimeter - the only part that a MOVE invalidates, because it is
+ * composited against whatever is behind it. */
+static void render_window_chrome(unoui_ui *ui, unoui_window *win, int wn)
+{
+    const unoui_theme *t = ui->theme;
+    const unoui_draw *d = t->draw ? t->draw : &unoui_default_draw;
+    if (win->flags & UI_WIN_BARE) return;   /* desktop/taskbar have no chrome */
+    win->active = (wn == ui->focus_win);
+    PICK(window)(t, win);
+    PICK(titlebar)(t, win);
+    draw_title_buttons(t, win);
+    draw_resize_grip(t, win);
+}
+
+void unoui_render_window_chrome(unoui_ui *ui, unoui_window *win)
+{
+    int wn;
+    if (!win) return;
+    for (wn = 0; wn < ui->nwin; wn++) if (ui->win[wn] == win) break;
+    render_window_chrome(ui, win, wn < ui->nwin ? wn : -1);
+}
+
 /* One window, chrome + widgets, with the interaction state its z-index `wn`
  * implies (focus, hot, pressed, the open menu). Shared by unoui_render_ui and
  * unoui_render_window so a platform repainting a single window during a live
@@ -1215,9 +1257,7 @@ static void render_one_window(unoui_ui *ui, unoui_window *win, int wn)
     } else {
         /* chrome (frame, titlebar, shadow) draws unclipped - its painters
          * are authored not to overflow win->r. */
-        PICK(window)(t, win);
-        PICK(titlebar)(t, win);
-        draw_title_buttons(t, win);
+        render_window_chrome(ui, win, wn);
         /* widgets are confined to the content rect (the region d_window
          * fills below the titlebar) so an over-sized widget or a too-long
          * label is cut at the frame instead of spilling onto the desktop. */
@@ -1242,19 +1282,7 @@ static void render_one_window(unoui_ui *ui, unoui_window *win, int wn)
     }
       if (fontpushed) unoui_font_pop(); }
     fb_reset_clip();
-    if ((win->flags & UI_WIN_RESIZE) && !(win->flags & UI_WIN_BARE)) {
-        /* corner grip: three diagonal ridges (light over shadow), the
-         * classic "this corner drags" affordance - clearer than the old
-         * faint dot cluster the user couldn't find. */
-        int bx = win->r.x + win->r.w - fw, by = win->r.y + win->r.h - fw, k;
-        for (k = 0; k < 3; k++) {
-            int o = 4 + k * 4, j;
-            for (j = 0; j < o; j++) {
-                fb_pixel(bx - o + j - 1, by - 1 - j, t->pal.light);
-                fb_pixel(bx - o + j,     by - 1 - j, t->pal.shadow);
-            }
-        }
-    }
+    draw_resize_grip(t, win);
     if (unoui_profile_win)
         unoui_profile_win((win->flags & UI_WIN_BARE) ? "(shell)" :
                           (win->title ? win->title : "(untitled)"), 0);
