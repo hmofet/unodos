@@ -2750,3 +2750,30 @@ the truth in the single field the whole detach programme is about, and I
 reported the ZimaBlade as running attached on the strength of it before the
 System window corrected me.
 
+
+## 2026-07-31 — CLAIM (toolkits lane): unoui window-management modernization
+
+**Status: CLAIMED, work not started.** Design: `docs/WM-MODERN-PLAN.md`; the
+implementation spec the worker follows is `docs/WM-MODERN-SPEC.md`.
+
+Taking the window-management slice of the toolkits lane (`unoui/*`,
+`pc64_uui*`, plus the shell-owned input funnel): live opaque window drag
+(retiring the rubber-band outline as the pc64 default), titlebar
+minimize/maximize buttons, edge snapping with drag previews, an MRU Alt-Tab
+switcher, virtual desktops, link-groups, tile/cascade commands, a window
+context menu, taskbar overflow, and SHELL.CFG geometry persistence. Work
+lands as short phase branches `wm-a` .. `wm-f` off master, per AGENTS §3.
+
+**Cross-lane request → usb stack (usbhid owner), OPEN:** expose the HID boot
+report's **modifier byte** (report byte 0: L/R Ctrl, Shift, Alt, GUI)
+alongside the existing key stream, so the shell's new mods plumbing
+(`uno_pc64_next_key2` / `uno_pc64_mods`, spec §D) can report Alt/Win from USB
+keyboards. **Stopgap:** modifier state is sourced from UEFI
+`SimpleTextInputEx` shift state (attached) and native PS/2 scan tracking
+(detached); USB keyboards fall back to ctrl-only bindings until this lands.
+
+**FYI → BIOS-boot lane, no action needed:** phases A-F touch `uefi_main.c`
+ONLY in the input section (`map_key`, the raw key ring, pointer polling) to
+add a mods byte — not boot wiring. If the BIOS path grows its own keyboard
+source, feed the same raw ring; the widened `(scan, uni, mods)` entry is the
+contract to target.
