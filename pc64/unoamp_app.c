@@ -243,6 +243,10 @@ void unoamp_tick(void)
  * find something to play.
  */
 static int g_started;
+/* What the opening scan saw. An empty player is ambiguous - no files, or a
+ * scan that never ran - and on a machine with no file manager open that
+ * ambiguity is expensive to resolve. So the counts go in the title well. */
+static int g_scan_vols, g_scan_files, g_scan_skins;
 
 /* Winamp read its skin from a directory of .wsz files and remembered the last
  * one. There is no settings store here yet, so this takes the first skin it
@@ -271,6 +275,7 @@ static int load_a_skin(void)
             path[0] = 0;
             strncpy(path, name, sizeof path - 1);
             path[sizeof path - 1] = 0;
+            g_scan_skins++;
             if (unoamp_skin_load(v, path)) return 1;
         }
     }
@@ -286,14 +291,37 @@ static void seed_playlist(void)
 {
     int nv = uno_fs_volumes(), v, i, n;
     char name[64];
+    g_scan_vols = nv;
     for (v = 0; v < nv && unoamp_pl_count() < 200; v++) {
         n = uno_fs_list_begin(v);
         for (i = 0; i < n && unoamp_pl_count() < 200; i++) {
             if (!uno_fs_list_get(v, i, name, (int)sizeof name)) continue;
+            g_scan_files++;
             unoamp_in_set_volume_index(v);
             if (unoamp_find_in(name)) unoamp_pl_add(v, name);
         }
     }
+}
+
+/* "V3 F47 S2 T9" - volumes scanned, files seen, skins found, tracks added.
+ * Terse because it shares a 153-pixel well with the track title, and it is
+ * only ever shown when the playlist came up empty. Four numbers separate
+ * "the disk is empty" from "the scan never ran" from "nothing was playable",
+ * which is three different bugs. */
+static void scan_report(char *out, int cap)
+{
+    int vals[4], i, n = 0;
+    const char *tag = "VFST";
+    vals[0] = g_scan_vols; vals[1] = g_scan_files;
+    vals[2] = g_scan_skins; vals[3] = unoamp_pl_count();
+    for (i = 0; i < 4 && n < cap - 8; i++) {
+        int v = vals[i], d = 1;
+        out[n++] = tag[i];
+        while (v / d >= 10) d *= 10;
+        while (d) { out[n++] = (char)('0' + (v / d) % 10); d /= 10; }
+        if (i < 3) out[n++] = ' ';
+    }
+    out[n] = 0;
 }
 
 void unoamp_start(void)
@@ -302,5 +330,13 @@ void unoamp_start(void)
     g_started = 1;
     load_a_skin();
     seed_playlist();
+    if (unoamp_pl_count() > 0) {
+        unoamp_ui_set_title(g_pl[0].title);
+        g_sel = 0;
+    } else {
+        char t[48];
+        scan_report(t, (int)sizeof t);
+        unoamp_ui_set_title(t);
+    }
 }
 

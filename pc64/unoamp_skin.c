@@ -21,6 +21,7 @@
 #include "unomedia.h"
 #include "pc64_fs.h"
 #include <string.h>
+#include <stdlib.h>
 
 /* ---- ZIP ------------------------------------------------------------------
  * Only what a skin needs: the LOCAL FILE HEADER walk. The central directory is
@@ -317,6 +318,14 @@ int unoamp_skin_load(int vol, const char *path)
      * skin that happened to be to hand. */
     static unsigned char buf[1536 * 1024];
     long n, at = 0;
+
+    /* unomedia has no allocator until a consumer gives it one, and um_inflate
+     * allocates its window from it - so without this every DEFLATED skin fails
+     * while every STORED one loads, which is a maddening way to find out. Each
+     * unomedia consumer in pc64 wires this the same way; the call is
+     * idempotent, so a skin load can never disturb the browser or the media
+     * player by doing it again. */
+    um_set_alloc(malloc, free);
 
     g_used = 0; g_loaded = 0;
     memset(&g_skin, 0, sizeof g_skin);
