@@ -96,6 +96,16 @@ static int tb_h(void) { int h = fb_text_h() + 12; return h < 26 ? 26 : h; }
 
 static unoui_ui     UI;
 
+/* Publish the work area to unoui: the screen minus the taskbar, which is what
+ * unoui clamps, maximizes and snaps into. TASKH follows the active font, so
+ * this has to be re-published whenever the font, UI scale or resolution moves -
+ * see build_taskbar() and reflow(). */
+static void set_workarea(void)
+{
+    UI.work.x = 0; UI.work.y = 0;
+    UI.work.w = FB_W; UI.work.h = FB_H - TASKH;
+}
+
 /* the live theme, for theme-aware icon recolouring (pc64_icons.c) */
 const struct unoui_theme *pc64_shell_theme(void) { return UI.theme; }
 
@@ -1318,9 +1328,11 @@ static int tb_start_w(void)  { return 8 + tb_start_logo_sz() + 6 + fb_text_w("St
 static int tb_chip_x(void)   { return 6 + tb_start_w() + 6; }
 
 /* app index of the focused window, or -1 (used to highlight its taskbar chip) */
+static int g_hidden_app = -1;            /* see drag_scene_without() */
 static int focused_app(void)
 {
     int i;
+    if (g_hidden_app >= 0) return g_hidden_app;   /* lifted out for one pass */
     if (UI.focus_win < 0 || UI.focus_win >= UI.nwin) return -1;
     for (i = 0; i < NAPPS; i++) if (&g_win[i] == UI.win[UI.focus_win]) return i;
     return -1;
@@ -1512,6 +1524,7 @@ static void rebuild_taskbar(void) { g_dirty = 1; }
 
 static void build_taskbar(void)
 {
+    set_workarea();                    /* TASKH follows the font: re-publish */
     unoui_window_init(&g_task, "", 0, FB_H - TASKH, FB_W, TASKH);
     g_task.flags = UI_WIN_BARE | UI_WIN_TOP;
     unoui_add_canvas(&g_task, 0, 0, FB_W, TASKH, &g_taskcv);
@@ -1612,7 +1625,10 @@ static void build_desktop(void)
     } }
 }
 
-/* pull a window fully into the work area (screen minus the taskbar) */
+/* pull a window fully into the work area (screen minus the taskbar). unoui's
+ * own clamp keeps a GRABBABLE strip on screen, which is right for a drag but
+ * wrong for placing a freshly built window, so this stays: a window the shell
+ * opens is pulled fully inside. */
 static void clamp_to_workarea(unoui_window *w)
 {
     if (w->r.x + w->r.w > FB_W)         w->r.x = FB_W - w->r.w;
@@ -2025,15 +2041,14 @@ static void sw_tick(void)
     if (++g_sw_timer >= SW_COMMIT_TICKS) sw_commit();
 }
 
-/* ---- keyboard window commands (phase D) -----------------------------------
- * Snap geometry is computed here against the shell's own work area. Phase C
- * owns the pointer-driven snap and lands unoui_snap_apply()/unoui_snap_rect()
- * over ui->work; when it does, this helper becomes a call into those and the
- * local g_snap/g_snap_r state retires. Keeping it shell-local now is what lets
- * the keybindings ship without waiting on another phase's branch. */
-enum { WM_SNAP_NONE = 0, WM_SNAP_MAX, WM_SNAP_L, WM_SNAP_R };
-static unsigned char g_snap[NAPPS];
-static unoui_rect    g_snap_r[NAPPS];
+/* ---- window commands (keyboard, phase D; title-bar double click, phase A) --
+ * Snap geometry, the restore rect and the don't-stretch-a-fixed-layout rule now
+ * live in unoui (unoui_snap_apply over ui->work), so every route into a snap -
+ * Alt+arrows, a double-clicked title bar, and phase C's drag-to-edge - goes
+ * through this one shell entry point and cannot drift apart. WM_SNAP_* were
+ * chosen to match UI_SNAP_*, so phase D's bindings are unchanged. */
+enum { WM_SNAP_NONE = UI_SNAP_NONE, WM_SNAP_MAX = UI_SNAP_MAX,
+       WM_SNAP_L = UI_SNAP_L, WM_SNAP_R = UI_SNAP_R };
 
 static int wm_focused_app(void)
 {
@@ -2046,32 +2061,9 @@ static int wm_focused_app(void)
 
 static void wm_snap(int a, int snap)
 {
-    unoui_window *win;
-    unoui_rect wr, tr;
     if (a < 0 || a >= NAPPS || !g_open[a] || g_parked[a]) return;
-    win = &g_win[a];
-    wr.x = 0; wr.y = 0; wr.w = FB_W; wr.h = FB_H - TASKH;
-    tr = wr;
-    switch (snap) {
-    case WM_SNAP_L: tr.w = wr.w / 2; break;
-    case WM_SNAP_R: tr.w = wr.w / 2; tr.x = wr.w - tr.w; break;
-    case WM_SNAP_MAX: break;
-    default:                                     /* restore */
-        if (g_snap[a]) { win->r = g_snap_r[a]; g_snap[a] = WM_SNAP_NONE;
-                         unoui_reflow_window(UI.theme, win); g_dirty = 1; }
-        return;
-    }
-    if (!g_snap[a]) g_snap_r[a] = win->r;        /* first snap keeps the origin */
-    if (win->flags & UI_WIN_RESIZE) {
-        win->r = tr;
-        unoui_reflow_window(UI.theme, win);
-    } else {                                     /* fixed layout: move only    */
-        win->r.x = tr.x + (tr.w - win->r.w) / 2;
-        win->r.y = tr.y + (tr.h - win->r.h) / 2;
-        if (win->r.x < tr.x) win->r.x = tr.x;
-        if (win->r.y < tr.y) win->r.y = tr.y;
-    }
-    g_snap[a] = (unsigned char)snap;
+    unoui_snap_apply(&UI, &g_win[a], snap);
+    session_save();                     /* geometry is part of the session now */
     g_dirty = 1;
 }
 
@@ -2105,7 +2097,8 @@ static void close_focused(void)
     for (i = 0; i < NAPPS; i++) if (&g_win[i] == win) {
         int g = app_game(i);
         g_open[i] = 0;
-        g_parked[i] = 0; g_snap[i] = WM_SNAP_NONE;   /* window-manager state dies with it */
+        g_parked[i] = 0;                             /* window-manager state dies with it */
+        g_win[i].snap = UI_SNAP_NONE;
         if (g >= 0)              pc64_game_close(g);        /* native game teardown */
         else if (i == APP_MUSIC) pc64_music_closed();       /* stop playback      */
         else if (i == EX_STUDIO) { if (g_studio && g_studio->closed) g_studio->closed(); }
@@ -2124,17 +2117,41 @@ static void close_focused(void)
     g_dirty = 1;
 }
 
-/* ---- session restore (SHELL.CFG) ------------------------------------------
- * Persist the "restore" preference and the set of open, restorable windows so
- * the next boot can reopen them. Only stable apps are saved (native apps + the
- * Browser); games, transient user/Python slots and loadable modules are not.
- * The file is a couple of `key=value` lines on the first writable volume. */
+/* ---- session restore (SHELL.CFG v2) ---------------------------------------
+ * Persist the "restore" preference, the set of open restorable windows, and
+ * each one's geometry, so the next boot reopens them WHERE THEY WERE. Only
+ * stable apps are saved (native apps + the Browser); games, transient
+ * user/Python slots and loadable modules are not.
+ *
+ * Line-oriented `key=value`, CRLF, purely additive: an older build ignores the
+ * keys it does not know (cfg_line_val matches whole keys), and a newer build
+ * reading an older file just finds no geometry and uses the designed position.
+ *
+ *   restore=1
+ *   open=0,2,14
+ *   geom0=40,20,520,380      x,y,w,h - the RESTORE rect, not the snapped one
+ *   snap0=0                  UI_SNAP_*
+ */
 static int app_restorable(int a)
 { return (a >= 0 && a < NNATIVE) || a == EX_BROWSER; }
 
+/* Where SHELL.CFG belongs. Volume 0 is the RAM disk, so "the first writable
+ * volume" - what this used to do - wrote the session to a filesystem that dies
+ * with the power, and no window has ever actually reopened where it was left.
+ * Prefer a native FAT partition, then any other persistent volume, and only
+ * fall back to RAM when the machine has nothing else. Same order unosecure
+ * picks for its own store (pick_vol, unosecure.c). */
+static int session_vol(void)
+{
+    int n = uno_fs_volumes(), v;
+    for (v = 1; v < n; v++) if (uno_fs_kind(v) == 1 && uno_fs_writable(v)) return v;
+    for (v = 1; v < n; v++) if (uno_fs_writable(v)) return v;
+    return (n > 0 && uno_fs_writable(0)) ? 0 : -1;
+}
+
 static void session_save(void)
 {
-    unsigned char buf[160]; char *p = (char *)buf; int a, first = 1, v, n;
+    unsigned char buf[640]; char *p = (char *)buf; int a, first = 1, v;
     if (!g_session_ready) return;       /* don't write during boot restore */
     p = ap_str(p, "restore="); *p++ = g_session_restore ? '1' : '0';
     *p++ = '\r'; *p++ = '\n';
@@ -2144,10 +2161,28 @@ static void session_save(void)
         if (!first) *p++ = ',';
         p = ap_int(p, a); first = 0;
     }
-    *p++ = '\r'; *p++ = '\n'; *p = 0;
-    n = uno_fs_volumes();
-    for (v = 0; v < n; v++) if (uno_fs_writable(v)) {
-        uno_fs_write(v, "SHELL.CFG", buf, (long)(p - (char *)buf)); break; }
+    *p++ = '\r'; *p++ = '\n';
+    for (a = 0; a < NAPPS; a++) {
+        /* A snapped window's rect is re-derived from the work area at restore
+         * time, so what gets saved is the rect it would go back to - otherwise
+         * a font-size change between boots would restore a stale half-screen. */
+        unoui_rect r;
+        if (!g_open[a] || !app_restorable(a) || !g_built[a]) continue;
+        r = (g_win[a].snap != UI_SNAP_NONE && g_win[a].restore_r.w > 0)
+            ? g_win[a].restore_r : g_win[a].r;
+        p = ap_str(p, "geom"); p = ap_int(p, a); *p++ = '=';
+        p = ap_int(p, r.x); *p++ = ',';
+        p = ap_int(p, r.y); *p++ = ',';
+        p = ap_int(p, r.w); *p++ = ',';
+        p = ap_int(p, r.h);
+        *p++ = '\r'; *p++ = '\n';
+        p = ap_str(p, "snap"); p = ap_int(p, a); *p++ = '=';
+        p = ap_int(p, g_win[a].snap);
+        *p++ = '\r'; *p++ = '\n';
+    }
+    *p = 0;
+    v = session_vol();
+    if (v >= 0) uno_fs_write(v, "SHELL.CFG", buf, (long)(p - (char *)buf));
 }
 
 /* Find `key` at the start of a line in `buf`; return the pointer just past it. */
@@ -2164,10 +2199,54 @@ static const char *cfg_line_val(const char *buf, const char *key)
     return 0;
 }
 
+/* Read a decimal from *pp, advancing past it; 0 if there is no digit there. */
+static int cfg_num(const char **pp)
+{
+    const char *p = *pp; int v = 0, neg = 0;
+    if (*p == '-') { neg = 1; p++; }
+    while (*p >= '0' && *p <= '9') { v = v * 10 + (*p - '0'); p++; }
+    if (*p == ',') p++;
+    *pp = p;
+    return neg ? -v : v;
+}
+
+/* Put app `a`'s window back where the last session left it. Called AFTER
+ * open_app has built the window and before the first present, so the restored
+ * rect is what gets painted rather than a jump on the second frame. */
+static void session_restore_geom(const char *buf, int a)
+{
+    char key[10]; char *k = key;
+    const char *p;
+    unoui_rect r;
+    k = ap_str(k, "geom"); k = ap_int(k, a); *k++ = '='; *k = 0;
+    p = cfg_line_val(buf, key);
+    if (!p) return;                          /* an older file: designed position */
+    r.x = cfg_num(&p); r.y = cfg_num(&p); r.w = cfg_num(&p); r.h = cfg_num(&p);
+    if (r.w < 60 || r.h < 40) return;        /* corrupt: leave the window alone  */
+    if (g_win[a].flags & UI_WIN_RESIZE) {
+        g_win[a].r = r;
+        unoui_reflow_window(UI.theme, &g_win[a]);
+    } else {                                 /* fixed layout: position only      */
+        g_win[a].r.x = r.x; g_win[a].r.y = r.y;
+    }
+    /* the DRAG clamp, not clamp_to_workarea: a window the user parked with its
+     * right half off the edge must come back parked, not shoved fully inside */
+    unoui_clamp_window(&UI, &g_win[a]);
+    /* geom applies BEFORE snap, and a snapped window re-derives its rect from
+     * the live work area - so a maximized window tracks a font-size change
+     * between boots instead of restoring a stale rect. */
+    k = key; k = ap_str(k, "snap"); k = ap_int(k, a); *k++ = '='; *k = 0;
+    p = cfg_line_val(buf, key);
+    if (p) {
+        int s = cfg_num(&p);
+        if (s > UI_SNAP_NONE && s <= UI_SNAP_BR) unoui_snap_apply(&UI, &g_win[a], s);
+    }
+}
+
 /* Boot: reopen the saved session, or fall back to opening the Control Panel. */
 static void session_load(void)
 {
-    unsigned char buf[192]; long got = -1; int v, n = uno_fs_volumes();
+    unsigned char buf[640]; long got = -1; int v, n = uno_fs_volumes();
     const char *rp, *op;
     for (v = 0; v < n && got < 0; v++)
         got = uno_fs_read(v, "SHELL.CFG", buf, (long)sizeof buf - 1);
@@ -2181,11 +2260,13 @@ static void session_load(void)
       for (; op && *op && *op != '\r' && *op != '\n'; op++) {
           if (*op >= '0' && *op <= '9') { val = val * 10 + (*op - '0'); have = 1; }
           else if (*op == ',') {
-              if (have && app_restorable(val) && !app_hidden(val)) { open_app(val); any = 1; }
+              if (have && app_restorable(val) && !app_hidden(val)) {
+                  open_app(val); session_restore_geom((char *)buf, val); any = 1; }
               val = 0; have = 0;
           }
       }
-      if (have && app_restorable(val) && !app_hidden(val)) { open_app(val); any = 1; }
+      if (have && app_restorable(val) && !app_hidden(val)) {
+          open_app(val); session_restore_geom((char *)buf, val); any = 1; }
       if (!any) open_app(APP_CTRL);
     }
     g_session_ready = 1;
@@ -2315,6 +2396,7 @@ static void reflow(void)
 {
     int i;
     UI.screen_w = FB_W; UI.screen_h = FB_H;
+    set_workarea();                                    /* new resolution: new work area */
     unoui_bg_invalidate();                             /* desktop size changed: rebuild bg cache */
     g_desk.r.w = FB_W; g_desk.r.h = FB_H - TASKH;      /* desktop fills - taskbar */
     g_task.r.y = FB_H - TASKH; g_task.r.w = FB_W;      /* taskbar re-anchored     */
@@ -2668,7 +2750,7 @@ static void rebuild_shell(void)
         /* everything below re-adds windows to the scene, so no window can stay
            parked across a rebuild; a snapped rect is re-derived by the reopen */
         if (g_parked[a]) { g_parked[a] = 0; if (a >= NNATIVE) unoui_ui_add(&UI, &g_win[a]); }
-        g_snap[a] = WM_SNAP_NONE;
+        g_win[a].snap = UI_SNAP_NONE;
         if (a < NNATIVE) {
             if (g_open[a]) { remove_win(&g_win[a]); g_open[a] = 0; }
             g_built[a] = 0;
@@ -2692,6 +2774,17 @@ static void on_action(const unoui_action *a)
       unoauto_hook_fire("uui.action", &ev); }
     g_dirty = 1;
     if (a->kind == UI_ACT_CLOSE) { close_focused(); return; }   /* title-bar close box */
+    if (a->kind == UI_ACT_MAX) {                 /* double-clicked title bar   */
+        /* Same path as Alt+Up, so the two can never disagree about what
+         * "restore" means. A window with no UI_WIN_RESIZE is left alone in
+         * phase A rather than being centred by unoui_snap_apply's move-only
+         * rule: a fixed-layout app jumping across the desktop on a
+         * double-click is worse than nothing happening. */
+        int a2 = wm_focused_app();
+        if (a2 >= 0 && (g_win[a2].flags & UI_WIN_RESIZE))
+            wm_snap(a2, g_win[a2].snap == UI_SNAP_MAX ? UI_SNAP_NONE : UI_SNAP_MAX);
+        return;
+    }
     if (a->id >= ID_TASK0   && a->id < ID_TASK0   + NAPPS) { open_app(a->id - ID_TASK0);   return; }
     if (a->id >= ID_LAUNCH0 && a->id < ID_LAUNCH0 + NAPPS) { open_app(a->id - ID_LAUNCH0); return; }
     if (pc64_write_action(a)) return;           /* the Editor's menus/toolbar */
@@ -2927,7 +3020,7 @@ static int pump_input(void)
            reports no Alt at all until the usb lane's modifier byte lands. */
         if ((mods & UI_MOD_ALT) && !(mods & UI_MOD_CTRL)) {
             int fa  = wm_focused_app();
-            int cur = (fa >= 0) ? g_snap[fa] : WM_SNAP_NONE;
+            int cur = (fa >= 0) ? g_win[fa].snap : WM_SNAP_NONE;
             if (scan == 0x01)                                         /* Alt+Up    */
                 { wm_snap(fa, cur == WM_SNAP_MAX ? WM_SNAP_NONE : WM_SNAP_MAX); continue; }
             if (scan == 0x04) { wm_snap(fa, WM_SNAP_L); continue; }   /* Alt+Left  */
@@ -3117,22 +3210,55 @@ static void draw_batt_icon(int x, int y, int bh, int pct, fb_px outline)
  * console), which a harness run can read out of the boot log - the on-screen
  * HUD averages every frame and is unreadable from a screenshot. */
 #ifdef UNO_DEBUG
-static unsigned long long g_drag_cyc;
+static unsigned long long g_drag_cyc, g_drag_paint;
 static unsigned long      g_drag_frames;
 static unsigned long long drag_cyc_now(void) { return uno_native_rdtsc(); }
 static void drag_cyc_note(unsigned long long c) { g_drag_cyc += c; g_drag_frames++; }
+static void drag_paint_note(unsigned long long c) { g_drag_paint += c; }
 static void drag_cyc_report(const char *how)
 {
     if (!g_drag_frames) return;
-    uno_dbg_log("wm: %s drag: %lu frames, %lu kcyc/frame", how, g_drag_frames,
-                (unsigned long)(g_drag_cyc / g_drag_frames / 1000));
-    g_drag_cyc = 0; g_drag_frames = 0;
+    /* the paint split matters: everything except `paint` is the snapshot
+     * restore plus present, which BOTH drags pay, so it is the paint alone
+     * that an opaque drag adds over a rubber band. */
+    uno_dbg_log("wm: %s drag: %lu frames, %lu kcyc/frame (paint %lu kcyc)",
+                how, g_drag_frames,
+                (unsigned long)(g_drag_cyc / g_drag_frames / 1000),
+                (unsigned long)(g_drag_paint / g_drag_frames / 1000));
+    g_drag_cyc = 0; g_drag_paint = 0; g_drag_frames = 0;
 }
 #else
 static unsigned long long drag_cyc_now(void) { return 0; }
 #define drag_cyc_note(c)    ((void)(c))
+#define drag_paint_note(c)  ((void)(c))
 #define drag_cyc_report(h)  ((void)(h))
 #endif
+
+/* ---- live drag: the scene WITHOUT the window being dragged -----------------
+ * The snapshot an opaque drag restores each frame must not contain the dragged
+ * window, or it would smear a copy of it at the position the drag started. So
+ * lift the window out of the z-list for exactly one render pass and put it back
+ * at the same index. focus_win moves with it, and while it is out there is no
+ * focused app window at all - which would blank the taskbar's active chip for
+ * the whole drag, since the snapshot is taken once - so focused_app() is told
+ * to keep naming it. */
+static void drag_scene_without(unoui_window *win)
+{
+    int i, k = -1, ofocus = UI.focus_win;
+    if (!win) { unoui_render_ui(&UI); return; }
+    for (i = 0; i < UI.nwin; i++) if (UI.win[i] == win) { k = i; break; }
+    if (k < 0) { unoui_render_ui(&UI); return; }
+    for (i = 0; i < NAPPS; i++) if (&g_win[i] == win) { g_hidden_app = i; break; }
+    for (i = k; i < UI.nwin - 1; i++) UI.win[i] = UI.win[i + 1];
+    UI.nwin--;
+    if (UI.focus_win > k)       UI.focus_win--;
+    else if (UI.focus_win == k) UI.focus_win = -1;
+    unoui_render_ui(&UI);
+    for (i = UI.nwin; i > k; i--) UI.win[i] = UI.win[i - 1];
+    UI.win[k] = win; UI.nwin++;
+    UI.focus_win = ofocus;
+    g_hidden_app = -1;
+}
 
 /* the legacy app index currently in front (fullscreen or focused), or -1 */
 static int active_legacy(void)
@@ -3148,10 +3274,17 @@ static int active_legacy(void)
 int main(void)
 {
     unoui_event tick;
-    int idle = 0, halfsecs = 0, was_dragging = 0;
+    int idle = 0, halfsecs = 0, was_dragging = 0, dragging = 0;
 
     uno_pc64_init();
     unoui_ui_init(&UI, &theme_aurora_light, FB_W, FB_H);   /* modern default look */
+    /* Opaque window drag. The rubber band existed because dragging used to
+       re-run the whole alpha-blend scene painter per mouse move; the scene
+       snapshot in the frame loop below made that obsolete, and this port can
+       afford the fb-sized buffer it needs (it already keeps one for
+       UNO_BG_CACHE). Ports that cannot leave live_drag 0 and keep the band. */
+    UI.live_drag = 1;
+    set_workarea();                     /* windows clamp/maximize inside the bar */
     unoui_icon_art = pc64_icon_art;     /* distinct per-app icon artwork */
     unoui_wallpaper = pc64_wallpaper_paint;  /* Control Panel wallpaper picker */
     unoui_font_push = uno_font_push;    /* per-window font overrides (Editor doc font) */
@@ -3323,25 +3456,45 @@ int main(void)
           else if (la >= 0 && app_is_bridge(NNATIVE + la)) { unoapp_focus(la); unoapp_run_tick(la); }
           else unoapp_focus(-1); }                                            /* browser: no tick */
         if (UI.full) g_dirty = 1;       /* fullscreen apps redraw every frame */
-        /* Rubber-band window drag: the desktop and windows are static while a
-           title bar is dragged - only the outline moves. Render the full scene
-           once when the drag begins, snapshot it, then each moved frame just
-           restore the snapshot and redraw the outline, instead of re-running the
-           (alpha-blend heavy) full-scene painter every mouse move. This is the
-           fix for laggy dragging. */
-        if (UI.drag_active) {
+        /* Window drag, both flavours, on ONE scene-snapshot fast path: the
+           desktop and the other windows are static while a title bar is
+           dragged, so render the full scene once when the drag begins,
+           snapshot it, and per moved frame restore the snapshot and redraw
+           only the thing that moved - instead of re-running the (alpha-blend
+           heavy) full-scene painter on every mouse move. That is what made
+           dragging smooth, and it is what makes an OPAQUE drag affordable:
+           the per-frame work goes from "restore + 3 rects" to "restore + one
+           window", not to a whole scene.
+
+           live (UI.live_drag):  the snapshot is taken with the dragged window
+                                 REMOVED, and each frame draws the window at
+                                 its new rect over it.
+           outline:              the snapshot includes every window and each
+                                 frame draws the rubber band. */
+        dragging = UI.drag_active || (UI.live_drag && UI.cap_mode == UI_CAP_WINDOW);
+        if (dragging) {
+            unoui_window *dw = (UI.cap_win >= 0 && UI.cap_win < UI.nwin)
+                             ? UI.win[UI.cap_win] : 0;
             if (!was_dragging) {                 /* drag just began */
-                UI.drag_active = 0;              /* render the scene without the outline */
-                unoui_render_ui(&UI);
-                UI.drag_active = 1;
+                if (UI.drag_active) {
+                    UI.drag_active = 0;          /* render the scene without the outline */
+                    unoui_render_ui(&UI);
+                    UI.drag_active = 1;
+                } else {
+                    drag_scene_without(dw);      /* ...or without the window   */
+                }
                 uno_pc64_scene_save();
-                unoui_draw_drag_outline(&UI);
+                if (UI.drag_active) unoui_draw_drag_outline(&UI);
+                else if (dw)        unoui_render_window(&UI, dw);
                 uno_pc64_present();
                 g_dirty = 0;
-            } else if (g_dirty) {                /* outline moved */
-                unsigned long long t0 = drag_cyc_now();
+            } else if (g_dirty) {                /* the drag moved */
+                unsigned long long t0 = drag_cyc_now(), t1;
                 uno_pc64_scene_restore();
-                unoui_draw_drag_outline(&UI);
+                t1 = drag_cyc_now();
+                if (UI.drag_active) unoui_draw_drag_outline(&UI);
+                else if (dw)        unoui_render_window(&UI, dw);
+                drag_paint_note(drag_cyc_now() - t1);
                 uno_pc64_present();
                 drag_cyc_note(drag_cyc_now() - t0);
                 g_dirty = 0;
@@ -3349,8 +3502,12 @@ int main(void)
                 uno_pc64_delay_ms(16);
             }
         } else {
-            if (was_dragging) { g_dirty = 1; drag_cyc_report("outline"); }
-                                                 /* drag ended: repaint to commit the move */
+            if (was_dragging) {                  /* drag ended: full repaint to
+                                                    commit shadows + occlusion */
+                g_dirty = 1;
+                drag_cyc_report(UI.live_drag ? "live" : "outline");
+                session_save();                  /* the new position is session state */
+            }
 #ifdef UNO_DEBUG
             /* timed render/present + the perf HUD, drawn into the frame the
              * same way any widget is so the present path carries it */
@@ -3400,7 +3557,7 @@ int main(void)
             else uno_pc64_delay_ms(16);
 #endif
         }
-        was_dragging = UI.drag_active;
+        was_dragging = dragging;
     }
     return 0;
 }
