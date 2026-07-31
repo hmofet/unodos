@@ -242,6 +242,10 @@ static int gDetachBlocked;              /* held attached to keep the pointer    
 static int gDetachStranded;             /* detached, but the system volume died */
 static const char *gDetachWhy = "not evaluated";  /* the deciding gate, in words */
 void *uno_pc64_st(void)           { return gST; }
+/* The loader's block, or NULL on a UEFI boot. Consumers use it as BOTH the
+ * data and the "am I on the BIOS path" test - there is no second flag to keep
+ * in step with it. */
+const uno_bootinfo *uno_pc64_bootinfo(void) { return gBI; }
 void *uno_pc64_image_handle(void) { return gIH; }
 int   uno_pc64_detached(void)     { return gDetached; }
 /* Why this machine is, or is not, running on its own drivers.  Every gate in
@@ -1160,18 +1164,20 @@ void uno_pc64_init(void)
      * out instead of hanging; on QEMU (no battery) this is a clean no-find. */
     splash_stage(3, "power (ACPI / AML)");
     uno_dbg_check("init:acpi");
-    /* NOT YET ON THE BIOS PATH, deliberately. uno_acpi_start() needs three
-     * things from boot services: the RSDP (which uno_bios_find_rsdp() already
-     * supplies by scanning the EBDA and the ROM area), a 10 ms Stall to
-     * calibrate against, and an 8 MB AllocatePool for the AML arena. The first
-     * is solved; the other two need the same decision the module loader needs -
-     * where does a BIOS boot get a large executable/working region from the
-     * E820 map - so they land together in phase C rather than growing an 8 MB
-     * static array here that the UEFI path would also carry.
-     *
-     * The cost of skipping it is battery percentage and lid state, on a target
-     * list that is mostly desktops and machines old enough to predate both. */
-    if (!gBI) uno_acpi_start(gST);
+    if (gBI) {
+        /* The BIOS path supplies the three things boot services used to: the
+         * RSDP by scanning the EBDA and ROM area, an 8 MB arena from the E820
+         * map, and a clock from the TSC calibrated above. A machine with no
+         * usable run that large simply gets no ACPI, which costs battery
+         * percentage and lid state and nothing else. */
+        unsigned long long arena = uno_bios_find_ram(gBI, UNO_ACPI_ARENA_BYTES);
+        if (arena)
+            uno_acpi_start_bios(uno_bios_find_rsdp(),
+                                (void *)(unsigned long long)arena,
+                                UNO_ACPI_ARENA_BYTES);
+    } else {
+        uno_acpi_start(gST);
+    }
     /* F4: now that the namespace is up, re-probe I2C-HID with the REAL slave
      * address + descriptor register from PNP0C50 _CRS/_DSM. The blind PCI
      * grid bound nothing on any tested machine; this is the targeted pass. */
@@ -1227,6 +1233,11 @@ void uno_pc64_init(void)
      * exactly the kind the detach programme spent months removing. */
     if (gBI) {
         gDetachWhy = "BIOS boot: native from reset";
+        /* try_detach() reserves the module arena on its way out of the
+         * firmware. This path never calls it, and an unreserved arena means
+         * NO loadable app can start - a failure that leaves the desktop
+         * looking perfectly healthy. */
+        { void uno_modload_reserve(void); uno_modload_reserve(); }
     } else {
         splash_stage(4, "detaching from firmware");
         try_detach();               /* M3: leave the firmware behind if the

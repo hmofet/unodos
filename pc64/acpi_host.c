@@ -30,7 +30,9 @@
 /* 8 MiB arena: a real laptop namespace is ~1-1.5 MiB persistent (the namespace
  * LIVES here for the interpreter's life - never reset it) plus transient eval
  * headroom; 1 MiB silently truncates SSDTs on real machines. */
-#define ARENA_BYTES (8u << 20)
+#define ARENA_BYTES UNO_ACPI_ARENA_BYTES   /* the header owns the number:
+                                            * a BIOS caller sizes the E820
+                                            * carve-out from it */
 #define EfiLoaderData 2
 
 /* ---- local port I/O + TSC -------------------------------------------------- */
@@ -70,6 +72,29 @@ static uint64_t find_rsdp(EFI_SYSTEM_TABLE *ST)
     return rsdp;
 }
 
+/* Everything after "we have an RSDP, a clock and an arena" - identical on both
+ * firmware paths, and factored out so the BIOS entry below cannot drift from
+ * the UEFI one. */
+static int acpi_bringup(void *arena, unsigned long arena_bytes)
+{
+    if (!acpi_arena_init(arena, arena_bytes))
+        return 0;
+
+    /* Seed the SMBus region handler with the Intel PCH SMBus I/O base (PCI
+     * class 0x0C05, BAR4).  Absent controller -> base 0 -> handler disabled. */
+    {
+        pci_dev smb;
+        if (pci_find_class(0x0C, 0x05, &smb)) {
+            unsigned long long bar = pci_bar(&smb, 4);
+            if (bar & 1)                          /* I/O-space BAR            */
+                wu_smbus_init((uint16_t)(bar & ~1ull));
+        }
+    }
+
+    g_status = (acpi_power_bringup() == ACPI_POWER_OK);
+    return g_status;
+}
+
 /* ---- entry: bind EFI, seed handlers, run the portable bring-up ------------- */
 int uno_acpi_start(void *stv)
 {
@@ -94,22 +119,42 @@ int uno_acpi_start(void *stv)
     void *buf = 0;
     if (gBS_->AllocatePool(EfiLoaderData, ARENA_BYTES, &buf) != EFI_SUCCESS || !buf)
         return 0;
-    if (!acpi_arena_init(buf, ARENA_BYTES))
+    return acpi_bringup(buf, ARENA_BYTES);
+}
+
+/* ---- entry: a legacy-BIOS boot ---------------------------------------------
+ * Same bring-up, with the three things boot services used to supply passed in:
+ *
+ *   rsdp   found by scanning the EBDA and the ROM area (uno_bios_find_rsdp).
+ *   arena  ARENA_BYTES of RAM taken from the E820 map. NOT a static array -
+ *          8 MB of .bss would be carried by the UEFI image too, which has no
+ *          use for it.
+ *   clock  measured against the TSC that uno_pc64_init has already calibrated
+ *          against PIT channel 2, rather than against a firmware Stall.
+ *
+ * gBS_ stays NULL, which the two delay helpers below already handle: they take
+ * the native path whenever the machine is detached, and a BIOS boot is
+ * detached from its first instruction.
+ */
+int uno_acpi_start_bios(void *rsdp, void *arena, unsigned long arena_bytes)
+{
+    if (g_status >= 0)
+        return g_status;                          /* idempotent               */
+    g_status = 0;
+    if (!rsdp || !arena || arena_bytes < ARENA_BYTES)
         return 0;
+    g_rsdp = (uint64_t)(uintptr_t)rsdp;
 
-    /* Seed the SMBus region handler with the Intel PCH SMBus I/O base (PCI
-     * class 0x0C05, BAR4).  Absent controller -> base 0 -> handler disabled. */
-    {
-        pci_dev smb;
-        if (pci_find_class(0x0C, 0x05, &smb)) {
-            unsigned long long bar = pci_bar(&smb, 4);
-            if (bar & 1)                          /* I/O-space BAR            */
-                wu_smbus_init((uint16_t)(bar & ~1ull));
-        }
+    {   /* the same 10 ms measurement, timed by the TSC we already trust */
+        uint64_t a, b;
+        g_tsc_start = rdtsc();
+        a = rdtsc();
+        uno_native_delay_us(10000);
+        b = rdtsc();
+        {   uint64_t mhz = ((b - a) * 100u) / 1000000u;
+            g_tsc_mhz = mhz ? mhz : 1; }
     }
-
-    g_status = (acpi_power_bringup() == ACPI_POWER_OK);
-    return g_status;
+    return acpi_bringup(arena, arena_bytes);
 }
 
 uint64_t uno_acpi_rsdp(void) { return g_rsdp; }

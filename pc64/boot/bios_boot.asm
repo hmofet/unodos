@@ -91,5 +91,19 @@ dap:                            ; INT 13h Disk Address Packet
     dw  0x0000                  ; buffer segment
     dq  STAGE2_LBA
 
-times 510-($-$$) db 0
+; ---------------------------------------------------------------------------
+; The last 66 bytes of a boot sector are the MBR PARTITION TABLE and the
+; signature, and they are not ours to fill with code. tools/mkbios.py writes one
+; entry here describing the FAT volume that carries the OS tree - the modules,
+; fonts and media the kernel loads once it is running.
+;
+; The assert is the point of this block: if the code above ever grows past 446
+; bytes it would silently eat the first partition entry, and the failure would
+; appear as a machine that boots perfectly and then has no filesystem.
+; ---------------------------------------------------------------------------
+%if ($-$$) > 446
+  %error "boot sector code overruns the MBR partition table at offset 446"
+%endif
+times 446-($-$$) db 0
+times 64 db 0                   ; partition table, written by tools/mkbios.py
 dw 0xAA55

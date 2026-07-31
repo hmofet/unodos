@@ -29,7 +29,9 @@ Both are written over placeholder dwords located by scanning for the magic
 'BOBP', so neither the assembler nor this script needs to know the other's
 layout.
 """
+import os
 import struct
+import subprocess
 import sys
 
 SECTOR = 512
@@ -37,6 +39,13 @@ STAGE2_SECTORS = 16
 KERNEL_LBA = 17
 PATCH_MAGIC = b"BOBP"
 MIN_IMAGE = 8 * 1024 * 1024      # see the padding note in main()
+
+# The boot chain is read by LBA, not through a filesystem, so it lives in a
+# reserved area BEFORE the partition. 8 MiB is four times the largest kernel
+# built to date, which buys room to grow without ever moving the partition -
+# and moving it would invalidate every image already written to a stick.
+RESERVED_SECTORS = 16384         # 8 MiB
+PART_TYPE_FAT32_LBA = 0x0C
 
 
 def pe_entry_va(image: bytes) -> int:
@@ -57,6 +66,41 @@ def pe_entry_va(image: bytes) -> int:
     return image_base + entry_rva, image_base
 
 
+def mbr_entry(first_lba: int, sectors: int) -> bytes:
+    """One MBR partition entry for the OS volume.
+
+    The CHS fields are the 0xFE/0xFF/0xFF "beyond CHS, use LBA" sentinel rather
+    than a computed geometry. Every machine this port targets reads the LBA
+    fields; a computed CHS triple would be a second source of truth that is
+    wrong for any disk over 8 GiB and right nowhere it matters.
+    """
+    return (bytes([0x80])                    # bootable
+            + bytes([0xFE, 0xFF, 0xFF])      # start CHS: use LBA
+            + bytes([PART_TYPE_FAT32_LBA])
+            + bytes([0xFE, 0xFF, 0xFF])      # end CHS: use LBA
+            + struct.pack("<II", first_lba, sectors))
+
+
+def build_fat(esp_dir: str, sectors: int, out: str) -> None:
+    """Format a FAT32 volume of `sectors` and copy the whole build/esp tree in.
+
+    Same mtools path tools/mkuefi.py uses for the UEFI image, for the same
+    reason: the kernel's own FAT writer cannot be used to author the volume it
+    is going to be loaded from.
+    """
+    if os.path.exists(out):
+        os.remove(out)
+    subprocess.run(["mformat", "-C", "-i", out, "-T", str(sectors),
+                    "-h", "64", "-s", "32", "-F", "-v", "UNODOS", "::"],
+                   check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    for name in sorted(os.listdir(esp_dir)):
+        src = os.path.join(esp_dir, name)
+        cmd = (["mcopy", "-s", "-i", out, src, "::/"] if os.path.isdir(src)
+               else ["mcopy", "-i", out, src, "::/" + name])
+        subprocess.run(cmd, check=True,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
 def patch(stage2: bytearray, kern_sectors: int, entry: int) -> None:
     at = stage2.find(PATCH_MAGIC)
     if at < 0:
@@ -66,10 +110,11 @@ def patch(stage2: bytearray, kern_sectors: int, entry: int) -> None:
 
 
 def main() -> int:
-    if len(sys.argv) != 5:
+    if len(sys.argv) not in (5, 6):
         print(__doc__)
         return 2
-    bootf, stage2f, kernelf, outf = sys.argv[1:]
+    bootf, stage2f, kernelf, outf = sys.argv[1:5]
+    esp_dir = sys.argv[5] if len(sys.argv) == 6 else None
 
     boot = bytearray(open(bootf, "rb").read())
     stage2 = bytearray(open(stage2f, "rb").read())
@@ -112,11 +157,50 @@ def main() -> int:
     if len(img) % (1024 * 1024):
         img += b"\0" * (1024 * 1024 - len(img) % (1024 * 1024))
 
+    # ---- the OS volume ----------------------------------------------------
+    # WITHOUT THIS THE IMAGE BOOTS AND HAS NO FILESYSTEM, which looks like a
+    # working system right up until an app is launched: the desktop is drawn
+    # from the kernel image, but every .UNO module, font and media file lives
+    # on disk. It sits after RESERVED_SECTORS so the boot chain, which stage2
+    # reads by raw LBA, is never inside a partition anything could reformat.
+    fat_note = "no OS volume"
+    if esp_dir and os.path.isdir(esp_dir):
+        if KERNEL_LBA + kern_sectors > RESERVED_SECTORS:
+            raise SystemExit(
+                "mkbios: the kernel ends at LBA %d, past the %d-sector reserved "
+                "area - raise RESERVED_SECTORS (and reflash every existing "
+                "image, since the partition would move)"
+                % (KERNEL_LBA + kern_sectors, RESERVED_SECTORS))
+        # Size the disk to the tree it has to carry: the tree plus half again
+        # plus 16 MiB of slack for what the running system writes (telemetry,
+        # documents), never below 96 MiB.
+        tree = 0
+        for root, _dirs, files in os.walk(esp_dir):
+            for fn in files:
+                tree += os.path.getsize(os.path.join(root, fn))
+        need = RESERVED_SECTORS * SECTOR + tree + tree // 2 + 16 * 1024 * 1024
+        need = max(need, 96 * 1024 * 1024)
+        need = (need + 1024 * 1024 - 1) // (1024 * 1024) * (1024 * 1024)
+        if len(img) < need:
+            img += b"\0" * (need - len(img))
+
+        part_sectors = len(img) // SECTOR - RESERVED_SECTORS
+        fat = "/tmp/uno_bios_fat.img"
+        build_fat(esp_dir, part_sectors, fat)
+        with open(fat, "rb") as f:
+            data = f.read()
+        img[RESERVED_SECTORS * SECTOR:RESERVED_SECTORS * SECTOR + len(data)] = data
+        os.remove(fat)
+        img[0x1BE:0x1CE] = mbr_entry(RESERVED_SECTORS, part_sectors)
+        fat_note = "FAT32 at LBA %d (%d MiB)" % (RESERVED_SECTORS,
+                                                 part_sectors // 2048)
+
     with open(outf, "wb") as f:
         f.write(img)
 
-    print("mkbios: %s  kernel %d bytes (%d sectors) entry %#x  image %d KB"
-          % (outf, len(kernel), kern_sectors, entry, len(img) // 1024))
+    print("mkbios: %s  kernel %d bytes (%d sectors) entry %#x  image %d MiB  %s"
+          % (outf, len(kernel), kern_sectors, entry, len(img) // (1024 * 1024),
+             fat_note))
     return 0
 
 

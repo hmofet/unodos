@@ -27,6 +27,7 @@
 #include "fat.h"
 #include "pc64_font.h"
 #include "uefi.h"
+#include "bootinfo.h"   /* BIOS boot: the E820 map is the only allocator */
 #include "e1000.h"
 #include "e1000e.h"
 #include "igb.h"
@@ -340,7 +341,32 @@ void uno_modload_reserve(void)
 {
     EFI_SYSTEM_TABLE *ST = (EFI_SYSTEM_TABLE *)uno_pc64_st();
     unsigned long long mem = 0;
-    if (gModArena || !ST) return;
+    unsigned long long want =
+        ((unsigned long long)(MOD_ARENA_PAGES + USER_SLOT_PAGES)) << 12;
+    if (gModArena) return;
+
+    /* BIOS boot: no AllocatePages, so the arena comes out of the E820 map.
+     *
+     * THIS IS NOT COSMETIC. Without an arena mod_alloc() returns 0 for every
+     * module, and every loadable app - Files, Notepad, Photos, Dostris, the
+     * Browser, Studio - fails to launch. The desktop draws either way, which is
+     * exactly what makes it easy to call a BIOS boot "working" while half the
+     * system is unreachable.
+     *
+     * uno_bios_find_ram() takes the TOP of the highest usable run below 4 GiB
+     * (all the loader's page tables map), which keeps the arena clear of the
+     * kernel and its heap at the bottom of high memory. Nothing else allocates
+     * physical pages on this path, so a single carve-out needs no bookkeeping
+     * beyond the bump pointer that is already here. */
+    if (!ST) {
+        const uno_bootinfo *bi = uno_pc64_bootinfo();
+        unsigned long long base = uno_bios_find_ram(bi, want);
+        if (!base) return;                 /* mod_alloc keeps failing, visibly */
+        gModArena = (unsigned char *)(unsigned long long)base;
+        gUserSlot = gModArena + ((unsigned long)MOD_ARENA_PAGES << 12);
+        return;
+    }
+
     if (((EFI_ALLOC_PAGES)ST->BootServices->AllocatePages)
             (0, EFI_LOADER_CODE, MOD_ARENA_PAGES + USER_SLOT_PAGES, &mem)
         == EFI_SUCCESS) {
