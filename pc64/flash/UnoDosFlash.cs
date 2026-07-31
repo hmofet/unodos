@@ -47,7 +47,7 @@ class FlashForm : Form
 
     ComboBox driveBox;
     Button refreshBtn, flashBtn, showAllBtn, devBtn, updateBtn, reconfigBtn;
-    CheckBox autoChk;
+    CheckBox autoChk, hybridChk;
     Label devSummary;
     ProgressBar progress;
     Label status;
@@ -144,6 +144,17 @@ class FlashForm : Form
                                  Location = new Point(216, 378), AutoSize = true };
         autoChk.CheckedChanged += (s, e) => { settings.AutoUpdate = autoChk.Checked; settings.Save(); };
         Controls.Add(autoChk);
+
+        /* Wording matters here: the choice is not "BIOS or UEFI" but "both or
+         * UEFI only", and a user who unticks this needs to know they are giving
+         * something up rather than choosing between equals. */
+        hybridChk = new CheckBox {
+            Text = "Also boot older BIOS / CSM machines",
+            Checked = settings.HybridBoot,
+            Location = new Point(16, 404), AutoSize = true };
+        hybridChk.CheckedChanged += (s, e) => {
+            settings.HybridBoot = hybridChk.Checked; settings.Save(); };
+        Controls.Add(hybridChk);
         updateBtn = new Button { Text = "Check for updates", Location = new Point(412, 375), Size = new Size(140, 26) };
         updateBtn.Click += (s, e) => StartUpdateCheck(true);
         Controls.Add(updateBtn);
@@ -451,6 +462,17 @@ class FlashForm : Form
             List<string> warn;
             sources.AddRange(settings.ExtraPayloads(out warn));
 
+            /* The boot chain comes out of the SAME archive, opened a second
+             * time - so it can never be from a different build than the system
+             * beside it. Null (an older ESP with no \BOOT\) or the setting off
+             * gives the GPT/UEFI-only stick this has always produced. */
+            UnoDisk.BootChain chain = null;
+            if (settings.HybridBoot) {
+                using (var espAgain = Assembly.GetExecutingAssembly()
+                                              .GetManifestResourceStream(espRes))
+                    chain = UnoDisk.ChainFromZip(espAgain);
+            }
+
             string summary;
             // bufferSize 1 = no FileStream buffering: a physical-drive handle only
             // accepts whole-sector writes, and .NET's buffering would happily
@@ -463,7 +485,7 @@ class FlashForm : Form
                         lastPct = pct;
                         Ui(() => { progress.Value = Math.Min(100, Math.Max(0, pct));
                                    status.Text = stage; });
-                    });
+                    }, chain);
                 fs.Flush();
                 // flush to the medium + re-read the partition table while the handle is
                 // still open: the FileStream OWNS `disk` and closes it on dispose, so

@@ -1,9 +1,10 @@
 # BIOS boot for pc64, a phased plan
 
-Status: **A-E done in QEMU.** One image boots both firmwares, and a BIOS
-boot is a full system including on hardware with no AHCI. Remaining: the
-installer's BIOS target (phase C), the Windows flasher, and everything that
-needs real metal. Details per phase below.
+Status: **A-E done in QEMU, plus the installer and the flasher.** One image
+boots both firmwares, a BIOS boot is a full system including on hardware with no
+AHCI, the OS installs itself onto a disk that then boots, and the Windows
+flasher writes hybrid sticks by default. Remaining: everything that needs real
+metal. Details per phase below.
 
 | Phase | State |
 |---|---|
@@ -318,13 +319,28 @@ mounts it either way with no change.
 `tools/mkuefi.py` (GPT + ESP) stays, unchanged, as the fallback for firmware
 that refuses MBR media.
 
-**Not done: the Windows flasher.** `flash/build-flasher.ps1` formats a whole
-disk as one FAT32 volume and writes no boot chain, so it produces a
-UEFI-only stick. Teaching it the hybrid layout means writing raw sectors to a
-physical drive, which is the one thing in this plan that cannot be verified
-without a stick in a machine - and an unverified raw-disk writer is worse than
-none. Until then: `dd` (or Rufus in DD mode) `build/unodos-hybrid.img` to the
-stick, which is the same file both QEMU firmwares booted.
+**The Windows flasher: DONE 2026-07-31.** It writes the hybrid layout, ON BY
+DEFAULT, with a checkbox ("Also boot older BIOS / CSM machines") that returns it
+to GPT for firmware that refuses MBR media.
+
+**And it was verifiable after all**, which is the part I had wrong when I
+deferred it. `UnoDisk` writes through a plain `Stream`, and `UnoDiskTest.exe`
+already pointed that at an image file precisely so the volume writer could be
+checked against real tools instead of by flashing a stick and hoping. So the
+same code that writes a USB stick wrote `build/flasher_zip.img`, and QEMU booted
+it under SeaBIOS AND OVMF from identical copies. What genuinely cannot be tested
+here is narrower than "the flasher": it is the Win32 layer around the write -
+drive enumeration, volume dismount, and the physical-drive handle - none of
+which the hybrid change touches.
+
+The test takes the SHIPPING path deliberately. `UnoDiskTest -hybrid <zip>` calls
+`UnoDisk.ChainFromZip`, the same call the flasher makes against its embedded
+resource, rather than reading three files from a folder - testing the folder
+path only would have verified code the product does not run.
+
+The chain needs no new resource: `tools/mkbios.py` stages it at `\BOOT\` on the
+volume, so it is already inside the ESP zip the flasher embeds, and a chain can
+never be from a different build than the system beside it.
 
 ## Standing rules for this lane
 

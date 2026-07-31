@@ -33,6 +33,16 @@ class UnoSettings
 
     // DevMode means "flash the DEBUG build + run the selected tests".
     // OFF (the default) flashes the clean PRODUCTION build.
+    /* A stick that boots a legacy BIOS as WELL as UEFI (MBR + an 0xEF
+     * partition; see docs/BIOS-BOOT-PLAN.md phase E). ON by default because it
+     * is strictly more capable - the same stick still boots every UEFI machine
+     * - and because a machine that needs it usually cannot tell you so.
+     *
+     * The escape hatch matters though: MBR-partitioned media is inside the UEFI
+     * spec but not every firmware is, so a machine that refuses this stick can
+     * be given the GPT-only layout by turning this off. */
+    public bool   HybridBoot     = true;
+
     public bool   DevMode;
 
     // --- Conformance suite (SPECTEST) ---
@@ -152,6 +162,7 @@ class UnoSettings
                 switch (k.ToLowerInvariant()) {
                     case "version":        break;                        // informational
                     case "devmode":        s.DevMode        = Truthy(v); break;
+                    case "hybridboot":     s.HybridBoot     = Truthy(v); break;
                     // conformance
                     case "runconformance": s.RunConformance = Truthy(v); break;
                     case "testspec":       s.RunConformance = Truthy(v); break;  // v1 alias
@@ -201,6 +212,7 @@ class UnoSettings
             sb.AppendLine("# UnoDOS flasher settings - kept out of the exe so it survives an update.");
             sb.AppendLine("version="        + VERSION);
             sb.AppendLine("devmode="         + B(DevMode));
+            sb.AppendLine("hybridboot="      + B(HybridBoot));
             sb.AppendLine("runconformance="  + B(RunConformance));
             sb.AppendLine("specstorage="     + B(SpecStorage));
             sb.AppendLine("specsystem="      + B(SpecSystem));

@@ -19,15 +19,45 @@ static class UnoDiskTestProgram
     {
         if (argv.Length < 3) {
             Console.WriteLine("usage: UnoDiskTest <out.img|sink> <sizeMiB> <espFolderOrZip> [extra ...]");
-            Console.WriteLine("  sink = discard the data but report the GPT, so multi-TB");
-            Console.WriteLine("         geometries can be checked without the disk space");
+            Console.WriteLine("       UnoDiskTest <out.img> <sizeMiB> -hybrid <bootDir> <espFolderOrZip> [extra ...]");
+            Console.WriteLine("  sink   = discard the data but report the GPT, so multi-TB");
+            Console.WriteLine("           geometries can be checked without the disk space");
+            Console.WriteLine("  -hybrid = write the MBR/0xEF layout that boots a BIOS *and*");
+            Console.WriteLine("           UEFI, taking BOOT.BIN/STAGE2.BIN/UNODOS.SYS from");
+            Console.WriteLine("           <bootDir>. The resulting image is bootable in QEMU");
+            Console.WriteLine("           under BOTH firmwares, which is how the flasher's");
+            Console.WriteLine("           BIOS support is verified without a physical stick.");
             return 2;
         }
         string outPath = argv[0];
         long mib = long.Parse(argv[1]);
 
+        int argi = 2;
+        UnoDisk.BootChain chain = null;
+        if (argv.Length > 3 && argv[2] == "-hybrid") {
+            string bd = argv[3];
+            if (Directory.Exists(bd)) {
+                chain = new UnoDisk.BootChain {
+                    Boot   = File.ReadAllBytes(Path.Combine(bd, "BOOT.BIN")),
+                    Stage2 = File.ReadAllBytes(Path.Combine(bd, "STAGE2.BIN")),
+                    Kernel = File.ReadAllBytes(Path.Combine(bd, "UNODOS.SYS")),
+                };
+            } else {
+                // A ZIP takes the SHIPPING path: UnoDisk.ChainFromZip, the same
+                // call the flasher makes against its embedded resource. Testing
+                // the folder path only would verify code the product does not
+                // run.
+                using (var z = File.OpenRead(bd)) chain = UnoDisk.ChainFromZip(z);
+                if (chain == null) {
+                    Console.WriteLine("no BOOT/ chain in " + bd);
+                    return 3;
+                }
+            }
+            argi = 4;
+        }
+
         var sources = new List<IPayloadSource>();
-        for (int i = 2; i < argv.Length; i++) sources.Add(Source(argv[i]));
+        for (int i = argi; i < argv.Length; i++) sources.Add(Source(argv[i]));
 
         if (outPath == "sink") return Sink(mib, sources);
 
@@ -40,7 +70,7 @@ static class UnoDiskTestProgram
                         if (stage == last) return;
                         last = stage;
                         Console.WriteLine("  " + stage);
-                    });
+                    }, chain);
                 Console.WriteLine("OK: " + outPath + " - " + summary);
             }
             return 0;
