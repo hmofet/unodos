@@ -42,6 +42,7 @@ re-home"). Ownership is of the CODE; the whole OS is a shared goal.
 | unosecure (identity / RBAC / audit) | `UNOSECURE-SPEC.md`, `UNOSECURE.md` | `unosecure.*`, `pc64_accounts.*` |
 | unoscript (scripting surface) | `UNOSCRIPT.md` | `unoscript.*`, `upy_port/mod_unoscript.c` |
 | unodevices (PCI device tree + driver registry) | `pc64/DEVICES.md` | `uno_devmgr.*` |
+| debug harness (IDT faults, watchdog, kernel log, telemetry to `\CRASH`) | `pc64/DEBUG.md` | `uno_debug.*`, `uno_hw_wdt.*`, `pc64_spectest.*`, `pc64_nettest.*` |
 | installer (install-to-disk + boot entries) | `INSTALL.md` | `installer.c` |
 | unomedia (image / audio decoders) | `IMAGES.md`, `AUDIO.md` | `unomedia/` |
 | pc64-python / PYRT | SDK docs | `upy_port/`, `apps/pyrt.c`, `pyhost.h` |
