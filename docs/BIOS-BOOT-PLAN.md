@@ -1,6 +1,10 @@
 # BIOS boot for pc64, a phased plan
 
-Status: **A-E done in QEMU, plus the installer and the flasher.** One image
+Status: **A-E done in QEMU, plus the installer and the flasher. THE FIRST METAL
+RUN DOES NOT BOOT** - see "Metal, 2026-07-31" at the end, which is where to
+resume. PAUSED at the user's request, 2026-07-31.
+
+In QEMU: one image
 boots both firmwares, a BIOS boot is a full system including on hardware with no
 AHCI, the OS installs itself onto a disk that then boots, and the Windows
 flasher writes hybrid sticks by default. Remaining: everything that needs real
@@ -352,3 +356,89 @@ never be from a different build than the system beside it.
   meaningful.
 - **No CHS.** Every machine in scope has EDD. A CHS fallback is untestable code
   that will be wrong when it is finally needed.
+
+
+## Metal, 2026-07-31: the Acer Revo RL100. START HERE WHEN RESUMING.
+
+First run on real hardware. **It does not boot.** What is established, what is
+not, and the one measurement that comes next.
+
+### The machine
+
+Acer Aspire Revo RL100 nettop: AMD, Radeon HD 4225-class integrated graphics,
+**no PS/2 port** (USB keyboard and mouse), HDMI and VGA out. Firmware offered
+the stick in its boot menu and was asked to boot it explicitly.
+
+### PROVEN WORKING on that hardware
+
+The loader runs end to end. With `UNO_BIOS_VERBOSE=1` the machine printed:
+
+```
+UnoDOS pc64          <- our boot sector, loaded and run by the firmware
+pc64 stage2          <- stage2 loaded from LBA 1 via INT 13h AH=42h
+a20 ok
+.......              <- the kernel read off the stick, chunk by chunk
+kernel loaded
+e820 entries: N
+vbe mode: 1024x768 lfb 0xF9000000 pitch 4096
+continuing: ........ <- eight dots, one per second, from the BIOS tick counter
+```
+
+So: firmware handoff, INT 13h EDD reads, the kernel load above 1 MB via INT 15h
+AH=87h, E820, VBE mode SELECTION, and a live CPU right up to the switch. The
+mode line is internally coherent - pitch 4096 is exactly 1024 x 4 bytes.
+
+### THE FAILURE
+
+After the switch: **nothing**. No green marker band (the loader paints one from
+64-bit code before the kernel runs), no splash, no desktop.
+
+### WHAT THAT DOES NOT YET TELL US, and the next measurement
+
+"No band" has two opposite causes, because the band is painted from 64-bit code:
+
+1. the VBE mode set succeeded but is not reaching the display, or
+2. **the long-mode transition is failing**, so there is no 64-bit code at all.
+
+`UNO_BIOS_NOVIDEO=1` builds the probe that settles it: it SKIPS the VBE mode,
+stays in text mode, enters long mode, and writes a white-on-red banner into the
+VGA text buffer at 0xB8000 from 64-bit code. That image was written to the test
+stick and **has not been run yet**. Run it first.
+
+- **Banner appears** -> long mode, page tables, GDT and SSE all work on this
+  hardware; the fault is entirely the video mode. Next: 800x600, then 640x480,
+  then forcing a display output. A nettop of this era setting a mode on the HDMI
+  transmitter while the user watches VGA (or the reverse) produces exactly this
+  symptom, and the mode set returns success either way.
+- **No banner** -> the transition is failing and the video was never the issue.
+  Different search entirely: page-table placement (0x20000), the stack at
+  0x90000 against this machine's EBDA, or the A20 path.
+
+### Two things already fixed as a result
+
+- **The video mode policy was too aggressive.** It took the LARGEST mode the
+  card advertised, up to 1920x1200. A card will advertise, and successfully SET,
+  a mode the attached display cannot show - and the mode set returns success, so
+  nothing downstream can detect it. It now prefers **1024x768**, the mode every
+  VBE implementation and every panel since about 1995 supports, and caps the
+  fallback at 1280x1024. This is the likeliest fix for the original 1920x1200
+  black screen, and it is unproven on metal.
+- **The keypress gate was a mistake on this machine.** It blocked on INT 16h,
+  which never returned - the RL100 has no PS/2 and its BIOS was not feeding USB
+  legacy emulation to INT 16h. Replaced with a timed wait that prints a dot per
+  second from the BIOS tick counter, so a live CPU says so and then continues by
+  itself.
+
+### A consequence worth knowing before judging any future result
+
+**That machine may have no keyboard in UnoDOS even once it boots.** The BIOS
+path drives the i8042, and the RL100's input is USB; pc64's USB stack is
+xHCI-only and nothing of that era has an xHCI. A desktop that appears but does
+not respond to typing is a driver gap (EHCI/UHCI HID), not a boot failure.
+
+### The diagnostic knobs, which are OFF by default and ship nothing
+
+| Build | What it does |
+|---|---|
+| `UNO_BIOS_VERBOSE=1 ./build.sh` | stage2 narrates each step, prints the chosen mode/LFB/pitch, waits 8 visible seconds, and paints a green band from 64-bit code before the kernel |
+| `UNO_BIOS_NOVIDEO=1 ./build.sh` | skips VBE, stays in text mode, proves long mode at 0xB8000, never boots the kernel |

@@ -618,8 +618,20 @@ if [ "$1" != "legacy" ]; then
               -Wl,--image-base,0x100000 -Wl,--disable-reloc-section \
               -Wl,--section-alignment,0x1000 -Wl,--file-alignment,0x1000 \
               -o build/UNODOS.SYS $OBJS ${LINK_EXTRA:-} -lgcc
+        # UNO_BIOS_VERBOSE=1 builds a stage2 that narrates each step and WAITS
+        # FOR A KEY before the video switch. That switch is one-way and takes
+        # the text console with it, so a machine that dies after it can only be
+        # diagnosed by what was on screen before - and on real hardware the
+        # text scrolls past too fast to read. Diagnostic only; never ship it.
+        # UNO_BIOS_NOVIDEO=1: skip the VBE mode entirely, stay in TEXT mode, and
+        # prove long mode by writing to 0xB8000 from 64-bit code. The one probe
+        # that still has an output channel when the framebuffer is not being
+        # displayed. Diagnostic only - it never boots the kernel.
+        NASMV=""
+        [ "${UNO_BIOS_VERBOSE:-0}" = "0" ] || NASMV="-dVERBOSE"
+        [ "${UNO_BIOS_NOVIDEO:-0}" = "0" ] || NASMV="$NASMV -dVERBOSE -dNOVIDEO"
         nasm -f bin -o build/bios_boot.bin   boot/bios_boot.asm
-        nasm -f bin -o build/bios_stage2.bin boot/bios_stage2.asm
+        nasm -f bin $NASMV -o build/bios_stage2.bin boot/bios_stage2.asm
         "$PY" tools/mkbios.py build/bios_boot.bin build/bios_stage2.bin \
                               build/UNODOS.SYS build/unodos-hybrid.img build/esp
     fi
