@@ -141,6 +141,14 @@ your landing note).
 > window paint per frame", which scales with window area (the Editor, the
 > measurement above, is 70 % of the screen). The shell logs the split per drag
 > in debug builds, so C and F can watch it rather than guess.
+>
+> **SUPERSEDED 2026-07-31 (after C): the budget IS reachable**, because a
+> dragged window does not need one window paint per frame at all. Its content
+> cannot change, so it is cached once and blitted; only the translucent
+> perimeter is repainted, clipped to a ring. Re-measured on one box, same
+> scenario: outline 49 692, opaque-uncached 108 405 (paint 44 856),
+> opaque-cached 77 139 (paint 14 798) - 2.18x down to 1.55x. See correction 25
+> for what that paint actually was, which is not what §3 assumed.
 
 ## 4. Phase B - titlebar minimize/maximize buttons
 
@@ -539,6 +547,23 @@ Recorded from the phases that have run. These override the sections above.
     open a desktop switch can repaint nothing else in the bar - and ignores
     everything left of the chips. Phase F's overflow chip should reuse that
     same two-frame trick rather than hardcoding an origin.
+
+25. **The drag paint was the drop SHADOW, not the widgets** (measured after C,
+    by stubbing `soft_shadow` out and re-running). Of the ~45 Mcyc per drag frame,
+    31 Mcyc was Aurora's shadow - six expanding alpha layers over the whole
+    window area, redrawn at every position - and the widgets, frame and title bar
+    were the rest. So the useful optimization is not "cache the
+    widgets", it is "stop recompositing 178 k pixels of shadow when only ~21 k
+    pixels of ring moved". `unoui_render_window_chrome()` exists for that: cache
+    the window's pixels, blit everything EXCEPT the four corner squares (the
+    anti-aliased arcs must composite against the restored scene, not against
+    stale pixels), and repaint the chrome clipped to those corners plus four
+    bands outside the window. F's group drag inherits this per member.
+26. **Put pinned windows back by BLITTING them, not re-rendering them.** The
+    taskbar's painter blends, so re-rendering it over a dragged window shows the
+    window through it. The scene snapshot already holds it correctly composited,
+    so cache those pixels at drag start and blit them back after the window.
+    That is what stops a dragged window painting across the taskbar.
 
 ## Phase table (update as you land)
 
