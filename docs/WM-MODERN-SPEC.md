@@ -453,13 +453,28 @@ Recorded from the phases that have run. These override the sections above.
 12. **The drag-frame budget in Gate A is unreachable** - see the measured note
     there. The delta between a rubber band and an opaque drag is one window
     paint, and that is the honest budget.
+13. **Anything a taskbar-chip handler wants to know about focus must be read
+    BEFORE the press** (phase B). `taskbar_event` runs inside the same
+    `UI_EV_MOUSE_DOWN` that already raised the taskbar - it is a `UI_WIN_TOP`
+    window like any other - so by then `focused_app()` is -1 and a "is this
+    the focused app?" test always answers no. Phase D's `g_mru[0]` is the
+    reliable source: raising shell chrome never calls `wm_note_focus()`.
+    Phase F's chip context menu will hit exactly this.
+14. **Aim a click at chrome whose position you can DERIVE, not hunt for**
+    (phase B). A window's diff bbox starts at its soft drop shadow, so
+    "bbox right edge minus a constant" misses the title-bar buttons. `wm_b`
+    snaps the window right (or maximizes it) first, which makes its top-right
+    corner the screen's, and then computes the box centres from the theme
+    metrics. A theme change then breaks the test loudly instead of clicking
+    bare title bar and passing. The same shadow bleeds a few rows INTO the
+    taskbar band, so locate a chip against a frame with no window in it.
 
 ## Phase table (update as you land)
 
 | Phase | Contents | State |
 |---|---|---|
 | A | live drag, work area, double-click max, geometry persistence | **DONE** 2026-07-31 |
-| B | min/max buttons, shell minimize, parked chips | READY on `wm-b`, held for A |
+| B | min/max buttons, shell minimize, parked chips | **DONE** 2026-07-31 |
 | C | pointer snap + previews + restore semantics | NOT STARTED |
 | D | mods byte, `next_key2`/`uno_pc64_mods`, Alt-Tab MRU switcher | **DONE** 2026-07-31 |
 | E | virtual desktops + pager + persistence | NOT STARTED |
