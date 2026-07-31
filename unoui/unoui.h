@@ -403,6 +403,14 @@ extern void (*unoui_profile_win)(const char *title, int begin);
 /* Draw only the rubber-band drag outline (no-op unless a drag is live). Lets a
  * platform snapshot the scene once and redraw just the outline per drag frame. */
 void          unoui_draw_drag_outline(unoui_ui *);
+/* Draw the drag-to-edge snap preview: a translucent accent wash plus a 1 px
+ * frame over the rect the drag would commit to (no-op unless ui->snap_preview
+ * is armed). Split out for the same reason as the outline above - the pc64
+ * live-drag path restores its scene snapshot and redraws only this plus the
+ * dragged window. The rect shown is exactly what unoui_snap_apply will produce
+ * for the window being dragged, non-resizable move-only policy included, so
+ * the preview never promises geometry the commit does not deliver. */
+void          unoui_draw_snap_preview(unoui_ui *);
 /* Invalidate any cached desktop background (call on theme / resolution change).
  * A no-op where the cache isn't compiled in. */
 void          unoui_bg_invalidate(void);

@@ -73,6 +73,10 @@ static const unoui_action NO_ACT = { 0, 0, 0, 0 };
  * many px of each other. A port ticks per frame, so 24 is roughly 400 ms. */
 #define DBLCLICK_TICKS 24
 #define DBLCLICK_SLOP  4
+/* Manhattan distance the pointer must travel before a drag un-snaps a snapped
+ * window. Comfortably above DBLCLICK_SLOP, so a double-click on a maximized
+ * title bar can never be read as the start of a drag off the snap. */
+#define UNSNAP_SLOP    8
 
 static int pt_in(unoui_rect r, int x, int y)
 { return x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h; }
@@ -205,6 +209,34 @@ void unoui_clamp_window(unoui_ui *ui, unoui_window *w)
 
 static void clamp_win(unoui_ui *ui, unoui_window *w)
 { unoui_clamp_window(ui, w); }
+
+/* ---- drag-to-edge snap zones (phase C) ------------------------------------ *
+ * The POINTER picks the zone, never the window rect: a window grabbed by the
+ * right end of its title bar must still snap left when the pointer reaches the
+ * left edge, and a window is clamped inside the work area while the pointer is
+ * not, so only the pointer can actually reach an edge. Corners are tested
+ * first, so the quarter zones win over the half/maximize strips they overlap. */
+#define SNAP_EDGE_PX   8    /* distance from a work-area edge that arms a half */
+#define SNAP_CORNER_PX 24   /* corner square that arms a quarter                */
+
+static int snap_zone(const unoui_ui *ui, int x, int y)
+{
+    unoui_rect wk = unoui_work_area(ui);
+    /* distances to each edge; negative = the pointer is past it (the taskbar
+     * band below the work area still counts as "at the bottom"). */
+    int dl = x - wk.x,            dr = (wk.x + wk.w - 1) - x;
+    int dt = y - wk.y,            db = (wk.y + wk.h - 1) - y;
+    int cl = dl < SNAP_CORNER_PX, cr = dr < SNAP_CORNER_PX;
+    int ct = dt < SNAP_CORNER_PX, cb = db < SNAP_CORNER_PX;
+    if (ct && cl) return UI_SNAP_TL;
+    if (ct && cr) return UI_SNAP_TR;
+    if (cb && cl) return UI_SNAP_BL;
+    if (cb && cr) return UI_SNAP_BR;
+    if (dt < SNAP_EDGE_PX) return UI_SNAP_MAX;
+    if (dl < SNAP_EDGE_PX) return UI_SNAP_L;
+    if (dr < SNAP_EDGE_PX) return UI_SNAP_R;
+    return UI_SNAP_NONE;                 /* the bottom edge alone snaps nothing */
+}
 
 static void close_popup(unoui_ui *ui)
 {
@@ -691,8 +723,36 @@ static unoui_action handle_inner(unoui_ui *ui, const unoui_event *ev)
                  * platform repaints it (unoui_render_window) over a snapshot
                  * of the rest of the scene. drag_active stays 0 - there is no
                  * rubber band to draw and nothing to commit on release. */
+                if (win->snap != UI_SNAP_NONE) {
+                    /* Un-snap on the first real MOTION, never on the press: the
+                     * first half of a double-click is a press on the title bar
+                     * of a maximized window, and un-snapping there would leave
+                     * the second half re-maximizing what it meant to restore.
+                     * Past the slop the pre-snap SIZE comes back immediately -
+                     * what you drag is what you drop - and the grab keeps its
+                     * relative position along the title bar (a press 80 % of
+                     * the way across a maximized bar stays 80 % across the
+                     * restored one) so the window does not jump. */
+                    int mx = ev->x - ui->last_press_x, my = ev->y - ui->last_press_y;
+                    if (mx < 0) mx = -mx;
+                    if (my < 0) my = -my;
+                    if (mx + my < UNSNAP_SLOP) return NO_ACT;
+                    if (win->restore_r.w > 0) {
+                        int rel = (win->r.w > 0) ? (ui->grab_dx * 1024) / win->r.w : 0;
+                        win->r.w = win->restore_r.w; win->r.h = win->restore_r.h;
+                        ui->grab_dx = (rel * win->r.w) / 1024;
+                        if (ui->grab_dy > win->r.h - 1) ui->grab_dy = win->r.h - 1;
+                    }
+                    win->snap = UI_SNAP_NONE;
+                    unoui_reflow_window(ui->theme, win);
+                }
                 win->r.x = ev->x - ui->grab_dx; win->r.y = ev->y - ui->grab_dy;
                 clamp_to(wk, &win->r);
+                /* arm (or disarm) the snap target the release would commit to.
+                 * Purely advisory until mouse-up: nothing about the window
+                 * changes while a zone is armed, so dragging back out of one
+                 * costs nothing to undo. */
+                ui->snap_preview = snap_zone(ui, ev->x, ev->y);
                 return NO_ACT;
             }
             /* move only the outline; the window commits on release */
@@ -825,6 +885,7 @@ static unoui_action handle_inner(unoui_ui *ui, const unoui_event *ev)
             ui->last_press_ticks = ui->ticks | 1u;   /* 0 means "no previous"  */
             ui->last_press_x = ev->x; ui->last_press_y = ev->y;
 
+            ui->snap_preview = 0;             /* a fresh drag arms nothing yet */
             ui->cap_mode = UI_CAP_WINDOW; ui->cap_win = ui->focus_win;
             ui->grab_dx = ev->x - win->r.x; ui->grab_dy = ev->y - win->r.y;
             if (!ui->live_drag) {
@@ -848,10 +909,17 @@ static unoui_action handle_inner(unoui_ui *ui, const unoui_event *ev)
             win->r.x = ui->drag_x; win->r.y = ui->drag_y;
             clamp_win(ui, win); ui->drag_active = 0;
         }
+        else if (ui->cap_mode == UI_CAP_WINDOW && ui->snap_preview) {
+            /* live drag released inside a snap zone: the free position the
+             * window is sitting at is discarded in favour of the zone, and
+             * unoui_snap_apply banks the pre-snap rect as restore_r. */
+            unoui_snap_apply(ui, ui->win[ui->cap_win], ui->snap_preview);
+        }
         else if (ui->cap_mode == UI_CAP_BUTTON &&
             hit_widget(ui, ui->win[ui->cap_win], ev->x, ev->y) == ui->cap_wi)
             a = activate(ui, ui->cap_win, ui->cap_wi);
         else if (ui->cap_mode == UI_CAP_NONE) canvas_forward(ui, ev);  /* canvas release */
+        ui->snap_preview = 0;     /* armed or not, the preview dies with the drag */
         ui->cap_mode = UI_CAP_NONE;
         return a;
     }
