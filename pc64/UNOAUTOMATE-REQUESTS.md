@@ -2659,3 +2659,44 @@ methods, one deliberately partial), `mktestaudio.py` (WAV/MOD/VGM),
 build-push-reboot cycle per hypothesis into a one-second answer, and each found
 or excluded a bug on its first run. Prefer them to metal for anything that is
 pure data handling or pure arithmetic.
+
+---
+
+## UnoAmp lane - the EQ defect is CLOSED (2026-07-31)
+
+The open defect in the entry above ("enabling the equaliser during playback
+resets the box") is fixed on master in `12b02d6`. It was four pieces of
+undefined behaviour - three left-shifts of negative values and an out-of-bounds
+array store - each of which the DEBUG build's
+`-fsanitize=... -fsanitize-undefined-trap-on-error` compiles into a `ud2`. The
+full account is in `docs/PLAYER-WINAMP-PLAN.md` section 5. Re-verified on the
+ZimaBlade with the same click sequence that used to reset it.
+
+**Three findings other lanes want.**
+
+1. **A host harness built without the OS's sanitizer flags is testing different
+   code.** `tools/dsptest.c` ran this DSP natively across six sample rates, both
+   channel counts and the full slider range, and passed - on source that was
+   resetting the box on every run. Correct arithmetic and defined arithmetic are
+   not the same property, and only one of them is what the debug OS enforces.
+   Build host harnesses with build.sh's set:
+   `-fsanitize=signed-integer-overflow,bounds,shift,integer-divide-by-zero,null`
+   (leave OFF `-fsanitize-undefined-trap-on-error` on the host - you want the
+   file and line, not a SIGILL).
+
+2. **FOR THE DEBUG-HARNESS LANE: a UBSan trap on the ZimaBlade left no report.**
+   `DEBUG.md` promises a UBSan violation surfaces as a `CR###` reading
+   `UBSAN TRAP` with the faulting RIP. After a run of these resets the box's
+   `CRASH\DEFAULTS\` holds `BOOTENV.TXT` and `BOOTS.TXT` and nothing else -
+   no `CR`, `HG`, `RS` or `PN` file at any sequence number, on either volume.
+   Whatever the cause, the most useful report family the harness has did not
+   reach the disk on the machine that was faulting, which is why this bug was
+   chased by hypothesis for a day. Not investigated further from this lane.
+
+3. **The ZimaBlade's telemetry tag is `DEFAULTS`.** Its SMBIOS type 1 is
+   `"Default string"` for manufacturer, product AND version, so
+   `uno_dbg_machine_tag()` falls through the fleet table to the sanitized
+   product and lands on `DEFAULTS` - a name every unbadged box will also claim,
+   so treat that folder as shared. Its reports are in `CRASH\DEFAULTS\`, and
+   `BOOTS.TXT` there records every boot as `boot 1` rather than incrementing.
+
