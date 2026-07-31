@@ -968,6 +968,238 @@ def wm_b():
     return 0 if not fails else 1
 
 
+# ---- phase C: the snap preview is asserted between two MID-DRAG frames -----
+# A preview washes a half (or a quarter) of the work area, and the window being
+# dragged sits inside that same wash, so "did the left half change" cannot tell
+# the preview from the window. The trick is to hold the button down and grab
+# TWICE at the same pointer HEIGHT - once parked away from any edge, once on
+# it - and diff a band the window does not reach in either frame. Then the only
+# thing that can differ there is the preview.
+
+def drag_band(wtop, half_w):
+    """The probe band: full-width-of-the-left-half, above the dragged window.
+    (left, top, right, bottom) in screendump pixels, or None if the window
+    leaves no room - which must fail loudly rather than silently assert on an
+    empty box. Starts at 46 because noise_bands() ignores the debug HUD across
+    the top 40 px and the bbox helpers can never see above it."""
+    top, bot = 46, wtop - 24
+    if bot - top < 60:
+        return None
+    return (10, top, half_w - 12, bot)
+
+
+def wm_c():
+    """Gate C: drag-to-edge snapping - the live preview, the commit on release,
+    the un-snap on drag-off, and the same preview on a flat palette.
+
+        UNO_DETACH=1 UNO_DEBUG=1 ./build.sh && python3 harness.py wm_c
+
+    Same pointer requirement as wm_a/wm_b (only the PS/2 mouse can express a
+    held button, see the Mouse class), and the same real FAT image, because the
+    shell saves the session on every drop and vvfat hands that write back as
+    garbage. It owns its QEMU instance for symmetry with those two."""
+    fails = []
+
+    def check(name, ok, detail=""):
+        print("  %-50s %s %s" % (name, "PASS" if ok else "FAIL", detail))
+        if not ok:
+            fails.append(name)
+
+    try:
+        os.remove("build/esp/SHELL.CFG")       # deterministic first boot
+    except OSError:
+        pass
+    quiet_debug_cfg()
+    subprocess.run([sys.executable, "tools/mkuefi.py"], check=True)
+    os.environ["UNO_DISK"] = "build/unodos-uefi.img"
+    qemu, q = start_qemu(log="build/wm_c1.log", pointer="none")
+    try:
+        print("wm_c: boot")
+        time.sleep(18)
+        probe_screen(q)
+        band = noise_bands()
+        gw, gh = SCREEN_W // SCALE, SCREEN_H // SCALE
+        half = SCREEN_W // 2
+        m = Mouse(q)
+        check("the guest has a pointer", m.alive(), "(needs UNO_DETACH=1)")
+        if fails:
+            raise SystemExit("wm_c: no pointer in the guest - nothing to drag")
+        m.park()
+        q.cmd("send-key", keys=[{"type": "qcode", "data": "ctrl"},
+                                {"type": "qcode", "data": "w"}])
+        time.sleep(1.5)                        # close the restored Control Panel
+        grab(q, "wm_c_00_desktop")
+
+        start_app(q, 1, wait=2.5)              # menu order = app order: Editor
+        m.park()
+        grab(q, "wm_c_01_open")
+        box = diff_bbox("wm_c_00_desktop", "wm_c_01_open", ignore=band)
+        check("Editor window opened",
+              box is not None and box[2] > 100 and box[3] > 80, str(box))
+        if box is None:
+            raise SystemExit("wm_c: no Editor window - nothing to drag")
+        title_in = win_title_y("wm_c_00_desktop", "wm_c_01_open", box)
+        cx, tb_y = box[0] + box[2] // 2, box[1] + title_in
+        grab_dy = tb_y - box[1]
+
+        # ---- drag to the LEFT edge -----------------------------------------
+        # Both mid-drag frames sit at the same pointer height (mid screen), so
+        # the window occupies the same rows in each and the band above it is
+        # bare desktop in both. Dragging by the title bar to a y this far down
+        # also keeps the pointer clear of the 24 px corner squares, so the zone
+        # under test is unambiguously the left HALF and not a quarter.
+        wtop = SCREEN_H // 2 - grab_dy
+        probe = drag_band(wtop, half)
+        check("the drag leaves a probe band above the window",
+              probe is not None, str(probe))
+        m.to(cx, tb_y)
+        m.btn(True)
+        m.to(int(SCREEN_W * 0.34), SCREEN_H // 2)
+        grab(q, "wm_c_02_drag_free")           # button STILL DOWN, no zone
+        m.to(2, SCREEN_H // 2)
+        grab(q, "wm_c_03_drag_left")           # button STILL DOWN, L armed
+        m.btn(False)
+        m.park()
+        grab(q, "wm_c_04_snap_left")
+
+        if probe:
+            quiet = diff_frac("wm_c_00_desktop", "wm_c_02_drag_free", probe)
+            washed = diff_frac("wm_c_02_drag_free", "wm_c_03_drag_left", probe)
+            check("away from an edge nothing is previewed",
+                  quiet < 0.05, "%.3f changed" % quiet)
+            check("at the left edge the preview washes the half",
+                  washed > 0.85, "%.3f changed" % washed)
+        lbox = diff_bbox("wm_c_00_desktop", "wm_c_04_snap_left", ignore=band)
+        check("release committed exactly the left half",
+              lbox is not None and lbox[0] <= 8 and
+              abs(lbox[0] + lbox[2] - half) <= 16 and lbox[1] <= 44,
+              "%s (half=%d)" % (lbox, half))
+        check("the snapped window spans the work area's height",
+              lbox is not None and lbox[3] >= (SCREEN_H - 64) * 0.88, str(lbox))
+
+        # ---- drag it OFF the edge: the pre-snap SIZE comes back -------------
+        # The snapped window's top-left corner IS the work area's, so its title
+        # bar is derivable from the theme metrics rather than hunted for.
+        tbx, tby = half // 2, (TB_FRAME + TB_TITLE // 2) * SCALE
+        m.to(tbx, tby)
+        m.btn(True)
+        m.to(SCREEN_W // 2, SCREEN_H // 2)
+        m.btn(False)
+        m.park()
+        grab(q, "wm_c_05_unsnapped")
+        ubox = diff_bbox("wm_c_00_desktop", "wm_c_05_unsnapped", ignore=band)
+        # The Editor is nearly as tall as the work area, so dropped at mid
+        # screen its bottom hangs off it (which the clamp allows - a window may
+        # be parked partly off an edge). Assert the height that is VISIBLE,
+        # i.e. as much of the restored height as fits below where it landed;
+        # the width is the discriminating one anyway (651 snapped, ~1033 free).
+        seen_h = min(box[3], (SCREEN_H - 64) - ubox[1]) if ubox else 0
+        check("dragging off restored the pre-snap size",
+              ubox is not None and abs(ubox[2] - box[2]) <= 16 and
+              abs(ubox[3] - seen_h) <= 16, "%s vs %s" % (ubox, box))
+        check("...and it is no longer against the edge",
+              ubox is not None and ubox[0] > 16, str(ubox))
+
+        # ---- drag to the TOP edge: maximize --------------------------------
+        # The un-snap kept the grab's relative position along the title bar, so
+        # the pointer is still on it and the press needs no new geometry.
+        m.to(SCREEN_W // 2, SCREEN_H // 2)
+        m.btn(True)
+        m.to(SCREEN_W // 2, 2)
+        m.btn(False)
+        m.park()
+        grab(q, "wm_c_06_maxed")
+        mbox = diff_bbox("wm_c_00_desktop", "wm_c_06_maxed", ignore=band)
+        check("the top edge maximized it",
+              mbox is not None and mbox[2] >= SCREEN_W * 0.92 and
+              mbox[1] <= 44, str(mbox))
+        work_bot = (mbox[1] + mbox[3]) if mbox else SCREEN_H - 64
+
+        # ---- drag to a CORNER: a quarter ------------------------------------
+        m.to(half, (TB_FRAME + TB_TITLE // 2) * SCALE)
+        m.btn(True)
+        m.to(SCREEN_W - 4, SCREEN_H - 4)       # past the work area: still "BR"
+        m.btn(False)
+        m.park()
+        grab(q, "wm_c_07_quarter")
+        qbox = diff_bbox("wm_c_00_desktop", "wm_c_07_quarter", ignore=band)
+        check("the bottom-right corner gave the right half",
+              qbox is not None and qbox[0] >= half - 16 and
+              qbox[0] + qbox[2] >= SCREEN_W - 16, str(qbox))
+        check("...and the bottom half of it",
+              qbox is not None and abs(qbox[1] - work_bot // 2) <= 40 and
+              qbox[1] + qbox[3] >= work_bot - 16,
+              "%s (work_bot=%d)" % (qbox, work_bot))
+
+        # ---- repeat one snap on a FLAT palette (Windows 3.1) ---------------
+        # Aurora's desktop is a gradient the wash sits over easily; Win 3.1 is
+        # two flat colours, which is the case a translucent highlight can
+        # disappear into. Driven through the real Control Panel: tab strip ->
+        # Personalization -> the Theme dropdown, which applies live on every
+        # arrow key. The Editor is CLOSED across the change so the second half
+        # of this scenario gets a clean Win 3.1 desktop to diff against and
+        # re-measures every coordinate under the new metrics - no theme-
+        # specific constant appears below.
+        q.cmd("send-key", keys=[{"type": "qcode", "data": "ctrl"},
+                                {"type": "qcode", "data": "w"}])
+        time.sleep(1.2)
+        start_app(q, 0, wait=2.5)              # Control Panel
+        m.park()
+        grab(q, "wm_c_08_before_theme")
+        tap(q, "tab")                          # the tab strip (widget 0)
+        tap(q, "right")                        # Display -> Personalization
+        time.sleep(0.6)
+        tap(q, "tab")                          # the Theme dropdown
+        for _ in range(5):                     # Aurora Light -> Windows 3.1
+            tap(q, "down", gap=0.35)
+        time.sleep(1.0)
+        m.park()
+        grab(q, "wm_c_09_win31_cp")
+        skin = diff_frac("wm_c_08_before_theme", "wm_c_09_win31_cp",
+                         (0, 46, SCREEN_W, SCREEN_H - 70))
+        check("the Windows 3.1 theme is live", skin > 0.5, "%.3f changed" % skin)
+        q.cmd("send-key", keys=[{"type": "qcode", "data": "ctrl"},
+                                {"type": "qcode", "data": "w"}])
+        time.sleep(1.5)                        # close the Control Panel
+        m.park()
+        grab(q, "wm_c_10_win31_desk")
+
+        start_app(q, 1, wait=2.5)              # Editor again, Win 3.1 chrome
+        m.park()
+        grab(q, "wm_c_11_win31_open")
+        b31 = diff_bbox("wm_c_10_win31_desk", "wm_c_11_win31_open", ignore=band)
+        check("Editor reopened under Windows 3.1",
+              b31 is not None and b31[2] > 100 and b31[3] > 80, str(b31))
+        if b31 is None:
+            raise SystemExit("wm_c: no Editor under Win 3.1")
+        t31 = win_title_y("wm_c_10_win31_desk", "wm_c_11_win31_open", b31)
+        probe31 = drag_band(SCREEN_H // 2 - t31, half)
+        m.to(b31[0] + b31[2] // 2, b31[1] + t31)
+        m.btn(True)
+        m.to(int(SCREEN_W * 0.34), SCREEN_H // 2)
+        grab(q, "wm_c_12_win31_free")
+        m.to(2, SCREEN_H // 2)
+        grab(q, "wm_c_13_win31_left")
+        m.btn(False)
+        m.park()
+        grab(q, "wm_c_14_win31_snapped")
+        if probe31:
+            w31 = diff_frac("wm_c_12_win31_free", "wm_c_13_win31_left", probe31)
+            check("the preview reads on the flat Win 3.1 palette",
+                  w31 > 0.85, "%.3f changed" % w31)
+        else:
+            check("the Win 3.1 drag leaves a probe band", False, str(probe31))
+        sbox = diff_bbox("wm_c_10_win31_desk", "wm_c_14_win31_snapped", ignore=band)
+        check("and it snaps to the left half there too",
+              sbox is not None and sbox[0] <= 8 and
+              abs(sbox[0] + sbox[2] - half) <= 16, str(sbox))
+    finally:
+        stop_qemu(qemu, q)
+
+    print("wm_c: %s" % ("PASS" if not fails else "FAIL " + ", ".join(fails)))
+    return 0 if not fails else 1
+
+
 def qemu_argv(extra=None, log="build/ovmf.log", pointer="tablet"):
     # Storage: a vvfat view of build/esp by default (no image build needed).
     # vvfat's read-write mode corrupts multi-cluster WRITES, though, so tests
@@ -1020,6 +1252,8 @@ def main():
         return wm_a()                          # owns its own two QEMU boots
     if len(sys.argv) > 1 and sys.argv[1] == "wm_b":
         return wm_b()                          # ditto: it asserts on a reboot
+    if len(sys.argv) > 1 and sys.argv[1] == "wm_c":
+        return wm_c()                          # ditto: it owns its QEMU
     subprocess.run(["cp", OVMF_VARS, "build/vars.fd"], check=True)
     if os.path.exists(QMP_SOCK):
         os.remove(QMP_SOCK)
