@@ -1,11 +1,11 @@
 # BIOS boot for pc64, a phased plan
 
-Status: **A in progress.** Details per phase below.
+Status: **A DONE, QEMU-verified.** Details per phase below.
 
 | Phase | State |
 |---|---|
-| A, the loader reaches long mode | IN PROGRESS |
-| B, the kernel boots from it | NOT STARTED |
+| A, the loader reaches long mode | **DONE**, QEMU + SeaBIOS: `tools/mkbios.sh test` then `tools/bios_qemu.py` paints 1920x1200 from 64-bit C |
+| B, the kernel boots from it | IN PROGRESS |
 | C, storage + input with no firmware at all | NOT STARTED |
 | D, the old-machine tier (P4 / Core) | NOT STARTED |
 | E, one image that boots both ways | NOT STARTED |
@@ -104,8 +104,24 @@ real-mode kernel, so the disk half is a starting point and the mode switch is
 new. They are `cpu 8086`-clean, a constraint this chain does not share and
 should not inherit.
 
-**Gate:** QEMU + SeaBIOS reaches the 64-bit entry and paints the framebuffer
-from C. Provable headlessly with a QMP screendump.
+**Gate: MET 2026-07-31.** `tools/mkbios.sh test` builds `boot/loadertest.c`
+into a bootable image and `tools/bios_qemu.py` boots it under SeaBIOS: colour
+bars and a frame at 1920x1200, drawn by 64-bit C through a VBE linear
+framebuffer, with no triple fault over the whole run.
+
+Two things bit on the way, both invisible from the symptom and both now
+commented where they live:
+
+- **File alignment must equal section alignment.** A normal PE packs sections at
+  file alignment 0x200 and spreads them at section alignment 0x1000, so file
+  offset != RVA. stage2 copies bytes; it is not a PE loader. The symptom was a
+  `#UD` at an address that is not an instruction boundary in the disassembly,
+  because what ran was never the compiled code.
+- **SSE has to be enabled by hand.** x86-64 mandates SSE2 so the compiler emits
+  it freely, but a CPU comes out of reset with `CR0.EM` set and `CR4.OSFXSR`
+  clear. UEFI does this for us, which is exactly why it is easy to miss: the
+  same kernel that runs when firmware loads it dies in its own prologue when
+  this loader does.
 
 ## Phase B, the kernel boots from it
 
