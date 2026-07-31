@@ -2935,3 +2935,38 @@ cycle on the real FAT image. Two traps behind that, recorded as corrections
 press already raised the taskbar - use `g_mru[0]`), and a window's diff bbox
 starts at its drop shadow, so aim clicks at chrome whose position you can
 derive rather than hunt for.
+
+## 2026-07-31 - LANDED (toolkits lane): WM phase C, drag-to-edge snapping
+
+`docs/WM-MODERN-SPEC.md` §5. Pointer-driven snap zones during a live drag, the
+translucent preview, commit on release, un-snap on drag-off.
+
+**unoui.** `snap_zone()` reads the POINTER, not the window rect: 8 px from a
+work-area edge arms MAX / L / R, a 24x24 corner arms a quarter, corners tested
+first. Only the pointer can reach an edge at all, because the window is clamped
+inside the work area and the pointer is not. `snap_target()` is factored out of
+`unoui_snap_apply` so the preview and the commit compute the same rect,
+non-resizable move-only policy included - the preview cannot promise geometry
+the release does not deliver. `unoui_draw_snap_preview()` (accent wash at alpha
+56 plus a 1 px accent frame, palette only) is the ONE new export, split out
+exactly like `unoui_draw_drag_outline()` so the pc64 snapshot fast path can
+redraw it per frame. Un-snap happens on the first pointer MOTION past an 8 px
+slop, never on the press - see correction 15.
+
+**Shell.** The drag fast path paints the preview under the dragged window. Two
+bugs fixed on the way through: `close_focused()` never handed focus on (any
+keyboard window command was dead after a close, correction 16), and Alt+Down's
+minimize half used the bare `wm_park()` instead of phase B's `minimize_app()`.
+
+**Gates** (all green, on `UNO_DETACH=1 UNO_DEBUG=1`): `pc64/build.sh` at
+`UNO_DEBUG=0` and `UNO_DEBUG=1`; `unoui/build.sh`; `python3 harness.py wm_c`
+PASS, 16 checks - left-edge preview asserted between two mid-drag frames, the
+committed left half, the pre-snap size returned by dragging off, the top edge
+maximizing, a corner giving a quarter, and the same preview repeated on the
+flat Win 3.1 palette (theme switched live through the real Control Panel).
+`wm_a`, `wm_b` and `WM_REQUIRE_EDGE=1 wm_d` re-run as regressions on the same
+build, all PASS. `wm_a` earned its keep: it caught the un-snap-on-press bug.
+
+Corrections 15-20 added to the spec's §13. E and F should note 16 in
+particular - a scenario that closes a window and then presses a key was
+relying on focus surviving, and it no longer has to.

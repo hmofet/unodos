@@ -1,6 +1,6 @@
 # Modern window management, implementation spec (worker brief)
 
-Status: SPEC, 2026-07-31. Phases A and D are landed (see the table at the
+Status: SPEC, 2026-07-31. Phases A, B, C and D are landed (see the table at the
 end and `pc64/UNOAUTOMATE-REQUESTS.md`). The design rationale is in
 [`WM-MODERN-PLAN.md`](WM-MODERN-PLAN.md); this document is the build order.
 Where the two disagree, THIS file wins.
@@ -469,13 +469,53 @@ Recorded from the phases that have run. These override the sections above.
     bare title bar and passing. The same shadow bleeds a few rows INTO the
     taskbar band, so locate a chip against a frame with no window in it.
 
+15. **Un-snap on MOTION, never on the press** (phase C). §5.5 says "on drag
+    start, if `win->snap != UI_SNAP_NONE`, un-snap first". Taken literally that
+    breaks the double click: its first half IS a press on a maximized title
+    bar, so the window un-snaps and the second half re-maximizes what it meant
+    to restore. `wm_a`'s restore step catches it. The rule is a slop threshold
+    (`UNSNAP_SLOP` 8 px, comfortably above `DBLCLICK_SLOP`) crossed in the
+    move handler; below it the drag does not move the window at all.
+16. **`close_focused()` never handed focus on** (found by phase C, fixed
+    there). `remove_win()` left `focus_win` pointing at whatever slid into the
+    closed window's index - in practice the pinned taskbar - so after closing
+    any window every keyboard window command (Alt+arrows, Ctrl-M, Alt-Tab)
+    silently no-opped until something was clicked. It calls phase B's
+    `focus_next_mru()` now, the same as minimizing. A gate step that closes a
+    window and then presses a key was relying on a bug.
+17. **A snap preview and the window it previews overlap**, so "did the left
+    half change" cannot tell them apart, and neither can a bbox. Assert between
+    TWO MID-DRAG frames at the same pointer HEIGHT - one parked away from any
+    edge, one on it - over a band the window reaches in neither. `wm_c`'s
+    `drag_band()` is that band (above the window, left half, below the ignored
+    HUD strip). The edge-parked frame doubles as the negative control: away
+    from an edge that band must not change at all.
+18. **Assert the VISIBLE height, not the nominal one.** The Editor is nearly as
+    tall as the work area, and the clamp deliberately lets a window hang off an
+    edge, so a window dropped anywhere below the top has its bottom cut off and
+    its bbox height is `work_bottom - top`, not the restored height. Phase C's
+    un-snap check compares against `min(orig_h, work_bottom - top)`.
+19. **A theme change mid-scenario needs a reference frame with the SAME window
+    set.** Diffing the post-change frame against one taken while a different
+    set of windows was open puts the vanished window into the bbox and reads as
+    a snap failure. `wm_c` closes the Editor across the theme change, grabs a
+    clean Win 3.1 desktop, and re-measures every coordinate under the new
+    metrics, so no theme constant appears in the second half at all.
+20. **§5.4's draw order is wrong for the fast path.** "After all windows" is
+    right for `unoui_render_ui`, but the pc64 snapshot path must draw the
+    preview BEFORE `unoui_render_window` - the preview marks where the window
+    is going, so the window has to stay the thing you are looking at. Both live
+    in `unoui_draw_snap_preview()`, split out exactly like
+    `unoui_draw_drag_outline()`; that one added export is phase C's whole
+    contract surface.
+
 ## Phase table (update as you land)
 
 | Phase | Contents | State |
 |---|---|---|
 | A | live drag, work area, double-click max, geometry persistence | **DONE** 2026-07-31 |
 | B | min/max buttons, shell minimize, parked chips | **DONE** 2026-07-31 |
-| C | pointer snap + previews + restore semantics | NOT STARTED |
+| C | pointer snap + previews + restore semantics | **DONE** 2026-07-31 |
 | D | mods byte, `next_key2`/`uno_pc64_mods`, Alt-Tab MRU switcher | **DONE** 2026-07-31 |
 | E | virtual desktops + pager + persistence | NOT STARTED |
 | F | link groups, tile/cascade, context menu, taskbar overflow | NOT STARTED |
