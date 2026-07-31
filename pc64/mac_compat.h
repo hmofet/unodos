@@ -285,6 +285,13 @@ void uno_pc64_scene_save(void);    /* snapshot the rendered scene (drag fast-pat
 void uno_pc64_scene_restore(void); /* restore the snapshot before drawing the outline */
 void uno_pc64_lowres(int on);   /* low-res render mode (full-screen 3D) */
 int  uno_pc64_next_key(int *scan, int *uni, int *ctrl);  /* raw key stream (unoui) */
+/* the same stream carrying the full UI_MOD_* byte (unoui.h); next_key is its
+ * ctrl-only wrapper, so pre-modifier callers need no change. uno_pc64_mods()
+ * is the LIVE held-now state - authoritative on native PS/2, a per-keystroke
+ * latch on the UEFI path, and 0 wherever the transport reports no modifiers
+ * (USB HID, until the usb lane exposes its boot-report modifier byte). */
+int  uno_pc64_next_key2(int *scan, int *uni, int *mods);
+int  uno_pc64_mods(void);
 void uno_pc64_mouse(int *x, int *y, int *btn);           /* fb-space mouse + button */
 int  uno_pc64_wheel(void);            /* wheel notches since last call (+ = down) */
 void uno_pc64_delay_ms(int ms);                          /* firmware Stall (idle pacing) */

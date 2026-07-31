@@ -33,6 +33,11 @@ void uno_ps2_status(int *kbd, int *aux, int *auxport, int *auxid);
 int  uno_ps2_init(void);
 void uno_ps2_pump(void);
 int  uno_ps2_next_key(int *scan, int *uni, int *ctrl);
+/* the same stream with the full UI_MOD_* byte; next_key is its ctrl-only
+ * wrapper. uno_ps2_mods() is the LIVE held-now state (make/break tracked), the
+ * authoritative modifier source whenever native input owns the keyboard. */
+int  uno_ps2_next_key2(int *scan, int *uni, int *mods);
+int  uno_ps2_mods(void);
 int  uno_ps2_mouse(int *dx, int *dy, int *btn);
 int  uno_ps2_mouse_wheel(void);   /* notches since the last call (+ = down) */
 

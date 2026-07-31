@@ -271,55 +271,86 @@ static const char kSet1Sh[128] = {
 #define K_RT 3
 #define K_LT 4
 #define K_DEL 8
+#define K_F1  0x0B                             /* F1..F12 are contiguous       */
 #define K_F10 0x14
 #define K_ESC 0x17
 
 #define KQ 16
-static struct { int scan, uni, ctrl; } gKQ[KQ];
+static struct { int scan, uni, mods; } gKQ[KQ];
 static int gKQh, gKQt;
 static int gShift, gCtrl, gCaps, gE0;
+static int gAlt, gGui;                         /* make/break tracked, like shift */
 
-static void kq_push(int scan, int uni, int ctrl)
+/* mirrors unoui.h's UI_MOD_* - this file includes no headers by design (it is
+ * the no-firmware layer), so the four bits are restated rather than pulled in.
+ * They are a wire format between here and uefi_main's raw ring; keep in step. */
+#define PS2_MOD_SHIFT 1
+#define PS2_MOD_CTRL  2
+#define PS2_MOD_ALT   4
+#define PS2_MOD_GUI   8
+
+/* live modifier state, UI_MOD_* bits. Authoritative while native input owns
+ * the keyboard: every modifier here has a real make AND break edge, so
+ * Alt-held reads true for exactly as long as Alt is physically down. */
+static int ps2_mods(void)
+{
+    return (gShift ? PS2_MOD_SHIFT : 0) | (gCtrl ? PS2_MOD_CTRL : 0) |
+           (gAlt   ? PS2_MOD_ALT   : 0) | (gGui  ? PS2_MOD_GUI  : 0);
+}
+int uno_ps2_mods(void) { return ps2_mods(); }
+
+static void kq_push(int scan, int uni, int mods)
 {
     int n = (gKQt + 1) % KQ;
     if (n == gKQh) return;
-    gKQ[gKQt].scan = scan; gKQ[gKQt].uni = uni; gKQ[gKQt].ctrl = ctrl;
+    gKQ[gKQt].scan = scan; gKQ[gKQt].uni = uni; gKQ[gKQt].mods = mods;
     gKQt = n;
 }
 
 static void kbd_byte(unsigned char b)
 {
-    int brk, code, uni;
+    int brk, code, uni, md;
     if (b == 0xE0) { gE0 = 1; return; }
     if (b == 0xE1) { return; }                 /* pause prefix - ignore        */
     brk  = b & 0x80;
     code = b & 0x7F;
     if (gE0) {
         gE0 = 0;
-        if (!brk) switch (code) {
-        case 0x48: kq_push(K_UP,  0, gCtrl); break;
-        case 0x50: kq_push(K_DN,  0, gCtrl); break;
-        case 0x4B: kq_push(K_LT,  0, gCtrl); break;
-        case 0x4D: kq_push(K_RT,  0, gCtrl); break;
-        case 0x53: kq_push(K_DEL, 0, gCtrl); break;
-        case 0x1D: gCtrl = 1; break;           /* right ctrl                   */
+        switch (code) {
+        case 0x1D: gCtrl = !brk; return;       /* right ctrl                   */
+        case 0x38: gAlt  = !brk; return;       /* AltGr / right alt            */
+        case 0x5B: case 0x5C: gGui = !brk; return;   /* left/right logo        */
         }
-        else if (code == 0x1D) gCtrl = 0;
+        if (brk) return;
+        md = ps2_mods();
+        switch (code) {
+        case 0x48: kq_push(K_UP,  0, md); break;
+        case 0x50: kq_push(K_DN,  0, md); break;
+        case 0x4B: kq_push(K_LT,  0, md); break;
+        case 0x4D: kq_push(K_RT,  0, md); break;
+        case 0x53: kq_push(K_DEL, 0, md); break;
+        }
         return;
     }
     switch (code) {
     case 0x2A: case 0x36: gShift = !brk; return;
     case 0x1D:            gCtrl  = !brk; return;
+    case 0x38:            gAlt   = !brk; return;
     case 0x3A: if (!brk)  gCaps  = !gCaps; return;
-    case 0x01: if (!brk)  kq_push(K_ESC, 0, gCtrl); return;
-    case 0x44: if (!brk)  kq_push(K_F10, 0, gCtrl); return;
+    case 0x01: if (!brk)  kq_push(K_ESC, 0, ps2_mods()); return;
     }
+    /* function keys: set-1 F1..F10 = 0x3B..0x44, F11/F12 = 0x57/0x58, and the
+     * EFI scan codes they map to are contiguous from F1 = 0x0B. The shell's
+     * F2 window-switcher fallback is unreachable on a detached boot without
+     * this, which is exactly the boot where Alt may be the only other route. */
+    if (code >= 0x3B && code <= 0x44) { if (!brk) kq_push(K_F1 + (code - 0x3B), 0, ps2_mods()); return; }
+    if (code == 0x57 || code == 0x58) { if (!brk) kq_push(K_F1 + 10 + (code - 0x57), 0, ps2_mods()); return; }
     if (brk || code >= 128) return;
     uni = gShift ? kSet1Sh[code] : kSet1[code];
     if (!uni) return;
     if (gCaps && uni >= 'a' && uni <= 'z' && !gShift) uni += 'A' - 'a';
     else if (gCaps && uni >= 'A' && uni <= 'Z' && gShift) uni += 'a' - 'A';
-    kq_push(0, uni, gCtrl);
+    kq_push(0, uni, ps2_mods());
 }
 
 /* ---- mouse packet assembly ------------------------------------------------ *
@@ -365,11 +396,20 @@ void uno_ps2_pump(void)
     }
 }
 
-int uno_ps2_next_key(int *scan, int *uni, int *ctrl)
+int uno_ps2_next_key2(int *scan, int *uni, int *mods)
 {
     if (gKQh == gKQt) return 0;
-    *scan = gKQ[gKQh].scan; *uni = gKQ[gKQh].uni; *ctrl = gKQ[gKQh].ctrl;
+    *scan = gKQ[gKQh].scan; *uni = gKQ[gKQh].uni; *mods = gKQ[gKQh].mods;
     gKQh = (gKQh + 1) % KQ;
+    return 1;
+}
+
+/* compat wrapper: the ctrl-only stream every pre-modifier caller reads */
+int uno_ps2_next_key(int *scan, int *uni, int *ctrl)
+{
+    int md;
+    if (!uno_ps2_next_key2(scan, uni, &md)) return 0;
+    *ctrl = (md & PS2_MOD_CTRL) != 0;
     return 1;
 }
 
