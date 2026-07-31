@@ -330,7 +330,7 @@ landing green on both `UNO_DEBUG` builds and the QEMU gate:
 | A | live drag (`live_drag` + `unoui_render_window` + shell fast path), work area in unoui, double-click maximize, geometry persistence | - |
 | B | min/max titlebar buttons + `UI_ACT_MIN/MAX`, shell minimize + parked chips, chip toggle, maximize-as-snap | A |
 | C | pointer snap zones + previews, snap restore-on-drag, non-resizable policy | A, B |
-| D | mods byte (`next_key2`, UEFI + PS/2 sources), Alt-Tab MRU switcher, Alt keybindings; USB HID request filed early so it can land in parallel | - (parallel to A-C) |
+| D | mods byte (`next_key2`, UEFI + PS/2 sources), Alt-Tab MRU switcher, Alt keybindings; USB HID request filed early so it can land in parallel | - (parallel to A-C) — **LANDED 2026-07-31** |
 | E | virtual desktops + pager + Ctrl+F1..F4 + persistence | B |
 | F | link groups, tile/cascade/show-desktop commands, window context menu, taskbar overflow | B, E |
 

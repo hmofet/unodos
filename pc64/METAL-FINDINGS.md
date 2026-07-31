@@ -805,3 +805,29 @@ Two self-inflicted hazards found via the Yoga's stick:
   unambiguous because the flasher ships an empty `CRASH\`.
   - Cross-check every report against `cpu:` / `fb_base` in the env block before
     attributing it to a machine.
+
+## 2026-07-31 — UEFI modifier state has no release edge under OVMF
+
+Window-management phase D needs to know when Alt goes UP, not just that it was
+down when a key was pressed. Three findings from the QEMU/OVMF gate:
+
+- `EFI_SIMPLE_TEXT_INPUT_EX` only reports `KeyShiftState` alongside a
+  keystroke, so on the attached path the state is a **latch**: it says what was
+  held at the last key, and reads stale forever after the modifier is released.
+- The standard remedy is `SetState(EFI_TOGGLE_STATE_VALID |
+  EFI_KEY_STATE_EXPOSED)`, which asks for modifier-only *partial keystrokes* —
+  the only report a key-UP ever generates. `uefi_main.c` now requests it,
+  best-effort. **OVMF's PS/2 keyboard driver ignores it**: the release edge
+  never arrives under QEMU. Untested on real firmware; if a machine misbehaves
+  (a flood of partial keystrokes, or input dying), deleting that one SetState
+  call restores the previous behaviour, and the poll drain is budgeted anyway.
+- The **native PS/2 tracker is authoritative** and always was the plan: once
+  detached, make and break of 0x2A/0x36, 0x1D, 0x38 and E0-5B/5C are ours, and
+  Alt-held reads true for exactly as long as Alt is physically down. Every
+  release-driven UI feature must therefore behave sanely with a stale latch —
+  the Alt-Tab overlay carries a ~3 s backstop for precisely that case.
+
+Practical consequence for anyone testing WM keybindings under QEMU: the
+production build detaches (so the edge works), while the **debug** build has
+detach disabled by default (finding F8) and needs `UNO_DETACH=1` to exercise
+the native path.

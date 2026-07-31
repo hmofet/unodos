@@ -2777,3 +2777,44 @@ ONLY in the input section (`map_key`, the raw key ring, pointer polling) to
 add a mods byte — not boot wiring. If the BIOS path grows its own keyboard
 source, feed the same raw ring; the widened `(scan, uni, mods)` entry is the
 contract to target.
+
+
+## 2026-07-31 — LANDED (toolkits lane): WM phase D, modifier plumbing + Alt-Tab
+
+Phase D of `docs/WM-MODERN-SPEC.md` §6 is on master. Phases A, B, C, E, F are
+untouched and still open.
+
+**What landed.** The raw key ring is now `(scan, uni, mods)` with
+`uno_pc64_next_key2()`; `uno_pc64_next_key()` is its ctrl-only wrapper, so
+`pc64_accounts.c` and every other pre-modifier caller is byte-identical.
+`uno_pc64_mods()` reports LIVE held-now modifiers. `unoui.h` gained
+`UI_MOD_GUI = 8` (append). Shell-side: an MRU focus stack, the Alt-Tab
+switcher overlay (replacing `cycle_window()`'s blind rotation), Alt+arrow
+snap, Alt+D show-desktop, and `pc64_dbg_wm_*` shims for the stress driver.
+
+**Modifier sources, as they actually behave.**
+
+| Transport | Shift/Ctrl | Alt / GUI | Release edge |
+|---|---|---|---|
+| native PS/2 (detached) | yes | yes | yes — make/break tracked, authoritative |
+| UEFI `SimpleTextInputEx` | yes | yes | only if the firmware exposes partial keystrokes; OVMF does not |
+| firmware ConIn only | no | no | no |
+| USB HID | no | no | no — the request below is still OPEN |
+
+Every Alt binding therefore keeps its ctrl-reachable fallback: F2 / Ctrl-Tab
+drive the same overlay and the same MRU order, committing on a ~0.8 s timer
+because they have no release edge at all.
+
+**Cross-lane request → usb stack (usbhid owner): STILL OPEN.** The HID boot
+report's modifier byte is not exposed, so `uno_pc64_mods()` reports 0 from a
+USB keyboard. Wiring it up is a one-line change in `uno_pc64_mods()`'s source
+selection once it lands.
+
+**Gates run** (all green): `pc64/build.sh` at `UNO_DEBUG=0` and `UNO_DEBUG=1`;
+`unoui/build.sh` (host contact sheet); `python3 harness.py wm_d` on the
+production build, the attached debug build, and — with `WM_REQUIRE_EDGE=1`
+against `UNO_DEBUG=1 UNO_DETACH=1` — the detached/native-input boot, which is
+the run that exercises the PS/2 make/break tracker (the System-window shot
+`shots/wm_d_11_system.png` records `DETACHED (native)` and `PS/2: kbd up`).
+The pre-existing default `harness.py` pass was re-run as a regression check on
+the key funnel.
