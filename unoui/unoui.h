@@ -139,6 +139,17 @@ enum {
     UI_WIN_RESIZE = 1 << 3    /* draggable bottom-right grip; fill widgets reflow */
 };
 
+/* ---- snap states (unoui_window.snap) ------------------------------------- *
+ * Where a window has been snapped to inside the work area. UI_SNAP_NONE = a
+ * free-floating window, which is what a zero-initialised window is, so nothing
+ * that never snaps has to know these exist. The geometry of each state is pure
+ * arithmetic on ui->work - see unoui_snap_rect(). */
+enum {
+    UI_SNAP_NONE = 0, UI_SNAP_MAX,
+    UI_SNAP_L, UI_SNAP_R,                     /* halves                        */
+    UI_SNAP_TL, UI_SNAP_TR, UI_SNAP_BL, UI_SNAP_BR   /* quarters               */
+};
+
 typedef struct unoui_window {
     const char   *title;
     unoui_rect    r;          /* whole window incl. title bar, screen coords  */
@@ -150,6 +161,9 @@ typedef struct unoui_window {
     int           content_y;
     int           font_slot;  /* per-window font override: -2 inherit, -1 bitmap, 0.. TTF */
     int           min_w, min_h; /* resize floor (UI_WIN_RESIZE)                */
+    /* --- appended; 0 must mean "as before" (see unoui_snap_apply) ---------- */
+    unsigned char snap;       /* UI_SNAP_*: which snap state this window is in */
+    unoui_rect    restore_r;  /* the pre-snap rect to give back on un-snap     */
 } unoui_window;
 
 struct unoui_theme;           /* fwd (defined in unoui_theme.h) */
@@ -291,6 +305,11 @@ typedef struct {
 /* special action kind: the title-bar close box was clicked. `value` is the
  * window's z-index; the app should close/remove that window. */
 #define UI_ACT_CLOSE 9999
+/* the same contract for the other two window commands: `value` is the z-index.
+ * unoui raises them, it does not implement them - minimizing needs a taskbar
+ * and maximizing needs a work-area policy, and both are the shell's. */
+#define UI_ACT_MIN   9998
+#define UI_ACT_MAX   9997
 
 /* ---- the UI context (windows + interaction state) ------------------------ */
 /* 24 = the pc64 shell's worst case (taskbar + desktop + Start menu + calendar
@@ -324,7 +343,34 @@ typedef struct unoui_ui {
      * moves (drag_active); the window commits to it on release. Keeps drags
      * flicker-free - the static desktop isn't rewritten every frame. */
     int drag_active, drag_x, drag_y, drag_w, drag_h;
+
+    /* --- appended; every field zero must reproduce the behaviour above ----- *
+     * work: the area windows are clamped, maximized and snapped into - the
+     *   screen minus whatever chrome the platform reserves (pc64: the taskbar).
+     *   unoui_ui_init sets it to the whole screen, and a zero-sized work rect
+     *   is read as "whole screen" too, so a context built by other means keeps
+     *   working.
+     * live_drag: 1 = UI_CAP_WINDOW moves win->r itself each event instead of
+     *   the rubber band. Opt-in, because an opaque drag needs the platform to
+     *   be able to repaint one window cheaply (pc64 snapshots the scene).
+     * snap_preview: the UI_SNAP_* zone a live drag would commit to (phase C).
+     * last_press_*: the double-click detector's previous press. */
+    unoui_rect work;
+    int        live_drag;
+    int        snap_preview;
+    unsigned   last_press_ticks;
+    int        last_press_x, last_press_y;
 } unoui_ui;
+
+/* ui->work, or the whole screen when it was never set (w or h <= 0) */
+unoui_rect unoui_work_area(const unoui_ui *);
+/* the rect a snap state occupies inside ui->work (pure geometry, no state) */
+unoui_rect unoui_snap_rect(const unoui_ui *, int snap);
+/* enter/leave a snap state: saves restore_r on the way in, gives it back on
+ * UI_SNAP_NONE, reflows the widgets either way. A window without
+ * UI_WIN_RESIZE is only MOVED (centred in the target) and keeps snap NONE -
+ * a fixed pixel layout must not be stretched. */
+void unoui_snap_apply(unoui_ui *, unoui_window *win, int snap);
 
 /* absolute screen rect of a widget (menubar spans the content top edge) */
 unoui_rect unoui_widget_rect(const struct unoui_theme *, const unoui_window *,
@@ -339,6 +385,10 @@ int           unoui_ui_add  (unoui_ui *, unoui_window *);   /* topmost = focus;
 void          unoui_bring_to_front(unoui_ui *, unoui_window *win);
 unoui_action  unoui_handle  (unoui_ui *, const unoui_event *);
 void          unoui_render_ui(unoui_ui *);
+/* Draw ONE window (chrome + widgets) with its correct focus/hot/pressed state,
+ * exactly as unoui_render_ui would. Lets a platform repaint just the window
+ * that moved over a snapshot of the rest of the scene - the live-drag path. */
+void          unoui_render_window(unoui_ui *, unoui_window *win);
 /* Optional per-window draw profiler (a debug harness sets it; NULL = free).
  * Called with begin=1 before a window's chrome+widgets draw and begin=0
  * after; the fullscreen canvas path reports the same way. The toolkit has no

@@ -33,6 +33,11 @@ void unoui_ui_init(unoui_ui *ui, const unoui_theme *t, int sw, int sh)
      * passed or failed depending on what the stack happened to hold. */
     ui->full = 0;
     ui->drag_active = ui->drag_x = ui->drag_y = ui->drag_w = ui->drag_h = 0;
+    /* the work area defaults to the whole screen: a platform that reserves
+     * chrome (a taskbar) narrows it, everyone else is unaffected */
+    ui->work.x = ui->work.y = 0; ui->work.w = sw; ui->work.h = sh;
+    ui->live_drag = 0; ui->snap_preview = 0;
+    ui->last_press_ticks = 0; ui->last_press_x = ui->last_press_y = 0;
     for (i = 0; i < UNOUI_MAX_WINDOWS; i++) ui->win[i] = 0;
     unoui_bg_invalidate();
 }
@@ -63,6 +68,11 @@ int unoui_ui_add(unoui_ui *ui, unoui_window *win)
 /* ----------------------------------------------------------- helpers ------ */
 
 static const unoui_action NO_ACT = { 0, 0, 0, 0 };
+
+/* title-bar double click: two presses within this many UI_EV_TICKs and this
+ * many px of each other. A port ticks per frame, so 24 is roughly 400 ms. */
+#define DBLCLICK_TICKS 24
+#define DBLCLICK_SLOP  4
 
 static int pt_in(unoui_rect r, int x, int y)
 { return x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h; }
@@ -167,13 +177,31 @@ void unoui_bring_to_front(unoui_ui *ui, unoui_window *win)
     ui->focus_wi = -1;
 }
 
-static void clamp_win(unoui_ui *ui, unoui_window *w)
+/* Windows are kept inside the WORK area, not the raw screen: a platform that
+ * reserves chrome (pc64's taskbar) sets ui->work and its windows stop hiding
+ * under the bar. A zero-sized work rect means "not set" and reads as the whole
+ * screen, so a context built without unoui_ui_init behaves exactly as before. */
+unoui_rect unoui_work_area(const unoui_ui *ui)
 {
-    if (w->r.x < -w->r.w + 48) w->r.x = -w->r.w + 48;
-    if (w->r.x > ui->screen_w - 48) w->r.x = ui->screen_w - 48;
-    if (w->r.y < 0) w->r.y = 0;
-    if (w->r.y > ui->screen_h - 16) w->r.y = ui->screen_h - 16;
+    unoui_rect r = ui->work;
+    if (r.w <= 0 || r.h <= 0) {
+        r.x = r.y = 0; r.w = ui->screen_w; r.h = ui->screen_h;
+    }
+    return r;
 }
+
+/* Keep at least 48 px of a window's width and 16 px of its height reachable
+ * inside `wk` - enough title bar to grab it back with. */
+static void clamp_to(unoui_rect wk, unoui_rect *r)
+{
+    if (r->x < wk.x - r->w + 48) r->x = wk.x - r->w + 48;
+    if (r->x > wk.x + wk.w - 48) r->x = wk.x + wk.w - 48;
+    if (r->y < wk.y) r->y = wk.y;
+    if (r->y > wk.y + wk.h - 16) r->y = wk.y + wk.h - 16;
+}
+
+static void clamp_win(unoui_ui *ui, unoui_window *w)
+{ clamp_to(unoui_work_area(ui), &w->r); }
 
 static void close_popup(unoui_ui *ui)
 {
@@ -654,13 +682,23 @@ static unoui_action handle_inner(unoui_ui *ui, const unoui_event *ev)
         switch (ui->cap_mode) {
         case UI_CAP_WINDOW: {
             unoui_window *win = ui->win[ui->cap_win];
+            unoui_rect wk = unoui_work_area(ui);
+            if (ui->live_drag) {
+                /* opaque drag: the window itself follows the pointer, so the
+                 * platform repaints it (unoui_render_window) over a snapshot
+                 * of the rest of the scene. drag_active stays 0 - there is no
+                 * rubber band to draw and nothing to commit on release. */
+                win->r.x = ev->x - ui->grab_dx; win->r.y = ev->y - ui->grab_dy;
+                clamp_to(wk, &win->r);
+                return NO_ACT;
+            }
             /* move only the outline; the window commits on release */
-            ui->drag_x = ev->x - ui->grab_dx; ui->drag_y = ev->y - ui->grab_dy;
-            if (ui->drag_x < -ui->drag_w + 48) ui->drag_x = -ui->drag_w + 48;
-            if (ui->drag_x > ui->screen_w - 48) ui->drag_x = ui->screen_w - 48;
-            if (ui->drag_y < 0) ui->drag_y = 0;
-            if (ui->drag_y > ui->screen_h - 16) ui->drag_y = ui->screen_h - 16;
-            (void)win; return NO_ACT;
+            { unoui_rect d;
+              d.x = ev->x - ui->grab_dx; d.y = ev->y - ui->grab_dy;
+              d.w = ui->drag_w; d.h = ui->drag_h;
+              clamp_to(wk, &d);
+              ui->drag_x = d.x; ui->drag_y = d.y; }
+            return NO_ACT;
         }
         case UI_CAP_RESIZE: {
             unoui_window *win = ui->win[ui->cap_win];
@@ -754,11 +792,31 @@ static unoui_action handle_inner(unoui_ui *ui, const unoui_event *ev)
                     a.kind = UI_ACT_CLOSE; a.value = ui->focus_win; return a;
                 }
             }
+            /* Double-click the title bar = maximize/restore. ui->ticks advances
+             * on UI_EV_TICK, which a port feeds per frame (~60 Hz on pc64), so
+             * 24 ticks is about 400 ms. The press is consumed: no drag starts,
+             * and last_press_ticks resets so a third click is a fresh first. */
+            if (ui->last_press_ticks &&
+                ui->ticks - ui->last_press_ticks < DBLCLICK_TICKS &&
+                ev->x - ui->last_press_x < DBLCLICK_SLOP &&
+                ui->last_press_x - ev->x < DBLCLICK_SLOP &&
+                ev->y - ui->last_press_y < DBLCLICK_SLOP &&
+                ui->last_press_y - ev->y < DBLCLICK_SLOP) {
+                unoui_action a; a.changed = 1; a.id = 0;
+                a.kind = UI_ACT_MAX; a.value = ui->focus_win;
+                ui->last_press_ticks = 0;        /* a third click starts over  */
+                return a;
+            }
+            ui->last_press_ticks = ui->ticks | 1u;   /* 0 means "no previous"  */
+            ui->last_press_x = ev->x; ui->last_press_y = ev->y;
+
             ui->cap_mode = UI_CAP_WINDOW; ui->cap_win = ui->focus_win;
             ui->grab_dx = ev->x - win->r.x; ui->grab_dy = ev->y - win->r.y;
-            ui->drag_active = 1;                     /* rubber-band outline drag */
-            ui->drag_x = win->r.x; ui->drag_y = win->r.y;
-            ui->drag_w = win->r.w; ui->drag_h = win->r.h;
+            if (!ui->live_drag) {
+                ui->drag_active = 1;                 /* rubber-band outline drag */
+                ui->drag_x = win->r.x; ui->drag_y = win->r.y;
+                ui->drag_w = win->r.w; ui->drag_h = win->r.h;
+            }
             return NO_ACT;
         }
         hi = hit_widget(ui, win, ev->x, ev->y);

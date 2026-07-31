@@ -1126,11 +1126,84 @@ void unoui_bg_invalidate(void) { }
 
 void (*unoui_profile_win)(const char *title, int begin);
 
+/* One window, chrome + widgets, with the interaction state its z-index `wn`
+ * implies (focus, hot, pressed, the open menu). Shared by unoui_render_ui and
+ * unoui_render_window so a platform repainting a single window during a live
+ * drag gets pixels identical to a full scene pass. */
+static void render_one_window(unoui_ui *ui, unoui_window *win, int wn)
+{
+    const unoui_theme *t = ui->theme;
+    const unoui_draw *d = t->draw ? t->draw : &unoui_default_draw;
+    int fw = t->m.frame_w, th = t->m.title_h, i;
+
+    win->active = (wn == ui->focus_win);
+    if (unoui_profile_win)
+        unoui_profile_win((win->flags & UI_WIN_BARE) ? "(shell)" :
+                          (win->title ? win->title : "(untitled)"), 1);
+    if (win->flags & UI_WIN_BARE) {
+        /* shell chrome (desktop / taskbar): no frame or titlebar; widgets
+         * fill the whole window rect and are clipped to it. */
+        fb_set_clip(win->r.x, win->r.y, win->r.w, win->r.h);
+    } else {
+        /* chrome (frame, titlebar, shadow) draws unclipped - its painters
+         * are authored not to overflow win->r. */
+        PICK(window)(t, win);
+        PICK(titlebar)(t, win);
+        /* widgets are confined to the content rect (the region d_window
+         * fills below the titlebar) so an over-sized widget or a too-long
+         * label is cut at the frame instead of spilling onto the desktop. */
+        fb_set_clip(win->r.x + fw, win->r.y + th,
+                    win->r.w - 2 * fw, win->r.h - th - fw);
+    }
+    { int fontpushed = (win->font_slot != UI_FONT_INHERIT && unoui_font_push);
+      if (fontpushed) unoui_font_push(win->font_slot);    /* per-window doc font */
+    for (i = 0; i < win->nw; i++) {
+        unoui_widget *w = &win->w[i];
+        int eff = w->flags, menuopen = -1;
+        if (wn == ui->focus_win && i == ui->focus_wi) {
+            eff |= UI_F_FOCUS;
+            if (w->edit && ((ui->ticks / CARET_BLINK) & 1u) == 0) eff |= UI_F_CARET;
+        }
+        if (ui->cap_mode == UI_CAP_BUTTON && wn == ui->cap_win && i == ui->cap_wi)
+            eff |= UI_F_PRESSED;
+        if (wn == ui->hot_win && i == ui->hot_wi) eff |= UI_F_HOT;
+        if (w->kind == UI_MENUBAR && ui->popup_wi == i && ui->popup_win == wn)
+            menuopen = ui->popup_menu;
+        draw_one(d, t, win, w, eff, menuopen);
+    }
+      if (fontpushed) unoui_font_pop(); }
+    fb_reset_clip();
+    if ((win->flags & UI_WIN_RESIZE) && !(win->flags & UI_WIN_BARE)) {
+        /* corner grip: three diagonal ridges (light over shadow), the
+         * classic "this corner drags" affordance - clearer than the old
+         * faint dot cluster the user couldn't find. */
+        int bx = win->r.x + win->r.w - fw, by = win->r.y + win->r.h - fw, k;
+        for (k = 0; k < 3; k++) {
+            int o = 4 + k * 4, j;
+            for (j = 0; j < o; j++) {
+                fb_pixel(bx - o + j - 1, by - 1 - j, t->pal.light);
+                fb_pixel(bx - o + j,     by - 1 - j, t->pal.shadow);
+            }
+        }
+    }
+    if (unoui_profile_win)
+        unoui_profile_win((win->flags & UI_WIN_BARE) ? "(shell)" :
+                          (win->title ? win->title : "(untitled)"), 0);
+}
+
+void unoui_render_window(unoui_ui *ui, unoui_window *win)
+{
+    int wn;
+    if (!win) return;
+    for (wn = 0; wn < ui->nwin; wn++) if (ui->win[wn] == win) break;
+    render_one_window(ui, win, wn < ui->nwin ? wn : -1);
+}
+
 void unoui_render_ui(unoui_ui *ui)
 {
     const unoui_theme *t = ui->theme;
     const unoui_draw *d = t->draw ? t->draw : &unoui_default_draw;
-    int wn, i;
+    int wn;
 
     /* fullscreen: the window's canvas owns the whole screen, no chrome. Clear
      * first - an app canvas (a game) may not paint every pixel, and without the
@@ -1154,63 +1227,8 @@ void unoui_render_ui(unoui_ui *ui)
 #else
     paint_backdrop(t, d, ui->screen_w, ui->screen_h);
 #endif
-    for (wn = 0; wn < ui->nwin; wn++) {
-        unoui_window *win = ui->win[wn];
-        int fw = t->m.frame_w, th = t->m.title_h;
-        win->active = (wn == ui->focus_win);
-        if (unoui_profile_win)
-            unoui_profile_win((win->flags & UI_WIN_BARE) ? "(shell)" :
-                              (win->title ? win->title : "(untitled)"), 1);
-        if (win->flags & UI_WIN_BARE) {
-            /* shell chrome (desktop / taskbar): no frame or titlebar; widgets
-             * fill the whole window rect and are clipped to it. */
-            fb_set_clip(win->r.x, win->r.y, win->r.w, win->r.h);
-        } else {
-            /* chrome (frame, titlebar, shadow) draws unclipped - its painters
-             * are authored not to overflow win->r. */
-            PICK(window)(t, win);
-            PICK(titlebar)(t, win);
-            /* widgets are confined to the content rect (the region d_window
-             * fills below the titlebar) so an over-sized widget or a too-long
-             * label is cut at the frame instead of spilling onto the desktop. */
-            fb_set_clip(win->r.x + fw, win->r.y + th,
-                        win->r.w - 2 * fw, win->r.h - th - fw);
-        }
-        { int fontpushed = (win->font_slot != UI_FONT_INHERIT && unoui_font_push);
-          if (fontpushed) unoui_font_push(win->font_slot);    /* per-window doc font */
-        for (i = 0; i < win->nw; i++) {
-            unoui_widget *w = &win->w[i];
-            int eff = w->flags, menuopen = -1;
-            if (wn == ui->focus_win && i == ui->focus_wi) {
-                eff |= UI_F_FOCUS;
-                if (w->edit && ((ui->ticks / CARET_BLINK) & 1u) == 0) eff |= UI_F_CARET;
-            }
-            if (ui->cap_mode == UI_CAP_BUTTON && wn == ui->cap_win && i == ui->cap_wi)
-                eff |= UI_F_PRESSED;
-            if (wn == ui->hot_win && i == ui->hot_wi) eff |= UI_F_HOT;
-            if (w->kind == UI_MENUBAR && ui->popup_wi == i && ui->popup_win == wn)
-                menuopen = ui->popup_menu;
-            draw_one(d, t, win, w, eff, menuopen);
-        }
-          if (fontpushed) unoui_font_pop(); }
-        fb_reset_clip();
-        if ((win->flags & UI_WIN_RESIZE) && !(win->flags & UI_WIN_BARE)) {
-            /* corner grip: three diagonal ridges (light over shadow), the
-             * classic "this corner drags" affordance - clearer than the old
-             * faint dot cluster the user couldn't find. */
-            int bx = win->r.x + win->r.w - fw, by = win->r.y + win->r.h - fw, k;
-            for (k = 0; k < 3; k++) {
-                int o = 4 + k * 4, j;
-                for (j = 0; j < o; j++) {
-                    fb_pixel(bx - o + j - 1, by - 1 - j, t->pal.light);
-                    fb_pixel(bx - o + j,     by - 1 - j, t->pal.shadow);
-                }
-            }
-        }
-        if (unoui_profile_win)
-            unoui_profile_win((win->flags & UI_WIN_BARE) ? "(shell)" :
-                              (win->title ? win->title : "(untitled)"), 0);
-    }
+    for (wn = 0; wn < ui->nwin; wn++)
+        render_one_window(ui, ui->win[wn], wn);
     /* the open menu's popup deliberately extends past its window - draw it
      * after the clip is reset. */
     if (ui->popup_wi >= 0)
@@ -1232,4 +1250,57 @@ void unoui_draw_drag_outline(unoui_ui *ui)
         fb_frame_rect(x + 1, y + 1, w - 2, h - 2, t->pal.accent);
         fb_frame_rect(x + 2, y + 2, w - 4, h - 4, t->pal.dark);
     }
+}
+
+/* ---- snapping ------------------------------------------------------------- *
+ * Geometry only: halves and quarters of the live work area, derived at CALL
+ * time, so a taskbar or font change just re-derives instead of leaving stale
+ * rects behind. */
+unoui_rect unoui_snap_rect(const unoui_ui *ui, int snap)
+{
+    unoui_rect wk = unoui_work_area(ui), r = wk;
+    int hw = wk.w / 2, hh = wk.h / 2;
+    switch (snap) {
+    case UI_SNAP_L:  r.w = hw; break;
+    case UI_SNAP_R:  r.w = wk.w - hw; r.x = wk.x + hw; break;
+    case UI_SNAP_TL: r.w = hw; r.h = hh; break;
+    case UI_SNAP_TR: r.w = wk.w - hw; r.x = wk.x + hw; r.h = hh; break;
+    case UI_SNAP_BL: r.w = hw; r.h = wk.h - hh; r.y = wk.y + hh; break;
+    case UI_SNAP_BR: r.w = wk.w - hw; r.x = wk.x + hw;
+                     r.h = wk.h - hh; r.y = wk.y + hh; break;
+    default: break;                          /* UI_SNAP_MAX / NONE: the lot   */
+    }
+    return r;
+}
+
+void unoui_snap_apply(unoui_ui *ui, unoui_window *win, int snap)
+{
+    unoui_rect tr;
+    if (!win) return;
+    if (snap == UI_SNAP_NONE) {
+        /* only a window that IS snapped has a rect to give back; restore_r is
+         * zero on one that never snapped, and putting that back would collapse
+         * it to nothing. */
+        if (win->snap != UI_SNAP_NONE && win->restore_r.w > 0) win->r = win->restore_r;
+        win->snap = UI_SNAP_NONE;
+        unoui_reflow_window(ui->theme, win);
+        return;
+    }
+    tr = unoui_snap_rect(ui, snap);
+    if (!(win->flags & UI_WIN_RESIZE)) {
+        /* A fixed pixel layout must not be stretched, so a non-resizable window
+         * is only MOVED into the target and keeps snap NONE - it has no snap
+         * state to leave, and nothing to restore. */
+        win->r.x = tr.x + (tr.w - win->r.w) / 2;
+        win->r.y = tr.y + (tr.h - win->r.h) / 2;
+        if (win->r.x < tr.x) win->r.x = tr.x;
+        if (win->r.y < tr.y) win->r.y = tr.y;
+        return;
+    }
+    /* entering a snap from free-floating remembers the rect ONCE: re-snapping
+     * between states must still restore the original, not the previous snap. */
+    if (win->snap == UI_SNAP_NONE) win->restore_r = win->r;
+    win->r = tr;
+    win->snap = (unsigned char)snap;
+    unoui_reflow_window(ui->theme, win);
 }
