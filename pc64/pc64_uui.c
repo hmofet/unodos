@@ -3109,6 +3109,31 @@ static void draw_batt_icon(int x, int y, int bh, int pct, fb_px outline)
     }
 }
 
+/* ---- drag-frame cost -------------------------------------------------------
+ * The window-management spec budgets a live opaque drag against the old
+ * rubber-band one, so the cost of a MOVED drag frame has to be a number, not an
+ * impression. Accumulate render+present cycles per moved frame and report the
+ * average when the drag ends: it lands in the kernel log (and the debug
+ * console), which a harness run can read out of the boot log - the on-screen
+ * HUD averages every frame and is unreadable from a screenshot. */
+#ifdef UNO_DEBUG
+static unsigned long long g_drag_cyc;
+static unsigned long      g_drag_frames;
+static unsigned long long drag_cyc_now(void) { return uno_native_rdtsc(); }
+static void drag_cyc_note(unsigned long long c) { g_drag_cyc += c; g_drag_frames++; }
+static void drag_cyc_report(const char *how)
+{
+    if (!g_drag_frames) return;
+    uno_dbg_log("wm: %s drag: %lu frames, %lu kcyc/frame", how, g_drag_frames,
+                (unsigned long)(g_drag_cyc / g_drag_frames / 1000));
+    g_drag_cyc = 0; g_drag_frames = 0;
+}
+#else
+static unsigned long long drag_cyc_now(void) { return 0; }
+#define drag_cyc_note(c)    ((void)(c))
+#define drag_cyc_report(h)  ((void)(h))
+#endif
+
 /* the legacy app index currently in front (fullscreen or focused), or -1 */
 static int active_legacy(void)
 {
@@ -3314,15 +3339,18 @@ int main(void)
                 uno_pc64_present();
                 g_dirty = 0;
             } else if (g_dirty) {                /* outline moved */
+                unsigned long long t0 = drag_cyc_now();
                 uno_pc64_scene_restore();
                 unoui_draw_drag_outline(&UI);
                 uno_pc64_present();
+                drag_cyc_note(drag_cyc_now() - t0);
                 g_dirty = 0;
             } else {
                 uno_pc64_delay_ms(16);
             }
         } else {
-            if (was_dragging) g_dirty = 1;       /* drag ended: repaint to commit the move */
+            if (was_dragging) { g_dirty = 1; drag_cyc_report("outline"); }
+                                                 /* drag ended: repaint to commit the move */
 #ifdef UNO_DEBUG
             /* timed render/present + the perf HUD, drawn into the frame the
              * same way any widget is so the present path carries it */
