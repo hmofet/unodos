@@ -76,6 +76,7 @@ const unoui_theme theme_macplus = {
     },
     { /* title_h */ 17, /* frame_w */ 2, /* bevel */ 1, /* pad */ 12,
       /* radius */ 0, /* closebox */ 0, /* shadow */ 2, /* title_center */ 1,
-      UNOUI_DEPTH_1 },
+      /* no min/max: System 1-6 had only a close box */
+      UNOUI_DEPTH_1, /* minbox */ 0, /* maxbox */ 0 },
     &macplus_draw
 };

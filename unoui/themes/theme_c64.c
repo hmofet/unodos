@@ -26,6 +26,7 @@ const unoui_theme theme_c64 = {
     },
     { /* title_h */ 16, /* frame_w */ 3, /* bevel */ 1, /* pad */ 12,
       /* radius */ 0, /* closebox */ 0, /* shadow */ 0, /* title_center */ 1,
-      UNOUI_DEPTH_4 },
+      /* no min/max: PETSCII chrome has no window controls */
+      UNOUI_DEPTH_4, /* minbox */ 0, /* maxbox */ 0 },
     0   /* default painters */
 };

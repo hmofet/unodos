@@ -23,6 +23,7 @@ const unoui_theme theme_apple2 = {
     },
     { /* title_h */ 16, /* frame_w */ 1, /* bevel */ 1, /* pad */ 12,
       /* radius */ 0, /* closebox */ 0, /* shadow */ 0, /* title_center */ 1,
-      UNOUI_DEPTH_1 },
+      /* no min/max: this chrome never had window controls */
+      UNOUI_DEPTH_1, /* minbox */ 0, /* maxbox */ 0 },
     0   /* default painters */
 };
