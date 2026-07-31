@@ -1,17 +1,17 @@
 # BIOS boot for pc64, a phased plan
 
-Status: **A-D done in QEMU.** A BIOS boot is a full system, including on
-hardware with no AHCI. Remaining: the installer's BIOS target (phase C), the
-hybrid image (phase E), and everything that needs real metal.
-Details per phase below.
+Status: **A-E done in QEMU.** One image boots both firmwares, and a BIOS
+boot is a full system including on hardware with no AHCI. Remaining: the
+installer's BIOS target (phase C), the Windows flasher, and everything that
+needs real metal. Details per phase below.
 
 | Phase | State |
 |---|---|
 | A, the loader reaches long mode | **DONE**, QEMU + SeaBIOS: `tools/mkbios.sh test` then `tools/bios_qemu.py` paints 1920x1200 from 64-bit C |
-| B, the kernel boots from it | **DONE**, QEMU + SeaBIOS: the full desktop, `build/unodos-bios.img` |
+| B, the kernel boots from it | **DONE**, QEMU + SeaBIOS: the full desktop, `build/unodos-hybrid.img` |
 | C, storage + input with no firmware at all | **DONE except the installer**: AHCI, i8042 keyboard+mouse, an OS volume, loadable modules and ACPI all work |
 | D, the old-machine tier (P4 / Core) | **DONE in QEMU**: `ide.c` (PIO ATA) boots a PIIX3/Core2 machine with no AHCI; the no-long-mode refusal verified. VBE quirks need metal |
-| E, one image that boots both ways | NOT STARTED |
+| E, one image that boots both ways | **DONE**, QEMU: one file boots SeaBIOS and OVMF from identical copies |
 
 ## Why this is a bootloader project and not an OS project
 
@@ -150,7 +150,7 @@ commented where they live:
   flat at `0x100000` and is objcopied to a raw binary with a small header
   carrying the load size and the `.bss` size for stage2 to zero.
 
-**Gate: MET 2026-07-31.** `build/unodos-bios.img`, booted under SeaBIOS on a
+**Gate: MET 2026-07-31.** `build/unodos-hybrid.img`, booted under SeaBIOS on a
 plain IDE disk with no ESP and no UEFI firmware anywhere: the desktop, its
 icons and taskbar, the clock running off the CMOS RTC, and the network up on
 the native e1000 driver. `shots/bios_desktop.png`. The UEFI gate
@@ -270,13 +270,38 @@ VBE BIOS.
 
 ## Phase E, one image that boots both ways
 
-A stick that boots on a UEFI machine and a CSM machine without being reflashed:
-GPT with a protective MBR that is also a real MBR, an ESP carrying
-`BOOTX64.EFI`, and stage2 plus the flat kernel in the same volume. The flasher
-grows a "BIOS bootable" option; `tools/mkuefi.py` grows the MBR/VBR write.
+**Gate: MET 2026-07-31.** `build/unodos-hybrid.img` boots under SeaBIOS
+(`shots/hybrid_bios.png`, i440fx/PIIX3/Core2) and under OVMF
+(`shots/hybrid_uefi.png`) - from two copies of the same file, verified by
+matching md5 before each boot rather than by booting one image twice and
+assuming.
 
-Deferred until A-D are real, because a hybrid image whose BIOS half does not
-work is worse than two images.
+**It came down to one byte, and NOT to a hybrid GPT.** The plan above proposed
+GPT with a protective MBR rewritten to hold real entries, which is what Boot
+Camp and rEFInd do. That was the wrong call: it is a spec violation, some
+firmware rejects it, and some partitioning tools "repair" it. What actually
+works is simpler - an MBR-partitioned disk whose single FAT32 partition is typed
+**0xEF**, an EFI System Partition. UEFI firmware scanning MBR media looks for
+exactly that and runs `\EFI\BOOT\BOOTX64.EFI` from it; a BIOS ignores the type
+byte entirely and runs the boot sector, which loads the kernel from the reserved
+area by raw LBA. MBR-partitioned media is inside the UEFI spec, and isohybrid
+images have used this shape for years.
+
+So there is no duplicated tree and nothing to keep in sync: one FAT volume is
+the ESP to one firmware, the OS volume to the running system, and invisible to
+the other boot path. `fat.c` already accepted `0xEF`, so the running system
+mounts it either way with no change.
+
+`tools/mkuefi.py` (GPT + ESP) stays, unchanged, as the fallback for firmware
+that refuses MBR media.
+
+**Not done: the Windows flasher.** `flash/build-flasher.ps1` formats a whole
+disk as one FAT32 volume and writes no boot chain, so it produces a
+UEFI-only stick. Teaching it the hybrid layout means writing raw sectors to a
+physical drive, which is the one thing in this plan that cannot be verified
+without a stick in a machine - and an unverified raw-disk writer is worse than
+none. Until then: `dd` (or Rufus in DD mode) `build/unodos-hybrid.img` to the
+stick, which is the same file both QEMU firmwares booted.
 
 ## Standing rules for this lane
 
