@@ -174,23 +174,49 @@ nine-slice, docked; and transcoding - `w` saved CHORD128.MP3 as CHORD128.WAV,
 which a later boot's fresh scan picked up as a playable entry, so the output is
 a real WAV rather than a success the encoder merely claimed.
 
-**OPEN: the equaliser resets the machine.** Switching the EQ on DURING PLAYBACK
-reboots the ZimaBlade, reproducibly. The window itself is not at fault - it
-renders, docks, toggles, and survives indefinitely while playback is stopped.
-Two things are ruled out:
+**CLOSED: the equaliser reset.** It was undefined behaviour, not arithmetic.
+The DEBUG build compiles first-party pc64 code with `-fsanitize=shift,bounds,
+signed-integer-overflow -fsanitize-undefined-trap-on-error`, so every violation
+is a `ud2`. The EQ contained four, and each one is correct arithmetic on x86 -
+which is precisely why the earlier round cleared the code:
 
-- *The arithmetic.* `tools/dsptest.c` runs the DSP natively across six sample
-  rates, mono and stereo, full boost, full cut, and a gain sweep between blocks.
-  No hang, correct frame counts, exact pass-through at flat, sensible gains
-  throughout.
-- *The tick budget.* Capping the loop at four blocks a frame did not help.
+- `(-2 * cw) << Q` and `alpha << Q` in `cut()` left-shift a NEGATIVE value.
+  `cos(w0)` is positive across the low bands, so `-2*cw` is negative for every
+  one of them. This trap is inside `refresh()`, i.e. it fires on the first block
+  after the switch - which is why "switch on during playback" was the trigger
+  and a stopped player was safe: `eq_modify()` returns before `refresh()` when
+  the EQ is off.
+- `sample << (Q-8)` in the sample loop, same class - half of any waveform is
+  negative.
+- the biquad accumulator overflowing `int` at high boost.
+- `if (g_eq_drag >= -2)` in `eq_event()` also admits `-1`, the nothing-grabbed
+  state, so the else arm stores to `g_eq_gain[-1]`; `-fsanitize=bounds` makes
+  that a `ud2` too. Independent of the DSP and of playback, and it landed in
+  `.bss` padding, so a PRODUCTION build survived it silently.
 
-The next step is on-box instrumentation, not another hypothesis. The EQ
-defaults OFF, so a shipped image is safe unless a user enables it - but treat
-that button as live until this closes.
+All fixed in `12b02d6`: multiplies instead of shifts, a 64-bit accumulator with
+a limiter, and an exact drag-state test. Bands above Nyquist are now
+pass-throughs as well - the cookbook assumes `w0 < pi` and folds back into
+arbitrary poles otherwise, which is why a full CUT at 22 kHz used to peak at
+FULL SCALE.
 
-**Still unverified:** VGM playback, and the EQ's audible effect (blocked by the
-reset above).
+*Why the tick-budget hypothesis went nowhere:* the fault is one illegal
+instruction, so it never mattered how much audio a frame processed.
+
+**Re-verified on metal after the fix** (ZimaBlade, same sequence that used to
+reset it): EQ switched on during MP3 playback, blank-space clicks inside the
+window, and four bands dragged to their extremes - no reset, playback
+uninterrupted, uptime continuous.
+
+**The lesson, and it generalises past this bug: a native harness that does not
+compile with the OS's sanitizer set is testing different code.**
+`tools/dsptest.c` passed every case on source that was resetting the box, and
+that clean bill of health is what sent the search toward timing. Its header now
+carries the matching build line. Any future host harness for pc64 code should
+start from the same flags.
+
+**Still unverified:** VGM playback, and the EQ's audible effect (it engages and
+the machine stays up; nobody has listened to it yet).
 
 ### Two traps this work uncovered, worth carrying forward
 
