@@ -85,6 +85,10 @@ struct EFI_SIMPLE_TEXT_INPUT_PROTOCOL {
 #define EFI_LEFT_ALT_PRESSED      0x00000020u
 #define EFI_RIGHT_LOGO_PRESSED    0x00000040u
 #define EFI_LEFT_LOGO_PRESSED     0x00000080u
+/* EFI_KEY_TOGGLE_STATE bits (SetState): EXPOSED asks the firmware to report
+ * modifier-only "partial keystrokes", which is where a key-UP edge lives */
+#define EFI_TOGGLE_STATE_VALID    0x80u
+#define EFI_KEY_STATE_EXPOSED     0x40u
 
 typedef struct {
     UINT32 KeyShiftState;
