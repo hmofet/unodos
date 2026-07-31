@@ -1,6 +1,6 @@
 # Modern window management for the unoui shell (pc64 first)
 
-Status: PROPOSAL, 2026-07-31. Phases A, B, C, D and E are landed. The claim is filed in
+Status: IMPLEMENTED, 2026-07-31. All six phases (A-F) are landed. The claim is filed in
 `pc64/UNOAUTOMATE-REQUESTS.md`; the implementation brief a worker follows is
 [`WM-MODERN-SPEC.md`](WM-MODERN-SPEC.md), which wins on any disagreement.
 Lane: toolkits (unoui / `pc64_uui*`), per `/AGENTS.md`. One out-of-lane
@@ -332,7 +332,7 @@ landing green on both `UNO_DEBUG` builds and the QEMU gate:
 | C | pointer snap zones + previews, snap restore-on-drag, non-resizable policy | A, B — **LANDED 2026-07-31** |
 | D | mods byte (`next_key2`, UEFI + PS/2 sources), Alt-Tab MRU switcher, Alt keybindings; USB HID request filed early so it can land in parallel | - (parallel to A-C) — **LANDED 2026-07-31** |
 | E | virtual desktops + pager + Ctrl+F1..F4 + persistence | B — **LANDED 2026-07-31** |
-| F | link groups, tile/cascade/show-desktop commands, window context menu, taskbar overflow | B, E |
+| F | link groups, tile/cascade/show-desktop commands, window context menu, taskbar overflow | B, E — **LANDED 2026-07-31** |
 
 Test plan per phase: `host_unoui` build for WM-logic unit checks (snap
 geometry, MRU, desktop set-swap are pure functions there), `tools/
