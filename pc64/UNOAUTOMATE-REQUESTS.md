@@ -3070,3 +3070,93 @@ and blitted back.
 `wm_a`, `wm_b`, `wm_c` and `WM_REQUIRE_EDGE=1 wm_d` all PASS on
 `UNO_DETACH=1 UNO_DEBUG=1`. Corrections 25-26 added to the spec's §13, and §3's
 "the 1.5x budget is not reachable" note is marked superseded.
+
+## 2026-07-31 - toolkits lane: WM phase F LANDED (link groups, context menus, tiling, taskbar overflow)
+
+`docs/WM-MODERN-SPEC.md` §9, the last of the six. **The whole programme is now
+on master.**
+
+**unoui** gains exactly two things, and nothing else knows groups exist:
+`unoui_win_badge`, an optional hook the generic control painter asks for a
+per-window marker index (the painter rotates the palette's accent through its
+RGB channels - a theme guarantees ONE accent, so no set of semantic roles could
+keep four badges apart, and literal RGB would ignore the theme); and
+`UI_WIN_NOCTL`, which zeroes `unoui_titlebtn_rect` - the one geometry both the
+painter and the hit-test read - so a titled window can opt out of the min/max
+boxes. That closes correction 7: the Start menu and the calendar were drawing
+controls that correctly did nothing.
+
+**Shell.** Link groups are `g_group[NAPPS]`, 0 = ungrouped (zero-initialised
+means "no groups", per E's lesson about bss-shaped state). A set moves, raises,
+minimizes/restores and changes desktops as one. Moving is shell-side delta
+tracking, so unoui stays ignorant; the live-drag fast path lifts the whole set
+out of the snapshot, and on C2's cached path the grabbed window keeps the pixel
+cache while peers are repainted - one extra window paint per peer, the same
+honest cost model A measured. Raising re-derives `cap_win` and `focus_win` from
+the windows they named, because both are INDEXES into the z-list it just
+rewrote. Context menus (title bar, chip, blank bar) and the `>>` overflow list
+share ONE popover built like the Start menu, not `ui->popup_*` (that needs an
+owner widget). Tile routes 1/2/4 through `unoui_snap_apply`, so it inherits the
+snap geometry and the never-stretch-a-fixed-layout rule; only the n>4 grid has
+rects of its own. The chip row's draw, hit-test and overflow list all read one
+`tb_open_list()`, so the bar and its `>>` popover cannot disagree.
+
+Two fixes found on the way: `close_focused()` is split so a window can be closed
+without being focused (the menu closes what the pointer named, and a parked app
+has no z-index at all), and `SHELL.CFG` gained `grpN=`, applied before the
+re-park or a saved minimize would park one app instead of its set.
+
+**Deviations from the brief, both deliberate:** §9.1's "members directly above
+the grabbed one" is inverted (it buries the window just clicked), and "Move to
+desktop N" SENDS without following, which is what E left `wm_desk_move`'s third
+argument for. Alt+Ctrl+Fn keeps the follow form and now takes the set too.
+
+**Gates - the full programme, run together on one `UNO_DETACH=1 UNO_DEBUG=1`
+build after rebasing onto C, E and C2:**
+
+| gate | result |
+|---|---|
+| `pc64/build.sh` `UNO_DEBUG=0` / `UNO_DEBUG=1` | green |
+| `unoui/build.sh` | green |
+| `wm_a` | PASS (11 checks) |
+| `wm_b` | PASS (15) |
+| `wm_c` | PASS (16) |
+| `WM_REQUIRE_EDGE=1 wm_d` | PASS (10) |
+| `wm_e` | PASS (19) |
+| `wm_f` | PASS (23) |
+
+`wm_f` is pointer-driven throughout. Two techniques in it are worth stealing:
+popover rows are DERIVED (a context menu's top-left IS the click point, and
+`TASKH == row_h + 6` at every font size) rather than measured, and every popover
+is opened, Esc'd away and opened again before the diff that measures it, because
+adding one focuses it and repaints the losing window's title bar. Grouping is
+asserted behaviourally with a control - the same drag moves both windows while
+grouped and only one after "Group: none" - measured on the PEER's own rect,
+since C's un-snap gives the Editor back a width larger than half the work area.
+
+Corrections 27-33 added to the spec's §13.
+
+**One bug fixed in the harness on the way**, because six scenarios back to back
+made it common: `stop_qemu` never guaranteed the process died. `quit` is a
+request, the ten-second wait raised out of a `finally:`, and the orphan then
+held the QMP socket - so the NEXT scenario's screendump never settled, which
+reads as "the guest did not boot" and is indistinguishable from a real
+regression. It cost this run two false failures on `wm_f` and one on `wm_b`
+before the pattern showed; `wm_b`'s intermittent second-boot
+`ConnectionResetError` on master is the same fault seen from the other side (a
+reboot scenario re-opens the raw image and the socket path while the previous
+QEMU still holds both). stop_qemu now escalates to `kill()` and removes the
+socket. Correction 34.
+
+Honest caveat on the suite above: `wm_c` and `wm_f` each needed ONE re-run over
+the whole session for a different reason - QEMU opening the freshly written
+128 MiB image on a Windows drvfs mount and exiting immediately, with no orphan
+alive. That is environmental, it is correction 35, and it is distinguishable
+from 34 by whether a `qemu-system` process survives. Every scenario passed on
+the final build.
+
+**The one open question is closed elsewhere:** the Alt-Tab switcher was scoped
+to the current desktop on master (`618fd9c1`) while F was in flight, so every
+cross-desktop affordance now agrees - chips, Alt+D, the tiling commands, the
+overflow list and the switcher are all per-desktop, and F's "To desktop N" is
+the deliberate exception that MOVES a window rather than reaching across.

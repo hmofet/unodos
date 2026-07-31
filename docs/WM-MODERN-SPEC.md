@@ -1,6 +1,6 @@
 # Modern window management, implementation spec (worker brief)
 
-Status: SPEC, 2026-07-31. Phases A, B, C, D and E are landed (see the table at the
+Status: SPEC, 2026-07-31. All six phases (A-F) are landed (see the table at the
 end and `pc64/UNOAUTOMATE-REQUESTS.md`). The design rationale is in
 [`WM-MODERN-PLAN.md`](WM-MODERN-PLAN.md); this document is the build order.
 Where the two disagree, THIS file wins.
@@ -565,6 +565,72 @@ Recorded from the phases that have run. These override the sections above.
     so cache those pixels at drag start and blit them back after the window.
     That is what stops a dragged window painting across the taskbar.
 
+27. **A badge needs a colour it can DERIVE, not a palette role** (phase F). A
+    theme guarantees exactly ONE accent, so no set of semantic roles can keep
+    four group markers apart, and hard-coded RGB would ignore the theme
+    entirely. `unoui_win_badge` returns an index and the painter rotates the
+    accent's RGB channels: same saturation and brightness, four separable hues,
+    and it re-skins with the theme. That hook plus `UI_WIN_NOCTL` is F's entire
+    contract surface in unoui - groups are otherwise wholly shell-side.
+28. **Raising a set must repair `cap_win` AND `focus_win`** (phase F). Both are
+    INDEXES into `ui->win[]`, and raising rewrites that array; a stale `cap_win`
+    hands the rest of a live drag to the wrong window. `wm_raise_group()`
+    re-derives each from the window it named. The same reason group raise is
+    skipped while a capture is live rather than run every frame.
+29. **SUPERSEDES §9.1's raise order.** "Members directly above the grabbed one"
+    buries the very window the user just clicked. The grabbed one goes on top
+    and its peers directly below it.
+30. **Popover geometry is arithmetic, and `TASKH == row_h + 6`** (phase F). A
+    context menu is placed with its top-left AT the click point, so with a known
+    row count the diff's bottom edge yields the row height exactly; a
+    bar-anchored popover is pinned to the bottom of the work area and flush
+    right, so nothing about it needs measuring. The identity holds at every font
+    size because `pc64_uui.c`'s two floors (20 for a row, 26 for the bar) move
+    together. `wm_f` measured it from a diff first, and a ticking Clock window
+    inside that diff moved the bbox up by one row - so Cascade clicked Tile,
+    re-tiled, and still passed on a coverage threshold. Assert a layout command
+    AGAINST the previous layout, where a repeat reads as zero change.
+31. **Opening a popover repaints the losing window's title bar**, because
+    adding it to the scene focuses it. That noise moves the bbox's top edge.
+    Open the popover, Esc it away, grab the `before`, and open it again: focus
+    is on shell chrome by then, so the second open changes only its own pixels.
+32. **A group drag must re-baseline when C un-snaps the grabbed window** (phase
+    F). Crossing `UNSNAP_SLOP` hands the window its restore size under the
+    pointer - a new rect, not a translation - and applying that as a delta
+    flings every peer by the un-snap's offset. Watch `win->snap` alongside the
+    origin. The same change breaks any gate assertion of the form "the drag
+    stays inside this half": the Editor's restored width is more than half the
+    work area. Measure the PEER's own rect instead.
+33. **A desktop switch hands focus to the incoming desktop's MRU window**
+    (phase F, over E). Any gate step after a switch must aim at a POSITION, not
+    at "the focused window" - `wm_f` moves its desktop round trip ahead of every
+    focus-dependent step for exactly this reason.
+
+34. **`stop_qemu` must GUARANTEE the process is gone** (phase F, running all
+    six scenarios back to back). `quit` is a request; a QEMU busy with the guest
+    can ignore it long enough for the ten-second wait to raise, and it raised out
+    of a `finally:`, so nothing killed the process. The orphan held the QMP
+    socket, and the next scenario's `screendump` never settled - which reads as
+    "the guest did not boot" and is indistinguishable from a real regression in
+    the code under test. The same fault seen from the other side is a reboot
+    scenario's SECOND boot failing with `ConnectionResetError`: it re-opens the
+    raw image and the socket path while the previous QEMU still holds both.
+    Escalate to `kill()` on timeout, wait again, and remove the socket. Note the
+    diagnostic trap that hid it: `build/wm_*.log` is the guest's `-debugcon`,
+    not QEMU's stderr, so its emptiness says nothing about why QEMU quit.
+
+35. **A scenario started right after another one can lose its QEMU outright**
+    (phase F, observed once in a six-scenario run and once more on a repeat).
+    Symptom: `BrokenPipeError` or a `screendump` that never settles, within a
+    second or two of the first QMP call, with NO orphan process alive - i.e.
+    QEMU opened and exited on its own. `tools/mkuefi.py` has just rewritten a
+    128 MiB image on a Windows drvfs mount and QEMU opens it immediately; the
+    remedy that works is to re-run, and the thing NOT to do is read it as a
+    regression in the guest. Distinguish it from correction 34 by whether a
+    `qemu-system` process is still alive: orphan = 34 (a real bug, fixed),
+    no orphan and an immediate exit = this, environmental. Every gate in the
+    suite has passed on the same build either side of it.
+
 ## Phase table (update as you land)
 
 | Phase | Contents | State |
@@ -574,4 +640,4 @@ Recorded from the phases that have run. These override the sections above.
 | C | pointer snap + previews + restore semantics | **DONE** 2026-07-31 |
 | D | mods byte, `next_key2`/`uno_pc64_mods`, Alt-Tab MRU switcher | **DONE** 2026-07-31 |
 | E | virtual desktops + pager + persistence | **DONE** 2026-07-31 |
-| F | link groups, tile/cascade, context menu, taskbar overflow | NOT STARTED |
+| F | link groups, tile/cascade, context menu, taskbar overflow | **DONE** 2026-07-31 |
