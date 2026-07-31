@@ -1957,11 +1957,31 @@ def start_qemu(extra=None, log="build/ovmf.log", pointer="tablet"):
 
 
 def stop_qemu(qemu, q):
+    """Stop one QEMU and GUARANTEE it is gone.
+
+    `quit` is a request, and a guest QEMU is busy with can ignore it long enough
+    for the old ten-second wait to raise - out of a `finally:`, so nothing ever
+    killed the process. The orphan then held the QMP socket, and the NEXT
+    scenario's screendump never settled: it reads as "the guest did not boot",
+    which is indistinguishable from a real regression in the code under test and
+    cost this run two false failures. Running the six wm scenarios back to back
+    is what made it common enough to notice."""
     try:
         q.cmd("quit")
     except Exception:
-        qemu.kill()
-    qemu.wait(timeout=10)
+        pass
+    for killer in (None, qemu.kill):
+        if killer:
+            killer()
+        try:
+            qemu.wait(timeout=10)
+            break
+        except Exception:
+            continue
+    try:
+        os.remove(QMP_SOCK)
+    except OSError:
+        pass
 
 
 def main():
