@@ -1520,11 +1520,17 @@ static int taskbar_event(struct unoui_widget *w, const void *ev, void *ctx)
     for (i = 0; i < NAPPS; i++) {
         if (!g_open[i]) continue;
         if (px >= x && px < x + tb_chip_w()) {
-            /* the modern chip toggle: parked -> restore + raise; unfocused ->
-               raise; the app that already has focus -> park it. */
-            if (g_parked[i])                 restore_app(i);
-            else if (i == focused_app())     minimize_app(i);
-            else                             open_app(i);
+            /* The modern chip toggle: parked -> restore + raise; unfocused ->
+               raise; the app that already has focus -> park it.
+               "Focused" is read off the MRU stack, NOT focused_app(): the
+               press that got us here already raised the TASKBAR (it is a
+               UI_WIN_TOP window like any other), so by now focused_app() is
+               -1 and every chip click would read as "not focused". g_mru[0]
+               still names the app that had focus, because raising shell
+               chrome never calls wm_note_focus(). */
+            if (g_parked[i])                        restore_app(i);
+            else if (g_nmru && g_mru[0] == i)       minimize_app(i);
+            else                                    open_app(i);
             return 1;
         }
         x += tb_chip_gap();
