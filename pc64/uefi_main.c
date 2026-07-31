@@ -51,6 +51,7 @@
 #include "unosecure.h"      /* security subsystem bring-up (unosec_boot) */
 #include "unoscript.h"      /* scripting runtime bring-up (unoscript_boot) */
 #include "pc64_native.h"    /* TSC/CMOS/PS2/CF9 - life after ExitBootServices */
+#include "bootinfo.h"       /* legacy-BIOS boot: what stage2 left us */
 #include "snd_pcm.h"        /* sampled audio: HD Audio / AC'97 PCM ring */
 #ifdef UNO_ACPI
 #include "acpi_host.h"      /* AML interpreter bring-up (battery/lid via unoacpi) */
@@ -229,6 +230,14 @@ static void con_puts(const char *s)
  * ======================================================================== */
 static EFI_HANDLE gIH;                  /* our image handle (installer needs it) */
 static int gDetached;                   /* 1 after ExitBootServices (M3)        */
+/* Non-NULL on a legacy-BIOS boot: the block stage2 left at BOOTINFO_ADDR.
+ *
+ * It doubles as the "which front end started this machine" flag, and reads
+ * throughout this file as exactly that. A BIOS boot is a machine that was
+ * DETACHED FROM BIRTH - gST is NULL, gDetached is 1 before any code of ours
+ * runs, and every firmware call in this file is skipped rather than replaced,
+ * because there is nothing to replace it with and nothing that needs it. */
+static const uno_bootinfo *gBI;
 static int gDetachBlocked;              /* held attached to keep the pointer    */
 static int gDetachStranded;             /* detached, but the system volume died */
 static const char *gDetachWhy = "not evaluated";  /* the deciding gate, in words */
@@ -269,6 +278,82 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
        the fb is up (see platform_init / splash_step). */
     uno_main();
     return EFI_SUCCESS;
+}
+
+/* ===========================================================================
+ * uno_bios_main - the legacy-BIOS entry, the sibling of efi_main.
+ *
+ * boot/bios_stage2.asm jumps here in long mode with the bootinfo block in RCX,
+ * paging live, SSE enabled and a stack. There is no firmware: no boot services,
+ * no runtime services, no console, no protocols. gST stays NULL, and gDetached
+ * is set BEFORE anything else runs, because every `if (uno_pc64_detached())` in
+ * the tree is already the correct test for "we are on our own" - this path just
+ * arrives there at instruction one instead of after ExitBootServices.
+ *
+ * It cannot report a bad handoff. The video mode is whatever stage2 set, and if
+ * the block is wrong we do not know where the framebuffer is; there is no
+ * console left to print on either, since the BIOS teletype died with real mode.
+ * So a bad block halts, and the diagnosis is stage2's printed output on the
+ * screen behind us. See boot/loadertest.c for the symptom table.
+ * ======================================================================== */
+/* Zero the parts of the image that exist in memory but not in the file.
+ *
+ * NOBODY ELSE WILL. A PE's .bss occupies no file bytes, and stage2 copies file
+ * bytes - so on entry every zero-initialised static in this kernel holds
+ * whatever the last thing to use that RAM left behind. That includes the 32 MB
+ * heap array, every `static int` flag in every driver, and gBI itself. On the
+ * UEFI path the firmware's loader does this; here it is ours to do, and it has
+ * to happen before ANY static is read or written.
+ *
+ * The bounds come from the image's own PE headers, which stage2 loaded to
+ * KERNEL_LIN along with everything else, so this needs no cooperation from the
+ * build: each section is zeroed from the end of its file content to the end of
+ * its virtual size, which is exactly the definition of .bss and also catches a
+ * .data tail that the linker left uninitialised.
+ */
+static void bios_zero_bss(unsigned long long base)
+{
+    const unsigned char *img = (const unsigned char *)base;
+    unsigned int pe, nsec, i, opt_size;
+    const unsigned char *sec;
+    if (img[0] != 'M' || img[1] != 'Z') return;
+    pe = *(const unsigned int *)(img + 0x3C);
+    if (*(const unsigned int *)(img + pe) != 0x00004550u) return;   /* 'PE\0\0' */
+    nsec     = *(const unsigned short *)(img + pe + 6);
+    opt_size = *(const unsigned short *)(img + pe + 20);
+    sec = img + pe + 24 + opt_size;
+    for (i = 0; i < nsec; i++, sec += 40) {
+        unsigned int vsize = *(const unsigned int *)(sec + 8);
+        unsigned int vaddr = *(const unsigned int *)(sec + 12);
+        unsigned int rsize = *(const unsigned int *)(sec + 16);
+        if (vsize > rsize) {
+            unsigned char *p = (unsigned char *)(base + vaddr + rsize);
+            unsigned int n = vsize - rsize;
+            while (n--) *p++ = 0;
+        }
+    }
+}
+
+void uno_bios_main(const uno_bootinfo *bi);
+void uno_bios_main(const uno_bootinfo *bi)
+{
+    /* FIRST, before any global is touched - including the ones this function
+     * is about to write. `bi` is a register argument, so it survives. */
+    bios_zero_bss(0x100000ull);
+
+    if (!bi || bi->magic != BOOTINFO_MAGIC || bi->size < BOOTINFO_SIZE ||
+        !bi->fb_addr || bi->fb_bpp != 32)
+        for (;;) __asm__ volatile ("cli; hlt");
+
+    gBI = bi;
+    gST = 0;
+    gBS = 0;
+    gIH = 0;
+    gDetached = 1;                  /* native from reset, not after a handoff */
+
+    uno_dbg_early(0);               /* stash + log + fault hooks, no firmware */
+    uno_main();
+    for (;;) __asm__ volatile ("cli; hlt");
 }
 
 /* ===========================================================================
@@ -382,6 +467,20 @@ static void splash_stage(int done, const char *msg)
 /* read the active GOP mode's geometry and present path */
 static void read_mode(void)
 {
+    /* BIOS boot: the mode was chosen and set by stage2 before long mode, and
+     * cannot be renegotiated (INT 10h needs real mode, which is gone). The
+     * loader recorded what it set; that IS the mode, for the whole boot. */
+    if (gBI) {
+        gModeW  = gBI->fb_width;
+        gModeH  = gBI->fb_height;
+        gStride = gBI->fb_pitch / 4;        /* the field is BYTES per line */
+        gUseBlt = 0;                        /* there is no Blt without a GOP */
+        gSwapRB = 0;                        /* VBE 32bpp is 8:8:8 = our FB_RGB */
+        gVram   = (volatile UINT32 *)(UINTN)gBI->fb_addr;
+        if (gModeW > GROW_W) gModeW = GROW_W;
+        if (gModeH > GROW_H) gModeH = GROW_H;
+        return;
+    }
     gModeW  = gGop->Mode->Info->HorizontalResolution;
     gModeH  = gGop->Mode->Info->VerticalResolution;
     gStride = gGop->Mode->Info->PixelsPerScanLine;
@@ -975,13 +1074,19 @@ void uno_pc64_init(void)
      * ever needed gBS, which we have had since efi_main, so doing it here makes
      * uno_pc64_delay_ms native for the whole of the rest of the boot and leaves
      * exactly one firmware Stall in the system: this one. */
-    {
+    if (gBI) {
+        /* No Stall to calibrate against, and CPUID's TSC-frequency leaf does
+         * not exist before Skylake - which is most of what this path targets.
+         * PIT channel 2 is the method that has worked since the 8253. */
+        unsigned long long per_us = uno_bios_calibrate_tsc();
+        uno_native_tsc_set(per_us ? per_us : 1000);
+    } else {
         unsigned long long t0 = uno_native_rdtsc();
         gBS->Stall(50000);
         uno_native_tsc_set((uno_native_rdtsc() - t0) / 50000);
     }
 
-    if (EFI_ERROR(gBS->LocateProtocol(&gopGuid, 0, (void **)&gGop)) || !gGop) {
+    if (!gBI && (EFI_ERROR(gBS->LocateProtocol(&gopGuid, 0, (void **)&gGop)) || !gGop)) {
         con_puts("pc64: no GOP - cannot continue\r\n");
         for (;;) __asm__ volatile ("hlt");
     }
@@ -992,20 +1097,30 @@ void uno_pc64_init(void)
                                        machine tested, so this is the frame) */
     splash_step(1, "graphics (GOP + geometry)");    /* the splash appears */
 
-    connect_all();
-    splash_step(2, "connecting drivers");
+    /* Everything in this block asks the firmware to bind or hand over a device.
+     * On a BIOS boot there is no firmware to ask and no protocol to collect, so
+     * it is skipped whole rather than stubbed: the native drivers below are the
+     * only input this machine will ever have, which is the same position a
+     * detached UEFI machine reaches - just from the first instruction. */
+    if (!gBI) {
+        connect_all();
+        splash_step(2, "connecting drivers");
 
-    gNAbs = collect(&absGuid, (void **)gAbs, MAXPTR);
-    gNPtr = collect(&ptrGuid, (void **)gPtr, MAXPTR);
-    for (i = 0; i < gNAbs; i++) gAbs[i]->Reset(gAbs[i], 0);
-    for (i = 0; i < gNPtr; i++) gPtr[i]->Reset(gPtr[i], 0);
-    if (gST->ConIn) gST->ConIn->Reset(gST->ConIn, 0);
+        gNAbs = collect(&absGuid, (void **)gAbs, MAXPTR);
+        gNPtr = collect(&ptrGuid, (void **)gPtr, MAXPTR);
+        for (i = 0; i < gNAbs; i++) gAbs[i]->Reset(gAbs[i], 0);
+        for (i = 0; i < gNPtr; i++) gPtr[i]->Reset(gPtr[i], 0);
+        if (gST->ConIn) gST->ConIn->Reset(gST->ConIn, 0);
 
-    {
-        static EFI_GUID exGuid = EFI_SIMPLE_TEXT_INPUT_EX_PROTOCOL_GUID;
-        if (EFI_ERROR(gBS->HandleProtocol(gST->ConsoleInHandle, &exGuid,
-                                          (void **)&gKeyEx)))
-            gKeyEx = 0;
+        {
+            static EFI_GUID exGuid = EFI_SIMPLE_TEXT_INPUT_EX_PROTOCOL_GUID;
+            if (EFI_ERROR(gBS->HandleProtocol(gST->ConsoleInHandle, &exGuid,
+                                              (void **)&gKeyEx)))
+                gKeyEx = 0;
+        }
+    } else {
+        splash_step(2, "native drivers");
+        uno_ps2_init();             /* the i8042 is ours from the start here */
     }
     splash_step(3, "input (pointer + keyboard)");
     splash_stage(3, "trackpad (I2C-HID)");
@@ -1045,7 +1160,18 @@ void uno_pc64_init(void)
      * out instead of hanging; on QEMU (no battery) this is a clean no-find. */
     splash_stage(3, "power (ACPI / AML)");
     uno_dbg_check("init:acpi");
-    uno_acpi_start(gST);
+    /* NOT YET ON THE BIOS PATH, deliberately. uno_acpi_start() needs three
+     * things from boot services: the RSDP (which uno_bios_find_rsdp() already
+     * supplies by scanning the EBDA and the ROM area), a 10 ms Stall to
+     * calibrate against, and an 8 MB AllocatePool for the AML arena. The first
+     * is solved; the other two need the same decision the module loader needs -
+     * where does a BIOS boot get a large executable/working region from the
+     * E820 map - so they land together in phase C rather than growing an 8 MB
+     * static array here that the UEFI path would also carry.
+     *
+     * The cost of skipping it is battery percentage and lid state, on a target
+     * list that is mostly desktops and machines old enough to predate both. */
+    if (!gBI) uno_acpi_start(gST);
     /* F4: now that the namespace is up, re-probe I2C-HID with the REAL slave
      * address + descriptor register from PNP0C50 _CRS/_DSM. The blind PCI
      * grid bound nothing on any tested machine; this is the targeted pass. */
@@ -1095,9 +1221,17 @@ void uno_pc64_init(void)
     uno_dbg_write_bootlog();
 #endif
 #ifndef UNO_NO_DETACH
-    splash_stage(4, "detaching from firmware");
-    try_detach();                   /* M3: leave the firmware behind if the
+    /* A BIOS boot has nothing to detach FROM. Saying so explicitly matters:
+     * gDetachWhy is what the System window renders, and "not evaluated" on a
+     * machine that is running entirely on its own drivers would be a lie of
+     * exactly the kind the detach programme spent months removing. */
+    if (gBI) {
+        gDetachWhy = "BIOS boot: native from reset";
+    } else {
+        splash_stage(4, "detaching from firmware");
+        try_detach();               /* M3: leave the firmware behind if the
                                        native stack covers this machine */
+    }
 #endif
     splash_stage(4, "starting desktop");
 

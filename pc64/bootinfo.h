@@ -51,4 +51,23 @@ typedef struct uno_e820 {
 
 #define UNO_E820_USABLE 1
 
+/* ---- what a BIOS boot has to answer for itself (bios_entry.c) ------------ */
+
+/* TSC cycles per microsecond, measured against PIT channel 2. 0 = the PIT did
+ * not move, which is a machine we cannot time on; the caller substitutes a
+ * guess rather than dividing by zero. */
+unsigned long long uno_bios_calibrate_tsc(void);
+
+/* ACPI RSDP and the SMBIOS entry point, by the pre-UEFI method: scan the EBDA
+ * and the BIOS ROM area for the signature and verify the checksum. NULL if the
+ * machine publishes neither. */
+void *uno_bios_find_rsdp(void);
+void *uno_bios_find_smbios(void);
+
+/* Base of the highest usable E820 run of at least `bytes`, above 2 MB and
+ * below 4 GB (the range the loader's page tables cover), 64 KB aligned.
+ * 0 if nothing fits. This is the BIOS answer to AllocatePages. */
+unsigned long long uno_bios_find_ram(const uno_bootinfo *bi,
+                                     unsigned long long bytes);
+
 #endif /* PC64_BOOTINFO_H */
