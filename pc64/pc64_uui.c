@@ -35,6 +35,7 @@ unsigned long long uno_native_rdtsc(void);
 #include "rtl8152.h"         /* USB Ethernet adapter (Realtek; docks/dongles) */
 #include "net.h"             /* net_link / net_ip / net_dhcp_done - tray LAN chip */
 #include "pc64_fs.h"         /* uno_fs_* - session persistence (SHELL.CFG) */
+#include "bootinfo.h"   /* which firmware actually started this machine */
 #include "iwlwifi.h"         /* Intel AC/AX WiFi (firmware-driven) */
 #include "i2c_hid.h"         /* native trackpad status/diag (System readout) */
 #include "pc64_native.h"     /* PS/2 kbd/aux bind status (System readout)   */
@@ -994,7 +995,14 @@ static void build_sys(unoui_window *w)
      * already runs the height of an 800 px desktop, so anything appended
      * at the bottom is born invisible. */
     unoui_add_label(w, gx, y, "UnoDOS / pc64  -  unoui shell");           y += lh;
-    unoui_add_label(w, gx, y, "x86-64 UEFI  -  bare metal  -  10 themes"); y += lh;
+    /* Which firmware ACTUALLY started this machine. It used to say UEFI
+     * unconditionally, which became false the day pc64 learned to boot from a
+     * BIOS - and the System window is precisely where someone goes to find out
+     * what a machine is doing. */
+    unoui_add_label(w, gx, y,
+                    uno_pc64_bootinfo() ? "x86-64 legacy BIOS  -  bare metal  -  10 themes"
+                                        : "x86-64 UEFI  -  bare metal  -  10 themes");
+    y += lh;
     { int bw = fb_text_w("View licenses") + 26;
       unoui_widget *b;
       unoui_add_label(w, gx, y, "CC BY-NC 4.0 + MIT/Apache-2.0 parts");

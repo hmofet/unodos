@@ -12,6 +12,14 @@
  * Returns 1 when the interpreter is up (namespace built), 0 otherwise.
  * Idempotent - only the first call does the work. */
 int uno_acpi_start(void *efi_system_table);
+/* Legacy-BIOS entry: the RSDP found by scanning, and an arena taken from the
+ * E820 map, in place of the config table and AllocatePool. ARENA_BYTES (8 MB)
+ * is the minimum arena_bytes accepted. */
+int uno_acpi_start_bios(void *rsdp, void *arena, unsigned long arena_bytes);
+/* The arena the call above needs. Mirrors ARENA_BYTES in acpi_host.c; the
+ * caller has to size an E820 carve-out before it can call, so the number
+ * cannot stay private to that file. */
+#define UNO_ACPI_ARENA_BYTES (8u << 20)
 
 /* The RSDP physical address (0 = none found / not started). */
 uint64_t uno_acpi_rsdp(void);

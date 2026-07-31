@@ -293,23 +293,6 @@ if [ "$1" != "legacy" ]; then
     fi
     mkdir -p build/esp/EFI/BOOT; cp build/BOOTX64.EFI build/esp/EFI/BOOT/BOOTX64.EFI
 
-    # ---- the legacy-BIOS image, from the SAME objects --------------------
-    # Same kernel, second link: flat at 0x100000, entry uno_bios_main, file
-    # alignment equal to section alignment so the file is a byte-for-byte image
-    # of memory (boot/bios_stage2.asm copies bytes; it is not a PE loader).
-    # Built from $OBJS, so the two front ends can never drift apart - a BIOS
-    # image is never a stale build of a UEFI kernel.  See docs/BIOS-BOOT-PLAN.md.
-    if [ "${UNO_NOBIOS:-0}" = "0" ]; then
-        echo "[bios] linking the legacy-BIOS image..."
-        "$CC" -nostdlib -e uno_bios_main \
-              -Wl,--image-base,0x100000 -Wl,--disable-reloc-section \
-              -Wl,--section-alignment,0x1000 -Wl,--file-alignment,0x1000 \
-              -o build/UNODOS.SYS $OBJS ${LINK_EXTRA:-} -lgcc
-        nasm -f bin -o build/bios_boot.bin   boot/bios_boot.asm
-        nasm -f bin -o build/bios_stage2.bin boot/bios_stage2.asm
-        "$PY" tools/mkbios.py build/bios_boot.bin build/bios_stage2.bin \
-                              build/UNODOS.SYS build/unodos-bios.img
-    fi
     # sample docs on the ESP (a real FAT volume) for the browser to open
     printf '# Hello from the disk\n\nThis file lives on the **FAT ESP**, read via the\nEFI Simple File System - the browser opened it from a *local disk*, not the\nRAM disk.\n\n- FAT12/16/32 supported (firmware driver)\n- read-only for now\n\n> UnoDOS pc64\n' > build/esp/HELLO.MD
     printf '<h1>Disk HTML</h1><p>An <b>HTML</b> file loaded from the FAT volume by the pc64 browser.</p><ul><li>local disk</li><li>FAT32</li></ul>' > build/esp/PAGE.HTML
@@ -615,6 +598,30 @@ if [ "$1" != "legacy" ]; then
         # two in sync). Bump it whenever a config key is added or renamed.
         printf 'UnoDOS pc64 DEBUG build\r\nid: %s\r\ncfgver: 2\r\nubsan: %s  dbgcon: %s\r\n' \
             "$DBG_ID" "${UNO_UBSAN:-1}" "${UNO_DBGCON:-0}" > build/esp/BUILD.TXT
+    fi
+
+    # ---- the legacy-BIOS image, from the SAME objects --------------------
+    # Same kernel, second link: flat at 0x100000, entry uno_bios_main, file
+    # alignment equal to section alignment so the file is a byte-for-byte image
+    # of memory (boot/bios_stage2.asm copies bytes; it is not a PE loader).
+    # Built from $OBJS, so the two front ends can never drift apart - a BIOS
+    # image is never a stale build of a UEFI kernel.  See docs/BIOS-BOOT-PLAN.md.
+    #
+    # IT RUNS HERE, at the END, because it packages build/esp into a FAT
+    # partition and that tree is not complete until this point - the fonts,
+    # media, .UNO modules and (in a debug build) the CRASH dir and fuzz
+    # corpus are all added above. Built any earlier it shipped a partial
+    # system: a desktop that comes up with most of its apps missing.
+    if [ "${UNO_NOBIOS:-0}" = "0" ]; then
+        echo "[bios] linking the legacy-BIOS image..."
+        "$CC" -nostdlib -e uno_bios_main \
+              -Wl,--image-base,0x100000 -Wl,--disable-reloc-section \
+              -Wl,--section-alignment,0x1000 -Wl,--file-alignment,0x1000 \
+              -o build/UNODOS.SYS $OBJS ${LINK_EXTRA:-} -lgcc
+        nasm -f bin -o build/bios_boot.bin   boot/bios_boot.asm
+        nasm -f bin -o build/bios_stage2.bin boot/bios_stage2.asm
+        "$PY" tools/mkbios.py build/bios_boot.bin build/bios_stage2.bin \
+                              build/UNODOS.SYS build/unodos-bios.img build/esp
     fi
 
     ls -l build/BOOTX64.EFI; echo "done: unoui shell (default) -> build/esp/"

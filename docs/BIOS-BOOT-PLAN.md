@@ -1,13 +1,13 @@
 # BIOS boot for pc64, a phased plan
 
-Status: **A and B DONE, QEMU-verified - the desktop boots from a BIOS.**
-Details per phase below.
+Status: **A, B and most of C DONE, QEMU-verified - a BIOS boot is a
+full system.** Details per phase below.
 
 | Phase | State |
 |---|---|
 | A, the loader reaches long mode | **DONE**, QEMU + SeaBIOS: `tools/mkbios.sh test` then `tools/bios_qemu.py` paints 1920x1200 from 64-bit C |
 | B, the kernel boots from it | **DONE**, QEMU + SeaBIOS: the full desktop, `build/unodos-bios.img` |
-| C, storage + input with no firmware at all | PARTIAL: i8042 and the native block stack come up; ACPI, the module arena and the installer's BIOS target are outstanding |
+| C, storage + input with no firmware at all | **DONE except the installer**: AHCI, i8042 keyboard+mouse, an OS volume, loadable modules and ACPI all work |
 | D, the old-machine tier (P4 / Core) | NOT STARTED |
 | E, one image that boots both ways | NOT STARTED |
 
@@ -192,15 +192,40 @@ not: it moves earlier and becomes unconditional. After the mode switch there is
 no `INT 13h` and no fallback, so AHCI (or NVMe) must come up before another byte
 can be read.
 
-- AHCI / NVMe bring-up on the BIOS path, from the disk stage2 booted from.
-- `i8042` from the start - there is no `ConIn`. Every machine in scope has PS/2
-  or BIOS legacy emulation, and the emulation dies with real mode, so the
-  native path is the only path.
-- The installer needs a BIOS target: write an MBR + VBR + stage2 instead of an
-  ESP and a `Boot####` variable (`SetVariable` does not exist here).
-- `detachgate.c`, `usbboot.c` and `try_detach()` compile to no-ops. They should
-  report "BIOS boot: native from reset" rather than "not evaluated", so the
-  System window says something true.
+**Gate: MET 2026-07-31, except the installer.** `shots/bios_system.png` is the
+System window on a BIOS boot: `x86-64 legacy BIOS`, `DETACHED (native): ahci0
+1 disk FAT vols 1 (UNODOS)`, `PS/2: kbd up, aux port ok, mouse streaming`,
+`ACPI AML: up, 261 nodes`. `shots/bios_module.png` is Dostris - a `.UNO` module
+read off that volume, relocated into an arena carved from the E820 map, running
+in its own window.
+
+What this phase actually turned out to be:
+
+- **THE IMAGE NEEDED A FILESYSTEM.** Phase B's image was the boot chain and
+  nothing else, and that is the failure mode this whole plan is most likely to
+  repeat: the desktop is drawn from the kernel image, so it comes up looking
+  perfectly healthy on a machine where every module, font and media file is
+  unreachable. `tools/mkbios.py` now lays down an MBR partition and a FAT32
+  volume built from `build/esp` - the same tree the UEFI ESP carries - after an
+  8 MiB reserved area that keeps the boot chain outside any partition.
+- **The module arena comes from E820.** `uno_modload_reserve()` returned early
+  with no `AllocatePages`, leaving `gModArena` NULL, so `mod_alloc()` refused
+  every module. `uno_bios_find_ram()` takes the top of the highest usable run
+  below 4 GiB. It is also called from a different place on this path: the UEFI
+  path reserves during `try_detach()`, which a BIOS boot never runs.
+- **ACPI works** (`uno_acpi_start_bios`), with the RSDP from a legacy scan, the
+  arena from E820, and the clock from the PIT-calibrated TSC instead of a
+  `Stall`. The shared bring-up is factored out so the two entries cannot drift.
+- **The System window stops saying "UEFI"** on a machine that booted from a
+  BIOS. That line was hardcoded, and the System window is exactly where someone
+  looks to find out what a machine is doing.
+
+**Still open: the installer's BIOS target.** `Install` writes an ESP and a
+`Boot####` variable, and `SetVariable` does not exist here; the BIOS equivalent
+is writing the MBR, stage2 and the kernel to the reserved area of the target
+disk. `tools/mkbios.py` already knows that layout, so the work is porting it
+into `installer.c` rather than designing it. Until then a BIOS machine is
+installed by writing the image to its disk from another computer.
 
 ## Phase D, the old-machine tier
 

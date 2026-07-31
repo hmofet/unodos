@@ -38,6 +38,14 @@ def main() -> int:
     ap.add_argument("--wait", type=float, default=8.0,
                     help="seconds to let the boot settle before the screendump")
     ap.add_argument("--mem", default="256")
+    ap.add_argument("--keys", default="",
+                    help="comma-separated qcodes to send after --wait, e.g. "
+                         "'down,down,ret'. Proves the i8042 path AND, when the "
+                         "keys launch an app, that the module loader works - "
+                         "the desktop paints either way, so a screenshot of it "
+                         "alone says nothing about either.")
+    ap.add_argument("--after", type=float, default=6.0,
+                    help="seconds to wait after the keys before the shot")
     args = ap.parse_args()
 
     if not os.path.exists(args.image):
@@ -64,6 +72,20 @@ def main() -> int:
     try:
         q = Qmp(QMP_SOCK)
         time.sleep(args.wait)
+        if args.keys:
+            # "a,b,c" = three presses; "ctrl+esc" = one chord. A chord is ONE
+            # send-key carrying both qcodes - QMP has no "ctrl-esc" key name,
+            # and sending that string silently does nothing, which reads
+            # exactly like a keyboard that is not working.
+            for name in args.keys.split(","):
+                name = name.strip()
+                if not name:
+                    continue
+                q.cmd("send-key",
+                      keys=[{"type": "qcode", "data": k}
+                            for k in name.split("+")])
+                time.sleep(0.4)
+            time.sleep(args.after)
         ppm = os.path.abspath("build/bios_shot.ppm")
         q.cmd("screendump", filename=ppm)
         time.sleep(1.0)

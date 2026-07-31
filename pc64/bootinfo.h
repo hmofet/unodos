@@ -51,6 +51,11 @@ typedef struct uno_e820 {
 
 #define UNO_E820_USABLE 1
 
+/* The block the loader left, or NULL on a UEFI boot (uefi_main.c). Consumers
+ * use it as BOTH the data and the "am I on the BIOS path" test, so there is
+ * never a second flag to keep in step with it. */
+const struct uno_bootinfo *uno_pc64_bootinfo(void);
+
 /* ---- what a BIOS boot has to answer for itself (bios_entry.c) ------------ */
 
 /* TSC cycles per microsecond, measured against PIT channel 2. 0 = the PIT did
