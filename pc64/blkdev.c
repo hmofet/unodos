@@ -168,6 +168,7 @@ void uno_blk_init(void)
         uno_ahci_init();             /* native controller ownership (no fw)    */
         uno_nvme_init();
         uno_sdhci_init();
+        uno_ide_init();              /* last: see the note in uno_blk_detach   */
     } else {
 #ifdef UNO_SDHCI_TEST
         /* QEMU-only: take the SDHCI controller eagerly while attached (OVMF
@@ -202,6 +203,13 @@ void uno_blk_detach(void)
     uno_ahci_init();
     uno_nvme_init();
     uno_sdhci_init();
+    /* LAST, on purpose. A machine with a SATA controller in AHCI mode is
+     * served by ahci.c and its ports do not answer at 0x1F0; a machine in
+     * compatibility mode has no AHCI to find and lands here. Probing IDE after
+     * the modern controllers means a box that somehow presents both registers
+     * its disks through the better driver, and the legacy probe finds nothing
+     * left to claim. */
+    uno_ide_init();
     /* P4: USB mass storage over the (now ours) xHCI - the boot stick, when
      * we booted from USB. No-op when the xHCI stack is compiled out. */
     { int uno_usbmsc_init(void); uno_usbmsc_init(); }

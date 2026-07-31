@@ -1,14 +1,16 @@
 # BIOS boot for pc64, a phased plan
 
-Status: **A, B and most of C DONE, QEMU-verified - a BIOS boot is a
-full system.** Details per phase below.
+Status: **A-D done in QEMU.** A BIOS boot is a full system, including on
+hardware with no AHCI. Remaining: the installer's BIOS target (phase C), the
+hybrid image (phase E), and everything that needs real metal.
+Details per phase below.
 
 | Phase | State |
 |---|---|
 | A, the loader reaches long mode | **DONE**, QEMU + SeaBIOS: `tools/mkbios.sh test` then `tools/bios_qemu.py` paints 1920x1200 from 64-bit C |
 | B, the kernel boots from it | **DONE**, QEMU + SeaBIOS: the full desktop, `build/unodos-bios.img` |
 | C, storage + input with no firmware at all | **DONE except the installer**: AHCI, i8042 keyboard+mouse, an OS volume, loadable modules and ACPI all work |
-| D, the old-machine tier (P4 / Core) | NOT STARTED |
+| D, the old-machine tier (P4 / Core) | **DONE in QEMU**: `ide.c` (PIO ATA) boots a PIIX3/Core2 machine with no AHCI; the no-long-mode refusal verified. VBE quirks need metal |
 | E, one image that boots both ways | NOT STARTED |
 
 ## Why this is a bootloader project and not an OS project
@@ -229,19 +231,42 @@ installed by writing the image to its disk from another computer.
 
 ## Phase D, the old-machine tier
 
-Only reached once C is solid, and every item here is conditional on the
-hardware actually being in the fleet:
+**Gate: MET 2026-07-31 in QEMU.** The test shape is `--machine pc --cpu
+core2duo`: an i440fx board with a PIIX3 IDE controller and **no AHCI anywhere**,
+which is what a P4 or Core machine actually looks like. `shots/bios_ide.png` is
+the System window on that machine - `DETACHED (native): ide00 1 disk FAT vols 1
+(UNODOS)`, the desktop with its disk-loaded apps, fonts read off the volume,
+ACPI up.
 
-- **VBE quirks.** Pre-3.0 implementations, modes that report a linear
-  framebuffer and do not deliver one, and machines whose best mode is 1024x768.
-- **IDE / PATA PIO.** ICH5 and earlier have no AHCI. pc64 has no IDE driver;
-  if a target machine needs one it is a self-contained addition behind the
-  existing `uno_bdev` seam.
-- **No xHCI.** Nothing pre-Nehalem has one. USB boot and USB HID are therefore
-  out of scope on this tier, which is survivable precisely because these
-  machines have PS/2.
-- The CPUID refusal path, tested on a machine that actually fails it if one is
-  available.
+- **IDE / PATA PIO landed** (`ide.c`), behind the existing `uno_bdev` seam, so
+  unofs, the installer and unostorage needed no knowledge of it. Both legacy
+  channels, master and slave, LBA28 and LBA48, read and write. Deliberately
+  **PIO and not DMA** - bus-master DMA needs a PRD table and either an
+  interrupt or a status dance, and buys throughput this OS does not need, on
+  hardware that is hard to come by for testing. Deliberately **polled and not
+  interrupt-driven**: there is no ATA ISR, and a driver that needs IRQ14 to make
+  progress would deadlock exactly where it is least debuggable. Every wait is
+  TSC-bounded; none can hang.
+- Probed **after** AHCI/NVMe/SDHCI, so a machine that presents both uses the
+  better driver and the legacy probe finds nothing left to claim. Probed at the
+  fixed ISA ports **regardless of what PCI reports**, because a controller in
+  compatibility mode may present a zero BAR or no recognisable class code, and a
+  floating bus reads as 0xFF and costs microseconds.
+- **The CPUID refusal path is verified** (`shots/bios_nolongmode.png`). A
+  Pentium 3 prints `This CPU has no long mode (no EM64T/x86-64). UnoDOS pc64 is
+  64-bit only and cannot run here.` and stops - which is the whole point of
+  testing it before the page tables.
+- **No xHCI.** Nothing pre-Nehalem has one. USB boot and USB HID stay out of
+  scope on this tier, which is survivable precisely because these machines have
+  PS/2 - and the PS/2 keyboard and mouse both come up (`kbd up, aux port ok,
+  mouse streaming`).
+
+**Not addressed: VBE quirks.** Pre-3.0 implementations, modes that advertise a
+linear framebuffer and do not deliver one, and panels whose best mode is
+1024x768. SeaBIOS's VBE is well behaved, so there is nothing here QEMU can
+falsify - this one genuinely needs the metal, and the honest position is that
+the mode-selection loop in `bios_stage2.asm` is unproven against a real vendor
+VBE BIOS.
 
 ## Phase E, one image that boots both ways
 

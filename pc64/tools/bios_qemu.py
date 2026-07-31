@@ -38,6 +38,14 @@ def main() -> int:
     ap.add_argument("--wait", type=float, default=8.0,
                     help="seconds to let the boot settle before the screendump")
     ap.add_argument("--mem", default="256")
+    ap.add_argument("--machine", default="q35")
+    ap.add_argument("--cpu", default="",
+                    help="QEMU CPU model. Use this to test the phase D tier "
+                         "honestly: '-cpu core2duo' with '--machine pc' is a "
+                         "PIIX3 IDE controller and no AHCI, which is what a "
+                         "P4/Core-era box actually looks like. '-cpu pentium3' "
+                         "has no long mode and must produce stage2's printed "
+                         "refusal, not a triple fault.")
     ap.add_argument("--keys", default="",
                     help="comma-separated qcodes to send after --wait, e.g. "
                          "'down,down,ret'. Proves the i8042 path AND, when the "
@@ -58,7 +66,7 @@ def main() -> int:
             os.remove(f)
 
     argv = [
-        "qemu-system-x86_64", "-machine", "q35", "-m", args.mem,
+        "qemu-system-x86_64", "-machine", args.machine, "-m", args.mem,
         # if=ide, not virtio: stage2 reads through INT 13h, and the BIOS only
         # provides that for disks it can itself see
         "-drive", "format=raw,if=ide,file=" + args.image,
@@ -67,6 +75,8 @@ def main() -> int:
         "-qmp", "unix:%s,server,nowait" % QMP_SOCK,
         "-no-reboot",          # a triple fault must STOP, not loop forever
     ]
+    if args.cpu:
+        argv += ["-cpu", args.cpu]
     print("+ " + " ".join(argv))
     proc = subprocess.Popen(argv)
     try:
