@@ -797,7 +797,12 @@ static int eq_event(struct unoui_widget *w, const void *evp, void *ctx)
             pc64_shell_dirty();
             return 1;
         }
-        if (g_eq_drag >= -2) {
+        /* -2 is the preamp and 0..9 are the bands. -1 (nothing grabbed) must
+         * be excluded EXPLICITLY: `>= -2` also admits it, and the else arm
+         * then writes g_eq_gain[-1] - an out-of-bounds store the DEBUG build's
+         * `-fsanitize=bounds` turns into a ud2, i.e. a reset, on any pointer
+         * event over the window that did not land on a slider. */
+        if (g_eq_drag == -2 || g_eq_drag >= 0) {
             int g = 100 - (y - EQB_Y) * 200 / (EQB_H - 11);
             if (g < -100) g = -100;
             if (g >  100) g =  100;

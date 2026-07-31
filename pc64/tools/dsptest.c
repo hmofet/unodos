@@ -5,9 +5,22 @@
  * can be run natively, where an infinite loop shows up as a hang you can Ctrl-C
  * and a coefficient blow-up shows up as a number.
  *
- * Build (from pc64/):
- *   cc -I. -o /tmp/dsptest tools/dsptest.c unoamp_dsp.c
+ * BUILD IT WITH THE SANITIZERS THE DEBUG OS USES, OR IT LIES TO YOU. Built
+ * plain, this harness passed every case on the exact code that was resetting
+ * the box, and that clean bill of health cost a day: the defect was undefined
+ * behaviour (`negative << 20`), which is correct arithmetic on x86 and a `ud2`
+ * under `-fsanitize=shift -fsanitize-undefined-trap-on-error` - which is how
+ * pc64's DEBUG build compiles. Match build.sh's set:
+ *
+ *   cc -O2 -I. -fsanitize=signed-integer-overflow,bounds,shift,\
+ *      integer-divide-by-zero,null -o /tmp/dsptest tools/dsptest.c \
+ *      unoamp_dsp.c -lm
  *   /tmp/dsptest
+ *
+ * Without -fsanitize-undefined-trap-on-error you get the file and line of each
+ * violation instead of an instant SIGILL, which is what you want on the host.
+ * A run that prints ANY "runtime error:" line is a failure even if every peak
+ * and frame count is right.
  */
 #include <stdio.h>
 #include <stdlib.h>
