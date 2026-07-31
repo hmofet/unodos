@@ -105,3 +105,81 @@ where `uno_snd_init()` found neither HDA nor AC'97, `g_ring` is NULL and
 level meter and reports progress - into nothing. Phase 1 fixes that by
 construction: with no `Out_Module` advertising `UNOAMP_CAP_PCM`, the core will
 not offer the file at all.
+
+## 5. Status, 2026-07-31: phases 1-8 landed
+
+All eight phases are implemented and build. What follows is what was actually
+built versus what section 3 planned, including the two places the plan was
+wrong and the three limits that are real.
+
+| Phase | File | State |
+|---|---|---|
+| 1 Output plugins | `pc64/unoamp_out.c` | PCM sink over `snd_pcm`, PC speaker as `CAP_SQUARE` only |
+| 2 Input plugins | `pc64/unoamp_in.c` | `IN_UNOMEDIA` (WAV/MIDI/MP3/AAC); content sniff beats extension |
+| 3 Skin engine | `pc64/unoamp_skin.c` | `.wsz` ZIP walk, 13 sheets, `viscolor.txt`, `pledit.txt` |
+| 4 The three windows | `pc64/unoamp_ui.c` | Main + EQ + playlist, shade, drag, dock, integer scale |
+| 5 Visualisers | `pc64/unoamp_vis.c` | Fixed-point FFT, spectrum + oscilloscope as `winampVisModule`s |
+| 6 DSP + EQ | `pc64/unoamp_dsp.c` | Ten RBJ peaking biquads in Q20, on the Winamp DSP chain |
+| 7 Encoders | `pc64/unoamp_enc.c` | WAV, AIFF, raw PCM + a transcoder over the playback graph |
+| 8 MOD + VGM | `pc64/unoamp_mod.c` | ProTracker 4/6/8ch, VGM driving an SN76489 |
+| - The player | `pc64/unoamp_app.c` | Playlist, transport, mixer, the per-frame pull |
+
+### Where the plan was wrong
+
+**Skin BMPs do not go through unomedia.** Section 3 assumed the image half was
+available to the kernel. It is not: `build.sh` links the image decoders only
+under `BROWSER_ENGINE=uw`, and `um_image`'s decoder roster is all-or-nothing -
+taking BMP means taking PNG, JPEG, GIF, WebP and VP8 as well. `um_image` is
+also a singleton the browser holds while decoding `<img>`. So `unoamp_skin.c`
+reads BMP itself (about sixty lines, uncompressed only) and only `um_inflate`
+is shared. That one is standalone and is exactly what ZIP method 8 needs.
+
+**The framebuffer word is `0xAABBGGRR`, not `0xAARRGGBB`.** `FB_RGB` in `fb.h`
+puts blue at bits 16-23. A BMP stores B,G,R, so BMP byte order maps straight
+across with no swap - but `viscolor.txt` ("r,g,b") and `pledit.txt`
+(`#RRGGBB`) both need one. Getting this wrong renders every skin with red and
+blue exchanged, and it is invisible in greyscale test material.
+
+### The three real limits
+
+**Conversions are capped at about two minutes.** `uno_fs_write` replaces a
+file entire and the fs has no append or write-at-offset, so `unoamp_enc.c`
+assembles the whole output in memory and writes once. The cap is 12 MB against
+a 32 MB kernel heap shared with Studio. Lifting it means adding a streaming
+append to `fat.c`; that was deliberately not bodged around, because a
+conversion that silently produced a truncated file is worse than one that says
+it ran out of room.
+
+**MP3 and AAC encoding are not implemented, on purpose.** A psychoacoustic
+encoder is more work than every decoder in unomedia put together, and a bad
+one is worse than none - it would produce files that sound wrong and be blamed
+on the player. The encoder registry takes one the day it exists with no change
+to `unoamp_enc.c`, which is the half of the work that was actually asked for.
+
+**VGM covers the SN76489 only.** Most VGMs in the wild are YM2612 (Genesis FM)
+or YM2151. Those are refused BY NAME at open rather than played as silence,
+because silence looks like a bug in the player rather than a missing chip.
+
+### Not yet verified on hardware
+
+Everything above builds and is wired into `uno_pc64_init`. None of it has been
+run on the ZimaBlade or any other metal. Specifically unproven: that a real
+`.wsz` decodes (the ZIP walk and the BMP reader have not met a genuine skin),
+that the FFT's fixed-point scaling produces sensible bar heights against real
+music, that the EQ biquads are stable at the extremes of the sliders, and that
+MOD playback is in tune. Those are ear-and-eye checks, not gates a QEMU run
+can settle.
+
+### Winamp fidelity: what is faithful and what is not
+
+Faithful: the plugin ABIs (`In_Module`, `Out_Module`, `winampVisModule`,
+`winampDSPModule` shapes), the 576-sample vis window, the NUL-separated
+extension lists, the 275x116 sprite offsets, the input opening the output, and
+`ModifySamples` being allowed to change the frame count.
+
+Deliberately not: control is INVERTED. Winamp's input plugin ran its own
+thread and pushed into `outMod`; pc64's shell is a cooperative frame loop with
+no threads, so the host pulls via `Decode()`. Same graph, and it is why a slow
+decode costs latency rather than stalling the desktop. Binary Win32 plugin
+DLLs cannot load - that finding is in section 2 - so a plugin is a `.UNO`
+built against `unoamp.h`.

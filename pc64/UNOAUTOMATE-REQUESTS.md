@@ -2596,3 +2596,26 @@ Filed with the numbers so whoever revisits it starts from measurement rather
 than from a guess. `tools/storage_test.py` covers read and
 write on native FAT post-detach, so unlike the HID path this one has a gate
 that means something.
+
+---
+
+## UnoAmp lane - phases 1-8 complete (2026-07-31)
+
+**Owner:** the UnoAmp lane (`pc64/unoamp_*.c`, `docs/PLAYER-WINAMP-PLAN.md`).
+Nine new files, all additive; the only edits to shared files are two source
+lists in `pc64/build.sh`, four init calls in `uno_pc64_init`, and one line in
+the unomedia loop in `build.sh` to link `um_inflate` into the kernel.
+
+**Two findings other lanes should have.**
+
+1. **`um_inflate` is now linked into the pc64 kernel** (`build.sh`, the audio
+   loop). It is standalone - it does NOT drag in the image decoders. Anyone who
+   wants raw deflate in the kernel no longer has to add it.
+
+2. **The framebuffer word is `0xAABBGGRR`.** `FB_RGB` in `fb.h` puts blue at
+   bits 16-23 and red at 0-7. Any code that builds a pixel from an
+   `#RRGGBB`-shaped source needs a swap; code reading BMP (B,G,R order) does
+   not. This cost a round of debugging here and is invisible in greyscale.
+
+**Not run on metal.** Builds clean, wired into init, no QEMU or hardware pass
+yet. The unverified list is in `docs/PLAYER-WINAMP-PLAN.md` section 5.

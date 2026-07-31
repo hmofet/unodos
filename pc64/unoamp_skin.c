@@ -79,7 +79,12 @@ static void *arena_alloc(unsigned long n);   /* the skin arena, below */
  * what it does.
  *
  * Handles 1/4/8-bit palette, 24-bit BGR and 32-bit BGRA, top-down or
- * bottom-up. Output is 0xAARRGGBB to match the framebuffer. */
+ * bottom-up.
+ *
+ * BMP stores pixels B,G,R and the framebuffer word is 0xAABBGGRR (see FB_RGB
+ * in fb.h - blue at bits 16..23, red at 0..7), so BMP byte order maps STRAIGHT
+ * ACROSS with no swap. Writing the intuitive 0xAARRGGBB here would render
+ * every skin with red and blue exchanged. */
 static int bmp_decode(const unsigned char *p, long n, unsigned **out,
                       int *ow, int *oh)
 {
@@ -120,17 +125,17 @@ static int bmp_decode(const unsigned char *p, long n, unsigned **out,
         for (x = 0; x < w; x++) {
             unsigned idx, b, g, bl;
             if (bpp == 32)      { bl = r[x*4]; g = r[x*4+1]; b = r[x*4+2];
-                                  d[x] = 0xFF000000u | (b<<16) | (g<<8) | bl; }
+                                  d[x] = 0xFF000000u | (bl<<16) | (g<<8) | b; }
             else if (bpp == 24) { bl = r[x*3]; g = r[x*3+1]; b = r[x*3+2];
-                                  d[x] = 0xFF000000u | (b<<16) | (g<<8) | bl; }
+                                  d[x] = 0xFF000000u | (bl<<16) | (g<<8) | b; }
             else {
                 if (bpp == 8)      idx = r[x];
                 else if (bpp == 4) idx = (x & 1) ? (r[x>>1] & 15u) : (r[x>>1] >> 4);
                 else               idx = (r[x>>3] >> (7 - (x & 7))) & 1u;
                 if (idx >= pal_n) idx = 0;
                 if (pal + idx * 4u + 3u > p + n) { d[x] = 0xFF000000u; continue; }
-                d[x] = 0xFF000000u | ((unsigned)pal[idx*4+2] << 16) |
-                       ((unsigned)pal[idx*4+1] << 8) | (unsigned)pal[idx*4];
+                d[x] = 0xFF000000u | ((unsigned)pal[idx*4] << 16) |
+                       ((unsigned)pal[idx*4+1] << 8) | (unsigned)pal[idx*4+2];
             }
         }
     }
@@ -210,8 +215,9 @@ static void parse_viscolor(const unsigned char *p, long n)
             }
             v[k] = acc < 0 ? 0 : (acc > 255 ? 255 : acc);
         }
-        g_skin.viscolor[line++] = 0xFF000000u | ((unsigned)v[0] << 16) |
-                                  ((unsigned)v[1] << 8) | (unsigned)v[2];
+        /* the file says r,g,b; the framebuffer word wants b,g,r */
+        g_skin.viscolor[line++] = 0xFF000000u | ((unsigned)v[2] << 16) |
+                                  ((unsigned)v[1] << 8) | (unsigned)v[0];
         while (i < n && p[i] != '\n') i++;
         if (i < n) i++;
     }
@@ -233,7 +239,9 @@ static unsigned hexcol(const unsigned char *p, long n, long i)
         else break;
         v = (v << 4) | (unsigned)x; d++; i++;
     }
-    return d == 6 ? (0xFF000000u | v) : 0;
+    /* #RRGGBB -> 0xAABBGGRR */
+    if (d != 6) return 0;
+    return 0xFF000000u | ((v & 0xFFu) << 16) | (v & 0xFF00u) | ((v >> 16) & 0xFFu);
 }
 static void parse_pledit(const unsigned char *p, long n)
 {

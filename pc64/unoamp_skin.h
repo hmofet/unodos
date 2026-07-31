@@ -29,6 +29,8 @@ enum {
 
 #define UNOAMP_VISCOLORS 24     /* viscolor.txt: 24 RGB triples              */
 
+/* px is in FRAMEBUFFER word order (0xAABBGGRR, see FB_RGB in fb.h), not the
+ * 0xAARRGGBB a BMP reader instinctively produces. */
 typedef struct { unsigned *px; int w, h; } unoamp_sheet;
 
 typedef struct {
