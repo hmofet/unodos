@@ -160,15 +160,52 @@ to `unoamp_enc.c`, which is the half of the work that was actually asked for.
 or YM2151. Those are refused BY NAME at open rather than played as silence,
 because silence looks like a bug in the player rather than a missing chip.
 
-### Not yet verified on hardware
+### Hardware status, 2026-07-31 (ZimaBlade, driven over URC)
 
-Everything above builds and is wired into `uno_pc64_init`. None of it has been
-run on the ZimaBlade or any other metal. Specifically unproven: that a real
-`.wsz` decodes (the ZIP walk and the BMP reader have not met a genuine skin),
-that the FFT's fixed-point scaling produces sensible bar heights against real
-music, that the EQ biquads are stable at the extremes of the sliders, and that
-MOD playback is in tune. Those are ear-and-eye checks, not gates a QEMU run
-can settle.
+**Confirmed on metal.** Skins decode end to end, both ZIP methods, 13 of 13
+sheets; the main window draws every control from the skin; TEXT.BMP renders
+track titles; the playlist scan finds media and content-sniff dispatch beats
+extension (an extension-less file was correctly claimed by the VGM plugin
+because it WAS a VGM); transport, shuffle and repeat; the spectrum analyser in
+the skin's own viscolor palette; position tracking; auto-advance at end of
+stream; MP3 (including VBR) and ProTracker MOD playback, the latter surfacing
+the module's embedded song name; the playlist window rendering PLEDIT's
+nine-slice, docked; and transcoding - `w` saved CHORD128.MP3 as CHORD128.WAV,
+which a later boot's fresh scan picked up as a playable entry, so the output is
+a real WAV rather than a success the encoder merely claimed.
+
+**OPEN: the equaliser resets the machine.** Switching the EQ on DURING PLAYBACK
+reboots the ZimaBlade, reproducibly. The window itself is not at fault - it
+renders, docks, toggles, and survives indefinitely while playback is stopped.
+Two things are ruled out:
+
+- *The arithmetic.* `tools/dsptest.c` runs the DSP natively across six sample
+  rates, mono and stereo, full boost, full cut, and a gain sweep between blocks.
+  No hang, correct frame counts, exact pass-through at flat, sensible gains
+  throughout.
+- *The tick budget.* Capping the loop at four blocks a frame did not help.
+
+The next step is on-box instrumentation, not another hypothesis. The EQ
+defaults OFF, so a shipped image is safe unless a user enables it - but treat
+that button as live until this closes.
+
+**Still unverified:** VGM playback, and the EQ's audible effect (blocked by the
+reset above).
+
+### Two traps this work uncovered, worth carrying forward
+
+**unomedia has no allocator until a consumer installs one.** `um_inflate`
+allocates through `um_alloc`, so every DEFLATED skin failed while every STORED
+one loaded perfectly - a maddening shape, because the no-skin fallback drew
+something plausible either way. Every unomedia consumer in pc64 calls
+`um_set_alloc(malloc, free)`; the call is idempotent. Any new consumer must too.
+
+**The shell SAMPLES input state, so state living less than a sample is
+invisible.** `poll_pointer()` rebuilds the button mask from hardware every
+frame, which erased injected clicks outright. Latching for a few frames then
+merged bursts, because a new press cancelled a pending release and two clicks
+became one drag. Injected pointer state is now a queue drained one entry per
+poll. Any future synthetic-input path on pc64 inherits this constraint.
 
 ### Winamp fidelity: what is faithful and what is not
 

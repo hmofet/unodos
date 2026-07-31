@@ -2619,3 +2619,43 @@ the unomedia loop in `build.sh` to link `um_inflate` into the kernel.
 
 **Not run on metal.** Builds clean, wired into init, no QEMU or hardware pass
 yet. The unverified list is in `docs/PLAYER-WINAMP-PLAN.md` section 5.
+
+---
+
+## UnoAmp lane - landed, with one open defect (2026-07-31)
+
+Phases 1-8 are on master and hardware-confirmed on the ZimaBlade; the full
+status is in `docs/PLAYER-WINAMP-PLAN.md` section 5. Shared-file edits remain
+additive: two source lists in `pc64/build.sh`, the init calls in
+`uno_pc64_init`, four parallel native-app tables in `pc64_uui.c`, and the
+injected-pointer path in `uefi_main.c`.
+
+**Three findings other lanes need.**
+
+1. **`um_set_alloc(malloc, free)` is mandatory for any new unomedia consumer.**
+   unomedia has no allocator until someone installs one, and `um_inflate`
+   allocates through it. The symptom is format-specific and misleading: every
+   DEFLATED skin failed while every STORED one worked.
+
+2. **The framebuffer word is `0xAABBGGRR`** (`FB_RGB`, blue at bits 16-23).
+   BMP byte order maps straight across; anything built from an `#RRGGBB` source
+   needs a swap. Invisible in greyscale.
+
+3. **Injected input must be QUEUED, not set.** `poll_pointer()` in
+   `uefi_main.c` rebuilds the button mask from hardware every frame and commits
+   it, so anything a synthetic-input path writes is gone before the shell
+   samples it. Latching is not enough either - it merges bursts into drags.
+   There is now a queue drained one entry per poll (`INJ_Q`); the stress
+   harness and any future scripting path both go through it.
+
+**OPEN DEFECT, owned by this lane:** enabling the equaliser during playback
+resets the box. The DSP arithmetic is exonerated by `tools/dsptest.c` and a
+tick-budget cap did not help; it needs on-box instrumentation. The EQ defaults
+off, so nothing else is at risk, but do not treat that control as safe.
+
+**Test tooling now in `pc64/tools/`:** `mkskin.py` (6 generated .wsz, both ZIP
+methods, one deliberately partial), `mktestaudio.py` (WAV/MOD/VGM),
+`skintest.c` and `dsptest.c` (native harnesses). Both harnesses turned a
+build-push-reboot cycle per hypothesis into a one-second answer, and each found
+or excluded a bug on its first run. Prefer them to metal for anything that is
+pure data handling or pure arithmetic.
