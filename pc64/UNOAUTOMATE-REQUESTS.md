@@ -2700,3 +2700,53 @@ ZimaBlade with the same click sequence that used to reset it.
    so treat that folder as shared. Its reports are in `CRASH\DEFAULTS\`, and
    `BOOTS.TXT` there records every boot as `boot 1` rather than incrementing.
 
+
+---
+
+## A detached machine's telemetry says it is attached (2026-07-31)
+
+Follow-on to finding 2 above, same lane, possibly the same root cause. Found
+while reading the ZimaBlade's posture off its own artifacts and getting it
+wrong.
+
+**The box detaches. Its boot env block says it did not.** `\CRASH\DEFAULTS\`
+BOOTENV.TXT and BOOTLOG.TXT both read `detached: 0`, `last_checkpoint:
+init:detach @ 3786ms`, `xhci: present=0`, and list the FIRMWARE's five volumes.
+Every one of those is the state as of the write BEFORE `try_detach()`
+(`uefi_main.c:1094`). The System window on the same running machine reports:
+
+    Pointer: fw simple 0 / abs 0  (dead: detached)
+    USB xHCI: up, 2 port, 4 dev 0x0bda:0x5411
+    Storage: DETACHED (native): emmc0  2 disk  FAT vols 2 (NO,UNODOS)
+
+The xHCI line settles it on its own: `uno_xhci_init()` returns 0 unless
+`uno_pc64_detached()` (`xhci.c:1170`), so a live controller with four devices
+behind a hub cannot happen on an attached machine.
+
+So the SECOND pass - `uno_dbg_write_bootenv()` / `write_bootlog()` at
+`uefi_main.c:1122`, whose comment says it "wants the FINAL machine state
+(post-detach)" - is not reaching the disk. Both copies on disk are the first
+pass. Every telemetry set collected off a detached box therefore describes it
+as attached, in every field, with nothing marking the copy as provisional.
+
+**Not the FAT layer.** A 2 MB URC `push` to that same volume verified fine on a
+detached boot, so post-detach writes to the stick work.
+
+**Untested theory, offered as the first place to look, not as a diagnosis.**
+`crash_vol()` caches a volume index; `uno_dbg_on_detach()` correctly clears it
+via `uno_dbg_storage_remapped()`, so the second write RESCANS. But the volume
+ORDER changes across the remount - pre-detach the firmware listed `UNODOS`
+first, post-detach `vols` reports `NO NAME` (the internal eMMC) first - so the
+rescan can select a different volume than the first pass did. `crash_dir()`'s
+`g_mdir` is cached separately and is NOT re-created on the newly chosen volume,
+so the write would target `CRASH\DEFAULTS\` on a volume that has at most a bare
+`CRASH\`, and fail silently. That would explain both this and the missing UBSan
+reports with one cause: anything `uno_debug.c` writes after detach goes to a
+directory that does not exist.
+
+**Why it is worth fixing rather than documenting:** these files are what you
+collect from a machine to learn what it did. This one asserted the opposite of
+the truth in the single field the whole detach programme is about, and I
+reported the ZimaBlade as running attached on the strength of it before the
+System window corrected me.
+
