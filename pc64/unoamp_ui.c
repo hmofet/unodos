@@ -102,7 +102,7 @@ static int  g_vol = 100, g_bal = 0;   /* 0..100, -100..100                    */
 static int  g_shuffle, g_repeat;
 static int  g_eq_open, g_pl_open;
 static int  g_scroll;                 /* title scroll offset, in characters   */
-static char g_title[192] = "UnoAmp";
+static char g_title[192] = "UNOAMP - NO TRACK LOADED";
 
 /* Where the window's client origin is on screen, in framebuffer pixels. */
 static void origin(int *ox, int *oy)
@@ -145,16 +145,30 @@ static int spr(const spr_t *s, int dx, int dy)
     return 1;
 }
 
-/* A sprite, or a flat rectangle in the theme's palette when the sheet is
- * missing. This is the whole no-skin fallback: the window keeps its shape and
- * its controls stay where a Winamp user expects them. */
+/* A sprite, or a drawn control when the sheet is missing.
+ *
+ * FLAT RECTANGLES WERE NOT ENOUGH. The first version filled with one colour,
+ * and on a theme where face and win_bg are neighbouring greys the result was a
+ * blank slab - the window was drawing correctly and looked like it was drawing
+ * nothing. So the fallback bevels: light on the top-left, shadow on the
+ * bottom-right, the theme's own outline around it. That is the same bevel
+ * unoui draws on a real button, which is the point - a skinless UnoAmp should
+ * look like it belongs to the desktop rather than like a failure. */
 static void spr_or(const spr_t *s, int dx, int dy, unsigned fallback)
 {
-    int ox, oy;
+    const unoui_theme *t;
+    int ox, oy, x, y, w, h, k = g_scale;
     if (spr(s, dx, dy)) return;
+    t = pc64_shell_theme();
     origin(&ox, &oy);
-    fb_fill_rect(ox + dx * g_scale, oy + dy * g_scale,
-                 s->w * g_scale, s->h * g_scale, fallback);
+    x = ox + dx * k; y = oy + dy * k;
+    w = s->w * k;    h = s->h * k;
+    fb_fill_rect(x, y, w, h, fallback);
+    if (w <= 2 * k || h <= 2 * k) return;      /* too small to bevel          */
+    fb_hline(x, y, w, t->pal.light);
+    fb_vline(x, y, h, t->pal.light);
+    fb_hline(x, y + h - k, w, t->pal.shadow);
+    fb_vline(x + w - k, y, h, t->pal.shadow);
 }
 
 static void rect_fill(int dx, int dy, int w, int h, unsigned c)
@@ -238,6 +252,30 @@ static void draw_time(int ms)
     font_digit(sc % 10,                TIME_X + 54, TIME_Y);
 }
 
+/* Transport glyphs for the no-skin case, drawn from filled rectangles rather
+ * than a font: at 1x scale a control is eighteen pixels tall and no font in
+ * the system has a play triangle that small. Index is CBUTTONS order. */
+static void glyph(int i, int dx, int dy, int w, int h)
+{
+    const unoui_theme *t = pc64_shell_theme();
+    unsigned c = t->pal.face_text;
+    int cx = dx + w / 2, cy = dy + h / 2;
+    switch (i) {
+    case UNOAMP_T_PREV:  rect_fill(cx - 4, cy - 3, 2, 7, c);
+                         rect_fill(cx - 1, cy - 1, 5, 2, c); break;
+    case UNOAMP_T_PLAY:  rect_fill(cx - 2, cy - 4, 2, 8, c);
+                         rect_fill(cx,     cy - 2, 2, 4, c); break;
+    case UNOAMP_T_PAUSE: rect_fill(cx - 3, cy - 4, 2, 8, c);
+                         rect_fill(cx + 1, cy - 4, 2, 8, c); break;
+    case UNOAMP_T_STOP:  rect_fill(cx - 3, cy - 3, 6, 6, c); break;
+    case UNOAMP_T_NEXT:  rect_fill(cx + 2, cy - 3, 2, 7, c);
+                         rect_fill(cx - 4, cy - 1, 5, 2, c); break;
+    case UNOAMP_T_EJECT: rect_fill(cx - 4, cy + 2, 8, 2, c);
+                         rect_fill(cx - 1, cy - 4, 2, 5, c); break;
+    default: break;
+    }
+}
+
 /* ---- the window ----------------------------------------------------------- */
 static void draw_main(void)
 {
@@ -250,6 +288,15 @@ static void draw_main(void)
      * is drawn ON TOP. That ordering is the format's, not a choice. */
     s.sheet = UNOAMP_SHEET_MAIN; s.sx = 0; s.sy = 0; s.w = WIN_W; s.h = WIN_H;
     spr_or(&s, 0, 0, t->pal.win_bg);
+    if (!unoamp_skin_get()) {
+        /* Sink the three wells so the time, title and visualiser read as
+         * displays rather than as bare background. */
+        int ox2, oy2;
+        origin(&ox2, &oy2);
+        rect_fill(TIME_X, TIME_Y - 2, 76, 17, t->pal.field_bg);
+        rect_fill(TEXT_X, TEXT_Y - 3, TEXT_W, 12, t->pal.field_bg);
+        fb_frame_rect(ox2, oy2, WIN_W * g_scale, WIN_H * g_scale, t->pal.win_frame);
+    }
 
     /* Titlebar. The active/inactive pair are two strips of the same sheet. */
     s.sheet = UNOAMP_SHEET_TITLEBAR; s.sx = 27; s.w = WIN_W; s.h = TITLE_H;
@@ -312,11 +359,15 @@ static void draw_main(void)
         spr_or(&s, POS_X + frac, POS_Y, t->pal.accent);
     }
 
-    /* Transport. The held button shows its pressed frame. */
+    /* Transport. The held button shows its pressed frame. Without a skin the
+     * buttons carry drawn glyphs - a bevelled square with no marking is not a
+     * play button, it is a mystery. */
     for (i = 0; i < 6; i++) {
+        int by = (i == 5) ? EJECT_Y : BTN_Y;
         s = kBtn[i];
         if (g_pressed == i) s.sy = (short)(i == 5 ? 16 : 18);
-        spr_or(&s, kBtnX[i], i == 5 ? EJECT_Y : BTN_Y, t->pal.face);
+        spr_or(&s, kBtnX[i], by, g_pressed == i ? t->pal.accent : t->pal.face);
+        if (!unoamp_skin_get()) glyph(i, kBtnX[i], by, kBtn[i].w, kBtn[i].h);
     }
 
     /* Shuffle and repeat, each a four-frame sprite (off / off-pressed / on /

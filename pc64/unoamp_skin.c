@@ -144,7 +144,15 @@ static int bmp_decode(const unsigned char *p, long n, unsigned **out,
 }
 
 /* ---- the skin ------------------------------------------------------------- */
-#define SKIN_ARENA (512u * 1024u)      /* whole decoded skin, all sheets      */
+/* SIZED FROM THE FORMAT, NOT GUESSED. The classic sheet set decodes to about
+ * 868 KB at 4 bytes a pixel - PLEDIT alone is 280x186, and MAIN, TITLEBAR and
+ * EQMAIN are 275x116 each. A 512 KB arena (the first guess here) could not
+ * hold ANY complete skin, which is the sort of bug that only shows up the
+ * moment a real .wsz arrives. 2 MB leaves room for the oversized sheets some
+ * skins ship without being open-ended.
+ *
+ * Both buffers are BSS, so they cost address space and zero file size. */
+#define SKIN_ARENA (2048u * 1024u)     /* whole decoded skin, all sheets      */
 static unsigned char g_arena[SKIN_ARENA];
 static unsigned long g_used;
 static unoamp_skin   g_skin;
@@ -303,7 +311,11 @@ static void take_member(const char *name, int nlen,
 
 int unoamp_skin_load(int vol, const char *path)
 {
-    static unsigned char buf[256 * 1024];
+    /* The whole archive, resident. Real skins run 100-500 KB and a STORED
+     * (uncompressed) one is larger still - FROST.wsz from tools/mkskin.py is
+     * 640 KB - so this is sized for the format rather than for the smallest
+     * skin that happened to be to hand. */
+    static unsigned char buf[1536 * 1024];
     long n, at = 0;
 
     g_used = 0; g_loaded = 0;
