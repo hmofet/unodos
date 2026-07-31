@@ -144,7 +144,36 @@ class FolderPayload : IPayloadSource
 static class UnoDisk
 {
     public const int  SECTOR      = 512;
-    public const long PART_START  = 2048;         // 1 MiB aligned
+    public const long PART_START  = 2048;         // 1 MiB aligned (GPT layout)
+
+    /* ---- the legacy-BIOS / hybrid layout -----------------------------------
+     * A stick that boots a BIOS machine cannot use GPT: the GPT header sits at
+     * LBA 1 and its entry array at LBA 2-33, exactly where the second-stage
+     * loader goes.  So the hybrid shape is MBR-partitioned, with the boot chain
+     * in a reserved run before the volume and the partition typed 0xEF - an EFI
+     * System Partition, which is what keeps the SAME stick bootable by UEFI
+     * firmware.  See docs/BIOS-BOOT-PLAN.md phase E.
+     *
+     * THESE THREE NUMBERS ARE ALSO IN tools/mkbios.py AND unostorage.h.  They
+     * describe one on-disk layout that three programs write, so they cannot be
+     * derived from each other - Build() asserts the chain it is handed fits,
+     * which is the only one of the three that can be checked at run time. */
+    public const long BIOS_RESERVED   = 16384;    // 8 MiB before the volume
+    public const long BIOS_STAGE2_LBA = 1;
+    public const long BIOS_STAGE2_SEC = 16;
+    public const long BIOS_KERNEL_LBA = 17;
+    const byte PART_TYPE_ESP = 0xEF;
+
+    /* The three blobs tools/mkbios.py stages at \BOOT\ on the volume: the boot
+     * sector, the ALREADY-PATCHED stage2, and the kernel.  Passing them in
+     * rather than reading them here keeps this class free of any knowledge of
+     * where a build puts things. */
+    public class BootChain
+    {
+        public byte[] Boot;      // exactly 512 bytes
+        public byte[] Stage2;
+        public byte[] Kernel;
+    }
     const int  RESERVED    = 32;                  // boot, FSInfo, backup boot @6
     const int  NUM_FATS    = 2;
     const int  GPT_ENTRIES = 128;
@@ -155,6 +184,44 @@ static class UnoDisk
     static readonly byte[] ESP_TYPE = new Guid("C12A7328-F81F-11D2-BA4B-00A0C93EC93B").ToByteArray();
 
     public delegate void Progress(string stage, long done, long total);
+
+    /* Pull the boot chain out of the same ESP zip the payload comes from.
+     * tools/mkbios.py stages it at BOOT/ on the volume, so it is already inside
+     * the archive this flasher embeds - there is nothing extra to bundle, and a
+     * chain can never be from a different build than the system beside it.
+     *
+     * Returns null when the entries are absent, which is not an error: an ESP
+     * built before mkbios staged them simply produces the GPT/UEFI-only stick
+     * this flasher has always produced. */
+    public static BootChain ChainFromZip(Stream zip)
+    {
+        try {
+            using (var a = new ZipArchive(zip, ZipArchiveMode.Read)) {
+                var c = new BootChain {
+                    Boot   = ZipBytes(a, "BOOT/BOOT.BIN"),
+                    Stage2 = ZipBytes(a, "BOOT/STAGE2.BIN"),
+                    Kernel = ZipBytes(a, "BOOT/UNODOS.SYS"),
+                };
+                if (c.Boot == null || c.Stage2 == null || c.Kernel == null) return null;
+                return c;
+            }
+        } catch { return null; }
+    }
+
+    static byte[] ZipBytes(ZipArchive a, string name)
+    {
+        foreach (var e in a.Entries) {
+            if (!string.Equals(e.FullName.Replace('\\', '/'), name,
+                               StringComparison.OrdinalIgnoreCase))
+                continue;
+            using (var s = e.Open())
+            using (var ms = new MemoryStream()) {
+                s.CopyTo(ms);
+                return ms.ToArray();
+            }
+        }
+        return null;
+    }
 
     /* ---- node tree ---------------------------------------------------------- */
     class Node
@@ -213,16 +280,39 @@ static class UnoDisk
     // its last file is on the disk, so the caller cannot do it any earlier).
     public static string Build(Stream disk, long diskBytes, IEnumerable<IPayloadSource> sources,
                                string label, Progress report)
+    { return Build(disk, diskBytes, sources, label, report, null); }
+
+    /* `chain` null = the GPT/UEFI-only layout this has always written.
+     * Non-null = the hybrid MBR layout, bootable by a BIOS AND by UEFI. */
+    public static string Build(Stream disk, long diskBytes, IEnumerable<IPayloadSource> sources,
+                               string label, Progress report, BootChain chain)
     {
-        try { return BuildInner(disk, diskBytes, sources, label, report); }
+        try { return BuildInner(disk, diskBytes, sources, label, report, chain); }
         finally {
             foreach (var s in sources) { try { s.Dispose(); } catch { } }
         }
     }
 
     static string BuildInner(Stream disk, long diskBytes, IEnumerable<IPayloadSource> sources,
-                             string label, Progress report)
+                             string label, Progress report, BootChain chain)
     {
+        long partStart = chain != null ? BIOS_RESERVED : PART_START;
+        if (chain != null) {
+            if (chain.Boot == null || chain.Boot.Length != SECTOR)
+                throw new IOException("The boot sector must be exactly 512 bytes.");
+            if (chain.Boot[510] != 0x55 || chain.Boot[511] != 0xAA)
+                throw new IOException("That file is not a boot sector (no 0xAA55).");
+            if (chain.Stage2 == null || chain.Stage2.Length == 0 ||
+                chain.Stage2.Length > BIOS_STAGE2_SEC * SECTOR)
+                throw new IOException("stage2 is missing or larger than its "
+                                      + (BIOS_STAGE2_SEC * SECTOR) + "-byte window.");
+            if (chain.Kernel == null || chain.Kernel.Length == 0)
+                throw new IOException("The kernel image is missing.");
+            /* A kernel past the reserved run would land inside the filesystem,
+               and the damage would show up later as a corrupt file. */
+            if (BIOS_KERNEL_LBA + (chain.Kernel.Length + SECTOR - 1) / SECTOR > BIOS_RESERVED)
+                throw new IOException("The kernel does not fit in the reserved boot area.");
+        }
         if (diskBytes < MIN_DISK_BYTES)
             throw new IOException("The drive is too small - UnoDOS needs at least "
                                   + (MIN_DISK_BYTES / (1024 * 1024)) + " MB.");
@@ -237,10 +327,10 @@ static class UnoDisk
         long lastUsable  = lastLba - gptTail;
         // End the partition on a 1 MiB boundary: costs at most 1 MiB and keeps
         // both the start and the length aligned to flash erase blocks.
-        long partLast    = ((lastUsable + 1) / PART_START) * PART_START - 1;   // inclusive
-        if (partLast - PART_START + 1 > MAX_SECTORS)
-            partLast = ((PART_START + MAX_SECTORS) / PART_START) * PART_START - 1;
-        long volSectors  = partLast - PART_START + 1;
+        long partLast    = ((lastUsable + 1) / partStart) * partStart - 1;   // inclusive
+        if (partLast - partStart + 1 > MAX_SECTORS)
+            partLast = ((partStart + MAX_SECTORS) / partStart) * partStart - 1;
+        long volSectors  = partLast - partStart + 1;
         if (volSectors < MIN_DISK_BYTES / SECTOR)
             throw new IOException("The drive is too small once the partition table is accounted for.");
 
@@ -251,7 +341,7 @@ static class UnoDisk
             throw new IOException("Cannot lay out a FAT32 volume on a drive this small.");
         if (clusters > 0x0FFFFFF5) throw new IOException("Drive too large for a single FAT32 volume.");
 
-        long fat0     = PART_START + RESERVED;
+        long fat0     = partStart + RESERVED;
         long dataLba  = fat0 + NUM_FATS * fatSize;
         int  clusBytes = spc * SECTOR;
 
@@ -261,7 +351,7 @@ static class UnoDisk
         // 1. wipe the front (stale MBR/GPT/superblocks) and the whole FAT region,
         //    so every cluster we never touch reads as free rather than as whatever
         //    the previous filesystem left behind.
-        w.Zero(0, PART_START);
+        w.Zero(0, partStart);
         // ...and the BACKUP GPT at the far end, in the same breath.  Re-flashing a
         //    stick that already held UnoDOS would otherwise leave a valid backup
         //    table describing this very layout: if the build then fails, Windows
@@ -269,7 +359,7 @@ static class UnoDisk
         //    the user ends up with a mountable, bootable-looking drive holding a
         //    half-written filesystem - exactly what writing the GPT last prevents.
         w.Zero(lastLba - gptTail + 1, gptTail);
-        w.Zero(PART_START, dataLba - PART_START);
+        w.Zero(partStart, dataLba - partStart);
 
         // 2. lay out the file tree and hand out clusters
         var root = new Node { IsDir = true, Name = "" };
@@ -298,28 +388,40 @@ static class UnoDisk
 
         // 4. boot sector, FSInfo and their backups at sector 6/7
         uint serial = (uint)DateTime.Now.Ticks;
-        byte[] boot = BootSector(volSectors, spc, fatSize, serial, label);
+        byte[] boot = BootSector(volSectors, spc, fatSize, serial, label, partStart);
         byte[] fsi  = FsInfo(clusters - used);
-        w.Write(PART_START + 0, boot, 0, SECTOR);
-        w.Write(PART_START + 1, fsi,  0, SECTOR);
-        w.Write(PART_START + 6, boot, 0, SECTOR);
-        w.Write(PART_START + 7, fsi,  0, SECTOR);
+        w.Write(partStart + 0, boot, 0, SECTOR);
+        w.Write(partStart + 1, fsi,  0, SECTOR);
+        w.Write(partStart + 6, boot, 0, SECTOR);
+        w.Write(partStart + 7, fsi,  0, SECTOR);
 
         // 5. directories and file data
         long done = 0;
         WriteTree(root, true, w, dataLba, spc, clusBytes, label, report, ref done, totalBytes);
 
-        // 6. GPT last: until the partition table lands the volume is invisible, so
-        //    an interrupted run leaves an unpartitioned drive rather than a
-        //    bootable-looking one with a half-written filesystem.
+        // 6. THE PARTITION TABLE LAST, and for the hybrid the boot chain after
+        //    it: until the table lands the volume is invisible, so an
+        //    interrupted run leaves an unpartitioned drive rather than a
+        //    bootable-looking one with a half-written filesystem.  The boot code
+        //    goes down last of all, so a drive never claims to boot before the
+        //    system it would boot is actually on it.
         report("Writing the partition table", 0, 1);
-        WriteGpt(w, diskSectors, PART_START, partLast, lastUsable);
+        if (chain == null) {
+            WriteGpt(w, diskSectors, partStart, partLast, lastUsable);
+        } else {
+            WriteMbr(w, partStart, partLast, null);   // table only: BIOS-inert
+            report("Writing the boot chain", 0, 1);
+            WriteChain(w, chain);                     // stage2 + kernel
+            WriteMbr(w, partStart, partLast, chain.Boot);   // ...then the code
+        }
 
         w.Flush();
-        return string.Format("FAT32 on {0} MB, {1} clusters of {2}, {3} MB of files",
+        return string.Format("{4} on {0} MB, {1} clusters of {2}, {3} MB of files",
                              volSectors / 2048, clusters,
                              clusBytes >= 1024 ? (clusBytes / 1024) + " KB" : clusBytes + " B",
-                             totalBytes / (1024 * 1024));
+                             totalBytes / (1024 * 1024),
+                             chain != null ? "BIOS + UEFI bootable FAT32"
+                                           : "UEFI-bootable FAT32");
     }
 
     /* ---- tree building ------------------------------------------------------ */
@@ -647,7 +749,8 @@ static class UnoDisk
     }
 
     /* ---- boot sector / FSInfo ----------------------------------------------- */
-    static byte[] BootSector(long volSectors, int spc, long fatSize, uint serial, string label)
+    static byte[] BootSector(long volSectors, int spc, long fatSize, uint serial,
+                             string label, long partStart)
     {
         var b = new byte[SECTOR];
         b[0] = 0xEB; b[1] = 0x58; b[2] = 0x90;                    // jmp short +0x58
@@ -661,7 +764,7 @@ static class UnoDisk
         b[21] = 0xF8;                                              // fixed disk
         PutU16(b, 22, 0);                                          // FATSz16: FAT32 = 0
         PutU16(b, 24, 63); PutU16(b, 26, 255);                     // CHS geometry, cosmetic
-        PutU32(b, 28, (uint)PART_START);                           // hidden sectors
+        PutU32(b, 28, (uint)partStart);                            // hidden sectors
         PutU32(b, 32, (uint)volSectors);
         PutU32(b, 36, (uint)fatSize);
         PutU16(b, 40, 0);                                          // ExtFlags: FATs mirrored
@@ -689,6 +792,44 @@ static class UnoDisk
     }
 
     /* ---- GPT ---------------------------------------------------------------- */
+    /* ---- the hybrid MBR + boot chain ---------------------------------------
+     * One partition entry, typed 0xEF.  The CHS fields are the 0xFE/0xFF/0xFF
+     * "beyond CHS, use LBA" sentinel rather than a computed geometry: everything
+     * that reads this stick reads the LBA fields, and a computed CHS triple is
+     * wrong for any disk over 8 GiB and right nowhere that matters. */
+    static void WriteMbr(SectorWriter w, long first, long last, byte[] code)
+    {
+        var sec = new byte[SECTOR];
+        // `code` null on the first pass: the table lands with a ZEROED code
+        // area, so the drive is UEFI-bootable and BIOS-inert until the chain is
+        // complete.  Only the first 446 bytes are ever taken from it, so
+        // installing boot code cannot damage the table.
+        if (code != null) Buffer.BlockCopy(code, 0, sec, 0, 0x1BE);
+        long count = last - first + 1;
+        if (count > MAX_SECTORS) count = MAX_SECTORS;
+        int o = 0x1BE;
+        sec[o + 0] = 0x80;                                   // bootable
+        sec[o + 1] = 0xFE; sec[o + 2] = 0xFF; sec[o + 3] = 0xFF;
+        sec[o + 4] = PART_TYPE_ESP;
+        sec[o + 5] = 0xFE; sec[o + 6] = 0xFF; sec[o + 7] = 0xFF;
+        PutU32(sec, o + 8,  (uint)first);
+        PutU32(sec, o + 12, (uint)count);
+        sec[510] = 0x55; sec[511] = 0xAA;
+        w.Write(0, sec, 0, SECTOR);
+    }
+
+    static void WriteChain(SectorWriter w, BootChain c)
+    {
+        var st = new byte[BIOS_STAGE2_SEC * SECTOR];
+        Buffer.BlockCopy(c.Stage2, 0, st, 0, c.Stage2.Length);
+        w.Write(BIOS_STAGE2_LBA, st, 0, st.Length);
+
+        long pad = ((c.Kernel.Length + SECTOR - 1) / SECTOR) * SECTOR;
+        var kn = new byte[pad];
+        Buffer.BlockCopy(c.Kernel, 0, kn, 0, c.Kernel.Length);
+        w.Write(BIOS_KERNEL_LBA, kn, 0, kn.Length);
+    }
+
     static void WriteGpt(SectorWriter w, long diskSectors, long first, long last, long lastUsable)
     {
         long entryArrSectors = (long)GPT_ENTRIES * GPT_ENTSZ / SECTOR;   // 32
