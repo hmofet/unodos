@@ -92,17 +92,21 @@ Write-Host "volume $drive ready"
 # weaken the corpus the stick is meant to carry.
 function Copy-Tree($src, $dstRoot) {
     Get-ChildItem -LiteralPath $src -Recurse -File | ForEach-Object {
-        $rel = $_.FullName.Substring($src.Length).TrimStart("\")
+        # Bind the pipeline item to a NAMED variable before the try. Inside a
+        # catch block $_ is the ErrorRecord, not the item, so using $_.FullName
+        # in the fallback silently passes an empty source path.
+        $f   = $_
+        $rel = $f.FullName.Substring($src.Length).TrimStart("\")
         $dst = Join-Path $dstRoot $rel
         $dir = Split-Path $dst -Parent
         if (-not (Test-Path -LiteralPath $dir)) {
             New-Item -ItemType Directory -Path $dir -Force | Out-Null
         }
         try {
-            Copy-Item -LiteralPath $_.FullName -Destination $dst -Force -ErrorAction Stop
+            Copy-Item -LiteralPath $f.FullName -Destination $dst -Force -ErrorAction Stop
         } catch {
             # Reserved name, or any other Win32 parsing objection.
-            [System.IO.File]::Copy($_.FullName, "\\?\$dst", $true)
+            [System.IO.File]::Copy($f.FullName, "\\?\$dst", $true)
             Write-Host "  (via \\?\) $rel"
         }
     }
