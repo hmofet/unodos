@@ -608,6 +608,13 @@ def wm_a():
     except OSError:
         pass
     quiet_debug_cfg()
+    # A REAL FAT image, not the vvfat view. vvfat's read-write mode is not a
+    # filesystem the guest can trust: SHELL.CFG written through it came back as
+    # 50 bytes of unrelated garbage, which reads exactly like a shell bug and is
+    # not one. mkuefi.py packs the same build/esp into a GPT + FAT32 image the
+    # native driver writes properly, and the file survives the power cycle.
+    subprocess.run([sys.executable, "tools/mkuefi.py"], check=True)
+    os.environ["UNO_DISK"] = "build/unodos-uefi.img"
     dropbox = None
     qemu, q = start_qemu(log="build/wm_a1.log", pointer="none")
     try:
