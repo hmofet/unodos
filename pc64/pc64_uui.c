@@ -1790,7 +1790,11 @@ static void open_app(int a)
         else if (app_is_bridge(a))  unoapp_open(a - NNATIVE);    /* bridge app    */
         rebuild_taskbar();
         session_save();                 /* remember the open set for next boot */
-    } else if (g_parked[a]) wm_unpark(a);   /* show-desktop / minimize: back in */
+    } else if (g_parked[a]) {          /* show-desktop / minimize: back in */
+        wm_unpark(a);
+        rebuild_taskbar();             /* the chip stops being dimmed      */
+        session_save();                /* ...and stops being parked on disk */
+    }
     else raise_win(&g_win[a]);
     if (g_launch_open) { remove_win(&g_launch); g_launch_open = 0; }  /* Start-menu closes */
     /* focus the opened window + its canvas (closing the launcher above moved
@@ -2141,10 +2145,11 @@ static void minimize_app(int a)
 static void restore_app(int a)
 {
     if (a < 0 || a >= NAPPS || !g_open[a] || !g_parked[a]) return;
-    open_app(a);                    /* unparks, raises, focuses, notes MRU   */
     g_showdesk = 0;                 /* the show-desktop set is broken up now */
-    rebuild_taskbar();
-    session_save();
+    open_app(a);                    /* unparks, raises, focuses, notes MRU,
+                                       redraws the chip and saves the session,
+                                       so Alt-Tab back to a parked window is
+                                       the same restore as the chip click   */
 }
 
 static void close_focused(void)
