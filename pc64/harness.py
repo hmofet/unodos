@@ -1715,6 +1715,24 @@ def wm_f():
         m.click(ed_x * SCALE, pop_row_y(tb_y * SCALE, row_h, POP_ROW_NONE))
         m.park()
         grab(q, "wm_f_08_ungrouped")
+
+        def files_box(tag):
+            """Files' rect with the Editor parked out of the frame. The control
+            has to be measured on the PEER itself, not as "did the right half
+            change": phase C un-snaps a snapped window once the drag crosses
+            UNSNAP_SLOP, and the Editor's restored width is more than half the
+            work area, so it spills into the right half whatever Files does.
+            Ctrl-M parks the focused window, which is the Editor in both
+            cases."""
+            q.cmd("send-key", keys=[{"type": "qcode", "data": "ctrl"},
+                                    {"type": "qcode", "data": "m"}])
+            time.sleep(1.5)
+            m.park()
+            grab(q, tag)
+            return diff_bbox("wm_f_00_desktop", tag, ignore=band)
+
+        f1 = files_box("wm_f_08a_files_alone")
+        m.click(chips[0] + chips[2] // 4, chips[1] + chips[3] // 2, settle=1.2)
         m.to(ed_x * SCALE, tb_y * SCALE)
         m.btn(True)
         for i in range(1, 11):
@@ -1722,11 +1740,14 @@ def wm_f():
         m.btn(False)
         m.park()
         grab(q, "wm_f_09_solo_dragged")
-        solo_r = diff_frac("wm_f_08_ungrouped", "wm_f_09_solo_dragged", right_half)
-        solo_l = diff_frac("wm_f_08_ungrouped", "wm_f_09_solo_dragged", left_half)
-        check("ungrouped, the same drag moves ONLY the grabbed window",
-              solo_r < 0.02 and solo_l > 0.05,
-              "left %.3f right %.3f" % (solo_l, solo_r))
+        f2 = files_box("wm_f_09a_files_alone")
+        check("ungrouped, the same drag left the ex-peer where it was",
+              f1 is not None and f2 is not None and
+              abs(f1[0] - f2[0]) <= 4 and abs(f1[1] - f2[1]) <= 4,
+              "%s vs %s" % (f1, f2))
+        check("...and it did move the grabbed window",
+              diff_frac("wm_f_08_ungrouped", "wm_f_09_solo_dragged", left_half) > 0.05)
+        m.click(chips[0] + chips[2] // 4, chips[1] + chips[3] // 2, settle=1.2)
 
         # ---- Tile / Cascade, from the taskbar context menu ------------------
         for _ in range(6):                     # start from an empty desktop
