@@ -1099,7 +1099,7 @@ unoui_rect unoui_titlebtn_rect(const unoui_theme *t, const unoui_window *win, in
 {
     unoui_rect r; int fw, th, sz, right;
     r.x = r.y = r.w = r.h = 0;
-    if (!t || !win || (win->flags & UI_WIN_BARE)) return r;
+    if (!t || !win || (win->flags & (UI_WIN_BARE | UI_WIN_NOCTL))) return r;
     fw = t->m.frame_w; th = t->m.title_h;
     sz = (which == UI_TB_MIN) ? t->m.minbox : t->m.maxbox;
     if (sz <= 0) return r;                    /* theme has no such button     */
@@ -1138,6 +1138,46 @@ static void draw_title_btn(const unoui_theme *t, unoui_rect b, int which,
     }
 }
 
+int (*unoui_win_badge)(const unoui_window *);
+
+/* Badge hue `idx`, derived from the palette's accent by rotating its channels.
+ * Deriving beats naming a role: a theme guarantees exactly ONE accent, so a
+ * fixed set of roles could not keep four badges apart, and hard-coded RGB would
+ * ignore the theme entirely. Rotation keeps the accent's saturation and
+ * brightness - so the badges stay a family - while separating their hues. */
+static fb_px badge_color(const unoui_theme *t, int idx)
+{
+    fb_px a = t->pal.accent;
+    unsigned r = a & 0xFFu, g = (a >> 8) & 0xFFu, b = (a >> 16) & 0xFFu;
+    switch (idx & (UI_BADGE_N - 1)) {
+    case 0:  return a;
+    case 1:  return FB_RGB(b, r, g);
+    case 2:  return FB_RGB(g, b, r);
+    default: return FB_RGB(255u - r, 255u - g, 255u - b);
+    }
+}
+
+/* The badge sits inboard of the min/max boxes (this toolkit's close box is at
+ * the LEFT end of the bar, so the right end is where the free space is). A
+ * theme with no title buttons at all anchors it to the same right margin they
+ * would have used. .w == 0 = it does not fit / there is nothing to draw. */
+#define UI_BADGE_SZ 6
+static unoui_rect badge_rect(const unoui_theme *t, const unoui_window *win)
+{
+    unoui_rect r, b;
+    int fw = t->m.frame_w, th = t->m.title_h;
+    r.x = r.y = r.w = r.h = 0;
+    if (win->flags & UI_WIN_BARE) return r;
+    if (th - fw < UI_BADGE_SZ + 2) return r;      /* title bar too short      */
+    b = unoui_titlebtn_rect(t, win, UI_TB_MIN);
+    if (b.w <= 0) b = unoui_titlebtn_rect(t, win, UI_TB_MAX);
+    r.x = (b.w > 0 ? b.x : win->r.x + win->r.w - fw - 4) - 4 - UI_BADGE_SZ;
+    r.y = win->r.y + fw + (th - fw - UI_BADGE_SZ) / 2;
+    if (r.x <= win->r.x + fw + 2) return r;       /* window too narrow: skip  */
+    r.w = r.h = UI_BADGE_SZ;
+    return r;
+}
+
 /* Draw whatever window controls this theme + window call for. Called from the
  * shared per-window render path (and the static contact-sheet path) right
  * after the title bar, so it paints over the theme's own chrome. */
@@ -1145,6 +1185,16 @@ static void draw_title_buttons(const unoui_theme *t, const unoui_window *win)
 {
     int nomax;
     if (win->flags & UI_WIN_BARE) return;
+    if (unoui_win_badge) {                        /* the optional group marker */
+        int bi = unoui_win_badge(win);
+        if (bi >= 0) {
+            unoui_rect br = badge_rect(t, win);
+            if (br.w > 0) {
+                fb_fill_rect(br.x, br.y, br.w, br.h, badge_color(t, bi));
+                fb_frame_rect(br.x, br.y, br.w, br.h, t->pal.dark);
+            }
+        }
+    }
     /* a window that cannot resize cannot maximize: the box is drawn disabled
      * (and the shell ignores the action it emits) rather than hidden, so the
      * title bars of fixed-layout apps still line up with everybody else's. */
