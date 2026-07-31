@@ -136,7 +136,8 @@ enum {
     UI_WIN_BARE   = 1 << 0,   /* no chrome (frame/titlebar), not draggable    */
     UI_WIN_BOTTOM = 1 << 1,   /* pinned behind normal windows (the desktop)   */
     UI_WIN_TOP    = 1 << 2,   /* pinned in front of normal windows (taskbar)  */
-    UI_WIN_RESIZE = 1 << 3    /* draggable bottom-right grip; fill widgets reflow */
+    UI_WIN_RESIZE = 1 << 3,   /* draggable bottom-right grip; fill widgets reflow */
+    UI_WIN_NOCTL  = 1 << 4    /* titled, but no minimize/maximize boxes       */
 };
 
 /* ---- snap states (unoui_window.snap) ------------------------------------- *
@@ -441,5 +442,19 @@ void unoui_render (unoui_window *win, const struct unoui_theme *theme);  /* stat
 enum { UI_TB_MIN = 0, UI_TB_MAX = 1 };
 unoui_rect unoui_titlebtn_rect(const struct unoui_theme *, const unoui_window *,
                                int which);
+
+/* Optional title-bar badge. When this hook is set, the generic control painter
+ * asks it for each window's badge index and draws a small marker just inboard
+ * of the min/max boxes. UI_BADGE_NONE = no badge; 0..UI_BADGE_N-1 select a hue
+ * DERIVED from the theme's accent (channel rotation), so a badge re-skins with
+ * the theme and stays distinguishable from its neighbours whatever the palette
+ * is - which no single palette role can promise.
+ *
+ * unoui has no idea what a badge MEANS: the pc64 shell uses it to mark window
+ * link-groups, and this one hook is the only thing the toolkit knows about
+ * them. NULL (the default) = no badges anywhere, i.e. today's chrome. */
+#define UI_BADGE_NONE (-1)
+#define UI_BADGE_N      4
+extern int (*unoui_win_badge)(const unoui_window *);
 
 #endif /* UNOUI_H */
