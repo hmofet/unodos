@@ -1304,26 +1304,64 @@ static void post_key_mod(short keycode, char ch, short mods)
 }
 static void post_key(short keycode, char ch) { post_key_mod(keycode, ch, 0); }
 
-/* ---- raw key ring: a platform-neutral (scan, unicode, ctrl) stream the
+/* ---- raw key ring: a platform-neutral (scan, unicode, mods) stream the
    unoui shell consumes directly. The legacy core uses the Mac-coded events
-   posted below; both are filled, harmlessly. ------------------------------- */
+   posted below; both are filled, harmlessly.
+
+   `mods` is a UI_MOD_* bitmask (unoui.h). It was a bare ctrl flag until the
+   window manager needed Alt; uno_pc64_next_key() is now the ctrl-only wrapper
+   so pc64_accounts.c and every other pre-modifier caller is untouched. ------ */
+/* mirrors unoui.h's UI_MOD_* - this file is below the toolkit and does not
+ * include it; the bits are the wire format of the ring. Keep in step. */
+#define UI_MOD_SHIFT 1
+#define UI_MOD_CTRL  2
+#define UI_MOD_ALT   4
+#define UI_MOD_GUI   8
+/* the Mac modifier space map_key speaks has no logo/GUI bit: borrow a free
+ * one so the funnel can carry all four the whole way to the ring. */
+#define UNO_GUIKEY   0x2000
+
 #define RAWK 32
-static struct { int scan, uni, ctrl; } gRawK[RAWK];
+static struct { int scan, uni, mods; } gRawK[RAWK];
 static int gRawHead, gRawTail;
-static void raw_push(int scan, int uni, int ctrl)
+
+/* LIVE (held-now) modifier state. Two sources, picked the same way
+ * poll_keyboard() picks its reader:
+ *   - native PS/2 tracks make AND break, so it is authoritative;
+ *   - the UEFI Ex path can only LATCH the KeyState carried by a keystroke, so
+ *     a modifier held with no keys pressed reads stale until the next event.
+ *     Firmware that never reports a modifier (pure ConIn, and USB HID until
+ *     the usb lane exposes its boot-report modifier byte) simply reads 0 -
+ *     hence the rule that every Alt binding keeps a ctrl-reachable fallback. */
+static int gLiveMods;
+
+static void raw_push(int scan, int uni, int mods)
 {
     int n = (gRawTail + 1) % RAWK;
     if (n == gRawHead) return;
     gRawK[gRawTail].scan = scan; gRawK[gRawTail].uni = uni;
-    gRawK[gRawTail].ctrl = ctrl; gRawTail = n;
+    gRawK[gRawTail].mods = mods; gRawTail = n;
 }
-int uno_pc64_next_key(int *scan, int *uni, int *ctrl)
+int uno_pc64_next_key2(int *scan, int *uni, int *mods)
 {
     if (gRawHead == gRawTail) return 0;
     *scan = gRawK[gRawHead].scan; *uni = gRawK[gRawHead].uni;
-    *ctrl = gRawK[gRawHead].ctrl;
+    *mods = gRawK[gRawHead].mods;
     gRawHead = (gRawHead + 1) % RAWK;
     return 1;
+}
+int uno_pc64_next_key(int *scan, int *uni, int *ctrl)
+{
+    int md;
+    if (!uno_pc64_next_key2(scan, uni, &md)) return 0;
+    *ctrl = (md & UI_MOD_CTRL) != 0;
+    return 1;
+}
+static int native_kbd_present(void);          /* fwd (defined with the pollers) */
+int uno_pc64_mods(void)
+{
+    if (gDetached && !native_kbd_present()) return uno_ps2_mods();
+    return gLiveMods;
 }
 void uno_pc64_mouse(int *x, int *y, int *btn) { *x = g_cx; *y = g_cy; *btn = g_prev_mb; }
 
@@ -1366,12 +1404,35 @@ void uno_pc64_delay_ms(int ms)
 static volatile int g_dbg_kcap, g_dbg_khave, g_dbg_kscan, g_dbg_kuni;
 #endif
 
+/* the Mac modifier space -> the ring's UI_MOD_* byte. cmdKey is what every
+ * pre-modifier caller means by "ctrl", so both land on UI_MOD_CTRL. */
+static int mods_to_ui(short mods)
+{
+    return ((mods & cmdKey)    ? UI_MOD_CTRL  : 0) |
+           ((mods & shiftKey)  ? UI_MOD_SHIFT : 0) |
+           ((mods & optionKey) ? UI_MOD_ALT   : 0) |
+           ((mods & UNO_GUIKEY)? UI_MOD_GUI   : 0);
+}
+
+/* ...and back, for the native PS/2 reader, which already speaks UI_MOD_*. */
+static short ps2_mods_to_mac(int md)
+{
+    return (short)(((md & UI_MOD_CTRL)  ? cmdKey    : 0) |
+                   ((md & UI_MOD_SHIFT) ? shiftKey  : 0) |
+                   ((md & UI_MOD_ALT)   ? optionKey : 0) |
+                   ((md & UI_MOD_GUI)   ? UNO_GUIKEY: 0));
+}
+
 static void map_key(UINT16 scan, CHAR16 uni, short mods)
 {
+    int uim = mods_to_ui(mods);
 #ifdef UNO_DEBUG
     if (g_dbg_kcap) { g_dbg_kscan = (int)scan; g_dbg_kuni = (int)uni; g_dbg_khave = 1; }
 #endif
-    raw_push((int)scan, (int)uni, mods ? 1 : 0);
+    gLiveMods = uim;                  /* latch: the best "held now" a keystroke
+                                         can tell us on the firmware path */
+    raw_push((int)scan, (int)uni, uim);
+    mods = (short)(mods & ~UNO_GUIKEY);   /* the borrowed bit is ours, not Mac's */
     switch (scan) {                           /* Mac keycode + arrow ASCII */
     case SCAN_LEFT:  post_key_mod(0x7B, 0x1C, mods); return;
     case SCAN_RIGHT: post_key_mod(0x7C, 0x1D, mods); return;
@@ -1383,8 +1444,10 @@ static void map_key(UINT16 scan, CHAR16 uni, short mods)
                                                  (desktop resolution lives in
                                                   the Settings app) */
     }
-    /* Ctrl+letter arrives as a control code (^S = 0x13) - normalize */
-    if (mods && uni >= 1 && uni <= 26 && uni != 0x0D && uni != 0x0A &&
+    /* Ctrl+letter arrives as a control code (^S = 0x13) - normalize. Gate on
+       cmdKey specifically: Alt or Shift alone never produces a control code,
+       and normalizing on them would rewrite Tab/Enter out from under the shell. */
+    if ((mods & cmdKey) && uni >= 1 && uni <= 26 && uni != 0x0D && uni != 0x0A &&
         uni != 0x08 && uni != 0x09)
         uni = (CHAR16)(uni - 1 + 'a');
     switch (uni) {
@@ -1421,22 +1484,35 @@ static void poll_keyboard(void)
         return;
     }
     if (gDetached) {                       /* native PS/2 (M3) */
-        int sc, uni, ct;
+        int sc, uni, md;
         uno_ps2_pump();
-        while (uno_ps2_next_key(&sc, &uni, &ct))
-            map_key((UINT16)sc, (CHAR16)uni, ct ? cmdKey : 0);
+        while (uno_ps2_next_key2(&sc, &uni, &md))
+            map_key((UINT16)sc, (CHAR16)uni, ps2_mods_to_mac(md));
         return;
     }
     if (gKeyEx) {
         EFI_KEY_DATA kd;
         while (budget-- > 0 &&
                gKeyEx->ReadKeyStrokeEx(gKeyEx, &kd) == EFI_SUCCESS) {
+            UINT32 ks = kd.KeyState.KeyShiftState;
             short mods = 0;
-            if ((kd.KeyState.KeyShiftState & EFI_SHIFT_STATE_VALID) &&
-                (kd.KeyState.KeyShiftState &
-                 (EFI_LEFT_CONTROL_PRESSED | EFI_RIGHT_CONTROL_PRESSED)))
-                mods = cmdKey;
-            if (!kd.Key.ScanCode && !kd.Key.UnicodeChar) continue;
+            if (ks & EFI_SHIFT_STATE_VALID) {
+                if (ks & (EFI_LEFT_CONTROL_PRESSED | EFI_RIGHT_CONTROL_PRESSED))
+                    mods |= cmdKey;
+                if (ks & (EFI_LEFT_SHIFT_PRESSED | EFI_RIGHT_SHIFT_PRESSED))
+                    mods |= shiftKey;
+                if (ks & (EFI_LEFT_ALT_PRESSED | EFI_RIGHT_ALT_PRESSED))
+                    mods |= optionKey;
+                if (ks & (EFI_LEFT_LOGO_PRESSED | EFI_RIGHT_LOGO_PRESSED))
+                    mods |= UNO_GUIKEY;
+            }
+            /* A partial keystroke (no scan, no char) is a modifier-only report:
+               worthless as a key, but it is the ONLY release edge this path can
+               ever see, so latch its state before dropping it. */
+            if (!kd.Key.ScanCode && !kd.Key.UnicodeChar) {
+                if (ks & EFI_SHIFT_STATE_VALID) gLiveMods = mods_to_ui(mods);
+                continue;
+            }
             map_key(kd.Key.ScanCode, kd.Key.UnicodeChar, mods);
         }
         return;
