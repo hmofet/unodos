@@ -1546,9 +1546,10 @@ def wm_e():
 # repaints the losing window's title bar - noise that would inflate the bbox and
 # move the top edge every row is counted from. After the first Esc, focus is
 # already on shell chrome, so the second open changes nothing but the popover.
-POP_WIN_ROWS    = 11    # Restore/Min/Max/SnapL/SnapR/-/none/A/B/-/Close
-POP_ROW_NONE    = 6     # "Group: none"
-POP_ROW_A       = 7     # "Group: A"
+POP_WIN_ROWS    = 16    # Restore/Min/Max/SnapL/SnapR /- /desk1-4 /- /none/A/B /- /Close
+POP_ROW_DESK2   = 7     # "To desktop 2"
+POP_ROW_NONE    = 11    # "Group: none"
+POP_ROW_A       = 12    # "Group: A"
 POP_ROW_TILE    = 0     # the taskbar menu: Tile / Cascade / Minimize all
 POP_ROW_CASCADE = 1
 POP_ROW_MINALL  = 2
@@ -1620,6 +1621,26 @@ def wm_f():
         time.sleep(1.5)                        # close the restored Control Panel
         grab(q, "wm_f_00_desktop")
 
+        # Phase E's pager sits between Start and the chips, and its occupancy
+        # dot lights the moment an app opens - so a chip's diff bbox would be
+        # the UNION of dot and chip, and the chip width derived from it wrong.
+        # Locate the pager the way wm_b does (with nothing open anywhere, a
+        # desktop switch can repaint nothing else in the bar) and take
+        # everything left of the chips out of every chip diff below.
+        q.cmd("send-key", keys=[{"type": "qcode", "data": "ctrl"},
+                                {"type": "qcode", "data": "f2"}])
+        time.sleep(1.2)
+        grab(q, "wm_f_00b_desk2")
+        pager = diff_bbox("wm_f_00_desktop", "wm_f_00b_desk2", ignore=chip_only)
+        q.cmd("send-key", keys=[{"type": "qcode", "data": "ctrl"},
+                                {"type": "qcode", "data": "f1"}])
+        time.sleep(1.2)
+        check("found the desktop pager", pager is not None, str(pager))
+        if pager is None:
+            raise SystemExit("wm_f: no pager - the chip strip cannot be located")
+        chip_only.append((0, SCREEN_H - 64,
+                          pager[0] + 4 * ((pager[2] + 3) // 2) + 8 * SCALE, 64))
+
         # ---- two windows in KNOWN halves ------------------------------------
         # Snapped, so every click below is computed from the theme metrics
         # against a corner that is the screen's - never hunted for in a diff,
@@ -1662,6 +1683,41 @@ def wm_f():
         m.park()
         grab(q, "wm_f_03_grouped")
 
+        # ---- the set changes desktops together (phase E's wm_desk_move) -----
+        # "To desktop N" SENDS without following, so desktop 1 must empty and
+        # desktop 2 must hold both. This runs BEFORE the drag deliberately: a
+        # desktop switch hands focus to that desktop's MRU window, so every step
+        # after it has to aim at a POSITION rather than at "the focused window".
+        # Both windows are still snapped to their halves here, so the right-click
+        # below names the Editor by where it is.
+        m.rclick(ed_x * SCALE, tb_y * SCALE)
+        m.click(ed_x * SCALE, pop_row_y(tb_y * SCALE, row_h, POP_ROW_DESK2),
+                settle=1.5)
+        m.park()
+        grab(q, "wm_f_03b_sent_away")
+        check("sending one member to desktop 2 sent the whole set",
+              diff_bbox("wm_f_00_desktop", "wm_f_03b_sent_away",
+                        ignore=band) is None)
+        q.cmd("send-key", keys=[{"type": "qcode", "data": "ctrl"},
+                                {"type": "qcode", "data": "f2"}])
+        time.sleep(1.5)
+        m.park()
+        grab(q, "wm_f_03c_on_desk2")
+        check("...and both of them are on desktop 2",
+              diff_frac("wm_f_00_desktop", "wm_f_03c_on_desk2", left_half) > 0.1 and
+              diff_frac("wm_f_00_desktop", "wm_f_03c_on_desk2", right_half) > 0.1)
+        m.rclick(ed_x * SCALE, tb_y * SCALE)   # ...and back again, same way
+        m.click(ed_x * SCALE, pop_row_y(tb_y * SCALE, row_h, POP_ROW_DESK2 - 1),
+                settle=1.5)
+        q.cmd("send-key", keys=[{"type": "qcode", "data": "ctrl"},
+                                {"type": "qcode", "data": "f1"}])
+        time.sleep(1.5)
+        m.park()
+        grab(q, "wm_f_03d_back_on_desk1")
+        check("sending them back to desktop 1 returned both",
+              diff_frac("wm_f_00_desktop", "wm_f_03d_back_on_desk1", left_half) > 0.1 and
+              diff_frac("wm_f_00_desktop", "wm_f_03d_back_on_desk1", right_half) > 0.1)
+
         # ---- drag ONE: the whole set moves ---------------------------------
         drop = 140
         m.to(ed_x * SCALE, tb_y * SCALE)
@@ -1674,10 +1730,10 @@ def wm_f():
         m.btn(False)
         m.park()
         grab(q, "wm_f_05_group_dragged")
-        mid = diff_frac("wm_f_03_grouped", "wm_f_04_mid_drag", right_half)
+        mid = diff_frac("wm_f_03d_back_on_desk1", "wm_f_04_mid_drag", right_half)
         check("mid-drag, the linked window has moved too", mid > 0.05, "%.3f" % mid)
-        both_r = diff_frac("wm_f_03_grouped", "wm_f_05_group_dragged", right_half)
-        both_l = diff_frac("wm_f_03_grouped", "wm_f_05_group_dragged", left_half)
+        both_r = diff_frac("wm_f_03d_back_on_desk1", "wm_f_05_group_dragged", right_half)
+        both_l = diff_frac("wm_f_03d_back_on_desk1", "wm_f_05_group_dragged", left_half)
         check("the drop left BOTH windows moved",
               both_r > 0.05 and both_l > 0.05,
               "left %.3f right %.3f" % (both_l, both_r))
