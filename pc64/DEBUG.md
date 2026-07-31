@@ -241,6 +241,32 @@ touch Block IO), so a hang report rides the warm-reset RAM stash. **On the
 Surface, let the machine reboot after a freeze, don't power it off, or the
 hang report is lost.** Crash reports are safe either way.
 
+### Which volume, and reading a PROVISIONAL copy (2026-07-31)
+
+Telemetry goes to **the boot volume, identified by its BPB serial**, not by a
+volume index - `uno_fat_remount()` renumbers volumes at detach, and on a machine
+with a second UnoDOS disk (the ZimaBlade has an internal install beside the
+stick it boots) the index that meant "the stick" before detach means the eMMC
+after it. `crash_vol()` re-finds the volume by serial, then by `is_boot`, then
+by anything that will hold a `CRASH` dir.
+
+`BOOTENV.TXT` and `BOOTLOG.TXT` are written **twice** - before `try_detach()` so
+a detach that strands the boot volume still leaves evidence, and after it so the
+file describes the machine as it ended up. Read the `telemetry:` line first:
+
+    telemetry: post-detach (final)   (detach gate: running on our own drivers)
+    telemetry: PRE-DETACH (PROVISIONAL) - if this is the newest copy on the disk,
+                                          the post-detach write did not land
+
+**A provisional copy describes a world the machine has already left**: it will
+say `detached: 0`, `xhci: present=0`, and list the firmware's volumes, on a
+machine that went on to detach and reclaim its own USB controller. Before
+2026-07-31 there was no such line and the second write was landing nowhere, so
+every collected `\CRASH` folder said the machine never detached. If you see a
+provisional copy as the newest one, the disk write is what is broken - check the
+kernel log for `bootenv: WRITE FAILED`, which rides the RAM stash and survives
+to the next boot's residue flush.
+
 For each of the X1 / Surface / Latitude:
 
 1. Flash the stick, boot the machine to the UnoDOS desktop.
