@@ -255,7 +255,7 @@ typedef enum {
     UI_EV_TICK        /* a frame tick; drives caret blink                     */
 } ui_event_kind;
 
-enum { UI_MOD_SHIFT = 1, UI_MOD_CTRL = 2, UI_MOD_ALT = 4 };
+enum { UI_MOD_SHIFT = 1, UI_MOD_CTRL = 2, UI_MOD_ALT = 4, UI_MOD_GUI = 8 };
 
 enum {                /* virtual keys - kept above ASCII so CHAR vs KEY split */
     UI_KEY_LEFT = 0x100, UI_KEY_RIGHT, UI_KEY_UP, UI_KEY_DOWN,

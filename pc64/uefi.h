@@ -79,6 +79,12 @@ struct EFI_SIMPLE_TEXT_INPUT_PROTOCOL {
 #define EFI_LEFT_SHIFT_PRESSED    0x00000002u
 #define EFI_RIGHT_CONTROL_PRESSED 0x00000004u
 #define EFI_LEFT_CONTROL_PRESSED  0x00000008u
+/* the rest of the UEFI 2.x shift bits - the window manager needs Alt and the
+ * logo/GUI key live, not just Ctrl */
+#define EFI_RIGHT_ALT_PRESSED     0x00000010u
+#define EFI_LEFT_ALT_PRESSED      0x00000020u
+#define EFI_RIGHT_LOGO_PRESSED    0x00000040u
+#define EFI_LEFT_LOGO_PRESSED     0x00000080u
 
 typedef struct {
     UINT32 KeyShiftState;
