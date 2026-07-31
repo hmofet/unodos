@@ -1357,24 +1357,34 @@ static void clamp_cursor(void)
    we must remember it until the release frame or the click "doesn't work". */
 static int gAbsBtn[MAXPTR], gPtrBtn[MAXPTR];
 
-/* INJECTED buttons are latched for the same reason, one level up.
+/* INJECTED pointer states are QUEUED, one applied per poll.
  *
  * poll_pointer() rebuilds `mb` from the hardware every frame and commits it, so
  * a button set by uno_pc64_inject_pointer() was cleared within one frame -
  * before the shell's own sample could ever see it. Injected clicks therefore
- * moved the cursor and pressed nothing, which is exactly what a remote
- * `pointer x y 1` / `pointer x y 0` pair did: both landed between two samples
- * and the press was never observed.
+ * moved the cursor and pressed nothing.
  *
- * So a press is held for a few frames and its release DEFERRED until the hold
- * expires. A down/up pair delivered in the same millisecond then still reads as
- * a real click at the shell's cadence, which is what a remote driver, a script
- * and the stress harness all need.
+ * Holding the press for a few frames fixed a SINGLE click and broke a burst.
+ * A remote driver sends `pointer x y 1` then `pointer x y 0` then the next
+ * pair, all within milliseconds; with a hold, the second press arrived while
+ * the first release was still pending and cancelled it. The shell then saw one
+ * continuous press that MOVED from the first control to the second - a drag,
+ * not two clicks - and correctly did nothing, because a button only fires when
+ * the release lands on the control the press started on.
  *
- * Four frames is about 70 ms at the shell's rate - long enough to be sampled
- * several times over, short enough that a fast scripted drag still tracks. */
-#define INJ_HOLD_FRAMES 4
-static int g_inj_btn, g_inj_hold, g_inj_release;
+ * A queue is the honest model: the shell consumes pointer state one sample at
+ * a time, so injected state must be produced one sample at a time. Each entry
+ * is applied for INJ_DWELL polls, which guarantees every transition is
+ * observed, in order, at the position it was meant for. Bursts serialise
+ * instead of collapsing, and the ordering the caller wrote is the ordering the
+ * shell sees.
+ *
+ * The queue drops when full rather than overwriting: losing the newest click is
+ * recoverable, silently losing a RELEASE leaves a phantom held button. */
+#define INJ_Q      32
+#define INJ_DWELL  2            /* polls each queued state is held           */
+static struct { int x, y, btn; } g_injq[INJ_Q];
+static int g_injq_head, g_injq_tail, g_inj_btn, g_inj_dwell;
 
 static void poll_pointer(void)
 {
@@ -1507,11 +1517,18 @@ static void poll_pointer(void)
     for (i = 0; i < gNAbs; i++) mb |= gAbsBtn[i];
     for (i = 0; i < gNPtr; i++) mb |= gPtrBtn[i];
 
-    /* Injected buttons, latched - see INJ_HOLD_FRAMES above. Counted down here
-     * rather than on a timer because the shell's sample rate is what the hold
-     * is measured against, and this function runs once per sample. */
-    if (g_inj_hold > 0) g_inj_hold--;
-    else if (g_inj_release) { g_inj_btn = 0; g_inj_release = 0; }
+    /* Injected state: advance the queue at most one entry per dwell window, so
+     * every transition gets its own sample. See INJ_Q above. */
+    if (g_inj_dwell > 0) g_inj_dwell--;
+    else if (g_injq_tail != g_injq_head) {
+        g_cx = g_injq[g_injq_tail].x;
+        g_cy = g_injq[g_injq_tail].y;
+        g_inj_btn = g_injq[g_injq_tail].btn;
+        g_injq_tail = (g_injq_tail + 1) % INJ_Q;
+        clamp_cursor();
+        g_have_pointer = 1;
+        g_inj_dwell = INJ_DWELL;
+    }
     mb |= g_inj_btn;
 
     pointer_moved_clicked(mb);
@@ -2258,12 +2275,12 @@ void uno_pc64_inject_key(int scan, int uni, int ctrl)
 
 void uno_pc64_inject_pointer(int x, int y, int btn)
 {
-    g_cx = x; g_cy = y;
-    clamp_cursor();
-    g_have_pointer = 1;
-    if (btn) { g_inj_btn = btn; g_inj_hold = INJ_HOLD_FRAMES; g_inj_release = 0; }
-    else if (g_inj_btn) g_inj_release = 1;   /* applied when the hold expires */
-    pointer_moved_clicked(g_inj_btn ? 1 : 0);
+    int n = (g_injq_head + 1) % INJ_Q;
+    if (n == g_injq_tail) return;            /* full - drop, never overwrite  */
+    g_injq[g_injq_head].x = x;
+    g_injq[g_injq_head].y = y;
+    g_injq[g_injq_head].btn = btn;
+    g_injq_head = n;
 }
 
 /* file size, via seek-to-end (0xFFFF... is the spec's "end of file" position) */

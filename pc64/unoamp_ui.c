@@ -462,6 +462,62 @@ static void slider_track(int x)
     }
 }
 
+/* Replace the extension with WAV, in place, 8.3-safe. A name with no dot gets
+ * one appended - a converted file must be findable by the very extension
+ * dispatch that will later have to recognise it. */
+static void wav_name(const char *src, char *dst, int cap)
+{
+    int i = 0, dot = -1;
+    while (src[i] && i < cap - 5) { dst[i] = src[i]; if (src[i] == '.') dot = i; i++; }
+    if (dot < 0) dot = i;
+    dst[dot] = '.'; dst[dot + 1] = 'W'; dst[dot + 2] = 'A'; dst[dot + 3] = 'V';
+    dst[dot + 4] = 0;
+}
+
+/* Progress goes to the title well, which is the only text surface this window
+ * has. Returning 1 keeps it running; there is no cancel key because a
+ * conversion here is bounded by the buffer cap in unoamp_enc.c anyway. */
+static int conv_progress(int pct)
+{
+    char t[32];
+    int n = 0;
+    const char *p = "SAVING ";
+    while (*p) t[n++] = *p++;
+    if (pct < 0) { t[n++] = '.'; t[n++] = '.'; t[n++] = '.'; }
+    else {
+        if (pct >= 100) t[n++] = '1';
+        if (pct >= 10)  t[n++] = (char)('0' + (pct / 10) % 10);
+        t[n++] = (char)('0' + pct % 10);
+        t[n++] = '%';
+    }
+    t[n] = 0;
+    unoamp_ui_set_title(t);
+    pc64_shell_dirty();
+    return 1;
+}
+
+static void save_as_wav(int with_dsp)
+{
+    int sel = unoamp_pl_selected();
+    const char *why = "";
+    char out[136];
+    if (sel < 0) { unoamp_ui_set_title("NOTHING SELECTED"); pc64_shell_dirty(); return; }
+    wav_name(unoamp_pl_path(sel), out, (int)sizeof out);
+    if (unoamp_transcode(unoamp_pl_vol(sel), unoamp_pl_path(sel),
+                         unoamp_pl_vol(sel), out, "WAV", with_dsp,
+                         conv_progress, &why)) {
+        char t[64];
+        int n = 0; const char *p = "SAVED ", *q = out;
+        while (*p) t[n++] = *p++;
+        while (*q && n < (int)sizeof t - 1) t[n++] = *q++;
+        t[n] = 0;
+        unoamp_ui_set_title(t);
+    } else {
+        unoamp_ui_set_title(why && why[0] ? why : "CONVERSION FAILED");
+    }
+    pc64_shell_dirty();
+}
+
 static int ui_event(struct unoui_widget *w, const void *evp, void *ctx)
 {
     const unoui_event *e = (const unoui_event *)evp;
@@ -515,6 +571,19 @@ static int ui_event(struct unoui_widget *w, const void *evp, void *ctx)
         g_pressed = -1; g_hit = HIT_NONE;
         pc64_shell_dirty();
         return 1;
+
+    case UI_EV_CHAR:
+        /* SAVE AS WAV. Winamp did this by switching the OUTPUT plugin to the
+         * Nullsoft Disk Writer and pressing play - the graph wrote a file
+         * instead of driving the DAC. Same idea, reached by a key because
+         * there is no plugin-preferences dialog to switch sinks in: the
+         * selected track runs decode -> DSP -> encoder to completion.
+         *
+         * The DSP chain is INCLUDED, which is Winamp's behaviour with a DSP
+         * plugin loaded and what someone who has just set an EQ curve expects.
+         * Hold shift for the dry copy. */
+        if (e->ch == 'w' || e->ch == 'W') { save_as_wav(!(e->mods & UI_MOD_SHIFT)); return 1; }
+        return 0;
 
     case UI_EV_WHEEL:
         /* Winamp's wheel is volume, everywhere in the window. */

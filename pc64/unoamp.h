@@ -212,6 +212,8 @@ int  unoamp_pl_current(void);
 int  unoamp_pl_selected(void);
 void unoamp_pl_select(int i);
 const char *unoamp_pl_title(int i);
+const char *unoamp_pl_path(int i);
+int  unoamp_pl_vol(int i);
 int  unoamp_pl_len_ms(int i);
 
 void unoamp_set_volume(int v);      /* 0..100                                */
