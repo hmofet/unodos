@@ -75,7 +75,7 @@ static const char *kThemeNames[NTHEMES];
  * canvas via the pc64_uui_apps bridge; app index a>=NNATIVE maps to legacy
  * index a-NNATIVE. */
 enum { APP_CTRL, APP_EDIT, APP_FILES, APP_SYS, APP_CLOCK, APP_SETUP,
-       APP_MUSIC, NNATIVE };
+       APP_MUSIC, APP_UNOAMP, NNATIVE };
 #define NEXTRA 6                          /* extra native apps beyond the bridge */
 #define EX_RUNNER  (NNATIVE + UNOAPP_COUNT)       /* Runner3D: shell app index    */
 #define EX_BROWSER (NNATIVE + UNOAPP_COUNT + 1)   /* Browser: shell app index     */
@@ -87,7 +87,7 @@ enum { APP_CTRL, APP_EDIT, APP_FILES, APP_SYS, APP_CLOCK, APP_SETUP,
 #define APP_TBAR 18                       /* legacy apps' own title-bar height */
 static const char *kAppNames[NNATIVE] =
     { "Control Panel", "Editor", "Files", "System", "Clock", "Install",
-      "Music" };
+      "Music", "UnoAmp" };
 
 /* taskbar height follows the active font (26 px under the classic 8px font) */
 static int tb_h(void) { int h = fb_text_h() + 12; return h < 26 ? 26 : h; }
@@ -205,7 +205,7 @@ static void photos_ensure(void)
 
 static const char *kNativeShort[NNATIVE] =
     { "Control", "Editor", "Files", "System", "Clock", "Install",
-      "Music" };
+      "Music", "UnoAmp" };
 static const char *py_app_name(void)
 { return (g_pyapp && g_pyapp->name) ? g_pyapp->name : "Python app"; }
 static const char *app_name(int a)
@@ -237,7 +237,8 @@ static int app_hidden(int a)
  * predict them), so an app names its icon and everyone else's stays put.
  * Anything unrecognised gets PCI_GENERIC rather than a neighbour's art. */
 static const unsigned char kNativeIcon[NNATIVE] = {
-    PCI_CTRL, PCI_EDIT, PCI_FILES, PCI_SYS, PCI_CLOCK, PCI_SETUP, PCI_MUSIC
+    PCI_CTRL, PCI_EDIT, PCI_FILES, PCI_SYS, PCI_CLOCK, PCI_SETUP, PCI_MUSIC,
+    PCI_MUSIC        /* UnoAmp shares the note icon - it IS the music app */
 };
 static const unsigned char kBridgeIcon[UNOAPP_COUNT] = {
     PCI_DOSTRIS, PCI_PACMAN, PCI_OUTLAST, PCI_TRACKER, PCI_PAINT
@@ -731,6 +732,11 @@ void pc64_music_build(unoui_window *w);
 static void build_edit(unoui_window *w)  { pc64_write_build(w); }
 static void build_files(unoui_window *w) { pc64_files_build(w); }
 static void build_music(unoui_window *w) { pc64_music_build(w); }
+/* UnoAmp is a skinned, chromeless window that draws itself - see
+ * pc64/unoamp_ui.c. It owns its EQ and playlist windows rather than the shell
+ * doing so, because the three are one player, not three applications. */
+void unoamp_ui_build(unoui_window *w);
+static void build_unoamp(unoui_window *w) { unoamp_ui_build(w); }
 /* tiny no-libc string builders for the diagnostics line */
 static char *ap_str(char *p, const char *s) { while (*s) *p++ = *s++; return p; }
 static char *ap_int(char *p, int v) { char t[12]; int n = 0;
@@ -1212,7 +1218,7 @@ static void build_setup(unoui_window *w)
 
 static void (*const g_build[NNATIVE])(unoui_window *) =
     { build_ctrl, build_edit, build_files, build_sys, build_clock,
-      build_setup, build_music };
+      build_setup, build_music, build_unoamp };
 
 /* ---- window management -------------------------------------------------- */
 static int g_launch_open;
@@ -2984,6 +2990,9 @@ int main(void)
         if (g_open[APP_MUSIC]) pc64_music_tick();  /* decode ahead into the PCM
                                         stream; bounded by FIFO space, so this
                                         never blocks the frame */
+        if (g_open[APP_UNOAMP]) { void unoamp_tick(void); unoamp_tick(); }
+                                       /* the same pull, through the plugin
+                                        graph: decode -> DSP -> sink */
         if (g_launch_open) {            /* Start-menu hover highlight + scroll */
             int mx, my, mb; uno_pc64_mouse(&mx, &my, &mb); launcher_hover(mx, my);
         }

@@ -190,4 +190,134 @@ const unoamp_in *unoamp_find_in(const char *fn);
 int  unoamp_play(int vol, const char *fn, const char **why);
 void unoamp_stop(void);
 
+
+/* ---- the player (phase 4, unoamp_app.c) -----------------------------------
+ * Playback state that has nothing to do with pixels, so that the skinned
+ * window, a keyboard shortcut and a script verb all reach it the same way. */
+enum {                              /* CBUTTONS order - see unoamp_ui.c      */
+    UNOAMP_T_PREV = 0, UNOAMP_T_PLAY, UNOAMP_T_PAUSE,
+    UNOAMP_T_STOP, UNOAMP_T_NEXT, UNOAMP_T_EJECT
+};
+void unoamp_transport(int which);
+void unoamp_next(void);
+void unoamp_prev(void);
+int  unoamp_play_index(int i);
+const char *unoamp_last_error(void);
+
+int  unoamp_pl_add(int vol, const char *path);
+void unoamp_pl_remove(int i);
+void unoamp_pl_clear(void);
+int  unoamp_pl_count(void);
+int  unoamp_pl_current(void);
+int  unoamp_pl_selected(void);
+void unoamp_pl_select(int i);
+const char *unoamp_pl_title(int i);
+int  unoamp_pl_len_ms(int i);
+
+void unoamp_set_volume(int v);      /* 0..100                                */
+void unoamp_set_balance(int b);     /* -100..100                             */
+int  unoamp_volume(void);
+int  unoamp_balance(void);
+
+/* One frame: pull the decoder into the sink, advance at end of stream. This
+ * IS the playback engine - there are no threads. */
+void unoamp_tick(void);
+/* First open: load a skin if one is installed and seed the playlist. Both are
+ * best-effort - neither can stop the player opening. */
+void unoamp_start(void);
+
+/* ---- the skinned windows (phase 4, unoamp_ui.c) --------------------------- */
+struct unoui_window;
+void unoamp_ui_build(struct unoui_window *win);
+struct unoui_window *unoamp_ui_window(void);
+void unoamp_ui_set_title(const char *s);
+void unoamp_ui_tick(void);
+void unoamp_ui_set_shade(int on);
+int  unoamp_ui_shaded(void);
+int  unoamp_ui_scale(void);
+void unoamp_ui_set_scale(int s);
+void unoamp_ui_show_eq(int on);
+void unoamp_ui_show_pl(int on);
+void unoamp_ui_close(void);
+void unoamp_ui_set_eq_open(int v);
+void unoamp_ui_set_pl_open(int v);
+void unoamp_ui_build_eq(struct unoui_window *win);
+void unoamp_ui_build_pl(struct unoui_window *win);
+struct unoui_window *unoamp_ui_eq_window(void);
+struct unoui_window *unoamp_ui_pl_window(void);
+void unoamp_ui_dock(void);          /* re-snap EQ + playlist to the main win  */
+int  unoamp_eq_enabled(void);
+int  unoamp_eq_band(int i);         /* -100..+100, 0 = flat                   */
+int  unoamp_eq_preamp(void);
+int  unoamp_ui_volume(void);
+int  unoamp_ui_balance(void);
+int  unoamp_ui_shuffle(void);
+int  unoamp_ui_repeat(void);
+
+/* ---- visualisation (phase 5, unoamp_vis.c) --------------------------------
+ * The host feeds every decoded block here on its way to the sink; the vis
+ * plugins read from the ring. Winamp handed plugins 576 samples, and skins'
+ * viscolor.txt palettes assume that width, so that is the window size. */
+void unoamp_vis_feed(const short *pcm, int nframes);
+int  unoamp_register_vis(unoamp_vis *v);
+int  unoamp_vis_count(void);
+unoamp_vis *unoamp_vis_at(int i);
+void unoamp_vis_select(int i);      /* -1 = none                             */
+int  unoamp_vis_selected(void);
+void unoamp_vis_init(void);
+/* Render the current visualiser into the main window's well. Scale is the
+ * integer skin scale; the caller has already cleared the well. */
+void unoamp_vis_draw(int x, int y, int w, int h, int scale);
+
+
+/* ---- DSP plugins (phase 6, unoamp_dsp.c) ----------------------------------
+ * Winamp's winampDSPModule, with the two Win32-only fields dropped. It sits
+ * between the decoder and the sink on the host's pull.
+ *
+ * ModifySamples RETURNS the new frame count: a plugin is allowed to resample
+ * or time-stretch, so the caller must write back what came out, not what went
+ * in. The buffer therefore has headroom - see unoamp_tick. */
+typedef struct unoamp_dsp {
+    const char *description;
+    void *host;
+    void *module;
+    int   enabled;
+    void (*Config)(struct unoamp_dsp *this_mod);
+    int  (*Init)(struct unoamp_dsp *this_mod);
+    int  (*ModifySamples)(struct unoamp_dsp *this_mod, short *samples,
+                          int nframes, int bps, int nch, int srate);
+    void (*Quit)(struct unoamp_dsp *this_mod);
+} unoamp_dsp;
+
+void unoamp_dsp_init(void);
+int  unoamp_register_dsp(unoamp_dsp *d);
+int  unoamp_dsp_count(void);
+unoamp_dsp *unoamp_dsp_at(int i);
+/* Run the chain in place. Returns the frame count after processing. */
+int  unoamp_dsp_run(short *samples, int nframes, int nch, int rate);
+
+
+/* The fs volume a decoder should open paths on. The Winamp Play() contract
+ * takes a path and nothing else, so the volume travels beside it - the host
+ * sets it before Play, and content-sniffing IsOurFile reads it too. */
+void unoamp_in_set_volume_index(int vol);
+int  unoamp_probe_volume(void);
+
+/* ---- encoders and transcoding (phase 7, unoamp_enc.c) --------------------- */
+void unoamp_enc_init(void);
+int  unoamp_register_enc(const unoamp_enc *e);
+int  unoamp_enc_count(void);
+const unoamp_enc *unoamp_enc_at(int i);
+const unoamp_enc *unoamp_find_enc(const char *ext);   /* "WAV", no dot        */
+/* Decode -> DSP -> encode, to completion. progress() returns 0 to cancel and
+ * gets -1 when the input cannot say how long it is. 1 = written. */
+int  unoamp_transcode(int in_vol, const char *in_path,
+                      int out_vol, const char *out_path,
+                      const char *ext, int apply_dsp,
+                      int (*progress)(int pct), const char **why);
+
+/* ---- tracker + chiptune inputs (phase 8, unoamp_mod.c) -------------------- */
+void unoamp_mod_init(void);
+const char *unoamp_vgm_error(void);   /* why a VGM was refused, or ""         */
+
 #endif /* PC64_UNOAMP_H */

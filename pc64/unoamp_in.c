@@ -105,22 +105,51 @@ static int um_isours(const char *fn)
     return um_audio_is(fn);
 }
 
+/* THE INPUT OPENS THE SINK. That is Winamp's rule (an input plugin calls
+ * outMod->Open with the format it is about to produce) and it is the right one
+ * here too: only the decoder knows the sample rate and channel count, and a
+ * host that guessed would have to reopen the sink mid-track the first time it
+ * guessed wrong. */
 static int um_play(const char *fn)
 {
-    if (g_open) { um_audio_close(); g_open = 0; }
+    const unoamp_out *out = unoamp_current_out();
+    if (g_open) { um_audio_close(); if (out && out->Close) out->Close(); g_open = 0; }
     strncpy(g_path, fn, sizeof g_path - 1);
     g_path[sizeof g_path - 1] = 0;
     if (!pc64_media_open(g_vol, g_path, &g_info)) return -1;
+    if (out && out->Open &&
+        out->Open(g_info.rate, g_info.channels, 16, 0, 0) < 0) {
+        um_audio_close();
+        return -1;
+    }
     g_open = 1; g_paused = 0;
     return 0;
 }
-static void um_stop(void) { if (g_open) { um_audio_close(); g_open = 0; } }
-static void um_pause_(void)   { g_paused = 1; }
-static void um_unpause(void)  { g_paused = 0; }
+static void um_stop(void)
+{
+    const unoamp_out *out = unoamp_current_out();
+    if (!g_open) return;
+    um_audio_close();
+    if (out && out->Close) out->Close();
+    g_open = 0;
+}
+static void um_pause_(void)
+{ const unoamp_out *o = unoamp_current_out();
+  g_paused = 1; if (o && o->Pause) o->Pause(1); }
+static void um_unpause(void)
+{ const unoamp_out *o = unoamp_current_out();
+  g_paused = 0; if (o && o->Pause) o->Pause(0); }
 static int  um_ispaused(void) { return g_paused; }
 static int  um_getlen(void)   { return g_open ? (int)g_info.duration_ms : -1; }
 static int  um_outtime(void)  { return g_open ? (int)um_audio_pos_ms() : 0; }
-static void um_setouttime(int ms) { if (g_open) um_audio_seek_ms(ms); }
+static void um_setouttime(int ms)
+{
+    const unoamp_out *o = unoamp_current_out();
+    if (!g_open) return;
+    um_audio_seek_ms(ms);
+    /* Drop what the sink already holds, or the seek is heard a buffer late. */
+    if (o && o->Flush) o->Flush(ms);
+}
 static void um_setvol(int v)  { (void)v; }   /* the sink owns volume          */
 static void um_setpan(int p)  { (void)p; }
 
@@ -156,6 +185,7 @@ static const unoamp_in g_in_unomedia = {
 /* The fs volume is per-open state the Winamp ABI has no field for (its Play
  * takes a path and nothing else). The host sets it before Play. */
 void unoamp_in_set_volume_index(int vol) { g_vol = vol; }
+int  unoamp_probe_volume(void) { return g_vol; }
 
 /* What the open stream is, for the host's status line. */
 const um_audio_info *unoamp_in_info(void) { return g_open ? &g_info : 0; }
