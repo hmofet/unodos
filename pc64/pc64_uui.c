@@ -1300,6 +1300,35 @@ static void wm_park(int a)
     g_dirty = 1;
 }
 
+/* ---- virtual desktops (phase E) --------------------------------------------
+ * Four fixed desktops, entirely shell policy - unoui knows nothing about them.
+ * A desktop IS a set of app windows plus the z-order they were left in, so a
+ * switch is remove-set / add-set over the one z-list. Everything else is shared
+ * by all four: the wallpaper, the desktop icons, the taskbar and its tray.
+ *
+ * A parked window is already out of the scene, so a switch never touches it: a
+ * window minimized on desktop 2 is still minimized when you come back, and its
+ * chip - drawn only while its own desktop is current - is still the only thing
+ * that says it exists. The switch itself must therefore never unpark, and
+ * wm_desk_apply() below is written so that it cannot.
+ *
+ * The state lives here because the taskbar (pager cells, which chips to draw)
+ * reads it; the machinery that acts on it sits with the rest of the window
+ * policy, after focus_next_mru(). */
+#define NDESK 4
+static int  g_cur_desk;                    /* 0-based; the desktop on screen  */
+static signed char g_desk_of[NAPPS];       /* which desktop each app lives on */
+static signed char g_dz[NDESK][NAPPS];     /* z-order, bottom-to-top, -1 end  */
+
+static void wm_desk_switch(int d);
+
+static int wm_in_scene(int a)
+{
+    int i;
+    for (i = 0; i < UI.nwin; i++) if (UI.win[i] == &g_win[a]) return 1;
+    return 0;
+}
+
 /* the taskbar background: a bare window draws no chrome, so a non-interactive
  * canvas paints the bar face + top highlight under the buttons. */
 /* forward decls (taskbar events fire these, defined below) */
@@ -1327,7 +1356,20 @@ static int tb_chip_w(void)   { int w = 40 + fb_text_w("Manager"); return w < 108
 static int tb_chip_gap(void) { return tb_chip_w() + 4; }
 static int tb_start_logo_sz(void) { int s = fb_text_h() + 2; return s < 12 ? 12 : s; }
 static int tb_start_w(void)  { return 8 + tb_start_logo_sz() + 6 + fb_text_w("Start") + 10; }
-static int tb_chip_x(void)   { return 6 + tb_start_w() + 6; }
+/* the desktop pager: [1][2][3][4], between the Start button and the chips.
+ * Draw and hit-test both derive their x from these, so the two cannot drift. */
+static int tb_pager_cell(void) { int w = fb_text_w("4") + 14; return w < 22 ? 22 : w; }
+static int tb_pager_gap(void)  { return tb_pager_cell() + 3; }
+static int tb_pager_x(void)    { return 6 + tb_start_w() + 8; }
+static int tb_pager_w(void)    { return NDESK * tb_pager_gap() - 3; }
+static int tb_chip_x(void)   { return tb_pager_x() + tb_pager_w() + 8; }
+/* does desktop d hold any open window (the pager's occupancy dot)? */
+static int tb_desk_used(int d)
+{
+    int a;
+    for (a = 0; a < NAPPS; a++) if (g_open[a] && g_desk_of[a] == d) return 1;
+    return 0;
+}
 
 /* app index of the focused window, or -1 (used to highlight its taskbar chip) */
 static int g_hidden_app = -1;            /* see drag_scene_without() */
@@ -1433,8 +1475,28 @@ static void taskbar_draw(struct unoui_widget *w, unoui_rect r, void *ctx)
       else        tb_panel(sx0, by, sw, bh, t->pal.accent, g_launch_open);
       pc64_start_logo(gx, ly, ls, t->pal.accent_text);
       fb_text(gx + ls + 6, by + (bh - fh) / 2, "Start", t->pal.accent_text, -1); }
-    /* one chip per open window: mini icon + name, highlighted if it's active.
-       Chips stop before the tray (clock/battery) instead of colliding. */
+    /* the desktop pager: one cell per virtual desktop, the current one filled
+       with the accent, a 2 px dot under any desktop that has windows on it.
+       Shared chrome - it looks the same on all four desktops. */
+    { int px = r.x + tb_pager_x(), pw = tb_pager_cell(), fh = fb_text_h(), d;
+      for (d = 0; d < NDESK; d++) {
+          int cur = (d == g_cur_desk);
+          char lbl[2];
+          lbl[0] = (char)('1' + d); lbl[1] = 0;
+          if (modern) fb_round_rect_a(px, by, pw, bh, cr,
+                                      cur ? t->pal.accent : t->pal.text,
+                                      cur ? 255 : 18, FB_CORNER_ALL);
+          else        tb_panel(px, by, pw, bh, cur ? t->pal.accent : t->pal.face, cur);
+          fb_text(px + (pw - fb_text_w(lbl)) / 2, by + (bh - fh) / 2 - 2, lbl,
+                  cur ? t->pal.accent_text : t->pal.text, -1);
+          if (tb_desk_used(d))
+              fb_fill_rect(px + pw / 2 - 3, by + bh - 6, 6, 2,
+                           cur ? t->pal.accent_text : t->pal.text_dim);
+          px += tb_pager_gap();
+      } }
+    /* one chip per open window ON THIS DESKTOP: mini icon + name, highlighted
+       if it's active. Chips stop before the tray (clock/battery) instead of
+       colliding. */
     x = r.x + tb_chip_x();
     { int cw = tb_chip_w(), fh = fb_text_h(), es = bh - 4 > 16 ? 16 : bh - 4;
       int bcw = tray_batt_cw();
@@ -1445,7 +1507,7 @@ static void taskbar_draw(struct unoui_widget *w, unoui_rect r, void *ctx)
         int d = (i == act) ? 1 : 0;
         int park = g_parked[i];              /* minimized: running, off-screen */
         unoui_rect eb;
-        if (!g_open[i]) continue;
+        if (!g_open[i] || g_desk_of[i] != g_cur_desk) continue;
         if (x + cw > tray_x - 4) break;      /* no room left before the tray */
         /* a parked chip reads as "still running, not on screen": fainter
            panel, no accent underline (it cannot be the active window) and
@@ -1516,9 +1578,21 @@ static int taskbar_event(struct unoui_widget *w, const void *ev, void *ctx)
     if (e->kind != UI_EV_MOUSE_DOWN) return 0;
     px = e->x - g_task.r.x;
     if (px >= 6 && px < 6 + tb_start_w()) { toggle_launcher(); return 1; }   /* Start button */
+    /* the desktop pager. It needs nothing from focus_app()/g_mru, so the
+       read-focus-before-the-press trap the chip toggle below documents does
+       not apply here - a pager cell means one thing whatever had focus. The
+       band between cells is swallowed rather than passed on, so a near miss
+       is a no-op instead of falling through to something else. */
+    { int pp = px - tb_pager_x(), d;
+      if (pp >= 0 && pp < tb_pager_w()) {
+          d = pp / tb_pager_gap();
+          if (d >= 0 && d < NDESK && pp - d * tb_pager_gap() < tb_pager_cell())
+              wm_desk_switch(d);
+          return 1;
+      } }
     x = tb_chip_x();
     for (i = 0; i < NAPPS; i++) {
-        if (!g_open[i]) continue;
+        if (!g_open[i] || g_desk_of[i] != g_cur_desk) continue;
         if (px >= x && px < x + tb_chip_w()) {
             /* The modern chip toggle: parked -> restore + raise; unfocused ->
                raise; the app that already has focus -> park it.
@@ -1770,6 +1844,12 @@ static void build_legacy(int a)
 static void open_app(int a)
 {
     if (a < 0 || a >= NAPPS) return;
+    /* Virtual desktops: these are single-instance apps, so "open" an app that
+     * is already up on another desktop means GO TO IT - dragging its window
+     * across would lose the layout the user left there. A window that is not
+     * open yet lands on the desktop being looked at. */
+    if (g_open[a]) { if (g_desk_of[a] != g_cur_desk) wm_desk_switch(g_desk_of[a]); }
+    else             g_desk_of[a] = (signed char)g_cur_desk;
     if (!g_built[a]) {
         if (a < NNATIVE) g_build[a](&g_win[a]);
         else             build_legacy(a);
@@ -2092,8 +2172,10 @@ static void wm_snap(int a, int snap)
     g_dirty = 1;
 }
 
-/* Alt+D: park every window ("show desktop"), and restore the same set on a
- * repeat press. */
+/* Alt+D: park every window on THIS desktop ("show desktop"), and restore the
+ * same set on a repeat press. Scoped to the current desktop for the same reason
+ * the chips are: the other three are not the desktop being shown, and parking
+ * their windows would silently minimize things the user cannot even see. */
 static int g_showdesk;
 static void wm_show_desktop(void)
 {
@@ -2102,10 +2184,13 @@ static void wm_show_desktop(void)
     if (g_launch_open) { remove_win(&g_launch); g_launch_open = 0; }
     if (g_cal_open)    { remove_win(&g_cal);    g_cal_open = 0;    }
     if (g_showdesk) {
-        for (a = 0; a < NAPPS; a++) if (g_parked[a]) wm_unpark(a);
+        for (a = 0; a < NAPPS; a++)
+            if (g_parked[a] && g_desk_of[a] == g_cur_desk) wm_unpark(a);
         g_showdesk = 0; g_dirty = 1; return;
     }
-    for (a = 0; a < NAPPS; a++) if (g_open[a] && !g_parked[a]) { wm_park(a); n++; }
+    for (a = 0; a < NAPPS; a++)
+        if (g_open[a] && !g_parked[a] && g_desk_of[a] == g_cur_desk)
+            { wm_park(a); n++; }
     g_showdesk = n ? 1 : 0;
     g_dirty = 1;
 }
@@ -2136,6 +2221,103 @@ static void focus_next_mru(void)
         if (!(UI.win[k]->flags & UI_WIN_BARE)) {
             UI.focus_win = k; UI.focus_wi = -1; return;
         }
+}
+
+/* ---- virtual desktops: the machinery (state + metrics are up at NDESK) -----
+ * Three primitives. capture() remembers a desktop's z-order while its windows
+ * are still in the scene; apply() makes the scene equal the current desktop's
+ * unparked set, in that order; switch() is capture-then-apply plus the policy
+ * a switch owes the rest of the shell. Everything that moves a window between
+ * desktops goes through these, so no route can leave the scene and the
+ * assignment table disagreeing. */
+
+/* Remember desktop d's z-order, bottom-to-top. Parked windows are not in
+ * UI.win[] so they are not recorded - wm_unpark() raises to the front, which
+ * is what a restore should do anyway. */
+static void wm_desk_capture(int d)
+{
+    int i, a, n = 0;
+    if (d < 0 || d >= NDESK) return;
+    for (i = 0; i < UI.nwin && n < NAPPS - 1; i++)
+        for (a = 0; a < NAPPS; a++)
+            if (UI.win[i] == &g_win[a]) {
+                if (g_open[a] && g_desk_of[a] == d) g_dz[d][n++] = (signed char)a;
+                break;
+            }
+    g_dz[d][n] = -1;
+}
+
+/* Scene := exactly the current desktop's unparked windows, in the order it was
+ * left in. A window assigned here but absent from that order - one moved in
+ * while we were away, or a session just restored - goes on top. The parked test
+ * is the reason a switch cannot unpark anything. */
+static void wm_desk_apply(void)
+{
+    int i, a;
+    for (a = 0; a < NAPPS; a++)
+        if (g_open[a] && g_desk_of[a] != g_cur_desk) remove_win(&g_win[a]);
+    for (i = 0; i < NAPPS && g_dz[g_cur_desk][i] >= 0; i++) {
+        a = g_dz[g_cur_desk][i];
+        if (a < NAPPS && g_open[a] && !g_parked[a] &&
+            g_desk_of[a] == g_cur_desk && !wm_in_scene(a))
+            unoui_ui_add(&UI, &g_win[a]);
+    }
+    for (a = 0; a < NAPPS; a++)
+        if (g_open[a] && !g_parked[a] &&
+            g_desk_of[a] == g_cur_desk && !wm_in_scene(a))
+            unoui_ui_add(&UI, &g_win[a]);
+}
+
+static void wm_desk_switch(int d)
+{
+    if (d < 0 || d >= NDESK || d == g_cur_desk) return;
+    /* A fullscreen game pins its desktop: leave fullscreen first, or a window
+     * that is not on the incoming desktop would still be covering it. */
+    if (UI.full) { unoui_fullscreen(&UI, 0); UI.focus_wi = 0; }
+    if (g_launch_open) { remove_win(&g_launch); g_launch_open = 0; }  /* popovers */
+    if (g_cal_open)    { remove_win(&g_cal);    g_cal_open = 0;    }  /* close    */
+    g_showdesk = 0;                 /* that show-desktop set was the old desktop's */
+    wm_desk_capture(g_cur_desk);
+    g_cur_desk = d;
+    wm_desk_apply();
+    /* the ONE MRU stack, not a second notion of recency: focus_next_mru skips
+     * anything not in the scene, so walking it now lands on the most recently
+     * focused window OF THIS DESKTOP. */
+    focus_next_mru();
+    rebuild_taskbar();
+    session_save();
+    g_dirty = 1;
+}
+
+/* Move app `a` to desktop `d`. `follow` also switches there, which is what
+ * Alt+Ctrl+Fn does; phase F's "Move to desktop N" menu item can pass 0 to send
+ * a window away without leaving. A parked window keeps its parked state either
+ * way - it just gets parked somewhere else. */
+static void wm_desk_move(int a, int d, int follow)
+{
+    int i, j, n;
+    if (a < 0 || a >= NAPPS || !g_open[a] || d < 0 || d >= NDESK) return;
+    if (g_desk_of[a] == d) { if (follow) wm_desk_switch(d); return; }
+    if (UI.full == &g_win[a]) { unoui_fullscreen(&UI, 0); UI.focus_wi = 0; }
+    wm_desk_capture(g_cur_desk);              /* the outgoing order, intact */
+    g_desk_of[a] = (signed char)d;
+    for (i = 0; i < NDESK; i++) {             /* drop it from every saved order */
+        for (j = 0, n = 0; j < NAPPS && g_dz[i][j] >= 0; j++)
+            if (g_dz[i][j] != a) g_dz[i][n++] = g_dz[i][j];
+        g_dz[i][n] = -1;
+    }
+    if (follow) {
+        wm_desk_switch(d);
+        /* land on top of what is already there, and with focus: a move you
+         * followed that dropped the window behind another would read as a bug */
+        if (!g_parked[a]) open_app(a);
+        return;
+    }
+    wm_desk_apply();
+    focus_next_mru();
+    rebuild_taskbar();
+    session_save();
+    g_dirty = 1;
 }
 
 static void minimize_app(int a)
@@ -2230,9 +2412,11 @@ static int session_vol(void)
 
 static void session_save(void)
 {
-    unsigned char buf[640]; char *p = (char *)buf; int a, first = 1, v;
+    unsigned char buf[1024]; char *p = (char *)buf; int a, first = 1, v;
     if (!g_session_ready) return;       /* don't write during boot restore */
     p = ap_str(p, "restore="); *p++ = g_session_restore ? '1' : '0';
+    *p++ = '\r'; *p++ = '\n';
+    p = ap_str(p, "cur_desk="); p = ap_int(p, g_cur_desk);
     *p++ = '\r'; *p++ = '\n';
     p = ap_str(p, "open=");
     for (a = 0; a < NAPPS; a++) {
@@ -2263,6 +2447,14 @@ static void session_save(void)
         if (g_parked[a]) {
             p = ap_str(p, "min"); p = ap_int(p, a);
             *p++ = '='; *p++ = '1'; *p++ = '\r'; *p++ = '\n';
+        }
+        /* virtual desktop. Desktop 0 is the default, so only a window that
+         * lives elsewhere gets a line - an absent deskN= reads as 0, which is
+         * exactly what an older file (and a build without desktops) means. */
+        if (g_desk_of[a]) {
+            p = ap_str(p, "desk"); p = ap_int(p, a); *p++ = '=';
+            p = ap_int(p, g_desk_of[a]);
+            *p++ = '\r'; *p++ = '\n';
         }
     }
     *p = 0;
@@ -2331,7 +2523,7 @@ static void session_restore_geom(const char *buf, int a)
 /* Boot: reopen the saved session, or fall back to opening the Control Panel. */
 static void session_load(void)
 {
-    unsigned char buf[640]; long got = -1; int v, n = uno_fs_volumes();
+    unsigned char buf[1024]; long got = -1; int v, n = uno_fs_volumes();
     const char *rp, *op;
     for (v = 0; v < n && got < 0; v++)
         got = uno_fs_read(v, "SHELL.CFG", buf, (long)sizeof buf - 1);
@@ -2364,6 +2556,25 @@ static void session_load(void)
           mp = cfg_line_val((const char *)buf, key);
           if (mp && *mp == '1') minimize_app(a);
       } }
+    /* Desktops LAST. Every window above was opened while g_cur_desk was still
+     * 0, so open_app assigned them all to desktop 1; the file is what actually
+     * decides, and it can only be applied once the whole set is up. Then land
+     * on the desktop the session was left on and let the scene follow. */
+    { int a; char key[12]; const char *dp;
+      for (a = 0; a < NAPPS; a++) {
+          char *k = key;
+          if (!g_open[a]) continue;
+          k = ap_str(k, "desk"); k = ap_int(k, a); *k++ = '='; *k = 0;
+          dp = cfg_line_val((const char *)buf, key);
+          if (!dp) continue;
+          { int d = cfg_num(&dp);
+            if (d > 0 && d < NDESK) g_desk_of[a] = (signed char)d; }
+      }
+      dp = cfg_line_val((const char *)buf, "cur_desk=");
+      if (dp) { int d = cfg_num(&dp); if (d > 0 && d < NDESK) g_cur_desk = d; }
+      wm_desk_apply();
+      focus_next_mru();
+    }
     g_session_ready = 1;
 }
 
@@ -2837,13 +3048,14 @@ void pc64_write_frame(void);
  * keep their canvases and just get clamped. */
 static void rebuild_shell(void)
 {
-    int a, wasopen[NAPPS];
+    int a, wasopen[NAPPS], wasdesk[NAPPS];
     sw_close();                        /* the overlay is sized in font-space */
     g_showdesk = 0;
     if (g_launch_open) { remove_win(&g_launch); g_launch_open = 0; }
     if (g_cal_open)    { remove_win(&g_cal);    g_cal_open = 0; }
     for (a = 0; a < NAPPS; a++) {
         wasopen[a] = g_open[a];
+        wasdesk[a] = g_desk_of[a];     /* reopening below would reassign them */
         /* everything below re-adds windows to the scene, so no window can stay
            parked across a rebuild; a snapped rect is re-derived by the reopen */
         if (g_parked[a]) { g_parked[a] = 0; if (a >= NNATIVE) unoui_ui_add(&UI, &g_win[a]); }
@@ -2859,6 +3071,11 @@ static void rebuild_shell(void)
     build_launcher();
     for (a = 0; a < NNATIVE; a++) if (wasopen[a]) open_app(a);
     for (a = NNATIVE; a < NAPPS; a++) if (g_open[a]) clamp_to_workarea(&g_win[a]);
+    /* every window is back in the scene now, on whatever desktop the reopen
+     * assigned; put the split back the way the user had it. */
+    for (a = 0; a < NAPPS; a++) g_desk_of[a] = (signed char)wasdesk[a];
+    wm_desk_apply();
+    focus_next_mru();
     g_dirty = 1;
 }
 
@@ -3129,12 +3346,28 @@ static int pump_input(void)
         if (ctrl && (uni == 'm' || uni == 'M') && !typing_in_field()) {
             minimize_app(wm_focused_app()); continue;
         }
+        /* Virtual desktops: Ctrl+F1..F4 switch, Alt+Ctrl+F1..F4 move the
+           focused window there and follow it. EFI scans 0x0B..0x0E (F1..F4),
+           the same contiguous block the F2 = 0x0C switcher uses - which is why
+           this sits AHEAD of it and why that test now demands no ctrl.
+           One carve-out: with the Browser focused, Ctrl+F4 stays its
+           close-tab. Losing tab-close outright is a real regression, whereas
+           desktop 4 is still one pager click, one Alt+Ctrl+F4, or the same key
+           from any other window away. */
+        if (ctrl && scan >= 0x0B && scan <= 0x0E &&
+            !(scan == 0x0E && !(mods & UI_MOD_ALT) && g_open[EX_BROWSER] &&
+              UI.focus_win >= 0 && UI.focus_win < UI.nwin &&
+              UI.win[UI.focus_win] == &g_win[EX_BROWSER])) {
+            if (mods & UI_MOD_ALT) wm_desk_move(wm_focused_app(), scan - 0x0B, 1);
+            else                   wm_desk_switch(scan - 0x0B);
+            continue;
+        }
         /* Alt-Tab family. The Alt form commits on the release edge; F2 and
            Ctrl-Tab are the ctrl-reachable fallback for keyboards whose
            transport cannot report Alt, and commit on sw_tick()'s timer. */
         if ((mods & UI_MOD_ALT) && uni == 0x09)
             { sw_step((mods & UI_MOD_SHIFT) != 0, 1); continue; }
-        if (scan == 0x0C || (ctrl && uni == 0x09))
+        if ((scan == 0x0C && !ctrl) || (ctrl && uni == 0x09))
             { sw_step((mods & UI_MOD_SHIFT) != 0, 0); continue; }   /* F2 / Ctrl-Tab */
         /* Alt window commands. Every one of these is reachable another way
            (the titlebar, the taskbar chip, Ctrl-W), because a USB keyboard
@@ -3724,4 +3957,7 @@ void pc64_dbg_wm_min(void)        { minimize_app(wm_focused_app()); }
 void pc64_dbg_wm_restore(int a)   { restore_app(a); }
 int  pc64_dbg_wm_parked(int a)    { return (a >= 0 && a < NAPPS) ? g_parked[a] : 0; }
 int  pc64_dbg_wm_mods(void)       { return uno_pc64_mods(); }
+void pc64_dbg_wm_desk(int n)      { wm_desk_switch(n); }
+int  pc64_dbg_wm_curdesk(void)    { return g_cur_desk; }
+int  pc64_dbg_wm_deskof(int a)    { return (a >= 0 && a < NAPPS) ? g_desk_of[a] : 0; }
 #endif /* UNO_DEBUG */
