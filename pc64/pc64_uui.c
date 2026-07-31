@@ -1307,6 +1307,8 @@ static void toggle_launcher(void);
 static void menu_refresh(void);
 static void build_desktop(void);
 static void open_app(int a);
+static void minimize_app(int a);
+static void restore_app(int a);
 static void fmt_clock(int uptime_secs);
 static void fmt_batt(void);
 static int  batt_icon_w(void);
@@ -1441,19 +1443,25 @@ static void taskbar_draw(struct unoui_widget *w, unoui_rect r, void *ctx)
                    - (g_net[0]  ? fb_text_w(g_net) + 16 + 12 : 0);
     for (i = 0; i < NAPPS; i++) {
         int d = (i == act) ? 1 : 0;
+        int park = g_parked[i];              /* minimized: running, off-screen */
         unoui_rect eb;
         if (!g_open[i]) continue;
         if (x + cw > tray_x - 4) break;      /* no room left before the tray */
+        /* a parked chip reads as "still running, not on screen": fainter
+           panel, no accent underline (it cannot be the active window) and
+           dimmed text. Same palette, no new colours. */
         if (modern) {
             if (d) { fb_round_rect_a(x, by, cw, bh, cr, t->pal.accent, 48, FB_CORNER_ALL);
                      fb_fill_rect(x + 8, by + bh - 2, cw - 16, 2, t->pal.accent); }
-            else     fb_round_rect_a(x, by, cw, bh, cr, t->pal.text, 18, FB_CORNER_ALL);
-        } else tb_panel(x, by, cw, bh, t->pal.face, d);
+            else     fb_round_rect_a(x, by, cw, bh, cr, t->pal.text,
+                                     park ? 8 : 18, FB_CORNER_ALL);
+        } else tb_panel(x, by, cw, bh, park ? t->pal.win_bg : t->pal.face, d);
         { int dd = modern ? 0 : d;
           eb.x = x + 4 + dd; eb.y = by + (bh - es) / 2 + dd; eb.w = es; eb.h = es;
           pc64_icon_emblem(app_icon(i), eb);
           fb_set_clip(x + es + 6, by, cw - es - 8, bh);        /* keep the name in the chip */
-          fb_text(x + es + 8 + dd, by + (bh - fh) / 2 + dd, app_short(i), t->pal.text, -1);
+          fb_text(x + es + 8 + dd, by + (bh - fh) / 2 + dd, app_short(i),
+                  park ? t->pal.text_dim : t->pal.text, -1);
           fb_set_clip(r.x, r.y, r.w, r.h); }                  /* back to the bar */
         x += tb_chip_gap();
     } }
@@ -1511,7 +1519,14 @@ static int taskbar_event(struct unoui_widget *w, const void *ev, void *ctx)
     x = tb_chip_x();
     for (i = 0; i < NAPPS; i++) {
         if (!g_open[i]) continue;
-        if (px >= x && px < x + tb_chip_w()) { open_app(i); return 1; }
+        if (px >= x && px < x + tb_chip_w()) {
+            /* the modern chip toggle: parked -> restore + raise; unfocused ->
+               raise; the app that already has focus -> park it. */
+            if (g_parked[i])                 restore_app(i);
+            else if (i == focused_app())     minimize_app(i);
+            else                             open_app(i);
+            return 1;
+        }
         x += tb_chip_gap();
     }
     return 0;
@@ -2085,6 +2100,53 @@ static void wm_show_desktop(void)
     g_dirty = 1;
 }
 
+/* ---- minimize policy (phase B) --------------------------------------------
+ * wm_park() above is the mechanism - the window leaves the scene and the flag
+ * goes up. Minimizing through the title-bar button, the taskbar chip or Ctrl-M
+ * is that plus the policy those routes need: hand focus on, redraw the chip in
+ * its parked style, and remember the parked set for the next boot. Alt+D's
+ * bulk park deliberately has none of it, because it is undone wholesale. */
+
+/* focus the most recently focused app still in the scene (phase D's MRU
+ * order), falling back to the topmost non-bare window. Without this,
+ * remove_win() leaves focus on the taskbar, which is pinned last. */
+static void focus_next_mru(void)
+{
+    int i, k;
+    for (i = 0; i < g_nmru; i++) {
+        int a = g_mru[i];
+        if (a < 0 || a >= NAPPS || !g_open[a] || g_parked[a]) continue;
+        for (k = 0; k < UI.nwin; k++) if (UI.win[k] == &g_win[a]) {
+            UI.focus_win = k; UI.focus_wi = (a >= NNATIVE) ? 0 : -1;
+            wm_note_focus(a);
+            return;
+        }
+    }
+    for (k = UI.nwin - 1; k >= 0; k--)
+        if (!(UI.win[k]->flags & UI_WIN_BARE)) {
+            UI.focus_win = k; UI.focus_wi = -1; return;
+        }
+}
+
+static void minimize_app(int a)
+{
+    if (a < 0 || a >= NAPPS || !g_open[a] || g_parked[a]) return;
+    if (UI.full == &g_win[a]) { unoui_fullscreen(&UI, 0); UI.focus_wi = 0; }
+    wm_park(a);
+    focus_next_mru();
+    rebuild_taskbar();
+    session_save();                 /* remember the parked set for next boot */
+}
+
+static void restore_app(int a)
+{
+    if (a < 0 || a >= NAPPS || !g_open[a] || !g_parked[a]) return;
+    open_app(a);                    /* unparks, raises, focuses, notes MRU   */
+    g_showdesk = 0;                 /* the show-desktop set is broken up now */
+    rebuild_taskbar();
+    session_save();
+}
+
 static void close_focused(void)
 {
     int f = UI.focus_win, i;
@@ -2179,6 +2241,12 @@ static void session_save(void)
         p = ap_str(p, "snap"); p = ap_int(p, a); *p++ = '=';
         p = ap_int(p, g_win[a].snap);
         *p++ = '\r'; *p++ = '\n';
+        /* parked = minimized. Only the parked apps get a line; an absent
+         * minN= reads as 0, so an older file behaves as it always did. */
+        if (g_parked[a]) {
+            p = ap_str(p, "min"); p = ap_int(p, a);
+            *p++ = '='; *p++ = '1'; *p++ = '\r'; *p++ = '\n';
+        }
     }
     *p = 0;
     v = session_vol();
@@ -2269,6 +2337,16 @@ static void session_load(void)
           open_app(val); session_restore_geom((char *)buf, val); any = 1; }
       if (!any) open_app(APP_CTRL);
     }
+    /* re-park whatever was parked, after the whole open set is up so the
+     * windows land in the z-order they were saved in. */
+    { int a; char key[10];
+      for (a = 0; a < NAPPS; a++) {
+          char *k = key; const char *mp;
+          if (!g_open[a]) continue;
+          k = ap_str(k, "min"); k = ap_int(k, a); *k++ = '='; *k = 0;
+          mp = cfg_line_val((const char *)buf, key);
+          if (mp && *mp == '1') minimize_app(a);
+      } }
     g_session_ready = 1;
 }
 
@@ -2615,6 +2693,7 @@ int pc64_shell_app_message(int idx, const char *msg, char *reply, int cap)
     }
     if (!strcmp(msg, "focus")) {
         if (!g_open[idx]) return sput(reply, cap, 0, "not-open");
+        restore_app(idx);                    /* parked: bring it back first  */
         raise_win(&g_win[idx]);
         for (wi = 0; wi < UI.nwin; wi++) if (UI.win[wi] == &g_win[idx]) { UI.focus_win = wi; break; }
         g_dirty = 1;
@@ -2622,6 +2701,7 @@ int pc64_shell_app_message(int idx, const char *msg, char *reply, int cap)
     }
     if (!strcmp(msg, "close")) {
         if (!g_open[idx]) return sput(reply, cap, 0, "not-open");
+        restore_app(idx);        /* a parked window has no z-index to focus  */
         for (wi = 0; wi < UI.nwin; wi++) if (UI.win[wi] == &g_win[idx]) { UI.focus_win = wi; break; }
         close_focused();
         return sput(reply, cap, 0, "closed");
@@ -2774,12 +2854,17 @@ static void on_action(const unoui_action *a)
       unoauto_hook_fire("uui.action", &ev); }
     g_dirty = 1;
     if (a->kind == UI_ACT_CLOSE) { close_focused(); return; }   /* title-bar close box */
-    if (a->kind == UI_ACT_MAX) {                 /* double-clicked title bar   */
-        /* Same path as Alt+Up, so the two can never disagree about what
-         * "restore" means. A window with no UI_WIN_RESIZE is left alone in
-         * phase A rather than being centred by unoui_snap_apply's move-only
-         * rule: a fixed-layout app jumping across the desktop on a
-         * double-click is worse than nothing happening. */
+    /* Title-bar minimize box. The input layer focused that window before
+     * emitting, so the focused app IS the target; a non-app window (the Start
+     * menu, the calendar) reports -1 and the action is dropped. */
+    if (a->kind == UI_ACT_MIN) { minimize_app(wm_focused_app()); return; }
+    if (a->kind == UI_ACT_MAX) {   /* maximize box, or a double-clicked bar   */
+        /* Same path as Alt+Up, so the three can never disagree about what
+         * "restore" means. A window with no UI_WIN_RESIZE is left alone
+         * rather than being centred by unoui_snap_apply's move-only rule:
+         * that is what makes its maxbox a genuinely disabled control, and a
+         * fixed-layout app jumping across the desktop on a double-click is
+         * worse than nothing happening. */
         int a2 = wm_focused_app();
         if (a2 >= 0 && (g_win[a2].flags & UI_WIN_RESIZE))
             wm_snap(a2, g_win[a2].snap == UI_SNAP_MAX ? UI_SNAP_NONE : UI_SNAP_MAX);
@@ -2878,6 +2963,18 @@ static void on_action(const unoui_action *a)
 /* ---- UEFI input -> unoui_event ----------------------------------------- */
 static int feed(const unoui_event *ev)
 { unoui_action a = unoui_handle(&UI, ev); on_action(&a); return 1; }
+
+/* 1 while an editable text widget owns the keyboard. Shell accelerators the
+ * user could plausibly be typing stand down when this is set - the same rule
+ * the Install window applies around its confirm box, generalised. */
+static int typing_in_field(void)
+{
+    const unoui_window *w;
+    if (UI.focus_win < 0 || UI.focus_win >= UI.nwin || UI.focus_wi < 0) return 0;
+    w = UI.win[UI.focus_win];
+    if (UI.focus_wi >= w->nw) return 0;
+    return w->w[UI.focus_wi].edit != 0;
+}
 
 static int pump_input(void)
 {
@@ -3008,6 +3105,13 @@ static int pump_input(void)
         }
         if (ctrl && scan == 0x17) { toggle_launcher(); continue; }               /* Ctrl-Esc: Start menu */
         if (ctrl && (uni == 'w' || uni == 'W' || uni == 0x17)) { close_focused(); continue; }  /* Ctrl-W */
+        /* Ctrl-M minimizes the focused window - the ctrl-reachable twin of
+           Alt+Down, for keyboards whose transport reports no Alt. No control-
+           code alias: Ctrl-M's is 0x0D, which is Enter, the same reason Ctrl-I
+           has no 0x09 alias. Never fires while a field has the caret. */
+        if (ctrl && (uni == 'm' || uni == 'M') && !typing_in_field()) {
+            minimize_app(wm_focused_app()); continue;
+        }
         /* Alt-Tab family. The Alt form commits on the release edge; F2 and
            Ctrl-Tab are the ctrl-reachable fallback for keyboards whose
            transport cannot report Alt, and commit on sw_tick()'s timer. */
@@ -3590,5 +3694,8 @@ void pc64_dbg_wm_commit(void)     { sw_commit(); }
 int  pc64_dbg_wm_switching(void)  { return g_sw_open; }
 void pc64_dbg_wm_snap(int snap)   { wm_snap(wm_focused_app(), snap); }
 void pc64_dbg_wm_showdesk(void)   { wm_show_desktop(); }
+void pc64_dbg_wm_min(void)        { minimize_app(wm_focused_app()); }
+void pc64_dbg_wm_restore(int a)   { restore_app(a); }
+int  pc64_dbg_wm_parked(int a)    { return (a >= 0 && a < NAPPS) ? g_parked[a] : 0; }
 int  pc64_dbg_wm_mods(void)       { return uno_pc64_mods(); }
 #endif /* UNO_DEBUG */
