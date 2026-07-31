@@ -14,6 +14,8 @@ into shots/*.png at each step.
   python3 harness.py wm_a       WM phase A gate (live drag, double-click
                                 maximize, per-app geometry across a reboot).
   python3 harness.py wm_d       WM phase D gate (Alt-Tab, snap, show desktop).
+  python3 harness.py wm_e       WM phase E gate (virtual desktops: the switch,
+                                the taskbar pager, move-and-follow, restore).
 """
 import json, os, socket, subprocess, sys, time
 
@@ -128,8 +130,7 @@ def probe_scale(img, wh):
 def probe_screen(q):
     global SCREEN_W, SCREEN_H, SCALE
     ppm = "shots/_probe.ppm"
-    q.cmd("screendump", filename=ppm)
-    time.sleep(0.4)
+    screendump(q, ppm)
     w, h, rgb = ppm2png.read_ppm(ppm)
     os.remove(ppm)
     SCREEN_W, SCREEN_H = w, h
@@ -158,10 +159,34 @@ def click(q, x, y):
     mouse_btn(q, False)
 
 
+def screendump(q, ppm, tries=60):
+    """QMP screendump is ASYNCHRONOUS: it returns as soon as the request is
+    queued, and QEMU writes the file on its next graphic update. A fixed sleep
+    therefore sometimes reads a file that is empty or half written, which
+    decodes as an all-BLACK frame - and a black frame passes or fails whatever
+    the shot was asserting for reasons that have nothing to do with the guest.
+    Delete first, then wait for the size to settle above zero."""
+    try:
+        os.remove(ppm)
+    except OSError:
+        pass
+    q.cmd("screendump", filename=ppm)
+    last = -1
+    for _ in range(tries):
+        time.sleep(0.15)
+        try:
+            n = os.path.getsize(ppm)
+        except OSError:
+            continue
+        if n and n == last:
+            return
+        last = n
+    raise RuntimeError("screendump never settled: " + ppm)
+
+
 def shot(q, tag):
     ppm = "shots/%s.ppm" % tag
-    q.cmd("screendump", filename=ppm)
-    time.sleep(0.4)
+    screendump(q, ppm)
     subprocess.run([sys.executable, "tools/ppm2png.py", ppm, "shots/%s.png" % tag],
                    check=True)
     os.remove(ppm)
@@ -206,8 +231,7 @@ FRAMES = {}
 def grab(q, tag):
     """screendump + convert (as shot()) and remember the raw RGB for diffing."""
     ppm = "shots/%s.ppm" % tag
-    q.cmd("screendump", filename=ppm)
-    time.sleep(0.4)
+    screendump(q, ppm)
     w, h, rgb = ppm2png.read_ppm(ppm)
     ppm2png.write_png("shots/%s.png" % tag, w, h, rgb)
     os.remove(ppm)
@@ -815,6 +839,25 @@ def wm_b():
         time.sleep(1.5)                        # close the restored Control Panel
         grab(q, "wm_b_00_desktop")
 
+        # The bar carries a desktop pager (phase E) between Start and the chips,
+        # and its occupancy dot lights up the moment an app opens - so the
+        # chip's diff bbox below would be the UNION of dot and chip, and its
+        # centre would land on the pager. Locate the pager first (with nothing
+        # open, a desktop switch can repaint nothing else in the bar) and ignore
+        # everything from the left edge to where the chips start.
+        q.cmd("send-key", keys=[{"type": "qcode", "data": "ctrl"},
+                                {"type": "qcode", "data": "f2"}])
+        time.sleep(1.2)
+        grab(q, "wm_b_00b_desk2")
+        pager = diff_bbox("wm_b_00_desktop", "wm_b_00b_desk2", ignore=chip_only)
+        q.cmd("send-key", keys=[{"type": "qcode", "data": "ctrl"},
+                                {"type": "qcode", "data": "f1"}])
+        time.sleep(1.2)
+        check("found the desktop pager", pager is not None, str(pager))
+        if pager:                              # 4 cells, of which 2 changed
+            chipx = pager[0] + 4 * ((pager[2] + 3) // 2) + 8 * SCALE
+            chip_only.append((0, SCREEN_H - 64, chipx, 64))
+
         start_app(q, 1, wait=2.5)              # menu order = app order: Editor
         m.park()
         grab(q, "wm_b_01_open")
@@ -1200,6 +1243,242 @@ def wm_c():
     return 0 if not fails else 1
 
 
+def wm_e():
+    """Gate E: four virtual desktops - the switch, the taskbar pager, the
+    move-and-follow binding, and the whole layout across a power cycle.
+
+        UNO_DETACH=1 UNO_DEBUG=1 ./build.sh && python3 harness.py wm_e
+
+    Same two requirements as wm_a/wm_b: the PS/2 pointer (the only one the guest
+    sees, see the Mouse class) for the chip click, and a real FAT image (vvfat
+    hands SHELL.CFG back as garbage) for the reboot.
+
+    The pager is LOCATED, not hardcoded: with nothing open anywhere, the only
+    thing a desktop switch can repaint in the taskbar band is the pager itself,
+    so the diff between an on-1 and an on-2 frame IS its two changed cells,
+    which gives the origin and the cell pitch. Same discipline as wm_b deriving
+    the title-bar buttons from theme metrics rather than hunting for them.
+
+    Every window assertion compares a diff BBOX against a box measured earlier
+    in the same run rather than demanding two frames be identical: the Editor's
+    text caret blinks, so "nothing changed" is never true of a frame with the
+    Editor in it."""
+    fails = []
+
+    def check(name, ok, detail=""):
+        print("  %-52s %s %s" % (name, "PASS" if ok else "FAIL", detail))
+        if not ok:
+            fails.append(name)
+
+    def ctrl_fn(n, wait=1.2):
+        q.cmd("send-key", keys=[{"type": "qcode", "data": "ctrl"},
+                                {"type": "qcode", "data": "f%d" % n}])
+        time.sleep(wait)
+
+    def like(box, ref, slop=10):
+        """Is this diff bbox the same window (or set) as one measured before?"""
+        return (box is not None and ref is not None and
+                abs(box[0] - ref[0]) <= slop and abs(box[1] - ref[1]) <= slop and
+                abs(box[2] - ref[2]) <= slop and abs(box[3] - ref[3]) <= slop)
+
+    try:
+        os.remove("build/esp/SHELL.CFG")       # deterministic first boot
+    except OSError:
+        pass
+    quiet_debug_cfg()
+    subprocess.run([sys.executable, "tools/mkuefi.py"], check=True)
+    os.environ["UNO_DISK"] = "build/unodos-uefi.img"
+    ebox = fbox = ubox = None
+    qemu, q = start_qemu(log="build/wm_e1.log", pointer="none")
+    try:
+        print("wm_e: boot 1")
+        time.sleep(18)
+        probe_screen(q)
+        band = noise_bands()
+        # the taskbar band MINUS the tray, whose clock always ticks: where the
+        # pager and the chips live
+        bar_only = [(0, 0, SCREEN_W, SCREEN_H - 64),
+                    (SCREEN_W - 320, SCREEN_H - 64, 320, 64)]
+        m = Mouse(q)
+        check("the guest has a pointer", m.alive(), "(needs UNO_DETACH=1)")
+        if fails:
+            raise SystemExit("wm_e: no pointer in the guest - nothing to click")
+        m.park()
+        q.cmd("send-key", keys=[{"type": "qcode", "data": "ctrl"},
+                                {"type": "qcode", "data": "w"}])
+        time.sleep(1.5)                        # close the restored Control Panel
+        grab(q, "wm_e_00_d1_empty")
+
+        # ---- locate the pager: switch desktops with NOTHING open, so the only
+        # thing that can differ anywhere is the two cells that changed state --
+        ctrl_fn(2)
+        grab(q, "wm_e_01_d2_empty")
+        check("an empty switch touches nothing but the bar",
+              diff_bbox("wm_e_00_d1_empty", "wm_e_01_d2_empty",
+                        ignore=band) is None)
+        pager = diff_bbox("wm_e_00_d1_empty", "wm_e_01_d2_empty", ignore=bar_only)
+        check("the pager highlight moved with the desktop",
+              pager is not None and pager[2] < SCREEN_W // 3 and pager[3] < 80,
+              str(pager))
+        if pager is None:
+            raise SystemExit("wm_e: no pager repaint - cannot locate the cells")
+        pitch = (pager[2] + 3) // 2            # the diff spans cells 1 and 2
+        cell = [(pager[0] + d * pitch + 3, pager[1],
+                 pager[0] + (d + 1) * pitch - 3, pager[1] + pager[3])
+                for d in range(4)]
+        chipx = pager[0] + 4 * pitch + 8 * SCALE
+
+        # ---- Editor on desktop 1, snapped right so it is unmistakably a
+        # different shape and place from Files later on --------------------
+        ctrl_fn(1)
+        start_app(q, 1, wait=2.5)              # menu order = app order: Editor
+        key_evt(q, "alt", True); time.sleep(0.2)
+        tap(q, "right")
+        time.sleep(0.3)
+        key_evt(q, "alt", False); time.sleep(1.0)
+        m.park()
+        grab(q, "wm_e_02_editor_d1")
+        ebox = diff_bbox("wm_e_00_d1_empty", "wm_e_02_editor_d1", ignore=band)
+        check("Editor open on desktop 1, snapped right",
+              ebox is not None and ebox[2] > 100 and
+              ebox[0] + ebox[2] >= SCREEN_W - 8, str(ebox))
+        if ebox is None:
+            raise SystemExit("wm_e: no Editor window - nothing to move")
+
+        # ---- Ctrl+F2 again: desktop 2 is EMPTY, and desktop 1 now has a dot -
+        ctrl_fn(2)
+        m.park()
+        grab(q, "wm_e_03_d2_empty")
+        check("switching to desktop 2 leaves an EMPTY desktop",
+              diff_bbox("wm_e_00_d1_empty", "wm_e_03_d2_empty",
+                        ignore=band) is None,
+              str(diff_bbox("wm_e_00_d1_empty", "wm_e_03_d2_empty", ignore=band)))
+        # the SAME cell in two frames with the same current desktop: the only
+        # thing that can have changed in it is the occupancy dot
+        d1 = diff_frac("wm_e_01_d2_empty", "wm_e_03_d2_empty", cell[0])
+        d3 = diff_frac("wm_e_01_d2_empty", "wm_e_03_d2_empty", cell[2])
+        d4 = diff_frac("wm_e_01_d2_empty", "wm_e_03_d2_empty", cell[3])
+        check("desktop 1's cell gained an occupancy dot", d1 > 0.004, "%.4f" % d1)
+        check("desktops 3 and 4 gained nothing",
+              d3 < 0.004 and d4 < 0.004, "%.4f / %.4f" % (d3, d4))
+
+        # ---- Files on desktop 2 -------------------------------------------
+        start_app(q, 2, wait=2.5)              # Files
+        m.park()
+        grab(q, "wm_e_04_files_d2")
+        fbox = diff_bbox("wm_e_00_d1_empty", "wm_e_04_files_d2", ignore=band)
+        check("Files opened on desktop 2",
+              fbox is not None and fbox[2] > 100 and fbox[3] > 80, str(fbox))
+        d2 = diff_frac("wm_e_03_d2_empty", "wm_e_04_files_d2", cell[1])
+        check("desktop 2's own cell gained one too", d2 > 0.004, "%.4f" % d2)
+
+        # ---- Ctrl+F1: the Editor is there, Files is not -------------------
+        ctrl_fn(1)
+        m.park()
+        grab(q, "wm_e_05_back_d1")
+        bbox = diff_bbox("wm_e_00_d1_empty", "wm_e_05_back_d1", ignore=band)
+        check("Ctrl+F1 brings desktop 1's Editor back, alone",
+              like(bbox, ebox), "%s vs %s" % (bbox, ebox))
+
+        # ---- Alt+Ctrl+F2: move the focused Editor to 2, and follow it -----
+        key_evt(q, "alt", True); key_evt(q, "ctrl", True)
+        time.sleep(0.25)
+        tap(q, "f2")
+        time.sleep(0.35)
+        key_evt(q, "ctrl", False); key_evt(q, "alt", False)
+        time.sleep(1.2)
+        m.park()
+        grab(q, "wm_e_06_moved_d2")
+        ubox = diff_bbox("wm_e_00_d1_empty", "wm_e_06_moved_d2", ignore=band)
+        # both windows: the union runs from Files' left edge to the Editor's
+        # right edge. If it had not FOLLOWED we would be on an empty desktop 1.
+        check("the move followed, and both windows are on desktop 2",
+              ubox is not None and fbox is not None and
+              abs(ubox[0] - fbox[0]) <= 10 and
+              abs((ubox[0] + ubox[2]) - (ebox[0] + ebox[2])) <= 10,
+              "%s vs %s / %s" % (ubox, fbox, ebox))
+        ctrl_fn(1)
+        m.park()
+        grab(q, "wm_e_07_d1_empty_now")
+        check("desktop 1 is empty now the Editor has left",
+              diff_bbox("wm_e_00_d1_empty", "wm_e_07_d1_empty_now",
+                        ignore=band) is None,
+              str(diff_bbox("wm_e_00_d1_empty", "wm_e_07_d1_empty_now",
+                            ignore=band)))
+
+        # ---- a PARKED window on a NON-CURRENT desktop ---------------------
+        # Not named in the spec; the design has to answer it. Park the Editor on
+        # desktop 2, leave, come back: still parked, no chip leaked to 1, and
+        # its chip still restores it.
+        ctrl_fn(2)
+        q.cmd("send-key", keys=[{"type": "qcode", "data": "ctrl"},
+                                {"type": "qcode", "data": "m"}])
+        time.sleep(1.5)
+        m.park()
+        grab(q, "wm_e_08_parked_d2")
+        pbox = diff_bbox("wm_e_00_d1_empty", "wm_e_08_parked_d2", ignore=band)
+        check("Ctrl-M parked the Editor, leaving Files", like(pbox, fbox),
+              "%s vs %s" % (pbox, fbox))
+        ctrl_fn(1)
+        m.park()
+        grab(q, "wm_e_09_away_from_parked")
+        check("the parked window did not follow to desktop 1",
+              diff_bbox("wm_e_00_d1_empty", "wm_e_09_away_from_parked",
+                        ignore=band) is None,
+              str(diff_bbox("wm_e_00_d1_empty", "wm_e_09_away_from_parked",
+                            ignore=band)))
+        chips = diff_bbox("wm_e_00_d1_empty", "wm_e_09_away_from_parked",
+                          ignore=bar_only)
+        check("no chip of desktop 2's apps leaked onto desktop 1's bar",
+              chips is None or chips[0] + chips[2] <= chipx, str(chips))
+        ctrl_fn(2)
+        m.park()
+        grab(q, "wm_e_10_back_still_parked")
+        rp = diff_bbox("wm_e_00_d1_empty", "wm_e_10_back_still_parked",
+                       ignore=band)
+        check("coming back it is STILL parked (nothing unparked itself)",
+              like(rp, fbox), "%s vs %s" % (rp, fbox))
+
+        # its chip is the first in the strip (chips run in app-index order and
+        # the Editor is index 1, Files index 2), just right of the pager
+        m.to(chipx + 40, pager[1] + pager[3] // 2); m.btn(True); m.btn(False)
+        time.sleep(1.5)
+        m.park()
+        grab(q, "wm_e_11_chip_restored")
+        rbox = diff_bbox("wm_e_00_d1_empty", "wm_e_11_chip_restored", ignore=band)
+        check("its chip restores it, on its own desktop",
+              like(rbox, ubox), "%s vs %s" % (rbox, ubox))
+        time.sleep(1.0)                        # let SHELL.CFG reach the disk
+    finally:
+        stop_qemu(qemu, q)
+
+    # ---- reboot: deskN= + cur_desk= put the same layout on the same desktop -
+    qemu, q = start_qemu(log="build/wm_e2.log", pointer="none")
+    try:
+        print("wm_e: boot 2 (session restore)")
+        time.sleep(18)
+        probe_screen(q)
+        grab(q, "wm_e_12_after_reboot")
+        rr = diff_bbox("wm_e_00_d1_empty", "wm_e_12_after_reboot",
+                       ignore=noise_bands())
+        check("same layout, on the same current desktop", like(rr, ubox),
+              "%s vs %s" % (rr, ubox))
+        q.cmd("send-key", keys=[{"type": "qcode", "data": "ctrl"},
+                                {"type": "qcode", "data": "f1"}])
+        time.sleep(1.2)
+        grab(q, "wm_e_13_reboot_d1")
+        check("and desktop 1 came back empty",
+              diff_bbox("wm_e_00_d1_empty", "wm_e_13_reboot_d1",
+                        ignore=noise_bands()) is None,
+              str(diff_bbox("wm_e_00_d1_empty", "wm_e_13_reboot_d1",
+                            ignore=noise_bands())))
+    finally:
+        stop_qemu(qemu, q)
+
+    print("wm_e: %s" % ("PASS" if not fails else "FAIL " + ", ".join(fails)))
+    return 0 if not fails else 1
+
+
 def qemu_argv(extra=None, log="build/ovmf.log", pointer="tablet"):
     # Storage: a vvfat view of build/esp by default (no image build needed).
     # vvfat's read-write mode corrupts multi-cluster WRITES, though, so tests
@@ -1254,6 +1533,8 @@ def main():
         return wm_b()                          # ditto: it asserts on a reboot
     if len(sys.argv) > 1 and sys.argv[1] == "wm_c":
         return wm_c()                          # ditto: it owns its QEMU
+    if len(sys.argv) > 1 and sys.argv[1] == "wm_e":
+        return wm_e()                          # ditto: it asserts on a reboot
     subprocess.run(["cp", OVMF_VARS, "build/vars.fd"], check=True)
     if os.path.exists(QMP_SOCK):
         os.remove(QMP_SOCK)
