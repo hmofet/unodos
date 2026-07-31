@@ -1,6 +1,6 @@
 # Modern window management, implementation spec (worker brief)
 
-Status: SPEC, 2026-07-31. Phases A, B, C and D are landed (see the table at the
+Status: SPEC, 2026-07-31. Phases A, B, C, D and E are landed (see the table at the
 end and `pc64/UNOAUTOMATE-REQUESTS.md`). The design rationale is in
 [`WM-MODERN-PLAN.md`](WM-MODERN-PLAN.md); this document is the build order.
 Where the two disagree, THIS file wins.
@@ -468,7 +468,6 @@ Recorded from the phases that have run. These override the sections above.
     metrics. A theme change then breaks the test loudly instead of clicking
     bare title bar and passing. The same shadow bleeds a few rows INTO the
     taskbar band, so locate a chip against a frame with no window in it.
-
 15. **Un-snap on MOTION, never on the press** (phase C). §5.5 says "on drag
     start, if `win->snap != UI_SNAP_NONE`, un-snap first". Taken literally that
     breaks the double click: its first half IS a press on a maximized title
@@ -508,6 +507,38 @@ Recorded from the phases that have run. These override the sections above.
     in `unoui_draw_snap_preview()`, split out exactly like
     `unoui_draw_drag_outline()`; that one added export is phase C's whole
     contract surface.
+21. **`0` is a valid app index, so a bss array of app indices has no
+    terminator** (phase E). `g_dz[4][NAPPS]` was specified here as "-1
+    terminated"; zero-initialized it decoded as NAPPS copies of app 0 with no
+    end, and the first `Alt+Ctrl+Fn` of a fresh boot compacted the row and
+    wrote the terminator one past the end - a UBSan `#UD` that rebooted the
+    machine mid-gate and made every downstream assertion nonsense. Store
+    **index + 1, terminated by 0**, so zero-initialized means "empty". This is
+    §1's "zero-initialized state must reproduce current behavior" applied to
+    shell state, and it is worth applying to any future index array.
+22. **`screendump` is ASYNCHRONOUS** (phase E). QMP returns as soon as the
+    request is queued; QEMU writes the file on its next graphic update. The
+    fixed `time.sleep(0.4)` after it intermittently read a half-written PPM,
+    which decodes as an all-BLACK frame - and a black frame passes or fails an
+    assertion for reasons that have nothing to do with the guest. `screendump()`
+    in `harness.py` now deletes first and waits for the size to settle;
+    `shot`/`grab`/`probe_screen` all go through it. Two phases' worth of
+    intermittent oddities were this.
+23. **A crash in the guest looks exactly like "the keystroke did nothing"**
+    (phase E). The shell reboots and the session restores, so the next few
+    frames are plausible but wrong, and the gate reports a scatter of unrelated
+    failures. Before theorising about input plumbing, `grep -i crash
+    build/<gate>.log` - and if the log is empty, rebuild with `UNO_DBGCON=1`
+    (the harness already passes `-debugcon`) and print what the key loop
+    actually receives. That took the phase-E diagnosis from hours of guessing
+    to one line: `KEY scan=12 uni=0 mods=6` followed by the crash report.
+24. **A taskbar test must know the pager is there** (phase E). The pager sits
+    between Start and the chips and its occupancy dot changes whenever an app
+    opens, so `wm_b`'s chip hunt started returning the union of dot and chip
+    and clicking the pager. `wm_b` now locates the pager first - with nothing
+    open a desktop switch can repaint nothing else in the bar - and ignores
+    everything left of the chips. Phase F's overflow chip should reuse that
+    same two-frame trick rather than hardcoding an origin.
 
 ## Phase table (update as you land)
 
@@ -517,5 +548,5 @@ Recorded from the phases that have run. These override the sections above.
 | B | min/max buttons, shell minimize, parked chips | **DONE** 2026-07-31 |
 | C | pointer snap + previews + restore semantics | **DONE** 2026-07-31 |
 | D | mods byte, `next_key2`/`uno_pc64_mods`, Alt-Tab MRU switcher | **DONE** 2026-07-31 |
-| E | virtual desktops + pager + persistence | NOT STARTED |
+| E | virtual desktops + pager + persistence | **DONE** 2026-07-31 |
 | F | link groups, tile/cascade, context menu, taskbar overflow | NOT STARTED |

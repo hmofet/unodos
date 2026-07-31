@@ -2970,3 +2970,66 @@ build, all PASS. `wm_a` earned its keep: it caught the un-snap-on-press bug.
 Corrections 15-20 added to the spec's §13. E and F should note 16 in
 particular - a scenario that closes a window and then presses a key was
 relying on focus surviving, and it no longer has to.
+## 2026-07-31 - LANDED (toolkits lane): WM phase E, virtual desktops
+
+Four fixed desktops, shell-only - `unoui/` is untouched, exactly as
+`docs/WM-MODERN-SPEC.md` §7 predicted. Commits on `master`; spec + plan phase
+tables flipped to DONE, four new §13 corrections (21-24) recorded.
+
+**Shell.** A desktop is a set of app windows plus the z-order they were left
+in, so a switch is remove-set / add-set over the one z-list:
+`wm_desk_capture()` / `wm_desk_apply()` / `wm_desk_switch()` / `wm_desk_move()`
+in `pc64_uui.c`. The wallpaper, desktop icons, taskbar and tray are shared by
+all four. Parked windows are already out of the scene, so a switch cannot
+unpark one - a window minimized on desktop 2 comes back still minimized, and
+its chip is drawn (dimmed) only while its own desktop is current. Focus after a
+switch walks the ONE MRU stack (`focus_next_mru` skips windows not in the
+scene), not a second notion of recency. A fullscreen game pins its desktop:
+switching away leaves fullscreen first; the launcher and calendar popovers
+close. Opening an app already up on another desktop goes to it rather than
+yanking the window across. `Alt+D` (show desktop) is now scoped to the current
+desktop, for the same reason the chips are.
+
+**Taskbar.** `[1][2][3][4]` between Start and the chips, current cell in the
+accent, a 2 px dot on any occupied desktop. `tb_chip_x()` now derives from the
+pager width, so draw and hit-test cannot drift.
+
+**Keys.** `Ctrl+F1..F4` switch; `Alt+Ctrl+F1..F4` move the focused window and
+follow it. They sit ahead of the F2 switcher, whose test now requires no ctrl
+so `Ctrl+F2` is a desktop switch. One documented carve-out: with the Browser
+focused `Ctrl+F4` stays its close-tab (desktop 4 is still one pager click, one
+`Alt+Ctrl+F4`, or the same key from any other window away).
+
+**Session.** `SHELL.CFG` gains `cur_desk=` and `desk<N>=`; absent means desktop
+1, so an older file reads correctly. Assignments are applied after the whole
+open set is up, because `open_app` assigns on first open. `rebuild_shell`
+(font/theme change) saves and restores them - a reopen would otherwise collapse
+all four onto one.
+
+**Stress hooks.** `pc64_dbg_wm_desk(int)`, plus `pc64_dbg_wm_curdesk()` /
+`pc64_dbg_wm_deskof(int)` queries next to the existing `pc64_dbg_wm_*`.
+
+**Gates** (all green, on `UNO_DETACH=1 UNO_DEBUG=1`): `pc64/build.sh` at
+`UNO_DEBUG=0` and `UNO_DEBUG=1`; `unoui/build.sh`; `python3 harness.py wm_e`
+PASS (16 checks, including the parked-window-on-a-non-current-desktop case the
+spec does not name, and the layout + current desktop over a power cycle on a
+real FAT image). `wm_a`, `wm_b` and `WM_REQUIRE_EDGE=1 wm_d` re-run as
+regressions on the same build, all PASS.
+
+**Two traps worth the next lane's attention.** (1) `g_dz` stored app indices
+"terminated by -1", but 0 is a valid app index and a bss array reads as all
+zero: the first `Alt+Ctrl+Fn` of a fresh boot walked the whole row and wrote the
+terminator one past the end. UBSan `#UD`, machine rebooted mid-gate, every
+downstream assertion nonsense. It stores index+1 terminated by 0 now. (2) QMP
+`screendump` is asynchronous - `harness.py` waits for the file to settle instead
+of sleeping, which retires a class of intermittent all-black frames that has
+been quietly affecting every scenario. Both are §13 corrections 21 and 22.
+
+**For phase F.** The pager is a tidy contiguous block in `taskbar_draw` (right
+after the Start-button block, before `x = r.x + tb_chip_x();`) and in
+`taskbar_event` (right after the Start-button test, before the chip loop); the
+chip loops in both gained one `g_desk_of[i] != g_cur_desk` term. `wm_desk_move(a,
+d, follow)` is the entry point for "Move to desktop N" - pass `follow = 0` to
+send a window away without leaving. `wm_target_app()` is the focus-with-fallback
+helper a context menu wants. And `wm_b` now locates the pager before hunting for
+a chip; the overflow `>>` chip should reuse that two-frame trick.
