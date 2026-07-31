@@ -1423,6 +1423,7 @@ static void wm_raise_group(int a)
  * same rule a single window drag obeys, so it cannot go anywhere unreachable. */
 static int g_gdrag = -1;                 /* app whose window unoui captured   */
 static int g_gdrag_x, g_gdrag_y;         /* its origin at the previous event  */
+static int g_gdrag_snap;                 /* ...and its snap state then        */
 
 /* The app whose TITLE BAR covers (mx, my), topmost first, or -1. The context
  * gesture wants the bar only: a right-click in a window's body belongs to the
@@ -1452,6 +1453,16 @@ static void wm_group_drag(void)
     if (a < 0 || !g_group[a]) { g_gdrag = -1; return; }
     if (a != g_gdrag) {                        /* the grab: take a baseline   */
         g_gdrag = a; g_gdrag_x = g_win[a].r.x; g_gdrag_y = g_win[a].r.y;
+        g_gdrag_snap = g_win[a].snap;
+        return;
+    }
+    if (g_win[a].snap != g_gdrag_snap) {
+        /* phase C just un-snapped it: the window was handed a whole new rect
+         * under the pointer, which is not a translation of the set. Re-baseline
+         * and let the NEXT move carry the peers, or every one of them would
+         * jump by the un-snap's offset. */
+        g_gdrag_snap = g_win[a].snap;
+        g_gdrag_x = g_win[a].r.x; g_gdrag_y = g_win[a].r.y;
         return;
     }
     dx = g_win[a].r.x - g_gdrag_x; dy = g_win[a].r.y - g_gdrag_y;
