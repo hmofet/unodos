@@ -2185,6 +2185,12 @@ static void close_focused(void)
     }
     if (UI.full == win) unoui_fullscreen(&UI, 0);   /* closing a fullscreen game */
     remove_win(win);
+    /* Hand focus on, exactly as minimizing does. Without this, remove_win()
+       leaves focus_win pointing at whatever slid into the closed window's
+       index - in practice the pinned taskbar - so every keyboard window
+       command silently no-ops until something is clicked. The closed app is
+       already g_open = 0, so the MRU walk skips it. */
+    focus_next_mru();
     rebuild_taskbar();
     session_save();                     /* remember the open set for next boot */
     g_dirty = 1;
@@ -3141,8 +3147,12 @@ static int pump_input(void)
             if (scan == 0x04) { wm_snap(fa, WM_SNAP_L); continue; }   /* Alt+Left  */
             if (scan == 0x03) { wm_snap(fa, WM_SNAP_R); continue; }   /* Alt+Right */
             if (scan == 0x02) {                                       /* Alt+Down  */
+                /* un-snap first, minimize only once already free-floating.
+                   Minimizing goes through the phase-B policy path (focus
+                   handoff, chip repaint, session), not the bare park - Alt+D's
+                   bulk park is the only route that skips those. */
                 if (cur != WM_SNAP_NONE) wm_snap(fa, WM_SNAP_NONE);
-                else                     wm_park(fa);
+                else                     minimize_app(fa);
                 continue;
             }
             if (uni == 'd' || uni == 'D') { wm_show_desktop(); continue; }
@@ -3600,15 +3610,20 @@ int main(void)
                 }
                 uno_pc64_scene_save();
                 if (UI.drag_active) unoui_draw_drag_outline(&UI);
-                else if (dw)        unoui_render_window(&UI, dw);
+                else if (dw)      { unoui_draw_snap_preview(&UI);
+                                    unoui_render_window(&UI, dw); }
                 uno_pc64_present();
                 g_dirty = 0;
             } else if (g_dirty) {                /* the drag moved */
                 unsigned long long t0 = drag_cyc_now(), t1;
                 uno_pc64_scene_restore();
                 t1 = drag_cyc_now();
+                /* the snap target goes UNDER the dragged window: it marks
+                   where the window is going, so the window itself must stay
+                   the thing you are looking at. */
                 if (UI.drag_active) unoui_draw_drag_outline(&UI);
-                else if (dw)        unoui_render_window(&UI, dw);
+                else if (dw)      { unoui_draw_snap_preview(&UI);
+                                    unoui_render_window(&UI, dw); }
                 drag_paint_note(drag_cyc_now() - t1);
                 uno_pc64_present();
                 drag_cyc_note(drag_cyc_now() - t0);
