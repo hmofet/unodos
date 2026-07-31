@@ -1305,6 +1305,11 @@ void unoui_render_ui(unoui_ui *ui)
 
     /* rubber-band drag outline (the window itself hasn't moved yet) */
     unoui_draw_drag_outline(ui);
+    /* drag-to-edge snap target. Drawn last, over everything: a full-scene pass
+     * mid-drag is the rare path (pc64 uses the snapshot fast path, which paints
+     * the preview UNDER the dragged window), and a preview hidden behind a
+     * window would be worse than one washing over it. */
+    unoui_draw_snap_preview(ui);
 }
 
 /* Draw just the rubber-band outline. Split out so a platform can render the
@@ -1325,6 +1330,12 @@ void unoui_draw_drag_outline(unoui_ui *ui)
  * Geometry only: halves and quarters of the live work area, derived at CALL
  * time, so a taskbar or font change just re-derives instead of leaving stale
  * rects behind. */
+
+/* Drag-preview wash strength (0..255). Light enough that the desktop and any
+ * window under the target stay legible, heavy enough to read as a highlight on
+ * every theme's accent. */
+#define SNAP_PREVIEW_ALPHA 56
+
 unoui_rect unoui_snap_rect(const unoui_ui *ui, int snap)
 {
     unoui_rect wk = unoui_work_area(ui), r = wk;
@@ -1342,6 +1353,40 @@ unoui_rect unoui_snap_rect(const unoui_ui *ui, int snap)
     return r;
 }
 
+/* The rect snapping `win` to `snap` will ACTUALLY produce: the snap rect for a
+ * resizable window, and the centred move-only rect for one with a fixed layout.
+ * unoui_snap_apply and the drag preview both go through here, so what the
+ * preview paints and what the release commits cannot drift apart. */
+static unoui_rect snap_target(const unoui_ui *ui, const unoui_window *win, int snap)
+{
+    unoui_rect tr = unoui_snap_rect(ui, snap);
+    if (win && !(win->flags & UI_WIN_RESIZE)) {
+        unoui_rect r = win->r;
+        r.x = tr.x + (tr.w - r.w) / 2;
+        r.y = tr.y + (tr.h - r.h) / 2;
+        if (r.x < tr.x) r.x = tr.x;
+        if (r.y < tr.y) r.y = tr.y;
+        return r;
+    }
+    return tr;
+}
+
+void unoui_draw_snap_preview(unoui_ui *ui)
+{
+    const unoui_theme *t = ui->theme;
+    const unoui_window *win = 0;
+    unoui_rect r;
+    if (!ui->snap_preview) return;
+    if (ui->cap_mode == UI_CAP_WINDOW && ui->cap_win >= 0 && ui->cap_win < ui->nwin)
+        win = ui->win[ui->cap_win];
+    r = snap_target(ui, win, ui->snap_preview);
+    /* palette only: a wash light enough to read the desktop through, plus a
+     * hard edge so the target reads on a flat two-tone theme (Win 3.1) where
+     * the wash alone is a subtle tint. */
+    fb_blend_rect(r.x, r.y, r.w, r.h, t->pal.accent, SNAP_PREVIEW_ALPHA);
+    fb_frame_rect(r.x, r.y, r.w, r.h, t->pal.accent);
+}
+
 void unoui_snap_apply(unoui_ui *ui, unoui_window *win, int snap)
 {
     unoui_rect tr;
@@ -1355,15 +1400,13 @@ void unoui_snap_apply(unoui_ui *ui, unoui_window *win, int snap)
         unoui_reflow_window(ui->theme, win);
         return;
     }
-    tr = unoui_snap_rect(ui, snap);
+    tr = snap_target(ui, win, snap);
     if (!(win->flags & UI_WIN_RESIZE)) {
         /* A fixed pixel layout must not be stretched, so a non-resizable window
          * is only MOVED into the target and keeps snap NONE - it has no snap
-         * state to leave, and nothing to restore. */
-        win->r.x = tr.x + (tr.w - win->r.w) / 2;
-        win->r.y = tr.y + (tr.h - win->r.h) / 2;
-        if (win->r.x < tr.x) win->r.x = tr.x;
-        if (win->r.y < tr.y) win->r.y = tr.y;
+         * state to leave, and nothing to restore. snap_target already centred
+         * it, so the rect below IS the move. */
+        win->r = tr;
         return;
     }
     /* entering a snap from free-floating remembers the rect ONCE: re-snapping
