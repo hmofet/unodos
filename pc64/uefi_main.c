@@ -1357,6 +1357,25 @@ static void clamp_cursor(void)
    we must remember it until the release frame or the click "doesn't work". */
 static int gAbsBtn[MAXPTR], gPtrBtn[MAXPTR];
 
+/* INJECTED buttons are latched for the same reason, one level up.
+ *
+ * poll_pointer() rebuilds `mb` from the hardware every frame and commits it, so
+ * a button set by uno_pc64_inject_pointer() was cleared within one frame -
+ * before the shell's own sample could ever see it. Injected clicks therefore
+ * moved the cursor and pressed nothing, which is exactly what a remote
+ * `pointer x y 1` / `pointer x y 0` pair did: both landed between two samples
+ * and the press was never observed.
+ *
+ * So a press is held for a few frames and its release DEFERRED until the hold
+ * expires. A down/up pair delivered in the same millisecond then still reads as
+ * a real click at the shell's cadence, which is what a remote driver, a script
+ * and the stress harness all need.
+ *
+ * Four frames is about 70 ms at the shell's rate - long enough to be sampled
+ * several times over, short enough that a fast scripted drag still tracks. */
+#define INJ_HOLD_FRAMES 4
+static int g_inj_btn, g_inj_hold, g_inj_release;
+
 static void poll_pointer(void)
 {
     int i, mb = 0, moved = 0;
@@ -1487,6 +1506,14 @@ static void poll_pointer(void)
        tests the whole mask, which is unchanged behaviour. */
     for (i = 0; i < gNAbs; i++) mb |= gAbsBtn[i];
     for (i = 0; i < gNPtr; i++) mb |= gPtrBtn[i];
+
+    /* Injected buttons, latched - see INJ_HOLD_FRAMES above. Counted down here
+     * rather than on a timer because the shell's sample rate is what the hold
+     * is measured against, and this function runs once per sample. */
+    if (g_inj_hold > 0) g_inj_hold--;
+    else if (g_inj_release) { g_inj_btn = 0; g_inj_release = 0; }
+    mb |= g_inj_btn;
+
     pointer_moved_clicked(mb);
 }
 
@@ -2234,7 +2261,9 @@ void uno_pc64_inject_pointer(int x, int y, int btn)
     g_cx = x; g_cy = y;
     clamp_cursor();
     g_have_pointer = 1;
-    pointer_moved_clicked(btn ? 1 : 0);
+    if (btn) { g_inj_btn = btn; g_inj_hold = INJ_HOLD_FRAMES; g_inj_release = 0; }
+    else if (g_inj_btn) g_inj_release = 1;   /* applied when the hold expires */
+    pointer_moved_clicked(g_inj_btn ? 1 : 0);
 }
 
 /* file size, via seek-to-end (0xFFFF... is the spec's "end of file" position) */

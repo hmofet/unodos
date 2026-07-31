@@ -310,21 +310,47 @@ def pledit_txt(pal):
 
 
 PALETTES = {
-    "Ember": dict(bg=(38, 24, 20), fg=(255, 214, 170), hi=(150, 70, 40),
-                  acc=(255, 140, 40), edge=(20, 12, 10)),
-    "Frost": dict(bg=(226, 234, 242), fg=(20, 34, 54), hi=(150, 180, 210),
-                  acc=(30, 110, 200), edge=(90, 110, 130)),
+    # Warm dark, the classic "player at night" look.
+    "Ember":  dict(bg=(38, 24, 20), fg=(255, 214, 170), hi=(150, 70, 40),
+                   acc=(255, 140, 40), edge=(20, 12, 10)),
+    # Light. Proves nothing in the renderer assumes a dark skin - a player that
+    # only looks right on black is a player with a hardcoded colour somewhere.
+    "Frost":  dict(bg=(226, 234, 242), fg=(20, 34, 54), hi=(150, 180, 210),
+                   acc=(30, 110, 200), edge=(90, 110, 130)),
+    # The Winamp house style: grey chassis, green readout.
+    "Classic": dict(bg=(58, 58, 58), fg=(0, 255, 60), hi=(96, 96, 96),
+                    acc=(0, 200, 50), edge=(24, 24, 24)),
+    # Maximum contrast. If a sprite is one pixel out of place, this is the skin
+    # that shows it - there is no shading to hide an edge in.
+    "Mono":   dict(bg=(0, 0, 0), fg=(255, 255, 255), hi=(255, 255, 255),
+                   acc=(255, 0, 255), edge=(255, 255, 0)),
+    # Saturated, to catch a red/blue channel swap at a glance: this skin is
+    # unmistakably purple-on-cyan, and byte-order bugs turn it green-on-orange.
+    "Neon":   dict(bg=(18, 0, 36), fg=(0, 255, 220), hi=(90, 0, 140),
+                   acc=(200, 0, 255), edge=(0, 255, 220)),
 }
+
+# Sheets deliberately left out of the PARTIAL skin below. Winamp falls back per
+# sheet and so do we, so a skin missing artwork must lose that artwork and
+# nothing else - which is only actually true if something tests it.
+PARTIAL_DROP = ("VOLUME.BMP", "BALANCE.BMP", "NUMBERS.BMP", "PLEDIT.BMP")
 
 
 def main():
     outdir = sys.argv[1] if len(sys.argv) > 1 else "build/skins"
     os.makedirs(outdir, exist_ok=True)
-    for i, (name, pal) in enumerate(PALETTES.items()):
+    jobs = [(n, p, None) for n, p in PALETTES.items()]
+    # A skin with sheets missing, to exercise the per-sheet fallback.
+    jobs.append(("Partial", PALETTES["Classic"], PARTIAL_DROP))
+    for i, (name, pal, drop) in enumerate(jobs):
         sheets = build_skin(pal)
-        # One deflated, one stored: both are legal .wsz and they are different
-        # code paths in the loader.
-        mode = zipfile.ZIP_DEFLATED if i == 0 else zipfile.ZIP_STORED
+        if drop:
+            for d in drop:
+                sheets.pop(d, None)
+        # Alternate deflate and store: both are legal .wsz and they are
+        # different code paths in the loader, so shipping only one would leave
+        # half the reader untested.
+        mode = zipfile.ZIP_DEFLATED if i % 2 == 0 else zipfile.ZIP_STORED
         path = os.path.join(outdir, "%s.wsz" % name.upper()[:8])
         with zipfile.ZipFile(path, "w", mode) as z:
             for fn, sh in sheets.items():
