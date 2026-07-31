@@ -200,8 +200,11 @@ static void clamp_to(unoui_rect wk, unoui_rect *r)
     if (r->y > wk.y + wk.h - 16) r->y = wk.y + wk.h - 16;
 }
 
+void unoui_clamp_window(unoui_ui *ui, unoui_window *w)
+{ if (w) clamp_to(unoui_work_area(ui), &w->r); }
+
 static void clamp_win(unoui_ui *ui, unoui_window *w)
-{ clamp_to(unoui_work_area(ui), &w->r); }
+{ unoui_clamp_window(ui, w); }
 
 static void close_popup(unoui_ui *ui)
 {

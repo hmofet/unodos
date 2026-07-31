@@ -364,6 +364,12 @@ typedef struct unoui_ui {
 
 /* ui->work, or the whole screen when it was never set (w or h <= 0) */
 unoui_rect unoui_work_area(const unoui_ui *);
+/* Pull a window back until it is REACHABLE in the work area: at least 48 px of
+ * width and 16 px of height, i.e. enough title bar to grab. Deliberately not
+ * "fully inside" - a window the user parked half off the edge should stay
+ * there. This is the rule a drag commits to, exposed so a platform restoring a
+ * saved position applies exactly the same one. */
+void unoui_clamp_window(unoui_ui *, unoui_window *);
 /* the rect a snap state occupies inside ui->work (pure geometry, no state) */
 unoui_rect unoui_snap_rect(const unoui_ui *, int snap);
 /* enter/leave a snap state: saves restore_r on the way in, gives it back on
