@@ -99,6 +99,7 @@ const unoui_theme theme_macos7 = {
     },
     { /* title_h */ 18, /* frame_w */ 1, /* bevel */ 1, /* pad */ 12,
       /* radius */ 3, /* closebox */ 0, /* shadow */ 3, /* title_center */ 1,
-      UNOUI_DEPTH_FULL },
+      /* no min/max: System 7 had a zoom box, never a minimize */
+      UNOUI_DEPTH_FULL, /* minbox */ 0, /* maxbox */ 0 },
     &macos7_draw
 };
