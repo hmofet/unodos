@@ -1318,7 +1318,13 @@ static void wm_park(int a)
 #define NDESK 4
 static int  g_cur_desk;                    /* 0-based; the desktop on screen  */
 static signed char g_desk_of[NAPPS];       /* which desktop each app lives on */
-static signed char g_dz[NDESK][NAPPS];     /* z-order, bottom-to-top, -1 end  */
+/* Saved z-order per desktop, bottom-to-top, storing app index PLUS ONE and
+ * terminated by a 0. The +1 is not decoration: a bss array reads as all-zero,
+ * and with a plain "-1 terminates" convention every untouched desktop would
+ * decode as NAPPS copies of app 0 with no terminator - which is exactly the
+ * out-of-bounds write UBSan trapped on the first Alt+Ctrl+Fn of a fresh boot.
+ * Encoded this way, zero-initialized means "empty", which is the truth. */
+static signed char g_dz[NDESK][NAPPS];
 
 static void wm_desk_switch(int d);
 
@@ -2164,6 +2170,22 @@ static int wm_focused_app(void)
     return -1;
 }
 
+/* The app a whole-window command should act on. Normally the focused one, but
+ * focus lands on shell chrome easily enough - the taskbar is an ordinary
+ * UI_WIN_TOP window, so any click on it takes focus, and a desktop with no
+ * windows leaves focus there - and a keystroke that then silently does nothing
+ * reads as a broken binding. Fall back to the topmost app window, the same
+ * "topmost non-bare" rule focus_next_mru() ends on. */
+static int wm_target_app(void)
+{
+    int a = wm_focused_app(), k, i;
+    if (a >= 0) return a;
+    for (k = UI.nwin - 1; k >= 0; k--)
+        for (i = 0; i < NAPPS; i++)
+            if (UI.win[k] == &g_win[i] && g_open[i]) return i;
+    return -1;
+}
+
 static void wm_snap(int a, int snap)
 {
     if (a < 0 || a >= NAPPS || !g_open[a] || g_parked[a]) return;
@@ -2241,10 +2263,10 @@ static void wm_desk_capture(int d)
     for (i = 0; i < UI.nwin && n < NAPPS - 1; i++)
         for (a = 0; a < NAPPS; a++)
             if (UI.win[i] == &g_win[a]) {
-                if (g_open[a] && g_desk_of[a] == d) g_dz[d][n++] = (signed char)a;
+                if (g_open[a] && g_desk_of[a] == d) g_dz[d][n++] = (signed char)(a + 1);
                 break;
             }
-    g_dz[d][n] = -1;
+    g_dz[d][n] = 0;
 }
 
 /* Scene := exactly the current desktop's unparked windows, in the order it was
@@ -2256,9 +2278,9 @@ static void wm_desk_apply(void)
     int i, a;
     for (a = 0; a < NAPPS; a++)
         if (g_open[a] && g_desk_of[a] != g_cur_desk) remove_win(&g_win[a]);
-    for (i = 0; i < NAPPS && g_dz[g_cur_desk][i] >= 0; i++) {
-        a = g_dz[g_cur_desk][i];
-        if (a < NAPPS && g_open[a] && !g_parked[a] &&
+    for (i = 0; i < NAPPS && g_dz[g_cur_desk][i]; i++) {
+        a = g_dz[g_cur_desk][i] - 1;
+        if (a >= 0 && a < NAPPS && g_open[a] && !g_parked[a] &&
             g_desk_of[a] == g_cur_desk && !wm_in_scene(a))
             unoui_ui_add(&UI, &g_win[a]);
     }
@@ -2302,9 +2324,9 @@ static void wm_desk_move(int a, int d, int follow)
     wm_desk_capture(g_cur_desk);              /* the outgoing order, intact */
     g_desk_of[a] = (signed char)d;
     for (i = 0; i < NDESK; i++) {             /* drop it from every saved order */
-        for (j = 0, n = 0; j < NAPPS && g_dz[i][j] >= 0; j++)
-            if (g_dz[i][j] != a) g_dz[i][n++] = g_dz[i][j];
-        g_dz[i][n] = -1;
+        for (j = 0, n = 0; j < NAPPS && g_dz[i][j]; j++)
+            if (g_dz[i][j] - 1 != a) g_dz[i][n++] = g_dz[i][j];
+        if (n < NAPPS) g_dz[i][n] = 0;        /* n == NAPPS: nothing to drop */
     }
     if (follow) {
         wm_desk_switch(d);
@@ -3358,7 +3380,7 @@ static int pump_input(void)
             !(scan == 0x0E && !(mods & UI_MOD_ALT) && g_open[EX_BROWSER] &&
               UI.focus_win >= 0 && UI.focus_win < UI.nwin &&
               UI.win[UI.focus_win] == &g_win[EX_BROWSER])) {
-            if (mods & UI_MOD_ALT) wm_desk_move(wm_focused_app(), scan - 0x0B, 1);
+            if (mods & UI_MOD_ALT) wm_desk_move(wm_target_app(), scan - 0x0B, 1);
             else                   wm_desk_switch(scan - 0x0B);
             continue;
         }
