@@ -20,6 +20,8 @@ const um_audio_info *unoamp_in_info(void);
 
 void pc64_shell_dirty(void);
 
+#define TICK_MAX_BLOCKS 4       /* decode/filter budget per frame - see below */
+
 #define PL_MAX 1000
 typedef struct { char path[128]; char title[96]; int vol; int len_ms; } pl_item;
 
@@ -36,6 +38,10 @@ void unoamp_pl_select(int i) { if (i >= -1 && i < g_pn) g_sel = i; }
 
 const char *unoamp_pl_title(int i)
 { return (i >= 0 && i < g_pn) ? g_pl[i].title : ""; }
+const char *unoamp_pl_path(int i)
+{ return (i >= 0 && i < g_pn) ? g_pl[i].path : ""; }
+int unoamp_pl_vol(int i)
+{ return (i >= 0 && i < g_pn) ? g_pl[i].vol : 0; }
 int unoamp_pl_len_ms(int i)
 { return (i >= 0 && i < g_pn) ? g_pl[i].len_ms : -1; }
 
@@ -203,14 +209,31 @@ void unoamp_tick(void)
      * (Winamp's ABI allows time-stretching), so the buffer is twice what is
      * ever decoded into it. */
     short buf[1152 * 2 * 2];
-    int room, want, got, rate = 44100, nch = 2;
+    int room, want, got, blocks, rate = 44100, nch = 2;
 
     unoamp_ui_tick();
     if (!in || !out) return;
     if (in->IsPaused && in->IsPaused()) return;
 
+    /* AT MOST THIS MANY BLOCKS PER FRAME. The file header promises that a slow
+     * decode costs latency rather than stalling the desktop; without a cap it
+     * does not, and that promise was worth exactly nothing.
+     *
+     * The sink reports how much room it has, which after a stall is the whole
+     * FIFO. Draining that in one tick means decoding and filtering a second of
+     * audio inside a 17 ms frame. With the EQ off that is merely slow; with it
+     * on it is ten biquads over two channels over every sample, and the shell
+     * simply stops responding - which is what froze the ZimaBlade the first
+     * time the equaliser was switched on during playback.
+     *
+     * Four blocks is about 100 ms of audio a frame: comfortably faster than
+     * real time, so the buffer still refills after a stall, but bounded. Going
+     * over budget now shows up as an underrun you can hear, not a desktop you
+     * cannot click. */
     room = out->CanWrite ? out->CanWrite() : 0;
-    while (room >= 1152 * 2 * (int)sizeof(short)) {
+    blocks = 0;
+    while (room >= 1152 * 2 * (int)sizeof(short) && blocks < TICK_MAX_BLOCKS) {
+        blocks++;
         want = 1152;                   /* half the buffer: DSP headroom      */
         got = in->Decode ? in->Decode(buf, want) : 0;
         if (got <= 0) {
@@ -225,7 +248,11 @@ void unoamp_tick(void)
         { const um_audio_info *inf = unoamp_in_info();
           if (inf) { rate = inf->rate; nch = inf->channels ? inf->channels : 2; } }
         got = unoamp_dsp_run(buf, got, nch, rate);
-        if (got <= 0) continue;
+        /* A DSP that consumed everything leaves nothing to write. BREAK, not
+         * continue: `continue` here never decrements `room`, so a plugin
+         * returning zero once spins this loop forever with interrupts on and
+         * the frame never ending. */
+        if (got <= 0) break;
         unoamp_vis_feed(buf, got);
         if (out->Write) out->Write((const char *)buf, got * nch * (int)sizeof(short));
         room -= got * nch * (int)sizeof(short);
