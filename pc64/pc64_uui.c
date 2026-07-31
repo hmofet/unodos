@@ -1245,6 +1245,24 @@ static unoui_window g_cal;                 /* calendar date-picker popup */
 static int g_cal_open, g_cal_y = 2026, g_cal_mo = 1, g_cal_sel = 1;
 static unoui_rect g_cal_rect;
 
+/* ---- popovers (phase F) ----------------------------------------------------
+ * The window context menu, the taskbar context menu and the ">>" overflow list
+ * are the same object - a short list you click one row out of - so they share
+ * ONE window, built the way launcher_at() builds the Start menu: a small
+ * BARE|TOP window with a list canvas. ui->popup_* is deliberately not reused;
+ * it belongs to an owner WIDGET (a menubar or a dropdown), and a context menu
+ * has none. */
+#define POP_MAXITEMS 20
+enum {                                  /* what a row does when it is clicked */
+    POP_NONE = 0, POP_SEP, POP_RESTORE, POP_MIN, POP_MAX, POP_SNAPL, POP_SNAPR,
+    POP_DESK, POP_GROUP, POP_CLOSE, POP_ACTIVATE, POP_TILE, POP_CASCADE,
+    POP_MINALL
+};
+static unoui_window g_pop;
+static int  g_pop_open, g_pop_app = -1, g_pop_hot = -1;
+static struct { const char *label; short cmd, arg, icon; } g_pop_it[POP_MAXITEMS];
+static int  g_pop_n;
+
 static void raise_win(unoui_window *win) { unoui_bring_to_front(&UI, win); }
 
 static void remove_win(unoui_window *win)
@@ -1335,6 +1353,121 @@ static int wm_in_scene(int a)
     return 0;
 }
 
+/* ---- link groups (phase F) -------------------------------------------------
+ * Grouping v1 is a LINK: windows keep their own frames and simply act as one
+ * set - move, raise, minimize/restore and (with desktops) switch together. That
+ * is the whole behaviour of grouping without a container concept in unoui, and
+ * it leaves the tabbed-frame version (v2, explicitly deferred) free to adopt
+ * this same id namespace later.
+ *
+ * The id is shell state: 0 = ungrouped, 1..WM_NGROUP = a group. unoui learns of
+ * it through exactly one hook (unoui_win_badge), which paints the title-bar
+ * dot; it has no other notion of a group. */
+#define WM_NGROUP 2                       /* the menu offers "A" and "B"       */
+static unsigned char g_group[NAPPS];
+
+/* Fill `out` with every OPEN app linked to `a`, `a` itself included, and return
+ * the count. An ungrouped app is a set of one, so no caller needs a special
+ * case for "not in a group". */
+static int wm_group_set(int a, int *out)
+{
+    int i, n = 0;
+    if (a < 0 || a >= NAPPS || !g_open[a]) return 0;
+    if (!g_group[a]) { out[0] = a; return 1; }
+    for (i = 0; i < NAPPS; i++)
+        if (g_open[i] && g_group[i] == g_group[a]) out[n++] = i;
+    return n;
+}
+
+/* the badge index unoui paints in a window's title bar, or UI_BADGE_NONE */
+static int shell_win_badge(const unoui_window *w)
+{
+    int a;
+    for (a = 0; a < NAPPS; a++)
+        if (&g_win[a] == w) return g_group[a] ? g_group[a] - 1 : UI_BADGE_NONE;
+    return UI_BADGE_NONE;
+}
+
+/* Lift `a`'s whole set above everything else. The peers go up first, keeping
+ * their relative order, and the window the user actually touched goes up last,
+ * so it ends on top: the spec's "members directly above the grabbed one" would
+ * bury the very window that was just clicked.
+ *
+ * Raising rewrites UI.win[], and both cap_win and focus_win are INDEXES into
+ * it, so each is re-derived from the window it named rather than left dangling
+ * - a stale cap_win would hand the rest of a live drag to the wrong window. */
+static void wm_raise_group(int a)
+{
+    int set[NAPPS], n, i, fwi = UI.focus_wi;
+    unoui_window *capw = (UI.cap_mode != UI_CAP_NONE &&
+                          UI.cap_win >= 0 && UI.cap_win < UI.nwin)
+                       ? UI.win[UI.cap_win] : 0;
+    if (a < 0 || a >= NAPPS || !g_open[a] || g_parked[a] || !g_group[a]) return;
+    n = wm_group_set(a, set);
+    if (n < 2) return;
+    for (i = 0; i < n; i++)
+        if (set[i] != a && !g_parked[set[i]])
+            unoui_bring_to_front(&UI, &g_win[set[i]]);
+    unoui_bring_to_front(&UI, &g_win[a]);
+    UI.focus_wi = fwi;
+    if (capw) for (i = 0; i < UI.nwin; i++)
+        if (UI.win[i] == capw) { UI.cap_win = i; break; }
+    g_dirty = 1;
+}
+
+/* ---- dragging a link group -------------------------------------------------
+ * unoui moves only the window it captured, and knows nothing about groups. So
+ * the shell watches the captured window's origin across the events that move
+ * it and applies the same delta to its peers. A peer that hits the keep-on-
+ * screen clamp simply stops there and the set spreads a little; that is the
+ * same rule a single window drag obeys, so it cannot go anywhere unreachable. */
+static int g_gdrag = -1;                 /* app whose window unoui captured   */
+static int g_gdrag_x, g_gdrag_y;         /* its origin at the previous event  */
+
+/* The app whose TITLE BAR covers (mx, my), topmost first, or -1. The context
+ * gesture wants the bar only: a right-click in a window's body belongs to the
+ * app (the Editor, Files and the Browser all use it). */
+static int win_titlebar_app_at(int mx, int my)
+{
+    int k, i, th = UI.theme->m.title_h;
+    for (k = UI.nwin - 1; k >= 0; k--) {
+        unoui_window *w = UI.win[k];
+        if (w->flags & UI_WIN_BARE) continue;
+        if (mx < w->r.x || mx >= w->r.x + w->r.w) continue;
+        if (my < w->r.y || my >= w->r.y + w->r.h) continue;
+        if (my >= w->r.y + th) return -1;          /* the body, not the bar   */
+        for (i = 0; i < NAPPS; i++)
+            if (&g_win[i] == w && g_open[i]) return i;
+        return -1;                                 /* chrome, not an app      */
+    }
+    return -1;
+}
+
+static void wm_group_drag(void)
+{
+    int a = -1, i, dx, dy, set[NAPPS], n;
+    if (UI.cap_mode == UI_CAP_WINDOW && UI.cap_win >= 0 && UI.cap_win < UI.nwin)
+        for (i = 0; i < NAPPS; i++)
+            if (UI.win[UI.cap_win] == &g_win[i] && g_open[i]) { a = i; break; }
+    if (a < 0 || !g_group[a]) { g_gdrag = -1; return; }
+    if (a != g_gdrag) {                        /* the grab: take a baseline   */
+        g_gdrag = a; g_gdrag_x = g_win[a].r.x; g_gdrag_y = g_win[a].r.y;
+        return;
+    }
+    dx = g_win[a].r.x - g_gdrag_x; dy = g_win[a].r.y - g_gdrag_y;
+    g_gdrag_x = g_win[a].r.x; g_gdrag_y = g_win[a].r.y;
+    if (!dx && !dy) return;
+    n = wm_group_set(a, set);
+    for (i = 0; i < n; i++) {
+        int b = set[i];
+        if (b == a || g_parked[b]) continue;
+        g_win[b].r.x += dx; g_win[b].r.y += dy;
+        g_win[b].snap = UI_SNAP_NONE;      /* it was moved: it is not snapped */
+        unoui_clamp_window(&UI, &g_win[b]);
+    }
+    g_dirty = 1;
+}
+
 /* the taskbar background: a bare window draws no chrome, so a non-interactive
  * canvas paints the bar face + top highlight under the buttons. */
 /* forward decls (taskbar events fire these, defined below) */
@@ -1344,6 +1477,10 @@ static void build_desktop(void);
 static void open_app(int a);
 static void minimize_app(int a);
 static void restore_app(int a);
+static void pop_overflow(int px, int py);      /* the ">>" chip's app list   */
+static void pop_window_menu(int a, int x, int y);
+static void pop_task_menu(int x, int y);
+static void pop_close(void);
 static void fmt_clock(int uptime_secs);
 static void fmt_batt(void);
 static int  batt_icon_w(void);
@@ -1415,6 +1552,64 @@ static int tray_batt_cw(void)
     case BATT_PCT:  return fb_text_w(g_batt);
     default:        return batt_icon_w() + 6 + fb_text_w(g_batt);   /* BATT_BOTH */
     }
+}
+
+/* ---- chip strip layout (phase F: overflow) ---------------------------------
+ * The chips used to stop at the tray with a bare `break`, so the apps past the
+ * edge simply vanished off the bar with nothing to say so and no way back to
+ * them but Alt-Tab. Now the last slot becomes a ">>" chip opening a popover of
+ * the rest. Draw and hit-test both derive the strip from these three
+ * functions, so a chip can only be clicked where one was drawn. */
+
+/* the tray's left edge (LAN | battery | clock), in screen coords */
+static int tb_tray_x(void)
+{
+    int bcw = tray_batt_cw();
+    return FB_W - (fb_text_w(g_clock) + 16) - 6
+           - (bcw ? bcw + 20 : 0)
+           - (g_net[0] ? fb_text_w(g_net) + 16 + 12 : 0);
+}
+
+/* how many chips fit between the Start button (plus whatever else precedes
+ * them) and the tray */
+static int tb_maxchips(void)
+{
+    int avail = tb_tray_x() - 4 - tb_chip_x();
+    int cw = tb_chip_w(), gap = tb_chip_gap(), n = 0;
+    while (n * gap + cw <= avail) n++;
+    return n;
+}
+
+/* The apps that get a chip, in bar order: open, and on the desktop currently
+ * on screen (phase E). The draw, the hit-test and the overflow popover all
+ * read this ONE list, so they cannot disagree about what is on the bar. */
+static int tb_open_list(int *out)
+{
+    int i, n = 0;
+    for (i = 0; i < NAPPS; i++)
+        if (g_open[i] && g_desk_of[i] == g_cur_desk) out[n++] = i;
+    return n;
+}
+
+/* How many of `n` open apps get a chip of their own. When they do not all fit,
+ * the final slot is the ">>" chip rather than an app, so one fewer shows. */
+static int tb_nvis(int n)
+{
+    int mx = tb_maxchips();
+    if (mx <= 0) return 0;
+    return (n <= mx) ? n : mx - 1;
+}
+
+/* the app whose chip covers bar-x `px`: -2 = the ">>" overflow chip, -1 = no
+ * chip there (Start button, bare bar or the tray) */
+static int tb_chip_app_at(int px)
+{
+    int list[NAPPS], nopen = tb_open_list(list), nvis = tb_nvis(nopen);
+    int x = tb_chip_x(), cw = tb_chip_w(), k;
+    for (k = 0; k < nvis; k++, x += tb_chip_gap())
+        if (px >= x && px < x + cw) return list[k];
+    if (nopen > nvis && px >= x && px < x + cw) return -2;
+    return -1;
 }
 
 /* Hover tooltip for the LAN chip: current IP address + negotiated link speed,
@@ -1505,16 +1700,13 @@ static void taskbar_draw(struct unoui_widget *w, unoui_rect r, void *ctx)
        colliding. */
     x = r.x + tb_chip_x();
     { int cw = tb_chip_w(), fh = fb_text_h(), es = bh - 4 > 16 ? 16 : bh - 4;
-      int bcw = tray_batt_cw();
-      int tray_x = r.x + r.w - (fb_text_w(g_clock) + 16) - 6
-                   - (bcw ? bcw + 20 : 0)
-                   - (g_net[0]  ? fb_text_w(g_net) + 16 + 12 : 0);
-    for (i = 0; i < NAPPS; i++) {
-        int d = (i == act) ? 1 : 0;
-        int park = g_parked[i];              /* minimized: running, off-screen */
+      int list[NAPPS], nopen = tb_open_list(list), nvis = tb_nvis(nopen), k;
+    for (k = 0; k < nvis; k++) {
+        int d, park;
         unoui_rect eb;
-        if (!g_open[i] || g_desk_of[i] != g_cur_desk) continue;
-        if (x + cw > tray_x - 4) break;      /* no room left before the tray */
+        i = list[k];
+        d = (i == act) ? 1 : 0;
+        park = g_parked[i];                  /* minimized: running, off-screen */
         /* a parked chip reads as "still running, not on screen": fainter
            panel, no accent underline (it cannot be the active window) and
            dimmed text. Same palette, no new colours. */
@@ -1532,6 +1724,18 @@ static void taskbar_draw(struct unoui_widget *w, unoui_rect r, void *ctx)
                   park ? t->pal.text_dim : t->pal.text, -1);
           fb_set_clip(r.x, r.y, r.w, r.h); }                  /* back to the bar */
         x += tb_chip_gap();
+    }
+    /* the overflow chip: the apps that did not fit, reachable instead of gone */
+    if (nopen > nvis) {
+        char cnt[8]; char *p = cnt;
+        *p++ = '+'; p = ap_int(p, nopen - nvis); *p = 0;
+        if (modern) fb_round_rect_a(x, by, cw, bh, cr, t->pal.text, 18, FB_CORNER_ALL);
+        else        tb_panel(x, by, cw, bh, t->pal.face, 0);
+        fb_set_clip(x + 4, by, cw - 8, bh);
+        fb_text(x + 8, by + (bh - fh) / 2, ">>", t->pal.text, -1);
+        fb_text(x + 8 + fb_text_w(">>  "), by + (bh - fh) / 2, cnt,
+                t->pal.text_dim, -1);
+        fb_set_clip(r.x, r.y, r.w, r.h);
     } }
     /* system tray, right-aligned: LAN chip | battery | clock. Each chip is
        placed to the LEFT of the previous one; cxx tracks the running left edge. */
@@ -1579,7 +1783,7 @@ static void taskbar_draw(struct unoui_widget *w, unoui_rect r, void *ctx)
 static int taskbar_event(struct unoui_widget *w, const void *ev, void *ctx)
 {
     const unoui_event *e = (const unoui_event *)ev;
-    int px, i, x;
+    int px, i;
     (void)w; (void)ctx;
     if (e->kind != UI_EV_MOUSE_DOWN) return 0;
     px = e->x - g_task.r.x;
@@ -1596,24 +1800,21 @@ static int taskbar_event(struct unoui_widget *w, const void *ev, void *ctx)
               wm_desk_switch(d);
           return 1;
       } }
-    x = tb_chip_x();
-    for (i = 0; i < NAPPS; i++) {
-        if (!g_open[i] || g_desk_of[i] != g_cur_desk) continue;
-        if (px >= x && px < x + tb_chip_w()) {
-            /* The modern chip toggle: parked -> restore + raise; unfocused ->
-               raise; the app that already has focus -> park it.
-               "Focused" is read off the MRU stack, NOT focused_app(): the
-               press that got us here already raised the TASKBAR (it is a
-               UI_WIN_TOP window like any other), so by now focused_app() is
-               -1 and every chip click would read as "not focused". g_mru[0]
-               still names the app that had focus, because raising shell
-               chrome never calls wm_note_focus(). */
-            if (g_parked[i])                        restore_app(i);
-            else if (g_nmru && g_mru[0] == i)       minimize_app(i);
-            else                                    open_app(i);
-            return 1;
-        }
-        x += tb_chip_gap();
+    i = tb_chip_app_at(px);
+    if (i == -2) { pop_overflow(e->x, e->y); return 1; }   /* the ">>" chip */
+    if (i >= 0) {
+        /* The modern chip toggle: parked -> restore + raise; unfocused ->
+           raise; the app that already has focus -> park it.
+           "Focused" is read off the MRU stack, NOT focused_app(): the
+           press that got us here already raised the TASKBAR (it is a
+           UI_WIN_TOP window like any other), so by now focused_app() is
+           -1 and every chip click would read as "not focused". g_mru[0]
+           still names the app that had focus, because raising shell
+           chrome never calls wm_note_focus(). */
+        if (g_parked[i])                        restore_app(i);
+        else if (g_nmru && g_mru[0] == i)       minimize_app(i);
+        else                                    open_app(i);
+        return 1;
     }
     return 0;
 }
@@ -2355,9 +2556,15 @@ static void wm_desk_move(int a, int d, int follow)
 
 static void minimize_app(int a)
 {
+    int set[NAPPS], n, i;
     if (a < 0 || a >= NAPPS || !g_open[a] || g_parked[a]) return;
-    if (UI.full == &g_win[a]) { unoui_fullscreen(&UI, 0); UI.focus_wi = 0; }
-    wm_park(a);
+    n = wm_group_set(a, set);       /* a linked set minimizes as one (phase F) */
+    for (i = 0; i < n; i++) {
+        int b = set[i];
+        if (g_parked[b]) continue;
+        if (UI.full == &g_win[b]) { unoui_fullscreen(&UI, 0); UI.focus_wi = 0; }
+        wm_park(b);
+    }
     focus_next_mru();
     rebuild_taskbar();
     session_save();                 /* remember the parked set for next boot */
@@ -2365,12 +2572,48 @@ static void minimize_app(int a)
 
 static void restore_app(int a)
 {
+    int set[NAPPS], n, i;
     if (a < 0 || a >= NAPPS || !g_open[a] || !g_parked[a]) return;
     g_showdesk = 0;                 /* the show-desktop set is broken up now */
+    n = wm_group_set(a, set);       /* ...and comes back as one               */
+    for (i = 0; i < n; i++)
+        if (set[i] != a && g_parked[set[i]]) open_app(set[i]);
     open_app(a);                    /* unparks, raises, focuses, notes MRU,
                                        redraws the chip and saves the session,
                                        so Alt-Tab back to a parked window is
-                                       the same restore as the chip click   */
+                                       the same restore as the chip click.
+                                       LAST, so the grabbed one ends on top. */
+}
+
+/* Close app `a` whether or not it is the focused window - the context menu
+ * (phase F) closes a window the pointer merely pointed at, and a PARKED app has
+ * no z-index to be focused through at all. close_focused() is this plus "which
+ * app is in front", so the teardown lives in exactly one place. */
+static void close_app(int a)
+{
+    int g;
+    if (a < 0 || a >= NAPPS || !g_open[a]) return;
+    g = app_game(a);
+    g_open[a] = 0;
+    g_parked[a] = 0;                             /* window-manager state dies with it */
+    g_group[a] = 0;
+    g_win[a].snap = UI_SNAP_NONE;
+    if (g >= 0)              pc64_game_close(g);        /* native game teardown */
+    else if (a == APP_MUSIC) pc64_music_closed();       /* stop playback      */
+    else if (a == EX_STUDIO) { if (g_studio && g_studio->closed) g_studio->closed(); }
+    else if (a == EX_PHOTOS) { if (g_photos && g_photos->closed) g_photos->closed(); }
+    else if (a == EX_PYAPP)  { if (g_pyapp) { unoscript_app_caps_end();
+                                 if (g_pyapp->closed) g_pyapp->closed();
+                                 if (g_pyrt) g_pyrt->unload();
+                                 g_pyapp = 0; } }
+    else if (a == EX_USERAPP) unoapp_user_close();
+    else if (app_is_bridge(a)) unoapp_close(a - NNATIVE); /* bridge app        */
+    if (UI.full == &g_win[a]) unoui_fullscreen(&UI, 0);  /* fullscreen game    */
+    remove_win(&g_win[a]);
+    focus_next_mru();
+    rebuild_taskbar();
+    session_save();                     /* remember the open set for next boot */
+    g_dirty = 1;
 }
 
 static void close_focused(void)
@@ -2382,23 +2625,8 @@ static void close_focused(void)
     if (win->flags & UI_WIN_BARE) return;         /* never close desktop/taskbar */
     if (win == &g_launch) { remove_win(&g_launch); g_launch_open = 0; g_dirty = 1; return; }
     if (win == &g_cal)    { remove_win(&g_cal);    g_cal_open = 0;    g_dirty = 1; return; }
-    for (i = 0; i < NAPPS; i++) if (&g_win[i] == win) {
-        int g = app_game(i);
-        g_open[i] = 0;
-        g_parked[i] = 0;                             /* window-manager state dies with it */
-        g_win[i].snap = UI_SNAP_NONE;
-        if (g >= 0)              pc64_game_close(g);        /* native game teardown */
-        else if (i == APP_MUSIC) pc64_music_closed();       /* stop playback      */
-        else if (i == EX_STUDIO) { if (g_studio && g_studio->closed) g_studio->closed(); }
-        else if (i == EX_PHOTOS) { if (g_photos && g_photos->closed) g_photos->closed(); }
-        else if (i == EX_PYAPP)  { if (g_pyapp) { unoscript_app_caps_end();
-                                     if (g_pyapp->closed) g_pyapp->closed();
-                                     if (g_pyrt) g_pyrt->unload(); g_pyapp = 0; } }
-        else if (i == EX_USERAPP) unoapp_user_close();
-        else if (app_is_bridge(i)) unoapp_close(i - NNATIVE); /* bridge app        */
-        break;
-    }
-    if (UI.full == win) unoui_fullscreen(&UI, 0);   /* closing a fullscreen game */
+    if (win == &g_pop)    { pop_close(); return; }
+    for (i = 0; i < NAPPS; i++) if (&g_win[i] == win) { close_app(i); return; }
     remove_win(win);
     /* Hand focus on, exactly as minimizing does. Without this, remove_win()
        leaves focus_win pointing at whatever slid into the closed window's
@@ -2407,8 +2635,287 @@ static void close_focused(void)
        already g_open = 0, so the MRU walk skips it. */
     focus_next_mru();
     rebuild_taskbar();
-    session_save();                     /* remember the open set for next boot */
     g_dirty = 1;
+}
+
+/* ---- tiling commands (phase F) ---------------------------------------------
+ * Commands, not a modal tiling mode: the user asks for a layout once and the
+ * windows stay ordinary draggable windows afterwards. Tile routes 1/2/4 through
+ * unoui_snap_apply so it inherits the snap geometry and the never-stretch-a-
+ * fixed-layout rule for free, and only the n>4 grid needs rects of its own. */
+
+/* the windows a tiling command arranges: open, in the scene, in z order */
+static int wm_tile_list(int *out)
+{
+    int k, i, n = 0;
+    for (k = 0; k < UI.nwin; k++)
+        for (i = 0; i < NAPPS; i++)
+            if (UI.win[k] == &g_win[i] && g_open[i] && !g_parked[i])
+                { out[n++] = i; break; }
+    return n;
+}
+
+/* put window `a` in cell `c`: resizable windows take the cell, fixed-layout
+ * ones are centred in it (the same policy unoui_snap_apply applies) */
+static void wm_place(int a, unoui_rect c)
+{
+    unoui_window *w = &g_win[a];
+    w->snap = UI_SNAP_NONE;                 /* a grid cell is not a snap state */
+    if (w->flags & UI_WIN_RESIZE) {
+        if (w->min_w > 0 && c.w < w->min_w) c.w = w->min_w;
+        if (w->min_h > 0 && c.h < w->min_h) c.h = w->min_h;
+        w->r = c;
+        unoui_reflow_window(UI.theme, w);
+    } else {
+        w->r.x = c.x + (c.w - w->r.w) / 2;
+        w->r.y = c.y + (c.h - w->r.h) / 2;
+    }
+    unoui_clamp_window(&UI, w);
+}
+
+static void wm_tile(void)
+{
+    static const unsigned char kQuad[4] =
+        { UI_SNAP_TL, UI_SNAP_TR, UI_SNAP_BL, UI_SNAP_BR };
+    int list[NAPPS], n = wm_tile_list(list), i;
+    if (n <= 0) return;
+    if (n == 1)
+        unoui_snap_apply(&UI, &g_win[list[0]], UI_SNAP_MAX);
+    else if (n == 2) {
+        unoui_snap_apply(&UI, &g_win[list[0]], UI_SNAP_L);
+        unoui_snap_apply(&UI, &g_win[list[1]], UI_SNAP_R);
+    } else if (n <= 4) {
+        for (i = 0; i < n; i++)
+            unoui_snap_apply(&UI, &g_win[list[i]], kQuad[i]);
+    } else {
+        unoui_rect wk = unoui_work_area(&UI);
+        int cols = 1, rows;
+        while (cols * cols < n) cols++;                    /* ceil(sqrt(n))   */
+        rows = (n + cols - 1) / cols;
+        for (i = 0; i < n; i++) {
+            unoui_rect c;
+            c.w = wk.w / cols; c.h = wk.h / rows;
+            c.x = wk.x + (i % cols) * c.w;
+            c.y = wk.y + (i / cols) * c.h;
+            wm_place(list[i], c);
+        }
+    }
+    session_save();
+    g_dirty = 1;
+}
+
+/* the classic escape hatch for a window lost off the edge: everything stacked
+ * from the work-area origin in 24 px steps, snap states given back first so a
+ * maximized window returns to a size a cascade can actually show. */
+static void wm_cascade(void)
+{
+    unoui_rect wk = unoui_work_area(&UI);
+    int list[NAPPS], n = wm_tile_list(list), i;
+    int x = wk.x, y = wk.y, step = 24;
+    for (i = 0; i < n; i++) {
+        unoui_window *w = &g_win[list[i]];
+        unoui_snap_apply(&UI, w, UI_SNAP_NONE);
+        if (x + 160 > wk.x + wk.w || y + 100 > wk.y + wk.h) { x = wk.x; y = wk.y; }
+        w->r.x = x; w->r.y = y;
+        unoui_clamp_window(&UI, w);
+        unoui_bring_to_front(&UI, w);       /* list order = back to front      */
+        x += step; y += step;
+    }
+    if (n) { UI.focus_wi = -1; session_save(); }
+    g_dirty = 1;
+}
+
+static void wm_minimize_all(void)
+{
+    int list[NAPPS], n = wm_tile_list(list), i;
+    if (UI.full) { unoui_fullscreen(&UI, 0); UI.focus_wi = 0; }
+    for (i = 0; i < n; i++) wm_park(list[i]);
+    if (n) { g_showdesk = 1; focus_next_mru(); rebuild_taskbar(); session_save(); }
+    g_dirty = 1;
+}
+
+/* join / leave a link group (0 = leave). Group membership is session state
+ * like geometry, so it is saved the same way. */
+static void wm_group_join(int a, int gid)
+{
+    if (a < 0 || a >= NAPPS || !g_open[a]) return;
+    if (gid < 0 || gid > WM_NGROUP) gid = 0;
+    g_group[a] = (unsigned char)gid;
+    session_save();
+    g_dirty = 1;
+}
+
+/* ---- the popover: draw, hit-test, build, dismiss --------------------------- */
+static int pop_row_h(void) { int h = fb_text_h() + 6; return h < 20 ? 20 : h; }
+
+static void pop_draw(struct unoui_widget *w, unoui_rect r, void *ctx)
+{
+    const unoui_theme *t = UI.theme;
+    int i, rh = pop_row_h(), fh = fb_text_h();
+    (void)w; (void)ctx;
+    fb_fill_rect(r.x, r.y, r.w, r.h, t->pal.win_bg);
+    fb_frame_rect(r.x, r.y, r.w, r.h, t->pal.dark);
+    for (i = 0; i < g_pop_n; i++) {
+        int ry = r.y + 1 + i * rh, hot = (i == g_pop_hot);
+        if (g_pop_it[i].cmd == POP_SEP) {
+            fb_hline(r.x + 5, ry + rh / 2, r.w - 10, t->pal.shadow);
+            continue;
+        }
+        if (hot) fb_fill_rect(r.x + 1, ry, r.w - 2, rh, t->pal.accent);
+        if (g_pop_it[i].icon >= 0) {
+            unoui_rect eb;
+            eb.x = r.x + 4; eb.y = ry + (rh - 14) / 2; eb.w = eb.h = 14;
+            pc64_icon_emblem(g_pop_it[i].icon, eb);
+        }
+        fb_text(r.x + 22, ry + (rh - fh) / 2, g_pop_it[i].label,
+                hot ? t->pal.accent_text : t->pal.text, -1);
+    }
+}
+
+static void pop_activate(int row)
+{
+    int cmd, arg, a = g_pop_app;
+    if (row < 0 || row >= g_pop_n) return;
+    cmd = g_pop_it[row].cmd; arg = g_pop_it[row].arg;
+    pop_close();                        /* the menu goes first, whatever it did */
+    /* Acting on a window through its own context menu also brings it forward:
+     * the menu was aimed at it, so it is what the user is working on. Closing
+     * the popover left focus on shell chrome (it is a TOP window), so without
+     * this a snap would leave nothing focused at all. */
+    if (a >= 0 && a < NAPPS && g_open[a] && !g_parked[a] && cmd != POP_CLOSE) {
+        unoui_bring_to_front(&UI, &g_win[a]);
+        UI.focus_wi = (a >= NNATIVE) ? 0 : -1;
+        wm_note_focus(a);
+    }
+    switch (cmd) {
+    case POP_RESTORE:  if (a >= 0) { if (g_parked[a]) restore_app(a);
+                                     else             wm_snap(a, WM_SNAP_NONE); } break;
+    case POP_MIN:      minimize_app(a); break;
+    case POP_MAX:      wm_snap(a, WM_SNAP_MAX); break;
+    case POP_SNAPL:    wm_snap(a, WM_SNAP_L); break;
+    case POP_SNAPR:    wm_snap(a, WM_SNAP_R); break;
+    case POP_GROUP:    wm_group_join(a, arg); break;
+    case POP_CLOSE:    close_app(a); break;
+    case POP_ACTIVATE: if (g_parked[arg]) restore_app(arg); else open_app(arg); break;
+    case POP_TILE:     wm_tile(); break;
+    case POP_CASCADE:  wm_cascade(); break;
+    case POP_MINALL:   wm_minimize_all(); break;
+    default: break;
+    }
+}
+
+static int pop_event(struct unoui_widget *w, const void *ev, void *ctx)
+{
+    const unoui_event *e = (const unoui_event *)ev;
+    int rh = pop_row_h(), row;
+    (void)w; (void)ctx;
+    if (e->kind != UI_EV_MOUSE_DOWN) return 0;
+    row = (e->y - (g_pop.r.y + 1)) / rh;
+    if (row >= 0 && row < g_pop_n) pop_activate(row);
+    return 1;
+}
+static unoui_canvas g_pop_cv = { pop_draw, pop_event, 0 };
+
+static void pop_close(void)
+{
+    if (!g_pop_open) return;
+    remove_win(&g_pop);
+    g_pop_open = 0; g_pop_hot = -1;
+    g_dirty = 1;
+}
+
+static void pop_add(const char *label, int cmd, int arg, int icon)
+{
+    if (g_pop_n >= POP_MAXITEMS) return;
+    g_pop_it[g_pop_n].label = label;
+    g_pop_it[g_pop_n].cmd   = (short)cmd;
+    g_pop_it[g_pop_n].arg   = (short)arg;
+    g_pop_it[g_pop_n].icon  = (short)icon;
+    g_pop_n++;
+}
+
+/* Show the rows collected by pop_add() with their top-left at (x, y), pulled
+ * fully into the work area (a menu opened off a taskbar chip would otherwise
+ * hang below the screen). */
+static void pop_show(int x, int y)
+{
+    int i, tw = 0, rh = pop_row_h(), ww, wh;
+    if (g_pop_n <= 0) return;
+    for (i = 0; i < g_pop_n; i++)
+        if (g_pop_it[i].label) {
+            int t = fb_text_w(g_pop_it[i].label);
+            if (t > tw) tw = t;
+        }
+    ww = tw + 22 + 12;
+    wh = 2 + g_pop_n * rh;
+    if (g_pop_open) remove_win(&g_pop);
+    unoui_window_init(&g_pop, "", x, y, ww, wh);
+    g_pop.flags = UI_WIN_BARE | UI_WIN_TOP;
+    unoui_add_canvas(&g_pop, 0, 0, ww, wh, &g_pop_cv);
+    if (g_pop.r.y + wh > FB_H - TASKH) g_pop.r.y = FB_H - TASKH - wh;
+    clamp_to_workarea(&g_pop);
+    g_pop_hot = -1;
+    if (!unoui_ui_add(&UI, &g_pop)) return;   /* window table full */
+    g_pop_open = 1;
+    g_dirty = 1;
+}
+
+/* right-click on a title bar or a taskbar chip */
+static void pop_window_menu(int a, int x, int y)
+{
+    if (a < 0 || a >= NAPPS || !g_open[a]) return;
+    g_pop_app = a; g_pop_n = 0;
+    pop_add(g_parked[a] ? "Restore" : "Restore size", POP_RESTORE, 0, -1);
+    pop_add("Minimize",   POP_MIN,   0, -1);
+    pop_add("Maximize",   POP_MAX,   0, -1);
+    pop_add("Snap left",  POP_SNAPL, 0, -1);
+    pop_add("Snap right", POP_SNAPR, 0, -1);
+    pop_add(0, POP_SEP, 0, -1);
+    pop_add(g_group[a] == 0 ? "Group: none *" : "Group: none", POP_GROUP, 0, -1);
+    pop_add(g_group[a] == 1 ? "Group: A *"    : "Group: A",    POP_GROUP, 1, -1);
+    pop_add(g_group[a] == 2 ? "Group: B *"    : "Group: B",    POP_GROUP, 2, -1);
+    pop_add(0, POP_SEP, 0, -1);
+    pop_add("Close", POP_CLOSE, 0, -1);
+    pop_show(x, y);
+}
+
+/* right-click on blank taskbar: the layout commands */
+static void pop_task_menu(int x, int y)
+{
+    g_pop_app = -1; g_pop_n = 0;
+    pop_add("Tile windows",    POP_TILE,    0, -1);
+    pop_add("Cascade windows", POP_CASCADE, 0, -1);
+    pop_add("Minimize all",    POP_MINALL,  0, -1);
+    pop_show(x, y);
+}
+
+/* the ">>" chip: the apps that did not fit on the bar, same click semantics as
+ * a chip (parked -> restore, otherwise raise + focus) */
+static void pop_overflow(int px, int py)
+{
+    int list[NAPPS], nopen = tb_open_list(list), nvis = tb_nvis(nopen), k;
+    (void)py;
+    g_pop_app = -1; g_pop_n = 0;
+    for (k = nvis; k < nopen; k++)
+        pop_add(app_name(list[k]), POP_ACTIVATE, list[k], app_icon(list[k]));
+    if (!g_pop_n) return;
+    pop_show(px, FB_H - TASKH - (2 + g_pop_n * pop_row_h()));
+}
+
+/* per-frame while a popover is up: highlight the row under the pointer. The
+ * shell only repaints when something changed, so the highlight has to ask for
+ * the repaint itself. */
+static void pop_hover(int mx, int my)
+{
+    int rh = pop_row_h(), old = g_pop_hot, row;
+    if (mx < g_pop.r.x || mx >= g_pop.r.x + g_pop.r.w ||
+        my < g_pop.r.y || my >= g_pop.r.y + g_pop.r.h) { row = -1; }
+    else {
+        row = (my - (g_pop.r.y + 1)) / rh;
+        if (row < 0 || row >= g_pop_n || g_pop_it[row].cmd == POP_SEP) row = -1;
+    }
+    g_pop_hot = row;
+    if (g_pop_hot != old) g_dirty = 1;
 }
 
 /* ---- session restore (SHELL.CFG v2) ---------------------------------------
@@ -2488,6 +2995,13 @@ static void session_save(void)
             p = ap_str(p, "desk"); p = ap_int(p, a); *p++ = '=';
             p = ap_int(p, g_desk_of[a]);
             *p++ = '\r'; *p++ = '\n';
+        }
+        /* link-group membership, same rule: only the grouped apps get a line,
+         * so an absent grpN= reads as ungrouped and an older file behaves as
+         * it always did. */
+        if (g_group[a]) {
+            p = ap_str(p, "grp"); p = ap_int(p, a); *p++ = '=';
+            p = ap_int(p, g_group[a]); *p++ = '\r'; *p++ = '\n';
         }
     }
     *p = 0;
@@ -2579,6 +3093,17 @@ static void session_load(void)
           open_app(val); session_restore_geom((char *)buf, val); any = 1; }
       if (!any) open_app(APP_CTRL);
     }
+    /* link groups BEFORE the re-park below, or minimize_app would only park
+     * the one app instead of its whole set. */
+    { int a; char key[10];
+      for (a = 0; a < NAPPS; a++) {
+          char *k = key; const char *gp;
+          if (!g_open[a]) continue;
+          k = ap_str(k, "grp"); k = ap_int(k, a); *k++ = '='; *k = 0;
+          gp = cfg_line_val((const char *)buf, key);
+          if (gp) { int g = cfg_num(&gp);
+                    if (g > 0 && g <= WM_NGROUP) g_group[a] = (unsigned char)g; }
+      } }
     /* re-park whatever was parked, after the whole open set is up so the
      * windows land in the z-order they were saved in. */
     { int a; char key[10];
@@ -2629,19 +3154,38 @@ static void menu_refresh(void)
     menu_napps = 0;
     for (a = 0; a < NAPPS; a++) if (!app_hidden(a)) menu_apps[menu_napps++] = a;
 }
-static int  menu_count(void) { return menu_napps + 2; }  /* + restart/shutdown */
+/* apps, then the window-layout commands (phase F), then power. The commands
+ * live here as well as on the taskbar's context menu because the Start button
+ * is the one piece of chrome that is always reachable - a right-click needs a
+ * patch of bar that no chip has taken. */
+#define MENU_NCMD 3                        /* Tile / Cascade / Minimize all   */
+static const char *kMenuCmd[MENU_NCMD] =
+{ "Tile windows", "Cascade windows", "Minimize all" };
+
+static int  menu_count(void) { return menu_napps + MENU_NCMD + 2; }
 static const char *menu_label(int i)
-{ return i < menu_napps ? app_name(menu_apps[i])
-       : (i == menu_napps ? "Restart" : "Shut Down"); }
+{
+    if (i < menu_napps)             return app_name(menu_apps[i]);
+    i -= menu_napps;
+    if (i < MENU_NCMD)              return kMenuCmd[i];
+    return (i == MENU_NCMD) ? "Restart" : "Shut Down";
+}
 static int  menu_icon(int i) { return i < menu_napps ? app_icon(menu_apps[i]) : -1; }
 static int  menu_vis(void)   { int t = menu_count(); return t < MENU_MAXVIS ? t : MENU_MAXVIS; }
 
 static void menu_activate(int i)
 {
     if (i < 0 || i >= menu_count()) return;
-    if (i < menu_napps)       open_app(menu_apps[i]);  /* also closes the launcher */
-    else if (i == menu_napps) uno_pc64_restart();
-    else                      uno_pc64_shutdown();
+    if (i < menu_napps) { open_app(menu_apps[i]); return; }  /* closes the launcher */
+    i -= menu_napps;
+    if (g_launch_open) { remove_win(&g_launch); g_launch_open = 0; g_dirty = 1; }
+    switch (i) {
+    case 0:         wm_tile();          break;
+    case 1:         wm_cascade();       break;
+    case 2:         wm_minimize_all();  break;
+    case MENU_NCMD: uno_pc64_restart(); break;
+    default:        uno_pc64_shutdown();break;
+    }
 }
 
 static void chevron(int cx, int y, int dir, fb_px c)         /* -1 up, +1 down */
@@ -2655,7 +3199,9 @@ static void launcher_draw(struct unoui_widget *w, unoui_rect r, void *ctx)
         int idx = g_menu_scroll + i, ry = r.y + i * MROW, hot = (idx == g_menu_hot);
         if (idx >= total) break;
         if (hot) fb_fill_rect(r.x, ry, r.w, MROW, t->pal.accent);
-        if (idx == menu_napps) fb_hline(r.x, ry, r.w, t->pal.shadow);  /* power divider */
+        /* dividers: apps | window commands | power */
+        if (idx == menu_napps || idx == menu_napps + MENU_NCMD)
+            fb_hline(r.x, ry, r.w, t->pal.shadow);
         if (menu_icon(idx) >= 0) { unoui_rect eb = { r.x + 3, ry + (MROW - 18) / 2, 18, 18 }; pc64_icon_emblem(menu_icon(idx), eb); }
         fb_text(r.x + 26, ry + (MROW - fb_text_h()) / 2, menu_label(idx),
                 hot ? t->pal.accent_text : t->pal.text, -1);
@@ -2727,6 +3273,10 @@ static void build_launcher(void)
     g_menu_scroll = 0; g_menu_hot = -1;
     unoui_window_init(&g_launch, "Programs", 8, 20,
                       winw, m->title_h + m->pad + vis * MROW + m->pad + m->frame_w);
+    /* the Start menu is a titled window, but it is not one you minimize or
+     * maximize: without this it inherits phase B's boxes and draws controls
+     * that correctly do nothing (spec 13.7). Same for the calendar. */
+    g_launch.flags |= UI_WIN_NOCTL;
     unoui_add_canvas(&g_launch, 0, 0, winw - 2 * m->frame_w - 2 * m->pad, vis * MROW, &g_menu_cv);
 }
 
@@ -2850,6 +3400,7 @@ static void open_calendar(void)
     g_cal_y = yy; g_cal_mo = mo; g_cal_sel = dd;
     unoui_window_init(&g_cal, "Pick a date", 180, 56,
                       cw + 2*m->frame_w + 2*m->pad, chh + m->title_h + 2*m->pad + m->frame_w);
+    g_cal.flags |= UI_WIN_NOCTL;
     unoui_add_canvas(&g_cal, 0, 0, cw, chh, &g_cal_cv);
     clamp_to_workarea(&g_cal);
     unoui_ui_add(&UI, &g_cal);
@@ -3268,13 +3819,16 @@ static int pump_input(void)
             int ohw = UI.hot_win, ohi = UI.hot_wi, oph = UI.popup_hot;
             memset(&ev, 0, sizeof ev); ev.kind = UI_EV_MOUSE_MOVE; ev.x = mx; ev.y = my;
             feed(&ev);
+            wm_group_drag();          /* a linked set follows the dragged one */
+            if (g_pop_open) pop_hover(mx, my);
             /* Also force a full repaint while a drag/capture is live: window
                drag (the rubber-band outline), live resize, and text drag-select
                all update visible state on a bare move but go through a cap_mode
                that returns NO_ACT and never touches the hover fields, so the
                hover test alone would freeze them until button-release. */
-            if (g_launch_open || UI.hot_win != ohw || UI.hot_wi != ohi ||
-                UI.popup_hot != oph || UI.drag_active || UI.cap_mode != UI_CAP_NONE)
+            if (g_launch_open || g_pop_open || UI.hot_win != ohw ||
+                UI.hot_wi != ohi || UI.popup_hot != oph ||
+                UI.drag_active || UI.cap_mode != UI_CAP_NONE)
                 real = 1;
         }
     }
@@ -3293,8 +3847,16 @@ static int pump_input(void)
        is under the pointer - the opposite of what a context gesture should do. */
     { int left = mb & 1, right = (mb >> 1) & 1;
       if (left && !(lastb & 1)) {                     /* press */
-          int hit = (!g_desk_lock && point_on_desktop(mx, my))
-                    ? desk_icon_at(mx, my) : -1;
+          int hit;
+          /* a press anywhere but ON the popover dismisses it, and is swallowed
+             - the same "one click closes the menu" every context menu has. */
+          if (g_pop_open &&
+              (mx < g_pop.r.x || mx >= g_pop.r.x + g_pop.r.w ||
+               my < g_pop.r.y || my >= g_pop.r.y + g_pop.r.h)) {
+              pop_close(); lastb = mb; return 1;    /* 1 = "repaint the scene" */
+          }
+          hit = (!g_desk_lock && point_on_desktop(mx, my))
+                ? desk_icon_at(mx, my) : -1;
           any = 1; real = 1;
           if (hit >= 0) {                             /* begin a drag */
               g_drag_icon = hit;
@@ -3306,6 +3868,7 @@ static int pump_input(void)
           } else {
               memset(&ev, 0, sizeof ev);
               ev.kind = UI_EV_MOUSE_DOWN; ev.x = mx; ev.y = my; feed(&ev);
+              wm_group_drag();      /* a group grab: baseline BEFORE it moves */
           }
       } else if (!left && (lastb & 1)) {              /* release */
           any = 1; real = 1;
@@ -3335,10 +3898,23 @@ static int pump_input(void)
               ev.kind = UI_EV_MOUSE_UP; ev.x = mx; ev.y = my; feed(&ev);
           }
       }
-      /* right-press on bare desktop: the launcher, at the pointer */
+      /* Right-press: the context gesture. The title-bar and taskbar tests come
+         BEFORE the desktop one - a right-click on a window used to fall through
+         to "not the desktop, do nothing". */
       if (right && !((lastb >> 1) & 1)) {
-          if (point_on_desktop(mx, my)) { launcher_at(mx, my); any = 1; real = 1; }
-          else if (g_launch_open)       { toggle_launcher();   any = 1; real = 1; }
+          any = 1; real = 1;
+          if (g_pop_open) pop_close();          /* a second right-click re-aims */
+          if (my >= FB_H - TASKH) {             /* the taskbar */
+              int a = tb_chip_app_at(mx - g_task.r.x);
+              if (a >= 0) pop_window_menu(a, mx, my);
+              else        pop_task_menu(mx, my);   /* blank bar / tray / Start */
+          } else {
+              int a = win_titlebar_app_at(mx, my);
+              if (a >= 0)                        pop_window_menu(a, mx, my);
+              else if (point_on_desktop(mx, my)) launcher_at(mx, my);
+              else if (g_launch_open)            toggle_launcher();
+              else                               { any = 0; real = 0; }
+          }
       }
       lastb = mb;
     }
@@ -3359,6 +3935,7 @@ static int pump_input(void)
             continue;
         }
 #endif
+        if (g_pop_open && scan == 0x17) { pop_close(); continue; }   /* Esc */
         /* the switcher owns the keyboard while it is up: Esc cancels, the
            arrows step it, and every other key falls through to commit-on-tick */
         if (g_sw_open) {
@@ -3520,7 +4097,19 @@ static int pump_input(void)
        entry point we could hook. Sampling the front app once per pump is
        cheap and catches every route (click, action, module raise). Skipped
        while the switcher is up - its own window would otherwise take slot 0. */
-    if (!g_sw_open) { int fa = wm_focused_app(); if (fa >= 0) wm_note_focus(fa); }
+    if (!g_sw_open) {
+        int fa = wm_focused_app();
+        if (fa >= 0) {
+            /* the SAME sample drives phase F's group raise: a link group comes
+               up as a set when one of its windows takes focus. Only on a real
+               change of front app, and never mid-drag - raising rewrites the
+               z-list under a live capture (wm_raise_group repairs cap_win, but
+               there is no reason to churn it every frame). */
+            int changed = !g_nmru || g_mru[0] != fa;
+            wm_note_focus(fa);
+            if (changed && UI.cap_mode == UI_CAP_NONE) wm_raise_group(fa);
+        }
+    }
     /* 0 = nothing; 1 = something changed, full repaint; 2 = cursor moved only,
        present recomposites the cursor without the full-scene painter. */
     return real ? 1 : (any ? 2 : 0);
@@ -3633,20 +4222,46 @@ static unsigned long long drag_cyc_now(void) { return 0; }
  * focused app window at all - which would blank the taskbar's active chip for
  * the whole drag, since the snapshot is taken once - so focused_app() is told
  * to keep naming it. */
+/* the windows a live drag lifts: the dragged one plus, when it belongs to a
+ * link group, every member of that set - they all move, so they must all be
+ * missing from the snapshot and all be repainted per frame. Bottom-to-top z
+ * order, which is also the order they are repainted in. */
+static unoui_window *g_dragset[NAPPS];
+static int g_ndragset;
+
+static void drag_set_build(unoui_window *dw)
+{
+    int a = -1, i, k, set[NAPPS], n;
+    g_ndragset = 0;
+    if (!dw) return;
+    for (i = 0; i < NAPPS; i++) if (&g_win[i] == dw) { a = i; break; }
+    if (a < 0 || !g_group[a]) { g_dragset[g_ndragset++] = dw; return; }
+    n = wm_group_set(a, set);
+    for (k = 0; k < UI.nwin; k++)
+        for (i = 0; i < n; i++)
+            if (UI.win[k] == &g_win[set[i]] && !g_parked[set[i]])
+                { g_dragset[g_ndragset++] = UI.win[k]; break; }
+}
+
 static void drag_scene_without(unoui_window *win)
 {
-    int i, k = -1, ofocus = UI.focus_win;
-    if (!win) { unoui_render_ui(&UI); return; }
-    for (i = 0; i < UI.nwin; i++) if (UI.win[i] == win) { k = i; break; }
-    if (k < 0) { unoui_render_ui(&UI); return; }
+    unoui_window *save[UNOUI_MAX_WINDOWS], *fw;
+    int nsave = UI.nwin, ofocus = UI.focus_win, i, j, keep = 0;
+    if (!win || !g_ndragset) { unoui_render_ui(&UI); return; }
     for (i = 0; i < NAPPS; i++) if (&g_win[i] == win) { g_hidden_app = i; break; }
-    for (i = k; i < UI.nwin - 1; i++) UI.win[i] = UI.win[i + 1];
-    UI.nwin--;
-    if (UI.focus_win > k)       UI.focus_win--;
-    else if (UI.focus_win == k) UI.focus_win = -1;
+    fw = (ofocus >= 0 && ofocus < nsave) ? UI.win[ofocus] : 0;
+    for (i = 0; i < nsave; i++) save[i] = UI.win[i];
+    for (i = 0; i < nsave; i++) {
+        for (j = 0; j < g_ndragset; j++) if (save[i] == g_dragset[j]) break;
+        if (j < g_ndragset) continue;                  /* lifted for this pass */
+        UI.win[keep++] = save[i];
+    }
+    UI.nwin = keep;
+    UI.focus_win = -1;
+    if (fw) for (i = 0; i < keep; i++) if (UI.win[i] == fw) { UI.focus_win = i; break; }
     unoui_render_ui(&UI);
-    for (i = UI.nwin; i > k; i--) UI.win[i] = UI.win[i - 1];
-    UI.win[k] = win; UI.nwin++;
+    for (i = 0; i < nsave; i++) UI.win[i] = save[i];
+    UI.nwin = nsave;
     UI.focus_win = ofocus;
     g_hidden_app = -1;
 }
@@ -3809,6 +4424,30 @@ static void drag_top_put(unoui_rect r)
     fb_blit(u.x, u.y, u.w, u.h, g_dragtop, u.w);
 }
 
+/* ---- a link group on the cached drag path (phase F) ------------------------
+ * The pixel cache above holds ONE window, and the grabbed one is the window
+ * worth caching: it is the one under the pointer and the one that moves every
+ * frame. A set's other members move by the same delta but are otherwise
+ * ordinary, so they are simply repainted - one extra window paint per peer,
+ * which is the same honest cost model phase A measured for the drag itself.
+ * They go down FIRST so the grabbed window stays on top of its own set, which
+ * is the z-order wm_raise_group() established before the drag began. */
+static void drag_paint_peers(unoui_window *dw)
+{
+    int k;
+    for (k = 0; k < g_ndragset; k++)
+        if (g_dragset[k] != dw) unoui_render_window(&UI, g_dragset[k]);
+}
+
+/* Pinned chrome goes back over EVERY member's rect: with a set, a peer can be
+ * under the taskbar while the grabbed window is nowhere near it, and
+ * drag_top_put() early-outs on exactly that test. */
+static void drag_top_put_set(void)
+{
+    int k;
+    for (k = 0; k < g_ndragset; k++) drag_top_put(g_dragset[k]->r);
+}
+
 /* the legacy app index currently in front (fullscreen or focused), or -1 */
 static int active_legacy(void)
 {
@@ -3835,6 +4474,7 @@ int main(void)
     UI.live_drag = 1;
     set_workarea();                     /* windows clamp/maximize inside the bar */
     unoui_icon_art = pc64_icon_art;     /* distinct per-app icon artwork */
+    unoui_win_badge = shell_win_badge;  /* the link-group dot in a title bar */
     unoui_wallpaper = pc64_wallpaper_paint;  /* Control Panel wallpaper picker */
     unoui_font_push = uno_font_push;    /* per-window font overrides (Editor doc font) */
     unoui_font_pop  = uno_font_pop;
@@ -3995,8 +4635,10 @@ int main(void)
         if (g_open[APP_UNOAMP]) { void unoamp_tick(void); unoamp_tick(); }
                                        /* the same pull, through the plugin
                                         graph: decode -> DSP -> sink */
-        if (g_launch_open) {            /* Start-menu hover highlight + scroll */
-            int mx, my, mb; uno_pc64_mouse(&mx, &my, &mb); launcher_hover(mx, my);
+        if (g_launch_open || g_pop_open) {   /* menu hover highlight + scroll */
+            int mx, my, mb; uno_pc64_mouse(&mx, &my, &mb);
+            if (g_launch_open) launcher_hover(mx, my);
+            if (g_pop_open)    pop_hover(mx, my);
         }
         sw_tick();                      /* Alt-Tab: the release edge + timer   */
         la = active_legacy();           /* drive the focused game/tool clock */
@@ -4030,18 +4672,20 @@ int main(void)
                     unoui_render_ui(&UI);
                     UI.drag_active = 1;
                 } else {
+                    drag_set_build(dw);          /* the window, or its whole set */
                     drag_scene_without(dw);      /* ...or without the window   */
                 }
                 uno_pc64_scene_save();
                 if (UI.drag_active) unoui_draw_drag_outline(&UI);
                 else if (dw)      { /* the fb still holds the scene WITHOUT the
-                                       dragged window: exactly the state both
+                                       dragged set: exactly the state both
                                        caches want to be taken from. */
                                     drag_top_take(UI.cap_win);
                                     unoui_draw_snap_preview(&UI);
+                                    drag_paint_peers(dw);
                                     unoui_render_window(&UI, dw);
                                     drag_cache_take(dw);
-                                    drag_top_put(dw->r); }
+                                    drag_top_put_set(); }
                 uno_pc64_present();
                 g_dirty = 0;
             } else if (g_dirty) {                /* the drag moved */
@@ -4054,6 +4698,7 @@ int main(void)
                 if (UI.drag_active) unoui_draw_drag_outline(&UI);
                 else if (dw)      {
                     unoui_draw_snap_preview(&UI);
+                    drag_paint_peers(dw);          /* a link group moves as one */
                     if (!drag_blit_window(dw)) {   /* cache unusable: the slow
                                                       way, and re-take it (the
                                                       window resized when the
@@ -4061,7 +4706,7 @@ int main(void)
                         unoui_render_window(&UI, dw);
                         drag_cache_take(dw);
                     }
-                    drag_top_put(dw->r);
+                    drag_top_put_set();
                 }
                 drag_paint_note(drag_cyc_now() - t1);
                 uno_pc64_present();
@@ -4073,6 +4718,7 @@ int main(void)
         } else {
             if (was_dragging) {                  /* drag ended: full repaint to
                                                     commit shadows + occlusion */
+                g_ndragset = 0;
                 g_dirty = 1;
                 drag_cache_drop();               /* content is live again */
                 drag_top_drop();
@@ -4163,6 +4809,10 @@ void pc64_dbg_wm_snap(int snap)   { wm_snap(wm_focused_app(), snap); }
 void pc64_dbg_wm_showdesk(void)   { wm_show_desktop(); }
 void pc64_dbg_wm_min(void)        { minimize_app(wm_focused_app()); }
 void pc64_dbg_wm_restore(int a)   { restore_app(a); }
+/* phase F: the stress driver exercises the real layout machinery, not a copy */
+void pc64_dbg_wm_tile(void)       { wm_tile(); }
+void pc64_dbg_wm_cascade(void)    { wm_cascade(); }
+void pc64_dbg_wm_group(int a, int g) { wm_group_join(a, g); }
 int  pc64_dbg_wm_parked(int a)    { return (a >= 0 && a < NAPPS) ? g_parked[a] : 0; }
 int  pc64_dbg_wm_mods(void)       { return uno_pc64_mods(); }
 void pc64_dbg_wm_desk(int n)      { wm_desk_switch(n); }
