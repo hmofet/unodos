@@ -18,7 +18,8 @@
 #include "uefi.h"
 #include "string.h"
 #include "installer.h"
-#include "unostorage.h"     /* shared CRC-32, and the native GPT/ESP authoring */
+#include "unostorage.h"
+#include "bootinfo.h"    /* which firmware started us - picks the disk shape */     /* shared CRC-32, and the native GPT/ESP authoring */
 #include "blkdev.h"         /* native disks, once the firmware is gone         */
 #include "pc64_fs.h"
 #include "fat.h"
@@ -475,14 +476,81 @@ static int nat_install_esp(target *t, unsigned char *buf, long cap,
     return 1;
 }
 
+/* ---- the legacy-BIOS target -------------------------------------------------
+ * A BIOS machine boots from a partition table it can read (MBR) and a boot
+ * chain in raw sectors before the first partition. GPT is not an option here
+ * and not merely unhelpful: its primary header sits at LBA 1 and its entry
+ * array at LBA 2-33, which is exactly where stage2 goes. A disk is one shape
+ * or the other.
+ *
+ * The chain travels WITH the system, staged at \BOOT\ by tools/mkbios.py, and
+ * stage2 is shipped already patched with the sector count and entry address of
+ * the kernel sitting beside it. So this reads three files and writes three
+ * runs of sectors; there is no PE parsing here and no arithmetic that could
+ * disagree with the image builder's.
+ * ------------------------------------------------------------------------ */
+static int bios_write_chain(uno_bdev *b, int src, unsigned char *buf, long cap,
+                            void (*progress)(int, const char *))
+{
+    long bl, sl, kl;
+    unsigned char *bootp, *stagep, *kernp;
+    /* 512 + 8 KiB + the kernel; the caller's buffer is 4 MiB and the kernel is
+     * ~2 MiB, so all three fit with room, but check rather than trust. */
+    long need;
+
+    if (progress) progress(85, "Writing the boot chain");
+
+    bl = uno_fs_size(src, "BOOT\\BOOT.BIN");
+    sl = uno_fs_size(src, "BOOT\\STAGE2.BIN");
+    kl = uno_fs_size(src, "BOOT\\UNODOS.SYS");
+    if (bl <= 0 || sl <= 0 || kl <= 0) {
+        /* Not an error worth failing the install over: the disk is already a
+         * complete, UEFI-bootable system. Say what is missing and what it
+         * costs, because "installed fine" and "will not boot on the machine
+         * you installed it for" must not look the same. */
+        err("no \\BOOT chain on this system - the disk is UEFI-bootable "
+            "but NOT BIOS-bootable");
+        return 0;
+    }
+    need = 512 + sl + kl;
+    if (need > cap) { err("boot chain too large for the copy buffer"); return 0; }
+
+    bootp  = buf;
+    stagep = bootp + 512;
+    kernp  = stagep + sl;
+    if (uno_fs_read(src, "BOOT\\BOOT.BIN",   bootp,  512) != 512 ||
+        uno_fs_read(src, "BOOT\\STAGE2.BIN", stagep, sl)  != sl  ||
+        uno_fs_read(src, "BOOT\\UNODOS.SYS", kernp,  kl)  != kl) {
+        err("could not read the \\BOOT chain");
+        return 0;
+    }
+    if (!unostorage_write_bootchain(b, bootp, 512, stagep, (unsigned long)sl,
+                                    kernp, (unsigned long)kl)) {
+        err("writing the boot chain failed");
+        return 0;
+    }
+    return 1;
+}
+
 static int nat_install_disk(target *t, unsigned char *buf, long cap,
                             void (*progress)(int, const char *))
 {
     uno_bdev *b = (uno_bdev *)t->bdev;
-    int nv, v, src = -1, dst = -1, files;
+    int nv, v, src = -1, dst = -1, files, bios;
+
+    /* WHICH SHAPE. A machine that booted from a BIOS must produce a disk a
+     * BIOS can boot, and that means MBR plus a raw boot chain - see
+     * bios_write_chain(). A UEFI boot keeps authoring GPT exactly as before;
+     * changing that was not asked for and GPT is what UEFI machines expect.
+     *
+     * The MBR shape is in fact the more capable of the two - its partition is
+     * typed 0xEF, so the disk boots either firmware - but it is only chosen
+     * where it is necessary rather than everywhere it would work. */
+    bios = uno_pc64_bootinfo() != 0;
 
     if (progress) progress(5, "Preparing the disk");
-    if (!unostorage_prepare_esp(b, "UNODOS")) {
+    if (!(bios ? unostorage_prepare_mbr(b, "UNODOS")
+               : unostorage_prepare_esp(b, "UNODOS"))) {
         err("prepare failed (too small / read-only?)");
         return 0;
     }
@@ -500,7 +568,14 @@ static int nat_install_disk(target *t, unsigned char *buf, long cap,
     files = uno_fs_copytree(src, dst, buf, cap, &g_nat_bytes);
     if (files < 0) { err("clone failed"); return 0; }
     uno_fat_sync();
-    if (progress) progress(100, "Done (removable-path boot - detached)");
+
+    /* The chain goes down AFTER the tree, so a disk is never left claiming to
+     * be bootable before the system it would boot is actually on it. */
+    if (bios && !bios_write_chain(b, src, buf, cap, progress)) return 0;
+    uno_fat_sync();
+
+    if (progress) progress(100, bios ? "Done (BIOS + UEFI bootable)"
+                                     : "Done (removable-path boot - detached)");
     return files > 0;
 }
 

@@ -64,6 +64,41 @@ int unostorage_gpt_finalize_clone(unostorage_dev *d);
  * NOTE: destructive - every byte on the disk is lost. */
 int unostorage_prepare_esp(uno_bdev *dev, const char *label);
 
+/* ---- the legacy-BIOS shape -------------------------------------------------
+ * A BIOS machine boots from a disk with NO GPT: an MBR whose boot sector holds
+ * our first-stage code, a reserved run of raw sectors carrying stage2 and the
+ * kernel, and one FAT32 partition after it typed 0xEF - an EFI System
+ * Partition, which is what makes the same disk bootable by UEFI firmware too.
+ * The layout matches tools/mkbios.py exactly, because a disk this authors and
+ * an image that builds must be interchangeable.
+ *
+ *     LBA 0        boot sector + MBR partition table
+ *     LBA 1..16    stage2
+ *     LBA 17..     the kernel (UNODOS.SYS), loaded verbatim to 0x100000
+ *     LBA 16384..  the FAT32 volume
+ */
+#define UNOSTORAGE_BIOS_RESERVED  16384u    /* 8 MiB, matches mkbios.py */
+#define UNOSTORAGE_BIOS_STAGE2_LBA    1u
+#define UNOSTORAGE_BIOS_STAGE2_SECS  16u
+#define UNOSTORAGE_BIOS_KERNEL_LBA   17u
+
+/* Author the MBR + FAT32 volume above and format it.  The disk is left
+ * bootable by UEFI (the 0xEF partition) but NOT yet by a BIOS - the boot chain
+ * goes down separately, so a failure to find it cannot leave a half-written
+ * boot sector on a disk that was about to be fine.
+ * NOTE: destructive - every byte on the disk is lost.  1 on success. */
+int unostorage_prepare_mbr(uno_bdev *dev, const char *label);
+
+/* Lay the boot chain into the reserved area of a disk prepared above.
+ * `boot` must be exactly 512 bytes; its last 66 bytes (partition table +
+ * signature) are IGNORED and replaced with what is already on the disk, so
+ * writing the chain can never destroy the partition table that was just
+ * authored.  Returns 1 on success. */
+int unostorage_write_bootchain(uno_bdev *dev,
+                               const unsigned char *boot, unsigned long boot_len,
+                               const unsigned char *stage2, unsigned long stage2_len,
+                               const unsigned char *kernel, unsigned long kernel_len);
+
 /* Read back the first ESP partition's LBA range + unique GUID from the GPT
  * (for authoring a boot entry that targets it).  1 if found. */
 int unostorage_find_esp(unostorage_dev *d, unsigned long long *first,

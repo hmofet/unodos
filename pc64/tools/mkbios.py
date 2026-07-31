@@ -159,6 +159,23 @@ def main() -> int:
     kern_sectors = (len(kernel) + SECTOR - 1) // SECTOR
     patch(stage2, kern_sectors, entry)
 
+    # STAGE THE PATCHED CHAIN ON THE VOLUME, for the on-device installer.
+    #
+    # `Install` cannot author a BIOS-bootable disk out of nothing: it needs the
+    # boot sector, stage2 and the kernel as bytes. Shipping the ALREADY-PATCHED
+    # stage2 is what keeps that simple - the patch (sector count + PE entry
+    # address) is computed here, from the very kernel being shipped beside it,
+    # so the installer copies three blobs to three LBAs and has no parsing to
+    # get wrong. It also means a UEFI-booted machine can install a
+    # BIOS-bootable disk, since the chain travels with the tree rather than
+    # having to be recovered from the disk we happen to have booted.
+    if esp_dir and os.path.isdir(esp_dir):
+        bootdir = os.path.join(esp_dir, "BOOT")
+        os.makedirs(bootdir, exist_ok=True)
+        open(os.path.join(bootdir, "BOOT.BIN"), "wb").write(bytes(boot))
+        open(os.path.join(bootdir, "STAGE2.BIN"), "wb").write(bytes(stage2))
+        open(os.path.join(bootdir, "UNODOS.SYS"), "wb").write(kernel)
+
     img = bytearray()
     img += boot
     img += stage2.ljust(STAGE2_SECTORS * SECTOR, b"\0")
