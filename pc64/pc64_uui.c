@@ -1905,6 +1905,11 @@ static int point_on_desktop(int x, int y)
 #define SW_ICON   32
 #define SW_PAD    8
 #define SW_COMMIT_TICKS 48                 /* ~0.8 s at the shell's ~60 Hz loop */
+#define SW_STALE_TICKS  180                /* ~3 s: a latch that never sees the
+                                              Alt release must not strand the
+                                              overlay on screen forever. Long
+                                              enough that a genuine hold-and-
+                                              read is never cut short.         */
 
 static unoui_window g_sw;                  /* the overlay window (bare + top)  */
 static int   g_sw_open, g_sw_sel, g_sw_n, g_sw_timer, g_sw_alt;
@@ -2009,7 +2014,14 @@ static void sw_step(int back, int alt)
 static void sw_tick(void)
 {
     if (!g_sw_open) return;
-    if (g_sw_alt && !(uno_pc64_mods() & UI_MOD_ALT)) { sw_commit(); return; }
+    if (g_sw_alt) {
+        /* held-to-browse: the overlay stays up for as long as Alt reads down,
+           so stepping and reading the strip is unhurried. The long backstop is
+           purely for a firmware latch that never sees the release. */
+        if (!(uno_pc64_mods() & UI_MOD_ALT)) { sw_commit(); return; }
+        if (++g_sw_timer >= SW_STALE_TICKS) sw_commit();
+        return;
+    }
     if (++g_sw_timer >= SW_COMMIT_TICKS) sw_commit();
 }
 

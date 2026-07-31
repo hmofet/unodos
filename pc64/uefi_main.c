@@ -1121,6 +1121,19 @@ void uno_pc64_init(void)
             if (EFI_ERROR(gBS->HandleProtocol(gST->ConsoleInHandle, &exGuid,
                                               (void **)&gKeyEx)))
                 gKeyEx = 0;
+            /* Ask for PARTIAL keystrokes (UEFI's "key state exposed"). They
+             * carry no character, so the key stream ignores them - but they
+             * are the only report a modifier going UP ever generates, and
+             * without them Alt-held/Alt-released is indistinguishable while
+             * attached. Best-effort: firmware that refuses simply keeps the
+             * pre-existing behaviour, and the poll drain is budgeted, so
+             * firmware that over-reports cannot spin the loop. */
+            if (gKeyEx && gKeyEx->SetState) {
+                typedef EFI_STATUS (*SETST_FN)(EFI_SIMPLE_TEXT_INPUT_EX_PROTOCOL *,
+                                               UINT8 *);
+                UINT8 ts = EFI_TOGGLE_STATE_VALID | EFI_KEY_STATE_EXPOSED;
+                ((SETST_FN)gKeyEx->SetState)(gKeyEx, &ts);
+            }
         }
     } else {
         splash_step(2, "native drivers");
