@@ -383,12 +383,47 @@ findings contradict this spec (e.g. Ex KeyState unreliable on a real
 firmware), record the finding in `pc64/METAL-FINDINGS.md` and adapt; the
 spec's fallback-first keybinding rule exists precisely for that case.
 
+## 13. Corrections learned in flight (read before phases C, E, F)
+
+Recorded from the phases that have run. These override the sections above.
+
+1. **QEMU is keyboard-only in emulation** (`pc64/DEVELOPMENT.md:169`: OVMF
+   ships no pointer driver). Any gate step described here as a click or a
+   drag either needs a detached boot, where pc64 drives the i8042 aux port
+   itself (`pc64_native.c`), or is **metal-only** and must be documented as
+   such rather than quietly skipped. Phase C's snap-preview gate is entirely
+   pointer-driven - plan for this before writing it.
+2. **Detach is disabled by default in the debug build** (`build.sh:98`,
+   finding F8). Use `UNO_DETACH=1`. Production detaches under QEMU.
+   §6's "the harness's existing detach flow covers this" was wrong.
+3. **No Pillow in this tree.** Diff raw PPM in memory, stdlib only
+   (`tools/ppm2png.py` exists for conversion). Phase D's `wm_d` is the
+   worked example; reuse its `key_evt` / `tap` / `grab` / `diff_frac`
+   helpers rather than writing parallel ones.
+4. **The harness GOP mode is 1280x800**, not the 640x480 the pre-existing
+   `mouse` scenario's coordinates assume. Those coordinates are stale.
+5. **§4.2's pressed/hot states do not exist.** There is no `UI_F_*` hover
+   machinery for titlebar controls - the close box has none either, and the
+   shell only repaints when `hot_win`/`hot_wi` changes, so a hover highlight
+   would render stale. Phase B matched the close box (no states). Adding
+   hover means adding a repaint trigger too.
+6. **`unoui_metrics` needs explicit `0`s in opted-out themes**, not omitted
+   fields - positional initializers otherwise emit
+   `-Wmissing-field-initializers`.
+7. **The Start menu and calendar are ordinary non-BARE windows**, so they
+   now draw a min box and a disabled max box. Both actions correctly no-op,
+   but if that reads as wrong, unoui needs a "no titlebar controls" window
+   flag; phase F's badge hook is the natural place to add it.
+8. **`session_save()` cannot round-trip in QEMU**: it writes to the first
+   writable volume, which there is the volatile RAM disk. Persistence steps
+   in any gate are code-review-only until metal.
+
 ## Phase table (update as you land)
 
 | Phase | Contents | State |
 |---|---|---|
-| A | live drag, work area, double-click max, geometry persistence | NOT STARTED |
-| B | min/max buttons, shell minimize, parked chips | NOT STARTED |
+| A | live drag, work area, double-click max, geometry persistence | IN FLIGHT |
+| B | min/max buttons, shell minimize, parked chips | READY on `wm-b`, held for A |
 | C | pointer snap + previews + restore semantics | NOT STARTED |
 | D | mods byte, `next_key2`/`uno_pc64_mods`, Alt-Tab MRU switcher | **DONE** 2026-07-31 |
 | E | virtual desktops + pager + persistence | NOT STARTED |
