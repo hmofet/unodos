@@ -1248,6 +1248,48 @@ static void remove_win(unoui_window *win)
     UI.focus_wi = -1;
 }
 
+/* ---- MRU focus order (phase D) --------------------------------------------
+ * The Alt-Tab switcher steps app windows most-recently-focused first, which is
+ * what makes "Alt-Tab takes me back to what I was just doing" true. The stack
+ * holds app indices; slot 0 is the most recently focused. */
+static short g_mru[NAPPS];
+static int   g_nmru;
+
+static void wm_note_focus(int a)
+{
+    int i, j;
+    if (a < 0 || a >= NAPPS) return;
+    for (i = 0; i < g_nmru; i++) if (g_mru[i] == a) break;
+    if (g_nmru && i == 0) return;                   /* already the front       */
+    if (i >= g_nmru && g_nmru < NAPPS) g_nmru++;    /* new entry: grow, then
+                                                       shift; a full stack drops
+                                                       its oldest instead      */
+    for (j = (i < g_nmru ? i : g_nmru - 1); j > 0; j--) g_mru[j] = g_mru[j - 1];
+    g_mru[0] = (short)a;
+}
+
+/* Parked windows: an app that is still OPEN but whose window is out of the
+ * scene. Alt+D (show desktop) parks the set; phase B's minimize adopts this
+ * flag. A parked window is not in UI.win[], so raising it is a no-op - every
+ * route back to the app must unpark first, which open_app does. */
+static int g_parked[NAPPS];
+
+static void wm_unpark(int a)
+{
+    if (a < 0 || a >= NAPPS || !g_open[a] || !g_parked[a]) return;
+    g_parked[a] = 0;
+    unoui_ui_add(&UI, &g_win[a]);
+    raise_win(&g_win[a]);
+    g_dirty = 1;
+}
+static void wm_park(int a)
+{
+    if (a < 0 || a >= NAPPS || !g_open[a] || g_parked[a]) return;
+    remove_win(&g_win[a]);
+    g_parked[a] = 1;
+    g_dirty = 1;
+}
+
 /* the taskbar background: a bare window draws no chrome, so a non-interactive
  * canvas paints the bar face + top highlight under the buttons. */
 /* forward decls (taskbar events fire these, defined below) */
@@ -1717,7 +1759,8 @@ static void open_app(int a)
         else if (app_is_bridge(a))  unoapp_open(a - NNATIVE);    /* bridge app    */
         rebuild_taskbar();
         session_save();                 /* remember the open set for next boot */
-    } else raise_win(&g_win[a]);
+    } else if (g_parked[a]) wm_unpark(a);   /* show-desktop / minimize: back in */
+    else raise_win(&g_win[a]);
     if (g_launch_open) { remove_win(&g_launch); g_launch_open = 0; }  /* Start-menu closes */
     /* focus the opened window + its canvas (closing the launcher above moved
      * focus to the taskbar, so do this last). */
@@ -1734,6 +1777,7 @@ static void open_app(int a)
     /* native games scale to any rect, so they can fill the screen (Esc returns).
      * Bridge apps + the browser stay windowed (they draw at a fixed size). */
     if (app_game(a) >= 0) unoui_fullscreen(&UI, &g_win[a]);
+    wm_note_focus(a);                    /* MRU: this is now the front window */
     g_dirty = 1;
 }
 
@@ -1839,16 +1883,202 @@ static int point_on_desktop(int x, int y)
     return 1;
 }
 
-/* F2 / Ctrl-Tab: raise the next OPEN app window (skips desktop + taskbar) */
-static void cycle_window(void)
+/* ---- Alt-Tab window switcher (phase D) ------------------------------------
+ * A bare TOP overlay: a centred strip of icon+name cells, one per open app
+ * (parked ones included), in MRU order. Alt+Tab opens it and steps forward,
+ * Alt+Shift+Tab steps back, Esc cancels, and it COMMITS when Alt is released -
+ * uno_pc64_mods() dropping UI_MOD_ALT, polled once per frame.
+ *
+ * F2 and Ctrl-Tab drive the same overlay and the same MRU order. They are the
+ * fallback for every transport that cannot report Alt at all (USB HID until
+ * the usb lane exposes its boot-report modifier byte; firmware with no Ex
+ * KeyState), and they have no release edge, so they commit on a ~0.8 s timer
+ * after the last step. That timer also backstops the Alt path, whose firmware
+ * source is a per-keystroke LATCH and can read "still held" after the key is
+ * up; on native PS/2, where make and break are both tracked, the release edge
+ * always wins and the timer never fires.
+ *
+ * This replaces the old cycle_window(), which rotated blindly through the app
+ * table with no preview and no MRU. */
+#define SW_CELL_W 96
+#define SW_CELL_H 74
+#define SW_ICON   32
+#define SW_PAD    8
+#define SW_COMMIT_TICKS 48                 /* ~0.8 s at the shell's ~60 Hz loop */
+
+static unoui_window g_sw;                  /* the overlay window (bare + top)  */
+static int   g_sw_open, g_sw_sel, g_sw_n, g_sw_timer, g_sw_alt;
+static short g_sw_list[NAPPS];
+
+static int sw_cols(void) { return g_sw_n < 1 ? 1 : g_sw_n; }
+
+static void sw_draw(struct unoui_widget *w, unoui_rect r, void *ctx)
 {
-    int i, cur = -1;
-    if (UI.focus_win >= 0 && UI.focus_win < UI.nwin)
-        for (i = 0; i < NAPPS; i++) if (&g_win[i] == UI.win[UI.focus_win]) { cur = i; break; }
-    for (i = 1; i <= NAPPS; i++) {
-        int a = (cur + i) % NAPPS;
-        if (g_open[a]) { raise_win(&g_win[a]); g_dirty = 1; return; }
+    const unoui_theme *t = UI.theme;
+    int i, fh = fb_text_h();
+    (void)w; (void)ctx;
+    fb_fill_rect(r.x, r.y, r.w, r.h, t->pal.face);
+    fb_frame_rect(r.x, r.y, r.w, r.h, t->pal.dark);
+    for (i = 0; i < g_sw_n; i++) {
+        int a  = g_sw_list[i];
+        int cx = r.x + SW_PAD + i * SW_CELL_W, cy = r.y + SW_PAD;
+        int sel = (i == g_sw_sel);
+        const char *nm = app_short(a);
+        int tw = fb_text_w(nm), tx = cx + (SW_CELL_W - tw) / 2;
+        unoui_rect eb;
+        if (sel) {
+            fb_fill_rect(cx, cy, SW_CELL_W, SW_CELL_H, t->pal.accent);
+            fb_frame_rect(cx, cy, SW_CELL_W, SW_CELL_H, t->pal.dark);
+        }
+        eb.x = cx + (SW_CELL_W - SW_ICON) / 2; eb.y = cy + 8;
+        eb.w = SW_ICON; eb.h = SW_ICON;
+        if (app_icon(a) >= 0) pc64_icon_emblem(app_icon(a), eb);
+        if (tx < cx) tx = cx;
+        fb_text(tx, cy + SW_CELL_H - fh - 6, nm,
+                sel ? t->pal.accent_text : t->pal.text, -1);
     }
+}
+static unoui_canvas g_sw_cv = { sw_draw, 0, 0 };
+
+/* rebuild the candidate list: MRU order first, then any open app the MRU has
+ * not seen yet (apps opened before the stack existed, or restored windows). */
+static void sw_fill(void)
+{
+    int i, a;
+    g_sw_n = 0;
+    for (i = 0; i < g_nmru && g_sw_n < NAPPS; i++)
+        if (g_open[g_mru[i]]) g_sw_list[g_sw_n++] = g_mru[i];
+    for (a = 0; a < NAPPS && g_sw_n < NAPPS; a++) {
+        if (!g_open[a]) continue;
+        for (i = 0; i < g_sw_n; i++) if (g_sw_list[i] == a) break;
+        if (i == g_sw_n) g_sw_list[g_sw_n++] = (short)a;
+    }
+}
+
+static void sw_close(void)
+{
+    if (!g_sw_open) return;
+    remove_win(&g_sw);
+    g_sw_open = 0;
+    g_dirty = 1;
+}
+
+static void sw_commit(void)
+{
+    int a = (g_sw_sel >= 0 && g_sw_sel < g_sw_n) ? g_sw_list[g_sw_sel] : -1;
+    sw_close();
+    if (a >= 0 && g_open[a]) open_app(a);        /* raises, unparks, focuses */
+}
+
+/* one Alt+Tab (or F2 / Ctrl-Tab) press: open the overlay, or step it.
+ * `back` steps toward the older end; `alt` marks the caller as release-driven. */
+static void sw_step(int back, int alt)
+{
+    if (!g_sw_open) {
+        int ww, wh;
+        sw_fill();
+        if (g_sw_n < 1) return;
+        if (g_sw_n == 1) {                       /* nothing to switch TO      */
+            if (g_open[g_sw_list[0]]) open_app(g_sw_list[0]);
+            return;
+        }
+        ww = sw_cols() * SW_CELL_W + 2 * SW_PAD;
+        wh = SW_CELL_H + 2 * SW_PAD;
+        unoui_window_init(&g_sw, "", 0, 0, ww, wh);
+        g_sw.flags = UI_WIN_BARE | UI_WIN_TOP;
+        unoui_add_canvas(&g_sw, 0, 0, ww, wh, &g_sw_cv);
+        g_sw.r.x = (FB_W - ww) / 2;
+        g_sw.r.y = (FB_H - TASKH - wh) / 2;
+        if (g_sw.r.x < 0) g_sw.r.x = 0;
+        if (g_sw.r.y < 0) g_sw.r.y = 0;
+        if (!unoui_ui_add(&UI, &g_sw)) return;
+        g_sw_open = 1;
+        g_sw_alt  = alt;
+        g_sw_sel  = back ? g_sw_n - 1 : 1;       /* start on the PREVIOUS app */
+    } else {
+        g_sw_sel += back ? -1 : 1;
+        if (g_sw_sel < 0)        g_sw_sel = g_sw_n - 1;
+        if (g_sw_sel >= g_sw_n)  g_sw_sel = 0;
+        if (alt) g_sw_alt = 1;
+    }
+    g_sw_timer = 0;
+    g_dirty = 1;
+}
+
+/* polled once per frame: the release edge, and the no-release-edge timer */
+static void sw_tick(void)
+{
+    if (!g_sw_open) return;
+    if (g_sw_alt && !(uno_pc64_mods() & UI_MOD_ALT)) { sw_commit(); return; }
+    if (++g_sw_timer >= SW_COMMIT_TICKS) sw_commit();
+}
+
+/* ---- keyboard window commands (phase D) -----------------------------------
+ * Snap geometry is computed here against the shell's own work area. Phase C
+ * owns the pointer-driven snap and lands unoui_snap_apply()/unoui_snap_rect()
+ * over ui->work; when it does, this helper becomes a call into those and the
+ * local g_snap/g_snap_r state retires. Keeping it shell-local now is what lets
+ * the keybindings ship without waiting on another phase's branch. */
+enum { WM_SNAP_NONE = 0, WM_SNAP_MAX, WM_SNAP_L, WM_SNAP_R };
+static unsigned char g_snap[NAPPS];
+static unoui_rect    g_snap_r[NAPPS];
+
+static int wm_focused_app(void)
+{
+    int i;
+    if (UI.focus_win < 0 || UI.focus_win >= UI.nwin) return -1;
+    for (i = 0; i < NAPPS; i++)
+        if (UI.win[UI.focus_win] == &g_win[i] && g_open[i]) return i;
+    return -1;
+}
+
+static void wm_snap(int a, int snap)
+{
+    unoui_window *win;
+    unoui_rect wr, tr;
+    if (a < 0 || a >= NAPPS || !g_open[a] || g_parked[a]) return;
+    win = &g_win[a];
+    wr.x = 0; wr.y = 0; wr.w = FB_W; wr.h = FB_H - TASKH;
+    tr = wr;
+    switch (snap) {
+    case WM_SNAP_L: tr.w = wr.w / 2; break;
+    case WM_SNAP_R: tr.w = wr.w / 2; tr.x = wr.w - tr.w; break;
+    case WM_SNAP_MAX: break;
+    default:                                     /* restore */
+        if (g_snap[a]) { win->r = g_snap_r[a]; g_snap[a] = WM_SNAP_NONE;
+                         unoui_reflow_window(UI.theme, win); g_dirty = 1; }
+        return;
+    }
+    if (!g_snap[a]) g_snap_r[a] = win->r;        /* first snap keeps the origin */
+    if (win->flags & UI_WIN_RESIZE) {
+        win->r = tr;
+        unoui_reflow_window(UI.theme, win);
+    } else {                                     /* fixed layout: move only    */
+        win->r.x = tr.x + (tr.w - win->r.w) / 2;
+        win->r.y = tr.y + (tr.h - win->r.h) / 2;
+        if (win->r.x < tr.x) win->r.x = tr.x;
+        if (win->r.y < tr.y) win->r.y = tr.y;
+    }
+    g_snap[a] = (unsigned char)snap;
+    g_dirty = 1;
+}
+
+/* Alt+D: park every window ("show desktop"), and restore the same set on a
+ * repeat press. */
+static int g_showdesk;
+static void wm_show_desktop(void)
+{
+    int a, n = 0;
+    if (UI.full) { unoui_fullscreen(&UI, 0); UI.focus_wi = 0; }
+    if (g_launch_open) { remove_win(&g_launch); g_launch_open = 0; }
+    if (g_cal_open)    { remove_win(&g_cal);    g_cal_open = 0;    }
+    if (g_showdesk) {
+        for (a = 0; a < NAPPS; a++) if (g_parked[a]) wm_unpark(a);
+        g_showdesk = 0; g_dirty = 1; return;
+    }
+    for (a = 0; a < NAPPS; a++) if (g_open[a] && !g_parked[a]) { wm_park(a); n++; }
+    g_showdesk = n ? 1 : 0;
+    g_dirty = 1;
 }
 
 static void close_focused(void)
@@ -1863,6 +2093,7 @@ static void close_focused(void)
     for (i = 0; i < NAPPS; i++) if (&g_win[i] == win) {
         int g = app_game(i);
         g_open[i] = 0;
+        g_parked[i] = 0; g_snap[i] = WM_SNAP_NONE;   /* window-manager state dies with it */
         if (g >= 0)              pc64_game_close(g);        /* native game teardown */
         else if (i == APP_MUSIC) pc64_music_closed();       /* stop playback      */
         else if (i == EX_STUDIO) { if (g_studio && g_studio->closed) g_studio->closed(); }
@@ -2416,10 +2647,16 @@ void pc64_write_frame(void);
 static void rebuild_shell(void)
 {
     int a, wasopen[NAPPS];
+    sw_close();                        /* the overlay is sized in font-space */
+    g_showdesk = 0;
     if (g_launch_open) { remove_win(&g_launch); g_launch_open = 0; }
     if (g_cal_open)    { remove_win(&g_cal);    g_cal_open = 0; }
     for (a = 0; a < NAPPS; a++) {
         wasopen[a] = g_open[a];
+        /* everything below re-adds windows to the scene, so no window can stay
+           parked across a rebuild; a snapped rect is re-derived by the reopen */
+        if (g_parked[a]) { g_parked[a] = 0; if (a >= NNATIVE) unoui_ui_add(&UI, &g_win[a]); }
+        g_snap[a] = WM_SNAP_NONE;
         if (a < NNATIVE) {
             if (g_open[a]) { remove_win(&g_win[a]); g_open[a] = 0; }
             g_built[a] = 0;
@@ -2540,7 +2777,7 @@ static int feed(const unoui_event *ev)
 static int pump_input(void)
 {
     static int lastx = -1, lasty = -1, lastb = 0;
-    int mx, my, mb, scan, uni, ctrl, any = 0, real = 0;
+    int mx, my, mb, scan, uni, ctrl, mods, any = 0, real = 0;
     unoui_event ev;
 
     uno_pc64_mouse(&mx, &my, &mb);
@@ -2636,8 +2873,9 @@ static int pump_input(void)
       }
       lastb = mb;
     }
-    while (uno_pc64_next_key(&scan, &uni, &ctrl)) {
-        int mods = ctrl ? UI_MOD_CTRL : 0, vk = 0;
+    while (uno_pc64_next_key2(&scan, &uni, &mods)) {
+        int vk = 0;
+        ctrl = (mods & UI_MOD_CTRL) != 0;
         any = 1; real = 1;
 #ifdef UNO_DEBUG
         /* F12 = operator escape hatch: stop the stress driver and hand back a
@@ -2652,12 +2890,43 @@ static int pump_input(void)
             continue;
         }
 #endif
+        /* the switcher owns the keyboard while it is up: Esc cancels, the
+           arrows step it, and every other key falls through to commit-on-tick */
+        if (g_sw_open) {
+            if (scan == 0x17) { sw_close(); continue; }              /* Esc     */
+            if (scan == 0x03 && !(mods & UI_MOD_ALT)) { sw_step(0, 0); continue; }
+            if (scan == 0x04 && !(mods & UI_MOD_ALT)) { sw_step(1, 0); continue; }
+            if (uni == 0x0D || uni == 0x0A) { sw_commit(); continue; }
+        }
         if (UI.full && scan == 0x17) {          /* Esc leaves a fullscreen game */
             unoui_fullscreen(&UI, 0); UI.focus_wi = 0; g_dirty = 1; continue;
         }
         if (ctrl && scan == 0x17) { toggle_launcher(); continue; }               /* Ctrl-Esc: Start menu */
         if (ctrl && (uni == 'w' || uni == 'W' || uni == 0x17)) { close_focused(); continue; }  /* Ctrl-W */
-        if (scan == 0x0C || (ctrl && uni == 0x09)) { cycle_window(); continue; }  /* F2 / Ctrl-Tab */
+        /* Alt-Tab family. The Alt form commits on the release edge; F2 and
+           Ctrl-Tab are the ctrl-reachable fallback for keyboards whose
+           transport cannot report Alt, and commit on sw_tick()'s timer. */
+        if ((mods & UI_MOD_ALT) && uni == 0x09)
+            { sw_step((mods & UI_MOD_SHIFT) != 0, 1); continue; }
+        if (scan == 0x0C || (ctrl && uni == 0x09))
+            { sw_step((mods & UI_MOD_SHIFT) != 0, 0); continue; }   /* F2 / Ctrl-Tab */
+        /* Alt window commands. Every one of these is reachable another way
+           (the titlebar, the taskbar chip, Ctrl-W), because a USB keyboard
+           reports no Alt at all until the usb lane's modifier byte lands. */
+        if ((mods & UI_MOD_ALT) && !(mods & UI_MOD_CTRL)) {
+            int fa  = wm_focused_app();
+            int cur = (fa >= 0) ? g_snap[fa] : WM_SNAP_NONE;
+            if (scan == 0x01)                                         /* Alt+Up    */
+                { wm_snap(fa, cur == WM_SNAP_MAX ? WM_SNAP_NONE : WM_SNAP_MAX); continue; }
+            if (scan == 0x04) { wm_snap(fa, WM_SNAP_L); continue; }   /* Alt+Left  */
+            if (scan == 0x03) { wm_snap(fa, WM_SNAP_R); continue; }   /* Alt+Right */
+            if (scan == 0x02) {                                       /* Alt+Down  */
+                if (cur != WM_SNAP_NONE) wm_snap(fa, WM_SNAP_NONE);
+                else                     wm_park(fa);
+                continue;
+            }
+            if (uni == 'd' || uni == 'D') { wm_show_desktop(); continue; }
+        }
         /* Editor accelerators (Ctrl-S/O/N, B/I/U, X/C/V, A, F...) - only when
            the Editor window is in front; pc64_write.c owns the mapping. */
         if (ctrl && !g_launch_open && !UI.full && g_open[APP_EDIT] &&
@@ -2750,6 +3019,12 @@ static int pump_input(void)
         if (vk) { ev.kind = UI_EV_KEY; ev.key = vk; ev.mods = mods; feed(&ev); }
         else if (uni >= 32 && uni < 127) { ev.kind = UI_EV_CHAR; ev.ch = uni; feed(&ev); }
     }
+    /* MRU: a pointer click that changed the front window has to reach the
+       switcher's order too, and clicks land through unoui, not through a shell
+       entry point we could hook. Sampling the front app once per pump is
+       cheap and catches every route (click, action, module raise). Skipped
+       while the switcher is up - its own window would otherwise take slot 0. */
+    if (!g_sw_open) { int fa = wm_focused_app(); if (fa >= 0) wm_note_focus(fa); }
     /* 0 = nothing; 1 = something changed, full repaint; 2 = cursor moved only,
        present recomposites the cursor without the full-scene painter. */
     return real ? 1 : (any ? 2 : 0);
@@ -3004,6 +3279,7 @@ int main(void)
         if (g_launch_open) {            /* Start-menu hover highlight + scroll */
             int mx, my, mb; uno_pc64_mouse(&mx, &my, &mb); launcher_hover(mx, my);
         }
+        sw_tick();                      /* Alt-Tab: the release edge + timer   */
         la = active_legacy();           /* drive the focused game/tool clock */
         { int g = (la >= 0) ? app_game(NNATIVE + la) : -1;
           if (g >= 0) { pc64_game_tick(g); g_dirty = 1; unoapp_focus(-1); }  /* native game */
@@ -3110,4 +3386,12 @@ void pc64_dbg_mark_dirty(void) { g_dirty = 1; }
  * route): the launcher for the malformed text/markup/html fuzz corpus. */
 void pc64_dbg_open_path(const char *path)
 { pc64_browser_open_path(path); g_dirty = 1; }
+/* window-manager verbs, same rule: the stress driver and the harness drive the
+ * REAL switcher / snap / show-desktop machinery, not a private shadow of it. */
+void pc64_dbg_wm_switch(int back) { sw_step(back, 0); }
+void pc64_dbg_wm_commit(void)     { sw_commit(); }
+int  pc64_dbg_wm_switching(void)  { return g_sw_open; }
+void pc64_dbg_wm_snap(int snap)   { wm_snap(wm_focused_app(), snap); }
+void pc64_dbg_wm_showdesk(void)   { wm_show_desktop(); }
+int  pc64_dbg_wm_mods(void)       { return uno_pc64_mods(); }
 #endif /* UNO_DEBUG */
