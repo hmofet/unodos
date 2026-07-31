@@ -1055,6 +1055,7 @@ void uno_pc64_init(void)
     uno_dbg_check("init:audio");
     uno_snd_init();                 /* PCM audio: HD Audio / AC'97 if present */
     { void unoamp_out_init(void); unoamp_out_init(); }
+    { void unoamp_in_init(void);  unoamp_in_init();  }
                                     /* UnoAmp: register the built-in sinks and
                                        pick one, now that the probe has run */
     splash_stage(3, 0);
