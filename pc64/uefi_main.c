@@ -1054,6 +1054,9 @@ void uno_pc64_init(void)
     splash_stage(3, "audio (HD Audio / AC'97)");
     uno_dbg_check("init:audio");
     uno_snd_init();                 /* PCM audio: HD Audio / AC'97 if present */
+    { void unoamp_out_init(void); unoamp_out_init(); }
+                                    /* UnoAmp: register the built-in sinks and
+                                       pick one, now that the probe has run */
     splash_stage(3, 0);
     dbg_puts(uno_snd_active() ? "snd: pcm device up\n" : "snd: pc speaker\n");
     splash_step(4, "starting up");  /* ready - the bar fills, core takes over */
