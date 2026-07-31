@@ -390,6 +390,6 @@ spec's fallback-first keybinding rule exists precisely for that case.
 | A | live drag, work area, double-click max, geometry persistence | NOT STARTED |
 | B | min/max buttons, shell minimize, parked chips | NOT STARTED |
 | C | pointer snap + previews + restore semantics | NOT STARTED |
-| D | mods byte, `next_key2`/`uno_pc64_mods`, Alt-Tab MRU switcher | NOT STARTED |
+| D | mods byte, `next_key2`/`uno_pc64_mods`, Alt-Tab MRU switcher | **DONE** 2026-07-31 |
 | E | virtual desktops + pager + persistence | NOT STARTED |
 | F | link groups, tile/cascade, context menu, taskbar overflow | NOT STARTED |
