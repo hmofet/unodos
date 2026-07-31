@@ -395,6 +395,14 @@ void          unoui_render_ui(unoui_ui *);
  * exactly as unoui_render_ui would. Lets a platform repaint just the window
  * that moved over a snapshot of the rest of the scene - the live-drag path. */
 void          unoui_render_window(unoui_ui *, unoui_window *win);
+/* Draw ONLY a window's chrome (shadow, frame, title bar, buttons, resize grip)
+ * - no widget pass. Honours the caller's fb clip. A window's widgets cannot
+ * change while it is being dragged, so a platform can cache its rendered
+ * pixels once and blit them per frame; what a MOVE really invalidates is the
+ * translucent perimeter (drop shadow, anti-aliased corners), which is
+ * composited against whatever is behind it. Clip to that perimeter and call
+ * this. No-op on a UI_WIN_BARE window, which has no chrome. */
+void          unoui_render_window_chrome(unoui_ui *, unoui_window *win);
 /* Optional per-window draw profiler (a debug harness sets it; NULL = free).
  * Called with begin=1 before a window's chrome+widgets draw and begin=0
  * after; the fullscreen canvas path reports the same way. The toolkit has no
