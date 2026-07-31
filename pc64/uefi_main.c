@@ -407,7 +407,11 @@ static void splash_draw(int done)
     /* wordmark + subtitle */
     { const char *t = "UnoDOS"; int tw = fb_text_w(t) * sc;
       fb_big_text(cx - tw / 2, H / 2 - 46, t, FB_RGB(255,255,255), -1, sc); }
-    { const char *s = "Modern PC world  -  x86-64 UEFI";
+    /* Which firmware started this machine. The same hardcoded "UEFI" the
+     * System window carried until phase C - and the splash is the FIRST thing
+     * a user sees, so it is the first chance to be wrong. */
+    { const char *s = gBI ? "Modern PC world  -  x86-64 legacy BIOS"
+                          : "Modern PC world  -  x86-64 UEFI";
       fb_text(cx - fb_text_w(s) / 2, H / 2 + 6, s, FB_RGB(150,170,225), -1); }
     { const char *s = "pc64   -   UnoDOS 3.1";
       fb_text(cx - fb_text_w(s) / 2, H / 2 + 22, s, FB_RGB(110,130,185), -1); }
