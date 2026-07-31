@@ -178,4 +178,16 @@ int unoamp_register_out(const unoamp_out *o);
 int unoamp_out_count(void);
 const unoamp_out *unoamp_out_at(int i);
 
+/* ---- input plugins (phase 2) ---------------------------------------------- */
+void unoamp_in_init(void);
+int  unoamp_register_in(const unoamp_in *in);
+int  unoamp_in_count(void);
+const unoamp_in *unoamp_in_at(int i);
+const unoamp_in *unoamp_playing(void);
+/* Pick a decoder for a name: content sniff first, extension list second. */
+const unoamp_in *unoamp_find_in(const char *fn);
+/* Open decoder + check the sink can carry it. 1 = playing, 0 = *why says no. */
+int  unoamp_play(int vol, const char *fn, const char **why);
+void unoamp_stop(void);
+
 #endif /* PC64_UNOAMP_H */
