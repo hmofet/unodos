@@ -11,11 +11,16 @@ into shots/*.png at each step.
                                 keyboard pass: SysInfo, Clock, Notepad
                                 (typing), Dostris (playing) - a shot each.
   python3 harness.py boot       boot -> desktop shot only.
+  python3 harness.py wm_a       WM phase A gate (live drag, double-click
+                                maximize, per-app geometry across a reboot).
+  python3 harness.py wm_d       WM phase D gate (Alt-Tab, snap, show desktop).
 """
 import json, os, socket, subprocess, sys, time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 os.chdir(HERE)
+sys.path.insert(0, os.path.join(HERE, "tools"))
+import ppm2png                                # read_ppm/write_png, stdlib only
 
 OVMF_CODE = "/usr/share/OVMF/OVMF_CODE_4M.fd"
 OVMF_VARS = "/usr/share/OVMF/OVMF_VARS_4M.fd"
@@ -73,10 +78,71 @@ def text(q, s):
         time.sleep(0.1)
 
 
+# An absolute pointer's axes are normalised 0..32767 over the WHOLE guest
+# display, so a click scripted in screen pixels has to know the LIVE GOP mode.
+# These divisors were hardcoded 640x480 while the shell boots 1280x800 under
+# OVMF: every scripted mouse coordinate landed at half scale, so a drag aimed
+# at a title bar quietly hit bare desktop and everything downstream "passed" by
+# dragging nothing. probe_screen() reads the real mode off a screendump header.
+#
+# SCALE is the present path's integer zoom: the shell renders a 640x400
+# framebuffer and blits it doubled into the 1280x800 mode, so a screendump
+# pixel is NOT a guest framebuffer pixel and pointer deltas (which are in
+# framebuffer pixels) have to be divided by it.
+SCREEN_W, SCREEN_H, SCALE = 640, 480, 1
+
+
+def probe_scale(img, wh):
+    """Detect the present path's integer zoom from the pixels themselves: a
+    doubled frame is exactly 2x2-blocky. Requires real variation in the sample
+    so a blank screen cannot answer "any scale you like"."""
+    w, h = wh
+    def pix(x, y):
+        i = (y * w + x) * 3
+        return img[i], img[i + 1], img[i + 2]
+    for s in (4, 3, 2):
+        if w % s or h % s:
+            continue
+        ok, seen = True, set()
+        for y in range(0, h - s, 29):
+            for x in range(0, w - s, 31):
+                bx, by = x - x % s, y - y % s
+                base = pix(bx, by)
+                seen.add(base)
+                for dy in range(s):
+                    for dx in range(s):
+                        if pix(bx + dx, by + dy) != base:
+                            ok = False
+                            break
+                    if not ok:
+                        break
+                if not ok:
+                    break
+            if not ok:
+                break
+        if ok and len(seen) > 8:
+            return s
+    return 1
+
+
+def probe_screen(q):
+    global SCREEN_W, SCREEN_H, SCALE
+    ppm = "shots/_probe.ppm"
+    q.cmd("screendump", filename=ppm)
+    time.sleep(0.4)
+    w, h, rgb = ppm2png.read_ppm(ppm)
+    os.remove(ppm)
+    SCREEN_W, SCREEN_H = w, h
+    SCALE = probe_scale(rgb, (w, h))
+    print("screen: %dx%d (guest fb %dx%d, zoom %dx)"
+          % (w, h, w // SCALE, h // SCALE, SCALE))
+    return w, h
+
+
 def mouse_move(q, x, y):
     q.cmd("input-send-event", events=[
-        {"type": "abs", "data": {"axis": "x", "value": int(x * 32767 / 640)}},
-        {"type": "abs", "data": {"axis": "y", "value": int(y * 32767 / 480)}}])
+        {"type": "abs", "data": {"axis": "x", "value": int(x * 32767 / SCREEN_W)}},
+        {"type": "abs", "data": {"axis": "y", "value": int(y * 32767 / SCREEN_H)}}])
     time.sleep(0.1)
 
 
@@ -139,8 +205,6 @@ FRAMES = {}
 
 def grab(q, tag):
     """screendump + convert (as shot()) and remember the raw RGB for diffing."""
-    sys.path.insert(0, os.path.join(HERE, "tools"))
-    import ppm2png
     ppm = "shots/%s.ppm" % tag
     q.cmd("screendump", filename=ppm)
     time.sleep(0.4)
@@ -171,6 +235,229 @@ def diff_frac(tag_a, tag_b, box):
                     abs(ra[i + 2] - rb[i + 2])) > 24:
                 n += 1
     return n / float((r - l) * (b - t))
+
+
+# diff_frac answers "did this region change"; a drag test also has to answer
+# "WHERE is the window now", so these give the bounding box of what changed and
+# the geometry helpers that go with it. Same rule: only ever between two frames
+# of the same run.
+
+def in_any(rects, x, y):
+    for r in rects or ():
+        if r[0] <= x < r[0] + r[2] and r[1] <= y < r[1] + r[3]:
+            return True
+    return False
+
+
+def diff_bbox(tag_a, tag_b, thresh=24, ignore=None):
+    """Bounding box (x, y, w, h) of the pixels that differ between two grabbed
+    frames, or None. `ignore` is a list of rects that always change and would
+    otherwise swallow the answer: the taskbar (its clock ticks) and, in a debug
+    build, the perf HUD across the top."""
+    wa, ha, ra = FRAMES[tag_a]
+    wb, hb, rb = FRAMES[tag_b]
+    if (wa, ha) != (wb, hb):
+        return None
+    xs0, ys0, xs1, ys1 = wa, ha, -1, -1
+    for y in range(0, ha, 2):                     # every other row: 4x cheaper
+        row = y * wa * 3
+        for x in range(0, wa, 2):
+            i = row + x * 3
+            if (abs(ra[i] - rb[i]) + abs(ra[i + 1] - rb[i + 1]) +
+                    abs(ra[i + 2] - rb[i + 2])) < thresh:
+                continue
+            if in_any(ignore, x, y):
+                continue
+            if x < xs0: xs0 = x
+            if x > xs1: xs1 = x
+            if y < ys0: ys0 = y
+            if y > ys1: ys1 = y
+    if xs1 < 0:
+        return None
+    return (xs0, ys0, xs1 - xs0 + 1, ys1 - ys0 + 1)
+
+
+def uniform(tag, x, y, bw, bh, thresh=24):
+    """Is every pixel of this box the same colour as its top-left? True over
+    bare wallpaper (the gradient moves far less than `thresh` across a small
+    box), false over an icon, a label or window chrome."""
+    w, h, img = FRAMES[tag]
+    if x < 0 or y < 0 or x + bw > w or y + bh > h:
+        return False
+    i0 = (y * w + x) * 3
+    r0, g0, b0 = img[i0], img[i0 + 1], img[i0 + 2]
+    for yy in range(y, y + bh, 2):
+        row = yy * w * 3
+        for xx in range(x, x + bw, 2):
+            i = row + xx * 3
+            if (abs(img[i] - r0) + abs(img[i + 1] - g0) +
+                    abs(img[i + 2] - b0)) >= thresh:
+                return False
+    return True
+
+
+def find_bare(tag, y0, y1, need=200):
+    """The centre of the widest run of columns that is bare wallpaper across the
+    whole band y0..y1: where a miss-test drag can press without touching a
+    window or a desktop icon.
+
+    A point merely "clear of the artwork" is not good enough - a desktop icon's
+    clickable CELL is far wider than the glyph and label drawn in it, so a press
+    in the blank part of a cell still launches the app. A run at least `need` px
+    wide cannot be a gap between icons in one column, so it is past the grid."""
+    w, h, _ = FRAMES[tag]
+    nb = w // 8
+    bare = [True] * nb
+    for xb in range(nb):
+        for y in range(y0, y1 - 8, 8):
+            if not uniform(tag, xb * 8, y, 8, 8):
+                bare[xb] = False
+                break
+    best, run = None, 0
+    for xb in range(nb + 1):
+        if xb < nb and bare[xb]:
+            run += 1
+            continue
+        if run * 8 >= need and (best is None or run * 8 > best[1]):
+            best = ((xb - run) * 8, run * 8)
+        run = 0
+    if not best:
+        return None
+    return best[0] + best[1] // 2, (y0 + y1) // 2
+
+
+def win_title_y(desk_tag, open_tag, box, probe=90):
+    """Offset from box[1] to a row that is really inside the title bar.
+
+    A window's diff bbox starts at the top of its soft DROP SHADOW, several
+    pixels above the frame, so "box[1] + a constant" aims the drag above the
+    window and grabs the desktop instead - which is how a drag test silently
+    turns into a no-op. Walk down the window's centre column to the first row
+    that is both opaque (differs from the wallpaper) and stable (the same colour
+    a few rows lower), i.e. the title bar's fill."""
+    w, h, desk = FRAMES[desk_tag]
+    _, _, win = FRAMES[open_tag]
+    x = box[0] + box[2] // 2
+    for dy in range(0, probe):
+        y = box[1] + dy
+        if y + 12 >= h:
+            break
+        i = (y * w + x) * 3
+        j = ((y + 6) * w + x) * 3
+        if (abs(win[i] - desk[i]) + abs(win[i + 1] - desk[i + 1]) +
+                abs(win[i + 2] - desk[i + 2])) < 24:
+            continue                            # still wallpaper
+        if (win[i] == win[j] and win[i + 1] == win[j + 1] and
+                win[i + 2] == win[j + 2]):
+            return dy + 8                       # inside the bar, clear of its edge
+    return 14
+
+
+def noise_bands():
+    """Rects that differ between any two frames whatever the windows did: the
+    taskbar (clock) and, in a debug build, the perf HUD across the top."""
+    return [(0, SCREEN_H - 64, SCREEN_W, 64), (0, 0, SCREEN_W, 40)]
+
+
+def quiet_debug_cfg():
+    """Disarm the fuzz driver for the duration of a UI scenario.
+
+    `UNO_DEBUG=1 ./build.sh` stages a DEBUG.CFG onto the ESP, and the mere
+    PRESENCE of that file arms pc64_stress.c, which opens and closes apps at
+    random from the shell's own main loop. A window-management test cannot tell
+    that apart from a bug in itself - the first run of wm_a had Studio launch
+    mid-drag - so the scenario rewrites the file with `nostress` rather than
+    hoping. The kernel log and the drag-frame cycle report are unaffected."""
+    p = "build/esp/DEBUG.CFG"
+    if os.path.exists(p):
+        with open(p, "w") as f:
+            f.write("nostress\nnoshutdown\nnonet\n")
+        print("DEBUG.CFG: stress driver disarmed for this scenario")
+
+
+class Mouse:
+    """The machine's PS/2 mouse - the only pointer that can express a DRAG in
+    QEMU, so build the image for it:
+
+        UNO_DETACH=1 UNO_DEBUG=1 ./build.sh        (and pointer="none")
+
+    Three pointer paths were tried before this one, and the first two cannot
+    carry a drag at all:
+
+    * firmware AbsolutePointer + usb-tablet (what mouse_move/click script, and
+      what the M4 scenario has always used): this OVMF carries no USB pointer
+      driver, so the guest never sees the tablet. Every scripted click in that
+      scenario goes nowhere, silently - which is what alive() exists to catch.
+    * native USB HID + usb-mouse (-DUNO_USBHID_TEST): enumerates, and the cursor
+      tracks, but a HELD button does not survive. A boot-protocol mouse reports
+      only on change, and uno_usb_hid_mouse_poll() returns 0 for the button on
+      every frame with no report, so the shell sees press-release-press instead
+      of a hold and the drag commits before it starts. The PS/2 path latches the
+      button (`gMBtn`, pc64_native.c) and does not have this bug; a request to
+      the usb lane to latch the USB one is filed in UNOAUTOMATE-REQUESTS.md.
+    * PS/2, after detach: latched buttons, real drags. Used here.
+
+    Deltas are guest framebuffer pixels 1:1 (poll_pointer adds them straight to
+    the cursor), so this class tracks the cursor itself and works in SCREENDUMP
+    coordinates, dividing by SCALE on the way out. Position is re-established by
+    slamming into the top-left corner, which the guest clamps."""
+
+    STEP = 100                                  # per event; the PS/2 packet is a signed byte
+
+    def __init__(self, q):
+        self.q = q
+        self.x = self.y = 0
+        self.home()
+
+    def _rel(self, dx, dy):
+        self.q.cmd("input-send-event", events=[
+            {"type": "rel", "data": {"axis": "x", "value": dx}},
+            {"type": "rel", "data": {"axis": "y", "value": dy}}])
+        time.sleep(0.05)
+
+    def home(self):
+        n = max(SCREEN_W, SCREEN_H) // SCALE // self.STEP + 2
+        for _ in range(n):
+            self._rel(-self.STEP, -self.STEP)
+        self.x = self.y = 0
+        time.sleep(0.2)
+
+    def to(self, sx, sy):
+        """Move to a SCREENDUMP coordinate (absolute), in steps a packet can
+        carry."""
+        gx, gy = int(sx) // SCALE, int(sy) // SCALE
+        while gx != self.x or gy != self.y:
+            dx = max(-self.STEP, min(self.STEP, gx - self.x))
+            dy = max(-self.STEP, min(self.STEP, gy - self.y))
+            self._rel(dx, dy)
+            self.x += dx
+            self.y += dy
+        time.sleep(0.1)
+
+    def btn(self, down):
+        self.q.cmd("input-send-event", events=[
+            {"type": "btn", "data": {"down": down, "button": "left"}}])
+        time.sleep(0.12)
+
+    def park(self):
+        """Sit in the ignored taskbar band, so the composited cursor is never
+        itself the thing a diff finds."""
+        self.to(SCREEN_W - 4, SCREEN_H - 4)
+        time.sleep(0.3)
+
+    def alive(self):
+        """Prove the guest is really tracking this device before any scenario
+        asserts on a drag."""
+        self.home()
+        time.sleep(0.4)
+        grab(self.q, "_ptr_a")
+        self.to(SCREEN_W // 2, SCREEN_H // 2)
+        time.sleep(0.4)
+        grab(self.q, "_ptr_b")
+        moved = diff_bbox("_ptr_a", "_ptr_b", ignore=noise_bands()) is not None
+        for t in ("_ptr_a", "_ptr_b"):
+            os.remove("shots/%s.png" % t)
+        return moved
 
 
 REQUIRE_EDGE = os.environ.get("WM_REQUIRE_EDGE", "0") != "0"
@@ -301,11 +588,163 @@ def wm_d(q):
     return 0 if not fails else 1
 
 
-def main():
-    rc = [0]
-    subprocess.run(["cp", OVMF_VARS, "build/vars.fd"], check=True)
-    if os.path.exists(QMP_SOCK):
-        os.remove(QMP_SOCK)
+def wm_a():
+    """Gate A: a drag MOVES the window (no rubber band), a double-click on the
+    title bar maximizes and restores, and the geometry survives a reboot.
+
+    Needs a pointer that can hold a button down, so build for the PS/2 one:
+        UNO_DETACH=1 UNO_DEBUG=1 ./build.sh && python3 harness.py wm_a
+    (the Mouse class documents why nothing else in QEMU can drag). It owns its
+    QEMU instances because the last assertion is about a POWER CYCLE."""
+    fails = []
+
+    def check(name, ok, detail=""):
+        print("  %-44s %s %s" % (name, "PASS" if ok else "FAIL", detail))
+        if not ok:
+            fails.append(name)
+
+    try:
+        os.remove("build/esp/SHELL.CFG")       # deterministic first boot
+    except OSError:
+        pass
+    quiet_debug_cfg()
+    dropbox = None
+    qemu, q = start_qemu(log="build/wm_a1.log", pointer="none")
+    try:
+        print("wm_a: boot 1")
+        time.sleep(18)
+        probe_screen(q)
+        band = noise_bands()
+        m = Mouse(q)
+        check("the guest has a pointer", m.alive(), "(needs UNO_DETACH=1)")
+        if fails:
+            raise SystemExit("wm_a: no pointer in the guest - nothing to drag")
+        m.park()
+        q.cmd("send-key", keys=[{"type": "qcode", "data": "ctrl"},
+                                {"type": "qcode", "data": "w"}])
+        time.sleep(1.5)                        # the restored Control Panel has
+        grab(q, "wm_a_00_desktop")             # focus at boot: that closed it
+
+        # ---- miss-test 1: press and drag on bare wallpaper with nothing open.
+        # NOTHING may change. This is the check that catches a mis-scaled
+        # pointer (it would land on a desktop icon and launch it); without it
+        # every drag assertion below can pass by dragging thin air.
+        bare = find_bare("wm_a_00_desktop", int(SCREEN_H * 0.15), SCREEN_H - 70)
+        check("found bare wallpaper to miss with", bare is not None, str(bare))
+        if bare:
+            mx, my = bare
+            m.to(mx, my); m.btn(True)
+            for i in range(1, 8):
+                m.to(mx, my + i * 16)
+            m.btn(False)
+            m.park()
+            grab(q, "wm_a_01_miss_desktop")
+            mb = diff_bbox("wm_a_00_desktop", "wm_a_01_miss_desktop", ignore=band)
+            check("drag on bare desktop changed nothing", mb is None, str(mb))
+
+        start_app(q, 1, wait=2.5)              # menu order = app order: Editor
+        m.park()
+        grab(q, "wm_a_02_editor_open")
+        box = diff_bbox("wm_a_00_desktop", "wm_a_02_editor_open", ignore=band)
+        check("Editor window opened",
+              box is not None and box[2] > 100 and box[3] > 80, str(box))
+        if box is None:
+            raise SystemExit("wm_a: no Editor window - nothing to drag")
+        title_in = win_title_y("wm_a_00_desktop", "wm_a_02_editor_open", box)
+
+        # ---- miss-test 2: the same gesture a few rows LOWER, in the document
+        # body, must not move the window. A pointer off by a title bar's height
+        # would move it, and this is the only assertion that can tell "the drag
+        # works" from "the drag is aimed too high".
+        cx = box[0] + box[2] // 2
+        m.to(cx, box[1] + title_in + 140); m.btn(True)
+        for i in range(1, 8):
+            m.to(cx + i * 25, box[1] + title_in + 140)
+        m.btn(False)
+        m.park()
+        grab(q, "wm_a_03_miss_body")
+        mb2 = diff_bbox("wm_a_00_desktop", "wm_a_03_miss_body", ignore=band)
+        check("a drag in the window BODY did not move it",
+              mb2 is not None and abs(mb2[0] - box[0]) <= 8 and
+              abs(mb2[2] - box[2]) <= 8, str(mb2))
+
+        # ---- the live drag ---------------------------------------------------
+        tb_y = box[1] + title_in
+        dx, steps = 200, 10
+        m.to(cx, tb_y)
+        m.btn(True)
+        for i in range(1, steps // 2 + 1):
+            m.to(cx + i * (dx // steps), tb_y)
+        grab(q, "wm_a_04_mid_drag")            # button STILL DOWN
+        midbox = diff_bbox("wm_a_00_desktop", "wm_a_04_mid_drag", ignore=band)
+        for i in range(steps // 2 + 1, steps + 1):
+            m.to(cx + i * (dx // steps), tb_y)
+        m.btn(False)
+        m.park()
+        grab(q, "wm_a_05_dropped")
+        dropbox = diff_bbox("wm_a_00_desktop", "wm_a_05_dropped", ignore=band)
+
+        half = dx // 2
+        check("window moved DURING the drag",
+              midbox is not None and
+              half * 0.6 <= midbox[0] - box[0] <= half * 1.4,
+              "%s vs %s" % (midbox, box))
+        # a rubber-band drag paints the window AND an outline offset from it, so
+        # its changed region is much wider than one window
+        check("mid-drag frame holds ONE window, no outline",
+              midbox is not None and abs(midbox[2] - box[2]) <= 24, str(midbox))
+        check("drop committed the move",
+              dropbox is not None and dx * 0.85 <= dropbox[0] - box[0] <= dx * 1.15,
+              str(dropbox))
+
+        # ---- double-click the title bar: maximize, then restore -------------
+        m.to(cx + dx, tb_y)
+        for _ in range(2):
+            m.btn(True); m.btn(False)
+        time.sleep(0.8)
+        m.park()
+        grab(q, "wm_a_06_maximized")
+        maxbox = diff_bbox("wm_a_00_desktop", "wm_a_06_maximized", ignore=band)
+        check("double-click filled the work area",
+              maxbox is not None and maxbox[2] >= SCREEN_W * 0.92 and
+              maxbox[1] <= 44, str(maxbox))
+
+        m.to(SCREEN_W // 2, title_in)          # the maximized bar sits at y=0
+        for _ in range(2):
+            m.btn(True); m.btn(False)
+        time.sleep(0.8)
+        m.park()
+        grab(q, "wm_a_07_restored")
+        rbox = diff_bbox("wm_a_00_desktop", "wm_a_07_restored", ignore=band)
+        check("second double-click restored the rect",
+              rbox is not None and dropbox is not None and
+              abs(rbox[0] - dropbox[0]) <= 8 and abs(rbox[2] - dropbox[2]) <= 8,
+              str(rbox))
+        time.sleep(1.0)                        # let SHELL.CFG reach the disk
+    finally:
+        stop_qemu(qemu, q)
+
+    # ---- reboot: the window comes back where it was dragged to --------------
+    qemu, q = start_qemu(log="build/wm_a2.log", pointer="none")
+    try:
+        print("wm_a: boot 2 (session restore)")
+        time.sleep(18)
+        probe_screen(q)
+        grab(q, "wm_a_08_after_reboot")
+        abox = diff_bbox("wm_a_00_desktop", "wm_a_08_after_reboot",
+                         ignore=noise_bands())
+        check("reopened at the dragged position",
+              abox is not None and dropbox is not None and
+              abs(abox[0] - dropbox[0]) <= 8 and abs(abox[1] - dropbox[1]) <= 8,
+              "%s vs %s" % (abox, dropbox))
+    finally:
+        stop_qemu(qemu, q)
+
+    print("wm_a: %s" % ("PASS" if not fails else "FAIL " + ", ".join(fails)))
+    return 0 if not fails else 1
+
+
+def qemu_argv(extra=None, log="build/ovmf.log", pointer="tablet"):
     # Storage: a vvfat view of build/esp by default (no image build needed).
     # vvfat's read-write mode corrupts multi-cluster WRITES, though, so tests
     # that write on-device (Studio build-and-run of a larger app) set UNO_DISK
@@ -317,12 +756,48 @@ def main():
         "-drive", "if=pflash,format=raw,readonly=on,file=" + OVMF_CODE,
         "-drive", "if=pflash,format=raw,file=build/vars.fd",
         "-drive", disk_arg,
-        "-device", "qemu-xhci", "-device", "usb-tablet",
+        "-device", "qemu-xhci",
         "-nic", "none",
         "-display", "none",
         "-qmp", "unix:%s,server,nowait" % QMP_SOCK,
-        "-debugcon", "file:build/ovmf.log", "-global", "isa-debugcon.iobase=0x402",
+        "-debugcon", "file:" + log, "-global", "isa-debugcon.iobase=0x402",
     ]
+    # AT MOST ONE pointer device: QEMU routes an input event to whichever
+    # handler registered first, so two pointers means the motion and the clicks
+    # can land on different ones. "none" leaves only the machine's built-in
+    # PS/2 mouse, which is what the Mouse class drives.
+    if pointer != "none":
+        argv += ["-device", "usb-mouse" if pointer == "mouse" else "usb-tablet"]
+    return argv + (extra or [])
+
+
+def start_qemu(extra=None, log="build/ovmf.log", pointer="tablet"):
+    """Boot one QEMU and connect QMP. Returns (proc, Qmp). A scenario that needs
+    a REBOOT (session restore) calls this twice; build/esp is the same vvfat
+    tree both times, so what the guest wrote survives the power cycle."""
+    subprocess.run(["cp", OVMF_VARS, "build/vars.fd"], check=True)
+    if os.path.exists(QMP_SOCK):
+        os.remove(QMP_SOCK)
+    qemu = subprocess.Popen(qemu_argv(extra, log, pointer))
+    return qemu, Qmp(QMP_SOCK)
+
+
+def stop_qemu(qemu, q):
+    try:
+        q.cmd("quit")
+    except Exception:
+        qemu.kill()
+    qemu.wait(timeout=10)
+
+
+def main():
+    rc = [0]
+    if len(sys.argv) > 1 and sys.argv[1] == "wm_a":
+        return wm_a()                          # owns its own two QEMU boots
+    subprocess.run(["cp", OVMF_VARS, "build/vars.fd"], check=True)
+    if os.path.exists(QMP_SOCK):
+        os.remove(QMP_SOCK)
+    argv = qemu_argv()
     if len(sys.argv) > 1 and sys.argv[1] == "acpi":
         # unoacpi verification: inject the synthetic battery/lid SSDT (50%).
         # Build it first if needed:  iasl tools/testbat.asl
@@ -336,6 +811,7 @@ def main():
         q = Qmp(QMP_SOCK)
         print("qemu up; waiting for OVMF -> UnoDOS boot...")
         time.sleep(18)                        # OVMF + splash + first desktop paint
+        probe_screen(q)                       # mouse coords need the real mode
         shot(q, "m1_desktop")
 
         if len(sys.argv) > 1 and sys.argv[1] == "boot":
