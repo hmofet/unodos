@@ -21,6 +21,7 @@
 #include "uefi.h"
 #include "fat.h"
 #include "blkdev.h"   /* uno_bdev.is_boot - which volume the telemetry belongs on */
+#include "bootinfo.h"  /* BIOS boot: PIT calibration + the real framebuffer */
 #include "pc64_fs.h"
 #include "pc64_native.h"
 #include "uno_debug.h"
@@ -1331,8 +1332,21 @@ void uno_dbg_envblock(void)
             dtw = 0, dth = 0, outw = 0, outh = 0;
         uno_pc64_dbg_display(&base, &w, &h, &stride, &pixfmt, &useblt,
                              &dtw, &dth, &outw, &outh);
-        env("gop: mode %dx%d stride %d pixfmt %d fb_base %llx present=%s\n",
-            w, h, stride, pixfmt, base, useblt ? "Blt (NO linear fb!)" : "linear");
+        /* "gop:" only on a machine that HAS a GOP. A BIOS boot's framebuffer
+         * came from VBE and lives in the boot info block; reporting it under a
+         * GOP heading with pixfmt -1 and fb_base 0 describes a protocol this
+         * machine never had, in the file someone reads to find out what the
+         * machine was. */
+        if (uno_pc64_bootinfo()) {
+            const uno_bootinfo *bi = uno_pc64_bootinfo();
+            env("vbe: mode %ux%u pitch %u bpp %u fb_base %x present=linear\n",
+                bi->fb_width, bi->fb_height, bi->fb_pitch, bi->fb_bpp,
+                bi->fb_addr);
+        } else {
+            env("gop: mode %dx%d stride %d pixfmt %d fb_base %llx present=%s\n",
+                w, h, stride, pixfmt, base,
+                useblt ? "Blt (NO linear fb!)" : "linear");
+        }
         env("desktop: %dx%d scaled to %dx%d\n", dtw, dth, outw, outh);
 
         /* the framebuffer cache attribute - the single biggest unmeasured
@@ -1544,11 +1558,19 @@ void uno_dbg_early(void *SystemTable)
         g_tsc_per_ms = (uno_native_rdtsc() - t0) / 10;
         if (!g_tsc_per_ms) g_tsc_per_ms = 1000000;
     } else {
-        /* BIOS boot: no Stall exists, and this runs before the PIT calibration
-         * in uno_pc64_init. A placeholder is correct rather than lazy - the
-         * only consumer this early is log timestamping, and init overwrites it
-         * with the measured value a moment later. */
-        g_tsc_per_ms = 1000000;
+        /* BIOS boot: no Stall to calibrate against, so measure the same way
+         * uno_pc64_init will - PIT channel 2, which needs nothing but port I/O
+         * and so works this early.
+         *
+         * This USED to plant a 1 GHz placeholder on the theory that init would
+         * overwrite it. It does not: init calls uno_native_tsc_set(), which is
+         * a different variable in a different file, and this one is never
+         * corrected. The symptom was quiet and thoroughly misleading - every
+         * log timestamp and the uptime in every report scaled by the ratio of
+         * the real clock to 1 GHz, on a machine whose reports are the whole
+         * reason the debug build exists. */
+        unsigned long long per_us = uno_bios_calibrate_tsc();
+        g_tsc_per_ms = per_us ? per_us * 1000ull : 1000000ull;
     }
     image_extent();
 

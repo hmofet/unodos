@@ -51,6 +51,12 @@ int uno_ahci_present(void);          /* controller found + brought up      */
 int uno_nvme_init(void);             /* registers its namespaces; returns count */
 int uno_nvme_present(void);          /* controller found + brought up      */
 
+/* ide.c - legacy ATA/IDE PIO, for hardware that predates AHCI or whose SATA
+ * controller is in compatibility mode. Probed LAST, so a machine that has both
+ * registers its AHCI disks first. */
+int uno_ide_init(void);              /* registers its drives; returns count */
+int uno_ide_present(void);
+
 /* sdhci.c */
 int uno_sdhci_init(void);            /* registers the eMMC/SD medium; count */
 int uno_sdhci_present(void);         /* controller found + brought up      */
