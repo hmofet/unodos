@@ -795,6 +795,18 @@ static unoui_action handle_inner(unoui_ui *ui, const unoui_event *ev)
                     a.kind = UI_ACT_CLOSE; a.value = ui->focus_win; return a;
                 }
             }
+            {   /* minimize / maximize boxes. Precedence is close, min, max,
+                 * then drag; an absent button has a zero-width rect, so a
+                 * theme that opted out can never be hit. The maximize box
+                 * still reports on a non-resizable window - it is drawn
+                 * disabled and the app ignores the action - so the click is
+                 * swallowed instead of starting a drag from the button. */
+                unoui_rect mb = unoui_titlebtn_rect(t, win, UI_TB_MIN);
+                unoui_rect xb = unoui_titlebtn_rect(t, win, UI_TB_MAX);
+                unoui_action a; a.changed = 1; a.id = 0; a.value = ui->focus_win;
+                if (pt_in(mb, ev->x, ev->y)) { a.kind = UI_ACT_MIN; return a; }
+                if (pt_in(xb, ev->x, ev->y)) { a.kind = UI_ACT_MAX; return a; }
+            }
             /* Double-click the title bar = maximize/restore. ui->ticks advances
              * on UI_EV_TICK, which a port feeds per frame (~60 Hz on pc64), so
              * 24 ticks is about 400 ms. The press is consumed: no drag starts,

@@ -1087,12 +1087,80 @@ int unoui_calendar_hit(unoui_rect r, int y, int m, int px, int py)
     return UI_CAL_NONE;
 }
 
+/* ---- title-bar window controls (the generic painter) ---------------------- *
+ * Themes opt in per button through unoui_metrics.minbox / .maxbox; the boxes
+ * themselves are drawn from the palette by ONE painter here, exactly like the
+ * resize grip, so no theme carries its own artwork. Layout: right-aligned
+ * [min][max], 4 px gaps, vertically centred in the title bar the same way the
+ * close box is. The hit-test (unoui_input.c) reads the same geometry, so a
+ * click always lands on the pixels that were drawn. */
+
+unoui_rect unoui_titlebtn_rect(const unoui_theme *t, const unoui_window *win, int which)
+{
+    unoui_rect r; int fw, th, sz, right;
+    r.x = r.y = r.w = r.h = 0;
+    if (!t || !win || (win->flags & UI_WIN_BARE)) return r;
+    fw = t->m.frame_w; th = t->m.title_h;
+    sz = (which == UI_TB_MIN) ? t->m.minbox : t->m.maxbox;
+    if (sz <= 0) return r;                    /* theme has no such button     */
+    right = win->r.x + win->r.w - fw - 4;
+    if (which == UI_TB_MIN && t->m.maxbox > 0) right -= t->m.maxbox + 4;
+    r.x = right - sz;
+    r.y = win->r.y + fw + (th - fw - sz) / 2;
+    r.w = r.h = sz;
+    return r;
+}
+
+/* one box: face fill, the theme's edge treatment, then a palette glyph */
+static void draw_title_btn(const unoui_theme *t, unoui_rect b, int which,
+                           int restore, int dis)
+{
+    fb_px g = dis ? t->pal.text_dim : t->pal.face_text;
+    unoui_rect in;
+    if (b.w <= 0) return;
+    fb_fill_rect(b.x, b.y, b.w, b.h, t->pal.face);
+    if (t->m.bevel > 0) in = ui_bevel(b, t, t->m.bevel, 1);
+    else {                                    /* flat themes get a hairline   */
+        fb_frame_rect(b.x, b.y, b.w, b.h, t->pal.shadow);
+        in.x = b.x + 1; in.y = b.y + 1; in.w = b.w - 2; in.h = b.h - 2;
+    }
+    if (in.w < 4 || in.h < 4) return;         /* too small to glyph honestly  */
+    if (which == UI_TB_MIN) {                 /* a bar along the bottom       */
+        fb_fill_rect(in.x + 1, in.y + in.h - 3, in.w - 2, 2, g);
+    } else if (!restore) {                    /* an empty frame = maximize    */
+        fb_frame_rect(in.x + 1, in.y + 1, in.w - 2, in.h - 2, g);
+        fb_hline(in.x + 1, in.y + 2, in.w - 2, g);     /* its own title bar   */
+    } else {                                  /* two frames = restore down    */
+        fb_frame_rect(in.x + 3, in.y, in.w - 3, in.h - 3, g);
+        fb_fill_rect (in.x, in.y + 3, in.w - 3, in.h - 3, t->pal.face);
+        fb_frame_rect(in.x, in.y + 3, in.w - 3, in.h - 3, g);
+        fb_hline     (in.x, in.y + 4, in.w - 3, g);
+    }
+}
+
+/* Draw whatever window controls this theme + window call for. Called from the
+ * shared per-window render path (and the static contact-sheet path) right
+ * after the title bar, so it paints over the theme's own chrome. */
+static void draw_title_buttons(const unoui_theme *t, const unoui_window *win)
+{
+    int nomax;
+    if (win->flags & UI_WIN_BARE) return;
+    /* a window that cannot resize cannot maximize: the box is drawn disabled
+     * (and the shell ignores the action it emits) rather than hidden, so the
+     * title bars of fixed-layout apps still line up with everybody else's. */
+    nomax = !(win->flags & UI_WIN_RESIZE);
+    draw_title_btn(t, unoui_titlebtn_rect(t, win, UI_TB_MIN), UI_TB_MIN, 0, 0);
+    draw_title_btn(t, unoui_titlebtn_rect(t, win, UI_TB_MAX), UI_TB_MAX,
+                   win->snap == UI_SNAP_MAX, nomax);
+}
+
 void unoui_render(unoui_window *win, const unoui_theme *t)
 {
     const unoui_draw *d = t->draw ? t->draw : &unoui_default_draw;
     int fw = t->m.frame_w, th = t->m.title_h, i;
     PICK(window)(t, win);
     PICK(titlebar)(t, win);
+    draw_title_buttons(t, win);
     fb_set_clip(win->r.x + fw, win->r.y + th, win->r.w - 2 * fw, win->r.h - th - fw);
     for (i = 0; i < win->nw; i++)
         draw_one(d, t, win, &win->w[i], win->w[i].flags, -1);
@@ -1149,6 +1217,7 @@ static void render_one_window(unoui_ui *ui, unoui_window *win, int wn)
          * are authored not to overflow win->r. */
         PICK(window)(t, win);
         PICK(titlebar)(t, win);
+        draw_title_buttons(t, win);
         /* widgets are confined to the content rect (the region d_window
          * fills below the titlebar) so an over-sized widget or a too-long
          * label is cut at the frame instead of spilling onto the desktop. */

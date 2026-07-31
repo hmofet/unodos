@@ -42,11 +42,12 @@ static void w_titlebar(const unoui_theme *t, const unoui_window *win)
     fb_fill_rect(bar.x, bar.y, bar.w, bar.h, bg);
     /* control-menu box at left (a "minus" in a box) */
     caption_btn(t, bar.x, cy, s, "-");
-    /* min / max at right */
-    caption_btn(t, r.x + r.w - 4 - s, cy, s, "\x18");          /* up arrow-ish */
-    caption_btn(t, r.x + r.w - 4 - 2*s - 1, cy, s, "\x19");
-    /* centred caption */
-    { unoui_rect c = { bar.x + s + 2, bar.y, bar.w - 2*s - 6, bar.h };
+    /* The min / max boxes at the right used to be painted here as decoration.
+     * They are real controls now: the generic painter draws them from
+     * m.minbox / m.maxbox and the same geometry is hit-tested. Only the
+     * caption's reserved width is still ours. */
+    { int res = 2*s + 12;                    /* space the two boxes occupy   */
+      unoui_rect c = { bar.x + s + 2, bar.y, bar.w - s - 2 - res, bar.h };
       ui_text_in(c, win->title, WIN_LIGHT, -1, 1); }
 }
 
