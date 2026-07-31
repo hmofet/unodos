@@ -26,6 +26,6 @@ const unoui_theme theme_next = {
     },
     { /* title_h */ 20, /* frame_w */ 2, /* bevel */ 2, /* pad */ 12,
       /* radius */ 0, /* closebox */ 12, /* shadow */ 0, /* title_center */ 1,
-      UNOUI_DEPTH_8 },
+      UNOUI_DEPTH_8, /* minbox */ 12, /* maxbox */ 12 },
     0   /* default painters */
 };

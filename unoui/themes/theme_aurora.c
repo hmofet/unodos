@@ -251,7 +251,8 @@ static const unoui_draw aurora_draw = {
 
 /* -------------------------------------------------------------- palettes */
 #define MET { /*title_h*/26, /*frame_w*/1, /*bevel*/0, /*pad*/12, /*radius*/9, \
-              /*closebox*/13, /*shadow_off*/6, /*title_center*/0, UNOUI_DEPTH_FULL }
+              /*closebox*/13, /*shadow_off*/6, /*title_center*/0, UNOUI_DEPTH_FULL, \
+              /*minbox*/13, /*maxbox*/13 }
 
 const unoui_theme theme_aurora_light = {
     "Aurora Light",

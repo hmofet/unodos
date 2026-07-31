@@ -113,6 +113,6 @@ const unoui_theme theme_win31 = {
     },
     { /* title_h */ 20, /* frame_w */ 4, /* bevel */ 1, /* pad */ 10,
       /* radius */ 0, /* closebox */ 0, /* shadow */ 0, /* title_center */ 1,
-      UNOUI_DEPTH_4 },
+      UNOUI_DEPTH_4, /* minbox */ 14, /* maxbox */ 14 },
     &win31_draw
 };

@@ -22,6 +22,6 @@ const unoui_theme theme_unodos = {
     },
     { /* title_h */ 18, /* frame_w */ 2, /* bevel */ 1, /* pad */ 10,
       /* radius */ 0, /* closebox */ 10, /* shadow */ 0, /* title_center */ 1,
-      UNOUI_DEPTH_FULL },
+      UNOUI_DEPTH_FULL, /* minbox */ 10, /* maxbox */ 10 },
     0   /* default painters */
 };

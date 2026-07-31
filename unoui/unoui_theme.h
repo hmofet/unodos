@@ -65,6 +65,13 @@ typedef struct {
     int shadow_off;     /* window drop-shadow offset (0 = none)              */
     int title_center;   /* 1 = centre title text, 0 = left-align             */
     unoui_depth depth;  /* target colour depth                               */
+    /* Title-bar window controls, drawn right-aligned by the GENERIC painter
+     * (unoui.c) so no theme needs its own artwork. 0 = this theme has no such
+     * button, which is also what every theme that never sets them reads: the
+     * theme structs use positional initialisers, so an appended field is 0 and
+     * the window keeps exactly today's chrome. */
+    int minbox;         /* minimize box size in px (0 = none)                */
+    int maxbox;         /* maximize/restore box size in px (0 = none)        */
 } unoui_metrics;
 
 struct unoui_theme;     /* fwd for the vtable signatures */
