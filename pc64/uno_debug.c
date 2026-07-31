@@ -20,6 +20,7 @@
 
 #include "uefi.h"
 #include "fat.h"
+#include "blkdev.h"   /* uno_bdev.is_boot - which volume the telemetry belongs on */
 #include "pc64_fs.h"
 #include "pc64_native.h"
 #include "uno_debug.h"
@@ -34,6 +35,9 @@ void uno_heap_stats(unsigned long *used, unsigned long *free_,
 void uno_pc64_ptr_status(int *nsimple, int *nabs, int *blocked);
 int  uno_pc64_time(int *y, int *mo, int *d, int *h, int *mi, int *s);
 int  uno_pc64_detached(void);
+/* the gate's verdict in words; "not evaluated" until try_detach() has run, so
+ * it also answers "is this env block from before or after the attempt?" */
+void uno_pc64_detach_status(int *blocked, int *stranded, const char **why);
 void uno_pc64_dbg_display(unsigned long long *base, int *w, int *h,
                           int *stride, int *pixfmt, int *useblt,
                           int *dtw, int *dth, int *outw, int *outh);
@@ -460,9 +464,51 @@ static void stash_report(int kind)
     st->h.crash_crc  = d_crc32(st->crash, (unsigned long)n);
 }
 
-/* pick (and cache) the FAT volume that holds CRASH\ - the boot volume in the
- * flasher's whole-disk layout.  Called from safe context at boot. */
+/* pick (and cache) the FAT volume that holds CRASH\.  Called from safe context
+ * at boot.
+ *
+ * A VOLUME INDEX IS NOT AN IDENTITY, and this function learned that the
+ * expensive way. It used to take "the first volume that has, or will accept, a
+ * CRASH dir", on the reasoning that the flasher's whole-disk layout leaves only
+ * one candidate. A machine with a second UnoDOS disk breaks that: the ZimaBlade
+ * has an internal install beside the stick it boots. Detach then re-orders the
+ * volumes - the firmware enumerated the stick first, the native block layer
+ * enumerates the eMMC first - so the post-detach telemetry pass selected a
+ * DIFFERENT disk from the pre-detach one and silently wrote nothing (the
+ * machine dir did not exist there; see crash_dir). The artifact left on the
+ * stick was therefore always the pre-detach copy, which reports `detached: 0`
+ * on a machine that had in fact detached. Every field of it describes a world
+ * the machine had already left.
+ *
+ * So the volume is chosen by IDENTITY, in three passes:
+ *
+ *   1. the same volume as last time, by BPB serial. Survives a remount, a
+ *      re-order, and the transport change underneath it.
+ *   2. the boot volume (`is_boot` on its backing device). Correct on the first
+ *      pass on every machine, since the firmware marks it by device path, and
+ *      still correct post-detach on a USB boot, which usbmsc re-marks.
+ *   3. anything that will hold a CRASH dir - the old behaviour, kept as the
+ *      last resort because telemetry on the wrong disk beats none at all.
+ *
+ * Pass 2 does not cover a post-detach INTERNAL boot: nothing re-marks is_boot
+ * for the native AHCI/NVMe/SDHCI backends. That is exactly what pass 1 is for,
+ * and why the serial is latched on the first successful pick rather than
+ * derived fresh each time.
+ */
 static unsigned g_crash_vol_backoff;   /* see crash_vol / uno_dbg_storage_remapped */
+static unsigned g_crash_serial;        /* BPB volume id of the chosen volume */
+
+/* does this volume hold a CRASH dir, or will it take one? */
+static int vol_takes_crash(int v)
+{
+    /* uno_fat_list returns 0 for both "empty" and "missing", so probe the
+     * ROOT listing (which includes subdir entries) for a real CRASH dir */
+    uno_fat_entry e[64];
+    int i, cnt = uno_fat_list_ex(v, "", e, 64);
+    for (i = 0; i < cnt && i < 64; i++)
+        if (e[i].is_dir && !strcmp(e[i].name, "CRASH")) return 1;
+    return uno_fat_mkdir(v, "CRASH");
+}
 
 static int crash_vol(void)
 {
@@ -476,17 +522,22 @@ static int crash_vol(void)
     if (g_crash_vol >= 0) return g_crash_vol;
     if (g_crash_vol_backoff) { g_crash_vol_backoff--; return -1; }
     n = uno_fat_volumes();
-    for (v = 0; v < n; v++) {
-        /* uno_fat_list returns 0 for both "empty" and "missing", so probe the
-         * ROOT listing (which includes subdir entries) for a real CRASH dir */
-        uno_fat_entry e[64];
-        int i, cnt = uno_fat_list_ex(v, "", e, 64);
-        for (i = 0; i < cnt && i < 64; i++)
-            if (e[i].is_dir && !strcmp(e[i].name, "CRASH")) { g_crash_vol = v; break; }
-        if (g_crash_vol >= 0) break;
-        if (uno_fat_mkdir(v, "CRASH")) { g_crash_vol = v; break; }
+
+    if (g_crash_serial)                                     /* 1: same volume */
+        for (v = 0; v < n && g_crash_vol < 0; v++)
+            if (uno_fat_serial(v) == g_crash_serial && vol_takes_crash(v))
+                g_crash_vol = v;
+
+    for (v = 0; v < n && g_crash_vol < 0; v++) {            /* 2: boot volume */
+        struct uno_bdev *d = uno_fat_dev(v);
+        if (d && d->is_boot && vol_takes_crash(v)) g_crash_vol = v;
     }
+
+    for (v = 0; v < n && g_crash_vol < 0; v++)              /* 3: anything    */
+        if (vol_takes_crash(v)) g_crash_vol = v;
+
     if (g_crash_vol < 0) g_crash_vol_backoff = 63;
+    else                 g_crash_serial = uno_fat_serial(g_crash_vol);
     return g_crash_vol;
 }
 
@@ -1096,12 +1147,22 @@ void dbg_timer_c(void)
  * different volume, or none. Every post-detach write then went somewhere
  * useless, which is why BOOTENV.TXT could sit on disk saying "detached: 0"
  * having been written after the detach. Drop the cache whenever storage is
- * remapped and let it re-find the volume. */
+ * remapped and let it re-find the volume.
+ *
+ * THE MACHINE DIR MUST GO WITH IT, and until 2026-07-31 it did not. Dropping
+ * only the volume left `g_mdir` holding "CRASH\<TAG>" as verified on the OLD
+ * volume; crash_dir() returns a cached string without re-creating it, so every
+ * post-detach write addressed a directory that existed on a disk we were no
+ * longer writing to. uno_fat_write does not create directories, so it returned
+ * 0 and nobody checked. The symptom is indistinguishable from the bug the
+ * paragraph above describes - the file on disk is the pre-detach copy either
+ * way - which is why fixing that one did not fix this one. */
 void uno_dbg_storage_remapped(void);
 void uno_dbg_storage_remapped(void)
 {
     g_crash_vol = -1;
     g_crash_vol_backoff = 0;
+    g_mdir[0] = 0;      /* re-create CRASH\<TAG> on whatever volume we land on */
 }
 
 void uno_dbg_on_detach(void)
@@ -1420,6 +1481,25 @@ void uno_dbg_envblock(void)
         g_stash == &g_stash_bss ? "BSS-FALLBACK (no warm-reset survival)" : "ram",
         (unsigned long long)(uintptr_t)g_stash, g_crash_seen);
 
+    /* WHICH COPY IS THIS. Telemetry is written twice - once before try_detach()
+     * so a detach that strands the boot volume still leaves evidence, once
+     * after so the file describes the machine as it ended up. When the second
+     * write failed, the surviving first copy was indistinguishable from a
+     * complete one, and it reads as a machine that never detached. A reader
+     * has to be able to tell a provisional copy from a final one WITHOUT
+     * cross-checking a running System window, because a collected \CRASH
+     * folder is usually all anyone has. */
+    {   const char *why = "";
+        int blocked = 0, stranded = 0, ran;
+        uno_pc64_detach_status(&blocked, &stranded, &why);
+        ran = why && strcmp(why, "not evaluated") != 0;
+        env("telemetry: %s   (detach gate: %s)\n",
+            ran ? "post-detach (final)"
+                : "PRE-DETACH (PROVISIONAL) - if this is the newest copy on the "
+                  "disk, the post-detach write did not land",
+            why && why[0] ? why : "-");
+    }
+
     uno_dbg_log("envblock built (%d bytes)", g_env_len);
 }
 
@@ -1558,17 +1638,29 @@ void uno_dbg_write_bootenv(void);
 void uno_dbg_write_bootenv(void)
 {
     char path[48];
-    int vol = crash_vol();
-    if (vol < 0 || !g_env_len) return;
+    int vol = crash_vol(), a, b;
+    if (vol < 0 || !g_env_len) {
+        uno_dbg_log("bootenv: NOT WRITTEN (vol=%d len=%d)", vol, g_env_len);
+        return;
+    }
     g_in_disk = 1;
     /* root copy = "the last boot", machine-dir copy = "this machine's boot"
      * (one stick now covers a whole batch of machines) */
-    uno_fat_write(vol, "BOOTENV.TXT", (const unsigned char *)g_env, g_env_len);
+    a = uno_fat_write(vol, "BOOTENV.TXT", (const unsigned char *)g_env, g_env_len);
     snprintf(path, sizeof path, "%s\\BOOTENV.TXT", crash_dir());
-    uno_fat_write(vol, path, (const unsigned char *)g_env, g_env_len);
+    b = uno_fat_write(vol, path, (const unsigned char *)g_env, g_env_len);
     uno_fat_sync();     /* a test run normally ends in a forced power-off, and
                            an unsynced write dies in the FAT write-back cache */
     g_in_disk = 0;
+    /* SAY SO WHEN IT FAILS. Both writes returned into the void for as long as
+     * this function has existed, so a post-detach pass that addressed a
+     * directory on the wrong disk looked exactly like one that worked, and the
+     * stale copy it left behind was read as current for a day. The log rides
+     * the RAM stash, so this line survives to the next boot's residue flush
+     * even when the disk write is the thing that is broken. */
+    if (!a || !b)
+        uno_dbg_log("bootenv: WRITE FAILED vol=%d root=%d machine-dir=%d (%s)",
+                    vol, a, b, path);
 }
 
 /* Append one line to CRASH\BOOTS.TXT the moment storage is usable.
@@ -1618,7 +1710,7 @@ void uno_dbg_write_bootlog(void);
 void uno_dbg_write_bootlog(void)
 {
     char path[48];
-    int vol = crash_vol();
+    int vol = crash_vol(), ok;
     if (vol < 0 || g_in_trap) return;
     g_rlen = 0;
     rp_common_head("BOOT LOG");
@@ -1627,10 +1719,11 @@ void uno_dbg_write_bootlog(void)
     rp_log_tail();
     snprintf(path, sizeof path, "%s\\BOOTLOG.TXT", crash_dir());
     g_in_disk = 1;
-    uno_fat_write(vol, path, (const unsigned char *)g_report,
-                  (long)g_rlen);
+    ok = uno_fat_write(vol, path, (const unsigned char *)g_report,
+                       (long)g_rlen);
     uno_fat_sync();
     g_in_disk = 0;
+    if (!ok) uno_dbg_log("bootlog: WRITE FAILED vol=%d (%s)", vol, path);
 }
 
 /* the stress driver's perf-snapshot writer */
