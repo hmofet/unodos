@@ -751,6 +751,223 @@ def wm_a():
     return 0 if not fails else 1
 
 
+# Where the generic title-bar buttons land, for the ACTIVE theme (Aurora Light:
+# frame_w 1, title_h 26, minbox = maxbox = 13 - unoui/themes/theme_aurora.c)
+# plus the painter's own 4 px right margin and 4 px gap (unoui.c,
+# unoui_titlebtn_rect). Guest pixels, measured from the window's top-right
+# corner, which is why every click below is aimed at a window whose right edge
+# is the screen's: snapped right, or maximized. Deriving it instead of hunting
+# for the box means a theme change breaks this test loudly rather than making
+# it click empty title bar and "pass".
+TB_FRAME, TB_TITLE, TB_BOX = 1, 26, 13
+
+
+def titlebtn_xy(right, top, which):
+    """Centre of the min ("min") or max ("max") box of a window whose top-right
+    corner is (right, top), in guest pixels."""
+    x = right - TB_FRAME - 4 - TB_BOX // 2
+    if which == "min":
+        x -= TB_BOX + 4
+    return x, top + TB_FRAME + (TB_TITLE - TB_FRAME - TB_BOX) // 2 + TB_BOX // 2
+
+
+def wm_b():
+    """Gate B: the title-bar minimize box, the taskbar chip toggle, the maximize
+    box, and the parked set surviving a power cycle.
+
+        UNO_DETACH=1 UNO_DEBUG=1 ./build.sh && python3 harness.py wm_b
+
+    Same two requirements as wm_a, for the same reasons: the PS/2 pointer (the
+    only one the guest sees, see the Mouse class) and a real FAT image (vvfat
+    hands SHELL.CFG back as garbage). It owns its QEMU instances because the
+    last assertion is about a REBOOT."""
+    fails = []
+
+    def check(name, ok, detail=""):
+        print("  %-46s %s %s" % (name, "PASS" if ok else "FAIL", detail))
+        if not ok:
+            fails.append(name)
+
+    try:
+        os.remove("build/esp/SHELL.CFG")       # deterministic first boot
+    except OSError:
+        pass
+    quiet_debug_cfg()
+    subprocess.run([sys.executable, "tools/mkuefi.py"], check=True)
+    os.environ["UNO_DISK"] = "build/unodos-uefi.img"
+    qemu, q = start_qemu(log="build/wm_b1.log", pointer="none")
+    try:
+        print("wm_b: boot 1")
+        time.sleep(18)
+        probe_screen(q)
+        band = noise_bands()
+        gw = SCREEN_W // SCALE
+        # the chip strip: the taskbar minus the tray, whose clock always ticks
+        chip_only = [(0, 0, SCREEN_W, SCREEN_H - 64),
+                     (SCREEN_W - 260, SCREEN_H - 64, 260, 64)]
+        m = Mouse(q)
+        check("the guest has a pointer", m.alive(), "(needs UNO_DETACH=1)")
+        if fails:
+            raise SystemExit("wm_b: no pointer in the guest - nothing to click")
+        m.park()
+        q.cmd("send-key", keys=[{"type": "qcode", "data": "ctrl"},
+                                {"type": "qcode", "data": "w"}])
+        time.sleep(1.5)                        # close the restored Control Panel
+        grab(q, "wm_b_00_desktop")
+
+        start_app(q, 1, wait=2.5)              # menu order = app order: Editor
+        m.park()
+        grab(q, "wm_b_01_open")
+        box = diff_bbox("wm_b_00_desktop", "wm_b_01_open", ignore=band)
+        check("Editor window opened",
+              box is not None and box[2] > 100 and box[3] > 80, str(box))
+        if box is None:
+            raise SystemExit("wm_b: no Editor window - nothing to click")
+
+        # Snap it right (Alt+Right, phase D) so its top-right corner is the
+        # screen's: from here the button geometry is exact, not guessed.
+        key_evt(q, "alt", True); time.sleep(0.2)
+        tap(q, "right")
+        time.sleep(0.3)
+        key_evt(q, "alt", False); time.sleep(1.0)
+        m.park()
+        grab(q, "wm_b_02_snapped")
+        sbox = diff_bbox("wm_b_00_desktop", "wm_b_02_snapped", ignore=band)
+        # the top edge reads as 44, not 0: noise_bands() ignores the debug HUD
+        # across the top 40 px, so no bbox can begin above it
+        check("snapped right (top-right corner = screen's)",
+              sbox is not None and sbox[0] > SCREEN_W * 0.4 and
+              sbox[1] <= 44 and sbox[0] + sbox[2] >= SCREEN_W - 8, str(sbox))
+
+        # ---- the maximize BOX: a real click on the chrome ------------------
+        mxx, mxy = titlebtn_xy(gw, 0, "max")
+        m.to(mxx * SCALE, mxy * SCALE); m.btn(True); m.btn(False)
+        time.sleep(0.8)
+        m.park()
+        grab(q, "wm_b_03_max")
+        maxbox = diff_bbox("wm_b_00_desktop", "wm_b_03_max", ignore=band)
+        check("clicking the maximize box filled the work area",
+              maxbox is not None and maxbox[2] >= SCREEN_W * 0.92 and
+              maxbox[1] <= 44, str(maxbox))
+
+        # ---- the minimize BOX ---------------------------------------------
+        mnx, mny = titlebtn_xy(gw, 0, "min")
+        m.to(mnx * SCALE, mny * SCALE); m.btn(True); m.btn(False)
+        time.sleep(0.8)
+        m.park()
+        grab(q, "wm_b_04_parked")
+        gone = diff_bbox("wm_b_00_desktop", "wm_b_04_parked", ignore=band)
+        check("clicking the minimize box took the window off screen",
+              gone is None, str(gone))
+        # Locate the chip against the EMPTY desktop, not against a frame that
+        # still has the window in it: a window's soft drop shadow reaches a few
+        # rows into the taskbar band, and that bleed swallows the bbox and puts
+        # its centre on bare bar between chips - a click that lands on nothing
+        # and reads as "restore is broken".
+        chip = diff_bbox("wm_b_00_desktop", "wm_b_04_parked", ignore=chip_only)
+        check("its taskbar chip is still drawn, changed to parked",
+              chip is not None and 40 < chip[2] < 400, str(chip))
+        if chip is None:
+            raise SystemExit("wm_b: no chip to click")
+        cx, cy = chip[0] + chip[2] // 2, chip[1] + chip[3] // 2
+
+        # ---- the chip toggle: parked -> restore, focused -> park -----------
+        m.to(cx, cy); m.btn(True); m.btn(False)
+        time.sleep(1.0)
+        m.park()
+        grab(q, "wm_b_05_chip_restored")
+        rbox = diff_bbox("wm_b_00_desktop", "wm_b_05_chip_restored", ignore=band)
+        check("the chip restored it, still maximized",
+              rbox is not None and rbox[2] >= SCREEN_W * 0.92, str(rbox))
+
+        m.to(cx, cy); m.btn(True); m.btn(False)  # it has focus now: park it
+        time.sleep(1.0)
+        m.park()
+        grab(q, "wm_b_06_chip_parked")
+        gone2 = diff_bbox("wm_b_00_desktop", "wm_b_06_chip_parked", ignore=band)
+        check("clicking the FOCUSED app's chip parks it", gone2 is None, str(gone2))
+
+        m.to(cx, cy); m.btn(True); m.btn(False)  # and back again
+        time.sleep(1.0)
+        m.park()
+        grab(q, "wm_b_07_chip_back")
+
+        # ---- the maximize box again: this time it must RESTORE -------------
+        m.to(mxx * SCALE, mxy * SCALE); m.btn(True); m.btn(False)
+        time.sleep(0.8)
+        m.park()
+        grab(q, "wm_b_08_unmax")
+        ubox = diff_bbox("wm_b_00_desktop", "wm_b_08_unmax", ignore=band)
+        check("a second click on the maximize box restored the rect",
+              ubox is not None and ubox[2] < SCREEN_W * 0.92, str(ubox))
+
+        # ---- Ctrl-M, the keyboard twin of the minimize box. It also leaves
+        # the Editor parked for the reboot assertion, and gets it out of the
+        # frame: with two windows open a diff bbox is their UNION, and Paint
+        # merely MOVING below would change it. -----------------------------
+        q.cmd("send-key", keys=[{"type": "qcode", "data": "ctrl"},
+                                {"type": "qcode", "data": "m"}])
+        time.sleep(1.5)
+        m.park()
+        grab(q, "wm_b_09_ctrlm_parked")
+        check("ctrl-m parks the focused window",
+              diff_bbox("wm_b_00_desktop", "wm_b_09_ctrlm_parked",
+                        ignore=band) is None)
+
+        # ---- Paint carries no UI_WIN_RESIZE, so its maxbox is painted
+        # disabled and on_action drops UI_ACT_MAX outright. Driven from the
+        # keyboard here: Alt+Up reaches the same handler, and unlike the click
+        # it needs no window geometry. It must never resize the window. ------
+        start_app(q, 12, wait=2.5)             # Paint
+        m.park()
+        grab(q, "wm_b_10_paint")
+        pbox = diff_bbox("wm_b_00_desktop", "wm_b_10_paint", ignore=band)
+        key_evt(q, "alt", True); time.sleep(0.2)
+        tap(q, "up")
+        time.sleep(0.3)
+        key_evt(q, "alt", False); time.sleep(0.8)
+        m.park()
+        grab(q, "wm_b_11_paint_after")
+        pbox2 = diff_bbox("wm_b_00_desktop", "wm_b_11_paint_after", ignore=band)
+        check("a non-resizable window is never resized by maximize",
+              pbox is not None and pbox2 is not None and
+              abs(pbox2[2] - pbox[2]) <= 8 and abs(pbox2[3] - pbox[3]) <= 8,
+              "%s vs %s" % (pbox2, pbox))
+
+        q.cmd("send-key", keys=[{"type": "qcode", "data": "ctrl"},
+                                {"type": "qcode", "data": "w"}])
+        time.sleep(1.5)                        # close Paint: only the parked
+        m.park()                               # Editor is left in the session
+        grab(q, "wm_b_12_only_parked")
+        check("closing Paint leaves just the parked Editor",
+              diff_bbox("wm_b_00_desktop", "wm_b_12_only_parked",
+                        ignore=band) is None)
+        time.sleep(1.0)                        # let SHELL.CFG reach the disk
+    finally:
+        stop_qemu(qemu, q)
+
+    # ---- reboot: minN= brings it back OPEN and PARKED ----------------------
+    qemu, q = start_qemu(log="build/wm_b2.log", pointer="none")
+    try:
+        print("wm_b: boot 2 (session restore)")
+        time.sleep(18)
+        probe_screen(q)
+        grab(q, "wm_b_13_after_reboot")
+        body = diff_bbox("wm_b_00_desktop", "wm_b_13_after_reboot",
+                         ignore=noise_bands())
+        check("restored session shows no window (still parked)",
+              body is None, str(body))
+        back = diff_bbox("wm_b_00_desktop", "wm_b_13_after_reboot",
+                         ignore=chip_only)
+        check("but its chip is back on the taskbar",
+              back is not None and 40 < back[2] < 400, str(back))
+    finally:
+        stop_qemu(qemu, q)
+
+    print("wm_b: %s" % ("PASS" if not fails else "FAIL " + ", ".join(fails)))
+    return 0 if not fails else 1
+
+
 def qemu_argv(extra=None, log="build/ovmf.log", pointer="tablet"):
     # Storage: a vvfat view of build/esp by default (no image build needed).
     # vvfat's read-write mode corrupts multi-cluster WRITES, though, so tests
@@ -801,6 +1018,8 @@ def main():
     rc = [0]
     if len(sys.argv) > 1 and sys.argv[1] == "wm_a":
         return wm_a()                          # owns its own two QEMU boots
+    if len(sys.argv) > 1 and sys.argv[1] == "wm_b":
+        return wm_b()                          # ditto: it asserts on a reboot
     subprocess.run(["cp", OVMF_VARS, "build/vars.fd"], check=True)
     if os.path.exists(QMP_SOCK):
         os.remove(QMP_SOCK)
