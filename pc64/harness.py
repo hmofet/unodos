@@ -458,10 +458,23 @@ class Mouse:
             self.y += dy
         time.sleep(0.1)
 
-    def btn(self, down):
+    def btn(self, down, button="left"):
         self.q.cmd("input-send-event", events=[
-            {"type": "btn", "data": {"down": down, "button": "left"}}])
+            {"type": "btn", "data": {"down": down, "button": button}}])
         time.sleep(0.12)
+
+    def click(self, sx, sy, settle=0.7):
+        self.to(sx, sy)
+        self.btn(True); self.btn(False)
+        time.sleep(settle)
+
+    def rclick(self, sx, sy, settle=0.7):
+        """The context gesture. The PS/2 packet carries all three buttons
+        (pc64_native.c latches gMBtn = byte0 & 7), so unlike the USB HID path a
+        right press is seen exactly like a left one."""
+        self.to(sx, sy)
+        self.btn(True, "right"); self.btn(False, "right")
+        time.sleep(settle)
 
     def park(self):
         """Sit in the ignored taskbar band, so the composited cursor is never
@@ -1519,6 +1532,315 @@ def wm_e():
     return 0 if not fails else 1
 
 
+# ---- phase F: the popovers ------------------------------------------------
+# A popover's ROW HEIGHT is fb_text_h() + 6 (floor 20), which the harness cannot
+# know without the guest's live font. It is derivable instead, and derived ONCE:
+# a window context menu is placed with its top-left AT the click point, so with
+# a known row count the diff's bottom edge gives the row height exactly. Every
+# other popover in the scenario reuses that number. Change the item lists in
+# pc64_uui.c and these counts break the test loudly rather than clicking the
+# wrong row and "passing".
+#
+# Every popover here is opened, closed with Esc, and opened AGAIN before the
+# diff that measures it. Adding a popover to the scene focuses it, which
+# repaints the losing window's title bar - noise that would inflate the bbox and
+# move the top edge every row is counted from. After the first Esc, focus is
+# already on shell chrome, so the second open changes nothing but the popover.
+POP_WIN_ROWS    = 11    # Restore/Min/Max/SnapL/SnapR/-/none/A/B/-/Close
+POP_ROW_NONE    = 6     # "Group: none"
+POP_ROW_A       = 7     # "Group: A"
+POP_ROW_TILE    = 0     # the taskbar menu: Tile / Cascade / Minimize all
+POP_ROW_CASCADE = 1
+POP_ROW_MINALL  = 2
+
+
+def pop_row_y(top, rh, i):
+    """Screendump y of the centre of row `i` of a popover whose top is `top`."""
+    return int(top + (1 + rh * (i + 0.5)) * SCALE)
+
+
+def wm_f():
+    """Gate F: link groups, the context menus, Tile/Cascade, taskbar overflow.
+
+        UNO_DETACH=1 UNO_DEBUG=1 ./build.sh && python3 harness.py wm_f
+
+    Every gesture here is a real pointer gesture, so it needs the PS/2 mouse for
+    the same reasons wm_a and wm_b do (see the Mouse class). It owns its QEMU
+    instance; nothing here asserts on a reboot, so there is only one."""
+    fails = []
+
+    def check(name, ok, detail=""):
+        print("  %-52s %s %s" % (name, "PASS" if ok else "FAIL", detail))
+        if not ok:
+            fails.append(name)
+
+    try:
+        os.remove("build/esp/SHELL.CFG")       # deterministic first boot
+    except OSError:
+        pass
+    quiet_debug_cfg()
+    subprocess.run([sys.executable, "tools/mkuefi.py"], check=True)
+    os.environ["UNO_DISK"] = "build/unodos-uefi.img"
+    qemu, q = start_qemu(log="build/wm_f.log", pointer="none")
+
+    def reopen(mouse, rx, ry, before_tag, after_tag):
+        """Open a popover at (rx, ry), Esc it away, grab a clean `before`, open
+        it again and grab `after`. Returns its diff bbox (x, y, w, h)."""
+        mouse.rclick(rx, ry)
+        tap(q, "esc")
+        time.sleep(0.5)
+        mouse.park()
+        grab(q, before_tag)
+        mouse.rclick(rx, ry)
+        mouse.park()
+        grab(q, after_tag)
+        return diff_bbox(before_tag, after_tag, ignore=noise_bands())
+
+    try:
+        print("wm_f: boot")
+        time.sleep(18)
+        probe_screen(q)
+        band = noise_bands()
+        gw = SCREEN_W // SCALE
+        # the two work-area halves, clear of the ignored HUD and taskbar bands
+        left_half = (0, 44, SCREEN_W // 2, SCREEN_H - 70)
+        right_half = (SCREEN_W // 2, 44, SCREEN_W, SCREEN_H - 70)
+        br_quad = (SCREEN_W // 2, SCREEN_H // 2, SCREEN_W, SCREEN_H - 70)
+        work_area = (0, 44, SCREEN_W, SCREEN_H - 70)
+        # the chip strip: the taskbar minus the tray, whose clock always ticks
+        chip_only = [(0, 0, SCREEN_W, SCREEN_H - 64),
+                     (SCREEN_W - 260, SCREEN_H - 64, 260, 64)]
+        m = Mouse(q)
+        check("the guest has a pointer", m.alive(), "(needs UNO_DETACH=1)")
+        if fails:
+            raise SystemExit("wm_f: no pointer in the guest - nothing to click")
+        m.park()
+        q.cmd("send-key", keys=[{"type": "qcode", "data": "ctrl"},
+                                {"type": "qcode", "data": "w"}])
+        time.sleep(1.5)                        # close the restored Control Panel
+        grab(q, "wm_f_00_desktop")
+
+        # ---- two windows in KNOWN halves ------------------------------------
+        # Snapped, so every click below is computed from the theme metrics
+        # against a corner that is the screen's - never hunted for in a diff,
+        # whose top edge is a soft drop shadow (spec 13.14).
+        start_app(q, 1, wait=2.5)              # menu order = app order: Editor
+        key_evt(q, "alt", True); time.sleep(0.2)
+        tap(q, "left"); time.sleep(0.3)
+        key_evt(q, "alt", False); time.sleep(1.0)
+        start_app(q, 2, wait=2.5)              # Files
+        key_evt(q, "alt", True); time.sleep(0.2)
+        tap(q, "right"); time.sleep(0.3)
+        key_evt(q, "alt", False); time.sleep(1.0)
+        m.park()
+        grab(q, "wm_f_01_two_snapped")
+        check("Editor left, Files right",
+              diff_frac("wm_f_00_desktop", "wm_f_01_two_snapped", left_half) > 0.3 and
+              diff_frac("wm_f_00_desktop", "wm_f_01_two_snapped", right_half) > 0.3)
+
+        # ---- the window context menu ---------------------------------------
+        # A snapped-left window's title bar starts at the work-area origin, so
+        # its rows come straight from the theme metrics wm_b already pins down.
+        tb_y = TB_FRAME + (TB_TITLE - TB_FRAME) // 2
+        ed_x, fi_x = gw // 4, gw * 3 // 4
+        menu = reopen(m, ed_x * SCALE, tb_y * SCALE,
+                      "wm_f_02a_menu_closed", "wm_f_02_win_menu")
+        check("right-click on a title bar opened a menu",
+              menu is not None and menu[3] > 100 * SCALE, str(menu))
+        if menu is None:
+            raise SystemExit("wm_f: no context menu - nothing to drive")
+        # top-left is the click point (pop_show places it there); the diff gives
+        # the bottom, and POP_WIN_ROWS rows between them give the row height.
+        pop_top = tb_y * SCALE
+        row_h = ((menu[1] + menu[3]) - pop_top - 2 * SCALE) / float(POP_WIN_ROWS) / SCALE
+        check("popover row height is sane", 14 <= row_h <= 64, "%.1f px" % row_h)
+
+        # Group: A on the Editor, then the same on Files
+        m.click(ed_x * SCALE, pop_row_y(pop_top, row_h, POP_ROW_A))
+        m.rclick(fi_x * SCALE, tb_y * SCALE)
+        m.click(fi_x * SCALE, pop_row_y(tb_y * SCALE, row_h, POP_ROW_A))
+        m.park()
+        grab(q, "wm_f_03_grouped")
+
+        # ---- drag ONE: the whole set moves ---------------------------------
+        drop = 140
+        m.to(ed_x * SCALE, tb_y * SCALE)
+        m.btn(True)
+        for i in range(1, 6):
+            m.to(ed_x * SCALE, (tb_y + i * (drop // 10)) * SCALE)
+        grab(q, "wm_f_04_mid_drag")            # button STILL DOWN
+        for i in range(6, 11):
+            m.to(ed_x * SCALE, (tb_y + i * (drop // 10)) * SCALE)
+        m.btn(False)
+        m.park()
+        grab(q, "wm_f_05_group_dragged")
+        mid = diff_frac("wm_f_03_grouped", "wm_f_04_mid_drag", right_half)
+        check("mid-drag, the linked window has moved too", mid > 0.05, "%.3f" % mid)
+        both_r = diff_frac("wm_f_03_grouped", "wm_f_05_group_dragged", right_half)
+        both_l = diff_frac("wm_f_03_grouped", "wm_f_05_group_dragged", left_half)
+        check("the drop left BOTH windows moved",
+              both_r > 0.05 and both_l > 0.05,
+              "left %.3f right %.3f" % (both_l, both_r))
+
+        # ---- minimize one: both park ---------------------------------------
+        q.cmd("send-key", keys=[{"type": "qcode", "data": "ctrl"},
+                                {"type": "qcode", "data": "m"}])
+        time.sleep(1.5)
+        m.park()
+        grab(q, "wm_f_06_group_parked")
+        check("minimizing one member parked the whole set",
+              diff_bbox("wm_f_00_desktop", "wm_f_06_group_parked",
+                        ignore=band) is None)
+        # With nothing on screen the chip strip diffs CLEANLY - a window's drop
+        # shadow bleeds into the taskbar band and would otherwise swallow it
+        # (spec 13.14). This is also where the chip width comes from, which the
+        # overflow step needs and cannot derive any other way.
+        chips = diff_bbox("wm_f_00_desktop", "wm_f_06_group_parked", ignore=chip_only)
+        check("both chips still on the bar", chips is not None, str(chips))
+        if chips is None:
+            raise SystemExit("wm_f: no chips to click")
+        chip_w = (chips[2] - 4 * SCALE) // 2         # two chips and a 4 px gap
+        m.click(chips[0] + chips[2] // 4, chips[1] + chips[3] // 2, settle=1.2)
+        m.park()
+        grab(q, "wm_f_07_group_restored")
+        check("restoring one member brought the set back",
+              diff_frac("wm_f_00_desktop", "wm_f_07_group_restored", left_half) > 0.1 and
+              diff_frac("wm_f_00_desktop", "wm_f_07_group_restored", right_half) > 0.1)
+
+        # ---- ungroup: the control. The SAME drag must now move ONE window.
+        key_evt(q, "alt", True); time.sleep(0.2)
+        tap(q, "left"); time.sleep(0.3)        # Editor back to a known corner
+        key_evt(q, "alt", False); time.sleep(1.0)
+        m.rclick(ed_x * SCALE, tb_y * SCALE)
+        m.click(ed_x * SCALE, pop_row_y(tb_y * SCALE, row_h, POP_ROW_NONE))
+        m.park()
+        grab(q, "wm_f_08_ungrouped")
+        m.to(ed_x * SCALE, tb_y * SCALE)
+        m.btn(True)
+        for i in range(1, 11):
+            m.to(ed_x * SCALE, (tb_y + i * (drop // 10)) * SCALE)
+        m.btn(False)
+        m.park()
+        grab(q, "wm_f_09_solo_dragged")
+        solo_r = diff_frac("wm_f_08_ungrouped", "wm_f_09_solo_dragged", right_half)
+        solo_l = diff_frac("wm_f_08_ungrouped", "wm_f_09_solo_dragged", left_half)
+        check("ungrouped, the same drag moves ONLY the grabbed window",
+              solo_r < 0.02 and solo_l > 0.05,
+              "left %.3f right %.3f" % (solo_l, solo_r))
+
+        # ---- Tile / Cascade, from the taskbar context menu ------------------
+        for _ in range(6):                     # start from an empty desktop
+            q.cmd("send-key", keys=[{"type": "qcode", "data": "ctrl"},
+                                    {"type": "qcode", "data": "w"}])
+            time.sleep(0.7)
+        m.park()
+        grab(q, "wm_f_10_cleared")
+        for n in (1, 2, 3, 4):                 # Editor, Files, System, Clock
+            start_app(q, n, wait=2.2)
+        m.park()
+        grab(q, "wm_f_11_four_open")
+        # A right-click anywhere on the bar that is not a chip opens the layout
+        # menu; the tray end always qualifies.
+        bar_x, bar_y = SCREEN_W - 40 * SCALE, SCREEN_H - 12 * SCALE
+
+        def task_menu(tag, row, nrows=3, settle=1.8):
+            """Open the taskbar layout menu and click one row. Its geometry is
+            DERIVED, never measured: pop_show pins a bar-anchored popover to the
+            bottom of the work area and clamp_to_workarea pulls it flush with
+            the right edge, and TASKH is exactly row_h + 6 (pc64_uui.c's two
+            floors, 20 and 26, move together, so the identity holds at every
+            font size). Measuring it instead is what the first run of this
+            scenario did, and a ticking Clock window inside the diff moved the
+            bbox's top edge by a row - so Cascade re-ran Tile and the test
+            reported "tiled" as "cascaded"."""
+            m.rclick(bar_x, bar_y)
+            m.park()
+            grab(q, tag)
+            top = SCREEN_H - (row_h + 6) * SCALE - (2 + nrows * row_h) * SCALE
+            m.click(SCREEN_W - 20 * SCALE, pop_row_y(top, row_h, row), settle=settle)
+            m.park()
+
+        m.rclick(bar_x, bar_y)
+        m.park()
+        grab(q, "wm_f_12_task_menu")
+        tmenu = diff_bbox("wm_f_11_four_open", "wm_f_12_task_menu", ignore=band)
+        check("right-click on blank taskbar opened the layout menu",
+              tmenu is not None and tmenu[3] > 40 * SCALE, str(tmenu))
+        if tmenu is None:
+            raise SystemExit("wm_f: no taskbar menu")
+        tap(q, "esc"); time.sleep(0.5)
+        task_menu("wm_f_12b_task_menu", POP_ROW_TILE)
+        grab(q, "wm_f_13_tiled")
+        quads = [(0, 44, SCREEN_W // 2, SCREEN_H // 2),
+                 (SCREEN_W // 2, 44, SCREEN_W, SCREEN_H // 2),
+                 (0, SCREEN_H // 2, SCREEN_W // 2, SCREEN_H - 70),
+                 (SCREEN_W // 2, SCREEN_H // 2, SCREEN_W, SCREEN_H - 70)]
+        fr = [diff_frac("wm_f_10_cleared", "wm_f_13_tiled", b) for b in quads]
+        check("Tile put a window in every quadrant", min(fr) > 0.10,
+              " ".join("%.2f" % f for f in fr))
+        tiled_br = fr[3]
+
+        task_menu("wm_f_14_task_menu2", POP_ROW_CASCADE)
+        grab(q, "wm_f_15_cascaded")
+        # Cascade is asserted against TILE, not against a coverage threshold:
+        # a stack at the origin can still reach any given quadrant (the Editor
+        # is most of the work area), but it can never reproduce the tiled
+        # layout. Re-running Tile - the exact bug the derived geometry above
+        # fixed - leaves this diff at zero.
+        moved = diff_frac("wm_f_13_tiled", "wm_f_15_cascaded", work_area)
+        check("Cascade relaid the windows (it is not a second Tile)",
+              moved > 0.25, "%.3f" % moved)
+        check("Cascade stacked them at the work-area origin",
+              diff_frac("wm_f_10_cleared", "wm_f_15_cascaded", quads[0]) > 0.2)
+        casc_br = diff_frac("wm_f_10_cleared", "wm_f_15_cascaded", br_quad)
+        print("      (bottom-right coverage: tiled %.3f, cascaded %.3f)"
+              % (tiled_br, casc_br))
+
+        # ---- taskbar overflow ----------------------------------------------
+        # Enough chips that the strip cannot reach the tray. The bridge apps
+        # (Dostris..Paint, menu 8..12) are all windowed, so none of them takes
+        # the screen away mid-scenario the way a native game would.
+        for n in (0, 5, 6, 7, 8, 9, 10, 11, 12):
+            start_app(q, n, wait=1.8)
+        m.park()
+        grab(q, "wm_f_16_many_open")
+        # Minimize all, so the chip strip diffs cleanly (and the command itself
+        # is exercised). From there a restored window is unmistakable.
+        task_menu("wm_f_17_task_menu3", POP_ROW_MINALL)
+        grab(q, "wm_f_18_all_parked")
+        check("Minimize all cleared the desktop",
+              diff_bbox("wm_f_00_desktop", "wm_f_18_all_parked",
+                        ignore=band) is None)
+        strip = diff_bbox("wm_f_00_desktop", "wm_f_18_all_parked", ignore=chip_only)
+        check("the chip strip is full", strip is not None, str(strip))
+        if strip is None:
+            raise SystemExit("wm_f: no chip strip")
+        # the last chip in the strip is the overflow one, and it is a chip wide
+        ovf_x = strip[0] + strip[2] - chip_w // 2
+        ovf_y = strip[1] + strip[3] // 2
+        m.click(ovf_x, ovf_y, settle=1.2)
+        m.park()
+        grab(q, "wm_f_19_overflow_popover")
+        pop = diff_bbox("wm_f_18_all_parked", "wm_f_19_overflow_popover", ignore=band)
+        check("the overflow chip opened a popover of the apps that did not fit",
+              pop is not None and pop[3] > 30 * SCALE, str(pop))
+        if pop is None:
+            raise SystemExit("wm_f: no overflow popover")
+        m.click(pop[0] + pop[2] // 2, pop_row_y(pop[1], row_h, 0), settle=1.8)
+        m.park()
+        grab(q, "wm_f_20_overflow_activated")
+        # every window was parked, so anything on screen now came from that row
+        back = diff_bbox("wm_f_18_all_parked", "wm_f_20_overflow_activated",
+                         ignore=band)
+        check("activating a row from it restored that app's window",
+              back is not None and back[2] > 100 and back[3] > 80, str(back))
+    finally:
+        stop_qemu(qemu, q)
+
+    print("wm_f: %s" % ("PASS" if not fails else "FAIL " + ", ".join(fails)))
+    return 0 if not fails else 1
+
+
 def qemu_argv(extra=None, log="build/ovmf.log", pointer="tablet"):
     # Storage: a vvfat view of build/esp by default (no image build needed).
     # vvfat's read-write mode corrupts multi-cluster WRITES, though, so tests
@@ -1575,6 +1897,8 @@ def main():
         return wm_c()                          # ditto: it owns its QEMU
     if len(sys.argv) > 1 and sys.argv[1] == "wm_e":
         return wm_e()                          # ditto: it asserts on a reboot
+    if len(sys.argv) > 1 and sys.argv[1] == "wm_f":
+        return wm_f()                          # ditto: it owns its own boot
     subprocess.run(["cp", OVMF_VARS, "build/vars.fd"], check=True)
     if os.path.exists(QMP_SOCK):
         os.remove(QMP_SOCK)
