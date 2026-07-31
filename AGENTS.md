@@ -49,7 +49,6 @@ re-home"). Ownership is of the CODE; the whole OS is a shared goal.
 | toolkits (uno3d / unoui / sound) | their headers | `uno3d*`, `pc64_uui*`, `snd_*`, `hdaudio/ac97` |
 | unojs (standalone JavaScript engine) | `unojs/UNOJS.md`, `unojs/unojs.h` | `unojs/*` |
 | unoweb (DOM / HTML / CSS / layout / paint) | `unoweb/UNOWEB.md`, `unoweb/unoweb.h` | `unoweb/*`, `pc64/webjs.c` |
-=======
 | browser (HTML/MD renderer + HTTP client + js) | `pc64_http.h` header | `pc64_browser.*`, `pc64_http.*`, `js.*` |
 | per-port ports | `AUDIT-<port>.md` | `amiga/`, `c64/`, `nes/`, `snes/`, ... |
 
