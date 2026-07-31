@@ -2818,3 +2818,71 @@ the run that exercises the PS/2 make/break tracker (the System-window shot
 `shots/wm_d_11_system.png` records `DETACHED (native)` and `PS/2: kbd up`).
 The pre-existing default `harness.py` pass was re-run as a regression check on
 the key funnel.
+
+
+## 2026-07-31 — LANDED (toolkits lane): WM phase A, live drag + geometry
+
+Phase A of `docs/WM-MODERN-SPEC.md` §3 is on master. Phases C, E, F are still
+open; B is in flight behind this.
+
+**What landed.** unoui: `ui->work` (the area windows clamp/maximize/snap into,
+defaulting to the whole screen), `ui->live_drag`, `win->snap` +
+`win->restore_r`, `UI_ACT_MIN`/`UI_ACT_MAX`, `UI_SNAP_*`, `unoui_render_window`,
+`unoui_snap_rect`, `unoui_snap_apply`, `unoui_work_area`, `unoui_clamp_window`,
+and title-bar double click. Shell: `UI.live_drag = 1`, the drag fast path
+generalised to snapshot the scene with the dragged window lifted out, and
+SHELL.CFG v2 (`geom<N>=x,y,w,h`, `snap<N>=`).
+
+Phase D's `wm_snap()` is retargeted onto `unoui_snap_apply` as it asked;
+`g_snap[]` / `g_snap_r[]` are gone into `win->snap` / `win->restore_r`, and its
+Alt bindings are unchanged. Alt+Up and the new double-click are the same path.
+
+**A real bug found on the way: no session has ever actually been restored.**
+`session_save()` wrote SHELL.CFG to "the first writable volume", which is
+volume 0, the RAM disk — so the file died with the power on every machine. It
+now prefers a native FAT partition (the order `unosecure.c:pick_vol` uses).
+
+**Drag-frame cost** (debug build, the shell now logs it per drag, split into
+paint vs restore+present): outline **30 857 / 32 984 kcyc/frame** before the
+change; live **76 545 kcyc/frame**, of which **38 761** is the window paint.
+That is **2.4x**, over the spec's 1.5x budget, and the budget is not reachable:
+a rubber band is cheap precisely because it touches almost no pixels, so the
+delta IS one window paint, which the plan (§3, "one memcpy + one window paint")
+always predicted. The Editor is the worst case in the shell — 70 % of the
+screen, full of TrueType text — and the cost scales with window area. Numbers
+are QEMU/TCG host cycles: the ratio is meaningful, the absolute value is not.
+
+**Cross-lane request → usb stack (usbhid owner): a HELD mouse button is lost.**
+`uno_usb_hid_mouse_poll()` (`usbhid.c`) returns `*btn = 0` on any poll where no
+new interrupt report arrived, but a boot-protocol mouse reports only on CHANGE
+— so a button held still reads as released on the very next frame. The shell
+therefore sees press-release-press instead of a hold, and **a drag with a USB
+mouse commits before it starts**. The PS/2 path does not have this
+(`uno_ps2_mouse` latches `gMBtn`, "latched button since the last call"). Fix is
+to latch the same way: remember the last reported button state and only change
+it when a report actually arrives. Until then `pc64/harness.py`'s wm scenarios
+drive the PS/2 mouse on a detached boot.
+
+**Two findings for anyone writing a pointer-driven harness scenario.**
+
+1. *QEMU had no mouse at all, and had not had one for as long as the M4
+   scenario has existed.* `harness.py` attaches a `usb-tablet`, but this OVMF
+   ships no USB pointer driver, so nothing in the guest ever saw it — every
+   scripted click in `harness.py mouse` has been landing on nothing. The native
+   USB stack will not take the tablet either (it claims BOOT interfaces only,
+   and the tablet advertises subclass 0). What works: `UNO_DETACH=1` plus NO
+   USB pointer device, driving the machine's PS/2 mouse with QMP `rel`/`btn`.
+   `Mouse.alive()` now proves a pointer exists before any scenario asserts on
+   one.
+2. *`UNO_DEBUG=1` arms the fuzz driver.* `build.sh` stages a DEBUG.CFG, and its
+   mere presence starts `pc64_stress.c` opening and closing apps from the
+   shell's own main loop. It launched Studio in the middle of a drag on the
+   first wm_a run. `quiet_debug_cfg()` rewrites it with `nostress`.
+   And vvfat read-write cannot carry a persistence test: SHELL.CFG written
+   through it came back as 50 bytes of garbage. wm_a builds a real FAT image
+   with `tools/mkuefi.py` and boots that.
+
+**Gates run** (all green): `pc64/build.sh` at `UNO_DEBUG=0` and `UNO_DEBUG=1`;
+`unoui/build.sh` (host contact sheet + storyboard, all 8 themes);
+`python3 harness.py wm_a` on the production build AND on
+`UNO_DEBUG=1 UNO_DETACH=1`, both PASS on all 11 assertions.

@@ -1,6 +1,7 @@
 # Modern window management, implementation spec (worker brief)
 
-Status: SPEC, 2026-07-31. Nothing implemented. The design rationale is in
+Status: SPEC, 2026-07-31. Phases A and D are landed (see the table at the
+end and `pc64/UNOAUTOMATE-REQUESTS.md`). The design rationale is in
 [`WM-MODERN-PLAN.md`](WM-MODERN-PLAN.md); this document is the build order.
 Where the two disagree, THIS file wins.
 
@@ -130,6 +131,16 @@ from the start frame at the window's new location), double-click titlebar
 at its dragged position. Debug-HUD drag-frame cycles within 1.5x of the
 pre-change outline drag (capture a baseline number first and record it in
 your landing note).
+
+> **Measured, 2026-07-31 (A):** the 1.5x budget is not reachable and should
+> not be chased. Outline 30 857 / 32 984 kcyc per drag frame; live 76 545, of
+> which 38 761 is the window paint - i.e. 2.4x, and the whole delta is one
+> window paint, exactly the cost model `WM-MODERN-PLAN.md` §3 predicted. A
+> rubber band is cheap *because* it touches almost no pixels, so no amount of
+> tuning makes an opaque drag within 1.5x of it; the honest budget is "one
+> window paint per frame", which scales with window area (the Editor, the
+> measurement above, is 70 % of the screen). The shell logs the split per drag
+> in debug builds, so C and F can watch it rather than guess.
 
 ## 4. Phase B - titlebar minimize/maximize buttons
 
@@ -417,12 +428,37 @@ Recorded from the phases that have run. These override the sections above.
 8. **`session_save()` cannot round-trip in QEMU**: it writes to the first
    writable volume, which there is the volatile RAM disk. Persistence steps
    in any gate are code-review-only until metal.
+9. **SUPERSEDES 8 (phase A).** That was a real bug, not an environment limit,
+   and it is fixed: `session_save()` picks a persistent volume now (native FAT
+   first, the order `unosecure.c:pick_vol` uses), so no session had EVER been
+   restored on any machine. A persistence step is a runnable gate - but only
+   over a real FAT image (`tools/mkuefi.py` + `UNO_DISK`): vvfat read-write
+   returns garbage for a file the guest wrote, which reads exactly like a bug
+   in the code under test. `wm_a` does this.
+10. **SUPERSEDES 1 (phase A): QEMU CAN be driven by a pointer, and `wm_a`
+    does.** Recipe: `UNO_DETACH=1` **and no USB pointer device at all**, then
+    QMP `rel` + `btn` to the machine's PS/2 mouse. Deltas are guest
+    framebuffer pixels 1:1. Two traps behind the old conclusion: the
+    `usb-tablet` `harness.py` has always attached is invisible to this OVMF
+    *and* to the native stack (which claims BOOT interfaces only, subclass 1),
+    so every click in the `mouse` scenario has been landing on nothing; and
+    with two pointer devices present QEMU routes motion and buttons to
+    different ones. `Mouse.alive()` in `harness.py` proves a pointer exists
+    before a scenario asserts on one - copy that.
+11. **A HELD button is lost on the USB HID path** (`uno_usb_hid_mouse_poll`
+    returns 0 for the button on any frame with no new report, and a boot mouse
+    reports only on change), so a drag with a USB mouse commits before it
+    starts. PS/2 latches (`gMBtn`) and does not. Request filed to the usb
+    lane; until it lands, pointer gates must use PS/2.
+12. **The drag-frame budget in Gate A is unreachable** - see the measured note
+    there. The delta between a rubber band and an opaque drag is one window
+    paint, and that is the honest budget.
 
 ## Phase table (update as you land)
 
 | Phase | Contents | State |
 |---|---|---|
-| A | live drag, work area, double-click max, geometry persistence | IN FLIGHT |
+| A | live drag, work area, double-click max, geometry persistence | **DONE** 2026-07-31 |
 | B | min/max buttons, shell minimize, parked chips | READY on `wm-b`, held for A |
 | C | pointer snap + previews + restore semantics | NOT STARTED |
 | D | mods byte, `next_key2`/`uno_pc64_mods`, Alt-Tab MRU switcher | **DONE** 2026-07-31 |
