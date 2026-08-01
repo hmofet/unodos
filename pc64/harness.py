@@ -2636,6 +2636,89 @@ def ssh_exec():
     return 1 if fails else 0
 
 
+def ssh_app():
+    """Gate for ssh-f: the SSH client app.
+
+        UNO_DEBUG=1 UNO_DBGCON=1 ./build.sh && python3 harness.py ssh_app
+
+    The functional half drives the app's OWN connect, pump and close - the same
+    functions a click calls - and asserts a connection opens a tab, output
+    reaches the terminal pane, a second connection opens a second tab, and
+    closing one falls back to Manage.
+
+    The visual half is a screenshot, because that is the part assertions cannot
+    reach: the tab strip from tabs-a, the two MDI panes from tabs-b, and the
+    session and key lists inside them are only really verified by looking."""
+    fails = []
+
+    def check(name, ok, detail=""):
+        print("  %-52s %s %s" % (name, "PASS" if ok else "FAIL", detail))
+        if not ok:
+            fails.append(name)
+
+    log = "build/ssh_app.log"
+    sshd, user = _sshd_start()
+    try:
+        with open("build/esp/DEBUG.CFG", "w") as f:
+            f.write("spec nostress\n")
+        with open("build/esp/SSHTEST.CFG", "w") as f:
+            f.write("10.0.2.2 %s 2222\n" % user)
+        subprocess.run(["sh", "-c", "rm -f build/unodos-uefi.img"], check=False)
+        subprocess.run([sys.executable, "tools/mkuefi.py"], check=True)
+        os.environ["UNO_DISK"] = "build/unodos-uefi.img"
+        qemu, q = start_qemu(log=log, pointer="none",
+                             extra=["-netdev", "user,id=n0",
+                                    "-device", "e1000,netdev=n0"])
+        try:
+            print("ssh_app: boot")
+            deadline = time.time() + 220
+            text = ""
+            while time.time() < deadline:
+                time.sleep(5)
+                try:
+                    with open(log, "rb") as f:
+                        text = f.read().decode("latin-1")
+                except IOError:
+                    text = ""
+                if "sshapp: RESULT" in text:
+                    break
+            for line in text.splitlines():
+                if line.startswith("sshapp:"):
+                    print("    | " + line.strip())
+            check("the app ran", "sshapp: begin" in text)
+            check("connecting opened a tab", "sshapp: no new tab" not in text and
+                  "sshapp: connect:" not in text)
+            check("output reached the terminal pane",
+                  "sshapp: no output in the terminal pane" not in text and
+                  "sshapp: term-bytes=0" not in text)
+            check("a second connection opened a second tab",
+                  "sshapp: second tab missing" not in text and
+                  "sshapp: second connect failed" not in text)
+            check("closing a tab falls back to Manage",
+                  "sshapp: close did not" not in text)
+            check("the gate passed", "sshapp: RESULT PASS" in text)
+
+            # the visual half: open the app and photograph it
+            # The guest opened the window itself at the end of the test, which
+            # is deterministic in a way that navigating the Start menu is not.
+            # But SPECTEST runs long BEFORE the shell paints a desktop, so the
+            # window sits in the list while the screen is still the boot-test
+            # console - photographing straight away catches that instead.
+            time.sleep(75)
+            probe_screen(q)
+            shot(q, "ssh_app_window")
+            print("    (screenshot: shots/ssh_app_window.png)")
+        finally:
+            stop_qemu(qemu, q)
+    finally:
+        _sshd_stop(sshd)
+    if fails:
+        print("ssh_app: %d FAILED - %s" % (len(fails), ", ".join(fails)))
+    else:
+        print("ssh_app: all checks passed")
+    return 1 if fails else 0
+
+
 def ssh_verb():
     """Gate for ssh-e: the automation verb, and its 8 KB slicing.
 
@@ -2880,7 +2963,9 @@ def main():
     if len(sys.argv) > 1 and sys.argv[1] == "ssh_store":
         return ssh_store()                     # ditto: it boots twice
     if len(sys.argv) > 1 and sys.argv[1] == "ssh_verb":
-        return ssh_verb()                     # ditto: it boots twice
+        return ssh_verb()
+    if len(sys.argv) > 1 and sys.argv[1] == "ssh_app":
+        return ssh_app()                       # ditto: it owns its own sshd                     # ditto: it boots twice
     subprocess.run(["cp", OVMF_VARS, "build/vars.fd"], check=True)
     if os.path.exists(QMP_SOCK):
         os.remove(QMP_SOCK)

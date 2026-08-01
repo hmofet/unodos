@@ -893,12 +893,79 @@ static int ssh_t_verb(void *ctx)
     return bad ? 1 : 0;
 }
 
+/* ssh-f: the app. Drives the same functions a click drives - the app's own
+ * connect, pump and close - so this is the app being exercised, not a copy of
+ * it. What a pointer would add is proof it RENDERS, and the harness takes a
+ * screenshot for exactly that. */
+int  pc64_sshapp_dbg_select(const char *name);
+int  pc64_sshapp_dbg_connect(void);
+void pc64_sshapp_dbg_pump(void);
+void pc64_sshapp_dbg_close(void);
+int  pc64_sshapp_dbg_tabs(void);
+int  pc64_sshapp_dbg_cur(void);
+int  pc64_sshapp_dbg_textlen(void);
+const char *pc64_sshapp_dbg_status(void);
+void pc64_dbg_open_ssh(void);
+
+static int ssh_t_app(void *ctx)
+{
+    int waited = 0, bad = 0, tabs0, i;
+    (void)ctx;
+
+    sd_s("sshapp: begin\n");
+    if (!pc64_net_up()) { sd_s("sshapp: no NIC\nsshapp: RESULT FAIL\n"); return 1; }
+    while (!net_dhcp_done() && waited < 15000) { net_poll(); uno_pc64_delay_ms(1); waited++; }
+    if (!net_dhcp_done()) { sd_s("sshapp: no DHCP\nsshapp: RESULT FAIL\n"); return 1; }
+
+    /* The app needs a session whose key it can open unattended. The store
+     * gate's `s1` uses a passphrase-protected key on purpose, and the app is
+     * right to refuse it, so this makes its own. */
+    if (ssh_key_add("appkey", kSshTestSeed, "") != 0) { sd_s("sshapp: key add failed\n"); return 1; }
+    if (ssh_sess_set("app", "10.0.2.2", 2222, "unosshtest", "appkey") != 0)
+        { sd_s("sshapp: session save failed\n"); return 1; }
+    if (!pc64_sshapp_dbg_select("app")) { sd_s("sshapp: session not selectable\n"); return 1; }
+
+    tabs0 = pc64_sshapp_dbg_tabs();
+    if (!pc64_sshapp_dbg_connect()) {
+        sd_s("sshapp: connect: "); sd_s(pc64_sshapp_dbg_status());
+        sd_s("\nsshapp: RESULT FAIL\n"); return 1;
+    }
+    sd_s("sshapp: status="); sd_s(pc64_sshapp_dbg_status()); sd_s("\n");
+    if (pc64_sshapp_dbg_tabs() != tabs0 + 1) { sd_s("sshapp: no new tab\n"); bad = 1; }
+    if (pc64_sshapp_dbg_cur() <= 0) { sd_s("sshapp: did not switch to it\n"); bad = 1; }
+
+    for (i = 0; i < 8000 && pc64_sshapp_dbg_textlen() == 0; i++) {
+        pc64_sshapp_dbg_pump();
+        uno_pc64_delay_ms(1);
+    }
+    sd_s("sshapp: term-bytes=");
+    {   int v = pc64_sshapp_dbg_textlen(), t[8], ti = 0, k = 0; char d[10];
+        if (!v) t[ti++] = 0;
+        while (v) { t[ti++] = v % 10; v /= 10; }
+        while (ti) d[k++] = (char)('0' + t[--ti]);
+        d[k] = 0; sd_s(d); }
+    sd_s("\n");
+    if (pc64_sshapp_dbg_textlen() == 0) { sd_s("sshapp: no output in the terminal pane\n"); bad = 1; }
+
+    if (!pc64_sshapp_dbg_connect()) { sd_s("sshapp: second connect failed\n"); bad = 1; }
+    else if (pc64_sshapp_dbg_tabs() != tabs0 + 2) { sd_s("sshapp: second tab missing\n"); bad = 1; }
+    pc64_sshapp_dbg_close();
+    if (pc64_sshapp_dbg_tabs() != tabs0 + 1) { sd_s("sshapp: close did not remove a tab\n"); bad = 1; }
+    if (pc64_sshapp_dbg_cur() != 0) { sd_s("sshapp: close did not fall back to Manage\n"); bad = 1; }
+
+    /* leave the window UP so the harness photographs the real thing */
+    pc64_dbg_open_ssh();
+    sd_s(bad ? "sshapp: RESULT FAIL\n" : "sshapp: RESULT PASS\n");
+    return bad ? 1 : 0;
+}
+
 void unossh_register_tests(void)
 {
     unoauto_test_register("network", "ssh:transport", ssh_t_transport);
     unoauto_test_register("network", "ssh:exec", ssh_t_exec);
     unoauto_test_register("network", "ssh:store", ssh_t_store);
     unoauto_test_register("network", "ssh:verb", ssh_t_verb);
+    unoauto_test_register("network", "ssh:app", ssh_t_app);
 }
 #else
 void unossh_register_tests(void) { }
