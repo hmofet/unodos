@@ -22,8 +22,16 @@ typedef struct {
 /* One translated key-down event.  `scan` is an EFI SimpleTextIn scan code
  * (SCAN_UP=1/DOWN=2/RIGHT=3/LEFT=4/DELETE=8/ESC=0x17), 0 for a character key;
  * `uni` is the ASCII/Unicode char (0 for a scan-only key); `ctrl` is 1 if a
- * Ctrl modifier was held. */
-typedef void (*hid_key_fn)(int scan, int uni, int ctrl, void *ctx);
+ * Ctrl modifier was held; `mods` is the FULL modifier mask held when the key
+ * went down, as unoui UI_MOD_* bits (SHIFT 1, CTRL 2, ALT 4, GUI 8).
+ *
+ * `ctrl` is redundant - it is exactly !!(mods & UI_MOD_CTRL) - and is kept so
+ * that a caller which only ever wanted Ctrl reads the same value it always
+ * has.  `mods` was ADDED rather than replacing it deliberately: repurposing
+ * the third argument would have compiled everywhere and quietly turned "Shift
+ * is down" into "Ctrl is down", where a new argument breaks the build at every
+ * typed call site instead. */
+typedef void (*hid_key_fn)(int scan, int uni, int ctrl, int mods, void *ctx);
 
 void hid_kbd_reset(hid_kbd_state *s);
 

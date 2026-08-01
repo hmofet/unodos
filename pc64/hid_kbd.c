@@ -45,6 +45,17 @@ void hid_kbd_reset(hid_kbd_state *s)
     s->prevmod = 0; s->caps = 0; s->inited = 1;
 }
 
+/* the HID modifier byte -> UI_MOD_* bits: bit0 LCtrl, bit1 LShift, bit2 LAlt,
+ * bit3 LGUI, bits 4-7 the right-hand four. Left and right fold together -
+ * nothing above this cares which hand held Alt. */
+static int fold_mods(unsigned char m)
+{
+    return ((m & 0x11) ? HK_CTRL  : 0) |
+           ((m & 0x22) ? HK_SHIFT : 0) |
+           ((m & 0x44) ? HK_ALT   : 0) |
+           ((m & 0x88) ? HK_GUI   : 0);
+}
+
 static int was_down(const hid_kbd_state *s, unsigned char u)
 {
     int i;
@@ -80,7 +91,11 @@ static void emit_usage(unsigned char u, unsigned char mod, hid_kbd_state *s,
         }
         break;
     }
-    if (scan || uni) emit(scan, uni, ctrl, ctx);
+    /* mods is the mask held AT THE MOMENT OF THIS PRESS, taken from this
+     * report's own modifier byte - not the live level. A binding like Alt+Tab
+     * has to know Alt was down when Tab arrived, which a later poll cannot
+     * answer once the key has been let go. */
+    if (scan || uni) emit(scan, uni, ctrl, fold_mods(mod), ctx);
 }
 
 void hid_kbd_report(hid_kbd_state *s, const unsigned char *rep,
@@ -116,11 +131,4 @@ void hid_kbd_report(hid_kbd_state *s, const unsigned char *rep,
  * LEVEL, not an edge: a modifier-only change IS a report (all six keycodes
  * zero), so this stays current while a modifier is held with no key pressed,
  * and a poll that brings no report leaves it alone rather than clearing it. */
-int hid_kbd_mods(const hid_kbd_state *s)
-{
-    unsigned char m = s->prevmod;
-    return ((m & 0x11) ? HK_CTRL  : 0) |
-           ((m & 0x22) ? HK_SHIFT : 0) |
-           ((m & 0x44) ? HK_ALT   : 0) |
-           ((m & 0x88) ? HK_GUI   : 0);
-}
+int hid_kbd_mods(const hid_kbd_state *s) { return fold_mods(s->prevmod); }
