@@ -70,7 +70,7 @@ The two lanes run concurrently. Within a lane, order is strict.
 |---|---|---|
 | `tabs-a` | toolkits | **DONE** - `UI_TABS` becomes a real tabbed-document control + public geometry split |
 | `tabs-b` | toolkits | **DONE** - `UI_MDI` container widget |
-| `tabs-c` | toolkits | browser refactored onto `tabs-a` |
+| `tabs-c` | toolkits | **DONE** - browser refactored onto `tabs-a` |
 | `ssh-a` | unossh | Ed25519, host-tested against RFC 8032 vectors |
 | `ssh-b` | unossh | transport: version exchange, `curve25519-sha256` KEX, `aes256-ctr` + `hmac-sha2-256`, rekey |
 | `ssh-c` | unossh | userauth (publickey, password) + session channel, exec and shell |
@@ -479,3 +479,50 @@ harmless today only because those windows happen to carry their canvas last.
 `UI_MDI` restores correctly for both cases; `UI_CANVAS` was left alone because
 it is a live shell path and this phase has no gate that would prove a change to
 it safe. Whoever touches the shell next should fix it there, with a gate.
+
+**16. `band_tabs` does not disappear.** §5 said it would and that `band_bar` /
+`band_body` would re-origin around it. They do not need to: the browser is a
+canvas hosting the control inside a rect, so the band simply *is* the control's
+rect. `ch_tabh()` became `unoui_tabs_h(TH())` and every other band's arithmetic
+was left untouched - one line instead of re-originating the whole chrome.
+
+**17. The chrome-palette question answered itself: ALL of it moved.** §5 offered
+two options and asked for a deliberate choice. Converting only the tabs was not
+really available - the control paints from the palette, so a themed strip would
+have sat directly on top of a hard-coded near-white toolbar, incoherent on any
+theme that is not light, and Aurora Light and Dark are the shell's own defaults.
+The conversion turned out to be six macro definitions (`CH_FACE` becomes
+`TH()->pal.face`, and so on), so the toolbar, the drop-down panels and the
+status bar all became themed with no edit at their use sites. The PAGE colours
+(`PG_*`) are deliberately NOT themed: a document renders as a document, which is
+what every browser does with a page regardless of the desktop.
+
+**18. `pc64_browser.c` needed `unoui_theme.h`.** It had only the forward
+declaration, because the existing panel code passes the theme straight to
+`unoui_list_draw` without ever dereferencing it. Reading the palette needs the
+complete type. `pc64_clock.c` already includes it for the same reason.
+
+**19. Ctrl-T deselects the previous tab, and that is what makes the strip
+derivable.** In the gate, the first add-a-tab diff's left edge is tab 0
+*repainting* because it lost the selection - not the new tab appearing. So the
+strip's left edge is `d1[0]` and the tab pitch is `d2[0] - d1[0]`. Assuming it
+the other way round produced a negative strip origin, which the range checks
+caught on the first run. The pattern is worth copying: derive geometry from two
+measurements, then range-check every derived value, so a bad derivation fails
+loudly instead of clicking empty chrome and reporting a pass.
+
+**20. The "+" button moving is a 0.2 signal, not a 1.0 one.** Its box is filled
+with `face`, which is also the empty strip's background, so when it moves only
+its frame and its cross glyph differ. Measured: 0.216 of the zone changes when
+it moves and 0.005 when it does not - two orders of magnitude apart, so the
+threshold sits at 0.10 with room either side. An assertion written at the
+obvious ">0.5 changed" would have failed on completely correct behaviour, which
+is the trap in every pixel-diff gate: take the threshold from the measurement,
+not from intuition about how big the change ought to be.
+
+**21. The dark theme is verified by palette values, not by a photograph.** The
+gate screenshots Aurora Light, the shell's default. Aurora Dark maps `face` to
+0x303643 against `text` 0xE7EBF3, so the contrast is high by construction and is
+exactly what every other themed window already gets - but no run has actually
+grabbed the browser under a dark palette. Anyone who adds a theme-switching step
+to `harness.py` should take that shot while they are in there.
