@@ -42,6 +42,30 @@ int  ssh_send(int handle, const unsigned char *payload, int n);
 int  ssh_recv(int handle, const unsigned char **payload, int *n, int timeout_ms);
 void ssh_close(int handle);
 
+/* ---- authentication (RFC 4252) ------------------------------------------
+ * Both return 0 when the server let you in, 1 when it rejected you (the reason
+ * string then lists the methods it WILL accept) and -1 when the connection
+ * broke. A rejection is not an error: probing one method and falling back to
+ * another is normal, and the connection stays usable. */
+int ssh_auth_password(int handle, const char *user, const char *pass);
+/* publickey with an Ed25519 key held as its 32-byte seed. The signature covers
+ * the session id, which is what stops it being replayed onto another
+ * connection. */
+int ssh_auth_key(int handle, const char *user, const unsigned char seed[32]);
+
+/* ---- the session channel (RFC 4254) -------------------------------------
+ * ssh_exec/ssh_shell open a channel and start something on it. After that
+ * ssh_poll() is non-blocking - drive it from a frame loop - and ssh_read()
+ * returns 0 when nothing has arrived yet and -1 only at a real end of stream.
+ * ssh_exit_status() is -1 until the server reports one. */
+int ssh_exec(int handle, const char *cmd);
+int ssh_shell(int handle);
+int ssh_poll(int handle);                   /* 1 = still live, 0 = done */
+int ssh_read(int handle, void *buf, int cap);
+int ssh_write(int handle, const void *buf, int n);
+int ssh_exit_status(int handle);
+int ssh_channel_open(int handle);
+
 const char          *ssh_error(int handle);
 const char          *ssh_server_ident(int handle);
 const unsigned char *ssh_host_fingerprint(int handle);   /* 32 bytes */
