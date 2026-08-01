@@ -1,6 +1,6 @@
 # SSH client + unoui tabs/MDI, implementation spec (worker brief)
 
-Status: **SPEC**, 2026-07-31. No phase started. The design rationale is in
+Status: **COMPLETE**, 2026-08-01. All nine phases landed and gated. The design rationale is in
 [`SSH-CLIENT-PLAN.md`](SSH-CLIENT-PLAN.md); this document is the build order.
 Where the two disagree, THIS file wins.
 
@@ -76,7 +76,7 @@ The two lanes run concurrently. Within a lane, order is strict.
 | `ssh-c` | unossh | **DONE** - publickey auth + session channel, proven end to end against OpenSSH |
 | `ssh-d` | unossh | **DONE** - key/session/known-host store, persistent across a power cycle |
 | `ssh-e` | unossh | **DONE** - the verb, gated directly; the URC clause is filed with unoautomate |
-| `ssh-f` | both | the GUI app - needs `tabs-a`, `tabs-b`, `ssh-c`, `ssh-d` |
+| `ssh-f` | both | **DONE** - the SSH client app; the programme is complete |
 
 ## 3. `tabs-a` - the tabbed-document control
 

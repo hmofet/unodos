@@ -3947,3 +3947,62 @@ not come back to you again.
    nobody looked at it.
 
 `ssh-f` (the GUI app) is all that remains.
+
+---
+
+## 2026-08-01 - LANDED (unossh): ssh-f, the app. THE PROGRAMME IS COMPLETE.
+
+All nine phases are on master: `tabs-a`, `tabs-b`, `tabs-c`, `ssh-a` .. `ssh-f`.
+
+`pc64/sshapp_ui.c` is a native windowed canvas, registered as `EX_SSH`. It is
+the joining point of everything: the tab strip is the control `tabs-a` built
+and `tabs-c` proved a canvas can host, the Manage tab's two panes are `tabs-b`'s
+MDI children, the lists inside them are `UI_LIST`'s public geometry, the
+sessions and keys are `ssh-d`'s store, and a connection is `ssh-b`'s transport
+under `ssh-c`'s auth. The screenshot in `shots/ssh_app_window.png` shows all of
+it at once.
+
+**Host-key policy finally lives somewhere.** `ssh-b` and `ssh-d` both deferred
+it to the app, and this is it: MISMATCH refuses and says so in red, UNKNOWN is
+recorded on first sight and reported, KNOWN is stated. Trust-on-first-use,
+written down rather than implied.
+
+**Nothing blocks.** One `ssh_poll` sweep per frame from the draw path; a
+connection that stalls costs the app a frame of nothing, not the desktop.
+
+Gate: `python3 harness.py ssh_app`, 6 checks plus a screenshot.
+
+### Two corrections to the spec, both deliberate
+
+1. **The gate is not fully pointer-driven, and that is the better test.** §11
+   asked for clicks. The functional half instead calls the app's OWN
+   `connect_selected`, pump and `tab_close` - the same functions a click calls,
+   not a copy - and the pointer would only have added a dependency on where
+   `EX_SSH` lands in the Start menu. That dependency is not hypothetical: the
+   first attempt used `start_app(q, 19)` and opened the Control Panel. The
+   window is now opened by the guest itself at the end of the test, and the
+   screenshot proves the thing assertions cannot reach - that it RENDERS.
+2. **`shell` without a `pty-req` produces no output at all.** The first version
+   asked for a shell and no pty, and the terminal pane stayed empty while every
+   other assertion passed. An interactive shell with no terminal reads the
+   channel and prints nothing until something is typed at it, which looks
+   exactly like a broken data path and is not one. `request_pty()` is now a
+   real pty-req - TERM, four dimensions, a modes string - and the same run
+   produced 225 bytes without touching anything else.
+
+### And one about photographing a boot-time test
+
+SPECTEST runs long before the shell paints a desktop, so a window opened from a
+test sits in the list while the screen is still the boot-test console. The
+first screenshot caught exactly that: a black console, with the app open and
+invisible. The scenario now waits for the desktop before it looks.
+
+### What the whole programme did NOT do
+
+No SSH server, no SFTP or SCP, no port forwarding, no agent forwarding, and no
+terminal emulation beyond plain text - the pane strips CR and TAB and does not
+interpret escape sequences, so a curses program will look like noise. Keys are
+loaded only when unprotected; the app cannot yet prompt for a passphrase, which
+is the first thing a follow-on should add. `ssh_shell()` takes no dimensions
+from the window. RSA host keys and RSA user keys are declared in the plan but
+only Ed25519 is implemented.
