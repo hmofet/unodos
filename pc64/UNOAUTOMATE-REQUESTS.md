@@ -3881,3 +3881,69 @@ first, and that is why "the first boot seeded it" is a separate assertion from
 `ssh_verify_host()` exists but nothing in the handshake path calls it yet -
 policy (prompt, refuse, trust-on-first-use) belongs to the app, so `ssh-f`
 wires it. `ssh-e` (the unoautomate verb) and `ssh-f` (the GUI) remain.
+
+---
+
+## 2026-08-01 - LANDED (unossh): ssh-e, the automation verb
+
+`ssh_dbg_cmd(line, out, cap)` is implemented and gated. The verb logs into
+another machine, runs a command and hands back its output - so the harness that
+already commands THIS box can command others.
+
+Gate: `python3 harness.py ssh_verb`, 7 checks. It drives `ssh_dbg_cmd()`
+directly rather than over URC, for the reason in the request below, and it
+still exercises everything this lane owns: the sub-verb grammar, a real login
+performed entirely through the verb, and the slicing.
+
+**Sub-verbs:** `keys`, `keygen <n>`, `keypub <n>`, `keyrm <n>`, `sess`,
+`sessadd <n> <host> <port> <user> <key>`, `sessrm <n>`, `hosts`,
+`run <sess|user@host> <cmd...>`, `get <id> <off>`, `close`, `help`.
+
+**Built around your 8 KB buffer rather than around it.** `g_tx` is 8192 bytes
+and `tx_putn` drops silently past it, while a remote command's output is
+unbounded. So `run` returns `id=N len=N exit=N` and `get <id> <off>` hands back
+one bounded slice; the caller loops until `off >= len`. The gate deliberately
+runs `seq 1 2000` - 8893 bytes, past the buffer on purpose - and asserts the
+slices reassemble to exactly that length, so the mechanism is exercised rather
+than merely present. No new streaming machinery is being asked for.
+
+### REQUEST -> unoautomate: one weak stub and one clause, when convenient
+
+Everything above is on our side already. What is still needed is the same
+four-line pass-through `eth` and `hwwdt` have:
+
+```
+int ssh_dbg_cmd(const char *line, char *out, int cap);
+__attribute__((weak)) int ssh_dbg_cmd(const char *line, char *out, int cap)
+{ ...  "unossh not built" ...; return -1; }
+```
+
+plus, in `dispatch_cmd`:
+
+```
+if (!strcmp_(verb, "ssh")) {
+    int n = ssh_dbg_cmd(args ? args : "", g_report, (int)sizeof g_report);
+    rsp(id, n >= 0 ? "ok" : "err", n >= 0 ? g_report : "bad-cmd (try: ssh help)");
+    rsp(id, "end", 0); return;
+}
+```
+
+and a `REMOTE.md` row. The strong symbol is already in the tree, so this links
+green either way and needs no coordination. The output format is ours and will
+not come back to you again.
+
+### Two findings
+
+1. **The known-hosts check fired for real, by accident.** `ssh:store` seeds a
+   SYNTHETIC fingerprint, and it had been seeding it against `10.0.2.2` - the
+   address `ssh:verb` then tries to reach. The verb refused with `HOST KEY
+   MISMATCH` and was right to. Fixture fixed (the store test now claims
+   `store.test.invalid`), but the feature validated itself on the way past:
+   a recorded fingerprint that does not match stops the connection.
+2. **A test that discards the error string wastes a run.** The verb writes its
+   reason into the caller's buffer even when it returns -1, and the first
+   version of this gate printed `(err)` instead. That is the same mistake the
+   `ssh_connect` "bad handle" bug was, one level up: the diagnosis existed and
+   nobody looked at it.
+
+`ssh-f` (the GUI app) is all that remains.

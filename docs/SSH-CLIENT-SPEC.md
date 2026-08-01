@@ -75,7 +75,7 @@ The two lanes run concurrently. Within a lane, order is strict.
 | `ssh-b` | unossh | **DONE** - transport proven against a real OpenSSH 9.5 server |
 | `ssh-c` | unossh | **DONE** - publickey auth + session channel, proven end to end against OpenSSH |
 | `ssh-d` | unossh | **DONE** - key/session/known-host store, persistent across a power cycle |
-| `ssh-e` | unossh | the unoautomate verb |
+| `ssh-e` | unossh | **DONE** - the verb, gated directly; the URC clause is filed with unoautomate |
 | `ssh-f` | both | the GUI app - needs `tabs-a`, `tabs-b`, `ssh-c`, `ssh-d` |
 
 ## 3. `tabs-a` - the tabbed-document control
