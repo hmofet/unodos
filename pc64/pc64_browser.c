@@ -15,6 +15,7 @@
  * pages and READMEs; not a spec-complete engine.
  * ======================================================================== */
 #include "unoui.h"
+#include "unoui_theme.h"      /* the chrome reads the shell's palette */
 #include "fb.h"
 #include "pc64_font.h"
 #include "pc64_fs.h"
@@ -1190,7 +1191,10 @@ static void go_fwd(void)
 /* ---- chrome geometry -----------------------------------------------------
  * One function per band, all derived from the font, so the chrome scales with
  * the UI font and the draw code and the hit test can never disagree. */
-static int ch_tabh(void)  { return fb_text_h() + 9; }
+static const unoui_theme *TH(void) { return pc64_shell_theme(); }
+
+/* the tab strip is a unoui control now, so the band is exactly its height */
+static int ch_tabh(void)  { return unoui_tabs_h(TH()); }
 static int ch_barh(void)  { return fb_text_h() + 12; }
 static int ch_stath(void) { return fb_text_h() + 5; }
 static int ch_btnw(void)  { return fb_text_h() + 12; }   /* square icon button */
@@ -1242,35 +1246,6 @@ static unoui_rect tb_rect(unoui_rect r, int which)
 }
 #define TB_ADDR TB_N          /* tb_rect's default case = the address field */
 
-/* tab strip: one rect per open tab, plus the "+" button */
-static int tab_width(unoui_rect r)
-{
-    int alive = 0, i, w;
-    for (i = 0; i < MAXTABS; i++) if (g_tab[i].used) alive++;
-    if (alive < 1) alive = 1;
-    w = (r.w - ch_tabh() - 8) / alive;
-    if (w > 130) w = 130;
-    if (w < 46)  w = 46;
-    return w;
-}
-
-static unoui_rect tab_rect(unoui_rect r, int idx)      /* idx = slot, not tab # */
-{
-    unoui_rect b = band_tabs(r), o;
-    o.x = b.x + 2 + idx * tab_width(r); o.y = b.y + 2;
-    o.w = tab_width(r) - 2; o.h = b.h - 2;
-    return o;
-}
-static unoui_rect tab_plus_rect(unoui_rect r)
-{
-    int alive = 0, i;
-    unoui_rect b = band_tabs(r), o;
-    for (i = 0; i < MAXTABS; i++) if (g_tab[i].used) alive++;
-    o.x = b.x + 2 + alive * tab_width(r) + 2; o.y = b.y + 3;
-    o.w = b.h - 6; o.h = b.h - 6;
-    return o;
-}
-
 /* the drop-down panel (bookmarks / history), anchored under its button */
 static unoui_rect panel_rect(unoui_rect r)
 {
@@ -1292,16 +1267,56 @@ static unoui_rect panel_list_rect(unoui_rect r)
     return o;
 }
 
-/* ---- chrome painting ----------------------------------------------------- */
-#define CH_FACE   FB_RGB(238, 240, 244)
-#define CH_EDGE   FB_RGB(186, 190, 198)
-#define CH_TEXT   FB_RGB(35, 38, 46)
-#define CH_DIM    FB_RGB(120, 126, 136)
-#define CH_ACTIVE FB_RGB(252, 252, 253)
-#define CH_HOT    FB_RGB(222, 232, 248)
+/* ---- chrome painting -----------------------------------------------------
+ * The chrome reads the SHELL'S palette instead of fixed light-grey values, so
+ * the browser is themed like every other window. That became a requirement
+ * rather than a nicety once the tab strip turned into a unoui control: the
+ * control paints from the palette, and leaving the toolbar on hard-coded light
+ * grey would have put a themed strip on top of chrome that ignored the theme -
+ * unmissable on Aurora Dark, which is the shell's own default. The role
+ * mapping is one for one with the constants it replaces.
+ *
+ * The PAGE colours (PG_*) are deliberately NOT themed: a document renders as
+ * the document, the way every browser paints a page regardless of the desktop. */
+#define CH_FACE   (TH()->pal.face)
+#define CH_EDGE   (TH()->pal.shadow)
+#define CH_TEXT   (TH()->pal.text)
+#define CH_DIM    (TH()->pal.text_dim)
+#define CH_ACTIVE (TH()->pal.win_bg)
+#define CH_HOT    (TH()->pal.light)
 
 static int g_hot = -1;                 /* toolbar slot under the pointer, -1 */
 static int g_hot_tab = -1, g_hot_close = 0, g_hot_plus = 0;
+static int g_tab_first;                /* first visible tab, if they overflow */
+
+/* ---- the tab strip ------------------------------------------------------- *
+ * The browser keeps tabs in a SPARSE array (g_tab[i].used); unoui_tabs_model
+ * is dense. tabs_model() builds the dense view each time it is needed - a
+ * label array pointing straight into each tab's own mutable title, plus a
+ * slot -> tab map - so nothing about btab's storage had to change and unoui
+ * never holds a pointer it could outlive. */
+static const char *g_tab_lbl[MAXTABS];
+static int         g_tab_map[MAXTABS];
+
+static void tabs_model(unoui_tabs_model *m)
+{
+    int i, n = 0;
+    m->sel = 0; m->hot = -1; m->hot_part = UI_TAB_NONE;
+    for (i = 0; i < MAXTABS; i++) {
+        if (!g_tab[i].used) continue;
+        g_tab_lbl[n] = g_tab[i].title;
+        g_tab_map[n] = i;
+        if (i == g_cur)     m->sel = n;
+        if (i == g_hot_tab) m->hot = n;
+        n++;
+    }
+    m->labels = g_tab_lbl;
+    m->n      = n;
+    m->first  = g_tab_first;
+    m->flags  = UI_TF_CLOSE | UI_TF_PLUS | UI_TF_ELASTIC | UI_TF_OVERFLOW;
+    if (m->hot >= 0)     m->hot_part = g_hot_close ? UI_TAB_CLOSE : UI_TAB_SEL;
+    else if (g_hot_plus) m->hot_part = UI_TAB_PLUS;
+}
 
 static void btn_box(unoui_rect r, int hot, int on)
 {
@@ -1359,36 +1374,18 @@ static void glyph_star(unoui_rect r, fb_px col, int filled)
     }
 }
 
+/* Thirty lines of hand-rolled strip became this. Everything it used to do -
+ * elastic widths, truncation, the close boxes, the "+", the hover states - is
+ * the toolkit's now, and the geometry it draws is the same geometry the hit
+ * test below reads, which the two hand-written copies could not guarantee. */
 static void draw_tabs(unoui_rect r)
 {
-    unoui_rect b = band_tabs(r), pl;
-    int i, slot = 0;
-    fb_fill_rect(b.x, b.y, b.w, b.h, CH_FACE);
-    fb_hline(b.x, b.y + b.h - 1, b.w, CH_EDGE);
-    for (i = 0; i < MAXTABS; i++) {
-        unoui_rect t;
-        int active = (i == g_cur), tw;
-        if (!g_tab[i].used) continue;
-        t = tab_rect(r, slot++);
-        fb_fill_rect(t.x, t.y, t.w, t.h, active ? CH_ACTIVE :
-                     (g_hot_tab == i ? CH_HOT : CH_FACE));
-        fb_frame_rect(t.x, t.y, t.w, t.h, CH_EDGE);
-        if (active) fb_hline(t.x + 1, t.y + t.h - 1, t.w - 2, CH_ACTIVE);
-        tw = t.w - 22;
-        {   char lbl[24]; int k = 0;
-            const char *s = g_tab[i].title;
-            while (s[k] && k < (int)sizeof lbl - 1 &&
-                   fb_text_w(lbl) < tw) { lbl[k] = s[k]; k++; lbl[k] = 0; }
-            fb_text(t.x + 6, t.y + (t.h - fb_text_h()) / 2, lbl,
-                    active ? CH_TEXT : CH_DIM, -1); }
-        {   int cx = t.x + t.w - 12, cy = t.y + t.h / 2, k;   /* the close X */
-            fb_px c = (g_hot_tab == i && g_hot_close) ? FB_RGB(200,60,60) : CH_DIM;
-            for (k = -3; k <= 3; k++) { fb_pixel(cx + k, cy + k, c); fb_pixel(cx + k, cy - k, c); } }
-    }
-    pl = tab_plus_rect(r);
-    btn_box(pl, g_hot_plus, 0);
-    fb_hline(pl.x + 3, pl.y + pl.h / 2, pl.w - 6, CH_TEXT);
-    fb_vline(pl.x + pl.w / 2, pl.y + 3, pl.h - 6, CH_TEXT);
+    unoui_tabs_model m;
+    unoui_rect b = band_tabs(r);
+    tabs_model(&m);
+    g_tab_first = unoui_tabs_reveal(TH(), b, &m, m.sel);   /* keep it in view */
+    m.first = g_tab_first;
+    unoui_tabs_draw(TH(), b, &m);
 }
 
 static void draw_toolbar(unoui_rect r)
@@ -1825,7 +1822,7 @@ static int br_event(struct unoui_widget *w, const void *ev, void *ctx)
     }
 
     if (e->kind == UI_EV_MOUSE_MOVE) {
-        int i, slot = 0;
+        int i;
         g_hot = -1; g_hot_tab = -1; g_hot_close = 0; g_hot_plus = 0;
         g_hint[0] = 0;
         for (i = 0; i < TB_N; i++) {
@@ -1839,20 +1836,25 @@ static int br_event(struct unoui_widget *w, const void *ev, void *ctx)
                 return 1;
             }
         }
-        for (i = 0; i < MAXTABS; i++) {
-            unoui_rect o;
-            if (!g_tab[i].used) continue;
-            o = tab_rect(r, slot++);
-            if (e->x >= o.x && e->x < o.x + o.w && e->y >= o.y && e->y < o.y + o.h) {
-                g_hot_tab = i;
-                g_hot_close = (e->x >= o.x + o.w - 18);
-                sput(g_hint, sizeof g_hint, g_hot_close ? "Close this tab" : g_tab[i].loc);
+        {   /* the strip: one hit test, and the close zone is the box that was
+             * actually drawn rather than "the last 18 px" */
+            unoui_tabs_model m;
+            int slot = -1, part;
+            tabs_model(&m);
+            part = unoui_tabs_hit(TH(), band_tabs(r), &m, e->x, e->y, &slot);
+            if ((part == UI_TAB_SEL || part == UI_TAB_CLOSE) && slot >= 0) {
+                g_hot_tab = g_tab_map[slot];
+                g_hot_close = (part == UI_TAB_CLOSE);
+                sput(g_hint, sizeof g_hint,
+                     g_hot_close ? "Close this tab" : g_tab[g_hot_tab].loc);
                 return 1;
             }
-        }
-        {   unoui_rect pl = tab_plus_rect(r);
-            if (e->x >= pl.x && e->x < pl.x + pl.w && e->y >= pl.y && e->y < pl.y + pl.h) {
-                g_hot_plus = 1; sput(g_hint, sizeof g_hint, "New tab (Ctrl-T)"); return 1;
+            if (part == UI_TAB_PLUS) {
+                g_hot_plus = 1; sput(g_hint, sizeof g_hint, "New tab (Ctrl-T)");
+                return 1;
+            }
+            if (part == UI_TAB_OVER) {
+                sput(g_hint, sizeof g_hint, "More tabs"); return 1;
             } }
         if (!t->start && !g_panel) {                  /* a link under the pointer */
             unoui_rect body = band_body(r);
@@ -1863,7 +1865,7 @@ static int br_event(struct unoui_widget *w, const void *ev, void *ctx)
     }
 
     if (e->kind == UI_EV_MOUSE_DOWN) {
-        int i, slot = 0;
+        int i;
         unoui_rect body = band_body(r);
 
         if (g_panel) {                                /* the open panel first */
@@ -1909,20 +1911,24 @@ static int br_event(struct unoui_widget *w, const void *ev, void *ctx)
                 addr_focus(1);
                 return 1;
             } }
-        for (i = 0; i < MAXTABS; i++) {               /* tabs */
-            unoui_rect o;
-            if (!g_tab[i].used) continue;
-            o = tab_rect(r, slot++);
-            if (e->x < o.x || e->x >= o.x + o.w || e->y < o.y || e->y >= o.y + o.h) continue;
-            if (e->x >= o.x + o.w - 18) tab_close(i);
-            else { g_cur = i; g_link_sel = -1;
-                   if (!g_addr_focus) { sput(g_addr, LOCMAX, g_tab[i].loc);
-                                        g_addr_caret = (int)strlen(g_addr); } }
-            return 1;
-        }
-        {   unoui_rect pl = tab_plus_rect(r);         /* the + button */
-            if (e->x >= pl.x && e->x < pl.x + pl.w && e->y >= pl.y && e->y < pl.y + pl.h) {
-                tab_new("uno:start"); return 1;
+        {   /* the strip: select, close, new, or scroll - one hit test, and it
+             * reads the same geometry the painter drew */
+            unoui_tabs_model m;
+            int slot = -1, part;
+            tabs_model(&m);
+            part = unoui_tabs_hit(TH(), band_tabs(r), &m, e->x, e->y, &slot);
+            if (part == UI_TAB_CLOSE && slot >= 0) { tab_close(g_tab_map[slot]); return 1; }
+            if (part == UI_TAB_SEL && slot >= 0) {
+                g_cur = g_tab_map[slot]; g_link_sel = -1;
+                if (!g_addr_focus) { sput(g_addr, LOCMAX, g_tab[g_cur].loc);
+                                     g_addr_caret = (int)strlen(g_addr); }
+                return 1;
+            }
+            if (part == UI_TAB_PLUS) { tab_new("uno:start"); return 1; }
+            if (part == UI_TAB_OVER) {
+                int mf = unoui_tabs_maxfirst(TH(), band_tabs(r), &m);
+                if (g_tab_first < mf) g_tab_first++;
+                return 1;
             } }
 
         if (e->y >= body.y && e->y < body.y + body.h) {
