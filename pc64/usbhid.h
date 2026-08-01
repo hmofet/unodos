@@ -19,9 +19,12 @@
  * Returns the number of HID endpoints claimed. Safe/idempotent. */
 int  uno_usb_hid_init(void);
 
-/* poll all USB keyboards: emit(scan, uni, ctrl, ctx) per newly-pressed key
- * (EFI SimpleTextIn scan codes + unicode, same space as the firmware path). */
-typedef void (*uno_usb_key_fn)(int scan, int uni, int ctrl, void *ctx);
+/* poll all USB keyboards: emit(scan, uni, ctrl, mods, ctx) per newly-pressed
+ * key (EFI SimpleTextIn scan codes + unicode, same space as the firmware
+ * path). `mods` is the UI_MOD_* mask held when that key went down - see
+ * hid_kbd.h; `ctrl` is the same bit on its own, kept for callers that only
+ * ever wanted Ctrl. */
+typedef void (*uno_usb_key_fn)(int scan, int uni, int ctrl, int mods, void *ctx);
 int  uno_usb_hid_kbd_poll(uno_usb_key_fn emit, void *ctx);
 
 /* poll all USB mice: dx/dy accumulated since the last call, plus the LATCHED
