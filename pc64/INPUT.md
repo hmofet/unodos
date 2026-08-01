@@ -19,6 +19,21 @@ edges** as `(scan, uni, ctrl)` in the EFI SimpleTextIn space `map_key()`
 already speaks, so both transports feed the existing key ring unchanged. It
 tracks Caps Lock and maps arrows/esc/del to EFI scan codes.
 
+The keys are edges; the **modifier byte is a level**. `hid_kbd_mods()` returns
+it as `UI_MOD_*` bits (left and right folded), recorded on every report -
+including the rollover one, which is otherwise ignored. `uno_usb_hid_mods()`
+ORs it across the claimed USB keyboards, and `uno_pc64_mods()` prefers it
+whenever a USB keyboard is bound: that is what gives a USB keyboard Alt and
+GUI at all, and a real release edge on both sides of detach.
+
+**Still ctrl-only on the key event itself.** `hid_key_fn` carries a bare `ctrl`
+flag, so a key pressed WITH Alt still reaches the raw ring with `mods` = 0 or
+CTRL. Bindings that test the live state (the Alt-Tab commit) now work from a
+USB keyboard; bindings that test the key event's own mods (Alt+Tab to open the
+switcher, Alt+arrow snap) still need the callback widened to carry the mods
+byte - that touches `i2c_hid.c` and `hid_key_emit()` as well, so it is the
+shell lane's call.
+
 ## I2C-HID: keyboard + pointer (`i2c_hid.c`)
 
 Self-configuring: scans every LPSS DesignWare I2C controller, probes the
@@ -95,7 +110,13 @@ dead trackpad on real hardware could not be diagnosed at all.
 ## Verifying
 
 - QEMU: `harness.py unoapps` (keyboard nav opens every app); `-device usb-kbd`
-  + `-DUNO_XHCI -DUNO_USBHID_TEST` logs `usbhid: claimed kbd=1 mouse=1`
-  (enumeration + claim; key *routing* to the emulated usb-kbd is a QEMU limit,
-  so real USB typing is metal-first). I2C-HID has no QEMU model → metal-only.
+  + `-DUNO_XHCI -DUNO_USBHID_TEST` logs `usbhid: claimed kbd=1 mouse=1`.
+  **Correction (2026-07-31): keys DO reach an emulated usb-kbd.** The old note
+  here said routing to it was a QEMU limit and that USB typing was metal-first;
+  an untargeted `input-send-event` key reaches the guest's native USB keyboard,
+  measured by `harness.py usbhid_mods`, which asserts on the modifier level the
+  guest reports back. (`input-send-event`'s `device` field does NOT help - it
+  names a console, and passing an input device's id aborts QEMU.) The USB mouse
+  has its own gate, `harness.py usbhid_drag`. I2C-HID has no QEMU model →
+  metal-only.
 - Metal: see `METAL-CHECKLIST.md` (Surface trackpad/keyboard bind + float gone).

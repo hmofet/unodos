@@ -130,6 +130,49 @@ because the native driver speaks boot protocol and nothing else.
 A debug boot log now prints the verdict, because the bound counts never could:
 `usb-hid preflight: kbd=1 ptr=0 (USB boot keyboard on an xHCI root port)`.
 
+## Boot HID reports on CHANGE: what is a level, and what is an edge
+
+The single rule the poll path has to get right, and got wrong twice. A boot
+keyboard and a boot mouse both report only when something changes, so a poll
+that brings no report means *nothing changed* - never *everything is zero*.
+
+| Field | Kind | On a poll with no report |
+|---|---|---|
+| mouse dx / dy, wheel | EDGE (deltas the caller consumes) | reset to 0 |
+| mouse button mask | LEVEL | unchanged, still held |
+| keyboard key presses | EDGE (diffed against the previous report) | nothing emitted |
+| keyboard modifier byte | LEVEL | unchanged, still held |
+
+`uno_usb_hid_mouse_poll()` used to start its button mask at 0 and only OR in
+`rep[0]` when a report arrived, so a button held still read as released on the
+very next frame: the shell saw press-release-press and **a drag with a USB
+mouse committed before it started**. The mask is now latched per endpoint
+(`g_eps[i].btn`) - per endpoint, not once per file, because the loop ORs
+several mice together and a shared latch would let one mouse's report clear a
+button held on another. `uno_ps2_mouse()` has always had this shape (`gMBtn`,
+"latched button since the last call").
+
+`uno_usb_hid_mods()` [STABLE, 2026-07-31] answers the same question for the
+keyboard: the modifier byte of the last report, folded to unoui `UI_MOD_*` bits
+(SHIFT 1, CTRL 2, ALT 4, GUI 8), left and right together. It is a read of what
+`uno_usb_hid_kbd_poll()` already latched, so it consumes no report and can be
+called at any rate. `hid_kbd_report()` records the byte on EVERY report,
+including the rollover one it otherwise ignores - rollover means too many keys
+are down, not that the modifiers were released. This is `uno_pc64_mods()`'s USB
+source; without it Alt and GUI were dead on every USB keyboard.
+
+Both are QEMU-gated: `harness.py usbhid_drag` (`-device usb-mouse`) and
+`harness.py usbhid_mods` (`-device usb-kbd`), on an eager
+`-DUNO_USBHID_TEST -DUNO_NO_DETACH -DUNO_DBGCON` build.
+
+**Still one transfer in flight.** `uno_usb_intr_in()` keeps exactly one TRB
+outstanding and re-posts on each successful read, so the controller fetches at
+most one report per host poll. Queueing more is the change that killed input on
+the ZimaBlade on 2026-07-30 (see the CORRECTION entry in
+`UNOAUTOMATE-REQUESTS.md`); it was reverted, and it is not to be retried
+without an xHCI error counter and queue depth readable over URC, plus a
+recovery path for a head that never completes.
+
 ## Full speed needs its real EP0 max packet
 
 `mps_for_speed()` can only guess for one speed. High speed EP0 is always 64 and
@@ -250,3 +293,8 @@ Changelog:
 - **2026-07-29**, `uno_xhci_init()` gained the attached-mode refusal and
   idempotence; `usbboot.*` added; `uno_usbio_iface()` / `uno_usbio_devpath()`
   added; `-DUNO_XHCI` now on by default.
+- **2026-07-31**, `uno_usb_hid_mouse_poll()`'s button mask is now a LATCH (a
+  held button survives a poll with no report) - a semantic change, not a
+  signature one, so re-read "Boot HID reports on CHANGE" above.
+  `uno_usb_hid_mods()` added; `hid_kbd_mods()` added alongside it in the shared
+  translator.
