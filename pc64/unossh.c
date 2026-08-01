@@ -34,6 +34,7 @@
 #include "tls_entropy.h"
 #include "ed25519.h"
 #include "unossh.h"
+#include "unossh_int.h"
 #include <stdlib.h>
 
 void uno_pc64_delay_ms(int ms);
@@ -51,20 +52,6 @@ int  pc64_net_up(void);
 #define MSG_ECDH_INIT  30
 #define MSG_ECDH_REPLY 31
 
-typedef struct {
-    int used, sock, encrypted;
-    unsigned seq_out, seq_in;
-    br_aes_ct64_ctr_keys enc, dec;
-    unsigned char iv_out[12], iv_in[12];
-    unsigned cc_out, cc_in;
-    unsigned char mac_out[32], mac_in[32];
-    unsigned char sess_id[32], h[32];
-    unsigned char hostkey[32], hostfp[32];
-    char v_s[256];
-    unsigned char *rx, *tx;
-    unsigned char *pay; int paylen;
-    char err[96];
-} ssh_conn;
 
 static ssh_conn g_conn[SSH_MAXCONN];
 
@@ -76,7 +63,7 @@ static int us_len(const char *s) { int n = 0; while (s[n]) n++; return n; }
  * this every setup error reads as "bad handle" - which is exactly what it did
  * the first time this gate ran against a real server. */
 static char g_last_err[96];
-static void us_err(ssh_conn *c, const char *m)
+void uns_err(ssh_conn *c, const char *m)
 {
     int i;
     for (i = 0; i < (int)sizeof c->err - 1 && m[i]; i++) c->err[i] = m[i];
@@ -84,7 +71,7 @@ static void us_err(ssh_conn *c, const char *m)
     for (i = 0; i < (int)sizeof g_last_err - 1 && m[i]; i++) g_last_err[i] = m[i];
     g_last_err[i] = 0;
 }
-static ssh_conn *us_get(int h)
+ssh_conn *uns_get(int h)
 { return (h >= 0 && h < SSH_MAXCONN && g_conn[h].used) ? &g_conn[h] : 0; }
 
 /* ---- socket helpers ------------------------------------------------------ */
@@ -149,26 +136,26 @@ static void mac_compute(const unsigned char key[32], unsigned seq,
     br_hmac_out(&hc, out);
 }
 
-static int send_packet(ssh_conn *c, const unsigned char *pay, int n)
+int uns_send(ssh_conn *c, const unsigned char *pay, int n)
 {
     int bs = c->encrypted ? 16 : 8;
     int pad = ssh_pad_len(n, bs);
     int plen = 1 + n + pad, total = 4 + plen;
     unsigned char *p = c->tx;
 
-    if (n < 0 || total + 32 > RXCAP) { us_err(c, "packet too large to send"); return -1; }
+    if (n < 0 || total + 32 > RXCAP) { uns_err(c, "packet too large to send"); return -1; }
     p[0] = (unsigned char)((unsigned)plen >> 24); p[1] = (unsigned char)((unsigned)plen >> 16);
     p[2] = (unsigned char)((unsigned)plen >> 8);  p[3] = (unsigned char)plen;
     p[4] = (unsigned char)pad;
     us_copy(p + 5, pay, n);
-    if (!tls_entropy_get(p + 5 + n, pad)) { us_err(c, "no entropy source for padding"); return -1; }
+    if (!tls_entropy_get(p + 5 + n, pad)) { uns_err(c, "no entropy source for padding"); return -1; }
 
     if (c->encrypted) {
         mac_compute(c->mac_out, c->seq_out, p, total, p + total);
         ctr_run(c, 1, p, total);
-        if (tx_all(c, p, total + 32) < 0) { us_err(c, "send failed"); return -1; }
+        if (tx_all(c, p, total + 32) < 0) { uns_err(c, "send failed"); return -1; }
     } else {
-        if (tx_all(c, p, total) < 0) { us_err(c, "send failed"); return -1; }
+        if (tx_all(c, p, total) < 0) { uns_err(c, "send failed"); return -1; }
     }
     c->seq_out++;
     return 0;
@@ -181,36 +168,36 @@ static int recv_packet_raw(ssh_conn *c, int timeout_ms)
     int plen, total, pad;
 
     if (c->encrypted) {
-        if (rx_exact(c, p, 16, timeout_ms) < 0) { us_err(c, "recv timed out"); return -1; }
+        if (rx_exact(c, p, 16, timeout_ms) < 0) { uns_err(c, "recv timed out"); return -1; }
         ctr_run(c, 0, p, 16);
     } else {
-        if (rx_exact(c, p, 8, timeout_ms) < 0) { us_err(c, "recv timed out"); return -1; }
+        if (rx_exact(c, p, 8, timeout_ms) < 0) { uns_err(c, "recv timed out"); return -1; }
     }
     plen = (int)(((unsigned)p[0] << 24) | ((unsigned)p[1] << 16) |
                  ((unsigned)p[2] << 8) | (unsigned)p[3]);
     total = 4 + plen;
-    if (plen < 12 || total > RXCAP - 32) { us_err(c, "absurd packet length"); return -1; }
-    if (c->encrypted && (total & 15)) { us_err(c, "packet not a whole block"); return -1; }
+    if (plen < 12 || total > RXCAP - 32) { uns_err(c, "absurd packet length"); return -1; }
+    if (c->encrypted && (total & 15)) { uns_err(c, "packet not a whole block"); return -1; }
 
     {   int have = c->encrypted ? 16 : 8;
         if (total > have) {
             if (rx_exact(c, p + have, total - have, timeout_ms < 200 ? 200 : timeout_ms) < 0) {
-                us_err(c, "short packet"); return -1;
+                uns_err(c, "short packet"); return -1;
             }
             if (c->encrypted) ctr_run(c, 0, p + have, total - have);
         }
     }
     if (c->encrypted) {
         unsigned char want[32], got[32];
-        if (rx_exact(c, got, 32, 200) < 0) { us_err(c, "no MAC"); return -1; }
+        if (rx_exact(c, got, 32, 200) < 0) { uns_err(c, "no MAC"); return -1; }
         mac_compute(c->mac_in, c->seq_in, p, total, want);
         {   int i, diff = 0;
             for (i = 0; i < 32; i++) diff |= want[i] ^ got[i];
-            if (diff) { us_err(c, "MAC mismatch"); return -1; } }
+            if (diff) { uns_err(c, "MAC mismatch"); return -1; } }
     }
     pad = p[4];
     c->paylen = plen - 1 - pad;
-    if (c->paylen < 0 || pad < 4) { us_err(c, "bad padding"); return -1; }
+    if (c->paylen < 0 || pad < 4) { uns_err(c, "bad padding"); return -1; }
     c->pay = p + 5;
     c->seq_in++;
     return 0;
@@ -218,17 +205,17 @@ static int recv_packet_raw(ssh_conn *c, int timeout_ms)
 
 /* ...and the same, with the three transport messages that can arrive at any
  * time handled here so no caller has to think about them. */
-static int recv_packet(ssh_conn *c, int timeout_ms)
+int uns_recv(ssh_conn *c, int timeout_ms)
 {
     int guard;
     for (guard = 0; guard < 32; guard++) {
         if (recv_packet_raw(c, timeout_ms) < 0) return -1;
         if (c->paylen < 1) continue;
         if (c->pay[0] == MSG_IGNORE || c->pay[0] == MSG_DEBUG) continue;
-        if (c->pay[0] == MSG_DISCONNECT) { us_err(c, "server disconnected"); return -1; }
+        if (c->pay[0] == MSG_DISCONNECT) { uns_err(c, "server disconnected"); return -1; }
         return 0;
     }
-    us_err(c, "too many transport messages");
+    uns_err(c, "too many transport messages");
     return -1;
 }
 
@@ -260,7 +247,7 @@ static int build_kexinit(ssh_conn *c, unsigned char *out, int cap, int *n)
 {
     ssh_buf b;
     unsigned char cookie[16];
-    if (!tls_entropy_get(cookie, 16)) { us_err(c, "no entropy source"); return -1; }
+    if (!tls_entropy_get(cookie, 16)) { uns_err(c, "no entropy source"); return -1; }
     ssh_buf_init(&b, out, cap);
     ssh_put_u8(&b, MSG_KEXINIT);
     ssh_put_raw(&b, cookie, 16);
@@ -271,7 +258,7 @@ static int build_kexinit(ssh_conn *c, unsigned char *out, int cap, int *n)
     ssh_put_cstr(&b, "");    ssh_put_cstr(&b, "");
     ssh_put_u8(&b, 0);                 /* first_kex_packet_follows */
     ssh_put_u32(&b, 0);
-    if (b.err) { us_err(c, "kexinit did not fit"); return -1; }
+    if (b.err) { uns_err(c, "kexinit did not fit"); return -1; }
     *n = b.len;
     return 0;
 }
@@ -291,11 +278,11 @@ static int check_kexinit(ssh_conn *c, const unsigned char *p, int n)
     { int k; for (k = 0; k < 16; k++) ssh_get_u8(&r); }
     for (i = 0; i < 6; i++) {
         l = ssh_get_str(&r, &ln);
-        if (r.err || !l) { us_err(c, "malformed KEXINIT"); return -1; }
+        if (r.err || !l) { uns_err(c, "malformed KEXINIT"); return -1; }
         if (i == 0) {
             if (!namelist_has(l, ln, "curve25519-sha256") &&
                 !namelist_has(l, ln, "curve25519-sha256@libssh.org")) {
-                us_err(c, "server offers no curve25519-sha256"); return -1;
+                uns_err(c, "server offers no curve25519-sha256"); return -1;
             }
         } else if (!namelist_has(l, ln, want[i])) {
             char m[96]; int k = 0, j;
@@ -305,7 +292,7 @@ static int check_kexinit(ssh_conn *c, const unsigned char *p, int n)
             m[k++] = ' '; m[k++] = '(';
             for (j = 0; what[i][j]; j++) m[k++] = what[i][j];
             m[k++] = ')'; m[k] = 0;
-            us_err(c, m); return -1;
+            uns_err(c, m); return -1;
         }
     }
     return 0;
@@ -323,7 +310,7 @@ static int do_kex(ssh_conn *c)
         const char *id = SSH_IDENT;
         for (i = 0; id[i]; i++) line[n++] = id[i];
         line[n++] = '\r'; line[n++] = '\n';
-        if (tx_all(c, (const unsigned char *)line, n) < 0) { us_err(c, "ident send failed"); return -1; }
+        if (tx_all(c, (const unsigned char *)line, n) < 0) { uns_err(c, "ident send failed"); return -1; }
     }
     {   int n = 0, waited = 0;
         for (;;) {
@@ -332,8 +319,8 @@ static int do_kex(ssh_conn *c)
             net_poll();
             r = net_recv(c->sock, &ch, 1);
             if (r <= 0) {
-                if (net_sock_state(c->sock) == TCP_CLOSED) { us_err(c, "closed during ident"); return -1; }
-                if (++waited > 15000) { us_err(c, "no server ident"); return -1; }
+                if (net_sock_state(c->sock) == TCP_CLOSED) { uns_err(c, "closed during ident"); return -1; }
+                if (++waited > 15000) { uns_err(c, "no server ident"); return -1; }
                 uno_pc64_delay_ms(1); continue;
             }
             waited = 0;
@@ -351,26 +338,26 @@ static int do_kex(ssh_conn *c)
 
     /* 2. KEXINIT both ways; both payloads are hashed verbatim. */
     if (build_kexinit(c, ic, (int)sizeof ic, &icn) < 0) return -1;
-    if (send_packet(c, ic, icn) < 0) return -1;
-    if (recv_packet(c, 15000) < 0) return -1;
-    if (c->paylen < 1 || c->pay[0] != MSG_KEXINIT) { us_err(c, "expected KEXINIT"); return -1; }
+    if (uns_send(c, ic, icn) < 0) return -1;
+    if (uns_recv(c, 15000) < 0) return -1;
+    if (c->paylen < 1 || c->pay[0] != MSG_KEXINIT) { uns_err(c, "expected KEXINIT"); return -1; }
     isn = c->paylen;
     is = (unsigned char *)malloc((size_t)(isn > 0 ? isn : 1));
-    if (!is) { us_err(c, "out of memory"); return -1; }
+    if (!is) { uns_err(c, "out of memory"); return -1; }
     us_copy(is, c->pay, isn);
     if (check_kexinit(c, is, isn) < 0) goto done;
 
     /* 3. ECDH init / reply */
-    if (!tls_entropy_get(sec, 32)) { us_err(c, "no entropy source"); goto done; }
-    if (!ssh_x25519_base(qc, sec)) { us_err(c, "x25519 failed"); goto done; }
+    if (!tls_entropy_get(sec, 32)) { uns_err(c, "no entropy source"); goto done; }
+    if (!ssh_x25519_base(qc, sec)) { uns_err(c, "x25519 failed"); goto done; }
     {   ssh_buf b;
         ssh_buf_init(&b, msg, (int)sizeof msg);
         ssh_put_u8(&b, MSG_ECDH_INIT);
         ssh_put_str(&b, qc, 32);
-        if (b.err || send_packet(c, msg, b.len) < 0) goto done;
+        if (b.err || uns_send(c, msg, b.len) < 0) goto done;
     }
-    if (recv_packet(c, 20000) < 0) goto done;
-    if (c->paylen < 1 || c->pay[0] != MSG_ECDH_REPLY) { us_err(c, "expected ECDH reply"); goto done; }
+    if (uns_recv(c, 20000) < 0) goto done;
+    if (c->paylen < 1 || c->pay[0] != MSG_ECDH_REPLY) { uns_err(c, "expected ECDH reply"); goto done; }
 
     {   ssh_rd r;
         const unsigned char *ks, *qs, *sig;
@@ -383,14 +370,14 @@ static int do_kex(ssh_conn *c)
         ks  = ssh_get_str(&r, &ksn);
         qs  = ssh_get_str(&r, &qsn);
         sig = ssh_get_str(&r, &sign);
-        if (r.err || !ks || !qs || !sig || qsn != 32) { us_err(c, "malformed ECDH reply"); goto done; }
+        if (r.err || !ks || !qs || !sig || qsn != 32) { uns_err(c, "malformed ECDH reply"); goto done; }
 
         /* the host key blob: string "ssh-ed25519", string key(32) */
         {   ssh_rd kr; const unsigned char *ty, *kb; int tn, kn;
             ssh_rd_init(&kr, ks, ksn);
             ty = ssh_get_str(&kr, &tn); kb = ssh_get_str(&kr, &kn);
             if (kr.err || !ty || !kb || kn != 32 || !namelist_has(ty, tn, "ssh-ed25519")) {
-                us_err(c, "host key is not ssh-ed25519"); goto done;
+                uns_err(c, "host key is not ssh-ed25519"); goto done;
             }
             us_copy(c->hostkey, kb, 32);
         }
@@ -399,12 +386,12 @@ static int do_kex(ssh_conn *c)
             ssh_rd_init(&sr, sig, sign);
             ty = ssh_get_str(&sr, &tn); sb = ssh_get_str(&sr, &sn2);
             if (sr.err || !ty || !sb || sn2 != 64 || !namelist_has(ty, tn, "ssh-ed25519")) {
-                us_err(c, "signature is not ssh-ed25519"); goto done;
+                uns_err(c, "signature is not ssh-ed25519"); goto done;
             }
             us_copy(sigblob, sb, 64);
         }
 
-        if (!ssh_x25519(k, sec, qs)) { us_err(c, "x25519 failed"); goto done; }
+        if (!ssh_x25519(k, sec, qs)) { uns_err(c, "x25519 failed"); goto done; }
 
         /* K is the raw X25519 output read as a big-endian integer - it goes
          * into the hash as an mpint, the one field that is not a string. */
@@ -417,7 +404,7 @@ static int do_kex(ssh_conn *c)
         ssh_exchange_hash(c->h, &e);
 
         if (!ed25519_verify(sigblob, c->h, 32, c->hostkey)) {
-            us_err(c, "host key signature did not verify"); goto done;
+            uns_err(c, "host key signature did not verify"); goto done;
         }
         {   br_sha256_context sc;                 /* the known-hosts identity */
             br_sha256_init(&sc);
@@ -427,9 +414,9 @@ static int do_kex(ssh_conn *c)
 
         /* 4. NEWKEYS, then the keys come alive in both directions */
         {   unsigned char nk = MSG_NEWKEYS;
-            if (send_packet(c, &nk, 1) < 0) goto done; }
-        if (recv_packet(c, 15000) < 0) goto done;
-        if (c->paylen < 1 || c->pay[0] != MSG_NEWKEYS) { us_err(c, "expected NEWKEYS"); goto done; }
+            if (uns_send(c, &nk, 1) < 0) goto done; }
+        if (uns_recv(c, 15000) < 0) goto done;
+        if (c->paylen < 1 || c->pay[0] != MSG_NEWKEYS) { uns_err(c, "expected NEWKEYS"); goto done; }
 
         {   unsigned char ivc[16], ivs[16], kc2[32], ks2[32];
             ssh_derive_key(ivc, 16, 'A', k, 32, c->h, c->sess_id);
@@ -482,27 +469,28 @@ int ssh_connect(const char *host, int port)
                   if (*s == 0) break;
               } else { got = -1; break; }
           }
-          if (got < 0 || e2 < 0) { us_err(c, "cannot resolve host"); return -1; } }
+          if (got < 0 || e2 < 0) { uns_err(c, "cannot resolve host"); return -1; } }
         ip[0] = (unsigned char)a; ip[1] = (unsigned char)b2;
         ip[2] = (unsigned char)d; ip[3] = (unsigned char)e2;
     }
 
     c->sock = net_socket(SOCK_TCP);
-    if (c->sock < 0) { us_err(c, "no socket"); return -1; }
+    if (c->sock < 0) { uns_err(c, "no socket"); return -1; }
     c->used = 1;
     c->rx = (unsigned char *)malloc(RXCAP);
     c->tx = (unsigned char *)malloc(RXCAP);
-    if (!c->rx || !c->tx) { us_err(c, "out of memory"); ssh_close(h); return -1; }
+    c->rb = (unsigned char *)malloc(SSH_RBCAP);
+    if (!c->rx || !c->tx || !c->rb) { uns_err(c, "out of memory"); ssh_close(h); return -1; }
 
     if (net_connect(c->sock, ip, (unsigned short)port) < 0) {
-        us_err(c, "connect failed"); ssh_close(h); return -1;
+        uns_err(c, "connect failed"); ssh_close(h); return -1;
     }
     while (net_sock_state(c->sock) != TCP_ESTABLISHED) {
         net_poll();
         if (net_sock_state(c->sock) == TCP_CLOSED || net_sock_state(c->sock) == TCP_DONE) {
-            us_err(c, "connection refused"); ssh_close(h); return -1;
+            uns_err(c, "connection refused"); ssh_close(h); return -1;
         }
-        if (++waited > 15000) { us_err(c, "connect timed out"); ssh_close(h); return -1; }
+        if (++waited > 15000) { uns_err(c, "connect timed out"); ssh_close(h); return -1; }
         uno_pc64_delay_ms(1);
     }
     return h;
@@ -510,23 +498,23 @@ int ssh_connect(const char *host, int port)
 
 int ssh_handshake(int handle)
 {
-    ssh_conn *c = us_get(handle);
+    ssh_conn *c = uns_get(handle);
     if (!c) return -1;
     return do_kex(c);
 }
 
 int ssh_send(int handle, const unsigned char *payload, int n)
 {
-    ssh_conn *c = us_get(handle);
+    ssh_conn *c = uns_get(handle);
     if (!c) return -1;
-    return send_packet(c, payload, n);
+    return uns_send(c, payload, n);
 }
 
 int ssh_recv(int handle, const unsigned char **payload, int *n, int timeout_ms)
 {
-    ssh_conn *c = us_get(handle);
+    ssh_conn *c = uns_get(handle);
     if (!c) return -1;
-    if (recv_packet(c, timeout_ms) < 0) return -1;
+    if (uns_recv(c, timeout_ms) < 0) return -1;
     if (payload) *payload = c->pay;
     if (n) *n = c->paylen;
     return 0;
@@ -534,12 +522,13 @@ int ssh_recv(int handle, const unsigned char **payload, int *n, int timeout_ms)
 
 void ssh_close(int handle)
 {
-    ssh_conn *c = us_get(handle);
+    ssh_conn *c = uns_get(handle);
     if (!c) return;
     if (c->sock >= 0) net_sock_close(c->sock);
     if (c->rx) free(c->rx);
     if (c->tx) free(c->tx);
-    c->used = 0; c->rx = 0; c->tx = 0; c->sock = -1;
+    if (c->rb) free(c->rb);
+    c->used = 0; c->rx = 0; c->tx = 0; c->rb = 0; c->sock = -1;
 }
 
 /* ---- the live gate -------------------------------------------------------
@@ -559,6 +548,7 @@ void ssh_close(int handle)
 #ifdef UNO_DEBUG
 #include "unoauto.h"
 #include "pc64_fs.h"
+#include "tools/sshtestkey.h"
 
 #ifndef SSH_TEST_HOST
 #define SSH_TEST_HOST "10.0.2.2"
@@ -650,21 +640,119 @@ static int ssh_t_transport(void *ctx)
     return ok ? 0 : 1;      /* SPECTEST reads 0 as PASS */
 }
 
+/* ssh-c: authenticate with a key and run a command. The target and the user
+ * come from \SSHTEST.CFG ("host [user]"); the key is the throwaway seed in
+ * tools/sshtestkey.h, which the harness has put in the test sshd's
+ * authorized_keys using OUR OWN ed25519 to derive the public half. */
+static int ssh_t_exec(void *ctx)
+{
+    char host[64], user[32];
+    int h, ok = 0, waited = 0, i, got = 0, port = SSH_TEST_PORT;
+    static char out[512];
+    (void)ctx;
+
+    for (i = 0; SSH_TEST_HOST[i] && i < (int)sizeof host - 1; i++) host[i] = SSH_TEST_HOST[i];
+    host[i] = 0;
+    user[0] = 0;
+    sd_s("sshexec: begin\n");
+    if (!pc64_net_up()) { sd_s("sshexec: no NIC\nsshexec: RESULT FAIL\n"); return 1; }
+    while (!net_dhcp_done() && waited < 15000) { net_poll(); uno_pc64_delay_ms(1); waited++; }
+    if (!net_dhcp_done()) { sd_s("sshexec: no DHCP\nsshexec: RESULT FAIL\n"); return 1; }
+
+    {   unsigned char cfg[96];
+        long n = uno_fs_read(0, "SSHTEST.CFG", cfg, (long)sizeof cfg - 1);
+        int k = 0, v;
+        if (n <= 0) n = uno_fs_read(1, "SSHTEST.CFG", cfg, (long)sizeof cfg - 1);
+        if (n > 0) {
+            cfg[n] = 0;
+            for (v = 0; v < (int)n && cfg[v] > ' ' && k < (int)sizeof host - 1; v++)
+                host[k++] = (char)cfg[v];
+            host[k] = 0;
+            while (v < (int)n && (cfg[v] == ' ' || cfg[v] == '\t')) v++;
+            k = 0;
+            for (; v < (int)n && cfg[v] > ' ' && k < (int)sizeof user - 1; v++)
+                user[k++] = (char)cfg[v];
+            user[k] = 0;
+            while (v < (int)n && (cfg[v] == ' ' || cfg[v] == '\t')) v++;
+            if (v < (int)n && cfg[v] >= '0' && cfg[v] <= '9') {
+                port = 0;
+                for (; v < (int)n && cfg[v] >= '0' && cfg[v] <= '9'; v++)
+                    port = port * 10 + (cfg[v] - '0');
+            }
+        }
+    }
+    if (!user[0]) { sd_s("sshexec: no user in SSHTEST.CFG\nsshexec: RESULT FAIL\n"); return 1; }
+    sd_s("sshexec: target="); sd_s(host); sd_s(" user="); sd_s(user); sd_s("\n");
+
+    h = ssh_connect(host, port);
+    if (h < 0) { sd_s("sshexec: connect: "); sd_s(ssh_error(h)); sd_s("\nsshexec: RESULT FAIL\n"); return 1; }
+    if (ssh_handshake(h) != 0) {
+        sd_s("sshexec: handshake: "); sd_s(ssh_error(h));
+        sd_s("\nsshexec: RESULT FAIL\n"); ssh_close(h); return 1;
+    }
+    sd_s("sshexec: transport up\n");
+
+    i = ssh_auth_key(h, user, kSshTestSeed);
+    if (i != 0) {
+        sd_s("sshexec: auth: "); sd_s(ssh_error(h));
+        sd_s("\nsshexec: RESULT FAIL\n"); ssh_close(h); return 1;
+    }
+    sd_s("sshexec: authenticated\n");
+
+    if (ssh_exec(h, "echo unodos-ssh-ok; exit 7") != 0) {
+        sd_s("sshexec: exec: "); sd_s(ssh_error(h));
+        sd_s("\nsshexec: RESULT FAIL\n"); ssh_close(h); return 1;
+    }
+    for (waited = 0; waited < 20000; waited++) {
+        int n;
+        ssh_poll(h);
+        n = ssh_read(h, out + got, (int)sizeof out - 1 - got);
+        if (n > 0) got += n;
+        if (!ssh_channel_open(h) && n <= 0) break;
+        uno_pc64_delay_ms(1);
+    }
+    out[got] = 0;
+    sd_s("sshexec: output="); sd_s(out); sd_s("\n");
+    sd_s("sshexec: exit=");
+    {   int st = ssh_exit_status(h), d, started = 0;
+        if (st < 0) { sd_s("-1"); }
+        else for (d = 100; d >= 1; d /= 10) {
+            int dig = (st / d) % 10;
+            if (dig || started || d == 1) { char t[2]; t[0] = (char)('0' + dig); t[1] = 0; sd_s(t); started = 1; }
+        }
+    }
+    sd_s("\n");
+
+    {   const char *want = "unodos-ssh-ok";
+        int k;
+        for (k = 0; k + 13 <= got; k++) {
+            int j, m = 1;
+            for (j = 0; j < 13; j++) if (out[k + j] != want[j]) { m = 0; break; }
+            if (m) { ok = 1; break; }
+        }
+    }
+    if (ok && ssh_exit_status(h) != 7) { sd_s("sshexec: wrong exit status\n"); ok = 0; }
+    ssh_close(h);
+    sd_s(ok ? "sshexec: RESULT PASS\n" : "sshexec: RESULT FAIL\n");
+    return ok ? 0 : 1;
+}
+
 void unossh_register_tests(void)
 {
     unoauto_test_register("network", "ssh:transport", ssh_t_transport);
+    unoauto_test_register("network", "ssh:exec", ssh_t_exec);
 }
 #else
 void unossh_register_tests(void) { }
 #endif
 
 const char *ssh_error(int handle)
-{ ssh_conn *c = us_get(handle); return c ? c->err : g_last_err; }
+{ ssh_conn *c = uns_get(handle); return c ? c->err : g_last_err; }
 const char *ssh_server_ident(int handle)
-{ ssh_conn *c = us_get(handle); return c ? c->v_s : ""; }
+{ ssh_conn *c = uns_get(handle); return c ? c->v_s : ""; }
 const unsigned char *ssh_host_fingerprint(int handle)
-{ ssh_conn *c = us_get(handle); return c ? c->hostfp : 0; }
+{ ssh_conn *c = uns_get(handle); return c ? c->hostfp : 0; }
 const unsigned char *ssh_session_id(int handle)
-{ ssh_conn *c = us_get(handle); return c ? c->sess_id : 0; }
+{ ssh_conn *c = uns_get(handle); return c ? c->sess_id : 0; }
 int ssh_is_encrypted(int handle)
-{ ssh_conn *c = us_get(handle); return c ? c->encrypted : 0; }
+{ ssh_conn *c = uns_get(handle); return c ? c->encrypted : 0; }
