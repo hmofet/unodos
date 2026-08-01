@@ -73,7 +73,7 @@ The two lanes run concurrently. Within a lane, order is strict.
 | `tabs-c` | toolkits | **DONE** - browser refactored onto `tabs-a` |
 | `ssh-a` | unossh | **DONE** - Ed25519, host-tested against RFC 8032 vectors |
 | `ssh-b` | unossh | **DONE** - transport proven against a real OpenSSH 9.5 server |
-| `ssh-c` | unossh | userauth (publickey, password) + session channel, exec and shell |
+| `ssh-c` | unossh | **DONE** - publickey auth + session channel, proven end to end against OpenSSH |
 | `ssh-d` | unossh | key store + session store, persistent |
 | `ssh-e` | unossh | the unoautomate verb |
 | `ssh-f` | both | the GUI app - needs `tabs-a`, `tabs-b`, `ssh-c`, `ssh-d` |

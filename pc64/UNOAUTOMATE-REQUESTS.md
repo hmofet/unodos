@@ -3742,3 +3742,74 @@ the value a known-hosts store will compare in `ssh-d`, and the gate above shows
 it is the right value to compare.
 
 `ssh-c`, `ssh-d`, `ssh-e` and `ssh-f` remain untouched.
+
+---
+
+## 2026-08-01 - LANDED (unossh): ssh-c, authentication and the session channel
+
+Public-key authentication and a working session channel, proven end to end
+against OpenSSH: the client authenticates with an Ed25519 key, runs
+`echo unodos-ssh-ok; exit 7`, reads the output back and collects the exit
+status. Gate: `python3 harness.py ssh_exec`, 6 checks.
+
+**The gate is interop at BOTH ends of one key.** `tools/sshkeygen.c` derives the
+public half with our own `ed25519.c` and writes the authorized_keys line;
+OpenSSH has to accept that key, and then verify a signature the guest made with
+the matching seed. Neither half is self-consistency: a bug in key derivation
+fails at the first, a bug in signing or in what gets signed fails at the second.
+
+**The signature covers the session id**, which is what stops a publickey auth
+being replayed onto another connection. The blob signed is the session id
+followed by the request, and the request that goes on the wire is the same
+bytes minus that leading string - so `unossh_auth.c` builds it ONCE and derives
+both from it. A client that builds the two separately and lets them drift gets
+a bare "rejected" with nothing pointing at why.
+
+**Channels are flow-controlled both ways.** The local window is topped up with
+WINDOW_ADJUST as data is consumed; without that the server sends exactly one
+window and stops, which looks like a hang and reports nothing anywhere.
+
+Reading is non-blocking - `ssh_poll()` drains into a ring and returns - so a
+live session can be driven from the shell's frame loop without stalling the
+desktop, which is what `ssh-f` will need.
+
+### The gate stands up its own sshd, and that took four goes
+
+The harness starts a throwaway OpenSSH on WSL:2222 with its own host key, its
+own authorized_keys and its own config, and kills it afterwards. It never
+touches `~/.ssh` or `/etc/ssh`. Four things went wrong first, all worth knowing:
+
+1. **`openssh-server` is not installed in WSL by default** and installing it
+   ENABLES `ssh.socket`. The first run's "rejected" came from the distro's own
+   sshd on port 22 - a real OpenSSH that naturally does not trust a test key -
+   because ours had failed to bind with "Address already in use" and nobody was
+   reading its log. The test sshd now uses 2222 rather than fighting the
+   service, and the port travels in `SSHTEST.CFG` alongside the host and user.
+2. **A stock WSL account cannot be logged into over SSH at all.** It usually
+   has no password, so its shadow entry is `!` and sshd refuses with "account is
+   locked" no matter how good the key is. The gate makes a dedicated
+   `unosshtest` account with `-p '*'` - no password login, but not locked - and
+   deletes it again on the way out.
+3. **sshd reads `authorized_keys` as the TARGET user.** Writing it 0600 owned by
+   the invoking user gives "ED25519 key is not allowed", which reads exactly
+   like a wrong key and is not one.
+4. **`sshd -ddd` is the instrument, not the client's error string.** Every one
+   of the above was a one-line diagnosis in the server log and an
+   indistinguishable "rejected" on our side. The line that ended the guessing
+   was `userauth_pubkey: publickey have ssh-ed25519 signature for ED25519
+   SHA256:...` - the server confirming it had RECEIVED and parsed our signature,
+   which moved the fault from our crypto to its account policy in one step.
+
+### Still not done
+
+Host-key trust: nothing yet checks the server's key is the one expected
+(`ssh-d`). `ssh_shell()` exists and opens a channel but has had no pty
+negotiated and no interactive run - `ssh-f` is where that gets exercised.
+`ssh-d`, `ssh-e` and `ssh-f` remain untouched.
+
+### One machine change to know about
+
+`openssh-server` is now installed in the WSL distro (it was not before) and its
+`ssh.socket` unit is enabled, so WSL listens on port 22. That is a side effect
+of setting this gate up, not something unossh needs. `sudo systemctl disable
+--now ssh.socket` reverses it.
