@@ -24,7 +24,10 @@ int  uno_usb_hid_init(void);
 typedef void (*uno_usb_key_fn)(int scan, int uni, int ctrl, void *ctx);
 int  uno_usb_hid_kbd_poll(uno_usb_key_fn emit, void *ctx);
 
-/* poll all USB mice: accumulate relative dx/dy + button mask since last call.
+/* poll all USB mice: dx/dy accumulated since the last call, plus the LATCHED
+ * button mask (bit0 left, bit1 right, bit2 middle) - a boot mouse reports only
+ * on change, so the mask is held state and survives frames with no report,
+ * exactly like uno_ps2_mouse(). Deltas are edges and reset every call.
  * Returns 1 if a mouse is present (dx/dy/btn written), 0 if none. */
 int  uno_usb_hid_mouse_poll(int *dx, int *dy, int *btn);
 
