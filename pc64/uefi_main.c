@@ -1304,6 +1304,10 @@ void uno_pc64_init(void)
 #endif
     unosec_boot();
     unoscript_boot();
+    { void unossh_register_tests(void);      /* unossh.h, declared locally to
+                                              * keep this file's includes as
+                                              * they were */
+      unossh_register_tests(); }             /* no-op in a production build */
 }
 
 /* ===========================================================================
