@@ -3627,3 +3627,61 @@ disliked - which is worth far more than any assertion this side.
 unoautomate verb) and `ssh-f` (the GUI app) are untouched. The cross-lane
 request to unoautomate for `ssh_dbg_cmd` filed in the CLAIM entry is still
 open and still not needed until `ssh-e`.
+
+---
+
+## 2026-07-31 - unossh: the transport state machine is written, NOT yet proven
+
+`pc64/unossh.c` completes the code half of ssh-b: version exchange, KEXINIT
+with algorithm checking, curve25519-sha256 ECDH, ssh-ed25519 host-key
+verification against the exchange hash, NEWKEYS, key derivation, and the
+aes256-ctr + hmac-sha2-256 packet layer with rekey-ready sequence numbers.
+Both builds are green and both host gates still pass.
+
+**It has never talked to a real server.** Every byte of it is inference from
+RFC 4253 and RFC 8731. The pure arithmetic underneath is gated (`sshwiretest`,
+26 checks, including RFC 7748's own X25519 vectors) and Ed25519 is gated
+(`ed25519test`, RFC 8032 section 7.1), so the parts that can be checked without
+a peer have been. The state machine cannot be, and until it has completed one
+handshake against OpenSSH it should be treated as a draft that compiles.
+
+### The gate that is still missing, and the cheapest way to build it
+
+SPECTEST already has a **`network` area**, and `unoauto_test_register()` needs
+no edit to `pc64_spectest.c` or to unoautomate - the suite name is the whole
+registration. So:
+
+1. In `unossh.c`, under `UNO_DEBUG`, add a test that reads its target from a
+   config file (so the harness can retarget without a rebuild), connects,
+   handshakes, and asserts `ssh_is_encrypted()` plus a non-zero session id.
+   Register it as `unoauto_test_register("network", "ssh:transport", fn)`.
+2. One appended call in `uno_pc64_init` to register it - a choke-point append,
+   its own `seam:` commit.
+3. Run `sshd -ddd -p 2222` on the WSL host. QEMU user-mode networking puts the
+   host at **10.0.2.2**, so no LAN and no second machine are needed.
+4. Boot `UNO_DEBUG=1 UNO_DBGCON=1` with STRESS.CFG selecting `spec` and the
+   network area, and capture the TEST channel off QEMU's debugcon.
+
+**The server's `-ddd` log is the real instrument.** It names the exact step it
+disliked, which no assertion on this side can. Expect the first run to fail in
+the exchange hash; that is the normal failure and it is why H's inputs are
+worth dumping before guessing.
+
+### Where the risk actually sits
+
+- **The exchange hash.** Every field is a string except K, which is an mpint,
+  and the ident strings are hashed WITHOUT their CR LF. Any of those three
+  getting it wrong produces a signature that will not verify, with nothing
+  pointing at the cause.
+- **Encrypt-and-MAC ordering** (correction 22). The MAC covers
+  `seqnum || the unencrypted packet` and rides in the clear after the
+  ciphertext. If the first encrypted packet is rejected, look here first.
+- **The CTR counter split.** BearSSL wants a 12-byte nonce plus a 32-bit
+  counter; SSH wants one 16-byte big-endian counter. The carry is handled but
+  will not fire until 64 GB into a stream, so it is untested by construction.
+- **`net_send` returns a short count** when its one-segment-in-flight window is
+  busy. `tx_all` loops, but a handshake that stalls with a partially written
+  packet would look like a server timeout.
+
+`ssh-c` (auth + channels), `ssh-d` (key + session store), `ssh-e` (the
+unoautomate verb) and `ssh-f` (the GUI app) remain untouched.
