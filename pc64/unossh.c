@@ -37,6 +37,7 @@
 #include <stdlib.h>
 
 void uno_pc64_delay_ms(int ms);
+int  pc64_net_up(void);
 
 #define SSH_IDENT   "SSH-2.0-UnoDOS_1.0"
 #define SSH_MAXPKT  35000            /* RFC 4253's required minimum payload */
@@ -70,8 +71,19 @@ static ssh_conn g_conn[SSH_MAXCONN];
 static void us_copy(unsigned char *d, const unsigned char *s, int n)
 { int i; for (i = 0; i < n; i++) d[i] = s[i]; }
 static int us_len(const char *s) { int n = 0; while (s[n]) n++; return n; }
+/* Also mirrored into a file-scope copy: ssh_connect() reports failures BEFORE
+ * it has a handle to hand back, and closes the slot on the way out, so without
+ * this every setup error reads as "bad handle" - which is exactly what it did
+ * the first time this gate ran against a real server. */
+static char g_last_err[96];
 static void us_err(ssh_conn *c, const char *m)
-{ int i; for (i = 0; i < (int)sizeof c->err - 1 && m[i]; i++) c->err[i] = m[i]; c->err[i] = 0; }
+{
+    int i;
+    for (i = 0; i < (int)sizeof c->err - 1 && m[i]; i++) c->err[i] = m[i];
+    c->err[i] = 0;
+    for (i = 0; i < (int)sizeof g_last_err - 1 && m[i]; i++) g_last_err[i] = m[i];
+    g_last_err[i] = 0;
+}
 static ssh_conn *us_get(int h)
 { return (h >= 0 && h < SSH_MAXCONN && g_conn[h].used) ? &g_conn[h] : 0; }
 
@@ -530,8 +542,124 @@ void ssh_close(int handle)
     c->used = 0; c->rx = 0; c->tx = 0; c->sock = -1;
 }
 
+/* ---- the live gate -------------------------------------------------------
+ * Registered into SPECTEST's existing "network" area. That needs no edit to
+ * pc64_spectest.c and none to unoautomate: unoauto_test_register() takes the
+ * suite name and that IS the registration, which is exactly the zero-edit path
+ * HARNESS-POLICY documents.
+ *
+ * The target defaults to 10.0.2.2, which is the host as seen through QEMU's
+ * user-mode networking - so the gate needs no LAN, no second machine and no
+ * DHCP server of its own.
+ *
+ * Progress goes to the debug console as well as the TEST channel, because a
+ * handshake that fails needs to say WHERE, and one grep-able line per step is
+ * worth more here than a pass/fail count.
+ * ======================================================================== */
+#ifdef UNO_DEBUG
+#include "unoauto.h"
+#include "pc64_fs.h"
+
+#ifndef SSH_TEST_HOST
+#define SSH_TEST_HOST "10.0.2.2"
+#endif
+#ifndef SSH_TEST_PORT
+#define SSH_TEST_PORT 22
+#endif
+
+#ifdef UNO_DBGCON
+static void sd_ob(unsigned short p, unsigned char v)
+{ __asm__ __volatile__("outb %0,%1" : : "a"(v), "Nd"(p)); }
+static void sd_s(const char *s) { while (*s) sd_ob(0x402, (unsigned char)*s++); }
+static void sd_hex(const unsigned char *d, int n)
+{
+    static const char hx[] = "0123456789abcdef";
+    int i;
+    for (i = 0; i < n; i++) {
+        sd_ob(0x402, (unsigned char)hx[d[i] >> 4]);
+        sd_ob(0x402, (unsigned char)hx[d[i] & 15]);
+    }
+}
+#else
+static void sd_s(const char *s) { (void)s; }
+static void sd_hex(const unsigned char *d, int n) { (void)d; (void)n; }
+#endif
+
+static int ssh_t_transport(void *ctx)
+{
+    char host[64];
+    int h, ok = 0, waited = 0, i;
+    (void)ctx;
+    for (i = 0; SSH_TEST_HOST[i] && i < (int)sizeof host - 1; i++) host[i] = SSH_TEST_HOST[i];
+    host[i] = 0;
+
+    /* Announce entry BEFORE anything that can block. Without this a stall in
+     * the DHCP wait below is indistinguishable from the test never running. */
+    sd_s("sshtest: begin\n");
+
+    /* The target comes from \SSHTEST.CFG when it exists, so the harness can
+     * retarget without a rebuild. It needs to: 10.0.2.2 is QEMU's alias for
+     * the machine RUNNING qemu, which on this box is the WSL VM - while the
+     * OpenSSH server is on Windows, one NAT hop further out. */
+    {   unsigned char cfg[64];
+        long got = uno_fs_read(0, "SSHTEST.CFG", cfg, (long)sizeof cfg - 1);
+        int v;
+        if (got <= 0) got = uno_fs_read(1, "SSHTEST.CFG", cfg, (long)sizeof cfg - 1);
+        if (got > 0) {
+            cfg[got] = 0;
+            for (v = 0; v < (int)got && v < (int)sizeof host - 1; v++) {
+                if (cfg[v] == '\r' || cfg[v] == '\n' || cfg[v] == ' ') break;
+                host[v] = (char)cfg[v];
+            }
+            host[v] = 0;
+        }
+    }
+    sd_s("sshtest: target="); sd_s(host); sd_s("\n");
+
+    /* SPECTEST runs BEFORE the boot network test, so nothing has brought the
+     * NIC up yet - the stack is lazy and pc64_net_up() is the entry point.
+     * Without this the test reports a protocol failure that is really "there
+     * was no network at all". */
+    if (!pc64_net_up()) { sd_s("sshtest: no NIC\nsshtest: RESULT FAIL\n"); return 1; }
+    while (!net_dhcp_done() && waited < 15000) {
+        net_poll();
+        uno_pc64_delay_ms(1);
+        if (++waited % 3000 == 0) sd_s("sshtest: waiting for DHCP\n");
+    }
+    if (!net_dhcp_done()) { sd_s("sshtest: no DHCP lease\nsshtest: RESULT FAIL\n"); return 1; }
+    sd_s("sshtest: link up, connecting\n");
+
+    h = ssh_connect(host, SSH_TEST_PORT);
+    if (h < 0) { sd_s("sshtest: connect failed: "); sd_s(ssh_error(h)); sd_s("\nsshtest: RESULT FAIL\n"); return 1; }
+
+    if (ssh_handshake(h) == 0 && ssh_is_encrypted(h)) {
+        const unsigned char *fp = ssh_host_fingerprint(h);
+        const unsigned char *sid = ssh_session_id(h);
+        int i, nz = 0;
+        for (i = 0; i < 32; i++) nz |= sid[i];
+        sd_s("sshtest: server="); sd_s(ssh_server_ident(h)); sd_s("\n");
+        sd_s("sshtest: hostkey-fp="); sd_hex(fp, 8); sd_s("\n");
+        sd_s("sshtest: session-id="); sd_hex(sid, 8); sd_s("\n");
+        ok = (nz != 0);
+        if (!ok) sd_s("sshtest: session id is all zero\n");
+    } else {
+        sd_s("sshtest: handshake failed: "); sd_s(ssh_error(h)); sd_s("\n");
+    }
+    ssh_close(h);
+    sd_s(ok ? "sshtest: RESULT PASS\n" : "sshtest: RESULT FAIL\n");
+    return ok ? 0 : 1;      /* SPECTEST reads 0 as PASS */
+}
+
+void unossh_register_tests(void)
+{
+    unoauto_test_register("network", "ssh:transport", ssh_t_transport);
+}
+#else
+void unossh_register_tests(void) { }
+#endif
+
 const char *ssh_error(int handle)
-{ ssh_conn *c = us_get(handle); return c ? c->err : "bad handle"; }
+{ ssh_conn *c = us_get(handle); return c ? c->err : g_last_err; }
 const char *ssh_server_ident(int handle)
 { ssh_conn *c = us_get(handle); return c ? c->v_s : ""; }
 const unsigned char *ssh_host_fingerprint(int handle)
