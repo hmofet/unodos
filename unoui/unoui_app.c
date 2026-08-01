@@ -27,7 +27,11 @@ static const unoui_menu g_menus[] = {
     { "File", m_file, 4 }, { "Edit", m_edit, 4 }, { "View", m_view, 3 }
 };
 
-void demo_app_build(unoui_window *ed, unoui_window *pal)
+/* the MDI container's child set, app-owned exactly as unoui_text buffers are */
+static unoui_mdi_child g_panes[4];
+static unoui_mdi       g_mdi;
+
+void demo_app_build(unoui_window *ed, unoui_window *pal, unoui_window *panes)
 {
     unoui_widget *w;
 
@@ -85,7 +89,22 @@ void demo_app_build(unoui_window *ed, unoui_window *pal)
                        (int)(sizeof g_docs / sizeof g_docs[0]), 0);
     w->id = ID_DOCTABS;
     w->flags |= UI_TF_CLOSE | UI_TF_PLUS | UI_TF_ELASTIC | UI_TF_OVERFLOW;
+
+    /* ---- MDI window (child frames inside one widget) --------------------- */
+    unoui_window_init(panes, "Panes - MDI", 60, 60, 420, 300);
+    g_mdi.ch = g_panes;
+    g_mdi.cap = (int)(sizeof g_panes / sizeof g_panes[0]);
+    w = unoui_add_mdi(panes, 0, 0, 392, 256, &g_mdi);
+    w->id = ID_PANES;
+    /* Each child is resizable, and gets the theme's own close box for free -
+     * the draw path hands the theme a temporary window per child. */
+    unoui_mdi_add(&g_mdi, "notes.txt",  0, 0, 190, 120, UI_MDI_RESIZE, 0);
+    unoui_mdi_add(&g_mdi, "main.c",     0, 0, 190, 120, UI_MDI_RESIZE, 0);
+    unoui_mdi_add(&g_mdi, "output",     0, 0, 190, 120, UI_MDI_RESIZE, 0);
+    unoui_mdi_add(&g_mdi, "watch",      0, 0, 190, 120, UI_MDI_RESIZE, 0);
 }
+
+unoui_mdi *demo_app_mdi(void) { return &g_mdi; }
 
 unoui_widget *demo_app_widget(unoui_window *win, int id)
 {

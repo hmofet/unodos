@@ -18,7 +18,7 @@
 /* fb is provided by ../ps2/fb.c which we link in. */
 
 static unoui_ui  UI;
-static unoui_window ED, PAL;
+static unoui_window ED, PAL, PANES;
 static int   g_frame = 0;
 static char  g_labels[32][48];
 
@@ -68,7 +68,7 @@ int main(int argc, char **argv)
     const char *dir = (argc > 1) ? argv[1] : "build";
 
     unoui_ui_init(&UI, &theme_unodos, FB_W, FB_H);
-    demo_app_build(&ED, &PAL);
+    demo_app_build(&ED, &PAL, &PANES);
     unoui_ui_add(&UI, &ED);
     unoui_ui_add(&UI, &PAL);          /* PAL on top initially */
 
@@ -156,6 +156,38 @@ int main(int argc, char **argv)
     ev_move(120+38, 300+52); ev_down(120+38, 300+52);
     snap(dir, "OK button held (pressed state)");
     ev_up(120+38, 300+52);
+
+    /* MDI: child frames inside a single widget. The window is added HERE, not
+     * at startup, so it appears only in the frames that are about it - and
+     * because it goes in before the re-skins below, those cover MDI under two
+     * more themes at no extra cost. */
+    {
+        unoui_mdi *m = demo_app_mdi();
+        unoui_widget *pw = demo_app_widget(&PANES, ID_PANES);
+        unoui_rect pr;
+        unoui_ui_add(&UI, &PANES);
+        pr = unoui_widget_rect(UI.theme, &PANES, pw);
+
+        unoui_mdi_cascade(UI.theme, pr, m);
+        snap(dir, "MDI: four child frames, cascaded");
+
+        unoui_mdi_tile(UI.theme, pr, m);
+        snap(dir, "MDI: the same four, tiled");
+
+        /* raise and drag the back child by its title bar - through real events,
+         * so this exercises the hit test and the capture, not just the maths */
+        {   int back = unoui_mdi_zorder(m, 0);
+            unoui_rect q = unoui_mdi_child_rect(pr, m, back);
+            int gx = q.x + q.w / 2, gy = q.y + 4;
+            drag(gx, gy, gx + 40, gy + 34);
+            snap(dir, "MDI: a back child raised and dragged over its peers"); }
+
+        /* and prove containment through the same path: yank it off the corner */
+        {   int ci = unoui_mdi_focused(m);
+            unoui_rect q = unoui_mdi_child_rect(pr, m, ci);
+            drag(q.x + q.w / 2, q.y + 4, FB_W + 200, FB_H + 200);
+            snap(dir, "MDI: dragged past the edge, clamped inside"); }
+    }
 
     /* SAME live state, re-skinned: input + theming compose */
     unoui_ui_theme(&UI, &theme_win31);
