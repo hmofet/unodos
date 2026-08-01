@@ -3289,3 +3289,68 @@ Corrections 1-8 are in the spec's §13. Two of them are worth `tabs-b` reading
 before it starts: the overflow reserve must be decided before the scroll clamp
 or the layout oscillates (4), and zero-initialised state must reproduce today's
 behaviour exactly, which is what made the flagless path free (1, 2).
+
+---
+
+## 2026-07-31 - LANDED (toolkits lane): tabs-b, the MDI container
+
+`docs/SSH-CLIENT-SPEC.md` §4. `tabs-c` (the browser refactor) is the last of the
+three UI-lane phases; the unossh lane is still untouched.
+
+**What landed.** A `UI_MDI` widget kind that hosts draggable, resizable,
+closable child frames inside its own rect, with local z-order, focus, tiling and
+cascading. Public surface: `unoui_mdi` / `unoui_mdi_child`, `unoui_add_mdi`,
+`unoui_mdi_add` / `_close` / `_raise` / `_focused` / `_count` / `_zorder` /
+`_at` / `_clamp` / `_child_rect` / `_content_rect` / `_tile` / `_cascade` /
+`_draw`, plus `UI_ACT_MDICLOSE` and two capture modes.
+
+**A child is not a window, and that was the design decision.** It never enters
+`ui->win[]`, so it does not reach the taskbar, Alt-Tab, virtual desktops or the
+snap zones, and it cannot be dragged out onto the desktop. The alternative -
+giving `unoui_window` a parent pointer and recursing - would have changed the
+meaning of that flat array for the PS2 port, the Dreamcast port and the host
+demo too, and it cannot honour the append-at-end/zero-means-absent rule those
+share. The whole feature is inside one widget kind instead.
+
+**The part worth stealing: a child frame IS a window to the theme painters.**
+They read `->r`, `->title`, `->active` and `->flags`, so the draw path fills in
+one reused temporary `unoui_window` per child and hands it to the theme's own
+`window` and `titlebar` painters and to `draw_resize_grip`. No new artwork, no
+refactor of the existing chrome path, and children look right on every theme
+automatically. `UI_WIN_NOCTL` (from WM phase F) keeps minimize and maximize off,
+since neither means anything without a taskbar and a work area.
+
+**Three findings other lanes want.**
+
+1. **Delegating a state to the theme beats hand-painting it.** This is the
+   counterpart to the finding in the tabs-a note above, and the more useful
+   half. Because MDI focus is drawn by the theme's own title-bar painter, it
+   survives the 1-bit Mac Plus palette - which marks an active window with
+   stripes, i.e. geometry - with nothing written for it. The hand-written tab
+   painter had to be checked and needed a geometric cue added. Prefer the
+   theme's solution: it already covers palettes you are not looking at.
+2. **Index+1 terminated by 0 is now used twice, and it earned it both times.**
+   `unoui_mdi.z[]` and `.focus` both store child index + 1, so a zero-
+   initialised container reads as empty AND child 0 stays representable. A bare
+   index terminated by -1 fails the second half silently. `mdi_test.c` asserts
+   exactly that case, because it is the one a reader would not think to write.
+3. **`UI_CANVAS` has a latent clip bug, found while writing the MDI twin, and
+   deliberately left.** After the canvas draws, `draw_one` restores the clip
+   with the non-BARE content formula unconditionally, which is the wrong rect on
+   a `UI_WIN_BARE` window - the shell's desktop and taskbar - for any widget
+   that follows the canvas. Harmless today only because those windows carry
+   their canvas last. `UI_MDI` handles both cases; `UI_CANVAS` was not changed
+   because it is a live shell path and nothing here would have proved a change
+   to it safe. Correction 15 in the spec has the detail.
+
+**Gates** (all green): `tools/mdi_test.sh` PASS, 47 checks - lifecycle, z-order,
+front-to-back hit-testing, tiling without overlaps or seams, cascade that
+shrinks its step rather than piling the tail in a corner, and containment
+asserted four ways including through real drag and resize events;
+`tools/tabs_test.sh` and `tools/list_test.sh` re-run as regressions, both PASS;
+`unoui/build.sh` (the storyboard is now 24 frames, four of them MDI, and because
+the container is added before the existing re-skins those cover MDI under
+Windows 3.1 and Mac Plus for free); `pc64/build.sh` green at `UNO_DEBUG=0` and
+`UNO_DEBUG=1`. No new compiler warnings.
+
+Corrections 9-15 are in the spec's §13.

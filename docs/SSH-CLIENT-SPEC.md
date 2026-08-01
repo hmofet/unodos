@@ -69,7 +69,7 @@ The two lanes run concurrently. Within a lane, order is strict.
 | Phase | Lane | What |
 |---|---|---|
 | `tabs-a` | toolkits | **DONE** - `UI_TABS` becomes a real tabbed-document control + public geometry split |
-| `tabs-b` | toolkits | `UI_MDI` container widget |
+| `tabs-b` | toolkits | **DONE** - `UI_MDI` container widget |
 | `tabs-c` | toolkits | browser refactored onto `tabs-a` |
 | `ssh-a` | unossh | Ed25519, host-tested against RFC 8032 vectors |
 | `ssh-b` | unossh | transport: version exchange, `curve25519-sha256` KEX, `aes256-ctr` + `hmac-sha2-256`, rekey |
@@ -423,3 +423,59 @@ the selected tab still reads as selected through its 2 px raise and its merge
 with the baseline - the same cue the plain painter has always relied on there.
 The rule for phases B and F: **a state signalled only by `accent` does not
 survive every theme.** Signal it with geometry too.
+
+**9. `UI_MDI_CLOSE` does not exist.** §4 gave a child both a close and a resize
+flag. The close box is drawn by the THEME's title-bar painter from
+`unoui_metrics.closebox`, and neither that painter nor the existing title-bar
+hit test takes any per-window opt-out. A per-child flag could therefore only
+have suppressed the *click*, leaving a drawn control that did nothing - which is
+precisely the mistake `WM-MODERN-SPEC.md` correction 7 was written about. So a
+child gets a close box exactly when the theme has one, and it is always live.
+`UI_MDI_RESIZE` is the only child flag.
+
+**10. The widget needs a pointer to the child set, and `n` is derived.**
+§4 described `unoui_mdi` but never said how a `UI_MDI` widget reaches it:
+`unoui_widget` gained an appended `struct unoui_mdi *mdi` (0 = absent, per the
+ABI rule). And the live-child count is derived from the z-list rather than
+stored in an `n` field, so there is one source of truth for "how many children"
+and it cannot drift out of step with z.
+
+**11. Nine functions the contract table missed**, none of them optional:
+`unoui_mdi_add` / `_close` / `_raise` / `_focused` / `_count` / `_zorder` /
+`_at` / `_clamp` / `_content_rect`. An app cannot maintain the z-list from
+outside without re-implementing the index+1 invariant, which is the one thing
+this design must not ask of it. Also `unoui_mdi_tile` has no `mode` argument -
+the grid falls out of the child count (`ceil(sqrt(n))` columns), so a caller
+never has to pick one.
+
+**12. `unoui_draw_frame_chrome` was the wrong shape and was not added.** §4
+wanted the chrome factored out of `render_window_chrome` into a
+rect-plus-title-plus-flags call. It cannot be: the theme painters take a
+`unoui_window *`, reading `->r`, `->title`, `->active` and `->flags` and
+*writing* `->content_*`, so a rect-based signature has nothing to hand them.
+A child is instead rendered by filling in a temporary `unoui_window` and passing
+it to `PICK(window)` / `PICK(titlebar)` / `draw_resize_grip` unchanged. The
+existing path needed no refactor at all, and children inherit every theme
+automatically - which is what §4 actually wanted.
+
+**13. That temporary is one file-scope scratch, not a stack local.**
+`unoui_window` embeds `unoui_widget w[UNOUI_MAX_WIDGETS]`, so a local would be
+several KB of stack per child per frame. `nw = 0` means the painters never read
+the array, and unoui is single-threaded by construction.
+
+**14. Delegating to the theme bought a state cue that survives 1-bit** - the
+exact opposite of correction 8, and the more useful half of the pair. Mac Plus
+marks an active window with a striped title bar, which is geometry rather than
+colour, so MDI focus reads correctly there with nothing written for it. The
+generalisation for `tabs-c` and the app phases: **prefer delegating a state to
+the theme over hand-painting it**, because the theme has already solved it on
+palettes you are not looking at.
+
+**15. A latent clip bug in `UI_CANVAS`, found and deliberately NOT fixed.**
+After the canvas draws, `draw_one` restores the clip with the non-BARE content
+formula unconditionally. On a `UI_WIN_BARE` window - the shell's desktop and
+taskbar - that is the wrong rect for any widget following the canvas. It is
+harmless today only because those windows happen to carry their canvas last.
+`UI_MDI` restores correctly for both cases; `UI_CANVAS` was left alone because
+it is a live shell path and this phase has no gate that would prove a change to
+it safe. Whoever touches the shell next should fix it there, with a gate.
