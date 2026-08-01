@@ -32,4 +32,11 @@ void hid_kbd_reset(hid_kbd_state *s);
 void hid_kbd_report(hid_kbd_state *s, const unsigned char *rep,
                     hid_key_fn emit, void *ctx);
 
+/* LIVE (held-now) modifier state from the last report, as unoui UI_MOD_* bits
+ * (SHIFT 1, CTRL 2, ALT 4, GUI 8), left and right folded together.  The keys
+ * above are edges; this is a LEVEL, so it persists across polls that bring no
+ * report - a boot keyboard reports on change, and a modifier held with nothing
+ * else pressed reports once and then stays silent. */
+int  hid_kbd_mods(const hid_kbd_state *s);
+
 #endif

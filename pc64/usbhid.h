@@ -34,6 +34,13 @@ int  uno_usb_hid_mouse_poll(int *dx, int *dy, int *btn);
 /* wheel notches accumulated by the polls above, cleared on read (+ = down) */
 int  uno_usb_hid_wheel(void);
 
+/* Modifiers HELD NOW on the claimed USB keyboards, as unoui UI_MOD_* bits
+ * (SHIFT 1, CTRL 2, ALT 4, GUI 8), left and right folded. Read-only: it
+ * reports what uno_usb_hid_kbd_poll() has already latched, so calling it does
+ * not consume a report. This is the USB source for uno_pc64_mods(); without it
+ * Alt and GUI are dead on every USB keyboard. */
+int  uno_usb_hid_mods(void);
+
 int  uno_usb_hid_present(void);       /* any HID endpoint claimed        */
 int  uno_usb_hid_kbd_present(void);   /* at least one keyboard           */
 void uno_usb_hid_status(int *nkbd, int *nmouse);
