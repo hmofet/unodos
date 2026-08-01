@@ -394,7 +394,43 @@ def sc_browser_https(q):
     key(q, "ret"); time.sleep(10.0)                  # + TLS 1.2 handshake
     shot(q, "browser_https")
 
+# ---- 2026-08 additions: window management and the SSH client ---------------
+def sc_winsnap(q):
+    """A window snapped to half the screen, with the desktop pager beside the
+    Start button. Both are new: drag-to-edge snapping and four virtual
+    desktops."""
+    close_all(q); launch(q, 1, settle=2.0)          # Editor
+    combo(q, "alt", "left"); time.sleep(1.0)        # snap to the left half
+    shot(q, "winsnap")
+
+def sc_desktops(q):
+    """Desktop 2, reached with Ctrl+F2. The pager cell for the current desktop
+    is filled, and a dot marks any desktop that has windows on it."""
+    close_all(q); launch(q, 1, settle=2.0)
+    combo(q, "ctrl", "f2"); time.sleep(1.2)
+    shot(q, "desktops")
+    combo(q, "ctrl", "f1"); time.sleep(0.6)
+
+def sc_switcher(q):
+    """The Alt-Tab switcher overlay. F2 drives the same overlay from a keyboard
+    with no working Alt, which is why it exists."""
+    close_all(q); launch(q, 1, settle=2.0); launch(q, 2, settle=2.0)
+    key(q, "f2"); time.sleep(0.5)
+    shot(q, "switcher")
+    key(q, "esc"); time.sleep(0.4)
+
+def _sc_ssh_at(q, idx, tag):
+    close_all(q); launch(q, idx, settle=2.5)
+    shot(q, tag)
+
+# The SSH client sits last in the launcher, at 17. Probed rather than assumed:
+# the first guess was 19 and opened nothing at all.
+def sc_ssh(q): _sc_ssh_at(q, 17, "ssh")
+
+
 SCENES = {
+    "winsnap": sc_winsnap, "desktops": sc_desktops, "switcher": sc_switcher,
+    "ssh": sc_ssh,
     "desktop": sc_desktop, "startmenu": sc_startmenu, "controlpanel": sc_controlpanel,
     "personalization": sc_personalization,
     "themes": sc_themes, "fonts": sc_fonts, "resolution": sc_resolution,
