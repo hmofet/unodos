@@ -3354,3 +3354,88 @@ Windows 3.1 and Mac Plus for free); `pc64/build.sh` green at `UNO_DEBUG=0` and
 `UNO_DEBUG=1`. No new compiler warnings.
 
 Corrections 9-15 are in the spec's §13.
+
+## 2026-07-31 — LANDED (usb stack): both open input defects, one root cause
+
+Both cross-lane requests filed against `usbhid` are closed. They were the same
+bug twice: **a USB boot-protocol HID device reports on CHANGE, and this driver
+read every poll with no report as if the device had reported zero.** The state
+is a LEVEL; the code treated it as an EDGE. The PS/2 path has always latched
+(`gMBtn`, `pc64_native.c`), which is why only USB had it.
+
+**For the toolkits lane, plainly:**
+
+- **A USB drag now holds.** `uno_usb_hid_mouse_poll()` latches the button mask
+  per endpoint; only a report rewrites it. `dx`/`dy`/wheel are genuinely
+  accumulative and still reset every poll - that asymmetry is the whole fix.
+  Per endpoint rather than one global because the loop ORs several mice
+  together and a shared latch would let one mouse clear a button held on
+  another.
+- **`uno_pc64_mods()` now has a USB source.** `uno_usb_hid_mods()` (usbhid.h)
+  returns the boot report's modifier byte as `UI_MOD_*` bits, left and right
+  folded, LIVE rather than an edge. `uno_pc64_mods()` prefers it whenever a USB
+  keyboard is bound - the one-clause change the phase D request anticipated,
+  and the only line outside the lane.
+
+**What that does NOT yet give you, so nobody re-derives it from a green gate:**
+the raw key ring still carries ctrl-only mods on a USB key event, because
+`hid_key_fn` passes a bare `ctrl` flag. So the Alt-Tab **commit** (which polls
+`uno_pc64_mods()`) works from a USB keyboard, and Alt+Tab to **open** the
+switcher, Alt+arrow snap and Alt+D still do not - they test the mods on the key
+event itself. Closing that means widening the HID emit callback to carry the
+mods byte, which touches `i2c_hid.c` and `hid_key_emit()` in the input section
+as well as `hid_kbd.c`. The primitive is in place (`hid_kbd_mods()` gives the
+per-report value); the funnel change is the shell lane's call, and this lane
+will land the `hid_kbd.c` half on request.
+
+**Rollover:** the modifier byte is now recorded on EVERY report, including the
+rollover error report `hid_kbd_report()` returns early from. Rollover means too
+many keys are down, not that the modifiers were released.
+
+**Gates run** (all green): `pc64/build.sh` at `UNO_DEBUG=0` AND `UNO_DEBUG=1`;
+two new harness scenarios; the default `harness.py` pass re-run as a
+regression. `claim_device()` is untouched - both fixes are poll-path only, and
+that path stays byte-for-byte the code proven on the ZimaBlade behind a hub.
+
+**The new gates, and a QEMU fact this tree had wrong.** Both need an eager
+build, `UNO_EXTRA="-DUNO_USBHID_TEST -DUNO_NO_DETACH -DUNO_DBGCON" ./build.sh`,
+which must never ship:
+
+- `harness.py usbhid_drag` (`-device usb-mouse`) drives the existing `Mouse`
+  class: press, DWELL with no motion, move, release. Measured differential on
+  one image: pre-latch the window **does not move at all**; latched it moves
+  mid-drag and commits the full 200 px. It also asserts the drag did not turn
+  into a title-bar double click, which is what a flickering button reads as.
+- `harness.py usbhid_mods` (`-device usb-kbd`) asserts on usbhid's own
+  `usbhid: mods=N` transition log (UNO_DBGCON only): Alt, right Alt, GUI, right
+  Shift and Ctrl each report the right bit, left and right fold, two modifiers
+  OR and release independently, and a modifier held over ~70 frames is ONE
+  transition, not a flicker.
+- **Keys DO reach an emulated `usb-kbd`.** `INPUT.md` said routing to it was a
+  QEMU limit and that USB typing was metal-first; an untargeted
+  `input-send-event` reaches the guest's native USB keyboard. Corrected in
+  `INPUT.md`. (`input-send-event`'s `device` field is no use - it names a
+  CONSOLE, and passing an input device's id aborts QEMU outright.)
+- Not covered by a runtime assertion: the source selection inside
+  `uno_pc64_mods()` itself, because nothing in the shell observes modifier
+  state except the Alt-Tab release edge, which needs the ring mods above.
+  Build + inspection only.
+
+**DEFECT 3 (one report per host poll) WAS DELIBERATELY LEFT ALONE.** The
+standing observation is still true - `uno_usb_intr_in()` keeps exactly one TRB
+outstanding, so the controller fetches one report per poll - and looping until
+it returns 0 buys nothing, because there is at most one completed report to
+take. Real throughput needs more transfers in flight, which is precisely the
+change that killed mouse AND keyboard permanently on the ZimaBlade on
+2026-07-30 and had to be reverted. It is not retryable without (a) the xHCI
+error counter and queue depth readable over URC, and (b) a recovery path that
+abandons a head which has waited N frames and re-arms the queue. Neither exists
+yet, and neither is worth guessing at: guessing cost a working machine once.
+The "1000 Hz mouse against a 60 fps loop" story for the floatiness stays
+**retracted** (the CORRECTION entry's three-build differential), not background
+fact. Nothing in this pass changes how many transfers are in flight.
+
+**Still metal-pending.** QEMU proves the level logic and nothing about silicon:
+its HID devices are the simplest possible boot devices. The ZimaBlade run worth
+doing is a drag with the Razer mouse behind the hub, and Alt on the Logitech
+receiver's keyboard.
