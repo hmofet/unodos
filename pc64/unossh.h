@@ -24,6 +24,30 @@
 #ifndef PC64_UNOSSH_H
 #define PC64_UNOSSH_H
 
+/* ---- connections --------------------------------------------------------
+ * The handshake BLOCKS with a timeout: it is a bounded operation with a fixed
+ * message order and nothing useful to do in between. Packet reads afterwards
+ * take a timeout of their own, so a shell session driven from the shell's
+ * frame loop passes 0 and never stalls the desktop.
+ *
+ * ssh_handshake() proves the peer holds the private half of the host key it
+ * presented. It does NOT check that the key is the one you expected - there is
+ * no known-hosts store until ssh-d. ssh_host_fingerprint() is the SHA-256 of
+ * the key blob that such a store will compare. */
+#define SSH_MAXCONN 4
+
+int  ssh_connect(const char *host, int port);   /* -> handle, or -1 */
+int  ssh_handshake(int handle);                 /* 0 = transport is up */
+int  ssh_send(int handle, const unsigned char *payload, int n);
+int  ssh_recv(int handle, const unsigned char **payload, int *n, int timeout_ms);
+void ssh_close(int handle);
+
+const char          *ssh_error(int handle);
+const char          *ssh_server_ident(int handle);
+const unsigned char *ssh_host_fingerprint(int handle);   /* 32 bytes */
+const unsigned char *ssh_session_id(int handle);         /* 32 bytes */
+int                  ssh_is_encrypted(int handle);
+
 /* ---- byte buffers -------------------------------------------------------
  * One append-only writer and one bounds-checked reader, because every wire
  * bug in this protocol is either a length that was not checked or a length
