@@ -77,13 +77,14 @@ static const char *kThemeNames[NTHEMES];
  * index a-NNATIVE. */
 enum { APP_CTRL, APP_EDIT, APP_FILES, APP_SYS, APP_CLOCK, APP_SETUP,
        APP_MUSIC, APP_UNOAMP, NNATIVE };
-#define NEXTRA 6                          /* extra native apps beyond the bridge */
+#define NEXTRA 7                          /* extra native apps beyond the bridge */
 #define EX_RUNNER  (NNATIVE + UNOAPP_COUNT)       /* Runner3D: shell app index    */
 #define EX_BROWSER (NNATIVE + UNOAPP_COUNT + 1)   /* Browser: shell app index     */
 #define EX_STUDIO  (NNATIVE + UNOAPP_COUNT + 2)   /* Studio IDE (a .UNO module)   */
 #define EX_PHOTOS  (NNATIVE + UNOAPP_COUNT + 3)   /* Photos viewer (.UNO module)  */
 #define EX_USERAPP (NNATIVE + UNOAPP_COUNT + 4)   /* the app Studio just built    */
 #define EX_PYAPP   (NNATIVE + UNOAPP_COUNT + 5)   /* a running Python app (PYRT)  */
+#define EX_SSH     (NNATIVE + UNOAPP_COUNT + 6)   /* SSH client (native canvas)   */
 #define NAPPS  (NNATIVE + UNOAPP_COUNT + NEXTRA)
 #define APP_TBAR 18                       /* legacy apps' own title-bar height */
 static const char *kAppNames[NNATIVE] =
@@ -221,12 +222,14 @@ static const char *py_app_name(void)
 { return (g_pyapp && g_pyapp->name) ? g_pyapp->name : "Python app"; }
 static const char *app_name(int a)
 { return a == EX_RUNNER ? "Runner3D" : a == EX_BROWSER ? "Browser"
+       : a == EX_SSH ? "SSH"
        : a == EX_STUDIO ? "Studio" : a == EX_PHOTOS ? "Photos"
        : a == EX_USERAPP ? unoapp_user_title()
        : a == EX_PYAPP ? py_app_name()
        : a < NNATIVE ? kAppNames[a] : unoapp_name(a - NNATIVE); }
 static const char *app_short(int a)
 { return a == EX_RUNNER ? "Runner" : a == EX_BROWSER ? "Browser"
+       : a == EX_SSH ? "SSH"
        : a == EX_STUDIO ? "Studio" : a == EX_PHOTOS ? "Photos"
        : a == EX_USERAPP ? unoapp_user_title()
        : a == EX_PYAPP ? py_app_name()
@@ -1987,6 +1990,7 @@ static int app_game(int a)
 static int app_is_bridge(int a)
 { int li = a - NNATIVE; return a >= NNATIVE && li >= 0 && li < UNOAPP_COUNT && app_game(a) < 0; }
 
+void pc64_sshapp_open(void);
 static void build_legacy(int a)
 {
     int li = a - NNATIVE, aw, ah, g = app_game(a);
@@ -1998,6 +2002,15 @@ static void build_legacy(int a)
                           aw + 2*m->frame_w + 2*m->pad, ah + m->title_h + 2*m->pad + m->frame_w);
         unoui_widget_fill(unoui_add_canvas(&g_win[a], 0, 0, aw, ah, pc64_game_canvas(g)));
         g_win[a].flags |= UI_WIN_RESIZE;    /* the game canvas scales to the rect */
+        return;
+    }
+    if (a == EX_SSH) {                 /* native windowed SSH client canvas */
+        unoui_canvas *pc64_sshapp_canvas(void);
+        aw = 470; ah = 300;
+        unoui_window_init(&g_win[a], app_name(a), 40, 30,
+                          aw + 2*m->frame_w + 2*m->pad, ah + m->title_h + 2*m->pad + m->frame_w);
+        unoui_widget_fill(unoui_add_canvas(&g_win[a], 0, 0, aw, ah, pc64_sshapp_canvas()));
+        g_win[a].flags |= UI_WIN_RESIZE;
         return;
     }
     if (a == EX_BROWSER) {             /* native windowed browser canvas */
@@ -2087,6 +2100,7 @@ static void open_app(int a)
         g_open[a] = 1;
         if (g >= 0)                 pc64_game_open(g);           /* native game   */
         else if (a == EX_BROWSER)   pc64_browser_open();         /* browser       */
+        else if (a == EX_SSH)       pc64_sshapp_open();          /* ssh client    */
         else if (a == EX_STUDIO)    { if (g_studio && g_studio->opened) g_studio->opened(); }
         else if (a == EX_PHOTOS)    { if (g_photos && g_photos->opened) g_photos->opened(); }
         else if (a == EX_PYAPP)     { if (g_pyapp && g_pyapp->opened) g_pyapp->opened(); }
