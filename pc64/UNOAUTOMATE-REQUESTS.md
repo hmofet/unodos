@@ -3491,3 +3491,73 @@ change" will pass on a build where the feature does nothing.
 **Not covered by QEMU:** an I2C-HID keyboard, which has no emulated model at
 all, so the Surface's built-in keyboard gaining Alt is inference from the
 shared translator, not a measurement. It is on the metal checklist.
+
+---
+
+## 2026-07-31 - LANDED (toolkits lane): tabs-c - the UI lane is complete
+
+`docs/SSH-CLIENT-SPEC.md` §5. **All three UI-lane phases are on master.** The
+unossh lane (`ssh-a`..`ssh-f`) is untouched and unblocked.
+
+**What landed.** `pc64_browser.c` no longer carries a tab strip. Its 30-line
+painter, its three geometry functions and its two hand-written hit tests are
+replaced by the `unoui_tabs_*` control from `tabs-a`, hosted inside the canvas
+through the public geometry. The browser keeps tabs in a SPARSE array and the
+control's model is dense, so a small `tabs_model()` builds the dense view - a
+label array pointing straight into each tab's own mutable title, plus a slot to
+tab map. `btab`'s storage and `MAXTABS` are unchanged.
+
+**The `-18` is gone.** The old close zone was "the last 18 px of the tab", named
+independently in the hover test and the click test and matching nothing the
+painter drew. It is now whatever `unoui_tab_close_rect()` drew, and the gate
+asserts the zoning directly: a click at a tab's centre selects, a click near its
+right edge closes.
+
+**The whole chrome is themed now, not just the strip.** §5 asked for a
+deliberate decision here and this is it. Converting only the tabs was not really
+an option: the control paints from the palette, so a themed strip would have sat
+straight on top of a hard-coded near-white toolbar - incoherent on any theme
+that is not light, and Aurora Light and Dark are the shell's own defaults. It
+cost six macro definitions (`CH_FACE` becomes `TH()->pal.face`, and so on), so
+the toolbar, the drop-down panels and the status bar came along with no edit at
+their use sites. The PAGE colours are deliberately left alone - a document
+renders as a document, the way every browser paints a page whatever the desktop
+looks like.
+
+**Three findings for other lanes, all from the gate rather than the code.**
+
+1. **Take a pixel-diff threshold from the measurement, not from intuition.**
+   The "+" button's box is filled with `face`, which is also the empty strip's
+   background, so when it moves only its frame and cross glyph differ: 0.216 of
+   the zone changes when it moves, 0.005 when it does not. Three assertions
+   written at the obvious ">0.25 changed" FAILED on completely correct
+   behaviour. Two orders of magnitude of separation were there; the number just
+   was not where it looked like it should be.
+2. **Derive geometry from two measurements, then range-check every derived
+   value.** `browser_tabs` finds the strip from two successive add-a-tab diffs
+   rather than any theme constant, and refuses to click anything until the
+   derived pitch, origin and height are all in range. That caught a wrong
+   assumption immediately (Ctrl-T deselects the previous tab, so the first
+   diff's left edge is tab 0 repainting, not the new tab appearing) instead of
+   quietly clicking empty chrome and reporting a pass.
+3. **`pc64_browser.c` only ever had the forward declaration of the theme**,
+   because the panel code passes it to `unoui_list_draw` without dereferencing
+   it. Anything that wants to read the palette needs `unoui_theme.h`.
+
+**Gates** (all green, re-run after rebasing onto the usb lane's landings):
+`python3 harness.py browser_tabs` PASS, 12 checks, pointer-driven on
+`UNO_DETACH=1 UNO_DEBUG=1` - three tabs opened, the strip derived and
+range-checked, centre-click selects without closing, close-box click closes, the
+"+" opens one by pointer, Ctrl-F4 still closes one, and the toolbar below the
+strip is left alone; the default `harness.py` pass re-run as a regression;
+`tools/tabs_test.sh`, `tools/mdi_test.sh` and `tools/list_test.sh` all PASS;
+`unoui/build.sh` green; `pc64/build.sh` green at `UNO_DEBUG=0` and
+`UNO_DEBUG=1`. No new compiler warnings in `pc64_browser.c` (the one at :784 in
+`js_expand` is pre-existing).
+
+**One honest gap:** the gate photographs Aurora Light, the default. Aurora Dark
+maps `face` to 0x303643 against `text` 0xE7EBF3, so the contrast is high by
+construction and identical to every other themed window's - but nothing has
+actually grabbed the browser under a dark palette. Correction 21.
+
+Corrections 16-21 are in the spec's §13.
