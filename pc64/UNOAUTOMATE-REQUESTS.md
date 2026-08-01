@@ -3685,3 +3685,60 @@ worth dumping before guessing.
 
 `ssh-c` (auth + channels), `ssh-d` (key + session store), `ssh-e` (the
 unoautomate verb) and `ssh-f` (the GUI app) remain untouched.
+
+---
+
+## 2026-08-01 - LANDED (unossh): ssh-b is DONE, proven against real OpenSSH
+
+The transport completes a full handshake with **OpenSSH_for_Windows_9.5**:
+version exchange, KEXINIT negotiation, curve25519-sha256 ECDH, the
+ssh-ed25519 signature over the exchange hash, NEWKEYS and key derivation.
+
+**The signature verifying is the proof that matters.** The server signs its own
+copy of the exchange hash, so accepting it means our H matched byte for byte -
+every string field, the CR-LF-stripped idents, and K as an mpint rather than a
+string. None of that could have been established this side of a real server.
+
+The gate then checks the host key independently: it runs `ssh-keyscan` against
+the same server, hashes the returned blob, and requires the guest's reported
+fingerprint to match. Both say `6ece45f9b901c285`. That rules out the guest
+having produced 32 plausible bytes rather than parsing the server's actual key.
+The session id differs on every run, which is what a fresh ephemeral scalar
+should do.
+
+Gate: `python3 harness.py ssh_transport`, 7 checks. unossh registers itself
+into SPECTEST's existing `network` area, so `pc64_spectest.c` and unoautomate
+are both untouched - `unoauto_test_register()` takes the suite name and that IS
+the registration.
+
+### Six things this cost, all of which will cost the next lane too
+
+1. **SPECTEST's flags come from DEBUG.CFG, not STRESS.CFG.**
+   `pc64_stress_cfg_flag()` reads the former despite the name. Writing `spec`
+   into STRESS.CFG does nothing at all, silently.
+2. **SPECTEST runs BEFORE the network exists.** The stack is lazy and
+   `pc64_net_up()` is the entry point; without calling it the test reports a
+   protocol failure that is really "there was no NIC".
+3. **A SPECTEST test function returns 0 for PASS.** Returning 1 on success
+   records a FAIL while the test prints that it passed - which is exactly as
+   confusing as it sounds.
+4. **`qemu_argv()` passes `-nic none`.** Any network gate has to add its own
+   card; `-netdev user,id=n0 -device e1000,netdev=n0` is the pair that works.
+5. **QEMU's 10.0.2.2 is the machine RUNNING qemu.** On this box that is the WSL
+   VM, while the OpenSSH server is on Windows - one NAT hop further out, at
+   WSL's default gateway. The scenario discovers it with `ip route` and writes
+   it to `\SSHTEST.CFG`, so the guest retargets without a rebuild.
+6. **`ssh_connect()` reported errors nobody could read.** It stored the reason
+   in a connection it had not returned a handle for (and closed on the way
+   out), so every setup failure surfaced as "bad handle". Found by this gate on
+   its first real run; the reason is now mirrored into a file-scope string.
+
+### What is still NOT true
+
+Nothing is authenticated - that is `ssh-c`. And nothing checks the host key is
+the one we expected: the signature proves the peer HOLDS the key it presented,
+which authenticates the channel, not the identity. `ssh_host_fingerprint()` is
+the value a known-hosts store will compare in `ssh-d`, and the gate above shows
+it is the right value to compare.
+
+`ssh-c`, `ssh-d`, `ssh-e` and `ssh-f` remain untouched.
