@@ -72,6 +72,53 @@ const unsigned char *ssh_host_fingerprint(int handle);   /* 32 bytes */
 const unsigned char *ssh_session_id(int handle);         /* 32 bytes */
 int                  ssh_is_encrypted(int handle);
 
+/* ---- the persistent store (keys, sessions, known hosts) -----------------
+ * All three live in one container file on the first NATIVE volume, not the
+ * first writable one - volume 0 is the RAM disk, so a store written there is
+ * gone at power-off while every save appears to have worked. That is the bug
+ * the WM lane shipped in session_save(); ssh_store_persistent() returns 0 when
+ * there is nowhere better, so a caller can warn rather than pretend.
+ *
+ * Private keys are encrypted at rest (PBKDF2-HMAC-SHA256 -> AES-256-CTR, with
+ * an HMAC over the ciphertext). The PUBLIC half is stored in the clear beside
+ * each entry, because listing keys and showing fingerprints are things a UI
+ * does before anyone has typed a passphrase. */
+#define SSH_MAXKEYS   8
+#define SSH_MAXSESS  16
+#define SSH_MAXHOSTS 32
+#define SSH_NAMELEN  32
+#define SSH_HOSTLEN  64
+
+int ssh_store_persistent(void);       /* 0 = the store is on the RAM disk */
+
+int ssh_key_generate(const char *name, const char *pass);
+int ssh_key_add(const char *name, const unsigned char seed[32], const char *pass);
+/* 0 = ok, -1 = no such key, -2 = wrong passphrase or a damaged entry */
+int ssh_key_load(const char *name, const char *pass, unsigned char seed[32]);
+int ssh_key_delete(const char *name);
+int ssh_key_list(int idx, char *name, int cap, unsigned char pub[32], int *guarded);
+/* the standard one-line authorized_keys form; returns its length */
+int ssh_key_export_pub(const char *name, char *out, int cap);
+/* import an openssh-key-v1 file. -3 = it is encrypted, which needs
+ * bcrypt_pbkdf and is not supported; -4 = it is not an Ed25519 key. */
+int ssh_key_import(const char *name, const char *pem, int pemlen, const char *pass);
+
+int ssh_sess_set(const char *name, const char *host, int port,
+                 const char *user, const char *key);
+int ssh_sess_get(const char *name, char *host, int hcap, int *port,
+                 char *user, int ucap, char *key, int kcap);
+int ssh_sess_list(int idx, char *name, int cap);
+int ssh_sess_delete(const char *name);
+
+/* known hosts: what turns "the peer holds the key it presented" into "the peer
+ * is who it was last time". MISMATCH is a different answer from UNKNOWN on
+ * purpose - the first is the one worth stopping for. */
+enum { SSH_HOST_UNKNOWN = 0, SSH_HOST_KNOWN = 1, SSH_HOST_MISMATCH = -1 };
+int ssh_known_check(const char *host, const unsigned char fp[32]);
+int ssh_known_add(const char *host, const unsigned char fp[32]);
+int ssh_known_forget(const char *host);
+int ssh_verify_host(int handle, const char *host);   /* uses this connection's key */
+
 /* ---- byte buffers -------------------------------------------------------
  * One append-only writer and one bounds-checked reader, because every wire
  * bug in this protocol is either a length that was not checked or a length
