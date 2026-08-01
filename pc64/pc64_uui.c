@@ -3585,6 +3585,14 @@ int pc64_shell_app_is_focused(int idx)
 { return (idx >= 0 && idx < NAPPS) ? (focused_app() == idx) : 0; }
 
 /* the bundled monospace face's font slot (Studio's code editor), -1 = none */
+#ifdef UNO_DEBUG
+/* Open the SSH client's window on demand. The visual half of the ssh_app gate
+ * needs the window UP at a known moment; driving the Start menu instead means
+ * depending on where EX_SSH lands in the launcher, and the first attempt at
+ * that opened the Control Panel. */
+void pc64_dbg_open_ssh(void) { open_app(EX_SSH); }
+#endif
+
 int pc64_shell_font_mono(void)
 {
     int i;

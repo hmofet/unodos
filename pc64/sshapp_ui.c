@@ -206,6 +206,27 @@ static void connect_selected(void)
     say("Connected to ", host, 0);
 }
 
+/* One non-blocking sweep of every live connection. Called once per frame from
+ * the draw path - which is the whole reason this app never stalls the desktop -
+ * and by the gate, so the test drives the same code a frame does. */
+static void pump_connections(void)
+{
+    int i;
+    for (i = 1; i < NTABS; i++) {
+        char chunk[512];
+        int n;
+        if (!g_tab[i].used || g_tab[i].conn < 0) continue;
+        ssh_poll(g_tab[i].conn);
+        n = ssh_read(g_tab[i].conn, chunk, (int)sizeof chunk);
+        if (n > 0) { tab_add_text(&g_tab[i], chunk, n); pc64_shell_dirty(); }
+        else if (n < 0) {
+            ssh_close(g_tab[i].conn);
+            g_tab[i].conn = -1;
+            tab_add_text(&g_tab[i], "\n[connection closed]\n", 21);
+        }
+    }
+}
+
 /* ---- painting ------------------------------------------------------------ */
 static int band_tabs_h(void) { return unoui_tabs_h(TH()); }
 static int band_stat_h(void) { return fb_text_h() + 6; }
@@ -272,22 +293,7 @@ static void ssh_draw(struct unoui_widget *w, unoui_rect r, void *ctx)
         say("Pick a session and press + to connect.", 0, 0);
     }
 
-    /* one poll per frame: this is the whole reason the app never blocks */
-    {   int i;
-        for (i = 1; i < NTABS; i++) {
-            char chunk[512];
-            int n;
-            if (!g_tab[i].used || g_tab[i].conn < 0) continue;
-            ssh_poll(g_tab[i].conn);
-            n = ssh_read(g_tab[i].conn, chunk, (int)sizeof chunk);
-            if (n > 0) { tab_add_text(&g_tab[i], chunk, n); pc64_shell_dirty(); }
-            else if (n < 0) {
-                ssh_close(g_tab[i].conn);
-                g_tab[i].conn = -1;
-                tab_add_text(&g_tab[i], "\n[connection closed]\n", 21);
-            }
-        }
-    }
+    pump_connections();
 
     strip = r; strip.h = band_tabs_h();
     stat = r; stat.y = r.y + r.h - band_stat_h(); stat.h = band_stat_h();
@@ -379,13 +385,33 @@ void pc64_sshapp_open(void)
         say("Store is on the RAM disk: keys will not survive a reboot.", 0, 1);
 }
 
-/* For the gate: drive the app the way a click would, without a pointer. */
+/* ---- the gate's way in ---------------------------------------------------
+ * These drive the SAME functions a click does - connect_selected(), tab_close()
+ * and the per-frame pump - rather than a parallel copy of them. Clicking the
+ * "+" through the Start menu would have meant depending on where EX_SSH lands
+ * in the launcher, which fails for reasons that have nothing to do with the
+ * app; the pointer is used for the screenshot, where it proves something the
+ * assertions cannot. */
+int pc64_sshapp_dbg_select(const char *name)
+{
+    int i;
+    reload_lists();
+    for (i = 0; i < g_nsess; i++) {
+        int k;
+        for (k = 0; name[k] && g_sessn[i][k] == name[k]; k++) ;
+        if (!name[k] && !g_sessn[i][k]) { g_sess_sel = i; return 1; }
+    }
+    return 0;
+}
 int pc64_sshapp_dbg_connect(void)
 {
     reload_lists();
     connect_selected();
     return (g_cur > 0 && g_tab[g_cur].conn >= 0) ? 1 : 0;
 }
+void pc64_sshapp_dbg_pump(void) { pump_connections(); }
+void pc64_sshapp_dbg_close(void) { tab_close(g_cur); }
 int pc64_sshapp_dbg_tabs(void) { return g_ntab; }
+int pc64_sshapp_dbg_cur(void) { return g_cur; }
 const char *pc64_sshapp_dbg_status(void) { return g_status; }
 int pc64_sshapp_dbg_textlen(void) { return (g_cur > 0) ? g_tab[g_cur].len : 0; }
