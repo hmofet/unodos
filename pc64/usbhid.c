@@ -152,6 +152,18 @@ int uno_usb_hid_kbd_poll(uno_usb_key_fn emit, void *ctx)
         if (n >= 8)                                    /* boot kbd report = 8 B */
             hid_kbd_report(&g_eps[i].kbd, rep, (hid_key_fn)emit, ctx);
     }
+#ifdef UNO_DBGCON
+    /* Log the modifier LEVEL on every transition, so a scripted run can read
+     * what the device is holding. One line per change and none in between is
+     * the assertion: a modifier held over hundreds of quiet polls must not
+     * flicker. UNO_DBGCON only - it is a QEMU-verification build (port 0x402
+     * is SMM-trapped on some laptops), never a shipping one. */
+    {
+        static int last = -1;
+        int m = uno_usb_hid_mods();
+        if (m != last) { last = m; uh_dbg("usbhid: mods="); uh_dbgn(m); uh_dbg("\n"); }
+    }
+#endif
     return any;
 }
 
