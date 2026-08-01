@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Windows & desktops · UnoDOS pc64 manual</title>
+<meta name="description" content="User manual for UnoDOS pc64, the x86-64/UEFI world of the UnoDOS operating-system family.">
+<link rel="stylesheet" href="assets/style.css">
+
+<script>
+(function(){
+  var r=document.documentElement, k='unodos-doc-theme';
+  try{var s=localStorage.getItem(k); if(s)r.setAttribute('data-theme',s);}catch(e){}
+  window.__t=function(){
+    var cur=r.getAttribute('data-theme');
+    if(!cur){cur=matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';}
+    var nx=cur==='dark'?'light':'dark';
+    r.setAttribute('data-theme',nx);
+    try{localStorage.setItem(k,nx);}catch(e){}
+  };
+})();
+</script>
+<script>
+/* Lightbox: click (or Enter/Space on) a screenshot to see it full size.
+   Manual shots are scaled into the text column, where fine UI detail - a
+   status line, an icon, a menu entry - is too small to read. Built once at
+   load and reused; Esc or a click anywhere closes it. */
+(function(){
+  var lb,img,cap;
+  function build(){
+    lb=document.createElement('div'); lb.id='lb'; lb.setAttribute('role','dialog');
+    lb.setAttribute('aria-modal','true');
+    img=document.createElement('img');
+    cap=document.createElement('figcaption');
+    var x=document.createElement('button');
+    x.className='x'; x.innerHTML='&times;'; x.setAttribute('aria-label','Close');
+    lb.appendChild(x); lb.appendChild(img); lb.appendChild(cap);
+    document.body.appendChild(lb);
+    lb.addEventListener('click', close);
+  }
+  function open(src, text){
+    if(!lb) build();
+    img.src=src; img.alt=text||''; cap.textContent=text||'';
+    lb.classList.add('on'); document.body.style.overflow='hidden';
+  }
+  function close(){
+    if(!lb) return;
+    lb.classList.remove('on'); img.src=''; document.body.style.overflow='';
+  }
+  document.addEventListener('click', function(e){
+    var b=e.target.closest && e.target.closest('button.zoom');
+    if(!b) return;
+    e.preventDefault();
+    var f=b.parentNode.querySelector('figcaption');
+    open(b.getAttribute('data-full'), f?f.textContent:'');
+  });
+  document.addEventListener('keydown', function(e){
+    if(e.key==='Escape') close();
+  });
+})();
+</script>
+
+</head>
+<body>
+<input type="checkbox" id="mnav">
+<div class="topbar">
+  <label class="menu-btn" for="mnav">☰ Menu</label>
+  <b>UnoDOS pc64</b>
+</div>
+<div class="layout">
+
+<aside class="sidebar">
+  <a class="brand" href="index.html" style="text-decoration:none;color:inherit">
+    <span class="logo"><i></i><i></i><i></i><i></i></span>
+    <span><b>UnoDOS <span style="color:var(--accent-2)">pc64</span></b><span class="sub">User manual</span></span>
+  </a>
+  <ul class="nav"><li><a class="" href="index.html">Overview</a></li><li><a class="" href="getting-started.html">Getting started</a></li><li><a class="" href="desktop.html">The desktop</a></li><li><a class="active" href="windows.html">Windows &amp; desktops</a></li><li><a class="" href="appearance.html">Themes &amp; appearance</a></li><li><a class="" href="apps.html">Applications</a></li><li><a class="" href="browser.html">Web browser</a></li><li><a class="" href="ssh.html">SSH client</a></li><li><a class="" href="networking.html">Networking</a></li><li><a class="" href="ports.html">The UnoDOS family</a></li><li class="sec">Developer</li><li><a class="" href="developer.html">Overview &amp; architecture</a></li><li><a class="" href="studio.html">Studio: the built-in IDE</a></li><li><a class="" href="dev-apps.html">Writing apps</a></li><li><a class="" href="dev-python.html">Python apps</a></li><li><a class="" href="dev-api.html">API reference</a></li><li><a class="" href="dev-build.html">Building &amp; tooling</a></li><li><a class="" href="dev-remote.html">Remote control &amp; automation</a></li></ul>
+  <div class="side-foot">
+    <a href="https://github.com/hmofet/unodos" target="_blank" rel="noopener">GitHub&nbsp;&rsaquo; hmofet/unodos</a><br>
+    <a href="#" onclick="__t();return false">Toggle light / dark</a>
+  </div>
+</aside>
+<main class="main"><div class="wrap">
+
+<p class="lede">Windows move, snap, stack and split across four desktops. Everything
+here works with the mouse and with the keyboard, and the layout you leave behind
+comes back after a restart.</p>
+
+<h2>Moving and sizing</h2>
+<p>Drag a window by its title bar and the window itself moves with the pointer -
+you see the real thing at the real position, not an outline. Double-click the title
+bar to maximize it, and double-click again to put it back. Every window that can be
+resized also has a <b>minimize</b> and a <b>maximize</b> button at the right-hand end
+of its title bar, and a grip in its bottom-right corner.</p>
+
+<h2>Snapping to an edge</h2>
+<p>Drag a window against the left or right edge of the screen and a translucent
+preview shows the half it will fill; let go and it takes that half. The top edge
+maximizes, and the four corners give you quarters. Dragging a snapped window away
+from the edge gives it its old size back, so nothing is lost by trying it.</p>
+<figure><button type="button" class="zoom" data-full="assets/img/winsnap.png" aria-label="Enlarge: The Editor snapped to the left half of the screen. Keyboard users get the same result with Alt and an arrow key. The four numbered cells beside the Start button are the desktop pager."><img src="assets/img/winsnap.png" alt="The Editor snapped to the left half of the screen. Keyboard users get the same result with Alt and an arrow key. The four numbered cells beside the Start button are the desktop pager." loading="lazy"></button><figcaption>The Editor snapped to the left half of the screen. Keyboard users get the same result with Alt and an arrow key. The four numbered cells beside the Start button are the desktop pager.</figcaption></figure>
+<p>The keyboard equivalents are <kbd>Alt</kbd>+<kbd>&larr;</kbd> and
+<kbd>Alt</kbd>+<kbd>&rarr;</kbd> for the halves, <kbd>Alt</kbd>+<kbd>&uarr;</kbd> to
+maximize and <kbd>Alt</kbd>+<kbd>&darr;</kbd> to minimize.</p>
+
+<h2>Switching windows</h2>
+<p>Hold <kbd>Alt</kbd> and press <kbd>Tab</kbd> to bring up the switcher, which lists
+the windows on the current desktop in the order you last used them. Keep tapping
+<kbd>Tab</kbd> to walk the list and let go of <kbd>Alt</kbd> to choose.</p>
+<div class="note tip"><b>If Alt does nothing</b>Some keyboards never report Alt to the system - a few USB models, and any machine whose firmware does not pass modifier keys through. <kbd>F2</kbd> and <kbd>Ctrl</kbd>+<kbd>Tab</kbd> open the same switcher and commit after a short pause, so the feature is reachable either way.</div>
+<figure><button type="button" class="zoom" data-full="assets/img/switcher.png" aria-label="Enlarge: The switcher, showing the windows on this desktop most-recently-used first. It is scoped to the current desktop on purpose: a switcher that reached across all four would undo the point of having them."><img src="assets/img/switcher.png" alt="The switcher, showing the windows on this desktop most-recently-used first. It is scoped to the current desktop on purpose: a switcher that reached across all four would undo the point of having them." loading="lazy"></button><figcaption>The switcher, showing the windows on this desktop most-recently-used first. It is scoped to the current desktop on purpose: a switcher that reached across all four would undo the point of having them.</figcaption></figure>
+
+<h2>Four desktops</h2>
+<p>The four numbered cells beside the Start button are desktops. Click one to switch,
+or press <kbd>Ctrl</kbd> and <kbd>F1</kbd> to <kbd>F4</kbd>. A small dot on a cell
+means that desktop has windows on it. To send the window you are using to another
+desktop and follow it there, press <kbd>Alt</kbd>+<kbd>Ctrl</kbd> and the number.</p>
+<figure><button type="button" class="zoom" data-full="assets/img/desktops.png" aria-label="Enlarge: Desktop 2, empty, with the pager showing which desktop is current and which others are occupied. The wallpaper, icons and taskbar are shared; only the windows move."><img src="assets/img/desktops.png" alt="Desktop 2, empty, with the pager showing which desktop is current and which others are occupied. The wallpaper, icons and taskbar are shared; only the windows move." loading="lazy"></button><figcaption>Desktop 2, empty, with the pager showing which desktop is current and which others are occupied. The wallpaper, icons and taskbar are shared; only the windows move.</figcaption></figure>
+<p>Right-click a window's title bar for a menu with <b>Snap left</b>, <b>Snap
+right</b>, <b>To desktop 1-4</b> and the group commands below. Right-clicking blank
+space on the taskbar offers <b>Tile</b> and <b>Cascade</b> for everything on the
+current desktop.</p>
+
+<h2>Linking windows into a group</h2>
+<p>Two windows you always use together can be linked. Give both the same group from
+the title-bar menu (<b>Group: A</b> or <b>Group: B</b>) and from then on they move,
+raise, minimize and change desktops as one. A small coloured marker on each title bar
+shows which group it belongs to. Choose <b>Group: none</b> to break the link.</p>
+
+<h2>Your layout is remembered</h2>
+<p>Where each window sits, how big it is, whether it is snapped or minimized, which
+desktop it is on and which group it belongs to are all saved, and restored the next
+time you start up.</p>
+<div class="note"><b>Where it is saved</b>The session is written to a real disk, so it survives a power cycle. On a machine with nothing but the RAM disk - booting from read-only media, say - there is nowhere persistent to write it and the layout will not come back.</div>
+
+<nav class="pagenav"><a href="desktop.html">&lsaquo; The desktop</a><a class="nxt" href="appearance.html">Themes &amp; appearance &rsaquo;</a></nav>
+</div></main>
+</div>
+</body>
+</html>

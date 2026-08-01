@@ -17,9 +17,11 @@ NAV = [
     ("index.html",           "Overview"),
     ("getting-started.html", "Getting started"),
     ("desktop.html",         "The desktop"),
+    ("windows.html",         "Windows &amp; desktops"),
     ("appearance.html",      "Themes &amp; appearance"),
     ("apps.html",            "Applications"),
     ("browser.html",         "Web browser"),
+    ("ssh.html",             "SSH client"),
     ("networking.html",      "Networking"),
     ("ports.html",           "The UnoDOS family"),
     (None,                   "Developer"),          # section header
@@ -939,6 +941,112 @@ or touchpad moves the pointer.</p>
 </tbody>
 </table></div>
 {note('Because a focused menu changes its value with <kbd>↑</kbd>/<kbd>↓</kbd>, you can switch themes, fonts and resolution entirely from the keyboard. See <a href="appearance.html">Themes &amp; appearance</a>.', kind="tip")}
+""")
+
+PAGES["windows.html"] = ("Windows & desktops", f"""
+<p class="lede">Windows move, snap, stack and split across four desktops. Everything
+here works with the mouse and with the keyboard, and the layout you leave behind
+comes back after a restart.</p>
+
+<h2>Moving and sizing</h2>
+<p>Drag a window by its title bar and the window itself moves with the pointer -
+you see the real thing at the real position, not an outline. Double-click the title
+bar to maximize it, and double-click again to put it back. Every window that can be
+resized also has a <b>minimize</b> and a <b>maximize</b> button at the right-hand end
+of its title bar, and a grip in its bottom-right corner.</p>
+
+<h2>Snapping to an edge</h2>
+<p>Drag a window against the left or right edge of the screen and a translucent
+preview shows the half it will fill; let go and it takes that half. The top edge
+maximizes, and the four corners give you quarters. Dragging a snapped window away
+from the edge gives it its old size back, so nothing is lost by trying it.</p>
+{fig("winsnap.png", "The Editor snapped to the left half of the screen. Keyboard users get the same result with Alt and an arrow key. The four numbered cells beside the Start button are the desktop pager.")}
+<p>The keyboard equivalents are <kbd>Alt</kbd>+<kbd>&larr;</kbd> and
+<kbd>Alt</kbd>+<kbd>&rarr;</kbd> for the halves, <kbd>Alt</kbd>+<kbd>&uarr;</kbd> to
+maximize and <kbd>Alt</kbd>+<kbd>&darr;</kbd> to minimize.</p>
+
+<h2>Switching windows</h2>
+<p>Hold <kbd>Alt</kbd> and press <kbd>Tab</kbd> to bring up the switcher, which lists
+the windows on the current desktop in the order you last used them. Keep tapping
+<kbd>Tab</kbd> to walk the list and let go of <kbd>Alt</kbd> to choose.</p>
+{note("Some keyboards never report Alt to the system - a few USB models, and any machine whose firmware does not pass modifier keys through. <kbd>F2</kbd> and <kbd>Ctrl</kbd>+<kbd>Tab</kbd> open the same switcher and commit after a short pause, so the feature is reachable either way.", "tip", "If Alt does nothing")}
+{fig("switcher.png", "The switcher, showing the windows on this desktop most-recently-used first. It is scoped to the current desktop on purpose: a switcher that reached across all four would undo the point of having them.")}
+
+<h2>Four desktops</h2>
+<p>The four numbered cells beside the Start button are desktops. Click one to switch,
+or press <kbd>Ctrl</kbd> and <kbd>F1</kbd> to <kbd>F4</kbd>. A small dot on a cell
+means that desktop has windows on it. To send the window you are using to another
+desktop and follow it there, press <kbd>Alt</kbd>+<kbd>Ctrl</kbd> and the number.</p>
+{fig("desktops.png", "Desktop 2, empty, with the pager showing which desktop is current and which others are occupied. The wallpaper, icons and taskbar are shared; only the windows move.")}
+<p>Right-click a window's title bar for a menu with <b>Snap left</b>, <b>Snap
+right</b>, <b>To desktop 1-4</b> and the group commands below. Right-clicking blank
+space on the taskbar offers <b>Tile</b> and <b>Cascade</b> for everything on the
+current desktop.</p>
+
+<h2>Linking windows into a group</h2>
+<p>Two windows you always use together can be linked. Give both the same group from
+the title-bar menu (<b>Group: A</b> or <b>Group: B</b>) and from then on they move,
+raise, minimize and change desktops as one. A small coloured marker on each title bar
+shows which group it belongs to. Choose <b>Group: none</b> to break the link.</p>
+
+<h2>Your layout is remembered</h2>
+<p>Where each window sits, how big it is, whether it is snapped or minimized, which
+desktop it is on and which group it belongs to are all saved, and restored the next
+time you start up.</p>
+{note("The session is written to a real disk, so it survives a power cycle. On a machine with nothing but the RAM disk - booting from read-only media, say - there is nowhere persistent to write it and the layout will not come back.", "", "Where it is saved")}
+""")
+
+PAGES["ssh.html"] = ("SSH client", f"""
+<p class="lede">Log in to another computer from UnoDOS, run commands on it and see
+the output, using the same SSH the rest of the world uses. Keys and saved
+connections live on this machine and survive a restart.</p>
+
+{fig("ssh.png", "The SSH client on first run. The Manage tab holds two panes - your saved connections and your keys - and the + button beside the tabs opens a connection to whichever session is selected. Each connection gets its own tab.")}
+
+<h2>What it can talk to</h2>
+<p>Any current OpenSSH server, and anything else that speaks the same modern set:
+<code>curve25519-sha256</code> for key exchange, <code>ssh-ed25519</code> host and
+user keys, <code>aes256-ctr</code> encryption and <code>hmac-sha2-256</code> for
+integrity. It has been tested against OpenSSH 9.5 and 9.6.</p>
+
+<h2>Getting a key</h2>
+<p>SSH identifies you by a key rather than a password. You can either make one here
+or bring one you already have.</p>
+<ol>
+  <li>Open <b>SSH</b> from the Start menu or the desktop.</li>
+  <li>To make a new key, use the <b>Keys</b> pane. The public half is what you give
+      to the other computer.</li>
+  <li>To use an existing key, copy its private key file onto a disk UnoDOS can read
+      and import it. Keys are listed as <b>(open)</b> or <b>(locked)</b> depending on
+      whether they need a passphrase.</li>
+</ol>
+{note("An OpenSSH private key that was saved <i>with</i> a passphrase cannot be imported yet - that format needs a password-hashing function UnoDOS does not carry. Export a copy with no passphrase if you want to bring it across, and keep that copy somewhere safe.", "warn", "Importing a protected key")}
+
+<h2>Saving a connection</h2>
+<p>A saved session records the machine name or address, the port, the user name to log
+in as, and which of your keys to use. Select it in the <b>Sessions</b> pane and press
+<b>+</b> to connect. A new tab opens with the session running in it; close the tab to
+hang up. The <b>Manage</b> tab cannot be closed - it is where you always come back to.</p>
+
+<h2>Host keys and what a warning means</h2>
+<p>Every server proves who it is with its own key. The first time you connect to a
+machine, UnoDOS records that key and says so. On later visits it checks the key
+matches.</p>
+{note("If the key has CHANGED, the client refuses to connect and says so in red. That can mean the server was legitimately rebuilt - or that something is impersonating it. Do not work around the warning until you know which; find out from the machine's owner, then remove the stored key and connect again to record the new one.", "warn", "A changed host key")}
+
+<h2>Automation</h2>
+<p>The same client is available to the remote-control channel, so a script driving one
+UnoDOS machine can log in to others and run commands there. See
+<a href="dev-remote.html">Remote control &amp; automation</a>.</p>
+
+<h2>What it does not do yet</h2>
+<ul>
+  <li>No file transfer (no SFTP or SCP) and no port forwarding.</li>
+  <li>The terminal shows plain text. Programs that draw with cursor-control codes -
+      a full-screen text editor, for instance - will not display correctly.</li>
+  <li>Connecting uses keys that have no passphrase; the app cannot prompt for one yet.</li>
+  <li>Ed25519 keys only, for both host and user keys.</li>
+</ul>
 """)
 
 PAGES["appearance.html"] = ("Themes & appearance", f"""
