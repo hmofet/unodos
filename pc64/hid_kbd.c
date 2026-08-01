@@ -11,6 +11,14 @@
 #define K_DEL 8
 #define K_ESC 0x17
 
+/* unoui's UI_MOD_* bits (unoui.h), mirrored the same way the scan codes above
+ * mirror uefi.h - this file sits below the toolkit and includes neither. They
+ * are the wire format hid_kbd_mods() answers in; keep them in step. */
+#define HK_SHIFT 1
+#define HK_CTRL  2
+#define HK_ALT   4
+#define HK_GUI   8
+
 /* HID Keyboard/Keypad usage (0x07 page) -> ASCII, unshifted / shifted.
  * Index is the usage code; entries are 0 for keys handled as scan codes or
  * with no character.  Covers 0x00..0x38 (letters, digits, the symbol row);
@@ -82,6 +90,12 @@ void hid_kbd_report(hid_kbd_state *s, const unsigned char *rep,
     int i;
     if (!s->inited) hid_kbd_reset(s);
 
+    /* Record the modifier byte FIRST, and unconditionally. It is LEVEL state
+     * (hid_kbd_mods() answers "held right now"), so it has to be current after
+     * every report - including the rollover one below, which means too many
+     * keys are down, not that the modifiers stopped being held. */
+    s->prevmod = mod;
+
     /* 0x01 in keycode[0] = rollover error; ignore the whole report */
     if (rep[2] == 0x01) return;
 
@@ -93,5 +107,20 @@ void hid_kbd_report(hid_kbd_state *s, const unsigned char *rep,
         emit_usage(u, mod, s, emit, ctx);
     }
     for (i = 0; i < 6; i++) s->prev[i] = rep[2 + i];
-    s->prevmod = mod;
+}
+
+/* The HID modifier byte as UI_MOD_* bits: bit0 LCtrl, bit1 LShift, bit2 LAlt,
+ * bit3 LGUI, bits 4-7 the right-hand four. Left and right fold together -
+ * nothing above this cares which hand held Alt.
+ *
+ * LEVEL, not an edge: a modifier-only change IS a report (all six keycodes
+ * zero), so this stays current while a modifier is held with no key pressed,
+ * and a poll that brings no report leaves it alone rather than clearing it. */
+int hid_kbd_mods(const hid_kbd_state *s)
+{
+    unsigned char m = s->prevmod;
+    return ((m & 0x11) ? HK_CTRL  : 0) |
+           ((m & 0x22) ? HK_SHIFT : 0) |
+           ((m & 0x44) ? HK_ALT   : 0) |
+           ((m & 0x88) ? HK_GUI   : 0);
 }

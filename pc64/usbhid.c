@@ -10,6 +10,7 @@ int  uno_usb_hid_init(void) { return 0; }
 int  uno_usb_hid_kbd_poll(uno_usb_key_fn e, void *c) { (void)e;(void)c; return 0; }
 int  uno_usb_hid_mouse_poll(int *dx, int *dy, int *b) { (void)dx;(void)dy;(void)b; return 0; }
 int  uno_usb_hid_wheel(void)       { return 0; }
+int  uno_usb_hid_mods(void)        { return 0; }
 int  uno_usb_hid_present(void)     { return 0; }
 int  uno_usb_hid_kbd_present(void) { return 0; }
 void uno_usb_hid_status(int *nk, int *nm) { if (nk)*nk=0; if (nm)*nm=0; }
@@ -194,6 +195,22 @@ int uno_usb_hid_mouse_poll(int *dx, int *dy, int *btn)
     if (!any) return 0;
     *dx = ax; *dy = ay; *btn = ab;
     return 1;
+}
+
+/* Modifiers HELD RIGHT NOW across every claimed USB keyboard, as UI_MOD_* bits.
+ * The state is the modifier byte hid_kbd_report() records from each report, so
+ * it needs no polling of its own and never steals a report from
+ * uno_usb_hid_kbd_poll() - it just reads what that poll already latched.
+ *
+ * Live rather than an edge, because that is what uno_pc64_mods() promises its
+ * callers: the window manager commits Alt-Tab on Alt going UP, so a source that
+ * only reported presses would leave the switcher on screen until its timer. */
+int uno_usb_hid_mods(void)
+{
+    int i, m = 0;
+    for (i = 0; i < g_neps; i++)
+        if (g_eps[i].is_kbd) m |= hid_kbd_mods(&g_eps[i].kbd);
+    return m;
 }
 
 int uno_usb_hid_wheel(void)       { int z = g_wheel; g_wheel = 0; return z; }
