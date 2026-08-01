@@ -2636,6 +2636,106 @@ def ssh_exec():
     return 1 if fails else 0
 
 
+def ssh_store():
+    """Gate for ssh-d: the key/session/known-host store survives a power cycle.
+
+        UNO_DEBUG=1 UNO_DBGCON=1 ./build.sh && python3 harness.py ssh_store
+
+    Boots the SAME real FAT image twice. There is no "which boot is this" flag,
+    so the store answers that itself: an empty one gets seeded, a populated one
+    gets verified. vvfat cannot carry this - it hands multi-cluster writes back
+    as garbage - so the image comes from tools/mkuefi.py.
+
+    It also does a genuine OpenSSH round trip. ssh-keygen generates a real
+    ed25519 private key, the guest imports it from the openssh-key-v1 container
+    and exports the public half in authorized_keys form, and that line is
+    diffed against ssh-keygen's OWN .pub. Byte equality there means the
+    container parse, the seed, our public-key derivation and the encoding all
+    agree with OpenSSH - four things one comparison can settle."""
+    fails = []
+
+    def check(name, ok, detail=""):
+        print("  %-52s %s %s" % (name, "PASS" if ok else "FAIL", detail))
+        if not ok:
+            fails.append(name)
+
+    def boot(tag):
+        log = "build/ssh_store_%s.log" % tag
+        os.environ["UNO_DISK"] = "build/unodos-uefi.img"
+        qemu, q = start_qemu(log=log, pointer="none")
+        try:
+            deadline = time.time() + 150
+            text = ""
+            while time.time() < deadline:
+                time.sleep(5)
+                try:
+                    with open(log, "rb") as f:
+                        text = f.read().decode("latin-1")
+                except IOError:
+                    text = ""
+                if "sshstore: RESULT" in text:
+                    break
+            return text
+        finally:
+            stop_qemu(qemu, q)
+
+    with open("build/esp/DEBUG.CFG", "w") as f:
+        f.write("spec nostress\n")
+    # a REAL OpenSSH key for the import round trip
+    subprocess.run(["sh", "-c",
+                    "rm -f /tmp/unossh-imp /tmp/unossh-imp.pub && "
+                    "ssh-keygen -q -t ed25519 -N '' -C '' -f /tmp/unossh-imp"], check=True)
+    subprocess.run(["sh", "-c", "cp /tmp/unossh-imp build/esp/SSHIMP.KEY"], check=True)
+    # A FRESH image, or "the first boot" is not one. The guest writes its store
+    # INTO the image's own FAT volume, so a leftover unodos-uefi.img from an
+    # earlier run arrives already seeded - the test then takes the verify path
+    # on boot 1 and never exercises seeding or import at all, while appearing
+    # to half-work.
+    subprocess.run(["sh", "-c", "rm -f build/unodos-uefi.img build/esp/SSHSTORE.DAT"],
+                   check=False)
+    want_pub = subprocess.check_output(
+        ["sh", "-c", "awk '{print $1\" \"$2}' /tmp/unossh-imp.pub"]).decode().strip()
+    subprocess.run([sys.executable, "tools/mkuefi.py"], check=True)
+
+    print("ssh_store: first boot (seeding)")
+    a = boot("a")
+    for line in a.splitlines():
+        if line.startswith("sshstore:"):
+            print("    1| " + line.strip())
+    check("the store landed on a persistent volume", "sshstore: volume=native" in a,
+          "(RAM disk means nothing can survive)")
+    check("the first boot seeded it", "sshstore: RESULT SEEDED" in a)
+    check("an OpenSSH private key imported", "sshstore: imported an OpenSSH key" in a)
+
+    print("ssh_store: second boot (verifying)")
+    b = boot("b")
+    for line in b.splitlines():
+        if line.startswith("sshstore:"):
+            print("    2| " + line.strip())
+    check("everything survived the power cycle", "sshstore: RESULT VERIFIED" in b)
+    check("the saved session came back",
+          "sshstore: session=10.0.2.2 user=unosshtest" in b)
+
+    def pub_of(text, which):
+        for line in text.splitlines():
+            if line.startswith("sshstore: %s-pub=" % which):
+                return line.strip().split("=", 1)[1]
+        return ""
+    check("the generated key is byte-identical across boots",
+          pub_of(a, "gate") != "" and pub_of(a, "gate") == pub_of(b, "gate"))
+    check("the imported key survived too",
+          pub_of(a, "imported") != "" and pub_of(a, "imported") == pub_of(b, "imported"))
+    check("and it matches what ssh-keygen itself produced",
+          pub_of(b, "imported") == want_pub,
+          "guest=%s..." % pub_of(b, "imported")[:38])
+
+    if fails:
+        print("ssh_store: %d FAILED - %s" % (len(fails), ", ".join(fails)))
+    else:
+        print("ssh_store: all checks passed")
+    return 1 if fails else 0
+
+
 def start_qemu(extra=None, log="build/ovmf.log", pointer="tablet"):
     """Boot one QEMU and connect QMP. Returns (proc, Qmp). A scenario that needs
     a REBOOT (session restore) calls this twice; build/esp is the same vvfat
@@ -2698,6 +2798,8 @@ def main():
         return ssh_transport()                 # ditto: it owns its own boot
     if len(sys.argv) > 1 and sys.argv[1] == "ssh_exec":
         return ssh_exec()                      # ditto: it owns its own sshd
+    if len(sys.argv) > 1 and sys.argv[1] == "ssh_store":
+        return ssh_store()                     # ditto: it boots twice
     subprocess.run(["cp", OVMF_VARS, "build/vars.fd"], check=True)
     if os.path.exists(QMP_SOCK):
         os.remove(QMP_SOCK)

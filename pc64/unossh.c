@@ -737,10 +737,82 @@ static int ssh_t_exec(void *ctx)
     return ok ? 0 : 1;
 }
 
+/* ssh-d: the store must survive a power cycle. There is no "which boot is
+ * this" flag anywhere, so the store answers that itself - an empty one means
+ * seed it, a populated one means verify it. The harness boots the same real
+ * FAT image twice and reads the two verdicts. */
+static int ssh_t_store(void *ctx)
+{
+    char name[SSH_NAMELEN], pub[128], host[SSH_HOSTLEN], user[SSH_NAMELEN];
+    unsigned char seed[32], fp[32];
+    int i, port = 0, bad = 0;
+    (void)ctx;
+
+    sd_s("sshstore: begin\n");
+    sd_s(ssh_store_persistent() ? "sshstore: volume=native\n"
+                                : "sshstore: volume=RAMDISK (will not persist)\n");
+    for (i = 0; i < 32; i++) fp[i] = (unsigned char)(i + 1);
+
+    if (ssh_key_list(0, name, sizeof name, 0, 0) != 0) {
+        /* ---- first boot: seed it -------------------------------------- */
+        sd_s("sshstore: seeding\n");
+        if (ssh_key_generate("gate", "pw") != 0) { sd_s("sshstore: generate failed\n"); return 1; }
+        sd_s("sshstore: key generated\n");
+        if (ssh_sess_set("s1", "10.0.2.2", 2222, "unosshtest", "gate") != 0)
+            { sd_s("sshstore: session save failed\n"); return 1; }
+        if (ssh_known_add("10.0.2.2", fp) != 0) { sd_s("sshstore: known add failed\n"); return 1; }
+        sd_s("sshstore: session+host saved\n");
+        {   static unsigned char pem[2048];   /* static: 2 KB of stack in a SPECTEST test is enough to run off the frame */
+            long n;
+            n = uno_fs_read(0, "SSHIMP.KEY", pem, (long)sizeof pem - 1);
+            if (n <= 0) n = uno_fs_read(1, "SSHIMP.KEY", pem, (long)sizeof pem - 1);
+            sd_s(n > 0 ? "sshstore: read ok\n" : "sshstore: read empty\n");
+            if (n > 0) {
+                int r;
+                r = ssh_key_import("imp", (const char *)pem, (int)n, "");
+                sd_s(r == 0 ? "sshstore: imported an OpenSSH key\n"
+                            : "sshstore: import FAILED\n");
+                if (r == 0 && ssh_key_export_pub("imp", pub, (int)sizeof pub) > 0) {
+                    sd_s("sshstore: imported-pub="); sd_s(pub); sd_s("\n");
+                }
+            } else sd_s("sshstore: no SSHIMP.KEY to import\n");
+        }
+        if (ssh_key_export_pub("gate", pub, (int)sizeof pub) > 0) {
+            sd_s("sshstore: gate-pub="); sd_s(pub); sd_s("\n");
+        }
+        sd_s("sshstore: RESULT SEEDED\n");
+        return 0;
+    }
+
+    /* ---- a later boot: everything must still be here ------------------- */
+    if (ssh_key_load("gate", "pw", seed) != 0) { sd_s("sshstore: key lost\n"); bad = 1; }
+    if (ssh_key_load("gate", "wrong", seed) != -2) { sd_s("sshstore: bad passphrase accepted!\n"); bad = 1; }
+    if (ssh_sess_get("s1", host, sizeof host, &port, user, sizeof user, 0, 0) != 0) {
+        sd_s("sshstore: session lost\n"); bad = 1;
+    } else {
+        sd_s("sshstore: session="); sd_s(host); sd_s(" user="); sd_s(user); sd_s("\n");
+        if (port != 2222) { sd_s("sshstore: port wrong\n"); bad = 1; }
+    }
+    if (ssh_known_check("10.0.2.2", fp) != SSH_HOST_KNOWN) { sd_s("sshstore: host forgotten\n"); bad = 1; }
+    fp[0] ^= 0xFF;
+    if (ssh_known_check("10.0.2.2", fp) != SSH_HOST_MISMATCH) { sd_s("sshstore: mismatch not caught!\n"); bad = 1; }
+    fp[0] ^= 0xFF;
+    if (ssh_known_check("nowhere.invalid", fp) != SSH_HOST_UNKNOWN) { sd_s("sshstore: unknown host claimed\n"); bad = 1; }
+    if (ssh_key_export_pub("gate", pub, (int)sizeof pub) > 0) {
+        sd_s("sshstore: gate-pub="); sd_s(pub); sd_s("\n");
+    }
+    if (ssh_key_export_pub("imp", pub, (int)sizeof pub) > 0) {
+        sd_s("sshstore: imported-pub="); sd_s(pub); sd_s("\n");
+    }
+    sd_s(bad ? "sshstore: RESULT FAIL\n" : "sshstore: RESULT VERIFIED\n");
+    return bad ? 1 : 0;
+}
+
 void unossh_register_tests(void)
 {
     unoauto_test_register("network", "ssh:transport", ssh_t_transport);
     unoauto_test_register("network", "ssh:exec", ssh_t_exec);
+    unoauto_test_register("network", "ssh:store", ssh_t_store);
 }
 #else
 void unossh_register_tests(void) { }
