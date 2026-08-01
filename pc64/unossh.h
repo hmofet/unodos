@@ -129,4 +129,8 @@ void ssh_derive_key(unsigned char *out, int outlen, unsigned char letter,
                     const unsigned char h[32],
                     const unsigned char session_id[32]);
 
+/* Register the live transport gate into SPECTEST's `network` area. No-op in a
+ * production build. Called once from uno_pc64_init. */
+void unossh_register_tests(void);
+
 #endif
