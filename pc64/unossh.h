@@ -204,4 +204,10 @@ void ssh_derive_key(unsigned char *out, int outlen, unsigned char letter,
  * production build. Called once from uno_pc64_init. */
 void unossh_register_tests(void);
 
+/* ---- the automation verb ------------------------------------------------
+ * The unoautomate pass-through, same shape as r8169_dbg_cmd. unoautomate
+ * lands one weak stub and one dispatch clause; the sub-verb grammar and the
+ * output format are ours. Returns the reply length, or -1 for a bad command. */
+int ssh_dbg_cmd(const char *line, char *out, int cap);
+
 #endif
