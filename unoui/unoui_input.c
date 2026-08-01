@@ -88,6 +88,7 @@ static int interactive(const unoui_widget *w)
     case UI_VSCROLL: case UI_HSCROLL: case UI_SLIDER: case UI_SPINNER:
     case UI_DROPDOWN: case UI_TABS: case UI_MENUBAR: case UI_LIST: case UI_ICON:
     case UI_CANVAS:            /* app-drawn regions take clicks (games, taskbar) */
+    case UI_MDI:               /* child frames drag, raise, resize and close   */
         return 1;
     case UI_FIELD: return w->edit != 0;
     default: return 0;
@@ -99,7 +100,7 @@ static int focusable(const unoui_widget *w)
     switch (w->kind) {
     case UI_BUTTON: case UI_CHECK: case UI_RADIO: case UI_TEXTAREA:
     case UI_SLIDER: case UI_SPINNER: case UI_DROPDOWN: case UI_TABS: case UI_LIST:
-    case UI_CANVAS:
+    case UI_CANVAS: case UI_MDI:
         return 1;
     case UI_FIELD: return w->edit != 0;
     default: return 0;
@@ -411,6 +412,57 @@ static unoui_action press_widget(unoui_ui *ui, unoui_window *win, int hi,
 
     case UI_BUTTON: case UI_CHECK: case UI_RADIO: case UI_ICON:
         ui->cap_mode = UI_CAP_BUTTON; return NO_ACT;   /* fires on release */
+
+    case UI_MDI: {
+        /* Precedence mirrors a real window's: resize zone, close box, then
+         * title-bar drag, then the body. The press always raises and focuses
+         * first, so every later test reads the child the user just brought
+         * forward. Geometry comes from unoui_mdi_child_rect, the same call the
+         * painter uses. */
+        unoui_mdi *m = w->mdi;
+        unoui_rect q;
+        int ci, fw = t->m.frame_w, th = t->m.title_h;
+        ui->focus_wi = hi; ui->cap_mode = UI_CAP_NONE;
+        if (!m) return NO_ACT;
+        ci = unoui_mdi_at(r, m, ev->x, ev->y);
+        if (ci < 0) return NO_ACT;
+        unoui_mdi_raise(m, ci);
+        q = unoui_mdi_child_rect(r, m, ci);
+
+        if (m->ch[ci].flags & UI_MDI_RESIZE) {
+            int gs = 14, eg = fw + 3;
+            int in_r = ev->x >= q.x + q.w - eg && ev->x < q.x + q.w;
+            int in_b = ev->y >= q.y + q.h - eg && ev->y < q.y + q.h;
+            int in_c = ev->x >= q.x + q.w - gs && ev->y >= q.y + q.h - gs &&
+                       ev->x < q.x + q.w && ev->y < q.y + q.h;
+            if (in_c || (ev->y >= q.y + th && (in_r || in_b))) {
+                ui->cap_mode = UI_CAP_MDISIZE;
+                ui->grab_dx = ev->x - (q.x + q.w);
+                ui->grab_dy = ev->y - (q.y + q.h);
+                ui->resize_axes = in_c ? 3 : ((in_r ? 1 : 0) | (in_b ? 2 : 0));
+                { unoui_action a = change(w); a.value = ci; return a; }
+            }
+        }
+        if (ev->y >= q.y && ev->y < q.y + th) {
+            int cs = t->m.closebox;
+            if (cs) {
+                int cbx = q.x + fw + 4, cby = q.y + fw + (th - fw - cs) / 2;
+                if (ev->x >= cbx && ev->x < cbx + cs &&
+                    ev->y >= cby && ev->y < cby + cs) {
+                    unoui_action a = change(w);
+                    a.kind = UI_ACT_MDICLOSE; a.value = ci; return a;
+                }
+            }
+            ui->cap_mode = UI_CAP_MDIDRAG;
+            ui->grab_dx = ev->x - q.x;
+            ui->grab_dy = ev->y - q.y;
+            { unoui_action a = change(w); a.value = ci; return a; }
+        }
+        /* the body: the child's own canvas, if it has one */
+        if (m->ch[ci].canvas && m->ch[ci].canvas->event)
+            m->ch[ci].canvas->event(0, ev, m->ch[ci].canvas->ctx);
+        { unoui_action a = change(w); a.value = ci; return a; }
+    }
 
     case UI_FIELD: case UI_TEXTAREA: {
         unoui_rect in = ui_edit_inner(r, t);
@@ -797,6 +849,36 @@ static unoui_action handle_inner(unoui_ui *ui, const unoui_event *ev)
             if (win->r.y + nh > ui->screen_h) nh = ui->screen_h - win->r.y;
             win->r.w = nw; win->r.h = nh;
             unoui_reflow_window(ui->theme, win);
+            return NO_ACT;
+        }
+        case UI_CAP_MDIDRAG: case UI_CAP_MDISIZE: {
+            /* Both act on the FOCUSED child, because the press that started the
+             * capture raised it. Child geometry is relative to the container,
+             * so the container rect has to be re-derived each move - it travels
+             * with its window. unoui_mdi_clamp then enforces the size floor and
+             * keeps the child inside the box, which is the whole containment
+             * guarantee in one call. */
+            unoui_window *win = ui->win[ui->cap_win];
+            unoui_widget *w = &win->w[ui->cap_wi];
+            unoui_mdi *m = w->mdi;
+            unoui_rect r;
+            int ci;
+            if (!m) return NO_ACT;
+            r = unoui_widget_rect(ui->theme, win, w);
+            ci = unoui_mdi_focused(m);
+            if (ci < 0) return NO_ACT;
+            if (ui->cap_mode == UI_CAP_MDIDRAG) {
+                m->ch[ci].r.x = (ev->x - ui->grab_dx) - r.x;
+                m->ch[ci].r.y = (ev->y - ui->grab_dy) - r.y;
+            } else {
+                unoui_rect q = unoui_mdi_child_rect(r, m, ci);
+                int nw = (ev->x - ui->grab_dx) - q.x;
+                int nh = (ev->y - ui->grab_dy) - q.y;
+                if (!(ui->resize_axes & 1)) nw = q.w;   /* edge grab: one axis */
+                if (!(ui->resize_axes & 2)) nh = q.h;
+                m->ch[ci].r.w = nw; m->ch[ci].r.h = nh;
+            }
+            unoui_mdi_clamp(r, m, ci);
             return NO_ACT;
         }
         case UI_CAP_VTHUMB: return set_vscroll(ui, ev->y);

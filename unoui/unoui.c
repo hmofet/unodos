@@ -201,6 +201,11 @@ unoui_widget *unoui_add_menubar(unoui_window *w, const unoui_menu *menus, int n)
 { unoui_widget *d = push(w, UI_MENUBAR, 0, 0, 0, UI_MENUBAR_H, 0);
   d->menus = menus; d->nmenus = n; return d; }
 
+unoui_widget *unoui_add_mdi(unoui_window *w, int x, int y, int ww, int hh,
+                            unoui_mdi *m)
+{ unoui_widget *d = push(w, UI_MDI, x, y, ww, hh, 0);
+  d->mdi = m; return d; }
+
 /* ---- editable text model ------------------------------------------------- */
 void unoui_text_init(unoui_text *t, char *buf, int cap, int multiline)
 {
@@ -1233,6 +1238,245 @@ int unoui_tabs_hit(const unoui_theme *t, unoui_rect r, const unoui_tabs_model *m
     return UI_TAB_NONE;
 }
 
+/* ---- MDI: child frames inside a widget -----------------------------------
+ * See unoui.h for what a child is and, more importantly, is not. Everything
+ * here is arithmetic on the container rect plus the theme metrics; the only
+ * state is the app's own unoui_mdi.
+ *
+ * z[] and focus hold index + 1 with 0 meaning "none", so a zero-initialised
+ * unoui_mdi reads as empty. Storing a bare index terminated by -1 is what cost
+ * WM phase E a mid-gate reboot: 0 is a valid index and bss reads as all-zero. */
+
+static void draw_resize_grip(const unoui_theme *t, const unoui_window *win); /* fwd */
+
+static int mdi_min_w(const unoui_mdi *m) { return m->min_w > 0 ? m->min_w : UI_MDI_MIN_W; }
+static int mdi_min_h(const unoui_mdi *m) { return m->min_h > 0 ? m->min_h : UI_MDI_MIN_H; }
+
+static int mdi_live(const unoui_mdi *m, int i)
+{ return m && m->ch && i >= 0 && i < m->cap && m->ch[i].used; }
+
+int unoui_mdi_focused(const unoui_mdi *m)
+{ return (m && m->focus) ? (int)m->focus - 1 : -1; }
+
+int unoui_mdi_count(const unoui_mdi *m)
+{
+    int k = 0;
+    if (!m) return 0;
+    while (k < UNOUI_MDI_MAX && m->z[k]) k++;
+    return k;
+}
+
+int unoui_mdi_zorder(const unoui_mdi *m, int k)
+{
+    if (!m || k < 0 || k >= UNOUI_MDI_MAX || !m->z[k]) return -1;
+    return (int)m->z[k] - 1;
+}
+
+/* position of child `i` in the z-list, or -1 */
+static int mdi_zindex(const unoui_mdi *m, int i)
+{
+    int k, n = unoui_mdi_count(m);
+    for (k = 0; k < n; k++) if (m->z[k] == (unsigned char)(i + 1)) return k;
+    return -1;
+}
+
+int unoui_mdi_add(unoui_mdi *m, const char *title, int x, int y, int w, int h,
+                  int flags, unoui_canvas *c)
+{
+    int i, n;
+    if (!m || !m->ch) return -1;
+    n = unoui_mdi_count(m);
+    if (n >= UNOUI_MDI_MAX) return -1;
+    for (i = 0; i < m->cap && m->ch[i].used; i++) ;
+    if (i >= m->cap) return -1;
+    m->ch[i].r.x = x; m->ch[i].r.y = y; m->ch[i].r.w = w; m->ch[i].r.h = h;
+    m->ch[i].title = title; m->ch[i].flags = flags; m->ch[i].canvas = c;
+    m->ch[i].used = 1;
+    m->z[n] = (unsigned char)(i + 1);
+    if (n + 1 < UNOUI_MDI_MAX) m->z[n + 1] = 0;
+    m->focus = (unsigned char)(i + 1);
+    return i;
+}
+
+void unoui_mdi_close(unoui_mdi *m, int i)
+{
+    int k, n;
+    if (!mdi_live(m, i)) return;
+    m->ch[i].used = 0;
+    n = unoui_mdi_count(m);
+    k = mdi_zindex(m, i);
+    if (k >= 0) {
+        for (; k < n - 1; k++) m->z[k] = m->z[k + 1];
+        m->z[n - 1] = 0;
+    }
+    n = unoui_mdi_count(m);            /* focus falls to whatever is now front */
+    m->focus = n ? m->z[n - 1] : 0;
+}
+
+void unoui_mdi_raise(unoui_mdi *m, int i)
+{
+    int k, n;
+    if (!mdi_live(m, i)) return;
+    n = unoui_mdi_count(m);
+    k = mdi_zindex(m, i);
+    if (k >= 0) {
+        for (; k < n - 1; k++) m->z[k] = m->z[k + 1];
+        m->z[n - 1] = (unsigned char)(i + 1);
+    }
+    m->focus = (unsigned char)(i + 1);
+}
+
+unoui_rect unoui_mdi_child_rect(unoui_rect r, const unoui_mdi *m, int i)
+{
+    unoui_rect q = zero_rect();
+    if (!mdi_live(m, i)) return q;
+    q = m->ch[i].r;
+    q.x += r.x; q.y += r.y;
+    return q;
+}
+
+unoui_rect unoui_mdi_content_rect(const unoui_theme *t, unoui_rect r,
+                                  const unoui_mdi *m, int i)
+{
+    unoui_rect q = unoui_mdi_child_rect(r, m, i);
+    int fw, th;
+    if (q.w <= 0 || !t) return zero_rect();
+    fw = t->m.frame_w; th = t->m.title_h;
+    q.x += fw; q.y += th; q.w -= 2 * fw; q.h -= th + fw;
+    if (q.w < 0) q.w = 0;
+    if (q.h < 0) q.h = 0;
+    return q;
+}
+
+void unoui_mdi_clamp(unoui_rect r, unoui_mdi *m, int i)
+{
+    unoui_mdi_child *c;
+    if (!mdi_live(m, i)) return;
+    c = &m->ch[i];
+    if (c->r.w > r.w) c->r.w = r.w;
+    if (c->r.h > r.h) c->r.h = r.h;
+    if (c->r.w < mdi_min_w(m)) c->r.w = mdi_min_w(m);
+    if (c->r.h < mdi_min_h(m)) c->r.h = mdi_min_h(m);
+    if (c->r.x + c->r.w > r.w) c->r.x = r.w - c->r.w;
+    if (c->r.y + c->r.h > r.h) c->r.y = r.h - c->r.h;
+    if (c->r.x < 0) c->r.x = 0;
+    if (c->r.y < 0) c->r.y = 0;
+}
+
+int unoui_mdi_at(unoui_rect r, const unoui_mdi *m, int x, int y)
+{
+    int k;
+    for (k = unoui_mdi_count(m) - 1; k >= 0; k--) {   /* front to back */
+        int i = unoui_mdi_zorder(m, k);
+        unoui_rect q = unoui_mdi_child_rect(r, m, i);
+        if (q.w > 0 && x >= q.x && x < q.x + q.w && y >= q.y && y < q.y + q.h)
+            return i;
+    }
+    return -1;
+}
+
+void unoui_mdi_tile(const unoui_theme *t, unoui_rect r, unoui_mdi *m)
+{
+    int n = unoui_mdi_count(m), cols = 1, rows, k;
+    (void)t;
+    if (n <= 0) return;
+    while (cols * cols < n) cols++;                   /* ceil(sqrt(n)) */
+    rows = (n + cols - 1) / cols;
+    for (k = 0; k < n; k++) {
+        int i = unoui_mdi_zorder(m, k), cx = k % cols, cy = k / cols;
+        unoui_mdi_child *c = &m->ch[i];
+        /* edges from the same a*i/n form on both sides, so adjacent cells
+         * share a boundary exactly and integer division leaves no seam */
+        c->r.x = r.w * cx / cols;
+        c->r.y = r.h * cy / rows;
+        c->r.w = r.w * (cx + 1) / cols - c->r.x;
+        c->r.h = r.h * (cy + 1) / rows - c->r.y;
+        unoui_mdi_clamp(r, m, i);
+    }
+}
+
+void unoui_mdi_cascade(const unoui_theme *t, unoui_rect r, unoui_mdi *m)
+{
+    int n = unoui_mdi_count(m), k;
+    int step = t ? t->m.title_h : 18;
+    int w = r.w * 3 / 4, h = r.h * 3 / 4;
+    if (n <= 0) return;
+    if (step < 8) step = 8;
+    /* shrink the step so the whole stack still fits rather than letting the
+     * clamp pile the tail on top of each other in the bottom-right corner */
+    if (n > 1) {
+        int sx = (r.w > w) ? (r.w - w) / (n - 1) : 0;
+        int sy = (r.h > h) ? (r.h - h) / (n - 1) : 0;
+        if (step > sx) step = sx;
+        if (step > sy) step = sy;
+        if (step < 2) step = 2;
+    }
+    for (k = 0; k < n; k++) {
+        int i = unoui_mdi_zorder(m, k);
+        unoui_mdi_child *c = &m->ch[i];
+        c->r.x = k * step; c->r.y = k * step;
+        c->r.w = w;        c->r.h = h;
+        unoui_mdi_clamp(r, m, i);
+    }
+}
+
+/* A child frame IS a window as far as the theme painters are concerned - they
+ * read ->r, ->title, ->active and ->flags and write ->content_* - so handing
+ * them a temporary one buys every theme's chrome with no new artwork.
+ *
+ * ONE reused scratch rather than a stack temporary: unoui_window embeds its
+ * 64-widget array, so a local would be several KB of stack per child per frame.
+ * nw = 0 means the painters never touch that array, and unoui is
+ * single-threaded by construction. */
+static unoui_window g_mdi_tmp;
+
+static unoui_window *mdi_as_window(unoui_rect r, const unoui_mdi *m, int i)
+{
+    unoui_window *w = &g_mdi_tmp;
+    const unoui_mdi_child *c = &m->ch[i];
+    w->title     = c->title;
+    w->r         = unoui_mdi_child_rect(r, m, i);
+    w->active    = (unoui_mdi_focused(m) == i);
+    /* NOCTL: minimize and maximize are meaningless without a taskbar and a
+     * work area, and a drawn control that does nothing is worse than none */
+    w->flags     = UI_WIN_NOCTL | ((c->flags & UI_MDI_RESIZE) ? UI_WIN_RESIZE : 0);
+    w->nw        = 0;
+    w->content_x = w->content_y = 0;
+    w->font_slot = UI_FONT_INHERIT;
+    w->min_w     = mdi_min_w(m);
+    w->min_h     = mdi_min_h(m);
+    w->snap      = UI_SNAP_NONE;
+    w->restore_r = w->r;
+    return w;
+}
+
+void unoui_mdi_draw(const unoui_theme *t, unoui_rect r, const unoui_mdi *m)
+{
+    const unoui_draw *d = t->draw ? t->draw : &unoui_default_draw;
+    int k, n;
+    if (!m || !m->ch || r.w <= 0 || r.h <= 0) return;
+    n = unoui_mdi_count(m);
+    fb_set_clip(r.x, r.y, r.w, r.h);        /* children never escape the box */
+    for (k = 0; k < n; k++) {               /* back to front */
+        int i = unoui_mdi_zorder(m, k);
+        unoui_window *tw = mdi_as_window(r, m, i);
+        PICK(window)(t, tw);
+        PICK(titlebar)(t, tw);
+        draw_resize_grip(t, tw);
+        if (m->ch[i].canvas && m->ch[i].canvas->draw) {
+            unoui_rect in = unoui_mdi_content_rect(t, r, m, i);
+            if (in.w > 0 && in.h > 0) {
+                fb_set_clip(in.x, in.y, in.w, in.h);
+                /* a child has no widget of its own - the canvas identifies
+                 * itself by its ctx, which is what every consumer uses */
+                m->ch[i].canvas->draw(0, in, m->ch[i].canvas->ctx);
+                fb_set_clip(r.x, r.y, r.w, r.h);
+            }
+        }
+    }
+    fb_reset_clip();
+}
+
 static void draw_one(const unoui_draw *d, const unoui_theme *t,
                      const unoui_window *win, unoui_widget *w, int eff, int menuopen)
 {
@@ -1279,6 +1523,20 @@ static void draw_one(const unoui_draw *d, const unoui_theme *t,
             w->canvas->draw(w, r, w->canvas->ctx);
             fb_set_clip(win->r.x + fw, win->r.y + th,
                         win->r.w - 2 * fw, win->r.h - th - fw);
+        }
+        break;
+    case UI_MDI:
+        /* child frames set their own clip; restore this window's afterwards for
+         * whatever widgets follow, the same way UI_CANVAS does. A BARE window's
+         * widgets fill its whole rect, so its clip is not the content formula. */
+        if (w->mdi) {
+            int fw = t->m.frame_w, th = t->m.title_h;
+            unoui_mdi_draw(t, r, w->mdi);
+            if (win->flags & UI_WIN_BARE)
+                fb_set_clip(win->r.x, win->r.y, win->r.w, win->r.h);
+            else
+                fb_set_clip(win->r.x + fw, win->r.y + th,
+                            win->r.w - 2 * fw, win->r.h - th - fw);
         }
         break;
     }

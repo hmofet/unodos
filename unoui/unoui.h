@@ -36,7 +36,8 @@ typedef enum {
     UI_DROPDOWN,   /* closed combo; opens a popup list                        */
     UI_TABS,       /* row of tab headers; sel = active                        */
     UI_MENUBAR,    /* row of menu titles; each opens a popup of items         */
-    UI_CANVAS      /* app-drawn region: the app renders into fb inside .r     */
+    UI_CANVAS,     /* app-drawn region: the app renders into fb inside .r     */
+    UI_MDI         /* container of draggable child frames (appended - see §MDI) */
 } ui_kind;
 
 /* ---- per-widget state flags --------------------------------------------- */
@@ -90,6 +91,8 @@ typedef struct unoui_canvas {
     void *ctx;
 } unoui_canvas;
 
+struct unoui_mdi;             /* fwd (defined with the MDI section below) */
+
 /* A single widget. Geometry `r` is relative to the window's CONTENT origin. */
 typedef struct unoui_widget {
     ui_kind      kind;
@@ -106,6 +109,8 @@ typedef struct unoui_widget {
     int          nmenus;
     unoui_canvas *canvas;     /* non-NULL => app-drawn UI_CANVAS              */
     int          icon;        /* UI_ICON: art id for the icon-art hook        */
+    /* --- appended; 0 must mean "as before" -------------------------------- */
+    struct unoui_mdi *mdi;    /* UI_MDI: the app-owned child set              */
 } unoui_widget;
 
 /* Optional per-app icon artwork. When set, UI_ICON widgets are drawn by this
@@ -334,6 +339,87 @@ void unoui_tabs_draw(const struct unoui_theme *, unoui_rect r,
 int  unoui_tabs_hit (const struct unoui_theme *, unoui_rect r,
                      const unoui_tabs_model *m, int x, int y, int *which);
 
+/* ---- MDI: child frames inside a widget -----------------------------------
+ * A UI_MDI widget hosts draggable, resizable, closable child frames inside its
+ * own rect - the "multiple document" container an editor or a terminal app
+ * wants for its panes.
+ *
+ * A child is NOT a window. It is not in ui->win[], so it never reaches the
+ * taskbar, Alt-Tab, virtual desktops or the snap zones, and it cannot be
+ * dragged out onto the desktop. That is the deliberate trade: unoui_window is
+ * a flat entry in a fixed array shared with the PS2 port, the Dreamcast port
+ * and the host demo, and giving it a parent pointer would change the meaning
+ * of that array for every one of them. A container widget keeps the whole
+ * feature inside one widget kind.
+ *
+ * What a child DOES get, free and per-theme, is real window chrome: the draw
+ * path builds a temporary unoui_window for each child and hands it to the
+ * theme's own window and title-bar painters, so frames, title bars, close
+ * boxes and resize grips match the desktop on all ten themes with no new
+ * artwork. Children carry UI_WIN_NOCTL - minimize and maximize mean nothing
+ * without a taskbar and a work area - so no theme draws a control that would
+ * do nothing.
+ *
+ * A child has a close box exactly when the THEME has one (`unoui_metrics
+ * .closebox`), and it is always live. There is no per-child opt-out because
+ * the close box is drawn by the theme's title-bar painter, which takes no such
+ * flag; a child-level flag could only have suppressed the click, leaving a
+ * drawn control that did nothing.
+ *
+ * Geometry is stored RELATIVE to the container rect, so moving or reflowing
+ * the container carries its children with it. */
+#define UNOUI_MDI_MAX  12
+#define UI_MDI_MIN_W   80        /* child resize floor when the app sets none */
+#define UI_MDI_MIN_H   48
+
+enum { UI_MDI_RESIZE = 1 << 0 };  /* this child gets a resize grip */
+
+typedef struct unoui_mdi_child {
+    unoui_rect    r;        /* RELATIVE to the container rect origin          */
+    const char   *title;    /* borrowed, never copied or freed                */
+    int           flags;    /* UI_MDI_*                                       */
+    unoui_canvas *canvas;   /* optional content painter + event handler       */
+    int           used;
+} unoui_mdi_child;
+
+typedef struct unoui_mdi {
+    unoui_mdi_child *ch;    /* app-owned array of `cap` entries               */
+    int cap;
+    int min_w, min_h;       /* child resize floor; 0 = UI_MDI_MIN_*           */
+    /* z-order back..front, and the focused child. Both hold index + 1, with 0
+     * meaning "none" - because 0 is a valid child index and a zero-initialised
+     * struct has to read as empty. Storing a bare index terminated by -1 is
+     * the trap WM phase E paid for with a mid-gate reboot. */
+    unsigned char z[UNOUI_MDI_MAX];
+    unsigned char focus;
+} unoui_mdi;
+
+unoui_widget *unoui_add_mdi(unoui_window *, int x, int y, int w, int h,
+                            unoui_mdi *m);
+/* returns the new child's index, or -1 if the array or the z-list is full */
+int  unoui_mdi_add  (unoui_mdi *, const char *title, int x, int y, int w, int h,
+                     int flags, unoui_canvas *c);
+void unoui_mdi_close(unoui_mdi *, int i);
+void unoui_mdi_raise(unoui_mdi *, int i);      /* raise + focus */
+int  unoui_mdi_focused(const unoui_mdi *);     /* child index, or -1 */
+int  unoui_mdi_count  (const unoui_mdi *);     /* live children */
+/* z-order walk, back to front: k = 0..count-1 -> child index, or -1 */
+int  unoui_mdi_zorder (const unoui_mdi *, int k);
+/* absolute rect of child `i` inside container rect `r`; .w 0 = not live */
+unoui_rect unoui_mdi_child_rect(unoui_rect r, const unoui_mdi *, int i);
+/* the child's interior, below its title bar and inside its frame - what a
+ * child canvas is handed and clipped to */
+unoui_rect unoui_mdi_content_rect(const struct unoui_theme *, unoui_rect r,
+                                  const unoui_mdi *, int i);
+/* pull child `i` back inside the container and up to the size floor */
+void unoui_mdi_clamp(unoui_rect r, unoui_mdi *, int i);
+/* the child under a point, front-to-back; -1 = none */
+int  unoui_mdi_at(unoui_rect r, const unoui_mdi *, int x, int y);
+/* lay every live child out: an even grid, or a stepped stack */
+void unoui_mdi_tile   (const struct unoui_theme *, unoui_rect r, unoui_mdi *);
+void unoui_mdi_cascade(const struct unoui_theme *, unoui_rect r, unoui_mdi *);
+void unoui_mdi_draw(const struct unoui_theme *, unoui_rect r, const unoui_mdi *);
+
 /* compute a window's canonical content origin from the theme metrics. Window
  * painters AND hit-testing use this, so what you see is what you can click. */
 void unoui_content_origin(const struct unoui_theme *, const unoui_window *,
@@ -371,7 +457,9 @@ typedef struct {
 enum {
     UI_CAP_NONE = 0, UI_CAP_WINDOW, UI_CAP_BUTTON, UI_CAP_VTHUMB, UI_CAP_HTHUMB,
     UI_CAP_SLIDER, UI_CAP_TEXT, UI_CAP_LIST, UI_CAP_RESIZE,
-    UI_CAP_LISTBAR               /* dragging a list's inline scrollbar thumb    */
+    UI_CAP_LISTBAR,              /* dragging a list's inline scrollbar thumb    */
+    UI_CAP_MDIDRAG,              /* moving a UI_MDI child by its title bar      */
+    UI_CAP_MDISIZE               /* resizing a UI_MDI child by its grip         */
 };
 
 /* result of feeding one event: did a widget activate / change? */
@@ -396,6 +484,10 @@ typedef struct {
  * document set and decides what closing or opening one means. */
 #define UI_ACT_TABCLOSE 9996
 #define UI_ACT_TABNEW   9995
+/* a UI_MDI child's close box: `value` is the child index, `id` the widget's.
+ * unoui does NOT remove the child - call unoui_mdi_close() if that is what the
+ * app means by closing one, exactly as UI_ACT_CLOSE leaves the window alone. */
+#define UI_ACT_MDICLOSE 9994
 
 /* ---- the UI context (windows + interaction state) ------------------------ */
 /* 24 = the pc64 shell's worst case (taskbar + desktop + Start menu + calendar
