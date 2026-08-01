@@ -255,6 +255,85 @@ unoui_rect unoui_list_bar(unoui_rect r, int n);    /* bar strip; .w 0 = none    
 void unoui_list_draw  (const struct unoui_theme *, unoui_rect r,
                        const char **items, int n, int sel, int top);
 
+/* ---- tabbed documents (UI_TABS) ------------------------------------------
+ * A bare UI_TABS is a strip of labels: it picks one of several PAGES of the
+ * same window, and the app rebuilds the window on a switch (the Control Panel).
+ * Adding any UI_TF_* flag turns the same widget into a tabbed DOCUMENT control
+ * - per-tab close boxes, a trailing "+", equal-width tabs, and a ">>" overflow
+ * control when they no longer fit.
+ *
+ * Every rect comes from ONE layout pass, so the painter and the hit test agree
+ * by construction and a click can only land where something was drawn. That is
+ * the same rule unoui_titlebtn_rect() enforces for the title-bar buttons, and
+ * it is why the geometry is public: a UI_CANVAS app - which owns raw pixels,
+ * not widgets - can host an identical strip inside its own rect by calling
+ * unoui_tabs_draw() and unoui_tabs_hit() directly. The browser does.
+ *
+ * The model is a VIEW over the app's own storage: `labels` is borrowed, never
+ * copied or freed, so an app whose titles are mutable char arrays just hands
+ * over an array of pointers into them.
+ *
+ * Flags live in the widget's `flags` (high bits, beside UI_WF_*) and in the
+ * model's, using the same constants either way. A zero-flag model renders and
+ * hit-tests exactly as a plain strip always has, including honouring a theme's
+ * own `tabs` painter - so nothing that never sets a flag can notice these. */
+#define UI_TF_CLOSE    (1 << 14)  /* per-tab close box                        */
+#define UI_TF_PLUS     (1 << 15)  /* trailing "+" (new document)              */
+#define UI_TF_ELASTIC  (1 << 16)  /* equal widths that share the strip        */
+#define UI_TF_OVERFLOW (1 << 17)  /* ">>" when the tabs do not fit            */
+#define UI_TF_ANY (UI_TF_CLOSE | UI_TF_PLUS | UI_TF_ELASTIC | UI_TF_OVERFLOW)
+
+/* elastic width bounds, px - a tab never shrinks past legibility nor grows to
+ * fill a wide strip on its own */
+#define UI_TAB_MIN_W 46
+#define UI_TAB_MAX_W 130
+
+/* what unoui_tabs_hit() found under the pointer */
+enum { UI_TAB_NONE = 0, UI_TAB_SEL, UI_TAB_CLOSE, UI_TAB_PLUS, UI_TAB_OVER };
+
+typedef struct unoui_tabs_model {
+    const char *const *labels;  /* borrowed, `n` entries                      */
+    int n;
+    int sel;                    /* active tab                                 */
+    int hot;                    /* tab under the pointer, -1 = none           */
+    int hot_part;               /* UI_TAB_* the pointer is over               */
+    int first;                  /* first visible tab (UI_TF_OVERFLOW)         */
+    int flags;                  /* UI_TF_*                                    */
+} unoui_tabs_model;
+
+/* fill a model from a UI_TABS widget. The scroll position lives in the
+ * widget's `value`, exactly as a list's `top` does, and the flags in its
+ * `flags`; a widget has no per-tab hover, so `hot` comes back -1. */
+void unoui_tabs_model_of(const unoui_widget *w, unoui_tabs_model *m);
+
+int  unoui_tabs_h(const struct unoui_theme *);          /* strip height, px   */
+/* how many tabs are drawn starting at m->first */
+int  unoui_tabs_visible(const struct unoui_theme *, unoui_rect r,
+                        const unoui_tabs_model *m);
+/* largest legal `first`, and the clamp that keeps `sel` on screen (sel < 0 =
+ * clamp only). Mirrors unoui_list_maxtop / unoui_list_reveal. */
+int  unoui_tabs_maxfirst(const struct unoui_theme *, unoui_rect r,
+                         const unoui_tabs_model *m);
+int  unoui_tabs_reveal(const struct unoui_theme *, unoui_rect r,
+                       const unoui_tabs_model *m, int sel);
+/* geometry: absolute index `i`, not a visible slot. A tab scrolled out of view
+ * or absent gets a zero-width rect, exactly as unoui_titlebtn_rect does for a
+ * button a window has opted out of. */
+unoui_rect unoui_tab_rect      (const struct unoui_theme *, unoui_rect r,
+                                const unoui_tabs_model *m, int i);
+unoui_rect unoui_tab_close_rect(const struct unoui_theme *, unoui_rect r,
+                                const unoui_tabs_model *m, int i);
+unoui_rect unoui_tabs_plus_rect(const struct unoui_theme *, unoui_rect r,
+                                const unoui_tabs_model *m);
+unoui_rect unoui_tabs_over_rect(const struct unoui_theme *, unoui_rect r,
+                                const unoui_tabs_model *m);
+void unoui_tabs_draw(const struct unoui_theme *, unoui_rect r,
+                     const unoui_tabs_model *m);
+/* returns UI_TAB_* and writes the tab index through `which` (-1 when the hit
+ * was not on a tab). Pass NULL for `which` if you only want the part. */
+int  unoui_tabs_hit (const struct unoui_theme *, unoui_rect r,
+                     const unoui_tabs_model *m, int x, int y, int *which);
+
 /* compute a window's canonical content origin from the theme metrics. Window
  * painters AND hit-testing use this, so what you see is what you can click. */
 void unoui_content_origin(const struct unoui_theme *, const unoui_window *,
@@ -311,6 +390,12 @@ typedef struct {
  * and maximizing needs a work-area policy, and both are the shell's. */
 #define UI_ACT_MIN   9998
 #define UI_ACT_MAX   9997
+/* tabbed documents (UI_TABS with UI_TF_CLOSE / UI_TF_PLUS): `value` is the tab
+ * index for TABCLOSE, and the count at the time of the click for TABNEW. Same
+ * contract as the window commands - unoui reports the gesture, the app owns the
+ * document set and decides what closing or opening one means. */
+#define UI_ACT_TABCLOSE 9996
+#define UI_ACT_TABNEW   9995
 
 /* ---- the UI context (windows + interaction state) ------------------------ */
 /* 24 = the pc64 shell's worst case (taskbar + desktop + Start menu + calendar
