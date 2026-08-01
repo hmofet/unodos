@@ -526,3 +526,29 @@ gate screenshots Aurora Light, the shell's default. Aurora Dark maps `face` to
 exactly what every other themed window already gets - but no run has actually
 grabbed the browser under a dark palette. Anyone who adds a theme-switching step
 to `harness.py` should take that shot while they are in there.
+
+**22. §7 has the MAC ordering wrong: SSH is encrypt-AND-MAC.** The spec says
+"encrypt-then-MAC ordering as the protocol specifies". RFC 4253 §6.4 specifies
+no such thing: the MAC is computed over the sequence number concatenated with
+the *unencrypted* packet, and is sent in the clear after the ciphertext. That
+is encrypt-and-MAC. Encrypt-then-MAC in SSH is an OpenSSH extension negotiated
+as `hmac-sha2-256-etm@openssh.com`, and a client that assumes it without
+negotiating it will fail every packet. Implement RFC 4253's order; the etm
+variants are a later, separate opt-in.
+
+**23. BearSSL's X25519 takes the point little-endian and the scalar
+BIG-endian.** It byteswaps the point internally (its comment says so) and
+clamps the scalar itself, but the scalar arrives in the generic EC API's
+big-endian convention while RFC 7748 - and therefore SSH - is little-endian
+throughout. Handing it a little-endian scalar produces a perfectly well-formed
+shared secret that simply is not the one the peer computed, which then surfaces
+as an exchange-hash mismatch several messages later. `ssh_x25519*()` reverses
+on the way in so no caller has to know, and `sshwiretest` pins it with RFC
+7748's own vectors rather than by reasoning about it.
+
+**24. The wire helpers are worth having as a separate, pure file.** Everything
+in `unossh_wire.c` is a pure function of its arguments - no sockets, no
+connection state, no allocation - which is what makes the half of SSH that
+fails silently (mpint encoding, length units, padding rules, the exchange hash)
+testable on the host in seconds. The I/O state machine sits on top rather than
+mixing in.
