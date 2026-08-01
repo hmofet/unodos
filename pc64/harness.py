@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """UnoDOS/pc64 scripted verification harness - QEMU + OVMF, fully headless.
 
 The pc64 counterpart of the family's harness.py pattern - but where the
@@ -2205,6 +2205,176 @@ def qemu_argv(extra=None, log="build/ovmf.log", pointer="tablet"):
     return argv + (extra or [])
 
 
+def browser_tabs():
+    """Gate for tabs-c: the browser's tab strip is now a unoui control.
+
+        UNO_DETACH=1 UNO_DEBUG=1 ./build.sh && python3 harness.py browser_tabs
+
+    Same pointer requirement as the wm scenarios - only the PS/2 mouse can
+    express a held button and a real click, so the build must be UNO_DETACH=1
+    and QEMU gets no USB pointer.
+
+    The strip's geometry is DERIVED from the guest rather than assumed. Adding a
+    tab moves the "+" button and puts a new tab where blank strip used to be, so
+    two successive add-a-tab diffs give the tab pitch (the distance between the
+    two new tabs' left edges) and, from it, the strip's left edge. Nothing here
+    hard-codes a theme metric or a tab width, and every derived value is range-
+    checked before anything is clicked - a scenario that mis-derives must fail
+    loudly, not quietly assert on empty boxes.
+
+    What it proves that the toolkit's own tabs_test cannot: the browser keeps
+    tabs in a SPARSE array and the control's model is dense, so every click has
+    to map back through that. And it pins the zoning that replaced the old
+    "the last 18 px is the close box" constant - a click at a tab's centre must
+    select, a click near its right edge must close."""
+    fails = []
+
+    def check(name, ok, detail=""):
+        print("  %-52s %s %s" % (name, "PASS" if ok else "FAIL", detail))
+        if not ok:
+            fails.append(name)
+
+    def ctrl(q, letter):
+        q.cmd("send-key", keys=[{"type": "qcode", "data": "ctrl"},
+                                {"type": "qcode", "data": letter}])
+        time.sleep(1.2)
+
+    try:
+        os.remove("build/esp/SHELL.CFG")           # deterministic first boot
+    except OSError:
+        pass
+    quiet_debug_cfg()
+    subprocess.run([sys.executable, "tools/mkuefi.py"], check=True)
+    os.environ["UNO_DISK"] = "build/unodos-uefi.img"
+    qemu, q = start_qemu(log="build/browser_tabs.log", pointer="none")
+    try:
+        print("browser_tabs: boot")
+        time.sleep(18)
+        probe_screen(q)
+        band = noise_bands()
+        m = Mouse(q)
+        check("the guest has a pointer", m.alive(), "(needs UNO_DETACH=1)")
+        if fails:
+            raise SystemExit("browser_tabs: no pointer - nothing to click")
+        m.park()
+        ctrl(q, "w")                               # close the restored window
+        time.sleep(0.8)
+        grab(q, "bt_00_desktop")
+
+        start_app(q, 14, wait=3.5)                 # menu order = app order
+        m.park()
+        grab(q, "bt_01_one_tab")
+        win = diff_bbox("bt_00_desktop", "bt_01_one_tab", ignore=band)
+        check("the Browser opened",
+              win is not None and win[2] > 200 and win[3] > 150, str(win))
+        if win is None:
+            raise SystemExit("browser_tabs: no Browser window")
+
+        # ---- derive the strip from two add-a-tab diffs ---------------------
+        ctrl(q, "t"); m.park(); grab(q, "bt_02_two_tabs")
+        ctrl(q, "t"); m.park(); grab(q, "bt_03_three_tabs")
+        d1 = diff_bbox("bt_01_one_tab", "bt_02_two_tabs", ignore=band)
+        d2 = diff_bbox("bt_02_two_tabs", "bt_03_three_tabs", ignore=band)
+        check("Ctrl-T changed the strip (twice)",
+              d1 is not None and d2 is not None, "%s / %s" % (d1, d2))
+        if d1 is None or d2 is None:
+            raise SystemExit("browser_tabs: Ctrl-T drew nothing - no strip to find")
+
+        # Ctrl-T also DESELECTS the tab that was current, so the first diff's
+        # left edge is tab 0 repainting - i.e. the strip's own left edge - and
+        # the second is where tab 2 appeared. Hence pitch = d2 - d1, strip = d1.
+        # Everything below is in SCREENDUMP pixels; the guest may be zoomed.
+        pitch = d2[0] - d1[0]
+        strip_x, strip_y, strip_h = d1[0], d1[1], d1[3]
+        row = strip_y + strip_h // 2
+        print("  derived: strip x=%d row=%d h=%d, pitch=%d (guest: h=%d pitch=%d)"
+              % (strip_x, row, strip_h, pitch, strip_h // SCALE, pitch // SCALE))
+        check("the derived tab pitch is a legal tab width",
+              46 <= pitch // SCALE <= 130, "%d guest px" % (pitch // SCALE))
+        check("the derived strip starts inside the window",
+              win[0] <= strip_x <= win[0] + win[2] // 2,
+              "x=%d, window %d..%d" % (strip_x, win[0], win[0] + win[2]))
+        check("the strip is one tab-bar tall",
+              10 <= strip_h // SCALE <= 40, "%d guest px" % (strip_h // SCALE))
+        if fails:
+            raise SystemExit("browser_tabs: geometry derivation failed")
+
+        # The close box is a cb-square inset 5 px from the tab's right edge, so
+        # its centre is 5 + cb/2 in from that edge - derived from the measured
+        # strip height exactly as unoui_tab_close_rect() derives it.
+        cb = strip_h // SCALE - 10
+        cb = 7 if cb < 7 else (12 if cb > 12 else cb)
+        close_in = (5 + cb // 2) * SCALE
+
+        def tab_mid(k):   return (strip_x + k * pitch + pitch // 2, row)
+        def tab_close(k): return (strip_x + (k + 1) * pitch - close_in, row)
+        def plus_zone(n):                       # the "+" box when n tabs are open
+            x = strip_x + n * pitch
+            return (x - 2, strip_y, x + strip_h, strip_y + strip_h)
+
+        # How much of the "+" zone changes when the button moves in or out of it.
+        # Measured, not guessed: the "+" box is filled with the palette's `face`,
+        # which is also the empty strip's background, so only its frame and its
+        # cross glyph differ - about a fifth of the box. The floor for "nothing
+        # happened" is two orders of magnitude below that, so PLUS_MOVED sits
+        # between them with room on both sides.
+        PLUS_MOVED = 0.10
+
+        # Three tabs, all 130 guest px wide (the elastic cap), so the "+" sits at
+        # strip_x + n*pitch and MOVES BY EXACTLY ONE PITCH whenever the count
+        # changes. That makes "did a tab open or close?" a precise pixel question
+        # rather than a guess. A fourth tab would fall under the cap and change
+        # the pitch, so the scenario deliberately stays at three.
+
+        # ---- a click at a tab's CENTRE selects, and must NOT close ---------
+        m.click(*tab_mid(0))
+        m.park(); grab(q, "bt_04_selected")
+        sel = diff_bbox("bt_03_three_tabs", "bt_04_selected", ignore=band)
+        check("clicking a tab's centre changed the strip (selection moved)",
+              sel is not None, str(sel))
+        stay = diff_frac("bt_03_three_tabs", "bt_04_selected", plus_zone(3))
+        check("and it did NOT close a tab - the + stayed put",
+              stay < PLUS_MOVED, "%.3f of the + zone changed" % stay)
+
+        # ---- a click near that tab's RIGHT EDGE closes it ------------------
+        m.click(*tab_close(0))
+        m.park(); grab(q, "bt_05_closed")
+        gone = diff_frac("bt_04_selected", "bt_05_closed", plus_zone(3))
+        check("clicking the close box removed a tab - the + moved a pitch left",
+              gone > PLUS_MOVED, "%.3f of the + zone changed" % gone)
+        d4 = diff_bbox("bt_04_selected", "bt_05_closed", ignore=band)
+        check("the close redrew the strip, not the page",
+              d4 is not None and d4[1] <= strip_y + strip_h + 4, str(d4))
+
+        # ---- the "+" opens one, by pointer --------------------------------
+        m.click(strip_x + 2 * pitch + strip_h // 2, row)
+        m.park(); grab(q, "bt_06_plus")
+        back = diff_frac("bt_05_closed", "bt_06_plus", plus_zone(3))
+        check("clicking + opened a tab - the + moved a pitch right",
+              back > PLUS_MOVED, "%.3f of the + zone changed" % back)
+
+        # ---- Ctrl-F4 still closes one, as it always did --------------------
+        ctrl(q, "f4")
+        m.park(); grab(q, "bt_07_ctrl_f4")
+        f4 = diff_frac("bt_06_plus", "bt_07_ctrl_f4", plus_zone(3))
+        check("Ctrl-F4 closes a tab too", f4 > PLUS_MOVED, "%.3f changed" % f4)
+
+        # ---- the strip never paints outside its own band -------------------
+        below = diff_frac("bt_03_three_tabs", "bt_05_closed",
+                          (strip_x, strip_y + strip_h + 6,
+                           strip_x + 3 * pitch, strip_y + 2 * strip_h + 6))
+        check("closing a tab left the toolbar below it alone",
+              below < 0.35, "%.3f changed" % below)
+
+        if fails:
+            print("browser_tabs: %d FAILED - %s" % (len(fails), ", ".join(fails)))
+        else:
+            print("browser_tabs: all checks passed")
+        return 1 if fails else 0
+    finally:
+        stop_qemu(qemu, q)
+
+
 def start_qemu(extra=None, log="build/ovmf.log", pointer="tablet"):
     """Boot one QEMU and connect QMP. Returns (proc, Qmp). A scenario that needs
     a REBOOT (session restore) calls this twice; build/esp is the same vvfat
@@ -2261,6 +2431,8 @@ def main():
                                                # topology (-device usb-mouse)
     if len(sys.argv) > 1 and sys.argv[1] == "usbhid_mods":
         return usbhid_mods()                   # ditto (-device usb-kbd)
+    if len(sys.argv) > 1 and sys.argv[1] == "browser_tabs":
+        return browser_tabs()                  # ditto: pointer-driven, own boot
     subprocess.run(["cp", OVMF_VARS, "build/vars.fd"], check=True)
     if os.path.exists(QMP_SOCK):
         os.remove(QMP_SOCK)
