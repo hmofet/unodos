@@ -760,7 +760,7 @@ static int ssh_t_store(void *ctx)
         sd_s("sshstore: key generated\n");
         if (ssh_sess_set("s1", "10.0.2.2", 2222, "unosshtest", "gate") != 0)
             { sd_s("sshstore: session save failed\n"); return 1; }
-        if (ssh_known_add("10.0.2.2", fp) != 0) { sd_s("sshstore: known add failed\n"); return 1; }
+        if (ssh_known_add("store.test.invalid", fp) != 0) { sd_s("sshstore: known add failed\n"); return 1; }
         sd_s("sshstore: session+host saved\n");
         {   static unsigned char pem[2048];   /* static: 2 KB of stack in a SPECTEST test is enough to run off the frame */
             long n;
@@ -793,9 +793,9 @@ static int ssh_t_store(void *ctx)
         sd_s("sshstore: session="); sd_s(host); sd_s(" user="); sd_s(user); sd_s("\n");
         if (port != 2222) { sd_s("sshstore: port wrong\n"); bad = 1; }
     }
-    if (ssh_known_check("10.0.2.2", fp) != SSH_HOST_KNOWN) { sd_s("sshstore: host forgotten\n"); bad = 1; }
+    if (ssh_known_check("store.test.invalid", fp) != SSH_HOST_KNOWN) { sd_s("sshstore: host forgotten\n"); bad = 1; }
     fp[0] ^= 0xFF;
-    if (ssh_known_check("10.0.2.2", fp) != SSH_HOST_MISMATCH) { sd_s("sshstore: mismatch not caught!\n"); bad = 1; }
+    if (ssh_known_check("store.test.invalid", fp) != SSH_HOST_MISMATCH) { sd_s("sshstore: mismatch not caught!\n"); bad = 1; }
     fp[0] ^= 0xFF;
     if (ssh_known_check("nowhere.invalid", fp) != SSH_HOST_UNKNOWN) { sd_s("sshstore: unknown host claimed\n"); bad = 1; }
     if (ssh_key_export_pub("gate", pub, (int)sizeof pub) > 0) {
@@ -808,11 +808,97 @@ static int ssh_t_store(void *ctx)
     return bad ? 1 : 0;
 }
 
+/* ssh-e: the automation verb, driven DIRECTLY rather than over URC.
+ *
+ * unoautomate's dispatch clause is their commit, not ours - the request is
+ * filed - so there is no URC path to this yet. Driving ssh_dbg_cmd() here
+ * tests exactly what this lane owns: the sub-verb grammar, and the slicing
+ * that exists because their tx buffer is 8 KB and drops silently past it.
+ * The command below deliberately produces MORE than 8 KB, which is the whole
+ * reason `run` returns an id instead of the output. */
+static int ssh_t_verb(void *ctx)
+{
+    static char acc[32768];
+    char r[2048];
+    int n, id = 0, len = 0, off = 0, got = 0, bad = 0, waited = 0;
+    (void)ctx;
+
+    sd_s("sshverb: begin\n");
+    if (!pc64_net_up()) { sd_s("sshverb: no NIC\nsshverb: RESULT FAIL\n"); return 1; }
+    while (!net_dhcp_done() && waited < 15000) { net_poll(); uno_pc64_delay_ms(1); waited++; }
+    if (!net_dhcp_done()) { sd_s("sshverb: no DHCP\nsshverb: RESULT FAIL\n"); return 1; }
+
+    /* the key the harness authorised, stored unprotected so the verb - which
+     * has nobody to ask for a passphrase - can load it */
+    if (ssh_key_add("auto", kSshTestSeed, "") != 0) { sd_s("sshverb: key add failed\n"); return 1; }
+
+    n = ssh_dbg_cmd("keys", r, (int)sizeof r);
+    sd_s("sshverb: keys -> "); sd_s(r); sd_s("\n");   /* r carries the reason even on failure */
+
+    n = ssh_dbg_cmd("sessadd t1 10.0.2.2 2222 unosshtest auto", r, (int)sizeof r);
+    sd_s("sshverb: sessadd -> "); sd_s(r); sd_s("\n");   /* r carries the reason even on failure */
+    if (n <= 0) bad = 1;
+    n = ssh_dbg_cmd("sess", r, (int)sizeof r);
+    sd_s("sshverb: sess -> "); sd_s(r); sd_s("\n");   /* r carries the reason even on failure */
+
+    /* seq 1 2000 is a shade under 9 KB - past the 8 KB tx buffer on purpose */
+    n = ssh_dbg_cmd("run t1 seq 1 2000", r, (int)sizeof r);
+    sd_s("sshverb: run -> "); sd_s(r); sd_s("\n");   /* r carries the reason even on failure */
+    if (n <= 0) { sd_s("sshverb: RESULT FAIL\n"); return 1; }
+    {   const char *s = r;
+        while (*s && !(s[0] == 'i' && s[1] == 'd' && s[2] == '=')) s++;
+        if (*s) { s += 3; while (*s >= '0' && *s <= '9') id = id * 10 + (*s++ - '0'); }
+        while (*s && !(s[0] == 'l' && s[1] == 'e' && s[2] == 'n' && s[3] == '=')) s++;
+        if (*s) { s += 4; while (*s >= '0' && *s <= '9') len = len * 10 + (*s++ - '0'); } }
+    if (len <= 8192) { sd_s("sshverb: output did not exceed the tx buffer\n"); bad = 1; }
+
+    while (off < len && got < (int)sizeof acc) {
+        char q[64];
+        int k = 0, j;
+        const char *pre = "get ";
+        for (j = 0; pre[j]; j++) q[k++] = pre[j];
+        {   int v = id, t[8], ti = 0;
+            if (!v) t[ti++] = 0;
+            while (v) { t[ti++] = v % 10; v /= 10; }
+            while (ti) q[k++] = (char)('0' + t[--ti]); }
+        q[k++] = ' ';
+        {   int v = off, t[8], ti = 0;
+            if (!v) t[ti++] = 0;
+            while (v) { t[ti++] = v % 10; v /= 10; }
+            while (ti) q[k++] = (char)('0' + t[--ti]); }
+        q[k] = 0;
+        n = ssh_dbg_cmd(q, r, (int)sizeof r);
+        if (n <= 0) { sd_s("sshverb: get failed\n"); bad = 1; break; }
+        for (j = 0; j < n && got < (int)sizeof acc; j++) acc[got++] = r[j];
+        off += n;
+    }
+    sd_s("sshverb: reassembled=");
+    {   int v = got, t[8], ti = 0; char d[10]; int k = 0;
+        if (!v) t[ti++] = 0;
+        while (v) { t[ti++] = v % 10; v /= 10; }
+        while (ti) d[k++] = (char)('0' + t[--ti]);
+        d[k] = 0; sd_s(d); }
+    sd_s("\n");
+    if (got != len) { sd_s("sshverb: slices did not reassemble to len\n"); bad = 1; }
+    if (got < 4 || acc[0] != '1' || acc[1] != '\n') { sd_s("sshverb: output does not start at 1\n"); bad = 1; }
+    {   /* ...and ends at 2000. The window starts at got-4, not got-6: the last
+         * line is "2000\n", so the '2' sits four back from the end and a
+         * window that began further in never saw it. */
+        int k, found = 0;
+        for (k = got - 4; k >= 0 && k > got - 16; k--)
+            if (acc[k] == '2' && acc[k+1] == '0' && acc[k+2] == '0' && acc[k+3] == '0') found = 1;
+        if (!found) { sd_s("sshverb: output does not end at 2000\n"); bad = 1; } }
+
+    sd_s(bad ? "sshverb: RESULT FAIL\n" : "sshverb: RESULT PASS\n");
+    return bad ? 1 : 0;
+}
+
 void unossh_register_tests(void)
 {
     unoauto_test_register("network", "ssh:transport", ssh_t_transport);
     unoauto_test_register("network", "ssh:exec", ssh_t_exec);
     unoauto_test_register("network", "ssh:store", ssh_t_store);
+    unoauto_test_register("network", "ssh:verb", ssh_t_verb);
 }
 #else
 void unossh_register_tests(void) { }

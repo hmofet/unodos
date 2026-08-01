@@ -2636,6 +2636,85 @@ def ssh_exec():
     return 1 if fails else 0
 
 
+def ssh_verb():
+    """Gate for ssh-e: the automation verb, and its 8 KB slicing.
+
+        UNO_DEBUG=1 UNO_DBGCON=1 ./build.sh && python3 harness.py ssh_verb
+
+    Drives ssh_dbg_cmd() DIRECTLY rather than over URC, because unoautomate's
+    dispatch clause is their commit and the request for it is filed. What that
+    still proves is everything this lane owns: the sub-verb grammar, a real
+    login driven entirely from the verb, and the slicing that exists because
+    unoautomate's tx buffer is 8192 bytes and drops silently past it.
+
+    The command is `seq 1 2000`, a shade under 9 KB, chosen to be past that
+    buffer on purpose - so `run` returning an id instead of the output is
+    exercised rather than merely present."""
+    fails = []
+
+    def check(name, ok, detail=""):
+        print("  %-52s %s %s" % (name, "PASS" if ok else "FAIL", detail))
+        if not ok:
+            fails.append(name)
+
+    log = "build/ssh_verb.log"
+    sshd, user = _sshd_start()
+    try:
+        with open("build/esp/DEBUG.CFG", "w") as f:
+            f.write("spec nostress\n")
+        with open("build/esp/SSHTEST.CFG", "w") as f:
+            f.write("10.0.2.2 %s 2222\n" % user)
+        subprocess.run(["sh", "-c", "rm -f build/unodos-uefi.img"], check=False)
+        subprocess.run([sys.executable, "tools/mkuefi.py"], check=True)
+        os.environ["UNO_DISK"] = "build/unodos-uefi.img"
+        qemu, q = start_qemu(log=log, pointer="none",
+                             extra=["-netdev", "user,id=n0",
+                                    "-device", "e1000,netdev=n0"])
+        try:
+            print("ssh_verb: boot")
+            deadline = time.time() + 200
+            text = ""
+            while time.time() < deadline:
+                time.sleep(5)
+                try:
+                    with open(log, "rb") as f:
+                        text = f.read().decode("latin-1")
+                except IOError:
+                    text = ""
+                if "sshverb: RESULT" in text:
+                    break
+            for line in text.splitlines():
+                if line.startswith("sshverb:"):
+                    print("    | " + line.strip())
+            got = ""
+            for line in text.splitlines():
+                if line.startswith("sshverb: run -> "):
+                    got = line.strip()
+            check("the verb ran", "sshverb: begin" in text)
+            check("it listed keys", "sshverb: keys -> " in text)
+            check("it saved a session", "sshverb: sessadd -> saved t1" in text)
+            check("it logged in and ran a command from the verb alone",
+                  "id=" in got, got)
+            biglen = 0
+            if "len=" in got:
+                biglen = int(got.split("len=")[1].split()[0])
+            check("the output exceeded unoautomate's 8 KB tx buffer",
+                  biglen > 8192, "%d bytes" % biglen)
+            check("the slices reassembled to exactly that length",
+                  "sshverb: slices did not reassemble" not in text and
+                  ("sshverb: reassembled=%d" % biglen) in text)
+            check("the gate passed", "sshverb: RESULT PASS" in text)
+        finally:
+            stop_qemu(qemu, q)
+    finally:
+        _sshd_stop(sshd)
+    if fails:
+        print("ssh_verb: %d FAILED - %s" % (len(fails), ", ".join(fails)))
+    else:
+        print("ssh_verb: all checks passed")
+    return 1 if fails else 0
+
+
 def ssh_store():
     """Gate for ssh-d: the key/session/known-host store survives a power cycle.
 
@@ -2800,6 +2879,8 @@ def main():
         return ssh_exec()                      # ditto: it owns its own sshd
     if len(sys.argv) > 1 and sys.argv[1] == "ssh_store":
         return ssh_store()                     # ditto: it boots twice
+    if len(sys.argv) > 1 and sys.argv[1] == "ssh_verb":
+        return ssh_verb()                     # ditto: it boots twice
     subprocess.run(["cp", OVMF_VARS, "build/vars.fd"], check=True)
     if os.path.exists(QMP_SOCK):
         os.remove(QMP_SOCK)
