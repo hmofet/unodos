@@ -3561,3 +3561,69 @@ construction and identical to every other themed window's - but nothing has
 actually grabbed the browser under a dark palette. Correction 21.
 
 Corrections 16-21 are in the spec's §13.
+
+---
+
+## 2026-07-31 - unossh: ssh-a landed, ssh-b half landed (handoff)
+
+**`ssh-a` is DONE.** `pc64/ed25519.*` implements RFC 8032 from scratch - the
+one piece of crypto BearSSL does not carry - and passes section 7.1's four
+vectors byte for byte (public key, signature and verification) plus the
+rejection cases: every single-bit flip of a signature, a flipped message bit,
+the wrong public key, a non-canonical S, and a public key off the curve. Gate:
+`sh tools/ed25519test.sh`, built with build.sh's sanitizer set. It is linked
+into the kernel and both builds are green.
+
+**`ssh-b` is HALF DONE, and the landed half is the half that fails silently.**
+`pc64/unossh_wire.c` carries the wire format and the key-exchange arithmetic as
+pure functions - no sockets, no connection state, no allocation - because a
+wrong mpint or a length in the wrong units produces no error at all, just an
+exchange hash the server computes differently and a disconnect several messages
+later that points nowhere near the cause. Gate: `sh tools/sshwiretest.sh`, 26
+checks including RFC 7748's own X25519 vectors.
+
+### What is left of ssh-b, precisely
+
+The connection state machine and its I/O, over `netsock.h` (`net_socket` /
+`net_connect`), NOT over `pc64/tls.*`:
+
+1. version exchange - send `SSH-2.0-...\r\n`, read the server's, keep both
+   WITHOUT the CR LF because that is what the exchange hash covers
+2. `SSH_MSG_KEXINIT` (20) both ways; keep both payloads, they are I_C and I_S
+3. `SSH_MSG_KEX_ECDH_INIT` (30) with Q_C, `..._REPLY` (31) back with K_S, Q_S
+   and the signature
+4. K = `ssh_x25519(sec, Q_S)`; H = `ssh_exchange_hash(...)`; session_id = H on
+   the first exchange and never changes afterwards
+5. verify the signature over H with `ed25519_verify` against the `ssh-ed25519`
+   blob inside K_S
+6. six keys via `ssh_derive_key` letters A..F, then `SSH_MSG_NEWKEYS` (21)
+7. the packet layer: aes256-ctr over length+padlen+payload+padding, hmac-sha2-256
+   over `seqnum || the UNENCRYPTED packet`, MAC sent in the clear after the
+   ciphertext. **Encrypt-AND-MAC, per correction 22** - the spec's original
+   "encrypt-then-MAC" was wrong, that is an OpenSSH extension that has to be
+   negotiated
+8. rekey on the usual thresholds
+
+Write it so the exchange-hash inputs can be dumped under `UNO_DEBUG`. A wrong H
+is otherwise an opaque disconnect, and it is the single most likely place to
+lose a day.
+
+### The gate for it needs no LAN and no second machine
+
+Run `sshd -ddd -p 2222` on the host (WSL is fine). QEMU user-mode networking
+reaches the host at **10.0.2.2**, so the guest can complete a real handshake
+against a real server, and the server's verbose log says precisely what it
+disliked - which is worth far more than any assertion this side.
+
+### Two findings already recorded, worth reading before starting
+
+- **Correction 22**: SSH is encrypt-AND-MAC. Assuming otherwise fails every
+  packet.
+- **Correction 23**: BearSSL's X25519 takes the point little-endian and the
+  scalar BIG-endian, and clamps the scalar itself. `ssh_x25519*()` already
+  hides this; do not unwrap it.
+
+`ssh-c` (auth + channels), `ssh-d` (key + session store), `ssh-e` (the
+unoautomate verb) and `ssh-f` (the GUI app) are untouched. The cross-lane
+request to unoautomate for `ssh_dbg_cmd` filed in the CLAIM entry is still
+open and still not needed until `ssh-e`.
