@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """UnoDOS/pc64 scripted verification harness - QEMU + OVMF, fully headless.
 
 The pc64 counterpart of the family's harness.py pattern - but where the
@@ -2375,6 +2375,122 @@ def browser_tabs():
         stop_qemu(qemu, q)
 
 
+def ssh_transport():
+    """Gate for ssh-b: a real SSH handshake against a real OpenSSH server.
+
+        UNO_DEBUG=1 UNO_DBGCON=1 ./build.sh && python3 harness.py ssh_transport
+
+    The server is whatever is listening on the HOST's port 22, reached through
+    QEMU's user-mode networking at 10.0.2.2 - so this needs no LAN, no second
+    machine and no sshd of its own. Everything up to and including NEWKEYS is
+    exercised: version exchange, KEXINIT negotiation, curve25519-sha256 ECDH,
+    the ssh-ed25519 signature over the exchange hash, and key derivation.
+
+    unossh registers itself into SPECTEST's existing `network` area, so the
+    trigger is just a STRESS.CFG with `spec` in it; the test writes one
+    grep-able line per step to the debug console, which QEMU is already
+    capturing to the boot log.
+
+    Nothing is authenticated here - that is ssh-c - and nothing checks the host
+    key is the one we expected, which is ssh-d. What it proves is that a real
+    OpenSSH server accepts our transport and we accept its."""
+    fails = []
+
+    def check(name, ok, detail=""):
+        print("  %-52s %s %s" % (name, "PASS" if ok else "FAIL", detail))
+        if not ok:
+            fails.append(name)
+
+    log = "build/ssh_transport.log"
+    # The conformance flags live in DEBUG.CFG, not STRESS.CFG - pc64_stress.c's
+    # cfg_flag() reads the former. `spec` with no `=areas` means every area, and
+    # `nostress` keeps the fuzz driver from opening apps underneath the test.
+    with open("build/esp/DEBUG.CFG", "w") as f:
+        f.write("spec nostress\n")
+    # Where the sshd actually is. QEMU's 10.0.2.2 is the machine RUNNING qemu,
+    # which here is the WSL VM - while the OpenSSH server is on Windows, one
+    # NAT hop further out, so the guest is pointed at WSL's default gateway.
+    # Overridable with SSHD_HOST when the server is somewhere else.
+    target = os.environ.get("SSHD_HOST")
+    if not target:
+        try:
+            out = subprocess.check_output(
+                ["sh", "-c", "ip route show default | awk '{print $3}' | head -1"])
+            target = out.decode().strip()
+        except Exception:
+            target = ""
+    if not target:
+        target = "10.0.2.2"
+    print("ssh_transport: target sshd = %s:22" % target)
+    with open("build/esp/SSHTEST.CFG", "w") as f:
+        f.write(target + "\n")
+    subprocess.run([sys.executable, "tools/mkuefi.py"], check=True)
+    os.environ["UNO_DISK"] = "build/unodos-uefi.img"
+    # qemu_argv() passes -nic none, so the guest has no network at all unless a
+    # card is added here. e1000 is the QEMU-verified wired driver; user-mode
+    # networking then serves DHCP and puts the HOST at 10.0.2.2.
+    qemu, q = start_qemu(log=log, pointer="none",
+                         extra=["-netdev", "user,id=n0",
+                                "-device", "e1000,netdev=n0"])
+    try:
+        print("ssh_transport: boot (SPECTEST runs the network area)")
+        deadline = time.time() + 150
+        text = ""
+        while time.time() < deadline:
+            time.sleep(5)
+            try:
+                with open(log, "rb") as f:
+                    text = f.read().decode("latin-1")
+            except IOError:
+                text = ""
+            if "sshtest: RESULT" in text:
+                break
+        for line in text.splitlines():
+            if line.startswith("sshtest:"):
+                print("    | " + line.strip())
+
+        check("the test ran at all", "sshtest:" in text,
+              "" if "sshtest:" in text else "(no sshtest lines in the debugcon log)")
+        check("the guest got a DHCP lease", "sshtest: link up" in text)
+        check("a server ident came back", "sshtest: server=SSH-2.0-" in text)
+        check("the host key verified and keys are live",
+              "sshtest: hostkey-fp=" in text)
+        check("the session id is real", "sshtest: session-id=" in text)
+        check("the handshake completed", "sshtest: RESULT PASS" in text)
+
+        # The strongest check available: ask the server for its host key
+        # independently and hash the blob ourselves. If the guest agrees, it
+        # really did parse THAT key rather than merely produce 32 plausible
+        # bytes - and the signature verifying already proved the exchange hash
+        # matched byte for byte, since the server signed its own copy of it.
+        want = ""
+        try:
+            blob = subprocess.check_output(
+                ["sh", "-c",
+                 "ssh-keyscan -t ed25519 -p 22 %s 2>/dev/null | awk '{print $3}' "
+                 "| base64 -d | sha256sum" % target]).decode()
+            want = blob.strip().split()[0][:16]
+        except Exception:
+            pass
+        got = ""
+        for line in text.splitlines():
+            if line.startswith("sshtest: hostkey-fp="):
+                got = line.strip().split("=", 1)[1]
+        check("the fingerprint matches the server's real host key",
+              bool(want) and got == want, "guest=%s keyscan=%s" % (got, want))
+        if "sshtest: handshake failed" in text:
+            for line in text.splitlines():
+                if "handshake failed" in line:
+                    print("    !! " + line.strip())
+    finally:
+        stop_qemu(qemu, q)
+    if fails:
+        print("ssh_transport: %d FAILED - %s" % (len(fails), ", ".join(fails)))
+    else:
+        print("ssh_transport: all checks passed")
+    return 1 if fails else 0
+
+
 def start_qemu(extra=None, log="build/ovmf.log", pointer="tablet"):
     """Boot one QEMU and connect QMP. Returns (proc, Qmp). A scenario that needs
     a REBOOT (session restore) calls this twice; build/esp is the same vvfat
@@ -2433,6 +2549,8 @@ def main():
         return usbhid_mods()                   # ditto (-device usb-kbd)
     if len(sys.argv) > 1 and sys.argv[1] == "browser_tabs":
         return browser_tabs()                  # ditto: pointer-driven, own boot
+    if len(sys.argv) > 1 and sys.argv[1] == "ssh_transport":
+        return ssh_transport()                 # ditto: it owns its own boot
     subprocess.run(["cp", OVMF_VARS, "build/vars.fd"], check=True)
     if os.path.exists(QMP_SOCK):
         os.remove(QMP_SOCK)
