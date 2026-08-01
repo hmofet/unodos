@@ -72,7 +72,7 @@ The two lanes run concurrently. Within a lane, order is strict.
 | `tabs-b` | toolkits | **DONE** - `UI_MDI` container widget |
 | `tabs-c` | toolkits | **DONE** - browser refactored onto `tabs-a` |
 | `ssh-a` | unossh | **DONE** - Ed25519, host-tested against RFC 8032 vectors |
-| `ssh-b` | unossh | **PART DONE** - wire format + KEX arithmetic landed and gated; the connection state machine is still to write |
+| `ssh-b` | unossh | **CODE DONE, UNPROVEN** - wire + KEX gated on the host; the state machine is written but has never talked to a real sshd |
 | `ssh-c` | unossh | userauth (publickey, password) + session channel, exec and shell |
 | `ssh-d` | unossh | key store + session store, persistent |
 | `ssh-e` | unossh | the unoautomate verb |
