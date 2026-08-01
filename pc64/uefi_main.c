@@ -1482,9 +1482,16 @@ static void map_key(UINT16 scan, CHAR16 uni, short mods)
 }
 
 /* shared emit for the native HID keyboards (I2C-HID + USB HID): translate the
- * (EFI scan, unicode, ctrl) triple into map_key's (scan, uni, mods) space. */
-static void hid_key_emit(int scan, int uni, int ctrl, void *ctx)
-{ (void)ctx; map_key((UINT16)scan, (CHAR16)uni, ctrl ? cmdKey : 0); }
+ * (EFI scan, unicode, mods) event into map_key's Mac-modifier space, which the
+ * raw ring then carries as UI_MOD_* bits.
+ *
+ * `mods` is the full mask held when the key went down, so Alt+Tab, Alt+arrow
+ * and the Win key reach the shell from a HID keyboard the same as from PS/2.
+ * It used to pass ctrl alone, which is why every Alt binding needed a
+ * ctrl-reachable twin on these two transports. `ctrl` is now redundant with
+ * UI_MOD_CTRL and ignored here. */
+static void hid_key_emit(int scan, int uni, int ctrl, int mods, void *ctx)
+{ (void)ctx; (void)ctrl; map_key((UINT16)scan, (CHAR16)uni, ps2_mods_to_mac(mods)); }
 
 /* 1 if a NATIVE keyboard (I2C-HID or USB HID) is bound - once one is, we drive
  * the keyboard from it and stop polling firmware ConIn (which on a touch device
