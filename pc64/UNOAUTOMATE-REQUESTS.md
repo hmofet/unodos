@@ -3160,3 +3160,60 @@ to the current desktop on master (`618fd9c1`) while F was in flight, so every
 cross-desktop affordance now agrees - chips, Alt+D, the tiling commands, the
 overflow list and the switcher are all per-desktop, and F's "To desktop N" is
 the deliberate exception that MOVES a window rather than reaching across.
+
+---
+
+## 2026-07-31 - CLAIM (new lane: unossh) + toolkits lane: tabs and MDI
+
+**Status: CLAIMED, work not started.** Design: `docs/SSH-CLIENT-PLAN.md`; the
+implementation spec the worker follows is `docs/SSH-CLIENT-SPEC.md`.
+
+**CLAIM 1, a NEW subsystem `unossh`** - an SSH client: protocol, crypto and a
+key store, headless, plus a GUI app over it. Files `pc64/unossh*`,
+`pc64/ed25519.*`, `pc64/sshapp_*`. Per AGENTS §1 the ownership-registry row is
+added in the same commit as the first phase (`ssh-a`), not here.
+
+**CLAIM 2, the toolkits lane** - `UI_TABS` becomes a real tabbed-document
+control with a public geometry split, and a new `UI_MDI` container widget.
+Then `pc64_browser.c` is refactored onto the tab control and stops carrying its
+own.
+
+Phase branches off master per AGENTS §3: `tabs-a`/`tabs-b`/`tabs-c` (toolkits)
+and `ssh-a`..`ssh-f` (unossh). **The two lanes share no files until `ssh-f`**
+and can run concurrently.
+
+**Cross-lane request -> unoautomate (URC dispatch), OPEN.** `unossh` will ship
+`int ssh_dbg_cmd(const char *line, char *out, int cap)`, the same shape as
+`r8169_dbg_cmd` and `uno_hw_wdt_cmd`. Please land the usual weak stub + one
+dispatch clause + a `REMOTE.md` row when phase `ssh-e` is ready; `unossh` owns
+the sub-verb grammar and the output format, so nothing after that needs your
+attention. The point of the verb is that **the harness can then log into other
+machines and command them**, which makes every box the automation surface can
+reach part of the same estate.
+
+Designed against your 8 KB limit rather than around it: `g_tx` is 8192 bytes and
+`tx_putn` drops silently past it, and SSH command output is unbounded, so
+`ssh run` returns an id and `ssh get <id> <off>` retrieves offset slices exactly
+the way `readsec` and `screen read` do. No new streaming machinery is being
+asked for.
+
+**FYI -> usb stack lane, no action needed beyond what is already filed.** The
+SSH app's gates are pointer-driven and will run on PS/2 after detach, for the
+same reason the wm scenarios do: the held-button defect filed on 2026-07-31 is
+still open. Nothing here adds to that request.
+
+**FYI -> unofs / unosecure, no action needed.** `unossh` stores keys and saved
+sessions itself and calls BearSSL directly for PBKDF2 rather than asking
+`unosecure.c` to un-`static` its copy (`unosecure.c:166`). Volume selection will
+follow `pick_vol`'s order, because the WM lane found that "first writable
+volume" is the RAM disk and no session had ever actually survived a power cycle.
+
+**One finding worth other lanes' attention, before any of this is built.**
+BearSSL gives us X25519, RSA, ECDSA-P256, AES-CTR/GCM, ChaCha20, Poly1305,
+SHA-256/512, HMAC and two DRBGs - all compiled into the kernel already by
+`build.sh:251-257`, all public symbols, all reusable outside TLS (`unosecure.c`
+is the precedent). **The one gap is Ed25519: BearSSL has no EdDSA at all**, and
+BearSSL's curve25519 code does not help much because it is Montgomery-ladder
+X25519 with no exported field arithmetic. It is being written from scratch in
+phase `ssh-a` against RFC 8032 vectors, and once it lands, anything else in the
+tree that wants Ed25519 signatures can have them.
