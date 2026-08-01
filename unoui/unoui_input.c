@@ -465,14 +465,25 @@ static unoui_action press_widget(unoui_ui *ui, unoui_window *win, int hi,
     }
 
     case UI_TABS: {
-        int x = r.x, k;
+        /* one geometry for the painter and the click - see unoui_tabs_hit() */
+        unoui_tabs_model tm;
+        int k = -1, part;
         ui->cap_mode = UI_CAP_NONE;
-        for (k = 0; k < w->nitems; k++) {
-            int tw = fb_text_w(w->items[k]) + 16;
-            if (ev->x >= x && ev->x < x + tw) {
-                w->sel = k; { unoui_action a = change(w); a.value = k; return a; }
-            }
-            x += tw;
+        unoui_tabs_model_of(w, &tm);
+        part = unoui_tabs_hit(t, r, &tm, ev->x, ev->y, &k);
+        if (part == UI_TAB_SEL && k >= 0) {
+            w->sel = k; { unoui_action a = change(w); a.value = k; return a; }
+        }
+        if (part == UI_TAB_CLOSE && k >= 0) {
+            unoui_action a = change(w); a.kind = UI_ACT_TABCLOSE; a.value = k; return a;
+        }
+        if (part == UI_TAB_PLUS) {
+            unoui_action a = change(w); a.kind = UI_ACT_TABNEW; a.value = w->nitems;
+            return a;
+        }
+        if (part == UI_TAB_OVER) {          /* scroll one tab further along */
+            if (w->value < unoui_tabs_maxfirst(t, r, &tm)) w->value++;
+            return change(w);
         }
         return NO_ACT;
     }
@@ -604,10 +615,21 @@ static unoui_action key_event(unoui_ui *ui, const unoui_event *ev)
             return change(w);
         }
         break;
-    case UI_TABS:
-        if (ev->key == UI_KEY_LEFT && w->sel > 0)            { w->sel--; { unoui_action a = change(w); a.value = w->sel; return a; } }
-        if (ev->key == UI_KEY_RIGHT && w->sel < w->nitems-1) { w->sel++; { unoui_action a = change(w); a.value = w->sel; return a; } }
-        break;
+    case UI_TABS: {
+        /* an overflowing strip scrolls the new selection into view, for the
+         * same reason a list does - otherwise the keys select what you cannot see */
+        unoui_tabs_model tm;
+        unoui_rect r;
+        int ns = w->sel;
+        if (ev->key == UI_KEY_LEFT  && ns > 0)              ns--;
+        else if (ev->key == UI_KEY_RIGHT && ns < w->nitems - 1) ns++;
+        else break;
+        w->sel = ns;
+        r = unoui_widget_rect(ui->theme, ui->win[ui->focus_win], w);
+        unoui_tabs_model_of(w, &tm);
+        w->value = unoui_tabs_reveal(ui->theme, r, &tm, ns);
+        { unoui_action a = change(w); a.value = ns; return a; }
+    }
     case UI_LIST: {
         /* the list scrolls, so every key that moves the selection also pulls it
          * back into view; PgUp/PgDn step a screenful, Home/End go to the ends. */

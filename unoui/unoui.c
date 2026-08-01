@@ -946,6 +946,293 @@ void unoui_list_draw(const unoui_theme *t, unoui_rect r, const char **items,
     }
 }
 
+/* ---- tabbed documents (UI_TABS) -----------------------------------------
+ * ONE layout pass feeds the painter, every public rect and the hit test, so
+ * they cannot drift apart - see unoui.h. It is pure arithmetic on the strip
+ * rect plus fb_text_w(); nothing here keeps state. The cost is that a rect
+ * query re-runs the pass, which for a handful of tabs is a few string widths
+ * and buys the guarantee that a click can only land where something was drawn.
+ *
+ * A zero-flag model is a plain strip and is handed straight to the theme, so
+ * the Control Panel and any theme that overrides `tabs` are untouched.  */
+
+typedef struct {
+    unoui_rect area;          /* the span tabs are laid out in                */
+    unoui_rect plus, over;    /* trailing controls; .w 0 = absent             */
+    int tab_w;                /* elastic width, or 0 = size each to its text  */
+    int cb;                   /* close-box side, 0 = no close boxes           */
+    int ctrl;                 /* trailing control side                        */
+    int first, maxfirst, nvis, used;
+} tabs_lay;
+
+int unoui_tabs_h(const unoui_theme *t) { (void)t; return UI_TAB_H; }
+
+static unoui_rect zero_rect(void) { unoui_rect q; q.x = q.y = q.w = q.h = 0; return q; }
+
+static int tab_cell_w(const unoui_tabs_model *m, int i, int cb, int tab_w)
+{
+    if (tab_w) return tab_w;
+    return fb_text_w(m->labels[i]) + 16 + (cb ? cb + 4 : 0);
+}
+
+static int elastic_w(int avail, int n)
+{
+    int tw = n > 0 ? avail / n : 0;
+    if (tw > UI_TAB_MAX_W) tw = UI_TAB_MAX_W;
+    if (tw < UI_TAB_MIN_W) tw = UI_TAB_MIN_W;
+    return tw;
+}
+
+static tabs_lay lay_tabs(const unoui_theme *t, unoui_rect r, const unoui_tabs_model *m)
+{
+    tabs_lay L;
+    int i, avail, need = 0;
+    (void)t;
+    L.area = r; L.plus = L.over = zero_rect();
+    L.tab_w = L.cb = L.ctrl = 0;
+    L.first = L.maxfirst = L.nvis = L.used = 0;
+    if (!m || !m->labels || m->n <= 0 || r.w <= 0 || r.h <= 0) { L.area.w = 0; return L; }
+
+    L.ctrl = r.h - 2;
+    if (L.ctrl < 10) L.ctrl = 10;
+    if (L.ctrl > r.w) L.ctrl = r.w;
+    if (m->flags & UI_TF_CLOSE) {
+        L.cb = r.h - 10;
+        if (L.cb < 7)  L.cb = 7;
+        if (L.cb > 12) L.cb = 12;
+    }
+
+    avail = r.w - ((m->flags & UI_TF_PLUS) ? L.ctrl : 0);
+    if (avail < 0) avail = 0;
+
+    /* Does the whole set fit without an overflow control? Answered BEFORE the
+     * `first` clamp, because the answer must not depend on where the strip is
+     * scrolled to - otherwise the ">>" would appear and vanish as you scroll. */
+    if (m->flags & UI_TF_ELASTIC) need = elastic_w(avail, m->n) * m->n;
+    else for (i = 0; i < m->n; i++) need += tab_cell_w(m, i, L.cb, 0);
+
+    if (need > avail && (m->flags & UI_TF_OVERFLOW)) {
+        avail -= L.ctrl;
+        if (avail < 0) avail = 0;
+        L.over.x = r.x + r.w - L.ctrl; L.over.y = r.y + 1;
+        L.over.w = L.ctrl;             L.over.h = r.h - 2;
+    }
+    if (m->flags & UI_TF_ELASTIC) L.tab_w = elastic_w(avail, m->n);
+    L.area.w = avail;
+
+    /* largest legal first = the smallest start whose tail still fits */
+    if (m->flags & UI_TF_OVERFLOW) {
+        int acc = 0, k = m->n;
+        while (k > 0 && acc + tab_cell_w(m, k - 1, L.cb, L.tab_w) <= avail)
+            acc += tab_cell_w(m, --k, L.cb, L.tab_w);
+        L.maxfirst = k > m->n - 1 ? m->n - 1 : k;
+        if (L.maxfirst < 0) L.maxfirst = 0;
+    }
+    L.first = m->first;
+    if (L.first > L.maxfirst) L.first = L.maxfirst;
+    if (L.first < 0) L.first = 0;
+
+    for (i = L.first; i < m->n; i++) {
+        int wq = tab_cell_w(m, i, L.cb, L.tab_w);
+        if (L.nvis && L.used + wq > avail) break;   /* the first always draws */
+        L.used += wq; L.nvis++;
+    }
+    if (L.used > avail) L.used = avail;
+
+    if (m->flags & UI_TF_PLUS) {
+        int px = L.area.x + L.used;                 /* follows the last tab   */
+        if (px > L.area.x + L.area.w) px = L.area.x + L.area.w;
+        L.plus.x = px; L.plus.y = r.y + 1; L.plus.w = L.ctrl; L.plus.h = r.h - 2;
+    }
+    return L;
+}
+
+void unoui_tabs_model_of(const unoui_widget *w, unoui_tabs_model *m)
+{
+    if (!w || !m) return;
+    m->labels   = (const char *const *)w->items;
+    m->n        = w->nitems;
+    m->sel      = w->sel;
+    m->hot      = -1;
+    m->hot_part = UI_TAB_NONE;
+    m->first    = w->value;
+    m->flags    = w->flags & UI_TF_ANY;
+}
+
+int unoui_tabs_visible(const unoui_theme *t, unoui_rect r, const unoui_tabs_model *m)
+{ return lay_tabs(t, r, m).nvis; }
+
+int unoui_tabs_maxfirst(const unoui_theme *t, unoui_rect r, const unoui_tabs_model *m)
+{ return lay_tabs(t, r, m).maxfirst; }
+
+int unoui_tabs_reveal(const unoui_theme *t, unoui_rect r,
+                      const unoui_tabs_model *m, int sel)
+{
+    tabs_lay L = lay_tabs(t, r, m);
+    int first = L.first;
+    if (m && sel >= 0 && sel < m->n) {
+        if (sel < first) first = sel;
+        else if (sel >= first + L.nvis) {
+            /* walk the start forward until `sel` is the last tab that fits */
+            unoui_tabs_model probe = *m;
+            int f = sel;
+            while (f > 0) {
+                tabs_lay L2;
+                probe.first = f - 1;
+                L2 = lay_tabs(t, r, &probe);
+                if (L2.first + L2.nvis <= sel) break;
+                f--;
+            }
+            first = f;
+        }
+    }
+    if (first > L.maxfirst) first = L.maxfirst;
+    if (first < 0) first = 0;
+    return first;
+}
+
+unoui_rect unoui_tab_rect(const unoui_theme *t, unoui_rect r,
+                          const unoui_tabs_model *m, int i)
+{
+    tabs_lay L = lay_tabs(t, r, m);
+    unoui_rect q = zero_rect();
+    int k, x;
+    if (!m || i < L.first || i >= L.first + L.nvis) return q;
+    x = L.area.x;
+    for (k = L.first; k < i; k++) x += tab_cell_w(m, k, L.cb, L.tab_w);
+    q.x = x; q.y = r.y; q.h = r.h;
+    q.w = tab_cell_w(m, i, L.cb, L.tab_w);
+    if (q.x + q.w > L.area.x + L.area.w) q.w = L.area.x + L.area.w - q.x;
+    if (q.w < 0) q.w = 0;
+    return q;
+}
+
+unoui_rect unoui_tab_close_rect(const unoui_theme *t, unoui_rect r,
+                                const unoui_tabs_model *m, int i)
+{
+    tabs_lay L = lay_tabs(t, r, m);
+    unoui_rect tr = unoui_tab_rect(t, r, m, i), q = zero_rect();
+    if (!L.cb || tr.w <= 0) return q;
+    q.w = q.h = L.cb;
+    q.x = tr.x + tr.w - L.cb - 5;
+    q.y = tr.y + (tr.h - L.cb) / 2;
+    /* a tab clipped narrow by the strip edge carries no close box, so a click
+     * there selects rather than closing - never the destructive reading */
+    if (q.x < tr.x + 4) return zero_rect();
+    return q;
+}
+
+unoui_rect unoui_tabs_plus_rect(const unoui_theme *t, unoui_rect r,
+                                const unoui_tabs_model *m)
+{ return lay_tabs(t, r, m).plus; }
+
+unoui_rect unoui_tabs_over_rect(const unoui_theme *t, unoui_rect r,
+                                const unoui_tabs_model *m)
+{ return lay_tabs(t, r, m).over; }
+
+/* copy as much of `s` as fits in `maxw` pixels into `buf` */
+static void fit_label(const char *s, int maxw, char *buf, int cap)
+{
+    int k = 0;
+    buf[0] = 0;
+    if (maxw <= 0) return;
+    while (s[k] && k < cap - 1) {
+        buf[k] = s[k]; buf[k + 1] = 0;
+        if (fb_text_w(buf) > maxw) { buf[k] = 0; return; }
+        k++;
+    }
+}
+
+static void draw_ctrl_box(const unoui_theme *t, unoui_rect b, int hot)
+{
+    fb_fill_rect(b.x, b.y, b.w, b.h, hot ? t->pal.light : t->pal.face);
+    fb_frame_rect(b.x, b.y, b.w, b.h, t->pal.shadow);
+}
+
+void unoui_tabs_draw(const unoui_theme *t, unoui_rect r, const unoui_tabs_model *m)
+{
+    const unoui_draw *d = t->draw ? t->draw : &unoui_default_draw;
+    tabs_lay L;
+    int i;
+    if (!m || !m->labels || m->n <= 0) return;
+    if (!(m->flags & UI_TF_ANY)) {          /* a plain strip belongs to the theme */
+        PICK(tabs)(t, r, (const char **)m->labels, m->n, m->sel, 0);
+        return;
+    }
+    L = lay_tabs(t, r, m);
+    fb_fill_rect(r.x, r.y, r.w, r.h, t->pal.face);
+    fb_hline(r.x, r.y + r.h - 1, r.w, t->pal.dark);
+
+    for (i = L.first; i < L.first + L.nvis; i++) {
+        unoui_rect q = unoui_tab_rect(t, r, m, i), cbr;
+        int on = (i == m->sel), hot = (m->hot == i);
+        int top = on ? q.y : q.y + 2;
+        int h   = r.y + r.h - top - (on ? 0 : 1);
+        char lbl[48];
+        if (q.w <= 0) continue;
+        fb_fill_rect(q.x, top, q.w, h,
+                     on ? t->pal.win_bg : (hot ? t->pal.light : t->pal.face));
+        fb_hline(q.x, top, q.w, t->pal.dark);
+        fb_vline(q.x, top, h, t->pal.light);
+        fb_vline(q.x + q.w - 1, top, h, t->pal.shadow);
+        if (on) {                            /* the active underline */
+            fb_hline(q.x, r.y + r.h - 2, q.w, t->pal.accent);
+            fb_hline(q.x, r.y + r.h - 1, q.w, t->pal.accent);
+        }
+        fit_label(m->labels[i], q.w - 12 - (L.cb ? L.cb + 4 : 0), lbl, (int)sizeof lbl);
+        fb_text(q.x + 6, top + (h - fb_text_h()) / 2, lbl,
+                on ? t->pal.text : t->pal.text_dim, -1);
+
+        cbr = unoui_tab_close_rect(t, r, m, i);
+        if (cbr.w > 0) {
+            fb_px c = (hot && m->hot_part == UI_TAB_CLOSE)
+                      ? t->pal.accent : t->pal.text_dim;
+            int half = cbr.w / 2, k;
+            for (k = -half + 1; k <= half - 1; k++) {
+                fb_pixel(cbr.x + half + k, cbr.y + half + k, c);
+                fb_pixel(cbr.x + half + k, cbr.y + half - k, c);
+            }
+        }
+    }
+
+    if (L.plus.w > 0) {
+        unoui_rect b = L.plus;
+        draw_ctrl_box(t, b, m->hot_part == UI_TAB_PLUS);
+        fb_hline(b.x + 4, b.y + b.h / 2, b.w - 8, t->pal.text);
+        fb_vline(b.x + b.w / 2, b.y + 4, b.h - 8, t->pal.text);
+    }
+    if (L.over.w > 0) {
+        unoui_rect b = L.over;
+        int tw = fb_text_w(">>");
+        draw_ctrl_box(t, b, m->hot_part == UI_TAB_OVER);
+        fb_text(b.x + (b.w - tw) / 2, b.y + (b.h - fb_text_h()) / 2, ">>",
+                t->pal.text, -1);
+    }
+}
+
+int unoui_tabs_hit(const unoui_theme *t, unoui_rect r, const unoui_tabs_model *m,
+                   int x, int y, int *which)
+{
+    tabs_lay L;
+    int i;
+    if (which) *which = -1;
+    if (!m || !m->labels || m->n <= 0) return UI_TAB_NONE;
+    if (x < r.x || x >= r.x + r.w || y < r.y || y >= r.y + r.h) return UI_TAB_NONE;
+    L = lay_tabs(t, r, m);
+    if (L.over.w > 0 && x >= L.over.x && x < L.over.x + L.over.w) return UI_TAB_OVER;
+    if (L.plus.w > 0 && x >= L.plus.x && x < L.plus.x + L.plus.w) return UI_TAB_PLUS;
+    for (i = L.first; i < L.first + L.nvis; i++) {
+        unoui_rect q = unoui_tab_rect(t, r, m, i), c;
+        if (q.w <= 0 || x < q.x || x >= q.x + q.w) continue;
+        if (which) *which = i;
+        c = unoui_tab_close_rect(t, r, m, i);
+        if (c.w > 0 && x >= c.x && x < c.x + c.w && y >= c.y && y < c.y + c.h)
+            return UI_TAB_CLOSE;
+        return UI_TAB_SEL;
+    }
+    return UI_TAB_NONE;
+}
+
 static void draw_one(const unoui_draw *d, const unoui_theme *t,
                      const unoui_window *win, unoui_widget *w, int eff, int menuopen)
 {
@@ -965,7 +1252,14 @@ static void draw_one(const unoui_draw *d, const unoui_theme *t,
     case UI_DROPDOWN: PICK(dropdown)(t, r,
                           (w->sel >= 0 && w->sel < w->nitems) ? w->items[w->sel] : "",
                           eff); break;
-    case UI_TABS:     PICK(tabs)(t, r, w->items, w->nitems, w->sel, eff); break;
+    case UI_TABS: {   /* `value` is the first visible tab, as a list's is its top */
+        unoui_tabs_model tm;
+        unoui_tabs_model_of(w, &tm);
+        w->value = unoui_tabs_reveal(t, r, &tm, -1);
+        tm.first = w->value;
+        unoui_tabs_draw(t, r, &tm);
+        break;
+    }
     case UI_MENUBAR:  PICK(menubar)(t, r, w->menus, w->nmenus, menuopen, -1); break;
     case UI_LIST:     w->value = unoui_list_reveal(r, w->nitems,
                           (w->flags & UI_WF_LIST_REVEAL) ? w->sel : -1, w->value);
