@@ -3217,3 +3217,75 @@ BearSSL's curve25519 code does not help much because it is Montgomery-ladder
 X25519 with no exported field arithmetic. It is being written from scratch in
 phase `ssh-a` against RFC 8032 vectors, and once it lands, anything else in the
 tree that wants Ed25519 signatures can have them.
+
+---
+
+## 2026-07-31 - LANDED (toolkits lane): tabs-a, the tabbed-document control
+
+`docs/SSH-CLIENT-SPEC.md` §3, the first of the three UI-lane phases. The other
+two (`tabs-b` MDI, `tabs-c` the browser refactor) are untouched, as is the whole
+unossh lane.
+
+**What landed.** `UI_TABS` keeps its old job and gains a second one. With no
+flag it is the same strip it has always been; with `UI_TF_CLOSE` / `UI_TF_PLUS`
+/ `UI_TF_ELASTIC` / `UI_TF_OVERFLOW` it grows per-tab close boxes, a trailing
+"+", equal widths, and a ">>" once the tabs stop fitting. New public surface:
+`unoui_tabs_model`, `unoui_tabs_model_of`, `unoui_tabs_h`, `unoui_tabs_visible`,
+`unoui_tabs_maxfirst`, `unoui_tabs_reveal`, `unoui_tab_rect`,
+`unoui_tab_close_rect`, `unoui_tabs_plus_rect`, `unoui_tabs_over_rect`,
+`unoui_tabs_draw`, `unoui_tabs_hit`, plus `UI_ACT_TABCLOSE` / `UI_ACT_TABNEW`
+on the same contract as `UI_ACT_CLOSE`.
+
+**The point of the phase was the geometry split, not the affordances.** The
+painter (`unoui.c`) and the hit test (`unoui_input.c`) each used to re-derive
+`fb_text_w(items[i]) + 16` independently, so they could disagree and nothing in
+the tree would have noticed. There is now ONE layout pass; every rect, the
+painter and the hit test all read it, and `tools/tabs_test.sh` sweeps every
+pixel column of the strip asserting that anything reporting a hit lies inside
+the rect the painter would have drawn for that tab. That sweep is the durable
+part - the close boxes are just what made it necessary.
+
+**Nothing that does not set a flag can tell the difference.** A zero-flag model
+is handed straight to the theme's own `tabs` painter, so the Control Panel
+(`pc64_uui.c:530`, the only in-tree consumer, flagless) is on its original code
+path, and the first block of assertions in `tabs_test.c` pins that down - tab
+width is still text + 16, tabs still abut, no close box, no scrolling.
+
+**Three findings other lanes want.**
+
+1. **A state signalled only by `accent` does not survive every theme.** Checked
+   by zooming the rendered frames, not assumed: on the 1-bit Mac Plus palette
+   the active underline collapses into the baseline and vanishes. The selected
+   tab still reads, but only because it also rises 2 px and merges with the
+   baseline. Anything in `tabs-b` or WM follow-ups that marks state with the
+   accent alone needs a geometric cue beside it.
+2. **`fb_text()`'s last argument is the BACKGROUND colour, not a width clip.**
+   `d_tabs` passes `-1` and it reads like a max width. There is no clipping
+   primitive; a painter that needs to fit a label into a box has to measure and
+   truncate itself. Cost a wrong first draft here.
+3. **The unoui host contact sheet covers eight themes, not ten.**
+   `unoui/build.sh`'s `THEMES` list omits `themes/theme_aurora.c`, which defines
+   both Aurora Light and Aurora Dark - the pc64 shell's own defaults. So the
+   host gate never renders the two themes users actually see. Not fixed here
+   (it is not this phase's file), but anyone writing a "renders correctly under
+   every theme" gate should know the host build cannot currently prove it.
+
+**Deliberately not done:** the new geometry functions are NOT added to
+`pc64_modload.c`'s `KX()` exports. `unoui_list_*` is exported and the symmetry
+argues for it, but no `.UNO` module hosts tabs today and `tabs-c`'s consumer
+(the browser) is in-kernel. It is a one-line `seam:` append whenever a module
+needs it. Also not done: per-tab hover on the widget path - see correction 5 in
+the spec, canvas hosts pass their own hover and the browser already tracks it.
+
+**Gates** (all green): `unoui/build.sh` (contact sheet + a storyboard that now
+runs to 20 frames, four of them the new control, one of those re-skinned to the
+1-bit theme while the window is still visible); `tools/tabs_test.sh` PASS, 42
+checks; `tools/list_test.sh` re-run as a regression, PASS; `pc64/build.sh` green
+at `UNO_DEBUG=0` **and** `UNO_DEBUG=1`. No new compiler warnings - the one
+`-Wmisleading-indentation` in `draw_one`'s `UI_ICON` case is pre-existing and
+was confirmed present on unmodified master before claiming so.
+
+Corrections 1-8 are in the spec's §13. Two of them are worth `tabs-b` reading
+before it starts: the overflow reserve must be decided before the scroll clamp
+or the layout oscillates (4), and zero-initialised state must reproduce today's
+behaviour exactly, which is what made the flagless path free (1, 2).
