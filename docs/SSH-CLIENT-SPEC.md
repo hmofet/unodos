@@ -71,8 +71,8 @@ The two lanes run concurrently. Within a lane, order is strict.
 | `tabs-a` | toolkits | **DONE** - `UI_TABS` becomes a real tabbed-document control + public geometry split |
 | `tabs-b` | toolkits | **DONE** - `UI_MDI` container widget |
 | `tabs-c` | toolkits | **DONE** - browser refactored onto `tabs-a` |
-| `ssh-a` | unossh | Ed25519, host-tested against RFC 8032 vectors |
-| `ssh-b` | unossh | transport: version exchange, `curve25519-sha256` KEX, `aes256-ctr` + `hmac-sha2-256`, rekey |
+| `ssh-a` | unossh | **DONE** - Ed25519, host-tested against RFC 8032 vectors |
+| `ssh-b` | unossh | **PART DONE** - wire format + KEX arithmetic landed and gated; the connection state machine is still to write |
 | `ssh-c` | unossh | userauth (publickey, password) + session channel, exec and shell |
 | `ssh-d` | unossh | key store + session store, persistent |
 | `ssh-e` | unossh | the unoautomate verb |
