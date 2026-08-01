@@ -7,6 +7,59 @@ is the on-metal follow-up to run **next time a stick write + boot is possible**.
 
 Newest at the top. Check items off as they're confirmed on the X1.
 
+## Newest, USB/HID input: held buttons and modifiers (2026-07-31)
+
+Two poll-path fixes, both QEMU-gated (`harness.py usbhid_drag`,
+`harness.py usbhid_mods`, on an eager
+`UNO_EXTRA="-DUNO_USBHID_TEST -DUNO_NO_DETACH -DUNO_DBGCON" ./build.sh` build,
+which must never ship). QEMU's HID devices are the simplest possible boot
+devices - one interface, no receiver, no composite descriptors - so what metal
+adds here is a real mouse's report cadence and a real dongle's shape. The USB
+section of USB.md ("Boot HID reports on CHANGE") is the reference.
+
+**ZimaBlade** (single USB port, so everything is behind a hub - the box that
+found the last three USB faults):
+
+- [ ] **A USB drag holds.** With the Razer Cobra behind the hub: press on a
+      title bar, hold still for a second, then drag and release. The window
+      should follow from the first movement and stay where it was dropped.
+      Before the latch it committed before it started; watch specifically for
+      the window **maximizing** mid-drag, which is what repeated presses on a
+      title bar read as (a double click) and is the clearest sign the button is
+      still flickering on this mouse.
+- [ ] **Alt from the Logitech receiver's keyboard.** Hold Alt, tap Tab: the
+      switcher overlay should appear and stay up while Alt is held, stepping on
+      each Tab, and commit when Alt is released. Then Alt+Left/Right snap,
+      Alt+D, and the Win key. Two distinguishable failures: the overlay appears
+      but commits instantly = the live level is not being held; Alt+Tab does
+      nothing while F2 still opens the switcher = the per-press mask is not
+      reaching the key ring.
+- [ ] **Two mice at once** (the Razer and the receiver's mouse). Hold a button
+      on one and move the other: the held button must not be cleared. The latch
+      is per endpoint precisely so it cannot be, and a single shared one would
+      show up here as a drag that dies whenever the other mouse moves. Nothing
+      in QEMU exercises this.
+- [ ] **Is the pointer still "floaty"?** Worth a fresh read, but read the
+      CORRECTION entry in UNOAUTOMATE-REQUESTS.md first: the "1000 Hz mouse
+      against a 60 fps loop" explanation was **retracted** on a three-build
+      differential, so the floatiness note in the phase D ZimaBlade entry below
+      rests on an explanation that no longer stands. Nothing in this pass
+      changed how many transfers are in flight. What did change is that a held
+      button no longer flickers, and a drag that kept committing and restarting
+      under the hand is easy to describe as floaty - so this is worth
+      re-judging, not assuming.
+
+**Surface Laptop Go** (I2C-HID, which has **no QEMU model at all**):
+
+- [ ] **Alt on the built-in keyboard.** The I2C keyboard shares the
+      `hid_kbd.c` translator, so it gained the same modifier mask in the same
+      change - but that is inference from shared code, not a measurement, and
+      it is the only part of this work nothing has run. Try Alt+Tab and
+      Alt+arrow. If Alt works from a USB keyboard on this machine and not from
+      the built-in one, suspect the report offset: `i2c_hid.c` hands
+      `rep + base` to `hid_kbd_report()`, and a wrong `base` shifts the
+      modifier byte out from under it.
+
 ## REGRESSION FIXED (unverified on metal), boot froze at the third bar
 
 The first cut of the trackpad work **hung both the Carbon and the Surface at
@@ -133,10 +186,16 @@ machine that showed `0 DW ctrl / 3 bars`):
 **USB HID** (external keyboards/mice + docks; build `-DUNO_XHCI`):
 - [ ] Plug a USB keyboard/mouse, boot a detached-capable machine; after detach
       they should work (USB HID is brought up post-ExitBootServices). QEMU
-      confirmed enumeration + claim (`usbhid: claimed kbd=1 mouse=1`) but can't
-      route injected keys to the emulated usb-kbd, so **real USB typing is
-      metal-first**. For an attached-mode smoke test: `-DUNO_XHCI
-      -DUNO_USBHID_TEST -DUNO_NO_DETACH` brings USB HID up eagerly.
+      confirms enumeration + claim (`usbhid: claimed kbd=1 mouse=1`). For an
+      attached-mode smoke test: `-DUNO_XHCI -DUNO_USBHID_TEST -DUNO_NO_DETACH`
+      brings USB HID up eagerly.
+      **Correction (2026-07-31): QEMU CAN route keys to the emulated usb-kbd.**
+      This bullet used to say it could not and that real USB typing was
+      metal-first, which is what kept the whole USB input path off the scripted
+      gates. An untargeted `input-send-event` reaches the guest's native USB
+      keyboard; `harness.py usbhid_mods` now types and Alt-Tabs through it. So
+      keyboard *routing* is QEMU-covered, and what stays metal-first is real
+      hardware behaviour: report cadence, receivers, hubs, composite devices.
 
 **Surface full OSK removal**: every piece now exists, input takeover +
 native **NVMe** (`nvme.c`) + native **SDHCI/eMMC** (`sdhci.c`, this Surface
