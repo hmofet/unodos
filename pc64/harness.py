@@ -16,6 +16,10 @@ into shots/*.png at each step.
   python3 harness.py wm_d       WM phase D gate (Alt-Tab, snap, show desktop).
   python3 harness.py wm_e       WM phase E gate (virtual desktops: the switch,
                                 the taskbar pager, move-and-follow, restore).
+  python3 harness.py usbhid_drag  usb stack gate: a HELD button on a native USB
+                                mouse survives the frames with no report, so a
+                                drag holds (needs its own eager build - see the
+                                scenario's docstring).
 """
 import json, os, socket, subprocess, sys, time
 
@@ -412,13 +416,15 @@ class Mouse:
       what the M4 scenario has always used): this OVMF carries no USB pointer
       driver, so the guest never sees the tablet. Every scripted click in that
       scenario goes nowhere, silently - which is what alive() exists to catch.
-    * native USB HID + usb-mouse (-DUNO_USBHID_TEST): enumerates, and the cursor
-      tracks, but a HELD button does not survive. A boot-protocol mouse reports
-      only on change, and uno_usb_hid_mouse_poll() returns 0 for the button on
-      every frame with no report, so the shell sees press-release-press instead
-      of a hold and the drag commits before it starts. The PS/2 path latches the
-      button (`gMBtn`, pc64_native.c) and does not have this bug; a request to
-      the usb lane to latch the USB one is filed in UNOAUTOMATE-REQUESTS.md.
+    * native USB HID + usb-mouse (-DUNO_USBHID_TEST): enumerates, the cursor
+      tracks, and since 2026-07-31 a HELD button survives too - the usb lane
+      latches the button mask per endpoint, as PS/2 always has (`gMBtn`,
+      pc64_native.c). It was the counter-example here until then: a boot mouse
+      reports only on change, and the driver read every quiet poll as "button
+      released", so the drag committed before it started. The usbhid_drag
+      scenario below is the gate for that, and drives THIS class against a
+      usb-mouse. It stays a separate scenario rather than the wm default
+      because a usb-mouse build is an eager-xHCI build, which must never ship.
     * PS/2, after detach: latched buttons, real drags. Used here.
 
     Deltas are guest framebuffer pixels 1:1 (poll_pointer adds them straight to
@@ -1918,6 +1924,129 @@ def wm_f():
     return 0 if not fails else 1
 
 
+def usbhid_drag():
+    """Gate (usb stack): a HELD button on a NATIVE USB mouse survives the frames
+    in between reports, so a drag with a USB mouse holds.
+
+    Build the eager native-USB image and run it against a real usb-mouse:
+
+        UNO_EXTRA="-DUNO_USBHID_TEST -DUNO_NO_DETACH -DUNO_DBGCON" ./build.sh
+        python3 harness.py usbhid_drag
+
+    -DUNO_USBHID_TEST implies UNO_XHCI_EAGER, which is what lets the native
+    stack take the controller while the firmware is still alive - the only way
+    QEMU can exercise this path (in production USB HID comes up at detach).
+    -DUNO_NO_DETACH keeps the machine attached, so the PS/2 mouse block in
+    poll_pointer() stays dead and the ONLY pointer under test is the USB one.
+    -DUNO_DBGCON puts usbhid's own claim line in the debugcon log, which is how
+    this scenario proves the native driver really bound the mouse rather than
+    some firmware path moving the cursor for it.
+
+    NO usb-kbd: routing QMP keys to an emulated USB keyboard is a QEMU limit
+    (INPUT.md), and binding one would make poll_keyboard() stop reading
+    firmware ConIn - i.e. it would cost this scenario the Start menu.
+
+    What it discriminates. A boot-protocol mouse reports on CHANGE. The driver
+    used to write *btn = 0 on every poll with no report, so a button held still
+    read as released on the very next frame; the DWELL below (press, then a
+    beat with no motion at all) is where that happens, and the drag that
+    follows it is what a user actually loses. Run against the pre-latch driver
+    the window ends up maximized instead of moved - the shell sees the
+    press-release-press as a title-bar double click."""
+    fails = []
+
+    def check(name, ok, detail=""):
+        print("  %-46s %s %s" % (name, "PASS" if ok else "FAIL", detail))
+        if not ok:
+            fails.append(name)
+
+    quiet_debug_cfg()                          # no-op on a production build
+    log = "build/usbhid_drag.log"
+    qemu, q = start_qemu(log=log, pointer="mouse")
+    try:
+        print("usbhid_drag: boot")
+        time.sleep(18)
+        probe_screen(q)
+        band = noise_bands()
+
+        claimed = ""
+        if os.path.exists(log):
+            with open(log, "r", errors="replace") as f:
+                for line in f:
+                    if line.startswith("usbhid: claimed"):
+                        claimed = line.strip()
+        check("the native USB driver claimed a mouse",
+              "mouse=" in claimed and not claimed.endswith("mouse=0"), claimed)
+
+        m = Mouse(q)
+        check("the guest tracks the USB mouse", m.alive(),
+              "(needs -DUNO_USBHID_TEST and -device usb-mouse)")
+        if fails:
+            raise SystemExit("usbhid_drag: no native USB pointer - nothing to drag")
+        m.park()
+        q.cmd("send-key", keys=[{"type": "qcode", "data": "ctrl"},
+                                {"type": "qcode", "data": "w"}])
+        time.sleep(1.5)                        # the Control Panel has focus at boot
+        grab(q, "usbhid_00_desktop")
+
+        start_app(q, 1, wait=2.5)              # menu order = app order: Editor
+        m.park()
+        grab(q, "usbhid_01_editor_open")
+        box = diff_bbox("usbhid_00_desktop", "usbhid_01_editor_open", ignore=band)
+        check("Editor window opened",
+              box is not None and box[2] > 100 and box[3] > 80, str(box))
+        if box is None:
+            raise SystemExit("usbhid_drag: no Editor window - nothing to drag")
+        title_in = win_title_y("usbhid_00_desktop", "usbhid_01_editor_open", box)
+
+        # ---- press, DWELL, move, release ------------------------------------
+        cx, tb_y = box[0] + box[2] // 2, box[1] + title_in
+        dx, steps = 200, 10
+        m.to(cx, tb_y)
+        m.btn(True)
+        time.sleep(0.8)                        # ~50 frames, ONE report: the hold
+        grab(q, "usbhid_02_held")
+        held = diff_bbox("usbhid_00_desktop", "usbhid_02_held", ignore=band)
+        check("holding the button still moved nothing",
+              held is not None and abs(held[0] - box[0]) <= 8 and
+              abs(held[2] - box[2]) <= 24, "%s vs %s" % (held, box))
+
+        for i in range(1, steps // 2 + 1):
+            m.to(cx + i * (dx // steps), tb_y)
+        grab(q, "usbhid_03_mid_drag")          # button STILL DOWN
+        midbox = diff_bbox("usbhid_00_desktop", "usbhid_03_mid_drag", ignore=band)
+        for i in range(steps // 2 + 1, steps + 1):
+            m.to(cx + i * (dx // steps), tb_y)
+        m.btn(False)
+        m.park()
+        grab(q, "usbhid_04_dropped")
+        drop = diff_bbox("usbhid_00_desktop", "usbhid_04_dropped", ignore=band)
+
+        half = dx // 2
+        check("the window moved DURING the drag",
+              midbox is not None and
+              half * 0.6 <= midbox[0] - box[0] <= half * 1.4,
+              "%s vs %s" % (midbox, box))
+        check("the drop committed the whole distance",
+              drop is not None and dx * 0.85 <= drop[0] - box[0] <= dx * 1.15,
+              str(drop))
+        # A button that flickers reads as repeated clicks on the title bar,
+        # which is the phase-A double click: the window maximizes instead of
+        # moving. Assert on the TOP EDGE and the height, not the width - a
+        # window dragged right runs off the screen and its changed region is
+        # clipped there, so the width legitimately shrinks. A maximize moves
+        # the top to the work area's and fills its height, which neither a
+        # move nor the clipping can imitate.
+        check("the drag did not turn into a double click",
+              drop is not None and abs(drop[1] - box[1]) <= 8 and
+              abs(drop[3] - box[3]) <= 24, "%s vs %s" % (drop, box))
+    finally:
+        stop_qemu(qemu, q)
+
+    print("usbhid_drag: %s" % ("PASS" if not fails else "FAIL " + ", ".join(fails)))
+    return 0 if not fails else 1
+
+
 def qemu_argv(extra=None, log="build/ovmf.log", pointer="tablet"):
     # Storage: a vvfat view of build/esp by default (no image build needed).
     # vvfat's read-write mode corrupts multi-cluster WRITES, though, so tests
@@ -1996,6 +2125,9 @@ def main():
         return wm_e()                          # ditto: it asserts on a reboot
     if len(sys.argv) > 1 and sys.argv[1] == "wm_f":
         return wm_f()                          # ditto: it owns its own boot
+    if len(sys.argv) > 1 and sys.argv[1] == "usbhid_drag":
+        return usbhid_drag()                   # ditto: it needs its own QEMU
+                                               # topology (-device usb-mouse)
     subprocess.run(["cp", OVMF_VARS, "build/vars.fd"], check=True)
     if os.path.exists(QMP_SOCK):
         os.remove(QMP_SOCK)
