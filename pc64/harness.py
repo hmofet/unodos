@@ -2491,6 +2491,151 @@ def ssh_transport():
     return 1 if fails else 0
 
 
+SSHD_DIR = "/tmp/unossh-test"
+
+
+def _sshd_start():
+    """Stand up a THROWAWAY sshd for the ssh-c gate and return (proc, user).
+
+    Everything about it is disposable and isolated: its own host key, its own
+    authorized_keys holding only the repo's test key, its own config, and it is
+    killed when the scenario ends. It touches nothing in ~/.ssh or /etc/ssh.
+
+    It listens on port 22 INSIDE WSL, which is free because the distro's own ssh
+    service is not running - and QEMU runs in WSL, so the guest reaches it at
+    10.0.2.2 with no NAT hop and no LAN.
+
+    The authorized_keys line is produced by tools/sshkeygen.c, which derives the
+    public half with OUR ed25519.c. That makes the gate an interop check at both
+    ends of one key: OpenSSH has to accept a key we generated, and then verify a
+    signature we made with the matching seed."""
+    sh = lambda cmd: subprocess.run(["sh", "-c", cmd], check=False,
+                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    # A dedicated throwaway account, removed again in _sshd_stop. The obvious
+    # thing - log in as the invoking user - does not work on a stock WSL
+    # install: that account usually has no password, so its shadow entry is `!`
+    # and sshd refuses it with "account is locked" no matter how good the key
+    # is. `-p *` means "no password login" WITHOUT locking, which is exactly
+    # what a key-only test account wants.
+    user = "unosshtest"
+    sh("sudo userdel -r %s 2>/dev/null" % user)
+    sh("sudo useradd -m -s /bin/sh -p '*' %s" % user)
+    sh("rm -rf %s && mkdir -p %s" % (SSHD_DIR, SSHD_DIR))
+    sh("ssh-keygen -q -t ed25519 -N '' -f %s/hostkey" % SSHD_DIR)
+    # our own key tool writes the line the server will trust
+    subprocess.run(["sh", "-c",
+                    "cc -O1 -Ibearssl/inc -Ibearssl/src -o build/sshkeygen tools/sshkeygen.c ed25519.c "
+                    "bearssl/src/hash/sha2big.c bearssl/src/codec/dec64be.c "
+                    "bearssl/src/codec/enc64be.c"], check=True)
+    key = subprocess.check_output(["./build/sshkeygen"]).decode().strip()
+    with open("/tmp/unossh-authkeys", "w") as f:
+        f.write(key + "\n")
+    sh("cp /tmp/unossh-authkeys %s/authorized_keys && chmod 644 %s/authorized_keys"
+       % (SSHD_DIR, SSHD_DIR))
+    with open("/tmp/unossh-sshd_config", "w") as f:
+        f.write(
+            "Port 2222\nListenAddress 0.0.0.0\n"
+            "HostKey %s/hostkey\n"
+            "AuthorizedKeysFile %s/authorized_keys\n"
+            "StrictModes no\nUsePAM no\n"
+            "PasswordAuthentication no\nKbdInteractiveAuthentication no\n"
+            "PermitRootLogin no\nPidFile %s/sshd.pid\nLogLevel DEBUG3\n"
+            % (SSHD_DIR, SSHD_DIR, SSHD_DIR))
+    sh("sudo cp /tmp/unossh-sshd_config %s/sshd_config" % SSHD_DIR)
+    sh("sudo mkdir -p /run/sshd")
+    sh("sudo pkill -f 'sshd -D -f %s' 2>/dev/null" % SSHD_DIR)
+    proc = subprocess.Popen(
+        ["sh", "-c", "sudo /usr/sbin/sshd -D -f %s/sshd_config -E %s/sshd.log"
+         % (SSHD_DIR, SSHD_DIR)])
+    time.sleep(2)
+    return proc, user
+
+
+def _sshd_stop(proc):
+    subprocess.run(["sh", "-c", "sudo pkill -f 'sshd -D -f %s' 2>/dev/null" % SSHD_DIR],
+                   check=False)
+    subprocess.run(["sh", "-c", "sudo userdel -r unosshtest 2>/dev/null"], check=False)
+    try:
+        proc.terminate()
+        proc.wait(timeout=5)
+    except Exception:
+        pass
+
+
+def ssh_exec():
+    """Gate for ssh-c: authenticate with a public key and run a command.
+
+        UNO_DEBUG=1 UNO_DBGCON=1 ./build.sh && python3 harness.py ssh_exec
+
+    Exercises the whole client: transport, ssh-userauth, publickey with an
+    Ed25519 signature over the session id, a session channel, exec, the data
+    stream with its flow control, and exit-status. The command is
+    `echo unodos-ssh-ok; exit 7`, so BOTH halves are asserted - a client that
+    reads the output but loses the exit status, or reports a status without
+    ever seeing the data, fails here."""
+    fails = []
+
+    def check(name, ok, detail=""):
+        print("  %-52s %s %s" % (name, "PASS" if ok else "FAIL", detail))
+        if not ok:
+            fails.append(name)
+
+    log = "build/ssh_exec.log"
+    sshd, user = _sshd_start()
+    try:
+        with open("build/esp/DEBUG.CFG", "w") as f:
+            f.write("spec nostress\n")
+        with open("build/esp/SSHTEST.CFG", "w") as f:
+            f.write("10.0.2.2 %s 2222\n" % user)  # qemu runs in WSL; so does sshd
+        print("ssh_exec: throwaway sshd on WSL:2222, user=%s" % user)
+        subprocess.run([sys.executable, "tools/mkuefi.py"], check=True)
+        os.environ["UNO_DISK"] = "build/unodos-uefi.img"
+        qemu, q = start_qemu(log=log, pointer="none",
+                             extra=["-netdev", "user,id=n0",
+                                    "-device", "e1000,netdev=n0"])
+        try:
+            print("ssh_exec: boot")
+            deadline = time.time() + 180
+            text = ""
+            while time.time() < deadline:
+                time.sleep(5)
+                try:
+                    with open(log, "rb") as f:
+                        text = f.read().decode("latin-1")
+                except IOError:
+                    text = ""
+                if "sshexec: RESULT" in text:
+                    break
+            for line in text.splitlines():
+                if line.startswith("sshexec:"):
+                    print("    | " + line.strip())
+
+            check("the test ran", "sshexec: begin" in text)
+            check("the transport came up", "sshexec: transport up" in text)
+            check("the public key was accepted", "sshexec: authenticated" in text)
+            check("the command's output came back",
+                  "sshexec: output=unodos-ssh-ok" in text)
+            check("the exit status came back", "sshexec: exit=7" in text)
+            check("the gate passed", "sshexec: RESULT PASS" in text)
+            if "sshexec: auth:" in text or "sshexec: exec:" in text:
+                print("    -- server log (last lines) --")
+                try:
+                    with open(SSHD_DIR + "/sshd.log") as f:
+                        for line in f.read().splitlines()[-12:]:
+                            print("    ss " + line)
+                except IOError:
+                    pass
+        finally:
+            stop_qemu(qemu, q)
+    finally:
+        _sshd_stop(sshd)
+    if fails:
+        print("ssh_exec: %d FAILED - %s" % (len(fails), ", ".join(fails)))
+    else:
+        print("ssh_exec: all checks passed")
+    return 1 if fails else 0
+
+
 def start_qemu(extra=None, log="build/ovmf.log", pointer="tablet"):
     """Boot one QEMU and connect QMP. Returns (proc, Qmp). A scenario that needs
     a REBOOT (session restore) calls this twice; build/esp is the same vvfat
@@ -2551,6 +2696,8 @@ def main():
         return browser_tabs()                  # ditto: pointer-driven, own boot
     if len(sys.argv) > 1 and sys.argv[1] == "ssh_transport":
         return ssh_transport()                 # ditto: it owns its own boot
+    if len(sys.argv) > 1 and sys.argv[1] == "ssh_exec":
+        return ssh_exec()                      # ditto: it owns its own sshd
     subprocess.run(["cp", OVMF_VARS, "build/vars.fd"], check=True)
     if os.path.exists(QMP_SOCK):
         os.remove(QMP_SOCK)
