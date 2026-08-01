@@ -91,8 +91,7 @@ build/unonet_test.exe
 # anchored to this file's directory, so the bare build/* rules above do NOT
 # reach a subdirectory's build/. The rendered PNGs in unoui/build/ ARE
 # committed evidence and stay tracked.
-unoui/build/list_test
-unoui/build/tabs_test
+unoui/build/*_test
 
 # Raw QEMU/emulator screendumps. Every capture path writes a .ppm and then
 # converts it to .png; the .ppm is a bulky intermediate (~3 MB each) with no
