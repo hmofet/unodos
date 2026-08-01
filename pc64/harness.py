@@ -20,6 +20,8 @@ into shots/*.png at each step.
                                 mouse survives the frames with no report, so a
                                 drag holds (needs its own eager build - see the
                                 scenario's docstring).
+  python3 harness.py usbhid_mods  usb stack gate: the HID modifier byte reaches
+                                uno_usb_hid_mods() as a live level (same build).
 """
 import json, os, socket, subprocess, sys, time
 
@@ -2047,6 +2049,95 @@ def usbhid_drag():
     return 0 if not fails else 1
 
 
+def usbhid_mods():
+    """Gate (usb stack): the HID boot report's modifier byte, as a LIVE level.
+
+        UNO_EXTRA="-DUNO_USBHID_TEST -DUNO_NO_DETACH -DUNO_DBGCON" ./build.sh
+        python3 harness.py usbhid_mods
+
+    Reads usbhid's own `usbhid: mods=N` debugcon line, which it emits ONLY when
+    uno_usb_hid_mods() changes value. That makes the log a transition list, and
+    the two things worth asserting both fall out of it: the right bits appear
+    for each key, and a modifier held down for ~70 shell frames produces ONE
+    line, not a flicker back to 0. Held state is what uno_pc64_mods() promises
+    its callers - the window manager commits Alt-Tab on Alt going UP.
+
+    QEMU DOES deliver keys to an emulated usb-kbd, untargeted. INPUT.md's note
+    that it cannot is what kept this path metal-only; measured here 2026-07-31
+    with the guest logging mods=4 for an `alt` press and mods=0 for its release.
+    (`input-send-event` with a `device` argument is still no good: that field
+    names a CONSOLE, and passing an input device's id aborts QEMU outright.)
+
+    What it does NOT cover: uno_pc64_mods()'s source selection, one clause in
+    uefi_main.c. Nothing in the shell observes modifiers except the Alt-Tab
+    release edge, and reaching that needs the raw key ring to carry ALT on the
+    key event itself, which the HID emit callback does not do yet (it carries a
+    bare ctrl flag). See the 2026-07-31 usb-lane entry in UNOAUTOMATE-REQUESTS.md."""
+    fails = []
+
+    def check(name, ok, detail=""):
+        print("  %-46s %s %s" % (name, "PASS" if ok else "FAIL", detail))
+        if not ok:
+            fails.append(name)
+
+    # (qcode, expected UI_MOD_* bits, what it proves)
+    PRESSES = [
+        ("alt",     4, "Alt"),
+        ("alt_r",   4, "right Alt folds onto the same bit"),
+        ("meta_l",  8, "the GUI/Windows key"),
+        ("shift_r", 1, "right Shift folds onto the same bit"),
+        ("ctrl",    2, "Ctrl"),
+    ]
+    log = "build/usbhid_mods.log"
+    quiet_debug_cfg()                          # no-op on a production build
+    qemu, q = start_qemu(extra=["-device", "usb-kbd,id=ukbd"], log=log,
+                         pointer="none")
+    try:
+        print("usbhid_mods: boot")
+        time.sleep(18)
+        for code, _bits, _why in PRESSES:
+            key_evt(q, code, True)
+            time.sleep(1.2)                    # ~70 frames, ONE report
+            key_evt(q, code, False)
+            time.sleep(0.6)
+        # Two at once, released one at a time: the mask ORs, and letting one go
+        # leaves the other held. A driver that treated the byte as an edge, or
+        # that rebuilt it from key-down events, gets this wrong.
+        key_evt(q, "alt", True);   time.sleep(0.8)
+        key_evt(q, "shift", True); time.sleep(0.8)
+        key_evt(q, "shift", False); time.sleep(0.8)
+        key_evt(q, "alt", False);  time.sleep(0.8)
+    finally:
+        stop_qemu(qemu, q)
+
+    claimed, seq = "", []
+    with open(log, "r", errors="replace") as f:
+        for line in f:
+            line = line.strip()
+            if line.startswith("usbhid: claimed"):
+                claimed = line
+            elif line.startswith("usbhid: mods="):
+                seq.append(int(line.split("=", 1)[1]))
+    print("  transitions: %s" % seq)
+    check("the native USB driver claimed a keyboard",
+          "kbd=0" not in claimed and "kbd=" in claimed, claimed)
+
+    want = [0]
+    for _code, bits, _why in PRESSES:
+        want += [bits, 0]
+    want += [4, 5, 4, 0]                       # Alt, +Shift, -Shift, -Alt
+    check("every press and release is ONE transition, no flicker",
+          seq == want, "%s vs %s" % (seq, want))
+    for i, (code, bits, why) in enumerate(PRESSES):
+        got = seq[1 + i * 2] if len(seq) > 1 + i * 2 else None
+        check("%-8s reports %d (%s)" % (code, bits, why), got == bits, str(got))
+    check("two modifiers OR together and release independently",
+          seq[-4:] == [4, 5, 4, 0], str(seq[-4:]))
+
+    print("usbhid_mods: %s" % ("PASS" if not fails else "FAIL " + ", ".join(fails)))
+    return 0 if not fails else 1
+
+
 def qemu_argv(extra=None, log="build/ovmf.log", pointer="tablet"):
     # Storage: a vvfat view of build/esp by default (no image build needed).
     # vvfat's read-write mode corrupts multi-cluster WRITES, though, so tests
@@ -2128,6 +2219,8 @@ def main():
     if len(sys.argv) > 1 and sys.argv[1] == "usbhid_drag":
         return usbhid_drag()                   # ditto: it needs its own QEMU
                                                # topology (-device usb-mouse)
+    if len(sys.argv) > 1 and sys.argv[1] == "usbhid_mods":
+        return usbhid_mods()                   # ditto (-device usb-kbd)
     subprocess.run(["cp", OVMF_VARS, "build/vars.fd"], check=True)
     if os.path.exists(QMP_SOCK):
         os.remove(QMP_SOCK)
