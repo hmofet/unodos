@@ -1377,6 +1377,11 @@ int uno_pc64_next_key(int *scan, int *uni, int *ctrl)
 static int native_kbd_present(void);          /* fwd (defined with the pollers) */
 int uno_pc64_mods(void)
 {
+    /* A bound USB keyboard is the one poll_keyboard() is reading, and its boot
+     * report carries make AND break for every modifier, so it is authoritative
+     * whether attached or detached - the same standing gLiveMods has on the
+     * firmware path, only with a real release edge. */
+    if (uno_usb_hid_kbd_present()) return uno_usb_hid_mods();
     if (gDetached && !native_kbd_present()) return uno_ps2_mods();
     return gLiveMods;
 }
