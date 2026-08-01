@@ -16,6 +16,9 @@ static const char *g_files[]  = { "boot.sys", "kernel.bin", "unoui.c",
                                   "session.dat", "wallpaper.raw", "todo.txt" };
 static const char *g_format[] = { "Plain text", "Markdown", "RTF", "HTML" };
 static const char *g_tabs[]   = { "Edit", "Files", "About" };
+/* more documents than the narrow Tools window can show at once, so the
+ * storyboard gets the overflow control as well as the close boxes and the "+" */
+static const char *g_docs[]   = { "Draft", "Notes", "Log", "Refs", "Scrap", "Old" };
 
 static const char *m_file[] = { "New", "Open...", "Save", "Quit" };
 static const char *m_edit[] = { "Undo", "Cut", "Copy", "Paste" };
@@ -68,10 +71,25 @@ void demo_app_build(unoui_window *ed, unoui_window *pal)
     w = unoui_add_button(ed, 120, 300, 100, "OK", UI_F_DEFAULT); w->id = ID_OK;
 
     /* ---- palette window (small; demonstrates z-order + dragging) --------- */
-    unoui_window_init(pal, "Tools", 438, 70, 168, 150);
+    unoui_window_init(pal, "Tools", 438, 70, 168, 196);
     unoui_add_group(pal, 0, 0, 144, 78, "Tool");
     unoui_add_radio(pal, 10, 16, "Pen",   1);
     unoui_add_radio(pal, 10, 34, "Fill",  0);
     unoui_add_radio(pal, 10, 52, "Eraser",0);
     w = unoui_add_button(pal, 0, 92, 144, "Apply", UI_F_DEFAULT); w->id = ID_APPLY;
+
+    /* The SAME widget kind as the editor's page tabs above, with the document
+     * flags on: close boxes, a "+", equal widths and a ">>" once they stop
+     * fitting. A strip this narrow overflows immediately, which is the point. */
+    w = unoui_add_tabs(pal, 0, 118, 144, g_docs,
+                       (int)(sizeof g_docs / sizeof g_docs[0]), 0);
+    w->id = ID_DOCTABS;
+    w->flags |= UI_TF_CLOSE | UI_TF_PLUS | UI_TF_ELASTIC | UI_TF_OVERFLOW;
+}
+
+unoui_widget *demo_app_widget(unoui_window *win, int id)
+{
+    int i;
+    for (i = 0; i < win->nw; i++) if (win->w[i].id == id) return &win->w[i];
+    return 0;
 }

@@ -10,6 +10,11 @@ void demo_app_build(unoui_window *editor, unoui_window *palette);
 
 /* widget ids the harness/app can react to */
 enum { ID_OK = 1, ID_CANCEL, ID_BODY, ID_NAME, ID_VOL, ID_COUNT,
-       ID_FORMAT, ID_WRAP, ID_DARK, ID_TABS, ID_FILES, ID_MENU, ID_APPLY };
+       ID_FORMAT, ID_WRAP, ID_DARK, ID_TABS, ID_FILES, ID_MENU, ID_APPLY,
+       ID_DOCTABS };
+
+/* find a built widget by id (the harness drives the document tabs through the
+ * public geometry rather than hard-coded pixels) */
+unoui_widget *demo_app_widget(unoui_window *win, int id);
 
 #endif

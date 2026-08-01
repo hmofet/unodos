@@ -109,6 +109,33 @@ int main(int argc, char **argv)
     ev_down(330, 244); ev_up(330, 244);   /* pick 'Markdown'                   */
     snap(dir, "dropdown choice committed");
 
+    /* document tabs in the Tools window: the SAME UI_TABS kind as the editor's
+     * page tabs above, with the document flags on. Driven through the public
+     * geometry rather than hard-coded pixels, which is both robust across
+     * themes and a working example of what a canvas app does. */
+    {
+        unoui_widget *dt = demo_app_widget(&PAL, ID_DOCTABS);
+        unoui_rect dr = unoui_widget_rect(UI.theme, &PAL, dt), o, t1;
+        unoui_tabs_model dm;
+        unoui_tabs_model_of(dt, &dm);
+        snap(dir, "document tabs: close boxes, + and overflow");
+
+        o = unoui_tabs_over_rect(UI.theme, dr, &dm);
+        click(o.x + o.w / 2, o.y + o.h / 2);
+        snap(dir, "document tabs: scrolled by the overflow control");
+
+        unoui_tabs_model_of(dt, &dm);              /* `first` has moved on */
+        t1 = unoui_tab_rect(UI.theme, dr, &dm, dm.first + 1);
+        click(t1.x + 4, t1.y + t1.h / 2);
+        snap(dir, "document tabs: a scrolled-to tab selected");
+
+        /* the document painter is palette-only, so the theme that can break it
+         * is the 1-bit one - where face, light and accent have nowhere to go */
+        unoui_ui_theme(&UI, &theme_macplus);
+        snap(dir, "document tabs under the 1-bit theme");
+        unoui_ui_theme(&UI, &theme_unodos);
+    }
+
     /* list selection (click 'themes.dat', a few rows down) */
     click(300, 300);
     snap(dir, "list: row selected");
