@@ -332,13 +332,46 @@ int ssh_exec(int handle, const char *cmd)
     return channel_request(c, "exec", cmd);
 }
 
+/* pty-req has a shape of its own - TERM, four dimensions and a modes string -
+ * so it does not fit channel_request()'s single-string form.
+ *
+ * It is not optional for an interactive session, which is the thing this got
+ * wrong first: `shell` WITHOUT a pty starts a shell that reads the channel and
+ * prints nothing at all until something is typed at it. That looks exactly
+ * like a broken data path and is not one. */
+static int request_pty(ssh_conn *c, int cols, int rows)
+{
+    unsigned char m[128];
+    ssh_buf b;
+    ssh_buf_init(&b, m, (int)sizeof m);
+    ssh_put_u8(&b, MSG_CHANNEL_REQUEST);
+    ssh_put_u32(&b, c->ch_remote);
+    ssh_put_cstr(&b, "pty-req");
+    ssh_put_u8(&b, 1);                       /* want_reply */
+    ssh_put_cstr(&b, "vt100");
+    ssh_put_u32(&b, (unsigned)cols);
+    ssh_put_u32(&b, (unsigned)rows);
+    ssh_put_u32(&b, 0);                      /* width in pixels  */
+    ssh_put_u32(&b, 0);                      /* height in pixels */
+    ssh_put_cstr(&b, "");                    /* no mode overrides */
+    if (b.err || uns_send(c, m, b.len) < 0) return -1;
+    for (;;) {
+        if (uns_recv(c, 20000) < 0) return -1;
+        if (c->paylen < 1) continue;
+        if (c->pay[0] == MSG_CHANNEL_SUCCESS) return 0;
+        if (c->pay[0] == MSG_CHANNEL_FAILURE) return -1;
+        channel_dispatch(c);
+    }
+}
+
 int ssh_shell(int handle)
 {
     ssh_conn *c = uns_get(handle);
     if (!c) return -1;
     if (open_session(c) < 0) return -1;
-    /* a pty is best-effort: a server that refuses one can still run a shell */
-    channel_request(c, "pty-req-skip", 0);
+    /* best-effort: a server that refuses a pty can still run a shell, it just
+     * will not say anything until it is spoken to */
+    request_pty(c, 80, 24);
     return channel_request(c, "shell", 0);
 }
 
