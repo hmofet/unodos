@@ -298,3 +298,7 @@ Changelog:
   signature one, so re-read "Boot HID reports on CHANGE" above.
   `uno_usb_hid_mods()` added; `hid_kbd_mods()` added alongside it in the shared
   translator.
+- **2026-07-31**, `uno_usb_key_fn` **gained an argument**:
+  `(scan, uni, ctrl, mods, ctx)`. `mods` is the UI_MOD_* mask held at that
+  press; `ctrl` is unchanged and still just Ctrl. A signature break on purpose,
+  so no existing caller can misread the new value - see `hid_kbd.h`.

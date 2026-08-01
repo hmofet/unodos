@@ -26,13 +26,18 @@ ORs it across the claimed USB keyboards, and `uno_pc64_mods()` prefers it
 whenever a USB keyboard is bound: that is what gives a USB keyboard Alt and
 GUI at all, and a real release edge on both sides of detach.
 
-**Still ctrl-only on the key event itself.** `hid_key_fn` carries a bare `ctrl`
-flag, so a key pressed WITH Alt still reaches the raw ring with `mods` = 0 or
-CTRL. Bindings that test the live state (the Alt-Tab commit) now work from a
-USB keyboard; bindings that test the key event's own mods (Alt+Tab to open the
-switcher, Alt+arrow snap) still need the callback widened to carry the mods
-byte - that touches `i2c_hid.c` and `hid_key_emit()` as well, so it is the
-shell lane's call.
+**The key event carries the mask too** (2026-07-31). `hid_key_fn` fires with
+`(scan, uni, ctrl, mods, ctx)`, `mods` being the mask held at the moment of
+that press, and `hid_key_emit()` maps it into the raw ring. So Alt+Tab OPENS
+the switcher from a HID keyboard (the ring's mods on the Tab press) and
+`uno_pc64_mods()` commits it on release; Alt+arrow snap, Alt+D and the Win key
+work the same. The ctrl-reachable twins (F2, Ctrl-Tab, Ctrl-M) are unchanged
+and still serve firmware ConIn, which reports no modifiers at all.
+
+Two different questions, deliberately answered separately: `mods` on the event
+is **per press** (Alt was down when Tab arrived), `uno_usb_hid_mods()` is the
+**live level** (Alt is down right now). Polling cannot answer the first once
+the key is up, and an event cannot answer the second.
 
 ## I2C-HID: keyboard + pointer (`i2c_hid.c`)
 
