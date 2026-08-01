@@ -2068,11 +2068,13 @@ def usbhid_mods():
     (`input-send-event` with a `device` argument is still no good: that field
     names a CONSOLE, and passing an input device's id aborts QEMU outright.)
 
-    What it does NOT cover: uno_pc64_mods()'s source selection, one clause in
-    uefi_main.c. Nothing in the shell observes modifiers except the Alt-Tab
-    release edge, and reaching that needs the raw key ring to carry ALT on the
-    key event itself, which the HID emit callback does not do yet (it carries a
-    bare ctrl flag). See the 2026-07-31 usb-lane entry in UNOAUTOMATE-REQUESTS.md."""
+    The second phase drives the whole chain the modifier byte exists for:
+    hold Alt, tap Tab, the switcher overlay appears, release Alt, it commits.
+    That covers what the first phase cannot - uno_pc64_mods()'s source
+    selection in uefi_main.c (the release edge polls it) AND the raw key ring
+    carrying ALT on the key event itself (opening the switcher tests the mods
+    on the Tab press). Before the ring carried mods, Alt+Tab from a USB
+    keyboard did nothing at all and only F2 / Ctrl-Tab reached the switcher."""
     fails = []
 
     def check(name, ok, detail=""):
@@ -2107,6 +2109,26 @@ def usbhid_mods():
         key_evt(q, "shift", True); time.sleep(0.8)
         key_evt(q, "shift", False); time.sleep(0.8)
         key_evt(q, "alt", False);  time.sleep(0.8)
+
+        # ---- phase 2: Alt+Tab, end to end, from the USB keyboard ------------
+        probe_screen(q)
+        band = noise_bands()
+        start_app(q, 1, wait=2.5)              # a second window to switch TO
+        grab(q, "usbhid_mods_00_two_apps")
+        key_evt(q, "alt", True)
+        time.sleep(0.3)
+        tap(q, "tab")
+        time.sleep(0.4)
+        grab(q, "usbhid_mods_01_switcher")     # ALT STILL HELD
+        sw = diff_bbox("usbhid_mods_00_two_apps", "usbhid_mods_01_switcher",
+                       ignore=band)
+        key_evt(q, "alt", False)               # the release edge commits it
+        time.sleep(1.2)
+        grab(q, "usbhid_mods_02_committed")
+        gone = diff_bbox("usbhid_mods_01_switcher", "usbhid_mods_02_committed",
+                         ignore=band)
+        switched = diff_bbox("usbhid_mods_00_two_apps", "usbhid_mods_02_committed",
+                             ignore=band)
     finally:
         stop_qemu(qemu, q)
 
@@ -2126,13 +2148,31 @@ def usbhid_mods():
     for _code, bits, _why in PRESSES:
         want += [bits, 0]
     want += [4, 5, 4, 0]                       # Alt, +Shift, -Shift, -Alt
+    want += [2, 0]                             # start_app's Ctrl-Esc chord
+    want += [4, 0]                             # the Alt-Tab hold and release
     check("every press and release is ONE transition, no flicker",
           seq == want, "%s vs %s" % (seq, want))
     for i, (code, bits, why) in enumerate(PRESSES):
         got = seq[1 + i * 2] if len(seq) > 1 + i * 2 else None
         check("%-8s reports %d (%s)" % (code, bits, why), got == bits, str(got))
     check("two modifiers OR together and release independently",
-          seq[-4:] == [4, 5, 4, 0], str(seq[-4:]))
+          seq[-8:-4] == [4, 5, 4, 0], str(seq[-8:-4]))
+
+    # The overlay is a centred strip of icon+name cells, so it is wide, short,
+    # and nowhere near the screen edges. Checking the SHAPE and not just "some
+    # pixels changed" is what stops a repaint of either window passing as a
+    # switcher.
+    check("Alt+Tab from the USB keyboard opened the switcher",
+          sw is not None and sw[3] < SCREEN_H // 3 and sw[2] > 120 and
+          sw[1] > SCREEN_H // 5 and sw[1] + sw[3] < SCREEN_H * 4 // 5, str(sw))
+    # Size-gated on purpose: run against the ctrl-only ring this passed on a
+    # 3x31 px diff, which was the Editor's blinking caret. "Some pixels
+    # changed" is not evidence that an overlay went away.
+    check("releasing Alt closed the overlay (the release edge)",
+          gone is not None and gone[2] > 120 and gone[3] > 40, str(gone))
+    check("...and committed: a different window is on top",
+          switched is not None and switched[2] > 100 and switched[3] > 80,
+          str(switched))
 
     print("usbhid_mods: %s" % ("PASS" if not fails else "FAIL " + ", ".join(fails)))
     return 0 if not fails else 1

@@ -3439,3 +3439,55 @@ fact. Nothing in this pass changes how many transfers are in flight.
 its HID devices are the simplest possible boot devices. The ZimaBlade run worth
 doing is a drag with the Razer mouse behind the hub, and Alt on the Logitech
 receiver's keyboard.
+
+
+## 2026-07-31 — LANDED (usb stack + input): the key ring carries Alt from HID keyboards
+
+Follow-on to the entry above, which closed the modifier byte's LIVE half and
+left the per-event half open as the shell lane's call. It is now closed too,
+and both HID transports get it: USB and the Surface's I2C keyboard share the
+`hid_kbd.c` translator, so this is one change, not two.
+
+**What changed.** `hid_key_fn` fires with `(scan, uni, ctrl, mods, ctx)` -
+`mods` is the `UI_MOD_*` mask held at the moment of that press, folded from the
+same report's modifier byte. `uno_usb_key_fn` and `uno_i2c_key_fn` match.
+`hid_key_emit()` maps it through the existing `ps2_mods_to_mac()` instead of
+passing ctrl alone. One function body in the input section; `map_key`, the
+firmware readers and the PS/2 reader are byte-identical.
+
+**An ARGUMENT was added rather than the third one repurposed**, which matters
+for anyone writing a fifth transport. Redefining `ctrl` to carry the mask would
+have compiled everywhere and quietly turned "Shift is down" into "Ctrl is
+down". AGENTS §6's rule - the compiler catches signature breaks, not semantic
+ones - so this was made the kind it catches. `ctrl` is still exactly Ctrl.
+
+**Two questions, two answers, don't conflate them:** `mods` on the event is
+PER PRESS (Alt was down when Tab arrived); `uno_usb_hid_mods()` is the LIVE
+level (Alt is down right now). Alt-Tab needs both - the first to open the
+switcher, the second to commit it on release - which is why exposing only the
+level last time got half the behaviour.
+
+**What now works from a USB keyboard:** Alt+Tab opens and commits the switcher,
+Alt+Shift+Tab steps back, Alt+arrow snaps, Alt+D parks, Alt+Ctrl+Fn moves a
+window between desktops, and the Win key reaches the shell. The ctrl-reachable
+twins (F2, Ctrl-Tab, Ctrl-M) are untouched and still needed: firmware ConIn
+reports no modifiers at all, and that path has not changed.
+
+**Gates run** (all green): `pc64/build.sh` at `UNO_DEBUG=0` and `UNO_DEBUG=1`;
+`harness.py usbhid_mods`, extended with a second phase that drives the whole
+chain from the emulated USB keyboard - hold Alt, tap Tab, the overlay appears,
+release Alt, it commits - plus `usbhid_drag`; `harness.py wm_d` on the
+production build as the modifier-path regression (the firmware Ex latch and its
+Ctrl-Tab fallback both still pass); and the default `harness.py` pass.
+
+**Measured differential**, same image, same run: with the ctrl-only ring,
+Alt+Tab from the USB keyboard opens **nothing** (`sw = None`); with the mask,
+the switcher opens and commits. One assertion had to be tightened as a result -
+"releasing Alt closed the overlay" passed on the pre-change build against a
+3x31 px diff that was the Editor's blinking caret. It is now size-gated. Worth
+repeating generally: a diff-based assertion that only asks "did some pixels
+change" will pass on a build where the feature does nothing.
+
+**Not covered by QEMU:** an I2C-HID keyboard, which has no emulated model at
+all, so the Surface's built-in keyboard gaining Alt is inference from the
+shared translator, not a measurement. It is on the metal checklist.
