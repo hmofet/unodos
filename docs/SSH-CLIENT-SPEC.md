@@ -68,7 +68,7 @@ The two lanes run concurrently. Within a lane, order is strict.
 
 | Phase | Lane | What |
 |---|---|---|
-| `tabs-a` | toolkits | `UI_TABS` becomes a real tabbed-document control + public geometry split |
+| `tabs-a` | toolkits | **DONE** - `UI_TABS` becomes a real tabbed-document control + public geometry split |
 | `tabs-b` | toolkits | `UI_MDI` container widget |
 | `tabs-c` | toolkits | browser refactored onto `tabs-a` |
 | `ssh-a` | unossh | Ed25519, host-tested against RFC 8032 vectors |
@@ -365,4 +365,61 @@ Append here as phases land, numbered, the way `WM-MODERN-SPEC.md` §13 does. A
 correction is something this spec got wrong or did not anticipate - record it
 even when the fix was obvious, because the next lane reads this section first.
 
-*(none yet)*
+**1. The `UI_TF_*` values in §3's table were wrong.** They are written there as
+1/2/4/8, which collide with `UI_F_DEFAULT`..`UI_F_HOT` in the very same `flags`
+word. They are `1 << 14` .. `1 << 17`, sitting beside `UI_WF_FILL` (1<<12) and
+`UI_WF_LIST_REVEAL` (1<<13). The model's `flags` field uses the SAME constants
+rather than a shifted-down copy, so there is one representation to reason about
+and a widget's flags can be handed to a model with a mask and nothing else.
+
+**2. A widget keeps its scroll position in `value`.** §3 named the model field
+`first` but never said where the widget-path equivalent lives. It is `value`,
+exactly as a list's `top` is - and `draw_one` re-clamps it every frame the way
+the `UI_LIST` case does, so an app that sets it out of range self-corrects.
+
+**3. Four functions the contract table missed**, all of which turned out to be
+load-bearing: `unoui_tabs_model_of` (the widget/model bridge, needed in both
+`unoui.c` and `unoui_input.c`, so it cannot be static), `unoui_tabs_maxfirst`,
+`unoui_tab_close_rect`, and `unoui_tabs_reveal`. **Reveal is not optional.**
+Without it the arrow keys walk the selection to a tab that is scrolled out of
+sight and nothing brings it back - the identical bug `UI_LIST` already fixed
+with `unoui_list_reveal`, arrived at from the identical direction.
+
+**4. "Does the set fit?" must be answered BEFORE the `first` clamp.** If the
+overflow reserve is computed from the visible tabs, the `>>` control appears and
+vanishes as you scroll, and because it is reserved out of the strip the usable
+width changes underneath you at the same moment - the layout oscillates. The
+fit test therefore reads only the flags and the total natural/elastic width,
+never `first`. `tabs_test.c` asserts the control's width is invariant across
+every legal scroll position, which is the cheap way to keep it that way.
+
+**5. Per-tab hover is canvas-only, deliberately.** `unoui_widget` has no field
+for a hot tab, and the only free ones are `vmin`/`vmax`, which would be
+field-abuse of the kind this toolkit has so far avoided. So
+`unoui_tabs_model_of` reports `hot = -1` and the widget path draws no hot tab.
+Canvas hosts pass their own hover in, which is what the actual consumer needs -
+`pc64_browser.c` already tracks `g_hot_tab`/`g_hot_close` itself. Revisit only
+if a widget-path app ever wants it.
+
+**6. The host contact sheet renders EIGHT themes, not ten.** `unoui/build.sh`'s
+`THEMES` list omits `themes/theme_aurora.c`, which is the file defining both
+Aurora Light and Aurora Dark - the pc64 shell's own defaults. §3's gate wording
+("all ten themes") is not achievable as the host build stands. Ten is what the
+shell offers (`pc64_uui.c` `kThemes[]`); eight is what the host build covers.
+Worth fixing on its own sometime; out of scope here, and noted so the next
+phase does not write another unachievable gate.
+
+**7. The contact-sheet demo has no tabs widget at all.** `unoui_demo.c` (the
+static write-once window behind `themes.png`) never adds one, so "the Control
+Panel's strip unchanged on the contact sheet" was not a checkable claim. The
+plain-strip evidence is instead the storyboard's editor window - which does
+carry one, and is rendered under the default, Windows 3.1 and Mac Plus themes -
+plus the explicit unchanged-behaviour assertions at the top of `tabs_test.c`.
+
+**8. A 1-bit palette loses the active underline, and that is survivable.**
+Checked by zooming the rendered frames rather than assumed: on Mac Plus the
+accent collapses to black and the underline disappears into the baseline, but
+the selected tab still reads as selected through its 2 px raise and its merge
+with the baseline - the same cue the plain painter has always relied on there.
+The rule for phases B and F: **a state signalled only by `accent` does not
+survive every theme.** Signal it with geometry too.
