@@ -37,6 +37,7 @@ typedef struct {
     int  dev;                  /* index into the xHCI device list          */
     int  h;                    /* xhci interrupt-endpoint handle           */
     int  is_kbd;               /* 1 keyboard, 0 mouse                      */
+    int  btn;                  /* mouse: LATCHED button mask (see below)   */
     hid_kbd_state kbd;         /* keyboard edge state                      */
 } hidep;
 
@@ -155,6 +156,22 @@ int uno_usb_hid_kbd_poll(uno_usb_key_fn emit, void *ctx)
 
 static int g_wheel;                    /* notches since the last read */
 
+/* A boot-protocol mouse reports on CHANGE, so a poll with no report means
+ * "nothing moved and nothing changed", NOT "no buttons are down". The button
+ * mask is therefore LEVEL state and is latched per endpoint: only a report
+ * rewrites it, so a button held still stays down across the frames in between,
+ * and a drag holds. Motion and wheel are the opposite - they are EDGES, deltas
+ * consumed by the caller - so they keep resetting to 0 on every poll.
+ *
+ * This is the shape uno_ps2_mouse() has always had (gMBtn, "latched button
+ * since the last call", pc64_native.c); without it the shell saw
+ * press-release-press and every USB drag committed before it started.
+ *
+ * The latch lives in g_eps[i] rather than in one file-scope global because the
+ * loop ORs several mice together: a shared latch would let one mouse's report
+ * clear a button held on another. Its initial value is the static zero, and
+ * claim_device() runs once (uno_usb_hid_init() is idempotent), so no endpoint
+ * ever starts with a stale mask. */
 int uno_usb_hid_mouse_poll(int *dx, int *dy, int *btn)
 {
     int i, any = 0, ax = 0, ay = 0, ab = 0;
@@ -165,13 +182,14 @@ int uno_usb_hid_mouse_poll(int *dx, int *dy, int *btn)
         any = 1;
         n = uno_usb_intr_in(g_eps[i].h, rep, sizeof rep);
         if (n >= 3) {                                  /* boot mouse: btn,dx,dy */
-            ab |= rep[0] & 0x07;
+            g_eps[i].btn = rep[0] & 0x07;
             ax += (signed char)rep[1];
             ay += (signed char)rep[2];
             /* byte 3 is the wheel on every mouse that has one (the boot
              * report is 3 bytes, but wheel mice append it); + = down */
             if (n >= 4) g_wheel += (signed char)rep[3];
         }
+        ab |= g_eps[i].btn;                            /* held, report or not */
     }
     if (!any) return 0;
     *dx = ax; *dy = ay; *btn = ab;
