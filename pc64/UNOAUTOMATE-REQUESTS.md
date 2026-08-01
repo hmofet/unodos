@@ -3813,3 +3813,71 @@ negotiated and no interactive run - `ssh-f` is where that gets exercised.
 `ssh.socket` unit is enabled, so WSL listens on port 22. That is a side effect
 of setting this gate up, not something unossh needs. `sudo systemctl disable
 --now ssh.socket` reverses it.
+
+---
+
+## 2026-08-01 - LANDED (unossh): ssh-d, the persistent store
+
+Private keys, saved sessions and known hosts, all surviving a power cycle.
+Gate: `python3 harness.py ssh_store`, 8 checks, booting the SAME real FAT image
+twice - vvfat cannot carry this, it hands multi-cluster writes back as garbage.
+
+**One container file, not three.** The spec asked for `unossh_keys.c` and
+`unossh_sess.c`; all three tables want the same volume, the same save path and
+the same written-whole behaviour, and splitting them would have meant three
+copies of that with three chances to disagree about which volume is persistent.
+
+**The volume is the whole ballgame.** "The first writable volume" is volume 0,
+the RAM disk, so a store written there vanishes at power-off while every save
+appears to work - the bug the WM lane shipped in `session_save()`.
+`pick_vol()` prefers a native FAT partition the way `unosecure.c` does, and
+`ssh_store_persistent()` returns 0 when there is nowhere better so a caller can
+warn rather than pretend. The gate asserts `volume=native` before anything else,
+because every other assertion is meaningless if that one fails.
+
+**Known hosts close ssh-b's open item.** `ssh_verify_host()` turns "the peer
+holds the key it presented" into "the peer is who it was last time", and
+MISMATCH is deliberately a different answer from UNKNOWN - the first is the one
+worth stopping for. Both are asserted.
+
+**Interop is proven with a real OpenSSH key.** `ssh-keygen` generates an
+ed25519 private key, the guest imports it from the `openssh-key-v1` container
+and exports the public half in authorized_keys form, and that line is diffed
+against ssh-keygen's OWN `.pub`. Byte equality settles the container parse, the
+seed, our public-key derivation and the encoding in one comparison. Encrypted
+containers need `bcrypt_pbkdf`, which we do not have, and are refused by name
+with a distinct return rather than failing somewhere obscure.
+
+### Three bugs the gate found, and all three were invisible
+
+Every one presented identically: the machine rebooted mid-test with no message,
+SPECTEST ran again, the second run found a half-populated store and reported
+success. A test that only asked "did it end up populated" would have passed on
+all three.
+
+1. **`b64_dec` accumulated into a signed `int` and never masked it.** Shifting
+   left 6 bits per character overflows a signed int after a handful of them -
+   defined-looking code that is undefined behaviour, and a UBSan trap on the
+   debug build. This is the UnoAmp lesson again, in a new place: correct
+   arithmetic and DEFINED arithmetic are different properties, and only one of
+   them is what this OS enforces.
+2. **The `openssh-key-v1` parse walked its offset with no bounds checks.** It
+   parses a file the user chose, so a malformed one has to be a clean error;
+   unchecked, it walks off a static array and traps. Every step is now checked
+   against the decoded length.
+3. **A 2 KB buffer on the stack inside a SPECTEST test** is enough to run the
+   kernel off its frame. Both the PEM buffer and the decode buffer are static
+   now.
+
+Plus one that was not a code bug at all: **the guest writes its store INTO the
+image's own FAT volume**, so a leftover `unodos-uefi.img` arrives already
+seeded. The first boot then takes the verify path and never exercises seeding
+or import, while looking like it half-worked. The scenario deletes the image
+first, and that is why "the first boot seeded it" is a separate assertion from
+"everything survived".
+
+### Still open
+
+`ssh_verify_host()` exists but nothing in the handshake path calls it yet -
+policy (prompt, refuse, trust-on-first-use) belongs to the app, so `ssh-f`
+wires it. `ssh-e` (the unoautomate verb) and `ssh-f` (the GUI) remain.
