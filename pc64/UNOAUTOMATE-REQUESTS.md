@@ -5306,6 +5306,99 @@ one-off oracle failure in this gate that will not reproduce, this was why.
 Escher, text that lives only in a shape's client data rather than in a text
 atom is not found.
 
+---
+
+## 2026-08-02 (metal) - the DEBUG.CFG parse window: why the Yoga could not be driven, and what it invalidates
+
+**CLAIM (filed with the work, not before it - my miss on AGENTS §4):** the
+DEBUG.CFG parse window in the debug harness (`pc64_stress.c`) and the config
+staging in `pc64/build.sh`. Landed as `harness: read the whole DEBUG.CFG...`
+and `build: stage DEBUG.CFG keys before the comment header`.
+
+### The trap
+
+`pc64_stress_cfg_flag/value` read DEBUG.CFG into a **512-byte** buffer, so the
+parse window was the first **511** bytes. `build.sh` staged a DEBUG.CFG whose
+comment header is **526 bytes on its own**. Every key in the shipped file was
+therefore outside the window, and a key outside the window is ignored with **no
+diagnostic anywhere** - it is not a parse error, the file mounts fine, and the
+key is plainly visible to anyone who looks at it on the host.
+
+Measured, not inferred: the ten header lines with CRLF endings come to exactly
+526 bytes, and 526 + `passes=3\r\n` = 536, which is exactly the size of the
+DEBUG.CFG on the fleet stick.
+
+It cost a session. A stick was configured with `remote=192.168.2.100:5097` to
+drive the X13 Yoga over URC; the key sat at byte 526+, the box never dialled,
+and the silence looked like a network fault. Two capture windows and a LAN sweep
+went into chasing a network that was never broken.
+
+**Fixed** by reading the whole file into one generous static buffer (4096) and
+**logging when a file exceeds it** rather than dropping the tail silently.
+Gated on a booting UEFI guest: a config whose only `remote=` key is at byte 598
+now dials in; a 5164-byte config logs `cfg: DEBUG.CFG is 5164 bytes, only the
+first 4095 are parsed - keys past that are IGNORED`.
+
+### CORRECTION to the 2026-08-01 entry: `passes=3` was never armed
+
+That entry's "Trap 1" says a raw `dd` of `unodos-hybrid.img` "arrives with the
+fuzz driver armed and auto power-off after 3 passes". **That is not what
+happened.** `passes=3` starts at byte 526 and has never been read by any build,
+so a dd-written stick arms nothing. The stress config was inert for a different
+reason than the one recorded.
+
+This matters beyond bookkeeping: **the Eee PC black-screen analysis rests on
+that premise.** The run sheet and `docs/BIOS-BOOT-PLAN.md` both offer "it may
+simply be that auto power-off" as the leading explanation for the unread flash
+then black. That explanation is unavailable - the machine was never told to
+power off. Whoever picks the Eee PC back up should treat its result as still
+unexplained.
+
+### CORRECTION to the 2026-08-01 entry: the flasher writes no URC key at all
+
+The same entry says "it is the flasher's Developer options that normally write
+those keys, so bypassing the flasher bypassed them". The flasher has never
+written them. `UnoSettings.StressCfg()` (pc64/flash/UnoSettings.cs) emits only
+`nostress`, optional `spec`/`interactive`, `mtrr-wc` and the network-suite keys
+- there is no `remote=`, `listen`, `discover` or `remote-serial` in it. So a
+flasher-written stick has URC compiled in and never armed, and "use the flasher"
+is not the workaround it reads as.
+
+**-> whoever owns the flasher:** adding a Remote-channel field to Developer
+options would make "Reconfigure tests (no erase)" the one-click way to make any
+metal box drivable. Note when doing it that `iwlwifi.c` reads WiFi credentials
+from DEBUG.CFG as candidate #1, so a reconfigure that regenerates the file
+wholesale would silently wipe an `ssid=` line living there.
+
+### -> NIC drivers lane: `file_has_ssid()` has a 255-byte window of its own
+
+`iwlwifi.c:473` searches for `ssid=` in only the first 255 bytes of the
+candidate file. Same silent-failure class as above, on the credentials path:
+creds present in the file, driver reports `creds:MISSING`. The staging fix puts
+keys first so this no longer bites in practice, but the window is still there
+for a hand-edited file. Your lane, so not touched - `uno_fs_size` + a bigger
+buffer, or a chunked scan, would close it.
+
+### -> unoautomate: the `test` verb can only run suites if the box booted with `spec`
+
+`test <suite>` over URC returned `suite network - 0 pass 0 fail` on a healthy
+box with the suites plainly compiled in. The registry is populated by
+`sp_register()`, which is only ever called from `pc64_spectest_run()`
+(`pc64_spectest.c:1156`), which only runs when DEBUG.CFG carries `spec`. So a
+remote operator cannot run any conformance suite on demand - the one thing the
+verb exists for - unless the boot config happened to ask for a conformance run.
+`sp_register()` is idempotent (`static int did`); calling it at boot regardless
+would make the verb work as documented.
+
+### -> shell/UI lane: nothing on the box shows the DNS resolver
+
+Diagnosing a name-resolution failure on metal currently requires URC, because
+no UI surfaces `net_dns()`. The System window's network line (`pc64_uui.c:851`)
+prints link state and IP; the Control Panel Network tab adds gateway, link speed
+and frame counters. The resolver - the one value that decides whether a lookup
+can possibly work - is visible only in the debug net trace. A `DNS:` row next to
+the existing `Gateway:` row would have made tonight's fault self-evident from
+the desktop.
 ## 2026-08-02 - unodoc phase 5b LANDED (Escher: shapes, properties, anchors)
 
 **Worker A, unodoc lane.** `unodoc/ud_escher.c`: the OfficeArt drawing layer
