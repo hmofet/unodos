@@ -50,4 +50,20 @@ unsigned char ud_uc_to_cp1252(uint16_t uc);
  * generates, which is what the ordering rule is checked against). */
 uint16_t ud_upper16(uint16_t uc);
 
+/* ---- number to text -------------------------------------------------------
+ * unodoc has no libc beyond mem-/str-, so it carries its own.  These are the
+ * only places a number becomes text inside the library, and both exist for
+ * one reason: a formula can contain a literal ("=A1*1.5"), so decompiling one
+ * requires rendering a double.  Cell VALUES are never formatted here - that
+ * is UnoCalc's uoc_numfmt, which owns Excel's format-code language. */
+
+/* Signed decimal.  `out` needs 12 bytes.  Returns the length. */
+int ud_int_text(long v, char *out);
+
+/* A double in Excel's own display convention: at most 15 significant digits
+ * (which is all Excel itself shows), trailing zeros trimmed, E+nn notation
+ * outside the plain-decimal range.  `out` needs 32 bytes.  Returns the
+ * length.  NOT shortest-round-trip - see UNODOC.md. */
+int ud_num_text(double v, char *out);
+
 #endif /* UNODOC_INT_H */

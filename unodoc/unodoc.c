@@ -101,6 +101,109 @@ uint16_t ud_upper16(uint16_t uc)
     }
 }
 
+/* ---- number to text -------------------------------------------------------
+ * Written out because unodoc links no libc beyond mem-/str-, and a formula
+ * literal has to be rendered somehow.  Integer-only apart from the scaling
+ * multiply, and no libm: the powers of ten are a table. */
+int ud_int_text(long v, char *out)
+{
+    char tmp[24];
+    int n = 0, len = 0;
+    unsigned long u;
+
+    if (v < 0) { out[len++] = '-'; u = (unsigned long)(-(v + 1)) + 1; }
+    else        u = (unsigned long)v;
+    do { tmp[n++] = (char)('0' + (u % 10)); u /= 10; } while (u);
+    while (n) out[len++] = tmp[--n];
+    out[len] = 0;
+    return len;
+}
+
+/* 1e0 .. 1e22 are all exactly representable; beyond that the table is the
+ * nearest double, which is what any scaling would land on anyway. */
+static double pow10_of(int e)
+{
+    static const double P[23] = {
+        1e0,  1e1,  1e2,  1e3,  1e4,  1e5,  1e6,  1e7,  1e8,  1e9,  1e10,
+        1e11, 1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18, 1e19, 1e20, 1e21, 1e22
+    };
+    double r = 1.0;
+    int neg = e < 0;
+    if (neg) e = -e;
+    while (e > 22) { r *= 1e22; e -= 22; }
+    r *= P[e];
+    return neg ? 1.0 / r : r;
+}
+
+#define SIGDIG 15
+
+int ud_num_text(double v, char *out)
+{
+    int len = 0, exp10 = 0, i, ndig;
+    unsigned long long m;
+    char dig[SIGDIG + 2];
+    double a;
+
+    if (v != v) { memcpy(out, "#NUM!", 6); return 5; }      /* NaN          */
+    if (v == 0) { memcpy(out, "0", 2); return 1; }
+    if (v < 0) { out[len++] = '-'; v = -v; }
+    if (v > 1.7e308) { memcpy(out + len, "#NUM!", 6); return len + 5; }
+
+    /* Scale into [1e14, 1e15) so 15 significant digits land in a uint64
+       exactly (1e15 < 2^53), then read them off.  The exponent is estimated
+       from the binary one (log10(2) as a ratio, no libm) so the scaling is a
+       SINGLE multiply for any magnitude - repeated division by ten would
+       accumulate a rounding error into the digits we are about to print. */
+    {
+        uint64_t bits;
+        int be, est;
+        memcpy(&bits, &v, 8);
+        be = (int)((bits >> 52) & 0x7FF) - 1023;
+        est = (int)(((long)be * 30103L) / 100000L);
+        exp10 = 14 - est;
+        a = v * pow10_of(exp10);
+        exp10 = -exp10;
+    }
+    while (a >= 1e15) { a /= 10.0; exp10++; }   /* at most a step or two    */
+    while (a <  1e14) { a *= 10.0; exp10--; }
+    m = (unsigned long long)(a + 0.5);
+    if (m >= 1000000000000000ULL) { m /= 10; exp10++; }     /* rounding up  */
+
+    for (i = SIGDIG - 1; i >= 0; i--) { dig[i] = (char)('0' + (m % 10)); m /= 10; }
+    ndig = SIGDIG;
+    while (ndig > 1 && dig[ndig - 1] == '0') ndig--;        /* trim zeros   */
+
+    /* decimal exponent of the leading digit */
+    exp10 += SIGDIG - 1;
+
+    if (exp10 >= -5 && exp10 < SIGDIG) {                    /* plain form   */
+        if (exp10 >= 0) {
+            for (i = 0; i <= exp10; i++)
+                out[len++] = i < ndig ? dig[i] : '0';
+            if (ndig > exp10 + 1) {
+                out[len++] = '.';
+                for (i = exp10 + 1; i < ndig; i++) out[len++] = dig[i];
+            }
+        } else {
+            out[len++] = '0'; out[len++] = '.';
+            for (i = 0; i < -exp10 - 1; i++) out[len++] = '0';
+            for (i = 0; i < ndig; i++) out[len++] = dig[i];
+        }
+    } else {                                                /* E notation   */
+        out[len++] = dig[0];
+        if (ndig > 1) {
+            out[len++] = '.';
+            for (i = 1; i < ndig; i++) out[len++] = dig[i];
+        }
+        out[len++] = 'E';
+        out[len++] = exp10 < 0 ? '-' : '+';
+        len += ud_int_text(exp10 < 0 ? -exp10 : exp10, out + len);
+        return len;
+    }
+    out[len] = 0;
+    return len;
+}
+
 /* ---- CFB directory ordering ----------------------------------------------
  * Shorter names sort first; equal lengths compare uppercased, code unit by
  * code unit.  unodoc names are CP-1252, one byte per code unit, so the byte

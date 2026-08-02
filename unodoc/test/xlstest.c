@@ -78,6 +78,11 @@ static void dump(ud_xls *x)
             printf("\tf=%d\tfmt=", c.formula);
             put_escaped(ud_xls_xf_format(x, c.xf));
             printf("\n");
+            if (c.formula) {
+                printf("formula\t%d\t%d\t%d\t", s, row, col);
+                put_escaped(c.ftext ? c.ftext : "<undecompiled>");
+                printf("\n");
+            }
             /* the random-access path must agree with the iteration path */
             {
                 ud_xcell d;
@@ -121,6 +126,8 @@ static int walk(const unsigned char *buf, long len, int print)
                     int r = 0, cl = 0;
                     ud_xls_cell_at(x, s, i, &r, &cl, &cc);
                     if (cc.kind == UD_XV_STR && cc.str) (void)strlen(cc.str);
+                    if (cc.ftext) (void)strlen(cc.ftext);
+                    if (cc.ftext) (void)strlen(cc.ftext);
                     (void)ud_xls_xf_format(x, cc.xf);
                 }
             }

@@ -128,8 +128,9 @@ DATE_STYLE = (
     'style:data-style-name="ND1"/>'
     '</office:automatic-styles>')
 
-def fods_sheets(sheets):
-    """sheets = [(name, rows)] where rows = [[cell, ...], ...]"""
+def fods_sheets(sheets, named=None):
+    """sheets = [(name, rows)] where rows = [[cell, ...], ...];
+    named = [(name, odf_range)] for the defined names PtgName renders."""
     out = []
     for name, rows in sheets:
         body = []
@@ -138,20 +139,39 @@ def fods_sheets(sheets):
                         % "".join(cell_xml(c) for c in row))
         out.append('<table:table table:name="%s">%s</table:table>'
                    % (esc(name), "".join(body)))
+    if named:
+        out.append("<table:named-expressions>%s</table:named-expressions>"
+                   % "".join(
+                       '<table:named-range table:name="%s" '
+                       'table:base-cell-address="%s" '
+                       'table:cell-range-address="%s"/>'
+                       % (esc(n), esc(rng.split(":")[0]), esc(rng))
+                       for n, rng in named))
     return ('<?xml version="1.0" encoding="UTF-8"?>\n'
             '<office:document %s office:version="1.2" '
             'office:mimetype="application/vnd.oasis.opendocument.spreadsheet">'
             '%s<office:body><office:spreadsheet>%s</office:spreadsheet>'
             '</office:body></office:document>' % (NS, DATE_STYLE, "".join(out)))
 
-def fixture(sheets, expect):
+def fixture(sheets, expect, fml=None):
     """expect = {(sheet, row, col): (KIND, value)} overriding the literal
-    cells; everything else is taken from the source document itself."""
+    cells; everything else is taken from the source document itself.
+    fml = {(sheet, row, col): "=SUM(A1:B2)"} - the formula text we expect the
+    decompiler to rebuild, written in Excel A1 syntax here and in ODF syntax
+    in the source, so neither side is derived from the other."""
     lines = []
+    for key in sorted(fml or {}):
+        lines.append("formula\t%d\t%d\t%d\t%s" % (key + (fml[key],)))
     for si, (_name, rows) in enumerate(sheets):
         for ri, row in enumerate(rows):
             for ci, c in enumerate(row):
                 key = (si, ri, ci)
+                # A formula cell's VALUE is whatever the engine computed on
+                # save, not the placeholder in the source, so the source
+                # cannot state it - the `formula` line is the assertion that
+                # matters for those.
+                if len(c) > 2 and c[2] and key not in expect:
+                    continue
                 if key in expect:
                     kind, val = expect[key]
                 elif c[0] == "num":
@@ -309,15 +329,100 @@ LARGE_SHEETS = [("Sheet1", [
 def sst_sheets():
     return [("SST", [[("str", s)] for s in sst_strings()])]
 
+# ---- the formula battery ----------------------------------------------------
+# Each entry is (odf_formula, expected_excel_text).  The two are written
+# independently on purpose: the source says it in ODF syntax (semicolon
+# arguments, [.A1] references) and the fixture says it in Excel A1 syntax, so
+# a match means the decompiler genuinely rebuilt the expression rather than
+# echoing anything we handed it.
+FML = [
+    # precedence, and the parentheses the author actually typed
+    ("=1+2*3",            "=1+2*3"),
+    ("=(1+2)*3",          "=(1+2)*3"),
+    ("=1-2-3",            "=1-2-3"),
+    ("=1-(2-3)",          "=1-(2-3)"),      # equal precedence on the RIGHT
+    ("=8/4/2",            "=8/4/2"),
+    ("=8/(4/2)",          "=8/(4/2)"),
+    ("=2^3^2",            "=2^3^2"),        # Excel's ^ is LEFT associative
+    ("=2^(3^2)",          "=2^(3^2)"),
+    ("=(1+2)&\"x\"",      "=(1+2)&\"x\""),
+    ("=1+2&\"x\"",        "=1+2&\"x\""),    # & binds looser than +
+    ("=50%",              "=50%"),
+    ("=-[.B1]",           "=-B1"),
+    ("=-[.B1]+3",         "=-B1+3"),
+    # references in all four relative/absolute combinations
+    ("=[.B1]",            "=B1"),
+    ("=[.$B$1]",          "=$B$1"),
+    ("=[.B$1]",           "=B$1"),
+    ("=[.$B1]",           "=$B1"),
+    ("=SUM([.B1:.C3])",   "=SUM(B1:C3)"),
+    ("=SUM([.$B$1:.$C$3])", "=SUM($B$1:$C$3)"),
+    # functions: fixed arity, variable arity, nesting, zero args
+    ("=PI()",             "=PI()"),
+    ("=ROUND(1.5;0)",     "=ROUND(1.5,0)"),
+    ("=IF([.B1]>0;\"y\";\"n\")", "=IF(B1>0,\"y\",\"n\")"),
+    ("=SUM(MAX(1;2);MIN(3;4))",  "=SUM(MAX(1,2),MIN(3,4))"),
+    ("=CONCATENATE(\"a\";\"b\";\"c\")", "=CONCATENATE(\"a\",\"b\",\"c\")"),
+    # literals: a doubled quote, a non-integer, a big one, an error
+    ("=\"a\"\"b\"",       "=\"a\"\"b\""),
+    ("=[.B1]*1.5",        "=B1*1.5"),
+    ("=[.B1]*0.1",        "=B1*0.1"),
+    ("=[.B1]*1000000",    "=B1*1000000"),
+    # LibreOffice compiles TRUE() down to a single PtgBool constant - the
+    # token stream for this cell is literally "1d 01", verified 2026-08-01
+    # with an instrumented build - so the faithful Excel text is the bare
+    # constant.  LibreOffice writes "TRUE()" when it reads the file back only
+    # because ODF has no bare boolean literal; that is its syntax, not ours.
+    ("=TRUE()",           "=TRUE"),
+    ("=[.B1]<>[.C1]",     "=B1<>C1"),
+    ("=[.B1]<=[.C1]",     "=B1<=C1"),
+    # a 3-D reference into the other sheet
+    ("=[$Other.A1]",      "=Other!A1"),
+    ("=SUM([$Other.A1:.B2])", "=SUM(Other!A1:B2)"),
+    # a defined name
+    ("=SUM(theRange)",    "=SUM(theRange)"),
+    # an array constant, which lives in rgbExtra after the token stream
+    ("=SUM({1;2|3;4})",   "=SUM({1,2;3,4})"),
+]
+
+def formula_sheets():
+    """Column A holds the battery; B and C hold operands so the references
+    point at something real.  A separate block of identical fill-down
+    formulas gives LibreOffice the chance to emit a SHRFMLA."""
+    rows = []
+    for i, (odf, _want) in enumerate(FML):
+        row = [("num", 0.0, odf)]
+        if i == 0:
+            row += [("num", 2.0), ("num", 4.0)]
+        rows.append(row)
+    # A genuine fill-down: the SAME expression in every row, differing only
+    # by the relative reference tracking the row.  This is the shape Excel
+    # stores once as a SHRFMLA whose members carry nothing but a PtgExp.
+    for i in range(12):
+        rows.append([("num", 0.0, "=[.B%d]*2" % (len(FML) + i + 1))])
+    return [("Formulas", rows), ("Other", [[("num", 7.0), ("num", 8.0)],
+                                           [("num", 9.0), ("num", 10.0)]])]
+
+def formula_expect():
+    out = {}
+    for i, (_odf, want) in enumerate(FML):
+        out[(0, i, 0)] = want
+    for i in range(12):
+        out[(0, len(FML) + i, 0)] = "=B%d*2" % (len(FML) + i + 1)
+    return out
+
+FORMULA_NAMED = [("theRange", "$Formulas.$B$1:$Formulas.$C$3")]
+
 # target basename -> (sheets, expectation overrides).  Every spreadsheet in
 # the corpus carries a fixture derived from the SOURCE document, never from
 # unodoc's own output.
 def FIXTURES():
     return {
-        "small.xls": (SMALL_SHEETS, {}),
-        "large.xls": (LARGE_SHEETS, {}),
-        "cells.xls": (CELLS_SHEETS, CELLS_EXPECT),
-        "sst.xls":   (sst_sheets(), {}),
+        "small.xls":    (SMALL_SHEETS, {}, None),
+        "large.xls":    (LARGE_SHEETS, {}, None),
+        "cells.xls":    (CELLS_SHEETS, CELLS_EXPECT, None),
+        "sst.xls":      (sst_sheets(), {}, None),
+        "formulas.xls": (formula_sheets(), {}, formula_expect()),
     }
 
 SOURCES = [
@@ -329,6 +434,7 @@ SOURCES = [
     ("large.fods", lambda: fods_sheets(LARGE_SHEETS), "xls"),
     ("cells.fods", lambda: fods_sheets(CELLS_SHEETS), "xls"),
     ("sst.fods",   lambda: fods_sheets(sst_sheets()), "xls"),
+    ("formulas.fods", lambda: fods_sheets(formula_sheets(), FORMULA_NAMED), "xls"),
     ("small.fodp", lambda: fodp([("Slide one", ["alpha", "beta"]),
                                  ("Slide two", ["gamma"]),
                                  ("Slide three", [])]), "ppt"),
@@ -361,12 +467,12 @@ def main():
 
     # fixtures are cheap and derived from the sources, so always rewrite them
     fx = FIXTURES()
-    for base, (sheets, expect) in fx.items():
+    for base, (sheets, expect, fml) in fx.items():
         if not os.path.exists(os.path.join(CORPUS, base)):
             continue
         with open(os.path.join(CORPUS, base + ".expect.tsv"), "w",
                   encoding="utf-8") as f:
-            f.write(fixture(sheets, expect))
+            f.write(fixture(sheets, expect, fml))
     print("corpus: %d file(s) generated, %d present, %d fixture(s)"
           % (made, len([f for f in os.listdir(CORPUS)
                         if not f.endswith(".expect.tsv")]), len(fx)))

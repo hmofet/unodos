@@ -27,6 +27,7 @@
  * ======================================================================== */
 #include "unodoc.h"
 #include "unodoc_int.h"
+#include "ud_xls_int.h"
 #include <string.h>
 
 /* ---- record types we act on ----------------------------------------------- */
@@ -36,6 +37,8 @@
 #define R_DATEMODE     0x0022
 #define R_FILEPASS     0x002F
 #define R_FONT         0x0031
+#define R_EXTERNSHEET  0x0017
+#define R_NAME         0x0018
 #define R_CONTINUE     0x003C
 #define R_CODEPAGE     0x0042
 #define R_COLINFO      0x007D
@@ -59,6 +62,7 @@
 #define R_FORMAT       0x041E
 #define R_SHRFMLA      0x04BC
 #define R_ARRAY        0x0221
+#define R_SUPBOOK      0x01AE
 #define R_BOF          0x0809
 
 /* BOF substream kinds */
@@ -230,6 +234,21 @@ typedef struct {
 
 typedef struct { uint16_t ifmt; } ud_xxf;
 
+typedef struct { uint16_t sup, first, last; } ud_xti;
+
+/* A shared formula: the expression stored ONCE for a filled-down block, with
+ * relative PtgRefN tokens each member cell re-bases against itself. */
+typedef struct {
+    int            r0, c0;
+    unsigned char *ptg;
+    long           n;
+} ud_xshr;
+
+/* A cell that carried only a PtgExp: it points at a shared formula whose
+ * SHRFMLA record has not been read yet (it follows the FIRST member), so the
+ * text is resolved at end of sheet. */
+typedef struct { int cell, er, ec, row, col; } ud_xpend;
+
 struct ud_xls {
     ud_cfb    *cfb;
     int        sid;
@@ -240,6 +259,10 @@ struct ud_xls {
     /* number-format codes, sparse by ifmt id */
     char     **fmt;    int nfmt;
     char     **owned;  int nowned, ocap;   /* every string we allocated     */
+    ud_xti    *xti;    int nxti, xticap;   /* EXTERNSHEET: 3-D ref targets  */
+    unsigned char *supint; int nsup, supcap; /* which SUPBOOKs are this file */
+    char     **name;   int nname, namecap; /* defined names                 */
+    char       xtibuf[96];                 /* scratch for xti_name()        */
 };
 
 /* ---- string ownership: one list, freed at close --------------------------- */
@@ -357,6 +380,52 @@ const char *ud_xls_err_text(int err)
     case UD_XE_NA:    return "#N/A";
     default:          return "#ERR?";
     }
+}
+
+/* ---- what ud_ptg.c is allowed to ask the workbook -------------------------- */
+static const char *env_xti_name(void *book, int ixti)
+{
+    ud_xls *x = (ud_xls *)book;
+    const char *a, *b;
+    unsigned long la, lb;
+
+    if (ixti < 0 || ixti >= x->nxti) return 0;
+    {
+        ud_xti *t = &x->xti[ixti];
+        if (t->sup < x->nsup && !x->supint[t->sup]) return 0;  /* external */
+        if (t->first >= x->nsh) return 0;
+        a = x->sh[t->first].name ? x->sh[t->first].name : "";
+        if (t->last == t->first || t->last >= x->nsh) return a;
+        b = x->sh[t->last].name ? x->sh[t->last].name : "";
+        la = strlen(a); lb = strlen(b);
+        if (la + lb + 2 > sizeof x->xtibuf) return a;
+        memcpy(x->xtibuf, a, la);
+        x->xtibuf[la] = ':';
+        memcpy(x->xtibuf + la + 1, b, lb);
+        x->xtibuf[la + 1 + lb] = 0;
+        return x->xtibuf;
+    }
+}
+
+static const char *env_name_of(void *book, int idx)
+{
+    ud_xls *x = (ud_xls *)book;
+    if (idx < 0 || idx >= x->nname) return 0;
+    return x->name[idx];
+}
+
+static const char *env_extname_of(void *book, int ixti, int idx)
+{
+    (void)ixti;
+    return env_name_of(book, idx);
+}
+
+static void env_init(ud_xls *x, ud_ptg_env *e)
+{
+    e->book = x;
+    e->xti_name = env_xti_name;
+    e->name_of = env_name_of;
+    e->extname_of = env_extname_of;
 }
 
 /* ---- cell collection ------------------------------------------------------- */
@@ -552,6 +621,82 @@ static int parse_globals(ud_xls *x, ud_xr *r)
             x->nxf++;
             break;
         }
+        case R_SUPBOOK: {
+            /* A 4-byte SUPBOOK whose second word is 0x0401 is this workbook
+               referring to its own sheets; anything else is an external
+               workbook, which v1 renders as #REF rather than guessing. */
+            int internal = (r->len == 4 && ud_rd16(r->buf + 2) == 0x0401);
+            if (x->nsup == x->supcap) {
+                int nc = x->supcap ? x->supcap * 2 : 8;
+                unsigned char *n = (unsigned char *)ud_alloc((unsigned long)nc);
+                if (!n) break;
+                memset(n, 0, (unsigned long)nc);
+                if (x->nsup) memcpy(n, x->supint, (unsigned long)x->nsup);
+                ud_free(x->supint);
+                x->supint = n; x->supcap = nc;
+            }
+            x->supint[x->nsup++] = (unsigned char)internal;
+            break;
+        }
+        case R_EXTERNSHEET: {
+            int cnt = (int)bs_u16(&b), k;
+            for (k = 0; k < cnt; k++) {
+                uint16_t sup = bs_u16(&b), f = bs_u16(&b), l = bs_u16(&b);
+                if (!b.ok) break;
+                if (x->nxti == x->xticap) {
+                    int nc = x->xticap ? x->xticap * 2 : 16;
+                    ud_xti *n = (ud_xti *)ud_alloc((unsigned long)nc * sizeof(ud_xti));
+                    if (!n) break;
+                    if (x->nxti) memcpy(n, x->xti,
+                                        (unsigned long)x->nxti * sizeof(ud_xti));
+                    ud_free(x->xti);
+                    x->xti = n; x->xticap = nc;
+                }
+                x->xti[x->nxti].sup = sup;
+                x->xti[x->nxti].first = f;
+                x->xti[x->nxti].last = l;
+                x->nxti++;
+            }
+            break;
+        }
+        case R_NAME: {
+            /* fixed header, then the name as an XLUnicodeString with its
+               length already given by cch, then the definition ptgs */
+            int cch;
+            char *nm;
+            bs_u16(&b);                       /* grbit                     */
+            bs_u8(&b);                        /* chKey                     */
+            cch = (int)bs_u8(&b);
+            bs_u16(&b);                       /* cce                       */
+            bs_u16(&b);                       /* ixals (unused)            */
+            bs_u16(&b);                       /* itab                      */
+            bs_skip(&b, 4);                   /* the four description cchs */
+            {
+                int grbit = bs_u8(&b), i;
+                nm = (char *)ud_alloc((unsigned long)(cch > 0 ? cch : 0) + 1);
+                if (!nm) break;
+                for (i = 0; i < cch; i++) {
+                    uint16_t u = (grbit & 1) ? bs_u16(&b)
+                                 : ud_cp1252_to_uc((unsigned char)bs_u8(&b));
+                    nm[i] = (char)ud_uc_to_cp1252(u);
+                }
+                nm[cch > 0 ? cch : 0] = 0;
+                if (!b.ok) nm[0] = 0;
+                own(x, nm);
+            }
+            if (x->nname == x->namecap) {
+                int nc = x->namecap ? x->namecap * 2 : 8;
+                char **n = (char **)ud_alloc((unsigned long)nc * sizeof(char *));
+                if (!n) break;
+                memset(n, 0, (unsigned long)nc * sizeof(char *));
+                if (x->nname) memcpy(n, x->name,
+                                     (unsigned long)x->nname * sizeof(char *));
+                ud_free(x->name);
+                x->name = n; x->namecap = nc;
+            }
+            x->name[x->nname++] = nm;
+            break;
+        }
         case R_SST: {
             long total, uniq, i;
             total = (long)bs_u32(&b); (void)total;
@@ -611,10 +756,24 @@ static int formula_result(ud_xcell *c, const unsigned char *v)
     return 0;
 }
 
+/* keep a copy of a ptg array; the record buffer is reused by the next read */
+static unsigned char *keep(const unsigned char *p, long n)
+{
+    unsigned char *c = (unsigned char *)ud_alloc((unsigned long)(n ? n : 1));
+    if (c && n) memcpy(c, p, (unsigned long)n);
+    return c;
+}
+
 static void parse_sheet(ud_xls *x, ud_xr *r, ud_xsheet *s)
 {
     int depth = 0;
     ud_xcell *pending_str = 0;      /* a formula whose result is a STRING   */
+    ud_ptg_env env;
+    ud_xshr  *shr = 0;   int nshr = 0, shrcap = 0;
+    ud_xpend *pnd = 0;   int npnd = 0, pndcap = 0;
+    int last_formula_cell = -1, last_fr = 0, last_fc = 0;
+
+    env_init(x, &env);
 
     if (s->pos < 0 || s->pos >= r->size) return;
     r->pos = s->pos;
@@ -720,6 +879,65 @@ static void parse_sheet(ud_xls *x, ud_xr *r, ud_xsheet *s)
             c->xf = xf;
             c->formula = 1;
             pending_str = formula_result(c, b.p + b.at) ? c : 0;
+            bs_skip(&b, 8);
+            bs_u16(&b);                       /* grbit                     */
+            bs_u32(&b);                       /* chn                       */
+            {
+                long cce = (long)bs_u16(&b);
+                long avail = r->len - b.at;
+                int er, ec;
+                if (!b.ok || cce < 0 || cce > avail) break;
+                last_formula_cell = s->ncell - 1;
+                last_fr = row; last_fc = col;
+                if (ud_ptg_is_exp(b.p + b.at, cce, &er, &ec)) {
+                    /* points at a shared formula whose SHRFMLA record has
+                       not arrived yet - resolve at end of sheet */
+                    if (npnd == pndcap) {
+                        int nc = pndcap ? pndcap * 2 : 32;
+                        ud_xpend *n = (ud_xpend *)ud_alloc((unsigned long)nc *
+                                                           sizeof(ud_xpend));
+                        if (!n) break;
+                        if (npnd) memcpy(n, pnd, (unsigned long)npnd * sizeof(ud_xpend));
+                        ud_free(pnd);
+                        pnd = n; pndcap = nc;
+                    }
+                    pnd[npnd].cell = s->ncell - 1;
+                    pnd[npnd].er = er; pnd[npnd].ec = ec;
+                    pnd[npnd].row = row; pnd[npnd].col = col;
+                    npnd++;
+                } else {
+                    char *t = ud_ptg_text(b.p + b.at, cce, &env, row, col,
+                                          b.p + b.at + cce, avail - cce);
+                    if (t) c->ftext = own(x, t);
+                }
+            }
+            break;
+        }
+        case R_SHRFMLA: {
+            long cce;
+            unsigned char *cp;
+            bs_u16(&b); bs_u16(&b);           /* rowFirst, rowLast         */
+            bs_u8(&b);  bs_u8(&b);            /* colFirst, colLast         */
+            bs_u16(&b);                       /* reserved / cUse           */
+            cce = (long)bs_u16(&b);
+            if (!b.ok || cce < 0 || cce > r->len - b.at) break;
+            if (last_formula_cell < 0) break;
+            if (nshr == shrcap) {
+                int nc = shrcap ? shrcap * 2 : 16;
+                ud_xshr *n = (ud_xshr *)ud_alloc((unsigned long)nc * sizeof(ud_xshr));
+                if (!n) break;
+                if (nshr) memcpy(n, shr, (unsigned long)nshr * sizeof(ud_xshr));
+                ud_free(shr);
+                shr = n; shrcap = nc;
+            }
+            cp = keep(b.p + b.at, cce);
+            if (!cp) break;
+            /* keyed on the FIRST member cell, which is what a PtgExp names */
+            shr[nshr].r0 = last_fr;
+            shr[nshr].c0 = last_fc;
+            shr[nshr].ptg = cp;
+            shr[nshr].n = cce;
+            nshr++;
             break;
         }
         case R_STRING: {
@@ -754,6 +972,28 @@ static void parse_sheet(ud_xls *x, ud_xr *r, ud_xsheet *s)
         default:
             break;
         }
+    }
+    /* Resolve the cells that only carried a PtgExp, now that every SHRFMLA
+       for this sheet has been read.  Each one re-bases the shared
+       expression's relative tokens against its OWN position - that is the
+       whole point of a shared formula. */
+    {
+        int i, k;
+        for (i = 0; i < npnd; i++) {
+            for (k = 0; k < nshr; k++) {
+                if (shr[k].r0 != pnd[i].er || shr[k].c0 != pnd[i].ec) continue;
+                if (pnd[i].cell < 0 || pnd[i].cell >= s->ncell) break;
+                {
+                    char *t = ud_ptg_text(shr[k].ptg, shr[k].n, &env,
+                                          pnd[i].row, pnd[i].col, 0, 0);
+                    if (t) s->cell[pnd[i].cell].v.ftext = own(x, t);
+                }
+                break;
+            }
+        }
+        for (k = 0; k < nshr; k++) ud_free(shr[k].ptg);
+        ud_free(shr);
+        ud_free(pnd);
     }
     cells_sort(s->cell, s->ncell);
 }
@@ -807,6 +1047,9 @@ void ud_xls_close(ud_xls *x)
     ud_free(x->sst);
     ud_free(x->xf);
     ud_free(x->fmt);
+    ud_free(x->xti);
+    ud_free(x->supint);
+    ud_free(x->name);
     ud_free(x);
 }
 
