@@ -4006,3 +4006,33 @@ loaded only when unprotected; the app cannot yet prompt for a passphrase, which
 is the first thing a follow-on should add. `ssh_shell()` takes no dimensions
 from the window. RSA host keys and RSA user keys are declared in the plan but
 only Ed25519 is implemented.
+
+## 2026-08-01 - CLAIMS + a landing (unoamp, and the Office 97 programme)
+
+**LANDED (unoamp lane): real-world .wsz skins** (`03f7f0d7` on master). The
+metal complaint "the skin/theme does not apply" was three loader gaps real
+downloaded skins hit and the generated test skins do not: folder-prefixed
+member names, streamed zips (data descriptors), and silent truncation of
+archives over the old 1.5 MB read buffer. The loader now walks the central
+directory (authoritative sizes), matches sheet names on the basename,
+refuses oversize archives whole via `uno_fs_size`, and parses pledit.txt
+`SelectedBG` so the playlist selection bar takes the skin's colour.
+`mkskin.py` now generates NESTED.wsz and STREAMED.wsz reproducing both
+real-world shapes; skintest (sanitized per the dsptest lesson) loads 13/13
+sheets on all where the old loader loaded 0/13 on the two new ones.
+METAL-PENDING: reconfirm on the ZimaBlade with a stock downloaded skin at
+the next hardware session.
+
+**CLAIM, TWO NEW subsystems: `unodoc` + `unoffice`** - the Office 97 clone
+programme. Registry rows added to /AGENTS.md in this commit. The plan for
+Opus workers is `docs/OFFICE97-PLAN.md`; the conformance yardstick is
+`docs/OFFICE97-SPEC.md`. Both new lanes are claimed for that programme;
+no code exists yet.
+
+**Requests filed by the plan** (use nearest primitive meanwhile, none block
+the start): to **unofs** - FAT long filenames; a streaming/append write
+path (whole-file writes force full-document RAM buffers on save). To the
+**font lane** - raise the styled-draw px clamp (8..40 today) to 8..96 for
+presentation titles; later, CP-1252 glyph coverage beyond ASCII. To the
+**shell** - a larger multi-format clipboard (512-byte plain text today);
+the suite keeps a private rich clipboard and mirrors plain text until then.
