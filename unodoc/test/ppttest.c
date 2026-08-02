@@ -55,7 +55,17 @@ int main(int argc, char **argv)
         p = open_ppt(b, n, &src, &c);
         if (!p) { printf("ERR: %s\n", ud_error()); free(b); ud_cfb_close(c); return 1; }
         if (strcmp(argv[1], "info") == 0) {
-            printf("slides=%d\n", ud_ppt_slides(p));
+            ud_shape sh[256];
+            long total = 0;
+            for (i = 0; i < ud_ppt_slides(p); i++) {
+                int ns = ud_ppt_slide_shapes(p, i, sh, 256), k;
+                total += ns;
+                for (k = 0; k < ns; k++)
+                    printf("shape\tslide=%d\tkind=%d\tid=%ld\tgroup=%d\t"
+                           "box=%ld,%ld,%ld,%ld\n", i, sh[k].kind, sh[k].id,
+                           sh[k].group, sh[k].x0, sh[k].y0, sh[k].x1, sh[k].y1);
+            }
+            printf("slides=%d shapes=%ld\n", ud_ppt_slides(p), total);
         } else {
             for (i = 0; i < ud_ppt_slides(p); i++)
                 fputs(ud_ppt_slide_text(p, i), stdout);
@@ -91,8 +101,11 @@ int main(int argc, char **argv)
             if (p) {
                 int i;
                 opened++;
-                for (i = 0; i < ud_ppt_slides(p); i++)
+                for (i = 0; i < ud_ppt_slides(p); i++) {
+                    ud_shape sh[64];
                     (void)strlen(ud_ppt_slide_text(p, i));
+                    (void)ud_ppt_slide_shapes(p, i, sh, 64);
+                }
                 ud_ppt_close(p);
             }
             ud_cfb_close(c);

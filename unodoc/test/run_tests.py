@@ -46,7 +46,7 @@ SAN = ["-fsanitize=address,undefined",
 SRCS  = ["unodoc.c", "ud_cfb.c"]
 XSRCS = ["unodoc.c", "ud_cfb.c", "ud_xls.c", "ud_ptg.c", "ud_ptgc.c", "ud_xlsw.c"]
 DSRCS = ["unodoc.c", "ud_cfb.c", "ud_doc.c", "ud_docw.c"]
-PSRCS = ["unodoc.c", "ud_cfb.c", "ud_ppt.c"]
+PSRCS = ["unodoc.c", "ud_cfb.c", "ud_ppt.c", "ud_escher.c"]
 
 # what each format is required to carry, as unodoc paths
 REQUIRED = {
@@ -551,7 +551,10 @@ def presentations(files, have_lo):
         if r.returncode or r.stdout.startswith("ERR:"):
             fail("%s: %s" % (base, (r.stdout + r.stderr).strip()[:300]))
             continue
-        print("  %-12s %s" % (base, r.stdout.strip()))
+        print("  %-12s %s" % (base, r.stdout.strip().splitlines()[-1]))
+        nsh = sum(1 for l in r.stdout.splitlines() if l.startswith("shape"))
+        if nsh < 1:
+            fail("%s: no Escher shapes found" % base)
         rr = subprocess.run([PBIN, "text", path], capture_output=True, timeout=600)
         ours = norm_lines(rr.stdout.decode("cp1252", errors="replace"))
         if not have_lo:

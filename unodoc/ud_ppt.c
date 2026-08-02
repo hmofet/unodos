@@ -282,6 +282,18 @@ void ud_ppt_close(ud_ppt *p)
 
 int ud_ppt_slides(const ud_ppt *p) { return p ? p->nslide : 0; }
 
+/* The slide's drawing is Escher, and Escher is format-neutral, so the whole
+ * SlideContainer is handed to it: the walker finds the SpContainers wherever
+ * inside the PPDrawing they happen to sit. */
+int ud_ppt_slide_shapes(ud_ppt *p, int i, ud_shape *out, int max)
+{
+    int type;
+    long len, body;
+    if (!p || i < 0 || i >= p->nslide || !out || max <= 0) return 0;
+    if (!rec_at(p, p->slide[i].off, &type, &len, &body)) return 0;
+    return ud_escher_shapes(p->doc, p->dlen, body, body + len, out, max, 0);
+}
+
 const char *ud_ppt_slide_text(ud_ppt *p, int i)
 {
     tbuf t;
