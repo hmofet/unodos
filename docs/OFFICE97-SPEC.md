@@ -122,7 +122,10 @@ guides (full URL list in the plan's research provenance, §11).
   64/512/4096 boundaries, DIFAT overflow, a 7-file LibreOffice corpus read
   and rebuilt through our writer with LibreOffice agreeing the rebuilt
   container is the same document, and 28,000 fuzz mutations under
-  ASan/UBSan. (Read covers v3 and v4; write emits v3, as Office 97 does.)
+  ASan/UBSan. Write emits version 3, as Office 97 does. The reader is
+  written sector-size-general and accepts a version 4 (4096-byte sector)
+  header, but **no v4 file has been tested** — nothing in the corpus can
+  produce one — so treat v4 as unproven until a real file turns up.
 - [ ] Encrypted files (FILEPASS / [MS-OFFCRYPTO]) refused with a clear
   message `[F for the refusal]`
 - [ ] Also: `.TXT` and `.RTF` write (Word), `.CSV`/`.TXT` (Excel)
