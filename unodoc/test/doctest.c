@@ -471,6 +471,78 @@ int main(int argc, char **argv)
         free(b);
         return 0;
     }
+    /* write a document, read it back with our own reader, and (via
+     * run_tests.py) hand it to LibreOffice - the half we cannot judge */
+    if (argc >= 2 && strcmp(argv[1], "wtest") == 0) {
+        static const char *P[4] = {
+            "Plain first paragraph.",
+            "This one is bold.",
+            "This one is italic and centred.",
+            "Back to plain, right aligned."
+        };
+        ud_docw *w = ud_docw_new();
+        unsigned char *img;
+        long n = 0;
+        ud_src src;
+        ud_cfb *c;
+        ud_doc *d;
+        int bad = 0, i;
+
+        if (!w) { printf("ERR: %s\n", ud_error()); return 1; }
+        ud_docw_para(w, P[0], 0, 0, 0);
+        ud_docw_para(w, P[1], 1, 0, 0);
+        ud_docw_para(w, P[2], 0, 1, 1);
+        ud_docw_para(w, P[3], 0, 0, 2);
+        img = ud_docw_save(w, &n);
+        ud_docw_free(w);
+        if (!img) { printf("FAIL doc write: %s\n", ud_error()); return 1; }
+        if (argc >= 3) {                       /* also drop it on disk      */
+            FILE *f = fopen(argv[2], "wb");
+            if (f) { fwrite(img, 1, (size_t)n, f); fclose(f); }
+        }
+        d = open_doc(img, n, &src, &c);
+        if (!d) {
+            printf("FAIL doc write: our own reader will not open it: %s\n", ud_error());
+            bad = 1;
+        } else {
+            const char *t = ud_doc_text(d);
+            long at = 0;
+            for (i = 0; i < 4; i++) {
+                long ln = (long)strlen(P[i]);
+                ud_chp ch;
+                ud_pap pa;
+                if (strncmp(t + at, P[i], (size_t)ln) != 0 || t[at + ln] != 0x0D) {
+                    printf("FAIL doc write: paragraph %d came back wrong\n", i);
+                    bad = 1;
+                }
+                ud_doc_chp_at(d, at, &ch);
+                ud_doc_pap_at(d, at, &pa);
+                if (ch.bold != (i == 1) || ch.italic != (i == 2)) {
+                    printf("FAIL doc write: paragraph %d formatting: bold=%d "
+                           "italic=%d\n", i, ch.bold, ch.italic);
+                    bad = 1;
+                }
+                if (pa.align != (i == 2 ? 1 : (i == 3 ? 2 : 0))) {
+                    printf("FAIL doc write: paragraph %d align=%d\n", i, pa.align);
+                    bad = 1;
+                }
+                if (ch.size != 20) {
+                    printf("FAIL doc write: paragraph %d size=%d, the Normal "
+                           "style should have supplied 20\n", i, ch.size);
+                    bad = 1;
+                }
+                at += ln + 1;
+            }
+            ud_doc_close(d);
+        }
+        ud_cfb_close(c);
+        ud_free(img);
+        if (!bad)
+            printf("doctest: writer OK - 4 paragraphs with bold, italic and "
+                   "alignment survive a save/reload, and 10pt arrives through "
+                   "the Normal style we wrote\n");
+        return bad;
+    }
     if (argc >= 5 && strcmp(argv[1], "fuzz") == 0) {
         long n = 0;
         unsigned char *b = slurp(argv[2], &n);

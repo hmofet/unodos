@@ -44,7 +44,7 @@ SAN = ["-fsanitize=address,undefined",
 
 SRCS  = ["unodoc.c", "ud_cfb.c"]
 XSRCS = ["unodoc.c", "ud_cfb.c", "ud_xls.c", "ud_ptg.c", "ud_ptgc.c", "ud_xlsw.c"]
-DSRCS = ["unodoc.c", "ud_cfb.c", "ud_doc.c"]
+DSRCS = ["unodoc.c", "ud_cfb.c", "ud_doc.c", "ud_docw.c"]
 
 # what each format is required to carry, as unodoc paths
 REQUIRED = {
@@ -91,7 +91,41 @@ SELFTESTS = [
     (lambda: [XBIN, "selftest"], "xlstest selftest"),   # the SST encoding switch
     (lambda: [XBIN, "wtest"],    "xlstest wtest"),      # the writer round-trip
     (lambda: [DBIN, "selftest"], "doctest selftest"),   # the multi-piece walk
+    (lambda: [DBIN, "wtest", os.path.join(GEN, "written.doc")], "doctest wtest"),
 ]
+
+# What LibreOffice must find in the .doc WE wrote.  Our own reader agreeing
+# with our own writer proves only that they share a misunderstanding.
+WRITTEN_DOC_MUST_HAVE = [
+    ("Plain first paragraph.",        "the first paragraph"),
+    ("This one is bold.",             "a bold paragraph's text"),
+    ("This one is italic and centred.", "an italic centred paragraph"),
+    ("Back to plain, right aligned.", "a right-aligned paragraph"),
+    ('fo:font-weight="bold"',         "the bold run"),
+    ('fo:font-style="italic"',        "the italic run"),
+    ('fo:text-align="center"',        "centred alignment"),
+    ('fo:text-align="end"',           "right alignment"),
+]
+
+def written_doc(have_lo):
+    out = os.path.join(GEN, "written.doc")
+    if not os.path.exists(out):
+        fail("no .doc was written")
+        return
+    print("  wrote %d bytes" % os.path.getsize(out))
+    if not have_lo:
+        print("  (no soffice: the independent half of this stage is SKIPPED)")
+        return
+    flat = soffice_flat(out, os.path.join(GEN, "lo_wdoc"))
+    if flat is None:
+        fail("LibreOffice REFUSED the .doc we wrote")
+        return
+    missing = [why for s, why in WRITTEN_DOC_MUST_HAVE if s not in flat]
+    if missing:
+        fail("LibreOffice opened our .doc but did not find: %s" % ", ".join(missing))
+    else:
+        print("  LibreOffice reads back all %d checked features"
+              % len(WRITTEN_DOC_MUST_HAVE))
 
 def selftest():
     for argv, what in SELFTESTS:
@@ -577,6 +611,7 @@ def main():
         stage("rebuild", rebuild_corpus, files, have_lo)
         stage("workbook", workbooks, files)
         stage("written", written, have_lo)
+        stage("written doc", written_doc, have_lo)
         stage("document", documents, files, have_lo)
         stage("fuzz", fuzz, files)
         stage("workbook fuzz", xls_fuzz, files)

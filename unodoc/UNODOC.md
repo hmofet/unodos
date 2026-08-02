@@ -27,7 +27,7 @@ a request rather than editing it.
 | 4a | `.doc` read: FIB, piece table, text | **landed**, `[EXPERIMENTAL]` |
 | 4b | `.doc` read: direct formatting (CHPX/PAPX, sprms) | **landed**, `[EXPERIMENTAL]` |
 | 4b′ | `.doc` read: the STSH style hierarchy | **landed**, `[EXPERIMENTAL]` |
-| 4c | `.doc` minimal writer | not started |
+| 4c | `.doc` minimal writer | **landed**, `[EXPERIMENTAL]` |
 | 5 | Escher + `.ppt` | not started |
 
 Everything is `[EXPERIMENTAL]` until a consuming app has shipped on it. The
@@ -468,8 +468,30 @@ base style, a style based on it, a character style and a direct exception all
 touching different properties: any two layers applied in the wrong order lose
 one.
 
+## Writing a document (phase 4c)
+
+```c
+ud_docw *w = ud_docw_new();
+ud_docw_para(w, "A heading", 1, 0, 1);      /* bold, centred */
+ud_docw_para(w, "Body text.", 0, 0, 0);
+long n; unsigned char *doc = ud_docw_save(w, &n);
+```
+
+Reading a `.doc` means coping with every layout Word has ever emitted; writing
+one means picking the single simplest layout both Word and LibreOffice accept
+and emitting it exactly: **one** 8-bit text piece, **one** exception page each
+for characters and paragraphs, a style sheet holding just Normal (a document
+with no STSH at all is rejected), and one section with no properties of its
+own. Bold, italic and alignment go out as sprm deltas over that Normal style.
+
+The awkward part is not any single structure — it is that the FIB has to be
+written twice: once to reserve its space, and again at the end once every
+other structure's offset and length is known.
+
 Still absent: the sprm set is the common ~15 rather than the full ~50;
-sections, tables and pictures are untouched; and there is no writer.
+sections beyond one, tables and pictures are untouched; and the writer emits
+no font table or document properties, which LibreOffice tolerates but real
+Word has not been asked about.
 
 ### A note on the corpus, so nobody re-derives it
 
@@ -512,6 +534,13 @@ only when it is actually needed, as an append.
 
 ## Changelog
 
+- **2026-08-02 — phase 4c.** `ud_docw.c`: writing a `.doc`. The minimal
+  layout Word and LibreOffice both accept - one 8-bit text piece, one
+  exception page each for characters and paragraphs, a Normal style, one
+  section - plus bold, italic and alignment as sprm deltas. Gate: our reader
+  round-trips it AND **LibreOffice opens it** and finds all four paragraphs
+  with the right formatting. UBSan caught an out-of-bounds FIB table on the
+  first run.
 - **2026-08-02 — phase 4b'.** The STSH: style sheet parsing, based-on
   chains, and four-layer resolution (paragraph style, character style,
   direct). Proven by a hand-built document where each layer sets a different
