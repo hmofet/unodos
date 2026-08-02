@@ -90,6 +90,22 @@ static const int PCWIDE[4] = { 0, 1, 0, 1 };
 /* the order the runs are PLACED in the stream - deliberately not 0,1,2,3 */
 static const int PCORDER[4] = { 2, 0, 3, 1 };
 
+#define FKP_PAGE  512
+
+static void wr32(unsigned char *p, unsigned long v)
+{
+    p[0] = (unsigned char)v;         p[1] = (unsigned char)(v >> 8);
+    p[2] = (unsigned char)(v >> 16); p[3] = (unsigned char)(v >> 24);
+}
+
+/* write one (fc, lcb) pair of rgFcLcb, given the array's base offset */
+static void patch_pair(unsigned char *fib, long rgbase, int pair,
+                       long fc, long lcb)
+{
+    wr32(fib + rgbase + pair * 8, (unsigned long)fc);
+    wr32(fib + rgbase + pair * 8 + 4, (unsigned long)lcb);
+}
+
 #define FIB_CSW   14
 #define FIB_CSLW  22
 #define FIB_CBFC  93
@@ -108,6 +124,7 @@ static int doc_selftest(void)
     ud_cfb *c;
     ud_doc *d;
     int bad = 0, whichtbl;
+    long bte_lo = 0, bte_hi = 0, bte_chpx = 0, bte_papx = 0;
 
     for (whichtbl = 0; whichtbl < 2; whichtbl++) {
         memset(&wd, 0, sizeof wd);
@@ -145,6 +162,52 @@ static int doc_selftest(void)
             }
         }
 
+        /* ---- formatting: one CHPX page and one PAPX page ----------------
+         * The CHPX run deliberately covers only the bytes of piece 2, which
+         * is the piece placed FIRST in the stream but appearing THIRD in the
+         * document.  So if the reader looks formatting up by character
+         * position instead of by file offset, the wrong text comes back
+         * bold - which is the whole point of doing it this way. */
+        {
+            long chpx_page = 8, papx_page = 9;
+            unsigned char fkp[FKP_PAGE];
+            long lo = at[PCORDER[0]];           /* first run placed         */
+            long mid = at[PCORDER[1]];
+            long hi = wd.n;
+
+            /* CHPX FKP: run 0 = [lo,mid) bold+italic+20pt, run 1 = default */
+            memset(fkp, 0, sizeof fkp);
+            wr32(fkp + 0, (unsigned long)lo);
+            wr32(fkp + 4, (unsigned long)mid);
+            wr32(fkp + 8, (unsigned long)hi);
+            fkp[12] = 250;                      /* run 0's CHPX at 500      */
+            fkp[13] = 0;                        /* run 1: no exception      */
+            fkp[500] = 10;                      /* cb                       */
+            fkp[501] = 0x35; fkp[502] = 0x08; fkp[503] = 1;   /* bold on    */
+            fkp[504] = 0x36; fkp[505] = 0x08; fkp[506] = 1;   /* italic on  */
+            fkp[507] = 0x43; fkp[508] = 0x4A;                 /* sprmCHps   */
+            fkp[509] = 40;   fkp[510] = 0;                    /* 20pt       */
+            fkp[FKP_PAGE - 1] = 2;              /* crun                     */
+            dzero(&wd, chpx_page * FKP_PAGE - wd.n);
+            dput(&wd, fkp, FKP_PAGE);
+
+            /* PAPX FKP: one run over everything, centred with a left indent */
+            memset(fkp, 0, sizeof fkp);
+            wr32(fkp + 0, (unsigned long)lo);
+            wr32(fkp + 4, (unsigned long)hi);
+            fkp[8] = 240;                       /* PAPX at 480              */
+            fkp[480] = 5;                       /* cb: grpprl is 2*5-1 = 9  */
+            fkp[481] = 0; fkp[482] = 0;         /* istd                     */
+            fkp[483] = 0x03; fkp[484] = 0x24; fkp[485] = 1;   /* jc centre  */
+            fkp[486] = 0x0F; fkp[487] = 0x84;                 /* dxaLeft    */
+            fkp[488] = 0xD0; fkp[489] = 0x02;                 /* 720 twips  */
+            fkp[FKP_PAGE - 1] = 1;
+            dzero(&wd, papx_page * FKP_PAGE - wd.n);
+            dput(&wd, fkp, FKP_PAGE);
+            bte_lo = lo; bte_hi = hi;
+            bte_chpx = chpx_page; bte_papx = papx_page;
+        }
+
         /* ---- the table stream: a CLX holding a four-entry piece table --- */
         {
             long lcb = 4 * 5 + 8 * 4;           /* (n+1) CPs + n Pcds       */
@@ -162,19 +225,24 @@ static int doc_selftest(void)
                 d32(&tbl, fc);
                 d16(&tbl, 0);
             }
-            /* patch rgFcLcb pair 33 = (fcClx, lcbClx) */
             {
                 long rg = 32 + 2 + FIB_CSW * 2 + 2 + FIB_CSLW * 4 + 2;
-                long p = rg + 33 * 8;
-                unsigned long fcClx = 64, lcbClx = (unsigned long)(tbl.n - 64);
-                wd.p[p + 0] = (unsigned char)fcClx;
-                wd.p[p + 1] = (unsigned char)(fcClx >> 8);
-                wd.p[p + 2] = (unsigned char)(fcClx >> 16);
-                wd.p[p + 3] = (unsigned char)(fcClx >> 24);
-                wd.p[p + 4] = (unsigned char)lcbClx;
-                wd.p[p + 5] = (unsigned char)(lcbClx >> 8);
-                wd.p[p + 6] = (unsigned char)(lcbClx >> 16);
-                wd.p[p + 7] = (unsigned char)(lcbClx >> 24);
+                long clxlen = tbl.n - 64;
+                long btechpx, btepapx;
+
+                /* the two formatting bin tables, right after the CLX */
+                btechpx = tbl.n;
+                d32(&tbl, (unsigned long)bte_lo);
+                d32(&tbl, (unsigned long)bte_hi);
+                d32(&tbl, (unsigned long)bte_chpx);
+                btepapx = tbl.n;
+                d32(&tbl, (unsigned long)bte_lo);
+                d32(&tbl, (unsigned long)bte_hi);
+                d32(&tbl, (unsigned long)bte_papx);
+
+                patch_pair(wd.p, rg, 33, 64, clxlen);            /* fcClx   */
+                patch_pair(wd.p, rg, 12, btechpx, 12);           /* CHPX bte*/
+                patch_pair(wd.p, rg, 13, btepapx, 12);           /* PAPX bte*/
             }
         }
 
@@ -201,6 +269,39 @@ static int doc_selftest(void)
                        "  want \"%s\"\n", whichtbl ? "1" : "0", ud_doc_text(d), want);
                 bad = 1;
             }
+            /* Formatting is indexed by FILE offset, and the CHPX run covers
+               only piece 2's bytes - the piece stored FIRST but reading
+               THIRD.  So the bold text is the one late in the document, and
+               a reader that indexed by character position would bold the
+               wrong words. */
+            {
+                long cp_in_p2 = (long)(strlen(PC[0]) + strlen(PC[1]) + 2);
+                ud_chp ch;
+                ud_pap pa;
+
+                ud_doc_chp_at(d, cp_in_p2, &ch);
+                if (!ch.bold || !ch.italic || ch.size != 40) {
+                    printf("FAIL doc selftest: piece 2 should be bold+italic+"
+                           "20pt, got bold=%d italic=%d size=%d\n",
+                           ch.bold, ch.italic, ch.size);
+                    bad = 1;
+                }
+                ud_doc_chp_at(d, 0, &ch);
+                if (ch.bold || ch.italic || ch.size) {
+                    printf("FAIL doc selftest: piece 0 should be unformatted, "
+                           "got bold=%d italic=%d size=%d - formatting was "
+                           "looked up by character position, not file offset\n",
+                           ch.bold, ch.italic, ch.size);
+                    bad = 1;
+                }
+                ud_doc_pap_at(d, 0, &pa);
+                if (pa.align != 1 || pa.left != 720) {
+                    printf("FAIL doc selftest: paragraph should be centred with "
+                           "a 720-twip indent, got align=%d left=%d\n",
+                           pa.align, pa.left);
+                    bad = 1;
+                }
+            }
             ud_doc_close(d);
         }
         ud_cfb_close(c);
@@ -208,8 +309,9 @@ static int doc_selftest(void)
     }
     if (!bad)
         printf("doctest: selftest OK - 4 pieces alternating 8-bit/UTF-16, "
-               "stored out of document order, reassembled correctly from "
-               "both 0Table and 1Table\n");
+               "stored out of document order, reassembled from both 0Table "
+               "and 1Table; CHPX/PAPX resolved by FILE offset (the bold run "
+               "is the piece stored first but reading third)\n");
     return bad;
 }
 
@@ -243,6 +345,53 @@ int main(int argc, char **argv)
             printf("pieces=%d chars=%ld paragraphs=%ld cells=%ld fields=%ld "
                    "other-controls=%ld\n",
                    ud_doc_pieces(d), ud_doc_text_len(d), para, cell, field, ctrl);
+        }
+        ud_doc_close(d);
+        ud_cfb_close(c);
+        free(b);
+        return 0;
+    }
+    /* For every ALLCAPS marker word in the document, report the formatting
+     * in force at its first character.  The gate compares this against the
+     * expectations mkcorpus.py wrote from the SOURCE styles - so the marker
+     * text, not an offset we computed, is what ties the two together. */
+    if (argc >= 3 && strcmp(argv[1], "fmt") == 0) {
+        long n = 0;
+        unsigned char *b = slurp(argv[2], &n);
+        ud_src src;
+        ud_cfb *c;
+        ud_doc *d;
+        const char *t;
+        long i, len;
+        if (!b) { printf("ERR: cannot read %s\n", argv[2]); return 2; }
+        d = open_doc(b, n, &src, &c);
+        if (!d) { printf("ERR: %s\n", ud_error()); free(b); ud_cfb_close(c); return 1; }
+        t = ud_doc_text(d);
+        len = ud_doc_text_len(d);
+        for (i = 0; i < len; i++) {
+            long j = i;
+            char word[64];
+            int k = 0;
+            while (j < len && t[j] >= 'A' && t[j] <= 'Z' && k < 63) word[k++] = t[j++];
+            if (k < 5) { continue; }
+            word[k] = 0;
+            {
+                ud_chp ch;
+                ud_pap pa;
+                ud_doc_chp_at(d, i, &ch);
+                ud_doc_pap_at(d, i, &pa);
+                printf("chp\t%s\tbold\t%d\n",      word, ch.bold);
+                printf("chp\t%s\titalic\t%d\n",    word, ch.italic);
+                printf("chp\t%s\tunderline\t%d\n", word, ch.underline);
+                printf("chp\t%s\tstrike\t%d\n",    word, ch.strike);
+                printf("chp\t%s\tcaps\t%d\n",      word, ch.caps);
+                printf("chp\t%s\tsize\t%d\n",      word, ch.size);
+                printf("pap\t%s\talign\t%d\n",     word, pa.align);
+                printf("pap\t%s\tleft\t%d\n",      word, pa.left);
+                printf("pap\t%s\tfirst\t%d\n",     word, pa.first);
+                printf("pap\t%s\tbefore\t%d\n",    word, pa.before);
+            }
+            i = j;
         }
         ud_doc_close(d);
         ud_cfb_close(c);

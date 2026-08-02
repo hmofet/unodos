@@ -68,6 +68,76 @@ def escattr(s):
     formulas carry string literals and would otherwise close the attribute."""
     return esc(s).replace('"', "&quot;")
 
+# ---- a document whose formatting describes itself ---------------------------
+# Each run's TEXT says what its formatting should be, so a gate can look the
+# marker up in the extracted text and assert on the properties found there -
+# nothing keyed on an offset we computed ourselves.
+#
+# THIS IS NOT YET A GATE, and the reason is worth recording.  LibreOffice
+# turns ODF automatic styles into Word CHARACTER AND PARAGRAPH STYLES, not
+# into direct formatting: measured on this very file, only 2 of the 7 runs
+# carry a CHPX at all, and the rest resolve through the style sheet.  unodoc
+# does not read the STSH yet, so it correctly reports "no direct formatting"
+# for those runs, and expectations written against the ODF source would fail
+# for a reason that is not a bug.
+#
+# So fmt.doc ships as a text and fuzz target now, and becomes the fixture for
+# the STSH slice - which is exactly what it was built for.  The sprm
+# interpreter itself is proven meanwhile by doctest's hand-built document,
+# where the CHPX and PAPX are ours and known.
+FMT_RUNS = [
+    ("PLAINWORD",  "",                       {}),
+    ("BOLDWORD",   'fo:font-weight="bold"',  {"bold": 1}),
+    ("ITALICWORD", 'fo:font-style="italic"', {"italic": 1}),
+    ("ULINEWORD",  'style:text-underline-style="solid" '
+                   'style:text-underline-width="auto"', {"underline": 1}),
+    ("BIGWORD",    'fo:font-size="18pt"',    {"size": 36}),
+    ("STRIKEWORD", 'style:text-line-through-style="solid"', {"strike": 1}),
+    ("CAPSWORD",   'fo:text-transform="uppercase"', {"caps": 1}),
+]
+
+FMT_PARAS = [
+    ("LEFTPARA",   "",                                   {"align": 0}),
+    ("CENTREPARA", 'fo:text-align="center"',             {"align": 1}),
+    ("RIGHTPARA",  'fo:text-align="end"',                {"align": 2}),
+    ("JUSTPARA",   'fo:text-align="justify"',            {"align": 3}),
+    ("INDENTPARA", 'fo:margin-left="2cm"',               {"left": 1134}),
+    ("FIRSTPARA",  'fo:text-indent="1cm"',               {"first": 567}),
+    ("SPACEPARA",  'fo:margin-top="0.5cm"',              {"before": 283}),
+]
+
+def fmt_fodt():
+    styles = []
+    for i, (_m, props, _e) in enumerate(FMT_RUNS):
+        styles.append('<style:style style:name="TT%d" style:family="text">'
+                      '<style:text-properties %s/></style:style>' % (i, props))
+    for i, (_m, props, _e) in enumerate(FMT_PARAS):
+        styles.append('<style:style style:name="PP%d" style:family="paragraph">'
+                      '<style:paragraph-properties %s/></style:style>' % (i, props))
+    body = []
+    for i, (marker, _p, _e) in enumerate(FMT_RUNS):
+        body.append('<text:p>a <text:span text:style-name="TT%d">%s</text:span>'
+                    ' z</text:p>' % (i, marker))
+    for i, (marker, _p, _e) in enumerate(FMT_PARAS):
+        body.append('<text:p text:style-name="PP%d">%s</text:p>' % (i, marker))
+    return ('<?xml version="1.0" encoding="UTF-8"?>\n'
+            '<office:document %s office:version="1.2" '
+            'office:mimetype="application/vnd.oasis.opendocument.text">'
+            '<office:automatic-styles>%s</office:automatic-styles>'
+            '<office:body><office:text>%s</office:text></office:body>'
+            '</office:document>' % (NS, "".join(styles), "".join(body)))
+
+def fmt_fixture():
+    """marker -> the properties the reader must report at that marker."""
+    lines = []
+    for marker, _p, exp in FMT_RUNS:
+        for k in sorted(exp):
+            lines.append("chp\t%s\t%s\t%d" % (marker, k, exp[k]))
+    for marker, _p, exp in FMT_PARAS:
+        for k in sorted(exp):
+            lines.append("pap\t%s\t%s\t%d" % (marker, k, exp[k]))
+    return "\n".join(lines) + "\n"
+
 # ---- flat-ODF source documents --------------------------------------------
 def fodt(paras, image=None):
     body = "".join("<text:p>%s</text:p>" % esc(p) for p in paras)
@@ -430,6 +500,7 @@ SOURCES = [
     ("small.fodt", lambda: fodt(["Hello unodoc.", "Second paragraph."]), "doc"),
     ("large.fodt", lambda: fodt([("%04d " % i) + LOREM * 3 for i in range(900)]), "doc"),
     ("pic.fodt",   lambda: fodt(["A document with a picture."], png(320, 240, 7)), "doc"),
+    ("fmt.fodt",   fmt_fodt, "doc"),
     ("small.fods", lambda: fods_sheets(SMALL_SHEETS), "xls"),
     ("large.fods", lambda: fods_sheets(LARGE_SHEETS), "xls"),
     ("cells.fods", lambda: fods_sheets(CELLS_SHEETS), "xls"),
