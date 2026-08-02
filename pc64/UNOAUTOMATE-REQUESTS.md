@@ -4290,3 +4290,48 @@ A note for whoever reads FIBs next: LibreOffice stamps nFib 0x0101 (not Word
 read is not enough; ud_doc.c uses 4 KB and bounds-checks rather than assuming.
 
 **No choke-point touched**; still no `pc64/build.sh` block.
+
+## 2026-08-02 - unodoc phase 4b LANDED (.doc direct formatting) + 4a's gap closed
+
+**Worker A, unodoc lane.** Two things.
+
+**1. Phase 4a's open gap is closed.** 4a shipped saying the multi-piece walk
+was implemented and unproven, because every document LibreOffice can produce
+is single-piece. `doctest selftest` now builds one by hand with two properties
+no generated file has: the runs sit in the stream in a DIFFERENT order from
+the one the piece table gives, and the pieces ALTERNATE between 8-bit and
+UTF-16. Built for both fWhichTblStm values, so the 0Table/1Table selection is
+exercised too. This is the third time a hand-built file was the only way to
+reach the case that matters (after the SST encoding switch and the shared
+formula); it is a pattern, not a coincidence.
+
+**2. Direct character and paragraph formatting.** `ud_doc_chp_at` /
+`ud_doc_pap_at`: the CHPX and PAPX bin tables, the 512-byte FKP pages, and a
+sprm interpreter. Formatting is indexed by FILE OFFSET, not character
+position, so a lookup goes through the piece table first - and the selftest
+checks precisely that by making its bold run cover the piece stored FIRST but
+reading THIRD. A reader that indexed by character position would embolden the
+wrong words and the test would say so.
+
+Two things in there have to be exactly right or they desynchronise the whole
+run rather than losing one property: the sprm operand-size table (the top
+three bits of the opcode), and PapxInFkp's two-level length, where a leading
+word count of zero means the real count is the NEXT byte and the blob starts
+one further in.
+
+**THE LIMIT, and it is bigger than it sounds.** This reads DIRECT formatting
+only - the STSH style hierarchy is not read yet. Measured on `fmt.doc`, a
+document authored with seven distinctly formatted runs: LibreOffice emitted a
+CHPX for only TWO of them and routed the other five through Word character
+styles. So on LibreOffice-authored documents, most formatting is currently
+invisible to unodoc. That makes STSH the next slice in this lane, not an
+optional refinement.
+
+`fmt.doc` is in the corpus now as a text and fuzz target, and is deliberately
+built to become the STSH fixture: each run's TEXT states what its formatting
+should be ("BOLDWORD" is the bold one), so the gate can look markers up in the
+extracted text rather than keying on offsets we computed ourselves. It ships
+WITHOUT expectations, because expectations we cannot yet satisfy would be a
+failing gate for a reason that is not a bug.
+
+**No choke-point touched**; still no `pc64/build.sh` block.

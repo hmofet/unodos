@@ -112,11 +112,15 @@ guides (full URL list in the plan's research provenance, §11).
   FIB, the piece table, text assembly in document order with both
   encodings, and field codes dropped in favour of their cached results —
   extracted text is identical to LibreOffice's own extraction on every
-  corpus file. NOT YET: formatting (CHPX/PAPX/sprms/STSH), sections,
-  tables, pictures, and the writer. **And one gap in the evidence:** every
-  corpus document is single-piece, so the multi-piece walk — the thing the
-  piece table exists for — is implemented but unproven; it needs a
-  hand-built document, as the SST encoding switch did.
+  corpus file; and (4b) DIRECT character/paragraph formatting through the
+  CHPX/PAPX bin tables and a sprm interpreter. The multi-piece walk that 4a
+  left unproven is now proven by a hand-built document, runs out of order
+  and encodings alternating. NOT YET: **the STSH style hierarchy** — and
+  that gap is larger than it sounds, because LibreOffice routes most
+  formatting through styles rather than direct exceptions (measured: 2 CHPX
+  for 7 formatted runs), so most formatting in a LibreOffice-authored
+  document is currently invisible. Also absent: sections, tables, pictures,
+  and the writer.
 - [F] **`.xls` BIFF8: read (SST incl. mid-string Continue encoding
   switches, XF/FONT/FORMAT, all cell record types, FORMULA ptg decompile,
   shared formulas, 1900/1904 epochs) + write (incl. compiled formulas
