@@ -100,6 +100,24 @@ static const char *cfg_find(const char *cfg, const char *key)
 static int cfg_has(const char *cfg, const char *key)
 { return cfg_find(cfg, key) != 0; }
 
+/* The whole config file has to fit in the parse window, because a key outside
+ * it is ignored with NO diagnostic anywhere.
+ *
+ * That is not hypothetical.  The window used to be 511 bytes (a 512-byte stack
+ * buffer per caller) while build.sh staged a DEBUG.CFG whose comment header is
+ * 526 bytes on its own - so the only key in the shipped file, `passes=3` at
+ * byte 526, was never once read, and every key an operator appended to that
+ * file landed in the same dead zone.  It cost a metal session: a stick
+ * configured with `remote=` looked correct on the host, mounted correctly, and
+ * the box simply never dialled out.  Wi-Fi credentials appended by build.sh sit
+ * past it too, which is the `creds:MISSING` a WiFi boot join reports.
+ *
+ * So: one generous window (the file is small; .bss, not 4 KB of stack on a boot
+ * path), and if a file ever does exceed it, SAY SO instead of silently dropping
+ * the tail. */
+#define CFG_MAX 4096
+static unsigned char g_cfg_buf[CFG_MAX];
+
 /* The debug/test config file.  Renamed STRESS.CFG -> DEBUG.CFG (2026-07-26);
  * the old name is still accepted as a fallback so debug sticks flashed before
  * the rename keep arming.  Scans every mounted volume for either name and reads
@@ -109,9 +127,24 @@ static long dbg_cfg_read(unsigned char *cfg, long cap)
 {
     int v, n = uno_fs_volumes();
     long got = -1;
+    const char *name = 0;
     for (v = 0; v < n && got < 0; v++) {
-        got = uno_fs_read(v, "DEBUG.CFG", cfg, cap);
-        if (got < 0) got = uno_fs_read(v, "STRESS.CFG", cfg, cap);   /* legacy name */
+        name = "DEBUG.CFG";
+        got = uno_fs_read(v, name, cfg, cap);
+        if (got < 0) { name = "STRESS.CFG";                          /* legacy name */
+                       got = uno_fs_read(v, name, cfg, cap); }
+        if (got >= 0) {
+            /* Truncation is the silent-failure mode this window exists to
+             * avoid, so it is reported once rather than inferred later from a
+             * key that mysteriously does nothing. */
+            static int warned;
+            long sz = uno_fs_size(v, name);
+            if (sz > cap && !warned) {
+                warned = 1;
+                uno_dbg_log("cfg: %s is %ld bytes, only the first %ld are parsed"
+                            " - keys past that are IGNORED", name, sz, cap);
+            }
+        }
     }
     return got;
 }
@@ -121,8 +154,8 @@ static long dbg_cfg_read(unsigned char *cfg, long cap)
  * DEBUG.CFG exists at all (distinct from "present but key absent" = 0). */
 int pc64_stress_cfg_flag(const char *key)
 {
-    unsigned char cfg[512];
-    long got = dbg_cfg_read(cfg, (long)sizeof cfg - 1);
+    unsigned char *cfg = g_cfg_buf;
+    long got = dbg_cfg_read(cfg, (long)CFG_MAX - 1);
     if (got < 0) return -1;
     cfg[got] = 0;
     return cfg_has((char *)cfg, key);
@@ -134,9 +167,9 @@ int pc64_stress_cfg_flag(const char *key)
  * cfg_flag it re-reads DEBUG.CFG (callers are one-shot, not per-frame). */
 int pc64_stress_cfg_value(const char *key, char *buf, int cap)
 {
-    unsigned char cfg[512];
+    unsigned char *cfg = g_cfg_buf;
     int out = 0;
-    long got = dbg_cfg_read(cfg, (long)sizeof cfg - 1);
+    long got = dbg_cfg_read(cfg, (long)CFG_MAX - 1);
     const char *s;
     if (cap > 0) buf[0] = 0;
     if (got < 0) return 0;
@@ -163,10 +196,10 @@ static int cfg_int(const char *cfg, const char *key, int dflt)
 
 static void arm(void)
 {
-    unsigned char cfg[512];
+    unsigned char *cfg = g_cfg_buf;
     long got;
     g_armed = 0;
-    got = dbg_cfg_read(cfg, (long)sizeof cfg - 1);
+    got = dbg_cfg_read(cfg, (long)CFG_MAX - 1);
     if (got < 0) { uno_dbg_log("stress: no DEBUG.CFG - driver disabled"); return; }
     cfg[got] = 0;
     /* `nostress` fully disables the fuzz driver. This is the OFF switch the
