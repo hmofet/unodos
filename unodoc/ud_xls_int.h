@@ -31,4 +31,21 @@ char *ud_ptg_text(const unsigned char *pt, long n, const ud_ptg_env *env,
 /* 1 if the array is nothing but a PtgExp pointing at a shared formula. */
 int ud_ptg_is_exp(const unsigned char *pt, long n, int *row, int *col);
 
+/* ---- the other direction: text -> ptgs (phase 3b) -------------------------
+ * What the compiler needs from the workbook it is compiling INTO: which
+ * sheet a name refers to (for a 3-D reference) and which defined name. */
+typedef struct {
+    void *book;
+    int (*sheet_index)(void *book, const char *name);  /* -1 if no such sheet */
+    int (*name_index)(void *book, const char *name);   /* 1-based, 0 = none   */
+} ud_ptgc_env;
+
+/* Compile "=SUM(A1:A9)" (the leading '=' is optional) into a ptg array in one
+ * ud_alloc'd buffer.  NULL on a syntax error, with ud_error() saying what and
+ * roughly where.  base_row/base_col are the cell the formula lives in; they
+ * are not used for absolute references but are what a future relative-token
+ * mode would need. */
+unsigned char *ud_ptg_compile(const char *text, const ud_ptgc_env *env,
+                              int base_row, int base_col, long *len);
+
 #endif /* UD_XLS_INT_H */

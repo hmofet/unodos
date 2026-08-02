@@ -274,6 +274,27 @@ static const char *ftab_name(int i)
     return 0;
 }
 
+/* The compiler's way in, so there is one copy of the table.  Case-insensitive
+ * because Excel accepts "sum(" and stores SUM.  Returns the Ftab index and
+ * the fixed arity (-1 = variable), or -1 if the name is not a function. */
+int ud_ftab_find(const char *name, int *args)
+{
+    int i;
+    if (!name) return -1;
+    for (i = 0; i < NFTAB; i++) {
+        const char *a = FTAB[i].name, *b = name;
+        if (!a) continue;
+        while (*a && *b) {
+            char ca = *a, cb = *b;
+            if (cb >= 'a' && cb <= 'z') cb = (char)(cb - 32);
+            if (ca != cb) break;
+            a++; b++;
+        }
+        if (!*a && !*b) { if (args) *args = FTAB[i].args; return i; }
+    }
+    return -1;
+}
+
 /* Pop `n` fragments and render name(a,b,c).  The deepest is the first arg. */
 static void call_func(pstate *p, const char *name, int n, int name_is_arg)
 {

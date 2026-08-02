@@ -340,6 +340,28 @@ static void wstr_gen(int i, char *out)
 
 #define WMANY 2500
 
+/* Formulas we compile, write, read back and decompile.  Each is in the
+ * canonical form the decompiler produces, so a full round trip through both
+ * directions has to return the string unchanged - which is a much stronger
+ * claim than either half alone. */
+static const char *WFML[] = {
+    "=1+2*3", "=(1+2)*3", "=1-(2-3)", "=8/(4/2)", "=2^3^2", "=50%", "=-B1",
+    "=A1&\"x\"", "=$A$1", "=A$1", "=$A1",
+    "=SUM(A1:C3)", "=SUM($A$1:$C$3)", "=IF(A1>0,\"y\",\"n\")",
+    "=ROUND(1.5,0)", "=PI()", "=CONCATENATE(\"a\",\"b\",\"c\")",
+    "=SUM(MAX(1,2),MIN(3,4))", "=A1<>B1", "=A1<=B1", "=A1*1.5", "=A1*0.1",
+    "=A1*1000000", "=TRUE", "=#N/A", "=\"a\"\"b\"",
+    "=Alpha!A1", "=SUM(Alpha!A1:B2)"
+};
+#define NWFML ((int)(sizeof WFML / sizeof WFML[0]))
+
+/* expressions the compiler must REFUSE rather than half-accept */
+static const char *WBAD[] = {
+    "=1+", "=SUM(", "=NOSUCHFUNC(1)", "=SUM(A1:C3", "=\"unterminated",
+    "=1 2", "=Nope!A1", "=ROUND(1)", "="
+};
+#define NWBAD ((int)(sizeof WBAD / sizeof WBAD[0]))
+
 static int build_demo(ud_xlsw *w, int date1904)
 {
     int a, b, i;
@@ -371,7 +393,49 @@ static int build_demo(ud_xlsw *w, int date1904)
     }
     ud_xlsw_str(w, b, 0, 2, "merged");
     ud_xlsw_merge(w, b, 0, 2, 1, 4);
+
+    {
+        int f = ud_xlsw_sheet(w, "Calc");
+        ud_xcell cached;
+        if (f < 0) return 0;
+        memset(&cached, 0, sizeof cached);
+        cached.kind = UD_XV_NUM;
+        cached.num = 7.0;
+        for (i = 0; i < NWFML; i++)
+            if (!ud_xlsw_formula(w, f, i, 0, WFML[i], &cached)) {
+                printf("FAIL write: could not compile \"%s\": %s\n",
+                       WFML[i], ud_error());
+                return 0;
+            }
+        /* a formula whose cached result is text, which rides in a STRING
+           record rather than the shared string table */
+        cached.kind = UD_XV_STR;
+        cached.str = "cached text";
+        if (!ud_xlsw_formula(w, f, NWFML, 0, "=A1&\"y\"", &cached)) return 0;
+        cached.kind = UD_XV_ERR;
+        cached.err = UD_XE_DIV0;
+        if (!ud_xlsw_formula(w, f, NWFML + 1, 0, "=1/0", &cached)) return 0;
+        cached.kind = UD_XV_BOOL;
+        cached.num = 1;
+        if (!ud_xlsw_formula(w, f, NWFML + 2, 0, "=1>0", &cached)) return 0;
+    }
     return 1;
+}
+
+/* the compiler must refuse malformed input, not guess at it */
+static int wbadtest(void)
+{
+    ud_xlsw *w = ud_xlsw_new();
+    int bad = 0, i;
+    if (!w) return 1;
+    ud_xlsw_sheet(w, "S");
+    for (i = 0; i < NWBAD; i++)
+        if (ud_xlsw_formula(w, 0, i, 0, WBAD[i], 0)) {
+            printf("FAIL write: compiler ACCEPTED \"%s\"\n", WBAD[i]);
+            bad = 1;
+        }
+    ud_xlsw_free(w);
+    return bad;
 }
 
 static int wcheck(ud_xls *x, int date1904)
@@ -383,7 +447,7 @@ static int wcheck(ud_xls *x, int date1904)
 #define WANT(cond, ...) do { if (!(cond)) { printf("FAIL write: "); \
         printf(__VA_ARGS__); printf("\n"); bad = 1; } } while (0)
 
-    WANT(ud_xls_sheets(x) == 2, "sheets = %d", ud_xls_sheets(x));
+    WANT(ud_xls_sheets(x) == 3, "sheets = %d", ud_xls_sheets(x));
     WANT(strcmp(ud_xls_sheet_name(x, 0), "Alpha") == 0,
          "sheet 0 named '%s'", ud_xls_sheet_name(x, 0));
     WANT(strcmp(ud_xls_sheet_name(x, 1), "Beta") == 0,
@@ -431,6 +495,24 @@ static int wcheck(ud_xls *x, int date1904)
             break;
         }
     }
+    /* the round trip that matters: text -> tokens -> file -> tokens -> text */
+    for (i = 0; i < NWFML; i++) {
+        if (!ud_xls_cell(x, 2, i, 0, &c) || !c.formula ||
+            !c.ftext || strcmp(c.ftext, WFML[i]) != 0) {
+            printf("FAIL write: formula %d round-tripped to \"%s\"\n  want \"%s\"\n",
+                   i, c.ftext ? c.ftext : "<none>", WFML[i]);
+            bad = 1;
+        }
+        WANT(c.kind == UD_XV_NUM && c.num == 7.0,
+             "formula %d lost its cached number", i);
+    }
+    WANT(ud_xls_cell(x, 2, NWFML, 0, &c) && c.kind == UD_XV_STR &&
+         strcmp(c.str, "cached text") == 0,
+         "a formula's cached STRING result did not survive");
+    WANT(ud_xls_cell(x, 2, NWFML + 1, 0, &c) && c.kind == UD_XV_ERR &&
+         c.err == UD_XE_DIV0, "a formula's cached ERROR result did not survive");
+    WANT(ud_xls_cell(x, 2, NWFML + 2, 0, &c) && c.kind == UD_XV_BOOL &&
+         c.num == 1, "a formula's cached BOOLEAN result did not survive");
     {
         int r0, c0, r1, c1;
         WANT(ud_xls_merges(x, 1) == 1, "merges = %d", ud_xls_merges(x, 1));
@@ -477,9 +559,12 @@ static int wtest(void)
         ud_cfb_close(c);
         ud_free(img);
     }
+    bad |= wbadtest();
     if (!bad)
-        printf("xlstest: writer OK - %d cells and %d shared strings survive a "
-               "save/reload on both date epochs\n", WNUM + WSTRN + 9, WMANY);
+        printf("xlstest: writer OK - %d cells, %d shared strings and %d "
+               "formulas survive a save/reload on both date epochs; %d "
+               "malformed expressions refused\n",
+               WNUM + WSTRN + 9, WMANY, NWFML + 3, NWBAD);
     return bad;
 }
 

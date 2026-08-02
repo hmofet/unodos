@@ -42,7 +42,7 @@ SAN = ["-fsanitize=address,undefined",
        "-fno-sanitize-recover=all"]
 
 SRCS  = ["unodoc.c", "ud_cfb.c"]
-XSRCS = ["unodoc.c", "ud_cfb.c", "ud_xls.c", "ud_ptg.c", "ud_xlsw.c"]
+XSRCS = ["unodoc.c", "ud_cfb.c", "ud_xls.c", "ud_ptg.c", "ud_ptgc.c", "ud_xlsw.c"]
 
 # what each format is required to carry, as unodoc paths
 REQUIRED = {
@@ -351,6 +351,22 @@ WRITTEN_MUST_HAVE = [
     ('table:number-columns-spanned="3"',    "the merged range"),
     ("number:date-style",                   "a built-in number format"),
     ("kg",                                  "a custom number format"),
+    # Formulas WE compiled, as LibreOffice re-renders them in ODF syntax.
+    # This is what actually validates the operand classes: a reference in the
+    # wrong class still writes, but comes back meaning something else.
+    ("of:=1+2*3",                           "operator precedence"),
+    ("of:=(1+2)*3",                         "the author's own parentheses"),
+    ("of:=2^3^2",                           "left-associative ^"),
+    ("of:=-[.B1]",                          "unary minus on a reference"),
+    ("of:=50%",                             "postfix percent"),
+    ("of:=[.$A$1]",                         "an absolute reference"),
+    ("of:=SUM([.A1:.C3])",                  "an area as a function argument"),
+    ("of:=IF([.A1]&gt;0;&quot;y&quot;;&quot;n&quot;)",
+                                            "mixed argument types"),
+    ("of:=SUM(MAX(1;2);MIN(3;4))",          "nested calls"),
+    ("of:=[$Alpha.A1]",                     "a 3-D reference"),
+    ("of:=SUM([$Alpha.A1:.B2])",            "a 3-D area"),
+    ("of:=&quot;a&quot;&quot;b&quot;",       "a doubled quote in a literal"),
 ]
 
 def written(have_lo):
