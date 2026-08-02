@@ -4475,3 +4475,32 @@ and LibreOffice independently reports that style as 12pt.
 **No choke-point touched**; still no `pc64/build.sh` block, and unodoc is
 still not compiled into the OS at all - see the note below about there being
 nothing installable yet.
+
+## 2026-08-02 - unodoc phase 4c LANDED (.doc writer)
+
+**Worker A, unodoc lane.** `unodoc/ud_docw.c` writes a Word 97 document.
+Reading a .doc means coping with every layout Word has ever emitted; writing
+one means picking the single simplest layout Word and LibreOffice both accept:
+ONE 8-bit text piece, one exception page each for characters and paragraphs, a
+style sheet holding just Normal (a document with no STSH at all is rejected),
+one section with no properties. Bold, italic and alignment as sprm deltas.
+
+The ordering is the awkward part, not any single structure: the FIB is written
+twice, once to reserve space and again once every other structure's offset and
+length is known.
+
+Gate: our reader round-trips four paragraphs with their formatting and
+confirms 10pt arrives through the Normal style we wrote rather than any direct
+exception; then LibreOffice opens the file and finds all four paragraphs, the
+bold run, the italic run and both alignments. NOT verified against real Word -
+that is OFFICE97-SPEC's strict gate and needs the VM nobody has staged yet.
+
+UBSan caught an out-of-bounds FIB table on the first run (rgFcLcb has 93 pairs,
+I had sized the scratch array 64).
+
+**What the writer still does not emit:** a font table (SttbfFfn), document
+properties (Dop), more than one section, tables or pictures. LibreOffice
+tolerates their absence; real Word has not been asked.
+
+**With this, .doc is readable AND writable, and the unodoc lane has only
+phase 5 (Escher + .ppt) left.**

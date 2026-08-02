@@ -120,7 +120,11 @@ guides (full URL list in the plan's research provenance, §11).
   formatting through styles rather than direct exceptions (measured: 2 CHPX
   for 7 formatted runs), so most formatting in a LibreOffice-authored
   document is currently invisible. Also absent: sections, tables, pictures,
-  and the writer.
+  and sections beyond one. THE WRITER LANDED (4c): the minimal accepted
+  layout - one text piece, one exception page each, a Normal style, one
+  section, with bold/italic/alignment as sprm deltas - and LibreOffice opens
+  what it writes with the text and formatting intact. Not yet verified
+  against real Word, which is this file's strict gate.
 - [F] **`.xls` BIFF8: read (SST incl. mid-string Continue encoding
   switches, XF/FONT/FORMAT, all cell record types, FORMULA ptg decompile,
   shared formulas, 1900/1904 epochs) + write (incl. compiled formulas
