@@ -246,6 +246,12 @@ typedef struct {
     int         err;      /* UD_XE_*                                        */
     int         xf;       /* index into the workbook's XF table             */
     int         formula;  /* 1 if a formula produced this value             */
+    /* The formula decompiled back to text, "=SUM(A1:A9)", owned by the
+       workbook - or NULL when the cell is not a formula, or when its token
+       stream held something this build does not render (the cached value is
+       still good).  Never confuse NULL with "not a formula": read `formula`
+       for that. */
+    const char *ftext;
 } ud_xcell;
 
 typedef struct ud_xls ud_xls;

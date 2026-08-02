@@ -21,7 +21,7 @@ a request rather than editing it.
 |---|---|---|
 | 1 | CFB container, read + write | **landed**, `[EXPERIMENTAL]` |
 | 2a | `.xls` read (BIFF8): values | **landed**, `[EXPERIMENTAL]` |
-| 2b | `.xls` read: formula ptg decompiler | not started |
+| 2b | `.xls` read: formula ptg decompiler | **landed**, `[EXPERIMENTAL]` |
 | 3 | `.xls` write + formula compiler | not started |
 | 4 | `.doc` read + minimal writer | not started |
 | 5 | Escher + `.ppt` | not started |
@@ -178,6 +178,13 @@ CP-1252 is single-byte and wholly inside the BMP, so **a unodoc name's byte
 length is its UTF-16 length** — which is what CFB's ordering rule compares.
 Code units with no CP-1252 form fold to `?`.
 
+Numbers become text in exactly one place, `ud_num_text`, and for one reason:
+a formula can contain a literal, so decompiling one requires rendering a
+double. It follows **Excel's own display convention — at most 15 significant
+digits** — not shortest-round-trip, and it is not a general number formatter:
+cell *values* are formatted by UnoCalc's `uoc_numfmt`, which owns Excel's
+format-code language.
+
 Known limit, stated rather than hidden: `ud_upper16` covers ASCII, Latin-1
 and the cased CP-1252 specials. That is exact for every name Office
 generates (they are ASCII, plus the `\001` and `\005` prefix bytes); for
@@ -268,13 +275,38 @@ unreachable from any file we can generate. `xlstest selftest` therefore
 hand-assembles a workbook byte by byte with four strings split on purpose:
 8→8, 16→16, **8→16 and 16→8**.
 
-### Not in phase 2a, stated rather than implied
+### Formulas (phase 2b)
 
-- **Formulas report their cached result**, which is what the file stores and
-  what a viewer needs. `cell.formula` says a formula produced it. Decompiling
-  the ptg array back to `=SUM(A1:A9)` is phase 2b; `SHRFMLA`/`ARRAY` need no
-  special handling until then, since every `FORMULA` record carries its own
-  cached value.
+`cell.formula` says a formula produced the value; `cell.ftext` is that
+formula decompiled back to text, `"=SUM(A1:A9)"`. The cached result is
+always there either way — `ftext` is NULL if the token stream held something
+this build does not render, and a viewer still has a correct value to show.
+
+Excel stores a formula as reverse-Polish tokens, not text, so `ud_ptg.c`
+runs the RPN back through a stack of fragments each carrying the precedence
+of its top-level operator, and re-inserts parentheses only where the tree
+requires them. Two details are easy to get quietly wrong and are both
+covered by fixtures: Excel's `^` is **left**-associative (`2^3^2` is 64, so
+an equal-precedence right operand really is parenthesised in the source),
+and the user's own parentheses are recorded as an explicit `PtgParen`, so
+`=(1+2)*3` comes back with them where the author put them rather than merely
+somewhere valid.
+
+Covered: the full operator set, references in all four relative/absolute
+combinations, areas, 3-D references through `EXTERNSHEET`/`SUPBOOK`, defined
+names, array constants (which live in `rgbExtra` after the token stream),
+the `Ftab` function table, and **shared formulas** — a filled-down column
+stores its expression once in a `SHRFMLA` and every member cell carries only
+a `PtgExp` pointing at it, so each one re-bases the relative `PtgRefN`
+tokens against its own position. Because the `SHRFMLA` follows the *first*
+member, those cells are resolved at end of sheet rather than in record
+order.
+
+External workbook references render as `#REF!` rather than a guess; v1 does
+not follow links into other files.
+
+### Not in phase 2, stated rather than implied
+
 - **`FONT`, `STYLE`, `COLINFO`, `ROW` and `WINDOW2` are skipped**, not
   parsed. Nothing consumes them yet and dead tables rot.
 - **The 1904 epoch is read but untested** — `ud_xls_date1904` reports
@@ -308,6 +340,14 @@ only when it is actually needed, as an append.
 
 ## Changelog
 
+- **2026-08-01 — phase 2b.** `ud_ptg.c`: the formula decompiler — operators
+  with precedence-aware parenthesisation, every reference form, 3-D
+  references, defined names, array constants, the `Ftab` function table, and
+  shared formulas. Plus `ud_num_text`/`ud_int_text` in the core, because a
+  formula literal has to be rendered and unodoc links no libc. Gate: 47
+  formulas whose expected Excel text is written independently of the ODF
+  source they are built from. The workbook fuzzer found a double-free on
+  stack underflow. All surface `[EXPERIMENTAL]`.
 - **2026-08-01 — phase 2a.** `ud_xls.c`: the BIFF8 record layer, globals,
   the shared string table (including mid-string `CONTINUE` encoding
   switches), every cell record type, merged ranges, and number-format

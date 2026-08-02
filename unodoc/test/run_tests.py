@@ -42,7 +42,7 @@ SAN = ["-fsanitize=address,undefined",
        "-fno-sanitize-recover=all"]
 
 SRCS  = ["unodoc.c", "ud_cfb.c"]
-XSRCS = ["unodoc.c", "ud_cfb.c", "ud_xls.c"]
+XSRCS = ["unodoc.c", "ud_cfb.c", "ud_xls.c", "ud_ptg.c"]
 
 # what each format is required to carry, as unodoc paths
 REQUIRED = {
@@ -233,6 +233,14 @@ def parse_cells(text):
             out[(int(f[1]), int(f[2]), int(f[3]))] = (f[4], f[5])
     return out
 
+def parse_formulas(text):
+    out = {}
+    for line in text.splitlines():
+        f = line.split("\t")
+        if len(f) >= 5 and f[0] == "formula":
+            out[(int(f[1]), int(f[2]), int(f[3]))] = f[4]
+    return out
+
 def same(kind, want, got):
     if want == got:
         return True
@@ -273,22 +281,40 @@ def workbooks(files):
             fail("%s: no fixture" % base)
             continue
         with open(fixpath, encoding="utf-8") as f:
-            want = parse_cells(f.read())
+            fixtext = f.read()
+        want = parse_cells(fixtext)
+        wantf = parse_formulas(fixtext)
         bad, missing = [], []
         for key, (kind, val) in want.items():
             if key not in got:
                 missing.append(key)
             elif got[key][0] != kind or not same(kind, val, got[key][1]):
                 bad.append((key, (kind, val), got[key]))
-        # extra cells are fine only when they carry no value (blank records
+        # Extra cells are fine only when they carry no value (blank records
         # that exist just to hold a format, e.g. the covered half of a merge)
-        extra = [k for k, v in got.items() if k not in want and v[0] != "EMPTY"]
+        # or when they are formula cells, whose value is whatever the engine
+        # computed on save and so is asserted by the `formula` line instead.
+        extra = [k for k, v in got.items()
+                 if k not in want and k not in wantf and v[0] != "EMPTY"]
         if missing or bad or extra:
             fail("%s: %d missing, %d wrong, %d unexpected; first wrong: %s"
                  % (base, len(missing), len(bad), len(extra),
                     bad[0] if bad else (missing[0] if missing else extra[0])))
         else:
             print("  %-12s %5d cells match the fixture" % (base, len(want)))
+        # formulas: the fixture states them in Excel A1 syntax while the
+        # source document states them in ODF syntax, so a match means the
+        # decompiler rebuilt the expression rather than echoing anything
+        if wantf:
+            gotf = parse_formulas(out)
+            wrong = [(k, wantf[k], gotf.get(k, "<absent>"))
+                     for k in wantf if gotf.get(k) != wantf[k]]
+            if wrong:
+                fail("%s: %d of %d formulas differ; first: %s"
+                     % (base, len(wrong), len(wantf), wrong[0]))
+            else:
+                print("  %-12s %5d formulas decompile exactly"
+                      % (base, len(wantf)))
         if base == "cells.xls":
             # the FORMAT/XF path: the two date cells must resolve to a real
             # number-format code, not General
