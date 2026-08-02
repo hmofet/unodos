@@ -23,7 +23,7 @@ a request rather than editing it.
 | 2a | `.xls` read (BIFF8): values | **landed**, `[EXPERIMENTAL]` |
 | 2b | `.xls` read: formula ptg decompiler | **landed**, `[EXPERIMENTAL]` |
 | 3a | `.xls` write: values, strings, formats | **landed**, `[EXPERIMENTAL]` |
-| 3b | `.xls` write: the formula compiler | not started |
+| 3b | `.xls` write: the formula compiler | **landed**, `[EXPERIMENTAL]` |
 | 4 | `.doc` read + minimal writer | not started |
 | 5 | Escher + `.ppt` | not started |
 
@@ -340,8 +340,42 @@ Two things the writer has to get right, both learned from the reader:
   UTF-16. CP-1252's `0x80`–`0x9F` map to code points above 255 (the euro sign
   is U+20AC), so those strings must go out wide or come back wrong.
 
-Not yet: formulas (3b), fonts and colours beyond the default, column widths,
-row heights.
+### Writing formulas (phase 3b)
+
+```c
+ud_xcell cached = { UD_XV_NUM, 42.0, 0, 0, 0, 0, 0 };
+ud_xlsw_formula(w, s, 0, 0, "=SUM(A1:A9)", &cached);
+```
+
+The text is compiled to tokens **immediately**, so a syntax error is reported
+at the cell that caused it rather than surfacing much later as a failed save.
+`cached` is the result stored alongside the expression — Excel keeps both, and
+it is what a reader that does not calculate will show.
+
+`ud_ptgc.c` is a recursive-descent parser that emits postfix directly: no
+intermediate tree, because RPN is what the file wants and the recursion
+already encodes the shape. One function per precedence rung, and an
+operator's token is written after its operands have written theirs.
+
+**Operand classes** are the subtle half, as the plan warned. Every
+reference-ish token exists in three flavours — reference, value and array —
+and Excel picks by how the operand is *consumed*, not by what it is. The rule
+here: a reference used as a **direct function argument** goes out in reference
+class, which is what lets `SUM` see a range instead of one dereferenced
+value; everywhere else — arithmetic, comparison, the whole formula — it goes
+out in value class. Every expression this build can construct is written,
+read back by LibreOffice, and checked. It is **not** checked against real
+Excel, which the plan reserves for a milestone with a VM; if a formula ever
+comes back wrong there, this rule is the first place to look.
+
+3-D references work because the writer emits an internal `SUPBOOK` and one
+`EXTERNSHEET` entry per sheet, so a sheet index and its `ixti` are the same
+number. Defined names are not written yet, so a formula referring to one is
+refused rather than mis-compiled.
+
+Not yet: defined names, fonts and colours beyond the default, column widths,
+row heights, shared formulas on write (every formula is written in full,
+which is correct, just larger than Excel would).
 
 ### Not in phase 2, stated rather than implied
 
@@ -378,6 +412,12 @@ only when it is actually needed, as an append.
 
 ## Changelog
 
+- **2026-08-02 — phase 3b.** `ud_ptgc.c`: the formula compiler, and with it
+  **the `.xls` lane is complete in both directions**. Gate: 28 expressions go
+  text → tokens → file → tokens → text and come back unchanged, 9 malformed
+  ones are refused, cached results of all four kinds survive, and LibreOffice
+  re-renders every compiled formula correctly — which is what actually
+  validates the operand classes.
 - **2026-08-02 — phase 3a.** `ud_xlsw.c`: writing a workbook — sheets,
   every value kind, the interned shared string table with correct `CONTINUE`
   splitting, number formats, merged ranges, both date epochs. Gate: a demo

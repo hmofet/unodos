@@ -24,6 +24,7 @@
  * ======================================================================== */
 #include "unodoc.h"
 #include "unodoc_int.h"
+#include "ud_xls_int.h"
 #include <string.h>
 
 #define W_MAXREC   8224          /* the BIFF record payload ceiling         */
@@ -110,6 +111,10 @@ typedef struct {
     int      sst;              /* index into the shared string table        */
     int      err;
     int      xf;               /* 15 = the default cell XF                  */
+    /* When set, this cell is a FORMULA: the token stream plus the cached
+       result above, which is what the kind/num/sst/err fields then mean. */
+    unsigned char *ptg;
+    long           ptgn;
 } wcell;
 
 typedef struct {
@@ -265,6 +270,8 @@ void ud_xlsw_free(ud_xlsw *w)
     int i;
     if (!w) return;
     for (i = 0; i < w->nsh; i++) {
+        int k;
+        for (k = 0; k < w->sh[i].ncell; k++) ud_free(w->sh[i].cell[k].ptg);
         ud_free(w->sh[i].name);
         ud_free(w->sh[i].cell);
         ud_free(w->sh[i].merge);
@@ -408,6 +415,61 @@ int ud_xlsw_merge(ud_xlsw *w, int s, int r0, int c0, int r1, int c1)
 
 int ud_xlsw_date1904(ud_xlsw *w, int on)
 { if (!w) return 0; w->date1904 = on ? 1 : 0; return 1; }
+
+/* ---- formulas (phase 3b) ---------------------------------------------------
+ * The text is compiled straight away rather than at save time, so a syntax
+ * error is reported to the caller who wrote it, at the cell they wrote it
+ * for, instead of surfacing much later as a failed save. */
+static int env_sheet_index(void *book, const char *name)
+{
+    ud_xlsw *w = (ud_xlsw *)book;
+    int i;
+    for (i = 0; i < w->nsh; i++) {
+        const char *a = w->sh[i].name, *b = name;
+        while (*a && *b) {
+            char ca = *a, cb = *b;
+            if (ca >= 'a' && ca <= 'z') ca = (char)(ca - 32);
+            if (cb >= 'a' && cb <= 'z') cb = (char)(cb - 32);
+            if (ca != cb) break;
+            a++; b++;
+        }
+        if (!*a && !*b) return i;
+    }
+    return -1;
+}
+static int env_name_index(void *book, const char *name)
+{ (void)book; (void)name; return 0; }   /* defined names: not written yet */
+
+int ud_xlsw_formula(ud_xlsw *w, int s, int row, int col, const char *text,
+                    const ud_xcell *cached)
+{
+    ud_ptgc_env env;
+    unsigned char *ptg;
+    long n = 0;
+    wcell *c;
+
+    if (!w || !text) { ud_set_error("xls write: no formula text"); return 0; }
+    env.book = w;
+    env.sheet_index = env_sheet_index;
+    env.name_index = env_name_index;
+    ptg = ud_ptg_compile(text, &env, row, col, &n);
+    if (!ptg) return 0;                      /* ud_error already says why  */
+
+    c = cell_at(w, s, row, col);
+    if (!c) { ud_free(ptg); return 0; }
+    ud_free(c->ptg);
+    c->ptg = ptg;
+    c->ptgn = n;
+    c->kind = cached ? cached->kind : UD_XV_NUM;
+    c->num  = cached ? cached->num : 0;
+    c->err  = cached ? cached->err : 0;
+    if (c->kind == UD_XV_STR) {
+        int i = sst_intern(w, cached && cached->str ? cached->str : "");
+        if (i < 0) return 0;
+        c->sst = i;                          /* the STRING record uses it  */
+    }
+    return 1;
+}
 
 /* ===========================================================================
  * serialisation
@@ -564,6 +626,16 @@ static long build_stream(ud_xlsw *w, wbuf *b)
         wstr(b, w->sh[i].name, 0);
         rec_close(b, at);
     }
+    /* SUPBOOK + EXTERNSHEET: a 3-D reference names a sheet through an index
+       into this table, not by name, so it has to exist before any formula
+       can use one.  One internal SUPBOOK (this file), then one XTI per sheet
+       so ixti and the sheet index are the same number. */
+    { long at = rec_open(b, 0x01AE);
+      w16(b, (unsigned)w->nsh); w16(b, 0x0401); rec_close(b, at); }
+    { long at = rec_open(b, 0x0017);
+      w16(b, (unsigned)w->nsh);
+      for (i = 0; i < w->nsh; i++) { w16(b, 0); w16(b, (unsigned)i); w16(b, (unsigned)i); }
+      rec_close(b, at); }
     if (w->nsst) sst_emit(b, w, total_refs);
     { long at = rec_open(b, 0x00FF); w16(b, 8); rec_close(b, at); }   /* EXTSST */
     emit_eof(b);
@@ -590,6 +662,44 @@ static long build_stream(ud_xlsw *w, wbuf *b)
             int r = (int)(c->key / UD_XLS_MAXCOL);
             int col = (int)(c->key % UD_XLS_MAXCOL);
             long at;
+            if (c->ptg) {
+                /* FORMULA carries the expression AND its cached result, so a
+                   reader that does not calculate still shows the right thing.
+                   The result is either a raw double, or a tagged 8 bytes
+                   ending 0xFFFF for the non-numeric kinds. */
+                at = rec_open(b, 0x0006);
+                w16(b, (unsigned)r); w16(b, (unsigned)col); w16(b, (unsigned)c->xf);
+                switch (c->kind) {
+                case UD_XV_STR:
+                    w8(b, 0); w8(b, 0); w8(b, 0); w8(b, 0);
+                    w8(b, 0); w8(b, 0); w16(b, 0xFFFF); break;
+                case UD_XV_BOOL:
+                    w8(b, 1); w8(b, 0); w8(b, c->num != 0); w8(b, 0);
+                    w8(b, 0); w8(b, 0); w16(b, 0xFFFF); break;
+                case UD_XV_ERR:
+                    w8(b, 2); w8(b, 0); w8(b, (unsigned)c->err); w8(b, 0);
+                    w8(b, 0); w8(b, 0); w16(b, 0xFFFF); break;
+                case UD_XV_EMPTY:
+                    w8(b, 3); w8(b, 0); w8(b, 0); w8(b, 0);
+                    w8(b, 0); w8(b, 0); w16(b, 0xFFFF); break;
+                default:
+                    wdbl(b, c->num); break;
+                }
+                w16(b, 0);                            /* grbit             */
+                w32(b, 0);                            /* chn               */
+                w16(b, (unsigned)c->ptgn);
+                if (wneed(b, c->ptgn)) {
+                    memcpy(b->p + b->n, c->ptg, (unsigned long)c->ptgn);
+                    b->n += c->ptgn;
+                }
+                rec_close(b, at);
+                if (c->kind == UD_XV_STR) {           /* the text result   */
+                    at = rec_open(b, 0x0207);
+                    wstr(b, c->sst < w->nsst ? w->sst[c->sst] : "", 1);
+                    rec_close(b, at);
+                }
+                continue;      /* not `break`: this is the cell loop, not a switch */
+            }
             switch (c->kind) {
             case UD_XV_NUM:
                 at = rec_open(b, 0x0203);

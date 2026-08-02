@@ -325,6 +325,15 @@ int ud_xlsw_blank(ud_xlsw *w, int s, int row, int col);
  * else becomes a FORMAT record.  Applies to the cell already written. */
 int ud_xlsw_format(ud_xlsw *w, int s, int row, int col, const char *code);
 
+/* A formula, given as text ("=SUM(A1:A9)", the '=' optional), compiled to
+ * tokens immediately - so a syntax error is reported here, at the cell that
+ * caused it, rather than surfacing later as a failed save.  `cached` is the
+ * result to store alongside it, which is what a reader that does not
+ * calculate will display; pass NULL for zero.  0 on failure, ud_error() says
+ * what was wrong with the expression. */
+int ud_xlsw_formula(ud_xlsw *w, int s, int row, int col, const char *text,
+                    const ud_xcell *cached);
+
 int ud_xlsw_merge(ud_xlsw *w, int s, int row0, int col0, int row1, int col1);
 int ud_xlsw_date1904(ud_xlsw *w, int on);
 
