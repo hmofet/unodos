@@ -426,6 +426,31 @@ int ud_docw_para(ud_docw *w, const char *text, int bold, int italic, int align);
 /* The whole .doc in one ud_alloc'd buffer (caller ud_free's it). */
 unsigned char *ud_docw_save(ud_docw *w, long *len);
 
+/* ===========================================================================
+ * .ppt - the PowerPoint 97 presentation [MS-PPT]           [EXPERIMENTAL]
+ *
+ * PHASE 5a: the persist chain, the live document, and slide text.
+ *
+ * A .ppt stream is an append-only edit log, and most of what is in it is a
+ * previous version of the file.  Finding the live document takes four hops -
+ * the Current User stream, the UserEdit chain running newest to oldest, the
+ * persist directories folded newest-wins, and only then the document itself.
+ * Fold those directories the wrong way round and every object in the
+ * presentation resolves to a stale copy of itself.
+ *
+ * Escher (the shared drawing layer) and writing are later slices.
+ * ======================================================================== */
+typedef struct ud_ppt ud_ppt;
+
+ud_ppt *ud_ppt_open(ud_cfb *c);
+void    ud_ppt_close(ud_ppt *p);
+
+int ud_ppt_slides(const ud_ppt *p);
+
+/* A slide's text, CP-1252, paragraphs separated by newlines.  Built once on
+ * demand and owned by the presentation. */
+const char *ud_ppt_slide_text(ud_ppt *p, int i);
+
 /* ---- name comparison (exposed: the format layers sort names too) ---------- */
 /* CFB directory order: shorter names first, then uppercased code unit by
  * code unit.  <0, 0, >0 like strcmp. */

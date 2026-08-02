@@ -28,7 +28,9 @@ a request rather than editing it.
 | 4b | `.doc` read: direct formatting (CHPX/PAPX, sprms) | **landed**, `[EXPERIMENTAL]` |
 | 4b′ | `.doc` read: the STSH style hierarchy | **landed**, `[EXPERIMENTAL]` |
 | 4c | `.doc` minimal writer | **landed**, `[EXPERIMENTAL]` |
-| 5 | Escher + `.ppt` | not started |
+| 5a | `.ppt` read: persist chain + slide text | **landed**, `[EXPERIMENTAL]` |
+| 5b | Escher (the drawing layer) | not started |
+| 5c | `.ppt` write | not started |
 
 Everything is `[EXPERIMENTAL]` until a consuming app has shipped on it. The
 core surface (`ud_src`, the allocator, the error surface) is the part least
@@ -508,6 +510,40 @@ is still a real test of the style machinery — `size` is 24 for *every* run and
 arrives through the Normal style chain, not through any direct exception. The
 layering itself is proven by the hand-built document, where the STSH is ours.
 
+## Reading a presentation (phase 5a)
+
+```c
+ud_ppt *p = ud_ppt_open(c);
+for (int i = 0; i < ud_ppt_slides(p); i++) puts(ud_ppt_slide_text(p, i));
+ud_ppt_close(p);
+```
+
+A `.ppt` stream is an **append-only edit log**, and most of what is in it is a
+previous version of the file. Finding the live document takes four hops, and
+every one is a chance to read a stale version by mistake:
+
+1. the **Current User** stream says where the *current* edit begins — not the
+   start of the document and not the end of the stream;
+2. that `UserEditAtom` points **back** to the previous one: the chain runs
+   newest to oldest;
+3. each edit carries a **persist directory** mapping object ids to offsets,
+   and the same id appears in several of them. **The first one wins**, because
+   that is the newest. Fold them oldest-first and every object in the
+   presentation resolves to a stale copy of itself;
+4. only then does `docPersistIdRef` name the live `DocumentContainer`.
+
+Slides come from the document's `SlideListWithText` in presentation order,
+falling back to every `SlideContainer` the persist directory names. Text is
+collected by walking a slide's record tree — containers are identified by the
+low nibble of the record header, so the walk needs no table of every record
+type. A text block is either UTF-16 (`TextCharsAtom`) or 8-bit
+(`TextBytesAtom`): the same either-encoding shape as BIFF8's shared strings
+and `.doc`'s pieces, met here for the third time.
+
+Not yet: Escher, so shape geometry, pictures and placeholder roles are absent
+— text that lives only in a shape's client data rather than in a text atom
+will not be found. And there is no writer.
+
 ## What unodoc is NOT
 
 - **Not a renderer.** It hands back models and bytes; drawing them is
@@ -534,6 +570,13 @@ only when it is actually needed, as an append.
 
 ## Changelog
 
+- **2026-08-02 — phase 5a.** `ud_ppt.c`: the persist chain and slide text.
+  Gate: every slide line we extract is present in LibreOffice's own
+  extraction, plus 4000 fuzz mutations. Also fixes a harness bug worth
+  knowing about — `soffice_flat` read its output path without clearing it
+  first, so a failed conversion silently compared against the PREVIOUS run's
+  file. It invented one failure before it was caught; it could just as easily
+  have hidden a real one.
 - **2026-08-02 — phase 4c.** `ud_docw.c`: writing a `.doc`. The minimal
   layout Word and LibreOffice both accept - one 8-bit text piece, one
   exception page each for characters and paragraphs, a Normal style, one
