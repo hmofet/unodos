@@ -116,8 +116,13 @@ guides (full URL list in the plan's research provenance, §11).
 - [ ] **`.ppt`: read (UserEdit chain → persist directory → live document;
   text from both homes; StyleTextPropAtom) + write (single UserEdit,
   valid PPDrawing per slide, no repair prompt)**
-- [ ] **CFB container: read with cycle/bounds defense; write with valid
-  (length, uppercase-UTF-16) directory ordering**
+- [F] **CFB container: read with cycle/bounds defense; write with valid
+  (length, uppercase-UTF-16) directory ordering** — `unodoc/ud_cfb.c`,
+  2026-08-01. Verified by `unodoc/test/run_tests.py`: round-trip across the
+  64/512/4096 boundaries, DIFAT overflow, a 7-file LibreOffice corpus read
+  and rebuilt through our writer with LibreOffice agreeing the rebuilt
+  container is the same document, and 28,000 fuzz mutations under
+  ASan/UBSan. (Read covers v3 and v4; write emits v3, as Office 97 does.)
 - [ ] Encrypted files (FILEPASS / [MS-OFFCRYPTO]) refused with a clear
   message `[F for the refusal]`
 - [ ] Also: `.TXT` and `.RTF` write (Word), `.CSV`/`.TXT` (Excel)

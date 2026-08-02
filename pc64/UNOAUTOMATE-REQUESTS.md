@@ -4036,3 +4036,36 @@ path (whole-file writes force full-document RAM buffers on save). To the
 presentation titles; later, CP-1252 glyph coverage beyond ASCII. To the
 **shell** - a larger multi-format clipboard (512-byte plain text today);
 the suite keeps a private rich clipboard and mirrors plain text until then.
+
+## 2026-08-01 - unodoc phase 1 LANDED (CFB container, read + write)
+
+**Worker A, unodoc lane.** `unodoc/` now exists on the unomedia playbook:
+`unodoc.h` (the core - `ud_src` byte source, registered allocator, error
+surface, the CP-1252/UTF-16 boundary, `ud_name_cmp`), `unodoc.c`, and
+`ud_cfb.c` - the [MS-CFB] compound file, **read AND write**. Contract +
+changelog: `unodoc/UNODOC.md`. Plan: `docs/OFFICE97-PLAN.md` §4 phase 1.
+
+Handle-based (`ud_cfb *`), not unomedia's single global open instance: the
+suite is MDI, so several documents are open in one address space from day
+one. Reader defends the way an OS-resident parser has to - every sector
+index checked against the sectors that physically exist, every chain walk
+step-budgeted, the directory's sibling trees flattened through a visited
+bitmap, declared sizes clamped, mini-vs-regular decided before clamping.
+Writer never works in place: it serialises a fresh v3 container from a model,
+directory emitted as a balanced all-black tree in CFB name order.
+
+Gate `unodoc/test/run_tests.py` (host, no boot, build.sh's sanitizer set plus
+ASan, `-fno-sanitize-recover=all`): selftest, then a 7-file corpus generated
+by LibreOffice headless in WSL, each file read, rebuilt through OUR writer,
+and handed back to LibreOffice - which converts the rebuilt container to the
+same document. 28,000 fuzz mutations, no crash, no hang. GREEN.
+
+**NOTE for whoever runs the gate:** LibreOffice was NOT installed in WSL
+despite the programme notes assuming it; `sudo apt install libreoffice-writer
+libreoffice-calc libreoffice-impress` fixes it (24.2.7.2 here). The corpus is
+generated, never committed (`unodoc/.gitignore`).
+
+**No choke-point touched.** No `pc64/build.sh` block yet - the kernel does
+not need unodoc until the first Office app lands, and per /AGENTS.md §2 the
+append happens when it is actually needed. `docs/OFFICE97-SPEC.md`'s CFB box
+in S-OFF-06 moved to `[F]`; nothing else was touched.
