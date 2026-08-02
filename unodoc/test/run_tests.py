@@ -34,6 +34,7 @@ CORPUS = os.path.join(HERE, "corpus")
 BIN    = os.path.join(GEN, "cfbtest")
 XBIN   = os.path.join(GEN, "xlstest")
 DBIN   = os.path.join(GEN, "doctest")
+PBIN   = os.path.join(GEN, "ppttest")
 PROFILE = os.path.join(GEN, "loprofile")
 
 # build.sh's first-party sanitizer set, verbatim, plus ASan for the host.
@@ -45,6 +46,7 @@ SAN = ["-fsanitize=address,undefined",
 SRCS  = ["unodoc.c", "ud_cfb.c"]
 XSRCS = ["unodoc.c", "ud_cfb.c", "ud_xls.c", "ud_ptg.c", "ud_ptgc.c", "ud_xlsw.c"]
 DSRCS = ["unodoc.c", "ud_cfb.c", "ud_doc.c", "ud_docw.c"]
+PSRCS = ["unodoc.c", "ud_cfb.c", "ud_ppt.c"]
 
 # what each format is required to carry, as unodoc paths
 REQUIRED = {
@@ -83,6 +85,7 @@ def build():
         raise SystemExit("build failed")
     gcc(XBIN, XSRCS, "xlstest.c")
     gcc(DBIN, DSRCS, "doctest.c")
+    gcc(PBIN, PSRCS, "ppttest.c")
     print("build: ok")
 
 # ---- 2. selftest ------------------------------------------------------------
@@ -215,11 +218,17 @@ def soffice_flat(path, outdir):
     os.makedirs(PROFILE, exist_ok=True)
     os.makedirs(outdir, exist_ok=True)
     fmt = FLAT[os.path.splitext(path)[1]]
+    out = os.path.join(outdir, os.path.splitext(os.path.basename(path))[0]
+                       + "." + fmt)
+    # Remove the target FIRST.  Without this, a conversion that fails or times
+    # out leaves the PREVIOUS run's file sitting there and we compare against
+    # stale content - which can invent a failure (seen once on small.ppt) just
+    # as easily as it can hide a real one.
+    if os.path.exists(out):
+        os.remove(out)
     subprocess.run(["soffice", "--headless", "--norestore", "--convert-to",
                     fmt, "--outdir", outdir, path],
                    capture_output=True, text=True, env=env, timeout=600)
-    out = os.path.join(outdir, os.path.splitext(os.path.basename(path))[0]
-                       + "." + fmt)
     if not os.path.exists(out):
         return None
     with open(out, encoding="utf-8", errors="replace") as f:
@@ -530,6 +539,58 @@ def documents(files, have_lo):
             print("  %-12s %d lines identical to LibreOffice's extraction"
                   % (base, len(a)))
 
+# ---- 4e. presentations: our slide text against LibreOffice's ----------------
+TAGS = re.compile(r"<[^>]*>")
+
+def presentations(files, have_lo):
+    for path in files:
+        if not path.endswith(".ppt"):
+            continue
+        base = os.path.basename(path)
+        r = run([PBIN, "info", path])
+        if r.returncode or r.stdout.startswith("ERR:"):
+            fail("%s: %s" % (base, (r.stdout + r.stderr).strip()[:300]))
+            continue
+        print("  %-12s %s" % (base, r.stdout.strip()))
+        rr = subprocess.run([PBIN, "text", path], capture_output=True, timeout=600)
+        ours = norm_lines(rr.stdout.decode("cp1252", errors="replace"))
+        if not have_lo:
+            continue
+        flat = soffice_flat(path, os.path.join(GEN, "lo_ppt"))
+        if flat is None:
+            fail("%s: LibreOffice could not convert it" % base)
+            continue
+        # Impress has no text filter, so the comparison goes through flat ODF
+        # with the markup stripped.  LibreOffice emits placeholder furniture
+        # we do not, so this asserts our text is a SUBSET in order, not an
+        # exact match - every line we produce must be a line it produced.
+        theirs = norm_lines(TAGS.sub("\n", flat))
+        missing = [l for l in ours if l not in theirs]
+        if missing:
+            fail("%s: %d slide lines are not in LibreOffice's extraction; "
+                 "first: %r" % (base, len(missing), missing[0]))
+        elif not ours:
+            fail("%s: no slide text extracted at all" % base)
+        else:
+            print("  %-12s %d slide lines all present in LibreOffice's "
+                  "extraction" % (base, len(ours)))
+
+def ppt_fuzz(files, iters=2000):
+    for path in files:
+        if not path.endswith(".ppt"):
+            continue
+        base = os.path.basename(path)
+        t = time.time()
+        try:
+            r = run([PBIN, "fuzz", path, "77", str(iters)], timeout=1800)
+        except subprocess.TimeoutExpired:
+            fail("%s: presentation fuzz did not terminate" % base)
+            continue
+        if r.returncode:
+            fail("%s: presentation fuzz: %s" % (base, (r.stdout + r.stderr).strip()[:600]))
+        else:
+            print("  %-12s %s in %.1fs" % (base, r.stdout.strip(), time.time() - t))
+
 def doc_fuzz(files, iters=3000):
     for path in files:
         if not path.endswith(".doc"):
@@ -613,9 +674,11 @@ def main():
         stage("written", written, have_lo)
         stage("written doc", written_doc, have_lo)
         stage("document", documents, files, have_lo)
+        stage("presentation", presentations, files, have_lo)
         stage("fuzz", fuzz, files)
         stage("workbook fuzz", xls_fuzz, files)
         stage("document fuzz", doc_fuzz, files)
+        stage("presentation fuzz", ppt_fuzz, files)
 
     print("\n" + ("unodoc gate: %d FAILURE(S)" % len(fails) if fails
                   else "unodoc gate: GREEN"))
