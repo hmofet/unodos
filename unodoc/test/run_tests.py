@@ -90,6 +90,7 @@ SELFTESTS = [
     (lambda: [BIN, "selftest"],  "cfbtest selftest"),
     (lambda: [XBIN, "selftest"], "xlstest selftest"),   # the SST encoding switch
     (lambda: [XBIN, "wtest"],    "xlstest wtest"),      # the writer round-trip
+    (lambda: [DBIN, "selftest"], "doctest selftest"),   # the multi-piece walk
 ]
 
 def selftest():
