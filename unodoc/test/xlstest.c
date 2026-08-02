@@ -304,11 +304,208 @@ static int selftest(void)
     return bad;
 }
 
+/* ===========================================================================
+ * the writer (phase 3a)
+ *
+ * One demo workbook, built once and used two ways: `wtest` saves it, reads it
+ * back with our own reader and checks every cell survived, and `wfile` writes
+ * it out so run_tests.py can hand it to LibreOffice - the half our own reader
+ * cannot judge, since a file we both write and read could be consistently
+ * wrong.
+ * ======================================================================== */
+#define WNUM 6
+static const double WN[WNUM] = { 0.0, -1.0, 1.5, 0.1, 1e20, 12345678901234.0 };
+#define WSTRN 4
+static const char *WS[WSTRN] = {
+    "plain",
+    /* CP-1252 accents, still 8-bit on disk.  The literals are split because
+       C's \x escape is greedy: "\xDCber" would try to read DCBE as one. */
+    "caf\xE9" " na\xEF" "ve \xDC" "ber",
+    "euro \x80 sign",               /* CP-1252 0x80 is U+20AC: must go WIDE  */
+    "0123456789012345678901234567890123456789012345678901234567890123456789"
+};
+static const int WERR[3] = { UD_XE_DIV0, UD_XE_NA, UD_XE_VALUE };
+
+/* enough long distinct strings to push the SST past the record ceiling many
+ * times over, so the writer's CONTINUE splitting is exercised, not assumed */
+static void wstr_gen(int i, char *out)
+{
+    int k, n = 60 + (i * 37) % 140;
+    int len = sprintf(out, "w%05d-", i);
+    for (k = 0; k < n; k++) out[len++] = (char)('a' + ((i * 7 + k * 13) % 26));
+    if (i % 3 == 0) { out[len++] = (char)0xE9; out[len++] = (char)0xE9; }
+    if (i % 7 == 0) { out[len++] = (char)0x80; }   /* forces the wide form */
+    out[len] = 0;
+}
+
+#define WMANY 2500
+
+static int build_demo(ud_xlsw *w, int date1904)
+{
+    int a, b, i;
+    char buf[256];
+
+    ud_xlsw_date1904(w, date1904);
+    a = ud_xlsw_sheet(w, "Alpha");
+    b = ud_xlsw_sheet(w, "Beta");
+    if (a < 0 || b < 0) return 0;
+
+    for (i = 0; i < WNUM; i++)  ud_xlsw_num(w, a, 0, i, WN[i]);
+    for (i = 0; i < WSTRN; i++) ud_xlsw_str(w, a, 1, i, WS[i]);
+    ud_xlsw_bool(w, a, 2, 0, 1);
+    ud_xlsw_bool(w, a, 2, 1, 0);
+    for (i = 0; i < 3; i++)     ud_xlsw_err(w, a, 3, i, WERR[i]);
+    ud_xlsw_blank(w, a, 4, 0);
+    /* number formats: a built-in code (no FORMAT record) and a custom one */
+    ud_xlsw_num(w, a, 5, 0, 46235.0);
+    ud_xlsw_format(w, a, 5, 0, "d-mmm-yy");
+    ud_xlsw_num(w, a, 5, 1, 1234.5);
+    ud_xlsw_format(w, a, 5, 1, "0.000\"kg\"");
+    /* rewriting a cell replaces it rather than duplicating it */
+    ud_xlsw_num(w, a, 6, 0, 1.0);
+    ud_xlsw_num(w, a, 6, 0, 42.0);
+
+    for (i = 0; i < WMANY; i++) {
+        wstr_gen(i, buf);
+        ud_xlsw_str(w, b, i, 0, buf);
+    }
+    ud_xlsw_str(w, b, 0, 2, "merged");
+    ud_xlsw_merge(w, b, 0, 2, 1, 4);
+    return 1;
+}
+
+static int wcheck(ud_xls *x, int date1904)
+{
+    int bad = 0, i;
+    ud_xcell c;
+    char buf[256];
+
+#define WANT(cond, ...) do { if (!(cond)) { printf("FAIL write: "); \
+        printf(__VA_ARGS__); printf("\n"); bad = 1; } } while (0)
+
+    WANT(ud_xls_sheets(x) == 2, "sheets = %d", ud_xls_sheets(x));
+    WANT(strcmp(ud_xls_sheet_name(x, 0), "Alpha") == 0,
+         "sheet 0 named '%s'", ud_xls_sheet_name(x, 0));
+    WANT(strcmp(ud_xls_sheet_name(x, 1), "Beta") == 0,
+         "sheet 1 named '%s'", ud_xls_sheet_name(x, 1));
+    WANT(ud_xls_date1904(x) == date1904, "date1904 = %d, wrote %d",
+         ud_xls_date1904(x), date1904);
+
+    for (i = 0; i < WNUM; i++) {
+        WANT(ud_xls_cell(x, 0, 0, i, &c) && c.kind == UD_XV_NUM &&
+             c.num == WN[i], "number %d came back wrong", i);
+    }
+    for (i = 0; i < WSTRN; i++) {
+        WANT(ud_xls_cell(x, 0, 1, i, &c) && c.kind == UD_XV_STR &&
+             strcmp(c.str, WS[i]) == 0, "string %d came back wrong", i);
+    }
+    WANT(ud_xls_cell(x, 0, 2, 0, &c) && c.kind == UD_XV_BOOL && c.num == 1,
+         "TRUE came back wrong");
+    WANT(ud_xls_cell(x, 0, 2, 1, &c) && c.kind == UD_XV_BOOL && c.num == 0,
+         "FALSE came back wrong");
+    for (i = 0; i < 3; i++)
+        WANT(ud_xls_cell(x, 0, 3, i, &c) && c.kind == UD_XV_ERR &&
+             c.err == WERR[i], "error %d came back wrong", i);
+    WANT(ud_xls_cell(x, 0, 4, 0, &c) && c.kind == UD_XV_EMPTY, "blank");
+    WANT(ud_xls_cell(x, 0, 5, 0, &c) &&
+         strcmp(ud_xls_xf_format(x, c.xf), "d-mmm-yy") == 0,
+         "built-in format came back as '%s'",
+         ud_xls_cell(x, 0, 5, 0, &c) ? ud_xls_xf_format(x, c.xf) : "?");
+    WANT(ud_xls_cell(x, 0, 5, 1, &c) &&
+         strcmp(ud_xls_xf_format(x, c.xf), "0.000\"kg\"") == 0,
+         "custom format came back as '%s'",
+         ud_xls_cell(x, 0, 5, 1, &c) ? ud_xls_xf_format(x, c.xf) : "?");
+    WANT(ud_xls_cell(x, 0, 6, 0, &c) && c.kind == UD_XV_NUM && c.num == 42,
+         "rewriting a cell did not replace it");
+
+    for (i = 0; i < WMANY; i++) {
+        wstr_gen(i, buf);
+        if (!ud_xls_cell(x, 1, i, 0, &c) || c.kind != UD_XV_STR ||
+            strcmp(c.str, buf) != 0) {
+            printf("FAIL write: shared string %d came back as \"", i);
+            put_escaped(c.kind == UD_XV_STR ? c.str : "<not a string>");
+            printf("\"\n  want \"");
+            put_escaped(buf);
+            printf("\"\n");
+            bad = 1;
+            break;
+        }
+    }
+    {
+        int r0, c0, r1, c1;
+        WANT(ud_xls_merges(x, 1) == 1, "merges = %d", ud_xls_merges(x, 1));
+        if (ud_xls_merge(x, 1, 0, &r0, &c0, &r1, &c1))
+            WANT(r0 == 0 && c0 == 2 && r1 == 1 && c1 == 4,
+                 "merge came back as %d,%d-%d,%d", r0, c0, r1, c1);
+    }
+#undef WANT
+    return bad;
+}
+
+static int wtest(void)
+{
+    int bad = 0, mode;
+
+    /* both epochs, so the 1904 flag is finally exercised end to end */
+    for (mode = 0; mode < 2; mode++) {
+        ud_xlsw *w = ud_xlsw_new();
+        unsigned char *img;
+        long len = 0;
+        ud_src src;
+        ud_cfb *c;
+        ud_xls *x;
+
+        if (!w || !build_demo(w, mode)) {
+            printf("FAIL write: could not build the model: %s\n", ud_error());
+            ud_xlsw_free(w);
+            return 1;
+        }
+        img = ud_xlsw_save(w, &len);
+        ud_xlsw_free(w);
+        if (!img) { printf("FAIL write: save failed: %s\n", ud_error()); return 1; }
+
+        ud_src_mem(&src, img, len);
+        c = ud_cfb_open(&src);
+        x = c ? ud_xls_open(c) : 0;
+        if (!x) {
+            printf("FAIL write: our own reader will not open it: %s\n", ud_error());
+            bad = 1;
+        } else {
+            bad |= wcheck(x, mode);
+            ud_xls_close(x);
+        }
+        ud_cfb_close(c);
+        ud_free(img);
+    }
+    if (!bad)
+        printf("xlstest: writer OK - %d cells and %d shared strings survive a "
+               "save/reload on both date epochs\n", WNUM + WSTRN + 9, WMANY);
+    return bad;
+}
+
 int main(int argc, char **argv)
 {
     ud_set_alloc(t_alloc, free);
 
     if (argc >= 2 && strcmp(argv[1], "selftest") == 0) return selftest();
+    if (argc >= 2 && strcmp(argv[1], "wtest") == 0) return wtest();
+    if (argc >= 3 && strcmp(argv[1], "wfile") == 0) {
+        ud_xlsw *w = ud_xlsw_new();
+        unsigned char *img;
+        long len = 0;
+        FILE *f;
+        if (!w || !build_demo(w, 0)) { printf("ERR: %s\n", ud_error()); return 1; }
+        img = ud_xlsw_save(w, &len);
+        ud_xlsw_free(w);
+        if (!img) { printf("ERR: %s\n", ud_error()); return 1; }
+        f = fopen(argv[2], "wb");
+        if (!f) { printf("ERR: cannot write %s\n", argv[2]); ud_free(img); return 2; }
+        fwrite(img, 1, (size_t)len, f);
+        fclose(f);
+        printf("OK wrote %ld bytes\n", len);
+        ud_free(img);
+        return 0;
+    }
 
     if (argc >= 3 && strcmp(argv[1], "dump") == 0) {
         long n = 0;

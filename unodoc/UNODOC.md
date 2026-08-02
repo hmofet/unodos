@@ -22,7 +22,8 @@ a request rather than editing it.
 | 1 | CFB container, read + write | **landed**, `[EXPERIMENTAL]` |
 | 2a | `.xls` read (BIFF8): values | **landed**, `[EXPERIMENTAL]` |
 | 2b | `.xls` read: formula ptg decompiler | **landed**, `[EXPERIMENTAL]` |
-| 3 | `.xls` write + formula compiler | not started |
+| 3a | `.xls` write: values, strings, formats | **landed**, `[EXPERIMENTAL]` |
+| 3b | `.xls` write: the formula compiler | not started |
 | 4 | `.doc` read + minimal writer | not started |
 | 5 | Escher + `.ppt` | not started |
 
@@ -305,6 +306,43 @@ order.
 External workbook references render as `#REF!` rather than a guess; v1 does
 not follow links into other files.
 
+## Writing a workbook (phase 3a)
+
+```c
+ud_xlsw *w = ud_xlsw_new();
+int s = ud_xlsw_sheet(w, "Sheet1");
+ud_xlsw_str(w, s, 0, 0, "name");
+ud_xlsw_num(w, s, 1, 0, 1234.5);
+ud_xlsw_format(w, s, 1, 0, "0.00");
+long len; unsigned char *xls = ud_xlsw_save(w, &len);   /* a complete file */
+ud_free(xls); ud_xlsw_free(w);
+```
+
+`ud_xlsw_save` hands back the BIFF8 stream **already wrapped in a compound
+file** — one call from model to something `uno_fs_write` can take. Writing the
+same cell twice replaces it, so a caller serialising a model does not have to
+de-duplicate first.
+
+The globals preamble is written **from the spec, not from a canned byte
+blob**. Canning one is the usual trick and the plan allowed for it, but the
+records Excel actually insists on are few enough to emit honestly — four
+`FONT`s (BIFF8 numbers them 0,1,2,3 and then *skips 4*, which is the single
+strangest thing about the format), the fifteen style `XF`s, the default cell
+`XF` at 15, a Normal `STYLE` — and a blob nobody can read is a blob nobody
+can fix.
+
+Two things the writer has to get right, both learned from the reader:
+
+- The SST is split at the 8224-byte ceiling with `CONTINUE`, and a string cut
+  mid-character **restates its encoding flag** in the new block. That is the
+  writer half of the trap `ud_xls.c` reads.
+- A string goes out 8-bit only when every character fits in one byte of
+  UTF-16. CP-1252's `0x80`–`0x9F` map to code points above 255 (the euro sign
+  is U+20AC), so those strings must go out wide or come back wrong.
+
+Not yet: formulas (3b), fonts and colours beyond the default, column widths,
+row heights.
+
 ### Not in phase 2, stated rather than implied
 
 - **`FONT`, `STYLE`, `COLINFO`, `ROW` and `WINDOW2` are skipped**, not
@@ -340,6 +378,15 @@ only when it is actually needed, as an append.
 
 ## Changelog
 
+- **2026-08-02 — phase 3a.** `ud_xlsw.c`: writing a workbook — sheets,
+  every value kind, the interned shared string table with correct `CONTINUE`
+  splitting, number formats, merged ranges, both date epochs. Gate: a demo
+  workbook survives save-and-reload through our own reader (2500 shared
+  strings, both epochs), and then **LibreOffice opens the file we wrote** and
+  finds all twelve checked features — the half our own reader cannot judge.
+  Also fixes the phase-2a gate, where the `xlstest` selftest had silently
+  never been wired in (a patch script lost its backslashes; see the requests
+  file).
 - **2026-08-01 — phase 2b.** `ud_ptg.c`: the formula decompiler — operators
   with precedence-aware parenthesisation, every reference form, 3-D
   references, defined names, array constants, the `Ftab` function table, and
