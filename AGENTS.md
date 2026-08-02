@@ -51,6 +51,8 @@ re-home"). Ownership is of the CODE; the whole OS is a shared goal.
 | unoweb (DOM / HTML / CSS / layout / paint) | `unoweb/UNOWEB.md`, `unoweb/unoweb.h` | `unoweb/*`, `pc64/webjs.c` |
 | browser (HTML/MD renderer + HTTP client + js) | `pc64_http.h` header | `pc64_browser.*`, `pc64_http.*`, `js.*` |
 | unossh (SSH client: protocol, crypto, key + session store) | `docs/SSH-CLIENT-SPEC.md`, `ed25519.h`, `unossh.h` | `unossh*`, `ed25519.*`, `sshapp_*` |
+| unodoc (document formats: CFB + doc/xls/ppt + Escher, R/W) | `unodoc/UNODOC.md`, `docs/OFFICE97-PLAN.md` §4 | `unodoc/*` |
+| unoffice (Office 97 suite: uochrome + UnoWord/UnoCalc/UnoShow) | `docs/OFFICE97-PLAN.md`, `docs/OFFICE97-SPEC.md` | `pc64/uoffice/*`, `pc64/apps/uo*.c` |
 | per-port ports | `AUDIT-<port>.md` | `amiga/`, `c64/`, `nes/`, `snes/`, ... |
 
 Whoever is actively working a subsystem this session **claims it in the requests
