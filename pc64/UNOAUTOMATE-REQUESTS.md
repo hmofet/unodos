@@ -4209,3 +4209,49 @@ hand. It is wired in now, along with the writer round-trip. Worth a look at
 any patch that "applied" without visibly changing behaviour.
 
 **No choke-point touched**; still no `pc64/build.sh` block.
+
+## 2026-08-02 - unodoc phase 3b LANDED: the .xls lane is COMPLETE
+
+**Worker A, unodoc lane.** `unodoc/ud_ptgc.c`: the formula compiler, text ->
+ptgs. With it `.xls` is done in both directions - values and expressions,
+read and write - so OFFICE97-SPEC S-OFF-06's `.xls` box is now `[F]`.
+
+A recursive-descent parser that emits postfix directly: no intermediate tree,
+because RPN is what the file wants and the recursion already encodes the
+shape. One function per precedence rung; an operator's token is written after
+its operands have written theirs.
+
+**Operand classes**, which OFFICE97-PLAN §4 flags as the subtle half. Every
+reference-ish token exists in reference / value / array flavours and Excel
+picks by how the operand is CONSUMED, not what it is. The rule implemented: a
+reference used as a DIRECT FUNCTION ARGUMENT goes out in reference class -
+that is what lets SUM see a range rather than one dereferenced value -
+everywhere else (arithmetic, comparison, the whole formula) it goes out in
+value class.
+
+**Read this before trusting that:** the rule is validated by LibreOffice
+reading back all 31 formulas we compile and re-rendering them correctly. It
+is NOT validated against real Excel, which the plan reserves for a milestone
+with a VM. If a formula ever comes back wrong in real Office, `ud_ptgc.c`'s
+class rule is the first place to look.
+
+3-D references work because the writer now emits an internal SUPBOOK and one
+EXTERNSHEET entry per sheet, so a sheet index and its ixti are the same
+number. Defined names are NOT written yet, so a formula referring to one is
+refused rather than mis-compiled - the compiler declines what it cannot do
+instead of emitting something plausible.
+
+Gate: 28 expressions go text -> tokens -> file -> tokens -> text and come back
+unchanged (which exercises the compiler and the decompiler against each other,
+neither able to hide the other's error); 9 malformed expressions are refused;
+cached results of all four kinds survive the round trip; and the `written`
+stage now checks 24 features in the file WE wrote as LibreOffice re-renders
+them, twelve of those being formulas.
+
+**What the .xls writer still does not do**, stated rather than implied: FONT
+and STYLE variation, defined names, and shared formulas on write - every
+formula is written in full, which is correct, just larger than Excel would
+write it.
+
+**No choke-point touched**; still no `pc64/build.sh` block. Next in this lane:
+phase 4, `.doc`.
