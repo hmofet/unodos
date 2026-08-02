@@ -41,7 +41,11 @@
 #define FL_WHICHTBL    0x0200
 #define FL_CRYPTO      0x8000
 
-#define FCLB_CLX       33        /* fcClx is pair 33 of rgFcLcb97          */
+#define FCLB_BTECHPX   12        /* pairs of rgFcLcb97 we use              */
+#define FCLB_BTEPAPX   13
+#define FCLB_CLX       33
+
+#define FKP_SIZE       512
 
 #define MAX_TEXT       (64L * 1024 * 1024)
 #define MAX_PIECES     1000000
@@ -52,21 +56,33 @@ typedef struct {
     int  wide;             /* 0 = 8-bit CP-1252, 1 = UTF-16LE             */
 } ud_piece;
 
+/* a bin table: which 512-byte FKP page covers which stretch of the file */
+typedef struct {
+    uint32_t *fc;      /* n+1 file offsets                                 */
+    uint32_t *pn;      /* n page numbers                                   */
+    long      n;
+} ud_bte;
+
 struct ud_doc {
     ud_cfb   *cfb;
     int       wd;                    /* WordDocument stream id            */
+    int       tbl;                   /* the table stream id               */
     long      ccp;                   /* characters of body text           */
     ud_piece *pc;  int npc;
     char     *text;                  /* the body, CP-1252, NUL-terminated */
     char     *plain;                 /* reading text (built on demand)    */
+    ud_bte    chpbte, papbte;
 };
 
 /* ---- the FIB ---------------------------------------------------------------
  * Everything after offset 0x20 is variable length: three counted arrays, one
  * after another.  Walk them rather than assuming offsets, because getting
  * this wrong silently reads the wrong table. */
+/* fclcb[i] receives the (fc, lcb) pair numbered WANTED[i] of rgFcLcb */
+static const int WANTED[3] = { FCLB_CLX, FCLB_BTECHPX, FCLB_BTEPAPX };
+
 static int fib_parse(ud_doc *d, const unsigned char *f, long n,
-                     int *whichtbl, long *fcClx, long *lcbClx)
+                     int *whichtbl, long fclcb[3][2])
 {
     long csw, cslw, cbfc, off;
 
@@ -107,8 +123,13 @@ static int fib_parse(ud_doc *d, const unsigned char *f, long n,
         ud_set_error("Word: FIB does not reach the piece table pointer");
         return 0;
     }
-    *fcClx  = (long)ud_rd32(f + off + FCLB_CLX * 8);
-    *lcbClx = (long)ud_rd32(f + off + FCLB_CLX * 8 + 4);
+    {
+        int i;
+        for (i = 0; i < 3; i++) {
+            fclcb[i][0] = (long)ud_rd32(f + off + WANTED[i] * 8);
+            fclcb[i][1] = (long)ud_rd32(f + off + WANTED[i] * 8 + 4);
+        }
+    }
     if (d->ccp < 0 || d->ccp > MAX_TEXT) {
         ud_set_error("Word: implausible document length");
         return 0;
@@ -211,11 +232,212 @@ static int build_text(ud_doc *d)
     return 1;
 }
 
+/* ===========================================================================
+ * formatting: bin table -> FKP page -> CHPX/PAPX -> sprms
+ * ======================================================================== */
+static int bte_load(ud_doc *d, ud_bte *b, long fc, long lcb)
+{
+    unsigned char *raw;
+    long n, i;
+
+    if (lcb < 4 || lcb > 4L * 1024 * 1024) return 0;
+    n = (lcb - 4) / 8;                     /* (n+1) FCs then n page numbers */
+    if (n <= 0) return 0;
+    raw = (unsigned char *)ud_alloc((unsigned long)lcb);
+    if (!raw) return 0;
+    if (ud_cfb_read(d->cfb, d->tbl, fc, raw, lcb) != lcb) { ud_free(raw); return 0; }
+    b->fc = (uint32_t *)ud_alloc((unsigned long)(n + 1) * 4);
+    b->pn = (uint32_t *)ud_alloc((unsigned long)n * 4);
+    if (!b->fc || !b->pn) { ud_free(raw); return 0; }
+    for (i = 0; i <= n; i++) b->fc[i] = ud_rd32(raw + i * 4);
+    for (i = 0; i < n; i++)
+        b->pn[i] = ud_rd32(raw + (n + 1) * 4 + i * 4) & 0x003FFFFFu;
+    b->n = n;
+    ud_free(raw);
+    return 1;
+}
+
+/* Which FKP page covers file offset `fc`?  The table is sorted, so this is a
+ * binary search - and the bounds check is what stops a damaged table sending
+ * us to page 4 billion. */
+static long bte_page(const ud_bte *b, long fc)
+{
+    long lo = 0, hi = b->n - 1;
+    if (!b->n) return -1;
+    if ((uint32_t)fc < b->fc[0] || (uint32_t)fc >= b->fc[b->n]) return -1;
+    while (lo <= hi) {
+        long mid = lo + (hi - lo) / 2;
+        if ((uint32_t)fc < b->fc[mid]) hi = mid - 1;
+        else if ((uint32_t)fc >= b->fc[mid + 1]) lo = mid + 1;
+        else return (long)b->pn[mid];
+    }
+    return -1;
+}
+
+/* ---- the sprm walker --------------------------------------------------------
+ * A sprm is a u16 opcode whose top three bits say how big its operand is.
+ * Getting that table wrong desynchronises the whole run, so it is the one
+ * piece of this that has to be exactly right. */
+static long sprm_operand_len(uint16_t sprm, const unsigned char *p, long avail)
+{
+    switch ((sprm >> 13) & 7) {
+    case 0: case 1: return 1;
+    case 2: case 4: case 5: return 2;
+    case 3: return 4;
+    case 7: return 3;
+    case 6:                              /* variable: a leading length byte */
+        if (avail < 1) return -1;
+        return 1 + (long)p[0];
+    default: return -1;
+    }
+}
+
+/* Word's toggle operands: 0 off, 1 on, 128 leave alone, 129 invert. */
+static int toggle(int cur, int v)
+{
+    if (v == 128) return cur;
+    if (v == 129) return !cur;
+    return v ? 1 : 0;
+}
+
+static void apply_chp(ud_chp *c, const unsigned char *g, long n)
+{
+    long at = 0;
+    while (at + 2 <= n) {
+        uint16_t sprm = ud_rd16(g + at);
+        long olen = sprm_operand_len(sprm, g + at + 2, n - at - 2);
+        const unsigned char *o = g + at + 2;
+        if (olen < 0 || at + 2 + olen > n) return;
+        switch (sprm) {
+        case 0x0835: c->bold      = toggle(c->bold, o[0]); break;
+        case 0x0836: c->italic    = toggle(c->italic, o[0]); break;
+        case 0x0837: c->strike    = toggle(c->strike, o[0]); break;
+        case 0x083A: c->smallcaps = toggle(c->smallcaps, o[0]); break;
+        case 0x083B: c->caps      = toggle(c->caps, o[0]); break;
+        case 0x2A3E: c->underline = o[0] != 0; break;
+        case 0x2A42: c->color     = o[0]; break;
+        case 0x4A43: c->size      = (int)ud_rd16(o); break;
+        case 0x4A4F: c->font      = (int)ud_rd16(o); break;
+        case 0x2A44: c->super = (o[0] == 1); c->sub = (o[0] == 2); break;
+        default: break;
+        }
+        at += 2 + olen;
+    }
+}
+
+static void apply_pap(ud_pap *p, const unsigned char *g, long n)
+{
+    long at = 0;
+    while (at + 2 <= n) {
+        uint16_t sprm = ud_rd16(g + at);
+        long olen = sprm_operand_len(sprm, g + at + 2, n - at - 2);
+        const unsigned char *o = g + at + 2;
+        if (olen < 0 || at + 2 + olen > n) return;
+        switch (sprm) {
+        case 0x2403: p->align  = o[0]; break;
+        case 0x2406: p->keep_next = o[0] != 0; break;
+        case 0x2407: p->page_break_before = o[0] != 0; break;
+        case 0x840F: p->left   = (int)(int16_t)ud_rd16(o); break;
+        case 0x840E: p->right  = (int)(int16_t)ud_rd16(o); break;
+        case 0x8411: p->first  = (int)(int16_t)ud_rd16(o); break;
+        case 0xA413: p->before = (int)ud_rd16(o); break;
+        case 0xA414: p->after  = (int)ud_rd16(o); break;
+        default: break;
+        }
+        at += 2 + olen;
+    }
+}
+
+/* Which file offset does document character `cp` live at?  The piece table
+ * again - formatting is indexed by FILE position, not by character. */
+static long cp_to_fc(ud_doc *d, long cp, int *wide)
+{
+    long i;
+    for (i = 0; i < d->npc; i++)
+        if (cp >= d->pc[i].cp0 && cp < d->pc[i].cp1) {
+            *wide = d->pc[i].wide;
+            return d->pc[i].fc + (cp - d->pc[i].cp0) * (d->pc[i].wide ? 2 : 1);
+        }
+    return -1;
+}
+
+int ud_doc_chp_at(ud_doc *d, long cp, ud_chp *out)
+{
+    unsigned char fkp[FKP_SIZE];
+    long fc, page, crun, j;
+    int wide = 0;
+
+    if (!out) return 0;
+    memset(out, 0, sizeof *out);
+    if (!d) return 0;
+    fc = cp_to_fc(d, cp, &wide);
+    if (fc < 0) return 0;
+    page = bte_page(&d->chpbte, fc);
+    if (page < 0) return 0;
+    if (ud_cfb_read(d->cfb, d->wd, page * FKP_SIZE, fkp, FKP_SIZE) != FKP_SIZE)
+        return 0;
+    crun = fkp[FKP_SIZE - 1];
+    if (crun < 1 || 4 * (crun + 1) + crun > FKP_SIZE - 1) return 0;
+    for (j = 0; j < crun; j++) {
+        uint32_t f0 = ud_rd32(fkp + j * 4), f1 = ud_rd32(fkp + (j + 1) * 4);
+        long off;
+        if ((uint32_t)fc < f0 || (uint32_t)fc >= f1) continue;
+        off = (long)fkp[4 * (crun + 1) + j] * 2;
+        if (off == 0) return 1;              /* no exception: the defaults */
+        if (off + 1 > FKP_SIZE) return 0;
+        {
+            long cb = fkp[off];
+            if (off + 1 + cb > FKP_SIZE) return 0;
+            apply_chp(out, fkp + off + 1, cb);
+        }
+        return 1;
+    }
+    return 0;
+}
+
+int ud_doc_pap_at(ud_doc *d, long cp, ud_pap *out)
+{
+    unsigned char fkp[FKP_SIZE];
+    long fc, page, crun, j;
+    int wide = 0;
+
+    if (!out) return 0;
+    memset(out, 0, sizeof *out);
+    if (!d) return 0;
+    fc = cp_to_fc(d, cp, &wide);
+    if (fc < 0) return 0;
+    page = bte_page(&d->papbte, fc);
+    if (page < 0) return 0;
+    if (ud_cfb_read(d->cfb, d->wd, page * FKP_SIZE, fkp, FKP_SIZE) != FKP_SIZE)
+        return 0;
+    crun = fkp[FKP_SIZE - 1];
+    /* a PAPX bin entry is 13 bytes, not 1 - the extra 12 are the BX */
+    if (crun < 1 || 4 * (crun + 1) + crun * 13 > FKP_SIZE - 1) return 0;
+    for (j = 0; j < crun; j++) {
+        uint32_t f0 = ud_rd32(fkp + j * 4), f1 = ud_rd32(fkp + (j + 1) * 4);
+        long off, cb, glen;
+        if ((uint32_t)fc < f0 || (uint32_t)fc >= f1) continue;
+        off = (long)fkp[4 * (crun + 1) + j * 13] * 2;
+        if (off == 0 || off + 2 > FKP_SIZE) return 1;
+        /* PapxInFkp: a word count, and if it is zero the REAL count is the
+           next byte and the blob starts one further in.  Miss that and every
+           long paragraph's properties come out as garbage. */
+        cb = fkp[off];
+        if (cb) { glen = cb * 2 - 1; off += 1; }
+        else    { cb = fkp[off + 1]; glen = cb * 2; off += 2; }
+        if (glen < 2 || off + glen > FKP_SIZE) return 0;
+        out->style = (int)ud_rd16(fkp + off);       /* istd leads the blob */
+        apply_pap(out, fkp + off + 2, glen - 2);
+        return 1;
+    }
+    return 0;
+}
+
 ud_doc *ud_doc_open(ud_cfb *c)
 {
     ud_doc *d;
     int tbl, tid;
-    long fcClx = 0, lcbClx = 0, wdlen;
+    long fclcb[3][2], fcClx, lcbClx, wdlen;
     /* The FIB's three counted arrays make it variable length.  Word 97 runs
        to about 900 bytes, but a file written by a later Word - or by
        LibreOffice, which stamps nFib 0x0101 and 136 rgFcLcb pairs - reaches
@@ -238,8 +460,10 @@ ud_doc *ud_doc_open(ud_cfb *c)
         return 0;
     }
     wdlen = ud_cfb_size(c, d->wd);
+    memset(fclcb, 0, sizeof fclcb);
     { long n = ud_cfb_read(c, d->wd, 0, fib, (long)sizeof fib);
-      if (!fib_parse(d, fib, n, &tbl, &fcClx, &lcbClx)) { ud_doc_close(d); return 0; } }
+      if (!fib_parse(d, fib, n, &tbl, fclcb)) { ud_doc_close(d); return 0; } }
+    fcClx = fclcb[0][0]; lcbClx = fclcb[0][1];
     (void)wdlen;
 
     tid = ud_cfb_find(c, tbl ? "/1Table" : "/0Table");
@@ -262,12 +486,18 @@ ud_doc *ud_doc_open(ud_cfb *c)
         ud_doc_close(d);
         return 0;
     }
+    d->tbl = tid;
     if (!clx_pieces(d, clx, lcbClx) || !build_text(d)) {
         ud_free(clx);
         ud_doc_close(d);
         return 0;
     }
     ud_free(clx);
+    /* The formatting bin tables are optional as far as opening goes: a
+       document with no direct formatting still reads, and one whose tables
+       are damaged should still give up its text. */
+    bte_load(d, &d->chpbte, fclcb[1][0], fclcb[1][1]);
+    bte_load(d, &d->papbte, fclcb[2][0], fclcb[2][1]);
     return d;
 }
 
@@ -277,6 +507,8 @@ void ud_doc_close(ud_doc *d)
     ud_free(d->pc);
     ud_free(d->text);
     ud_free(d->plain);
+    ud_free(d->chpbte.fc); ud_free(d->chpbte.pn);
+    ud_free(d->papbte.fc); ud_free(d->papbte.pn);
     ud_free(d);
 }
 

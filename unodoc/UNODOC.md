@@ -25,7 +25,8 @@ a request rather than editing it.
 | 3a | `.xls` write: values, strings, formats | **landed**, `[EXPERIMENTAL]` |
 | 3b | `.xls` write: the formula compiler | **landed**, `[EXPERIMENTAL]` |
 | 4a | `.doc` read: FIB, piece table, text | **landed**, `[EXPERIMENTAL]` |
-| 4b | `.doc` read: formatting (CHPX/PAPX, sprms) | not started |
+| 4b | `.doc` read: direct formatting (CHPX/PAPX, sprms) | **landed**, `[EXPERIMENTAL]` |
+| 4b′ | `.doc` read: the STSH style hierarchy | not started |
 | 4c | `.doc` minimal writer | not started |
 | 5 | Escher + `.ppt` | not started |
 
@@ -418,17 +419,49 @@ three consequences are where naive readers go wrong:
   `0Table` or `1Table`. Both may exist. If the named one is missing, unodoc
   tries the other rather than giving up on an otherwise readable document.
 
-### The gap in this phase's evidence, stated plainly
+Every document in the corpus comes back with `pieces=1` — LibreOffice writes a
+single text run, and nothing we can generate produces the multi-piece,
+mixed-encoding layout a real quick-saved Word file has. So `doctest selftest`
+builds one **by hand**, with the runs stored in a different order from the one
+the piece table gives and the encodings alternating. A reader that walks the
+file instead of the table gets the text scrambled; one that decides the
+encoding once gets half of it as mojibake. Both are caught.
 
-Every document in the corpus comes back with **`pieces=1`**. LibreOffice
-writes a single text run, and nothing we can generate produces the
-multi-piece, mixed-encoding layout that a real quick-saved Word file has —
-which is exactly the case the piece table exists for. So the walk is
-implemented and bounds-checked, and it extracts text identical to
-LibreOffice's own extraction on every corpus file, but **the multi-piece path
-itself is unproven**. The honest fix is the one used for the SST encoding
-switch: build a document by hand with several pieces in a deliberate order
-and both encodings. That is the first thing phase 4b should do.
+## Formatting (phase 4b)
+
+```c
+ud_chp ch; ud_pap pa;
+ud_doc_chp_at(d, cp, &ch);      /* bold, italic, size, colour, ...        */
+ud_doc_pap_at(d, cp, &pa);      /* alignment, indents, spacing, style id  */
+```
+
+Word stores formatting as **runs of exceptions**, not per character: CHPX for
+characters and PAPX for paragraphs, packed into 512-byte pages, with a bin
+table saying which page covers which stretch of the file. Note *of the file* —
+formatting is indexed by byte offset, not by character position, so a lookup
+goes through the piece table first. The hand-built selftest checks exactly
+that: its bold run covers the piece stored **first** in the stream but reading
+**third** in the document, so a reader that indexed by character position
+would embolden the wrong words.
+
+The one thing in here that must be exactly right is the sprm operand-size
+table — the top three bits of the opcode — because getting it wrong
+desynchronises the rest of the run rather than losing one property. Same for
+`PapxInFkp`'s two-level length: a leading word count, and when that is zero
+the real count is the *next* byte and the blob starts one further in.
+
+### What this does NOT do yet, and why it matters more than what it does
+
+These report **direct formatting only**. The style sheet (STSH) and its
+based-on chains are not read, so a run whose boldness comes from its paragraph
+or character *style* reads as not-bold.
+
+That is not a corner case. Measured on `fmt.doc` — a document authored with
+seven distinctly formatted runs — LibreOffice emitted a CHPX for **only 2 of
+the 7**, routing the rest through Word character styles. So on
+LibreOffice-authored documents, most formatting is currently invisible.
+`fmt.doc` therefore ships as a text and fuzz target and is waiting to become
+the fixture for the STSH slice, which is the next thing this lane should do.
 
 ## What unodoc is NOT
 
@@ -456,6 +489,14 @@ only when it is actually needed, as an append.
 
 ## Changelog
 
+- **2026-08-02 — phase 4b.** Direct character and paragraph formatting:
+  the CHPX/PAPX bin tables, the FKP pages, and a sprm interpreter. Also
+  **closes phase 4a's open gap** — the multi-piece walk is now proven by a
+  hand-built document with the runs out of order and the encodings
+  alternating. New limit, and a bigger one than it sounds: LibreOffice routes
+  most formatting through Word *styles*, so until the STSH is read, most
+  formatting in a LibreOffice-authored document is invisible. Measured: 2
+  CHPX for 7 formatted runs.
 - **2026-08-02 — phase 4a.** `ud_doc.c`: the FIB, the piece table and the
   text. Gate: every corpus document's reading text is **identical to
   LibreOffice's own extraction** (900 lines on the largest), plus 9000 fuzz

@@ -377,6 +377,39 @@ const char *ud_doc_plain(ud_doc *d);
  * quick way to tell a quick-saved document from a freshly written one. */
 int ud_doc_pieces(const ud_doc *d);
 
+/* ---- formatting (phase 4b) -------------------------------------------------
+ * Word does not store formatting per character.  It stores RUNS of exceptions
+ * - CHPX for characters, PAPX for paragraphs - in 512-byte pages, and a bin
+ * table says which page covers which part of the file.  Ask by character
+ * position and unodoc does the two lookups.
+ *
+ * IMPORTANT, and stated here rather than discovered later: these report the
+ * DIRECT formatting a document applies, over Word's built-in defaults.  The
+ * style hierarchy (STSH, based-on chains) is not resolved yet, so a run whose
+ * boldness comes from its paragraph STYLE rather than from direct formatting
+ * reads as not-bold.  Resolving that is the next slice. */
+typedef struct {
+    int bold, italic, underline, strike, caps, smallcaps;
+    int size;        /* half-points, so 20 is 10pt; 0 = not set directly   */
+    int color;       /* Word's ico palette index, 0 = automatic            */
+    int font;        /* index into the document's font table               */
+    int super, sub;
+} ud_chp;
+
+typedef struct {
+    int style;                  /* istd, the paragraph's style index       */
+    int align;                  /* 0 left, 1 centre, 2 right, 3 justified  */
+    int left, right, first;     /* indents in twips; first may be negative */
+    int before, after;          /* spacing in twips                        */
+    int keep_next, page_break_before;
+} ud_pap;
+
+/* Fill *out with the formatting in force at character position `cp`.
+ * Returns 1 if a lookup succeeded (out is always initialised to the
+ * defaults first, so a 0 return still leaves something usable). */
+int ud_doc_chp_at(ud_doc *d, long cp, ud_chp *out);
+int ud_doc_pap_at(ud_doc *d, long cp, ud_pap *out);
+
 /* ---- name comparison (exposed: the format layers sort names too) ---------- */
 /* CFB directory order: shorter names first, then uppercased code unit by
  * code unit.  <0, 0, >0 like strcmp. */
