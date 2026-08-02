@@ -4255,3 +4255,38 @@ write it.
 
 **No choke-point touched**; still no `pc64/build.sh` block. Next in this lane:
 phase 4, `.doc`.
+
+## 2026-08-02 - unodoc phase 4a LANDED (.doc read: FIB, piece table, text)
+
+**Worker A, unodoc lane.** `unodoc/ud_doc.c`: the File Information Block, the
+piece table, and the body text. `ud_doc_text()` is the text exactly as stored
+(CP-1252, still carrying Word's in-band control characters, which is what a
+formatting layer walks); `ud_doc_plain()` is the same as reading matter, with
+field CODES dropped and their CACHED RESULTS kept.
+
+Three things a .doc reader has to get right, all of them handled here:
+document order is NOT file order (the piece table's order wins); each piece
+picks its own encoding, with bit 30 of its offset meaning "8-bit" and the real
+offset then being the remaining bits HALVED; and which of `0Table` / `1Table`
+holds the piece table is a single FIB bit, with unodoc falling back to the
+other stream rather than giving up on an otherwise readable document.
+
+Gate: every corpus document's reading text is IDENTICAL to LibreOffice's own
+text extraction, line for line - 900 lines on large.doc - plus 9000 fuzz
+mutations through the container and the document reader.
+
+**READ THIS BEFORE TRUSTING THE PIECE TABLE.** Every corpus document comes
+back with `pieces=1`. LibreOffice writes a single text run, and nothing we can
+generate produces the multi-piece, mixed-encoding layout a real quick-saved
+Word file has - which is precisely the case the piece table exists for. The
+walk is implemented and bounds-checked and gets the right answer on
+everything we can throw at it, but the multi-piece path itself is UNPROVEN.
+The fix is the one already used for the SST encoding switch: build a document
+by hand with several pieces in a deliberate order and both encodings. That is
+the first thing phase 4b should do, before any formatting work.
+
+A note for whoever reads FIBs next: LibreOffice stamps nFib 0x0101 (not Word
+97's 0x00C1) and 136 rgFcLcb pairs, so the FIB runs to 1242 bytes. A 1 KB
+read is not enough; ud_doc.c uses 4 KB and bounds-checks rather than assuming.
+
+**No choke-point touched**; still no `pc64/build.sh` block.
