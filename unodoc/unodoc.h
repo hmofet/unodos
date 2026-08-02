@@ -410,6 +410,22 @@ typedef struct {
 int ud_doc_chp_at(ud_doc *d, long cp, ud_chp *out);
 int ud_doc_pap_at(ud_doc *d, long cp, ud_pap *out);
 
+/* ---- writing a document (phase 4c) ---------------------------- [EXPERIMENTAL]
+ * The minimal layout Word and LibreOffice both accept: one 8-bit text piece,
+ * one exception page each for characters and paragraphs, a style sheet with a
+ * single Normal style, one section.  Paragraphs go in as text plus a little
+ * direct formatting; anything richer waits for the app that needs it. */
+typedef struct ud_docw ud_docw;
+
+ud_docw *ud_docw_new(void);
+void     ud_docw_free(ud_docw *w);
+
+/* Append a paragraph.  `align` is 0 left, 1 centre, 2 right, 3 justified. */
+int ud_docw_para(ud_docw *w, const char *text, int bold, int italic, int align);
+
+/* The whole .doc in one ud_alloc'd buffer (caller ud_free's it). */
+unsigned char *ud_docw_save(ud_docw *w, long *len);
+
 /* ---- name comparison (exposed: the format layers sort names too) ---------- */
 /* CFB directory order: shorter names first, then uppercased code unit by
  * code unit.  <0, 0, >0 like strcmp. */
