@@ -4569,3 +4569,42 @@ that match the source layout. Gate asserts shapes are found and the fuzzer
 walks them.
 
 **Remaining in the unodoc lane: 5c (.ppt write) only.**
+
+## 2026-08-02 - unodoc phase 5c LANDED (.ppt write): THE FORMATS LANE IS DONE
+
+**Worker A, unodoc lane.** `unodoc/ud_pptw.c`: writing a presentation - and
+with it every v1 format (.xls, .doc, .ppt) now reads AND writes, each gated
+by our own reader plus LibreOffice as the independent oracle.
+
+The writer never writes an edit log: a single UserEdit, one persist
+directory, every object live - the layout of a fresh save. The structure was
+taken by dumping the corpus record by record (gen/pptdump.py, a throwaway),
+then cut to what a reader requires: DocumentAtom, the Escher Dgg SHAPE-ID
+LEDGER (Impress checks ids against it; cidcl counts one phantom cluster more
+than exist, as the corpus confirms), master + slide SlideListWithText rows,
+a MainMaster with honest one-level empty-mask TxMasterStyleAtoms, plain
+Escher textboxes for slide text, persist dir, UserEdit, Current User.
+
+Two traps for whoever touches this next:
+
+  - TextBytesAtom is LATIN-1, not CP-1252: it stores the low byte of a
+    UTF-16 unit, and CP-1252's 0x80..0x9F are above U+00FF. The writer
+    splits on pure-ASCII, so no CP-1252 special ever rides the bytes form.
+  - UD_CFB_NONE is -1, so `if (!ud_cfbw_stream(...))` PASSES on failure.
+    Compare against UD_CFB_NONE explicitly, as ud_pptw_save now does.
+
+Not yet, stated: StyleTextPropAtom both directions (written text takes the
+viewer's default styling - UnoShow's font/size/colour needs the style atom),
+placeholders, pictures, notes, transitions. Real-PowerPoint acceptance stays
+reserved for the VM milestone, per the SPEC.
+
+One flaky observation, for honesty: a single full-gate run reported one
+failure that vanished before it could be read and did not reproduce across
+three subsequent full green runs - consistent with an soffice conversion
+timeout, the shape the 5a harness fix already guards against. If a one-off
+oracle failure shows up again, capture /tmp's gate log before rerunning.
+
+**Remaining in the unodoc lane: nothing scheduled.** The next consumers are
+worker B's uochrome/UnoWord (phases 6-8) and the app-side lanes; unodoc
+gains surface on request from them (OFFICE97-PLAN §4 names the candidates:
+.doc styles-on-write, .xls fonts/colours, .ppt style atoms, pictures).
