@@ -4111,3 +4111,58 @@ no boolean-typed cell at all. Our BOOLERR path is proven separately by a
 not need unodoc until the first Office app lands). The `.xls` box in
 `docs/OFFICE97-SPEC.md` S-OFF-06 stays OPEN with an inline note of what is
 and is not done - it covers read AND write, and write is phase 3.
+
+## 2026-08-01 - unodoc phase 2b LANDED (.xls formula decompiler)
+
+**Worker A, unodoc lane.** `unodoc/ud_ptg.c`: a BIFF8 ptg array back to
+"=SUM(A1:A9)". With this the `.xls` READ side is complete - values in 2a,
+expressions in 2b. `ud_xcell.ftext` carries the text; the cached value is
+still there when a token stream holds something this build cannot render, so
+a viewer is never left with nothing.
+
+Covered: the operator set with precedence-aware parenthesisation, all four
+relative/absolute reference forms, areas, 3-D references via
+EXTERNSHEET/SUPBOOK, defined names via NAME, array constants (which live in
+rgbExtra after the token stream), the Ftab function table, and **shared
+formulas** - a filled-down column stores its expression once in a SHRFMLA and
+every member carries only a PtgExp, so each cell re-bases the relative
+PtgRefN tokens against its own position. The SHRFMLA follows the FIRST
+member, so those cells resolve at end of sheet rather than in record order.
+
+Two traps worth naming: Excel's `^` is LEFT associative (2^3^2 is 64), so an
+equal-precedence right operand really is parenthesised in the source; and the
+user's own parentheses are recorded as an explicit PtgParen, so "=(1+2)*3"
+comes back with them where the author put them rather than merely somewhere
+valid. Both are fixture-covered.
+
+Also lands `ud_num_text` / `ud_int_text` in the core. unodoc links no libc
+beyond mem-/str-, and a formula literal has to be rendered somehow. It
+follows Excel's own 15-significant-digit display convention, NOT
+shortest-round-trip, and it is not a general number formatter - cell values
+are UnoCalc's uoc_numfmt, which owns the format-code language.
+
+Gate: `formulas.xls`, 47 expressions whose expected Excel A1 text is written
+INDEPENDENTLY of the ODF syntax the source document states them in, so a
+match means the decompiler rebuilt the expression rather than echoing
+anything handed to it. Measured with an instrumented build rather than
+assumed: the file really does contain 1 SHRFMLA record and 12 cells carrying
+only a PtgExp. The workbook fuzzer found a double-free (binop freed an
+uninitialised frag when a malformed token stream underflowed the stack).
+
+**One oracle finding, recorded so nobody re-debugs it:** LibreOffice compiles
+`=TRUE()` down to a single PtgBool constant - the token stream is literally
+`1d 01`, checked with an instrumented build - and then writes `TRUE()` again
+when it reads the file back, because ODF has no bare boolean literal. The
+faithful Excel text for that cell is the bare constant `=TRUE`, which is what
+the fixture asserts.
+
+**A harness note for everyone on this repo:** running `python - <<'PY'` via
+the Bash tool from Git Bash silently EATS backslashes (the same layer that
+eats `$var`), so a patch script containing `\t` or `\n` applies something
+else, or nothing at all. One edit here no-op'd that way and was caught only
+because the output was missing. Use the Edit/Write tools for anything
+containing a backslash.
+
+**No choke-point touched**; still no `pc64/build.sh` block. The `.xls` box in
+`docs/OFFICE97-SPEC.md` S-OFF-06 now reads READ SIDE COMPLETE and stays open
+for the write half (phase 3).

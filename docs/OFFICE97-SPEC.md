@@ -112,12 +112,14 @@ guides (full URL list in the plan's research provenance, §11).
 - [ ] **`.xls` BIFF8: read (SST incl. mid-string Continue encoding
   switches, XF/FONT/FORMAT, all cell record types, FORMULA ptg decompile,
   shared formulas, 1900/1904 epochs) + write (incl. compiled formulas
-  with correct operand classes)** — partial, `unodoc/ud_xls.c`, 2026-08-01
-  (phase 2a). DONE: the record layer with Continue folding, the SST
-  **including 8↔16-bit switches mid-string**, XF/FORMAT number-format
-  resolution, every cell record type, merged ranges, FILEPASS refused by
-  name. NOT YET, so the box stays open: the FORMULA ptg decompiler (2b),
-  writing (3), FONT/STYLE, and a 1904-epoch file to test against.
+  with correct operand classes)** — **READ SIDE COMPLETE**,
+  `unodoc/ud_xls.c` + `ud_ptg.c`, 2026-08-01 (phases 2a+2b). The record
+  layer with Continue folding; the SST **including 8↔16-bit switches
+  mid-string**; XF/FORMAT number-format resolution; every cell record type;
+  merged ranges; FILEPASS refused by name; the FORMULA ptg decompiler with
+  precedence-aware parenthesisation, 3-D references, defined names, array
+  constants and **shared formulas**. The box stays open for the WRITE half
+  (phase 3), plus FONT/STYLE and a 1904-epoch file to test against.
 - [ ] **`.ppt`: read (UserEdit chain → persist directory → live document;
   text from both homes; StyleTextPropAtom) + write (single UserEdit,
   valid PPDrawing per slide, no repair prompt)**
