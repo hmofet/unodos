@@ -4442,3 +4442,36 @@ watchdog metal pass". Two later findings in this file contradict that: the
 Yoga's firmware LOCKS the TCO (`tco1_cnt_fw=0x1800` = TCO_LOCK+HLT), and the
 Yoga is PMC-class while only the v2/RCBA NO_REBOOT path is implemented, so
 `present()` returns 0 there and is right to. Annotated in place.
+## 2026-08-02 - unodoc phase 4b' LANDED (.doc STSH style hierarchy)
+
+**Worker A, unodoc lane.** Phase 4b read the direct exceptions; this reads the
+styles they override, which is where most formatting in a real Word document
+actually lives.
+
+Character formatting now resolves in FOUR LAYERS, outermost first: the
+paragraph's style and everything it is based on (applied root-first, so a
+derived style overrides its parent); then any character style the run names
+via sprmCIstd; then the run's own direct exceptions. Paragraph formatting is
+the same minus the character-style layer. Get the order backwards and direct
+formatting silently loses to the style it was meant to override, so the
+selftest gives each layer a DIFFERENT property - any two applied in the wrong
+order lose one, and the failure message says which.
+
+**A corpus finding worth more than the passing test, for anyone authoring
+fixture documents here:** LibreOffice's flat-ODF import drops most automatic
+text styles on the way to .doc. `fmt.doc` was authored with seven distinctly
+formatted runs and most of that formatting IS NOT IN THE FILE - converting it
+back to ODF shows no bold, italic or font-size span at all, and a single
+text-align. Only underline, strikethrough and the Normal style's 12pt
+survived. The gate therefore asserts those three and nothing else,
+cross-checked against LibreOffice's own read-back rather than against what the
+source asked for. Do not write fixture expectations from an ODF source without
+checking what actually survived the export.
+
+That check is still meaningful: `size` comes back as 24 for EVERY run and
+arrives through the Normal style chain, not through any direct exception -
+and LibreOffice independently reports that style as 12pt.
+
+**No choke-point touched**; still no `pc64/build.sh` block, and unodoc is
+still not compiled into the OS at all - see the note below about there being
+nothing installable yet.
