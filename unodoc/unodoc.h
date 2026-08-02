@@ -300,6 +300,37 @@ int ud_xls_merge(const ud_xls *x, int s, int i,
 #define UD_XLS_MAXROW  65536
 #define UD_XLS_MAXCOL  256
 
+/* ---- writing a workbook (phase 3) ----------------------------- [EXPERIMENTAL]
+ * Same rule as the container: never in place.  Build a model, serialise a
+ * fresh file.  ud_xlsw_save hands back a complete .xls - the BIFF8 workbook
+ * stream already wrapped in a compound file - ready for uno_fs_write. */
+typedef struct ud_xlsw ud_xlsw;
+
+ud_xlsw *ud_xlsw_new(void);
+void     ud_xlsw_free(ud_xlsw *w);
+
+/* Add a sheet; returns its index, or -1.  At least one is required. */
+int ud_xlsw_sheet(ud_xlsw *w, const char *name);
+
+/* Cells.  Each returns 1 on success.  Writing the same cell twice replaces
+ * it, so a caller building from a model does not have to de-duplicate. */
+int ud_xlsw_num  (ud_xlsw *w, int s, int row, int col, double v);
+int ud_xlsw_str  (ud_xlsw *w, int s, int row, int col, const char *t);
+int ud_xlsw_bool (ud_xlsw *w, int s, int row, int col, int v);
+int ud_xlsw_err  (ud_xlsw *w, int s, int row, int col, int err);   /* UD_XE_* */
+int ud_xlsw_blank(ud_xlsw *w, int s, int row, int col);
+
+/* The number format a cell displays through, as a format code ("0.00",
+ * "d-mmm-yy").  Excel's built-in codes are recognised and reused; anything
+ * else becomes a FORMAT record.  Applies to the cell already written. */
+int ud_xlsw_format(ud_xlsw *w, int s, int row, int col, const char *code);
+
+int ud_xlsw_merge(ud_xlsw *w, int s, int row0, int col0, int row1, int col1);
+int ud_xlsw_date1904(ud_xlsw *w, int on);
+
+/* The whole file in one ud_alloc'd buffer (caller ud_free's it). */
+unsigned char *ud_xlsw_save(ud_xlsw *w, long *len);
+
 /* ---- name comparison (exposed: the format layers sort names too) ---------- */
 /* CFB directory order: shorter names first, then uppercased code unit by
  * code unit.  <0, 0, >0 like strcmp. */

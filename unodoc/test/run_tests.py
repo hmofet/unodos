@@ -42,7 +42,7 @@ SAN = ["-fsanitize=address,undefined",
        "-fno-sanitize-recover=all"]
 
 SRCS  = ["unodoc.c", "ud_cfb.c"]
-XSRCS = ["unodoc.c", "ud_cfb.c", "ud_xls.c", "ud_ptg.c"]
+XSRCS = ["unodoc.c", "ud_cfb.c", "ud_xls.c", "ud_ptg.c", "ud_xlsw.c"]
 
 # what each format is required to carry, as unodoc paths
 REQUIRED = {
@@ -83,13 +83,21 @@ def build():
     print("build: ok")
 
 # ---- 2. selftest ------------------------------------------------------------
+SELFTESTS = [
+    (lambda: [BIN, "selftest"],  "cfbtest selftest"),
+    (lambda: [XBIN, "selftest"], "xlstest selftest"),   # the SST encoding switch
+    (lambda: [XBIN, "wtest"],    "xlstest wtest"),      # the writer round-trip
+]
+
 def selftest():
-    r = run([BIN, "selftest"], timeout=900)
-    print("  " + r.stdout.strip().replace("\n", "\n  "))
-    if r.returncode:
-        fail("selftest returned %d" % r.returncode)
-        if r.stderr.strip():
-            print(r.stderr[:4000])
+    for argv, what in SELFTESTS:
+        r = run(argv(), timeout=900)
+        out = r.stdout.strip()
+        print("  " + (out.replace("\n", "\n  ") if out else "(no output)"))
+        if r.returncode:
+            fail("%s returned %d" % (what, r.returncode))
+            if r.stderr.strip():
+                print(r.stderr[:4000])
 
 # ---- corpus helpers ---------------------------------------------------------
 def corpus_files():
@@ -326,6 +334,47 @@ def workbooks(files):
                 print("  %-12s date format resolved: %s"
                       % (base, fmts[0].replace("fmt=", "")))
 
+# ---- 4c. the workbook WE write, judged by LibreOffice -----------------------
+# xlstest wtest already proves our writer and our reader agree, but a file we
+# both write and read could be consistently wrong. This is the independent
+# half: LibreOffice opens it and has to find the same content.
+WRITTEN_MUST_HAVE = [
+    ('table:name="Alpha"',                  "the first sheet"),
+    ('table:name="Beta"',                   "the second sheet"),
+    ('office:value="1.5"',                  "a plain number"),
+    ('office:value="12345678901234"',       "a number past 32 bits"),
+    ('office:value="42"',                   "a rewritten cell"),
+    ("café naïve Über",      "CP-1252 accents"),
+    ("euro € sign",                    "a string that had to go out WIDE"),
+    ("#DIV/0!",                             "an error value"),
+    ("#N/A",                                "another error value"),
+    ('table:number-columns-spanned="3"',    "the merged range"),
+    ("number:date-style",                   "a built-in number format"),
+    ("kg",                                  "a custom number format"),
+]
+
+def written(have_lo):
+    out = os.path.join(GEN, "written.xls")
+    r = run([XBIN, "wfile", out], timeout=600)
+    if r.returncode or not os.path.exists(out):
+        fail("could not write a workbook: %s" % (r.stdout + r.stderr).strip()[:300])
+        return
+    print("  wrote %d bytes" % os.path.getsize(out))
+    if not have_lo:
+        print("  (no soffice: the independent half of this stage is SKIPPED)")
+        return
+    flat = soffice_flat(out, os.path.join(GEN, "lo_written"))
+    if flat is None:
+        fail("LibreOffice REFUSED the workbook we wrote")
+        return
+    missing = [why for s, why in WRITTEN_MUST_HAVE if s not in flat]
+    if missing:
+        fail("LibreOffice opened our workbook but did not find: %s"
+             % ", ".join(missing))
+    else:
+        print("  LibreOffice reads back all %d checked features"
+              % len(WRITTEN_MUST_HAVE))
+
 def xls_fuzz(files, iters=3000):
     for path in files:
         if not path.endswith(".xls"):
@@ -390,6 +439,7 @@ def main():
         stage("corpus read", read_corpus, files)
         stage("rebuild", rebuild_corpus, files, have_lo)
         stage("workbook", workbooks, files)
+        stage("written", written, have_lo)
         stage("fuzz", fuzz, files)
         stage("workbook fuzz", xls_fuzz, files)
 
