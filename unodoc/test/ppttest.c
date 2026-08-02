@@ -1,11 +1,16 @@
 /* ===========================================================================
- * ppttest - the host gate for unodoc's .ppt reader (OFFICE97-PLAN §4 phase 5).
+ * ppttest - the host gate for unodoc's .ppt lane (OFFICE97-PLAN §4 phase 5).
  *
  *   text FILE          every slide's text, for run_tests.py to compare
  *                      against LibreOffice's own extraction
  *   info FILE          slide count
  *   fuzz FILE SEED N   mutations through the container AND the presentation
  *                      reader.  Must never crash, never hang.
+ *   wtest              write a deck, read it back with OUR reader, assert
+ *                      slides, text and shapes all survive (phase 5c)
+ *   wfile FILE         write the demo deck to disk for the LibreOffice half
+ *                      of the gate - our reader agreeing with our writer only
+ *                      proves they share a misunderstanding
  * ======================================================================== */
 #include "unodoc.h"
 #include <stdio.h>
@@ -74,6 +79,68 @@ int main(int argc, char **argv)
         ud_cfb_close(c);
         free(b);
         return 0;
+    }
+    if (argc >= 2 && (strcmp(argv[1], "wtest") == 0 ||
+                      strcmp(argv[1], "wfile") == 0)) {
+        /* The demo deck: two slides, multi-paragraph body, and one string
+         * that forces the UTF-16 text atom (the euro sign is CP-1252 0x80,
+         * which Latin-1 bytes cannot carry). */
+        ud_pptw *w = ud_pptw_new();
+        unsigned char *ppt;
+        long n;
+        int s1 = ud_pptw_slide(w), s2 = ud_pptw_slide(w), bad = 0;
+        ud_pptw_title(w, s1, "Slide one title");
+        ud_pptw_body (w, s1, "alpha line\nbeta line");
+        ud_pptw_title(w, s2, "Slide two title");
+        ud_pptw_body (w, s2, "wide caf\xe9 \x80 euro");
+        ppt = ud_pptw_save(w, &n);
+        ud_pptw_free(w);
+        if (!ppt) { printf("FAILED: save: %s\n", ud_error()); return 1; }
+        if (strcmp(argv[1], "wfile") == 0) {
+            FILE *f = argc >= 3 ? fopen(argv[2], "wb") : 0;
+            if (!f || fwrite(ppt, 1, (size_t)n, f) != (size_t)n) {
+                printf("FAILED: cannot write %s\n", argc >= 3 ? argv[2] : "?");
+                if (f) fclose(f);
+                free(ppt);
+                return 1;
+            }
+            fclose(f);
+            printf("wrote %ld bytes\n", n);
+            free(ppt);
+            return 0;
+        }
+        {
+            ud_src src;
+            ud_cfb *c;
+            ud_ppt *p = open_ppt(ppt, n, &src, &c);
+            ud_shape sh[16];
+            int ns;
+            if (!p) { printf("FAILED: reopen: %s\n", ud_error()); free(ppt); ud_cfb_close(c); return 1; }
+            if (ud_ppt_slides(p) != 2) { printf("FAILED: %d slides, wanted 2\n", ud_ppt_slides(p)); bad = 1; }
+            if (!bad && !strstr(ud_ppt_slide_text(p, 0), "Slide one title"))
+                { printf("FAILED: slide 1 lost its title\n"); bad = 1; }
+            if (!bad && !strstr(ud_ppt_slide_text(p, 0), "beta line"))
+                { printf("FAILED: slide 1 lost a body paragraph\n"); bad = 1; }
+            if (!bad && !strstr(ud_ppt_slide_text(p, 1), "caf\xe9"))
+                { printf("FAILED: the UTF-16 atom lost its CP-1252 accents\n"); bad = 1; }
+            if (!bad && !strstr(ud_ppt_slide_text(p, 1), "\x80"))
+                { printf("FAILED: the euro sign did not survive\n"); bad = 1; }
+            if (!bad) {
+                ns = ud_ppt_slide_shapes(p, 0, sh, 16);
+                /* patriarch group + title box + body box */
+                if (ns != 3) { printf("FAILED: slide 1 has %d shapes, wanted 3\n", ns); bad = 1; }
+                else if (sh[1].kind != 202 || sh[2].kind != 202)
+                    { printf("FAILED: textboxes read back kind %d/%d, wanted 202\n",
+                             sh[1].kind, sh[2].kind); bad = 1; }
+                else if (sh[1].y0 >= sh[2].y0)
+                    { printf("FAILED: title anchor is not above the body anchor\n"); bad = 1; }
+            }
+            ud_ppt_close(p);
+            ud_cfb_close(c);
+        }
+        free(ppt);
+        if (!bad) printf("OK pptw: 2 slides, text, both encodings and 3 shapes survive our own reader\n");
+        return bad;
     }
     if (argc >= 5 && strcmp(argv[1], "fuzz") == 0) {
         long n = 0;

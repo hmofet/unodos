@@ -46,7 +46,7 @@ SAN = ["-fsanitize=address,undefined",
 SRCS  = ["unodoc.c", "ud_cfb.c"]
 XSRCS = ["unodoc.c", "ud_cfb.c", "ud_xls.c", "ud_ptg.c", "ud_ptgc.c", "ud_xlsw.c"]
 DSRCS = ["unodoc.c", "ud_cfb.c", "ud_doc.c", "ud_docw.c"]
-PSRCS = ["unodoc.c", "ud_cfb.c", "ud_ppt.c", "ud_escher.c"]
+PSRCS = ["unodoc.c", "ud_cfb.c", "ud_ppt.c", "ud_escher.c", "ud_pptw.c"]
 
 # what each format is required to carry, as unodoc paths
 REQUIRED = {
@@ -95,6 +95,7 @@ SELFTESTS = [
     (lambda: [XBIN, "wtest"],    "xlstest wtest"),      # the writer round-trip
     (lambda: [DBIN, "selftest"], "doctest selftest"),   # the multi-piece walk
     (lambda: [DBIN, "wtest", os.path.join(GEN, "written.doc")], "doctest wtest"),
+    (lambda: [PBIN, "wtest"],    "ppttest wtest"),      # the .ppt writer round-trip
 ]
 
 # What LibreOffice must find in the .doc WE wrote.  Our own reader agreeing
@@ -438,6 +439,43 @@ def written(have_lo):
         print("  LibreOffice reads back all %d checked features"
               % len(WRITTEN_MUST_HAVE))
 
+# ---- 4c'. the presentation WE write, judged by LibreOffice ------------------
+# ppttest wtest already proves writer and reader agree; this is the
+# independent half.  Impress has no text filter, so the check goes through
+# flat ODF: every string the demo deck carries must appear, and the deck must
+# come back as exactly two draw:page elements.
+WRITTEN_PPT_MUST_HAVE = [
+    ("Slide one title",   "the first slide's title"),
+    ("alpha line",        "a body paragraph"),
+    ("beta line",         "the second body paragraph"),
+    ("Slide two title",   "the second slide's title"),
+    ("café €",            "the UTF-16 text atom (CP-1252 specials)"),
+]
+
+def written_ppt(have_lo):
+    out = os.path.join(GEN, "written.ppt")
+    r = run([PBIN, "wfile", out], timeout=600)
+    if r.returncode or not os.path.exists(out):
+        fail("could not write a presentation: %s" % (r.stdout + r.stderr).strip()[:300])
+        return
+    print("  wrote %d bytes" % os.path.getsize(out))
+    if not have_lo:
+        print("  (no soffice: the independent half of this stage is SKIPPED)")
+        return
+    flat = soffice_flat(out, os.path.join(GEN, "lo_wppt"))
+    if flat is None:
+        fail("LibreOffice REFUSED the presentation we wrote")
+        return
+    missing = [why for s, why in WRITTEN_PPT_MUST_HAVE if s not in flat]
+    pages = flat.count("<draw:page ")
+    if missing:
+        fail("LibreOffice opened our .ppt but did not find: %s" % ", ".join(missing))
+    elif pages != 2:
+        fail("LibreOffice sees %d draw:page elements, wanted 2" % pages)
+    else:
+        print("  LibreOffice reads back all %d checked strings on 2 pages"
+              % len(WRITTEN_PPT_MUST_HAVE))
+
 # ---- 4d. documents: our text against LibreOffice's -------------------------
 def lo_txt(path, outdir):
     env = dict(os.environ)
@@ -676,6 +714,7 @@ def main():
         stage("workbook", workbooks, files)
         stage("written", written, have_lo)
         stage("written doc", written_doc, have_lo)
+        stage("written ppt", written_ppt, have_lo)
         stage("document", documents, files, have_lo)
         stage("presentation", presentations, files, have_lo)
         stage("fuzz", fuzz, files)
