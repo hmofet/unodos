@@ -26,7 +26,7 @@ a request rather than editing it.
 | 3b | `.xls` write: the formula compiler | **landed**, `[EXPERIMENTAL]` |
 | 4a | `.doc` read: FIB, piece table, text | **landed**, `[EXPERIMENTAL]` |
 | 4b | `.doc` read: direct formatting (CHPX/PAPX, sprms) | **landed**, `[EXPERIMENTAL]` |
-| 4b′ | `.doc` read: the STSH style hierarchy | not started |
+| 4b′ | `.doc` read: the STSH style hierarchy | **landed**, `[EXPERIMENTAL]` |
 | 4c | `.doc` minimal writer | not started |
 | 5 | Escher + `.ppt` | not started |
 
@@ -450,18 +450,41 @@ desynchronises the rest of the run rather than losing one property. Same for
 `PapxInFkp`'s two-level length: a leading word count, and when that is zero
 the real count is the *next* byte and the blob starts one further in.
 
-### What this does NOT do yet, and why it matters more than what it does
+### Styles (the STSH), and the order that matters
 
-These report **direct formatting only**. The style sheet (STSH) and its
-based-on chains are not read, so a run whose boldness comes from its paragraph
-or character *style* reads as not-bold.
+Most formatting in a real document does not live in the direct exceptions at
+all — it lives in the style sheet, and the exceptions only override it. So
+character formatting resolves in **four layers, outermost first**:
 
-That is not a corner case. Measured on `fmt.doc` — a document authored with
-seven distinctly formatted runs — LibreOffice emitted a CHPX for **only 2 of
-the 7**, routing the rest through Word character styles. So on
-LibreOffice-authored documents, most formatting is currently invisible.
-`fmt.doc` therefore ships as a text and fuzz target and is waiting to become
-the fixture for the STSH slice, which is the next thing this lane should do.
+1. the **paragraph's** style, and everything that style is based on, applied
+   root-first so a derived style overrides its parent;
+2. any **character style** the run names, via `sprmCIstd` in its own CHPX;
+3. the run's **direct** exceptions.
+
+Paragraph formatting is the same minus the character-style layer. Get the
+order backwards and direct formatting silently loses to the style it was
+meant to override — which is why `doctest selftest` builds a document with a
+base style, a style based on it, a character style and a direct exception all
+touching different properties: any two layers applied in the wrong order lose
+one.
+
+Still absent: the sprm set is the common ~15 rather than the full ~50;
+sections, tables and pictures are untouched; and there is no writer.
+
+### A note on the corpus, so nobody re-derives it
+
+`fmt.doc` was authored with seven distinctly formatted runs and **most of that
+formatting is not in the file**. LibreOffice's flat-ODF import drops the
+majority of automatic text styles on the way to `.doc`: converting `fmt.doc`
+back to ODF shows no bold, italic or font-size span at all, and a single
+`text-align`. What survived is underline, strikethrough, and the Normal
+style's 12pt.
+
+So the gate asserts those three and no more, cross-checked against
+LibreOffice's own read-back rather than against what the source asked for. It
+is still a real test of the style machinery — `size` is 24 for *every* run and
+arrives through the Normal style chain, not through any direct exception. The
+layering itself is proven by the hand-built document, where the STSH is ours.
 
 ## What unodoc is NOT
 
@@ -489,6 +512,13 @@ only when it is actually needed, as an append.
 
 ## Changelog
 
+- **2026-08-02 — phase 4b'.** The STSH: style sheet parsing, based-on
+  chains, and four-layer resolution (paragraph style, character style,
+  direct). Proven by a hand-built document where each layer sets a different
+  property, so any two applied out of order lose one. Also found, and worth
+  knowing before authoring corpus documents: LibreOffice's flat-ODF import
+  drops most automatic text styles on the way to `.doc`, so `fmt.doc` holds
+  far less formatting than its source asked for.
 - **2026-08-02 — phase 4b.** Direct character and paragraph formatting:
   the CHPX/PAPX bin tables, the FKP pages, and a sprm interpreter. Also
   **closes phase 4a's open gap** — the multi-piece walk is now proven by a

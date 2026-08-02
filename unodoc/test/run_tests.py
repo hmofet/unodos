@@ -423,6 +423,42 @@ def norm_lines(text):
             out.append(line)
     return out
 
+# What fmt.doc PROVABLY contains, and nothing more.  The file was authored
+# with seven distinctly formatted runs, but LibreOffice's flat-ODF import
+# drops most automatic styles on the way to .doc: converting fmt.doc back to
+# ODF shows no bold/italic/size span at all and a single text-align.  So the
+# expectations here are what survived, cross-checked against LibreOffice's own
+# read-back rather than against what the source asked for.
+#
+# It is still a real test of the style machinery: `size` is 24 for EVERY run
+# and comes from the Normal style chain, not from any direct exception -
+# LibreOffice independently reports that style as 12pt - while underline and
+# strike are direct CHPX layered on top.
+FMT_DOC_EXPECT = [
+    ("PLAINWORD",  "size",      24),
+    ("BOLDWORD",   "size",      24),
+    ("ULINEWORD",  "underline", 1),
+    ("ULINEWORD",  "size",      24),
+    ("STRIKEWORD", "strike",    1),
+    ("CAPSWORD",   "size",      24),
+]
+
+def check_fmt_doc(path):
+    rr = subprocess.run([DBIN, "fmt", path], capture_output=True, timeout=600)
+    got = {}
+    for line in rr.stdout.decode("cp1252", errors="replace").splitlines():
+        f = line.split("\t")
+        if len(f) >= 4:
+            got[(f[1], f[2])] = int(f[3])
+    bad = [(m, k, v, got.get((m, k))) for m, k, v in FMT_DOC_EXPECT
+           if got.get((m, k)) != v]
+    if bad:
+        fail("fmt.doc: %d formatting expectations differ; first: %s"
+             % (len(bad), bad[0]))
+    else:
+        print("  %-12s %d style-resolved properties match (size comes from "
+              "the Normal style chain)" % ("fmt.doc", len(FMT_DOC_EXPECT)))
+
 def documents(files, have_lo):
     for path in files:
         if not path.endswith(".doc"):
@@ -433,6 +469,8 @@ def documents(files, have_lo):
             fail("%s: %s" % (base, (r.stdout + r.stderr).strip()[:300]))
             continue
         print("  %-12s %s" % (base, r.stdout.strip()))
+        if base == "fmt.doc":
+            check_fmt_doc(path)
         rr = subprocess.run([DBIN, "text", path], capture_output=True, timeout=600)
         if rr.returncode:
             fail("%s: text extraction failed" % base)
