@@ -438,7 +438,7 @@ unsigned char *ud_docw_save(ud_docw *w, long *len);
  * Fold those directories the wrong way round and every object in the
  * presentation resolves to a stale copy of itself.
  *
- * Escher (the shared drawing layer) and writing are later slices.
+ * Escher is phase 5b (ud_shape, below); writing is phase 5c (ud_pptw).
  * ======================================================================== */
 typedef struct ud_ppt ud_ppt;
 
@@ -474,6 +474,25 @@ int ud_escher_shapes(const unsigned char *b, long n, long at, long end,
 /* The shapes on one slide, read straight out of its drawing.  Returns how
  * many were written into `out`. */
 int ud_ppt_slide_shapes(ud_ppt *p, int i, ud_shape *out, int max);
+
+/* ---- writing a presentation (phase 5c) ------------------------ [EXPERIMENTAL]
+ * A single UserEdit and one persist directory - the layout of a fresh save,
+ * never an edit log.  Slides carry a title frame and a body frame as plain
+ * Escher textboxes; '\n' inside either text is a paragraph break.  Text is
+ * CP-1252 in, stored 8-bit when pure ASCII and UTF-16 otherwise. */
+typedef struct ud_pptw ud_pptw;
+
+ud_pptw *ud_pptw_new(void);
+void     ud_pptw_free(ud_pptw *w);
+
+/* Append a slide; returns its index (or -1). */
+int ud_pptw_slide(ud_pptw *w);
+
+int ud_pptw_title(ud_pptw *w, int slide, const char *text);
+int ud_pptw_body (ud_pptw *w, int slide, const char *text);
+
+/* The whole .ppt (container included) in one ud_alloc'd buffer. */
+unsigned char *ud_pptw_save(ud_pptw *w, long *len);
 
 /* ---- name comparison (exposed: the format layers sort names too) ---------- */
 /* CFB directory order: shorter names first, then uppercased code unit by

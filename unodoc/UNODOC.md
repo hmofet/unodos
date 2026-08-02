@@ -30,7 +30,7 @@ a request rather than editing it.
 | 4c | `.doc` minimal writer | **landed**, `[EXPERIMENTAL]` |
 | 5a | `.ppt` read: persist chain + slide text | **landed**, `[EXPERIMENTAL]` |
 | 5b | Escher: shapes, properties, anchors | **landed**, `[EXPERIMENTAL]` |
-| 5c | `.ppt` write | not started |
+| 5c | `.ppt` minimal writer | **landed**, `[EXPERIMENTAL]` |
 
 Everything is `[EXPERIMENTAL]` until a consuming app has shipped on it. The
 core surface (`ud_src`, the allocator, the error surface) is the part least
@@ -540,9 +540,51 @@ type. A text block is either UTF-16 (`TextCharsAtom`) or 8-bit
 (`TextBytesAtom`): the same either-encoding shape as BIFF8's shared strings
 and `.doc`'s pieces, met here for the third time.
 
-Not yet: Escher, so shape geometry, pictures and placeholder roles are absent
-— text that lives only in a shape's client data rather than in a text atom
-will not be found. And there is no writer.
+Not yet on the read side: pictures and placeholder roles.  Shape geometry is
+phase 5b (`ud_ppt_slide_shapes`); the writer is phase 5c, below.
+
+## Writing a presentation (phase 5c)
+
+```c
+ud_pptw *w = ud_pptw_new();
+int s = ud_pptw_slide(w);
+ud_pptw_title(w, s, "A heading");
+ud_pptw_body (w, s, "First point\nSecond point");
+long n; unsigned char *ppt = ud_pptw_save(w, &n);   /* a complete file */
+```
+
+Reading a `.ppt` means surviving the append-only edit log; writing one means
+NOT writing an edit log at all.  `ud_pptw_save` emits the layout of a fresh
+save — a **single UserEdit**, one persist directory, every object live —
+which is the only layout a writer should ever produce.  The structure was
+read record by record out of what LibreOffice's own 97 filter writes (the
+corpus), then cut to what experiment showed a reader actually requires:
+DocumentContainer (DocumentAtom, the Escher **Dgg shape-id ledger**, the
+master and slide SlideListWithText rows), one MainMasterContainer with
+colour schemes and one-level empty-mask TxMasterStyleAtoms (every value
+defaults, honestly, instead of a canned blob nobody can read), one
+SlideContainer per slide, the persist directory, the UserEditAtom, and a
+Current User stream pointing at it.
+
+Slide text goes out as **plain Escher textboxes** — an SpContainer per
+frame with a ClientTextbox holding TextHeaderAtom plus a text atom — which
+is how LibreOffice writes slide text, what our own tree walk reads back,
+and what keeps this writer out of the placeholder/outline machinery.  The
+title frame sits above the body frame at PowerPoint's classic geometry on a
+5760x4320 (10 x 7.5 inch) slide.  `'\n'` in a title or body is a paragraph
+break (0x0D in the atom).  Encoding is the split met three times on the
+read side, applied in reverse: pure-ASCII text goes out as TextBytesAtom,
+anything else as UTF-16 TextCharsAtom.  TextBytesAtom stores Latin-1 (the
+low byte of a UTF-16 unit), and CP-1252's 0x80..0x9F are NOT Latin-1 — so
+the split is on ASCII and no CP-1252 special ever rides the bytes form.
+
+Not yet: StyleTextPropAtom (written text takes the viewer's defaults —
+faces, sizes and colours are UnoShow's concern and need the style atom),
+placeholders, pictures, notes, transitions.  The gate: `ppttest wtest`
+round-trips a deck through our own reader (slides, both encodings, shape
+count and title-above-body geometry), and the `written ppt` stage hands
+the file to LibreOffice, which must find every checked string on exactly
+the pages we wrote.
 
 ## What unodoc is NOT
 
@@ -570,6 +612,15 @@ only when it is actually needed, as an append.
 
 ## Changelog
 
+- **2026-08-02 — phase 5c.** `ud_pptw.c`: writing a presentation, and with it
+  **the .ppt lane is complete in both directions** and every format unodoc
+  planned for v1 reads AND writes.  A single UserEdit, the Dgg shape-id
+  ledger, plain-textbox slides, both text encodings.  Gate: `ppttest wtest`
+  (our reader gets back slides, text, both encodings, 3 shapes with the
+  title above the body) and LibreOffice reads back every checked string on
+  exactly 2 pages.  The structure came from dumping the corpus files record
+  by record, not from anyone's code; the master's text styles are honest
+  one-level empty-mask atoms, not a canned blob.
 - **2026-08-02 — phase 5a.** `ud_ppt.c`: the persist chain and slide text.
   Gate: every slide line we extract is present in LibreOffice's own
   extraction, plus 4000 fuzz mutations. Also fixes a harness bug worth
