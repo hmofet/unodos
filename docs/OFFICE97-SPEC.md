@@ -109,17 +109,22 @@ guides (full URL list in the plan's research provenance, §11).
   encodings, CHPX/PAPX/sprms, STSH, sections, tables, cached fields,
   pictures) + write (accepted by real Word AND LibreOffice with no repair
   prompt)**
-- [ ] **`.xls` BIFF8: read (SST incl. mid-string Continue encoding
+- [F] **`.xls` BIFF8: read (SST incl. mid-string Continue encoding
   switches, XF/FONT/FORMAT, all cell record types, FORMULA ptg decompile,
   shared formulas, 1900/1904 epochs) + write (incl. compiled formulas
-  with correct operand classes)** — **READ SIDE COMPLETE**,
-  `unodoc/ud_xls.c` + `ud_ptg.c`, 2026-08-01 (phases 2a+2b). The record
-  layer with Continue folding; the SST **including 8↔16-bit switches
-  mid-string**; XF/FORMAT number-format resolution; every cell record type;
-  merged ranges; FILEPASS refused by name; the FORMULA ptg decompiler with
-  precedence-aware parenthesisation, 3-D references, defined names, array
-  constants and **shared formulas**. The box stays open for the WRITE half
-  (phase 3), plus FONT/STYLE and a 1904-epoch file to test against.
+  with correct operand classes)** — `unodoc/ud_xls.c`, `ud_ptg.c`,
+  `ud_xlsw.c`, `ud_ptgc.c`, phases 2a-3b, 2026-08-02. Read and write both
+  done, each gated: the SST **including 8↔16-bit switches mid-string** (a
+  case no generated file can reach, so the harness builds one by hand),
+  every cell record type, shared formulas, both epochs, the ptg decompiler
+  and the ptg compiler, with 28 expressions surviving text→tokens→file→
+  tokens→text unchanged. **Two honest limits.** Operand classes are
+  validated by LibreOffice reading back every formula we compile, NOT by
+  real Excel — that is the strict gate this file reserves for a milestone
+  with a VM, and it is the first place to look if a formula ever comes back
+  wrong there. And the writer does not yet emit FONT/STYLE variation,
+  defined names, or shared formulas (it writes each formula in full, which
+  is correct, just larger than Excel would).
 - [ ] **`.ppt`: read (UserEdit chain → persist directory → live document;
   text from both homes; StyleTextPropAtom) + write (single UserEdit,
   valid PPDrawing per slide, no repair prompt)**
