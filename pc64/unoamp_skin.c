@@ -24,14 +24,21 @@
 #include <stdlib.h>
 
 /* ---- ZIP ------------------------------------------------------------------
- * Only what a skin needs: the LOCAL FILE HEADER walk. The central directory is
- * the "right" way to enumerate a ZIP, but every .wsz in existence is a flat
- * archive written front to back, and walking local headers means one forward
- * pass over a file we are streaming anyway.
+ * The CENTRAL DIRECTORY walk, with the local-header walk kept as a fallback.
+ *
+ * The first cut walked local file headers only, which the two generated test
+ * skins pass and real downloaded skins fail: an archive written by a streaming
+ * zipper sets general-purpose bit 3 and stores ZERO sizes in the local header
+ * (the real ones live in a trailing data descriptor and in the central
+ * directory), so an LFH-only walk skips the member and then loses the stream.
+ * The central directory always carries true sizes, so it is authoritative;
+ * the LFH walk remains only for a truncated archive with no directory.
  *
  * Method 0 (stored) and method 8 (deflate) are the only ones Winamp skins use.
  */
-#define ZIP_LFH 0x04034b50u
+#define ZIP_LFH  0x04034b50u
+#define ZIP_CDH  0x02014b50u
+#define ZIP_EOCD 0x06054b50u
 
 static unsigned rd16(const unsigned char *p) { return p[0] | (p[1] << 8); }
 static unsigned rd32(const unsigned char *p)
@@ -177,6 +184,20 @@ static const char *kSheet[UNOAMP_SHEET_N] = {
     "PLAYPAUS.BMP", "NUMBERS.BMP", "TEXT.BMP", "EQMAIN.BMP", "PLEDIT.BMP"
 };
 
+/* Member names in real skins carry a directory: skins are almost always
+ * zipped as "SkinName/MAIN.BMP", and Winamp accepts that, so matching must be
+ * on the BASENAME. The generated test skins are flat, which is exactly why an
+ * exact-name match survived QEMU and then refused every skin the metal box
+ * was given. */
+static const char *base_name(const char *name, int nlen, int *blen)
+{
+    int i, cut = 0;
+    for (i = 0; i < nlen && name[i]; i++)
+        if (name[i] == '/' || name[i] == '\\') cut = i + 1;
+    *blen = nlen - cut;
+    return name + cut;
+}
+
 static int name_eq_ci(const char *a, const char *b, int n)
 {
     int i;
@@ -260,8 +281,10 @@ static void parse_pledit(const unsigned char *p, long n)
             g_skin.pl_normal = hexcol(p, n, i);
         else if (i + 8 <= n && name_eq_ci((const char *)p + i, "CURRENT=", 8))
             g_skin.pl_current = hexcol(p, n, i);
-        else if (i + 11 <= n && name_eq_ci((const char *)p + i, "NORMALBG=", 9))
+        else if (i + 9 <= n && name_eq_ci((const char *)p + i, "NORMALBG=", 9))
             g_skin.pl_bg = hexcol(p, n, i);
+        else if (i + 11 <= n && name_eq_ci((const char *)p + i, "SELECTEDBG=", 11))
+            g_skin.pl_selbg = hexcol(p, n, i);
         while (i < n && p[i] != '\n') i++;
         if (i < n) i++;
     }
@@ -310,14 +333,48 @@ static void take_member(const char *name, int nlen,
     }
 }
 
+/* One member by its local-header offset, with the sizes the CALLER trusts:
+ * the central directory's clen/ulen are real even when the local header's are
+ * the streamed-zip zeros. The local header still owns its own name/extra
+ * lengths - they can legally differ from the directory's copy. */
+static void member_at(const unsigned char *buf, long n, long lfh,
+                      unsigned method, unsigned clen, unsigned ulen)
+{
+    unsigned nlen, elen;
+    int blen;
+    const char *b;
+    if (lfh < 0 || lfh + 30 > n) return;
+    if (rd32(buf + lfh) != ZIP_LFH) return;
+    nlen = rd16(buf + lfh + 26);
+    elen = rd16(buf + lfh + 28);
+    if (lfh + 30 + (long)nlen + (long)elen + (long)clen > n) return;
+    if (!clen) return;                 /* a directory entry, or truly empty   */
+    b = base_name((const char *)buf + lfh + 30, (int)nlen, &blen);
+    take_member(b, blen, buf + lfh + 30 + nlen + elen,
+                (long)clen, (long)ulen, (int)method);
+}
+
+/* The end-of-central-directory record sits in the last 22..65557 bytes (its
+ * comment is bounded at 64 KB). Scan backward for the signature. */
+static long find_eocd(const unsigned char *buf, long n)
+{
+    long i, lo = n - 22 - 65535;
+    if (lo < 0) lo = 0;
+    for (i = n - 22; i >= lo; i--)
+        if (rd32(buf + i) == ZIP_EOCD) return i;
+    return -1;
+}
+
 int unoamp_skin_load(int vol, const char *path)
 {
-    /* The whole archive, resident. Real skins run 100-500 KB and a STORED
-     * (uncompressed) one is larger still - FROST.wsz from tools/mkskin.py is
-     * 640 KB - so this is sized for the format rather than for the smallest
-     * skin that happened to be to hand. */
-    static unsigned char buf[1536 * 1024];
-    long n, at = 0;
+    /* The whole archive, resident. Real skins run 100-500 KB zipped, but a
+     * STORED one with 24-bit sheets can pass 1.5 MB - and uno_fs_read
+     * TRUNCATES at the buffer, which turned such a skin into a half-parsed
+     * archive that applied some sheets and not others. So: sized to the 2 MB
+     * decode arena, and anything larger is refused whole rather than read
+     * truncated. */
+    static unsigned char buf[2048 * 1024];
+    long n, at = 0, eocd;
 
     /* unomedia has no allocator until a consumer gives it one, and um_inflate
      * allocates its window from it - so without this every DEFLATED skin fails
@@ -330,29 +387,49 @@ int unoamp_skin_load(int vol, const char *path)
     g_used = 0; g_loaded = 0;
     memset(&g_skin, 0, sizeof g_skin);
 
+    {
+        long sz = uno_fs_size(vol, path);
+        if (sz > (long)sizeof buf) return 0;   /* whole, or not at all        */
+    }
     n = uno_fs_read(vol, path, buf, (long)sizeof buf);
     if (n < 30) return 0;
 
-    /* Walk local file headers front to back. */
-    while (at + 30 <= n) {
-        unsigned sig = rd32(buf + at);
-        unsigned method, clen, ulen, nlen, elen;
-        if (sig != ZIP_LFH) break;             /* central directory reached   */
-        method = rd16(buf + at + 8);
-        clen   = rd32(buf + at + 18);
-        ulen   = rd32(buf + at + 22);
-        nlen   = rd16(buf + at + 26);
-        elen   = rd16(buf + at + 28);
-        if (at + 30 + (long)nlen + (long)elen + (long)clen > n) break;
-        /* A streamed ZIP can carry clen == 0 with the real sizes in a trailing
-         * data descriptor. Skins are not written that way, and guessing the
-         * length would mean scanning for the next signature - so refuse the
-         * member rather than decode garbage. */
-        if (clen > 0)
-            take_member((const char *)buf + at + 30, (int)nlen,
-                        buf + at + 30 + nlen + elen,
-                        (long)clen, (long)ulen, (int)method);
-        at += 30 + (long)nlen + (long)elen + (long)clen;
+    /* The central directory first: it is authoritative (see the ZIP comment
+     * above). Every field is bounds-checked against n because a skin is user
+     * data pulled off the internet, not something we authored. */
+    eocd = find_eocd(buf, n);
+    if (eocd >= 0) {
+        unsigned count = rd16(buf + eocd + 10), k;
+        at = (long)rd32(buf + eocd + 16);
+        for (k = 0; k < count && at >= 0 && at + 46 <= n; k++) {
+            unsigned method, clen, ulen, nlen, elen, clm;
+            if (rd32(buf + at) != ZIP_CDH) break;
+            method = rd16(buf + at + 10);
+            clen   = rd32(buf + at + 20);
+            ulen   = rd32(buf + at + 24);
+            nlen   = rd16(buf + at + 28);
+            elen   = rd16(buf + at + 30);
+            clm    = rd16(buf + at + 32);
+            member_at(buf, n, (long)rd32(buf + at + 42), method, clen, ulen);
+            at += 46 + (long)nlen + (long)elen + (long)clm;
+        }
+    } else {
+        /* No directory (a truncated or hand-made archive): walk local file
+         * headers front to back. Streamed members (clen 0, bit-3 flag) cannot
+         * be sized here and end the walk. */
+        while (at + 30 <= n) {
+            unsigned method, clen, ulen, nlen, elen;
+            if (rd32(buf + at) != ZIP_LFH) break;
+            method = rd16(buf + at + 8);
+            clen   = rd32(buf + at + 18);
+            ulen   = rd32(buf + at + 22);
+            nlen   = rd16(buf + at + 26);
+            elen   = rd16(buf + at + 28);
+            if (at + 30 + (long)nlen + (long)elen + (long)clen > n) break;
+            if (!clen) { at += 30 + (long)nlen + (long)elen; continue; }
+            member_at(buf, n, at, method, clen, ulen);
+            at += 30 + (long)nlen + (long)elen + (long)clen;
+        }
     }
 
     g_loaded = g_skin.sheet[UNOAMP_SHEET_MAIN].px != 0;

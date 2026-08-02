@@ -43,6 +43,18 @@ long uno_fs_read_at(int vol, const char *name, long off,
     fclose(f);
     return n;
 }
+long uno_fs_size(int vol, const char *name)
+{
+    FILE *f;
+    long n;
+    (void)vol; (void)name;
+    f = fopen(g_file, "rb");
+    if (!f) return -1;
+    if (fseek(f, 0, SEEK_END)) { fclose(f); return -1; }
+    n = ftell(f);
+    fclose(f);
+    return n;
+}
 
 static const char *kName[UNOAMP_SHEET_N] = {
     "MAIN", "CBUTTONS", "TITLEBAR", "SHUFREP", "POSBAR", "VOLUME", "BALANCE",
@@ -78,8 +90,8 @@ int main(int argc, char **argv)
         if (sk->have_viscolor)
             printf("  bg=%08X peak=%08X bar0=%08X", sk->viscolor[0],
                    sk->viscolor[1], sk->viscolor[2]);
-        printf("\n  pledit   normal=%08X current=%08X bg=%08X\n",
-               sk->pl_normal, sk->pl_current, sk->pl_bg);
+        printf("\n  pledit   normal=%08X current=%08X bg=%08X selbg=%08X\n",
+               sk->pl_normal, sk->pl_current, sk->pl_bg, sk->pl_selbg);
         printf("%d/%d sheets\n", ok, UNOAMP_SHEET_N);
     }
     return ok ? 0 : 1;

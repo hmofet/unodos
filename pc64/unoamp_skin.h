@@ -38,6 +38,7 @@ typedef struct {
     unsigned viscolor[UNOAMP_VISCOLORS];   /* 0=bg 1=peak 2..17 bars 18..23 osc */
     int      have_viscolor;
     unsigned pl_normal, pl_current, pl_bg; /* pledit.txt, 0 when absent       */
+    unsigned pl_selbg;                     /* SelectedBG=, 0 when absent      */
 } unoamp_skin;
 
 /* Load a .wsz. 1 = a usable skin (MAIN.BMP at minimum). Replaces whatever was

@@ -336,6 +336,34 @@ PALETTES = {
 PARTIAL_DROP = ("VOLUME.BMP", "BALANCE.BMP", "NUMBERS.BMP", "PLEDIT.BMP")
 
 
+class Unseekable:
+    """A write-only wrapper with no seek(): zipfile then writes STREAMED
+    members (general-purpose bit 3, zero sizes in the local header, trailing
+    data descriptors), which is how plenty of real-world zippers write a .wsz.
+    The loader must get every size from the central directory to read one."""
+    def __init__(self, f):
+        self.f = f
+    def write(self, b):
+        return self.f.write(b)
+    def flush(self):
+        self.f.flush()
+
+
+def write_wsz(path, sheets, pal, mode, prefix="", streamed=False):
+    def put(z):
+        for fn, sh in sheets.items():
+            z.writestr(prefix + fn, sh.bmp())
+        z.writestr(prefix + "viscolor.txt", viscolor(pal))
+        z.writestr(prefix + "pledit.txt", pledit_txt(pal))
+    if streamed:
+        with open(path, "wb") as f:
+            with zipfile.ZipFile(Unseekable(f), "w", mode) as z:
+                put(z)
+    else:
+        with zipfile.ZipFile(path, "w", mode) as z:
+            put(z)
+
+
 def main():
     outdir = sys.argv[1] if len(sys.argv) > 1 else "build/skins"
     os.makedirs(outdir, exist_ok=True)
@@ -352,14 +380,25 @@ def main():
         # half the reader untested.
         mode = zipfile.ZIP_DEFLATED if i % 2 == 0 else zipfile.ZIP_STORED
         path = os.path.join(outdir, "%s.wsz" % name.upper()[:8])
-        with zipfile.ZipFile(path, "w", mode) as z:
-            for fn, sh in sheets.items():
-                z.writestr(fn, sh.bmp())
-            z.writestr("viscolor.txt", viscolor(pal))
-            z.writestr("pledit.txt", pledit_txt(pal))
+        write_wsz(path, sheets, pal, mode)
         print("%s  (%s, %d bytes)" %
               (path, "deflate" if mode == zipfile.ZIP_DEFLATED else "stored",
                os.path.getsize(path)))
+    # The two shapes REAL downloaded skins take and the generated flat set does
+    # not - both loaded fine in QEMU tests and failed on the metal box:
+    #   NESTED:   every member under a "SkinName/" folder (how skins are
+    #             actually zipped; the loader must match on the basename).
+    #   STREAMED: local headers carry zero sizes + data descriptors (bit 3);
+    #             only the central directory knows the truth.
+    sheets = build_skin(PALETTES["Ember"])
+    path = os.path.join(outdir, "NESTED.wsz")
+    write_wsz(path, sheets, PALETTES["Ember"], zipfile.ZIP_DEFLATED,
+              prefix="Ember Skin/")
+    print("%s  (deflate, nested folder, %d bytes)" % (path, os.path.getsize(path)))
+    path = os.path.join(outdir, "STREAMED.wsz")
+    write_wsz(path, sheets, PALETTES["Ember"], zipfile.ZIP_DEFLATED,
+              streamed=True)
+    print("%s  (deflate, data descriptors, %d bytes)" % (path, os.path.getsize(path)))
 
 
 if __name__ == "__main__":
