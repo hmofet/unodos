@@ -746,8 +746,25 @@ if [ "$1" != "legacy" ]; then
         # Keys are listed one-per-line commented out, NOT in a prose list -
         # the parser ignores comments now, but a key hiding in a comment is
         # exactly the bug that made every "safe" stick self-crash (F1).
-        { printf '# UnoDOS pc64 stress driver config (presence of this file = armed)\r\n'
+        #
+        # KEYS FIRST, COMMENTS LAST, and it matters.  Readers of this file parse
+        # a bounded window: pc64_stress.c takes CFG_MAX bytes, and iwlwifi.c's
+        # file_has_ssid() searches only the first 255 for `ssid=`.  With the
+        # header on top, this file's own comment block (526 bytes) pushed
+        # `passes=3` to byte 526 and any appended wifi.creds past 536 - outside
+        # BOTH windows, so the shipped config was inert and a WiFi boot join
+        # reported creds:MISSING with the credentials sitting right there in the
+        # file.  Emitting keys first keeps the file correct for every reader,
+        # whatever window each one uses, and however long the header grows.
+        { printf 'passes=3\r\n'
+          # local Wi-Fi credentials if present (pc64/wifi.creds is .gitignored
+          # so the psk is never committed; the driver reads ssid=/psk= from
+          # DEBUG.CFG via firmware_volume). No file = no creds staged.
+          if [ -f wifi.creds ]; then cat wifi.creds; fi
+          printf '#\r\n'
+          printf '# UnoDOS pc64 stress driver config (presence of this file = armed)\r\n'
           printf '# Press F12 on the machine to stop the driver early.\r\n'
+          printf '# Keys go ABOVE this header - readers parse a bounded window.\r\n'
           printf '#\r\n'
           printf '# passes=N     stop after N passes, then POWER OFF by itself\r\n'
           printf '#              (0/absent = run forever, F12 to stop)\r\n'
@@ -756,12 +773,8 @@ if [ "$1" != "legacy" ]; then
           printf '# fast | slow  action cadence\r\n'
           printf '# allow-force  self-test: force a #PF (proves the crash pipeline)\r\n'
           printf '# force-hang   self-test: force a freeze (proves the watchdog)\r\n'
-          printf 'passes=3\r\n'
         } > build/esp/DEBUG.CFG
-        # append local Wi-Fi credentials if present (pc64/wifi.creds is
-        # .gitignored so the psk is never committed; the driver reads ssid=/psk=
-        # from DEBUG.CFG via firmware_volume). No file = no creds staged.
-        if [ -f wifi.creds ]; then cat wifi.creds >> build/esp/DEBUG.CFG; echo "[dbg] appended wifi.creds -> DEBUG.CFG"; fi
+        if [ -f wifi.creds ]; then echo "[dbg] staged wifi.creds -> DEBUG.CFG"; fi
         # BUILD.TXT stamp so a report can be tied back to an exact image.
         # cfgver = the STRESS.CFG key generation this OS understands; the
         # flasher's Reconfigure refuses to write settings onto a disk stamped
