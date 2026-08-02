@@ -24,7 +24,9 @@ a request rather than editing it.
 | 2b | `.xls` read: formula ptg decompiler | **landed**, `[EXPERIMENTAL]` |
 | 3a | `.xls` write: values, strings, formats | **landed**, `[EXPERIMENTAL]` |
 | 3b | `.xls` write: the formula compiler | **landed**, `[EXPERIMENTAL]` |
-| 4 | `.doc` read + minimal writer | not started |
+| 4a | `.doc` read: FIB, piece table, text | **landed**, `[EXPERIMENTAL]` |
+| 4b | `.doc` read: formatting (CHPX/PAPX, sprms) | not started |
+| 4c | `.doc` minimal writer | not started |
 | 5 | Escher + `.ppt` | not started |
 
 Everything is `[EXPERIMENTAL]` until a consuming app has shipped on it. The
@@ -386,6 +388,48 @@ which is correct, just larger than Excel would).
   unodoc does not convert serials to dates anyway (that is UnoCalc's).
 - **BIFF5/BIFF7** are recognised and declined by name, not decoded.
 
+## Reading a document (phase 4a)
+
+```c
+ud_doc *d = ud_doc_open(c);              /* c is an open ud_cfb */
+puts(ud_doc_plain(d));                   /* what a person would read */
+ud_doc_close(d);                         /* before ud_cfb_close */
+```
+
+`ud_doc_text()` is the body exactly as the file stores it — CP-1252, still
+carrying Word's in-band control characters (`0x07` cell mark, `0x0D`
+paragraph mark, `0x13`/`0x14`/`0x15` around fields). That is what a
+formatting layer walks. `ud_doc_plain()` is the same text as reading matter:
+paragraph marks become newlines, cell marks tabs, and a field's *code* is
+dropped while its *cached result* is kept — which is why a page number shows
+up as a number rather than as `PAGE`.
+
+A `.doc` stores neither its text in one place nor in one encoding, and all
+three consequences are where naive readers go wrong:
+
+- **Document order is not file order.** The WordDocument stream holds runs
+  wherever a quick-save left them; the piece table says which run supplies
+  which part of the document, and it must be walked in *its* order.
+- **Each piece picks its own encoding.** Bit 30 of a piece's offset means
+  "this run is 8-bit", and the real offset is then the remaining bits
+  *halved*. One document mixes 8-bit and UTF-16 runs freely — the same shape
+  as BIFF8's shared strings, which is why `ud_xls.c` met it first.
+- **Which table stream** holds the piece table is one bit in the FIB, naming
+  `0Table` or `1Table`. Both may exist. If the named one is missing, unodoc
+  tries the other rather than giving up on an otherwise readable document.
+
+### The gap in this phase's evidence, stated plainly
+
+Every document in the corpus comes back with **`pieces=1`**. LibreOffice
+writes a single text run, and nothing we can generate produces the
+multi-piece, mixed-encoding layout that a real quick-saved Word file has —
+which is exactly the case the piece table exists for. So the walk is
+implemented and bounds-checked, and it extracts text identical to
+LibreOffice's own extraction on every corpus file, but **the multi-piece path
+itself is unproven**. The honest fix is the one used for the SST encoding
+switch: build a document by hand with several pieces in a deliberate order
+and both encodings. That is the first thing phase 4b should do.
+
 ## What unodoc is NOT
 
 - **Not a renderer.** It hands back models and bytes; drawing them is
@@ -412,6 +456,11 @@ only when it is actually needed, as an append.
 
 ## Changelog
 
+- **2026-08-02 — phase 4a.** `ud_doc.c`: the FIB, the piece table and the
+  text. Gate: every corpus document's reading text is **identical to
+  LibreOffice's own extraction** (900 lines on the largest), plus 9000 fuzz
+  mutations. Caveat recorded above and worth repeating: every corpus file is
+  single-piece, so the multi-piece walk is unproven.
 - **2026-08-02 — phase 3b.** `ud_ptgc.c`: the formula compiler, and with it
   **the `.xls` lane is complete in both directions**. Gate: 28 expressions go
   text → tokens → file → tokens → text and come back unchanged, 9 malformed

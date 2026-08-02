@@ -340,6 +340,43 @@ int ud_xlsw_date1904(ud_xlsw *w, int on);
 /* The whole file in one ud_alloc'd buffer (caller ud_free's it). */
 unsigned char *ud_xlsw_save(ud_xlsw *w, long *len);
 
+/* ===========================================================================
+ * .doc - the Word 97 document [MS-DOC]                     [EXPERIMENTAL]
+ *
+ * PHASE 4a (this surface) is the FIB, the piece table and the TEXT.  A .doc
+ * does not store its text in one place or one encoding: the WordDocument
+ * stream holds runs wherever a quick-save left them, and a piece table in one
+ * of the two table streams says which run supplies which part of the
+ * document.  Document order is not file order, and each run picks 8-bit or
+ * UTF-16 for itself.
+ *
+ * Formatting (CHPX/PAPX, sprms, styles) is phase 4b; writing is 4c.
+ * ======================================================================== */
+typedef struct ud_doc ud_doc;
+
+/* Open the document inside an already-open container.  NULL on failure;
+ * ud_error() distinguishes "not a Word document" from "Word 6/95 - not
+ * decoded in this build" from "password-protected - not opened".  The
+ * ud_cfb must outlive the ud_doc. */
+ud_doc *ud_doc_open(ud_cfb *c);
+void    ud_doc_close(ud_doc *d);
+
+/* The body text exactly as the file stores it: CP-1252, NUL-terminated, and
+ * still carrying Word's in-band control characters (0x07 cell mark, 0x0D
+ * paragraph mark, 0x13/0x14/0x15 around fields...).  This is what a
+ * formatting layer walks. */
+long        ud_doc_text_len(const ud_doc *d);
+const char *ud_doc_text(const ud_doc *d);
+
+/* The same text as a person would read it: paragraph marks become newlines,
+ * cell marks tabs, and a field's CODE is dropped while its CACHED RESULT is
+ * kept.  Built once, on demand, and owned by the document. */
+const char *ud_doc_plain(ud_doc *d);
+
+/* How many text pieces the table held - introspection for the gate, and a
+ * quick way to tell a quick-saved document from a freshly written one. */
+int ud_doc_pieces(const ud_doc *d);
+
 /* ---- name comparison (exposed: the format layers sort names too) ---------- */
 /* CFB directory order: shorter names first, then uppercased code unit by
  * code unit.  <0, 0, >0 like strcmp. */

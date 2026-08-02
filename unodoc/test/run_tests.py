@@ -33,6 +33,7 @@ GEN    = os.path.join(HERE, "gen")
 CORPUS = os.path.join(HERE, "corpus")
 BIN    = os.path.join(GEN, "cfbtest")
 XBIN   = os.path.join(GEN, "xlstest")
+DBIN   = os.path.join(GEN, "doctest")
 PROFILE = os.path.join(GEN, "loprofile")
 
 # build.sh's first-party sanitizer set, verbatim, plus ASan for the host.
@@ -43,6 +44,7 @@ SAN = ["-fsanitize=address,undefined",
 
 SRCS  = ["unodoc.c", "ud_cfb.c"]
 XSRCS = ["unodoc.c", "ud_cfb.c", "ud_xls.c", "ud_ptg.c", "ud_ptgc.c", "ud_xlsw.c"]
+DSRCS = ["unodoc.c", "ud_cfb.c", "ud_doc.c"]
 
 # what each format is required to carry, as unodoc paths
 REQUIRED = {
@@ -80,6 +82,7 @@ def build():
         print(r.stdout + r.stderr)
         raise SystemExit("build failed")
     gcc(XBIN, XSRCS, "xlstest.c")
+    gcc(DBIN, DSRCS, "doctest.c")
     print("build: ok")
 
 # ---- 2. selftest ------------------------------------------------------------
@@ -391,6 +394,85 @@ def written(have_lo):
         print("  LibreOffice reads back all %d checked features"
               % len(WRITTEN_MUST_HAVE))
 
+# ---- 4d. documents: our text against LibreOffice's -------------------------
+def lo_txt(path, outdir):
+    env = dict(os.environ)
+    env["HOME"] = PROFILE
+    env["SAL_USE_VCLPLUGIN"] = "svp"
+    os.makedirs(PROFILE, exist_ok=True)
+    os.makedirs(outdir, exist_ok=True)
+    subprocess.run(["soffice", "--headless", "--norestore", "--convert-to",
+                    "txt:Text (encoded):UTF8", "--outdir", outdir, path],
+                   capture_output=True, text=True, env=env, timeout=600)
+    out = os.path.join(outdir, os.path.splitext(os.path.basename(path))[0] + ".txt")
+    if not os.path.exists(out):
+        return None
+    with open(out, encoding="utf-8", errors="replace") as f:
+        return f.read()
+
+def norm_lines(text):
+    """Compare on content, not layout: the two extractors disagree about
+    trailing blank lines and about whether a space run is one space, and
+    neither difference means the piece table was walked wrong."""
+    out = []
+    text = text.lstrip("﻿")        # LibreOffice's UTF-8 output is BOM'd
+    for line in text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        line = " ".join(line.split())
+        if line:
+            out.append(line)
+    return out
+
+def documents(files, have_lo):
+    for path in files:
+        if not path.endswith(".doc"):
+            continue
+        base = os.path.basename(path)
+        r = run([DBIN, "info", path])
+        if r.returncode or r.stdout.startswith("ERR:"):
+            fail("%s: %s" % (base, (r.stdout + r.stderr).strip()[:300]))
+            continue
+        print("  %-12s %s" % (base, r.stdout.strip()))
+        rr = subprocess.run([DBIN, "text", path], capture_output=True, timeout=600)
+        if rr.returncode:
+            fail("%s: text extraction failed" % base)
+            continue
+        ours = rr.stdout.decode("cp1252", errors="replace")
+        if not have_lo:
+            continue
+        theirs = lo_txt(path, os.path.join(GEN, "lo_txt"))
+        if theirs is None:
+            fail("%s: LibreOffice could not convert it to text" % base)
+            continue
+        a, b = norm_lines(ours), norm_lines(theirs)
+        if a != b:
+            i = 0
+            while i < len(a) and i < len(b) and a[i] == b[i]:
+                i += 1
+            fail("%s: text differs from LibreOffice's at line %d of %d/%d\n"
+                 "      ours:  %r\n      theirs: %r"
+                 % (base, i, len(a), len(b),
+                    a[i] if i < len(a) else "<end>",
+                    b[i] if i < len(b) else "<end>"))
+        else:
+            print("  %-12s %d lines identical to LibreOffice's extraction"
+                  % (base, len(a)))
+
+def doc_fuzz(files, iters=3000):
+    for path in files:
+        if not path.endswith(".doc"):
+            continue
+        base = os.path.basename(path)
+        t = time.time()
+        try:
+            r = run([DBIN, "fuzz", path, "4242", str(iters)], timeout=1800)
+        except subprocess.TimeoutExpired:
+            fail("%s: document fuzz did not terminate" % base)
+            continue
+        if r.returncode:
+            fail("%s: document fuzz: %s" % (base, (r.stdout + r.stderr).strip()[:600]))
+        else:
+            print("  %-12s %s in %.1fs" % (base, r.stdout.strip(), time.time() - t))
+
 def xls_fuzz(files, iters=3000):
     for path in files:
         if not path.endswith(".xls"):
@@ -456,8 +538,10 @@ def main():
         stage("rebuild", rebuild_corpus, files, have_lo)
         stage("workbook", workbooks, files)
         stage("written", written, have_lo)
+        stage("document", documents, files, have_lo)
         stage("fuzz", fuzz, files)
         stage("workbook fuzz", xls_fuzz, files)
+        stage("document fuzz", doc_fuzz, files)
 
     print("\n" + ("unodoc gate: %d FAILURE(S)" % len(fails) if fails
                   else "unodoc gate: GREEN"))
