@@ -4166,3 +4166,46 @@ containing a backslash.
 **No choke-point touched**; still no `pc64/build.sh` block. The `.xls` box in
 `docs/OFFICE97-SPEC.md` S-OFF-06 now reads READ SIDE COMPLETE and stays open
 for the write half (phase 3).
+
+## 2026-08-02 - unodoc phase 3a LANDED (.xls write: values, strings, formats)
+
+**Worker A, unodoc lane.** `unodoc/ud_xlsw.c`: building and serialising a
+BIFF8 workbook. Sheets, every value kind, the interned shared string table
+with correct CONTINUE splitting, number formats (built-in codes reuse
+Excel's ids, custom ones get a FORMAT record), merged ranges, both date
+epochs. `ud_xlsw_save` returns a complete .xls - the workbook stream already
+wrapped in a compound file - so it is one call from model to something
+`uno_fs_write` can take.
+
+**The globals preamble is written from the spec, not canned.** OFFICE97-PLAN
+§4 allowed for freezing a real Office file's preamble as a byte array, and
+that is the usual trick, but the records Excel actually insists on are few
+enough to emit honestly: four FONTs (BIFF8 numbers them 0,1,2,3 and then
+SKIPS 4), fifteen style XFs, the default cell XF at 15, a Normal STYLE. A
+blob nobody can read is a blob nobody can fix.
+
+The writer emits the mirror image of the reader's trap: an SST string cut
+mid-character restates its encoding flag in the CONTINUE block, and a string
+goes out 8-bit only when every character fits in one byte of UTF-16 (CP-1252
+0x80-0x9F map above 255 - the euro sign is U+20AC - so those go wide).
+
+Gate, in two halves because one alone proves nothing:
+  `xlstest wtest`  a demo workbook survives save-and-reload through OUR
+                   reader: 19 assorted cells and 2500 shared strings, on
+                   BOTH date epochs - which is the first time the 1904 flag
+                   has been exercised end to end.
+  `written` stage  LibreOffice opens the file WE wrote and finds all twelve
+                   checked features (sheet names, numbers past 32 bits,
+                   CP-1252 accents, a string that had to go out wide, error
+                   values, the merge, a built-in and a custom number
+                   format). A file we both write and read could be
+                   consistently wrong; this is the independent half.
+
+**A gate repair, not just a feature.** The phase-2a patch that was supposed
+to add `xlstest selftest` to run_tests.py silently no-op'd - the same
+backslash-eating heredoc problem recorded in the 2b entry - so the
+encoding-switch selftest has never actually run as part of the gate, only by
+hand. It is wired in now, along with the writer round-trip. Worth a look at
+any patch that "applied" without visibly changing behaviour.
+
+**No choke-point touched**; still no `pc64/build.sh` block.
