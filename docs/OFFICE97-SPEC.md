@@ -108,7 +108,15 @@ guides (full URL list in the plan's research provenance, §11).
 - [ ] **`.doc` Word 97-2003 binary: read (piece table, both text
   encodings, CHPX/PAPX/sprms, STSH, sections, tables, cached fields,
   pictures) + write (accepted by real Word AND LibreOffice with no repair
-  prompt)**
+  prompt)** — started, `unodoc/ud_doc.c`, 2026-08-02 (phase 4a). DONE: the
+  FIB, the piece table, text assembly in document order with both
+  encodings, and field codes dropped in favour of their cached results —
+  extracted text is identical to LibreOffice's own extraction on every
+  corpus file. NOT YET: formatting (CHPX/PAPX/sprms/STSH), sections,
+  tables, pictures, and the writer. **And one gap in the evidence:** every
+  corpus document is single-piece, so the multi-piece walk — the thing the
+  piece table exists for — is implemented but unproven; it needs a
+  hand-built document, as the SST encoding switch did.
 - [F] **`.xls` BIFF8: read (SST incl. mid-string Continue encoding
   switches, XF/FONT/FORMAT, all cell record types, FORMULA ptg decompile,
   shared formulas, 1900/1904 epochs) + write (incl. compiled formulas
