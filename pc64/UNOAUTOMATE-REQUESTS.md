@@ -4069,3 +4069,45 @@ generated, never committed (`unodoc/.gitignore`).
 not need unodoc until the first Office app lands, and per /AGENTS.md §2 the
 append happens when it is actually needed. `docs/OFFICE97-SPEC.md`'s CFB box
 in S-OFF-06 moved to `[F]`; nothing else was touched.
+
+## 2026-08-01 - unodoc phase 2a LANDED (.xls BIFF8 read, values)
+
+**Worker A, unodoc lane.** `unodoc/ud_xls.c`: the BIFF8 record layer, the
+globals substream, every cell record type, merged ranges and number-format
+resolution. READ ONLY and VALUES only - a formula cell reports its cached
+result and `cell.formula`; decompiling the ptg array to `=SUM(A1:A9)` is
+phase 2b and writing is phase 3. Contract: `unodoc/UNODOC.md`.
+
+**The trap, handled once.** A BIFF record caps at 8224 bytes, so the shared
+string table is always split across CONTINUE records - and a string may be
+cut at ANY character, with the continuation restating whether the rest is
+8-bit or UTF-16. One string can change encoding halfway through. That is the
+number-one BIFF8 bug and `sst_string()` is the single place that knows it;
+the same shape recurs in .doc (piece table fc bit 30) and .ppt
+(TextBytesAtom vs TextCharsAtom), so phases 4-5 inherit it.
+
+**A measurement worth keeping.** The LibreOffice corpus DOES produce
+mid-string splits (54 in sst.xls, counted with an instrumented build) but
+LibreOffice always restates the SAME flag, so the encoding-SWITCH case is
+unreachable from any file we can generate. `xlstest selftest` therefore
+hand-assembles a workbook byte by byte with four strings split on purpose:
+8->8, 16->16, 8->16 and 16->8. Do not delete it when phase 3 can write .xls
+properly - a generated file will still not cover this.
+
+Gate (`unodoc/test/run_tests.py`, host, no boot, sanitizers + ASan): 4
+fixture workbooks / 19,043 cells compared against expectations derived from
+the SOURCE documents, never from unodoc's own output; the hand-built
+encoding-switch selftest; 12,000 workbook fuzz mutations. The fuzzer earned
+its keep by finding a leak (a second SST record overwrote the first table's
+pointer array). GREEN.
+
+**One finding about the oracle, recorded so nobody re-debugs it:**
+LibreOffice's ODF->BIFF8 export turns LITERAL boolean cells into plain
+numbers - confirmed by converting the .xls back to flat ODF, which contains
+no boolean-typed cell at all. Our BOOLERR path is proven separately by a
+`=1>0` formula, which does come back as a real boolean.
+
+**No choke-point touched**; still no `pc64/build.sh` block (the kernel does
+not need unodoc until the first Office app lands). The `.xls` box in
+`docs/OFFICE97-SPEC.md` S-OFF-06 stays OPEN with an inline note of what is
+and is not done - it covers read AND write, and write is phase 3.
