@@ -32,6 +32,7 @@ UD     = os.path.dirname(HERE)
 GEN    = os.path.join(HERE, "gen")
 CORPUS = os.path.join(HERE, "corpus")
 BIN    = os.path.join(GEN, "cfbtest")
+XBIN   = os.path.join(GEN, "xlstest")
 PROFILE = os.path.join(GEN, "loprofile")
 
 # build.sh's first-party sanitizer set, verbatim, plus ASan for the host.
@@ -40,7 +41,8 @@ SAN = ["-fsanitize=address,undefined",
        "integer-divide-by-zero,null",
        "-fno-sanitize-recover=all"]
 
-SRCS = ["unodoc.c", "ud_cfb.c"]
+SRCS  = ["unodoc.c", "ud_cfb.c"]
+XSRCS = ["unodoc.c", "ud_cfb.c", "ud_xls.c"]
 
 # what each format is required to carry, as unodoc paths
 REQUIRED = {
@@ -65,10 +67,19 @@ def build():
             "-I", UD] + SAN + ["-o", BIN] +
            [os.path.join(UD, s) for s in SRCS] +
            [os.path.join(HERE, "cfbtest.c")])
+    def gcc(out, srcs, main):
+        c = (["gcc", "-O1", "-g", "-std=c99", "-Wall", "-Wextra", "-Werror",
+              "-I", UD] + SAN + ["-o", out] +
+             [os.path.join(UD, x) for x in srcs] + [os.path.join(HERE, main)])
+        rr = run(c)
+        if rr.returncode:
+            print(rr.stdout + rr.stderr)
+            raise SystemExit("build failed: " + out)
     r = run(cmd)
     if r.returncode:
         print(r.stdout + r.stderr)
         raise SystemExit("build failed")
+    gcc(XBIN, XSRCS, "xlstest.c")
     print("build: ok")
 
 # ---- 2. selftest ------------------------------------------------------------
@@ -213,6 +224,98 @@ def rebuild_corpus(files, oracle=True):
             print("  %-12s oracle  LibreOffice agrees (%d bytes flat XML)"
                   % (base, len(a1)))
 
+# ---- 4b. workbook: values against the fixture -------------------------------
+def parse_cells(text):
+    out = {}
+    for line in text.splitlines():
+        f = line.split("	")
+        if len(f) >= 6 and f[0] == "cell":
+            out[(int(f[1]), int(f[2]), int(f[3]))] = (f[4], f[5])
+    return out
+
+def same(kind, want, got):
+    if want == got:
+        return True
+    if kind == "NUM":
+        try:
+            return float(want) == float(got)
+        except ValueError:
+            return False
+    return False
+
+def dump_cp1252(path):
+    """xlstest emits CP-1252 bytes (unodoc's internal text encoding), so the
+    runner decodes them as CP-1252 rather than letting the default UTF-8 turn
+    every accented character into a replacement char and a false failure."""
+    r = subprocess.run([XBIN, "dump", path], capture_output=True, timeout=600)
+    return (r.returncode,
+            r.stdout.decode("cp1252", errors="strict"),
+            r.stderr.decode("utf-8", errors="replace"))
+
+def workbooks(files):
+    for path in files:
+        if not path.endswith(".xls"):
+            continue
+        base = os.path.basename(path)
+        fixpath = path + ".expect.tsv"
+        try:
+            rc, out, err = dump_cp1252(path)
+        except UnicodeDecodeError as e:
+            fail("%s: dump is not valid CP-1252 (%s)" % (base, e))
+            continue
+        if rc or out.startswith("ERR:"):
+            fail("%s: %s" % (base, (out + err).strip()[:300]))
+            continue
+        if "!! lookup disagrees" in out:
+            fail("%s: random access disagrees with iteration" % base)
+        got = parse_cells(out)
+        if not os.path.exists(fixpath):
+            fail("%s: no fixture" % base)
+            continue
+        with open(fixpath, encoding="utf-8") as f:
+            want = parse_cells(f.read())
+        bad, missing = [], []
+        for key, (kind, val) in want.items():
+            if key not in got:
+                missing.append(key)
+            elif got[key][0] != kind or not same(kind, val, got[key][1]):
+                bad.append((key, (kind, val), got[key]))
+        # extra cells are fine only when they carry no value (blank records
+        # that exist just to hold a format, e.g. the covered half of a merge)
+        extra = [k for k, v in got.items() if k not in want and v[0] != "EMPTY"]
+        if missing or bad or extra:
+            fail("%s: %d missing, %d wrong, %d unexpected; first wrong: %s"
+                 % (base, len(missing), len(bad), len(extra),
+                    bad[0] if bad else (missing[0] if missing else extra[0])))
+        else:
+            print("  %-12s %5d cells match the fixture" % (base, len(want)))
+        if base == "cells.xls":
+            # the FORMAT/XF path: the two date cells must resolve to a real
+            # number-format code, not General
+            fmts = [l.split("	")[-1] for l in out.splitlines()
+                    if l.startswith("cell	0	6	")]
+            if not fmts or any(f == "fmt=General" for f in fmts):
+                fail("cells.xls: date cells lost their number format (%s)" % fmts)
+            else:
+                print("  %-12s date format resolved: %s"
+                      % (base, fmts[0].replace("fmt=", "")))
+
+def xls_fuzz(files, iters=3000):
+    for path in files:
+        if not path.endswith(".xls"):
+            continue
+        base = os.path.basename(path)
+        t = time.time()
+        try:
+            r = run([XBIN, "fuzz", path, "999", str(iters)], timeout=1800)
+        except subprocess.TimeoutExpired:
+            fail("%s: workbook fuzz did not terminate" % base)
+            continue
+        if r.returncode:
+            fail("%s: workbook fuzz: %s" % (base, (r.stdout + r.stderr).strip()[:600]))
+        else:
+            print("  %-12s %s in %.1fs" % (base, r.stdout.strip(), time.time() - t))
+
 # ---- 5. fuzz ----------------------------------------------------------------
 def fuzz(files, iters=4000):
     for path in files:
@@ -260,7 +363,9 @@ def main():
     else:
         stage("corpus read", read_corpus, files)
         stage("rebuild", rebuild_corpus, files, have_lo)
+        stage("workbook", workbooks, files)
         stage("fuzz", fuzz, files)
+        stage("workbook fuzz", xls_fuzz, files)
 
     print("\n" + ("unodoc gate: %d FAILURE(S)" % len(fails) if fails
                   else "unodoc gate: GREEN"))

@@ -20,7 +20,8 @@ a request rather than editing it.
 | Phase | Surface | State |
 |---|---|---|
 | 1 | CFB container, read + write | **landed**, `[EXPERIMENTAL]` |
-| 2 | `.xls` read (BIFF8) | not started |
+| 2a | `.xls` read (BIFF8): values | **landed**, `[EXPERIMENTAL]` |
+| 2b | `.xls` read: formula ptg decompiler | not started |
 | 3 | `.xls` write + formula compiler | not started |
 | 4 | `.doc` read + minimal writer | not started |
 | 5 | Escher + `.ppt` | not started |
@@ -43,7 +44,7 @@ ones it has.
                         ud_cfb_read / ud_cfb_load ─► stream bytes
                                                 │
                                                 ▼
-                        (phase 2+) ud_xls / ud_doc / ud_ppt
+                        ud_xls_open  (phase 2)  │  ud_doc / ud_ppt (4, 5)
 ```
 
 Writing runs the other way and never in place: build a `ud_cfbw` model, call
@@ -217,6 +218,70 @@ Requires `soffice` on PATH. On this machine that is WSL:
 sudo apt install libreoffice-writer libreoffice-calc libreoffice-impress
 ```
 
+## Reading a workbook
+
+```c
+ud_cfb *c = ud_cfb_open(&src);
+ud_xls *x = ud_xls_open(c);            /* finds the Workbook stream itself */
+if (!x) { show(ud_error()); return; }  /* "password-protected", "BIFF5", ... */
+
+for (int s = 0; s < ud_xls_sheets(x); s++)
+    for (int i = 0; i < ud_xls_cell_count(x, s); i++) {
+        int row, col; ud_xcell cell;
+        ud_xls_cell_at(x, s, i, &row, &col, &cell);
+        ...
+    }
+ud_xls_close(x);                       /* before ud_cfb_close */
+```
+
+Walk with `ud_xls_cell_at` when you want every cell — a sheet is sparse and
+the cells that exist are held sorted. `ud_xls_cell(x, s, row, col, &out)` is
+the random-access form, a binary search over the same array.
+
+### What phase 2a covers
+
+- The record layer, with `CONTINUE` folding **and the continuation
+  boundaries kept**, because of the trap below.
+- Globals: `BOUNDSHEET` (name, position, visibility, worksheet-vs-chart),
+  `SST`, `FORMAT`, `XF`, `DATEMODE`, and `FILEPASS` — an encrypted workbook
+  is refused with a plain message, never half-read.
+- Cells: `BLANK`, `MULBLANK`, `NUMBER`, `RK`, `MULRK`, `LABELSST`, `LABEL`,
+  `BOOLERR`, `FORMULA` (+ the `STRING` record carrying a string result), and
+  `MERGEDCELLS`.
+- Number formats: `ud_xls_xf_format` resolves an XF through the file's
+  `FORMAT` records, falling back to Excel's built-in id table. This is what
+  tells a date serial from a plain number.
+
+**The trap this phase exists to get right.** A record caps at 8224 bytes, so
+the shared string table is always split across `CONTINUE` records — and a
+string may be cut at *any* character, with the continuation restating whether
+the remaining text is 8-bit or UTF-16. One string can change encoding
+halfway through. `sst_string()` in `ud_xls.c` is the single place that knows
+this, and the same shape recurs in `.doc` (piece table, fc bit 30) and
+`.ppt` (`TextBytesAtom` vs `TextCharsAtom`), so phases 4 and 5 reuse the
+lesson rather than rediscovering it.
+
+The generated corpus reaches the split (54 mid-string splits in `sst.xls`,
+measured) but LibreOffice always restates the *same* flag, so the
+encoding-*switch* case — which [MS-XLS] permits and Excel emits — is
+unreachable from any file we can generate. `xlstest selftest` therefore
+hand-assembles a workbook byte by byte with four strings split on purpose:
+8→8, 16→16, **8→16 and 16→8**.
+
+### Not in phase 2a, stated rather than implied
+
+- **Formulas report their cached result**, which is what the file stores and
+  what a viewer needs. `cell.formula` says a formula produced it. Decompiling
+  the ptg array back to `=SUM(A1:A9)` is phase 2b; `SHRFMLA`/`ARRAY` need no
+  special handling until then, since every `FORMULA` record carries its own
+  cached value.
+- **`FONT`, `STYLE`, `COLINFO`, `ROW` and `WINDOW2` are skipped**, not
+  parsed. Nothing consumes them yet and dead tables rot.
+- **The 1904 epoch is read but untested** — `ud_xls_date1904` reports
+  `DATEMODE` faithfully, but nothing in the corpus is a 1904 workbook, and
+  unodoc does not convert serials to dates anyway (that is UnoCalc's).
+- **BIFF5/BIFF7** are recognised and declined by name, not decoded.
+
 ## What unodoc is NOT
 
 - **Not a renderer.** It hands back models and bytes; drawing them is
@@ -243,6 +308,14 @@ only when it is actually needed, as an append.
 
 ## Changelog
 
+- **2026-08-01 — phase 2a.** `ud_xls.c`: the BIFF8 record layer, globals,
+  the shared string table (including mid-string `CONTINUE` encoding
+  switches), every cell record type, merged ranges, and number-format
+  resolution. Read only, values only. Gate: 4 fixture workbooks (19,043
+  cells) checked against expectations derived from the SOURCE documents, a
+  hand-built encoding-switch selftest, and 12,000 workbook fuzz mutations —
+  which is what found the duplicate-`SST` leak. All surface
+  `[EXPERIMENTAL]`.
 - **2026-08-01 — phase 1.** `unodoc.h` core (`ud_src`, allocator, error
   surface, CP-1252/UTF-16 boundary, `ud_name_cmp`) and `ud_cfb.c`: the CFB
   container, read and write. Gate green: selftest, 7-file LibreOffice
