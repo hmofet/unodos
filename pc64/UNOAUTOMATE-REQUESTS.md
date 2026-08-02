@@ -4536,3 +4536,36 @@ one-off oracle failure in this gate that will not reproduce, this was why.
 **Remaining in the unodoc lane: 5b (Escher) and 5c (.ppt write).** Without
 Escher, text that lives only in a shape's client data rather than in a text
 atom is not found.
+
+## 2026-08-02 - unodoc phase 5b LANDED (Escher: shapes, properties, anchors)
+
+**Worker A, unodoc lane.** `unodoc/ud_escher.c`: the OfficeArt drawing layer
+[MS-ODRAW], shared by all three formats. Written STANDALONE - it takes a byte
+range rather than a document, and each format hands it whatever range holds
+its drawing - because a .ppt slide's visuals, a .doc's floating objects and an
+.xls chart are all the same records.
+
+Escher uses the SAME 8-byte record header as the PowerPoint stream around it,
+so one walker serves both. Two things about it are not obvious:
+
+  - A SHAPE'S TYPE IS IN ITS HEADER, not its body: the Sp record's
+    recInstance field is the shape type. The body is only the id and flags.
+  - FOPT PROPERTIES ARE A SORTED ARRAY WITH THE BIG ONES OUT OF LINE: each is
+    a u16 id plus a u32 value, and when the id says "complex" that value is a
+    LENGTH whose data is appended after the whole array. Read the array as
+    fixed-size records and you desynchronise.
+
+The ANCHOR record is host-defined, which is the whole reason Escher is
+format-neutral, so its shape is decided by LENGTH rather than by assuming one
+host: PowerPoint writes four int16 (top/left/right/bottom), while a child
+anchor and Excel's client anchor are four int32. Getting that wrong is silent
+- every shape reads as a zero-size rectangle at the origin, which is exactly
+what happened on the first run here before the length test went in.
+
+Exposed through `ud_ppt_slide_shapes`. Verified on the corpus: 11 shapes over
+3 slides and 9 over 2, each slide a group plus two text boxes (msosptTextBox,
+202) plus a background rectangle, with the text boxes carrying real frames
+that match the source layout. Gate asserts shapes are found and the fuzzer
+walks them.
+
+**Remaining in the unodoc lane: 5c (.ppt write) only.**

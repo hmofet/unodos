@@ -451,6 +451,30 @@ int ud_ppt_slides(const ud_ppt *p);
  * demand and owned by the presentation. */
 const char *ud_ppt_slide_text(ud_ppt *p, int i);
 
+/* ---- OfficeArt / Escher (phase 5b) ------------------------------ [EXPERIMENTAL]
+ * The drawing layer shared by all three formats, so it takes a byte range
+ * rather than a document and each format hands it whatever range holds its
+ * drawing.  A shape's TYPE comes from its record header, not its body. */
+typedef struct {
+    int  kind;            /* the msosptXxx shape type from the Sp header    */
+    long id;              /* the shape id, unique within the drawing        */
+    int  group;           /* 1 if this is a group rather than a leaf shape  */
+    long x0, y0, x1, y1;  /* the anchor rectangle, in the host's units      */
+    long fill_color, line_color;   /* -1 when the shape does not set one    */
+    long line_width;
+    int  filled, lined;
+    long text_id;         /* links the shape to its text, 0 if none         */
+} ud_shape;
+
+/* Collect the shapes in a byte range, descending into groups.  Returns how
+ * many were written.  `depth` starts at 0. */
+int ud_escher_shapes(const unsigned char *b, long n, long at, long end,
+                     ud_shape *out, int max, int depth);
+
+/* The shapes on one slide, read straight out of its drawing.  Returns how
+ * many were written into `out`. */
+int ud_ppt_slide_shapes(ud_ppt *p, int i, ud_shape *out, int max);
+
 /* ---- name comparison (exposed: the format layers sort names too) ---------- */
 /* CFB directory order: shorter names first, then uppercased code unit by
  * code unit.  <0, 0, >0 like strcmp. */

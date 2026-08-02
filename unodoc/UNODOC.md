@@ -29,7 +29,7 @@ a request rather than editing it.
 | 4b′ | `.doc` read: the STSH style hierarchy | **landed**, `[EXPERIMENTAL]` |
 | 4c | `.doc` minimal writer | **landed**, `[EXPERIMENTAL]` |
 | 5a | `.ppt` read: persist chain + slide text | **landed**, `[EXPERIMENTAL]` |
-| 5b | Escher (the drawing layer) | not started |
+| 5b | Escher: shapes, properties, anchors | **landed**, `[EXPERIMENTAL]` |
 | 5c | `.ppt` write | not started |
 
 Everything is `[EXPERIMENTAL]` until a consuming app has shipped on it. The
