@@ -12,8 +12,14 @@
  * PHASE 1 (this header): the CFB container, read AND write.
  *
  * DESIGN RULES (inherited from unomedia, and they are load-bearing):
- *   - Freestanding C, no float, no libc beyond mem-/str-.  Builds unchanged
- *     as a hosted object for the host tests and as part of a .UNO module.
+ *   - Freestanding C, no libc beyond mem-/str-.  Builds unchanged as a
+ *     hosted object for the host tests and as part of a .UNO module.
+ *   - IEEE doubles ARE used, unlike unomedia's integer-only rule: a
+ *     spreadsheet cell IS a double and there is no honest way around it.
+ *     What unodoc never does is call libm - only the four arithmetic
+ *     operators and comparisons, which are hardware on x86-64 - and it
+ *     never FORMATS a double (that
+ *     is UnoCalc's uoc_numfmt, which owns Excel's format-code language).
  *   - Nothing loads a whole file: bytes stream through the caller's ud_src.
  *     (The one exception is ud_cfbw_serialize, which by definition produces
  *     a whole file - unofs has no append path today.)
@@ -192,6 +198,101 @@ int ud_cfbw_clsid(ud_cfbw *w, int id, const unsigned char clsid[16]);
  * ud_free's it).  Always version 3 / 512-byte sectors, which is what Office
  * 97 writes.  NULL on failure. */
 unsigned char *ud_cfbw_serialize(ud_cfbw *w, long *len);
+
+/* ===========================================================================
+ * .xls - the BIFF8 workbook [MS-XLS]                       [EXPERIMENTAL]
+ *
+ * A BIFF8 workbook is a flat stream of (type, length, payload) records
+ * inside the container's "Workbook" stream: one globals substream (fonts,
+ * formats, cell formats, the shared string table, the sheet directory)
+ * followed by one substream per sheet.  Records longer than 8224 bytes are
+ * split with CONTINUE records - and a shared string may split at ANY
+ * character, with the continuation restating whether it is 8-bit or
+ * UTF-16.  That last sentence is the single most common BIFF8 bug and
+ * ud_xls.c handles it in one place.
+ *
+ * PHASE 2 (this surface) is READ ONLY, and reads values: a formula cell
+ * reports its cached result and that it is a formula.  Decompiling the ptg
+ * array back to "=SUM(A1:A9)" is phase 2b; writing is phase 3.
+ * ======================================================================== */
+
+/* cell value kinds */
+enum {
+    UD_XV_EMPTY = 0,      /* no cell, or a blank cell carrying only format  */
+    UD_XV_NUM   = 1,
+    UD_XV_STR   = 2,
+    UD_XV_BOOL  = 3,
+    UD_XV_ERR   = 4
+};
+
+/* Excel's seven error values, in their on-disk encoding */
+enum {
+    UD_XE_NULL  = 0x00,   /* #NULL!  */
+    UD_XE_DIV0  = 0x07,   /* #DIV/0! */
+    UD_XE_VALUE = 0x0F,   /* #VALUE! */
+    UD_XE_REF   = 0x17,   /* #REF!   */
+    UD_XE_NAME  = 0x1D,   /* #NAME?  */
+    UD_XE_NUM   = 0x24,   /* #NUM!   */
+    UD_XE_NA    = 0x2A    /* #N/A    */
+};
+
+/* The text of an error value ("#DIV/0!"), or "#ERR?" if unrecognised. */
+const char *ud_xls_err_text(int err);
+
+typedef struct {
+    int         kind;     /* UD_XV_*                                        */
+    double      num;      /* NUM, and BOOL as 0/1; a formula's CACHED result*/
+    const char *str;      /* STR: CP-1252, owned by the workbook            */
+    int         err;      /* UD_XE_*                                        */
+    int         xf;       /* index into the workbook's XF table             */
+    int         formula;  /* 1 if a formula produced this value             */
+} ud_xcell;
+
+typedef struct ud_xls ud_xls;
+
+/* Open the workbook inside an already-open container.  Finds the "Workbook"
+ * (BIFF8) or "Book" stream itself.  NULL on failure; ud_error() distinguishes
+ * "not a workbook" from "BIFF5 - not decoded in this build" from "encrypted
+ * (FILEPASS) - refused".  The ud_cfb must outlive the ud_xls. */
+ud_xls *ud_xls_open(ud_cfb *c);
+void    ud_xls_close(ud_xls *x);
+
+int         ud_xls_sheets(const ud_xls *x);
+const char *ud_xls_sheet_name(const ud_xls *x, int s);
+int         ud_xls_sheet_visible(const ud_xls *x, int s);   /* 0 = hidden   */
+int         ud_xls_date1904(const ud_xls *x);  /* the epoch this book uses  */
+
+/* Used extent: one past the last row/column that carries a cell. */
+int ud_xls_rows(const ud_xls *x, int s);
+int ud_xls_cols(const ud_xls *x, int s);
+
+/* One cell.  Returns 1 and fills *out when a cell record exists there,
+ * 0 otherwise (out is zeroed).  Cheap: cells are held sorted and found by
+ * binary search. */
+int ud_xls_cell(const ud_xls *x, int s, int row, int col, ud_xcell *out);
+
+/* Iterate only the cells that exist, in row-major order - the right way to
+ * walk a sparse sheet.  `i` runs 0..ud_xls_cell_count-1. */
+int ud_xls_cell_count(const ud_xls *x, int s);
+int ud_xls_cell_at(const ud_xls *x, int s, int i, int *row, int *col,
+                   ud_xcell *out);
+
+/* The number-format an XF selects: the id, and its format code ("General",
+ * "0.00", "d-mmm-yy").  A file stores FORMAT records only for the codes it
+ * defines; Excel's built-in ids resolve through an internal table.  This is
+ * what tells a date serial apart from a plain number - unodoc does not
+ * format numbers itself (that is UnoCalc's uoc_numfmt). */
+int         ud_xls_xf_format_id(const ud_xls *x, int xf);
+const char *ud_xls_xf_format(const ud_xls *x, int xf);
+
+/* Merged ranges, inclusive on all four bounds. */
+int ud_xls_merges(const ud_xls *x, int s);
+int ud_xls_merge(const ud_xls *x, int s, int i,
+                 int *row0, int *col0, int *row1, int *col1);
+
+/* Excel's row/column limits - the 97 grid, which is also the spec's. */
+#define UD_XLS_MAXROW  65536
+#define UD_XLS_MAXCOL  256
 
 /* ---- name comparison (exposed: the format layers sort names too) ---------- */
 /* CFB directory order: shorter names first, then uppercased code unit by
