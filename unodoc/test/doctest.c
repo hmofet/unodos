@@ -98,6 +98,39 @@ static void wr32(unsigned char *p, unsigned long v)
     p[2] = (unsigned char)(v >> 16); p[3] = (unsigned char)(v >> 24);
 }
 
+/* Append one STD to a style sheet under construction: the fixed header, an
+ * empty name, then the property blobs (a paragraph style carries PAPX then
+ * CHPX, a character style just CHPX). */
+static void put_style(dbuf *b, int stk, int base,
+                      const unsigned char *papx, long npapx,
+                      const unsigned char *chpx, long nchpx)
+{
+    long lenat, start;
+    int cupx = (stk == 1) ? 2 : 1;
+
+    lenat = b->n;
+    d16(b, 0);                                  /* cbStd, patched below     */
+    start = b->n;
+    d16(b, 0);                                  /* sti and its flags        */
+    d16(b, (unsigned)(stk | (base << 4)));
+    d16(b, (unsigned)cupx);                     /* cupx | istdNext << 4     */
+    d16(b, 0);                                  /* bchUpe                   */
+    d16(b, 0);                                  /* grfstd                   */
+    d16(b, 0);                                  /* Xstz: an empty name...   */
+    d16(b, 0);                                  /* ...and its terminator    */
+    if (stk == 1) {
+        d16(b, (unsigned)(npapx + 2));          /* UPXPapx leads with istd  */
+        d16(b, 0);
+        dput(b, papx, npapx);
+        if ((b->n - start) & 1) dzero(b, 1);    /* ONE byte of padding      */
+    }
+    d16(b, (unsigned)nchpx);
+    dput(b, chpx, nchpx);
+    if ((b->n - start) & 1) dzero(b, 1);
+    b->p[lenat] = (unsigned char)(b->n - start);
+    b->p[lenat + 1] = (unsigned char)((b->n - start) >> 8);
+}
+
 /* write one (fc, lcb) pair of rgFcLcb, given the array's base offset */
 static void patch_pair(unsigned char *fib, long rgbase, int pair,
                        long fc, long lcb)
@@ -125,6 +158,7 @@ static int doc_selftest(void)
     ud_doc *d;
     int bad = 0, whichtbl;
     long bte_lo = 0, bte_hi = 0, bte_chpx = 0, bte_papx = 0;
+    long stsh_at = 0, stsh_len = 0;
 
     for (whichtbl = 0; whichtbl < 2; whichtbl++) {
         memset(&wd, 0, sizeof wd);
@@ -182,11 +216,10 @@ static int doc_selftest(void)
             wr32(fkp + 8, (unsigned long)hi);
             fkp[12] = 250;                      /* run 0's CHPX at 500      */
             fkp[13] = 0;                        /* run 1: no exception      */
-            fkp[500] = 10;                      /* cb                       */
-            fkp[501] = 0x35; fkp[502] = 0x08; fkp[503] = 1;   /* bold on    */
-            fkp[504] = 0x36; fkp[505] = 0x08; fkp[506] = 1;   /* italic on  */
-            fkp[507] = 0x43; fkp[508] = 0x4A;                 /* sprmCHps   */
-            fkp[509] = 40;   fkp[510] = 0;                    /* 20pt       */
+            fkp[500] = 7;                       /* cb                       */
+            fkp[501] = 0x30; fkp[502] = 0x4A;                 /* sprmCIstd  */
+            fkp[503] = 2;    fkp[504] = 0;                    /* char style 2*/
+            fkp[505] = 0x3E; fkp[506] = 0x2A; fkp[507] = 1;   /* underline  */
             fkp[FKP_PAGE - 1] = 2;              /* crun                     */
             dzero(&wd, chpx_page * FKP_PAGE - wd.n);
             dput(&wd, fkp, FKP_PAGE);
@@ -197,7 +230,7 @@ static int doc_selftest(void)
             wr32(fkp + 4, (unsigned long)hi);
             fkp[8] = 240;                       /* PAPX at 480              */
             fkp[480] = 5;                       /* cb: grpprl is 2*5-1 = 9  */
-            fkp[481] = 0; fkp[482] = 0;         /* istd                     */
+            fkp[481] = 1; fkp[482] = 0;         /* istd: paragraph style 1  */
             fkp[483] = 0x03; fkp[484] = 0x24; fkp[485] = 1;   /* jc centre  */
             fkp[486] = 0x0F; fkp[487] = 0x84;                 /* dxaLeft    */
             fkp[488] = 0xD0; fkp[489] = 0x02;                 /* 720 twips  */
@@ -240,9 +273,37 @@ static int doc_selftest(void)
                 d32(&tbl, (unsigned long)bte_hi);
                 d32(&tbl, (unsigned long)bte_papx);
 
+                /* A style sheet with a based-on chain and a character style.
+                 * Three styles, so the layering has something to get wrong:
+                 *   0  paragraph, based on nothing: 10pt, left aligned
+                 *   1  paragraph, based on 0:       bold, centred
+                 *   2  character:                   italic
+                 * The paragraph names style 1; the run names style 2 through
+                 * sprmCIstd and adds underline directly.  Correct resolution
+                 * is size from 0, bold and centre from 1, italic from 2, and
+                 * underline plus the indent direct - four layers, and any two
+                 * of them applied in the wrong order loses a property. */
+                {
+                    static const unsigned char S0P[] = { 0x03, 0x24, 0 };
+                    static const unsigned char S0C[] = { 0x43, 0x4A, 20, 0 };
+                    static const unsigned char S1P[] = { 0x03, 0x24, 1 };
+                    static const unsigned char S1C[] = { 0x35, 0x08, 1 };
+                    static const unsigned char S2C[] = { 0x36, 0x08, 1 };
+                    stsh_at = tbl.n;
+                    d16(&tbl, 18);                       /* cbStshi         */
+                    d16(&tbl, 3);                        /* cstd            */
+                    d16(&tbl, 10);                       /* cbSTDBaseInFile */
+                    dzero(&tbl, 14);                     /* the rest of it   */
+                    put_style(&tbl, 1, 0x0FFF, S0P, sizeof S0P, S0C, sizeof S0C);
+                    put_style(&tbl, 1, 0,      S1P, sizeof S1P, S1C, sizeof S1C);
+                    put_style(&tbl, 2, 0x0FFF, 0, 0,          S2C, sizeof S2C);
+                    stsh_len = tbl.n - stsh_at;
+                }
+
                 patch_pair(wd.p, rg, 33, 64, clxlen);            /* fcClx   */
                 patch_pair(wd.p, rg, 12, btechpx, 12);           /* CHPX bte*/
                 patch_pair(wd.p, rg, 13, btepapx, 12);           /* PAPX bte*/
+                patch_pair(wd.p, rg,  1, stsh_at, stsh_len);     /* STSH    */
             }
         }
 
@@ -279,19 +340,30 @@ static int doc_selftest(void)
                 ud_chp ch;
                 ud_pap pa;
 
+                /* All four layers at once: size from the base style, bold
+                   from the style based on it, italic from the CHARACTER
+                   style the run names, underline from the run itself. */
                 ud_doc_chp_at(d, cp_in_p2, &ch);
-                if (!ch.bold || !ch.italic || ch.size != 40) {
-                    printf("FAIL doc selftest: piece 2 should be bold+italic+"
-                           "20pt, got bold=%d italic=%d size=%d\n",
-                           ch.bold, ch.italic, ch.size);
+                if (ch.size != 20 || !ch.bold || !ch.italic || !ch.underline) {
+                    printf("FAIL doc selftest: the four style layers did not "
+                           "all resolve - size=%d (want 20, from the base "
+                           "style) bold=%d (want 1, from the derived style) "
+                           "italic=%d (want 1, from the character style) "
+                           "underline=%d (want 1, direct)\n",
+                           ch.size, ch.bold, ch.italic, ch.underline);
                     bad = 1;
                 }
+                /* Piece 0 has no direct CHPX, so it keeps the paragraph
+                   style's bold and size but NOT the character style's italic
+                   or the direct underline - which is also how we know the
+                   lookup followed file offset rather than character
+                   position, since piece 0 reads FIRST but is stored second. */
                 ud_doc_chp_at(d, 0, &ch);
-                if (ch.bold || ch.italic || ch.size) {
-                    printf("FAIL doc selftest: piece 0 should be unformatted, "
-                           "got bold=%d italic=%d size=%d - formatting was "
-                           "looked up by character position, not file offset\n",
-                           ch.bold, ch.italic, ch.size);
+                if (ch.size != 20 || !ch.bold || ch.italic || ch.underline) {
+                    printf("FAIL doc selftest: piece 0 should inherit the "
+                           "paragraph style only, got size=%d bold=%d "
+                           "italic=%d underline=%d\n",
+                           ch.size, ch.bold, ch.italic, ch.underline);
                     bad = 1;
                 }
                 ud_doc_pap_at(d, 0, &pa);
@@ -310,8 +382,9 @@ static int doc_selftest(void)
     if (!bad)
         printf("doctest: selftest OK - 4 pieces alternating 8-bit/UTF-16, "
                "stored out of document order, reassembled from both 0Table "
-               "and 1Table; CHPX/PAPX resolved by FILE offset (the bold run "
-               "is the piece stored first but reading third)\n");
+               "and 1Table; CHPX/PAPX resolved by FILE offset; and four style "
+               "layers (base style, derived style, character style, direct) "
+               "resolving in the right order\n");
     return bad;
 }
 
