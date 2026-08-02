@@ -143,13 +143,19 @@ guides (full URL list in the plan's research provenance, §11).
   is correct, just larger than Excel would).
 - [ ] **`.ppt`: read (UserEdit chain → persist directory → live document;
   text from both homes; StyleTextPropAtom) + write (single UserEdit,
-  valid PPDrawing per slide, no repair prompt)** — started, `unodoc/ud_ppt.c`,
-  2026-08-02 (phase 5a). DONE: the Current User hop, the UserEdit chain, the
-  persist directories folded **newest-wins**, the live DocumentContainer, and
-  slide text from the text atoms — every line we extract is present in
-  LibreOffice's own extraction. NOT YET: Escher, so text that lives only in a
-  shape's client data rather than in a text atom is not found;
-  StyleTextPropAtom; and the writer.
+  valid PPDrawing per slide, no repair prompt)** — `unodoc/ud_ppt.c`,
+  `ud_escher.c`, `ud_pptw.c`, phases 5a-5c, 2026-08-02. DONE: the Current
+  User hop, the UserEdit chain, the persist directories folded
+  **newest-wins**, the live DocumentContainer, slide text (every line we
+  extract is present in LibreOffice's own extraction); Escher shapes with
+  properties and both anchor forms; AND THE WRITER — single UserEdit, one
+  persist directory, plain-textbox slides with a valid Dgg/Dg shape-id
+  ledger, both text encodings. LibreOffice opens what it writes and reads
+  back every checked string on exactly the pages we wrote. NOT YET:
+  StyleTextPropAtom (both directions — written text takes the viewer's
+  defaults), placeholder/outline text on write, pictures, notes; and the
+  strict "no repair prompt in real PowerPoint" gate is still reserved for
+  the milestone with a VM.
 - [F] **CFB container: read with cycle/bounds defense; write with valid
   (length, uppercase-UTF-16) directory ordering** — `unodoc/ud_cfb.c`,
   2026-08-01. Verified by `unodoc/test/run_tests.py`: round-trip across the
