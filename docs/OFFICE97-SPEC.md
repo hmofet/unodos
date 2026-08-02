@@ -143,7 +143,13 @@ guides (full URL list in the plan's research provenance, §11).
   is correct, just larger than Excel would).
 - [ ] **`.ppt`: read (UserEdit chain → persist directory → live document;
   text from both homes; StyleTextPropAtom) + write (single UserEdit,
-  valid PPDrawing per slide, no repair prompt)**
+  valid PPDrawing per slide, no repair prompt)** — started, `unodoc/ud_ppt.c`,
+  2026-08-02 (phase 5a). DONE: the Current User hop, the UserEdit chain, the
+  persist directories folded **newest-wins**, the live DocumentContainer, and
+  slide text from the text atoms — every line we extract is present in
+  LibreOffice's own extraction. NOT YET: Escher, so text that lives only in a
+  shape's client data rather than in a text atom is not found;
+  StyleTextPropAtom; and the writer.
 - [F] **CFB container: read with cycle/bounds defense; write with valid
   (length, uppercase-UTF-16) directory ordering** — `unodoc/ud_cfb.c`,
   2026-08-01. Verified by `unodoc/test/run_tests.py`: round-trip across the

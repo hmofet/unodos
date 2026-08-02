@@ -4504,3 +4504,35 @@ tolerates their absence; real Word has not been asked.
 
 **With this, .doc is readable AND writable, and the unodoc lane has only
 phase 5 (Escher + .ppt) left.**
+
+## 2026-08-02 - unodoc phase 5a LANDED (.ppt read: persist chain + slide text)
+
+**Worker A, unodoc lane.** `unodoc/ud_ppt.c`. A .ppt stream is an append-only
+edit log and most of what is in it is a PREVIOUS VERSION of the file. Four
+hops to the live document, each a chance to read a stale one: the Current User
+stream says where the current edit begins; the UserEditAtom chain runs newest
+to oldest; each edit's persist directory maps ids to offsets and the same id
+appears in several, so THE FIRST ENTRY WINS (fold them oldest-first and every
+object resolves to a stale copy of itself); only then does docPersistIdRef
+name the live DocumentContainer.
+
+Slides from SlideListWithText in presentation order, falling back to every
+SlideContainer the persist directory names. Text by walking the record tree,
+containers identified by the low nibble of the header so no table of record
+types is needed. Text atoms are UTF-16 or 8-bit - the same either-encoding
+shape as BIFF8 shared strings and .doc pieces, for the third time.
+
+Gate: every slide line we extract is present, in order, in LibreOffice's own
+extraction; 4000 fuzz mutations.
+
+**A HARNESS BUG worth more than the feature.** `soffice_flat` read its
+expected output path WITHOUT REMOVING IT FIRST, so a conversion that failed or
+timed out silently compared against the previous run's file. It invented a
+failure on small.ppt (reported as a rebuild-oracle difference in a stage that
+had been green for eight slices) and could just as easily have hidden a real
+one. Fixed: the target is deleted before every conversion. If you see a
+one-off oracle failure in this gate that will not reproduce, this was why.
+
+**Remaining in the unodoc lane: 5b (Escher) and 5c (.ppt write).** Without
+Escher, text that lives only in a shape's client data rather than in a text
+atom is not found.
