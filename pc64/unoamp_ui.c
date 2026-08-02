@@ -897,13 +897,14 @@ static void pl_draw(struct unoui_widget *w, unoui_rect r, void *ctx)
     const unoamp_skin *sk = unoamp_skin_get();
     int ww = g_plwin ? g_plwin->r.w / g_scale : PLW_MIN_W;
     int wh = g_plwin ? g_plwin->r.h / g_scale : PLW_MIN_H;
-    unsigned c_norm, c_cur, c_bg;
+    unsigned c_norm, c_cur, c_bg, c_sel;
     int i, rows, x, ox, oy;
     (void)w; (void)r; (void)ctx;
 
     c_norm = (sk && sk->pl_normal)  ? sk->pl_normal  : t->pal.field_text;
     c_cur  = (sk && sk->pl_current) ? sk->pl_current : t->pal.accent;
     c_bg   = (sk && sk->pl_bg)      ? sk->pl_bg      : t->pal.field_bg;
+    c_sel  = (sk && sk->pl_selbg)   ? sk->pl_selbg   : t->pal.accent;
 
     /* Interior first, then the frame on top: the nine-slice edges overlap the
      * fill by design, which is how the skin's inner shadow lands. */
@@ -942,7 +943,7 @@ static void pl_draw(struct unoui_widget *w, unoui_rect r, void *ctx)
         if (idx == unoamp_pl_selected())
             fb_fill_rect(ox + 12 * g_scale, oy + (y - 1) * g_scale,
                          (ww - 32) * g_scale, (PL_ROW_H + 2) * g_scale,
-                         t->pal.accent);
+                         c_sel);
         pl_text(line, 12, y, (ww - 40) / CH_W,
                 idx == unoamp_pl_current() ? c_cur : c_norm);
     }
