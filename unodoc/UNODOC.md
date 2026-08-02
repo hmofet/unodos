@@ -114,6 +114,15 @@ guarantees matter more than the features:
   6, a mini-stream cutoff other than 4096, a zero or absurd FAT sector
   count, a DIFAT that does not describe every FAT sector it promised.
 - `ud_cfb_load` refuses anything over `UD_MAX_STREAM` (64 MB).
+- Every allocation the reader makes is proportionate to the file: the FAT,
+  the mini FAT and the directory each cost at most about one file's worth,
+  so a crafted header cannot ask for gigabytes on behalf of a small file.
+
+**Unproven, stated rather than implied:** the reader is written
+sector-size-general and accepts a **version 4** (4096-byte sector) header,
+but no v4 file has ever been through it — Office 97 does not write one and
+neither does LibreOffice, so nothing in the corpus can produce one. The plan
+asked for v3 only; treat v4 as untested code until a real file turns up.
 
 A damaged file may still open and yield what is readable — salvage is the
 right behaviour for a document the user cares about — but it can never make
