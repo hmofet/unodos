@@ -1,8 +1,12 @@
 # BIOS boot for pc64, a phased plan
 
-Status: **A-E done in QEMU, plus the installer and the flasher. THE FIRST METAL
-RUN DOES NOT BOOT** - see "Metal, 2026-07-31" at the end, which is where to
-resume. PAUSED at the user's request, 2026-07-31.
+Status: **A-E done in QEMU, plus the installer and the flasher. TWO METAL RUNS,
+NEITHER CONCLUSIVE.** Run 1 (Acer Revo RL100, 2026-07-31) does not boot and does
+not yet distinguish a dead video mode from a failed long-mode transition. Run 2
+(Asus Eee PC 1005, 2026-08-01) got further and may have reached the kernel, but
+ran from a stress-driver stick that powers the machine off by itself, so it is
+confounded. **Both metal sections are at the end of this file; read run 2 first,
+it has the cleaner next step.**
 
 In QEMU: one image
 boots both firmwares, a BIOS boot is a full system including on hardware with no
@@ -442,3 +446,79 @@ not respond to typing is a driver gap (EHCI/UHCI HID), not a boot failure.
 |---|---|
 | `UNO_BIOS_VERBOSE=1 ./build.sh` | stage2 narrates each step, prints the chosen mode/LFB/pitch, waits 8 visible seconds, and paints a green band from 64-bit code before the kernel |
 | `UNO_BIOS_NOVIDEO=1 ./build.sh` | skips VBE, stays in text mode, proves long mode at 0xB8000, never boots the kernel |
+
+## Metal, 2026-08-01: the Asus Eee PC 1005. Inconclusive, and the run was confounded
+
+Second machine, and it got further than the Revo. **Do not read this as a
+failure yet** - the stick it ran from was misconfigured in a way that produces
+the same symptom as a video fault.
+
+### What was observed
+
+The verbose stage2 narration appeared and **the dots were seen**, so the loader
+ran end to end on this hardware exactly as it did on the Revo: firmware handoff,
+INT 13h reads, the kernel above 1 MB, E820, VBE mode selection, and a live CPU
+to the switch. Then "something with 10 in it" flashed past too quickly to read,
+and the screen went black.
+
+### Why that flash matters, and why it is NOT a stage2 message
+
+**Nothing stage2 prints after the dots.** The dots are the last text it emits;
+past that its only output is the graphical green marker band. So the flash was
+one of:
+
+1. earlier text glimpsed as the screen changed - `vbe mode: 1024x768 ...` and
+   `e820 entries: N` both contain "10"; or
+2. **the kernel's own boot-test console.** The stick carried a `UNO_DEBUG=1`
+   build, which runs SPECTEST as a text console long before the shell paints a
+   desktop.
+
+Reading (2) would mean the VBE mode DID display and this machine reached the
+kernel - substantially further than the Revo, which never proved long mode at
+all. It also supplies an innocent explanation for the black screen: the stick's
+`DEBUG.CFG` carried `passes=3`, so the stress driver was armed and **powers the
+machine off by itself** after three passes. Black screen, no fault.
+
+### The confound, stated plainly so the next run avoids it
+
+The image was written with `dd` rather than by the flasher, and `build.sh`
+stages a `DEBUG.CFG` with `passes=3` into `build/esp` which `mkbios.py` packages
+verbatim. A hands-on boot therefore got a fuzz run that shuts the machine down,
+plus a text console that scrolls, plus no URC key. All three work against
+reading a first boot on new hardware. See the 2026-08-01 metal entry in
+`pc64/UNOAUTOMATE-REQUESTS.md`.
+
+### The next boot, and what it settles
+
+A **production** image (no `DEBUG.CFG` at all, therefore no stress driver, no
+auto power-off and no console) with the verbose stage2 kept. It boots straight
+to a desktop, so the outcome is unambiguous. Built and staged as
+`~/unodos-eee.img` on devbuntu, SeaBIOS-verified.
+
+Watch for the **green marker band** specifically. If a green stripe appears
+across the top before anything else, VBE, the LFB, the page tables and long mode
+are all proven and any later fault is past the loader. If the desktop follows,
+phase D is validated on real IDE-mode silicon, which is the thing QEMU cannot
+falsify.
+
+### Why this machine is worth the second boot
+
+- **A real i8042.** The netbook's keyboard and touchpad are on the internal PS/2
+  controller, unlike the Revo (USB-only input, no xHCI in that era), so it
+  should be *drivable* if it comes up.
+- **SATA almost certainly in IDE compatibility mode** (NM10 / ICH7-M), which
+  exercises `ide.c` on real silicon for the first time - currently only
+  QEMU-verified against a PIIX3.
+- **A 1024x600 panel** against a mode policy that prefers 1024x768. This is
+  exactly the "panels whose best mode is 1024x768" quirk this plan names as
+  needing metal. If the production boot is black too, that is the strong
+  hypothesis and the fix is forcing a lower mode.
+
+### One variant trap for whoever picks this up
+
+The Eee PC 1005 line straddles the long-mode exclusion. **1005HA/HAB/HAG are
+Atom N270/N280 and have no EM64T** - they cannot run pc64 at all and should
+produce stage2's printed CPUID refusal, which would itself be the first metal
+test of that path (only ever exercised in QEMU against a simulated Pentium 3).
+**1005PE/PEB/P/PR are Atom N450/N455** and can run it. Check before spending a
+boot.

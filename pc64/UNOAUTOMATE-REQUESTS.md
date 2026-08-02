@@ -4335,3 +4335,110 @@ WITHOUT expectations, because expectations we cannot yet satisfy would be a
 failing gate for a reason that is not a bug.
 
 **No choke-point touched**; still no `pc64/build.sh` block.
+
+---
+
+## 2026-08-01 (metal) - fleet run: the X1 boots, SKYNET joins on the Yoga and NOT the X1, and two traps in how the stick was built
+
+Hardware session across three machines (X1 Carbon Gen 8, X13 Yoga, Asus Eee PC
+1005). Recorded here rather than only in METAL-CHECKLIST because most of it is
+cross-lane.
+
+### The bar-3 boot regression is FIXED on the X1
+
+The first cut of the trackpad work hung both the Carbon and the Surface at
+splash bar 3 (`uno_i2c_hid_init()`), and that fix had never been run on metal.
+**The X1 boots.** The Surface half is still untested, so the checklist item is
+annotated rather than ticked.
+
+### -> NIC drivers lane: SKYNET joins on the Yoga, not on the X1
+
+Same AP, same SSID, same driver, two machines, opposite results:
+
+- **X13 Yoga: joined SKYNET.**
+- **X1 Carbon (AX201): scan works and lists networks; the join does not complete.**
+
+A machine-level differential against ONE access point is a much narrower
+starting point than the round-25 campaign had.
+
+**SKYNET is on BOTH bands (operator-confirmed).** That rules the obvious
+hypothesis OUT rather than in, and points somewhere better. `g_band_pref`
+defaults to 0 and `band_ok()` is then `chan >= 1 && chan <= 14`, so the driver
+considers **2.4 GHz only** on both machines - neither can have wandered onto a
+5 GHz BSS. The differential is therefore BSS SELECTION WITHIN 2.4 GHz, not band.
+
+**The leading hypothesis, and it is already written down in this driver.**
+`scan_pick()` takes `scan_pick_nth(0)`, the STRONGEST matching BSS, and the
+comment on that function records exactly this failure mode from the NimmuNet
+campaign:
+
+> on a mesh, "strongest" is not the same as "will talk to us" - NimmuNet's
+> `e8:d3:eb:47:4e:cf` is the loudest BSS on the air here and refuses every auth,
+> while `e8:d3:eb:51:8c:8f` 36 dB down completes every time
+
+A dual-band SSID implies several BSSIDs, and **band-steering APs routinely
+refuse or ignore 2.4 GHz auth from a dual-band-capable client specifically to
+push it to 5 GHz** - which presents as "scan lists the network, join never
+completes". Two machines in two physical positions will have different strongest
+2.4 GHz BSSes, which is a sufficient explanation for the Yoga succeeding where
+the X1 fails, with no per-machine driver difference at all.
+
+`scan_pick_nth(n)` was split out precisely so "a refused AP can be retried
+against the next candidate". **Whether the join path actually walks n > 0 for
+this failure is the thing to check first**, because if it does not, the X1 is
+stuck retrying one BSS that will never answer.
+
+Three commands settle it once the box is reachable (see the URC note below):
+`iwl scan` for every SKYNET BSS with channel and RSSI, `iwl status` for where
+the join dies, and `iwl band any` / `iwl band 5` to force the other band live -
+noting 5 GHz is explicitly NOT the proven path (`mvm_phy_ctxt` has only ever
+been driven on band 2.4 / LMAC 0), so a failure there is uninformative while a
+success would be a real result.
+
+No log was captured off the X1 this session, so all of the above is inference
+from the code plus the operator's observation.
+
+### -> unoautomate: the X1 cannot be driven over URC, by construction
+
+A URC-enabled stick was built (`remote=192.168.2.100:5099`) and the box never
+dialed in. The reason is structural rather than a config error: **the X1's only
+NIC is the Intel radio** (METAL-CHECKLIST "Networking", TODO.md), and
+`unoauto_remote_boot()` needs a link to dial out - but the link is the thing
+under test. This is the same chicken-and-egg recorded for the ZimaBlade r8169
+("URC can't ride the very NIC we're fixing"), and the 16550 UART carrier that
+answered it there does not help a laptop with no serial port.
+
+So the X1 has exactly two channels: an **AX88179 USB-Ethernet dongle** (debug
+the radio over wired, the pattern the Yoga used), or the **offline** one,
+`CRASH\<machine>\BOOTLOG.TXT` + NETLOG carried off on the stick. USB-CDC-ACM,
+still unimplemented, is the general fix; this is a second concrete motivation
+for it, on different hardware from the first.
+
+### Trap 1: a raw `dd` of `unodos-hybrid.img` ships a stress-driver config
+
+`build.sh` stages a `DEBUG.CFG` containing `passes=3` into `build/esp`, and
+`tools/mkbios.py` packages that tree verbatim. So a stick written with `dd`
+rather than by the flasher arrives with **the fuzz driver armed and auto
+power-off after 3 passes**, and with no `remote=`/`listen`/`discover` key, so no
+URC. Bypassing the flasher means bypassing the Developer options that write
+those keys, and you get both surprises at once. A hands-on session wants
+`nostress` + `noshutdown` + a remote key. The Eee PC result below was probably
+confounded by exactly this.
+
+### Trap 2: verifying an image in QEMU MUTATES it
+
+Booting `unodos-hybrid.img` writably under QEMU lets the guest write to its own
+FAT volume, and on a `UNO_DEBUG=1` build that means the QEMU boot's
+`CRASH\<machine>\BOOTLOG.TXT` ends up baked into the image about to be shipped.
+Caught here by an md5 mismatch after transfer, not by anything cleverer. Since
+the fleet procedure is "read the `detach gate:` line out of BOOTLOG.TXT", a
+stick carrying a QEMU boot log is a wasted diagnosis cycle waiting to happen.
+**Verify with `-snapshot`** and the bytes tested are the bytes written.
+
+### One stale line corrected in METAL-CHECKLIST
+
+Phase D's Yoga entry called it "the one machine that can exercise the PCH TCO
+watchdog metal pass". Two later findings in this file contradict that: the
+Yoga's firmware LOCKS the TCO (`tco1_cnt_fw=0x1800` = TCO_LOCK+HLT), and the
+Yoga is PMC-class while only the v2/RCBA NO_REBOOT path is implemented, so
+`present()` returns 0 there and is right to. Annotated in place.

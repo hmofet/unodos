@@ -82,9 +82,13 @@ shipped before), and later candidates cost two qualification transfers each
 unless one answers. A `PROBE_BUDGET` caps total probe transfers so any future
 mistake here degrades to "no trackpad" rather than a machine that won't boot.
 
-- [ ] **Both machines boot again.** This is the first thing to check. If either
+- [~] **Both machines boot again.** This is the first thing to check. If either
       still freezes at bar 3, the timing sweep needs to come out entirely -
       say so and it will be gated off by default.
+      **X1 Carbon: CONFIRMED BOOTING 2026-08-01.** The Surface half is still
+      untested, so this stays open. The trackpad/pointer readouts were not
+      captured on that run - the X1 has no wired NIC, so it could not be driven
+      over URC (see the 2026-08-01 metal entry in UNOAUTOMATE-REQUESTS.md).
 - [ ] **The Surface's trackpad still binds** (it did before; it takes the
       identical candidate-0 path now, so this is a no-change check).
 
@@ -255,8 +259,15 @@ the plan asks for, **in this order**, easiest rollback first. Every box: boot
       floaty post-detach (one HID report drained per frame against a 1000 Hz
       mouse). Both written up in the requests file.
 - [ ] **X13 Yoga** (NVMe + ethernet, already detaches today). Regression check.
-      Also the one machine that can exercise the PCH TCO watchdog metal pass
-      still outstanding in UNOAUTOMATE-REQUESTS.md, if someone is there anyway.
+      ~~Also the one machine that can exercise the PCH TCO watchdog metal
+      pass.~~ **STALE, corrected 2026-08-01:** it cannot. The Yoga's firmware
+      LOCKS the TCO (`tco1_cnt_fw=0x1800` = TCO_LOCK+HLT) and the Yoga is
+      PMC-class, while only the v2/RCBA NO_REBOOT path is implemented - so
+      `uno_hw_wdt_present()` returns 0 there and is correct to. There is no TCO
+      metal pass to run on this machine; it needs a v2/RCBA box, or the PMC
+      slice. Both facts are in UNOAUTOMATE-REQUESTS.md (2026-07-24).
+      Confirmed 2026-08-01: this machine DOES join SKYNET over WiFi, which the
+      X1 does not - see the 2026-08-01 metal entry.
 - [ ] **X1 Carbon Gen 8** - **the phase B claim, and the one that could be
       wrong.** Its I2C-HID trackpad may or may not bind; the point of the new
       gate is that the machine should detach EITHER WAY, because the TrackPoint
