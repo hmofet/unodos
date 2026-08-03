@@ -77,7 +77,7 @@ static const char *kThemeNames[NTHEMES];
  * index a-NNATIVE. */
 enum { APP_CTRL, APP_EDIT, APP_FILES, APP_SYS, APP_CLOCK, APP_SETUP,
        APP_MUSIC, APP_UNOAMP, NNATIVE };
-#define NEXTRA 7                          /* extra native apps beyond the bridge */
+#define NEXTRA 8                          /* extra native apps beyond the bridge */
 #define EX_RUNNER  (NNATIVE + UNOAPP_COUNT)       /* Runner3D: shell app index    */
 #define EX_BROWSER (NNATIVE + UNOAPP_COUNT + 1)   /* Browser: shell app index     */
 #define EX_STUDIO  (NNATIVE + UNOAPP_COUNT + 2)   /* Studio IDE (a .UNO module)   */
@@ -85,6 +85,7 @@ enum { APP_CTRL, APP_EDIT, APP_FILES, APP_SYS, APP_CLOCK, APP_SETUP,
 #define EX_USERAPP (NNATIVE + UNOAPP_COUNT + 4)   /* the app Studio just built    */
 #define EX_PYAPP   (NNATIVE + UNOAPP_COUNT + 5)   /* a running Python app (PYRT)  */
 #define EX_SSH     (NNATIVE + UNOAPP_COUNT + 6)   /* SSH client (native canvas)   */
+#define EX_UOWORD  (NNATIVE + UNOAPP_COUNT + 7)   /* UnoWord (a .UNO module)      */
 #define NAPPS  (NNATIVE + UNOAPP_COUNT + NEXTRA)
 #define APP_TBAR 18                       /* legacy apps' own title-bar height */
 static const char *kAppNames[NNATIVE] =
@@ -215,6 +216,23 @@ static void photos_ensure(void)
     }
 }
 
+/* ---- UnoWord: the word processor, a unoui-CLASS module --------------------
+ * (APPS\\UOWORD.UNO - the whole uoffice chrome lane and unodoc's Word half
+ * ride inside the module).  Same hosting contract as Studio and Photos; a
+ * distro without the file simply has no UnoWord. */
+static const UnoUuiApp *g_uoword;
+static int  g_uoword_tried, g_uoword_present;
+static void uoword_ensure(void)
+{
+    if (g_uoword || g_uoword_tried) return;
+    g_uoword_tried = 1;
+    {
+        UnoUuiEntry e = uno_mod_load_uui("UOWORD.UNO");
+        if (e) g_uoword = e(0);
+        if (g_uoword && g_uoword->abi != UNO_UUIAPP_ABI) g_uoword = 0;
+    }
+}
+
 static const char *kNativeShort[NNATIVE] =
     { "Control", "Editor", "Files", "System", "Clock", "Install",
       "Music", "UnoAmp" };
@@ -224,6 +242,7 @@ static const char *app_name(int a)
 { return a == EX_RUNNER ? "Runner3D" : a == EX_BROWSER ? "Browser"
        : a == EX_SSH ? "SSH"
        : a == EX_STUDIO ? "Studio" : a == EX_PHOTOS ? "Photos"
+       : a == EX_UOWORD ? "UnoWord"
        : a == EX_USERAPP ? unoapp_user_title()
        : a == EX_PYAPP ? py_app_name()
        : a < NNATIVE ? kAppNames[a] : unoapp_name(a - NNATIVE); }
@@ -231,6 +250,7 @@ static const char *app_short(int a)
 { return a == EX_RUNNER ? "Runner" : a == EX_BROWSER ? "Browser"
        : a == EX_SSH ? "SSH"
        : a == EX_STUDIO ? "Studio" : a == EX_PHOTOS ? "Photos"
+       : a == EX_UOWORD ? "UnoWord"
        : a == EX_USERAPP ? unoapp_user_title()
        : a == EX_PYAPP ? py_app_name()
        : a < NNATIVE ? kNativeShort[a] : unoapp_name(a - NNATIVE); }
@@ -243,6 +263,7 @@ static int app_hidden(int a)
     if (a == EX_PYAPP)   return !g_open[EX_PYAPP];
     if (a == EX_STUDIO)  return !g_studio_present;
     if (a == EX_PHOTOS)  return !g_photos_present;
+    if (a == EX_UOWORD)  return !g_uoword_present;
     return 0;
 }
 
@@ -263,6 +284,7 @@ static int app_icon(int a)
     if (a == EX_BROWSER) return PCI_BROWSER;
     if (a == EX_STUDIO)  return PCI_STUDIO;
     if (a == EX_PHOTOS)  return PCI_PHOTOS;
+    if (a == EX_UOWORD)  return PCI_GENERIC;
     if (a == EX_USERAPP) return PCI_GENERIC;
     if (a == EX_PYAPP)   return PCI_GENERIC;
     if (a >= 0 && a < NNATIVE) return kNativeIcon[a];
@@ -2029,6 +2051,14 @@ static void build_legacy(int a)
         unoui_add_label(&g_win[a], 8, 28, "This system ships without the viewer.");
         return;
     }
+    if (a == EX_UOWORD) {              /* the word processor fills its window */
+        uoword_ensure();
+        if (g_uoword) { g_uoword->build(&g_win[a]); return; }
+        unoui_window_init(&g_win[a], "UnoWord", 60, 40, 320, 90);
+        unoui_add_label(&g_win[a], 8, 10, "APPS\\UOWORD.UNO is missing");
+        unoui_add_label(&g_win[a], 8, 28, "This system ships without the word processor.");
+        return;
+    }
     if (a == EX_STUDIO) {              /* the IDE module fills its own window */
         studio_ensure();
         if (g_studio) { g_studio->build(&g_win[a]); return; }
@@ -2103,6 +2133,7 @@ static void open_app(int a)
         else if (a == EX_SSH)       pc64_sshapp_open();          /* ssh client    */
         else if (a == EX_STUDIO)    { if (g_studio && g_studio->opened) g_studio->opened(); }
         else if (a == EX_PHOTOS)    { if (g_photos && g_photos->opened) g_photos->opened(); }
+        else if (a == EX_UOWORD)    { if (g_uoword && g_uoword->opened) g_uoword->opened(); }
         else if (a == EX_PYAPP)     { if (g_pyapp && g_pyapp->opened) g_pyapp->opened(); }
         else if (a == EX_USERAPP)   { }                          /* run() opened it */
         else if (app_is_bridge(a))  unoapp_open(a - NNATIVE);    /* bridge app    */
@@ -2123,6 +2154,8 @@ static void open_app(int a)
     if (a == APP_FILES) { int wi = pc64_files_canvas_index(); if (wi >= 0) UI.focus_wi = wi; }
     if (a == EX_STUDIO && g_studio && g_studio->canvas_index)
         { int wi = g_studio->canvas_index(); if (wi >= 0) UI.focus_wi = wi; }
+    if (a == EX_UOWORD && g_uoword && g_uoword->canvas_index)
+        return g_uoword->canvas_index();
     if (a == EX_PHOTOS && g_photos && g_photos->canvas_index)
         { int wi = g_photos->canvas_index(); if (wi >= 0) UI.focus_wi = wi; }
     if (a == EX_PYAPP && g_pyapp && g_pyapp->canvas_index)
@@ -4549,6 +4582,7 @@ int main(void)
     unoapp_setup(&g_dirty);             /* wire the legacy-app KernelApi */
     g_studio_present = uno_mod_present("STUDIO.UNO");   /* IDE shipped here? */
     g_photos_present = uno_mod_present("PHOTOS.UNO");   /* viewer shipped?   */
+    g_uoword_present = uno_mod_present("UOWORD.UNO");   /* UnoWord shipped?  */
     uno_font_set_subpixel(1);           /* subpixel AA for the outline faces  */
     /* Default to the bundled Chicago-style bitmap face (slot 0). It renders at
      * its native px with AA off (crisp 1:1 pixels). If its TTF can't be loaded

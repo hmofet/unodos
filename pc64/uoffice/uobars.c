@@ -244,7 +244,7 @@ static void as_balloon_rect(const uob_assist *a, int *x, int *y, int *w, int *h)
     *x = a->x + AS_W / 2 - *w / 2;
     *y = a->y - *h - 6;
     if (*x < 2) *x = 2;
-    if (*x + *w > FB_W - 2) *x = FB_W - 2 - *w;
+    if (*x + *w > fb_width() - 2) *x = fb_width() - 2 - *w;
     if (*y < 2) *y = a->y + AS_H + 6;
 }
 

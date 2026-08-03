@@ -514,6 +514,42 @@ if [ "$1" != "legacy" ]; then
         fi
     fi
 
+    # ---- UOWORD.UNO: the word processor, a unoui-CLASS module --------------
+    # UnoWord plus the WHOLE uoffice chrome lane (command bars, dialogs,
+    # ruler/status/Assistant, the file dialog, the document model and page
+    # layout) and unodoc's Word half, statically linked into the module -
+    # the PHOTOS pattern.  The kernel gains no document code at all.
+    if [ "${UNO_UOWORD:-1}" != "0" ]; then
+        echo "[3d2] building UOWORD.UNO (the word processor)..."
+        WOBJ="build/apps/uoword.o"
+        # -mno-stack-arg-probe: unodoc's .doc reader keeps the 4 KB FIB on
+        # the stack, and mingw emits ___chkstk_ms for any frame past 4 KB.
+        # That probe walks Windows' guard page - a mechanism this OS does
+        # not have and cannot provide - so it is a host artifact rather
+        # than a safety net, and a freestanding module must not import it.
+        UWCF="$UCF -mno-stack-arg-probe -I../unoui -Iuoffice -I../unodoc"
+        pc "$CC" $UWCF -DUNO_APP_SYM=uno_app_main               -c -o "build/apps/uoword.o" "apps/uoword.c"
+        for b in uochrome uoicons uodlg uobars uofile uow_doc uow_layout; do
+            pc "$CC" $UWCF -c -o "build/apps/uo_$b.o" "uoffice/$b.c"
+            WOBJ="$WOBJ build/apps/uo_$b.o"
+        done
+        for b in unodoc ud_cfb ud_doc ud_docw; do
+            pc "$CC" $UWCF -c -o "build/apps/ud_$b.o" "../unodoc/$b.c"
+            WOBJ="$WOBJ build/apps/ud_$b.o"
+        done
+        pcwait                 # barrier: all UOWORD objects before the nm/link
+        "$NM" $WOBJ | awk '$1=="U"&&$2!=""{u[$2]=1}             $1!="U"&&NF>=3{d[$3]=1}             END{for(s in u) if(!(s in d)) print s}'             | sort -u > build/apps/uoword.syms
+        while read -r s; do
+            [ -z "$s" ] && continue
+            grep -qx "$s" build/apps/kexports.txt || {
+                echo "FAIL: UOWORD imports '$s' which pc64_modload.c does not export"; exit 1; }
+        done < build/apps/uoword.syms
+        "$PY" tools/mkuno.py thunks "build/apps/uoword.syms" "build/apps/uoword_thunks.s"
+        "$CC" -c -o "build/apps/uoword_thunks.o" "build/apps/uoword_thunks.s"
+        "$CC" -shared -nostdlib -e uno_app_main -Wl,--exclude-all-symbols             -o "build/apps/uoword.dll" $WOBJ "build/apps/uoword_thunks.o"
+        "$PY" tools/mkuno.py convert "build/apps/uoword.dll" "build/esp/APPS/UOWORD.UNO" 1
+    fi
+
     # ---- DUUM.UNO: the Python Doom engine (a PYAPP; needs PYRT + a WAD) -----
     # Duum is a Python app, so it packages like any .py (source -> PYAPP
     # container).  The WAD is developer-supplied game data, never committed

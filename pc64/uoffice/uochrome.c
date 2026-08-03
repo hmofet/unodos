@@ -320,11 +320,11 @@ static void popup_rect(const uoc_ui *u, int level, int *rx, int *ry,
         pit = level_items(u, level - 1, &pn);
         y = py + popup_item_y(k, pit, pn, u->path[level - 1]);
         x = px + pw - POPUP_BORDER;
-        if (x + w > FB_W) x = px - w + POPUP_BORDER;   /* flip to the left */
+        if (x + w > fb_width()) x = px - w + POPUP_BORDER;   /* flip to the left */
     }
-    if (x + w > FB_W) x = FB_W - w;
+    if (x + w > fb_width()) x = fb_width() - w;
     if (x < 0) x = 0;
-    if (y + h > FB_H) y = FB_H - h;
+    if (y + h > fb_height()) y = fb_height() - h;
     if (y < 0) y = 0;
     *rx = x; *ry = y; *rw = w; *rh = h;
 }
@@ -556,7 +556,7 @@ static void combo_rect(const uoc_ui *u, int bar, int idx,
     *ry = y + h;
     *rw = w - k->pad;
     *rh = rows * (fb_text_h() + 2) + 2;
-    if (*ry + *rh > FB_H) *ry = y - *rh;
+    if (*ry + *rh > fb_height()) *ry = y - *rh;
 }
 static int combo_hit(const uoc_ui *u, int mx, int my)
 {
@@ -585,8 +585,8 @@ static void pal_rect(const uoc_ui *u, int bar, int idx,
     pal_size(k, p, rw, rh);
     *rx = x;
     *ry = y + h;
-    if (*rx + *rw > FB_W) *rx = FB_W - *rw;
-    if (*ry + *rh > FB_H) *ry = y - *rh;
+    if (*rx + *rw > fb_width()) *rx = fb_width() - *rw;
+    if (*ry + *rh > fb_height()) *ry = y - *rh;
 }
 static int pal_hit_at(const uoc_look *k, const uoc_palette *p,
                       int px, int py, int mx, int my)
@@ -905,7 +905,7 @@ static void paint_tip(const uoc_ui *u)
     tw = fb_text_w(b->tip) + 6;
     x += w / 2;
     y += h + 2;
-    if (x + tw > FB_W) x = FB_W - tw;
+    if (x + tw > fb_width()) x = fb_width() - tw;
     fb_fill_rect(x, y, tw, fb_text_h() + 4, k->tip_bg);
     fb_frame_rect(x, y, tw, fb_text_h() + 4, k->dkshadow);
     fb_text(x + 3, y + 2, b->tip, k->text, -1);
