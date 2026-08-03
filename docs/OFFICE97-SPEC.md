@@ -581,6 +581,17 @@ coverage in the gate. Unknown names are rejected with `#NAME?`, exactly as
 
 ## 4. PowerPoint 97 (S-UOS)
 
+`pc64/uoffice/uos_geom.c` + `uos_model.c` + `uos_render.c` +
+`pc64/apps/uoshow.c`, phases 11-12, 2026-08-03. Gated by
+`pc64/uoffice/build.sh` (66 checks over the geometry, the pooled store, the
+renderer's pixels, render-twice determinism, scale invariance and clipping)
+and by `pc64/tools/uoshow_urc.py`, which drives the app on a booted machine.
+
+**Read this section as an early build.** The four views, the AutoLayouts, the
+colour schemes and a full-screen show with transitions exist; most of what
+follows does not, and the prose says how far each line goes rather than the
+box being ticked.
+
 ### S-UOS-01 Menus — 9 menus per the normative trees
 - [ ] File (incl. Pack and Go `[C]`, Send To ▸ Word `[C]`) · Edit (incl.
   Duplicate Ctrl+D, Delete Slide) · View (**Slide / Outline / Slide
@@ -647,11 +658,19 @@ coverage in the gate. Unknown names are rejected with `#NAME?`, exactly as
 - [ ] **Set Up Show: speaker full-screen / individual window `[C]` /
   kiosk loop; loop until Esc; without narration/animation; slide
   range; advance manual vs timings; pen color**
-- [ ] **Transitions v1 `[F]`: No Transition, Cut, Cut Through Black,
+- [ ] **Transitions v1: No Transition, Cut, Cut Through Black,
   Dissolve, Fade Through Black, Wipe ×4, Blinds H/V, Box In/Out,
   Checkerboard ×2, Random Bars H/V, Cover ×8, Uncover ×8, Split ×4,
   Strips ×4, Random — with Slow/Medium/Fast and the dialog's preview
-  picture; per-slide sound `[C]`; advance on click / after N sec**
+  picture; per-slide sound `[C]`; advance on click / after N sec** —
+  **19 are live**: No Transition, Cut, Cut Through Black, Wipe ×4, Box
+  In/Out, Split H/V, Cover ×4 and Blinds / Random Bars H/V, picked from the
+  Slide Transition dialog and advanced on click. There is no second
+  framebuffer on this machine, so a transition draws the outgoing slide and
+  then the incoming one through a moving window; **Dissolve, Checkerboard,
+  Fade Through Black and Strips need a per-cell mask over the whole slide**
+  (192 renders a frame) and are absent rather than approximated by something
+  that stutters. Speeds, the preview picture and timed advance are not there
 - [ ] **Builds (Custom Animation) v1 `[F]`: Appear, Fly From ×8, Peek
   ×4, Wipe ×4, Blinds, Box, Checkerboard, Dissolve, Random Bars,
   Split, Strips, Zoom family `[C]`, Spiral `[C]`, Swivel `[C]`,
@@ -666,7 +685,9 @@ coverage in the gate. Unknown names are rejected with `#NAME?`, exactly as
   Previous/First/Last/Last Viewed/End Show/Slide…/URL `[C]`/Custom
   Show `[C]`; Run program `[X]`; Play sound `[C]`; Highlight click**;
   Action Buttons 12-palette
-- [ ] **In-show: click/Space/arrows/PgUp-PgDn advance; right-click menu
+- [ ] **In-show: click/Space/arrows/PgUp-PgDn advance** — live and
+  full-screen, with `B` for a black screen, Esc to end and hidden slides
+  skipped. The rest of this line is not there: **right-click menu
   (Next, Previous, Go ▸ Slide Navigator / By Title, Meeting Minder
   `[C]`, Speaker Notes, Pen, Pointer Options, Screen ▸ Pause/Black/
   Erase Pen, End Show); pen drawing Ctrl+P, erased on slide change;

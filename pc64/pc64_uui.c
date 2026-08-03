@@ -78,7 +78,7 @@ static const char *kThemeNames[NTHEMES];
  * index a-NNATIVE. */
 enum { APP_CTRL, APP_EDIT, APP_FILES, APP_SYS, APP_CLOCK, APP_SETUP,
        APP_MUSIC, APP_UNOAMP, NNATIVE };
-#define NEXTRA 9                          /* extra native apps beyond the bridge */
+#define NEXTRA 10                         /* extra native apps beyond the bridge */
 #define EX_RUNNER  (NNATIVE + UNOAPP_COUNT)       /* Runner3D: shell app index    */
 #define EX_BROWSER (NNATIVE + UNOAPP_COUNT + 1)   /* Browser: shell app index     */
 #define EX_STUDIO  (NNATIVE + UNOAPP_COUNT + 2)   /* Studio IDE (a .UNO module)   */
@@ -88,6 +88,7 @@ enum { APP_CTRL, APP_EDIT, APP_FILES, APP_SYS, APP_CLOCK, APP_SETUP,
 #define EX_SSH     (NNATIVE + UNOAPP_COUNT + 6)   /* SSH client (native canvas)   */
 #define EX_UOWORD  (NNATIVE + UNOAPP_COUNT + 7)   /* UnoWord (a .UNO module)      */
 #define EX_UOCALC  (NNATIVE + UNOAPP_COUNT + 8)   /* UnoCalc (a .UNO module)      */
+#define EX_UOSHOW  (NNATIVE + UNOAPP_COUNT + 9)   /* UnoShow (a .UNO module)      */
 #define NAPPS  (NNATIVE + UNOAPP_COUNT + NEXTRA)
 #define APP_TBAR 18                       /* legacy apps' own title-bar height */
 static const char *kAppNames[NNATIVE] =
@@ -235,6 +236,19 @@ static void uoword_ensure(void)
     }
 }
 
+static const UnoUuiApp *g_uoshow;
+static int  g_uoshow_tried, g_uoshow_present;
+static void uoshow_ensure(void)
+{
+    if (g_uoshow || g_uoshow_tried) return;
+    g_uoshow_tried = 1;
+    {
+        UnoUuiEntry e = uno_mod_load_uui("UOSHOW.UNO");
+        if (e) g_uoshow = e(0);
+        if (g_uoshow && g_uoshow->abi != UNO_UUIAPP_ABI) g_uoshow = 0;
+    }
+}
+
 static const UnoUuiApp *g_uocalc;
 static int  g_uocalc_tried, g_uocalc_present;
 static void uocalc_ensure(void)
@@ -259,6 +273,7 @@ static const char *app_name(int a)
        : a == EX_STUDIO ? "Studio" : a == EX_PHOTOS ? "Photos"
        : a == EX_UOWORD ? "UnoWord"
        : a == EX_UOCALC ? "UnoCalc"
+       : a == EX_UOSHOW ? "UnoShow"
        : a == EX_USERAPP ? unoapp_user_title()
        : a == EX_PYAPP ? py_app_name()
        : a < NNATIVE ? kAppNames[a] : unoapp_name(a - NNATIVE); }
@@ -268,6 +283,7 @@ static const char *app_short(int a)
        : a == EX_STUDIO ? "Studio" : a == EX_PHOTOS ? "Photos"
        : a == EX_UOWORD ? "UnoWord"
        : a == EX_UOCALC ? "UnoCalc"
+       : a == EX_UOSHOW ? "UnoShow"
        : a == EX_USERAPP ? unoapp_user_title()
        : a == EX_PYAPP ? py_app_name()
        : a < NNATIVE ? kNativeShort[a] : unoapp_name(a - NNATIVE); }
@@ -282,6 +298,7 @@ static int app_hidden(int a)
     if (a == EX_PHOTOS)  return !g_photos_present;
     if (a == EX_UOWORD)  return !g_uoword_present;
     if (a == EX_UOCALC)  return !g_uocalc_present;
+    if (a == EX_UOSHOW)  return !g_uoshow_present;
     return 0;
 }
 
@@ -304,6 +321,7 @@ static int app_icon(int a)
     if (a == EX_PHOTOS)  return PCI_PHOTOS;
     if (a == EX_UOWORD)  return PCI_GENERIC;
     if (a == EX_UOCALC)  return PCI_GENERIC;
+    if (a == EX_UOSHOW)  return PCI_GENERIC;
     if (a == EX_USERAPP) return PCI_GENERIC;
     if (a == EX_PYAPP)   return PCI_GENERIC;
     if (a >= 0 && a < NNATIVE) return kNativeIcon[a];
@@ -2079,6 +2097,13 @@ static void build_legacy(int a)
         unoui_add_label(&g_win[a], 8, 28, "This system ships without the viewer.");
         return;
     }
+    if (a == EX_UOSHOW) {              /* the presentation app fills it too  */
+        uoshow_ensure();
+        if (g_uoshow) { g_uoshow->build(&g_win[a]); return; }
+        unoui_window_init(&g_win[a], "UnoShow", 60, 40, 320, 90);
+        unoui_add_label(&g_win[a], 8, 10, "APPS\\UOSHOW.UNO is missing");
+        return;
+    }
     if (a == EX_UOCALC) {              /* the spreadsheet fills its window   */
         uocalc_ensure();
         if (g_uocalc) { g_uocalc->build(&g_win[a]); return; }
@@ -2170,6 +2195,7 @@ static void open_app(int a)
         else if (a == EX_PHOTOS)    { if (g_photos && g_photos->opened) g_photos->opened(); }
         else if (a == EX_UOWORD)    { if (g_uoword && g_uoword->opened) g_uoword->opened(); }
         else if (a == EX_UOCALC)    { if (g_uocalc && g_uocalc->opened) g_uocalc->opened(); }
+        else if (a == EX_UOSHOW)    { if (g_uoshow && g_uoshow->opened) g_uoshow->opened(); }
         else if (a == EX_PYAPP)     { if (g_pyapp && g_pyapp->opened) g_pyapp->opened(); }
         else if (a == EX_USERAPP)   { }                          /* run() opened it */
         else if (app_is_bridge(a))  unoapp_open(a - NNATIVE);    /* bridge app    */
@@ -2190,6 +2216,8 @@ static void open_app(int a)
     if (a == APP_FILES) { int wi = pc64_files_canvas_index(); if (wi >= 0) UI.focus_wi = wi; }
     if (a == EX_STUDIO && g_studio && g_studio->canvas_index)
         { int wi = g_studio->canvas_index(); if (wi >= 0) UI.focus_wi = wi; }
+    if (a == EX_UOSHOW && g_uoshow && g_uoshow->canvas_index)
+        return g_uoshow->canvas_index();
     if (a == EX_UOCALC && g_uocalc && g_uocalc->canvas_index)
         return g_uocalc->canvas_index();
     if (a == EX_UOWORD && g_uoword && g_uoword->canvas_index)
@@ -3538,6 +3566,21 @@ void pc64_shell_dirty(void) { g_dirty = 1; }
 int  pc64_shell_workarea_w(void) { return FB_W; }
 int  pc64_shell_workarea_h(void) { return FB_H - TASKH; }
 
+/* Full-screen, for a module that has a full-screen MODE rather than a
+ * full-screen app: UnoShow's slide show is the case.  unoui_fullscreen()
+ * itself cannot be exported because it takes the shell's own `UI`, which a
+ * module has no way to name - so the service takes a window and does the
+ * lookup here, exactly as pc64_shell_focus_window does.  Passing 0 leaves
+ * full-screen, which is also what Esc does at the shell level, so a show
+ * that ends either way ends the same way. */
+void pc64_shell_fullscreen(unoui_window *w)
+{
+    if (w) { unoui_fullscreen(&UI, w); pc64_shell_focus_window(w); }
+    else   { unoui_fullscreen(&UI, 0); UI.focus_wi = 0; }
+    g_dirty = 1;
+}
+int pc64_shell_is_fullscreen(void) { return UI.full != 0; }
+
 /* unoautomate PROBE accessors (unoauto_probe.c): enumerate the open windows.
  * Titles are string literals, so the returned pointer is stable.  Production
  * since 2026-08-03 (unoauto ships; see unoauto_gate.h) - reaching them over URC
@@ -3829,6 +3872,8 @@ static void on_action(const unoui_action *a)
         g_uoword->action(a)) return;            /* the UnoWord module         */
     if (g_uocalc && g_open[EX_UOCALC] && g_uocalc->action &&
         g_uocalc->action(a)) return;            /* the UnoCalc module         */
+    if (g_uoshow && g_open[EX_UOSHOW] && g_uoshow->action &&
+        g_uoshow->action(a)) return;            /* the UnoShow module         */
     if (g_pyapp && g_open[EX_PYAPP] && g_pyapp->action &&
         g_pyapp->action(a)) return;             /* the running Python app      */
     switch (a->id) {
@@ -4164,6 +4209,15 @@ static int pump_input(void)
             UI.focus_win >= 0 && UI.focus_win < UI.nwin &&
             UI.win[UI.focus_win] == &g_win[EX_UOCALC] && g_uocalc->key) {
             if (g_uocalc->key(uni, scan, ctrl)) { g_dirty = 1; continue; }
+        }
+        /* UnoShow's slide show runs FULL-SCREEN, so unlike the other two
+         * its key hook must be reachable with UI.full set - that is the
+         * whole point of the mode. */
+        if (!g_launch_open && g_uoshow && g_open[EX_UOSHOW] &&
+            (UI.full == &g_win[EX_UOSHOW] ||
+             (!UI.full && UI.focus_win >= 0 && UI.focus_win < UI.nwin &&
+              UI.win[UI.focus_win] == &g_win[EX_UOSHOW])) && g_uoshow->key) {
+            if (g_uoshow->key(uni, scan, ctrl)) { g_dirty = 1; continue; }
         }
         /* a focused Python app's accelerators */
         if (!g_launch_open && !UI.full && g_pyapp && g_open[EX_PYAPP] &&
@@ -4640,6 +4694,7 @@ int main(void)
     g_photos_present = uno_mod_present("PHOTOS.UNO");   /* viewer shipped?   */
     g_uoword_present = uno_mod_present("UOWORD.UNO");   /* UnoWord shipped?  */
     g_uocalc_present = uno_mod_present("UOCALC.UNO");   /* UnoCalc shipped?  */
+    g_uoshow_present = uno_mod_present("UOSHOW.UNO");   /* UnoShow shipped?  */
     uno_font_set_subpixel(1);           /* subpixel AA for the outline faces  */
     /* Default to the bundled Chicago-style bitmap face (slot 0). It renders at
      * its native px with AA off (crisp 1:1 pixels). If its TTF can't be loaded
@@ -4780,6 +4835,8 @@ int main(void)
             g_uoword->frame();          /* UnoWord: caret blink              */
         if (g_uocalc && g_open[EX_UOCALC] && g_uocalc->frame)
             g_uocalc->frame();          /* UnoCalc: per-frame tick           */
+        if (g_uoshow && g_open[EX_UOSHOW] && g_uoshow->frame)
+            g_uoshow->frame();          /* UnoShow: the transition clock     */
         if (g_pyapp && g_open[EX_PYAPP] && g_pyapp->frame)
             g_pyapp->frame();           /* the Python app's per-frame tick   */
         if (g_open[EX_USERAPP]) unoapp_user_tick();  /* the user's app clock */
