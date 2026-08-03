@@ -102,3 +102,6 @@ unoui/build/*_test
 # local Wi-Fi credentials / debug config (never commit - hold ssid+psk)
 DEBUG.CFG
 wifi.creds
+
+# uoffice host harness artifacts (regeneratable via pc64/uoffice/build.sh)
+pc64/uoffice/build/
