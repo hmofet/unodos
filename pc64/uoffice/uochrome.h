@@ -34,6 +34,14 @@
 #include "fb.h"
 #include "unoui.h"          /* the event contract only: unoui_event, UI_* */
 
+/* The screen extent, as FUNCTIONS.  pc64's FB_W/FB_H expand to the
+ * variables uno_fb_w/uno_fb_h, and a .UNO module can only import functions -
+ * the loader turns every undefined symbol into a jmp thunk.  So the whole
+ * lane calls these and never the macros; pc64 exports them, and the host
+ * harness gets them from uoffice/host_fbdim.c. */
+int fb_width(void);
+int fb_height(void);
+
 /* ---- the look, in one table -----------------------------------------------
  * Every colour and gap the chrome draws with, so the whole suite re-tunes
  * from one place once the pixel-check against a real Office 97 install

@@ -170,6 +170,8 @@ static const struct { const char *name; void *addr; } kExports[] = {
     KX(uno_fs_write), KX(uno_fs_writable), KX(uno_fs_kind), KX(uno_fs_fat_index),
     KX(devmgr_list_str), KX(devmgr_count), KX(devmgr_info), KX(devmgr_driver_name),
     KX(uno_fs_mkdir),
+    /* appended for UOWORD (the Office file dialog browses volumes) */
+    KX(uno_fs_isdir),
     KX(uno_fat_list_ex), KX(uno_fat_read), KX(uno_fat_read_at), KX(uno_fat_size),
     KX(uno_fat_write), KX(uno_fat_delete), KX(uno_fat_mkdir), KX(uno_fat_rename),
     /* memory */
