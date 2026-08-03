@@ -293,6 +293,13 @@ int  uno_pc64_next_key(int *scan, int *uni, int *ctrl);  /* raw key stream (unou
 int  uno_pc64_next_key2(int *scan, int *uni, int *mods);
 int  uno_pc64_mods(void);
 void uno_pc64_mouse(int *x, int *y, int *btn);           /* fb-space mouse + button */
+/* Synthetic-input lockout.  While set, uno_pc64_inject_key/_pointer DROP their
+ * event, so no automation - local script or remote URC link - can drive the
+ * security UI; only a real keyboard and mouse can.  pc64_accounts.c sets it when
+ * a dialog opens; the shell's frame loop clears it every frame, which is the
+ * only place that can run once the dialog has returned.  See uefi_main.c. */
+void uno_pc64_input_lock(int on);
+int  uno_pc64_input_locked(void);
 int  uno_pc64_wheel(void);            /* wheel notches since last call (+ = down) */
 void uno_pc64_delay_ms(int ms);                          /* firmware Stall (idle pacing) */
 void uno_pc64_res_set(int idx);      /* Settings resolution (shell reuse) */

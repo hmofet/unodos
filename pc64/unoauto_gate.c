@@ -16,9 +16,11 @@
 /* freestanding libc + the 60 Hz monotonic clock (see unosecure.c's note) */
 void *memset(void *, int, unsigned long);
 long  TickCount(void);
-/* DEBUG.CFG reader - weak-stubbed for production in unoauto_compat.c, so the
+/* DEBUG.CFG reader - defined for production in unoauto_compat.c, so the
  * `urc-auth` opt-in below costs a production build nothing. */
 int   pc64_stress_cfg_flag(const char *key);
+/* set while the security UI is modal (uefi_main.c / pc64_accounts.c) */
+int   uno_pc64_input_locked(void);
 
 /* ---- state ---------------------------------------------------------------
  * All of it is boot-lifetime only: nothing here is persisted.  A token that
@@ -413,12 +415,31 @@ int unoauto_gate_verb(const char *verb, const char **why)
 {
     const GateRow *r;
     if (why) *why = 0;
+    r = gate_find(verb);
+
+    /* A security dialog is open at the console.  Refuse the DRIVE class rather
+     * than let it inject into a sheet that decides identity and authority - the
+     * injection is already dropped at the source (uefi_main.c), but answering
+     * "ok" to a click that silently went nowhere is worse than saying no.  READ
+     * verbs stay allowed on purpose: the operator should still be able to
+     * `screen` grab the dialog and see why the box stopped responding, and the
+     * SYSTEM class keeps `reboot` available as the escape hatch from a dialog
+     * nobody is there to close.
+     *
+     * ABOVE the auth_forced() gate deliberately: this is UI safety, not
+     * authorization, so it applies in a debug build too.  Metal-caught on the
+     * ZimaBlade 2026-08-03 with the check below it - the injection was dropped
+     * correctly but `launch` still answered "launched", which is a lie. */
+    if (r && (r->power & UNOAUTO_P_DRIVE) && uno_pc64_input_locked()) {
+        if (why) *why = "refused (a security dialog is open at the console)";
+        return 0;
+    }
+
     if (!auth_forced()) return 1;                /* debug harness: transparent */
 
     if (!g_armed)  { if (why) *why = "not-armed";        return 0; }
     if (!g_authed) { if (why) *why = "auth-required";    return 0; }
 
-    r = gate_find(verb);
     if (!r)        { if (why) *why = "unknown-verb";     return 0; }
     if (!r->power) return 1;                     /* ungated handshake verb */
 

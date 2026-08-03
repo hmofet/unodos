@@ -4764,6 +4764,11 @@ int main(void)
          * means until a console user arms it through unoauto_gate.h - so an
          * unarmed machine pays three predicted branches per frame and nothing
          * else. */
+        /* Clear the security UI's synthetic-input lockout.  Reaching this line
+         * means no dialog is modal (they run their own loop and never return
+         * here until closed), so this is the one place that can clear it
+         * without every dialog exit path having to remember to. */
+        uno_pc64_input_lock(0);
         unoauto_gate_tick();            /* revalidate the arming session       */
         unoauto_remote_tick();          /* pump the dev-PC remote link         */
         uno_screen_capture_tick();      /* server-side screen record
