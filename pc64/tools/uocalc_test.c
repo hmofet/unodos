@@ -328,6 +328,54 @@ int main(void)
         }
     }
 
+    /* ---- the shared pools --------------------------------------------------
+     * The store keeps ONE cell pool and ONE token pool for the whole book
+     * (uocalc.h: per-sheet arrays made the module 104 MB against a 4 MB
+     * module arena).  Overwriting a formula leaks its tokens, so the pool
+     * fills and is REBUILT by recompiling every live formula.  Rewrite one
+     * cell far more times than the pool holds, then check that the book -
+     * this cell AND its untouched neighbours - still computes. */
+    {
+        int k;
+        uxl_val v;
+        uxl_book *pb = uxl_new();
+        uxl_set_num(pb, 0, 0, 0, 6);            /* A1 = 6                   */
+        uxl_set_num(pb, 0, 1, 0, 7);            /* A2 = 7                   */
+        uxl_set_formula(pb, 0, 2, 0, "=A1*A2");  /* A3, never touched again  */
+        for (k = 0; k < 4000; k++) {            /* >> UXL_RPNPOOL tokens    */
+            char f[64];
+            sprintf(f, "=A1+A2+%d", k);
+            uxl_set_formula(pb, 0, 3, 0, f);     /* A4, rewritten each time  */
+        }
+        uxl_recalc(pb);
+        g_checks++;
+        if (!uxl_get(pb, 0, 2, 0, &v) || v.kind != UXL_NUM || v.num != 42) {
+            char b1[160];
+            sprintf(b1, "A3 after %d rewrites is kind %d = %.10g, wanted 42",
+                    4000, v.kind, v.num);
+            fail("rpn pool rebuild", b1);
+        }
+        g_checks++;
+        if (!uxl_get(pb, 0, 3, 0, &v) || v.kind != UXL_NUM || v.num != 13 + 3999) {
+            char b1[160];
+            sprintf(b1, "A4 is kind %d = %.10g, wanted %d",
+                    v.kind, v.num, 13 + 3999);
+            fail("rpn pool rebuild", b1);
+        }
+        /* the cell pool recycles: fill it, clear it, fill it again */
+        for (k = 0; k < UXL_MAXCELL - 4; k++)
+            uxl_set_num(pb, 1, k, 0, k);
+        g_checks++;
+        if (uxl_count(pb, 1) != UXL_MAXCELL - 4)
+            fail("cell pool", "sheet 2 did not take its share of the pool");
+        for (k = 0; k < UXL_MAXCELL - 4; k++) uxl_clear(pb, 1, k, 0);
+        for (k = 0; k < UXL_MAXCELL - 4; k++) uxl_set_num(pb, 2, k, 0, k);
+        g_checks++;
+        if (uxl_count(pb, 2) != UXL_MAXCELL - 4)
+            fail("cell pool", "cleared cells were not returned to the pool");
+        printf("  shared cell + token pools: rebuild and recycle checked\n");
+    }
+
     printf(g_fail ? "\nuocalc gate: %d FAILURE(S) in %d checks\n"
                   : "\nuocalc gate: GREEN (%d checks)\n",
            g_fail ? g_fail : g_checks, g_checks);

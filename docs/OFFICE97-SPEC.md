@@ -362,6 +362,17 @@ including separators and submenus; deltas get called out here:
 
 ## 3. Excel 97 (S-UOC)
 
+`pc64/uoffice/uxl_sheet.c` + `uxl_calc.c` + `uxl_numfmt.c` +
+`pc64/apps/uocalc.c`, phases 9-10, 2026-08-03. Gated by
+`pc64/uoffice/build.sh` (110 checks: 56 scalar formulas, 22 range formulas,
+14 number formats, the A1 round-trip, the recalc chain, circular detection
+and the shared pools) and by `pc64/tools/uocalc_urc.py`, which drives the
+app on a booted machine with injected clicks and keys.
+
+**Read this section as an early build.** The workspace exists and computes;
+almost nothing below is at `[F]` yet, and where a line is partially met the
+prose says exactly how far it goes rather than the box being ticked.
+
 ### S-UOC-01 Menus — 9 menus per the normative trees
 - [ ] File (incl. Save Workspace `[C]`, Print Area ▸) · Edit (incl. Fill ▸
   Down/Right/Up/Left/Series/Justify, Clear ▸ All/Formats/Contents/
@@ -393,18 +404,30 @@ including separators and submenus; deltas get called out here:
 ### S-UOC-03 Workspace anatomy
 - [ ] **Formula bar: Name Box (ref display, names dropdown, type-to-
   define) · Cancel ✗ · Enter ✓ · Edit Formula (=) opening the Formula
-  Palette with inline argument help**
+  Palette with inline argument help** — the bar and the Name Box are
+  present and the box tracks the selection; the formula field shows the
+  cell's SOURCE text (not its result) as Excel does. The dropdown, the
+  two buttons and the Formula Palette are not
 - [ ] **In-cell editing; Range Finder (formula references color-coded
   with draggable matching borders); formula-view toggle Ctrl+`**
 - [ ] **Fill handle (black square): drag series, right-drag menu,
   double-click fill-down; custom lists; AutoComplete; Pick From List**
 - [ ] **Sheet tabs + scroll buttons; rename by double-click; drag
-  reorder, Ctrl-drag copy; tab context menu; default 3 sheets**
+  reorder, Ctrl-drag copy; tab context menu; default 3 sheets** — the tab
+  strip is drawn, clickable and defaults to Sheet1/2/3; renaming,
+  reordering and the context menu are not
 - [ ] **Grid: 65,536 rows × 256 columns (A-IV); Select All corner;
-  marching-ants copy marquee; heavy selection border + interior tint**
+  marching-ants copy marquee; heavy selection border + interior tint** —
+  the addressable grid IS 65536 x 256 and the store is sparse over it; the
+  painter virtualises over the visible rectangle only. The heavy selection
+  border is there; the Select All corner and the marquee are not. Live
+  cells are capped at `UXL_MAXCELL` per workbook, which is a memory budget
+  (the module arena is 4 MB), not a model limit
 - [ ] **Status bar: mode (Ready/Enter/Edit/Point) · AutoCalculate well
   (right-click: Average/Count/Count Nums/Max/Min/Sum) · CAPS NUM SCRL
-  END FIX OVR CIRC cells**
+  END FIX OVR CIRC cells** — the bar, the reference cell and the
+  AutoCalculate well (Sum over the selection) are live; the well's
+  right-click function menu and the mode indicators are not
 - [ ] **Freeze Panes (thin line) vs Split (thick bars); split boxes on
   the scrollbars**
 - [ ] Cell context menu (Cut/Copy/Paste/Paste Special/Insert/Delete/
@@ -412,16 +435,25 @@ including separators and submenus; deltas get called out here:
   header menus with Height/Width/Hide/Unhide
 
 ### S-UOC-04 Cell model and formatting
-- [ ] Types: IEEE double, text, bool, errors (#DIV/0! #N/A #NAME? #NULL!
+- [F] Types: IEEE double, text, bool, errors (#DIV/0! #N/A #NAME? #NULL!
   #NUM! #REF! #VALUE!); dates as serials, **1900 (with the Lotus
-  leap-year bug, faithfully) and 1904 systems**
+  leap-year bug, faithfully)** — every type and every one of the seven
+  errors, and the 1900 system reproduces the leap-year bug, because a
+  serial that disagrees with Excel's is worse than no date at all. The
+  1904 system is `[ ]`
 - [ ] **Format Cells 6 tabs: Number (General, Number, Currency,
   Accounting, Date, Time, Percentage, Fraction, Scientific, Text,
   Special, Custom with the FULL format-code language incl. sections,
   colors, conditions); Alignment (horizontal incl. Fill/Justify/Center
   Across, vertical, orientation dial -90..+90 + vertical stack, indent,
   wrap, shrink-to-fit, merge); Font; Border (13 styles, diagonals
-  *(verify)*); Patterns (56-color palette); Protection `[C]`**
+  *(verify)*); Patterns (56-color palette); Protection `[C]`** — the
+  format-code LANGUAGE of the Number tab is implemented (`uxl_numfmt.c`:
+  General, 0/#/? digit places, thousands separators, percent, currency,
+  fractions, scientific, date and time codes, and up to four
+  positive;negative;zero;text sections), and the Format menu applies
+  Currency / Percent / Comma / more-and-fewer decimals to the selection.
+  The DIALOG itself and the other five tabs are not there
 - [ ] **Conditional formatting: up to 3 conditions, Cell Value Is /
   Formula Is, font/border/pattern results**
 - [ ] AutoFormat (17 named table formats); named cell styles (Normal,
@@ -434,7 +466,12 @@ including separators and submenus; deltas get called out here:
   option; 3-D refs `Sheet1:Sheet3!A1`; external refs `[C]` v1; array
   formulas (Ctrl+Shift+Enter); natural-language labels `[C]`
 - [ ] **Recalc: automatic/manual, iteration settings, circular detection
-  + CIRC indicator; dependency-driven partial recalc**
+  + CIRC indicator; dependency-driven partial recalc** — recalculation is
+  automatic and dependency-driven (memoised depth-first over a generation
+  counter, so each cell evaluates once per pass and only what a formula
+  reaches is walked), and a circular reference is DETECTED and reported
+  rather than hung on. Manual mode, iteration settings and the CIRC
+  status cell are not there
 - [ ] **Paste Function dialog (categories + MRU) and the Formula
   Palette; AutoSum; Formula AutoCorrect `[C]`**
 - [ ] Names: Define/Create/Paste/Apply; Go To Special (blanks,
@@ -455,6 +492,10 @@ fixture coverage. ATP functions behave as "add-in installed".
 - [ ] **Date/Time (14)**: DATE DATEVALUE DAY DAYS360 HOUR MINUTE MONTH
   NOW SECOND TIME TIMEVALUE TODAY WEEKDAY YEAR; ATP (6): EDATE EOMONTH
   NETWORKDAYS WEEKNUM WORKDAY YEARFRAC
+**Implemented so far: 73 of these names**, across Math/Trig, Statistical,
+Text, Logical, Lookup, Information and Date/Time, each with fixture
+coverage in the gate. Unknown names are rejected with `#NAME?`, exactly as
+97 would, so what is missing fails honestly rather than silently.
 - [ ] **Math/Trig (51)**: ABS ACOS ACOSH ASIN ASINH ATAN ATAN2 ATANH
   CEILING COMBIN COS COSH COUNTIF DEGREES EVEN EXP FACT FLOOR INT LN LOG
   LOG10 MDETERM MINVERSE MMULT MOD ODD PI POWER PRODUCT RADIANS RAND

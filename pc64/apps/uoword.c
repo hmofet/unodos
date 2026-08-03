@@ -601,7 +601,7 @@ static void app_draw(struct unoui_widget *w, unoui_rect r, void *ctx)
     sync_toggles();
 
     CH.x = r.x; CH.y = r.y; CH.w = r.w; CH.h = r.h;
-    uoc_render(&CH);
+    uoc_render_bars(&CH);
     top = r.y + uoc_height(&CH);
     if (g_showruler) {
         uob_ruler_render(&RU, r.x, top, r.w);
@@ -612,6 +612,7 @@ static void app_draw(struct unoui_widget *w, unoui_rect r, void *ctx)
     if (chh < 16) chh = 16;
     draw_doc(cx, cy, cw, chh);
     uob_status_render(&ST, r.x, r.y + r.h - uob_status_h(), r.w);
+    uoc_render_popups(&CH);          /* an open menu goes OVER the page */
     if (g_dlg_kind) uod_render(&DL);
 }
 

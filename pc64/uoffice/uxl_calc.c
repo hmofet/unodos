@@ -512,8 +512,7 @@ int uxl_set_formula(uxl_book *b, int s, int r, int c, const char *text)
     p = uxl_slot(b, s, r, c, 1);
     if (!p) return 0;
     c_cpy(p->fml, text, UXL_FMLLEN);
-    { int i; for (i = 0; i < n; i++) p->rpn[i] = rpn[i]; }
-    p->nrpn = (short)n;
+    if (!uxl_rpn_store(b, p, rpn, n)) return 0;
     p->v.kind = UXL_EMPTY;
     b->rev++; b->dirty = 1;
     return 1;
@@ -1207,7 +1206,7 @@ static int eval_cell(uxl_book *b, int s, int r, int c, uxl_val *out)
     if (!b || s < 0 || s >= b->nsheet) { out->kind = UXL_ERR; out->err = UXL_E_REF; return 0; }
     i = uxl_find(b, s, r, c);
     if (i < 0) return 1;                      /* empty is not an error      */
-    p = &b->sheet[s].cell[i];
+    p = uxl_nth(b, s, i);
     if (!p->nrpn) { *out = p->v; return 1; }
     if (p->mark == 1) {                       /* already computing: circular */
         b->circular = 1;
@@ -1217,7 +1216,7 @@ static int eval_cell(uxl_book *b, int s, int r, int c, uxl_val *out)
     }
     if (p->mark == 2 && p->gen == b->gen) { *out = p->v; return 1; }
     p->mark = 1;
-    run_rpn(b, p->rpn, p->nrpn, s, &p->v);
+    run_rpn(b, &b->rpn[p->rpn_at], p->nrpn, s, &p->v);
     p->mark = 2;
     p->gen = b->gen;
     *out = p->v;
@@ -1231,13 +1230,12 @@ int uxl_recalc(uxl_book *b)
     b->gen++;
     b->circular = 0;
     for (s = 0; s < b->nsheet; s++)
-        for (i = 0; i < b->sheet[s].ncell; i++) b->sheet[s].cell[i].mark = 0;
+        for (i = 0; i < b->sheet[s].ncell; i++) uxl_nth(b, s, i)->mark = 0;
     for (s = 0; s < b->nsheet; s++)
         for (i = 0; i < b->sheet[s].ncell; i++) {
+            uxl_cell *p = uxl_nth(b, s, i);
             uxl_val v;
-            if (b->sheet[s].cell[i].nrpn)
-                eval_cell(b, s, b->sheet[s].cell[i].row,
-                          b->sheet[s].cell[i].col, &v);
+            if (p->nrpn) eval_cell(b, s, p->row, p->col, &v);
         }
     b->dirty = 0;
     return !b->circular;

@@ -4930,3 +4930,40 @@ canvas-rect fix from the previous entry.
 because it aimed at y=40, which is the title bar - the menu band is at y=67
 on this screen. Take the screenshot first, read the coordinates off it, and
 do not compute them from the chrome's internals.
+
+
+## 2026-08-03 - UnoCalc (phases 9-10), and two traps for other lanes
+
+**Worker C, unoffice lane.** `APPS\UOCALC.UNO` is on the ESP and RUNS:
+`pc64/tools/uocalc_urc.py` types 6, 7 and `=A1*A2` into A1:A3, watches 42
+appear, clicks A3 and reads `=A1*A2` back out of the formula bar, opens the
+File and Format menus by mouse and dismisses an About box. Screenshots in
+`shots/uxl_*.png`.
+
+**Trap 1: read `mkuno`'s `mem=` line.** UnoCalc's first link printed
+`mem=104036K`. It compiled clean, passed 106 host-gate checks, and could
+never have loaded, because module BSS comes out of a **4 MB arena shared by
+every module** (`pc64_modload.c`, `MOD_ARENA_PAGES`). The cause was a
+per-sheet cell array whose cells each inlined 96 RPN tokens - 94% of the
+store, paid by every literal. One shared cell pool with per-sheet index
+arrays, plus a workbook-wide token pool, brought it to 656K, in line with
+UnoWord's 636K. Nothing else in the build reports that number, and no host
+gate can see it. **Anyone landing a .UNO module: read the line.**
+
+**Trap 2: a test that launches `app_count() - 1` does not fail when an app is
+added - it silently drives the new app.** `uoword_urc.py` spent a whole run
+exercising UnoCalc's menus and reporting success, because UnoCalc had taken
+the last slot. `urcui.py` now has **`launch_named("UnoWord")`**, which opens
+a slot, checks the title of the window that actually appeared (PROBE kind 1)
+and closes it again if it is the wrong one. Both scripts use it. Any harness
+that hardcodes a slot index should switch.
+
+**One shared-code change:** `uoc_render()` is now
+`uoc_render_bars()` + `uoc_render_popups()`, and an app whose content sits
+BELOW the chrome must paint bars, content, popups - in that order. Calling
+`uoc_render()` there paints the dropdown and then overpaints it: UnoCalc's
+File menu came out clipped to the toolbar band, and **UnoWord had the same
+bug**, unnoticed because a two-item File menu still looks like a menu.
+`uoc_render()` itself is unchanged for callers with nothing underneath.
+
+Prod + debug builds, all five host gates and the URC UI pass green.

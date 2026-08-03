@@ -41,10 +41,16 @@ const char *uxl_err_text(int err);        /* "#DIV/0!" etc.                 */
 
 /* ---- the workbook ---------------------------------------------------------- */
 #define UXL_MAXSHEET 8
-#define UXL_MAXCELL  4096          /* live cells per sheet                   */
-#define UXL_MAXSTR   2048
-#define UXL_STRLEN   64
-#define UXL_FMLLEN   128
+/* Live cells are drawn from ONE pool shared by every sheet, and each sheet
+ * keeps a sorted array of indices into it.  Per-sheet cell arrays looked
+ * tidier and cost UXL_MAXSHEET times the memory whether the sheets were used
+ * or not - at 4096 cells a sheet that was a 104 MB module, against a 4 MB
+ * module arena (pc64_modload.c MOD_ARENA_PAGES).  Sharing the pool means one
+ * sheet may hold all of it, which is also how people actually use a workbook. */
+#define UXL_MAXCELL  2048          /* live cells per WORKBOOK                */
+#define UXL_MAXSTR   768
+#define UXL_STRLEN   48
+#define UXL_FMLLEN   96
 #define UXL_MAXNAME  32            /* defined names                          */
 #define UXL_ROWS     65536         /* Excel 97's grid, and the reason        */
 #define UXL_COLS     256           /* the store has to be sparse             */

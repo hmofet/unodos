@@ -145,6 +145,30 @@ class UrcUi(object):
         self.link.command("launch", index, timeout=15)
         time.sleep(settle)
 
+    def windows(self):
+        """Titles of the windows currently open (PROBE kind 1)."""
+        return [r["name"] for r in self.link.probe(timeout=10) if r["kind"] == 1]
+
+    def launch_named(self, name, settle=4.0, tries=6):
+        """Open the app whose window is titled `name`, and PROVE it opened.
+
+        Slot indices shift the moment anyone adds an app, and a test that
+        launches app_count()-1 does not fail when that happens - it silently
+        drives the new app instead.  uoword_urc.py spent a run doing exactly
+        that to UnoCalc.  So search from the end, check the window that
+        actually appeared, and close anything else we opened on the way."""
+        n = self.app_count()
+        for i in range(n - 1, max(-1, n - 1 - tries), -1):
+            self.link.command("launch", i, timeout=15)
+            time.sleep(settle)
+            for t in self.windows():
+                if t.startswith(name):
+                    return i
+            self.link.command("close", timeout=10)
+            time.sleep(0.6)
+        raise SystemExit("no app slot opens a window titled %r "
+                         "(searched the last %d of %d)" % (name, tries, n))
+
     # ---- output ------------------------------------------------------------
     def shot(self, tag, scale=1):
         os.makedirs(SHOTS, exist_ok=True)
