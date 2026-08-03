@@ -434,6 +434,14 @@ prose says exactly how far it goes rather than the box being ticked.
   Clear Contents/Insert Comment/Format Cells/Pick From List/Hyperlink);
   header menus with Height/Width/Hide/Unhide
 
+**File I/O is live.** Open and Save read and write real BIFF8 `.xls` through
+unodoc: values by kind, the seven error values mapped rather than cast, and
+**formulas as text** - decompiled from the ptg array on the way in and
+recompiled on the way out, with the cached result carried alongside. Round-
+tripped on a booted machine by `pc64/tools/uofile_urc.py`. Not yet carried:
+number formats, fonts, colours, column widths, defined names, multiple
+sheets' formatting.
+
 ### S-UOC-04 Cell model and formatting
 - [F] Types: IEEE double, text, bool, errors (#DIV/0! #N/A #NAME? #NULL!
   #NUM! #REF! #VALUE!); dates as serials, **1900 (with the Lotus
@@ -628,6 +636,12 @@ box being ticked.
   Design) ·** view buttons lower-left
 - [ ] Ruler + center-zero slide coords; Guides (draggable, position
   readout, Ctrl-drag duplicates)
+
+**File I/O is live.** Open and Save read and write `.ppt` through unodoc. A
+slide is a title frame and a body frame with paragraph breaks, which is what
+unodoc's writer models, so **titles and body text round-trip and hand-drawn
+shapes do not**; everything reopens as a Bulleted List because the format
+layer carries no layout id. Round-tripped by `pc64/tools/uofile_urc.py`.
 
 ### S-UOS-03 Authoring
 - [ ] **24 AutoLayouts (the exact New Slide grid: Title Slide, Bulleted

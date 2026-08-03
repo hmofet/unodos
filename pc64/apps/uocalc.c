@@ -21,6 +21,7 @@
 #include "uobars.h"
 #include "uofile.h"
 #include "uocalc.h"
+#include "unodoc.h"
 #include "pc64_font.h"
 
 void  pc64_shell_dirty(void);
@@ -33,6 +34,9 @@ const char *uno_fs_volume_name(int vol);
 int   uno_fs_list_begin(int vol);
 int   uno_fs_list_get(int vol, int i, char *name, int cap);
 int   uno_fs_isdir(int vol, const char *name);
+long  uno_fs_read(int vol, const char *name, unsigned char *buf, long max);
+long  uno_fs_size(int vol, const char *name);
+int   uno_fs_write(int vol, const char *name, const unsigned char *buf, long len);
 
 enum {
     C_NEW = 1, C_OPEN, C_SAVE, C_EXIT,
@@ -57,7 +61,11 @@ static int  g_sel_r, g_sel_c;               /* the anchor of a range        */
 static int  g_top_r, g_left_c;              /* the scroll origin            */
 static int  g_editing;
 static char g_edit[128];
-static int  g_dlg;
+static int  g_dlg;                          /* DLG_* while one is up        */
+enum { DLG_NONE = 0, DLG_OPEN, DLG_SAVE, DLG_MSG };
+static char g_name[64];                     /* "" until saved or opened     */
+static unsigned char *g_io;                 /* the file buffer              */
+static long g_iolen;
 static char g_statl[64], g_statr[64];
 
 static void a_cpy(char *d, const char *s, int cap)
@@ -335,6 +343,157 @@ static void app_draw(struct unoui_widget *w, unoui_rect r, void *ctx)
     if (g_dlg) uod_render(&DL);
 }
 
+/* Excel's on-disk error codes and ours are two enumerations of the same
+ * seven values; neither may be cast to the other. */
+static int xls_err_to_uxl(int e)
+{
+    switch (e) {
+    case UD_XE_NULL:  return UXL_E_NULL;
+    case UD_XE_DIV0:  return UXL_E_DIV0;
+    case UD_XE_VALUE: return UXL_E_VALUE;
+    case UD_XE_REF:   return UXL_E_REF;
+    case UD_XE_NAME:  return UXL_E_NAME;
+    case UD_XE_NUM:   return UXL_E_NUM;
+    default:          return UXL_E_NA;
+    }
+}
+static int uxl_err_to_xls(int e)
+{
+    switch (e) {
+    case UXL_E_NULL:  return UD_XE_NULL;
+    case UXL_E_DIV0:  return UD_XE_DIV0;
+    case UXL_E_VALUE: return UD_XE_VALUE;
+    case UXL_E_REF:   return UD_XE_REF;
+    case UXL_E_NAME:  return UD_XE_NAME;
+    case UXL_E_NUM:   return UD_XE_NUM;
+    default:          return UD_XE_NA;
+    }
+}
+
+/* ---- .xls, in and out --------------------------------------------------------
+ * unodoc does the format; this is the mapping between its cell view and the
+ * workbook model, and it is deliberately symmetric - what save writes, open
+ * reads back.  A FORMULA round-trips as its TEXT (unodoc decompiles the ptg
+ * array on the way in and recompiles it on the way out), with the cached
+ * value carried alongside so a reader that does not calculate still shows
+ * the right number. */
+static long io_read(void *ctx, long off, void *dst, long n)
+{
+    long i;
+    unsigned char *d = (unsigned char *)dst;
+    (void)ctx;
+    if (off < 0 || off >= g_iolen) return 0;
+    if (off + n > g_iolen) n = g_iolen - off;
+    for (i = 0; i < n; i++) d[i] = g_io[off + i];
+    return n;
+}
+
+#define UOC_IOCAP (4L * 1024 * 1024)
+
+static int load_book(int vol, const char *name)
+{
+    ud_cfb *c;
+    ud_xls *x;
+    ud_src  src;
+    long sz;
+    int ok = 0;
+
+    ud_set_alloc(malloc, free);
+    sz = uno_fs_size(vol, name);
+    if (sz <= 0 || sz > UOC_IOCAP) return 0;
+    if (!g_io) g_io = (unsigned char *)malloc(UOC_IOCAP);
+    if (!g_io) return 0;
+    g_iolen = uno_fs_read(vol, name, g_io, sz);
+    if (g_iolen <= 0) return 0;
+
+    src.read = io_read; src.size = g_iolen; src.ctx = 0;
+    c = ud_cfb_open(&src);
+    if (!c) return 0;
+    x = ud_xls_open(c);
+    if (x) {
+        int ns = ud_xls_sheets(x), si;
+        BK = uxl_new();
+        for (si = 0; si < ns && si < UXL_MAXSHEET; si++) {
+            int n = ud_xls_cell_count(x, si), i, sh = si;
+            if (si >= uxl_sheets(BK)) sh = uxl_sheet_add(BK, ud_xls_sheet_name(x, si));
+            else                      sh = si;
+            if (sh < 0) break;
+            for (i = 0; i < n; i++) {
+                int row = 0, col = 0;
+                ud_xcell cv;
+                if (!ud_xls_cell_at(x, si, i, &row, &col, &cv)) continue;
+                if (cv.formula && cv.ftext && *cv.ftext &&
+                    uxl_set_formula(BK, sh, row, col, cv.ftext)) continue;
+                switch (cv.kind) {
+                case UD_XV_NUM:  uxl_set_num(BK, sh, row, col, cv.num); break;
+                case UD_XV_STR:  uxl_set_str(BK, sh, row, col, cv.str ? cv.str : ""); break;
+                case UD_XV_BOOL: uxl_set_bool(BK, sh, row, col, cv.num != 0); break;
+                case UD_XV_ERR:  uxl_set_err(BK, sh, row, col, xls_err_to_uxl(cv.err)); break;
+                default: break;
+                }
+            }
+        }
+        ud_xls_close(x);
+        uxl_recalc(BK);
+        ok = 1;
+    }
+    ud_cfb_close(c);
+    g_cur_r = g_cur_c = g_sel_r = g_sel_c = 0;
+    g_top_r = g_left_c = 0;
+    g_sheet = 0;
+    return ok;
+}
+
+static int save_book(int vol, const char *name)
+{
+    ud_xlsw *w;
+    unsigned char *out = 0;
+    long len = 0;
+    int ok = 0, ns, si;
+
+    if (!BK) return 0;
+    ud_set_alloc(malloc, free);
+    w = ud_xlsw_new();
+    if (!w) return 0;
+    ns = uxl_sheets(BK);
+    for (si = 0; si < ns; si++) {
+        int sh = ud_xlsw_sheet(w, uxl_sheet_name(BK, si));
+        int n = uxl_count(BK, si), i;
+        if (sh < 0) break;
+        for (i = 0; i < n; i++) {
+            int row = 0, col = 0;
+            uxl_val v;
+            const char *f;
+            if (!uxl_at(BK, si, i, &row, &col, &v)) continue;
+            f = uxl_formula(BK, si, row, col);
+            if (f && *f) {
+                ud_xcell cached;
+                cached.kind = UD_XV_NUM; cached.num = 0; cached.str = 0;
+                cached.err = 0; cached.xf = 0; cached.formula = 1; cached.ftext = 0;
+                if (v.kind == UXL_NUM || v.kind == UXL_BOOL) cached.num = v.num;
+                else if (v.kind == UXL_STR) {
+                    cached.kind = UD_XV_STR; cached.str = uxl_pool(BK, v.str);
+                }
+                if (ud_xlsw_formula(w, sh, row, col, f, &cached)) continue;
+                /* an expression unodoc's compiler refuses must not lose the
+                 * cell: fall through and write the value it produced */
+            }
+            switch (v.kind) {
+            case UXL_NUM:  ud_xlsw_num(w, sh, row, col, v.num); break;
+            case UXL_STR:  ud_xlsw_str(w, sh, row, col, uxl_pool(BK, v.str)); break;
+            case UXL_BOOL: ud_xlsw_bool(w, sh, row, col, v.num != 0); break;
+            case UXL_ERR:  ud_xlsw_err(w, sh, row, col, uxl_err_to_xls(v.err)); break;
+            default:       ud_xlsw_blank(w, sh, row, col); break;
+            }
+        }
+    }
+    out = ud_xlsw_save(w, &len);
+    if (out && len > 0) ok = uno_fs_write(vol, name, out, len) ? 1 : 0;
+    ud_free(out);
+    ud_xlsw_free(w);
+    return ok;
+}
+
 /* ---- commands ---------------------------------------------------------------- */
 static void commit_edit(void)
 {
@@ -380,13 +539,22 @@ static void do_command(int cmd)
         uof_set_fs(&kFs);
         uof_open(&DL, 0, kTypes, 1, pc64_shell_workarea_w(),
                  pc64_shell_workarea_h());
-        g_dlg = 1;
+        g_dlg = DLG_OPEN;
         break;
     case C_SAVE:
-        uod_msgbox(&DL, "UnoCalc",
-                   "Saving .xls is not in this build yet.", UOD_MB_OK,
-                   pc64_shell_workarea_w(), pc64_shell_workarea_h());
-        g_dlg = 1;
+        if (g_name[0]) {
+            if (!save_book(0, g_name)) {
+                uod_msgbox(&DL, "UnoCalc", "Could not write the workbook.",
+                           UOD_MB_OK, pc64_shell_workarea_w(),
+                           pc64_shell_workarea_h());
+                g_dlg = DLG_MSG;
+            }
+            break;
+        }
+        uof_set_fs(&kFs);
+        uof_open(&DL, 1, kTypes, 1, pc64_shell_workarea_w(),
+                 pc64_shell_workarea_h());
+        g_dlg = DLG_SAVE;
         break;
     case C_CURRENCY: set_fmt_all(UXL_FMT_CURRENCY); break;
     case C_PERCENT:  set_fmt_all(UXL_FMT_PCT); break;
@@ -457,6 +625,31 @@ static void scroll_to_cursor(void)
     if (g_cur_r >= g_top_r + rows) g_top_r = g_cur_r - rows + 1;
 }
 
+/* Whatever a closing dialog meant.  Shared, because a dialog can be dismissed
+ * by the mouse (app_event) or by Enter/Esc (uw_key). */
+static void dialog_closed(void)
+{
+    int res = uod_result(&DL), kind = g_dlg;
+    g_dlg = DLG_NONE;
+    if (res != UOD_ID_OK) return;
+    if (kind == DLG_OPEN) {
+        a_cpy(g_name, uof_name(), (int)sizeof g_name);
+        if (!load_book(uof_volume(), g_name)) {
+            g_name[0] = 0;
+            uod_msgbox(&DL, "UnoCalc", "That is not a workbook this build reads.",
+                       UOD_MB_OK, pc64_shell_workarea_w(), pc64_shell_workarea_h());
+            g_dlg = DLG_MSG;
+        }
+    } else if (kind == DLG_SAVE) {
+        a_cpy(g_name, uof_name(), (int)sizeof g_name);
+        if (!save_book(uof_volume(), g_name)) {
+            uod_msgbox(&DL, "UnoCalc", "Could not write the workbook.",
+                       UOD_MB_OK, pc64_shell_workarea_w(), pc64_shell_workarea_h());
+            g_dlg = DLG_MSG;
+        }
+    }
+}
+
 static int app_event(struct unoui_widget *w, const void *evp, void *ctx)
 {
     const unoui_event *e = (const unoui_event *)evp;
@@ -466,8 +659,8 @@ static int app_event(struct unoui_widget *w, const void *evp, void *ctx)
 
     if (g_dlg) {
         uod_handle(&DL, e);
-        uof_sync(&DL);
-        if (!uod_is_open(&DL)) g_dlg = 0;
+        if (g_dlg == DLG_OPEN || g_dlg == DLG_SAVE) uof_sync(&DL);
+        if (!uod_is_open(&DL)) dialog_closed();
         pc64_shell_dirty();
         return 1;
     }
@@ -544,8 +737,8 @@ static int uw_key(int uni, int scan, int ctrl)
         else if (uni == 27) { e.kind = UI_EV_KEY; e.key = UI_KEY_ESC; }
         else return 0;
         uod_handle(&DL, &e);
-        uof_sync(&DL);
-        if (!uod_is_open(&DL)) g_dlg = 0;
+        if (g_dlg == DLG_OPEN || g_dlg == DLG_SAVE) uof_sync(&DL);
+        if (!uod_is_open(&DL)) dialog_closed();
         pc64_shell_dirty();
         return 1;
     }

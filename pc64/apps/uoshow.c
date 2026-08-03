@@ -38,6 +38,8 @@ int   pc64_shell_workarea_w(void);
 int   pc64_shell_workarea_h(void);
 void  pc64_shell_fullscreen(unoui_window *w);
 int   pc64_shell_is_fullscreen(void);
+void *malloc(unsigned long);
+void  free(void *);
 int   uno_fs_volumes(void);
 const char *uno_fs_volume_name(int vol);
 int   uno_fs_list_begin(int vol);
@@ -80,6 +82,9 @@ static char g_edit[512];
 static unsigned char g_lvl[24];        /* levels survive a text_set rewrite  */
 static int  g_nlvl;
 static char g_name[64] = "Presentation1";
+static char g_file[64];                     /* "" until saved or opened     */
+static unsigned char *g_io;
+static long g_iolen;
 static char g_statl[48], g_statr[48];
 static int  g_dlg;                     /* which dialog is up (a C_* code)    */
 static uos_map g_map;
@@ -89,6 +94,11 @@ static int  g_show, g_show_black;
 static int  g_trans = 1;               /* the deck's transition             */
 static int  g_tprog, g_tfrom;
 #define TRANS_FRAMES 12
+
+/* The file half is defined below the editing half but used from the dialog
+ * path above it. */
+static int load_pres(int vol, const char *name);
+static int save_pres(int vol, const char *name);
 
 static void a_cpy(char *d, const char *s, int cap)
 { int i = 0; while (s && s[i] && i < cap - 1) { d[i] = s[i]; i++; } d[i] = 0; }
@@ -591,6 +601,28 @@ static void dialog_closed(void)
     g_dlg = 0;
     if (res != UOD_ID_OK) return;
     switch (which) {
+    case C_OPEN:
+        a_cpy(g_file, uof_name(), (int)sizeof g_file);
+        a_cpy(g_name, g_file, (int)sizeof g_name);
+        if (!load_pres(uof_volume(), g_file)) {
+            g_file[0] = 0;
+            uod_msgbox(&DL, "UnoShow",
+                       "That is not a presentation this build reads.",
+                       UOD_MB_OK, pc64_shell_workarea_w(),
+                       pc64_shell_workarea_h());
+            g_dlg = C_ABOUT;              /* a message box, nothing to act on */
+        }
+        break;
+    case C_SAVE:
+        a_cpy(g_file, uof_name(), (int)sizeof g_file);
+        a_cpy(g_name, g_file, (int)sizeof g_name);
+        if (!save_pres(uof_volume(), g_file)) {
+            uod_msgbox(&DL, "UnoShow", "Could not write the presentation.",
+                       UOD_MB_OK, pc64_shell_workarea_w(),
+                       pc64_shell_workarea_h());
+            g_dlg = C_ABOUT;
+        }
+        break;
     case C_NEWSLIDE:
         g_cur = uos_slide_insert(PR, g_cur + 1, pick);
         g_sel = -1;
@@ -607,6 +639,134 @@ static void dialog_closed(void)
     default: break;
     }
     pc64_shell_dirty();
+}
+
+/* ---- .ppt, in and out --------------------------------------------------------
+ * unodoc writes a slide as a TITLE frame and a BODY frame with '\n' between
+ * paragraphs, and reads a slide back as its text with the same separator.
+ * So the mapping is the obvious one and, more to the point, the SYMMETRIC
+ * one: the first paragraph is the title, the rest are the body, and what
+ * save writes open reads back. Shapes drawn by hand do not survive a
+ * round-trip - unodoc's writer is title-and-body only, which the Save path
+ * says out loud rather than dropping them quietly. */
+static long io_read(void *ctx, long off, void *dst, long n)
+{
+    long i;
+    unsigned char *d = (unsigned char *)dst;
+    (void)ctx;
+    if (off < 0 || off >= g_iolen) return 0;
+    if (off + n > g_iolen) n = g_iolen - off;
+    for (i = 0; i < n; i++) d[i] = g_io[off + i];
+    return n;
+}
+
+#define UOS_IOCAP (4L * 1024 * 1024)
+
+/* Split `text` at the first newline: the head becomes the title, the tail
+ * (which may itself hold newlines) becomes the body. */
+static void put_slide_text(int slide, const char *text)
+{
+    char head[256];
+    int i = 0, t, b;
+    while (text[i] && text[i] != '\n' && i < (int)sizeof head - 1) { head[i] = text[i]; i++; }
+    head[i] = 0;
+    t = uos_placeholder(PR, slide, UOS_PH_TITLE);
+    if (t < 0) t = uos_placeholder(PR, slide, UOS_PH_CTRTITLE);
+    if (t >= 0 && head[0]) uos_text_set(PR, slide, t, head);
+    if (!text[i]) return;
+    b = uos_placeholder(PR, slide, UOS_PH_BODY);
+    if (b >= 0) uos_text_set(PR, slide, b, text + i + 1);
+}
+
+static int load_pres(int vol, const char *name)
+{
+    ud_cfb *c;
+    ud_ppt *p;
+    ud_src  src;
+    long sz;
+    int ok = 0;
+
+    ud_set_alloc(malloc, free);
+    sz = uno_fs_size(vol, name);
+    if (sz <= 0 || sz > UOS_IOCAP) return 0;
+    if (!g_io) g_io = (unsigned char *)malloc(UOS_IOCAP);
+    if (!g_io) return 0;
+    g_iolen = uno_fs_read(vol, name, g_io, sz);
+    if (g_iolen <= 0) return 0;
+
+    src.read = io_read; src.size = g_iolen; src.ctx = 0;
+    c = ud_cfb_open(&src);
+    if (!c) return 0;
+    p = ud_ppt_open(c);
+    if (p) {
+        int n = ud_ppt_slides(p), i;
+        PR = uos_new();
+        for (i = 0; i < n; i++) {
+            const char *t = ud_ppt_slide_text(p, i);
+            /* unodoc's .ppt writer has no layout concept - a slide is a
+             * title frame and a body frame - so everything comes back as a
+             * Bulleted List, including a deck that was saved from a Title
+             * Slide.  Re-laying out slide 0 drops the title layout's now
+             * empty holders (uos_model.c does that part). */
+            int sl = (i == 0) ? 0 : uos_slide_add(PR, UOS_AL_BULLETS);
+            if (sl < 0) break;
+            if (i == 0) uos_slide_set_layout(PR, 0, UOS_AL_BULLETS);
+            if (t && *t) put_slide_text(sl, t);
+        }
+        ud_ppt_close(p);
+        ok = 1;
+    }
+    ud_cfb_close(c);
+    g_cur = 0; g_sel = -1; g_editing = 0;
+    return ok;
+}
+
+/* Join a placeholder's paragraphs back into one '\n'-separated string. */
+static int gather(int slide, int role, char *out, int cap)
+{
+    int z = uos_placeholder(PR, slide, role), i, n, k = 0;
+    out[0] = 0;
+    if (z < 0) return 0;
+    n = uos_text_paras(PR, slide, z);
+    for (i = 0; i < n && k < cap - 2; i++) {
+        int len = 0, j;
+        const char *t = uos_para_text(PR, slide, z, i, &len);
+        if (i && k < cap - 2) out[k++] = '\n';
+        for (j = 0; j < len && k < cap - 2; j++) out[k++] = t[j];
+    }
+    out[k] = 0;
+    return k;
+}
+
+static int save_pres(int vol, const char *name)
+{
+    ud_pptw *w;
+    unsigned char *out = 0;
+    long len = 0;
+    int ok = 0, i, n;
+    static char buf[2048];
+
+    if (!PR) return 0;
+    ud_set_alloc(malloc, free);
+    w = ud_pptw_new();
+    if (!w) return 0;
+    n = uos_slides(PR);
+    for (i = 0; i < n; i++) {
+        int sl = ud_pptw_slide(w);
+        if (sl < 0) break;
+        if (!gather(i, UOS_PH_TITLE, buf, (int)sizeof buf))
+            gather(i, UOS_PH_CTRTITLE, buf, (int)sizeof buf);
+        if (buf[0]) ud_pptw_title(w, sl, buf);
+        if (!gather(i, UOS_PH_BODY, buf, (int)sizeof buf))
+            gather(i, UOS_PH_SUBTITLE, buf, (int)sizeof buf);
+        if (buf[0]) ud_pptw_body(w, sl, buf);
+    }
+    out = ud_pptw_save(w, &len);
+    if (out && len > 0) ok = uno_fs_write(vol, name, out, len) ? 1 : 0;
+    ud_free(out);
+    ud_pptw_free(w);
+    if (ok) uos_set_dirty(PR, 0);
+    return ok;
 }
 
 /* ---- editing ---------------------------------------------------------------------
@@ -650,8 +810,30 @@ static void do_command(int cmd)
 {
     switch (cmd) {
     case C_NEW: PR = uos_new(); g_cur = 0; g_sel = -1; g_editing = 0;
+                g_file[0] = 0;
                 a_cpy(g_name, "Presentation1", (int)sizeof g_name); break;
     case C_EXIT: break;
+    case C_OPEN:
+        uof_set_fs(&kFs);
+        uof_open(&DL, 0, kTypes, 1, pc64_shell_workarea_w(),
+                 pc64_shell_workarea_h());
+        g_dlg = C_OPEN;
+        return;
+    case C_SAVE:
+        if (g_file[0]) {
+            if (!save_pres(0, g_file)) {
+                uod_msgbox(&DL, "UnoShow", "Could not write the presentation.",
+                           UOD_MB_OK, pc64_shell_workarea_w(),
+                           pc64_shell_workarea_h());
+                g_dlg = C_SAVE;
+            }
+            break;
+        }
+        uof_set_fs(&kFs);
+        uof_open(&DL, 1, kTypes, 1, pc64_shell_workarea_w(),
+                 pc64_shell_workarea_h());
+        g_dlg = C_SAVE;
+        return;
     case C_V_SLIDE:   g_view = 0; break;
     case C_V_OUTLINE: g_view = 1; break;
     case C_V_SORTER:  g_view = 2; break;
@@ -747,6 +929,7 @@ static int app_event(struct unoui_widget *w, const void *evp, void *ctx)
     }
     if (g_dlg) {
         if (uod_handle(&DL, e)) {
+            if (g_dlg == C_OPEN || g_dlg == C_SAVE) uof_sync(&DL);
             if (!uod_is_open(&DL)) dialog_closed();
             pc64_shell_dirty();
             return 1;
@@ -820,6 +1003,7 @@ static int uw_key(int uni, int scan, int ctrl)
         else if (scan == 0x01)                { e.kind = UI_EV_KEY; e.key = UI_KEY_UP; }
         else return 1;
         uod_handle(&DL, &e);
+        if (g_dlg == C_OPEN || g_dlg == C_SAVE) uof_sync(&DL);
         if (!uod_is_open(&DL)) dialog_closed();
         pc64_shell_dirty();
         return 1;

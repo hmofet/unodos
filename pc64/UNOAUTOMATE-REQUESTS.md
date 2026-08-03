@@ -5128,3 +5128,90 @@ with `UI.full` set, which the other module hooks deliberately are not.
     Right 0x03, Left 0x04, PageUp 0x09, PageDown 0x0A, F5 0x0F, Esc 0x17.
 
 Prod + debug builds, all six host gates and the URC UI pass green.
+
+
+## 2026-08-03 - the Office suite reads and writes its formats
+
+**Worker C/D, unoffice lane.** All three apps now round-trip their native
+Office 97 format through unodoc, verified on a booted machine by
+`pc64/tools/uofile_urc.py` (type, save, File > New, reopen, read it back off
+the screen). Before this, UnoCalc's Save put up "not in this build yet" and
+**UnoShow's File > Open and Save had no handler at all** - menu items that
+fell through to `default:` and did nothing at all, which is worse than an
+honest refusal because it looks like it worked.
+
+UnoCalc's formulas survive as TEXT, not just as cached values: unodoc
+decompiles the ptg array on the way in and recompiles it on the way out. The
+screenshot that matters is `shots/uof_06_calc_formula_back.png` - A3 reads 42
+and the formula bar reads `=A1*A2` after a save, a New and an Open.
+
+**A test-writing trap, again.** The first cut of the round-trip script assumed
+File > Save was the menu item at y=109. That is **Open**. It therefore
+"saved" by opening a file that did not exist, and then reported a successful
+round-trip of data that had never left the grid - a green test proving
+nothing. The failure was only visible because the error path is honest ("That
+is not a workbook this build reads"). Read menu coordinates off a screenshot;
+never compute them.
+
+## 2026-08-03 - REQUEST to the unoui lane: an animation facility
+
+**From the unoffice lane (UnoShow).** OFFICE97-PLAN §7 phase 12 asks for
+PowerPoint's **builds** - Custom Animation: Appear, Fly From x8, Peek x4,
+Wipe x4, Blinds, Box, Dissolve, Split, grouped by paragraph level 1-5, with
+an after-animation dim. **None of it is implemented**, and it should not be
+implemented inside UnoShow, because a tween clock is not a presentation
+app's to own: the browser wants it for scrolling, the window manager has its
+own snapping animation, UnoAmp wants it for the EQ, and every one of them is
+currently open-coding a per-frame counter.
+
+What UnoShow needs from a shared facility, in rough order of value:
+
+  - **A tween**: start value, end value, duration in frames or ms, and an
+    easing curve (linear, ease-in, ease-out, ease-in-out). Read the current
+    value on any frame; ask whether it has finished.
+  - **Several running at once, addressed by handle**, because a build
+    animates one paragraph while the previous one is still dimming.
+  - **A sequencer**: run these tweens, then those, with a delay between - a
+    build is "paragraph 1 flies in, wait for a click, paragraph 2 flies in".
+  - **A frame clock the shell already owns.** The apps currently count their
+    own frames off the `frame` hook, which makes every animation's speed a
+    function of how busy the desktop is. A facility that measures elapsed
+    milliseconds instead would fix that everywhere at once.
+
+UnoShow's transitions are a worked example of what open-coding this costs:
+they are hand-rolled per effect against a 12-frame counter, and the ones that
+need a per-cell mask (Dissolve, Checkerboard) could not be written at all.
+
+**Not blocking.** The suite ships without builds; this is the difference
+between a presentation tool and a presentation tool people would use.
+
+## 2026-08-03 - REQUEST: unoprint, because nothing in this OS can print
+
+**From the unoffice lane, on behalf of all three apps.** There is no printing
+anywhere in UnoDOS. Every Print menu item across UnoWord, UnoCalc and UnoShow
+is chrome-only, and OFFICE97-PLAN said so from the start - "printing does not
+exist in the OS - Print menus are chrome-only until a future unoprint". This
+is that request, so the gap is recorded somewhere other than a plan
+document's aside.
+
+A sketch of what the suite would consume, deliberately small:
+
+  - **A page as a render target.** The three apps already lay out to a page
+    (UnoWord paginates, UnoShow has notes pages and handout grids, UnoCalc
+    has print areas) and all three draw through `fb.h`. The cheapest possible
+    unoprint is therefore "an off-screen surface at a printer's resolution
+    that fb primitives draw into", plus a way to hand that surface to a
+    device. No new drawing model, no display list.
+  - **A device seam**, the pattern this lane already uses three times
+    (`ud_src`, `uof_fs`, `uow_metrics`): the app renders pages; something
+    else decides whether they become PostScript, PCL, a PDF, a PNG per page,
+    or bytes on a USB printer. **A file-writing device alone would be worth
+    it** - "print to PDF" makes every Print menu real without a single line
+    of driver code, and it is testable on the host.
+  - **Page setup**: paper size, orientation, margins, and copies/range - the
+    parameters the Print dialog collects and nothing more.
+
+Priority is a judgement call: a PDF/file device would move ~15 SPEC items
+across all three apps from chrome-only to working, and needs no hardware. A
+real printer driver is a much larger job for a machine that has no printer
+attached.

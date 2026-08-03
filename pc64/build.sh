@@ -556,7 +556,7 @@ if [ "$1" != "legacy" ]; then
             pc "$CC" $UWCF -c -o "build/apps/uo_$b.o" "uoffice/$b.c"
             WOBJ="$WOBJ build/apps/uo_$b.o"
         done
-        for b in unodoc ud_cfb ud_xls ud_ptg; do
+        for b in unodoc ud_cfb ud_xls ud_xlsw ud_ptg ud_ptgc; do
             pc "$CC" $UWCF -c -o "build/apps/ud_$b.o" "../unodoc/$b.c"
             WOBJ="$WOBJ build/apps/ud_$b.o"
         done
