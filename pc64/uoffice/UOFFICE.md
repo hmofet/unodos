@@ -20,7 +20,8 @@ Owner: the unoffice lane (workers B, C, D).
 | 6b | docking on four edges + floating, combo lists, split buttons + tear-off palettes, ScreenTips, icon artwork | **landed**, `[EXPERIMENTAL]` |
 | 6c | uodlg: the dialog engine (tabs, group boxes, message box) | **landed**, `[EXPERIMENTAL]` |
 | 6d | uobars + uofile: Open/Save dialog, status bar, ruler, the Assistant | **landed**, `[EXPERIMENTAL]` |
-| 7-8 | UnoWord | not started |
+| 7 | UnoWord: document model + page layout (`uoword.h`, `uow_*.c`) | **landed**, `[EXPERIMENTAL]` |
+| 8 | UnoWord the app (`pc64/apps/uoword.c` -> `APPS\UOWORD.UNO`) | **landed**, `[EXPERIMENTAL]` |
 | 9-10 | UnoCalc | not started |
 | 11-12 | UnoShow | not started |
 
@@ -215,16 +216,51 @@ Built with `build.sh`'s own sanitizer set plus ASan and
 `-fno-sanitize-recover=all`, per the UnoAmp EQ lesson: a harness built without
 the OS's flags is testing different code.
 
+## UnoWord (phases 7 and 8)
+
+`uoword.h` is the document model and the page layout; `pc64/apps/uoword.c` is
+the app. See uoword.h's header for why the model is a **piece table** and why
+the layout wraps to the **page** rather than the window - the one thing pc64's
+Editor cannot be taught. Font metrics arrive through a `uow_metrics` seam, so
+the layout engine is gated on the host without booting the OS.
+
+### Three things a module build teaches you
+
+1. **`FB_W` / `FB_H` are variables on pc64** (`uno_fb_w` / `uno_fb_h`), and a
+   `.UNO` module can only import **functions** - the loader turns every
+   undefined symbol into a jmp thunk. The lane calls the exported
+   `fb_width()` / `fb_height()` and never the macros; the host harness gets
+   them from `host_fbdim.c` rather than an `#ifdef` in every file.
+2. **A stack frame over 4 KB pulls in `___chkstk_ms`** on mingw - a probe
+   that walks Windows' guard page, which this OS does not have and cannot
+   provide. It is a host artifact, not a safety net, so the module is built
+   `-mno-stack-arg-probe`. (unodoc's `.doc` reader keeps the 4 KB FIB on the
+   stack, which is what tripped it.)
+3. **`build.sh`'s kExports check earns its keep**: it caught all of the above
+   at build time, rather than as a module that loads and then jumps into
+   nothing.
+
 ## Build integration
 
-There is **no `pc64/build.sh` block yet**. The kernel does not need uoffice
-until the first Office app module lands (phase 8), and per `/AGENTS.md` §2 a
-choke-point is touched only when it is actually needed, as an append. The apps
-will ship PHOTOS-style: each module links its own private copy of uochrome plus
-the unodoc halves it uses.
+`pc64/build.sh` gains a **UOWORD.UNO block beside PHOTOS'** - the app plus the
+whole uoffice lane plus unodoc's Word half, statically linked into the module,
+so the kernel gains no document code. `pc64_modload.c` gained one `KX()` line
+(`uno_fs_isdir`, which the file dialog needs to tell a folder from a document)
+and `pc64_uui.c` an `EX_UOWORD` slot in the same shape as `EX_PHOTOS`. All
+three are appends, which is how those choke-points are meant to grow.
 
 ## Changelog
 
+- **2026-08-03 - phases 7 and 8.** `uoword.h` + `uow_doc.c` + `uow_layout.c`
+  (the piece-table model, run-list formatting, styles with based-on chains,
+  undo/redo, and paginated layout with justification and widow control), and
+  `pc64/apps/uoword.c` -> `APPS\UOWORD.UNO`. Gates: a fourth host harness
+  plus production and debug pc64 builds and the QEMU diskboot gate. Three
+  bugs the layout gate caught are worth repeating: direct runs seeded with
+  Normal's own values BEAT every style applied later; justification spread
+  slack between FORMATTING runs, so uniform text never justified at all; and
+  the pagination fixture fitted on one page, which is a correct answer to the
+  wrong question. **Not yet verified: the app driven on screen.**
 - **2026-08-03 - phase 6d.** `uobars.c` (status bar, ruler, Assistant) and
   `uofile.c` (Open / Save As over a filesystem seam). Gate: 11 frames over a
   fake volume set. The gate's first cut assumed the filesystem's raw order
