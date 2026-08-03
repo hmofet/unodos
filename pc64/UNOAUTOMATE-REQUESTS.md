@@ -4967,3 +4967,61 @@ bug**, unnoticed because a two-item File menu still looks like a menu.
 `uoc_render()` itself is unchanged for callers with nothing underneath.
 
 Prod + debug builds, all five host gates and the URC UI pass green.
+---
+
+## 2026-08-03 - CLAIM: unoautomate + URC ship in PRODUCTION, gated by unosecure RBAC
+
+**Claiming** the unoautomate lane (`unoauto*`) for this slice, plus the
+cross-lane edits it needs: an append to unoscript's capability enum, a consent
+/arming entry point in the security UI, and the `build.sh` file-list move.
+Branch `urc-production`, worktree `unodos-urcprod`.
+
+**What changes.** Today `unoauto*`, the URC channel, its serial + screen
+backends and `netdisc`'s callable surface are all `#ifdef UNO_DEBUG`: a
+production image has no harness, no remote control, and no automation at all.
+arin's ruling (2026-08-03) is that unoautomate and URC are **product features,
+not test scaffolding**, and ship in production - with the gate moved from a
+compile flag to PRIVILEGE, exactly as `unoscript` already does it
+(UNOSCRIPT.md: "its gate is not a compile flag - it is privilege").
+
+**The gate, as decided:**
+
+- Three new capabilities appended to `usc_cap_t` (append-only, per the
+  contract): `automate.observe` (ADMIN), `automate.drive` (ADMIN),
+  `automate.system` (KERNEL). Each URC verb declares one; the dispatcher
+  guards per verb, so a session may watch a log without being able to author a
+  GPT or exec Python.
+- The channel is **disarmed at boot in production**. A user at the console
+  arms it through the security UI, which escalates via the normal
+  `unosec_request` consent sheet. Arming mints a random **token**, shown on
+  screen.
+- Every inbound connection must `auth <token>` before any other verb.
+  Authenticating opens a session at `UNOSEC_TRUST_REMOTE` (the trust class
+  UNOSECURE-SPEC.md §5 already reserved for exactly this link) bound to the
+  arming user, so per-verb checks answer against that user's grants.
+- Dropping the grant, logging out, or a reboot invalidates the token.
+
+**The debug build is unchanged**: it still arms itself from `DEBUG.CFG` with
+no token, so every `tools/*_qemu.py` gate and the WinForms client keep working
+as they do today. The auth requirement is production-only.
+
+**Why it needs cross-lane edits.** unoautomate cannot append to `usc_cap_t`
+(unoscript's) or add a consent path to `pc64_accounts.c` (the security UI's)
+from inside its own lane. Both are additive: three enum entries before
+`USC_CAP__COUNT` plus their name/tier rows, and one new dialog entry point.
+Filing this as the request AND the claim in one entry because the same task
+holds all three lanes; anyone who disagrees with the cap names should say so
+here before they are load-bearing.
+
+**Traps found while scoping** (write them down before they cost someone a day):
+
+- `unoauto.c` depends on `uno_dbg_log`/`uno_dbg_check`/`uno_dbg_uptime_ms`
+  (uno_debug.c) and `pc64_netlog_sink_ensure` (pc64_nettest.c) - all
+  debug-only. Production needs weak fallbacks and a real uptime source.
+- `unoauto_remote.c` calls `uno_dbg_guard_*` and `pc64_stress_cfg_*` the same
+  way, and several shell hooks it drives (`pc64_shell_launch`,
+  `pc64_shell_py_exec`, the window accessors) are themselves `#ifdef
+  UNO_DEBUG` inside `pc64_uui.c`. Promoting the channel means promoting the
+  hooks it calls.
+- `netdisc.c` already compiles in production, but `netdisc.h` macros its whole
+  surface away at `UNO_DEBUG=0`, so the file currently links as dead weight.
