@@ -2536,7 +2536,30 @@ void uno_pc64_dbg_bench_cleanup(void)
  * and a lockout that leaked would silently kill automation for the rest of the
  * boot.  The shell loop only runs when no modal is up, so it cannot leak. */
 static int g_inject_lock;
-void uno_pc64_input_lock(int on) { g_inject_lock = on ? 1 : 0; }
+
+#ifdef UNO_DEBUG
+int pc64_stress_cfg_flag(const char *key);        /* pc64_stress.c */
+/* `ui-unlock` in DEBUG.CFG: let the harness drive the security dialogs anyway.
+ * DEBUG-ONLY and opt-in, the same shape as `urc-auth` - without it the arming
+ * flow (create an account, escalate, mint a token) cannot be exercised without
+ * a human, a monitor and a mouse at the machine, so it would ship untested.
+ * The lockout it defeats is verified separately, on a stick WITHOUT this key;
+ * a production image has no DEBUG.CFG and cannot reach this path at all. */
+static int ui_unlock(void)
+{
+    static int cached = -1;
+    if (cached < 0) cached = pc64_stress_cfg_flag("ui-unlock") > 0;
+    return cached;
+}
+#endif
+
+void uno_pc64_input_lock(int on)
+{
+#ifdef UNO_DEBUG
+    if (on && ui_unlock()) on = 0;                /* harness override, see above */
+#endif
+    g_inject_lock = on ? 1 : 0;
+}
 int  uno_pc64_input_locked(void) { return g_inject_lock; }
 
 /* Synthetic input - PRODUCTION.  Keys go through the SAME map_key path real
