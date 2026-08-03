@@ -31,7 +31,7 @@ rm -f build/*.ppm
 
 # shellcheck disable=SC2086
 $CC -O1 -g -std=c99 -Wall -Wextra -Werror -I. -I"$FB" -I"$UI" $SAN \
-    uochrome.c "$FB/fb.c" "$FB/fb_aa.c" ../tools/uochrome_test.c \
+    uochrome.c uoicons.c "$FB/fb.c" "$FB/fb_aa.c" ../tools/uochrome_test.c \
     -o build/uochrome_test
 
 ./build/uochrome_test build
