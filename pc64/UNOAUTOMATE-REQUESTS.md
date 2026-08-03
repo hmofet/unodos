@@ -4728,3 +4728,68 @@ in the SPEC as unticked boxes; each waits for an app that needs it.
 
 **NEXT: phase 7** (UnoWord's document model and page layout), then 8 (the
 app). Workers C and D may start 9-12 in parallel.
+
+## 2026-08-03 - unoffice phases 7 + 8 LANDED: UnoWord builds and ships
+
+**Worker B, unoffice lane.** `pc64/uoffice/uoword.h` + `uow_doc.c` +
+`uow_layout.c` (the document model and page layout) and
+`pc64/apps/uoword.c` -> `APPS\UOWORD.UNO` (the app). Contract updated in
+`pc64/uoffice/UOFFICE.md`.
+
+The model is a PIECE TABLE - the .doc lesson applied in memory - with two run
+lists for formatting, styles resolving root-first down based-on chains, and an
+undo stack of inverse commands. The layout wraps to the PAGE, not the window,
+which is the one thing pc64's Editor cannot be taught. Font metrics arrive
+through a seam, so the whole layout engine is gated on the host.
+
+**Three bugs the layout gate caught, all invisible in a screenshot:**
+
+  - The initial character run was seeded with Normal's own values, so every
+    character carried an explicit direct size that BEAT any style applied
+    later. Applying Heading 1 resolved correctly and then lost. Direct runs
+    hold EXCEPTIONS; they start empty now.
+  - JUSTIFICATION SPREAD SLACK BETWEEN FORMATTING RUNS. A paragraph in one
+    font is one run per line, so there were no gaps to spread across and
+    justified text came out ragged-right while every unit test passed. Runs
+    are now split at word boundaries too - after the last space of a group,
+    so runs still tile the line exactly, which the caret depends on.
+  - The pagination fixture fitted on a single page, so "more than one page"
+    was a correct answer to the wrong question.
+
+**FOUR THINGS A MODULE BUILD TEACHES, and every lane shipping a .UNO wants
+to know them:**
+
+  1. **pc64's FB_W / FB_H are VARIABLES** (`uno_fb_w` / `uno_fb_h`), and a
+     module can only import FUNCTIONS - the loader turns each undefined
+     symbol into a jmp thunk. Call the exported `fb_width()` / `fb_height()`.
+     The host harness gets them from a six-line `uoffice/host_fbdim.c` rather
+     than an `#ifdef` in every file that wants the screen size.
+  2. **A stack frame over 4 KB pulls in `___chkstk_ms`** on mingw. That probe
+     walks Windows' guard page - a mechanism this OS does not have and cannot
+     provide - so it is a host artifact rather than a safety net, and the
+     module is built `-mno-stack-arg-probe`. unodoc's `.doc` reader keeps the
+     4 KB FIB on the stack, which is what tripped it. A FILED NOTE to the
+     unodoc lane: that local is fine in the kernel and awkward in a module;
+     moving it off the stack would let the flag go away.
+  3. **`uno_fs_isdir` was not exported.** Appended as one KX() line, which is
+     how that choke-point is meant to grow.
+  4. **build.sh's kExports check earns its keep** - it caught all three at
+     BUILD time rather than as a module that loads and jumps into nothing.
+
+Choke-points touched, all appends: a UOWORD.UNO block in `pc64/build.sh`
+beside PHOTOS', one KX() line, and an EX_UOWORD slot in `pc64_uui.c` shaped
+exactly like EX_PHOTOS.
+
+**VERIFIED:** production and `UNO_DEBUG=1` builds green, four host gates
+green, QEMU diskboot green with UOWORD.UNO on the ESP (636 KB image, 127 KB
+on disk, 34 imports).
+
+**NOT VERIFIED, and stated plainly: nobody has watched the app run.** Opening
+its window and typing into it is the next session's FIRST job - the module
+builds and ships, which is not the same as working. Everything in phase 8's
+app layer (caret, selection, the toolbar wiring, .doc open/save round-trip)
+is code-reviewed only.
+
+**Also still open from phase 6:** the Customize dialog, the toolbar
+right-click checklist, editable combo fields, the file dialog's view buttons
+and MRU, Assistant help content, Large-icons doubling.
