@@ -347,6 +347,13 @@ promoting, autoshape insert, and **the slide show full-screen** - F5, click
 or Space or Right to advance, Left to go back, `B` for a black screen, Esc
 out, hidden slides skipped.
 
+**Builds (Custom Animation) do not exist.** OFFICE97-PLAN §7 asks for builds
+v1 - appear, fly-from, wipe, dissolve, grouped by paragraph level, with
+after-animation dim - and none of it is implemented. What follows is about
+slide TRANSITIONS, which are a different feature; the gap is filed as a
+request for an animation facility in unoui, since a tween clock is not
+UnoShow's to own.
+
 **Transitions v1 are the ones a bounded number of renders per frame can
 express**: Cut, Cut Through Black, Wipe x4, Box In/Out, Split H/V, Cover x4,
 Blinds H/V, Random Bars H/V. There is no second framebuffer, so a transition
@@ -377,6 +384,51 @@ they are honestly absent rather than approximated by something that stutters.
    it. **UnoWord had this bug too** - its zoom moved the page and never the
    text - and it is fixed in the same commit.
 
+## File I/O
+
+All three apps read and write their native Office 97 format through unodoc,
+and each module links only its own half of the library - UnoWord carries
+`ud_doc`/`ud_docw`, UnoCalc `ud_xls`/`ud_xlsw` plus the ptg compiler, UnoShow
+`ud_ppt`/`ud_pptw` plus Escher - so none of them pays for another's format.
+
+The mapping in each app is deliberately **symmetric: what save writes, open
+reads back**. That is the property the round-trip test checks, and it is the
+one a writer and a reader that are each self-consistent can quietly fail.
+
+- **UnoCalc**: values by kind, and a **formula round-trips as its TEXT** -
+  unodoc decompiles the ptg array on the way in and recompiles it on the way
+  out, with the cached result carried alongside so a reader that does not
+  calculate still shows the right number. An expression unodoc's compiler
+  refuses does not lose the cell: the value it produced is written instead.
+  Excel's on-disk error codes and `uxl`'s are two enumerations of the same
+  seven values and are mapped, never cast.
+- **UnoShow**: unodoc writes a slide as a title frame and a body frame with
+  `\n` between paragraphs, so the first paragraph is the title and the rest
+  are the body. Shapes drawn by hand do **not** survive - the writer is
+  title-and-body only.
+- **UnoWord**: plain text through the piece table (`.doc` styles on write are
+  a standing request to unodoc).
+
+### The bug the round-trip found
+
+`uos_slide_set_layout` added the new layout's placeholders and never removed
+the old ones. A Title Slide reopened as a Bulleted List kept its centre-title
+and subtitle frames underneath the new ones, so the slide showed two
+overlapping "Click to add text" prompts. Applying a layout now deletes
+placeholders the new layout has no use for **when they are empty** - which is
+what PowerPoint does: it keeps content and drops the frame.
+
+### The test
+
+`pc64/tools/uofile_urc.py` types content, saves it, clears the document with
+File > New, reopens the file and reads the content back off the screen. It is
+the only test that catches a writer and a reader that agree with themselves
+and not with each other, and its first cut is worth remembering: it assumed
+File > Save was the menu item at y=109, which is Open. Every step after that
+cascaded - it "saved" by opening a file that did not exist, and then reported
+a successful round-trip of data that had never left the grid. **Read the
+coordinates off a screenshot.**
+
 ## Build integration
 
 `pc64/build.sh` gains a **UOWORD.UNO block beside PHOTOS'** - the app plus the
@@ -388,6 +440,16 @@ three are appends, which is how those choke-points are meant to grow.
 
 ## Changelog
 
+- **2026-08-03 - file I/O.** UnoCalc reads and writes `.xls` (values, number
+  formats and formulas as text, through unodoc's ptg compiler and
+  decompiler); UnoShow reads and writes `.ppt`. Before this, UnoCalc's Save
+  said "not in this build yet" and **UnoShow's File > Open and Save had no
+  handler at all** - they fell through to `default:` and silently did
+  nothing. Gate: `pc64/tools/uofile_urc.py`, which round-trips both on a
+  booted machine, plus the six host gates and prod/debug builds. It found one
+  model bug (empty placeholders surviving a layout change, above). Two gaps
+  are now filed rather than left implicit: builds/Custom Animation, and
+  printing.
 - **2026-08-03 - phases 11 and 12.** `uoshow.h` + `uos_geom.c` + `uos_model.c`
   + `uos_render.c` (20 autoshapes, 8 colour schemes, the 24 AutoLayouts, the
   pooled store and the one renderer) and `pc64/apps/uoshow.c` ->

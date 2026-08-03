@@ -508,6 +508,20 @@ static void layout_apply(uos_pres *p, int slide, int lay)
         }
         taken[z] = 1;
     }
+
+    /* Placeholders the NEW layout has no use for go, but only if they are
+     * EMPTY - PowerPoint keeps content when you change layout and drops the
+     * frame when there is nothing in it.  Without this a Title Slide turned
+     * into a Bulleted List keeps its centre-title and subtitle holders
+     * underneath the new ones, and the slide shows two overlapping "Click to
+     * add text" prompts.  Walk downwards so the indices behind stay valid. */
+    for (j = s->n - 1; j >= 0; j--) {
+        const uos_shape *sh = &p->shape[s->idx[j]];
+        int wanted = 0, k;
+        if (sh->ph == UOS_PH_NONE || sh->para_n > 0) continue;
+        for (k = 0; k < L->n; k++) if (L->ph[k].ph == sh->ph) { wanted = 1; break; }
+        if (!wanted) uos_shape_delete(p, slide, j);
+    }
 }
 
 int uos_slide_layout(const uos_pres *p, int i)
