@@ -26,8 +26,8 @@ guides (full URL list in the plan's research provenance, §11).
 ## 1. Shared Office platform (S-OFF)
 
 ### S-OFF-01 Command bars
-`pc64/uoffice/uochrome.c`, phase 6a, 2026-08-02. Gated by
-`pc64/uoffice/build.sh`: 16 storyboard frames asserting behaviour, sampled
+`pc64/uoffice/uochrome.c` + `uoicons.c`, phases 6a-6b, 2026-08-03. Gated by
+`pc64/uoffice/build.sh`: 23 storyboard frames asserting behaviour, sampled
 pixels, and that rendering the same state twice is byte-identical.
 - [F] **Menus are owner-drawn with 16x16 icons beside items that exist as
   toolbar buttons; full static menus (NO adaptive/personalized collapsing
@@ -42,20 +42,26 @@ pixels, and that rendering the same state twice is byte-identical.
   claim (a button's top-left corner: face when flat, the bright edge on hover,
   the dark edge when pressed, and still dark once a toggle is on and the
   mouse has left).
-- [ ] **Toolbars dockable top/bottom/left/right and floatable (mini title
-  bar + close); drag handle (two raised bars) at docked left end** — the
-  gripper is drawn and toolbars render docked in declaration order; docking
-  and floating themselves are 6b.
+- [F] **Toolbars dockable top/bottom/left/right and floatable (mini title
+  bar + close); drag handle (two raised bars) at docked left end** — a bar
+  lives in a band (a row top/bottom, a column left/right); dragging its
+  gripper shows the Windows dashed drop outline, releasing near an edge docks
+  it there and anywhere else floats it with a title bar and close box.
+  `uoc_client_rect()` reports what is left for the document.
 - [ ] Right-click any bar → checklist of toolbars + Customize…
 - [ ] Customize dialog (3 tabs: Toolbars / Commands / Options); drag
   commands onto bars; Alt-drag off; Options: Large icons, ScreenTips,
   shortcut keys in ScreenTips, menu animations (None/Random/Unfold/Slide)
-- [ ] Combo boxes in toolbars (Style, Font, Size, Zoom) editable + dropdown —
-  6a draws the sunken field and its raised drop button and reserves the
-  space; the list behind it is 6b
-- [ ] **Split/dropdown buttons with tear-off palettes (Undo/Redo stacks;
+- [F] Combo boxes in toolbars (Style, Font, Size, Zoom) + dropdown — the
+  field, its drop button, a real list and a remembered selection. Not yet
+  EDITABLE (typing into the field is the app's, once one needs it); the text
+  is truncated to the field rather than clipped, because fb_text clips to the
+  screen and not to the fb_aa clip window
+- [F] **Split/dropdown buttons with tear-off palettes (Undo/Redo stacks;
   Border, Highlight, Font Color, Fill Color palettes float when dragged)** —
-  6b
+  colour and icon palettes drop from the arrow half, and the move bar across
+  the top tears one off to float, swatches still live. The Undo/Redo *stack*
+  lists specifically wait for an app with an undo stack to list
 - [F] Menu keyboard: Alt+mnemonic, F10, arrows, Esc; accelerator column —
   F10 activates the bar without opening a menu, arrows walk it, Down opens,
   Up/Down skip separators and disabled items, Right opens a submenu (or moves
@@ -65,10 +71,13 @@ pixels, and that rendering the same state twice is byte-identical.
   virtual-key enum, which would be a choke-point edit for no reason.
 
 ### S-OFF-02 Visual identity
-- [ ] **Win95/NT4 chrome: `#C0C0C0` face, `#FFFFFF` light, `#808080`
+- [F] **Win95/NT4 chrome: `#C0C0C0` face, `#FFFFFF` light, `#808080`
   shadow, black frame; navy `#000080` selection with white text; MS Sans
-  Serif 8pt-alike dialog font**
-- [ ] **16x16 toolbar icons, 16-color VGA look; Large-icons doubling**
+  Serif 8pt-alike dialog font** — every colour and gap lives in one table
+  (`uoc_look_97`), so the whole suite re-tunes from one place when the
+  pixel-check against a real install happens
+- [F] **16x16 toolbar icons, 16-color VGA look**; Large-icons doubling `[ ]`
+  — 35 icons in `uoicons.c`, our own artwork drawn from shape primitives
 - [ ] Word default Times New Roman 10pt / Excel Arial 10 (metric-compatible
   Liberation faces; document defaults reproduce 97 line breaks)
 - [ ] MDI: documents as children in one app frame; Window menu switching
@@ -77,13 +86,17 @@ pixels, and that rendering the same state twice is byte-identical.
 - [ ] Splash screens + About boxes (own artwork/name, Office-97 layout)
 
 ### S-OFF-03 Office Assistant
-- [ ] Assistant frame: frameless always-on-top window, yellow balloon,
-  "What would you like to do?" query + numbered blue-bullet results,
-  Options/Close; lightbulb tips; animates on save/print
-- [ ] F1 and the Standard-toolbar Assistant button summon it; off by
-  default in UnoOffice; our own character ("Uno"), never Clippit's art
-- [ ] Classic help behind it: Contents and Index viewer; What's This?
-  (Shift+F1) per-control popups; "?" titlebar button on dialogs
+`pc64/uoffice/uobars.c`, phase 6d, 2026-08-03.
+- [F] Assistant frame: a small always-on-top card, yellow balloon,
+  "What would you like to do?" query box + numbered blue-bullet results,
+  Close; lightbulb tip indicator; a slow idle blink off the tick stream
+- [F] Off by default; our own character **"Uno"** — deliberately not a
+  paperclip, a dog, a cat or a wizard. `[C]` for F1 / the toolbar button
+  summoning it, which needs an app to route the key
+- [C] Classic help behind it: the balloon takes a query and lists topics,
+  but no help CONTENT exists yet; What's This? is absent. **The "?" titlebar
+  button on dialogs is `[F]`** and reports its own result rather than
+  masquerading as a cancel (uodlg, 6c)
 
 ### S-OFF-04 OfficeArt drawing layer (shared by all three apps)
 - [ ] **Drawing toolbar: Draw ▾ (Group/Ungroup/Regroup, Order (6 ops),
@@ -113,8 +126,12 @@ pixels, and that rendering the same state twice is byte-identical.
 - [ ] **Insert → Hyperlink (Ctrl+K) in all apps; blue/underlined, purple
   followed; Web toolbar (Back/Forward/Stop/Refresh/Start Page/Search/
   Favorites/Go/Address) driving the OS browser**
-- [ ] Office Open/Save dialogs: Look-in combo, list/details/preview
-  views, type filter, MRU on File menu (4 default, 9 max)
+- [C] Office Open/Save dialogs: Look-in combo, list/details/preview
+  views, type filter, MRU on File menu (4 default, 9 max) —
+  `pc64/uoffice/uofile.c`, 6d: the Look-in combo, the file list (directories
+  first, with a trailing backslash), the name field and the type filter are
+  `[F]`, over a filesystem seam so the dialog is testable without the OS.
+  The view buttons and the MRU are not built
 - [ ] Paste Special with format list; Paste as Hyperlink; drag-and-drop
   of selections within and between the suite's apps
 - [ ] Single shared spell engine + one custom dictionary; shared
@@ -247,11 +264,15 @@ including separators and submenus; deltas get called out here:
   Online Layout / Page Layout / Outline)**
 - [ ] **Select Browse Object on the vertical scrollbar (12-way palette;
   Previous/Next arrows turn blue for non-page objects)**
-- [ ] **Ruler: first-line + hanging indent triangles, left/right indent,
-  tab-type selector cycling L/C/R/Decimal, click-to-set tabs, table
-  column markers (Alt shows measurements), margin drag in Page Layout**
-- [ ] **Status bar: Page n · Sec n · n/N · At/Ln/Col · REC TRK EXT OVR
-  cells (double-click toggles) · spell-status book icon**
+- [F] **Ruler: first-line + hanging indent triangles, left/right indent,
+  tab-type selector cycling L/C/R/Decimal, click-to-set tabs** — plus the
+  square below the hanging marker that drags both while preserving their
+  gap (`pc64/uoffice/uobars.c`, 6d). Table column markers and margin drag in
+  Page Layout `[ ]`, both of which need the document model (phase 7)
+- [F] **Status bar: Page n · Sec n · n/N · At/Ln/Col · REC TRK EXT OVR
+  cells · spell-status book icon** — `uob_status_hit` names the cell under
+  the pointer so double-click-to-toggle has a target; what a toggle MEANS is
+  the app's, from phase 8
 - [ ] Page Layout: white page on gray pasteboard, page edge + shadow;
   Normal: galley with optional style area
 - [ ] Context menus: text / squiggle (suggestions bold, Ignore All, Add,
