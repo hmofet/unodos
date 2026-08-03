@@ -86,6 +86,28 @@ const char *uxl_pool(const uxl_book *b, int idx)
  * walk is already in the order a painter wants. */
 static long key_of(int r, int c) { return (long)r * UXL_COLS + c; }
 
+/* The cell pool: a bump half plus a free stack of cells uxl_clear released.
+ * Sheets hold indices, so a cell never moves and a pointer into the pool
+ * stays valid across inserts - which the calculator relies on. */
+static int cell_alloc(uxl_book *b)
+{
+    if (b->nfree > 0)            return b->freecell[--b->nfree];
+    if (b->nalloc < UXL_MAXCELL) return b->nalloc++;
+    return -1;
+}
+static void cell_release(uxl_book *b, int ci)
+{
+    if (b->nfree < UXL_MAXCELL) b->freecell[b->nfree++] = (unsigned short)ci;
+}
+
+uxl_cell *uxl_nth(uxl_book *b, int s, int i)
+{
+    if (!b || s < 0 || s >= b->nsheet || i < 0 || i >= b->sheet[s].ncell) return 0;
+    return &b->cell[b->sheet[s].idx[i]];
+}
+static const uxl_cell *nth_c(const uxl_book *b, int s, int i)
+{ return &b->cell[b->sheet[s].idx[i]]; }
+
 int uxl_find(const uxl_book *b, int s, int r, int c)
 {
     const uxl_sheet *sh;
@@ -95,9 +117,11 @@ int uxl_find(const uxl_book *b, int s, int r, int c)
     sh = &b->sheet[s];
     lo = 0; hi = sh->ncell - 1;
     while (lo <= hi) {
+        const uxl_cell *p;
         long km;
         mid = (lo + hi) / 2;
-        km = key_of(sh->cell[mid].row, sh->cell[mid].col);
+        p = nth_c(b, s, mid);
+        km = key_of(p->row, p->col);
         if (km == k) return mid;
         if (km < k) lo = mid + 1; else hi = mid - 1;
     }
@@ -108,28 +132,81 @@ uxl_cell *uxl_slot(uxl_book *b, int s, int r, int c, int make)
 {
     uxl_sheet *sh;
     long k;
-    int lo, hi, mid, at, i;
+    int lo, hi, mid, at, i, ci;
     if (!b || s < 0 || s >= b->nsheet) return 0;
     if (r < 0 || r >= UXL_ROWS || c < 0 || c >= UXL_COLS) return 0;
     sh = &b->sheet[s];
     k = key_of(r, c);
     lo = 0; hi = sh->ncell - 1; at = sh->ncell;
     while (lo <= hi) {
+        uxl_cell *p;
         long km;
         mid = (lo + hi) / 2;
-        km = key_of(sh->cell[mid].row, sh->cell[mid].col);
-        if (km == k) return &sh->cell[mid];
+        p = &b->cell[sh->idx[mid]];
+        km = key_of(p->row, p->col);
+        if (km == k) return p;
         if (km < k) lo = mid + 1; else { at = mid; hi = mid - 1; }
     }
     if (!make) return 0;
     if (sh->ncell >= UXL_MAXCELL) return 0;
+    ci = cell_alloc(b);
+    if (ci < 0) return 0;
     if (lo > at) at = lo;
-    for (i = sh->ncell; i > at; i--) sh->cell[i] = sh->cell[i - 1];
-    x_memset(&sh->cell[at], 0, (long)sizeof sh->cell[at]);
-    sh->cell[at].row = (unsigned short)r;
-    sh->cell[at].col = (unsigned short)c;
+    for (i = sh->ncell; i > at; i--) sh->idx[i] = sh->idx[i - 1];
+    sh->idx[at] = (unsigned short)ci;
+    x_memset(&b->cell[ci], 0, (long)sizeof b->cell[ci]);
+    b->cell[ci].row = (unsigned short)r;
+    b->cell[ci].col = (unsigned short)c;
     sh->ncell++;
-    return &sh->cell[at];
+    return &b->cell[ci];
+}
+
+/* ---- the token pool ---------------------------------------------------------
+ * Setting a formula bump-allocates; overwriting one leaks the old tokens.
+ * That is deliberate: the source text is kept in the cell, so when the pool
+ * fills, every live formula can simply be RECOMPILED into a fresh pool.  A
+ * rebuild costs one compile per formula and needs no back-pointers, free
+ * list or compaction pass to go wrong. */
+static int g_rebuilding;
+
+static int rpn_rebuild(uxl_book *b)
+{
+    static uxl_tok tmp[UXL_MAXRPN];
+    int s, i, j, n, ok = 1;
+    g_rebuilding = 1;
+    b->nrpnpool = 0;
+    for (s = 0; s < b->nsheet; s++)
+        for (i = 0; i < b->sheet[s].ncell; i++) {
+            uxl_cell *p = uxl_nth(b, s, i);
+            if (!p->nrpn) continue;
+            n = uxl_compile(b, p->fml, s, tmp, UXL_MAXRPN);
+            if (n < 0 || b->nrpnpool + n > UXL_RPNPOOL) {
+                p->nrpn = 0; ok = 0; continue;   /* visibly a literal now   */
+            }
+            p->rpn_at = b->nrpnpool;
+            for (j = 0; j < n; j++) b->rpn[b->nrpnpool + j] = tmp[j];
+            b->nrpnpool += n;
+            p->nrpn = (short)n;
+        }
+    g_rebuilding = 0;
+    return ok;
+}
+
+int uxl_rpn_store(uxl_book *b, uxl_cell *p, const uxl_tok *t, int n)
+{
+    int i;
+    if (!b || !p) return 0;
+    if (n <= 0) { p->nrpn = 0; p->rpn_at = 0; return 1; }
+    if (b->nrpnpool + n > UXL_RPNPOOL && !g_rebuilding) {
+        p->nrpn = 0;               /* this cell is mid-set: don't rebuild it */
+        rpn_rebuild(b);
+    }
+    if (b->nrpnpool + n > UXL_RPNPOOL) return 0;
+    p->rpn_at = b->nrpnpool;
+    for (i = 0; i < n; i++) b->rpn[b->nrpnpool + i] = t[i];
+    b->nrpnpool += n;
+    p->nrpn = (short)n;
+    return 1;
 }
 
 /* ---- setters ---------------------------------------------------------------- */
@@ -180,7 +257,8 @@ int uxl_clear(uxl_book *b, int s, int r, int c)
     int i = uxl_find(b, s, r, c), j;
     if (i < 0) return 0;
     sh = &b->sheet[s];
-    for (j = i; j + 1 < sh->ncell; j++) sh->cell[j] = sh->cell[j + 1];
+    cell_release(b, sh->idx[i]);
+    for (j = i; j + 1 < sh->ncell; j++) sh->idx[j] = sh->idx[j + 1];
     sh->ncell--;
     bump(b);
     return 1;
@@ -191,13 +269,13 @@ int uxl_get(const uxl_book *b, int s, int r, int c, uxl_val *out)
     int i = uxl_find(b, s, r, c);
     if (!out) return 0;
     if (i < 0) { x_memset(out, 0, (long)sizeof *out); return 0; }
-    *out = b->sheet[s].cell[i].v;
+    *out = nth_c(b, s, i)->v;
     return 1;
 }
 const char *uxl_formula(const uxl_book *b, int s, int r, int c)
 {
     int i = uxl_find(b, s, r, c);
-    return (i >= 0 && b->sheet[s].cell[i].fml[0]) ? b->sheet[s].cell[i].fml : 0;
+    return (i >= 0 && nth_c(b, s, i)->fml[0]) ? nth_c(b, s, i)->fml : 0;
 }
 int uxl_count(const uxl_book *b, int s)
 { return (b && s >= 0 && s < b->nsheet) ? b->sheet[s].ncell : 0; }
@@ -205,7 +283,7 @@ int uxl_at(const uxl_book *b, int s, int i, int *r, int *c, uxl_val *out)
 {
     const uxl_cell *p;
     if (!b || s < 0 || s >= b->nsheet || i < 0 || i >= b->sheet[s].ncell) return 0;
-    p = &b->sheet[s].cell[i];
+    p = nth_c(b, s, i);
     if (r) *r = p->row;
     if (c) *c = p->col;
     if (out) *out = p->v;
@@ -214,7 +292,7 @@ int uxl_at(const uxl_book *b, int s, int i, int *r, int *c, uxl_val *out)
 int uxl_fmt(const uxl_book *b, int s, int r, int c)
 {
     int i = uxl_find(b, s, r, c);
-    return i >= 0 ? b->sheet[s].cell[i].fmt : UXL_FMT_GENERAL;
+    return i >= 0 ? nth_c(b, s, i)->fmt : UXL_FMT_GENERAL;
 }
 void uxl_set_fmt(uxl_book *b, int s, int r, int c, int fmt)
 {
@@ -305,8 +383,8 @@ int uxl_text(const uxl_book *b, int s, int r, int c, char *out, int cap)
     if (!out || cap < 2) return 0;
     out[0] = 0;
     if (i < 0) return 0;
-    v = b->sheet[s].cell[i].v;
-    fmt = b->sheet[s].cell[i].fmt;
+    v = nth_c(b, s, i)->v;
+    fmt = nth_c(b, s, i)->fmt;
     switch (v.kind) {
     case UXL_NUM:
         return uxl_format(v.num, uxl_fmt_code(fmt), out, cap);

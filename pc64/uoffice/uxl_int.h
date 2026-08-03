@@ -37,28 +37,43 @@ typedef struct {
     short  s, r1, c1, r2, c2;
 } uxl_tok;
 
-#define UXL_MAXRPN 96
+#define UXL_MAXRPN  96             /* tokens in ONE formula                 */
+#define UXL_RPNPOOL 2048           /* tokens in the whole workbook          */
 
+/* A cell's compiled form lives in the workbook's token pool, not in the cell:
+ * inline it was 96 tokens x 32 bytes = 3 KB of a 3.2 KB cell, i.e. 94% of the
+ * store, paid by every literal too.  rpn_at is a pool index and nrpn its
+ * length; a literal has nrpn == 0. */
 typedef struct {
     unsigned short row, col;
     short          fmt;
+    short          nrpn;
+    int            rpn_at;            /* index into book.rpn[]              */
     uxl_val        v;                 /* the cached result                  */
     char           fml[UXL_FMLLEN];   /* the source text, "" when a literal */
-    uxl_tok        rpn[UXL_MAXRPN];
-    short          nrpn;
     unsigned char  mark;              /* recalc visit state                 */
     unsigned char  gen;               /* which recalc generation cached it  */
 } uxl_cell;
 
+/* A sheet owns no cells, only a sorted view of the shared pool. */
 typedef struct {
-    char     name[32];
-    uxl_cell cell[UXL_MAXCELL];
-    int      ncell;
+    char           name[32];
+    unsigned short idx[UXL_MAXCELL];  /* sorted by (row,col), into b->cell  */
+    int            ncell;
 } uxl_sheet;
 
 struct uxl_book {
     uxl_sheet sheet[UXL_MAXSHEET];
     int       nsheet;
+
+    uxl_cell  cell[UXL_MAXCELL];      /* the shared cell pool               */
+    int       nalloc;                 /* high-water mark of the bump half   */
+    unsigned short freecell[UXL_MAXCELL];
+    int       nfree;                  /* cells returned by uxl_clear        */
+
+    uxl_tok   rpn[UXL_RPNPOOL];       /* the shared token pool              */
+    int       nrpnpool;               /* bump; reclaimed by uxl_rpn_rebuild */
+
     char      pool[UXL_MAXSTR][UXL_STRLEN];
     int       npool;
     struct { char name[32]; int s, r, c; } name[UXL_MAXNAME];
@@ -71,6 +86,8 @@ struct uxl_book {
 
 /* the store's internals the calculator needs */
 int       uxl_find(const uxl_book *b, int s, int r, int c);
+uxl_cell *uxl_nth(uxl_book *b, int s, int i);       /* the i'th live cell   */
+int       uxl_rpn_store(uxl_book *b, uxl_cell *p, const uxl_tok *t, int n);
 uxl_cell *uxl_slot(uxl_book *b, int s, int r, int c, int make);
 int       uxl_intern(uxl_book *b, const char *t);
 

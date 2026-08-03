@@ -27,9 +27,8 @@ def main():
         w, h = ui.size()
         print("desktop is %dx%d" % (w, h))
 
-        n = ui.app_count()
-        print("apps: %d - UnoWord is the last slot" % n)
-        ui.launch(n - 1, settle=6.0)
+        slot = ui.launch_named("UnoWord", settle=6.0)
+        print("UnoWord is app slot %d of %d" % (slot, ui.app_count()))
         ui.shot("urc_00_open")
 
         # The window is opened by the shell at a known spot: uw_build asks for

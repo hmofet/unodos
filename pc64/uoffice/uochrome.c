@@ -917,7 +917,12 @@ static void paint_tip(const uoc_ui *u)
     fb_text(x + 3, y + 2, b->tip, k->text, -1);
 }
 
-void uoc_render(const uoc_ui *u)
+/* The bars only.  An app whose content starts BELOW the chrome must paint
+ * these first, then its content, then uoc_render_popups() last - otherwise
+ * the content overpaints an open dropdown and the menu appears clipped to
+ * the toolbar band.  (That is exactly how UnoCalc's File menu came out: two
+ * items and a cut edge, because the formula bar painted over the rest.) */
+void uoc_render_bars(const uoc_ui *u)
 {
     const uoc_look *k;
     int i, bh, b;
@@ -940,6 +945,16 @@ void uoc_render(const uoc_ui *u)
     etch_h(k, u->x, u->y + uoc_height(u) - 2, u->w);
     for (b = 0; b < u->ntbar; b++)
         if (u->bs[b].dock == UOC_DOCK_FLOAT) paint_toolbar(u, b);
+
+}
+
+/* Everything that floats: tear-offs, popups, the tip, the drag preview. */
+void uoc_render_popups(const uoc_ui *u)
+{
+    const uoc_look *k;
+    int i;
+    if (!u || !u->look) return;
+    k = u->look;
 
     /* torn-off palettes float above the bars but below an open menu */
     for (i = 0; i < UOC_MAXTEAR; i++) {
@@ -975,6 +990,13 @@ void uoc_render(const uoc_ui *u)
         else                         { w = len; h = m_tb_h(k); }
         drag_outline(u->drag_x, u->drag_y, w, h, k->dkshadow);
     }
+}
+
+/* The whole chrome in one call, for apps with nothing under it to overpaint. */
+void uoc_render(const uoc_ui *u)
+{
+    uoc_render_bars(u);
+    uoc_render_popups(u);
 }
 
 /* ---- events ---------------------------------------------------------------- */

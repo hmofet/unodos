@@ -22,7 +22,8 @@ Owner: the unoffice lane (workers B, C, D).
 | 6d | uobars + uofile: Open/Save dialog, status bar, ruler, the Assistant | **landed**, `[EXPERIMENTAL]` |
 | 7 | UnoWord: document model + page layout (`uoword.h`, `uow_*.c`) | **landed**, `[EXPERIMENTAL]` |
 | 8 | UnoWord the app (`pc64/apps/uoword.c` -> `APPS\UOWORD.UNO`) | **landed**, `[EXPERIMENTAL]` |
-| 9-10 | UnoCalc | not started |
+| 9 | UnoCalc: workbook store, calculator, number formats (`uocalc.h`, `uxl_*.c`) | **landed**, `[EXPERIMENTAL]` |
+| 10 | UnoCalc the app (`pc64/apps/uocalc.c` -> `APPS\UOCALC.UNO`) | **landed**, `[EXPERIMENTAL]` |
 | 11-12 | UnoShow | not started |
 
 ## Why the chrome is ours and not unoui
@@ -239,6 +240,62 @@ the layout engine is gated on the host without booting the OS.
 3. **`build.sh`'s kExports check earns its keep**: it caught all of the above
    at build time, rather than as a module that loads and then jumps into
    nothing.
+4. **A module's BSS comes out of a 4 MB arena shared by every module**
+   (`pc64_modload.c`, `MOD_ARENA_PAGES`), and `mkuno` prints the figure on
+   every build. UnoCalc's first link read `mem=104036K`: a per-sheet cell
+   array where each cell inlined 96 RPN tokens. It compiled, it passed every
+   host gate, and it could never have loaded on the machine. **Read the
+   `mem=` line** - it is the only place that number is visible before metal.
+
+## UnoCalc (phases 9 and 10)
+
+`uocalc.h` is the contract; `uxl_sheet.c` is the store, `uxl_calc.c` the
+formula compiler and evaluator, `uxl_numfmt.c` the number-format language, and
+`pc64/apps/uocalc.c` the app.
+
+- **The store is sparse.** Excel 97's grid is 65536 x 256 = 16.7 million
+  cells and a real sheet holds a few hundred, so live cells are a sorted
+  array searched by bisection - the same reasoning BIFF8 applies when it
+  stores rows as records rather than as a rectangle.
+- **One pool, not one per sheet.** Cells come from a single workbook-wide
+  pool and each sheet keeps a sorted array of **indices** into it. Per-sheet
+  arrays cost `UXL_MAXSHEET` times the memory whether the sheets were used or
+  not; sharing means one sheet may hold the lot, which is also how people use
+  a workbook.
+- **Compiled formulas live in a token pool**, not in the cell: inline, 96
+  tokens x 32 bytes was 94% of the store and every literal paid it. Setting a
+  formula bump-allocates and overwriting one leaks - deliberately, because
+  the **source text is kept in the cell**, so a full pool is reclaimed by
+  recompiling every live formula into a fresh one. No back-pointers, no free
+  list, no compaction pass to get wrong. The gate rewrites one cell 4000
+  times and then checks that an untouched neighbour still computes.
+- **The RPN is shaped like Excel's ptgs on purpose** (operands carry a value
+  or a reference, operators an arity), so unodoc's ptg conversion is
+  mechanical in both directions rather than a translation layer nobody can
+  check.
+- **Recalc is memoised depth-first with a generation counter**, and a cell
+  reached while it is already computing is the circular reference - which is
+  reported, not hung on.
+- **73 functions** across maths, statistics, text, logic, lookup and dates,
+  and the number-format language (`#,##0.00`, sections for
+  positive;negative;zero;text, dates, fractions, scientific). Excel's 1900
+  leap-year bug is reproduced, because a date serial that disagrees with
+  Excel's is worse than no date at all.
+
+Two engine bugs the gate caught are worth repeating. `ROUND(2.345,2)` gave
+2.34 because 2.345*100 is 234.4999... in binary, so rounding takes a relative
+epsilon nudge. And a date fixture that read "12-Jun-97" was simply **wrong**:
+serial 35562 is 12 May, and the engine was right - a fixture is only an oracle
+when it comes from one.
+
+### The trap phase 10 found: paint order
+
+An app whose content sits **below** the chrome must paint
+`uoc_render_bars()`, then its own content, then `uoc_render_popups()` LAST.
+Calling `uoc_render()` in that position paints an open dropdown and then
+overpaints it: UnoCalc's File menu came out as two items and a cut edge,
+clipped to the toolbar band, and **UnoWord had the same bug** and nobody had
+noticed because a two-item File menu still looks like a menu.
 
 ## Build integration
 
@@ -251,6 +308,19 @@ three are appends, which is how those choke-points are meant to grow.
 
 ## Changelog
 
+- **2026-08-03 - phases 9 and 10.** `uocalc.h` + `uxl_sheet.c` + `uxl_calc.c`
+  + `uxl_numfmt.c` (the sparse store, the RPN compiler and evaluator, 73
+  functions, the number-format language) and `pc64/apps/uocalc.c` ->
+  `APPS\UOCALC.UNO`. Gates: a fifth host harness at 110 checks, production
+  and debug pc64 builds, and **the app driven on screen over URC**
+  (`pc64/tools/uocalc_urc.py`): typing into cells, `=A1*A2` computing to 42,
+  the formula bar showing the source text back, three menus opened by mouse
+  and the About box dismissed. Two things this phase changed for everyone
+  else: the chrome paint is now split (`uoc_render_bars` /
+  `uoc_render_popups`, see the trap above, which also fixed UnoWord), and
+  `urcui.py` resolves an app by the **title of the window it opens**
+  (`launch_named`) rather than by slot index - `uoword_urc.py` had silently
+  driven UnoCalc the moment UnoCalc took the last slot.
 - **2026-08-03 - phases 7 and 8.** `uoword.h` + `uow_doc.c` + `uow_layout.c`
   (the piece-table model, run-list formatting, styles with based-on chains,
   undo/redo, and paginated layout with justification and widow control), and

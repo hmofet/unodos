@@ -231,6 +231,11 @@ int  uoc_pick(const uoc_ui *u);
  * Popups deliberately paint last and outside the bar rect, exactly as a real
  * menu overlaps the document beneath it. */
 void uoc_render(const uoc_ui *u);
+/* The same paint in two halves, for an app whose content sits BELOW the
+ * chrome: bars, then the app's own content, then the popups LAST.  Calling
+ * uoc_render() in that position clips every dropdown to the toolbar band. */
+void uoc_render_bars(const uoc_ui *u);
+void uoc_render_popups(const uoc_ui *u);
 
 int  uoc_menu_open(const uoc_ui *u);
 void uoc_dismiss(uoc_ui *u);
