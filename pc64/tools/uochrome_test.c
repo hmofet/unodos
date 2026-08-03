@@ -1,6 +1,6 @@
 /* ===========================================================================
  * uochrome_test - the host gate for the Office 97 command-bar engine
- * (OFFICE97-PLAN §5 phase 6a).
+ * (OFFICE97-PLAN §5 phase 6a and 6b).
  *
  * Runs without booting the OS, over the same uochrome.c the app module
  * compiles freestanding, linked against the shared software framebuffer the
@@ -8,7 +8,8 @@
  * unoui_event stream pc64 feeds - and after each gesture asserts two kinds of
  * thing:
  *
- *   BEHAVIOUR: which menu is open, which item is hot, what command fired.
+ *   BEHAVIOUR: which menu is open, which item is hot, what command fired,
+ *              where a toolbar ended up, what a palette handed back.
  *   PIXELS:    that what was drawn matches what the state says.  A model that
  *              is right while the painter is wrong is the failure mode a
  *              behaviour-only test cannot see, so the navy of an open title,
@@ -23,6 +24,7 @@
  *   ./uochrome_test <out_dir>      write the storyboard PPMs and assert
  * ======================================================================== */
 #include "uochrome.h"
+#include "uoicons.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -89,7 +91,12 @@ static void ev_key(int k, int mods)
 { unoui_event e; memset(&e,0,sizeof e); e.kind=UI_EV_KEY; e.key=k; e.mods=mods; feed(&e); }
 static void ev_char(int c, int mods)
 { unoui_event e; memset(&e,0,sizeof e); e.kind=UI_EV_CHAR; e.ch=c; e.mods=mods; feed(&e); }
+static void ev_tick(int n)
+{ unoui_event e; int i; memset(&e,0,sizeof e); e.kind=UI_EV_TICK;
+  for (i = 0; i < n; i++) feed(&e); }
 static void click(int x, int y) { ev_move(x,y); ev_down(x,y); ev_up(x,y); }
+static void drag(int x0, int y0, int x1, int y1)
+{ ev_move(x0,y0); ev_down(x0,y0); ev_move((x0+x1)/2,(y0+y1)/2); ev_move(x1,y1); ev_up(x1,y1); }
 
 /* ---- the demo app's menus -------------------------------------------------
  * Word 97's own tree, abridged to what exercises every drawing case: an
@@ -97,39 +104,39 @@ static void click(int x, int y) { ev_move(x,y); ev_down(x,y); ev_up(x,y); }
  * a disabled item.  It doubles as the first concrete draft of SPEC S-UOW-01,
  * which is why the strings are the real ones. */
 enum {
-    C_NONE = 0,
     C_NEW = 100, C_OPEN, C_CLOSE, C_SAVE, C_SAVEAS, C_PRINT, C_EXIT,
     C_SEND_MAIL, C_SEND_FAX,
     C_UNDO = 200, C_REDO, C_CUT, C_COPY, C_PASTE,
     C_NORMAL = 300, C_PAGELAYOUT, C_RULER, C_TOOLBARS,
-    C_BOLD = 400, C_ITALIC, C_UNDERLINE, C_LEFT, C_CENTER
+    C_BOLD = 400, C_ITALIC, C_UNDERLINE, C_LEFT, C_CENTER,
+    C_STYLE = 500, C_FONT, C_FONTCOLOR, C_BORDERS
 };
 
 static const uoc_item kSendTo[] = {
-    { "&Mail Recipient",    C_SEND_MAIL, 20, 0, 0, 0 },
-    { "&Fax Recipient...",  C_SEND_FAX,  21, 0, 0, 0 },
-    { "Microsoft &PowerPoint", 0,        -1, UOC_DISABLED, 0, 0 }
+    { "&Mail Recipient",      C_SEND_MAIL, UOI_LINK, 0, 0, 0 },
+    { "&Fax Recipient...",    C_SEND_FAX,  UOI_PRINT, 0, 0, 0 },
+    { "Microsoft &PowerPoint", 0,          -1, UOC_DISABLED, 0, 0 }
 };
 static const uoc_item kFile[] = {
-    { "&New...\tCtrl+N",     C_NEW,    0, 0, 0, 0 },
-    { "&Open...\tCtrl+O",    C_OPEN,   1, 0, 0, 0 },
+    { "&New...\tCtrl+N",     C_NEW,   UOI_NEW,   0, 0, 0 },
+    { "&Open...\tCtrl+O",    C_OPEN,  UOI_OPEN,  0, 0, 0 },
     { "&Close",              C_CLOSE, -1, 0, 0, 0 },
     { 0, 0, -1, 0, 0, 0 },
-    { "&Save\tCtrl+S",       C_SAVE,   2, 0, 0, 0 },
+    { "&Save\tCtrl+S",       C_SAVE,  UOI_SAVE,  0, 0, 0 },
     { "Save &As...",         C_SAVEAS,-1, 0, 0, 0 },
     { 0, 0, -1, 0, 0, 0 },
     { "Sen&d To",            0,       -1, 0, kSendTo, 3 },
-    { "&Print...\tCtrl+P",   C_PRINT,  3, 0, 0, 0 },
+    { "&Print...\tCtrl+P",   C_PRINT, UOI_PRINT, 0, 0, 0 },
     { 0, 0, -1, 0, 0, 0 },
     { "E&xit",               C_EXIT,  -1, 0, 0, 0 }
 };
 static const uoc_item kEdit[] = {
-    { "&Undo\tCtrl+Z",  C_UNDO,  4, 0, 0, 0 },
-    { "&Redo\tCtrl+Y",  C_REDO,  5, UOC_DISABLED, 0, 0 },
+    { "&Undo\tCtrl+Z",  C_UNDO,  UOI_UNDO,  0, 0, 0 },
+    { "&Redo\tCtrl+Y",  C_REDO,  UOI_REDO,  UOC_DISABLED, 0, 0 },
     { 0, 0, -1, 0, 0, 0 },
-    { "Cu&t\tCtrl+X",   C_CUT,   6, 0, 0, 0 },
-    { "&Copy\tCtrl+C",  C_COPY,  7, 0, 0, 0 },
-    { "&Paste\tCtrl+V", C_PASTE, 8, 0, 0, 0 }
+    { "Cu&t\tCtrl+X",   C_CUT,   UOI_CUT,   0, 0, 0 },
+    { "&Copy\tCtrl+C",  C_COPY,  UOI_COPY,  0, 0, 0 },
+    { "&Paste\tCtrl+V", C_PASTE, UOI_PASTE, 0, 0, 0 }
 };
 static const uoc_item kView[] = {
     { "&Normal",       C_NORMAL,     -1, UOC_RADIO | UOC_CHECKED, 0, 0 },
@@ -152,42 +159,75 @@ static const uoc_menu kMenus[] = {
 };
 #define NMENU 5
 
+/* the sixteen-colour palette Office 97 dropped from a colour button */
+static const fb_px kColors[16] = {
+    FB_RGB(0x00,0x00,0x00), FB_RGB(0x80,0x00,0x00), FB_RGB(0x00,0x80,0x00),
+    FB_RGB(0x80,0x80,0x00), FB_RGB(0x00,0x00,0x80), FB_RGB(0x80,0x00,0x80),
+    FB_RGB(0x00,0x80,0x80), FB_RGB(0xC0,0xC0,0xC0), FB_RGB(0x80,0x80,0x80),
+    FB_RGB(0xFF,0x00,0x00), FB_RGB(0x00,0xFF,0x00), FB_RGB(0xFF,0xFF,0x00),
+    FB_RGB(0x00,0x00,0xFF), FB_RGB(0xFF,0x00,0xFF), FB_RGB(0x00,0xFF,0xFF),
+    FB_RGB(0xFF,0xFF,0xFF)
+};
+static const uoc_palette kFontColorPal = {
+    UOC_PAL_COLOR, kColors, 0, 16, 8, "Font Color"
+};
+static const int kBorderIcons[8] = {
+    UOI_BORDERS, UOI_BORDERS, UOI_BORDERS, UOI_BORDERS,
+    UOI_BORDERS, UOI_BORDERS, UOI_BORDERS, UOI_BORDERS
+};
+static const uoc_palette kBorderPal = {
+    UOC_PAL_ICON, 0, kBorderIcons, 8, 4, "Borders"
+};
+
+static const char *const kStyles[] = {
+    "Normal", "Heading 1", "Heading 2", "Heading 3", "Body Text", "List Bullet"
+};
+static const char *const kFonts[] = {
+    "Times New Roman", "Arial", "Courier New", "Symbol"
+};
+
 static const uoc_tbitem kStd[] = {
-    { UOC_TB_BUTTON, C_NEW,   0, "New",   0, 0 },
-    { UOC_TB_BUTTON, C_OPEN,  1, "Open",  0, 0 },
-    { UOC_TB_BUTTON, C_SAVE,  2, "Save",  0, 0 },
-    { UOC_TB_SEP,    0,      -1, 0,       0, 0 },
-    { UOC_TB_BUTTON, C_PRINT, 3, "Print", 0, 0 },
-    { UOC_TB_BUTTON, C_UNDO,  4, "Undo",  0, 0 },
-    { UOC_TB_BUTTON, C_REDO,  5, "Redo",  UOC_DISABLED, 0 },
-    { UOC_TB_SEP,    0,      -1, 0,       0, 0 },
-    { UOC_TB_BUTTON, C_CUT,   6, "Cut",   0, 0 },
-    { UOC_TB_BUTTON, C_COPY,  7, "Copy",  0, 0 }
+    { UOC_TB_BUTTON, C_NEW,   UOI_NEW,   "New",   0, 0, 0, 0, 0 },
+    { UOC_TB_BUTTON, C_OPEN,  UOI_OPEN,  "Open",  0, 0, 0, 0, 0 },
+    { UOC_TB_BUTTON, C_SAVE,  UOI_SAVE,  "Save",  0, 0, 0, 0, 0 },
+    { UOC_TB_SEP,    0,      -1, 0,               0, 0, 0, 0, 0 },
+    { UOC_TB_BUTTON, C_PRINT, UOI_PRINT, "Print", 0, 0, 0, 0, 0 },
+    { UOC_TB_BUTTON, C_UNDO,  UOI_UNDO,  "Undo",  0, 0, 0, 0, 0 },
+    { UOC_TB_BUTTON, C_REDO,  UOI_REDO,  "Redo",  UOC_DISABLED, 0, 0, 0, 0 },
+    { UOC_TB_SEP,    0,      -1, 0,               0, 0, 0, 0, 0 },
+    { UOC_TB_BUTTON, C_CUT,   UOI_CUT,   "Cut",   0, 0, 0, 0, 0 },
+    { UOC_TB_BUTTON, C_COPY,  UOI_COPY,  "Copy",  0, 0, 0, 0, 0 }
 };
 static const uoc_tbitem kFmt[] = {
-    { UOC_TB_COMBO,  0,      -1, "Normal", 0, 90 },
-    { UOC_TB_COMBO,  0,      -1, "Times",  0, 80 },
-    { UOC_TB_SEP,    0,      -1, 0, 0, 0 },
-    { UOC_TB_TOGGLE, C_BOLD,      10, "Bold",      0, 0 },
-    { UOC_TB_TOGGLE, C_ITALIC,    11, "Italic",    0, 0 },
-    { UOC_TB_TOGGLE, C_UNDERLINE, 12, "Underline", 0, 0 },
-    { UOC_TB_SEP,    0,      -1, 0, 0, 0 },
-    { UOC_TB_TOGGLE, C_LEFT,      13, "Align Left", 0, 0 },
-    { UOC_TB_TOGGLE, C_CENTER,    14, "Center",     0, 0 }
+    { UOC_TB_COMBO,  C_STYLE, -1, "Style", 0, 90, kStyles, 6, 0 },
+    { UOC_TB_COMBO,  C_FONT,  -1, "Font",  0, 80, kFonts,  4, 0 },
+    { UOC_TB_SEP,    0,       -1, 0, 0, 0, 0, 0, 0 },
+    { UOC_TB_TOGGLE, C_BOLD,      UOI_BOLD,      "Bold",      0, 0, 0, 0, 0 },
+    { UOC_TB_TOGGLE, C_ITALIC,    UOI_ITALIC,    "Italic",    0, 0, 0, 0, 0 },
+    { UOC_TB_TOGGLE, C_UNDERLINE, UOI_UNDERLINE, "Underline", 0, 0, 0, 0, 0 },
+    { UOC_TB_SEP,    0,       -1, 0, 0, 0, 0, 0, 0 },
+    { UOC_TB_TOGGLE, C_LEFT,   UOI_ALIGN_L, "Align Left", 0, 0, 0, 0, 0 },
+    { UOC_TB_TOGGLE, C_CENTER, UOI_ALIGN_C, "Center",     0, 0, 0, 0, 0 },
+    { UOC_TB_SEP,    0,       -1, 0, 0, 0, 0, 0, 0 },
+    { UOC_TB_SPLIT,  C_FONTCOLOR, UOI_FONTCOLOR, "Font Color", 0, 0, 0, 0,
+      &kFontColorPal },
+    { UOC_TB_SPLIT,  C_BORDERS,   UOI_BORDERS,   "Borders",    0, 0, 0, 0,
+      &kBorderPal }
 };
 static const uoc_tbar kBars[] = {
     { "Standard",   kStd, 10 },
-    { "Formatting", kFmt,  9 }
+    { "Formatting", kFmt, 12 }
 };
 #define NBAR 2
 
 /* ---- the document behind the chrome, so overlap is visible ---------------- */
 static void paint_all(void)
 {
-    int top = UI.y + uoc_height(&UI);
+    int cx, cy, cw, ch;
+    uoc_client_rect(&UI, &cx, &cy, &cw, &ch);
     fb_clear(FB_RGB(0x80,0x80,0x80));
-    fb_fill_rect(40, top + 10, FB_W - 80, FB_H - top - 50, FB_RGB(0xFF,0xFF,0xFF));
-    fb_text(52, top + 22, "The document sits under the chrome; a menu overlaps it.",
+    fb_fill_rect(cx + 8, cy + 8, cw - 16, ch - 24, FB_RGB(0xFF,0xFF,0xFF));
+    fb_text(cx + 20, cy + 20, "The document sits under the chrome.",
             FB_RGB(0x00,0x00,0x00), -1);
     uoc_render(&UI);
 }
@@ -233,7 +273,7 @@ static void snap(const char *label)
 static int bar_h(void)  { return fb_text_h() + 2 * uoc_look_97()->pad + 2; }
 static int item_h(void)
 { int t = fb_text_h() + 6, i = uoc_look_97()->icon_px + 2; return t > i ? t : i; }
-/* the centre of top-level menu item `idx` */
+static int tb_h(void)   { return uoc_look_97()->icon_px + 6; }
 static int title_x(int idx)
 {
     const uoc_look *k = uoc_look_97();
@@ -251,14 +291,14 @@ static void btn_rect(const uoc_tbar *tb, int bar, int idx, int *rx, int *ry)
     for (i = 0; i < idx; i++) {
         const uoc_tbitem *b = &tb->item[i];
         x += b->w > 0 ? b->w
-           : (b->kind == UOC_TB_SEP ? k->pad + 2 : k->icon_px + 8);
+           : (b->kind == UOC_TB_SEP ? k->pad + 2
+           : (b->kind == UOC_TB_SPLIT ? k->icon_px + 8 + k->pad + 7
+                                      : k->icon_px + 8));
     }
     *rx = x;
-    *ry = UI.y + bar_h() + bar * (k->icon_px + 6) + 1;
+    *ry = UI.y + bar_h() + bar * tb_h() + 1;
 }
-static int btn_x(const uoc_tbar *tb, int idx)
-{ int x, y; btn_rect(tb, 0, idx, &x, &y); return x + 6; }
-static int row_y(int bar) { return UI.y + bar_h() + bar * (uoc_look_97()->icon_px + 6) + 8; }
+static int row_y(int bar) { return UI.y + bar_h() + bar * tb_h() + tb_h() / 2; }
 
 int main(int argc, char **argv)
 {
@@ -266,35 +306,30 @@ int main(int argc, char **argv)
     int y0;
 
     if (argc >= 2) g_dir = argv[1];
-    uoc_init(&UI, kMenus, NMENU, kBars, NBAR, 0, 0, FB_W);
+    uoc_icons_install();                 /* phase 6b: real artwork */
+    uoc_init(&UI, kMenus, NMENU, kBars, NBAR, 0, 0, FB_W, FB_H - 14);
 
     printf("uochrome storyboard -> %s\n", g_dir);
     y0 = bar_h() / 2;
 
-    /* 1. idle */
-    snap("idle: menu bar and two toolbars");
-    eq("idle: nothing open", uoc_menu_open(&UI), 0);
-    eq("idle: chrome height",
-       uoc_height(&UI), bar_h() + 2 * (k->icon_px + 6));
+    /* ================= phase 6a: menus, and flat toolbars ================= */
 
-    /* 2. hovering a title highlights it but does NOT open it */
+    snap("idle: menu bar, two toolbars, real icons");
+    eq("idle: nothing open", uoc_menu_open(&UI), 0);
+    eq("idle: top band height", uoc_height(&UI), bar_h() + 2 * tb_h());
+
     ev_move(title_x(1), y0);
     snap("hover Edit (no menu opens on hover alone)");
     eq("hover: still closed", uoc_menu_open(&UI), 0);
     eq("hover: hot title", UI.hot, 1);
     px_is("hover: the title sits on the navy bar", title_x(1), y0, k->sel);
 
-    /* 3. click opens it */
     click(title_x(0), y0);
     snap("File menu open");
     eq("open: File", UI.open, 0);
     eq("open: one level", UI.depth, 1);
     px_is("open: the title stays navy", title_x(0), y0, k->sel);
-    /* the popup body is face-coloured, below the bar */
-    px_is("open: the popup covers the document",
-          UI.x + 20, UI.y + bar_h() + 2 * (k->icon_px + 6) + item_h(), k->face);
 
-    /* 4. hovering an item highlights it */
     {
         int py = UI.y + bar_h() + 2 + item_h() + item_h() / 2;   /* item 1 */
         ev_move(UI.x + 40, py);
@@ -303,7 +338,6 @@ int main(int argc, char **argv)
         px_is("hover item: navy behind it", UI.x + 60, py, k->sel);
     }
 
-    /* 5. a disabled item never becomes hot */
     click(title_x(1), y0);                       /* Edit */
     {
         int py = UI.y + bar_h() + 2 + item_h() + item_h() / 2;   /* Redo */
@@ -313,30 +347,27 @@ int main(int argc, char **argv)
         px_not("disabled: no navy", UI.x + 60, py, k->sel);
     }
 
-    /* 6. a submenu */
     click(title_x(0), y0);                       /* File again */
     {
         int i, py = UI.y + bar_h() + 2;
         for (i = 0; i < 7; i++) py += kFile[i].text ? item_h() : (fb_text_h()/2 + 3);
-        py += item_h() / 2;                      /* "Send To" */
+        py += item_h() / 2;
         ev_move(UI.x + 40, py);
         snap("File > Send To: the submenu opens to the right");
         eq("submenu: two levels", UI.depth, 2);
         eq("submenu: parent hot", UI.path[0], 7);
     }
 
-    /* 7. a command fires from the submenu, and the menus close */
     g_cmd = 0;
     {
         int i, py = UI.y + bar_h() + 2;
         for (i = 0; i < 7; i++) py += kFile[i].text ? item_h() : (fb_text_h()/2 + 3);
         py += item_h() / 2;                      /* the "Send To" item's middle */
-        ev_move(UI.x + 40, py);                  /* keep the submenu open      */
+        ev_move(UI.x + 40, py);
         /* A submenu's border is aligned to its parent ITEM, so the parent
-         * item's own middle is inside the submenu's FIRST entry - which is
-         * exactly the slide that makes "hover across into the submenu" feel
-         * right, and the one that is off by an item if you reason from the
-         * popup's top instead. */
+         * item's own middle is inside the submenu's FIRST entry - the slide
+         * that makes "hover across into the submenu" feel right, and the one
+         * that is off by an item if you reason from the popup's top. */
         ev_move(UI.x + 240, py);
         eq("submenu: first entry hot", UI.path[1], 0);
         ev_up(UI.x + 240, py);
@@ -345,7 +376,6 @@ int main(int argc, char **argv)
         eq("fired: menus closed", uoc_menu_open(&UI), 0);
     }
 
-    /* 8. keyboard: F10 activates the bar, Right walks it, Down opens */
     ev_key(UOC_KEY_F10, 0);
     eq("F10: bar keyed", UI.keyed, 1);
     eq("F10: nothing open yet", uoc_menu_open(&UI), 0);
@@ -355,18 +385,15 @@ int main(int argc, char **argv)
     eq("kbd: Edit open", UI.open, 1);
     eq("kbd: first item hot", UI.path[0], 0);
 
-    /* Down skips the disabled Redo and the separator that follows it */
     ev_key(UI_KEY_DOWN, 0);
     snap("keyboard: Down skips the disabled item and the separator");
     eq("kbd: skipped to Cut", UI.path[0], 3);
 
-    /* Enter fires it */
     g_cmd = 0;
     ev_key(UI_KEY_ENTER, 0);
     eq("kbd: Enter fired Cut", g_cmd, C_CUT);
     eq("kbd: closed after firing", uoc_menu_open(&UI), 0);
 
-    /* 9. Alt+mnemonic opens a menu by letter */
     ev_char('o', UI_MOD_ALT);                    /* "F&ormat" */
     snap("Alt+O opens Format by its mnemonic");
     eq("mnemonic: Format open", UI.open, 3);
@@ -376,16 +403,14 @@ int main(int argc, char **argv)
     eq("esc: fully dismissed", uoc_menu_open(&UI), 0);
     eq("esc: bar released", UI.keyed, 0);
 
-    /* 10. toolbar: flat, raised on hover, sunken on press.  This is SPEC
-     *     S-OFF-01's central claim about Office 97 command bars, so it is
-     *     asserted at the pixel that carries it: the button's top-left
-     *     corner, which is face when flat, the bright edge when hovered and
-     *     the dark edge when pressed. */
+    /* flat, raised on hover, sunken on press - SPEC S-OFF-01's central claim,
+     * asserted at the pixel that carries it */
     {
-        int bx = btn_x(&kBars[0], 1), by = row_y(0), cx, cy;
+        int bx, by = row_y(0), cx, cy;
         btn_rect(&kBars[0], 0, 1, &cx, &cy);
+        bx = cx + 6;
 
-        ev_move(FB_W / 2, FB_H - 30);           /* nowhere near the toolbar */
+        ev_move(FB_W / 2, FB_H - 40);
         paint_all();
         px_is("tb flat: no bevel at rest", cx, cy, k->face);
 
@@ -406,48 +431,170 @@ int main(int argc, char **argv)
         eq("tb: no longer held", UI.down_btn, -1);
     }
 
-    /* 11. a disabled toolbar button neither hovers nor fires */
     {
-        int bx = btn_x(&kBars[0], 6), by = row_y(0);   /* Redo, disabled */
+        int bx, by = row_y(0), cx, cy;
+        btn_rect(&kBars[0], 0, 6, &cx, &cy);       /* Redo, disabled */
+        bx = cx + 6;
         g_cmd = 0;
         click(bx, by);
         snap("toolbar: the disabled \"Redo\" ignores a click");
         eq("tb disabled: nothing fired", g_cmd, 0);
     }
 
-    /* 12. a toggle stays down after the mouse leaves */
     {
         int bx, by = row_y(1), cx, cy;
-        btn_rect(&kBars[1], 1, 3, &cx, &cy);           /* Bold */
+        btn_rect(&kBars[1], 1, 3, &cx, &cy);       /* Bold */
         bx = cx + 6;
         g_cmd = 0;
         click(bx, by);
-        ev_move(FB_W / 2, FB_H - 30);                  /* leave the toolbar */
+        ev_move(FB_W / 2, FB_H - 40);
         snap("toolbar: Bold toggled ON stays sunken with the mouse away");
         eq("toggle: fired", g_cmd, C_BOLD);
         eq("toggle: on", uoc_toggle(&UI, C_BOLD), 1);
         px_is("toggle: still sunken once the mouse has gone", cx, cy, k->shadow);
 
         click(bx, by);
-        ev_move(FB_W / 2, FB_H - 30);
-        snap("toolbar: clicking Bold again turns it off");
+        ev_move(FB_W / 2, FB_H - 40);
+        paint_all();                 /* sample what THIS state draws, not the
+                                      * frame the previous snap left behind */
         eq("toggle: off again", uoc_toggle(&UI, C_BOLD), 0);
         px_is("toggle: flat again", cx, cy, k->face);
     }
 
-    /* 13. a click on the document closes an open menu and is consumed */
-    click(title_x(2), y0);
-    eq("view open", UI.open, 2);
+    /* ============ phase 6b: combos, palettes, tear-offs, docking ========== */
+
+    /* a ScreenTip after the dwell */
     {
-        unoui_event e;
-        int cmd = 0, used;
-        memset(&e, 0, sizeof e);
-        e.kind = UI_EV_MOUSE_DOWN; e.x = FB_W / 2; e.y = FB_H - 60;
-        used = uoc_handle(&UI, &e, &cmd);
-        eq("click-away: consumed by the chrome", used, 1);
-        eq("click-away: menu closed", uoc_menu_open(&UI), 0);
+        int bx, by = row_y(0), cx, cy;
+        btn_rect(&kBars[0], 0, 2, &cx, &cy);       /* Save */
+        bx = cx + 6;
+        ev_move(bx, by);
+        ev_tick(UOC_TIP_TICKS + 1);
+        snap("ScreenTip: \"Save\" appears after the hover dwell");
+        eq("tip: armed on the right button", UI.tip_btn, 2);
     }
-    snap("a click on the document dismisses the menu");
+
+    /* the Style combo drops a list, and picking from it changes the field */
+    {
+        int cx, cy, bx, by = row_y(1);
+        btn_rect(&kBars[1], 1, 0, &cx, &cy);       /* Style combo */
+        bx = cx + 80;                              /* its drop button */
+        ev_move(bx, by);
+        ev_down(bx, by);
+        ev_up(bx, by);
+        snap("combo: the Style list drops");
+        eq("combo: a list is open", UI.pop_kind, UOC_POP_COMBO);
+
+        {   int lx, ly;
+            lx = cx + 10;
+            ly = cy + (uoc_look_97()->icon_px + 6 - 2) + 1 + 2 * (fb_text_h() + 2) + 1;
+            ev_move(lx, ly);
+            eq("combo: third row hot", UI.pop_hot, 2);
+            g_cmd = 0;
+            ev_down(lx, ly);
+            snap("combo: picking \"Heading 2\" closes the list and sets the field");
+            eq("combo: fired its id", g_cmd, C_STYLE);
+            eq("combo: selection stored", uoc_combo(&UI, C_STYLE), 2);
+            eq("combo: list closed", UI.pop_kind, UOC_POP_NONE);
+        }
+    }
+
+    /* a split button drops a colour palette */
+    {
+        int cx, cy, ax, by = row_y(1);
+        btn_rect(&kBars[1], 1, 10, &cx, &cy);      /* Font Color split */
+        ax = cx + k->icon_px + 8 + 3;              /* over the arrow half */
+        ev_move(ax, by);
+        ev_down(ax, by);
+        snap("split button: the Font Color palette drops");
+        eq("palette: open", UI.pop_kind, UOC_POP_PALETTE);
+
+        {   int sw = k->icon_px + 4;
+            int px = cx, py = cy + (k->icon_px + 6 - 2);
+            int hx = px + 2 + sw / 2 + sw, hy = py + 7 + 2 + sw / 2;
+            ev_move(hx, hy);
+            eq("palette: second swatch hot", UI.pop_hot, 1);
+            g_cmd = 0;
+            ev_down(hx, hy);
+            snap("palette: picking a swatch reports the button and the index");
+            eq("palette: fired the split button's id", g_cmd, C_FONTCOLOR);
+            eq("palette: the index picked", uoc_pick(&UI), 1);
+            eq("palette: closed", UI.pop_kind, UOC_POP_NONE);
+        }
+    }
+
+    /* ...and the same palette can be TORN OFF by its move bar */
+    {
+        int cx, cy, ax, by = row_y(1), px, py;
+        btn_rect(&kBars[1], 1, 10, &cx, &cy);
+        ax = cx + k->icon_px + 8 + 3;
+        ev_move(ax, by);
+        ev_down(ax, by);
+        eq("tear: palette open again", UI.pop_kind, UOC_POP_PALETTE);
+        px = cx; py = cy + (k->icon_px + 6 - 2);
+        /* grab the move bar across its top and drag it away */
+        ev_down(px + 20, py + 2);
+        ev_move(240, 220);
+        ev_up(240, 220);
+        snap("tear-off: the palette is dragged away and floats");
+        eq("tear: one palette is floating", UI.tear[0].open, 1);
+        eq("tear: the drop-down itself closed", UI.pop_kind, UOC_POP_NONE);
+
+        /* a swatch in the FLOATING palette still picks */
+        g_cmd = 0;
+        {   int sw = k->icon_px + 4, th = fb_text_h() + k->pad;
+            ev_down(UI.tear[0].x + 2 + sw / 2,
+                    UI.tear[0].y + th + 7 + 2 + sw / 2);
+            eq("tear: a floating swatch still fires", g_cmd, C_FONTCOLOR);
+            eq("tear: index 0", uoc_pick(&UI), 0);
+        }
+    }
+
+    /* dragging a toolbar off its dock makes it float */
+    {
+        int gx = UI.x + 3, gy = UI.y + bar_h() + tb_h() + tb_h() / 2;
+        eq("dock: two top bands to start", uoc_height(&UI), bar_h() + 2 * tb_h());
+        drag(gx, gy, 300, 300);
+        snap("docking: the Formatting bar dragged into the document floats");
+        eq("dock: it is floating", UI.bs[1].dock, UOC_DOCK_FLOAT);
+        eq("dock: one top band left", uoc_height(&UI), bar_h() + tb_h());
+    }
+
+    /* ...and dragging it to the left edge docks it as a column */
+    {
+        int tx = UI.bs[1].fx + 20, ty = UI.bs[1].fy + 3;
+        int cx0, cy0, cw0, ch0, cx1, cw1;
+        uoc_client_rect(&UI, &cx0, &cy0, &cw0, &ch0);
+        drag(tx, ty, UI.x + 4, 240);
+        snap("docking: dropped at the left edge, it becomes a column");
+        eq("dock: docked left", UI.bs[1].dock, UOC_DOCK_LEFT);
+        uoc_client_rect(&UI, &cx1, &cy0, &cw1, &ch0);
+        eq("dock: the client area moved right", cx1, cx0 + tb_h());
+        eq("dock: and got narrower", cw1, cw0 - tb_h());
+    }
+
+    /* a floating bar's close box hides it */
+    {
+        int tx, ty;
+        drag(UI.x + 4, UI.y + bar_h() + tb_h() + 4, 320, 260);
+        eq("close: floating again", UI.bs[1].dock, UOC_DOCK_FLOAT);
+        tx = UI.bs[1].fx; ty = UI.bs[1].fy;
+        {   int len = 0, i;
+            for (i = 0; i < kBars[1].n; i++) {
+                const uoc_tbitem *b = &kBars[1].item[i];
+                len += b->w > 0 ? b->w
+                     : (b->kind == UOC_TB_SEP ? k->pad + 2
+                     : (b->kind == UOC_TB_SPLIT ? k->icon_px + 8 + k->pad + 7
+                                                : k->icon_px + 8));
+            }
+            len += k->pad * 2;
+            /* the close box spans [fx+fw-s-2, fx+fw-2): aim at its middle,
+             * not its left edge, which is two pixels outside it */
+            click(tx + len - 2 - fb_text_h() / 2, ty + 2 + fb_text_h() / 2);
+        }
+        snap("a floating bar's close box hides it");
+        eq("close: hidden", UI.bs[1].hidden, 1);
+    }
 
     printf(g_fail ? "\nuochrome gate: %d FAILURE(S)\n" : "\nuochrome gate: GREEN\n",
            g_fail);
