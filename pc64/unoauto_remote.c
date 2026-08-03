@@ -1389,6 +1389,8 @@ void unoauto_remote_boot(void)
     char v[64]; char *p; int oct, i;
     if (g_state != RS_OFF) return;                 /* armed once */
 
+    unoauto_gate_boot();       /* debug `urc-auth=<token>` hook; no-op in prod */
+
     /* PRODUCTION: nothing happens until a console user arms the channel.  This
      * one line is the difference between "a shipped OS that can be remotely
      * driven if you ask it to" and "a shipped OS listening on the LAN".  The

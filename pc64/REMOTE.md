@@ -3,8 +3,16 @@
 A bidirectional link between a running UnoDOS pc64 machine and the PC you
 develop from: **remote logging** out, **remote control** in, and free-form
 **messages + commands in either direction**, driven from a simple text command
-language *or* a Python API on each end. Debug builds only (same `UNO_DEBUG` gate
-as the rest of unoautomate); in production every entry point compiles away.
+language *or* a Python API on each end.
+
+**Ships in production as of 2026-08-03.** It used to be debug-only (`UNO_DEBUG`,
+like the rest of unoautomate) and absent from a shipped image. The gate is now
+PRIVILEGE, not a compile flag: the channel is present in every build, starts
+DISARMED, and a console user has to arm it - see **Production: arming and
+authentication** below, and `unoauto_gate.h` for the full model. Everything in
+this document describes the channel once it is running; the arming step is what
+changed, plus one new verb (`auth`) and one new response (`err denied (needs
+automate.<power>)`).
 
 ## Shape
 
@@ -56,9 +64,80 @@ connection drops it reconnects with a short backoff.
 > The WinForms client's **Scan…** button broadcasts a PROBE, lists the listening
 > boxes, and dials the one you pick. Gate: `tools/listen_qemu.py`.
 
-> **Security.** Plaintext, **LAN-only by intent**. Do not expose the listener
+> **Security.** Plaintext, **LAN-only by intent**, even now that it
+> authenticates - the token proves who may drive the box, it does not encrypt
+> the wire. Do not expose the listener
 > to an untrusted network; it can drive input, launch apps, run Python, and
 > power the machine off.
+
+## Production: arming and authentication
+
+On a **production** boot nothing happens: no listener, no dial-out, no dispatch.
+`unoauto_remote_boot()` returns immediately because the gate is closed, and
+there is no `DEBUG.CFG` to configure it with anyway. The channel exists but is
+inert until somebody at the machine turns it on.
+
+**Arming.** Control Panel -> **Remote control...** (also on the System Info
+panel, beside Manage accounts). The panel offers three levels, and each is a
+real capability the user must hold or be granted:
+
+| Panel wording | Capability | Tier | What the link can then do |
+|---|---|---|---|
+| **Watch** | `automate.observe` | ADMIN | `probe` `log` `uptime` `apps` `vols` `disks` `devices` `screen` `disc` `caps` |
+| **Control** | `automate.drive` | ADMIN | `key` `pointer` `launch` `close` `test` `guard` `pet` `safe` |
+| **Full access** | `automate.system` | KERNEL | `put` `mkdir` `install` `arm` `disarm` `readsec` `writesec` `gptinit` `mkpart` `mkfs` `prepdisk` `makeboot` `bootnext` `reboot` `poweroff` `py` `iwl` `eth` `hwwdt` `nst` |
+
+Enabling runs `unosec_request(cap, SESSION)` per ticked level. A user whose
+roles already cover one gets it silently (the built-in `admin` role holds every
+ADMIN-tier capability, so Watch and Control are usually silent for an admin);
+anything else draws the normal consent sheet. `automate.system` is KERNEL tier,
+so it is never covered by a role and always prompts. Refusing a sheet just
+leaves that level out of the arm - the others still take effect, and the panel
+says "Partly granted".
+
+**The token.** A successful arm mints 16 hex characters from `tls_entropy_get`
+and shows them with the box's address. The token is RAM-only: it is never
+written to disk, and disarming, signing out or rebooting kills it. If the box
+has no defensible entropy source, arming FAILS rather than minting a weak token
+(same argument `tls_entropy.c` makes about keys).
+
+**Authenticating.** The first thing a client sends is:
+
+```
+auth <token>
+ok authenticated as <user> powers=observe drive system
+```
+
+Until that succeeds every other verb answers `err auth-required`. Three bad
+tokens disarm the channel outright - the operator can re-arm at the console, an
+attacker on the wire cannot, so the plaintext protocol is not a brute-force
+oracle. The third refusal is still *answered* before the channel goes down (the
+disarm is deferred one frame), so a mistyped code gets told rather than dropped.
+
+**After auth**, the link runs as the arming user under `UNOSEC_TRUST_REMOTE` and
+every verb is checked against the powers granted at arm time. A verb outside
+them answers `err denied (needs automate.system)`, naming the missing power so
+the operator knows what to go and grant. `caps` reports the three flags, so a
+client can grey out what it cannot use instead of discovering the boundary by
+tripping it. **The remote path never prompts**: a consent sheet needs somebody
+at the machine, and a remote link by definition has nobody there.
+
+Losing the link deauthenticates but leaves the channel armed - in listen mode
+you are expected to reconnect without walking back to the machine. The owner's
+session ending (sign out, lock, expiry) disarms on the next frame, so a token
+can never outlive the login that made it.
+
+**Verb table:** the complete list, with the power each verb costs, is the `GATE[]`
+table in `unoauto_gate.c`. It is fail-closed - a verb with no row is refused, so
+adding a verb without classifying it denies it rather than making it ambient.
+
+> **Debug builds are unaffected.** The gate is transparent under `UNO_DEBUG`:
+> `DEBUG.CFG` still arms the channel, no token, every verb allowed. Every QEMU
+> gate under `tools/` and the WinForms client work exactly as before. The
+> DEBUG.CFG key **`urc-auth=<token>`** runs the *production* rules in a debug
+> image with a token you choose (arming observe+drive but not system), which is
+> how the security path is regression-tested without a screen and a human:
+> `tools/urcauth_qemu.py`.
 
 ## NIC-independent transport (serial / UART)
 
@@ -123,8 +202,14 @@ unchanged.
 
 ### Command verbs executed on pc64
 
+In a production image every verb below except `auth` needs a power the console
+user granted at arm time (see the table above); the reply on refusal is
+`err denied (needs automate.<power>)`, or `err auth-required` before `auth`.
+
 | Verb | Effect | Reply |
 |------|--------|-------|
+| `auth <token>` | authenticate the link (production; a debug build answers "open" and requires nothing) | `ok authenticated as <user> powers=…` / `err auth failed` |
+| `caps` | what this link may do | three `ok` lines: `observe 0\|1`, `drive 0\|1`, `system 0\|1` |
 | `probe` | `unoauto_probe()` snapshot | one `ok` line per row: `kind state v1 v2 name` (name last, may contain spaces) |
 | `log <text>` | `unoauto_log(SCRIPT, …)` | `ok logged` |
 | `key <scan> <uni> [ctrl]` | inject a keypress | `ok` |
@@ -310,9 +395,11 @@ Or from the library: `link.push_file(2, r'EFI\BOOT\BOOTX64.EFI', 'build/BOOTX64.
 returns `True` when verified; then `link.bootnext(n)` / `link.reboot()`.
 
 > **Security, `put`/`reboot`/`bootnext` widen the blast radius.** They are arbitrary
-> file write + reset + boot-target change, and (like the whole channel) are
-> **UNO_DEBUG-only** and **plaintext, LAN-only**. Never expose the listener to an
-> untrusted network. `put` caps a single upload at 8 MB (the staging buffer).
+> file write + reset + boot-target change, which is why all three sit under
+> **`automate.system`** - the KERNEL-tier power a console user has to consent to
+> separately, and the one an admin's role never covers by itself. The channel is
+> still **plaintext, LAN-only**: never expose the listener to an untrusted
+> network. `put` caps a single upload at 8 MB (the staging buffer).
 
 `probe` row kinds: `0` module (`.UNO` file), `1` window (title), `2` subsystem
 (`heap`/`net`/`fs`/`shell`) - see `unoauto.h` for the `v1`/`v2` meanings.
@@ -391,7 +478,8 @@ entry you must use the on-device Install app while booted to firmware (attached)
 > `prepdisk`) is inert until you `arm <disk>`, which **auto-disarms after one
 > op** and **refuses the disk UnoDOS booted from** (`is_boot`). `arm` echoes the
 > disk name + size so you can confirm the target before committing. Like the rest
-> of the channel these verbs are **UNO_DEBUG-only** and **LAN-only**. `prepdisk`
+> of the destructive tail these verbs need **`automate.system`** (see "Production:
+> arming and authentication"), and the channel is **LAN-only**. `prepdisk`
 > erases the whole disk.
 
 ### Installing to an internal disk

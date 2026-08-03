@@ -81,6 +81,12 @@ void unoauto_gate_tick(void);
 /* ---- the link side --------------------------------------------------------
  * unoauto_remote.c calls these; nothing else should. */
 
+/* Called once from unoauto_remote_boot, before anything else.  Production: a
+ * no-op.  Debug with `urc-auth=<token>` in DEBUG.CFG: arms the production gate
+ * with that token so a headless QEMU run can exercise the auth and per-verb
+ * paths - see the note in unoauto_gate.c for why that hook has to exist. */
+void unoauto_gate_boot(void);
+
 /* May the channel run AT ALL this boot?  0 in production until armed - the
  * remote boot path returns immediately, so a production image with nobody
  * signed in has no listener and no dial-out.  Always 1 in a debug build. */

@@ -116,6 +116,32 @@ since that is where the capability (and the churn, see §0) now lives.
 
 ## API changelog
 
+### 2026-08-03 - UNOAUTO_API 2: unoautomate ships in PRODUCTION
+
+**Breaking for anyone who tested the build flag.** `unoauto.h` no longer has an
+`#ifdef UNO_DEBUG` gate, and the no-op macro fallbacks that stood in for the API
+in a production build (`unoauto_log(...)` -> `((void)0)`, `unoauto_probe(...)`
+-> `0`, and the rest) are **deleted**. Every declaration is live in every build.
+
+- A consumer that used `#ifdef UNO_DEBUG` to decide whether unoautomate existed
+  must now test PRIVILEGE instead: `unoauto_gate_powers()`, or `unosec_require`
+  on the relevant `automate.*` capability. The symbols are always there; whether
+  you may *use* them is a runtime question now.
+- `unoauto_hook_fire` is a MACRO, not a function. It reads the new global
+  `unoauto_hooks_live` and only calls `unoauto_hook_fire_()` when a hook is
+  attached - the tap points are hot paths (net.tx/rx per frame, every malloc)
+  that used to compile away in production and no longer do. Producers keep
+  calling `unoauto_hook_fire(point, arg)` unchanged; nobody should call the
+  underscore form.
+- New sibling header **`unoauto_gate.h`**: arming, the token, per-verb
+  authorization. `unoauto_remote.c` asks it; it decides. The complete reachable
+  surface of a URC link is the `GATE[]` table in `unoauto_gate.c`, and it is
+  fail-closed - **a new verb with no row in that table is refused**. Add the row
+  in the same commit as the verb.
+- The debug build is behaviourally unchanged: the gate is transparent, DEBUG.CFG
+  still arms the channel, no token, every verb allowed.
+
+
 Newest first; each dated. A `UNOAUTO_API` bump marks a breaking change, read
 the entry before building (§0).
 

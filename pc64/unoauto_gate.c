@@ -32,6 +32,7 @@ static usec_session_t g_console_sess;                /* the arming session     *
 static usec_session_t g_link_sess;                   /* TRUST_REMOTE, the link */
 static int          g_authed;                        /* current link is auth'd */
 static int          g_badauth;                       /* failed auth attempts   */
+static int          g_lockout;                       /* disarm on the next tick*/
 static int          g_grants[3];                     /* handles, to drop later */
 
 #define BADAUTH_MAX 3          /* then disarm: no brute-force oracle on a LAN */
@@ -267,7 +268,7 @@ void unoauto_gate_disarm(const char *why)
     for (i = 0; i < 3; i++) { if (g_grants[i] > 0) unosec_drop(g_grants[i]); g_grants[i] = 0; }
     if (g_link_sess) unosec_logout(g_link_sess);
     g_link_sess = 0; g_console_sess = 0;
-    g_armed = 0; g_powers = 0; g_authed = 0; g_badauth = 0;
+    g_armed = 0; g_powers = 0; g_authed = 0; g_badauth = 0; g_lockout = 0;
     memset(g_token, 0, sizeof g_token);
     unoauto_log(UA_CH_SCRIPT, "urc: disarmed (%s)", why ? why : "?");
     unosec_audit(USC_CAP_AUTOMATE_OBSERVE, "urc:disarm", 1);
@@ -284,8 +285,17 @@ void unoauto_gate_tick(void)
 {
     /* A token must never outlive the login that made it.  The console session
      * ending - sign out, lock, expiry - stands the channel down on the next
-     * frame, without the user having to remember to disarm. */
-    if (g_armed && (!g_console_sess || !unosec_session_valid(g_console_sess)))
+     * frame, without the user having to remember to disarm.
+     *
+     * g_console_sess == 0 means the arm did NOT come from a console user: the
+     * only way that happens is the debug `urc-auth=<token>` hook, which has no
+     * session to outlive.  Checking it here rather than assuming matters - the
+     * first version of this function disarmed the debug arm on the very next
+     * frame, so the listener came up and vanished before any client could dial
+     * in.  Production arms always set g_console_sess (unoauto_gate_arm refuses
+     * without a valid one), so this is not a hole in the real path. */
+    if (g_lockout) { g_lockout = 0; unoauto_gate_disarm("failed authentication"); return; }
+    if (g_armed && g_console_sess && !unosec_session_valid(g_console_sess))
         unoauto_gate_disarm("owner session ended");
 }
 
@@ -303,6 +313,35 @@ static int auth_forced(void)
     return cached;
 #else
     return 1;
+#endif
+}
+
+void unoauto_gate_boot(void)
+{
+#ifdef UNO_DEBUG
+    /* `urc-auth=<token>` in DEBUG.CFG: run the PRODUCTION auth + per-verb rules
+     * in a debug build, with the token supplied by the config instead of minted
+     * and shown on a screen.  That is the whole reason this hook exists - a
+     * headless QEMU gate has no console user to arm the channel and no way to
+     * read a random token, so without it the entire security path would ship
+     * untested and only ever run on a machine with a human in front of it.
+     *
+     * It arms OBSERVE|DRIVE and deliberately NOT SYSTEM, so the gate can prove
+     * all three outcomes in one boot: allowed, refused-for-lack-of-power, and
+     * refused-for-lack-of-auth.  No unosecure involvement - there is no session
+     * to escalate from - which is also why this is debug-only: the key does
+     * nothing in a production image, where auth_forced() ignores DEBUG.CFG.
+     */
+    char t[UNOAUTO_TOKEN_BUF];
+    if (g_armed || !auth_forced()) return;
+    if (pc64_stress_cfg_value("urc-auth", t, (int)sizeof t) <= 0) return;
+    strcpy_n(g_token, t, (int)sizeof g_token);
+    g_powers = UNOAUTO_P_OBSERVE | UNOAUTO_P_DRIVE;
+    g_owner  = UNOSEC_UID_SYSTEM;
+    strcpy_n(g_owner_name, "debug-cfg", (int)sizeof g_owner_name);
+    g_armed  = 1;
+    unoauto_log(UA_CH_SCRIPT, "urc: DEBUG.CFG urc-auth - production gate armed "
+                              "(observe+drive, token from config)");
 #endif
 }
 
@@ -351,8 +390,15 @@ int unoauto_gate_auth(const char *token)
         unosec_audit(USC_CAP_AUTOMATE_OBSERVE, "urc:auth", 0);
         /* Three strikes stands the channel down entirely.  A plaintext LAN
          * protocol must not be a brute-force oracle: the operator can re-arm at
-         * the console, an attacker on the wire cannot. */
-        if (g_badauth >= BADAUTH_MAX) unoauto_gate_disarm("failed authentication");
+         * the console, an attacker on the wire cannot.
+         *
+         * DEFERRED to the next frame, not done here: disarming closes the link,
+         * and the caller has not yet queued - let alone flushed - the "auth
+         * failed" response.  Tearing the socket down inside the handler makes
+         * the third attempt answer with a dropped connection instead of a
+         * refusal, which is worse for an operator who simply mistyped and tells
+         * an attacker the same thing anyway. */
+        if (g_badauth >= BADAUTH_MAX) g_lockout = 1;
         return 0;
     }
 
