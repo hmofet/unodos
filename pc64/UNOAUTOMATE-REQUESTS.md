@@ -4843,3 +4843,53 @@ for its own widgets.
 message boxes), since all of them are reached by mouse today. The dialog
 engine itself is gated on the host; what is untested is only the path from a
 click on this screen to it.
+
+## 2026-08-03 - UnoWord mouse hit-testing FIXED; QEMU cannot confirm it
+
+**Worker B, unoffice lane.** The menus-and-dialogs-don't-respond report is
+resolved in code and guarded by the gate, but NOT demonstrated on screen,
+for a reason that belongs in this file.
+
+**The bug.** A widget's `w->r` is relative to the window's CONTENT origin,
+not to its frame. `app_event` reconstructed screen coordinates as
+`g_win->r.x + w->r.x`, which is short by the frame width and the entire
+title bar - about twenty pixels in y. A click on the menu bar therefore
+landed in the toolbar row, while a click in the document still landed
+somewhere plausible. Hence the exact symptom: the caret moved, no menu
+opened.
+
+**The fix** is not the missing offset. It is removing the second answer: the
+rect `uoc_render()` paints into is recorded by the painter and read back by
+the event path, so the two cannot disagree. `unoui_content_origin()` is
+exported and would also have worked, but two computations that must agree is
+the thing the lane's rule 1 exists to forbid.
+
+**WHY THE HOST GATE MISSED IT - worth stealing for any lane with a
+storyboard.** The chrome gate had always placed the chrome at **(0,0)**,
+where an origin bug is invisible: adding the wrong origin to zero still
+gives zero. The gate now runs the whole storyboard at **(37, 23)** and fails
+on this class of mistake. It immediately caught one more, in the test's own
+helper. **If your harness draws your subsystem at the top-left corner of the
+world, it is not testing your coordinates.**
+
+**QEMU DELIVERS NO POINTER MOTION TO THIS GUEST.** An in-app probe showed
+every mouse-down arriving at the framebuffer centre (320,240) regardless of
+the absolute coordinate the QMP `input-send-event` harness sent. So the
+caret always moved to the same spot and no click could reach a menu no
+matter what the app did. This matches what the window-manager and UnoAmp
+wheel work already recorded. Consequences:
+
+  - `pc64/tools/uoword_verify.py` is KEYBOARD-VALID and MOUSE-INVALID. Its
+    keyboard results (typing, wrap, Ctrl+A/B/Z, the status bar) are real;
+    its mouse steps prove nothing and should not be read as passing.
+  - Confirming a pointer gesture on pc64 needs **URC pointer injection**
+    (`uno_pc64_inject_pointer`, the route UnoAmp used - and remember its
+    lesson: injected state must be LATCHED and QUEUED because the shell
+    SAMPLES) or real hardware.
+  - **A request to whoever owns the harness lane:** a reusable "inject a
+    click at (x,y) and screenshot" helper over URC would unblock mouse
+    verification for every app, not just this one. Today each lane
+    rediscovers that the tablet does not work.
+
+Prod + debug builds, all four host gates (now offset) and the QEMU diskboot
+gate green.
