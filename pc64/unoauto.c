@@ -14,7 +14,6 @@
  * wire up against the final API from day one; they grow in Stage 2 files
  * (unoauto_probe.c, unoauto_py.c) - NOT in this one, which stays small.
  * ======================================================================== */
-#ifdef UNO_DEBUG
 
 #include "unoauto.h"
 
@@ -175,12 +174,18 @@ int unoauto_test_run(const char *suite, void *ctx, char *report, int cap)
 typedef struct { const char *point; UnoAutoHookFn fn; void *user; } UaHook;
 static UaHook ua_hooks[UA_HOOK_MAX];
 
+/* Live-hook count.  The tap points are hot paths that are now compiled into
+ * production (net.tx/rx per frame, every malloc), so unoauto_hook_fire is a
+ * macro that reads this and skips the call entirely at zero - see unoauto.h. */
+int unoauto_hooks_live;
+
 int unoauto_hook_add(const char *point, UnoAutoHookFn fn, void *user)
 {
     int i;
     for (i = 0; i < UA_HOOK_MAX; i++)
         if (!ua_hooks[i].fn) {
             ua_hooks[i].point = point; ua_hooks[i].fn = fn; ua_hooks[i].user = user;
+            unoauto_hooks_live++;
             return i;
         }
     return -1;
@@ -188,10 +193,13 @@ int unoauto_hook_add(const char *point, UnoAutoHookFn fn, void *user)
 
 void unoauto_hook_remove(int id)
 {
-    if (id >= 0 && id < UA_HOOK_MAX) ua_hooks[id].fn = 0;
+    if (id >= 0 && id < UA_HOOK_MAX && ua_hooks[id].fn) {
+        ua_hooks[id].fn = 0;
+        if (unoauto_hooks_live > 0) unoauto_hooks_live--;
+    }
 }
 
-void unoauto_hook_fire(const char *point, void *arg)
+void unoauto_hook_fire_(const char *point, void *arg)
 {
     int i;
     for (i = 0; i < UA_HOOK_MAX; i++)
@@ -204,4 +212,3 @@ int unoauto_drive_ready(void)
     return 0;                       /* PYRT binding lands in unoauto_py.c */
 }
 
-#endif /* UNO_DEBUG */

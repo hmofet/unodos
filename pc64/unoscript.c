@@ -47,6 +47,9 @@ static const struct { usc_tier_t tier; const char *name; } CAPS[USC_CAP__COUNT] 
     [USC_CAP_IO_WRITE]        = { USC_TIER_KERNEL,  "io.write" },
     [USC_CAP_SYSCALL]         = { USC_TIER_KERNEL,  "syscall" },
     [USC_CAP_MODULE]          = { USC_TIER_KERNEL,  "module" },
+    [USC_CAP_AUTOMATE_OBSERVE]= { USC_TIER_ADMIN,   "automate.observe" },
+    [USC_CAP_AUTOMATE_DRIVE]  = { USC_TIER_ADMIN,   "automate.drive" },
+    [USC_CAP_AUTOMATE_SYSTEM] = { USC_TIER_KERNEL,  "automate.system" },
 };
 
 usc_tier_t  unoscript_cap_tier(usc_cap_t c)

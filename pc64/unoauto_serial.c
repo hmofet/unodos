@@ -23,7 +23,6 @@
  * ======================================================================== */
 #include "unoauto_serial.h"
 
-#ifdef UNO_DEBUG
 
 /* 16550 register offsets from the port base. */
 enum {
@@ -81,4 +80,3 @@ int uart_read(unsigned char *buf, int cap)
     return i;
 }
 
-#endif /* UNO_DEBUG */

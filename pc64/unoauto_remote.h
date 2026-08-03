@@ -18,13 +18,14 @@
  *   directions - see REMOTE.md.  One TCP connection is shared with the
  *   Browser/AI apps, so the remote link and those are mutually exclusive.
  *
- *   Compiled only under -DUNO_DEBUG (same gate as the rest of unoautomate);
- *   in a production build every entry point compiles away.  [EXPERIMENTAL].
+ *   SHIPS IN PRODUCTION (2026-08-03), gated by privilege rather than by a
+ *   compile flag: the channel stays disarmed until a console user arms it and
+ *   every inbound connection authenticates.  See unoauto_gate.h.
+ *   [EXPERIMENTAL].
  * ======================================================================== */
 #ifndef UNOAUTO_REMOTE_H
 #define UNOAUTO_REMOTE_H
 
-#ifdef UNO_DEBUG
 
 /* Read the DEBUG.CFG `remote=<ip>:<port>` key and arm the connector.  A no-op
  * if the key is absent or already armed.  Call once the boot net test has
@@ -50,13 +51,5 @@ int  unoauto_remote_recv(char *buf, int cap);
 /* Tear the link down (BYE + close) and disarm. */
 void unoauto_remote_stop(void);
 
-#else /* !UNO_DEBUG: everything compiles away */
-#define unoauto_remote_boot()        ((void)0)
-#define unoauto_remote_tick()        ((void)0)
-#define unoauto_remote_active()      (0)
-#define unoauto_remote_send(t, x)    (-1)
-#define unoauto_remote_recv(b, c)    (0)
-#define unoauto_remote_stop()        ((void)0)
-#endif
 
 #endif /* UNOAUTO_REMOTE_H */

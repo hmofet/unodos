@@ -8,6 +8,7 @@
  * ======================================================================== */
 #include "unoauto.h"
 #include "unoauto_remote.h"
+#include "unoauto_gate.h"   /* the privilege gate: who may run which verb */
 #include "net.h"            /* u8/u16, net_tcp_*, net_poll */
 #include "netsock.h"        /* multi-connection socket API (own link socket) */
 #include "netdisc.h"        /* zero-config discovery: auto-dial the found host */
@@ -17,7 +18,6 @@
 #include "unoauto_serial.h" /* 16550 UART backend: the NIC-independent transport */
 #include "unoauto_screen.h" /* framebuffer QOI grab: the `screen` verb (remote desktop) */
 
-#ifdef UNO_DEBUG
 
 /* ---- freestanding libc + debug kernel symbols (no public header) --------- */
 void        *memcpy(void *, const void *, unsigned long);
@@ -922,9 +922,64 @@ static void do_screen(const char *id, char *args)
     rsp(id, "end", 0);
 }
 
+/* `auth <token>` - the production handshake.  Until it succeeds the gate
+ * refuses every other verb, so this is the only thing a fresh link can do.  A
+ * debug build without `urc-auth` reports "open" and moves on, which is what
+ * keeps every existing QEMU gate under tools/ working unchanged. */
+static void do_auth(const char *id, char *args)
+{
+    char *tokv = tok(&args);
+    if (!unoauto_gate_needs_auth()) {
+        rsp(id, "ok", "open (debug build - no auth required)");
+        rsp(id, "end", 0); return;
+    }
+    if (unoauto_gate_auth(tokv ? tokv : "")) {
+        char t[96]; SB b; unsigned p = unoauto_gate_powers();
+        sb_init(&b, t, sizeof t);
+        sb_s(&b, "authenticated as "); sb_s(&b, unoauto_gate_owner_name());
+        sb_s(&b, " powers=");
+        if (p & UNOAUTO_P_OBSERVE) sb_s(&b, "observe ");
+        if (p & UNOAUTO_P_DRIVE)   sb_s(&b, "drive ");
+        if (p & UNOAUTO_P_SYSTEM)  sb_s(&b, "system");
+        t[b.len] = 0;
+        rsp(id, "ok", t);
+    } else {
+        /* Deliberately uninformative: "bad token" and nothing about how close
+         * it was, how many tries remain, or whether the channel is even armed. */
+        rsp(id, "err", "auth failed");
+    }
+    rsp(id, "end", 0);
+}
+
+/* `caps` - what may this link do?  A client asks once after `auth` and greys
+ * out the rest of its UI, instead of discovering the boundary by tripping it. */
+static void do_caps(const char *id)
+{
+    unsigned p = unoauto_gate_powers();
+    rsp(id, "ok", (p & UNOAUTO_P_OBSERVE) ? "observe 1" : "observe 0");
+    rsp(id, "ok", (p & UNOAUTO_P_DRIVE)   ? "drive 1"   : "drive 0");
+    rsp(id, "ok", (p & UNOAUTO_P_SYSTEM)  ? "system 1"  : "system 0");
+    rsp(id, "end", 0);
+}
+
 static void dispatch_cmd(const char *id, char *verb, char *args)
 {
+    const char *why = 0;
     if (!verb) { rsp(id, "err", "empty"); rsp(id, "end", 0); return; }
+
+    /* THE GATE.  Everything below this point assumes the link is allowed to be
+     * here; this is the one place that decides it.  `auth` runs before the
+     * check (it IS the check's precondition); every other verb - including any
+     * verb a later agent adds - is refused unless unoauto_gate.c has a row for
+     * it and the console user granted that power.  Fail-closed by construction:
+     * a new verb with no table row is denied, not ambient. */
+    if (!strcmp_(verb, "auth")) { do_auth(id, args); return; }
+
+    if (!unoauto_gate_verb(verb, &why)) {
+        rsp(id, "err", why ? why : "denied");
+        rsp(id, "end", 0); return;
+    }
+    if (!strcmp_(verb, "caps")) { do_caps(id); return; }
 
     /* IMPLICIT CALL-HOME. Reaching here means a full inbound frame was received,
      * parsed and dispatched - proof the box is alive end to end - so refresh the
@@ -1334,6 +1389,13 @@ void unoauto_remote_boot(void)
     char v[64]; char *p; int oct, i;
     if (g_state != RS_OFF) return;                 /* armed once */
 
+    /* PRODUCTION: nothing happens until a console user arms the channel.  This
+     * one line is the difference between "a shipped OS that can be remotely
+     * driven if you ask it to" and "a shipped OS listening on the LAN".  The
+     * gate is open unconditionally in a debug build, so the harness path below
+     * is untouched. */
+    if (!unoauto_gate_open()) return;
+
     /* URC SERVER mode: `listen` (bare = port 5099) or `listen=<port>` makes the
      * box a LISTENER - the dev PC dials INTO it (netsock net_listen/net_accept),
      * instead of the box dialing out. Also arms netdisc as a responder so a
@@ -1380,6 +1442,22 @@ void unoauto_remote_boot(void)
                 g_sink = unoauto_sink_add((1u << UA_CH_COUNT) - 1, remote_sink, 0);
             g_state = RS_DISCOVER;
             unoauto_log(UA_CH_SCRIPT, "remote: awaiting discovery (no remote= key)");
+            return;
+        }
+        /* PRODUCTION default: no DEBUG.CFG exists, so every key above read as
+         * absent and we land here with the gate armed.  LISTEN is the right
+         * shape for a shipped machine - the operator arms it at the console,
+         * reads the token off the screen, and dials IN from wherever they are.
+         * Dial-out would need a host address nobody has typed. */
+        if (unoauto_gate_armed()) {
+            g_port = 5099;
+            g_listening = 1;
+            g_tp = &TP_TCP_LISTEN;
+            if (g_sink < 0)
+                g_sink = unoauto_sink_add((1u << UA_CH_COUNT) - 1, remote_sink, 0);
+            netdisc_listen(5099);          /* answer scans, so the client can find us */
+            unoauto_log(UA_CH_SCRIPT, "remote: armed, listening on :5099");
+            start_connect();
         }
         return;
     }
@@ -1441,6 +1519,10 @@ void unoauto_remote_tick(void)
         break;
     case RS_UP:
         drain_rx();
+        /* A verb can stand the whole channel down under us - `disarm`, or three
+         * failed auths tripping the gate - and drain_rx runs the dispatcher.
+         * Bail rather than pumping a link that no longer exists. */
+        if (g_state != RS_UP) break;
         /* Serial has no connection handshake, so a host that attaches AFTER the
          * guest booted never saw the one link-up HELLO.  Re-emit it every ~2 s
          * until we hear the host, so a late `unoauto_remote.py --serial` syncs. */
@@ -1451,6 +1533,11 @@ void unoauto_remote_tick(void)
         flush_tx();
         if (ls != LINK_UP) {
             g_tp->close();
+            /* The client left.  Deauthenticate: the NEXT dial-in is a different
+             * peer as far as we know, and must present the token itself.  The
+             * channel stays armed - in listen mode the operator expects to
+             * reconnect without walking back to the machine. */
+            unoauto_gate_link_reset();
             if (g_listening) {                  /* keep the listener; await a re-dial */
                 g_txlen = 0; g_rxlen = 0; g_rx_seen = 0;
                 g_state = RS_CONNECTING; g_deadline = g_tick + 600;
@@ -1484,4 +1571,3 @@ void unoauto_remote_stop(void)
     g_txlen = 0; g_rxlen = 0;
 }
 
-#endif /* UNO_DEBUG */

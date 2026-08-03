@@ -7,7 +7,6 @@
  * debug heap - through their existing (or purpose-added, additive) accessors.
  * Snapshot semantics: one pass, caller memory, nothing retained.
  * ======================================================================== */
-#ifdef UNO_DEBUG
 
 #include "unoauto.h"
 #include "net.h"
@@ -80,4 +79,3 @@ int unoauto_probe(UnoAutoProbeEnt *out, int max)
     return n;
 }
 
-#endif /* UNO_DEBUG */

@@ -7,6 +7,8 @@
  *   - pc64_consent_register(): the escalation consent sheet (a UAC-style prompt
  *                              registered with unosecure as its consent hook).
  *   - pc64_accounts_open()  : the Accounts manager (list/new/passwd/delete/role).
+ *   - pc64_remote_open()    : the Remote Control panel - the only way to arm
+ *                             unoautomate/URC in a production image.
  *
  * These CONSUME unosecure; they never make a security decision themselves -
  * every mutation goes through the unosec_* API, which fail-closed-enforces the
@@ -19,6 +21,8 @@
 #include "pc64_icons.h"        /* pc64_shell_theme() */
 #include "unosecure.h"
 #include "pc64_accounts.h"
+#include "unoauto_gate.h"      /* the Remote Control panel arms unoautomate */
+#include "net.h"               /* net_ip/net_link: the address to tell the user */
 #include <string.h>
 #include <stdio.h>
 
@@ -26,7 +30,8 @@
 enum {
     ID_OK = 1, ID_CANCEL, ID_GUEST,
     ID_LIST, ID_NEW, ID_DEL, ID_PASSWD, ID_ADMIN, ID_CLOSE, ID_ROLE,
-    ID_C_ONCE, ID_C_SESSION, ID_C_DENY
+    ID_C_ONCE, ID_C_SESSION, ID_C_DENY,
+    ID_R_OBSERVE, ID_R_DRIVE, ID_R_SYSTEM, ID_R_ENABLE, ID_R_DISABLE
 };
 
 #define NAME_MAX 32
@@ -406,4 +411,120 @@ void pc64_accounts_open(void)
     }
 done:
     while (pushed-- > 0) unosec_leave();          /* drop any elevation we added */
+}
+
+/* ===========================================================================
+ * Remote control (unoautomate / URC) - the arming panel.
+ *
+ * unoautomate ships in production, disarmed, and this is the ONLY way to turn
+ * it on (unoauto_gate.h has the full model).  The panel is deliberately blunt
+ * about what each tick hands out, because the person clicking it is the only
+ * safeguard between a LAN and a machine that can be driven, watched and
+ * reformatted from it.  Ticking a box does not itself grant anything - Enable
+ * runs a real unosec_request per power, so a user whose roles do not cover one
+ * gets the normal consent sheet on top of this window, and a refusal there
+ * means that power simply is not in the arm.
+ *
+ * The token is displayed, never stored: it lives in RAM until disarm, sign-out
+ * or reboot.  There is no "remember this" affordance on purpose.
+ * ======================================================================== */
+static void ip_str(char *out, int cap)
+{
+    const u8 *ip = net_ip();
+    if (!net_link() || !ip || (!ip[0] && !ip[1] && !ip[2] && !ip[3]))
+        { snprintf(out, (size_t)cap, "(no network link yet)"); return; }
+    snprintf(out, (size_t)cap, "%d.%d.%d.%d:5099", ip[0], ip[1], ip[2], ip[3]);
+}
+
+void pc64_remote_open(void)
+{
+    unoui_window win;
+    char status[96], addr[40], tokline[64];
+    int W = 400, H = 300;
+    int x = (FB_W - W) / 2, y = (FB_H - H) / 2;
+    /* what the user has ticked - seeded from what is already granted, so
+       re-opening the panel on an armed channel shows the truth. */
+    int want_obs = 1, want_drv = 1, want_sys = 0;
+
+    status[0] = 0;
+    if (unoauto_gate_armed()) {
+        unsigned p = unoauto_gate_powers();
+        want_obs = (p & UNOAUTO_P_OBSERVE) != 0;
+        want_drv = (p & UNOAUTO_P_DRIVE)   != 0;
+        want_sys = (p & UNOAUTO_P_SYSTEM)  != 0;
+    }
+
+    for (;;) {
+        int cy = 8, armed = unoauto_gate_armed();
+        unoui_widget *w;
+
+        unoui_window_init(&win, "Remote Control", x, y, W, H);
+        unoui_add_label(&win, 8, cy, armed ? "Remote control is ON."
+                                           : "Remote control is off."); cy += 18;
+        unoui_add_label(&win, 8, cy, "Another computer can connect to this machine"); cy += 14;
+        unoui_add_label(&win, 8, cy, "and use it. Grant only what you need:"); cy += 20;
+
+        w = unoui_add_check(&win, 12, cy, "Watch  - see the screen and system state", want_obs);
+        w->id = ID_R_OBSERVE; cy += 20;
+        w = unoui_add_check(&win, 12, cy, "Control  - move the mouse, type, open apps", want_drv);
+        w->id = ID_R_DRIVE; cy += 20;
+        w = unoui_add_check(&win, 12, cy, "Full access  - disks, files, run code, restart", want_sys);
+        w->id = ID_R_SYSTEM; cy += 22;
+
+        if (armed) {
+            ip_str(addr, (int)sizeof addr);
+            snprintf(tokline, sizeof tokline, "Code:  %s", unoauto_gate_token());
+            unoui_add_label(&win, 8, cy, "Connect to this address and enter the code:"); cy += 16;
+            unoui_add_label(&win, 12, cy, addr);    cy += 16;
+            unoui_add_label(&win, 12, cy, tokline); cy += 18;
+        } else {
+            unoui_add_label(&win, 8, cy, "Nothing is listening until you turn this on."); cy += 34;
+        }
+
+        { unoui_widget *b;
+          b = unoui_add_button(&win, 8, cy, armed ? 120 : 96,
+                               armed ? "Update access" : "Turn on", UI_F_DEFAULT);
+          b->id = ID_R_ENABLE;
+          if (armed) { b = unoui_add_button(&win, 136, cy, 84, "Turn off", 0);
+                       b->id = ID_R_DISABLE; }
+          b = unoui_add_button(&win, W - 92, cy, 84, "Close", 0); b->id = ID_CLOSE;
+          cy += 26;
+        }
+        if (status[0]) unoui_add_label(&win, 8, cy, status);
+
+        modal_begin(&win);
+        for (;;) {
+            unoui_action a;
+            if (!modal_frame(&a) || !a.changed) continue;
+            if (a.id == ID_R_OBSERVE) { want_obs = a.value; continue; }
+            if (a.id == ID_R_DRIVE)   { want_drv = a.value; continue; }
+            if (a.id == ID_R_SYSTEM)  { want_sys = a.value; continue; }
+            if (a.id == ID_CLOSE || a.id == ID_CANCEL || a.kind == UI_ACT_CLOSE) return;
+            if (a.id == ID_R_DISABLE) {
+                unoauto_gate_disarm("turned off at the console");
+                snprintf(status, sizeof status, "Remote control is off.");
+                break;
+            }
+            if (a.id == ID_R_ENABLE || a.id == ID_OK) {
+                unsigned want = (want_obs ? UNOAUTO_P_OBSERVE : 0u)
+                              | (want_drv ? UNOAUTO_P_DRIVE   : 0u)
+                              | (want_sys ? UNOAUTO_P_SYSTEM  : 0u);
+                unsigned got;
+                if (!want) { snprintf(status, sizeof status,
+                                      "Tick at least one kind of access."); break; }
+                /* This is the escalation.  The consent sheet (if any) draws
+                   over us, which is fine - it is its own modal ui. */
+                got = unoauto_gate_arm(want, "ui:remote-panel");
+                if (!got)
+                    snprintf(status, sizeof status,
+                             "Not allowed. Sign in as a user with permission.");
+                else if (got != want)
+                    snprintf(status, sizeof status,
+                             "Partly granted - some access was refused.");
+                else
+                    snprintf(status, sizeof status, "Remote control is on.");
+                break;
+            }
+        }
+    }
 }

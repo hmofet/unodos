@@ -151,7 +151,7 @@ if [ "$1" != "legacy" ]; then
     # paths compile either way, so neither can rot; the flow painter stays
     # the default until the engine path has been through real pages.
     if [ "${BROWSER_ENGINE:-}" = "uw" ]; then UCF="$UCF -DUW_ENGINE"; fi
-    for f in fb mac_compat pc64_libc pc64_io pc64_pci uno_devmgr pc64_math pc64_fs blkdev ahci nvme sdhci ide fat unostorage hid_kbd i2c_hid xhci usbio usbboot usbmsc usbhid detachgate unoamp_out unoamp_in unoamp_skin unoamp_vis unoamp_dsp unoamp_enc unoamp_mod unoamp_app unoamp_ui pc64_mtrr ax88179 rtl8152 iwlwifi rtwifi mrvlwifi wifi_wpa uefi_main bios_entry pc64_native pc64_uui pc64_uui_apps pc64_write pc64_files pc64_music pc64_clock pc64_media pc64_modload pc64_games js pc64_http pc64_font pc64_browser pc64_icons e1000 e1000e igb r8169 net netdisc tls tls_entropy tls_ca acpi_host installer snd_pcm hdaudio ac97 unosecure unoscript unoscript_path pc64_accounts ed25519 unossh_wire unossh unossh_auth unossh_store unossh_cmd sshapp_ui; do
+    for f in fb mac_compat pc64_libc pc64_io pc64_pci uno_devmgr pc64_math pc64_fs blkdev ahci nvme sdhci ide fat unostorage hid_kbd i2c_hid xhci usbio usbboot usbmsc usbhid detachgate unoamp_out unoamp_in unoamp_skin unoamp_vis unoamp_dsp unoamp_enc unoamp_mod unoamp_app unoamp_ui pc64_mtrr ax88179 rtl8152 iwlwifi rtwifi mrvlwifi wifi_wpa uefi_main bios_entry pc64_native pc64_uui pc64_uui_apps pc64_write pc64_files pc64_music pc64_clock pc64_media pc64_modload pc64_games js pc64_http pc64_font pc64_browser pc64_icons e1000 e1000e igb r8169 net netdisc tls tls_entropy tls_ca acpi_host installer snd_pcm hdaudio ac97 unosecure unoscript unoscript_path pc64_accounts unoauto unoauto_compat unoauto_gate unoauto_probe unoauto_remote unoauto_serial unoauto_screen ed25519 unossh_wire unossh unossh_auth unossh_store unossh_cmd sshapp_ui; do
         pc "$CC" $UCF $DBGSAN -c -o "build/$f.o" "$f.c"; OBJS="$OBJS build/$f.o"
     done
     # unojs: the JavaScript engine, its own subsystem (unojs/UNOJS.md).  Plain
@@ -185,25 +185,12 @@ if [ "$1" != "legacy" ]; then
         OBJS="$OBJS build/pc64_nettest.o"
         pc "$CC" $UCF $DBGSAN -c -o "build/pc64_spectest.o" "pc64_spectest.c"
         OBJS="$OBJS build/pc64_spectest.o"
-        # UNOAUTOMATE core (Stage 1 seam): channelled logging + test registry.
-        # The legacy harness above delegates into it; see unoauto.h.
-        pc "$CC" $UCF $DBGSAN -c -o "build/unoauto.o" "unoauto.c"
-        OBJS="$OBJS build/unoauto.o"
-        pc "$CC" $UCF $DBGSAN -c -o "build/unoauto_probe.o" "unoauto_probe.c"
-        OBJS="$OBJS build/unoauto_probe.o"
-        # UNOAUTOMATE remote channel: the bidirectional dev-PC link (remote
-        # logging + control).  Consumes only the public net API; see REMOTE.md.
-        pc "$CC" $UCF $DBGSAN -c -o "build/unoauto_remote.o" "unoauto_remote.c"
-        OBJS="$OBJS build/unoauto_remote.o"
-        # NIC-independent URC transport: a 16550 UART backend behind the same
-        # URC line protocol, so a box whose only network is the broken NIC can
-        # still be driven live over serial.  See REMOTE.md / unoauto_serial.c.
-        pc "$CC" $UCF $DBGSAN -c -o "build/unoauto_serial.o" "unoauto_serial.c"
-        OBJS="$OBJS build/unoauto_serial.o"
-        # UNOAUTOMATE screen grab: QOI-encode the framebuffer for the URC
-        # `screen` verb - the OUT half of remote desktop.  See unoauto_screen.c.
-        pc "$CC" $UCF $DBGSAN -c -o "build/unoauto_screen.o" "unoauto_screen.c"
-        OBJS="$OBJS build/unoauto_screen.o"
+        # NOTE: unoautomate itself (unoauto*, incl. the URC remote channel, its
+        # serial + screen backends and the privilege gate) is NO LONGER built
+        # here - it ships in PRODUCTION as of 2026-08-03 and lives in the
+        # unconditional file list above.  What stays debug-only is the test
+        # HARNESS around it: the fuzz driver, the conformance suites, the crash
+        # /watchdog core and the live network test.  See unoauto_gate.h.
     fi
     # unomedia AUDIO half (core + WAV/MIDI/MP3/AAC) - linked into the kernel
     # plus um_inflate, which UnoAmp's skin engine needs for ZIP method 8 in a

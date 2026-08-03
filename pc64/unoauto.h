@@ -20,8 +20,13 @@
  *   Stage 3: the legacy files dissolve; wrappers remain until the last
  *   caller is migrated, then uno_debug.h shrinks to an #include of this.
  *
- *   Compiled when -DUNO_DEBUG (same gate as the old harness).  In a
- *   production build every hook compiles away, exactly like uno_debug.h.
+ *   SHIPS IN PRODUCTION as of 2026-08-03.  It used to be compiled only under
+ *   -DUNO_DEBUG, so a shippable image had no harness, no remote channel and no
+ *   automation at all.  The gate is now PRIVILEGE, not a compile flag: the
+ *   whole surface is present in every build and unoauto_gate.h adjudicates who
+ *   may reach it (three automate.* capabilities, a console arming step, a
+ *   token on the wire).  Same move unoscript already made.  Read
+ *   unoauto_gate.h before adding a verb or a caller.
  * ======================================================================== */
 #ifndef UNOAUTO_H
 #define UNOAUTO_H
@@ -45,11 +50,15 @@
  * moved, assume something you use may have changed (the compiler catches
  * signature breaks, not semantic ones).  The legacy uno_dbg_* entry points
  * (uno_debug.h) are thin wrappers over this core. */
-#define UNOAUTO_API 1
+/* API 2 (2026-08-03): the UNO_DEBUG gate is gone - every declaration below is
+ * live in a production build, and the no-op macro fallbacks that used to stand
+ * in for them are deleted.  A consumer that tested for the debug build to
+ * decide whether unoauto existed must now test PRIVILEGE instead
+ * (unoauto_gate_powers / unosec_can), because the symbols are always there. */
+#define UNOAUTO_API 2
 
-/* ---- HOOK event payloads (outside the UNO_DEBUG gate so production call
- * sites still typecheck; the fire itself compiles away).  One struct per
- * tap-point family; the registered points and their payloads:
+/* ---- HOOK event payloads.  One struct per tap-point family; the registered
+ * points and their payloads:
  *
  *   "libc.malloc"        UnoAutoAllocEv   set .fail=1 to make it return 0
  *   "fs.read" "fs.write" UnoAutoFsEv      trace-only
@@ -64,8 +73,6 @@ typedef struct { unsigned long size; int fail; } UnoAutoAllocEv;
 typedef struct { int vol; const char *path; long len; } UnoAutoFsEv;
 typedef struct { const char *file; int ok; } UnoAutoModEv;
 typedef struct { int id, kind, value; } UnoAutoUiEv;   /* "uui.action" */
-
-#ifdef UNO_DEBUG
 
 /* ---- LOG: channelled structured logging ------------------------ [STABLE] */
 typedef enum {
@@ -141,7 +148,17 @@ int unoauto_probe(UnoAutoProbeEnt *out, int max);   /* rows filled */
 typedef void (*UnoAutoHookFn)(const char *point, void *arg, void *user);
 int  unoauto_hook_add(const char *point, UnoAutoHookFn fn, void *user);
 void unoauto_hook_remove(int id);
-void unoauto_hook_fire(const char *point, void *arg);   /* producers call     */
+
+/* Producers call unoauto_hook_fire().  The tap points are hot - every frame on
+ * the wire (net.tx/net.rx), every allocation (libc.malloc) - and they are now
+ * compiled into production, where they were previously macro'd to nothing.  So
+ * the fire is a macro over a global: with no hook attached (the normal state,
+ * since attaching one needs an ADMIN escalation) the cost is one predictable
+ * load-and-branch and the call never happens.  Do not call the _() form. */
+extern int unoauto_hooks_live;                          /* count of live hooks */
+void unoauto_hook_fire_(const char *point, void *arg);
+#define unoauto_hook_fire(p, a) \
+    do { if (unoauto_hooks_live) unoauto_hook_fire_((p), (a)); } while (0)
 
 /* ---- DRIVE: scripted automation (Stage 2) ---------------- [EXPERIMENTAL]
  * UI event injection reuses uno_pc64_inject_key/_pointer (uno_debug.h).
@@ -159,21 +176,5 @@ int  unoauto_drive_ready(void);          /* 1 when PYRT + shell are up        */
  * for the C surface, the `unoauto.remote_*` Python bindings, and REMOTE.md for
  * the wire protocol.  Note: pyhost.h PyHost ABI is now 2 (added run_src, the
  * exec-a-source-string entry the remote `py` verb uses). */
-
-#else /* !UNO_DEBUG: everything compiles away */
-#define unoauto_log(...)                 ((void)0)
-#define unoauto_sink_add(m, f, u)        (-1)
-#define unoauto_sink_remove(i)           ((void)0)
-#define unoauto_test_register(s, i, f)   (-1)
-#define unoauto_test_run(s, x, r, c)     (-1)
-#define unoauto_test_deadline_ms(ms)     ((void)(ms))
-#define unoauto_deadline_left_ms()       (-1L)
-#define unoauto_probe(o, m)              0
-#define unoauto_hook_add(p, f, u)        (-1)
-#define unoauto_hook_remove(i)           ((void)0)
-/* consumes its args: production tap sites must not warn set-but-unused */
-#define unoauto_hook_fire(p, a)          ((void)(p), (void)(a))
-#define unoauto_drive_ready()            0
-#endif
 
 #endif /* UNOAUTO_H */

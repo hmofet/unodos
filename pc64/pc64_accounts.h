@@ -29,4 +29,12 @@ void pc64_consent_register(void);
  * account exists yet. */
 void pc64_accounts_open(void);
 
+/* Open the Remote Control panel (a modal): turn unoautomate's URC channel on or
+ * off, choose how much access it hands out (watch / control / full), and read
+ * the connection address and one-time code off the screen.  This is the ONLY
+ * arming path in a production image - see unoauto_gate.h for why, and for what
+ * each level actually permits.  Enabling runs a real unosec_request per level,
+ * so a user without the capability gets the consent sheet (or a refusal). */
+void pc64_remote_open(void);
+
 #endif /* PC64_ACCOUNTS_H */
