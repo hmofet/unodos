@@ -4793,3 +4793,53 @@ is code-reviewed only.
 **Also still open from phase 6:** the Customize dialog, the toolbar
 right-click checklist, editable combo fields, the file dialog's view buttons
 and MRU, Assistant help content, Large-icons doubling.
+
+## 2026-08-03 - UnoWord VERIFIED ON SCREEN (and three bugs the gates missed)
+
+**Worker B, unoffice lane.** Phase 8 landed as "the module builds and ships".
+Driving it in QEMU (`pc64/tools/uoword_verify.py`, screenshots in
+`pc64/shots/uow_*.png`) settled whether that meant "it works". It does now;
+it did not then.
+
+**1. THE SHELL NEVER ROUTED KEYS TO IT.** `pc64_uui.c` dispatches a module's
+hooks at SIX sites, not three: build, opened, canvas_index - and also
+`->key`, `->action` and `->frame`. Phase 8 wired the first three. The window
+appeared, drew correctly, and ignored every keystroke. **Anyone adding an
+EX_ slot for a .UNO module: grep for `g_photos->` and match ALL of them.**
+Three of the six are easy to miss precisely because the app looks finished
+without them.
+
+**2. A US LETTER PAGE DOES NOT FIT THE DESKTOP.** The layout was right the
+whole time - an in-app probe read back page 816 px, column 576 px, line 567
+px, exactly as the host gate asserts - but the desktop framebuffer is
+640x400, so at 100% the sheet was wider than the screen and the document
+looked like it had no right margin. UnoWord now opens at Word's Page Width
+zoom. The lesson is worth keeping: **the host gate can be completely right
+and the screen still wrong, when the gate never asks "does this fit?"**
+
+**3. A DOCKED TOOLBAR ONLY FILLED ITS OWN LENGTH.** Office 97's band runs
+the full width of the frame with the buttons on it; filling just tb_len left
+the window's own background showing past the last button.
+
+**VERIFIED:** opens from the Start menu with menu bar, both toolbars, ruler,
+a page on its pasteboard and the status bar; typing enters the model, lays
+out and wraps at the margin; Enter starts a paragraph; Ctrl+A selects all
+(navy selection painted); Ctrl+B bolds it, the toolbar toggle lights up and
+the text RE-WRAPS because bold is wider; Ctrl+Z undoes; the status bar
+tracks Page / Ln / Col live. Prod + debug builds and all four host gates
+still green.
+
+**NOT VERIFIED, and it is the next job: mouse-driven menus and toolbar
+buttons.** Pointer events DO reach the canvas - a click moves the caret - but
+clicking a menu title or a toolbar button neither opens nor toggles it. So
+the chrome's hit-testing disagrees with where it paints once the desktop's
+coordinate scaling is in play (the OS renders 640x400 and the GOP is
+1280x800). Two candidates worth checking first: whether the canvas rect the
+app receives in `event` matches the one it receives in `draw`, and whether
+the shell scales pointer coordinates the same way for a module's canvas as
+for its own widgets.
+
+**Also unverified for the same reason:** every dialog (Font, Open/Save, the
+message boxes), since all of them are reached by mouse today. The dialog
+engine itself is gated on the host; what is untested is only the path from a
+click on this screen to it.
