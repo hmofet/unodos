@@ -30,7 +30,7 @@ fi
 rm -f build/*.ppm
 
 # shellcheck disable=SC2086
-CORE="uochrome.c uoicons.c uodlg.c uobars.c uofile.c uow_doc.c uow_layout.c host_fbdim.c $FB/fb.c $FB/fb_aa.c"
+CORE="uochrome.c uoicons.c uodlg.c uobars.c uofile.c uow_doc.c uow_layout.c uxl_sheet.c uxl_calc.c uxl_numfmt.c host_fbdim.c $FB/fb.c $FB/fb_aa.c"
 CC_ALL="$CC -O1 -g -std=c99 -Wall -Wextra -Werror -I. -I$FB -I$UI $SAN"
 
 # shellcheck disable=SC2086
@@ -41,11 +41,14 @@ $CC_ALL $CORE ../tools/uodlg_test.c    -o build/uodlg_test
 $CC_ALL $CORE ../tools/uobars_test.c   -o build/uobars_test
 # shellcheck disable=SC2086
 $CC_ALL $CORE ../tools/uoword_test.c   -o build/uoword_test
+# shellcheck disable=SC2086
+$CC_ALL $CORE ../tools/uocalc_test.c   -o build/uocalc_test
 
 ./build/uochrome_test build
 ./build/uodlg_test build
 ./build/uobars_test build
 ./build/uoword_test build
+./build/uocalc_test
 
 if [ -f "$UI/tools/tile.py" ]; then
     # shellcheck disable=SC2046
