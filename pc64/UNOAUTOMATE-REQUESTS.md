@@ -4893,3 +4893,40 @@ wheel work already recorded. Consequences:
 
 Prod + debug builds, all four host gates (now offset) and the QEMU diskboot
 gate green.
+
+## 2026-08-03 - urcui: mouse gestures on pc64 are testable now
+
+**Worker B, unoffice lane, but the tool is for everyone.**
+`pc64/tools/urcui.py` boots the DEBUG image, links up over URC, and gives
+any harness `click(x,y)`, `dblclick`, `move`, `key`, `text`, `launch(app)`
+and `shot(tag)`. It closes the request filed here earlier for a reusable
+"inject a click and screenshot" helper.
+
+**Why it was needed.** QEMU's usb-tablet delivers no pointer MOTION to this
+guest - every mouse-down arrives at the framebuffer centre whatever
+coordinate QMP was told. The window-manager lane, UnoAmp's wheel work and
+UnoWord's harness each discovered that independently and each stopped. URC
+could always inject pointer events; nobody had put boot + connect + click +
+grab in one file.
+
+**Two things it encodes so nobody rediscovers them:**
+
+  - **Coordinates are the OS FRAMEBUFFER's** (640x400 on this setup), not
+    the host window's. `ui.size()` reports them.
+  - **A click is THREE injections** (move, press, release) with gaps. The
+    shell SAMPLES pointer state per frame, so a press and release inside one
+    sample cancel out - the same reason uefi_main.c latches and queues
+    injected states, which UnoAmp paid a day to learn.
+
+**UnoWord's dialogs are verified** (`tools/uoword_urc.py`, screenshots
+`shots/urc_*.png`): the Format menu opens from a click on its title with
+Font... live and Paragraph... correctly greyed; Font... opens the Font
+dialog; a click INSIDE the dialog ticks Bold and gives it the focus ring; OK
+closes it; Help > About opens a message box and OK dismisses it. That closes
+the "mouse-driven menus and dialogs unverified" item and confirms the
+canvas-rect fix from the previous entry.
+
+**A caveat for anyone writing coordinates:** the first run missed every menu
+because it aimed at y=40, which is the title bar - the menu band is at y=67
+on this screen. Take the screenshot first, read the coordinates off it, and
+do not compute them from the chrome's internals.
