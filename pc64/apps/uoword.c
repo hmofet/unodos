@@ -208,6 +208,27 @@ static const char *const kDocTypes[] = {
 };
 
 /* ---- layout bookkeeping ---------------------------------------------------- */
+/* Word's "Page Width" zoom, applied automatically.
+ *
+ * THE DESKTOP IS 640x400 AND A US LETTER PAGE IS 816 PIXELS WIDE AT 100%, so
+ * at 1:1 the sheet is wider than the whole screen and the document looks like
+ * it has no right margin at all.  (It measured correctly the whole time - the
+ * gate's numbers were right - the page simply did not fit.)  So the app opens
+ * at whatever zoom makes the page fit its viewport, never magnifying past
+ * 1:1, which is what Word's Page Width does and what every reader expects. */
+static void fit_page_width(int viewport_w)
+{
+    const uow_sect *sc;
+    int want;
+    if (!DOC || viewport_w < 64) return;
+    sc = uow_section(DOC);
+    if (!sc || sc->page_w <= 0) return;
+    want = (int)(((long)(viewport_w - 24) * 15 * 100) / sc->page_w);
+    if (want > 100) want = 100;
+    if (want < 25)  want = 25;
+    if (want != g_zoom) { g_zoom = want; g_dirty_layout = 1; }
+}
+
 static void relayout(void)
 {
     if (!LAY || !DOC) return;
@@ -556,6 +577,7 @@ static void app_draw(struct unoui_widget *w, unoui_rect r, void *ctx)
 {
     int cx, cy, cw, chh, top;
     (void)w; (void)ctx;
+    fit_page_width(r.w);
     if (g_dirty_layout) relayout();
     sync_toggles();
 

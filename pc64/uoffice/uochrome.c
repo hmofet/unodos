@@ -811,6 +811,12 @@ static void paint_toolbar(const uoc_ui *u, int bar)
         raised(k, fx + fw - s - 2, fy + 2, s, s);
         fb_text(fx + fw - s + 1, fy + 3, "x", k->text, -1);
     } else {
+        /* A DOCKED BAR FILLS ITS WHOLE BAND, not just its own length.  Office
+         * 97's toolbar band runs the full width of the frame and the buttons
+         * sit on it; filling only tb_len leaves the window's own background
+         * showing past the last button, which reads as a half-drawn toolbar. */
+        if (vert) fb_fill_rect(fx, u->y + m_bar_h(k), t, u->h, k->face);
+        else      fb_fill_rect(u->x, fy, u->w, t, k->face);
         fb_fill_rect(fx, fy, fw, fh, k->face);
         if (vert) {          /* the gripper runs across the top of a column */
             etch_h(k, fx + 3, fy + 2, t - 6);
