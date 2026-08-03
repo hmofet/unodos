@@ -29,11 +29,27 @@ writes no report) leaves the last log lines for the next boot to salvage.
 
 ### UNOAUTOMATE (the harness core going forward)
 
-The harness is being generalized into **unoautomate** (`unoauto.h` /
-`unoauto.c`): channelled logging with pluggable sinks, a registered test
-registry (SPECTEST's suites live in it now), and - staged next - process/
-thread probing, call-surface hooks, and Python-scripted automation via the
-PYRT PyHost. **New diagnostics should go through `unoauto_*`**:
+**unoautomate is no longer part of what this build adds.** As of 2026-08-03 it
+ships in PRODUCTION too - the whole `unoauto*` family, the URC remote channel,
+its serial and screen backends and `netdisc` - gated by PRIVILEGE instead of by
+`UNO_DEBUG` (three `automate.*` capabilities, a console arming step, a token on
+the wire; see `unoauto_gate.h` and REMOTE.md "Production: arming and
+authentication"). What stays debug-only is the test HARNESS *around* it: the
+crash/watchdog core, the fuzz driver, the conformance suites and the live
+network test - the table above.
+
+In a debug build the gate is transparent, so nothing in this document changes:
+`DEBUG.CFG` still arms the channel, there is no token, and every verb is
+allowed. The one addition is the key **`urc-auth=<token>`**, which runs the
+production rules in a debug image so the security path can be regression-tested
+headlessly (`tools/urcauth_qemu.py`) - it arms observe+drive but NOT system, so
+one boot proves allowed, refused-for-power and refused-for-auth.
+
+The harness core is **unoautomate** (`unoauto.h` / `unoauto.c`): channelled
+logging with pluggable sinks, a registered test registry (SPECTEST's suites live
+in it now), and - staged next - process/thread probing, call-surface hooks, and
+Python-scripted automation via the PYRT PyHost. **New diagnostics should go
+through `unoauto_*`**:
 `unoauto_log(UA_CH_NET, ...)` instead of a new trace global,
 `unoauto_test_register(...)` instead of a new clause in a run function. The
 legacy entry points (`uno_dbg_log`, `uno_dbg_net_trace`, the SPECTEST

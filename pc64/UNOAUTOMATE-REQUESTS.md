@@ -5025,3 +5025,65 @@ here before they are load-bearing.
   hooks it calls.
 - `netdisc.c` already compiles in production, but `netdisc.h` macros its whole
   surface away at `UNO_DEBUG=0`, so the file currently links as dead weight.
+
+---
+
+## 2026-08-03 - DONE: unoautomate + URC ship in production (the claim above)
+
+Landed on `urc-production`. The claim entry earlier today has the design; this
+is what actually shipped and what to watch out for.
+
+**Both builds green, both gates green.** `UNO_DEBUG=0` and `UNO_DEBUG=1` build
+clean. `tools/remote_qemu.py` (23 checks: probe, py eval, push_file, prepdisk,
+makeboot, devices) passes UNCHANGED on the debug build - that is the regression
+proof that the gate is transparent there. The new `tools/urcauth_qemu.py`
+proves the production semantics in 19 checks.
+
+**Cap names, as filed and unchanged:** `automate.observe` (ADMIN),
+`automate.drive` (ADMIN), `automate.system` (KERNEL). Note what the built-in
+role seeding does for free: `seed_roles()` gives `admin` every cap at tier
+<= ADMIN, so an admin holds observe and drive statically and arming those draws
+NO consent sheet. `automate.system` is KERNEL, held by no role, so it always
+prompts. That is the behaviour we want and it needed no special-casing.
+
+**Four traps, none of them obvious, all of them paid for:**
+
+1. **Cross-object weak symbols do not work here.** The plan was the tree's
+   usual weak-fallback pattern for the debug-only hooks (`uno_dbg_log`,
+   `uno_dbg_uptime_ms`, `pc64_stress_cfg_*`, ...). mingw lowers a weak
+   DEFINITION to a COFF weak external (`.weak.uno_dbg_log.` in the symbol
+   table) and ld will NOT use the alternate to satisfy a reference from a
+   DIFFERENT object - you get a plain `undefined reference`. The existing weak
+   stubs in the tree (`r8169_dbg_cmd`, `devmgr_list_str`, `uno_hw_wdt_cmd`) all
+   work because definition and caller share a translation unit. `unoauto_compat.c`
+   is `#ifndef UNO_DEBUG` with strong definitions instead. Do not "simplify" it.
+
+2. **`pc64_libc.c` already ships a production `uno_heap_stats`** beside the
+   debug walker. Adding one to the compat file is a duplicate-symbol link error,
+   not a fallback. Check before you stub.
+
+3. **The session-revalidation tick killed the debug arm.** `unoauto_gate_tick`
+   disarms when the arming session goes away; the `urc-auth` debug hook has no
+   session by design, so the listener came up and vanished on the next frame -
+   the gate failed with "never got a HELLO" and nothing in the log until we
+   captured debugcon. It now checks `g_console_sess` before revalidating.
+   Production arms always set it, so this is not a hole in the real path.
+
+4. **Disarming inside the auth handler ate the response.** Three bad tokens
+   stand the channel down; doing it in the handler tore the socket down before
+   the "auth failed" reply was queued, so a mistyped code got a dropped
+   connection. The lockout is now deferred one frame (`g_lockout`, cleared in
+   the tick), so the refusal is answered and THEN the channel dies.
+
+**For whoever adds the next verb:** `GATE[]` in `unoauto_gate.c` is now a
+shared choke-point (registered as one in AGENTS.md §2). It is fail-closed - a
+verb with no row answers `err unknown-verb` even to an authenticated link - so
+add the row in the same commit as the verb, and think about which power it
+costs. The judgement calls already made are in the comment above the table
+(`readsec` is SYSTEM not OBSERVE because raw sectors are the whole disk;
+`iwl`/`eth` are SYSTEM because their subcommands write device registers).
+
+**Still open, deliberately:** the wire is still plaintext. The token proves WHO
+may drive the box; it does not encrypt what crosses. `unossh`/TLS material
+exists in the tree and a future entry could carry URC over it - filing that as a
+known limitation rather than pretending the token closed it.
