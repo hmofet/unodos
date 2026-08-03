@@ -30,14 +30,21 @@ fi
 rm -f build/*.ppm
 
 # shellcheck disable=SC2086
-$CC -O1 -g -std=c99 -Wall -Wextra -Werror -I. -I"$FB" -I"$UI" $SAN \
-    uochrome.c uoicons.c "$FB/fb.c" "$FB/fb_aa.c" ../tools/uochrome_test.c \
-    -o build/uochrome_test
+CORE="uochrome.c uoicons.c uodlg.c $FB/fb.c $FB/fb_aa.c"
+CC_ALL="$CC -O1 -g -std=c99 -Wall -Wextra -Werror -I. -I$FB -I$UI $SAN"
+
+# shellcheck disable=SC2086
+$CC_ALL $CORE ../tools/uochrome_test.c -o build/uochrome_test
+# shellcheck disable=SC2086
+$CC_ALL $CORE ../tools/uodlg_test.c    -o build/uodlg_test
 
 ./build/uochrome_test build
+./build/uodlg_test build
 
 if [ -f "$UI/tools/tile.py" ]; then
     # shellcheck disable=SC2046
     $PY "$UI/tools/tile.py" build/uochrome.png 3 $(ls build/uoc_*.ppm | sort)
-    echo "storyboard: build/uochrome.png"
+    # shellcheck disable=SC2046
+    $PY "$UI/tools/tile.py" build/uodlg.png 3 $(ls build/uod_*.ppm | sort)
+    echo "storyboards: build/uochrome.png build/uodlg.png"
 fi
