@@ -2520,18 +2520,42 @@ void uno_pc64_dbg_bench_cleanup(void)
 
 #endif /* UNO_DEBUG */
 
+/* ---- synthetic-input LOCKOUT (the security UI) -----------------------------
+ * While the security UI is modal - login gate, escalation consent sheet,
+ * Accounts manager, the Remote Control arming panel - injected input is dropped
+ * HERE, at the source, so no synthetic event can reach those dialogs by any
+ * path.  A person at the keyboard approves an escalation; a remote peer does
+ * not, even one holding automate.drive.  Without this, arming the URC channel
+ * would be self-escalating: a link granted "control" could open the panel, tick
+ * "Full access" and press Turn on, promoting itself to automate.system - and
+ * could approve a consent sheet the local user is looking at.
+ *
+ * Set by modal_begin() in pc64_accounts.c and cleared unconditionally at the
+ * top of every shell frame (pc64_uui.c).  The clear is deliberately the SHELL's
+ * job rather than each dialog's: the modal helpers return from a dozen places,
+ * and a lockout that leaked would silently kill automation for the rest of the
+ * boot.  The shell loop only runs when no modal is up, so it cannot leak. */
+static int g_inject_lock;
+void uno_pc64_input_lock(int on) { g_inject_lock = on ? 1 : 0; }
+int  uno_pc64_input_locked(void) { return g_inject_lock; }
+
 /* Synthetic input - PRODUCTION.  Keys go through the SAME map_key path real
  * firmware/native keys use; pointer moves through the same clamp + click
  * plumbing, so an injected event exercises the true input stack.  Ungated
  * because unoscript's `ui.*` automation surface (production) drives these,
  * capability-gated at that layer by unosecure (UI_INPUT); the stress driver and
- * the remote channel (both debug) also call them. */
+ * the remote channel also call them. */
 void uno_pc64_inject_key(int scan, int uni, int ctrl)
-{ map_key((UINT16)scan, (CHAR16)uni, ctrl ? cmdKey : 0); }
+{
+    if (g_inject_lock) return;               /* security dialog up - see above */
+    map_key((UINT16)scan, (CHAR16)uni, ctrl ? cmdKey : 0);
+}
 
 void uno_pc64_inject_pointer(int x, int y, int btn)
 {
-    int n = (g_injq_head + 1) % INJ_Q;
+    int n;
+    if (g_inject_lock) return;               /* security dialog up - see above */
+    n = (g_injq_head + 1) % INJ_Q;
     if (n == g_injq_tail) return;            /* full - drop, never overwrite  */
     g_injq[g_injq_head].x = x;
     g_injq[g_injq_head].y = y;

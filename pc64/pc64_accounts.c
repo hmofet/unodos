@@ -22,6 +22,8 @@
 #include "unosecure.h"
 #include "pc64_accounts.h"
 #include "unoauto_gate.h"      /* the Remote Control panel arms unoautomate */
+#include "unoauto_remote.h"    /* modal_frame pumps the link (see the note there) */
+#include "uno_debug.h"         /* uno_dbg_heartbeat - a no-op in production */
 #include "net.h"               /* net_ip/net_link: the address to tell the user */
 #include <string.h>
 #include <stdio.h>
@@ -52,6 +54,11 @@ static int        s_pw_wi = -1;
 static void modal_begin(unoui_window *sheet)
 {
     int mx, my, mb;
+    /* Lock out synthetic input for as long as a security dialog is up: these
+     * sheets decide identity and authority, so only a person at the keyboard
+     * drives them (uefi_main.c carries the full argument).  Cleared by the
+     * shell's frame loop, which cannot run until this modal returns. */
+    uno_pc64_input_lock(1);
     unoui_ui_init(&MU, pc64_shell_theme(), FB_W, FB_H);
     unoui_ui_add(&MU, sheet);
     uno_pc64_mouse(&mx, &my, &mb);
@@ -118,6 +125,25 @@ static int modal_frame(unoui_action *out)
     memset(&ev, 0, sizeof ev); ev.kind = UI_EV_TICK; unoui_handle(&MU, &ev);
     unoui_render_ui(&MU);
     uno_pc64_present();
+
+    /* This loop REPLACES the shell's frame loop for as long as a dialog is up,
+     * so it owes the two things that loop does every frame:
+     *
+     *   - the freeze watchdog's heartbeat.  Without it the debug build's
+     *     20-second LAPIC watchdog reads "a human is typing a password" as a
+     *     wedged main loop and hard-resets the machine.  Metal-confirmed on the
+     *     ZimaBlade 2026-08-03: opening the Remote Control panel reset the box
+     *     ~20 s later, every time.  (No watchdog exists in production, so this
+     *     compiles away there.)
+     *   - the URC pump.  Without it an armed remote link goes silent the moment
+     *     any security dialog opens, and on a headless box that is unrecoverable
+     *     - you cannot send the click that would close the dialog.  The link
+     *     stays serviced, so a remote operator still sees the machine and can
+     *     `screen` grab the dialog; the lockout above is what stops them
+     *     driving it. */
+    uno_dbg_heartbeat();
+    unoauto_remote_tick();
+
     uno_pc64_delay_ms(16);
     return got;
 }
