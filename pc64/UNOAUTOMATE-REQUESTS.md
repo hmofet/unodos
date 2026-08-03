@@ -4666,3 +4666,65 @@ tear-off palettes, and the real icon artwork through the `uoc_set_icons`
 seam), then 6c (dialog engine) and 6d (file dialog, status bar, rulers,
 Assistant). Phases 7-8 (UnoWord) can start against 6a as it stands; workers C
 and D fork after 6b/6c land, since UnoCalc and UnoShow both need dialogs.
+
+## 2026-08-03 - unoffice phases 6b, 6c, 6d LANDED: PHASE 6 IS COMPLETE
+
+**Worker B, unoffice lane.** The shared chrome is finished; UnoWord (phases
+7-8) can start against it, and workers C and D can fork now that dialogs
+exist. Contract: `pc64/uoffice/UOFFICE.md`. Gate: `pc64/uoffice/build.sh`
+builds and runs three harnesses (`uochrome_test`, `uodlg_test`,
+`uobars_test`) for 45 storyboard frames, all green.
+
+**6b** - toolbars dock on all four edges and float. A bar is a strip in a
+BAND (row top/bottom, column left/right); dragging its gripper shows the
+Windows dashed drop outline and releasing near an edge docks it, anywhere
+else floats it with a title bar and close box. Plus combo lists, split
+buttons dropping colour/icon palettes, TEAR-OFF palettes (drag the move bar,
+it floats away, swatches still live), ScreenTips on a dwell, and
+`uoicons.c`: 35 16x16 icons in the VGA palette, OUR OWN ARTWORK drawn from
+shape primitives, no Microsoft bitmap copied or traced.
+
+  Worth noting: all of the docking arrived WITHOUT re-deriving a coordinate,
+  because 6a had already put every toolbar position behind tb_origin() /
+  tb_btn_rect(). The geometry-computed-once rule paid for itself one phase
+  later, exactly as unoui's own note predicted it would.
+
+**6c** - `uodlg`: one dialog engine, and Office's ~30 dialogs are DATA
+TABLES over it. Label, button (default + focus rings), check, radio
+(exclusive per group), edit, list, combo, spinner, etched group box with the
+caption punched out of its top edge, preview well, tabbed pages (an item on
+page -1 shows on every page), the full keyboard, and a message box built
+rather than declared. Modal within the canvas, because unoui has no dialog
+primitive at all and faking one with a second window blocks nothing.
+
+**6d** - `uobars` (Word's status bar with hit-testable mode cells; the ruler
+with indent markers, the square that drags both, tab stops and the type
+selector; the Assistant balloon with "Uno", our own character) and `uofile`
+(the Open/Save As dialog over a FILESYSTEM SEAM - pc64 installs one wrapping
+uno_fs_*, the host gate installs a fake, uofile never learns which; the same
+trick as unodoc's ud_src).
+
+**A TRAP FOR EVERY LANE THAT DRAWS TEXT, and it cost a rendering bug here:**
+`fb_set_clip` DOES NOT CLIP TEXT. `fb.c`'s `fb_text` clips to the SCREEN
+only; the settable clip window lives in `fb_aa.c` and governs the alpha
+primitives. fb.c's own comment says the two domains merely "agree in
+practice" because unoui sizes its widgets to fit. A combo field is where they
+do not agree - "Times New Roman" overflowed across the buttons beside it and
+then showed through the transparent parts of their icons, which are drawn
+earlier in the same pass. Text that must fit a control has to be TRUNCATED.
+If a future lane wants real text clipping, that is a request to the toolkits
+owner, not something to work around twice.
+
+Two other catches worth recording: UBSan found the icon atlas sized ROWS=4
+for 35 icons on its first run (it derives from UOI_COUNT now), and -Werror
+caught the `if (a) x; if (b) y;` misleading-indentation pattern that unoui's
+build notes had already flagged once.
+
+**Still open in phase 6, stated rather than hidden:** the Customize dialog,
+the right-click toolbar checklist, editable combo fields, the file dialog's
+view buttons and MRU, real help content behind the Assistant's query box, and
+Large-icons doubling. All are in UOFFICE.md's "What phase 6 does NOT do" and
+in the SPEC as unticked boxes; each waits for an app that needs it.
+
+**NEXT: phase 7** (UnoWord's document model and page layout), then 8 (the
+app). Workers C and D may start 9-12 in parallel.

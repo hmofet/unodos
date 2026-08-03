@@ -17,9 +17,9 @@ Owner: the unoffice lane (workers B, C, D).
 | Phase | Surface | State |
 |---|---|---|
 | 6a | uochrome: menu bar, static menus, docked toolbars | **landed**, `[EXPERIMENTAL]` |
-| 6b | floating/docking, combo lists, split buttons + tear-off palettes, icon artwork | not started |
-| 6c | the dialog engine (tabs, group boxes, message box) | not started |
-| 6d | file Open/Save dialog, status bar, rulers, the Assistant | not started |
+| 6b | docking on four edges + floating, combo lists, split buttons + tear-off palettes, ScreenTips, icon artwork | **landed**, `[EXPERIMENTAL]` |
+| 6c | uodlg: the dialog engine (tabs, group boxes, message box) | **landed**, `[EXPERIMENTAL]` |
+| 6d | uobars + uofile: Open/Save dialog, status bar, ruler, the Assistant | **landed**, `[EXPERIMENTAL]` |
 | 7-8 | UnoWord | not started |
 | 9-10 | UnoCalc | not started |
 | 11-12 | UnoShow | not started |
@@ -87,12 +87,101 @@ re-tunes from one place when the pixel-check against a real Office 97 install
 happens. Items the SPEC tags *(verify)* are exactly the ones that check will
 settle.
 
-### What 6a does NOT do
+## Docking, palettes and icons (phase 6b)
 
-Floating and docking (toolbars are drawn docked, in declaration order), combo
-**lists** (the field and its drop button are drawn and their space reserved;
-clicking one does nothing yet), split buttons and tear-off palettes, ScreenTips,
-the Customize dialog, and any dialog at all. Those are 6b-6d.
+A toolbar is a strip in a **band**: a row at the top or bottom, a column at
+the left or right, with two bars sharing a band sitting side by side in
+declaration order. Dragging a bar's gripper (or a floating bar's title bar)
+shows the Windows dashed drop outline; releasing within a bar-and-a-half of a
+frame edge docks it there as a new band, anywhere else floats it.
+`uoc_client_rect()` reports what is left for the document, so an app never
+computes a band height itself.
+
+All of that arrived without re-deriving a coordinate, because 6a had already
+put every toolbar position behind `tb_origin()` / `tb_btn_rect()`. That is
+rule 1 above paying for itself one phase later.
+
+Also here: combo boxes that drop real lists and remember their selection
+(`uoc_combo` / `uoc_combo_set`), split buttons that drop colour or icon
+palettes, **tear-off palettes** (drag the move bar across a dropped palette's
+top and it floats away, swatches still live — the Office 97 gesture people
+remember), and ScreenTips on a hover dwell driven by `UI_EV_TICK`.
+
+`uoicons.c` fills the atlas seam with 35 16x16 icons in the VGA palette,
+drawn from shape primitives. **Our own artwork**: no Microsoft bitmap was
+copied or traced. They are code rather than a data blob for the same reason
+unodoc refused a canned STSH — a blob nobody can read is a blob nobody can
+fix — and the shapes that are not rectangles are string art anyone can edit
+by counting.
+
+**A trap worth keeping.** `fb_set_clip` does NOT clip text. `fb.c`'s
+`fb_text` clips to the screen only; the settable clip window lives in
+`fb_aa.c` and governs the alpha primitives, and fb.c's own comment notes the
+two domains merely "agree in practice" because unoui sizes widgets to fit. A
+combo field is where they do not agree — "Times New Roman" overflowed across
+the buttons beside it and then showed through the transparent parts of their
+icons. Text that must fit a control is **truncated**, not clipped.
+
+## The dialog engine (phase 6c)
+
+`uodlg.h`. Office's ~30 shared dialogs are the same dozen controls arranged
+differently, so this is one engine and they are **data tables** over it. An
+app declares a `uod_dlg` of `uod_item`s at dialog-relative coordinates;
+nothing in `uodlg.c` knows what a font is.
+
+Controls: label, push button (default ring, focus ring), check, radio
+(exclusive within its `group`), edit, list, drop-down combo, spinner with a
+clamped range, etched group box with the caption punched out of its top edge,
+and a preview well the app paints into after `uod_render` via
+`uod_preview_rect`. Tabbed pages, where an item on page `-1` shows on every
+page. Keyboard: Tab/Shift+Tab, arrows for lists, combos, spinners and radio
+groups, a mnemonic anywhere jumps to that control and fires it, Enter presses
+the default, Esc cancels.
+
+**Modal within the canvas.** unoui has no dialog primitive at all — apps fake
+one with a second window and nothing blocks the parent — so the suite draws
+its dialogs over the document inside its own `UI_CANVAS` and swallows every
+event while one is up. That is what Office 97 looked like too: a dialog was a
+window, not an overlay panel. It drags by its title bar, and its close box and
+its "?" button report **distinct** results rather than both meaning cancel.
+
+`uod_msgbox` builds its dialog rather than taking one, because "Save changes
+to Document1?" is not anybody's data table.
+
+## The status bar, ruler, Assistant and file dialog (phase 6d)
+
+`uobars.h` carries three independent pieces, each a pure function of its own
+model plus the event stream:
+
+- **The status bar**: Word's page and position cells, the four mode cells
+  (REC/TRK/EXT/OVR, greyed when off) and the spelling book. `uob_status_hit`
+  names the cell under the pointer so double-click-to-toggle has a target.
+- **The ruler**: the white text column over grey margins, ticks, the
+  first-line and hanging indent markers, the square below the hanging one
+  that drags **both** while preserving their gap, the right indent, tab stops,
+  and the selector at the far left that cycles left/centre/right/decimal.
+  Clicking the bare ruler sets a stop of whatever type the selector shows.
+- **The Assistant**: the balloon, the query box, the numbered blue-bullet
+  answers, the Close button — and **"Uno"**, our own character, deliberately
+  not a paperclip, a dog, a cat or a wizard. The SPEC asks for the fidelity of
+  the frame, not for anyone's likeness. Off by default.
+
+`uofile.h` is the Open / Save As dialog, which Office 97 shipped itself
+rather than taking from the common dialog. It is a `uodlg` like any other;
+what it adds is that **its list is not static data**. Contents arrive through
+a filesystem seam (`uof_set_fs`): pc64 installs one wrapping `uno_fs_*`, the
+host gate installs a fake, and `uofile.c` never learns which — the same trick
+as unodoc's `ud_src`, and what makes it testable without booting the OS.
+`uof_sync()` sits deliberately OUTSIDE `uod_handle`, so the dialog engine
+stays a pure control layer that knows nothing about files.
+
+### What phase 6 does NOT do
+
+The Customize dialog (drag a command onto a bar, Large icons, menu
+animations), right-click-a-bar's toolbar checklist, list/details/preview view
+buttons in the file dialog and its MRU, real Assistant help content behind the
+query box, and the Large-icons doubling. Those wait for the apps that need
+them.
 
 ## The host gate
 
@@ -100,11 +189,12 @@ the Customize dialog, and any dialog at all. Those are 6b-6d.
 cd pc64/uoffice && ./build.sh
 ```
 
-Builds `pc64/tools/uochrome_test.c` against the same `uochrome.c` the module
-compiles freestanding, linked to the shared software framebuffer
-(`ps2/fb.c` + `fb_aa.c`) exactly as unoui's harness is, and drives a **scripted
-`unoui_event` stream** - the same event stream pc64 feeds. Sixteen frames land
-in `build/uoc_*.ppm` plus a contact sheet.
+Builds three harnesses - `pc64/tools/uochrome_test.c`, `uodlg_test.c` and
+`uobars_test.c` - against the same sources the module compiles freestanding,
+linked to the shared software framebuffer (`ps2/fb.c` + `fb_aa.c`) exactly as
+unoui's harness is, and drives a **scripted `unoui_event` stream**: the same
+event stream pc64 feeds. 45 frames land in `build/uo{c,d,b}_*.ppm` plus three
+contact sheets.
 
 It asserts three kinds of thing, and the mix is the point:
 
@@ -135,6 +225,19 @@ the unodoc halves it uses.
 
 ## Changelog
 
+- **2026-08-03 - phase 6d.** `uobars.c` (status bar, ruler, Assistant) and
+  `uofile.c` (Open / Save As over a filesystem seam). Gate: 11 frames over a
+  fake volume set. The gate's first cut assumed the filesystem's raw order
+  and was corrected by the engine: directories sort first, wear a trailing
+  backslash, and picking one does not fill the name field.
+- **2026-08-03 - phase 6c.** `uodlg.c`: the dialog engine, and with it the
+  claim that Office's thirty dialogs are one engine and thirty tables. Gate:
+  11 frames driving Word's Font dialog, declared as a data table.
+- **2026-08-03 - phase 6b.** Docking on four edges and floating, combo lists,
+  split buttons with tear-off palettes, ScreenTips, and `uoicons.c`. Gate
+  grew to 23 frames. Two bugs it caught: the atlas was sized for 32 icons and
+  UBSan found the overrun at 35 (it is derived from `UOI_COUNT` now), and
+  combo text was not clipped - see the fb_set_clip trap above.
 - **2026-08-02 - phase 6a.** `uochrome.{h,c}`: the menu bar, full static menus
   (16x16 icon gutter, separators, submenus, checkmarks and radio bullets,
   disabled items with the Windows 95 white emboss, a right-aligned accelerator
