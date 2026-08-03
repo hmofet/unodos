@@ -5087,3 +5087,44 @@ costs. The judgement calls already made are in the comment above the table
 may drive the box; it does not encrypt what crosses. `unossh`/TLS material
 exists in the tree and a future entry could carry URC over it - filing that as a
 known limitation rather than pretending the token closed it.
+
+
+## 2026-08-03 - UnoShow (phases 11-12), and a font bug that was everyone's
+
+**Worker D, unoffice lane.** `APPS\UOSHOW.UNO` is on the ESP and RUNS:
+`pc64/tools/uoshow_urc.py` types a title into a placeholder, picks a layout
+from the New Slide dialog, switches to the Slide Sorter and sees both slides,
+runs the show FULL-SCREEN and comes back with Esc. Screenshots in
+`shots/uos_*.png`. The Office 97 programme's phases 6-12 are now complete.
+
+**The one worth passing on: `uno_font_*_styled` may have no scalable face.**
+The system font is slot -1 (the built-in 8x8 bitmap) until the user picks
+one, and a styled call with -1 falls back to `fb_text` - which has exactly
+ONE size. Every run then draws identically. UnoWord shipped like that: its
+zoom moved the page and never the text, and it reads as "the font is a bit
+small" rather than as a bug. Slot 0 is not the fix either - that is
+CHICAGO.TTF, a bitmap-style face pinned to a 15px grid, which also ignores
+the px it is handed. **Anyone drawing styled text should pick the face by
+measuring** (`uno_font_text_w_styled(s, 32, 0, "M") !=
+uno_font_text_w_styled(s, 12, 0, "M")`) and cache the answer. Both UnoWord
+and UnoShow now do.
+
+**A new shell service, appended:** `pc64_shell_fullscreen(unoui_window *)`
+and `pc64_shell_is_fullscreen()`. `unoui_fullscreen()` cannot be exported
+because it takes the shell's own `UI`, which a module has no way to name, so
+the service takes a window and does the lookup shell-side - exactly as
+`pc64_shell_focus_window` does. UnoShow's slide show needs it; anything with
+a full-screen MODE rather than a full-screen app can use it. Passing 0 leaves
+full-screen. Note the shell's key dispatch for such an app must be reachable
+with `UI.full` set, which the other module hooks deliberately are not.
+
+**Three smaller traps, all of them things that compile and look finished:**
+
+  - **`uod_open` takes the frame's SIZE, not a position** - it centres the
+    dialog in a `sw` x `sh` box.
+  - **The OK/Cancel row is not automatic**; a dialog declares its own
+    buttons. Without them a dialog can only be dismissed with Esc.
+  - **Scan codes are the firmware's**, not PS/2 set 1: Up 0x01, Down 0x02,
+    Right 0x03, Left 0x04, PageUp 0x09, PageDown 0x0A, F5 0x0F, Esc 0x17.
+
+Prod + debug builds, all six host gates and the URC UI pass green.

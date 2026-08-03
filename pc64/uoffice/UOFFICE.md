@@ -24,7 +24,8 @@ Owner: the unoffice lane (workers B, C, D).
 | 8 | UnoWord the app (`pc64/apps/uoword.c` -> `APPS\UOWORD.UNO`) | **landed**, `[EXPERIMENTAL]` |
 | 9 | UnoCalc: workbook store, calculator, number formats (`uocalc.h`, `uxl_*.c`) | **landed**, `[EXPERIMENTAL]` |
 | 10 | UnoCalc the app (`pc64/apps/uocalc.c` -> `APPS\UOCALC.UNO`) | **landed**, `[EXPERIMENTAL]` |
-| 11-12 | UnoShow | not started |
+| 11 | UnoShow: presentation model, autoshape geometry, slide renderer (`uoshow.h`, `uos_*.c`) | **landed**, `[EXPERIMENTAL]` |
+| 12 | UnoShow the app (`pc64/apps/uoshow.c` -> `APPS\UOSHOW.UNO`) | **landed**, `[EXPERIMENTAL]` |
 
 ## Why the chrome is ours and not unoui
 
@@ -297,6 +298,85 @@ overpaints it: UnoCalc's File menu came out as two items and a cut edge,
 clipped to the toolbar band, and **UnoWord had the same bug** and nobody had
 noticed because a two-item File menu still looks like a menu.
 
+## UnoShow (phases 11 and 12)
+
+`uoshow.h` is the contract; `uos_geom.c` holds the autoshape paths, colour
+schemes, AutoLayouts and page setups, `uos_model.c` the store, `uos_render.c`
+the renderer, and `pc64/apps/uoshow.c` the app.
+
+- **One renderer, five destinations.** The editing zoom, a sorter thumbnail,
+  the notes page, the handout grid and the full-screen show are `uos_render()`
+  with a different rectangle. Everything is in SLIDE POINTS (72/inch, the
+  on-screen show is 720 x 540) so that stays true, and the gate asserts it:
+  the same slide drawn at full size and at thumbnail size must put the slide's
+  centre at the centre of both rectangles. A shape that is only right at 100%
+  is a shape the sorter shows wrong twelve times.
+- **Autoshapes are paths in a 1000 x 1000 box**, mapped onto the shape's
+  frame - one description for every size. The three shapes a polygon
+  describes badly (ellipse, round rectangle, line) say so through
+  `uos_geom_kind()` instead of being approximated with 64 vertices, which
+  looks like 64 vertices at show size and costs 64 divisions at thumbnail
+  size. The pentagon's and the star's trigonometry is precomputed: a constant
+  table has no business being recomputed 60 times a second.
+- **Spans carry the fill.** The scanline filler emits one horizontal run at a
+  time and hands it to a span painter, so solid, two gradients and six
+  patterns are four span painters over ONE geometry walk. Everything is drawn
+  from `fb_fill_rect` / `fb_hline` / `fb_pixel` / `fb_text` and nothing else,
+  so UOSHOW.UNO imports the same short list UOWORD.UNO does.
+- **The renderer clips to the slide.** A shape half-dragged off the edge is
+  normal in PowerPoint and harmless full-screen; in the sorter the overhang
+  lands on the next thumbnail. It cannot use `fb_set_clip` (see the trap
+  above - that governs `fb_aa`'s alpha primitives, not fb's), so every span
+  and every line passes through the file's own clip rect. The gate renders
+  a slide whose bottom row deliberately hangs over the edge and counts the
+  pixels outside the rectangle: the answer must be zero.
+- **Three pools, shared by the whole presentation** - shapes, paragraphs and
+  characters - with slides holding indices. This is the UnoCalc lesson
+  applied at design time rather than after a 104 MB link. The invariant that
+  makes compaction work is stated in `uos_model.c`'s header: a shape's
+  paragraph run and its text are both contiguous, and sorting shapes by
+  `para_at` sorts them by text offset too. `uos_para_add` re-homes the run's
+  text as well as its paragraphs precisely to keep that true.
+
+### The app
+
+Four views (Slide, Outline, Slide Sorter, Notes Page), the 24 AutoLayouts as
+a picker, Apply Design / Colour Scheme over the eight scheme roles, text
+typed straight into a placeholder with Tab and Shift+Tab demoting and
+promoting, autoshape insert, and **the slide show full-screen** - F5, click
+or Space or Right to advance, Left to go back, `B` for a black screen, Esc
+out, hidden slides skipped.
+
+**Transitions v1 are the ones a bounded number of renders per frame can
+express**: Cut, Cut Through Black, Wipe x4, Box In/Out, Split H/V, Cover x4,
+Blinds H/V, Random Bars H/V. There is no second framebuffer, so a transition
+cannot cross-fade two bitmaps - it draws the outgoing slide and then the
+incoming one through a moving window (`uos_clip`). Dissolve and Checkerboard
+need a per-cell mask over the whole slide, which is 192 renders a frame, so
+they are honestly absent rather than approximated by something that stutters.
+
+### Four traps this phase found, three of them not UnoShow's
+
+1. **`uod_open` takes the frame's SIZE, not a position.** It centres the
+   dialog in a `sw` x `sh` box. Passing a top-left corner puts the dialog at
+   a quarter of the screen with its list somewhere else again.
+2. **The OK/Cancel row is not automatic** - a dialog declares its own
+   buttons, as uoword's Font dialog does. A picker without them opens, looks
+   finished, and can only be dismissed with Esc.
+3. **Scan codes are the FIRMWARE's**, not PS/2 set 1: Up 0x01, Down 0x02,
+   Right 0x03, Left 0x04, PageUp 0x09, PageDown 0x0A, F5 0x0F, Esc 0x17. A
+   PS/2 table compiles, looks plausible, and every key silently does nothing.
+4. **`uno_font_*_styled` needs a scalable TTF slot, and there may not be
+   one.** The system font is slot -1 (the 8x8 bitmap) until the user picks a
+   face, and a styled call with -1 falls back to `fb_text`, which has exactly
+   one size - so a 44pt title and a 20pt bullet draw identically and the
+   full-screen show draws text the size the editor does. Slot 0 is no better:
+   it is CHICAGO.TTF, a bitmap-style face pinned to a 15px grid, which also
+   ignores the size it is asked for. Both apps now choose the face by
+   MEASURING (the first slot whose width answer changes with px) and cache
+   it. **UnoWord had this bug too** - its zoom moved the page and never the
+   text - and it is fixed in the same commit.
+
 ## Build integration
 
 `pc64/build.sh` gains a **UOWORD.UNO block beside PHOTOS'** - the app plus the
@@ -308,6 +388,19 @@ three are appends, which is how those choke-points are meant to grow.
 
 ## Changelog
 
+- **2026-08-03 - phases 11 and 12.** `uoshow.h` + `uos_geom.c` + `uos_model.c`
+  + `uos_render.c` (20 autoshapes, 8 colour schemes, the 24 AutoLayouts, the
+  pooled store and the one renderer) and `pc64/apps/uoshow.c` ->
+  `APPS\UOSHOW.UNO`. Gates: a sixth host harness at 66 checks and 4
+  storyboard frames, production and debug pc64 builds, and **the app driven
+  on screen over URC** (`pc64/tools/uoshow_urc.py`): a title typed into a
+  placeholder, New Slide picked from the AutoLayout dialog, the Slide Sorter
+  showing both slides, and the show taking the whole screen and coming back.
+  One shared-code addition: `pc64_shell_fullscreen()` +
+  `pc64_shell_is_fullscreen()`, because `unoui_fullscreen()` takes the
+  shell's own `UI` and a module has no way to name it - the same append
+  UnoWord made for `uno_fs_isdir`. Four traps recorded above; the font-slot
+  one was a live bug in UnoWord as well.
 - **2026-08-03 - phases 9 and 10.** `uocalc.h` + `uxl_sheet.c` + `uxl_calc.c`
   + `uxl_numfmt.c` (the sparse store, the RPN compiler and evaluator, 73
   functions, the number-format language) and `pc64/apps/uocalc.c` ->

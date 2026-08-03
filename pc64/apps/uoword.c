@@ -103,6 +103,33 @@ static char *a_num(long v, char *b)
 }
 
 /* ---- the metrics seam, over pc64's kerned TTF ----------------------------- */
+/* uno_font_*_styled needs a TTF SLOT, and the system font is slot -1 (the
+ * built-in 8x8 bitmap) until the user picks a face - a styled call with -1
+ * falls back to fb_text, which has exactly ONE size.  Every run then draws
+ * identically: a 44pt title and a 20pt bullet come out the same height, and
+ * the full-screen show draws text the size the editor does.  It reads as
+ * "the font is a bit small", not as a bug.
+ *
+ * Nor is "slot 0" the answer: slot 0 is CHICAGO.TTF, a bitmap-style face
+ * pinned to a 15px grid, which also ignores the size it is asked for.  So the
+ * face is chosen by MEASURING - the first slot whose width answer actually
+ * changes with px - and cached.  If none scales, -1 is honest and the text
+ * simply is one size. */
+static int font_slot(void)
+{
+    static int cached = -2;
+    int s;
+    if (cached != -2) return cached;
+    s = uno_font_active();
+    if (s >= 0 && uno_font_text_w_styled(s, 32, 0, "M") !=
+                  uno_font_text_w_styled(s, 12, 0, "M")) { cached = s; return s; }
+    for (s = 0; s < 8; s++)
+        if (uno_font_text_w_styled(s, 32, 0, "M") !=
+            uno_font_text_w_styled(s, 12, 0, "M")) { cached = s; return s; }
+    cached = -1;
+    return -1;
+}
+
 static int px_of(const uow_chp *c)
 {
     int px = (c->size ? c->size : 20) / 2;      /* half-points -> points     */
@@ -121,14 +148,14 @@ static int m_text_w(const char *s, long n, const uow_chp *c, void *ctx)
     (void)ctx;
     for (i = 0; i < n && i < 255; i++) b[i] = s[i];
     b[i] = 0;
-    return uno_font_text_w_styled(uno_font_active(), px_of(c), style_of(c), b);
+    return uno_font_text_w_styled(font_slot(), px_of(c), style_of(c), b);
 }
 static int m_height(const uow_chp *c, void *ctx)
-{ (void)ctx; return uno_font_height_px(uno_font_active(), px_of(c)) + 1; }
+{ (void)ctx; return uno_font_height_px(font_slot(), px_of(c)) + 1; }
 static int m_baseline(const uow_chp *c, void *ctx)
-{ (void)ctx; return uno_font_baseline_px(uno_font_active(), px_of(c)); }
+{ (void)ctx; return uno_font_baseline_px(font_slot(), px_of(c)); }
 static int m_space(const uow_chp *c, void *ctx)
-{ (void)ctx; return uno_font_text_w_styled(uno_font_active(), px_of(c), 0, " "); }
+{ (void)ctx; return uno_font_text_w_styled(font_slot(), px_of(c), 0, " "); }
 
 /* ---- the filesystem seam the Open dialog browses -------------------------- */
 static const uof_fs kFs = {
@@ -569,7 +596,7 @@ static void draw_doc(int cx, int cy, int cw, int ch)
             if (selB > selA && r->cp < selB && r->cp + r->n > selA)
                 fb_fill_rect(cx + ln->x + r->x, y, r->w, ln->h,
                              FB_RGB(0x00,0x00,0x80));
-            uno_font_draw_styled(uno_font_active(), px_of(&r->chp),
+            uno_font_draw_styled(font_slot(), px_of(&r->chp),
                                  style_of(&r->chp),
                                  cx + ln->x + r->x, y, buf,
                                  (selB > selA && r->cp >= selA && r->cp < selB)
