@@ -26,21 +26,43 @@ guides (full URL list in the plan's research provenance, §11).
 ## 1. Shared Office platform (S-OFF)
 
 ### S-OFF-01 Command bars
-- [ ] **Menus are owner-drawn with 16x16 icons beside items that exist as
+`pc64/uoffice/uochrome.c`, phase 6a, 2026-08-02. Gated by
+`pc64/uoffice/build.sh`: 16 storyboard frames asserting behaviour, sampled
+pixels, and that rendering the same state twice is byte-identical.
+- [F] **Menus are owner-drawn with 16x16 icons beside items that exist as
   toolbar buttons; full static menus (NO adaptive/personalized collapsing
-  — that is Office 2000); disabled items gray, never hidden**
-- [ ] **Toolbar buttons flat; raised 3D edge on hover; sunken + dither
-  background when pressed/toggled**
+  — that is Office 2000); disabled items gray, never hidden** — with the
+  Windows 95 white emboss under a disabled label, separators, submenus,
+  checkmarks and radio bullets, and a right-aligned accelerator column.
+  Mnemonics are always underlined, which is right for this era: hiding them
+  until Alt is a Windows 2000 behaviour. Icons come through an atlas seam
+  whose artwork is 6b; until then they draw as deterministic placeholders.
+- [F] **Toolbar buttons flat; raised 3D edge on hover; sunken + dither
+  background when pressed/toggled** — asserted at the pixel that carries the
+  claim (a button's top-left corner: face when flat, the bright edge on hover,
+  the dark edge when pressed, and still dark once a toggle is on and the
+  mouse has left).
 - [ ] **Toolbars dockable top/bottom/left/right and floatable (mini title
-  bar + close); drag handle (two raised bars) at docked left end**
+  bar + close); drag handle (two raised bars) at docked left end** — the
+  gripper is drawn and toolbars render docked in declaration order; docking
+  and floating themselves are 6b.
 - [ ] Right-click any bar → checklist of toolbars + Customize…
 - [ ] Customize dialog (3 tabs: Toolbars / Commands / Options); drag
   commands onto bars; Alt-drag off; Options: Large icons, ScreenTips,
   shortcut keys in ScreenTips, menu animations (None/Random/Unfold/Slide)
-- [ ] Combo boxes in toolbars (Style, Font, Size, Zoom) editable + dropdown
+- [ ] Combo boxes in toolbars (Style, Font, Size, Zoom) editable + dropdown —
+  6a draws the sunken field and its raised drop button and reserves the
+  space; the list behind it is 6b
 - [ ] **Split/dropdown buttons with tear-off palettes (Undo/Redo stacks;
-  Border, Highlight, Font Color, Fill Color palettes float when dragged)**
-- [ ] Menu keyboard: Alt+mnemonic, F10, arrows, Esc; accelerator column
+  Border, Highlight, Font Color, Fill Color palettes float when dragged)** —
+  6b
+- [F] Menu keyboard: Alt+mnemonic, F10, arrows, Esc; accelerator column —
+  F10 activates the bar without opening a menu, arrows walk it, Down opens,
+  Up/Down skip separators and disabled items, Right opens a submenu (or moves
+  to the next menu when there is none), Left closes one level, Enter
+  activates, Esc unwinds one level at a time. The app maps its platform's
+  F10 onto `UOC_KEY_F10`, declared in uochrome.h rather than widening unoui's
+  virtual-key enum, which would be a choke-point edit for no reason.
 
 ### S-OFF-02 Visual identity
 - [ ] **Win95/NT4 chrome: `#C0C0C0` face, `#FFFFFF` light, `#808080`

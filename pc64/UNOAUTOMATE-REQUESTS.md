@@ -4608,3 +4608,61 @@ oracle failure shows up again, capture /tmp's gate log before rerunning.
 worker B's uochrome/UnoWord (phases 6-8) and the app-side lanes; unodoc
 gains surface on request from them (OFFICE97-PLAN §4 names the candidates:
 .doc styles-on-write, .xls fonts/colours, .ppt style atoms, pictures).
+
+## 2026-08-02 - unoffice phase 6a LANDED (uochrome: the Office 97 command bars)
+
+**Worker B, unoffice lane** - the first code in the lane.
+`pc64/uoffice/uochrome.{h,c}`, contract `pc64/uoffice/UOFFICE.md` (the
+AGENTS.md registry row now points at it), gate `pc64/uoffice/build.sh` ->
+`pc64/tools/uochrome_test.c`.
+
+**The chrome is ours, deliberately.** Office 97 drew menus and toolbars as
+owner-drawn command bars, not native controls, so drawing them ourselves is
+the FAITHFUL choice rather than a workaround - and it is also the only one
+available: unoui's menubar is flat (no submenus, separators, icons,
+checkmarks, accelerator column) and UNOUI_MAX_WIDGETS is 64, which an Office
+toolbar row would eat on its own. The suite therefore hosts its chrome in a
+single UI_CANVAS, the UnoAmp pattern, and consumes unoui unchanged. **No
+choke-point was touched by this slice** - no build.sh block (the kernel does
+not need uoffice until the first app module, phase 8), no kExports, no
+pc64_uui.c slot.
+
+Landed: menu bar, full static menus (16x16 icon gutter, separators,
+submenus, checks/radios, disabled items with the Win95 white emboss,
+right-aligned accelerators, always-underlined mnemonics), docked toolbars
+(flat -> raised on hover -> sunken on press/toggle, grippers, separators,
+combo fields with drop buttons), and the keyboard model (F10, Alt+mnemonic,
+arrows, Enter, Esc).
+
+Three things worth knowing before touching it:
+
+  - **Geometry is computed once**, by the functions the painter and the
+    hit-tester both call. This is unoui's own recorded lesson
+    (unoui_content_origin); hit-test against arithmetic that merely
+    resembles the drawing and they drift until buttons stop working where
+    they look.
+  - **Metrics derive from fb_text_h()/fb_text_w()**, never pixel counts: the
+    host harness draws an 8x8 bitmap, pc64 draws kerned TTF at the user's UI
+    scale, and both must lay out.
+  - **F10 is `UOC_KEY_F10` in uochrome.h**, not a new entry in unoui's
+    virtual-key enum. Widening someone else's enum for our lane is exactly
+    the choke-point edit AGENTS.md §2 forbids, and a constant in our own
+    header costs nothing.
+
+**The gate asserts pixels, not just state.** A model that is right while the
+painter is wrong is the failure a behaviour-only test cannot see, so the navy
+of an open title, the bright edge of a hovered button, the dark edge of a
+pressed one and a toggle still sunken after the mouse leaves are sampled out
+of the framebuffer - those four ARE SPEC S-OFF-01's central claim. It also
+renders every state twice and requires byte-identical frames, which catches a
+painter that accumulates rather than drawing from scratch. Two failures on
+the first run were both the test's own arithmetic (a pixel that landed on the
+white emboss of a disabled label, and a submenu coordinate half an item low
+because a submenu's border aligns to its parent ITEM, not to the parent
+popup's top).
+
+**Next in this lane: 6b** (floating/docking, combo lists, split buttons +
+tear-off palettes, and the real icon artwork through the `uoc_set_icons`
+seam), then 6c (dialog engine) and 6d (file dialog, status bar, rulers,
+Assistant). Phases 7-8 (UnoWord) can start against 6a as it stands; workers C
+and D fork after 6b/6c land, since UnoCalc and UnoShow both need dialogs.
