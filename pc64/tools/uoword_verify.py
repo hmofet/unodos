@@ -118,21 +118,41 @@ def main():
         time.sleep(0.6)
         H.shot(q, "uow_08_undo")
 
-        # ONE decisive mouse test: click the Bold button on the Formatting
-        # bar.  If the toggle lights up, the pointer path works and any menu
-        # miss is a coordinate error; if it does not, the pointer never
-        # reaches the canvas at all.
-        mclick(q, 387, 225)
+        # ---- the mouse paths ------------------------------------------
+        # Every one of these was dead before the canvas rect came from the
+        # painter instead of being reconstructed from the window frame.
+        mclick(q, 387, 225)                    # the Bold button
         time.sleep(0.6)
         H.shot(q, "uow_09_click_bold")
 
-        # and the File menu, by clicking its title
-        mclick(q, 108, 133)
+        mclick(q, 108, 133)                    # the File menu title
         time.sleep(0.6)
         H.shot(q, "uow_10_filemenu")
         H.keys(q, "esc")
         time.sleep(0.4)
-        H.shot(q, "uow_11_final")
+
+        mclick(q, 369, 133)                    # Format > Font...
+        time.sleep(0.5)
+        H.shot(q, "uow_11_formatmenu")
+        H.keys(q, "down", "ret")
+        time.sleep(1.0)
+        H.shot(q, "uow_12_fontdialog")
+
+        # drive the dialog with the mouse: tick Italic, then press OK
+        mclick(q, 470, 470)
+        time.sleep(0.4)
+        H.shot(q, "uow_13_dialog_check")
+        H.keys(q, "esc")
+        time.sleep(0.5)
+
+        mclick(q, 564, 133)                    # Help > About
+        time.sleep(0.5)
+        H.keys(q, "down", "ret")
+        time.sleep(0.9)
+        H.shot(q, "uow_14_about")
+        H.keys(q, "ret")
+        time.sleep(0.5)
+        H.shot(q, "uow_15_final")
 
     finally:
         qemu.terminate()

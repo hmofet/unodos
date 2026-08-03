@@ -31,6 +31,10 @@
 
 /* fb[] comes from ../../ps2/fb.c, which we link. */
 
+/* the chrome does not live at the top-left corner of the world */
+#define ORIGIN_X 37
+#define ORIGIN_Y 23
+
 static uoc_ui UI;
 static int g_frame, g_fail;
 static const char *g_dir = "build";
@@ -307,10 +311,21 @@ int main(int argc, char **argv)
 
     if (argc >= 2) g_dir = argv[1];
     uoc_icons_install();                 /* phase 6b: real artwork */
-    uoc_init(&UI, kMenus, NMENU, kBars, NBAR, 0, 0, FB_W, FB_H - 14);
+
+    /* THE CHROME IS PLACED AT A NON-ZERO ORIGIN, deliberately.
+     *
+     * Every earlier run of this gate put it at (0,0), where an origin bug is
+     * invisible because adding the wrong origin to zero still gives zero.
+     * UnoWord found that out on the screen: the app reconstructed its canvas
+     * rect from the window FRAME instead of the window's CONTENT origin, was
+     * short by the title bar, and every menu click missed while the gate
+     * stayed green.  Running the whole storyboard offset makes that class of
+     * bug fail here instead. */
+    uoc_init(&UI, kMenus, NMENU, kBars, NBAR, ORIGIN_X, ORIGIN_Y,
+             FB_W - ORIGIN_X, FB_H - 14 - ORIGIN_Y);
 
     printf("uochrome storyboard -> %s\n", g_dir);
-    y0 = bar_h() / 2;
+    y0 = UI.y + bar_h() / 2;   /* the bar is at the ORIGIN, not at zero */
 
     /* ================= phase 6a: menus, and flat toolbars ================= */
 

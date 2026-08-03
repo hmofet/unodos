@@ -70,6 +70,23 @@ static char g_name[40] = "Document1";
 static char g_status_l[64], g_status_r[64];
 static int  g_showruler = 1;
 
+/* THE CANVAS RECT, TAKEN FROM THE PAINTER.
+ *
+ * A widget's own w->r is relative to the window's CONTENT origin, not to its
+ * frame, so reconstructing screen coordinates as (window.x + widget.x) is
+ * short by the frame width and the whole title bar - about twenty pixels in
+ * y.  That is enough to push a click on the menu bar into the toolbar row
+ * while a click in the document still lands somewhere plausible, which is
+ * exactly how it presented: the caret moved, and no menu ever opened.
+ *
+ * unoui_content_origin() would give the right answer, but the stronger fix is
+ * to have only ONE answer: the rect uoc_render() painted into is the rect
+ * uoc_handle() must hit-test against, so the painter records it and the event
+ * path reads it back.  This is the same rule the rest of the lane is built on
+ * (uochrome.c's header, rule 1) and this is what breaking it looks like. */
+static unoui_rect g_rect;
+static int        g_have_rect;
+
 enum { DLG_NONE = 0, DLG_OPEN, DLG_SAVE, DLG_FONT, DLG_MSG };
 
 static int a_strlen(const char *s) { int n = 0; while (s && s[n]) n++; return n; }
@@ -578,6 +595,8 @@ static void app_draw(struct unoui_widget *w, unoui_rect r, void *ctx)
     int cx, cy, cw, chh, top;
     (void)w; (void)ctx;
     fit_page_width(r.w);
+    g_rect = r;
+    g_have_rect = 1;
     if (g_dirty_layout) relayout();
     sync_toggles();
 
@@ -604,42 +623,46 @@ static int doc_top(unoui_rect r)
     return t;
 }
 
+/* Whatever a closing dialog meant.  Shared, because a dialog can be
+ * dismissed by the mouse (app_event) or by Enter/Esc (uw_key). */
+static void dialog_closed(void)
+{
+    int res = uod_result(&DL), kind = g_dlg_kind;
+    g_dlg_kind = DLG_NONE;
+    if (res == UOD_ID_OK && kind == DLG_OPEN) {
+        a_cpy(g_name, uof_name(), (int)sizeof g_name);
+        load_doc(uof_volume(), g_name);
+    } else if (res == UOD_ID_OK && kind == DLG_SAVE) {
+        a_cpy(g_name, uof_name(), (int)sizeof g_name);
+        save_doc(uof_volume(), g_name);
+    } else if (res == UOD_ID_OK && kind == DLG_FONT) {
+        uow_chp c;
+        long a = g_anchor < g_caret ? g_anchor : g_caret;
+        long b = g_anchor < g_caret ? g_caret : g_anchor;
+        uow_chp_at(DOC, a, &c);
+        c.bold      = (unsigned char)uod_value(&DL, FD_BOLD);
+        c.italic    = (unsigned char)uod_value(&DL, FD_ITALIC);
+        c.underline = (unsigned char)uod_value(&DL, FD_UNDER);
+        c.size      = (unsigned short)(uod_value(&DL, FD_SIZE) * 2);
+        if (b > a) uow_format(DOC, a, b - a, &c);
+    }
+    touched();
+}
+
 static int app_event(struct unoui_widget *w, const void *evp, void *ctx)
 {
     const unoui_event *e = (const unoui_event *)evp;
     unoui_rect r;
     int cmd = 0;
-    (void)ctx;
-    if (!w) return 0;
-    r = w->r;
-    if (g_win) { r.x = g_win->r.x + w->r.x; r.y = g_win->r.y + w->r.y; }
+    (void)ctx; (void)w;
+    if (!g_have_rect) return 0;      /* nothing has been painted yet */
+    r = g_rect;
 
     /* a dialog is modal: it eats everything until it closes */
     if (g_dlg_kind) {
         uod_handle(&DL, e);
         if (g_dlg_kind == DLG_OPEN || g_dlg_kind == DLG_SAVE) uof_sync(&DL);
-        if (!uod_is_open(&DL)) {
-            int res = uod_result(&DL), kind = g_dlg_kind;
-            g_dlg_kind = DLG_NONE;
-            if (res == UOD_ID_OK && kind == DLG_OPEN) {
-                a_cpy(g_name, uof_name(), (int)sizeof g_name);
-                load_doc(uof_volume(), g_name);
-            } else if (res == UOD_ID_OK && kind == DLG_SAVE) {
-                a_cpy(g_name, uof_name(), (int)sizeof g_name);
-                save_doc(uof_volume(), g_name);
-            } else if (res == UOD_ID_OK && kind == DLG_FONT) {
-                uow_chp c;
-                long a = g_anchor < g_caret ? g_anchor : g_caret;
-                long b = g_anchor < g_caret ? g_caret : g_anchor;
-                uow_chp_at(DOC, a, &c);
-                c.bold      = (unsigned char)uod_value(&DL, FD_BOLD);
-                c.italic    = (unsigned char)uod_value(&DL, FD_ITALIC);
-                c.underline = (unsigned char)uod_value(&DL, FD_UNDER);
-                c.size      = (unsigned short)(uod_value(&DL, FD_SIZE) * 2);
-                if (b > a) uow_format(DOC, a, b - a, &c);
-            }
-            touched();
-        }
+        if (!uod_is_open(&DL)) dialog_closed();
         pc64_shell_dirty();
         return 1;
     }
@@ -709,7 +732,7 @@ static int uw_key(int uni, int scan, int ctrl)
         else return 0;
         uod_handle(&DL, &e);
         if (g_dlg_kind == DLG_OPEN || g_dlg_kind == DLG_SAVE) uof_sync(&DL);
-        if (!uod_is_open(&DL)) { app_event(0, 0, 0); }
+        if (!uod_is_open(&DL)) dialog_closed();
         pc64_shell_dirty();
         return 1;
     }
