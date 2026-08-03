@@ -3787,6 +3787,8 @@ static void on_action(const unoui_action *a)
         g_studio->action(a)) return;            /* the Studio module          */
     if (g_photos && g_open[EX_PHOTOS] && g_photos->action &&
         g_photos->action(a)) return;            /* the Photos module          */
+    if (g_uoword && g_open[EX_UOWORD] && g_uoword->action &&
+        g_uoword->action(a)) return;            /* the UnoWord module         */
     if (g_pyapp && g_open[EX_PYAPP] && g_pyapp->action &&
         g_pyapp->action(a)) return;             /* the running Python app      */
     switch (a->id) {
@@ -4108,6 +4110,14 @@ static int pump_input(void)
             UI.focus_win >= 0 && UI.focus_win < UI.nwin &&
             UI.win[UI.focus_win] == &g_win[EX_PHOTOS] && g_photos->key) {
             if (g_photos->key(uni, scan, ctrl)) { g_dirty = 1; continue; }
+        }
+        /* UnoWord takes EVERY key while it is in front - it is a word
+           processor, so the plain characters are the point, not just the
+           accelerators. */
+        if (!g_launch_open && !UI.full && g_uoword && g_open[EX_UOWORD] &&
+            UI.focus_win >= 0 && UI.focus_win < UI.nwin &&
+            UI.win[UI.focus_win] == &g_win[EX_UOWORD] && g_uoword->key) {
+            if (g_uoword->key(uni, scan, ctrl)) { g_dirty = 1; continue; }
         }
         /* a focused Python app's accelerators */
         if (!g_launch_open && !UI.full && g_pyapp && g_open[EX_PYAPP] &&
@@ -4714,6 +4724,8 @@ int main(void)
             g_studio->frame();          /* Studio caret blink / build pumps */
         if (g_photos && g_open[EX_PHOTOS] && g_photos->frame)
             g_photos->frame();          /* Photos: GIF animation pump */
+        if (g_uoword && g_open[EX_UOWORD] && g_uoword->frame)
+            g_uoword->frame();          /* UnoWord: caret blink              */
         if (g_pyapp && g_open[EX_PYAPP] && g_pyapp->frame)
             g_pyapp->frame();           /* the Python app's per-frame tick   */
         if (g_open[EX_USERAPP]) unoapp_user_tick();  /* the user's app clock */
