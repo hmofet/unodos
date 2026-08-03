@@ -2,10 +2,15 @@
  * UnoDOS/pc64 - netdisc: zero-config LAN discovery (see netdisc.h).
  * ======================================================================== */
 #include "netdisc.h"
-#ifdef UNO_DEBUG
 #include "netsock.h"
 #include "unoauto.h"        /* unoauto_log / UA_CH_NET */
-#include "uno_debug.h"      /* pc64_stress_cfg_flag / _value */
+/* DEBUG.CFG reader.  Declared locally rather than via uno_debug.h, whose whole
+ * body is #ifdef UNO_DEBUG - this file is production now, so the include gave
+ * us nothing but an implicit-declaration warning.  pc64_stress.c defines these
+ * in a debug build, unoauto_compat.c in a production one (where they report
+ * every key absent, so `discover` never self-arms). */
+int pc64_stress_cfg_flag(const char *key);
+int pc64_stress_cfg_value(const char *key, char *buf, int cap);
 #include <string.h>
 
 #define DISC_PORT   5400
@@ -165,4 +170,3 @@ int  netdisc_have_host(void)       { return g_have_host; }
 const u8 *netdisc_host_ip(void)    { return g_host_ip; }
 unsigned short netdisc_host_port(void) { return g_host_port; }
 
-#endif /* UNO_DEBUG */

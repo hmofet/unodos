@@ -5,7 +5,8 @@
  * snapshot the live UnoDOS framebuffer (fb.h `fb[]`) so a dev-PC client can
  * render it. The frame is QOI-encoded (lossless, tiny on UnoDOS's flat-colour
  * desktop, trivial to decode) and the `screen` verb in unoauto_remote.c streams
- * it base64 like `readsec`. UNO_DEBUG-only, same gate as the rest of URC.
+ * it base64 like `readsec`. Ships in production behind automate.observe (the
+ * screen shows whatever the user has open) - see unoauto_gate.h.
  *
  * Two grab modes share one QOI encoder:
  *   - FULL keyframe (uno_screen_grab_qoi): the whole framebuffer, as before.
@@ -66,7 +67,6 @@ int  uno_screen_grab_delta(int scale, unsigned char *out, int cap,
  * base64 like `screen read`) and reconstructs frames the same way the live view
  * composites - a keyframe replaces the canvas, a delta blits its changed tiles.
  * Ring frame format is documented at the recorder in unoauto_screen.c. */
-#ifdef UNO_DEBUG
 /* Start recording at `scale`/`fps` (fps clamped 1..60). Returns 1, or 0 if a
  * recording is already running. Resets the ring. */
 int  uno_screen_capture_start(int scale, int fps);
@@ -82,8 +82,5 @@ void uno_screen_capture_stat(int *frames, int *bytes, int *dropped, int *on,
 /* Copy `len` bytes of the recorded ring at `off` into `dst`; returns the count
  * actually copied (clamped to the recording length). */
 int  uno_screen_capture_read(int off, unsigned char *dst, int len);
-#else
-#define uno_screen_capture_tick()    ((void)0)
-#endif
 
 #endif

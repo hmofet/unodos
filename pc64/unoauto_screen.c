@@ -19,7 +19,6 @@
  * ======================================================================== */
 #include "unoauto_screen.h"
 
-#ifdef UNO_DEBUG
 
 #include "fb.h"          /* fb[], uno_fb_w/uno_fb_h, FB_W/FB_H */
 #include <stdint.h>
@@ -484,4 +483,3 @@ int uno_screen_capture_read(int off, unsigned char *dst, int len)
     return len;
 }
 
-#endif /* UNO_DEBUG */

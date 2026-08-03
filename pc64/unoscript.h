@@ -96,6 +96,23 @@ typedef enum {
     USC_CAP_SYSCALL,         /* intercept / emulate / trace syscalls            */
     USC_CAP_MODULE,          /* load unsigned modules / patch live code         */
 
+    /* -- unoautomate / the URC remote channel (appended 2026-08-03) --
+     * unoauto ships in PRODUCTION as of this change; like the rest of this
+     * header its gate is privilege, not a compile flag.  Split three ways so
+     * arming the channel to watch a machine does not also hand over its disks:
+     *   OBSERVE  read-only: probe rows, log stream, screen grabs, device and
+     *            volume listings.  ADMIN - it sees the whole machine.
+     *   DRIVE    synthesise input and steer the UI: key/pointer injection,
+     *            launching and closing apps, running a test suite.  ADMIN.
+     *   SYSTEM   the destructive tail: raw sector writes, GPT/FAT authoring,
+     *            file upload, install, arbitrary Python, power and boot-order
+     *            control.  KERNEL - this is where you can lose the machine.
+     * Appended at the END (never renumbered): the tier comes from the CAPS
+     * table in unoscript.c, not from position in this enum. */
+    USC_CAP_AUTOMATE_OBSERVE,
+    USC_CAP_AUTOMATE_DRIVE,
+    USC_CAP_AUTOMATE_SYSTEM,
+
     USC_CAP__COUNT
 } usc_cap_t;
 

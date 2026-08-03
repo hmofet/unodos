@@ -89,9 +89,9 @@ int devmgr_list_str(char *, int);
 int devmgr_count(void);
 int devmgr_info(int, unsigned int *, int);
 const char *devmgr_driver_name(int);
-#ifdef UNO_DEBUG
-/* the unoautomate DRIVE surface exported below (unoauto_* come from
- * unoauto.h; the rest are debug-only accessors with no public header) */
+/* the unoautomate DRIVE surface exported below (unoauto_* come from unoauto.h;
+ * the rest are shell/kernel accessors with no public header).  Production since
+ * 2026-08-03 - unoautomate ships, gated by privilege (unoauto_gate.h). */
 long unoauto_deadline_left(void);        /* 23-char alias (unoauto.c) */
 void uno_pc64_inject_key(int scan, int uni, int ctrl);
 void uno_pc64_inject_pointer(int x, int y, int btn);
@@ -108,7 +108,6 @@ int  unoauto_remote_active(void);
 int  unoauto_remote_send(const char *type, const char *text);
 int  unoauto_remote_recv(char *buf, int cap);
 void unoauto_remote_stop(void);
-#endif
 static const struct { const char *name; void *addr; } kExports[] = {
     /* Toolbox geometry + drawing (mac_compat.c) */
     KX(SetRect),   KX(OffsetRect), KX(InsetRect),  KX(PtInRect),
@@ -219,6 +218,10 @@ static const struct { const char *name; void *addr; } kExports[] = {
      * capability-gated surface ops. */
     KX(unoscript_available), KX(unoscript_cap_name), KX(unoscript_cap_tier),
     KX(unosec_current_user), KX(unosec_present), KX(unosec_request),
+    /* the side-effect-free live check.  mod_unoauto.c gates every call on it,
+     * and it is the right primitive for any module asking "may I?" without
+     * triggering a consent sheet - unlike unosec_request, which escalates. */
+    KX(unosec_require),
     KX(usc_ui_pointer), KX(usc_ui_key), KX(usc_ui_screen_text),
     KX(usc_ui_clipboard_get), KX(usc_ui_clipboard_set),
     KX(usc_app_count), KX(usc_app_launch), KX(usc_app_close_top), KX(usc_app_message),
@@ -230,11 +233,12 @@ static const struct { const char *name; void *addr; } kExports[] = {
     KX(unoscript_e2e_selftest),      /* authenticated end-to-end self-test (u.e2e) */
     KX(unoscript_mtest), /* manifest-caps self-test (u.mtest)          */
 #endif
-#ifdef UNO_DEBUG
-    /* ---- unoautomate DRIVE surface (debug builds only) --------------------
-     * The `unoauto` Python module (upy_port/mod_unoauto.c) binds these; the
-     * prod PYRT compiles that module to stubs, so a prod PYRT.UNO never
-     * imports them and the prod export table stays clean. */
+    /* ---- unoautomate DRIVE surface (every build) --------------------------
+     * The `unoauto` Python module (upy_port/mod_unoauto.c) binds these.  It used
+     * to compile to stubs in production so the prod export table stayed clean;
+     * since 2026-08-03 unoautomate ships in production and the module is real in
+     * both builds, capability-gated per call (automate.observe/drive/system).
+     * One export table, one code path, both builds test it. */
     KX(unoauto_log), KX(unoauto_probe), KX(unoauto_deadline_left),
     KX(uno_pc64_inject_key), KX(uno_pc64_inject_pointer),
     KX(pc64_shell_app_count), KX(pc64_shell_launch), KX(pc64_shell_close_top),
@@ -242,7 +246,6 @@ static const struct { const char *name; void *addr; } kExports[] = {
     KX(uno_pc64_shutdown), KX(uno_dbg_uptime_ms),
     KX(unoauto_remote_active), KX(unoauto_remote_send),
     KX(unoauto_remote_recv),   KX(unoauto_remote_stop),
-#endif
 };
 #define NEXPORT ((int)(sizeof kExports / sizeof kExports[0]))
 

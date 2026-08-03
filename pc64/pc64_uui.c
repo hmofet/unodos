@@ -26,8 +26,9 @@
 #include "uno_debug.h"       /* debug build: heartbeat/HUD/stress (no-ops otherwise) */
 #include "unoauto.h"         /* unoautomate taps + DRIVE accessors (no-ops in prod) */
 #include "unoauto_remote.h"  /* remote dev-PC link pump (no-op in prod) */
-#include "unoauto_screen.h"  /* remote-desktop screen capture tick (no-op in prod) */
-#include "netdisc.h"         /* zero-config LAN discovery (no-op in prod) */
+#include "unoauto_screen.h"  /* remote-desktop screen capture tick */
+#include "unoauto_gate.h"    /* unoautomate privilege gate: arm/disarm + tick */
+#include "netdisc.h"         /* zero-config LAN discovery */
 #ifdef UNO_DEBUG
 unsigned long long uno_native_rdtsc(void);
 #endif
@@ -350,7 +351,7 @@ enum { ID_THEME = 1, ID_RES, ID_DARK, ID_WRAP, ID_VOL, ID_SCALE, ID_ABOUT,
        ID_DATE, ID_TIME, ID_SETDT, ID_FONT, ID_CAL, ID_EFONT, ID_ALITE,
        ID_ILIST, ID_IDEF, ID_IRESCAN, ID_IGO, ID_ICONF, ID_LIDSLP,
        ID_DFLOW, ID_DSORT, ID_PSPEED, ID_DSNAP, ID_DLOCK, ID_DARRANGE,
-       ID_LIC, ID_ACCT, ID_WALL, ID_CLOCKFMT, ID_BATTMODE,
+       ID_LIC, ID_ACCT, ID_REMOTE, ID_WALL, ID_CLOCKFMT, ID_BATTMODE,
        ID_CPTAB, ID_NETREFRESH, ID_NETRENEW, ID_SESSION,
        ID_WIFISCAN, ID_WIFILIST, ID_WIFIPSK, ID_WIFIJOIN,
        ID_START = 90, ID_SHUTDOWN = 91, ID_RESTART = 92,
@@ -758,6 +759,11 @@ static void build_ctrl(unoui_window *w)
         x = unoui_add_button(w, 126, y, 110, "Licenses", 0); x->id = ID_LIC;
         x = unoui_add_button(w, cw - 8 - 96, y, 96, "About", 0); x->id = ID_ABOUT;
         y += bh + 8;
+        /* the unoautomate/URC arming panel.  Sits beside Accounts because it
+         * is the same kind of decision - who may use this machine - and it is
+         * the ONLY way to turn remote control on (unoauto_gate.h). */
+        x = unoui_add_button(w, 8, y, 150, "Remote control...", 0); x->id = ID_REMOTE;
+        y += bh + 8;
         break;
     }
     w->r.w = cw + 2 * UI.theme->m.frame_w + 2 * UI.theme->m.pad;
@@ -1064,7 +1070,11 @@ static void build_sys(unoui_window *w)
     /* accounts & security: opens the Accounts manager (login/RBAC via unosecure) */
     { int aw = fb_text_w("Manage accounts...") + 26;
       unoui_widget *b = unoui_add_button(w, gx, y, aw, "Manage accounts...", 0);
-      b->id = ID_ACCT; y += lh + 8; }
+      b->id = ID_ACCT;
+      { int rw = fb_text_w("Remote control...") + 26;
+        b = unoui_add_button(w, gx + aw + 8, y, rw, "Remote control...", 0);
+        b->id = ID_REMOTE; }
+      y += lh + 8; }
     /* grouped hardware readouts: a box per subsystem, rows inside */
 #define SYS_GROUP(title, nrows) \
     g0 = y; (void)g0; unoui_add_group(w, gx, y, cw - 2 * gx, (nrows) * lh + fh + 10, title); \
@@ -3528,14 +3538,14 @@ void pc64_shell_dirty(void) { g_dirty = 1; }
 int  pc64_shell_workarea_w(void) { return FB_W; }
 int  pc64_shell_workarea_h(void) { return FB_H - TASKH; }
 
-#ifdef UNO_DEBUG
 /* unoautomate PROBE accessors (unoauto_probe.c): enumerate the open windows.
- * Titles are string literals, so the returned pointer is stable. */
+ * Titles are string literals, so the returned pointer is stable.  Production
+ * since 2026-08-03 (unoauto ships; see unoauto_gate.h) - reaching them over URC
+ * costs automate.observe. */
 int pc64_shell_win_count(void) { return UI.nwin; }
 const char *pc64_shell_win_title(int i)
 { return (i >= 0 && i < UI.nwin) ? UI.win[i]->title : 0; }
 int pc64_shell_win_focused(int i) { return i == UI.focus_win; }
-#endif
 
 /* ---- production accessors for unoscript's ui.* automation surface ----------
  * Always built (unlike the DRIVE/PROBE accessors above); unoscript gates them at
@@ -3694,9 +3704,10 @@ static int pc64_shell_run_python(int vol, const char *path)
     return 0;
 }
 
-#ifdef UNO_DEBUG
 /* unoautomate: run a Python source/container directly (peek_flags cannot see
- * a raw .py - no magic - so the automation runner comes in through here). */
+ * a raw .py - no magic - so the automation runner comes in through here).
+ * Production since 2026-08-03; the URC `py` verb that reaches it is KERNEL-tier
+ * (automate.system), because it is arbitrary code execution. */
 int pc64_shell_run_py(int vol, const char *path)
 { return pc64_shell_run_python(vol, path); }
 
@@ -3715,7 +3726,6 @@ int pc64_shell_py_exec(const char *src, char *out, int cap)
     }
     return g_pyrt->run_src(src, (int)n, out, cap);
 }
-#endif
 
 int pc64_shell_run_user(int vol, const char *path)
 {
@@ -3881,6 +3891,7 @@ static void on_action(const unoui_action *a)
     case ID_LIC:   pc64_browser_open_path("DOCS\\LICENSES.MD");
                    open_app(EX_BROWSER); break;
     case ID_ACCT:  pc64_accounts_open(); g_dirty = 1; break;   /* Accounts manager */
+    case ID_REMOTE: pc64_remote_open(); g_dirty = 1; break;    /* arm/disarm URC   */
     case ID_SETDT: {                    /* time spinners; the date stays as-is */
         int yy = 2026, mo = 1, dd = 1;
         uno_pc64_time(&yy, &mo, &dd, 0, 0, 0);
@@ -4692,12 +4703,17 @@ int main(void)
             pc64_net_boot();
 #endif
         }
-        unoauto_remote_tick();          /* debug build: pump the dev-PC remote
-                                           link (armed by unoauto_remote_boot) */
-        uno_screen_capture_tick();      /* debug build: server-side screen record
-                                           (armed by `screen record start`) */
-        netdisc_tick();                 /* debug build: zero-config LAN discovery
-                                           (armed by netdisc_boot) */
+        /* unoautomate, pumped every frame.  These are real calls in EVERY build
+         * as of 2026-08-03 (they used to be no-op macros in production).  Each
+         * returns immediately unless the channel is armed - in production that
+         * means until a console user arms it through unoauto_gate.h - so an
+         * unarmed machine pays three predicted branches per frame and nothing
+         * else. */
+        unoauto_gate_tick();            /* revalidate the arming session       */
+        unoauto_remote_tick();          /* pump the dev-PC remote link         */
+        uno_screen_capture_tick();      /* server-side screen record
+                                           (armed by `screen record start`)    */
+        netdisc_tick();                 /* zero-config LAN discovery           */
         /* pc64_stress_tick() REMOVED 2026-07-21 (user request): the continuous
          * fuzz driver ran even when unticked / looped forever. Disconnected here
          * AND hard-disabled in pc64_stress.c so no DEBUG.CFG value can revive

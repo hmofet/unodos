@@ -2120,7 +2120,10 @@ int uno_pc64_set_time(int y, int mo, int d, int h, int mi, int s)
     return uno_native_rtc_write(y, mo, d, h, mi, s);
 }
 
-#ifdef UNO_DEBUG
+/* PRODUCTION since 2026-08-03: the URC `bootnext` / `makeboot` verbs reach
+ * these, and unoautomate now ships in production behind the automate.system
+ * capability (unoauto_gate.h).  Boot-order authoring is KERNEL-tier there -
+ * it decides what the machine runs next time it starts. */
 /* unoautomate remote `bootnext`: set the UEFI BootNext variable so the machine
  * boots Boot#### option `n` on the next reset without the operator touching the
  * firmware menu.  Only meaningful while ATTACHED (runtime SetVariable live -
@@ -2228,7 +2231,6 @@ int uno_pc64_add_boot_entry(const void *disk_dp, unsigned long long first_lba,
     }
     return 1;
 }
-#endif
 
 /* a short rising arpeggio played after the splash completes (PC speaker,
    or the HDA/AC'97 DAC when one is up - pumped in slices so the PCM ring
