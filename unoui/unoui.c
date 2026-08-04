@@ -879,6 +879,102 @@ unoui_rect unoui_widget_rect(const unoui_theme *t, const unoui_window *win,
       { unoui_rect r = { ox + w->r.x, oy + w->r.y, w->r.w, w->r.h }; return r; } }
 }
 
+/* ---- layout audit ---------------------------------------------------------
+ * The window content rect is CLIPPED (render_window draws widgets inside it),
+ * so a layout that does not fit is not a mess on the desktop - it is silently
+ * cut off at the frame, which is worse: the machine looks fine and a button
+ * reads "Allow se...".  Every one of those found so far was found by somebody
+ * squinting at a screenshot on a 400x300 desktop, one window at a time.
+ *
+ * This walks a window as BUILT and reports the widgets that will be cut.  Pure
+ * geometry against the live font - no drawing, no allocation, no I/O - so the
+ * caller can sweep every window in the OS in one pass, at whatever font and UI
+ * scale it likes.  pc64 runs it from the debug build (`layout-audit` in
+ * DEBUG.CFG); anything else may call it whenever.
+ *
+ * WHAT IT DELIBERATELY DOES NOT FLAG.  A list, textarea, canvas or MDI is
+ * MEANT to hold more than it shows - that is what its scrollbar is for - so
+ * only their rects are checked, never their contents.  Anything scrolled
+ * horizontally by t->scroll_x is exempt for the same reason. */
+static int text_overflows(const unoui_widget *w)
+{
+    int tw;
+    if (!w->text || !w->text[0]) return 0;
+    tw = fb_text_w(w->text);
+    switch (w->kind) {
+    case UI_LABEL:                 return tw > w->r.w;
+    /* the painters inset a button's text; a check/radio also spends its box +
+     * gap before the label starts (see unoui_add_check) */
+    case UI_BUTTON:                return tw + 8  > w->r.w;
+    case UI_CHECK: case UI_RADIO:  return tw + 18 > w->r.w;
+    case UI_GROUP:                 return tw + 12 > w->r.w;
+    case UI_FIELD:                 return w->edit ? 0 : tw + 6 > w->r.w;
+    default:                       return 0;
+    }
+}
+
+/* the width a UI_TABS strip needs, by the same sum lay_tabs makes.  A strip
+ * with UI_TF_OVERFLOW or UI_TF_ELASTIC is DESIGNED not to fit (it scrolls, or
+ * shares the width out), so only a plain strip can be too small. */
+static int tabs_needed_w(const unoui_widget *w)
+{
+    int i, n = 0, cb;
+    if (!w->items || (w->flags & (UI_TF_OVERFLOW | UI_TF_ELASTIC))) return 0;
+    cb = (w->flags & UI_TF_CLOSE) ? 12 : 0;
+    for (i = 0; i < w->nitems; i++)
+        n += fb_text_w(w->items[i]) + 16 + (cb ? cb + 4 : 0);
+    return n + ((w->flags & UI_TF_PLUS) ? 16 : 0);
+}
+
+/* the widest a dropdown's longest item needs (it shows one at a time, and the
+ * arrow box eats the right end of the field) */
+static int items_needed_w(const unoui_widget *w)
+{
+    int i, n = 0;
+    if (!w->items) return 0;
+    for (i = 0; i < w->nitems; i++)
+        { int t = fb_text_w(w->items[i]); if (t > n) n = t; }
+    return n;
+}
+
+int unoui_window_audit(const unoui_theme *t, const unoui_window *win,
+                       unoui_audit_fn cb, void *ctx)
+{
+    int i, n = 0, cw, ch;
+    if (!t || !win || !cb) return 0;
+    /* the content box render_window clips widgets to */
+    if (win->flags & UI_WIN_BARE) { cw = win->r.w; ch = win->r.h; }
+    else {
+        cw = win->r.w - 2 * (t->m.frame_w + t->m.pad);
+        ch = win->r.h - t->m.title_h - t->m.pad - t->m.frame_w;
+    }
+    for (i = 0; i < win->nw; i++) {
+        const unoui_widget *w = &win->w[i];
+        if (w->kind == UI_MENUBAR) continue;          /* spans the frame by design */
+        if (w->r.x < 0 || w->r.y < 0)
+            { cb(ctx, win, i, "starts outside the content area", w->r, cw, ch); n++; continue; }
+        if (w->r.x + w->r.w > cw)
+            { cb(ctx, win, i, "runs past the right edge", w->r, cw, ch); n++; continue; }
+        if (w->r.y + w->r.h > ch)
+            { cb(ctx, win, i, "runs past the bottom edge", w->r, cw, ch); n++; continue; }
+        if (text_overflows(w))
+            { cb(ctx, win, i, "text is wider than its control", w->r, cw, ch); n++; continue; }
+        if (w->kind == UI_TABS && tabs_needed_w(w) > w->r.w)
+            { cb(ctx, win, i, "tab strip is wider than its rect", w->r, cw, ch); n++; continue; }
+        if (w->kind == UI_DROPDOWN && items_needed_w(w) + 24 > w->r.w)
+            { cb(ctx, win, i, "an item is wider than the dropdown", w->r, cw, ch); n++; continue; }
+    }
+    return n;
+}
+
+int unoui_ui_audit(const unoui_ui *ui, unoui_audit_fn cb, void *ctx)
+{
+    int i, n = 0;
+    if (!ui) return 0;
+    for (i = 0; i < ui->nwin; i++) n += unoui_window_audit(ui->theme, ui->win[i], cb, ctx);
+    return n;
+}
+
 /* ---- scrolling lists ------------------------------------------------------
  * A list box shows a WINDOW of its items: `top` is the first visible row. All
  * of the geometry lives here so the painter, the hit test and the input layer

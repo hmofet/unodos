@@ -584,6 +584,25 @@ extern int unoui_snap_ms;                    /* snap duration, ms; 0 = instant *
 unoui_rect unoui_widget_rect(const struct unoui_theme *, const unoui_window *,
                              const unoui_widget *);
 
+/* ---- layout audit ---------------------------------------------------------
+ * Widgets are clipped to their window's content rect, so a layout that does
+ * not fit is not a mess on the desktop - it is silently CUT OFF at the frame,
+ * and the machine looks fine while a button reads "Allow se...". These walk a
+ * window (or every window) as built and report what will be cut, measured
+ * against the live font, so a whole OS's worth of screens can be swept in one
+ * pass instead of squinted at one screenshot at a time.
+ *
+ * `cb` gets the widget index, a short reason, the widget's window-relative
+ * rect and the content box it had to fit in. Returns the number of reports.
+ * Lists, textareas, canvases and MDI panes are meant to hold more than they
+ * show, so only their rects are checked, never their contents. */
+typedef void (*unoui_audit_fn)(void *ctx, const unoui_window *win, int wi,
+                               const char *why, unoui_rect widget,
+                               int content_w, int content_h);
+int unoui_window_audit(const struct unoui_theme *, const unoui_window *,
+                       unoui_audit_fn cb, void *ctx);
+int unoui_ui_audit(const unoui_ui *, unoui_audit_fn cb, void *ctx);
+
 void          unoui_ui_init (unoui_ui *, const struct unoui_theme *, int sw, int sh);
 void          unoui_ui_theme(unoui_ui *, const struct unoui_theme *);
 int           unoui_ui_add  (unoui_ui *, unoui_window *);   /* topmost = focus;
