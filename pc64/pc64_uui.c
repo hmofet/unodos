@@ -759,9 +759,20 @@ static void build_ctrl(unoui_window *w)
             y += fh + 6;
             pw = fb_text_w("Password:") + 10;
             unoui_add_label(w, 8, y + lofs, "Password:");
-            unoui_text_init(&g_cp_psk_t, g_cp_psk, sizeof g_cp_psk, 0);
-            g_cp_psk_t.len = (int)strlen(g_cp_psk);
-            g_cp_psk_t.caret = g_cp_psk_t.sel = g_cp_psk_t.len;
+            /* Re-seed the model but KEEP the caret where the user left it.
+             * unoui_text_init resets caret/sel/scroll to the end of the text,
+             * and this runs on every rebuild of the tab - so a lease landing
+             * mid-password (or any Scan) used to jerk the cursor to the end of
+             * whatever had been typed so far. */
+            { int c = g_cp_psk_t.caret, sl = g_cp_psk_t.sel, sx = g_cp_psk_t.scroll_x;
+              int same = (g_cp_psk_t.buf == g_cp_psk);
+              unoui_text_init(&g_cp_psk_t, g_cp_psk, sizeof g_cp_psk, 0);
+              if (same) {
+                  if (c  > g_cp_psk_t.len) c  = g_cp_psk_t.len;
+                  if (sl > g_cp_psk_t.len) sl = g_cp_psk_t.len;
+                  g_cp_psk_t.caret = c; g_cp_psk_t.sel = sl;
+                  g_cp_psk_t.scroll_x = sx;
+              } }
             x = unoui_add_edit(w, 8 + pw, y, cw - pw - 16, &g_cp_psk_t); x->id = ID_WIFIPSK;
             y += row;
             x = unoui_add_button(w, 8, y, 110, "Scan", 0); x->id = ID_WIFISCAN;
@@ -843,10 +854,25 @@ static void build_ctrl(unoui_window *w)
 static void rebuild_ctrl_window(void)
 {
     int px = g_win[APP_CTRL].r.x, py = g_win[APP_CTRL].r.y;
+    /* Remember which control had the keyboard BY ID, and put the focus back on
+     * the same one afterwards.  A rebuild throws the widget array away, so the
+     * old `focus_wi = 0` threw the caret away with it: the frame loop rebuilds
+     * this tab whenever a DHCP lease appears or disappears, which is exactly
+     * what happens while you are typing a WiFi password, and the cursor left
+     * the field mid-word.  Ids survive the rebuild; indexes do not. */
+    int fid = 0, ours = (UI.focus_win >= 0 && UI.focus_win < UI.nwin &&
+                         UI.win[UI.focus_win] == &g_win[APP_CTRL]);
+    if (ours && UI.focus_wi >= 0 && UI.focus_wi < g_win[APP_CTRL].nw)
+        fid = g_win[APP_CTRL].w[UI.focus_wi].id;
     build_ctrl(&g_win[APP_CTRL]);
     g_win[APP_CTRL].r.x = px; g_win[APP_CTRL].r.y = py;
     clamp_to_workarea(&g_win[APP_CTRL]);
-    UI.focus_wi = 0;
+    if (ours) {
+        UI.focus_wi = 0;
+        if (fid) { int i;
+            for (i = 0; i < g_win[APP_CTRL].nw; i++)
+                if (g_win[APP_CTRL].w[i].id == fid) { UI.focus_wi = i; break; } }
+    }
     g_dirty = 1;
 }
 
