@@ -238,6 +238,26 @@ void pc64_login_gate(void)
 /* ===========================================================================
  * Escalation consent sheet (the unosecure consent provider).
  * ======================================================================== */
+
+/* Truncate `s` to `px` pixels, ellipsising, into `buf`.  Needed because
+ * fb_set_clip does NOT clip text: a line wider than the sheet draws straight
+ * past its frame instead of being cut off at it.  Returns `s` untouched when it
+ * already fits, so the common case copies nothing. */
+static const char *fit_px(char *buf, int cap, const char *s, int px)
+{
+    int n = 0, dots;
+    if (!s || !*s) return "";
+    if (fb_text_w(s) <= px) return s;
+    dots = fb_text_w("...");
+    while (s[n] && n < cap - 4) {
+        buf[n] = s[n]; buf[n + 1] = 0;
+        if (fb_text_w(buf) > px - dots) { buf[n] = 0; break; }
+        n++;
+    }
+    buf[n] = 0;
+    if (n < cap - 4) { buf[n] = '.'; buf[n+1] = '.'; buf[n+2] = '.'; buf[n+3] = 0; }
+    return buf;
+}
 static usc_consent_t consent_cb(void *ctx, usc_uid_t uid, usc_trust_t trust,
                                 usc_cap_t cap, const char *cap_name,
                                 usc_tier_t tier, const char *detail)
@@ -250,29 +270,87 @@ static usc_consent_t consent_cb(void *ctx, usc_uid_t uid, usc_trust_t trust,
     const char *tier_s = (tier >= USC_TIER_KERNEL) ? "KERNEL - can harm the machine"
                        : "system-wide (admin)";
     int kernel = (tier >= USC_TIER_KERNEL);
-    int W = 520, H = 210, x = (FB_W - W) / 2, y = (FB_H - H) / 2, cy = 8;
+    const char *warn = kernel ? "Deny unless you launched this and trust it completely."
+                              : "Allow only if you launched this and trust it.";
+    /* Buttons size to their text (the house idiom), so this lays out under any
+     * font as well as any width. */
+    int bw_d = fb_text_w("Deny") + 26;
+    int bw_o = fb_text_w("Allow once") + 26;
+    int bw_s = fb_text_w("Allow session") + 26;
+    const int pad = 8, gap = 8;
+    int W, H, x, y, cy = 8, two_rows, inner;
     (void)ctx; (void)cap;
 
     snprintf(line1, sizeof line1, "A %s script (uid %lu) requests:", tname,
              (unsigned long)uid);
     snprintf(line2, sizeof line2, "  %s  -  %s", cap_name ? cap_name : "?", tier_s);
 
+    /* WIDTH.  This used to be a flat 520 with x = (FB_W - W) / 2, which on the
+     * 400x300 desktop put the origin at -60 and ran 60 px off the right edge:
+     * the title read "mission requested", the capability line "mate.observe",
+     * and the third button "Allow se...".  A KERNEL-tier prompt the user cannot
+     * read is not a place to be approving anything.  Found on the ZimaBlade
+     * 2026-08-04.  Size to the content, clamp to the screen, never go negative. */
+    W = fb_text_w(line2);
+    if (fb_text_w(line1) > W) W = fb_text_w(line1);
+    if (fb_text_w(warn)  > W) W = fb_text_w(warn);
+    if (detail && detail[0] && fb_text_w(detail) > W) W = fb_text_w(detail);
+    {   /* unoui_window_init takes the OUTER width: the frame and the theme's
+         * content padding come out of it on BOTH sides, and widget x is
+         * relative to the content area.  Sizing W to the text alone left every
+         * line 2*(frame_w + pad) too long, which is why the first attempt at
+         * this fix still ran the capability line into the frame. */
+        const unoui_theme *th = pc64_shell_theme();
+        int chrome = 2 * (th->m.frame_w + th->m.pad);
+        int brow   = pad + bw_d + gap + bw_o + gap + bw_s + pad;
+        if (brow > W) W = brow;                        /* the buttons need it   */
+        W += 2 * pad + chrome;
+        if (W > FB_W) W = FB_W;                        /* never overhang        */
+        if (W < 200)  W = 200;
+        inner = W - chrome;                            /* usable content width  */
+    }
+
+    /* If the buttons no longer fit side by side at that width, stack them: the
+     * two Allow buttons on one row, Deny on its own below.  Deny stays the
+     * default either way. */
+    two_rows = (pad + bw_d + gap + bw_o + gap + bw_s + pad > inner);
+    H = 210 + (two_rows ? 28 : 0);
+    x = (FB_W - W) / 2; if (x < 0) x = 0;
+    y = (FB_H - H) / 2; if (y < 0) y = 0;
+
     unoui_window_init(&win, kernel ? "Kernel access requested"
                                     : "Permission requested", x, y, W, H);
-    unoui_add_label(&win, 8, cy, line1); cy += 20;
-    unoui_add_label(&win, 8, cy, line2); cy += 22;
-    if (detail && detail[0]) { unoui_add_label(&win, 8, cy, detail); cy += 20; }
-    unoui_add_label(&win, 8, cy, kernel
-        ? "Deny unless you launched this and trust it completely."
-        : "Allow only if you launched this and trust it."); cy += 26;
+    {   /* every line clamped to the sheet's content width - see fit_px */
+        static char t1[96], t2[96], t3[96], t4[96];
+        unoui_add_label(&win, pad, cy, fit_px(t1, sizeof t1, line1, inner - 2 * pad)); cy += 20;
+        unoui_add_label(&win, pad, cy, fit_px(t2, sizeof t2, line2, inner - 2 * pad)); cy += 22;
+        if (detail && detail[0]) {
+            unoui_add_label(&win, pad, cy, fit_px(t3, sizeof t3, detail, inner - 2 * pad));
+            cy += 20;
+        }
+        unoui_add_label(&win, pad, cy, fit_px(t4, sizeof t4, warn, inner - 2 * pad)); cy += 26;
+    }
 
-    /* Deny is the default (and the only default for KERNEL tier). */
-    { unoui_widget *b = unoui_add_button(&win, 8, cy, 100, "Deny",
-                                         UI_F_DEFAULT); b->id = ID_C_DENY; }
-    { unoui_widget *b = unoui_add_button(&win, W - 310, cy, 140, "Allow once",
-                                         0); b->id = ID_C_ONCE; }
-    { unoui_widget *b = unoui_add_button(&win, W - 162, cy, 154, "Allow session",
-                                         0); b->id = ID_C_SESSION; }
+    /* Deny is the default (and the only default for KERNEL tier).  Laid out
+     * from the RIGHT edge so the Allow pair stays anchored whatever the width. */
+    if (!two_rows) {
+        unoui_widget *b;
+        b = unoui_add_button(&win, pad, cy, bw_d, "Deny", UI_F_DEFAULT);
+        b->id = ID_C_DENY;
+        b = unoui_add_button(&win, inner - pad - bw_s - gap - bw_o, cy, bw_o,
+                             "Allow once", 0); b->id = ID_C_ONCE;
+        b = unoui_add_button(&win, inner - pad - bw_s, cy, bw_s, "Allow session", 0);
+        b->id = ID_C_SESSION;
+    } else {
+        unoui_widget *b;
+        b = unoui_add_button(&win, inner - pad - bw_s - gap - bw_o, cy, bw_o,
+                             "Allow once", 0); b->id = ID_C_ONCE;
+        b = unoui_add_button(&win, inner - pad - bw_s, cy, bw_s, "Allow session", 0);
+        b->id = ID_C_SESSION;
+        cy += 28;
+        b = unoui_add_button(&win, pad, cy, bw_d, "Deny", UI_F_DEFAULT);
+        b->id = ID_C_DENY;
+    }
 
     modal_begin(&win);
     for (;;) {
