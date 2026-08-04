@@ -390,10 +390,11 @@ static void d_titlebar(const unoui_theme *t, const unoui_window *win)
     fb_fill_rect(bar.x, bar.y, bar.w, bar.h, bg);
     fb_hline(bar.x, r.y + th - 1, bar.w, t->pal.win_frame);
     if (t->m.closebox) {
-        int cs = t->m.closebox, cy = bar.y + (bar.h - cs) / 2;
-        unoui_rect cb = { bar.x + 4, cy, cs, cs };
+        unoui_rect cb = unoui_closebox_rect(t, r);
         ui_bevel(cb, t, 1, 1);
-        bar.x += cs + 8; bar.w -= cs + 8;
+        /* the title text yields to whichever side the box took */
+        if (t->m.closeright) bar.w -= t->m.closebox + 8;
+        else { bar.x += t->m.closebox + 8; bar.w -= t->m.closebox + 8; }
     }
     ui_text_in(bar, win->title, fg, -1, t->m.title_center);
 }
@@ -1647,6 +1648,23 @@ int unoui_calendar_hit(unoui_rect r, int y, int m, int px, int py)
  * close box is. The hit-test (unoui_input.c) reads the same geometry, so a
  * click always lands on the pixels that were drawn. */
 
+/* The close box, for ANY titled rect. Deliberately not part of
+ * unoui_titlebtn_rect: that one refuses UI_WIN_NOCTL windows, and an MDI child
+ * is exactly a NOCTL window that still has a close box. Both title-bar painters
+ * and both hit tests (window and MDI child) read this, so the box can only be
+ * clicked where it was drawn - the same rule the min/max boxes follow. */
+unoui_rect unoui_closebox_rect(const unoui_theme *t, unoui_rect winr)
+{
+    unoui_rect r; int fw, th, cs;
+    r.x = r.y = r.w = r.h = 0;
+    if (!t || (cs = t->m.closebox) <= 0) return r;
+    fw = t->m.frame_w; th = t->m.title_h;
+    r.y = winr.y + fw + (th - fw - cs) / 2;
+    r.w = r.h = cs;
+    r.x = t->m.closeright ? winr.x + winr.w - fw - 4 - cs : winr.x + fw + 4;
+    return r;
+}
+
 unoui_rect unoui_titlebtn_rect(const unoui_theme *t, const unoui_window *win, int which)
 {
     unoui_rect r; int fw, th, sz, right;
@@ -1656,6 +1674,10 @@ unoui_rect unoui_titlebtn_rect(const unoui_theme *t, const unoui_window *win, in
     sz = (which == UI_TB_MIN) ? t->m.minbox : t->m.maxbox;
     if (sz <= 0) return r;                    /* theme has no such button     */
     right = win->r.x + win->r.w - fw - 4;
+    /* With the close box on the right it is the OUTBOARD control - closest to
+     * the corner, the way every desktop that puts it there does - so min and
+     * max shuffle inboard by its width. */
+    if (t->m.closeright && t->m.closebox > 0) right -= t->m.closebox + 4;
     if (which == UI_TB_MIN && t->m.maxbox > 0) right -= t->m.maxbox + 4;
     r.x = right - sz;
     r.y = win->r.y + fw + (th - fw - sz) / 2;

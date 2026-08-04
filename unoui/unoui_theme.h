@@ -72,6 +72,12 @@ typedef struct {
      * the window keeps exactly today's chrome. */
     int minbox;         /* minimize box size in px (0 = none)                */
     int maxbox;         /* maximize/restore box size in px (0 = none)        */
+    /* Where the close box lives. 0 = the LEFT of the title bar, which is what
+     * every theme did before this field existed and what the Mac-lineage
+     * themes want on purpose. 1 = the RIGHT, grouped with min/max and
+     * outboard of them, which is where the house themes put it. Appended, so
+     * a theme that never sets it is unchanged. */
+    int closeright;
 } unoui_metrics;
 
 struct unoui_theme;     /* fwd for the vtable signatures */

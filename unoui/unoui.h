@@ -643,6 +643,11 @@ void unoui_render (unoui_window *win, const struct unoui_theme *theme);  /* stat
 enum { UI_TB_MIN = 0, UI_TB_MAX = 1 };
 unoui_rect unoui_titlebtn_rect(const struct unoui_theme *, const unoui_window *,
                                int which);
+/* The close box for any titled rect, on whichever side unoui_metrics.closeright
+ * puts it. Separate from the above because that refuses UI_WIN_NOCTL windows,
+ * and an MDI child is a NOCTL window that still has a close box. .w == 0 when
+ * the theme has no close box at all. */
+unoui_rect unoui_closebox_rect(const struct unoui_theme *, unoui_rect winr);
 
 /* Optional title-bar badge. When this hook is set, the generic control painter
  * asks it for each window's badge index and draws a small marker just inboard

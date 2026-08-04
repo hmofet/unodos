@@ -71,7 +71,9 @@ static void a_titlebar(const unoui_theme *t, const unoui_window *win)
 {
     unoui_rect r = win->r;
     int fw = t->m.frame_w, th = t->m.title_h, rad = a_rad(t);
-    int cs = t->m.closebox, cbx = r.x + fw + 6, cby = r.y + fw + (th - fw - cs)/2;
+    int cs = t->m.closebox;
+    unoui_rect cbr = unoui_closebox_rect(t, r);
+    int cbx = cbr.x, cby = cbr.y;
     fb_px bg = win->active ? t->pal.title_bg : t->pal.title_bg_in;
     fb_px fg = win->active ? t->pal.title_fg : t->pal.title_fg_in;
     unoui_rect bar;
@@ -88,9 +90,13 @@ static void a_titlebar(const unoui_theme *t, const unoui_window *win)
             fb_blend_pixel(cbx+k, cby+k, t->pal.text_dim, 220);
             fb_blend_pixel(cbx+cs-1-k, cby+k, t->pal.text_dim, 220);
         }
-        bar.x = cbx + cs + 8;
+        bar.x = t->m.closeright ? r.x + fw + 10 : cbx + cs + 8;
     } else bar.x = r.x + fw + 10;
     bar.y = r.y + fw; bar.w = (r.x + r.w - fw) - bar.x - 6; bar.h = th - fw;
+    /* the controls now sit at the right end: keep the title clear of them */
+    if (t->m.closeright)
+        bar.w -= (cs ? cs + 4 : 0) + (t->m.minbox ? t->m.minbox + 4 : 0)
+                                   + (t->m.maxbox ? t->m.maxbox + 4 : 0);
     ui_text_in(bar, win->title, fg, -1, 0);
 }
 
@@ -252,7 +258,7 @@ static const unoui_draw aurora_draw = {
 /* -------------------------------------------------------------- palettes */
 #define MET { /*title_h*/26, /*frame_w*/1, /*bevel*/0, /*pad*/12, /*radius*/9, \
               /*closebox*/13, /*shadow_off*/6, /*title_center*/0, UNOUI_DEPTH_FULL, \
-              /*minbox*/13, /*maxbox*/13 }
+              /*minbox*/13, /*maxbox*/13, /*closeright*/1 }
 
 const unoui_theme theme_aurora_light = {
     "Aurora Light",

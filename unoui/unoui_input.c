@@ -444,11 +444,9 @@ static unoui_action press_widget(unoui_ui *ui, unoui_window *win, int hi,
             }
         }
         if (ev->y >= q.y && ev->y < q.y + th) {
-            int cs = t->m.closebox;
-            if (cs) {
-                int cbx = q.x + fw + 4, cby = q.y + fw + (th - fw - cs) / 2;
-                if (ev->x >= cbx && ev->x < cbx + cs &&
-                    ev->y >= cby && ev->y < cby + cs) {
+            if (t->m.closebox) {
+                unoui_rect cb = unoui_closebox_rect(t, q);
+                if (pt_in(cb, ev->x, ev->y)) {
                     unoui_action a = change(w);
                     a.kind = UI_ACT_MDICLOSE; a.value = ci; return a;
                 }
@@ -951,10 +949,9 @@ static unoui_action handle_inner(unoui_ui *ui, const unoui_event *ev)
         if (!(win->flags & UI_WIN_BARE) &&           /* bare windows don't drag */
             ev->y >= win->r.y && ev->y < win->r.y + ui->theme->m.title_h) {
             const unoui_theme *t = ui->theme;
-            int cs = t->m.closebox, fw = t->m.frame_w, th = t->m.title_h;
-            if (cs) {                                /* title-bar close box */
-                int cbx = win->r.x + fw + 4, cby = win->r.y + fw + (th - fw - cs) / 2;
-                if (ev->x >= cbx && ev->x < cbx + cs && ev->y >= cby && ev->y < cby + cs) {
+            if (t->m.closebox) {                     /* title-bar close box */
+                unoui_rect cb = unoui_closebox_rect(t, win->r);
+                if (pt_in(cb, ev->x, ev->y)) {
                     unoui_action a; a.changed = 1; a.id = 0;
                     a.kind = UI_ACT_CLOSE; a.value = ui->focus_win; return a;
                 }
