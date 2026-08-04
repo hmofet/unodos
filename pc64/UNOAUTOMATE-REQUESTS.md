@@ -5355,3 +5355,31 @@ Not urgent, and worked around locally (the demo drops glyphs left of the slide
 by hand, `unoui/host_unoui_anim.c`). The fix is to route ps2/fb.c's `clip()`
 through `fb_aa.c`'s clip window the way pc64/fb.c already does, which is also
 the only version of the two that a loadable module can be handed safely.
+
+## 2026-08-03 - DELIVERED to the unoffice lane: the animation facility is live
+
+The tween facility claimed above is built AND wired into the shell. UnoShow can
+stop waiting for it.
+
+  - `unoui/unoui_anim.h` is the contract. Tweens (from, to, duration in ms,
+    easing - ten curves), several at once by handle, and sequences whose steps
+    run after the previous group, alongside it (`UI_STEP_WITH`), or on a click
+    (`UI_STEP_ON_TRIGGER`). A tween can write its value straight into an int
+    through its `out` pointer, so a build needs no polling.
+  - **The shell owns the clock.** `pc64_uui.c` pumps one context every frame
+    off the calibrated TSC, and a running tween marks the frame dirty. Speed no
+    longer depends on how busy the desktop is - the thing the request asked for.
+  - **A module gets at it** through `uno_pc64_anim()`, exported alongside the
+    tween and sequence calls in `pc64_modload.c`, so UOSHOW.UNO animates against
+    the same clock as everything else.
+  - System > Timing reports which clock a machine ended up with (TSC or the
+    frame-counted fallback) and how many tweens are running.
+
+Worked example of exactly the build shape you described - paragraph flies in on
+a click while the previous one dims - in `unoui/host_unoui_anim.c`, rendered to
+`unoui/build/anim.png`. The 105-assertion contract test beside it runs from
+`unoui/build.sh` and fails the build on a regression.
+
+Still yours, deliberately: the build EFFECTS themselves (Fly From, Wipe,
+Dissolve, Blinds, Box, Split) and the per-paragraph grouping. This lane built
+the clock, not the choreography.
