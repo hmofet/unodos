@@ -1185,8 +1185,8 @@ target the other pane's folder.</p>
   {fig("music.png", "<b>Music</b>: plays WAV, MIDI and MP3 files from disk, plus the built-in tunes.")}
 </div>
 <p><strong>UnoAmp</strong> is a second music player in the Winamp 2 mould, for when you want more
-than Play and Stop: a playlist, a ten-band graphic equaliser and a visualiser, and it loads real
-<code>.wsz</code> skin files from disk to change its appearance.</p>
+than Play and Stop: a playlist, a ten-band graphic equaliser and a visualiser.</p>
+{fig("unoamp.png", "<b>UnoAmp</b> as it opens, in its built-in look: a dark chassis with lit displays for the time, the track title and the visualiser. Drop a real Winamp <code>.wsz</code> skin file on the machine and it will wear that instead.")}
 <p>The games, Music and Tracker all make sound - through the machine's <strong>HD&nbsp;Audio</strong>
 or <strong>AC'97</strong> audio hardware on modern PCs (which have no PC speaker), with the classic
 PC-speaker beep as the fallback on machines that still have one. The Control Panel's Volume slider
@@ -1269,9 +1269,13 @@ attached to it. Three sheets come with a new workbook, and the status bar keeps 
 <strong>Sum</strong> of the selection.</p>
 <div class="grid cols-2">
   {fig("uocalc.png", "<b>UnoCalc</b>: the Name Box and formula bar above the grid, sheet tabs below it.")}
-  {fig("uocalc_formula.png", "A3 holds <code>=A1+A2</code> and shows <b>42</b>. Formulas are stored as formulas, so a saved workbook reopens with the formula intact, not just the number it produced.")}
+  {fig("uocalc_formula.png", "A3 holds <code>=A1+A2</code>: the cell shows <b>42</b>, the formula bar shows the formula that produced it and the status bar totals the selection. Formulas are stored as formulas, so a saved workbook reopens with the formula intact, not just the number.")}
 </div>
-{note('Use <kbd>Enter</kbd> to commit a cell and step down. Moving the selection with the arrow keys is not wired up yet, so build a column top to bottom rather than wandering around it.', kind="warn", title="Keyboard navigation")}
+<p>Move around with the <strong>arrow keys</strong>, a page at a time with
+<kbd>PgUp</kbd>/<kbd>PgDn</kbd>, to the start of the row with <kbd>Home</kbd> and to the far corners
+with <kbd>Ctrl</kbd>+<kbd>Home</kbd> / <kbd>Ctrl</kbd>+<kbd>End</kbd>. <kbd>Enter</kbd> commits a cell
+and steps down, <kbd>Tab</kbd> commits and steps right; either way what you were typing is kept, so
+arrowing out of a half-typed cell stores it rather than throwing it away.</p>
 
 <h2 id="unoshow">UnoShow</h2>
 <p>A presentation designer: slides with title and body placeholders, an outline to structure them,
