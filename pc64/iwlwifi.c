@@ -3060,6 +3060,10 @@ static void mvm_scan_cfg(void)
  * ===================================================================== */
 static char g_cfg_ssid[36];
 static char g_cfg_psk[80];
+/* the hand-staged WIFI.CFG credentials, kept aside when a REMEMBERED network
+ * takes precedence over them - see the credential block in iwl_nic() */
+static char g_alt_ssid[36];
+static char g_alt_psk[80];
 /* ONE parser for the credentials file, used both to TEST a candidate volume and
  * to READ the values off it.
  *
@@ -3123,6 +3127,174 @@ static int read_config(int vol)
     return cfg_parse(vol, g_cfgname[0] ? g_cfgname : "WIFI.CFG",
                      g_cfg_ssid, (int)sizeof g_cfg_ssid,
                      g_cfg_psk,  (int)sizeof g_cfg_psk);
+}
+
+/* =====================================================================
+ * 10b. Remembered networks (WIFINETS.CFG)
+ * =====================================================================
+ * A network joined from the Control Panel used to be forgotten at power-off:
+ * only a hand-staged WIFI.CFG survived a reboot, so a laptop with no wired
+ * port came back up with no network and no way to get one without retyping the
+ * passphrase.  This is the store that fixes that.
+ *
+ * FORMAT.  The same ssid=/psk= grammar WIFI.CFG uses, repeated, MOST RECENTLY
+ * JOINED FIRST - so "rejoin the last network" is just entry 0, and re-joining a
+ * remembered network moves it back to the top.  An `ssid=` line starts a new
+ * entry; a `psk=` line belongs to the entry above it.  Comments and blank lines
+ * are skipped, so the file stays hand-editable like WIFI.CFG.
+ *
+ * IT IS PLAINTEXT, deliberately and visibly.  A WPA2 passphrase has to be
+ * recoverable to derive the PMK, this OS has no user-keyed secret store to wrap
+ * it with, and WIFI.CFG has always sat on the same volume in the clear - an
+ * encrypted-looking file whose key is also on the disk would claim a protection
+ * it does not have.  The file is written to the same volume the shell picks for
+ * SHELL.CFG (a real partition ahead of the RAM disk), and `Forget` deletes an
+ * entry outright.
+ * ===================================================================== */
+#define SAVED_MAX      8            /* networks remembered, oldest dropped     */
+#define SAVED_SSID_MAX 36
+#define SAVED_PSK_MAX  72
+#define SAVED_FILE     "WIFINETS.CFG"
+
+typedef struct { char ssid[SAVED_SSID_MAX]; char psk[SAVED_PSK_MAX]; } saved_net;
+static saved_net g_saved[SAVED_MAX];
+static int       g_saved_n;
+static int       g_saved_loaded;     /* the file has been read this boot       */
+static int       g_saved_vol = -1;   /* where it was found / will be written   */
+
+/* Where remembered networks live.  A native FAT partition first, then any
+ * writable volume, and the RAM disk only if the machine has nothing else -
+ * the same order the shell's session file and unosecure's store use, and for
+ * the same reason: a store on a volume that dies with the power is not a
+ * store. */
+static int saved_vol(void)
+{
+    int n = uno_fs_volumes(), v;
+    for (v = 0; v < n; v++) if (uno_fs_kind(v) == 1 && uno_fs_writable(v)) return v;
+    for (v = 0; v < n; v++) if (uno_fs_kind(v) != 0 && uno_fs_writable(v)) return v;
+    for (v = 0; v < n; v++) if (uno_fs_writable(v)) return v;
+    return -1;
+}
+
+static void saved_load(void)
+{
+    static u8 buf[1024];
+    int nv, v; long n = -1;
+    if (g_saved_loaded) return;
+    g_saved_loaded = 1;
+    g_saved_n = 0;
+    /* read from ANY volume that has one (a stick moved between machines still
+     * carries its networks), but write back to the preferred one */
+    nv = uno_fs_volumes();
+    for (v = 0; v < nv && n <= 0; v++) {
+        n = uno_fs_read(v, SAVED_FILE, buf, (long)sizeof buf - 1);
+        if (n > 0) g_saved_vol = v;
+    }
+    if (g_saved_vol < 0) g_saved_vol = saved_vol();
+    if (n <= 0) return;
+    buf[n] = 0;
+    { long i = 0;
+      while (i < n) {
+        char key[16], val[SAVED_PSK_MAX]; int k = 0, x = 0;
+        while (i<n && (buf[i]==' '||buf[i]=='\t'||buf[i]=='\r'||buf[i]=='\n')) i++;
+        if (i<n && buf[i]=='#') { while (i<n && buf[i]!='\n') i++; continue; }
+        while (i<n && buf[i]!='=' && buf[i]!='\n' && k<15) key[k++] = (char)buf[i++];
+        key[k] = 0;
+        if (i<n && buf[i]=='=') { i++;
+            while (i<n && buf[i]!='\n' && buf[i]!='\r' && x < (int)sizeof val - 1)
+                val[x++] = (char)buf[i++];
+            while (x>0 && (val[x-1]==' '||val[x-1]=='\t')) x--;
+            val[x] = 0;
+            if (!strcmp(key, "ssid") && val[0] && g_saved_n < SAVED_MAX) {
+                memset(&g_saved[g_saved_n], 0, sizeof g_saved[0]);
+                strncpy(g_saved[g_saved_n].ssid, val, SAVED_SSID_MAX - 1);
+                g_saved_n++;
+            } else if (!strcmp(key, "psk") && g_saved_n > 0) {
+                strncpy(g_saved[g_saved_n-1].psk, val, SAVED_PSK_MAX - 1);
+            }
+        }
+        while (i<n && buf[i]!='\n') i++;
+      } }
+    uno_dbg_net_trace("wifi: %d remembered network(s) from vol %d", g_saved_n, g_saved_vol);
+}
+
+static void saved_write(void)
+{
+    static u8 buf[1024];
+    int i; long o = 0;
+    const char *hdr = "# UnoDOS remembered WiFi networks - most recent first.\r\n"
+                      "# Written by the Control Panel; hand-editable, same keys as WIFI.CFG.\r\n";
+    if (g_saved_vol < 0) g_saved_vol = saved_vol();
+    if (g_saved_vol < 0) return;                    /* nowhere to keep it */
+    while (hdr[o]) { buf[o] = (u8)hdr[o]; o++; }
+    for (i = 0; i < g_saved_n; i++) {
+        const char *s;
+        if (o + SAVED_SSID_MAX + SAVED_PSK_MAX + 16 > (long)sizeof buf) break;
+        buf[o++]='s'; buf[o++]='s'; buf[o++]='i'; buf[o++]='d'; buf[o++]='=';
+        for (s = g_saved[i].ssid; *s; s++) buf[o++] = (u8)*s;
+        buf[o++]='\r'; buf[o++]='\n';
+        buf[o++]='p'; buf[o++]='s'; buf[o++]='k'; buf[o++]='=';
+        for (s = g_saved[i].psk; *s; s++) buf[o++] = (u8)*s;
+        buf[o++]='\r'; buf[o++]='\n';
+    }
+    if (uno_fs_write(g_saved_vol, SAVED_FILE, buf, o) != 0)
+        uno_dbg_net_trace("wifi: could not write %s on vol %d", SAVED_FILE, g_saved_vol);
+    memset(buf, 0, sizeof buf);                     /* do not leave it in .bss */
+}
+
+/* Remember a network that just joined, at the top of the list. */
+static void saved_remember(const char *ssid, const char *psk)
+{
+    int i, j;
+    if (!ssid || !ssid[0]) return;
+    saved_load();
+    for (i = 0; i < g_saved_n; i++) if (!strcmp(g_saved[i].ssid, ssid)) break;
+    if (i == g_saved_n) {                            /* new: make room at 0 */
+        if (g_saved_n < SAVED_MAX) g_saved_n++;
+        i = g_saved_n - 1;
+    }
+    for (j = i; j > 0; j--) g_saved[j] = g_saved[j-1];
+    memset(&g_saved[0], 0, sizeof g_saved[0]);
+    strncpy(g_saved[0].ssid, ssid, SAVED_SSID_MAX - 1);
+    if (psk) strncpy(g_saved[0].psk, psk, SAVED_PSK_MAX - 1);
+    saved_write();
+}
+
+int iwl_saved_count(void) { saved_load(); return g_saved_n; }
+
+int iwl_saved_get(int i, char *ssid, int cap)
+{
+    saved_load();
+    if (i < 0 || i >= g_saved_n || !ssid || cap <= 0) return -1;
+    strncpy(ssid, g_saved[i].ssid, (unsigned)cap - 1); ssid[cap-1] = 0;
+    return 0;
+}
+
+int iwl_saved_psk(const char *ssid, char *psk, int cap)
+{
+    int i;
+    saved_load();
+    if (!ssid || !psk || cap <= 0) return 0;
+    for (i = 0; i < g_saved_n; i++)
+        if (!strcmp(g_saved[i].ssid, ssid)) {
+            strncpy(psk, g_saved[i].psk, (unsigned)cap - 1); psk[cap-1] = 0;
+            return 1;
+        }
+    return 0;
+}
+
+void iwl_saved_forget(const char *ssid)
+{
+    int i, j;
+    saved_load();
+    if (!ssid) return;
+    for (i = 0; i < g_saved_n; i++)
+        if (!strcmp(g_saved[i].ssid, ssid)) {
+            for (j = i; j < g_saved_n - 1; j++) g_saved[j] = g_saved[j+1];
+            memset(&g_saved[--g_saved_n], 0, sizeof g_saved[0]);
+            saved_write();
+            return;
+        }
 }
 
 /* =====================================================================
@@ -4128,17 +4300,44 @@ uno_nic_t *iwl_nic(void)
     /* Credentials FIRST - see the long note below on why this is ahead of the
      * BAR0 map. A boot join with nothing to join to must cost nothing. */
     {
+        int have_cfg;
         cred_vol = firmware_volume();
-        if (cred_vol >= 0 && read_config(cred_vol) >= 0) {
+        have_cfg = (cred_vol >= 0 && read_config(cred_vol) >= 0);
+        if (have_cfg) {
+            strncpy(g_alt_ssid, g_cfg_ssid, sizeof g_alt_ssid - 1);
+            strncpy(g_alt_psk,  g_cfg_psk,  sizeof g_alt_psk  - 1);
             uno_dbg_net_trace("wifi: creds from %s: ssid=\"%s\" psk_len=%d",
                               g_cfgname, g_cfg_ssid, (int)strlen(g_cfg_psk));
-        } else if (!g_no_join) {
-            st_set(cred_vol < 0 ? "WiFi: no WIFI.CFG on the ESP"
-                                : "WiFi: WIFI.CFG has no ssid=");
+        } else { g_alt_ssid[0] = g_alt_psk[0] = 0; }
+        /* The LAST NETWORK THE USER JOINED wins over the staged file.  It is
+         * their most recent explicit choice, and on a machine that has never
+         * had a WIFI.CFG written onto its stick it is the only credential
+         * there is.  WIFI.CFG is not demoted to nothing: it stays as g_alt_*
+         * and the join below falls back to it, which is what makes editing the
+         * file on the stick still a working recovery path when the remembered
+         * network is out of range or its password changed. */
+        if (iwl_saved_count() > 0) {
+            char s[SAVED_SSID_MAX], p[SAVED_PSK_MAX];
+            if (iwl_saved_get(0, s, (int)sizeof s) == 0) {
+                p[0] = 0; iwl_saved_psk(s, p, (int)sizeof p);
+                strncpy(g_cfg_ssid, s, sizeof g_cfg_ssid - 1);
+                g_cfg_ssid[sizeof g_cfg_ssid - 1] = 0;
+                strncpy(g_cfg_psk, p, sizeof g_cfg_psk - 1);
+                g_cfg_psk[sizeof g_cfg_psk - 1] = 0;
+                have_cfg = 1;
+                uno_dbg_net_trace("wifi: rejoining the last network \"%s\" "
+                                  "(psk_len=%d); %s is the fallback",
+                                  g_cfg_ssid, (int)strlen(g_cfg_psk),
+                                  g_alt_ssid[0] ? g_cfgname : "no staged file");
+            }
+        }
+        if (!have_cfg && !g_no_join) {
+            st_set(cred_vol < 0 ? "WiFi: no saved network and no WIFI.CFG on the ESP"
+                                : "WiFi: no saved network and WIFI.CFG has no ssid=");
             uno_dbg_net_trace("wifi: FAIL no usable credentials (cfg vol %d) - "
-                              "a boot join needs ssid=", cred_vol);
+                              "a boot join needs a remembered network or ssid=", cred_vol);
             return 0;
-        } else {
+        } else if (!have_cfg) {
             g_cfg_ssid[0] = g_cfg_psk[0] = 0;
             uno_dbg_net_trace("wifi: no stored credentials - radio-only bring-up "
                               "(scan / GUI join)");
@@ -4366,9 +4565,30 @@ uno_nic_t *iwl_nic(void)
         st_set("WiFi: radio up - press Scan to list networks");
         return 0;
     }
-    if (find_and_join() < 0) { st_set("WiFi: join failed"); uno_dbg_net_trace("wifi: FAIL join"); return 0; }
+    if (find_and_join() < 0) {
+        /* The remembered network is not here, or its password changed.  Fall
+         * back to the hand-staged WIFI.CFG if it names a DIFFERENT one - that
+         * is what keeps editing the file on the stick a working recovery path
+         * now that the saved store outranks it.  One extra attempt, only on
+         * failure, and only when the two disagree. */
+        int retry = (g_alt_ssid[0] && strcmp(g_alt_ssid, g_cfg_ssid) != 0);
+        if (retry) {
+            uno_dbg_net_trace("wifi: \"%s\" did not join - falling back to %s "
+                              "(\"%s\")", g_cfg_ssid, g_cfgname, g_alt_ssid);
+            strncpy(g_cfg_ssid, g_alt_ssid, sizeof g_cfg_ssid - 1);
+            g_cfg_ssid[sizeof g_cfg_ssid - 1] = 0;
+            strncpy(g_cfg_psk, g_alt_psk, sizeof g_cfg_psk - 1);
+            g_cfg_psk[sizeof g_cfg_psk - 1] = 0;
+        }
+        if (!retry || find_and_join() < 0) {
+            st_set("WiFi: join failed"); uno_dbg_net_trace("wifi: FAIL join"); return 0;
+        }
+    }
 
     nic_publish();
+    /* it worked: remember it, so the next boot comes back to this network
+     * whether it came from the store or from the staged file */
+    saved_remember(g_cfg_ssid, g_cfg_psk);
     st_set("WiFi bound: "); st_cat(g_ssid_str[0]?g_ssid_str:g_cfg_ssid);
     st_cat(g_joined ? " (joined)" : " (associating)");
     return &g_nic;
@@ -4457,6 +4677,10 @@ int iwl_join_ssid(const char *ssid, const char *psk)
                       g_cfg_ssid, (int)strlen(g_cfg_psk));
     if (find_and_join() < 0) { st_set("WiFi: join failed"); return -1; }
     nic_publish();
+    /* A network the user picked and typed a password for is remembered, so the
+     * next boot rejoins it without them typing it again.  Only on SUCCESS - a
+     * wrong password must not be stored and retried forever at boot. */
+    if (g_joined) saved_remember(g_cfg_ssid, g_cfg_psk);
     return g_joined ? 0 : -1;
 }
 
