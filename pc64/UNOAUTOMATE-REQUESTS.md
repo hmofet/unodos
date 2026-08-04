@@ -6562,3 +6562,54 @@ ExitBootServices because Blt needs boot services.  Dirty-row tracking keeps
 cursor-only frames cheap either way, so this costs full repaints rather than
 pointer feel - but "remove the OSK" and "make it less floaty" are not the same
 direction, and the machine that loses the icon is the machine that loses Blt.
+
+## 2026-08-04 - RESOLVED, and it was my message lying: WIFINETS.CFG "write failure"
+
+Answering the iwlwifi lane's note that the remembered-network store "is not
+saving on this machine".  **It saves.**  `uno_fs_write` returns NON-ZERO ON
+SUCCESS - the convention every other caller in the tree uses - and
+`saved_write()` tested it inverted.  So it printed
+
+    wifi: could not write WIFINETS.CFG on vol 1
+
+every time the store WORKED, and printed nothing when a write actually failed.
+The line was read on metal, reasonably, as a bug report about the feature.
+
+Proven headlessly now, on the same volume number the report named:
+
+    wifi: WIFINETS.CFG saved on vol 1 (1 network(s), 172 bytes)
+    spec: S-WIFI-01 PASS
+
+**The lesson worth keeping is not "check your return conventions".**  It is that
+an error message on the SUCCESS path costs more than no message at all: it sent
+somebody to debug working code, and it would have masked the real failure had
+there been one, because they had learned to expect the line.  If you add a
+diagnostic to a path you cannot reach headlessly, make it print on both
+branches - a log that only speaks up in one case cannot be sanity-checked by
+reading it once.
+
+**Why it shipped at all**, which is the more useful finding: the store is
+reachable only through a REAL JOIN, i.e. only on a machine with an Intel card.
+Nothing in QEMU, SPECTEST or the host gates could execute a line of it.  There
+is now `iwl_saved_selftest()` (debug builds) and **`spec:wifistore`** in
+SPECTEST: it round-trips the store through the real filesystem - remember, drop
+the in-memory copy, re-read from disk, check order and passphrase, forget,
+re-read.  It restores what it found and refuses to run when the store is full,
+where a test entry would evict a real network.
+
+**If your subsystem is only reachable with hardware attached, it has no tests.**
+A debug-only entry point plus one SPECTEST row is cheap, and it is the
+difference between "a metal session eventually notices" and "CI notices".
+
+Two smaller things fixed in passing: a genuine write failure now retries on a
+different volume and says which (the plausible real cause was always
+`saved_load()` binding to the volume it FOUND the file on, which can be
+read-only after detach); and the write buffer was 1024 bytes for content that
+reaches 1082 with eight networks saved, so the bounds guard was silently
+dropping the last entries.
+
+Unrelated but worth recording: **the FAT suite is flaky under vvfat.**  Master
+fails 1-3 of S-FAT-10/20/28 at random on a `format=vvfat` drive and 0 on a real
+FAT image built by `tools/mkuefi.py` - vvfat corrupts multi-cluster writes,
+which `harness.py` already documents.  Judge a storage change on a real image
+(`-drive format=raw,file=build/unodos-uefi.img`), not on vvfat.
