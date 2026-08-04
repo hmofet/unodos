@@ -608,6 +608,37 @@ int uno_i2c_hid_acpi_retry(void)
                     break;
                 }
             }
+            /* SAY SO WHEN IT DOES NOT ANSWER.
+             *
+             * Every other outcome here logs: no reachable controller, a dead
+             * DW core, a successful bind. The one that says nothing is the one
+             * that actually happens - a live controller whose slave never
+             * replies - so a boot log shows the ACPI hit and then silence, and
+             * there is no way to tell "the pad is held in reset by a GPIO"
+             * from "wrong SCL timing" from "wrong address" without the box in
+             * front of you.
+             *
+             * Reported on the Surface Laptop Go exactly that way: `acpi hit 0:
+             * slave=34 desc_reg=0001 ctrl=21.2` and then nothing, with
+             * ctrls=3 present=0. The abort source is what separates the cases:
+             * bit 7 (TX_ABRT_7B_ADDR_NOACK) means the bus worked and nobody
+             * was home at that address, while abrt=0 with no bytes means the
+             * transfer never completed at all - a different fault with a
+             * different fix. uno_i2c_hid_diag() has carried both all along
+             * and nothing was writing them down. */
+            if (!g_ptr.present || !g_kbd.present) {
+                int sa; unsigned ab;
+                uno_i2c_hid_diag(&sa, &ab);
+                uno_dbg_log("i2c-hid:   slave %02x did not answer on ctrl @ "
+                            "%08x%08x after %d scl timings (saw_bytes=%d "
+                            "tx_abrt=%08x%s, budget left %d)",
+                            hits[i].slave,
+                            (unsigned)(cand[ci] >> 32), (unsigned)cand[ci],
+                            NTIMING, sa, ab,
+                            (ab & (1u << 7)) ? " NOACK - nobody at that address"
+                                             : (ab ? "" : " - no abort: the transfer never completed"),
+                            g_probe_left);
+            }
             if (g_ptr.present && g_kbd.present) return 1;
         }
     }
