@@ -906,8 +906,10 @@ live clock. Every control works by keyboard or pointer.</p>
   <li><strong>Desktop icons</strong> launch apps directly. Arrange them in columns or rows,
       in launcher order or by name, from the Control Panel.</li>
   <li>The <strong>Start button</strong> at the bottom-left (the UnoDOS brand mark and the word
-      <strong>Start</strong>) opens the scrollable <strong>programs menu</strong> ("Programs"), which lists
-      every app and ends with <strong>Restart</strong> and <strong>Shut Down</strong>. A
+      <strong>Start</strong>) opens the <strong>Start menu</strong>, which has <strong>two panes</strong>:
+      the things you <em>open</em> on the left - every app, in one scrolling list - and the things you
+      <em>do to the machine</em> on the right, grouped under <strong>Windows</strong> (Tile, Cascade,
+      Minimize all) and <strong>Power</strong> (Restart, Shut Down). A
       <strong>right-click anywhere on the desktop</strong> opens the same menu at the pointer, and
       <kbd>Ctrl</kbd>+<kbd>Esc</kbd> toggles it from the keyboard.</li>
   <li>The <strong>taskbar</strong> along the bottom shows a button for each open window, to the right of the Start button; click one to bring it to the front.</li>
@@ -917,7 +919,9 @@ live clock. Every control works by keyboard or pointer.</p>
       a percentage, an icon, or both - all chosen in the <a href="appearance.html#datetime">Control Panel</a>.</li>
 </ul>
 
-{fig("startmenu.png", "The Start menu lists every app, then Restart and Shut Down. Open it with <kbd>Ctrl</kbd>+<kbd>Esc</kbd>; move with the arrows and launch with <kbd>Enter</kbd>.")}
+{fig("startmenu.png", "Two panes: apps on the left, machine commands on the right. Open the menu with <kbd>Ctrl</kbd>+<kbd>Esc</kbd>, move with <kbd>&uarr;</kbd>/<kbd>&darr;</kbd>, cross between the panes with <kbd>&larr;</kbd>/<kbd>&rarr;</kbd>, and choose with <kbd>Enter</kbd>.")}
+
+{note("Opening a program and turning the computer off are not the same kind of act, so they are not in the same list. The menu always opens with the highlight on the left, in the apps, and the arrow keys will not wander into <strong>Power</strong> unless you press <kbd>&rarr;</kbd> to go there.", kind="tip", title="Why the menu is split")}
 
 <h2 id="windows">Windows</h2>
 <p>Each window has a title bar with a <strong>close box</strong>. Drag the title bar to move a window.
@@ -938,6 +942,7 @@ or touchpad moves the pointer.</p>
 <tr><td><kbd>F2</kbd> / <kbd>Ctrl</kbd>+<kbd>Tab</kbd></td><td>Raise the next open window</td></tr>
 <tr><td><kbd>Tab</kbd> / <kbd>Shift</kbd>+<kbd>Tab</kbd></td><td>Move focus between controls in a window</td></tr>
 <tr><td><kbd>↑</kbd> <kbd>↓</kbd> <kbd>←</kbd> <kbd>→</kbd></td><td>Adjust the focused control (dropdown value, slider, spinner, list, menu)</td></tr>
+<tr><td><kbd>&larr;</kbd> <kbd>&rarr;</kbd> (Start menu)</td><td>Cross between the apps pane and the machine-commands pane</td></tr>
 <tr><td><kbd>Enter</kbd></td><td>Activate a button, checkbox or menu item</td></tr>
 <tr><td><kbd>Esc</kbd></td><td>Leave a full-screen game (Runner3D)</td></tr>
 </tbody>
@@ -1124,9 +1129,16 @@ labels, buttons, lists &mdash; and the whole layout re-measures itself to fit th
 {fig("uiscale.png", "The desktop at <b>150%</b> UI scale: same resolution, larger text and controls everywhere.")}
 
 <h2 id="resolution">Resolution &amp; scaling</h2>
-<p>Pick a resolution from the <strong>Display</strong> tab and the desktop resizes to match, scaled to fill your
-screen while keeping the correct proportions.</p>
-{fig("resolution.png", "A smaller desktop mode scaled to fit the panel.")}
+<p>Pick a resolution from the <strong>Display</strong> tab and press <strong>Apply</strong>. The desktop
+resizes to match, scaled to fill your screen while keeping the correct proportions. Choosing from the
+menu on its own changes nothing until you apply it, so you can arrow through the list without the
+screen rearranging itself at every step.</p>
+<p>A new resolution is then held <strong>on probation</strong> for fifteen seconds: a row appears asking
+<em>Keep this resolution?</em> with a countdown, a <strong>Keep</strong> button and <strong>Revert now</strong>.
+Do nothing and the desktop goes back by itself.</p>
+{fig("resolution.png", "A smaller desktop mode scaled to fit the panel. Apply commits it; the countdown puts it back if you say nothing.")}
+
+{note("The countdown is there for the case where the new mode is unreadable - if you cannot see the screen you cannot click <strong>Keep</strong> either, so waiting is the answer. Just leave it alone for fifteen seconds and you are back where you started.", kind="tip", title="If the screen goes wrong")}
 
 <h2 id="datetime">Date, time, battery and sessions</h2>
 <p>The <strong>Date &amp; Time</strong> tab sets the clock: two spinners for the time with a <strong>Set time</strong>
@@ -1174,7 +1186,7 @@ target the other pane's folder.</p>
 
 <h2 id="native">Everyday apps</h2>
 <div class="grid cols-2">
-  {fig("system.png", "<b>System</b>: device information in tidy groups - Input &amp; USB, Storage, Power &amp; ACPI, and Audio. The Storage group shows which native driver has taken over (<i>DETACHED (native): ahci0 / nvme0 / emmc0</i>), and Audio shows which backend the sound reaches (<i>HD Audio</i>, <i>AC'97</i>, or the PC speaker).")}
+  {fig("system.png", "<b>System</b>: device information in one scrolling list, under headings - Timing, Input &amp; USB, Storage, Network, Power &amp; ACPI and Audio. Storage names the native driver that has taken over (<i>DETACHED (native): ahci0 / nvme0 / emmc0</i>), and Audio names the backend the sound reaches (<i>HD Audio</i>, <i>AC'97</i>, or the PC speaker). Scroll the list to reach the readouts below the fold.")}
   {fig("clock.png", "<b>Clock</b>: an analog face beside a world map showing the day/night terminator, with world times for twenty cities.")}
 </div>
 
@@ -1404,10 +1416,16 @@ Two chip families are supported - check a listing's chipset line before you buy:
 {note('An ASIX AX88179A adapter has been taken all the way to a DHCP lease and a gateway ping on a real laptop (a ThinkPad X13 Yoga). The older ASIX AX88772 / AX88178A chips are <em>not</em> supported.', kind="tip", title="Tested on metal")}
 
 <h2 id="wifi">Wi-Fi</h2>
-<p><strong>Wi-Fi is not supported yet.</strong> The groundwork is in place - UnoDOS ships early drivers for
-Intel (AX201 / AX210), Realtek and Marvell wireless chips, and they load the adapter's firmware - but no
-machine has yet joined a network, so wireless is not usable in this release. Use a wired port or a USB
-Ethernet adapter to get online.</p>
+<p><strong>Wi-Fi is not usable yet</strong>, though it is closer than it was. UnoDOS ships drivers for
+Intel (AX201 / AX210), Realtek and Marvell wireless chips. On Intel hardware the driver now loads the
+adapter's firmware, scans, <strong>joins a WPA2 network and installs the encryption keys</strong> - a real
+association, proven on a laptop. What does not yet work is the step after that: the network never hands
+back an address, so nothing can actually be reached. <strong>Use a wired port or a USB Ethernet adapter
+to get online.</strong></p>
+<p>The Control Panel's <strong>Network</strong> tab already carries the interface it will use - a scan
+list, a password box and a <strong>Join</strong> button, with a spinner and a running description of each
+step while it works, since a join takes several seconds. Networks you join are remembered, so the machine
+can rejoin the last one by itself at the next boot.</p>
 """)
 
 PAGES["ports.html"] = ("The UnoDOS family", f"""
