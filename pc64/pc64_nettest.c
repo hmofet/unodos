@@ -123,10 +123,56 @@ static char g_buf[NETBUF];
 static int  g_len;
 static int  g_active;                   /* only flush to disk during the test */
 
+/* REWRITING THE WHOLE FILE PER LINE IS WHAT MADE THE MACHINE UNUSABLE.
+ *
+ * flush() writes the ENTIRE accumulated buffer, and netlog_sink() called it on
+ * every single trace line. The buffer grows, so N lines cost O(N^2) bytes
+ * through firmware Block IO to whatever the boot volume is - a USB stick, on
+ * every machine in the fleet.
+ *
+ * The Surface's own boot log measures it, because g_active gates the flush and
+ * so the same code runs both ways in one boot:
+ *
+ *   boot-phase WiFi bring-up, g_active=0:   11.096 11.107 11.199 11.202  (~11 ms/line)
+ *   test-phase WiFi bring-up, g_active=1:   64.926 65.181 65.466 65.769  (~260 ms/line)
+ *
+ * Same driver, same lines, one difference. A quarter of a second of stall per
+ * trace line, and the WiFi bring-up emits dozens and then retries - which is
+ * exactly the reported "very, very slow, hard to use". It is not the uncached
+ * framebuffer: a full present on that machine is 234 ms and the banner strip is
+ * a fortieth of that.
+ *
+ * So flush on a BUDGET. NETLOG exists to survive a machine that dies mid-test,
+ * and the thing that kills the diagnosis is losing the last few lines, not the
+ * last few milliseconds of them - while the thing that kills the MACHINE is
+ * writing all of it, over and over. Coalesce: at most one write per
+ * FLUSH_MS, plus an unconditional one on every terminal path, so what lands on
+ * disk after the test is byte-for-byte what landed before.
+ *
+ * A crash between two writes now loses at most FLUSH_MS of trace. Against
+ * that: without this, the trace is slow enough to change what it is measuring. */
+#define FLUSH_MS 1000
+
+static unsigned long long g_last_flush;
+static int                g_dirty_log;   /* lines appended since the last write */
+
+static void flush_now(void)
+{
+    if (g_active && g_len > 0) {
+        uno_dbg_write_crashfile("NETLOG.TXT", g_buf, g_len);
+        g_last_flush = uno_dbg_uptime_ms();
+        g_dirty_log = 0;
+    }
+}
+
+/* the budgeted one: what the per-line path calls */
 static void flush(void)
 {
-    if (g_active && g_len > 0)
-        uno_dbg_write_crashfile("NETLOG.TXT", g_buf, g_len);
+    unsigned long long now;
+    if (!g_active || g_len <= 0) return;
+    now = uno_dbg_uptime_ms();
+    if (g_last_flush && now - g_last_flush < FLUSH_MS) { g_dirty_log = 1; return; }
+    flush_now();
 }
 
 static void netlog_sink(UnoAutoChan ch, const char *line, void *user)
@@ -565,7 +611,7 @@ void pc64_nettest_tick(void)
         g_active = 1;
         uno_dbg_net_trace("== P3 MTRR write-combining experiment (operator-opted) ==");
         uno_pc64_mtrr_wc_experiment();
-        flush();
+        flush_now();                     /* terminal: g_active drops next line */
         g_active = 0;
     }
     /* SPECTEST conformance suite (spec key), before the net test + stress */
@@ -602,7 +648,7 @@ void pc64_nettest_tick(void)
 
     g_active = 1;
     run_test();
-    flush();
+    flush_now();                         /* terminal: the file must be complete */
     g_active = 0;
     nettest_finish();                    /* banner back, then power off if asked */
     automate_start();                    /* unreached if nettest_finish powered off */
