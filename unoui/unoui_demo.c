@@ -33,6 +33,15 @@ void demo_build(unoui_window *win, int screen_w, int screen_h)
     unoui_add_label(win, 0, 192, "Name:");
     unoui_add_field(win, 44, 188, 106, "UnoDOS", 1);
 
+    /* a masked field, and the indeterminate busy ring beside it - both are
+     * toolkit features, so both belong in the sheet that proves the toolkit */
+    { static char pw[] = "hunter2";
+      static unoui_text pwt;
+      unoui_text_init(&pwt, pw, (int)sizeof pw, 0);
+      unoui_text_secret(&pwt, '*');
+      unoui_add_label(win, 0, 216, "Key:");
+      unoui_add_edit(win, 44, 212, 106, &pwt); }
+
     /* --- right column: a file list + scrollbar + buttons ------------------- */
     unoui_add_label(win, 170, 0, "Files:");
     unoui_add_list (win, 170, 12, 122, 100, g_files, 5, 2);
@@ -42,4 +51,8 @@ void demo_build(unoui_window *win, int screen_w, int screen_h)
 
     unoui_add_button(win, 170, 138, 72, "Cancel", 0);
     unoui_add_button(win, 252, 138, 72, "OK",     UI_F_DEFAULT);
+
+    { unoui_widget *b = unoui_add_busy(win, 170, 186, 22);
+      b->value = 2;                        /* mid-lap, so the trail is visible */
+      unoui_add_label(win, 200, 192, "Working..."); }
 }

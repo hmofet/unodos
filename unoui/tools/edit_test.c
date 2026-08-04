@@ -250,6 +250,47 @@ int main(void)
           ui_edit_eye_rect(g_inner, &g_t).w == 0 &&
           ui_edit_text_rect(g_inner, &g_t).w == g_inner.w);
 
+    /* the eye is a CLICK TARGET, and clicking it must toggle the mask without
+     * also dragging the caret to wherever the eye happens to sit */
+    fb_set_font(0);
+    { static unoui_ui ui; static unoui_window win;
+      static char pb[32] = "hunter2";
+      static unoui_text pt;
+      unoui_widget *fld;
+      unoui_event e;
+      unoui_rect r, inner, eye;
+      unoui_text_init(&pt, pb, sizeof pb, 0);
+      unoui_text_secret(&pt, '*');
+      unoui_ui_init(&ui, &theme_unodos, 640, 480);
+      unoui_window_init(&win, "P", 20, 20, 300, 90);
+      fld = unoui_add_edit(&win, 8, 8, 260, &pt);
+      unoui_ui_add(&ui, &win);
+      r = unoui_widget_rect(ui.theme, &win, fld);
+      inner = ui_edit_inner(r, ui.theme);
+      eye = ui_edit_eye_rect(inner, &pt);
+      pt.caret = pt.sel = 3;
+
+      memset(&e, 0, sizeof e); e.kind = UI_EV_MOUSE_DOWN;
+      e.x = eye.x + eye.w / 2; e.y = eye.y + eye.h / 2;
+      unoui_handle(&ui, &e);
+      CHECK("eye: a click on it reveals", pt.revealed == 1);
+      CHECK("eye: a click on it leaves the caret alone", pt.caret == 3);
+      unoui_handle(&ui, &e);
+      CHECK("eye: a second click hides again", pt.revealed == 0);
+
+      /* a click in the TEXT still positions the caret */
+      memset(&e, 0, sizeof e); e.kind = UI_EV_MOUSE_DOWN;
+      e.x = inner.x + 3; e.y = inner.y + inner.h / 2;
+      unoui_handle(&ui, &e);
+      CHECK("eye: a click in the text still moves the caret",
+            pt.caret == 0 && pt.revealed == 0);
+
+      /* and losing the focus puts the mask back up, however it was lost */
+      pt.revealed = 1;
+      ui.focus_wi = -1;
+      unoui_render_ui(&ui);
+      CHECK("eye: reveal does not survive losing focus", pt.revealed == 0); }
+
     /* ---- 7. the busy indicator ------------------------------------------ */
     fb_set_font(0);
     { static unoui_window bw;
