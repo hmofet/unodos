@@ -248,6 +248,21 @@ int main(void)
       CHECK("plain: no eye, and the whole inner rect is text",
             ui_edit_eye_rect(g_inner, &plain).w == 0 &&
             ui_edit_text_rect(g_inner, &plain).w == g_inner.w); }
+    /* `plain` above is a STACK LOCAL on purpose, and it caught the real bug
+     * once by luck - whatever the stack held made unoui_text_init believe it
+     * was a re-bind, so `secret` survived from the field before it. Luck is
+     * not a gate, so this fills the struct with a pattern first and asks the
+     * same question deterministically. */
+    { union { unoui_text t; unsigned char b[sizeof(unoui_text)]; } u;
+      static char gb[8] = "hi";
+      unsigned i;
+      for (i = 0; i < sizeof u.b; i++) u.b[i] = 0xA5;
+      unoui_text_init(&u.t, gb, sizeof gb, 0);
+      CHECK("garbage: an uninitialised struct is not believed",
+            u.t.secret == 0 && u.t.revealed == 0 && u.t.multiline == 0);
+      CHECK("garbage: and comes up with a sane caret and view",
+            u.t.caret == 2 && u.t.sel == 2 &&
+            u.t.scroll_x == 0 && u.t.scroll_y == 0); }
     /* a field too narrow to spare the room keeps all of it for the text */
     field_set("pw", 40);
     unoui_text_secret(&g_t, '*');
@@ -317,7 +332,7 @@ int main(void)
      * window that rebuilds underneath you. */
     fb_set_font(0);
     { static char rb[32] = "hello world";
-      static unoui_text rt;                        /* zeroed: see the contract */
+      static unoui_text rt;
       unoui_text_init(&rt, rb, sizeof rb, 0);
       CHECK("re-init: a FIRST bind puts the caret at the end", rt.caret == 11);
       rt.caret = rt.sel = 4; rt.scroll_x = 7;
