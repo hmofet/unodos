@@ -6255,3 +6255,60 @@ worse than an absent switch.
 Also: `MENU_MAXVIS` was a flat 11 rows = 11 * 46 px at a 200% UI scale, i.e. a
 menu taller than the desktop it drops out of.  It comes from the work area now,
 and the layout audit sweeps the Start menu along with everything else.
+
+
+## 2026-08-04 - SESSION CLOSE (iwlwifi + harness): SURFGO from dead radio to associating
+
+Closing the claim on the iwlwifi lane. What changed, what is proven on metal,
+and what is still open.
+
+### Proven on hardware
+
+- **The AX201 on this box is Qu-c0 and wants `IWLAX20C.UCO`.** Found by the
+  candidate-retry loop with nobody editing the stick, on a machine that had
+  been dead for weeks and could not be reached over URC to debug.
+- **Credentials, association, 4-way, CCMP keys, station authorized.** The
+  supplicant survives a replayed 1/4 (`-> state 2, reply 0` instead of
+  regressing to SENT_2 and re-sending 2/4).
+- **`fw_known_good` promotion**: `fw=IWLAX20C.UCO,IWLAX20B.UCO,IWLAX201.UCO`
+  on the second bring-up, ALIVE first try, no 4.5 s detour.
+- **`mtrr-wc` REFUSES on this hardware and always will**: `mtrr6` covers the fb
+  with a 256 GB UC region, re-tiling needs more than the 10 variable MTRRs the
+  CPU has, and neither an overlapping WC MTRR (UC wins) nor PAT (cannot
+  override strong UC) substitutes. Blt is 4x faster and already auto-selected.
+
+### Still open
+
+- **No DHCP lease.** DISCOVERs go out at the correct ~1.5 s backoff. The
+  post-join diagnostic (`62874dc8`) exists precisely to say whether the AP is
+  not ACKing us (radio-level) or ACKing and not answering (association
+  identity) - it has not yet produced a reading.
+- **Reason-7 deauths from a BSS we are not on.** Correctly ignored; whether
+  they are a symptom or the cause is what the diagnostic decides.
+- **`ref_bssid_addr` is never filled** in `mld_link_cfg`, where Linux fills it
+  from the BSS being joined. Fixing that is probably right; my attempt to ALSO
+  re-issue LINK_CONFIG on retry ASSERTED THE FIRMWARE and cost a boot
+  (`59f0d49c`, reverted in `dade4c22`). Redo the field alone, with evidence.
+- **`could not write WIFINETS.CFG on vol 1`** right after a successful join -
+  the remembered-networks store from `e10ee514` is not saving on this machine,
+  so "rejoin the last network at boot" has nothing to rejoin. Not my lane;
+  flagging it.
+- **The listener still does not reliably come up** when URC is armed. Filed
+  separately earlier today; a `UNODISC` broadcast got no OFFER from any pc64
+  box on two separate arms.
+
+### What this session should be read for
+
+Five of my changes regressed something, and the pattern is uniform: I treated a
+plausible mechanism as sufficient reason to ship, against a target I can only
+observe one log per reboot. The buffer overflow, the unconstrained-DMA window,
+the stale-ALIVE misread and the firmware assert were all consequences of the
+candidate-retry loop - which also solved the original problem, so the lesson is
+not "do not do that", it is that turning one bring-up per boot into several
+makes every piece of leaked state between attempts reachable.
+
+The two things that actually moved this forward were **reading the log instead
+of reasoning** and **the operator describing a visible symptom** ("the warning
+locks the UI") that I had treated as background for two messages. The floaty
+cursor was never the pointer code; it was the boot-test banner repainting the
+desktop, which I found only after three rounds in the wrong file.
