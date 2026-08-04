@@ -1044,7 +1044,12 @@ static void rebuild_ctrl_window(void)
         UI.focus_wi = 0;
         if (fid) { int i;
             for (i = 0; i < g_win[APP_CTRL].nw; i++)
-                if (g_win[APP_CTRL].w[i].id == fid) { UI.focus_wi = i; break; } }
+                if (g_win[APP_CTRL].w[i].id == fid &&
+                    !(g_win[APP_CTRL].w[i].flags & UI_F_DISABLED)) {
+                    UI.focus_wi = i; break;      /* never park on a dead control:
+                                                    Apply greys itself out the
+                                                    moment it has been pressed */
+                } }
     }
     g_dirty = 1;
 }
