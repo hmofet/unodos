@@ -95,11 +95,20 @@ so it is never covered by a role and always prompts. Refusing a sheet just
 leaves that level out of the arm - the others still take effect, and the panel
 says "Partly granted".
 
-**The token.** A successful arm mints 16 hex characters from `tls_entropy_get`
-and shows them with the box's address. The token is RAM-only: it is never
-written to disk, and disarming, signing out or rebooting kills it. If the box
-has no defensible entropy source, arming FAILS rather than minting a weak token
-(same argument `tls_entropy.c` makes about keys).
+**The token.** A successful arm mints a **6-digit PIN** from `tls_entropy_get`
+and shows it with the box's address. The digits are drawn by rejection rather
+than `byte % 10`, which would make 0-5 about 20% likelier than 6-9. The PIN is
+RAM-only: it is never written to disk, and disarming, signing out or rebooting
+kills it. If the box has no defensible entropy source, arming FAILS rather than
+minting a weak PIN (same argument `tls_entropy.c` makes about keys).
+
+> It was 16 hex characters until 2026-08-04. That is a better credential and a
+> worse thing to ask a person to do: it is read off one screen and typed on
+> another machine by hand. **Six digits is safe here because of the lockout,
+> not because of the length** - three bad attempts disarm the channel, the
+> count survives a reconnect, and re-arming needs somebody at the console, so
+> the wire is worth three guesses in a million and cannot buy a fourth. Relax
+> `BADAUTH_MAX` and the PIN stops being defensible.
 
 **Authenticating.** The first thing a client sends is:
 
@@ -111,8 +120,9 @@ ok authenticated as <user> powers=observe drive system
 Until that succeeds every other verb answers `err auth-required`. Three bad
 tokens disarm the channel outright - the operator can re-arm at the console, an
 attacker on the wire cannot, so the plaintext protocol is not a brute-force
-oracle. The third refusal is still *answered* before the channel goes down (the
-disarm is deferred one frame), so a mistyped code gets told rather than dropped.
+oracle. **This is what the PIN's length rests on** (see above). The third
+refusal is still *answered* before the channel goes down (the disarm is
+deferred one frame), so a mistyped code gets told rather than dropped.
 
 **After auth**, the link runs as the arming user under `UNOSEC_TRUST_REMOTE` and
 every verb is checked against the powers granted at arm time. A verb outside

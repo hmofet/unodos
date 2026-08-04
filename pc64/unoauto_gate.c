@@ -162,23 +162,33 @@ usc_cap_t unoauto_gate_verb_cap(const char *verb)
  * Arming.
  * ======================================================================== */
 
-/* Mint a token.  tls_entropy_get is the production entropy source and FAILS
- * CLOSED (tls_entropy.h): on a box where neither RDRAND nor conditioned jitter
- * qualifies it returns 0 and we refuse to arm, rather than mint a guessable
- * token from a TSC counter.  A machine that cannot make a credential should say
- * so, not make a weak one - the same argument tls_entropy.c makes for keys. */
+/* Mint the connection PIN. */
 static int mint_token(void)
 {
-    static const char HEX[] = "0123456789abcdef";
-    unsigned char raw[UNOAUTO_TOKEN_CHARS / 2];
-    int i;
-    if (!tls_entropy_get(raw, (int)sizeof raw)) {
-        g_token[0] = 0;
-        return 0;
-    }
-    for (i = 0; i < (int)sizeof raw; i++) {
-        g_token[i * 2]     = HEX[(raw[i] >> 4) & 0xf];
-        g_token[i * 2 + 1] = HEX[raw[i] & 0xf];
+    /* Six decimal digits (see the note in unoauto_gate.h for why six is
+     * enough HERE).  Drawn by REJECTION, not `byte % 10`: 256 is not a multiple
+     * of ten, so the modulo would make 0-5 about 20% likelier than 6-9 and hand
+     * an attacker a better-than-uniform first guess.  Bytes >= 250 are thrown
+     * away instead, which costs a couple of extra draws and nothing else.
+     *
+     * A generous over-draw up front, then top-ups: tls_entropy_get is the
+     * production source and FAILS CLOSED (tls_entropy.h) - on a box where
+     * neither RDRAND nor conditioned jitter qualifies it returns 0 and we
+     * refuse to arm rather than mint a guessable PIN from a TSC counter.  A
+     * machine that cannot make a credential should say so, not make a weak one
+     * - the same argument tls_entropy.c makes for keys. */
+    unsigned char raw[UNOAUTO_TOKEN_CHARS * 4];
+    int i = 0, n = 0, refills = 0;
+    if (!tls_entropy_get(raw, (int)sizeof raw)) { g_token[0] = 0; return 0; }
+    while (n < UNOAUTO_TOKEN_CHARS) {
+        if (i >= (int)sizeof raw) {                  /* astronomically unlikely */
+            if (++refills > 4 || !tls_entropy_get(raw, (int)sizeof raw)) {
+                g_token[0] = 0; memset(raw, 0, sizeof raw); return 0;
+            }
+            i = 0;
+        }
+        { unsigned char b = raw[i++];
+          if (b < 250) g_token[n++] = (char)('0' + (b % 10)); }
     }
     g_token[UNOAUTO_TOKEN_CHARS] = 0;
     memset(raw, 0, sizeof raw);
