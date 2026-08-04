@@ -495,6 +495,21 @@ static int save_book(int vol, const char *name)
 }
 
 /* ---- commands ---------------------------------------------------------------- */
+/* Is the formula being typed at a point where a reference may follow?  Excel
+ * says yes after an operator, an opening bracket, a separator or the leading
+ * '=' itself, and no straight after an operand - where a click means "select
+ * that cell instead", not "and also this one". */
+static int point_ready(const char *e)
+{
+    int n = a_len(e);
+    char c;
+    if (n <= 0) return 0;
+    c = e[n - 1];
+    return c == '=' || c == '+' || c == '-' || c == '*' || c == '/' ||
+           c == '^' || c == '(' || c == ',' || c == ':' || c == '&' ||
+           c == '<' || c == '>' || c == '%' || c == ' ';
+}
+
 static void commit_edit(void)
 {
     if (!g_editing) return;
@@ -697,6 +712,21 @@ static int app_event(struct unoui_widget *w, const void *evp, void *ctx)
         }
         if (e->x >= gx + head_w() && e->y >= gy + cell_h() &&
             e->x < gx + gw && e->y < gy + gh) {
+            int pr = g_top_r + (e->y - gy - cell_h()) / cell_h();
+            int pc = g_left_c + (e->x - gx - head_w()) / cell_w();
+            /* POINT MODE.  While a formula is being typed and the last thing
+             * typed was an operator, clicking a cell PUTS ITS REFERENCE IN
+             * rather than moving the selection - which is how anyone actually
+             * writes =A1*A2 in Excel, and without it the only way to name a
+             * cell is to know its address and type it. */
+            if (g_editing && g_edit[0] == '=' && point_ready(g_edit)) {
+                char a1[16];
+                int n = a_len(g_edit);
+                uxl_a1_write(pr, pc, 0, 0, a1, (int)sizeof a1);
+                a_cpy(g_edit + n, a1, (int)sizeof g_edit - n);
+                pc64_shell_dirty();
+                return 1;
+            }
             commit_edit();
             g_cur_c = g_left_c + (e->x - gx - head_w()) / cell_w();
             g_cur_r = g_top_r + (e->y - gy - cell_h()) / cell_h();

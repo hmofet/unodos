@@ -5263,3 +5263,49 @@ width and add `2 * (th->m.frame_w + th->m.pad)` at the end. Also note
 `fb_set_clip` does NOT clip text, so an overlong label draws past the frame
 instead of being cut off at it - truncate explicitly (`fit_px` in
 pc64_accounts.c).
+
+
+## 2026-08-04 - five things a laptop found that QEMU did not
+
+**Worker B/C/D, unoffice lane**, from arin running the suite on a Surface
+Laptop Go. Every one of these survived a host gate, a URC pass and a pile of
+screenshots. Two of them are other lanes' business.
+
+**1. Eight icons in the shared atlas drew NOTHING.** `art()` in `uoicons.c`
+indexes its palette hex-style - `'a'` is TEN - and eight icons were written
+with `'a'` meaning "the second colour", so they indexed past a two-entry
+palette. Bold, Italic, Underline, Cut, Spelling, Undo, Draw and Help were
+blank squares from the day they landed. **A toolbar with an invisible button
+still lays out, still highlights and still fires**, which is why 23 storyboard
+frames and a pixel-sampling gate all passed. `uochrome_test` now counts the
+ink in every atlas cell and fails below 8 pixels; the threshold is not 1
+because a one-pixel icon is as broken as a no-pixel one.
+
+**2. `unoui_event.button` is WHICH BUTTON, not whether one is held**, and the
+left button is `0`. UnoWord tested `if (e->button)` to decide whether a move
+event was a drag, so selecting text with the mouse never worked at all. Any
+lane doing drag gestures should track the drag between DOWN and UP itself -
+the event stream carries no "still held" bit.
+
+**3. FILL widgets were not filling on the first frame.** `unoui_widget_fill`
+only took effect when `unoui_reflow_window` ran, which the shell did on resize
+and on restoring saved geometry - never at build. Every freshly opened window
+kept whatever size its app guessed, and all three Office apps guessed slightly
+small, so a strip of DESKTOP showed through along the bottom and right edge of
+each. `open_app` now reflows once after building. **This was not an Office
+bug** - it affected any app that marks a widget fill, and the fix is in the
+shell.
+
+**4. Two shell exports added** for UnoWord's Font combo: `uno_font_count` and
+`uno_font_name`. A module could draw with a font slot but had no way to find
+out which faces the machine actually has, so "pick a font" could not be built
+at all.
+
+**5. Three app emblems added** (`PCI_UOWORD`, `PCI_UOCALC`, `PCI_UOSHOW`).
+All three apps had been shipping `PCI_GENERIC`.
+
+**The lesson worth carrying:** every one of these is invisible to a test that
+asks "did the right thing happen?" and visible in one second to a person
+looking at the screen. Where a lane can cheaply assert a PROPERTY of the
+output rather than an event - "every icon has ink", "every fill widget covers
+its content rect" - that is the assertion worth writing.

@@ -71,7 +71,14 @@ static void phline(int x, int y, int w, fb_px c) { prect(x, y, w, 1, c); }
 static void pvline(int x, int y, int h, fb_px c) { prect(x, y, 1, h, c); }
 
 /* String art, for the shapes that are not rectangles.  One char per pixel:
- * space is transparent, and the rest index the small palette passed in. */
+ * space is transparent, and the rest index the small palette passed in -
+ * HEX-STYLE: '0'-'9' are 0-9 and 'a' is TEN, not one.  Eight icons were
+ * written with 'a' meaning "the second colour", indexed past a two-entry
+ * palette, and drew nothing at all: Bold, Italic and Underline were blank
+ * squares on every Formatting bar in the suite from the day they landed.
+ * Nothing caught it, because a toolbar with an invisible button still lays
+ * out, still highlights, still fires - so the gate now checks that every
+ * icon in the atlas actually puts ink down. */
 static void art(const char *const *rows, int n, const fb_px *pal, int npal)
 {
     int y, x;
@@ -154,21 +161,21 @@ static void icon_spell(void)
 {
     static const char *const rows[] = {
         "                ",
-        "  aa    a   aaa ",
-        " a  a  a a  a  a",
-        " a  a  a a  a  a",
-        " aaaa  aaa  aaa ",
-        " a  a  a a  a  a",
-        " a  a  a a  aaa ",
+        "  11    1   111 ",
+        " 1  1  1 1  1  1",
+        " 1  1  1 1  1  1",
+        " 1111  111  111 ",
+        " 1  1  1 1  1  1",
+        " 1  1  1 1  111 ",
         "                ",
-        "             b  ",
-        "            bb  ",
-        " b         bb   ",
-        " bb       bb    ",
-        "  bb     bb     ",
-        "   bb   bb      ",
-        "    bbbbb       ",
-        "     bbb        "
+        "             2  ",
+        "            22  ",
+        " 2         22   ",
+        " 22       22    ",
+        "  22     22     ",
+        "   22   22      ",
+        "    22222       ",
+        "     222        "
     };
     static const fb_px pal[] = { TRN, BLK, GRN };
     art(rows, 16, pal, 3);
@@ -178,20 +185,20 @@ static void icon_cut(void)
 {
     static const char *const rows[] = {
         "                ",
-        "  a          a  ",
-        "  aa        aa  ",
-        "   aa      aa   ",
-        "    aa    aa    ",
-        "     aa  aa     ",
-        "      aaaa      ",
-        "       aa       ",
-        "      aaaa      ",
-        "     bb  bb     ",
-        "    b  b b  b   ",
-        "   b    b    b  ",
-        "   b    b    b  ",
-        "    b  b  b b   ",
-        "     bb    bb   ",
+        "  1          1  ",
+        "  11        11  ",
+        "   11      11   ",
+        "    11    11    ",
+        "     11  11     ",
+        "      1111      ",
+        "       11       ",
+        "      1111      ",
+        "     22  22     ",
+        "    2  2 2  2   ",
+        "   2    2    2  ",
+        "   2    2    2  ",
+        "    2  2  2 2   ",
+        "     22    22   ",
         "                "
     };
     static const fb_px pal[] = { TRN, GRY, DGY };
@@ -234,17 +241,17 @@ static void icon_undo(int mirror)
     static const char *const rows[] = {
         "                ",
         "                ",
-        "      aaaa      ",
-        "    aa    aa    ",
-        "   a        a   ",
-        "  a          a  ",
-        "  a          a  ",
-        " a            a ",
-        " a              ",
-        "aaa             ",
-        " aaaaa          ",
-        "  aaa           ",
-        "   a            ",
+        "      1111      ",
+        "    11    11    ",
+        "   1        1   ",
+        "  1          1  ",
+        "  1          1  ",
+        " 1            1 ",
+        " 1              ",
+        "111             ",
+        " 11111          ",
+        "  111           ",
+        "   1            ",
         "                ",
         "                ",
         "                "
@@ -302,21 +309,21 @@ static void icon_columns(void)
 static void icon_draw(void)
 {
     static const char *const rows[] = {
-        "            aaa ",
-        "           aabaa",
-        "          aabbaa",
-        "         aabbaa ",
-        "        aabbaa  ",
-        "       aabbaa   ",
-        "      aabbaa    ",
-        "     aabbaa     ",
-        "    aabbaa      ",
-        "   aabbaa       ",
-        "  ccbbaa        ",
-        " cccbaa         ",
-        " ddcaa          ",
-        " ddda           ",
-        "  dd            ",
+        "            111 ",
+        "           11211",
+        "          112211",
+        "         112211 ",
+        "        112211  ",
+        "       112211   ",
+        "      112211    ",
+        "     112211     ",
+        "    112211      ",
+        "   112211       ",
+        "  332211        ",
+        " 333211         ",
+        " 44311          ",
+        " 4441           ",
+        "  44            ",
         "                "
     };
     static const fb_px pal[] = { TRN, YEL, BRN, TAN, BLK };
@@ -327,19 +334,19 @@ static void icon_help(void)
 {
     static const char *const rows[] = {
         "                ",
-        "     aaaaa      ",
-        "   aa     aa    ",
-        "  aa       aa   ",
-        "  aa       aa   ",
-        "           aa   ",
-        "          aa    ",
-        "        aaa     ",
-        "       aa       ",
-        "       aa       ",
-        "       aa       ",
+        "     11111      ",
+        "   11     11    ",
+        "  11       11   ",
+        "  11       11   ",
+        "           11   ",
+        "          11    ",
+        "        111     ",
+        "       11       ",
+        "       11       ",
+        "       11       ",
         "                ",
-        "       aa       ",
-        "       aa       ",
+        "       11       ",
+        "       11       ",
         "                ",
         "                "
     };
@@ -353,19 +360,19 @@ static void icon_bold(void)
 {
     static const char *const rows[] = {
         "                ",
-        "   aaaaaaa      ",
-        "   aaaaaaaa     ",
-        "   aaa   aaa    ",
-        "   aaa   aaa    ",
-        "   aaa  aaa     ",
-        "   aaaaaaa      ",
-        "   aaaaaaa      ",
-        "   aaa   aaa    ",
-        "   aaa    aaa   ",
-        "   aaa    aaa   ",
-        "   aaa   aaa    ",
-        "   aaaaaaaa     ",
-        "   aaaaaaa      ",
+        "   1111111      ",
+        "   11111111     ",
+        "   111   111    ",
+        "   111   111    ",
+        "   111  111     ",
+        "   1111111      ",
+        "   1111111      ",
+        "   111   111    ",
+        "   111    111   ",
+        "   111    111   ",
+        "   111   111    ",
+        "   11111111     ",
+        "   1111111      ",
         "                ",
         "                "
     };
@@ -376,19 +383,19 @@ static void icon_italic(void)
 {
     static const char *const rows[] = {
         "                ",
-        "      aaaaaa    ",
-        "      aaaaaa    ",
-        "        aaa     ",
-        "        aaa     ",
-        "       aaa      ",
-        "       aaa      ",
-        "      aaa       ",
-        "      aaa       ",
-        "     aaa        ",
-        "     aaa        ",
-        "    aaa         ",
-        "   aaaaaa       ",
-        "   aaaaaa       ",
+        "      111111    ",
+        "      111111    ",
+        "        111     ",
+        "        111     ",
+        "       111      ",
+        "       111      ",
+        "      111       ",
+        "      111       ",
+        "     111        ",
+        "     111        ",
+        "    111         ",
+        "   111111       ",
+        "   111111       ",
         "                ",
         "                "
     };
@@ -399,19 +406,19 @@ static void icon_under(void)
 {
     static const char *const rows[] = {
         "                ",
-        "   aaa    aaa   ",
-        "   aaa    aaa   ",
-        "   aaa    aaa   ",
-        "   aaa    aaa   ",
-        "   aaa    aaa   ",
-        "   aaa    aaa   ",
-        "   aaa    aaa   ",
-        "    aaa  aaa    ",
-        "     aaaaaa     ",
-        "      aaaa      ",
+        "   111    111   ",
+        "   111    111   ",
+        "   111    111   ",
+        "   111    111   ",
+        "   111    111   ",
+        "   111    111   ",
+        "   111    111   ",
+        "    111  111    ",
+        "     111111     ",
+        "      1111      ",
         "                ",
-        "  aaaaaaaaaa    ",
-        "  aaaaaaaaaa    ",
+        "  1111111111    ",
+        "  1111111111    ",
         "                ",
         "                "
     };

@@ -275,6 +275,71 @@ void pc64_icon_emblem(int icon, unoui_rect box)
             hln(ox + G(19) - w2 / 2, oy + G(6) + yy, w2 + 1, FB_RGB(55, 110, 70));
         } }
         break; }
+    /* ---- the Office suite ------------------------------------------------
+     * A shared shape language, so the three read as one suite at 16 px: the
+     * same page, the same fold, a coloured band across the bottom carrying
+     * the app's letter-form.  The letters are drawn from bars and triangles
+     * rather than set in a font, for the reason uoicons.c gives - at this
+     * size a real face is mush.  Our own artwork; Microsoft's colours are
+     * not a design, they are three primaries, and these are ours. */
+    case PCI_UOWORD: {                               /* page + blue W band   */
+        const fb_px band = FB_RGB(42, 88, 168);
+        int i;
+        rr(ox + G(6), oy + G(3), G(20), G(26), FB_RGB(252, 252, 250));
+        frame(ox + G(6), oy + G(3), G(20), G(26), FB_RGB(120, 125, 140));
+        rr(ox + G(20), oy + G(3), G(6), G(6), FB_RGB(226, 228, 222));  /* fold */
+        seg(ox + G(20), oy + G(9), ox + G(26), oy + G(3), FB_RGB(120, 125, 140));
+        for (i = 0; i < 3; i++)
+            rr(ox + G(9), oy + G(7) + i * G(4), G(13) - i * G(2), G(2),
+               FB_RGB(150, 158, 175));               /* text lines           */
+        rr(ox + G(4), oy + G(19), G(24), G(11), band);
+        frame(ox + G(4), oy + G(19), G(24), G(11), FB_RGB(24, 56, 118));
+        /* a W: four strokes down-up-down-up, drawn as thick segments */
+        thick(ox + G(8),  oy + G(21), ox + G(11), oy + G(28), G(2), FB_RGB(255,255,255));
+        thick(ox + G(11), oy + G(28), ox + G(14), oy + G(23), G(2), FB_RGB(255,255,255));
+        thick(ox + G(14), oy + G(23), ox + G(17), oy + G(28), G(2), FB_RGB(255,255,255));
+        thick(ox + G(17), oy + G(28), ox + G(20), oy + G(21), G(2), FB_RGB(255,255,255));
+        break; }
+
+    case PCI_UOCALC: {                               /* page + green grid    */
+        const fb_px band = FB_RGB(24, 122, 72);
+        const fb_px rule = FB_RGB(150, 195, 170);
+        int i;
+        rr(ox + G(6), oy + G(3), G(20), G(26), FB_RGB(252, 252, 250));
+        frame(ox + G(6), oy + G(3), G(20), G(26), FB_RGB(120, 125, 140));
+        rr(ox + G(20), oy + G(3), G(6), G(6), FB_RGB(226, 228, 222));
+        seg(ox + G(20), oy + G(9), ox + G(26), oy + G(3), FB_RGB(120, 125, 140));
+        rr(ox + G(8), oy + G(6), G(16), G(3), FB_RGB(200, 224, 210));   /* header row */
+        for (i = 0; i < 4; i++) hln(ox + G(8), oy + G(9) + i * G(3), G(16), rule);
+        for (i = 0; i < 3; i++)
+            rr(ox + G(13) + i * G(5), oy + G(6), G(1), G(12), rule);    /* columns */
+        rr(ox + G(4), oy + G(19), G(24), G(11), band);
+        frame(ox + G(4), oy + G(19), G(24), G(11), FB_RGB(12, 84, 48));
+        /* an X: two crossed strokes */
+        thick(ox + G(9),  oy + G(21), ox + G(19), oy + G(28), G(2), FB_RGB(255,255,255));
+        thick(ox + G(19), oy + G(21), ox + G(9),  oy + G(28), G(2), FB_RGB(255,255,255));
+        break; }
+
+    case PCI_UOSHOW: {                               /* slide + amber band   */
+        const fb_px band = FB_RGB(196, 88, 24);
+        rr(ox + G(4), oy + G(4), G(24), G(15), FB_RGB(252, 252, 250)); /* slide */
+        frame(ox + G(4), oy + G(4), G(24), G(15), FB_RGB(120, 125, 140));
+        rr(ox + G(7), oy + G(7), G(12), G(2), FB_RGB(150, 158, 175));  /* title */
+        /* a little bar chart on the slide, which is what a deck looks like */
+        rr(ox + G(8),  oy + G(14), G(3), G(3), FB_RGB(120, 170, 220));
+        rr(ox + G(13), oy + G(12), G(3), G(5), FB_RGB(120, 170, 220));
+        rr(ox + G(18), oy + G(10), G(3), G(7), FB_RGB(120, 170, 220));
+        rr(ox + G(15), oy + G(19), G(2), G(3), FB_RGB(120, 125, 140)); /* stand */
+        rr(ox + G(11), oy + G(21), G(10), G(1), FB_RGB(120, 125, 140));
+        rr(ox + G(4), oy + G(23), G(24), G(7), band);
+        frame(ox + G(4), oy + G(23), G(24), G(7), FB_RGB(140, 58, 12));
+        /* a P: a stem and a bowl */
+        rr(ox + G(10), oy + G(24), G(2), G(5), FB_RGB(255,255,255));
+        rr(ox + G(10), oy + G(24), G(7), G(2), FB_RGB(255,255,255));
+        rr(ox + G(15), oy + G(24), G(2), G(3), FB_RGB(255,255,255));
+        rr(ox + G(10), oy + G(26), G(7), G(1), FB_RGB(255,255,255));
+        break; }
+
     case PCI_GENERIC:
     default: {
         /* Any app that does not name a known emblem - notably one loaded from

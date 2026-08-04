@@ -165,6 +165,7 @@ static const struct { const char *name; void *addr; } kExports[] = {
     KX(uno_font_draw_styled), KX(uno_font_text_w_styled),
     KX(uno_font_height_px),   KX(uno_font_baseline_px), KX(uno_font_active),
     KX(uno_font_push), KX(uno_font_pop),
+    KX(uno_font_count), KX(uno_font_name),   /* UnoWord's Font combo */
     /* filesystem: the simple per-volume surface + the rich FAT one */
     KX(uno_fs_volumes), KX(uno_fs_volume_name), KX(uno_fs_list_begin),
     KX(uno_fs_list_get), KX(uno_fs_read), KX(uno_fs_read_at), KX(uno_fs_size),

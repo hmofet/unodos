@@ -320,9 +320,9 @@ static int app_icon(int a)
     if (a == EX_BROWSER) return PCI_BROWSER;
     if (a == EX_STUDIO)  return PCI_STUDIO;
     if (a == EX_PHOTOS)  return PCI_PHOTOS;
-    if (a == EX_UOWORD)  return PCI_GENERIC;
-    if (a == EX_UOCALC)  return PCI_GENERIC;
-    if (a == EX_UOSHOW)  return PCI_GENERIC;
+    if (a == EX_UOWORD)  return PCI_UOWORD;
+    if (a == EX_UOCALC)  return PCI_UOCALC;
+    if (a == EX_UOSHOW)  return PCI_UOSHOW;
     if (a == EX_USERAPP) return PCI_GENERIC;
     if (a == EX_PYAPP)   return PCI_GENERIC;
     if (a >= 0 && a < NNATIVE) return kNativeIcon[a];
@@ -2175,6 +2175,15 @@ static void open_app(int a)
     if (!g_built[a]) {
         if (a < NNATIVE) g_build[a](&g_win[a]);
         else             build_legacy(a);
+        /* A widget marked FILL is a declaration that it should occupy the
+         * window's content rect, and until now that only came true when the
+         * window was resized or its saved geometry restored - a freshly
+         * opened window kept whatever size the app guessed at build time.
+         * The Office apps guessed `w - 12, h - 28`, which is close but not
+         * exact, so a strip of DESKTOP showed through along the bottom and
+         * right edge of every one of them.  Reflow once here and the flag
+         * means what it says from the first frame. */
+        unoui_reflow_window(UI.theme, &g_win[a]);
         g_built[a] = 1;
     }
     if (!g_open[a]) {
