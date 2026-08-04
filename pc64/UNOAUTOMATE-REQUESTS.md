@@ -5544,3 +5544,28 @@ Two details worth knowing if you touch this:
     a second one onto the same int.
 
 Gate: `pc64/tools/switcher_anim_qemu.py`. `harness.py wm_d` still passes whole.
+
+## 2026-08-03 - CLAIM (toolkits/unoui lane): window open/close motion, and the
+## close box moved to the right
+
+Two things, by request. The last item on the animation list, plus a chrome
+change.
+
+**The close box moves to the RIGHT**, outboard of min/max, on the house theme
+only. New `unoui_metrics.closeright` (appended, 0 = the left, which is what
+every theme did before and what the Mac-lineage themes want on purpose); only
+`theme_aurora` sets it, so ps2/dreamcast and the eight retro themes are
+untouched. Geometry comes from one new `unoui_closebox_rect()` that the default
+painter, Aurora's painter and BOTH hit tests (window and MDI child) read, so
+the box cannot be clicked anywhere other than where it was drawn.
+
+**Opening animates for real; closing cannot.** A window rises 18 px into place
+over 130 ms - position only, never size, because widgets are laid out from the
+content origin and do not scale. Closing is a GHOST: `close_app()` tears the
+app down (a game's teardown, a `.UNO` module's `closed` hook, the Python
+runtime unloaded and `g_pyapp` set to 0) and only then removes the window, so
+keeping that window on screen for another eighth of a second would leave its
+canvas painter calling into an unloaded module. Teardown and removal are
+unchanged; a frame collapses toward the window's centre where it used to be.
+
+Gate: `pc64/tools/window_anim_qemu.py`; `harness.py wm_d` still passes whole.
