@@ -53,12 +53,40 @@ void pc64_dbg_mark_dirty(void);         /* full shell repaint next frame      */
  * full-width strip so a shorter message always erases a longer one; presented
  * immediately (the dirty-span present makes a one-strip paint cheap). */
 static int g_prog_shown;
+/* One-way latch: the boot-test phase is over and the shell owns the screen. */
+static int g_prog_closed;
 
 void uno_dbg_progress(const char *fmt, ...)
 {
     char msg[128];
     va_list ap;
     int n, sh = 20;
+    /* AFTER THE BOOT TESTS, THIS MUST NOT PAINT.
+     *
+     * Read what this function does: it draws a full-width strip over whatever
+     * is on screen, calls uno_pc64_present() SYNCHRONOUSLY, and its _done()
+     * partner then marks the ENTIRE shell dirty for a full repaint. That is
+     * the right trade during the blocking boot phase, when the shell loop that
+     * would normally repaint is precisely what is blocked - which is what the
+     * comment above says it is for.
+     *
+     * Nothing stopped it firing afterwards. netlog_sink() calls it for EVERY
+     * NET trace line, and the WiFi driver keeps emitting them long after the
+     * desktop is up: anything wanting the network re-runs the bring-up, and
+     * with no credentials staged each attempt logs its failure. URC's own
+     * RS_DOWN retry does this every ~5 s by calling pc64_net_up().
+     *
+     * So on a machine with no WIFI.CFG, every few seconds the desktop got a
+     * banner painted over it, a synchronous full present, and a full-screen
+     * repaint. Reported from metal exactly that way: "missing SSID key warning
+     * in debug overlay kept locking the UI - every time the message displayed
+     * it would interrupt and prevent mouse from moving". It is also the
+     * remaining half of the floaty/jumping cursor: the pointer was fine, the
+     * frame it was drawn in was being thrown away and rebuilt.
+     *
+     * The line still reaches the kernel log and NETLOG. Only the painting
+     * stops, and only once the phase that needs it has finished. */
+    if (g_prog_closed) return;
     if (uno_fb_w <= 0) return;             /* fb not up yet */
     n = snprintf(msg, sizeof msg, " BOOT TESTS   ");
     va_start(ap, fmt);
@@ -73,6 +101,11 @@ void uno_dbg_progress(const char *fmt, ...)
 
 void uno_dbg_progress_done(void)
 {
+    /* Every terminal path out of pc64_nettest_tick() reaches here, either
+     * directly or via nettest_finish(), so this is the one honest "the
+     * blocking phase is over" signal. Latch it: from here the shell repaints
+     * itself and the strip has no business on the screen. */
+    g_prog_closed = 1;
     if (!g_prog_shown) return;
     g_prog_shown = 0;
     pc64_dbg_mark_dirty();                 /* shell repaints over the strip */
