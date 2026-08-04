@@ -186,7 +186,7 @@ where QEMU can reach; metal-pending items are flagged.
   **S-LIBC-06**: a TRUNCATING `snprintf` HANGS pc64 (watchdog HG), open,
   not root-caused; the suite avoids executing it.
 
-### F14, Surface stalls forever on "Shutting down" (EFI_RESET_SHUTDOWN ignored)  ·  OS  ·  S2  ·  FIXED
+### F14, Surface stalls forever on "Shutting down" (EFI_RESET_SHUTDOWN ignored)  ·  OS  ·  S2  ·  REOPENED 2026-08-04
 The Surface Laptop Go completes its bounded run and reaches `stress: shutting
 down now`, but the firmware's `ResetSystem(EFI_RESET_SHUTDOWN)` is a no-op on
 it (it returns instead of powering off), so `uno_pc64_shutdown` fell through
@@ -197,6 +197,28 @@ to the `hlt` loop and the machine sat on the shutdown screen indefinitely.
   of ACPI-enable mode, so it works from the attached NO_ACPI_MODE context.
   QEMU still powers off via ResetSystem (never reaches the fallback), so no
   regression. Only reached on firmware that ignores EFI_RESET_SHUTDOWN.
+- **REOPENED 2026-08-04, and widened: RESTART hangs too.** Operator report from
+  the same machine - both Shut down and Restart freeze and it has to be held
+  down. The S5 fallback above is real and still right, but it only ever covered
+  power-off. **Restart had a fallback that was unreachable**: `power_down()`
+  called `uno_native_reset()`, which pulses CF9, pulses the i8042 and then
+  HALTS, so on a board that ignores both, execution stopped inside the helper
+  and everything after it was dead code. uACPI has exposed `uacpi_reboot()`
+  (the FADT reset register) all along and nothing called it.
+- **Fixed properly in `53d746ed`**: reset now walks CF9 -> i8042 -> FADT reset
+  using the non-terminal `_try` form so each failure falls through, with the
+  halt at the bottom. Every step logs, so a boot log names the mechanism that
+  was refused instead of ending mid-shutdown.
+- **And the halt now SAYS what happened.** The old path kept the last drawn
+  frame, so "Shutting down..." sat there forever - which to somebody standing
+  at the machine is indistinguishable from a crash, and is why this was
+  reported as a freeze rather than as a failed shutdown. The message is drawn
+  BEFORE the terminal S5 call, because S5 returns with interrupts down and
+  anything drawn after it runs on a machine that cannot be interrupted.
+- **The lesson worth keeping:** F14 was marked FIXED on the strength of a
+  mechanism being *added*, without checking it was *reached*. It was reached
+  for power-off and not for reset, and nobody had tried Restart on the machine.
+  Metal-pending again until the Surface confirms both.
 
 ### F15, splash progress text on all four loading bars (+ post-bar-4 stages)  ·  UX / DIAG  ·  DONE
 Operator request after the MacBook hung at the FULL loading bar with no
