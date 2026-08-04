@@ -5491,3 +5491,28 @@ Shape, so nobody duplicates it:
 
 Out of scope: animating anything else (window open/close, the launcher, the
 Alt-Tab switcher). One consumer at a time.
+
+## 2026-08-03 - CLAIM (toolkits/unoui lane): animating the Start menu
+
+Reopening scope I closed myself. The WM-snap claim above said "animating
+anything else (window open/close, the launcher, the Alt-Tab switcher)" was out
+of scope, one consumer at a time; the launcher is now in, by request. Window
+open/close and Alt-Tab remain out.
+
+The Start menu RISES from behind the taskbar over 110 ms instead of appearing.
+Shorter than a window snap (`unoui_snap_ms` is 130) because a menu is something
+you are waiting for before you can act.
+
+Two things that make this safe rather than merely pretty:
+
+  - the window's FINAL geometry is set before the first frame and the animation
+    runs from a start rect backwards to it, so the keyboard path - Ctrl-Esc,
+    arrows, Enter, which is how every harness scenario in `harness.py` drives
+    this menu - never depends on the animation having finished;
+  - the menu is an ordinary window and the taskbar is `UI_WIN_TOP`, so it is
+    already drawn behind the bar and genuinely emerges from it. No clipping, no
+    z-order change.
+
+Opening only. Closing stays instant: you close a menu because you want to see
+what is behind it, and animating that out would mean keeping a dead window in
+the z-order and deciding what a click on it means.
