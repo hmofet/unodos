@@ -403,7 +403,7 @@ enum { ID_THEME = 1, ID_RES, ID_DARK, ID_WRAP, ID_VOL, ID_SCALE, ID_ABOUT,
        ID_DFLOW, ID_DSORT, ID_PSPEED, ID_DSNAP, ID_DLOCK, ID_DARRANGE,
        ID_LIC, ID_ACCT, ID_REMOTE, ID_WALL, ID_CLOCKFMT, ID_BATTMODE,
        ID_CPTAB, ID_NETREFRESH, ID_NETRENEW, ID_SESSION,
-       ID_WIFISCAN, ID_WIFILIST, ID_WIFIPSK, ID_WIFIJOIN,
+       ID_WIFISCAN, ID_WIFILIST, ID_WIFIPSK, ID_WIFIJOIN, ID_WIFIFORGET,
        ID_START = 90, ID_SHUTDOWN = 91, ID_RESTART = 92,
        ID_LAUNCH0 = 100,                  /* desktop icons + launcher: +app     */
        ID_TASK0   = 200 };                /* taskbar window buttons: +app       */
@@ -491,7 +491,11 @@ static void rebuild_ctrl_window(void);
 #define CP_WIFI_MAX 16          /* networks kept from a scan (strongest first) */
 #define CP_WIFI_ROWS 6          /* rows of the network list shown at once      */
 static iwl_ap_t    g_cp_aps[CP_WIFI_MAX];
-static char        g_cp_ap_lbl[CP_WIFI_MAX][44];
+/* 44 was too small and always had been: a 32-character SSID plus " -54 dBm",
+ * " ch 11" and the "saved" marker is 56 characters, so a long SSID wrote past
+ * the end of its row into the next one.  Sized for the worst case now, and the
+ * builder below is bounded regardless. */
+static char        g_cp_ap_lbl[CP_WIFI_MAX][72];
 static const char *g_cp_ap_ptr[CP_WIFI_MAX];
 static int         g_cp_ap_n, g_cp_ap_sel;
 /* The network list SCROLLS (unoui_add_list + wheel / scrollbar / arrow keys),
@@ -526,22 +530,73 @@ static void cp_wifi_note(const char *s)
     uno_pc64_present();
 }
 
+/* is this network already remembered?  (asks for the passphrase without
+ * copying any of it out) */
+static int cp_wifi_known(const char *ssid)
+{ char probe[1]; return ssid && ssid[0] && iwl_saved_psk(ssid, probe, 1); }
+
+/* the SSID of the highlighted row, or NULL */
+static const char *cp_wifi_sel_ssid(void)
+{
+    if (g_cp_ap_n <= 0 || g_cp_ap_sel < 0 || g_cp_ap_sel >= g_cp_ap_n) return 0;
+    return g_cp_aps[g_cp_ap_sel].ssid[0] ? g_cp_aps[g_cp_ap_sel].ssid : 0;
+}
+
+/* A remembered network needs no password typed: put the stored one in the
+ * field when its row is selected, so Join is one click.  Written straight into
+ * the live text model - selecting a row deliberately does NOT rebuild the
+ * window, so nothing else would pick the change up. */
+static void cp_wifi_fill_psk(void)
+{
+    const char *ssid = cp_wifi_sel_ssid();
+    if (!ssid) return;
+    if (!iwl_saved_psk(ssid, g_cp_psk, (int)sizeof g_cp_psk)) return;
+    g_cp_psk_t.len = (int)strlen(g_cp_psk);
+    g_cp_psk_t.caret = g_cp_psk_t.sel = g_cp_psk_t.len;
+    g_cp_psk_t.scroll_x = 0;
+}
+
+/* Forget the selected network: drop it from the store and clear the field, so
+ * the next join asks for the password again.  This is the only way to correct
+ * a remembered passphrase after the AP's changed. */
+static void cp_wifi_forget(void)
+{
+    const char *ssid = cp_wifi_sel_ssid();
+    if (!ssid) { cp_wifi_note("Pick a network first."); return; }
+    iwl_saved_forget(ssid);
+    { int i; for (i = 0; i < (int)sizeof g_cp_psk; i++) g_cp_psk[i] = 0; }
+    g_cp_psk_t.len = g_cp_psk_t.caret = g_cp_psk_t.sel = 0;
+    g_cp_psk_t.scroll_x = 0;
+    { char msg[120]; char *p = ap_str(msg, "Forgotten \"");
+      p = ap_str(p, ssid); p = ap_str(p, "\" - it will ask for the password again.");
+      *p = 0; cp_wifi_note(msg); }
+    rebuild_ctrl_window();
+}
+
 static void cp_wifi_scan(void)
 {
     int i;
     cp_wifi_note("Scanning for networks...");
     g_cp_ap_n = iwl_scan_aps(g_cp_aps, CP_WIFI_MAX);
     for (i = 0; i < g_cp_ap_n; i++) {
-        char *p = ap_str(g_cp_ap_lbl[i], g_cp_aps[i].ssid);
+        char *p = g_cp_ap_lbl[i];
+        const char *s = g_cp_aps[i].ssid;
+        int k = 0;
+        while (*s && k < 33) { *p++ = *s++; k++; }     /* the SSID, hard-bounded */
         p = ap_str(p, "   ");
         if (g_cp_aps[i].rssi) { p = ap_int(p, g_cp_aps[i].rssi); p = ap_str(p, " dBm"); }
         p = ap_str(p, "   ch "); p = ap_int(p, g_cp_aps[i].chan);
+        /* mark the ones this machine already knows the password for, so it is
+         * obvious which rows are one click from being connected */
+        if (cp_wifi_known(g_cp_aps[i].ssid)) p = ap_str(p, "   saved");
         *p = 0;
         g_cp_ap_ptr[i] = g_cp_ap_lbl[i];
     }
     g_cp_ap_sel = 0;
     if (g_cp_ap_n) {
-        cp_wifi_note("Pick a network, type its password, then Join.");
+        cp_wifi_fill_psk();                  /* remembered? the field is filled */
+        cp_wifi_note("Pick a network, type its password, then Join. "
+                     "A network marked \"saved\" needs no password.");
     } else {
         /* An empty scan almost never means "the air is empty" - it means the
          * radio never came up, and the driver already knows why. Guessing
@@ -775,8 +830,23 @@ static void build_ctrl(unoui_window *w)
               } }
             x = unoui_add_edit(w, 8 + pw, y, cw - pw - 16, &g_cp_psk_t); x->id = ID_WIFIPSK;
             y += row;
-            x = unoui_add_button(w, 8, y, 110, "Scan", 0); x->id = ID_WIFISCAN;
-            x = unoui_add_button(w, 126, y, 110, "Join", 0); x->id = ID_WIFIJOIN;
+            /* buttons sized to their labels and flowed left to right (the house
+             * idiom), not pinned at 8/126/244 - three fixed 110 px slots ran
+             * past the panel the moment the UI scale went up */
+            { int bs = fb_text_w("Scan")   + 34;
+              int bj = fb_text_w("Join")   + 34;
+              int bf = fb_text_w("Forget") + 34;
+              int bx = 8;
+              x = unoui_add_button(w, bx, y, bs, "Scan", 0); x->id = ID_WIFISCAN;
+              bx += bs + 8;
+              x = unoui_add_button(w, bx, y, bj, "Join", UI_F_DEFAULT); x->id = ID_WIFIJOIN;
+              bx += bj + 8;
+              /* Forget only exists once something is remembered, and it acts on
+               * the highlighted row - the only way to correct a stored
+               * passphrase the AP has since changed. */
+              if (iwl_saved_count() > 0 && bx + bf + 8 <= cw) {
+                  x = unoui_add_button(w, bx, y, bf, "Forget", 0); x->id = ID_WIFIFORGET;
+              } }
             y += bh + 6;
             unoui_add_label(w, 8, y + lofs, g_cp_wifi_msg);
             y += fh + 8;
@@ -4208,9 +4278,11 @@ static void on_action(const unoui_action *a)
                            g_cp_ap_sel = a->value;
                            cp_wifi_target_label();  /* in place: no rebuild, so
                                                        the list keeps its view */
+                           cp_wifi_fill_psk();      /* remembered? type it for them */
                        } break;
     case ID_WIFISCAN:  cp_wifi_scan(); break;
     case ID_WIFIJOIN:  cp_wifi_join(); break;
+    case ID_WIFIFORGET: cp_wifi_forget(); break;
     case ID_WIFIPSK:   break;                               /* typing; nothing to do */
     case ID_SESSION: g_session_restore = a->value ? 1 : 0; session_save(); break;
     case ID_PSPEED: uno_pc64_pointer_speed(a->value); break;
