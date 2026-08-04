@@ -5253,3 +5253,13 @@ URC re-dials within a few seconds and recovers on its own. Benign, and a
 production image has no net test, but a debug box shows one `replacing stale
 link` right after the desktop appears. Not worth a fix unless it starts costing
 a gate a retry.
+
+**Trap for anyone laying out a unoui window:** `unoui_window_init` takes the
+**OUTER** width. The frame and the theme's content padding come out of it on
+both sides, and widget x is relative to the CONTENT area, so sizing a window to
+its text leaves every line `2 * (frame_w + pad)` too long. The first fix for
+the clipping above still overflowed for exactly this reason. Work in content
+width and add `2 * (th->m.frame_w + th->m.pad)` at the end. Also note
+`fb_set_clip` does NOT clip text, so an overlong label draws past the frame
+instead of being cut off at it - truncate explicitly (`fit_px` in
+pc64_accounts.c).
