@@ -227,6 +227,20 @@ static int nn_recv(void *c, void *p, int cap) { (void)c;(void)p;(void)cap; retur
 static int nn_link(void *c) { (void)c; return 1; }
 static uno_nic_t g_nullnic = { 0, nn_send, nn_recv, nn_link };
 
+/* ---- S-WIFI-01: the remembered-network store round-trips through disk -----
+ * The store is otherwise reachable only through a real join on a machine with
+ * an Intel card, which is how an inverted success test in saved_write() shipped
+ * and then got read on metal as "the feature is broken". This reaches it
+ * headlessly. */
+static void test_wifistore(void)
+{
+    int r = iwl_saved_selftest();
+    if (r == -1) { SKIP("S-WIFI-01", "store already holds the maximum, "
+                                     "a test entry would evict a real one"); return; }
+    if (r == 0)  { OK("S-WIFI-01"); return; }
+    BAD("S-WIFI-01", "remembered-network store round trip failed at step %d", r);
+}
+
 static void test_net(void)
 {
     static const unsigned char mac[6] = { 2, 0, 0, 0, 0, 1 };
@@ -1121,6 +1135,7 @@ SP_SUITE(sp_unomedia, test_unomedia())
 SP_SUITE(sp_editor,   test_editor(*(int *)ctx))
 SP_SUITE(sp_music,    test_music(*(int *)ctx))
 SP_SUITE(sp_studio,   test_studio(*(int *)ctx))
+SP_SUITE(sp_wifistore,test_wifistore())
 SP_SUITE(sp_net,      test_net())
 SP_SUITE(sp_netlive,  test_netlive())
 SP_SUITE(sp_inter,    test_interactive())
@@ -1132,6 +1147,7 @@ static void sp_register(void)
     if (did) return;
     did = 1;
     unoauto_test_register("storage",     "spec:fat",         sp_fat);
+    unoauto_test_register("storage",     "spec:wifistore",   sp_wifistore);
     unoauto_test_register("system",      "spec:libc",        sp_libc);
     unoauto_test_register("system",      "spec:font",        sp_font);
     unoauto_test_register("system",      "spec:js",          sp_js);
