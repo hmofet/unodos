@@ -19,6 +19,13 @@ void uno_fat_init(void);
 void uno_fat_sync(void);
 void uno_fat_remount(void);
 int  uno_fat_native_eligible(void);
+/* The same question with its working shown: which volume carries the system,
+ * which native storage controllers PCI can see, and whether one of them is the
+ * one the system is actually on.  PCI config reads only - nothing is mapped
+ * and no controller register is touched, so it is safe while the firmware
+ * still owns them.  Writes at most `cap`-1 bytes plus a NUL; returns the
+ * length.  Read this BEFORE detaching a machine you have just installed to. */
+int  uno_fat_native_status(char *buf, int cap);
 
 int         uno_fat_volumes(void);
 const char *uno_fat_label(int vol);              /* 11-char volume label / ""  */

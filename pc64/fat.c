@@ -318,6 +318,95 @@ int uno_fat_native_eligible(void)
     return 0;
 }
 
+/* ---- the same question, answered out loud ---------------------------------
+ * uno_fat_native_eligible() returns a bit, and a bit is not a diagnosis. When
+ * it says no, try_detach() refuses with "no native-reachable volume carries
+ * the system" and there the trail ends: you cannot tell whether the controller
+ * the system sits on has no native driver at all, or has one that could not
+ * find it on PCI, or is simply not where the system lives. On the Surface
+ * Laptop Go - whose whole detach plan is "install to the internal eMMC so the
+ * SDHCI driver owns the boot volume" - those are three different jobs, and
+ * telling them apart currently costs a detach, which is the one step with no
+ * way back.
+ *
+ * So say it while still attached, and say it in a line somebody can read off a
+ * screen. Everything here is PCI CONFIG SPACE ONLY: which functions exist and
+ * what class they claim. Nothing is mapped and no controller register is
+ * touched, because the firmware still owns these devices and reprogramming one
+ * underneath it has already corrupted an installer clone mid-write once
+ * (blkdev.c). Reading the config header is what the firmware itself expects
+ * every OS to do.
+ *
+ * Bounded, no allocation, safe to call every frame. */
+static char *nat_str(char *p, const char *end, const char *s)
+{ while (p < end && *s) *p++ = *s++; return p; }
+static char *nat_hex2(char *p, const char *end, unsigned v)
+{ static const char h[] = "0123456789abcdef";
+  if (p < end) *p++ = h[(v >> 4) & 0xF];
+  if (p < end) *p++ = h[v & 0xF];
+  return p; }
+
+int uno_fat_native_status(char *buf, int cap)
+{
+    static const unsigned char cls[3][2] = { { 0x01, 0x06 },   /* AHCI  */
+                                             { 0x01, 0x08 },   /* NVMe  */
+                                             { 0x08, 0x05 } }; /* SDHCI */
+    static const char *nm[3] = { "ahci", "nvme", "sdhci" };
+    char *p = buf, *end;
+    pci_dev ctl;
+    int c, i, sysvol = -1, found = 0;
+
+    if (!buf || cap < 2) return 0;
+    end = buf + cap - 1;
+
+    /* WHERE THE SYSTEM IS. Not "a volume" - the one carrying a UnoDOS
+     * BOOTX64.EFI, which is the only volume the gate cares about. */
+    for (i = 0; i < g_nvol; i++)
+        if (vol_carries_system(i)) { sysvol = i; break; }
+    if (sysvol < 0) { p = nat_str(p, end, "sys vol: none found"); *p = 0;
+                      return (int)(p - buf); }
+
+    p = nat_str(p, end, "sys on ");
+    p = nat_str(p, end, g_vol[sysvol].dev ? g_vol[sysvol].dev->name : "?");
+    if (g_vol[sysvol].dev && g_vol[sysvol].dev->pci_dev >= 0) {
+        p = nat_str(p, end, " @");
+        p = nat_hex2(p, end, (unsigned)g_vol[sysvol].dev->pci_dev);
+        if (p < end) *p++ = '.';
+        p = nat_hex2(p, end, (unsigned)g_vol[sysvol].dev->pci_fn);
+    }
+
+    /* WHAT COULD RECLAIM IT. Every storage class we have a driver for, whether
+     * or not it is the one the system is on - a controller that exists but
+     * does not match is a completely different problem from one that is not
+     * there, and the reader needs to see both. */
+    p = nat_str(p, end, "  native:");
+    for (c = 0; c < 3; c++) {
+        if (!pci_find_class(cls[c][0], cls[c][1], &ctl)) continue;
+        found++;
+        if (p < end) *p++ = ' ';
+        p = nat_str(p, end, nm[c]);
+        if (p < end) *p++ = '@';
+        p = nat_hex2(p, end, (unsigned)ctl.dev);
+        if (p < end) *p++ = '.';
+        p = nat_hex2(p, end, (unsigned)ctl.fn);
+        if (g_vol[sysvol].dev && g_vol[sysvol].dev->pci_dev == ctl.dev &&
+            g_vol[sysvol].dev->pci_fn == ctl.fn)
+            p = nat_str(p, end, "*");          /* this is the one, star it */
+    }
+    if (!found) p = nat_str(p, end, " none on PCI");
+
+    /* USB is not a PCI class match (see the note in native_eligible above), so
+     * it gets its own word or the line reads as a flat "no" on the very boot
+     * shape the fleet actually uses. */
+    if (g_vol[sysvol].dev && g_vol[sysvol].dev->is_boot && uno_usbboot_native_ok())
+        p = nat_str(p, end, "  usbmsc*");
+
+    p = nat_str(p, end, uno_fat_native_eligible() ? "  -> reclaimable"
+                                                  : "  -> STRANDED");
+    *p = 0;
+    return (int)(p - buf);
+}
+
 int uno_fat_volumes(void) { return g_nvol; }
 const char *uno_fat_label(int vol)  { return (vol >= 0 && vol < g_nvol) ? g_vol[vol].label : ""; }
 unsigned int uno_fat_serial(int vol){ return (vol >= 0 && vol < g_nvol) ? g_vol[vol].serial : 0; }
