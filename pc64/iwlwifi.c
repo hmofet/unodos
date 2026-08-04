@@ -546,16 +546,18 @@ static void choose_firmware(void)
  * the documented name; WIFI.TXT is accepted too - it is what the flasher's
  * developer-options folder copy stages from the NAS creds template. */
 static char g_cfgname[12];
-/* true if the named file on `vol` contains an "ssid=" line (real credentials,
- * not just a stress-only DEBUG.CFG). */
+/* true if the named file on `vol` carries a real `ssid=` (credentials), rather
+ * than merely existing - a stress-only DEBUG.CFG, or a starter file whose only
+ * ssid= is inside a '#' comment, must both read as "no credentials here".
+ *
+ * Defined in terms of the SAME parser read_config() uses (see cfg_parse below):
+ * this used to be a separate 255-byte raw byte search, and the two disagreeing
+ * about the same file is what stopped a correctly-provisioned stick joining. */
+static int cfg_parse(int vol, const char *name,
+                     char *ssid, int ssidcap, char *psk, int pskcap);
 static int file_has_ssid(int vol, const char *name)
 {
-    static u8 b[256]; long n = uno_fs_read(vol, name, b, (long)sizeof b - 1); int i;
-    if (n <= 0) return 0;
-    for (i = 0; i + 5 <= n; i++)
-        if (b[i]=='s' && b[i+1]=='s' && b[i+2]=='i' && b[i+3]=='d' && b[i+4]=='=')
-            return 1;
-    return 0;
+    return cfg_parse(vol, name, 0, 0, 0, 0) == 0;
 }
 /* An 8.3 firmware name forced from the config file: `fw=IWLAX20B.UCO` in
  * WIFI.CFG / WIFI.TXT / DEBUG.CFG on any mounted volume.
@@ -3007,12 +3009,39 @@ static void mvm_scan_cfg(void)
  * ===================================================================== */
 static char g_cfg_ssid[36];
 static char g_cfg_psk[80];
-static int read_config(int vol)
+/* ONE parser for the credentials file, used both to TEST a candidate volume and
+ * to READ the values off it.
+ *
+ * There used to be two. file_has_ssid() peeked at the first 255 bytes and did a
+ * raw byte search for "ssid="; read_config() read 511 and parsed properly,
+ * skipping '#' comments. Two parsers over one file format is a divergence
+ * waiting to happen, and it happened: the NAS credentials template documents
+ * itself in a 434-byte comment header, so `ssid=` sits at byte 434 - past the
+ * first parser's window and inside the second's. The log said both things at
+ * once (metal, SURFGO 2026-08-04):
+ *
+ *   plan: ... creds:WIFI.TXT (vol 1)                  <- the planner found it
+ *   wifi: FAIL no usable credentials (cfg vol -1)     <- the driver did not
+ *
+ * so a stick with perfectly good credentials could not join, and the failure
+ * named the file it was refusing to read.
+ *
+ * `ssid`/`psk` may be NULL when the caller only wants to know whether usable
+ * credentials are present. Returns 0 if an ssid was found, -1 otherwise.
+ *
+ * A commented-out example (`# ssid=YourNetwork`, which the starter file
+ * tools/uno-wifi-fw.py writes) must NOT read as credentials - that is F13's
+ * shadowing trap in a different costume, and skipping '#' lines is what stops
+ * it. The raw search never did. */
+#define CFG_MAX 4096
+static int cfg_parse(int vol, const char *name,
+                     char *ssid, int ssidcap, char *psk, int pskcap)
 {
-    static u8 buf[512];
-    long n = uno_fs_read(vol, g_cfgname[0] ? g_cfgname : "WIFI.CFG", buf, sizeof buf - 1);
-    int i = 0;
-    g_cfg_ssid[0] = g_cfg_psk[0] = 0;
+    static u8 buf[CFG_MAX];
+    long n = uno_fs_read(vol, name, buf, (long)sizeof buf - 1);
+    int i = 0, got = 0;
+    if (ssid) ssid[0] = 0;
+    if (psk)  psk[0]  = 0;
     if (n <= 0) return -1;
     buf[n] = 0;
     while (i < n) {
@@ -3025,12 +3054,24 @@ static int read_config(int vol)
             while (i<n && buf[i]!='\n' && buf[i]!='\r' && v<79) val[v++]=buf[i++];
             while (v>0 && (val[v-1]==' '||val[v-1]=='\t')) v--;
             val[v]=0;
-            if (!strcmp(key,"ssid")) strcpy(g_cfg_ssid, val);
-            else if (!strcmp(key,"psk")) strcpy(g_cfg_psk, val);
+            if (!strcmp(key,"ssid")) {
+                got = val[0] != 0;
+                if (ssid && got) { strncpy(ssid, val, (size_t)ssidcap - 1);
+                                   ssid[ssidcap - 1] = 0; }
+            } else if (!strcmp(key,"psk") && psk) {
+                strncpy(psk, val, (size_t)pskcap - 1); psk[pskcap - 1] = 0;
+            }
         }
         while (i<n && buf[i]!='\n') i++;
     }
-    return g_cfg_ssid[0] ? 0 : -1;
+    return got ? 0 : -1;
+}
+
+static int read_config(int vol)
+{
+    return cfg_parse(vol, g_cfgname[0] ? g_cfgname : "WIFI.CFG",
+                     g_cfg_ssid, (int)sizeof g_cfg_ssid,
+                     g_cfg_psk,  (int)sizeof g_cfg_psk);
 }
 
 /* =====================================================================
