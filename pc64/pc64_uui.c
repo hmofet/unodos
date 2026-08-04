@@ -935,8 +935,19 @@ static void build_ctrl(unoui_window *w)
          * hint pinned at 248 cut all three at a larger UI scale */
         { int br = fb_text_w("Refresh")  + 26;
           int bn = fb_text_w("Renew IP") + 26;
-          const char *hint = up && net_dhcp_done() ? "DHCP is automatic."
-                                                   : "No lease? Try Renew IP.";
+          /* THE HINT MUST NOT SEND YOU AT A BUTTON THAT CANNOT WORK.
+           *
+           * This tested `up && net_dhcp_done()` and said "No lease? Try Renew
+           * IP." for everything else - including no link at all, which is the
+           * state this machine is in whenever no network has been joined,
+           * because the boot-path WiFi bring-up deliberately stops at firmware
+           * ALIVE (the F12 boundary in iwlwifi.c) and only a join from the
+           * pane below goes further. So the panel advised a 20-second DHCP
+           * that had nothing to send on, and then reported that the network
+           * did not answer. Reported from metal in those words. */
+          const char *hint = !up            ? "No link yet - join a network below."
+                           : net_dhcp_done() ? "DHCP is automatic."
+                                             : "No lease? Try Renew IP.";
           int hx = 8 + br + 8 + bn + 12;
           x = unoui_add_button(w, 8, y, br, "Refresh", 0); x->id = ID_NETREFRESH;
           x = unoui_add_button(w, 8 + br + 8, y, bn, "Renew IP", 0);
@@ -4903,6 +4914,16 @@ static void on_action(const unoui_action *a)
     case ID_NETREFRESH: rebuild_ctrl_window(); break;        /* re-read live net status */
     case ID_NETRENEW: {                                     /* ask for a lease again */
         int i;
+        /* NO LINK MEANS NO ANSWER, AND SAYING "the network did not answer" IS
+         * BLAMING THE WRONG END. DHCP broadcasts a DISCOVER and waits; with
+         * nothing associated it goes nowhere, so twenty seconds later the
+         * panel accused the network of being silent when in fact this machine
+         * had never spoken to it. Check first and say which end is at fault. */
+        if (!net_link()) {
+            cp_wifi_note("No link - join a network first (the panel below).");
+            rebuild_ctrl_window();
+            break;
+        }
         cp_wifi_phase("Asking the network for an address (DHCP)", 0);
         net_dhcp_start();
         for (i = 0; i < 4000 && !net_dhcp_done(); i++) {
