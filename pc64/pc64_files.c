@@ -461,9 +461,23 @@ void pc64_files_build(unoui_window *w)
     const unoui_theme *t = pc64_shell_theme();
     if (ww < 470) ww = 470; if (ww > 860) ww = 860;
     if (wh < 320) wh = 320; if (wh > wah - 24) wh = wah - 24;
-    int need1, need2;
+    int need;
+    /* THE TOOLBAR WRAPS - see the same note in pc64_write.c, which had the
+     * identical shape and the identical fault. Two FIXED rows, and the window
+     * grown to fit the wider of them, works until the wider of them is bigger
+     * than the screen; at a 150-200% UI scale the layout audit found Refresh,
+     * Two panes and the whole Name box past the right edge and cut at the frame
+     * on a 640x400 desktop.
+     *
+     * Width first, then flow into it, starting a new row when the next control
+     * would not fit. `need` is the widest SINGLE control - what the window can
+     * no longer be narrower than - not the widest row. */
+#define WRAP(need_) do { \
+        if (bx && bx + (need_) > cw) { bx = 0; y += bh + 4; } \
+        if ((need_) > need) need = (need_); } while (0)
 #define FBTN(label, wid, keep) do { \
         int bw_ = fb_text_w(label) + 16; \
+        WRAP(bw_); \
         x = unoui_add_button(w, bx, y, bw_, label, 0); x->id = (wid); \
         keep; bx += bw_ + 4; } while (0)
     unoui_window_init(w, "Files", 120, 64, ww, wh);
@@ -472,8 +486,10 @@ void pc64_files_build(unoui_window *w)
     for (i = 0; i < fm_nvols; i++) fm_vols[i] = uno_fs_volume_name(i);
     if (fm_p[0].vol >= fm_nvols) fm_p[0].vol = 0;
     if (fm_p[1].vol >= fm_nvols) fm_p[1].vol = fm_nvols > 1 ? 1 : 0;
-    /* toolbar row 1: navigation + volume pickers (measured flow layout) */
-    y = 2; bx = 0;
+    /* toolbar: navigation, volume pickers, then the file operations - one flow
+     * that wraps, rather than two rows that cannot */
+    y = 2; bx = 0; need = 0;
+    cw = ww - 2 * t->m.frame_w - 2 * t->m.pad;   /* settled BEFORE the flow */
     FBTN("Up", FID_UP, (void)0);
     FBTN("Open", FID_OPEN, (void)0);
     /* Wide enough for the widest volume name actually mounted, not for six M's:
@@ -486,43 +502,46 @@ void pc64_files_build(unoui_window *w)
           { int t2 = fb_text_w(fm_vols[k]); if (t2 > dw) dw = t2; }
       dw += 26;
       if (dw > 200) dw = 200;
+      WRAP(dw);
       x = unoui_add_dropdown(w, bx, y, dw, fm_vols, fm_nvols, fm_p[0].vol);
       x->id = FID_VOL_L; fm_dd_l = x; bx += dw + 4;
+      WRAP(dw);
       x = unoui_add_dropdown(w, bx, y, dw, fm_vols, fm_nvols, fm_p[1].vol);
       x->id = FID_VOL_R; fm_dd_r = x; (void)fm_dd_r; bx += dw + 4; }
     { int bw_ = fb_text_w("Two panes") + 16;
+      WRAP(bw_);
       x = unoui_add_button(w, bx, y, bw_, fm_two ? "One pane" : "Two panes", 0);
       x->id = FID_TWOPANE; fm_bt_two = x; bx += bw_ + 4; }
     FBTN("Refresh", FID_REFRESH, (void)0);
-    need1 = bx;
-    y += bh + 4;
-    /* toolbar row 2: file operations + name box */
-    bx = 0;
+    /* the file operations start their own row: they act on the selection, and
+     * running them straight on from the navigation controls reads as one bar */
+    y += bh + 4; bx = 0;
     FBTN("Folder+", FID_MKDIR, (void)0);
     FBTN("Rename", FID_RENAME, (void)0);
     FBTN("Delete", FID_DELETE, (void)0);
     FBTN("Copy", FID_COPY, (void)0);
     FBTN("Move", FID_MOVE, (void)0);
-    unoui_add_label(w, bx, y + (ch - fh) / 2, "Name:"); bx += fb_text_w("Name:") + 8;
-    need2 = bx + 80;                          /* name box wants >= 80 px */
-    /* the window must fit the wider toolbar row */
-    { int need = (need1 > need2 ? need1 : need2)
-                 + 2 * t->m.frame_w + 2 * t->m.pad;
-      if (ww < need) ww = need;
-      if (ww > waw - 8) ww = waw - 8;
-      w->r.w = ww; }
-    cw = ww - 2 * t->m.frame_w - 2 * t->m.pad;
-    unoui_text_init(&fm_name_t, fm_name, sizeof fm_name, 0);
-    { int fw = cw - bx; if (fw < 60) fw = 60;
+    /* Name: label + box travel together, and take the rest of whatever row
+     * they land on - never less than 60 px of it. */
+    { int lw = fb_text_w("Name:") + 8;
+      int fw;
+      WRAP(lw + 60);
+      unoui_add_label(w, bx, y + (ch - fh) / 2, "Name:"); bx += lw;
+      fw = cw - bx; if (fw < 60) fw = 60;
+      unoui_text_init(&fm_name_t, fm_name, sizeof fm_name, 0);
       x = unoui_add_edit(w, bx, y, fw, &fm_name_t); x->id = FID_NAME; }
     y += ch + 6;
 #undef FBTN
+#undef WRAP
     /* the panes fill the rest */
     x = unoui_add_canvas(w, 0, y, cw, 100, &fm_canvas);
     unoui_widget_fill(x);
     fm_canvas_wi = w->nw - 1;
     unoui_reflow_window(t, w);
-    w->min_w = (need1 > need2 ? need1 : need2) + 2 * t->m.frame_w + 2 * t->m.pad;
+    /* the widest single control, not the widest row: the toolbar wraps, so a
+       narrow window costs rows rather than cut-off buttons */
+    w->min_w = need + 16 + 2 * t->m.frame_w + 2 * t->m.pad;
+    if (w->min_w > w->r.w) w->min_w = w->r.w;
     w->min_h = 240;
     w->flags |= UI_WIN_RESIZE;
     pane_refresh(&fm_p[0]);
