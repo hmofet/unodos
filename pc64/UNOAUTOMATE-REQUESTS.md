@@ -5516,3 +5516,31 @@ Two things that make this safe rather than merely pretty:
 Opening only. Closing stays instant: you close a menu because you want to see
 what is behind it, and animating that out would mean keeping a dead window in
 the z-order and deciding what a click on it means.
+
+## 2026-08-03 - CLAIM (toolkits/unoui lane): the Alt-Tab switcher highlight
+
+The third and last of the three things the WM-snap claim listed as out of
+scope, now in by request. Window open/close remains out.
+
+What animates is the SELECTION HIGHLIGHT, not the overlay. The overlay appears
+once per switch and is already the thing you are looking at; the highlight
+moves on every press, and a strip of near-identical cells is exactly the case
+where a jump makes you re-read the whole row to find where you are. It slides
+between cells over 90 ms.
+
+Entirely inside `pc64_uui.c` - `sw_draw` gains one tweened x and draws the
+highlight once, outside the per-cell loop, since it can now sit between two
+cells. No unoui change.
+
+Two details worth knowing if you touch this:
+
+  - which label reads as selected follows the HIGHLIGHT (the nearest cell to
+    where it actually is), not `g_sw_sel`. Using `g_sw_sel` would flip the
+    destination's text to `accent_text` while the accent is still travelling,
+    so for most of the slide the wrong label is the light one on the wrong
+    background;
+  - held Alt-Tab steps faster than 90 ms, so re-aiming mid-slide is the normal
+    case, not the edge case. It frees the tween in flight rather than starting
+    a second one onto the same int.
+
+Gate: `pc64/tools/switcher_anim_qemu.py`. `harness.py wm_d` still passes whole.
