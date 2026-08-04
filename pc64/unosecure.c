@@ -215,9 +215,34 @@ static int ct_eq(const unsigned char *a, const unsigned char *b, int n)
 }
 
 /* ---- entropy for salts: RDRAND if present, else a whitened TSC mix -------- */
+/* RDRAND is NOT a universal instruction, and a CPU without it does not
+ * politely return carry-clear - it takes an INVALID OPCODE fault.  This code
+ * was written as though a bounded retry could ride out a missing DRNG, so on
+ * any pre-Ivy-Bridge machine, and on QEMU's default `qemu64` model, creating
+ * the first account faulted the OS at #UD inside gen_random.  Metal-equivalent
+ * proof: a plain QEMU boot, "Create the first administrator", Enter, reset.
+ *
+ * CPUID.01H:ECX[30] is the only safe way to ask, and it is asked ONCE - the
+ * answer cannot change while the machine is running, and the check must not
+ * sit inside the retry loop it guards.  tls_entropy.c has always done this;
+ * unosecure simply never did. */
+static unsigned cpuid_ecx1(void)
+{
+    unsigned a, b, c, d;
+    __asm__ volatile ("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d)
+                              : "a"(1), "c"(0));
+    return c;
+}
+static int have_rdrand(void)
+{
+    static int cached = -1;
+    if (cached < 0) cached = (int)((cpuid_ecx1() >> 30) & 1u);
+    return cached;
+}
 static int rdrand64(unsigned long long *v)
 {
     unsigned char ok;
+    if (!have_rdrand()) return 0;        /* no DRNG: fall through to the TSC path */
     __asm__ volatile ("rdrand %0; setc %1" : "=r"(*v), "=qm"(ok));
     return ok;
 }
@@ -235,6 +260,7 @@ static void gen_random(unsigned char *out, int n)
         unsigned long long v;
         unsigned char blk[32];
         int t = 8;
+        v = 0;                           /* the retry may never assign it */
         while (!rdrand64(&v) && t--) ;   /* bounded retry; TSC fallback below  */
         if (t < 0) v = rdtsc_() ^ (ctr * 0x9E3779B97F4A7C15ULL);
         ctr++;
