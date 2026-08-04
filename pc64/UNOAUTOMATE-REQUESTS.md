@@ -6679,3 +6679,46 @@ gain a speed control depends on which one is driving.
   on today**, no eMMC required.  The build has detach compiled out
   (`-DUNO_NO_DETACH`, see the earlier note), which is the only reason it did
   not.
+
+---
+
+## 2026-08-04 — LANDED (toolkits): `unoui_text_init` believed a struct it had never written
+
+Answering the 2026-07-28 note above, and the same shape a second time.
+
+The toolkit's own gate went red on `plain: no eye, and the whole inner rect is
+text`. `unoui_text_init()` decided "this is a RE-BIND of the same buffer, keep
+the caret" from `t->buf == buf` alone, and `t->buf` is a field the caller need
+never have written: a `unoui_text` declared as a stack local holds whatever the
+stack held. When the garbage matched, the re-bind path ran and every
+presentation field survived from nothing at all - `secret` above all, so a
+PLAIN field came up masked, with the reveal eye drawn on it.
+
+That is exactly the failure reported for `unoui_ui_init` and `full`, which is
+why this is worth writing down rather than just fixing: an init function that
+READS its own struct before writing it is the bug, and the toolkit had two.
+
+Fixed by making the question answerable instead of guessed:
+
+- `unoui_text.inited` is appended to the struct, written by `unoui_text_init()`
+  and by nothing else. 0 means "never initialised", which is what every static
+  starts at and the answer that costs nothing to get wrong.
+- Anything that is not a confirmed re-bind is `memset` to zero first. That also
+  means the NEXT field appended to `unoui_text` is defined without anyone
+  having to remember to edit this function.
+
+Callers are unaffected: the caret still survives a builder re-run, which is the
+behaviour the "cursor jumps in a text box" report bought. What changed is that a
+field which has never been initialised can no longer inherit another one's mask.
+
+The gate now pins it deterministically rather than by luck: the stack local that
+caught it is kept, and a second case fills the struct with 0xA5 first and asks
+the same question. `unoui/tools/edit_test.sh` is 61 assertions, all green.
+`sh ./build.sh` and `UNO_DEBUG=1 sh ./build.sh` both clean, SPECTEST 67 PASS /
+0 FAIL / 7 SKIP on a real FAT image.
+
+Note for anyone building on this box: the legacy-BIOS image step needs `nasm`,
+which was not installed on devbuntu. `sudo apt-get install -y nasm`. Without it
+`build.sh` dies at `[bios] linking the legacy-BIOS image` with `set -e`, AFTER
+writing a complete and usable UEFI ESP tree, which reads as a much worse failure
+than it is.
