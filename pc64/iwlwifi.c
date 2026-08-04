@@ -347,6 +347,7 @@ static int  g_gen2;          /* 22000+ : TFH TFDs, context-info fw load */
 static int  g_mq_rx;         /* 9000+  : RFH multi-queue rx */
 static u32  g_hw_rev, g_hw_rf_id;
 static char g_fwfile[20];    /* 8.3 name under FIRMWARE\ on the ESP */
+static char g_fwalt[20];     /* second choice when the first is not staged */
 static char g_pnvmfile[20];
 static u8   g_mac[6];
 static u8   g_joined;
@@ -414,16 +415,34 @@ static int identify_by_pci(u16 dev)
     return 0;
 }
 
+/* The MAC types this driver cares about, from CSR_HW_REV bits 11:4 - the same
+ * numbers Linux calls IWL_CFG_MAC_TYPE_*.  A Qu-family AX201 is Qu or QuZ
+ * SILICON, and which one you have is NOT a function of the PCI device id:
+ * 0x02f0 and 0x34f0 both appear as either, which is why Linux keys its config
+ * table on the hardware revision and not on the id.
+ *
+ * That matters because Qu-b0, Qu-c0 and QuZ-a0 are three DIFFERENT upstream
+ * ucode files.  This driver used to compute mac_type and throw it away, then
+ * load one IWLAX201.UCO whichever silicon it found - and the blob that ships
+ * is QuZ-a0-hr-b0 (verified byte-identical against Debian's
+ * firmware-iwlwifi 20260622-1).  It works on the machines it was developed
+ * on; on a Surface Laptop Go the firmware loads, starts, and never posts
+ * ALIVE, which is what a stepping mismatch looks like from the outside. */
+#define MAC_TYPE_QU   0x33
+#define MAC_TYPE_QUZ  0x35
+#define MAC_TYPE_QNJ  0x36
+
 /* decode CSR_HW_REV / CSR_HW_RF_ID and choose the firmware file name */
 static void choose_firmware(void)
 {
     u32 mac_type = (g_hw_rev >> 4) & 0xFFF;
-    (void)mac_type;
+    u32 step     = (g_hw_rev >> 2) & 0x3;      /* 0 = A, 1 = B, 2 = C */
     g_gen2  = (g_family >= FAM_22000);
     g_mq_rx = (g_family >= FAM_9000);
     if (g_family >= FAM_AX210) g_prph_mask = 0x00FFFFFF;
 
     g_pnvmfile[0] = 0;
+    g_fwalt[0] = 0;
     switch (g_family) {
     case FAM_7000:  strcpy(g_fwfile, "FIRMWARE\\IWL7260.UCO"); break;
     case FAM_8000:  strcpy(g_fwfile, "FIRMWARE\\IWL8000.UCO"); break;
@@ -435,10 +454,23 @@ static void choose_firmware(void)
         else strcpy(g_fwfile, "FIRMWARE\\IWL9000.UCO");
         break;
     case FAM_22000:
-        /* AX200 (discrete, device 0x2723) uses the cc-a0 image; AX201 (Qu/QuZ
-           CNVi) uses the Qu-b0-hr-b0 image - different files. */
-        if (g_pci.device == 0x2723) strcpy(g_fwfile, "FIRMWARE\\IWLAX200.UCO");
-        else                        strcpy(g_fwfile, "FIRMWARE\\IWLAX201.UCO");
+        /* AX200 (discrete, 0x2723) is the cc-a0 image.  Every other 22000 part
+           here is a Qu-family AX201 CNVi, and the STEPPING picks the file:
+           QuZ-a0, Qu-b0 and Qu-c0 are three separate ucodes.  The alternate is
+           tried when the preferred one was never staged onto the stick, so a
+           machine with only one blob still gets the radio it can get rather
+           than a "firmware not found". */
+        if (g_pci.device == 0x2723) { strcpy(g_fwfile, "FIRMWARE\\IWLAX200.UCO"); break; }
+        if (mac_type == MAC_TYPE_QUZ) {
+            strcpy(g_fwfile, "FIRMWARE\\IWLAX201.UCO");    /* QuZ-a0-hr-b0 */
+            strcpy(g_fwalt,  "FIRMWARE\\IWLAX20B.UCO");
+        } else if (mac_type == MAC_TYPE_QU && step >= 2) {
+            strcpy(g_fwfile, "FIRMWARE\\IWLAX20C.UCO");    /* Qu-c0-hr-b0  */
+            strcpy(g_fwalt,  "FIRMWARE\\IWLAX20B.UCO");
+        } else {
+            strcpy(g_fwfile, "FIRMWARE\\IWLAX20B.UCO");    /* Qu-b0-hr-b0  */
+            strcpy(g_fwalt,  "FIRMWARE\\IWLAX201.UCO");
+        }
         break;
     case FAM_AX210:
         /* Ty (0x2725) uses ty-a0-gf-a0; So/Ma parts (AX211/AX411) use
@@ -478,6 +510,44 @@ static int file_has_ssid(int vol, const char *name)
             return 1;
     return 0;
 }
+/* An 8.3 firmware name forced from the config file: `fw=IWLAX20B.UCO` in
+ * WIFI.CFG / WIFI.TXT / DEBUG.CFG on any mounted volume.
+ *
+ * WHY THIS EXISTS.  Which AX201 stepping a machine needs is in CSR_HW_REV, and
+ * the decode below is a hypothesis until a real machine confirms it.  The one
+ * machine that disagrees with the driver - a Surface Laptop Go whose firmware
+ * loads and never posts ALIVE - has NO WIRED NIC, so URC cannot reach it and
+ * every experiment otherwise costs a rebuild, a reflash and a walk to the
+ * laptop.  With this, all three steppings are on the stick and trying the next
+ * one is editing one line in a text file on the stick.  It is a debugging
+ * affordance for exactly the situation that has no other affordance. */
+static char g_fwforce[20];
+
+static void read_fw_override(void)
+{
+    static const char *cand[3] = { "WIFI.CFG", "WIFI.TXT", "DEBUG.CFG" };
+    static u8 b[512];
+    int nv = uno_fs_volumes(), v, j;
+    g_fwforce[0] = 0;
+    for (v = 0; v < nv; v++)
+        for (j = 0; j < 3; j++) {
+            long n = uno_fs_read(v, cand[j], b, (long)sizeof b - 1), i;
+            if (n <= 0) continue;
+            for (i = 0; i + 3 <= n; i++) {
+                /* an "fw=" at the start of a line, so a psk containing "fw="
+                 * is never mistaken for one */
+                if (!(b[i]=='f' && b[i+1]=='w' && b[i+2]=='=')) continue;
+                if (i > 0 && b[i-1] != '\n' && b[i-1] != '\r') continue;
+                { int k = 0; long q = i + 3;
+                  while (q < n && k < (int)sizeof g_fwforce - 1 &&
+                         b[q] != '\r' && b[q] != '\n' && b[q] != ' ')
+                      g_fwforce[k++] = (char)b[q++];
+                  g_fwforce[k] = 0; }
+                if (g_fwforce[0]) return;
+            }
+        }
+}
+
 static int firmware_volume(void)
 {
     /* DEBUG.CFG can carry the Wi-Fi creds too (debug builds); prefer whichever
@@ -3784,8 +3854,23 @@ uno_nic_t *iwl_nic(void)
 
     choose_firmware();
     st_set("Intel WiFi "); st_cathex(g_hw_rev);
-    uno_dbg_net_trace("wifi: card pci=%04x fam=%d gen2=%d fw=%s",
-                      g_devid, g_family, g_gen2, g_fwfile);
+    read_fw_override();
+    if (g_fwforce[0]) {
+        strcpy(g_fwfile, "FIRMWARE\\");
+        strcat(g_fwfile, g_fwforce);
+        g_fwalt[0] = 0;                     /* forced means forced */
+        uno_dbg_net_trace("wifi: firmware FORCED to %s by an fw= line", g_fwfile);
+    }
+
+    /* The silicon identity, in the log, on every boot.  Without it a firmware
+     * that never posts ALIVE is undiagnosable from a crash dump: the stepping
+     * is the first thing anyone asks for and it was the one thing not
+     * recorded.  hw_rev's bits 11:4 are the MAC type and 3:2 the step. */
+    uno_dbg_net_trace("wifi: card pci=%04x fam=%d gen2=%d hw_rev=%08x "
+                      "mac_type=%02x step=%d rf_id=%08x fw=%s alt=%s",
+                      g_devid, g_family, g_gen2, g_hw_rev,
+                      (g_hw_rev >> 4) & 0xFFF, (g_hw_rev >> 2) & 3, g_hw_rf_id,
+                      g_fwfile, g_fwalt[0] ? g_fwalt : "-");
 
     /* Credentials: needed to JOIN, NOT to bring the radio up and scan. The GUI
      * scans first and asks for the password afterwards, which is the whole
@@ -3825,6 +3910,20 @@ uno_nic_t *iwl_nic(void)
             vol = cand[ci];
             fn = uno_fs_read(vol, g_fwfile, g_fwbuf, FW_FILE_MAX);
             if (fn <= 0) fn = uno_fs_read(vol, g_fwfile + 9, g_fwbuf, FW_FILE_MAX);
+        }
+        if (fn <= 0 && g_fwalt[0]) {          /* the stepping we would rather
+                                               * not use, but which is here */
+            for (ci = 0; ci < nc && fn <= 0; ci++) {
+                vol = cand[ci];
+                fn = uno_fs_read(vol, g_fwalt, g_fwbuf, FW_FILE_MAX);
+                if (fn <= 0) fn = uno_fs_read(vol, g_fwalt + 9, g_fwbuf, FW_FILE_MAX);
+            }
+            if (fn > 0) {
+                uno_dbg_net_trace("wifi: %s not staged, falling back to %s - "
+                                  "if this never ALIVEs, that is why",
+                                  g_fwfile, g_fwalt);
+                strcpy(g_fwfile, g_fwalt);
+            }
         }
         if (fn <= 0) {
             st_set("WiFi: firmware not found ("); st_cat(g_fwfile); st_cat(")");
