@@ -804,6 +804,11 @@ static void build_ctrl(unoui_window *w)
      * on a 640 px desktop: the last tabs and the right-hand column of every tab
      * were off the edge of the machine.  Past the cap the strip SCROLLS
      * (UI_TF_OVERFLOW) instead, which is what that flag is for. */
+    /* The panel SCROLLS (UI_WIN_VSCROLL below), so the scrollbar's strip comes
+     * off the layout width before anything is placed in it - a layout cannot
+     * know it needs a bar until it knows how tall it came out, which is after
+     * everything has been placed. One constant beats two passes. */
+    cw -= UI_WIN_BAR_W;
     { int tabw = 8, i2;
       /* the cap is on the WINDOW, so the frame and padding come out of it
          first - capping the content at FB_W built a 650 px window on a 640 px
@@ -926,10 +931,18 @@ static void build_ctrl(unoui_window *w)
          * bottom of the tab on a 640x400 desktop at the default font. */
         for (i = 0; i < 5; i++) { unoui_add_label(w, 8, y, g_cp_net[i]); y += fh + 6; }
         y += 6;
-        x = unoui_add_button(w, 8, y, 110, "Refresh", 0); x->id = ID_NETREFRESH;
-        x = unoui_add_button(w, 126, y, 110, "Renew IP", 0); x->id = ID_NETRENEW;
-        unoui_add_label(w, 248, y + lofs, up && net_dhcp_done()
-                        ? "DHCP is automatic." : "No lease? Try Renew IP.");
+        /* sized to their labels and flowed - two fixed 110 px slots with the
+         * hint pinned at 248 cut all three at a larger UI scale */
+        { int br = fb_text_w("Refresh")  + 26;
+          int bn = fb_text_w("Renew IP") + 26;
+          const char *hint = up && net_dhcp_done() ? "DHCP is automatic."
+                                                   : "No lease? Try Renew IP.";
+          int hx = 8 + br + 8 + bn + 12;
+          x = unoui_add_button(w, 8, y, br, "Refresh", 0); x->id = ID_NETREFRESH;
+          x = unoui_add_button(w, 8 + br + 8, y, bn, "Renew IP", 0);
+          x->id = ID_NETRENEW;
+          if (hx + fb_text_w(hint) <= cw - 8)
+              unoui_add_label(w, hx, y + lofs, hint); }
         y += bh + 8;
         /* ---- WiFi: scan, pick, type the password, join ---- */
         if (WIFI_PANE_ON()) {
@@ -1117,17 +1130,23 @@ static void build_ctrl(unoui_window *w)
         y += bh + 8;
         break;
     }
-    w->r.w = cw + 2 * UI.theme->m.frame_w + 2 * UI.theme->m.pad;
+    w->r.w = cw + UI_WIN_BAR_W + 2 * UI.theme->m.frame_w + 2 * UI.theme->m.pad;
     w->r.h = win_h_for(y);
-    /* Never taller than the desktop.  The System tab at a 200% UI scale came to
-     * 380 px of content on a 357 px work area, so the panel opened with its
-     * bottom - and the buttons that live there - below the taskbar, and
-     * min_h = r.h meant it could not even be dragged smaller. */
+    /* Never taller than the desktop - and now that is not a loss. The System
+     * tab at a 200% UI scale comes to 380 px of content on a 357 px work area;
+     * it used to open with its bottom, and the buttons that live there, below
+     * the taskbar, with min_h = r.h so it could not even be dragged smaller.
+     * Capped AND scrolling: the panel fits the screen and everything in it is
+     * still reachable. */
+    w->content_h = y;
+    w->flags |= UI_WIN_VSCROLL;
     { int cap = FB_H - TASKH; if (w->r.h > cap) w->r.h = cap; }
     w->min_w = w->r.w;
     w->min_h = win_h_for(UI_TAB_H + 10 + 4 * (ui_ctl_h() + 8));   /* ~4 rows */
     if (w->min_h > w->r.h) w->min_h = w->r.h;
     w->flags |= UI_WIN_RESIZE;
+    /* a shorter tab must not leave the panel scrolled past its own end */
+    unoui_win_scroll_to(UI.theme, w, w->scroll_y);
 }
 
 /* Rebuild the Control Panel content in place (tab switch / network refresh)
@@ -1680,10 +1699,13 @@ static void build_setup(unoui_window *w)
     const unoui_theme *t = pc64_shell_theme();
     const char *conf_lab = "To erase a whole disk, type " INST_CONFIRM_WORD ":";
     /* One 71-character hint line forced the window 753 px wide at a 150% UI
-       scale - wider than the desktop it was supposed to open on.  Two shorter
-       lines cost one row and fit any font. */
-    const char *keys1 = "Keys: Up/Down pick - C confirm box (Esc leaves)";
-    const char *keys2 = "      I installs - R rescans";
+       scale - wider than the desktop it was supposed to open on. Two lines were
+       not enough either: the longer of them was still 658 px at 200%, against
+       586 px of content. Three short ones fit at every scale and read better
+       than a sentence with three dashes in it. */
+    const char *keys1 = "Up/Down: pick a target";
+    const char *keys2 = "C: confirm box  (Esc leaves it)";
+    const char *keys3 = "I: install      R: rescan";
     int fh = fb_text_h(), lh = fh + 4, bh = ui_ctl_h(), ch = ui_field_h();
     int confw = fb_text_w(conf_lab), instw = fb_text_w("Install") + 24;
     int cw, y, listh;
@@ -1694,9 +1716,10 @@ static void build_setup(unoui_window *w)
        the desktop, because a window wider than the screen cannot be read
        whatever it contains. */
     cw = 8 + confw + 8 + 80 + 8;
-    { int k = 8 + fb_text_w(keys1) + 8; if (cw < k) cw = k; }
+    { int k = 8 + fb_text_w(keys2) + 8; if (cw < k) cw = k; }
     if (cw < 400) cw = 400;
     { int cap = FB_W - 16 - 2 * t->m.frame_w - 2 * t->m.pad; if (cw > cap) cw = cap; }
+    cw -= UI_WIN_BAR_W;                  /* this window scrolls - see below */
 
     inst_rescan();
     unoui_window_init(w, "Install", 150, 60, cw, 286);
@@ -1705,27 +1728,39 @@ static void build_setup(unoui_window *w)
        face, so every row overlapped the one below it under a larger font. */
     y = 4;
     unoui_add_label(w, 8, y, "Install UnoDOS to a local disk");       y += lh;
-    unoui_add_label(w, 8, y, "Volumes keep your files; Disks are ERASED."); y += lh;
+    unoui_add_label(w, 8, y, "Volumes keep files; Disks are ERASED."); y += lh;
     unoui_add_label(w, 8, y, keys1);                                  y += fh + 2;
-    unoui_add_label(w, 8, y, keys2);                                  y += lh + 4;
-    /* the list takes whatever the fixed rows leave, so the window fits the
+    unoui_add_label(w, 8, y, keys2);                                  y += fh + 2;
+    unoui_add_label(w, 8, y, keys3);                                  y += lh + 4;
+    /* The list takes whatever the fixed rows leave, so the window fits the
        desktop instead of running its buttons under the taskbar (found by the
-       audit at 100%: a 395 px window on a 372 px work area) */
+       audit at 100%: a 395 px window on a 372 px work area). The floor is
+       three rows rather than two now: below that the window SCROLLS instead,
+       which is a better answer than a list you cannot see a disk in. */
     listh = (FB_H - TASKH) - 60 - win_h_for(y)
           - (fh + 12) - (ch + 8) - (bh + 8) - (12 + 6) - (fh + 6);
     if (listh > 6 * ui_row_h() + 6) listh = 6 * ui_row_h() + 6;
-    if (listh < 2 * ui_row_h() + 6) listh = 2 * ui_row_h() + 6;
+    if (listh < 3 * ui_row_h() + 6) listh = 3 * ui_row_h() + 6;
     g_inst_list_w = unoui_add_list(w, 8, y, cw - 16, listh, g_inst_ptr, g_inst_n,
                                    g_inst_sel);
     g_inst_list_w->id = ID_ILIST;                                     y += listh + 8;
     { unoui_widget *c = unoui_add_check(w, 8, y, "Boot UnoDOS by default", 1);
       c->id = ID_IDEF; }                                              y += fh + 12;
-    /* the typed half of the whole-disk confirmation (ignored for volumes) */
-    unoui_add_label(w, 8, y + (ch - fh) / 2, conf_lab);
+    /* The typed half of the whole-disk confirmation (ignored for volumes). The
+       box drops BELOW its label when the two do not fit side by side, which at
+       a 150% UI scale they do not. */
     unoui_text_init(&g_inst_conf_t, g_inst_conf, sizeof g_inst_conf, 0);
-    { unoui_widget *e = unoui_add_edit(w, 8 + confw + 8, y, 80, &g_inst_conf_t);
-      e->id = ID_ICONF; g_inst_conf_w = e; g_inst_conf_wi = w->nw - 1; }
-    y += ch + 8;
+    if (8 + confw + 8 + 80 <= cw) {
+        unoui_add_label(w, 8, y + (ch - fh) / 2, conf_lab);
+        { unoui_widget *e = unoui_add_edit(w, 8 + confw + 8, y, 80, &g_inst_conf_t);
+          e->id = ID_ICONF; g_inst_conf_w = e; g_inst_conf_wi = w->nw - 1; }
+        y += ch + 8;
+    } else {
+        unoui_add_label(w, 8, y, conf_lab); y += fh + 4;
+        { unoui_widget *e = unoui_add_edit(w, 8, y, 80, &g_inst_conf_t);
+          e->id = ID_ICONF; g_inst_conf_w = e; g_inst_conf_wi = w->nw - 1; }
+        y += ch + 8;
+    }
     { int rw = fb_text_w("Rescan") + 26;
       unoui_widget *b = unoui_add_button(w, 8, y, rw, "Rescan", 0); b->id = ID_IRESCAN; }
     { unoui_widget *b = unoui_add_button(w, cw - 8 - instw, y, instw, "Install", 0);
@@ -1733,8 +1768,14 @@ static void build_setup(unoui_window *w)
     y += bh + 8;
     g_inst_prog_w = unoui_add_progress(w, 8, y, cw - 16, 0, 100);     y += 12 + 6;
     unoui_add_label(w, 8, y, g_inst_stat);                            y += fh + 6;
-    w->r.w = cw + 2 * t->m.frame_w + 2 * t->m.pad;
+    w->r.w = cw + UI_WIN_BAR_W + 2 * t->m.frame_w + 2 * t->m.pad;
     w->r.h = win_h_for(y);
+    /* Scrolls rather than overhanging the desktop. This window is a fixed
+       stack - a list, a confirmation box, two buttons, a progress bar - and at
+       a 150% UI scale the stack is simply taller than a 640x400 screen. */
+    w->content_h = y;
+    w->flags |= UI_WIN_VSCROLL;
+    { int cap = FB_H - TASKH; if (w->r.h > cap) w->r.h = cap; }
 }
 
 static void (*const g_build[NNATIVE])(unoui_window *) =
@@ -4834,7 +4875,9 @@ static void on_action(const unoui_action *a)
     case ID_BATTMODE: if (a->value >= 0 && a->value <= BATT_BOTH) {
                           g_batt_mode = a->value; fmt_batt(); g_dirty = 1; } break;
     case ID_CPTAB: if (a->value >= 0 && a->value < CT_N) {   /* Control Panel tab */
-                       g_ctrl_tab = a->value; rebuild_ctrl_window(); } break;
+                       g_ctrl_tab = a->value;
+                       g_win[APP_CTRL].scroll_y = 0;   /* a new tab starts at its top */
+                       rebuild_ctrl_window(); } break;
     case ID_NETREFRESH: rebuild_ctrl_window(); break;        /* re-read live net status */
     case ID_NETRENEW: {                                     /* ask for a lease again */
         int i;

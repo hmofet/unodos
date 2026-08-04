@@ -371,9 +371,16 @@ void pc64_clock_build(unoui_window *w)
      * here is a fixed pixel count: the map is sized as a fraction of the work
      * area (keeping the 2:1 ratio equirectangular demands), the dial matches
      * its height, and the city list takes whatever is left. */
+    /* The map was sized from the work area's WIDTH only, so on a short desktop
+     * - or at a large UI scale, where every row below it grows - the dial, the
+     * map and the fixed rows came to more than the screen was tall and the
+     * window hung off the bottom. Cap it against the HEIGHT as well: the map is
+     * 2:1, so it may have at most about a third of the vertical room. */
     mapw = waw * 2 / 5;
-    if (mapw < 160) mapw = 160;
+    { int by_h = (wah / 3) * 2;          /* height budget -> width, at 2:1 */
+      if (mapw > by_h) mapw = by_h; }
     if (mapw > 288) mapw = 288;
+    if (mapw < 120) mapw = 120;
     maph = mapw / 2;
     faceh = maph;
     if (faceh > 132) faceh = 132;
@@ -430,8 +437,15 @@ void pc64_clock_build(unoui_window *w)
     unoui_widget_fill(x);
     y += listh + 4;
 
-    w->r.w = cw + 2 * t->m.frame_w + 2 * t->m.pad;
+    /* the scrollbar gets its own strip on top of the layout width, rather than
+       being taken out of it - see UI_WIN_BAR_W */
+    w->r.w = cw + UI_WIN_BAR_W + 2 * t->m.frame_w + 2 * t->m.pad;
     w->r.h = y + t->m.title_h + t->m.frame_w + 2 * t->m.pad;
+    /* and if it still does not fit - a very short desktop with a very large
+     * font - it scrolls rather than hanging off the bottom edge */
+    w->content_h = y;
+    w->flags |= UI_WIN_VSCROLL;
+    { int cap = wah; if (w->r.h > cap) w->r.h = cap; }
     w->min_w = w->r.w;
     w->min_h = chrome + 3 * (fh + 6) + 8 + 4;
     w->flags |= UI_WIN_RESIZE;
