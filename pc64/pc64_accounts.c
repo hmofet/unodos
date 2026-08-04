@@ -536,8 +536,31 @@ void pc64_remote_open(void)
                               | (want_drv ? UNOAUTO_P_DRIVE   : 0u)
                               | (want_sys ? UNOAUTO_P_SYSTEM  : 0u);
                 unsigned got;
+                usec_session_t cs;
                 if (!want) { snprintf(status, sizeof status,
                                       "Tick at least one kind of access."); break; }
+
+                /* Arming needs a bound session, and there may not be one: the
+                 * boot login gate is the only other place that binds, and on a
+                 * machine whose accounts were created after boot it has already
+                 * run.  Telling the user to "sign in" while offering no way to
+                 * do it is a dead end (found on the ZimaBlade 2026-08-03), so
+                 * offer the sheet here and KEEP the session - exactly what the
+                 * boot gate does; from here on it is the shell's session. */
+                cs = unosec_current_session();
+                if (!cs || !unosec_session_valid(cs)) {
+                    if (unosec_account_list(0, 0) <= 0) {
+                        snprintf(status, sizeof status,
+                                 "Create a user account first (Manage accounts).");
+                        break;
+                    }
+                    if (cred_sheet("Sign in",
+                                   "Sign in to turn remote control on.", 0, 0) != ID_OK
+                        || !try_login_bind(UNOSEC_TRUST_INTERACTIVE)) {
+                        snprintf(status, sizeof status, "Sign-in failed.");
+                        break;
+                    }
+                }
                 /* This is the escalation.  The consent sheet (if any) draws
                    over us, which is fine - it is its own modal ui. */
                 got = unoauto_gate_arm(want, "ui:remote-panel");
