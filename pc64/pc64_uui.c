@@ -581,7 +581,23 @@ static void cp_wifi_join(void)
       p = ap_str(p, "\" - associating and running the 4-way handshake...");
       *p = 0; cp_wifi_note(msg); }
     if (iwl_join_ssid(g_cp_aps[g_cp_ap_sel].ssid, g_cp_psk) != 0) {
-        cp_wifi_note("Join failed - check the password (details in the NET log).");
+        /* SAY WHAT ACTUALLY FAILED. iwl_join_ssid() returns non-zero for an
+         * SSID that vanished between scan and join, an auth timeout, an assoc
+         * the AP refused, a 4-way that timed out, a firmware assert, or simply
+         * running out of candidate BSSes - and this told the operator their
+         * password was wrong for every one of them. Reported from metal:
+         * "wrong wifi password, even though I can see it clearly (it's
+         * correct)" - and it was correct; the radio had asserted three
+         * attempts earlier. Guessing is fine; stating the guess as the answer
+         * is what cost somebody a trip to their router settings.
+         *
+         * The driver already knows: iwl_status_str() carries the real reason,
+         * including a deauth reason code when the AP supplied one. */
+        char why[160];
+        iwl_status_str(why, (int)sizeof why);
+        { char msg[200]; char *p = ap_str(msg, "Join failed: ");
+          p = ap_str(p, why[0] ? why : "no reason reported");
+          *p = 0; cp_wifi_note(msg); }
     } else {
         cp_wifi_phase("Joined. Asking the network for an address (DHCP)", 0);
         nic = iwl_nic();
