@@ -3275,7 +3275,10 @@ static void saved_load(void)
 
 static void saved_write(void)
 {
-    static u8 buf[1024];
+    /* 8 entries x (ssid= + 35 + CRLF + psk= + 71 + CRLF) plus the header is
+     * 1082 bytes - which 1024 did not hold, so the guard below silently
+     * dropped the last network or two. */
+    static u8 buf[2048];
     int i; long o = 0;
     const char *hdr = "# UnoDOS remembered WiFi networks - most recent first.\r\n"
                       "# Written by the Control Panel; hand-editable, same keys as WIFI.CFG.\r\n";
@@ -3292,8 +3295,35 @@ static void saved_write(void)
         for (s = g_saved[i].psk; *s; s++) buf[o++] = (u8)*s;
         buf[o++]='\r'; buf[o++]='\n';
     }
-    if (uno_fs_write(g_saved_vol, SAVED_FILE, buf, o) != 0)
-        uno_dbg_net_trace("wifi: could not write %s on vol %d", SAVED_FILE, g_saved_vol);
+    /* uno_fs_write returns NON-ZERO ON SUCCESS - the convention every other
+     * caller in the tree uses (`if (uno_fs_write(...))` = it worked). This test
+     * was inverted, so it announced "could not write" every time the store
+     * SAVED and said nothing at all when it genuinely failed. A metal session
+     * read that line, reasonably concluded the feature was broken, and filed it
+     * as such. An error message that fires on the success path is worse than no
+     * message: it sends someone to debug a thing that is working.
+     *
+     * Both outcomes are logged now, so the next NETLOG reading is unambiguous. */
+    if (!uno_fs_write(g_saved_vol, SAVED_FILE, buf, o)) {
+        /* A real failure. The likely cause is that saved_load() bound us to the
+         * volume it FOUND the file on, which may be read-only (a firmware SFS
+         * after detach, or a stick that came up ro). Re-pick a writable one and
+         * try once more before giving up. */
+        int alt = saved_vol();
+        uno_dbg_net_trace("wifi: %s write FAILED on vol %d", SAVED_FILE, g_saved_vol);
+        if (alt >= 0 && alt != g_saved_vol &&
+            uno_fs_write(alt, SAVED_FILE, buf, o)) {
+            uno_dbg_net_trace("wifi: %s saved on vol %d instead (%d network(s))",
+                              SAVED_FILE, alt, g_saved_n);
+            g_saved_vol = alt;
+        } else {
+            uno_dbg_net_trace("wifi: %s could not be saved anywhere - the next "
+                              "boot has no network to rejoin", SAVED_FILE);
+        }
+    } else {
+        uno_dbg_net_trace("wifi: %s saved on vol %d (%d network(s), %d bytes)",
+                          SAVED_FILE, g_saved_vol, g_saved_n, (int)o);
+    }
     memset(buf, 0, sizeof buf);                     /* do not leave it in .bss */
 }
 
@@ -3337,6 +3367,57 @@ int iwl_saved_psk(const char *ssid, char *psk, int cap)
         }
     return 0;
 }
+
+#ifdef UNO_DEBUG
+/* ---- test hook -------------------------------------------------------------
+ * The store is otherwise reachable ONLY through a real join, i.e. only on a
+ * machine with an Intel card - which is exactly why an inverted success test in
+ * saved_write() shipped, and why the log line it produced was then read on
+ * metal as "the feature is broken". Nothing headless could reach the code to
+ * disagree.
+ *
+ * This runs the whole round trip through the REAL filesystem: remember a
+ * network, drop the in-memory copy, re-read it off disk, check it came back
+ * first and with its passphrase, then forget it and check it is gone. Returns 0
+ * on success or the number of the step that failed.
+ *
+ * It leaves the store as it found it: remember/forget preserve the other
+ * entries and their order, and it refuses to run at all when the store is full,
+ * where remembering a ninth network would push the oldest one out. */
+int iwl_saved_selftest(void)
+{
+    static const char *T = "uno-selftest";     /* cannot collide with a real SSID */
+    static const char *P = "selftest-passphrase";
+    char got[SAVED_PSK_MAX];
+    int n0;
+
+    saved_load();
+    n0 = g_saved_n;
+    if (n0 >= SAVED_MAX) return -1;              /* would evict a real network */
+
+    saved_remember(T, P);
+    if (g_saved_n != n0 + 1)                     return 1;
+    if (strcmp(g_saved[0].ssid, T))              return 2;   /* most recent first */
+
+    /* forget the in-memory copy and re-read from disk: this is the step that
+     * proves the WRITE happened, not just that the array was updated */
+    g_saved_loaded = 0; g_saved_n = 0;
+    saved_load();
+    if (g_saved_n != n0 + 1)                     return 3;
+    if (strcmp(g_saved[0].ssid, T))              return 4;
+    got[0] = 0;
+    if (!iwl_saved_psk(T, got, (int)sizeof got)) return 5;
+    if (strcmp(got, P))                          return 6;
+
+    iwl_saved_forget(T);
+    if (g_saved_n != n0)                         return 7;
+    g_saved_loaded = 0; g_saved_n = 0;           /* and it stayed forgotten */
+    saved_load();
+    if (g_saved_n != n0)                         return 8;
+    if (iwl_saved_psk(T, got, (int)sizeof got))  return 9;
+    return 0;
+}
+#endif /* UNO_DEBUG */
 
 void iwl_saved_forget(const char *ssid)
 {

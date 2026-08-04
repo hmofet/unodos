@@ -77,6 +77,11 @@ int  iwl_saved_count(void);                       /* 0 if nothing remembered   *
 int  iwl_saved_get(int i, char *ssid, int cap);   /* 0 = last joined; 0 = ok   */
 int  iwl_saved_psk(const char *ssid, char *psk, int cap); /* 1 if remembered   */
 void iwl_saved_forget(const char *ssid);          /* drop it from the store    */
+#ifdef UNO_DEBUG
+/* Round-trip the store through the real filesystem (SPECTEST spec:wifistore).
+ * 0 = ok, -1 = skipped because the store is full, else the failing step. */
+int  iwl_saved_selftest(void);
+#endif
 
 /* Interactive F12 debug entry point (for the unoautomate remote channel -
  * see the 2026-07-22 request in UNOAUTOMATE-REQUESTS.md). Parses ONE command
