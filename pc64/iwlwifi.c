@@ -4049,15 +4049,34 @@ uno_nic_t *iwl_nic(void)
      * with the full FIRMWARE\ path and with the flat root name, since the FAT
      * reader may expose either.
      *
-     * A candidate that is not staged is skipped silently-ish; one that loads
-     * and never ALIVEs costs ~4 s and we move on, after device_stop() - the
-     * ROM may be live and DMAing, and running prepare_card_hw() against a live
-     * busy device is what wedged the Yoga once (see the `rerun` verb, which
-     * quiesces for the same reason). */
+     * A candidate that is not staged is skipped; one that loads and never
+     * ALIVEs costs ~4 s and we move on.  Each pass begins by halting whatever
+     * image is already running - see the note at the top of the loop; that has
+     * to happen before the disk read, not just before prepare_card_hw(). */
     {
         int fi, r = BRINGUP_NOFW, tried = 0;
         for (fi = 0; fi < g_fwcand_n; fi++) {
             int cand[2], nc = 0, ci, fv;
+            /* HALT ANY RUNNING IMAGE FIRST, before we touch the disk.
+             *
+             * Reading the next candidate is ~1.4 MB off the boot stick through
+             * the FIRMWARE's USB stack, and iommu_disable() has already turned
+             * VT-d OFF for this device.  A previously-kicked ROM that is live
+             * and confused can therefore DMA anywhere, unconstrained, for the
+             * whole duration of that read - including over the firmware's own
+             * USB/HID structures, which is what the pointer runs on while we
+             * are still attached.  A dead mouse mid-session is what that looks
+             * like from the outside.
+             *
+             * The hazard is not new (the single-shot path had the same read
+             * before its device_stop, and a GUI rescan after a failed attempt
+             * hit it), but the candidate loop enters it once per retry instead
+             * of once per scan, so it went from rare to routine. */
+            if (g_bar && g_fw_loaded) {
+                uno_dbg_net_trace("wifi: halting the previous image (device_stop) "
+                                  "before reading the next candidate");
+                device_stop();
+            }
             strcpy(g_fwfile, g_fwcand[fi]);
             fv = fw_volume();                  /* per candidate: different file */
             if (fv >= 0)                         cand[nc++] = fv;
@@ -4082,11 +4101,6 @@ uno_nic_t *iwl_nic(void)
                               fi + 1, g_fwcand_n, g_fwfile, fn);
             load_pnvm(vol);
             tried++;
-
-            if (g_bar && g_fw_loaded) {        /* a previous candidate left the ROM running */
-                uno_dbg_net_trace("wifi: halting the previous image (device_stop) before retrying");
-                device_stop();
-            }
             r = bringup_to_alive();
             if (r == BRINGUP_ALIVE) break;
             if (r == BRINGUP_FATAL) {
