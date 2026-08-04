@@ -161,8 +161,10 @@ no portable clock, so a platform sets `unoui_clock_ms` once at boot. Left NULL,
 before it has a clock at the cost of the exact defect this exists to fix.
 
 Integer arithmetic throughout, 12-bit fixed point, no `fb.h` and no libm. It
-compiles under `-std=c89 -pedantic -Wconversion`, 32- and 64-bit, so it reaches
-ports the rest of the toolkit does not.
+compiles clean under `-std=c89 -pedantic -Wall -Wextra -Wconversion` at 32 and
+64 bits, and under pc64's own `-ffreestanding -nostdinc` with **no undefined
+symbols at all** - it calls nothing, not even memcpy. So it drops into any port
+whose C compiler works, including ones the rest of the toolkit does not reach.
 
 ### The curves
 
