@@ -153,6 +153,15 @@ void unoui_reflow_window(const unoui_theme *t, unoui_window *win)
     int fw = t->m.frame_w, th = bare ? 0 : t->m.title_h, pad = bare ? 0 : t->m.pad;
     int cw = win->r.w - 2 * fw - 2 * pad;         /* usable content (matches origin) */
     int ch = win->r.h - th - fw - 2 * pad, i;
+    /* FILL means "take the usable content", and the scrollbar's strip is not
+     * usable - a filling widget that reached under it would be drawn beneath a
+     * bar and hit-tested through it. A scrolling window's fill height is the
+     * CONTENT height too, not the frame's: filling to the frame would make the
+     * thing that scrolls exactly as tall as the hole it scrolls in. */
+    if (win->flags & UI_WIN_VSCROLL) {
+        cw -= UI_WIN_BAR_W;
+        if (win->content_h > ch) ch = win->content_h;
+    }
     for (i = 0; i < win->nw; i++) {
         unoui_widget *w = &win->w[i];
         if (!(w->flags & UI_WF_FILL)) continue;
@@ -436,6 +445,53 @@ void unoui_content_origin(const unoui_theme *t, const unoui_window *w,
     }
     *ox = w->r.x + t->m.frame_w + t->m.pad;
     *oy = w->r.y + t->m.title_h + t->m.pad;
+    /* A SCROLLED window moves its whole content up. Doing it HERE is what makes
+     * scrolling honest: the painter, the hit test, the caret reveal and the
+     * layout audit all ask this function where the content starts, so none of
+     * them can disagree about where a widget is. */
+    if (w->flags & UI_WIN_VSCROLL) *oy -= w->scroll_y;
+}
+
+/* ---- scrolling window content (see unoui.h) ------------------------------- */
+/* the content box a scrolling window's widgets are seen through */
+static unoui_rect win_view(const unoui_theme *t, const unoui_window *w)
+{
+    unoui_rect v;
+    if (w->flags & UI_WIN_BARE) { v = w->r; return v; }
+    v.x = w->r.x + t->m.frame_w + t->m.pad;
+    v.y = w->r.y + t->m.title_h + t->m.pad;
+    v.w = w->r.w - 2 * (t->m.frame_w + t->m.pad);
+    v.h = w->r.h - t->m.title_h - t->m.pad - t->m.frame_w;
+    return v;
+}
+
+int unoui_win_scroll_max(const unoui_theme *t, const unoui_window *w)
+{
+    int over;
+    if (!t || !w || !(w->flags & UI_WIN_VSCROLL)) return 0;
+    over = w->content_h - win_view(t, w).h;
+    return over > 0 ? over : 0;
+}
+
+void unoui_win_scroll_to(const unoui_theme *t, unoui_window *w, int y)
+{
+    int mx = unoui_win_scroll_max(t, w);
+    if (!w) return;
+    if (y > mx) y = mx;
+    if (y < 0)  y = 0;
+    w->scroll_y = y;
+}
+
+unoui_rect unoui_win_bar(const unoui_theme *t, const unoui_window *w)
+{
+    unoui_rect z; z.x = z.y = z.w = z.h = 0;
+    if (!t || !w || !(w->flags & UI_WIN_VSCROLL)) return z;
+    if (unoui_win_scroll_max(t, w) <= 0) return z;      /* it all fits */
+    { unoui_rect v = win_view(t, w);
+      if (v.w <= 3 * UI_LIST_BAR_W) return z;           /* too narrow to spare it */
+      z.x = v.x + v.w - UI_LIST_BAR_W; z.y = v.y;
+      z.w = UI_LIST_BAR_W;             z.h = v.h;
+      return z; }
 }
 
 /* ------------------------------------------------- default painters -------- *
@@ -1130,6 +1186,14 @@ int unoui_window_audit(const unoui_theme *t, const unoui_window *win,
     else {
         cw = win->r.w - 2 * (t->m.frame_w + t->m.pad);
         ch = win->r.h - t->m.title_h - t->m.pad - t->m.frame_w;
+    }
+    /* A window that SCROLLS is meant to be taller than its frame - that is what
+     * the scrollbar is for - so the bottom edge is not a limit for it. The
+     * width still is: nothing scrolls sideways, and the bar takes a strip off
+     * the right that widgets must not be laid out under. */
+    if (win->flags & UI_WIN_VSCROLL) {
+        if (win->content_h > ch) ch = win->content_h;
+        cw -= UI_WIN_BAR_W;
     }
     for (i = 0; i < win->nw; i++) {
         const unoui_widget *w = &win->w[i];
@@ -2204,6 +2268,14 @@ static void render_one_window(unoui_ui *ui, unoui_window *win, int wn)
     }
       if (fontpushed) unoui_font_pop(); }
     fb_reset_clip();
+    /* The content scrollbar, painted AFTER the widgets and outside their clip:
+     * it is chrome, not content, and a bar that scrolled with the thing it
+     * scrolls would be a joke. */
+    { unoui_rect bar = unoui_win_bar(t, win);
+      if (bar.w) {
+          int mx = unoui_win_scroll_max(t, win);
+          PICK(vscroll)(t, bar, win->scroll_y, mx);
+      } }
     draw_resize_grip(t, win);
     if (unoui_profile_win)
         unoui_profile_win((win->flags & UI_WIN_BARE) ? "(shell)" :

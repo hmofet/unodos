@@ -193,7 +193,8 @@ enum {
     UI_WIN_BOTTOM = 1 << 1,   /* pinned behind normal windows (the desktop)   */
     UI_WIN_TOP    = 1 << 2,   /* pinned in front of normal windows (taskbar)  */
     UI_WIN_RESIZE = 1 << 3,   /* draggable bottom-right grip; fill widgets reflow */
-    UI_WIN_NOCTL  = 1 << 4    /* titled, but no minimize/maximize boxes       */
+    UI_WIN_NOCTL  = 1 << 4,   /* titled, but no minimize/maximize boxes       */
+    UI_WIN_VSCROLL= 1 << 5    /* content taller than the frame SCROLLS - below */
 };
 
 /* ---- snap states (unoui_window.snap) ------------------------------------- *
@@ -221,7 +222,39 @@ typedef struct unoui_window {
     /* --- appended; 0 must mean "as before" (see unoui_snap_apply) ---------- */
     unsigned char snap;       /* UI_SNAP_*: which snap state this window is in */
     unoui_rect    restore_r;  /* the pre-snap rect to give back on un-snap     */
+    /* --- UI_WIN_VSCROLL (see below); 0 = no scroll, i.e. as before --------- */
+    int           content_h;  /* full height of the laid-out content, px      */
+    int           scroll_y;   /* how far down it is scrolled, px              */
 } unoui_window;
+
+/* ---- scrolling window content (UI_WIN_VSCROLL) ----------------------------
+ * A window whose layout is a fixed stack has no answer to "the desktop is
+ * smaller than the stack" other than being cut off at its own frame. The
+ * Control Panel's System tab, the installer and the Clock all reached that
+ * point at a 150-200% UI scale on a 640x400 desktop; the layout audit reports
+ * it, but reporting is not fixing.
+ *
+ * Set UI_WIN_VSCROLL and `content_h` (the height your layout actually came to)
+ * and the core does the rest: a scrollbar in a strip down the right of the
+ * content rect - drawn as CHROME, outside the widget array, so it does not
+ * scroll with what it scrolls - a wheel that works anywhere over the window,
+ * and `scroll_y` subtracted from every widget's position. Because that
+ * subtraction happens in unoui_content_origin, the painter, the hit test, the
+ * focus reveal and the layout audit all move together; nothing sees a widget
+ * anywhere other than where it is drawn.
+ *
+ * The app's own layout does not change at all: keep laying out from y = 0 and
+ * report how tall you got. */
+int  unoui_win_scroll_max(const struct unoui_theme *, const unoui_window *);
+void unoui_win_scroll_to (const struct unoui_theme *, unoui_window *, int y);
+/* the scrollbar strip in screen coords, {0,0,0,0} when it is not needed */
+unoui_rect unoui_win_bar(const struct unoui_theme *, const unoui_window *);
+/* The bar sits inside the content rect's right edge, so a window that scrolls
+ * must leave that much room: subtract UI_WIN_BAR_W from the width you lay out
+ * into. It is not taken off automatically because a layout has to know its
+ * width BEFORE it can know how tall it came out - and therefore before anyone
+ * knows whether a bar is needed. One constant is cheaper than two passes. */
+#define UI_WIN_BAR_W UI_LIST_BAR_W
 
 struct unoui_theme;           /* fwd (defined in unoui_theme.h) */
 
@@ -525,7 +558,8 @@ enum {
     UI_CAP_SLIDER, UI_CAP_TEXT, UI_CAP_LIST, UI_CAP_RESIZE,
     UI_CAP_LISTBAR,              /* dragging a list's inline scrollbar thumb    */
     UI_CAP_MDIDRAG,              /* moving a UI_MDI child by its title bar      */
-    UI_CAP_MDISIZE               /* resizing a UI_MDI child by its grip         */
+    UI_CAP_MDISIZE,              /* resizing a UI_MDI child by its grip         */
+    UI_CAP_WINBAR                /* dragging a window's CONTENT scrollbar       */
 };
 
 /* result of feeding one event: did a widget activate / change? */

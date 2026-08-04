@@ -393,6 +393,21 @@ static unoui_action set_listbar(unoui_ui *ui, int y)
     { unoui_action a = NO_ACT; return a; }
 }
 
+/* drag on a window's CONTENT scrollbar: map y to a scroll offset. The thumb is
+ * grabbed at its middle rather than where it was clicked, which for a bar this
+ * narrow is what makes it feel like it follows the pointer. */
+static void set_winbar(unoui_ui *ui, int y)
+{
+    unoui_window *win = ui->win[ui->cap_win];
+    unoui_rect bar = unoui_win_bar(ui->theme, win);
+    int track = bar.h - 2 * UI_WIN_BAR_W;
+    int mx = unoui_win_scroll_max(ui->theme, win);
+    if (!bar.w) return;
+    if (track < 1) track = 1;
+    unoui_win_scroll_to(ui->theme, win,
+                        mx * (y - (bar.y + UI_WIN_BAR_W)) / track);
+}
+
 /* scroll a list by `d` rows, clamped. NO_ACT for the same reason as above. */
 static unoui_action scroll_list(unoui_ui *ui, unoui_window *win,
                                 unoui_widget *w, int d)
@@ -802,6 +817,17 @@ static unoui_action handle_inner(unoui_ui *ui, const unoui_event *ev)
             if (w->kind == UI_LIST)                  /* 3 rows a notch */
                 return scroll_list(ui, ui->win[ui->hot_win], w, ev->wheel * 3);
         }
+        /* nothing under the pointer wanted it: if the window itself scrolls,
+         * the wheel scrolls the window. Anywhere over it, not just on the bar -
+         * a scroll gesture that only works on a 12 px strip is a scroll gesture
+         * nobody finds. */
+        { int wn = window_at(ui, ui->mx, ui->my);
+          if (wn >= 0 && (ui->win[wn]->flags & UI_WIN_VSCROLL)) {
+              unoui_window *win = ui->win[wn];
+              int step = 3 * ui_row_h();
+              unoui_win_scroll_to(ui->theme, win, win->scroll_y + ev->wheel * step);
+              return NO_ACT;
+          } }
         return NO_ACT;
     }
 
@@ -905,6 +931,7 @@ static unoui_action handle_inner(unoui_ui *ui, const unoui_event *ev)
         case UI_CAP_SLIDER: return set_slider(ui, ev->x);
         case UI_CAP_LIST:   return set_list(ui, ev->y);
         case UI_CAP_LISTBAR: return set_listbar(ui, ev->y);
+        case UI_CAP_WINBAR:  set_winbar(ui, ev->y); { unoui_action a = NO_ACT; return a; }
         case UI_CAP_TEXT: {
             unoui_window *win = ui->win[ui->cap_win];
             unoui_widget *w = &win->w[ui->cap_wi];
@@ -1019,6 +1046,14 @@ static unoui_action handle_inner(unoui_ui *ui, const unoui_event *ev)
             }
             return NO_ACT;
         }
+        /* the content scrollbar, before the widgets: it is drawn OVER the
+         * right-hand end of the content, so it has to be hit-tested there too */
+        { unoui_rect bar = unoui_win_bar(ui->theme, win);
+          if (bar.w && pt_in(bar, ev->x, ev->y)) {
+              ui->cap_mode = UI_CAP_WINBAR; ui->cap_win = ui->focus_win;
+              set_winbar(ui, ev->y);
+              return NO_ACT;
+          } }
         hi = hit_widget(ui, win, ev->x, ev->y);
         if (hi < 0) { ui->focus_wi = -1; return NO_ACT; }
         if (focusable(&win->w[hi])) ui->focus_wi = hi;
