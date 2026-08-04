@@ -45,6 +45,23 @@ int iwl_scan_aps(iwl_ap_t *out, int max);
  * A join that SUCCEEDS is remembered (see below). */
 int iwl_join_ssid(const char *ssid, const char *psk);
 
+/* ---- progress reporting ----------------------------------------------------
+ * A scan is a 5-second dwell and a join is an association plus a 4-way
+ * handshake: the driver blocks its caller for seconds at a time with no way for
+ * the UI to repaint, so a joining machine and a hung one look identical. That
+ * is not a theoretical complaint - "it looks like it's frozen" is what a real
+ * session reported.
+ *
+ * This is the driver saying where it is up to. `what` names the current phase
+ * in words a user can read; `step`/`steps` place it in the sequence. It is
+ * called on ENTERING each phase and then repeatedly (a few times a second)
+ * while that phase waits, so a caller can animate on it as well as label it.
+ *
+ * Called on the CALLER'S stack, inside the blocking call - so a UI hook may
+ * repaint and present, but must not re-enter the driver. NULL disables. */
+typedef void (*iwl_progress_fn)(void *ctx, const char *what, int step, int steps);
+void iwl_progress_set(iwl_progress_fn fn, void *ctx);
+
 /* ---- remembered networks -------------------------------------------------
  * Every successful join is written to WIFINETS.CFG on a persistent volume,
  * most recent first, and entry 0 is what the next boot rejoins - so a machine
