@@ -389,7 +389,16 @@ exercises the real machinery.
   `unoauto*` dispatch (if the harness needs a URC verb, use the weak-symbol
   pass-through pattern and note it in the requests file).
 - Per-theme hand-drawn button artwork beyond the generic painter.
-- Animations of any kind.
+- ~~Animations of any kind.~~ **Partly reversed 2026-08-03, by the
+  toolkits/unoui lane, for snap only.** The reason for the ban was sound: there
+  was no clock to animate against, so every animation would have been a
+  hand-rolled per-frame counter running at a speed set by how busy the desktop
+  was. `unoui_anim` is that clock, and `unoui_wmanim.c` now moves a window to
+  its snap target over ~130 ms (`unoui_snap_ms`) from inside
+  `unoui_snap_apply`, so all six routes into a snap animate without any of
+  them knowing. The WM's own phases are unchanged. Everything else on this
+  list still stands, and animating anything BEYOND snap - window open/close,
+  the launcher, the Alt-Tab switcher - remains a non-goal.
 
 ## 12. Reporting
 
