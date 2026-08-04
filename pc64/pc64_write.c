@@ -990,11 +990,32 @@ void pc64_write_build(unoui_window *w)
     if (ww < 480) ww = 480; if (ww > 980) ww = 980;
     if (wh < 360) wh = 360; if (wh > wah - 24) wh = wah - 24;
     metrics_reset(); lay_dirty();
-    int bx, need1, need2;
-    /* measured flow layout so the toolbar fits under any font/scale and never
-     * overflows the window (the window min width follows the toolbar) */
+    int bx, need;
+    /* THE TOOLBAR WRAPS.
+     *
+     * It was a measured flow across two FIXED rows, and the window then grew to
+     * fit the wider of them - which works right up to the point where the wider
+     * of them is bigger than the screen. At a 150-200% UI scale it is: the
+     * layout audit had the alignment buttons and Replace-All sitting past the
+     * right edge, cut off at the frame, on a 640x400 desktop.
+     *
+     * So the WIDTH is settled first, from the desktop, and the controls flow
+     * into it - starting a new row whenever the next one would not fit. The
+     * toolbar is however many rows it needs, which is the only arrangement that
+     * survives both a bigger font and a smaller screen.
+     *
+     * `need` tracks the widest SINGLE control rather than the widest row,
+     * because that is what the window can no longer be narrower than: below it
+     * a control would be cut, above it the toolbar just uses more rows.
+     *
+     * WRAP() is called before placing anything - button, dropdown, label,
+     * field - so every element takes part, not only the buttons. */
+#define WRAP(need_) do { \
+        if (bx && bx + (need_) > cw) { bx = 0; y += bh + 4; } \
+        if ((need_) > need) need = (need_); } while (0)
 #define BTN(label, wid, keep) do { \
         int bw_ = fb_text_w(label) + 18; \
+        WRAP(bw_); \
         x = unoui_add_button(w, bx, y, bw_, label, 0); x->id = (wid); \
         keep; bx += bw_ + 4; } while (0)
     unoui_window_init(w, "Editor", 90, 36, ww, wh);
@@ -1003,16 +1024,19 @@ void pc64_write_build(unoui_window *w)
     /* the menubar spans the content's top edge OUTSIDE the padded origin
        (rect = title_h..title_h+MENUBAR_H); start the toolbar below it */
     y = ui_menubar_h() - t->m.pad + 3; if (y < 0) y = 0;
-    bx = 0;
+    bx = 0; need = 0;
+    cw = ww - 2 * t->m.frame_w - 2 * t->m.pad;   /* settled BEFORE the flow */
     /* toolbar row 1: file ops | face + size | B I U | L C R */
     BTN("New", WID_NEW, (void)0);
     BTN("Open", WID_OPEN, (void)0);
     BTN("Save", WID_SAVE, (void)0);
     bx += 6;
     { int fw = fb_text_w("Chicago") + 28;
+      WRAP(fw);
       wr_dd_face = unoui_add_dropdown(w, bx, y, fw, kFaceName, 4, 0);
       wr_dd_face->id = WID_FACE; bx += fw + 4; }
     { int sw = fb_text_w("32") + 28;
+      WRAP(sw);
       wr_dd_size = unoui_add_dropdown(w, bx, y, sw, kSizeName, 8, 2);
       wr_dd_size->id = WID_SIZE; bx += sw + 8; }
     BTN("B", WID_B, wr_bt_b = x);
@@ -1022,37 +1046,41 @@ void pc64_write_build(unoui_window *w)
     BTN("L", WID_AL, wr_bt_al = x);
     BTN("C", WID_AC, wr_bt_ac = x);
     BTN("R", WID_AR, wr_bt_ar = x);
-    need1 = bx;
+    /* find / replace starts a row of its own rather than wrapping onto the end
+     * of the formatting controls: it is a different job, and it reads as one. */
     y += bh + 4; bx = 0;
-    /* toolbar row 2: find / replace */
-    unoui_add_label(w, bx, y + (ch - fh) / 2, "Find:");
-    bx += fb_text_w("Find:") + 6;
-    unoui_text_init(&wr_find_t, wr_find, sizeof wr_find, 0);
-    x = unoui_add_edit(w, bx, y, 110, &wr_find_t); x->id = WID_FINDF; bx += 114;
+    { int fldw = fb_text_w("MMMMMMMMMM") + 8;       /* ~10 characters        */
+      int lw = fb_text_w("Find:") + 6;
+      WRAP(lw + fldw);                              /* label + field as one  */
+      unoui_add_label(w, bx, y + (ch - fh) / 2, "Find:");
+      bx += lw;
+      unoui_text_init(&wr_find_t, wr_find, sizeof wr_find, 0);
+      x = unoui_add_edit(w, bx, y, fldw, &wr_find_t); x->id = WID_FINDF;
+      bx += fldw + 4; }
     BTN("Next", WID_FINDGO, (void)0);
     bx += 4;
-    unoui_add_label(w, bx, y + (ch - fh) / 2, "Repl:");
-    bx += fb_text_w("Repl:") + 6;
-    unoui_text_init(&wr_repl_t, wr_repl, sizeof wr_repl, 0);
-    x = unoui_add_edit(w, bx, y, 110, &wr_repl_t); x->id = WID_REPLF; bx += 114;
+    { int fldw = fb_text_w("MMMMMMMMMM") + 8;
+      int lw = fb_text_w("Repl:") + 6;
+      WRAP(lw + fldw);
+      unoui_add_label(w, bx, y + (ch - fh) / 2, "Repl:");
+      bx += lw;
+      unoui_text_init(&wr_repl_t, wr_repl, sizeof wr_repl, 0);
+      x = unoui_add_edit(w, bx, y, fldw, &wr_repl_t); x->id = WID_REPLF;
+      bx += fldw + 4; }
     BTN("Replace", WID_REPLGO, (void)0);
     BTN("All", WID_REPLALL, (void)0);
-    need2 = bx;
     y += ch + 6;
 #undef BTN
-    /* the window must at least fit the wider toolbar row */
-    { int need = (need1 > need2 ? need1 : need2)
-                 + 2 * t->m.frame_w + 2 * t->m.pad;
-      if (ww < need) ww = need;
-      if (ww > waw - 8) ww = waw - 8;
-      w->r.w = ww; }
-    cw = ww - 2 * t->m.frame_w - 2 * t->m.pad;
+#undef WRAP
     /* the document canvas fills the rest of the window */
     x = unoui_add_canvas(w, 0, y, cw, 100, &wr_canvas);
     unoui_widget_fill(x);
     wr_canvas_wi = w->nw - 1;
     unoui_reflow_window(t, w);
-    w->min_w = (need1 > need2 ? need1 : need2) + 2 * t->m.frame_w + 2 * t->m.pad;
+    /* the widest single control, not the widest row: the toolbar wraps, so a
+       narrow window costs rows rather than cut-off buttons */
+    w->min_w = need + 16 + 2 * t->m.frame_w + 2 * t->m.pad;
+    if (w->min_w > w->r.w) w->min_w = w->r.w;
     w->min_h = 260;
     w->flags |= UI_WIN_RESIZE;
     if (wr_len == 0 && !wr_fname[0] && !wr_modified) {
