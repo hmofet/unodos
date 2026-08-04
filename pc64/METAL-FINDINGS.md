@@ -851,10 +851,70 @@ NUL that overflowed `g_fwfile[20]`); the candidate list renders correctly in
 try-order; and **the pointer survives the boot**, which is the user-visible half
 of the same bug.
 
-**What this run does NOT show: an ALIVE.** The boot-path bring-up stops at
-`creds:MISSING` by design, and this NETLOG ends there - no GUI Scan bring-up was
-captured to the stick. So the candidate-retry path STILL has no metal evidence,
-and the original question is still open: does this Qu part ALIVE on `IWLAX20C`
-or `IWLAX201`, or on none of the three? A scan whose NETLOG is captured (let the
-box settle before pulling the stick - a yanked FAT volume can lose the tail of
-the log) answers it.
+### SURFGO ALIVEs on Qu-c0, and ASSOCIATES: F12 is closed on this machine
+
+Same boot, from the operator's GUI Scan at 110 s. **`NETLOG.TXT` did not have
+this** - its tail was lost when the stick was pulled - but the kernel ring
+mirrors every channel, so `BOOTLOG.TXT` carried the whole sequence. **Read
+BOOTLOG, not just NETLOG, when a run ends with the stick being yanked.**
+
+```
+[110.903] wifi: candidate 1/3 FIRMWARE\IWLAX20B.UCO loaded from disk (1406572 bytes)
+[115.347] wifi: FAIL no ALIVE notification within 2 s of fw start
+[115.351] wifi: FIRMWARE\IWLAX20B.UCO never ALIVEd - trying the next stepping
+[115.354] wifi: halting the previous image (device_stop) before reading the next candidate
+[115.422] wifi: candidate 2/3 FIRMWARE\IWLAX20C.UCO loaded from disk (1406588 bytes)
+[115.743] wifi: ALIVE cause seen after 0 ms (HW causes 00000001)
+[115.752] wifi: firmware ALIVE
+[115.822] wifi: MAC c0:3c:59:58:6e:43 (from OTP)
+```
+
+**The Surface Laptop Go is a Qu-c0 part and wants `IWLAX20C.UCO`.** The stepping
+hypothesis was right, and so was the decision to let the hardware decide: this
+machine was unreachable for weeks and the retry cleared it on the second try
+without anyone touching the stick.
+
+**The decode is WRONG for this part, though.** `step = (hw_rev >> 2) & 3` gives 0
+for `hw_rev=0x332`, so the list leads with Qu-b0 and pays a 4.5 s detour. Two
+data points now exist and the LOW NIBBLE separates them where bits 3:2 do not:
+`0x351` (QuZ, nibble 1) wants QuZ-a0, `0x332` (Qu, nibble 2) wants Qu-c0. Linux
+uses `hw_rev & 0xF` for family >= 8000, which is consistent with both. Worth
+switching the ORDER to; not worth removing the retry over.
+
+### The 2026-08-01 BSS-selection hypothesis is CONFIRMED on metal
+
+The fleet entry guessed that "strongest BSS" is not "will talk to us", and that
+walking `scan_pick_nth(n)` past n=0 was the thing to check. It is exactly what
+happened, on the same SKYNET the X1 could not join:
+
+```
+[170.593] join: try 1/3 "SKYNET" bssid e8:d3:eb:51:4d:66 chan 1 rssi -44 ...
+[171.544] join: auth -> -1 (0=ok, >0 AP status, -1 no resp)
+[171.550] join: e8:d3:eb:51:4d:66 did not complete
+[171.556] join: try 2/3 "SKYNET" bssid 30:29:2b:70:4f:c6 chan 1 rssi -52 ...
+[171.666] join: retry auth -> 0
+[171.864] join: retry assoc -> 7 (>=0 AID)
+[171.959] 4-way handshake DONE - CCMP keys installed (gtk_len=16 idx=1), station authorized
+```
+
+**The loudest BSS (-44) ignored auth entirely; the one 8 dB down completed on the
+first try.** Scan saw 24 BSS -> 7 networks. Full WPA2-CCMP association on an
+AX201 that had never posted ALIVE before.
+
+### STILL OPEN: no DHCP lease, and the AP deauths after association
+
+The run does not end happily. From 173.6 s to the end of the log at 189.5 s the
+station retransmits a 309-byte frame every ~1.6 s (DHCP DISCOVER shape) and
+takes repeated `mgmt rx subtype=12` - **deauthentication** - from the AP:
+
+```
+[173.580] wifi: mgmt rx subtype=12 len=26
+[175.218] wifi: TX q=1 idx=8 seq=0108 flen=309 ...
+      ... 10 more TX retries, no lease, log ends still retrying
+```
+
+So: associated and keyed, **but never reached an IP**. Whether the deauths are
+the cause (AP kicking us) or a symptom (our null-data/keepalive or power-save
+handling after assoc) is the next question, and it is a NEW one - everything
+before it is now working. `wifi_wpa.c` post-handshake state and the null-func /
+power-save path are where to start.

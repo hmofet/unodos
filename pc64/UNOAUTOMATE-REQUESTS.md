@@ -5765,3 +5765,70 @@ leaves the selection past it.
 
 The manual now carries a warning callout saying so (`docs/office.html`,
 "Keyboard navigation"). Please delete that callout when this lands.
+
+## 2026-08-04 (metal) - RESOLVED: SURFGO ALIVEs on Qu-c0 and associates. Two hypotheses confirmed, one new problem
+
+Operator ran a GUI Scan and joined SKYNET by hand. **The evidence was NOT in
+`NETLOG.TXT`** - its tail was lost when the stick was pulled - but the kernel
+ring mirrors every channel, so `BOOTLOG.TXT` had all of it. Worth internalising:
+**when a run ends with the stick being yanked, read BOOTLOG, not just NETLOG.**
+I nearly filed "ALIVE not demonstrated" on the strength of NETLOG alone.
+
+Full logs: `Documents\unodos-metal-logs\2026-08-04-surfgo-wifi-works\`.
+
+### -> iwlwifi (mine): the candidate list did exactly its job
+
+```
+candidate 1/3 IWLAX20B.UCO -> FAIL no ALIVE within 2 s
+IWLAX20B.UCO never ALIVEd - trying the next stepping
+halting the previous image (device_stop) before reading the next candidate
+candidate 2/3 IWLAX20C.UCO -> ALIVE cause seen after 0 ms -> firmware ALIVE
+```
+
+**SURFGO is Qu-c0 and wants `IWLAX20C.UCO`.** A machine that had been dead for
+weeks, and could not be reached over URC to debug, cleared itself on the second
+try with nobody touching the stick. That is the argument for "the decode picks
+the order, ALIVE picks the answer" made on hardware rather than on paper.
+
+**But the decode is wrong for this part and should be improved.** `step =
+(hw_rev >> 2) & 3` is 0 for `0x332`, so we lead with b0 and pay 4.5 s. Two data
+points now, and the LOW NIBBLE separates them where bits 3:2 do not: `0x351`
+(QuZ, nibble 1) wants QuZ-a0; `0x332` (Qu, nibble 2) wants Qu-c0. Linux uses
+`hw_rev & 0xF` for family >= 8000, consistent with both. **Not doing it in this
+session** - two data points is thin, the retry already covers the miss, and the
+cost of being wrong again is a boot delay rather than a dead radio. Next person
+in this lane: that is the cheap win.
+
+### -> unonet / NIC drivers: the 2026-08-01 BSS-selection hypothesis is CONFIRMED
+
+The fleet entry guessed that "strongest BSS" is not "will talk to us", quoting
+the NimmuNet note, and said the thing to check first was whether the join path
+walks `scan_pick_nth(n)` past n=0. It does, and it is what saved this join - on
+the same SKYNET the X1 could not get onto:
+
+```
+join: try 1/3 "SKYNET" bssid e8:d3:eb:51:4d:66 rssi -44 -> auth -> -1 (no resp) -> did not complete
+join: try 2/3 "SKYNET" bssid 30:29:2b:70:4f:c6 rssi -52 -> auth 0, assoc AID 7
+4-way handshake DONE - CCMP keys installed (gtk_len=16 idx=1), station authorized
+```
+
+The loudest BSS ignored auth outright; the one 8 dB down completed first try.
+The hypothesis was right and the multi-BSS retry built for it is earning its
+keep. **This also re-opens the X1 question in a good way**: same AP, same
+symptom, and now a known-good mechanism - the X1 may simply have been sitting in
+front of the BSS that refuses.
+
+### NEW and open: associated, keyed, but no DHCP lease - and the AP deauths us
+
+From 173.6 s to the end of the log the station retransmits a 309-byte frame
+every ~1.6 s (DHCP DISCOVER shape) and takes repeated `mgmt rx subtype=12` -
+**deauthentication** - from the AP. No lease in 16 s of trying.
+
+Everything up to and including the 4-way now works, so this is a genuinely new
+frontier rather than the old one resurfacing. Whether the deauths cause the
+failure (AP kicking us) or report it (our post-assoc null-data / power-save
+handling) is the question. `wifi_wpa.c` post-handshake state and the null-func /
+keepalive path are where I would start.
+
+**Closing my claim on the iwlwifi lane.** ALIVE and association are done on both
+silicon variants; the lease is somebody's next slice.
