@@ -3852,6 +3852,28 @@ uno_nic_t *iwl_nic(void)
         return 0;
     }
 
+    /* map BAR0 + bus master, and read the silicon identity, BEFORE choosing a
+     * firmware file.  This used to happen ~100 lines further down - AFTER
+     * choose_firmware() had already decoded `g_hw_rev` and after the .ucode had
+     * been read off the disk - so on the FIRST bring-up of a cold boot the
+     * stepping decode ran on g_hw_rev == 0: mac_type 0, step 0, and the
+     * else-branch default for the family.  It only ever saw a real revision
+     * from the second bring-up onwards, off the value the first one cached.
+     * Metal proof (SURFGO, 2026-08-03): `hw_rev=00000000` on the boot
+     * bring-up, `hw_rev=00000332` on the GUI one.  Linux reads CSR_HW_REV in
+     * iwl_trans_pcie_alloc(), immediately after mapping BAR0 and before any of
+     * the config/firmware selection, which is exactly this order. */
+    pci_enable_bus_master(&g_pci);
+    g_bar = (volatile u8 *)(uintptr_t)pci_bar(&g_pci, 0);
+    if (!g_bar) {
+        st_set("WiFi: no BAR0");
+        uno_dbg_net_trace("wifi: FAIL BAR0 unmapped");
+        return 0;
+    }
+    g_hw_rev = r32(CSR_HW_REV);
+    g_hw_rf_id = r32(CSR_HW_RF_ID);
+    uno_dbg_net_trace("wifi: BAR0 ok, hw_rev=%08x rf_id=%08x", g_hw_rev, g_hw_rf_id);
+
     choose_firmware();
     st_set("Intel WiFi "); st_cathex(g_hw_rev);
     read_fw_override();
@@ -3940,18 +3962,8 @@ uno_nic_t *iwl_nic(void)
     uno_dbg_net_trace("wifi: firmware %s loaded from disk (%ld bytes)", g_fwfile, fn);
     load_pnvm(vol);
 
-    /* map BAR0 + bus master */
-    pci_enable_bus_master(&g_pci);
-    g_bar = (volatile u8 *)(uintptr_t)pci_bar(&g_pci, 0);
-    if (!g_bar) {
-        st_set("WiFi: no BAR0");
-        uno_dbg_net_trace("wifi: FAIL BAR0 unmapped");
-        return 0;
-    }
-    g_hw_rev = r32(CSR_HW_REV);
-    g_hw_rf_id = r32(CSR_HW_RF_ID);
-    uno_dbg_net_trace("wifi: BAR0 ok, hw_rev=%08x rf_id=%08x", g_hw_rev, g_hw_rf_id);
-
+    /* BAR0, bus master and the CSR_HW_REV read now happen at the top of this
+     * function, before choose_firmware() - see the note there. */
     if (prepare_card_hw() < 0) {
         st_set("WiFi: card not ready (ME owns it?)");
         uno_dbg_net_trace("wifi: FAIL prepare_card_hw timeout - CSR handshake refused (ME/CNVi ownership?)");
