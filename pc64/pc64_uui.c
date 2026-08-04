@@ -561,6 +561,22 @@ static void cp_wifi_target_label(void)
     *p = 0;
 }
 
+/* The spinner beside the WiFi status line. It only exists while something is
+ * running, so its presence IS the "working" signal and its absence is "idle" -
+ * no state to keep in sync, and nothing left spinning after a failure. */
+static unoui_widget *g_cp_busy;
+static int g_cp_working;             /* a scan/join is in flight right now */
+#ifdef UNO_DEBUG
+/* The WiFi pane only exists when a card does, so the layout audit could never
+ * see it - and it is five rows and the tallest thing on the Network tab. This
+ * lets the audit lay it out on a machine (QEMU) that has no radio. Debug only;
+ * it never affects what a user sees. */
+static int g_cp_wifi_force;
+#define WIFI_PANE_ON() (iwl_present() || g_cp_wifi_force)
+#else
+#define WIFI_PANE_ON() iwl_present()
+#endif
+
 /* update the status line and paint it NOW (we are about to block) */
 static void cp_wifi_note(const char *s)
 {
@@ -569,6 +585,49 @@ static void cp_wifi_note(const char *s)
     *p = 0;
     unoui_render_ui(&UI);
     uno_pc64_present();
+}
+
+/* Advance the spinner and repaint, WITHOUT rebuilding the window - this runs
+ * from inside the driver's wait loops, several times a second, and a rebuild
+ * per tick would throw the keyboard focus away that often. */
+static void cp_wifi_spin(void)
+{
+    if (g_cp_busy) unoui_busy_step(g_cp_busy);
+    unoui_render_ui(&UI);
+    uno_pc64_present();
+}
+
+/* The driver's progress hook (iwlwifi.h). Called on the shell's own stack from
+ * inside the blocking call, so it may paint - and must not call back into the
+ * driver, which is why this only ever touches a string and the spinner. */
+static void cp_wifi_progress(void *ctx, const char *what, int step, int steps)
+{
+    char msg[120]; char *p;
+    (void)ctx;
+    p = ap_str(msg, what ? what : "Working");
+    if (steps > 0) { p = ap_str(p, "   ("); p = ap_int(p, step);
+                     p = ap_str(p, " of "); p = ap_int(p, steps); *p++ = ')'; }
+    *p = 0;
+    { char *q = g_cp_wifi_msg; const char *r = msg;
+      while (*r && q < g_cp_wifi_msg + sizeof g_cp_wifi_msg - 1) *q++ = *r++;
+      *q = 0; }
+    cp_wifi_spin();
+}
+
+/* Bracket a blocking driver call: the spinner appears, the driver reports into
+ * it, and it is gone by the time anything else is drawn. */
+static void cp_wifi_busy_begin(void)
+{
+    g_cp_working = 1;
+    rebuild_ctrl_window();              /* the spinner joins the layout */
+    iwl_progress_set(cp_wifi_progress, 0);
+}
+static void cp_wifi_busy_end(void)
+{
+    iwl_progress_set(0, 0);
+    g_cp_working = 0;
+    g_cp_busy = 0;
+    rebuild_ctrl_window();              /* ...and leaves it again */
 }
 
 /* is this network already remembered?  (asks for the passphrase without
@@ -617,8 +676,10 @@ static void cp_wifi_forget(void)
 static void cp_wifi_scan(void)
 {
     int i;
+    cp_wifi_busy_begin();
     cp_wifi_note("Scanning for networks...");
     g_cp_ap_n = iwl_scan_aps(g_cp_aps, CP_WIFI_MAX);
+    cp_wifi_busy_end();
     for (i = 0; i < g_cp_ap_n; i++) {
         char *p = g_cp_ap_lbl[i];
         const char *s = g_cp_aps[i].ssid;
@@ -672,10 +733,12 @@ static void cp_wifi_join(void)
     int i;
     if (g_cp_ap_n <= 0) { cp_wifi_note("Scan first."); return; }
     g_cp_psk[g_cp_psk_t.len] = 0;
+    cp_wifi_busy_begin();
     { char msg[120]; char *p = ap_str(msg, "Joining \"");
-      p = ap_str(p, g_cp_aps[g_cp_ap_sel].ssid);
-      p = ap_str(p, "\" - associating and running the 4-way handshake...");
+      p = ap_str(p, g_cp_aps[g_cp_ap_sel].ssid); p = ap_str(p, "\"...");
       *p = 0; cp_wifi_note(msg); }
+    /* The driver reports each phase into cp_wifi_progress from here on, so the
+     * label follows the join instead of describing the whole of it up front. */
     if (iwl_join_ssid(g_cp_aps[g_cp_ap_sel].ssid, g_cp_psk) != 0) {
         /* SAY WHAT ACTUALLY FAILED. iwl_join_ssid() returns non-zero for an
          * SSID that vanished between scan and join, an auth timeout, an assoc
@@ -706,6 +769,10 @@ static void cp_wifi_join(void)
              * screen is visibly alive the whole time. */
             for (i = 0; i < 4000 && !net_dhcp_done(); i++) {
                 net_poll(); uno_pc64_delay_ms(5);
+                /* ~8 Hz for the spinner, once a half-second for the clock:
+                 * the indicator has to move faster than the words change or it
+                 * stops reading as motion */
+                if (i && (i % 25) == 0)  cp_wifi_spin();
                 if (i && (i % 100) == 0)
                     cp_wifi_phase("Asking the network for an address (DHCP)", i / 200);
             }
@@ -714,6 +781,7 @@ static void cp_wifi_join(void)
             ? "Connected."
             : "Joined, but no address yet - still asking in the background.");
     }
+    cp_wifi_busy_end();
     for (i = 0; i < (int)sizeof g_cp_psk; i++) g_cp_psk[i] = 0;   /* do not keep it */
     g_cp_psk_t.len = g_cp_psk_t.caret = g_cp_psk_t.sel = 0;
     rebuild_ctrl_window();
@@ -850,15 +918,19 @@ static void build_ctrl(unoui_window *w)
         p = ap_int(p, (int)net_tx_frames()); p = ap_str(p, "   rx ");
         p = ap_int(p, (int)net_rx_frames());
         *p = 0;
-        for (i = 0; i < 5; i++) { unoui_add_label(w, 8, y + lofs, g_cp_net[i]); y += row; }
-        y += 2;
+        /* Five plain labels, at LABEL pitch. They were stepping by `row` - the
+         * height of a control - which spent 50 px of a 333 px panel on white
+         * space and was enough on its own to push the WiFi status line off the
+         * bottom of the tab on a 640x400 desktop at the default font. */
+        for (i = 0; i < 5; i++) { unoui_add_label(w, 8, y, g_cp_net[i]); y += fh + 6; }
+        y += 6;
         x = unoui_add_button(w, 8, y, 110, "Refresh", 0); x->id = ID_NETREFRESH;
         x = unoui_add_button(w, 126, y, 110, "Renew IP", 0); x->id = ID_NETRENEW;
         unoui_add_label(w, 248, y + lofs, up && net_dhcp_done()
                         ? "DHCP is automatic." : "No lease? Try Renew IP.");
         y += bh + 8;
         /* ---- WiFi: scan, pick, type the password, join ---- */
-        if (iwl_present()) {
+        if (WIFI_PANE_ON()) {
             int pw;
             unoui_add_sep(w, 8, y, cw - 16); y += 8;
             iwl_status_str(g_cp_wifi_stat, sizeof g_cp_wifi_stat);
@@ -867,8 +939,23 @@ static void build_ctrl(unoui_window *w)
                             g_cp_wifi_stat[0] ? g_cp_wifi_stat : "Intel WiFi card present.");
             y += fh + 8;
             if (g_cp_ap_n > 0) {
-                int rows = g_cp_ap_n < CP_WIFI_ROWS ? g_cp_ap_n : CP_WIFI_ROWS;
-                int lh = rows * (fh + 4) + 6;
+                /* The scan list takes what the rows BELOW it leave, not a fixed
+                 * six rows. Six pushed the status line - the one that carries
+                 * "Join failed: ..." - off the bottom of the panel on a 640x400
+                 * desktop at the DEFAULT font. The layout audit could not see
+                 * it, because this whole pane only exists when a WiFi card
+                 * does and QEMU has none; g_cp_wifi_force is why it can now. */
+                int below = (fh + 6)            /* the target-network label     */
+                          + (ch + 8)            /* the password row             */
+                          + (bh + 6)            /* Scan / Join / Forget         */
+                          + (fh + 8) + 8;       /* the status line + a margin   */
+                int have  = (FB_H - TASKH) - win_h_for(y) - below;
+                int rows  = have / (fh + 4);
+                int lh;
+                if (rows > CP_WIFI_ROWS) rows = CP_WIFI_ROWS;
+                if (rows > g_cp_ap_n)    rows = g_cp_ap_n;
+                if (rows < 2)            rows = 2;   /* a list of one is not a list */
+                lh = rows * (fh + 4) + 6;
                 /* the whole scan goes into ONE scrolling list: wheel, the
                  * inline scrollbar and the arrow keys reach the rest */
                 x = unoui_add_list(w, 8, y, cw - 16, lh,
@@ -901,6 +988,12 @@ static void build_ctrl(unoui_window *w)
             { int c = g_cp_psk_t.caret, sl = g_cp_psk_t.sel, sx = g_cp_psk_t.scroll_x;
               int same = (g_cp_psk_t.buf == g_cp_psk);
               unoui_text_init(&g_cp_psk_t, g_cp_psk, sizeof g_cp_psk, 0);
+              /* MASKED. It was in the clear until now - a WPA2 passphrase, on
+               * a Control Panel that anybody walking past can read, on a
+               * machine whose whole point is that other people use it. The
+               * field's own eye shows it back when you need to check it, and
+               * hides it again as soon as the field loses focus. */
+              unoui_text_secret(&g_cp_psk_t, '*');
               if (same) {
                   if (c  > g_cp_psk_t.len) c  = g_cp_psk_t.len;
                   if (sl > g_cp_psk_t.len) sl = g_cp_psk_t.len;
@@ -927,8 +1020,18 @@ static void build_ctrl(unoui_window *w)
                   x = unoui_add_button(w, bx, y, bf, "Forget", 0); x->id = ID_WIFIFORGET;
               } }
             y += bh + 6;
-            unoui_add_label(w, 8, y + lofs, g_cp_wifi_msg);
-            y += fh + 8;
+            /* the spinner leads the status line while something is running;
+             * when nothing is, there is no widget and the text starts at 8 */
+            if (g_cp_working) {
+                int sz = fh + 4;
+                g_cp_busy = unoui_add_busy(w, 8, y, sz);
+                unoui_add_label(w, 8 + sz + 8, y + (sz - fh) / 2, g_cp_wifi_msg);
+                y += (sz > fh ? sz : fh) + 8;
+            } else {
+                g_cp_busy = 0;
+                unoui_add_label(w, 8, y + lofs, g_cp_wifi_msg);
+                y += fh + 8;
+            }
         }
         break; }
 
@@ -1676,6 +1779,7 @@ static void audit_fit(unoui_window *w, const char *what)
 static void layout_audit_pass(void)
 {
     int a, saved_tab = g_ctrl_tab, t;
+    g_cp_wifi_force = 1;            /* audit the WiFi pane even with no radio */
     for (t = 0; t < CT_N; t++) {              /* six tabs = six layouts */
         g_ctrl_tab = t;
         build_ctrl(&g_win[APP_CTRL]);
@@ -1685,6 +1789,7 @@ static void layout_audit_pass(void)
         unoui_window_audit(UI.theme, &g_win[APP_CTRL], audit_report,
                            (void *)kCtrlTabs[t]);
     }
+    g_cp_wifi_force = 0;
     g_ctrl_tab = saved_tab;
     build_ctrl(&g_win[APP_CTRL]);
     unoui_reflow_window(UI.theme, &g_win[APP_CTRL]);
