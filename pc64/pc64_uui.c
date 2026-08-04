@@ -982,26 +982,17 @@ static void build_ctrl(unoui_window *w)
             y += fh + 6;
             pw = fb_text_w("Password:") + 10;
             unoui_add_label(w, 8, y + lofs, "Password:");
-            /* Re-seed the model but KEEP the caret where the user left it.
-             * unoui_text_init resets caret/sel/scroll to the end of the text,
-             * and this runs on every rebuild of the tab - so a lease landing
-             * mid-password (or any Scan) used to jerk the cursor to the end of
-             * whatever had been typed so far. */
-            { int c = g_cp_psk_t.caret, sl = g_cp_psk_t.sel, sx = g_cp_psk_t.scroll_x;
-              int same = (g_cp_psk_t.buf == g_cp_psk);
-              unoui_text_init(&g_cp_psk_t, g_cp_psk, sizeof g_cp_psk, 0);
-              /* MASKED. It was in the clear until now - a WPA2 passphrase, on
-               * a Control Panel that anybody walking past can read, on a
-               * machine whose whole point is that other people use it. The
-               * field's own eye shows it back when you need to check it, and
-               * hides it again as soon as the field loses focus. */
-              unoui_text_secret(&g_cp_psk_t, '*');
-              if (same) {
-                  if (c  > g_cp_psk_t.len) c  = g_cp_psk_t.len;
-                  if (sl > g_cp_psk_t.len) sl = g_cp_psk_t.len;
-                  g_cp_psk_t.caret = c; g_cp_psk_t.sel = sl;
-                  g_cp_psk_t.scroll_x = sx;
-              } }
+            /* Re-binding the same buffer keeps the caret - unoui_text_init's
+             * own contract now, rather than this builder saving and restoring
+             * it by hand. That hand-rolled version fixed exactly one field;
+             * every other one in the OS still jumped. */
+            unoui_text_init(&g_cp_psk_t, g_cp_psk, sizeof g_cp_psk, 0);
+            /* MASKED. It was in the clear until now - a WPA2 passphrase, on a
+             * Control Panel that anybody walking past can read, on a machine
+             * whose whole point is that other people use it. The field's own
+             * eye shows it back when you need to check it, and hides it again
+             * as soon as the field loses focus. */
+            unoui_text_secret(&g_cp_psk_t, '*');
             x = unoui_add_edit(w, 8 + pw, y, cw - pw - 16, &g_cp_psk_t); x->id = ID_WIFIPSK;
             /* The house "no": the field shakes and keeps the focus, so the
              * retry is one keystroke.  Fired from the BUILD because the widget

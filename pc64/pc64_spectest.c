@@ -409,7 +409,8 @@ static void test_unoui(void)
      * capacity is a no-op and never overflows the buffer */
     {
         unoui_ui u3; unoui_window ew; unoui_widget *e;
-        unoui_text txt; static char tbuf[8];
+        unoui_text txt = { 0 }; static char tbuf[8];   /* zeroed: see
+                                          unoui_text_init's contract */
         unoui_rect r; unoui_event ev; int cx, cy, k;
         unoui_ui_init(&u3, t, 1024, 768);
         unoui_window_init(&ew, "edit", 40, 40, 300, 200);

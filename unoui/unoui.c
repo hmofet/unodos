@@ -265,10 +265,31 @@ unoui_widget *unoui_add_mdi(unoui_window *w, int x, int y, int ww, int hh,
 /* ---- editable text model ------------------------------------------------- */
 void unoui_text_init(unoui_text *t, char *buf, int cap, int multiline)
 {
-    int n = 0; while (buf[n] && n < cap - 1) n++;
+    int n = 0, again = (t->buf == buf);
+    while (buf[n] && n < cap - 1) n++;
     t->buf = buf; t->cap = cap; t->len = n;
-    t->caret = n; t->sel = n; t->scroll_x = t->scroll_y = 0;
     t->multiline = multiline;
+    /* RE-BINDING THE SAME BUFFER KEEPS THE CARET.
+     *
+     * Because a window BUILDER is a function that runs many times - on a tab
+     * switch, a refresh, a font change, a lease arriving - and this was written
+     * as though it ran once. Every rebuild slammed the caret to the end of the
+     * text, so typing into a field in a window that rebuilt underneath you
+     * jumped the cursor away mid-word. Reported twice: once as the WiFi
+     * password field (patched there, in the app, which fixed one field out of
+     * five), and again afterwards for the others - Files' Name box, the
+     * Editor's Find and Replace boxes, the installer's confirmation box.
+     *
+     * Fixing it in each builder means every FUTURE builder gets it wrong too.
+     * A caller that really does want the caret reset is asking to REPLACE the
+     * contents, and that is what unoui_text_set() is for. */
+    if (!again) { t->caret = t->sel = n; t->scroll_x = t->scroll_y = 0; }
+    else {
+        if (t->caret > n) t->caret = n;
+        if (t->sel   > n) t->sel   = n;
+        if (t->caret < 0) t->caret = 0;
+        if (t->sel   < 0) t->sel   = 0;
+    }
 }
 
 void unoui_text_secret(unoui_text *t, int mask_char)

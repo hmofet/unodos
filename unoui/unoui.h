@@ -71,6 +71,18 @@ typedef struct {
     int   revealed;   /* showing the real text right now; cleared on blur     */
 } unoui_text;
 
+/* Bind the model to `buf`. ZERO-INITIALISE THE STRUCT FIRST (static storage
+ * does this for you) - init inspects the model to see whether it is already
+ * bound to this same buffer, and re-binding the SAME buffer keeps the caret,
+ * the selection and the scroll rather than throwing them away.
+ *
+ * That is not a nicety: a window BUILDER runs many times - a tab switch, a
+ * refresh, a font change - and every one of those re-inits its fields. Without
+ * this, typing into any field in a window that rebuilds underneath you jumps
+ * the cursor to the end of the text mid-word.
+ *
+ * A caller that really wants the caret reset is asking to REPLACE the
+ * contents: unoui_text_set() does that, and resets. */
 void unoui_text_init(unoui_text *t, char *buf, int cap, int multiline);
 void unoui_text_set (unoui_text *t, const char *s);
 
