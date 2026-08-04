@@ -217,6 +217,31 @@ ssid=YourNetwork
 psk=your-wpa2-passphrase
 ```
 
+### Forcing an AX201 firmware stepping (`fw=`)
+
+An AX201 is a Qu-family CNVi part in one of three steppings - **QuZ-a0, Qu-b0
+and Qu-c0** - and each needs a *different* ucode. Which one a machine has is in
+`CSR_HW_REV`, not in its PCI id: `0x02f0` and `0x34f0` both appear as either,
+which is why Linux keys its config table on the hardware revision. The driver
+decodes the revision and picks `IWLAX201.UCO` (QuZ-a0), `IWLAX20B.UCO` (Qu-b0)
+or `IWLAX20C.UCO` (Qu-c0), falling back to whichever is actually staged.
+
+When the firmware loads but never posts ALIVE, the stepping is the first thing
+to vary. Add a line to `WIFI.CFG` (or `WIFI.TXT`, or `DEBUG.CFG`) at a volume
+root:
+
+```
+fw=IWLAX20B.UCO
+```
+
+That overrides the decode entirely - no rebuild, no reflash. The bring-up
+trace records what happened either way (`hw_rev`, the decoded `mac_type` and
+`step`, `rf_id`, the file chosen and the alternate), so one boot makes
+`CRASH\<machine>\NETLOG.TXT` answer "what silicon is this, and what did we feed
+it". That matters most on a machine with no wired NIC, where URC cannot reach
+the box to run `iwl alive` and the crash log is the only channel there is.
+
+
 The NAS keeps a template at `\\behemoth\unreplicated\unodos\pc64\testkit\wifi.txt`
 - fill it in once and the flasher's **Developer options** folder-copy puts it
 on every stick it flashes. Plaintext on the stick; treat it accordingly.
