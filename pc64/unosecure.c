@@ -100,7 +100,22 @@ typedef struct {
     trustkey_t keys[MAX_KEYS];
 } db_blob_t;
 
+/* magic[0..5] = 'UNSCDB', [6] = format version, [7] = CAPABILITY GENERATION.
+ *
+ * Byte 7 was a spare zero.  It now records USC_CAP__COUNT as of the build that
+ * last wrote the store, which is what lets unosec_boot() notice that the
+ * capability vocabulary has GROWN since and seed the new entries onto the
+ * built-in roles (see cap_gen_migrate).  It lives in the magic rather than in a
+ * new struct field on purpose: db_load requires an EXACT sizeof match, so
+ * growing db_blob_t would make every existing store fail to load and be
+ * re-seeded from empty - silently destroying the accounts on every machine that
+ * upgraded.  Only the first 7 bytes are compared for validity.
+ *
+ * A store written before this change has 0 here, which reads as "knows nothing"
+ * and triggers a full additive re-seed.  That is correct for those stores and
+ * safe because role_add_cap_raw skips duplicates. */
 static const char DB_MAGIC[8] = { 'U','N','S','C','D','B',1,0 };
+#define DB_MAGIC_LEN 7                 /* byte 7 is data, not signature */
 
 /* ---- live escalation grants (RAM only; never persisted) ------------------ */
 typedef struct {
@@ -503,7 +518,9 @@ static int pick_vol(void)
 static void db_save(void)
 {
     if (g_vol < 0) return;
-    memcpy(g_db.magic, DB_MAGIC, 8);
+    memcpy(g_db.magic, DB_MAGIC, DB_MAGIC_LEN);
+    /* stamp the vocabulary this build knows, so a later one can tell it grew */
+    g_db.magic[7] = (char)(unsigned char)USC_CAP__COUNT;
     uno_fs_write(g_vol, STORE_FILE, (const unsigned char *)&g_db, sizeof g_db);
 }
 static int db_load(void)
@@ -514,7 +531,8 @@ static int db_load(void)
     if (sz != (long)sizeof g_db) return 0;
     if (uno_fs_read(g_vol, STORE_FILE, (unsigned char *)&g_db, sizeof g_db)
             != (long)sizeof g_db) return 0;
-    if (memcmp(g_db.magic, DB_MAGIC, 8) != 0) { memset(&g_db, 0, sizeof g_db); return 0; }
+    if (memcmp(g_db.magic, DB_MAGIC, DB_MAGIC_LEN) != 0)
+        { memset(&g_db, 0, sizeof g_db); return 0; }
     return 1;
 }
 /* Restore the running chain head + sequence from the last stored line so the
@@ -562,25 +580,50 @@ static void audit_load(void)
 /* ===========================================================================
  * Built-in role seeding (only when the role table is empty on a fresh store).
  * ======================================================================== */
-static void seed_roles(void)
+/* Seed the built-in roles with capabilities [first, USC_CAP__COUNT).
+ *
+ * ADDITIVE ONLY - role_add_cap_raw skips duplicates, and role_ensure leaves an
+ * existing role alone - so this is safe to run against a populated store.  That
+ * matters because it is now also the MIGRATION path, not just first-run setup.
+ *
+ * Why a range rather than always re-seeding everything: usc_cap_t is documented
+ * append-only, so an index is a point in time and "index >= the generation the
+ * store was written with" is exactly the set of capabilities added since.  If a
+ * remove-capability API ever lands, that precision is what stops a migration
+ * silently restoring something an operator deliberately took away.  (Today no
+ * such API exists, which is why a `first` of 1 - a pre-generation store - can
+ * safely re-seed the lot.) */
+static void seed_roles_from(int first)
 {
-    int c;
+    int c, full = 0;
     role_ensure("admin"); role_ensure("user"); role_ensure("guest");
-    for (c = 1; c < USC_CAP__COUNT; c++) {
+    if (first < 1) first = 1;
+    for (c = first; c < USC_CAP__COUNT; c++) {
         usc_tier_t t = unoscript_cap_tier((usc_cap_t)c);
         const char *n = unoscript_cap_name((usc_cap_t)c);
-        if (t <= USC_TIER_ADMIN)   role_add_cap_raw("admin", n);
-        if (t <= USC_TIER_USER)    role_add_cap_raw("user",  n);
-        if (t == USC_TIER_AMBIENT) role_add_cap_raw("guest", n);
+        if (t <= USC_TIER_ADMIN   && !role_add_cap_raw("admin", n)) full = 1;
+        if (t <= USC_TIER_USER    && !role_add_cap_raw("user",  n)) full = 1;
+        if (t == USC_TIER_AMBIENT && !role_add_cap_raw("guest", n)) full = 1;
     }
-    /* unosecure's own management caps live only on admin. */
-    role_add_cap_raw("admin", UNOSEC_CAP_USER_CREATE);
-    role_add_cap_raw("admin", UNOSEC_CAP_USER_DELETE);
-    role_add_cap_raw("admin", UNOSEC_CAP_ROLE_ASSIGN);
-    role_add_cap_raw("admin", UNOSEC_CAP_ROLE_EDIT);
-    role_add_cap_raw("admin", UNOSEC_CAP_POLICY_EDIT);
-    role_add_cap_raw("admin", UNOSEC_CAP_AUDIT_READ);
+    /* unosecure's own management caps live only on admin.  Not in usc_cap_t, so
+     * they have no index and are simply re-added every time (idempotent). */
+    if (!role_add_cap_raw("admin", UNOSEC_CAP_USER_CREATE)) full = 1;
+    if (!role_add_cap_raw("admin", UNOSEC_CAP_USER_DELETE)) full = 1;
+    if (!role_add_cap_raw("admin", UNOSEC_CAP_ROLE_ASSIGN)) full = 1;
+    if (!role_add_cap_raw("admin", UNOSEC_CAP_ROLE_EDIT))   full = 1;
+    if (!role_add_cap_raw("admin", UNOSEC_CAP_POLICY_EDIT)) full = 1;
+    if (!role_add_cap_raw("admin", UNOSEC_CAP_AUDIT_READ))  full = 1;
+
+    /* A role table that is FULL drops capabilities on the floor, which shows up
+     * later as an admin being prompted for something their role should cover -
+     * exactly the bug this seeding exists to prevent.  Say so rather than
+     * truncating in silence. */
+    if (full)
+        audit_emit(UNOSEC_UID_SYSTEM, "sec.seed",
+                   "role capability table FULL - some caps not granted", 0);
 }
+
+static void seed_roles(void) { seed_roles_from(1); }
 
 /* ===========================================================================
  * Lifecycle.
@@ -609,6 +652,30 @@ int unosec_boot(void)
     }
     /* a loaded store with no roles (corruption / older layout) -> reseed. */
     if (!role_find("admin")) seed_roles();
+
+    /* CAPABILITY MIGRATION.  seed_roles() only ever ran on a FRESH store, so a
+     * machine whose store predated a capability never granted it: the built-in
+     * `admin` role is defined as "every capability at tier <= ADMIN", but an
+     * existing store froze that definition at whatever the vocabulary was the
+     * day it was created.  Adding a capability therefore reached new installs
+     * and no existing one.
+     *
+     * Caught on the ZimaBlade 2026-08-04: automate.observe and automate.drive
+     * are both ADMIN tier and both seeded onto `admin` in a fresh store, yet an
+     * admin on that box got a consent prompt for each - its store was older
+     * than the capabilities.  Fail-closed, so not a hole, but it means an admin
+     * is asked to approve things their role already grants, and the prompt
+     * fatigue that breeds is its own security problem. */
+    if (have_db) {
+        int stored = (unsigned char)g_db.magic[7];
+        if (stored < USC_CAP__COUNT) {
+            seed_roles_from(stored);          /* only what is new since `stored` */
+            audit_emit(UNOSEC_UID_SYSTEM, "sec.capmigrate",
+                       stored ? "new capabilities seeded onto built-in roles"
+                              : "pre-generation store - built-in roles re-seeded", 1);
+            if (g_vol >= 0) db_save();        /* stamps the new generation */
+        }
+    }
 
     g_up = 1;
     audit_emit(UNOSEC_UID_SYSTEM, "sec.boot",
