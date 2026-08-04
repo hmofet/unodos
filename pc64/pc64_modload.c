@@ -44,6 +44,7 @@
 #include "unosound.h"       /* uno_seq_* audio */
 #include "uno3d.h"          /* u3d_* 3D */
 #include "unoscript.h"      /* the production scripting surface: usc_ + unosec_ */
+#include "unoui_anim.h"     /* the shared tween clock the shell pumps */
 #include <string.h>
 #include <stdlib.h>
 #include <math.h>
@@ -65,6 +66,7 @@ const struct unoui_theme *pc64_shell_theme(void);
 int  pc64_shell_run_user(int vol, const char *path);
 const char *pc64_shell_py_error(void);
 int  pc64_shell_font_mono(void);
+unoui_anim *uno_pc64_anim(void);               /* the clock the shell pumps */
 void pc64_browser_open_path(const char *path);
 int  fb_width(void);
 int  fb_height(void);
@@ -159,6 +161,18 @@ static const struct { const char *name; void *addr; } kExports[] = {
     KX(unoui_list_set_sel), KX(unoui_list_draw),  KX(unoui_list_rows),
     KX(unoui_list_maxtop),  KX(unoui_list_index_at), KX(unoui_list_reveal),
     KX(unoui_list_bar),
+    /* appended: the shared animation clock. uno_pc64_anim() hands back the
+     * context the SHELL pumps, so a module animates against the same clock as
+     * everything else instead of counting its own frames. */
+    KX(uno_pc64_anim),
+    KX(unoui_tween_start),  KX(unoui_tween_to),
+    KX(unoui_anim_value),   KX(unoui_anim_progress), KX(unoui_anim_done),
+    KX(unoui_anim_live),    KX(unoui_anim_active),
+    KX(unoui_anim_cancel),  KX(unoui_anim_finish),   KX(unoui_anim_free),
+    KX(unoui_ease),         KX(unoui_anim_lerp),     KX(unoui_anim_now),
+    KX(unoui_seq_init),     KX(unoui_seq_add),       KX(unoui_seq_start),
+    KX(unoui_seq_trigger),  KX(unoui_seq_stop),
+    KX(unoui_seq_done),     KX(unoui_seq_waiting),
     /* framebuffer + fonts */
     KX(fb_fill_rect), KX(fb_hline), KX(fb_vline), KX(fb_blit), KX(fb_text),
     KX(fb_text_w),    KX(fb_text_h), KX(fb_width), KX(fb_height),
