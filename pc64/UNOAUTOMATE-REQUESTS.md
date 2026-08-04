@@ -6351,3 +6351,84 @@ the shape**; both apps had it written the other way and both were cut at
 150-200%.
 
 Audit: 100% clean, and Editor/Files clean at every scale.
+
+## 2026-08-04 - CLAIM + LANDED (unosecure sheet loop / pc64 boot input order): the two Surface reports
+
+Operator report from the Surface Laptop Go, after the boot-test-banner fix
+(`52a936d9`) landed: **"the OSK keyboard icon is still showing in the bottom
+right"**, and **"mouse cursor is floaty in the OS login screen, but once the
+desktop loads, mouse moves more normally (still a bit floaty)"**.  Taking one
+slice each on `surface-input`; both landed there.  Neither is metal-confirmed -
+the box was unreachable this session (see the note at the end).
+
+### 1. -> unosecure (`pc64_accounts.c`): the sign-in sheet slept through the pointer
+
+`9bbd0a26`.  `modal_frame()` ended with a flat `uno_pc64_delay_ms(16)` on
+**every** pass, including passes in which the cursor was moving.  The shell's
+own loop does not: a `cursor_only` frame goes straight to `uno_pc64_present()`
+and starts the next one, and the 16 ms wait is what it does when nothing
+happened at all.  So the sign-in sheet moved its cursor several times slower
+than the desktop behind it, which is the reported asymmetry exactly.
+
+Now it sleeps only on a frame with no input and no animation running.
+`unoui_anim_active()` is what keeps the reject shake smooth - that tween is
+TSC-timed, so it wants real frames rather than a fixed cadence.
+
+**If you own a modal loop elsewhere, this is the shape.**  Presenting is already
+cheap when little changed (`uno_pc64_present` tracks dirty rows and returns
+after 1 ms when there are none), so the wait buys nothing on a busy frame and
+costs the pointer everything.
+
+**This is one contributor, not the whole of it.**  The rest is the machine: the
+framebuffer is uncached at ~26 MB/s, `mtrr-wc` cannot fix it and never will
+(METAL-FINDINGS), so every present is dear and "still a bit floaty" on the
+desktop is expected until something else changes.  The other open lead, filed
+here rather than fixed: `uno_i2c_hid_poll()` reads exactly ONE report per frame,
+so on a slow frame the pad's backlog is drained at frame rate.  It does not lose
+DISTANCE (`rel_from_abs` diffs against the last position it saw), but it does
+lag if the device queues.  Bounded-drain, the way `8fd9b691` did it for USB
+before it was reverted - and note that revert: the same idea killed mouse AND
+keyboard on the ZimaBlade when the Editor opened.
+
+### 2. -> pc64 boot input order (`uefi_main.c`): stop ASKING firmware for keys
+
+`5a54f700`.  `poll_keyboard()` has refused to read firmware ConIn once a native
+keyboard binds, and `native_kbd_present()`'s comment says why - on a touch
+machine, ConIn being consumed is what keeps the firmware OSK drawn.  The
+handshake that arms it did not follow the same rule: `Reset(ConIn)`, the
+`SimpleTextInputEx` lookup and `SetState(KEY_STATE_EXPOSED)` ran
+unconditionally, and they ran **before** `uno_i2c_hid_init()`.  Never asking and
+stopping afterwards are not the same thing.
+
+Moved below the native probe; the two calls that ASK are skipped when it found a
+keyboard.  The lookup still happens either way - `HandleProtocol` requests
+nothing, and keeping the handle preserves a fallback if the Surface's I2C-HID
+keyboard turns out to bind without delivering, which is still an open checklist
+item.
+
+**Not a claim that the icon goes.**  Firmware that draws it from the presence of
+a touch digitiser will keep drawing it, and the guaranteed removal is still a
+real detach, which on this machine waits on native eMMC (METAL-CHECKLIST, "The
+Surface Laptop Go (eMMC)").  This is the half that costs nothing to get right.
+
+### What to check on metal
+
+1. System app line 2: does a **second** HID device bind (`HID device: UP addr
+   0xNN parsed`)?  That decides which branch §2 takes, and it is the answer to
+   the long-open "does the Surface keyboard bind" question either way.
+2. The sign-in sheet: is the cursor now as smooth as the desktop's?  If it is
+   still worse **specifically there**, §1 was not the whole story and the next
+   suspect is `unoauto_remote_tick()` blocking inside the modal.
+3. The HUD's `r`/`p` milliseconds at the login screen vs the desktop.  Reading
+   them is the measurement nobody has taken yet, and the 2026-08-04 banner note
+   above says so in as many words.
+
+### The box was not reachable
+
+`192.168.2.207` did not answer ping or ARP from `amanuensis` or from
+`devbuntu`, and a `UNODISC` broadcast scan drew an OFFER from devbuntu's own
+listener and from no pc64 box.  Same shape as the "listener still did not come
+up" entry earlier today, and the address had already moved once (`.207` ->
+`.42`).  Everything above is therefore code-reviewed and QEMU-gated only:
+SPECTEST 66 PASS / 0 FAIL / 7 SKIP, `automate_qemu` 21 apps open + close, both
+`UNO_DEBUG` settings build.
