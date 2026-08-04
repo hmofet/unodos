@@ -396,6 +396,82 @@ int main(void)
         unoui_anim_tick(&ac, 1400 + 400);
         CHECK("reject: the window came home", win.r.x == x0); } }
 
+    /* ---- 9. scrolling window content ------------------------------------ *
+     * The promise is that scrolling moves the CONTENT and nothing else: a
+     * widget's rect, the hit test and the painter all come from
+     * unoui_content_origin, so if they can disagree here they disagree on
+     * screen too. */
+    fb_set_font(0);
+    { static unoui_ui ui; static unoui_window win;
+      const unoui_theme *th = &theme_unodos;
+      unoui_widget *top, *bot;
+      unoui_rect r0, r1, bar;
+      int viewh;
+      unoui_ui_init(&ui, th, 640, 480);
+      unoui_window_init(&win, "S", 20, 20, 260, 160);
+      top = unoui_add_button(&win, 8, 0,   90, "top", 0);
+      bot = unoui_add_button(&win, 8, 400, 90, "bottom", 0);
+      unoui_ui_add(&ui, &win);
+
+      CHECK("scroll: an ordinary window has no range",
+            unoui_win_scroll_max(th, &win) == 0 &&
+            unoui_win_bar(th, &win).w == 0);
+
+      win.flags |= UI_WIN_VSCROLL;
+      win.content_h = 460;
+      viewh = win.r.h - th->m.title_h - th->m.pad - th->m.frame_w;
+      CHECK("scroll: the range is content minus the view",
+            unoui_win_scroll_max(th, &win) == 460 - viewh);
+      bar = unoui_win_bar(th, &win);
+      CHECK("scroll: the bar takes a strip off the content's right edge",
+            bar.w == UI_WIN_BAR_W &&
+            bar.x + bar.w == win.r.x + win.r.w - th->m.frame_w - th->m.pad);
+
+      r0 = unoui_widget_rect(th, &win, top);
+      unoui_win_scroll_to(th, &win, 50);
+      r1 = unoui_widget_rect(th, &win, top);
+      CHECK("scroll: scrolling moves the widgets up", r1.y == r0.y - 50);
+      CHECK("scroll: and only vertically", r1.x == r0.x);
+
+      /* The hit test has to move with them, or a click lands on whatever used
+       * to be at those coordinates. Scrolled to the bottom, the widget that was
+       * 400 px down is the one on screen - so clicking there must focus IT and
+       * not the one that used to be there. */
+      unoui_win_scroll_to(th, &win, unoui_win_scroll_max(th, &win));
+      { unoui_rect rb = unoui_widget_rect(th, &win, bot);
+        unoui_event e; memset(&e, 0, sizeof e);
+        e.kind = UI_EV_MOUSE_DOWN;
+        e.x = rb.x + 10; e.y = rb.y + rb.h / 2;
+        unoui_handle(&ui, &e);
+        CHECK("scroll: a click lands on the widget where it now IS",
+              ui.focus_wi == 1); }
+      unoui_win_scroll_to(th, &win, 50);
+
+      unoui_win_scroll_to(th, &win, 99999);
+      CHECK("scroll: it cannot be scrolled past the end",
+            win.scroll_y == unoui_win_scroll_max(th, &win));
+      unoui_win_scroll_to(th, &win, -50);
+      CHECK("scroll: nor above the top", win.scroll_y == 0);
+
+      /* the wheel anywhere over the window scrolls it */
+      { unoui_event e; memset(&e, 0, sizeof e);
+        e.kind = UI_EV_MOUSE_MOVE; e.x = win.r.x + 40; e.y = win.r.y + 60;
+        unoui_handle(&ui, &e);
+        memset(&e, 0, sizeof e); e.kind = UI_EV_WHEEL; e.wheel = 1;
+        e.x = win.r.x + 40; e.y = win.r.y + 60;
+        unoui_handle(&ui, &e);
+        CHECK("scroll: the wheel scrolls the window", win.scroll_y > 0); }
+
+      /* a FILL widget stops before the bar, and fills the CONTENT height */
+      { unoui_widget *f = unoui_add_button(&win, 0, 0, 10, "f", 0);
+        unoui_widget_fill(f);
+        unoui_reflow_window(th, &win);
+        CHECK("scroll: a fill widget stops before the scrollbar",
+              f->r.w == win.r.w - 2 * (th->m.frame_w + th->m.pad) - UI_WIN_BAR_W);
+        CHECK("scroll: and fills the content, not the frame",
+              f->r.h == win.content_h); }
+      (void)bot; }
+
     printf(fails ? "\n%d FAILED\n" : "\nall passed\n", fails);
     return fails ? 1 : 0;
 }
