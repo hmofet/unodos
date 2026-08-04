@@ -380,6 +380,31 @@ static void fwc_add(const char *name)
     if (g_fwcand_n >= FW_CAND_MAX) return;
     strcpy(g_fwcand[g_fwcand_n++], name);
 }
+
+/* The image that last posted ALIVE on this machine, remembered for the rest of
+ * the session. Empty until one does. */
+static char g_fw_known_good[FW_NAME_MAX];
+
+/* Move the known-good image to the front of the candidate list.
+ *
+ * Without this, EVERY bring-up restarts at candidate 1 and re-runs an image
+ * this card has already refused - four and a half seconds of load, doorbell and
+ * ALIVE-timeout autopsy, per attempt, per bring-up. A boot does several. It is
+ * also what opened the window for the stale-ALIVE misread above: the failing
+ * attempt only had a previous success to trip over because it kept being
+ * repeated after that success. Answering "which one worked?" removes both. */
+static void fwc_promote_known_good(void)
+{
+    char tmp[FW_NAME_MAX];
+    int i;
+    if (!g_fw_known_good[0]) return;
+    for (i = 0; i < g_fwcand_n; i++)
+        if (!strcmp(g_fwcand[i], g_fw_known_good)) break;
+    if (i <= 0 || i >= g_fwcand_n) return;         /* absent, or already first */
+    strcpy(tmp, g_fwcand[i]);
+    for (; i > 0; i--) strcpy(g_fwcand[i], g_fwcand[i - 1]);
+    strcpy(g_fwcand[0], tmp);
+}
 static u8   g_mac[6];
 static u8   g_joined;
 static int  g_link_lost_reason = -1;   /* last deauth/disassoc reason, -1 = none */
@@ -539,6 +564,7 @@ static void choose_firmware(void)
         fwc_add("FIRMWARE\\IWLBE211.UCO");
         strcpy(g_pnvmfile, "FIRMWARE\\IWLBE211.PNV"); break;
     }
+    fwc_promote_known_good();          /* start with what already worked here */
     if (g_fwcand_n) strcpy(g_fwfile, g_fwcand[0]);
 }
 
@@ -1043,6 +1069,31 @@ static int g_data_qid = -1;              /* fw-assigned data queue (gen2/3) */
 static void rx_alloc_lists(void)
 {
     int i;
+    /* WIPE THE BUFFERS, not just the descriptors.
+     *
+     * This reset the free/used lists and the indices and left 8 MB of previous
+     * frames sitting in g_rb[]. That was harmless while a boot did exactly one
+     * bring-up. The candidate-ucode loop does up to three, and the ALIVE-timeout
+     * autopsy brute-scans EVERY RB for an ALIVE notification when the closed
+     * index looks empty (this card's rb_status DMA is unreliable, so that scan
+     * is load-bearing). A previous candidate's ALIVE is therefore still lying
+     * in RB 0 when the next candidate's autopsy runs, and gets read as proof
+     * that THIS image booted.
+     *
+     * Metal, SURFGO 2026-08-04, the two autopsies in one boot:
+     *   candidate 1, first bring-up:  rb0[0..7]=0000000000000000  -> honest fail
+     *   candidate 1, second bring-up: rb0[0..7]=94000020010000c0  -> "ALIVE FOUND
+     *     by brute scan in RB 0 - fw BOOTED ... Proceeding"
+     * The second is the first bring-up's IWLAX20C ALIVE. The driver then ran MVM
+     * init and a scan against an IWLAX20B image that had never started, and the
+     * Network app reported "no networks found" on a radio it believed was up.
+     *
+     * 8 MB at the measured ~2.6 GB/s is about 3 ms, once per bring-up attempt,
+     * against a path that takes seconds. Zeroing all of it beats poisoning the
+     * first few bytes of each buffer: rx_process_rb() walks packets THROUGH an
+     * RB, so a partial clear just moves the stale frame out of reach of the
+     * cheap check and leaves it findable by the thorough one. */
+    memset(g_rb, 0, sizeof g_rb);
     for (i = 0; i < RXQ_N; i++) {
         g_rbd_free_le32[i] = (u32)(phys(g_rb[i]) >> 8);
         g_rbd_free_le64[i] = phys(g_rb[i]) | (u64)(i + 1);   /* vid = i+1 */
@@ -4242,7 +4293,16 @@ uno_nic_t *iwl_nic(void)
             load_pnvm(vol);
             tried++;
             r = bringup_to_alive();
-            if (r == BRINGUP_ALIVE) break;
+            if (r == BRINGUP_ALIVE) {
+                /* Remember it: later bring-ups start here instead of walking
+                 * back through images this card has already refused. */
+                if (strcmp(g_fw_known_good, g_fwfile)) {
+                    strcpy(g_fw_known_good, g_fwfile);
+                    uno_dbg_net_trace("wifi: %s is the working image on this card - "
+                                      "later bring-ups will try it first", g_fwfile);
+                }
+                break;
+            }
             if (r == BRINGUP_FATAL) {
                 uno_dbg_net_trace("wifi: bring-up failed for a reason a different "
                                   "stepping cannot fix - not trying the rest");
