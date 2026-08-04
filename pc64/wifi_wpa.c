@@ -269,6 +269,15 @@ static int find_gtk(wpa_sm_t *sm, const u8 *kd, int kdlen)
     return -1;
 }
 
+/* Compare two 8-byte big-endian EAPOL-Key replay counters.
+ * <0 if a < b, 0 if equal, >0 if a > b. */
+static int replay_cmp(const u8 *a, const u8 *b)
+{
+    int i;
+    for (i = 0; i < 8; i++) if (a[i] != b[i]) return a[i] < b[i] ? -1 : 1;
+    return 0;
+}
+
 int wpa_sm_rx_eapol(wpa_sm_t *sm, const u8 *frame, int len,
                     u8 *reply, int reply_cap)
 {
@@ -285,6 +294,21 @@ int wpa_sm_rx_eapol(wpa_sm_t *sm, const u8 *frame, int len,
 
     if ((ki & (KI_PAIRWISE | KI_ACK | KI_MIC)) == (KI_PAIRWISE | KI_ACK)) {
         /* ---- message 1/4: take ANonce, derive the PTK, answer with 2/4 -- */
+        /* THE REPLAY COUNTER IS THE POINT OF THIS FIELD, and it was stored and
+         * never compared.  A 1/4 that arrives again after the handshake has
+         * finished - the AP retransmitting, or our own RX ring re-presenting a
+         * buffer - therefore re-derived the PTK, sent a fresh 2/4, and knocked
+         * the state machine back from DONE to SENT_2.  On metal (SURFGO,
+         * 2026-08-04) that is exactly what happened 50 ms after a clean
+         * handshake, and the AP answered the unexpected 2/4 with a stream of
+         * deauthentications; DHCP never completed.
+         *
+         * 802.11i: only a counter STRICTLY GREATER than the highest seen starts
+         * a new handshake (a genuine PTK rekey).  Anything else is a stale copy
+         * and must not touch state or produce a reply. */
+        if (sm->state != WPA_ST_IDLE &&
+            replay_cmp(frame + EK_REPLAY, sm->replay) <= 0)
+            return 0;
         memcpy(sm->anonce, frame + EK_NONCE, 32);
         if (sm->state == WPA_ST_IDLE) gen_snonce(sm->snonce);
         derive_ptk(sm);
@@ -300,6 +324,10 @@ int wpa_sm_rx_eapol(wpa_sm_t *sm, const u8 *frame, int len,
         u8 kd[256];
         int n;
         if (sm->state != WPA_ST_SENT_2 && sm->state != WPA_ST_DONE) return 0;
+        /* A 3/4 carrying the SAME counter is the AP retransmitting because our
+         * 4/4 did not arrive - answer it again.  A LOWER one is stale and must
+         * not be answered (same reasoning as 1/4 above). */
+        if (replay_cmp(frame + EK_REPLAY, sm->replay) < 0) return 0;
         if (!mic_ok(sm, frame, len)) { sm->state = WPA_ST_FAILED; return -1; }
         if (memcmp(frame + EK_NONCE, sm->anonce, 32) != 0) {
             sm->state = WPA_ST_FAILED; return -1;      /* ANonce changed */
@@ -321,6 +349,7 @@ int wpa_sm_rx_eapol(wpa_sm_t *sm, const u8 *frame, int len,
         u8 kd[256];
         int n;
         if (sm->state != WPA_ST_DONE) return 0;
+        if (replay_cmp(frame + EK_REPLAY, sm->replay) < 0) return 0;   /* stale rekey */
         if (!mic_ok(sm, frame, len)) return -1;
         if (kdlen < 24 || kdlen > (int)sizeof kd) { sm->state = WPA_ST_FAILED; return -1; }
         n = aes_unwrap(sm->ptk + 16, frame + EK_KDATA, kdlen, kd, sizeof kd);
