@@ -1,5 +1,6 @@
 /* ===========================================================================
- * unoui editable-text geometry contract test (host).
+ * unoui editable-text geometry contract test (host), plus the one other
+ * input-layer promise that had no gate: that UI_F_DISABLED disables.
  *
  * THE CONTRACT.  Three pieces of code have to agree on where glyph number N
  * of an editable field starts: the painter's pen, ui_text_caret_xy (where the
@@ -169,7 +170,38 @@ int main(void)
       g_inner = ui_edit_inner(r, th); }
     CHECK("multiline: caret x <-> click index round-trips", roundtrip_worst() == 0);
 
+    /* ---- 5. UI_F_DISABLED actually disables ----------------------------- *
+     * It used to be a paint-only flag: every theme dimmed the text and the
+     * input layer hit, focused and fired the control regardless.  A greyed
+     * button that still works is a lie about what a click will do. */
     fb_set_font(0);
+    { static unoui_ui ui; static unoui_window win;
+      unoui_widget *live, *dead;
+      unoui_event e; unoui_action a;
+      unoui_ui_init(&ui, &theme_unodos, 640, 480);
+      unoui_window_init(&win, "T", 20, 20, 240, 120);
+      live = unoui_add_button(&win, 8,  8, 100, "Live", 0);          live->id = 11;
+      dead = unoui_add_button(&win, 8, 40, 100, "Dead", UI_F_DISABLED); dead->id = 22;
+      unoui_ui_add(&ui, &win);
+
+      memset(&e, 0, sizeof e); e.kind = UI_EV_MOUSE_DOWN;
+      { unoui_rect r = unoui_widget_rect(ui.theme, &win, dead);
+        e.x = r.x + r.w / 2; e.y = r.y + r.h / 2; }
+      a = unoui_handle(&ui, &e);
+      memset(&e, 0, sizeof e); e.kind = UI_EV_MOUSE_UP;
+      { unoui_rect r = unoui_widget_rect(ui.theme, &win, dead);
+        e.x = r.x + r.w / 2; e.y = r.y + r.h / 2; }
+      { unoui_action b = unoui_handle(&ui, &e); if (b.changed) a = b; }
+      CHECK("disabled: a click on it fires nothing", !(a.changed && a.id == 22));
+
+      /* Tab must skip it rather than parking the keyboard on a dead control */
+      ui.focus_wi = -1;
+      memset(&e, 0, sizeof e); e.kind = UI_EV_KEY; e.key = UI_KEY_TAB;
+      unoui_handle(&ui, &e);
+      unoui_handle(&ui, &e);
+      CHECK("disabled: Tab never lands on it",
+            ui.focus_wi < 0 || win.w[ui.focus_wi].id != 22); }
+
     printf(fails ? "\n%d FAILED\n" : "\nall passed\n", fails);
     return fails ? 1 : 0;
 }
