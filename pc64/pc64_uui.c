@@ -1401,6 +1401,73 @@ static int  g_pop_n;
 
 static void raise_win(unoui_window *win) { unoui_bring_to_front(&UI, win); }
 
+/* ---- window open / close motion -------------------------------------------
+ * Opening is real: the window rises WIN_RISE px into its designed position.
+ * Position only, never size - widgets are laid out from the content origin and
+ * do not scale, so animating w/h would show a frame smaller than the content
+ * it is meant to hold.
+ *
+ * Closing cannot be real, and that is the interesting half. close_app() tears
+ * the app down - a native game's teardown, a .UNO module's `closed` hook, the
+ * Python runtime unloaded and g_pyapp set to 0 - and only then removes the
+ * window. Keeping that window on screen for another eighth of a second would
+ * leave its canvas painter calling into a module that has been unloaded. So
+ * the teardown and the removal stay exactly as they were, and what animates is
+ * a GHOST: a frame drawn where the window was, collapsing toward its centre.
+ * Nothing about it can outlive anything. */
+#define WIN_RISE     18
+#define WIN_OPEN_MS  130
+#define WIN_CLOSE_MS 120
+
+static unoui_rect  g_ghost;                 /* the collapsing frame          */
+static unoui_anim_h g_ghost_h[4];
+static int         g_ghost_on;
+
+static void ghost_start(unoui_rect from)
+{
+    unoui_tween tw;
+    int k, *field[4], to[4], fr[4];
+    int cx = from.x + from.w / 2, cy = from.y + from.h / 2;
+    if (from.w <= 0 || from.h <= 0) return;
+    for (k = 0; k < 4; k++) { unoui_anim_free(&ANIM, g_ghost_h[k]); g_ghost_h[k] = 0; }
+    g_ghost = from;
+    field[0] = &g_ghost.x; field[1] = &g_ghost.y;
+    field[2] = &g_ghost.w; field[3] = &g_ghost.h;
+    fr[0] = from.x; fr[1] = from.y; fr[2] = from.w; fr[3] = from.h;
+    to[0] = cx - 8;  to[1] = cy - 6;  to[2] = 16;   to[3] = 12;
+    for (k = 0; k < 4; k++) {
+        tw.from = fr[k]; tw.to = to[k];
+        tw.dur_ms = WIN_CLOSE_MS; tw.delay_ms = 0;
+        tw.ease = UI_EASE_OUT_CUBIC; tw.loop = UI_ANIM_ONCE; tw.out = field[k];
+        g_ghost_h[k] = unoui_tween_start(&ANIM, &tw);
+    }
+    g_ghost_on = g_ghost_h[0] != 0;
+}
+
+/* Retire the ghost, from the frame loop and NOT from ghost_draw(). The draw
+ * happens after the scene and just before the present, by which point this
+ * frame's g_dirty is about to be cleared - so a ghost that finished there would
+ * leave its last outline painted on a desktop nothing was going to redraw. It
+ * did: 52 stray pixels, exactly the perimeter of the final 16x12 rect, sitting
+ * on the desktop until something else happened to dirty the frame. Marking the
+ * frame dirty HERE is what paints the desktop without it. */
+static void ghost_tick(void)
+{
+    int k;
+    if (!g_ghost_on || !unoui_anim_done(&ANIM, g_ghost_h[0])) return;
+    for (k = 0; k < 4; k++) { unoui_anim_free(&ANIM, g_ghost_h[k]); g_ghost_h[k] = 0; }
+    g_ghost_on = 0;
+    g_dirty = 1;
+}
+
+/* drawn after the scene, before the present: it is not a window and must not
+ * be in the z-order, so it cannot be one. */
+static void ghost_draw(void)
+{
+    if (!g_ghost_on) return;
+    fb_frame_rect(g_ghost.x, g_ghost.y, g_ghost.w, g_ghost.h, UI.theme->pal.accent);
+}
+
 static void remove_win(unoui_window *win)
 {
     int i, j;
@@ -2262,6 +2329,15 @@ static void open_app(int a)
             return;
         }
         g_open[a] = 1;
+        /* Rise into place. The window's FINAL rect is already set, so anything
+         * that reads geometry - the taskbar, a harness clicking a widget, the
+         * session file - sees where it is going to be, not where it is. */
+        {   unoui_rect to = g_win[a].r;
+            if (!(g_win[a].flags & UI_WIN_BARE) && to.y + WIN_RISE < FB_H) {
+                g_win[a].r.y = to.y + WIN_RISE;
+                if (!unoui_wmanim_geom(&UI, &g_win[a], to, WIN_OPEN_MS))
+                    g_win[a].r = to;
+            } }
         if (g >= 0)                 pc64_game_open(g);           /* native game   */
         else if (a == EX_BROWSER)   pc64_browser_open();         /* browser       */
         else if (a == EX_SSH)       pc64_sshapp_open();          /* ssh client    */
@@ -2887,6 +2963,9 @@ static void close_app(int a)
     else if (a == EX_USERAPP) unoapp_user_close();
     else if (app_is_bridge(a)) unoapp_close(a - NNATIVE); /* bridge app        */
     if (UI.full == &g_win[a]) unoui_fullscreen(&UI, 0);  /* fullscreen game    */
+    /* the ghost is taken BEFORE the window goes, and outlives nothing but its
+     * own rectangle */
+    if (!(g_win[a].flags & UI_WIN_BARE)) ghost_start(g_win[a].r);
     remove_win(&g_win[a]);
     focus_next_mru();
     rebuild_taskbar();
@@ -5046,6 +5125,7 @@ int main(void)
          * stopped moving. */
         unoui_anim_frame(&ANIM);
         if (unoui_anim_active(&ANIM)) g_dirty = 1;
+        ghost_tick();                   /* retire a finished close ghost */
         /* NOT `idle = 0` as well: `idle` is what drives the half-second
          * housekeeping below (tray clock, battery, LAN chip), so resetting it
          * here would stop the clock ticking for as long as anything was
@@ -5171,6 +5251,7 @@ int main(void)
                 uno_dbg_win_frame_reset();
                 t0 = uno_native_rdtsc();
                 unoui_render_ui(&UI);
+                ghost_draw();           /* same place as the production path */
                 t1 = uno_native_rdtsc();
                 uno_dbg_frame_render_cyc(t1 - t0);
                 /* Right-align, but NEVER pass a negative x: fb_text ->
@@ -5207,7 +5288,8 @@ int main(void)
                 uno_dbg_frame_idle(0);
             } else { uno_pc64_delay_ms(16); uno_dbg_frame_idle(1); }
 #else
-            if (g_dirty) { unoui_render_ui(&UI); uno_pc64_present(); g_dirty = 0; }
+            if (g_dirty) { unoui_render_ui(&UI); ghost_draw();
+                           uno_pc64_present(); g_dirty = 0; }
             else if (cursor_only) uno_pc64_present();  /* cursor moved: recomposite only */
             else uno_pc64_delay_ms(16);
 #endif
