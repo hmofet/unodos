@@ -896,7 +896,7 @@ arrow keys and <kbd>Enter</kbd> launch apps; <kbd>Ctrl</kbd>+<kbd>W</kbd> closes
 
 PAGES["desktop.html"] = ("The desktop", f"""
 <h1>The desktop</h1>
-<p class="lede">A themed desktop with a window manager, a scrollable programs menu, a taskbar and a
+<p class="lede">A themed desktop with a window manager, a two-pane Start menu, a taskbar and a
 live clock. Every control works by keyboard or pointer.</p>
 
 {fig("desktop.png", "The desktop: app icons, the <b>Start</b> button (bottom-left), the taskbar with a button per open window, and the clock.")}
