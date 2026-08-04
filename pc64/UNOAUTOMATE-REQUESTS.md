@@ -5832,3 +5832,29 @@ keepalive path are where I would start.
 
 **Closing my claim on the iwlwifi lane.** ALIVE and association are done on both
 silicon variants; the lease is somebody's next slice.
+
+## 2026-08-04 - DONE: UnoCalc arrow keys, and UnoAmp's out-of-box look
+
+Both fixed on the owner's direct instruction rather than by the lane, so this
+entry is the record.
+
+**UnoCalc arrow keys.** `uw_key()` took a `scan` parameter and discarded it
+(`(void)scan;`), and everything it did read came from `uni` - which arrow keys
+arrive with as 0. So the selection could only ever move down, one Enter at a
+time. It now handles the firmware scan codes: arrows, PgUp/PgDn, Home/End and
+Ctrl+Home/End. Enter and Tab were doing the same "commit, step, reselect,
+scroll" inline and now share the one helper, because two copies of that is how
+they drift apart. Committing on the way out is deliberate: arrowing out of a
+half-typed cell stores the value, as every spreadsheet does.
+
+**UnoAmp's out-of-box look.** `unoamp_ui.c` derived its no-skin colours from
+the shell theme, and on Aurora Light `win_bg`, `face` and `title_bg` are all a
+few points from white - so a brand-new UnoAmp drew a white player on a white
+desktop. It has its own chassis palette now (dark, with black-green wells for
+the time, title and visualiser); the ACCENT still comes from the shell theme, so
+it belongs to the desktop without disappearing into it. A loaded `.wsz` skin
+overrides all of it exactly as before.
+
+The manual's "Keyboard navigation" warning callout is deleted, the UnoCalc
+figure is retaken (the formula bar now shows `=A1+A2` beside the 42), and
+UnoAmp gets the screenshot the manual previously declined to publish.
