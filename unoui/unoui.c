@@ -272,10 +272,34 @@ unoui_widget *unoui_add_mdi(unoui_window *w, int x, int y, int ww, int hh,
   d->mdi = m; return d; }
 
 /* ---- editable text model ------------------------------------------------- */
+/* written into unoui_text.inited by unoui_text_init(), and by nothing else */
+#define UI_TEXT_INITED 0x7E5701ED
+
 void unoui_text_init(unoui_text *t, char *buf, int cap, int multiline)
 {
-    int n = 0, again = (t->buf == buf);
+    /* THE ONLY FIELD THIS MAY BELIEVE IS ONE IT WROTE ITSELF.
+     *
+     * The re-bind test below was `t->buf == buf` alone, which reads a pointer
+     * the caller need never have written: a unoui_text declared as a stack
+     * local holds whatever the stack held. When that garbage happened to
+     * match, the keep-the-caret path ran and every presentation field was left
+     * as garbage too - `secret` above all, so a PLAIN field came up masked
+     * with the reveal eye on it. The toolkit's own gate caught it as
+     * "plain: no eye, and the whole inner rect is text".
+     *
+     * This is the second sighting of the shape, not the first: unoui_ui_init()
+     * left `full` uninitialised, and a stack-local unoui_ui swallowed every
+     * event it was given. An init function that reads its own struct before
+     * writing it is the bug; the fix is to make the question answerable.
+     *
+     * `inited` is written here and nowhere else, so a struct that has never
+     * been through this function cannot claim it has. Anything that is not a
+     * confirmed re-bind starts from zero - which also means a field appended
+     * to unoui_text later is defined without editing this function again. */
+    int n = 0, again = (t->inited == UI_TEXT_INITED && t->buf == buf);
     while (buf[n] && n < cap - 1) n++;
+    if (!again) memset(t, 0, sizeof *t);
+    t->inited = UI_TEXT_INITED;
     t->buf = buf; t->cap = cap; t->len = n;
     t->multiline = multiline;
     /* RE-BINDING THE SAME BUFFER KEEPS THE CARET.
@@ -292,7 +316,7 @@ void unoui_text_init(unoui_text *t, char *buf, int cap, int multiline)
      * Fixing it in each builder means every FUTURE builder gets it wrong too.
      * A caller that really does want the caret reset is asking to REPLACE the
      * contents, and that is what unoui_text_set() is for. */
-    if (!again) { t->caret = t->sel = n; t->scroll_x = t->scroll_y = 0; }
+    if (!again) t->caret = t->sel = n;      /* the memset did the scrolls */
     else {
         if (t->caret > n) t->caret = n;
         if (t->sel   > n) t->sel   = n;

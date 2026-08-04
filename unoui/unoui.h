@@ -69,6 +69,11 @@ typedef struct {
     /* --- appended; 0 must mean "as before" -------------------------------- */
     int   secret;     /* mask character (0 = plain text). See below.          */
     int   revealed;   /* showing the real text right now; cleared on blur     */
+    /* Written by unoui_text_init() and by NOTHING else, so that it can tell a
+     * struct it has already seen from one holding whatever the stack held.
+     * 0 - the value every static starts at - means "never initialised", which
+     * is the answer that costs nothing to get wrong. */
+    int   inited;
 } unoui_text;
 
 /* Bind the model to `buf`. ZERO-INITIALISE THE STRUCT FIRST (static storage
