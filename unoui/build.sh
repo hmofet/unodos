@@ -23,7 +23,7 @@ fi
 THEMES="themes/theme_unodos.c themes/theme_macos7.c themes/theme_macplus.c \
         themes/theme_win31.c  themes/theme_amiga.c  themes/theme_c64.c \
         themes/theme_apple2.c themes/theme_next.c"
-CORE="unoui.c unoui_input.c unoui_anim.c $THEMES $FB/fb.c $FB/fb_aa.c"
+CORE="unoui.c unoui_input.c unoui_anim.c unoui_wmanim.c $THEMES $FB/fb.c $FB/fb_aa.c"
 
 rm -f build/*.ppm
 
@@ -50,6 +50,7 @@ $CC -O2 -Wall -I. -I"$FB" $CORE host_unoui_anim.c -o build/host_unoui_anim
 ./build/host_unoui_anim build
 $PY tools/tile.py build/easing.png 1 0,0,640,300 build/an_curves.ppm
 $PY tools/tile.py build/anim.png 3 60,0,520,290 $(ls build/an_[0-9]*.ppm | sort)
+$PY tools/tile.py build/snap.png 3 0,0,640,300 $(ls build/sn_[0-9]*.ppm | sort)
 
 # per-frame PNGs for inspection
 for p in build/*.ppm; do

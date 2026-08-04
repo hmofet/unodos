@@ -62,6 +62,7 @@ derived from each window's rect and the theme's metrics, so any resolution works
 | `unoui.h` / `unoui.c` | public API + portable core: window/widget building, depth-aware drawing helpers (`ui_shade`, `ui_stipple`, `ui_bevel`, `ui_round_*`), editable-text engine, the **default painters**, and the render dispatcher with per-painter NULL fallback |
 | `unoui_input.c` | the interaction layer: event dispatch, hit-testing, focus + Tab, drag, popups, multi-line text editing, **zero platform code** |
 | `unoui_anim.h` / `unoui_anim.c` | the shared tween clock: easing curves, concurrent tweens by handle, sequences. Integer only, and the one file here that does not include `fb.h` |
+| `unoui_wmanim.h` / `unoui_wmanim.c` | animated window geometry: the snap animation. Opt-in, and the join between the two files above |
 | `unoui_theme.h` | the theme model: palette + metrics + draw vtable, helper decls, theme externs |
 | `themes/theme_*.c` | the eight shipped themes (see below) |
 | `unoui_demo.c` | the static write-once demo window (theme contact sheet) |
@@ -199,11 +200,39 @@ delays, looping, stale-handle refusal, pool exhaustion, the 49-day millisecond
 wraparound, and the click that skips a build: 105 checks, and a failure exits
 non-zero and fails `./build.sh`.
 
+### The first consumer: the snap animation
+
+`unoui_wmanim.c` makes a snap, an unsnap or a maximize *move* the window to its
+target over ~130 ms instead of teleporting it there. Sampled across one snap to
+the left half:
+
+![snap](build/snap.png)
+
+It works by intercepting the one place `unoui_snap_apply()` assigns geometry, so
+every route into a snap - drag-to-edge, the maximize box, a double-clicked title
+bar, the context menu, the keyboard, tile/cascade - animates without any of them
+knowing an animation exists.
+
+**The window's geometry really is mid-flight** (the tweens write straight into
+`win->r`), so drawing, hit-testing and the work-area clamp all agree with what
+is on screen, because they read the same rect. What is *not* mid-flight is the
+window's **model**: `snap` and `restore_r` are final on the first frame, because
+those are what a saved session is made of. `unoui_geom_target()` exists so a
+platform that persists geometry can ask where a moving window is going instead
+of catching it halfway, and `unoui_geom_settle()` skips the move for the cases
+that must not be seen to happen - a session restore, a virtual-desktop switch.
+
+It is **opt-in through a hook**, not a direct call: `unoui.c` gains no link
+dependency on the animation module, so ps2 and dreamcast - which compile `unoui`
+but not `unoui_anim` - keep today's instant snap and need no build-list edit. A
+port opts in by compiling this file and calling `unoui_wmanim_install()`.
+
 ## Build
 
 ```sh
 ./build.sh          # → build/themes.png + per-theme PNGs
-                    #   + build/easing.png + build/anim.png (and the assertions)
+                    #   + build/easing.png + build/anim.png + build/snap.png
+                    #   (and the assertions)
 ```
 
 Reuses the shared software framebuffer (`../ps2/fb.c`) and its 8×8 font, exactly
