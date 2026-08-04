@@ -217,29 +217,50 @@ ssid=YourNetwork
 psk=your-wpa2-passphrase
 ```
 
-### Forcing an AX201 firmware stepping (`fw=`)
+### AX201 firmware steppings: the driver tries them all
 
 An AX201 is a Qu-family CNVi part in one of three steppings - **QuZ-a0, Qu-b0
 and Qu-c0** - and each needs a *different* ucode. Which one a machine has is in
 `CSR_HW_REV`, not in its PCI id: `0x02f0` and `0x34f0` both appear as either,
-which is why Linux keys its config table on the hardware revision. The driver
-decodes the revision and picks `IWLAX201.UCO` (QuZ-a0), `IWLAX20B.UCO` (Qu-b0)
-or `IWLAX20C.UCO` (Qu-c0), falling back to whichever is actually staged.
+which is why Linux keys its config table on the hardware revision.
 
-When the firmware loads but never posts ALIVE, the stepping is the first thing
-to vary. Add a line to `WIFI.CFG` (or `WIFI.TXT`, or `DEBUG.CFG`) at a volume
-root:
+**You should not have to configure this.** All three blobs ship on every stick,
+and the driver builds an ordered candidate list rather than committing to one
+guess: the revision decode picks the ORDER (so the right one is normally tried
+first) and **ALIVE picks the answer**. If a candidate loads and the ROM never
+posts the ALIVE notification within 2 s, the driver quiesces the device and
+tries the next one. A blob that is not staged is skipped. So one image boots
+every laptop, and a revision decode that is wrong on some machine costs ~4
+seconds of boot rather than a dead radio.
+
+The NETLOG says exactly what happened:
+
+```
+wifi: card pci=34f0 fam=3 gen2=1 hw_rev=00000332 mac_type=33 step=0 rf_id=0010a100 fw=IWLAX20B.UCO,IWLAX20C.UCO,IWLAX201.UCO
+wifi: candidate 1/3 FIRMWARE\IWLAX20B.UCO loaded from disk (1406572 bytes)
+wifi: FIRMWARE\IWLAX20B.UCO never ALIVEd - trying the next stepping
+wifi: candidate 2/3 FIRMWARE\IWLAX20C.UCO loaded from disk (1406588 bytes)
+wifi: firmware ALIVE
+```
+
+`fw=` is now only a **debugging override**, for pinning one specific blob (to
+reproduce a failure, or to prove which one a machine wants). Add a line to
+`WIFI.CFG` (or `WIFI.TXT`, or `DEBUG.CFG`) at a volume root:
 
 ```
 fw=IWLAX20B.UCO
 ```
 
-That overrides the decode entirely - no rebuild, no reflash. The bring-up
-trace records what happened either way (`hw_rev`, the decoded `mac_type` and
-`step`, `rf_id`, the file chosen and the alternate), so one boot makes
-`CRASH\<machine>\NETLOG.TXT` answer "what silicon is this, and what did we feed
-it". That matters most on a machine with no wired NIC, where URC cannot reach
-the box to run `iwl alive` and the crash log is the only channel there is.
+That collapses the candidate list to exactly that file - **forced means forced,
+so it also disables the automatic retry**, which is the point when you are
+bisecting. No rebuild, no reflash. That matters most on a machine with no wired
+NIC, where URC cannot reach the box to run `iwl alive` and the crash log is the
+only channel there is.
+
+Note the retry only covers "the ROM refused this image". A failure that a
+different stepping cannot fix - RF-kill, an ownership/APM timeout, a loader
+error - stops the loop immediately rather than re-proving the same hardware
+problem three times, and the NETLOG says so.
 
 
 The NAS keeps a template at `\\behemoth\unreplicated\unodos\pc64\testkit\wifi.txt`
