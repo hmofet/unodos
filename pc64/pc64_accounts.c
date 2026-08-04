@@ -160,40 +160,116 @@ static int        s_role_sel;              /* create: 0 user / 1 admin / 2 guest
 
 static const char *k_roles[] = { "user", "admin", "guest" };
 
+/* truncate-with-ellipsis to a pixel width; defined with the consent sheet */
+static const char *fit_px(char *buf, int cap, const char *s, int px);
+
+/* ---- sheet geometry -------------------------------------------------------
+ * unoui_window_init takes the OUTER width; widget x is relative to the CONTENT
+ * origin, and the frame plus the theme's padding come out of BOTH sides (26 px
+ * under the shipping Aurora theme).  Every sheet in this file laid widgets out
+ * against the outer number - `W - 80` wide fields inside a `W` window - so the
+ * right-hand end of every text field and every right-anchored button sat 10 px
+ * past the content edge and was clipped, at the default font, in the shipping
+ * theme.  consent_cb worked this out the hard way in 2026-08; these helpers are
+ * that lesson applied to the other three sheets.
+ *
+ * `sheet_outer` converts a wanted CONTENT size into the window rect to ask for,
+ * clamped to the screen; `sheet_inner` is the usable content width. */
+static int sheet_chrome(void)
+{ const unoui_theme *th = pc64_shell_theme(); return 2 * (th->m.frame_w + th->m.pad); }
+
+static void sheet_outer(int content_w, int content_h, int *W, int *H, int *x, int *y)
+{
+    const unoui_theme *th = pc64_shell_theme();
+    *W = content_w + sheet_chrome();
+    *H = content_h + th->m.title_h + th->m.pad + th->m.frame_w;
+    if (*W > FB_W) *W = FB_W;
+    if (*H > FB_H) *H = FB_H;
+    *x = (FB_W - *W) / 2; if (*x < 0) *x = 0;
+    *y = (FB_H - *H) / 2; if (*y < 0) *y = 0;
+}
+static int sheet_inner(int W) { return W - sheet_chrome(); }
+
+/* Run unoui's layout audit over a sheet just before it goes modal, so these
+ * four - which are built inside blocking loops and so are out of reach of the
+ * shell's boot-time sweep - are covered by the same check as every other
+ * window.  Debug builds only; compiles away entirely in production. */
+#ifdef UNO_DEBUG
+static void sheet_audit_cb(void *ctx, const unoui_window *win, int wi,
+                           const char *why, unoui_rect r, int cw, int ch)
+{
+    (void)ctx;
+    uno_dbg_log("layout: %s w%d: %s - rect %d,%d %dx%d, content %dx%d",
+                win->title ? win->title : "(sheet)", wi, why,
+                r.x, r.y, r.w, r.h, cw, ch);
+}
+static void sheet_audit(const unoui_window *win)
+{
+    int n = unoui_window_audit(pc64_shell_theme(), win, sheet_audit_cb, 0);
+    if (win->r.w > FB_W || win->r.h > FB_H)
+        uno_dbg_log("layout: %s: sheet %dx%d does not fit the %dx%d screen",
+                    win->title ? win->title : "(sheet)",
+                    win->r.w, win->r.h, FB_W, FB_H);
+    else if (!n)
+        uno_dbg_log("layout: %s: ok (%dx%d)",
+                    win->title ? win->title : "(sheet)", win->r.w, win->r.h);
+}
+#else
+#define sheet_audit(w) ((void)0)
+#endif
+
 static int cred_sheet(const char *title, const char *sub, int is_create,
                       int allow_guest)
 {
     unoui_window win;
     unoui_widget *w;
-    int W = 360, H = is_create ? 210 : 176;
-    int x = (FB_W - W) / 2, y = (FB_H - H) / 2, cy = 8;
+    int fh = fb_text_h(), ch = ui_field_h(), bh = ui_ctl_h();
+    int lofs = (ch - fh) / 2, pad = 8;
+    /* the label column is as wide as its widest label, in the LIVE font */
+    int lw = fb_text_w("Password:");
+    int bw_ok = fb_text_w(is_create ? "Create" : "Sign In") + 30;
+    int bw_alt = fb_text_w(allow_guest ? "Guest" : "Cancel") + 30;
+    int W, H, x, y, inner, cy = pad;
+    { int want = pad + lw + 8 + 160 + pad;        /* a usable field width   */
+      int brow = pad + bw_alt + 12 + bw_ok + pad;
+      int subw = pad + fb_text_w(sub) + pad;
+      if (brow > want) want = brow;
+      if (subw > want) want = subw;
+      sheet_outer(want, pad + fh + 10 + 2 * (ch + 8)
+                        + (is_create ? ch + 8 : 0) + bh + pad, &W, &H, &x, &y); }
+    inner = sheet_inner(W);
 
     s_name[0] = 0; s_passvis[0] = 0; g_pw[0] = 0; g_pwlen = 0; s_role_sel = 0;
     unoui_text_init(&s_name_t, s_name, sizeof s_name, 0);
     unoui_text_init(&s_pass_t, s_passvis, sizeof s_passvis, 0);
 
     unoui_window_init(&win, title, x, y, W, H);
-    unoui_add_label(&win, 8, cy, sub); cy += 22;
-    unoui_add_label(&win, 8, cy + 3, "User:");
-    w = unoui_add_edit(&win, 64, cy, W - 80, &s_name_t); w->flags |= UI_F_FOCUS; cy += 26;
-    unoui_add_label(&win, 8, cy + 3, "Password:");
-    w = unoui_add_edit(&win, 80, cy, W - 96, &s_pass_t);
+    { static char t1[128];
+      unoui_add_label(&win, pad, cy, fit_px(t1, sizeof t1, sub, inner - 2 * pad)); }
+    cy += fh + 10;
+    unoui_add_label(&win, pad, cy + lofs, "User:");
+    w = unoui_add_edit(&win, pad + lw + 8, cy, inner - pad - lw - 8 - pad, &s_name_t);
+    w->flags |= UI_F_FOCUS; cy += ch + 8;
+    unoui_add_label(&win, pad, cy + lofs, "Password:");
+    w = unoui_add_edit(&win, pad + lw + 8, cy, inner - pad - lw - 8 - pad, &s_pass_t);
     s_pw_wi = win.nw - 1;                       /* mark for masking              */
-    cy += 26;
+    cy += ch + 8;
     if (is_create) {
-        unoui_add_label(&win, 8, cy + 3, "Role:");
-        w = unoui_add_dropdown(&win, 64, cy, 140, k_roles, 3, 0); w->id = ID_ROLE;
-        cy += 28;
+        int dw = 0, k;
+        for (k = 0; k < 3; k++) { int t2 = fb_text_w(k_roles[k]); if (t2 > dw) dw = t2; }
+        unoui_add_label(&win, pad, cy + lofs, "Role:");
+        w = unoui_add_dropdown(&win, pad + lw + 8, cy, dw + 34, k_roles, 3, 0);
+        w->id = ID_ROLE;
+        cy += ch + 8;
     }
-    { unoui_widget *b = unoui_add_button(&win, W - 108, cy, 100,
+    { unoui_widget *b = unoui_add_button(&win, inner - pad - bw_ok, cy, bw_ok,
                                          is_create ? "Create" : "Sign In",
                                          UI_F_DEFAULT); b->id = ID_OK; }
-    if (allow_guest) {
-        unoui_widget *b = unoui_add_button(&win, 8, cy, 96, "Guest", 0); b->id = ID_GUEST;
-    } else {
-        unoui_widget *b = unoui_add_button(&win, 8, cy, 96, "Cancel", 0); b->id = ID_CANCEL;
-    }
+    { unoui_widget *b = unoui_add_button(&win, pad, cy, bw_alt,
+                                         allow_guest ? "Guest" : "Cancel", 0);
+      b->id = allow_guest ? ID_GUEST : ID_CANCEL; }
 
+    sheet_audit(&win);
     modal_begin(&win);
     for (;;) {
         unoui_action a;
@@ -352,6 +428,7 @@ static usc_consent_t consent_cb(void *ctx, usc_uid_t uid, usc_trust_t trust,
         b->id = ID_C_DENY;
     }
 
+    sheet_audit(&win);
     modal_begin(&win);
     for (;;) {
         unoui_action a;
@@ -448,34 +525,57 @@ void pc64_accounts_open(void)
     unoui_window win;
     unoui_widget *lw;
     char status[80];
-    int sel = 0, pushed = 0, W = 380, H = 300;
-    int x = (FB_W - W) / 2, y = (FB_H - H) / 2;
+    int fh = fb_text_h(), bh = ui_ctl_h(), pad = 8;
+    int sel = 0, pushed = 0, W, H, x, y, inner, listh;
+    /* every button sized to its label in the live font, and the two rows
+       measured, so the window is as wide as its widest row and no wider */
+    int b_new  = fb_text_w("New...")       + 26;
+    int b_pwd  = fb_text_w("Password...")  + 26;
+    int b_del  = fb_text_w("Delete")       + 26;
+    int b_adm  = fb_text_w("Toggle admin") + 26;
+    int b_cls  = fb_text_w("Close")        + 26;
 
     if (!ensure_authority(&pushed)) return;      /* cancelled / not authorised   */
     status[0] = 0;
+    listh = 6 * ui_row_h() + 6;
+    { int r1 = pad + b_new + 8 + b_pwd + 8 + b_del + pad;
+      int r2 = pad + b_adm + 12 + b_cls + pad;
+      int want = r1 > r2 ? r1 : r2;
+      if (want < 300) want = 300;
+      sheet_outer(want, pad + fh + 6 + listh + 10 + bh + 8 + bh + 8 + fh + pad,
+                  &W, &H, &x, &y); }
+    inner = sheet_inner(W);
 
     for (;;) {
-        int cy = 8;
+        int cy = pad;
         load_users();
         if (sel >= g_nusers) sel = g_nusers - 1;
         if (sel < 0) sel = 0;
 
         unoui_window_init(&win, "Accounts", x, y, W, H);
-        unoui_add_label(&win, 8, cy, "Users on this system:"); cy += 20;
-        lw = unoui_add_list(&win, 8, cy, W - 16, 120, g_uptr, g_nusers, sel);
-        lw->id = ID_LIST; cy += 128;
+        unoui_add_label(&win, pad, cy, "Users on this system:"); cy += fh + 6;
+        lw = unoui_add_list(&win, pad, cy, inner - 2 * pad, listh,
+                            g_uptr, g_nusers, sel);
+        lw->id = ID_LIST; cy += listh + 10;
         { unoui_widget *b;
-          b = unoui_add_button(&win, 8,   cy, 84, "New...", 0);      b->id = ID_NEW;
-          b = unoui_add_button(&win, 96,  cy, 108, "Password...", 0); b->id = ID_PASSWD;
-          b = unoui_add_button(&win, 208, cy, 84, "Delete", 0);      b->id = ID_DEL;
-          cy += 28;
-          b = unoui_add_button(&win, 8,   cy, 130, "Toggle admin", 0); b->id = ID_ADMIN;
-          b = unoui_add_button(&win, W - 92, cy, 84, "Close", UI_F_DEFAULT); b->id = ID_CLOSE;
-          cy += 26;
+          b = unoui_add_button(&win, pad, cy, b_new, "New...", 0); b->id = ID_NEW;
+          b = unoui_add_button(&win, pad + b_new + 8, cy, b_pwd, "Password...", 0);
+          b->id = ID_PASSWD;
+          b = unoui_add_button(&win, pad + b_new + 8 + b_pwd + 8, cy, b_del,
+                               "Delete", 0); b->id = ID_DEL;
+          cy += bh + 8;
+          b = unoui_add_button(&win, pad, cy, b_adm, "Toggle admin", 0);
+          b->id = ID_ADMIN;
+          b = unoui_add_button(&win, inner - pad - b_cls, cy, b_cls, "Close",
+                               UI_F_DEFAULT); b->id = ID_CLOSE;
+          cy += bh + 8;
         }
-        if (status[0]) unoui_add_label(&win, 8, cy, status);
+        if (status[0]) { static char st[96];
+            unoui_add_label(&win, pad, cy,
+                            fit_px(st, sizeof st, status, inner - 2 * pad)); }
 
-        modal_begin(&win);
+        sheet_audit(&win);
+    modal_begin(&win);
         for (;;) {
             unoui_action a;
             if (!modal_frame(&a) || !a.changed) continue;
@@ -544,13 +644,37 @@ void pc64_remote_open(void)
 {
     unoui_window win;
     char status[96], addr[40], tokline[64];
-    int W = 400, H = 300;
-    int x = (FB_W - W) / 2, y = (FB_H - H) / 2;
+    int fh = fb_text_h(), bh = ui_ctl_h(), pad = 8;
+    int W, H, x, y, inner;
+    /* The three tick labels are the widest things here and they are sentences,
+       so the panel is sized to THEM rather than to a round 400 - at anything
+       above the 8 px bitmap face "Full access - disks, files, run code,
+       restart" ran off the end of a sheet that is the only place in the OS
+       where remote control gets turned on. */
+    static const char *k_obs = "Watch  - see the screen and system state";
+    static const char *k_drv = "Control  - move the mouse, type, open apps";
+    static const char *k_sys = "Full access  - disks, files, run code, restart";
+    static const char *k_l1  = "Another computer can connect to this machine";
+    static const char *k_l2  = "and use it. Grant only what you need:";
+    int b_on   = fb_text_w("Update access") + 26;
+    int b_off  = fb_text_w("Turn off")      + 26;
+    int b_cls  = fb_text_w("Close")         + 26;
     /* what the user has ticked - seeded from what is already granted, so
        re-opening the panel on an armed channel shows the truth. */
     int want_obs = 1, want_drv = 1, want_sys = 0;
 
     status[0] = 0;
+    { int want = 0, k;
+      const char *lines[5]; lines[0]=k_obs; lines[1]=k_drv; lines[2]=k_sys;
+      lines[3]=k_l1; lines[4]=k_l2;
+      for (k = 0; k < 5; k++)
+          { int t2 = 12 + 18 + fb_text_w(lines[k]) + pad; if (t2 > want) want = t2; }
+      { int brow = pad + b_on + 8 + b_off + 12 + b_cls + pad;
+        if (brow > want) want = brow; }
+      sheet_outer(want, pad + 3 * fh + 8 + 3 * (fh + 8) + 6
+                        + 3 * (fh + 4) + 8 + bh + 8 + fh + pad,
+                  &W, &H, &x, &y); }
+    inner = sheet_inner(W);
     if (unoauto_gate_armed()) {
         unsigned p = unoauto_gate_powers();
         want_obs = (p & UNOAUTO_P_OBSERVE) != 0;
@@ -563,40 +687,48 @@ void pc64_remote_open(void)
         unoui_widget *w;
 
         unoui_window_init(&win, "Remote Control", x, y, W, H);
-        unoui_add_label(&win, 8, cy, armed ? "Remote control is ON."
-                                           : "Remote control is off."); cy += 18;
-        unoui_add_label(&win, 8, cy, "Another computer can connect to this machine"); cy += 14;
-        unoui_add_label(&win, 8, cy, "and use it. Grant only what you need:"); cy += 20;
+        unoui_add_label(&win, pad, cy, armed ? "Remote control is ON."
+                                             : "Remote control is off."); cy += fh + 4;
+        unoui_add_label(&win, pad, cy, k_l1); cy += fh + 2;
+        unoui_add_label(&win, pad, cy, k_l2); cy += fh + 8;
 
-        w = unoui_add_check(&win, 12, cy, "Watch  - see the screen and system state", want_obs);
-        w->id = ID_R_OBSERVE; cy += 20;
-        w = unoui_add_check(&win, 12, cy, "Control  - move the mouse, type, open apps", want_drv);
-        w->id = ID_R_DRIVE; cy += 20;
-        w = unoui_add_check(&win, 12, cy, "Full access  - disks, files, run code, restart", want_sys);
-        w->id = ID_R_SYSTEM; cy += 22;
+        w = unoui_add_check(&win, 12, cy, k_obs, want_obs);
+        w->id = ID_R_OBSERVE; cy += fh + 8;
+        w = unoui_add_check(&win, 12, cy, k_drv, want_drv);
+        w->id = ID_R_DRIVE; cy += fh + 8;
+        w = unoui_add_check(&win, 12, cy, k_sys, want_sys);
+        w->id = ID_R_SYSTEM; cy += fh + 12;
 
         if (armed) {
             ip_str(addr, (int)sizeof addr);
-            snprintf(tokline, sizeof tokline, "Code:  %s", unoauto_gate_token());
-            unoui_add_label(&win, 8, cy, "Connect to this address and enter the code:"); cy += 16;
-            unoui_add_label(&win, 12, cy, addr);    cy += 16;
-            unoui_add_label(&win, 12, cy, tokline); cy += 18;
+            snprintf(tokline, sizeof tokline, "PIN:  %s", unoauto_gate_token());
+            unoui_add_label(&win, pad, cy, "Connect to this address and enter the PIN:");
+            cy += fh + 4;
+            unoui_add_label(&win, 12, cy, addr);    cy += fh + 4;
+            unoui_add_label(&win, 12, cy, tokline); cy += fh + 8;
         } else {
-            unoui_add_label(&win, 8, cy, "Nothing is listening until you turn this on."); cy += 34;
+            unoui_add_label(&win, pad, cy, "Nothing is listening until you turn this on.");
+            cy += 3 * (fh + 4) + 4;             /* keep the buttons in one place */
         }
 
         { unoui_widget *b;
-          b = unoui_add_button(&win, 8, cy, armed ? 120 : 96,
+          int bw = armed ? b_on : (fb_text_w("Turn on") + 26);
+          b = unoui_add_button(&win, pad, cy, bw,
                                armed ? "Update access" : "Turn on", UI_F_DEFAULT);
           b->id = ID_R_ENABLE;
-          if (armed) { b = unoui_add_button(&win, 136, cy, 84, "Turn off", 0);
+          if (armed) { b = unoui_add_button(&win, pad + bw + 8, cy, b_off,
+                                            "Turn off", 0);
                        b->id = ID_R_DISABLE; }
-          b = unoui_add_button(&win, W - 92, cy, 84, "Close", 0); b->id = ID_CLOSE;
-          cy += 26;
+          b = unoui_add_button(&win, inner - pad - b_cls, cy, b_cls, "Close", 0);
+          b->id = ID_CLOSE;
+          cy += bh + 8;
         }
-        if (status[0]) unoui_add_label(&win, 8, cy, status);
+        if (status[0]) { static char st[128];
+            unoui_add_label(&win, pad, cy,
+                            fit_px(st, sizeof st, status, inner - 2 * pad)); }
 
-        modal_begin(&win);
+        sheet_audit(&win);
+    modal_begin(&win);
         for (;;) {
             unoui_action a;
             if (!modal_frame(&a) || !a.changed) continue;
