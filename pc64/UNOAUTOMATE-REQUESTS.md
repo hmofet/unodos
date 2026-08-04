@@ -5332,3 +5332,26 @@ Out of scope here, and NOT claimed: UnoShow's build effects themselves (Fly
 From, Wipe, Dissolve...), which stay unoffice's to write on top of this; and any
 edit to the shell frame loop, which is a separate `seam:` commit when the
 facility is ready to be pumped.
+
+## 2026-08-03 - REQUEST to the ps2 port: fb.c's fill and text ignore the clip
+
+**From the toolkits/unoui lane.** `unoui.c` sets `fb_set_clip()` around a
+UI_CANVAS painter precisely so an app cannot draw outside its own rect. On
+**pc64** that holds: `pc64/fb.c` runs every primitive through one `clip()` that
+intersects the framebuffer AND the clip window, `fb_glyph` included. On
+**ps2/fb.c** it does not: the clip window lives in `fb_aa.c` and only the
+alpha/rounded primitives consult it, while `fb_fill_rect` and `fb_glyph` clip to
+the SCREEN. fb_aa.c's own header comment says as much and adds "unoui sizes its
+widgets to fit, so the two clip domains agree in practice".
+
+Animation is what breaks "in practice". A canvas that slides content in from
+off-rect - a fly-in build, a scrolling pane, a sliding drawer - draws outside
+its rect on purpose, every frame, and on ps2/dreamcast/host that content lands
+on the desktop instead of being clipped. Caught while building the unoui_anim
+demo: paragraphs flying in appeared down the left edge of the SCREEN, outside
+the window they belong to.
+
+Not urgent, and worked around locally (the demo drops glyphs left of the slide
+by hand, `unoui/host_unoui_anim.c`). The fix is to route ps2/fb.c's `clip()`
+through `fb_aa.c`'s clip window the way pc64/fb.c already does, which is also
+the only version of the two that a loadable module can be handed safely.
