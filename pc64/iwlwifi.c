@@ -2876,20 +2876,6 @@ static void mld_link_cfg(int action, int active, int have_phy, u32 modify_mask)
     c.mac_id = MLD_MAC_ID;
     c.phy_id = have_phy ? g_phy_id : FW_CTXT_INVALID;
     memcpy(c.local_link_addr, g_mac, 6);
-    /* THE BSS THIS LINK BELONGS TO. Linux fills ref_bssid_addr in
-     * iwl_mvm_link_changed from vif->bss_conf.bssid; we memset the command and
-     * never wrote it, so the firmware ran every link with an all-zero reference
-     * BSSID. The STA peer and the TX queue were re-pointed on a join retry and
-     * this was not, so the link never described the BSS we were actually on.
-     *
-     * Metal, SURFGO 2026-08-04: associated to e8:d3:eb:51:4d:66 (the third
-     * candidate, -62 dBm, after the two stronger BSSes refused auth), then a
-     * steady drip of `DEAUTH from e8:d3:eb:47:4e:c6 reason=7` and no DHCP
-     * lease. Reason 7 is "class 3 frame received from nonassociated STA" -
-     * an AP saying these data frames do not belong to any association it
-     * knows about, which is exactly what an unset reference BSSID would
-     * produce. */
-    memcpy(c.ref_bssid_addr, g_bssid, 6);
     c.listen_lmac = 0;
     c.spec_link_id = 0;                 /* the 802.11 link id (non-MLO: 0) */
     if (action == 2 /*MODIFY*/) {
@@ -3825,17 +3811,6 @@ static int retarget_ap(int new_chan)
     }
     g_joined = 0; g_wpa_active = 0;                /* leaving the old BSS */
     g_link_lost_reason = -1;                       /* a new attempt, not the old failure */
-    /* Re-point the LINK at the new BSS, not just the station. The link carries
-     * ref_bssid_addr (see mld_link_cfg); re-pointing the peer and the TX queue
-     * while leaving the link describing the previous candidate is how the
-     * firmware ended up transmitting on behalf of a BSS we had walked away
-     * from. LINK_CONFIG only appeared at attempt 1 in the metal trace - every
-     * retry silently kept attempt 1's link. */
-    mld_link_cfg(2 /*MODIFY*/, 1 /*active*/, 1 /*phy*/, LINK_MOD_ACTIVE);
-    if (r32(CSR_MSIX_HW_INT_CAUSES_AD)) {
-        uno_dbg_net_trace("wifi: retarget: LINK_CONFIG re-point asserted the fw");
-        return -1;
-    }
     mld_sta_cfg(g_bssid, 0, 0);                    /* the new peer */
     if (r32(CSR_MSIX_HW_INT_CAUSES_AD)) return -1;
     mvm_txq_free(AP_STA_ID, 15);
