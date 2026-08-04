@@ -14,6 +14,7 @@
 #include "unoui.h"
 #include "unoui_theme.h"
 #include "unoui_anim.h"      /* the shared tween clock (this shell owns it) */
+#include "unoui_wmanim.h"    /* animated snap/unsnap geometry */
 #include "mac_compat.h"      /* FB_W/FB_H + uno_pc64_* + FSOpen/... */
 #include "pc64_uui_apps.h"   /* the legacy-app bridge (paint, tracker, music) */
 #include "pc64_games.h"      /* native unoui games (Dostris, ...) */
@@ -3193,6 +3194,13 @@ static void session_save(void)
         if (!g_open[a] || !app_restorable(a) || !g_built[a]) continue;
         r = (g_win[a].snap != UI_SNAP_NONE && g_win[a].restore_r.w > 0)
             ? g_win[a].restore_r : g_win[a].r;
+        /* A snap animation is ~130 ms long and session_save fires at the END of
+         * the drag that started it, so without this the rect written to disk is
+         * whatever the window was passing through at the time. The window's
+         * snap state and restore_r are final immediately, so only the un-snap
+         * and move-only cases can be caught mid-flight - which are exactly the
+         * two that persist g_win[a].r rather than restore_r. */
+        if (g_win[a].snap == UI_SNAP_NONE) unoui_geom_target(&UI, &g_win[a], &r);
         p = ap_str(p, "geom"); p = ap_int(p, a); *p++ = '=';
         p = ap_int(p, r.x); *p++ = ',';
         p = ap_int(p, r.y); *p++ = ',';
@@ -3283,7 +3291,14 @@ static void session_restore_geom(const char *buf, int a)
     p = cfg_line_val(buf, key);
     if (p) {
         int s = cfg_num(&p);
-        if (s > UI_SNAP_NONE && s <= UI_SNAP_BR) unoui_snap_apply(&UI, &g_win[a], s);
+        if (s > UI_SNAP_NONE && s <= UI_SNAP_BR) {
+            unoui_snap_apply(&UI, &g_win[a], s);
+            /* Restoring a session is not a gesture, so it must not be animated:
+             * a desktop whose windows slide in from wherever they were last
+             * saved looks like the machine is still deciding. Settle them into
+             * place before the first frame is ever drawn. */
+            unoui_geom_settle(&UI, &g_win[a]);
+        }
     }
 }
 
@@ -4820,6 +4835,10 @@ int main(void)
      * rather than a division by zero. */
     unoui_anim_init(&ANIM);
     if (uno_native_tsc_per_us()) unoui_clock_ms = anim_clock_ms;
+    /* Snap, unsnap and maximize now MOVE the window instead of teleporting it.
+     * Installed after the clock, because without one every snap would run at
+     * the frame-counted fallback speed. */
+    unoui_wmanim_install(&UI, &ANIM);
     int netboot_done = 0, netboot_frames = 0;   /* one-shot proactive net bring-up */
 #ifdef UNO_DEBUG
     /* Prove the shell's main loop was reached and that the debug hooks are
