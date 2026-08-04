@@ -41,8 +41,25 @@ typedef struct {
 int iwl_scan_aps(iwl_ap_t *out, int max);
 
 /* Join an SSID with a WPA2-PSK passphrase (overriding WIFI.CFG for this boot).
- * Blocks for the scan + association + 4-way handshake (~10 s). 0 = joined. */
+ * Blocks for the scan + association + 4-way handshake (~10 s). 0 = joined.
+ * A join that SUCCEEDS is remembered (see below). */
 int iwl_join_ssid(const char *ssid, const char *psk);
+
+/* ---- remembered networks -------------------------------------------------
+ * Every successful join is written to WIFINETS.CFG on a persistent volume,
+ * most recent first, and entry 0 is what the next boot rejoins - so a machine
+ * with no wired port comes back onto the network it was last on without anyone
+ * retyping a passphrase.  A hand-staged WIFI.CFG still works and is the
+ * fallback when the remembered network will not join.
+ *
+ * The passphrases are stored in PLAINTEXT, the same as WIFI.CFG has always
+ * been: WPA2 needs the passphrase back to derive the PMK, and there is no
+ * user-keyed store on this OS to wrap it with.  iwlwifi.c's section 10b has
+ * the full argument. */
+int  iwl_saved_count(void);                       /* 0 if nothing remembered   */
+int  iwl_saved_get(int i, char *ssid, int cap);   /* 0 = last joined; 0 = ok   */
+int  iwl_saved_psk(const char *ssid, char *psk, int cap); /* 1 if remembered   */
+void iwl_saved_forget(const char *ssid);          /* drop it from the store    */
 
 /* Interactive F12 debug entry point (for the unoautomate remote channel -
  * see the 2026-07-22 request in UNOAUTOMATE-REQUESTS.md). Parses ONE command

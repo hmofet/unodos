@@ -170,9 +170,45 @@ psk=my-wpa2-passphrase
 
 The WiFi driver is bound lazily (on the first network use), not at boot: a scan +
 join + 4-way handshake takes a few seconds, which does not belong on the boot
-path. If no `WIFI.CFG`/firmware is present, or the join fails, `iwl_nic()`
+path. If no credentials/firmware are present, or the join fails, `iwl_nic()`
 returns NULL and the probe chain simply falls through, a machine with a wired or
 USB NIC is unaffected.
+
+### WIFINETS.CFG, the networks the machine remembers
+
+`WIFI.CFG` is a file you stage by hand. Everything you join from the **Control
+Panel** is remembered for you, in `WIFINETS.CFG` on the first writable
+partition (a real FAT partition ahead of the RAM disk - the same volume the
+shell keeps `SHELL.CFG` on):
+
+```
+ssid=MyNetwork
+psk=my-wpa2-passphrase
+ssid=SomeCafe
+psk=hunter2
+```
+
+- Same grammar as `WIFI.CFG`, repeated, **most recently joined first**, up to 8
+  networks; the oldest falls off the end. Hand-editable.
+- Only a join that actually SUCCEEDED is written, so a mistyped passphrase is
+  never stored and retried at every boot.
+- **Entry 0 is what the next boot rejoins**, which is what makes a laptop with
+  no wired port come back onto its network by itself.
+- The passphrases are plaintext, for the same reason `WIFI.CFG`'s is: WPA2
+  needs the passphrase back to derive the PMK and there is no user-keyed store
+  on this OS to wrap it with. An encrypted file whose key sat on the same disk
+  would claim a protection it does not have.
+
+**Precedence.** The remembered network wins over `WIFI.CFG`: it is the user's
+most recent explicit choice, and on a machine that never had a config file
+staged it is the only credential there is. `WIFI.CFG` is not thereby dead -
+if the remembered network fails to join (out of range, password changed) the
+boot path falls back to the staged file when it names a different network, so
+editing `WIFI.CFG` on the stick is still a working recovery path.
+
+In the Control Panel's Network tab a remembered network is marked **`saved`**
+in the scan list, selecting it fills the password field in, and **Forget** drops
+it from the store (the way to correct a passphrase the access point changed).
 
 ## Realtek and Marvell PCIe WiFi
 
