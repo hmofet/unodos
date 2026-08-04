@@ -5401,3 +5401,69 @@ Seeding is a RANGE (`index >= stored generation`), not a blanket re-seed,
 because `usc_cap_t` is append-only so an index is a point in time. There is no
 remove-capability API today; if one lands, that precision is what stops a
 migration restoring something an operator deliberately took away.
+
+
+## 2026-08-04 - REQUEST to the iwlwifi lane: AX201 never ALIVEs on Ice Lake (SURFGO)
+
+**Reported from metal by arin** on the Surface Laptop Go: the Network app's
+scan says **"No networks found - WiFi: firmware did not ALIVE"**. Evidence
+salvaged off the stick before it was reflashed, at
+`Documents\unodos-metal-logs\2026-08-04-surfgo-boot\` (`SURFGO/NETLOG.TXT`,
+`BOOTLOG.TXT`, `BOOTENV.TXT`).
+
+What the box is, from its own log:
+
+```
+pci: net-other (WiFi?) 8086:34f0 at 0/20/3
+wifi: card pci=34f0 fam=3 gen2=1 fw=FIRMWARE\IWLAX201.UCO
+```
+
+`8086:34f0` is the **Ice Lake-LP CNVi** - an AX201 on QuZ silicon. The lane's
+known-good AX201 (2026-07-28: DHCP/ping/DNS over CCMP) was a different
+platform, so "AX201 works" and "this AX201 works" are not the same claim.
+
+**The specific thing worth checking first.** `choose_firmware()` ships ONE
+`IWLAX201.UCO` for every Qu/QuZ part, and cannot tell them apart:
+
+```c
+u32 mac_type = (g_hw_rev >> 4) & 0xFFF;
+(void)mac_type;                       /* iwlwifi.c:420-421 */
+...
+else strcpy(g_fwfile, "FIRMWARE\\IWLAX201.UCO");
+```
+
+It reads the MAC type out of `CSR_HW_REV` and then explicitly DISCARDS it.
+`tools/uno-wifi-fw.py` already knows Qu and QuZ are different upstream files -
+it globs `iwlwifi-QuZ-a0-hr-b0-*.ucode`, then `iwlwifi-Qu-b0-hr-b0-*.ucode`,
+and collapses whichever it finds to one destination name, with the comment
+"the driver loads one IWLAX201.UCO". **Loading the other stepping's ucode is
+the textbook cause of firmware that loads, starts, and never posts ALIVE.**
+
+The blob in `fw-blobs/` is build tag `release/core74::f39cc7f9` and carries no
+name TLV, so **which stepping it is cannot be recovered from the file** - only
+from whichever glob happened to match when it was fetched.
+
+**What would settle it, and why this cannot be settled from here.** Nothing
+logs the silicon revision. The status string builds `"Intel WiFi " +
+hex(g_hw_rev)` but the trace line beside it prints only pci/family/gen2/file:
+
+```c
+st_set("Intel WiFi "); st_cathex(g_hw_rev);
+uno_dbg_net_trace("wifi: card pci=%04x fam=%d gen2=%d fw=%s", ...);
+```
+
+**Smallest useful change: put `CSR_HW_REV` and `CSR_HW_RF_ID` into that trace
+line.** One boot on the Surface then writes the silicon identity into
+`\CRASH\SURFGO\NETLOG.TXT`, and the question stops being a guess. If it is a
+stepping mismatch, the fix is to ship the two blobs separately and select on
+`mac_type` - the value the code already computes and throws away.
+
+**Why this box cannot be debugged over URC**, which is the other half of the
+problem: the Surface Laptop Go has NO wired NIC (`plan: no USB ethernet`), so
+the remote channel can only reach it over the radio that is broken. The `iwl
+alive` verbs and the rest of the lane's apparatus are unreachable on precisely
+the machine that needs them. A USB-ethernet adapter breaks the deadlock; so
+would a QEMU fixture for the same firmware path.
+
+Filed by the unoffice lane because that is who was standing there. The
+subsystem, the call and the fix are the WiFi lane's.
