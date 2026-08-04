@@ -81,8 +81,16 @@ static const unoui_action NO_ACT = { 0, 0, 0, 0 };
 static int pt_in(unoui_rect r, int x, int y)
 { return x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h; }
 
+/* UI_F_DISABLED greys a control out.  It used to grey it out and NOTHING ELSE:
+ * every painter dimmed the text, and the input layer went on hitting, focusing
+ * and firing the widget exactly as before.  A control that looks unavailable
+ * and still works is worse than one that never greys, because the look is a
+ * promise about what a click will do.  Both gates below honour it now. */
+static int disabled(const unoui_widget *w) { return (w->flags & UI_F_DISABLED) != 0; }
+
 static int interactive(const unoui_widget *w)
 {
+    if (disabled(w)) return 0;
     switch (w->kind) {
     case UI_BUTTON: case UI_CHECK: case UI_RADIO: case UI_TEXTAREA:
     case UI_VSCROLL: case UI_HSCROLL: case UI_SLIDER: case UI_SPINNER:
@@ -97,6 +105,7 @@ static int interactive(const unoui_widget *w)
 
 static int focusable(const unoui_widget *w)
 {
+    if (disabled(w)) return 0;              /* Tab skips it too - see above */
     switch (w->kind) {
     case UI_BUTTON: case UI_CHECK: case UI_RADIO: case UI_TEXTAREA:
     case UI_SLIDER: case UI_SPINNER: case UI_DROPDOWN: case UI_TABS: case UI_LIST:
