@@ -4240,7 +4240,12 @@ static void postjoin_diag(void)
     unsigned long long now = uno_dbg_uptime_ms();
     const char *reading;
     if (g_postjoin_diag_done || !g_joined || !g_join_ms) return;
-    if (now - g_join_ms < 6000) return;
+    /* 2.5 s, not 6. DHCP DISCOVER retries at roughly 1.5 s intervals, so by
+     * here two or three have gone out and the counters have said what they are
+     * going to say - and the FIRST attempt at this waited 6 s and never fired,
+     * because the captured log ended 3.2 s after the join. A diagnostic that
+     * outlives its own capture window measures nothing. */
+    if (now - g_join_ms < 2500) return;
     g_postjoin_diag_done = 1;
 
     if (g_txr_total && g_txr_ackfail * 2 >= g_txr_total)
@@ -4261,6 +4266,26 @@ static void postjoin_diag(void)
                       (unsigned)g_rx_data_n, (unsigned)g_rx_from_ap, (unsigned)g_rx_data_drop,
                       (unsigned)g_deauth_ours, (unsigned)g_deauth_other, g_deauth_reason);
     uno_dbg_net_trace("wifi: post-join diag: -> %s", reading);
+
+    /* PERSIST IT NOW, rather than hoping the boot log gets written later.
+     *
+     * These lines go to the kernel ring; the ring reaches the stick only when
+     * something writes BOOTLOG.TXT, and post-boot nothing routinely does. The
+     * NETLOG sink cannot help either - it only flushes while the boot net test
+     * is active. So the first version of this diagnostic could have fired
+     * perfectly and still left no trace on the medium we read it from.
+     *
+     * The whole point of this round is that ONE boot produces the answer, and
+     * on a machine whose stick gets pulled while it is still running, that
+     * means writing it out at the moment it is known.
+     *
+     * Debug-only: uno_debug.h DECLARES uno_dbg_write_bootlog unconditionally but
+     * the release build does not define it, so an unguarded call links fine at
+     * UNO_DEBUG=1 and fails at 0. The trace calls above already compile to
+     * nothing in release, so there is nothing to persist there anyway. */
+#if UNO_DEBUG
+    uno_dbg_write_bootlog();
+#endif
 }
 
 static int iwl_link(void *ctx)
