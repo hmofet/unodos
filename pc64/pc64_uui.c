@@ -566,6 +566,7 @@ static void cp_wifi_target_label(void)
  * no state to keep in sync, and nothing left spinning after a failure. */
 static unoui_widget *g_cp_busy;
 static int g_cp_working;             /* a scan/join is in flight right now */
+static int g_cp_join_failed;         /* shake the password field once, next build */
 #ifdef UNO_DEBUG
 /* The WiFi pane only exists when a card does, so the layout audit could never
  * see it - and it is five rows and the tallest thing on the Network tab. This
@@ -757,6 +758,7 @@ static void cp_wifi_join(void)
         { char msg[200]; char *p = ap_str(msg, "Join failed: ");
           p = ap_str(p, why[0] ? why : "no reason reported");
           *p = 0; cp_wifi_note(msg); }
+        g_cp_join_failed = 1;      /* the field shakes on the rebuild below */
     } else {
         cp_wifi_phase("Joined. Asking the network for an address (DHCP)", 0);
         nic = iwl_nic();
@@ -1001,6 +1003,18 @@ static void build_ctrl(unoui_window *w)
                   g_cp_psk_t.scroll_x = sx;
               } }
             x = unoui_add_edit(w, 8 + pw, y, cw - pw - 16, &g_cp_psk_t); x->id = ID_WIFIPSK;
+            /* The house "no": the field shakes and keeps the focus, so the
+             * retry is one keystroke.  Fired from the BUILD because the widget
+             * has to exist before anything can animate it, and consumed here so
+             * one failure is one shake however many rebuilds follow. */
+            if (g_cp_join_failed) {
+                g_cp_join_failed = 0;
+                unoui_reject_widget(&UI, w, x);
+                { int fi;
+                  for (fi = 0; fi < UI.nwin; fi++)
+                      if (UI.win[fi] == w) { UI.focus_win = fi; break; } }
+                UI.focus_wi = w->nw - 1;
+            }
             y += row;
             /* buttons sized to their labels and flowed left to right (the house
              * idiom), not pinned at 8/126/244 - three fixed 110 px slots ran
