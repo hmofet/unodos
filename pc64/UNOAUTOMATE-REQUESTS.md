@@ -6465,3 +6465,100 @@ that was 658 px against 586 px of content, a confirmation box parked beside its
 label whether or not both fit.  A width in your source that is a round number is
 a bug at some font size.  `layout-audit=1` in DEBUG.CFG finds them in seconds;
 please run it before landing a new window.
+
+## 2026-08-04 - CLAIM + LANDED (unofs / shell / boot / harness): the eMMC detach preflight
+
+Operator direction: work the eMMC so the Surface can fully detach and lose the
+firmware on-screen keyboard.  The driver for that already exists and is
+QEMU-green (`sdhci.c`, SD via `tools/sdhci_test.py`, eMMC handshake via
+`tools/emmc_test_win.py`).  What did not exist was any way to find out whether
+it will work on THAT machine without taking the irreversible step.  Landed on
+`emmc-preflight`; the box was still unreachable, so none of this is
+metal-confirmed.
+
+### 1. -> unofs (`fat.c`): `uno_fat_native_status()`
+
+`uno_fat_native_eligible()` returns a bit, and try_detach() turns a false into
+"no native-reachable volume carries the system".  Three different situations
+produce that one sentence: no native driver for the controller the system is
+on; a driver that could not find the controller on PCI; or a controller that is
+simply not where the system lives.  On the Surface those are three different
+jobs and telling them apart cost a detach.
+
+The new call says it out loud - which volume carries the system and where it
+sits, which of ahci/nvme/sdhci PCI can see and where, which of those is the one
+the system is ON (starred), whether usbmsc covers it, and the verdict:
+
+    sys on fw0 @1f.2  native: ahci@1f.2*  -> reclaimable
+
+**PCI config space only.**  Nothing mapped, no controller register read: the
+firmware still owns these devices while attached and reprogramming one
+underneath it corrupted an installer clone mid-write once already (blkdev.c).
+
+### 2. -> shell (`pc64_uui.c`): it goes in the System window
+
+Under STORAGE, one row below "Native FS:".  **It has to be a UI surface, not a
+log.**  A 6-digit URC PIN means the machine is running the PRODUCTION build,
+and `uno_dbg_log` compiles to nothing there.  Gate: `tools/natstat_urc.py`,
+shots committed.  `rows[]` went 24 -> 32; this row took it to exactly 24.
+
+### 3. -> boot (`uefi_main.c`): the gate's diagnostics never reached metal
+
+**Worth knowing whatever lane you are in.**  Every line `try_detach()` logged
+went through `dbg_puts`, which is `outb(0x402)` under `-DUNO_DBGCON` and an
+empty function otherwise.  So the whole detach diagnostic existed only in QEMU
+- including `DETACHED BUT STRANDED`, the one line a stranded machine has no
+other way to tell you - on a decision whose entire difficulty is that it
+behaves differently on every real machine.  The comment above the gate line has
+claimed "this reaches the kernel log" since it was written; now it does.  Same
+correction `62874dc8` made for the iwlwifi join diagnostic.
+
+### 4. -> unoautomate harness (`tools/remote_qemu.py`): urcui could not boot
+
+`boot_qemu()` passes `-drive file=/tmp/remote_disk2.img` unconditionally, but
+only `main()` ever created it - `build_disk()` did not.  So **every gate built
+on `urcui.py`** (the one harness that can prove a mouse gesture on pc64) handed
+QEMU a drive that was not there, QEMU refused to start, stderr went to DEVNULL,
+and the only symptom was "the guest never dialled in - is this the DEBUG
+build?".  It hid because `main()` DOES create the file: run `remote_qemu.py`
+once and everything works until `/tmp` is cleared, which on a WSL box is every
+reboot.  Fixed in `build_disk()` so both entry points build the same machine.
+
+### -> whoever owns build.sh: the debug build cannot test detach at all
+
+**Not changed, because it is a fleet-wide default.**  `build.sh` adds
+`-DUNO_NO_DETACH` to every `UNO_DEBUG=1` build unless `UNO_DETACH=1`, citing
+finding F8: "the native stack has no USB mass-storage driver, so
+ExitBootServices on a USB-booted system strands its own boot volume".
+
+**That reason stopped being true when `usbmsc.c` landed.**  `try_detach()`'s own
+comment now reads "A USB boot detaches by DEFAULT as of 2026-07-30, confirmed
+on metal", and the ZimaBlade runs detached from a USB stick.  So the debug build
+- the only build that produces a BOOTLOG - compiles out the very thing the
+Surface work needs to observe, for a reason that no longer holds.  Anyone
+testing detach today needs `UNO_DETACH=1 UNO_DEBUG=1 ./build.sh` and probably
+does not know it.  Someone should either flip the default or rewrite that
+comment; both are the build lane's call, not mine.
+
+### The order to do the Surface in
+
+1. Boot what it has now, open System, read the new STORAGE row.  While it is
+   still a USB boot this says `usbmsc*` or it does not, which answers "could
+   this machine detach from the stick it is on" before eMMC enters into it.
+2. Install to the internal eMMC (`install <disk>` over URC, or the Install app).
+3. Reboot, open System, read the row again.  `sdhci@XX.X*` means the detach
+   will work.  No `sdhci` at all means the Ice Lake eMMC controller is in
+   ACPI-only mode and never appears as PCI class 08/05 - at which point the fix
+   is an ACPI-directed probe, and `uno_i2c_hid_acpi_retry()` is the working
+   pattern to copy.  **Do not build that on spec: if the controller is on PCI,
+   it is dead code.**
+
+### One trade-off to go in with eyes open
+
+Detaching this machine will probably make it SLOWER.  `choose_present_path()`
+picks Blt on the Surface because it benches ~4x the direct-store path (99 MB/s
+vs the ~26 MB/s uncached framebuffer), and `gBltFast` is cleared at
+ExitBootServices because Blt needs boot services.  Dirty-row tracking keeps
+cursor-only frames cheap either way, so this costs full repaints rather than
+pointer feel - but "remove the OSK" and "make it less floaty" are not the same
+direction, and the machine that loses the icon is the machine that loses Blt.
