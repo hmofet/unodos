@@ -5215,3 +5215,41 @@ Priority is a judgement call: a PDF/file device would move ~15 SPEC items
 across all three apps from chrome-only to working, and needs no hardware. A
 real printer driver is a much larger job for a machine that has no printer
 attached.
+
+---
+
+## 2026-08-04 - unoffice/unoui + unosecure owners: three things metal found
+
+Filing these against the owners' lanes rather than fixing them from the
+unoautomate lane. All three surfaced while testing the Remote Control panel on
+the ZimaBlade (400x300 desktop, Celeron N3350).
+
+**1. The escalation consent sheet does not fit a small screen (unoui/security
+UI).** At 400x300 the sheet is wider than the display and centred with
+`x = (FB_W - W) / 2`, which goes NEGATIVE - so both edges are cut off. The
+title reads "mission requested", the cap line "mate.observe", and the third
+button "Allow se...". It is still operable (Allow once is fully visible and
+Deny is partly), but a KERNEL-tier prompt that the user cannot fully read is
+not an acceptable place to be approving anything. Needs a min-width clamp and
+a non-negative origin, or a narrower layout under some width.
+
+**2. New capabilities are NOT granted to existing roles (unosecure).**
+`seed_roles()` gives `admin` every cap with tier <= ADMIN, but it only runs on
+a FRESH store - `unosec_boot()` calls it when `db_load()` finds nothing, or
+when the role table is missing entirely. So a machine whose store predates a
+capability never grants it, and an admin gets a consent prompt for something
+their role is supposed to cover. Seen exactly this: `automate.observe` and
+`automate.drive` (both ADMIN tier, both seeded onto `admin` in a fresh store)
+prompted on a box whose store was older than the caps. Fail-closed, so not a
+security hole - but it means capability additions silently do not reach
+existing machines. Suggest a stored schema/cap-generation counter that
+re-seeds built-in roles when it moves.
+
+**3. The boot network test tears down an early URC link (unoautomate, ours -
+noted for the record).** With the 2026-08-04 change that brings the network and
+channel up BEFORE the login gate on a machine with accounts, the boot-time net
+test later re-runs the full bring-up and drops the established TCP connection;
+URC re-dials within a few seconds and recovers on its own. Benign, and a
+production image has no net test, but a debug box shows one `replacing stale
+link` right after the desktop appears. Not worth a fix unless it starts costing
+a gate a retry.
