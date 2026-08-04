@@ -931,8 +931,23 @@ static int try_detach(void)
     typedef EFI_STATUS (*GMM_FN)(UINTN *, void *, UINTN *, UINTN *, UINT32 *);
     typedef EFI_STATUS (*EBS_FN)(EFI_HANDLE, UINTN);
     int t, had_i8042;
+/* EVERY LINE THIS FUNCTION LOGS GOES THROUGH uno_dbg_log, NOT dbg_puts.
+ *
+ * dbg_puts is `outb(0x402)` under -DUNO_DBGCON and an empty function
+ * otherwise: QEMU's debug console, in a build nobody takes to a laptop, and
+ * METAL-CHECKLIST says as much in as many words ("a -DUNO_DBGCON build is
+ * silent here"). So the gate's whole diagnostic - the reading it took, the
+ * keyboard it wanted, the volume it could not reclaim - existed only in the
+ * emulator, on a decision whose entire difficulty is that it behaves
+ * differently on every real machine.
+ *
+ * uno_dbg_log writes the kernel log AND the debugcon, so QEMU keeps exactly
+ * what it had and metal gains the same lines in CRASH\<machine>\BOOTLOG.TXT.
+ * Same correction as `62874dc8` made for the iwlwifi join diagnostic; the
+ * comment below has claimed "this reaches the kernel log" since it was
+ * written, and now it is true. Compiles away in production, as before. */
 #define REFUSE(msg, block) do { gDetachWhy = (msg); gDetachBlocked = (block); \
-                                dbg_puts("detach: " msg "\n"); return 0; } while (0)
+                                uno_dbg_log("detach: %s", (msg)); return 0; } while (0)
     if (gDetached) return 1;
     /* Log what the gate SEES before logging what it decided. The ZimaBlade
      * rounds turned on exactly this: three sessions were spent inferring a
@@ -943,7 +958,7 @@ static int try_detach(void)
      * env block, which only survives a clean power-off. */
     {   char dg[160];
         uno_dg_status_str(dg, (int)sizeof dg);
-        dbg_puts("detach gate: "); dbg_puts(dg); dbg_puts("\n");
+        uno_dbg_log("detach gate: %s", dg);
     }
     if (gUseBlt || !gVram)        REFUSE("no linear framebuffer", 0);
     if (!native_kbd_for_detach()) {
@@ -952,7 +967,7 @@ static int try_detach(void)
          * reading it from: the xHCI for USB, an LPSS I2C controller otherwise */
         detach_blame(0x0C, uno_dg_fw_kbd_transport() == UNO_DGT_USB ? 0x03 : 0x80);
         gDetachWhy = hw; gDetachBlocked = 1;   /* say WHICH keyboard we wanted */
-        dbg_puts("detach: no native keyboard - "); dbg_puts(hw); dbg_puts("\n");
+        uno_dbg_log("detach: no native keyboard - %s", hw);
         return 0;
     }
     /* refuse to trade a working firmware pointer for no pointer at all */
@@ -974,8 +989,7 @@ static int try_detach(void)
         if (!uno_usbboot_native_ok()) {
             detach_blame(0x0C, 0x03);           /* the USB host controller */
             gDetachWhy = why; gDetachBlocked = 1;
-            dbg_puts("detach: USB boot volume would be stranded - ");
-            dbg_puts(why); dbg_puts("\n");
+            uno_dbg_log("detach: USB boot volume would be stranded - %s", why);
             return 0;
         }
         /* A USB boot detaches by DEFAULT as of 2026-07-30, confirmed on metal:
@@ -992,10 +1006,22 @@ static int try_detach(void)
          * ExitBootServices there is no way back. `DETACH.CFG: nousb` is the
          * escape hatch for a machine this gets wrong, and it needs no rebuild -
          * drop the file on the stick from any other computer. */
-        dbg_puts("detach: USB boot volume is reclaimable - "); dbg_puts(why); dbg_puts("\n");
+        uno_dbg_log("detach: USB boot volume is reclaimable - %s", why);
     }
-    if (!uno_fat_native_eligible())
+    if (!uno_fat_native_eligible()) {
+        /* Log the working, not just the verdict. This refusal is the one that
+         * stands between the Surface and a detached machine, and on its own it
+         * cannot tell you whether the eMMC controller is missing from PCI,
+         * present but not where the system lives, or simply has no driver.
+         * uno_fat_native_status() reads that out of PCI config space without
+         * touching anything - and it reaches the kernel log, which a killed
+         * guest still has, rather than the env block, which needs a clean
+         * power-off. Same reasoning as the `detach gate:` line above. */
+        char st[160];
+        uno_fat_native_status(st, (int)sizeof st);
+        uno_dbg_log("detach storage: %s", st);
         REFUSE("no native-reachable volume carries the system", 0);
+    }
 #undef REFUSE
     had_i8042 = uno_ps2_present();
     uno_fat_sync();             /* flush write-back lines while fw Block IO lives */
@@ -1050,9 +1076,9 @@ static int try_detach(void)
                  * is hardware we still own, so use it: the operator needs to
                  * know this is a known state with a known way out, not a brick. */
                 splash_step(100, "detach failed - power off and remove the USB stick");
-                dbg_puts("DETACHED BUT STRANDED: the system volume did not come "
-                         "back on native drivers - usbmsc: ");
-                dbg_puts(uno_usbmsc_why()); dbg_puts("\n");
+                uno_dbg_log("DETACHED BUT STRANDED: the system volume did not "
+                            "come back on native drivers - usbmsc: %s",
+                            uno_usbmsc_why());
             } else {
                 /* The pointer gate is a prediction too, and the same argument
                  * applies to it: check on this side of the door and SAY so.
@@ -1062,14 +1088,14 @@ static int try_detach(void)
                 const char *pwhy = "";
                 gDetachWhy = uno_dg_ptr_arrived(&pwhy) ? "running on our own drivers"
                                                        : pwhy;
-                if (pwhy[0]) { dbg_puts("detach: "); dbg_puts(pwhy); dbg_puts("\n"); }
+                if (pwhy[0]) uno_dbg_log("detach: %s", pwhy);
             }
-            dbg_puts("detached: ExitBootServices done - native storage/input/timers\n");
+            uno_dbg_log("detached: ExitBootServices done - native storage/input/timers");
             return 1;
         }
     }
     gDetachWhy = "ExitBootServices refused";
-    dbg_puts("detach: ExitBootServices failed - staying attached\n");
+    uno_dbg_log("detach: ExitBootServices failed - staying attached");
     return 0;
 }
 
