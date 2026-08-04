@@ -145,6 +145,42 @@ static int spr(const spr_t *s, int dx, int dy)
     return 1;
 }
 
+/* ---- the built-in look ("no skin" is still a look) -------------------------
+ * A .wsz supplies every pixel it covers, so everything below is only ever seen
+ * on a machine with NO skin loaded - which is every machine out of the box.
+ *
+ * It used to come straight from the shell theme, and that was wrong in one
+ * specific, embarrassing way: on Aurora Light, win_bg, face and title_bg are
+ * all within a few points of white, so a brand-new UnoAmp drew a white player
+ * on a white desktop. Transport buttons, and otherwise a blank slab. The user
+ * manual declined to publish a picture of it, which is the right instinct and
+ * the wrong fix.
+ *
+ * So the CHASSIS is fixed here rather than inherited: dark, with black-green
+ * wells for the time and title, the way every hardware player and every
+ * software one since 1997 has looked. The accent still comes from the shell
+ * theme, so the player belongs to the desktop it is sitting on without
+ * disappearing into it. */
+static const unoui_theme *ua_theme(void)
+{
+    static unoui_theme T;
+    const unoui_theme *sh = pc64_shell_theme();
+    if (unoamp_skin_get()) return sh;       /* the sheets own the pixels */
+    T = *sh;                                /* metrics and painters unchanged */
+    T.pal.win_bg     = FB_RGB(0x2E, 0x31, 0x3A);   /* the chassis            */
+    T.pal.face       = FB_RGB(0x3B, 0x3F, 0x4A);   /* buttons and sliders    */
+    T.pal.face_text  = FB_RGB(0xD8, 0xDC, 0xE6);
+    T.pal.title_bg   = FB_RGB(0x21, 0x23, 0x2A);
+    T.pal.title_fg   = FB_RGB(0xD8, 0xDC, 0xE6);
+    T.pal.field_bg   = FB_RGB(0x0A, 0x14, 0x0F);   /* the lit displays       */
+    T.pal.field_text = FB_RGB(0x4C, 0xF0, 0x92);
+    T.pal.text       = FB_RGB(0xD8, 0xDC, 0xE6);
+    T.pal.light      = FB_RGB(0x4C, 0x51, 0x5F);   /* bevels, both ways      */
+    T.pal.shadow     = FB_RGB(0x15, 0x17, 0x1C);
+    T.pal.win_frame  = FB_RGB(0x12, 0x14, 0x18);
+    return &T;
+}
+
 /* A sprite, or a drawn control when the sheet is missing.
  *
  * FLAT RECTANGLES WERE NOT ENOUGH. The first version filled with one colour,
@@ -159,7 +195,7 @@ static void spr_or(const spr_t *s, int dx, int dy, unsigned fallback)
     const unoui_theme *t;
     int ox, oy, x, y, w, h, k = g_scale;
     if (spr(s, dx, dy)) return;
-    t = pc64_shell_theme();
+    t = ua_theme();
     origin(&ox, &oy);
     x = ox + dx * k; y = oy + dy * k;
     w = s->w * k;    h = s->h * k;
@@ -218,7 +254,7 @@ static void font_text(const char *s, int dx, int dy, int n)
             int ox, oy;
             origin(&ox, &oy);
             fb_text(ox + dx * g_scale, oy + dy * g_scale, s,
-                    pc64_shell_theme()->pal.text, -1);
+                    ua_theme()->pal.field_text, -1);
             return;
         }
     }
@@ -238,7 +274,7 @@ static void font_digit(int d, int dx, int dy)
         t[0] = (char)(d < 0 ? ' ' : '0' + d); t[1] = 0;
         origin(&ox, &oy);
         fb_text(ox + dx * g_scale, oy + dy * g_scale, t,
-                pc64_shell_theme()->pal.text, -1);
+                ua_theme()->pal.field_text, -1);
     }
 }
 
@@ -257,7 +293,7 @@ static void draw_time(int ms)
  * the system has a play triangle that small. Index is CBUTTONS order. */
 static void glyph(int i, int dx, int dy, int w, int h)
 {
-    const unoui_theme *t = pc64_shell_theme();
+    const unoui_theme *t = ua_theme();
     unsigned c = t->pal.face_text;
     int cx = dx + w / 2, cy = dy + h / 2;
     switch (i) {
@@ -279,7 +315,7 @@ static void glyph(int i, int dx, int dy, int w, int h)
 /* ---- the window ----------------------------------------------------------- */
 static void draw_main(void)
 {
-    const unoui_theme *t = pc64_shell_theme();
+    const unoui_theme *t = ua_theme();
     const unoamp_in *in = unoamp_playing();
     spr_t s;
     int i, playing, pos_ms = 0, len_ms = -1, frac;
@@ -706,7 +742,7 @@ static void eq_origin(int *ox, int *oy)
  * flat rather than merely approximately centred. */
 static void eq_slider(int dx, int gain)
 {
-    const unoui_theme *t = pc64_shell_theme();
+    const unoui_theme *t = ua_theme();
     const unoamp_skin *sk = unoamp_skin_get();
     int ox, oy, ty;
     unsigned groove = t->pal.dark, thumb = t->pal.face;
@@ -754,7 +790,7 @@ static void sheet_bg(int sheet, int ox, int oy, int w, int h, unsigned fallback)
 
 static void eq_draw(struct unoui_widget *w, unoui_rect r, void *ctx)
 {
-    const unoui_theme *t = pc64_shell_theme();
+    const unoui_theme *t = ua_theme();
     int i, ox, oy;
     (void)w; (void)r; (void)ctx;
     eq_origin(&ox, &oy);
@@ -893,7 +929,7 @@ static void pl_text(const char *s, int dx, int dy, int maxch, unsigned fallback)
 
 static void pl_draw(struct unoui_widget *w, unoui_rect r, void *ctx)
 {
-    const unoui_theme *t = pc64_shell_theme();
+    const unoui_theme *t = ua_theme();
     const unoamp_skin *sk = unoamp_skin_get();
     int ww = g_plwin ? g_plwin->r.w / g_scale : PLW_MIN_W;
     int wh = g_plwin ? g_plwin->r.h / g_scale : PLW_MIN_H;
