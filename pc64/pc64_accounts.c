@@ -86,7 +86,7 @@ static void modal_begin(unoui_window *sheet)
 static int modal_frame(unoui_action *out)
 {
     unoui_event ev;
-    int mx, my, mb, scan, uni, ctrl, got = 0;
+    int mx, my, mb, scan, uni, ctrl, got = 0, busy = 0;
     unoui_action a;
 
     out->changed = 0; out->id = 0;
@@ -96,13 +96,16 @@ static int modal_frame(unoui_action *out)
     if (mx != m_lx || my != m_ly) {
         memset(&ev, 0, sizeof ev); ev.kind = UI_EV_MOUSE_MOVE; ev.x = mx; ev.y = my;
         unoui_handle(&MU, &ev); m_lx = mx; m_ly = my;
+        busy = 1;                            /* the cursor is being moved */
     }
     if (mb && !m_lb) {
         memset(&ev, 0, sizeof ev); ev.kind = UI_EV_MOUSE_DOWN; ev.x = mx; ev.y = my;
         a = unoui_handle(&MU, &ev); if (a.changed) { *out = a; got = 1; }
+        busy = 1;
     } else if (!mb && m_lb) {
         memset(&ev, 0, sizeof ev); ev.kind = UI_EV_MOUSE_UP; ev.x = mx; ev.y = my;
         a = unoui_handle(&MU, &ev); if (a.changed) { *out = a; got = 1; }
+        busy = 1;
     }
     m_lb = mb;
 
@@ -127,6 +130,7 @@ static int modal_frame(unoui_action *out)
         } else continue;
 
         a = unoui_handle(&MU, &ev); if (a.changed) { *out = a; got = 1; }
+        busy = 1;
         if (vk == UI_KEY_ENTER) { out->changed = 1; out->id = ID_OK; got = 1; }
         else if (vk == UI_KEY_ESC) { out->changed = 1; out->id = ID_CANCEL; got = 1; }
     }
@@ -156,7 +160,27 @@ static int modal_frame(unoui_action *out)
     uno_dbg_heartbeat();
     unoauto_remote_tick();
 
-    uno_pc64_delay_ms(16);
+    /* SLEEP ONLY WHEN THE FRAME HAD NOTHING TO SHOW.
+     *
+     * This used to sleep a flat 16 ms every time round, including while the
+     * pointer was being moved - so the cursor could not be redrawn faster than
+     * ~55 Hz here however cheap the frame was, and in practice a good deal
+     * slower, because the render and the present come out of the same 16 ms.
+     *
+     * The shell's own loop (pc64_uui.c) does NOT do that: a frame in which
+     * only the cursor moved goes straight to uno_pc64_present() with no delay
+     * after it, and the 16 ms wait is what it does when nothing happened at
+     * all. So the sign-in sheet - the FIRST thing anyone touches on this
+     * machine - moved its cursor several times slower than the desktop behind
+     * it, which is exactly how it reads from metal: floaty at the login
+     * screen, normal once the desktop is up.
+     *
+     * Presenting is already cheap when little changed (uno_pc64_present tracks
+     * dirty rows and returns after 1 ms when none are), so dropping the wait on
+     * a busy frame costs nothing on an idle one. An animation counts as busy:
+     * the reject shake is timed off the TSC and wants real frames to draw into. */
+    if (!busy && !unoui_anim_active(uno_pc64_anim()))
+        uno_pc64_delay_ms(16);
     return got;
 }
 
