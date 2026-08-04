@@ -501,10 +501,28 @@ static void automate_start(void)
 
 void pc64_nettest_tick(void)
 {
-    static int done, frames;
+    static int done, started;
+    static unsigned long long t0;
+    unsigned long long now;
     int flag;
     if (done) return;
-    if (++frames < 30) return;           /* let the desktop paint first (~0.5 s) */
+    /* "Let the desktop paint first (~0.5 s)" - MEASURED IN MILLISECONDS, not in
+     * frames.
+     *
+     * This used to wait 30 frames, which is ~0.5 s only if the machine renders
+     * at ~60. On a box whose framebuffer is still mapped UC it renders at about
+     * 4, so 30 frames is SEVEN AND A HALF SECONDS - and the mtrr-wc flip that
+     * would fix the framerate is the very thing being delayed. The login screen
+     * therefore spent the whole of that window at 4 fps, which is exactly how it
+     * was reported from metal: floaty before login, better once on the desktop.
+     * The slower the machine, the longer it waits to be made faster.
+     *
+     * Wall-clock restores the original intent on every machine: unchanged on a
+     * fast one, and a couple of frames instead of hundreds of milliseconds of
+     * lag on a slow one. */
+    now = uno_dbg_uptime_ms();
+    if (!started) { started = 1; t0 = now; return; }
+    if (now - t0 < 500) return;
     done = 1;                            /* one shot, whatever happens below */
     /* P3 opt-in: flip the framebuffer to write-combining if the operator asked
      * (mtrr-wc). Runs before the net test so the whole session benefits; it is
