@@ -476,7 +476,16 @@ void pc64_files_build(unoui_window *w)
     y = 2; bx = 0;
     FBTN("Up", FID_UP, (void)0);
     FBTN("Open", FID_OPEN, (void)0);
-    { int dw = fb_text_w("MMMMMM") + 26;
+    /* Wide enough for the widest volume name actually mounted, not for six M's:
+     * the guess was made against the 8 px bitmap face and cut real names off
+     * ("UNODOS-BO...") at every larger font. Floored so an empty machine still
+     * shows a normal-looking control, capped so one absurd label cannot push
+     * the whole toolbar off the window. */
+    { int dw = fb_text_w("MMMMMM"), k;
+      for (k = 0; k < fm_nvols; k++)
+          { int t2 = fb_text_w(fm_vols[k]); if (t2 > dw) dw = t2; }
+      dw += 26;
+      if (dw > 200) dw = 200;
       x = unoui_add_dropdown(w, bx, y, dw, fm_vols, fm_nvols, fm_p[0].vol);
       x->id = FID_VOL_L; fm_dd_l = x; bx += dw + 4;
       x = unoui_add_dropdown(w, bx, y, dw, fm_vols, fm_nvols, fm_p[1].vol);
