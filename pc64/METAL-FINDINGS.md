@@ -831,3 +831,30 @@ Practical consequence for anyone testing WM keybindings under QEMU: the
 production build detaches (so the edge works), while the **debug** build has
 detach disabled by default (finding F8) and needs `UNO_DETACH=1` to exercise
 the native path.
+
+### SURFGO, 2026-08-04: the firmware-path overflow is METAL-CONFIRMED FIXED
+
+Build `debug-ccbe1768-20260804-0417`, one boot at 00:24. The bring-up trace that
+came back mangled the boot before (`pci=5841`, `hw_rev=45524157` - path strings
+in the varargs, see the retraction entry in UNOAUTOMATE-REQUESTS.md) is now
+correct and self-consistent:
+
+```
+wifi: BAR0 ok, hw_rev=00000332 rf_id=0010a100
+wifi: card pci=34f0 fam=3 gen2=1 hw_rev=00000332 mac_type=33 step=0
+      rf_id=0010a100 fw=IWLAX20B.UCO,IWLAX20C.UCO,IWLAX201.UCO
+```
+
+Three things confirmed on silicon: `rf_id` in the multi-argument line now agrees
+with the two-argument read right above it (it used to end `004f` - the `'O'` and
+NUL that overflowed `g_fwfile[20]`); the candidate list renders correctly in
+try-order; and **the pointer survives the boot**, which is the user-visible half
+of the same bug.
+
+**What this run does NOT show: an ALIVE.** The boot-path bring-up stops at
+`creds:MISSING` by design, and this NETLOG ends there - no GUI Scan bring-up was
+captured to the stick. So the candidate-retry path STILL has no metal evidence,
+and the original question is still open: does this Qu part ALIVE on `IWLAX20C`
+or `IWLAX201`, or on none of the three? A scan whose NETLOG is captured (let the
+box settle before pulling the stick - a yanked FAT volume can lose the tail of
+the log) answers it.
