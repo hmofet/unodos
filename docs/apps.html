@@ -74,7 +74,7 @@
     <span class="logo"><i></i><i></i><i></i><i></i></span>
     <span><b>UnoDOS <span style="color:var(--accent-2)">pc64</span></b><span class="sub">User manual</span></span>
   </a>
-  <ul class="nav"><li><a class="" href="index.html">Overview</a></li><li><a class="" href="getting-started.html">Getting started</a></li><li><a class="" href="desktop.html">The desktop</a></li><li><a class="" href="windows.html">Windows &amp; desktops</a></li><li><a class="" href="appearance.html">Themes &amp; appearance</a></li><li><a class="active" href="apps.html">Applications</a></li><li><a class="" href="browser.html">Web browser</a></li><li><a class="" href="ssh.html">SSH client</a></li><li><a class="" href="networking.html">Networking</a></li><li><a class="" href="ports.html">The UnoDOS family</a></li><li class="sec">Developer</li><li><a class="" href="developer.html">Overview &amp; architecture</a></li><li><a class="" href="studio.html">Studio: the built-in IDE</a></li><li><a class="" href="dev-apps.html">Writing apps</a></li><li><a class="" href="dev-python.html">Python apps</a></li><li><a class="" href="dev-api.html">API reference</a></li><li><a class="" href="dev-build.html">Building &amp; tooling</a></li><li><a class="" href="dev-remote.html">Remote control &amp; automation</a></li></ul>
+  <ul class="nav"><li><a class="" href="index.html">Overview</a></li><li><a class="" href="getting-started.html">Getting started</a></li><li><a class="" href="desktop.html">The desktop</a></li><li><a class="" href="windows.html">Windows &amp; desktops</a></li><li><a class="" href="appearance.html">Themes &amp; appearance</a></li><li><a class="active" href="apps.html">Applications</a></li><li><a class="" href="office.html">UnoOffice</a></li><li><a class="" href="browser.html">Web browser</a></li><li><a class="" href="ssh.html">SSH client</a></li><li><a class="" href="networking.html">Networking</a></li><li><a class="" href="ports.html">The UnoDOS family</a></li><li class="sec">Developer</li><li><a class="" href="developer.html">Overview &amp; architecture</a></li><li><a class="" href="studio.html">Studio: the built-in IDE</a></li><li><a class="" href="dev-apps.html">Writing apps</a></li><li><a class="" href="dev-python.html">Python apps</a></li><li><a class="" href="dev-api.html">API reference</a></li><li><a class="" href="dev-build.html">Building &amp; tooling</a></li><li><a class="" href="dev-remote.html">Remote control &amp; automation</a></li></ul>
   <div class="side-foot">
     <a href="https://github.com/hmofet/unodos" target="_blank" rel="noopener">GitHub&nbsp;&rsaquo; hmofet/unodos</a><br>
     <a href="#" onclick="__t();return false">Toggle light / dark</a>
@@ -126,10 +126,24 @@ target the other pane's folder.</p>
   <figure><button type="button" class="zoom" data-full="assets/img/tracker.png" aria-label="Enlarge: Tracker: a 4-channel pattern sequencer."><img src="assets/img/tracker.png" alt="Tracker: a 4-channel pattern sequencer." loading="lazy"></button><figcaption><b>Tracker</b>: a 4-channel pattern sequencer.</figcaption></figure>
   <figure><button type="button" class="zoom" data-full="assets/img/music.png" aria-label="Enlarge: Music: plays WAV, MIDI and MP3 files from disk, plus the built-in tunes."><img src="assets/img/music.png" alt="Music: plays WAV, MIDI and MP3 files from disk, plus the built-in tunes." loading="lazy"></button><figcaption><b>Music</b>: plays WAV, MIDI and MP3 files from disk, plus the built-in tunes.</figcaption></figure>
 </div>
+<p><strong>UnoAmp</strong> is a second music player in the Winamp 2 mould, for when you want more
+than Play and Stop: a playlist, a ten-band graphic equaliser and a visualiser, and it loads real
+<code>.wsz</code> skin files from disk to change its appearance.</p>
 <p>The games, Music and Tracker all make sound - through the machine's <strong>HD&nbsp;Audio</strong>
 or <strong>AC'97</strong> audio hardware on modern PCs (which have no PC speaker), with the classic
 PC-speaker beep as the fallback on machines that still have one. The Control Panel's Volume slider
 sets the level.</p>
+
+<h2 id="office">UnoOffice: word processor, spreadsheet, slides</h2>
+<p>Three more apps - <strong>UnoWord</strong>, <strong>UnoCalc</strong> and
+<strong>UnoShow</strong> - make up <a href="office.html">UnoOffice</a>, and they read and write the
+real <code>.doc</code>, <code>.xls</code> and <code>.ppt</code> formats. They have a page of their
+own: <a href="office.html">UnoOffice</a>.</p>
+<div class="grid cols-3">
+  <figure><button type="button" class="zoom" data-full="assets/img/uoword.png" aria-label="Enlarge: UnoWord, the word processor."><img src="assets/img/uoword.png" alt="UnoWord, the word processor." loading="lazy"></button><figcaption><b>UnoWord</b>, the word processor.</figcaption></figure>
+  <figure><button type="button" class="zoom" data-full="assets/img/uocalc.png" aria-label="Enlarge: UnoCalc, the spreadsheet."><img src="assets/img/uocalc.png" alt="UnoCalc, the spreadsheet." loading="lazy"></button><figcaption><b>UnoCalc</b>, the spreadsheet.</figcaption></figure>
+  <figure><button type="button" class="zoom" data-full="assets/img/uoshow.png" aria-label="Enlarge: UnoShow, the presentation designer."><img src="assets/img/uoshow.png" alt="UnoShow, the presentation designer." loading="lazy"></button><figcaption><b>UnoShow</b>, the presentation designer.</figcaption></figure>
+</div>
 
 <h2 id="photos">Photos: an image viewer</h2>
 <p><strong>Photos</strong> opens image files from any disk and steps through the rest of the folder with
@@ -165,7 +179,7 @@ open it. Installing UnoDOS onto a PC copies them along automatically. If an app'
 its window simply says so - nothing crashes. (Studio itself is one of these files, so a build can
 include or omit it freely.)</p>
 
-<nav class="pagenav"><a href="appearance.html">&lsaquo; Themes &amp; appearance</a><a class="nxt" href="browser.html">Web browser &rsaquo;</a></nav>
+<nav class="pagenav"><a href="appearance.html">&lsaquo; Themes &amp; appearance</a><a class="nxt" href="office.html">UnoOffice &rsaquo;</a></nav>
 </div></main>
 </div>
 </body>
