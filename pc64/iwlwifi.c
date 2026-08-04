@@ -382,6 +382,7 @@ static void fwc_add(const char *name)
 }
 static u8   g_mac[6];
 static u8   g_joined;
+static int  g_link_lost_reason = -1;   /* last deauth/disassoc reason, -1 = none */
 static char g_ssid_str[36];
 
 /* Classify an Intel WiFi PCI device id into its iwlwifi family. In current
@@ -3444,6 +3445,31 @@ static void mgmt_capture(const u8 *frame, int fl, u16 fc)
     if (fl > (int)sizeof g_mgmt_rx) fl = (int)sizeof g_mgmt_rx;
     memcpy(g_mgmt_rx, frame, fl);
     g_mgmt_rx_len = fl; g_mgmt_rx_subtype = (u8)st;
+    /* Deauth (12) and disassoc (10) carry a 2-byte reason code after the MAC
+     * header, and it is the single most useful byte the AP ever sends us: 1
+     * unspecified, 2 previous auth invalid, 4 inactivity, 6/7 class-2/class-3
+     * frame from a station the AP does not think is authenticated/associated,
+     * 15 4-way timeout.  It used to be dropped on the floor, so a run that
+     * ended in a wall of deauths said nothing about WHY. */
+    if (st == 12 || st == 10) {
+        int reason = fl >= 26 ? (frame[24] | (frame[25] << 8)) : -1;
+        int ours = !memcmp(frame + 10, g_bssid, 6);
+        uno_dbg_net_trace("wifi: %s from %02x:%02x:%02x:%02x:%02x:%02x reason=%d%s",
+                          st == 12 ? "DEAUTH" : "DISASSOC",
+                          frame[10],frame[11],frame[12],frame[13],frame[14],frame[15],
+                          reason, ours ? " (our AP)" : " (not our BSSID - ignored)");
+        /* Acting on it is the point: the association is gone the moment the AP
+         * says so, and pretending otherwise is what left the stack retrying
+         * DHCP into a dead link for the rest of the run (metal, SURFGO
+         * 2026-08-04).  Only our own BSSID may tear us down. */
+        if (ours && (g_joined || g_keys_installed)) {
+            g_joined = 0; g_keys_installed = 0; g_wpa_active = 0;
+            g_link_lost_reason = reason;
+            uno_dbg_net_trace("wifi: link DOWN - deauthenticated by the AP "
+                              "(reason %d); the Network app must re-join", reason);
+        }
+        return;
+    }
     uno_dbg_net_trace("wifi: mgmt rx subtype=%d len=%d", st, fl);
 }
 
@@ -3667,6 +3693,7 @@ static int retarget_ap(int new_chan)
         }
     }
     g_joined = 0; g_wpa_active = 0;                /* leaving the old BSS */
+    g_link_lost_reason = -1;                       /* a new attempt, not the old failure */
     mld_sta_cfg(g_bssid, 0, 0);                    /* the new peer */
     if (r32(CSR_MSIX_HW_INT_CAUSES_AD)) return -1;
     mvm_txq_free(AP_STA_ID, 15);
@@ -5144,6 +5171,17 @@ void iwl_status_str(char *buf, int cap)
         ss_cat(buf, cap, &i, " rx ");   ss_dec(buf, cap, &i, (int)g_rx_data_n);
         if (g_rx_data_drop) { ss_cat(buf, cap, &i, " drop "); ss_dec(buf, cap, &i, (int)g_rx_data_drop); }
         if (g_bar && r32(CSR_MSIX_HW_INT_CAUSES_AD)) ss_cat(buf, cap, &i, " [fw ASSERTED]");
+        return;
+    }
+    /* A link the AP tore down must SAY so. Falling through to g_status left the
+     * last happy string ("WiFi bound: SKYNET (joined)") on screen while the
+     * association was gone, so the UI and the log disagreed about the one fact
+     * that mattered. */
+    if (g_link_lost_reason >= 0 && !g_joined) {
+        ss_cat(buf, cap, &i, "WiFi: deauthenticated by the AP (reason ");
+        ss_dec(buf, cap, &i, g_link_lost_reason);
+        ss_cat(buf, cap, &i, ") - press Join to reconnect");
+        buf[i < cap ? i : cap - 1] = 0;
         return;
     }
     while (g_status[i] && i < cap-1) { buf[i] = g_status[i]; i++; }
