@@ -5309,3 +5309,26 @@ asks "did the right thing happen?" and visible in one second to a person
 looking at the screen. Where a lane can cheaply assert a PROPERTY of the
 output rather than an event - "every icon has ink", "every fill widget covers
 its content rect" - that is the assertion worth writing.
+
+---
+
+## 2026-08-03 - CLAIM (toolkits/unoui lane): the animation facility
+
+Taking the 2026-08-03 unoffice request for a tween/sequencer facility. It lands
+in the unoui lane as a new `unoui/unoui_anim.{c,h}`, NOT inside UnoShow, for the
+reason the request gives: the browser, the window manager and UnoAmp each
+open-code a per-frame counter today.
+
+Scope of this slice, so nobody duplicates it:
+
+  - tweens (from, to, duration in ms, easing curve), several at once, addressed
+    by handle;
+  - a sequencer: steps that run after the previous one, with it, or on an
+    external trigger (a click), with per-step delays;
+  - a millisecond clock seam, so animation speed stops being a function of how
+    busy the desktop is.
+
+Out of scope here, and NOT claimed: UnoShow's build effects themselves (Fly
+From, Wipe, Dissolve...), which stay unoffice's to write on top of this; and any
+edit to the shell frame loop, which is a separate `seam:` commit when the
+facility is ready to be pumped.
