@@ -4033,6 +4033,26 @@ uno_nic_t *iwl_nic(void)
         return 0;
     }
 
+    /* Credentials FIRST - see the long note below on why this is ahead of the
+     * BAR0 map. A boot join with nothing to join to must cost nothing. */
+    {
+        cred_vol = firmware_volume();
+        if (cred_vol >= 0 && read_config(cred_vol) >= 0) {
+            uno_dbg_net_trace("wifi: creds from %s: ssid=\"%s\" psk_len=%d",
+                              g_cfgname, g_cfg_ssid, (int)strlen(g_cfg_psk));
+        } else if (!g_no_join) {
+            st_set(cred_vol < 0 ? "WiFi: no WIFI.CFG on the ESP"
+                                : "WiFi: WIFI.CFG has no ssid=");
+            uno_dbg_net_trace("wifi: FAIL no usable credentials (cfg vol %d) - "
+                              "a boot join needs ssid=", cred_vol);
+            return 0;
+        } else {
+            g_cfg_ssid[0] = g_cfg_psk[0] = 0;
+            uno_dbg_net_trace("wifi: no stored credentials - radio-only bring-up "
+                              "(scan / GUI join)");
+        }
+    }
+
     /* map BAR0 + bus master, and read the silicon identity, BEFORE choosing a
      * firmware file.  This used to happen ~100 lines further down - AFTER
      * choose_firmware() had already decoded `g_hw_rev` and after the .ucode had
@@ -4107,24 +4127,18 @@ uno_nic_t *iwl_nic(void)
      * scans first and asks for the password afterwards, which is the whole
      * point of the Control Panel's network pane - so a missing WIFI.CFG must
      * not stop the radio (metal: "no networks found" on a box with a working
-     * card and no config file). g_no_join marks exactly that bring-up. */
-    {
-        cred_vol = firmware_volume();
-        if (cred_vol >= 0 && read_config(cred_vol) >= 0) {
-            uno_dbg_net_trace("wifi: creds from %s: ssid=\"%s\" psk_len=%d",
-                              g_cfgname, g_cfg_ssid, (int)strlen(g_cfg_psk));
-        } else if (!g_no_join) {
-            st_set(cred_vol < 0 ? "WiFi: no WIFI.CFG on the ESP"
-                                : "WiFi: WIFI.CFG has no ssid=");
-            uno_dbg_net_trace("wifi: FAIL no usable credentials (cfg vol %d) - "
-                              "a boot join needs ssid=", cred_vol);
-            return 0;
-        } else {
-            g_cfg_ssid[0] = g_cfg_psk[0] = 0;
-            uno_dbg_net_trace("wifi: no stored credentials - radio-only bring-up "
-                              "(scan / GUI join)");
-        }
-    }
+     * card and no config file). g_no_join marks exactly that bring-up.
+     *
+     * THIS CHECK COMES BEFORE THE DEVICE IS TOUCHED, and that ordering is load
+     * bearing. d3f5ca54 moved the BAR0 map and CSR_HW_REV read above it so the
+     * firmware decode had a revision to work with, which was right, but it also
+     * meant a boot-join attempt with no credentials now enabled bus mastering
+     * and mapped BAR0 before discovering it had nothing to join with. Anything
+     * wanting the network retries this - URC's RS_DOWN retry alone does it
+     * every ~5 s - so on a box with no WIFI.CFG that was PCI work, and a log
+     * line, on a loop forever. The credentials live on a filesystem and the
+     * check needs nothing from the card, so it costs nothing to ask first.
+     * (The block itself now runs above, before pci_enable_bus_master.) */
 
     /* Try each candidate ucode until one posts ALIVE.
      *
