@@ -34,7 +34,9 @@ Both are written over placeholder dwords located by scanning for the magic
 layout.
 """
 import os
+import shutil
 import struct
+import tempfile
 import subprocess
 import sys
 
@@ -101,6 +103,23 @@ def mbr_entry(first_lba: int, sectors: int) -> bytes:
             + struct.pack("<II", first_lba, sectors))
 
 
+def mt_run(cmd):
+    """Run an mtools command, and SAY WHAT HAPPENED when it fails.
+
+    These used to run with check=True and both streams sent to DEVNULL, so a
+    failure surfaced as a bare CalledProcessError traceback naming the command
+    and nothing else - no "disk full", no "no such file", nothing to act on.
+    stdout stays discarded (mtools is chatty on success); stderr is captured and
+    put in the error, which is the only part anyone ever wanted.
+    """
+    r = subprocess.run(cmd, stdout=subprocess.DEVNULL,
+                       stderr=subprocess.PIPE, text=True)
+    if r.returncode:
+        raise SystemExit("mkbios: %s failed (exit %d)%s"
+                         % (" ".join(cmd), r.returncode,
+                            ": " + r.stderr.strip() if r.stderr.strip() else ""))
+
+
 def build_fat(esp_dir: str, sectors: int, out: str) -> None:
     """Format a FAT32 volume of `sectors` and copy the whole build/esp tree in.
 
@@ -110,15 +129,13 @@ def build_fat(esp_dir: str, sectors: int, out: str) -> None:
     """
     if os.path.exists(out):
         os.remove(out)
-    subprocess.run(["mformat", "-C", "-i", out, "-T", str(sectors),
-                    "-h", "64", "-s", "32", "-F", "-v", "UNODOS", "::"],
-                   check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    mt_run(["mformat", "-C", "-i", out, "-T", str(sectors),
+            "-h", "64", "-s", "32", "-F", "-v", "UNODOS", "::"])
     for name in sorted(os.listdir(esp_dir)):
         src = os.path.join(esp_dir, name)
         cmd = (["mcopy", "-s", "-i", out, src, "::/"] if os.path.isdir(src)
                else ["mcopy", "-i", out, src, "::/" + name])
-        subprocess.run(cmd, check=True,
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        mt_run(cmd)
 
 
 def patch(stage2: bytearray, kern_sectors: int, entry: int) -> None:
@@ -222,12 +239,21 @@ def main() -> int:
             img += b"\0" * (need - len(img))
 
         part_sectors = len(img) // SECTOR - RESERVED_SECTORS
-        fat = "/tmp/uno_bios_fat.img"
-        build_fat(esp_dir, part_sectors, fat)
-        with open(fat, "rb") as f:
-            data = f.read()
+        # A scratch directory of our OWN. This used to be the fixed path
+        # /tmp/uno_bios_fat.img, which two builds running at once - normal on a
+        # box with several worktrees - would delete and re-create underneath
+        # each other. It presented as a random mcopy failing mid-build and
+        # passing on retry, with no message, because the mtools stderr was
+        # thrown away as well. Both halves are fixed; see mt_run().
+        scratch = tempfile.mkdtemp(prefix="uno-mkbios-")
+        try:
+            fat = os.path.join(scratch, "fat.img")
+            build_fat(esp_dir, part_sectors, fat)
+            with open(fat, "rb") as f:
+                data = f.read()
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
         img[RESERVED_SECTORS * SECTOR:RESERVED_SECTORS * SECTOR + len(data)] = data
-        os.remove(fat)
         img[0x1BE:0x1CE] = mbr_entry(RESERVED_SECTORS, part_sectors)
         fat_note = "ESP/FAT32 at LBA %d (%d MiB), boots BIOS + UEFI" % (
             RESERVED_SECTORS, part_sectors // 2048)
