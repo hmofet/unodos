@@ -13,6 +13,7 @@
  * ======================================================================== */
 #include "unoui.h"
 #include "unoui_theme.h"
+#include "unoui_anim.h"      /* the shared tween clock (this shell owns it) */
 #include "mac_compat.h"      /* FB_W/FB_H + uno_pc64_* + FSOpen/... */
 #include "pc64_uui_apps.h"   /* the legacy-app bridge (paint, tracker, music) */
 #include "pc64_games.h"      /* native unoui games (Dostris, ...) */
@@ -101,6 +102,35 @@ static int tb_h(void) { int h = fb_text_h() + 12; return h < 26 ? 26 : h; }
 #define TASKH (tb_h())
 
 static unoui_ui     UI;
+
+/* ---- the animation clock ------------------------------------------------- *
+ * ONE tween clock for the whole desktop, pumped once per frame below. Before
+ * this, every animated thing in the OS counted its own frames, so each ran at a
+ * speed set by how busy the desktop was and none could be ordered against
+ * another. A module gets at it through uno_pc64_anim() (exported in
+ * pc64_modload.c), so an app animates against the same clock as the shell.
+ *
+ * The time source is the TSC uno_pc64_init() calibrates before anything else
+ * asks for a delay - available in EVERY build, unlike uno_dbg_uptime_ms(). If
+ * the calibration never happened (no Stall to calibrate against and no CPUID
+ * leaf), the hook is simply not installed and unoui_anim_frame() falls back to
+ * counting frames: degraded, not broken.
+ *
+ * The ms value is deliberately 32-bit and wraps every 49 days; unoui_anim takes
+ * differences through unsigned arithmetic and does not care. */
+static unoui_anim   ANIM;
+
+static unsigned anim_clock_ms(void)
+{
+    static unsigned long long t0;
+    unsigned long long per_ms = uno_native_tsc_per_us() * 1000ull, now;
+    if (!per_ms) return 0;
+    now = uno_native_rdtsc();
+    if (!t0) t0 = now;                  /* first call is time zero */
+    return (unsigned)((now - t0) / per_ms);
+}
+
+unoui_anim *uno_pc64_anim(void) { return &ANIM; }
 
 /* Publish the work area to unoui: the screen minus the taskbar, which is what
  * unoui clamps, maximizes and snaps into. TASKH follows the active font, so
@@ -962,6 +992,31 @@ static void build_sndstat(void)
     *p = 0;
 }
 
+/* The animation clock, for System. Worth a readout of its own rather than a
+ * log line: whether this machine's tween clock is real milliseconds or the
+ * frame-counted fallback is exactly the kind of thing that silently differs per
+ * box, and "the animation ran at the wrong speed on that laptop" is otherwise a
+ * very hard report to act on. */
+static char g_animln[80];
+static void build_animstat(void)
+{
+    unsigned long long per_us = uno_native_tsc_per_us();
+    char *p = ap_str(g_animln, "Animation clock: ");
+    if (!unoui_clock_ms) p = ap_str(p, "frame-counted (TSC uncalibrated)");
+    else {
+        unsigned ms = unoui_anim_now(&ANIM);
+        /* cycles per MICROsecond IS megahertz - no scaling. Dividing by 1000
+         * first printed a 3 GHz box as "3 MHz". */
+        p = ap_str(p, "TSC "); p = ap_int(p, (int)per_us);
+        p = ap_str(p, " MHz, up ");   p = ap_int(p, (int)(ms / 1000u));
+        *p++ = '.'; p = ap_int(p, (int)((ms / 100u) % 10u));
+        p = ap_str(p, " s");
+    }
+    p = ap_str(p, ", "); p = ap_int(p, unoui_anim_active(&ANIM));
+    p = ap_str(p, " running");
+    *p = 0;
+}
+
 /* ACPI (unoacpi AML interpreter): bring-up + battery/lid, for System */
 static char g_acpi1[80], g_acpi2[80];
 static void build_acpistat(void)
@@ -1065,6 +1120,7 @@ static void build_sys(unoui_window *w)
     build_natstat();
     build_acpistat();
     build_sndstat();
+    build_animstat();
     fmt_net();                    /* Network line (IP / lease state) */
     unoui_window_init(w, "System", 400, 100, 1, 1);
     /* header - identity + licensing (the About surface; the notices the
@@ -1099,6 +1155,13 @@ static void build_sys(unoui_window *w)
     g0 = y; (void)g0; unoui_add_group(w, gx, y, cw - 2 * gx, (nrows) * lh + fh + 10, title); \
     y += fh + 4
 #define SYS_ROW(s) unoui_add_label(w, tx, y, s); y += lh
+    /* FIRST, not last. This window already runs past the bottom of an 800 px
+     * desktop (see the header comment above), so a group appended at the end is
+     * born invisible - which is exactly what happened to this one on the first
+     * attempt, on a 640x400 QEMU desktop. */
+    SYS_GROUP("Timing", 1);
+    SYS_ROW(g_animln);
+    y += 12;
     SYS_GROUP("Input & USB", 6);
     SYS_ROW(g_tp1);
     SYS_ROW(g_tp2);
@@ -4752,6 +4815,11 @@ int main(void)
     session_load();                     /* reopen last session (or Control Panel) */
 
     memset(&tick, 0, sizeof tick); tick.kind = UI_EV_TICK;
+    /* the animation clock, armed for the frame loop below. Installing the hook
+     * only when the TSC calibrated is what makes the no-clock fallback reachable
+     * rather than a division by zero. */
+    unoui_anim_init(&ANIM);
+    if (uno_native_tsc_per_us()) unoui_clock_ms = anim_clock_ms;
     int netboot_done = 0, netboot_frames = 0;   /* one-shot proactive net bring-up */
 #ifdef UNO_DEBUG
     /* Prove the shell's main loop was reached and that the debug hooks are
@@ -4854,6 +4922,12 @@ int main(void)
               idle = 0; g_dirty = 1;
               fmt_clock(++halfsecs / 2);
               fmt_batt();               /* AML _BST, self-cached ~2 s */
+              /* The System window is BUILT ONCE and cached (g_built), so every
+               * row in it is otherwise a snapshot from whenever it was first
+               * opened. Re-formatting the buffer the label borrows is how the
+               * tray clock stays live, and it is how the Timing row does too -
+               * a frozen clock readout would be worse than none. */
+              if (g_open[APP_SYS]) build_animstat();
               net_activity_sample();    /* LAN chip blink: tx/rx delta this tick */
               if ((halfsecs & 3) == 0) fmt_net();  /* LAN chip label, ~2 s cadence */
           }
@@ -4865,6 +4939,18 @@ int main(void)
                      my >= g_net_cy && my < g_net_cy + g_net_ch;
           if (over != g_net_hover) { g_net_hover = over; g_dirty = 1; } }
         feed(&tick);                    /* advance the caret-blink timebase */
+        /* The tween clock, advanced BEFORE the per-app frame hooks below so
+         * every one of them reads this frame's values rather than the last
+         * frame's. A running animation is a reason to repaint, and the only
+         * one the shell would otherwise miss: nothing about it touches input,
+         * so without this an animation would freeze the moment the pointer
+         * stopped moving. */
+        unoui_anim_frame(&ANIM);
+        if (unoui_anim_active(&ANIM)) g_dirty = 1;
+        /* NOT `idle = 0` as well: `idle` is what drives the half-second
+         * housekeeping below (tray clock, battery, LAN chip), so resetting it
+         * here would stop the clock ticking for as long as anything was
+         * animating. A repaint is all an animation needs. */
         pc64_write_frame();             /* Editor caret blink / autoscroll */
         if (g_studio && g_open[EX_STUDIO] && g_studio->frame)
             g_studio->frame();          /* Studio caret blink / build pumps */
