@@ -403,6 +403,7 @@ enum { ID_THEME = 1, ID_RES, ID_DARK, ID_WRAP, ID_VOL, ID_SCALE, ID_ABOUT,
        ID_DFLOW, ID_DSORT, ID_PSPEED, ID_DSNAP, ID_DLOCK, ID_DARRANGE,
        ID_LIC, ID_ACCT, ID_REMOTE, ID_WALL, ID_CLOCKFMT, ID_BATTMODE,
        ID_CPTAB, ID_NETREFRESH, ID_NETRENEW, ID_SESSION,
+       ID_RESAPPLY, ID_RESKEEP, ID_RESREVERT,
        ID_WIFISCAN, ID_WIFILIST, ID_WIFIPSK, ID_WIFIJOIN, ID_WIFIFORGET,
        ID_START = 90, ID_SHUTDOWN = 91, ID_RESTART = 92,
        ID_LAUNCH0 = 100,                  /* desktop icons + launcher: +app     */
@@ -410,6 +411,19 @@ enum { ID_THEME = 1, ID_RES, ID_DARK, ID_WRAP, ID_VOL, ID_SCALE, ID_ABOUT,
 
 /* shell status buffers */
 static char g_res_str[12][14]; static const char *g_res_items[12]; static int g_res_n;
+/* ---- Display tab: resolution is applied, then held on probation -----------
+ * Picking in the dropdown only SELECTS (g_res_sel).  Apply commits it and arms
+ * a revert: unless the user clicks Keep within RES_CONFIRM_S seconds the
+ * desktop goes back to g_res_prev by itself.  That is the standard contract
+ * for a display change and the only safe one - the failure mode of a mode you
+ * cannot read is that you cannot click anything to undo it either. */
+#define RES_CONFIRM_S 15
+static int  g_res_sel;               /* what the dropdown is showing           */
+static int  g_res_confirm;           /* a revert is armed                      */
+static int  g_res_prev;              /* the mode Apply moved away from         */
+static int  g_res_left;              /* seconds still on the clock             */
+static int  g_res_deadline;          /* seconds-of-day the revert fires        */
+static char g_res_msg[64];
 static char g_clock[40] = "Uptime 0 s";
 static char g_batt[12];      /* tray battery chip, "" = no battery reported */
 static int  g_batt_pct = -1; /* battery %, -1 = none (drives the tray icon)  */
@@ -441,6 +455,33 @@ static void build_res_items(void)
         o[j] = 0; g_res_items[i] = o;
     }
     g_res_n = n;
+}
+
+/* Which entry is the desktop actually running?  The dropdown used to be built
+ * with a hardcoded selection of 0, so it named the first mode in the list
+ * whatever the machine was really in - it did not even track a change it had
+ * just made itself. */
+static int res_active_index(void)
+{
+    int i, n = uno_pc64_res_count(); if (n > 12) n = 12;
+    for (i = 0; i < n; i++) {
+        short w, h, z; Boolean act;
+        uno_pc64_res_get(i, &w, &h, &z, &act);
+        if (act) return i;
+    }
+    return 0;
+}
+
+/* Wall-clock seconds since midnight, from the RTC.  The revert countdown needs
+ * REAL time: the shell's half-second housekeeping only runs when input is idle
+ * (moving the mouse resets it), and TickCount() here is a call counter, not a
+ * clock - either would let the timeout stretch indefinitely, which is the one
+ * thing a safety timeout must not do. */
+static int wall_secs(void)
+{
+    int h = 0, mi = 0, s = 0;
+    uno_pc64_time(0, 0, 0, &h, &mi, &s);
+    return h * 3600 + mi * 60 + s;
 }
 
 /* ---- app window builders ------------------------------------------------- *
@@ -697,9 +738,36 @@ static void build_ctrl(unoui_window *w)
 
     switch (g_ctrl_tab) {
     case CT_DISPLAY:
-        unoui_add_label(w, 8, y + lofs, "Resolution:");
-        x = unoui_add_dropdown(w, lw, y, cw - lw - 8, g_res_items, g_res_n, 0); x->id = ID_RES;
+        /* Resolution is APPLIED, not live.  Arrowing this dropdown used to
+         * switch the desktop on every keypress - so walking the list resized
+         * and re-laid out the whole screen four or five times, and there was no
+         * way back if you could not read the one you landed on.  The dropdown
+         * now only picks; Apply commits, and the commit is on probation (below)
+         * until you confirm it. */
+        { int bw = fb_text_w("Apply") + 26;
+          unoui_add_label(w, 8, y + lofs, "Resolution:");
+          x = unoui_add_dropdown(w, lw, y, cw - lw - bw - 16, g_res_items, g_res_n,
+                                 g_res_sel); x->id = ID_RES;
+          x = unoui_add_button(w, cw - bw - 8, y, bw, "Apply",
+                               g_res_sel == res_active_index() ? UI_F_DISABLED : 0);
+          x->id = ID_RESAPPLY; }
         y += row;
+        if (g_res_confirm) {
+            /* The probation row.  It replaces nothing and pushes the rest down,
+             * so it is impossible to miss, and it is the ONLY thing on this tab
+             * with a clock attached. */
+            char *p = ap_str(g_res_msg, "Keep this resolution?  Reverting in ");
+            p = ap_int(p, g_res_left); p = ap_str(p, " s"); *p = 0;
+            unoui_add_label(w, 8, y + lofs, g_res_msg);
+            y += fh + 8;
+            { int bk = fb_text_w("Keep")       + 26;
+              int br = fb_text_w("Revert now") + 26;
+              x = unoui_add_button(w, 8, y, bk, "Keep", UI_F_DEFAULT);
+              x->id = ID_RESKEEP;
+              x = unoui_add_button(w, 8 + bk + 8, y, br, "Revert now", 0);
+              x->id = ID_RESREVERT; }
+            y += bh + 8;
+        }
         unoui_add_label(w, 8, y + lofs, "Font:");
         x = unoui_add_dropdown(w, lw, y, cw - lw - 8, g_font_items, g_font_n, uno_font_active()+1); x->id = ID_FONT;
         y += row;
@@ -2478,12 +2546,18 @@ static void open_app(int a)
     if (a == APP_FILES) { int wi = pc64_files_canvas_index(); if (wi >= 0) UI.focus_wi = wi; }
     if (a == EX_STUDIO && g_studio && g_studio->canvas_index)
         { int wi = g_studio->canvas_index(); if (wi >= 0) UI.focus_wi = wi; }
+    /* These three said `return g_uoshow->canvas_index();` in a void function -
+     * they RETURNED OUT OF open_app instead of setting the focus index, so
+     * opening UnoWord, UnoCalc or UnoShow skipped everything below: the MRU
+     * never learned the window was front, and g_dirty was never set, so the
+     * app appeared only on the next unrelated repaint.  Same shape as every
+     * other app now. */
     if (a == EX_UOSHOW && g_uoshow && g_uoshow->canvas_index)
-        return g_uoshow->canvas_index();
+        { int wi = g_uoshow->canvas_index(); if (wi >= 0) UI.focus_wi = wi; }
     if (a == EX_UOCALC && g_uocalc && g_uocalc->canvas_index)
-        return g_uocalc->canvas_index();
+        { int wi = g_uocalc->canvas_index(); if (wi >= 0) UI.focus_wi = wi; }
     if (a == EX_UOWORD && g_uoword && g_uoword->canvas_index)
-        return g_uoword->canvas_index();
+        { int wi = g_uoword->canvas_index(); if (wi >= 0) UI.focus_wi = wi; }
     if (a == EX_PHOTOS && g_photos && g_photos->canvas_index)
         { int wi = g_photos->canvas_index(); if (wi >= 0) UI.focus_wi = wi; }
     if (a == EX_PYAPP && g_pyapp && g_pyapp->canvas_index)
@@ -3809,6 +3883,64 @@ static void reflow(void)
 }
 void uno_screen_changed(void) { if (UI.nwin) reflow(); }
 
+/* ---- Display tab: apply a resolution, then hold it on probation -----------
+ * The commit is deliberately in three pieces rather than one modal loop.  A
+ * blocking dialog would freeze the shell for the whole countdown, and the one
+ * thing that must keep running while a display change is being judged is the
+ * rest of the machine - not least the URC link, which is how a headless box
+ * gets driven back out of a mode nobody at the console can read. */
+/* repaint the panel, if it is still the thing on screen.  The countdown can
+ * outlive the window: closing the Control Panel does NOT cancel a pending
+ * revert (the display is still on probation whatever is in front of it). */
+static void res_ui_refresh(void)
+{ if (g_open[APP_CTRL]) rebuild_ctrl_window(); else g_dirty = 1; }
+
+static void res_apply(void)
+{
+    if (g_res_sel < 0 || g_res_sel >= g_res_n) return;
+    if (g_res_sel == res_active_index()) return;      /* nothing to do */
+    if (!g_res_confirm) g_res_prev = res_active_index();  /* the way back */
+    uno_pc64_res_set(g_res_sel);
+    reflow();
+    g_res_confirm  = 1;
+    g_res_left     = RES_CONFIRM_S;
+    g_res_deadline = wall_secs() + RES_CONFIRM_S;
+    res_ui_refresh();
+}
+
+static void res_keep(void)
+{
+    g_res_confirm = 0;
+    g_res_sel = res_active_index();
+    res_ui_refresh();
+}
+
+static void res_revert(void)
+{
+    g_res_confirm = 0;
+    if (g_res_prev >= 0 && g_res_prev < g_res_n) { uno_pc64_res_set(g_res_prev); reflow(); }
+    g_res_sel = res_active_index();
+    res_ui_refresh();
+}
+
+/* Called every frame.  Counts in WALL seconds (see wall_secs) and repaints only
+ * when the displayed number changes, so the countdown costs one rebuild a
+ * second rather than one a frame. */
+static void res_confirm_tick(void)
+{
+    int now, left;
+    if (!g_res_confirm) return;
+    now = wall_secs();
+    left = g_res_deadline - now;
+    /* midnight: seconds-of-day wrapped under us.  A countdown is at most 15 s,
+     * so anything wildly negative is the wrap, not an expiry - re-base and
+     * carry on rather than reverting a display the user was happy with. */
+    if (left < -60) { g_res_deadline = now + g_res_left; return; }
+    if (left < 0) left = 0;
+    if (left != g_res_left) { g_res_left = left; res_ui_refresh(); }
+    if (left == 0) res_revert();
+}
+
 /* ---- calendar date picker (a popup over the unoui calendar core) --------- */
 /* The calendar core offers prev/next MONTH only, so correcting the year meant
  * twelve clicks per year - and fourteen years of them on a box whose CMOS
@@ -4292,7 +4424,15 @@ static void on_action(const unoui_action *a)
         int i; for (i = 0; i < 32; i++) g_icon_pos[i].placed = 0;
         build_desktop(); g_dirty = 1; break; }
     case ID_VOL:   uno_snd_volume(a->value); break;    /* PCM gain; PC speaker has none */
-    case ID_RES:   if (a->value >= 0 && a->value < g_res_n) { uno_pc64_res_set(a->value); reflow(); } break;
+    /* Selecting only selects.  This used to call uno_pc64_res_set() straight
+     * from the dropdown, so cursoring down the list switched the desktop on
+     * every keypress instead of once, when you had chosen. */
+    case ID_RES:   if (a->value >= 0 && a->value < g_res_n) {
+                       g_res_sel = a->value; rebuild_ctrl_window(); }
+                   break;
+    case ID_RESAPPLY:   res_apply();  break;
+    case ID_RESKEEP:    res_keep();   break;
+    case ID_RESREVERT:  res_revert(); break;
     case ID_ABOUT: open_app(APP_SYS); break;
     case ID_LIC:   pc64_browser_open_path("DOCS\\LICENSES.MD");
                    open_app(EX_BROWSER); break;
@@ -5064,6 +5204,7 @@ int main(void)
      * MUST run before the shell chrome is built: the taskbar, icon grid and
      * launcher are all laid out in the live font's metrics. */
     uno_font_use(0);
+    g_res_sel = res_active_index();     /* the Display tab opens on the truth  */
     /* Security: register the escalation consent sheet with unosecure, then run
      * the boot login gate.  The gate is a no-op on a fresh machine (no accounts
      * yet), so existing/first boots reach the desktop unchanged; once accounts
@@ -5230,6 +5371,7 @@ int main(void)
           int over = g_net[0] && mx >= g_net_cx && mx < g_net_cx + g_net_cw &&
                      my >= g_net_cy && my < g_net_cy + g_net_ch;
           if (over != g_net_hover) { g_net_hover = over; g_dirty = 1; } }
+        res_confirm_tick();             /* Display tab: the revert countdown   */
         feed(&tick);                    /* advance the caret-blink timebase */
         /* The tween clock, advanced BEFORE the per-app frame hooks below so
          * every one of them reads this frame's values rather than the last
