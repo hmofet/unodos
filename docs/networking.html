@@ -139,10 +139,16 @@ Two chip families are supported - check a listing's chipset line before you buy:
 <div class="note tip"><b>Tested on metal</b>An ASIX AX88179A adapter has been taken all the way to a DHCP lease and a gateway ping on a real laptop (a ThinkPad X13 Yoga). The older ASIX AX88772 / AX88178A chips are <em>not</em> supported.</div>
 
 <h2 id="wifi">Wi-Fi</h2>
-<p><strong>Wi-Fi is not supported yet.</strong> The groundwork is in place - UnoDOS ships early drivers for
-Intel (AX201 / AX210), Realtek and Marvell wireless chips, and they load the adapter's firmware - but no
-machine has yet joined a network, so wireless is not usable in this release. Use a wired port or a USB
-Ethernet adapter to get online.</p>
+<p><strong>Wi-Fi is not usable yet</strong>, though it is closer than it was. UnoDOS ships drivers for
+Intel (AX201 / AX210), Realtek and Marvell wireless chips. On Intel hardware the driver now loads the
+adapter's firmware, scans, <strong>joins a WPA2 network and installs the encryption keys</strong> - a real
+association, proven on a laptop. What does not yet work is the step after that: the network never hands
+back an address, so nothing can actually be reached. <strong>Use a wired port or a USB Ethernet adapter
+to get online.</strong></p>
+<p>The Control Panel's <strong>Network</strong> tab already carries the interface it will use - a scan
+list, a password box and a <strong>Join</strong> button, with a spinner and a running description of each
+step while it works, since a join takes several seconds. Networks you join are remembered, so the machine
+can rejoin the last one by itself at the next boot.</p>
 
 <nav class="pagenav"><a href="ssh.html">&lsaquo; SSH client</a><a class="nxt" href="ports.html">The UnoDOS family &rsaquo;</a></nav>
 </div></main>

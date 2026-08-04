@@ -144,9 +144,16 @@ labels, buttons, lists &mdash; and the whole layout re-measures itself to fit th
 <figure><button type="button" class="zoom" data-full="assets/img/uiscale.png" aria-label="Enlarge: The desktop at 150% UI scale: same resolution, larger text and controls everywhere."><img src="assets/img/uiscale.png" alt="The desktop at 150% UI scale: same resolution, larger text and controls everywhere." loading="lazy"></button><figcaption>The desktop at <b>150%</b> UI scale: same resolution, larger text and controls everywhere.</figcaption></figure>
 
 <h2 id="resolution">Resolution &amp; scaling</h2>
-<p>Pick a resolution from the <strong>Display</strong> tab and the desktop resizes to match, scaled to fill your
-screen while keeping the correct proportions.</p>
-<figure><button type="button" class="zoom" data-full="assets/img/resolution.png" aria-label="Enlarge: A smaller desktop mode scaled to fit the panel."><img src="assets/img/resolution.png" alt="A smaller desktop mode scaled to fit the panel." loading="lazy"></button><figcaption>A smaller desktop mode scaled to fit the panel.</figcaption></figure>
+<p>Pick a resolution from the <strong>Display</strong> tab and press <strong>Apply</strong>. The desktop
+resizes to match, scaled to fill your screen while keeping the correct proportions. Choosing from the
+menu on its own changes nothing until you apply it, so you can arrow through the list without the
+screen rearranging itself at every step.</p>
+<p>A new resolution is then held <strong>on probation</strong> for fifteen seconds: a row appears asking
+<em>Keep this resolution?</em> with a countdown, a <strong>Keep</strong> button and <strong>Revert now</strong>.
+Do nothing and the desktop goes back by itself.</p>
+<figure><button type="button" class="zoom" data-full="assets/img/resolution.png" aria-label="Enlarge: A smaller desktop mode scaled to fit the panel. Apply commits it; the countdown puts it back if you say nothing."><img src="assets/img/resolution.png" alt="A smaller desktop mode scaled to fit the panel. Apply commits it; the countdown puts it back if you say nothing." loading="lazy"></button><figcaption>A smaller desktop mode scaled to fit the panel. Apply commits it; the countdown puts it back if you say nothing.</figcaption></figure>
+
+<div class="note tip"><b>If the screen goes wrong</b>The countdown is there for the case where the new mode is unreadable - if you cannot see the screen you cannot click <strong>Keep</strong> either, so waiting is the answer. Just leave it alone for fifteen seconds and you are back where you started.</div>
 
 <h2 id="datetime">Date, time, battery and sessions</h2>
 <p>The <strong>Date &amp; Time</strong> tab sets the clock: two spinners for the time with a <strong>Set time</strong>

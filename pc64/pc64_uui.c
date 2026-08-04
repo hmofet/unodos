@@ -2947,7 +2947,7 @@ static void launcher_reveal(int from_y)
 static void toggle_launcher(void)
 {
     if (g_launch_open) { remove_win(&g_launch); g_launch_open = 0; }
-    else { g_menu_scroll = 0; g_menu_hot = 0; menu_refresh();
+    else { g_menu_scroll = 0; g_menu_hot = 0; g_menu_pane = 0; menu_refresh();
            /* anchor the menu bottom-left, flush with the Start button and
               sitting directly on top of the taskbar (a real Start menu), rather
               than floating at the old fixed (8,20). */
@@ -2968,7 +2968,13 @@ static void toggle_launcher(void)
  * right-click elsewhere should obviously do. */
 static void launcher_at(int x, int y)
 {
-    g_menu_scroll = 0; g_menu_hot = 0; menu_refresh();
+    /* pane 0 EVERY time it opens.  Without this the highlight stayed wherever
+     * it was left, so a menu last used for Shut Down reopened with the
+     * highlight in the power column - and Down,Enter from there fires a system
+     * command instead of launching an app.  That is precisely the hazard
+     * splitting the menu was meant to remove, so leaving it would have undone
+     * the change from the inside. */
+    g_menu_scroll = 0; g_menu_hot = 0; g_menu_pane = 0; menu_refresh();
     g_launch.r.x = x;
     g_launch.r.y = y;
     clamp_to_workarea(&g_launch);
