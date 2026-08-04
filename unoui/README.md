@@ -61,12 +61,14 @@ derived from each window's rect and the theme's metrics, so any resolution works
 |------|------|
 | `unoui.h` / `unoui.c` | public API + portable core: window/widget building, depth-aware drawing helpers (`ui_shade`, `ui_stipple`, `ui_bevel`, `ui_round_*`), editable-text engine, the **default painters**, and the render dispatcher with per-painter NULL fallback |
 | `unoui_input.c` | the interaction layer: event dispatch, hit-testing, focus + Tab, drag, popups, multi-line text editing, **zero platform code** |
+| `unoui_anim.h` / `unoui_anim.c` | the shared tween clock: easing curves, concurrent tweens by handle, sequences. Integer only, and the one file here that does not include `fb.h` |
 | `unoui_theme.h` | the theme model: palette + metrics + draw vtable, helper decls, theme externs |
 | `themes/theme_*.c` | the eight shipped themes (see below) |
 | `unoui_demo.c` | the static write-once demo window (theme contact sheet) |
 | `unoui_app.c` | the interactive write-once app (all widgets, two windows) |
 | `host_unoui.c` | host harness: render every theme → one PPM each |
 | `host_unoui_input.c` | host harness: drive the app with a scripted event stream → storyboard |
+| `host_unoui_anim.c` | host harness: the animation **contract test** (asserts, fails the build) + its two sheets |
 | `tools/tile.py` | tile renders into a contact sheet (stdlib only) |
 | `build.sh` | build + render + contact sheet (`themes.png`) + storyboard (`storyboard.png`) |
 
@@ -128,10 +130,78 @@ identical live state under other themes, proving input and theming compose:
 
 ![storyboard](build/storyboard.png)
 
+## Animation: one tween clock, not one counter per app
+
+Every animated thing in UnoDOS used to count its own frames: the window
+manager's snap, UnoAmp's EQ decay, the browser's smooth scroll and UnoShow's
+slide transitions each hand-rolled a counter. Two consequences, both bad. Every
+animation ran at a speed that depended on how busy the desktop was, and no two
+of them could be ordered against each other, so UnoShow's PowerPoint-style
+**builds** could not be written at all.
+
+`unoui_anim` is that counter, written once. A tween is a value moving from A to
+B over a duration in **milliseconds** along an easing curve. Several run at
+once, each addressed by a handle, and a **sequence** orders them: after the
+previous one, alongside it, or on a click.
+
+```c
+unoui_anim_h h = unoui_tween_to(&AC, -300, 24, 500, UI_EASE_OUT_CUBIC, &x);
+...
+unoui_anim_frame(&AC);              /* once per frame, from the shell        */
+if (unoui_anim_active(&AC)) repaint();
+```
+
+The value can be read back with `unoui_anim_value()`, or written straight into
+a variable through the tween's `out` pointer, which is how the demo below moves
+its paragraphs without polling anything.
+
+**The clock is a seam**, the same shape as `unoui_profile_win`: the toolkit has
+no portable clock, so a platform sets `unoui_clock_ms` once at boot. Left NULL,
+`unoui_anim_frame()` counts frames at 16 ms each, which keeps a port working
+before it has a clock at the cost of the exact defect this exists to fix.
+
+Integer arithmetic throughout, 12-bit fixed point, no `fb.h` and no libm. It
+compiles under `-std=c89 -pedantic -Wconversion`, 32- and 64-bit, so it reaches
+ports the rest of the toolkit does not.
+
+### The curves
+
+`./build.sh` plots all ten straight out of `unoui_ease()`, so this picture is
+drawn by the code under test:
+
+![easing](build/easing.png)
+
+Endpoints are pinned exact: every curve returns precisely 0 and precisely
+`UI_ANIM_ONE` at the ends, even where its fixed-point arithmetic lands a few
+parts in 4096 short, because an animation that stops 0.1% shy of its target is
+a stuck pixel someone eventually files a bug about. `out-back` and `out-bounce`
+deliberately leave the band in the middle; that is what they are for.
+
+### The worked example
+
+The same harness renders UnoShow's ask: three paragraphs that fly in one click
+at a time, each one dimming the paragraph before it *while* the next flies in.
+
+![anim](build/anim.png)
+
+That is one `unoui_seq` of five steps (`AFTER`, then `ON_TRIGGER` + `WITH`
+twice) and no per-app frame counter. Frame 7 is worth a look: a second click
+mid-build snaps what is running to its end and parks on the next step, which is
+what a presenter clicking through a deck expects.
+
+A sequence keeps to its **schedule** rather than to the frame it was noticed
+on: a group due at 500 ms that the frame loop only reaches at 517 ms starts 17
+ms in, not 17 ms late, so a long build cannot accumulate a frame of drift per
+step. `host_unoui_anim.c` asserts exactly that, along with endpoint exactness,
+delays, looping, stale-handle refusal, pool exhaustion, the 49-day millisecond
+wraparound, and the click that skips a build: 105 checks, and a failure exits
+non-zero and fails `./build.sh`.
+
 ## Build
 
 ```sh
 ./build.sh          # → build/themes.png + per-theme PNGs
+                    #   + build/easing.png + build/anim.png (and the assertions)
 ```
 
 Reuses the shared software framebuffer (`../ps2/fb.c`) and its 8×8 font, exactly
