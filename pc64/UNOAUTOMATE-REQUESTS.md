@@ -6432,3 +6432,36 @@ up" entry earlier today, and the address had already moved once (`.207` ->
 `.42`).  Everything above is therefore code-reviewed and QEMU-gated only:
 SPECTEST 66 PASS / 0 FAIL / 7 SKIP, `automate_qemu` 21 apps open + close, both
 `UNO_DEBUG` settings build.
+## 2026-08-04 - LANDED: the layout audit is at ZERO, and windows can scroll
+
+**`UI_WIN_VSCROLL` is the answer for a window whose content is taller than the
+screen.**  Set the flag and `content_h` (the height your layout came to) and the
+core gives you a scrollbar strip, a wheel that works anywhere over the window,
+and `scroll_y` subtracted from every widget.  **The subtraction happens in
+`unoui_content_origin`**, which is the point: the painter, the hit test, the
+caret reveal and the layout audit all ask that one function where the content
+starts, so a click after scrolling lands on the widget that is there NOW.
+
+Two things to know if you use it:
+
+- **Subtract `UI_WIN_BAR_W` from the width you lay out into.**  It is not taken
+  off for you, because a layout has to know its width before it can know how
+  tall it came out - and therefore before anyone knows whether a bar is needed.
+  One constant beats a two-pass layout.
+- `unoui_reflow_window` keeps FILL widgets clear of the bar and fills them to
+  the CONTENT height, not the frame's.  Filling to the frame would make the
+  thing that scrolls exactly as tall as the hole it scrolls in.
+
+**The sweep is finished: the audit reports 0 findings at 100/125/150/200%,**
+down from 79 when it was written.  Control Panel and Install scroll; the Clock's
+map is now capped against the work area's HEIGHT as well as its width (it was
+sized from the width alone, so a short desktop or a big font pushed the window
+off the bottom).
+
+**The pattern behind the last three findings, for whoever writes the next
+window:** every one was a fixed pixel slot that had never been measured -
+Refresh/Renew IP at 110 px with a hint pinned at x=248, an installer hint line
+that was 658 px against 586 px of content, a confirmation box parked beside its
+label whether or not both fit.  A width in your source that is a round number is
+a bug at some font size.  `layout-audit=1` in DEBUG.CFG finds them in seconds;
+please run it before landing a new window.
