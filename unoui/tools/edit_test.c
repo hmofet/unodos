@@ -85,6 +85,10 @@ static void field_set(const char *s, int w)
     unoui_rect r;
     const unoui_theme *th = &theme_unodos;
     snprintf(g_buf, sizeof g_buf, "%s", s);
+    /* a FRESH field each case: re-init keeps the caret and the scroll when the
+     * buffer is the same one, which is the point of it, and would otherwise
+     * carry one case's scroll position into the next */
+    memset(&g_t, 0, sizeof g_t);
     unoui_text_init(&g_t, g_buf, (int)sizeof g_buf, 0);
     r.x = 40; r.y = 60; r.w = w; r.h = ui_field_h();
     g_inner = ui_edit_inner(r, th);
@@ -306,6 +310,34 @@ int main(void)
       CHECK("busy: one step advances one dot", b->value == 1);
       b = unoui_add_busy(&bw, 8, 40, 0);
       CHECK("busy: size 0 means font-derived", b->r.w > 0 && b->r.w == b->r.h); }
+
+    /* ---- 7b. re-init must not move the caret ---------------------------- *
+     * A window builder runs on every rebuild and re-inits its fields, so this
+     * is what stops the cursor jumping to the end of the text mid-word in any
+     * window that rebuilds underneath you. */
+    fb_set_font(0);
+    { static char rb[32] = "hello world";
+      static unoui_text rt;                        /* zeroed: see the contract */
+      unoui_text_init(&rt, rb, sizeof rb, 0);
+      CHECK("re-init: a FIRST bind puts the caret at the end", rt.caret == 11);
+      rt.caret = rt.sel = 4; rt.scroll_x = 7;
+      unoui_text_init(&rt, rb, sizeof rb, 0);      /* the rebuild */
+      CHECK("re-init: re-binding the same buffer keeps the caret",
+            rt.caret == 4 && rt.sel == 4 && rt.scroll_x == 7);
+      /* ...clamped, because the text may have got shorter behind the model */
+      rb[2] = 0;
+      unoui_text_init(&rt, rb, sizeof rb, 0);
+      CHECK("re-init: a caret past the new end is clamped, not left dangling",
+            rt.len == 2 && rt.caret == 2 && rt.sel == 2);
+      /* a DIFFERENT buffer is a different field: it resets */
+      { static char ob[16] = "other";
+        rt.caret = rt.sel = 1;
+        unoui_text_init(&rt, ob, sizeof ob, 0);
+        CHECK("re-init: binding a different buffer resets", rt.caret == 5); }
+      /* and unoui_text_set is the explicit "replace it", which resets */
+      { unoui_text_set(&rt, "abc");
+        CHECK("text_set: replacing the contents resets the caret",
+              rt.len == 3 && rt.caret == 3 && rt.scroll_x == 0); } }
 
     /* ---- 8. the reject gesture ------------------------------------------ *
      * A shake that does not come home is worse than no shake at all: whatever
