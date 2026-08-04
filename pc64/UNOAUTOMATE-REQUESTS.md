@@ -5880,3 +5880,70 @@ Two things would make it a non-event: give the temp image a unique name
 `build_fat()`, which is why the failure said nothing about what went wrong.
 `tools/mkuefi.py` uses the same mtools path and is worth checking for the same
 fixed-path assumption.
+
+## 2026-08-04 - CLAIM + LANDED (iwlwifi/wifi_wpa): the deauth-after-handshake, and why DHCP never completed
+
+Follow-up to the SURFGO run. Two bugs, one of which fully explains the
+deauthentication storm; the trigger behind it is narrowed but not closed.
+
+### Bug 1 (the cause): the supplicant never compared the EAPOL replay counter
+
+`wpa_sm_t::replay` is commented "highest replay counter seen" and was written on
+every message and **never compared**. A message 1/4 arriving again after the
+handshake finished was therefore taken at face value: re-derive the PTK, send a
+fresh 2/4, and regress the state from DONE back to SENT_2.
+
+```
+[171.959] 4-way handshake DONE - CCMP keys installed, station authorized
+[172.011] EAPOL in (99 bytes, ki=008a 1/4) -> state 1, reply 121
+[172.020] EAPOL in (163 bytes, ki=13ca 3/4) -> state 2, reply 99
+[173.580] mgmt rx subtype=12          <- deauth, then one every ~1 s
+```
+
+An unexpected 2/4 at an authenticator that has already finished is a protocol
+violation and the AP answered it with deauths. Fixed in `0d9537c0`: only a
+strictly greater counter starts a new handshake; an equal one on 3/4 or a group
+rekey is a legitimate retransmission and still gets answered; a lower one is
+dropped. 64-bit big-endian compare, so a carry is not read as a decrease.
+
+### Bug 2 (why it was silent and unrecoverable): deauth was captured and ignored
+
+`mgmt_capture()` accepted subtypes 12 and 10, stashed them, logged
+`subtype=12 len=26` and **nothing read them**. `g_joined` stayed 1, `link()`
+kept saying up, and the stack retried DHCP into a dead association for the rest
+of the run. Fixed in `4e2fa74b`: log the reason code and transmitter, and let a
+deauth from OUR bssid clear the join state so `link()` tells the truth. A deauth
+from any other BSSID is logged and ignored - the join walks several BSSIDs and
+the abandoned one may well object.
+
+Deliberately no auto-rejoin: `radio_restart()`'s own note says restarting on top
+of a half-finished association is not a working recovery on this firmware.
+
+### STILL OPEN: why was a 1/4 repeated 50 ms after DONE?
+
+The supplicant is now robust to a repeat however it arrives, but the repeat
+itself is unexplained. The same frames recur in the same order - auth resp (30
+B), assoc resp (197 B), EAPOL 1/4 (99 B), EAPOL 3/4 (163 B) - twice, which reads
+more like **our RX ring re-presenting buffers** than an AP retransmitting an
+auth response it had no reason to resend.
+
+Two things in the ring code are worth a look by whoever picks this up:
+
+- `wait_cmd_done()` does `g_rx_read = closed` and restocks **without processing
+  the RBs it skips**, so frames delivered during a command wait are dropped, not
+  dispatched. That is a loss rather than a replay, but it is the same index
+  bookkeeping.
+- `rx_restock()` computes `tgt = ((g_rx_read - 1) & (RXQ_N-1)) & ~7` and the
+  used-list VID is read as `g_rbd_used[g_rx_read] & 0xFFF`. If a used-list entry
+  is read before the fw has written it, the stale VID points at a buffer we have
+  already consumed - which is exactly what a replay would look like.
+
+I did not touch either: both need the card to verify and a wrong guess there
+costs the whole RX path. Filed rather than fixed.
+
+### -> debug harness: a suggestion, not a request
+
+The supplicant is pure logic over a byte buffer with no hardware dependency, and
+a replayed 1/4 is trivially constructible (1/4 carries no MIC). A host case in
+`pc64_spectest.c` would have caught this without a laptop. I have a working host
+test but did not add a spec entry, because that file is yours.
