@@ -1409,6 +1409,17 @@ static void build_acpistat(void)
 /* 320, not 256: the worst case is a detached box with three labelled volumes,
  * a 64-char reason and a 40-char blocker device, which overran the old size. */
 static char g_nat[320];
+/* The storage-detach preflight (uno_fat_native_status, unofs).  A SECOND row
+ * rather than more of g_nat: that buffer is already sized to its own worst
+ * case, and this answers a different question anyway.  g_nat says where the
+ * machine IS; this says whether the disk it lives on would still be there
+ * afterwards, and which controller would be doing it.
+ *
+ * It has to be here, on this surface, and not only in the boot log: the
+ * production build is the one an operator actually runs (a 6-digit URC PIN
+ * means production), and uno_dbg_log compiles to nothing there.  The System
+ * window is what production has. */
+static char g_natwhy[192];
 static void build_natstat(void)
 {
     int nblk = uno_blk_count(), i, nnat = 0, nfat = uno_fat_volumes();
@@ -1456,6 +1467,7 @@ static void build_natstat(void)
         }
     }
     *p = 0;
+    uno_fat_native_status(g_natwhy, (int)sizeof g_natwhy);
 }
 
 static void build_sys(unoui_window *w)
@@ -1527,7 +1539,10 @@ static void build_sys(unoui_window *w)
      * because none of them can fall off the end. Headings are rows. */
     (void)tx; (void)g0; (void)lh;
     { int n = 0;
-      static const char *rows[24];
+      /* 32, not 24: adding the storage-preflight row took the count to exactly
+       * 24, so the next row anybody appends would have run off the end of a
+       * fixed array with nothing to stop it. Headroom is cheaper than that. */
+      static const char *rows[32];
       rows[n++] = "TIMING";                 rows[n++] = g_animln;
       rows[n++] = "";
       rows[n++] = "INPUT & USB";            rows[n++] = g_tp1;   rows[n++] = g_tp2;
@@ -1535,6 +1550,7 @@ static void build_sys(unoui_window *w)
       rows[n++] = g_usb;                    rows[n++] = g_usb2;
       rows[n++] = "";
       rows[n++] = "STORAGE";                rows[n++] = g_nat;
+      rows[n++] = g_natwhy;
       rows[n++] = "";
       rows[n++] = "NETWORK";                rows[n++] = g_netline;
       rows[n++] = "";
