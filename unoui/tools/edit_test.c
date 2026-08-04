@@ -25,6 +25,7 @@
  *      ../pc64/fb.c tools/edit_test.c -o build/edit_test
  * ======================================================================== */
 #include "unoui_theme.h"
+#include "unoui_wmanim.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -305,6 +306,63 @@ int main(void)
       CHECK("busy: one step advances one dot", b->value == 1);
       b = unoui_add_busy(&bw, 8, 40, 0);
       CHECK("busy: size 0 means font-derived", b->r.w > 0 && b->r.w == b->r.h); }
+
+    /* ---- 8. the reject gesture ------------------------------------------ *
+     * A shake that does not come home is worse than no shake at all: whatever
+     * it moved is left sitting to one side, permanently, and the layout is
+     * wrong from then on. So the curve's endpoints matter more than its shape. */
+    { int t, e, neg = 0, pos = 0;
+      CHECK("shake: starts at rest", unoui_ease(UI_EASE_SHAKE, 0) == 0);
+      CHECK("shake: ENDS at rest", unoui_ease(UI_EASE_SHAKE, UI_ANIM_ONE) == 0);
+      for (t = 0; t <= UI_ANIM_ONE; t += 16) {
+          e = unoui_ease(UI_EASE_SHAKE, t);
+          if (e >  UI_ANIM_ONE / 8) pos++;
+          if (e < -UI_ANIM_ONE / 8) neg++;
+      }
+      CHECK("shake: swings both ways", pos > 0 && neg > 0);
+      /* decaying: the biggest excursion is in the first half */
+      { int first = 0, second = 0;
+        for (t = 0; t < UI_ANIM_ONE / 2; t += 16) {
+            e = unoui_ease(UI_EASE_SHAKE, t); if (e < 0) e = -e;
+            if (e > first) first = e; }
+        for (t = UI_ANIM_ONE / 2; t <= UI_ANIM_ONE; t += 16) {
+            e = unoui_ease(UI_EASE_SHAKE, t); if (e < 0) e = -e;
+            if (e > second) second = e; }
+        CHECK("shake: decays", first > second); } }
+
+    { static unoui_ui ui; static unoui_anim ac; static unoui_window win;
+      static char pb2[16] = "wrong";
+      static unoui_text pt2;
+      unoui_widget *fld;
+      unoui_text_init(&pt2, pb2, sizeof pb2, 0);
+      unoui_text_secret(&pt2, '*');
+      unoui_anim_init(&ac);
+      unoui_ui_init(&ui, &theme_unodos, 640, 480);
+      unoui_window_init(&win, "R", 40, 40, 300, 90);
+      fld = unoui_add_edit(&win, 8, 8, 200, &pt2);
+      unoui_ui_add(&ui, &win);
+      CHECK("reject: refused with no animator installed",
+            unoui_reject_widget(&ui, &win, fld) == 0);
+      unoui_wmanim_install(&ui, &ac);
+      unoui_anim_tick(&ac, 1000);
+      CHECK("reject: accepted once the animator is in",
+            unoui_reject_widget(&ui, &win, fld) == 1);
+      CHECK("reject: the text is selected, so typing replaces it",
+            pt2.sel == 0 && pt2.caret == pt2.len);
+      unoui_anim_tick(&ac, 1000 + 80);
+      CHECK("reject: the widget has actually moved", fld->dx != 0);
+      unoui_anim_tick(&ac, 1000 + 400);        /* past the end */
+      CHECK("reject: and comes back to exactly where it was", fld->dx == 0);
+
+      /* a window shake must land the window back on its own x */
+      { int x0 = win.r.x;
+        /* the tween's clock starts at the context's CURRENT time, which the
+         * ticks above have already advanced to 1400 - sample relative to that */
+        CHECK("reject: a window shake starts", unoui_reject_window(&ui, &win) == 1);
+        unoui_anim_tick(&ac, 1400 + 80);
+        CHECK("reject: the window moved", win.r.x != x0);
+        unoui_anim_tick(&ac, 1400 + 400);
+        CHECK("reject: the window came home", win.r.x == x0); } }
 
     printf(fails ? "\n%d FAILED\n" : "\nall passed\n", fails);
     return fails ? 1 : 0;

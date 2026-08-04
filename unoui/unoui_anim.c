@@ -47,6 +47,26 @@ static int ease_bounce_out(int t)
     x = t - 3910;  return fmul(30976, fmul(x, x)) + 4032;
 }
 
+/* A decaying oscillation about zero: four swings, each smaller than the last,
+ * arriving at exactly zero. Done from a small table rather than a sine, because
+ * this file has no floating point and no trig by design, and because the SHAPE
+ * is the thing being specified - a shake that is felt rather than watched. The
+ * table is the peak of each half-swing; the value between two peaks is a
+ * straight line, which at 60 Hz over ~300 ms is indistinguishable from a curve
+ * and a great deal easier to reason about. */
+static int ease_shake(int t)
+{
+    /* peaks, in units of ONE/16, alternating sign and decaying */
+    static const signed char PEAK[] = { 0, 16, -12, 9, -6, 3, -1, 0 };
+    int n = (int)(sizeof PEAK / sizeof PEAK[0]) - 1;   /* segments */
+    int seg = t * n / ONE, frac, a, b;
+    if (seg >= n) seg = n - 1;
+    frac = t * n - seg * ONE;                          /* 0..ONE within seg */
+    a = PEAK[seg] * (ONE / 16);
+    b = PEAK[seg + 1] * (ONE / 16);
+    return a + (b - a) * frac / ONE;
+}
+
 int unoui_ease(int ease, int t)
 {
     int u;
@@ -55,7 +75,10 @@ int unoui_ease(int ease, int t)
      * stops 0.1% shy of its target is a stuck pixel someone eventually files a
      * bug about, so the ends are pinned rather than computed. */
     if (t <= 0)   return 0;
-    if (t >= ONE) return ONE;
+    /* ...except SHAKE, whose end is zero, not ONE: it oscillates ABOUT the
+     * start and comes home, so pinning it to ONE would leave the thing it moved
+     * parked one full amplitude off to the side. */
+    if (t >= ONE) return (ease == UI_EASE_SHAKE) ? 0 : ONE;
 
     switch (ease) {
     case UI_EASE_IN:          return fmul(t, t);
@@ -71,6 +94,7 @@ int unoui_ease(int ease, int t)
     case UI_EASE_OUT_BACK:    return ease_back_out(t);
     case UI_EASE_OUT_BOUNCE:  return ease_bounce_out(t);
     case UI_EASE_STEP:        return 0;          /* ONE only at t == ONE      */
+    case UI_EASE_SHAKE:       return ease_shake(t);
     default:                  return t;          /* UI_EASE_LINEAR            */
     }
 }
@@ -151,6 +175,18 @@ static int normalise(unsigned e, int dur)
     return (int)((e * (unsigned)ONE + (unsigned)dur / 2u) / (unsigned)dur);
 }
 
+/* The value a tween SETTLES on. For every ramp curve that is `to`, because the
+ * ends are pinned (unoui_ease returns exactly ONE at t == ONE) - so this is the
+ * same exact endpoint the old `s->value = s->tw.to` gave, arrived at by asking
+ * the curve instead of assuming the answer.
+ *
+ * Which matters because not every curve ends where it is pointed: UI_EASE_SHAKE
+ * oscillates ABOUT the start and comes home, so its `to` is an amplitude and
+ * its final value is `from`. Assuming `to` left everything a shake had moved
+ * parked one amplitude off to the side, permanently. */
+static int end_value(const unoui_tween *tw)
+{ return unoui_anim_lerp(tw->from, tw->to, unoui_ease(tw->ease, ONE)); }
+
 /* recompute one running slot against `now`; clears state to 2 when it ends */
 static void slot_eval(unoui_anim_slot *s, unsigned now)
 {
@@ -162,7 +198,7 @@ static void slot_eval(unoui_anim_slot *s, unsigned now)
     } else {
         unsigned e = elapsed - (unsigned)(s->tw.delay_ms > 0 ? s->tw.delay_ms : 0);
         if (dur <= 0) {
-            s->value = s->tw.to;
+            s->value = end_value(&s->tw);
             if (s->tw.loop == UI_ANIM_ONCE) s->state = 2;
         } else if (s->tw.loop == UI_ANIM_LOOP) {
             s->value = unoui_anim_lerp(s->tw.from, s->tw.to,
@@ -174,7 +210,7 @@ static void slot_eval(unoui_anim_slot *s, unsigned now)
             s->value = unoui_anim_lerp(s->tw.from, s->tw.to,
                                        unoui_ease(s->tw.ease, t));
         } else if (e >= (unsigned)dur) {
-            s->value = s->tw.to;          /* endpoint is the target, exactly  */
+            s->value = end_value(&s->tw);   /* the curve's own end, exactly   */
             s->state = 2;
         } else {
             s->value = unoui_anim_lerp(s->tw.from, s->tw.to,
@@ -271,7 +307,7 @@ void unoui_anim_finish(unoui_anim *ac, unoui_anim_h h)
 {
     unoui_anim_slot *s = slot_of(ac, h);
     if (!s) return;
-    s->value = s->tw.to;
+    s->value = end_value(&s->tw);
     s->state = 2;
     if (s->tw.out) *s->tw.out = s->value;
 }

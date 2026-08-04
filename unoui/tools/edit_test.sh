@@ -13,6 +13,7 @@ FB=../pc64
 [ -f "$FB/build/font_data.h" ] || ( cd "$FB" && ${PY:-python3} mkfont_c.py )
 mkdir -p build
 ${CC:-cc} -O1 -Wall -Wextra -I. -I"$FB" -o build/edit_test \
-    tools/edit_test.c unoui.c unoui_input.c themes/theme_unodos.c \
+    tools/edit_test.c unoui.c unoui_input.c unoui_anim.c unoui_wmanim.c \
+    themes/theme_unodos.c \
     "$FB/fb.c"
 ./build/edit_test

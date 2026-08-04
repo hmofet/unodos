@@ -1034,7 +1034,11 @@ unoui_rect unoui_widget_rect(const unoui_theme *t, const unoui_window *win,
         return r;
     }
     { int ox, oy; unoui_content_origin(t, win, &ox, &oy);
-      { unoui_rect r = { ox + w->r.x, oy + w->r.y, w->r.w, w->r.h }; return r; } }
+      /* `dx` is added HERE, which is what makes a shaken widget really move:
+       * the painter, the hit test and the layout audit all ask this function
+       * where a widget is, so none of them can disagree with the screen. */
+      { unoui_rect r = { ox + w->r.x + w->dx, oy + w->r.y, w->r.w, w->r.h };
+        return r; } }
 }
 
 /* ---- layout audit ---------------------------------------------------------

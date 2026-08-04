@@ -25,6 +25,7 @@
  */
 #include "unoui_theme.h"
 #include "unoui_anim.h"
+#include <string.h>
 
 /* Windows that can be moving at once. Tile/cascade snaps a whole set in one
  * go, so this is not 1. Past it the animator declines and the core snaps that
@@ -146,6 +147,54 @@ void unoui_geom_settle(unoui_ui *ui, unoui_window *win)
             unoui_reflow_window(ui->theme, win);
             return;
         }
+}
+
+/* ---- the reject gesture (see unoui_wmanim.h) -------------------------------
+ * One tween on an x offset, with UI_EASE_SHAKE - which oscillates about zero
+ * and ENDS at zero, so whatever it moved comes back exactly where it started
+ * with no cleanup and nothing to leak if the pool recycles the slot.
+ *
+ * The amplitude follows the font rather than being 10 px, for the same reason
+ * every other measurement here does: a gesture sized for an 8 px face is a
+ * twitch at 200%. */
+#define REJECT_MS 320
+
+static int reject_amp(void) { int a = fb_text_h(); return a < 8 ? 8 : a; }
+
+int unoui_reject_widget(unoui_ui *ui, unoui_window *win, unoui_widget *w)
+{
+    unoui_anim *ac;
+    unoui_tween tw;
+    if (!ui || !w) return 0;
+    ac = (unoui_anim *)ui->anim;
+    if (!ac) return 0;
+    (void)win;
+    /* typing should replace what was rejected, not append to it */
+    if (w->edit) { w->edit->sel = 0; w->edit->caret = w->edit->len; }
+    w->dx = 0;
+    memset(&tw, 0, sizeof tw);
+    tw.from = 0; tw.to = reject_amp(); tw.dur_ms = REJECT_MS;
+    tw.ease = UI_EASE_SHAKE; tw.out = &w->dx;
+    return unoui_tween_start(ac, &tw) != 0;
+}
+
+int unoui_reject_window(unoui_ui *ui, unoui_window *win)
+{
+    unoui_anim *ac;
+    unoui_tween tw;
+    int i;
+    if (!ui || !win) return 0;
+    ac = (unoui_anim *)ui->anim;
+    if (!ac) return 0;
+    /* A window already flying somewhere (a snap mid-flight) must not be shaken
+     * as well: the two tweens would both write win->r.x and the window would
+     * end up wherever the loser wrote last. The move wins - it is the one with
+     * a destination. */
+    for (i = 0; i < GEOM_MAX; i++) if (g_geom[i].win == win) return 0;
+    memset(&tw, 0, sizeof tw);
+    tw.from = win->r.x; tw.to = win->r.x + reject_amp(); tw.dur_ms = REJECT_MS;
+    tw.ease = UI_EASE_SHAKE; tw.out = &win->r.x;
+    return unoui_tween_start(ac, &tw) != 0;
 }
 
 void unoui_wmanim_install(unoui_ui *ui, unoui_anim *ac)

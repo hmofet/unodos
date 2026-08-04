@@ -149,6 +149,7 @@ typedef struct unoui_widget {
     int          icon;        /* UI_ICON: art id for the icon-art hook        */
     /* --- appended; 0 must mean "as before" -------------------------------- */
     struct unoui_mdi *mdi;    /* UI_MDI: the app-owned child set              */
+    int          dx;          /* transient x offset, px - see unoui_reject_*  */
 } unoui_widget;
 
 /* Optional per-app icon artwork. When set, UI_ICON widgets are drawn by this
