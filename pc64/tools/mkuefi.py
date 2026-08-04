@@ -20,14 +20,20 @@ Prereq: ./build.sh  (produces build/esp/EFI/BOOT/BOOTX64.EFI).
 """
 import os
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 
 PC64 = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BUILD = os.path.join(PC64, "build")
 ESP_DIR = os.path.join(BUILD, "esp")                 # the tree build.sh emits
 DISK = os.path.join(BUILD, "unodos-uefi.img")        # output raw image
-FAT = "/tmp/uno_esp.img"                             # scratch partition image
+# The scratch partition image is created per RUN, in a directory of our own -
+# see main(). It used to be the fixed path /tmp/uno_esp.img, which two builds
+# at once would delete and re-create underneath each other; mkbios.py had the
+# same bug and it presented there as a random mcopy failure that passed on
+# retry.
 SECTOR = 512
 
 _mib = int(sys.argv[1]) if len(sys.argv) > 1 else int(os.environ.get("UNO_DISK_MIB", "128"))
@@ -35,7 +41,18 @@ DISK_SECTORS = _mib * 2048                           # MiB -> 512-byte sectors
 
 
 def run(cmd):
-    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    """Run a command, and SAY WHAT HAPPENED when it fails.
+
+    This discarded stderr as well as stdout, so an mtools failure arrived as a
+    bare CalledProcessError naming the command and nothing else. stdout stays
+    discarded (these tools are chatty on success); stderr goes in the error.
+    """
+    r = subprocess.run(cmd, stdout=subprocess.DEVNULL,
+                       stderr=subprocess.PIPE, text=True)
+    if r.returncode:
+        sys.exit("mkuefi: %s failed (exit %d)%s"
+                 % (" ".join(cmd), r.returncode,
+                    ": " + r.stderr.strip() if r.stderr.strip() else ""))
 
 
 def main():
@@ -56,6 +73,9 @@ def main():
     first = int(re.search(r"First sector:\s*(\d+)", info).group(1))
     last = int(re.search(r"Last sector:\s*(\d+)", info).group(1))
     part_sectors = last - first + 1
+
+    scratch = tempfile.mkdtemp(prefix="uno-mkuefi-")
+    FAT = os.path.join(scratch, "esp.img")
 
     # 3. format the partition as FAT32 (-F) and copy the ESP tree into it.
     #    mformat's -h/-s geometry matches what real firmware expects on removable
@@ -78,7 +98,7 @@ def main():
     with open(DISK, "r+b") as f:
         f.seek(first * SECTOR)
         f.write(data)
-    os.remove(FAT)
+    shutil.rmtree(scratch, ignore_errors=True)
 
     efi_bytes = os.path.getsize(boot)
     print("unodos-uefi.img: %d MiB, GPT + ESP (FAT32) at LBA %d (%d sectors), "
