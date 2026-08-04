@@ -5972,3 +5972,48 @@ failure said nothing but the name of the command. stdout is still discarded
 Not changed, and worth someone's judgement: `tools/vbox_shot.py` and
 `tools/zima_drive.py` also use fixed `/tmp` paths, but on a REMOTE host and for
 a log respectively, and neither is in the build path.
+
+## 2026-08-04 - REQUEST to the unoautomate lane: the listen-mode listener does not reliably return to accepting
+
+**Found by misusing it, but the misuse is the point.** Driving an armed SURFGO
+(192.168.2.207, console-armed, listen mode on :5099) I opened and closed a
+connection per query rather than holding one session - roughly eight
+connect/query/close cycles in a few minutes. After that the channel stopped
+accepting: first `connect()` succeeded but nothing spoke URC (no `HELLO`, no
+answer to `auth`), then `connect()` itself began timing out. **A disarm/re-arm
+at the console did not clear it.**
+
+**The box is fine.** It answers ICMP at 31-37 ms throughout, continuously. That
+also rules out a hung shell: `net_poll()` is pumped from the shell frame, so
+pings being answered means the main loop is running and only the URC accept
+path is stuck.
+
+REMOTE.md says of listen mode:
+
+> the listener **persists** across client reconnects (a dropped client just
+> returns it to waiting), so there is no connect timeout and no address to dial
+
+That is the contract I was relying on and it did not hold. Whether the cause is
+the accept slot never being freed when a peer goes away without a clean BYE, or
+sockets leaking one per disconnect until `net_accept` has none left, I cannot
+tell from outside - I could not get a link to ask.
+
+**Two things worth having regardless of the root cause:**
+
+1. **A client that disappears must free the slot.** Whatever the detection is
+   (RST, FIN, or a timeout on a session with no traffic), the listener returning
+   to `waiting` is the documented behaviour and the one that makes listen mode
+   usable without walking to the machine - which is its whole purpose on a
+   laptop with no wired NIC.
+2. **Say so in the log.** Nothing in the NET/SCRIPT channel announced the
+   listener's state, so from the client end a wedged listener and a crashed box
+   look identical. One line on accept and on disconnect ("remote: client gone,
+   listening again") would have told me in seconds which of the two I had.
+
+Not filed as a fix because I could not reach the box to test one. Reproducing
+should be cheap under `tools/listen_qemu.py`: connect and drop a client N times
+without a clean BYE and see whether the N+1th is accepted.
+
+**Client-side lesson, which is mine:** hold ONE session and run every verb
+through it. Reconnecting per query is what triggered this, and it is also just
+wasteful - the CMD/RSP framing multiplexes fine over a single link.
