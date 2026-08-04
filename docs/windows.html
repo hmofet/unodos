@@ -74,7 +74,7 @@
     <span class="logo"><i></i><i></i><i></i><i></i></span>
     <span><b>UnoDOS <span style="color:var(--accent-2)">pc64</span></b><span class="sub">User manual</span></span>
   </a>
-  <ul class="nav"><li><a class="" href="index.html">Overview</a></li><li><a class="" href="getting-started.html">Getting started</a></li><li><a class="" href="desktop.html">The desktop</a></li><li><a class="active" href="windows.html">Windows &amp; desktops</a></li><li><a class="" href="appearance.html">Themes &amp; appearance</a></li><li><a class="" href="apps.html">Applications</a></li><li><a class="" href="browser.html">Web browser</a></li><li><a class="" href="ssh.html">SSH client</a></li><li><a class="" href="networking.html">Networking</a></li><li><a class="" href="ports.html">The UnoDOS family</a></li><li class="sec">Developer</li><li><a class="" href="developer.html">Overview &amp; architecture</a></li><li><a class="" href="studio.html">Studio: the built-in IDE</a></li><li><a class="" href="dev-apps.html">Writing apps</a></li><li><a class="" href="dev-python.html">Python apps</a></li><li><a class="" href="dev-api.html">API reference</a></li><li><a class="" href="dev-build.html">Building &amp; tooling</a></li><li><a class="" href="dev-remote.html">Remote control &amp; automation</a></li></ul>
+  <ul class="nav"><li><a class="" href="index.html">Overview</a></li><li><a class="" href="getting-started.html">Getting started</a></li><li><a class="" href="desktop.html">The desktop</a></li><li><a class="active" href="windows.html">Windows &amp; desktops</a></li><li><a class="" href="appearance.html">Themes &amp; appearance</a></li><li><a class="" href="apps.html">Applications</a></li><li><a class="" href="office.html">UnoOffice</a></li><li><a class="" href="browser.html">Web browser</a></li><li><a class="" href="ssh.html">SSH client</a></li><li><a class="" href="networking.html">Networking</a></li><li><a class="" href="ports.html">The UnoDOS family</a></li><li class="sec">Developer</li><li><a class="" href="developer.html">Overview &amp; architecture</a></li><li><a class="" href="studio.html">Studio: the built-in IDE</a></li><li><a class="" href="dev-apps.html">Writing apps</a></li><li><a class="" href="dev-python.html">Python apps</a></li><li><a class="" href="dev-api.html">API reference</a></li><li><a class="" href="dev-build.html">Building &amp; tooling</a></li><li><a class="" href="dev-remote.html">Remote control &amp; automation</a></li></ul>
   <div class="side-foot">
     <a href="https://github.com/hmofet/unodos" target="_blank" rel="noopener">GitHub&nbsp;&rsaquo; hmofet/unodos</a><br>
     <a href="#" onclick="__t();return false">Toggle light / dark</a>
@@ -89,9 +89,19 @@ comes back after a restart.</p>
 <h2>Moving and sizing</h2>
 <p>Drag a window by its title bar and the window itself moves with the pointer -
 you see the real thing at the real position, not an outline. Double-click the title
-bar to maximize it, and double-click again to put it back. Every window that can be
-resized also has a <b>minimize</b> and a <b>maximize</b> button at the right-hand end
-of its title bar, and a grip in its bottom-right corner.</p>
+bar to maximize it, and double-click again to put it back. The window's buttons sit
+together at the right-hand end of the title bar - <b>minimize</b>, <b>maximize</b>
+and then <b>close</b> in the outermost position - and a resizable window also has a
+grip in its bottom-right corner.</p>
+<div class="note"><b>Where the close box is</b>The retro themes put their close box where the system they imitate put it, which for the Mac-lineage themes is the LEFT of the title bar. The buttons follow the theme, so if you switch skins expect the close box to move.</div>
+
+<h2>Windows move rather than jump</h2>
+<p>A window that snaps, un-snaps or maximizes travels to its new shape over about an
+eighth of a second instead of teleporting, so you can see where it went. Opening a
+window rises it into place, closing it leaves a briefly collapsing outline, the Start
+menu slides up out of the taskbar, and the window switcher's highlight slides between
+entries rather than jumping. None of it delays anything: the window is already
+wherever it is going as far as clicking and typing are concerned.</p>
 
 <h2>Snapping to an edge</h2>
 <p>Drag a window against the left or right edge of the screen and a translucent

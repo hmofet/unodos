@@ -7,12 +7,11 @@ surface to shots/manual/<tag>.png at each scene.
 
   python3 docs_shots.py [scene ...]     run named scenes (default: all core)
 
-The desktop is deterministic, so the Start-menu order is fixed. Network was
-dropped as a standalone app on 2026-07-26 (its status/self-test moved to the
-Control Panel's Network tab), so every app after Paint shifted down by one:
-  0 Control 1 Editor 2 Files 3 System 4 Clock 5 Install 6 Music 7 Dostris
-  8 Pac-Man 9 OutLast 10 Tracker 11 Paint 12 Runner3D 13 Browser
-  14 Studio (present only when APPS\\STUDIO.UNO ships) 15 Photos (APPS\\PHOTOS.UNO)
+The desktop is deterministic, so the Start-menu order is fixed - but it MOVES
+when an app is added, and nothing here fails when it does: the harness launches
+the next app along and captures it under the old name. So the order lives in
+named constants below (A_EDITOR, A_UOCALC, ...), measured off the launcher
+rather than derived, and those names are what the scenes use.
 Launch app N: Ctrl-Esc, Down*N, Enter.  Close focused window: Ctrl-W.
 """
 import json, os, socket, subprocess, sys, time
@@ -71,8 +70,15 @@ def combo(q, *names, gap=0.2):
     time.sleep(gap)
 
 
+# QEMU qcodes for the characters the scenes type. A character MISSING here used
+# to be typed as its own name, which qemu silently ignores - so "=A1+A2" reached
+# the guest as "A1A2" and UnoCalc stored it as text. Anything new a scene types
+# has to be added here first.
 QMAP = {" ": "spc", ".": "dot", ",": "comma", "-": "minus", "/": "slash",
-        ":": "shift+semicolon", "_": "shift+minus"}
+        ":": "shift+semicolon", "_": "shift+minus",
+        "=": "equal", "+": "shift+equal", "*": "shift+8",
+        "(": "shift+9", ")": "shift+0", "!": "shift+1", "%": "shift+5",
+        ";": "semicolon", "?": "shift+slash", "'": "apostrophe"}
 
 
 def text(q, s, gap=0.06):
@@ -84,8 +90,10 @@ def text(q, s, gap=0.06):
             a, b = QMAP[ch].split("+")
             q.cmd("send-key", keys=[{"type": "qcode", "data": a},
                                     {"type": "qcode", "data": b}])
-        else:
+        elif ch.isalnum() or ch in QMAP:
             q.cmd("send-key", keys=[{"type": "qcode", "data": QMAP.get(ch, ch)}])
+        else:
+            raise KeyError("no qcode for %r - add it to QMAP" % ch)
         time.sleep(gap)
 
 
@@ -172,6 +180,21 @@ def launch(q, idx, settle=1.6):
     key(q, "ret"); time.sleep(settle)
 
 
+# ---------------------------------------------------------------- app indices
+# Start-menu order = the app enum order in pc64_uui.c, minus the hidden slots
+# (the Studio-built app and a running Python app appear only once they exist).
+# MEASURED off the launcher, not derived: `probe` shots at Down x15/18/20.
+#
+# This list moved on 2026-08-04 when UnoAmp was added at 7, which pushed every
+# game and tool down by one. Nothing failed - the harness happily launched the
+# NEXT app along and captured it under the old name, so `tracker.png` would
+# have shipped a picture of Paint. Hence names, not numbers, below.
+A_CONTROL, A_EDITOR, A_FILES, A_SYSTEM, A_CLOCK, A_INSTALL = 0, 1, 2, 3, 4, 5
+A_MUSIC, A_UNOAMP = 6, 7
+A_DOSTRIS, A_PACMAN, A_OUTLAST, A_TRACKER, A_PAINT = 8, 9, 10, 11, 12
+A_RUNNER3D, A_BROWSER, A_STUDIO, A_PHOTOS, A_SSH = 13, 14, 15, 16, 17
+A_UOWORD, A_UOCALC, A_UOSHOW = 18, 19, 20
+
 # ---- scenes ---------------------------------------------------------------
 def sc_desktop(q):
     close_all(q)                     # boot opens Control Panel; close it
@@ -197,7 +220,7 @@ def cp_open_tab(q, tab_idx):
     strip; a following Tab steps into that tab's first control. The Panel
     reopens on its LAST-viewed tab, so clamp left to Display (tab 0) first, then
     walk right - deterministic regardless of the remembered tab."""
-    close_all(q); launch(q, 0)
+    close_all(q); launch(q, A_CONTROL)
     key(q, "tab"); time.sleep(0.3)                   # focus the tab strip
     for _ in range(6):
         key(q, "left", gap=0.12)                     # clamp at Display (tab 0)
@@ -207,7 +230,7 @@ def cp_open_tab(q, tab_idx):
 
 def sc_controlpanel(q):
     close_all(q)
-    launch(q, 0)
+    launch(q, A_CONTROL)
     shot(q, "controlpanel")                          # opens on the Display tab
 
 def sc_personalization(q):
@@ -261,7 +284,7 @@ def sc_uiscale(q):
     bump("up")                                       # 125% -> 100%
 
 def sc_editor(q):
-    close_all(q); launch(q, 1)
+    close_all(q); launch(q, A_EDITOR)
     shot(q, "editor")
     # rich text: select all, bold + italic via the Ctrl accelerators
     combo(q, "ctrl", "a"); time.sleep(0.3)
@@ -269,25 +292,25 @@ def sc_editor(q):
     shot(q, "editor_rich")
 
 def sc_files(q):
-    close_all(q); launch(q, 2)
+    close_all(q); launch(q, A_FILES)
     shot(q, "files")
     text(q, "2"); time.sleep(0.6)                    # two-pane commander view
     shot(q, "files_two")
 
 def sc_system(q):
-    close_all(q); launch(q, 3)
+    close_all(q); launch(q, A_SYSTEM)
     shot(q, "system")
 
 def sc_clock(q):
-    close_all(q); launch(q, 4)
+    close_all(q); launch(q, A_CLOCK)
     shot(q, "clock")
 
 def sc_install(q):
-    close_all(q); launch(q, 5, settle=2.0)
+    close_all(q); launch(q, A_INSTALL, settle=2.0)
     shot(q, "install")
 
 def sc_dostris(q):
-    close_all(q); launch(q, 7)
+    close_all(q); launch(q, A_DOSTRIS)
     key(q, "n"); time.sleep(0.5)
     for _ in range(4):
         key(q, "left", gap=0.15); key(q, "spc", gap=0.25)
@@ -295,7 +318,7 @@ def sc_dostris(q):
     shot(q, "dostris")
 
 def sc_pacman(q):
-    close_all(q); launch(q, 8)
+    close_all(q); launch(q, A_PACMAN)
     key(q, "n"); time.sleep(0.4)
     for _ in range(3):
         key(q, "right", gap=0.2)
@@ -303,30 +326,30 @@ def sc_pacman(q):
     shot(q, "pacman")
 
 def sc_outlast(q):
-    close_all(q); launch(q, 9)
+    close_all(q); launch(q, A_OUTLAST)
     key(q, "n"); time.sleep(0.5)
     shot(q, "outlast")
 
 def sc_music(q):
-    close_all(q); launch(q, 6)
+    close_all(q); launch(q, A_MUSIC)
     shot(q, "music")
 
 def sc_tracker(q):
-    close_all(q); launch(q, 10)
+    close_all(q); launch(q, A_TRACKER)
     shot(q, "tracker")
 
 def sc_paint(q):
-    close_all(q); launch(q, 11)
+    close_all(q); launch(q, A_PAINT)
     shot(q, "paint")
 
 def sc_runner3d(q):
-    close_all(q); launch(q, 12, settle=2.2)
+    close_all(q); launch(q, A_RUNNER3D, settle=2.2)
     time.sleep(1.0)
     shot(q, "runner3d")
 
 def sc_studio(q):
     # The IDE (Start-menu index 14). Greets with SDK\SAMPLE.C, syntax-lit.
-    close_all(q); launch(q, 14, settle=2.8)
+    close_all(q); launch(q, A_STUDIO, settle=2.8)
     shot(q, "studio")
     combo(q, "ctrl", "b"); time.sleep(2.8)           # build -> SAMPLE.UNO
     shot(q, "studio_build")                          # build-output pane
@@ -336,28 +359,28 @@ def sc_studio(q):
 def sc_studio_ai(q):
     # The AI column needs a wide desktop, so bump the resolution first
     # (Control Panel -> Resolution dropdown -> a bigger mode), then open Studio.
-    close_all(q); launch(q, 0)
+    close_all(q); launch(q, A_CONTROL)
     key(q, "tab", "tab"); time.sleep(0.3)            # focus Resolution dropdown
     key(q, "down", gap=0.5); key(q, "down", gap=0.5) # up two modes; shell reflows
     time.sleep(1.4)
     close_all(q)
-    launch(q, 14, settle=2.8)                        # Studio, now wide -> AI column shows
+    launch(q, A_STUDIO, settle=2.8)                        # Studio, now wide -> AI column shows
     shot(q, "studio_ai")
     # back to the default resolution so later scenes match
-    close_all(q); launch(q, 0)
+    close_all(q); launch(q, A_CONTROL)
     key(q, "tab", "tab"); time.sleep(0.3)
     key(q, "up", gap=0.5); key(q, "up", gap=0.5)
     time.sleep(1.0); close_all(q)
 
 def sc_browser_disk(q):
-    close_all(q); launch(q, 13, settle=2.0)
+    close_all(q); launch(q, A_BROWSER, settle=2.0)
     shot(q, "browser_files")
 
 def _browser_open(q, row, tag, settle=1.6):
     # Fresh browser each time. Entering the list from the address bar lands on
     # row 1 (Sample.html); Up from row 0 jumps BACK to the address bar, so we
     # navigate RELATIVE to row 1 and never go above row 0.
-    close_all(q); launch(q, 13, settle=2.0)
+    close_all(q); launch(q, A_BROWSER, settle=2.0)
     key(q, "down"); time.sleep(0.3)                  # address bar -> list row 1
     delta = row - 1
     for _ in range(abs(delta)):
@@ -374,7 +397,7 @@ def sc_cp_network(q):
     # 2026-07-26). Needs a NIC (run with UNO_NIC=1). pc64 binds the NIC lazily -
     # on first network use - so bring the link up by loading a page in the
     # Browser first, then read the live status in the tab (Refresh to update it).
-    close_all(q); launch(q, 13, settle=2.0)          # Browser
+    close_all(q); launch(q, A_BROWSER, settle=2.0)          # Browser
     text(q, "http://example.com/"); time.sleep(0.3)
     key(q, "ret"); time.sleep(6.0)                   # DHCP+DNS+GET brings the link up
     cp_open_tab(q, 2)                                # Display -> ... -> Network
@@ -383,13 +406,13 @@ def sc_cp_network(q):
     shot(q, "cp_network")
 
 def sc_browser_http(q):
-    close_all(q); launch(q, 13, settle=2.0)
+    close_all(q); launch(q, A_BROWSER, settle=2.0)
     text(q, "http://example.com/"); time.sleep(0.3)
     key(q, "ret"); time.sleep(5.0)                   # DHCP+DNS+TCP+GET+render
     shot(q, "browser_http")
 
 def sc_browser_https(q):
-    close_all(q); launch(q, 13, settle=2.0)
+    close_all(q); launch(q, A_BROWSER, settle=2.0)
     text(q, "https://example.com/"); time.sleep(0.3)
     key(q, "ret"); time.sleep(10.0)                  # + TLS 1.2 handshake
     shot(q, "browser_https")
@@ -399,14 +422,14 @@ def sc_winsnap(q):
     """A window snapped to half the screen, with the desktop pager beside the
     Start button. Both are new: drag-to-edge snapping and four virtual
     desktops."""
-    close_all(q); launch(q, 1, settle=2.0)          # Editor
+    close_all(q); launch(q, A_EDITOR, settle=2.0)          # Editor
     combo(q, "alt", "left"); time.sleep(1.0)        # snap to the left half
     shot(q, "winsnap")
 
 def sc_desktops(q):
     """Desktop 2, reached with Ctrl+F2. The pager cell for the current desktop
     is filled, and a dot marks any desktop that has windows on it."""
-    close_all(q); launch(q, 1, settle=2.0)
+    close_all(q); launch(q, A_EDITOR, settle=2.0)
     combo(q, "ctrl", "f2"); time.sleep(1.2)
     shot(q, "desktops")
     combo(q, "ctrl", "f1"); time.sleep(0.6)
@@ -414,7 +437,7 @@ def sc_desktops(q):
 def sc_switcher(q):
     """The Alt-Tab switcher overlay. F2 drives the same overlay from a keyboard
     with no working Alt, which is why it exists."""
-    close_all(q); launch(q, 1, settle=2.0); launch(q, 2, settle=2.0)
+    close_all(q); launch(q, A_EDITOR, settle=2.0); launch(q, A_FILES, settle=2.0)
     key(q, "f2"); time.sleep(0.5)
     shot(q, "switcher")
     key(q, "esc"); time.sleep(0.4)
@@ -425,12 +448,47 @@ def _sc_ssh_at(q, idx, tag):
 
 # The SSH client sits last in the launcher, at 17. Probed rather than assumed:
 # the first guess was 19 and opened nothing at all.
-def sc_ssh(q): _sc_ssh_at(q, 17, "ssh")
+def sc_ssh(q): _sc_ssh_at(q, A_SSH, "ssh")
+
+
+# ---- UnoOffice ------------------------------------------------------------
+# The suite ships as three .UNO modules and each opens on an empty document, so
+# every scene types something first: a manual figure of a blank page teaches
+# nothing. Keyboard only - these apps are driven here exactly as someone without
+# a mouse would drive them.
+def sc_uoword(q):
+    close_all(q); launch(q, A_UOWORD, settle=3.0)
+    shot(q, "uoword")
+    text(q, "UnoDOS runs a word processor.")
+    time.sleep(0.4)
+    shot(q, "uoword_typed")
+
+def sc_uocalc(q):
+    close_all(q); launch(q, A_UOCALC, settle=3.0)
+    shot(q, "uocalc")
+    # a formula, so the figure shows a RESULT and the formula bar together -
+    # the one thing that tells a spreadsheet apart from a grid of text
+    text(q, "12"); key(q, "ret", gap=0.25)
+    text(q, "30"); key(q, "ret", gap=0.25)
+    text(q, "=A1+A2"); key(q, "ret", gap=0.6)
+    key(q, "up", gap=0.6)                    # back onto the formula cell, so the
+    time.sleep(0.8)                          # figure shows result AND formula bar
+    shot(q, "uocalc_formula")
+
+def sc_uoshow(q):
+    close_all(q); launch(q, A_UOSHOW, settle=3.0)
+    shot(q, "uoshow")
+
+def sc_unoamp(q):
+    close_all(q); launch(q, A_UNOAMP, settle=2.4)
+    shot(q, "unoamp")
 
 
 SCENES = {
     "winsnap": sc_winsnap, "desktops": sc_desktops, "switcher": sc_switcher,
     "ssh": sc_ssh,
+    "uoword": sc_uoword, "uocalc": sc_uocalc, "uoshow": sc_uoshow,
+    "unoamp": sc_unoamp,
     "desktop": sc_desktop, "startmenu": sc_startmenu, "controlpanel": sc_controlpanel,
     "personalization": sc_personalization,
     "themes": sc_themes, "fonts": sc_fonts, "resolution": sc_resolution,

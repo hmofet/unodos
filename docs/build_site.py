@@ -20,6 +20,7 @@ NAV = [
     ("windows.html",         "Windows &amp; desktops"),
     ("appearance.html",      "Themes &amp; appearance"),
     ("apps.html",            "Applications"),
+    ("office.html",          "UnoOffice"),
     ("browser.html",         "Web browser"),
     ("ssh.html",             "SSH client"),
     ("networking.html",      "Networking"),
@@ -749,7 +750,8 @@ PAGES["index.html"] = ("Overview", f"""
 <div class="cards">
   <div class="card"><h4>A real desktop</h4><p>Window manager, taskbar, desktop icons you can arrange, and windows you can move and resize, all by keyboard or pointer. The Start button, a right-click on the desktop, or <kbd>Ctrl</kbd>+<kbd>Esc</kbd> all open the programs menu.</p></div>
   <div class="card"><h4>10 live themes</h4><p>A modern <em>Aurora</em> look (light and dark) plus eight retro skins, switchable live from the Control Panel &mdash; with proportional TrueType text and a real UI-scale setting.</p></div>
-  <div class="card"><h4>Applications</h4><p>A WordPad-class rich-text <strong>Editor</strong>, a real <strong>Files</strong> manager with a two-pane mode, System, Clock, a Canvas demo, plus Paint, Music, a Tracker, three games and a 3D runner.</p></div>
+  <div class="card"><h4>An office suite</h4><p><a href="office.html">UnoOffice</a>: a word processor, a spreadsheet and a presentation designer that read and write the real <strong>.doc</strong>, <strong>.xls</strong> and <strong>.ppt</strong> formats.</p></div>
+  <div class="card"><h4>Applications</h4><p>A WordPad-class rich-text <strong>Editor</strong>, a real <strong>Files</strong> manager with a two-pane mode, System, Clock, a Canvas demo, plus Paint, Music, a Tracker, UnoAmp, three games and a 3D runner.</p></div>
   <div class="card"><h4>A web browser</h4><p>Shows HTML, Markdown and CSS, runs JavaScript, and loads pages over HTTP and HTTPS.</p></div>
   <div class="card"><h4>A built-in IDE</h4><p><a href="studio.html">Studio</a> lets you write, compile and run your own apps in <strong>UnoC or Python</strong> on the machine itself - a syntax-highlighting editor, a real compiler and an AI assistant, no PC needed.</p></div>
   <div class="card"><h4>Networking</h4><p>Connect over Ethernet, get an address automatically, and browse the web, including secure (HTTPS) sites.</p></div>
@@ -951,9 +953,19 @@ comes back after a restart.</p>
 <h2>Moving and sizing</h2>
 <p>Drag a window by its title bar and the window itself moves with the pointer -
 you see the real thing at the real position, not an outline. Double-click the title
-bar to maximize it, and double-click again to put it back. Every window that can be
-resized also has a <b>minimize</b> and a <b>maximize</b> button at the right-hand end
-of its title bar, and a grip in its bottom-right corner.</p>
+bar to maximize it, and double-click again to put it back. The window's buttons sit
+together at the right-hand end of the title bar - <b>minimize</b>, <b>maximize</b>
+and then <b>close</b> in the outermost position - and a resizable window also has a
+grip in its bottom-right corner.</p>
+{note("The retro themes put their close box where the system they imitate put it, which for the Mac-lineage themes is the LEFT of the title bar. The buttons follow the theme, so if you switch skins expect the close box to move.", "", "Where the close box is")}
+
+<h2>Windows move rather than jump</h2>
+<p>A window that snaps, un-snaps or maximizes travels to its new shape over about an
+eighth of a second instead of teleporting, so you can see where it went. Opening a
+window rises it into place, closing it leaves a briefly collapsing outline, the Start
+menu slides up out of the taskbar, and the window switcher's highlight slides between
+entries rather than jumping. None of it delays anything: the window is already
+wherever it is going as far as clicking and typing are concerned.</p>
 
 <h2>Snapping to an edge</h2>
 <p>Drag a window against the left or right edge of the screen and a translucent
@@ -1172,10 +1184,24 @@ target the other pane's folder.</p>
   {fig("tracker.png", "<b>Tracker</b>: a 4-channel pattern sequencer.")}
   {fig("music.png", "<b>Music</b>: plays WAV, MIDI and MP3 files from disk, plus the built-in tunes.")}
 </div>
+<p><strong>UnoAmp</strong> is a second music player in the Winamp 2 mould, for when you want more
+than Play and Stop: a playlist, a ten-band graphic equaliser and a visualiser, and it loads real
+<code>.wsz</code> skin files from disk to change its appearance.</p>
 <p>The games, Music and Tracker all make sound - through the machine's <strong>HD&nbsp;Audio</strong>
 or <strong>AC'97</strong> audio hardware on modern PCs (which have no PC speaker), with the classic
 PC-speaker beep as the fallback on machines that still have one. The Control Panel's Volume slider
 sets the level.</p>
+
+<h2 id="office">UnoOffice: word processor, spreadsheet, slides</h2>
+<p>Three more apps - <strong>UnoWord</strong>, <strong>UnoCalc</strong> and
+<strong>UnoShow</strong> - make up <a href="office.html">UnoOffice</a>, and they read and write the
+real <code>.doc</code>, <code>.xls</code> and <code>.ppt</code> formats. They have a page of their
+own: <a href="office.html">UnoOffice</a>.</p>
+<div class="grid cols-3">
+  {fig("uoword.png", "<b>UnoWord</b>, the word processor.")}
+  {fig("uocalc.png", "<b>UnoCalc</b>, the spreadsheet.")}
+  {fig("uoshow.png", "<b>UnoShow</b>, the presentation designer.")}
+</div>
 
 <h2 id="photos">Photos: an image viewer</h2>
 <p><strong>Photos</strong> opens image files from any disk and steps through the rest of the folder with
@@ -1210,6 +1236,56 @@ the <a href="studio.html">Studio</a> page.</p>
 open it. Installing UnoDOS onto a PC copies them along automatically. If an app's file is missing,
 its window simply says so - nothing crashes. (Studio itself is one of these files, so a build can
 include or omit it freely.)</p>
+""")
+
+PAGES["office.html"] = ("UnoOffice", f"""
+<h1>UnoOffice</h1>
+<p class="lede">A word processor, a spreadsheet and a presentation designer, built into UnoDOS.
+They read and write the real Office 97 file formats, so a document written here opens on a PC.</p>
+
+<p>UnoOffice is three apps - <strong>UnoWord</strong>, <strong>UnoCalc</strong> and
+<strong>UnoShow</strong> - sharing one look and one set of habits. If you have used a
+mid-1990s office suite you already know where everything is: a menu bar, docked toolbars you can
+drag off into floating palettes, a status bar along the bottom, and the same
+<kbd>Ctrl</kbd>+<kbd>N</kbd>/<kbd>O</kbd>/<kbd>S</kbd> shortcuts throughout.</p>
+
+<p>Open any of them from the Start menu or its desktop icon. Each is a
+<code>.UNO</code> file in the <code>APPS</code> folder, loaded the first time you open it.</p>
+
+<h2 id="unoword">UnoWord</h2>
+<p>A word processor with real page layout: it paginates, shows a ruler with indent markers, and
+tracks where you are (<i>Page 1 Sec 1, Ln 1 Col 30</i>) in the status bar. Text can be bold, italic
+or underlined, in a choice of faces and sizes, and paragraphs can be left, centred, right or
+justified.</p>
+<div class="grid cols-2">
+  {fig("uoword.png", "<b>UnoWord</b> on an empty document: menu bar, the Standard and Formatting toolbars, the ruler, the page itself and the status bar.")}
+  {fig("uoword_typed.png", "Typing straight onto the page. The status bar tracks the line and column as you go.")}
+</div>
+
+<h2 id="unocalc">UnoCalc</h2>
+<p>A spreadsheet with a real calculation engine, not a grid of text. Type numbers into cells, type a
+formula beginning with <code>=</code>, and the result appears in the cell while the formula stays
+attached to it. Three sheets come with a new workbook, and the status bar keeps a running
+<strong>Sum</strong> of the selection.</p>
+<div class="grid cols-2">
+  {fig("uocalc.png", "<b>UnoCalc</b>: the Name Box and formula bar above the grid, sheet tabs below it.")}
+  {fig("uocalc_formula.png", "A3 holds <code>=A1+A2</code> and shows <b>42</b>. Formulas are stored as formulas, so a saved workbook reopens with the formula intact, not just the number it produced.")}
+</div>
+{note('Use <kbd>Enter</kbd> to commit a cell and step down. Moving the selection with the arrow keys is not wired up yet, so build a column top to bottom rather than wandering around it.', kind="warn", title="Keyboard navigation")}
+
+<h2 id="unoshow">UnoShow</h2>
+<p>A presentation designer: slides with title and body placeholders, an outline to structure them,
+speaker notes, and a full-screen slide show driven from the keyboard.</p>
+{fig("uoshow.png", "<b>UnoShow</b> with a new presentation open.")}
+
+<h2 id="files">Real file formats</h2>
+<p>The suite reads and writes the Office 97 formats themselves - <code>.doc</code>,
+<code>.xls</code> and <code>.ppt</code> - through UnoDOS's own <em>unodoc</em> library. Nothing is
+converted to a private format on the way in or out, so a file written on the machine opens on a PC
+and a file from a PC opens here.</p>
+<p>Save and open through the suite's file dialog onto any writable volume, exactly as the Editor and
+Files do.</p>
+{note('Printing does not exist in UnoDOS yet, so every <strong>Print</strong> menu item is present but does nothing. Save the file and print it from another machine.', kind="warn", title="No printing")}
 """)
 
 PAGES["browser.html"] = ("Web browser", f"""
