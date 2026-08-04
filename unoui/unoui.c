@@ -1904,6 +1904,13 @@ void unoui_render_ui(unoui_ui *ui)
     const unoui_draw *d = t->draw ? t->draw : &unoui_default_draw;
     int wn;
 
+    /* Let a geometry animation settle this frame's rects BEFORE anything is
+     * drawn from them. Here rather than in the platform's frame loop because a
+     * window whose size is mid-flight also needs its fill widgets reflowed, and
+     * a port that forgot the call would get a window frame that moves with the
+     * content standing still. Nothing to do when no animator is installed. */
+    if (unoui_geom_tick) unoui_geom_tick(ui);
+
     /* fullscreen: the window's canvas owns the whole screen, no chrome. Clear
      * first - an app canvas (a game) may not paint every pixel, and without the
      * clear the desktop/windows from the prior frame would show through. */
@@ -2017,6 +2024,22 @@ void unoui_draw_snap_preview(unoui_ui *ui)
     fb_frame_rect(r.x, r.y, r.w, r.h, t->pal.accent);
 }
 
+unoui_geom_fn      unoui_geom_anim = 0;
+unoui_geom_tick_fn unoui_geom_tick = 0;
+int unoui_snap_ms = 130;      /* long enough to read, short enough to feel instant */
+
+/* Put `win` at `r`, animated if an animator is installed and takes the job.
+ * Every geometry change in unoui_snap_apply goes through here, so the six
+ * routes into a snap - drag-to-edge, the maximize box, double-click, the
+ * context menu, the keyboard, tile/cascade - all behave the same way without
+ * any of them knowing an animation exists. */
+static void geom_to(unoui_ui *ui, unoui_window *win, unoui_rect r)
+{
+    if (unoui_geom_anim && unoui_snap_ms > 0 &&
+        unoui_geom_anim(ui, win, r, unoui_snap_ms)) return;
+    win->r = r;
+}
+
 void unoui_snap_apply(unoui_ui *ui, unoui_window *win, int snap)
 {
     unoui_rect tr;
@@ -2025,7 +2048,8 @@ void unoui_snap_apply(unoui_ui *ui, unoui_window *win, int snap)
         /* only a window that IS snapped has a rect to give back; restore_r is
          * zero on one that never snapped, and putting that back would collapse
          * it to nothing. */
-        if (win->snap != UI_SNAP_NONE && win->restore_r.w > 0) win->r = win->restore_r;
+        if (win->snap != UI_SNAP_NONE && win->restore_r.w > 0)
+            geom_to(ui, win, win->restore_r);
         win->snap = UI_SNAP_NONE;
         unoui_reflow_window(ui->theme, win);
         return;
@@ -2036,13 +2060,13 @@ void unoui_snap_apply(unoui_ui *ui, unoui_window *win, int snap)
          * is only MOVED into the target and keeps snap NONE - it has no snap
          * state to leave, and nothing to restore. snap_target already centred
          * it, so the rect below IS the move. */
-        win->r = tr;
+        geom_to(ui, win, tr);
         return;
     }
     /* entering a snap from free-floating remembers the rect ONCE: re-snapping
      * between states must still restore the original, not the previous snap. */
     if (win->snap == UI_SNAP_NONE) win->restore_r = win->r;
-    win->r = tr;
+    geom_to(ui, win, tr);
     win->snap = (unsigned char)snap;
     unoui_reflow_window(ui->theme, win);
 }

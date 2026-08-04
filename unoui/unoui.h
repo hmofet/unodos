@@ -538,6 +538,10 @@ typedef struct unoui_ui {
     int        snap_preview;
     unsigned   last_press_ticks;
     int        last_press_x, last_press_y;
+    /* the animation context geometry tweens run in; NULL = no animation. Set
+     * through unoui_wmanim_install(), never by hand - the hooks below and this
+     * field are only meaningful together. */
+    struct unoui_anim *anim;
 } unoui_ui;
 
 /* ui->work, or the whole screen when it was never set (w or h <= 0) */
@@ -555,6 +559,26 @@ unoui_rect unoui_snap_rect(const unoui_ui *, int snap);
  * UI_WIN_RESIZE is only MOVED (centred in the target) and keeps snap NONE -
  * a fixed pixel layout must not be stretched. */
 void unoui_snap_apply(unoui_ui *, unoui_window *win, int snap);
+
+/* ---- animated geometry (optional) -----------------------------------------
+ * unoui_snap_apply normally assigns the target rect and the window is simply
+ * THERE on the next frame. Set these and it hands the target to an animator
+ * instead, which walks win->r over to it. Both NULL - the default, and what
+ * every port did before this existed - means every geometry change is instant,
+ * so a port that links no animator is unaffected and needs no build-list edit.
+ *
+ * unoui_wmanim.c is the shipped animator (it needs unoui_anim.c); a platform
+ * installs the pair with unoui_wmanim_install(). The SEAM is here rather than
+ * a direct call so unoui.c gains no link dependency on the animation module.
+ *
+ * `anim` in the drawing hook is the animator's business; the core only routes.
+ * A hook that returns 0 declines the job and the core snaps instantly, which
+ * is what a full animator pool does rather than dropping the change. */
+typedef int  (*unoui_geom_fn)(unoui_ui *, unoui_window *, unoui_rect target, int ms);
+typedef void (*unoui_geom_tick_fn)(unoui_ui *);
+extern unoui_geom_fn      unoui_geom_anim;   /* start moving win -> target     */
+extern unoui_geom_tick_fn unoui_geom_tick;   /* per-frame; called from render  */
+extern int unoui_snap_ms;                    /* snap duration, ms; 0 = instant */
 
 /* absolute screen rect of a widget (menubar spans the content top edge) */
 unoui_rect unoui_widget_rect(const struct unoui_theme *, const unoui_window *,

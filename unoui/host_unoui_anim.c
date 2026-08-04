@@ -16,6 +16,7 @@
  * ======================================================================== */
 #include "unoui_theme.h"
 #include "unoui_anim.h"
+#include "unoui_wmanim.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -562,6 +563,144 @@ static void render_build(const char *dir)
     }
 }
 
+/* ---- the WM snap animation ------------------------------------------------
+ * The first real consumer. These assert the CONTRACT the window manager needs:
+ * the model (snap state, restore_r) is final immediately because that is what
+ * a saved session is made of, while the geometry is what takes its time. */
+
+static void test_snap_anim(void)
+{
+    unoui_anim ac;
+    unoui_ui   ui;
+    unoui_window w;
+    unoui_rect  got, maxr;
+
+    unoui_anim_init(&ac);
+    unoui_ui_init(&ui, &theme_unodos, 640, 480);
+    ui.work.x = 0; ui.work.y = 0; ui.work.w = 640; ui.work.h = 460;
+    unoui_window_init(&w, "Doc", 120, 90, 240, 160);
+    w.flags |= UI_WIN_RESIZE;
+    unoui_ui_add(&ui, &w);
+
+    /* with no animator installed, a snap is instant - every port that links no
+     * animator has to keep behaving exactly as it did */
+    unoui_geom_anim = 0; unoui_geom_tick = 0; ui.anim = 0;
+    maxr = unoui_snap_rect(&ui, UI_SNAP_MAX);
+    unoui_snap_apply(&ui, &w, UI_SNAP_MAX);
+    check(w.r.w == maxr.w && w.r.h == maxr.h, "no animator: the snap is instant");
+    unoui_snap_apply(&ui, &w, UI_SNAP_NONE);
+    check(w.r.w == 240 && w.r.h == 160, "no animator: the unsnap is instant too");
+
+    /* installed */
+    unoui_wmanim_install(&ui, &ac);
+    unoui_anim_tick(&ac, 0);
+    unoui_snap_apply(&ui, &w, UI_SNAP_MAX);
+
+    check_eq(w.snap, UI_SNAP_MAX, "snap: the state is final on frame one");
+    check(w.restore_r.w == 240 && w.restore_r.h == 160,
+          "snap: restore_r is banked on frame one, not when the move ends");
+    check(w.r.w == 240, "snap: the geometry has NOT jumped");
+    check(unoui_geom_target(&ui, &w, &got) && got.w == maxr.w,
+          "snap: the settled rect is available while it is still moving");
+
+    unoui_anim_tick(&ac, unoui_snap_ms / 2);
+    check(w.r.w > 240 && w.r.w < maxr.w, "snap: half way is between the two");
+
+    unoui_anim_tick(&ac, unoui_snap_ms);
+    unoui_render_ui(&ui);                 /* the tick that retires the slot */
+    check(w.r.x == maxr.x && w.r.y == maxr.y &&
+          w.r.w == maxr.w && w.r.h == maxr.h, "snap: lands EXACTLY on the target");
+    check(!unoui_geom_target(&ui, &w, 0), "snap: the slot is retired when it lands");
+
+    /* unsnap animates back, and the state is again final immediately */
+    unoui_snap_apply(&ui, &w, UI_SNAP_NONE);
+    check_eq(w.snap, UI_SNAP_NONE, "unsnap: the state is final on frame one");
+    check(w.r.w == maxr.w, "unsnap: the geometry has not jumped back");
+    unoui_anim_tick(&ac, unoui_snap_ms * 2);
+    unoui_render_ui(&ui);
+    check(w.r.w == 240 && w.r.h == 160, "unsnap: arrives back at the saved rect");
+
+    /* RE-AIMING mid-flight must cancel, not stack: two sets of tweens writing
+     * the same four ints would each win on alternate frames, which reads as a
+     * window that shakes. */
+    unoui_snap_apply(&ui, &w, UI_SNAP_L);
+    unoui_anim_tick(&ac, unoui_snap_ms * 2 + unoui_snap_ms / 3);
+    unoui_snap_apply(&ui, &w, UI_SNAP_R);          /* change of mind */
+    check_eq(unoui_anim_active(&ac), 4, "re-aim: still exactly four tweens");
+    unoui_anim_tick(&ac, unoui_snap_ms * 4);
+    unoui_render_ui(&ui);
+    { unoui_rect rr = unoui_snap_rect(&ui, UI_SNAP_R);
+      check(w.r.x == rr.x && w.r.w == rr.w, "re-aim: lands on the LAST target"); }
+
+    /* settle: the move must be skippable for a desktop switch or a restore */
+    unoui_snap_apply(&ui, &w, UI_SNAP_MAX);
+    unoui_geom_settle(&ui, &w);
+    check(w.r.w == maxr.w && w.r.h == maxr.h, "settle: jumps to the target at once");
+    check(!unoui_geom_target(&ui, &w, 0), "settle: and drops the animation");
+
+    /* a non-resizable window is MOVED, never stretched - animated or not */
+    {
+        unoui_window f;
+        unoui_window_init(&f, "Fixed", 40, 40, 200, 120);   /* no UI_WIN_RESIZE */
+        unoui_ui_add(&ui, &f);
+        unoui_snap_apply(&ui, &f, UI_SNAP_MAX);
+        unoui_anim_tick(&ac, unoui_snap_ms * 8);
+        unoui_render_ui(&ui);
+        check(f.r.w == 200 && f.r.h == 120, "fixed window: animated but never stretched");
+        check_eq(f.snap, UI_SNAP_NONE, "fixed window: keeps no snap state");
+    }
+
+    unoui_geom_anim = 0; unoui_geom_tick = 0;
+}
+
+/* the storyboard: one snap, sampled across its 130 ms */
+static void render_snap(const char *dir)
+{
+    static unoui_anim AC2;
+    static unoui_window DOC, PAL;
+    static unoui_ui UI2;
+    const unsigned step[6] = { 0, 20, 45, 75, 110, 200 };
+    char path[256], cap[96];
+    int i;
+
+    unoui_anim_init(&AC2);
+    unoui_ui_init(&UI2, &theme_unodos, FB_W, FB_H);
+    UI2.work.x = 0; UI2.work.y = 0; UI2.work.w = FB_W; UI2.work.h = FB_H - 26;
+    unoui_window_init(&PAL, "Notes", 330, 250, 240, 150);
+    PAL.flags |= UI_WIN_RESIZE;
+    unoui_add_label(&PAL, 12, 12, "a second window, to show");
+    unoui_add_label(&PAL, 12, 26, "the snap against something");
+    unoui_window_init(&DOC, "Document", 150, 120, 260, 170);
+    DOC.flags |= UI_WIN_RESIZE;
+    unoui_add_label(&DOC, 12, 12, "Dragged to the left edge,");
+    unoui_add_label(&DOC, 12, 26, "released, and now on its");
+    unoui_add_label(&DOC, 12, 40, "way to the left half.");
+    unoui_add_button(&DOC, 12, 64, 70, "OK", UI_F_DEFAULT);
+    unoui_ui_add(&UI2, &PAL);
+    unoui_ui_add(&UI2, &DOC);
+    unoui_wmanim_install(&UI2, &AC2);
+    unoui_anim_tick(&AC2, 0);
+    unoui_snap_apply(&UI2, &DOC, UI_SNAP_L);
+
+    for (i = 0; i < 6; i++) {
+        unoui_anim_tick(&AC2, step[i]);
+        UI2.ticks = 0;
+        unoui_render_ui(&UI2);
+        fb_fill_rect(0, 0, FB_W, 13, FB_RGB(0x10, 0x10, 0x10));
+        fb_hline(0, 13, FB_W, FB_RGB(0x80, 0x80, 0x80));
+        sprintf(cap, "%d. t=%3u ms   x=%d w=%d   %s", i + 1, step[i],
+                DOC.r.x, DOC.r.w,
+                step[i] == 0 ? "released" :
+                step[i] >= (unsigned)unoui_snap_ms ? "landed on the left half"
+                                                   : "easing out-cubic");
+        fb_text(6, 3, cap, FB_RGB(0xFF, 0xFF, 0xFF), -1);
+        sprintf(path, "%s/sn_%02d.ppm", dir, i);
+        write_ppm(path);
+        printf("snap frame %d: t=%u ms  x=%d w=%d\n", i + 1, step[i], DOC.r.x, DOC.r.w);
+    }
+    unoui_geom_anim = 0; unoui_geom_tick = 0;
+}
+
 int main(int argc, char **argv)
 {
     const char *dir = (argc > 1) ? argv[1] : "build";
@@ -571,10 +710,12 @@ int main(int argc, char **argv)
     test_tweens();
     test_clock_seam();
     test_sequences();
+    test_snap_anim();
     printf("  %d checks, %d failed\n", g_checks, g_fail);
     if (g_fail) return 1;
 
     render_curves(dir);
     render_build(dir);
+    render_snap(dir);
     return 0;
 }
