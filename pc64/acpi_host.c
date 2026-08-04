@@ -499,3 +499,19 @@ int uno_acpi_poweroff(void)
     uacpi_enter_sleep_state(UACPI_SLEEP_STATE_S5);
     return -1;                                     /* still here = it failed */
 }
+
+/* ACPI reset - the FADT's RESET_REG/RESET_VALUE, which is the standard third
+ * way to restart a machine after the firmware's ResetSystem and the PCH's CF9
+ * have both been ignored. uACPI has always exposed it and nothing called it,
+ * so a box where those two fail (the Surface Laptop Go: EFI_RESET_SHUTDOWN is
+ * a no-op and CF9 does not take) had no reboot left and simply halted.
+ *
+ * Unlike S5 this is NOT terminal by construction - a board with no reset
+ * register, or one whose register does nothing, returns - so callers may fall
+ * through to something else afterwards. Returns only on failure. */
+int uno_acpi_reset(void)
+{
+    if (g_status <= 0) return -1;                 /* interpreter not up */
+    if (uacpi_reboot() != UACPI_STATUS_OK) return -1;
+    return -1;                                     /* still here = it failed */
+}
