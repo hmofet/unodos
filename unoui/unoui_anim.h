@@ -42,6 +42,13 @@ typedef enum {
     UI_EASE_OUT_BACK,      /* overshoots past `to`, then settles              */
     UI_EASE_OUT_BOUNCE,    /* lands, bounces, lands again                     */
     UI_EASE_STEP,          /* holds `from`, snaps to `to` at the end          */
+    /* Not a ramp at all: a decaying oscillation about ZERO, ending at zero.
+     * `to` is therefore an AMPLITUDE rather than a destination - tween 0 -> 12
+     * and the value swings +12, -9, +6, -3 and settles back at 0. It is the
+     * "no" gesture (a rejected password, a refused drop), and it belongs in the
+     * curve table rather than in each caller because everything else already
+     * composes with a curve: the lerp, the out pointer, the sequence steps. */
+    UI_EASE_SHAKE,
     UI_EASE_N
 } ui_ease;
 
