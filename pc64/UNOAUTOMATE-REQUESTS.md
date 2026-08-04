@@ -5246,8 +5246,9 @@ security hole - but it means capability additions silently do not reach
 existing machines. Suggest a stored schema/cap-generation counter that
 re-seeds built-in roles when it moves.
 
-**3. The boot network test tears down an early URC link (unoautomate, ours -
-noted for the record).** With the 2026-08-04 change that brings the network and
+**3. The boot network test tears down an early URC link (unoautomate, ours).
+FIXED 2026-08-04 in `223feab5`** - skipped when the link is already up;
+`net-force-test` runs it anyway. With the 2026-08-04 change that brings the network and
 channel up BEFORE the login gate on a machine with accounts, the boot-time net
 test later re-runs the full bring-up and drops the established TCP connection;
 URC re-dials within a few seconds and recovers on its own. Benign, and a
