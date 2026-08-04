@@ -38,6 +38,31 @@ authentication"). What stays debug-only is the test HARNESS *around* it: the
 crash/watchdog core, the fuzz driver, the conformance suites and the live
 network test - the table above.
 
+### `layout-audit` - sweep every window for content that will be cut off
+
+`DEBUG.CFG` key **`layout-audit=1`**. At boot the shell builds every native
+window - including all six Control Panel tabs, which are six layouts sharing one
+window - at **100 / 125 / 150 / 200% UI scale**, runs `unoui_window_audit` over
+each, and logs what does not fit. The security sheets in `pc64_accounts.c` audit
+themselves as they open, since they are built inside blocking modal loops and
+the boot sweep cannot reach them.
+
+Nothing is opened, drawn or left behind: a builder lays widgets out, which is
+all the audit reads, and the windows are rebuilt for real afterwards. Read it
+off QEMU debugcon:
+
+```
+UNO_DEBUG=1 UNO_DBGCON=1 ./build.sh
+printf 'layout-audit=1\r\nnonet\r\n' > build/esp/DEBUG.CFG
+qemu-system-x86_64 ... -debugcon file:build/audit.log -global isa-debugcon.iobase=0x402
+grep layout build/audit.log
+```
+
+Widgets are clipped to their window's content rect, so a layout that does not
+fit is not a mess on the desktop - it is silently **cut off at the frame**, and
+the machine looks fine while a button reads "Allow se...". That is why this is a
+check and not a screenshot review.
+
 In a debug build the gate is transparent, so nothing in this document changes:
 `DEBUG.CFG` still arms the channel, there is no token, and every verb is
 allowed. The one addition is the key **`urc-auth=<token>`**, which runs the

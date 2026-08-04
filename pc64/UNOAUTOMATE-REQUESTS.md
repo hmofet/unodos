@@ -6081,3 +6081,81 @@ credentials are on a filesystem and the check needs nothing from the card.
   that had also changed (`.207` -> `.42`; the old lease moved to another host).
   A `UNODISC` broadcast got no OFFER from any pc64 box, so nothing was bound.
   Related to the wedge filed earlier today but not the same failure.
+## 2026-08-04 - CLAIM (unoui / shell Control Panel / iwlwifi / unoautomate gate): five UI polish items
+
+Taking, for this session, one slice per item.  Listed here rather than in four
+places because they are one user report and they overlap in the Control Panel:
+
+1. **unoui lane** - the text caret lands on the wrong character.  Reported while
+   typing a WiFi password; it is toolkit-wide, not WiFi-specific.
+2. **iwlwifi lane** - remembered networks.  A join from the GUI is forgotten at
+   power-off; only a hand-written `WIFI.CFG` survives a reboot.
+3. **shell lane (Control Panel, Display tab)** - arrowing the Resolution
+   dropdown switches mode on every keypress.  Wants Apply + a revert timeout.
+4. **unoautomate lane (unoauto_gate)** - the URC arming credential is 16 hex
+   chars.  Wants a 6-digit PIN, because it is typed by a human off a screen.
+   NOT taking any other part of unoautomate; the gate's brute-force lockout is
+   what makes a 6-digit credential defensible and it is unchanged.
+5. **cross-lane** - a sweep of every window for overflow / clipped layout.
+   Fixes in a subsystem's own file; anything structural gets filed here instead.
+
+## 2026-08-04 - LANDED (unoui / shell / iwlwifi / unoauto gate): the five polish items, and a layout audit
+
+All five landed on `ui-polish`; the claim above is discharged.  The parts other
+lanes need to know about:
+
+**1. The caret was in the wrong place in EVERY text field, not just the WiFi
+one.** `ui_text_index_at` summed per-character widths - `ui_seg_w(buf, i, i+1)`
+- while the caret painter and `ui_text_reveal` measure a whole PREFIX in one
+call.  `fb_text_w` rounds its 26.6 pen to whole pixels once per call, so a
+per-character sum banks up to half a pixel EVERY character and throws away the
+kerning between each pair.  A dozen characters in, a click landed a glyph or two
+from the pointer.  It is invisible under the 8 px bitmap font, which is why no
+host gate had ever caught it; `unoui/tools/edit_test.sh` registers a synthetic
+proportional provider and pins the three measurements to each other.
+
+**2. `UI_F_DISABLED` never disabled anything.** Every painter dimmed the text;
+the input layer hit, focused and fired the control regardless.  Nothing in the
+OS had set the flag before this session, so no existing screen changes - but if
+you were avoiding it because it looked decorative, it works now.
+
+**3. A layout AUDIT, and what it found.** `unoui_window_audit` walks a window as
+built and reports what will be cut off at the frame; `layout-audit=1` in
+DEBUG.CFG sweeps every shell window at 100/125/150/200% UI scale (see DEBUG.md).
+79 findings on the first run, 22 now, **none at 100%**, which is what ships.
+The one that matters to everyone: `clamp_to_workarea` only ever MOVED a window,
+so a window built bigger than the desktop was shoved to 0,0 with its far edge
+off the screen and nothing left to drag it back by.  It resizes now, and
+`open_app` re-fits anything marked `UI_WF_FILL` afterwards.
+
+**Still open, and deliberately left:** at a 150-200% UI scale on a 640x400
+desktop the Editor and Files TOOLBARS are wider than their windows, and the
+Install window is taller than the work area.  All three are the same shape - a
+flow layout with no WRAP - and the fix is a wrapping toolbar in each app rather
+than more measuring.  The audit names them precisely, so whoever takes it has a
+list and a gate rather than a screenshot.  Nothing in that class is reachable at
+100%, and a bigger desktop moves the threshold up.
+
+**4. The URC credential is now a 6-DIGIT PIN** (`UNOAUTO_TOKEN_CHARS` 16 -> 6),
+drawn by rejection sampling so the digits are uniform.  **Do not relax
+`BADAUTH_MAX`.**  Six digits is defensible only because the third bad attempt
+disarms the channel, the count survives a reconnect, and re-arming needs a user
+at the console - the security is in the lockout, not the length.
+`tools/urcauth_qemu.py` is green on the new length (its `TOKEN` constant moved
+to 6 digits; the auth compare is fixed-width, so any other length can never
+match).
+
+**5. WiFi networks are remembered** (`WIFINETS.CFG`, most recent first, up to 8;
+NETWORK.md has the format and the precedence rule).  Only a join that SUCCEEDED
+is written.  Entry 0 is what the next boot rejoins; a hand-staged `WIFI.CFG` is
+kept as the fallback and tried when the remembered network will not join, so
+editing the file on the stick stays a working recovery path.  The passphrases
+are plaintext and the docs say so - WPA2 needs the passphrase back to derive the
+PMK, and an encrypted file whose key sits on the same disk claims a protection
+it does not have.
+
+**Noticed in passing, fixed, worth knowing:** `open_app` had three
+`return <value>;` statements in a `void` function - opening UnoWord, UnoCalc or
+UnoShow returned out of it early, so the MRU never learned the window was front
+and `g_dirty` was never set; the app appeared only on the next unrelated
+repaint.  Compiler had been warning about it.
