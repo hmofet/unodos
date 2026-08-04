@@ -346,9 +346,22 @@ static int  g_is_dvm;        /* a recognised but iwldvm-only card (unsupported) 
 static int  g_gen2;          /* 22000+ : TFH TFDs, context-info fw load */
 static int  g_mq_rx;         /* 9000+  : RFH multi-queue rx */
 static u32  g_hw_rev, g_hw_rf_id;
-static char g_fwfile[20];    /* 8.3 name under FIRMWARE\ on the ESP */
-static char g_fwalt[20];     /* second choice when the first is not staged */
+static char g_fwfile[20];    /* 8.3 name under FIRMWARE\ on the ESP - the one loaded now */
+/* Every ucode this card could plausibly want, best guess first.  See the note
+ * on choose_firmware(): the decode picks the ORDER, ALIVE picks the answer. */
+#define FW_CAND_MAX 4
+static char g_fwcand[FW_CAND_MAX][20];
+static int  g_fwcand_n;
 static char g_pnvmfile[20];
+
+/* append a candidate, ignoring duplicates and overflow */
+static void fwc_add(const char *name)
+{
+    int i;
+    for (i = 0; i < g_fwcand_n; i++) if (!strcmp(g_fwcand[i], name)) return;
+    if (g_fwcand_n >= FW_CAND_MAX) return;
+    strcpy(g_fwcand[g_fwcand_n++], name);
+}
 static u8   g_mac[6];
 static u8   g_joined;
 static char g_ssid_str[36];
@@ -432,7 +445,24 @@ static int identify_by_pci(u16 dev)
 #define MAC_TYPE_QUZ  0x35
 #define MAC_TYPE_QNJ  0x36
 
-/* decode CSR_HW_REV / CSR_HW_RF_ID and choose the firmware file name */
+/* Decode CSR_HW_REV / CSR_HW_RF_ID and build the ORDERED LIST of ucode files
+ * this card might want, best guess first.
+ *
+ * WHY A LIST AND NOT A CHOICE.  Which Qu-family stepping a machine has is in
+ * CSR_HW_REV, and our decode of it is a hypothesis - it has never been checked
+ * against silicon that disagrees.  The old code committed to one file and
+ * treated a wrong guess as terminal: `g_fwalt` was consulted only when the
+ * preferred file was NOT STAGED, never when it loaded and the ROM refused it.
+ * So a laptop whose revision we decode wrongly had a dead radio, and the only
+ * way through was a human editing `fw=` into a file on the stick.
+ *
+ * Every blob ships on every stick already (build.sh bundles all of fw-blobs/),
+ * so there is no reason for the driver to need a human to tell it which one it
+ * is holding.  ALIVE is a clean 2-second pass/fail oracle - the firmware either
+ * posts the notification or it does not - which makes "try the next one" both
+ * cheap and unambiguous.  The decode therefore picks the ORDER (right first,
+ * usually first try) and the hardware picks the answer.  One image, every
+ * laptop, no per-machine configuration. */
 static void choose_firmware(void)
 {
     u32 mac_type = (g_hw_rev >> 4) & 0xFFF;
@@ -442,57 +472,55 @@ static void choose_firmware(void)
     if (g_family >= FAM_AX210) g_prph_mask = 0x00FFFFFF;
 
     g_pnvmfile[0] = 0;
-    g_fwalt[0] = 0;
+    g_fwcand_n = 0;
     switch (g_family) {
-    case FAM_7000:  strcpy(g_fwfile, "FIRMWARE\\IWL7260.UCO"); break;
-    case FAM_8000:  strcpy(g_fwfile, "FIRMWARE\\IWL8000.UCO"); break;
+    case FAM_7000:  fwc_add("FIRMWARE\\IWL7260.UCO"); break;
+    case FAM_8000:  fwc_add("FIRMWARE\\IWL8000.UCO"); break;
     case FAM_9000:
         /* 9260 (device 0x2526/0x271b/0x271c) uses the th-b0-jf-b0 image;
-           9461/9462/9560 use the pu-b0-jf-b0 image - different upstream files. */
+           9461/9462/9560 use the pu-b0-jf-b0 image - different upstream files.
+           The device id settles this one, so the other is only a fallback. */
         if (g_pci.device==0x2526 || g_pci.device==0x271b || g_pci.device==0x271c)
-             strcpy(g_fwfile, "FIRMWARE\\IWL9260.UCO");
-        else strcpy(g_fwfile, "FIRMWARE\\IWL9000.UCO");
+             { fwc_add("FIRMWARE\\IWL9260.UCO"); fwc_add("FIRMWARE\\IWL9000.UCO"); }
+        else { fwc_add("FIRMWARE\\IWL9000.UCO"); fwc_add("FIRMWARE\\IWL9260.UCO"); }
         break;
     case FAM_22000:
-        /* AX200 (discrete, 0x2723) is the cc-a0 image.  Every other 22000 part
-           here is a Qu-family AX201 CNVi, and the STEPPING picks the file:
-           QuZ-a0, Qu-b0 and Qu-c0 are three separate ucodes.  The alternate is
-           tried when the preferred one was never staged onto the stick, so a
-           machine with only one blob still gets the radio it can get rather
-           than a "firmware not found". */
-        if (g_pci.device == 0x2723) { strcpy(g_fwfile, "FIRMWARE\\IWLAX200.UCO"); break; }
-        if (mac_type == MAC_TYPE_QUZ) {
-            strcpy(g_fwfile, "FIRMWARE\\IWLAX201.UCO");    /* QuZ-a0-hr-b0 */
-            strcpy(g_fwalt,  "FIRMWARE\\IWLAX20B.UCO");
-        } else if (mac_type == MAC_TYPE_QU && step >= 2) {
-            strcpy(g_fwfile, "FIRMWARE\\IWLAX20C.UCO");    /* Qu-c0-hr-b0  */
-            strcpy(g_fwalt,  "FIRMWARE\\IWLAX20B.UCO");
-        } else {
-            strcpy(g_fwfile, "FIRMWARE\\IWLAX20B.UCO");    /* Qu-b0-hr-b0  */
-            strcpy(g_fwalt,  "FIRMWARE\\IWLAX201.UCO");
-        }
+        /* AX200 (discrete, 0x2723) is the cc-a0 image and is not a Qu part. */
+        if (g_pci.device == 0x2723) { fwc_add("FIRMWARE\\IWLAX200.UCO"); break; }
+        /* Every other 22000 part here is a Qu-family AX201 CNVi: QuZ-a0, Qu-b0
+           and Qu-c0 are three separate ucodes and the PCI id does not say which
+           (0x02f0 and 0x34f0 both appear as either).  Lead with the decode,
+           then offer the other two - fwc_add dedups, so this is 3 entries. */
+        if (mac_type == MAC_TYPE_QUZ)                  fwc_add("FIRMWARE\\IWLAX201.UCO");
+        else if (mac_type == MAC_TYPE_QU && step >= 2) fwc_add("FIRMWARE\\IWLAX20C.UCO");
+        else                                           fwc_add("FIRMWARE\\IWLAX20B.UCO");
+        fwc_add("FIRMWARE\\IWLAX20B.UCO");             /* Qu-b0-hr-b0  */
+        fwc_add("FIRMWARE\\IWLAX20C.UCO");             /* Qu-c0-hr-b0  */
+        fwc_add("FIRMWARE\\IWLAX201.UCO");             /* QuZ-a0-hr-b0 */
         break;
     case FAM_AX210:
         /* Ty (0x2725) uses ty-a0-gf-a0; So/Ma parts (AX211/AX411) use
-           so-a0-gf-a0 - separate files. Both need a matching PNVM. */
-        if (g_pci.device == 0x2725) { strcpy(g_fwfile,"FIRMWARE\\IWLAX210.UCO");
+           so-a0-gf-a0 - separate files. Both need a matching PNVM, which is
+           chosen with the image, so these two are not interchangeable. */
+        if (g_pci.device == 0x2725) { fwc_add("FIRMWARE\\IWLAX210.UCO");
                                       strcpy(g_pnvmfile,"FIRMWARE\\IWLAX210.PNV"); }
-        else                        { strcpy(g_fwfile,"FIRMWARE\\IWLAX211.UCO");
+        else                        { fwc_add("FIRMWARE\\IWLAX211.UCO");
                                       strcpy(g_pnvmfile,"FIRMWARE\\IWLAX211.PNV"); }
         break;
     case FAM_BZ:
         /* WiFi 7 Bz/Gl. Best-effort: routed through the gen3 loader, but Bz adds
            a TOP-reset + ROM-start handshake this driver does not yet perform, so
            this is metal-pending even by the family's standard. */
-        if (g_pci.device == 0x272b) { strcpy(g_fwfile,"FIRMWARE\\IWLBE200.UCO");   /* Gl discrete */
+        if (g_pci.device == 0x272b) { fwc_add("FIRMWARE\\IWLBE200.UCO");   /* Gl discrete */
                                       strcpy(g_pnvmfile,"FIRMWARE\\IWLBE200.PNV"); }
-        else                        { strcpy(g_fwfile,"FIRMWARE\\IWLBE201.UCO");   /* Bz */
+        else                        { fwc_add("FIRMWARE\\IWLBE201.UCO");   /* Bz */
                                       strcpy(g_pnvmfile,"FIRMWARE\\IWLBE201.PNV"); }
         break;
     case FAM_SC:
-        strcpy(g_fwfile,   "FIRMWARE\\IWLBE211.UCO");
+        fwc_add("FIRMWARE\\IWLBE211.UCO");
         strcpy(g_pnvmfile, "FIRMWARE\\IWLBE211.PNV"); break;
     }
+    if (g_fwcand_n) strcpy(g_fwfile, g_fwcand[0]);
 }
 
 /* the ESP volume that holds FIRMWARE\ and the credentials file. WIFI.CFG is
@@ -3837,6 +3865,89 @@ int iwl_present(void)
 
 static int iommu_disable(char *out, int cap);   /* defined after iwl_nic (F12 fix) */
 
+/* Bring the card from "BAR0 mapped, image parsed" to "firmware ALIVE".
+ *
+ * Split out of iwl_nic() so a candidate ucode that never posts ALIVE can be
+ * swapped for the next one and the whole sequence re-run - see the loop in
+ * iwl_nic().  The return value distinguishes the two failure kinds, because
+ * only one of them is worth retrying with a different image:
+ *
+ *    0  ALIVE
+ *   -1  no ALIVE - the image is a candidate for being the wrong one
+ *   -2  fatal and image-independent (RF-kill, ownership, APM, loader) - a
+ *       different stepping cannot help, so the caller must stop rather than
+ *       burn ~4 s per blob re-proving the same hardware problem. */
+#define BRINGUP_ALIVE  0
+#define BRINGUP_NOFW  -1
+#define BRINGUP_FATAL -2
+static int bringup_to_alive(void)
+{
+    if (prepare_card_hw() < 0) {
+        st_set("WiFi: card not ready (ME owns it?)");
+        uno_dbg_net_trace("wifi: FAIL prepare_card_hw timeout - CSR handshake refused (ME/CNVi ownership?)");
+        return BRINGUP_FATAL;
+    }
+    device_stop();                   /* Linux loads always stop the device first */
+    clear_persistence_bit();         /* BEFORE the reset (Linux start_hw order) */
+    sw_reset();                      /* now retakes ownership afterwards */
+    if (g_family == FAM_22000 && g_devid != 0x2723) {   /* integrated CNVi (all AX201s) */
+        if (force_power_gating() < 0)
+            uno_dbg_net_trace("wifi: force-power-gating clock-ready timeout (continuing)");
+        else
+            uno_dbg_net_trace("wifi: CNVi force-power-gating done (HPM_HIPM readback=%08x)",
+                              prph_r(HPM_HIPM_GEN_CFG));
+    }
+    w32(CSR_INT, 0xFFFFFFFFu);
+    if (rf_killed()) {
+        st_set("WiFi: hardware RF-kill is on");
+        uno_dbg_net_trace("wifi: FAIL hardware RF-kill asserted (airplane-mode key/switch)");
+        return BRINGUP_FATAL;
+    }
+    w32(CSR_UCODE_DRV_GP1_CLR, 0x00000002);   /* clear SW rfkill handshake */
+    w32(CSR_UCODE_DRV_GP1_CLR, 0x00000004);   /* clear cmd-blocked */
+
+    if (apm_init() < 0) {
+        st_set("WiFi: APM init timeout");
+        uno_dbg_net_trace("wifi: FAIL APM init timeout (clock-ready never came up)");
+        return BRINGUP_FATAL;
+    }
+    uno_dbg_net_trace("wifi: card hw ready (APM up, no rfkill)");
+    if (g_gen2) { msix_enable_pci(); conf_msix();
+                  if (g_msix_arm) msix_table_setup(); }  /* PCI MSI-X + BAR0 MSI-X - REQUIRED for the ROM to start */
+    else if (g_mq_rx) prph_w(uprph(UREG_CHICK), UREG_CHICK_MSI);
+    nic_config_radio();              /* Linux order: apm -> nic_config -> rx init */
+    rx_hw_init();
+    if (g_gen2) w32(CSR_MAC_SHADOW_REG_CTRL, 0x802FFFFFu);   /* working trace value */
+
+    /* Force the fw/context-info DMA arena below 4GB before we build it: the boot
+     * ROM DMAs from these physaddrs, and a >4GB arena is why FH_INT stayed 0. */
+    arena_init_lowmem();
+    uno_dbg_net_trace("wifi: DMA arena base=%08x%08x (%s 4GB)",
+                      (u32)(g_arena_phys >> 32), (u32)g_arena_phys,
+                      g_arena_phys < 0x100000000ull ? "below" : "ABOVE - alloc failed!");
+    if (!g_gen2) msi_probe_enable();   /* gen2 uses PCI MSI-X (enabled above); MSI probe would conflict */
+
+    /* THE F12 FIX (with MSI-X): the firmware leaves VT-d DMA remapping ON
+     * (confirmed: DRHD@fed91000 TES=ON), which blocks the boot ROM's fw-load
+     * DMA to our arena. Disable it so the device can DMA. */
+    { char rep[128]; int nd = iommu_disable(rep, (int)sizeof rep);
+      uno_dbg_net_trace("wifi: IOMMU disable: %d unit(s) %s", nd, rep); }
+
+    /* load firmware + wait ALIVE */
+    if (g_family >= FAM_AX210)      { if (load_fw_gen3() < 0) { st_set("WiFi: gen3 fw load failed"); uno_dbg_net_trace("wifi: FAIL gen3 (ctxt-info) fw load"); return BRINGUP_FATAL; } }
+    else if (g_gen2)                { if (load_fw_gen2() < 0) { st_set("WiFi: gen2 fw load failed"); uno_dbg_net_trace("wifi: FAIL gen2 (ctxt-info) fw load"); return BRINGUP_FATAL; } }
+    else                            { if (load_fw_gen1(g_fw.rt, g_fw.rt_n) < 0) { st_set("WiFi: gen1 fw load failed"); uno_dbg_net_trace("wifi: FAIL gen1 (section DMA) fw load"); return BRINGUP_FATAL; } }
+    g_fw_loaded = 1;   /* the ROM is now self-loading/running - a re-init MUST quiesce it first (see the rerun verb) */
+
+    if (wait_alive(2000) < 0) {
+        st_set("WiFi: firmware did not ALIVE");
+        uno_dbg_net_trace("wifi: FAIL no ALIVE notification within 2 s of fw start");
+        return BRINGUP_NOFW;
+    }
+    uno_dbg_net_trace("wifi: firmware ALIVE");
+    return BRINGUP_ALIVE;
+}
+
 uno_nic_t *iwl_nic(void)
 {
     int vol, cred_vol;
@@ -3880,19 +3991,32 @@ uno_nic_t *iwl_nic(void)
     if (g_fwforce[0]) {
         strcpy(g_fwfile, "FIRMWARE\\");
         strcat(g_fwfile, g_fwforce);
-        g_fwalt[0] = 0;                     /* forced means forced */
-        uno_dbg_net_trace("wifi: firmware FORCED to %s by an fw= line", g_fwfile);
+        g_fwcand_n = 0; fwc_add(g_fwfile);  /* forced means forced: no fallback */
+        uno_dbg_net_trace("wifi: firmware FORCED to %s by an fw= line "
+                          "(the automatic stepping retry is disabled)", g_fwfile);
     }
 
     /* The silicon identity, in the log, on every boot.  Without it a firmware
      * that never posts ALIVE is undiagnosable from a crash dump: the stepping
      * is the first thing anyone asks for and it was the one thing not
-     * recorded.  hw_rev's bits 11:4 are the MAC type and 3:2 the step. */
-    uno_dbg_net_trace("wifi: card pci=%04x fam=%d gen2=%d hw_rev=%08x "
-                      "mac_type=%02x step=%d rf_id=%08x fw=%s alt=%s",
-                      g_devid, g_family, g_gen2, g_hw_rev,
-                      (g_hw_rev >> 4) & 0xFFF, (g_hw_rev >> 2) & 3, g_hw_rf_id,
-                      g_fwfile, g_fwalt[0] ? g_fwalt : "-");
+     * recorded.  hw_rev's bits 11:4 are the MAC type and 3:2 the step.  The
+     * candidate list is logged with it, in the order they will be tried, so a
+     * NETLOG says both what we decoded and what we were prepared to fall back
+     * to. */
+    {
+        char fwl[FW_CAND_MAX * 16 + 4]; int i;
+        fwl[0] = 0;
+        for (i = 0; i < g_fwcand_n; i++) {
+            if (i) strcat(fwl, ",");
+            strcat(fwl, g_fwcand[i] + 9);      /* strip the FIRMWARE\ prefix */
+        }
+        if (!fwl[0]) strcpy(fwl, "-");
+        uno_dbg_net_trace("wifi: card pci=%04x fam=%d gen2=%d hw_rev=%08x "
+                          "mac_type=%02x step=%d rf_id=%08x fw=%s",
+                          g_devid, g_family, g_gen2, g_hw_rev,
+                          (g_hw_rev >> 4) & 0xFFF, (g_hw_rev >> 2) & 3, g_hw_rf_id,
+                          fwl);
+    }
 
     /* Credentials: needed to JOIN, NOT to bring the radio up and scan. The GUI
      * scans first and asks for the password afterwards, which is the whole
@@ -3917,116 +4041,76 @@ uno_nic_t *iwl_nic(void)
         }
     }
 
-    /* read the .ucode image. Candidates in order: the volume that actually
-       holds the file, then the config volume (what this used to assume), so a
-       filesystem whose size query and read query disagree cannot cost us the
-       radio. Each is tried with the full FIRMWARE\ path and with the flat root
-       name, since the FAT reader may expose either. */
+    /* Try each candidate ucode until one posts ALIVE.
+     *
+     * Reading the image: the volume that actually holds the file, then the
+     * config volume (what this used to assume), so a filesystem whose size
+     * query and read query disagree cannot cost us the radio.  Each is tried
+     * with the full FIRMWARE\ path and with the flat root name, since the FAT
+     * reader may expose either.
+     *
+     * A candidate that is not staged is skipped silently-ish; one that loads
+     * and never ALIVEs costs ~4 s and we move on, after device_stop() - the
+     * ROM may be live and DMAing, and running prepare_card_hw() against a live
+     * busy device is what wedged the Yoga once (see the `rerun` verb, which
+     * quiesces for the same reason). */
     {
-        int cand[2], nc = 0, ci;
-        int fv = fw_volume();
-        if (fv >= 0)                       cand[nc++] = fv;
-        if (cred_vol >= 0 && cred_vol != fv) cand[nc++] = cred_vol;
-        vol = -1; fn = 0;
-        for (ci = 0; ci < nc && fn <= 0; ci++) {
-            vol = cand[ci];
-            fn = uno_fs_read(vol, g_fwfile, g_fwbuf, FW_FILE_MAX);
-            if (fn <= 0) fn = uno_fs_read(vol, g_fwfile + 9, g_fwbuf, FW_FILE_MAX);
-        }
-        if (fn <= 0 && g_fwalt[0]) {          /* the stepping we would rather
-                                               * not use, but which is here */
+        int fi, r = BRINGUP_NOFW, tried = 0;
+        for (fi = 0; fi < g_fwcand_n; fi++) {
+            int cand[2], nc = 0, ci, fv;
+            strcpy(g_fwfile, g_fwcand[fi]);
+            fv = fw_volume();                  /* per candidate: different file */
+            if (fv >= 0)                         cand[nc++] = fv;
+            if (cred_vol >= 0 && cred_vol != fv) cand[nc++] = cred_vol;
+            vol = -1; fn = 0;
             for (ci = 0; ci < nc && fn <= 0; ci++) {
                 vol = cand[ci];
-                fn = uno_fs_read(vol, g_fwalt, g_fwbuf, FW_FILE_MAX);
-                if (fn <= 0) fn = uno_fs_read(vol, g_fwalt + 9, g_fwbuf, FW_FILE_MAX);
+                fn = uno_fs_read(vol, g_fwfile, g_fwbuf, FW_FILE_MAX);
+                if (fn <= 0) fn = uno_fs_read(vol, g_fwfile + 9, g_fwbuf, FW_FILE_MAX);
             }
-            if (fn > 0) {
-                uno_dbg_net_trace("wifi: %s not staged, falling back to %s - "
-                                  "if this never ALIVEs, that is why",
-                                  g_fwfile, g_fwalt);
-                strcpy(g_fwfile, g_fwalt);
+            if (fn <= 0) {
+                uno_dbg_net_trace("wifi: candidate %d/%d %s not staged - skipping",
+                                  fi + 1, g_fwcand_n, g_fwfile);
+                continue;
             }
+            if (parse_ucode(g_fwbuf, (u32)fn) < 0) {
+                uno_dbg_net_trace("wifi: candidate %d/%d %s (%ld bytes) failed TLV parse - skipping",
+                                  fi + 1, g_fwcand_n, g_fwfile, fn);
+                continue;
+            }
+            uno_dbg_net_trace("wifi: candidate %d/%d %s loaded from disk (%ld bytes)",
+                              fi + 1, g_fwcand_n, g_fwfile, fn);
+            load_pnvm(vol);
+            tried++;
+
+            if (g_bar && g_fw_loaded) {        /* a previous candidate left the ROM running */
+                uno_dbg_net_trace("wifi: halting the previous image (device_stop) before retrying");
+                device_stop();
+            }
+            r = bringup_to_alive();
+            if (r == BRINGUP_ALIVE) break;
+            if (r == BRINGUP_FATAL) {
+                uno_dbg_net_trace("wifi: bring-up failed for a reason a different "
+                                  "stepping cannot fix - not trying the rest");
+                return 0;
+            }
+            if (fi + 1 < g_fwcand_n)
+                uno_dbg_net_trace("wifi: %s never ALIVEd - trying the next stepping",
+                                  g_fwfile);
         }
-        if (fn <= 0) {
-            st_set("WiFi: firmware not found ("); st_cat(g_fwfile); st_cat(")");
-            uno_dbg_net_trace("wifi: FAIL firmware %s on no volume (%d candidates) - "
-                              "uno-wifi-fw.py stages it", g_fwfile, nc);
+        if (r != BRINGUP_ALIVE) {
+            if (!tried) {
+                st_set("WiFi: firmware not found ("); st_cat(g_fwfile); st_cat(")");
+                uno_dbg_net_trace("wifi: FAIL no candidate ucode is staged (%d name(s) tried) - "
+                                  "uno-wifi-fw.py stages them", g_fwcand_n);
+            } else {
+                st_set("WiFi: firmware did not ALIVE");
+                uno_dbg_net_trace("wifi: FAIL no ALIVE from any of %d staged ucode(s) - "
+                                  "this is not a stepping mismatch", tried);
+            }
             return 0;
         }
     }
-    if (parse_ucode(g_fwbuf, (u32)fn) < 0) {
-        st_set("WiFi: bad .ucode TLV");
-        uno_dbg_net_trace("wifi: FAIL %s (%ld bytes) failed TLV parse", g_fwfile, fn);
-        return 0;
-    }
-    uno_dbg_net_trace("wifi: firmware %s loaded from disk (%ld bytes)", g_fwfile, fn);
-    load_pnvm(vol);
-
-    /* BAR0, bus master and the CSR_HW_REV read now happen at the top of this
-     * function, before choose_firmware() - see the note there. */
-    if (prepare_card_hw() < 0) {
-        st_set("WiFi: card not ready (ME owns it?)");
-        uno_dbg_net_trace("wifi: FAIL prepare_card_hw timeout - CSR handshake refused (ME/CNVi ownership?)");
-        return 0;
-    }
-    device_stop();                   /* Linux loads always stop the device first */
-    clear_persistence_bit();         /* BEFORE the reset (Linux start_hw order) */
-    sw_reset();                      /* now retakes ownership afterwards */
-    if (g_family == FAM_22000 && g_devid != 0x2723) {   /* integrated CNVi (all AX201s) */
-        if (force_power_gating() < 0)
-            uno_dbg_net_trace("wifi: force-power-gating clock-ready timeout (continuing)");
-        else
-            uno_dbg_net_trace("wifi: CNVi force-power-gating done (HPM_HIPM readback=%08x)",
-                              prph_r(HPM_HIPM_GEN_CFG));
-    }
-    w32(CSR_INT, 0xFFFFFFFFu);
-    if (rf_killed()) {
-        st_set("WiFi: hardware RF-kill is on");
-        uno_dbg_net_trace("wifi: FAIL hardware RF-kill asserted (airplane-mode key/switch)");
-        return 0;
-    }
-    w32(CSR_UCODE_DRV_GP1_CLR, 0x00000002);   /* clear SW rfkill handshake */
-    w32(CSR_UCODE_DRV_GP1_CLR, 0x00000004);   /* clear cmd-blocked */
-
-    if (apm_init() < 0) {
-        st_set("WiFi: APM init timeout");
-        uno_dbg_net_trace("wifi: FAIL APM init timeout (clock-ready never came up)");
-        return 0;
-    }
-    uno_dbg_net_trace("wifi: card hw ready (APM up, no rfkill)");
-    if (g_gen2) { msix_enable_pci(); conf_msix();
-                  if (g_msix_arm) msix_table_setup(); }  /* PCI MSI-X + BAR0 MSI-X - REQUIRED for the ROM to start */
-    else if (g_mq_rx) prph_w(uprph(UREG_CHICK), UREG_CHICK_MSI);
-    nic_config_radio();              /* Linux order: apm -> nic_config -> rx init */
-    rx_hw_init();
-    if (g_gen2) w32(CSR_MAC_SHADOW_REG_CTRL, 0x802FFFFFu);   /* working trace value */
-
-    /* Force the fw/context-info DMA arena below 4GB before we build it: the boot
-     * ROM DMAs from these physaddrs, and a >4GB arena is why FH_INT stayed 0. */
-    arena_init_lowmem();
-    uno_dbg_net_trace("wifi: DMA arena base=%08x%08x (%s 4GB)",
-                      (u32)(g_arena_phys >> 32), (u32)g_arena_phys,
-                      g_arena_phys < 0x100000000ull ? "below" : "ABOVE - alloc failed!");
-    if (!g_gen2) msi_probe_enable();   /* gen2 uses PCI MSI-X (enabled above); MSI probe would conflict */
-
-    /* THE F12 FIX (with MSI-X): the firmware leaves VT-d DMA remapping ON
-     * (confirmed: DRHD@fed91000 TES=ON), which blocks the boot ROM's fw-load
-     * DMA to our arena. Disable it so the device can DMA. */
-    { char rep[128]; int nd = iommu_disable(rep, (int)sizeof rep);
-      uno_dbg_net_trace("wifi: IOMMU disable: %d unit(s) %s", nd, rep); }
-
-    /* load firmware + wait ALIVE */
-    if (g_family >= FAM_AX210)      { if (load_fw_gen3() < 0) { st_set("WiFi: gen3 fw load failed"); uno_dbg_net_trace("wifi: FAIL gen3 (ctxt-info) fw load"); return 0; } }
-    else if (g_gen2)                { if (load_fw_gen2() < 0) { st_set("WiFi: gen2 fw load failed"); uno_dbg_net_trace("wifi: FAIL gen2 (ctxt-info) fw load"); return 0; } }
-    else                            { if (load_fw_gen1(g_fw.rt, g_fw.rt_n) < 0) { st_set("WiFi: gen1 fw load failed"); uno_dbg_net_trace("wifi: FAIL gen1 (section DMA) fw load"); return 0; } }
-    g_fw_loaded = 1;   /* the ROM is now self-loading/running - a re-init MUST quiesce it first (see the rerun verb) */
-
-    if (wait_alive(2000) < 0) {
-        st_set("WiFi: firmware did not ALIVE");
-        uno_dbg_net_trace("wifi: FAIL no ALIVE notification within 2 s of fw start");
-        return 0;
-    }
-    uno_dbg_net_trace("wifi: firmware ALIVE");
     g_alive = 1;
     rx_restock();      /* gen2: first restock happens at alive (fw owns the RFH) */
     if (g_family >= FAM_AX210 && g_pnvm_len) {

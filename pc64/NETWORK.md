@@ -119,7 +119,9 @@ are recognised and cleanly declined, they need a different driver).
 | 9260 (discrete) | `iwlwifi-9260-th-b0-jf-b0` | `FIRMWARE/IWL9260.UCO` | - |
 | 9461 / 9462 / 9560 | `iwlwifi-9000-pu-b0-jf-b0` | `FIRMWARE/IWL9000.UCO` | - |
 | AX200 (discrete) | `iwlwifi-cc-a0` | `FIRMWARE/IWLAX200.UCO` | - |
-| AX201 (Qu/QuZ CNVi) | `iwlwifi-Qu-b0-hr-b0` / `-QuZ-a0-hr-b0` | `FIRMWARE/IWLAX201.UCO` | - |
+| AX201 (Qu/QuZ CNVi) ‡ | `iwlwifi-QuZ-a0-hr-b0` | `FIRMWARE/IWLAX201.UCO` | - |
+| AX201 (Qu/QuZ CNVi) ‡ | `iwlwifi-Qu-b0-hr-b0` | `FIRMWARE/IWLAX20B.UCO` | - |
+| AX201 (Qu/QuZ CNVi) ‡ | `iwlwifi-Qu-c0-hr-b0` | `FIRMWARE/IWLAX20C.UCO` | - |
 | AX210 (Ty) | `iwlwifi-ty-a0-gf-a0` | `FIRMWARE/IWLAX210.UCO` | **yes** |
 | AX211 / AX411 (So/Ma) | `iwlwifi-so-a0-gf-a0` | `FIRMWARE/IWLAX211.UCO` | **yes** |
 | BE200 (Gl, WiFi 7 †) | `iwlwifi-gl-*-fm-*` | `FIRMWARE/IWLBE200.UCO` | **yes** |
@@ -130,6 +132,12 @@ Use the highest API revision (the number before `.ucode`) your file set has; the
 driver only cares about the contents. AX210 and every WiFi-7 part also need the
 matching `.pnvm` (regulatory/PHY data), without it the firmware refuses to leave
 init. AC cards and AX200/AX201 have no PNVM.
+
+‡ **An AX201 is one of three steppings and they are three different ucodes**, and
+the PCI id does not say which (`0x02f0` and `0x34f0` both appear as either). Stage
+all three - `uno-wifi-fw.py` does - and the driver sorts it out at run time: it
+decodes `CSR_HW_REV` to pick the ORDER, then tries each in turn until one posts
+ALIVE. See "AX201 firmware steppings" in [DEBUG.md](DEBUG.md).
 
 † **WiFi 7 (Bz/Gl/Sc) is best-effort / not yet working**: those cards boot through
 the gen3 path but add a TOP-reset + ROM-start handshake the driver does not yet
