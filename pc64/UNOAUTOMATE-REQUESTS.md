@@ -6312,3 +6312,42 @@ of reasoning** and **the operator describing a visible symptom** ("the warning
 locks the UI") that I had treated as background for two messages. The floaty
 cursor was never the pointer code; it was the boot-test banner repainting the
 desktop, which I found only after three rounds in the wrong file.
+## 2026-08-04 - LANDED: the caret STILL jumped, and the last two toolbars
+
+**The cursor-jump report came back after the WiFi field was "fixed", and it was
+right.**  Two separate faults wore the same symptom, and only the first was
+found in August:
+
+1. `ui_text_index_at` summed per-glyph widths (fixed earlier - a click landed on
+   the wrong character).
+2. **`unoui_text_init` reset the caret on every call.**  A window BUILDER runs
+   many times - a tab switch, a refresh, a font change, a DHCP lease arriving -
+   and this was written as though it ran once, so every rebuild slammed the
+   caret to the end.  Typing into a field in a window that rebuilt underneath
+   you jumped the cursor away mid-word.
+
+The first fix for (2) was in the Control Panel's builder, saving and restoring
+the caret by hand around the call.  That fixed exactly one field and left four:
+**Files' Name box, the Editor's Find and Replace boxes, the installer's
+confirmation box.**  The lesson is the general one - a workaround in one caller
+of a shared function leaves every other caller broken and every future caller
+broken by default.
+
+`unoui_text_init` now KEEPS caret/selection/scroll when it is re-bound to the
+SAME buffer (clamped to the current length); a different buffer still resets,
+and `unoui_text_set()` is the explicit "replace the contents", which resets.
+**The cost: the struct must be zero-initialised before the first init**, because
+init inspects the model to decide.  Static storage does that for you; the one
+stack-local `unoui_text` in the tree (pc64_spectest.c) is now `= { 0 }`.  If you
+declare one on the stack, zero it.
+
+**The Editor and Files toolbars wrap.**  Last of the toolbar-overflow class the
+audit found: two FIXED rows with the window grown to fit the wider of them,
+which fails once the wider of them is bigger than the screen.  Width first, then
+flow into it, new row when the next control will not fit.  `min_w` is the widest
+SINGLE control rather than the widest row - below that a control gets cut, above
+it the toolbar just uses more rows.  **If you are laying out a toolbar, this is
+the shape**; both apps had it written the other way and both were cut at
+150-200%.
+
+Audit: 100% clean, and Editor/Files clean at every scale.
