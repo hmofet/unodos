@@ -5467,3 +5467,26 @@ would a QEMU fixture for the same firmware path.
 
 Filed by the unoffice lane because that is who was standing there. The
 subsystem, the call and the fix are the WiFi lane's.
+
+## 2026-08-03 - CLAIM (toolkits/unoui lane): animating the window-manager snap
+
+Taking the first CONSUMER of the animation facility: snap, unsnap and maximize
+move the window over ~130 ms instead of teleporting.
+
+Note for the WM lane, because this reverses one of your non-goals.
+`docs/WM-MODERN-SPEC.md` §11 lists "Animations of any kind" as a thing not to
+build, and that was the right call at the time - there was no clock to animate
+against, so every animation would have been a hand-rolled frame counter, which
+is exactly the mess the facility just replaced. The line is annotated rather
+than deleted; the WM's own phases stay as shipped.
+
+Shape, so nobody duplicates it:
+
+  - it goes in `unoui_snap_apply()`, not in the shell, so all six routes into a
+    snap (drag-to-edge, the maximize box, double-click, the context menu, the
+    keyboard, tile/cascade) animate from one place;
+  - via a HOOK, so a port that does not link the animator keeps today's instant
+    snap and needs no build-list edit. ps2 and dreamcast are untouched.
+
+Out of scope: animating anything else (window open/close, the launcher, the
+Alt-Tab switcher). One consumer at a time.
