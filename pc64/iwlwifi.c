@@ -346,18 +346,36 @@ static int  g_is_dvm;        /* a recognised but iwldvm-only card (unsupported) 
 static int  g_gen2;          /* 22000+ : TFH TFDs, context-info fw load */
 static int  g_mq_rx;         /* 9000+  : RFH multi-queue rx */
 static u32  g_hw_rev, g_hw_rf_id;
-static char g_fwfile[20];    /* 8.3 name under FIRMWARE\ on the ESP - the one loaded now */
+/* Firmware path buffers.  SIZE THIS FROM THE ACTUAL STRINGS, not by eye:
+ * "FIRMWARE\IWLAX201.UCO" is 21 characters, so it needs 22 bytes, and these
+ * were declared [20] - every strcpy of a full path overflowed by exactly two
+ * bytes, 'O' and the NUL.  That is where the `rf_id=0x....004f` in the SURFGO
+ * bring-up trace came from: 0x004f is 'O' + NUL landing in the global declared
+ * next to g_fwfile.  It was mis-read as a cosmetic trace bug.
+ *
+ * The `fw=` override is worse than a fixed string: it builds "FIRMWARE\" plus
+ * up to 19 characters read out of a text file on the stick, so a long name in
+ * WIFI.CFG could overflow by a lot.  32 covers 9 + 19 + NUL with room. */
+#define FW_NAME_MAX 32
+/* Compile-time proof that the longest path we build actually fits, so this
+ * cannot silently regress the next time a firmware name gets longer. */
+typedef char fw_name_max_is_big_enough[
+    (sizeof "FIRMWARE\\IWLAX201.UCO" <= FW_NAME_MAX) ? 1 : -1];
+static char g_fwfile[FW_NAME_MAX];    /* 8.3 name under FIRMWARE\ on the ESP - the one loaded now */
 /* Every ucode this card could plausibly want, best guess first.  See the note
  * on choose_firmware(): the decode picks the ORDER, ALIVE picks the answer. */
 #define FW_CAND_MAX 4
-static char g_fwcand[FW_CAND_MAX][20];
+static char g_fwcand[FW_CAND_MAX][FW_NAME_MAX];
 static int  g_fwcand_n;
-static char g_pnvmfile[20];
+static char g_pnvmfile[FW_NAME_MAX];
 
-/* append a candidate, ignoring duplicates and overflow */
+/* append a candidate, ignoring duplicates, overflow and anything too long to
+ * hold.  Silently truncating a firmware path would just fail the open later
+ * with a confusing name, so an over-long one is refused outright. */
 static void fwc_add(const char *name)
 {
     int i;
+    if (!name || strlen(name) + 1 > FW_NAME_MAX) return;
     for (i = 0; i < g_fwcand_n; i++) if (!strcmp(g_fwcand[i], name)) return;
     if (g_fwcand_n >= FW_CAND_MAX) return;
     strcpy(g_fwcand[g_fwcand_n++], name);
@@ -3989,11 +4007,21 @@ uno_nic_t *iwl_nic(void)
     st_set("Intel WiFi "); st_cathex(g_hw_rev);
     read_fw_override();
     if (g_fwforce[0]) {
-        strcpy(g_fwfile, "FIRMWARE\\");
-        strcat(g_fwfile, g_fwforce);
-        g_fwcand_n = 0; fwc_add(g_fwfile);  /* forced means forced: no fallback */
-        uno_dbg_net_trace("wifi: firmware FORCED to %s by an fw= line "
-                          "(the automatic stepping retry is disabled)", g_fwfile);
+        /* g_fwforce comes out of a text file on the stick, so its length is not
+         * ours to assume: build into a local, then let fwc_add() vet it. */
+        char forced[FW_NAME_MAX];
+        if (9 + strlen(g_fwforce) + 1 > FW_NAME_MAX) {
+            uno_dbg_net_trace("wifi: fw= name is too long (%d chars) - ignoring it "
+                              "and using the decoded candidate list",
+                              (int)strlen(g_fwforce));
+        } else {
+            strcpy(forced, "FIRMWARE\\");
+            strcat(forced, g_fwforce);
+            g_fwcand_n = 0; fwc_add(forced);   /* forced means forced: no fallback */
+            strcpy(g_fwfile, forced);
+            uno_dbg_net_trace("wifi: firmware FORCED to %s by an fw= line "
+                              "(the automatic stepping retry is disabled)", g_fwfile);
+        }
     }
 
     /* The silicon identity, in the log, on every boot.  Without it a firmware
@@ -4004,11 +4032,16 @@ uno_nic_t *iwl_nic(void)
      * NETLOG says both what we decoded and what we were prepared to fall back
      * to. */
     {
-        char fwl[FW_CAND_MAX * 16 + 4]; int i;
+        char fwl[FW_CAND_MAX * FW_NAME_MAX + 4]; int i; unsigned o = 0;
         fwl[0] = 0;
         for (i = 0; i < g_fwcand_n; i++) {
-            if (i) strcat(fwl, ",");
-            strcat(fwl, g_fwcand[i] + 9);      /* strip the FIRMWARE\ prefix */
+            const char *nm = g_fwcand[i];
+            unsigned nl;
+            if (strlen(nm) > 9) nm += 9;       /* strip the FIRMWARE\ prefix */
+            nl = (unsigned)strlen(nm);
+            if (o + nl + 2 >= sizeof fwl) break;      /* never write past the end */
+            if (o) fwl[o++] = ',';
+            memcpy(fwl + o, nm, nl); o += nl; fwl[o] = 0;
         }
         if (!fwl[0]) strcpy(fwl, "-");
         uno_dbg_net_trace("wifi: card pci=%04x fam=%d gen2=%d hw_rev=%08x "
