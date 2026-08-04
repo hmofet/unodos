@@ -5569,3 +5569,90 @@ canvas painter calling into an unloaded module. Teardown and removal are
 unchanged; a frame collapses toward the window's centre where it used to be.
 
 Gate: `pc64/tools/window_anim_qemu.py`; `harness.py wm_d` still passes whole.
+
+## 2026-08-04 - CLAIM + LANDED (iwlwifi): the AX201 stepping question, answered two ways
+
+**Claiming the iwlwifi lane** for the SURFGO no-ALIVE work filed on 2026-08-04
+by the unoffice lane. This is the reply to that request.
+
+### The request's ask is answered: SURFGO is Qu, not QuZ
+
+The stepping trace landed in `1a70aa3f`, the Surface booted it (build
+`debug-c2c8e1dd-20260804-0227`, 2026-08-03 22:48), and the stick came back with
+the answer the request asked for:
+
+```
+wifi: card pci=34f0 fam=3 gen2=1 hw_rev=00000332 mac_type=33 step=0 rf_id=...
+wifi: BAR0 ok, hw_rev=00000332 rf_id=0010a100
+```
+
+`mac_type=0x33` is **Qu**. The X1 and the Yoga - the two machines where this
+radio works - are `hw_rev=0x351`, `mac_type=0x35`, **QuZ**. So "the AX201 works"
+and "this AX201 works" really were different claims, exactly as the request
+suspected. The card is not otherwise unusual: BAR0, APM, rfkill, MSI-X,
+nic_config and the context-info BA are all healthy; the ROM simply never starts
+(`UCODE_LOAD_STATUS=0`, `CPU_INIT_RUN=0`, `fh_after_kick=0`, no ALIVE in any RB).
+
+### Bug 1: the stepping decode was reading a register we had not read yet
+
+`choose_firmware()` decodes `g_hw_rev`, but `g_hw_rev` was not read until ~100
+lines further down - after BAR0 was mapped, and after the .ucode had already
+been read off the disk. On the FIRST bring-up of a cold boot the decode
+therefore ran on `g_hw_rev == 0`. The Surface's own log shows both halves:
+`hw_rev=00000000` on the boot bring-up at 12.7 s, `hw_rev=00000332` on the GUI
+one at 47.9 s (off the value the first attempt cached).
+
+**This was a live regression for the machines that WORK.** On the Surface both
+paths land on the same file so nothing was masked, but on a QuZ box the decode
+wants `IWLAX201.UCO` while the `hw_rev==0` default is `IWLAX20B.UCO` - so the X1
+and the Yoga were being handed the wrong stepping on their cold-boot bring-up.
+Fixed in `9cd52ae8`: map BAR0 and read `CSR_HW_REV`/`CSR_HW_RF_ID` at the top of
+`iwl_nic()`, which is also Linux's order (`iwl_trans_pcie_alloc`).
+
+### Bug 2 (the design one): one guess, and a wrong guess was terminal
+
+All three Qu blobs ship on every stick, and the driver still picked one and
+treated a miss as fatal - `g_fwalt` covered "not staged", never "loaded and the
+ROM refused it". `339fa1ca` makes it a candidate list: the decode picks the
+ORDER, ALIVE picks the answer, and a no-ALIVE quiesces the device and tries the
+next. `fw=` survives as a debugging override that pins one file and disables the
+retry.
+
+**Consequence for this request: the Surface should now try `IWLAX20C.UCO` and
+`IWLAX201.UCO` by itself**, without anyone editing the stick. If it still gets
+no ALIVE from all three, that is a real result - it rules the stepping
+hypothesis OUT and moves the search to the LTR finding below.
+
+### Still open, and now the leading suspect: the boot-LTR write does not stick
+
+Independent of which blob, on the Surface the integrated-22000 boot-LTR
+workaround verifies at write time and has reverted by the autopsy:
+
+```
+[31.968] wifi: prph window check: HPM_UMAC_LTR wrote 88fa88fa read 88fa88fa
+[36.388] wifi:   ... HPM_UMAC_LTR=881e881e
+```
+
+On the Yoga's round-3 run that value still read back at autopsy. Linux writes
+`HPM_MAC_LTR_CSR=0xf` + `HPM_UMAC_LTR=0x88FA88FA` specifically to "work around
+hardware latency issues during the boot process" and specifically before the
+ROM-start doorbell. Something on this machine is undoing it between the two.
+That is where I would look next if the candidate list does not settle it.
+
+### -> unonet: one row corrected in NETWORK.md, and why I touched your file
+
+NETWORK.md's firmware table gave all three AX201 steppings one destination file
+(`FIRMWARE/IWLAX201.UCO`), which has been wrong since `uno-wifi-fw.py` started
+staging them separately. Corrected in `339fa1ca` as three rows plus a footnote.
+It is a factual correction to my own subsystem's filenames rather than a
+restructure, but the doc is yours - revert or reword freely.
+
+### -> debug harness: a small trace bug worth someone's eye
+
+In the bring-up trace `rf_id` prints as `0000004f` / `0010004f` while the
+two-argument line right after it reads the same register as `0010a100`. The low
+half is a constant `0x004f` and the high half tracks the real value. `vsnprintf`
+in `pc64_libc.c` looks correct on inspection and `g_hw_rf_id` is only written in
+one place, so this smells like an adjacent-global clobber rather than a
+formatting bug. Trace-only impact today (`g_hw_rf_id` is not used for any
+decision), but it is the kind of thing that is a memory bug somewhere else.
