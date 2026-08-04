@@ -2104,34 +2104,57 @@ static EFI_RUNTIME_SERVICES *rts(void) { return (EFI_RUNTIME_SERVICES *)gST->Run
 static void power_down(int off)
 {
     uno_dbg_mark_clean();           /* debug build: not a crash, don't salvage */
-    if (!off && gDetached)
-        uno_native_reset_try();     /* detached: our own CF9 first, returns if ignored */
-    /* ResetSystem is a RUNTIME service, so this is legal on both sides of
-       ExitBootServices while we stay in physical addressing. Some firmware
-       ignores EFI_RESET_SHUTDOWN and simply returns - the Surface Laptop Go
-       hangs on "Shutting down" this way - which is why nothing below assumes
-       it worked. */
-    uno_dbg_log("power: ResetSystem(%s)", off ? "Shutdown" : "Cold");
-    rts()->ResetSystem(off ? EfiResetShutdown : EfiResetCold, 0, 0, 0);
-    uno_dbg_log("power: ResetSystem returned - firmware ignored it");
 
-    /* RESET: CF9, then the i8042 pulse, then the FADT reset register.
+    /* RESET: every NATIVE mechanism first, and the firmware's ResetSystem LAST.
      *
-     * This used to call uno_native_reset(), which pulses CF9 + i8042 and then
-     * HALTS - so on a board that ignores both, the machine stopped there and
-     * everything below was unreachable. That is the Surface's reboot hang: not
-     * a missing mechanism but an unreachable one, because the terminal form of
-     * the helper was called in a position that still had options left. Use the
-     * _try form, which returns, and keep the terminal halt at the bottom where
-     * it belongs. */
+     * The previous order put ResetSystem first while attached, on the argument
+     * that it is the firmware's chance to flush a pending NVRAM write before
+     * the machine goes down. That argument assumed the call RETURNS when it
+     * cannot do the job. Metal says otherwise: on the Surface Laptop Go
+     * `ResetSystem(EfiResetCold)` never comes back at all, so the entire
+     * fallback chain below it - CF9, the i8042 pulse, the FADT reset register,
+     * and the message telling the operator what happened - was unreachable. The
+     * screen keeps the frame that was up when Restart was pressed, which is
+     * exactly how it was reported: "restart freezes".
+     *
+     * This file already states the principle; it was just never applied to the
+     * firmware call. From pc64_native.c, on why the CF9 helper is split in two:
+     *
+     *     "a reset routine that never returns cannot be first in any such order"
+     *
+     * ResetSystem is such a routine on at least one machine we own, so it goes
+     * last, where a hang costs nothing we still needed. The native mechanisms
+     * all return, so each can fall through to the next.
+     *
+     * WHAT THIS GIVES UP, stated plainly: on firmware that caches NVRAM writes
+     * until ResetSystem, a boot-entry change made just before a restart (the
+     * `bootnext` verb, the installer's makeboot) could be lost, because CF9 is
+     * a hard platform reset that skips the firmware's shutdown path. That is a
+     * real if narrow cost. It buys a machine that can restart at all, which is
+     * the trade this hardware forces. POWER-OFF is left alone - F14 has
+     * positive evidence that ResetSystem RETURNS there, and changing an order
+     * on no evidence is the mistake that reopened F14 in the first place. */
     if (!off) {
+        uno_dbg_log("power: reset - trying CF9");
         uno_native_reset_try();     /* CF9; returns if the board ignored it */
         uno_dbg_log("power: CF9 ignored - trying the i8042 pulse");
         uno_native_kbd_reset_pulse();
 #ifdef UNO_ACPI
         uno_dbg_log("power: i8042 ignored - trying the ACPI FADT reset register");
         uno_acpi_reset();           /* returns only if there is no usable reset reg */
+        uno_dbg_log("power: FADT reset ignored - firmware ResetSystem is all that is left");
 #endif
+    }
+
+    /* ResetSystem is a RUNTIME service, so this is legal on both sides of
+       ExitBootServices while we stay in physical addressing. For POWER-OFF it
+       is still first (see above); for RESET it is now the last resort, and it
+       may simply never return - which is why the operator message below is
+       drawn BEFORE it rather than after. */
+    if (off) {
+        uno_dbg_log("power: ResetSystem(Shutdown)");
+        rts()->ResetSystem(EfiResetShutdown, 0, 0, 0);
+        uno_dbg_log("power: ResetSystem returned - firmware ignored it");
     }
     /* SAY SO ON THE SCREEN, and say it BEFORE the last mechanism runs.
      *
