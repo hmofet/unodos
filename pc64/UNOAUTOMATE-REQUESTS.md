@@ -6613,3 +6613,69 @@ fails 1-3 of S-FAT-10/20/28 at random on a `format=vvfat` drive and 0 on a real
 FAT image built by `tools/mkuefi.py` - vvfat corrupts multi-cluster writes,
 which `harness.py` already documents.  Judge a storage change on a real image
 (`-drive format=raw,file=build/unodos-uefi.img`), not on vvfat.
+## 2026-08-04 (metal) - "very, very slow" is a DISK WRITE PER TRACE LINE, not the framebuffer
+
+Operator report: "very, very slow, hard to use because the pointer is too slow",
+whole machine, all the time.  The stick came out of the Surface and into
+devbuntu, and its own `CRASH\SURFGO\` answers it.  **This corrects a standing
+assumption, mine included.**
+
+### The measurement, from the machine
+
+`netlog_sink()` called `flush()` per line, and `flush()` rewrites the WHOLE
+accumulated buffer.  `g_active` gates it, so one boot contains the controlled
+experiment - same driver, same lines, flush off then on:
+
+| phase | g_active | timestamps | per line |
+|---|---|---|---|
+| boot WiFi bring-up | 0 | 11.096 11.107 11.199 11.202 | **~11 ms** |
+| test WiFi bring-up | 1 | 64.926 65.181 65.466 65.769 | **~260 ms** |
+
+`pc64_nettest_tick()` runs from inside the shell's main loop, and login was at
+47.3 s with the test starting at 48.4 s - so this is a live desktop stalling a
+quarter second at a time, for as long as the test runs.  Fixed in `51ef38b6`:
+budgeted flush, unconditional `flush_now()` on the terminal paths.
+
+**The correction.**  Every previous round, including today's, reached for the
+uncached framebuffer.  That is real (`fb bench: vram 26902 KB/s`, `mtrr6 ...
+type=0 (UC - SLOW PRESENT!)`) and a full present really is 234 ms, but the
+banner strip is 20 of 512 rows, about a fortieth of one, and the 11 ms row above
+IS the banner with the flush switched off.  **The framebuffer was the loudest
+number in the env block and the wrong one.**  Nobody had put a stopwatch on a
+trace line, which the log had been carrying all along.
+
+### The pointer half: ACPI found the trackpad, and it did not answer
+
+    [2.251] i2c-hid: acpi hit 0: slave=34 desc_reg=0001 ctrl=21.2 mmio=00..00 (\_SB.PCI0.I2C2)
+    i2c-hid: ctrls=3 present=0 addr=0 desc_parsed=0 acpi_hits=1
+
+**Slave 0x34 is not in `kAddrs`**, so the blind grid could never have found this
+pad and the ACPI path is the only route.  It matched a controller, COMP_TYPE
+answered, the device did not.  Three faults look identical from here: a GPIO
+holding the pad in reset (wants `_PS0`), the wrong SCL timing for a 216 MHz Ice
+Lake LPSS clock, or a misparsed address.  `c1a1e5fb` logs the TX_ABRT source on
+that path, which separates them - bit 7 is NOACK, abrt=0 with no bytes is a
+transfer that never completed.  **No hardware guess was committed**; the box is
+not reachable and this is the round trip that decides it.
+
+Consequence while it stays unbound: the pointer runs on the FIRMWARE path
+(`pointer: fw_simple=1 fw_abs=3`), where **Control Panel -> Pointer speed does
+nothing at all** - `g_ptr_speed` is only read inside the `uno_i2c_hid_present()`
+branch of `poll_pointer()`.  A slider that silently does nothing on the machine
+you are holding is its own defect; filed, not fixed, because which path should
+gain a speed control depends on which one is driving.
+
+### Also worth knowing
+
+- **The stick predates today's work.**  `debug-62874dc8-20260804-2039`; the
+  login-sheet and ConIn changes (`926df088`) are NOT on it, so both remain
+  untested on metal whatever this build does.
+- `blt bench: 105166 KB/s (direct 26272 KB/s) -> BLT IS FASTER` while the env
+  line says `present=linear`.  That line reports whether a linear fb EXISTS
+  (`gUseBlt`), not which path present actually takes (`gBltFast`), so it reads
+  as a contradiction with the bench directly above it.  Worth disambiguating.
+- `usb-hid preflight: kbd=1 ptr=1` and `detach gate: ... survives ptr=1 kbd=1
+  strand=0` - **this machine's gate says it could detach from the stick it is
+  on today**, no eMMC required.  The build has detach compiled out
+  (`-DUNO_NO_DETACH`, see the earlier note), which is the only reason it did
+  not.
