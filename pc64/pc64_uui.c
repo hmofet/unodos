@@ -1790,6 +1790,8 @@ static void audit_fit(unoui_window *w, const char *what)
     }
 }
 
+static void build_launcher(void);        /* below; the audit builds it */
+
 static void layout_audit_pass(void)
 {
     int a, saved_tab = g_ctrl_tab, t;
@@ -1820,6 +1822,11 @@ static void layout_audit_pass(void)
      * failure mode (a taskbar chip wider than the bar) */
     unoui_window_audit(UI.theme, &g_desk, audit_report, (void *)"desktop");
     unoui_window_audit(UI.theme, &g_task, audit_report, (void *)"taskbar");
+    /* the Start menu, which is built rather than opened - two panes now, and
+     * its width is the sum of two measured columns */
+    build_launcher();
+    audit_fit(&g_launch, "Start menu");
+    unoui_window_audit(UI.theme, &g_launch, audit_report, (void *)"Start menu");
 }
 
 static void layout_audit_run(void)
@@ -1853,6 +1860,9 @@ static void layout_audit_run(void)
 /* ---- window management -------------------------------------------------- */
 static int g_launch_open;
 static int g_menu_scroll, g_menu_hot = -1, g_scroll_tmr;   /* Start-menu scroll */
+static int g_menu_pane;            /* which Start-menu pane has the highlight */
+static int g_menu_lw;              /* left pane width, px (set by build_launcher) */
+#define SYS_GAP 12                 /* px between the two panes                */
 static unoui_window g_cal;                 /* calendar date-picker popup */
 static int g_cal_open, g_cal_y = 2026, g_cal_mo = 1, g_cal_sel = 1;
 static unoui_rect g_cal_rect;
@@ -4028,13 +4038,43 @@ static void session_load(void)
     g_session_ready = 1;
 }
 
-/* ---- Start menu: a scrollable canvas (apps + Restart + Shut Down) --------- *
- * Entries beyond the visible window scroll: hovering the bottom edge shows a
- * down chevron and scrolls down; once scrolled, an up chevron appears at the
- * top edge and hovering it scrolls back. */
+/* ---- Start menu: TWO PANES ------------------------------------------------
+ * Left: the launcher - things you OPEN, one scrolling list of apps. Right:
+ * things you DO TO THE MACHINE - the window commands and the power commands,
+ * in labelled sections.
+ *
+ * They used to be one list, apps then Tile/Cascade/Minimize-all then Restart
+ * and Shut Down, separated by hairlines. Which put "Shut Down" one row below
+ * "Studio" in a list you SCROLL - so the entry that ends your session moved
+ * around under the pointer depending on how many apps were installed and how
+ * far down you were. Opening a program and turning the computer off are not
+ * the same kind of act and should not be the same gesture; the divider was
+ * doing all the work of saying so, and a divider is not much.
+ *
+ * WHERE WIDGETS GO. The right pane is a table of {section header, command}
+ * rows (kSys below), so a quick toggle - flight mode, Bluetooth, a share
+ * sheet - is a row and a case in sys_activate, not a new menu. Nothing like
+ * that exists to toggle yet, and this deliberately ships no placeholder for
+ * one: a switch that does nothing is worse than an absent switch.
+ *
+ * Entries beyond the visible window scroll (left pane only): hovering the
+ * bottom edge shows a down chevron and scrolls down; once scrolled, an up
+ * chevron appears at the top edge and hovering it scrolls back. */
 static int mrow_h(void) { int h = fb_text_h() + 8; return h < 22 ? 22 : h; }
 #define MROW (mrow_h())
-#define MENU_MAXVIS 11
+/* How many rows the menu may show. It was a flat 11, which is 11 * 46 px at a
+ * 200% UI scale - a menu taller than the desktop it drops out of. The list
+ * scrolls, so the honest cap is "what the work area has room for". */
+static int menu_maxvis(void)
+{
+    const unoui_metrics *m = &UI.theme->m;
+    int chrome = m->title_h + 2 * m->pad + m->frame_w + 8;
+    int n = ((FB_H - TASKH) - chrome) / MROW;
+    if (n > 11) n = 11;
+    if (n < 3)  n = 3;
+    return n;
+}
+#define MENU_MAXVIS (menu_maxvis())
 
 /* the launcher lists only visible apps (Studio needs its module on disk;
  * the user-app slot appears once something has run in it) */
@@ -4046,37 +4086,47 @@ static void menu_refresh(void)
     menu_napps = 0;
     for (a = 0; a < NAPPS; a++) if (!app_hidden(a)) menu_apps[menu_napps++] = a;
 }
-/* apps, then the window-layout commands (phase F), then power. The commands
- * live here as well as on the taskbar's context menu because the Start button
- * is the one piece of chrome that is always reachable - a right-click needs a
- * patch of bar that no chip has taken. */
-#define MENU_NCMD 3                        /* Tile / Cascade / Minimize all   */
-static const char *kMenuCmd[MENU_NCMD] =
-{ "Tile windows", "Cascade windows", "Minimize all" };
-
-static int  menu_count(void) { return menu_napps + MENU_NCMD + 2; }
-static const char *menu_label(int i)
-{
-    if (i < menu_napps)             return app_name(menu_apps[i]);
-    i -= menu_napps;
-    if (i < MENU_NCMD)              return kMenuCmd[i];
-    return (i == MENU_NCMD) ? "Restart" : "Shut Down";
-}
-static int  menu_icon(int i) { return i < menu_napps ? app_icon(menu_apps[i]) : -1; }
+/* ---- left pane: the launcher --------------------------------------------- */
+static int  menu_count(void) { return menu_napps; }
+static const char *menu_label(int i) { return app_name(menu_apps[i]); }
+static int  menu_icon(int i) { return app_icon(menu_apps[i]); }
 static int  menu_vis(void)   { int t = menu_count(); return t < MENU_MAXVIS ? t : MENU_MAXVIS; }
 
 static void menu_activate(int i)
 {
     if (i < 0 || i >= menu_count()) return;
-    if (i < menu_napps) { open_app(menu_apps[i]); return; }  /* closes the launcher */
-    i -= menu_napps;
+    open_app(menu_apps[i]);                       /* closes the launcher */
+}
+
+/* ---- right pane: what you do to the machine ------------------------------ *
+ * A flat table with section headers in it, because that is the shape a widget
+ * row will want too: one more entry here and one more case in sys_activate.
+ * Headers are not selectable and the keyboard steps over them. */
+enum { SYSC_TILE = 1, SYSC_CASCADE, SYSC_MINALL, SYSC_RESTART, SYSC_SHUTDOWN };
+static const struct { short cmd; const char *label; } kSys[] = {
+    { 0,             "Windows"      },       /* cmd 0 = a section header */
+    { SYSC_TILE,     "Tile"         },
+    { SYSC_CASCADE,  "Cascade"      },
+    { SYSC_MINALL,   "Minimize all" },
+    { 0,             "Power"        },
+    { SYSC_RESTART,  "Restart"      },
+    { SYSC_SHUTDOWN, "Shut Down"    },
+};
+#define SYS_N ((int)(sizeof kSys / sizeof kSys[0]))
+
+static int  sys_is_head(int i) { return i >= 0 && i < SYS_N && kSys[i].cmd == 0; }
+
+static void sys_activate(int i)
+{
+    if (i < 0 || i >= SYS_N || sys_is_head(i)) return;
     if (g_launch_open) { remove_win(&g_launch); g_launch_open = 0; g_dirty = 1; }
-    switch (i) {
-    case 0:         wm_tile();          break;
-    case 1:         wm_cascade();       break;
-    case 2:         wm_minimize_all();  break;
-    case MENU_NCMD: uno_pc64_restart(); break;
-    default:        uno_pc64_shutdown();break;
+    switch (kSys[i].cmd) {
+    case SYSC_TILE:     wm_tile();          break;
+    case SYSC_CASCADE:  wm_cascade();       break;
+    case SYSC_MINALL:   wm_minimize_all();  break;
+    case SYSC_RESTART:  uno_pc64_restart(); break;
+    case SYSC_SHUTDOWN: uno_pc64_shutdown();break;
+    default: break;
     }
 }
 
@@ -4088,18 +4138,45 @@ static void launcher_draw(struct unoui_widget *w, unoui_rect r, void *ctx)
     const unoui_theme *t = UI.theme; int vis = menu_vis(), total = menu_count(), i;
     (void)w; (void)ctx;
     for (i = 0; i < vis; i++) {
-        int idx = g_menu_scroll + i, ry = r.y + i * MROW, hot = (idx == g_menu_hot);
+        int idx = g_menu_scroll + i, ry = r.y + i * MROW;
+        int hot = (g_menu_pane == 0 && idx == g_menu_hot);
         if (idx >= total) break;
         if (hot) fb_fill_rect(r.x, ry, r.w, MROW, t->pal.accent);
-        /* dividers: apps | window commands | power */
-        if (idx == menu_napps || idx == menu_napps + MENU_NCMD)
-            fb_hline(r.x, ry, r.w, t->pal.shadow);
         if (menu_icon(idx) >= 0) { unoui_rect eb = { r.x + 3, ry + (MROW - 18) / 2, 18, 18 }; pc64_icon_emblem(menu_icon(idx), eb); }
         fb_text(r.x + 26, ry + (MROW - fb_text_h()) / 2, menu_label(idx),
                 hot ? t->pal.accent_text : t->pal.text, -1);
     }
     if (g_menu_scroll > 0)           chevron(r.x + r.w/2, r.y + 1,           -1, t->pal.text);
     if (g_menu_scroll + vis < total) chevron(r.x + r.w/2, r.y + vis*MROW - 6, +1, t->pal.text);
+}
+
+/* the right pane. Its own canvas rather than a second half of the left one:
+ * the two have different row models (this one has headers and does not
+ * scroll), and keeping them apart is what stops a scroll position or a
+ * hovered row in one from meaning anything in the other. */
+static void sysmenu_draw(struct unoui_widget *w, unoui_rect r, void *ctx)
+{
+    const unoui_theme *t = UI.theme; int i;
+    (void)w; (void)ctx;
+    /* the divider between the panes, drawn INSIDE this canvas at its own left
+     * edge - a canvas is clipped to its rect, so a line drawn in the gap to the
+     * left of it is simply not there */
+    fb_vline(r.x, r.y, r.h, t->pal.shadow);
+    for (i = 0; i < SYS_N; i++) {
+        int ry = r.y + i * MROW;
+        int hot = (g_menu_pane == 1 && i == g_menu_hot && !sys_is_head(i));
+        if (sys_is_head(i)) {
+            /* a section header: dim, with a rule ABOVE it - through it is where
+             * the first attempt put the line, which reads as struck-out text */
+            if (i) fb_hline(r.x + 6, ry + 2, r.w - 10, t->pal.shadow);
+            fb_text(r.x + 10, ry + (MROW - fb_text_h()) / 2 + 3,
+                    kSys[i].label, t->pal.text_dim, -1);
+            continue;
+        }
+        if (hot) fb_fill_rect(r.x + 1, ry, r.w - 1, MROW, t->pal.accent);
+        fb_text(r.x + 20, ry + (MROW - fb_text_h()) / 2, kSys[i].label,
+                hot ? t->pal.accent_text : t->pal.text, -1);
+    }
 }
 
 /* keep the highlighted entry within the scrolled window */
@@ -4110,66 +4187,129 @@ static void menu_reveal(void)
     if (g_menu_hot >= g_menu_scroll + vis)    g_menu_scroll = g_menu_hot - vis + 1;
 }
 
+/* step the highlight within the right pane, skipping the section headers */
+static void sys_step(int d)
+{
+    int i = g_menu_hot;
+    do { i += d; } while (i >= 0 && i < SYS_N && sys_is_head(i));
+    if (i >= 0 && i < SYS_N) g_menu_hot = i;
+}
+
+/* move the highlight to the other pane, landing on something selectable */
+static void menu_pane(int p)
+{
+    if (p == g_menu_pane) return;
+    g_menu_pane = p;
+    if (p == 0) { g_menu_hot = g_menu_scroll; }
+    else        { g_menu_hot = 0; if (sys_is_head(0)) sys_step(+1); }
+    g_dirty = 1;
+}
+
 static int launcher_event(struct unoui_widget *w, const void *ev, void *ctx)
 {
     const unoui_event *e = (const unoui_event *)ev; int ox, oy, row;
     (void)w; (void)ctx;
     if (e->kind == UI_EV_KEY) {                       /* keyboard navigation */
-        int total = menu_count();
-        if (g_menu_hot < 0) g_menu_hot = g_menu_scroll;
-        if (e->key == UI_KEY_DOWN) { if (g_menu_hot < total - 1) g_menu_hot++; menu_reveal(); g_dirty = 1; return 1; }
-        if (e->key == UI_KEY_UP)   { if (g_menu_hot > 0) g_menu_hot--;         menu_reveal(); g_dirty = 1; return 1; }
-        if (e->key == UI_KEY_ENTER){ menu_activate(g_menu_hot); return 1; }
+        int total = g_menu_pane ? SYS_N : menu_count();
+        if (g_menu_hot < 0) g_menu_hot = g_menu_pane ? 1 : g_menu_scroll;
+        /* left/right cross between the panes - the whole point of there being
+         * two of them is that the keyboard can stay out of the power column */
+        if (e->key == UI_KEY_LEFT)  { menu_pane(0); return 1; }
+        if (e->key == UI_KEY_RIGHT) { menu_pane(1); return 1; }
+        if (e->key == UI_KEY_DOWN) {
+            if (g_menu_pane) sys_step(+1);
+            else if (g_menu_hot < total - 1) { g_menu_hot++; menu_reveal(); }
+            g_dirty = 1; return 1;
+        }
+        if (e->key == UI_KEY_UP) {
+            if (g_menu_pane) sys_step(-1);
+            else if (g_menu_hot > 0) { g_menu_hot--; menu_reveal(); }
+            g_dirty = 1; return 1;
+        }
+        if (e->key == UI_KEY_ENTER) {
+            if (g_menu_pane) sys_activate(g_menu_hot);
+            else             menu_activate(g_menu_hot);
+            return 1;
+        }
         return 0;
     }
     if (e->kind != UI_EV_MOUSE_DOWN) return 0;
     unoui_content_origin(UI.theme, &g_launch, &ox, &oy);
     row = (e->y - oy) / MROW;
+    if (e->x >= ox + g_menu_lw) {                       /* the right pane */
+        if (row >= 0 && row < SYS_N) sys_activate(row);
+        return 1;
+    }
     if (row >= 0 && row < menu_vis()) { menu_activate(g_menu_scroll + row); return 1; }
     return 0;
 }
+/* ONE canvas takes the input for both panes: a canvas only gets events while
+ * it is the focused widget, and the focus cannot be in two places. It splits
+ * the click by x (above); the right pane's canvas draws only. */
 static unoui_canvas g_menu_cv = { launcher_draw, launcher_event, 0 };
+static unoui_canvas g_sys_cv  = { sysmenu_draw,  0, 0 };
 
 /* per-frame while the launcher is open: highlight the hovered row, and scroll
  * when the pointer rests on the top/bottom scroll zone. */
 static void launcher_hover(int mx, int my)
 {
-    int ox, oy, vis = menu_vis(), total = menu_count(), row, oldhot = g_menu_hot;
+    int ox, oy, vis = menu_vis(), total = menu_count(), row;
+    int oldhot = g_menu_hot, oldpane = g_menu_pane;
     unoui_content_origin(UI.theme, &g_launch, &ox, &oy);
     /* only the pointer sitting ON the menu changes the highlight - otherwise
      * leave it (so keyboard selection isn't clobbered every frame). */
     if (mx < g_launch.r.x || mx >= g_launch.r.x + g_launch.r.w) return;
-    if (my < oy || my >= oy + vis * MROW) return;
-    if (g_menu_scroll > 0 && my < oy + 12) {                        /* up zone */
-        if (++g_scroll_tmr >= 6) { g_scroll_tmr = 0; g_menu_scroll--; g_dirty = 1; }
-        return;
-    }
-    if (g_menu_scroll + vis < total && my >= oy + vis*MROW - 12) {  /* down zone */
-        if (++g_scroll_tmr >= 6) { g_scroll_tmr = 0; g_menu_scroll++; g_dirty = 1; }
-        return;
-    }
-    g_scroll_tmr = 0;
+    if (my < oy) return;
     row = (my - oy) / MROW;
-    if (row >= 0 && row < vis) g_menu_hot = g_menu_scroll + row;
-    if (g_menu_hot != oldhot) g_dirty = 1;
+    if (mx >= ox + g_menu_lw) {                                /* right pane */
+        if (row >= 0 && row < SYS_N && !sys_is_head(row)) {
+            g_menu_pane = 1; g_menu_hot = row;
+        }
+        g_scroll_tmr = 0;
+    } else {                                                   /* left pane */
+        if (my >= oy + vis * MROW) return;
+        if (g_menu_scroll > 0 && my < oy + 12) {                    /* up zone */
+            if (++g_scroll_tmr >= 6) { g_scroll_tmr = 0; g_menu_scroll--; g_dirty = 1; }
+            return;
+        }
+        if (g_menu_scroll + vis < total && my >= oy + vis*MROW - 12) { /* down */
+            if (++g_scroll_tmr >= 6) { g_scroll_tmr = 0; g_menu_scroll++; g_dirty = 1; }
+            return;
+        }
+        g_scroll_tmr = 0;
+        if (row >= 0 && row < vis) { g_menu_pane = 0; g_menu_hot = g_menu_scroll + row; }
+    }
+    if (g_menu_hot != oldhot || g_menu_pane != oldpane) g_dirty = 1;
 }
 
 static void build_launcher(void)
 {
     const unoui_metrics *m = &UI.theme->m;
-    int i, tw = 0, winw, vis;
+    int i, tw = 0, sw = 0, winw, vis, rows, contentw;
     menu_refresh();
     vis = menu_vis();
     for (i = 0; i < menu_count(); i++) { int t = fb_text_w(menu_label(i)); if (t > tw) tw = t; }
-    winw = tw + 26 + 14 + 2 * m->frame_w + 2 * m->pad;
-    g_menu_scroll = 0; g_menu_hot = -1;
-    unoui_window_init(&g_launch, "Programs", 8, 20,
-                      winw, m->title_h + m->pad + vis * MROW + m->pad + m->frame_w);
+    for (i = 0; i < SYS_N; i++) { int t = fb_text_w(kSys[i].label); if (t > sw) sw = t; }
+    g_menu_lw = tw + 26 + 14;                      /* icon + label + chevron  */
+    /* both panes are as tall as the taller of them, so the divider runs the
+     * full height and neither column ends in mid-air */
+    rows = vis > SYS_N ? vis : SYS_N;
+    if (rows > MENU_MAXVIS) rows = MENU_MAXVIS;   /* the right pane is taller
+                                                     than the screen at 200% */
+    contentw = g_menu_lw + SYS_GAP + sw + 28;
+    winw = contentw + 2 * m->frame_w + 2 * m->pad;
+    g_menu_scroll = 0; g_menu_hot = -1; g_menu_pane = 0;
+    unoui_window_init(&g_launch, "Start", 8, 20,
+                      winw, m->title_h + m->pad + rows * MROW + m->pad + m->frame_w);
     /* the Start menu is a titled window, but it is not one you minimize or
      * maximize: without this it inherits phase B's boxes and draws controls
      * that correctly do nothing (spec 13.7). Same for the calendar. */
     g_launch.flags |= UI_WIN_NOCTL;
-    unoui_add_canvas(&g_launch, 0, 0, winw - 2 * m->frame_w - 2 * m->pad, vis * MROW, &g_menu_cv);
+    /* the LEFT canvas takes the input for both panes (see g_menu_cv), so it is
+     * added first and is the one the shell focuses */
+    unoui_add_canvas(&g_launch, 0, 0, g_menu_lw, rows * MROW, &g_menu_cv);
+    unoui_add_canvas(&g_launch, g_menu_lw + SYS_GAP, 0,
+                     contentw - g_menu_lw - SYS_GAP, rows * MROW, &g_sys_cv);
 }
 
 /* ---- keep windows on-screen after a resolution change ------------------- */
