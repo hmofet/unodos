@@ -35,7 +35,7 @@ DISK  = "/tmp/urcauth_disk.img"
 FAT   = "/tmp/urcauth_fat.img"
 LPORT = 5099
 HFWD  = 5698
-TOKEN = "0123456789abcdef"          # 16 hex chars, as UNOAUTO_TOKEN_CHARS wants
+TOKEN = "147025"                    # 6 digits, as UNOAUTO_TOKEN_CHARS wants
 SECTOR, MIB = 512, 1 << 20
 
 

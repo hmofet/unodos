@@ -43,7 +43,10 @@ In a debug build the gate is transparent, so nothing in this document changes:
 allowed. The one addition is the key **`urc-auth=<token>`**, which runs the
 production rules in a debug image so the security path can be regression-tested
 headlessly (`tools/urcauth_qemu.py`) - it arms observe+drive but NOT system, so
-one boot proves allowed, refused-for-power and refused-for-auth.
+one boot proves allowed, refused-for-power and refused-for-auth. The value must
+be exactly `UNOAUTO_TOKEN_CHARS` long (**6 digits** since 2026-08-04, 16 hex
+characters before that) - the auth compare is fixed-width, so a token of any
+other length can never match.
 
 The harness core is **unoautomate** (`unoauto.h` / `unoauto.c`): channelled
 logging with pluggable sinks, a registered test registry (SPECTEST's suites live

@@ -39,9 +39,20 @@
 
 #include "unoscript.h"          /* usc_cap_t / usc_uid_t */
 
-/* Token: 16 hex chars + NUL.  Long enough that guessing it over a LAN is not a
- * strategy, short enough to read off a screen and type on the dev PC. */
-#define UNOAUTO_TOKEN_CHARS  16
+/* Token: a 6-DIGIT PIN + NUL.  It used to be 16 hex characters, which is a
+ * fine credential and a bad thing to ask a person to do: it is read off one
+ * screen and typed on another machine, by hand, and "was that a b or a 6" is
+ * the failure everybody actually hit.
+ *
+ * WHY SIX DIGITS IS ENOUGH HERE, and would not be anywhere else.  A million
+ * combinations is nothing against an oracle you can hammer.  This is not one:
+ * unoauto_gate_auth counts failures and the THIRD one disarms the channel
+ * outright (BADAUTH_MAX), the count survives a reconnect, and re-arming needs a
+ * user physically at the console.  So an attacker on the LAN gets three guesses
+ * in a million per arming, and cannot buy a fourth from the wire.  The security
+ * comes from the lockout, not from the length - which is exactly why the
+ * lockout must not be relaxed to make the PIN more forgiving. */
+#define UNOAUTO_TOKEN_CHARS  6
 #define UNOAUTO_TOKEN_BUF    (UNOAUTO_TOKEN_CHARS + 1)
 
 /* The three powers, as a mask - which of the automate.* capabilities the
