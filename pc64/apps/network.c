@@ -396,7 +396,18 @@ static void wifi_do_join(void)
             } else strcpy(gWifiMsg, "Joined, but no DHCP lease yet.");
         }
     } else {
-        strcpy(gWifiMsg, "Join failed - check the password and try again.");
+        /* Report the driver's reason, not a guess. See the matching note in
+         * pc64_uui.c: this blamed the password for every join failure, and on
+         * metal it did so while the actual fault was an asserted radio. */
+        char why[80];
+        int n = 0, i;
+        iwl_status_str(why, (int)sizeof why);
+        if (why[0]) {
+            const char *pre = "Join failed: ";
+            while (pre[n] && n < (int)sizeof gWifiMsg - 1) { gWifiMsg[n] = pre[n]; n++; }
+            for (i = 0; why[i] && n < (int)sizeof gWifiMsg - 1; i++) gWifiMsg[n++] = why[i];
+            gWifiMsg[n] = 0;
+        } else strcpy(gWifiMsg, "Join failed - see the NET log for why.");
     }
     { int i; for (i = 0; i < (int)sizeof gPsk; i++) gPsk[i] = 0; }
     gPskLen = 0;
