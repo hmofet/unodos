@@ -728,12 +728,23 @@ static void build_ctrl(unoui_window *w)
     for (i = 0; i < NTHEMES; i++) kThemeNames[i] = kThemes[i].name;
     build_res_items();
     build_font_items();
-    /* widen the panel if the tab strip (laid out by label width) needs it, so no
-       tab spills past the window edge under a wider font */
-    { int tabw = 8; for (i = 0; i < CT_N; i++) tabw += fb_text_w(kCtrlTabs[i]) + 16;
-      if (tabw > cw) cw = tabw; }
+    /* Widen the panel if the tab strip (laid out by label width) needs it - but
+     * never past the screen.  Widening alone was the whole rule, and at a 150%
+     * UI scale six tabs come to 682 px, so the Control Panel was built 682 wide
+     * on a 640 px desktop: the last tabs and the right-hand column of every tab
+     * were off the edge of the machine.  Past the cap the strip SCROLLS
+     * (UI_TF_OVERFLOW) instead, which is what that flag is for. */
+    { int tabw = 8, i2;
+      /* the cap is on the WINDOW, so the frame and padding come out of it
+         first - capping the content at FB_W built a 650 px window on a 640 px
+         desktop, and the clamp then cut 10 px off every right-hand control */
+      int cap = FB_W - 16 - 2 * (UI.theme->m.frame_w + UI.theme->m.pad);
+      for (i2 = 0; i2 < CT_N; i2++) tabw += fb_text_w(kCtrlTabs[i2]) + 16;
+      if (tabw > cw)  cw = tabw;
+      if (cw > cap)   cw = cap; }
     unoui_window_init(w, "Control Panel", 150, 24, 1, 1);   /* sized below */
-    x = unoui_add_tabs(w, 4, y, cw - 4, kCtrlTabs, CT_N, g_ctrl_tab); x->id = ID_CPTAB;
+    x = unoui_add_tabs(w, 4, y, cw - 4, kCtrlTabs, CT_N, g_ctrl_tab);
+    x->id = ID_CPTAB; x->flags |= UI_TF_OVERFLOW;
     y += UI_TAB_H + 10;
 
     switch (g_ctrl_tab) {
@@ -939,13 +950,17 @@ static void build_ctrl(unoui_window *w)
         g_sp_h  = unoui_add_spinner(w, lw,      y, 52, 0, 23, hh);
         unoui_add_label(w, lw + 56, y + lofs, ":");
         g_sp_mi = unoui_add_spinner(w, lw + 66, y, 52, 0, 59, mi);
-        x = unoui_add_button(w, lw + 126, y, 92, "Set time", 0); x->id = ID_SETDT;
+        x = unoui_add_button(w, lw + 126, y, fb_text_w("Set time") + 26,
+                             "Set time", 0); x->id = ID_SETDT;
         y += row;
-        x = unoui_add_button(w, 8, y, 120, "Set date...", 0); x->id = ID_CAL;
+        x = unoui_add_button(w, 8, y, fb_text_w("Set date...") + 26,
+                             "Set date...", 0); x->id = ID_CAL;
         y += row + 4;
         { int lwc = fb_text_w("Clock format:") + 8;
+          int dw = fb_text_w(cfmt[0]);
+          if (fb_text_w(cfmt[1]) > dw) dw = fb_text_w(cfmt[1]);
           unoui_add_label(w, 8, y + lofs, "Clock format:");
-          unoui_add_dropdown(w, 8 + lwc, y, 120, cfmt, 2, g_clock_12h);
+          unoui_add_dropdown(w, 8 + lwc, y, dw + 32, cfmt, 2, g_clock_12h);
           w->w[w->nw-1].id = ID_CLOCKFMT; }
         y += row;
         break; }
@@ -953,8 +968,11 @@ static void build_ctrl(unoui_window *w)
     case CT_SYSTEM:
         { static const char *bmode[] = { "Percent", "Icon", "Both" };
           int lwb = fb_text_w("Battery display:") + 8;
+          int dw = 0, k;
+          for (k = 0; k < 3; k++)
+              { int t2 = fb_text_w(bmode[k]); if (t2 > dw) dw = t2; }
           unoui_add_label(w, 8, y + lofs, "Battery display:");
-          unoui_add_dropdown(w, 8 + lwb, y, 120, bmode, 3, g_batt_mode);
+          unoui_add_dropdown(w, 8 + lwb, y, dw + 32, bmode, 3, g_batt_mode);
           w->w[w->nw-1].id = ID_BATTMODE; }
         y += row;
         unoui_add_check(w, 8, y, "Restore last session at startup", g_session_restore);
@@ -970,20 +988,37 @@ static void build_ctrl(unoui_window *w)
           w->w[w->nw-1].id = ID_PSPEED; }
         y += ch + 10;
         unoui_add_sep(w, 8, y, cw - 16); y += 8;
-        x = unoui_add_button(w, 8, y, 110, "Accounts...", 0); x->id = ID_ACCT;
-        x = unoui_add_button(w, 126, y, 110, "Licenses", 0); x->id = ID_LIC;
-        x = unoui_add_button(w, cw - 8 - 96, y, 96, "About", 0); x->id = ID_ABOUT;
+        /* sized to their labels and flowed, not three fixed 110/96 px slots -
+         * at a larger UI scale every one of them was cut ("Accounts..." read
+         * "Accounts.", About ran past the panel edge) */
+        { int ba = fb_text_w("Accounts...") + 26;
+          int bl = fb_text_w("Licenses")    + 26;
+          int bo = fb_text_w("About")       + 26;
+          x = unoui_add_button(w, 8, y, ba, "Accounts...", 0); x->id = ID_ACCT;
+          x = unoui_add_button(w, 8 + ba + 8, y, bl, "Licenses", 0); x->id = ID_LIC;
+          if (8 + ba + 8 + bl + 8 + bo <= cw - 8)
+              x = unoui_add_button(w, cw - 8 - bo, y, bo, "About", 0);
+          else { y += bh + 6; x = unoui_add_button(w, 8, y, bo, "About", 0); }
+          x->id = ID_ABOUT; }
         y += bh + 8;
         /* the unoautomate/URC arming panel.  Sits beside Accounts because it
          * is the same kind of decision - who may use this machine - and it is
          * the ONLY way to turn remote control on (unoauto_gate.h). */
-        x = unoui_add_button(w, 8, y, 150, "Remote control...", 0); x->id = ID_REMOTE;
+        x = unoui_add_button(w, 8, y, fb_text_w("Remote control...") + 26,
+                             "Remote control...", 0); x->id = ID_REMOTE;
         y += bh + 8;
         break;
     }
     w->r.w = cw + 2 * UI.theme->m.frame_w + 2 * UI.theme->m.pad;
     w->r.h = win_h_for(y);
-    w->min_w = w->r.w; w->min_h = w->r.h;
+    /* Never taller than the desktop.  The System tab at a 200% UI scale came to
+     * 380 px of content on a 357 px work area, so the panel opened with its
+     * bottom - and the buttons that live there - below the taskbar, and
+     * min_h = r.h meant it could not even be dragged smaller. */
+    { int cap = FB_H - TASKH; if (w->r.h > cap) w->r.h = cap; }
+    w->min_w = w->r.w;
+    w->min_h = win_h_for(UI_TAB_H + 10 + 4 * (ui_ctl_h() + 8));   /* ~4 rows */
+    if (w->min_h > w->r.h) w->min_h = w->r.h;
     w->flags |= UI_WIN_RESIZE;
 }
 
@@ -1303,6 +1338,20 @@ static void build_sys(unoui_window *w)
     build_sndstat();
     build_animstat();
     fmt_net();                    /* Network line (IP / lease state) */
+    /* Wide enough for the header rows at the LIVE font, capped to the desktop.
+     * 420 was a constant chosen against the 8 px bitmap face; at 150% the
+     * licence line and the two buttons were already past the right edge. */
+    { int need = fb_text_w("x86-64 legacy BIOS  -  bare metal  -  10 themes");
+      int t2 = fb_text_w("CC BY-NC 4.0 + MIT/Apache-2.0 parts")
+             + fb_text_w("View licenses") + 26 + 24;
+      int t3 = fb_text_w("Manage accounts...") + fb_text_w("Remote control...")
+             + 2 * 26 + 8 + 2 * gx;
+      if (t2 > need) need = t2;
+      if (t3 > need) need = t3;
+      need += 2 * gx;
+      if (need > cw) cw = need;
+      { int cap = FB_W - 16 - 2 * (UI.theme->m.frame_w + UI.theme->m.pad);
+        if (cw > cap) cw = cap; } }
     unoui_window_init(w, "System", 400, 100, 1, 1);
     /* header - identity + licensing (the About surface; the notices the
      * bundled open components require live behind View licenses, which
@@ -1331,44 +1380,46 @@ static void build_sys(unoui_window *w)
         b = unoui_add_button(w, gx + aw + 8, y, rw, "Remote control...", 0);
         b->id = ID_REMOTE; }
       y += lh + 8; }
-    /* grouped hardware readouts: a box per subsystem, rows inside */
-#define SYS_GROUP(title, nrows) \
-    g0 = y; (void)g0; unoui_add_group(w, gx, y, cw - 2 * gx, (nrows) * lh + fh + 10, title); \
-    y += fh + 4
-#define SYS_ROW(s) unoui_add_label(w, tx, y, s); y += lh
-    /* FIRST, not last. This window already runs past the bottom of an 800 px
-     * desktop (see the header comment above), so a group appended at the end is
-     * born invisible - which is exactly what happened to this one on the first
-     * attempt, on a 640x400 QEMU desktop. */
-    SYS_GROUP("Timing", 1);
-    SYS_ROW(g_animln);
-    y += 12;
-    SYS_GROUP("Input & USB", 6);
-    SYS_ROW(g_tp1);
-    SYS_ROW(g_tp2);
-    SYS_ROW(g_ptr1);
-    SYS_ROW(g_ptr2);
-    SYS_ROW(g_usb);
-    SYS_ROW(g_usb2);
-    y += 12;
-    SYS_GROUP("Storage", 1);
-    SYS_ROW(g_nat);
-    y += 12;
-    SYS_GROUP("Network", 1);
-    SYS_ROW(g_netline);
-    y += 12;
-    SYS_GROUP("Power & ACPI", 2);
-    SYS_ROW(g_acpi1);
-    SYS_ROW(g_acpi2);
-    y += 12;
-    SYS_GROUP("Audio", 1);
-    SYS_ROW(g_snd);
-    y += 12;
-#undef SYS_GROUP
-#undef SYS_ROW
+    /* The hardware readouts, in ONE SCROLLING LIST.
+     *
+     * They used to be a stack of group boxes and labels sized by adding rows
+     * up, and both comments above are the scar tissue: the window ran off the
+     * bottom of the desktop, so each new group had to be inserted at the TOP or
+     * it was "born invisible", and every row after the fold was unreachable
+     * with no scrollbar to reach it. There is no arrangement of a fixed-height
+     * stack that survives another row being added, or a 200% UI scale - which
+     * put 874 px of content on a 357 px work area.
+     *
+     * A list scrolls (wheel, its inline bar, the arrow keys), fills the window
+     * so resizing it shows more, and takes rows in whatever order reads best
+     * because none of them can fall off the end. Headings are rows. */
+    (void)tx; (void)g0; (void)lh;
+    { int n = 0;
+      static const char *rows[24];
+      rows[n++] = "TIMING";                 rows[n++] = g_animln;
+      rows[n++] = "";
+      rows[n++] = "INPUT & USB";            rows[n++] = g_tp1;   rows[n++] = g_tp2;
+      rows[n++] = g_ptr1;                   rows[n++] = g_ptr2;
+      rows[n++] = g_usb;                    rows[n++] = g_usb2;
+      rows[n++] = "";
+      rows[n++] = "STORAGE";                rows[n++] = g_nat;
+      rows[n++] = "";
+      rows[n++] = "NETWORK";                rows[n++] = g_netline;
+      rows[n++] = "";
+      rows[n++] = "POWER & ACPI";           rows[n++] = g_acpi1; rows[n++] = g_acpi2;
+      rows[n++] = "";
+      rows[n++] = "AUDIO";                  rows[n++] = g_snd;
+      /* the list is the rest of the window, and grows with it */
+      { unoui_widget *l = unoui_add_list(w, gx, y, cw - 2 * gx, 10 * ui_row_h() + 6,
+                                         rows, n, -1);
+        unoui_widget_fill(l);
+        y += 10 * ui_row_h() + 6; } }
     w->r.w = cw + 2 * UI.theme->m.frame_w + 2 * UI.theme->m.pad;
     w->r.h = win_h_for(y);
+    { int cap = FB_H - TASKH; if (w->r.h > cap) w->r.h = cap; }
     w->min_w = 360; w->min_h = 240;
+    if (w->min_h > w->r.h) w->min_h = w->r.h;
+    if (w->min_w > w->r.w) w->min_w = w->r.w;
     w->flags |= UI_WIN_RESIZE;
 }
 /* Clock lives in its own translation unit now (analog face + world map). */
@@ -1515,44 +1566,165 @@ static void build_setup(unoui_window *w)
 {
     const unoui_theme *t = pc64_shell_theme();
     const char *conf_lab = "To erase a whole disk, type " INST_CONFIRM_WORD ":";
-    const char *keys_lab = "Keys: Up/Down pick - C confirm box (Esc leaves) - I installs - R rescans";
+    /* One 71-character hint line forced the window 753 px wide at a 150% UI
+       scale - wider than the desktop it was supposed to open on.  Two shorter
+       lines cost one row and fit any font. */
+    const char *keys1 = "Keys: Up/Down pick - C confirm box (Esc leaves)";
+    const char *keys2 = "      I installs - R rescans";
+    int fh = fb_text_h(), lh = fh + 4, bh = ui_ctl_h(), ch = ui_field_h();
     int confw = fb_text_w(conf_lab), instw = fb_text_w("Install") + 24;
-    int cw, y;
+    int cw, y, listh;
 
     /* Content width is measured, not assumed: the confirm row is the widest
        thing here and its width follows the active font, so a fixed 400 px
-       window clipped it (and left the Install button un-anchored). */
+       window clipped it (and left the Install button un-anchored).  Capped to
+       the desktop, because a window wider than the screen cannot be read
+       whatever it contains. */
     cw = 8 + confw + 8 + 80 + 8;
-    if (cw < 8 + fb_text_w(keys_lab) + 8) cw = 8 + fb_text_w(keys_lab) + 8;
+    { int k = 8 + fb_text_w(keys1) + 8; if (cw < k) cw = k; }
     if (cw < 400) cw = 400;
+    { int cap = FB_W - 16 - 2 * t->m.frame_w - 2 * t->m.pad; if (cw > cap) cw = cap; }
 
     inst_rescan();
     unoui_window_init(w, "Install", 150, 60, cw, 286);
-    unoui_add_label(w, 8, 4, "Install UnoDOS to a local disk");
-    unoui_add_label(w, 8, 20, "Volumes keep your files; Disks are ERASED.");
-    unoui_add_label(w, 8, 34, keys_lab);
-    g_inst_list_w = unoui_add_list(w, 8, 52, cw - 16, 92, g_inst_ptr, g_inst_n, g_inst_sel);
-    g_inst_list_w->id = ID_ILIST;
-    { unoui_widget *c = unoui_add_check(w, 8, 150, "Boot UnoDOS by default", 1);
-      c->id = ID_IDEF; }
+    /* Rows flow from the font's own metrics.  They were absolute pixel offsets
+       (4, 20, 34, 52, 150, 174, 196, 224, 242) chosen against the 8 px bitmap
+       face, so every row overlapped the one below it under a larger font. */
+    y = 4;
+    unoui_add_label(w, 8, y, "Install UnoDOS to a local disk");       y += lh;
+    unoui_add_label(w, 8, y, "Volumes keep your files; Disks are ERASED."); y += lh;
+    unoui_add_label(w, 8, y, keys1);                                  y += fh + 2;
+    unoui_add_label(w, 8, y, keys2);                                  y += lh + 4;
+    /* the list takes whatever the fixed rows leave, so the window fits the
+       desktop instead of running its buttons under the taskbar (found by the
+       audit at 100%: a 395 px window on a 372 px work area) */
+    listh = (FB_H - TASKH) - 60 - win_h_for(y)
+          - (fh + 12) - (ch + 8) - (bh + 8) - (12 + 6) - (fh + 6);
+    if (listh > 6 * ui_row_h() + 6) listh = 6 * ui_row_h() + 6;
+    if (listh < 2 * ui_row_h() + 6) listh = 2 * ui_row_h() + 6;
+    g_inst_list_w = unoui_add_list(w, 8, y, cw - 16, listh, g_inst_ptr, g_inst_n,
+                                   g_inst_sel);
+    g_inst_list_w->id = ID_ILIST;                                     y += listh + 8;
+    { unoui_widget *c = unoui_add_check(w, 8, y, "Boot UnoDOS by default", 1);
+      c->id = ID_IDEF; }                                              y += fh + 12;
     /* the typed half of the whole-disk confirmation (ignored for volumes) */
-    unoui_add_label(w, 8, 174, conf_lab);
+    unoui_add_label(w, 8, y + (ch - fh) / 2, conf_lab);
     unoui_text_init(&g_inst_conf_t, g_inst_conf, sizeof g_inst_conf, 0);
-    { unoui_widget *e = unoui_add_edit(w, 8 + confw + 8, 170, 80, &g_inst_conf_t);
+    { unoui_widget *e = unoui_add_edit(w, 8 + confw + 8, y, 80, &g_inst_conf_t);
       e->id = ID_ICONF; g_inst_conf_w = e; g_inst_conf_wi = w->nw - 1; }
-    y = 196;
-    { unoui_widget *b = unoui_add_button(w, 8, y, 100, "Rescan", 0); b->id = ID_IRESCAN; }
+    y += ch + 8;
+    { int rw = fb_text_w("Rescan") + 26;
+      unoui_widget *b = unoui_add_button(w, 8, y, rw, "Rescan", 0); b->id = ID_IRESCAN; }
     { unoui_widget *b = unoui_add_button(w, cw - 8 - instw, y, instw, "Install", 0);
       b->id = ID_IGO; }
-    g_inst_prog_w = unoui_add_progress(w, 8, 224, cw - 16, 0, 100);
-    unoui_add_label(w, 8, 242, g_inst_stat);
+    y += bh + 8;
+    g_inst_prog_w = unoui_add_progress(w, 8, y, cw - 16, 0, 100);     y += 12 + 6;
+    unoui_add_label(w, 8, y, g_inst_stat);                            y += fh + 6;
     w->r.w = cw + 2 * t->m.frame_w + 2 * t->m.pad;
-    w->r.h = win_h_for(262);
+    w->r.h = win_h_for(y);
 }
 
 static void (*const g_build[NNATIVE])(unoui_window *) =
     { build_ctrl, build_edit, build_files, build_sys, build_clock,
       build_setup, build_music, build_unoamp };
+
+#ifdef UNO_DEBUG
+/* ---- layout audit (debug builds; DEBUG.CFG `layout-audit`) -----------------
+ * Widgets are clipped to their window's content rect, so a layout that does not
+ * fit does not spill onto the desktop - it is silently CUT OFF at the frame,
+ * and a screen with a button reading "Allow se..." looks like a working
+ * machine.  Every one of those found so far was found by a person squinting at
+ * one screenshot at a time.
+ *
+ * This builds every native window - including all six Control Panel tabs, which
+ * are six different layouts sharing one window - and runs unoui's geometry
+ * audit over each, at whatever font and UI scale the boot is using.  Nothing is
+ * opened and nothing is drawn: a builder lays widgets out, which is all the
+ * audit reads.  The report goes to the kernel log (and to QEMU debugcon under
+ * -DUNO_DBGCON, which is how it is read headlessly). */
+static int g_audit_hits;
+
+static void audit_report(void *ctx, const unoui_window *win, int wi,
+                         const char *why, unoui_rect r, int cw, int ch)
+{
+    const char *what = (const char *)ctx;
+    g_audit_hits++;
+    uno_dbg_log("layout: %s%s%s w%d: %s - rect %d,%d %dx%d, content %dx%d",
+                win->title && win->title[0] ? win->title : "(untitled)",
+                what ? " / " : "", what ? what : "",
+                wi, why, r.x, r.y, r.w, r.h, cw, ch);
+}
+
+/* a window bigger than the work area cannot be laid out its way out of - it is
+ * simply off the screen.  Reported separately because the fix is different:
+ * the window has to get smaller, not its widgets. */
+static void audit_fit(unoui_window *w, const char *what)
+{
+    int aw = FB_W, ah = FB_H - TASKH;
+    if (w->r.w > aw || w->r.h > ah) {
+        g_audit_hits++;
+        uno_dbg_log("layout: %s: window %dx%d does not fit the %dx%d work area",
+                    what, w->r.w, w->r.h, aw, ah);
+    }
+}
+
+static void layout_audit_pass(void)
+{
+    int a, saved_tab = g_ctrl_tab, t;
+    for (t = 0; t < CT_N; t++) {              /* six tabs = six layouts */
+        g_ctrl_tab = t;
+        build_ctrl(&g_win[APP_CTRL]);
+        audit_fit(&g_win[APP_CTRL], kCtrlTabs[t]);   /* as BUILT, before clamping */
+        clamp_to_workarea(&g_win[APP_CTRL]);         /* what open_app will do */
+        unoui_reflow_window(UI.theme, &g_win[APP_CTRL]);
+        unoui_window_audit(UI.theme, &g_win[APP_CTRL], audit_report,
+                           (void *)kCtrlTabs[t]);
+    }
+    g_ctrl_tab = saved_tab;
+    build_ctrl(&g_win[APP_CTRL]);
+    unoui_reflow_window(UI.theme, &g_win[APP_CTRL]);
+    for (a = 0; a < NNATIVE; a++) {
+        if (a == APP_CTRL) continue;
+        g_build[a](&g_win[a]);
+        audit_fit(&g_win[a], g_win[a].title ? g_win[a].title : "(untitled)");
+        clamp_to_workarea(&g_win[a]);
+        unoui_reflow_window(UI.theme, &g_win[a]);
+        g_built[a] = 1;
+        unoui_window_audit(UI.theme, &g_win[a], audit_report, 0);
+    }
+    /* the shell's own BARE chrome, laid out the same way and with the same
+     * failure mode (a taskbar chip wider than the bar) */
+    unoui_window_audit(UI.theme, &g_desk, audit_report, (void *)"desktop");
+    unoui_window_audit(UI.theme, &g_task, audit_report, (void *)"taskbar");
+}
+
+static void layout_audit_run(void)
+{
+    /* Sweep every UI SCALE, not just the one this boot happens to use.  Almost
+     * every layout in the OS is a mix of measured text and absolute pixels, so
+     * 100% proves nothing about 200% - and 200% is exactly where a window that
+     * was already close to the screen edge goes over it. */
+    static const int scales[] = { 100, 125, 150, 200 };
+    int saved = uno_font_ui_scale(), i;
+    g_audit_hits = 0;
+    for (i = 0; i < (int)(sizeof scales / sizeof scales[0]); i++) {
+        int before = g_audit_hits;
+        uno_font_set_ui_scale(scales[i]);
+        set_workarea();
+        uno_dbg_log("layout: --- font \"%s\", UI scale %d%%, desktop %dx%d ---",
+                    uno_font_active() >= 0 ? uno_font_name(uno_font_active()) : "System",
+                    uno_font_ui_scale(), FB_W, FB_H);
+        layout_audit_pass();
+        uno_dbg_log("layout: --- %d%%: %d finding(s) ---",
+                    scales[i], g_audit_hits - before);
+    }
+    uno_font_set_ui_scale(saved);
+    set_workarea();
+    { int a; for (a = 0; a < NNATIVE; a++) g_built[a] = 0; }   /* rebuild for real */
+    uno_dbg_log("layout: audit done - %d finding(s) over %d scales",
+                g_audit_hits, (int)(sizeof scales / sizeof scales[0]));
+}
+#endif /* UNO_DEBUG */
 
 /* ---- window management -------------------------------------------------- */
 static int g_launch_open;
@@ -2327,6 +2499,17 @@ static void build_desktop(void)
  * opens is pulled fully inside. */
 static void clamp_to_workarea(unoui_window *w)
 {
+    /* SIZE first, then position.  A window built bigger than the desktop used
+     * to be shoved to 0,0 and left hanging off the bottom right - the Install
+     * window is 753 px wide at a 150% UI scale, the System window taller than
+     * the work area at every scale, and neither could be dragged back into
+     * view because there was nothing left on screen to drag.  Shrinking to fit
+     * cuts content, which is bad; being unreachable is worse, and the layout
+     * audit reports the cut so it gets fixed at the source. */
+    if (w->r.w > FB_W)         w->r.w = FB_W;
+    if (w->r.h > FB_H - TASKH) w->r.h = FB_H - TASKH;
+    if (w->min_w > w->r.w) w->min_w = w->r.w;
+    if (w->min_h > w->r.h) w->min_h = w->r.h;
     if (w->r.x + w->r.w > FB_W)         w->r.x = FB_W - w->r.w;
     if (w->r.y + w->r.h > FB_H - TASKH) w->r.y = FB_H - TASKH - w->r.h;
     if (w->r.x < 0) w->r.x = 0;
@@ -2499,7 +2682,12 @@ static void open_app(int a)
     }
     if (!g_open[a]) {
         int g = app_game(a);
-        clamp_to_workarea(&g_win[a]);   /* designed pos, but never off-screen */
+        unoui_rect was = g_win[a].r;
+        clamp_to_workarea(&g_win[a]);   /* designed size/pos, but never off-screen */
+        /* clamp can now SHRINK a window that was built bigger than the desktop,
+         * so anything marked FILL has to be re-fitted to the size it ended up */
+        if (g_win[a].r.w != was.w || g_win[a].r.h != was.h)
+            unoui_reflow_window(UI.theme, &g_win[a]);
         if (!unoui_ui_add(&UI, &g_win[a])) {         /* window table full */
 #ifdef UNO_DBGCON
             { const char *s = "open_app: window table full\n";
@@ -5205,6 +5393,13 @@ int main(void)
      * launcher are all laid out in the live font's metrics. */
     uno_font_use(0);
     g_res_sel = res_active_index();     /* the Display tab opens on the truth  */
+#ifdef UNO_DEBUG
+    /* DEBUG.CFG `layout-audit`: sweep every window for content that will be cut
+     * off at its frame, then carry on booting.  Before the login gate, so a
+     * machine with accounts still reports. */
+    { int pc64_stress_cfg_flag(const char *key);          /* pc64_stress.c */
+      if (pc64_stress_cfg_flag("layout-audit") > 0) layout_audit_run(); }
+#endif
     /* Security: register the escalation consent sheet with unosecure, then run
      * the boot login gate.  The gate is a no-op on a fresh machine (no accounts
      * yet), so existing/first boots reach the desktop unchanged; once accounts

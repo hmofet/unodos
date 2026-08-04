@@ -403,13 +403,23 @@ void pc64_clock_build(unoui_window *w)
     unoui_add_label(w, 0, y, cl_digital); y += fh + 2;
     unoui_add_label(w, 0, y, cl_date);    y += fh + 6;
 
-    unoui_add_label(w, 0, y + (ch - fh) / 2, "UTC offset (hours):");
-    x = unoui_add_spinner(w, fb_text_w("UTC offset (hours):") + 8, y, 70,
-                          -12, 14, cl_utc_off / 60);
-    x->id = CID_UTC;
-    unoui_add_label(w, fb_text_w("UTC offset (hours):") + 86, y + (ch - fh) / 2,
-                    "standard time - no DST");
-    y += ch + 6;
+    /* The offset row: label, spinner, and a note about DST.  The note used to
+     * be pinned to the right of the spinner unconditionally, which put it past
+     * the window edge the moment the font grew (found by the layout audit at a
+     * 125% UI scale) - so it drops to its own line when it does not fit. */
+    { int lx = fb_text_w("UTC offset (hours):") + 8;
+      const char *note = "standard time - no DST";
+      unoui_add_label(w, 0, y + (ch - fh) / 2, "UTC offset (hours):");
+      x = unoui_add_spinner(w, lx, y, 70, -12, 14, cl_utc_off / 60);
+      x->id = CID_UTC;
+      if (lx + 78 + fb_text_w(note) <= cw) {
+          unoui_add_label(w, lx + 78, y + (ch - fh) / 2, note);
+          y += ch + 6;
+      } else {
+          y += ch + 4;
+          unoui_add_label(w, 0, y, note);
+          y += fh + 4;
+      } }
 
     unoui_add_label(w, 0, y, "World times"); y += fh + 2;
     /* The list is the LAST widget, so marking it fill is correct here: on

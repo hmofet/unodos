@@ -573,19 +573,25 @@ void pc64_music_build(unoui_window *w)
      * stretches a widget to the content edge, which is only correct for the
      * LAST widget in a window. The list sits in the middle, so filling it
      * would swallow the transport controls underneath. */
-    listh  = 8 * (fh + 6) + 8;                    /* about eight visible rows  */
+    /* Everything except the list is a fixed stack, so size the LIST to what is
+     * left and derive the window from that.  Trimming the list and then
+     * re-applying a floor to it (what this did) put the height back over the
+     * work area, and the transport row and level meter ended up below the
+     * bottom edge - found by the layout audit at a 200% UI scale. */
     chrome = 2                                     /* top margin               */
            + (bh + 6)                              /* source row               */
-           + listh + 6                             /* list + separator         */
+           + 6                                     /* separator                */
            + 2 * (fh + 2) + 4                      /* now-playing + meta       */
            + (ch + 6)                              /* seek row                 */
            + (bh + 6)                              /* transport row            */
-           + 18 + 2;                               /* level meter              */
+           + 18 + 2                                /* level meter              */
+           + t->m.title_h + t->m.frame_w + 2 * t->m.pad;
+    listh = (wah - 24) - chrome;
+    if (listh > 8 * (fh + 6) + 8) listh = 8 * (fh + 6) + 8;
+    if (listh < 2 * (fh + 6))     listh = 2 * (fh + 6);
     ww = 460;
-    wh = chrome + t->m.title_h + t->m.frame_w + 2 * t->m.pad;
     if (ww > waw - 8)  ww = waw - 8;
-    if (wh > wah - 24) { listh -= (wh - (wah - 24)); wh = wah - 24; }
-    if (listh < 3 * (fh + 6)) listh = 3 * (fh + 6);
+    wh = chrome + listh;
     unoui_window_init(w, "Music", 140, 70, ww, wh);
     mu_win = w; (void)mu_win;
 
@@ -607,7 +613,13 @@ void pc64_music_build(unoui_window *w)
 
     /* row 1: source picker + directory navigation */
     y = 2; bx = 0;
-    { int dw = fb_text_w("MMMMMM") + 26;
+    /* sized to the widest volume name that is really mounted - "MMMMMM" was a
+     * guess made against the 8 px bitmap face and cut real names off */
+    { int dw = fb_text_w("MMMMMM"), k;
+      for (k = 0; k < mu_nvols; k++)
+          { int t2 = fb_text_w(mu_vols[k]); if (t2 > dw) dw = t2; }
+      dw += 26;
+      if (dw > 200) dw = 200;
       x = unoui_add_dropdown(w, bx, y, dw, mu_vols, mu_nvols, mu_volsel);
       x->id = MID_VOL; mu_w_vol_dd = x; bx += dw + 4; }
     MBTN("Up", MID_UP, (void)0);
@@ -653,6 +665,7 @@ void pc64_music_build(unoui_window *w)
 #undef MBTN
     w->min_w = need + 2 * t->m.frame_w + 2 * t->m.pad;
     w->min_h = wh;
+    if (w->min_w > w->r.w) w->min_w = w->r.w;
     mu_relist();
     uno_snd_volume(mu_gain);
 }
