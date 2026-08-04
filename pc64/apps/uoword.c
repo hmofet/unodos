@@ -26,6 +26,8 @@
 
 /* the shell's services this module imports by name */
 void  pc64_shell_dirty(void);
+int   uno_font_count(void);
+const char *uno_font_name(int slot);
 int   pc64_shell_workarea_w(void);
 int   pc64_shell_workarea_h(void);
 void *malloc(unsigned long);
@@ -62,6 +64,7 @@ static unoui_window *g_win;
 static unoui_canvas  g_canvas;
 static int  g_cidx = -1;
 static long g_caret, g_anchor;
+static int  g_dragging;      /* between mouse-down and mouse-up in the page */
 static int  g_scroll;
 static int  g_zoom = 100;
 static int  g_dirty_layout = 1;
@@ -102,6 +105,15 @@ static char *a_num(long v, char *b)
     return b;
 }
 
+/* The Font combo's list.  It cannot be a literal: which faces exist is a
+ * property of the machine (they are TTFs read off the ESP), so the array is
+ * filled at startup from uno_font_count/uno_font_name and the toolbar table
+ * just points at it.  Entry 0 is the document default, which is what a
+ * character run with face == 0 means. */
+#define MAXFACE 8
+static const char *g_faces[MAXFACE + 1];
+static int         g_nface = 1;
+
 /* ---- the metrics seam, over pc64's kerned TTF ----------------------------- */
 /* uno_font_*_styled needs a TTF SLOT, and the system font is slot -1 (the
  * built-in 8x8 bitmap) until the user picks a face - a styled call with -1
@@ -130,6 +142,16 @@ static int font_slot(void)
     return -1;
 }
 
+/* A run's face, resolved to a pc64 font slot.  face 0 is "the document
+ * default" - whatever font_slot() found - and face n is slot n-1, so the
+ * model carries an index that survives a machine with a different font set
+ * rather than a raw slot number. */
+static int slot_of(const uow_chp *c)
+{
+    if (c && c->face > 0 && (int)c->face <= g_nface - 1) return (int)c->face - 1;
+    return font_slot();
+}
+
 static int px_of(const uow_chp *c)
 {
     int px = (c->size ? c->size : 20) / 2;      /* half-points -> points     */
@@ -148,14 +170,14 @@ static int m_text_w(const char *s, long n, const uow_chp *c, void *ctx)
     (void)ctx;
     for (i = 0; i < n && i < 255; i++) b[i] = s[i];
     b[i] = 0;
-    return uno_font_text_w_styled(font_slot(), px_of(c), style_of(c), b);
+    return uno_font_text_w_styled(slot_of(c), px_of(c), style_of(c), b);
 }
 static int m_height(const uow_chp *c, void *ctx)
-{ (void)ctx; return uno_font_height_px(font_slot(), px_of(c)) + 1; }
+{ (void)ctx; return uno_font_height_px(slot_of(c), px_of(c)) + 1; }
 static int m_baseline(const uow_chp *c, void *ctx)
-{ (void)ctx; return uno_font_baseline_px(font_slot(), px_of(c)); }
+{ (void)ctx; return uno_font_baseline_px(slot_of(c), px_of(c)); }
 static int m_space(const uow_chp *c, void *ctx)
-{ (void)ctx; return uno_font_text_w_styled(font_slot(), px_of(c), 0, " "); }
+{ (void)ctx; return uno_font_text_w_styled(slot_of(c), px_of(c), 0, " "); }
 
 /* ---- the filesystem seam the Open dialog browses -------------------------- */
 static const uof_fs kFs = {
@@ -231,8 +253,10 @@ static const uoc_tbitem kStd[] = {
     { UOC_TB_BUTTON, C_PASTE, UOI_PASTE, "Paste", 0, 0, 0, 0, 0 }
 };
 static const uoc_tbitem kFmt[] = {
-    { UOC_TB_COMBO,  C_STYLE,    -1, "Style", 0, 88, kStyleList, 7, 0 },
-    { UOC_TB_COMBO,  C_FONTSIZE, -1, "Size",  0, 48, kSizeList,  7, 0 },
+    { UOC_TB_COMBO,  C_STYLE,    -1, "Style", 0, 76, kStyleList, 7, 0 },
+    { UOC_TB_COMBO,  C_FONTNAME, -1, "Font",  0, 80,
+      (const char *const *)g_faces, MAXFACE + 1, 0 },
+    { UOC_TB_COMBO,  C_FONTSIZE, -1, "Size",  0, 40, kSizeList,  7, 0 },
     { UOC_TB_SEP,    0, -1, 0, 0, 0, 0, 0, 0 },
     { UOC_TB_TOGGLE, C_BOLD,   UOI_BOLD,      "Bold",      0, 0, 0, 0, 0 },
     { UOC_TB_TOGGLE, C_ITALIC, UOI_ITALIC,    "Italic",    0, 0, 0, 0, 0 },
@@ -244,7 +268,7 @@ static const uoc_tbitem kFmt[] = {
     { UOC_TB_TOGGLE, C_JUSTIFY, UOI_JUSTIFY, "Justify",    0, 0, 0, 0, 0 }
 };
 static const uoc_tbar kBars[] = {
-    { "Standard", kStd, 12 }, { "Formatting", kFmt, 11 }
+    { "Standard", kStd, 12 }, { "Formatting", kFmt, 12 }
 };
 
 static const char *const kDocTypes[] = {
@@ -514,6 +538,17 @@ static void do_command(int cmd)
     case C_CENTER:  apply_align(UOW_AL_CENTER);  break;
     case C_RIGHT:   apply_align(UOW_AL_RIGHT);   break;
     case C_JUSTIFY: apply_align(UOW_AL_JUSTIFY); break;
+    case C_FONTNAME: {
+        int f = uoc_combo(&CH, C_FONTNAME);
+        long a = g_anchor < g_caret ? g_anchor : g_caret;
+        long b = g_anchor < g_caret ? g_caret : g_anchor;
+        uow_chp c;
+        uow_chp_at(DOC, a, &c);
+        c.face = (unsigned short)f;
+        if (b > a) uow_format(DOC, a, b - a, &c);
+        touched();
+        break;
+    }
     case C_STYLE: {
         int s = uoc_combo(&CH, C_STYLE);
         long a = g_anchor < g_caret ? g_anchor : g_caret;
@@ -596,7 +631,7 @@ static void draw_doc(int cx, int cy, int cw, int ch)
             if (selB > selA && r->cp < selB && r->cp + r->n > selA)
                 fb_fill_rect(cx + ln->x + r->x, y, r->w, ln->h,
                              FB_RGB(0x00,0x00,0x80));
-            uno_font_draw_styled(font_slot(), px_of(&r->chp),
+            uno_font_draw_styled(slot_of(&r->chp), px_of(&r->chp),
                                  style_of(&r->chp),
                                  cx + ln->x + r->x, y, buf,
                                  (selB > selA && r->cp >= selA && r->cp < selB)
@@ -713,12 +748,26 @@ static int app_event(struct unoui_widget *w, const void *evp, void *ctx)
         pc64_shell_dirty();
         return 1;
     }
+    /* Click to place the caret, DRAG to select.
+     *
+     * The first cut extended the selection on a move event `if (e->button)`.
+     * `button` is not "a button is held" - it is WHICH button, and the left
+     * one is 0 - so that test was false for every left-button drag ever made
+     * and selecting text with the mouse simply did not work.  The app tracks
+     * the drag itself, between DOWN and UP, which is the only thing the event
+     * stream actually tells it. */
+    if (e->kind == UI_EV_MOUSE_UP) { g_dragging = 0; return 0; }
     if (e->kind == UI_EV_MOUSE_DOWN || e->kind == UI_EV_MOUSE_MOVE) {
         int top = doc_top(r);
+        if (e->kind == UI_EV_MOUSE_MOVE && !g_dragging) return 0;
         if (e->y >= top && LAY) {
             long cp = uow_cp_at(LAY, &MET, e->x - r.x, e->y - top + g_scroll);
-            if (e->kind == UI_EV_MOUSE_DOWN) { g_caret = g_anchor = cp; }
-            else if (e->button) g_caret = cp;
+            if (e->kind == UI_EV_MOUSE_DOWN) {
+                g_caret = g_anchor = cp;
+                g_dragging = 1;
+            } else {
+                g_caret = cp;                   /* dragging: extend           */
+            }
             sync_toggles();
             pc64_shell_dirty();
             return 1;
@@ -814,6 +863,16 @@ static void uw_opened(void)
     if (!DOC) DOC = uow_new();
     if (!LAY) LAY = (uow_layout *)malloc(sizeof(uow_layout));
     uoc_icons_install();
+    {   /* whatever faces this machine actually has, plus the default */
+        int n = uno_font_count(), i;
+        g_faces[0] = "Default";
+        g_nface = 1;
+        for (i = 0; i < n && g_nface <= MAXFACE; i++) {
+            const char *nm = uno_font_name(i);
+            if (nm && *nm) g_faces[g_nface++] = nm;
+        }
+        for (i = g_nface; i <= MAXFACE; i++) g_faces[i] = "";
+    }
     uoc_init(&CH, kMenus, 6, kBars, 2, 0, 0, 400, 300);
     uob_ruler_init(&RU, 20, 300);
     ST.page = "Page 1   Sec 1   1/1";

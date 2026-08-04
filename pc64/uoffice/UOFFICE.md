@@ -429,6 +429,53 @@ cascaded - it "saved" by opening a file that did not exist, and then reported
 a successful round-trip of data that had never left the grid. **Read the
 coordinates off a screenshot.**
 
+## What running it on a laptop found
+
+The suite was gated on the host, driven over URC in QEMU, and screenshotted at
+every step - and then someone booted it on a Surface Laptop Go and found five
+things in ten minutes that none of that had caught. Each one is worth keeping,
+because each is a different reason a test can be green and the product wrong.
+
+**Eight toolbar icons were blank squares.** `art()` in `uoicons.c` indexes its
+palette HEX-STYLE - `'a'` is ten, not one - and eight icons were written with
+`'a'` meaning "the second colour", indexing past a two-entry palette and
+drawing nothing. Bold, Italic and Underline had been invisible on every
+Formatting bar in the suite since the day they landed, along with Cut,
+Spelling, Undo, Draw and Help. Nothing caught it because **a toolbar with an
+invisible button still lays out, still highlights, still fires**, and 23
+storyboard frames of it looked fine. The gate now counts the ink in every
+atlas cell and fails under 8 pixels.
+
+**Drag-selection could never have worked.** The event handler extended the
+selection on a move `if (e->button)`. `button` is not "a button is held" - it
+is WHICH button, and the left one is `0`. The app now tracks the drag itself,
+between DOWN and UP, which is the only thing the event stream actually says.
+
+**There was no way to choose a typeface.** The Formatting bar had Style and
+Size and no Font, and `uow_chp.face` was carried through the model and then
+ignored by the metrics seam, which asked `font_slot()` for every run. There is
+now a Font combo filled from the faces the machine really has
+(`uno_font_count` / `uno_font_name`, newly exported to modules), and a run's
+face selects the slot it draws with.
+
+**A formula could only name a cell by typing its address.** UnoCalc now has
+Excel's POINT MODE: while a formula is being typed and the last thing typed
+was an operator, clicking a cell puts its reference in instead of moving the
+selection.
+
+**Every app window leaked a strip of desktop** along its bottom and right
+edge. A widget marked FILL only became the content rect when the window was
+resized or its saved geometry restored; a freshly opened window kept whatever
+size the app guessed at build time, and the Office apps guessed `w - 12,
+h - 28`. The shell now reflows once when it builds a window, so the flag means
+what it says from the first frame - which fixes it for every fill-widget app,
+not just these three.
+
+All three apps also have their own emblems now (`PCI_UOWORD`, `PCI_UOCALC`,
+`PCI_UOSHOW`) instead of the generic one: a shared page-and-band shape
+language so they read as a suite at 16 px, with the letter-forms drawn from
+bars and triangles for the same reason the toolbar icons are.
+
 ## Build integration
 
 `pc64/build.sh` gains a **UOWORD.UNO block beside PHOTOS'** - the app plus the

@@ -611,6 +611,38 @@ int main(int argc, char **argv)
         eq("close: hidden", UI.bs[1].hidden, 1);
     }
 
+    /* ---- every icon in the atlas must actually put ink down ---------------
+     * Eight of them did not.  `art()` indexes its palette HEX-STYLE - 'a' is
+     * ten, not one - and eight icons were written with 'a' meaning "the
+     * second colour", so they indexed past a two-entry palette and drew
+     * nothing.  Bold, Italic and Underline were blank squares on every
+     * Formatting bar in the suite from the day they landed, and it took
+     * someone running the OS on a laptop to notice: a toolbar with an
+     * invisible button still lays out, still highlights, still fires.
+     *
+     * The threshold is deliberately not 1.  An icon that puts down a single
+     * pixel is as broken as one that puts down none, and would pass. */
+    {
+        int cell = 0, cols = 0, count = 0, i;
+        const fb_px *atlas = uoc_icons_97(&cell, &cols, &count);
+        int worst = 1 << 30, worst_i = -1;
+        for (i = 0; i < count; i++) {
+            int ink = 0, x, y;
+            int ox = (i % cols) * cell, oy = (i / cols) * cell;
+            for (y = 0; y < cell; y++)
+                for (x = 0; x < cell; x++)
+                    if (atlas[(long)(oy + y) * cell * cols + ox + x]) ink++;
+            if (ink < worst) { worst = ink; worst_i = i; }
+            if (ink < 8) {
+                char b[120];
+                sprintf(b, "icon %d has %d visible pixels", i, ink);
+                fail("blank icon", b);
+            }
+        }
+        printf("  %d icons in the atlas, thinnest is #%d at %d pixels\n",
+               count, worst_i, worst);
+    }
+
     printf(g_fail ? "\nuochrome gate: %d FAILURE(S)\n" : "\nuochrome gate: GREEN\n",
            g_fail);
     return g_fail ? 1 : 0;
