@@ -5947,3 +5947,28 @@ The supplicant is pure logic over a byte buffer with no hardware dependency, and
 a replayed 1/4 is trivially constructible (1/4 carries no MIC). A host case in
 `pc64_spectest.c` would have caught this without a laptop. I have a working host
 test but did not add a spec entry, because that file is yours.
+
+## 2026-08-04 - DONE: the mkbios/mkuefi fixed temp path, and it was worse than filed
+
+Fixed in `tools/mkbios.py` and `tools/mkuefi.py`. Both wrote their scratch FAT
+image to a FIXED path (`/tmp/uno_bios_fat.img`, `/tmp/uno_esp.img`) and both
+deleted and re-created it, so two builds at once stamped on each other. Each now
+takes a `tempfile.mkdtemp()` of its own and removes it in a `finally`.
+
+**The note above under-reported it.** I called it a build that "fails once for
+no reason". Reproduced deliberately - three concurrent `mkbios.py` runs against
+one build tree - and what actually happens is that it **HANGS**: one run
+completed and the other two sat at 0% CPU inside
+`mcopy -i /tmp/uno_bios_fat.img ...` for nineteen minutes until killed. A build
+that stops forever is a much worse failure than one that stops with an error,
+and on a box that routinely has three or four worktrees each with an agent, it
+is not a rare shape. The same three concurrent runs with the fix: 3 of 3
+succeeded, each producing a complete 96 MiB image.
+
+Both files also sent mtools' stderr to `/dev/null`, which is why the original
+failure said nothing but the name of the command. stdout is still discarded
+(mtools is chatty on success); stderr is captured and put into the error.
+
+Not changed, and worth someone's judgement: `tools/vbox_shot.py` and
+`tools/zima_drive.py` also use fixed `/tmp` paths, but on a REMOTE host and for
+a log respectively, and neither is in the build path.
