@@ -6213,3 +6213,45 @@ covering it** - give it a debug override the way this one now has.
 Still open, unchanged from the last note: the Editor and Files toolbars, and
 the Install window, at 150-200% UI scale on a 640x400 desktop.  Same shape (a
 flow layout with no wrap), still nothing reachable at 100%.
+
+## 2026-08-04 - LANDED: a standard "no", and the Start menu split in two
+
+**unoui owns password rejection now.**  `unoui_reject_widget()` shakes one
+control (and selects its text, so the retry is one keystroke);
+`unoui_reject_window()` shakes a whole sheet.  Behind them is `UI_EASE_SHAKE`,
+a decaying oscillation about zero whose `to` is an AMPLITUDE - putting it in
+the curve table means it composes with the lerp, the out pointer and sequence
+steps like every other curve.  **If you have a dialog that reports a refusal
+with a red label or a status line, this is the house gesture instead.**  A shake
+says "rejected" without saying which part was wrong, which is exactly the amount
+a login prompt is allowed to tell you.  Something genuinely different goes in a
+UI_CANVAS - that is what the canvas is for.
+
+**A tween used to settle on `to` when it ended.**  Right for every curve whose
+end IS its target, wrong for a shake.  It now settles on the curve's own value
+at `t == ONE`, which is identical for every ramp (the endpoints are pinned).  If
+you add a curve that does not end at ONE, that is the line that makes it work.
+
+**REQUEST to the unosecure lane, and a fix I made rather than filed:**
+`gen_random()` issued RDRAND with no CPUID check.  A CPU without it does not
+return carry-clear, it takes an INVALID OPCODE fault, so creating the first
+administrator RESET the machine on anything pre-Ivy-Bridge and on QEMU's default
+`qemu64` model - #UD at `gen_random+0x61` from `account_create_internal`.  One
+line to reproduce: boot, "Create the first administrator", Enter.  Fixed here
+because it is a hard crash on a first-run path and I hit it while testing
+something else; `tls_entropy.c` has always guarded this correctly and unosecure
+now does the same.  **Its owner should still look**: the TSC fallback below it
+had never once executed.
+
+**The Start menu is two panes.**  Left = things you OPEN (apps, scrolling),
+right = things you DO TO THE MACHINE (Windows: Tile/Cascade/Minimize all;
+Power: Restart/Shut Down).  They were one list, which put "Shut Down" one row
+below "Studio" in something you scroll.  **The right pane is a table of
+{header, command} rows** - a quick toggle (flight mode, Bluetooth, a share
+sheet) is one row and one case in `sys_activate`, not a new menu.  Nothing like
+that exists to toggle today and none is stubbed: a switch that does nothing is
+worse than an absent switch.
+
+Also: `MENU_MAXVIS` was a flat 11 rows = 11 * 46 px at a 200% UI scale, i.e. a
+menu taller than the desktop it drops out of.  It comes from the work area now,
+and the layout audit sweeps the Start menu along with everything else.
