@@ -345,6 +345,12 @@ static char *nat_hex2(char *p, const char *end, unsigned v)
   if (p < end) *p++ = h[(v >> 4) & 0xF];
   if (p < end) *p++ = h[v & 0xF];
   return p; }
+/* the FUNCTION is 3 bits, so one digit - "1f.2" is how everyone writes a PCI
+ * address and "1f.02" reads like a second byte of something */
+static char *nat_hex1(char *p, const char *end, unsigned v)
+{ static const char h[] = "0123456789abcdef";
+  if (p < end) *p++ = h[v & 0xF];
+  return p; }
 
 int uno_fat_native_status(char *buf, int cap)
 {
@@ -372,7 +378,7 @@ int uno_fat_native_status(char *buf, int cap)
         p = nat_str(p, end, " @");
         p = nat_hex2(p, end, (unsigned)g_vol[sysvol].dev->pci_dev);
         if (p < end) *p++ = '.';
-        p = nat_hex2(p, end, (unsigned)g_vol[sysvol].dev->pci_fn);
+        p = nat_hex1(p, end, (unsigned)g_vol[sysvol].dev->pci_fn);
     }
 
     /* WHAT COULD RECLAIM IT. Every storage class we have a driver for, whether
@@ -388,7 +394,7 @@ int uno_fat_native_status(char *buf, int cap)
         if (p < end) *p++ = '@';
         p = nat_hex2(p, end, (unsigned)ctl.dev);
         if (p < end) *p++ = '.';
-        p = nat_hex2(p, end, (unsigned)ctl.fn);
+        p = nat_hex1(p, end, (unsigned)ctl.fn);
         if (g_vol[sysvol].dev && g_vol[sysvol].dev->pci_dev == ctl.dev &&
             g_vol[sysvol].dev->pci_fn == ctl.fn)
             p = nat_str(p, end, "*");          /* this is the one, star it */
