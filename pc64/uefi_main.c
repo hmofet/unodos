@@ -1122,13 +1122,55 @@ void uno_pc64_init(void)
         gNPtr = collect(&ptrGuid, (void **)gPtr, MAXPTR);
         for (i = 0; i < gNAbs; i++) gAbs[i]->Reset(gAbs[i], 0);
         for (i = 0; i < gNPtr; i++) gPtr[i]->Reset(gPtr[i], 0);
-        if (gST->ConIn) gST->ConIn->Reset(gST->ConIn, 0);
+        /* NB: the firmware KEYBOARD is deliberately not touched here - see the
+         * block after uno_i2c_hid_init() below for why the order matters. */
+    } else {
+        splash_step(2, "native drivers");
+        uno_ps2_init();             /* the i8042 is ours from the start here */
+    }
+    splash_step(3, "input (pointer + keyboard)");
+    splash_stage(3, "trackpad (I2C-HID)");
+    uno_dbg_check("init:i2c-hid");
+    uno_i2c_hid_init();             /* native trackpad + keyboard; inert unless built in */
 
-        {
-            static EFI_GUID exGuid = EFI_SIMPLE_TEXT_INPUT_EX_PROTOCOL_GUID;
-            if (EFI_ERROR(gBS->HandleProtocol(gST->ConsoleInHandle, &exGuid,
-                                              (void **)&gKeyEx)))
-                gKeyEx = 0;
+    /* THE FIRMWARE KEYBOARD IS THE FALLBACK, SO ASK FOR IT LAST.
+     *
+     * poll_keyboard() has always refused to read firmware ConIn once a native
+     * keyboard is bound, and the comment above native_kbd_present() says why:
+     * on a touch machine, ConIn being consumed is what keeps the firmware's
+     * on-screen keyboard drawn. But this handshake - Reset(ConIn), open
+     * SimpleTextInputEx, and SetState(KEY_STATE_EXPOSED), which is an explicit
+     * "this application wants keystrokes with their modifier state" - ran
+     * unconditionally, and it ran BEFORE uno_i2c_hid_init() had a chance to
+     * bind anything. So on the Surface, whose keyboard is I2C-HID, the
+     * firmware was asked for text input at every boot and only told to stop
+     * afterwards, which is not the same thing as never asking.
+     *
+     * Moved below the native probe and skipped outright when that probe found
+     * a keyboard. A machine with no native keyboard is unaffected: it takes
+     * the identical path a few lines later than it used to.
+     *
+     * What is skipped is only the two calls that ASK: Reset(ConIn) and
+     * SetState. The protocol handle itself is still looked up, because
+     * HandleProtocol is a passive query that requests nothing, and holding it
+     * keeps the firmware path available as a fallback if the native keyboard
+     * ever turns out to bind without delivering (which is precisely the
+     * Surface's open checklist item). Nothing is taken away that the machine
+     * might need to type on.
+     *
+     * This is the half of the OSK question that costs nothing to get right.
+     * It is NOT a claim that it removes the icon - firmware that draws it from
+     * the mere presence of a touch digitiser will keep drawing it, and the
+     * only guaranteed removal remains a real detach (pc64/DETACH.md), which on
+     * this machine waits on native eMMC. Metal is the only test. */
+    if (!gBI) {
+        static EFI_GUID exGuid = EFI_SIMPLE_TEXT_INPUT_EX_PROTOCOL_GUID;
+        int native_kbd = uno_i2c_hid_kbd_present();
+        if (EFI_ERROR(gBS->HandleProtocol(gST->ConsoleInHandle, &exGuid,
+                                          (void **)&gKeyEx)))
+            gKeyEx = 0;
+        if (!native_kbd) {
+            if (gST->ConIn) gST->ConIn->Reset(gST->ConIn, 0);
             /* Ask for PARTIAL keystrokes (UEFI's "key state exposed"). They
              * carry no character, so the key stream ignores them - but they
              * are the only report a modifier going UP ever generates, and
@@ -1143,14 +1185,7 @@ void uno_pc64_init(void)
                 ((SETST_FN)gKeyEx->SetState)(gKeyEx, &ts);
             }
         }
-    } else {
-        splash_step(2, "native drivers");
-        uno_ps2_init();             /* the i8042 is ours from the start here */
     }
-    splash_step(3, "input (pointer + keyboard)");
-    splash_stage(3, "trackpad (I2C-HID)");
-    uno_dbg_check("init:i2c-hid");
-    uno_i2c_hid_init();             /* native trackpad + keyboard; inert unless built in */
 #ifdef UNO_USBHID_TEST
     /* eager native USB HID (test only): takes xHCI from the firmware while
      * attached so QEMU can exercise it with -device usb-kbd/usb-mouse. In
