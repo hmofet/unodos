@@ -37,11 +37,15 @@ CARDS = {
     "9260":  ([r"iwlwifi-9260-th-b0-jf-b0-(\d+)\.ucode"],     "IWL9260.UCO", False),
     "9560":  ([r"iwlwifi-9000-pu-b0-jf-b0-(\d+)\.ucode"],     "IWL9000.UCO", False),
     "ax200": ([r"iwlwifi-cc-a0-(\d+)\.ucode"],                "IWLAX200.UCO", False),
-    # AX201 (X1 Carbon Gen 8 etc.) is a Qu/QuZ CNVi part; ship whichever stepping
-    # the repo has, preferring QuZ then Qu-b0 (the driver loads one IWLAX201.UCO).
-    "ax201": ([r"iwlwifi-QuZ-a0-hr-b0-(\d+)\.ucode",
-               r"iwlwifi-Qu-b0-hr-b0-(\d+)\.ucode",
-               r"iwlwifi-Qu-c0-hr-b0-(\d+)\.ucode"],          "IWLAX201.UCO", False),
+    # AX201 is a Qu-family CNVi part and comes in THREE steppings that need
+    # three different ucodes - QuZ-a0, Qu-b0 and Qu-c0.  Which one a machine
+    # has is NOT a function of its PCI id (0x02f0 and 0x34f0 both appear as
+    # either): it is in CSR_HW_REV, which the driver now reads.  So all three
+    # are staged under distinct names and the driver picks; a stick carrying
+    # only one still works, because the driver falls back to what is there.
+    "ax201":  ([r"iwlwifi-QuZ-a0-hr-b0-(\d+)\.ucode"],        "IWLAX201.UCO", False),
+    "ax201b": ([r"iwlwifi-Qu-b0-hr-b0-(\d+)\.ucode"],         "IWLAX20B.UCO", False),
+    "ax201c": ([r"iwlwifi-Qu-c0-hr-b0-(\d+)\.ucode"],         "IWLAX20C.UCO", False),
     "ax210": ([r"iwlwifi-ty-a0-gf-a0-(\d+)\.ucode"],          "IWLAX210.UCO", True),
     # AX211/AX411 (So/Ma parts) - gf RF; So first, then Ma.
     "ax211": ([r"iwlwifi-so-a0-gf-a0-(\d+)\.ucode",
@@ -59,7 +63,9 @@ CARD_HELP = {
     "7260": "Intel 7260/7265", "7265d": "Intel 7265D", "3168": "Intel 3168",
     "8265": "Intel 8260/8265", "9260": "Intel 9260", "9560": "Intel 9461/9462/9560",
     "ax200": "Intel Wi-Fi 6 AX200 (discrete)",
-    "ax201": "Intel Wi-Fi 6 AX201 (CNVi - most 2020+ laptops, incl. X1 Carbon Gen 8)",
+    "ax201": "Intel Wi-Fi 6 AX201 (CNVi - most 2020+ laptops); stages all 3 steppings",
+    "ax201b": "  ...AX201 Qu-b0 stepping only",
+    "ax201c": "  ...AX201 Qu-c0 stepping only",
     "ax210": "Intel Wi-Fi 6E AX210 (Ty)",
     "ax211": "Intel Wi-Fi 6E AX211/AX411 (So/Ma)",
     "be200": "Intel Wi-Fi 7 BE200 (discrete, best-effort)",
@@ -384,7 +390,18 @@ def main():
         if card in WIFI_DIRECT:               # Realtek / Marvell: direct download
             got = fetch_direct(card, tmp)
         else:                                 # Intel: Debian package (or --source local)
-            got = (fetch_from_local if args.source == "local" else fetch_from_deb)(card, tmp)
+            grab = fetch_from_local if args.source == "local" else fetch_from_deb
+            got = grab(card, tmp)
+            # An AX201 comes in three steppings needing three different ucodes,
+            # and WHICH ONE a machine has is in CSR_HW_REV - a register nobody
+            # can read until UnoDOS is running.  So stage all three and let the
+            # driver choose at boot; they are ~1.4 MB each.
+            if card == "ax201":
+                for extra in ("ax201b", "ax201c"):
+                    try:
+                        got += grab(extra, tmp)
+                    except SystemExit as e:
+                        log("  (skipping %s: %s)" % (extra, e))
         for src in got:
             shutil.copyfile(src, os.path.join(fwdir, os.path.basename(src)))
 
