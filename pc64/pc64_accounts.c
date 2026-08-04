@@ -21,6 +21,8 @@
 #include "pc64_icons.h"        /* pc64_shell_theme() */
 #include "unosecure.h"
 #include "pc64_accounts.h"
+#include "unoui_anim.h"        /* the shell's tween clock, for the reject shake */
+#include "unoui_wmanim.h"      /* unoui_reject_window                          */
 #include "unoauto_gate.h"      /* the Remote Control panel arms unoautomate */
 #include "unoauto_remote.h"    /* modal_frame pumps the link (see the note there) */
 #include "uno_debug.h"         /* uno_dbg_heartbeat - a no-op in production */
@@ -57,6 +59,8 @@ static int        m_lx, m_ly, m_lb;      /* last mouse for edge detection      *
  * because nobody arrows around a password field until the one time they do. */
 static char       g_pw[PW_MAX + 1];
 
+unoui_anim *uno_pc64_anim(void);        /* pc64_uui.c - the shell's clock */
+
 static void modal_begin(unoui_window *sheet)
 {
     int mx, my, mb;
@@ -66,6 +70,12 @@ static void modal_begin(unoui_window *sheet)
      * shell's frame loop, which cannot run until this modal returns. */
     uno_pc64_input_lock(1);
     unoui_ui_init(&MU, pc64_shell_theme(), FB_W, FB_H);
+    /* Borrow the shell's tween clock so a sheet can animate - the reject shake
+     * is the only user today.  Pointed at directly rather than through
+     * unoui_wmanim_install(), which would also re-point the global geometry
+     * hooks and clear the window-move table underneath a shell snap that is
+     * still in flight. */
+    MU.anim = uno_pc64_anim();
     unoui_ui_add(&MU, sheet);
     uno_pc64_mouse(&mx, &my, &mb);
     m_lx = mx; m_ly = my; m_lb = mb & 1;     /* seed: no phantom press on entry */
@@ -122,6 +132,9 @@ static int modal_frame(unoui_action *out)
     }
 
     memset(&ev, 0, sizeof ev); ev.kind = UI_EV_TICK; unoui_handle(&MU, &ev);
+    /* the shell's frame loop is not running while a sheet is up, so the clock
+     * this loop borrowed has to be advanced from here or nothing moves */
+    unoui_anim_frame(uno_pc64_anim());
     unoui_render_ui(&MU);
     uno_pc64_present();
 
@@ -216,8 +229,17 @@ static void sheet_audit(const unoui_window *win)
 #define sheet_audit(w) ((void)0)
 #endif
 
+/* `verify` (NULL for a sheet that just collects) is asked whether the typed
+ * credentials are good the moment the sheet is submitted.  Returning 0 means
+ * WRONG, and the sheet stays up and SHAKES rather than closing.
+ *
+ * That is the whole point of it taking a callback.  The login gate used to
+ * close the sheet, test the password, and open a brand new one on failure -
+ * so a mistyped character cost you the username as well, and the only signal
+ * that anything had happened was the dialog flickering.  A prompt that survives
+ * a wrong answer is also the only place a reject gesture can live. */
 static int cred_sheet(const char *title, const char *sub, int is_create,
-                      int allow_guest)
+                      int allow_guest, int (*verify)(void))
 {
     unoui_window win;
     unoui_widget *w;
@@ -274,6 +296,16 @@ static int cred_sheet(const char *title, const char *sub, int is_create,
         if (!modal_frame(&a) || !a.changed) continue;
         if (a.id == ID_ROLE) { s_role_sel = a.value; continue; }
         if (a.kind == UI_ACT_CLOSE) return ID_CANCEL;
+        if (a.id == ID_OK && verify && !verify()) {
+            /* Wrong.  Shake the sheet, keep everything typed, and say nothing
+             * about WHICH part was wrong - a login prompt is not allowed to
+             * narrow the guess for whoever is standing there. */
+            unoui_reject_window(&MU, &win);
+            { int i; for (i = 0; i < PW_MAX; i++) g_pw[i] = 0; }
+            s_pass_t.len = s_pass_t.caret = s_pass_t.sel = 0;
+            s_pass_t.scroll_x = 0;
+            continue;
+        }
         if (a.id == ID_OK || a.id == ID_CANCEL || a.id == ID_GUEST) return a.id;
     }
 }
@@ -294,17 +326,29 @@ static int try_login_bind(usc_trust_t trust)
     return 1;
 }
 
+static int verify_interactive(void)
+{ return try_login_bind(UNOSEC_TRUST_INTERACTIVE); }
+
+/* a login that is valid but not an administrator is still a NO here */
+static int verify_admin(void)
+{
+    if (!try_login_bind(UNOSEC_TRUST_INTERACTIVE)) return 0;
+    if (unosec_can(UNOSEC_CAP_USER_CREATE)) return 1;
+    unosec_leave();                      /* logged in, but not an admin */
+    return 0;
+}
+
 void pc64_login_gate(void)
 {
     if (unosec_account_list(0, 0) <= 0) return;      /* fresh machine: no gate   */
 
-    for (;;) {
-        int r = cred_sheet("Sign in to UnoDOS",
-                           "Enter your account credentials.", 0, 0);
-        if (r == ID_OK && try_login_bind(UNOSEC_TRUST_INTERACTIVE)) return;
-        /* wrong credentials (or Cancel/Esc, which cannot bypass the gate):
-         * loop and prompt again.  There is no guest path once accounts exist. */
-    }
+    /* ONE sheet, which does not close until a login succeeds: it verifies in
+     * place, shakes on a wrong password and keeps the username.  Cancel and Esc
+     * cannot dismiss it either - there is no guest path once accounts exist -
+     * so the loop is only here for those. */
+    for (;;)
+        if (cred_sheet("Sign in to UnoDOS", "Enter your account credentials.",
+                       0, 0, verify_interactive) == ID_OK) return;
 }
 
 /* ===========================================================================
@@ -474,7 +518,8 @@ static int ensure_authority(int *pushed)
     if (unosec_account_list(0, 0) <= 0) {
         /* first run: create the first administrator, then sign in as them. */
         int r = cred_sheet("Create the first administrator",
-                           "No accounts exist yet. Create an admin to begin.", 0, 0);
+                           "No accounts exist yet. Create an admin to begin.",
+                           0, 0, 0);
         if (r != ID_OK || !s_name[0] || !g_pw[0]) return 0;
         if (!unosec_bootstrap_admin(s_name, g_pw)) return 0;
         if (try_login_bind(UNOSEC_TRUST_INTERACTIVE)) { *pushed = 1; return 1; }
@@ -482,12 +527,15 @@ static int ensure_authority(int *pushed)
     }
     /* accounts exist but the shell isn't an admin: elevate via a login. */
     {
+        /* Verifying in place also fixes a quieter fault: a login that WORKED but
+         * was not an admin used to close the sheet, unwind the session and
+         * return "no", which from the outside is indistinguishable from a wrong
+         * password - and from nothing happening at all. It shakes now, and the
+         * sheet stays up for another go. */
         int r = cred_sheet("Administrator required",
-                           "Sign in as an administrator to manage accounts.", 0, 0);
-        if (r == ID_OK && try_login_bind(UNOSEC_TRUST_INTERACTIVE)) {
-            if (unosec_can(UNOSEC_CAP_USER_CREATE)) { *pushed = 1; return 1; }
-            unosec_leave();          /* logged in, but not an admin */
-        }
+                           "Sign in as an administrator to manage accounts.",
+                           0, 0, verify_admin);
+        if (r == ID_OK) { *pushed = 1; return 1; }
         return 0;
     }
 }
@@ -495,7 +543,7 @@ static int ensure_authority(int *pushed)
 /* Sub-action: create a new user from a sheet. */
 static void do_new_user(char *status, int cap)
 {
-    int r = cred_sheet("New account", "Create a user account.", 1, 0);
+    int r = cred_sheet("New account", "Create a user account.", 1, 0, 0);
     if (r != ID_OK) { snprintf(status, cap, "New account cancelled."); return; }
     if (!s_name[0] || !g_pw[0]) { snprintf(status, cap, "Name and password required."); return; }
     if (unosec_account_create(s_name, g_pw, k_roles[s_role_sel]))
@@ -507,7 +555,8 @@ static void do_new_user(char *status, int cap)
 static void do_set_password(usc_uid_t uid, char *status, int cap)
 {
     const char *nm = unosec_account_name(uid);
-    int r = cred_sheet("Set password", "Enter a new password for the account.", 0, 0);
+    int r = cred_sheet("Set password", "Enter a new password for the account.",
+                       0, 0, 0);
     if (r != ID_OK) { snprintf(status, cap, "Password change cancelled."); return; }
     if (!g_pw[0]) { snprintf(status, cap, "Password cannot be empty."); return; }
     if (unosec_account_set_password(uid, g_pw))
@@ -760,10 +809,9 @@ void pc64_remote_open(void)
                                  "Create a user account first (Manage accounts).");
                         break;
                     }
-                    if (cred_sheet("Sign in",
-                                   "Sign in to turn remote control on.", 0, 0) != ID_OK
-                        || !try_login_bind(UNOSEC_TRUST_INTERACTIVE)) {
-                        snprintf(status, sizeof status, "Sign-in failed.");
+                    if (cred_sheet("Sign in", "Sign in to turn remote control on.",
+                                   0, 0, verify_interactive) != ID_OK) {
+                        snprintf(status, sizeof status, "Sign-in cancelled.");
                         break;
                     }
                 }
