@@ -2467,30 +2467,68 @@ static int point_on_desktop(int x, int y)
                                               enough that a genuine hold-and-
                                               read is never cut short.         */
 
+/* The selection highlight SLIDES between cells rather than jumping. That is the
+ * animation worth having here: the overlay appears once, but the highlight
+ * moves on every press, and a strip of identical cells is exactly the case
+ * where a jump leaves you re-reading the whole row to find where you are.
+ * g_sw_hl is its x offset from the strip's left content edge, in px, tweened
+ * against the shell's clock. */
+#define SW_SLIDE_MS 90
+
 static unoui_window g_sw;                  /* the overlay window (bare + top)  */
 static int   g_sw_open, g_sw_sel, g_sw_n, g_sw_timer, g_sw_alt;
+static int   g_sw_hl;                      /* animated highlight x, px         */
+static unoui_anim_h g_sw_hl_h;             /* its tween                        */
 static short g_sw_list[NAPPS];
 
 static int sw_cols(void) { return g_sw_n < 1 ? 1 : g_sw_n; }
 
+/* Aim the highlight at cell `sel`. Re-aiming frees the tween in flight rather
+ * than starting a second one onto the same int - two would each win on
+ * alternate frames, and on a strip of cells that reads as a highlight that
+ * stutters. Held Alt-Tab steps faster than 90 ms, so this happens constantly. */
+static void sw_slide_to(int sel)
+{
+    unoui_tween tw;
+    int to = sel * SW_CELL_W;
+    unoui_anim_free(&ANIM, g_sw_hl_h);
+    g_sw_hl_h = 0;
+    tw.from = g_sw_hl; tw.to = to;
+    tw.dur_ms = SW_SLIDE_MS; tw.delay_ms = 0;
+    tw.ease = UI_EASE_OUT_CUBIC; tw.loop = UI_ANIM_ONCE;
+    tw.out = &g_sw_hl;
+    g_sw_hl_h = unoui_tween_start(&ANIM, &tw);
+    if (!g_sw_hl_h) g_sw_hl = to;          /* pool full: just be there */
+}
+
 static void sw_draw(struct unoui_widget *w, unoui_rect r, void *ctx)
 {
     const unoui_theme *t = UI.theme;
-    int i, fh = fb_text_h();
+    int i, near, fh = fb_text_h();
     (void)w; (void)ctx;
     fb_fill_rect(r.x, r.y, r.w, r.h, t->pal.face);
     fb_frame_rect(r.x, r.y, r.w, r.h, t->pal.dark);
+    /* ONE highlight, at its animated x, drawn before any cell content - it can
+     * sit between two cells, so it cannot be part of the per-cell loop. */
+    if (g_sw_n > 0) {
+        fb_fill_rect(r.x + SW_PAD + g_sw_hl, r.y + SW_PAD,
+                     SW_CELL_W, SW_CELL_H, t->pal.accent);
+        fb_frame_rect(r.x + SW_PAD + g_sw_hl, r.y + SW_PAD,
+                      SW_CELL_W, SW_CELL_H, t->pal.dark);
+    }
+    /* Which label reads as selected follows the highlight, not g_sw_sel: the
+     * nearest cell to where the highlight actually IS. Using g_sw_sel would
+     * flip the destination's text to accent_text while the accent is still on
+     * its way, so for most of the slide the wrong label would be the light one
+     * against the wrong background. */
+    near = (g_sw_hl + SW_CELL_W / 2) / SW_CELL_W;
     for (i = 0; i < g_sw_n; i++) {
         int a  = g_sw_list[i];
         int cx = r.x + SW_PAD + i * SW_CELL_W, cy = r.y + SW_PAD;
-        int sel = (i == g_sw_sel);
+        int sel = (i == near);
         const char *nm = app_short(a);
         int tw = fb_text_w(nm), tx = cx + (SW_CELL_W - tw) / 2;
         unoui_rect eb;
-        if (sel) {
-            fb_fill_rect(cx, cy, SW_CELL_W, SW_CELL_H, t->pal.accent);
-            fb_frame_rect(cx, cy, SW_CELL_W, SW_CELL_H, t->pal.dark);
-        }
         eb.x = cx + (SW_CELL_W - SW_ICON) / 2; eb.y = cy + 8;
         eb.w = SW_ICON; eb.h = SW_ICON;
         if (app_icon(a) >= 0) pc64_icon_emblem(app_icon(a), eb);
@@ -2528,6 +2566,11 @@ static void sw_close(void)
 {
     if (!g_sw_open) return;
     remove_win(&g_sw);
+    /* Hand the slot back rather than leaving a tween writing into a highlight
+     * nothing is drawing - it would also keep unoui_anim_active nonzero, and
+     * the shell repaints while that is true. */
+    unoui_anim_free(&ANIM, g_sw_hl_h);
+    g_sw_hl_h = 0;
     g_sw_open = 0;
     g_dirty = 1;
 }
@@ -2567,11 +2610,18 @@ static void sw_step(int back, int alt)
         g_sw_open = 1;
         g_sw_alt  = alt;
         g_sw_sel  = back ? g_sw_n - 1 : 1;       /* start on the PREVIOUS app */
+        /* No slide on the first frame: the overlay itself is what just
+         * appeared, and a highlight travelling across a strip the user has not
+         * read yet is motion with nothing to say. */
+        unoui_anim_free(&ANIM, g_sw_hl_h);
+        g_sw_hl_h = 0;
+        g_sw_hl = g_sw_sel * SW_CELL_W;
     } else {
         g_sw_sel += back ? -1 : 1;
         if (g_sw_sel < 0)        g_sw_sel = g_sw_n - 1;
         if (g_sw_sel >= g_sw_n)  g_sw_sel = 0;
         if (alt) g_sw_alt = 1;
+        sw_slide_to(g_sw_sel);
     }
     g_sw_timer = 0;
     g_dirty = 1;
