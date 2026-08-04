@@ -1430,6 +1430,19 @@ static int g_scan_mpdu_seen, g_scan_beacon_calls, g_scan_rb_total;   /* scan dia
 static const u8 SNAP[6] = { 0xAA,0xAA,0x03,0x00,0x00,0x00 };
 static u8  g_bssid[6];                                 /* the AP we joined */
 static u32 g_rx_data_n, g_rx_data_drop, g_tx_data_n;   /* data-path counters */
+/* ---- post-join diagnosis (see iwl_link) ---------------------------------
+ * "Associated, but no DHCP lease" has two candidate explanations and no
+ * evidence separating them, so these count the handful of things that do.
+ * All of them are increments on paths that already run; nothing here changes
+ * behaviour. */
+static u32 g_txr_total;        /* TX_STATUS notifications seen                */
+static u32 g_txr_ackfail;      /* ...of those, ones the AP did not ACK        */
+static u32 g_rx_from_ap;       /* frames whose transmitter IS our BSSID       */
+static u32 g_deauth_ours;      /* deauth/disassoc FROM the AP we joined       */
+static u32 g_deauth_other;     /* ...from any other BSSID (steering, usually) */
+static int g_deauth_reason = -1;             /* the most recent reason code   */
+static unsigned long long g_join_ms;         /* when the 4-way completed      */
+static int g_postjoin_diag_done;
 static int g_rx_data_log;      /* log the next N received data frames (debug) */
 static int g_rx_mic = -1;      /* does the fw leave the CCMP MIC on? -1 = not learned yet */
 static int g_last_rssi;        /* strongest energy seen on a frame from our AP */
@@ -1466,6 +1479,14 @@ static void rx_process_rb(const u8 *rb, int cap,
          * frame_count@0, failure_rts@2, failure_frame@3, initial_rate@4 are
          * stable across all of them; the agg_tx_status (TX_STATUS_SUCCESS=0x01,
          * TX_STATUS_DIRECT_DONE=0x02, failures above 0x80) sits in the tail. */
+        /* Count EVERY TX_STATUS, not just the four that get dumped: whether the
+         * AP is acknowledging our frames is the single most useful fact about a
+         * link that associated and then went quiet. failure_frame@3 is nonzero
+         * when the frame was not ACKed. */
+        if (pkt->group_id == 0 && pkt->cmd == 0x1c && plen >= 8) {
+            g_txr_total++;
+            if (pkt->data[3]) g_txr_ackfail++;
+        }
         if (pkt->group_id == 0 && pkt->cmd == 0x1c && g_txresp_n < 4) {
             g_txresp_n++;
             const u8 *d = pkt->data; int n = plen - 4, i;
@@ -1537,7 +1558,10 @@ static void rx_process_rb(const u8 *rb, int cap,
                     if (g_scanning) scan_record_beacon(frame, fl, rssi, dchan);
                     else            mgmt_capture(frame, fl, fc);
                 }
-                if (rssi && !memcmp(frame + 10, g_bssid, 6)) g_last_rssi = rssi;
+                if (!memcmp(frame + 10, g_bssid, 6)) {
+                    g_rx_from_ap++;             /* the AP we joined is talking */
+                    if (rssi) g_last_rssi = rssi;
+                }
                 {
                 /* Payload offset. With hardware CCMP the firmware decrypts in
                  * place but strips NOTHING: the 8-byte CCMP header still sits
@@ -3417,6 +3441,12 @@ static void handle_eapol(const u8 *eapol, int len)
             mvm_add_sta(g_bssid, 1, (1u<<14)|(1u<<15));        /* authorize */
         }
         g_joined = 1;
+        /* Baseline the post-join counters here, so the diagnosis in iwl_link()
+         * describes THIS association and not the noise of getting to it. */
+        g_join_ms = uno_dbg_uptime_ms();
+        g_postjoin_diag_done = 0;
+        g_txr_total = g_txr_ackfail = g_rx_from_ap = 0;
+        g_deauth_ours = g_deauth_other = 0; g_deauth_reason = -1;
         /* Publish the nic service the moment the link is usable, whatever drove
          * the join - the step-by-step debug verbs (mld/auth/assoc/eapol) reach
          * this point without ever going through iwl_nic(), and send/recv both
@@ -3747,6 +3777,8 @@ static void mgmt_capture(const u8 *frame, int fl, u16 fc)
                           st == 12 ? "DEAUTH" : "DISASSOC",
                           frame[10],frame[11],frame[12],frame[13],frame[14],frame[15],
                           reason, ours ? " (our AP)" : " (not our BSSID - ignored)");
+        g_deauth_reason = reason;
+        if (ours) g_deauth_ours++; else g_deauth_other++;
         /* Acting on it is the point: the association is gone the moment the AP
          * says so, and pretending otherwise is what left the stack retrying
          * DHCP into a dead link for the rest of the run (metal, SURFGO
@@ -4147,11 +4179,61 @@ static int iwl_recv(void *ctx, void *pkt, int cap)
  * the caller that waits for link (ip_suite, net_dhcp_after_link) does NOT poll
  * recv while it waits - so pump here, or a handshake still in flight can never
  * finish and the link never comes up. */
+/* ONE line, once, six seconds after a successful join, that says which of the
+ * two "associated but no DHCP lease" explanations this machine is actually
+ * suffering from.
+ *
+ * The two have been indistinguishable from the outside all week:
+ *   (a) the AP is not treating our data frames as part of its BSS, so it
+ *       accepts them at the radio and drops them above it;
+ *   (b) a mesh is steering us off the weak BSS it keeps giving us, and our
+ *       frames are not reliably getting there at all.
+ * They call for completely different work, and I have twice guessed and been
+ * wrong, so this measures instead. Three counters decide it:
+ *
+ *   ack_fail  the AP is not ACKING us at all      -> (b), radio-level
+ *   rx_from_ap==0 with ack_fail==0                -> (a), it hears us and
+ *                                                    will not answer
+ *   rx_from_ap>0                                  -> neither; the link works
+ *                                                    and DHCP itself is at fault
+ *
+ * iwl_link() is the hook because the IP stack polls it throughout the DHCP
+ * wait, so this needs no timer, no tick registration and no URC - and it lands
+ * in the NET log, which is the only channel this machine reliably has. */
+static void postjoin_diag(void)
+{
+    unsigned long long now = uno_dbg_uptime_ms();
+    const char *reading;
+    if (g_postjoin_diag_done || !g_joined || !g_join_ms) return;
+    if (now - g_join_ms < 6000) return;
+    g_postjoin_diag_done = 1;
+
+    if (g_txr_total && g_txr_ackfail * 2 >= g_txr_total)
+        reading = "the AP is NOT ACKing us - radio-level: wrong BSS, steering, or too weak";
+    else if (!g_rx_from_ap)
+        reading = "our frames are ACKed but the AP sends us NOTHING - it hears us "
+                  "and will not answer (association identity)";
+    else
+        reading = "traffic flows BOTH ways - the link is fine and DHCP itself is the problem";
+
+    uno_dbg_net_trace("wifi: post-join diag +%ds: bssid %02x:%02x:%02x:%02x:%02x:%02x aid %d rssi %d",
+                      (int)((now - g_join_ms) / 1000),
+                      g_bssid[0],g_bssid[1],g_bssid[2],g_bssid[3],g_bssid[4],g_bssid[5],
+                      (int)g_aid, g_last_rssi);
+    uno_dbg_net_trace("wifi: post-join diag: tx=%u txresp=%u ack_fail=%u | rx=%u from_ap=%u drop=%u "
+                      "| deauth ours=%u other=%u last_reason=%d",
+                      (unsigned)g_tx_data_n, (unsigned)g_txr_total, (unsigned)g_txr_ackfail,
+                      (unsigned)g_rx_data_n, (unsigned)g_rx_from_ap, (unsigned)g_rx_data_drop,
+                      (unsigned)g_deauth_ours, (unsigned)g_deauth_other, g_deauth_reason);
+    uno_dbg_net_trace("wifi: post-join diag: -> %s", reading);
+}
+
 static int iwl_link(void *ctx)
 {
     (void)ctx;
     if (!g_bound) return 0;
     if (!g_joined && g_wpa_active) rx_pump_ms(50, 1);
+    postjoin_diag();               /* one line, once, six seconds after joining */
     return g_joined;
 }
 
