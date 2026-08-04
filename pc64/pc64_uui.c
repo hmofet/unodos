@@ -25,7 +25,8 @@
 #include "detachgate.h"      /* which device is holding this machine attached */
 #include "uno_debug.h"       /* debug build: heartbeat/HUD/stress (no-ops otherwise) */
 #include "unoauto.h"         /* unoautomate taps + DRIVE accessors (no-ops in prod) */
-#include "unoauto_remote.h"  /* remote dev-PC link pump (no-op in prod) */
+#include "unoauto_remote.h"  /* remote dev-PC link pump */
+#include "unosecure.h"       /* unosec_account_list: does the login gate block? */
 #include "unoauto_screen.h"  /* remote-desktop screen capture tick */
 #include "unoauto_gate.h"    /* unoautomate privilege gate: arm/disarm + tick */
 #include "netdisc.h"         /* zero-config LAN discovery */
@@ -4708,6 +4709,30 @@ int main(void)
      * yet), so existing/first boots reach the desktop unchanged; once accounts
      * exist it blocks here until a valid login binds the shell session. */
     pc64_consent_register();
+    /* HEADLESS REACHABILITY.  pc64_login_gate() blocks here until someone signs
+     * in, and it runs BEFORE the frame loop that brings the network and the URC
+     * channel up - so on a machine with accounts and no keyboard the gate is a
+     * dead end: a password prompt with no way to reach it.  That is exactly the
+     * machine remote control exists for.  Metal-proved on the ZimaBlade
+     * 2026-08-03 (the box would have been stranded; the account was deleted
+     * before rebooting).
+     *
+     * So when the gate is going to block, bring the link up FIRST.  Only then -
+     * a machine with no accounts reaches the desktop exactly as before and pays
+     * nothing.  pc64_net_boot is bounded (an 8 s budget across all devices) and
+     * modal_frame pumps unoauto_remote_tick, so the link connects while the
+     * sheet is up.
+     *
+     * NOTE this changes nothing for a PRODUCTION image on its own: there, the
+     * channel stays disarmed until a console user arms it, and arming needs the
+     * very session this gate is asking for.  Reaching a headless production box
+     * additionally needs an arm that SURVIVES a reboot, which is a standing
+     * credential and a separate decision - see unoauto_gate.h. */
+    if (unosec_account_list(0, 0) > 0) {
+        int pc64_net_boot(void);                 /* pc64_http.c */
+        pc64_net_boot();
+        unoauto_remote_boot();
+    }
     pc64_login_gate();
     build_desktop();  unoui_ui_add(&UI, &g_desk);   /* bottom: icon layer  */
     build_taskbar();  unoui_ui_add(&UI, &g_task);   /* top: the taskbar    */
