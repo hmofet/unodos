@@ -45,11 +45,17 @@ enum {
 static unoui_ui   MU;
 static int        m_lx, m_ly, m_lb;      /* last mouse for edge detection      */
 
-/* password masking: the real secret is kept here; the edit widget only sees
- * '*'.  s_pw_wi is the widget index of the active password field (-1 = none). */
+/* The password the sheets collect.  It is the edit widget's OWN buffer now -
+ * unoui_text_secret() masks a field in the toolkit, so the model holds the real
+ * passphrase and only the drawing uses '*'.
+ *
+ * This file used to do it by hand: feed the widget '*' per keystroke, keep the
+ * real characters in a side buffer, and intercept backspace to keep the two in
+ * step.  Which meant the widget's caret, selection and length all described the
+ * MASK - so Home, End, arrow keys, click-to-position and select-all all edited
+ * the asterisks while the password sat untouched behind them.  Nobody noticed
+ * because nobody arrows around a password field until the one time they do. */
 static char       g_pw[PW_MAX + 1];
-static int        g_pwlen;
-static int        s_pw_wi = -1;
 
 static void modal_begin(unoui_window *sheet)
 {
@@ -91,7 +97,7 @@ static int modal_frame(unoui_action *out)
     m_lb = mb;
 
     while (uno_pc64_next_key(&scan, &uni, &ctrl)) {
-        int vk = 0, on_pass;
+        int vk = 0;
         switch (scan) {
         case 0x01: vk = UI_KEY_UP; break;    case 0x02: vk = UI_KEY_DOWN; break;
         case 0x03: vk = UI_KEY_RIGHT; break; case 0x04: vk = UI_KEY_LEFT; break;
@@ -103,18 +109,11 @@ static int modal_frame(unoui_action *out)
             else if (uni == 0x08) vk = UI_KEY_BACKSPACE;
             else if (uni == 0x09) vk = UI_KEY_TAB;
         }
-        on_pass = (s_pw_wi >= 0 && MU.focus_wi == s_pw_wi);
-
         memset(&ev, 0, sizeof ev);
         if (vk) {
             ev.kind = UI_EV_KEY; ev.key = vk; ev.mods = ctrl ? UI_MOD_CTRL : 0;
-            if (vk == UI_KEY_BACKSPACE && on_pass && g_pwlen > 0) g_pw[--g_pwlen] = 0;
         } else if (uni >= 32 && uni < 127) {
-            ev.kind = UI_EV_CHAR;
-            if (on_pass) {                       /* keep the real char, show '*' */
-                if (g_pwlen < PW_MAX) { g_pw[g_pwlen++] = (char)uni; g_pw[g_pwlen] = 0; }
-                ev.ch = '*';
-            } else ev.ch = uni;
+            ev.kind = UI_EV_CHAR; ev.ch = uni;
         } else continue;
 
         a = unoui_handle(&MU, &ev); if (a.changed) { *out = a; got = 1; }
@@ -154,7 +153,6 @@ static int modal_frame(unoui_action *out)
  * password in g_pw.
  * ======================================================================== */
 static char       s_name[NAME_MAX + 1];
-static char       s_passvis[PW_MAX + 1];   /* the masked ('*') display buffer   */
 static unoui_text s_name_t, s_pass_t;
 static int        s_role_sel;              /* create: 0 user / 1 admin / 2 guest */
 
@@ -239,9 +237,10 @@ static int cred_sheet(const char *title, const char *sub, int is_create,
                         + (is_create ? ch + 8 : 0) + bh + pad, &W, &H, &x, &y); }
     inner = sheet_inner(W);
 
-    s_name[0] = 0; s_passvis[0] = 0; g_pw[0] = 0; g_pwlen = 0; s_role_sel = 0;
+    s_name[0] = 0; g_pw[0] = 0; s_role_sel = 0;
     unoui_text_init(&s_name_t, s_name, sizeof s_name, 0);
-    unoui_text_init(&s_pass_t, s_passvis, sizeof s_passvis, 0);
+    unoui_text_init(&s_pass_t, g_pw, sizeof g_pw, 0);
+    unoui_text_secret(&s_pass_t, '*');      /* masked, with the toolkit's eye */
 
     unoui_window_init(&win, title, x, y, W, H);
     { static char t1[128];
@@ -252,7 +251,6 @@ static int cred_sheet(const char *title, const char *sub, int is_create,
     w->flags |= UI_F_FOCUS; cy += ch + 8;
     unoui_add_label(&win, pad, cy + lofs, "Password:");
     w = unoui_add_edit(&win, pad + lw + 8, cy, inner - pad - lw - 8 - pad, &s_pass_t);
-    s_pw_wi = win.nw - 1;                       /* mark for masking              */
     cy += ch + 8;
     if (is_create) {
         int dw = 0, k;
@@ -275,10 +273,8 @@ static int cred_sheet(const char *title, const char *sub, int is_create,
         unoui_action a;
         if (!modal_frame(&a) || !a.changed) continue;
         if (a.id == ID_ROLE) { s_role_sel = a.value; continue; }
-        if (a.kind == UI_ACT_CLOSE) { s_pw_wi = -1; return ID_CANCEL; }
-        if (a.id == ID_OK || a.id == ID_CANCEL || a.id == ID_GUEST) {
-            s_pw_wi = -1; return a.id;
-        }
+        if (a.kind == UI_ACT_CLOSE) return ID_CANCEL;
+        if (a.id == ID_OK || a.id == ID_CANCEL || a.id == ID_GUEST) return a.id;
     }
 }
 
