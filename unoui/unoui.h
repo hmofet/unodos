@@ -37,7 +37,8 @@ typedef enum {
     UI_TABS,       /* row of tab headers; sel = active                        */
     UI_MENUBAR,    /* row of menu titles; each opens a popup of items         */
     UI_CANVAS,     /* app-drawn region: the app renders into fb inside .r     */
-    UI_MDI         /* container of draggable child frames (appended - see §MDI) */
+    UI_MDI,        /* container of draggable child frames (appended - see §MDI) */
+    UI_BUSY        /* indeterminate "working" indicator (appended - see below)  */
 } ui_kind;
 
 /* ---- per-widget state flags --------------------------------------------- */
@@ -65,10 +66,47 @@ typedef struct {
     int   scroll_x;   /* horizontal view offset, px                           */
     int   scroll_y;   /* vertical view offset, px (multi-line)                */
     int   multiline;
+    /* --- appended; 0 must mean "as before" -------------------------------- */
+    int   secret;     /* mask character (0 = plain text). See below.          */
+    int   revealed;   /* showing the real text right now; cleared on blur     */
 } unoui_text;
 
 void unoui_text_init(unoui_text *t, char *buf, int cap, int multiline);
 void unoui_text_set (unoui_text *t, const char *s);
+
+/* ---- secret (password) fields ---------------------------------------------
+ * `secret` is the character the field DRAWS in place of every real one; the
+ * model still holds the real text, so the caret, the selection, the length and
+ * everything the app reads are the password, not the mask. That is the whole
+ * point of doing this in the toolkit: the alternative - feeding the widget
+ * '*' and keeping the real characters in a side buffer - makes every one of
+ * those belong to the mask instead, and every app that wants a password field
+ * has to reimplement it.
+ *
+ * Measurement follows the mask, so a click and the caret land on the glyph
+ * under the pointer exactly as they do in a plain field.
+ *
+ * REVEAL. A masked field with no way to check what you typed is how a correct
+ * passphrase gets retyped four times. A secret field therefore draws a small
+ * eye at its right-hand end; clicking it shows the real text, clicking again
+ * hides it. It is deliberately TEMPORARY: it clears the moment the field loses
+ * focus, so a password is never left readable on a screen somebody has walked
+ * away from. Apps can drive it themselves with unoui_text_show().
+ *
+ * (Not to be confused with ui_text_reveal(), which scrolls a field so the
+ * caret is visible - an older and unrelated use of the word.)
+ *
+ * Multi-line and secret are mutually exclusive (a masked paragraph is not a
+ * thing); unoui_text_secret() clears `multiline`. */
+void unoui_text_secret(unoui_text *t, int mask_char);  /* 0 = back to plain   */
+void unoui_text_show  (unoui_text *t, int on);   /* show the real text  */
+/* The eye's rect inside a field's inner rect - {0,0,0,0} when the field is not
+ * secret. Shared by the painter and the hit test so a click on the eye can
+ * never be off by a pixel from the eye that was drawn. */
+unoui_rect ui_edit_eye_rect(unoui_rect inner, const unoui_text *t);
+/* the part of the inner rect the TEXT gets - inner minus the eye. Every
+ * measurement about an editable field is made against this one. */
+unoui_rect ui_edit_text_rect(unoui_rect inner, const unoui_text *t);
 
 /* ---- menus (for UI_MENUBAR and UI_DROPDOWN popups) ----------------------- */
 typedef struct unoui_menu {
@@ -214,6 +252,21 @@ unoui_widget *unoui_add_edit  (unoui_window *, int x, int y, int w,
 unoui_widget *unoui_add_textarea(unoui_window *, int x, int y, int w, int h,
                                unoui_text *t);
 unoui_widget *unoui_add_progress(unoui_window *, int x, int y, int w, int v, int vmax);
+/* An indeterminate BUSY indicator: a ring of dots with the bright one walking
+ * round it. UI_PROGRESS answers "how far"; this one answers "is it alive" -
+ * the honest report for work whose length nobody knows, and the thing a
+ * frozen-looking machine most needs to say.
+ *
+ * `value` is the animation PHASE, not a fraction: the app advances it (any
+ * amount, any cadence - it is taken modulo the dot count) and repaints. That
+ * keeps the widget stateless, and it means a BLOCKING caller can step it from
+ * inside its own wait loop - which is exactly where the feedback is needed and
+ * the one place a timer-driven animation cannot reach.
+ *
+ * unoui_busy_step() is the convenience: advance one dot, so a wait loop reads
+ * `unoui_busy_step(w); repaint();`. */
+unoui_widget *unoui_add_busy(unoui_window *, int x, int y, int size);
+void          unoui_busy_step(unoui_widget *);
 unoui_widget *unoui_add_vscroll(unoui_window *, int x, int y, int h, int v, int vmax);
 unoui_widget *unoui_add_hscroll(unoui_window *, int x, int y, int w, int v, int vmax);
 unoui_widget *unoui_add_slider(unoui_window *, int x, int y, int w,

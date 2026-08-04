@@ -314,7 +314,9 @@ static unoui_rect focus_inner(unoui_ui *ui)
 {
     unoui_window *win = ui->win[ui->focus_win];
     unoui_widget *w = &win->w[ui->focus_wi];
-    return ui_edit_inner(unoui_widget_rect(ui->theme, win, w), ui->theme);
+    return ui_edit_text_rect(
+               ui_edit_inner(unoui_widget_rect(ui->theme, win, w), ui->theme),
+               w->edit);
 }
 
 static void mv(unoui_ui *ui, unoui_text *t, int nc, int extend)
@@ -472,7 +474,17 @@ static unoui_action press_widget(unoui_ui *ui, unoui_window *win, int hi,
     }
 
     case UI_FIELD: case UI_TEXTAREA: {
-        unoui_rect in = ui_edit_inner(r, t);
+        unoui_rect box = ui_edit_inner(r, t);
+        unoui_rect eye = ui_edit_eye_rect(box, w->edit);
+        unoui_rect in;
+        /* the eye first: a click there toggles the mask instead of moving the
+         * caret, and must NOT start a text drag */
+        if (eye.w && pt_in(eye, ev->x, ev->y)) {
+            w->edit->revealed = !w->edit->revealed;
+            ui->cap_mode = UI_CAP_NONE;
+            return NO_ACT;
+        }
+        in = ui_edit_text_rect(box, w->edit);
         w->edit->caret = ui_text_index_at(in, w->edit, ev->x, ev->y);
         w->edit->sel = w->edit->caret;
         ui->cap_mode = UI_CAP_TEXT; ui_text_reveal(in, w->edit);
@@ -896,7 +908,9 @@ static unoui_action handle_inner(unoui_ui *ui, const unoui_event *ev)
         case UI_CAP_TEXT: {
             unoui_window *win = ui->win[ui->cap_win];
             unoui_widget *w = &win->w[ui->cap_wi];
-            unoui_rect in = ui_edit_inner(unoui_widget_rect(ui->theme, win, w), ui->theme);
+            unoui_rect in = ui_edit_text_rect(
+                ui_edit_inner(unoui_widget_rect(ui->theme, win, w), ui->theme),
+                w->edit);
             w->edit->caret = ui_text_index_at(in, w->edit, ev->x, ev->y);
             ui_text_reveal(in, w->edit); return NO_ACT;
         }

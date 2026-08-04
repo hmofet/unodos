@@ -55,6 +55,54 @@ static int seg_draw(const char *buf, int s, int e, int x, int y, fb_px fg, long 
     return x;
 }
 
+/* ---- masked text ----------------------------------------------------------
+ * A secret field draws N mask characters where the real text is. Everything
+ * that measures or paints an editable range goes through these two, so the
+ * caret, the click hit test, the horizontal scroll and the glyphs are all
+ * talking about the SAME string - which is what makes a click land on the
+ * right character in a password field as reliably as in a plain one.
+ *
+ * The mask run is measured, never multiplied: a proportional face kerns its
+ * own mask character against itself, so N * width(mask) is not width of N
+ * masks. Chunked exactly like ui_seg_w for the same reason it is. */
+static int masked(const unoui_text *t) { return t && t->secret && !t->revealed; }
+
+static int mask_w(int mask_char, int n)
+{
+    char tmp[UI_SEG_CHUNK + 1];
+    int w = 0;
+    while (n > 0) {
+        int k = n > UI_SEG_CHUNK ? UI_SEG_CHUNK : n, i;
+        for (i = 0; i < k; i++) tmp[i] = (char)mask_char;
+        tmp[k] = 0;
+        w += fb_text_w(tmp);
+        n -= k;
+    }
+    return w;
+}
+
+static int mask_draw(int mask_char, int n, int x, int y, fb_px fg, long bg)
+{
+    char tmp[UI_SEG_CHUNK + 1];
+    while (n > 0) {
+        int k = n > UI_SEG_CHUNK ? UI_SEG_CHUNK : n, i;
+        for (i = 0; i < k; i++) tmp[i] = (char)mask_char;
+        tmp[k] = 0;
+        x = fb_text(x, y, tmp, fg, bg);
+        n -= k;
+    }
+    return x;
+}
+
+/* width of [s,e) as the field actually shows it */
+static int t_seg_w(const unoui_text *t, int s, int e)
+{ return masked(t) ? mask_w(t->secret, e - s) : ui_seg_w(t->buf, s, e); }
+
+static int t_seg_draw(const unoui_text *t, int s, int e, int x, int y,
+                      fb_px fg, long bg)
+{ return masked(t) ? mask_draw(t->secret, e - s, x, y, fg, bg)
+                   : seg_draw(t->buf, s, e, x, y, fg, bg); }
+
 /* ------------------------------------------------------------------ build -- */
 
 /* S-UUI-04: on overflow, hand back a THROWAWAY scratch widget, not the live
@@ -143,6 +191,14 @@ unoui_widget *unoui_add_progress(unoui_window *w, int x, int y, int ww,
 { unoui_widget *d = push(w, UI_PROGRESS, x, y, ww, 12, 0);
   d->value = v; d->vmax = vm; return d; }
 
+unoui_widget *unoui_add_busy(unoui_window *w, int x, int y, int size)
+{ int s = size > 0 ? size : fb_text_h() + 6;
+  unoui_widget *d = push(w, UI_BUSY, x, y, s, s, 0);
+  d->vmax = UI_BUSY_DOTS; return d; }
+
+void unoui_busy_step(unoui_widget *w)
+{ if (w && w->kind == UI_BUSY) w->value = (w->value + 1) % UI_BUSY_DOTS; }
+
 unoui_widget *unoui_add_vscroll(unoui_window *w, int x, int y, int h, int v, int vm)
 { unoui_widget *d = push(w, UI_VSCROLL, x, y, 14, h, 0);
   d->value = v; d->vmax = vm; return d; }
@@ -214,6 +270,17 @@ void unoui_text_init(unoui_text *t, char *buf, int cap, int multiline)
     t->caret = n; t->sel = n; t->scroll_x = t->scroll_y = 0;
     t->multiline = multiline;
 }
+
+void unoui_text_secret(unoui_text *t, int mask_char)
+{
+    if (!t) return;
+    t->secret = mask_char;
+    t->revealed = 0;
+    if (mask_char) t->multiline = 0;    /* a masked paragraph is not a thing */
+}
+
+void unoui_text_show(unoui_text *t, int on)
+{ if (t) t->revealed = t->secret ? (on ? 1 : 0) : 0; }
 
 void unoui_text_set(unoui_text *t, const char *s)
 {
@@ -497,7 +564,7 @@ void ui_text_caret_xy(unoui_rect in, const unoui_text *t, int idx, int *cx, int 
 {
     int line, col, s, e; idx_linecol(t, idx, &line, &col);
     line_span(t, line, &s, &e);
-    *cx = in.x + 3 + ui_seg_w(t->buf, s, s + col) - t->scroll_x;
+    *cx = in.x + 3 + t_seg_w(t, s, s + col) - t->scroll_x;
     *cy = t->multiline ? in.y + 2 + line * UI_LINE_H - t->scroll_y
                        : in.y + (in.h - fb_text_h()) / 2;
 }
@@ -526,7 +593,7 @@ int ui_text_index_at(unoui_rect in, const unoui_text *t, int px, int py)
     want = px - (in.x + 3) + t->scroll_x;
     prev = 0;
     for (i = s; i < e; i++) {
-        int adv = ui_seg_w(t->buf, s, i + 1);   /* pen after glyph i */
+        int adv = t_seg_w(t, s, i + 1);         /* pen after glyph i */
         if (want < (prev + adv) / 2) return i;  /* nearer this glyph's left gap */
         prev = adv;
     }
@@ -538,7 +605,7 @@ void ui_text_reveal(unoui_rect in, unoui_text *t)
     int line, col, s, e, cpx, vis_w = in.w - 6, vis_h = in.h - 4;
     idx_linecol(t, t->caret, &line, &col);
     line_span(t, line, &s, &e);
-    cpx = 3 + ui_seg_w(t->buf, s, s + col);
+    cpx = 3 + t_seg_w(t, s, s + col);
     if (cpx - t->scroll_x < 0)         t->scroll_x = cpx;
     if (cpx - t->scroll_x > vis_w)     t->scroll_x = cpx - vis_w;
     if (t->scroll_x < 0) t->scroll_x = 0;
@@ -559,9 +626,69 @@ static void clamp_fill(unoui_rect clip, int x, int y, int w, int h, fb_px c)
     if (w > 0 && h > 0) fb_fill_rect(x, y, w, h, c);
 }
 
-static void draw_edit_text(unoui_rect in, const unoui_text *t,
+/* ---- the reveal eye -------------------------------------------------------
+ * A square at the field's right-hand end, as tall as the text. Its rect is
+ * computed HERE and used by both the painter and the hit test, so a click on
+ * the eye can never be off by a pixel from the eye that was drawn. Zero-sized
+ * when the field is not secret, or when the field is too narrow to give up the
+ * room (a 40 px field with an eye in it is not a field). */
+unoui_rect ui_edit_eye_rect(unoui_rect in, const unoui_text *t)
+{
+    unoui_rect z; int side;
+    z.x = z.y = z.w = z.h = 0;
+    if (!t || !t->secret) return z;
+    side = fb_text_h() + 2;
+    if (side < 9) side = 9;
+    if (in.w < side + 40) return z;            /* no room: no eye */
+    z.w = side; z.h = side;
+    z.x = in.x + in.w - side - 2;
+    z.y = in.y + (in.h - side) / 2;
+    return z;
+}
+
+/* The part of a field's inner rect the TEXT gets: everything left of the eye.
+ * Every measurement the toolkit makes about an editable field is against this
+ * rect, so a secret field scrolls and hit-tests inside its own text area rather
+ * than underneath the eye. */
+unoui_rect ui_edit_text_rect(unoui_rect in, const unoui_text *t)
+{
+    unoui_rect e = ui_edit_eye_rect(in, t);
+    if (e.w) in.w = e.x - in.x - 2;
+    return in;
+}
+
+/* A lens outline with a pupil; a stroke through it when the text is showing,
+ * which is the "click to hide again" state. Deliberately drawn from ui_px and
+ * spans rather than a bitmap, so it follows the font size and the theme's
+ * colours on every port. */
+static void draw_eye(unoui_rect e, const unoui_theme *th, int showing)
+{
+    int cx = e.x + e.w / 2, cy = e.y + e.h / 2;
+    int rx = e.w / 2 - 1, ry = e.h / 4;
+    fb_px c = showing ? th->pal.accent : th->pal.text_dim;
+    int x;
+    if (rx < 2 || ry < 1) return;
+    /* the lens: two arcs meeting at the corners, as y = +-ry*(1-(x/rx)^2) */
+    for (x = -rx; x <= rx; x++) {
+        int dy = (ry * (rx * rx - x * x) + rx * rx / 2) / (rx * rx);
+        ui_px(cx + x, cy - dy, c);
+        ui_px(cx + x, cy + dy, c);
+    }
+    /* the pupil */
+    { int r = ry > 2 ? 2 : 1, dx, dy;
+      for (dy = -r; dy <= r; dy++)
+          for (dx = -r; dx <= r; dx++)
+              if (dx * dx + dy * dy <= r * r) ui_px(cx + dx, cy + dy, c); }
+    if (showing) {                            /* struck through = it is visible */
+        int i, n = e.w;
+        for (i = 0; i < n; i++) ui_px(e.x + i, e.y + e.h - 1 - i, c);
+    }
+}
+
+static void draw_edit_text(unoui_rect box, const unoui_text *t,
                            const unoui_theme *th, int focused, int caret_on)
 {
+    unoui_rect in = ui_edit_text_rect(box, t);
     int selA = t->sel < t->caret ? t->sel : t->caret;
     int selB = t->sel < t->caret ? t->caret : t->sel;
     int nlines = text_lines(t), line, fh = fb_text_h(), lh = UI_LINE_H;
@@ -583,8 +710,8 @@ static void draw_edit_text(unoui_rect in, const unoui_text *t,
         if (focused && selB > selA) {                           /* selection bg */
             int a = s > selA ? s : selA, b = e < selB ? e : selB;
             if (b > a) {
-                int sx = x0 + ui_seg_w(t->buf, s, a);
-                clamp_fill(in, sx, y - 1, ui_seg_w(t->buf, a, b), lh, th->pal.accent);
+                int sx = x0 + t_seg_w(t, s, a);
+                clamp_fill(in, sx, y - 1, t_seg_w(t, a, b), lh, th->pal.accent);
             }
         }
         /* draw up to three runs so selection recolours without breaking the
@@ -592,9 +719,9 @@ static void draw_edit_text(unoui_rect in, const unoui_text *t,
         { int a = focused && selB > selA ? (selA > s ? (selA < e ? selA : e) : s) : e;
           int b = focused && selB > selA ? (selB > s ? (selB < e ? selB : e) : s) : e;
           int x = x0;
-          x = seg_draw(t->buf, s, a, x, y, th->pal.field_text, -1);
-          x = seg_draw(t->buf, a, b, x, y, th->pal.accent_text, -1);
-          (void)seg_draw(t->buf, b, e, x, y, th->pal.field_text, -1); }
+          x = t_seg_draw(t, s, a, x, y, th->pal.field_text, -1);
+          x = t_seg_draw(t, a, b, x, y, th->pal.accent_text, -1);
+          (void)t_seg_draw(t, b, e, x, y, th->pal.field_text, -1); }
     }
     if (focused && caret_on) {
         int cx, cy; ui_text_caret_xy(in, t, t->caret, &cx, &cy);
@@ -602,6 +729,8 @@ static void draw_edit_text(unoui_rect in, const unoui_text *t,
             fb_vline(cx, cy - 1, fh + 1, th->pal.field_text);
     }
     fb_set_clip(scx, scy, scw, sch);
+    { unoui_rect eye = ui_edit_eye_rect(box, t);
+      if (eye.w) draw_eye(eye, th, t->revealed); }
 }
 
 /* public wrapper so custom themes can reuse the exact default text painter
@@ -638,6 +767,35 @@ static void d_textarea(const unoui_theme *t, unoui_rect r, unoui_text *ed, int f
     ui_bevel(r, t, 1, -1);
     in = ui_edit_inner(r, t);
     if (ed) draw_edit_text(in, ed, t, (f & UI_F_FOCUS) != 0, (f & UI_F_CARET) != 0);
+}
+
+/* UI_BUSY: eight dots round a ring, brightest at `phase` and fading behind it.
+ * A ring rather than a bar because a bar implies a proportion it does not have,
+ * and eight because the trail has to be readable at 9 px as well as at 32. */
+static void d_busy(const unoui_theme *t, unoui_rect r, int phase)
+{
+    /* unit-circle offsets x1000, so no float and no trig table */
+    static const short CX[UI_BUSY_DOTS] = {    0,  707, 1000,  707,    0, -707, -1000, -707 };
+    static const short CY[UI_BUSY_DOTS] = {-1000, -707,    0,  707, 1000,  707,     0, -707 };
+    int cx = r.x + r.w / 2, cy = r.y + r.h / 2;
+    int rad = (r.w < r.h ? r.w : r.h) / 2 - 2;
+    int dot = rad / 4, i;
+    if (rad < 3) return;
+    if (dot < 1) dot = 1;
+    for (i = 0; i < UI_BUSY_DOTS; i++) {
+        /* how far BEHIND the head this dot is: 0 = the head itself */
+        int back = (i - phase) % UI_BUSY_DOTS;
+        int px, py, dx, dy;
+        fb_px c;
+        if (back < 0) back += UI_BUSY_DOTS;
+        /* head and the two behind it are the accent; the rest is the dim trail */
+        c = (back == 0 || back >= UI_BUSY_DOTS - 2) ? t->pal.accent : t->pal.text_dim;
+        px = cx + CX[i] * rad / 1000;
+        py = cy + CY[i] * rad / 1000;
+        for (dy = -dot; dy <= dot; dy++)
+            for (dx = -dot; dx <= dot; dx++)
+                if (dx * dx + dy * dy <= dot * dot) ui_px(px + dx, py + dy, c);
+    }
 }
 
 static void d_progress(const unoui_theme *t, unoui_rect r, int v, int vm)
@@ -858,7 +1016,7 @@ const unoui_draw unoui_default_draw = {
     d_desktop, d_window, d_titlebar, d_button, d_check, d_radio, d_field,
     d_label, d_progress, d_vscroll, d_list, d_group, d_sep, d_icon,
     d_textarea, d_hscroll, d_slider, d_spinner, d_dropdown, d_tabs,
-    d_menubar, d_popup
+    d_menubar, d_popup, d_busy
 };
 
 /* ----------------------------------------------------------- dispatch ------ */
@@ -1594,9 +1752,17 @@ static void draw_one(const unoui_draw *d, const unoui_theme *t,
     case UI_BUTTON:   PICK(button)(t, r, w->text, eff); break;
     case UI_CHECK:    PICK(check)(t, r, w->text, eff); break;
     case UI_RADIO:    PICK(radio)(t, r, w->text, eff); break;
-    case UI_FIELD:    PICK(field)(t, r, w->text, w->edit, eff); break;
+    case UI_FIELD:
+        /* Reveal is TEMPORARY, and this is the one place every path that can
+         * take the focus away passes through - a click elsewhere, Tab, a window
+         * raise, the app rebuilding its widgets. Clearing it here rather than in
+         * each of those is what makes "you cannot walk away from a screen with
+         * a password on it" true rather than mostly true. */
+        if (w->edit && w->edit->secret && !(eff & UI_F_FOCUS)) w->edit->revealed = 0;
+        PICK(field)(t, r, w->text, w->edit, eff); break;
     case UI_TEXTAREA: PICK(textarea)(t, r, w->edit, eff); break;
     case UI_PROGRESS: PICK(progress)(t, r, w->value, w->vmax); break;
+    case UI_BUSY:     PICK(busy)(t, r, w->value % UI_BUSY_DOTS); break;
     case UI_VSCROLL:  PICK(vscroll)(t, r, w->value, w->vmax); break;
     case UI_HSCROLL:  PICK(hscroll)(t, r, w->value, w->vmax); break;
     case UI_SLIDER:   PICK(slider)(t, r, w->value, w->vmin, w->vmax, eff); break;
