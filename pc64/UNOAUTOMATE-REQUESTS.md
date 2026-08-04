@@ -5225,7 +5225,7 @@ unoautomate lane. All three surfaced while testing the Remote Control panel on
 the ZimaBlade (400x300 desktop, Celeron N3350).
 
 **1. The escalation consent sheet does not fit a small screen (unoui/security
-UI).** At 400x300 the sheet is wider than the display and centred with
+UI). FIXED 2026-08-04 in `d1f3ebcf`** - kept for the trap it recorded. At 400x300 the sheet is wider than the display and centred with
 `x = (FB_W - W) / 2`, which goes NEGATIVE - so both edges are cut off. The
 title reads "mission requested", the cap line "mate.observe", and the third
 button "Allow se...". It is still operable (Allow once is fully visible and
