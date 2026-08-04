@@ -42,6 +42,21 @@ def build_disk():
         f.write("remote=10.0.2.2:%d\nnonet\n" % PORT)
     disk_sectors = 96 * 2048
     with open(DISK, "wb") as f: f.truncate(disk_sectors * SECTOR)
+    # DISK B BELONGS HERE, NOT IN main().
+    #
+    # boot_qemu() passes `-drive file=DISK2` unconditionally, so a caller that
+    # uses this module as a LIBRARY - build_disk() then boot_qemu(), which is
+    # exactly what urcui.py and every gate built on it does - handed QEMU a
+    # drive file that did not exist. QEMU then refuses to start at all, its
+    # stderr goes to DEVNULL, and the only symptom is urcui's "the guest never
+    # dialled in - is this the DEBUG build?", which points at the build.
+    #
+    # It looked intermittent because main() DOES create it: run remote_qemu.py
+    # once and every urcui gate works until /tmp is cleared, which on a WSL box
+    # is every reboot. Creating it here makes the two entry points equivalent,
+    # which is the only reason the bug could exist.
+    if not os.path.exists(DISK2):
+        with open(DISK2, "wb") as f: f.truncate(128 * MIB)   # blank disk B
     sh(["sgdisk", "--zap-all", DISK], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     sh(["sgdisk", "-n", "1:2048:0", "-t", "1:EF00", "-c", "1:UNODOS", DISK],
        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
