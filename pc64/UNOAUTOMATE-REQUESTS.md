@@ -5656,3 +5656,92 @@ in `pc64_libc.c` looks correct on inspection and `g_hw_rf_id` is only written in
 one place, so this smells like an adjacent-global clobber rather than a
 formatting bug. Trace-only impact today (`g_hw_rf_id` is not used for any
 decision), but it is the kind of thing that is a memory bug somewhere else.
+
+
+## 2026-08-04 (metal) - RETRACTION + fix: the rf_id trace anomaly was a real memory bug
+
+**Correcting my own entry from earlier today.** I filed the odd `rf_id=0x....004f`
+in the AX201 bring-up trace to the debug-harness lane as "trace-only impact
+today ... smells like an adjacent-global clobber". The diagnosis of the CLASS was
+right and **the severity was wrong**. It was a live buffer overflow on master,
+and the candidate-list commit turned it into a stack smash that took out the
+Surface's pointer.
+
+### The bug
+
+`"FIRMWARE\IWLAX201.UCO"` is 21 characters, so it needs 22 bytes. `g_fwfile`,
+`g_pnvmfile` and (once I added it) every `g_fwcand[]` element were declared
+`[20]`. Every `strcpy` of a full firmware path overflowed by exactly two bytes -
+`'O'` and the NUL. **`0x004f` is those two bytes**, landing in the `u32`
+declared next to `g_fwfile`. The value in the log was the overflow, not a
+formatting fault, and `vsnprintf` was innocent as suspected.
+
+With one buffer the spill hit one neighbour and stayed survivable, which is why
+this sat on master unnoticed. With `g_fwcand[4][20]` each element overflowed
+into the next, so the `+9` prefix-strip in the trace join walked into the
+neighbour's text, built a ~98-character string and wrote it into a **68-byte
+stack buffer**. SURFGO, boot of 2026-08-03 23:57, at 12.4 s:
+
+```
+wifi: card pci=5841 fam=1297238342 gen2=808605761 hw_rev=45524157
+      mac_type=415 step=1 rf_id=4d524946 fw=IWLAX20B.UCFIRMWARE\IWLAX20C...
+```
+
+`pci=0x5841` is `"AX"`. `hw_rev=0x45524157` is `"WARE"`. `rf_id=0x4d524946` is
+`"FIRM"`. Those are not register reads - they are the path strings sitting in
+the varargs after the smash.
+
+### The symptom, and what it says about this machine
+
+The box did NOT crash and did not hang: the HUD kept updating and the watchdog
+never fired, so no crash report was written. **Only the pointer died**, from
+12.4 s onward. On a machine that stays firmware-attached the pointer is the
+firmware's own USB HID (`fw_simple=1 fw_abs=3`, `ptr=usb`), and a stack smash in
+the shell's main-loop call chain is enough to lose it while everything else
+keeps running. Worth remembering as a diagnostic signature: **on SURFGO, "mouse
+dead, everything else fine" is a memory-corruption tell, not an input-driver
+one.**
+
+### Fixed in `ccbe1768`
+
+`FW_NAME_MAX 32` for all three buffers, sized from the strings rather than by
+eye, plus a `typedef` static-assert so a longer firmware name breaks the BUILD
+instead of the machine. `fwc_add()` refuses an over-long name rather than
+truncating. The trace join is bounds-checked. The `fw=` override now builds into
+a local and is vetted - it takes an arbitrary-length name from a text file on
+the stick, so it was the one that could overflow by a lot rather than by two.
+
+Verified with a host test under ASan/UBSan: the new code is clean, and the old
+`[20]` sizing reproduces as `global-buffer-overflow, WRITE of size 45, 0 bytes
+after g_fwcand`.
+
+### Also landed: `faa5b62a`, quiesce before the disk read
+
+Separate hazard found while chasing this one. The retry loop read the next
+candidate (~1.4 MB, through the firmware's USB stack) and only then called
+`device_stop()` on the image already running - with VT-d already disabled for
+that device by `iommu_disable()`. It was my first hypothesis for the dead
+pointer and it turned out **not** to be the cause, but it is a real
+unconstrained-DMA window and it is now closed. The hazard predates the
+candidate loop; the loop just entered it once per retry instead of once per
+scan.
+
+### -> debug harness: two things this owes you
+
+1. The `rf_id` item I filed to you can be closed as **fixed in the iwlwifi
+   lane**, not deferred. Sorry for the mis-severity.
+2. **UBSan-class coverage does not reach this.** The debug build has `ubsan: 1`
+   and it did not catch a 2-byte global overflow, because UBSan does not bounds
+   check `strcpy` into a global. Whatever the cheapest equivalent is here - a
+   fortify-style `strcpy` wrapper in the debug build, or redzones on the hot
+   globals - would have caught this on the first QEMU boot instead of on a
+   laptop with no wired NIC. Filing as a suggestion, not a request; your lane,
+   your call.
+
+### Still unanswered: the actual WiFi question
+
+None of this is progress on the radio. The boot-path bring-up still stops at
+`creds:MISSING` before loading anything, and the candidate-retry path has STILL
+never executed on metal - the smash happened before it got there. The stick has
+been rewritten with `ccbe1768` and the question is unchanged: does SURFGO ALIVE
+on `IWLAX20C` or `IWLAX201`, or on none of the three?
