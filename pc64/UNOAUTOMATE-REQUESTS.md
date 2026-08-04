@@ -5657,7 +5657,6 @@ one place, so this smells like an adjacent-global clobber rather than a
 formatting bug. Trace-only impact today (`g_hw_rf_id` is not used for any
 decision), but it is the kind of thing that is a memory bug somewhere else.
 
-
 ## 2026-08-04 (metal) - RETRACTION + fix: the rf_id trace anomaly was a real memory bug
 
 **Correcting my own entry from earlier today.** I filed the odd `rf_id=0x....004f`
@@ -5745,3 +5744,24 @@ None of this is progress on the radio. The boot-path bring-up still stops at
 never executed on metal - the smash happened before it got there. The stick has
 been rewritten with `ccbe1768` and the question is unchanged: does SURFGO ALIVE
 on `IWLAX20C` or `IWLAX201`, or on none of the three?
+
+## 2026-08-04 - REQUEST to the unoffice lane: UnoCalc ignores the arrow keys
+
+**From the docs lane, found while capturing manual figures.** In UnoCalc the
+arrow keys do not move the cell selection. Typing a value and pressing Enter
+commits and steps down correctly, but from there Up/Down/Left/Right do nothing:
+after entering A1, A2 and a formula in A3, two Up presses (120 ms hold, a second
+apart) left the selection on A4 with the Name Box still reading `A4`.
+
+The keys reach the guest - the same helper drives the Start menu's Down/Enter in
+every scene - so this is UnoCalc not acting on them rather than a harness
+problem.
+
+Consequence for a user: a keyboard-only operator can build a column top to bottom
+and nothing else. They cannot go back to correct a cell, cannot reach column B,
+and cannot select a cell to see its formula in the formula bar - so the formula
+bar is effectively unreachable, since the only way to put a formula in a cell
+leaves the selection past it.
+
+The manual now carries a warning callout saying so (`docs/office.html`,
+"Keyboard navigation"). Please delete that callout when this lands.
