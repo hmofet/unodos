@@ -2307,6 +2307,26 @@ static void open_app(int a)
     g_dirty = 1;
 }
 
+/* How long the Start menu takes to rise, ms. Shorter than a window snap
+ * (unoui_snap_ms): a menu is something you are waiting for before you can act,
+ * so it has to be quick enough not to be in the way, and long enough to show
+ * where it came from. */
+#define LAUNCHER_MS 110
+
+/* Reveal the launcher by moving it to the rect it is ALREADY set to, starting
+ * from `from_y`. The window's final geometry is therefore correct before the
+ * first frame, so the keyboard path (Ctrl-Esc, arrows, Enter) - which is how
+ * every harness scenario drives this menu - never depends on the animation
+ * having finished. If the animator is not installed or its pool is full the
+ * window is simply there, which is what it did before. */
+static void launcher_reveal(int from_y)
+{
+    unoui_rect to = g_launch.r;
+    if (from_y == to.y) return;
+    g_launch.r.y = from_y;
+    if (!unoui_wmanim_geom(&UI, &g_launch, to, LAUNCHER_MS)) g_launch.r = to;
+}
+
 /* Start button: toggle the app-menu launcher window */
 static void toggle_launcher(void)
 {
@@ -2318,6 +2338,10 @@ static void toggle_launcher(void)
            g_launch.r.x = 6;
            g_launch.r.y = FB_H - TASKH - g_launch.r.h;
            clamp_to_workarea(&g_launch); unoui_ui_add(&UI, &g_launch);
+           /* Rise out from behind the taskbar. The taskbar is a UI_WIN_TOP
+              window and the menu is an ordinary one, so it is drawn behind the
+              bar and genuinely emerges from it - no clipping needed. */
+           launcher_reveal(FB_H - TASKH);
            UI.focus_wi = 0;                    /* focus the menu canvas for keys */
            g_launch_open = 1; }
     g_dirty = 1;
@@ -2332,8 +2356,14 @@ static void launcher_at(int x, int y)
     g_launch.r.x = x;
     g_launch.r.y = y;
     clamp_to_workarea(&g_launch);
-    if (!g_launch_open) { unoui_ui_add(&UI, &g_launch); g_launch_open = 1; }
-    else                  unoui_bring_to_front(&UI, &g_launch);
+    if (!g_launch_open) {
+        unoui_ui_add(&UI, &g_launch);
+        /* A short rise, not the slide up from the taskbar: this menu was asked
+         * for AT the pointer, so it has nowhere to come from. Moving an already
+         * open menu is not a reveal and is left alone. */
+        launcher_reveal(g_launch.r.y + 14);
+        g_launch_open = 1;
+    } else                unoui_bring_to_front(&UI, &g_launch);
     UI.focus_wi = 0;
     g_dirty = 1;
 }
