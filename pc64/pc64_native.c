@@ -38,6 +38,8 @@ void uno_native_tsc_set(unsigned long long cycles_per_us)
 
 int uno_native_tsc_ok(void) { return gTscPerUs != 0; }
 
+unsigned long long uno_native_tsc_per_us(void) { return gTscPerUs; }
+
 void uno_native_delay_us(unsigned long us)
 {
     unsigned long long end;

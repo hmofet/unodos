@@ -8,6 +8,11 @@ unsigned long long uno_native_rdtsc(void);
 void uno_native_tsc_set(unsigned long long cycles_per_us);
 int  uno_native_tsc_ok(void);
 void uno_native_delay_us(unsigned long us);
+/* The calibrated rate itself, 0 if uncalibrated. Everything here could already
+ * WAIT for a known time; reading the rate is what lets a caller ask what time
+ * it is now. uno_dbg_uptime_ms() answers that in a debug build only, and an
+ * animation clock has to work in production. */
+unsigned long long uno_native_tsc_per_us(void);
 
 /* CMOS RTC */
 int uno_native_rtc_read(int *y, int *mo, int *d, int *h, int *mi, int *s);
