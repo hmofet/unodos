@@ -55,6 +55,11 @@ typedef unsigned long long u64;
 
 void uno_pc64_delay_ms(int ms);
 
+/* progress reporting (section 10a); declared here because the RX wait loops
+ * that tick it are defined well above it */
+static void prog(const char *what, int step);
+static void prog_tick(void);
+
 /* =====================================================================
  * 0. small utilities + a diagnostics string
  * ===================================================================== */
@@ -1648,6 +1653,7 @@ static const u8 *wait_notif(int group, int cmd, int *out_len, int timeout_ms)
         if (g_gen2) w32(CSR_MSIX_AUTOMASK_ST_AD, 1);
         /* FW error? */
         if (!g_gen2 && (r32(CSR_INT) & (CSR_INT_BIT_SW_ERR|CSR_INT_BIT_HW_ERR))) return 0;
+        if ((t & 0x7f) == 0) prog_tick();           /* the scan dwell lives here */
         mdelay_(1);
     }
     return 0;
@@ -1694,6 +1700,8 @@ static int rx_pump_ms(int ms, int until_joined)
         rx_pump_once();
         if (until_joined && g_joined) return t;
         if ((t & 0xff) == 0) uno_dbg_heartbeat();   /* a long pump must not trip the wd */
+        if ((t & 0x7f) == 0) prog_tick();           /* ~8 Hz: keep the caller's
+                                                       indicator moving */
         mdelay_(1);
     }
     return ms;
@@ -3154,6 +3162,29 @@ static int read_config(int vol)
 }
 
 /* =====================================================================
+ * 10a. Progress reporting (see iwlwifi.h)
+ * ===================================================================== */
+#define IWL_PROG_STEPS 5
+static iwl_progress_fn g_prog_fn;
+static void *g_prog_ctx;
+static const char *g_prog_what = "";
+static int  g_prog_step;
+
+void iwl_progress_set(iwl_progress_fn fn, void *ctx)
+{ g_prog_fn = fn; g_prog_ctx = ctx; }
+
+/* enter a phase */
+static void prog(const char *what, int step)
+{
+    g_prog_what = what; g_prog_step = step;
+    if (g_prog_fn) g_prog_fn(g_prog_ctx, what, step, IWL_PROG_STEPS);
+}
+/* still in the same phase, still working - called from the wait loops so the
+ * caller's indicator keeps moving through a five-second dwell */
+static void prog_tick(void)
+{ if (g_prog_fn) g_prog_fn(g_prog_ctx, g_prog_what, g_prog_step, IWL_PROG_STEPS); }
+
+/* =====================================================================
  * 10b. Remembered networks (WIFINETS.CFG)
  * =====================================================================
  * A network joined from the Control Panel used to be forgotten at power-off:
@@ -3969,16 +4000,19 @@ static int join_selected(void)
         uno_dbg_net_trace("wifi: join: session-prot asserted the fw (iwl fwerr)");
         return -1;
     }
+    prog("Authenticating", 3);
     r = mvm_auth();
     uno_dbg_net_trace("wifi: join: auth -> %d (0=ok, >0 AP status, -1 no resp)", r);
     if (r != 0) return -1;
     wpa_arm();                  /* before the request: EAPOL 1/4 lands inside mvm_assoc() */
+    prog("Joining the network", 4);
     r = mvm_assoc();
     uno_dbg_net_trace("wifi: join: assoc -> %d (>=0 AID)", r);
     if (r < 0) return -1;
     assoc_mark_associated(r);
     uno_dbg_net_trace("wifi: join: associated with \"%s\" aid=%d - pumping RX for the 4-way",
                       g_cfg_ssid, r);
+    prog("Exchanging keys", 5);
     { int ms = rx_pump_ms(4000, 1);
       uno_dbg_net_trace("wifi: join: 4-way %s after %d ms (keys=%d)",
                         g_joined ? "COMPLETE" : "did NOT complete", ms, g_keys_installed); }
@@ -4104,6 +4138,7 @@ static int join_retry(void)
 static int find_and_join(void)
 {
     int attempt, idx;
+    prog("Looking for the network", 2);
     mvm_scan_cfg();
     mvm_scan_passive(5000);
     for (attempt = 0; attempt < JOIN_TRIES; attempt++) {
@@ -4689,6 +4724,7 @@ static int radio_up(void)
      * that had been driven by hand (metal, round 25): iwl_nic() returns the
      * cached nic immediately when bound, so g_mvm_done could never become 1. */
     if (g_alive && (g_mvm_done || g_bound || g_joined)) return 0;
+    prog("Starting the radio", 1);
     g_mvm_arm = 1;                       /* past the boot-path MVM gate */
     g_no_join = 1;
     iwl_nic();
