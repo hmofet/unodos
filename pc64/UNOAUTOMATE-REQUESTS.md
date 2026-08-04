@@ -6017,3 +6017,67 @@ without a clean BYE and see whether the N+1th is accepted.
 **Client-side lesson, which is mine:** hold ONE session and run every verb
 through it. Reconnecting per query is what triggered this, and it is also just
 wasteful - the CMD/RSP framing multiplexes fine over a single link.
+
+
+## 2026-08-04 (metal) - the floaty cursor was the BOOT-TEST BANNER, and it locked the UI
+
+**Operator report that cracked it**, after three rounds of me guessing at the
+pointer code: *"missing SSID key warning in debug overlay kept locking the UI.
+Every time the message displayed, it would interrupt and prevent mouse from
+moving."*
+
+### -> debug harness: I edited your file, `52a936d9`
+
+`uno_dbg_progress()` paints a full-width strip, calls `uno_pc64_present()`
+**synchronously**, and `uno_dbg_progress_done()` then marks the **whole shell
+dirty**. Correct during the blocking boot phase, which is what its comment
+describes. Nothing stopped it afterwards, and `netlog_sink()` calls it for
+**every NET trace line**.
+
+The WiFi driver emits those forever on a box with no `WIFI.CFG`: everything that
+wants the network re-runs the bring-up, and **URC's own `RS_DOWN` retry calls
+`pc64_net_up()` every ~5 s**. So the desktop got a banner, a synchronous present
+and a full repaint several times a minute - on a machine whose framebuffer is
+uncached and cannot afford one.
+
+Latched off in `uno_dbg_progress_done()`. Every terminal path out of
+`pc64_nettest_tick()` reaches it, so it is the one honest "blocking phase over"
+signal. Traces still reach the log; only the painting stops. **Your file, your
+call** - rework it freely, but the machine is not usable without something
+equivalent.
+
+### The lesson, which is mine
+
+I spent three rounds on the pointer code - EMA smoothing, absolute-vs-relative
+mapping, stale `GetState`, MTRR write-combining - and **the pointer was never
+wrong**. The frame it was drawn in was being thrown away. Every symptom fits in
+hindsight: drift, jumping, worse before login than after (the login screen sits
+in the window where the network is retried hardest), and better on the one boot
+that had no WiFi activity at all.
+
+Two things would have got me there faster. The operator's description named a
+*visible on-screen event* correlated with the freeze and I treated it as
+background colour for two messages. And I never once measured a frame time -
+the HUD reports `r`/`p` in milliseconds and I inferred from bench numbers
+instead of reading it.
+
+### Also landed: `5e486fd0`, and it is a regression of mine
+
+`d3f5ca54` moved the BAR0 map above the credentials check so `choose_firmware()`
+had a revision to decode - right, and it stays. It also put PCI work ahead of
+the cheapest early-out, so every one of those ~5 s retries enabled bus
+mastering and mapped BAR0 before finding it had nothing to join with. The
+credentials are on a filesystem and the check needs nothing from the card.
+
+### Still open
+
+- **`mtrr-wc` refuses on this hardware** and always will: `mtrr6` covers the fb
+  with a 256 GB UC region, re-tiling the remainder needs more than the 10
+  variable MTRRs the CPU has, and neither an overlapping WC MTRR (UC wins) nor
+  PAT (cannot override strong UC) can substitute. The fb stays uncached at
+  ~26 MB/s, so `present` is expensive and full repaints must stay rare. Blt is
+  4x faster and `uefi_main.c:619` already selects it automatically.
+- **The listener still did not come up** on the last two arms, at an address
+  that had also changed (`.207` -> `.42`; the old lease moved to another host).
+  A `UNODISC` broadcast got no OFFER from any pc64 box, so nothing was bound.
+  Related to the wedge filed earlier today but not the same failure.
