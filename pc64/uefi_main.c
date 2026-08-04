@@ -2085,13 +2085,57 @@ static void power_down(int off)
        ignores EFI_RESET_SHUTDOWN and simply returns - the Surface Laptop Go
        hangs on "Shutting down" this way - which is why nothing below assumes
        it worked. */
+    uno_dbg_log("power: ResetSystem(%s)", off ? "Shutdown" : "Cold");
     rts()->ResetSystem(off ? EfiResetShutdown : EfiResetCold, 0, 0, 0);
-    if (!off) uno_native_reset();   /* CF9 + i8042 pulse, then halt */
+    uno_dbg_log("power: ResetSystem returned - firmware ignored it");
+
+    /* RESET: CF9, then the i8042 pulse, then the FADT reset register.
+     *
+     * This used to call uno_native_reset(), which pulses CF9 + i8042 and then
+     * HALTS - so on a board that ignores both, the machine stopped there and
+     * everything below was unreachable. That is the Surface's reboot hang: not
+     * a missing mechanism but an unreachable one, because the terminal form of
+     * the helper was called in a position that still had options left. Use the
+     * _try form, which returns, and keep the terminal halt at the bottom where
+     * it belongs. */
+    if (!off) {
+        uno_native_reset_try();     /* CF9; returns if the board ignored it */
+        uno_dbg_log("power: CF9 ignored - trying the i8042 pulse");
+        uno_native_kbd_reset_pulse();
 #ifdef UNO_ACPI
-    uno_acpi_poweroff();            /* terminal: leaves interrupts off */
+        uno_dbg_log("power: i8042 ignored - trying the ACPI FADT reset register");
+        uno_acpi_reset();           /* returns only if there is no usable reset reg */
 #endif
-    /* nothing worked: halt quietly. The screen keeps the last frame, so the
-       machine is safe to switch off by hand and says as much. */
+    }
+    /* SAY SO ON THE SCREEN, and say it BEFORE the last mechanism runs.
+     *
+     * Two reasons for the order. Leaving whatever frame was last drawn sitting
+     * there - "Shutting down..." that never goes away - is indistinguishable
+     * from a crash to somebody standing at the machine, which is exactly how
+     * the Surface's hang reads. And ACPI S5 below is terminal BY CONSTRUCTION:
+     * it drops interrupts and returns with them still down, so anything drawn
+     * after it runs on a machine that can no longer be interrupted. Drawing
+     * first means the message is already up if S5 fails, and costs only a
+     * sub-second flash of it if S5 succeeds. */
+    {
+        int W = fb_width(), H = fb_height();
+        const char *l1 = off ? "You can switch this machine off now."
+                             : "Restart failed - hold the power button.";
+        const char *l2 = "The firmware refused every method we have.";
+        fb_fill_rect(0, 0, W, H, FB_RGB(10, 14, 34));
+        { int x = (W - fb_text_w(l1)) / 2; if (x < 0) x = 0;
+          fb_text(x, H / 2 - 10, l1, FB_RGB(255, 210, 90), -1); }
+        { int x = (W - fb_text_w(l2)) / 2; if (x < 0) x = 0;
+          fb_text(x, H / 2 + 10, l2, FB_RGB(150, 170, 225), -1); }
+        uno_pc64_present();
+    }
+#ifdef UNO_ACPI
+    /* POWER-OFF: S5 stays LAST, per the ordering note above. */
+    if (off) {
+        uno_dbg_log("power: trying ACPI S5");
+        uno_acpi_poweroff();
+    }
+#endif
     for (;;) __asm__ volatile ("hlt");
 }
 

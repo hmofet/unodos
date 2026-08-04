@@ -47,4 +47,8 @@ const char *uno_acpi_log_tail(void);
  * The reliable poweroff where EFI_RESET_SHUTDOWN is a no-op (the Surface). */
 int uno_acpi_poweroff(void);
 
+/* ACPI reset via the FADT reset register. Returns only on FAILURE. The third
+ * reboot mechanism, for boards that ignore both firmware ResetSystem and CF9. */
+int uno_acpi_reset(void);
+
 #endif

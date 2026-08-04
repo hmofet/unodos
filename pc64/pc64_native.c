@@ -144,10 +144,19 @@ int uno_native_reset_try(void)
     return 0;                                  /* still here: it did not take  */
 }
 
+/* The i8042 pulse on its own, non-terminal.  Same argument as the CF9 split
+ * above: a caller that still has an ACPI reset register to try cannot use a
+ * helper that halts. */
+void uno_native_kbd_reset_pulse(void)
+{
+    n_outb(0x64, 0xFE);
+    uno_native_delay_us(200000);
+}
+
 void uno_native_reset(void)
 {
     uno_native_reset_try();
-    n_outb(0x64, 0xFE);                        /* fallback: i8042 pulse        */
+    uno_native_kbd_reset_pulse();              /* fallback: i8042 pulse        */
     for (;;) __asm__ volatile ("hlt");
 }
 
