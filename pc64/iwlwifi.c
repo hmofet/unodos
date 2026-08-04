@@ -1243,6 +1243,10 @@ static int hdrlen_80211(const u8 *frame)
  */
 static int g_keys_installed;
 static int g_key_gtk_idx = -1;   /* GTK index live on the station, -1 = none */
+/* Remaining per-frame TX log lines; see the note at the trace site. Sized to
+ * cover a whole join (auth, assoc, the four EAPOL messages, first data out)
+ * and then fall silent. `iwl txlog <n>` re-arms it. */
+static int g_tx_log = 32;
 static void tx_enqueue(const u8 *frame, int flen, int high_pri)
 {
     int idx = g_tx_wr & (TXQ_N - 1);
@@ -1314,9 +1318,30 @@ static void tx_enqueue(const u8 *frame, int flen, int high_pri)
         if (total > tb0) tfd_set_tb_gen1(t, phys(out + tb0), total - tb0);
         g_tx_bc[idx] = (u16)((total + 3)/4);
     }
-    uno_dbg_net_trace("wifi: TX q=%d idx=%d seq=%04x flen=%d hdr=%d pad=%d tfd=%d bc=%04x",
-                      qid, idx, (unsigned)(((qid & 0x1f) << 8) | (idx & 0xff)),
-                      flen, h80211, pad, total, g_tx_bc[idx]);
+    /* One line per TRANSMITTED FRAME, on a budget.
+     *
+     * Ungated, this is the single loudest thing in the kernel log: every data
+     * frame, every keepalive, and - once URC rides the WiFi link - every frame
+     * of the remote session itself, which is then sent over that link.  On
+     * SURFGO the entire ring tail was this and nothing else, so the deauth,
+     * EAPOL and join lines that the ring exists to preserve had all scrolled
+     * out.  On a machine with no wired NIC the crash log is the ONLY diagnostic
+     * channel, and this was drowning it.
+     *
+     * A budget rather than an off switch: the frames worth seeing are the first
+     * ones - auth, assoc, the EAPOL exchange, the first data out - and those
+     * fit easily. After that it goes quiet AND SAYS SO, because a log that
+     * stops without explanation is its own bug report. `iwl txlog <n>` re-arms
+     * it (0 = silent). */
+    if (g_tx_log > 0) {
+        g_tx_log--;
+        uno_dbg_net_trace("wifi: TX q=%d idx=%d seq=%04x flen=%d hdr=%d pad=%d tfd=%d bc=%04x",
+                          qid, idx, (unsigned)(((qid & 0x1f) << 8) | (idx & 0xff)),
+                          flen, h80211, pad, total, g_tx_bc[idx]);
+        if (!g_tx_log)
+            uno_dbg_net_trace("wifi: TX log budget spent - further frames are NOT logged "
+                              "('iwl txlog <n>' for more)");
+    }
     g_tx_wr = (g_tx_wr + 1) & (TXQ_N - 1);
     if (g_gen2) w32(HBUS_TARG_WRPTR, g_tx_wr | (qid << 16));
     else        w32(HBUS_TARG_WRPTR, g_tx_wr | (qid << 8));
@@ -4950,6 +4975,19 @@ int iwl_dbg_cmd(const char *line, char *out, int cap)
         if (*q == 0x30 || *q == 0x31) g_tx_qos = (*q == 0x31);
         strcpy(out, g_tx_qos ? "ok qos: TX as QoS data (subtype 8, 26 B hdr)"
                              : "ok qos: TX as plain data (subtype 0, 24 B hdr)");
+        return (int)strlen(out);
+    }
+    /* "iwl txlog <n>" - re-arm the per-frame TX log for n more frames (0 =
+     * silent). Ungated it floods the kernel ring and buries everything else -
+     * see the note at the trace site - so it runs on a budget and this is how
+     * you buy more of it when you are actually looking at the TX path. */
+    if (!strncmp(line, "txlog", 5)) {
+        const char *q = line + 5;
+        int n = 0;
+        while (*q == 0x20) q++;
+        while (*q >= 0x30 && *q <= 0x39) { n = n * 10 + (*q - 0x30); q++; }
+        g_tx_log = n;
+        uno_snprintf_hex(out, cap, "ok txlog: next ", (u32)n, " TX frames will be logged");
         return (int)strlen(out);
     }
     /* "iwl band <24|5|any>" - which band scan_pick() may choose from. */
