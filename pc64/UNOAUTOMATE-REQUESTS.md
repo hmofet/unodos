@@ -5233,7 +5233,8 @@ Deny is partly), but a KERNEL-tier prompt that the user cannot fully read is
 not an acceptable place to be approving anything. Needs a min-width clamp and
 a non-negative origin, or a narrower layout under some width.
 
-**2. New capabilities are NOT granted to existing roles (unosecure).**
+**2. New capabilities are NOT granted to existing roles (unosecure). FIXED
+2026-08-04 in `65737fa1`.**
 `seed_roles()` gives `admin` every cap with tier <= ADMIN, but it only runs on
 a FRESH store - `unosec_boot()` calls it when `db_load()` finds nothing, or
 when the role table is missing entirely. So a machine whose store predates a
@@ -5383,3 +5384,20 @@ a click while the previous one dims - in `unoui/host_unoui_anim.c`, rendered to
 Still yours, deliberately: the build EFFECTS themselves (Fly From, Wipe,
 Dissolve, Blinds, Box, Split) and the per-paragraph grouping. This lane built
 the clock, not the choreography.
+
+**How it was fixed, and the trap under it (2026-08-04, `65737fa1`).** The store
+now carries a **capability generation** - `USC_CAP__COUNT` as of the build that
+wrote it - and `unosec_boot` seeds the difference onto the built-in roles.
+
+It lives in the **reserved 8th byte of the DB magic**, not a new struct field,
+and that is the load-bearing detail: `db_load` requires an **exact `sizeof`
+match**, so growing `db_blob_t` makes every existing store fail to load and be
+re-seeded from empty - **silently destroying the accounts on every machine that
+upgrades**. Anyone extending the persisted store must handle that, either the
+same way or with a real versioned migration that reads the old size. Only the
+first 7 bytes are compared for validity now.
+
+Seeding is a RANGE (`index >= stored generation`), not a blanket re-seed,
+because `usc_cap_t` is append-only so an index is a point in time. There is no
+remove-capability API today; if one lands, that precision is what stops a
+migration restoring something an operator deliberately took away.
