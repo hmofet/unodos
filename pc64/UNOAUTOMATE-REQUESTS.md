@@ -6159,3 +6159,57 @@ it does not have.
 UnoShow returned out of it early, so the MRU never learned the window was front
 and `g_dirty` was never set; the app appeared only on the next unrelated
 repaint.  Compiler had been warning about it.
+
+## 2026-08-04 - CLAIM (unoui + shell): secret text fields, and real feedback while a WiFi join runs
+
+Follows the polish slice that just landed.  Three pieces:
+
+1. **unoui lane** - a SECRET flag on `unoui_text`, so a password field is a
+   toolkit feature rather than each app's private trick.  pc64_accounts.c fakes
+   it today by feeding the widget `'*'` and keeping the real characters in a
+   side buffer, which means the widget's caret, selection and length all belong
+   to the mask and not to the password.  Includes a reveal affordance ("show it
+   for a moment"), because a masked field with no way to check what you typed is
+   how a correct passphrase gets retyped four times.
+2. **unoui lane** - an indeterminate BUSY indicator (`UI_BUSY`).  UI_PROGRESS is
+   determinate and there is nothing for "working, no idea how long".
+3. **iwlwifi lane** - an optional progress hook on the join path.  A join blocks
+   the shell for seconds inside the driver with no repaint, so today the only
+   feedback is one line of text painted before the call.  A spinner cannot spin
+   without the driver saying where it is up to.
+
+Nothing here changes what the join DOES; it is all reporting.
+
+## 2026-08-04 - LANDED: secret fields, a busy ring, and a join that reports itself
+
+Discharges the claim above.  What other lanes should know:
+
+**`unoui_text_secret(t, '*')` is how you make a password field now.**  The model
+holds the REAL text and only the drawing and measuring use the mask, so the
+caret, the selection and the length are all the password.  If you are carrying a
+hand-rolled masking trick, delete it: pc64_accounts.c's was feed-the-widget-'*'
+plus a side buffer, and it meant Home, End, the arrow keys, click-to-position
+and select-all were editing asterisks while the password sat untouched behind
+them.  The field draws its own reveal eye; reveal clears whenever the field is
+not focused, which the RENDER path enforces so no dialog has to remember to.
+
+**`unoui_add_busy()` is the indeterminate indicator.**  `value` is a PHASE the
+app advances, not a fraction - which is the point: a caller that BLOCKS can step
+it from inside its own wait loop, and that is the only place the feedback is
+actually needed.  UI_PROGRESS is still the right thing when you know how far.
+
+**`iwl_progress_set()` reports a join in progress.**  Five named phases, plus a
+tick about eight times a second inside each one so a caller can animate.  It is
+called on the CALLER'S stack from inside the blocking driver call, so a hook may
+repaint and present but must not re-enter the driver.
+
+**The layout audit could not see the WiFi pane** - that whole block is gated on
+`iwl_present()` and QEMU has no radio, so the tallest thing on the Network tab
+had never been measured.  `g_cp_wifi_force` (debug only) makes the audit lay it
+out anyway, and it found the status line below the bottom edge on a 640x400
+desktop AT 100%.  **If your pane is conditional on hardware, the audit is not
+covering it** - give it a debug override the way this one now has.
+
+Still open, unchanged from the last note: the Editor and Files toolbars, and
+the Install window, at 150-200% UI scale on a 640x400 desktop.  Same shape (a
+flow layout with no wrap), still nothing reachable at 100%.
