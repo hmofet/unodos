@@ -94,6 +94,10 @@ static EFI_SIMPLE_POINTER_PROTOCOL   *gPtr[MAXPTR];
 static EFI_ABSOLUTE_POINTER_PROTOCOL *gAbs[MAXPTR];
 static int gNPtr, gNAbs;
 static int gAccX[MAXPTR], gAccY[MAXPTR];    /* sub-pixel remainders per device */
+/* last raw absolute position per instance, so a firmware that reports SUCCESS
+ * with unchanged coordinates cannot pass as movement - see the pointer loop */
+static UINT64 gAbsLastX[MAXPTR], gAbsLastY[MAXPTR];
+static unsigned char gAbsSeen[MAXPTR];
 static int gAccZ[MAXPTR];                   /* sub-notch wheel remainder       */
 
 /* ---- present-target geometry ---------------------------------------------
@@ -1684,7 +1688,25 @@ static void poll_pointer(void)
         if (gAbs[i]->GetState(gAbs[i], &st) != EFI_SUCCESS) continue;   /* no change */
         /* AbsolutePointer has no left/right split: bit0 is a touch. */
         gAbsBtn[i] = st.ActiveButtons ? 1 : 0;                          /* latch */
-        if (!moved) {
+        /* An instance only gets to drive the cursor if its REPORTED POSITION
+         * ACTUALLY CHANGED since we last looked.
+         *
+         * GetState() is specified to return EFI_NOT_READY when there is nothing
+         * new, and the loop used to treat "it returned SUCCESS" as "it moved".
+         * Firmware that answers SUCCESS every poll with the same stale
+         * coordinates then owns the cursor permanently: it sets `moved`, which
+         * locks the relative pointer below out of the frame entirely, and yanks
+         * the cursor back toward its fixed point whenever that point is more
+         * than the dead-zone away. On a machine with THREE absolute instances
+         * and one simple pointer - a Surface Laptop Go - the symptom is a
+         * cursor that mostly tracks the touchpad and intermittently jumps.
+         * Comparing raw coordinates costs two words per instance and does not
+         * care what the firmware returns. */
+        {
+            int fresh = !gAbsSeen[i] ||
+                        st.CurrentX != gAbsLastX[i] || st.CurrentY != gAbsLastY[i];
+            gAbsLastX[i] = st.CurrentX; gAbsLastY[i] = st.CurrentY; gAbsSeen[i] = 1;
+            if (!moved && fresh) {
             UINT64 rx = gAbs[i]->Mode->AbsoluteMaxX - gAbs[i]->Mode->AbsoluteMinX;
             UINT64 ry = gAbs[i]->Mode->AbsoluteMaxY - gAbs[i]->Mode->AbsoluteMinY;
             if (rx && ry && gOutW > 0 && gOutH > 0) {
@@ -1699,10 +1721,14 @@ static void poll_pointer(void)
                    what read as floaty on the Surface; dropping it removes the lag
                    without breaking absolute positioning or tap-to-position. */
                 int dxx = tx - g_cx, dyy = ty - g_cy;
-                if (dxx > 1 || dxx < -1) g_cx = tx;
-                if (dyy > 1 || dyy < -1) g_cy = ty;
-                clamp_cursor();
-                g_have_pointer = 1; moved = 1;
+                /* `moved` means "this frame's cursor position has been decided",
+                 * so only claim it when the position really did change. An
+                 * instance jittering inside the dead-zone otherwise blocks the
+                 * relative pointer every frame while moving nothing itself. */
+                if (dxx > 1 || dxx < -1) { g_cx = tx; moved = 1; }
+                if (dyy > 1 || dyy < -1) { g_cy = ty; moved = 1; }
+                if (moved) { clamp_cursor(); g_have_pointer = 1; }
+            }
             }
         }
     }
