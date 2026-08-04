@@ -526,6 +526,29 @@ void pc64_nettest_tick(void)
                                             may still be configured)          */
     if (flag > 0) { uno_dbg_log("net: skipped (nonet in DEBUG.CFG)");
                     nettest_finish(); automate_start(); return; }
+
+    /* DON'T TEAR DOWN A LIVE URC LINK.
+     *
+     * run_test() binds the stack to one NIC via net_init(), which destroys every
+     * open socket - including the remote channel.  That never mattered while URC
+     * came up AFTER this test, but a machine with user accounts now brings the
+     * network and the channel up BEFORE the login gate (so a headless box is not
+     * stranded at a password prompt), and this test then dropped the link the
+     * moment the desktop appeared.  It re-dialled within seconds, but it cost a
+     * command and made the boot look flaky.
+     *
+     * Skipping loses nothing that matters: a box we are already TALKING TO over
+     * the network has demonstrated link, DHCP, and routing more convincingly
+     * than the test can.  What the test is really for is the machine where
+     * networking does NOT work, and there the link is not up and it still runs.
+     * `net-force-test` runs it regardless when you specifically want the WiFi
+     * bring-up trace - the link drops and re-dials, which is the old behaviour. */
+    if (unoauto_remote_active() && pc64_stress_cfg_flag("net-force-test") <= 0) {
+        uno_dbg_log("net: skipped - URC link already up, testing would tear it "
+                    "down (net-force-test overrides)");
+        nettest_finish(); automate_start(); return;
+    }
+
     g_active = 1;
     run_test();
     flush();
