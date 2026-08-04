@@ -224,7 +224,7 @@ if [ "$1" != "legacy" ]; then
     for u in uno3d uno3d_soft uno3d_intel uno3d_game; do
         pc "$CC" $UCF -c -o "build/uui_$u.o" "../uno3d/$u.c"; OBJS="$OBJS build/uui_$u.o"
     done
-    for u in unoui unoui_input; do
+    for u in unoui unoui_input unoui_anim; do
         pc "$CC" $UCF -c -o "build/uui_$u.o" "../unoui/$u.c"; OBJS="$OBJS build/uui_$u.o"
     done
     for t in $(find ../unoui/themes -name '*.c' | sort); do
