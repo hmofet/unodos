@@ -754,11 +754,36 @@ static void uw_build(unoui_window *win)
 }
 static int uw_action(const unoui_action *a) { (void)a; return 0; }
 
+/* how many rows fit in the grid right now - the page for PgUp/PgDn, and the
+ * same arithmetic scroll_to_cursor uses so a page always lands on a full screen */
+static int page_rows(void)
+{
+    int gx, gy, gw, gh, rows;
+    grid_rect(&gx, &gy, &gw, &gh);
+    rows = (gh - cell_h()) / cell_h();
+    return rows < 1 ? 1 : rows;
+}
+
+/* Move the cursor by (dr, dc), committing whatever was being typed first.
+ * Committing is what a spreadsheet does: an arrow out of a half-typed cell
+ * means "that value, and now I am over there", not "throw it away". */
+static void move_cursor(int dr, int dc)
+{
+    commit_edit();
+    g_cur_r += dr; g_cur_c += dc;
+    if (g_cur_r < 0) g_cur_r = 0;
+    if (g_cur_c < 0) g_cur_c = 0;
+    if (g_cur_r >= UXL_ROWS) g_cur_r = UXL_ROWS - 1;
+    if (g_cur_c >= UXL_COLS) g_cur_c = UXL_COLS - 1;
+    g_sel_r = g_cur_r; g_sel_c = g_cur_c;
+    scroll_to_cursor();
+    pc64_shell_dirty();
+}
+
 static int uw_key(int uni, int scan, int ctrl)
 {
     unoui_event e;
     int i;
-    (void)scan;
     if (!BK) return 0;
     if (g_dlg) {
         for (i = 0; i < (int)sizeof e; i++) ((char *)&e)[i] = 0;
@@ -772,6 +797,22 @@ static int uw_key(int uni, int scan, int ctrl)
         pc64_shell_dirty();
         return 1;
     }
+    /* Navigation, from the firmware SCAN code - these arrive with uni == 0, so
+     * everything below (which reads uni) never saw them and the selection could
+     * only ever move down, one Enter at a time. Ctrl+Home/End jump to the far
+     * corners, the way every spreadsheet since Multiplan has. */
+    switch (scan) {
+    case 0x01: move_cursor(-1, 0); return 1;                      /* up      */
+    case 0x02: move_cursor(+1, 0); return 1;                      /* down    */
+    case 0x03: move_cursor(0, +1); return 1;                      /* right   */
+    case 0x04: move_cursor(0, -1); return 1;                      /* left    */
+    case 0x05:                                                    /* home    */
+        move_cursor(ctrl ? -g_cur_r : 0, -g_cur_c); return 1;
+    case 0x06:                                                    /* end     */
+        move_cursor(ctrl ? UXL_ROWS : 0, UXL_COLS); return 1;
+    case 0x09: move_cursor(-page_rows(), 0); return 1;            /* page up */
+    case 0x0A: move_cursor(+page_rows(), 0); return 1;            /* page dn */
+    }
     if (ctrl) {
         int c = uni;
         if (c >= 1 && c <= 26) c += 'a' - 1;
@@ -781,22 +822,10 @@ static int uw_key(int uni, int scan, int ctrl)
         return 0;
     }
     if (uni == 27) { g_editing = 0; g_edit[0] = 0; pc64_shell_dirty(); return 1; }
-    if (uni == '\r' || uni == '\n') {
-        commit_edit();
-        if (g_cur_r + 1 < UXL_ROWS) g_cur_r++;
-        g_sel_r = g_cur_r; g_sel_c = g_cur_c;
-        scroll_to_cursor();
-        pc64_shell_dirty();
-        return 1;
-    }
-    if (uni == '\t') {
-        commit_edit();
-        if (g_cur_c + 1 < UXL_COLS) g_cur_c++;
-        g_sel_r = g_cur_r; g_sel_c = g_cur_c;
-        scroll_to_cursor();
-        pc64_shell_dirty();
-        return 1;
-    }
+    /* Enter and Tab are just moves, and go through the same helper - two copies
+     * of "commit, step, reselect, scroll" is how they drift apart. */
+    if (uni == '\r' || uni == '\n') { move_cursor(+1, 0); return 1; }
+    if (uni == '\t')                { move_cursor(0, +1); return 1; }
     if (uni == 8) {
         if (g_editing) {
             int n = a_len(g_edit);
