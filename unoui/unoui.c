@@ -504,20 +504,31 @@ void ui_text_caret_xy(unoui_rect in, const unoui_text *t, int idx, int *cx, int 
 
 int ui_text_index_at(unoui_rect in, const unoui_text *t, int px, int py)
 {
-    int line = 0, s, e, i, x, want;
+    int line = 0, s, e, i, prev, want;
     if (t->multiline) {
         line = (py - (in.y + 2) + t->scroll_y) / UI_LINE_H;
         if (line < 0) line = 0;
         if (line > text_lines(t) - 1) line = text_lines(t) - 1;
     }
     line_span(t, line, &s, &e);
-    /* walk the line's glyphs; snap to whichever gap is nearest the pointer */
+    /* walk the line's glyphs; snap to whichever gap is nearest the pointer.
+     *
+     * Each gap is measured as a PREFIX from the start of the line - the same
+     * measurement ui_text_caret_xy makes and the same one the painter's pen
+     * performs - not as a running sum of per-glyph widths.  Summing per glyph
+     * was wrong on any proportional font: fb_text_w rounds its 26.6 pen to
+     * whole pixels once per call, so a per-character sum banks up to half a
+     * pixel of rounding EVERY character and throws away the kerning between
+     * each pair.  Over a dozen characters that is several pixels, and the
+     * click landed a glyph or two from the one under the pointer - reported as
+     * the caret jumping to the wrong spot while typing a WiFi password, but
+     * it was every text field in the OS. */
     want = px - (in.x + 3) + t->scroll_x;
-    x = 0;
+    prev = 0;
     for (i = s; i < e; i++) {
-        int cw = ui_seg_w(t->buf, i, i + 1);
-        if (want < x + cw / 2) return i;
-        x += cw;
+        int adv = ui_seg_w(t->buf, s, i + 1);   /* pen after glyph i */
+        if (want < (prev + adv) / 2) return i;  /* nearer this glyph's left gap */
+        prev = adv;
     }
     return e;
 }
