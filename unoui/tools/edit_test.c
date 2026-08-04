@@ -202,6 +202,69 @@ int main(void)
       CHECK("disabled: Tab never lands on it",
             ui.focus_wi < 0 || win.w[ui.focus_wi].id != 22); }
 
+    /* ---- 6. secret fields ----------------------------------------------- *
+     * The model must hold the REAL text while everything geometric measures
+     * the MASK. Getting that backwards is the bug the old per-app trick had:
+     * feeding the widget '*' made its caret, selection and length belong to
+     * the mask, so the app could not tell where in the PASSWORD it was. */
+    fb_set_font(&g_prop);
+    field_set("secret-pass", 300);
+    unoui_text_secret(&g_t, '*');
+    CHECK("secret: the buffer is still the real text",
+          !strcmp(g_t.buf, "secret-pass") && g_t.len == 11);
+    { int cx, cy, mx;
+      char mask[16]; int i;
+      for (i = 0; i < 5; i++) mask[i] = '*';
+      mask[5] = 0;
+      ui_text_caret_xy(g_inner, &g_t, 5, &cx, &cy);
+      mx = g_inner.x + 3 + p_text(0, 0, mask, 0, -1);
+      CHECK("secret: caret x follows the MASK, not the text", cx == mx); }
+    CHECK("secret: caret x <-> click index still round-trips",
+          roundtrip_worst() == 0);
+    /* revealed, every measurement swaps back to the real glyphs */
+    unoui_text_show(&g_t, 1);
+    { int cx, cy;
+      char pre[16]; memcpy(pre, g_buf, 5); pre[5] = 0;
+      ui_text_caret_xy(g_inner, &g_t, 5, &cx, &cy);
+      CHECK("revealed: caret x follows the real text",
+            cx == g_inner.x + 3 + p_text(0, 0, pre, 0, -1)); }
+    CHECK("revealed: caret x <-> click index still round-trips",
+          roundtrip_worst() == 0);
+    unoui_text_show(&g_t, 0);
+    CHECK("secret: multiline is refused", g_t.multiline == 0);
+    { unoui_rect eye = ui_edit_eye_rect(g_inner, &g_t);
+      unoui_rect txt = ui_edit_text_rect(g_inner, &g_t);
+      CHECK("secret: the eye is inside the field",
+            eye.w > 0 && eye.x + eye.w <= g_inner.x + g_inner.w);
+      CHECK("secret: the text area stops before the eye",
+            txt.x + txt.w <= eye.x); }
+    { unoui_text plain; static char pb[8] = "hi";
+      unoui_text_init(&plain, pb, sizeof pb, 0);
+      CHECK("plain: no eye, and the whole inner rect is text",
+            ui_edit_eye_rect(g_inner, &plain).w == 0 &&
+            ui_edit_text_rect(g_inner, &plain).w == g_inner.w); }
+    /* a field too narrow to spare the room keeps all of it for the text */
+    field_set("pw", 40);
+    unoui_text_secret(&g_t, '*');
+    CHECK("secret: a narrow field gives up the eye, not its text",
+          ui_edit_eye_rect(g_inner, &g_t).w == 0 &&
+          ui_edit_text_rect(g_inner, &g_t).w == g_inner.w);
+
+    /* ---- 7. the busy indicator ------------------------------------------ */
+    fb_set_font(0);
+    { static unoui_window bw;
+      unoui_widget *b;
+      unoui_window_init(&bw, "B", 10, 10, 120, 80);
+      b = unoui_add_busy(&bw, 8, 8, 16);
+      CHECK("busy: sized as asked", b->r.w == 16 && b->r.h == 16);
+      CHECK("busy: starts at phase 0", b->value == 0);
+      { int i; for (i = 0; i < UI_BUSY_DOTS; i++) unoui_busy_step(b); }
+      CHECK("busy: a full lap returns to phase 0", b->value == 0);
+      unoui_busy_step(b);
+      CHECK("busy: one step advances one dot", b->value == 1);
+      b = unoui_add_busy(&bw, 8, 40, 0);
+      CHECK("busy: size 0 means font-derived", b->r.w > 0 && b->r.w == b->r.h); }
+
     printf(fails ? "\n%d FAILED\n" : "\nall passed\n", fails);
     return fails ? 1 : 0;
 }

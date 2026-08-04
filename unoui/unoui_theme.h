@@ -113,6 +113,9 @@ typedef struct unoui_draw {
     void (*tabs)    (const struct unoui_theme *, unoui_rect, const char **, int n, int sel, int flags);
     void (*menubar) (const struct unoui_theme *, unoui_rect, const unoui_menu *, int n, int open, int hot);
     void (*popup)   (const struct unoui_theme *, unoui_rect, const char **, int n, int hot);
+    /* appended: NULL falls back to the default, so the 8 existing positional
+     * theme initialisers keep working untouched */
+    void (*busy)    (const struct unoui_theme *, unoui_rect, int phase);
 } unoui_draw;
 
 typedef struct unoui_theme {
@@ -125,6 +128,9 @@ typedef struct unoui_theme {
 /* ---- shared drawing helpers (live in unoui.c) ---------------------------- *
  * Themes build their custom graphics from these, so chrome stays compact and
  * automatically depth-correct. */
+
+/* how many dots a UI_BUSY ring has; `value` is taken modulo this */
+#define UI_BUSY_DOTS 8
 
 /* bounds-checked single pixel */
 void ui_px(int x, int y, fb_px c);
