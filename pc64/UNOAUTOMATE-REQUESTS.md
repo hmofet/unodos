@@ -5858,3 +5858,25 @@ overrides all of it exactly as before.
 The manual's "Keyboard navigation" warning callout is deleted, the UnoCalc
 figure is retaken (the formula bar now shows `=A1+A2` beside the 42), and
 UnoAmp gets the screenshot the manual previously declined to publish.
+
+## 2026-08-04 - NOTE: `./build.sh` can fail in mkbios for no reason, once
+
+Hit while landing the two fixes above: `UNO_DEBUG=1 ./build.sh` died with
+
+    mcopy -i /tmp/uno_bios_fat.img build/esp/SANS.TTF ::/SANS.TTF -> exit 1
+
+and succeeded on an immediate retry with nothing changed. The volume was not
+full - mkbios sizes it from the tree (11 MB tree, 96 MiB floor) - and the disk
+had 900 GB free.
+
+Likely cause, NOT proven: `tools/mkbios.py` writes to the fixed path
+`/tmp/uno_bios_fat.img`, and it deletes and re-creates that file. Two builds
+running at once - and this box routinely has three or four worktrees, each with
+its own agent - will therefore stamp on each other's intermediate image. It
+would present exactly like this: a random mcopy failing, and passing on retry.
+
+Two things would make it a non-event: give the temp image a unique name
+(`tempfile.mkdtemp()` or the pid), and stop swallowing mcopy's stderr in
+`build_fat()`, which is why the failure said nothing about what went wrong.
+`tools/mkuefi.py` uses the same mtools path and is worth checking for the same
+fixed-path assumption.
