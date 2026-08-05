@@ -77,6 +77,89 @@ static int len_px(uw_len l, int base)
     return 0;
 }
 
+/* ---- floats ---------------------------------------------------------------
+ * A float is taken out of the normal flow, pinned to one side of its
+ * containing block, and everything after it flows AROUND it. Two pieces are
+ * needed: a record of what is currently floating (so a line knows how much
+ * width is left at its own y), and `clear`, which pushes a later block below
+ * them.
+ *
+ * The list is per-containing-block and lives for that block's layout. Floats
+ * do not escape their block here - a float taller than its parent still ends
+ * at the parent's edge - which is the simplification worth naming, because
+ * the real rule (floats leak out of an auto-height parent unless it
+ * establishes a new formatting context) is a large part of why CSS float
+ * layout is famously fiddly.
+ */
+#define FLOAT_MAX 16
+typedef struct floatrec_s {
+    int side;                        /* UW_FLOAT_LEFT / RIGHT */
+    int x, y, w, h;                  /* margin box, document coords */
+} floatrec;
+
+struct floatctx {
+    floatrec f[FLOAT_MAX];
+    int n;
+    int left, right;                 /* the containing block's content edges */
+};
+typedef struct floatctx floatctx;
+
+/* Width available for a line at `y` of height `h`, and where it starts. */
+static void float_band(floatctx *fc, int y, int h, int *out_x, int *out_w)
+{
+    int lo = fc->left, hi = fc->right, i;
+    for (i = 0; i < fc->n; i++) {
+        floatrec *f = &fc->f[i];
+        if (y + h <= f->y || y >= f->y + f->h) continue;   /* no overlap */
+        if (f->side == UW_FLOAT_LEFT) { if (f->x + f->w > lo) lo = f->x + f->w; }
+        else                          { if (f->x < hi)        hi = f->x; }
+    }
+    if (hi < lo) hi = lo;
+    *out_x = lo;
+    *out_w = hi - lo;
+}
+
+/* The first y at or below `y` where a box of width `w` fits between floats. */
+static int float_fit(floatctx *fc, int y, int w, int h)
+{
+    int guard = 0;
+    for (; guard < FLOAT_MAX + 1; guard++) {
+        int bx, bw, i, next = 0;
+        float_band(fc, y, h, &bx, &bw);
+        if (bw >= w) return y;
+        for (i = 0; i < fc->n; i++) {          /* drop past the shallowest */
+            int bottom = fc->f[i].y + fc->f[i].h;
+            if (bottom > y && (!next || bottom < next)) next = bottom;
+        }
+        if (!next) return y;
+        y = next;
+    }
+    return y;
+}
+
+/* y below every float the `clear` value names */
+static int float_clear_y(floatctx *fc, int y, int clear)
+{
+    int i;
+    if (clear == UW_CLEAR_NONE) return y;
+    for (i = 0; i < fc->n; i++) {
+        int side = fc->f[i].side, bottom = fc->f[i].y + fc->f[i].h;
+        if (clear == UW_CLEAR_BOTH ||
+            (clear == UW_CLEAR_LEFT  && side == UW_FLOAT_LEFT) ||
+            (clear == UW_CLEAR_RIGHT && side == UW_FLOAT_RIGHT))
+            if (bottom > y) y = bottom;
+    }
+    return y;
+}
+
+static int float_bottom(floatctx *fc)
+{
+    int i, b = 0;
+    for (i = 0; i < fc->n; i++)
+        if (fc->f[i].y + fc->f[i].h > b) b = fc->f[i].y + fc->f[i].h;
+    return b;
+}
+
 /* ---- inline content: greedy word wrap into line boxes --------------------
  * The emitter below is greedy word wrap; ALIGNMENT (text-align,
  * vertical-align) happens in line_close(), because neither the line's final
@@ -93,6 +176,9 @@ typedef struct {
     int     pending_space;       /* a space is owed before the next word */
     uw_node *cur_elem;           /* the element whose text is being flowed */
     uw_box *line;
+    struct floatctx *floats;     /* NULL when no float is in play */
+    int     line_x0;             /* band offset of the current line          */
+    int     avail_full;          /* the block's width, before any float      */
 } inline_ctx;
 
 /* Ascent of a box: how far its top sits above the line's baseline. Text asks
@@ -175,6 +261,8 @@ static void line_break(inline_ctx *ic)
     line_close(ic, 0);
     ic->y += ic->line_h;
     ic->x = 0;
+    ic->line_x0 = 0;
+    if (ic->floats) ic->avail = ic->avail_full;   /* re-measured by ensure_line */
     ic->line_h = 0;
     ic->pending_space = 0;       /* a space at a line end is not drawn */
     ic->line = NULL;
@@ -187,6 +275,15 @@ static void ensure_line(inline_ctx *ic, const uw_style *s)
     if (!ic->line) return;
     ic->line->x = ic->content_x;
     ic->line->y = ic->content_y + ic->y;
+    /* A line beside a float is narrower, and starts further in when the float
+     * is on the left. This is the whole of "text flows around an image". */
+    if (ic->floats && ic->floats->n) {
+        int bx, bw, lh = ic->line_h > 0 ? ic->line_h : lineh(ic->d, s);
+        float_band(ic->floats, ic->line->y, lh, &bx, &bw);
+        ic->line->x = bx;
+        ic->line_x0 = bx - ic->content_x;
+        ic->avail = bw;
+    }
     box_add(ic->block, ic->line);
 }
 
@@ -214,7 +311,7 @@ static void emit_word(inline_ctx *ic, const uw_style *s, const char *t, int len)
     tb->inline_bg = (unsigned char)(ic->cur_elem && ic->block &&
                                     ic->cur_elem != ic->block->node);
     tb->text = t; tb->tlen = len;
-    tb->x = ic->content_x + ic->x;
+    tb->x = ic->content_x + ic->line_x0 + ic->x;
     tb->y = ic->content_y + ic->y;
     tb->w = w;
     tb->h = lh;
@@ -251,7 +348,7 @@ static void emit_image(inline_ctx *ic, uw_node *n, const uw_style *s)
     b = box_new(ic->d, UW_BOX_IMAGE, n, s);
     if (!b) return;
     b->image = handle;
-    b->x = ic->content_x + ic->x;
+    b->x = ic->content_x + ic->line_x0 + ic->x;
     b->y = ic->content_y + ic->y;
     b->w = iw; b->h = ih;
     box_add(ic->line, b);
@@ -324,7 +421,8 @@ static void flow_inline(inline_ctx *ic, uw_node *n, const uw_style *inherited)
 /* ---- block layout ---------------------------------------------------------
  * Pass 1 (this function) resolves this box's width and position, lays out its
  * children, then resolves its own height from them. */
-static void layout_block(uw_doc *d, uw_box *b, int cb_width, int x, int y);
+static void layout_block(uw_doc *d, uw_box *b, int cb_width, int x, int y,
+                         floatctx *fc);
 
 static uw_box *build_block(uw_doc *d, uw_node *n, const uw_style *s)
 {
@@ -333,6 +431,8 @@ static uw_box *build_block(uw_doc *d, uw_node *n, const uw_style *s)
 }
 
 static uw_box *build_block(uw_doc *d, uw_node *n, const uw_style *s);
+static void layout_block(uw_doc *d, uw_box *b, int cb_width, int x, int y,
+                         floatctx *fc);
 
 /* ---- tables ---------------------------------------------------------------
  * Auto table layout, the useful subset. Rows come from the table's children,
@@ -451,7 +551,7 @@ static void layout_table(uw_doc *d, uw_box *b, int content_x, int content_y,
             /* a cell is a block laid out in a containing block of exactly its
              * column width; margins do not apply to cells, so cb_width IS the
              * column and the cell fills it */
-            layout_block(d, cb, colw[k], cx, cy);
+            layout_block(d, cb, colw[k], cx, cy, NULL);
             cb->w = colw[k];
             if (cb->h > rowh) rowh = cb->h;
             cx += colw[k] + spacing;
@@ -468,20 +568,68 @@ static void layout_table(uw_doc *d, uw_box *b, int content_x, int content_y,
 #undef TBL_MAXROW
 }
 
+/* `inherited` is the float context of the block formatting context this box
+ * belongs to. Floats are NOT scoped to the block that declared them - a float
+ * in <body> shortens the lines of every paragraph after it, which are
+ * separate blocks - so the context is passed down rather than rebuilt per
+ * block. NULL starts a new one (the root, and anything that would establish
+ * its own BFC once that concept exists here). */
 static void layout_children(uw_doc *d, uw_box *b, int content_x, int content_y,
-                            int content_w, int *out_h)
+                            int content_w, int *out_h, floatctx *inherited)
 {
     uw_node *c;
     int cy = content_y;
     int prev_margin = 0;            /* for collapsing with the next sibling */
     int first = 1;
     int any_block = 0;
+    floatctx own;
+    floatctx *fcp = inherited;
+
+    if (!fcp) { own.n = 0; own.left = content_x; own.right = content_x + content_w; fcp = &own; }
+
+    /* FLOATS first: they are out of flow, so their geometry has to exist
+     * before any in-flow content asks how much room is left beside them. A
+     * float is placed at the current flow position, pushed down until it
+     * fits, and recorded; everything after flows around what is recorded. */
+    for (c = uw_first_child(b->node); c; c = uw_next_sibling(c)) {
+        const uw_style *cs;
+        uw_box *fb;
+        int fw, fy;
+        if (uw_type(c) != UW_NODE_ELEMENT) continue;
+        cs = uw_computed(c);
+        if (!cs || cs->display == UW_DISP_NONE) continue;
+        if (cs->cssfloat == UW_FLOAT_NONE) continue;
+        if (fcp->n >= FLOAT_MAX) continue;
+        fb = build_block(d, c, cs);
+        if (!fb) continue;
+        box_add(b, fb);
+        /* a float shrinks to its width if given one, else to half the
+         * containing block - a float with no width is not "as wide as the
+         * block", which would leave nothing to flow beside it */
+        fw = cs->width.unit == UW_LEN_AUTO ? content_w / 2 : len_px(cs->width, content_w);
+        if (fw < 1) fw = 1;
+        if (fw > content_w) fw = content_w;
+        layout_block(d, fb, fw, content_x, content_y, fcp);
+        fb->w = fw;
+        fy = float_fit(fcp, content_y, fw, fb->h);
+        fb->y = fy;
+        if (cs->cssfloat == UW_FLOAT_RIGHT) {
+            int bx, bw;
+            float_band(fcp, fy, fb->h, &bx, &bw);
+            fb->x = bx + bw - fw;
+        }
+        fcp->f[fcp->n].side = cs->cssfloat;
+        fcp->f[fcp->n].x = fb->x;  fcp->f[fcp->n].y = fb->y;
+        fcp->f[fcp->n].w = fb->w;  fcp->f[fcp->n].h = fb->h;
+        fcp->n++;
+    }
 
     for (c = uw_first_child(b->node); c; c = uw_next_sibling(c)) {
         const uw_style *cs;
         if (uw_type(c) != UW_NODE_ELEMENT) continue;
         cs = uw_computed(c);
         if (!cs || cs->display == UW_DISP_NONE) continue;
+        if (cs->cssfloat != UW_FLOAT_NONE) continue;     /* already placed */
         if (cs->display != UW_DISP_BLOCK && cs->display != UW_DISP_LIST_ITEM &&
             cs->display != UW_DISP_TABLE) continue;
         {   uw_box *cb = build_block(d, c, cs);
@@ -494,31 +642,43 @@ static void layout_children(uw_doc *d, uw_box *b, int content_x, int content_y,
              * the sum of both margins and the page would read as double-spaced. */
             if (first) { cy += mt; first = 0; }
             else cy += (mt > prev_margin ? mt : prev_margin) - prev_margin;
-            layout_block(d, cb, content_w, content_x, cy);
+            cy = float_clear_y(fcp, cy, cs->clear);
+            layout_block(d, cb, content_w, content_x, cy, fcp);
             cy = cb->y + cb->h;
             prev_margin = len_px(cs->margin[UW_BOTTOM], content_w);
             cy += prev_margin;
             any_block = 1;
         }
     }
-    if (any_block) { *out_h = cy - content_y; return; }
+    if (any_block) {
+        int fb2 = inherited ? 0 : float_bottom(fcp);
+        if (fb2 > cy) cy = fb2;      /* the parent contains its floats */
+        *out_h = cy - content_y;
+        return;
+    }
 
     /* no block children: this box establishes an inline formatting context */
     {   inline_ctx ic;
         memset(&ic, 0, sizeof ic);
         ic.d = d; ic.block = b; ic.avail = content_w > 0 ? content_w : 1;
+        ic.avail_full = ic.avail;
         ic.content_x = content_x; ic.content_y = content_y;
         ic.cur_elem = b->node;
+        if (fcp->n) ic.floats = fcp;
         flow_inline(&ic, b->node, b->style);
         /* the block's LAST line: aligned like the rest, but never justified
          * (CSS leaves a final line ragged - stretching it is the classic
          * broken-justification look) */
         if (ic.line) { line_close(&ic, 1); ic.y += ic.line_h; }
+        if (!inherited) {                  /* the BFC root contains its floats */
+            int fb2 = float_bottom(fcp) - content_y;
+            if (fb2 > ic.y) ic.y = fb2; }
         *out_h = ic.y;
     }
 }
 
-static void layout_block(uw_doc *d, uw_box *b, int cb_width, int x, int y)
+static void layout_block(uw_doc *d, uw_box *b, int cb_width, int x, int y,
+                         floatctx *fc)
 {
     const uw_style *s = b->style;
     int avail, content_w, content_h = 0;
@@ -553,7 +713,7 @@ static void layout_block(uw_doc *d, uw_box *b, int cb_width, int x, int y)
                      content_w, &content_h);
     else
         layout_children(d, b, b->x + b->bl + b->pl, b->y + b->bt + b->pt,
-                        content_w, &content_h);
+                        content_w, &content_h, fc);
 
     if (s->height.unit != UW_LEN_AUTO) content_h = len_px(s->height, 0);
     b->h = content_h + b->bt + b->bb + b->pt + b->pb;
@@ -578,7 +738,7 @@ int uw_layout(uw_doc *d, int width, int height, const uw_metrics *m)
      * sibling collapsing is resolved by the parent. The root has no parent, so
      * its top margin is applied here or it is silently lost. */
     layout_block(d, d->layout_root, width, 0,
-                 len_px(bs->margin[UW_TOP], width));
+                 len_px(bs->margin[UW_TOP], width), NULL);
     return d->layout_root->h + d->layout_root->mt + d->layout_root->mb;
 }
 
