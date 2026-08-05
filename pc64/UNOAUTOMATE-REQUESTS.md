@@ -11,6 +11,14 @@ fulfilled.
 
 ---
 
+## 2026-08-05 — CLAIM: CS3 browser wiring (branch `libcss-wire`)
+
+Continuing the csslib claim below: taking the browser-lane uno:engine page
+(cascade section wired to `csslib/uwx.h`, the JS-engine pattern) and a urcui
+comparison harness (`tools/browser_cascade_urc.py`) that screenshots the same
+pages under both cascades in a BROWSER_ENGINE=uw QEMU boot. Default cascade
+stays built-in; a flip is a separate decision after the comparison runs.
+
 ## 2026-08-05 — CLAIM: csslib (new subsystem) - phase 2 of the second-engine programme
 
 Taking (branch `libcss-vendor`, then `libcss-port`): the vendored MIT CSS stack
