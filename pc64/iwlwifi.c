@@ -3885,10 +3885,53 @@ static void mgmt_capture(const u8 *frame, int fl, u16 fc)
     if (st == 12 || st == 10) {
         int reason = fl >= 26 ? (frame[24] | (frame[25] << 8)) : -1;
         int ours = !memcmp(frame + 10, g_bssid, 6);
+        /* "NOT OUR BSSID - IGNORED" WAS HIDING THE DIAGNOSIS.
+         *
+         * A reason 6 or 7 - class-2/class-3 frame from a station the AP does
+         * not think is authenticated/associated - sent BY A NODE WE ARE NOT
+         * ASSOCIATED WITH, WHILE WE BELIEVE WE ARE ASSOCIATED, is not noise
+         * from an unrelated network. It is that node telling us it is
+         * receiving our data frames and does not consider us its client. Some
+         * other AP is picking up traffic meant for ours, and dropping it.
+         *
+         * This is candidate (b) of the two "associated, keys installed, no
+         * lease" explanations 927ed9be set out to separate, and it arrives
+         * with a name and a MAC attached rather than as a counter. Seen on the
+         * Surface against a mesh: the join aimed at e8:d3:eb:47:4e:c6, auth
+         * and assoc were answered by e8:d3:eb:51:4d:66, the 4-way completed
+         * with the responder, and then 47:4e:c6 sent reason=7 every few
+         * hundred milliseconds for the rest of the session while every DHCP
+         * DISCOVER went unanswered. Sixty of those lines all said "ignored".
+         *
+         * The AP is not confused about who we are. We are. */
+        int steer = (!ours && g_joined && (reason == 6 || reason == 7));
         uno_dbg_net_trace("wifi: %s from %02x:%02x:%02x:%02x:%02x:%02x reason=%d%s",
                           st == 12 ? "DEAUTH" : "DISASSOC",
                           frame[10],frame[11],frame[12],frame[13],frame[14],frame[15],
-                          reason, ours ? " (our AP)" : " (not our BSSID - ignored)");
+                          reason,
+                          ours  ? " (our AP)"
+                          : steer ? " *** THIS AP IS RECEIVING OUR DATA AND WE ARE"
+                                    " NOT ASSOCIATED WITH IT - our frames are"
+                                    " reaching the wrong node ***"
+                                  : " (not our BSSID - ignored)");
+        /* Say it once, loudly, with both ends named - a wall of identical
+         * lines is easy to scroll past, and this is the whole answer. */
+        if (steer) {
+            static int said;
+            if (!said) {
+                said = 1;
+                uno_dbg_net_trace("wifi: STEERED: associated with "
+                                  "%02x:%02x:%02x:%02x:%02x:%02x but "
+                                  "%02x:%02x:%02x:%02x:%02x:%02x is getting our "
+                                  "class-3 frames and refusing them (reason %d). "
+                                  "Data cannot flow, so DHCP will never answer.",
+                                  g_bssid[0],g_bssid[1],g_bssid[2],
+                                  g_bssid[3],g_bssid[4],g_bssid[5],
+                                  frame[10],frame[11],frame[12],
+                                  frame[13],frame[14],frame[15], reason);
+                st_set("WiFi: joined, but our data is reaching the wrong AP");
+            }
+        }
         g_deauth_reason = reason;
         if (ours) g_deauth_ours++; else g_deauth_other++;
         /* Acting on it is the point: the association is gone the moment the AP
