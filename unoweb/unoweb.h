@@ -277,6 +277,12 @@ const uw_style *uw_computed(uw_node *n);
  * cascade uses, exposed because querySelector needs it in M5. */
 int uw_matches(uw_doc *d, uw_node *n, const char *sel);
 
+/* How many cascades the last uw_style_document skipped by sharing a computed
+ * style between identically-shaped siblings. Diagnostic: a suite that passes
+ * proves nothing about sharing, since it would pass identically if sharing
+ * never fired at all. */
+int uw_share_hits(void);
+
 /* An indented dump of the computed styles, one element per line. Like uw_dump,
  * the format is part of the contract because the golden tests compare it. */
 int uw_style_dump(uw_doc *d, uw_node *n, char *out, int max);

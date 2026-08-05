@@ -607,6 +607,39 @@ int main(int argc, char **argv)
            "  li display=list-item font=14/400 color=#ff0000 bullet=1\n"
            "  li display=list-item font=14/400 color=#1e2028 bullet=1\n");
 
+    /* ---- style sharing (M7) -------------------------------------------------
+     * A passing style suite does NOT prove sharing works - it would look
+     * identical if sharing never fired. These check that it fires, that it
+     * DECLINES when the sheet is positional, and that it keys on attributes. */
+    if (want("css-share")) {
+        static const char many[] =
+            "<style>li{color:red}</style><ul>"
+            "<li>a</li><li>a</li><li>a</li><li>a</li></ul>";
+        static const char posn[] =
+            "<style>li:first-child{color:red}</style><ul>"
+            "<li>a</li><li>a</li><li>a</li><li>a</li></ul>";
+        static const char attrs[] =
+            "<style>li{color:red}</style><ul>"
+            "<li class=x>a</li><li class=y>a</li><li class=x>a</li></ul>";
+        uw_doc *d;
+        int shared_many, shared_posn, shared_attrs;
+        run++;
+        d = uw_parse_string(many, -1, NULL);
+        uw_add_inline_sheets(d); uw_style_document(d, 400, 600);
+        shared_many = uw_share_hits(); uw_doc_free(d);
+        d = uw_parse_string(posn, -1, NULL);
+        uw_add_inline_sheets(d); uw_style_document(d, 400, 600);
+        shared_posn = uw_share_hits(); uw_doc_free(d);
+        d = uw_parse_string(attrs, -1, NULL);
+        uw_add_inline_sheets(d); uw_style_document(d, 400, 600);
+        shared_attrs = uw_share_hits(); uw_doc_free(d);
+        if (shared_many < 3 || shared_posn != 0 || shared_attrs != 1) {
+            printf("  FAIL css-share (plain=%d want>=3, positional=%d want 0, "
+                   "attrs=%d want 1)\n", shared_many, shared_posn, shared_attrs);
+            fails++;
+        }
+    }
+
     /* a malformed rule must not eat the ones after it */
     tstyle("css-error-recovery",
            "<style>p{color:@@@;;;} p{font-weight:700} @unknown{x:y} p{color:lime}</style><p>x</p>",

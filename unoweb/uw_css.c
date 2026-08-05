@@ -467,6 +467,42 @@ uw_decl *uw_decl_next(uw_decl *x)    { return x ? x->next : NULL; }
 uw_atom  uw_decl_prop(uw_decl *x)    { return x ? x->prop : 0; }
 const char *uw_decl_value(uw_decl *x){ return x ? x->value : ""; }
 int      uw_decl_important(uw_decl *x){ return x ? x->important : 0; }
+/* Can a document styled by this sheet share computed styles between
+ * same-shaped siblings? Only if NO rule can depend on an element's POSITION,
+ * because position is the one thing a "same tag, same attributes, same
+ * parent" key cannot see. `li:first-child{color:red}` over two identical
+ * siblings is exactly that case, and it is what caught the first attempt at
+ * sharing.
+ *
+ * Proving that no rule cares beats trying to model position in the key: the
+ * key would need per-element sibling indices, and would have to be re-derived
+ * every time a new positional selector is supported. This is conservative by
+ * construction - an unrecognised pseudo-class disables sharing rather than
+ * being assumed harmless. */
+int uw_sheet_shareable(uw_doc *d, uw_sheet *s)
+{
+    uw_rule *r;
+    if (!s) return 1;
+    for (r = s->rules; r; r = r->next) {
+        uw_compound *c;
+        for (c = r->sel; c; c = c->next) {
+            uw_cond *q;
+            if (c->comb == UW_COMB_ADJ) return 0;         /* b + i */
+            for (q = c->conds; q; q = q->next) {
+                const char *nm;
+                if (q->kind != UW_CND_PSEUDO) continue;
+                nm = uw_atom_name(d, q->name);
+                if (!nm) return 0;
+                if (!strncmp(nm, "first", 5) || !strncmp(nm, "last", 4) ||
+                    !strncmp(nm, "nth", 3)   || !strncmp(nm, "only", 4) ||
+                    !strcmp(nm, "root"))
+                    return 0;
+            }
+        }
+    }
+    return 1;
+}
+
 int      uw_sheet_origin(uw_sheet *s){ return s ? s->origin : UW_ORIGIN_AUTHOR; }
 uw_sheet *uw_sheet_next(uw_sheet *s) { return s ? s->next : NULL; }
 void      uw_sheet_link(uw_sheet *s, uw_sheet *n) { if (s) s->next = n; }

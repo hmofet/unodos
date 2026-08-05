@@ -105,6 +105,8 @@ uw_atom     uw_decl_prop(uw_decl *x);
 const char *uw_decl_value(uw_decl *x);
 int         uw_decl_important(uw_decl *x);
 int         uw_sheet_origin(uw_sheet *s);
+/* 1 if no rule in the sheet depends on an element's POSITION - see uw_css.c */
+int         uw_sheet_shareable(uw_doc *d, uw_sheet *s);
 uw_sheet   *uw_sheet_next(uw_sheet *s);
 void        uw_sheet_link(uw_sheet *s, uw_sheet *n);
 
