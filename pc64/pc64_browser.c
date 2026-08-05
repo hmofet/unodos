@@ -424,6 +424,15 @@ static int uwm_lineh(void *u, const uw_style *s)
     return s->line_height > h ? s->line_height : h;
 }
 
+/* The real ascent, so mixed font sizes and images share a baseline rather
+ * than a common top. unoweb falls back to ~80% of the line box without this;
+ * pc64 has the font, so it answers properly. */
+static int uwm_baseline(void *u, const uw_style *s)
+{
+    (void)u;
+    return uno_font_baseline_px(uw_slot(s), s->font_size);
+}
+
 static int  g_uw_w;                 /* width the current layout was built for */
 static int  g_uw_h;                 /* its resulting document height           */
                                     /* (g_link_sel is shared with the flow
@@ -551,6 +560,7 @@ static void render_uw(const char *src, unoui_rect r, int scroll)
         memset(&m, 0, sizeof m);
         m.text_width = uwm_width;
         m.line_height = uwm_lineh;
+        m.baseline = uwm_baseline;
         {   uw_images im;
             memset(&im, 0, sizeof im);
             im.resolve = uwi_resolve;

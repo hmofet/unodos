@@ -199,6 +199,19 @@ static void map_style(const css_computed_style *st, const css_unit_ctx *uc,
     default:                        out->white_space = UW_WS_NORMAL; break;
     }
 
+    {   css_fixed vv; css_unit vu;
+        switch (css_computed_vertical_align(st, &vv, &vu)) {
+        case CSS_VERTICAL_ALIGN_TOP:
+        case CSS_VERTICAL_ALIGN_TEXT_TOP:    out->vertical_align = UW_VA_TOP;    break;
+        case CSS_VERTICAL_ALIGN_MIDDLE:      out->vertical_align = UW_VA_MIDDLE; break;
+        case CSS_VERTICAL_ALIGN_BOTTOM:
+        case CSS_VERTICAL_ALIGN_TEXT_BOTTOM: out->vertical_align = UW_VA_BOTTOM; break;
+        case CSS_VERTICAL_ALIGN_SUB:         out->vertical_align = UW_VA_SUB;    break;
+        case CSS_VERTICAL_ALIGN_SUPER:       out->vertical_align = UW_VA_SUPER;  break;
+        default:                             out->vertical_align = UW_VA_BASELINE; break;
+        }
+    }
+
     out->underline =
         (css_computed_text_decoration(st) & CSS_TEXT_DECORATION_UNDERLINE) != 0;
 

@@ -78,10 +78,11 @@ static int len_px(uw_len l, int base)
 }
 
 /* ---- inline content: greedy word wrap into line boxes --------------------
- * This is NOT full inline formatting (nested inline boxes carrying their own
- * borders across line breaks, vertical-align, justification - all M4). It is
- * enough to give a block a REAL height, without which every auto height above
- * it would be a guess and the golden geometry would mean nothing. */
+ * The emitter below is greedy word wrap; ALIGNMENT (text-align,
+ * vertical-align) happens in line_close(), because neither the line's final
+ * width nor its tallest item is known until the line ends. Still not full
+ * inline formatting: nested inline boxes do not carry their own borders
+ * across a line break. */
 typedef struct {
     uw_doc *d;
     uw_box *block;
@@ -94,12 +95,84 @@ typedef struct {
     uw_box *line;
 } inline_ctx;
 
+/* Ascent of a box: how far its top sits above the line's baseline. Text asks
+ * the embedder (fonts are the embedder's business - see uw_metrics); anything
+ * else, an image included, sits ON the baseline, which is what CSS means by
+ * an inline replaced box defaulting to vertical-align: baseline. */
+static int box_ascent(inline_ctx *ic, uw_box *b)
+{
+    if (b->type == UW_BOX_TEXT && ic->d->metrics.baseline)
+        return ic->d->metrics.baseline(ic->d->metrics.user, b->style);
+    if (b->type == UW_BOX_TEXT)
+        return b->h * 4 / 5;     /* no hook: the usual ~80% of the line box */
+    return b->h;                 /* replaced content rests on the baseline  */
+}
+
+/* Close the current line: align its children vertically against a shared
+ * baseline, then horizontally per text-align.
+ *
+ * Doing BOTH here rather than at emit time is the point. Neither the line's
+ * final width nor its tallest item is known until the line ends, and both
+ * alignments need exactly that - which is why the greedy emitter simply
+ * stacks boxes at the pen and this function puts them where they belong.
+ * `last` suppresses justification on a block's final line, per CSS. */
+static void line_close(inline_ctx *ic, int last)
+{
+    uw_box *c;
+    int ascent = 0, top, slack, nchild = 0, ngap;
+
+    if (!ic->line) return;
+    ic->line->w = ic->x;
+    top = ic->line->y;
+
+    /* A line box is max(ascent) + max(descent), NOT max(height): once items
+     * share a baseline instead of a common top, the tallest ascender and the
+     * deepest descender can come from different items, and sizing by height
+     * alone lets a descender hang into the next line. */
+    {   int descent = 0;
+        for (c = ic->line->first; c; c = c->next) {
+            int a = box_ascent(ic, c), dsc = c->h - a;
+            if (a > ascent) ascent = a;
+            if (dsc > descent) descent = dsc;
+            nchild++;
+        }
+        if (ascent + descent > ic->line_h) ic->line_h = ascent + descent;
+    }
+    ic->line->h = ic->line_h;
+    for (c = ic->line->first; c; c = c->next) {
+        switch (c->style ? c->style->vertical_align : UW_VA_BASELINE) {
+        case UW_VA_TOP:    c->y = top; break;
+        case UW_VA_BOTTOM: c->y = top + ic->line_h - c->h; break;
+        case UW_VA_MIDDLE: c->y = top + (ic->line_h - c->h) / 2; break;
+        case UW_VA_SUB:    c->y = top + ascent - box_ascent(ic, c) + c->h / 5; break;
+        case UW_VA_SUPER:  c->y = top + ascent - box_ascent(ic, c) - c->h / 3; break;
+        default:           c->y = top + ascent - box_ascent(ic, c); break;
+        }
+    }
+
+    slack = ic->avail - ic->x;
+    if (slack > 0 && nchild) {
+        int align = ic->line->style ? ic->line->style->text_align : UW_ALIGN_LEFT;
+        if (align == UW_ALIGN_CENTER)
+            for (c = ic->line->first; c; c = c->next) c->x += slack / 2;
+        else if (align == UW_ALIGN_RIGHT)
+            for (c = ic->line->first; c; c = c->next) c->x += slack;
+        else if (align == UW_ALIGN_JUSTIFY && !last && (ngap = nchild - 1) > 0) {
+            /* spread the slack across the inter-box gaps; the remainder goes
+             * to the leftmost gaps so the right edge lands exactly flush */
+            int i = 0, rem = slack % ngap, step = slack / ngap, shift = 0;
+            for (c = ic->line->first; c; c = c->next, i++) {
+                c->x += shift;
+                if (i < ngap) shift += step + (i < rem ? 1 : 0);
+            }
+            ic->line->w = ic->avail;
+        }
+    }
+}
+
 static void line_break(inline_ctx *ic)
 {
-    if (ic->line) {
-        ic->line->h = ic->line_h;
-        ic->line->w = ic->x;
-    }
+    line_close(ic, 0);
     ic->y += ic->line_h;
     ic->x = 0;
     ic->line_h = 0;
@@ -300,7 +373,10 @@ static void layout_children(uw_doc *d, uw_box *b, int content_x, int content_y,
         ic.content_x = content_x; ic.content_y = content_y;
         ic.cur_elem = b->node;
         flow_inline(&ic, b->node, b->style);
-        if (ic.line) { ic.line->h = ic.line_h; ic.line->w = ic.x; ic.y += ic.line_h; }
+        /* the block's LAST line: aligned like the rest, but never justified
+         * (CSS leaves a final line ragged - stretching it is the classic
+         * broken-justification look) */
+        if (ic.line) { line_close(&ic, 1); ic.y += ic.line_h; }
         *out_h = ic.y;
     }
 }

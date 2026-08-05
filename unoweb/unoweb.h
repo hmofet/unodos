@@ -186,6 +186,10 @@ enum { UW_FF_SANS = 0, UW_FF_SERIF, UW_FF_MONO };
 enum { UW_ALIGN_LEFT = 0, UW_ALIGN_CENTER, UW_ALIGN_RIGHT, UW_ALIGN_JUSTIFY };
 enum { UW_WS_NORMAL = 0, UW_WS_PRE, UW_WS_NOWRAP };
 enum { UW_BS_NONE = 0, UW_BS_SOLID };
+/* vertical-align, the subset an inline formatter can honour without a full
+ * baseline table: everything else in the property maps to BASELINE. */
+enum { UW_VA_BASELINE = 0, UW_VA_TOP, UW_VA_MIDDLE, UW_VA_BOTTOM,
+       UW_VA_SUB, UW_VA_SUPER };
 /* side order is CSS order: top, right, bottom, left */
 enum { UW_TOP = 0, UW_RIGHT, UW_BOTTOM, UW_LEFT };
 
@@ -195,6 +199,7 @@ typedef struct {
     unsigned char font_style;      /* 0 normal, 1 italic */
     unsigned char text_align;
     unsigned char white_space;
+    unsigned char vertical_align;
     unsigned char underline;
     unsigned char list_bullet;     /* 0 none, 1 disc, 2 decimal */
     unsigned char has_bg;          /* background_color is meaningful */
@@ -276,6 +281,11 @@ typedef struct {
     int (*text_width)(void *user, const uw_style *s, const char *t, int len);
     /* Height of one line box in style `s` (ascent+descent+leading). */
     int (*line_height)(void *user, const uw_style *s);
+    /* Baseline of style `s`: pixels from the top of a line box down to the
+     * text baseline. OPTIONAL - NULL means "assume the usual ~80%", which
+     * keeps older embedders working; supplying it is what makes mixed font
+     * sizes and images share a real baseline instead of a common top. */
+    int (*baseline)(void *user, const uw_style *s);
 } uw_metrics;
 
 /* A laid-out box. Geometry is in DOCUMENT coordinates (the page origin, not
