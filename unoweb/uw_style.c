@@ -42,9 +42,13 @@ static const char UA_CSS[] =
            "border-left:2px solid #c8c8c3}"
 "hr{margin:8px 0;border-top:1px solid #c8c8c3}"
 "dd{margin:0 0 0 24px}"
-"table{margin:6px 0}"
-"td,th{display:block}"
-"th{font-weight:700}";
+/* Real table formatting (M6). Before this, td,th were display:block and
+ * every table on the web rendered as one column of stacked cells. */
+"table{display:table;margin:6px 0;border-spacing:2px}"
+"thead,tbody,tfoot{display:table-row-group}"
+"tr{display:table-row}"
+"td,th{display:table-cell;padding:2px 4px}"
+"th{font-weight:700;text-align:center}";
 
 /* ---- value helpers -------------------------------------------------------- */
 static int is_ws(int c) { return c==' '||c=='\t'||c=='\n'||c=='\r'||c=='\f'; }
@@ -238,6 +242,14 @@ static void apply_decl(uw_doc *d, uw_style *st, const uw_style *parent,
         else if (keyword_is(v, vlen, "inline-block")) st->display = UW_DISP_INLINE_BLOCK;
         else if (keyword_is(v, vlen, "list-item")) st->display = UW_DISP_LIST_ITEM;
         else if (keyword_is(v, vlen, "none")) st->display = UW_DISP_NONE;
+        else if (keyword_is(v, vlen, "table")) st->display = UW_DISP_TABLE;
+        else if (keyword_is(v, vlen, "inline-table")) st->display = UW_DISP_TABLE;
+        else if (keyword_is(v, vlen, "table-row")) st->display = UW_DISP_TABLE_ROW;
+        else if (keyword_is(v, vlen, "table-cell")) st->display = UW_DISP_TABLE_CELL;
+        else if (keyword_is(v, vlen, "table-row-group") ||
+                 keyword_is(v, vlen, "table-header-group") ||
+                 keyword_is(v, vlen, "table-footer-group"))
+            st->display = UW_DISP_TABLE_ROW_GROUP;
         return;
     }
     if (!strcmp(prop, "color")) { parse_color(v, vlen, &st->color); return; }
