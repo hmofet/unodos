@@ -306,6 +306,18 @@ static void apply_decl(uw_doc *d, uw_style *st, const uw_style *parent,
                                                                          UW_ALIGN_LEFT);
         return;
     }
+    if (!strcmp(prop, "position")) {
+        st->position = (unsigned char)(keyword_is(v, vlen, "relative") ? UW_POS_RELATIVE :
+                                       keyword_is(v, vlen, "absolute") ? UW_POS_ABSOLUTE :
+                                       keyword_is(v, vlen, "fixed")    ? UW_POS_FIXED :
+                                                                         UW_POS_STATIC);
+        return;
+    }
+    if (!strcmp(prop, "z-index")) { st->z_index = atoi(v); return; }
+    if (!strcmp(prop, "top"))    { parse_len(v, vlen, em, root_px, &st->offset[UW_TOP]); return; }
+    if (!strcmp(prop, "right"))  { parse_len(v, vlen, em, root_px, &st->offset[UW_RIGHT]); return; }
+    if (!strcmp(prop, "bottom")) { parse_len(v, vlen, em, root_px, &st->offset[UW_BOTTOM]); return; }
+    if (!strcmp(prop, "left"))   { parse_len(v, vlen, em, root_px, &st->offset[UW_LEFT]); return; }
     if (!strcmp(prop, "float")) {
         st->cssfloat = (unsigned char)(keyword_is(v, vlen, "left")  ? UW_FLOAT_LEFT :
                                        keyword_is(v, vlen, "right") ? UW_FLOAT_RIGHT :

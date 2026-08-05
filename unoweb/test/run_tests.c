@@ -746,6 +746,34 @@ int main(int argc, char **argv)
             "      text (98,31 20x14) \"jj\"\n",
             NULL);
 
+    /* ---- position (M6) ------------------------------------------------------
+     * `relative` moves the WHOLE SUBTREE - the box, its line and its text -
+     * and leaves its space in the flow behind, so the paragraph after it sits
+     * exactly where it would have anyway (y=40). Shifting after layout moves
+     * the border box and strands its own text, which the first version did. */
+    tlayout_w("layout-relative",
+            "<style>.r{position:relative;left:20px;top:5px}</style>"
+            "<p class=r>rel</p><p>after</p>", 300,
+            "block body (8,8 284x55)\n"
+            "  block p (28,22 284x14)\n"
+            "    line (28,22 30x14)\n"
+            "      text (28,22 30x14) \"rel\"\n"
+            "  block p (8,40 284x14)\n"
+            "    line (8,40 50x14)\n"
+            "      text (8,40 50x14) \"after\"\n",
+            NULL);
+    /* `absolute` is OUT OF FLOW: placed against the containing block, and the
+     * paragraph lays out as though it were not there at all. */
+    tlayout_w("layout-absolute",
+            "<style>.a{position:absolute;left:50px;top:100px;width:80px;height:20px}</style>"
+            "<div class=a></div><p>flow</p>", 300,
+            "block body (8,8 284x32)\n"
+            "  block div (58,108 80x20)\n"
+            "  block p (8,17 284x14)\n"
+            "    line (8,17 40x14)\n"
+            "      text (8,17 40x14) \"flow\"\n",
+            NULL);
+
     /* ---- floats (M6) --------------------------------------------------------
      * The float is out of flow and the PARAGRAPH is a separate block, so this
      * only works because the float context is passed down the block tree
