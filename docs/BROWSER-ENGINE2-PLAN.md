@@ -126,12 +126,20 @@ Branch series (each lands independently, AGENTS.md-shaped):
   Two handler ownership rules libcss does not document are recorded in
   csslib/VENDOR.md (classes-array pool; node data MUST be stored - eager
   delete is a use-after-free on real trees).
-- **CS3 `libcss-wire`** (next): the browser turns the engine on - either
-  flip the default under BROWSER_ENGINE=uw or grow the uno:engine page a
-  cascade section (runtime toggle, the JS-engine pattern); then real-page
-  QEMU runs (BROWSER-METAL-RUN.md flow) comparing the two cascades on live
-  sites before any default flip. <link> sheets join when the fetch queue
-  lands (unoweb M4).
+- **CS3 `libcss-wire`: LANDED 2026-08-05** (-> master `d54378cc`). The
+  uno:engine page (now titled "Engines") grew the layout-cascade switch
+  (built-in / libcss, plain-link pattern, restyle forced on toggle), and
+  `tools/browser_cascade_urc.py` drove the comparison in a
+  BROWSER_ENGINE=uw QEMU boot: uno:welcome / uno:sample / uno:script
+  rendered under both cascades differ by **0.000-0.009% of pixels** with
+  shell chrome masked - pixel-identical page content. Side find: every
+  BROWSER_ENGINE=uw build had been link-broken since 2026-08-03 (um_inflate
+  compiled twice after UnoAmp's skin work); fixed in build.sh.
+  **Open decision - the default flip**: the evidence supports making libcss
+  the default cascade in uw builds (and eventually retiring the built-in
+  one to CONSUME-only), but the flip is deliberately NOT taken here; the
+  built-in cascade remains default until the user calls it. Real-network
+  page runs and <link> sheets wait on unoweb M4's fetch queue either way.
 
 If real-page layout quality still disappoints after CS3, the remaining gap
 is uw_layout itself (floats, tables, inline-block); that is unoweb-lane
