@@ -708,19 +708,64 @@ int main(int argc, char **argv)
             "        text (8,8 10x14) \"x\"\n",
             NULL);
 
+    /* ---- line alignment (M4: text-align + vertical-align) -------------------
+     * Each of these is a LINE-CLOSE decision: while words are being placed
+     * neither the line's final width nor its tallest item is known, so the
+     * emitter stacks at the pen and closing the line puts things right. */
+    tlayout_w("layout-align-center", "<style>p{text-align:center}</style><p>ab cd</p>", 200,
+            "block body (8,8 184x32)\n"
+            "  block p (8,17 184x14)\n"
+            "    line (8,17 50x14)\n"
+            "      text (75,17 20x14) \"ab\"\n"
+            "      text (105,17 20x14) \"cd\"\n",
+            NULL);
+    tlayout_w("layout-align-right", "<style>p{text-align:right}</style><p>ab cd</p>", 200,
+            "block body (8,8 184x32)\n"
+            "  block p (8,17 184x14)\n"
+            "    line (8,17 50x14)\n"
+            "      text (142,17 20x14) \"ab\"\n"
+            "      text (172,17 20x14) \"cd\"\n",
+            NULL);
+    /* justify: the WRAPPED line is stretched so its right edge lands exactly
+     * on the content edge (172+20 = 8+184); the LAST line stays ragged. */
+    tlayout_w("layout-align-justify",
+            "<style>p{text-align:justify}</style><p>aa bb cc dd ee ff gg hh ii jj</p>", 200,
+            "block body (8,8 184x46)\n"
+            "  block p (8,17 184x28)\n"
+            "    line (8,17 184x14)\n"
+            "      text (8,17 20x14) \"aa\"\n"
+            "      text (41,17 20x14) \"bb\"\n"
+            "      text (74,17 20x14) \"cc\"\n"
+            "      text (107,17 20x14) \"dd\"\n"
+            "      text (140,17 20x14) \"ee\"\n"
+            "      text (172,17 20x14) \"ff\"\n"
+            "    line (8,31 110x14)\n"
+            "      text (8,31 20x14) \"gg\"\n"
+            "      text (38,31 20x14) \"hh\"\n"
+            "      text (68,31 20x14) \"ii\"\n"
+            "      text (98,31 20x14) \"jj\"\n",
+            NULL);
+
     /* ---- images + hit testing --------------------------------------------- */
     if (want("layout-image")) {
         char buf[4096];
         uw_doc *d = uw_parse_string("<p>a<img src=x.png>b</p>", -1, NULL);
         uw_metrics m;
         uw_images im;
+        /* The image is 40 tall and sits ON the baseline (what CSS means by an
+         * inline replaced box defaulting to vertical-align: baseline); the
+         * text shares that baseline, so its top is at 46 rather than at the
+         * line top. The line is ascent(40) + descent(3) = 43, NOT max-height
+         * 40 - sizing by height alone would let the text's descender hang
+         * into the next line. Before vertical-align landed everything was
+         * top-aligned and this read 17/40. */
         const char *expect =
-            "block body (8,8 784x58)\n"
-            "  block p (8,17 784x40)\n"
-            "    line (8,17 70x40)\n"
-            "      text (8,17 10x14) \"a\"\n"
+            "block body (8,8 784x61)\n"
+            "  block p (8,17 784x43)\n"
+            "    line (8,17 70x43)\n"
+            "      text (8,46 10x14) \"a\"\n"
             "      image img (18,17 50x40)\n"
-            "      text (68,17 10x14) \"b\"\n";
+            "      text (68,46 10x14) \"b\"\n";
         run++;
         uw_style_document(d, 800, 600);
         memset(&m, 0, sizeof m); m.text_width = fake_width; m.line_height = fake_lineh;

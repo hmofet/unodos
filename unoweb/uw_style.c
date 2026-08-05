@@ -294,6 +294,21 @@ static void apply_decl(uw_doc *d, uw_style *st, const uw_style *parent,
                                                                          UW_ALIGN_LEFT);
         return;
     }
+    if (!strcmp(prop, "vertical-align")) {
+        /* NOT inherited (CSS says so), and the length/percentage forms fall
+         * back to baseline rather than pretending to shift by a value the
+         * line box cannot honour yet. */
+        st->vertical_align = (unsigned char)(
+            keyword_is(v, vlen, "top")         ? UW_VA_TOP :
+            keyword_is(v, vlen, "middle")      ? UW_VA_MIDDLE :
+            keyword_is(v, vlen, "bottom")      ? UW_VA_BOTTOM :
+            keyword_is(v, vlen, "sub")         ? UW_VA_SUB :
+            keyword_is(v, vlen, "super")       ? UW_VA_SUPER :
+            keyword_is(v, vlen, "text-top")    ? UW_VA_TOP :
+            keyword_is(v, vlen, "text-bottom") ? UW_VA_BOTTOM :
+                                                 UW_VA_BASELINE);
+        return;
+    }
     if (!strcmp(prop, "text-decoration") || !strcmp(prop, "text-decoration-line")) {
         st->underline = (unsigned char)(strstr(v, "underline") != NULL);
         return;

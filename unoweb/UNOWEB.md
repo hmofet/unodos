@@ -136,9 +136,14 @@ matches its ink.
 ### Layout gaps (beyond the parser gaps above)
 
 7. **No float/clear, no position** other than static. M6.
-8. **Inline formatting is greedy word wrap only.** Nested inline boxes do not
-   carry their own borders across a line break, and there is no
-   `vertical-align` or justification. M4.
+8. **Inline formatting is greedy word wrap plus line-close alignment.**
+   `text-align` (left/center/right/justify) and `vertical-align`
+   (baseline/top/middle/bottom/sub/super) are applied when a line CLOSES,
+   which is the first moment the line's width and tallest item are known; a
+   line box is `max(ascent) + max(descent)`, so a descender cannot hang into
+   the next line. Still missing: nested inline boxes do not carry their own
+   borders across a line break, and the length/percentage forms of
+   `vertical-align` fall back to baseline.
 9. **Margin collapsing is siblings only** - a parent and its first/last child
    do not collapse through the parent's edge.
 10. **No `box-sizing`**; `width` always sets the content box.
