@@ -38,8 +38,22 @@ done
 $CC $FLAGS -I. -c js.c -o build/qjs_t_js.o
 $CC $FLAGS -I. -c qjsweb.c -o build/qjs_t_qjsweb.o
 $CC $FLAGS -I. -c quickjs/test/qjs_dispatch_test.c -o build/qjs_t_dmain.o
+UJS_OBJS="build/qjs_t_ujsmath.o build/qjs_t_ujs_core.o build/qjs_t_ujs_lex.o \
+          build/qjs_t_ujs_comp.o build/qjs_t_ujs_vm.o build/qjs_t_ujs_lib.o \
+          build/qjs_t_ujs_api.o"
 $CC -o build/qjs_dispatch_test.exe build/qjs_t_dmain.o build/qjs_t_js.o \
-    build/qjs_t_qjsweb.o $QJS_OBJS build/qjs_t_ujsmath.o \
-    build/qjs_t_ujs_core.o build/qjs_t_ujs_lex.o build/qjs_t_ujs_comp.o \
-    build/qjs_t_ujs_vm.o build/qjs_t_ujs_lib.o build/qjs_t_ujs_api.o
+    build/qjs_t_qjsweb.o $QJS_OBJS $UJS_OBJS
 echo "built build/qjs_dispatch_test.exe"
+
+# the M5 test: the live DOM bindings, on both engines. Needs unoweb too,
+# since the whole point is that scripts change a real tree.
+for f in uw_dom uw_html uw_css uw_style uw_layout; do
+    $CC $FLAGS -w -c "../unoweb/$f.c" -o "build/qjs_t_$f.o"
+done
+$CC $FLAGS -I. -Wall -Wextra -c webjs.c -o build/qjs_t_webjs.o
+$CC $FLAGS -I. -c quickjs/test/webjs_test.c -o build/qjs_t_wmain.o
+$CC -o build/webjs_test.exe build/qjs_t_wmain.o build/qjs_t_webjs.o \
+    build/qjs_t_js.o build/qjs_t_qjsweb.o $QJS_OBJS $UJS_OBJS \
+    build/qjs_t_uw_dom.o build/qjs_t_uw_html.o build/qjs_t_uw_css.o \
+    build/qjs_t_uw_style.o build/qjs_t_uw_layout.o
+echo "built build/webjs_test.exe"
