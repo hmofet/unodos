@@ -105,8 +105,28 @@ static void report(ujs_vm *vm, ujs_result r)
     sink_str(&g_log, "\n");
 }
 
-/* ---- js_run -------------------------------------------------------------- */
+/* ---- engine dispatch ------------------------------------------------------
+ * The one runtime switch between the in-tree engine and the vendored
+ * quickjs (qjsweb.c). Registry-style: a new engine appends a row. */
+static const struct { const char *name;
+                      int (*run)(const char *, char *, int, char *, int); }
+g_engines[JS_ENGINE_COUNT] = {
+    { "unojs",   js_run_ujs },
+    { "quickjs", js_run_qjs },
+};
+static int g_engine = JS_ENGINE_UNOJS;
+
+int  js_engine_get(void) { return g_engine; }
+void js_engine_set(int engine)
+{ if (engine >= 0 && engine < JS_ENGINE_COUNT) g_engine = engine; }
+const char *js_engine_name(int engine)
+{ return engine >= 0 && engine < JS_ENGINE_COUNT ? g_engines[engine].name : "?"; }
+
 int js_run(const char *src, char *out, int outmax, char *log, int logmax)
+{ return g_engines[g_engine].run(src, out, outmax, log, logmax); }
+
+/* ---- the unojs backend ---------------------------------------------------- */
+int js_run_ujs(const char *src, char *out, int outmax, char *log, int logmax)
 {
     ujs_config cfg;
     ujs_vm *vm;
