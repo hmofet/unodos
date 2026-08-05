@@ -25,6 +25,7 @@
 #include "js.h"
 #include "../unoweb/unoweb.h"
 #include "../csslib/uwx.h"
+#include "webjs.h"
 #include "unoui.h"
 #include "unoui_theme.h"
 #include "uno3d.h"
@@ -425,6 +426,64 @@ static void test_css(void)
 
     uwx_libcss_unregister();
     CHECK("S-CSS-06", !uw_cascade_active());
+    uw_doc_free(d);
+}
+
+/* =================================================================== WEBJS */
+/* The live DOM binding (M5) on the kernel allocator: a script that CHANGES
+ * the tree, checked against the tree rather than against its own report,
+ * plus a timer and an event - the three things that separate a live binding
+ * from the old text-rewriting one. */
+static void test_webjs(void)
+{
+    static const char html[] = "<body><p id='a'>old</p></body>";
+    uw_doc *d = uw_parse_string(html, sizeof html - 1, 0);
+    uw_node *n;
+
+    CHECK("S-WJS-01", d != 0);
+    if (!d) return;
+
+    CHECK("S-WJS-02", webjs_page_begin(d) == 0);
+    CHECK("S-WJS-03", webjs_page_active());
+
+    {   char log[256];
+        log[0] = 0;
+        webjs_run("document.getElementById('a').setText('new');", -1, log, sizeof log);
+    }
+    n = uw_get_element_by_id(d, "a");
+    {   uw_node *t = n ? uw_first_child(n) : 0;
+        int tl = 0;
+        const char *s = t ? uw_text(t, &tl) : 0;
+        CHECK("S-WJS-04", s && tl == 3 && !strncmp(s, "new", 3)); }
+    CHECK("S-WJS-05", webjs_take_dirty() == 1);   /* the browser must repaint */
+
+    {   char log[256];
+        log[0] = 0;
+        webjs_run("setTimeout(function(){"
+                  " document.getElementById('a').setText('timed'); }, 50);",
+                  -1, log, sizeof log);
+        webjs_pump(10, log, sizeof log);          /* not due yet */
+        {   uw_node *t = uw_first_child(uw_get_element_by_id(d, "a"));
+            int tl = 0; const char *s = t ? uw_text(t, &tl) : 0;
+            CHECK("S-WJS-06", s && !strncmp(s, "new", 3)); }
+        webjs_pump(60, log, sizeof log);          /* due */
+        {   uw_node *t = uw_first_child(uw_get_element_by_id(d, "a"));
+            int tl = 0; const char *s = t ? uw_text(t, &tl) : 0;
+            CHECK("S-WJS-07", s && tl == 5 && !strncmp(s, "timed", 5)); } }
+
+    {   char log[256];
+        log[0] = 0;
+        webjs_run("document.getElementById('a').addEventListener('click',"
+                  " function(){ document.getElementById('a').setText('hit'); });",
+                  -1, log, sizeof log);
+        CHECK("S-WJS-08", webjs_event(uw_get_element_by_id(d, "a"), "click",
+                                      log, sizeof log) == 1);
+        {   uw_node *t = uw_first_child(uw_get_element_by_id(d, "a"));
+            int tl = 0; const char *s = t ? uw_text(t, &tl) : 0;
+            CHECK("S-WJS-09", s && tl == 3 && !strncmp(s, "hit", 3)); } }
+
+    webjs_page_end();
+    CHECK("S-WJS-10", !webjs_page_active());
     uw_doc_free(d);
 }
 
@@ -1191,6 +1250,7 @@ SP_SUITE(sp_libc,     test_libc())
 SP_SUITE(sp_font,     test_font())
 SP_SUITE(sp_js,       test_js())
 SP_SUITE(sp_css,      test_css())
+SP_SUITE(sp_webjs,    test_webjs())
 SP_SUITE(sp_dbg,      test_dbg())
 SP_SUITE(sp_unoui,    test_unoui())
 SP_SUITE(sp_uno3d,    test_uno3d())
@@ -1216,6 +1276,7 @@ static void sp_register(void)
     unoauto_test_register("system",      "spec:font",        sp_font);
     unoauto_test_register("system",      "spec:js",          sp_js);
     unoauto_test_register("system",      "spec:css",         sp_css);
+    unoauto_test_register("system",      "spec:webjs",       sp_webjs);
     unoauto_test_register("system",      "spec:dbg",         sp_dbg);
     unoauto_test_register("frameworks",  "spec:unoui",       sp_unoui);
     unoauto_test_register("frameworks",  "spec:uno3d",       sp_uno3d);
