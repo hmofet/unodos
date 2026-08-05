@@ -20,6 +20,7 @@
 #include "pc64_font.h"
 #include "pc64_fs.h"
 #include "js.h"
+#include "../csslib/uwx.h"
 #include "../unoweb/unoweb.h"
 #include "../unomedia/unomedia.h"
 #include <stdlib.h>
@@ -677,7 +678,7 @@ static const char kWelcome[] =
 "## Try it\n\n"
 "- [The HTML sample](uno:sample) - tags, lists, a rule and a code block\n"
 "- [The JavaScript demo](uno:script) - a `<script>` block that writes the page\n"
-"- [The script engine](uno:engine) - run pages on unojs or on QuickJS\n"
+"- [The engines](uno:engine) - switch the script engine and the CSS cascade\n"
 "- [The start page](uno:start) - every document on the local disks\n\n"
 "## Getting around\n\n"
 "- Click a **link** to follow it; `Left` / `Right` step through a page's links "
@@ -1062,26 +1063,48 @@ static void load_loc(btab *t, const char *loc)
     if (!strcmp(loc, "uno:sample"))  { doc_set(t, kSample, 1);  sput(t->title, TITMAX, "HTML sample"); return; }
     if (!strcmp(loc, "uno:script"))  { doc_set(t, kScript, 1);  sput(t->title, TITMAX, "JavaScript"); return; }
 
-    /* uno:engine - the JS engine switch. Plain links carry the action so it
-     * works with the keyboard link-walker like every other internal page;
-     * the switch applies to every <script> run from then on. */
+    /* uno:engine - the engine switches (script + layout cascade). Plain
+     * links carry the actions so the page works with the keyboard
+     * link-walker like every other internal page; both switches apply from
+     * the next page load on. */
     if (!strcmp(loc, "uno:engine") ||
-        !strcmp(loc, "uno:engine/unojs") || !strcmp(loc, "uno:engine/quickjs")) {
-        char pg[640], *p = pg, *end = pg + sizeof pg;
+        !strcmp(loc, "uno:engine/unojs") || !strcmp(loc, "uno:engine/quickjs") ||
+        !strcmp(loc, "uno:engine/cascade/builtin") ||
+        !strcmp(loc, "uno:engine/cascade/libcss")) {
+        char pg[1280], *p = pg, *end = pg + sizeof pg;
         if (!strcmp(loc, "uno:engine/unojs"))   js_engine_set(JS_ENGINE_UNOJS);
         if (!strcmp(loc, "uno:engine/quickjs")) js_engine_set(JS_ENGINE_QUICKJS);
-        p = sapp(p, end, "<h1>Script engine</h1><p>Pages' <code>&lt;script&gt;</code> "
+        if (!strcmp(loc, "uno:engine/cascade/builtin")) uwx_libcss_unregister();
+        if (!strcmp(loc, "uno:engine/cascade/libcss"))  uwx_libcss_register();
+#ifdef UW_ENGINE
+        g_uw_w = 0;                    /* force restyle+relayout on next paint */
+#endif
+        p = sapp(p, end, "<h1>Engines</h1>"
+                         "<h2>Script engine</h2><p>Pages' <code>&lt;script&gt;</code> "
                          "blocks are running on <b>");
         p = sapp(p, end, js_engine_name(js_engine_get()));
         p = sapp(p, end, "</b>.</p><ul><li><a href='uno:engine/unojs'>unojs</a> - "
                          "the UnoDOS engine (the default)</li>"
                          "<li><a href='uno:engine/quickjs'>quickjs</a> - the vendored "
                          "quickjs-ng, full modern JavaScript</li></ul>"
-                         "<hr><p>Try each on <a href='uno:script'>the JavaScript demo"
-                         "</a>. The choice lasts until the browser closes.</p>");
+                         "<h2>Layout cascade</h2><p>Styles are computed by the <b>");
+        p = sapp(p, end, uw_cascade_active() ? "libcss" : "built-in");
+        p = sapp(p, end, "</b> cascade.</p>"
+                         "<ul><li><a href='uno:engine/cascade/builtin'>built-in</a> - "
+                         "unoweb's own matcher and cascade (the default)</li>"
+                         "<li><a href='uno:engine/cascade/libcss'>libcss</a> - the "
+                         "vendored NetSurf CSS engine (full selectors)</li></ul>"
+#ifndef UW_ENGINE
+                         "<p><i>This build paints pages with the flow renderer; the "
+                         "cascade choice takes effect in unoweb-engine builds "
+                         "(BROWSER_ENGINE=uw).</i></p>"
+#endif
+                         "<hr><p>Try the script engines on <a href='uno:script'>the "
+                         "JavaScript demo</a>, the cascades on <a href='uno:sample'>"
+                         "the HTML sample</a>. Choices last until the browser closes.</p>");
         (void)p;
         doc_set(t, pg, 1);
-        sput(t->title, TITMAX, "Script engine");
+        sput(t->title, TITMAX, "Engines");
         return;
     }
 
