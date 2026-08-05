@@ -218,6 +218,28 @@ static void map_style(const css_computed_style *st, const css_unit_ctx *uc,
         }
     }
 
+    {   int32_t zi = 0;
+        switch (css_computed_position(st)) {
+        case CSS_POSITION_RELATIVE: out->position = UW_POS_RELATIVE; break;
+        case CSS_POSITION_ABSOLUTE: out->position = UW_POS_ABSOLUTE; break;
+        case CSS_POSITION_FIXED:    out->position = UW_POS_FIXED;    break;
+        default:                    out->position = UW_POS_STATIC;   break;
+        }
+        if (css_computed_z_index(st, &zi) == CSS_Z_INDEX_SET) out->z_index = (int)zi;
+        else out->z_index = 0;
+        {   static uint8_t (*const ofn[4])(const css_computed_style *,
+                                           css_fixed *, css_unit *) = {
+                css_computed_top, css_computed_right,
+                css_computed_bottom, css_computed_left };
+            int oi;
+            for (oi = 0; oi < 4; oi++) {
+                css_fixed ov; css_unit ou;
+                uint8_t ot = ofn[oi](st, &ov, &ou);
+                out->offset[oi] = to_uw_len(st, uc, ot, CSS_TOP_SET, CSS_TOP_AUTO, ov, ou);
+            }
+        }
+    }
+
     switch (css_computed_float(st)) {
     case CSS_FLOAT_LEFT:  out->cssfloat = UW_FLOAT_LEFT;  break;
     case CSS_FLOAT_RIGHT: out->cssfloat = UW_FLOAT_RIGHT; break;

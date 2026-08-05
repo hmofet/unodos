@@ -644,7 +644,18 @@ static void layout_children(uw_doc *d, uw_box *b, int content_x, int content_y,
             else cy += (mt > prev_margin ? mt : prev_margin) - prev_margin;
             cy = float_clear_y(fcp, cy, cs->clear);
             layout_block(d, cb, content_w, content_x, cy, fcp);
+            /* absolute and fixed are OUT OF FLOW: the boxes after them must
+             * lay out as though they were not there, so the flow position
+             * does not advance past one. */
+            if (cs->position == UW_POS_ABSOLUTE || cs->position == UW_POS_FIXED)
+                continue;
             cy = cb->y + cb->h;
+            if (cs->position == UW_POS_RELATIVE) {   /* space stays behind */
+                if (cs->offset[UW_TOP].unit != UW_LEN_AUTO)
+                    cy -= len_px(cs->offset[UW_TOP], content_w);
+                else if (cs->offset[UW_BOTTOM].unit != UW_LEN_AUTO)
+                    cy += len_px(cs->offset[UW_BOTTOM], content_w);
+            }
             prev_margin = len_px(cs->margin[UW_BOTTOM], content_w);
             cy += prev_margin;
             any_block = 1;
@@ -707,6 +718,17 @@ static void layout_block(uw_doc *d, uw_box *b, int cb_width, int x, int y,
 
     b->x = x + b->ml;
     b->y = y;
+    /* `relative` shifts BEFORE the children are laid out, so the whole
+     * subtree moves with the box. Applying it afterwards moves the border
+     * box and leaves its own text behind, which is what the first version
+     * did. The space the box occupied in the flow is unaffected - the parent
+     * advances from the unshifted position (see layout_children). */
+    if (s->position == UW_POS_RELATIVE) {
+        if (s->offset[UW_LEFT].unit != UW_LEN_AUTO) b->x += len_px(s->offset[UW_LEFT], cb_width);
+        else if (s->offset[UW_RIGHT].unit != UW_LEN_AUTO) b->x -= len_px(s->offset[UW_RIGHT], cb_width);
+        if (s->offset[UW_TOP].unit != UW_LEN_AUTO) b->y += len_px(s->offset[UW_TOP], cb_width);
+        else if (s->offset[UW_BOTTOM].unit != UW_LEN_AUTO) b->y -= len_px(s->offset[UW_BOTTOM], cb_width);
+    }
 
     if (s->display == UW_DISP_TABLE)
         layout_table(d, b, b->x + b->bl + b->pl, b->y + b->bt + b->pt,
@@ -717,6 +739,25 @@ static void layout_block(uw_doc *d, uw_box *b, int cb_width, int x, int y,
 
     if (s->height.unit != UW_LEN_AUTO) content_h = len_px(s->height, 0);
     b->h = content_h + b->bt + b->bb + b->pt + b->pb;
+
+    /* position: applied AFTER the box has its normal-flow geometry, which is
+     * exactly what CSS means - `relative` offsets from where the box would
+     * have been, and leaves the space it occupied behind. `absolute` and
+     * `fixed` are placed against their containing block instead; here that
+     * is the nearest positioned ancestor's padding box, approximated by the
+     * containing block this call was given. Fixed uses the same path and is
+     * pinned to the viewport by the PAINT pass, since only paint knows the
+     * scroll. */
+    if (s->position == UW_POS_ABSOLUTE || s->position == UW_POS_FIXED) {
+        if (s->offset[UW_LEFT].unit != UW_LEN_AUTO)
+            b->x = x + len_px(s->offset[UW_LEFT], cb_width);
+        else if (s->offset[UW_RIGHT].unit != UW_LEN_AUTO)
+            b->x = x + cb_width - b->w - len_px(s->offset[UW_RIGHT], cb_width);
+        if (s->offset[UW_TOP].unit != UW_LEN_AUTO)
+            b->y = y + len_px(s->offset[UW_TOP], cb_width);
+        else if (s->offset[UW_BOTTOM].unit != UW_LEN_AUTO)
+            b->y = y - b->h - len_px(s->offset[UW_BOTTOM], cb_width);
+    }
 }
 
 int uw_layout(uw_doc *d, int width, int height, const uw_metrics *m)
@@ -766,6 +807,8 @@ const char *uw_box_text(uw_box *b, int *len)
 }
 
 /* ---- the display list ----------------------------------------------------- */
+static int g_paint_z;             /* z of the box currently emitting */
+
 static int pl_push(uw_doc *d, const uw_paint_cmd *c)
 {
     struct uw_paint_list *p = d->paint;
@@ -776,7 +819,9 @@ static int pl_push(uw_doc *d, const uw_paint_cmd *c)
         if (p->v) memcpy(nv, p->v, (size_t)p->n * sizeof *nv);
         p->v = nv; p->cap = nc;
     }
-    p->v[p->n++] = *c;
+    p->v[p->n] = *c;
+    p->v[p->n].z = g_paint_z;      /* stamped here so no emitter can forget */
+    p->n++;
     return 0;
 }
 
@@ -785,7 +830,11 @@ static void paint_box(uw_doc *d, uw_box *b)
     uw_paint_cmd c;
     const uw_style *s = b->style;
     uw_box *k;
+    int save_z = g_paint_z;
     memset(&c, 0, sizeof c);
+    /* A positioned box with a z-index carries it to everything it and its
+     * descendants emit: z applies to a whole subtree, not to one rectangle. */
+    if (s && s->position != UW_POS_STATIC && s->z_index) g_paint_z = s->z_index;
 
     if (b->type == UW_BOX_IMAGE) {
         c.cmd = UW_CMD_IMAGE;
@@ -853,6 +902,7 @@ static void paint_box(uw_doc *d, uw_box *b)
         }
     }
     for (k = b->first; k; k = k->next) paint_box(d, k);
+    g_paint_z = save_z;
 }
 
 int uw_paint(uw_doc *d)
@@ -864,6 +914,23 @@ int uw_paint(uw_doc *d)
     }
     d->paint->n = 0;
     paint_box(d, d->layout_root);
+
+    /* z-index: a STABLE sort of the finished list by the z of the box each
+     * command came from. Sorting the list rather than ordering the walk keeps
+     * paint_box a plain tree recursion, and stability is what preserves
+     * document order among equal z - which is the rule for everything that
+     * has no z-index of its own, i.e. almost every box on a page.
+     * Insertion sort: the list is nearly always already ordered (z-index is
+     * rare), so this is a linear scan in the common case. */
+    {   int i, j;
+        for (i = 1; i < d->paint->n; i++) {
+            uw_paint_cmd tmp = d->paint->v[i];
+            int z = tmp.z;
+            for (j = i - 1; j >= 0 && d->paint->v[j].z > z; j--)
+                d->paint->v[j + 1] = d->paint->v[j];
+            d->paint->v[j + 1] = tmp;
+        }
+    }
     return d->paint->n;
 }
 

@@ -196,6 +196,7 @@ enum { UW_BS_NONE = 0, UW_BS_SOLID };
 enum { UW_VA_BASELINE = 0, UW_VA_TOP, UW_VA_MIDDLE, UW_VA_BOTTOM,
        UW_VA_SUB, UW_VA_SUPER };
 enum { UW_FLOAT_NONE = 0, UW_FLOAT_LEFT, UW_FLOAT_RIGHT };
+enum { UW_POS_STATIC = 0, UW_POS_RELATIVE, UW_POS_ABSOLUTE, UW_POS_FIXED };
 enum { UW_CLEAR_NONE = 0, UW_CLEAR_LEFT, UW_CLEAR_RIGHT, UW_CLEAR_BOTH };
 /* side order is CSS order: top, right, bottom, left */
 enum { UW_TOP = 0, UW_RIGHT, UW_BOTTOM, UW_LEFT };
@@ -209,6 +210,9 @@ typedef struct {
     unsigned char vertical_align;
     unsigned char cssfloat;        /* UW_FLOAT_*  ("float" is a C keyword) */
     unsigned char clear;
+    unsigned char position;        /* UW_POS_*                              */
+    int      z_index;              /* paint order; 0 = auto/initial         */
+    uw_len   offset[4];            /* top,right,bottom,left (UW_TOP order)  */
     unsigned char underline;
     unsigned char list_bullet;     /* 0 none, 1 disc, 2 decimal */
     unsigned char has_bg;          /* background_color is meaningful */
@@ -336,6 +340,7 @@ typedef struct {
     int         len;
     const uw_style *style;
     void       *image;             /* UW_CMD_IMAGE: the embedder's handle */
+    int         z;                 /* z-index of the box this came from    */
 } uw_paint_cmd;
 
 /* Build the display list for the last layout. Returns the command count. */
