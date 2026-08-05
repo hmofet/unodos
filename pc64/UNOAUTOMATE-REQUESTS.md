@@ -6722,3 +6722,59 @@ which was not installed on devbuntu. `sudo apt-get install -y nasm`. Without it
 `build.sh` dies at `[bios] linking the legacy-BIOS image` with `set -e`, AFTER
 writing a complete and usable UEFI ESP tree, which reads as a much worse failure
 than it is.
+## 2026-08-04 (metal) -> iwlwifi: the "no lease" question is ANSWERED, and it is (b)
+
+`927ed9be` set out to separate two explanations for "associated, keys installed,
+no lease" and shipped counters to do it.  The Surface's boot log settles it
+without needing them, and the evidence is a MAC address rather than a ratio.
+
+    [61.085] join: try 1/3 "SKYNET" bssid e8:d3:eb:47:4e:c6 chan 6 rssi -34
+    [61.091] STA_CONFIG ... peer=e8:d3:eb:47:4e:c6
+    [62.013] mgmt subtype=11 ... a2=e8:d3:eb:51:4d:66 mine=1     <- AUTH answered by a DIFFERENT node
+    [62.098] join: retry assoc -> 4 (>=0 AID)
+    [62.100] STA_CONFIG ... aid=4 peer=e8:d3:eb:51:4d:66         <- station adopted the responder
+    [62.144] 4-way handshake DONE - CCMP keys installed, station authorized
+    [62.236] TX q=1 idx=5 flen=309                               <- DHCP DISCOVER
+    [62.695] DEAUTH from e8:d3:eb:47:4e:c6 reason=7 (not our BSSID - ignored)
+    ... ~60 more, 62 s to 165 s, DISCOVER retried throughout, no lease
+
+**We aimed at one mesh node and associated with another, and the one we aimed
+at is the one receiving our data.**  Reason 7 is "class-3 frame from a
+nonassociated station": `47:4e:c6` is telling us, once or twice a second for
+the whole session, that it is getting our frames and does not consider us its
+client.  That is (b) - the frames are not arriving where the association is -
+and it is not subtle once the two MACs are put side by side.
+
+`0f6f118c` makes the line say so instead of "ignored"; that is diagnosis only,
+nothing is acted on.
+
+### The fix, and why not the obvious one
+
+The obvious move is to re-point the link at the responder mid-join.  **That is
+what asserted the LMAC and cost a boot** (927ed9be's own note).  The safer shape
+is to RE-AIM: when auth or assoc is answered by a BSSID other than the one
+`select_ap()` chose, abandon the attempt and start a fresh one targeting the
+responder, so `LINK_CONFIG` is *built* with the right BSSID and never has to be
+re-pointed.  `retarget_ap()` and the radio-restart path in `iwl_join_ssid()`
+already exist for exactly this kind of restart, and `join: try 1/3` already
+implies a candidate loop that currently never runs, because the join reports
+success.
+
+Worth checking first, cheaply, on the next boot with hardware: whether `g_bssid`
+is the responder or the target at the moment the DATA frames are built
+(`iwlwifi.c:3459/3930/3964` all address `addr1`/`addr3` from `g_bssid`).  The
+STA_CONFIG trace says the station adopted `51:4d:66`, and `select_ap()` is the
+only place `g_bssid` is written, which those two facts cannot both satisfy -
+so one of them is not doing what its trace line claims, and that is one `iwl`
+verb away from being settled.
+
+### Two harness gaps this exposed
+
+1. **A GUI join is never written to NETLOG.TXT.**  `flush()` only writes while
+   `g_active`, which is set only around the boot net test, so the file stops at
+   `== net test done ==` and the join a human performs afterwards - the one the
+   6-second verdict in 927ed9be was built to describe - is appended to the RAM
+   buffer and never lands.  The whole join above was recovered from BOOTLOG's
+   kernel-log tail instead, by luck of it still being in the ring.
+2. **The 6-second post-join verdict never appeared at all**, on a join that
+   succeeded.  Either it did not run or its lines went where (1) sends them.
