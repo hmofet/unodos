@@ -1448,6 +1448,21 @@ static u32 g_deauth_other;     /* ...from any other BSSID (steering, usually) */
 static int g_deauth_reason = -1;             /* the most recent reason code   */
 static unsigned long long g_join_ms;         /* when the 4-way completed      */
 static int g_postjoin_diag_done;
+/* ---- who the frame is from, and what the firmware did with it -------------
+ * Two facts the counters above could not tell apart, and both of them decide
+ * what "69 frames dropped" means:
+ *
+ *  - a mesh puts several BSSes on one channel, and an encrypted data frame
+ *    from a BSS we did NOT associate with is not evidence of anything. It is
+ *    also not ours to deliver, which is what `foreign` now separates.
+ *  - `prot` vs `prot_dec` is the hardware's own answer to "did you decrypt
+ *    this": every protected frame from our AP, and how many of them arrived
+ *    decrypted. prot > 0 with prot_dec == 0 is a key that was never armed,
+ *    and it is a different fault from a key that is wrong.               */
+static u32 g_rx_foreign;       /* data frames from a BSS we are not joined to */
+static u32 g_rx_prot;          /* protected data frames FROM OUR AP           */
+static u32 g_rx_prot_dec;      /* ...of those, ones that arrived decrypted    */
+static u32 g_rx_st_undec;      /* the rx descriptor status of the last one that did not */
 static int g_rx_data_log;      /* log the next N received data frames (debug) */
 static int g_rx_mic = -1;      /* does the fw leave the CCMP MIC on? -1 = not learned yet */
 static int g_last_rssi;        /* strongest energy seen on a frame from our AP */
@@ -1508,6 +1523,7 @@ static void rx_process_rb(const u8 *rb, int cap,
         if (pkt->group_id == 0 && pkt->cmd == 0xc1) {         /* REPLY_RX_MPDU */
             const u8 *frame; int fl, machdr;
             int rssi = 0, dchan = 0;
+            u32 st = 0;                  /* iwl_rx_mpdu_desc.status, mq path only */
             if (g_scanning) g_scan_mpdu_seen++;
             if (g_mq_rx) {
                 /* iwl_rx_mpdu_desc: mpdu_len@0, mac_flags2@3 (PAD 0x20,
@@ -1521,6 +1537,16 @@ static void rx_process_rb(const u8 *rb, int cap,
                 int pad = (pkt->data[3] & 0x20) ? 2 : 0;
                 frame = pkt->data + descsz + pad; fl = mlen;
                 machdr = (pkt->data[3] & 0x1f) * 2;
+                /* status is a __le32 at desc+12 (DW5 of iwl_rx_mpdu_desc, ahead
+                 * of the v1/v3 union, so it is at the same place on every part
+                 * this driver binds). It is the firmware's own account of what
+                 * it did with the frame, and it has been sitting there unread
+                 * through four rounds of inferring the same facts from payload
+                 * bytes: SRC_STA_FOUND bit2, KEY_VALID bit3, MIC_OK bit6,
+                 * SEC_MASK bits 8-10 (2 = CCM), DECRYPTED bit11, and the
+                 * station it matched in bits 24-28. */
+                st = (u32)pkt->data[12] | ((u32)pkt->data[13] << 8) |
+                     ((u32)pkt->data[14] << 16) | ((u32)pkt->data[15] << 24);
                 /* iwl_rx_mpdu_desc_v1 sits at DW7 = desc+20: rss_hash@20,
                  * filter_match@24, rate_n_flags@28, energy_a@32, energy_b@33,
                  * channel@34. RSSI dBm = -max(energy_a, energy_b) (iwlwifi
@@ -1563,7 +1589,13 @@ static void rx_process_rb(const u8 *rb, int cap,
                     if (g_scanning) scan_record_beacon(frame, fl, rssi, dchan);
                     else            mgmt_capture(frame, fl, fc);
                 }
-                if (!memcmp(frame + 10, g_bssid, 6)) {
+                /* addr2 is the transmitter, and on an infrastructure downlink
+                 * that IS the BSSID. Everything below needs to know whether
+                 * this frame came from the AP we joined: a mesh runs several
+                 * BSSes on one channel, so "an encrypted data frame arrived"
+                 * says nothing until you know whose it is. */
+                int from_ap = !memcmp(frame + 10, g_bssid, 6);
+                if (from_ap) {
                     g_rx_from_ap++;             /* the AP we joined is talking */
                     if (rssi) g_last_rssi = rssi;
                 }
@@ -1598,15 +1630,31 @@ static void rx_process_rb(const u8 *rb, int cap,
                       if (want > 0 && want <= avail) g_rx_mic = (avail - 8 >= want);
                       if (g_rx_mic == 1 && dlen > poff + 16) dlen -= 8; }
                 }
-                if (dlen > poff + 8 && !memcmp(frame + poff, SNAP, 6)) {
+                /* A data frame from a BSS we are not associated with is not
+                 * ours to deliver and not ours to reason about. Both used to
+                 * happen: another BSS's broadcast traffic went into the IP
+                 * stack as if the AP had sent it, and its encrypted frames
+                 * were counted as our drops - on a mesh channel that is the
+                 * majority of what arrives. */
+                int is_data = ((fc >> 2) & 3) == 2;
+                int prot = (fc & 0x4000) != 0;
+                if (is_data && !from_ap) {
+                    if (!g_rx_foreign++ && g_rx_data_log > 0)
+                        uno_dbg_net_trace("wifi: RXDATA foreign BSS fc=%04x len=%d "
+                                          "ta=%02x:%02x:%02x:%02x:%02x:%02x - ignored "
+                                          "(further ones counted only)", fc, fl,
+                                          frame[10],frame[11],frame[12],frame[13],
+                                          frame[14],frame[15]);
+                } else if (dlen > poff + 8 && !memcmp(frame + poff, SNAP, 6)) {
                     u16 et = (u16)((frame[poff + 6] << 8) | frame[poff + 7]);
-                    if (g_rx_data_log > 0 && ((fc >> 2) & 3) == 2) {
+                    if (is_data && prot) { g_rx_prot++; g_rx_prot_dec++; }
+                    if (g_rx_data_log > 0 && is_data) {
                         g_rx_data_log--;
                         uno_dbg_net_trace("wifi: RXDATA fc=%04x len=%d hdr=%d enc=%d et=%04x "
-                                          "sa=%02x:%02x:%02x:%02x:%02x:%02x rssi=%d",
+                                          "sa=%02x:%02x:%02x:%02x:%02x:%02x rssi=%d st=%08x",
                                           fc, fl, hl, enc, et,
                                           frame[16],frame[17],frame[18],frame[19],frame[20],frame[21],
-                                          rssi);
+                                          rssi, (unsigned)st);
                     }
                     /* wpa_sm_rx_eapol() parses from the EAPOL HEADER, not the
                      * 802.11 header - its first check is frame[1] == 0x03
@@ -1616,12 +1664,24 @@ static void rx_process_rb(const u8 *rb, int cap,
                      * Skip the MAC header, any CCMP header, and the LLC/SNAP. */
                     if (et == 0x888E) handle_eapol(frame + poff + 8, dlen - poff - 8);
                     else              handle_data_frame(frame, dlen, poff);
-                } else if (((fc >> 2) & 3) == 2 && fl > hl) {
+                } else if (is_data && fl > hl) {
                     g_rx_data_drop++;
+                    if (prot) { g_rx_prot++; g_rx_st_undec = st; }
                     if (g_rx_data_log > 0) {
                         g_rx_data_log--;
-                        uno_dbg_net_trace("wifi: RXDATA DROP fc=%04x len=%d hdr=%d "
-                                          "b0=%02x %02x %02x %02x %02x %02x %02x %02x", fc, fl, hl,
+                        /* The status word is the firmware answering the question
+                         * this line exists to ask. sta=1 means it matched the
+                         * frame to a station at all, key=1 that it found a key
+                         * for it, sec is the cipher it decided the frame carried
+                         * (0 = none, 2 = CCM), dec=1 that it decrypted. A
+                         * protected frame with sec=0 was never even looked at. */
+                        uno_dbg_net_trace("wifi: RXDATA DROP fc=%04x len=%d hdr=%d st=%08x "
+                                          "sta=%d key=%d sec=%d mic=%d dec=%d staid=%d",
+                                          fc, fl, hl, (unsigned)st,
+                                          (int)((st >> 2) & 1), (int)((st >> 3) & 1),
+                                          (int)((st >> 8) & 7), (int)((st >> 6) & 1),
+                                          (int)((st >> 11) & 1), (int)((st >> 24) & 0x1f));
+                        uno_dbg_net_trace("wifi: RXDATA DROP b0=%02x %02x %02x %02x %02x %02x %02x %02x",
                                           frame[hl],frame[hl+1],frame[hl+2],frame[hl+3],
                                           frame[hl+4],frame[hl+5],frame[hl+6],frame[hl+7]);
                     }
@@ -3559,6 +3619,7 @@ static void handle_eapol(const u8 *eapol, int len)
         g_postjoin_diag_done = 0;
         g_txr_total = g_txr_ackfail = g_rx_from_ap = 0;
         g_rx_data_n = g_rx_data_drop = g_tx_data_n = 0;
+        g_rx_foreign = g_rx_prot = g_rx_prot_dec = 0; g_rx_st_undec = 0;
         /* ARM THE RX DESCRIPTION FOR THE FIRST FEW FRAMES OF THIS ASSOCIATION.
          *
          * g_rx_data_log gates the two RXDATA traces that say what a received
@@ -4418,6 +4479,15 @@ static void postjoin_diag(void)
     else if (!g_rx_from_ap)
         reading = "our frames are ACKed but the AP sends us NOTHING - it hears us "
                   "and will not answer (association identity)";
+    else if (g_rx_prot && !g_rx_prot_dec)
+        /* The AP is talking to us and the hardware is handing its frames up
+         * still encrypted. Which of the two that is - a key the fw never armed,
+         * or one it armed and could not use - is in the status word on the
+         * `prot` line below: sec=0 means it never treated the frame as
+         * encrypted at all, sec=2 with mic=0 means it tried and the key is
+         * wrong. Nothing above this point could tell those apart. */
+        reading = "the AP IS sending to us and every PROTECTED frame arrives "
+                  "UNDECRYPTED - read the sta/key/sec bits on the prot line";
     else
         reading = "traffic flows BOTH ways - the link is fine and DHCP itself is the problem";
 
@@ -4430,6 +4500,18 @@ static void postjoin_diag(void)
                       (unsigned)g_tx_data_n, (unsigned)g_txr_total, (unsigned)g_txr_ackfail,
                       (unsigned)g_rx_data_n, (unsigned)g_rx_from_ap, (unsigned)g_rx_data_drop,
                       (unsigned)g_deauth_ours, (unsigned)g_deauth_other, g_deauth_reason);
+    /* `drop` above now counts only frames from the AP we joined; `foreign` is
+     * everything else on the channel, which on a mesh is most of it and used to
+     * be indistinguishable. `prot` is how many protected frames our AP sent us
+     * and how many of them the hardware decrypted - the fact the whole "no
+     * lease" question turns on - and st is the last undecrypted one's status. */
+    uno_dbg_net_trace("wifi: post-join diag: prot=%u dec=%u foreign=%u st=%08x "
+                      "(sta=%d key=%d sec=%d mic=%d dec=%d staid=%d)",
+                      (unsigned)g_rx_prot, (unsigned)g_rx_prot_dec, (unsigned)g_rx_foreign,
+                      (unsigned)g_rx_st_undec,
+                      (int)((g_rx_st_undec >> 2) & 1), (int)((g_rx_st_undec >> 3) & 1),
+                      (int)((g_rx_st_undec >> 8) & 7), (int)((g_rx_st_undec >> 6) & 1),
+                      (int)((g_rx_st_undec >> 11) & 1), (int)((g_rx_st_undec >> 24) & 0x1f));
     uno_dbg_net_trace("wifi: post-join diag: -> %s", reading);
 
     /* PERSIST IT NOW, rather than hoping the boot log gets written later.
