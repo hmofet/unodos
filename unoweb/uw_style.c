@@ -18,6 +18,11 @@ static const char UA_CSS[] =
 "header,footer,nav,main,aside,figure,figcaption,table,form,hr,dl,dt,dd"
 "{display:block}"
 "head,style,script,title,meta,link{display:none}"
+/* colour on html AND body: the default text colour must come from the SHEET,
+ * not a cascade's hardcoded root default - the libcss engine computes the
+ * spec initial (black) for anything the sheet leaves unset, and parity
+ * between the two cascades is asserted by csslib/test/css_cascade_test.c */
+"html{color:#1e2028}"
 "body{margin:8px;color:#1e2028;font-size:14px}"
 "h1{font-size:28px;font-weight:700;margin:14px 0;color:#14285a}"
 "h2{font-size:21px;font-weight:700;margin:12px 0;color:#14285a}"
@@ -508,11 +513,43 @@ int uw_add_inline_sheets(uw_doc *d)
     return count;
 }
 
+/* ---- alternate cascade engine (see unoweb.h) ------------------------------ */
+static uw_cascade_fn g_cascade;
+static void         *g_cascade_user;
+
+void uw_cascade_set(uw_cascade_fn fn, void *user)
+{ g_cascade = fn; g_cascade_user = user; }
+
+int uw_cascade_active(void) { return g_cascade != NULL; }
+
+const char *uw_ua_css(void) { return UA_CSS; }
+
+int uw_style_store(uw_doc *d, uw_node *n, const uw_style *s)
+{
+    uw_style *st;
+    if (!d || !n || !s || uw_type(n) != UW_NODE_ELEMENT) return -1;
+    st = (uw_style *)n->style;
+    if (!st) {
+        st = (uw_style *)uw_arena(d, sizeof *st);
+        if (!st) return -1;
+        n->style = st;
+    }
+    *st = *s;
+    return 0;
+}
+
 int uw_style_document(uw_doc *d, int viewport_w, int viewport_h)
 {
     if (!d) return -1;
     d->vw = viewport_w > 0 ? viewport_w : 800;
     d->vh = viewport_h > 0 ? viewport_h : 600;
+    /* the external engine, when registered, IS the style pass; a non-zero
+     * return degrades to the built-in cascade below rather than leaving the
+     * tree unstyled */
+    if (g_cascade && g_cascade(g_cascade_user, d, d->vw, d->vh) == 0) {
+        d->styled = 1;
+        return 0;
+    }
     /* the UA sheet is installed once, ahead of every author sheet */
     if (!d->sheets || uw_sheet_origin(d->sheets) != UW_ORIGIN_UA) {
         uw_sheet *ua = uw_css_parse(d, UA_CSS, -1, UW_ORIGIN_UA);
