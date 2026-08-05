@@ -451,6 +451,58 @@ static void inherit(uw_style *st, const uw_style *parent)
     st->list_bullet = parent->list_bullet;
 }
 
+/* ---- style sharing --------------------------------------------------------
+ * A list of forty <li>, a table of two hundred <td>, a nav of fifty <a> - the
+ * normal shape of a page is many elements that cascade IDENTICALLY. Running
+ * the cascade once for each is work with a known answer.
+ *
+ * What is shared is the RESULT, copied into each element's own struct, not
+ * the struct itself: script and the external cascade both write through a
+ * node's style pointer, and two elements aliasing one record would make one
+ * element's change silently move the other.
+ *
+ * Correctness rests on two things, learned by getting it wrong. The KEY is
+ * the same parent NODE (which makes the whole ancestor chain identical, so
+ * no descendant or child selector can differ) plus the same TAG and the same
+ * FULL attribute set (so no attribute selector can differ). And sharing is
+ * switched OFF entirely for a document whose sheets contain anything
+ * POSITION-dependent, because position is what such a key cannot see -
+ * `li:first-child{color:red}` over two identical siblings is exactly the
+ * case that caught the first attempt. */
+#define SHARE_MAX 32
+
+typedef struct {
+    uw_node        *parent;        /* same parent = same ancestor chain */
+    uw_node        *proto;         /* the element whose style this is   */
+    const uw_style *result;
+} share_ent;
+
+static share_ent g_share[SHARE_MAX];
+static int       g_nshare;
+static int       g_share_ok;       /* no positional selector anywhere   */
+static int       g_share_hits;     /* cascades skipped (tests/diagnostics) */
+
+/* How many cascades the last style pass skipped by sharing. Exposed because
+ * "the tests still pass" does not prove sharing ever FIRED - a feature that
+ * silently never engages looks identical to one that works. */
+int uw_share_hits(void) { return g_share_hits; }
+
+/* Same tag and same attributes - value for value, in any order. */
+static int same_shape(uw_doc *d, uw_node *a, uw_node *b)
+{
+    int na = uw_nattrs(a), i;
+    if (uw_tag(a) != uw_tag(b)) return 0;
+    if (na != uw_nattrs(b)) return 0;
+    for (i = 0; i < na; i++) {
+        const char *k = 0, *v = 0, *ov;
+        uw_attr_at(d, a, i, &k, &v);
+        if (!k) return 0;
+        ov = uw_attr(d, b, k);
+        if (!ov || !v || strcmp(ov, v)) return 0;
+    }
+    return 1;
+}
+
 static void style_element(uw_doc *d, uw_node *n, const uw_style *parent, int root_px)
 {
     uw_style *st = (uw_style *)n->style;
@@ -461,6 +513,12 @@ static void style_element(uw_doc *d, uw_node *n, const uw_style *parent, int roo
         st = (uw_style *)uw_arena(d, sizeof *st);
         if (!st) return;
         n->style = st;
+    }
+    if (g_share_ok) {                          /* a hit skips the whole cascade */
+        int i;
+        for (i = 0; i < g_nshare; i++)
+            if (g_share[i].parent == uw_parent(n) &&
+                same_shape(d, g_share[i].proto, n)) { *st = *g_share[i].result; g_share_hits++; return; }
     }
     memset(st, 0, sizeof *st);
     if (parent) inherit(st, parent);
@@ -523,6 +581,13 @@ static void style_element(uw_doc *d, uw_node *n, const uw_style *parent, int roo
         }
     }
     if (!st->line_height) st->line_height = st->font_size * 4 / 3;
+    if (g_share_ok) {
+        if (g_nshare >= SHARE_MAX) g_nshare = 0;      /* simplest eviction */
+        g_share[g_nshare].parent = uw_parent(n);
+        g_share[g_nshare].proto = n;
+        g_share[g_nshare].result = st;
+        g_nshare++;
+    }
 }
 
 static void style_tree(uw_doc *d, uw_node *n, const uw_style *parent, int root_px)
@@ -609,6 +674,13 @@ int uw_style_document(uw_doc *d, int viewport_w, int viewport_h)
         uw_sheet_link(ua, d->sheets);
         d->sheets = ua;
         if (!d->sheets_tail) d->sheets_tail = ua;
+    }
+    {   uw_sheet *sh2;
+        g_nshare = 0;
+        g_share_hits = 0;
+        g_share_ok = 1;
+        for (sh2 = d->sheets; sh2; sh2 = uw_sheet_next(sh2))
+            if (!uw_sheet_shareable(d, sh2)) { g_share_ok = 0; break; }
     }
     style_tree(d, d->document, NULL, 14);
     d->styled = 1;
