@@ -112,17 +112,26 @@ Branch series (each lands independently, AGENTS.md-shaped):
   shapes CS2: unmatched properties compute INITIAL values, so the UA
   default sheet (browser text colour, margins, display types per element)
   is a required CS2 deliverable, not an option.
-- **CS2 `libcss-cascade`** (next): libcss behind uw_css/uw_style - libcss
-  consumes DOM nodes through client vtables, so unoweb's DOM feeds it
-  directly and uw_layout consumes its computed styles. Deliverables: the
-  css_select_handler over uw_dom (seed: the test scaffolding in
-  `csslib/test/`), a UA default stylesheet (see the CS1 finding above),
-  the build.sh block (mirror `csslib/test/build-host-test.sh`'s flag set
-  verbatim), and a SPECTEST area. Old cascade stays compiled (two-painter
-  rule) behind the existing `BROWSER_ENGINE` switch until the new one has
-  been through real pages.
-- **CS3 `libcss-wire`**: default flip + SPECTEST area + uno:engine page
-  grows a layout section if a runtime toggle is wanted.
+- **CS2 `libcss-cascade`: LANDED 2026-08-05** (-> master `2137c285`).
+  unoweb gained the alternate-cascade seam (`uw_cascade_set` /
+  `uw_style_store` / `uw_ua_css`; a failing pass falls back to the
+  built-in cascade). The bridge (`csslib/uw_select.c` + `uw_cascade.c`,
+  embedder surface `csslib/uwx.h`) implements the full select handler over
+  unoweb's public DOM, shared-UA + <style> + style= sheets, compose-based
+  inheritance, and the computed->uw_style mapping. The UA default text
+  colour moved INTO the shared sheet (html{color}) so parity doesn't ride
+  on a hardcoded root default. Tests: css_cascade_test (29 checks - both
+  cascades over one document, per-engine expectations + full-tree parity),
+  green mingw + linux ASan/UBSan; SPECTEST S-CSS-01..06 in QEMU (77/0/7).
+  Two handler ownership rules libcss does not document are recorded in
+  csslib/VENDOR.md (classes-array pool; node data MUST be stored - eager
+  delete is a use-after-free on real trees).
+- **CS3 `libcss-wire`** (next): the browser turns the engine on - either
+  flip the default under BROWSER_ENGINE=uw or grow the uno:engine page a
+  cascade section (runtime toggle, the JS-engine pattern); then real-page
+  QEMU runs (BROWSER-METAL-RUN.md flow) comparing the two cascades on live
+  sites before any default flip. <link> sheets join when the fetch queue
+  lands (unoweb M4).
 
 If real-page layout quality still disappoints after CS3, the remaining gap
 is uw_layout itself (floats, tables, inline-block); that is unoweb-lane
