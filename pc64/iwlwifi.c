@@ -4273,6 +4273,8 @@ static int iwl_send(void *ctx, const void *pkt, int len)
     return len;
 }
 
+static void postjoin_diag(void);        /* defined below; called from here too */
+
 static int iwl_recv(void *ctx, void *pkt, int cap)
 {
     (void)ctx;
@@ -4281,6 +4283,21 @@ static int iwl_recv(void *ctx, void *pkt, int cap)
        rx_process_rb dispatches data frames to handle_data_frame and EAPOL to
        handle_eapol (which drives the 4-way handshake + key install). */
     rx_pump_once();
+    /* THE DIAGNOSIS HAS TO HANG OFF A CALL THE STACK ACTUALLY MAKES.
+     *
+     * postjoin_diag() was hooked into iwl_link() alone, on the reasoning that
+     * the IP stack polls the link throughout a DHCP wait. It does not: the
+     * Control Panel's renew loop is `net_dhcp_start()` then `net_poll()` in a
+     * tight loop, and net_poll drives recv, not link. So on the Surface the
+     * verdict never fired ONCE, through a successful join and a hundred
+     * seconds of DHCP retries - the whole window it exists to describe.
+     *
+     * recv is polled on every single pass of that loop, so putting it here
+     * means the diagnostic reports whenever DHCP is actually running, which is
+     * the only time anybody wants it. It is idempotent and one-shot
+     * (g_postjoin_diag_done), so the extra call site costs a predictable
+     * branch and cannot double-report. */
+    postjoin_diag();
     if (g_dq_tail != g_dq_head) {
         int n = g_dataq[g_dq_tail].len;
         if (n > cap) n = cap;
@@ -4329,7 +4346,22 @@ static void postjoin_diag(void)
     if (now - g_join_ms < 2500) return;
     g_postjoin_diag_done = 1;
 
-    if (g_txr_total && g_txr_ackfail * 2 >= g_txr_total)
+    if (g_tx_data_n && !g_txr_total)
+        /* THE CASE THIS DID NOT HAVE A WORD FOR, AND IT IS THE ONE ON THE
+         * SURFACE. Every branch below reasons about the RATIO of ack_fail to
+         * txresp, which silently assumes txresp > 0. When the queue produces
+         * no completion at all the ratio test is false, rx_from_ap is 0, and
+         * it reported "it hears us and will not answer" - an association-level
+         * verdict for a fault that never reached the air.
+         *
+         * Frames enqueued and NOTHING coming back is a different animal: the
+         * transmit path itself is not completing. On that machine every
+         * management frame after the retarget got a TXRESP (auth, assoc, all
+         * four EAPOL) and not one DHCP DISCOVER did, which is the shape this
+         * names. */
+        reading = "frames were QUEUED and the hw returned no transmit response "
+                  "at all - the TX path is not completing, this is not the AP";
+    else if (g_txr_total && g_txr_ackfail * 2 >= g_txr_total)
         reading = "the AP is NOT ACKing us - radio-level: wrong BSS, steering, or too weak";
     else if (!g_rx_from_ap)
         reading = "our frames are ACKed but the AP sends us NOTHING - it hears us "
@@ -4374,7 +4406,7 @@ static int iwl_link(void *ctx)
     (void)ctx;
     if (!g_bound) return 0;
     if (!g_joined && g_wpa_active) rx_pump_ms(50, 1);
-    postjoin_diag();               /* one line, once, six seconds after joining */
+    postjoin_diag();               /* one line, once, 2.5 s after joining */
     return g_joined;
 }
 
