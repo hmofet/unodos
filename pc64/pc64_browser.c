@@ -1808,6 +1808,61 @@ static void draw_status(unoui_rect r)
     fb_text(b.x + 6, b.y + 2, s, g_hint[0] ? PG_LINK : CH_DIM, -1);
 }
 
+/* ---- download (Ctrl-S) ----------------------------------------------------
+ * Save the page you are looking at to the first writable volume. The bytes
+ * are the ones already in hand - the document the tab holds - so this costs
+ * no second fetch and cannot save something different from what is on
+ * screen, which is the failure mode of a save that re-requests.
+ *
+ * The name comes from the URL's last path segment, sanitised to something
+ * FAT will accept; a URL that ends in a slash gets INDEX.HTM. */
+static void save_name_from(const char *loc, char *out, int cap)
+{
+    const char *base = loc, *p;
+    int n = 0, dot = 0;
+    for (p = loc; *p; p++) if (*p == '/' || *p == '\\' || *p == ':') base = p + 1;
+    for (p = base; *p && n < cap - 1; p++) {
+        char c = *p;
+        if (c == '?' || c == '#') break;            /* query is not a name */
+        if (c >= 'a' && c <= 'z') c = (char)(c - 32);
+        if ((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '.' || c == '_' || c == '-') {
+            if (c == '.') dot = 1;
+            out[n++] = c;
+        }
+    }
+    out[n] = 0;
+    if (!n) { const char *d = "INDEX.HTM"; n = 0; while (d[n] && n < cap - 1) { out[n] = d[n]; n++; } out[n] = 0; return; }
+    if (!dot && n < cap - 5) { out[n++] = '.'; out[n++] = 'T'; out[n++] = 'X'; out[n++] = 'T'; out[n] = 0; }
+}
+
+static void save_page(btab *t)
+{
+    char name[64];
+    const char *doc = t->doc;
+    int v, nv = uno_fs_volumes(), len;
+    if (!doc || !*doc) { sput(g_status, sizeof g_status, "Nothing to save."); return; }
+    len = (int)strlen(doc);
+    save_name_from(t->loc, name, sizeof name);
+    for (v = 0; v < nv; v++) {
+        if (!uno_fs_writable(v)) continue;
+        if (uno_fs_write(v, name, (const unsigned char *)doc, len) == 0) {
+            char msg[160], *p = msg, *end = msg + sizeof msg;
+            p = sapp(p, end, "Saved ");
+            p = sapp(p, end, name);
+            p = sapp(p, end, " to volume ");
+            {   char d[8]; int k = 0, x = v;
+                if (!x) d[k++] = '0';
+                while (x) { d[k++] = (char)('0' + x % 10); x /= 10; }
+                while (k && p < end - 1) *p++ = d[--k];
+                *p = 0; }
+            sapp(p, end, ".");
+            sput(g_status, sizeof g_status, msg);
+            return;
+        }
+    }
+    sput(g_status, sizeof g_status, "Could not save: no writable volume.");
+}
+
 /* Put the selected match on screen. Document coordinates are what both
  * painters record, so this is the same arithmetic for either. */
 static void find_scroll_to(btab *t, unoui_rect r)
@@ -2428,6 +2483,7 @@ int pc64_browser_key(int uni, int scan, int ctrl)
     case 'b': case 'B': panel_open(PANEL_MARKS); return 1;
     case 'h': case 'H': panel_open(PANEL_HIST); return 1;
     case 'r': case 'R': load_loc(t, t->loc); return 1;
+    case 's': case 'S': save_page(t); return 1;      /* download this page */
     default: break;
     }
     if (scan == 0x0E) { tab_close(g_cur); return 1; }               /* Ctrl-F4 */

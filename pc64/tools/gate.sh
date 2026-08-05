@@ -15,14 +15,21 @@ cd "$(dirname "$0")/.."
 
 step() { printf '\n=== %s\n' "$1"; }
 
+# Each variant gets a CLEAN build dir. They share build/, and an object from
+# one configuration linked into the next failed at link with an undefined
+# reference the source did not contain (a UW_ENGINE pc64_spectest.o carried
+# into a non-engine link). A gate that can fail for a reason the tree does
+# not hold is worse than no gate.
+fresh() { rm -rf build; }
+
 step "production build"
-./build.sh >/dev/null
+fresh; ./build.sh >/dev/null
 step "debug build"
-UNO_DEBUG=1 ./build.sh >/dev/null
+fresh; UNO_DEBUG=1 ./build.sh >/dev/null
 step "unoweb-engine build (BROWSER_ENGINE=uw)"
-BROWSER_ENGINE=uw ./build.sh >/dev/null
+fresh; BROWSER_ENGINE=uw ./build.sh >/dev/null
 step "unoweb-engine debug build"
-BROWSER_ENGINE=uw UNO_DEBUG=1 ./build.sh >/dev/null
+fresh; BROWSER_ENGINE=uw UNO_DEBUG=1 ./build.sh >/dev/null
 
 step "unoweb golden tests"
 (cd ../unoweb/test && make -s >/dev/null && ./run_tests | tail -1)
@@ -50,6 +57,6 @@ fi
 # The QEMU suite needs the DEBUG image staged, and the loop above left the
 # uw-debug one in build/esp.
 step "restaging the plain debug image for SPECTEST"
-UNO_DEBUG=1 ./build.sh >/dev/null
+fresh; UNO_DEBUG=1 ./build.sh >/dev/null
 step "SPECTEST in QEMU"
 python3 tools/spectest_qemu.py | tail -3
