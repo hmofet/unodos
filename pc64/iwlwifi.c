@@ -628,6 +628,58 @@ static void read_fw_override(void)
         }
 }
 
+/* A BSSID the join must try FIRST: `bssid=30:29:2b:70:4f:c6` in WIFI.CFG /
+ * WIFI.TXT / DEBUG.CFG on any mounted volume. Same affordance as `fw=` above,
+ * for the same machine and the same reason.
+ *
+ * WHY THIS EXISTS. find_and_join() rescans and orders candidates by RSSI on
+ * every attempt, so on a mesh the experiment changes underneath you. Between
+ * two SURFGO runs a BSS appeared that had not been there before and the one
+ * that had associated slid from attempt 2 to attempt 3 - which is the
+ * difference between a FIRST-ATTEMPT join and a RETARGETED one, and that is
+ * the variable under test. Pinning makes a run repeatable, and it carries no
+ * credentials, so it can be staged into an image without a password in it. */
+static u8  g_pin_bssid[6];
+static int g_pin_on;
+
+static int hexnib(int c)
+{
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+static void read_bssid_override(void)
+{
+    static const char *cand[3] = { "WIFI.CFG", "WIFI.TXT", "DEBUG.CFG" };
+    static u8 b[512];
+    int nv = uno_fs_volumes(), v, j;
+    g_pin_on = 0;
+    for (v = 0; v < nv; v++)
+        for (j = 0; j < 3; j++) {
+            long n = uno_fs_read(v, cand[j], b, (long)sizeof b - 1), i;
+            if (n <= 0) continue;
+            for (i = 0; i + 6 <= n; i++) {
+                long q; int k, got = 0;
+                if (memcmp(b + i, "bssid=", 6)) continue;
+                /* start of a line only, so a psk containing "bssid=" is not one */
+                if (i > 0 && b[i-1] != '\n' && b[i-1] != '\r') continue;
+                q = i + 6;
+                for (k = 0; k < 6; k++) {
+                    int hi, lo;
+                    if (q + 1 >= n) break;
+                    hi = hexnib(b[q]); lo = hexnib(b[q+1]);
+                    if (hi < 0 || lo < 0) break;
+                    g_pin_bssid[k] = (u8)((hi << 4) | lo);
+                    q += 2; got++;
+                    if (k < 5 && q < n && (b[q] == ':' || b[q] == '-')) q++;
+                }
+                if (got == 6) { g_pin_on = 1; return; }
+            }
+        }
+}
+
 static int firmware_volume(void)
 {
     /* DEBUG.CFG can carry the Wi-Fi creds too (debug builds); prefer whichever
@@ -3944,6 +3996,25 @@ static int scan_pick_nth(int n)
     return chosen;
 }
 
+/* Candidate order for the join: a pinned BSSID first if the scan saw it, then
+ * everything else strongest-first. With no pin this is exactly scan_pick_nth,
+ * so the stock behaviour is unchanged. */
+static int join_pick_nth(int n)
+{
+    int p = -1, i, idx, want, k;
+    if (g_pin_on)
+        for (i = 0; i < g_scan_ap_n; i++)
+            if (!memcmp(g_scan_aps[i].bssid, g_pin_bssid, 6)) { p = i; break; }
+    if (p < 0) return scan_pick_nth(n);
+    if (n == 0) return p;
+    for (want = n - 1, k = 0; ; k++) {
+        idx = scan_pick_nth(k);
+        if (idx < 0) return -1;
+        if (idx == p) continue;               /* already spent as attempt 1 */
+        if (want-- == 0) return idx;
+    }
+}
+
 /* Point the join at scan result `idx`. */
 static void select_ap(int idx)
 {
@@ -4374,8 +4445,14 @@ static int find_and_join(void)
     prog("Looking for the network", 2);
     mvm_scan_cfg();
     mvm_scan_passive(5000);
+    read_bssid_override();
+    if (g_pin_on)
+        uno_dbg_net_trace("wifi: join: bssid= pins the first attempt to "
+                          "%02x:%02x:%02x:%02x:%02x:%02x",
+                          g_pin_bssid[0],g_pin_bssid[1],g_pin_bssid[2],
+                          g_pin_bssid[3],g_pin_bssid[4],g_pin_bssid[5]);
     for (attempt = 0; attempt < JOIN_TRIES; attempt++) {
-        idx = scan_pick_nth(attempt);
+        idx = join_pick_nth(attempt);
         if (idx < 0) {
             uno_dbg_net_trace(attempt ? "wifi: join: no further \"%s\" candidate after %d tries"
                                       : "wifi: join: SSID \"%s\" not found in %d scanned APs",
