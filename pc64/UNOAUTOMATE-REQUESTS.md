@@ -11,6 +11,16 @@ fulfilled.
 
 ---
 
+## 2026-08-05 — CLAIM: csslib (new subsystem) - phase 2 of the second-engine programme
+
+Taking (branch `libcss-vendor`, then `libcss-port`): the vendored MIT CSS stack
+at repo-root `csslib/` (libcss 0.9.2 + libparserutils 0.2.5 + libwapcaplet
+0.4.3; per-file licence audit in `csslib/VENDOR.md` - the GPL NetSurf core is
+excluded by the 2026-08-05 no-GPL ruling) + its freestanding port and host
+tests. CS2 (wiring libcss under uw_css/uw_style) will touch the unoweb lane - I
+hold both lanes this task, and the old cascade stays compiled behind the
+existing BROWSER_ENGINE switch per the two-painter rule.
+
 ## 2026-08-05 — CLAIM: quickjs engine option (new subsystem) + browser js.* dispatch seam
 
 Taking (branch `qjs-engine`):
