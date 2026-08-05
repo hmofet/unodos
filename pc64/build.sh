@@ -247,7 +247,10 @@ if [ "$1" != "legacy" ]; then
     # not carry the image decoders (Photos links its own copy into PHOTOS.UNO),
     # so this costs the standard build nothing.
     if [ "${BROWSER_ENGINE:-}" = "uw" ]; then
-        for u in um_image um_stub um_png um_inflate um_jpg um_gif um_bmp um_tga um_pnm um_qoi um_ico um_webp um_vp8; do
+        # NO um_inflate here: the audio half above always compiles it since
+        # UnoAmp's skin engine landed (2026-08-03), and a second copy made
+        # every BROWSER_ENGINE=uw build fail at link (found by CS3).
+        for u in um_image um_stub um_png um_jpg um_gif um_bmp um_tga um_pnm um_qoi um_ico um_webp um_vp8; do
             pc "$CC" $UCF -c -o "build/umi_$u.o" "../unomedia/$u.c"; OBJS="$OBJS build/umi_$u.o"
         done
     fi
