@@ -6778,3 +6778,55 @@ verb away from being settled.
    kernel-log tail instead, by luck of it still being in the ring.
 2. **The 6-second post-join verdict never appeared at all**, on a join that
    succeeded.  Either it did not run or its lines went where (1) sends them.
+
+## 2026-08-04 (metal) - CORRECTION: mesh steering already works; the fault is the retarget TX path
+
+**The entry above this one is wrong and `ffc80e13` reverts the commit it
+describes.**  I read a truncated grep of the Surface's log, saw `join: retry
+auth -> 0` without the `join: try 2/3` line above it, and concluded the driver
+had been silently re-pointed to a BSS it did not choose.  The full log says the
+opposite:
+
+    [61.085] join: try 1/3 "SKYNET" bssid e8:d3:eb:47:4e:c6 chan 6 rssi -34
+    [61.957] join: auth -> -1 (0=ok, >0 AP status, -1 no resp)
+    [61.957] join: e8:d3:eb:47:4e:c6 did not complete
+    [61.957] join: try 2/3 "SKYNET" bssid e8:d3:eb:51:4d:66 chan 6 rssi -67
+    [61.980] retarget: fresh TX queue -> qid=1
+    [62.144] join: retry 4-way COMPLETE after 21 ms (keys=1)
+
+`find_and_join()` did exactly what its comment says it exists for: the loudest
+BSS ACKs the auth at the MAC layer and never answers it, so the candidate loop
+moved on and joined the next one.  **Mesh steering is implemented and it
+worked.**  `g_bssid` is the BSS we are on, and the deauths from the abandoned
+candidate genuinely are from a BSS we are not on - "not our BSSID - ignored"
+was right all along.
+
+**The lesson is mine and it is the same one this file keeps recording**: I
+matched a log against a hypothesis instead of reading it in order, and the line
+that falsified me was fourteen lines above the one I quoted, inside a grep I
+had capped at 60 results.
+
+### The real fault
+
+After the retarget, every MANAGEMENT frame completes and no DATA frame does:
+
+    [62.129] TX q=1 idx=2 flen=153   [62.129] TXRESP frames=1 ...   EAPOL 2/4
+    [62.141] TX q=1 idx=3 flen=131   [62.144] TXRESP frames=1 ...   EAPOL 4/4
+    [62.236] TX q=1 idx=5 flen=309   <- DHCP DISCOVER, no TXRESP
+    [63.983] TX q=1 idx=6 flen=309   <- no TXRESP
+    [65.770] TX q=1 idx=7 flen=309   <- no TXRESP
+
+Same queue (`q=1`), same header length, and `g_data_qid` is correct
+(`mvm_txq_free`/`mvm_txq_alloc` maintain it, and the log shows the realloc).
+**The difference between the frames that complete and the ones that do not is
+encryption**: EAPOL goes out in the clear, DHCP is the first frame sent under
+the CCMP keys installed at 62.141.  That is where I would look first - the
+pairwise key or the station's authorized state after a `retarget_ap()` that
+removed the previous attempt's keys - and it is also why this has never been
+seen before: **it only happens when try 1 fails**, which is why the same AP has
+worked on other days.
+
+`17189089` makes the instrument that settles this actually fire (it was hooked
+to `iwl_link()`, which `net_poll()` never calls) and gives it a verdict for
+"queued, nothing came back", which it did not have.  **Get that one line off
+the next boot before changing any TX code.**
