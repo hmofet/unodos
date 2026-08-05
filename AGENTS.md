@@ -49,6 +49,7 @@ re-home"). Ownership is of the CODE; the whole OS is a shared goal.
 | toolkits (uno3d / unoui / sound) | their headers | `uno3d*`, `pc64_uui*`, `snd_*`, `hdaudio/ac97` |
 | unojs (standalone JavaScript engine) | `unojs/UNOJS.md`, `unojs/unojs.h` | `unojs/*` |
 | quickjs engine option (vendored quickjs-ng + freestanding port + browser backend) | `pc64/quickjs/VENDOR.md`, `docs/BROWSER-ENGINE2-PLAN.md` | `pc64/quickjs/*`, `pc64/qjsweb.c` |
+| csslib (vendored MIT CSS stack: libcss + libparserutils + libwapcaplet + port layer) | `csslib/VENDOR.md`, `docs/BROWSER-ENGINE2-PLAN.md` | `csslib/*` |
 | unoweb (DOM / HTML / CSS / layout / paint) | `unoweb/UNOWEB.md`, `unoweb/unoweb.h` | `unoweb/*`, `pc64/webjs.c` |
 | browser (HTML/MD renderer + HTTP client + js) | `pc64_http.h` header | `pc64_browser.*`, `pc64_http.*`, `js.*` |
 | unossh (SSH client: protocol, crypto, key + session store) | `docs/SSH-CLIENT-SPEC.md`, `ed25519.h`, `unossh.h` | `unossh*`, `ed25519.*`, `sshapp_*` |
