@@ -25,4 +25,12 @@ int pc64_net_boot(void);
 int pc64_http_get(const char *url, char *body, int bodymax,
                   char *status, int statusmax);
 
+/* The same, with a method: `post` NULL is a GET, otherwise the
+ * form-encoded body to send as a POST. A POST is never served from nor
+ * written to the cache - it asks the server to CHANGE something, and
+ * replaying one is how a browser double-submits an order. A redirect after
+ * a POST is followed as a GET, which is what browsers do. */
+int pc64_http_request(const char *url, const char *post,
+                      char *body, int bodymax, char *status, int statusmax);
+
 #endif

@@ -330,6 +330,66 @@ static void fetch_link_sheets(uw_doc *d);    /* defined with the URL helpers */
  * thing the script is manipulating. */
 static char g_js_log[2048];
 
+#ifdef UW_ENGINE
+/* ---- forms ----------------------------------------------------------------
+ * The focused control, and submission. A control's VALUE lives in its own
+ * `value` attribute rather than in a side table: the DOM already has to hold
+ * it (script reads and writes it), submission just walks the form reading
+ * attributes, and a re-render cannot lose what the user typed. */
+static uw_node *g_form_focus;
+
+/* percent-encode into a form body */
+static int form_enc(char *out, int cap, int at, const char *s)
+{
+    static const char hex[] = "0123456789ABCDEF";
+    for (; *s && at < cap - 4; s++) {
+        unsigned char ch = (unsigned char)*s;
+        if ((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') ||
+            (ch >= '0' && ch <= '9') || ch == '-' || ch == '_' || ch == '.' || ch == '~')
+            out[at++] = (char)ch;
+        else if (ch == ' ') out[at++] = '+';
+        else { out[at++] = '%'; out[at++] = hex[ch >> 4]; out[at++] = hex[ch & 15]; }
+    }
+    out[at] = 0;
+    return at;
+}
+
+/* the <form> enclosing `n`, or NULL */
+static uw_node *form_of(uw_node *n)
+{
+    for (; n; n = uw_parent(n))
+        if (uw_type(n) == UW_NODE_ELEMENT && !strcmp(uw_tag_name(g_dom, n), "form"))
+            return n;
+    return NULL;
+}
+
+/* Build "a=1&b=2" from every named control in `form`. */
+static int form_body(uw_node *form, char *out, int cap)
+{
+    uw_node *n;
+    int at = 0;
+    for (n = uw_next_in_order(form, form); n; n = uw_next_in_order(n, form)) {
+        const char *nm, *val, *type, *tg;
+        if (uw_type(n) != UW_NODE_ELEMENT) continue;
+        tg = uw_tag_name(g_dom, n);
+        if (strcmp(tg, "input") && strcmp(tg, "textarea") && strcmp(tg, "select")) continue;
+        nm = uw_attr(g_dom, n, "name");
+        if (!nm || !*nm) continue;                  /* unnamed: not submitted */
+        type = uw_attr(g_dom, n, "type");
+        if (type && (!strcmp(type, "submit") || !strcmp(type, "button") ||
+                     !strcmp(type, "reset"))) continue;
+        val = uw_attr(g_dom, n, "value");
+        if (at) { if (at < cap - 1) out[at++] = '&'; }
+        at = form_enc(out, cap, at, nm);
+        if (at < cap - 1) out[at++] = '=';
+        at = form_enc(out, cap, at, val ? val : "");
+    }
+    out[at] = 0;
+    return at;
+}
+#endif /* UW_ENGINE */
+
+
 /* Milliseconds since this page's VM was built. The TSC is the only clock a
  * PRODUCTION build has (uno_dbg_uptime_ms is debug-only), and it is the same
  * source the shell's animation clock uses. 0 when uncalibrated, which simply
@@ -700,6 +760,29 @@ static void render_uw(const char *src, unoui_rect r, int scroll)
         case UW_CMD_BULLET:
             fb_fill_rect(x, y, c->w, c->h, col);
             break;
+        case UW_CMD_CONTROL: {
+            /* unoweb says where the control is; the LOOK is ours, because a
+             * text field looks like whatever this OS's widgets look like. */
+            const char *type = uw_attr(g_dom, c->node, "type");
+            const char *val = uw_attr(g_dom, c->node, "value");
+            const char *tg = uw_tag_name(g_dom, c->node);
+            int btn = (tg && !strcmp(tg, "button")) ||
+                      (type && (!strcmp(type, "submit") || !strcmp(type, "button") ||
+                                !strcmp(type, "reset")));
+            int focused = (c->node == g_form_focus);
+            fb_fill_rect(x, y, c->w, c->h, btn ? FB_RGB(226, 226, 222)
+                                               : FB_RGB(255, 255, 255));
+            fb_frame_rect(x, y, c->w, c->h,
+                          focused ? PG_LINK : FB_RGB(150, 150, 150));
+            {   char buf[128];
+                int n = 0;
+                const char *sv = val ? val : "";
+                if (btn && !val) sv = "Submit";
+                while (sv[n] && n < (int)sizeof buf - 2) { buf[n] = sv[n]; n++; }
+                if (focused && n < (int)sizeof buf - 2) buf[n++] = '_';
+                buf[n] = 0;
+                if (n) fb_text(x + 4, y + 3, buf, PG_TEXT, -1); }
+            break; }
         case UW_CMD_IMAGE:
             /* No decoder is wired in yet, so an image paints as its reserved
              * box rather than silently occupying nothing - the layout is
@@ -1481,6 +1564,50 @@ static void resolve(const char *href, const char *base, char *out, int cap)
     sput(out, cap, href);
 }
 
+#ifdef UW_ENGINE
+/* Submit the form containing `ctl`. GET puts the fields in the query and is
+ * an ordinary navigation; POST sends them as a body (pc64_http_request). */
+static void form_submit(btab *t, uw_node *ctl)
+{
+    uw_node *form = form_of(ctl);
+    const char *action, *method;
+    char body[1024], url[LOCMAX];
+    int n;
+    if (!form) return;
+    action = uw_attr(g_dom, form, "action");
+    method = uw_attr(g_dom, form, "method");
+    n = form_body(form, body, sizeof body);
+    resolve(action && *action ? action : t->loc, g_page_base[0] ? g_page_base : t->loc,
+            url, sizeof url);
+    if (method && (method[0] == 'p' || method[0] == 'P')) {
+        char *d = tab_doc(t);
+        if (!d) return;
+        sput(g_status, sizeof g_status, "Submitting...");
+        pc64_shell_dirty();
+        {   int r = pc64_http_request(url, body, d, DOC_MAX - 1,
+                                      g_status, sizeof g_status);
+            if (r < 0) doc_error(t, url, g_status);
+            else t->is_html = 1;
+            sput(t->loc, LOCMAX, url);
+            sput(g_page_base, LOCMAX, url);
+            t->scroll = 0;
+            g_dom_sig = 0;                 /* force a re-parse of the reply */
+        }
+        return;
+    }
+    /* GET: the fields become the query string and it is a normal navigation */
+    {   int k = (int)strlen(url), i;
+        for (i = 0; i < k; i++) if (url[i] == '?') { url[i] = 0; k = i; break; }
+        if (n && k < LOCMAX - 2) {
+            url[k++] = '?';
+            for (i = 0; i < n && k < LOCMAX - 1; i++) url[k++] = body[i];
+            url[k] = 0;
+        }
+    }
+    navigate(url, 1);
+}
+#endif /* UW_ENGINE */
+
 static void navigate(const char *loc, int push)
 {
     btab *t = &g_tab[g_cur];
@@ -2142,6 +2269,52 @@ static int br_event(struct unoui_widget *w, const void *ev, void *ctx)
     unoui_rect r = g_rect;
     (void)w; (void)ctx;
 
+#ifdef UW_ENGINE
+    /* ---- a focused form control owns the keyboard ----
+     * Ahead of everything else: while you are typing in a field, a plain
+     * letter is text, not a browser shortcut. Enter submits, Tab and Esc
+     * leave the field. The value lives on the element, so a re-render (or a
+     * script reading it) sees exactly what was typed. */
+    if (g_form_focus) {
+        if (e->kind == UI_EV_CHAR && e->ch >= 32 && e->ch < 127) {
+            const char *cur = uw_attr(g_dom, g_form_focus, "value");
+            char buf[256];
+            int n = 0;
+            while (cur && cur[n] && n < (int)sizeof buf - 2) { buf[n] = cur[n]; n++; }
+            buf[n++] = (char)e->ch;
+            buf[n] = 0;
+            uw_set_attr(g_dom, g_form_focus, "value", buf);
+            g_uw_sig = 0;                      /* the field must repaint */
+            pc64_shell_dirty();
+            return 1;
+        }
+        if (e->kind == UI_EV_KEY) {
+            switch (e->key) {
+            case UI_KEY_BACKSPACE: {
+                const char *cur = uw_attr(g_dom, g_form_focus, "value");
+                char buf[256];
+                int n = 0;
+                while (cur && cur[n] && n < (int)sizeof buf - 1) { buf[n] = cur[n]; n++; }
+                if (n) buf[--n] = 0; else buf[0] = 0;
+                uw_set_attr(g_dom, g_form_focus, "value", buf);
+                g_uw_sig = 0;
+                pc64_shell_dirty();
+                return 1; }
+            case UI_KEY_ENTER:
+                form_submit(t, g_form_focus);
+                g_form_focus = 0;
+                return 1;
+            case UI_KEY_ESC:
+            case UI_KEY_TAB:
+                g_form_focus = 0;
+                pc64_shell_dirty();
+                return 1;
+            default: return 1;
+            }
+        }
+    }
+#endif /* UW_ENGINE */
+
     /* ---- the find bar owns the keyboard while it is open ----
      * Ahead of the address bar because Ctrl-F is what put it there; a page
      * scroll or a link walk arriving mid-search would be the wrong answer to
@@ -2445,6 +2618,26 @@ static int br_event(struct unoui_widget *w, const void *ev, void *ctx)
                     if (webjs_take_dirty()) { g_uw_sig = 0; pc64_shell_dirty(); }
                     return 1;
                 }
+                /* a form control takes focus (or submits) before the click
+                 * is considered as a link - a submit button inside an <a>
+                 * must submit, not navigate */
+                {   uw_node *ctl = n;
+                    for (; ctl; ctl = uw_parent(ctl)) {
+                        const char *tg;
+                        if (uw_type(ctl) != UW_NODE_ELEMENT) continue;
+                        tg = uw_tag_name(g_dom, ctl);
+                        if (!strcmp(tg, "input") || !strcmp(tg, "textarea") ||
+                            !strcmp(tg, "select") || !strcmp(tg, "button")) break;
+                    }
+                    if (ctl) {
+                        const char *ty = uw_attr(g_dom, ctl, "type");
+                        const char *tg = uw_tag_name(g_dom, ctl);
+                        if (!strcmp(tg, "button") ||
+                            (ty && (!strcmp(ty, "submit") || !strcmp(ty, "button"))))
+                            form_submit(t, ctl);
+                        else { g_form_focus = ctl; pc64_shell_dirty(); }
+                        return 1;
+                    } }
                 a = uw_link_at(g_dom, n);
                 if (a) {
                     const char *href = uw_attr(g_dom, a, "href");

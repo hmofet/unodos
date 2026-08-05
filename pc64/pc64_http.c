@@ -303,9 +303,13 @@ static int http_header(const char *raw, int rawlen, const char *name, char *out,
  * the resolved absolute next URL in `redir`; otherwise behaves like the public
  * pc64_http_get (body length >=0, or a negative error). */
 #define HTTP_REDIRECT (-100)
+/* `post` is NULL for a GET, else the form-encoded body to send. A POST is
+ * never cached and never served from cache - it is a request to CHANGE
+ * something, and replaying one from a cache is how a browser double-submits
+ * an order. */
 static int http_get_once(const char *url, char *body, int bodymax,
                          char *status, int statusmax, char *redir, int redirmax,
-                         pc64_cache_ctl *ctl)
+                         pc64_cache_ctl *ctl, const char *post)
 {
     char host[128], path[512];
     unsigned char ip[4];
@@ -358,7 +362,9 @@ static int http_get_once(const char *url, char *body, int bodymax,
     /* request */
     { char req[2048]; int rn = 0;
       char ck[768];
-      const char *a = "GET ", *b = " HTTP/1.0\r\nHost: ", *c = "\r\nUser-Agent: UnoDOS-pc64\r\nConnection: close\r\nAccept: text/html,text/markdown,text/plain\r\n";
+      const char *a = post ? "POST " : "GET ";
+      const char *b = " HTTP/1.0\r\nHost: ";
+      const char *c = "\r\nUser-Agent: UnoDOS-pc64\r\nConnection: close\r\nAccept: text/html,text/markdown,text/plain\r\n";
       /* every append is bounds-checked against sizeof(req): host/path come from
          the address bar AND from links in untrusted pages, so a crafted long URL
          must not overflow this stack buffer. */
@@ -370,7 +376,21 @@ static int http_get_once(const char *url, char *body, int bodymax,
       if (pc64_cookie_header(host, path, secure, ck, sizeof ck) > 0) {
           REQ_PUT("Cookie: "); REQ_PUT(ck); REQ_PUT("\r\n");
       }
+      if (post) {
+          char num[24];
+          int k = 0, v = (int)strlen(post);
+          REQ_PUT("Content-Type: application/x-www-form-urlencoded\r\n");
+          REQ_PUT("Content-Length: ");
+          if (!v) num[k++] = '0';
+          {   char tmp[16]; int t = 0, vv = v;
+              while (vv) { tmp[t++] = (char)('0' + vv % 10); vv /= 10; }
+              while (t) num[k++] = tmp[--t]; }
+          num[k] = 0;
+          REQ_PUT(num);
+          REQ_PUT("\r\n");
+      }
       REQ_PUT("\r\n");                            /* end of headers */
+      if (post) REQ_PUT(post);
       #undef REQ_PUT
       if (secure) { if (tls_write(req, rn) < 0) { set_tls_err(status, statusmax, "TLS write failed"); tls_close(); return -7; } }
       else        net_tcp_send(req, rn);
@@ -473,24 +493,31 @@ static int http_get_once(const char *url, char *body, int bodymax,
 }
 
 /* Public entry: fetch `url`, following up to a few redirects. */
-int pc64_http_get(const char *url, char *body, int bodymax, char *status, int statusmax)
+int pc64_http_request(const char *url, const char *post,
+                      char *body, int bodymax, char *status, int statusmax)
 {
     char cur[512], nxt[512];
     pc64_cache_ctl ctl;
     int hop, n;
     /* a fresh copy short-circuits the whole DNS + TCP + TLS round, which on
-     * this box is seconds rather than milliseconds */
-    n = pc64_cache_get(url, body, bodymax, status, statusmax);
-    if (n >= 0) return n;
+     * this box is seconds rather than milliseconds. NEVER for a POST: that is
+     * a request to change something, and replaying one from a cache is how a
+     * browser double-submits an order. */
+    if (!post) {
+        n = pc64_cache_get(url, body, bodymax, status, statusmax);
+        if (n >= 0) return n;
+    }
     memset(&ctl, 0, sizeof ctl);
     ctl.max_age = -1;
     strncpy(cur, url, sizeof cur - 1); cur[sizeof cur - 1] = 0;
     for (hop = 0; hop < 6; hop++) {
-        n = http_get_once(cur, body, bodymax, status, statusmax, nxt, sizeof nxt, &ctl);
+        n = http_get_once(cur, body, bodymax, status, statusmax, nxt, sizeof nxt,
+                          &ctl, post);
+        post = 0;              /* a redirect after a POST is followed as GET */
         if (n != HTTP_REDIRECT) {
             /* cache under the ORIGINAL url, not the last hop: that is what
              * the next visit will ask for */
-            if (n > 0) pc64_cache_put(url, body, n, status, &ctl);
+            if (n > 0 && !post) pc64_cache_put(url, body, n, status, &ctl);
             return n;
         }
         strncpy(cur, nxt, sizeof cur - 1); cur[sizeof cur - 1] = 0;
@@ -498,3 +525,6 @@ int pc64_http_get(const char *url, char *body, int bodymax, char *status, int st
     if (statusmax > 0) strncpy(status, "Too many redirects", statusmax-1);
     return -9;
 }
+
+int pc64_http_get(const char *url, char *body, int bodymax, char *status, int statusmax)
+{ return pc64_http_request(url, 0, body, bodymax, status, statusmax); }
