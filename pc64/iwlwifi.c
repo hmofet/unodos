@@ -3558,6 +3558,23 @@ static void handle_eapol(const u8 *eapol, int len)
         g_join_ms = uno_dbg_uptime_ms();
         g_postjoin_diag_done = 0;
         g_txr_total = g_txr_ackfail = g_rx_from_ap = 0;
+        g_rx_data_n = g_rx_data_drop = g_tx_data_n = 0;
+        /* ARM THE RX DESCRIPTION FOR THE FIRST FEW FRAMES OF THIS ASSOCIATION.
+         *
+         * g_rx_data_log gates the two RXDATA traces that say what a received
+         * data frame actually looked like - and it was only ever armed by a
+         * hand-typed `iwl` debug verb. On the Surface that made it unreachable
+         * by construction: the machine has no wired NIC, so with no lease
+         * there is no URC, so there is no way to type the verb that would
+         * explain why there is no lease.
+         *
+         * That boot ended `rx=0 from_ap=22 drop=69`: the AP was talking to us,
+         * every frame we sent was ACKed, and every single data frame that came
+         * back was thrown away without a word about why. Sixteen frames is
+         * enough to characterise the shape and small enough that a busy link
+         * cannot turn it into a log flood - and it is per association, so a
+         * rejoin re-arms it. */
+        g_rx_data_log = 16;
         g_deauth_ours = g_deauth_other = 0; g_deauth_reason = -1;
         /* Publish the nic service the moment the link is usable, whatever drove
          * the join - the step-by-step debug verbs (mld/auth/assoc/eapol) reach
