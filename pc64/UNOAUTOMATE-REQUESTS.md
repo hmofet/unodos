@@ -6897,3 +6897,100 @@ before that the framebuffer being blamed for a stall that was a per-line disk
 write.  Both came from matching a log against a hypothesis instead of reading it
 in order.  **The mesh candidate loop works, the TX path works, the framebuffer
 was a red herring, and the answer was in the RX path the whole time.**
+
+## 2026-08-05 - CLAIM + LANDED (iwlwifi): it is NOT a regression, and the drop
+## evidence does not yet say the frames were ours
+
+Taking the iwlwifi lane to answer the entry above.  Two things before any key
+or TX code is touched: whether this ever worked (it did, once, under conditions
+that have not recurred), and whether the fourteen undecrypted frames belong to
+the AP we joined (nothing in the log says so).
+
+### Is it a regression?  No, and the archaeology is worth keeping
+
+The encrypted data path has been proven exactly ONCE: round 25 on the Yoga, an
+AX201 on `QuZ-a0` firmware, joining NimmuNet's `51:8c:8f` on the FIRST attempt,
+DHCP lease + 3/3 pings + a DNS answer.  Every failing observation since has
+differed from that run in three ways at once - a different machine, a different
+firmware image, and a join that only completed on a RETRY.
+
+Nothing on the path in question changed in between:
+
+- `mld_sec_key()` has not been modified since `2366135e` introduced it, which
+  is BEFORE the run that worked.  `git log -L` on the function has one entry.
+- the RX payload/offset logic last changed in `908ba2f8`, also part of the
+  round-25 set that worked.  `927ed9be` touched `rx_process_rb` since, and it
+  is counters only - I re-read the diff to be sure.
+- `wifi_wpa.c` has one change since (`4ad497f3`, the replay counter), and it
+  gates whether a repeated 1/4 is acted on, not what the GTK parses to.
+- the key flags are right.  Checked against the reference driver rather than
+  from memory: for a station-mode GTK it sets MCAST_KEY, CIPHER_CCMP and NO_TX,
+  "when a GTK is configured for a station it can only be used for Rx and never
+  for Tx".  Our `0x4a` is exactly that.  Candidate (b) as filed - "key_flags is
+  missing whatever bit arms RX decryption" - is not a missing flag in this
+  command.
+
+What DID change is the fleet.  And the failure has a much older description
+than this week: **2026-07-28 recorded that after a RETARGETED join the data
+path does not carry, and that a first-attempt join carries data fine.**  SURFGO
+cannot reach SKYNET on the first attempt - `51:4d:66` never answers auth - so
+every association it has ever completed has been a `join: try 2/3` through
+`retarget_ap()`.  This is that gap, on the machine that cannot avoid it.
+
+`5c6af816` (drop the old keys when re-pointing) is not in play either: on
+SURFGO try 1 fails at AUTH, so `g_keys_installed` is 0 and the removal never
+runs.
+
+### What is NOT established, and why I did not go straight to a fix
+
+`drop=69` counts every encrypted data frame the ring delivered, from any BSS.
+SKYNET is a mesh: the abandoned candidate and its neighbours are on the same
+channel, protected with group keys we will never hold, and their frames are
+indistinguishable in that counter from our AP's.  The `RXDATA DROP` line does
+not print a transmitter, so the fourteen sampled frames cannot be attributed.
+The lane's own record this week is two hypotheses that reached a commit and were
+reverted, both from matching a log against a hypothesis instead of reading it in
+order, so this one gets attributed before it gets acted on.
+
+### Landed (`1d82f542`)
+
+- **The RX descriptor's `status` word is now read.**  It is a `__le32` at
+  desc+12, ahead of the v1/v3 union, and it has been sitting there unread
+  through four rounds of inferring the same facts from payload bytes.  Every
+  `RXDATA` line carries `st=`; the DROP line decodes `sta` (SRC_STA_FOUND),
+  `key` (KEY_VALID), `sec` (cipher: 0 none, 2 CCM), `mic`, `dec` (DECRYPTED)
+  and the station id it matched.  **This is the (a)/(b) discriminator from the
+  hardware instead of by inference**: `sec=0` on a protected frame is a key
+  never armed; `sec=2 mic=0` is a key that is wrong.
+- **A data frame from a BSS we did not join is no longer delivered** to the IP
+  stack, and no longer counted as one of our drops.  It used to be handed to
+  `net.c` as if the AP had sent it.  Counters split into `drop` (ours),
+  `foreign` (everyone else) and `prot`/`dec` (protected frames from our AP
+  against how many the hardware decrypted).
+- The post-join verdict gains the branch for "the AP is sending to us and every
+  protected frame arrives undecrypted", which the previous wording collapsed
+  into "the link is fine and DHCP is the problem".
+
+No key, TX or association code touched.  Builds both, SPECTEST 67/0/7.
+
+### What the next metal boot has to produce
+
+One GUI join on SURFGO, then `BOOTLOG.TXT` (a GUI join still never reaches
+NETLOG).  The two lines that decide the next move:
+
+    post-join diag: prot=N dec=N foreign=N st=........ (sta= key= sec= mic= dec=)
+    RXDATA DROP ... sta= key= sec= mic= dec= staid=
+
+- `prot=0 foreign>0` - the sampled frames were never ours and the 08-05 entry's
+  conclusion does not hold.  The question reopens as "our AP sends us nothing",
+  and the deauth/steering line is where it goes.
+- `prot>0 dec=0 sec=0` - the firmware never treated our AP's frames as
+  encrypted.  Then the key is not armed for RX on that station, and the suspect
+  is the RETARGET path: `mld_sta_cfg()` re-points a live station at a new peer,
+  which the reference driver never does - it removes the station and adds a
+  fresh one (`STA_REMOVE_CMD`, MAC_CONF 0x0b) around a link deactivate.  That is
+  the next slice, and it is a fw-assert risk, so it wants the evidence first.
+- `prot>0 dec=0 sec=2 mic=0` - the key IS armed and wrong, which points back at
+  the GTK bytes out of the EAPOL key data, and `wifi_wpa.c` owns that.
+- `sta=0` on our AP's frames - the firmware does not recognise the transmitter
+  as a station at all, which is the same retarget suspicion from the other end.
