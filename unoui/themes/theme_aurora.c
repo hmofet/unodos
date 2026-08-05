@@ -82,13 +82,21 @@ static void a_titlebar(const unoui_theme *t, const unoui_window *win)
     /* accent underline on the active window (the signature) */
     if (win->active)
         fb_fill_rect(r.x+fw+12, r.y+th-2, r.w-2*fw-24, 2, t->pal.accent);
-    /* close box: a soft rounded button with an x */
+    /* Close box: a soft rounded button with an x. It sits next to the min/max
+     * boxes, which the GENERIC painter (unoui.c draw_title_btn) draws as a
+     * pal.face fill + a pal.shadow hairline + a full-strength pal.face_text
+     * glyph, active or not. Match all three here or the close box reads as
+     * greyed out beside them; only the rounded silhouette stays Aurora's own.
+     * The x is a main stroke plus a mirrored half-strength one, so a 1px
+     * diagonal carries the same weight as those 2px bars without going jagged. */
     if (cs) {
         int k;
-        aa_fill(cbx, cby, cs, cs, cs/3, win->active ? t->pal.face : t->pal.title_bg_in);
-        for (k = 3; k < cs-3; k++) {
-            fb_blend_pixel(cbx+k, cby+k, t->pal.text_dim, 220);
-            fb_blend_pixel(cbx+cs-1-k, cby+k, t->pal.text_dim, 220);
+        aa_border(cbx, cby, cs, cs, cs/3, 1, t->pal.shadow, t->pal.face);
+        for (k = 3; k <= cs-4; k++) {   /* inset clear of the rounded corners */
+            fb_blend_pixel(cbx+k, cby+k, t->pal.face_text, 255);
+            fb_blend_pixel(cbx+cs-1-k, cby+k, t->pal.face_text, 255);
+            fb_blend_pixel(cbx+k+1, cby+k, t->pal.face_text, 110);
+            fb_blend_pixel(cbx+cs-2-k, cby+k, t->pal.face_text, 110);
         }
         bar.x = t->m.closeright ? r.x + fw + 10 : cbx + cs + 8;
     } else bar.x = r.x + fw + 10;
