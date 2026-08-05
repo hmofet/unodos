@@ -746,6 +746,51 @@ int main(int argc, char **argv)
             "      text (98,31 20x14) \"jj\"\n",
             NULL);
 
+    /* ---- floats (M6) --------------------------------------------------------
+     * The float is out of flow and the PARAGRAPH is a separate block, so this
+     * only works because the float context is passed down the block tree
+     * rather than rebuilt per block - a float in <body> has to shorten the
+     * lines of every paragraph after it. Lines start past the float and wrap
+     * at the narrowed width; the body grows to contain the float. */
+    tlayout_w("layout-float-left",
+            "<style>.f{float:left;width:100px;height:40px}</style>"
+            "<div class=f></div><p>aa bb cc dd ee ff gg hh</p>", 300,
+            "block body (8,8 284x46)\n"
+            "  block div (8,8 100x40)\n"
+            "  block p (8,17 284x28)\n"
+            "    line (108,17 170x14)\n"
+            "      text (108,17 20x14) \"aa\"\n"
+            "      text (138,17 20x14) \"bb\"\n"
+            "      text (168,17 20x14) \"cc\"\n"
+            "      text (198,17 20x14) \"dd\"\n"
+            "      text (228,17 20x14) \"ee\"\n"
+            "      text (258,17 20x14) \"ff\"\n"
+            "    line (108,31 50x14)\n"
+            "      text (108,31 20x14) \"gg\"\n"
+            "      text (138,31 20x14) \"hh\"\n",
+            NULL);
+    /* a right float pins to the right content edge and leaves the left free */
+    tlayout_w("layout-float-right",
+            "<style>.f{float:right;width:100px;height:40px}</style>"
+            "<div class=f></div><p>aa bb</p>", 300,
+            "block body (8,8 284x40)\n"
+            "  block div (192,8 100x40)\n"
+            "  block p (8,17 284x14)\n"
+            "    line (8,17 50x14)\n"
+            "      text (8,17 20x14) \"aa\"\n"
+            "      text (38,17 20x14) \"bb\"\n",
+            NULL);
+    /* clear pushes a later block below the float instead of beside it */
+    tlayout_w("layout-clear",
+            "<style>.f{float:left;width:100px;height:20px}.c{clear:left}</style>"
+            "<div class=f></div><p class=c>below</p>", 300,
+            "block body (8,8 284x43)\n"
+            "  block div (8,8 100x20)\n"
+            "  block p (8,28 284x14)\n"
+            "    line (8,28 50x14)\n"
+            "      text (8,28 50x14) \"below\"\n",
+            NULL);
+
     /* ---- tables (M6) --------------------------------------------------------
      * Columns are proportional to how much text each holds, which is what
      * makes the common shape - a narrow index column beside a wide

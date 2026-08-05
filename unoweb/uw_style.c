@@ -306,6 +306,19 @@ static void apply_decl(uw_doc *d, uw_style *st, const uw_style *parent,
                                                                          UW_ALIGN_LEFT);
         return;
     }
+    if (!strcmp(prop, "float")) {
+        st->cssfloat = (unsigned char)(keyword_is(v, vlen, "left")  ? UW_FLOAT_LEFT :
+                                       keyword_is(v, vlen, "right") ? UW_FLOAT_RIGHT :
+                                                                      UW_FLOAT_NONE);
+        return;
+    }
+    if (!strcmp(prop, "clear")) {
+        st->clear = (unsigned char)(keyword_is(v, vlen, "left")  ? UW_CLEAR_LEFT :
+                                    keyword_is(v, vlen, "right") ? UW_CLEAR_RIGHT :
+                                    keyword_is(v, vlen, "both")  ? UW_CLEAR_BOTH :
+                                                                   UW_CLEAR_NONE);
+        return;
+    }
     if (!strcmp(prop, "vertical-align")) {
         /* NOT inherited (CSS says so), and the length/percentage forms fall
          * back to baseline rather than pretending to shift by a value the

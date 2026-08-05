@@ -195,6 +195,8 @@ enum { UW_BS_NONE = 0, UW_BS_SOLID };
  * baseline table: everything else in the property maps to BASELINE. */
 enum { UW_VA_BASELINE = 0, UW_VA_TOP, UW_VA_MIDDLE, UW_VA_BOTTOM,
        UW_VA_SUB, UW_VA_SUPER };
+enum { UW_FLOAT_NONE = 0, UW_FLOAT_LEFT, UW_FLOAT_RIGHT };
+enum { UW_CLEAR_NONE = 0, UW_CLEAR_LEFT, UW_CLEAR_RIGHT, UW_CLEAR_BOTH };
 /* side order is CSS order: top, right, bottom, left */
 enum { UW_TOP = 0, UW_RIGHT, UW_BOTTOM, UW_LEFT };
 
@@ -205,6 +207,8 @@ typedef struct {
     unsigned char text_align;
     unsigned char white_space;
     unsigned char vertical_align;
+    unsigned char cssfloat;        /* UW_FLOAT_*  ("float" is a C keyword) */
+    unsigned char clear;
     unsigned char underline;
     unsigned char list_bullet;     /* 0 none, 1 disc, 2 decimal */
     unsigned char has_bg;          /* background_color is meaningful */

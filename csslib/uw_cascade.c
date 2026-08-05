@@ -132,12 +132,18 @@ static unsigned char map_display(uint8_t d)
 {
     switch (d) {
     case CSS_DISPLAY_NONE:         return UW_DISP_NONE;
+    case CSS_DISPLAY_TABLE:
+    case CSS_DISPLAY_INLINE_TABLE: return UW_DISP_TABLE;
+    case CSS_DISPLAY_TABLE_ROW:    return UW_DISP_TABLE_ROW;
+    case CSS_DISPLAY_TABLE_CELL:   return UW_DISP_TABLE_CELL;
+    case CSS_DISPLAY_TABLE_ROW_GROUP:
+    case CSS_DISPLAY_TABLE_HEADER_GROUP:
+    case CSS_DISPLAY_TABLE_FOOTER_GROUP: return UW_DISP_TABLE_ROW_GROUP;
     case CSS_DISPLAY_INLINE:       return UW_DISP_INLINE;
     case CSS_DISPLAY_INLINE_BLOCK: return UW_DISP_INLINE_BLOCK;
     case CSS_DISPLAY_LIST_ITEM:    return UW_DISP_LIST_ITEM;
     default:                       return UW_DISP_BLOCK;
-    /* the table/flex display types collapse to BLOCK, which is exactly the
-     * built-in UA sheet's treatment of tables today */
+    /* the flex/grid display types still collapse to BLOCK */
     }
 }
 
@@ -210,6 +216,18 @@ static void map_style(const css_computed_style *st, const css_unit_ctx *uc,
         case CSS_VERTICAL_ALIGN_SUPER:       out->vertical_align = UW_VA_SUPER;  break;
         default:                             out->vertical_align = UW_VA_BASELINE; break;
         }
+    }
+
+    switch (css_computed_float(st)) {
+    case CSS_FLOAT_LEFT:  out->cssfloat = UW_FLOAT_LEFT;  break;
+    case CSS_FLOAT_RIGHT: out->cssfloat = UW_FLOAT_RIGHT; break;
+    default:              out->cssfloat = UW_FLOAT_NONE;  break;
+    }
+    switch (css_computed_clear(st)) {
+    case CSS_CLEAR_LEFT:  out->clear = UW_CLEAR_LEFT;  break;
+    case CSS_CLEAR_RIGHT: out->clear = UW_CLEAR_RIGHT; break;
+    case CSS_CLEAR_BOTH:  out->clear = UW_CLEAR_BOTH;  break;
+    default:              out->clear = UW_CLEAR_NONE;  break;
     }
 
     out->underline =
