@@ -357,6 +357,51 @@ static void emit_image(inline_ctx *ic, uw_node *n, const uw_style *s)
     if (ih > ic->line_h) ic->line_h = ih;
 }
 
+/* A form control: an inline replaced box. unoweb sizes it and says where it
+ * is; the embedder paints it, because a text field looks like whatever the
+ * host's widgets look like and unoweb owns no theme. Width comes from the
+ * `size` attribute (in characters, the HTML convention) or a sensible
+ * default per type; height is one line box plus the field's own chrome. */
+static void emit_control(inline_ctx *ic, uw_node *n, const uw_style *s)
+{
+    const char *type = uw_attr(ic->d, n, "type");
+    const char *tag = uw_tag_name(ic->d, n);
+    const char *szs = uw_attr(ic->d, n, "size");
+    int cw, ch = lineh(ic->d, s) + 6, chars = 20;
+    uw_box *b;
+
+    if (type && (!strcmp(type, "hidden"))) return;      /* occupies nothing */
+    if (szs && *szs) { int v = 0; const char *p = szs;
+                       while (*p >= '0' && *p <= '9') v = v * 10 + (*p++ - '0');
+                       if (v > 0) chars = v; }
+    if (!strcmp(tag, "button") || (type && (!strcmp(type, "submit") ||
+                                            !strcmp(type, "button") ||
+                                            !strcmp(type, "reset")))) {
+        const char *val = uw_attr(ic->d, n, "value");
+        int tl = val ? (int)strlen(val) : 6;
+        cw = measure(ic->d, s, "M", 1) * (tl + 2);
+    } else if (type && (!strcmp(type, "checkbox") || !strcmp(type, "radio"))) {
+        cw = ch = lineh(ic->d, s);
+    } else {
+        cw = measure(ic->d, s, "M", 1) * chars + 8;
+    }
+    if (s->width.unit == UW_LEN_PX) cw = s->width.v;
+    if (cw > ic->avail && ic->avail > 0) cw = ic->avail;
+
+    if (ic->x > 0 && ic->x + cw > ic->avail) line_break(ic);
+    ensure_line(ic, s);
+    if (!ic->line) return;
+    b = box_new(ic->d, UW_BOX_CONTROL, n, s);
+    if (!b) return;
+    b->x = ic->content_x + ic->line_x0 + ic->x;
+    b->y = ic->content_y + ic->y;
+    b->w = cw; b->h = ch;
+    box_add(ic->line, b);
+    ic->x += cw;
+    ic->pending_space = 0;
+    if (ch > ic->line_h) ic->line_h = ch;
+}
+
 static void flow_text(inline_ctx *ic, const char *t, int len, const uw_style *s)
 {
     int i = 0;
@@ -404,6 +449,10 @@ static void flow_inline(inline_ctx *ic, uw_node *n, const uw_style *inherited)
         {   const uw_style *s = uw_computed(c);
             if (!s || s->display == UW_DISP_NONE) continue;
             if (!strcmp(uw_tag_name(ic->d, c), "img")) { emit_image(ic, c, s); continue; }
+            {   const char *tg = uw_tag_name(ic->d, c);
+                if (!strcmp(tg, "input") || !strcmp(tg, "textarea") ||
+                    !strcmp(tg, "select") || !strcmp(tg, "button")) {
+                    emit_control(ic, c, s); continue; } }
             if (!strcmp(uw_tag_name(ic->d, c), "br")) {
                 if (!ic->line) ensure_line(ic, s);
                 if (!ic->line_h) ic->line_h = lineh(ic->d, s);
@@ -836,6 +885,13 @@ static void paint_box(uw_doc *d, uw_box *b)
      * descendants emit: z applies to a whole subtree, not to one rectangle. */
     if (s && s->position != UW_POS_STATIC && s->z_index) g_paint_z = s->z_index;
 
+    if (b->type == UW_BOX_CONTROL) {
+        c.cmd = UW_CMD_CONTROL;
+        c.x = b->x; c.y = b->y; c.w = b->w; c.h = b->h;
+        c.style = s; c.node = b->node;
+        pl_push(d, &c);
+        return;
+    }
     if (b->type == UW_BOX_IMAGE) {
         c.cmd = UW_CMD_IMAGE;
         c.x = b->x; c.y = b->y; c.w = b->w; c.h = b->h;

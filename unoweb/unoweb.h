@@ -306,7 +306,7 @@ typedef struct {
  * the paint pass replays. */
 typedef struct uw_box uw_box;
 
-enum { UW_BOX_BLOCK = 0, UW_BOX_LINE, UW_BOX_TEXT, UW_BOX_BULLET,
+enum { UW_BOX_BLOCK = 0, UW_BOX_LINE, UW_BOX_TEXT, UW_BOX_BULLET, UW_BOX_CONTROL,
        UW_BOX_IMAGE };
 
 /* Lay the document out into `width` pixels. Styles are computed first if the
@@ -329,7 +329,12 @@ int uw_layout_dump(uw_doc *d, char *out, int max);
  * Layout emits a flat, ordered list of paint commands. The canvas replays it
  * translated by the scroll offset, so SCROLLING NEVER RELAYOUTS. */
 enum { UW_CMD_RECT = 1, UW_CMD_BORDER, UW_CMD_TEXT, UW_CMD_BULLET,
-       UW_CMD_IMAGE };
+       UW_CMD_IMAGE,
+       /* A form control. unoweb lays it out and says where it is; the
+        * EMBEDDER paints it, because a text field looks like whatever the
+        * host's widgets look like and unoweb has no theme. `node` names the
+        * element so the embedder can read its value and type. */
+       UW_CMD_CONTROL };
 
 typedef struct {
     int      cmd;
@@ -340,6 +345,7 @@ typedef struct {
     int         len;
     const uw_style *style;
     void       *image;             /* UW_CMD_IMAGE: the embedder's handle */
+    uw_node    *node;              /* UW_CMD_CONTROL: the element           */
     int         z;                 /* z-index of the box this came from    */
 } uw_paint_cmd;
 
