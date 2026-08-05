@@ -11,7 +11,33 @@ fulfilled.
 
 ---
 
-## 2026-07-24 — kernel/unodevices → unoautomate: guard→TCO wiring + `hwwdt` verb LANDED (I hold both lanes this task)
+## 2026-08-05 — CLAIM: quickjs engine option (new subsystem) + browser js.* dispatch seam
+
+Taking (branch `qjs-engine`):
+
+- **New subsystem `quickjs`** (row added to AGENTS.md in this commit): the
+  vendored quickjs-ng engine + its freestanding port layer under
+  `pc64/quickjs/`, and the browser-facing backend `pc64/qjsweb.c`. This is the
+  "second, real-world JS engine" half of the switchable-engine programme
+  (docs/BROWSER-ENGINE2-PLAN.md); layout stays unoweb.
+- **Browser lane, js.h/js.c only** (I hold both lanes this task): `js_run()`
+  keeps its exact contract; underneath it becomes an engine dispatch
+  (unojs default, quickjs opt-in, runtime-switchable). Registry-style and
+  additive: a third engine appends an entry, nothing reorders.
+
+## 2026-08-05 — quickjs → unojs owner: bless ujs_math as a stable double-math surface
+
+`pc64/quickjs/compat/math.h` consumes unojs's double math (`ujs_fabs`,
+`ujs_floor`, `ujs_ceil`, `ujs_fmod`, `ujs_sqrt`, `ujs_exp`, `ujs_log`,
+`ujs_log10`, `ujs_pow`, `ujs_sin`, `ujs_cos`, `ujs_tan`, `ujs_atan`,
+`ujs_atan2`) as the one double-precision libm in the tree - pc64's kernel
+math is float-only and JS numbers are doubles. Today those symbols are
+declared by hand in the compat header because `ujs_int.h` is unojs-internal.
+
+Request: export this set in a small public header (or bless the names as
+`[STABLE]` in UNOJS.md) so the quickjs port stops depending on internals.
+Stopgap in use: hand-written extern declarations, signatures asserted by the
+host smoke test (`pc64/quickjs/test/`, 31/31 green on linux-ASan + mingw).
 
 **FYI, no action needed.** This task was assigned both lanes (unodevices + the
 guard/URC dispatch), so I edited two files in **your** lane directly rather than
