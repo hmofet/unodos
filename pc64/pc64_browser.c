@@ -26,6 +26,8 @@
 #include <stdlib.h>
 #include "pc64_http.h"
 #include "pc64_fetch.h"
+#include "pc64_native.h"
+#include "webjs.h"
 #include <string.h>
 
 void uno_pc64_present(void);       /* fb -> GOP (for a Loading frame mid-fetch) */
@@ -260,6 +262,54 @@ static int  loc_is_net(const char *loc);
 
 #ifdef UW_ENGINE
 static void fetch_link_sheets(uw_doc *d);    /* defined with the URL helpers */
+
+/* ---- page scripts on the live DOM (M5) ------------------------------------
+ * One VM per page, built here and torn down by the next navigation. Every
+ * <script> in the document runs in it, in document order, and whatever it
+ * leaves behind - handlers, timers, closures - stays alive for the page.
+ * The console output of all of them shares one buffer, surfaced by the
+ * status line rather than appended to the document: the document is now a
+ * real tree, and stapling a console panel onto it would mutate the very
+ * thing the script is manipulating. */
+static char g_js_log[2048];
+
+/* Milliseconds since this page's VM was built. The TSC is the only clock a
+ * PRODUCTION build has (uno_dbg_uptime_ms is debug-only), and it is the same
+ * source the shell's animation clock uses. 0 when uncalibrated, which simply
+ * means timers all come due at once - correct, if not smooth. */
+static unsigned page_clock_ms(void)
+{
+    static unsigned long long t0;
+    unsigned long long per_ms = uno_native_tsc_per_us() * 1000ull, now;
+    if (!per_ms) return 0;
+    now = uno_native_rdtsc();
+    if (!t0) t0 = now;
+    return (unsigned)((now - t0) / per_ms);
+}
+
+static void run_page_scripts(uw_doc *d)
+{
+    uw_node *n;
+    if (!d) return;
+    g_js_log[0] = 0;
+    if (webjs_page_begin(d) != 0) return;
+    for (n = uw_next_in_order(uw_document(d), uw_document(d)); n;
+         n = uw_next_in_order(n, uw_document(d))) {
+        uw_node *t;
+        const char *src;
+        int len = 0;
+        if (uw_type(n) != UW_NODE_ELEMENT) continue;
+        if (strcmp(uw_tag_name(d, n), "script")) continue;
+        if (uw_attr(d, n, "src")) continue;      /* external: M5b, with the
+                                                  * fetch queue in front */
+        t = uw_first_child(n);
+        src = t ? uw_text(t, &len) : NULL;
+        if (src && len > 0)
+            webjs_run(src, len, g_js_log, sizeof g_js_log);
+    }
+    webjs_event(uw_body(d), "load", g_js_log, sizeof g_js_log);
+    webjs_take_dirty();          /* the first layout has not happened yet */
+}
 #endif
 
 static void dom_sync(const char *src)
@@ -278,6 +328,7 @@ static void dom_sync(const char *src)
     g_dom_sig = sig;
 #ifdef UW_ENGINE
     fetch_link_sheets(g_dom);
+    run_page_scripts(g_dom);
 #endif
 }
 
@@ -556,6 +607,14 @@ static void render_uw(const char *src, unoui_rect r, int scroll)
     dom_sync(src);
     if (!g_dom) return;
     sig = g_dom_sig;
+    /* Script that changed the tree since the last frame invalidates the
+     * layout exactly like a resize does - without this a DOM change is
+     * computed and then never drawn. The timer pump runs first so a
+     * setTimeout that mutates is picked up in the SAME frame. */
+    if (webjs_page_active()) {
+        webjs_pump(page_clock_ms(), g_js_log, sizeof g_js_log);
+        if (webjs_take_dirty()) g_uw_sig = 0;
+    }
     if (sig != g_uw_sig || avail != g_uw_w) {
         memset(&m, 0, sizeof m);
         m.text_width = uwm_width;
@@ -891,6 +950,15 @@ static int ci(char c){ return (c>='A'&&c<='Z') ? c+32 : c; }
 static int tag_at(const char *p, const char *name)   /* case-insensitive "<name" */
 { while (*name){ if (ci(*p)!=*name) return 0; p++; name++; } return 1; }
 
+/* The pre-DOM script path, for the FLOW-PAINTER build only. It rewrites the
+ * source text, replacing each <script> with its document.write output, which
+ * is all a renderer without a DOM can do.
+ *
+ * The ENGINE build has a real DOM, so it runs scripts against it instead
+ * (run_page_scripts below) - that is M5, and it is why this whole function
+ * is compiled out there rather than left to fight with the live bindings
+ * over who owns <script>. */
+#ifndef UW_ENGINE
 static void js_expand(char *doc)
 {
     static char out[DOC_MAX];
@@ -933,6 +1001,7 @@ static void js_expand(char *doc)
     }
     memcpy(doc, out, (size_t)oi+1);
 }
+#endif /* !UW_ENGINE */
 
 /* ---- the start page's list ----------------------------------------------- */
 static void refresh_files(void)
@@ -1152,7 +1221,11 @@ static void doc_set(btab *t, const char *src, int html)
     if (!d) return;
     sput(d, DOC_MAX, src);
     t->is_html = html;
+#ifndef UW_ENGINE
     if (html) js_expand(d);
+#else
+    (void)html;                  /* the engine build runs scripts on the DOM */
+#endif
 }
 
 static void doc_error(btab *t, const char *what, const char *why)
@@ -1261,7 +1334,9 @@ static void load_loc(btab *t, const char *loc)
         if (n < 0) { doc_error(t, name, "no volume carries that file"); return; }
         d[n] = 0;
         t->is_html = name_is_html(name);
+#ifndef UW_ENGINE
         if (t->is_html) js_expand(d);
+#endif
         return;
     }
 
@@ -1279,7 +1354,9 @@ static void load_loc(btab *t, const char *loc)
         t->is_html = 1;
         if (q >= 3 && !strncmp(loc+q-3, ".md", 3)) t->is_html = 0;
         else if (q >= 4 && !strncmp(loc+q-4, ".txt", 4)) t->is_html = 0;
+#ifndef UW_ENGINE
         if (t->is_html) js_expand(d);
+#endif
         return;
     }
 
@@ -2137,7 +2214,16 @@ static int br_event(struct unoui_widget *w, const void *ev, void *ctx)
              * display list what is under the pointer */
             if (g_dom) {
                 uw_node *n = uw_hit_test(g_dom, e->x - r.x, e->y - r.y + t->scroll);
-                uw_node *a = uw_link_at(g_dom, n);
+                uw_node *a;
+                /* handlers see the click FIRST, as they do in a browser; a
+                 * handler that rewrites the page marks the tree dirty and the
+                 * next frame relays it out */
+                if (n && webjs_page_active() &&
+                    webjs_event(n, "click", g_js_log, sizeof g_js_log)) {
+                    if (webjs_take_dirty()) { g_uw_sig = 0; pc64_shell_dirty(); }
+                    return 1;
+                }
+                a = uw_link_at(g_dom, n);
                 if (a) {
                     const char *href = uw_attr(g_dom, a, "href");
                     if (href && *href && href[0] != '#') {
