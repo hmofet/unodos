@@ -677,6 +677,7 @@ static const char kWelcome[] =
 "## Try it\n\n"
 "- [The HTML sample](uno:sample) - tags, lists, a rule and a code block\n"
 "- [The JavaScript demo](uno:script) - a `<script>` block that writes the page\n"
+"- [The script engine](uno:engine) - run pages on unojs or on QuickJS\n"
 "- [The start page](uno:start) - every document on the local disks\n\n"
 "## Getting around\n\n"
 "- Click a **link** to follow it; `Left` / `Right` step through a page's links "
@@ -1059,6 +1060,29 @@ static void load_loc(btab *t, const char *loc)
     if (!strcmp(loc, "uno:welcome")) { doc_set(t, kWelcome, 0); sput(t->title, TITMAX, "Welcome"); return; }
     if (!strcmp(loc, "uno:sample"))  { doc_set(t, kSample, 1);  sput(t->title, TITMAX, "HTML sample"); return; }
     if (!strcmp(loc, "uno:script"))  { doc_set(t, kScript, 1);  sput(t->title, TITMAX, "JavaScript"); return; }
+
+    /* uno:engine - the JS engine switch. Plain links carry the action so it
+     * works with the keyboard link-walker like every other internal page;
+     * the switch applies to every <script> run from then on. */
+    if (!strcmp(loc, "uno:engine") ||
+        !strcmp(loc, "uno:engine/unojs") || !strcmp(loc, "uno:engine/quickjs")) {
+        char pg[640], *p = pg, *end = pg + sizeof pg;
+        if (!strcmp(loc, "uno:engine/unojs"))   js_engine_set(JS_ENGINE_UNOJS);
+        if (!strcmp(loc, "uno:engine/quickjs")) js_engine_set(JS_ENGINE_QUICKJS);
+        p = sapp(p, end, "<h1>Script engine</h1><p>Pages' <code>&lt;script&gt;</code> "
+                         "blocks are running on <b>");
+        p = sapp(p, end, js_engine_name(js_engine_get()));
+        p = sapp(p, end, "</b>.</p><ul><li><a href='uno:engine/unojs'>unojs</a> - "
+                         "the UnoDOS engine (the default)</li>"
+                         "<li><a href='uno:engine/quickjs'>quickjs</a> - the vendored "
+                         "quickjs-ng, full modern JavaScript</li></ul>"
+                         "<hr><p>Try each on <a href='uno:script'>the JavaScript demo"
+                         "</a>. The choice lasts until the browser closes.</p>");
+        (void)p;
+        doc_set(t, pg, 1);
+        sput(t->title, TITMAX, "Script engine");
+        return;
+    }
 
     if (!strncmp(loc, "file:", 5) || !strncmp(loc, "path:", 5)) {
         char *d = tab_doc(t);
