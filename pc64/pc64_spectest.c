@@ -363,6 +363,29 @@ static void test_js(void)
      * arena off its base pointer - just require survival + a result or error */
     { int r = js_run("((((((1+1))))))", out, sizeof out, log, sizeof log);
       (void)r; OK("S-JS-06"); }
+
+    /* S-JS-10..13: the QUICKJS engine behind the same js_run dispatch (js.h).
+     * In-OS this is the first time the vendored engine runs on the kernel's
+     * own allocator/clock, so assert real behaviour, then always switch back:
+     * the engine choice is process-global and later suites assume unojs. */
+    js_engine_set(JS_ENGINE_QUICKJS);
+    /* the sinks APPEND by contract (a page's blocks accumulate), and these
+     * four assert exact content - so empty the buffers per check, which the
+     * rc-only checks above never needed to */
+    out[0] = 0; log[0] = 0;
+    { int r = js_run("document.write(2+3*4)", out, sizeof out, log, sizeof log);
+      CHECK("S-JS-10", r == 0 && !strcmp(out, "14")); }
+    out[0] = 0; log[0] = 0;
+    { int r = js_run("document.write(JSON.stringify({a:[1,2]}))",
+                     out, sizeof out, log, sizeof log);
+      CHECK("S-JS-11", r == 0 && !strcmp(out, "{\"a\":[1,2]}")); }
+    out[0] = 0; log[0] = 0;
+    { int r = js_run("2+*", out, sizeof out, log, sizeof log);
+      CHECK("S-JS-12", r == 1); }
+    out[0] = 0; log[0] = 0;
+    { int r = js_run("function r(){return r()} r()", out, sizeof out, log, sizeof log);
+      CHECK("S-JS-13", r == 2); }          /* stack guard, not a kernel fault */
+    js_engine_set(JS_ENGINE_UNOJS);
 }
 
 /* ===================================================================== UNOUI */
