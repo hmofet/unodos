@@ -660,7 +660,22 @@ static unoui_action key_event(unoui_ui *ui, const unoui_event *ev)
     unoui_widget *w;
     int ext = (ev->mods & UI_MOD_SHIFT) != 0;
 
-    if (ev->key == UI_KEY_ESC) { close_popup(ui); return NO_ACT; }
+    /* Esc: a focused CANVAS gets first refusal. It used to be swallowed here
+     * unconditionally, which meant a canvas app could never use Esc for its
+     * own dismissable state - the browser's find bar opened and could not be
+     * closed. The canvas's return value is what decides; only when it
+     * declines does Esc keep its old meaning of "close the popup".
+     * (canvas_forward below cannot serve here: it reports whether it
+     * FORWARDED, not whether the app consumed.) */
+    if (ev->key == UI_KEY_ESC) {
+        if (ui->focus_win >= 0 && ui->focus_wi >= 0) {
+            unoui_widget *cw = &ui->win[ui->focus_win]->w[ui->focus_wi];
+            if (cw->kind == UI_CANVAS && cw->canvas && cw->canvas->event &&
+                cw->canvas->event(cw, ev, cw->canvas->ctx))
+                return NO_ACT;
+        }
+        close_popup(ui); return NO_ACT;
+    }
     if (ev->key == UI_KEY_TAB) { focus_step(ui, ext ? -1 : 1); return NO_ACT; }
     if (ui->focus_win < 0 || ui->focus_wi < 0) return NO_ACT;
     if (canvas_forward(ui, ev)) return NO_ACT;   /* a focused canvas gets keys */

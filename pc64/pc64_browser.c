@@ -87,6 +87,50 @@ static int link_add(const char *s, int len)
     return g_nhref++;
 }
 
+/* ---- find in page ---------------------------------------------------------
+ * Matches are collected the same way links are: as the page PAINTS, because
+ * the painter is the only thing that knows where a word ends up. That keeps
+ * one geometry source for finding, highlighting and scrolling-to, and it
+ * means find works on whatever the renderer drew rather than on a second,
+ * possibly disagreeing, pass over the source text.
+ *
+ * The engine path collects from the display list instead (same rects, same
+ * document coordinates), so both renderers answer Ctrl-F. */
+#define FIND_MAX  128
+#define FIND_TEXT 64
+static char g_find[FIND_TEXT];      /* the needle; empty = find is off      */
+static int  g_find_on;              /* the find bar has the keyboard        */
+static blinkrect g_findhit[FIND_MAX];
+static int  g_nfind, g_find_sel;
+static int  g_find_collect;         /* 1 while a paint pass is collecting   */
+
+/* ASCII-caseless substring: a find that only matched the user's exact case
+ * would be useless on prose. */
+static int find_in(const char *hay, const char *needle)
+{
+    int nl = (int)strlen(needle), i, k;
+    if (!nl) return 0;
+    for (i = 0; hay[i]; i++) {
+        for (k = 0; k < nl; k++) {
+            char a = hay[i + k], b = needle[k];
+            if (a >= 'A' && a <= 'Z') a += 32;
+            if (b >= 'A' && b <= 'Z') b += 32;
+            if (!a || a != b) break;
+        }
+        if (k == nl) return 1;
+    }
+    return 0;
+}
+
+static void find_add(int x, int y, int w, int h)
+{
+    if (g_nfind >= FIND_MAX) return;
+    g_findhit[g_nfind].x = (short)x; g_findhit[g_nfind].y = (short)y;
+    g_findhit[g_nfind].w = (short)w; g_findhit[g_nfind].h = (short)h;
+    g_findhit[g_nfind].href = -1;
+    g_nfind++;
+}
+
 static void fl_reset(unoui_rect r, int scroll, int pad)
 {
     fleft = r.x + pad; fright = r.x + r.w - pad;
@@ -120,10 +164,23 @@ static void fl_word(const char *buf, int indent, bstyle *s)
         L->x = (short)fx; L->y = (short)fy;
         L->w = (short)ww; L->h = (short)lh; L->href = (short)g_link_cur;
     }
+    if (g_find_collect && g_find[0] && find_in(buf, g_find))
+        find_add(fx, fy, ww, lh);
     dy = fy - fscroll;
     if (dy > fclip.y - lh && dy < fclip.y + fclip.h) {          /* visible row */
         if (g_link_cur >= 0 && g_link_cur == g_link_sel)         /* selected */
             fb_fill_rect(fx - 1, dy - 1, ww + 2, ch + 2, FB_RGB(215, 228, 250));
+        /* a match is painted UNDER the word, and the current one is the
+         * loud colour - a page with forty hits is unreadable if they all
+         * shout equally */
+        if (g_find[0] && find_in(buf, g_find)) {
+            int hit = -1, i;
+            for (i = 0; i < g_nfind; i++)
+                if (g_findhit[i].x == (short)fx && g_findhit[i].y == (short)fy) { hit = i; break; }
+            fb_fill_rect(fx - 1, dy - 1, ww + 2, ch + 2,
+                         hit == g_find_sel ? FB_RGB(255, 190, 60)
+                                           : FB_RGB(255, 240, 150));
+        }
         if (s->mono) fb_fill_rect(fx - 1, dy - 1, ww + 2, ch + 2, PG_CODEBG);
         uno_font_draw_styled(slot, px, st, fx, dy, buf, s->color, -1);
         if (s->under) { int bl = uno_font_baseline_px(slot, px);
@@ -675,6 +732,16 @@ static void render_uw(const char *src, unoui_rect r, int scroll)
             int slot = uw_slot(c->style), st = uw_fstyle(c->style);
             memcpy(buf, c->text, (size_t)k);
             buf[k] = 0;
+            /* find, from the display list: the same rects the flow painter
+             * records, in the same document coordinates, so Ctrl-F behaves
+             * identically whichever renderer drew the page */
+            if (g_find[0] && find_in(buf, g_find)) {
+                int hit = g_nfind;
+                if (g_find_collect) find_add(c->x, c->y, c->w, c->h);
+                fb_fill_rect(x - 1, y - 1, c->w + 2, c->h + 2,
+                             hit == g_find_sel ? FB_RGB(255, 190, 60)
+                                               : FB_RGB(255, 240, 150));
+            }
             uno_font_draw_styled(slot, c->style->font_size, st, x, y, buf, col, -1);
             if (c->style->underline) {
                 int bl = uno_font_baseline_px(slot, c->style->font_size);
@@ -1702,7 +1769,54 @@ static void draw_status(unoui_rect r)
     const char *s = g_hint[0] ? g_hint : g_status;
     fb_fill_rect(b.x, b.y, b.w, b.h, CH_FACE);
     fb_hline(b.x, b.y, b.w, CH_EDGE);
+    /* Find takes over the status band rather than opening a floating bar:
+     * the band is already there, already the width of the window, and a
+     * find bar that covers page text is a find bar that hides the thing you
+     * were looking for. */
+    if (g_find_on || g_find[0]) {
+        char line[160];
+        int n = 0;
+        const char *lbl = "Find: ";
+        while (*lbl && n < (int)sizeof line - 1) line[n++] = *lbl++;
+        {   const char *q = g_find;
+            while (*q && n < (int)sizeof line - 1) line[n++] = *q++; }
+        if (g_find_on && n < (int)sizeof line - 1) line[n++] = '_';
+        line[n] = 0;
+        fb_text(b.x + 6, b.y + 2, line, CH_TEXT, -1);
+        {   char cnt[48];
+            int k = 0, i, tot = g_nfind, cur = g_nfind ? g_find_sel + 1 : 0;
+            const char *w;
+            if (!g_find[0]) w = "type to search   Esc closes";
+            else if (!tot)  w = "no matches   Esc closes";
+            else {
+                char num[12];
+                w = 0;
+                for (i = 0; i < 2; i++) {
+                    int v = i ? tot : cur, j = 0;
+                    if (!v) num[j++] = '0';
+                    while (v) { num[j++] = (char)('0' + v % 10); v /= 10; }
+                    while (j) cnt[k++] = num[--j];
+                    if (!i) { cnt[k++] = ' '; cnt[k++] = 'o'; cnt[k++] = 'f'; cnt[k++] = ' '; }
+                }
+                {   const char *t = "   Enter next   Esc closes";
+                    while (*t && k < (int)sizeof cnt - 1) cnt[k++] = *t++; }
+                cnt[k] = 0;
+            }
+            fb_text(b.x + b.w - 260, b.y + 2, w ? w : cnt, CH_DIM, -1); }
+        return;
+    }
     fb_text(b.x + 6, b.y + 2, s, g_hint[0] ? PG_LINK : CH_DIM, -1);
+}
+
+/* Put the selected match on screen. Document coordinates are what both
+ * painters record, so this is the same arithmetic for either. */
+static void find_scroll_to(btab *t, unoui_rect r)
+{
+    int top, h = band_body(r).h;
+    if (g_find_sel < 0 || g_find_sel >= g_nfind) return;
+    top = g_findhit[g_find_sel].y - h / 3;      /* a third down, not flush */
+    if (top < 0) top = 0;
+    t->scroll = top;
 }
 
 static void draw_panel(unoui_rect r)
@@ -1788,8 +1902,19 @@ static void br_draw(struct unoui_widget *w, unoui_rect r, void *ctx)
              * view is still painted (only fully off-screen rows are skipped),
              * so without this the document draws over the toolbar */
             fb_set_clip(body.x, body.y, body.w, body.h);
+            /* Match collection wraps BOTH painters. It used to sit inside
+             * the HTML one, which meant a Markdown page (the welcome page,
+             * every README) highlighted its hits but counted none of them -
+             * the count is what Enter steps through, so find silently did
+             * nothing there. Rebuilt every paint: the painter already walks
+             * every word, and a page changed under script cannot leave a
+             * stale rect pointing at text that moved. */
+            g_nfind = 0;
+            g_find_collect = g_find[0] != 0;
             if (t->is_html) render_html(t->doc, body, t->scroll);
             else            render_md(t->doc, body, t->scroll);
+            g_find_collect = 0;
+            if (g_find_sel >= g_nfind) g_find_sel = g_nfind ? g_nfind - 1 : 0;
             fb_set_clip(r.x, r.y, r.w, r.h);
             /* track content height for scroll clamping */
             { int total = (fy + flh) - body.y;
@@ -1961,6 +2086,48 @@ static int br_event(struct unoui_widget *w, const void *ev, void *ctx)
     btab *t = &g_tab[g_cur];
     unoui_rect r = g_rect;
     (void)w; (void)ctx;
+
+    /* ---- the find bar owns the keyboard while it is open ----
+     * Ahead of the address bar because Ctrl-F is what put it there; a page
+     * scroll or a link walk arriving mid-search would be the wrong answer to
+     * every key. Each edit resets the selection to the first hit, so typing
+     * more characters always lands you at the top of the new result set. */
+    if (g_find_on) {
+        if (e->kind == UI_EV_CHAR && e->ch >= 32 && e->ch < 127) {
+            int n = (int)strlen(g_find);
+            if (n < FIND_TEXT - 1) { g_find[n] = (char)e->ch; g_find[n + 1] = 0; }
+            g_find_sel = 0;
+            return 1;
+        }
+        if (e->kind == UI_EV_KEY) {
+            switch (e->key) {
+            case UI_KEY_BACKSPACE: {
+                int n = (int)strlen(g_find);
+                if (n) g_find[n - 1] = 0;
+                g_find_sel = 0;
+                return 1; }
+            case UI_KEY_ESC:
+                g_find_on = 0;
+                g_find[0] = 0;              /* closing clears the highlights */
+                g_nfind = 0;
+                return 1;
+            case UI_KEY_ENTER:
+            case UI_KEY_DOWN:
+                if (g_nfind) {
+                    g_find_sel = (g_find_sel + 1) % g_nfind;
+                    find_scroll_to(t, r);
+                }
+                return 1;
+            case UI_KEY_UP:
+                if (g_nfind) {
+                    g_find_sel = (g_find_sel + g_nfind - 1) % g_nfind;
+                    find_scroll_to(t, r);
+                }
+                return 1;
+            default: return 1;              /* swallow the rest while open */
+            }
+        }
+    }
 
     /* ---- the address bar owns the keyboard while it has focus ---- */
     if (g_addr_focus) {
@@ -2250,6 +2417,10 @@ int pc64_browser_key(int uni, int scan, int ctrl)
     if (scan == 0x0F) { load_loc(t, t->loc); return 1; }            /* F5 */
     if (!ctrl) return 0;
     switch (uni) {
+    case 'f': case 'F':                       /* find in page */
+        g_panel = PANEL_NONE;
+        g_find_on = 1;
+        return 1;
     case 'l': case 'L': g_panel = PANEL_NONE; addr_focus(1);
                         g_addr_caret = (int)strlen(g_addr); return 1;
     case 't': case 'T': g_panel = PANEL_NONE; tab_new("uno:start"); return 1;
