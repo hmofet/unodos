@@ -63,3 +63,9 @@ $CC $FLAGS -Wall -Wextra -c pc64_cookie.c -o build/qjs_t_cookie.o
 $CC $FLAGS -I. -c quickjs/test/cookie_test.c -o build/qjs_t_cmain.o
 $CC -o build/cookie_test.exe build/qjs_t_cmain.o build/qjs_t_cookie.o
 echo "built build/cookie_test.exe"
+
+# the response cache: same shape as the jar - pure C, its own tiny link
+$CC $FLAGS -Wall -Wextra -c pc64_cache.c -o build/qjs_t_cache.o
+$CC $FLAGS -I. -c quickjs/test/cache_test.c -o build/qjs_t_camain.o
+$CC -o build/cache_test.exe build/qjs_t_camain.o build/qjs_t_cache.o
+echo "built build/cache_test.exe"

@@ -1,6 +1,7 @@
 /* pc64_http - HTTP/1.0 GET for the browser. See pc64_http.h. */
 #include "pc64_http.h"
 #include "pc64_cookie.h"
+#include "pc64_cache.h"
 #include "net.h"
 #include "e1000.h"
 #include "e1000e.h"       /* Intel e1000e GbE (82574 / I217/I218/I219 LOM) */
@@ -303,7 +304,8 @@ static int http_header(const char *raw, int rawlen, const char *name, char *out,
  * pc64_http_get (body length >=0, or a negative error). */
 #define HTTP_REDIRECT (-100)
 static int http_get_once(const char *url, char *body, int bodymax,
-                         char *status, int statusmax, char *redir, int redirmax)
+                         char *status, int statusmax, char *redir, int redirmax,
+                         pc64_cache_ctl *ctl)
 {
     char host[128], path[512];
     unsigned char ip[4];
@@ -412,6 +414,27 @@ static int http_get_once(const char *url, char *body, int bodymax,
             pc64_cookie_set(host, path, cv);
         } }
 
+      /* Cache-Control, for the caller's cache decision. Parsed here because
+       * this is the only place with the headers in hand - the body is all
+       * that survives the return. */
+      if (ctl) {
+          char cc[160];
+          ctl->no_store = 0;
+          ctl->max_age = -1;
+          if (http_status_code(raw) != 200) ctl->no_store = 1;   /* only 200 */
+          if (http_header(raw, rn, "cache-control", cc, sizeof cc)) {
+              int k;
+              for (k = 0; cc[k]; k++) if (cc[k] >= 'A' && cc[k] <= 'Z') cc[k] += 32;
+              if (strstr(cc, "no-store") || strstr(cc, "no-cache") ||
+                  strstr(cc, "private")) ctl->no_store = 1;
+              {   const char *m = strstr(cc, "max-age");
+                  if (m) { long v = 0; int any = 0;
+                           m += 7; while (*m == ' ' || *m == '=') m++;
+                           while (*m >= '0' && *m <= '9') { v = v*10 + (*m++ - '0'); any = 1; }
+                           if (any) ctl->max_age = v; } }
+          }
+      }
+
       /* follow a redirect: 3xx + Location -> resolve to an absolute URL. Handles
        * absolute Locations, root-relative ("/path"), and http<->https upgrades
        * (google.com -> www.google.com, apex -> www, http -> https all land here). */
@@ -453,11 +476,23 @@ static int http_get_once(const char *url, char *body, int bodymax,
 int pc64_http_get(const char *url, char *body, int bodymax, char *status, int statusmax)
 {
     char cur[512], nxt[512];
+    pc64_cache_ctl ctl;
     int hop, n;
+    /* a fresh copy short-circuits the whole DNS + TCP + TLS round, which on
+     * this box is seconds rather than milliseconds */
+    n = pc64_cache_get(url, body, bodymax, status, statusmax);
+    if (n >= 0) return n;
+    memset(&ctl, 0, sizeof ctl);
+    ctl.max_age = -1;
     strncpy(cur, url, sizeof cur - 1); cur[sizeof cur - 1] = 0;
     for (hop = 0; hop < 6; hop++) {
-        n = http_get_once(cur, body, bodymax, status, statusmax, nxt, sizeof nxt);
-        if (n != HTTP_REDIRECT) return n;
+        n = http_get_once(cur, body, bodymax, status, statusmax, nxt, sizeof nxt, &ctl);
+        if (n != HTTP_REDIRECT) {
+            /* cache under the ORIGINAL url, not the last hop: that is what
+             * the next visit will ask for */
+            if (n > 0) pc64_cache_put(url, body, n, status, &ctl);
+            return n;
+        }
         strncpy(cur, nxt, sizeof cur - 1); cur[sizeof cur - 1] = 0;
     }
     if (statusmax > 0) strncpy(status, "Too many redirects", statusmax-1);
