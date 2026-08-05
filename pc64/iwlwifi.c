@@ -2450,6 +2450,7 @@ static void tx_start_gen1(void)
 #define MC_MAC_CONFIG   0x08
 #define MC_LINK_CONFIG  0x09
 #define MC_STA_CONFIG   0x0a
+#define MC_STA_REMOVE   0x0c            /* STA_REMOVE_CMD, { u32 sta_id } */
 #define DP_SEC_KEY      0x18            /* DATA_PATH SEC_KEY_CMD (MLD key path) */
 
 #define FW_CTXT_INVALID 0xFFFFFFFFu
@@ -3022,6 +3023,30 @@ static void mld_sta_cfg(const u8 addr[6], int aid, int authorized)
                       AP_STA_ID, MLD_LINK_ID, aid, authorized,
                       addr[0],addr[1],addr[2],addr[3],addr[4],addr[5], (int)sizeof c);
     send_cmd(GRP_MACCONF, MC_STA_CONFIG, 0, &c, (int)sizeof c);
+    wait_cmd_done(100);
+}
+
+/* STA_REMOVE_CMD (MAC_CONF 0x0c) — drop the station entirely. `{ u32 sta_id }`
+ * and nothing else (iwl_remove_sta_cmd, REMOVE_STA_API_S_VER_1).
+ *
+ * METAL, 2026-08-05, SURFGO: re-sending STA_CONFIG_CMD with a different peer
+ * updates the station enough for TRANSMIT - the AP answers our CCMP-encrypted
+ * DHCP DISCOVER, one 376-byte reply per retransmission - and not enough for
+ * RECEIVE. Every one of those replies arrives with the protected bit set, a
+ * KeyID-0 CCMP header intact, and an RX descriptor reporting SEC=UNKNOWN with
+ * DECRYPTED clear: the hardware found no key to apply to a frame encrypted
+ * with the very key it is transmitting under.
+ *
+ * The reference driver never re-points a live station. Every association
+ * removes the station and adds a fresh one, so the address the hardware
+ * matches received frames against is written at ADD time and never mutated.
+ * That is what this exists for. */
+static void mld_sta_remove(void)
+{
+    struct __attribute__((packed)) { u32 sta_id; } c;
+    c.sta_id = (u32)AP_STA_ID;
+    uno_dbg_net_trace("wifi: STA_REMOVE sta=%d len=%d", AP_STA_ID, (int)sizeof c);
+    send_cmd(GRP_MACCONF, MC_STA_REMOVE, 0, &c, (int)sizeof c);
     wait_cmd_done(100);
 }
 
@@ -4243,9 +4268,23 @@ static int retarget_ap(int new_chan)
     }
     g_joined = 0; g_wpa_active = 0;                /* leaving the old BSS */
     g_link_lost_reason = -1;                       /* a new attempt, not the old failure */
-    mld_sta_cfg(g_bssid, 0, 0);                    /* the new peer */
-    if (r32(CSR_MSIX_HW_INT_CAUSES_AD)) return -1;
+    /* REMOVE the station and ADD a fresh one, rather than re-pointing the live
+     * one at the next peer. Re-pointing left the hardware transmitting happily
+     * under the new association's key while decrypting nothing it received
+     * (metal, SURFGO 2026-08-05: SEC=UNKNOWN on every reply the AP sent) -
+     * the receive-side address match is written when a station is ADDED.
+     *
+     * Order is the reference driver's teardown order: the TX queue belongs to
+     * the station, so it is released while its owner still exists, and only
+     * then is the station dropped. */
     mvm_txq_free(AP_STA_ID, 15);
+    mld_sta_remove();
+    if (r32(CSR_MSIX_HW_INT_CAUSES_AD)) {
+        uno_dbg_net_trace("wifi: retarget: STA_REMOVE asserted the fw - only a reboot recovers");
+        return -1;
+    }
+    mld_sta_cfg(g_bssid, 0, 0);                    /* a NEW station for the new peer */
+    if (r32(CSR_MSIX_HW_INT_CAUSES_AD)) return -1;
     q = mvm_txq_alloc(AP_STA_ID, 15, TXQ_N);
     uno_dbg_net_trace("wifi: retarget: fresh TX queue -> qid=%d csr2808=%08x",
                       q, r32(CSR_MSIX_HW_INT_CAUSES_AD));
