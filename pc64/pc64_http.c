@@ -354,6 +354,15 @@ static int dechunk(char *body, int len)
     }
 }
 
+/* ---- progressive delivery -------------------------------------------------
+ * A page used to appear only when its last byte landed. The transport now
+ * offers the body AS IT ARRIVES, throttled, so the browser can draw what it
+ * has. The transport does not know what a document is - it hands over bytes
+ * and lets the embedder decide what they are worth. */
+static pc64_http_progress_fn g_progress;
+
+void pc64_http_on_progress(pc64_http_progress_fn fn) { g_progress = fn; }
+
 /* ---- the kept-alive connection --------------------------------------------
  * A page is a document plus its images and stylesheets, and each of those
  * used to cost a fresh DNS + TCP + TLS round to the SAME server. Holding one
@@ -527,6 +536,7 @@ static int http_get_once(const char *url, char *body, int bodymax,
     { static char raw[49152];
       int rn = 0, idle = 0;
       int split = -1;                 /* body offset, once headers are in    */
+      int next_report = 0;            /* progressive-delivery throttle       */
       long clen = -1;                 /* Content-Length, -1 = absent         */
       int chunked = 0, done = 0;
       while (rn < (int)sizeof(raw)-1 && !done) {
@@ -561,6 +571,15 @@ static int http_get_once(const char *url, char *body, int bodymax,
                       if (strstr(v, "chunked")) chunked = 1;
                   }
               }
+          }
+          /* offer what has arrived, every ~6 KB. Chunked bodies are not
+           * offered: they are still encoded at this point, and handing the
+           * embedder chunk-size lines to render would be worse than making
+           * it wait. */
+          if (split >= 0 && g_progress && !chunked && rn - split > next_report) {
+              raw[rn] = 0;
+              g_progress(raw + split, rn - split, clen);
+              next_report = (rn - split) + 6144;
           }
           if (split >= 0) {
               if (chunked) {
