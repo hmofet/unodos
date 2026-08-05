@@ -1,5 +1,6 @@
 /* pc64_http - HTTP/1.0 GET for the browser. See pc64_http.h. */
 #include "pc64_http.h"
+#include "pc64_cookie.h"
 #include "net.h"
 #include "e1000.h"
 #include "e1000e.h"       /* Intel e1000e GbE (82574 / I217/I218/I219 LOM) */
@@ -230,6 +231,41 @@ static int http_status_code(const char *raw)
 /* find a header value by name (case-insensitive) within the header block of a
  * raw response. Stops at the blank line so it never matches inside the body.
  * Returns 1 and fills `out` (NUL-terminated, trimmed) if found, else 0. */
+/* The nth (0-based) occurrence of a header. Set-Cookie is the reason this
+ * exists: a response commonly carries several, and a "find the header"
+ * helper that stops at the first would quietly drop all but one. */
+static int http_header_nth(const char *raw, int rawlen, const char *name,
+                           int nth, char *out, int outmax)
+{
+    int nl = (int)strlen(name), seen = 0;
+    const char *e = raw + rawlen, *ln = raw;
+    while (ln < e && *ln != '\n') ln++;               /* skip the status line */
+    if (ln < e) ln++;
+    for (; ln < e; ) {
+        const char *le = ln; while (le < e && *le != '\n') le++;
+        {   int ll = (int)(le - ln), k, m = 1;
+            if (ll == 0 || (ll == 1 && ln[0] == '\r')) break;    /* end of headers */
+            if (ll > nl && ln[nl] == ':') {
+                for (k = 0; k < nl; k++) {
+                    char a = ln[k], b = name[k];
+                    if (a >= 'A' && a <= 'Z') a += 32;
+                    if (b >= 'A' && b <= 'Z') b += 32;
+                    if (a != b) { m = 0; break; }
+                }
+                if (m && seen++ == nth) {
+                    const char *v = ln + nl + 1, *ve = le; int o = 0;
+                    while (v < ve && (*v == ' ' || *v == '\t')) v++;
+                    while (ve > v && (ve[-1] == '\r' || ve[-1] == ' ' || ve[-1] == '\t')) ve--;
+                    while (v < ve && o < outmax - 1) out[o++] = *v++;
+                    out[o] = 0;
+                    return 1;
+                }
+            } }
+        ln = le + 1;
+    }
+    return 0;
+}
+
 static int http_header(const char *raw, int rawlen, const char *name, char *out, int outmax)
 {
     int nl = (int)strlen(name);
@@ -318,13 +354,21 @@ static int http_get_once(const char *url, char *body, int bodymax,
     }
 
     /* request */
-    { char req[1024]; int rn = 0;
-      const char *a = "GET ", *b = " HTTP/1.0\r\nHost: ", *c = "\r\nUser-Agent: UnoDOS-pc64\r\nConnection: close\r\nAccept: text/html,text/markdown,text/plain\r\n\r\n";
+    { char req[2048]; int rn = 0;
+      char ck[768];
+      const char *a = "GET ", *b = " HTTP/1.0\r\nHost: ", *c = "\r\nUser-Agent: UnoDOS-pc64\r\nConnection: close\r\nAccept: text/html,text/markdown,text/plain\r\n";
       /* every append is bounds-checked against sizeof(req): host/path come from
          the address bar AND from links in untrusted pages, so a crafted long URL
          must not overflow this stack buffer. */
       #define REQ_PUT(s) do { int l=(int)strlen(s); if (rn+l >= (int)sizeof(req)) { if (statusmax) strncpy(status,"URL too long",statusmax-1); if (secure) tls_close(); else net_tcp_close(); return -8; } memcpy(req+rn,(s),l); rn+=l; } while (0)
       REQ_PUT(a); REQ_PUT(path); REQ_PUT(b); REQ_PUT(host); REQ_PUT(c);
+      /* stored cookies for this origin. The jar decides what matches; the
+       * transport only has to hand it enough to decide with - host, path AND
+       * the scheme, since a Secure cookie must never leave over plain HTTP. */
+      if (pc64_cookie_header(host, path, secure, ck, sizeof ck) > 0) {
+          REQ_PUT("Cookie: "); REQ_PUT(ck); REQ_PUT("\r\n");
+      }
+      REQ_PUT("\r\n");                            /* end of headers */
       #undef REQ_PUT
       if (secure) { if (tls_write(req, rn) < 0) { set_tls_err(status, statusmax, "TLS write failed"); tls_close(); return -7; } }
       else        net_tcp_send(req, rn);
@@ -357,6 +401,16 @@ static int http_get_once(const char *url, char *body, int bodymax,
       /* status line */
       if (statusmax > 0) { int j=0; const char *s=raw; while (*s && *s!='\r' && *s!='\n' && j<statusmax-1) status[j++]=*s++; status[j]=0;
                            if (j==0) strncpy(status,"No response",statusmax-1); }
+
+      /* Set-Cookie, every occurrence. This runs BEFORE the redirect branch
+       * below on purpose: a sign-in almost always answers 302 + Set-Cookie,
+       * and returning at the redirect first would drop the very cookie the
+       * redirect exists to deliver. */
+      { char cv[768]; int occ;
+        for (occ = 0; occ < 8; occ++) {
+            if (!http_header_nth(raw, rn, "set-cookie", occ, cv, sizeof cv)) break;
+            pc64_cookie_set(host, path, cv);
+        } }
 
       /* follow a redirect: 3xx + Location -> resolve to an absolute URL. Handles
        * absolute Locations, root-relative ("/path"), and http<->https upgrades

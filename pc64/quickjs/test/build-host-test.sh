@@ -57,3 +57,9 @@ $CC -o build/webjs_test.exe build/qjs_t_wmain.o build/qjs_t_webjs.o \
     build/qjs_t_uw_dom.o build/qjs_t_uw_html.o build/qjs_t_uw_css.o \
     build/qjs_t_uw_style.o build/qjs_t_uw_layout.o
 echo "built build/webjs_test.exe"
+
+# the cookie jar: pure C, no engine - its own tiny link
+$CC $FLAGS -Wall -Wextra -c pc64_cookie.c -o build/qjs_t_cookie.o
+$CC $FLAGS -I. -c quickjs/test/cookie_test.c -o build/qjs_t_cmain.o
+$CC -o build/cookie_test.exe build/qjs_t_cmain.o build/qjs_t_cookie.o
+echo "built build/cookie_test.exe"

@@ -36,6 +36,10 @@ step "quickjs host tests"
 sh quickjs/test/build-host-test.sh >/dev/null 2>&1
 ./build/qjs_host_test.exe | tail -1
 ./build/qjs_dispatch_test.exe | tail -1
+./build/webjs_test.exe | tail -1
+
+step "cookie jar tests"
+./build/cookie_test.exe | tail -1
 
 if [ "${QUICK:-0}" != "0" ]; then
     printf '\nQUICK=1: skipping the QEMU conformance run\n'
