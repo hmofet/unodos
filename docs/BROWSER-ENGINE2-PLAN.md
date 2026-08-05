@@ -78,50 +78,50 @@ get the same bindings behind the same dispatch), per-frame yielding via the
 interrupt handler (the browser blocks on js_run today either way), ES
 module loading over pc64_http.
 
-## 4. Phase 2 - NetSurf as the second layout engine (PLANNED)
+## 4. Phase 2 - real CSS under unoweb's layout (PLANNED; licence-reshaped)
 
-Goal: real-page CSS + layout quality behind the existing painter switch,
-keeping the browser chrome, tabs, history, pc64_http and the fb untouched.
-NetSurf is the right donor because it is C99, single-threaded around a
-cooperative scheduler, and its rendering core is DESIGNED for pluggable
-frontends (the framebuffer frontend is how it shipped on RISC OS-class
-systems).
+**Licence ruling (user, 2026-08-05): no GPL code in the tree; MIT is ok.**
+That resolves the old NS0 decision point immediately: the NetSurf *browser
+core* (the layout engine proper) is GPLv2 - **excluded**. The NetSurf
+project's *libraries* are MIT - eligible. So phase 2 is no longer "NetSurf
+as a third painter"; it is **the MIT libraries upgrading unoweb in place**,
+which the old plan already named as most of the visible quality win at a
+fraction of the integration. unoweb keeps DOM, HTML parsing, layout and
+paint ownership; the browser seams don't change.
 
-What gets vendored (all NetSurf-project C libraries): `libparserutils`,
-`libwapcaplet`, `libhubbub` (HTML), `libdom`, `libcss`, `libnsutils`,
-`libnsfb` only as reference (we plot straight to fb.h). Plus the netsurf
-core (content/handlers/html = the layout engine proper).
+What gets vendored (each MIT, verify per-release with
+`tools/check_licenses.py` + licence roster entries like unomedia's):
+`libparserutils`, `libwapcaplet`, `libcss`. (`libhubbub`/`libdom` are also
+MIT but unoweb already owns an HTML parser and DOM - only pull them if
+uw_html's gaps ever justify it.)
 
 Branch series (each lands independently, AGENTS.md-shaped):
 
-- **NS0 `netsurf-vendor`**: vendor drop + VENDOR.md provenance (pin one
-  release), no build wiring. Licence roster entries (GPLv2 with the
-  MIT-licensed libs - CHECK the exact mix per component before shipping it
-  in a build; the libs are MIT, the netsurf core is GPLv2+link exception
-  territory. If the core's licence is unacceptable for the tree, the
-  fallback is libcss+libdom under unoweb's own layout - decide at NS0).
-- **NS1 `netsurf-libs`**: the support libs freestanding under the QJSCF
-  pattern (their own compat dir where needed) + a host test running
-  libcss's selection engine on real stylesheets. These libs alone already
-  let unoweb upgrade its cascade (libcss consumes DOM-ish nodes through
-  vtables, no NetSurf core needed).
-- **NS2 `netsurf-core-host`**: netsurf core compiled hosted with a stub
-  frontend: feed HTML bytes, get plot calls, assert against golden pages.
-  This is where the effort risk lives; timebox it before committing to NS3.
-- **NS3 `netsurf-fe`**: the UnoDOS frontend - plotters over fb.h, fetcher
-  over pc64_http, scheduler pumped from the browser tick, images via
-  unomedia behind its content handlers.
-- **NS4 `netsurf-wire`**: third entry in the painter switch (compile-time
-  `BROWSER_ENGINE=ns` first, runtime toggle on the uno:engine page once
-  stable) + SPECTEST area.
+- **CS0 `libcss-vendor`**: vendor drop + VENDOR.md provenance (pin one
+  release, record every file's licence header), no build wiring.
+- **CS1 `libcss-port`**: freestanding under the QJSCF pattern (own compat
+  dir; the quickjs VENDOR.md traps apply verbatim - limit macros, implicit
+  decls, warnings-on audit) + a host test running libcss's parser +
+  selection engine over real stylesheets.
+- **CS2 `libcss-cascade`**: libcss behind uw_css/uw_style - libcss consumes
+  DOM nodes through client vtables, so unoweb's DOM feeds it directly and
+  uw_layout consumes its computed styles. Old cascade stays compiled
+  (two-painter rule) behind the existing `BROWSER_ENGINE` switch until the
+  new one has been through real pages.
+- **CS3 `libcss-wire`**: default flip + SPECTEST area + uno:engine page
+  grows a layout section if a runtime toggle is wanted.
 
-Decision points recorded now: (1) NS0 licence check gates the whole shape;
-(2) if NS2's timebox blows, land NS1 anyway - libcss under unoweb is most
-of the visible quality win at a fraction of the integration.
+If real-page layout quality still disappoints after CS3, the remaining gap
+is uw_layout itself (floats, tables, inline-block); that is unoweb-lane
+work on its own plan, not a vendoring question - there is no MIT-licensed
+drop-in layout engine worth taking (Blink/WebKit derivatives are not
+extractable, NetSurf's is GPL, litehtml is C++).
 
 ## 5. How to resume this programme
 
 Read this doc, then `pc64/quickjs/VENDOR.md`, then the claim entries in
-`pc64/UNOAUTOMATE-REQUESTS.md` (2026-08-05). Phase-1 branch `qjs-engine`;
-merge gate = both builds + spectest_qemu green (S-JS-10..13 included) +
-the two host tests. Phase 2 starts at NS0 with the licence check.
+`pc64/UNOAUTOMATE-REQUESTS.md` (2026-08-05). Phase-1 branch `qjs-engine`
+(landed `a67fe2f1`); merge gate = both builds + spectest_qemu green
+(S-JS-10..13 included) + the two host tests. Phase 2 starts at CS0; the
+licence rule (no GPL, MIT ok) is standing - check every vendored file, not
+just the project's top-level LICENSE.
