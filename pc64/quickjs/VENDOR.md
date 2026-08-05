@@ -24,13 +24,18 @@ engine stays unojs). Layout: vendored files at this level, the port layer in
 
 Compiled with the kernel's freestanding flags plus:
 
-    -Iquickjs/compat (FIRST)  -D__wasi__  -U_WIN32 -U_WIN64
+    -Iquickjs/compat (FIRST)  -D__DJGPP  -U_WIN32 -U_WIN64
     -U__MINGW32__ -U__MINGW64__  -Dalloca=__builtin_alloca
     -DJS_NAN_BOXING=0  -w
 
-- `__wasi__` is quickjs-ng's "single-threaded, no OS" personality: no
-  pthreads, no stack-limit probing, plain gettimeofday/clock_gettime. It is
-  exactly what pc64 is, so the vendor code needs no edits.
+- `__DJGPP` is quickjs-ng's "single-threaded, no OS" personality: no
+  pthreads, no atomics, plain gettimeofday - exactly what pc64 is, so the
+  vendor code needs no edits. NOT `__wasi__`, which gates the same three
+  things but ALSO compiles out the C-stack overflow check
+  (update_stack_limit): quickjs recurses the C stack (unojs's VM is
+  heap-based), the kernel runs on the guard-pageless UEFI stack, and a
+  hostile deeply-recursive page must hit the engine's own stack check
+  first. qjsweb.c caps it at 64 KB via JS_SetMaxStackSize.
 - The `-U`s hide mingw's identity: otherwise quickjs takes the `_WIN32`
   paths (winsock2, `_beginthread`, QueryPerformanceCounter).
 - `JS_NAN_BOXING=0` pins the 64-bit JSValue layout. Do NOT drop this: with
