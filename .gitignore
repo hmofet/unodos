@@ -105,3 +105,4 @@ wifi.creds
 
 # uoffice host harness artifacts (regeneratable via pc64/uoffice/build.sh)
 pc64/uoffice/build/
+csslib/test/build/
