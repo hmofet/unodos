@@ -184,6 +184,31 @@ if [ "$1" != "legacy" ]; then
         pc "$CC" $QJSCF -w -c -o "build/qjs_$f.o" "quickjs/$f.c"; OBJS="$OBJS build/qjs_$f.o"
     done
     pc "$CC" $QJSCF -Wall -Wextra $DBGSAN -c -o "build/qjsweb.o" "qjsweb.c"; OBJS="$OBJS build/qjsweb.o"
+    # csslib: the vendored MIT CSS stack + the unoweb bridge - the browser's
+    # second cascade (csslib/VENDOR.md; registered at runtime via
+    # uwx_libcss_register, default stays the built-in cascade until CS3).
+    # The flag set MIRRORS csslib/test/build-host-test.sh - do not let them
+    # drift. Vendored files -w like uACPI; the bridge gets warnings + DBGSAN.
+    CSSCF="-O2 -ffreestanding -fno-stack-protector -fno-stack-check -nostdinc \
+           -I../csslib/compat -Iinclude \
+           -I../csslib/css/include -I../csslib/parserutils/include -I../csslib/wapcaplet/include \
+           -DWITHOUT_ICONV_FILTER -D_ALIGNED= -DNDEBUG ${UNO_EXTRA:-} $DBGDEF"
+    for f in $(find ../csslib/css/src -name '*.c' | sort); do
+        o="build/$(echo "${f#../}" | tr / _ | sed 's/\.c$/.o/')"
+        pc "$CC" $CSSCF -w -I../csslib/css/src -c "$f" -o "$o"; OBJS="$OBJS $o"
+    done
+    for f in $(find ../csslib/parserutils/src -name '*.c' | sort); do
+        o="build/$(echo "${f#../}" | tr / _ | sed 's/\.c$/.o/')"
+        pc "$CC" $CSSCF -w -I../csslib/parserutils/src -c "$f" -o "$o"; OBJS="$OBJS $o"
+    done
+    pc "$CC" $CSSCF -w -c ../csslib/wapcaplet/src/libwapcaplet.c -o build/csslib_wapcaplet.o
+    OBJS="$OBJS build/csslib_wapcaplet.o"
+    pc "$CC" $CSSCF -Wall -Wextra -c ../csslib/css_port.c -o build/csslib_port.o
+    OBJS="$OBJS build/csslib_port.o"
+    pc "$CC" $CSSCF -Wall -Wextra $DBGSAN -c ../csslib/uw_select.c -o build/csslib_uwsel.o
+    OBJS="$OBJS build/csslib_uwsel.o"
+    pc "$CC" $CSSCF -Wall -Wextra $DBGSAN -c ../csslib/uw_cascade.c -o build/csslib_uwcas.o
+    OBJS="$OBJS build/csslib_uwcas.o"
     # the DEBUG core: crash reports + watchdog + stress driver.  uno_debug.c is
     # the interrupt file -> -mgeneral-regs-only (no SSE in the fault paths) and
     # NO sanitizer (its ud2 handler must not itself be instrumented).
