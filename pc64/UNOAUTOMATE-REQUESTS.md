@@ -6830,3 +6830,70 @@ worked on other days.
 to `iwl_link()`, which `net_poll()` never calls) and gives it a verdict for
 "queued, nothing came back", which it did not have.  **Get that one line off
 the next boot before changing any TX code.**
+
+## 2026-08-05 (metal) -> iwlwifi: RX DECRYPTION IS NOT HAPPENING. That is the no-lease bug.
+
+**Answered.**  Four rounds of instrumentation on the Surface Laptop Go ended
+here, and the evidence is a frame header rather than an inference.
+
+    RXDATA DROP fc=4208 len=126 hdr=24 b0=48 35 00 a0 a1 01 00 00
+    RXDATA DROP fc=4208 len=108 hdr=24 b0=4b 35 00 a0 a1 01 00 00
+    ... 14 of these, one after another
+    RXDATA      fc=0208 len=131 hdr=24 enc=0 et=888e sa=30:29:2b:70:4f:c6 rssi=-54
+    RXDATA      fc=0a08 len=131 hdr=24 enc=0 et=888e sa=30:29:2b:70:4f:c6 rssi=-55
+
+`fc=4208`: **protected bit (0x4000) SET**, FromDS, type data.  The eight bytes
+at the header boundary are an intact CCMP header - `48 35` PN0/PN1, byte 2 the
+mandatory zero, `a0` carrying the ExtIV bit with **KeyID = 2** in the top two
+bits, then PN2..PN5.
+
+**The frames reach us still encrypted.**  `rx_process_rb` looks for LLC/SNAP at
+`hl + 8` and finds ciphertext, so it drops - which is the correct thing to do
+with a frame nobody decrypted.  The fault is upstream of that check.  The only
+frames that got through are the two EAPOL ones, and they got through *because
+they are unprotected* (`enc=0`).
+
+That is the whole no-lease story: `post-join diag: tx=2 txresp=10 ack_fail=0 |
+rx=0 from_ap=22 drop=69` -> "the link is fine".  It is.  Every protected frame
+the AP sends us is discarded at our end.
+
+### The two candidates, and how to tell them apart
+
+KeyID 2 is the group key and it matches what we installed
+(`SEC_KEY idx=2 mcast=1 flags=4a` = MCAST | NO_TX | CCMP), so **the index is
+not the problem**.  Either:
+
+- **(a) the GTK bytes are wrong**, misparsed out of the EAPOL key data, so every
+  group frame fails to decrypt and the fw passes it up untouched; or
+- **(b) `key_flags` is missing whatever bit arms RX decryption** for that
+  station, so the key is fine and the hardware was never asked to use it.
+
+Cheap discriminator before touching any command: **there is not one KeyID 0
+frame in the sample.**  No unicast data reached us at all, decrypted or not.  If
+the pairwise key were working we would expect unicast frames to arrive
+decrypted and be delivered; if it is broken the same way, that points at (b) -
+a flag common to both key installs - rather than at a GTK parse, which would
+only affect group traffic.
+
+### Read this before starting
+
+Everything above was recovered the hard way and the instruments now exist.  Do
+not re-derive them:
+
+- `postjoin_diag()` fires 2.5 s after the 4-way, from `iwl_recv()`, and has a
+  verdict for "queued, nothing came back" (`17189089`).
+- The first 16 frames of every association are described by the RXDATA traces,
+  armed automatically at join (`c363dc3b`).
+- Deauth lines are rate-limited (`90dec10f`).  **They flooded a bounded kernel
+  ring and evicted an entire boot's diagnosis before that landed.**
+- A GUI join is still never written to `NETLOG.TXT` (only the boot net test
+  flushes it), so `BOOTLOG.TXT` is the channel.
+
+### And a correction worth keeping
+
+Two wrong diagnoses got as far as a commit this session, both reverted:
+"the mesh re-pointed us and our frames go to the wrong node" (`ffc80e13`), and
+before that the framebuffer being blamed for a stall that was a per-line disk
+write.  Both came from matching a log against a hypothesis instead of reading it
+in order.  **The mesh candidate loop works, the TX path works, the framebuffer
+was a red herring, and the answer was in the RX path the whole time.**
