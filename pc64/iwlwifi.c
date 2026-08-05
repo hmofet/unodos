@@ -3902,10 +3902,45 @@ static void mgmt_capture(const u8 *frame, int fl, u16 fc)
     if (st == 12 || st == 10) {
         int reason = fl >= 26 ? (frame[24] | (frame[25] << 8)) : -1;
         int ours = !memcmp(frame + 10, g_bssid, 6);
-        uno_dbg_net_trace("wifi: %s from %02x:%02x:%02x:%02x:%02x:%02x reason=%d%s",
-                          st == 12 ? "DEAUTH" : "DISASSOC",
-                          frame[10],frame[11],frame[12],frame[13],frame[14],frame[15],
-                          reason, ours ? " (our AP)" : " (not our BSSID - ignored)");
+        /* RATE-LIMIT IT. A DEAUTH WE IGNORE MUST NOT COST US THE DIAGNOSIS.
+         *
+         * An abandoned mesh candidate sends these once or twice a second,
+         * forever. On the Surface that is thousands of identical lines, and
+         * the kernel log is a RING: a 29-minute session ended with a boot log
+         * whose entire tail was this one message, with the join, the post-join
+         * verdict and the RXDATA descriptions - everything we booted that
+         * build to collect - rolled out from under it.
+         *
+         * A diagnostic that evicts the diagnosis is worse than silence,
+         * because it looks like data. Log the first few from a given sender,
+         * then one line a minute carrying the count, so a persistent talker
+         * costs a line a minute instead of a hundred. The counters
+         * (g_deauth_ours / g_deauth_other) are unaffected and still see every
+         * frame, so the post-join verdict reads exactly as before. */
+        {
+            static u8  last_src[6];
+            static unsigned long long last_ms;
+            static u32 burst, hidden;
+            unsigned long long now = uno_dbg_uptime_ms();
+            int same = !memcmp(last_src, frame + 10, 6);
+            if (!same) { memcpy(last_src, frame + 10, 6); burst = 0; hidden = 0; last_ms = 0; }
+            if (burst < 4 || now - last_ms >= 60000) {
+                char extra[64];
+                extra[0] = 0;
+                if (hidden)
+                    snprintf(extra, sizeof extra, " [+%u more since the last line]",
+                             (unsigned)hidden);
+                uno_dbg_net_trace("wifi: %s from %02x:%02x:%02x:%02x:%02x:%02x reason=%d%s%s",
+                                  st == 12 ? "DEAUTH" : "DISASSOC",
+                                  frame[10],frame[11],frame[12],frame[13],frame[14],frame[15],
+                                  reason, ours ? " (our AP)" : " (not our BSSID - ignored)",
+                                  extra);
+                last_ms = now; hidden = 0;
+                if (burst < 4) burst++;
+            } else {
+                hidden++;
+            }
+        }
         g_deauth_reason = reason;
         if (ours) g_deauth_ours++; else g_deauth_other++;
         /* Acting on it is the point: the association is gone the moment the AP
