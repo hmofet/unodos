@@ -468,8 +468,8 @@ the shipping browser is untouched until M4's flag flip.
 | **M1** | `unojs/` engine + host suite; `js_run()` compat shim replaces `js.c` | spectest S-JS green; Script.html demo identical; js.c deleted |
 | **M2** | `unoweb/` DOM + HTML parser (NoScript build) | host golden DOM dumps green; browser renders via a bridge that walks the DOM with the OLD flow painter, screenshots match current pages |
 | **M3** | CSS parse + cascade + block layout + paint list | golden box/display-list dumps; demo pages pixel-compared in QEMU |
-| **M4** | Inline formatting, images (unomedia), links/hit-test; app wired behind `BROWSER_ENGINE=uw` build flag | real article-class pages render; old renderer still default |
-| **M5** | webjs.c bindings, events, timers, innerHTML; **flag flips, old renderer + flow painter deleted** | interactive golden pages; JS-built content visible on live text-first sites |
+| **M4** DONE 2026-08-06 | Inline formatting, images (unomedia), links/hit-test; app wired behind `BROWSER_ENGINE=uw` build flag | real article-class pages render; old renderer still default. Landed: subresource fetch queue (network `<img>` + `<link>` sheets, `pc64_fetch.c`), line-close alignment (`text-align`, `vertical-align`, line box = max ascent + max descent) |
+| **M5** PARTIAL 2026-08-06 | webjs.c bindings, events, timers, innerHTML | LANDED: live DOM (get/querySelector, text/attrs/innerHTML, create/append/remove), events with bubbling, setTimeout/setInterval, mutation-driven restyle; 17 host checks + SPECTEST S-WJS-01..10. NOT DONE: **the flag does NOT flip** - the flow painter stays the default renderer by user ruling (2026-08-06), and the quickjs DOM adapter is written but pinned off (see js.c) |
 | **M6** | forms (text input, submit → GET; POST added to pc64_http), tables, floats, position, z-index | wiki/news golden set renders creditably |
 | **M7** | progressive render during fetch, style sharing, keep-alive + parallel TLS (if unonet delivered per-socket TLS), perf pass | page-load time targets on ZimaBlade metal |
 
