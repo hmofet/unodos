@@ -28,3 +28,15 @@ $CC $BASE -Wall -Wextra -c csslib/css_port.c -o "$B/port.o"
 $CC $BASE -Wall -c csslib/test/css_host_test.c -o "$B/main.o"
 $CC ${SAN:-} -o "$B/css_host_test.exe" "$B"/*.o
 echo "built $B/css_host_test.exe ($((n + 3)) objects)"
+
+# the CS2 test: unoweb + the bridge, both cascades over one document
+for f in uw_dom uw_html uw_css uw_style uw_layout; do
+    $CC $BASE -w -c "unoweb/$f.c" -o "$B/t_$f.o"
+done
+$CC $BASE -Wall -Wextra -c csslib/uw_select.c  -o "$B/t_uwsel.o"
+$CC $BASE -Wall -Wextra -c csslib/uw_cascade.c -o "$B/t_uwcas.o"
+$CC $BASE -Wall -c csslib/test/css_cascade_test.c -o "$B/t_main.o"
+rm "$B/main.o"
+$CC ${SAN:-} -o "$B/css_cascade_test.exe" "$B"/*.o
+rm "$B/t_main.o"
+echo "built $B/css_cascade_test.exe"
