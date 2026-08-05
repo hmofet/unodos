@@ -9,6 +9,7 @@
 
 #include <libcss/libcss.h>
 #include "../unoweb/unoweb.h"
+#include "uwx.h"                 /* the embedder surface (no libcss types) */
 
 /* One cascade pass's state. `pool` backs the class-list arrays the select
  * handler returns: libcss unrefs the STRINGS but never frees the ARRAY, and
@@ -46,14 +47,5 @@ void  uwx_pool_free_all(uwx_ctx *cx);
 void  uwx_nodedata_drop_all(uwx_ctx *cx);
 
 extern css_select_handler uwx_select_handler;
-
-/* ---- embedder surface ----------------------------------------------------- */
-/* Register/unregister the libcss stack as unoweb's cascade engine
- * (uw_cascade_set underneath). Registration is idempotent. */
-void uwx_libcss_register(void);
-void uwx_libcss_unregister(void);
-/* "" when healthy; else a short reason the last pass fell back to the
- * built-in cascade (for diagnostics/spectest). */
-const char *uwx_libcss_status(void);
 
 #endif /* CSSLIB_UW_BRIDGE_H */
