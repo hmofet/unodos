@@ -19,6 +19,14 @@ lives at `DOCS\LICENSES.MD` on the system volume.
 - **MicroPython** (the Python 3 interpreter inside the optional `PYRT.UNO`) -
   (c) 2013-2024 Damien P. George and contributors. MIT license, below. Only
   present when the Python runtime module is built into the image.
+- **quickjs-ng** (the browser's optional second JavaScript engine, on the
+  uno:engine page) - (c) 2017-2026 Fabrice Bellard, (c) 2017-2024 Charlie
+  Gordon, (c) 2023-2026 Ben Noordhuis, (c) 2023-2026 Saul Ibarra Corretge.
+  MIT license, below.
+- **libcss / libparserutils / libwapcaplet** (the NetSurf project's CSS
+  parser + selection engine and its support libraries; the browser's
+  optional second layout cascade, on the uno:engine page) - (C) 2007-8
+  J-M Bell; (c) 2009 The NetSurf Browser Project. MIT license, below.
 - **AAC decoding tables** (in unomedia's `aac_tables.h`) - the spectral
   Huffman codebooks, scalefactor codebook and scalefactor-band offset tables
   are derived from **OpenCORE aacdec** (Android Open Source Project),
@@ -75,8 +83,12 @@ AAC decoders freely). UnoDOS decodes both; it encodes neither.
 ## The MIT License
 
 Applies to BearSSL ((c) 2016 Thomas Pornin), uACPI ((c) 2022-2026
-Daniil Tatianin), and MicroPython ((c) 2013-2024 Damien P. George and
-contributors):
+Daniil Tatianin), MicroPython ((c) 2013-2024 Damien P. George and
+contributors), quickjs-ng ((c) 2017-2026 Fabrice Bellard, (c) 2017-2024
+Charlie Gordon, (c) 2023-2026 Ben Noordhuis, (c) 2023-2026 Saul Ibarra
+Corretge), and the NetSurf CSS stack - libcss, libparserutils,
+libwapcaplet ((C) 2007-8 J-M Bell; (c) 2009 The NetSurf Browser
+Project):
 
     Permission is hereby granted, free of charge, to any person obtaining
     a copy of this software and associated documentation files (the
