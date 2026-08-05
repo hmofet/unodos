@@ -23,6 +23,8 @@
 #include "fb.h"
 #include "pc64_font.h"
 #include "js.h"
+#include "../unoweb/unoweb.h"
+#include "../csslib/uwx.h"
 #include "unoui.h"
 #include "unoui_theme.h"
 #include "uno3d.h"
@@ -386,6 +388,44 @@ static void test_js(void)
     { int r = js_run("function r(){return r()} r()", out, sizeof out, log, sizeof log);
       CHECK("S-JS-13", r == 2); }          /* stack guard, not a kernel fault */
     js_engine_set(JS_ENGINE_UNOJS);
+}
+
+/* ==================================================================== CSS */
+/* The libcss cascade (csslib bridge) on the kernel allocator: parse a real
+ * document, style it with the SECOND engine, assert computed styles, then
+ * restore the built-in cascade - the engine choice is process-global. */
+static void test_css(void)
+{
+    static const char html[] =
+        "<html><head><style>"
+        ".hot { color: #c81e28; font-weight: bold } "
+        "#lead { font-size: 20px } "
+        "</style></head><body>"
+        "<h1>t</h1><p id='lead' class='hot'>x</p></body></html>";
+    uw_doc *d = uw_parse_string(html, sizeof html - 1, 0);
+    const uw_style *st;
+
+    CHECK("S-CSS-01", d != 0);
+    if (!d) return;
+
+    uwx_libcss_register();
+    CHECK("S-CSS-02", uw_cascade_active());
+    uw_style_document(d, 640, 400);
+    CHECK("S-CSS-03", uwx_libcss_status()[0] == 0);   /* no fallback taken */
+
+    st = uw_computed(uw_get_element_by_id(d, "lead"));
+    CHECK("S-CSS-04", st && st->font_size == 20 && st->font_weight == 700 &&
+                      st->color.r == 0xc8 && st->color.g == 0x1e &&
+                      st->color.b == 0x28);
+    {   uw_node *els[4];
+        int n = uw_elements_by_tag(d, uw_document(d), "h1", els, 4);
+        st = n ? uw_computed(els[0]) : 0;
+        CHECK("S-CSS-05", st && st->font_size == 28 && st->font_weight == 700);
+    }
+
+    uwx_libcss_unregister();
+    CHECK("S-CSS-06", !uw_cascade_active());
+    uw_doc_free(d);
 }
 
 /* ===================================================================== UNOUI */
@@ -1150,6 +1190,7 @@ SP_SUITE(sp_fat,      test_fat())
 SP_SUITE(sp_libc,     test_libc())
 SP_SUITE(sp_font,     test_font())
 SP_SUITE(sp_js,       test_js())
+SP_SUITE(sp_css,      test_css())
 SP_SUITE(sp_dbg,      test_dbg())
 SP_SUITE(sp_unoui,    test_unoui())
 SP_SUITE(sp_uno3d,    test_uno3d())
@@ -1174,6 +1215,7 @@ static void sp_register(void)
     unoauto_test_register("system",      "spec:libc",        sp_libc);
     unoauto_test_register("system",      "spec:font",        sp_font);
     unoauto_test_register("system",      "spec:js",          sp_js);
+    unoauto_test_register("system",      "spec:css",         sp_css);
     unoauto_test_register("system",      "spec:dbg",         sp_dbg);
     unoauto_test_register("frameworks",  "spec:unoui",       sp_unoui);
     unoauto_test_register("frameworks",  "spec:uno3d",       sp_uno3d);
