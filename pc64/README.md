@@ -331,16 +331,16 @@ interpreter (`js.c`) executes each `<script>` block, splicing its
 `document.write` output into the page and collecting `console.log` into a
 "console" panel at the foot of the document.
 
-- **js.c**: arena-allocated (no `malloc`), freestanding (only `string.h` from
-  `pc64_libc`; `Math.sqrt` is Newton's method, `Math.random` an xorshift). A
-  lexer + recursive-descent parser to an AST + tree-walking evaluator: numbers/
-  strings/booleans, `var`, arithmetic/logical/comparison/`+=`/`++`, `if`/`for`/
-  `while`/ternary, functions + recursion, arrays (`.length`/`.push`),
-  `console.log`, `document.write`, `Math.*`, `String`/`Number`/`parseInt`. ⚠
-  Function calls **mark/release** the arena on return (copying out simple return
-  values), so deep recursion is O(depth) not O(calls), `fib(24)` (46 k calls)
-  runs in the 512 KB arena. It has a `-DJS_TEST` host harness for native
-  testing before it ever touches the EFI image.
+- **js.c**: the browser's script hook, now an **engine dispatch** behind the
+  unchanged `js_run()` contract. Two engines, runtime-switchable on the
+  browser's `uno:engine` page: **unojs** (the in-tree bytecode VM in
+  `../unojs/`, the default) and **quickjs** (vendored quickjs-ng under
+  `quickjs/`, full modern JavaScript - see `quickjs/VENDOR.md`). Both
+  backends project the same host surface (`document.write`, `console.*`,
+  `window`) and both always compile. Host tests:
+  `sh quickjs/test/build-host-test.sh` builds the engine-core and
+  dispatch-seam suites; SPECTEST S-JS-10..13 cover the quickjs engine
+  in-OS.
 - **File system** (`pc64_fs.c`), a unified read-only namespace. Volume 0 is the
   RAM disk (`uno_ramfs_*`); volumes 1.. are the FAT / FAT32 / local disks the
   firmware mounted, reached through the UEFI **Simple File System** protocol
