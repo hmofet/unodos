@@ -168,6 +168,22 @@ if [ "$1" != "legacy" ]; then
     for f in uw_dom uw_html uw_css uw_style uw_layout; do
         pc "$CC" $UCF $DBGSAN -c -o "build/$f.o" "../unoweb/$f.c"; OBJS="$OBJS build/$f.o"
     done
+    # quickjs: the vendored second JS engine behind js_run()'s dispatch (see
+    # pc64/quickjs/VENDOR.md for the personality + layout pins - do not trim
+    # them). Its OWN flag set: compat/ FIRST on the include path so the
+    # engine sees double math + the missing limit macros; qjsweb.c is ours
+    # but must share the set (same JSValue ABI as the engine objects) - it
+    # gets warnings + the debug sanitizer, the vendored files get -w like
+    # uACPI. Both engines always compile, same rule as the browser's two
+    # painters.
+    QJSCF="-O2 -ffreestanding -fno-stack-protector -fno-stack-check -nostdinc \
+           -Iquickjs/compat -Iinclude -Iquickjs -I. \
+           -D__DJGPP -U_WIN32 -U_WIN64 -U__MINGW32__ -U__MINGW64__ \
+           -Dalloca=__builtin_alloca -DJS_NAN_BOXING=0 -DUNO_COLOR=1 -DUNO_PC64 ${UNO_EXTRA:-} $DBGDEF"
+    for f in quickjs libregexp libunicode dtoa qjs_port; do
+        pc "$CC" $QJSCF -w -c -o "build/qjs_$f.o" "quickjs/$f.c"; OBJS="$OBJS build/qjs_$f.o"
+    done
+    pc "$CC" $QJSCF -Wall -Wextra $DBGSAN -c -o "build/qjsweb.o" "qjsweb.c"; OBJS="$OBJS build/qjsweb.o"
     # the DEBUG core: crash reports + watchdog + stress driver.  uno_debug.c is
     # the interrupt file -> -mgeneral-regs-only (no SSE in the fault paths) and
     # NO sanitizer (its ud2 handler must not itself be instrumented).
