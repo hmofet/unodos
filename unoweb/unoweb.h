@@ -230,6 +230,27 @@ int uw_add_inline_sheets(uw_doc *d);
  * repeatedly; layout calls it when UW_DIRTY_STYLE is set. */
 int uw_style_document(uw_doc *d, int viewport_w, int viewport_h);
 
+/* ---- alternate cascade engine ---------------------------------------------
+ * An embedder may replace the WHOLE style pass (matching, cascade,
+ * inheritance) with an external engine - this is how the vendored libcss
+ * stack plugs in (csslib/uw_cascade.c) without unoweb depending on it. The
+ * engine's contract: fill every element's computed style via
+ * uw_style_store() and return 0. A non-zero return falls back to the
+ * built-in cascade for THIS pass, so a failing engine degrades to the old
+ * renderer rather than an unstyled page. Layout and paint are unaffected
+ * either way - they read uw_computed(), whoever produced it. */
+typedef int (*uw_cascade_fn)(void *user, uw_doc *d, int viewport_w, int viewport_h);
+void uw_cascade_set(uw_cascade_fn fn, void *user);   /* NULL = built-in    */
+int  uw_cascade_active(void);                        /* external engine set */
+
+/* Store an element's computed style (external cascade engines only; the
+ * style is copied into the document arena). */
+int  uw_style_store(uw_doc *d, uw_node *n, const uw_style *s);
+
+/* The UA stylesheet TEXT, shared with external engines so the browser's
+ * defaults cannot drift between cascades. */
+const char *uw_ua_css(void);
+
 /* The computed style of an element, or NULL if the tree has not been styled
  * (or the node is not an element). */
 const uw_style *uw_computed(uw_node *n);
