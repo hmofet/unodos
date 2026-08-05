@@ -73,16 +73,45 @@ committed here as ordinary sources. On a version bump, regenerate both:
   `test/build-host-test.sh`, to be mirrored verbatim by the build.sh block
   when CS2 wires it in.
 
+## The unoweb bridge (CS2)
+
+`uw_bridge.h` + `uw_select.c` + `uw_cascade.c`: libcss AS unoweb's style
+pass, registered at runtime via `uwx_libcss_register()` (the
+`uw_cascade_set` seam in unoweb). A failing pass falls back to the
+built-in cascade. Sheet inputs = the SHARED UA text (`uw_ua_css()`),
+every `<style>` element, and per-element `style=""` as libcss inline
+sheets; inheritance = `css_computed_style_compose` parent-before-child.
+
+Select-handler ownership rules libcss's headers do NOT document (each
+found the hard way; the host tests enforce them):
+
+- `node_name`/`node_id`/`node_classes` transfer STRONG lwc refs; libcss
+  unrefs the strings but NEVER frees the classes ARRAY, and two arrays are
+  live at once during style-sharing checks - arrays must come from a
+  per-pass pool, never a static or a leaked malloc.
+- Per-node data (`set/get_libcss_node_data`) MUST actually be stored:
+  libcss reads a node's data while selecting its DESCENDANTS, so upstream
+  example1's store-nothing-delete-eagerly pattern is a use-after-free on
+  any tree deeper than one node (ASan-found in css_cascade_test). The
+  bridge keeps a per-pass pointer-keyed map and hands every entry back via
+  `css_libcss_node_data_handler(CSS_NODE_DELETED)` at pass end.
+
 ## Tests (CS1)
 
     sh csslib/test/build-host-test.sh && ./csslib/test/build/css_host_test.exe
 
-The whole stack (320 objects) freestanding-compiled and host-linked:
-parse -> cascade -> computed style, 8 checks (keyword/hex/rgb() colors,
-grouped selectors, later-rule cascade order, unmatched->initial, display,
-@media filtering). Green on mingw (LLP64, the kernel's compiler) and on
+Two suites, both green on mingw (LLP64, the kernel's compiler) and on
 linux gcc with ASan+UBSan (`CC=gcc SAN="-fsanitize=address,undefined
--U__linux__ -U__gnu_linux__ -U__GLIBC__" sh csslib/test/build-host-test.sh`).
+-U__linux__ -U__gnu_linux__ -U__GLIBC__" sh csslib/test/build-host-test.sh`):
+
+- `css_host_test` (CS1, 8 checks): the raw stack - parse -> cascade ->
+  computed style over keyword/hex/rgb() colors, grouped selectors,
+  later-rule cascade order, unmatched->initial, display, @media.
+- `css_cascade_test` (CS2, 29 checks): one real document styled by BOTH
+  cascades through uw_style_document - per-engine expectations (class/id/
+  descendant/attribute selectors, style=, UA defaults, margins, lists),
+  full-tree PARITY on the core fields, clean-pass status, and
+  register/unregister. In-OS: SPECTEST S-CSS-01..06.
 NOTE the select-handler scaffolding in `test/` is adapted from libcss's
 `examples/example1.c` (MIT): `css_test_decls.inc` + `css_test_handlers.inc`
 are mechanical extracts, re-extractable on a bump. An element no rule
