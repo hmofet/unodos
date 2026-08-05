@@ -298,6 +298,62 @@ static int http_header(const char *raw, int rawlen, const char *name, char *out,
     return 0;
 }
 
+/* ---- response framing ------------------------------------------------------
+ * Where does a response END? Until now the answer was "when the server hangs
+ * up", which works only because every request says Connection: close, and
+ * costs a wait for the close (or a 3 s idle timeout) even when the server
+ * already stated the length. Framing the body properly is what makes the
+ * response finish the moment its last byte lands - and it is the hard
+ * prerequisite for keep-alive, where the close never comes at all.
+ *
+ * Two framings matter: Content-Length, and Transfer-Encoding: chunked. A
+ * response with neither still falls back to read-until-close, which remains
+ * correct for HTTP/1.0.
+ */
+
+/* Offset of the body (past the blank line), or -1 if the headers are not all
+ * here yet. */
+static int hdr_split(const char *raw, int rn)
+{
+    int i;
+    for (i = 0; i + 1 < rn; i++) {
+        if (i + 3 < rn && raw[i]=='\r' && raw[i+1]=='\n' && raw[i+2]=='\r' && raw[i+3]=='\n')
+            return i + 4;
+        if (raw[i]=='\n' && raw[i+1]=='\n') return i + 2;
+    }
+    return -1;
+}
+
+/* De-chunk in place. Returns the decoded length, or -1 if the terminating
+ * zero-size chunk has not arrived yet (so the caller keeps reading). */
+static int dechunk(char *body, int len)
+{
+    int in = 0, out = 0;
+    for (;;) {
+        long sz = 0;
+        int digits = 0;
+        while (in < len && (body[in]=='\r' || body[in]=='\n')) in++;   /* CRLF between chunks */
+        while (in < len) {                                            /* hex size */
+            char c = body[in];
+            int v = (c>='0'&&c<='9') ? c-'0' :
+                    (c>='a'&&c<='f') ? c-'a'+10 :
+                    (c>='A'&&c<='F') ? c-'A'+10 : -1;
+            if (v < 0) break;
+            sz = sz * 16 + v;
+            in++; digits++;
+        }
+        if (!digits) return -1;                       /* size line incomplete */
+        while (in < len && body[in] != '\n') in++;    /* skip any chunk-ext   */
+        if (in >= len) return -1;
+        in++;                                         /* past the LF          */
+        if (sz == 0) { body[out] = 0; return out; }   /* the terminator       */
+        if (in + sz > len) return -1;                 /* chunk not all here   */
+        memmove(body + out, body + in, (size_t)sz);
+        out += (int)sz;
+        in += (int)sz;
+    }
+}
+
 /* ---- GET ----------------------------------------------------------------- */
 /* One request/response. On a 3xx with a Location, returns HTTP_REDIRECT and puts
  * the resolved absolute next URL in `redir`; otherwise behaves like the public
@@ -396,10 +452,17 @@ static int http_get_once(const char *url, char *body, int bodymax,
       else        net_tcp_send(req, rn);
     }
 
-    /* receive until the server closes (Connection: close) or we time out */
+    /* Receive until the body is COMPLETE by its own framing - Content-Length
+     * or the chunked terminator - and only fall back to read-until-close when
+     * the response states neither. Waiting for the close costs a round trip
+     * the server already told us was unnecessary, and on a keep-alive
+     * connection the close never comes at all. */
     { static char raw[49152];
       int rn = 0, idle = 0;
-      while (rn < (int)sizeof(raw)-1) {
+      int split = -1;                 /* body offset, once headers are in    */
+      long clen = -1;                 /* Content-Length, -1 = absent         */
+      int chunked = 0, done = 0;
+      while (rn < (int)sizeof(raw)-1 && !done) {
           char tmp[1460]; int n;
           if (secure) {
               n = tls_read(tmp, sizeof tmp);
@@ -416,8 +479,40 @@ static int http_get_once(const char *url, char *body, int bodymax,
                   uno_pc64_delay_ms(5);
               }
           }
+          if (split < 0) {
+              split = hdr_split(raw, rn);
+              if (split >= 0) {
+                  char v[64];
+                  raw[rn] = 0;
+                  if (http_header(raw, split, "content-length", v, sizeof v)) {
+                      long q = 0; const char *p2 = v;
+                      while (*p2 >= '0' && *p2 <= '9') q = q * 10 + (*p2++ - '0');
+                      clen = q;
+                  }
+                  if (http_header(raw, split, "transfer-encoding", v, sizeof v)) {
+                      int k; for (k = 0; v[k]; k++) if (v[k]>='A'&&v[k]<='Z') v[k] += 32;
+                      if (strstr(v, "chunked")) chunked = 1;
+                  }
+              }
+          }
+          if (split >= 0) {
+              if (chunked) {
+                  /* peek: dechunk on a COPY would cost a second buffer, so
+                   * probe for the terminator instead and decode once, below */
+                  int i;
+                  for (i = split; i + 4 < rn; i++)
+                      if (raw[i]=='\n' && raw[i+1]=='0' &&
+                          (raw[i+2]=='\r' || raw[i+2]=='\n')) { done = 1; break; }
+              } else if (clen >= 0 && (long)(rn - split) >= clen) done = 1;
+          }
       }
       raw[rn] = 0;
+      /* chunked bodies are decoded in place, so everything downstream - the
+       * header/body split below, the cache, the parser - sees a plain body */
+      if (split >= 0 && chunked) {
+          int dl = dechunk(raw + split, rn - split);
+          if (dl >= 0) { rn = split + dl; raw[rn] = 0; }
+      }
       if (secure) tls_close(); else net_tcp_close();
 
       /* status line */

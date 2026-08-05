@@ -69,3 +69,10 @@ $CC $FLAGS -Wall -Wextra -c pc64_cache.c -o build/qjs_t_cache.o
 $CC $FLAGS -I. -c quickjs/test/cache_test.c -o build/qjs_t_camain.o
 $CC -o build/cache_test.exe build/qjs_t_camain.o build/qjs_t_cache.o
 echo "built build/cache_test.exe"
+
+# HTTP response framing: pure string code, its own tiny link (the helpers are
+# static inside pc64_http.c, which drags in every NIC and TLS - the test
+# includes them directly instead).
+$CC $FLAGS -Wall -Wextra -c quickjs/test/framing_test.c -o build/qjs_t_fmain.o
+$CC -o build/framing_test.exe build/qjs_t_fmain.o
+echo "built build/framing_test.exe"
