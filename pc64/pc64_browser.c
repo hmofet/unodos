@@ -700,8 +700,9 @@ static const char kSample[] =
 
 static const char kScript[] =
 "<h1>JavaScript</h1>"
-"<p>The <code>&lt;script&gt;</code> block below runs in a tiny tree-walking "
-"interpreter; its <code>document.write</code> output is spliced into the page "
+"<p>The <code>&lt;script&gt;</code> block below runs on the selected script "
+"engine (<a href='uno:engine'>switch engines here</a>); its "
+"<code>document.write</code> output is spliced into the page "
 "and <code>console.log</code> appears in the console panel.</p>"
 "<script>"
 "document.write('<h2>Generated from JS</h2>');"
