@@ -354,19 +354,70 @@ static int dechunk(char *body, int len)
     }
 }
 
+/* ---- the kept-alive connection --------------------------------------------
+ * A page is a document plus its images and stylesheets, and each of those
+ * used to cost a fresh DNS + TCP + TLS round to the SAME server. Holding one
+ * connection open across them is the single biggest win available in the
+ * fetch path, and the framing work above is what makes it possible: on a
+ * persistent connection the server never closes, so the only way to know a
+ * response ended is its own Content-Length or chunked terminator.
+ *
+ * Exactly ONE connection is kept. A browser on this box fetches one thing at
+ * a time, so a pool would be bookkeeping for a concurrency that does not
+ * exist.
+ *
+ * The failure that matters: a server may drop an idle connection at any
+ * moment, and it looks identical to a healthy one until the write or the
+ * first read fails. So a REUSED connection that fails is retried once on a
+ * fresh one, and only a fresh connection's failure is reported. Without that
+ * retry, keep-alive turns a working browser into one that intermittently
+ * fails for no visible reason. */
+static struct {
+    char host[128];
+    int  port, secure, open;
+} g_ka;
+
+static void ka_drop(void)
+{
+    if (!g_ka.open) return;
+    if (g_ka.secure) tls_close(); else net_tcp_close();
+    g_ka.open = 0;
+    g_ka.host[0] = 0;
+}
+
+static int ka_matches(const char *host, int port, int secure)
+{
+    return g_ka.open && g_ka.secure == secure && g_ka.port == port &&
+           !strcmp(g_ka.host, host);
+}
+
+static void ka_keep(const char *host, int port, int secure)
+{
+    int n = 0;
+    while (host[n] && n < (int)sizeof g_ka.host - 1) { g_ka.host[n] = host[n]; n++; }
+    g_ka.host[n] = 0;
+    g_ka.port = port; g_ka.secure = secure; g_ka.open = 1;
+}
+
+void pc64_http_disconnect(void) { ka_drop(); }
+
 /* ---- GET ----------------------------------------------------------------- */
 /* One request/response. On a 3xx with a Location, returns HTTP_REDIRECT and puts
  * the resolved absolute next URL in `redir`; otherwise behaves like the public
  * pc64_http_get (body length >=0, or a negative error). */
 #define HTTP_REDIRECT (-100)
+/* "the connection I reused was dead - try again on a fresh one". Never
+ * reported to a caller; the retry loop consumes it. */
+#define HTTP_RETRY    (-101)
 /* `post` is NULL for a GET, else the form-encoded body to send. A POST is
  * never cached and never served from cache - it is a request to CHANGE
  * something, and replaying one from a cache is how a browser double-submits
  * an order. */
 static int http_get_once(const char *url, char *body, int bodymax,
                          char *status, int statusmax, char *redir, int redirmax,
-                         pc64_cache_ctl *ctl, const char *post)
+                         pc64_cache_ctl *ctl, const char *post, int *out_reused)
 {
+    int reused = 0;
     char host[128], path[512];
     unsigned char ip[4];
     int port = 80, hn = 0, i, secure = 0;
@@ -399,8 +450,12 @@ static int http_get_once(const char *url, char *body, int bodymax,
         if (!net_dns_query(host, ip)) { if (statusmax) strncpy(status,"DNS lookup failed",statusmax-1); return -4; }
     }
 
-    /* connect (plain TCP, or TLS with CA validation for https) */
-    if (secure) {
+    /* connect - unless the connection we already hold goes to this very
+     * origin, in which case the whole DNS + TCP + TLS round is skipped */
+    if (ka_matches(host, port, secure)) {
+        reused = 1;
+    } else if (secure) {
+        ka_drop();
         int rc = tls_connect_ca(ip, (unsigned short)port, host);
         /* A refusal for want of entropy never reached BearSSL, so there is no
          * BR_ERR_* to quote and "TLS connect failed (BearSSL err 0)" would
@@ -410,6 +465,7 @@ static int http_get_once(const char *url, char *body, int bodymax,
             return -5; }
         if (rc != 0) { set_tls_err(status, statusmax, "TLS connect failed"); return -5; }
     } else {
+        ka_drop();
         if (net_tcp_connect(ip, (unsigned short)port) < 0) { if (statusmax) strncpy(status,"TCP connect failed",statusmax-1); return -5; }
         for (i = 0; i < 400 && net_tcp_state() == TCP_SYN_SENT; i++) { net_poll(); uno_pc64_delay_ms(5); }
         if (net_tcp_state() != TCP_ESTABLISHED) { net_tcp_close(); if (statusmax) strncpy(status,"Connection timed out",statusmax-1); return -6; }
@@ -448,8 +504,19 @@ static int http_get_once(const char *url, char *body, int bodymax,
       REQ_PUT("\r\n");                            /* end of headers */
       if (post) REQ_PUT(post);
       #undef REQ_PUT
-      if (secure) { if (tls_write(req, rn) < 0) { set_tls_err(status, statusmax, "TLS write failed"); tls_close(); return -7; } }
-      else        net_tcp_send(req, rn);
+      if (secure) {
+          if (tls_write(req, rn) < 0) {
+              /* on a reused connection this is almost always "the server
+               * dropped it while idle", not a real error - the caller
+               * retries once on a fresh one */
+              ka_drop();
+              if (reused) { if (out_reused) *out_reused = 1; return HTTP_RETRY; }
+              set_tls_err(status, statusmax, "TLS write failed");
+              return -7;
+          }
+      } else {
+          net_tcp_send(req, rn);
+      }
     }
 
     /* Receive until the body is COMPLETE by its own framing - Content-Length
@@ -506,6 +573,20 @@ static int http_get_once(const char *url, char *body, int bodymax,
               } else if (clen >= 0 && (long)(rn - split) >= clen) done = 1;
           }
       }
+      /* Keep the connection ONLY when the reply was framed (so we know where
+       * it ended) and neither side asked to close. Anything else and we are
+       * guessing about a shared socket, which is how a browser starts
+       * reading one page's bytes as the next page's body. */
+      {   char cv[64];
+          int keep = (split >= 0) && (chunked || clen >= 0) && done;
+          if (keep && http_header(raw, split, "connection", cv, sizeof cv)) {
+              int k; for (k = 0; cv[k]; k++) if (cv[k]>='A'&&cv[k]<='Z') cv[k] += 32;
+              if (strstr(cv, "close")) keep = 0;
+          }
+          if (keep) ka_keep(host, port, secure); else ka_drop();
+      }
+      /* a reused connection that produced NOTHING was dead: retry once */
+      if (rn == 0 && reused) { ka_drop(); if (out_reused) *out_reused = 1; return HTTP_RETRY; }
       raw[rn] = 0;
       /* chunked bodies are decoded in place, so everything downstream - the
        * header/body split below, the cache, the parser - sees a plain body */
@@ -513,7 +594,7 @@ static int http_get_once(const char *url, char *body, int bodymax,
           int dl = dechunk(raw + split, rn - split);
           if (dl >= 0) { rn = split + dl; raw[rn] = 0; }
       }
-      if (secure) tls_close(); else net_tcp_close();
+      /* the connection's fate was decided above - do NOT close it here */
 
       /* status line */
       if (statusmax > 0) { int j=0; const char *s=raw; while (*s && *s!='\r' && *s!='\n' && j<statusmax-1) status[j++]=*s++; status[j]=0;
@@ -606,8 +687,18 @@ int pc64_http_request(const char *url, const char *post,
     ctl.max_age = -1;
     strncpy(cur, url, sizeof cur - 1); cur[sizeof cur - 1] = 0;
     for (hop = 0; hop < 6; hop++) {
-        n = http_get_once(cur, body, bodymax, status, statusmax, nxt, sizeof nxt,
-                          &ctl, post);
+        {   int tries = 0, was_reused = 0;
+            do {
+                was_reused = 0;
+                n = http_get_once(cur, body, bodymax, status, statusmax,
+                                  nxt, sizeof nxt, &ctl, post, &was_reused);
+                /* HTTP_RETRY means the connection we REUSED was already dead.
+                 * That is not an error - it is the normal end of an idle
+                 * keep-alive - so try once more on a fresh one. Only a fresh
+                 * connection's failure is ever reported. */
+            } while (n == HTTP_RETRY && ++tries < 2);
+            if (n == HTTP_RETRY) n = -6;
+        }
         post = 0;              /* a redirect after a POST is followed as GET */
         if (n != HTTP_REDIRECT) {
             /* cache under the ORIGINAL url, not the last hop: that is what

@@ -33,4 +33,9 @@ int pc64_http_get(const char *url, char *body, int bodymax,
 int pc64_http_request(const char *url, const char *post,
                       char *body, int bodymax, char *status, int statusmax);
 
+/* Drop any kept-alive connection. Call when the browser goes idle or the
+ * network is reconfigured; ordinary navigation does not need it, since the
+ * connection is reused only for the origin it was opened to. */
+void pc64_http_disconnect(void);
+
 #endif
