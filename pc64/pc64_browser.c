@@ -25,6 +25,7 @@
 #include "../unomedia/unomedia.h"
 #include <stdlib.h>
 #include "pc64_http.h"
+#include "pc64_fetch.h"
 #include <string.h>
 
 void uno_pc64_present(void);       /* fb -> GOP (for a Loading frame mid-fetch) */
@@ -38,6 +39,12 @@ void uno_pc64_present(void);       /* fb -> GOP (for a Loading frame mid-fetch) 
 #define PG_CODEBG FB_RGB(235, 235, 230)
 #define PG_QUOTE FB_RGB(90, 100, 120)
 #define PG_RULE  FB_RGB(200, 200, 195)
+
+/* Location buffer size. Hoisted above the rest of the browser's constants
+ * because the subresource fetch code (page base, link sheets, network
+ * images) sits with the DOM helpers, far above the chrome section where the
+ * other sizes are declared. */
+#define LOCMAX    256
 
 /* ---- content faces (fixed: page content doesn't follow the UI font) ------ */
 #define BR_BODY_SLOT 1                 /* Sans - body + headings */
@@ -244,6 +251,17 @@ static unsigned doc_sig(const char *s)
     return h ? h : 1;
 }
 
+/* The location the current document came from: subresource URLs resolve
+ * against it. Set by load_loc; "" for the built-in pages, which reference
+ * nothing external. */
+static char g_page_base[LOCMAX];
+static void resolve(const char *href, const char *base, char *out, int cap);
+static int  loc_is_net(const char *loc);
+
+#ifdef UW_ENGINE
+static void fetch_link_sheets(uw_doc *d);    /* defined with the URL helpers */
+#endif
+
 static void dom_sync(const char *src)
 {
     uw_config c;
@@ -258,6 +276,9 @@ static void dom_sync(const char *src)
     c.max_depth = 96;
     g_dom = uw_parse_string(src, -1, &c);
     g_dom_sig = sig;
+#ifdef UW_ENGINE
+    fetch_link_sheets(g_dom);
+#endif
 }
 
 /* Emit a text node. Outside <pre>, every run of whitespace (including the
@@ -414,10 +435,12 @@ static int  g_uw_h;                 /* its resulting document height           *
  * asks for a size on every reflow and re-decoding a PNG per keystroke would
  * be absurd.
  *
- * Only LOCAL files resolve today. A page fetched over the network references
- * images by URL, and the fetch queue that would retrieve them is not built
- * yet - such an image resolves to nothing and lays out as an empty box, which
- * is the documented behaviour for an image that has not arrived. */
+ * Both LOCAL files and NETWORK URLs resolve: a src that resolves against the
+ * page base to http/https goes through pc64_fetch (fetch-once-per-page,
+ * failures remembered), and the bytes are decoded straight out of memory
+ * through the same um_src indirection a file uses. An image that cannot be
+ * had still lays out as an empty replaced box, which is the documented
+ * behaviour for one that has not arrived. */
 #define IMG_CACHE   8
 #define IMG_MAX_PX  (4u * 1024u * 1024u)     /* 4 MP: a fuzzed header cannot
                                               * talk us into a huge malloc   */
@@ -429,6 +452,18 @@ static char   g_img_file[64];
 
 static long img_src_read(void *ctx, long off, unsigned char *dst, long n)
 { (void)ctx; return uno_fs_read_at(g_img_vol, g_img_file, off, dst, n); }
+
+/* the same indirection over already-fetched bytes (network images) */
+typedef struct { const unsigned char *p; long len; } membuf;
+
+static long img_mem_read(void *ctx, long off, unsigned char *dst, long n)
+{
+    membuf *m = (membuf *)ctx;
+    if (!m || off < 0 || off >= m->len) return 0;
+    if (n > m->len - off) n = m->len - off;
+    memcpy(dst, m->p + off, (size_t)n);
+    return n;
+}
 
 static void img_cache_reset(void)
 {
@@ -453,6 +488,28 @@ static int uwi_resolve(void *user, const char *src, int *w, int *h, void **handl
             return 1;
         }
     if (g_nimgs >= IMG_CACHE) return 0;
+
+    /* NETWORK first: a src that resolves to http/https against the page base
+     * is fetched (once - failures are remembered by pc64_fetch) and decoded
+     * from memory. `mem` must outlive um_image_open's reads, hence the
+     * function-scope lifetime rather than a block-local. */
+    {   static membuf mem;
+        char abs[LOCMAX];
+        const unsigned char *bytes;
+        int len;
+        resolve(src, g_page_base, abs, sizeof abs);
+        if (g_page_base[0] && loc_is_net(abs) &&
+            (len = pc64_fetch_get(abs, &bytes)) > 0) {
+            mem.p = bytes; mem.len = len;
+            um_set_alloc(malloc, free);
+            s.read = img_mem_read; s.size = len; s.ctx = &mem;
+            /* the NAME matters to the decoder only as an extension hint;
+             * pass the URL so .png/.jpg still steer the sniffer */
+            if (!um_image_open(&s, abs, &info)) return 0;
+            goto decoded;
+        }
+    }
+
     { int k = 0; while (src[k] && k < 63) { g_img_file[k] = src[k]; k++; } g_img_file[k] = 0; }
     nv = uno_fs_volumes();
     for (v = 0; v < nv; v++) { sz = uno_fs_size(v, g_img_file); if (sz > 0) { g_img_vol = v; break; } }
@@ -460,6 +517,7 @@ static int uwi_resolve(void *user, const char *src, int *w, int *h, void **handl
     um_set_alloc(malloc, free);
     s.read = img_src_read; s.size = sz; s.ctx = 0;
     if (!um_image_open(&s, g_img_file, &info)) return 0;
+decoded:
     if (info.w < 1 || info.h < 1 ||
         (unsigned)info.w * (unsigned)info.h > IMG_MAX_PX) { um_image_close(); return 0; }
     {   imgent *e = &g_imgs[g_nimgs];
@@ -610,7 +668,6 @@ static void render_html(const char *src, unoui_rect r, int scroll)
 #include "pc64_icons.h"                 /* pc64_shell_theme() for the panels */
 
 #define DOC_MAX   32768
-#define LOCMAX    256
 #define TITMAX    48
 #define MAXTABS   6
 #define HISTN     16                    /* back / forward depth per tab       */
@@ -718,6 +775,71 @@ static const char kScript[] =
 "console.log('Math.floor(3.7) =', Math.floor(3.7));"
 "</script>"
 "<hr><p>Everything above the rule was produced at open time by the script.</p>";
+
+#ifdef UW_ENGINE
+/* rel="stylesheet" is ASCII-caseless and may carry other tokens
+ * (rel="stylesheet alternate"); match the token, not the whole string. */
+static int rel_is_stylesheet(const char *rel)
+{
+    static const char kw[] = "stylesheet";
+    const char *p = rel;
+    while (*p) {
+        const char *b;
+        int i;
+        while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') p++;
+        b = p;
+        while (*p && *p != ' ' && *p != '\t' && *p != '\n' && *p != '\r') p++;
+        if (p - b == (int)sizeof kw - 1) {
+            for (i = 0; i < (int)sizeof kw - 1; i++) {
+                int c = b[i] >= 'A' && b[i] <= 'Z' ? b[i] + 32 : b[i];
+                if (c != kw[i]) break;
+            }
+            if (i == (int)sizeof kw - 1) return 1;
+        }
+    }
+    return 0;
+}
+
+/* ---- linked stylesheets ---------------------------------------------------
+ * <link rel=stylesheet href=...> is fetched here and spliced into the DOM as
+ * a <style> element holding the CSS text, in the link's own position.
+ *
+ * That splice is the whole trick: BOTH cascades already collect <style>
+ * elements in document order (the built-in one through uw_add_inline_sheets,
+ * the libcss bridge through its own scan), so linked sheets land in the
+ * right cascade position for both engines with no new API and no way for the
+ * two to disagree about them. */
+static void fetch_link_sheets(uw_doc *d)
+{
+    uw_node *n, *next;
+    if (!d || !g_page_base[0]) return;
+    for (n = uw_next_in_order(uw_document(d), uw_document(d)); n; n = next) {
+        const char *rel, *href;
+        char abs[LOCMAX];
+        const unsigned char *css;
+        int len;
+        next = uw_next_in_order(n, uw_document(d));
+        if (uw_type(n) != UW_NODE_ELEMENT) continue;
+        if (strcmp(uw_tag_name(d, n), "link")) continue;
+        rel = uw_attr(d, n, "rel");
+        href = uw_attr(d, n, "href");
+        if (!rel || !href || !*href) continue;
+        if (!rel_is_stylesheet(rel)) continue;
+        resolve(href, g_page_base, abs, sizeof abs);
+        if (!loc_is_net(abs)) continue;          /* only network sheets */
+        len = pc64_fetch_get(abs, &css);
+        if (len <= 0) continue;
+        {   uw_node *st = uw_create_element(d, "style");
+            uw_node *tx = st ? uw_create_text(d, (const char *)css, len) : 0;
+            if (st && tx) {
+                uw_append(d, st, tx);
+                uw_insert_before(d, uw_parent(n), st, n);
+            }
+        }
+    }
+}
+#endif
+
 
 static void navigate(const char *loc, int push);
 
@@ -1046,6 +1168,10 @@ static void load_loc(btab *t, const char *loc)
     t->start = 0;
     g_link_sel = -1;
     sput(t->loc, LOCMAX, loc);
+    /* subresources belong to the page that referenced them: the base moves
+     * and the cache empties on EVERY navigation, including one that fails */
+    sput(g_page_base, LOCMAX, loc);
+    pc64_fetch_reset();
     title_from_loc(t, loc);
     sput(g_status, sizeof g_status,
          "Left / Right: links   Enter: follow   Backspace: back");
