@@ -332,6 +332,142 @@ static uw_box *build_block(uw_doc *d, uw_node *n, const uw_style *s)
     return b;
 }
 
+static uw_box *build_block(uw_doc *d, uw_node *n, const uw_style *s);
+
+/* ---- tables ---------------------------------------------------------------
+ * Auto table layout, the useful subset. Rows come from the table's children,
+ * descending THROUGH row groups (tbody/thead/tfoot exist in the tree but own
+ * no box - a table's rows are its rows wherever the parser put them).
+ *
+ * Column widths are proportional to how much text each column holds, floored
+ * so a column can never vanish. Equal columns would be simpler and are what a
+ * first attempt reaches for, but they make the common table - a narrow index
+ * column beside a wide description - unreadable, and the text length is
+ * already in hand. This is not the CSS auto-table algorithm (which needs
+ * min/max content widths per cell, i.e. laying every cell out twice); it is
+ * the cheap approximation that gets the common shapes right.
+ *
+ * A row's height is its tallest cell, and every cell in the row is stretched
+ * to it, which is what makes a table look like a table rather than a set of
+ * independently-sized boxes.
+ */
+#define TBL_MAXCOL 16
+#define TBL_MINCOL 24                    /* px: a column never disappears */
+
+static int cell_text_weight(uw_doc *d, uw_node *cell)
+{
+    uw_node *n;
+    int w = 0;
+    for (n = cell; n; n = uw_next_in_order(n, cell)) {
+        int tl = 0;
+        if (uw_type(n) != UW_NODE_TEXT) continue;
+        if (uw_text(n, &tl)) w += tl;
+    }
+    (void)d;
+    return w;
+}
+
+/* Append every row of `parent` to `rows`, looking through row groups. */
+static void table_rows(uw_doc *d, uw_node *parent, uw_node **rows, int *nrows, int max)
+{
+    uw_node *c;
+    for (c = uw_first_child(parent); c && *nrows < max; c = uw_next_sibling(c)) {
+        const uw_style *cs;
+        if (uw_type(c) != UW_NODE_ELEMENT) continue;
+        cs = uw_computed(c);
+        if (!cs || cs->display == UW_DISP_NONE) continue;
+        if (cs->display == UW_DISP_TABLE_ROW_GROUP) table_rows(d, c, rows, nrows, max);
+        else if (cs->display == UW_DISP_TABLE_ROW) rows[(*nrows)++] = c;
+    }
+}
+
+static void layout_table(uw_doc *d, uw_box *b, int content_x, int content_y,
+                         int content_w, int *out_h)
+{
+#define TBL_MAXROW 64
+    uw_node *rows[TBL_MAXROW];
+    int colw[TBL_MAXCOL], weight[TBL_MAXCOL];
+    int nrows = 0, ncols = 0, i, c, cy = content_y;
+    long total = 0;
+    int spacing = 2;                       /* border-spacing, fixed for now */
+
+    table_rows(d, b->node, rows, &nrows, TBL_MAXROW);
+    if (!nrows) { *out_h = 0; return; }
+
+    for (i = 0; i < TBL_MAXCOL; i++) weight[i] = 0;
+    for (i = 0; i < nrows; i++) {
+        uw_node *cell;
+        int k = 0;
+        for (cell = uw_first_child(rows[i]); cell; cell = uw_next_sibling(cell)) {
+            const uw_style *cs;
+            int wgt;
+            if (uw_type(cell) != UW_NODE_ELEMENT) continue;
+            cs = uw_computed(cell);
+            if (!cs || cs->display == UW_DISP_NONE) continue;
+            if (k >= TBL_MAXCOL) break;
+            wgt = cell_text_weight(d, cell);
+            if (wgt > weight[k]) weight[k] = wgt;
+            k++;
+        }
+        if (k > ncols) ncols = k;
+    }
+    if (!ncols) { *out_h = 0; return; }
+
+    for (i = 0; i < ncols; i++) { if (weight[i] < 1) weight[i] = 1; total += weight[i]; }
+    {   int avail = content_w - spacing * (ncols + 1), used = 0;
+        if (avail < ncols * TBL_MINCOL) avail = ncols * TBL_MINCOL;
+        for (i = 0; i < ncols; i++) {
+            colw[i] = (int)((long)avail * weight[i] / (total ? total : 1));
+            if (colw[i] < TBL_MINCOL) colw[i] = TBL_MINCOL;
+            used += colw[i];
+        }
+        /* rounding remainder goes to the widest column, so the table's right
+         * edge lands exactly on the content edge */
+        if (used < avail) {
+            int widest = 0;
+            for (i = 1; i < ncols; i++) if (colw[i] > colw[widest]) widest = i;
+            colw[widest] += avail - used;
+        }
+    }
+
+    cy += spacing;
+    for (i = 0; i < nrows; i++) {
+        uw_node *cell;
+        uw_box *rowbox = box_new(d, UW_BOX_BLOCK, rows[i], uw_computed(rows[i]));
+        int cx = content_x + spacing, k = 0, rowh = 0;
+        if (!rowbox) continue;
+        rowbox->x = content_x; rowbox->y = cy; rowbox->w = content_w;
+        box_add(b, rowbox);
+        for (cell = uw_first_child(rows[i]); cell; cell = uw_next_sibling(cell)) {
+            const uw_style *cs;
+            uw_box *cb;
+            if (uw_type(cell) != UW_NODE_ELEMENT) continue;
+            cs = uw_computed(cell);
+            if (!cs || cs->display == UW_DISP_NONE) continue;
+            if (k >= ncols) break;
+            cb = build_block(d, cell, cs);
+            if (!cb) { k++; continue; }
+            box_add(rowbox, cb);
+            /* a cell is a block laid out in a containing block of exactly its
+             * column width; margins do not apply to cells, so cb_width IS the
+             * column and the cell fills it */
+            layout_block(d, cb, colw[k], cx, cy);
+            cb->w = colw[k];
+            if (cb->h > rowh) rowh = cb->h;
+            cx += colw[k] + spacing;
+            k++;
+        }
+        /* every cell stretches to the row height - the thing that makes a
+         * table read as a grid rather than as ragged boxes */
+        {   uw_box *cb;
+            for (cb = rowbox->first; cb; cb = cb->next) cb->h = rowh; }
+        rowbox->h = rowh;
+        cy += rowh + spacing;
+    }
+    *out_h = cy - content_y;
+#undef TBL_MAXROW
+}
+
 static void layout_children(uw_doc *d, uw_box *b, int content_x, int content_y,
                             int content_w, int *out_h)
 {
@@ -346,7 +482,8 @@ static void layout_children(uw_doc *d, uw_box *b, int content_x, int content_y,
         if (uw_type(c) != UW_NODE_ELEMENT) continue;
         cs = uw_computed(c);
         if (!cs || cs->display == UW_DISP_NONE) continue;
-        if (cs->display != UW_DISP_BLOCK && cs->display != UW_DISP_LIST_ITEM) continue;
+        if (cs->display != UW_DISP_BLOCK && cs->display != UW_DISP_LIST_ITEM &&
+            cs->display != UW_DISP_TABLE) continue;
         {   uw_box *cb = build_block(d, c, cs);
             int mt;
             if (!cb) continue;
@@ -411,8 +548,12 @@ static void layout_block(uw_doc *d, uw_box *b, int cb_width, int x, int y)
     b->x = x + b->ml;
     b->y = y;
 
-    layout_children(d, b, b->x + b->bl + b->pl, b->y + b->bt + b->pt,
-                    content_w, &content_h);
+    if (s->display == UW_DISP_TABLE)
+        layout_table(d, b, b->x + b->bl + b->pl, b->y + b->bt + b->pt,
+                     content_w, &content_h);
+    else
+        layout_children(d, b, b->x + b->bl + b->pl, b->y + b->bt + b->pt,
+                        content_w, &content_h);
 
     if (s->height.unit != UW_LEN_AUTO) content_h = len_px(s->height, 0);
     b->h = content_h + b->bt + b->bb + b->pt + b->pb;

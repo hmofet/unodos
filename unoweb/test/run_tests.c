@@ -746,6 +746,34 @@ int main(int argc, char **argv)
             "      text (98,31 20x14) \"jj\"\n",
             NULL);
 
+    /* ---- tables (M6) --------------------------------------------------------
+     * Columns are proportional to how much text each holds, which is what
+     * makes the common shape - a narrow index column beside a wide
+     * description - readable; equal columns would put 192px under "1".
+     * Cells stretch to the row height, so a row reads as a grid rather than
+     * as independently-sized boxes. */
+    tlayout_w("layout-table",
+            "<table><tr><td>1</td><td>description here</td></tr>"
+            "<tr><td>22</td><td>x</td></tr></table>", 400,
+            "block body (8,8 384x54)\n"
+            "  block table (8,14 384x42)\n"
+            "    block tr (8,16 384x18)\n"
+            "      block td (10,16 42x18)\n"
+            "        line (14,18 10x14)\n"
+            "          text (14,18 10x14) \"1\"\n"
+            "      block td (54,16 336x18)\n"
+            "        line (58,18 160x14)\n"
+            "          text (58,18 110x14) \"description\"\n"
+            "          text (178,18 40x14) \"here\"\n"
+            "    block tr (8,36 384x18)\n"
+            "      block td (10,36 42x18)\n"
+            "        line (14,38 20x14)\n"
+            "          text (14,38 20x14) \"22\"\n"
+            "      block td (54,36 336x18)\n"
+            "        line (58,38 10x14)\n"
+            "          text (58,38 10x14) \"x\"\n",
+            NULL);
+
     /* ---- images + hit testing --------------------------------------------- */
     if (want("layout-image")) {
         char buf[4096];

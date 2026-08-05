@@ -181,7 +181,12 @@ enum { UW_LEN_AUTO = 0, UW_LEN_PX, UW_LEN_PCT };
 typedef struct { int v; unsigned char unit; } uw_len;
 
 enum { UW_DISP_INLINE = 0, UW_DISP_BLOCK, UW_DISP_INLINE_BLOCK,
-       UW_DISP_LIST_ITEM, UW_DISP_NONE };
+       UW_DISP_LIST_ITEM, UW_DISP_NONE,
+       /* table formatting: a row GROUP (tbody/thead/tfoot) is transparent to
+        * layout - it exists in the tree, contributes no box of its own, and
+        * its rows belong to the table. */
+       UW_DISP_TABLE, UW_DISP_TABLE_ROW_GROUP, UW_DISP_TABLE_ROW,
+       UW_DISP_TABLE_CELL };
 enum { UW_FF_SANS = 0, UW_FF_SERIF, UW_FF_MONO };
 enum { UW_ALIGN_LEFT = 0, UW_ALIGN_CENTER, UW_ALIGN_RIGHT, UW_ALIGN_JUSTIFY };
 enum { UW_WS_NORMAL = 0, UW_WS_PRE, UW_WS_NOWRAP };
