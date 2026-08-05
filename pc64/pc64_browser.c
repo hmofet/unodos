@@ -1395,6 +1395,34 @@ static void doc_error(btab *t, const char *what, const char *why)
 
 /* the one loader: every scheme lands here, so history, bookmarks and the
  * address bar all navigate through the same door */
+/* ---- progressive render ----------------------------------------------------
+ * The transport hands over the body every few KB; this paints it. The cost of
+ * re-rendering a partial document is bounded by construction: the receive
+ * buffer caps at ~48 KB and the throttle is ~6 KB, so a page is drawn at most
+ * a handful of times before it is complete. Streaming into a live parser
+ * would avoid even that, but the browser keys its DOM cache on the document
+ * TEXT, and threading a parser through that is a bigger change than the
+ * saving justifies at this size. */
+static btab *g_partial_tab;
+static void br_draw(struct unoui_widget *w, unoui_rect r, void *ctx);
+
+static void load_progress(const char *body, int len, long total)
+{
+    btab *t = g_partial_tab;
+    char *d;
+    (void)total;
+    if (!t || !(d = tab_doc(t))) return;
+    if (len > DOC_MAX - 1) len = DOC_MAX - 1;
+    memcpy(d, body, (size_t)len);
+    d[len] = 0;
+    t->is_html = 1;
+    g_dom_sig = 0;                    /* the tree must be rebuilt from this */
+    if (g_rect.w > 0) {
+        br_draw(0, g_rect, 0);
+        uno_pc64_present();           /* straight to the screen, mid-fetch */
+    }
+}
+
 static void load_loc(btab *t, const char *loc)
 {
     t->scroll = 0;
@@ -1495,7 +1523,16 @@ static void load_loc(btab *t, const char *loc)
         int n, q, i;
         if (!d) return;
         loading_frame(loc);                     /* show progress before we block */
+        /* Draw the page AS IT ARRIVES rather than only when the last byte
+         * lands. The partial body is rendered by the ordinary path - a
+         * document is a document whether or not more of it is coming - and
+         * an unclosed tag at the cut simply renders as the parser's usual
+         * recovery, which is what a real browser shows mid-load too. */
+        g_partial_tab = t;
+        pc64_http_on_progress(load_progress);
         n = pc64_http_get(loc, d, DOC_MAX - 1, g_status, sizeof g_status);
+        pc64_http_on_progress(0);
+        g_partial_tab = 0;
         if (n < 0) { doc_error(t, loc, g_status); return; }
         /* pick MD vs HTML from the suffix; HTML is the default (it also
          * renders plain text sensibly) */

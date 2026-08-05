@@ -33,6 +33,18 @@ int pc64_http_get(const char *url, char *body, int bodymax,
 int pc64_http_request(const char *url, const char *post,
                       char *body, int bodymax, char *status, int statusmax);
 
+/* ---- progressive delivery -------------------------------------------------
+ * Called with the body SO FAR while a response is still arriving, throttled
+ * to roughly every 6 KB. `total` is the Content-Length when the server gave
+ * one, else -1. The buffer is the transport's and is valid only for the
+ * duration of the call. Install NULL to turn it off.
+ *
+ * Not offered for chunked responses: those are still encoded mid-transfer,
+ * and handing an embedder chunk-size lines to render is worse than making it
+ * wait for the decode. */
+typedef void (*pc64_http_progress_fn)(const char *body, int len, long total);
+void pc64_http_on_progress(pc64_http_progress_fn fn);
+
 /* Drop any kept-alive connection. Call when the browser goes idle or the
  * network is reconfigured; ordinary navigation does not need it, since the
  * connection is reused only for the origin it was opened to. */
