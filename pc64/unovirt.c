@@ -599,11 +599,12 @@ int uno_vmm_selftest(void)
             snprintf(g_self + n, sizeof g_self - (unsigned)n,
                      "; linux %s: %ld KB, %d chars %d lines over %d exits, "
                      "stopped on %u at %llx (vec %x err %x addr %llx), "
-                     "last \"%s\"",
+                     "%d pio [%x %x %x %x], last \"%s\"",
                      ok6 ? "SPOKE" : "silent", L.loaded / 1024, L.chars,
                      L.lines, L.exits, L.stop_reason, L.stop_rip,
                      L.fault_vec, L.fault_err, L.fault_addr,
-                     L.last ? L.last : "");
+                     L.pio, L.pio_ports[0], L.pio_ports[1], L.pio_ports[2],
+                     L.pio_ports[3], L.last ? L.last : "");
     }
 
     /* A3 is ARMED here and finished by the frame loop, because that is the

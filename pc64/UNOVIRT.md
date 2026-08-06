@@ -4,7 +4,7 @@ The appliance machinery: can this machine host a guest, and later, the guest
 itself. The programme and its phases are `docs/UNOVIRT-PLAN.md`; this file is
 the API surface, its changelog, and the things a consumer has to know.
 
-**Status: A0 through A5 [implemented on VMX]. A6 [in progress: a real kernel loads, enters and runs, and has not spoken yet]. A1 [unproved on SVM].** The
+**Status: A0 through A5 [implemented on VMX]. A6 [in progress: **Linux boots and prints**, not yet to a shell]. A1 [unproved on SVM].** The
 capability gate runs on every boot. The foothold is real on Intel: on devbuntu
 (bare metal, nested KVM) UnoDOS enters VMX operation, runs a guest, takes it
 through a CPUID intercept, reads its marker back out of guest memory, and then
@@ -358,62 +358,72 @@ through `uno_vmm_gpa()`, and every chain walk is bounded by the queue size.
 points at itself is one store by the guest, and a device that trusts a chain
 to terminate hangs the machine on request.
 
-## A6: a real kernel, and how far it gets
+## A6: Linux boots, and says so
 
-**Not finished, and this section is the handoff.** The criterion is Linux to a
-shell on virtio-console. What exists is the loader, the boot protocol, a
-serial port, and a kernel that executes.
+**Not finished** - the criterion is a shell on virtio-console. What exists is a
+kernel that runs.
 
-    linux silent: 16870 KB, 0 chars 0 lines over 6 exits,
-                  stopped on 0 at 543fa80 (vec e err 0 addr 40e)
+    linux SPOKE: 16870 KB, 1542 chars 24 lines over 3666 exits, 3100 pio
 
-**The x86 equivalent of Glide's device tree is `boot_params`.** An arm64
-kernel is entered with x0 holding a flattened device tree and learns its
-machine from it; an x86-64 kernel is entered with RSI holding a zero page and
-learns its machine from that. Same sentence, different structure, and in both
-cases a kernel handed nothing does not get far enough to complain. `bzImage`
-is read off the filesystem into the carve, the setup header travels verbatim
-from the image (it carries the kernel's own answers about itself, and
-inventing any of them breaks on the next release), and the e820 map is ours to
-write - with the loader's own page tables inside a **reserved** run, because a
-kernel told that memory is free will use it, and it is still running on those
-tables.
+    KASLR disabled: 'nokaslr' on cmdline.
+    [    0.000000] Linux version 7.0.0-28-generic (buildd@lcy02-amd64-047) ...
+    [    0.000000] Command line: earlyprintk=serial,ttyS0,115200 console=ttyS0
+                   nolapic no_timer_check panic=-1 nokaslr
+    [    0.000000] BIOS-provided physical RAM map:
+    [    0.000000] BIOS-e820: [mem 0x0000000000000000-0x000000000009fbff] System RAM
+    [    0.000000] BIOS-e820: [mem 0x0000000000600000-0x0000000000ffffff] device reserved
+    [    0.000000] BIOS-e820: [mem 0x0000000001000000-0x000000005fffffff] System RAM
+    [    0.000000] printk: legacy bootconsole [earlyser0] enabled
+    [    0.000000] NX (Execute Disable) protection: active
+    [    0.000000] DMI not present or invalid.
 
-### Three faults, each one further in
+Every line of that is a claim about this hypervisor rather than about Linux.
+It read the command line we placed, so `boot_params` was accepted. It echoed
+back the **e820 map we invented**, our reserved run for the loader's page
+tables included. It found the 8250 and enabled a console on it. And it says
+DMI is absent, which is true: we provide no SMBIOS. It was still running when
+the three-second bound stopped it.
 
-The value of this phase so far is the sequence, so it is recorded rather than
-summarised:
+**The x86 equivalent of Glide's device tree is `boot_params`**, and the
+comparison holds all the way down: an arm64 kernel is entered with x0 holding
+a flattened device tree, an x86-64 kernel with RSI holding a zero page, and
+both learn their machine from nothing else.
 
-1. **Triple fault at entry+0x7e.** No vector, no address: the kernel has no
+### Four faults, each one further in
+
+The sequence is the value here, so it is kept:
+
+1. **Triple fault at entry+0x7e.** No vector, no address - the kernel has no
    IDT yet, so every early fault is a triple fault at whatever RIP it reached.
-   Fixed by trapping #UD, #GP and #PF in the exception bitmap, which turns
-   "it stopped" into a vector and an address.
-2. **`#GP(0)` at entry+0x7e, once it could be seen.** VMX requires the guest's
-   CR4 to keep VMXE set at all times, and Linux does not know it is a guest:
-   it writes CR4 with its own bits, VMXE cleared among them, a hundred bytes
-   into its entry point. **A kernel cannot boot without the shadow
-   registers.** VMXE is now ours - the mask makes that write exit instead of
-   faulting, the read shadow makes the guest see the bit clear, and the guest
-   keeps every other bit.
-3. **`#PF(0)` at guest linear `0x40e`, at RIP `0x543fa80`.** Where it is now.
-   The RIP is far beyond the load address, so the decompressor has relocated
-   itself and is running; `0x40e` is the EBDA pointer in the BIOS data area.
+   Trapping #UD/#GP/#PF is what made the next one legible.
+2. **`#GP(0)` at the same place, once it could be seen.** VMX requires the
+   guest's CR4 to keep VMXE set and Linux does not know it is a guest: it
+   writes CR4 with VMXE cleared a hundred bytes into its entry point. **A
+   kernel cannot boot without the CR shadow registers.**
+3. **`#PF(0)` at guest `0x40e`** - and this one was ours. The decompressor
+   **takes page faults on purpose**: its identity map is built on demand and
+   its own handler adds the mapping and returns. The bitmap that made fault 2
+   visible was stealing an exception the guest handles correctly, and
+   reporting the kernel's normal operation as a failure. It is empty now; it
+   earned its keep and then got out of the way.
+4. **Silence, over 1454 exits, ending in `hlt`.** The tell was in the numbers:
+   **zero of those exits were port I/O**, and a booting kernel touches the
+   PIT, the CMOS and the PCI config ports constantly. Port I/O does not exit
+   unless asked. Without the unconditional-I/O-exiting control the guest's
+   `in` and `out` had been executing **natively, against this machine's real
+   ports** - so the kernel was not failing to reach its serial port, it was
+   reaching the host's.
 
-### What the next session should look at, in order
+### What is left before a shell
 
-- **Nothing was printed**, over six exits, none of them port I/O. Before
-  chasing the page fault, find out whether the kernel ever looked at the
-  command line: `earlyprintk=serial` only arms if it parses `cmd_line_ptr`,
-  and a zero page it did not accept explains both the silence and possibly the
-  fault. Check `hdr.version`, `setup_header` copy bounds, and that
-  `cmd_line_ptr` is where a 64-bit kernel looks for it.
-- The BDA at `0x40e` is inside the first 2 MiB, which the loader's tables do
-  map - so either the kernel is on its OWN tables by then (likely) and the
-  fault is legitimate for a machine with no BIOS-provided low memory, or the
-  EPT mapping of GPA 0 is not what it should be. The e820 says
-  `0..0x9FC00` is usable RAM; a real machine has a BDA there and this one has
-  zeros.
-- Then a LAPIC, which `nolapic` currently papers over, and an initramfs.
+- **Somewhere to run.** Three seconds inside a boot-time selftest is not where
+  a kernel lives. It belongs behind `uno_vmm_tick`, which is what A3 built:
+  the guest gets a slice per frame and the desktop keeps drawing.
+- **A LAPIC and a timer.** `nolapic no_timer_check` papers over their absence,
+  and a kernel with no timer cannot schedule - which is most of what reaching
+  a shell means.
+- **An initramfs**, and A5's virtio-console wired up as the guest's real
+  console instead of the 8250 standing in for it.
 
 ## Changelog
 
@@ -428,8 +438,8 @@ summarised:
   at L0: entered, round trip, crasher contained, boot continued. `tools/
   hv_remote.py` runs it.
 - **2026-08-06, API 1.** A6 (partial): the bzImage loader, `boot_params`, an
-  8250 on COM1, CPUID/MSR handling for a real kernel, and CR shadow
-  registers. Contract S-HV-31.
+  8250 on COM1, CPUID/MSR handling for a real kernel, CR shadow registers
+  and unconditional I/O exiting. Linux boots and prints. Contracts S-HV-31..33.
 - **2026-08-06, API 1.** A5: `unovdev.c`/`unovdev.h` (virtio-mmio transport,
   console device, bounded ring walk), plus MMIO decode and a guest page-table
   walk in the VMX backend. Contracts S-HV-27..30.
