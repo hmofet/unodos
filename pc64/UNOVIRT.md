@@ -4,7 +4,7 @@ The appliance machinery: can this machine host a guest, and later, the guest
 itself. The programme and its phases are `docs/UNOVIRT-PLAN.md`; this file is
 the API surface, its changelog, and the things a consumer has to know.
 
-**Status: A0, A1, A2, A3 [implemented on VMX]. A1 [unproved on SVM].** The
+**Status: A0 through A4 [implemented on VMX]. A1 [unproved on SVM].** The
 capability gate runs on every boot. The foothold is real on Intel: on devbuntu
 (bare metal, nested KVM) UnoDOS enters VMX operation, runs a guest, takes it
 through a CPUID intercept, reads its marker back out of guest memory, and then
@@ -283,6 +283,34 @@ bracket the entry (S-HV-23).
 It is worth noticing what made this findable: A3 is the first phase whose
 subject is the machine still working afterwards, rather than a value arriving.
 
+## A4: the three things that make a guest an operating system
+
+    clock ticks (+59145778 over 140 exits), irq taken once (1, not
+    redelivered), msr answered
+
+A guest needs a clock it can read, an interrupt it can take, and an MSR space
+somebody answers, and Linux asks for all three in its first milliseconds. One
+guest of eighteen instructions exercises all three, and the SHAPE of each proof
+matters more than the number.
+
+- **The clock is sampled across two slices, not within one.** `rdtsc` is not
+  intercepted, so the guest reads the real counter directly; the claim being
+  tested is that it keeps making progress, which sampling inside a single slice
+  would not show. 59 million cycles is about 17 ms of guest time.
+- **The interrupt is counted by the guest**, in its own memory, by a handler
+  reached through its own IDT. Nothing about the delivery is taken on trust,
+  and the count is checked AGAIN after forty more entries: an interrupt
+  delivered forever and one never delivered look identical for the first
+  millisecond. The CPU clears the entry-interruption valid bit itself, and this
+  is what proves it.
+- **The MSR read is answered by us.** The guest reads an index nothing real
+  uses, we put a marker in its EDX, and it stores what it got.
+
+**One thing here is right for this guest and wrong for Linux.** With no MSR
+bitmap configured, every MSR access exits. That is fine for eighteen
+instructions and unworkable for a kernel that reads MSRs constantly, so the
+bitmap belongs with the virtio work (S-HV-26).
+
 ## Changelog
 
 - **2026-08-06, API 1.** A0: the capability gate. `uno_vmm_probe`,
@@ -295,6 +323,9 @@ subject is the machine still working afterwards, rather than a value arriving.
 - **2026-08-06, API 1.** A1 PASSES on VMX (`hv_vmx.c`), on devbuntu under KVM
   at L0: entered, round trip, crasher contained, boot continued. `tools/
   hv_remote.py` runs it.
+- **2026-08-06, API 1.** A4: the `clockirq` backend entry - guest TSC across
+  slices, interrupt injection through the guest's own IDT, and MSR exits
+  answered. Contracts S-HV-24..26.
 - **2026-08-06, API 1.** A3: `uno_vmm_tick` / `uno_vmm_slice_str`, the
   preemption-timer slice, and the RFLAGS fix in the entry stub. Contracts
   S-HV-20..23.

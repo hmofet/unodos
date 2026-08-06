@@ -57,6 +57,16 @@ _Static_assert(__builtin_offsetof(uno_gprs, rbx) == 0x08, "gpr layout");
 _Static_assert(__builtin_offsetof(uno_gprs, rbp) == 0x30, "gpr layout");
 _Static_assert(__builtin_offsetof(uno_gprs, r15) == 0x70, "gpr layout");
 
+/* What A4's guest reports about itself.  Each field is a separate claim with
+ * its own way of being wrong, which is why this is a struct and not a bool. */
+typedef struct uno_vm_clockirq {
+    unsigned long long t1, t2;   /* its clock, sampled across two slices     */
+    unsigned long long msr_echo; /* what it read back from an MSR we answered */
+    int irqs;                    /* times its own handler ran                */
+    int redelivered;             /* did the acknowledged one come back?      */
+    int exits;                   /* how many exits it took to get there      */
+} uno_vm_clockirq;
+
 typedef struct uno_hv {
     const char *name;                     /* "svm" | "vmx"                   */
 
@@ -90,6 +100,11 @@ typedef struct uno_hv {
      * it a slice and the machine takes it back. */
     int (*spin_start)(void);
     int (*slice)(unsigned budget_us, uno_vmexit *out);
+
+    /* A4: the three things a guest needs before it can be an operating
+     * system - a clock it can read, an interrupt it can take, and an MSR
+     * space somebody answers.  One guest exercises all three. */
+    int (*clockirq)(struct uno_vm_clockirq *out);
 } uno_hv_t;
 
 const uno_hv_t *uno_hv_svm(void);         /* hv_svm.c                        */

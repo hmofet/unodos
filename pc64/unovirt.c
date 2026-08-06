@@ -453,7 +453,7 @@ static char g_slice_str[144];
  * a machine that stops. */
 #define VM_MARKER 0x534F444F4E55ull      /* 'UNODOS', little-endian          */
 
-static char g_self[320];
+static char g_self[480];
 static int  g_self_done, g_self_ok;
 
 const char *uno_vmm_selftest_str(void) { return g_self; }
@@ -552,6 +552,21 @@ int uno_vmm_selftest(void)
         int n = (int)strlen(g_self);
         snprintf(g_self + n, sizeof g_self - (unsigned)n,
                  "; ept not implemented for %s", hv->name);
+    }
+
+    /* ---- A4: a clock, an interrupt, and an MSR space -------------------- */
+    if (g_self_ok && hv->clockirq) {
+        uno_vm_clockirq k;
+        int ok4 = hv->clockirq(&k);
+        int n = (int)strlen(g_self);
+        snprintf(g_self + n, sizeof g_self - (unsigned)n,
+                 "; clock %s (+%llu over %d exits), irq %s (%d, %sredelivered), "
+                 "msr %s",
+                 k.t2 > k.t1 ? "ticks" : "STUCK", k.t2 - k.t1, k.exits,
+                 k.irqs == 1 ? "taken once" : "WRONG", k.irqs,
+                 k.redelivered ? "" : "not ",
+                 k.msr_echo ? "answered" : "NOT ANSWERED");
+        if (!ok4) g_self_ok = 0;
     }
 
     /* A3 is ARMED here and finished by the frame loop, because that is the

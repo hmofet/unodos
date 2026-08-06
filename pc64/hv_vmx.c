@@ -811,7 +811,201 @@ static int vmx_slice(unsigned budget_us, uno_vmexit *out)
     return 1;
 }
 
+/* ---- A4: a clock, an interrupt, and an MSR space --------------------------
+ *
+ * These are the three things a guest needs before it can be an operating
+ * system rather than a program. Linux asks for all three in its first
+ * milliseconds: it reads a counter, it installs an IDT and expects timer
+ * interrupts through it, and it reads MSRs constantly.
+ *
+ * One guest exercises all three, and the shape of the proof matters more than
+ * the numbers. The clock is sampled ACROSS two slices, so a guest that merely
+ * ran once cannot pass - it has to keep making progress. The interrupt is
+ * counted BY THE GUEST in its own memory, through its own vector table, so
+ * nothing about the delivery is taken on trust. And the count is checked again
+ * after further slices, because an interrupt that is delivered forever is a
+ * different bug from one that is never delivered and looks identical for the
+ * first millisecond.
+ */
+#define GP_IDT   0x5000
+#define GP_TSS2  0x9000
+#define GP_CELLS 0x100000        /* [0] tsc, [1] msr echo, [2] irq counter   */
+#define A4_VECTOR 0x20
+#define A4_MSR   0x1234ABCDu     /* an index nothing real uses               */
+#define A4_MSR_ANSWER 0x5A5A5A5Au
+#define EXIT_RDMSR 31
+#define EXIT_WRMSR 32
+#define VM_ENTRY_INTR_VALID 0x80000000u
+
+/* The guest, hand-assembled because eighteen instructions do not justify a
+ * second toolchain in the build. Offsets are load-bearing and commented.
+ *
+ *   00: 48 BB <cells>   mov  rbx, 0x100000     ; its own memory
+ *   0A: 0F 31           rdtsc                  ; NOT intercepted: it reads
+ *   0C: 89 03           mov  [rbx], eax        ;   the real counter directly
+ *   0E: B9 <msr>        mov  ecx, 0x1234ABCD
+ *   13: 0F 32           rdmsr                  ; -> exit 31, we answer
+ *   15: 89 53 04        mov  [rbx+4], edx      ; the answer, in its memory
+ *   18: EB F0           jmp  0x0A              ; forever
+ *
+ *   handler, at +0x100:
+ *   FF 05 <disp32>      incl [rip+disp]        ; count it, in its own memory
+ *   48 CF               iretq
+ */
+static int a4_emit(void)
+{
+    u8 *p = (u8 *)uno_vmm_gpa(GP_CODE, 0x110);
+    u8 *h;
+    unsigned i;
+    u64 counter = GP_CELLS + 8;
+    long disp;
+    if (!p) return 0;
+    for (i = 0; i < 0x110; i++) p[i] = 0;
+
+    p[0] = 0x48; p[1] = 0xBB;
+    for (i = 0; i < 8; i++) p[2 + i] = (u8)((u64)GP_CELLS >> (8 * i));
+    p[0x0A] = 0x0F; p[0x0B] = 0x31;
+    p[0x0C] = 0x89; p[0x0D] = 0x03;
+    p[0x0E] = 0xB9;
+    for (i = 0; i < 4; i++) p[0x0F + i] = (u8)(A4_MSR >> (8 * i));
+    p[0x13] = 0x0F; p[0x14] = 0x32;
+    p[0x15] = 0x89; p[0x16] = 0x53; p[0x17] = 0x04;
+    p[0x18] = 0xEB; p[0x19] = (u8)(signed char)(0x0A - 0x1A);
+
+    h = p + 0x100;
+    /* rip-relative displacement is measured from the END of the instruction,
+     * which is six bytes on from its start. */
+    disp = (long)(counter - (GP_CODE + 0x100 + 6));
+    h[0] = 0xFF; h[1] = 0x05;
+    for (i = 0; i < 4; i++) h[2 + i] = (u8)((unsigned long)disp >> (8 * i));
+    h[6] = 0x48; h[7] = 0xCF;
+    return 1;
+}
+
+static int a4_idt(void)
+{
+    u8 *idt = (u8 *)uno_vmm_gpa(GP_IDT, 4096);
+    u64 off = GP_CODE + 0x100;
+    u8 *e;
+    unsigned i;
+    if (!idt) return 0;
+    for (i = 0; i < 4096; i++) idt[i] = 0;
+    e = idt + A4_VECTOR * 16;
+    e[0] = (u8)off;  e[1] = (u8)(off >> 8);
+    e[2] = 0x08;     e[3] = 0x00;              /* the guest's own code sel   */
+    e[4] = 0;                                  /* IST 0: the current stack   */
+    e[5] = 0x8E;                               /* present, DPL 0, int gate   */
+    e[6] = (u8)(off >> 16); e[7] = (u8)(off >> 24);
+    for (i = 0; i < 4; i++) e[8 + i] = (u8)(off >> (32 + 8 * i));
+    return 1;
+}
+
+/* One entry, with whatever servicing the exit needs.  Returns 0 when the
+ * guest is no longer runnable, which is how a wrong turn ends the test
+ * instead of the machine. */
+static int a4_step(uno_vmexit *ex)
+{
+    u64 per_us = uno_native_tsc_per_us();
+    unsigned shift = (unsigned)(rdmsr(IA32_VMX_MISC) & 0x1F);
+    u64 ticks;
+    if (!per_us) per_us = 1000ull;
+    ticks = (per_us * 2000ull) >> shift;         /* 2 ms is plenty here      */
+    if (!ticks) ticks = 1;
+    vmwrite(VMX_PREEMPT_VALUE, ticks);
+    run_once(ex);
+    switch (ex->raw) {
+    case EXIT_RDMSR:
+        /* The guest asked for an MSR and we are its entire MSR space. With no
+         * MSR bitmap every access exits, which is correct for a guest this
+         * size and wrong for Linux - A5 wants a bitmap so the hot ones do not
+         * trap. */
+        g_ctx.rax = 0;
+        g_ctx.rdx = A4_MSR_ANSWER;
+        vmwrite(GUEST_RIP, vmread(GUEST_RIP) + vmread(VM_EXIT_INSTR_LEN));
+        return 1;
+    case EXIT_CPUID:
+        g_ctx.rax = 0;
+        vmwrite(GUEST_RIP, vmread(GUEST_RIP) + vmread(VM_EXIT_INSTR_LEN));
+        return 1;
+    case EXIT_PREEMPT:
+    case EXIT_EXT_INTR:
+        return 1;
+    default:
+        return 0;                                 /* anything else is a bug */
+    }
+}
+
+static int vmx_clockirq(uno_vm_clockirq *out)
+{
+    u64 eptp, pa = (u64)(unsigned long long)(void *)g_vmcs;
+    volatile u32 *cells;
+    uno_vmexit ex;
+    u8 fail = 0;
+    unsigned i;
+    u32 proc, proc2, pin;
+    int n;
+
+    out->t1 = out->t2 = out->msr_echo = 0;
+    out->irqs = out->redelivered = out->exits = 0;
+
+    cells = (volatile u32 *)uno_vmm_gpa(GP_CELLS, 16);
+    if (!cells || !uno_vmm_probe()->slat || !uno_vmm_probe()->preempt_timer) return 0;
+    eptp = ept_build();
+    if (!eptp || !guest_tables_in_carve()) return 0;
+    cells[0] = 0; cells[1] = 0; cells[2] = 0;
+
+    for (i = 0; i < sizeof g_ctx / sizeof(u64); i++) ((u64 *)&g_ctx)[i] = 0;
+    *(u32 *)g_vmcs = (u32)(rdmsr(IA32_VMX_BASIC) & 0x7FFFFFFFu);
+    __asm__ volatile ("vmclear %1; setna %0" : "=r"(fail) : "m"(pa) : "cc");
+    if (fail) return 0;
+    __asm__ volatile ("vmptrld %1; setna %0" : "=r"(fail) : "m"(pa) : "cc");
+    if (fail) return 0;
+    g_launched = 0;
+
+    vmcs_reset(0, GP_CODE, 0xFFF);
+    pin   = adjust(IA32_VMX_TRUE_PIN, IA32_VMX_PINBASED,
+                   PIN_EXT_INTR_EXIT | PIN_PREEMPT, 1);
+    proc  = adjust(IA32_VMX_TRUE_PROC, IA32_VMX_PROCBASED,
+                   PROC_HLT_EXITING | (1u << 31), 1);
+    proc2 = adjust(IA32_VMX_PROCBASED2, IA32_VMX_PROCBASED2, EPT_PROC2, 0);
+    vmwrite(PIN_BASED_CTLS, pin);
+    vmwrite(PROC_BASED_CTLS, proc);
+    vmwrite(PROC_BASED_CTLS2, proc2);
+    vmwrite(EPT_POINTER, eptp);
+    vmwrite(GUEST_CR3, GP_PML4);
+    vmwrite(GUEST_GDTR_BASE, GP_GDT);
+    vmwrite(GUEST_TR_BASE, GP_TSS2);
+    vmwrite(GUEST_RSP, GP_STACK);
+    /* Its own vector table, and interrupts open. A guest with IF clear cannot
+     * take the injection, and the failure looks exactly like an injection that
+     * never happened. */
+    vmwrite(GUEST_IDTR_BASE, GP_IDT);
+    vmwrite(GUEST_IDTR_LIMIT, 0xFFF);
+    vmwrite(GUEST_RFLAGS, 0x202);
+    if (!a4_emit() || !a4_idt()) return 0;
+
+    /* Phase 1 and 2: does its clock advance ACROSS slices? */
+    for (n = 0; n < 40; n++) { if (!a4_step(&ex)) return 0; out->exits++; }
+    out->t1 = cells[0];
+    for (n = 0; n < 40; n++) { if (!a4_step(&ex)) return 0; out->exits++; }
+    out->t2 = cells[0];
+    out->msr_echo = cells[1];
+
+    /* Phase 3: hand it an interrupt it never asked for and did not raise. */
+    vmwrite(VM_ENTRY_INTR_INFO, VM_ENTRY_INTR_VALID | A4_VECTOR);
+    for (n = 0; n < 20; n++) { if (!a4_step(&ex)) return 0; out->exits++; }
+    out->irqs = (int)cells[2];
+
+    /* Phase 4: and does it STAY delivered once, rather than forever? */
+    for (n = 0; n < 40; n++) { if (!a4_step(&ex)) return 0; out->exits++; }
+    out->redelivered = ((int)cells[2] != out->irqs);
+    return out->t2 > out->t1
+        && out->msr_echo == A4_MSR_ANSWER
+        && out->irqs == 1
+        && !out->redelivered;
+}
+
 static const uno_hv_t VMX = { "vmx", vmx_enable, vmx_marker, vmx_crasher,
-                              vmx_ept, vmx_spin_start, vmx_slice };
+                              vmx_ept, vmx_spin_start, vmx_slice, vmx_clockirq };
 
 const uno_hv_t *uno_hv_vmx(void) { return &VMX; }
