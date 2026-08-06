@@ -11,6 +11,69 @@ fulfilled.
 
 ---
 
+## 2026-08-05 — REQUEST to unofs/storage: PYRT.UNO load hung once, first boot after a kernel push
+
+**Status: observed ONCE, has NOT reproduced.** Filed for the evidence, not as a
+confirmed defect - and deliberately without the root cause I first thought it
+had, because that turned out to be wrong.
+
+### What happened
+
+On build `debug-67330815-20260805-2259` (ZimaBlade, `UNO_DEBUG=1 UNO_DETACH=1`),
+the URC `py` verb stopped answering. Two `py` verbs in a row timed out at ~90 s
+each. On the same link, in the same minute, `vols` answered instantly - so the
+box, the kernel and the channel were all alive and only PYRT was wedged.
+
+The box recorded a hang: `\CRASH\DEFAULTS\HG005.TXT` (4610 B) and the debug HUD
+showed `cr1`. **That file is still on the ZimaBlade's UNODOS volume** and is the
+single best artifact anyone picking this up has; it was never read, because
+reading a file over URC needs the `py` verb that was the thing broken.
+
+### What was ruled out
+
+- **Not a missing module.** `APPS\PYRT.UNO` is present, 310 K.
+- **Not general module loading.** With `py` dead, UnoWord (132 K) and Dostris
+  (24 K) both launched from disk normally.
+- **Not truncation or corruption.** `MODBUF_MAX` is 2 MB and `mod_instantiate`
+  CRC-checks the image; either would return a clean `no PYRT.UNO`, not a hang.
+- **Not an ABI mismatch.** `pyrt_ensure()` checks `abi != UNO_PYHOST_ABI` and
+  fails cleanly. No commit between the two builds touched `pc64_modload.c`,
+  `uno_module.h` or `pyhost.h`, and module imports resolve by name.
+
+### What it is NOT, despite appearances
+
+I first concluded detach was the cause: setting `DETACH.CFG: off` and rebooting
+made `py` work. **That was a confounded test.** The box has since been restored
+to `DETACH.CFG: on`, is confirmed `DETACHED (native)` in the System window, and
+`py print(6*7)` answers `42`. Detach is not the variable. The reboot is what
+cleared it, and any reboot appears to do so.
+
+### The one thing that was actually unique about the failing boot
+
+It was the **first boot after a kernel push** - `BOOTX64.EFI` (4.3 MB) and
+`BUILD.TXT` were written to the FAT volume over URC, then the box was rebooted
+to flush the write-back cache. Both later boots were ordinary ones and both are
+fine. If there is a real defect here it is most likely in that sequence - what
+the FAT/cluster state looks like on the boot immediately after a large
+write-back-cached file replacement - which is why this goes to the storage lane
+rather than to pc64-python.
+
+Supporting circumstantial fact: PYRT is the largest module on the volume by a
+wide margin (310 K vs 195 K for the next biggest, UOCALC), so if a read path is
+slow enough to cross the 20 s freeze watchdog, PYRT is the module that would
+find it first. That is a hypothesis, not a measurement - nobody has timed a
+native module read.
+
+### Suggested first step
+
+Read `HG005.TXT` off the ZimaBlade (it needs a console or a `py`-free path) - it
+names where the watchdog caught the machine, which would settle in one step
+whether this was in the read path at all.
+
+No storage code touched. Requester: the unoui/shell lane (Aurora close-box fix
++ Control Panel preference persistence).
+
+
 ## 2026-08-05 — CLAIM: CS3 browser wiring (branch `libcss-wire`)
 
 Continuing the csslib claim below: taking the browser-lane uno:engine page
