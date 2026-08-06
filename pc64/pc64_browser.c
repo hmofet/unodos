@@ -292,9 +292,33 @@ static void render_md(const char *src, unoui_rect r, int scroll)
  *
  * The DOM is cached: br_draw runs every frame, and re-parsing per frame would
  * be absurd, so dom_sync() re-parses only when the source actually changes. */
+/* ---- which renderer is drawing -------------------------------------------
+ * Both of them are in this binary. They always were: build.sh compiles
+ * unoweb's whole pipeline (uw_dom/uw_html/uw_css/uw_style/uw_layout), quickjs
+ * and csslib into EVERY kernel, and -DUW_ENGINE never chose what to link - only
+ * which of two paths this file calls. So the engine choice was compile-time for
+ * no reason except that it was written that way, and one perfectly good
+ * renderer sat unreachable in every image.
+ *
+ * That mattered beyond tidiness: the cascade switch on uno:engine flips at
+ * runtime and then reports that libcss is computing the styles, which on a flow
+ * painter build is not true of anything on screen. A switch that lies about
+ * what it did is worse than no switch. Now all three choices - script engine,
+ * cascade, renderer - are the same kind of thing.
+ *
+ * UW_ENGINE survives as the INITIAL selection only, so BROWSER_ENGINE=uw keeps
+ * meaning what the gates expect ("boot with the engine renderer"). It no longer
+ * removes anything from the build. */
+enum { RENDER_FLOW = 0, RENDER_UW = 1 };
 #ifdef UW_ENGINE
-static void img_cache_reset(void);   /* defined with the image cache below */
+static int g_renderer = RENDER_UW;
+#else
+static int g_renderer = RENDER_FLOW;
 #endif
+static const char *renderer_name(int r)
+{ return r == RENDER_UW ? "unoweb engine" : "flow painter"; }
+
+static void img_cache_reset(void);   /* defined with the image cache below */
 static uw_doc  *g_dom;
 static unsigned g_dom_sig;
 /* Which TREE this is, as opposed to which SOURCE it came from. The two are not
@@ -332,7 +356,6 @@ static int  loc_is_net(const char *loc);
  * protects is engine-only. */
 static int g_in_progress_paint;
 
-#ifdef UW_ENGINE
 static void fetch_link_sheets(uw_doc *d);        /* defined with the URL helpers */
 static void prefetch_subresources(uw_doc *d);    /* likewise */
 
@@ -346,7 +369,6 @@ static void prefetch_subresources(uw_doc *d);    /* likewise */
  * thing the script is manipulating. */
 static char g_js_log[2048];
 
-#ifdef UW_ENGINE
 /* ---- forms ----------------------------------------------------------------
  * The focused control, and submission. A control's VALUE lives in its own
  * `value` attribute rather than in a side table: the DOM already has to hold
@@ -403,7 +425,6 @@ static int form_body(uw_node *form, char *out, int cap)
     out[at] = 0;
     return at;
 }
-#endif /* UW_ENGINE */
 
 
 /* Milliseconds since this page's VM was built. The TSC is the only clock a
@@ -443,7 +464,6 @@ static void run_page_scripts(uw_doc *d)
     webjs_event(uw_body(d), "load", g_js_log, sizeof g_js_log);
     webjs_take_dirty();          /* the first layout has not happened yet */
 }
-#endif
 
 /* The one line of feedback the browser has. Declared here rather than with the
  * tab state below because dom_sync writes to it: a tree that would not fit is
@@ -476,9 +496,7 @@ static void dom_sync(const char *src)
     unsigned sig = doc_sig(src);
     if (g_dom && sig == g_dom_sig) return;
     if (g_dom) { uw_doc_free(g_dom); g_dom = NULL; }
-#ifdef UW_ENGINE
     img_cache_reset();               /* decoded frames belong to the old page */
-#endif
     memset(&c, 0, sizeof c);
     /* The arena is sized to THIS document, not to a constant. It was a flat
      * 2 MB, which was never a page-size opinion so much as a number chosen when
@@ -514,11 +532,17 @@ static void dom_sync(const char *src)
     g_dom_sig = sig;
     g_dom_gen++;                     /* a new tree, whatever the text says */
     note_arena_full();
-#ifdef UW_ENGINE
-    prefetch_subresources(g_dom);    /* ask for everything before needing any */
-    fetch_link_sheets(g_dom);
-    run_page_scripts(g_dom);
-#endif
+    /* Subresources, linked sheets and page scripts belong to the ENGINE path:
+     * the flow painter has nowhere to put an image, no cascade to feed a
+     * stylesheet to, and runs scripts by rewriting the source (js_expand)
+     * instead of against the tree. Doing them for a flow render would be work
+     * whose results nothing reads - and, for the scripts, two engines mutating
+     * one document. */
+    if (g_renderer == RENDER_UW) {
+        prefetch_subresources(g_dom);    /* ask for everything before needing any */
+        fetch_link_sheets(g_dom);
+        run_page_scripts(g_dom);
+    }
 }
 
 /* Emit a text node. Outside <pre>, every run of whitespace (including the
@@ -640,7 +664,6 @@ static void walk_dom(uw_doc *d, uw_node *parent, bstyle st, int li, int pre)
  * how wide text actually is. Getting this wrong does not crash anything - it
  * just lays the page out for the wrong font, which is exactly why the hook
  * exists rather than a hard-coded guess inside the engine. */
-#ifdef UW_ENGINE
 static int uw_slot(const uw_style *s)
 { return s->font_family == UW_FF_MONO ? BR_MONO_SLOT : BR_BODY_SLOT; }
 
@@ -917,15 +940,11 @@ static void render_uw(const char *src, unoui_rect r, int scroll)
     fy = r.y + g_uw_h;
     flh = 0;
 }
-#endif /* UW_ENGINE */
 
 static void render_html(const char *src, unoui_rect r, int scroll)
 {
     bstyle base = { 1, 0, 0, 0, 0, PG_TEXT };
-#ifdef UW_ENGINE
-    render_uw(src, r, scroll);
-    return;
-#endif
+    if (g_renderer == RENDER_UW) { render_uw(src, r, scroll); return; }
     dom_sync(src);
     fl_reset(r, scroll, 10);
     if (!g_dom) return;
@@ -1082,7 +1101,6 @@ static const char kScript[] =
 "</script>"
 "<hr><p>Everything above the rule was produced at open time by the script.</p>";
 
-#ifdef UW_ENGINE
 /* rel="stylesheet" is ASCII-caseless and may carry other tokens
  * (rel="stylesheet alternate"); match the token, not the whole string. */
 static int rel_is_stylesheet(const char *rel)
@@ -1187,8 +1205,6 @@ static void fetch_link_sheets(uw_doc *d)
         }
     }
 }
-#endif
-
 
 static void navigate(const char *loc, int push);
 
@@ -1238,7 +1254,6 @@ static int tag_at(const char *p, const char *name)   /* case-insensitive "<name"
  * (run_page_scripts below) - that is M5, and it is why this whole function
  * is compiled out there rather than left to fight with the live bindings
  * over who owns <script>. */
-#ifndef UW_ENGINE
 /* `cap` is the document buffer's size, not a constant: the buffer grows to the
  * page now, so a static scratch of the maximum would be a megabyte of BSS
  * carried by every build to serve the rare page that needs it. One allocation
@@ -1289,7 +1304,6 @@ static void js_expand(char *doc, int cap)
     memcpy(doc, out, (size_t)oi+1);
     free(out);
 }
-#endif /* !UW_ENGINE */
 
 /* ---- the start page's list ----------------------------------------------- */
 static void refresh_files(void)
@@ -1520,11 +1534,11 @@ static void doc_set(btab *t, const char *src, int html)
     if (!d) return;
     sput(d, t->doccap, src);
     t->is_html = html;
-#ifndef UW_ENGINE
-    if (html) js_expand(d, t->doccap);
-#else
-    (void)html;                  /* the engine build runs scripts on the DOM */
-#endif
+    /* Only the flow painter expands scripts into the source. The engine runs
+     * them against the live DOM (run_page_scripts), and letting both happen
+     * would run every <script> twice, once into the text and once on the tree
+     * built from that text. */
+    if (html && g_renderer == RENDER_FLOW) js_expand(d, t->doccap);
 }
 
 static void doc_error(btab *t, const char *what, const char *why)
@@ -1613,23 +1627,47 @@ static void load_loc(btab *t, const char *loc)
     if (!strcmp(loc, "uno:sample"))  { doc_set(t, kSample, 1);  sput(t->title, TITMAX, "HTML sample"); return; }
     if (!strcmp(loc, "uno:script"))  { doc_set(t, kScript, 1);  sput(t->title, TITMAX, "JavaScript"); return; }
 
-    /* uno:engine - the engine switches (script + layout cascade). Plain
-     * links carry the actions so the page works with the keyboard
-     * link-walker like every other internal page; both switches apply from
-     * the next page load on. */
+    /* uno:engine - the three engine switches: renderer, script engine, layout
+     * cascade. Plain links carry the actions so the page works with the
+     * keyboard link-walker like every other internal page; all three apply
+     * from the next page load on.
+     *
+     * The RENDERER is listed first because the other two depend on it: a
+     * cascade means nothing to the flow painter, which does not have one, and
+     * the script engine is reached by two different routes (js_expand into the
+     * source, or run_page_scripts against the tree). Reading the page top to
+     * bottom now tells you what is actually drawing your pages. */
     if (!strcmp(loc, "uno:engine") ||
         !strcmp(loc, "uno:engine/unojs") || !strcmp(loc, "uno:engine/quickjs") ||
         !strcmp(loc, "uno:engine/cascade/builtin") ||
-        !strcmp(loc, "uno:engine/cascade/libcss")) {
-        char pg[1280], *p = pg, *end = pg + sizeof pg;
+        !strcmp(loc, "uno:engine/cascade/libcss") ||
+        !strcmp(loc, "uno:engine/render/flow") ||
+        !strcmp(loc, "uno:engine/render/unoweb")) {
+        char pg[1792], *p = pg, *end = pg + sizeof pg;
         if (!strcmp(loc, "uno:engine/unojs"))   js_engine_set(JS_ENGINE_UNOJS);
         if (!strcmp(loc, "uno:engine/quickjs")) js_engine_set(JS_ENGINE_QUICKJS);
         if (!strcmp(loc, "uno:engine/cascade/builtin")) uwx_libcss_unregister();
         if (!strcmp(loc, "uno:engine/cascade/libcss"))  uwx_libcss_register();
-#ifdef UW_ENGINE
+        if (!strcmp(loc, "uno:engine/render/flow"))   g_renderer = RENDER_FLOW;
+        if (!strcmp(loc, "uno:engine/render/unoweb")) g_renderer = RENDER_UW;
+        /* A focused form control is engine state and the flow painter cannot
+         * draw, move or unfocus one - leaving it set across a switch would
+         * silently swallow every keystroke into an element nothing renders. */
+        if (g_renderer == RENDER_FLOW) g_form_focus = 0;
         g_uw_w = 0;                    /* force restyle+relayout on next paint */
-#endif
+        g_dom_sig = 0;                 /* and a re-parse: the paths disagree about
+                                        * who runs <script>, so the tree the other
+                                        * renderer built is not the one we want */
         p = sapp(p, end, "<h1>Engines</h1>"
+                         "<h2>Renderer</h2><p>Pages are painted by the <b>");
+        p = sapp(p, end, renderer_name(g_renderer));
+        p = sapp(p, end, "</b>.</p>"
+                         "<ul><li><a href='uno:engine/render/flow'>flow painter</a> - "
+                         "the UnoDOS renderer, a direct walk of the tree (the "
+                         "default)</li>"
+                         "<li><a href='uno:engine/render/unoweb'>unoweb engine</a> - "
+                         "the full pipeline: cascade, block layout, display list, "
+                         "images and forms</li></ul>"
                          "<h2>Script engine</h2><p>Pages' <code>&lt;script&gt;</code> "
                          "blocks are running on <b>");
         p = sapp(p, end, js_engine_name(js_engine_get()));
@@ -1643,15 +1681,19 @@ static void load_loc(btab *t, const char *loc)
                          "<ul><li><a href='uno:engine/cascade/builtin'>built-in</a> - "
                          "unoweb's own matcher and cascade (the default)</li>"
                          "<li><a href='uno:engine/cascade/libcss'>libcss</a> - the "
-                         "vendored NetSurf CSS engine (full selectors)</li></ul>"
-#ifndef UW_ENGINE
-                         "<p><i>This build paints pages with the flow renderer; the "
-                         "cascade choice takes effect in unoweb-engine builds "
-                         "(BROWSER_ENGINE=uw).</i></p>"
-#endif
-                         "<hr><p>Try the script engines on <a href='uno:script'>the "
-                         "JavaScript demo</a>, the cascades on <a href='uno:sample'>"
-                         "the HTML sample</a>. Choices last until the browser closes.</p>");
+                         "vendored NetSurf CSS engine (full selectors)</li></ul>");
+        /* Told at runtime, not compiled in. The old note said the cascade
+         * needed a different BUILD; now it needs a different RENDERER, and the
+         * page can see which one is selected - so it only says this when it is
+         * actually true of the reader's situation. */
+        if (g_renderer == RENDER_FLOW)
+            p = sapp(p, end, "<p><i>The flow painter has no cascade, so the "
+                             "choice above changes nothing until the unoweb "
+                             "engine is selected.</i></p>");
+        p = sapp(p, end, "<hr><p>Try the script engines on <a href='uno:script'>the "
+                         "JavaScript demo</a>, the renderers and cascades on "
+                         "<a href='uno:sample'>the HTML sample</a>. Choices last "
+                         "until the browser closes.</p>");
         (void)p;
         doc_set(t, pg, 1);
         sput(t->title, TITMAX, "Engines");
@@ -1684,9 +1726,7 @@ static void load_loc(btab *t, const char *loc)
         if (n < 0) { doc_error(t, name, "no volume carries that file"); return; }
         d[n] = 0;
         t->is_html = name_is_html(name);
-#ifndef UW_ENGINE
-        if (t->is_html) js_expand(d, t->doccap);
-#endif
+        if (t->is_html && g_renderer == RENDER_FLOW) js_expand(d, t->doccap);
         return;
     }
 
@@ -1733,9 +1773,7 @@ static void load_loc(btab *t, const char *loc)
         t->is_html = 1;
         if (q >= 3 && !strncmp(loc+q-3, ".md", 3)) t->is_html = 0;
         else if (q >= 4 && !strncmp(loc+q-4, ".txt", 4)) t->is_html = 0;
-#ifndef UW_ENGINE
-        if (t->is_html) js_expand(d, t->doccap);
-#endif
+        if (t->is_html && g_renderer == RENDER_FLOW) js_expand(d, t->doccap);
         return;
     }
 
@@ -1793,7 +1831,6 @@ static void resolve(const char *href, const char *base, char *out, int cap)
     sput(out, cap, href);
 }
 
-#ifdef UW_ENGINE
 /* Submit the form containing `ctl`. GET puts the fields in the query and is
  * an ordinary navigation; POST sends them as a body (pc64_http_request). */
 static void form_submit(btab *t, uw_node *ctl)
@@ -1844,7 +1881,6 @@ static void form_submit(btab *t, uw_node *ctl)
     }
     navigate(url, 1);
 }
-#endif /* UW_ENGINE */
 
 static void navigate(const char *loc, int push)
 {
@@ -2507,12 +2543,15 @@ static int br_event(struct unoui_widget *w, const void *ev, void *ctx)
     unoui_rect r = g_rect;
     (void)w; (void)ctx;
 
-#ifdef UW_ENGINE
     /* ---- a focused form control owns the keyboard ----
      * Ahead of everything else: while you are typing in a field, a plain
      * letter is text, not a browser shortcut. Enter submits, Tab and Esc
      * leave the field. The value lives on the element, so a re-render (or a
-     * script reading it) sees exactly what was typed. */
+     * script reading it) sees exactly what was typed.
+     *
+     * No renderer test needed: only the engine path can focus a control, so
+     * g_form_focus is NULL under the flow painter and this falls straight
+     * through. Switching renderers clears it below. */
     if (g_form_focus) {
         if (e->kind == UI_EV_CHAR && e->ch >= 32 && e->ch < 127) {
             const char *cur = uw_attr(g_dom, g_form_focus, "value");
@@ -2551,7 +2590,6 @@ static int br_event(struct unoui_widget *w, const void *ev, void *ctx)
             }
         }
     }
-#endif /* UW_ENGINE */
 
     /* ---- the find bar owns the keyboard while it is open ----
      * Ahead of the address bar because Ctrl-F is what put it there; a page
@@ -2842,10 +2880,12 @@ static int br_event(struct unoui_widget *w, const void *ev, void *ctx)
                 open_start_row(t->sel);
                 return 1;
             }
-#ifdef UW_ENGINE
             /* the engine owns page geometry when it is the renderer: ask the
-             * display list what is under the pointer */
-            if (g_dom) {
+             * display list what is under the pointer. Under the flow painter
+             * there IS no display list - it draws straight to the framebuffer -
+             * so the fall-through below (follow_link_at, which hit-tests the
+             * link rectangles the walk recorded) is the answer there. */
+            if (g_renderer == RENDER_UW && g_dom) {
                 uw_node *n = uw_hit_test(g_dom, e->x - r.x, e->y - r.y + t->scroll);
                 uw_node *a;
                 /* handlers see the click FIRST, as they do in a browser; a
@@ -2887,7 +2927,6 @@ static int br_event(struct unoui_widget *w, const void *ev, void *ctx)
                     }
                 }
             }
-#endif
             return follow_link_at(e->x, e->y + t->scroll);
         }
         return 0;

@@ -11,6 +11,33 @@ fulfilled.
 
 ---
 
+## 2026-08-06 — CLAIM (browser lane): the renderer becomes a runtime switch (branch `rtengine`)
+
+Taking the 22 `#ifdef UW_ENGINE` sites in `pc64_browser.c`, plus the two
+`BROWSER_ENGINE` lines in `build.sh` (choke-point, no restructuring). No other
+lane's files.
+
+**It is a source-level branch, not a linking problem, and that is the whole
+reason this is worth doing.** `build.sh` already compiles `uw_dom uw_html uw_css
+uw_style uw_layout` (line 168), quickjs and all of csslib into EVERY kernel,
+unconditionally. `-DUW_ENGINE` never controlled what was linked - it only chose
+which of two code paths `pc64_browser.c` calls. Both renderers are already in
+the binary of the build you are running right now; one of them is simply
+unreachable.
+
+One genuine link difference exists and has to go: the unomedia IMAGE half
+(`um_image`, `um_png`, `um_jpg`, ... 12 files, build.sh ~line 249) is compiled
+only for `BROWSER_ENGINE=uw`, because only the engine path decodes `<img>`.
+Linking it always costs the default kernel ~100 KB (measured from the two debug
+images: 4,419,158 vs 4,319,335 bytes). That is the price of the switch and it
+seems a fair one.
+
+Why now: the browser has THREE engine choices and until today only two of them
+were on the `uno:engine` page. The cascade switch is the awkward evidence - it
+flips at runtime, reports "styles are computed by the libcss cascade", and on a
+default kernel is inert, because the flow painter never consults a cascade. A
+switch that lies about what it did is worse than no switch.
+
 ## 2026-08-06 — browser → unoweb owner: an exhausted arena draws NOTHING, not less
 
 Found while removing the browser's size caps (claim below). Not blocking - the
