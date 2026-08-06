@@ -41,21 +41,58 @@ static void check_eq(int got, int want, const char *what)
 
 static const char *EASE_NAME[UI_EASE_N] = {
     "linear", "in", "out", "in-out", "in-cubic", "out-cubic", "in-out-cubic",
-    "out-back", "out-bounce", "step"
+    "out-back", "out-bounce", "step", "shake"
 };
 
 static void test_curves(void)
 {
     int e, t, prev;
 
+    /* SHAKE is not a ramp. It is a decaying oscillation about ZERO that comes
+     * home to zero (unoui_anim.h), so `to` is an amplitude and not a
+     * destination - the ramp contract below asserts the exact opposite of what
+     * it is for. It gets its own checks after this loop.
+     *
+     * This is what the two long-standing failures were: the loop ran to
+     * UI_EASE_N and demanded every curve end at ONE, so adding SHAKE to the
+     * enum made a correct implementation fail. They reported as `(null)`
+     * because EASE_NAME was never extended either, which is the same omission
+     * seen twice - a curve added to the enum and nowhere else. */
     for (e = 0; e < UI_EASE_N; e++) {
         char msg[96];
+        if (e == UI_EASE_SHAKE) continue;
         sprintf(msg, "%s: starts at 0", EASE_NAME[e]);
         check_eq(unoui_ease(e, 0), 0, msg);
         sprintf(msg, "%s: ends at ONE", EASE_NAME[e]);
         check_eq(unoui_ease(e, UI_ANIM_ONE), UI_ANIM_ONE, msg);
         sprintf(msg, "%s: clamps past the ends", EASE_NAME[e]);
         check(unoui_ease(e, -500) == 0 && unoui_ease(e, UI_ANIM_ONE + 500) == UI_ANIM_ONE, msg);
+    }
+
+    /* SHAKE's actual contract. It had NO coverage before this: the only checks
+     * that named it were the three ramp ones it could never satisfy. */
+    {
+        int hi = 0, lo = 0, prev_mag = -1, decays = 1, seg;
+        check_eq(unoui_ease(UI_EASE_SHAKE, 0), 0, "shake: starts at 0");
+        check_eq(unoui_ease(UI_EASE_SHAKE, UI_ANIM_ONE), 0, "shake: comes home to 0");
+        check(unoui_ease(UI_EASE_SHAKE, -500) == 0 &&
+              unoui_ease(UI_EASE_SHAKE, UI_ANIM_ONE + 500) == 0,
+              "shake: clamps to 0 past both ends");
+        for (t = 0; t <= UI_ANIM_ONE; t += 8) {
+            int v = unoui_ease(UI_EASE_SHAKE, t);
+            if (v > hi) hi = v;
+            if (v < lo) lo = v;
+        }
+        check(hi > 0 && lo < 0, "shake: swings to BOTH sides of zero");
+        /* each successive peak is smaller than the one before - a shake that
+         * did not decay would ring forever rather than settle */
+        for (seg = 1; seg <= 6; seg++) {
+            int v = unoui_ease(UI_EASE_SHAKE, UI_ANIM_ONE * seg / 7);
+            int mag = v < 0 ? -v : v;
+            if (prev_mag >= 0 && mag >= prev_mag) decays = 0;
+            prev_mag = mag;
+        }
+        check(decays, "shake: each peak decays below the last");
     }
 
     /* the non-overshoot curves never go backwards, and never leave 0..ONE */
