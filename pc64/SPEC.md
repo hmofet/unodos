@@ -1351,6 +1351,18 @@ BROWSER, JS, STUDIO, PHOTOS, PAINT, GAME, INST, MAC, PY, LIBC.
   the Left/Right/Enter keyboard path follow exactly the ink that was drawn.
   Under `BROWSER_ENGINE=uw` the map is empty and the DOM's own <a> elements
   drive the same keys.
+- **S-BROWSER-11** [auto] The layout cache MUST be keyed on the TREE, not
+  on the source text. Identical text re-parsed is a DIFFERENT tree that has
+  never been laid out, and a progressive paint followed by the completed
+  load re-parses exactly that: same bytes, new tree. Keying on the source
+  fingerprint made the cache skip layout on the new tree and the page
+  rendered BLANK, with the fetch, the parse, the subresources and the
+  status line all correct - which is why every server-side assertion in
+  `tools/netverify_urc.py` passed while nothing was on screen. `g_dom_gen`
+  is bumped once per rebuild and is what `render_uw` compares. Gate:
+  netverify section 1a asserts the COLOURS the page's own linked
+  stylesheets set are present in a screen grab, which is end to end from
+  the fetch through the cascade to a lit pixel.
 
 ## S-JS, the JS engine (`js.c`)
 

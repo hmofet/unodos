@@ -297,6 +297,14 @@ static void img_cache_reset(void);   /* defined with the image cache below */
 #endif
 static uw_doc  *g_dom;
 static unsigned g_dom_sig;
+/* Which TREE this is, as opposed to which SOURCE it came from. The two are not
+ * the same thing and the difference rendered pages blank: the layout cache
+ * keyed off the source fingerprint, so re-parsing the SAME text - which is
+ * exactly what a progressive paint followed by the completed load does -
+ * produced a brand-new tree that compared equal to the one already laid out,
+ * and was therefore never laid out or painted at all. Bumped once per rebuild,
+ * so a new tree can never be mistaken for the one on screen. */
+static unsigned g_dom_gen;
 
 /* Fingerprint the source rather than plumb an "invalidate" call through every
  * loader: g_doc is refilled from several places (a built-in demo, a local
@@ -451,6 +459,7 @@ static void dom_sync(const char *src)
     c.max_depth = 96;
     g_dom = uw_parse_string(src, -1, &c);
     g_dom_sig = sig;
+    g_dom_gen++;                     /* a new tree, whatever the text says */
 #ifdef UW_ENGINE
     prefetch_subresources(g_dom);    /* ask for everything before needing any */
     fetch_link_sheets(g_dom);
@@ -732,7 +741,10 @@ static void render_uw(const char *src, unoui_rect r, int scroll)
     unsigned sig;
     dom_sync(src);
     if (!g_dom) return;
-    sig = g_dom_sig;
+    /* The GENERATION, not the source fingerprint: a re-parse of identical text
+     * still yields a tree that has never been laid out, and comparing text
+     * fingerprints told this cache it was already on screen. See g_dom_gen. */
+    sig = g_dom_gen;
     /* Script that changed the tree since the last frame invalidates the
      * layout exactly like a resize does - without this a DOM change is
      * computed and then never drawn. The timer pump runs first so a

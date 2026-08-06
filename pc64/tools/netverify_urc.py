@@ -34,6 +34,25 @@ def shot(ui, tag):
 PORT = 8099
 HOST = "10.0.2.2"          # the QEMU user-mode gateway = this machine
 
+# What the page's own stylesheets set, and nothing else on this desktop uses.
+H1_BLUE  = (0x1e, 0x5a, 0xc8)      # c.css  h1{color:#1e5ac8}
+TEXT_RED = (0xc8, 0x1e, 0x28)      # a.css  .k{color:#c81e28}
+
+
+def frame(ui):
+    """(w, h, [(r,g,b), ...]) read back over the link. Four bytes per pixel,
+    and urcui's own PPM writer takes the first three as RGB, so we do too."""
+    w, h, rgba = ui.link.screen_grab(1, timeout=60)
+    return w, h, [(rgba[i], rgba[i + 1], rgba[i + 2]) for i in range(0, len(rgba), 4)]
+
+
+def count(px, want, tol=8):
+    """Pixels within `tol` of a colour. A tolerance because glyph edges are
+    antialiased; the interiors are exact, which is what clears the threshold."""
+    return sum(1 for p in px
+               if abs(p[0] - want[0]) <= tol and abs(p[1] - want[1]) <= tol
+               and abs(p[2] - want[2]) <= tol)
+
 
 def goto(ui, loc, settle=3.0):
     ui.key(ord('l'), ctrl=1)
@@ -95,6 +114,28 @@ def main():
             # the contradiction was invisible here and fatal everywhere else.
             results.append(("the client actually asks to persist",
                             s["keepalive_asked"] >= 4 and s["close_asked"] == 0))
+
+            # ---- 1a. and it is actually ON SCREEN -----------------------
+            # Every assertion above passed for weeks while this page rendered
+            # BLANK, because they all read the server. The screenshot looked
+            # normal too - right window, right address bar, "200 OK" in the
+            # status band, empty content area. So read the PIXELS.
+            #
+            # The colours are the interesting part: the browser would never
+            # draw #1e5ac8 or #c81e28 on its own, they are what c.css and
+            # a.css set. Finding them on screen is end to end from a parallel
+            # HTTP fetch, through the splice into the DOM and the cascade, to
+            # a lit pixel - which is more than "something was drawn".
+            #
+            # Only these two. "The frame has more than one colour" was in here
+            # and is worthless: the grab is the whole desktop, so the chrome
+            # and the taskbar clear it while the page is blank. It passed on
+            # the broken build. A check that cannot fail is not a check.
+            w, h, px = frame(ui)
+            blue, red = count(px, H1_BLUE), count(px, TEXT_RED)
+            print("  screen %dx%d: h1 blue %d px, .k red %d px" % (w, h, blue, red))
+            results.append(("the h1 is drawn in the colour c.css set", blue >= 20))
+            results.append(("the body text is drawn in the colour a.css set", red >= 20))
 
             # ---- 1b. and the pool is REUSED on the next navigation ------
             # Parallel fetching means a page opens several connections, so
