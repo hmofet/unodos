@@ -583,6 +583,29 @@ int uno_vmm_selftest(void)
         if (!ok5) g_self_ok = 0;
     }
 
+    /* ---- A6: a real kernel, as far as it gets --------------------------
+     * Reported rather than judged. Every interesting outcome here is partial,
+     * and the exit that stopped it plus the last line it printed is what
+     * makes the next step obvious. A missing bzImage is not a failure of
+     * anything: most machines will not carry one. */
+    if (g_self_ok && hv->linux_boot) {
+        uno_vm_linux L;
+        int ok6 = hv->linux_boot(&L);
+        int n = (int)strlen(g_self);
+        if (!L.loaded)
+            snprintf(g_self + n, sizeof g_self - (unsigned)n,
+                     "; linux: no bzImage (code %u)", L.stop_reason);
+        else
+            snprintf(g_self + n, sizeof g_self - (unsigned)n,
+                     "; linux %s: %ld KB, %d chars %d lines over %d exits, "
+                     "stopped on %u at %llx (vec %x err %x addr %llx), "
+                     "last \"%s\"",
+                     ok6 ? "SPOKE" : "silent", L.loaded / 1024, L.chars,
+                     L.lines, L.exits, L.stop_reason, L.stop_rip,
+                     L.fault_vec, L.fault_err, L.fault_addr,
+                     L.last ? L.last : "");
+    }
+
     /* A3 is ARMED here and finished by the frame loop, because that is the
      * thing being tested: a guest running in the gaps of a desktop that keeps
      * drawing. Nothing else about the boot changes. */

@@ -22,6 +22,7 @@
 #include "unovirt.h"
 #include "pc64_native.h" /* the calibrated TSC rate, for the slice budget */
 #include "unovdev.h"     /* the device the MMIO decode answers for        */
+#include "pc64_fs.h"     /* A6 reads the kernel off the filesystem        */
 
 typedef unsigned int       u32;
 typedef unsigned short     u16;
@@ -1284,8 +1285,389 @@ static int vmx_virtio(uno_vm_virtio *out)
         && out->cycle_refused;
 }
 
+/* ---- A6: the Linux boot protocol ------------------------------------------
+ *
+ * THE X86 EQUIVALENT OF GLIDE'S DEVICE TREE IS `boot_params`. An arm64 kernel
+ * is entered with x0 holding a flattened device tree and learns its machine
+ * from it; an x86-64 kernel is entered with RSI holding a zero page and learns
+ * its machine from that. Same sentence, different structure, and in both cases
+ * a kernel that is handed nothing does not get far enough to complain.
+ *
+ * No BIOS, no UEFI, no real mode: the 64-bit entry point at load address +
+ * 0x200 is entered directly with paging already on. That is what makes
+ * "unrestricted guest" a nice-to-have here rather than a requirement.
+ *
+ * The guest's memory map is ours to invent, and the layout below keeps the
+ * structures Linux must not tread on out of the region it is told is free. */
+#define L_PML4    0x700000ull
+#define L_PDPT    0x701000ull
+#define L_PD0     0x702000ull            /* 4 PDs: 4 GiB identity-mapped     */
+#define L_GDT     0x706000ull
+#define L_CMDLINE 0x800000ull
+#define L_ZEROPG  0x900000ull
+#define L_KERNEL  0x1000000ull           /* 16 MiB, clear of everything      */
+#define EXIT_IO   30
+#define EXIT_CR   28
+#define EXIT_EXCEPTION 0
+#define CR0_GH_MASK        0x6000
+#define CR4_GH_MASK        0x6002
+#define CR0_READ_SHADOW    0x6004
+#define CR4_READ_SHADOW    0x6006
+#define CR4_VMXE           (1ull << 13)
+#define VM_EXIT_INTR_INFO  0x4404
+#define VM_EXIT_INTR_ERROR 0x4406
+#define L_CMDLINE_TEXT \
+    "earlyprintk=serial,ttyS0,115200 console=ttyS0 nolapic no_timer_check " \
+    "panic=-1 nokaslr"
+
+static int g_lin_lines;
+static u64 g_lin_deadline;
+static char g_lin_last[120];
+
+static void lin_sink(const char *s)
+{
+    unsigned i;
+    g_lin_lines++;
+    for (i = 0; i + 1 < sizeof g_lin_last && s[i]; i++) g_lin_last[i] = s[i];
+    g_lin_last[i] = 0;
+    trace("[lin] "); trace(s); trace("\n");
+}
+
+/* Its page tables, at addresses the e820 map calls reserved.  Four gibibytes
+ * identity-mapped, because the boot protocol requires the kernel, its zero
+ * page and its command line all to be reachable before it builds its own. */
+static int lin_paging(void)
+{
+    u64 *pml4 = (u64 *)uno_vmm_gpa(L_PML4, 4096);
+    u64 *pdpt = (u64 *)uno_vmm_gpa(L_PDPT, 4096);
+    unsigned g, i;
+    if (!pml4 || !pdpt) return 0;
+    for (i = 0; i < 512; i++) { pml4[i] = 0; pdpt[i] = 0; }
+    for (g = 0; g < 4; g++) {
+        u64 *pd = (u64 *)uno_vmm_gpa(L_PD0 + 0x1000 * g, 4096);
+        if (!pd) return 0;
+        for (i = 0; i < 512; i++)
+            pd[i] = ((u64)g << 30) | ((u64)i << 21) | 0x83;
+        pdpt[g] = (L_PD0 + 0x1000 * g) | 0x3;
+    }
+    pml4[0] = L_PML4 + 0x1000 - 0x1000;   /* placeholder, set below          */
+    pml4[0] = L_PDPT | 0x3;
+    return 1;
+}
+
+/* One e820 entry, appended.  The reserved run in the middle is the loader's
+ * own structures: a kernel told that memory is free will use it, and the page
+ * tables it is still running on are in there. */
+static void e820_add(u8 *zp, int *n, u64 base, u64 len, u32 type)
+{
+    u8 *e = zp + 0x2D0 + (*n) * 20;
+    if (*n >= 128) return;
+    *(u64 *)(e + 0)  = base;
+    *(u64 *)(e + 8)  = len;
+    *(u32 *)(e + 16) = type;
+    (*n)++;
+}
+
+static int lin_zeropage(const u8 *setup, u64 carve)
+{
+    u8 *zp = (u8 *)uno_vmm_gpa(L_ZEROPG, 4096);
+    char *cl = (char *)uno_vmm_gpa(L_CMDLINE, 512);
+    const char *t = L_CMDLINE_TEXT;
+    int n = 0, i;
+    if (!zp || !cl) return 0;
+    for (i = 0; i < 4096; i++) zp[i] = 0;
+    for (i = 0; t[i] && i < 511; i++) cl[i] = t[i];
+    cl[i] = 0;
+
+    /* The setup header travels verbatim from the image: it carries the
+     * kernel's own answers about itself (version, relocatability, init_size),
+     * and inventing any of them is how a loader breaks on the next release. */
+    for (i = 0x1F1; i <= 0x268; i++) zp[i] = setup[i];
+    zp[0x210] = 0xFF;                     /* type_of_loader: not a known one */
+    zp[0x211] |= 0x80;                    /* loadflags: CAN_USE_HEAP         */
+    zp[0x211] &= (u8)~0x20;               /* ...and QUIET off, we want output */
+    *(u32 *)(zp + 0x228) = (u32)L_CMDLINE;
+    *(u32 *)(zp + 0x218) = 0;             /* no initrd yet                   */
+    *(u32 *)(zp + 0x21C) = 0;
+
+    e820_add(zp, &n, 0x00000000, 0x0009FC00, 1);
+    e820_add(zp, &n, 0x0009FC00, 0x00000400, 2);
+    e820_add(zp, &n, 0x000F0000, 0x00010000, 2);
+    e820_add(zp, &n, 0x00100000, 0x00500000, 1);
+    e820_add(zp, &n, 0x00600000, 0x00A00000, 2);   /* ours: tables, cmdline */
+    e820_add(zp, &n, 0x01000000, carve - 0x01000000, 1);
+    zp[0x1E8] = (u8)n;
+    return 1;
+}
+
+/* Read the kernel out of the filesystem straight into the carve. */
+static long lin_load(u64 *entry)
+{
+    long size, off, got;
+    int vol, nvol = uno_fs_volumes();
+    const char *path = "EFI\\UNODOS\\VM\\BZIMAGE";
+    u8 *setup = (u8 *)uno_vmm_gpa(L_ZEROPG + 0x1000, 4096);   /* scratch     */
+    u8 *dst;
+    unsigned setup_sects;
+
+    if (!setup) return 0;
+    for (vol = 0; vol < nvol; vol++) {
+        size = uno_fs_size(vol, path);
+        if (size > 0) break;
+        size = uno_fs_size(vol, "BZIMAGE");
+        if (size > 0) { path = "BZIMAGE"; break; }
+    }
+    if (vol >= nvol || size <= 0x300) return 0;
+    if (uno_fs_read_at(vol, path, 0, setup, 4096) < 0x300) return 0;
+    if (*(const u32 *)(setup + 0x202) != 0x53726448u) return -1;   /* 'HdrS' */
+    if (!(setup[0x236] & 1)) return -2;               /* no 64-bit entry     */
+
+    setup_sects = setup[0x1F1] ? setup[0x1F1] : 4;
+    off = (long)(setup_sects + 1) * 512;
+    dst = (u8 *)uno_vmm_gpa(L_KERNEL, (u64)(size - off));
+    if (!dst) return -3;
+    /* In chunks, because a multi-megabyte read through the FAT cache one
+     * cluster at a time is what the sequential cursor exists for. */
+    for (got = 0; got < size - off; ) {
+        long want = size - off - got;
+        long r;
+        if (want > 0x40000) want = 0x40000;
+        r = uno_fs_read_at(vol, path, off + got, dst + got, want);
+        if (r <= 0) break;
+        got += r;
+    }
+    if (got < size - off) return -4;
+    *entry = L_KERNEL + 0x200;
+    return got;
+}
+
+/* CPUID for a kernel rather than for a test guest: the real answers, with the
+ * few bits masked that would send Linux looking for hardware we do not have. */
+static void lin_cpuid(void)
+{
+    u32 a = (u32)g_ctx.rax, c = (u32)g_ctx.rcx, ra, rb, rc, rd;
+    if (a == 0x40000000u) {                  /* the hypervisor leaf: say we
+                                                are not one it knows          */
+        g_ctx.rax = 0; g_ctx.rbx = 0; g_ctx.rcx = 0; g_ctx.rdx = 0;
+        return;
+    }
+    __asm__ volatile ("cpuid" : "=a"(ra), "=b"(rb), "=c"(rc), "=d"(rd)
+                              : "a"(a), "c"(c));
+    if (a == 1) {
+        rc &= ~(1u << 5);                    /* VMX: not for the guest       */
+        rc &= ~(1u << 21);                   /* x2APIC: there is no APIC      */
+        rc |=  (1u << 31);                   /* and say plainly it is a guest */
+        rd &= ~(1u << 9);                    /* APIC                          */
+    }
+    g_ctx.rax = ra; g_ctx.rbx = rb; g_ctx.rcx = rc; g_ctx.rdx = rd;
+}
+
+static u64 g_kernel_gs;
+
+static void lin_msr(int write)
+{
+    u32 idx = (u32)g_ctx.rcx;
+    u64 v = ((u64)(u32)g_ctx.rdx << 32) | (u32)g_ctx.rax;
+    switch (idx) {
+    case 0xC0000080u:                        /* EFER, a VMCS guest field     */
+        if (write) vmwrite(GUEST_IA32_EFER, v); else v = vmread(GUEST_IA32_EFER);
+        break;
+    case 0xC0000100u:                        /* FS_BASE                      */
+        if (write) vmwrite(GUEST_FS_BASE, v); else v = vmread(GUEST_FS_BASE);
+        break;
+    case 0xC0000101u:                        /* GS_BASE                      */
+        if (write) vmwrite(GUEST_GS_BASE, v); else v = vmread(GUEST_GS_BASE);
+        break;
+    case 0xC0000102u:                        /* KERNEL_GS_BASE               */
+        if (write) g_kernel_gs = v; else v = g_kernel_gs;
+        break;
+    default:
+        /* Zero for everything else. A kernel reading an MSR that answers 0 is
+         * in far better shape than one reading a value we invented. */
+        if (!write) v = 0;
+        break;
+    }
+    if (!write) { g_ctx.rax = (u32)v; g_ctx.rdx = (u32)(v >> 32); }
+}
+
+static int vmx_linux(uno_vm_linux *out)
+{
+    u64 eptp, pa = (u64)(unsigned long long)(void *)g_vmcs, entry = 0;
+    u64 carve = uno_vmm_carve_size();
+    const u8 *setup;
+    u8 fail = 0;
+    unsigned i;
+    u32 proc, proc2, pin;
+    uno_vmexit ex;
+    long n;
+    int step;
+
+    out->loaded = 0; out->lines = 0; out->exits = 0;
+    out->last = ""; out->stop_reason = 0; out->stop_rip = 0;
+    out->fault_vec = 0xFFFF; out->fault_err = 0; out->fault_addr = 0;
+    g_lin_lines = 0; g_lin_last[0] = 0; g_kernel_gs = 0;
+
+    if (!uno_vmm_probe()->slat || !carve) return 0;
+    eptp = ept_build();
+    if (!eptp) return 0;
+
+    n = lin_load(&entry);
+    if (n <= 0) { out->stop_reason = (unsigned)(-n); return 0; }
+    out->loaded = n;
+    setup = (const u8 *)uno_vmm_gpa(L_ZEROPG + 0x1000, 4096);
+    if (!setup || !lin_paging() || !lin_zeropage(setup, carve)) return 0;
+
+    {   /* Its GDT, and THE SELECTOR NUMBERS ARE PART OF THE PROTOCOL. The
+         * 64-bit boot protocol does not say "provide a code and a data
+         * segment", it says __BOOT_CS is selector 0x10 and __BOOT_DS is
+         * 0x18 - because startup_64 loads 0x18 into DS, ES and SS within its
+         * first few instructions, before it has its own GDT.
+         *
+         * Putting them at 0x08 and 0x10 (which is what every other guest in
+         * this file uses) means that load reaches a null descriptor: #GP,
+         * into an IDT the kernel has not installed yet, triple fault, about
+         * a hundred bytes past the entry point. Which is exactly where this
+         * first landed. */
+        u64 *g = (u64 *)uno_vmm_gpa(L_GDT, 4096);
+        if (!g) return 0;
+        for (i = 0; i < 512; i++) g[i] = 0;
+        g[2] = 0x00AF9B000000FFFFull;         /* selector 0x10: __BOOT_CS    */
+        g[3] = 0x00CF93000000FFFFull;         /* selector 0x18: __BOOT_DS    */
+    }
+
+    for (i = 0; i < sizeof g_ctx / sizeof(u64); i++) ((u64 *)&g_ctx)[i] = 0;
+    *(u32 *)g_vmcs = (u32)(rdmsr(IA32_VMX_BASIC) & 0x7FFFFFFFu);
+    __asm__ volatile ("vmclear %1; setna %0" : "=r"(fail) : "m"(pa) : "cc");
+    if (fail) return 0;
+    __asm__ volatile ("vmptrld %1; setna %0" : "=r"(fail) : "m"(pa) : "cc");
+    if (fail) return 0;
+    g_launched = 0;
+    uno_vdev_reset();
+
+    vmcs_reset(0, entry, 0);                 /* IDT limit 0: it installs one */
+    pin   = adjust(IA32_VMX_TRUE_PIN, IA32_VMX_PINBASED,
+                   PIN_EXT_INTR_EXIT | PIN_PREEMPT, 1);
+    proc  = adjust(IA32_VMX_TRUE_PROC, IA32_VMX_PROCBASED,
+                   PROC_HLT_EXITING | (1u << 31), 1);
+    proc2 = adjust(IA32_VMX_PROCBASED2, IA32_VMX_PROCBASED2, EPT_PROC2, 0);
+    vmwrite(PIN_BASED_CTLS, pin);
+    vmwrite(PROC_BASED_CTLS, proc);
+    vmwrite(PROC_BASED_CTLS2, proc2);
+    vmwrite(EPT_POINTER, eptp);
+    vmwrite(GUEST_CR3, L_PML4);
+    vmwrite(GUEST_GDTR_BASE, L_GDT);
+    vmwrite(GUEST_GDTR_LIMIT, 0x1F);
+    /* CATCH THE FAULT INSTEAD OF THE WRECKAGE. The kernel has no IDT for its
+     * first instructions, so any exception it takes is a triple fault - one
+     * exit code, no vector, no address, at whatever RIP it reached. Trapping
+     * #UD, #GP and #PF turns that into the vector, the error code and (for a
+     * page fault) the address, which is the difference between a debuggable
+     * result and "it stopped". */
+    vmwrite(EXCEPTION_BITMAP, (1u << 6) | (1u << 13) | (1u << 14));
+    /* THE SHADOW REGISTERS, and a kernel cannot boot without them.
+     *
+     * VMX requires the guest's CR4 to keep VMXE set at all times - it is in
+     * IA32_VMX_CR4_FIXED0. Linux does not know it is a guest and writes CR4
+     * with its own idea of the bits, VMXE cleared among them, about a hundred
+     * bytes into its entry point. Unshadowed, that write is #GP(0) with
+     * nothing to say why, which is precisely where this stopped.
+     *
+     * So VMXE is owned by us: the mask makes a write that changes it exit
+     * instead of faulting, and the read shadow makes the guest see the bit as
+     * clear, which is the value it expects to read back. The guest keeps
+     * every other bit. */
+    vmwrite(CR4_GH_MASK, CR4_VMXE);
+    vmwrite(CR4_READ_SHADOW, vmread(GUEST_CR4) & ~CR4_VMXE);
+    vmwrite(CR0_GH_MASK, 0);
+    vmwrite(CR0_READ_SHADOW, vmread(GUEST_CR0));
+    vmwrite(GUEST_CS_SEL, 0x10);
+    vmwrite(GUEST_SS_SEL, 0x18); vmwrite(GUEST_DS_SEL, 0x18);
+    vmwrite(GUEST_ES_SEL, 0x18); vmwrite(GUEST_FS_SEL, 0x18);
+    vmwrite(GUEST_GS_SEL, 0x18);
+    vmwrite(GUEST_RSP, L_ZEROPG - 0x100);
+    vmwrite(GUEST_RFLAGS, 0x2);              /* interrupts off, as required  */
+    g_ctx.rsi = L_ZEROPG;                    /* THE zero page, in RSI        */
+
+    /* A WALL-CLOCK BOUND, not just an exit count. A kernel that gets further
+     * than the last attempt is progress and a kernel that loops forever is
+     * indistinguishable from it at the level of an exit counter - and this
+     * runs during boot, so an unbounded run does not fail, it takes the
+     * desktop with it. Three seconds is generous for "did it say anything". */
+    {   u64 per_us = uno_native_tsc_per_us();
+        g_lin_deadline = uno_native_rdtsc() + (per_us ? per_us : 1000ull) * 3000000ull;
+    }
+    for (step = 0; step < 200000; step++) {
+        u64 ticks;
+        if (uno_native_rdtsc() > g_lin_deadline) { out->stop_reason = 0xDEAD; break; }
+        ticks = uno_native_tsc_per_us() * 4000ull
+                    >> (unsigned)(rdmsr(IA32_VMX_MISC) & 0x1F);
+        vmwrite(VMX_PREEMPT_VALUE, ticks ? ticks : 1);
+        run_once(&ex);
+        out->exits++;
+        if (ex.raw == EXIT_PREEMPT || ex.raw == EXIT_EXT_INTR) continue;
+        if (ex.raw == EXIT_CPUID) {
+            lin_cpuid();
+            vmwrite(GUEST_RIP, vmread(GUEST_RIP) + vmread(VM_EXIT_INSTR_LEN));
+            continue;
+        }
+        if (ex.raw == EXIT_RDMSR || ex.raw == EXIT_WRMSR) {
+            lin_msr(ex.raw == EXIT_WRMSR);
+            vmwrite(GUEST_RIP, vmread(GUEST_RIP) + vmread(VM_EXIT_INSTR_LEN));
+            continue;
+        }
+        if (ex.raw == EXIT_IO) {
+            u64 q = vmread(EXIT_QUALIFICATION), v;
+            unsigned size = (unsigned)(q & 7) + 1;
+            unsigned port = (unsigned)(q >> 16) & 0xFFFF;
+            int is_in = (q & 8) ? 1 : 0;
+            if (q & 0x10) break;             /* a string port op: not decoded */
+            v = g_ctx.rax;
+            uno_vdev_pio(port, !is_in, size, &v, lin_sink);
+            if (is_in) {
+                if (size == 1) g_ctx.rax = (g_ctx.rax & ~0xFFull) | (v & 0xFF);
+                else if (size == 2) g_ctx.rax = (g_ctx.rax & ~0xFFFFull) | (v & 0xFFFF);
+                else g_ctx.rax = v & 0xFFFFFFFFull;
+            }
+            vmwrite(GUEST_RIP, vmread(GUEST_RIP) + vmread(VM_EXIT_INSTR_LEN));
+            continue;
+        }
+        if (ex.raw == EXIT_CR) {
+            u64 q = vmread(EXIT_QUALIFICATION);
+            int cr = (int)(q & 15), acc = (int)((q >> 4) & 3);
+            u64 *r = gpr((int)((q >> 8) & 15));
+            if (acc == 0 && cr == 4 && r) {      /* mov cr4, reg            */
+                vmwrite(GUEST_CR4, *r | CR4_VMXE);
+                vmwrite(CR4_READ_SHADOW, *r & ~CR4_VMXE);
+                vmwrite(GUEST_RIP, vmread(GUEST_RIP) + vmread(VM_EXIT_INSTR_LEN));
+                continue;
+            }
+            if (acc == 0 && cr == 0 && r) {      /* mov cr0, reg            */
+                vmwrite(GUEST_CR0, (*r | rdmsr(IA32_VMX_CR0_FIXED0))
+                                   & rdmsr(IA32_VMX_CR0_FIXED1));
+                vmwrite(CR0_READ_SHADOW, *r);
+                vmwrite(GUEST_RIP, vmread(GUEST_RIP) + vmread(VM_EXIT_INSTR_LEN));
+                continue;
+            }
+            break;
+        }
+        if (ex.raw == EXIT_EPT_VIOLATION && mmio_service()) continue;
+        if (ex.raw == EXIT_EXCEPTION) {
+            out->fault_vec = (unsigned)(vmread(VM_EXIT_INTR_INFO) & 0xFF);
+            out->fault_err = (unsigned)vmread(VM_EXIT_INTR_ERROR);
+            out->fault_addr = vmread(EXIT_QUALIFICATION);
+        }
+        break;                                /* whatever it was, report it  */
+    }
+    out->lines = g_lin_lines;
+    out->last = g_lin_last;
+    out->chars = uno_vdev_serial_chars();
+    out->stop_reason = (unsigned)ex.raw;
+    out->stop_rip = ex.rip;
+    return out->chars > 0;
+}
+
 static const uno_hv_t VMX = { "vmx", vmx_enable, vmx_marker, vmx_crasher,
                               vmx_ept, vmx_spin_start, vmx_slice, vmx_clockirq,
-                              vmx_virtio };
+                              vmx_virtio, vmx_linux };
 
 const uno_hv_t *uno_hv_vmx(void) { return &VMX; }

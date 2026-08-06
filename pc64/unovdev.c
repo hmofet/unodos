@@ -188,6 +188,57 @@ int uno_vdev_mmio(u64 gpa, int is_write, unsigned size, u64 *val)
     return 1;
 }
 
+/* ---- an 8250, because it is the first thing a kernel talks to -------------
+ *
+ * Linux's `earlyprintk=serial` writes bytes to port 0x3F8 before it has a
+ * driver for anything, before it has an interrupt controller, and before it
+ * can be asked what went wrong. A virtio console is the better device and it
+ * arrives far too late to help with a kernel that dies in its first
+ * millisecond.
+ *
+ * Port I/O is also the one place x86 is EASIER than ARM here: the exit
+ * qualification carries the port, the size and the direction, so unlike MMIO
+ * there is no instruction to decode. */
+#define COM1 0x3F8
+static struct { char line[160]; int n; int chars; } U;
+
+int uno_vdev_pio(unsigned port, int is_write, unsigned size,
+                 unsigned long long *val, void (*sink)(const char *))
+{
+    (void)size;
+    if (port < COM1 || port > COM1 + 7) {
+        /* Everything else answers as absent hardware: reads all-ones, writes
+         * dropped. A kernel probing a port that is not there gets the same
+         * answer it would on a machine without the device, which is a thing
+         * it already knows how to handle. */
+        if (!is_write) *val = 0xFFFFFFFFull;
+        return 1;
+    }
+    if (is_write) {
+        if (port == COM1) {
+            char c = (char)(*val & 0xFF);
+            U.chars++;
+            if (c == '\n' || U.n >= (int)sizeof U.line - 1) {
+                U.line[U.n] = 0;
+                if (sink && U.n) sink(U.line);
+                U.n = 0;
+            } else if (c != '\r') {
+                U.line[U.n++] = c;
+            }
+        }
+        return 1;
+    }
+    switch (port) {
+    case COM1 + 5: *val = 0x60; break;   /* LSR: holding + shift both empty */
+    case COM1 + 2: *val = 0x01; break;   /* IIR: no interrupt pending       */
+    case COM1 + 6: *val = 0xB0; break;   /* MSR: carrier, DSR, CTS          */
+    default:       *val = 0x00; break;
+    }
+    return 1;
+}
+
+int uno_vdev_serial_chars(void) { return U.chars; }
+
 /* ---- what the test wants to know ------------------------------------------ */
 
 unsigned long long uno_vdev_base(void) { return VDEV_BASE; }
