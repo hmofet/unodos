@@ -386,6 +386,13 @@ static struct {
     int  port, secure, open;
 } g_ka;
 
+static void ka_opened(int secure)
+{ g_ka.open = 1; g_ka.secure = secure; g_ka.host[0] = 0; g_ka.port = 0; }
+
+/* Close whatever is open. `open` is set when a connection is ESTABLISHED,
+ * not when it becomes reusable: an earlier version set it only on the keep
+ * path, so a response that could not be kept was never closed at all - and
+ * pc64 has a single TCP slot, so that leaked socket wedged the next fetch. */
 static void ka_drop(void)
 {
     if (!g_ka.open) return;
@@ -394,10 +401,24 @@ static void ka_drop(void)
     g_ka.host[0] = 0;
 }
 
+/* DISABLED 2026-08-06, and left in place rather than deleted because the
+ * framing it needs is real and the wiring is most of the work.
+ *
+ * Tested against a real server (tools/netverify_urc.py) it FAILED: the page
+ * and its first stylesheet each took their own connection - no reuse at all -
+ * and the browser then hung with the remaining two sheets never requested.
+ * One cause was found and fixed (a connection that could not be kept was
+ * never closed, and pc64 has a single TCP slot), but the hang survived the
+ * fix, so something else is wrong that I have not identified.
+ *
+ * A browser that hangs is far worse than one that reopens a connection, so
+ * reuse is off until the rest is understood. Turn it back on by restoring
+ * the real body here AND the 1.1/keep-alive request line below - and re-run
+ * netverify_urc.py, which is the only thing that would have caught this. */
 static int ka_matches(const char *host, int port, int secure)
 {
-    return g_ka.open && g_ka.secure == secure && g_ka.port == port &&
-           !strcmp(g_ka.host, host);
+    (void)host; (void)port; (void)secure;
+    return 0;
 }
 
 static void ka_keep(const char *host, int port, int secure)
@@ -473,11 +494,13 @@ static int http_get_once(const char *url, char *body, int bodymax,
             if (statusmax) strncpy(status, "TLS refused: no entropy source on this machine", statusmax-1);
             return -5; }
         if (rc != 0) { set_tls_err(status, statusmax, "TLS connect failed"); return -5; }
+        ka_opened(1);
     } else {
         ka_drop();
         if (net_tcp_connect(ip, (unsigned short)port) < 0) { if (statusmax) strncpy(status,"TCP connect failed",statusmax-1); return -5; }
         for (i = 0; i < 400 && net_tcp_state() == TCP_SYN_SENT; i++) { net_poll(); uno_pc64_delay_ms(5); }
         if (net_tcp_state() != TCP_ESTABLISHED) { net_tcp_close(); if (statusmax) strncpy(status,"Connection timed out",statusmax-1); return -6; }
+        ka_opened(0);
     }
 
     /* request */
@@ -602,7 +625,8 @@ static int http_get_once(const char *url, char *body, int bodymax,
               int k; for (k = 0; cv[k]; k++) if (cv[k]>='A'&&cv[k]<='Z') cv[k] += 32;
               if (strstr(cv, "close")) keep = 0;
           }
-          if (keep) ka_keep(host, port, secure); else ka_drop();
+          (void)keep;                 /* reuse disabled - always close */
+          ka_drop();
       }
       /* a reused connection that produced NOTHING was dead: retry once */
       if (rn == 0 && reused) { ka_drop(); if (out_reused) *out_reused = 1; return HTTP_RETRY; }
