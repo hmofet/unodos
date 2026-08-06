@@ -1276,6 +1276,13 @@ void uno_pc64_init(void)
     { void unoamp_enc_init(void); unoamp_enc_init(); }
                                     /* UnoAmp: register the built-in sinks and
                                        pick one, now that the probe has run */
+    { void unolog_init(void); unolog_init(); }
+                                    /* system log: after uno_fat_init so \LOGS
+                                       is reachable on the first record. It is
+                                       safe earlier - records buffer until a
+                                       volume appears - but starting it here
+                                       means the config is read before anything
+                                       has been filtered by the default. */
     splash_stage(3, 0);
     dbg_puts(uno_snd_active() ? "snd: pcm device up\n" : "snd: pc speaker\n");
     splash_step(4, "starting up");  /* ready - the bar fills, core takes over */
@@ -2165,6 +2172,12 @@ static EFI_RUNTIME_SERVICES *rts(void) { return (EFI_RUNTIME_SERVICES *)gST->Run
 static void power_down(int off)
 {
     uno_dbg_mark_clean();           /* debug build: not a crash, don't salvage */
+    { void unolog_shutdown(void); unolog_shutdown(); }
+                                    /* system log: the last write-out. The FAT
+                                       cache is write-back, so without this the
+                                       tail of the log - which on a deliberate
+                                       shutdown is the part explaining why -
+                                       dies with the machine. */
 
     /* RESET: every NATIVE mechanism first, and the firmware's ResetSystem LAST.
      *
