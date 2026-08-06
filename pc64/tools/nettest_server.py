@@ -87,6 +87,29 @@ SHEETS = {b"/a.css": b".k{color:#c81e28}",
           b"/b.css": b".k{font-weight:bold}",
           b"/c.css": b"h1{color:#1e5ac8}"}
 
+# /big - google.com's SHAPE, which is the shape that broke the browser: a very
+# large <head> and every visible byte after it. The padding lives inside
+# <style> on purpose, because a renderer that leaked it as text would light up
+# the content area and the test would pass on a build that truncates. The only
+# renderable bytes in this page start at ~70 KB, past both of the caps that
+# used to apply (the transport's 48 KB and the tab's 32 KB).
+BIG_PAD = b"".join(b"/* filler line %05d - not renderable, only bulk */\n" % i
+                   for i in range(1, 1500))
+BIG = (b"<html><head><title>big</title><style>\n" + BIG_PAD +
+       b"</style></head><body><h1>a page whose body starts late</h1>" +
+       b"".join(b"<p>visible line %d, and every one of these is past 64 KB</p>" % i
+               for i in range(1, 12)) +
+       b"</body></html>")
+
+# /huge - bigger than the transport will ever hold (RAW_MAX = 1 MB), so the cap
+# is genuinely reached. A truncated page must still RENDER what arrived, must
+# SAY it was truncated, and must not be pooled: its framing never completed, so
+# reusing that connection would read this page's tail as the next page's body.
+HUGE = (b"<html><body><h1>a page past the cap</h1>" +
+        b"".join(b"<p>huge line %06d, filler to run past one megabyte</p>" % i
+                 for i in range(1, 24000)) +
+        b"<h2>THE TAIL, WHICH CANNOT ARRIVE</h2></body></html>")
+
 # a page big enough that it cannot arrive in one go, with a pause in the
 # middle - if progressive render works, the top is on screen during it
 SLOW_HEAD = b"<html><body><h1>slow page</h1>"
@@ -152,6 +175,10 @@ def serve_conn(conn):
                 if delays["sheet"]:
                     time.sleep(delays["sheet"])
                 respond(conn, SHEETS[path], b"text/css")
+            elif path == b"/big":
+                respond(conn, BIG)
+            elif path == b"/huge":
+                respond(conn, HUGE)
             elif path == b"/chunked":
                 respond(conn, b"<html><body><h1>chunked</h1>"
                               b"<p>decoded across three chunks</p></body></html>",
