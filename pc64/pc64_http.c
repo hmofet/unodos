@@ -15,6 +15,7 @@
 #include "rtwifi.h"       /* Realtek PCIe WiFi (rtw88/rtw89) */
 #include "mrvlwifi.h"     /* Marvell/NXP PCIe WiFi (mwifiex) */
 #include "tls.h"          /* tls_open / tls_send / tls_recv (HTTPS) */
+#include "unolog.h"       /* the system log: what the network actually did */
 #include <string.h>
 #include <stdlib.h>
 
@@ -617,6 +618,9 @@ static int raw_reserve(http_req *r, int want)
 static int req_fail(http_req *r, int rc, const char *why)
 {
     if (why) sput_n(r->status, sizeof r->status, why);
+    /* The one line someone asking "why did that page not load" needs. */
+    ulog_warn(LF_NET, "%s: %s", r->cur[0] ? r->cur : "(no url)",
+              why ? why : "failed");
     conn_close(&r->c);
     r->rc = rc;
     r->st = HS_END;
@@ -949,6 +953,7 @@ static void step_finish(http_req *r)
          * of feedback, so the fact goes there. */
         if (r->capped) {
             char kb[16]; int k = 0, v = r->rn / 1024;
+            ulog_warn(LF_NET, "%s: truncated at %d KB", r->cur, r->rn / 1024);
             char tmp[8]; int t = 0;
             if (!v) kb[k++] = '0';
             while (v) { tmp[t++] = (char)('0' + v % 10); v /= 10; }
