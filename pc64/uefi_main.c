@@ -1028,6 +1028,10 @@ static int try_detach(void)
     uno_fat_sync();             /* flush write-back lines while fw Block IO lives */
     { void uno_modload_reserve(void); uno_modload_reserve(); }
                                 /* executable arena for post-detach .UNO loads */
+    uno_vmm_reserve();          /* ...and the guest carve, for the same reason:
+                                   AllocatePages does not exist on the far side
+                                   of the door. Inert on a machine that cannot
+                                   host an appliance. */
     for (t = 0; t < 2; t++) {   /* per spec: one retry after a fresh map */
         UINTN sz = sizeof gMMap, key = 0, dsz = 0;
         UINT32 ver = 0;
