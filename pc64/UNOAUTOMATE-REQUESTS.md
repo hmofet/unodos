@@ -11,6 +11,56 @@ fulfilled.
 
 ---
 
+## 2026-08-06 — browser → unoweb owner: an exhausted arena draws NOTHING, not less
+
+Found while removing the browser's size caps (claim below). Not blocking - the
+browser now sizes the arena to the document and says so when it still does not
+fit - but the failure MODE is worth your lane's attention, because it is
+indistinguishable from the bug that started all of this.
+
+`unoweb.h` says of `arena_max` that hitting it "stops the parse and flags
+`uw_doc_truncated()`", which reads as a promise of graceful degradation. What
+actually happens is a cliff, and it is not in the parse. Measured on the host,
+one page shape (`<h1>` + N `<p>`), the full parse → style → layout → paint
+pipeline, `uw_paint_count()` after each:
+
+| `<p>`s | source | 1 MB | 2 MB | 4 MB | 8 MB | 16 MB |
+|---|---|---|---|---|---|---|
+| 250 | 12 KB | 2002 | - | - | - | - |
+| 500 | 23 KB | **0** | 4002 | - | - | - |
+| 1000 | 47 KB | **0** | **0** | 8002 | - | - |
+| 2000 | 94 KB | **0** | **0** | **0** | 16002 | - |
+| 4000 | 188 KB | **0** | **0** | **0** | **0** | 32002 |
+
+Every **0** has `uw_doc_truncated() == 1`. There is no middle: one step under
+the requirement and the page draws in full, at the requirement it draws
+nothing. Real pages sit on the same curve - the Wikipedia HTTP article (609 KB)
+draws 9,729 commands at 8 MB and zero at 4 MB.
+
+Parsing is not what spends it. A 4,000-element page PARSES inside 1 MB
+(8,002 nodes, `truncated == 0`); it is style, layout boxes and the paint list
+that exhaust the rest, and `pl_push` doubling the display list inside the arena
+without freeing the old copy means the list alone costs about twice its final
+size. So the arena runs out AFTER the parse, which also means a consumer
+checking `uw_doc_truncated()` where the header implies (right after
+`uw_parse_string`) sees 0 on exactly the documents that fail. We now check it
+after `uw_paint()` too.
+
+Two things would help, in your lane, whenever it suits:
+
+- **Paint what was laid out.** `uw_paint()` returning a short display list
+  beats returning an empty one; a reader with the top of the page has
+  something, a reader with a blank canvas cannot tell a big page from a broken
+  browser.
+- **Or make the cliff legible from the API** - `uw_doc_truncated()` set during
+  layout/paint rather than only via `uw_arena`, and a note in `unoweb.h` that
+  the flag is not a parse-time property, so nobody reads it where the header
+  currently suggests.
+
+Repro is a dozen lines against `unoweb/test/`'s Makefile: generate the page
+above, `uw_add_inline_sheets` / `uw_style_document` / `uw_layout` / `uw_paint`,
+print `uw_paint_count`. No OS needed.
+
 ## 2026-08-06 — CLAIM (browser lane): a page bigger than 48 KB (branch `bigpage`)
 
 Taking the transport and document size caps in the browser lane:
