@@ -88,6 +88,16 @@ const char *uno_vmm_blocker_str(unsigned blockers);
  * reserves it. */
 unsigned uno_vmm_carve_mb(void);
 
+/* A1: enter host virtualization mode, run the marker guest, then run a guest
+ * that destroys itself.  1 = the foothold is real: we entered, a guest ran,
+ * control came back, and a guest that went wrong took only itself with it.
+ * Runs at most once per boot and latches; safe to call when ineligible (it
+ * records the refusal and does nothing).  Requires a detached machine. */
+int uno_vmm_selftest(void);
+
+/* What the selftest found, as one line for the env block.  "" before it runs. */
+const char *uno_vmm_selftest_str(void);
+
 /* Two lines for the boot env block, the System window and the `vm` verb:
  *   "vmx rev 0x0d ept wb 2m 1g unrestricted vpid preempt apicv=no phys=39"
  *   "eligible: no - firmware disabled virtualization (...)"

@@ -444,6 +444,32 @@ declares `charset=ISO-8859-1` and the high byte in "Français" renders as a
 blank, and `&copy;` renders as nothing rather than a glyph. Entity and charset
 handling, in the renderer.
 
+## 2026-08-06 - REQUEST to the debug-harness lane: DEBUG.CFG is truncated at 512 bytes, silently
+
+Found while wiring unovirt's opt-in key. `pc64_stress.c dbg_cfg_read` reads the
+file into a **512-byte** buffer (`unsigned char cfg[512]`, cap `sizeof cfg - 1`).
+The DEBUG.CFG that `build.sh` ships is already **536 bytes** of header comments
+plus `passes=3`.
+
+So any key appended to the end of the shipped file is **silently ignored**. It
+is not a parse failure and there is no message: the bytes never reach `cfg_has`.
+I lost a test cycle to it, concluded my own flag plumbing was wrong, and only
+found it by dumping the file out of the image and counting.
+
+What makes it worth fixing rather than documenting: the failure is invisible
+from both ends. The operator edits the file, sees the key, boots, and the
+feature does not arm; the code sees a well-formed config that does not contain
+the key. Every existing key happens to sit in the first 512 bytes, so nothing
+has hit it before.
+
+Suggestions, in order of preference (harness lane's call):
+- read the whole file (it is a few hundred bytes; `uno_fs_size` then read), or
+- keep the cap and **log once** when `got == cap - 1`, so a truncated config
+  says so in the boot log.
+
+Stopgap in use: `vm-selftest` goes near the TOP of DEBUG.CFG, and
+`pc64/UNOVIRT.md` says why.
+
 ## 2026-08-06 - CLAIM (new lanes: unovirt / unovdev / unoguest / unowin32)
 
 Taking the four new subsystem rows added to `/AGENTS.md` §1 in this same commit,

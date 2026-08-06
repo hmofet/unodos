@@ -1672,6 +1672,18 @@ faults on the first instruction that assumes it.
   (the UEFI memory map dies at ExitBootServices): on a UEFI boot a post-detach
   read of `ram_mb` MUST still be non-zero, which is only true if the boot path
   probed during init.
+- **S-HV-12** [auto] `uno_vmm_selftest()` MUST be inert unless DEBUG.CFG carries
+  `vm-selftest`: on a default boot it MUST NOT enter host virtualization mode,
+  MUST NOT execute VMRUN/VMLAUNCH, and MUST report "not run - opt-in". A VMRUN
+  that does not return leaves GIF clear, and with GIF clear nothing can be
+  delivered to that core again - not even the watchdog whose job this is - so
+  the first one on any machine happens because an operator asked.
+- **S-HV-13** [auto] The selftest MUST run at most once per boot and MUST latch
+  its verdict; a second call MUST NOT enter a guest again.
+- **S-HV-14** [manual] A guest that destroys itself MUST leave the machine
+  running: the crasher exits with SHUTDOWN (or the CPU's refusal), the desktop
+  keeps painting, and the verdict says which. Manual because it needs a machine
+  where VMRUN returns at all.
 - **S-HV-11** [assert] The probe MUST count only free conventional memory
   (`EfiConventionalMemory` / E820 type 1). Counting firmware-reserved or
   boot-services ranges would overstate a machine sitting on the floor, which
