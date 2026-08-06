@@ -1330,6 +1330,8 @@ the machine is running. Both open as a panel under the toolbar, and both are lis
 <tr><td><kbd>Ctrl</kbd>+<kbd>T</kbd></td><td>New tab</td></tr>
 <tr><td><kbd>Ctrl</kbd>+<kbd>L</kbd></td><td>Jump to the address bar</td></tr>
 <tr><td><kbd>Ctrl</kbd>+<kbd>D</kbd></td><td>Bookmark this page</td></tr>
+<tr><td><kbd>Ctrl</kbd>+<kbd>F</kbd></td><td>Find on this page - type to search, <kbd>Enter</kbd> for the next match, <kbd>Esc</kbd> to close</td></tr>
+<tr><td><kbd>Ctrl</kbd>+<kbd>S</kbd></td><td>Save this page to disk</td></tr>
 <tr><td><kbd>Ctrl</kbd>+<kbd>B</kbd> / <kbd>Ctrl</kbd>+<kbd>H</kbd></td><td>Bookmarks / History panel</td></tr>
 <tr><td><kbd>F5</kbd></td><td>Reload</td></tr>
 </table>
@@ -1346,11 +1348,40 @@ large bold headings, a monospace face for code, and true italics.</p>
 <h2 id="js">JavaScript</h2>
 <p>The browser runs the JavaScript on a page and adds its output to the page, with a console panel at the
 bottom for <code>console.log</code> messages.</p>
+<p>Scripts can also work with the page itself while it is open: finding elements
+(<code>getElementById</code>, <code>querySelector</code>), reading and changing their text, attributes and
+HTML, creating and removing elements, responding to clicks, and running work later with
+<code>setTimeout</code> and <code>setInterval</code>. A change a script makes appears straight away -
+the page is laid out again and redrawn.</p>
 {fig("browser_js.png", "<b>Script.html</b>: its JavaScript generated this Fibonacci table on the page.")}
+
+<h2 id="engines">Choosing the engines</h2>
+<p>The page at <code>uno:engine</code> - reachable from the welcome page, or by typing it in the address
+bar - lets you switch two things while the browser is running:</p>
+<ul>
+  <li>the <strong>script engine</strong>: <strong>unojs</strong>, UnoDOS's own (the default), or
+      <strong>quickjs</strong>, a vendored full modern JavaScript engine;</li>
+  <li>the <strong>CSS cascade</strong>: the <strong>built-in</strong> one (the default), or
+      <strong>libcss</strong>, the CSS engine from the NetSurf project.</li>
+</ul>
+<p>Both default to UnoDOS's own. The alternatives are there so a page that leans on newer JavaScript or
+more complete CSS has somewhere to go, and so the two can be compared on the same page.</p>
+
+<h2 id="layout">Tables, floats and forms</h2>
+<p>Pages that use the ordinary furniture of the web lay out properly: <strong>tables</strong> as real
+grids with columns sized to their contents, <strong>floats</strong> with text flowing around them,
+<strong>positioned</strong> elements, and <strong>forms</strong> - click a field, type into it, and press
+<kbd>Enter</kbd> or the submit button to send it.</p>
 
 <h2 id="net">Over the network</h2>
 <p>Type a web address and press <kbd>Enter</kbd>; UnoDOS connects, looks up the site, loads the page and
-runs any JavaScript on it.</p>
+runs any JavaScript on it. A page's own images and stylesheets are fetched too.</p>
+<p>Three things make that feel quicker than it used to. The page is <strong>drawn as it arrives</strong>
+rather than only when the last byte lands, so you start reading immediately. A page and everything it
+references travel over <strong>one connection</strong> instead of opening a new one each time. And a page
+you have already seen is <strong>remembered</strong> for a short while, so going back to it is instant.
+Sites that need you to sign in work too - <strong>cookies</strong> are kept for as long as the browser is
+running.</p>
 <div class="grid cols-2">
   {fig("browser_http.png", "A live page loaded over <b>HTTP</b>.")}
   {fig("browser_https.png", "A secure page loaded over <b>HTTPS</b>.")}
