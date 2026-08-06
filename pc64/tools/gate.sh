@@ -31,24 +31,47 @@ fresh; BROWSER_ENGINE=uw ./build.sh >/dev/null
 step "unoweb-engine debug build"
 fresh; BROWSER_ENGINE=uw UNO_DEBUG=1 ./build.sh >/dev/null
 
+# Run a host test, print only its last line, and FAIL THE GATE if it failed.
+# `test | tail -1` cannot do that: a pipeline's exit status is the LAST
+# command's, so piping a test into tail throws the test's status away and
+# `set -e` never sees it - every check below was reporting rather than gating.
+# On failure the whole output is printed, since that is when you want it.
+hosttest() {
+    if ! _o=$("$@" 2>&1); then
+        printf '%s\n' "$_o"
+        printf 'gate: %s FAILED\n' "$1"
+        exit 1
+    fi
+    printf '%s\n' "$_o" | tail -1
+}
+
 step "unoweb golden tests"
-(cd ../unoweb/test && make -s >/dev/null && ./run_tests | tail -1)
+(cd ../unoweb/test && make -s >/dev/null)
+(cd ../unoweb/test && hosttest ./run_tests)
 
 step "csslib host tests"
 (cd .. && sh csslib/test/build-host-test.sh >/dev/null 2>&1)
-../csslib/test/build/css_host_test.exe | tail -1
-../csslib/test/build/css_cascade_test.exe | tail -1
+hosttest ../csslib/test/build/css_host_test.exe
+hosttest ../csslib/test/build/css_cascade_test.exe
 
 step "quickjs host tests"
 sh quickjs/test/build-host-test.sh >/dev/null 2>&1
-./build/qjs_host_test.exe | tail -1
-./build/qjs_dispatch_test.exe | tail -1
-./build/webjs_test.exe | tail -1
+hosttest ./build/qjs_host_test.exe
+hosttest ./build/qjs_dispatch_test.exe
+hosttest ./build/webjs_test.exe
 
 step "cookie jar tests"
-./build/cookie_test.exe | tail -1
-./build/cache_test.exe | tail -1
-./build/framing_test.exe | tail -1
+hosttest ./build/cookie_test.exe
+hosttest ./build/cache_test.exe
+hosttest ./build/framing_test.exe
+hosttest ./build/fetch_test.exe
+
+# The TLS gates are host builds against a real echo server, and they are the
+# only assertion in the tree that a handshake completes: SPECTEST's network
+# area runs a NULL NIC and cannot reach TLS at all.
+step "unonet TLS host gates"
+hosttest sh tools/tls_entropy_test.sh
+hosttest sh tools/tls_conc_test.sh
 
 if [ "${QUICK:-0}" != "0" ]; then
     printf '\nQUICK=1: skipping the QEMU conformance run\n'

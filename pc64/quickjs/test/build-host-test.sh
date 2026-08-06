@@ -76,3 +76,10 @@ echo "built build/cache_test.exe"
 $CC $FLAGS -Wall -Wextra -c quickjs/test/framing_test.c -o build/qjs_t_fmain.o
 $CC -o build/framing_test.exe build/qjs_t_fmain.o
 echo "built build/framing_test.exe"
+
+# the subresource queue's SCHEDULING: pc64_fetch.c against a stubbed
+# transport, so parallelism is countable without a network.
+$CC $FLAGS -Wall -Wextra -c pc64_fetch.c -o build/qjs_t_fetch.o
+$CC $FLAGS -I. -c quickjs/test/fetch_test.c -o build/qjs_t_ftmain.o
+$CC -o build/fetch_test.exe build/qjs_t_ftmain.o build/qjs_t_fetch.o
+echo "built build/fetch_test.exe"

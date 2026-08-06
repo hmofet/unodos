@@ -1,8 +1,10 @@
-/* pc64_http - HTTP/1.0 GET for the browser. See pc64_http.h. */
+/* pc64_http - HTTP/1.0 for the browser. See pc64_http.h. */
 #include "pc64_http.h"
 #include "pc64_cookie.h"
 #include "pc64_cache.h"
 #include "net.h"
+#include "netsock.h"      /* one socket per request in flight */
+#include "pc64_native.h"  /* the TSC: the only clock a production build has */
 #include "e1000.h"
 #include "e1000e.h"       /* Intel e1000e GbE (82574 / I217/I218/I219 LOM) */
 #include "igb.h"          /* Intel igb GbE (I210/I211/82576) */
@@ -12,8 +14,9 @@
 #include "iwlwifi.h"      /* Intel AC/AX WiFi (firmware-driven; WIFI.CFG) */
 #include "rtwifi.h"       /* Realtek PCIe WiFi (rtw88/rtw89) */
 #include "mrvlwifi.h"     /* Marvell/NXP PCIe WiFi (mwifiex) */
-#include "tls.h"          /* tls_connect_ca / tls_write / tls_read (HTTPS) */
+#include "tls.h"          /* tls_open / tls_send / tls_recv (HTTPS) */
 #include <string.h>
+#include <stdlib.h>
 
 void uno_pc64_delay_ms(int ms);          /* firmware Stall (uefi_main) */
 
@@ -190,14 +193,18 @@ int pc64_net_boot(void)
 }
 
 /* ---- tiny helpers -------------------------------------------------------- */
-static void set_tls_err(char *status, int statusmax, const char *what)
+static void sput_n(char *dst, int cap, const char *src)
+{ int i = 0; if (cap <= 0) return; while (src[i] && i < cap - 1) { dst[i] = src[i]; i++; } dst[i] = 0; }
+
+static void set_tls_err(char *status, int statusmax, const char *what, int e)
 {
-    int e = tls_last_error(), i = 0, n = 0; char num[8];
+    int i = 0, n = 0; char num[8];
     if (statusmax <= 0) return;
     while (what[i] && i < statusmax-1) { status[i] = what[i]; i++; }
     { const char *sfx = " (BearSSL err "; int k = 0; while (sfx[k] && i < statusmax-1) status[i++] = sfx[k++]; }
     if (e < 0) { if (i < statusmax-1) status[i++]='-'; e = -e; }
-    if (!e) num[n++]='0'; while (e && n < (int)sizeof num) { num[n++]=(char)('0'+e%10); e/=10; }
+    if (!e) { num[n++]='0'; }
+    while (e && n < (int)sizeof num) { num[n++]=(char)('0'+e%10); e/=10; }
     while (n && i < statusmax-1) status[i++] = num[--n];
     if (i < statusmax-1) status[i++]=')';
     status[i] = 0;
@@ -363,393 +370,676 @@ static pc64_http_progress_fn g_progress;
 
 void pc64_http_on_progress(pc64_http_progress_fn fn) { g_progress = fn; }
 
-/* ---- the kept-alive connection --------------------------------------------
- * A page is a document plus its images and stylesheets, and each of those
- * used to cost a fresh DNS + TCP + TLS round to the SAME server. Holding one
- * connection open across them is the single biggest win available in the
- * fetch path, and the framing work above is what makes it possible: on a
- * persistent connection the server never closes, so the only way to know a
- * response ended is its own Content-Length or chunked terminator.
+/* ---- a millisecond clock a PRODUCTION build has ---------------------------
+ * uno_dbg_uptime_ms() is debug-only, and a transport whose timeouts exist only
+ * in the debug build has no timeouts. The TSC is what the shell's animation
+ * clock and the browser's page clock already use. When it is uncalibrated the
+ * fallback counts CALLS rather than milliseconds: coarser, but a deadline that
+ * still ends beats one that never fires. */
+static unsigned http_ms(void)
+{
+    static unsigned long long t0;
+    static unsigned tick;
+    unsigned long long per_ms = uno_native_tsc_per_us() * 1000ull, now;
+    if (!per_ms) return ++tick;
+    now = uno_native_rdtsc();
+    if (!t0) t0 = now;
+    return (unsigned)((now - t0) / per_ms);
+}
+
+/* ---- connections ----------------------------------------------------------
+ * A page is a document plus its images and stylesheets, and each of those used
+ * to cost a fresh DNS + TCP + TLS round to the SAME server. Holding connections
+ * open across them is the single biggest win available in the fetch path, and
+ * the framing work above is what makes it possible: on a persistent connection
+ * the server never closes, so the only way to know a response ended is its own
+ * Content-Length or chunked terminator.
  *
- * Exactly ONE connection is kept. A browser on this box fetches one thing at
- * a time, so a pool would be bookkeeping for a concurrency that does not
- * exist.
+ * A POOL, not one slot. One slot was right while the browser could only fetch
+ * one thing at a time; now that several requests are in flight, one slot would
+ * mean the second request closes the first's connection and neither is reused.
  *
- * The failure that matters: a server may drop an idle connection at any
- * moment, and it looks identical to a healthy one until the write or the
- * first read fails. So a REUSED connection that fails is retried once on a
- * fresh one, and only a fresh connection's failure is reported. Without that
- * retry, keep-alive turns a working browser into one that intermittently
- * fails for no visible reason. */
-static struct {
-    char host[128];
-    int  port, secure, open;
-} g_ka;
+ * The failure that matters: a server may drop an idle connection at any moment,
+ * and it looks identical to a healthy one until the write or the first read
+ * fails. So a REUSED connection that fails is retried once on a fresh one, and
+ * only a fresh connection's failure is reported. Without that retry, keep-alive
+ * turns a working browser into one that intermittently fails for no visible
+ * reason. */
+#define KA_N   4
+#define DNS_N  8
+#define RAW_MAX 49152
+/* The browser's share of the NSOCK (16) socket table. The rest of the machine
+ * needs sockets too - the URC link, the child its listener accepts, discovery -
+ * and on a box driven only over URC, a browser that crowded those out would
+ * take the machine with it. In-flight requests are already capped (one
+ * document plus pc64_fetch's FETCH_PAR), so this is really a cap on how many
+ * IDLE pooled connections may sit around alongside them; over budget, the
+ * oldest idle one is given up. */
+#define HTTP_MAX_CONNS 8
 
+typedef struct {
+    /* An EXPLICIT occupied flag, not "is sock >= 0": socket id 0 is a
+     * perfectly good socket, so a zeroed pool slot reads as occupied and
+     * every connection gets closed instead of kept - which is keep-alive
+     * silently doing nothing, and a conn_close() on somebody else's socket 0.
+     * tools/netverify_urc.py caught exactly that, second page load. */
+    int       used;
+    int       sock;                 /* -1 unless plain    */
+    tls_conn *tls;                  /* 0 unless secure    */
+    int       secure, port;
+    char      host[128];
+} httpconn;
 
-static void ka_opened(int secure)
-{ g_ka.open = 1; g_ka.secure = secure; g_ka.host[0] = 0; g_ka.port = 0; }
+static httpconn g_pool[KA_N];
+static int      g_conn_open;        /* pooled + in flight */
 
-/* Close whatever is open. `open` is set when a connection is ESTABLISHED,
- * not when it becomes reusable: an earlier version set it only on the keep
- * path, so a response that could not be kept was never closed at all - and
- * pc64 has a single TCP slot, so that leaked socket wedged the next fetch. */
-static void ka_drop(void)
+static void conn_clear(httpconn *c)
+{ memset(c, 0, sizeof *c); c->sock = -1; }
+
+static int conn_live(const httpconn *c) { return c->used; }
+
+static void conn_close(httpconn *c)
 {
-    if (!g_ka.open) return;
-    if (g_ka.secure) tls_close(); else net_tcp_close();
-    g_ka.open = 0;
-    g_ka.host[0] = 0;
+    if (!c->used) { conn_clear(c); return; }
+    if (c->tls) tls_free(c->tls); else if (c->sock >= 0) net_sock_close(c->sock);
+    g_conn_open--;
+    conn_clear(c);
 }
 
-/* Re-enabled 2026-08-06 after root-causing the failure it was disabled for.
- * Keep-alive was never independently broken: the hang and the total absence
- * of reuse were both collateral damage from the progressive-render
- * re-entrancy bug, where a repaint from inside this receive loop started a
- * NESTED request on the same single TCP slot. With that fixed (and with a
- * connection marked open at ESTABLISH time so a non-keepable one is actually
- * closed), a page and its three stylesheets now travel on ONE connection -
- * measured server-side by tools/netverify_urc.py. */
-static int ka_matches(const char *host, int port, int secure)
+/* Is a POOLED connection still worth handing out? A dead one costs the caller
+ * a whole request before it finds out, so ask before, not after. */
+static int conn_healthy(httpconn *c)
 {
-    /* g_ka.host is empty until a connection is proven KEEPABLE, so an
-     * established-but-not-yet-kept connection can never be reused by
-     * accident - it can only be closed. */
-    return g_ka.open && g_ka.secure == secure && g_ka.port == port &&
-           g_ka.host[0] && !strcmp(g_ka.host, host);
+    if (!conn_live(c)) return 0;
+    if (c->tls) return tls_poll(c->tls) == TLS_READY;
+    return net_sock_state(c->sock) == TCP_ESTABLISHED;
 }
 
-static void ka_keep(const char *host, int port, int secure)
+static int pool_take(const char *host, int port, int secure, httpconn *out)
 {
-    int n = 0;
-    while (host[n] && n < (int)sizeof g_ka.host - 1) { g_ka.host[n] = host[n]; n++; }
-    g_ka.host[n] = 0;
-    g_ka.port = port; g_ka.secure = secure; g_ka.open = 1;
+    int i;
+    for (i = 0; i < KA_N; i++) {
+        httpconn *p = &g_pool[i];
+        if (!conn_live(p) || p->secure != secure || p->port != port) continue;
+        if (strcmp(p->host, host)) continue;
+        if (!conn_healthy(p)) { conn_close(p); continue; }
+        *out = *p;
+        conn_clear(p);
+        return 1;
+    }
+    return 0;
 }
 
-void pc64_http_disconnect(void) { ka_drop(); }
-
-/* ---- GET ----------------------------------------------------------------- */
-/* One request/response. On a 3xx with a Location, returns HTTP_REDIRECT and puts
- * the resolved absolute next URL in `redir`; otherwise behaves like the public
- * pc64_http_get (body length >=0, or a negative error). */
-#define HTTP_REDIRECT (-100)
-/* "the connection I reused was dead - try again on a fresh one". Never
- * reported to a caller; the retry loop consumes it. */
-#define HTTP_RETRY    (-101)
-/* `post` is NULL for a GET, else the form-encoded body to send. A POST is
- * never cached and never served from cache - it is a request to CHANGE
- * something, and replaying one from a cache is how a browser double-submits
- * an order. */
-static int http_get_once(const char *url, char *body, int bodymax,
-                         char *status, int statusmax, char *redir, int redirmax,
-                         pc64_cache_ctl *ctl, const char *post, int *out_reused)
+/* Give up idle connections until a new one fits inside the budget. Only
+ * POOLED ones can be given up - an in-flight request owns its socket - so
+ * this cannot starve a request that is already running. */
+static void budget_make_room(void)
 {
-    int reused = 0;
-    char host[128], path[512];
+    while (g_conn_open >= HTTP_MAX_CONNS) {
+        int i;
+        for (i = 0; i < KA_N; i++)
+            if (conn_live(&g_pool[i])) { conn_close(&g_pool[i]); break; }
+        if (i == KA_N) return;              /* nothing idle left to give up */
+    }
+}
+
+static void pool_put(httpconn *c)
+{
+    int i;
+    if (!conn_live(c)) return;
+    for (i = 0; i < KA_N; i++)
+        if (!conn_live(&g_pool[i])) { g_pool[i] = *c; conn_clear(c); return; }
+    conn_close(c);                      /* pool full: the newest one loses */
+}
+
+/* ---- the resolver's memory ------------------------------------------------
+ * net_dns_query() is synchronous, so a page whose four subresources live on
+ * one host used to pay four blocking round trips to learn the same address.
+ * Page-lifetime, dropped by pc64_http_disconnect() along with the connections,
+ * which is what a network reconfiguration invalidates. Deliberately not a TTL
+ * cache: this is a browser session's worth of memory, not a resolver. */
+static struct { char host[128]; unsigned char ip[4]; } g_dns[DNS_N];
+static int g_dnsn;
+
+static int resolve_host(const char *host, unsigned char ip[4])
+{
+    int i;
+    if (is_ipv4(host, ip)) return 1;
+    for (i = 0; i < g_dnsn; i++)
+        if (!strcmp(g_dns[i].host, host)) { memcpy(ip, g_dns[i].ip, 4); return 1; }
+    if (!net_dns_query(host, ip)) return 0;
+    if (g_dnsn < DNS_N) {
+        sput_n(g_dns[g_dnsn].host, sizeof g_dns[g_dnsn].host, host);
+        memcpy(g_dns[g_dnsn].ip, ip, 4);
+        g_dnsn++;
+    }
+    return 1;
+}
+
+void pc64_http_disconnect(void)
+{
+    int i;
+    for (i = 0; i < KA_N; i++) conn_close(&g_pool[i]);
+    g_dnsn = 0;
+}
+
+int pc64_http_conns(void) { return g_conn_open; }
+
+/* ---- a request in flight --------------------------------------------------
+ * One state machine, one implementation of what an HTTP request is. The
+ * blocking pc64_http_get/request are this plus a wait loop; the browser's
+ * subresource fetcher is several of these plus one wait loop.
+ */
+enum { HS_CONNECT = 0, HS_SEND, HS_RECV, HS_FINISH, HS_END };
+
+/* deadlines, in ms of no progress. A plain TCP open is either answered or it
+ * is not; a TLS open also has to carry a ~4-5 KB certificate flight, and this
+ * transport moves one 512-byte segment per round trip. */
+#define CONNECT_MS_PLAIN 3000
+#define CONNECT_MS_TLS   8000
+#define SEND_MS          8000
+#define IDLE_MS          3000
+#define MAX_HOPS         6
+
+struct http_req {
+    int   st, finished, rc;
+    int   hop, want_progress;
+    char  url0[512];                /* the ORIGINAL url - what the cache keys */
+    char  cur[512];                 /* this hop's url                         */
+    char *post;                     /* copied; NULL for a GET                 */
+    /* per hop */
+    char  host[128], path[512];
     unsigned char ip[4];
-    int port = 80, hn = 0, i, secure = 0;
-    const char *p = url;
+    int   secure, port, reused, retried;
+    httpconn c;
+    char  req[2048]; int reqn, reqoff;
+    char *raw; int rn;
+    int   split, chunked, done, next_report;
+    long  clen;
+    unsigned t0;
+    int   body_off, body_len;
+    char  status[192];
+    pc64_cache_ctl ctl;
+};
 
-    if (statusmax > 0) status[0] = 0;
-    if (bodymax > 0) body[0] = 0;
+static int req_fail(http_req *r, int rc, const char *why)
+{
+    if (why) sput_n(r->status, sizeof r->status, why);
+    conn_close(&r->c);
+    r->rc = rc;
+    r->st = HS_END;
+    r->finished = 1;
+    return 1;
+}
 
-    /* scheme */
-    if (!strncmp(p, "https://", 8)) { secure = 1; port = 443; p += 8; }
+/* Parse this hop's URL, get a connection (pooled if one matches, fresh
+ * otherwise) and build the request bytes. `no_reuse` forces a fresh
+ * connection - that is the keep-alive retry. */
+static int hop_start(http_req *r, int no_reuse)
+{
+    const char *p = r->cur;
+    int hn = 0, i;
+
+    r->secure = 0; r->port = 80; r->reused = 0;
+    r->reqn = r->reqoff = 0;
+    r->rn = 0; r->split = -1; r->chunked = 0; r->done = 0; r->next_report = 0;
+    r->clen = -1;
+
+    if (!strncmp(p, "https://", 8)) { r->secure = 1; r->port = 443; p += 8; }
     else if (!strncmp(p, "http://", 7)) p += 7;
 
-    /* host[:port] */
-    while (*p && *p != '/' && *p != ':' && hn < (int)sizeof(host)-1) host[hn++] = *p++;
-    host[hn] = 0;
-    if (*p == ':') { p++; port = 0; while (*p >= '0' && *p <= '9') port = port*10 + (*p++ - '0'); }
-    /* path */
-    if (*p != '/') { path[0] = '/'; i = 1; } else { i = 0; }
-    { int j = i; while (*p && j < (int)sizeof(path)-1) path[j++] = *p++; path[j] = 0; if (!i && !path[0]) strcpy(path,"/"); }
-    if (path[0] == 0) strcpy(path, "/");
-    if (host[0] == 0) { if (statusmax) strncpy(status,"Empty host",statusmax-1); return -2; }
+    while (*p && *p != '/' && *p != ':' && hn < (int)sizeof(r->host)-1) r->host[hn++] = *p++;
+    r->host[hn] = 0;
+    if (*p == ':') { p++; r->port = 0; while (*p >= '0' && *p <= '9') r->port = r->port*10 + (*p++ - '0'); }
+    if (*p != '/') { r->path[0] = '/'; i = 1; } else { i = 0; }
+    {   int j = i; while (*p && j < (int)sizeof(r->path)-1) r->path[j++] = *p++; r->path[j] = 0; }
+    if (r->path[0] == 0) { r->path[0] = '/'; r->path[1] = 0; }
+    if (r->host[0] == 0) return req_fail(r, -2, "Empty host");
 
     /* now that pc64_net_up() reports the lease rather than just the bind, this
      * branch also catches "NIC up, link up, but no address", so say so - the
      * old wording blamed a missing NIC for what was usually a missing lease */
-    if (!pc64_net_up()) { if (statusmax) strncpy(status,"No network (no NIC, no link, or no DHCP lease - check the cable, or WIFI.CFG + firmware)",statusmax-1); return -3; }
+    if (!pc64_net_up())
+        return req_fail(r, -3, "No network (no NIC, no link, or no DHCP lease - check the cable, or WIFI.CFG + firmware)");
 
-    /* resolve */
-    if (!is_ipv4(host, ip)) {
-        if (!net_dns_query(host, ip)) { if (statusmax) strncpy(status,"DNS lookup failed",statusmax-1); return -4; }
-    }
+    /* The one blocking step left, and the only one: net_dns_query is
+     * synchronous by contract (net.h). Memoised per host, so a page's whole
+     * subresource set pays it once. */
+    if (!resolve_host(r->host, r->ip)) return req_fail(r, -4, "DNS lookup failed");
 
-    /* connect - unless the connection we already hold goes to this very
-     * origin, in which case the whole DNS + TCP + TLS round is skipped */
-    if (ka_matches(host, port, secure)) {
-        reused = 1;
-    } else if (secure) {
-        ka_drop();
-        int rc = tls_connect_ca(ip, (unsigned short)port, host);
-        /* A refusal for want of entropy never reached BearSSL, so there is no
-         * BR_ERR_* to quote and "TLS connect failed (BearSSL err 0)" would
-         * point the reader at the wrong layer. Name the real cause. */
-        if (rc == TLS_ENOENTROPY) {
-            if (statusmax) strncpy(status, "TLS refused: no entropy source on this machine", statusmax-1);
-            return -5; }
-        if (rc != 0) { set_tls_err(status, statusmax, "TLS connect failed"); return -5; }
-        ka_opened(1);
-    } else {
-        ka_drop();
-        if (net_tcp_connect(ip, (unsigned short)port) < 0) { if (statusmax) strncpy(status,"TCP connect failed",statusmax-1); return -5; }
-        for (i = 0; i < 400 && net_tcp_state() == TCP_SYN_SENT; i++) { net_poll(); uno_pc64_delay_ms(5); }
-        if (net_tcp_state() != TCP_ESTABLISHED) { net_tcp_close(); if (statusmax) strncpy(status,"Connection timed out",statusmax-1); return -6; }
-        ka_opened(0);
-    }
-
-    /* request */
-    { char req[2048]; int rn = 0;
-      char ck[768];
-      const char *a = post ? "POST " : "GET ";
-      const char *b = " HTTP/1.0\r\nHost: ";
-      const char *c = "\r\nUser-Agent: UnoDOS-pc64\r\nConnection: close\r\nAccept: text/html,text/markdown,text/plain\r\n";
-      /* every append is bounds-checked against sizeof(req): host/path come from
-         the address bar AND from links in untrusted pages, so a crafted long URL
-         must not overflow this stack buffer. */
-      #define REQ_PUT(s) do { int l=(int)strlen(s); if (rn+l >= (int)sizeof(req)) { if (statusmax) strncpy(status,"URL too long",statusmax-1); if (secure) tls_close(); else net_tcp_close(); return -8; } memcpy(req+rn,(s),l); rn+=l; } while (0)
-      REQ_PUT(a); REQ_PUT(path); REQ_PUT(b); REQ_PUT(host); REQ_PUT(c);
-      /* stored cookies for this origin. The jar decides what matches; the
-       * transport only has to hand it enough to decide with - host, path AND
-       * the scheme, since a Secure cookie must never leave over plain HTTP. */
-      if (pc64_cookie_header(host, path, secure, ck, sizeof ck) > 0) {
-          REQ_PUT("Cookie: "); REQ_PUT(ck); REQ_PUT("\r\n");
-      }
-      if (post) {
-          char num[24];
-          int k = 0, v = (int)strlen(post);
-          REQ_PUT("Content-Type: application/x-www-form-urlencoded\r\n");
-          REQ_PUT("Content-Length: ");
-          if (!v) num[k++] = '0';
-          {   char tmp[16]; int t = 0, vv = v;
-              while (vv) { tmp[t++] = (char)('0' + vv % 10); vv /= 10; }
-              while (t) num[k++] = tmp[--t]; }
-          num[k] = 0;
-          REQ_PUT(num);
-          REQ_PUT("\r\n");
-      }
-      REQ_PUT("\r\n");                            /* end of headers */
-      if (post) REQ_PUT(post);
-      #undef REQ_PUT
-      if (secure) {
-          if (tls_write(req, rn) < 0) {
-              /* on a reused connection this is almost always "the server
-               * dropped it while idle", not a real error - the caller
-               * retries once on a fresh one */
-              ka_drop();
-              if (reused) { if (out_reused) *out_reused = 1; return HTTP_RETRY; }
-              set_tls_err(status, statusmax, "TLS write failed");
-              return -7;
-          }
-      } else {
-          net_tcp_send(req, rn);
-      }
-    }
-
-    /* Receive until the body is COMPLETE by its own framing - Content-Length
-     * or the chunked terminator - and only fall back to read-until-close when
-     * the response states neither. Waiting for the close costs a round trip
-     * the server already told us was unnecessary, and on a keep-alive
-     * connection the close never comes at all. */
-    { static char raw[49152];
-      int rn = 0, idle = 0;
-      int split = -1;                 /* body offset, once headers are in    */
-      int next_report = 0;            /* progressive-delivery throttle       */
-      long clen = -1;                 /* Content-Length, -1 = absent         */
-      int chunked = 0, done = 0;
-      while (rn < (int)sizeof(raw)-1 && !done) {
-          char tmp[1460]; int n;
-          if (secure) {
-              n = tls_read(tmp, sizeof tmp);
-              if (n > 0) { if (rn+n > (int)sizeof(raw)-1) n = (int)sizeof(raw)-1-rn; memcpy(raw+rn,tmp,n); rn += n; }
-              else break;                        /* <=0: TLS closed or error */
-          } else {
-              net_poll();
-              n = net_tcp_recv(tmp, sizeof tmp);
-              if (n > 0) { if (rn+n > (int)sizeof(raw)-1) n = (int)sizeof(raw)-1-rn; memcpy(raw+rn,tmp,n); rn += n; idle = 0; }
-              else {
-                  int st = net_tcp_state();
-                  if (st == TCP_DONE || st == TCP_CLOSED || st == TCP_FIN_WAIT) { if (++idle > 20) break; }
-                  else if (++idle > 600) break;  /* ~3s of no data */
-                  uno_pc64_delay_ms(5);
-              }
-          }
-          if (split < 0) {
-              split = hdr_split(raw, rn);
-              if (split >= 0) {
-                  char v[64];
-                  raw[rn] = 0;
-                  if (http_header(raw, split, "content-length", v, sizeof v)) {
-                      long q = 0; const char *p2 = v;
-                      while (*p2 >= '0' && *p2 <= '9') q = q * 10 + (*p2++ - '0');
-                      clen = q;
-                  }
-                  if (http_header(raw, split, "transfer-encoding", v, sizeof v)) {
-                      int k; for (k = 0; v[k]; k++) if (v[k]>='A'&&v[k]<='Z') v[k] += 32;
-                      if (strstr(v, "chunked")) chunked = 1;
-                  }
-              }
-          }
-          /* offer what has arrived, every ~6 KB. Chunked bodies are not
-           * offered: they are still encoded at this point, and handing the
-           * embedder chunk-size lines to render would be worse than making
-           * it wait. */
-          if (split >= 0 && g_progress && !chunked && rn - split > next_report) {
-              raw[rn] = 0;
-              g_progress(raw + split, rn - split, clen);
-              next_report = (rn - split) + 6144;
-          }
-          if (split >= 0) {
-              if (chunked) {
-                  /* peek: dechunk on a COPY would cost a second buffer, so
-                   * probe for the terminator instead and decode once, below */
-                  int i;
-                  for (i = split; i + 4 < rn; i++)
-                      if (raw[i]=='\n' && raw[i+1]=='0' &&
-                          (raw[i+2]=='\r' || raw[i+2]=='\n')) { done = 1; break; }
-              } else if (clen >= 0 && (long)(rn - split) >= clen) done = 1;
-          }
-      }
-      /* Keep the connection ONLY when the reply was framed (so we know where
-       * it ended) and neither side asked to close. Anything else and we are
-       * guessing about a shared socket, which is how a browser starts
-       * reading one page's bytes as the next page's body. */
-      {   char cv[64];
-          int keep = (split >= 0) && (chunked || clen >= 0) && done;
-          if (keep && http_header(raw, split, "connection", cv, sizeof cv)) {
-              int k; for (k = 0; cv[k]; k++) if (cv[k]>='A'&&cv[k]<='Z') cv[k] += 32;
-              if (strstr(cv, "close")) keep = 0;
-          }
-          if (keep) ka_keep(host, port, secure); else ka_drop();
-      }
-      /* a reused connection that produced NOTHING was dead: retry once */
-      if (rn == 0 && reused) { ka_drop(); if (out_reused) *out_reused = 1; return HTTP_RETRY; }
-      raw[rn] = 0;
-      /* chunked bodies are decoded in place, so everything downstream - the
-       * header/body split below, the cache, the parser - sees a plain body */
-      if (split >= 0 && chunked) {
-          int dl = dechunk(raw + split, rn - split);
-          if (dl >= 0) { rn = split + dl; raw[rn] = 0; }
-      }
-      /* the connection's fate was decided above - do NOT close it here */
-
-      /* status line */
-      if (statusmax > 0) { int j=0; const char *s=raw; while (*s && *s!='\r' && *s!='\n' && j<statusmax-1) status[j++]=*s++; status[j]=0;
-                           if (j==0) strncpy(status,"No response",statusmax-1); }
-
-      /* Set-Cookie, every occurrence. This runs BEFORE the redirect branch
-       * below on purpose: a sign-in almost always answers 302 + Set-Cookie,
-       * and returning at the redirect first would drop the very cookie the
-       * redirect exists to deliver. */
-      { char cv[768]; int occ;
-        for (occ = 0; occ < 8; occ++) {
-            if (!http_header_nth(raw, rn, "set-cookie", occ, cv, sizeof cv)) break;
-            pc64_cookie_set(host, path, cv);
-        } }
-
-      /* Cache-Control, for the caller's cache decision. Parsed here because
-       * this is the only place with the headers in hand - the body is all
-       * that survives the return. */
-      if (ctl) {
-          char cc[160];
-          ctl->no_store = 0;
-          ctl->max_age = -1;
-          if (http_status_code(raw) != 200) ctl->no_store = 1;   /* only 200 */
-          if (http_header(raw, rn, "cache-control", cc, sizeof cc)) {
-              int k;
-              for (k = 0; cc[k]; k++) if (cc[k] >= 'A' && cc[k] <= 'Z') cc[k] += 32;
-              if (strstr(cc, "no-store") || strstr(cc, "no-cache") ||
-                  strstr(cc, "private")) ctl->no_store = 1;
-              {   const char *m = strstr(cc, "max-age");
-                  if (m) { long v = 0; int any = 0;
-                           m += 7; while (*m == ' ' || *m == '=') m++;
-                           while (*m >= '0' && *m <= '9') { v = v*10 + (*m++ - '0'); any = 1; }
-                           if (any) ctl->max_age = v; } }
-          }
-      }
-
-      /* follow a redirect: 3xx + Location -> resolve to an absolute URL. Handles
-       * absolute Locations, root-relative ("/path"), and http<->https upgrades
-       * (google.com -> www.google.com, apex -> www, http -> https all land here). */
-      { int code = http_status_code(raw); char loc[512];
-        if (code >= 300 && code < 400 && redir && redirmax > 0 &&
-            http_header(raw, rn, "location", loc, sizeof loc) && loc[0]) {
-            int o = 0;
-            #define RPUT(s) do { const char *q=(s); while (*q && o<redirmax-1) redir[o++]=*q++; } while (0)
-            if (!strncmp(loc,"http://",7) || !strncmp(loc,"https://",8)) {
-                RPUT(loc);
-            } else {                                 /* relative to the current origin */
-                char pnum[8]; int v = port, k = 0, defport = secure ? 443 : 80;
-                RPUT(secure ? "https://" : "http://");
-                RPUT(host);
-                if (v != defport) { RPUT(":"); if(!v)pnum[k++]='0'; while(v){pnum[k++]=(char)('0'+v%10);v/=10;}
-                                    while (k && o<redirmax-1) redir[o++]=pnum[--k]; }
-                if (loc[0] != '/') RPUT("/");
-                RPUT(loc);
-            }
-            #undef RPUT
-            redir[o] = 0;
-            return HTTP_REDIRECT;
-        } }
-
-      /* split headers from body at the blank line */
-      { const char *bp = raw, *e = raw + rn; const char *split = 0;
-        for (; bp + 3 < e; bp++) {
-            if (bp[0]=='\r'&&bp[1]=='\n'&&bp[2]=='\r'&&bp[3]=='\n') { split = bp+4; break; }
-            if (bp[0]=='\n'&&bp[1]=='\n') { split = bp+2; break; }
+    if (!no_reuse && pool_take(r->host, r->port, r->secure, &r->c)) {
+        r->reused = 1;
+        r->st = HS_SEND;
+    } else if (r->secure) {
+        budget_make_room();
+        r->c.tls = tls_open(r->ip, (unsigned short)r->port, r->host, TLS_TRUST_CA);
+        if (!r->c.tls) {
+            /* A refusal for want of entropy never reached BearSSL, so there is
+             * no BR_ERR_* to quote and "TLS connect failed (BearSSL err 0)"
+             * would point the reader at the wrong layer. Name the real cause. */
+            if (tls_open_error() == TLS_ENOENTROPY)
+                return req_fail(r, -5, "TLS refused: no entropy source on this machine");
+            return req_fail(r, -5, "TLS connect failed (no socket or no memory)");
         }
-        if (!split) split = raw;                 /* no headers found - show all */
-        { int bl = (int)(e - split); if (bl > bodymax-1) bl = bodymax-1; if (bl < 0) bl = 0;
-          memcpy(body, split, bl); body[bl] = 0; return bl; }
-      }
+        r->c.used = 1; r->c.sock = -1; r->c.secure = 1; r->c.port = r->port;
+        sput_n(r->c.host, sizeof r->c.host, r->host);
+        g_conn_open++;
+        r->st = HS_CONNECT;
+    } else {
+        int s;
+        budget_make_room();
+        s = net_socket(SOCK_TCP);
+        if (s < 0) return req_fail(r, -5, "TCP connect failed (no socket free)");
+        if (net_connect(s, r->ip, (unsigned short)r->port) != 0) {
+            net_sock_close(s);
+            return req_fail(r, -5, "TCP connect failed");
+        }
+        r->c.used = 1; r->c.sock = s; r->c.tls = 0; r->c.secure = 0; r->c.port = r->port;
+        sput_n(r->c.host, sizeof r->c.host, r->host);
+        g_conn_open++;
+        r->st = HS_CONNECT;
+    }
+
+    /* the request bytes */
+    {   char ck[768];
+        int rn = 0;
+        const char *a = r->post ? "POST " : "GET ";
+        const char *b = " HTTP/1.0\r\nHost: ";
+        /* Connection: keep-alive, NOT close. The framing above is what lets a
+         * response end without a close, and asking for one anyway is how the
+         * pool ends up empty against every server that honours the header.
+         * The test server did not, so nothing in the tree noticed. A server
+         * that will not persist answers "Connection: close" and the finish
+         * step below drops the connection, which is the correct fallback. */
+        const char *c = "\r\nUser-Agent: UnoDOS-pc64\r\nConnection: keep-alive\r\n"
+                        "Accept: text/html,text/markdown,text/plain\r\n";
+        /* every append is bounds-checked against sizeof(req): host/path come
+           from the address bar AND from links in untrusted pages, so a crafted
+           long URL must not overflow this buffer. */
+        #define REQ_PUT(s) do { int l=(int)strlen(s); \
+            if (rn+l >= (int)sizeof(r->req)) { return req_fail(r, -8, "URL too long"); } \
+            memcpy(r->req+rn,(s),l); rn+=l; } while (0)
+        REQ_PUT(a); REQ_PUT(r->path); REQ_PUT(b); REQ_PUT(r->host); REQ_PUT(c);
+        /* stored cookies for this origin. The jar decides what matches; the
+         * transport only has to hand it enough to decide with - host, path AND
+         * the scheme, since a Secure cookie must never leave over plain HTTP. */
+        if (pc64_cookie_header(r->host, r->path, r->secure, ck, sizeof ck) > 0) {
+            REQ_PUT("Cookie: "); REQ_PUT(ck); REQ_PUT("\r\n");
+        }
+        if (r->post) {
+            char num[24];
+            int k = 0, v = (int)strlen(r->post);
+            REQ_PUT("Content-Type: application/x-www-form-urlencoded\r\n");
+            REQ_PUT("Content-Length: ");
+            if (!v) num[k++] = '0';
+            {   char tmp[16]; int t = 0, vv = v;
+                while (vv) { tmp[t++] = (char)('0' + vv % 10); vv /= 10; }
+                while (t) num[k++] = tmp[--t]; }
+            num[k] = 0;
+            REQ_PUT(num);
+            REQ_PUT("\r\n");
+        }
+        REQ_PUT("\r\n");                            /* end of headers */
+        if (r->post) REQ_PUT(r->post);
+        #undef REQ_PUT
+        r->reqn = rn;
+    }
+    r->t0 = http_ms();
+    return 0;
+}
+
+/* "the connection I reused was dead - try again on a fresh one". Never
+ * reported to a caller; this consumes it. */
+static int hop_retry(http_req *r)
+{
+    conn_close(&r->c);
+    r->retried = 1;
+    return hop_start(r, 1);
+}
+
+static void step_connect(http_req *r)
+{
+    if (r->secure) {
+        int p = tls_poll(r->c.tls);
+        if (p < 0) { char m[160]; set_tls_err(m, sizeof m, "TLS connect failed", tls_conn_error(r->c.tls));
+                     req_fail(r, -5, m); return; }
+        if (p == TLS_READY) { r->st = HS_SEND; r->t0 = http_ms(); return; }
+        if (p == TLS_EOF) { req_fail(r, -5, "TLS connect failed (peer closed)"); return; }
+        if (http_ms() - r->t0 > CONNECT_MS_TLS) req_fail(r, -6, "TLS handshake timed out");
+    } else {
+        int s = net_sock_state(r->c.sock);
+        if (s == TCP_ESTABLISHED) { r->st = HS_SEND; r->t0 = http_ms(); return; }
+        if (s == TCP_DONE || s == TCP_CLOSED) { req_fail(r, -5, "TCP connect failed"); return; }
+        if (http_ms() - r->t0 > CONNECT_MS_PLAIN) req_fail(r, -6, "Connection timed out");
     }
 }
 
-/* Public entry: fetch `url`, following up to a few redirects. */
+static void step_send(http_req *r)
+{
+    while (r->reqoff < r->reqn) {
+        int want = r->reqn - r->reqoff, n;
+        if (r->secure) {
+            n = tls_send(r->c.tls, r->req + r->reqoff, want);
+            if (n < 0) {
+                /* on a reused connection this is almost always "the server
+                 * dropped it while idle", not a real error */
+                if (r->reused && !r->retried) { hop_retry(r); return; }
+                { char m[160]; set_tls_err(m, sizeof m, "TLS write failed", tls_conn_error(r->c.tls));
+                  req_fail(r, -7, m); }
+                return;
+            }
+        } else {
+            n = net_send(r->c.sock, r->req + r->reqoff, want);
+            if (n < 0) {
+                if (net_sock_state(r->c.sock) != TCP_ESTABLISHED) {
+                    if (r->reused && !r->retried) { hop_retry(r); return; }
+                    req_fail(r, -7, "Connection lost while sending");
+                    return;
+                }
+                n = 0;                              /* a segment is in flight */
+            }
+        }
+        if (n == 0) break;                          /* would block: come back */
+        r->reqoff += n;
+        r->t0 = http_ms();
+    }
+    if (r->reqoff >= r->reqn) { r->st = HS_RECV; r->t0 = http_ms(); }
+    else if (http_ms() - r->t0 > SEND_MS) req_fail(r, -7, "Request send timed out");
+}
+
+/* Update the framing state from whatever is in raw[] now. Split out because
+ * both the arrival path and the finish path need it to agree. */
+static void frame_update(http_req *r)
+{
+    if (r->split < 0) {
+        r->split = hdr_split(r->raw, r->rn);
+        if (r->split >= 0) {
+            char v[64];
+            r->raw[r->rn] = 0;
+            if (http_header(r->raw, r->split, "content-length", v, sizeof v)) {
+                long q = 0; const char *p2 = v;
+                while (*p2 >= '0' && *p2 <= '9') q = q * 10 + (*p2++ - '0');
+                r->clen = q;
+            }
+            if (http_header(r->raw, r->split, "transfer-encoding", v, sizeof v)) {
+                int k; for (k = 0; v[k]; k++) if (v[k]>='A'&&v[k]<='Z') v[k] += 32;
+                if (strstr(v, "chunked")) r->chunked = 1;
+            }
+        }
+    }
+    if (r->split >= 0 && !r->done) {
+        if (r->chunked) {
+            /* peek: dechunk on a COPY would cost a second buffer, so probe for
+             * the terminator instead and decode once, at the finish */
+            int i;
+            for (i = r->split; i + 4 < r->rn; i++)
+                if (r->raw[i]=='\n' && r->raw[i+1]=='0' &&
+                    (r->raw[i+2]=='\r' || r->raw[i+2]=='\n')) { r->done = 1; break; }
+        } else if (r->clen >= 0 && (long)(r->rn - r->split) >= r->clen) r->done = 1;
+    }
+}
+
+static void step_recv(http_req *r)
+{
+    int eof = 0;
+
+    for (;;) {
+        char tmp[1460];
+        int n, room = RAW_MAX - 1 - r->rn;
+        if (room <= 0) break;
+        if (room > (int)sizeof tmp) room = (int)sizeof tmp;
+        n = r->secure ? tls_recv(r->c.tls, tmp, room)
+                      : net_recv(r->c.sock, tmp, room);
+        if (n < 0) { eof = 1; break; }              /* TLS closed or failed */
+        if (n == 0) {
+            if (!r->secure) {
+                int s = net_sock_state(r->c.sock);
+                if (s == TCP_DONE || s == TCP_CLOSED || s == TCP_FIN_WAIT) eof = 1;
+            }
+            break;
+        }
+        memcpy(r->raw + r->rn, tmp, (size_t)n);
+        r->rn += n;
+        r->t0 = http_ms();
+    }
+
+    frame_update(r);
+
+    /* offer what has arrived, every ~6 KB. Chunked bodies are not offered:
+     * they are still encoded at this point, and handing the embedder
+     * chunk-size lines to render would be worse than making it wait. */
+    if (r->want_progress && g_progress && r->split >= 0 && !r->chunked &&
+        r->rn - r->split > r->next_report) {
+        r->raw[r->rn] = 0;
+        g_progress(r->raw + r->split, r->rn - r->split, r->clen);
+        r->next_report = (r->rn - r->split) + 6144;
+    }
+
+    if (r->done || eof || r->rn >= RAW_MAX - 1) { r->st = HS_FINISH; return; }
+    /* An idle timeout is not a failure: the old loop broke out and used
+     * whatever had arrived, which is what read-until-close means when the
+     * close never comes. */
+    if (http_ms() - r->t0 > IDLE_MS) r->st = HS_FINISH;
+}
+
+/* Resolve a Location into an absolute URL, into r->cur. Handles absolute
+ * Locations, root-relative ("/path"), and http<->https upgrades (google.com ->
+ * www.google.com, apex -> www, http -> https all land here). */
+static void redirect_to(http_req *r, const char *loc)
+{
+    char next[512];
+    int o = 0, redirmax = (int)sizeof next;
+    #define RPUT(s) do { const char *q=(s); while (*q && o<redirmax-1) next[o++]=*q++; } while (0)
+    if (!strncmp(loc,"http://",7) || !strncmp(loc,"https://",8)) {
+        RPUT(loc);
+    } else {
+        char pnum[8]; int v = r->port, k = 0, defport = r->secure ? 443 : 80;
+        RPUT(r->secure ? "https://" : "http://");
+        RPUT(r->host);
+        if (v != defport) { RPUT(":"); if(!v)pnum[k++]='0'; while(v){pnum[k++]=(char)('0'+v%10);v/=10;}
+                            while (k && o<redirmax-1) next[o++]=pnum[--k]; }
+        if (loc[0] != '/') RPUT("/");
+        RPUT(loc);
+    }
+    #undef RPUT
+    next[o] = 0;
+    sput_n(r->cur, sizeof r->cur, next);
+}
+
+static void step_finish(http_req *r)
+{
+    /* Keep the connection ONLY when the reply was framed (so we know where it
+     * ended) and neither side asked to close. Anything else and we are guessing
+     * about a shared socket, which is how a browser starts reading one page's
+     * bytes as the next page's body. */
+    {   char cv[64];
+        int keep = (r->split >= 0) && (r->chunked || r->clen >= 0) && r->done;
+        if (keep && http_header(r->raw, r->split, "connection", cv, sizeof cv)) {
+            int k; for (k = 0; cv[k]; k++) if (cv[k]>='A'&&cv[k]<='Z') cv[k] += 32;
+            if (strstr(cv, "close")) keep = 0;
+        }
+        if (keep) pool_put(&r->c); else conn_close(&r->c);
+    }
+    /* a reused connection that produced NOTHING was dead: retry once */
+    if (r->rn == 0 && r->reused && !r->retried) { hop_retry(r); return; }
+    r->raw[r->rn] = 0;
+
+    /* chunked bodies are decoded in place, so everything downstream - the
+     * header/body split below, the cache, the parser - sees a plain body */
+    if (r->split >= 0 && r->chunked) {
+        int dl = dechunk(r->raw + r->split, r->rn - r->split);
+        if (dl >= 0) { r->rn = r->split + dl; r->raw[r->rn] = 0; }
+    }
+
+    /* status line */
+    {   int j = 0; const char *s = r->raw;
+        while (*s && *s != '\r' && *s != '\n' && j < (int)sizeof r->status - 1) r->status[j++] = *s++;
+        r->status[j] = 0;
+        if (!j) sput_n(r->status, sizeof r->status, "No response");
+    }
+
+    /* Set-Cookie, every occurrence. This runs BEFORE the redirect branch below
+     * on purpose: a sign-in almost always answers 302 + Set-Cookie, and taking
+     * the redirect first would drop the very cookie the redirect delivers. */
+    {   char cv[768]; int occ;
+        for (occ = 0; occ < 8; occ++) {
+            if (!http_header_nth(r->raw, r->rn, "set-cookie", occ, cv, sizeof cv)) break;
+            pc64_cookie_set(r->host, r->path, cv);
+        } }
+
+    /* Cache-Control, for the cache decision. Parsed here because this is the
+     * only place with the headers in hand - the body is all that survives. */
+    {   char cc[160];
+        r->ctl.no_store = 0;
+        r->ctl.max_age = -1;
+        if (http_status_code(r->raw) != 200) r->ctl.no_store = 1;   /* only 200 */
+        if (http_header(r->raw, r->rn, "cache-control", cc, sizeof cc)) {
+            int k;
+            for (k = 0; cc[k]; k++) if (cc[k] >= 'A' && cc[k] <= 'Z') cc[k] += 32;
+            if (strstr(cc, "no-store") || strstr(cc, "no-cache") ||
+                strstr(cc, "private")) r->ctl.no_store = 1;
+            {   const char *m = strstr(cc, "max-age");
+                if (m) { long v = 0; int any = 0;
+                         m += 7; while (*m == ' ' || *m == '=') m++;
+                         while (*m >= '0' && *m <= '9') { v = v*10 + (*m++ - '0'); any = 1; }
+                         if (any) r->ctl.max_age = v; } }
+        }
+    }
+
+    /* follow a redirect */
+    {   int code = http_status_code(r->raw); char loc[512];
+        if (code >= 300 && code < 400 &&
+            http_header(r->raw, r->rn, "location", loc, sizeof loc) && loc[0]) {
+            if (++r->hop >= MAX_HOPS) { req_fail(r, -9, "Too many redirects"); return; }
+            redirect_to(r, loc);
+            /* a redirect after a POST is followed as a GET, which is what
+             * browsers do */
+            if (r->post) { free(r->post); r->post = 0; }
+            r->retried = 0;
+            hop_start(r, 0);
+            return;
+        } }
+
+    /* split headers from body at the blank line */
+    {   const char *bp = r->raw, *e = r->raw + r->rn, *sp = 0;
+        for (; bp + 3 < e; bp++) {
+            if (bp[0]=='\r'&&bp[1]=='\n'&&bp[2]=='\r'&&bp[3]=='\n') { sp = bp+4; break; }
+            if (bp[0]=='\n'&&bp[1]=='\n') { sp = bp+2; break; }
+        }
+        if (!sp) sp = r->raw;                       /* no headers found - show all */
+        r->body_off = (int)(sp - r->raw);
+        r->body_len = r->rn - r->body_off;
+        if (r->body_len < 0) r->body_len = 0;
+    }
+    /* cache under the ORIGINAL url, not the last hop: that is what the next
+     * visit will ask for. Never a POST - replaying one from a cache is how a
+     * browser double-submits an order. */
+    if (r->body_len > 0 && !r->post)
+        pc64_cache_put(r->url0, r->raw + r->body_off, r->body_len, r->status, &r->ctl);
+    r->rc = r->body_len;
+    r->st = HS_END;
+    r->finished = 1;
+}
+
+http_req *pc64_http_begin(const char *url, const char *post)
+{
+    http_req *r = (http_req *)malloc(sizeof *r);
+    if (!r) return 0;
+    memset(r, 0, sizeof *r);
+    conn_clear(&r->c);
+    r->raw = (char *)malloc(RAW_MAX);
+    if (!r->raw) { free(r); return 0; }
+    r->split = -1;
+    r->clen = -1;
+    r->ctl.max_age = -1;
+    if (post) {
+        size_t n = strlen(post) + 1;
+        r->post = (char *)malloc(n);
+        if (!r->post) { free(r->raw); free(r); return 0; }
+        memcpy(r->post, post, n);
+    }
+    sput_n(r->url0, sizeof r->url0, url ? url : "");
+    sput_n(r->cur,  sizeof r->cur,  url ? url : "");
+
+    /* The cache lives HERE, not in the blocking wrapper, so every request path
+     * gets it. It used to sit in pc64_http_request, which was fine while every
+     * caller blocked - but the subresource queue now calls begin() directly,
+     * and a page's second visit would have re-fetched every image it already
+     * had. A fresh copy short-circuits the whole DNS + TCP + TLS round, which
+     * on this box is seconds rather than milliseconds. NEVER for a POST: that
+     * asks the server to CHANGE something, and replaying one from a cache is
+     * how a browser double-submits an order. */
+    if (!r->post) {
+        int n = pc64_cache_get(r->url0, r->raw, RAW_MAX, r->status, sizeof r->status);
+        if (n >= 0) {
+            r->body_off = 0; r->body_len = n; r->rc = n;
+            r->st = HS_END; r->finished = 1;
+            return r;
+        }
+    }
+    hop_start(r, 0);                 /* sets HS_* or finishes with an error */
+    return r;
+}
+
+void pc64_http_req_progress(http_req *r, int on) { if (r) r->want_progress = on; }
+
+int pc64_http_poll(http_req *r)
+{
+    if (!r) return 1;
+    if (r->finished) return 1;
+    switch (r->st) {
+    case HS_CONNECT: step_connect(r); break;
+    case HS_SEND:    step_send(r);    break;
+    case HS_RECV:    step_recv(r);    break;
+    case HS_FINISH:  step_finish(r);  break;
+    default:         r->finished = 1; break;
+    }
+    return r->finished;
+}
+
+int pc64_http_take(http_req *r, char *body, int bodymax, char *status, int statusmax)
+{
+    if (bodymax > 0) body[0] = 0;
+    if (statusmax > 0) status[0] = 0;
+    if (!r) return -2;
+    if (statusmax > 0) sput_n(status, statusmax, r->status);
+    if (r->rc < 0) return r->rc;
+    {   int n = r->body_len;
+        if (n > bodymax - 1) n = bodymax - 1;
+        if (n < 0) n = 0;
+        if (bodymax > 0) { memcpy(body, r->raw + r->body_off, (size_t)n); body[n] = 0; }
+        return n;
+    }
+}
+
+int pc64_http_len(http_req *r)
+{ return r ? (r->rc < 0 ? r->rc : r->body_len) : -2; }
+
+void pc64_http_free(http_req *r)
+{
+    if (!r) return;
+    conn_close(&r->c);               /* a cancelled request never pools its own */
+    free(r->raw);
+    free(r->post);
+    free(r);
+}
+
+/* ---- the blocking entry points -------------------------------------------- */
 int pc64_http_request(const char *url, const char *post,
                       char *body, int bodymax, char *status, int statusmax)
 {
-    char cur[512], nxt[512];
-    pc64_cache_ctl ctl;
-    int hop, n;
-    /* a fresh copy short-circuits the whole DNS + TCP + TLS round, which on
-     * this box is seconds rather than milliseconds. NEVER for a POST: that is
-     * a request to change something, and replaying one from a cache is how a
-     * browser double-submits an order. */
-    if (!post) {
-        n = pc64_cache_get(url, body, bodymax, status, statusmax);
-        if (n >= 0) return n;
-    }
-    memset(&ctl, 0, sizeof ctl);
-    ctl.max_age = -1;
-    strncpy(cur, url, sizeof cur - 1); cur[sizeof cur - 1] = 0;
-    for (hop = 0; hop < 6; hop++) {
-        {   int tries = 0, was_reused = 0;
-            do {
-                was_reused = 0;
-                n = http_get_once(cur, body, bodymax, status, statusmax,
-                                  nxt, sizeof nxt, &ctl, post, &was_reused);
-                /* HTTP_RETRY means the connection we REUSED was already dead.
-                 * That is not an error - it is the normal end of an idle
-                 * keep-alive - so try once more on a fresh one. Only a fresh
-                 * connection's failure is ever reported. */
-            } while (n == HTTP_RETRY && ++tries < 2);
-            if (n == HTTP_RETRY) n = -6;
-        }
-        post = 0;              /* a redirect after a POST is followed as GET */
-        if (n != HTTP_REDIRECT) {
-            /* cache under the ORIGINAL url, not the last hop: that is what
-             * the next visit will ask for */
-            if (n > 0 && !post) pc64_cache_put(url, body, n, status, &ctl);
-            return n;
-        }
-        strncpy(cur, nxt, sizeof cur - 1); cur[sizeof cur - 1] = 0;
-    }
-    if (statusmax > 0) strncpy(status, "Too many redirects", statusmax-1);
-    return -9;
+    http_req *r;
+    int rc;
+
+    if (bodymax > 0) body[0] = 0;
+    if (statusmax > 0) status[0] = 0;
+    r = pc64_http_begin(url, post);      /* the cache check is inside */
+    if (!r) { if (statusmax > 0) sput_n(status, statusmax, "Out of memory"); return -2; }
+    pc64_http_req_progress(r, 1);
+    while (!pc64_http_poll(r)) { net_poll(); uno_pc64_delay_ms(2); }
+    rc = pc64_http_take(r, body, bodymax, status, statusmax);
+    pc64_http_free(r);
+    return rc;
 }
 
 int pc64_http_get(const char *url, char *body, int bodymax, char *status, int statusmax)

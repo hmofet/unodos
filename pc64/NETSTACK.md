@@ -33,8 +33,16 @@ over these sockets), it does **not** own the layer.
 
 ## Sockets (`netsock.h`)
 
-A fixed table of `NSOCK` (12) slots, each an `SOCK_TCP` connection or an
+A fixed table of `NSOCK` (16) slots, each an `SOCK_TCP` connection or an
 `SOCK_UDP` port. BSD-ish, non-blocking, drive with `net_poll()` and poll state.
+
+**The table is shared, so consumers budget themselves.** It was 12 while the
+only thing holding several sockets was the URC channel. The browser now holds
+up to `HTTP_MAX_CONNS` (8, `pc64_http.c`) at a time and gives up idle pooled
+ones rather than exceed it, which leaves the rest for the URC link, the child
+its listener accepts, and discovery. Anything new that wants more than one
+socket should cap itself the same way: on a box driven only over URC, taking
+the last slot means losing the machine.
 
 | call | effect |
 |------|--------|

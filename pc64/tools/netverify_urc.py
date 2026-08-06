@@ -10,8 +10,9 @@ browser claims.
     cd pc64 && BROWSER_ENGINE=uw UNO_DEBUG=1 ./build.sh
     python3 tools/netverify_urc.py
 
-Three questions, three answers:
-  keep-alive       one connection serving four requests, not four connections
+Four questions, four answers:
+  parallel fetch   three delayed sheets arrive together, not one after another
+  keep-alive       a second page to the same origin needs no new connections
   chunked framing  a chunked page renders its decoded text
   progressive      text is on screen DURING a deliberate mid-response pause
 """
@@ -67,22 +68,65 @@ def main():
         with UrcUi() as ui:
             open_browser(ui)
 
-            # ---- 1. keep-alive + subresource fetching -------------------
-            nettest_server.stats.update(connections=0, requests=0, paths=[])
+            # ---- 1. PARALLEL subresource fetching -----------------------
+            # Every sheet is answered a second late, so serial and parallel
+            # are hours apart at QEMU timescales: three sheets one after
+            # another is >= 3 s, three together is ~1 s. Without the delay a
+            # fast serial fetcher and a parallel one are indistinguishable,
+            # which is why "one connection for the whole page" used to be the
+            # only thing this section could assert.
+            nettest_server.reset()
+            nettest_server.delays["sheet"] = 1.0
             goto(ui, "http://%s:%d/" % (HOST, PORT), settle=15.0)
             s = dict(nettest_server.stats)
-            shot(ui, "net_01_keepalive")
-            print("  page load: connections=%d requests=%d paths=%s"
-                  % (s["connections"], s["requests"], s["paths"]))
+            span = nettest_server.span()
+            shot(ui, "net_01_parallel")
+            print("  page load: connections=%d requests=%d peak=%d span=%.2fs paths=%s"
+                  % (s["connections"], s["requests"], s["peak"], span, s["paths"]))
             results.append(("subresources fetched (page + 3 sheets)",
                             s["requests"] >= 4))
-            results.append(("keep-alive: fewer connections than requests",
-                            s["connections"] < s["requests"]))
-            results.append(("keep-alive: ONE connection for the whole page",
-                            s["connections"] == 1))
+            results.append(("several connections IN FLIGHT at once",
+                            s["peak"] >= 3))
+            results.append(("page load shorter than the sum of its parts "
+                            "(%.2fs vs 3.0s serial)" % span,
+                            0 < span < 2.5))
+            # The client used to send "Connection: close" while asking for
+            # keep-alive semantics; this server answered keep-alive anyway, so
+            # the contradiction was invisible here and fatal everywhere else.
+            results.append(("the client actually asks to persist",
+                            s["keepalive_asked"] >= 4 and s["close_asked"] == 0))
+
+            # ---- 1b. and the pool is REUSED on the next navigation ------
+            # Parallel fetching means a page opens several connections, so
+            # "one connection" is no longer the measure of keep-alive.
+            # Reuse shows up as a second page needing NO new accepts.
+            nettest_server.reset()
+            nettest_server.delays["sheet"] = 0.0
+            goto(ui, "http://%s:%d/?again" % (HOST, PORT), settle=10.0)
+            s = dict(nettest_server.stats)
+            print("  second load: NEW connections=%d requests=%d" % (s["connections"], s["requests"]))
+            results.append(("keep-alive: the second page reuses pooled connections",
+                            s["requests"] >= 4 and s["connections"] < s["requests"]))
+
+            # ---- 1c. and it RECOVERS when the server drops the pool -----
+            # Every real server hangs up on an idle connection eventually, and
+            # a dropped one is indistinguishable from a healthy one until the
+            # write or the first read fails. Without the retry-once path,
+            # keep-alive turns a working browser into one that fails
+            # intermittently for no visible reason.
+            dropped = nettest_server.drop_all()
+            nettest_server.reset()
+            print("  server hung up on %d pooled connections" % dropped)
+            goto(ui, "http://%s:%d/?cold" % (HOST, PORT), settle=12.0)
+            s = dict(nettest_server.stats)
+            print("  after the drop: connections=%d requests=%d paths=%s"
+                  % (s["connections"], s["requests"], s["paths"]))
+            results.append(("the server really did drop the pool first", dropped >= 3))
+            results.append(("a pool the server dropped still serves the page",
+                            s["requests"] >= 4 and s["connections"] >= 1))
 
             # ---- 2. chunked framing ------------------------------------
-            nettest_server.stats.update(connections=0, requests=0, paths=[])
+            nettest_server.reset()
             goto(ui, "http://%s:%d/chunked" % (HOST, PORT), settle=12.0)
             shot(ui, "net_02_chunked")
             print("  chunked: connections=%d requests=%d"
@@ -94,7 +138,7 @@ def main():
             # ---- 3. progressive render ---------------------------------
             # the server pauses 2.5 s mid-response; a screenshot taken during
             # the pause shows text only if the page painted before the end
-            nettest_server.stats.update(connections=0, requests=0, paths=[])
+            nettest_server.reset()
             ui.key(ord('l'), ctrl=1)
             ui.key(0, scan=0x06, settle=0.05)
             for _ in range(40):
