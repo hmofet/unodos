@@ -194,6 +194,7 @@ A_MUSIC, A_UNOAMP = 6, 7
 A_DOSTRIS, A_PACMAN, A_OUTLAST, A_TRACKER, A_PAINT = 8, 9, 10, 11, 12
 A_RUNNER3D, A_BROWSER, A_STUDIO, A_PHOTOS, A_SSH = 13, 14, 15, 16, 17
 A_UOWORD, A_UOCALC, A_UOSHOW = 18, 19, 20
+A_LOGVIEW = 21                   # System Log; appended, so 0..20 held
 
 # ---- scenes ---------------------------------------------------------------
 def sc_desktop(q):
@@ -304,6 +305,46 @@ def sc_system(q):
 def sc_clock(q):
     close_all(q); launch(q, A_CLOCK)
     shot(q, "clock")
+
+def sc_logview(q):
+    """The system log, with real activity in it.
+
+    A log viewer photographed on a freshly booted machine shows ONE line -
+    unolog announcing itself - which teaches nothing about what the feature
+    is for. So open a few documents first; each is a real record the browser
+    wrote, not a staged one.
+
+    Deliberately LOCAL documents, no network. The network scenes do not
+    currently reproduce (DNS fails on a production build - see the note in
+    the manual commit), and a figure that depends on a broken path is a
+    figure that regenerates as an error page.
+
+    Two traps this encodes: the address bar has NO select-all, so Ctrl-L
+    leaves the caret at the END and typing APPENDS - hence End + backspaces
+    before every address; and the level starts at notice, which DROPS the
+    info lines the figure exists to show, so More is pressed first."""
+    close_all(q)
+
+    def goto(loc, settle=1.4):
+        combo(q, "ctrl", "l"); time.sleep(0.35)
+        key(q, "end")
+        for _ in range(40):
+            key(q, "backspace", gap=0.02)
+        text(q, loc); key(q, "ret"); time.sleep(settle)
+
+    close_all(q)
+    launch(q, A_LOGVIEW, settle=2.4)
+    # RAISE THE LEVEL FIRST, then generate the traffic. A record dropped
+    # for being over the level is gone - turning the level up afterwards
+    # shows an empty log and a "dropped 5" counter, which is honest and
+    # useless as a figure.
+    text(q, "="); time.sleep(0.6)          # More: notice -> info
+    launch(q, A_BROWSER, settle=2.0)
+    goto("uno:sample")
+    goto("uno:script")
+    goto("uno:engine")
+    combo(q, "ctrl", "w"); time.sleep(1.2)   # close the browser, log is behind
+    shot(q, "logview")
 
 def sc_install(q):
     close_all(q); launch(q, A_INSTALL, settle=2.0)
@@ -494,6 +535,7 @@ SCENES = {
     "themes": sc_themes, "fonts": sc_fonts, "resolution": sc_resolution,
     "uiscale": sc_uiscale,
     "editor": sc_editor, "files": sc_files, "system": sc_system, "clock": sc_clock,
+    "logview": sc_logview,
     "install": sc_install, "dostris": sc_dostris, "pacman": sc_pacman,
     "outlast": sc_outlast, "music": sc_music, "tracker": sc_tracker,
     "paint": sc_paint, "runner3d": sc_runner3d,

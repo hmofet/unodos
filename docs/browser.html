@@ -74,7 +74,7 @@
     <span class="logo"><i></i><i></i><i></i><i></i></span>
     <span><b>UnoDOS <span style="color:var(--accent-2)">pc64</span></b><span class="sub">User manual</span></span>
   </a>
-  <ul class="nav"><li><a class="" href="index.html">Overview</a></li><li><a class="" href="getting-started.html">Getting started</a></li><li><a class="" href="desktop.html">The desktop</a></li><li><a class="" href="windows.html">Windows &amp; desktops</a></li><li><a class="" href="appearance.html">Themes &amp; appearance</a></li><li><a class="" href="apps.html">Applications</a></li><li><a class="" href="office.html">UnoOffice</a></li><li><a class="active" href="browser.html">Web browser</a></li><li><a class="" href="ssh.html">SSH client</a></li><li><a class="" href="networking.html">Networking</a></li><li><a class="" href="ports.html">The UnoDOS family</a></li><li class="sec">Developer</li><li><a class="" href="developer.html">Overview &amp; architecture</a></li><li><a class="" href="studio.html">Studio: the built-in IDE</a></li><li><a class="" href="dev-apps.html">Writing apps</a></li><li><a class="" href="dev-python.html">Python apps</a></li><li><a class="" href="dev-api.html">API reference</a></li><li><a class="" href="dev-build.html">Building &amp; tooling</a></li><li><a class="" href="dev-remote.html">Remote control &amp; automation</a></li></ul>
+  <ul class="nav"><li><a class="" href="index.html">Overview</a></li><li><a class="" href="getting-started.html">Getting started</a></li><li><a class="" href="desktop.html">The desktop</a></li><li><a class="" href="windows.html">Windows &amp; desktops</a></li><li><a class="" href="appearance.html">Themes &amp; appearance</a></li><li><a class="" href="apps.html">Applications</a></li><li><a class="" href="office.html">UnoOffice</a></li><li><a class="active" href="browser.html">Web browser</a></li><li><a class="" href="ssh.html">SSH client</a></li><li><a class="" href="networking.html">Networking</a></li><li><a class="" href="logging.html">System log</a></li><li><a class="" href="ports.html">The UnoDOS family</a></li><li class="sec">Developer</li><li><a class="" href="developer.html">Overview &amp; architecture</a></li><li><a class="" href="studio.html">Studio: the built-in IDE</a></li><li><a class="" href="dev-apps.html">Writing apps</a></li><li><a class="" href="dev-python.html">Python apps</a></li><li><a class="" href="dev-api.html">API reference</a></li><li><a class="" href="dev-build.html">Building &amp; tooling</a></li><li><a class="" href="dev-remote.html">Remote control &amp; automation</a></li></ul>
   <div class="side-foot">
     <a href="https://github.com/hmofet/unodos" target="_blank" rel="noopener">GitHub&nbsp;&rsaquo; hmofet/unodos</a><br>
     <a href="#" onclick="__t();return false">Toggle light / dark</a>
@@ -134,15 +134,21 @@ the page is laid out again and redrawn.</p>
 
 <h2 id="engines">Choosing the engines</h2>
 <p>The page at <code>uno:engine</code> - reachable from the welcome page, or by typing it in the address
-bar - lets you switch two things while the browser is running:</p>
+bar - lets you switch <strong>three</strong> things while the browser is running. No rebuild, no
+restart: each takes effect on the next page you open.</p>
 <ul>
+  <li>the <strong>renderer</strong>: the <strong>flow painter</strong>, UnoDOS's own (the default), or
+      the <strong>unoweb engine</strong>, which does a full cascade, block layout and display list, and
+      handles images and forms;</li>
   <li>the <strong>script engine</strong>: <strong>unojs</strong>, UnoDOS's own (the default), or
       <strong>quickjs</strong>, a vendored full modern JavaScript engine;</li>
   <li>the <strong>CSS cascade</strong>: the <strong>built-in</strong> one (the default), or
       <strong>libcss</strong>, the CSS engine from the NetSurf project.</li>
 </ul>
-<p>Both default to UnoDOS's own. The alternatives are there so a page that leans on newer JavaScript or
-more complete CSS has somewhere to go, and so the two can be compared on the same page.</p>
+<p>All three default to UnoDOS's own. The alternatives are there so a page that leans on newer
+JavaScript or more complete CSS has somewhere to go, and so the two can be compared on the same page -
+open a page, switch, reload, and look at the difference.</p>
+<div class="note"><b>The three are not independent</b>The cascade choice only changes what you see while the <b>unoweb engine</b> is the renderer: the flow painter does not have a cascade for it to feed. The page says so when that is the case, rather than reporting a setting that is doing nothing.</div>
 
 <h2 id="layout">Tables, floats and forms</h2>
 <p>Pages that use the ordinary furniture of the web lay out properly: <strong>tables</strong> as real
@@ -153,6 +159,10 @@ grids with columns sized to their contents, <strong>floats</strong> with text fl
 <h2 id="net">Over the network</h2>
 <p>Type a web address and press <kbd>Enter</kbd>; UnoDOS connects, looks up the site, loads the page and
 runs any JavaScript on it. A page's own images and stylesheets are fetched too.</p>
+<p>Real sites are bigger than they look. A page whose visible content starts sixty kilobytes into the
+file - which is ordinary for a large site - now arrives whole; the browser grows its buffers to the page
+rather than stopping at a fixed size. If a page is genuinely too big to hold, the status line says so
+instead of quietly showing you part of one.</p>
 <p>Three things make that feel quicker than it used to. The page is <strong>drawn as it arrives</strong>
 rather than only when the last byte lands, so you start reading immediately. A page and everything it
 references travel over <strong>one connection</strong> instead of opening a new one each time. And a page

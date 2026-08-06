@@ -24,6 +24,7 @@ NAV = [
     ("browser.html",         "Web browser"),
     ("ssh.html",             "SSH client"),
     ("networking.html",      "Networking"),
+    ("logging.html",         "System log"),
     ("ports.html",           "The UnoDOS family"),
     (None,                   "Developer"),          # section header
     ("developer.html",       "Overview &amp; architecture"),
@@ -1357,15 +1358,21 @@ the page is laid out again and redrawn.</p>
 
 <h2 id="engines">Choosing the engines</h2>
 <p>The page at <code>uno:engine</code> - reachable from the welcome page, or by typing it in the address
-bar - lets you switch two things while the browser is running:</p>
+bar - lets you switch <strong>three</strong> things while the browser is running. No rebuild, no
+restart: each takes effect on the next page you open.</p>
 <ul>
+  <li>the <strong>renderer</strong>: the <strong>flow painter</strong>, UnoDOS's own (the default), or
+      the <strong>unoweb engine</strong>, which does a full cascade, block layout and display list, and
+      handles images and forms;</li>
   <li>the <strong>script engine</strong>: <strong>unojs</strong>, UnoDOS's own (the default), or
       <strong>quickjs</strong>, a vendored full modern JavaScript engine;</li>
   <li>the <strong>CSS cascade</strong>: the <strong>built-in</strong> one (the default), or
       <strong>libcss</strong>, the CSS engine from the NetSurf project.</li>
 </ul>
-<p>Both default to UnoDOS's own. The alternatives are there so a page that leans on newer JavaScript or
-more complete CSS has somewhere to go, and so the two can be compared on the same page.</p>
+<p>All three default to UnoDOS's own. The alternatives are there so a page that leans on newer
+JavaScript or more complete CSS has somewhere to go, and so the two can be compared on the same page -
+open a page, switch, reload, and look at the difference.</p>
+{note('The cascade choice only changes what you see while the <b>unoweb engine</b> is the renderer: the flow painter does not have a cascade for it to feed. The page says so when that is the case, rather than reporting a setting that is doing nothing.', title="The three are not independent")}
 
 <h2 id="layout">Tables, floats and forms</h2>
 <p>Pages that use the ordinary furniture of the web lay out properly: <strong>tables</strong> as real
@@ -1376,6 +1383,10 @@ grids with columns sized to their contents, <strong>floats</strong> with text fl
 <h2 id="net">Over the network</h2>
 <p>Type a web address and press <kbd>Enter</kbd>; UnoDOS connects, looks up the site, loads the page and
 runs any JavaScript on it. A page's own images and stylesheets are fetched too.</p>
+<p>Real sites are bigger than they look. A page whose visible content starts sixty kilobytes into the
+file - which is ordinary for a large site - now arrives whole; the browser grows its buffers to the page
+rather than stopping at a fixed size. If a page is genuinely too big to hold, the status line says so
+instead of quietly showing you part of one.</p>
 <p>Three things make that feel quicker than it used to. The page is <strong>drawn as it arrives</strong>
 rather than only when the last byte lands, so you start reading immediately. A page and everything it
 references travel over <strong>one connection</strong> instead of opening a new one each time. And a page
@@ -1457,6 +1468,65 @@ to get online.</strong></p>
 list, a password box and a <strong>Join</strong> button, with a spinner and a running description of each
 step while it works, since a join takes several seconds. Networks you join are remembered, so the machine
 can rejoin the last one by itself at the next boot.</p>
+""")
+
+PAGES["logging.html"] = ("System log", f"""
+<h1>System log</h1>
+<p class="lede">UnoDOS keeps a record of what it did - what loaded, what failed, what the network was
+doing - and shows it to you. You choose how much is kept, and it can be sent to a logging server on your
+network.</p>
+
+<h2 id="viewer">Reading the log</h2>
+<p>Open <strong>System Log</strong> from the desktop or the Start menu. The newest entries are at the
+bottom and the view follows them as they arrive, so you can leave it open and watch. Each line carries
+the time, how serious it is, which part of the system wrote it, and the message.</p>
+<p><strong>Colour tells you where to look</strong>: errors are red, warnings amber, ordinary lines plain,
+and debug lines grey. You should be able to find the interesting line without reading every one.</p>
+{fig("logview.png", "The System Log. Three entries the browser wrote while opening documents, above the line the log itself wrote at startup. The footer shows the current level and how many records exist.")}
+
+<h2 id="level">How much is kept</h2>
+<p><strong>Less</strong> and <strong>More</strong> change how much the machine records. The scale runs
+from <em>emerg</em> (the machine is unusable) down to <em>debug</em> (everything). The default is
+<em>notice</em>, which keeps the things worth knowing and leaves out the routine chatter.</p>
+<table>
+<tr><th>Level</th><th>What it keeps</th></tr>
+<tr><td>emerg, alert, crit</td><td>Only serious trouble</td></tr>
+<tr><td>err</td><td>... and things that failed</td></tr>
+<tr><td>warning</td><td>... and things that nearly failed</td></tr>
+<tr><td>notice <em>(default)</em></td><td>... and significant normal events</td></tr>
+<tr><td>info</td><td>... and ordinary activity, like each page you open</td></tr>
+<tr><td>debug</td><td>Everything</td></tr>
+</table>
+{note('Turning the level up does not recover what was already dropped - a record filtered out is gone. If you are chasing something intermittent, turn the level up <b>first</b> and then reproduce it.', kind="warn", title="Set the level before you reproduce the problem")}
+<p>Your choice is saved to <code>\LOGS\LOG.CFG</code> straight away, so it survives a restart.
+<strong>All</strong> cycles through the parts of the system, so you can look at just the network or just
+the browser. <strong>Write</strong> saves the log to disk immediately.</p>
+
+<h2 id="file">The log on disk</h2>
+<p>The log is written to <code>\LOGS\SYSTEM.LOG</code> as plain text you can open in the Editor or
+copy to another machine. It is written every few seconds, and <strong>immediately</strong> for anything
+at error level or worse - so the lines explaining a machine that is about to stop working reach the disk
+before it does. When the file gets large it rolls over to <code>SYSTEM.1</code> and starts again.</p>
+
+<h2 id="syslog">Sending the log to a server</h2>
+<p>If you run a logging server - <strong>rsyslog</strong>, <strong>syslog-ng</strong> or anything else
+that speaks syslog - UnoDOS can send its log there, so a machine's record survives the machine. Put the
+server's address in <code>\LOGS\LOG.CFG</code>:</p>
+<pre><code>level=5
+remote_level=4
+remote=192.168.1.10:514
+listen=0</code></pre>
+<p>Entries are sent as standard <strong>RFC 5424</strong> syslog over UDP, so they arrive as ordinary
+log lines with the right severity and no special handling at the other end.</p>
+<p><code>remote_level</code> is separate from <code>level</code> on purpose: what is worth writing down
+locally and what is worth putting on the network are different questions. The default sends warnings and
+worse while keeping more than that on disk.</p>
+
+<h2 id="collector">Being the server</h2>
+<p>It also works the other way. Set <code>listen=1</code> (or press <strong>Sink off</strong> in the
+viewer) and UnoDOS accepts syslog from other machines on the network and files it alongside its own,
+tagged with the sender's address. One UnoDOS machine can be the place you read the logs of several.</p>
+{note('The listener accepts messages from anyone who can reach the machine - there is no password on it. Turn it on for a network you trust, not one you share. It is off unless you turn it on.', kind="warn", title="An open listener")}
 """)
 
 PAGES["ports.html"] = ("The UnoDOS family", f"""
