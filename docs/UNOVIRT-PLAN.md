@@ -219,6 +219,12 @@ ExitBootServices, and takes one contiguous carve:
 | 4..8 GiB | 1.5 GiB | comfortable Linux appliance |
 | > 8 GiB | 2 GiB | plus a second carve if a Windows appliance is configured |
 
+Those are installed sizes; the gate compares against **free conventional
+memory**, which is always less (a 4 GiB machine reports about 3.9 GiB under
+OVMF and less under a vendor firmware). `uno_vmm_carve_mb()` therefore steps at
+1800/3500/7000 MiB rather than at the round numbers, which is the difference
+between a 4 GiB laptop getting its 1.5 GiB carve and silently dropping a step.
+
 Three constraints, each of which has already cost somebody a day somewhere:
 
 - **The carve must be write-back.** pc64 has `pc64_mtrr.c` and the debug builds
