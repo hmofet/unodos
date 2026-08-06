@@ -1,11 +1,22 @@
 # The second-engine programme: real-world engines behind the browser's seams
 
-**Status: phase 1 (QuickJS) LANDED on branch `qjs-engine`, 2026-08-05.
-Phase 2 (NetSurf layout) is PLANNED - branch series not started.**
+**Status: BOTH PHASES LANDED ON MASTER, 2026-08-05/06.** Phase 1 (QuickJS) via
+`qjs-engine`; phase 2 reshaped by the licence ruling from "NetSurf layout" into
+"the MIT libraries upgrading unoweb in place", delivered as CS0 through CS3.
+The programme's build work is done. What remains is one decision, one bug that
+is not root-caused, and one verification waiting on a networking fix (§5):
+
+- **The default-cascade flip** (CS3) is the user's call and has not been taken.
+- **The quickjs DOM adapter is written but pinned off** (`pc64/js.c`, 2026-08-06):
+  it runs clean under a native linux build, and the mingw host test binary dies
+  at startup before `main` the moment quickjs is the selected DOM engine. Not
+  root-caused. `js_run()` is unaffected, so the script-engine switch on
+  `uno:engine` still works on either engine; it is only the live-DOM layer that
+  is pinned.
 
 The ask this answers: "port Blink/V8 as a switchable option next to our own
 engine, same front end." This doc records why that exact ask is unbuildable,
-what delivers its value instead, and the plan for the remaining phase.
+what delivered its value instead, and what is left.
 
 ## 1. Why not Blink/V8 (the feasibility finding, 2026-08-05)
 
@@ -29,7 +40,9 @@ one address space.
 JS engine + NetSurf's stack as the second layout engine. Both are C, both
 are the proven "real engine on a small/hobby OS" lineage (NetSurf shipped
 on RISC OS / Amiga / Atari; quickjs-ng builds for wasi/DJGPP-class
-targets).
+targets). *The NetSurf half of that sentence was overtaken the same day by
+the no-GPL ruling: what shipped is NetSurf's MIT libraries under unoweb's
+own layout, not its layout engine. See §4.*
 
 ## 2. The seams (why "same front end" already works)
 
@@ -38,10 +51,17 @@ targets).
   runtime-switchable via `js_engine_set()`; the `uno:engine` internal page
   is the user-facing switch. Registry-style: an engine is a backend file +
   an appended table row in js.c.
-- **Layout/paint:** `BROWSER_ENGINE=uw` (build flag `UW_ENGINE`) already
-  switches the browser between the DOM-walk flow painter and the unoweb
-  pipeline (`pc64_browser.c` ~line 371). Phase 2 adds a third path behind
-  the same pattern. Both compiled always, "so neither can rot".
+- **Layout/paint:** the browser switches between the DOM-walk flow painter and
+  the unoweb pipeline. **This became a RUNTIME switch on 2026-08-06** (`g_renderer`
+  in `pc64_browser.c`, third choice on `uno:engine`): build.sh always compiled
+  unoweb, quickjs and csslib into every kernel, so `-DUW_ENGINE` was only choosing
+  which of two in-image paths this one file called, and one of them was
+  unreachable. `UW_ENGINE` survives as the INITIAL selection, so
+  `BROWSER_ENGINE=uw` still means what the gates expect, and the flow painter
+  stays the default. Switching clears the parsed tree and any focused form
+  control (the two paths disagree about who runs `<script>`).
+- **Cascade:** the third switch, added by CS3: built-in cascade or libcss, live
+  on `uno:engine`, restyle forced on toggle.
 
 ## 3. Phase 1 - QuickJS (LANDED; this is the record)
 
@@ -72,13 +92,19 @@ loop + hostile recursion contained), green on mingw AND linux ASan/UBSan;
 SPECTEST gained S-JS-10..13 (quickjs on the kernel allocator/clock in
 QEMU).
 
-Not in scope yet (candidates for later slices): DOM bindings beyond the
-document.write surface (arrives with unoweb M5's webjs.c - quickjs should
-get the same bindings behind the same dispatch), per-frame yielding via the
-interrupt handler (the browser blocks on js_run today either way), ES
-module loading over pc64_http.
+Since landed, and the update this section wanted: **unoweb M5's `webjs.c`
+arrived 2026-08-06** with the live DOM (get/querySelector, text/attrs/innerHTML,
+create/append/remove), events with bubbling, timers and mutation-driven restyle.
+The DOM itself is written once for both engines behind `webjs.h`'s five-operation
+call frame, and quickjs's adapter (`QJS_WEBJS_ENGINE` in `qjsweb.c`) exists, but
+`webjs_engine_current()` returns the unojs one unconditionally, per the pin
+described at the top of this doc. Un-pinning it is the next quickjs slice, and it
+starts by root-causing the mingw-only startup death.
 
-## 4. Phase 2 - real CSS under unoweb's layout (PLANNED; licence-reshaped)
+Still not in scope: per-frame yielding via the interrupt handler (the browser
+blocks on `js_run` today either way), ES module loading over `pc64_http`.
+
+## 4. Phase 2 - real CSS under unoweb's layout (LANDED CS0-CS3; licence-reshaped)
 
 **Licence ruling (user, 2026-08-05): no GPL code in the tree; MIT is ok.**
 That resolves the old NS0 decision point immediately: the NetSurf *browser
@@ -138,8 +164,14 @@ Branch series (each lands independently, AGENTS.md-shaped):
   **Open decision - the default flip**: the evidence supports making libcss
   the default cascade in uw builds (and eventually retiring the built-in
   one to CONSUME-only), but the flip is deliberately NOT taken here; the
-  built-in cascade remains default until the user calls it. Real-network
-  page runs and <link> sheets wait on unoweb M4's fetch queue either way.
+  built-in cascade remains default until the user calls it.
+- **Update 2026-08-06:** the blocker this bullet named is gone. unoweb M4
+  landed the subresource fetch queue (`pc64_fetch.c`), so network `<img>`
+  and `<link>` sheets are fetched, and M7 verified framing, keep-alive and
+  progressive render against a real server. What blocks a real-network
+  comparison run now is a different bug: **DNS fails on a production
+  build** (filed the same day against the unonet lane), so a live page run
+  wants a debug image until that is fixed.
 
 If real-page layout quality still disappoints after CS3, the remaining gap
 is uw_layout itself (floats, tables, inline-block); that is unoweb-lane
@@ -147,11 +179,31 @@ work on its own plan, not a vendoring question - there is no MIT-licensed
 drop-in layout engine worth taking (Blink/WebKit derivatives are not
 extractable, NetSurf's is GPL, litehtml is C++).
 
-## 5. How to resume this programme
+## 5. What is left, and how to pick it up
 
-Read this doc, then `pc64/quickjs/VENDOR.md`, then the claim entries in
-`pc64/UNOAUTOMATE-REQUESTS.md` (2026-08-05). Phase-1 branch `qjs-engine`
-(landed `a67fe2f1`); merge gate = both builds + spectest_qemu green
-(S-JS-10..13 included) + the two host tests. Phase 2 starts at CS0; the
-licence rule (no GPL, MIT ok) is standing - check every vendored file, not
-just the project's top-level LICENSE.
+Both phases are on master, so there is no branch series to start. Three
+things remain, in the order they are worth doing:
+
+1. **The default-cascade flip (user's call, no engineering left).** CS3's
+   pixel evidence is 0.000-0.009% difference with shell chrome masked. If
+   the user calls it, the flip is a default change plus retiring the
+   built-in cascade to CONSUME-only over time.
+2. **Un-pin the quickjs DOM adapter.** Root-cause why the mingw host test
+   binary dies before `main` with quickjs selected as the DOM engine, when
+   the same object set is fine under linux and when unojs is selected.
+   Until then `webjs_engine_current()` stays hardcoded to unojs, which is
+   the honest choice: a binding that might take the browser down is worse
+   than one engine's binding.
+3. **A real-network cascade comparison**, once the production DNS bug is
+   fixed, using `tools/browser_cascade_urc.py` against live pages rather
+   than `uno:` internal ones.
+
+To pick any of it up: read this doc, then `pc64/quickjs/VENDOR.md` and
+`csslib/VENDOR.md`, then the 2026-08-05/06 entries in
+`pc64/UNOAUTOMATE-REQUESTS.md`. Merge gate for anything in this lane =
+both builds + spectest_qemu green (S-JS-10..13 and S-CSS-01..06 included)
++ the host tests. Two traps recorded from this programme: a
+`BROWSER_ENGINE=uw` build was silently link-broken for two days (um_inflate
+compiled twice), so **wipe `build/` between variants**, and the licence
+rule (no GPL, MIT ok) is standing - check every vendored file, not just the
+project's top-level LICENSE.

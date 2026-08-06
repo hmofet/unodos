@@ -1,15 +1,20 @@
 # Aurora rollout, handoff / continuation prompt
 
 Continue bringing the **unoui Aurora theme** to the UnoDOS ports. Repo:
-`github.com/hmofet/unodos`, branch **`pc64-usb-flasher`**. **Read
-[`PLAN-aurora-rollout.md`](PLAN-aurora-rollout.md) first**: it's the
-authoritative plan (per-port tiers, architecture, phases). This doc is the
-current state + how to execute on a machine with enough RAM to build the heavy
-cross-toolchains that were blocked before.
+`github.com/hmofet/unodos`. **Read [`PLAN-aurora-rollout.md`](PLAN-aurora-rollout.md)
+first**: it's the authoritative plan (per-port tiers, architecture, phases). This
+doc is the current state + how to execute on a machine with enough RAM to build
+the heavy cross-toolchains that were blocked before.
+
+**Branch note (2026-08-06):** this doc used to name `pc64-usb-flasher` as the
+working branch. Everything it credits to that branch is **on master** now, and
+the branch itself is a deletion candidate (see [CLAUDE.md](CLAUDE.md)). Work the
+normal way per [AGENTS.md](AGENTS.md) §3: one worktree + branch per slice off
+`origin/master`, land small, delete the branch the day it lands.
 
 **Rules:** install toolchains as needed; **verify each port by rendering in its
-emulator (screendump), not just building**; commit per port; push to
-`pc64-usb-flasher`.
+emulator (screendump), not just building**; commit per port; push your slice
+branch.
 
 ## Already done, do NOT redo (see `git log`)
 
@@ -115,8 +120,9 @@ never *depends* on the capture working.
 
 ## Coordination
 
-A separate **perf pass** (drag damage-rect; see `AUDIT-*.md` and the branch
-history) may push changes to `unoui.c` / `pc64_uui.c` on this same branch -
-rebase/reconcile if so. The 8 GB dev box could not run the perf-pass toolchain
+A separate **perf pass** (drag damage-rect; see `AUDIT-*.md` and
+[`HANDOFF-perf.md`](HANDOFF-perf.md)) touches the same `unoui.c` / `pc64_uui.c`.
+Both land through master now, so rebase onto `origin/master` at the start of
+every session and reconcile there. The 8 GB dev box could not run the perf-pass toolchain
 builds and Aurora builds at once (WSL VM crashed under memory pressure); on a
 bigger machine that's a non-issue.

@@ -9,10 +9,17 @@ finding carries a **✅ FIXED (`<commit>`)** note in its audit.
 REFACTOR → **render-verify** each one: build the `AUTOTEST` variant, render, and
 pixel-diff against a baseline built from the pre-change source (git-stash the edit
 → build → render → pop → build → render → `cmp`). A correct refactor is
-**byte-identical**. Apply per port, verify, **commit per port**, push (pull first -
-other agents share this branch).
+**byte-identical**. Apply per port, verify, **commit per port**, push.
 
-Repo: `github.com/hmofet/unodos`, branch `pc64-usb-flasher`.
+Repo: `github.com/hmofet/unodos`.
+
+**Branch note (2026-08-06):** this doc used to name `pc64-usb-flasher` as the
+shared working branch. Every fix it records is **on master** now, and that branch
+is a deletion candidate (see [CLAUDE.md](CLAUDE.md)). Work the normal way per
+[AGENTS.md](AGENTS.md) §3: one worktree + branch per slice off `origin/master`,
+rebase at the start of every session, land small. The ports with fixes recorded
+so far are amiga, c64, dreamcast, genesis, iigs, mac, ps2, sms and snes; the rest
+of the work-list is untouched.
 
 ## Verify infrastructure (all working on this box = amanuensis)
 
