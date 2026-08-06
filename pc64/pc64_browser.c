@@ -317,13 +317,15 @@ static char g_page_base[LOCMAX];
 static void resolve(const char *href, const char *base, char *out, int cap);
 static int  loc_is_net(const char *loc);
 
+/* RE-ENTRANCY GUARD - set in load_progress, read by fetch_link_sheets.
+ * A progressive repaint must not start a NESTED fetch on the single TCP slot
+ * the outer response is still using. Declared outside the engine guard
+ * because progressive rendering happens in BOTH builds; only the thing it
+ * protects is engine-only. */
+static int g_in_progress_paint;
+
 #ifdef UW_ENGINE
 static void fetch_link_sheets(uw_doc *d);    /* defined with the URL helpers */
-
-/* RE-ENTRANCY GUARD - see where it is set, in load_progress.
- * A progressive repaint must not start a NESTED fetch on the single TCP
- * slot the outer response is still using. */
-static int g_in_progress_paint;
 
 /* ---- page scripts on the live DOM (M5) ------------------------------------
  * One VM per page, built here and torn down by the next navigation. Every
