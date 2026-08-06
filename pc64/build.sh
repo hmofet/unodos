@@ -146,10 +146,11 @@ if [ "$1" != "legacy" ]; then
     # together (unosecure's strong unosec_* symbols replace unoscript.c's weak
     # fail-closed fallbacks - the r8169 pattern), so tier>=1 script surfaces
     # light up.  See UNOSECURE-SPEC.md / UNOSCRIPT.md.
-    # BROWSER_ENGINE=uw switches the browser from the DOM-walk painter to the
-    # full unoweb pipeline (cascade -> block layout -> display list).  Both
-    # paths compile either way, so neither can rot; the flow painter stays
-    # the default until the engine path has been through real pages.
+    # BROWSER_ENGINE=uw now picks which renderer the browser STARTS on; it no
+    # longer decides what is built.  Both renderers are in every kernel and the
+    # user switches between them on the uno:engine page.  Kept because the gates
+    # and harnesses say BROWSER_ENGINE=uw to mean "boot with the engine", and
+    # because the flow painter remains the default.
     if [ "${BROWSER_ENGINE:-}" = "uw" ]; then UCF="$UCF -DUW_ENGINE"; fi
     for f in pc64_fetch pc64_cookie pc64_cache webjs fb mac_compat pc64_libc pc64_io pc64_pci uno_devmgr pc64_math pc64_fs blkdev ahci nvme sdhci ide fat unostorage hid_kbd i2c_hid xhci usbio usbboot usbmsc usbhid detachgate unoamp_out unoamp_in unoamp_skin unoamp_vis unoamp_dsp unoamp_enc unoamp_mod unoamp_app unoamp_ui pc64_mtrr ax88179 rtl8152 iwlwifi rtwifi mrvlwifi wifi_wpa uefi_main bios_entry pc64_native pc64_uui pc64_uui_apps pc64_write pc64_files pc64_music pc64_clock pc64_media pc64_modload pc64_games js pc64_http pc64_font pc64_browser pc64_icons e1000 e1000e igb r8169 net netdisc tls tls_entropy tls_ca acpi_host installer snd_pcm hdaudio ac97 unosecure unoscript unoscript_path pc64_accounts unoauto unoauto_compat unoauto_gate unoauto_probe unoauto_remote unoauto_serial unoauto_screen ed25519 unossh_wire unossh unossh_auth unossh_store unossh_cmd sshapp_ui; do
         pc "$CC" $UCF $DBGSAN -c -o "build/$f.o" "$f.c"; OBJS="$OBJS build/$f.o"
@@ -242,18 +243,19 @@ if [ "$1" != "legacy" ]; then
     for u in unomedia um_audio um_wav um_midi um_mp3 um_aac um_inflate; do
         pc "$CC" $UCF -c -o "build/uml_$u.o" "../unomedia/$u.c"; OBJS="$OBJS build/uml_$u.o"
     done
-    # unomedia IMAGE half - only for BROWSER_ENGINE=uw, where the browser
-    # decodes <img> behind unoweb's uw_images hook.  The default kernel does
-    # not carry the image decoders (Photos links its own copy into PHOTOS.UNO),
-    # so this costs the standard build nothing.
-    if [ "${BROWSER_ENGINE:-}" = "uw" ]; then
-        # NO um_inflate here: the audio half above always compiles it since
-        # UnoAmp's skin engine landed (2026-08-03), and a second copy made
-        # every BROWSER_ENGINE=uw build fail at link (found by CS3).
-        for u in um_image um_stub um_png um_jpg um_gif um_bmp um_tga um_pnm um_qoi um_ico um_webp um_vp8; do
-            pc "$CC" $UCF -c -o "build/umi_$u.o" "../unomedia/$u.c"; OBJS="$OBJS build/umi_$u.o"
-        done
-    fi
+    # unomedia IMAGE half - the browser decodes <img> behind unoweb's uw_images
+    # hook.  UNCONDITIONAL since the renderer became a runtime switch: the
+    # engine path is now reachable in every kernel, so a kernel without the
+    # decoders would offer a renderer that cannot draw a picture.  This was the
+    # ONLY real link difference between the two BROWSER_ENGINE settings - the
+    # unoweb pipeline, quickjs and csslib were always compiled in - and it costs
+    # the standard build about 100 KB.
+    # NO um_inflate here: the audio half above always compiles it since
+    # UnoAmp's skin engine landed (2026-08-03), and a second copy made
+    # every BROWSER_ENGINE=uw build fail at link (found by CS3).
+    for u in um_image um_stub um_png um_jpg um_gif um_bmp um_tga um_pnm um_qoi um_ico um_webp um_vp8; do
+        pc "$CC" $UCF -c -o "build/umi_$u.o" "../unomedia/$u.c"; OBJS="$OBJS build/umi_$u.o"
+    done
     # unoacpi: shared AML/ACPI power stack (verbatim from writers-unlock) + the
     # vendored uACPI interpreter (third-party -> -w).
     for u in acpi_arena ec_handler smbus_handler acpi_power; do
