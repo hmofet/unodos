@@ -56,8 +56,27 @@ slot. RX demux is by full 4-tuple; a bare SYN to a `TCP_LISTEN` port spawns a
 
 **Legacy compatibility.** The old single-connection `net_tcp_*` / `net_udp_*`
 API (net.h) is preserved as thin wrappers over one reserved socket slot, so the
-`.UNO` app ABI (kernel exports) and `tls.c` / `pc64_http.c` / `unoauto_remote.c`
-are byte-for-byte compatible. New code should prefer the socket API.
+`.UNO` app ABI (kernel exports) stays byte-for-byte compatible. New code should
+prefer the socket API - and note that "the stack does one thing at a time" is a
+property of these WRAPPERS, not of the stack. It reads as a stack limit from a
+consumer that only ever called them, which is how the 2026-08-06 browser request
+came to be filed against `net.c`. `tls.c` moved off them on 2026-08-06;
+`unoauto_remote.c` has its own socket already.
+
+## TLS (`tls.h`, one session per handle)
+
+`tls_open()` returns a `tls_conn *` that owns its own socket from the table
+above, its own BearSSL engine and its own record buffer, so several TLS sessions
+coexist - the browser's parallel HTTPS fetches are N of these driven from one
+loop. Every call (`tls_poll` / `tls_send` / `tls_recv`) is **non-blocking and
+does not call `net_poll` itself**: the caller pumps once per round and advances
+every session, which is the only shape under which one slow peer cannot stall
+the others. Contract: SPEC.md S-TLS-12/13/14; host gate `tools/tls_conc_test.sh`.
+
+The original `tls_connect` / `tls_write` / `tls_read` / `tls_close` remain, with
+their deadlines and error codes unchanged, as blocking wrappers over one
+internally-held handle. They are what the `.UNO` app ABI exports and what
+`apps/studio_ai.c` uses; a consumer that wants concurrency uses handles.
 
 ## Broadcast (`net.h`)
 
