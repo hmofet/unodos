@@ -14,8 +14,7 @@ from urcui import UrcUi
 
 # The viewer's own colours, from LOGVIEW.PY. Finding them on screen is proof
 # the app's draw() ran - nothing else on this desktop paints them.
-C_BAD  = (0xE0, 0x38, 0x38)        # emerg..err, as RGB
-C_DIM  = (0x90, 0x90, 0x90)
+C_BAD  = (200, 40, 40)             # logview.c sev_col(), emerg..err
 
 
 def frame(ui):
@@ -43,28 +42,47 @@ def main():
             py(ui, "import uno; uno.log(6,1,'viewer sees this info line %d')" % i)
         py(ui, "import uno; uno.log(3,2,'viewer sees this ERROR line')")
 
-        # A PYAPP is not in the shell's fixed app list - it is hosted in the
-        # EX_PYAPP window, which is what Files does when you open a .UNO. Same
-        # entry point here, via uno.run_app.
-        for v in (1, 2, 0, 3):
-            r = py(ui, "import uno; print(uno.run_app(%d,'APPS'+chr(92)+'LOGVIEW.UNO'))" % v)
-            if any("0" == l.strip() for l in r):
+        # It has its own desktop slot now, so it launches like any other app.
+        # launch_named dies on the shell's refused slots (EX_PYAPP/EX_USERAPP
+        # sit in the from-the-end search range), so search tolerantly.
+        n = ui.app_count()
+        opened = -1
+        for i in range(n - 1, -1, -1):
+            try:
+                ui.link.command("launch", i, timeout=20)
+            except RuntimeError:
+                continue
+            time.sleep(2.0)
+            if any("System Log" in t for t in ui.windows()):
+                opened = i
                 break
-        time.sleep(3.0)
-        wins = ui.windows()
-        opened = 0 if any("LOGVIEW" in t.upper() for t in wins) else -1
-        print("  windows:", wins)
-        results.append(("LOGVIEW opens a window", opened >= 0))
+            try:
+                ui.link.command("close", timeout=10)
+            except RuntimeError:
+                pass
+            time.sleep(0.4)
+        print("  opened from slot", opened, "windows:", ui.windows())
+        # The TITLE is the point of the native module: a PYAPP could only be
+        # called LOGVIEW.UNO, after its file.
+        results.append(("the viewer opens from the desktop, titled \"System Log\"",
+                        opened >= 0))
 
         if opened >= 0:
             time.sleep(2.0)
             ui.shot("logview_01")
             w, h, px = frame(ui)
-            bad, dim = count(px, C_BAD), count(px, C_DIM)
-            print("  err-red %d px, dim-grey %d px" % (bad, dim))
+            bad = count(px, C_BAD)
+            # The footer is theme-coloured (text_dim), so count INK in the band
+            # rather than a literal - a palette swap must not fail this.
+            foot = sum(1 for y in range(h - 120, h - 40)
+                       for x in range(60, min(560, w))
+                       if px[y * w + x] != (255, 255, 255)
+                       and not (px[y*w+x][0] > 240 and px[y*w+x][1] > 240
+                                and px[y*w+x][2] > 240))
+            print("  err-red %d px, footer ink %d px" % (bad, foot))
             results.append(("it draws the ERR line in the severity colour",
                             bad >= 15))
-            results.append(("it draws the footer", dim >= 40))
+            results.append(("it draws the footer", foot >= 200))
 
     print()
     n_bad = 0

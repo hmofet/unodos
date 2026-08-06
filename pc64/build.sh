@@ -511,6 +511,22 @@ if [ "$1" != "legacy" ]; then
     # unomedia/ - PNG incl. its own inflate, baseline JPEG, GIF, BMP, TGA,
     # PNM, QOI, ICO, all from scratch) statically linked into the module:
     # the kernel gains no decoder code, just the fb_blit export.
+    # LOGVIEW.UNO - unolog's viewer (pc64/UNOLOG.md).  A unoui-CLASS module
+    # like Photos: its own desktop slot and window title, which a PYAPP cannot
+    # have (one shared EX_PYAPP slot, and pyrt names the window after the FILE).
+    echo "[3d] building LOGVIEW.UNO (the system log viewer)..."
+    pc "$CC" $UCF -DUNO_APP_SYM=uno_app_main -c -o build/apps/logview.o apps/logview.c
+    pcwait
+    "$NM" -u build/apps/logview.o | awk '{print $2}' | sort -u > build/apps/logview.syms
+    while read -r s; do
+        [ -z "$s" ] && continue
+        grep -qx "$s" build/apps/kexports.txt || {
+            echo "FAIL: LOGVIEW imports '$s' which pc64_modload.c does not export"; exit 1; }
+    done < build/apps/logview.syms
+    "$PY" tools/mkuno.py thunks build/apps/logview.syms build/apps/logview_thunks.s
+    "$CC" -c -o build/apps/logview_thunks.o build/apps/logview_thunks.s
+    "$CC" -shared -nostdlib -e uno_app_main -Wl,--exclude-all-symbols -o build/apps/logview.dll build/apps/logview.o build/apps/logview_thunks.o
+    "$PY" tools/mkuno.py convert build/apps/logview.dll build/esp/APPS/LOGVIEW.UNO 1
     if [ "${UNO_PHOTOS:-1}" != "0" ]; then
         echo "[3d] building PHOTOS.UNO (the image viewer + unomedia)..."
         POBJ="build/apps/photos.o"
@@ -663,10 +679,6 @@ if [ "$1" != "legacy" ]; then
     if [ "${UNO_PYRT:-1}" != "0" ] && [ -f apps/DUUM.PY ]; then
         echo "[3e] packaging DUUM.UNO (the Python Doom engine)..."
         "$PY" tools/mkuno.py pyapp apps/DUUM.PY build/esp/APPS/DUUM.UNO
-        # the system log viewer (pc64/UNOLOG.md). A PYAPP so unolog needs no
-        # toolkits-lane edit for a desktop slot; see the request filed there.
-        "$PY" tools/mkuno.py pyapp apps/LOGVIEW.PY build/esp/APPS/LOGVIEW.UNO
-        cp apps/LOGVIEW.PY build/esp/SDK/ 2>/dev/null || true
         mkdir -p build/esp/SDK; cp apps/DUUM.PY build/esp/SDK/ 2>/dev/null || true
         if   [ -f wads/DOOM1.WAD ];     then WADSRC=wads/DOOM1.WAD
         elif [ -f wads/freedoom1.wad ]; then WADSRC=wads/freedoom1.wad
