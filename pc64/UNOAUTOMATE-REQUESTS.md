@@ -11,6 +11,49 @@ fulfilled.
 
 ---
 
+## 2026-08-06 — CLAIM: unolog, a new subsystem (branch `unolog`)
+
+Registry row added in the same commit, per AGENTS.md §1. Files: `unolog*`,
+`apps/logview.c`, contract `pc64/UNOLOG.md`. Choke-points touched additively
+only: the build.sh file list, one `KX()` block, one boot call in `uefi_main.c`,
+one URC verb + its `GATE[]` row, and the `REMOTE.md` verb table.
+
+**Why this is not the debug harness, which already has a log.** `uno_dbg_log`
+is a byte ring inside the crash stash, and `uno_debug.h` line 156 turns it into
+`((void)0)` for every production build. It is the right design for what it is -
+forensics for a developer holding a failing machine - and it is the wrong thing
+to build a system log on: a shipped OS that keeps no record of its own operation
+has nothing to show a user asking why the network dropped at 3am. The two
+coexist. uno_debug stays the debug-build forensic ring and its lane is
+untouched; unolog is a levelled, production, user-visible record.
+
+What it has to be, given the ask (levels the user picks, periodic file writes, a
+viewer, and rsyslog in BOTH directions):
+
+- **Syslog severities natively** (0 EMERG .. 7 DEBUG) rather than a private
+  scheme mapped at the edge. Interop is the requirement, so the wire format is
+  the internal format.
+- **A record ring, not a byte ring.** The viewer filters by level and facility
+  and the sender emits structured messages; neither can be done to a flat char
+  buffer without re-parsing it.
+- **Present in production builds.** That is the whole point.
+
+## 2026-08-06 — browser → unoweb owner: a one-line tap in uno_dbg_log
+
+Not blocking; unolog ships without it. There are **96 `uno_dbg_log` call sites
+across 17 files** - i2c-hid enumeration, account layout, NIC bring-up - and
+every one of them is a sentence a user reading a system log would want. They
+are invisible in production and unreachable from another subsystem.
+
+If the debug-harness owner is willing, one line at the end of `uno_dbg_log()`:
+
+    void unolog_tap(int sev, const char *line);   /* weak; no-op until unolog links */
+
+declared weak so the debug build links green with or without unolog present -
+the `r8169_dbg_cmd` pattern from §2 of AGENTS.md. unolog would file them at
+LOG_DEBUG under a `kernel` facility. I have deliberately not edited
+`uno_debug.c`; the call has to originate there, so it is yours to make.
+
 ## 2026-08-06 — CLAIM (browser lane): the renderer becomes a runtime switch (branch `rtengine`)
 
 Taking the 22 `#ifdef UW_ENGINE` sites in `pc64_browser.c`, plus the two
