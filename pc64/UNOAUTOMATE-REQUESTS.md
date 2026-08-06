@@ -11,6 +11,48 @@ fulfilled.
 
 ---
 
+## 2026-08-06 — browser → unonet owner: a net stack that can do more than one thing at once
+
+**What is needed:** concurrent sockets, and TLS that is per-connection rather
+than per-machine.
+
+**Why, concretely.** `net.c` today gives the system ONE TCP connection at a
+time, and `tls.c` one TLS session. The browser is now the heaviest consumer of
+both, and every remaining performance item in
+[`docs/WEB-ENGINE-DESIGN.md`](../docs/WEB-ENGINE-DESIGN.md) M7 is blocked on
+that single slot rather than on anything in the browser:
+
+- **Parallel fetches.** A page and its images and stylesheets are fetched one
+  after another because there is nowhere to put a second request. Keep-alive
+  (landed 2026-08-06) recovers the connection setup cost but not the
+  serialisation - four resources still cost four round trips end to end.
+- **Parallel TLS** is the M7 item that was never attempted, for exactly this
+  reason: `tls_connect_ca` / `tls_read` / `tls_write` address a single implicit
+  session, so a second HTTPS request cannot exist while the first is open.
+- **The single slot is also a correctness hazard, not only a speed one.** A
+  bug where the browser started a nested request from inside another request's
+  receive loop did not merely queue - it wedged the machine, because the inner
+  request tore down the socket the outer one was still reading. That cost a day
+  and is written up in `tools/netverify_urc.py`. A stack where a second
+  connection is simply a second connection would have made it a non-event.
+
+**Shape that would help** (not a design, just what the consumer needs):
+
+- a connection HANDLE returned by connect, taken by send/recv/close, so two
+  can exist at once;
+- TLS bound to such a handle rather than to the module;
+- non-blocking or poll-driven reads, so one slow response cannot stall the
+  others - the browser's fetch loop is already structured around a progress
+  callback and would adapt to this directly.
+
+**Stopgap in use:** strictly serial fetching, plus keep-alive to amortise the
+setup, plus a re-entrancy guard that forbids a nested request outright.
+
+**How to know it worked:** `pc64/tools/netverify_urc.py` counts connections and
+requests server-side. Today it asserts one connection for a four-resource page.
+With concurrency it should assert several connections in flight and a wall-clock
+page load shorter than the sum of its parts.
+
 ## 2026-08-05 — REQUEST to unofs/storage: PYRT.UNO load hung once, first boot after a kernel push
 
 **Status: observed ONCE, has NOT reproduced.** Filed for the evidence, not as a
