@@ -86,6 +86,34 @@ Second defect, and the one that made this expensive to see: **truncation is
 silent**. Hitting the cap goes down the same path as a complete response, so the
 status line says `200 OK` and the page is blank.
 
+### DONE — and confirmed on the ZimaBlade, not just in QEMU
+
+Landed on the branch as five commits. A third cap turned up on the way: the DOM
+arena in `dom_sync` was a flat 2 MB, and since the arena holds styles, layout
+boxes and the paint list as well as the tree, what it needs tracks the ELEMENT
+count rather than the byte count. Measured on the host through the full
+pipeline: google.com (83 KB) needs 1 MB, news.yc (35 KB) needs 1 MB, **the
+Wikipedia HTTP article (609 KB) needs 8 MB and drew nothing at 2 MB.**
+
+Evidence, before and after, on the metal box running the built kernel
+(`debug-local-20260806-1622`, pushed over URC and confirmed from `BUILD.TXT`):
+
+| | before | after |
+|---|---|---|
+| `https://google.com` | blank, `HTTP/1.0 200 OK` | Gmail / Images / Sign in / Advanced search / Advertising / Business / Privacy / Terms |
+| `https://en.wikipedia.org/wiki/HTTP` (609 KB) | not reachable at all under the old caps | full navigation tree, `HTTP/1.1 200 OK` |
+
+Gate: four build variants + host tests + SPECTEST 87/0/7 in QEMU. netverify
+13/13 with the two new endpoints. The `/big` check was verified to
+DISCRIMINATE, not merely to pass - with `RAW_MAX` put back to 49152 its content
+area measures single-digit ink.
+
+**Two cosmetic defects are visible in the after shot and belong to whoever
+wants them** (both predate this change and neither is a size cap): the page
+declares `charset=ISO-8859-1` and the high byte in "Français" renders as a
+blank, and `&copy;` renders as nothing rather than a glyph. Entity and charset
+handling, in the renderer.
+
 ## 2026-08-06 — FIXED (browser): the blank page, and my own hypothesis was wrong
 
 Closes the FINDING below. **The stylesheets had nothing to do with it**, and
