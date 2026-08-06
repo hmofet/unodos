@@ -437,6 +437,9 @@ static const uno_hv_t *g_hv;
 static int g_slice_armed, g_slice_n, g_slice_other;
 static u64 g_slice_max_cyc, g_slice_tot_cyc;
 static char g_slice_str[144];
+static uno_vm_linux g_lin;               /* A6b: the kernel, running        */
+static int g_lin_armed, g_lin_reported;
+static char g_lin_str[200];
 
 /* ---- A1: the foothold -----------------------------------------------------
  *
@@ -583,34 +586,36 @@ int uno_vmm_selftest(void)
         if (!ok5) g_self_ok = 0;
     }
 
-    /* ---- A6: a real kernel, as far as it gets --------------------------
-     * Reported rather than judged. Every interesting outcome here is partial,
-     * and the exit that stopped it plus the last line it printed is what
-     * makes the next step obvious. A missing bzImage is not a failure of
-     * anything: most machines will not carry one. */
+    /* ---- A6: place a real kernel, and let the FRAME LOOP run it --------
+     * A boot needs seconds and a selftest cannot give them, so this only
+     * places the kernel; uno_vmm_tick() runs it a slice at a time for as long
+     * as it takes. A missing bzImage is not a failure of anything: most
+     * machines will not carry one. */
     if (g_self_ok && hv->linux_boot) {
-        uno_vm_linux L;
-        int ok6 = hv->linux_boot(&L);
+        int placed = hv->linux_boot(&g_lin);
         int n = (int)strlen(g_self);
-        if (!L.loaded)
+        if (!g_lin.loaded)
             snprintf(g_self + n, sizeof g_self - (unsigned)n,
-                     "; linux: no bzImage (code %u)", L.stop_reason);
-        else
+                     "; linux: no bzImage (code %u)", g_lin.stop_reason);
+        else {
             snprintf(g_self + n, sizeof g_self - (unsigned)n,
-                     "; linux %s: %ld KB, %d chars %d lines over %d exits, "
-                     "stopped on %u at %llx (vec %x err %x addr %llx), "
-                     "%d pio [%x %x %x %x], last \"%s\"",
-                     ok6 ? "SPOKE" : "silent", L.loaded / 1024, L.chars,
-                     L.lines, L.exits, L.stop_reason, L.stop_rip,
-                     L.fault_vec, L.fault_err, L.fault_addr,
-                     L.pio, L.pio_ports[0], L.pio_ports[1], L.pio_ports[2],
-                     L.pio_ports[3], L.last ? L.last : "");
+                     "; linux: %ld KB placed, %s",
+                     g_lin.loaded / 1024, placed ? "running" : "REFUSED");
+            g_lin_armed = placed;
+            snprintf(g_lin_str, sizeof g_lin_str, "starting");
+        }
     }
 
     /* A3 is ARMED here and finished by the frame loop, because that is the
      * thing being tested: a guest running in the gaps of a desktop that keeps
      * drawing. Nothing else about the boot changes. */
-    if (g_self_ok && hv->spin_start && hv->spin_start()) {
+    /* ONE VMCS, so one guest at a time. The spinner's setup vmclears and
+     * reconfigures the same control block the kernel is using, which does not
+     * fail - it silently replaces a booting Linux with two bytes of `jmp $`,
+     * and the only symptom is a kernel that stops saying anything. A6b's
+     * kernel wins; the A3 measurement has already been taken on machines
+     * without one. */
+    if (g_self_ok && !g_lin_armed && hv->spin_start && hv->spin_start()) {
         g_slice_armed = 1;
         snprintf(g_slice_str, sizeof g_slice_str, "armed, running");
     } else if (g_self_ok) {
@@ -637,10 +642,42 @@ int uno_vmm_selftest(void)
  * a guest a core of its own. */
 const char *uno_vmm_slice_str(void) { return g_slice_str; }
 
+const char *uno_vmm_linux_str(void) { return g_lin_str; }
+
 void uno_vmm_tick(void)
 {
     uno_vmexit ex;
     u64 t0, dt;
+
+    /* A6b: the kernel gets its slice first, because it is the guest with
+     * somewhere to get to. The budget is the same 4 ms the spinner gets - a
+     * guest is a guest, and the desktop's frame is the thing being protected. */
+    if (g_lin_armed && g_hv && g_hv->linux_slice) {
+        int lines = g_lin.lines;
+        if (!g_hv->linux_slice(SLICE_BUDGET_US, &g_lin)) g_lin_armed = 0;
+        uno_dbg_heartbeat();
+        /* A kernel that stops printing has not necessarily stopped: it can
+         * be spinning on a port waiting for hardware nobody emulated. The
+         * exit count and the port it is sitting on say which. */
+        if ((g_lin.exits & 0x3FFF) == 0)
+            uno_dbg_log("vm linux: %d exits %d pio, sitting on port %x, "
+                        "%d lines", g_lin.exits, g_lin.pio, g_lin.last_port,
+                        g_lin.lines);
+        if (g_lin.lines != lines || !g_lin_armed) {
+            snprintf(g_lin_str, sizeof g_lin_str,
+                     "%s: %d lines %d chars, %d exits, %d pio%s%s",
+                     g_lin_armed ? "running" : "stopped",
+                     g_lin.lines, g_lin.chars, g_lin.exits, g_lin.pio,
+                     g_lin_armed ? "" : " on ",
+                     g_lin_armed ? "" : (g_lin.stop_reason == 12 ? "hlt" : "an exit"));
+            if (!g_lin_armed && !g_lin_reported) {
+                g_lin_reported = 1;
+                uno_dbg_log("vm linux: %s, last \"%s\"", g_lin_str,
+                            g_lin.last ? g_lin.last : "");
+            }
+        }
+        return;                  /* one guest per frame; the spinner waits  */
+    }
 
     if (!g_slice_armed || !g_hv || !g_hv->slice) return;
 
@@ -715,6 +752,11 @@ int uno_vmm_status_str(char *buf, int cap)
     if (g_self[0] && n + 4 < cap) {
         int k = snprintf(buf + n, (unsigned)(cap - n),
                          "\n            selftest: %s", g_self);
+        if (k > 0) n = (n + k >= cap) ? cap - 1 : n + k;
+    }
+    if (g_lin_str[0] && n + 4 < cap) {
+        int k = snprintf(buf + n, (unsigned)(cap - n),
+                         "\n            linux: %s", g_lin_str);
         if (k > 0) n = (n + k >= cap) ? cap - 1 : n + k;
     }
     if (g_slice_str[0] && n + 4 < cap) {

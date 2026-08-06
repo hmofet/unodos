@@ -1318,11 +1318,12 @@ static int vmx_virtio(uno_vm_virtio *out)
 #define VM_EXIT_INTR_ERROR 0x4406
 #define L_CMDLINE_TEXT \
     "earlyprintk=serial,ttyS0,115200 console=ttyS0 nolapic no_timer_check " \
-    "panic=-1 nokaslr"
+    "panic=-1 nokaslr lpj=4000000"
 
 static int g_lin_lines;
-static u64 g_lin_deadline;
 static unsigned g_lin_lastport;
+static int g_lin_running;
+static int g_lin_mark;
 static char g_lin_last[120];
 
 static void lin_sink(const char *s)
@@ -1507,9 +1508,7 @@ static int vmx_linux(uno_vm_linux *out)
     u8 fail = 0;
     unsigned i;
     u32 proc, proc2, pin;
-    uno_vmexit ex;
     long n;
-    int step;
 
     out->loaded = 0; out->lines = 0; out->exits = 0;
     out->last = ""; out->stop_reason = 0; out->stop_rip = 0;
@@ -1566,7 +1565,17 @@ static int vmx_linux(uno_vm_linux *out)
      * kernel touches the PIT, the CMOS and the PCI config ports constantly. */
     proc  = adjust(IA32_VMX_TRUE_PROC, IA32_VMX_PROCBASED,
                    PROC_HLT_EXITING | (1u << 24) | (1u << 31), 1);
-    proc2 = adjust(IA32_VMX_PROCBASED2, IA32_VMX_PROCBASED2, EPT_PROC2, 0);
+    /* ENABLE INVPCID, and it is the same lesson as the I/O controls: an
+     * instruction the CPU has does not necessarily WORK in a guest. INVPCID
+     * raises #UD in VMX non-root operation unless bit 12 says otherwise, and
+     * CPUID cheerfully tells the guest it is available. Linux believes CPUID
+     * and uses it in native_flush_tlb_global, which is early and unavoidable:
+     *   PANIC: early exception 0x06 ... native_flush_tlb_global+0x3c
+     *   Code: ... <66> 0f 38 82   <- invpcid
+     * One bit, and the alternative would have been masking the feature out of
+     * CPUID and making every TLB flush slower for no reason. */
+    proc2 = adjust(IA32_VMX_PROCBASED2, IA32_VMX_PROCBASED2,
+                   EPT_PROC2 | (1u << 12), 0);
     vmwrite(PIN_BASED_CTLS, pin);
     vmwrite(PROC_BASED_CTLS, proc);
     vmwrite(PROC_BASED_CTLS2, proc2);
@@ -1618,23 +1627,42 @@ static int vmx_linux(uno_vm_linux *out)
     vmwrite(GUEST_RFLAGS, 0x2);              /* interrupts off, as required  */
     g_ctx.rsi = L_ZEROPG;                    /* THE zero page, in RSI        */
 
-    /* A WALL-CLOCK BOUND, not just an exit count. A kernel that gets further
-     * than the last attempt is progress and a kernel that loops forever is
-     * indistinguishable from it at the level of an exit counter - and this
-     * runs during boot, so an unbounded run does not fail, it takes the
-     * desktop with it. Three seconds is generous for "did it say anything". */
-    {   u64 per_us = uno_native_tsc_per_us();
-        g_lin_deadline = uno_native_rdtsc() + (per_us ? per_us : 1000ull) * 3000000ull;
-    }
-    for (step = 0; step < 200000; step++) {
-        u64 ticks;
-        if (uno_native_rdtsc() > g_lin_deadline) { out->stop_reason = 0xDEAD; break; }
-        ticks = uno_native_tsc_per_us() * 4000ull
-                    >> (unsigned)(rdmsr(IA32_VMX_MISC) & 0x1F);
-        vmwrite(VMX_PREEMPT_VALUE, ticks ? ticks : 1);
+    g_lin_running = 1;
+    out->lines = 0;
+    out->last = g_lin_last;
+    out->chars = 0;
+    return 1;                                 /* placed and ready to run     */
+}
+
+/* One budgeted slice of the kernel, and everything its exits need.  This is
+ * the same servicing the boot-time attempt did, moved to where a kernel can
+ * actually live: called once per shell frame, for as long as it takes.
+ *
+ * A6a ran it inside a selftest with a three-second bound, which is fine for
+ * "did it say anything" and hopeless for "did it reach userspace" - a kernel
+ * that needs eight seconds is not slow, it is normal. */
+static int vmx_linux_slice(unsigned budget_us, uno_vm_linux *out)
+{
+    uno_vmexit ex;
+    u64 per_us = uno_native_tsc_per_us();
+    unsigned shift = (unsigned)(rdmsr(IA32_VMX_MISC) & 0x1F);
+    u64 ticks;
+    int n;
+
+    if (!g_lin_running) return 0;
+    if (!per_us) per_us = 1000ull;
+    ticks = (per_us * budget_us) >> shift;
+    if (!ticks) ticks = 1;
+
+    /* Several entries per frame: most exits are a CPUID or a port write that
+     * costs a microsecond to answer, and returning to the frame loop after
+     * each one would spend the whole budget on the round trip. */
+    for (n = 0; n < 512; n++) {
+        vmwrite(VMX_PREEMPT_VALUE, ticks);
         run_once(&ex);
         out->exits++;
-        if (ex.raw == EXIT_PREEMPT || ex.raw == EXIT_EXT_INTR) continue;
+        if (ex.raw == EXIT_PREEMPT) break;         /* the budget is spent    */
+        if (ex.raw == EXIT_EXT_INTR) break;
         if (ex.raw == EXIT_CPUID) {
             lin_cpuid();
             vmwrite(GUEST_RIP, vmread(GUEST_RIP) + vmread(VM_EXIT_INSTR_LEN));
@@ -1650,13 +1678,10 @@ static int vmx_linux(uno_vm_linux *out)
             unsigned size = (unsigned)(q & 7) + 1;
             unsigned port = (unsigned)(q >> 16) & 0xFFFF;
             int is_in = (q & 8) ? 1 : 0;
-            if (q & 0x10) break;             /* a string port op: not decoded */
+            if (q & 0x10) { g_lin_running = 0; break; }   /* a string op     */
             v = g_ctx.rax;
-            if (out->pio_n < 8 && port != g_lin_lastport) {
-                out->pio_ports[out->pio_n++] = (unsigned short)port;
-                g_lin_lastport = port;
-            }
             out->pio++;
+            out->last_port = port;
             uno_vdev_pio(port, !is_in, size, &v, lin_sink);
             if (is_in) {
                 if (size == 1) g_ctx.rax = (g_ctx.rax & ~0xFFull) | (v & 0xFF);
@@ -1670,39 +1695,51 @@ static int vmx_linux(uno_vm_linux *out)
             u64 q = vmread(EXIT_QUALIFICATION);
             int cr = (int)(q & 15), acc = (int)((q >> 4) & 3);
             u64 *r = gpr((int)((q >> 8) & 15));
-            if (acc == 0 && cr == 4 && r) {      /* mov cr4, reg            */
+            if (acc == 0 && cr == 4 && r) {
                 vmwrite(GUEST_CR4, *r | CR4_VMXE);
                 vmwrite(CR4_READ_SHADOW, *r & ~CR4_VMXE);
                 vmwrite(GUEST_RIP, vmread(GUEST_RIP) + vmread(VM_EXIT_INSTR_LEN));
                 continue;
             }
-            if (acc == 0 && cr == 0 && r) {      /* mov cr0, reg            */
+            if (acc == 0 && cr == 0 && r) {
                 vmwrite(GUEST_CR0, (*r | rdmsr(IA32_VMX_CR0_FIXED0))
                                    & rdmsr(IA32_VMX_CR0_FIXED1));
                 vmwrite(CR0_READ_SHADOW, *r);
                 vmwrite(GUEST_RIP, vmread(GUEST_RIP) + vmread(VM_EXIT_INSTR_LEN));
                 continue;
             }
-            break;
+            g_lin_running = 0; break;
         }
         if (ex.raw == EXIT_EPT_VIOLATION && mmio_service()) continue;
-        if (ex.raw == EXIT_EXCEPTION) {
-            out->fault_vec = (unsigned)(vmread(VM_EXIT_INTR_INFO) & 0xFF);
-            out->fault_err = (unsigned)vmread(VM_EXIT_INTR_ERROR);
-            out->fault_addr = vmread(EXIT_QUALIFICATION);
+        if (ex.raw == EXIT_HLT) {
+            /* A halted kernel is waiting for an interrupt it will not get
+             * until there is a timer. Stopping here rather than spinning
+             * says so, instead of burning a slice a frame forever. */
+            g_lin_running = 0;
+            out->stop_reason = (unsigned)ex.raw;
+            out->stop_rip = ex.rip;
+            break;
         }
-        break;                                /* whatever it was, report it  */
+        g_lin_running = 0;
+        out->stop_reason = (unsigned)ex.raw;
+        out->stop_rip = ex.rip;
+        break;
     }
     out->lines = g_lin_lines;
     out->last = g_lin_last;
     out->chars = uno_vdev_serial_chars();
-    if (out->stop_reason != 0xDEAD) out->stop_reason = (unsigned)ex.raw;
-    out->stop_rip = ex.rip;
-    return out->chars > 0;
+    /* On the debug console rather than the kernel log: a kernel that stops
+     * printing may be spinning on a port nobody emulated, and the boot log is
+     * only flushed on a timer this run does not reach. */
+    if ((out->exits >> 14) != g_lin_mark) {
+        g_lin_mark = out->exits >> 14;
+        tracex("[lin] still going, port=", (u64)out->last_port);
+    }
+    return g_lin_running;
 }
 
 static const uno_hv_t VMX = { "vmx", vmx_enable, vmx_marker, vmx_crasher,
                               vmx_ept, vmx_spin_start, vmx_slice, vmx_clockirq,
-                              vmx_virtio, vmx_linux };
+                              vmx_virtio, vmx_linux, vmx_linux_slice };
 
 const uno_hv_t *uno_hv_vmx(void) { return &VMX; }

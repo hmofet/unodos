@@ -126,6 +126,7 @@ const char *uno_vmm_selftest_str(void);
  * This is how a guest is scheduled on an OS with no scheduler. */
 void uno_vmm_tick(void);
 const char *uno_vmm_slice_str(void);
+const char *uno_vmm_linux_str(void);
 
 /* Two lines for the boot env block, the System window and the `vm` verb:
  *   "vmx rev 0x0d ept wb 2m 1g unrestricted vpid preempt apicv=no phys=39"
