@@ -50,6 +50,7 @@ void uno_usb_hid_status(int *nkbd, int *nmouse);
 /* the detach gate's prediction of what USB HID will be claimable (usbboot.c) */
 void uno_usbboot_hid_status(int *kbd, int *ptr, const char **why);
 int  uno_dg_status_str(char *buf, int cap);     /* the detach gate's reading */
+int  uno_vmm_status_str(char *buf, int cap);    /* unovirt's capability gate  */
 #include "xhci.h"     /* the enumerated USB device list, for the env block */
 void uno_ps2_status(int *kbd, int *aux, int *auxport, int *auxid);
 
@@ -1353,6 +1354,15 @@ void uno_dbg_envblock(void)
         env("cpu: %s\n", brand);
         cpuid(1, 0, &a, &b, &c, &d);
         env("cpuid1: eax=%x (fam/model) ecx=%x edx=%x\n", a, c, d);
+    }
+
+    {   /* unovirt: what this machine could host, and what is stopping it.
+         * Next to the CPU line because that is where the reader looks for it,
+         * and it belongs in every boot log rather than only in a VM build: on
+         * a machine that refuses, THIS line is the whole bug report. */
+        char hv[220];
+        uno_vmm_status_str(hv, (int)sizeof hv);
+        env("HV: %s\n", hv);
     }
 
     {   /* display + present path */
