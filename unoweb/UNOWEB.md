@@ -135,7 +135,13 @@ matches its ink.
 
 ### Layout gaps (beyond the parser gaps above)
 
-7. **No float/clear, no position** other than static. M6.
+7. **Floats, clear and position are implemented** (M6, 2026-08-06). The float
+   context is passed DOWN the block tree, so a float in `<body>` shortens the
+   lines of later paragraphs - those are separate blocks, and scoping floats
+   to their declaring block was the bug that made text run under them.
+   Remaining: a float does not escape its formatting context, so one taller
+   than its parent still ends at the parent's edge; `position: fixed` shares
+   the absolute path and is pinned by paint rather than tracked separately.
 8. **Inline formatting is greedy word wrap plus line-close alignment.**
    `text-align` (left/center/right/justify) and `vertical-align`
    (baseline/top/middle/bottom/sub/super) are applied when a line CLOSES,
@@ -147,8 +153,17 @@ matches its ink.
 9. **Margin collapsing is siblings only** - a parent and its first/last child
    do not collapse through the parent's edge.
 10. **No `box-sizing`**; `width` always sets the content box.
-11. **Tables lay out as plain blocks.** The parser builds a correct table tree;
-    nothing yet does column widths.
+
+12. **Style sharing is on** (M7): elements with the same parent, tag and full
+    attribute set reuse one cascade result, and sharing switches off entirely
+    for a document whose sheets contain a positional selector. See
+    `uw_share_hits()`.
+11. **Tables have real layout** (M6, 2026-08-06): rows collected through row
+    groups, column widths proportional to each column's text, cells stretched
+    to the row height. It is NOT the CSS auto-table algorithm, which needs
+    min/max content widths per cell and so lays every cell out twice.
+    Remaining: no `colspan`/`rowspan`, no `border-collapse`, and an explicit
+    `width` on a cell is ignored in favour of the proportional share.
 
 ## Testing
 
