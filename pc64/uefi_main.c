@@ -44,6 +44,7 @@
 #include "detachgate.h"     /* ...and whether its keyboard and pointer do too */
 #include "uno_devmgr.h"     /* unodevices: enumerate + bind (phases 2, 4) */
 #include "pc64_mtrr.h"      /* P3 opt-in: WC framebuffer MTRR rebuild */
+#include "unovirt.h"        /* unovirt: can this machine host a guest at all */
 #include <string.h>         /* memcpy (freestanding, from pc64_libc.c) */
 #include "fat.h"            /* native block + FAT stack bring-up */
 #include "blkdev.h"
@@ -1296,6 +1297,13 @@ void uno_pc64_init(void)
     uno_pc64_chime();               /* startup chime: loading complete */
 
     dbg_puts("unodos-pc64: init done\n");
+
+    /* unovirt A0: read the virtualization capabilities while boot services are
+     * still alive.  It must happen HERE rather than lazily, because the RAM
+     * figure comes from the firmware's memory map and that map dies at
+     * ExitBootServices, taking with it the one input the carve size depends
+     * on.  The probe writes nothing and cannot fault; see pc64/UNOVIRT.md. */
+    (void)uno_vmm_probe();
 
     splash_stage(4, "saving boot log");
     uno_dbg_check("init:detach");
