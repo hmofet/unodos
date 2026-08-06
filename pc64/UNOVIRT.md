@@ -4,11 +4,14 @@ The appliance machinery: can this machine host a guest, and later, the guest
 itself. The programme and its phases are `docs/UNOVIRT-PLAN.md`; this file is
 the API surface, its changelog, and the things a consumer has to know.
 
-**Status: A0 [implemented]. A1 [written, not proved].** The capability gate is
-in and runs on every boot. The SVM backend, the vCPU context and the marker
-guest are written and compile, but the first VMRUN has never returned on the
-only machine available to run it (see "The A1 wedge" below), so the selftest is
-**opt-in** and off by default. Nothing is carved and there is no NPT yet.
+**Status: A0 [implemented]. A1 [implemented on VMX, unproved on SVM].** The
+capability gate runs on every boot. The foothold is real on Intel: on devbuntu
+(bare metal, nested KVM) UnoDOS enters VMX operation, runs a guest, takes it
+through a CPUID intercept, reads its marker back out of guest memory, and then
+runs a guest that destroys itself and carries on booting. The AMD backend is
+written and compiles but its first VMRUN has never returned, on a box that is
+two levels of virtualization down (see "The A1 wedge"). The selftest stays
+**opt-in** either way. Nothing is carved and there is no EPT/NPT yet.
 
 ## API (`unovirt.h`, `UNO_VIRT_API 1`)
 
@@ -87,16 +90,18 @@ gates on `--kvm` on an Intel box or on metal.
 | QEMU TCG `EPYC` / `max` | svm rev 1, npt wb 2m 1g | no: still attached |
 | QEMU TCG `Nehalem[,+vmx]` | neither (TCG drops vmx) | no: no VMX or SVM |
 | QEMU KVM `-cpu host` (Ryzen 5 5600G, WSL2 nested) | svm rev 1, npt wb 2m 1g, phys 48, 3889 MB | **yes**, carve 1536 MB (UNO_DETACH=1 build) |
-| ZimaBlade, X1 Carbon (Intel, the VMX arm) | pending | pending |
+| QEMU KVM `-cpu host` on **devbuntu** (Haswell, bare metal) | vmx rev 0x11e57ed0, ept wb 2m 1g unrestricted vpid preempt, phys 39, 3887 MB | **yes**, carve 1536 MB, **and A1 passes** |
+| ZimaBlade, X1 Carbon | pending | pending |
 
-The Intel arm has never run. Both metal boxes are Intel, so the first hardware
-boot of this branch is also the first execution of half the file, and the
-thing to watch for is the `HV:` line naming `vmx` with a plausible EPT
-capability set rather than a locked `FEATURE_CONTROL`.
+The Intel arm now has real numbers, and the revision id is the tell that they
+are KVM's rather than Haswell's: `0x11e57ed0` is literally KVM's
+`VMCS12_REVISION`. Metal is still outstanding, and it is the run that decides
+whether `FEATURE_CONTROL` is locked on either box.
 
 ## A1: the foothold, and why it is opt-in
 
-`uno_vmm_selftest()` enters host SVM operation, runs a guest that takes a
+`uno_vmm_selftest()` enters host virtualization mode (VMX or SVM, whichever
+this machine has), runs a guest that takes a
 64-bit value through a CPUID intercept, writes it to its own memory and halts,
 then runs a second guest that destroys itself on purpose. The evidence is
 deliberately the value in GUEST memory rather than the exit codes: a guest that
@@ -111,29 +116,55 @@ delivered to that core, including the LAPIC watchdog that exists to catch a
 hang. There is no fault, no report, no reset and no screen. The machine stops
 being a machine.
 
-### The A1 wedge, stated as what is and is not known
+### A1 on Intel: what the run proves
+
+    [hv] vmxon ok, rev=0000000011e57ed0
+    [hv] vmentry rip=0000000142d31000   exit reason=a   (CPUID)
+    [hv] vmentry rip=0000000142d31002   exit reason=c   (HLT)
+    [hv] vmentry rip=0000000142d31000   exit reason=2   (triple fault: the crasher)
+    selftest: vmx: entered, guest round trip -> 534f444f4e55 OK, crasher contained
+
+Three separate claims, each with its own evidence rather than one summary:
+
+- **The guest ran and we answered it.** Exit reason 10 is CPUID; the value we
+  handed back arrived at `0x534f444f4e55` in GUEST memory, written by the
+  guest's own store through its own page tables.
+- **It resumed correctly.** The second entry is at RIP + 2, and reason 12 is
+  HLT - which the guest only reaches by executing the two stores after the
+  intercepted instruction. Getting the RIP advance wrong does not produce a
+  wrong answer, it produces a guest that executes CPUID forever.
+- **A guest that destroys itself takes only itself.** Reason 2 is a triple
+  fault, and the boot log continues past it into the network self-test, which
+  runs from the shell's frame loop. The desktop was alive on the far side.
+
+Run it again with `python3 tools/hv_remote.py devbuntu.local`.
+
+**One bug worth keeping.** The first attempt entered with guest RIP 0, because
+the SVM backend runs its guest from offset 0 with a real-mode CS base pointing
+at the code. A long-mode guest has no segment base to fold in: CS.base must be
+0, so RIP *is* the linear address. Entering at 0 mapped nothing, the fetch
+faulted into an IDT that cannot deliver, and it presented as exit reason 2 at
+RIP 0 - indistinguishable from a guest that never started.
+
+### The A1 wedge on AMD, stated as what is and is not known
 
 **Known:** on amanuensis (Ryzen 5 5600G) under QEMU/KVM, `EFER.SVME` sets, the
 host save area is accepted, and the first `vmrun` never returns. Reproducible,
 every run. No fault is taken (our IDT is installed by then and no crash report
 is written), QEMU stays alive, and the boot simply ends there.
 
-**Not known:** whether that is a defect in this code or a limit of the test
-environment. The nesting on this box is three deep - Hyper-V hosts WSL2, KVM
+**Not known, but now less so:** whether that is a defect in this code or a
+limit of the test environment. The VMX backend, built on the same seam, the
+same vCPU stub pattern and the same selftest, works one level down - so the
+shape of all of that is right, and the environment is the stronger suspect.
+It is not proof: the two backends share no vendor-specific code. The nesting on this box is three deep - Hyper-V hosts WSL2, KVM
 runs inside WSL2, UnoDOS runs under KVM, and UnoDOS's guest would be a fourth
 level. Nested SVM under an already-nested KVM is not a configuration anyone
 supports, and a wedged vCPU is a plausible way for it to decline.
 
-**Two experiments settle it, in order of cost:**
-
-1. Write the VMX backend and run it on **devbuntu**, which is bare metal
-   (`systemd-detect-virt` says none), Intel, with `kvm_intel nested=Y`. That is
-   KVM at L0, one level of nesting, the configuration nested virtualization is
-   actually tested in. It also exercises the arm both metal boxes need.
-2. Boot the branch on the **ZimaBlade** with `vm-selftest` set. That is the real
-   answer, and it is the one that has to be true anyway.
-
-Until one of those runs, A1 is written and unproved, and this file says so.
+**What settles it:** an AMD machine where KVM is at L0, or AMD metal. Neither
+is on the LAN today (devbuntu is Intel), so the SVM row stays unproved and this
+file says so rather than borrowing the VMX result.
 
 ### Two findings from the bring-up, kept because both cost time
 
@@ -159,4 +190,7 @@ go near the top. That is the debug harness's lane, reported in
 - **2026-08-06, API 1.** A1 written: the `uno_hv_t` backend seam, the SVM
   backend (`hv_svm.c`), the vCPU register context, the marker guest and the
   crasher. `uno_vmm_selftest` / `uno_vmm_selftest_str`, opt-in behind DEBUG.CFG
-  `vm-selftest`. Unproved: see the wedge above.
+  `vm-selftest`. Unproved on AMD: see the wedge above.
+- **2026-08-06, API 1.** A1 PASSES on VMX (`hv_vmx.c`), on devbuntu under KVM
+  at L0: entered, round trip, crasher contained, boot continued. `tools/
+  hv_remote.py` runs it.

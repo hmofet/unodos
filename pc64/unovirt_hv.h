@@ -76,5 +76,6 @@ typedef struct uno_hv {
 } uno_hv_t;
 
 const uno_hv_t *uno_hv_svm(void);         /* hv_svm.c                        */
+const uno_hv_t *uno_hv_vmx(void);         /* hv_vmx.c                        */
 
 #endif /* UNO_VIRT_HV_H */
