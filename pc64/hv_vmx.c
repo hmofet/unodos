@@ -499,10 +499,27 @@ static void classify(uno_vmexit *out)
  * the console and slows the very thing being measured. */
 static int g_quiet;
 
+/* ---- XCR0, which VMX does not save or restore ----------------------------
+ * XSETBV exits unconditionally, and it has to: XCR0 is machine state that VMX
+ * carries in neither direction, so a guest that enables AVX would enable it
+ * for the host too and leave it that way. The guest's value is applied around
+ * its entries and the host's put back afterwards. */
+static u64 g_host_xcr0, g_guest_xcr0;
+
+static int host_osxsave(void)
+{ u64 c4; __asm__ volatile ("mov %%cr4, %0" : "=r"(c4)); return (int)((c4 >> 18) & 1); }
+static u64 xgetbv0(void)
+{ u32 a, d; __asm__ volatile ("xgetbv" : "=a"(a), "=d"(d) : "c"(0)); return ((u64)d << 32) | a; }
+static void xsetbv0(u64 v)
+{ __asm__ volatile ("xsetbv" : : "a"((u32)v), "d"((u32)(v >> 32)), "c"(0)); }
+
 static void run_once(uno_vmexit *out)
 {
+    int swap = g_guest_xcr0 && host_osxsave();
     if (!g_quiet) tracex("[hv] vmentry rip=", vmread(GUEST_RIP));
+    if (swap) xsetbv0(g_guest_xcr0);
     vmx_entry(&g_ctx);
+    if (swap) xsetbv0(g_host_xcr0);
     if (!g_entry_failed) g_launched = 1;
     classify(out);
     if (!g_quiet) tracex("[hv] exit reason=", out->raw);
@@ -1308,6 +1325,7 @@ static int vmx_virtio(uno_vm_virtio *out)
 #define L_KERNEL  0x1000000ull           /* 16 MiB, clear of everything      */
 #define EXIT_IO   30
 #define EXIT_CR   28
+#define EXIT_XSETBV 55
 #define EXIT_EXCEPTION 0
 #define CR0_GH_MASK        0x6000
 #define CR4_GH_MASK        0x6002
@@ -1324,6 +1342,8 @@ static int g_lin_lines;
 static unsigned g_lin_lastport;
 static int g_lin_running;
 static int g_lin_mark;
+
+
 static char g_lin_last[120];
 
 static void lin_sink(const char *s)
@@ -1468,6 +1488,20 @@ static void lin_cpuid(void)
         rc &= ~(1u << 21);                   /* x2APIC: there is no APIC      */
         rc |=  (1u << 31);                   /* and say plainly it is a guest */
         rd &= ~(1u << 9);                    /* APIC                          */
+        /* XSAVE OFF, AND THE WHOLE FAMILY WITH IT. Advertising it drags in
+         * XCR0, IA32_XSS and CPUID leaf 0xD, whose answers have to agree with
+         * each other and with what the hypervisor actually preserves - and
+         * they did not: the kernel died in fpstate_reset with a null pointer,
+         * which is what a zero xstate size looks like from the far end.
+         *
+         * Without it the guest uses FXSAVE, which every x86-64 CPU has and
+         * which needs nothing from us. It costs the guest AVX. Turning it
+         * back on is a real slice of work (save and restore XCR0 per entry,
+         * answer IA32_XSS, keep leaf 0xD consistent) and it is not on the
+         * path to a shell. */
+        rc &= ~(1u << 26);                   /* XSAVE                         */
+        rc &= ~(1u << 27);                   /* OSXSAVE                       */
+        rc &= ~(1u << 28);                   /* AVX, which needs both          */
     }
     g_ctx.rax = ra; g_ctx.rbx = rb; g_ctx.rcx = rc; g_ctx.rdx = rd;
 }
@@ -1709,6 +1743,14 @@ static int vmx_linux_slice(unsigned budget_us, uno_vm_linux *out)
                 continue;
             }
             g_lin_running = 0; break;
+        }
+        if (ex.raw == EXIT_XSETBV) {
+            if (host_osxsave() && (u32)g_ctx.rcx == 0) {
+                if (!g_host_xcr0) g_host_xcr0 = xgetbv0();
+                g_guest_xcr0 = ((u64)(u32)g_ctx.rdx << 32) | (u32)g_ctx.rax;
+            }
+            vmwrite(GUEST_RIP, vmread(GUEST_RIP) + vmread(VM_EXIT_INSTR_LEN));
+            continue;
         }
         if (ex.raw == EXIT_EPT_VIOLATION && mmio_service()) continue;
         if (ex.raw == EXIT_HLT) {
