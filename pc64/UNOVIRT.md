@@ -4,14 +4,15 @@ The appliance machinery: can this machine host a guest, and later, the guest
 itself. The programme and its phases are `docs/UNOVIRT-PLAN.md`; this file is
 the API surface, its changelog, and the things a consumer has to know.
 
-**Status: A0 [implemented]. A1 [implemented on VMX, unproved on SVM].** The
+**Status: A0, A1, A2 [implemented on VMX]. A1 [unproved on SVM].** The
 capability gate runs on every boot. The foothold is real on Intel: on devbuntu
 (bare metal, nested KVM) UnoDOS enters VMX operation, runs a guest, takes it
 through a CPUID intercept, reads its marker back out of guest memory, and then
 runs a guest that destroys itself and carries on booting. The AMD backend is
 written and compiles but its first VMRUN has never returned, on a box that is
 two levels of virtualization down (see "The A1 wedge"). The selftest stays
-**opt-in** either way. Nothing is carved and there is no EPT/NPT yet.
+**opt-in** either way. The carve is taken at detach and the guest now runs
+behind EPT, in an address space of its own.
 
 ## API (`unovirt.h`, `UNO_VIRT_API 1`)
 
@@ -24,6 +25,9 @@ two levels of virtualization down (see "The A1 wedge"). The selftest stays
 | `uno_vmm_status_str(buf, cap)` | the two/three-line `HV:` block for the env block and the System window |
 | `uno_vmm_selftest()` | A1: enter host mode, run the marker guest, then a guest that destroys itself. **Opt-in**: DEBUG.CFG `vm-selftest` |
 | `uno_vmm_selftest_str()` | what it found, for the env block |
+| `uno_vmm_reserve()` | A2: take the carve before ExitBootServices, beside the module arena |
+| `uno_vmm_carve_base/size()` | where it is and how big, 0 for none |
+| `uno_vmm_gpa(gpa, len)` | **the security boundary**: a guest address the host may touch, or NULL |
 
 `probe` is latched; `eligible` is live, because detaching from the firmware
 changes the answer and nothing else does.
@@ -182,6 +186,53 @@ it is **silently ignored** - it never reaches the parser. `vm-selftest` has to
 go near the top. That is the debug harness's lane, reported in
 `pc64/UNOAUTOMATE-REQUESTS.md` rather than fixed here.
 
+## A2: the guest gets an address space
+
+    [hv] vmentry rip=0000000000010000   exit reason=a   (CPUID)
+    [hv] vmentry rip=0000000000010002   exit reason=c   (HLT)
+    ept OK gpa 0x100000 -> pa 1bf00000 wrote 534f444f4e56
+        (memtype 6, 1536 MB at 1be00000)
+
+**The pair of addresses is the point.** The guest stored at guest-physical
+`0x100000` and the value turned up at host-physical `0x1bf00000`. Translation
+observed, not assumed. And the guest's RIP is now `0x10000` rather than a host
+address in the hundreds of megabytes, because it is running in a small tidy
+machine with RAM at the bottom and nothing else in it.
+
+Two details that make the evidence hold:
+
+- **The value is the marker PLUS ONE**, so a buffer that happened to contain
+  the right bytes cannot pass for a guest that ran.
+- **Had the second stage been quietly off, the store would have gone to host
+  physical `0x100000`** - the kernel's own low memory - and nothing would have
+  appeared where we looked. The address was chosen for that.
+
+The carve is `EfiLoaderData` taken beside the module arena in `try_detach`,
+because `AllocatePages` does not exist afterwards. It halves down to a 128 MiB
+floor rather than failing: firmware that will not part with 1.5 GiB will often
+part with 512 MiB, and a smaller appliance beats none. The BIOS path gets no
+carve at all, and says so - `uno_bios_find_ram()` keeps no bookkeeping, so a
+second consumer would be handed memory the module arena is already using.
+
+**`uno_vmm_gpa()` is the only place a guest address becomes an address this
+machine will touch.** Stage two bounds the guest's OWN accesses and does
+nothing whatever for the ones the host makes on its behalf - and every address
+in a virtqueue will have come from the guest, including the ones inside
+descriptors. It checks address and length together, because checking them
+separately is how an overflow gets through (S-HV-15).
+
+### Two findings
+
+**A 2 MiB second-stage leaf must be 2 MiB aligned**, and `AllocatePages` only
+promises 4 KiB. An unaligned frame address is a reserved-bit violation, and
+the machine reports it as **EPT misconfiguration (exit 49)** - a number that
+says the tables are malformed and nothing about which field. The reservation
+over-allocates by 2 MiB and rounds up.
+
+**Only whole frames inside the carve are mapped.** Rounding the mapping up to
+the next 2 MiB would hand the guest whatever follows the carve in host memory,
+and it would work perfectly in every test.
+
 ## Changelog
 
 - **2026-08-06, API 1.** A0: the capability gate. `uno_vmm_probe`,
@@ -194,3 +245,7 @@ go near the top. That is the debug harness's lane, reported in
 - **2026-08-06, API 1.** A1 PASSES on VMX (`hv_vmx.c`), on devbuntu under KVM
   at L0: entered, round trip, crasher contained, boot continued. `tools/
   hv_remote.py` runs it.
+- **2026-08-06, API 1.** A2: `uno_vmm_reserve`, `uno_vmm_carve_base/size`,
+  `uno_vmm_gpa`, and EPT in the VMX backend. The guest runs at low
+  guest-physical addresses in a 1536 MB write-back carve. Contracts
+  S-HV-15..19.

@@ -1684,6 +1684,29 @@ faults on the first instruction that assumes it.
   running: the crasher exits with SHUTDOWN (or the CPU's refusal), the desktop
   keeps painting, and the verdict says which. Manual because it needs a machine
   where VMRUN returns at all.
+- **S-HV-15** [auto] `uno_vmm_gpa()` MUST reject any (gpa, len) not wholly
+  inside the carve, checking address and length TOGETHER in 64-bit: `len >
+  size` first, then `gpa > size - len`. A length near 2^64 MUST NOT wrap the
+  sum into an accepted range. This is the whole security boundary between a
+  guest and this machine's memory, because a guest's own accesses are bounded
+  by the second stage and the ones the HOST makes on its behalf are bounded by
+  nothing else. check: {0,size}, {size,1}, {0,~0ull}, {size-1,2}, {~0ull,1}.
+- **S-HV-16** [auto] The carve MUST be 2 MiB aligned. A second-stage large-page
+  leaf addresses a 2 MiB frame, so an unaligned base is a reserved-bit
+  violation, reported as EPT MISCONFIGURATION (exit 49) rather than as anything
+  naming the field. `AllocatePages` promises only 4 KiB, so the reservation
+  over-allocates and rounds up.
+- **S-HV-17** [auto] `uno_vmm_reserve()` MUST be idempotent, MUST halve its
+  request down to the floor rather than fail outright, and MUST report the size
+  it actually got - never the size it asked for.
+- **S-HV-18** [auto] Second-stage mappings MUST cover the carve and NOTHING
+  else: an entry is written only where the whole 2 MiB frame lies within it, so
+  a guest reading past its own memory takes a reportable exit instead of
+  reaching whatever follows the carve in host memory.
+- **S-HV-19** [auto] The carve MUST be write-back. A UC carve is not a failure
+  anyone recognises as one - the appliance simply runs at a fraction of the
+  speed - so the memory type is read from the MTRRs and printed beside the
+  result, where it can still be believed.
 - **S-HV-11** [assert] The probe MUST count only free conventional memory
   (`EfiConventionalMemory` / E820 type 1). Counting firmware-reserved or
   boot-services ranges would overstate a machine sitting on the floor, which
