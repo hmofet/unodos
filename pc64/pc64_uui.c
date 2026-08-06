@@ -72,6 +72,10 @@ static const struct { const char *name; const struct unoui_theme *theme; } kThem
     { "Apple II",  &theme_apple2  }, { "NeXTSTEP",    &theme_next   }
 };
 #define NTHEMES ((int)(sizeof kThemes / sizeof kThemes[0]))
+/* the two Aurora palettes have their own toggle (ID_DARK) as well as being
+ * rows in this table, so the toggle needs to name the rows it selects */
+#define THEME_AURORA_LIGHT 0
+#define THEME_AURORA_DARK  1
 static const char *kThemeNames[NTHEMES];
 
 /* ---- apps --------------------------------------------------------------- *
@@ -411,6 +415,26 @@ enum { ID_THEME = 1, ID_RES, ID_DARK, ID_WRAP, ID_VOL, ID_SCALE, ID_ABOUT,
 
 /* shell status buffers */
 static char g_res_str[12][14]; static const char *g_res_items[12]; static int g_res_n;
+
+/* ---- Control Panel preferences, persisted in SHELL.CFG --------------------
+ * SHELL.CFG already carried the SESSION (which windows were open, and where).
+ * It carried no PREFERENCES, so every Control Panel choice - resolution, theme,
+ * UI scale, volume, wallpaper - was rebuilt from defaults on the next boot.
+ *
+ * Two of these have no getter to read the live value back out of, and their
+ * controls were built from a constant (the volume slider always drew at 70, the
+ * theme dropdown always at entry 0) - so they are shadowed here. That is also
+ * what makes them persistable: a value nobody can read is a value nobody can
+ * save.
+ *
+ * The resolution is deliberately NOT stored by res_apply(). It is stored by
+ * res_keep(), the point at which a human has confirmed they can still read the
+ * screen. Persisting on apply would let an unreadable mode be written to disk
+ * and then faithfully restored on every subsequent boot - turning the one
+ * failure the probation countdown exists to prevent into a permanent one. */
+static int   g_theme_sel;                  /* Appearance dropdown selection   */
+static int   g_pref_vol = 70;              /* PCM gain, mirrors the slider    */
+static short g_pref_res_w, g_pref_res_h;   /* last CONFIRMED mode, 0 = none   */
 /* ---- Display tab: resolution is applied, then held on probation -----------
  * Picking in the dropdown only SELECTS (g_res_sel).  Apply commits it and arms
  * a revert: unless the user clicks Keep within RES_CONFIRM_S seconds the
@@ -868,7 +892,8 @@ static void build_ctrl(unoui_window *w)
 
     case CT_PERSONAL:
         unoui_add_label(w, 8, y + lofs, "Theme:");
-        x = unoui_add_dropdown(w, lw, y, cw - lw - 8, kThemeNames, NTHEMES, 0); x->id = ID_THEME;
+        x = unoui_add_dropdown(w, lw, y, cw - lw - 8, kThemeNames, NTHEMES,
+                               g_theme_sel); x->id = ID_THEME;
         y += row;
         unoui_add_check(w, 8, y, "Dark mode", 0);   w->w[w->nw-1].id = ID_DARK;
         y += fh + 10;
@@ -1066,7 +1091,7 @@ static void build_ctrl(unoui_window *w)
 
     case CT_AUDIO:
         unoui_add_label(w, 8, y + lofs, "Volume:");
-        x = unoui_add_slider(w, lw, y, cw - lw - 8, 0, 100, 70); x->id = ID_VOL;
+        x = unoui_add_slider(w, lw, y, cw - lw - 8, 0, 100, g_pref_vol); x->id = ID_VOL;
         y += row + 4;
         unoui_add_label(w, 8, y + lofs, "Output device:");
         unoui_add_label(w, lw, y + lofs,
@@ -3905,12 +3930,41 @@ static int session_vol(void)
 
 static void session_save(void)
 {
-    unsigned char buf[1024]; char *p = (char *)buf; int a, first = 1, v;
+    unsigned char buf[2048]; char *p = (char *)buf; int a, first = 1, v;
     if (!g_session_ready) return;       /* don't write during boot restore */
     p = ap_str(p, "restore="); *p++ = g_session_restore ? '1' : '0';
     *p++ = '\r'; *p++ = '\n';
     p = ap_str(p, "cur_desk="); p = ap_int(p, g_cur_desk);
     *p++ = '\r'; *p++ = '\n';
+    /* preferences. The mode is written as WIDTHxHEIGHT, not as the dropdown
+     * index it came from: the mode LIST is whatever the firmware enumerates
+     * this boot, so an index means a different mode on a different display (or
+     * after a GOP reports its modes in another order) and would silently
+     * restore the wrong one. Dimensions identify a mode on any machine. */
+    if (g_pref_res_w > 0 && g_pref_res_h > 0) {
+        p = ap_str(p, "res="); p = ap_int(p, g_pref_res_w); *p++ = 'x';
+        p = ap_int(p, g_pref_res_h); *p++ = '\r'; *p++ = '\n';
+    }
+    /* likewise the theme goes out by NAME - the table is compiled in, but a
+     * build that adds or reorders a theme must not repaint the desktop in a
+     * different one just because the row moved. */
+    if (g_theme_sel >= 0 && g_theme_sel < NTHEMES) {
+        p = ap_str(p, "theme="); p = ap_str(p, kThemes[g_theme_sel].name);
+        *p++ = '\r'; *p++ = '\n';
+    }
+    p = ap_str(p, "scale=");    p = ap_int(p, uno_font_ui_scale());   *p++='\r'; *p++='\n';
+    p = ap_str(p, "vol=");      p = ap_int(p, g_pref_vol);            *p++='\r'; *p++='\n';
+    p = ap_str(p, "alite=");    p = ap_int(p, unoui_aurora_lite);     *p++='\r'; *p++='\n';
+    p = ap_str(p, "wall=");     p = ap_int(p, g_wallpaper);           *p++='\r'; *p++='\n';
+    p = ap_str(p, "clock12=");  p = ap_int(p, g_clock_12h);           *p++='\r'; *p++='\n';
+    p = ap_str(p, "battmode="); p = ap_int(p, g_batt_mode);           *p++='\r'; *p++='\n';
+    p = ap_str(p, "dflow=");    p = ap_int(p, g_desk_flow);           *p++='\r'; *p++='\n';
+    p = ap_str(p, "dsort=");    p = ap_int(p, g_desk_sort);           *p++='\r'; *p++='\n';
+    p = ap_str(p, "dsnap=");    p = ap_int(p, g_desk_snap);           *p++='\r'; *p++='\n';
+    p = ap_str(p, "dlock=");    p = ap_int(p, g_desk_lock);           *p++='\r'; *p++='\n';
+    p = ap_str(p, "lidsleep="); p = ap_int(p, g_lidsleep);            *p++='\r'; *p++='\n';
+    p = ap_str(p, "pspeed=");   p = ap_int(p, uno_pc64_pointer_speed_get());
+    *p++='\r'; *p++='\n';
     p = ap_str(p, "open=");
     for (a = 0; a < NAPPS; a++) {
         if (!g_open[a] || !app_restorable(a)) continue;
@@ -4032,6 +4086,97 @@ static void session_restore_geom(const char *buf, int a)
             unoui_geom_settle(&UI, &g_win[a]);
         }
     }
+}
+
+/* ---- Boot: apply the persisted preferences --------------------------------
+ * Split in two because the two halves need different moments in init().
+ *
+ * EARLY runs before unoui_ui_init and before any chrome is laid out, because
+ * resolution and UI scale are the two settings the whole layout is derived
+ * FROM: FB_W/FB_H are live (fb.h maps them to uno_fb_w/h), so setting the mode
+ * here means the UI is built at the right size once, instead of being built
+ * wrong and reflowed. It also means no window ever exists at the old geometry,
+ * so nothing has to be clamped back on-screen afterwards.
+ *
+ * LATE runs after the UI exists, because a theme is applied TO it.
+ *
+ * Both are best-effort: a missing file, a missing key or a value this build no
+ * longer understands leaves that setting at its default. */
+static int prefs_read(unsigned char *buf, long cap)
+{
+    int v, n = uno_fs_volumes(); long got = -1;
+    for (v = 0; v < n && got < 0; v++)
+        got = uno_fs_read(v, "SHELL.CFG", buf, cap - 1);
+    if (got < 0) return 0;
+    buf[got] = 0; return 1;
+}
+
+static void prefs_apply_early(void)
+{
+    unsigned char buf[2048]; const char *p;
+    if (!prefs_read(buf, (long)sizeof buf)) return;
+    p = cfg_line_val((const char *)buf, "res=");
+    if (p) {
+        int want_w = cfg_num(&p), want_h;
+        if (*p == 'x' || *p == 'X') p++;
+        want_h = cfg_num(&p);
+        if (want_w > 0 && want_h > 0) {
+            int i, n = uno_pc64_res_count(); if (n > 12) n = 12;
+            for (i = 0; i < n; i++) {
+                short w, h, z; Boolean act;
+                uno_pc64_res_get(i, &w, &h, &z, &act);
+                if (w == want_w && h == want_h) {
+                    if (!act) uno_pc64_res_set(i);
+                    g_pref_res_w = w; g_pref_res_h = h;
+                    break;
+                }
+            }
+        }
+    }
+    p = cfg_line_val((const char *)buf, "scale=");
+    if (p) { int s = cfg_num(&p), i;
+             for (i = 0; i < NSCALES; i++)
+                 if (g_scale_pcts[i] == s) { uno_font_set_ui_scale(s); break; } }
+}
+
+static void prefs_apply_late(void)
+{
+    unsigned char buf[2048]; const char *p;
+    if (!prefs_read(buf, (long)sizeof buf)) return;
+    p = cfg_line_val((const char *)buf, "theme=");
+    if (p) {
+        int i;
+        for (i = 0; i < NTHEMES; i++) {
+            const char *a = kThemes[i].name; const char *b = p;
+            while (*a && *b && *a == *b) { a++; b++; }
+            if (!*a && (*b == '\r' || *b == '\n' || !*b)) {
+                g_theme_sel = i; unoui_ui_theme(&UI, kThemes[i].theme); break;
+            }
+        }
+    }
+    p = cfg_line_val((const char *)buf, "vol=");
+    if (p) { int n = cfg_num(&p);
+             if (n >= 0 && n <= 100) { g_pref_vol = n; uno_snd_volume(n); } }
+    p = cfg_line_val((const char *)buf, "alite=");
+    if (p) unoui_aurora_lite = cfg_num(&p) ? 1 : 0;
+    p = cfg_line_val((const char *)buf, "wall=");
+    if (p) { int n = cfg_num(&p); if (n >= 0 && n < NWALL) g_wallpaper = n; }
+    p = cfg_line_val((const char *)buf, "clock12=");
+    if (p) g_clock_12h = cfg_num(&p) ? 1 : 0;
+    p = cfg_line_val((const char *)buf, "battmode=");
+    if (p) { int n = cfg_num(&p); if (n >= 0 && n <= BATT_BOTH) g_batt_mode = n; }
+    p = cfg_line_val((const char *)buf, "dflow=");
+    if (p) g_desk_flow = cfg_num(&p) ? 1 : 0;
+    p = cfg_line_val((const char *)buf, "dsort=");
+    if (p) g_desk_sort = cfg_num(&p) ? 1 : 0;
+    p = cfg_line_val((const char *)buf, "dsnap=");
+    if (p) g_desk_snap = cfg_num(&p) ? 1 : 0;
+    p = cfg_line_val((const char *)buf, "dlock=");
+    if (p) g_desk_lock = cfg_num(&p) ? 1 : 0;
+    p = cfg_line_val((const char *)buf, "lidsleep=");
+    if (p) g_lidsleep = cfg_num(&p) ? 1 : 0;
+    p = cfg_line_val((const char *)buf, "pspeed=");
+    if (p) { int n = cfg_num(&p); if (n >= 25 && n <= 800) uno_pc64_pointer_speed(n); }
 }
 
 /* Boot: reopen the saved session, or fall back to opening the Control Panel. */
@@ -4427,8 +4572,14 @@ static void res_apply(void)
 
 static void res_keep(void)
 {
+    short w, h, z; Boolean act;
     g_res_confirm = 0;
     g_res_sel = res_active_index();
+    /* Keep is the ONLY place a mode is persisted: it is the click that proves a
+     * human can still read the screen. See the note on g_pref_res_w. */
+    uno_pc64_res_get(g_res_sel, &w, &h, &z, &act);
+    g_pref_res_w = w; g_pref_res_h = h;
+    session_save();
     res_ui_refresh();
 }
 
@@ -4895,18 +5046,30 @@ static void on_action(const unoui_action *a)
     case ID_START:    toggle_launcher(); break;
     case ID_SHUTDOWN: uno_pc64_shutdown(); break;
     case ID_RESTART:  uno_pc64_restart();  break;
-    case ID_THEME: if (a->value >= 0 && a->value < NTHEMES) unoui_ui_theme(&UI, kThemes[a->value].theme); break;
-    case ID_DARK:  unoui_ui_theme(&UI, a->value ? &theme_aurora_dark : &theme_aurora_light); break;
-    case ID_ALITE: unoui_aurora_lite = a->value ? 1 : 0; g_dirty = 1; break;   /* Aurora full<->lite (no live composite) */
-    case ID_LIDSLP: g_lidsleep = a->value ? 1 : 0; break;                      /* lid-close enters sleep */
+    /* Every one of these ends in session_save(): a preference the user has
+     * changed is persisted at the moment they change it, the same way the
+     * session already was. Saving here rather than at shutdown is what makes it
+     * survive the way a test box actually ends a session - a hard reset or a
+     * power cut, neither of which runs any shutdown path. */
+    case ID_THEME: if (a->value >= 0 && a->value < NTHEMES) {
+                       g_theme_sel = a->value;
+                       unoui_ui_theme(&UI, kThemes[a->value].theme);
+                       session_save(); } break;
+    case ID_DARK:  g_theme_sel = a->value ? THEME_AURORA_DARK : THEME_AURORA_LIGHT;
+                   unoui_ui_theme(&UI, a->value ? &theme_aurora_dark : &theme_aurora_light);
+                   session_save(); break;
+    case ID_ALITE: unoui_aurora_lite = a->value ? 1 : 0; g_dirty = 1; session_save(); break;   /* Aurora full<->lite (no live composite) */
+    case ID_LIDSLP: g_lidsleep = a->value ? 1 : 0; session_save(); break;      /* lid-close enters sleep */
     /* desktop arrangement: rebuild the icon layer in place */
-    case ID_DFLOW: g_desk_flow = a->value ? 1 : 0; build_desktop(); g_dirty = 1; break;
-    case ID_DSORT: g_desk_sort = a->value ? 1 : 0; build_desktop(); g_dirty = 1; break;
+    case ID_DFLOW: g_desk_flow = a->value ? 1 : 0; build_desktop(); g_dirty = 1; session_save(); break;
+    case ID_DSORT: g_desk_sort = a->value ? 1 : 0; build_desktop(); g_dirty = 1; session_save(); break;
     case ID_WALL: if (a->value >= 0 && a->value < NWALL) {   /* desktop wallpaper */
-                      g_wallpaper = a->value; unoui_bg_invalidate(); g_dirty = 1; } break;
-    case ID_CLOCKFMT: g_clock_12h = a->value ? 1 : 0; fmt_clock(0); g_dirty = 1; break;
+                      g_wallpaper = a->value; unoui_bg_invalidate(); g_dirty = 1;
+                      session_save(); } break;
+    case ID_CLOCKFMT: g_clock_12h = a->value ? 1 : 0; fmt_clock(0); g_dirty = 1; session_save(); break;
     case ID_BATTMODE: if (a->value >= 0 && a->value <= BATT_BOTH) {
-                          g_batt_mode = a->value; fmt_batt(); g_dirty = 1; } break;
+                          g_batt_mode = a->value; fmt_batt(); g_dirty = 1;
+                          session_save(); } break;
     case ID_CPTAB: if (a->value >= 0 && a->value < CT_N) {   /* Control Panel tab */
                        g_ctrl_tab = a->value;
                        g_win[APP_CTRL].scroll_y = 0;   /* a new tab starts at its top */
@@ -4946,13 +5109,14 @@ static void on_action(const unoui_action *a)
     case ID_WIFIFORGET: cp_wifi_forget(); break;
     case ID_WIFIPSK:   break;                               /* typing; nothing to do */
     case ID_SESSION: g_session_restore = a->value ? 1 : 0; session_save(); break;
-    case ID_PSPEED: uno_pc64_pointer_speed(a->value); break;
-    case ID_DSNAP:  g_desk_snap = a->value ? 1 : 0; break;
-    case ID_DLOCK:  g_desk_lock = a->value ? 1 : 0; break;
+    case ID_PSPEED: uno_pc64_pointer_speed(a->value); session_save(); break;
+    case ID_DSNAP:  g_desk_snap = a->value ? 1 : 0; session_save(); break;
+    case ID_DLOCK:  g_desk_lock = a->value ? 1 : 0; session_save(); break;
     case ID_DARRANGE: {          /* forget every hand placement and reflow */
         int i; for (i = 0; i < 32; i++) g_icon_pos[i].placed = 0;
         build_desktop(); g_dirty = 1; break; }
-    case ID_VOL:   uno_snd_volume(a->value); break;    /* PCM gain; PC speaker has none */
+    case ID_VOL:   g_pref_vol = a->value; uno_snd_volume(a->value);
+                   session_save(); break;              /* PCM gain; PC speaker has none */
     /* Selecting only selects.  This used to call uno_pc64_res_set() straight
      * from the dropdown, so cursoring down the list switched the desktop on
      * every keypress instead of once, when you had chosen. */
@@ -4979,6 +5143,7 @@ static void on_action(const unoui_action *a)
     case ID_SCALE: if (a->value >= 0 && a->value < NSCALES) {
                        uno_font_set_ui_scale(g_scale_pcts[a->value]);
                        rebuild_shell();
+                       session_save();
                    } break;
     case ID_CAL:   open_calendar(); break;              /* calendar date picker */
     default: break;
@@ -5695,6 +5860,10 @@ int main(void)
     int idle = 0, halfsecs = 0, was_dragging = 0, dragging = 0;
 
     uno_pc64_init();
+    /* BEFORE unoui_ui_init: resolution and UI scale are what the whole layout is
+       derived from, and FB_W/FB_H are live - so applying them here builds the UI
+       at the right size once instead of building it wrong and reflowing. */
+    prefs_apply_early();
     unoui_ui_init(&UI, &theme_aurora_light, FB_W, FB_H);   /* modern default look */
     /* Opaque window drag. The rubber band existed because dragging used to
        re-run the whole alpha-blend scene painter per mouse move; the scene
@@ -5733,6 +5902,10 @@ int main(void)
      * MUST run before the shell chrome is built: the taskbar, icon grid and
      * launcher are all laid out in the live font's metrics. */
     uno_font_use(0);
+    /* the rest of the preferences: after the UI exists (a theme is applied TO
+       it) but before the chrome and icon layer are built below, so they are
+       laid out once in the restored theme rather than rebuilt into it. */
+    prefs_apply_late();
     g_res_sel = res_active_index();     /* the Display tab opens on the truth  */
 #ifdef UNO_DEBUG
     /* DEBUG.CFG `layout-audit`: sweep every window for content that will be cut
