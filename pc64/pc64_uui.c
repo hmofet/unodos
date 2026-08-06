@@ -85,7 +85,7 @@ static const char *kThemeNames[NTHEMES];
  * index a-NNATIVE. */
 enum { APP_CTRL, APP_EDIT, APP_FILES, APP_SYS, APP_CLOCK, APP_SETUP,
        APP_MUSIC, APP_UNOAMP, NNATIVE };
-#define NEXTRA 10                         /* extra native apps beyond the bridge */
+#define NEXTRA 11                         /* extra native apps beyond the bridge */
 #define EX_RUNNER  (NNATIVE + UNOAPP_COUNT)       /* Runner3D: shell app index    */
 #define EX_BROWSER (NNATIVE + UNOAPP_COUNT + 1)   /* Browser: shell app index     */
 #define EX_STUDIO  (NNATIVE + UNOAPP_COUNT + 2)   /* Studio IDE (a .UNO module)   */
@@ -96,6 +96,7 @@ enum { APP_CTRL, APP_EDIT, APP_FILES, APP_SYS, APP_CLOCK, APP_SETUP,
 #define EX_UOWORD  (NNATIVE + UNOAPP_COUNT + 7)   /* UnoWord (a .UNO module)      */
 #define EX_UOCALC  (NNATIVE + UNOAPP_COUNT + 8)   /* UnoCalc (a .UNO module)      */
 #define EX_UOSHOW  (NNATIVE + UNOAPP_COUNT + 9)   /* UnoShow (a .UNO module)      */
+#define EX_LOGVIEW (NNATIVE + UNOAPP_COUNT + 10)  /* System Log (a .UNO module)   */
 #define NAPPS  (NNATIVE + UNOAPP_COUNT + NEXTRA)
 #define APP_TBAR 18                       /* legacy apps' own title-bar height */
 static const char *kAppNames[NNATIVE] =
@@ -272,6 +273,22 @@ static void uoword_ensure(void)
     }
 }
 
+/* ---- System Log: unolog's viewer, a unoui-CLASS module -------------------
+ * (APPS\LOGVIEW.UNO).  Same hosting contract as Studio and Photos: a distro
+ * without the file simply has no viewer, and unolog still keeps the log. */
+static const UnoUuiApp *g_logview;
+static int  g_logview_tried, g_logview_present;
+static void logview_ensure(void)
+{
+    if (g_logview || g_logview_tried) return;
+    g_logview_tried = 1;
+    {
+        UnoUuiEntry e = uno_mod_load_uui("LOGVIEW.UNO");
+        if (e) g_logview = e(0);
+        if (g_logview && g_logview->abi != UNO_UUIAPP_ABI) g_logview = 0;
+    }
+}
+
 static const UnoUuiApp *g_uoshow;
 static int  g_uoshow_tried, g_uoshow_present;
 static void uoshow_ensure(void)
@@ -312,6 +329,7 @@ static const char *app_name(int a)
        : a == EX_UOSHOW ? "UnoShow"
        : a == EX_USERAPP ? unoapp_user_title()
        : a == EX_PYAPP ? py_app_name()
+       : a == EX_LOGVIEW ? "System Log"
        : a < NNATIVE ? kAppNames[a] : unoapp_name(a - NNATIVE); }
 static const char *app_short(int a)
 { return a == EX_RUNNER ? "Runner" : a == EX_BROWSER ? "Browser"
@@ -322,6 +340,7 @@ static const char *app_short(int a)
        : a == EX_UOSHOW ? "UnoShow"
        : a == EX_USERAPP ? unoapp_user_title()
        : a == EX_PYAPP ? py_app_name()
+       : a == EX_LOGVIEW ? "Log"
        : a < NNATIVE ? kNativeShort[a] : unoapp_name(a - NNATIVE); }
 
 /* hidden from the launcher + desktop: the user/py-app slots until something
@@ -335,6 +354,7 @@ static int app_hidden(int a)
     if (a == EX_UOWORD)  return !g_uoword_present;
     if (a == EX_UOCALC)  return !g_uocalc_present;
     if (a == EX_UOSHOW)  return !g_uoshow_present;
+    if (a == EX_LOGVIEW) return !g_logview_present;
     return 0;
 }
 
@@ -358,6 +378,7 @@ static int app_icon(int a)
     if (a == EX_UOWORD)  return PCI_UOWORD;
     if (a == EX_UOCALC)  return PCI_UOCALC;
     if (a == EX_UOSHOW)  return PCI_UOSHOW;
+    if (a == EX_LOGVIEW) return PCI_SYS;   /* the system-ish emblem */
     if (a == EX_USERAPP) return PCI_GENERIC;
     if (a == EX_PYAPP)   return PCI_GENERIC;
     if (a >= 0 && a < NNATIVE) return kNativeIcon[a];
@@ -2810,6 +2831,14 @@ static void build_legacy(int a)
         unoui_add_label(&g_win[a], 8, 28, "This system ships without the viewer.");
         return;
     }
+    if (a == EX_LOGVIEW) {             /* the log viewer fills its window    */
+        logview_ensure();
+        if (g_logview) { g_logview->build(&g_win[a]); return; }
+        unoui_window_init(&g_win[a], "System Log", 60, 40, 340, 90);
+        unoui_add_label(&g_win[a], 8, 10, "APPS\LOGVIEW.UNO is missing");
+        unoui_add_label(&g_win[a], 8, 28, "The log is still kept in \LOGS.");
+        return;
+    }
     if (a == EX_UOSHOW) {              /* the presentation app fills it too  */
         uoshow_ensure();
         if (g_uoshow) { g_uoshow->build(&g_win[a]); return; }
@@ -2929,6 +2958,7 @@ static void open_app(int a)
         else if (a == EX_SSH)       pc64_sshapp_open();          /* ssh client    */
         else if (a == EX_STUDIO)    { if (g_studio && g_studio->opened) g_studio->opened(); }
         else if (a == EX_PHOTOS)    { if (g_photos && g_photos->opened) g_photos->opened(); }
+        else if (a == EX_LOGVIEW)   { if (g_logview && g_logview->opened) g_logview->opened(); }
         else if (a == EX_UOWORD)    { if (g_uoword && g_uoword->opened) g_uoword->opened(); }
         else if (a == EX_UOCALC)    { if (g_uocalc && g_uocalc->opened) g_uocalc->opened(); }
         else if (a == EX_UOSHOW)    { if (g_uoshow && g_uoshow->opened) g_uoshow->opened(); }
@@ -2964,6 +2994,8 @@ static void open_app(int a)
         { int wi = g_uocalc->canvas_index(); if (wi >= 0) UI.focus_wi = wi; }
     if (a == EX_UOWORD && g_uoword && g_uoword->canvas_index)
         { int wi = g_uoword->canvas_index(); if (wi >= 0) UI.focus_wi = wi; }
+    if (a == EX_LOGVIEW && g_logview && g_logview->canvas_index)
+        return g_logview->canvas_index();
     if (a == EX_PHOTOS && g_photos && g_photos->canvas_index)
         { int wi = g_photos->canvas_index(); if (wi >= 0) UI.focus_wi = wi; }
     if (a == EX_PYAPP && g_pyapp && g_pyapp->canvas_index)
@@ -3554,6 +3586,7 @@ static void close_app(int a)
     else if (a == APP_MUSIC) pc64_music_closed();       /* stop playback      */
     else if (a == EX_STUDIO) { if (g_studio && g_studio->closed) g_studio->closed(); }
     else if (a == EX_PHOTOS) { if (g_photos && g_photos->closed) g_photos->closed(); }
+    else if (a == EX_LOGVIEW) { if (g_logview && g_logview->closed) g_logview->closed(); }
     else if (a == EX_PYAPP)  { if (g_pyapp) { unoscript_app_caps_end();
                                  if (g_pyapp->closed) g_pyapp->closed();
                                  if (g_pyrt) g_pyrt->unload();
@@ -5891,6 +5924,7 @@ int main(void)
     unoapp_setup(&g_dirty);             /* wire the legacy-app KernelApi */
     g_studio_present = uno_mod_present("STUDIO.UNO");   /* IDE shipped here? */
     g_photos_present = uno_mod_present("PHOTOS.UNO");   /* viewer shipped?   */
+    g_logview_present = uno_mod_present("LOGVIEW.UNO"); /* the log viewer?   */
     g_uoword_present = uno_mod_present("UOWORD.UNO");   /* UnoWord shipped?  */
     g_uocalc_present = uno_mod_present("UOCALC.UNO");   /* UnoCalc shipped?  */
     g_uoshow_present = uno_mod_present("UOSHOW.UNO");   /* UnoShow shipped?  */
