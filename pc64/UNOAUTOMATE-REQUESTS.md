@@ -11,6 +11,31 @@ fulfilled.
 
 ---
 
+## 2026-08-06 — CLAIM (browser lane): a page bigger than 48 KB (branch `bigpage`)
+
+Taking the transport and document size caps in the browser lane:
+`pc64_http.c`'s `RAW_MAX` and `pc64_browser.c`'s `DOC_MAX`, plus an additive
+length accessor on `pc64_cache`. No other lane's files.
+
+`https://google.com` renders BLANK with `HTTP/1.0 200 OK` in the status band -
+a different blank page from the one fixed above, and one nothing in the tree
+could catch, because the gate's server serves small pages. Measured against the
+real site: `www.google.com` answers 1,384 bytes of headers and an 82,760-byte
+body whose `<body>` opens at body offset **62,883**. `RAW_MAX` (48 KB) cuts the
+response at body offset 47,767 and `DOC_MAX` (32 KB) cuts it again at 32,767, so
+the parser is handed a document that is nothing but `<head>` - scripts and one
+stylesheet - and renders exactly what that says: nothing.
+
+The caps are also inconsistent with the rest of the browser, which is the
+clearest sign they are stale rather than deliberate: `pc64_fetch` already allows
+`FETCH_ONE_MAX` = 1 MB per subresource and sizes its buffer from
+`pc64_http_len()`, and `pc64_cache` already stores `CACHE_ONE_MAX` = 256 KB per
+page. Only the transport that feeds them both stops at 48 KB.
+
+Second defect, and the one that made this expensive to see: **truncation is
+silent**. Hitting the cap goes down the same path as a complete response, so the
+status line says `200 OK` and the page is blank.
+
 ## 2026-08-06 — FIXED (browser): the blank page, and my own hypothesis was wrong
 
 Closes the FINDING below. **The stylesheets had nothing to do with it**, and
