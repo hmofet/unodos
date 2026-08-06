@@ -18,6 +18,7 @@
  * ======================================================================== */
 #include "unovirt.h"
 #include <stdio.h>
+#include "pc64_native.h"   /* the PIT counts against the real TSC */
 
 typedef unsigned int       u32;
 typedef unsigned short     u16;
@@ -199,6 +200,67 @@ int uno_vdev_mmio(u64 gpa, int is_write, unsigned size, u64 *val)
  * Port I/O is also the one place x86 is EASIER than ARM here: the exit
  * qualification carries the port, the size and the direction, so unlike MMIO
  * there is no instruction to decode. */
+/* ---- an 8254, because a kernel calibrates its clock against one ----------
+ *
+ * Linux measures the TSC by watching PIT channel 2 count down, and a machine
+ * where that counter never moves is a machine where `quick_pit_calibrate`
+ * never returns. It presented as a kernel that stopped printing after "DMI
+ * not present or invalid." and sat on port 0x42 forever - which is why the
+ * diagnostic that mattered was "which port is it on", not the log.
+ *
+ * The counter is driven by the REAL TSC rather than by a tick of our own, and
+ * that is what makes the calibration come out right even though the guest
+ * only runs in slices: the kernel is reading the same TSC we are, so both
+ * sides of its ratio stop and start together. */
+#define PIT_HZ 1193182ull
+static struct { u16 initial; u64 start; int wr_hi, rd_hi; int armed; } P;
+
+static u64 pit_elapsed(void)
+{
+    u64 per_us = uno_native_tsc_per_us();
+    u64 dt = uno_native_rdtsc() - P.start;
+    if (!per_us) per_us = 1000ull;
+    return (dt / per_us) * PIT_HZ / 1000000ull;
+}
+
+static int pit_io(unsigned port, int is_write, unsigned long long *val)
+{
+    switch (port) {
+    case 0x43:                                   /* the command register    */
+        if (is_write && ((*val >> 6) & 3) == 2) { P.wr_hi = 0; P.rd_hi = 0; }
+        return 1;
+    case 0x42:
+        if (is_write) {
+            if (!P.wr_hi) { P.initial = (u16)(*val & 0xFF); P.wr_hi = 1; }
+            else {
+                P.initial |= (u16)((*val & 0xFF) << 8);
+                P.wr_hi = 0;
+                P.start = uno_native_rdtsc();
+                P.armed = 1;
+            }
+        } else {
+            /* Wrapping, because mode 0 does not stop at zero - it carries on
+             * decrementing, and a counter that sticks at 0 is one a caller
+             * spins on just as happily as one that never moves. */
+            u16 now = (u16)(P.initial - (u16)pit_elapsed());
+            *val = P.rd_hi ? (now >> 8) : (now & 0xFF);
+            P.rd_hi = !P.rd_hi;
+        }
+        return 1;
+    case 0x61:
+        if (is_write) { if (*val & 1) P.start = uno_native_rdtsc(); }
+        else {
+            /* Bit 5 is OUT2: high once the count has run out. Bit 4 is the
+             * refresh toggle, which some code watches to prove time passes. */
+            int out2 = (P.armed && pit_elapsed() >= P.initial) ? 1 : 0;
+            *val = (unsigned)(out2 << 5) | (unsigned)((pit_elapsed() & 1) << 4) | 1;
+        }
+        return 1;
+    default:
+        return 0;
+    }
+}
+
 #define COM1 0x3F8
 static struct { char line[160]; int n; int chars; } U;
 
@@ -206,6 +268,7 @@ int uno_vdev_pio(unsigned port, int is_write, unsigned size,
                  unsigned long long *val, void (*sink)(const char *))
 {
     (void)size;
+    if (pit_io(port, is_write, val)) return 1;
     if (port < COM1 || port > COM1 + 7) {
         /* Everything else answers as absent hardware: reads all-ones, writes
          * dropped. A kernel probing a port that is not there gets the same

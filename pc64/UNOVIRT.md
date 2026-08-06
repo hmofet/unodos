@@ -4,7 +4,7 @@ The appliance machinery: can this machine host a guest, and later, the guest
 itself. The programme and its phases are `docs/UNOVIRT-PLAN.md`; this file is
 the API surface, its changelog, and the things a consumer has to know.
 
-**Status: A0 through A5 [implemented on VMX]. A6 [in progress: **Linux boots and prints**, not yet to a shell]. A1 [unproved on SVM].** The
+**Status: A0 through A5 [implemented on VMX]. A6 [in progress: **Linux runs on the frame loop, 128 lines deep**, not yet to a shell]. A1 [unproved on SVM].** The
 capability gate runs on every boot. The foothold is real on Intel: on devbuntu
 (bare metal, nested KVM) UnoDOS enters VMX operation, runs a guest, takes it
 through a CPUID intercept, reads its marker back out of guest memory, and then
@@ -414,11 +414,41 @@ The sequence is the value here, so it is kept:
    ports** - so the kernel was not failing to reach its serial port, it was
    reaching the host's.
 
+### A6b: somewhere to run, a clock, and an instruction that was not there
+
+    vm linux: 128 lines 8433 chars, 58689 exits, 57131 pio,
+              last "active return thunk: its_return_thunk"
+
+The kernel is out of the selftest and running from `uno_vmm_tick` - a 4 ms
+slice per frame, the same budget the spinner gets, for as long as it takes.
+Three findings, and the last two are the same lesson twice:
+
+**One VMCS means one guest.** Arming A3's spinner after placing the kernel
+vmcleared and reconfigured the block the kernel was using. That does not fail;
+it silently replaces a booting Linux with two bytes of `jmp $`, and the only
+symptom is a kernel that stops saying anything.
+
+**A kernel calibrates its clock against an 8254.** After "DMI not present" it
+sat on port `0x42` forever: `quick_pit_calibrate` watches channel 2 count down,
+and a counter that never moves is a loop that never ends. The counter is driven
+by the real TSC rather than a tick of our own, which is what makes the
+calibration come out right even though the guest only runs in slices - the
+kernel reads the same TSC we do, so both sides of its ratio stop and start
+together. That took it from 24 lines to 54.
+
+**An instruction the CPU has does not necessarily work in a guest.** The next
+stop was `PANIC: early exception 0x06 ... native_flush_tlb_global+0x3c`, and
+the faulting bytes were `66 0f 38 82` - INVPCID. It raises #UD in VMX non-root
+operation unless a secondary control says otherwise, while CPUID cheerfully
+tells the guest it is available. One bit, and 54 lines became 128. It is
+exactly the shape of the port-I/O finding in A6a: the default is not "works",
+it is "ask first".
+
 ### What is left before a shell
 
-- **Somewhere to run.** Three seconds inside a boot-time selftest is not where
-  a kernel lives. It belongs behind `uno_vmm_tick`, which is what A3 built:
-  the guest gets a slice per frame and the desktop keeps drawing.
+- **The next unhandled exit**, whatever it is: the run ends on one after 128
+  lines, in the middle of CPU mitigation setup. Decode it the way the others
+  were decoded.
 - **A LAPIC and a timer.** `nolapic no_timer_check` papers over their absence,
   and a kernel with no timer cannot schedule - which is most of what reaching
   a shell means.

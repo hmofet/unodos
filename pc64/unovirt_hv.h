@@ -89,6 +89,7 @@ typedef struct uno_vm_linux {
     unsigned fault_vec, fault_err;      /* 0xFFFF when it was not a fault   */
     unsigned long long fault_addr;
     int pio, pio_n;                     /* port I/O: how much, and where    */
+    unsigned last_port;                 /* the one it is sitting on         */
     unsigned short pio_ports[8];
 } uno_vm_linux;
 
@@ -137,6 +138,11 @@ typedef struct uno_hv {
 
     /* A6: load a bzImage into the carve, hand it a zero page, and run it. */
     int (*linux_boot)(struct uno_vm_linux *out);
+
+    /* A6b: one budgeted slice of the kernel, from the frame loop.  A boot
+     * needs seconds and a selftest cannot give them; this is where a guest
+     * actually lives.  Returns 0 once the kernel has stopped. */
+    int (*linux_slice)(unsigned budget_us, struct uno_vm_linux *out);
 } uno_hv_t;
 
 const uno_hv_t *uno_hv_svm(void);         /* hv_svm.c                        */
