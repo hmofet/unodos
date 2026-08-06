@@ -25,7 +25,8 @@ enum {
     UNO_VX_SHUTDOWN,            /* guest triple-faulted; it is over          */
     UNO_VX_INTR,                /* a host interrupt is pending               */
     UNO_VX_NPF,                 /* second-stage fault (A2)                   */
-    UNO_VX_INVALID              /* the CPU refused the guest state           */
+    UNO_VX_INVALID,             /* the CPU refused the guest state           */
+    UNO_VX_PREEMPT              /* the slice clock ran out (A3)              */
 };
 
 typedef struct uno_vmexit {
@@ -82,6 +83,13 @@ typedef struct uno_hv {
     int (*ept)(unsigned long long want, unsigned long long gpa,
                unsigned long long *got, unsigned long long *hpa,
                uno_vmexit *last);
+
+    /* A3: place a guest that never yields, then run it one budget at a time.
+     * `slice` returns 0 when no such guest is placed.  Together these are how
+     * a guest is scheduled on an OS with no scheduler: the frame loop hands
+     * it a slice and the machine takes it back. */
+    int (*spin_start)(void);
+    int (*slice)(unsigned budget_us, uno_vmexit *out);
 } uno_hv_t;
 
 const uno_hv_t *uno_hv_svm(void);         /* hv_svm.c                        */

@@ -3,6 +3,7 @@
 
     UNO_DEBUG=1 UNO_DETACH=1 UNO_DBGCON=1 ./build.sh
     python3 tools/hv_remote.py devbuntu.local
+    python3 tools/hv_remote.py devbuntu.local --shot   # + a screenshot mid-slice
 
 WHY THIS EXISTS. Executing VMLAUNCH or VMRUN needs the virtualization
 extension to actually work, not merely to be advertised, and the development
@@ -48,6 +49,28 @@ tail -3 /tmp/hv.log
 """
 
 
+def shot(host):
+    """Boot again and screendump while the A3 slice test is running.
+
+    The log can say a guest was sliced 120 times; only a picture can say the
+    desktop was still being painted between the slices."""
+    subprocess.run(["scp", "-q", "tools/hv_shot_remote.py", host + ":/tmp/"],
+                   check=True)
+    r = subprocess.run(["ssh", "-o", "BatchMode=yes", host,
+                        "python3 /tmp/hv_shot_remote.py 26"],
+                       capture_output=True, text=True)
+    print(r.stdout.strip())
+    if subprocess.run(["scp", "-q", host + ":/tmp/hv_shot.ppm",
+                       "shots/hv_slice.ppm"]).returncode:
+        return
+    sys.path.insert(0, "tools")
+    import ppm2png
+    w, h, px = ppm2png.read_ppm("shots/hv_slice.ppm")
+    ppm2png.write_png("shots/hv_slice.png", w, h, px)
+    os.remove("shots/hv_slice.ppm")
+    print("shots/hv_slice.png (%dx%d)" % (w, h))
+
+
 def main():
     host = sys.argv[1] if len(sys.argv) > 1 else "devbuntu.local"
     if not os.path.exists(IMG):
@@ -68,6 +91,8 @@ def main():
     print(r.stdout)
     if r.stderr.strip():
         print("stderr:", r.stderr.strip()[:400])
+    if "--shot" in sys.argv:
+        shot(host)
     ok = "round trip" in r.stdout and "OK" in r.stdout
     print("hv remote: %s" % ("PASS" if ok else "no round trip - read the trace above"))
     return 0 if ok else 1

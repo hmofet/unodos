@@ -4,7 +4,7 @@ The appliance machinery: can this machine host a guest, and later, the guest
 itself. The programme and its phases are `docs/UNOVIRT-PLAN.md`; this file is
 the API surface, its changelog, and the things a consumer has to know.
 
-**Status: A0, A1, A2 [implemented on VMX]. A1 [unproved on SVM].** The
+**Status: A0, A1, A2, A3 [implemented on VMX]. A1 [unproved on SVM].** The
 capability gate runs on every boot. The foothold is real on Intel: on devbuntu
 (bare metal, nested KVM) UnoDOS enters VMX operation, runs a guest, takes it
 through a CPUID intercept, reads its marker back out of guest memory, and then
@@ -28,6 +28,8 @@ behind EPT, in an address space of its own.
 | `uno_vmm_reserve()` | A2: take the carve before ExitBootServices, beside the module arena |
 | `uno_vmm_carve_base/size()` | where it is and how big, 0 for none |
 | `uno_vmm_gpa(gpa, len)` | **the security boundary**: a guest address the host may touch, or NULL |
+| `uno_vmm_tick()` | A3: one budgeted slice of any running guest, once per shell frame |
+| `uno_vmm_slice_str()` | what the slice test measured |
 
 `probe` is latched; `eligible` is live, because detaching from the firmware
 changes the answer and nothing else does.
@@ -233,6 +235,54 @@ over-allocates by 2 MiB and rounds up.
 the next 2 MiB would hand the guest whatever follows the carve in host memory,
 and it would work perfectly in every test.
 
+## A3: how a guest is scheduled on an OS with no scheduler
+
+    vm slice: 120 slices x 4000 us budget: max 4811 us, mean 4025 us,
+              0 exits that were not the clock
+
+The guest is two bytes, `jmp $`. It makes no hypercall, takes no fault and
+touches no device, so **nothing it does can end its turn** - which is the
+property being tested. It does not get scheduled; it gets a budget out of a
+frame the shell was going to spend anyway, and the machine takes the core back
+whether or not it cooperates.
+
+- **mean 4025 us against a 4000 us budget** is the preemption timer being
+  accurate to half a percent, which means the budget is a real control and not
+  an aspiration.
+- **max 4811 us** is the worst slice over 120, comfortably under the 100 ms
+  that `pc64/DEBUG.md` counts as a hitch.
+- **0 exits that were not the clock** is the load-bearing number. Every single
+  slice ended because the machine ended it.
+
+`shots/hv_slice.png` is the other half, and it is the half a log cannot show:
+the desktop mid-run, Control Panel open, HUD reading 0.5 ms render and 93%
+idle, zero crash reports, while the guest spins in the gaps between frames.
+
+**Why the budget is a correctness constraint rather than a tuning knob.** The
+watchdog fires on a heartbeat 20 s stale and anything over 100 ms is a logged
+hitch, so a slice has to fit inside a frame with room left for the desktop to
+draw. 4 ms of a 16 ms frame is about a quarter of a core, and that is the
+honest number for a single-core appliance until A9 gives a guest a core of its
+own.
+
+**Two mechanisms bound a slice, and the second is not redundancy.** The
+preemption timer ends it on time; external-interrupt exiting means a host
+interrupt arriving mid-slice ends it too, rather than being delivered through
+the guest's IDT - which this guest does not have, and which would turn every
+timer tick into a triple fault.
+
+### The defect this phase found in the last one
+
+A VM exit loads host RFLAGS with `0x2`. Every flag clear, **IF included**. The
+A1 and A2 stubs did not restore them, so from the first guest onwards the host
+ran with interrupts disabled - and nothing in this OS is interrupt-driven
+except the LAPIC watchdog, so the machine looked perfectly healthy while the
+one mechanism that exists to catch a hang was dead. `pushfq`/`popfq` now
+bracket the entry (S-HV-23).
+
+It is worth noticing what made this findable: A3 is the first phase whose
+subject is the machine still working afterwards, rather than a value arriving.
+
 ## Changelog
 
 - **2026-08-06, API 1.** A0: the capability gate. `uno_vmm_probe`,
@@ -245,6 +295,9 @@ and it would work perfectly in every test.
 - **2026-08-06, API 1.** A1 PASSES on VMX (`hv_vmx.c`), on devbuntu under KVM
   at L0: entered, round trip, crasher contained, boot continued. `tools/
   hv_remote.py` runs it.
+- **2026-08-06, API 1.** A3: `uno_vmm_tick` / `uno_vmm_slice_str`, the
+  preemption-timer slice, and the RFLAGS fix in the entry stub. Contracts
+  S-HV-20..23.
 - **2026-08-06, API 1.** A2: `uno_vmm_reserve`, `uno_vmm_carve_base/size`,
   `uno_vmm_gpa`, and EPT in the VMX backend. The guest runs at low
   guest-physical addresses in a 1536 MB write-back carve. Contracts
