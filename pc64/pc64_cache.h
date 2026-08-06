@@ -27,6 +27,13 @@ typedef struct {
 int  pc64_cache_get(const char *url, char *body, int bodymax,
                     char *status, int statusmax);
 
+/* How many bytes a fresh entry for `url` holds, or <0 if there is none. For a
+ * caller that sizes its buffer before taking, which is what the transport does
+ * now that its receive buffer grows to the response instead of starting at the
+ * maximum. Does NOT drop a stale entry - only reports it as absent - so this
+ * stays a question, and _get remains the one thing that consumes. */
+int  pc64_cache_len(const char *url);
+
 /* Offer a response to the cache. Ignores anything it should not keep. */
 void pc64_cache_put(const char *url, const char *body, int len,
                     const char *status, const pc64_cache_ctl *ctl);
