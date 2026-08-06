@@ -26,7 +26,7 @@ in the final section, **Suspected divergences**.
 
 Areas: BOOT, FB, FONT, UUI, SHELL, FAT, FS, BLK, USB, INP, NET, NIC, WIFI,
 TLS, HTTP, SND, ACPI, MOD, DBG, STRESS, NTST, WRITE, FILES, MUSIC, CLOCK,
-BROWSER, JS, STUDIO, PHOTOS, PAINT, GAME, INST, MAC, PY, LIBC.
+BROWSER, JS, STUDIO, PHOTOS, PAINT, GAME, INST, MAC, PY, LIBC, HV.
 
 ---
 
@@ -1628,6 +1628,55 @@ decoders ship inside PHOTOS.UNO and are host-tested only.
   no crash, no hang).
 - **S-MEDIA-08** [manual] Image decoders (PNG/JPEG/…) live in PHOTOS.UNO
   (module), not the kernel, host-tested.
+
+## S-HV, unovirt capability gate (`unovirt.c`, `unovirt.h`)
+
+The A0 half of docs/UNOVIRT-PLAN.md: what this machine could host, and why not.
+Every contract here is about the gate being HONEST and INERT, because the
+failure mode that matters is a machine that reports itself hostable and then
+faults on the first instruction that assumes it.
+
+- **S-HV-01** [auto] `uno_vmm_probe()` MUST be idempotent: the second call MUST
+  return the same pointer and MUST NOT re-read CPUID or any MSR.
+  check: snapshot the struct, call again, memcmp.
+- **S-HV-02** [auto] The probe MUST NOT change machine state: `IA32_FEATURE_
+  CONTROL` (Intel) / `VM_CR` (AMD), `CR4` and `EFER` MUST read identically
+  before and after it. It executes no `wrmsr`, no `vmxon` and no `vmrun`, so a
+  probe on an ineligible machine leaves no trace.
+- **S-HV-03** [auto] A capability MSR MUST be read only when the CPUID bit that
+  makes it architectural is set: the `IA32_VMX_*` block only under
+  CPUID.1:ECX[5]; `IA32_VMX_PROCBASED_CTLS2` only when the primary controls'
+  allowed-1 half has bit 31; `IA32_VMX_EPT_VPID_CAP` only when EPT is allowed;
+  `VM_CR` and CPUID.8000000A only under CPUID.80000001:ECX[2]. On a machine
+  with neither extension the probe MUST complete having read NO MSR at all.
+- **S-HV-04** [auto] VMX capabilities MUST be taken from the ALLOWED-1 (high)
+  half of the capability MSRs. Reading the allowed-0 half MUST NEVER be the
+  source of a reported capability (it reports what must be set, not what may).
+- **S-HV-05** [auto] `UNO_VMB_FW_OFF` MUST be set when, and only when, the
+  vendor's disable is LOCKED: Intel, `FEATURE_CONTROL` lock set with
+  VMXON-outside-SMX clear; AMD, `VM_CR.SVMDIS` and `VM_CR.LOCK` both set. A
+  disable without the lock MUST NOT block: that case is ours to clear (A1).
+- **S-HV-06** [auto] Eligibility MUST include `UNO_VMB_ATTACHED` whenever
+  `uno_pc64_detached()` is 0, whatever the CPU reports. An appliance needs our
+  own IDT, our own LAPIC and a memory map nothing else rewrites.
+- **S-HV-07** [auto] `uno_vmm_carve_mb()` MUST be 0 below the floor, MUST be
+  monotonic non-decreasing in reported RAM, and MUST be 0 whenever eligibility
+  reports `UNO_VMB_LOW_RAM`. A carve is never advertised that cannot be taken.
+- **S-HV-08** [auto] `uno_vmm_blocker_str()` MUST return a non-empty string for
+  every single-bit mask and "" for 0, so a refusal can never be reported
+  without a reason. check: loop all `UNO_VMB_*` bits.
+- **S-HV-09** [auto] `uno_vmm_status_str()` MUST NUL-terminate and MUST NEVER
+  write past `cap`, for every cap in 0..the full line length.
+  check: guard bytes either side, call across the whole range.
+- **S-HV-10** [auto] The RAM figure MUST be latched while boot services live
+  (the UEFI memory map dies at ExitBootServices): on a UEFI boot a post-detach
+  read of `ram_mb` MUST still be non-zero, which is only true if the boot path
+  probed during init.
+- **S-HV-11** [assert] The probe MUST count only free conventional memory
+  (`EfiConventionalMemory` / E820 type 1). Counting firmware-reserved or
+  boot-services ranges would overstate a machine sitting on the floor, which
+  is exactly the machine the answer matters for.
+  site: `unovirt.c ram_mb_uefi` / `ram_mb_bios`.
 
 ## S-AI, Studio AI assistant (live checks; SKIP without a link)
 
