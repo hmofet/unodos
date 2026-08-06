@@ -1,8 +1,25 @@
 # UnoDOS web engine, full HTML/CSS/JS design
 
-Status: DESIGN (2026-07-27). Nothing here is built. The current browser
-(`pc64/pc64_browser.c` + `pc64/js.c`) stays in production until milestone M5
-flips the default.
+Status: **BUILT, M1 through M7, and NOT the default** (last updated 2026-08-06;
+the per-milestone state is the table in §16, which is the authority). The design
+below is what was designed; where it and the table disagree, the table is what
+exists.
+
+Two things a reader of the original 2026-07-27 text should know, because they
+changed:
+
+- **The default did not flip at M5, by user ruling.** The flow painter in
+  `pc64/pc64_browser.c` is still the renderer a boot comes up with. Since
+  2026-08-06 the choice is a **runtime switch** (`g_renderer`, third option on
+  `uno:engine`) rather than the `BROWSER_ENGINE=uw` build flag this document
+  describes; every kernel already contained both paths, so the flag now only
+  picks the initial selection.
+- **`js.c` was not deleted** as M1's exit criteria proposed. It became the
+  engine dispatch layer: `js_run()` selects unojs or quickjs, and
+  `webjs_engine_current()` picks the DOM binding (pinned to unojs, see the file
+  and [BROWSER-ENGINE2-PLAN.md](BROWSER-ENGINE2-PLAN.md)).
+
+What is genuinely unbuilt: **forms** (M6) and **parallel TLS** (M7).
 
 This is the plan for replacing the immediate-mode markdown/HTML flow renderer
 with a real engine: DOM tree, CSS cascade, box layout, display-list paint, and
@@ -460,14 +477,16 @@ Layered, mostly OFF the OS (the `acpipower`/`unomedia` host-test pattern):
 
 ## 16. Milestones, landable slices (AGENTS.md-sized)
 
-Each milestone is one or a few short branches; master stays green throughout;
-the shipping browser is untouched until M4's flag flip.
+Each milestone is one or a few short branches; master stays green throughout.
+The shipping browser was to be untouched until M4's flag flip; in the event the
+flip was never taken (see the status note at the top of this file), and the
+renderer became a runtime switch instead.
 
 | M | Deliverable | Exit criteria |
 |---|---|---|
-| **M1** | `unojs/` engine + host suite; `js_run()` compat shim replaces `js.c` | spectest S-JS green; Script.html demo identical; js.c deleted |
-| **M2** | `unoweb/` DOM + HTML parser (NoScript build) | host golden DOM dumps green; browser renders via a bridge that walks the DOM with the OLD flow painter, screenshots match current pages |
-| **M3** | CSS parse + cascade + block layout + paint list | golden box/display-list dumps; demo pages pixel-compared in QEMU |
+| **M1** DONE | `unojs/` engine + host suite; `js_run()` compat shim replaces `js.c` | spectest S-JS green; Script.html demo identical; ~~js.c deleted~~ js.c survives as the engine dispatch, which the second-engine programme then built on |
+| **M2** DONE | `unoweb/` DOM + HTML parser (NoScript build) | host golden DOM dumps green; browser renders via a bridge that walks the DOM with the OLD flow painter, screenshots match current pages |
+| **M3** DONE | CSS parse + cascade + block layout + paint list | golden box/display-list dumps; demo pages pixel-compared in QEMU. Later joined by an alternate libcss cascade behind `uw_cascade_set`, pixel-compared at 0.000-0.009% |
 | **M4** DONE 2026-08-06 | Inline formatting, images (unomedia), links/hit-test; app wired behind `BROWSER_ENGINE=uw` build flag | real article-class pages render; old renderer still default. Landed: subresource fetch queue (network `<img>` + `<link>` sheets, `pc64_fetch.c`), line-close alignment (`text-align`, `vertical-align`, line box = max ascent + max descent) |
 | **M5** PARTIAL 2026-08-06 | webjs.c bindings, events, timers, innerHTML | LANDED: live DOM (get/querySelector, text/attrs/innerHTML, create/append/remove), events with bubbling, setTimeout/setInterval, mutation-driven restyle; 17 host checks + SPECTEST S-WJS-01..10. NOT DONE: **the flag does NOT flip** - the flow painter stays the default renderer by user ruling (2026-08-06), and the quickjs DOM adapter is written but pinned off (see js.c) |
 | **M6** PARTIAL 2026-08-06 | forms (text input, submit → GET; POST added to pc64_http), tables, floats, position, z-index | LANDED: **tables** (rows through row groups, text-proportional columns, cells stretched to row height), **floats + clear** (context passed down the block tree so a float in body shortens later paragraphs), **position + z-index** (relative shifts the subtree and leaves its space; absolute/fixed out of flow; stable z sort of the display list). NOT DONE: **forms** - no text input, no submit, pc64_http is still GET-only |
