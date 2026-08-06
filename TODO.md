@@ -1,8 +1,10 @@
 # UnoDOS Roadmap
 
-*Updated 2026-07-17. This file tracks **open** work only. Completed milestones are
+*Updated 2026-08-06. This file tracks **open** work only. Completed milestones are
 recorded in [CHANGELOG.md](CHANGELOG.md) and the per-port READMEs/HANDOFFs, they are
-not repeated here.*
+not repeated here. Per-programme detail lives in the plan docs linked below; the
+async channel between agents is [pc64/UNOAUTOMATE-REQUESTS.md](pc64/UNOAUTOMATE-REQUESTS.md),
+and the process every agent follows is [AGENTS.md](AGENTS.md).*
 
 ## Direction
 
@@ -18,32 +20,97 @@ expected to adopt. The 8-bit/console ports keep a minimal native path.
 
 ## pc64, Modern PC (x86-64 / UEFI), the active frontier
 
-Shipped and verified on real hardware (Lenovo X1 Carbon Gen 8): the `unoui` desktop
-shell, e1000 NIC + from-scratch TCP/IP, TLS 1.2 / HTTPS (BearSSL), a JS-capable browser,
-`uno3d` 3D, live resolution/theme switching, resizable windows. Remaining driver tail
-(details in [pc64/README.md](pc64/README.md), metal items in
+Shipped and verified on real hardware: the `unoui` desktop shell and modern window
+manager, e1000/e1000e/igb/r8169 wired NICs, AX201 Wi-Fi, AX88179 USB-Ethernet,
+from-scratch TCP/IP + TLS/HTTPS, a JS-capable browser with two script engines and two
+CSS cascades, AHCI/NVMe/SDHCI block drivers, xHCI + HID + mass storage, firmware detach
+(ExitBootServices, ZimaBlade-confirmed), the installer, URC remote control, unolog, an
+Office 97 suite, and `uno3d`.
+
+**The 2026-07-17 driver tail is closed** apart from the items below (details in
+[pc64/README.md](pc64/README.md), metal items in
 [pc64/METAL-CHECKLIST.md](pc64/METAL-CHECKLIST.md)):
 
-- [ ] **AX88179 USB-Ethernet bulk driver** → `uno_nic_t`, so the net/TLS/HTTPS stack
-      lights up on the X1 (which has no wired e1000; Intel Wi-Fi only). xHCI USB core
-      (Phases A+B) is done; this is the class driver on top.
-- [ ] **xHCI HID** (USB keyboard/mouse) class driver on the USB core.
-- [ ] **USBLEGSUP** BIOS→OS handoff (xECP), may be required for xHCI on real Intel
-      controllers (QEMU works without it).
-- [ ] **ExitBootServices**: take full ownership from firmware (currently UEFI-as-BIOS
-      with boot services alive).
-- [ ] **NVMe / AHCI block driver**: real disk storage (today: RAM-FAT + UEFI Simple FS).
-- [ ] **Real Intel-GPU 3D backend** for `uno3d` (today: soft rasteriser + honest
-      Intel-iGPU soft-fallback scaffold).
-- [ ] **I2C-HID trackpad** on-metal bring-up, driver ships gated/self-configuring;
-      needs the X1 diagnostic readout iterated (LPSS reset-release landed; parser tuning
-      pending real report dumps).
-- [ ] Metal re-test pass of the latest build (mouse-driven apps, PC-speaker audio, RTC
-      set, HTTPS-needs-NIC), see the checklist.
+- [ ] **USBLEGSUP BIOS→OS handoff (xECP)** is still not implemented. `pc64/xhci.c`
+      instead rides out the handoff race by retrying HCRST + re-init up to five times,
+      which has been enough on every machine tested so far; a real extended-capability
+      walk remains the correct fix if a controller ever needs it.
+- [ ] **Real Intel-GPU 3D backend** for `uno3d`. `uno3d/uno3d_intel.c` probes PCI for
+      the iGPU and then honestly delegates every draw to the software rasteriser; the
+      command-streamer path (GTT, batch buffers, 3DPRIMITIVE, display-engine flip) is
+      unwritten, and only the four vtable hooks change when it lands.
+- [ ] **I2C-HID trackpad on metal.** Root-caused and fixed in source (`pc64/i2c_hid.c`:
+      the LPSS input clock is 216 MHz on Cannon/Comet/Ice/Tiger Lake, not the 133 MHz
+      the DesignWare timing table assumed), but the fix has never been run on the X1.
+- [ ] **DNS fails on a production build** while a debug build resolves fine on the same
+      host (filed 2026-08-06 against the unonet lane). The lease succeeds and the
+      resolver still cannot ask anybody, so the suspect is the DNS server address out of
+      the lease. Blocks regenerating the manual's network figures.
+- [ ] **iwlwifi RX decryption on the Surface Go**: association and the 4-way handshake
+      complete, no DHCP lease follows. The next move needs one metal boot producing the
+      `post-join diag` line, then most likely a station remove/add instead of the live
+      retarget (see the 2026-08-05 entries in the requests file).
+- [ ] Metal re-test pass of the latest build, see the checklist.
+
+### Programmes in flight (pc64)
+
+Each has its own plan doc; this is the index, not the detail.
+
+- [ ] **Virtualization** (branch `unovirt`, not yet on master): A0 through A6 committed
+      and pushed, a Linux guest boots under UnoDOS and says so. Active.
+- [ ] **BIOS boot** ([docs/BIOS-BOOT-PLAN.md](docs/BIOS-BOOT-PLAN.md)): A-E green in
+      QEMU including the installer and the flasher; **two metal runs, neither
+      conclusive** (Acer Revo RL100, Asus Eee PC 1005). Run 2 has the cleaner next step.
+- [ ] **Detach completion** ([docs/DETACH-COMPLETION-PLAN.md](docs/DETACH-COMPLETION-PLAN.md)):
+      phase B is metal-pending on the X1, which is the machine that can falsify it; B3
+      (Surface keyboard) is deliberately unanswered; phase D fleet validation is
+      outstanding on the Yoga, X1 and Surface.
+- [ ] **Web engine** ([docs/WEB-ENGINE-DESIGN.md](docs/WEB-ENGINE-DESIGN.md)): **forms**
+      (M6: no text input, no submit, `pc64_http` is GET-only) and **parallel TLS** (M7,
+      blocked on per-socket TLS from unonet). The unoweb renderer stays non-default by
+      user ruling.
+- [ ] **Second engine** ([docs/BROWSER-ENGINE2-PLAN.md](docs/BROWSER-ENGINE2-PLAN.md)):
+      the default-cascade flip is the user's call, and the quickjs DOM adapter is
+      written but pinned off pending a mingw-only startup crash.
+- [ ] **UnoMail** ([docs/OFFICE97-PLAN.md](docs/OFFICE97-PLAN.md)): the fourth Office
+      app, deferred on the OAuth / web sign-on question. Word, Excel and PowerPoint are
+      done.
+- [ ] **SSH client** ([docs/SSH-CLIENT-PLAN.md](docs/SSH-CLIENT-PLAN.md)): PROPOSAL
+      only, nothing started. The spec is the build order.
+- [ ] **`cfg-parse-window`**: three commits (read the whole DEBUG.CFG, and say so when
+      it does not fit) sitting unlanded on their branch. Land or delete per
+      [AGENTS.md](AGENTS.md) §3.
 
 ---
 
 ## Cross-platform features
+
+### Aurora rollout (plan: [PLAN-aurora-rollout.md](PLAN-aurora-rollout.md), state: [HANDOFF-aurora.md](HANDOFF-aurora.md))
+Bring the unoui Aurora theme to the ports. Phase 0 (the `UNO_BG_CACHE` compositing
+foundation + the `unoui_aurora_lite` full/static split) and phase 1 (**ps2** and
+**dreamcast**, both render-verified in PCSX2 and flycast) are on master.
+- [ ] **Phase 2, rpi → pinephone → ppcmac**: stand a freestanding C world beside each
+      asm kernel, point an `fb.c` at the framebuffer the asm bring-up already
+      establishes, add a timer/input shim, then unoui + Aurora FULL.
+- [ ] **Phase 4 mac (dithered)**: a QuickDraw `fb` backend, Aurora at `DEPTH_8` on a
+      256-color Mac. The easiest remaining win (already hosted C).
+- [ ] **Phase 3 gba / x86 (STATIC toggle)**: gba gets a build-time-baked wallpaper
+      behind the existing asm UI; x86 needs a VESA LFB truecolor mode plus a pc64-style
+      C+unoui world, the biggest single lift.
+- [ ] **Phase 4 amiga** (conditional spike: vbcc/gcc-m68k + chunky→planar `c2p`, 020/AGA
+      only). **iigs is excluded** from unoui-Aurora; native faux-aurora only if wanted.
+
+### Cross-port performance pass (state: [HANDOFF-perf.md](HANDOFF-perf.md))
+The work-list is every `AUDIT-<port>.md` §1 plus cross-cutting pattern #1 in
+[AUDIT-INDEX.md](AUDIT-INDEX.md): no damage-rect means a full-scene repaint on drag and
+redraw. amiga, c64, dreamcast, genesis, iigs, mac, ps2, sms and snes each carry at least
+one **✅ FIXED** finding.
+- [ ] The remaining ports have no fixes recorded yet (pc64, x86, apple2, gb, gg, gba,
+      macplus, nes, pce, pinephone, ppcmac, rpi, vic20, ws). x86 (full damage-rect),
+      amiga (XOR outline) and macplus (damage-min) are the models to copy.
+- [ ] **Hard rule, unchanged:** every fix is a redraw refactor, so render-verify it. A
+      correct refactor is byte-identical against a baseline built from the pre-change
+      source.
 
 ### Music Player app (full design: [docs/MUSIC-PLAYER-PLAN.md](docs/MUSIC-PLAYER-PLAN.md))
 A new app (alongside the built-in-tune **Music** app) that plays music **files**, routed
@@ -107,6 +174,19 @@ remaining work is the **bare-metal asm ports**:
 
 ## Per-port remaining work
 
+### Fresh-3.1 console tier (app parity + storage)
+The 2026-07-19 audit's conclusion that this work was lost was wrong; it landed on
+`parity-push-fresh-ports` and is on master. **sms, nes, gba, rpi, pinephone and ppcmac
+are at 11 of 11 apps** (Tracker, OutLast, Pac-Man and Paint are real and wired into
+dispatch). See [docs/PARITY-HANDOFF.md](docs/PARITY-HANDOFF.md).
+- [ ] **gb, gg, vic20, ws, pce still ship 7 of 11.** Those four apps are launcher
+      placeholders on each.
+- [ ] **Storage persistence is outstanding across the whole fresh tier.**
+- [ ] `docs/FEATURE-MATRIX.md` is stale: no C64 column, the pc64 storage row predates
+      the native block drivers, and the fresh-port rows now understate six ports.
+- [ ] `parity-wip` (`b2e40c1`, does not build by design) is fully superseded by master
+      and holds nothing worth recovering. Do not merge it; it is a deletion candidate.
+
 ### 8088 / IBM PC-XT (feature parity achieved on a cycle-accurate XT; see [docs/PORT-8088.md](docs/PORT-8088.md))
 - [~] **FAT16-on-8088** (DOS-interchangeable CF): boot chain is 8086-clean and verified.
       Remaining, [ ] convert the kernel FAT16 driver (~104 sites across
@@ -158,22 +238,33 @@ MKBOOT.BIN kept off the default image so Tracker + Paint fit; both still build v
 - [ ] Real-hardware adapters still to exercise: PS/2 wiring, tape comparator, Sega CD Mode-1.
 - [ ] Console-flavored chrome (after weighing the real-hardware regression risk).
 
-### Apple II (in progress)
-- [ ] 6502/dasm/py65; Disk II boot + own GCR RWTS; 280×192 hi-res 1-bit; keyboard desktop.
-      M1 landed (toolchain, `mkfont.py`, `boot.s` with 6-and-2 RWTS + multi-track loader).
-      Remaining M1: `kernel.s`, `mkdsk.py`, `harness.py`, `build.sh`, `tests/m1.script`,
-      README. M2: RWTS write + USV1 FS + Files/Notepad + paddle pointer. M3:
-      Dostris/Pac-Man/Paint/Tracker/Theme; OutLast feasibility-gated at 1 MHz.
-      Validation: py65 harness → AppleWin → FloppyEmu.
+### Apple II (M1-M3 shipped; real hardware remaining)
+M1 (desktop + boot/RWTS path), M2 (write RWTS + USV1 mini-FS + Files/Notepad) and M3
+(the disk-loaded apps, audio, Theme, and the cooperative-scheduler verdict) are all
+shipped and py65-harness-verified. The as-built behavior is in
+[apple2/README.md](apple2/README.md); the open questions below are from
+[apple2/HANDOFF.md](apple2/HANDOFF.md) §11.
+- [ ] **AppleWin pass**: only an emulator can prove the *absolute* sector
+      skew/interleave convention matches real DOS-order `.dsk` semantics (the harness
+      selftest only proves it is self-consistent), and it settles the 16-sector autoload
+      assumption on a clone P5A ROM.
+- [ ] **Real hardware** via FloppyEmu (WOZ imaging path is documented), plus an audio
+      ear-check.
+- [ ] Confirm the target machine: M1 targets the II+ floor, and a IIe later unlocks
+      up/down plus 80 columns. The `$FBB3/$FBC0` SysInfo seeds are `$E0/$E0`, not a real
+      machine pair, and want fixing to II+ (`$EA/$EA`) alongside SysInfo's decode.
 
 ### PS2 (via FreeMcBoot)
 - [ ] PS2SDK ELF launched by FMCB; port the portable C core over a gsKit/pad/mc/audsrv
       layer; pad-as-pointer + soft keyboard always, USB kbd/mouse when present; memory-card
       storage. Core + apps are host-shim/PCSX2-verified; remaining is on-device PS2 validation.
 
-### SNES / Apple IIGS (emulator-verified, real-hardware remaining)
-- [ ] SNES: real hardware (flashcart + SNES Mouse) + audio ear-check
-      (backlog in [snes/HANDOFF.md](snes/HANDOFF.md)).
+### SNES / Apple IIGS (real-hardware remaining)
+- [ ] SNES: **conditional pass on a clone** (SupaBoy Hyperbeach + FXPak Pro): the OS
+      boots and is navigable, but desktop icons render as text labels only and there is
+      no audio. Genuine SNES silicon is pending, and the two things to re-check there
+      are the icon-tile upload (shadow→VRAM DMA) and SPC700 audio. Backlog in
+      [snes/HANDOFF.md](snes/HANDOFF.md).
 - [ ] IIGS: real hardware (GSplus/KEGS/MAME then FloppyEmu SmartPort) + audio ear-check
       (see [iigs/HANDOFF.md](iigs/HANDOFF.md)).
 
