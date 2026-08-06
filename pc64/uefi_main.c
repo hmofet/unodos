@@ -1350,6 +1350,22 @@ void uno_pc64_init(void)
     uno_dbg_envblock();                 /* re-read: detach changes the picture */
     if (gDetached) uno_dbg_on_detach();
     else           uno_dbg_watchdog_start();
+    /* unovirt A1, and the position is load-bearing in BOTH directions.
+     *
+     * Not earlier than detach: the appliance gate requires a detached machine
+     * (our own IDT, our own LAPIC, a memory map nothing else rewrites), so a
+     * selftest run before it would only ever record "still attached".
+     *
+     * Not before uno_dbg_on_detach() either, which is where that IDT actually
+     * gets installed. VMRUN can #GP or #UD for a dozen reasons, and in the
+     * window between ExitBootServices and our own IDT there is nothing to
+     * catch it: the fault triple-faults the machine with no report and no
+     * output, which is exactly how this arrived. Behind the IDT the same
+     * fault is a CR report naming the instruction. */
+    uno_vmm_selftest();
+    uno_dbg_envblock();                 /* ...and again: the selftest's verdict
+                                           is part of the picture, and it does
+                                           not exist until the line above ran */
     uno_dbg_check("init:done");
     /* Second pass, best-effort. If detach stranded us this writes nothing and
      * the PRE-detach copy above is what survives - which is the whole point of
