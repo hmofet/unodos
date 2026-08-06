@@ -386,6 +386,7 @@ static struct {
     int  port, secure, open;
 } g_ka;
 
+
 static void ka_opened(int secure)
 { g_ka.open = 1; g_ka.secure = secure; g_ka.host[0] = 0; g_ka.port = 0; }
 
@@ -401,24 +402,21 @@ static void ka_drop(void)
     g_ka.host[0] = 0;
 }
 
-/* DISABLED 2026-08-06, and left in place rather than deleted because the
- * framing it needs is real and the wiring is most of the work.
- *
- * Tested against a real server (tools/netverify_urc.py) it FAILED: the page
- * and its first stylesheet each took their own connection - no reuse at all -
- * and the browser then hung with the remaining two sheets never requested.
- * One cause was found and fixed (a connection that could not be kept was
- * never closed, and pc64 has a single TCP slot), but the hang survived the
- * fix, so something else is wrong that I have not identified.
- *
- * A browser that hangs is far worse than one that reopens a connection, so
- * reuse is off until the rest is understood. Turn it back on by restoring
- * the real body here AND the 1.1/keep-alive request line below - and re-run
- * netverify_urc.py, which is the only thing that would have caught this. */
+/* Re-enabled 2026-08-06 after root-causing the failure it was disabled for.
+ * Keep-alive was never independently broken: the hang and the total absence
+ * of reuse were both collateral damage from the progressive-render
+ * re-entrancy bug, where a repaint from inside this receive loop started a
+ * NESTED request on the same single TCP slot. With that fixed (and with a
+ * connection marked open at ESTABLISH time so a non-keepable one is actually
+ * closed), a page and its three stylesheets now travel on ONE connection -
+ * measured server-side by tools/netverify_urc.py. */
 static int ka_matches(const char *host, int port, int secure)
 {
-    (void)host; (void)port; (void)secure;
-    return 0;
+    /* g_ka.host is empty until a connection is proven KEEPABLE, so an
+     * established-but-not-yet-kept connection can never be reused by
+     * accident - it can only be closed. */
+    return g_ka.open && g_ka.secure == secure && g_ka.port == port &&
+           g_ka.host[0] && !strcmp(g_ka.host, host);
 }
 
 static void ka_keep(const char *host, int port, int secure)
@@ -625,8 +623,7 @@ static int http_get_once(const char *url, char *body, int bodymax,
               int k; for (k = 0; cv[k]; k++) if (cv[k]>='A'&&cv[k]<='Z') cv[k] += 32;
               if (strstr(cv, "close")) keep = 0;
           }
-          (void)keep;                 /* reuse disabled - always close */
-          ka_drop();
+          if (keep) ka_keep(host, port, secure); else ka_drop();
       }
       /* a reused connection that produced NOTHING was dead: retry once */
       if (rn == 0 && reused) { ka_drop(); if (out_reused) *out_reused = 1; return HTTP_RETRY; }
