@@ -1754,6 +1754,15 @@ faults on the first instruction that assumes it.
 - **S-HV-30** [auto] Every read or write of guest memory made ON THE GUEST'S
   BEHALF MUST go through `uno_vmm_gpa()`, including addresses that came out of
   descriptors. Stage two bounds the guest's own accesses and nothing else.
+- **S-HV-31** [auto] A guest MUST be able to write CR4 without faulting. VMX
+  forces CR4.VMXE, and a guest that does not know it is a guest clears it -
+  Linux does so within a hundred bytes of its entry point. So VMXE MUST be in
+  the CR4 guest/host mask (the write exits instead of faulting) and MUST read
+  back as CLEAR through the shadow. Every other bit stays the guest's.
+- **S-HV-32** [auto] A guest kernel's early faults MUST be legible: with #UD,
+  #GP and #PF in the exception bitmap, a fault before the guest has an IDT
+  MUST report its vector, error code and address rather than presenting as a
+  triple fault at whatever RIP it reached.
 - **S-HV-11** [assert] The probe MUST count only free conventional memory
   (`EfiConventionalMemory` / E820 type 1). Counting firmware-reserved or
   boot-services ranges would overstate a machine sitting on the floor, which

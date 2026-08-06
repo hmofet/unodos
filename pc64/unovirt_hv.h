@@ -76,6 +76,20 @@ typedef struct uno_vm_virtio {
     const char *text;        /* what came through                           */
 } uno_vm_virtio;
 
+/* How far a real kernel got.  Not a pass/fail: the interesting outcomes are
+ * all partial, and `stop_reason` plus the last line it printed is what makes
+ * the next step obvious. */
+typedef struct uno_vm_linux {
+    long loaded;             /* bytes of kernel placed in the carve         */
+    int  lines, chars;       /* what it said on its serial port             */
+    const char *last;        /* ...and the last line of it                  */
+    int  exits;
+    unsigned stop_reason;    /* the exit that ended the run                 */
+    unsigned long long stop_rip;
+    unsigned fault_vec, fault_err;      /* 0xFFFF when it was not a fault   */
+    unsigned long long fault_addr;
+} uno_vm_linux;
+
 typedef struct uno_hv {
     const char *name;                     /* "svm" | "vmx"                   */
 
@@ -118,6 +132,9 @@ typedef struct uno_hv {
     /* A5: an MMIO device the guest discovers and talks to through a
      * virtqueue.  This is the mechanism every later device is built on. */
     int (*virtio)(struct uno_vm_virtio *out);
+
+    /* A6: load a bzImage into the carve, hand it a zero page, and run it. */
+    int (*linux_boot)(struct uno_vm_linux *out);
 } uno_hv_t;
 
 const uno_hv_t *uno_hv_svm(void);         /* hv_svm.c                        */

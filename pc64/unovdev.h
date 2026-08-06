@@ -13,6 +13,14 @@ int uno_vdev_mmio(unsigned long long gpa, int is_write, unsigned size,
                   unsigned long long *val);
 
 void uno_vdev_reset(void);
+
+/* Port I/O.  Easier than MMIO on x86: the exit carries the port, the size and
+ * the direction, so there is nothing to decode.  `sink` is called with each
+ * completed line the guest writes to COM1 - which is where a kernel talks
+ * before it has a driver for anything. */
+int uno_vdev_pio(unsigned port, int is_write, unsigned size,
+                 unsigned long long *val, void (*sink)(const char *));
+int uno_vdev_serial_chars(void);
 unsigned long long uno_vdev_base(void);
 
 /* Place a queue's rings on the guest's behalf (A5's guest is eighteen
