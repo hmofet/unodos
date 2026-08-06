@@ -184,8 +184,11 @@ dispatch). See [docs/PARITY-HANDOFF.md](docs/PARITY-HANDOFF.md).
 - [ ] **Storage persistence is outstanding across the whole fresh tier.**
 - [ ] `docs/FEATURE-MATRIX.md` is stale: no C64 column, the pc64 storage row predates
       the native block drivers, and the fresh-port rows now understate six ports.
-- [ ] `parity-wip` (`b2e40c1`, does not build by design) is fully superseded by master
-      and holds nothing worth recovering. Do not merge it; it is a deletion candidate.
+- `parity-wip` (`b2e40c1`, does not build by design) was fully superseded by master and
+  held nothing worth recovering. **Branch deleted 2026-08-06**, along with
+  `pc64-usb-flasher`; both are gone from origin and locally. The commits remain
+  unreachable in the object store until a gc, so nothing is unrecoverable today, but do
+  not go looking for either branch: the history is on master.
 
 ### 8088 / IBM PC-XT (feature parity achieved on a cycle-accurate XT; see [docs/PORT-8088.md](docs/PORT-8088.md))
 - [~] **FAT16-on-8088** (DOS-interchangeable CF): boot chain is 8086-clean and verified.

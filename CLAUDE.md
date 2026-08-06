@@ -51,10 +51,16 @@ Checked three ways rather than by commit message:
   `1c24462f` is 102 files of screenshots regenerated from a fortnight-old build
   plus click-to-enlarge, which master already has in `docs/build_site.py`.
 
-So there is nothing to merge and a clear reason not to merge. The branch is
-safe to delete, local and `origin/pc64-usb-flasher`, whenever someone wants the
-tidy-up; nothing on it is unrecoverable, since every commit is either upstream
-already or content master deliberately replaced.
+So there is nothing to merge and a clear reason not to merge. The branch was
+safe to delete, and **it is now deleted** (2026-08-06, local and
+`origin/pc64-usb-flasher`), along with `parity-wip`. Nothing on either is
+unrecoverable: every commit is upstream already, or content master deliberately
+replaced.
+
+Two docs used to name `pc64-usb-flasher` as their working branch,
+`HANDOFF-aurora.md` and `HANDOFF-perf.md`. Both were corrected the same day, so
+if you meet an older copy of either: the work they describe is on master, and
+new slices branch off `origin/master` per [`AGENTS.md`](AGENTS.md) §3.
 
 ## Standing rule (2026-07-21): the flasher embeds BOTH production + debug builds
 
