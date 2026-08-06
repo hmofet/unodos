@@ -11,6 +11,62 @@ fulfilled.
 
 ---
 
+## 2026-08-06 — FIXED (browser): the blank page, and my own hypothesis was wrong
+
+Closes the FINDING below. **The stylesheets had nothing to do with it**, and
+that entry's "start at `fetch_link_sheets`" is a bad lead I am withdrawing
+before anyone spends a day on it. Recording the correction with the same weight
+as the fix, because the wrong lead was the expensive part.
+
+**Where I went wrong.** I had three pages: one blank, two fine, and the blank
+one was the only one with `<link rel=stylesheet>`. That is a real correlation
+and it is a coincidence. Proving it took ten minutes I should have spent before
+filing: the unoweb engine parses that page, splices the sheets exactly the way
+`fetch_link_sheets` does, lays it out and paints it - correct boxes, correct
+cascaded colours - in a host harness with no OS at all. So the engine was never
+the suspect and neither was the splice. The right question was not "what does
+this page have that the others lack" but "what does this page DO that the
+others do not".
+
+**What it does.** Its body arrives in ONE read. That is the whole bug:
+
+| page | first progressive report | outcome |
+|---|---|---|
+| `/` | the COMPLETE body (200 bytes, one read) | blank |
+| `/chunked` | never - chunked bodies are not offered mid-transfer | renders |
+| `/slow` | a PARTIAL body, the server pauses mid-response | renders |
+
+`load_progress` paints a partial document, then the completed load re-parses.
+When the progressive text and the final text are the SAME BYTES - which is what
+"the body arrived in one read" means - the re-parse produces a brand-new tree
+with an identical source fingerprint. `render_uw` cached its layout on that
+fingerprint, decided the tree was already on screen, and never laid it out.
+`uw_paint_count` on a never-laid-out tree is 0. Blank.
+
+**The fix** is a distinction, not a workaround: `g_dom_gen` counts TREES, not
+source texts, is bumped once per rebuild, and is what the layout cache compares.
+A new tree can no longer be mistaken for the one on screen.
+
+**Scope, which is wider than the page that found it.** This was never about
+stylesheets: **any** non-chunked page whose body lands in a single read rendered
+blank over plain HTTP. Under ~1.4 KB, roughly. Real sites are mostly bigger than
+that, which is why it survived - the failure needs a page small enough that the
+first progressive report is already the last one.
+
+**The gate now reads pixels.** Every existing assertion passed on the broken
+build, because they all read the server, and the screenshot looked normal:
+right window, right address bar, "HTTP/1.1 200 OK" in the status band, empty
+content area. netverify section 1a now grabs the screen and asserts the two
+colours the page's own linked sheets set (`#1e5ac8` for the h1, `#c81e28` for
+the text) are actually lit - end to end from a parallel HTTP fetch, through the
+splice and the cascade, to a pixel. Verified to DISCRIMINATE, not just to pass:
+with the one-line fix reverted the two colour checks fail and the rest still
+pass. A third check I had written ("the frame is not one flat colour") went in
+the bin for the opposite reason - the grab is the whole desktop, so the chrome
+alone cleared it while the page was blank.
+
+Contract: SPEC.md **S-BROWSER-11**.
+
 ## 2026-08-06 — DELIVERED (unonet + browser): the net stack does several things at once
 
 The 2026-08-06 browser request below ("a net stack that can do more than one
