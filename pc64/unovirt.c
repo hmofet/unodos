@@ -381,9 +381,9 @@ int uno_vmm_selftest(void)
         return 0;
     }
     if (c->vendor == UNO_HV_SVM) hv = uno_hv_svm();
+    if (c->vendor == UNO_HV_VMX) hv = uno_hv_vmx();
     if (!hv) {
-        snprintf(g_self, sizeof g_self, "no backend for this vendor yet "
-                 "(vmx is written but unimplemented)");
+        snprintf(g_self, sizeof g_self, "no backend for this vendor");
         return 0;
     }
     if (!hv->enable(&why)) {
