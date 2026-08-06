@@ -41,7 +41,10 @@ static long long civil_days(int y, int m, int d)
 static long long now_s(void)
 {
     int y, mo, d, h, mi, s;
-    if (uno_native_rtc_read(&y, &mo, &d, &h, &mi, &s) != 0) return 0;
+    /* rtc_read returns 1 on SUCCESS. This tested != 0 and treated that as
+     * failure, so now_s() returned 0 - "no clock" - on every machine whose
+     * clock worked, which is all of them. */
+    if (uno_native_rtc_read(&y, &mo, &d, &h, &mi, &s) != 1) return 0;
     return civil_days(y, mo, d) * 86400ll + h * 3600ll + mi * 60ll + s;
 }
 

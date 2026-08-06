@@ -12,7 +12,7 @@
  * changing what the RTC says rather than by waiting. */
 static int g_min;
 int uno_native_rtc_read(int *y, int *mo, int *d, int *h, int *mi, int *s)
-{ *y = 2026; *mo = 8; *d = 6; *h = 12; *mi = g_min; *s = 0; return 0; }
+{ *y = 2026; *mo = 8; *d = 6; *h = 12; *mi = g_min; *s = 0; return 1; }  /* 1 = success, as pc64_native.c does */
 
 static int g_pass, g_fail;
 static void note(int ok, const char *name)
