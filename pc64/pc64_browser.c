@@ -980,6 +980,7 @@ static void render_html(const char *src, unoui_rect r, int scroll)
  * so navigation, history and bookmarks are one code path rather than four.
  * ========================================================================= */
 #include "pc64_icons.h"                 /* pc64_shell_theme() for the panels */
+#include "unolog.h"                     /* the system log */
 
 /* A tab's document buffer GROWS to the document. It was a flat 32768, a second
  * and tighter cut behind pc64_http's old 48 KB one: google.com's <body> opens
@@ -1602,6 +1603,13 @@ static void load_progress(const char *body, int len, long total)
 
 static void load_loc(btab *t, const char *loc)
 {
+    /* Every navigation, not just the network ones: "what did I open" is the
+     * question a browsing log answers, and a local document is as much an
+     * answer as a fetched one. INFO rather than NOTICE, so the default level
+     * keeps it out of the log until someone turns the level up to look.
+     * The RESULT of a network load is logged separately by pc64_http, which
+     * is the layer that knows whether it worked. */
+    ulog_info(LF_BROWSER, "open %s", loc);
     t->scroll = 0;
     t->start = 0;
     g_link_sel = -1;
