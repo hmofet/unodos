@@ -55,6 +55,19 @@ static void drop(int i)
     g_ent[i].url[0] = 0;
 }
 
+int pc64_cache_len(const char *url)
+{
+    long long t = now_s();
+    int i;
+    if (!url) return -1;
+    for (i = 0; i < CACHE_MAX; i++) {
+        if (!g_ent[i].body || strcmp(g_ent[i].url, url)) continue;
+        if (!t || g_ent[i].expires <= t) return -1;      /* stale = absent */
+        return g_ent[i].len;
+    }
+    return -1;
+}
+
 int pc64_cache_get(const char *url, char *body, int bodymax,
                    char *status, int statusmax)
 {

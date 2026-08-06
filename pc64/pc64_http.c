@@ -407,7 +407,21 @@ static unsigned http_ms(void)
  * reason. */
 #define KA_N   4
 #define DNS_N  8
-#define RAW_MAX 49152
+/* The receive buffer GROWS. It used to be a flat 49152, which is where
+ * https://google.com went blank: www.google.com answers 1,384 bytes of headers
+ * and an 82,760-byte body whose <body> does not open until body offset 62,883,
+ * so a 48 KB response was a document consisting entirely of <head> - scripts
+ * and one stylesheet - and a parser handed that renders nothing. The status
+ * line still said 200 OK, because the fetch really had succeeded.
+ *
+ * A flat buffer big enough for that page would be paid by every 300-byte icon
+ * on it, and pc64_fetch runs FETCH_PAR of those at once, so the size is the
+ * response's, not the constant's: start small, double on demand, stop at
+ * RAW_MAX. 1 MB is not a new opinion about how big a page may be - it is what
+ * pc64_fetch already allows per subresource (FETCH_ONE_MAX), and this is the
+ * transport that feeds it. */
+#define RAW_START (16u * 1024u)
+#define RAW_MAX   (1u << 20)
 /* The browser's share of the NSOCK (16) socket table. The rest of the machine
  * needs sockets too - the URC link, the child its listener accepts, discovery -
  * and on a box driven only over URC, a browser that crowded those out would
@@ -553,7 +567,7 @@ struct http_req {
     int   secure, port, reused, retried;
     httpconn c;
     char  req[2048]; int reqn, reqoff;
-    char *raw; int rn;
+    char *raw; int rn, rcap, capped;
     int   split, chunked, done, next_report;
     long  clen;
     unsigned t0;
@@ -561,6 +575,44 @@ struct http_req {
     char  status[192];
     pc64_cache_ctl ctl;
 };
+
+/* Room in raw[] for more bytes, growing it if there is none. Always leaves one
+ * byte spare, because everything downstream NUL-terminates at raw[rn].
+ *
+ * Returns 0 when the response has outgrown RAW_MAX (or the heap said no), and
+ * sets `capped`. That flag is the whole point: the old loop stopped at the cap
+ * down the SAME path as a complete response, so a truncated page reported
+ * "200 OK" and rendered whatever half a document renders as. A reader has no
+ * way to tell that from a site that is genuinely blank. */
+static int raw_room(http_req *r)
+{
+    int room = r->rcap - 1 - r->rn;
+    char *bigger;
+    int want;
+    if (room > 0) return room;
+    if (r->rcap >= (int)RAW_MAX) { r->capped = 1; return 0; }
+    want = r->rcap * 2;
+    if (want > (int)RAW_MAX) want = (int)RAW_MAX;
+    bigger = (char *)realloc(r->raw, (size_t)want);
+    if (!bigger) { r->capped = 1; return 0; }   /* keep what already arrived */
+    r->raw = bigger;
+    r->rcap = want;
+    return r->rcap - 1 - r->rn;
+}
+
+/* Grow to hold `want` bytes up front, for a caller that already knows the size
+ * (the cache hit below). 1 on success. */
+static int raw_reserve(http_req *r, int want)
+{
+    char *bigger;
+    if (want > (int)RAW_MAX) want = (int)RAW_MAX;
+    if (r->rcap >= want) return 1;
+    bigger = (char *)realloc(r->raw, (size_t)want);
+    if (!bigger) return 0;
+    r->raw = bigger;
+    r->rcap = want;
+    return 1;
+}
 
 static int req_fail(http_req *r, int rc, const char *why)
 {
@@ -583,6 +635,7 @@ static int hop_start(http_req *r, int no_reuse)
     r->secure = 0; r->port = 80; r->reused = 0;
     r->reqn = r->reqoff = 0;
     r->rn = 0; r->split = -1; r->chunked = 0; r->done = 0; r->next_report = 0;
+    r->capped = 0;                  /* per hop: a redirect starts clean */
     r->clen = -1;
 
     if (!strncmp(p, "https://", 8)) { r->secure = 1; r->port = 443; p += 8; }
@@ -785,7 +838,7 @@ static void step_recv(http_req *r)
 
     for (;;) {
         char tmp[1460];
-        int n, room = RAW_MAX - 1 - r->rn;
+        int n, room = raw_room(r);
         if (room <= 0) break;
         if (room > (int)sizeof tmp) room = (int)sizeof tmp;
         n = r->secure ? tls_recv(r->c.tls, tmp, room)
@@ -805,17 +858,30 @@ static void step_recv(http_req *r)
 
     frame_update(r);
 
-    /* offer what has arrived, every ~6 KB. Chunked bodies are not offered:
-     * they are still encoded at this point, and handing the embedder
-     * chunk-size lines to render would be worse than making it wait. */
+    /* Offer what has arrived, at a GEOMETRIC interval: ~6 KB at first, then a
+     * quarter of the body so far. Chunked bodies are not offered - they are
+     * still encoded at this point, and handing the embedder chunk-size lines to
+     * render would be worse than making it wait.
+     *
+     * The interval used to be a flat 6 KB, which was fine only because the
+     * buffer stopped at 48 KB: eight reports, eight repaints. An embedder
+     * re-parses and re-renders the whole partial document on each one, so a
+     * flat interval is quadratic in the page size, and against the 1 MB the
+     * transport now accepts that is ~170 full re-renders of a document that
+     * keeps getting longer - the big pages this change exists to allow would
+     * arrive, and crawl. Growing the interval keeps the early feedback (the
+     * first screenful is what the reader is waiting for) and makes the total
+     * about two dozen reports whatever the size. */
     if (r->want_progress && g_progress && r->split >= 0 && !r->chunked &&
         r->rn - r->split > r->next_report) {
+        int have = r->rn - r->split, step = have / 4;
         r->raw[r->rn] = 0;
-        g_progress(r->raw + r->split, r->rn - r->split, r->clen);
-        r->next_report = (r->rn - r->split) + 6144;
+        g_progress(r->raw + r->split, have, r->clen);
+        if (step < 6144) step = 6144;
+        r->next_report = have + step;
     }
 
-    if (r->done || eof || r->rn >= RAW_MAX - 1) { r->st = HS_FINISH; return; }
+    if (r->done || eof || r->capped) { r->st = HS_FINISH; return; }
     /* An idle timeout is not a failure: the old loop broke out and used
      * whatever had arrived, which is what read-until-close means when the
      * close never comes. */
@@ -876,6 +942,26 @@ static void step_finish(http_req *r)
         while (*s && *s != '\r' && *s != '\n' && j < (int)sizeof r->status - 1) r->status[j++] = *s++;
         r->status[j] = 0;
         if (!j) sput_n(r->status, sizeof r->status, "No response");
+        /* SAY SO when the answer did not fit. Truncation used to be reported as
+         * "200 OK", which is true of the exchange and useless to the reader:
+         * the page is short or blank and nothing on screen distinguishes that
+         * from a site that really is. The status band is the browser's one line
+         * of feedback, so the fact goes there. */
+        if (r->capped) {
+            char kb[16]; int k = 0, v = r->rn / 1024;
+            char tmp[8]; int t = 0;
+            if (!v) kb[k++] = '0';
+            while (v) { tmp[t++] = (char)('0' + v % 10); v /= 10; }
+            while (t) kb[k++] = tmp[--t];
+            kb[k] = 0;
+            if (j + 20 + k < (int)sizeof r->status) {
+                const char *a = " - TRUNCATED at ", *b = " KB";
+                memcpy(r->status + j, a, strlen(a)); j += (int)strlen(a);
+                memcpy(r->status + j, kb, (size_t)k); j += k;
+                memcpy(r->status + j, b, strlen(b)); j += (int)strlen(b);
+                r->status[j] = 0;
+            }
+        }
     }
 
     /* Set-Cookie, every occurrence. This runs BEFORE the redirect branch below
@@ -933,8 +1019,10 @@ static void step_finish(http_req *r)
     }
     /* cache under the ORIGINAL url, not the last hop: that is what the next
      * visit will ask for. Never a POST - replaying one from a cache is how a
-     * browser double-submits an order. */
-    if (r->body_len > 0 && !r->post)
+     * browser double-submits an order. Never a TRUNCATED body either: it is not
+     * the resource, and storing it would serve the half-page from memory for the
+     * whole TTL, so a reload could not even recover by chance. */
+    if (r->body_len > 0 && !r->post && !r->capped)
         pc64_cache_put(r->url0, r->raw + r->body_off, r->body_len, r->status, &r->ctl);
     r->rc = r->body_len;
     r->st = HS_END;
@@ -947,8 +1035,9 @@ http_req *pc64_http_begin(const char *url, const char *post)
     if (!r) return 0;
     memset(r, 0, sizeof *r);
     conn_clear(&r->c);
-    r->raw = (char *)malloc(RAW_MAX);
+    r->raw = (char *)malloc(RAW_START);
     if (!r->raw) { free(r); return 0; }
+    r->rcap = (int)RAW_START;
     r->split = -1;
     r->clen = -1;
     r->ctl.max_age = -1;
@@ -970,7 +1059,13 @@ http_req *pc64_http_begin(const char *url, const char *post)
      * asks the server to CHANGE something, and replaying one from a cache is
      * how a browser double-submits an order. */
     if (!r->post) {
-        int n = pc64_cache_get(r->url0, r->raw, RAW_MAX, r->status, sizeof r->status);
+        /* Ask how big the entry is and grow to fit FIRST. raw[] no longer
+         * starts at the maximum, so handing the cache its own capacity would
+         * hand back a cache hit truncated to 16 KB - which is the bug this
+         * change exists to remove, reintroduced on the fast path. */
+        int have = pc64_cache_len(r->url0), n;
+        if (have >= 0) raw_reserve(r, have + 1);
+        n = pc64_cache_get(r->url0, r->raw, r->rcap, r->status, sizeof r->status);
         if (n >= 0) {
             r->body_off = 0; r->body_len = n; r->rc = n;
             r->st = HS_END; r->finished = 1;
@@ -1015,6 +1110,13 @@ int pc64_http_take(http_req *r, char *body, int bodymax, char *status, int statu
 int pc64_http_len(http_req *r)
 { return r ? (r->rc < 0 ? r->rc : r->body_len) : -2; }
 
+int pc64_http_wait(http_req *r)
+{
+    if (!r) return 0;
+    while (!pc64_http_poll(r)) { net_poll(); uno_pc64_delay_ms(2); }
+    return 1;
+}
+
 void pc64_http_free(http_req *r)
 {
     if (!r) return;
@@ -1036,7 +1138,7 @@ int pc64_http_request(const char *url, const char *post,
     r = pc64_http_begin(url, post);      /* the cache check is inside */
     if (!r) { if (statusmax > 0) sput_n(status, statusmax, "Out of memory"); return -2; }
     pc64_http_req_progress(r, 1);
-    while (!pc64_http_poll(r)) { net_poll(); uno_pc64_delay_ms(2); }
+    pc64_http_wait(r);
     rc = pc64_http_take(r, body, bodymax, status, statusmax);
     pc64_http_free(r);
     return rc;

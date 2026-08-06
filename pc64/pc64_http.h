@@ -73,6 +73,12 @@ int pc64_http_take(http_req *r, char *body, int bodymax,
  * error code from take(). */
 int pc64_http_len(http_req *r);
 
+/* Drive one request to completion, pumping the NIC. This is the poll loop out
+ * of pc64_http_get, exposed so a caller that wants the ALLOCATE-FROM-len flow
+ * does not have to choose between a worst-case buffer and reaching into the net
+ * stack for a pump of its own. Returns 1 (finished), or 0 for a NULL handle. */
+int pc64_http_wait(http_req *r);
+
 /* Release the handle. Its connection returns to the keep-alive pool if it is
  * still good, and is closed if it is not. Safe on NULL, and safe on a request
  * that has not finished (which cancels it). */
