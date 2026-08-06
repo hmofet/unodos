@@ -213,7 +213,7 @@ int uno_vdev_mmio(u64 gpa, int is_write, unsigned size, u64 *val)
  * only runs in slices: the kernel is reading the same TSC we are, so both
  * sides of its ratio stop and start together. */
 #define PIT_HZ 1193182ull
-static struct { u16 initial; u64 start; int wr_hi, rd_hi; int armed; } P;
+static struct { u16 initial; u64 start; int wr_hi, rd_hi; int armed; u8 cmos; } P;
 
 static u64 pit_elapsed(void)
 {
@@ -245,6 +245,34 @@ static int pit_io(unsigned port, int is_write, unsigned long long *val)
             u16 now = (u16)(P.initial - (u16)pit_elapsed());
             *val = P.rd_hi ? (now >> 8) : (now & 0xFF);
             P.rd_hi = !P.rd_hi;
+        }
+        return 1;
+    case 0x70:                                   /* CMOS index              */
+        if (is_write) P.cmos = (u8)(*val & 0x7F);
+        return 1;
+    case 0x71:                                   /* CMOS data               */
+        /* A KERNEL READS THE RTC AND WAITS FOR IT. The default answer for an
+         * absent port is all-ones, and in a STATUS register all-ones means
+         * every flag is set - including update-in-progress, which the kernel
+         * spins on until it clears. It never clears, so the boot ends there.
+         * That is the same failure the PIT had, and the general lesson is
+         * that 0xFF is a dangerous default: absent hardware should read as
+         * quiet, not as busy. */
+        if (!is_write) {
+            switch (P.cmos) {
+            case 0x00: *val = 0x00; break;       /* seconds, BCD            */
+            case 0x02: *val = 0x00; break;       /* minutes                 */
+            case 0x04: *val = 0x12; break;       /* hours                   */
+            case 0x06: *val = 0x04; break;       /* weekday                 */
+            case 0x07: *val = 0x06; break;       /* day                     */
+            case 0x08: *val = 0x08; break;       /* month                   */
+            case 0x09: *val = 0x26; break;       /* year                    */
+            case 0x0A: *val = 0x26; break;       /* status A: UIP CLEAR     */
+            case 0x0B: *val = 0x02; break;       /* status B: 24-hour, BCD  */
+            case 0x0D: *val = 0x80; break;       /* battery good            */
+            case 0x32: *val = 0x20; break;       /* century                 */
+            default:   *val = 0x00; break;
+            }
         }
         return 1;
     case 0x61:

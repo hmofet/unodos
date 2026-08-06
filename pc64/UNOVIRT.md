@@ -4,7 +4,7 @@ The appliance machinery: can this machine host a guest, and later, the guest
 itself. The programme and its phases are `docs/UNOVIRT-PLAN.md`; this file is
 the API surface, its changelog, and the things a consumer has to know.
 
-**Status: A0 through A5 [implemented on VMX]. A6 [in progress: **Linux runs on the frame loop, 128 lines deep**, not yet to a shell]. A1 [unproved on SVM].** The
+**Status: A0 through A5 [implemented on VMX]. A6 [in progress: **Linux completes its boot and panics for want of a root filesystem**]. A1 [unproved on SVM].** The
 capability gate runs on every boot. The foothold is real on Intel: on devbuntu
 (bare metal, nested KVM) UnoDOS enters VMX operation, runs a guest, takes it
 through a CPUID intercept, reads its marker back out of guest memory, and then
@@ -444,11 +444,40 @@ tells the guest it is available. One bit, and 54 lines became 128. It is
 exactly the shape of the port-I/O finding in A6a: the default is not "works",
 it is "ask first".
 
+### The last four, and the shape they share
+
+    333 lines, ending:
+    Kernel panic - not syncing: VFS: Unable to mount root fs on unknown-block(0,0)
+
+The kernel now runs its whole boot and panics for the one honest reason: there
+is no root filesystem, because nobody has given it one. Getting from 128 lines
+to there took four fixes and three of them are the same fix:
+
+- **XSETBV (exit 55) always exits**, because XCR0 is machine state VMX carries
+  in neither direction - a guest that enabled AVX would enable it for the host
+  and leave it that way.
+- **XSAVE then had to go entirely.** The kernel died in `fpstate_reset` with a
+  null pointer, which is what a zero xstate size looks like from the far end:
+  advertising XSAVE drags in XCR0, `IA32_XSS` and CPUID leaf 0xD, whose
+  answers must agree with each other and with what the hypervisor really
+  preserves. Masked out of CPUID, the guest uses FXSAVE, which every x86-64
+  CPU has and which needs nothing from us. It costs the guest AVX.
+- **The CMOS, and the general lesson.** It then sat on port `0x71` forever.
+  The default answer for an absent port was all-ones, and in a STATUS register
+  all-ones means every flag is set - including update-in-progress, which the
+  kernel spins on until it clears. **0xFF is a dangerous default: absent
+  hardware should read as quiet, not as busy.** That is the same failure the
+  PIT had, twice in one phase.
+
+The shared shape, across INVPCID, port I/O, XSETBV and the status registers:
+**the default is never "works as on real hardware"**. It is either "traps", or
+"reads as busy forever", and CPUID will happily tell the guest otherwise.
+
 ### What is left before a shell
 
-- **The next unhandled exit**, whatever it is: the run ends on one after 128
-  lines, in the middle of CPU mitigation setup. Decode it the way the others
-  were decoded.
+- **An initramfs.** This is now the only thing between here and userspace, and
+  it is supply rather than mechanism: `ramdisk_image`/`ramdisk_size` in the
+  zero page are already wired and set to zero.
 - **A LAPIC and a timer.** `nolapic no_timer_check` papers over their absence,
   and a kernel with no timer cannot schedule - which is most of what reaching
   a shell means.
