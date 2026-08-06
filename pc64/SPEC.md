@@ -1763,6 +1763,11 @@ faults on the first instruction that assumes it.
   #GP and #PF in the exception bitmap, a fault before the guest has an IDT
   MUST report its vector, error code and address rather than presenting as a
   triple fault at whatever RIP it reached.
+- **S-HV-33** [auto] Guest port I/O MUST be intercepted. It does not exit by
+  default: without the unconditional-I/O-exiting control a guest executes
+  `in` and `out` NATIVELY against this machine's ports, which is both wrong
+  and dangerous. The symptom is a guest doing no I/O at all, and a booting
+  kernel that touches zero ports is impossible.
 - **S-HV-11** [assert] The probe MUST count only free conventional memory
   (`EfiConventionalMemory` / E820 type 1). Counting firmware-reserved or
   boot-services ranges would overstate a machine sitting on the floor, which

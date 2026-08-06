@@ -1322,6 +1322,7 @@ static int vmx_virtio(uno_vm_virtio *out)
 
 static int g_lin_lines;
 static u64 g_lin_deadline;
+static unsigned g_lin_lastport;
 static char g_lin_last[120];
 
 static void lin_sink(const char *s)
@@ -1384,8 +1385,16 @@ static int lin_zeropage(const u8 *setup, u64 carve)
      * and inventing any of them is how a loader breaks on the next release. */
     for (i = 0x1F1; i <= 0x268; i++) zp[i] = setup[i];
     zp[0x210] = 0xFF;                     /* type_of_loader: not a known one */
-    zp[0x211] |= 0x80;                    /* loadflags: CAN_USE_HEAP         */
-    zp[0x211] &= (u8)~0x20;               /* ...and QUIET off, we want output */
+    /* CAN_USE_HEAP goes OFF, not on. It is a promise that heap_end_ptr is
+     * valid, and a flag set beside a field left at zero points the kernel's
+     * heap at address zero. The 64-bit entry path does not want a heap from
+     * the loader anyway. */
+    zp[0x211] &= (u8)~0x80;
+    zp[0x211] &= (u8)~0x20;               /* QUIET off, we want the output   */
+    /* code32_start is where WE put the kernel, not where the image was built
+     * to sit. It ships as 0x100000 and we load at 16 MiB. */
+    *(u32 *)(zp + 0x214) = (u32)L_KERNEL;
+    *(u32 *)(zp + 0x224) = 0;             /* heap_end_ptr: none, and say so  */
     *(u32 *)(zp + 0x228) = (u32)L_CMDLINE;
     *(u32 *)(zp + 0x218) = 0;             /* no initrd yet                   */
     *(u32 *)(zp + 0x21C) = 0;
@@ -1505,6 +1514,7 @@ static int vmx_linux(uno_vm_linux *out)
     out->loaded = 0; out->lines = 0; out->exits = 0;
     out->last = ""; out->stop_reason = 0; out->stop_rip = 0;
     out->fault_vec = 0xFFFF; out->fault_err = 0; out->fault_addr = 0;
+    out->pio = 0; out->pio_n = 0; g_lin_lastport = 0xFFFFFFFFu;
     g_lin_lines = 0; g_lin_last[0] = 0; g_kernel_gs = 0;
 
     if (!uno_vmm_probe()->slat || !carve) return 0;
@@ -1547,8 +1557,15 @@ static int vmx_linux(uno_vm_linux *out)
     vmcs_reset(0, entry, 0);                 /* IDT limit 0: it installs one */
     pin   = adjust(IA32_VMX_TRUE_PIN, IA32_VMX_PINBASED,
                    PIN_EXT_INTR_EXIT | PIN_PREEMPT, 1);
+    /* UNCONDITIONAL I/O EXITING, and its absence is why the kernel was
+     * silent. Port I/O does not exit unless asked: without bit 24 the guest's
+     * `in` and `out` execute NATIVELY, against this machine's real ports. So
+     * the kernel was not failing to write to its serial port - it was writing
+     * to the HOST's, along with whatever else it probed. Fourteen hundred
+     * exits and not one of them I/O should have been the tell: a booting
+     * kernel touches the PIT, the CMOS and the PCI config ports constantly. */
     proc  = adjust(IA32_VMX_TRUE_PROC, IA32_VMX_PROCBASED,
-                   PROC_HLT_EXITING | (1u << 31), 1);
+                   PROC_HLT_EXITING | (1u << 24) | (1u << 31), 1);
     proc2 = adjust(IA32_VMX_PROCBASED2, IA32_VMX_PROCBASED2, EPT_PROC2, 0);
     vmwrite(PIN_BASED_CTLS, pin);
     vmwrite(PROC_BASED_CTLS, proc);
@@ -1557,13 +1574,26 @@ static int vmx_linux(uno_vm_linux *out)
     vmwrite(GUEST_CR3, L_PML4);
     vmwrite(GUEST_GDTR_BASE, L_GDT);
     vmwrite(GUEST_GDTR_LIMIT, 0x1F);
-    /* CATCH THE FAULT INSTEAD OF THE WRECKAGE. The kernel has no IDT for its
-     * first instructions, so any exception it takes is a triple fault - one
-     * exit code, no vector, no address, at whatever RIP it reached. Trapping
-     * #UD, #GP and #PF turns that into the vector, the error code and (for a
-     * page fault) the address, which is the difference between a debuggable
-     * result and "it stopped". */
-    vmwrite(EXCEPTION_BITMAP, (1u << 6) | (1u << 13) | (1u << 14));
+    /* WHICH EXCEPTIONS TO STEAL, and the answer is fewer than it looks.
+     *
+     * Trapping #UD/#GP/#PF is what made the CR4 fault visible: before its own
+     * IDT exists, every exception the kernel takes is a triple fault with no
+     * vector and no address. But the decompressor TAKES PAGE FAULTS ON
+     * PURPOSE - its identity map is built on demand, and its own #PF handler
+     * adds the mapping and returns. Intercepting #PF steals an exception the
+     * guest was going to handle correctly, and reports the kernel's normal
+     * operation as a failure.
+     *
+     * So #PF is left to the guest. #UD and #GP are still stolen: nothing in a
+     * booting kernel expects either, and while they are trapped a fault that
+     * WOULD have been a silent triple fault names itself. That trade goes
+     * away once the kernel is known to boot. */
+    /* And now NONE of them. Once the kernel is far enough in to have its own
+     * IDT, #UD and #GP are its business too - Linux raises #UD deliberately
+     * for BUG() and patches instructions around it. Stealing those turns the
+     * kernel's own error handling into our stop. The bitmap earned its keep
+     * on the first two faults and is now in the way. */
+    vmwrite(EXCEPTION_BITMAP, 0);
     /* THE SHADOW REGISTERS, and a kernel cannot boot without them.
      *
      * VMX requires the guest's CR4 to keep VMXE set at all times - it is in
@@ -1622,6 +1652,11 @@ static int vmx_linux(uno_vm_linux *out)
             int is_in = (q & 8) ? 1 : 0;
             if (q & 0x10) break;             /* a string port op: not decoded */
             v = g_ctx.rax;
+            if (out->pio_n < 8 && port != g_lin_lastport) {
+                out->pio_ports[out->pio_n++] = (unsigned short)port;
+                g_lin_lastport = port;
+            }
+            out->pio++;
             uno_vdev_pio(port, !is_in, size, &v, lin_sink);
             if (is_in) {
                 if (size == 1) g_ctx.rax = (g_ctx.rax & ~0xFFull) | (v & 0xFF);
@@ -1661,7 +1696,7 @@ static int vmx_linux(uno_vm_linux *out)
     out->lines = g_lin_lines;
     out->last = g_lin_last;
     out->chars = uno_vdev_serial_chars();
-    out->stop_reason = (unsigned)ex.raw;
+    if (out->stop_reason != 0xDEAD) out->stop_reason = (unsigned)ex.raw;
     out->stop_rip = ex.rip;
     return out->chars > 0;
 }
