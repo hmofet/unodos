@@ -76,15 +76,10 @@ def main():
                   % (s["connections"], s["requests"], s["paths"]))
             results.append(("subresources fetched (page + 3 sheets)",
                             s["requests"] >= 4))
-            # Connection REUSE is currently disabled (see ka_matches in
-            # pc64_http.c). Assert what is true today rather than what we
-            # wish were true: one connection per request. When reuse is
-            # re-enabled, flip this to connections < requests - and this
-            # test is what will say whether it actually worked.
-            results.append(("no reuse yet: one connection per request "
-                            "(keep-alive is disabled)",
-                            s["connections"] == s["requests"]))
-            print("  NOTE keep-alive reuse is disabled in pc64_http.c")
+            results.append(("keep-alive: fewer connections than requests",
+                            s["connections"] < s["requests"]))
+            results.append(("keep-alive: ONE connection for the whole page",
+                            s["connections"] == 1))
 
             # ---- 2. chunked framing ------------------------------------
             nettest_server.stats.update(connections=0, requests=0, paths=[])
