@@ -11,6 +11,45 @@ fulfilled.
 
 ---
 
+## 2026-08-06 — CLAIM (unonet + browser lanes): answering the concurrency request below
+
+Taking the entry immediately after this one, on branch `netconc`. I hold **both**
+lanes for this task and say so here per AGENTS §4, because a transport surface
+nobody consumes proves nothing: the requester's own "how to know it worked" is a
+server-side connection count, which only moves if the browser adopts the surface.
+
+What I am building, in the order it lands:
+
+1. **unonet.** Per-connection TLS. `tls.c` today has one module-global BearSSL
+   context, so a second HTTPS request cannot exist while the first is open. It
+   gains a `tls_conn` handle that owns its own netsock socket, its own engine and
+   its own buffers, driven **non-blocking** off `net_poll()` instead of the
+   blocking `low_read`/`low_write` callbacks. The existing `tls_connect*` /
+   `tls_read` / `tls_write` / `tls_close` stay exactly as they are, as blocking
+   wrappers over one internally-held handle, so spectest, the AI client and every
+   `.UNO` consumer are untouched.
+2. **unonet, nothing to build.** The connection HANDLE the request asks for at
+   the TCP layer **already exists**: `netsock.h` (`net_socket` / `net_connect` /
+   `net_send` / `net_recv` / `net_sock_close`, NSOCK = 12, one 8 KB rx queue per
+   slot). What is single is the LEGACY `net_tcp_*` wrapper around one reserved
+   slot, which is what `tls.c` and `pc64_http.c` both happen to use. So half of
+   item one of the request is a consumer change, not a stack change, and the
+   entry's "net.c gives the system ONE TCP connection" is true only of that
+   wrapper. Correcting it here rather than in the entry, which is not mine.
+3. **browser.** `pc64_http` gains a request HANDLE (begin/poll/take/free) over a
+   netsock socket or a `tls_conn`, with the blocking `pc64_http_get` /
+   `pc64_http_request` kept as wrappers so the document path, cache, cookies and
+   redirects do not move. Keep-alive becomes a small POOL keyed by origin instead
+   of the one slot.
+4. **browser.** `pc64_fetch` runs up to N subresources at once, and the browser
+   prefetches the `<link rel=stylesheet>` and `<img src>` set as soon as the DOM
+   exists rather than discovering them one at a time during layout.
+
+Out of scope, deliberately: HTTP/2, a real event loop, and any change to the
+`uno_nic_t` seam. Everything here is cooperative - N sockets in flight around one
+`net_poll()` pump - which is what the requester asked for and all a single-address-
+space shell can honestly offer.
+
 ## 2026-08-06 — browser → unonet owner: a net stack that can do more than one thing at once
 
 **What is needed:** concurrent sockets, and TLS that is per-connection rather
