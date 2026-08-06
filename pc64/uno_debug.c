@@ -1360,7 +1360,7 @@ void uno_dbg_envblock(void)
          * Next to the CPU line because that is where the reader looks for it,
          * and it belongs in every boot log rather than only in a VM build: on
          * a machine that refuses, THIS line is the whole bug report. */
-        char hv[380];
+        char hv[560];
         uno_vmm_status_str(hv, (int)sizeof hv);
         env("HV: %s\n", hv);
     }

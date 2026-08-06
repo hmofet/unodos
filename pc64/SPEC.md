@@ -1724,6 +1724,21 @@ faults on the first instruction that assumes it.
   and stays that way. Nothing in this OS is interrupt-driven except the LAPIC
   watchdog, so the machine looks healthy while the one mechanism that catches a
   hang is dead. site: `hv_vmx.c vmx_entry` (`pushfq`/`popfq`).
+- **S-HV-24** [auto] A guest MUST have a clock that advances ACROSS slices.
+  `rdtsc` is not intercepted, so the guest reads the real counter directly; a
+  sample taken at two points separated by other slices MUST be strictly
+  increasing. Sampling within one slice would prove only that the guest ran
+  once, which is not the same claim and is the one that passes by accident.
+- **S-HV-25** [auto] An injected interrupt MUST be delivered through the
+  GUEST's own IDT exactly once: its own handler counts it in its own memory,
+  the count MUST be 1 after injection and MUST STILL be 1 after further
+  entries. Re-delivery forever and delivery never look identical for the first
+  millisecond, which is why both halves are checked.
+- **S-HV-26** [auto] An intercepted MSR read MUST be answerable: the value the
+  host places in the guest's EDX:EAX MUST be what the guest reads back into
+  its own memory. NOTE: with no MSR bitmap configured EVERY MSR access exits.
+  That is correct for a guest of eighteen instructions and unworkable for
+  Linux, which reads MSRs constantly; the bitmap belongs with the virtio work.
 - **S-HV-11** [assert] The probe MUST count only free conventional memory
   (`EfiConventionalMemory` / E820 type 1). Counting firmware-reserved or
   boot-services ranges would overstate a machine sitting on the floor, which
