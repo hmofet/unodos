@@ -337,6 +337,59 @@ static mp_obj_t m_pci(void) {
 }
 static MP_DEFINE_CONST_FUN_OBJ_0(pci_obj, m_pci);
 
+/* ---- uno.log* : the system log (see pc64/UNOLOG.md) -----------------------
+ * Scripting the log is worth having on its own - a script that notices
+ * something and records it belongs in the same record as the kernel's own
+ * lines - and it is what lets the gate assert on the log from outside. */
+void unolog(int sev, int fac, const char *fmt, ...);
+int  unolog_flush(void);
+int  unolog_level(void);
+void unolog_set_level(int sev);
+void unolog_set_remote_level(int sev);
+int  unolog_set_remote(const char *host, int port);
+int  unolog_set_listen(int on);
+unsigned long unolog_next(void);
+unsigned long unolog_dropped(void);
+unsigned long unolog_sent(void);
+unsigned long unolog_received(void);
+
+static mp_obj_t m_log(size_t n, const mp_obj_t *a)
+{   /* uno.log(sev, fac, text) */
+    unolog(mp_obj_get_int(a[0]), mp_obj_get_int(a[1]), "%s",
+           mp_obj_str_get_str(a[2]));
+    (void)n; return mp_const_none; }
+static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(log_obj, 3, 3, m_log);
+
+static mp_obj_t m_log_flush(void) { return mp_obj_new_int(unolog_flush()); }
+static MP_DEFINE_CONST_FUN_OBJ_0(log_flush_obj, m_log_flush);
+
+static mp_obj_t m_log_level(size_t n, const mp_obj_t *a)
+{   if (n) unolog_set_level(mp_obj_get_int(a[0]));
+    return mp_obj_new_int(unolog_level()); }
+static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(log_level_obj, 0, 1, m_log_level);
+
+static mp_obj_t m_log_remote_level(mp_obj_t s)
+{ unolog_set_remote_level(mp_obj_get_int(s)); return mp_const_none; }
+static MP_DEFINE_CONST_FUN_OBJ_1(log_remote_level_obj, m_log_remote_level);
+
+static mp_obj_t m_log_remote(size_t n, const mp_obj_t *a)
+{   int port = (n > 1) ? mp_obj_get_int(a[1]) : 0;
+    return mp_obj_new_int(unolog_set_remote(mp_obj_str_get_str(a[0]), port)); }
+static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(log_remote_obj, 1, 2, m_log_remote);
+
+static mp_obj_t m_log_listen(mp_obj_t on)
+{ return mp_obj_new_int(unolog_set_listen(mp_obj_get_int(on) != 0)); }
+static MP_DEFINE_CONST_FUN_OBJ_1(log_listen_obj, m_log_listen);
+
+static mp_obj_t m_log_stat(void)
+{   mp_obj_t t[4];
+    t[0] = mp_obj_new_int((mp_int_t)unolog_next());
+    t[1] = mp_obj_new_int((mp_int_t)unolog_dropped());
+    t[2] = mp_obj_new_int((mp_int_t)unolog_sent());
+    t[3] = mp_obj_new_int((mp_int_t)unolog_received());
+    return mp_obj_new_tuple(4, t); }
+static MP_DEFINE_CONST_FUN_OBJ_0(log_stat_obj, m_log_stat);
+
 static const mp_rom_map_elem_t uno_globals_table[] = {
     { MP_ROM_QSTR(MP_QSTR___name__), MP_ROM_QSTR(MP_QSTR_uno) },
     { MP_ROM_QSTR(MP_QSTR_rgb),      MP_ROM_PTR(&rgb_obj) },
@@ -350,6 +403,13 @@ static const mp_rom_map_elem_t uno_globals_table[] = {
     { MP_ROM_QSTR(MP_QSTR_mkdir),    MP_ROM_PTR(&mkdir_obj) },
     { MP_ROM_QSTR(MP_QSTR_devices),  MP_ROM_PTR(&devices_obj) },
     { MP_ROM_QSTR(MP_QSTR_pci),      MP_ROM_PTR(&pci_obj) },
+    { MP_ROM_QSTR(MP_QSTR_log),          MP_ROM_PTR(&log_obj) },
+    { MP_ROM_QSTR(MP_QSTR_log_flush),    MP_ROM_PTR(&log_flush_obj) },
+    { MP_ROM_QSTR(MP_QSTR_log_level),    MP_ROM_PTR(&log_level_obj) },
+    { MP_ROM_QSTR(MP_QSTR_log_remote_level), MP_ROM_PTR(&log_remote_level_obj) },
+    { MP_ROM_QSTR(MP_QSTR_log_remote),   MP_ROM_PTR(&log_remote_obj) },
+    { MP_ROM_QSTR(MP_QSTR_log_listen),   MP_ROM_PTR(&log_listen_obj) },
+    { MP_ROM_QSTR(MP_QSTR_log_stat),     MP_ROM_PTR(&log_stat_obj) },
 };
 static MP_DEFINE_CONST_DICT(uno_globals, uno_globals_table);
 const mp_obj_module_t mp_module_uno = {

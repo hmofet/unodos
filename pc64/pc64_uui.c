@@ -6018,6 +6018,11 @@ int main(void)
         uno_screen_capture_tick();      /* server-side screen record
                                            (armed by `screen record start`)    */
         netdisc_tick();                 /* zero-config LAN discovery           */
+        { void unolog_tick(void); unolog_tick(); }
+                                        /* system log: the periodic write-out
+                                           and the syslog socket. Everything
+                                           expensive lives here so unolog()
+                                           itself costs only a formatted line  */
         /* pc64_stress_tick() REMOVED 2026-07-21 (user request): the continuous
          * fuzz driver ran even when unticked / looped forever. Disconnected here
          * AND hard-disabled in pc64_stress.c so no DEBUG.CFG value can revive

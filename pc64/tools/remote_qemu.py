@@ -97,7 +97,14 @@ def boot_qemu():
         "-drive", "if=pflash,format=raw,file=" + VARS,
         "-drive", "format=raw,file=" + DISK,
         "-drive", "format=raw,file=" + DISK2,     # blank; the disk verbs partition/format it
-        "-netdev", "user,id=n0", "-device", "e1000,netdev=n0",
+        # URC_HOSTFWD appends slirp forwards, e.g. "udp::5514-:514". Slirp is
+        # outbound-only by default: the guest can reach the host at 10.0.2.2,
+        # and the host cannot reach the guest AT ALL without a forward. A test
+        # for anything the guest LISTENS to therefore measures nothing unless
+        # it sets this - which is how the unolog syslog-sink check first
+        # "failed" against a sink that was working.
+        "-netdev", "user,id=n0" + os.environ.get("URC_HOSTFWD", ""),
+        "-device", "e1000,netdev=n0",
         "-display", "none",
     ]
     if os.environ.get("URC_DBGCON"):

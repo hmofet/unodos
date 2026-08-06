@@ -23,6 +23,7 @@
 #include "uno_uuiapp.h"     /* the unoui-class module ABI (flags bit 0) */
 #include "pyhost.h"     /* Python-runtime + Python-app module tiers */
 #include "unoauto.h"    /* mod.load / mod.unload tap points (no-op in prod) */
+#include "unolog.h"     /* the system log: exported to apps + the uno module */
 #include "pc64_fs.h"
 #include "fat.h"
 #include "pc64_font.h"
@@ -264,6 +265,17 @@ static const struct { const char *name; void *addr; } kExports[] = {
     KX(uno_pc64_shutdown), KX(uno_dbg_uptime_ms),
     KX(unoauto_remote_active), KX(unoauto_remote_send),
     KX(unoauto_remote_recv),   KX(unoauto_remote_stop),
+    /* unolog (pc64/UNOLOG.md): the system log, for the uno.log* Python
+     * bindings and for LOGVIEW.UNO. The read side is exported as well as the
+     * write side - a viewer that could only append would be a strange thing. */
+    KX(unolog), KX(unolog_flush), KX(unolog_format),
+    KX(unolog_level), KX(unolog_set_level),
+    KX(unolog_remote_level), KX(unolog_set_remote_level),
+    KX(unolog_set_remote), KX(unolog_remote_host), KX(unolog_remote_port),
+    KX(unolog_set_listen), KX(unolog_listening), KX(unolog_save_cfg),
+    KX(unolog_first), KX(unolog_next), KX(unolog_get),
+    KX(unolog_dropped), KX(unolog_sent), KX(unolog_received),
+    KX(unolog_sev_name), KX(unolog_fac_name),
 };
 #define NEXPORT ((int)(sizeof kExports / sizeof kExports[0]))
 
