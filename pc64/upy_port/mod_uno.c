@@ -381,6 +381,49 @@ static mp_obj_t m_log_listen(mp_obj_t on)
 { return mp_obj_new_int(unolog_set_listen(mp_obj_get_int(on) != 0)); }
 static MP_DEFINE_CONST_FUN_OBJ_1(log_listen_obj, m_log_listen);
 
+/* The ring, for a viewer. Sequence numbers rather than indices: the ring
+ * wraps, so an index is only meaningful until it is overwritten, and a viewer
+ * that scrolled while the machine logged would show the wrong lines. */
+unsigned long unolog_first(void);
+typedef struct {
+    unsigned long seq; int sev, fac; unsigned long ms; long long wall;
+    char text[192]; char src[16];
+} unolog_rec_py;                    /* mirrors unolog.h's unolog_rec */
+int unolog_get(unsigned long seq, unolog_rec_py *out);
+
+/* uno.run_app(vol, path) - open a .UNO app, the way Files does when you
+ * double-click one. No new capability: the `py` verb that reaches this is
+ * already KERNEL-tier because it is arbitrary code execution. */
+int pc64_shell_run_user(int vol, const char *path);
+static mp_obj_t m_run_app(mp_obj_t vol, mp_obj_t path)
+{ return mp_obj_new_int(pc64_shell_run_user(mp_obj_get_int(vol),
+                                            mp_obj_str_get_str(path))); }
+static MP_DEFINE_CONST_FUN_OBJ_2(run_app_obj, m_run_app);
+
+int unolog_save_cfg(void);
+static mp_obj_t m_log_save(void) { return mp_obj_new_int(unolog_save_cfg()); }
+static MP_DEFINE_CONST_FUN_OBJ_0(log_save_obj, m_log_save);
+
+static mp_obj_t m_log_span(void)
+{   mp_obj_t t[2];
+    t[0] = mp_obj_new_int((mp_int_t)unolog_first());
+    t[1] = mp_obj_new_int((mp_int_t)unolog_next());
+    return mp_obj_new_tuple(2, t); }
+static MP_DEFINE_CONST_FUN_OBJ_0(log_span_obj, m_log_span);
+
+static mp_obj_t m_log_read(mp_obj_t seq)
+{   unolog_rec_py r;
+    mp_obj_t t[6];
+    if (!unolog_get((unsigned long)mp_obj_get_int(seq), &r)) return mp_const_none;
+    t[0] = mp_obj_new_int(r.sev);
+    t[1] = mp_obj_new_int(r.fac);
+    t[2] = mp_obj_new_int((mp_int_t)r.ms);
+    t[3] = mp_obj_new_int((mp_int_t)r.wall);
+    t[4] = mp_obj_new_str(r.text, strlen(r.text));
+    t[5] = mp_obj_new_str(r.src, strlen(r.src));
+    return mp_obj_new_tuple(6, t); }
+static MP_DEFINE_CONST_FUN_OBJ_1(log_read_obj, m_log_read);
+
 static mp_obj_t m_log_stat(void)
 {   mp_obj_t t[4];
     t[0] = mp_obj_new_int((mp_int_t)unolog_next());
@@ -410,6 +453,10 @@ static const mp_rom_map_elem_t uno_globals_table[] = {
     { MP_ROM_QSTR(MP_QSTR_log_remote),   MP_ROM_PTR(&log_remote_obj) },
     { MP_ROM_QSTR(MP_QSTR_log_listen),   MP_ROM_PTR(&log_listen_obj) },
     { MP_ROM_QSTR(MP_QSTR_log_stat),     MP_ROM_PTR(&log_stat_obj) },
+    { MP_ROM_QSTR(MP_QSTR_log_span),     MP_ROM_PTR(&log_span_obj) },
+    { MP_ROM_QSTR(MP_QSTR_log_read),     MP_ROM_PTR(&log_read_obj) },
+    { MP_ROM_QSTR(MP_QSTR_log_save),     MP_ROM_PTR(&log_save_obj) },
+    { MP_ROM_QSTR(MP_QSTR_run_app),      MP_ROM_PTR(&run_app_obj) },
 };
 static MP_DEFINE_CONST_DICT(uno_globals, uno_globals_table);
 const mp_obj_module_t mp_module_uno = {
