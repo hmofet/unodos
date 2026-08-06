@@ -115,6 +115,24 @@ one **✅ FIXED** finding.
 ### Music Player app (full design: [docs/MUSIC-PLAYER-PLAN.md](docs/MUSIC-PLAYER-PLAN.md))
 A new app (alongside the built-in-tune **Music** app) that plays music **files**, routed
 to the best sound hardware on each platform and scaled down gracefully.
+
+**pc64 is done, and by a different plan.** [UnoAmp](docs/PLAYER-WINAMP-PLAN.md), the
+Winamp 2.x clone, supersedes this plan's Track B **for pc64 only**: phases 1-8 landed
+and are ZimaBlade-confirmed (skins, three windows, visualisers, EQ, encoders, MOD+VGM).
+Its three deliberate limits are below. **Everything in this section is therefore the
+retro-port half**, which UnoAmp does not touch, plus Track A.
+
+UnoAmp's own remaining items:
+- [ ] Conversions cap at about two minutes: `uno_fs_write` replaces a file entire, so
+      `unoamp_enc.c` assembles the whole output in memory (12 MB against a 32 MB heap
+      shared with Studio). Lifting it means a streaming append in `fat.c`.
+- [ ] MP3/AAC **encoding** is unimplemented on purpose (a bad psychoacoustic encoder is
+      worse than none). The encoder registry takes one the day it exists, no change to
+      `unoamp_enc.c`.
+- [ ] VGM covers the **SN76489 only**; YM2612 and YM2151 modules are refused by name at
+      open rather than played as silence.
+
+The retro-port half:
 - [ ] Formats: **WAV/AU** (PCM, every platform), **MIDI/SMF** (synth-capable HW), **MP3**
       (PS2 / Dreamcast only, fixed-point decoder), **console-native** (Amiga **MOD**,
       Genesis **VGM**, SNES **SPC**, C64 **SID**, PS2 **VAG**, DC **ADX**).
