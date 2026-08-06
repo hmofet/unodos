@@ -15,6 +15,7 @@
  * not in the OS).
  * ======================================================================== */
 #include "unovirt.h"
+#include "unovirt_hv.h"
 #include "uefi.h"
 #include "bootinfo.h"
 #include <stdio.h>
@@ -324,6 +325,96 @@ const char *uno_vmm_blocker_str(unsigned m)
     return "";
 }
 
+/* ---- A1: the foothold -----------------------------------------------------
+ *
+ * The banner does not say "we own the extension", it says "a guest ran and
+ * control came back".  Glide's V2 makes the same distinction and it is worth
+ * copying exactly: `owned` alone would only prove a branch was taken, while a
+ * value that went out through a guest's registers, through its own store
+ * instruction, and came back out of its memory proves entry, intercept
+ * decode, register write-back, RIP advance, resume and exit - each of which
+ * is otherwise a silent hang the first time something depends on it.
+ *
+ * The crasher runs SECOND and matters as much.  Until a guest that goes wrong
+ * reports why, every later mistake in this subsystem presents identically, as
+ * a machine that stops. */
+#define VM_MARKER 0x534F444F4E55ull      /* 'UNODOS', little-endian          */
+
+static char g_self[160];
+static int  g_self_done, g_self_ok;
+
+const char *uno_vmm_selftest_str(void) { return g_self; }
+
+int pc64_stress_cfg_flag(const char *key);   /* DEBUG.CFG key set? -1 = no file */
+
+int uno_vmm_selftest(void)
+{
+    const uno_vm_caps *c = uno_vmm_probe();
+    const uno_hv_t *hv = 0;
+    const char *why = 0;
+    unsigned m = 0;
+    uno_vmexit ex;
+    u64 got = 0;
+
+    if (g_self_done) return g_self_ok;
+    g_self_done = 1;
+
+    /* OPT-IN, and it stays opt-in until a first VMRUN has been survived on
+     * real silicon. The precedent is `mtrr-wc` (pc64_mtrr.c): a change with a
+     * genuine risk of taking the machine out runs only with an operator
+     * present who asked for it, and refuses rather than guesses.
+     *
+     * The risk here is not theoretical and is not a fault. A VMRUN that does
+     * not return leaves the core with GIF clear, which means no interrupt of
+     * any kind can be delivered to it - not the LAPIC watchdog that exists to
+     * catch exactly this. There is no report, no reset and no screen: the
+     * machine simply stops. Nothing that behaves that way when it goes wrong
+     * belongs on the default boot path of an OS somebody is using. */
+    if (pc64_stress_cfg_flag("vm-selftest") != 1) {
+        snprintf(g_self, sizeof g_self,
+                 "not run - opt-in (DEBUG.CFG `vm-selftest`)");
+        return 0;
+    }
+
+    if (!uno_vmm_eligible(&m)) {
+        snprintf(g_self, sizeof g_self, "not run - %s", uno_vmm_blocker_str(m));
+        return 0;
+    }
+    if (c->vendor == UNO_HV_SVM) hv = uno_hv_svm();
+    if (!hv) {
+        snprintf(g_self, sizeof g_self, "no backend for this vendor yet "
+                 "(vmx is written but unimplemented)");
+        return 0;
+    }
+    if (!hv->enable(&why)) {
+        snprintf(g_self, sizeof g_self, "%s: could not enter host mode - %s",
+                 hv->name, why ? why : "?");
+        return 0;
+    }
+
+    ex.reason = UNO_VX_UNKNOWN; ex.raw = 0; ex.rip = 0; ex.info1 = 0; ex.info2 = 0;
+    if (!hv->marker(VM_MARKER, &got, &ex)) {
+        snprintf(g_self, sizeof g_self,
+                 "%s: entered, but the guest did not come back - got %llx "
+                 "want %llx, last exit %llx at rip %llx",
+                 hv->name, got, VM_MARKER, ex.raw, ex.rip);
+        return 0;
+    }
+    {   /* A guest that ruins itself, and a machine that survives it. */
+        uno_vmexit cr;
+        int contained;
+        cr.reason = UNO_VX_UNKNOWN; cr.raw = 0; cr.rip = 0; cr.info1 = 0; cr.info2 = 0;
+        contained = hv->crasher(&cr);
+        snprintf(g_self, sizeof g_self,
+                 "%s: entered, guest round trip -> %llx OK, crasher %s "
+                 "(exit %llx rip %llx)",
+                 hv->name, got, contained ? "contained" : "NOT CONTAINED",
+                 cr.raw, cr.rip);
+        g_self_ok = contained;
+    }
+    return g_self_ok;
+}
+
 int uno_vmm_status_str(char *buf, int cap)
 {
     const uno_vm_caps *c = uno_vmm_probe();
@@ -356,5 +447,12 @@ int uno_vmm_status_str(char *buf, int cap)
     }
     if (n < 0) { buf[0] = 0; return 0; }
     if (n >= cap) n = cap - 1;
+    /* The A1 result rides on the same block rather than taking a second line
+     * in the env block: one seam, one place to read. */
+    if (g_self[0] && n + 4 < cap) {
+        int k = snprintf(buf + n, (unsigned)(cap - n),
+                         "\n            selftest: %s", g_self);
+        if (k > 0) n = (n + k >= cap) ? cap - 1 : n + k;
+    }
     return n;
 }
