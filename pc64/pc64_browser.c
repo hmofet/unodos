@@ -320,6 +320,11 @@ static int  loc_is_net(const char *loc);
 #ifdef UW_ENGINE
 static void fetch_link_sheets(uw_doc *d);    /* defined with the URL helpers */
 
+/* RE-ENTRANCY GUARD - see where it is set, in load_progress.
+ * A progressive repaint must not start a NESTED fetch on the single TCP
+ * slot the outer response is still using. */
+static int g_in_progress_paint;
+
 /* ---- page scripts on the live DOM (M5) ------------------------------------
  * One VM per page, built here and torn down by the next navigation. Every
  * <script> in the document runs in it, in document order, and whatever it
@@ -1032,6 +1037,8 @@ static void fetch_link_sheets(uw_doc *d)
 {
     uw_node *n, *next;
     if (!d || !g_page_base[0]) return;
+    /* never from inside a progressive paint - see the guard's declaration */
+    if (g_in_progress_paint) return;
     for (n = uw_next_in_order(uw_document(d), uw_document(d)); n; n = next) {
         const char *rel, *href;
         char abs[LOCMAX];
@@ -1406,6 +1413,16 @@ static void doc_error(btab *t, const char *what, const char *why)
 static btab *g_partial_tab;
 static void br_draw(struct unoui_widget *w, unoui_rect r, void *ctx);
 
+/* g_in_progress_paint is declared with fetch_link_sheets above, which is the
+ * function it protects. The progressive callback repaints from INSIDE
+ * pc64_http's receive loop; that repaint re-parses the partial document, and
+ * parsing walked straight into fetch_link_sheets - starting a nested HTTP
+ * request on the single TCP slot the outer response was still using.
+ * Against a real server the browser fetched the page, then fetched its first
+ * stylesheet from inside the page's own receive loop, and hung with the other
+ * two never requested. Subresources are not urgent mid-response: the document
+ * is re-rendered when it completes, and the sheets are fetched then. */
+
 static void load_progress(const char *body, int len, long total)
 {
     btab *t = g_partial_tab;
@@ -1418,7 +1435,9 @@ static void load_progress(const char *body, int len, long total)
     t->is_html = 1;
     g_dom_sig = 0;                    /* the tree must be rebuilt from this */
     if (g_rect.w > 0) {
+        g_in_progress_paint = 1;
         br_draw(0, g_rect, 0);
+        g_in_progress_paint = 0;
         uno_pc64_present();           /* straight to the screen, mid-fetch */
     }
 }
@@ -1533,6 +1552,12 @@ static void load_loc(btab *t, const char *loc)
         n = pc64_http_get(loc, d, DOC_MAX - 1, g_status, sizeof g_status);
         pc64_http_on_progress(0);
         g_partial_tab = 0;
+        /* Force one more parse now that the document is COMPLETE and the
+         * re-entrancy guard is clear. Without this the last progressive
+         * paint's cached tree is reused - the text is identical, so the
+         * document-signature cache short-circuits - and the page's
+         * stylesheets are never fetched at all. */
+        g_dom_sig = 0;
         if (n < 0) { doc_error(t, loc, g_status); return; }
         /* pick MD vs HTML from the suffix; HTML is the default (it also
          * renders plain text sensibly) */
