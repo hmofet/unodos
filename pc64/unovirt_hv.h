@@ -67,6 +67,15 @@ typedef struct uno_vm_clockirq {
     int exits;                   /* how many exits it took to get there      */
 } uno_vm_clockirq;
 
+/* What A5's guest and its device report between them. */
+typedef struct uno_vm_virtio {
+    unsigned magic;          /* the identity register, read BY the guest    */
+    unsigned used_idx;       /* what the guest read back out of the used ring */
+    int bytes, notifies;     /* what the device consumed, and how often     */
+    int cycle_refused;       /* a self-referential chain returned, not hung */
+    const char *text;        /* what came through                           */
+} uno_vm_virtio;
+
 typedef struct uno_hv {
     const char *name;                     /* "svm" | "vmx"                   */
 
@@ -105,6 +114,10 @@ typedef struct uno_hv {
      * system - a clock it can read, an interrupt it can take, and an MSR
      * space somebody answers.  One guest exercises all three. */
     int (*clockirq)(struct uno_vm_clockirq *out);
+
+    /* A5: an MMIO device the guest discovers and talks to through a
+     * virtqueue.  This is the mechanism every later device is built on. */
+    int (*virtio)(struct uno_vm_virtio *out);
 } uno_hv_t;
 
 const uno_hv_t *uno_hv_svm(void);         /* hv_svm.c                        */

@@ -1739,6 +1739,21 @@ faults on the first instruction that assumes it.
   its own memory. NOTE: with no MSR bitmap configured EVERY MSR access exits.
   That is correct for a guest of eighteen instructions and unworkable for
   Linux, which reads MSRs constantly; the bitmap belongs with the virtio work.
+- **S-HV-27** [auto] An MMIO access MUST be decoded from the guest's
+  instruction stream, not guessed: x86 supplies the faulting address and the
+  direction but NOT the register or the operand size. The decoder MUST accept
+  exactly the MOV forms `88`/`89`/`8A`/`8B` with their prefixes and MUST
+  REFUSE anything else, ending the guest with a report rather than answering
+  a load into a register it guessed at.
+- **S-HV-28** [auto] A 32-bit MMIO load MUST zero-extend into the top half of
+  the destination, exactly as the instruction would; a 16- or 8-bit load MUST
+  leave the rest of the register alone.
+- **S-HV-29** [auto] Every descriptor-chain walk MUST terminate within the
+  queue size and MUST return a failure rather than hanging. A guest can point
+  a descriptor's `next` field at itself with one store.
+- **S-HV-30** [auto] Every read or write of guest memory made ON THE GUEST'S
+  BEHALF MUST go through `uno_vmm_gpa()`, including addresses that came out of
+  descriptors. Stage two bounds the guest's own accesses and nothing else.
 - **S-HV-11** [assert] The probe MUST count only free conventional memory
   (`EfiConventionalMemory` / E820 type 1). Counting firmware-reserved or
   boot-services ranges would overstate a machine sitting on the floor, which
