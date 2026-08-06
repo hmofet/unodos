@@ -54,6 +54,30 @@ def count(px, want, tol=8):
                and abs(p[2] - want[2]) <= tol)
 
 
+# The browser window's two interesting bands on the 640x400 desktop. Deliberate
+# rectangles rather than the whole frame: the desktop's own chrome and the
+# taskbar clear any "is anything drawn" threshold on their own, which is how a
+# blank content area passed for weeks.
+CONTENT = (46, 115, 478, 328)          # inside the page, below the toolbar
+STATUS  = (40, 332, 478, 348)          # the one line of feedback the browser has
+
+
+def ink(px, w, h, box):
+    """Non-background pixels in `box`. Both bands are near-white when empty, so
+    this counts drawn text without caring what colour a renderer chose - which
+    matters because these pages carry no stylesheets of their own and the two
+    renderers do not agree on much else."""
+    x0, y0, x1, y1 = box
+    n = 0
+    for y in range(y0, min(y1, h)):
+        row = y * w
+        for x in range(x0, min(x1, w)):
+            r, g, b = px[row + x]
+            if r < 236 or g < 236 or b < 236:
+                n += 1
+    return n
+
+
 def goto(ui, loc, settle=3.0):
     ui.key(ord('l'), ctrl=1)
     ui.key(0, scan=0x06, settle=0.05)              # End
@@ -191,6 +215,71 @@ def main():
             time.sleep(6.0)
             shot(ui, "net_04_progressive_done")
             print("  slow page: requests=%d" % nettest_server.stats["requests"])
+
+            # ---- 4. a page whose body starts past the old caps -----------
+            # This is https://google.com in miniature, and the reason it is
+            # here: www.google.com opens its <body> 62,883 bytes into an
+            # 82,760-byte body, and the transport stopped at 48 KB while the
+            # tab stopped at 32 KB. The browser fetched the page, reported
+            # "200 OK", and rendered a document that was nothing but <head>.
+            #
+            # /big has the same shape and none of google's variability: ~78 KB
+            # of <style> padding, then every renderable byte. The padding is
+            # inside <style> so a renderer that leaked it as text could not
+            # pass this by accident. Verified to DISCRIMINATE: with RAW_MAX
+            # back at 49152 the content area measures single-digit ink.
+            nettest_server.reset()
+            goto(ui, "http://%s:%d/big" % (HOST, PORT), settle=20.0)
+            shot(ui, "net_05_big")
+            w, h, px = frame(ui)
+            big_ink = ink(px, w, h, CONTENT)
+            big_status = ink(px, w, h, STATUS)
+            print("  big page (78 KB, body at 78,001): content ink %d px, "
+                  "status ink %d px" % (big_ink, big_status))
+            results.append(("a page whose body starts past 64 KB renders at all",
+                            big_ink > 400))
+
+            # ---- 5. and past the cap it TRUNCATES OUT LOUD ---------------
+            # 1.3 MB against a 1 MB buffer. Three things have to hold, and the
+            # middle one is the one that cost a day: a truncated page used to
+            # be indistinguishable from a site that is genuinely blank,
+            # because hitting the cap took the same exit as a complete
+            # response and the status band said "200 OK".
+            nettest_server.reset()
+            goto(ui, "http://%s:%d/huge" % (HOST, PORT), settle=60.0)
+            shot(ui, "net_06_truncated")
+            w, h, px = frame(ui)
+            huge_ink = ink(px, w, h, CONTENT)
+            huge_status = ink(px, w, h, STATUS)
+            print("  huge page (1.3 MB vs a 1 MB cap): content ink %d px, "
+                  "status ink %d px (a plain 200 OK was %d)"
+                  % (huge_ink, huge_status, big_status))
+            # NOT "the partial page renders". The two renderers genuinely
+            # differ here and the difference is a property of the machine, not
+            # a bug to assert away: the flow painter walks the DOM and draws
+            # what parsed, while the unoweb engine needs arena to build a paint
+            # list, and 24,000 elements will not lay out inside a 32 MB heap
+            # however the arena is sized (measured: ~85x the source for a page
+            # this shape). What MUST hold on both is that the reader is told -
+            # a blank page with "200 OK" under it is the failure this whole
+            # change exists to remove, and it is worse than a blank page that
+            # explains itself.
+            #
+            # "- TRUNCATED at 1023 KB" is 23 more characters than the status
+            # line alone, so the band carries far more ink. A ratio, not an
+            # absolute: the status line's own length varies with the reply.
+            results.append(("the status line SAYS the page was truncated",
+                            huge_status > big_status * 1.3))
+            # A response whose framing never completed cannot be pooled - the
+            # rest of it is still coming down that socket, and reusing it
+            # would read this page's tail as the next page's body.
+            nettest_server.reset()
+            goto(ui, "http://%s:%d/?after" % (HOST, PORT), settle=15.0)
+            s = dict(nettest_server.stats)
+            print("  after the truncation: connections=%d requests=%d"
+                  % (s["connections"], s["requests"]))
+            results.append(("the abandoned connection is not handed out again",
+                            s["connections"] >= 1 and s["requests"] >= 1))
     finally:
         try: srv.close()
         except Exception: pass
