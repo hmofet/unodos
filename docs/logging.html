@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>System log · UnoDOS pc64 manual</title>
+<meta name="description" content="User manual for UnoDOS pc64, the x86-64/UEFI world of the UnoDOS operating-system family.">
+<link rel="stylesheet" href="assets/style.css">
+
+<script>
+(function(){
+  var r=document.documentElement, k='unodos-doc-theme';
+  try{var s=localStorage.getItem(k); if(s)r.setAttribute('data-theme',s);}catch(e){}
+  window.__t=function(){
+    var cur=r.getAttribute('data-theme');
+    if(!cur){cur=matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';}
+    var nx=cur==='dark'?'light':'dark';
+    r.setAttribute('data-theme',nx);
+    try{localStorage.setItem(k,nx);}catch(e){}
+  };
+})();
+</script>
+<script>
+/* Lightbox: click (or Enter/Space on) a screenshot to see it full size.
+   Manual shots are scaled into the text column, where fine UI detail - a
+   status line, an icon, a menu entry - is too small to read. Built once at
+   load and reused; Esc or a click anywhere closes it. */
+(function(){
+  var lb,img,cap;
+  function build(){
+    lb=document.createElement('div'); lb.id='lb'; lb.setAttribute('role','dialog');
+    lb.setAttribute('aria-modal','true');
+    img=document.createElement('img');
+    cap=document.createElement('figcaption');
+    var x=document.createElement('button');
+    x.className='x'; x.innerHTML='&times;'; x.setAttribute('aria-label','Close');
+    lb.appendChild(x); lb.appendChild(img); lb.appendChild(cap);
+    document.body.appendChild(lb);
+    lb.addEventListener('click', close);
+  }
+  function open(src, text){
+    if(!lb) build();
+    img.src=src; img.alt=text||''; cap.textContent=text||'';
+    lb.classList.add('on'); document.body.style.overflow='hidden';
+  }
+  function close(){
+    if(!lb) return;
+    lb.classList.remove('on'); img.src=''; document.body.style.overflow='';
+  }
+  document.addEventListener('click', function(e){
+    var b=e.target.closest && e.target.closest('button.zoom');
+    if(!b) return;
+    e.preventDefault();
+    var f=b.parentNode.querySelector('figcaption');
+    open(b.getAttribute('data-full'), f?f.textContent:'');
+  });
+  document.addEventListener('keydown', function(e){
+    if(e.key==='Escape') close();
+  });
+})();
+</script>
+
+</head>
+<body>
+<input type="checkbox" id="mnav">
+<div class="topbar">
+  <label class="menu-btn" for="mnav">☰ Menu</label>
+  <b>UnoDOS pc64</b>
+</div>
+<div class="layout">
+
+<aside class="sidebar">
+  <a class="brand" href="index.html" style="text-decoration:none;color:inherit">
+    <span class="logo"><i></i><i></i><i></i><i></i></span>
+    <span><b>UnoDOS <span style="color:var(--accent-2)">pc64</span></b><span class="sub">User manual</span></span>
+  </a>
+  <ul class="nav"><li><a class="" href="index.html">Overview</a></li><li><a class="" href="getting-started.html">Getting started</a></li><li><a class="" href="desktop.html">The desktop</a></li><li><a class="" href="windows.html">Windows &amp; desktops</a></li><li><a class="" href="appearance.html">Themes &amp; appearance</a></li><li><a class="" href="apps.html">Applications</a></li><li><a class="" href="office.html">UnoOffice</a></li><li><a class="" href="browser.html">Web browser</a></li><li><a class="" href="ssh.html">SSH client</a></li><li><a class="" href="networking.html">Networking</a></li><li><a class="active" href="logging.html">System log</a></li><li><a class="" href="ports.html">The UnoDOS family</a></li><li class="sec">Developer</li><li><a class="" href="developer.html">Overview &amp; architecture</a></li><li><a class="" href="studio.html">Studio: the built-in IDE</a></li><li><a class="" href="dev-apps.html">Writing apps</a></li><li><a class="" href="dev-python.html">Python apps</a></li><li><a class="" href="dev-api.html">API reference</a></li><li><a class="" href="dev-build.html">Building &amp; tooling</a></li><li><a class="" href="dev-remote.html">Remote control &amp; automation</a></li></ul>
+  <div class="side-foot">
+    <a href="https://github.com/hmofet/unodos" target="_blank" rel="noopener">GitHub&nbsp;&rsaquo; hmofet/unodos</a><br>
+    <a href="#" onclick="__t();return false">Toggle light / dark</a>
+  </div>
+</aside>
+<main class="main"><div class="wrap">
+
+<h1>System log</h1>
+<p class="lede">UnoDOS keeps a record of what it did - what loaded, what failed, what the network was
+doing - and shows it to you. You choose how much is kept, and it can be sent to a logging server on your
+network.</p>
+
+<h2 id="viewer">Reading the log</h2>
+<p>Open <strong>System Log</strong> from the desktop or the Start menu. The newest entries are at the
+bottom and the view follows them as they arrive, so you can leave it open and watch. Each line carries
+the time, how serious it is, which part of the system wrote it, and the message.</p>
+<p><strong>Colour tells you where to look</strong>: errors are red, warnings amber, ordinary lines plain,
+and debug lines grey. You should be able to find the interesting line without reading every one.</p>
+<figure><button type="button" class="zoom" data-full="assets/img/logview.png" aria-label="Enlarge: The System Log. Three entries the browser wrote while opening documents, above the line the log itself wrote at startup. The footer shows the current level and how many records exist."><img src="assets/img/logview.png" alt="The System Log. Three entries the browser wrote while opening documents, above the line the log itself wrote at startup. The footer shows the current level and how many records exist." loading="lazy"></button><figcaption>The System Log. Three entries the browser wrote while opening documents, above the line the log itself wrote at startup. The footer shows the current level and how many records exist.</figcaption></figure>
+
+<h2 id="level">How much is kept</h2>
+<p><strong>Less</strong> and <strong>More</strong> change how much the machine records. The scale runs
+from <em>emerg</em> (the machine is unusable) down to <em>debug</em> (everything). The default is
+<em>notice</em>, which keeps the things worth knowing and leaves out the routine chatter.</p>
+<table>
+<tr><th>Level</th><th>What it keeps</th></tr>
+<tr><td>emerg, alert, crit</td><td>Only serious trouble</td></tr>
+<tr><td>err</td><td>... and things that failed</td></tr>
+<tr><td>warning</td><td>... and things that nearly failed</td></tr>
+<tr><td>notice <em>(default)</em></td><td>... and significant normal events</td></tr>
+<tr><td>info</td><td>... and ordinary activity, like each page you open</td></tr>
+<tr><td>debug</td><td>Everything</td></tr>
+</table>
+<div class="note warn"><b>Set the level before you reproduce the problem</b>Turning the level up does not recover what was already dropped - a record filtered out is gone. If you are chasing something intermittent, turn the level up <b>first</b> and then reproduce it.</div>
+<p>Your choice is saved to <code>\LOGS\LOG.CFG</code> straight away, so it survives a restart.
+<strong>All</strong> cycles through the parts of the system, so you can look at just the network or just
+the browser. <strong>Write</strong> saves the log to disk immediately.</p>
+
+<h2 id="file">The log on disk</h2>
+<p>The log is written to <code>\LOGS\SYSTEM.LOG</code> as plain text you can open in the Editor or
+copy to another machine. It is written every few seconds, and <strong>immediately</strong> for anything
+at error level or worse - so the lines explaining a machine that is about to stop working reach the disk
+before it does. When the file gets large it rolls over to <code>SYSTEM.1</code> and starts again.</p>
+
+<h2 id="syslog">Sending the log to a server</h2>
+<p>If you run a logging server - <strong>rsyslog</strong>, <strong>syslog-ng</strong> or anything else
+that speaks syslog - UnoDOS can send its log there, so a machine's record survives the machine. Put the
+server's address in <code>\LOGS\LOG.CFG</code>:</p>
+<pre><code>level=5
+remote_level=4
+remote=192.168.1.10:514
+listen=0</code></pre>
+<p>Entries are sent as standard <strong>RFC 5424</strong> syslog over UDP, so they arrive as ordinary
+log lines with the right severity and no special handling at the other end.</p>
+<p><code>remote_level</code> is separate from <code>level</code> on purpose: what is worth writing down
+locally and what is worth putting on the network are different questions. The default sends warnings and
+worse while keeping more than that on disk.</p>
+
+<h2 id="collector">Being the server</h2>
+<p>It also works the other way. Set <code>listen=1</code> (or press <strong>Sink off</strong> in the
+viewer) and UnoDOS accepts syslog from other machines on the network and files it alongside its own,
+tagged with the sender's address. One UnoDOS machine can be the place you read the logs of several.</p>
+<div class="note warn"><b>An open listener</b>The listener accepts messages from anyone who can reach the machine - there is no password on it. Turn it on for a network you trust, not one you share. It is off unless you turn it on.</div>
+
+<nav class="pagenav"><a href="networking.html">&lsaquo; Networking</a><a class="nxt" href="ports.html">The UnoDOS family &rsaquo;</a></nav>
+</div></main>
+</div>
+</body>
+</html>
