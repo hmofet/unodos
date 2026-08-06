@@ -1128,23 +1128,61 @@ BROWSER, JS, STUDIO, PHOTOS, PAINT, GAME, INST, MAC, PY, LIBC.
   e1000, e1000e, igb, r8169, ax88179, rtl8152, iwl, rtwifi, mrvl; bind the
   first present one; then wait for DHCP up to ~2 s. It is idempotent.
 - **S-HTTP-02** [auto] `pc64_http_get` speaks HTTP/1.0 GET with
-  Connection: close; https URLs use `tls_connect_ca` (443), http port 80;
-  the URL parser accepts IPv4 literals and DNS names, host <= 128 and
-  path <= 512 chars, request buffer 1024 with overflow -> -8.
+  **Connection: keep-alive**; https URLs open a CA-validated `tls_conn`
+  (443), http port 80; the URL parser accepts IPv4 literals and DNS names,
+  host <= 128 and path <= 512 chars, request buffer 2048 with overflow ->
+  -8. The header was `Connection: close` until 2026-08-06, which
+  contradicted the keep-alive path it shipped alongside; nothing caught it
+  because `tools/nettest_server.py` answered keep-alive regardless of what
+  it was asked. That server now records what the client asked for, and
+  `tools/netverify_urc.py` asserts on it.
 - **S-HTTP-03** [auto] Error codes are fixed: -2 empty host, -3 no link,
   -4 DNS fail, -5 connect/TLS fail, -6 timeout, -7 TLS write fail, -8 URL
   too long; body length >= 0 on success.
-- **S-HTTP-04** [auto] The response splits at the first blank line; the
-  status line is returned (truncated) via `status`; redirects are NOT
-  followed and chunked transfer coding is NOT decoded (documented, the
-  browser shows what arrived).
+- **S-HTTP-04** [auto] The response splits at the first blank line and the
+  status line is returned (truncated) via `status`. 3xx + Location IS
+  followed, up to 6 hops, as a GET after a POST; `Transfer-Encoding:
+  chunked` IS decoded in place, so the cache and the parser only ever see
+  a plain body. (This item read "not followed, not decoded" until
+  2026-08-06; both had been true for weeks.)
 - **S-HTTP-05** [auto] Responses larger than the 48 KB buffer MUST be
   truncated safely (no overflow), receive idle timeout ~3 s.
 - **S-HTTP-06** [assert] Connect failure detection MUST NOT rely on
   `net_tcp_connect`'s return (always 0, see S-NET-26), only on the state
   timeout. site: `pc64_http.c` connect loop.
-- **S-HTTP-07** [auto] `pc64_http_get` MUST leave the single TCP
-  connection closed (state CLOSED/DONE) on every exit path.
+- **S-HTTP-07** [auto] A finished request MUST leave its connection either
+  POOLED for reuse or closed - never leaked. A connection is poolable only
+  when the response was framed (Content-Length or a chunked terminator) and
+  neither side asked to close; anything else and we would be guessing about
+  a shared socket, which is how a browser starts reading one page's bytes
+  as the next page's body. `pc64_http_free` on an unfinished request closes
+  its connection rather than pooling it.
+- **S-HTTP-08** [auto] SEVERAL requests MUST be able to be in flight at
+  once. `pc64_http_begin` returns a handle, `pc64_http_poll` advances it
+  without blocking and without pumping the NIC, and N handles are driven
+  from one loop. `pc64_http_get`/`pc64_http_request` are that plus a wait,
+  so there is exactly one implementation of a request. The only step that
+  still blocks is DNS, which `net_dns_query` defines as synchronous;
+  `pc64_http_begin` therefore may wait on the resolver for a host it has
+  not seen, and only for that. Gate: `tools/netverify_urc.py` section 1.
+- **S-HTTP-09** [auto] The keep-alive POOL holds up to 4 idle connections
+  keyed by (host, port, scheme). A pooled connection is health-checked
+  before it is handed out, and a REUSED connection that fails - the normal
+  end of an idle keep-alive, indistinguishable from a healthy one until
+  the write or first read fails - MUST be retried ONCE on a fresh
+  connection, with only the fresh one's failure reported.
+- **S-HTTP-09b** [assert] The browser MUST cap its total connections
+  (pooled + in flight) at `HTTP_MAX_CONNS` (8) of the shared `NSOCK` (16)
+  socket table, giving up IDLE pooled connections to stay inside it and
+  never an in-flight one. The table also carries the URC link, the child
+  its listener accepts, and discovery; on a box driven only over URC, a
+  browser that took the last slot would take the machine. site:
+  `pc64_http.c budget_make_room`.
+- **S-HTTP-10** [auto] Host lookups are memoised for the browsing session
+  (8 hosts) so a page's subresource set resolves its origin once rather
+  than once per resource. `pc64_http_disconnect()` drops the memo along
+  with the pool, since a network reconfiguration invalidates both. It is
+  deliberately NOT a TTL resolver cache.
 
 ## S-SND, audio (`snd_pcm.c`, `hdaudio.c`, `ac97.c`)
 

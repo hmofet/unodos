@@ -23,9 +23,15 @@
 
 enum { SOCK_NONE = 0, SOCK_TCP, SOCK_UDP };
 
-/* How many sockets exist at once (listeners + connections + UDP ports). */
+/* How many sockets exist at once (listeners + connections + UDP ports).
+ * Raised 12 -> 16 on 2026-08-06: the browser now holds several connections at
+ * a time (its own budget caps it, see pc64_http.c HTTP_MAX_CONNS) and the
+ * table is SHARED with the URC link, its listener's accepted child, and
+ * discovery. A browser that could crowd those out would take the machine's
+ * remote channel down with it - which on a box driven only over URC means
+ * losing the machine. Each slot costs its 8 KB rx queue, so this is ~35 KB. */
 #ifndef NSOCK
-#define NSOCK 12
+#define NSOCK 16
 #endif
 
 /* Create a socket of SOCK_TCP or SOCK_UDP. Returns a socket id [0,NSOCK) or -1

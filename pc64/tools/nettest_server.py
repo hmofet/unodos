@@ -17,9 +17,64 @@ import socket, sys, threading, time
 
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8099
 
-# what happened, for the driver to assert on
-stats = {"connections": 0, "requests": 0, "paths": []}
+# What happened, for the driver to assert on.
+#   connections   accepts since the last reset
+#   live/peak     connections open AT ONCE - the measurement that tells a
+#                 parallel fetcher from a fast serial one, which a plain
+#                 accept count cannot
+#   t_first/t_last  when the first request arrived and the last response left,
+#                 so the driver can compare the page's wall clock against the
+#                 sum of its parts without trusting its own sleeps
+#   keepalive_asked  did the CLIENT ask to persist? The old client sent
+#                 "Connection: close" and this server answered keep-alive
+#                 anyway, so reuse looked like it worked here and could not
+#                 have worked against any server that honours the header.
+stats = {"connections": 0, "requests": 0, "paths": [],
+         "live": 0, "peak": 0, "t_first": 0.0, "t_last": 0.0,
+         "keepalive_asked": 0, "close_asked": 0}
+# Knobs the driver turns to make a property measurable.
+#   sheet  per-stylesheet latency. A page's subresources all answering
+#          instantly cannot distinguish parallel from serial at QEMU
+#          timescales; a second each makes 3-in-a-row and 3-at-once obvious.
+#   idle   how long a connection is held open with no request on it. The
+#          default is long, so "did the CLIENT reuse its pool" is not really
+#          "did the SERVER hang up first" - the old 10 s made a 15 s gap
+#          between two page loads look like a client that never pools. Turn
+#          it DOWN to test the opposite: recovery from a pool of connections
+#          the server dropped, which is what every real server eventually does.
+delays = {"sheet": 0.0, "idle": 60.0}
 _lock = threading.Lock()
+
+
+_open = set()          # every connection currently held, for drop_all()
+
+
+def reset():
+    stats.update(connections=0, requests=0, paths=[], live=0, peak=0,
+                 t_first=0.0, t_last=0.0, keepalive_asked=0, close_asked=0)
+
+
+def drop_all():
+    """Hang up on every connection we are holding, the way a real server
+    eventually does to an idle one. An IDLE TIMEOUT cannot be used for this:
+    it is armed when a connection is accepted, so turning it down afterwards
+    leaves the already-pooled connections on the old, long one - the test
+    then passes without ever having dropped anything. This is unambiguous."""
+    with _lock:
+        conns = list(_open)
+        _open.clear()
+    for c in conns:
+        try:
+            c.close()
+        except OSError:
+            pass
+    return len(conns)
+
+
+def span():
+    """Seconds from the first request in to the last response out, measured
+    HERE. The driver's own timing includes its screenshot sleeps."""
+    return max(0.0, stats["t_last"] - stats["t_first"])
 
 PAGE = (b"<html><head>"
         b"<link rel=stylesheet href='/a.css'>"
@@ -67,7 +122,11 @@ def respond(conn, body, ctype=b"text/html", chunked=False, slow=False):
 def serve_conn(conn):
     with _lock:
         stats["connections"] += 1
-    conn.settimeout(10)
+        stats["live"] += 1
+        if stats["live"] > stats["peak"]:
+            stats["peak"] = stats["live"]
+        _open.add(conn)
+    conn.settimeout(delays["idle"])
     buf = b""
     try:
         while True:
@@ -79,10 +138,19 @@ def serve_conn(conn):
             head, buf = buf.split(b"\r\n\r\n", 1)
             line = head.split(b"\r\n")[0]
             path = line.split(b" ")[1] if b" " in line else b"/"
+            low = head.lower()
             with _lock:
                 stats["requests"] += 1
                 stats["paths"].append(path.decode("latin1"))
+                if not stats["t_first"]:
+                    stats["t_first"] = time.time()
+                if b"connection: keep-alive" in low:
+                    stats["keepalive_asked"] += 1
+                if b"connection: close" in low:
+                    stats["close_asked"] += 1
             if path in SHEETS:
+                if delays["sheet"]:
+                    time.sleep(delays["sheet"])
                 respond(conn, SHEETS[path], b"text/css")
             elif path == b"/chunked":
                 respond(conn, b"<html><body><h1>chunked</h1>"
@@ -98,9 +166,14 @@ def serve_conn(conn):
                 respond(conn, s, b"text/plain")
             else:
                 respond(conn, PAGE)
+            with _lock:
+                stats["t_last"] = time.time()
     except Exception:
         pass
     finally:
+        with _lock:
+            stats["live"] -= 1
+            _open.discard(conn)
         try: conn.close()
         except Exception: pass
 

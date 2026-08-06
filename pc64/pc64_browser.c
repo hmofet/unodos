@@ -325,7 +325,8 @@ static int  loc_is_net(const char *loc);
 static int g_in_progress_paint;
 
 #ifdef UW_ENGINE
-static void fetch_link_sheets(uw_doc *d);    /* defined with the URL helpers */
+static void fetch_link_sheets(uw_doc *d);        /* defined with the URL helpers */
+static void prefetch_subresources(uw_doc *d);    /* likewise */
 
 /* ---- page scripts on the live DOM (M5) ------------------------------------
  * One VM per page, built here and torn down by the next navigation. Every
@@ -451,6 +452,7 @@ static void dom_sync(const char *src)
     g_dom = uw_parse_string(src, -1, &c);
     g_dom_sig = sig;
 #ifdef UW_ENGINE
+    prefetch_subresources(g_dom);    /* ask for everything before needing any */
     fetch_link_sheets(g_dom);
     run_page_scripts(g_dom);
 #endif
@@ -1024,6 +1026,47 @@ static int rel_is_stylesheet(const char *rel)
         }
     }
     return 0;
+}
+
+/* ---- prefetch -------------------------------------------------------------
+ * Everything the page references, asked for AT ONCE, the moment the DOM
+ * exists - before the cascade wants the first stylesheet and long before
+ * layout wants the first image.
+ *
+ * Discovering a subresource is not the same as needing it, and the two used to
+ * be welded together: the only way to learn about a stylesheet was to arrive
+ * at it in fetch_link_sheets, which fetched it on the spot and blocked. Four
+ * sheets therefore cost four round trips end to end no matter how fast the
+ * server was. This walk finds all of them in one pass and hands them to the
+ * queue, which runs several at a time; the fetch each consumer then performs
+ * is usually a table lookup on bytes that already arrived.
+ *
+ * Runs BEFORE fetch_link_sheets on purpose - that one splices <style> elements
+ * over the <link>s it consumes, so the links have to be read first. */
+static void prefetch_subresources(uw_doc *d)
+{
+    uw_node *n;
+    if (!d || !g_page_base[0]) return;
+    /* never from inside a progressive paint - see the guard's declaration */
+    if (g_in_progress_paint) return;
+    for (n = uw_next_in_order(uw_document(d), uw_document(d)); n;
+         n = uw_next_in_order(n, uw_document(d))) {
+        const char *tag, *url = 0;
+        char abs[LOCMAX];
+        if (uw_type(n) != UW_NODE_ELEMENT) continue;
+        tag = uw_tag_name(d, n);
+        if (!strcmp(tag, "link")) {
+            const char *rel = uw_attr(d, n, "rel");
+            if (!rel || !rel_is_stylesheet(rel)) continue;
+            url = uw_attr(d, n, "href");
+        } else if (!strcmp(tag, "img")) {
+            url = uw_attr(d, n, "src");
+        }
+        if (!url || !*url) continue;
+        resolve(url, g_page_base, abs, sizeof abs);
+        if (!loc_is_net(abs)) continue;          /* only network resources */
+        pc64_fetch_start(abs);
+    }
 }
 
 /* ---- linked stylesheets ---------------------------------------------------

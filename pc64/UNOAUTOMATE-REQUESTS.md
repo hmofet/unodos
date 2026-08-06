@@ -11,6 +11,98 @@ fulfilled.
 
 ---
 
+## 2026-08-06 — DELIVERED (unonet + browser): the net stack does several things at once
+
+The 2026-08-06 browser request below ("a net stack that can do more than one
+thing at once") is answered end to end, on branch `netconc`. What the requester
+asked for, and what each ask turned out to be:
+
+| the ask | what it needed |
+|---|---|
+| a connection HANDLE, so two can exist | **already existed** - `netsock.h`. What was single was the legacy `net_tcp_*` wrapper that `tls.c` and `pc64_http.c` both used. Both moved off it. |
+| TLS bound to a handle, not the module | **built.** `tls_open()` -> `tls_conn *`, each owning its socket, engine and record buffer. |
+| non-blocking / poll-driven reads | **built.** The engine is driven off BearSSL's record interface instead of `br_sslio`'s blocking callbacks; `tls_poll`/`tls_send`/`tls_recv` never wait and never call `net_poll`, so one loop drives N sessions. |
+
+Above that: `pc64_http` gained a request handle (begin/poll/take/free) with the
+blocking `pc64_http_get`/`_request` kept as that plus a wait, so there is one
+implementation of a request rather than two; keep-alive became a POOL keyed by
+origin; `pc64_fetch` runs 4 subresources at a time; and the browser prefetches
+the whole `<link rel=stylesheet>` + `<img src>` set the moment the DOM exists,
+instead of discovering them one at a time during layout.
+
+**The requester's own success criterion, measured server-side**
+(`tools/netverify_urc.py`, 8/8, sheets delayed 1 s each so serial and parallel
+are distinguishable at QEMU timescales):
+
+```
+page load: connections=3 requests=4 peak=3 span=1.08s   (serial would be 3.0s)
+second load: NEW connections=0 requests=4               (the pool is real)
+server hung up on 3 pooled connections
+after the drop: connections=3 requests=4                (and recovery is real)
+```
+
+**Three defects found on the way, two of them mine:**
+
+1. **`Connection: close`** was in every request header, while the file it sat
+   in was implementing keep-alive. Nothing caught it because
+   `tools/nettest_server.py` answered `keep-alive` regardless of what it was
+   asked, so reuse worked in the gate and could not have worked against any
+   server that honours the header. The server now records what the client
+   asked for and the gate asserts on it.
+2. **Mine:** the connection pool tested `sock >= 0` for "occupied". Socket id 0
+   is a perfectly good socket, so a zeroed pool slot read as occupied, every
+   connection was closed instead of kept, and `conn_close` on an empty slot
+   would have closed *somebody else's* socket 0. Caught by 1b above failing on
+   the first run - the assertion existed before the bug did, which is the only
+   reason it was found in minutes.
+3. **Mine:** moving the subresource queue off the blocking call silently took
+   the response CACHE away from it, because the cache check lived in the
+   blocking wrapper. It now lives in `pc64_http_begin`, so every path has it.
+
+**Gates.** `tools/tls_conc_test.sh` is new and is now the ONLY assertion in the
+tree that a TLS handshake completes at all: SPECTEST's network area runs a null
+NIC and cannot reach TLS, and `nettest.py` is a screenshot a human reads. It
+builds the real `tls.c` and the real BearSSL against a POSIX netsock shim and
+runs 4 real TLS 1.2 sessions from one pump loop (15/15). `quickjs/test/fetch_test.c`
+is new and asserts the queue's scheduling against a stubbed transport (15/15).
+Both are wired into `tools/gate.sh`, because a gate nobody runs is already broken.
+
+**Not done, deliberately:** HTTP/2, a real event loop, and asynchronous DNS.
+`net_dns_query` is synchronous by contract, so `pc64_http_begin` still waits on
+the resolver for a host it has not seen - once per host, since lookups are now
+memoised for the session. Making it async is a real unonet slice and belongs in
+its own branch.
+
+## 2026-08-06 — FINDING (→ browser / unoweb lane): the keep-alive test page fetches perfectly and renders NOTHING
+
+**Not mine, and not new** - I checked before saying so, because it turned up in
+my own gate's screenshot and the obvious reading was that I had broken the
+browser. `tools/nettest_server.py`'s `/` page (an `<html><head>` with three
+`<link rel=stylesheet>` and a body of `<h1>` + `<p>`) comes down cleanly - the
+server logs all four requests, the status line reads `HTTP/1.1 200 OK` - and
+the content area is **blank**.
+
+Same page, same build flags, two trees:
+
+- `origin/master` @ `f44d12c5`, built `BROWSER_ENGINE=uw UNO_DEBUG=1`:
+  blank. (`shots/net_01_keepalive.png` from that worktree.)
+- my branch, same flags: blank, pixel for pixel.
+
+So the concurrency work neither caused it nor fixed it. It is worth someone's
+time because everything AROUND it works: `/chunked` and `/slow` render fully on
+both trees, with styling, from the same server in the same run. The difference
+between the pages that render and the one that does not is that the blank one
+is the only one with `<link rel=stylesheet>` elements - which `fetch_link_sheets`
+consumes by splicing a `<style>` element in front of each one. That is where I
+would start, and the cheapest repro is 90 seconds:
+
+    cd pc64 && BROWSER_ENGINE=uw UNO_DEBUG=1 ./build.sh
+    python3 tools/netverify_urc.py        # then read shots/net_01_parallel.png
+
+Recorded rather than fixed: my claim below is the transport, and chasing a
+render bug into the cascade would have widened this branch past what it says it
+is. Filed with the A/B so the next person does not repeat it.
+
 ## 2026-08-06 — CLAIM (unonet + browser lanes): answering the concurrency request below
 
 Taking the entry immediately after this one, on branch `netconc`. I hold **both**
