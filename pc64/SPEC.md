@@ -1707,6 +1707,23 @@ faults on the first instruction that assumes it.
   anyone recognises as one - the appliance simply runs at a fraction of the
   speed - so the memory type is read from the MTRRs and printed beside the
   result, where it can still be believed.
+- **S-HV-20** [auto] A slice MUST be bounded by the MACHINE, not by the guest:
+  a guest that never yields MUST leave on the slice clock, and the measured
+  slice MUST NOT exceed the budget by more than a small margin. check: the
+  spinner, 120 slices, `max` within ~25% of the budget and every exit the
+  clock's.
+- **S-HV-21** [auto] Every slice MUST feed the watchdog heartbeat. The guest is
+  the only thing in this system that can hold the core for a length IT chose;
+  the heartbeat is what turns that from a dead machine into a report.
+- **S-HV-22** [auto] `uno_vmm_tick()` MUST be inert with no guest running: no
+  VMCS access, no entry, no measurable cost. It sits on the shell's hot path
+  unconditionally, so this is what makes that acceptable.
+- **S-HV-23** [assert] The entry stub MUST save and restore host RFLAGS across
+  a guest. A VM exit loads host RFLAGS with 0x2 - IF clear - so a stub that
+  does not restore them returns from its first guest with interrupts disabled
+  and stays that way. Nothing in this OS is interrupt-driven except the LAPIC
+  watchdog, so the machine looks healthy while the one mechanism that catches a
+  hang is dead. site: `hv_vmx.c vmx_entry` (`pushfq`/`popfq`).
 - **S-HV-11** [assert] The probe MUST count only free conventional memory
   (`EfiConventionalMemory` / E820 type 1). Counting firmware-reserved or
   boot-services ranges would overstate a machine sitting on the floor, which

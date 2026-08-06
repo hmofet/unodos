@@ -20,6 +20,7 @@
  * ======================================================================== */
 #include "unovirt_hv.h"
 #include "unovirt.h"
+#include "pc64_native.h" /* the calibrated TSC rate, for the slice budget */
 
 typedef unsigned int       u32;
 typedef unsigned short     u16;
@@ -284,6 +285,13 @@ static void vmx_entry(uno_gprs *g)
     __asm__ volatile (
         "push %%rbx\n\t  push %%rbp\n\t  push %%rsi\n\t  push %%rdi\n\t"
         "push %%r12\n\t  push %%r13\n\t  push %%r14\n\t  push %%r15\n\t"
+        /* A VM EXIT LOADS HOST RFLAGS WITH 0x2 - every flag clear, IF
+         * included. Without saving and restoring them here, the host returns
+         * from its first guest with interrupts disabled and stays that way.
+         * Nothing in this OS is interrupt-driven except the LAPIC watchdog,
+         * so the machine looks perfectly healthy while the one mechanism that
+         * exists to catch a hang is quietly dead. */
+        "pushfq\n\t"
         "push %[ctx]\n\t"
         "mov $0x6C14, %%rdx\n\t  vmwrite %%rsp, %%rdx\n\t"   /* HOST_RSP     */
         "lea 1f(%%rip), %%rax\n\t"
@@ -321,6 +329,7 @@ static void vmx_entry(uno_gprs *g)
         "pop %%rcx\n\t"
         "mov %%rcx, (%%rax)\n\t"                     /* guest RAX            */
         "add $0x08, %%rsp\n\t"                       /* drop ctx             */
+        "popfq\n\t"                                  /* ...and IF comes back */
         "pop %%r15\n\t  pop %%r14\n\t  pop %%r13\n\t  pop %%r12\n\t"
         "pop %%rdi\n\t  pop %%rsi\n\t  pop %%rbp\n\t  pop %%rbx\n\t"
         : [failed] "=m" (g_entry_failed)
@@ -483,13 +492,18 @@ static void classify(uno_vmexit *out)
     }
 }
 
+/* The bring-up trace is per-entry, which is right for a selftest that enters
+ * three times and wrong for a slice that enters every frame forever: it floods
+ * the console and slows the very thing being measured. */
+static int g_quiet;
+
 static void run_once(uno_vmexit *out)
 {
-    tracex("[hv] vmentry rip=", vmread(GUEST_RIP));
+    if (!g_quiet) tracex("[hv] vmentry rip=", vmread(GUEST_RIP));
     vmx_entry(&g_ctx);
     if (!g_entry_failed) g_launched = 1;
     classify(out);
-    tracex("[hv] exit reason=", out->raw);
+    if (!g_quiet) tracex("[hv] exit reason=", out->raw);
 }
 
 static int vmcs_load(u64 base, u64 rip, u64 idtr_limit)
@@ -710,6 +724,94 @@ static int vmx_ept(u64 want, u64 gpa, u64 *got, u64 *hpa, uno_vmexit *last)
     return *got == want;
 }
 
-static const uno_hv_t VMX = { "vmx", vmx_enable, vmx_marker, vmx_crasher, vmx_ept };
+/* ---- A3: a guest that never yields, and a core that comes back anyway -----
+ *
+ * The guest is two bytes, `jmp $`. It makes no hypercall, takes no fault and
+ * touches no device, so nothing it does can end its turn: the only thing that
+ * can is the machine, and that is exactly the property being tested. This is
+ * how a guest gets scheduled on an OS that has no scheduler - the frame loop
+ * hands it a budget and the preemption timer takes it back.
+ *
+ * TWO mechanisms, not one, and the second is not redundancy. The preemption
+ * timer bounds the slice; external-interrupt exiting means a host interrupt
+ * that arrives mid-slice ends it too, rather than being delivered through the
+ * guest's IDT - which this guest does not have, and which would turn every
+ * timer tick into a triple fault. */
+#define PIN_EXT_INTR_EXIT (1u << 0)
+#define PIN_PREEMPT       (1u << 6)
+#define VMX_PREEMPT_VALUE 0x482E
+#define IA32_VMX_MISC     0x485u
+#define EXIT_PREEMPT      52
+
+static int g_spinning;
+
+static int vmx_spin_start(void)
+{
+    u64 eptp, pa = (u64)(unsigned long long)(void *)g_vmcs;
+    u8 *code = (u8 *)uno_vmm_gpa(GP_CODE, 8);
+    u8 fail = 0;
+    unsigned i;
+    u32 proc, proc2, pin;
+
+    g_spinning = 0;
+    if (!code || !uno_vmm_probe()->slat || !uno_vmm_probe()->preempt_timer) return 0;
+    eptp = ept_build();
+    if (!eptp || !guest_tables_in_carve()) return 0;
+
+    for (i = 0; i < sizeof g_ctx / sizeof(u64); i++) ((u64 *)&g_ctx)[i] = 0;
+    *(u32 *)g_vmcs = (u32)(rdmsr(IA32_VMX_BASIC) & 0x7FFFFFFFu);
+    __asm__ volatile ("vmclear %1; setna %0" : "=r"(fail) : "m"(pa) : "cc");
+    if (fail) return 0;
+    __asm__ volatile ("vmptrld %1; setna %0" : "=r"(fail) : "m"(pa) : "cc");
+    if (fail) return 0;
+    g_launched = 0;
+
+    vmcs_reset(0, GP_CODE, 0xFFF);
+    pin   = adjust(IA32_VMX_TRUE_PIN, IA32_VMX_PINBASED,
+                   PIN_EXT_INTR_EXIT | PIN_PREEMPT, 1);
+    if (!(pin & PIN_PREEMPT)) return 0;        /* the machine said no         */
+    proc  = adjust(IA32_VMX_TRUE_PROC, IA32_VMX_PROCBASED,
+                   PROC_HLT_EXITING | (1u << 31), 1);
+    proc2 = adjust(IA32_VMX_PROCBASED2, IA32_VMX_PROCBASED2, EPT_PROC2, 0);
+    vmwrite(PIN_BASED_CTLS, pin);
+    vmwrite(PROC_BASED_CTLS, proc);
+    vmwrite(PROC_BASED_CTLS2, proc2);
+    vmwrite(EPT_POINTER, eptp);
+    vmwrite(GUEST_CR3, GP_PML4);
+    vmwrite(GUEST_GDTR_BASE, GP_GDT);
+    vmwrite(GUEST_IDTR_BASE, GP_GDT);
+    vmwrite(GUEST_TR_BASE, GP_STACK);
+    vmwrite(GUEST_RSP, GP_STACK);
+    code[0] = 0xEB; code[1] = 0xFE;             /* jmp $                      */
+    g_spinning = 1;
+    return 1;
+}
+
+/* The timer counts down in units of 2^N TSC ticks, N from IA32_VMX_MISC.  A
+ * budget converted with the wrong shift is not a wrong answer, it is a slice
+ * 32 times too long or too short - the first of which is a visible stall and
+ * the second a guest that never progresses. */
+static int vmx_slice(unsigned budget_us, uno_vmexit *out)
+{
+    u64 per_us = uno_native_tsc_per_us();
+    unsigned shift = (unsigned)(rdmsr(IA32_VMX_MISC) & 0x1F);
+    u64 ticks;
+    if (!g_spinning) return 0;
+    /* The rate comes from pc64_native, not the debug harness: this has to
+     * work in a production build, where uno_dbg_* is compiled away. */
+    if (!per_us) per_us = 1000ull;              /* uncalibrated: 1 GHz guess  */
+    ticks = per_us * budget_us;
+    ticks >>= shift;
+    if (ticks < 1) ticks = 1;
+    if (ticks > 0xFFFFFFFFull) ticks = 0xFFFFFFFFull;
+    vmwrite(VMX_PREEMPT_VALUE, ticks);
+    run_once(out);
+    g_quiet = 1;                  /* the first slice is traced, the rest are not */
+    if (out->raw == EXIT_PREEMPT) out->reason = UNO_VX_PREEMPT;
+    return 1;
+}
+
+static const uno_hv_t VMX = { "vmx", vmx_enable, vmx_marker, vmx_crasher,
+                              vmx_ept, vmx_spin_start, vmx_slice };
 
 const uno_hv_t *uno_hv_vmx(void) { return &VMX; }

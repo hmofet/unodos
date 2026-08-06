@@ -20,6 +20,8 @@
 #include "bootinfo.h"
 #include <stdio.h>
 #include <string.h>
+#include "pc64_native.h"     /* uno_native_rdtsc: the slice clock            */
+#include "uno_debug.h"       /* the heartbeat, and the calibrated TSC rate   */
 
 typedef unsigned int       u32;
 typedef unsigned long long u64;
@@ -427,6 +429,15 @@ static int carve_memtype(void)
     return type;
 }
 
+/* A3 state, declared here so the selftest can arm it (below). */
+#define SLICE_BUDGET_US 4000u
+#define SLICE_TEST_N    120          /* frames, not seconds: QEMU draws slowly */
+
+static const uno_hv_t *g_hv;
+static int g_slice_armed, g_slice_n, g_slice_other;
+static u64 g_slice_max_cyc, g_slice_tot_cyc;
+static char g_slice_str[144];
+
 /* ---- A1: the foothold -----------------------------------------------------
  *
  * The banner does not say "we own the extension", it says "a guest ran and
@@ -484,6 +495,7 @@ int uno_vmm_selftest(void)
     }
     if (c->vendor == UNO_HV_SVM) hv = uno_hv_svm();
     if (c->vendor == UNO_HV_VMX) hv = uno_hv_vmx();
+    g_hv = hv;                       /* the frame loop's slice needs it too */
     if (!hv) {
         snprintf(g_self, sizeof g_self, "no backend for this vendor");
         return 0;
@@ -541,7 +553,76 @@ int uno_vmm_selftest(void)
         snprintf(g_self + n, sizeof g_self - (unsigned)n,
                  "; ept not implemented for %s", hv->name);
     }
+
+    /* A3 is ARMED here and finished by the frame loop, because that is the
+     * thing being tested: a guest running in the gaps of a desktop that keeps
+     * drawing. Nothing else about the boot changes. */
+    if (g_self_ok && hv->spin_start && hv->spin_start()) {
+        g_slice_armed = 1;
+        snprintf(g_slice_str, sizeof g_slice_str, "armed, running");
+    } else if (g_self_ok) {
+        snprintf(g_slice_str, sizeof g_slice_str,
+                 "not run - no slice clock on this backend");
+    }
     return g_self_ok;
+}
+
+/* ---- A3: a guest, sliced out of the frame loop ----------------------------
+ *
+ * pc64 has no scheduler and one core, and that is a property worth keeping
+ * rather than a limitation to route around: everything above it is written
+ * with no locks because nothing can preempt it. A guest therefore does not get
+ * scheduled, it gets a BUDGET - a few milliseconds of the frame the shell was
+ * going to spend anyway - and the machine takes the core back whether or not
+ * the guest cooperates.
+ *
+ * The budget is a correctness constraint, not a tuning knob. The watchdog
+ * fires on a heartbeat 20 s stale and anything over 100 ms is a logged hitch
+ * (S-DBG-09, S-DBG-19), so a slice has to fit inside a frame with room left
+ * for the desktop to draw. 4 ms of a 16 ms frame is about a quarter of the
+ * core, which is the honest number for a single-core appliance until A9 gives
+ * a guest a core of its own. */
+const char *uno_vmm_slice_str(void) { return g_slice_str; }
+
+void uno_vmm_tick(void)
+{
+    uno_vmexit ex;
+    u64 t0, dt;
+
+    if (!g_slice_armed || !g_hv || !g_hv->slice) return;
+
+    t0 = uno_native_rdtsc();
+    if (!g_hv->slice(SLICE_BUDGET_US, &ex)) { g_slice_armed = 0; return; }
+    dt = uno_native_rdtsc() - t0;
+
+    /* Feed the watchdog on the far side of the slice as well as at the top of
+     * the frame. The frame's own heartbeat would cover a budget this size, but
+     * the guest is the one thing here that can hold the core for a length it
+     * chose rather than one we did, and the heartbeat is what turns that from
+     * a dead machine into a report. */
+    uno_dbg_heartbeat();
+
+    g_slice_n++;
+    g_slice_tot_cyc += dt;
+    if (dt > g_slice_max_cyc) g_slice_max_cyc = dt;
+    if (ex.reason != UNO_VX_PREEMPT && ex.reason != UNO_VX_INTR) g_slice_other++;
+
+    if (g_slice_n >= SLICE_TEST_N) {
+        u64 per_us = uno_native_tsc_per_us();
+        if (!per_us) per_us = 1;
+        snprintf(g_slice_str, sizeof g_slice_str,
+                 "%d slices x %u us budget: max %llu us, mean %llu us, "
+                 "%d exits that were not the clock",
+                 g_slice_n, SLICE_BUDGET_US,
+                 g_slice_max_cyc / per_us,
+                 (g_slice_tot_cyc / (u64)g_slice_n) / per_us,
+                 g_slice_other);
+        g_slice_armed = 0;           /* the spinner stops being entered      */
+        /* The env block was built before this finished, so the kernel log is
+         * where the result lands - it is flushed to BOOTLOG.TXT on the 30 s
+         * heartbeat and at shutdown. */
+        uno_dbg_log("vm slice: %s", g_slice_str);
+    }
 }
 
 int uno_vmm_status_str(char *buf, int cap)
@@ -581,6 +662,11 @@ int uno_vmm_status_str(char *buf, int cap)
     if (g_self[0] && n + 4 < cap) {
         int k = snprintf(buf + n, (unsigned)(cap - n),
                          "\n            selftest: %s", g_self);
+        if (k > 0) n = (n + k >= cap) ? cap - 1 : n + k;
+    }
+    if (g_slice_str[0] && n + 4 < cap) {
+        int k = snprintf(buf + n, (unsigned)(cap - n),
+                         "\n            slice: %s", g_slice_str);
         if (k > 0) n = (n + k >= cap) ? cap - 1 : n + k;
     }
     return n;
