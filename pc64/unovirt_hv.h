@@ -73,6 +73,15 @@ typedef struct uno_hv {
     /* Run a guest that destroys itself on purpose.  Returns 1 when the ruin
      * was CONTAINED (the machine is still ours and the exit says why). */
     int (*crasher)(uno_vmexit *out);
+
+    /* A2: the same round trip, but through second-stage translation.  The
+     * guest is placed in the carve at LOW guest-physical addresses and stores
+     * its marker at `gpa`; the host reads it back at a completely different
+     * host-physical address, which is the evidence.  *hpa receives that
+     * address so the report can print the pair.  NULL until a backend has it. */
+    int (*ept)(unsigned long long want, unsigned long long gpa,
+               unsigned long long *got, unsigned long long *hpa,
+               uno_vmexit *last);
 } uno_hv_t;
 
 const uno_hv_t *uno_hv_svm(void);         /* hv_svm.c                        */

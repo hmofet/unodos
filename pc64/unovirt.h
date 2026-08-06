@@ -88,6 +88,29 @@ const char *uno_vmm_blocker_str(unsigned blockers);
  * reserves it. */
 unsigned uno_vmm_carve_mb(void);
 
+/* A2: take the guest carve, BEFORE ExitBootServices.  Called from try_detach
+ * beside uno_modload_reserve(), for the same reason: AllocatePages does not
+ * exist afterwards.  Idempotent, and a no-op when the machine is ineligible.
+ * Halves its request down to a floor rather than failing outright, because a
+ * smaller appliance is better than none and firmware that will not part with
+ * 1.5 GiB will often part with 512 MiB. */
+void uno_vmm_reserve(void);
+
+/* The carve, or 0/0 when there is none.  The base is a host physical address,
+ * which on this port is also a virtual one (identity map). */
+unsigned long long uno_vmm_carve_base(void);
+unsigned long long uno_vmm_carve_size(void);
+
+/* THE SECURITY BOUNDARY.  Turn a guest-physical address into something this
+ * machine may touch, or NULL.  Every read or write of guest memory goes
+ * through here - including the ones whose addresses came out of a descriptor
+ * the guest wrote, which is the case that matters.
+ *
+ * Address and length are checked TOGETHER and in 64-bit, because checking
+ * them separately is how an overflow gets through: `gpa < size` passes for a
+ * gpa near the top, and `gpa + len` then wraps to something small. */
+void *uno_vmm_gpa(unsigned long long gpa, unsigned long long len);
+
 /* A1: enter host virtualization mode, run the marker guest, then run a guest
  * that destroys itself.  1 = the foothold is real: we entered, a guest ran,
  * control came back, and a guest that went wrong took only itself with it.

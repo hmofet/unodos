@@ -74,6 +74,9 @@ typedef unsigned long long u64;
 #define VM_ENTRY_CTLS     0x4012
 #define VM_ENTRY_MSR_LOAD_CNT 0x4014
 #define VM_ENTRY_INTR_INFO    0x4016
+#define PROC_BASED_CTLS2  0x401E
+#define EPT_POINTER       0x201A
+#define IA32_VMX_PROCBASED2   0x48Bu
 #define VM_INSTR_ERROR    0x4400
 #define VM_EXIT_REASON    0x4402
 #define VM_EXIT_INSTR_LEN 0x440C
@@ -556,6 +559,157 @@ static int vmx_crasher(uno_vmexit *out)
     return out->reason == UNO_VX_SHUTDOWN || out->reason == UNO_VX_INVALID;
 }
 
-static const uno_hv_t VMX = { "vmx", vmx_enable, vmx_marker, vmx_crasher };
+/* ---- A2: second-stage translation, and a guest that only sees its own -----
+ *
+ * With EPT on, the guest's physical addresses stop being this machine's.  The
+ * carve is mapped at guest-physical 0, so the guest sees a small tidy machine
+ * with RAM at the bottom, and everything else in this computer is not
+ * "denied" to it - it is not expressible.
+ *
+ * The guest's own page tables now live in the carve at guest-physical
+ * addresses, so CR3 is a GPA and the host writes them through uno_vmm_gpa().
+ * That is the whole difference from A1, where CR3 was a host address because
+ * the two were the same thing. */
+#define EPT_PROC2         (1u << 1)
+#define EPTP_WB           6u
+#define EPTP_WALK4        (3u << 3)
+#define EPT_RWX           0x7ull
+#define EPT_PAGE_WB       (6ull << 3)
+#define EPT_LARGE         (1ull << 7)
+
+/* Guest-physical layout inside the carve.  Deliberately low and round: an
+ * address like 0x100000 is obviously the guest's own, and if the second stage
+ * were off the same store would land on the kernel's low memory, where it
+ * would be noticed as something other than a passing test. */
+#define GP_PML4  0x1000
+#define GP_PDPT  0x2000
+#define GP_PD    0x3000
+#define GP_GDT   0x4000
+#define GP_STACK 0x8000
+#define GP_CODE  0x10000
+
+__attribute__((aligned(4096))) static u64 g_ept_pml4[512];
+__attribute__((aligned(4096))) static u64 g_ept_pdpt[512];
+__attribute__((aligned(4096))) static u64 g_ept_pd[4][512];
+
+static u64 ept_build(void)
+{
+    u64 base = uno_vmm_carve_base(), size = uno_vmm_carve_size();
+    unsigned gb, i;
+    if (!base) return 0;
+    for (i = 0; i < 512; i++) { g_ept_pml4[i] = 0; g_ept_pdpt[i] = 0; }
+    for (gb = 0; gb < 4; gb++) {
+        for (i = 0; i < 512; i++) {
+            u64 gpa = ((u64)gb << 30) | ((u64)i << 21);
+            /* Only what the carve actually covers is mapped.  A guest reading
+             * past the end of its own memory takes an EPT violation, which is
+             * a reportable exit; leaving the tail mapped at whatever follows
+             * the carve in host memory would make it a silent success. */
+            g_ept_pd[gb][i] = (gpa + 0x200000 <= size)
+                            ? ((base + gpa) | EPT_RWX | EPT_PAGE_WB | EPT_LARGE)
+                            : 0;
+        }
+        if (((u64)gb << 30) < size)
+            g_ept_pdpt[gb] = (u64)(unsigned long long)(void *)g_ept_pd[gb] | EPT_RWX;
+    }
+    g_ept_pml4[0] = (u64)(unsigned long long)(void *)g_ept_pdpt | EPT_RWX;
+    return (u64)(unsigned long long)(void *)g_ept_pml4 | EPTP_WB | EPTP_WALK4;
+}
+
+/* The guest's stage-1 tables, written into the carve at guest-physical
+ * addresses.  Identity again, so guest linear equals guest physical - which
+ * keeps the interesting translation the one being tested. */
+static int guest_tables_in_carve(void)
+{
+    u64 *pml4 = (u64 *)uno_vmm_gpa(GP_PML4, 4096);
+    u64 *pdpt = (u64 *)uno_vmm_gpa(GP_PDPT, 4096);
+    u64 *pd   = (u64 *)uno_vmm_gpa(GP_PD,   4096);
+    u64 *gdt  = (u64 *)uno_vmm_gpa(GP_GDT,  4096);
+    unsigned i;
+    if (!pml4 || !pdpt || !pd || !gdt) return 0;
+    for (i = 0; i < 512; i++) {
+        pml4[i] = 0;
+        pdpt[i] = 0;
+        pd[i]   = ((u64)i << 21) | 0x83;         /* present, rw, 2 MiB       */
+    }
+    pdpt[0] = GP_PD   | 0x3;                     /* GPAs, not host addresses */
+    pml4[0] = GP_PDPT | 0x3;
+    gdt[0] = 0;
+    gdt[1] = 0x00AF9B000000FFFFull;
+    gdt[2] = 0x00CF93000000FFFFull;
+    return 1;
+}
+
+static int vmx_ept(u64 want, u64 gpa, u64 *got, u64 *hpa, uno_vmexit *last)
+{
+    u64 eptp, pa = (u64)(unsigned long long)(void *)g_vmcs;
+    u8 *code = (u8 *)uno_vmm_gpa(GP_CODE, 64);
+    u32 *cell = (u32 *)uno_vmm_gpa(gpa, 8);
+    u32 proc, proc2;
+    u8 fail = 0;
+    unsigned i;
+    int guard;
+
+    *got = 0;
+    *hpa = 0;
+    if (!code || !cell) return 0;
+    if (!uno_vmm_probe()->slat) return 0;
+    eptp = ept_build();
+    if (!eptp) return 0;
+    if (!guest_tables_in_carve()) return 0;
+    *hpa = (u64)(unsigned long long)cell;
+    cell[0] = 0; cell[1] = 0;
+
+    for (i = 0; i < sizeof g_ctx / sizeof(u64); i++) ((u64 *)&g_ctx)[i] = 0;
+    *(u32 *)g_vmcs = (u32)(rdmsr(IA32_VMX_BASIC) & 0x7FFFFFFFu);
+    __asm__ volatile ("vmclear %1; setna %0" : "=r"(fail) : "m"(pa) : "cc");
+    if (fail) return 0;
+    __asm__ volatile ("vmptrld %1; setna %0" : "=r"(fail) : "m"(pa) : "cc");
+    if (fail) return 0;
+    g_launched = 0;
+
+    vmcs_reset(0, GP_CODE, 0xFFF);               /* segment bases 0, GPA rip */
+    /* EPT lives in the secondary controls, which have to be activated in the
+     * primary word first - and both go through the same allowed-0/allowed-1
+     * adjustment as everything else. */
+    proc  = adjust(IA32_VMX_TRUE_PROC, IA32_VMX_PROCBASED,
+                   PROC_HLT_EXITING | (1u << 31), 1);
+    proc2 = adjust(IA32_VMX_PROCBASED2, IA32_VMX_PROCBASED2, EPT_PROC2, 0);
+    vmwrite(PROC_BASED_CTLS, proc);
+    vmwrite(PROC_BASED_CTLS2, proc2);
+    vmwrite(EPT_POINTER, eptp);
+    vmwrite(GUEST_CR3, GP_PML4);                 /* a GUEST-physical address */
+    vmwrite(GUEST_GDTR_BASE, GP_GDT);
+    vmwrite(GUEST_IDTR_BASE, GP_GDT);
+    vmwrite(GUEST_TR_BASE, GP_STACK);
+    vmwrite(GUEST_RSP, GP_STACK);
+
+    /* The same eighteen bytes as A1, at a guest-physical address this time. */
+    {   u8 *p = code;
+        p[0] = 0x0F; p[1] = 0xA2;
+        p[2] = 0x48; p[3] = 0xBB;
+        for (i = 0; i < 8; i++) p[4 + i] = (u8)(gpa >> (8 * i));
+        p[12] = 0x89; p[13] = 0x03;
+        p[14] = 0x89; p[15] = 0x53; p[16] = 0x04;
+        p[17] = 0xF4;
+    }
+
+    for (guard = 0; guard < 8; guard++) {
+        run_once(last);
+        if (last->reason == UNO_VX_CPUID) {
+            g_ctx.rax = want & 0xFFFFFFFFull;
+            g_ctx.rdx = (want >> 32) & 0xFFFFFFFFull;
+            vmwrite(GUEST_RIP, vmread(GUEST_RIP) + vmread(VM_EXIT_INSTR_LEN));
+            continue;
+        }
+        if (last->reason == UNO_VX_INTR) continue;
+        break;
+    }
+    if (last->reason != UNO_VX_HLT) return 0;
+    *got = (u64)cell[0] | ((u64)cell[1] << 32);
+    return *got == want;
+}
+
+static const uno_hv_t VMX = { "vmx", vmx_enable, vmx_marker, vmx_crasher, vmx_ept };
 
 const uno_hv_t *uno_hv_vmx(void) { return &VMX; }

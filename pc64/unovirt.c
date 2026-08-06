@@ -19,6 +19,7 @@
 #include "uefi.h"
 #include "bootinfo.h"
 #include <stdio.h>
+#include <string.h>
 
 typedef unsigned int       u32;
 typedef unsigned long long u64;
@@ -325,6 +326,107 @@ const char *uno_vmm_blocker_str(unsigned m)
     return "";
 }
 
+/* ---- A2: the carve --------------------------------------------------------
+ *
+ * Taken before ExitBootServices, beside uno_modload_reserve(), because
+ * AllocatePages does not exist afterwards.  This is the same shape as the
+ * module arena and for the same reason, with one difference worth naming: the
+ * arena is small enough that firmware always has it, and a gibibyte is not.
+ * So the request halves down to a floor instead of failing, and what it
+ * actually got is reported rather than assumed. */
+typedef EFI_STATUS (*EFI_ALLOC_PAGES)(UINTN, UINTN, UINTN, unsigned long long *);
+#define EFI_LOADER_DATA 2
+#define CARVE_FLOOR_MB  128u
+
+static unsigned long long g_carve_base, g_carve_size;
+static char g_carve_note[96];
+
+unsigned long long uno_vmm_carve_base(void) { return g_carve_base; }
+unsigned long long uno_vmm_carve_size(void) { return g_carve_size; }
+
+void *uno_vmm_gpa(unsigned long long gpa, unsigned long long len)
+{
+    /* Both halves of the check matter, and so does their order: without the
+     * `len > size` arm, a length near 2^64 makes `gpa + len` wrap to a small
+     * number that passes the sum test. */
+    if (!g_carve_base) return 0;
+    if (len > g_carve_size) return 0;
+    if (gpa > g_carve_size - len) return 0;
+    return (void *)(unsigned long long)(g_carve_base + gpa);
+}
+
+void uno_vmm_reserve(void)
+{
+    EFI_SYSTEM_TABLE *ST = (EFI_SYSTEM_TABLE *)uno_pc64_st();
+    unsigned want = uno_vmm_carve_mb();
+    const uno_vm_caps *c = uno_vmm_probe();
+
+    if (g_carve_base || !want) return;
+    if (c->vendor == UNO_HV_NONE) return;         /* nothing would use it    */
+    if (!ST) {
+        /* The BIOS path has no allocator: uno_bios_find_ram() hands out the
+         * top of the highest usable run and keeps no bookkeeping, so a second
+         * caller would be handed memory the module arena is already using.
+         * One consumer is all that mechanism supports, and the arena is the
+         * one that cannot be done without. */
+        snprintf(g_carve_note, sizeof g_carve_note,
+                 "no carve: BIOS boot has one bump allocator and modload owns it");
+        return;
+    }
+
+    while (want >= CARVE_FLOOR_MB) {
+        unsigned long long mem = 0;
+        /* Two mebibytes more than asked for, so the base can be ROUNDED UP to
+         * a 2 MiB boundary.  This is not tidiness: a second-stage large-page
+         * entry addresses a 2 MiB frame, so bits 20:12 of the address in it
+         * must be zero, and AllocatePages only ever promises 4 KiB alignment.
+         * An unaligned frame address is a reserved-bit violation, which the
+         * machine reports as EPT MISCONFIGURATION (exit 49) - a number that
+         * says "your tables are malformed" and nothing about which field. */
+        UINTN pages = (((UINTN)want << 20) + 0x200000u) >> 12;
+        if (((EFI_ALLOC_PAGES)ST->BootServices->AllocatePages)
+                (0 /*AnyPages*/, EFI_LOADER_DATA, pages, &mem) == EFI_SUCCESS) {
+            g_carve_base = (mem + 0x1FFFFFull) & ~0x1FFFFFull;
+            g_carve_size = (unsigned long long)want << 20;
+            snprintf(g_carve_note, sizeof g_carve_note, "%u MB at %llx%s",
+                     want, g_carve_base,
+                     want < uno_vmm_carve_mb() ? " (reduced)" : "");
+            return;
+        }
+        want /= 2;
+    }
+    snprintf(g_carve_note, sizeof g_carve_note,
+             "no carve: firmware refused down to %u MB", CARVE_FLOOR_MB);
+}
+
+/* Is the carve write-back?  A carve the CPU treats as uncacheable is not a
+ * failure anyone would notice as one: the appliance simply runs at a fraction
+ * of the speed and the conclusion is "virtualization is slow" rather than
+ * "the memory type is wrong" (docs/UNOVIRT-PLAN.md R5).  So it is checked and
+ * printed at the point where it can still be believed.
+ *
+ * The variable MTRRs win over the default type, so both are read; this is a
+ * READ of the same registers pc64_mtrr.c owns the writing of, which is why it
+ * is six lines here rather than a request to that lane. */
+#define MTRR_CAP       0xFEu
+#define MTRR_DEF_TYPE  0x2FFu
+static int carve_memtype(void)
+{
+    unsigned long long def = rdmsr(MTRR_DEF_TYPE);
+    unsigned long long cap = rdmsr(MTRR_CAP);
+    int n = (int)(cap & 0xFF), i;
+    int type = (def & (1ull << 11)) ? (int)(def & 0xFF) : 6;  /* E=0 -> UC?  */
+    if (!(def & (1ull << 11))) return 6;      /* MTRRs disabled: WB by fiat  */
+    for (i = 0; i < n && i < 16; i++) {
+        unsigned long long base = rdmsr(0x200u + 2u * (unsigned)i);
+        unsigned long long mask = rdmsr(0x201u + 2u * (unsigned)i);
+        if (!(mask & (1ull << 11))) continue;                 /* not valid   */
+        if (((g_carve_base ^ base) & mask & ~0xFFFull) == 0)
+            type = (int)(base & 0xFF);        /* a variable range covers it  */
+    }
+    return type;
+}
+
 /* ---- A1: the foothold -----------------------------------------------------
  *
  * The banner does not say "we own the extension", it says "a guest ran and
@@ -340,7 +442,7 @@ const char *uno_vmm_blocker_str(unsigned m)
  * a machine that stops. */
 #define VM_MARKER 0x534F444F4E55ull      /* 'UNODOS', little-endian          */
 
-static char g_self[160];
+static char g_self[320];
 static int  g_self_done, g_self_ok;
 
 const char *uno_vmm_selftest_str(void) { return g_self; }
@@ -411,6 +513,33 @@ int uno_vmm_selftest(void)
                  hv->name, got, contained ? "contained" : "NOT CONTAINED",
                  cr.raw, cr.rip);
         g_self_ok = contained;
+    }
+
+    /* ---- A2: the same round trip, one translation deeper ------------------
+     * The addresses are the evidence and they are deliberately unalike: the
+     * guest stores at a guest-physical address low enough to be obviously not
+     * a real one, and the value turns up somewhere else entirely.  Had the
+     * second stage been quietly off, the store would have gone to host
+     * physical 0x100000 - which is the kernel's own low memory - and nothing
+     * would have appeared where we looked. */
+    if (g_self_ok && hv->ept) {
+        uno_vmexit ex2;
+        unsigned long long g2 = 0, hpa = 0;
+        int ok2;
+        ex2.reason = UNO_VX_UNKNOWN; ex2.raw = 0; ex2.rip = 0;
+        ex2.info1 = 0; ex2.info2 = 0;
+        ok2 = hv->ept(VM_MARKER + 1, 0x100000ull, &g2, &hpa, &ex2);
+        {   int n = (int)strlen(g_self);
+            snprintf(g_self + n, sizeof g_self - (unsigned)n,
+                     "; ept %s gpa 0x100000 -> pa %llx wrote %llx (memtype %d, %s)",
+                     ok2 ? "OK" : "FAILED", hpa, g2, carve_memtype(),
+                     g_carve_note[0] ? g_carve_note : "no carve");
+            if (!ok2) g_self_ok = 0;
+        }
+    } else if (g_self_ok) {
+        int n = (int)strlen(g_self);
+        snprintf(g_self + n, sizeof g_self - (unsigned)n,
+                 "; ept not implemented for %s", hv->name);
     }
     return g_self_ok;
 }
