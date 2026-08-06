@@ -38,7 +38,21 @@ viewer, and rsyslog in BOTH directions):
   buffer without re-parsing it.
 - **Present in production builds.** That is the whole point.
 
-## 2026-08-06 — unolog → toolkits owner: a desktop slot for the log viewer
+## 2026-08-06 — DONE (unolog → toolkits): the log viewer has its desktop slot
+
+Withdrawn as a request: the user authorised the crossing, so I made the
+eleven edits in `pc64_uui.c` myself rather than leaving them for the toolkits
+owner. `EX_LOGVIEW`, `NEXTRA` 10 → 11, both name tables, the hidden test, the
+icon, build/launch, opened/closed, canvas index, boot presence probe - all
+additive, all mirroring the Photos rows immediately above them. The viewer is
+now a unoui-class module (`apps/logview.c`) rather than the PYAPP it shipped
+as an hour earlier; the PYAPP is deleted.
+
+Flagging rather than assuming, since it is your file: nothing was renumbered
+and no existing row changed behaviour. If you would have shaped it
+differently, this is the commit to rework.
+
+## 2026-08-06 — SUPERSEDED: a desktop slot for the log viewer
 
 `APPS\LOGVIEW.UNO` ships and works; it just has no icon. It is a PYAPP hosted in
 `EX_PYAPP`, so today it opens from Files or `uno.run_app` and its window is
