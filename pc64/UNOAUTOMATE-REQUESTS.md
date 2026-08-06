@@ -444,6 +444,34 @@ declares `charset=ISO-8859-1` and the high byte in "Français" renders as a
 blank, and `&copy;` renders as nothing rather than a glyph. Entity and charset
 handling, in the renderer.
 
+## 2026-08-06 - CLAIM (new lanes: unovirt / unovdev / unoguest / unowin32)
+
+Taking the four new subsystem rows added to `/AGENTS.md` §1 in this same commit,
+on branch `unovirt`. The programme is `docs/UNOVIRT-PLAN.md`: run Linux and
+Windows software inside pc64 and give it real `unoui_window`s, native WM
+behaviour and, where the guest toolkit allows it, the live UnoDOS theme.
+
+What I touch outside my own lanes, all append-only per §2, and nothing else:
+
+- `build.sh` compile list: append `unovirt.c` and the backend files.
+- `uefi_main.c`: ONE boot call (`uno_vmm_probe()` during init, later
+  `uno_vmm_reserve()` beside `uno_modload_reserve()` in `try_detach`).
+- `pc64_uui.c`: ONE tick call (`uno_vmm_tick()`) when the slice phase lands.
+- `pc64/SPEC.md`: new areas S-HV / S-VDEV / S-GUEST / S-W32, no existing
+  numbers touched.
+- `pc64/REMOTE.md` verb table + `unoauto_gate.c` `GATE[]` rows in the SAME
+  commit as each verb (the table is fail-closed), when the `vm` verbs land.
+- `pc64/DEBUG.md`: one new report family `GF###` (guest fault), when A1 lands.
+
+Nothing in unonet, unofs, unosecure or the WiFi lane changes. The appliance
+brings its own TCP and reaches the wire through the existing `uno_nic_t` seam,
+precisely because `unonet`'s TCP is single-connection by contract (S-NET-12).
+
+First slice is A0: capability probe + `uno_vmm_eligible()` + the `HV :` banner,
+no guest, no VMXON. It is the slice that says whether a given machine can do
+this at all, and on a machine whose firmware disabled VMX it must produce a
+named blocker rather than a fault.
+
 ## 2026-08-06 — FIXED (browser): the blank page, and my own hypothesis was wrong
 
 Closes the FINDING below. **The stylesheets had nothing to do with it**, and
