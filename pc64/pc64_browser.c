@@ -445,6 +445,31 @@ static void run_page_scripts(uw_doc *d)
 }
 #endif
 
+/* The one line of feedback the browser has. Declared here rather than with the
+ * tab state below because dom_sync writes to it: a tree that would not fit is
+ * something the reader has to be told, and this is where that is discovered. */
+static char g_status[128];
+
+/* Say so when the tree would not fit. Distinct from the transport's truncation
+ * note: there, bytes never arrived; here they all did and the DOCUMENT is what
+ * did not fit, which is a different problem with a different answer (a narrower
+ * page will not help, a simpler one will).
+ *
+ * Called after the parse AND after the paint, because the arena can run out in
+ * either and only the second one is visible on this page: parsing is the cheap
+ * part, so a document that parses inside the budget can still exhaust it
+ * building layout boxes and a paint list. Checking only after uw_parse_string
+ * left the exact page that needs the note without one. Appends at most once. */
+static void note_arena_full(void)
+{
+    const char *note = " - page too complex to lay out in full";
+    int k = (int)strlen(g_status);
+    if (!g_dom || !uw_doc_truncated(g_dom)) return;
+    if (strstr(g_status, "too complex")) return;
+    if (k + (int)strlen(note) < (int)sizeof g_status)
+        memcpy(g_status + k, note, strlen(note) + 1);
+}
+
 static void dom_sync(const char *src)
 {
     uw_config c;
@@ -455,11 +480,40 @@ static void dom_sync(const char *src)
     img_cache_reset();               /* decoded frames belong to the old page */
 #endif
     memset(&c, 0, sizeof c);
-    c.arena_max = 2u << 20;          /* a page's tree, bounded */
+    /* The arena is sized to THIS document, not to a constant. It was a flat
+     * 2 MB, which was never a page-size opinion so much as a number chosen when
+     * the transport could not deliver more than 48 KB anyway. It holds the DOM,
+     * the computed styles, the layout boxes AND the paint list - and the paint
+     * list doubles inside it without freeing the old copy - so what it needs
+     * tracks the ELEMENT COUNT, not the byte count. Measured on real pages,
+     * through the whole parse-style-layout-paint pipeline:
+     *
+     *   google.com      83 KB   needs 1 MB   (a huge <head>, few elements)
+     *   news.yc         35 KB   needs 1 MB
+     *   the Wikipedia HTTP article, 609 KB,  needs 8 MB
+     *
+     * 16x the source with a 2 MB floor covers all three, and the ceiling is
+     * what a 32 MB heap can give one document while the rest of the OS runs.
+     * The arena is freed on every navigation, so this is a peak, not a
+     * reservation.
+     *
+     * Over the ceiling the parse stops and uw_doc_truncated() is set. The two
+     * renderers differ there, and the difference is worth knowing: the flow
+     * painter walks the DOM, so it draws whatever parsed, while the unoweb
+     * engine needs arena to build its paint list and so draws NOTHING at all.
+     * Hence the status note below - a blank page with no explanation is the
+     * exact failure this whole change exists to remove. */
+    {   unsigned long n = (unsigned long)strlen(src);
+        unsigned long want = n * 16;
+        if (want < (2u << 20)) want = 2u << 20;
+        if (want > (16u << 20)) want = 16u << 20;
+        c.arena_max = (size_t)want;
+    }
     c.max_depth = 96;
     g_dom = uw_parse_string(src, -1, &c);
     g_dom_sig = sig;
     g_dom_gen++;                     /* a new tree, whatever the text says */
+    note_arena_full();
 #ifdef UW_ENGINE
     prefetch_subresources(g_dom);    /* ask for everything before needing any */
     fetch_link_sheets(g_dom);
@@ -766,6 +820,7 @@ static void render_uw(const char *src, unoui_rect r, int scroll)
         uw_style_document(g_dom, avail, r.h);
         g_uw_h = uw_layout(g_dom, avail, r.h, &m);
         uw_paint(g_dom);
+        note_arena_full();       /* layout and paint spend it too, not just the parse */
         g_uw_sig = sig;
         g_uw_w = avail;
     }
@@ -942,7 +997,6 @@ typedef struct {
 static btab g_tab[MAXTABS];
 static int  g_ntab, g_cur;
 
-static char g_status[128];
 static char g_hint[128];                /* hover text, beats g_status         */
 static unoui_rect g_rect;               /* last-drawn canvas rect             */
 
