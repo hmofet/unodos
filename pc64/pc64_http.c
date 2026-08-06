@@ -1063,9 +1063,13 @@ http_req *pc64_http_begin(const char *url, const char *post)
          * starts at the maximum, so handing the cache its own capacity would
          * hand back a cache hit truncated to 16 KB - which is the bug this
          * change exists to remove, reintroduced on the fast path. */
-        int have = pc64_cache_len(r->url0), n;
-        if (have >= 0) raw_reserve(r, have + 1);
-        n = pc64_cache_get(r->url0, r->raw, r->rcap, r->status, sizeof r->status);
+        int have = pc64_cache_len(r->url0);
+        int n = -1;
+        /* And if it will not fit, do not take a SHORT copy - go to the network
+         * instead. A truncated cache hit is the worst of both: wrong, and fast
+         * enough that nothing ever looks at it twice. */
+        if (have >= 0 && raw_reserve(r, have + 1))
+            n = pc64_cache_get(r->url0, r->raw, r->rcap, r->status, sizeof r->status);
         if (n >= 0) {
             r->body_off = 0; r->body_len = n; r->rc = n;
             r->st = HS_END; r->finished = 1;
