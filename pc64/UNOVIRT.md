@@ -4,7 +4,7 @@ The appliance machinery: can this machine host a guest, and later, the guest
 itself. The programme and its phases are `docs/UNOVIRT-PLAN.md`; this file is
 the API surface, its changelog, and the things a consumer has to know.
 
-**Status: A0 through A4 [implemented on VMX]. A1 [unproved on SVM].** The
+**Status: A0 through A5 [implemented on VMX]. A1 [unproved on SVM].** The
 capability gate runs on every boot. The foothold is real on Intel: on devbuntu
 (bare metal, nested KVM) UnoDOS enters VMX operation, runs a guest, takes it
 through a CPUID intercept, reads its marker back out of guest memory, and then
@@ -311,6 +311,53 @@ bitmap configured, every MSR access exits. That is fine for eighteen
 instructions and unworkable for a kernel that reads MSRs constantly, so the
 bitmap belongs with the virtio work (S-HV-26).
 
+## A5: a device, and the thing x86 does not give you
+
+    virtio OK magic 74726976, used.idx 1, 29 bytes in 1 notify,
+    cycle refused, said "a message through a virtqueue"
+
+Four claims: the guest read the transport's identity register, its doorbell
+write reached the device, the device walked a descriptor chain in guest memory
+and consumed exactly 29 bytes, and **the guest read `used.idx` back out of its
+own memory** - so the device's write landed where a driver would look for it.
+
+**The structural difference from Glide, and it is the big one.** On ARM a
+stage-2 abort hands the hypervisor a syndrome naming the access size, the
+direction and which register the guest used; trap-and-emulate is a switch on
+those fields. An EPT violation gives the faulting address, a direction bit,
+and nothing else. The register and the operand size are only knowable by
+**decoding the instruction**, which is why KVM carries an x86 emulator.
+
+What keeps that from becoming an emulator here is scope: a driver's MMIO
+accesses are `mov` between a register and memory, because that is what `readl`
+and `writel` compile to. So `decode_mov` handles exactly `88`/`89`/`8A`/`8B`
+with their prefixes and refuses everything else **loudly** - an unrecognised
+opcode ends the guest with a report rather than a guessed answer. The
+instruction length does not have to be decoded at all: VMX supplies it.
+
+`guest_walk` turns a guest linear address into a guest-physical one through
+the guest's own page tables, which is what makes the decoder work for a guest
+that is not identity-mapped. A1..A5's guests are; Linux is not.
+
+### The bug, and why it looked like something else
+
+The guest's first device access triple-faulted at an address unrelated to the
+device. The device is at 3.25 GiB and **the guest's own page tables mapped
+only the first gibibyte** - so the access faulted in stage ONE, into an IDT
+the guest had not built, before stage two ever saw it. A device access is
+meant to fault in stage two; when it faults in stage one instead, nothing in
+the report mentions the device.
+
+### The security posture is the point of `unovdev.c`
+
+Every address in a virtqueue came from the guest, including the ones inside
+descriptors, and stage two does nothing about them: it bounds the guest's own
+accesses, not the ones we make on its behalf. So every guest address goes
+through `uno_vmm_gpa()`, and every chain walk is bounded by the queue size.
+`cycle refused` is that second rule under test: a descriptor whose `next`
+points at itself is one store by the guest, and a device that trusts a chain
+to terminate hangs the machine on request.
+
 ## Changelog
 
 - **2026-08-06, API 1.** A0: the capability gate. `uno_vmm_probe`,
@@ -323,6 +370,9 @@ bitmap belongs with the virtio work (S-HV-26).
 - **2026-08-06, API 1.** A1 PASSES on VMX (`hv_vmx.c`), on devbuntu under KVM
   at L0: entered, round trip, crasher contained, boot continued. `tools/
   hv_remote.py` runs it.
+- **2026-08-06, API 1.** A5: `unovdev.c`/`unovdev.h` (virtio-mmio transport,
+  console device, bounded ring walk), plus MMIO decode and a guest page-table
+  walk in the VMX backend. Contracts S-HV-27..30.
 - **2026-08-06, API 1.** A4: the `clockirq` backend entry - guest TSC across
   slices, interrupt injection through the guest's own IDT, and MSR exits
   answered. Contracts S-HV-24..26.

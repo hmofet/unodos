@@ -21,6 +21,7 @@
 #include "unovirt_hv.h"
 #include "unovirt.h"
 #include "pc64_native.h" /* the calibrated TSC rate, for the slice budget */
+#include "unovdev.h"     /* the device the MMIO decode answers for        */
 
 typedef unsigned int       u32;
 typedef unsigned short     u16;
@@ -598,6 +599,7 @@ static int vmx_crasher(uno_vmexit *out)
 #define GP_PML4  0x1000
 #define GP_PDPT  0x2000
 #define GP_PD    0x3000
+#define GP_PD2   0x6000        /* the gibibyte the devices live in         */
 #define GP_GDT   0x4000
 #define GP_STACK 0x8000
 #define GP_CODE  0x10000
@@ -638,15 +640,24 @@ static int guest_tables_in_carve(void)
     u64 *pml4 = (u64 *)uno_vmm_gpa(GP_PML4, 4096);
     u64 *pdpt = (u64 *)uno_vmm_gpa(GP_PDPT, 4096);
     u64 *pd   = (u64 *)uno_vmm_gpa(GP_PD,   4096);
+    u64 *pd2  = (u64 *)uno_vmm_gpa(GP_PD2,  4096);
     u64 *gdt  = (u64 *)uno_vmm_gpa(GP_GDT,  4096);
     unsigned i;
-    if (!pml4 || !pdpt || !pd || !gdt) return 0;
+    if (!pml4 || !pdpt || !pd || !pd2 || !gdt) return 0;
     for (i = 0; i < 512; i++) {
         pml4[i] = 0;
         pdpt[i] = 0;
         pd[i]   = ((u64)i << 21) | 0x83;         /* present, rw, 2 MiB       */
+        /* The fourth gibibyte, where the devices are. THE GUEST'S OWN TABLES
+         * HAVE TO MAP IT: a device access is meant to fault in stage TWO, and
+         * a guest whose stage-one mapping is missing never gets that far - it
+         * takes a page fault into an IDT it has not built, and the result is
+         * a triple fault at an address that has nothing to do with the
+         * device. That is exactly how this arrived. */
+        pd2[i]  = (3ull << 30) | ((u64)i << 21) | 0x83;
     }
     pdpt[0] = GP_PD   | 0x3;                     /* GPAs, not host addresses */
+    pdpt[3] = GP_PD2  | 0x3;
     pml4[0] = GP_PDPT | 0x3;
     gdt[0] = 0;
     gdt[1] = 0x00AF9B000000FFFFull;
@@ -1005,7 +1016,276 @@ static int vmx_clockirq(uno_vm_clockirq *out)
         && !out->redelivered;
 }
 
+/* ---- A5: MMIO, and the thing x86 does not give you ------------------------
+ *
+ * On ARM a stage-2 abort hands the hypervisor a syndrome register that names
+ * the access size, the direction and WHICH REGISTER the guest used. Glide's
+ * trap-and-emulate is a switch on those fields. x86 gives an EPT violation
+ * with the faulting guest-physical address, a direction bit, and nothing
+ * else: the register and the operand size are only knowable by DECODING THE
+ * INSTRUCTION. That is why KVM carries an x86 emulator, and it is the single
+ * biggest structural difference between this port and Glide's.
+ *
+ * What saves it from being an emulator is scope. A device driver's MMIO
+ * accesses are `mov` between a register and memory - that is what `readl` and
+ * `writel` compile to on every compiler anyone uses. So this decodes exactly
+ * the four MOV forms and refuses everything else, loudly, rather than
+ * guessing. An unrecognised opcode is a reportable exit, not a wrong answer.
+ *
+ * The instruction LENGTH does not have to be decoded: VMX supplies it for
+ * EPT violations, which removes the part of decoding that is genuinely hard. */
+#define EXIT_EPT_MISCONFIG 49
+#define GUEST_PHYS_ADDR    0x2400
+#define EXIT_QUALIFICATION 0x6400
+
+/* Walk the guest's own page tables to turn a guest LINEAR address into a
+ * guest-physical one. A1..A4's guests are identity-mapped, so this is the
+ * identity for them; Linux is not, and this is what stops that being a
+ * rewrite later. Every table read goes through the bounds seam. */
+static int guest_walk(u64 lin, u64 *gpa)
+{
+    u64 cr3 = vmread(GUEST_CR3) & ~0xFFFull;
+    int level;
+    u64 tbl = cr3;
+    for (level = 39; level >= 12; level -= 9) {
+        const u64 *t = (const u64 *)uno_vmm_gpa(tbl, 4096);
+        u64 e;
+        if (!t) return 0;
+        e = t[(lin >> level) & 511];
+        if (!(e & 1)) return 0;                    /* not present            */
+        if ((e & 0x80) && level > 12) {            /* a large page ends it   */
+            u64 mask = (1ull << level) - 1;
+            *gpa = (e & ~mask & 0x000FFFFFFFFFF000ull) | (lin & mask);
+            return 1;
+        }
+        tbl = e & 0x000FFFFFFFFFF000ull;
+        if (level == 12) { *gpa = tbl | (lin & 0xFFF); return 1; }
+    }
+    return 0;
+}
+
+/* The four forms, and what each one means:
+ *   88 /r  mov r/m8,  r8      store, 1 byte
+ *   89 /r  mov r/m32, r32     store, operand size
+ *   8A /r  mov r8,  r/m8      load,  1 byte
+ *   8B /r  mov r32, r/m32     load,  operand size
+ * Everything before the opcode is prefixes; everything after is addressing we
+ * do not need, because the faulting ADDRESS already came from the CPU. */
+static int decode_mov(const u8 *ins, int *reg, unsigned *size, int *is_store)
+{
+    int i = 0, rex = 0, opsz = 4;
+    for (; i < 8; i++) {
+        u8 b = ins[i];
+        if (b == 0x66) { opsz = 2; continue; }
+        if (b == 0x67 || b == 0xF0 || b == 0xF2 || b == 0xF3) continue;
+        if (b == 0x2E || b == 0x36 || b == 0x3E || b == 0x26 ||
+            b == 0x64 || b == 0x65) continue;
+        if ((b & 0xF0) == 0x40) { rex = b; if (b & 8) opsz = 8; continue; }
+        break;
+    }
+    switch (ins[i]) {
+    case 0x88: *is_store = 1; *size = 1; break;
+    case 0x8A: *is_store = 0; *size = 1; break;
+    case 0x89: *is_store = 1; *size = (unsigned)opsz; break;
+    case 0x8B: *is_store = 0; *size = (unsigned)opsz; break;
+    default: return 0;
+    }
+    *reg = ((ins[i + 1] >> 3) & 7) | ((rex & 4) ? 8 : 0);
+    return 1;
+}
+
+/* The guest's register file, addressed the way an instruction encoding does.
+ * RSP is index 4 and lives in the VMCS rather than the context, which is the
+ * one hole a table like this always has. */
+static u64 *gpr(int n)
+{
+    u64 *c = (u64 *)&g_ctx;
+    static const int map[16] = { 0, 2, 3, 1, -1, 6, 5, 4,
+                                 7, 8, 9, 10, 11, 12, 13, 14 };
+    /* rax rcx rdx rbx rsp rbp rsi rdi r8..r15 -> uno_gprs order */
+    if (n < 0 || n > 15 || map[n] < 0) return 0;
+    return c + map[n];
+}
+
+/* Answer one EPT violation as the device would, then step the guest past the
+ * instruction. Returns 0 when it is not a device access or not a form we
+ * decode - both of which end the guest with a report rather than a guess. */
+static int mmio_service(void)
+{
+    u64 gpa = vmread(GUEST_PHYS_ADDR);
+    u64 qual = vmread(EXIT_QUALIFICATION);
+    u64 rip = vmread(GUEST_RIP), ins_gpa = 0, val = 0;
+    const u8 *ins;
+    int reg = 0, is_store = 0, decoded_store = 0;
+    unsigned size = 4;
+    u64 *r;
+
+    if (!guest_walk(rip, &ins_gpa)) return 0;
+    ins = (const u8 *)uno_vmm_gpa(ins_gpa, 16);
+    if (!ins) return 0;
+    if (!decode_mov(ins, &reg, &size, &decoded_store)) return 0;
+    is_store = (qual & 2) ? 1 : 0;
+    if (is_store != decoded_store) return 0;      /* the two must agree      */
+    r = gpr(reg);
+    if (!r) return 0;
+
+    if (is_store) {
+        val = *r;
+        if (size == 1) val &= 0xFF;
+        else if (size == 2) val &= 0xFFFF;
+        else if (size == 4) val &= 0xFFFFFFFFull;
+        if (!uno_vdev_mmio(gpa, 1, size, &val)) return 0;
+    } else {
+        if (!uno_vdev_mmio(gpa, 0, size, &val)) return 0;
+        /* A 32-bit destination zero-extends into the top half, exactly as the
+         * instruction would have. Writing only the low half leaves the guest
+         * with whatever it had up there, which is a bug that appears only
+         * once a value crosses 4 GiB. */
+        if (size == 4) *r = val & 0xFFFFFFFFull;
+        else if (size == 2) *r = (*r & ~0xFFFFull) | (val & 0xFFFF);
+        else if (size == 1) *r = (*r & ~0xFFull) | (val & 0xFF);
+        else *r = val;
+    }
+    vmwrite(GUEST_RIP, rip + vmread(VM_EXIT_INSTR_LEN));
+    return 1;
+}
+
+/* A5's guest: read the transport's identity, ring the doorbell, then read
+ * back what the device wrote into the guest's own used ring.
+ *
+ *   00: 48 BB <mmio>   mov rbx, 0xD0000000
+ *   0A: 48 B9 <cells>  mov rcx, 0x100000
+ *   14: 8B 03          mov eax, [rbx]        ; MagicValue  -> a load exit
+ *   16: 89 01          mov [rcx], eax
+ *   18: 31 C0          xor eax, eax
+ *   1A: 89 43 50       mov [rbx+0x50], eax   ; QueueNotify -> a store exit
+ *   1D: 48 BA <used>   mov rdx, 0x202000
+ *   27: 8B 42 02       mov eax, [rdx+2]      ; used.idx, written by the device
+ *   2A: 89 41 04       mov [rcx+4], eax
+ *   2D: F4             hlt
+ */
+#define GP_VQ_DESC  0x200000
+#define GP_VQ_AVAIL 0x201000
+#define GP_VQ_USED  0x202000
+#define GP_VQ_BUF   0x203000
+#define VQ_MSG "a message through a virtqueue"
+
+static int a5_emit(void)
+{
+    u8 *p = (u8 *)uno_vmm_gpa(GP_CODE, 0x40);
+    unsigned i;
+    if (!p) return 0;
+    for (i = 0; i < 0x40; i++) p[i] = 0;
+    p[0] = 0x48; p[1] = 0xBB;
+    for (i = 0; i < 8; i++) p[2 + i] = (u8)(uno_vdev_base() >> (8 * i));
+    p[0x0A] = 0x48; p[0x0B] = 0xB9;
+    for (i = 0; i < 8; i++) p[0x0C + i] = (u8)((u64)GP_CELLS >> (8 * i));
+    p[0x14] = 0x8B; p[0x15] = 0x03;
+    p[0x16] = 0x89; p[0x17] = 0x01;
+    p[0x18] = 0x31; p[0x19] = 0xC0;
+    p[0x1A] = 0x89; p[0x1B] = 0x43; p[0x1C] = 0x50;
+    p[0x1D] = 0x48; p[0x1E] = 0xBA;
+    for (i = 0; i < 8; i++) p[0x1F + i] = (u8)((u64)GP_VQ_USED >> (8 * i));
+    p[0x27] = 0x8B; p[0x28] = 0x42; p[0x29] = 0x02;
+    p[0x2A] = 0x89; p[0x2B] = 0x41; p[0x2C] = 0x04;
+    p[0x2D] = 0xF4;
+    return 1;
+}
+
+/* The rings, placed on the guest's behalf.  A6's guest is Linux and builds
+ * its own; what is being tested here is the DEVICE walking them. */
+static int a5_rings(void)
+{
+    u8 *d = (u8 *)uno_vmm_gpa(GP_VQ_DESC, 64);
+    u8 *a = (u8 *)uno_vmm_gpa(GP_VQ_AVAIL, 64);
+    u8 *u = (u8 *)uno_vmm_gpa(GP_VQ_USED, 64);
+    char *b = (char *)uno_vmm_gpa(GP_VQ_BUF, 64);
+    const char *m = VQ_MSG;
+    unsigned n = 0, i;
+    if (!d || !a || !u || !b) return 0;
+    while (m[n]) { b[n] = m[n]; n++; }
+    for (i = 0; i < 64; i++) { d[i] = 0; a[i] = 0; u[i] = 0; }
+    *(u64 *)(d + 0) = GP_VQ_BUF;      /* desc[0].addr                        */
+    *(u32 *)(d + 8) = n;              /* desc[0].len                         */
+    *(u16 *)(a + 2) = 1;              /* avail.idx = 1                       */
+    *(u16 *)(a + 4) = 0;              /* avail.ring[0] = descriptor 0        */
+    uno_vdev_queue(GP_VQ_DESC, GP_VQ_AVAIL, GP_VQ_USED, 8);
+    return (int)n;
+}
+
+static int vmx_virtio(uno_vm_virtio *out)
+{
+    u64 eptp, pa = (u64)(unsigned long long)(void *)g_vmcs;
+    volatile u32 *cells;
+    uno_vmexit ex;
+    u8 fail = 0;
+    unsigned i;
+    u32 proc, proc2, pin;
+    int n, want;
+
+    out->magic = out->used_idx = 0;
+    out->bytes = out->notifies = out->cycle_refused = 0;
+    out->text = "";
+
+    cells = (volatile u32 *)uno_vmm_gpa(GP_CELLS, 16);
+    if (!cells || !uno_vmm_probe()->slat) return 0;
+    eptp = ept_build();
+    if (!eptp || !guest_tables_in_carve()) return 0;
+    cells[0] = 0; cells[1] = 0;
+    uno_vdev_reset();
+    want = a5_rings();
+    if (want <= 0 || !a5_emit()) return 0;
+
+    for (i = 0; i < sizeof g_ctx / sizeof(u64); i++) ((u64 *)&g_ctx)[i] = 0;
+    *(u32 *)g_vmcs = (u32)(rdmsr(IA32_VMX_BASIC) & 0x7FFFFFFFu);
+    __asm__ volatile ("vmclear %1; setna %0" : "=r"(fail) : "m"(pa) : "cc");
+    if (fail) return 0;
+    __asm__ volatile ("vmptrld %1; setna %0" : "=r"(fail) : "m"(pa) : "cc");
+    if (fail) return 0;
+    g_launched = 0;
+
+    vmcs_reset(0, GP_CODE, 0xFFF);
+    pin   = adjust(IA32_VMX_TRUE_PIN, IA32_VMX_PINBASED,
+                   PIN_EXT_INTR_EXIT | PIN_PREEMPT, 1);
+    proc  = adjust(IA32_VMX_TRUE_PROC, IA32_VMX_PROCBASED,
+                   PROC_HLT_EXITING | (1u << 31), 1);
+    proc2 = adjust(IA32_VMX_PROCBASED2, IA32_VMX_PROCBASED2, EPT_PROC2, 0);
+    vmwrite(PIN_BASED_CTLS, pin);
+    vmwrite(PROC_BASED_CTLS, proc);
+    vmwrite(PROC_BASED_CTLS2, proc2);
+    vmwrite(EPT_POINTER, eptp);
+    vmwrite(GUEST_CR3, GP_PML4);
+    vmwrite(GUEST_GDTR_BASE, GP_GDT);
+    vmwrite(GUEST_IDTR_BASE, GP_GDT);
+    vmwrite(GUEST_TR_BASE, GP_TSS2);
+    vmwrite(GUEST_RSP, GP_STACK);
+
+    for (n = 0; n < 32; n++) {
+        u64 ticks = uno_native_tsc_per_us() * 2000ull
+                    >> (unsigned)(rdmsr(IA32_VMX_MISC) & 0x1F);
+        vmwrite(VMX_PREEMPT_VALUE, ticks ? ticks : 1);
+        run_once(&ex);
+        if (ex.raw == EXIT_EPT_VIOLATION) {
+            if (mmio_service()) continue;
+            break;                            /* undecodable: say so, stop   */
+        }
+        if (ex.raw == EXIT_PREEMPT || ex.raw == EXIT_EXT_INTR) continue;
+        break;
+    }
+
+    out->magic    = cells[0];
+    out->used_idx = cells[1];
+    out->text     = uno_vdev_output(&n, &out->notifies, &out->bytes);
+    out->cycle_refused = uno_vdev_cycle_refused(GP_VQ_DESC, 8);
+    return ex.reason == UNO_VX_HLT
+        && out->magic == 0x74726976u
+        && out->used_idx == 1
+        && n == want
+        && out->cycle_refused;
+}
+
 static const uno_hv_t VMX = { "vmx", vmx_enable, vmx_marker, vmx_crasher,
-                              vmx_ept, vmx_spin_start, vmx_slice, vmx_clockirq };
+                              vmx_ept, vmx_spin_start, vmx_slice, vmx_clockirq,
+                              vmx_virtio };
 
 const uno_hv_t *uno_hv_vmx(void) { return &VMX; }

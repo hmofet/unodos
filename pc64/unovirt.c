@@ -453,7 +453,7 @@ static char g_slice_str[144];
  * a machine that stops. */
 #define VM_MARKER 0x534F444F4E55ull      /* 'UNODOS', little-endian          */
 
-static char g_self[480];
+static char g_self[720];
 static int  g_self_done, g_self_ok;
 
 const char *uno_vmm_selftest_str(void) { return g_self; }
@@ -567,6 +567,20 @@ int uno_vmm_selftest(void)
                  k.redelivered ? "" : "not ",
                  k.msr_echo ? "answered" : "NOT ANSWERED");
         if (!ok4) g_self_ok = 0;
+    }
+
+    /* ---- A5: a device the guest discovers and talks to ------------------ */
+    if (g_self_ok && hv->virtio) {
+        uno_vm_virtio v;
+        int ok5 = hv->virtio(&v);
+        int n = (int)strlen(g_self);
+        snprintf(g_self + n, sizeof g_self - (unsigned)n,
+                 "; virtio %s magic %x, used.idx %u, %d bytes in %d notify, "
+                 "cycle %s, said \"%s\"",
+                 ok5 ? "OK" : "FAILED", v.magic, v.used_idx, v.bytes,
+                 v.notifies, v.cycle_refused ? "refused" : "NOT REFUSED",
+                 v.text ? v.text : "");
+        if (!ok5) g_self_ok = 0;
     }
 
     /* A3 is ARMED here and finished by the frame loop, because that is the
