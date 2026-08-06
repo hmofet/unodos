@@ -5424,7 +5424,7 @@ static int pump_input(void)
             UI.focus_win >= 0 && UI.focus_win < UI.nwin &&
             UI.win[UI.focus_win] == &g_win[EX_PHOTOS] && g_photos->key) {
             if (g_photos->key(uni, scan, ctrl)) { g_dirty = 1; continue; }
-        }
+        }
         if (!g_launch_open && !UI.full && g_logview && g_open[EX_LOGVIEW] &&
             UI.focus_win >= 0 && UI.focus_win < UI.nwin &&
             UI.win[UI.focus_win] == &g_win[EX_LOGVIEW] && g_logview->key) {
@@ -6015,6 +6015,11 @@ int main(void)
     for (;;) {
         int la, cursor_only = 0;
         uno_dbg_heartbeat();            /* debug build: the watchdog's liveness */
+        { void uno_vmm_tick(void); uno_vmm_tick(); }
+                                        /* unovirt: one budgeted slice of any
+                                           running guest. Inert until a guest
+                                           exists, which is why it can sit on
+                                           the hot path unconditionally. */
         pc64_nettest_tick();            /* debug build: network hw test + the
                                            conformance suite, runs once and
                                            blocks this frame while it does */
@@ -6143,7 +6148,7 @@ int main(void)
         if (g_studio && g_open[EX_STUDIO] && g_studio->frame)
             g_studio->frame();          /* Studio caret blink / build pumps */
         if (g_photos && g_open[EX_PHOTOS] && g_photos->frame)
-            g_photos->frame();          /* Photos: GIF animation pump */
+            g_photos->frame();          /* Photos: GIF animation pump */
         if (g_logview && g_open[EX_LOGVIEW] && g_logview->frame)
             g_logview->frame();         /* System Log: follow the tail  */
         if (g_uoword && g_open[EX_UOWORD] && g_uoword->frame)
