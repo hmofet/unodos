@@ -663,6 +663,10 @@ if [ "$1" != "legacy" ]; then
     if [ "${UNO_PYRT:-1}" != "0" ] && [ -f apps/DUUM.PY ]; then
         echo "[3e] packaging DUUM.UNO (the Python Doom engine)..."
         "$PY" tools/mkuno.py pyapp apps/DUUM.PY build/esp/APPS/DUUM.UNO
+        # the system log viewer (pc64/UNOLOG.md). A PYAPP so unolog needs no
+        # toolkits-lane edit for a desktop slot; see the request filed there.
+        "$PY" tools/mkuno.py pyapp apps/LOGVIEW.PY build/esp/APPS/LOGVIEW.UNO
+        cp apps/LOGVIEW.PY build/esp/SDK/ 2>/dev/null || true
         mkdir -p build/esp/SDK; cp apps/DUUM.PY build/esp/SDK/ 2>/dev/null || true
         if   [ -f wads/DOOM1.WAD ];     then WADSRC=wads/DOOM1.WAD
         elif [ -f wads/freedoom1.wad ]; then WADSRC=wads/freedoom1.wad
