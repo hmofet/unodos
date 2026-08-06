@@ -907,7 +907,18 @@ static void render_html(const char *src, unoui_rect r, int scroll)
  * ========================================================================= */
 #include "pc64_icons.h"                 /* pc64_shell_theme() for the panels */
 
-#define DOC_MAX   32768
+/* A tab's document buffer GROWS to the document. It was a flat 32768, a second
+ * and tighter cut behind pc64_http's old 48 KB one: google.com's <body> opens
+ * 62,883 bytes into its body, so neither layer could ever have delivered a page
+ * that size and the tab rendered <head> and nothing else.
+ *
+ * DOC_MAX matches the transport's RAW_MAX and pc64_fetch's FETCH_ONE_MAX - one
+ * number for "the biggest single resource this browser handles", rather than
+ * three that disagree. Six tabs at the maximum would be 6 MB of a 32 MB heap,
+ * which is why the buffer is sized per document and not per tab: a tab showing
+ * the start page holds DOC_MIN. */
+#define DOC_MIN   32768
+#define DOC_MAX   (1024 * 1024)
 #define TITMAX    48
 #define MAXTABS   6
 #define HISTN     16                    /* back / forward depth per tab       */
@@ -919,7 +930,8 @@ typedef struct {
     int   used;
     char  loc[LOCMAX];
     char  title[TITMAX];
-    char *doc;                          /* DOC_MAX, allocated on first use    */
+    char *doc;                          /* doccap bytes, grown on demand      */
+    int   doccap;
     int   is_html, scroll;
     int   start;                        /* 1 = showing the start page         */
     int   sel, top;                     /* start page: selection + first row  */
@@ -1173,14 +1185,21 @@ static int tag_at(const char *p, const char *name)   /* case-insensitive "<name"
  * is compiled out there rather than left to fight with the live bindings
  * over who owns <script>. */
 #ifndef UW_ENGINE
-static void js_expand(char *doc)
+/* `cap` is the document buffer's size, not a constant: the buffer grows to the
+ * page now, so a static scratch of the maximum would be a megabyte of BSS
+ * carried by every build to serve the rare page that needs it. One allocation
+ * per navigation instead - and if it fails, the document is left exactly as it
+ * arrived, which renders the page with its scripts unexpanded rather than not
+ * at all. */
+static void js_expand(char *doc, int cap)
 {
-    static char out[DOC_MAX];
     static char code[8192], wbuf[8192], logbuf[4096], lbuf[2048];
+    char *out = (char *)malloc((size_t)cap);
     int oi = 0, haslog = 0;
     const char *p = doc;
+    if (!out) return;
     logbuf[0] = 0;
-    while (*p && oi < DOC_MAX-1) {
+    while (*p && oi < cap-1) {
         if (p[0]=='<' && tag_at(p+1,"script")) {
             const char *s = p + 7; while (*s && *s!='>') s++; if (*s=='>') s++;
             const char *e = s;
@@ -1190,7 +1209,7 @@ static void js_expand(char *doc)
             wbuf[0] = 0; lbuf[0] = 0;
             int jrc = js_run(code, wbuf, sizeof wbuf, lbuf, sizeof lbuf);
             int wl = (int)strlen(wbuf);
-            if (wl > DOC_MAX-1-oi) wl = DOC_MAX-1-oi;
+            if (wl > cap-1-oi) wl = cap-1-oi;
             memcpy(out+oi, wbuf, wl); oi += wl;
             /* Only surface a console panel for scripts that RAN (rc==0): real web
              * pages carry minified JS this tiny interpreter can't parse, and on a
@@ -1208,12 +1227,13 @@ static void js_expand(char *doc)
     if (haslog) {                                    /* a small console panel */
         const char *h = "<hr><h3>console</h3><pre>", *f = "</pre>";
         int hl=(int)strlen(h), ll=(int)strlen(logbuf), fl2=(int)strlen(f);
-        if (oi+hl+ll+fl2 < DOC_MAX-1) {
+        if (oi+hl+ll+fl2 < cap-1) {
             memcpy(out+oi,h,hl); oi+=hl; memcpy(out+oi,logbuf,ll); oi+=ll;
             memcpy(out+oi,f,fl2); oi+=fl2; out[oi]=0;
         }
     }
     memcpy(doc, out, (size_t)oi+1);
+    free(out);
 }
 #endif /* !UW_ENGINE */
 
@@ -1361,14 +1381,25 @@ static void hist_add(const char *loc, const char *title)
 }
 
 /* ---- tabs ---------------------------------------------------------------- */
-static char *tab_doc(btab *t)
+/* The tab's document buffer, with room for at least `need` bytes (NUL
+ * included). Never shrinks - a tab that has held a big page will hold another -
+ * and never grows past DOC_MAX. NULL only if the heap refused, in which case a
+ * previous buffer is still valid and still returned. */
+static char *tab_doc_cap(btab *t, int need)
 {
-    if (!t->doc) {
-        t->doc = (char *)malloc(DOC_MAX);
-        if (t->doc) t->doc[0] = 0;
-    }
+    char *bigger;
+    if (need < DOC_MIN) need = DOC_MIN;
+    if (need > DOC_MAX) need = DOC_MAX;
+    if (t->doc && t->doccap >= need) return t->doc;
+    bigger = (char *)realloc(t->doc, (size_t)need);
+    if (!bigger) return t->doc;                 /* keep whatever we had */
+    if (!t->doc) bigger[0] = 0;
+    t->doc = bigger;
+    t->doccap = need;
     return t->doc;
 }
+
+static char *tab_doc(btab *t) { return tab_doc_cap(t, DOC_MIN); }
 
 static int tab_new(const char *loc)
 {
@@ -1392,7 +1423,7 @@ static void tab_close(int i)
     if (i < 0 || i >= MAXTABS || !g_tab[i].used) return;
     for (k = 0; k < MAXTABS; k++) if (g_tab[k].used) alive++;
     if (alive <= 1) { navigate("uno:start", 1); return; }   /* never zero tabs */
-    if (g_tab[i].doc) { free(g_tab[i].doc); g_tab[i].doc = 0; }
+    if (g_tab[i].doc) { free(g_tab[i].doc); g_tab[i].doc = 0; g_tab[i].doccap = 0; }
     g_tab[i].used = 0;
     while (g_ntab > 0 && !g_tab[g_ntab-1].used) g_ntab--;
     if (g_cur == i) {
@@ -1431,12 +1462,12 @@ static void title_from_loc(btab *t, const char *loc)
 
 static void doc_set(btab *t, const char *src, int html)
 {
-    char *d = tab_doc(t);
+    char *d = tab_doc_cap(t, (int)strlen(src) + 1);
     if (!d) return;
-    sput(d, DOC_MAX, src);
+    sput(d, t->doccap, src);
     t->is_html = html;
 #ifndef UW_ENGINE
-    if (html) js_expand(d);
+    if (html) js_expand(d, t->doccap);
 #else
     (void)html;                  /* the engine build runs scripts on the DOM */
 #endif
@@ -1446,7 +1477,7 @@ static void doc_error(btab *t, const char *what, const char *why)
 {
     char *d = tab_doc(t), *p, *end;
     if (!d) return;
-    p = d; end = d + DOC_MAX;
+    p = d; end = d + t->doccap;
     p = sapp(p, end, "<h1>Couldn't load the page</h1><p><b>Where:</b> ");
     p = sapp(p, end, what);
     p = sapp(p, end, "</p><p><b>Reason:</b> ");
@@ -1461,9 +1492,11 @@ static void doc_error(btab *t, const char *what, const char *why)
  * address bar all navigate through the same door */
 /* ---- progressive render ----------------------------------------------------
  * The transport hands over the body every few KB; this paints it. The cost of
- * re-rendering a partial document is bounded by construction: the receive
- * buffer caps at ~48 KB and the throttle is ~6 KB, so a page is drawn at most
- * a handful of times before it is complete. Streaming into a live parser
+ * re-rendering a partial document is bounded by the transport's throttle, which
+ * grows with the body (~6 KB, then a quarter of what has arrived) precisely
+ * because this callback re-parses and re-renders the whole thing each time -
+ * see the note on it in pc64_http.c. A page is drawn a couple of dozen times on
+ * the way in whatever its size. Streaming into a live parser
  * would avoid even that, but the browser keys its DOM cache on the document
  * TEXT, and threading a parser through that is a bigger change than the
  * saving justifies at this size. */
@@ -1485,8 +1518,8 @@ static void load_progress(const char *body, int len, long total)
     btab *t = g_partial_tab;
     char *d;
     (void)total;
-    if (!t || !(d = tab_doc(t))) return;
-    if (len > DOC_MAX - 1) len = DOC_MAX - 1;
+    if (!t || !(d = tab_doc_cap(t, len + 1))) return;
+    if (len > t->doccap - 1) len = t->doccap - 1;
     memcpy(d, body, (size_t)len);
     d[len] = 0;
     t->is_html = 1;
@@ -1572,32 +1605,41 @@ static void load_loc(btab *t, const char *loc)
     }
 
     if (!strncmp(loc, "file:", 5) || !strncmp(loc, "path:", 5)) {
-        char *d = tab_doc(t);
+        char *d;
         const char *name = loc + 5;
-        long n = -1;
+        long n = -1, sz;
         int v = -1;
-        if (!d) return;
+        /* Ask the volume how big the file is and size the buffer to it - a
+         * local document was capped at 32 KB by the same constant that cut
+         * google.com, and a long README truncated just as silently. */
         if (!strncmp(loc, "file:", 5)) {
             v = loc_file(loc, &name);
-            if (v >= 0) n = uno_fs_read(v, name, (unsigned char *)d, DOC_MAX - 1);
+            sz = (v >= 0) ? uno_fs_size(v, name) : -1;
+            d = tab_doc_cap(t, (sz > 0 ? (int)sz : 0) + 1);
+            if (!d) return;
+            if (v >= 0) n = uno_fs_read(v, name, (unsigned char *)d, t->doccap - 1);
         } else {
             int k, nv = uno_fs_volumes();                    /* search every volume */
+            sz = -1;
+            for (k = 0; k < nv && sz <= 0; k++) sz = uno_fs_size(k, name);
+            d = tab_doc_cap(t, (sz > 0 ? (int)sz : 0) + 1);
+            if (!d) return;
             for (k = 0; k < nv && n < 0; k++)
-                n = uno_fs_read(k, name, (unsigned char *)d, DOC_MAX - 1);
+                n = uno_fs_read(k, name, (unsigned char *)d, t->doccap - 1);
         }
         if (n < 0) { doc_error(t, name, "no volume carries that file"); return; }
         d[n] = 0;
         t->is_html = name_is_html(name);
 #ifndef UW_ENGINE
-        if (t->is_html) js_expand(d);
+        if (t->is_html) js_expand(d, t->doccap);
 #endif
         return;
     }
 
     if (loc_is_net(loc)) {
-        char *d = tab_doc(t);
+        http_req *rq;
+        char *d;
         int n, q, i;
-        if (!d) return;
         loading_frame(loc);                     /* show progress before we block */
         /* Draw the page AS IT ARRIVES rather than only when the last byte
          * lands. The partial body is rendered by the ordinary path - a
@@ -1606,9 +1648,23 @@ static void load_loc(btab *t, const char *loc)
          * recovery, which is what a real browser shows mid-load too. */
         g_partial_tab = t;
         pc64_http_on_progress(load_progress);
-        n = pc64_http_get(loc, d, DOC_MAX - 1, g_status, sizeof g_status);
+        /* The handle flow, not pc64_http_get, for ONE reason: the blocking call
+         * needs its buffer before the answer exists, so the only size it can be
+         * given is the worst case - which is exactly the 32 KB that cut
+         * google.com's <body> off. Here the request finishes first and the
+         * buffer is sized from what actually arrived. */
+        rq = pc64_http_begin(loc, 0);
+        if (!rq) { g_partial_tab = 0; pc64_http_on_progress(0);
+                   doc_error(t, loc, "Out of memory"); return; }
+        pc64_http_req_progress(rq, 1);
+        pc64_http_wait(rq);
         pc64_http_on_progress(0);
         g_partial_tab = 0;
+        n = pc64_http_len(rq);
+        d = tab_doc_cap(t, (n > 0 ? n : 0) + 1);
+        if (!d) { pc64_http_free(rq); return; }
+        n = pc64_http_take(rq, d, t->doccap, g_status, sizeof g_status);
+        pc64_http_free(rq);
         /* Force one more parse now that the document is COMPLETE and the
          * re-entrancy guard is clear. Without this the last progressive
          * paint's cached tree is reused - the text is identical, so the
@@ -1624,7 +1680,7 @@ static void load_loc(btab *t, const char *loc)
         if (q >= 3 && !strncmp(loc+q-3, ".md", 3)) t->is_html = 0;
         else if (q >= 4 && !strncmp(loc+q-4, ".txt", 4)) t->is_html = 0;
 #ifndef UW_ENGINE
-        if (t->is_html) js_expand(d);
+        if (t->is_html) js_expand(d, t->doccap);
 #endif
         return;
     }
@@ -1699,12 +1755,21 @@ static void form_submit(btab *t, uw_node *ctl)
     resolve(action && *action ? action : t->loc, g_page_base[0] ? g_page_base : t->loc,
             url, sizeof url);
     if (method && (method[0] == 'p' || method[0] == 'P')) {
-        char *d = tab_doc(t);
-        if (!d) return;
         sput(g_status, sizeof g_status, "Submitting...");
         pc64_shell_dirty();
-        {   int r = pc64_http_request(url, body, d, DOC_MAX - 1,
-                                      g_status, sizeof g_status);
+        /* Same allocate-from-len flow as a GET navigation: a form's reply is
+         * as likely to be a full page as any other document, and taking it
+         * into a fixed buffer would truncate it the same way. */
+        {   http_req *rq = pc64_http_begin(url, body);
+            char *d;
+            int r;
+            if (!rq) { doc_error(t, url, "Out of memory"); return; }
+            pc64_http_wait(rq);
+            r = pc64_http_len(rq);
+            d = tab_doc_cap(t, (r > 0 ? r : 0) + 1);
+            if (!d) { pc64_http_free(rq); return; }
+            r = pc64_http_take(rq, d, t->doccap, g_status, sizeof g_status);
+            pc64_http_free(rq);
             if (r < 0) doc_error(t, url, g_status);
             else t->is_html = 1;
             sput(t->loc, LOCMAX, url);
