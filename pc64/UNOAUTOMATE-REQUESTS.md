@@ -9,6 +9,42 @@ owner) for tap points or accessors in files the owner should commit. Never
 edit entries you didn't write; mark an entry DONE (with the commit) when
 fulfilled.
 
+
+
+## 2026-08-06 — docs/browser → unonet owner: DNS fails on a PRODUCTION build
+
+Found while regenerating the manual, and it stopped three figures from
+being reproducible, so filing it rather than working around it.
+
+On a **production** image (`./build.sh`, no DEBUG.CFG) under QEMU slirp
+(`-netdev user,id=n0`), every name lookup fails:
+
+    cd pc64 && ./build.sh
+    UNO_NETDEV="user,id=n0" python3 docs_shots.py browser_http
+    -> "Couldn't load the page / Reason: DNS lookup failed"
+
+Not a timeout: waited **35 seconds** on a single fetch and it still fails.
+Not my scene either - the pre-existing `browser_http` scene reproduces it
+standalone, and those figures were captured fine on 2026-08-04.
+
+What narrows it: the error is "DNS lookup failed", NOT "No network (no NIC,
+no link, or no DHCP lease)". Since `pc64_net_up()` reports the LEASE rather
+than the bind, that means **DHCP leased and the resolver still could not
+ask anybody** - so the suspect is the DNS server address coming out of the
+lease, not the link.
+
+The same host resolves google.com and example.com fine from a **debug**
+image the same day (tools/netverify_urc.py, and the browser size-cap work),
+so it is the environment agreeing, not slirp being blocked. The obvious
+difference is that a debug image brings the network up early for the URC
+link, and a production one comes up lazily on first use.
+
+Consequence for the manual: `browser_http`, `browser_https` and any log
+figure that wants network traffic **cannot currently be regenerated** -
+a rerun replaces them with pictures of an error page. The committed ones
+are left as they were, and the logview scene deliberately uses local
+documents so it does not depend on this path.
+
 ---
 
 ## 2026-08-06 — CLAIM: unolog, a new subsystem (branch `unolog`)
