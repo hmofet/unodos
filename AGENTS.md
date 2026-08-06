@@ -39,6 +39,7 @@ re-home"). Ownership is of the CODE; the whole OS is a shared goal.
 | detach gate (pre-EBS eligibility + blocker attribution) | `pc64/DETACH.md` | `detachgate.*`, `try_detach` in `uefi_main.c` |
 | unostorage (GPT/ESP/FAT authoring) | `STORAGE.md` | `unostorage.*`, `uno_fat_mkfs` in `fat.c` |
 | unofs (filesystems + block devices) | `STORAGE.md` | `fat.*`, `pc64_fs.*`, `blkdev.*`, `ahci/nvme/sdhci` |
+| unolog (system log: levels, ring, file sink, syslog in/out, viewer) | `UNOLOG.md` | `unolog*`, `apps/logview.c` |
 | unosecure (identity / RBAC / audit) | `UNOSECURE-SPEC.md`, `UNOSECURE.md` | `unosecure.*`, `pc64_accounts.*` |
 | unoscript (scripting surface) | `UNOSCRIPT.md` | `unoscript.*`, `upy_port/mod_unoscript.c` |
 | unodevices (PCI device tree + driver registry) | `pc64/DEVICES.md` | `uno_devmgr.*` |
