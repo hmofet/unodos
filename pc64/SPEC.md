@@ -1075,10 +1075,14 @@ BROWSER, JS, STUDIO, PHOTOS, PAINT, GAME, INST, MAC, PY, LIBC.
   actual success). The former TSC-LCG fallback is **withdrawn**: it was
   "not cryptographically strong" by its own comment and was injected
   anyway, so an RDRAND-less box handshook on a weak seed. See S-TLS-10/11.
-- **S-TLS-07** [assert] One TLS session at a time: the single global
-  context means `tls_connect` while `g_open` MUST refuse or tear down
-  first, and `tls_cipher/version/last_error` MUST NOT be trusted after
-  close. site: `tls.c tls_connect` entry.
+- **S-TLS-07** [assert] The LEGACY API (`tls_connect` / `tls_write` /
+  `tls_read` / `tls_close`, the pair exported to `.UNO` modules) holds
+  exactly ONE session: a `tls_connect` over a live one MUST tear the old
+  one down first, and `tls_cipher`/`tls_version` MUST NOT be trusted after
+  close. `tls_last_error()` is the exception and MUST survive the close,
+  because every caller reads it to explain a failure. site: `tls.c
+  leg_connect` entry. Superseded for concurrency by S-TLS-12: "one at a
+  time" is a property of this API, not of the stack.
 - **S-TLS-08** [manual] `tls_connect_ca` against a real public HTTPS host
   MUST succeed with a correct RTC and fail with a skewed RTC (fails
   closed, whole-web-down symptom documented).
@@ -1095,6 +1099,28 @@ BROWSER, JS, STUDIO, PHOTOS, PAINT, GAME, INST, MAC, PY, LIBC.
   step-locked, or too few distinct delta values, rather than condition it
   into a plausible-looking seed. Host gate: `tools/tls_entropy_test.sh`
   (6 synthetic-CPU scenarios); on-device: SPECTEST S-TLS-10/11.
+- **S-TLS-12** [auto] SEVERAL sessions MUST be able to exist at once. Each
+  `tls_conn` from `tls_open` owns its own netsock socket, its own BearSSL
+  engine and its own record buffer, so N handshakes MAY be in flight
+  together and application data MUST NOT cross between them. A session
+  that fails MUST NOT disturb the others. Host gate:
+  `tools/tls_conc_test.sh` (4 real TLS 1.2 sessions from one pump loop
+  against `tools/tls_echo_server.py`, asserting simultaneity, per-session
+  payloads and distinct sockets).
+- **S-TLS-13** [auto] The handle API MUST NOT block: `tls_poll`,
+  `tls_send` and `tls_recv` return with whatever the transport would give
+  or take right now, MUST NOT delay, and MUST NOT call `net_poll`
+  themselves - the caller owns the pump, which is what lets one loop drive
+  many sessions. `tls_send` returning 0 and `tls_recv` returning 0 mean
+  "not now", never failure. Only the legacy wrappers wait, and only
+  within S-TLS-04's deadlines (which is what S-TLS-09 asserts).
+- **S-TLS-14** [auto] A peer that drops the transport WITHOUT a
+  close_notify - most of the public web on `Connection: close` - MUST
+  surface as EOF after every buffered byte has been delivered, never as an
+  error and never as a hang. Symmetrically, `tls_free` MUST send our
+  close_notify only while the transport still takes it and MUST NOT wait
+  for the peer's (RFC 5246 permits the early close; waiting for it is what
+  used to spin for 20 s into the watchdog).
 
 ## S-HTTP, HTTP client (`pc64_http.c`)
 

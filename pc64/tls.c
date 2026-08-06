@@ -1,11 +1,20 @@
 /* ===========================================================================
  * UnoDOS/pc64 - TLS client glue (see tls.h). BearSSL does all the crypto.
+ *
+ * The engine is driven NON-BLOCKING, straight off BearSSL's record-level
+ * interface (SENDREC / RECVREC / SENDAPP / RECVAPP), against a netsock socket.
+ * That is the whole reason several sessions can exist at once: the old shape
+ * used br_sslio with blocking low_read/low_write callbacks, and a callback that
+ * sits in a delay loop owns the machine until its peer answers, so a second
+ * session could not have made progress even if the transport had allowed one.
  * ======================================================================== */
 #include "bearssl.h"
 #include "tls.h"
 #include "tls_ca.h"      /* bundled CA trust anchors for HTTPS */
+#include "netsock.h"     /* per-connection sockets: net_socket/net_connect/... */
 #include "unoauto.h"     /* cooperative test deadline; compiles away in prod */
 #include <string.h>
+#include <stdlib.h>
 #include <stdint.h>
 
 /* ---- the PINNED server public key (P-256 uncompressed point) -------------
@@ -14,8 +23,8 @@
  * - the handshake only succeeds if the server proves possession of this key. */
 #include "tls_test/pinned_key.h"
 
-/* millisecond delay from the pc64 kernel - used to pace + time-bound the
- * transport waits below so a black-holed peer cannot busy-spin the UI. */
+/* millisecond delay from the pc64 kernel - used to pace the LEGACY blocking
+ * wrappers below. The handle API never delays; that is its point. */
 void uno_pc64_delay_ms(int ms);
 
 /* Debug-build transport trace: fires only on failure paths (EOF, deadlines,
@@ -44,116 +53,28 @@ br_prng_seeder br_prng_seeder_system(const char **name)
  * runner exports unoauto_deadline_left_ms() precisely so the long waits opt in
  * and bail; this is that half. 0 = out of budget, -1 = no budget armed (the
  * production case, where the macro folds it to a constant -1 and the test
- * compiles out entirely). */
+ * compiles out entirely). Only the blocking wrappers need it - a non-blocking
+ * caller cannot overrun a budget it never waits inside. */
 #define TLS_OUT_OF_BUDGET() (unoauto_deadline_left_ms() == 0)
 
-/* ---- low-level record transport over the pc64 TCP stack ----------------- */
-static int low_read(void *ctx, unsigned char *buf, size_t len)
-{
-    long tries = 6000000;       /* hard iteration ceiling (backstop) */
-    int  ms = 0;                /* accumulated wall-clock wait */
-    (void)ctx;
-    for (;;) {
-        /* poll FIRST, then drain: when one poll batch delivers the last data
-         * segment AND the peer's FIN together (Connection: close servers do
-         * exactly this), checking the state before re-reading the queue threw
-         * away the just-arrived bytes and reported EOF - the S-AI-02 bug. A
-         * DONE state is EOF only once the queue is empty. */
-        int n;
-        net_poll();
-        n = net_tcp_recv(buf, (int)len);
-        if (n > 0) return n;
-        { int st = net_tcp_state(); if (st == TCP_DONE || st == TCP_CLOSED) {
-              TLSTRACE("tls: low_read EOF (tcp state %d after %d ms)", st, ms); return -1; } }
-        uno_pc64_delay_ms(1);                   /* pace the idle wait to ~1ms/poll */
-        if (++ms > 4000) { TLSTRACE("tls: low_read -1 (4s idle deadline)"); return -1; }
-        if (TLS_OUT_OF_BUDGET()) {
-            TLSTRACE("tls: low_read -1 (test budget exhausted after %d ms)", ms); return -1; }
-        if (--tries <= 0) return -1;
-    }
-}
-static int low_write(void *ctx, const unsigned char *buf, size_t len)
-{
-    int off = 0;
-    long tries = 12000000;      /* hard iteration ceiling (backstop) */
-    int  ms = 0;                /* accumulated wall-clock wait */
-    (void)ctx;
-    while (off < (int)len) {
-        int chunk = (int)len - off;
-        int r;
-        if (chunk > 512) chunk = 512;
-        r = net_tcp_send(buf + off, chunk);   /* -1 while a segment is unacked */
-        if (r > 0) off += r;
-        net_poll();
-        if (net_tcp_state() != TCP_ESTABLISHED) {
-            TLSTRACE("tls: low_write %d/%d (tcp state %d)", off, (int)len, net_tcp_state());
-            return (off > 0) ? off : -1;
-        }
-        if (r <= 0) {                          /* no progress: pace + bound the wait */
-            uno_pc64_delay_ms(1);
-            if (++ms > 8000) { TLSTRACE("tls: low_write %d/%d (8s deadline)", off, (int)len);
-                               return (off > 0) ? off : -1; }   /* ~8s deadline */
-            if (TLS_OUT_OF_BUDGET()) {
-                TLSTRACE("tls: low_write %d/%d (test budget exhausted)", off, (int)len);
-                return (off > 0) ? off : -1; }
-        }
-        if (--tries <= 0) return (off > 0) ? off : -1;
-    }
-    return off;
-}
+/* ======================== the handle ==================================== */
 
-/* ---- context ------------------------------------------------------------ */
-static br_ssl_client_context   g_sc;
-static br_x509_minimal_context g_xm;      /* scratch for init_full (overridden) */
-static br_x509_knownkey_context g_kk;
-static br_sslio_context        g_io;
-static unsigned char           g_iobuf[BR_SSL_BUFSIZE_MONO];
-static int g_open;
+enum { ST_CONNECTING = 0, ST_HANDSHAKE, ST_READY, ST_EOF, ST_ERR };
 
-int tls_connect(const u8 dst[4], u16 port, const char *sni)
-{
-    unsigned char seed[32];
-    br_ec_public_key pk;
-    long t;
+struct tls_conn {
+    int  sock;                          /* netsock id                       */
+    int  state;                         /* ST_*                             */
+    int  rc;                            /* the <0 tls_poll code once ST_ERR */
+    int  err;                           /* BearSSL BR_ERR_*, latched        */
+    br_ssl_client_context   sc;
+    br_x509_minimal_context xm;         /* CA path (also init_full scratch)  */
+    br_x509_knownkey_context kk;        /* pinned path                       */
+    unsigned char iobuf[BR_SSL_BUFSIZE_MONO];
+};
 
-    /* Checked BEFORE the socket exists: a box with no usable RNG must never
-     * open a connection it cannot secure, and the caller gets a distinct
-     * reason instead of a generic handshake failure. */
-    if (tls_entropy_source() == TLS_ENT_NONE) {
-        TLSTRACE("tls: refusing connect - no usable entropy source");
-        return TLS_ENOENTROPY;
-    }
-    if (net_tcp_connect(dst, port) != 0) return -1;
-    t = 4000000;                                /* hard iteration ceiling (backstop) */
-    { int ms = 0;
-      while (net_tcp_state() != TCP_ESTABLISHED) {
-        net_poll();
-        { int st = net_tcp_state(); if (st == TCP_DONE || st == TCP_CLOSED) return -2; }
-        uno_pc64_delay_ms(1);
-        if (++ms > 3000) return -2;             /* ~3s deadline: SYN went unanswered */
-        if (TLS_OUT_OF_BUDGET()) return -2;     /* the test's budget ran out first */
-        if (--t <= 0) return -2;
-      } }
+static int g_open_err;                  /* why the last tls_open() failed   */
 
-    /* suites + algorithms from the standard client profile... */
-    br_ssl_client_init_full(&g_sc, &g_xm, 0, 0);
-    /* ...but replace CA/chain validation with a PINNED key */
-    pk.curve = BR_EC_secp256r1;
-    pk.q = (unsigned char *)PINNED_EC_Q;
-    pk.qlen = sizeof PINNED_EC_Q;
-    br_x509_knownkey_init_ec(&g_kk, &pk, BR_KEYTYPE_KEYX | BR_KEYTYPE_SIGN);
-    br_ssl_engine_set_x509(&g_sc.eng, &g_kk.vtable);
-
-    br_ssl_engine_set_buffer(&g_sc.eng, g_iobuf, sizeof g_iobuf, 0);
-    if (!tls_entropy_get(seed, sizeof seed)) return TLS_ENOENTROPY;  /* source died */
-    br_ssl_engine_inject_entropy(&g_sc.eng, seed, sizeof seed);
-    memset(seed, 0, sizeof seed);
-
-    if (br_ssl_client_reset(&g_sc, sni, 0) != 1) return -3;
-    br_sslio_init(&g_io, &g_sc.eng, low_read, 0, low_write, 0);
-    g_open = 1;
-    return 0;                       /* handshake completes on first I/O */
-}
+int tls_open_error(void) { return g_open_err; }
 
 /* current UTC time as BearSSL's (days since 0 AD, seconds since midnight);
  * Unix epoch = days 719528. Sourced from the UEFI RTC (uno_pc64_time). */
@@ -173,99 +94,335 @@ static void tls_now(uint32_t *days, uint32_t *secs)
     *secs = (uint32_t)(h * 3600 + mi * 60 + s);
 }
 
-/* Connect + TLS with CA-chain validation (HTTPS to arbitrary hosts). Unlike
- * tls_connect (pinned key), this trusts the bundled root store and checks the
- * server name + validity date. */
-int tls_connect_ca(const u8 dst[4], u16 port, const char *sni)
+tls_conn *tls_open(const u8 dst[4], u16 port, const char *sni, int trust)
 {
+    tls_conn *c;
     unsigned char seed[32];
-    uint32_t days, secs;
-    long t;
+    int s;
 
-    if (tls_entropy_source() == TLS_ENT_NONE) {          /* fail closed - see tls_entropy.h */
-        TLSTRACE("tls: refusing connect_ca - no usable entropy source");
-        return TLS_ENOENTROPY;
+    /* Checked BEFORE the socket exists: a box with no usable RNG must never
+     * open a connection it cannot secure, and the caller gets a distinct
+     * reason instead of a generic handshake failure. */
+    if (tls_entropy_source() == TLS_ENT_NONE) {
+        TLSTRACE("tls: refusing open - no usable entropy source");
+        g_open_err = TLS_ENOENTROPY;
+        return 0;
     }
-    if (net_tcp_connect(dst, port) != 0) return -1;
-    t = 4000000;                                /* hard iteration ceiling (backstop) */
-    { int ms = 0;
-      while (net_tcp_state() != TCP_ESTABLISHED) {
-        net_poll();
-        { int st = net_tcp_state(); if (st == TCP_DONE || st == TCP_CLOSED) return -2; }
-        uno_pc64_delay_ms(1);
-        if (++ms > 3000) return -2;             /* ~3s deadline: SYN went unanswered */
-        if (TLS_OUT_OF_BUDGET()) return -2;     /* the test's budget ran out first */
-        if (--t <= 0) return -2;
-      } }
-    br_ssl_client_init_full(&g_sc, &g_xm, uno_tls_tas, uno_tls_tas_num);  /* trust the roots */
-    tls_now(&days, &secs);
-    br_x509_minimal_set_time(&g_xm, days, secs);            /* validity window */
-    br_ssl_engine_set_buffer(&g_sc.eng, g_iobuf, sizeof g_iobuf, 0);
-    if (!tls_entropy_get(seed, sizeof seed)) return TLS_ENOENTROPY;  /* source died */
-    br_ssl_engine_inject_entropy(&g_sc.eng, seed, sizeof seed);
+    c = (tls_conn *)malloc(sizeof *c);
+    if (!c) { g_open_err = -1; return 0; }
+    memset(c, 0, sizeof *c);
+
+    s = net_socket(SOCK_TCP);
+    if (s < 0) { TLSTRACE("tls: open - no socket free"); free(c); g_open_err = -1; return 0; }
+    c->sock = s;
+    if (net_connect(s, dst, port) != 0) {
+        net_sock_close(s); free(c); g_open_err = -1; return 0;
+    }
+
+    if (trust == TLS_TRUST_CA) {
+        uint32_t days, secs;
+        br_ssl_client_init_full(&c->sc, &c->xm, uno_tls_tas, uno_tls_tas_num);
+        tls_now(&days, &secs);
+        br_x509_minimal_set_time(&c->xm, days, secs);       /* validity window */
+    } else {
+        br_ec_public_key pk;
+        br_ssl_client_init_full(&c->sc, &c->xm, 0, 0);      /* suites/algorithms */
+        pk.curve = BR_EC_secp256r1;                         /* ...then PIN the key */
+        pk.q = (unsigned char *)PINNED_EC_Q;
+        pk.qlen = sizeof PINNED_EC_Q;
+        br_x509_knownkey_init_ec(&c->kk, &pk, BR_KEYTYPE_KEYX | BR_KEYTYPE_SIGN);
+        br_ssl_engine_set_x509(&c->sc.eng, &c->kk.vtable);
+    }
+    br_ssl_engine_set_buffer(&c->sc.eng, c->iobuf, sizeof c->iobuf, 0);
+    if (!tls_entropy_get(seed, sizeof seed)) {              /* source died */
+        net_sock_close(s); free(c); g_open_err = TLS_ENOENTROPY; return 0;
+    }
+    br_ssl_engine_inject_entropy(&c->sc.eng, seed, sizeof seed);
     memset(seed, 0, sizeof seed);
-    if (br_ssl_client_reset(&g_sc, sni, 0) != 1) return -3;
-    br_sslio_init(&g_io, &g_sc.eng, low_read, 0, low_write, 0);
-    g_open = 1;
-    return 0;
+
+    if (br_ssl_client_reset(&c->sc, sni, 0) != 1) {
+        net_sock_close(s); free(c); g_open_err = -3; return 0;
+    }
+    c->state = ST_CONNECTING;
+    g_open_err = 0;
+    return c;
 }
+
+/* Move whatever the socket will give or take RIGHT NOW between it and the
+ * engine. Never waits: a pass that moves no bytes ends the loop, so the cost
+ * of polling an idle session is two state reads. The spin bound is a backstop
+ * against an engine that reports progress without consuming, not a timeout. */
+static void pump(tls_conn *c)
+{
+    int spin = 64;
+    while (spin-- > 0) {
+        unsigned st;
+        int moved = 0;
+
+        st = br_ssl_engine_current_state(&c->sc.eng);
+        if (st & BR_SSL_CLOSED) return;
+        if (st & BR_SSL_SENDREC) {
+            size_t len;
+            unsigned char *buf = br_ssl_engine_sendrec_buf(&c->sc.eng, &len);
+            int w = net_send(c->sock, buf, (int)len);   /* caps at one segment */
+            if (w > 0) { br_ssl_engine_sendrec_ack(&c->sc.eng, (size_t)w); moved = 1; }
+        }
+        /* re-read: the ack above can retire the record and change what the
+         * engine wants, and a recvrec buffer fetched from a stale state word
+         * is not one the engine is prepared to have written. */
+        st = br_ssl_engine_current_state(&c->sc.eng);
+        if (st & BR_SSL_CLOSED) return;
+        if (st & BR_SSL_RECVREC) {
+            size_t len;
+            unsigned char *buf = br_ssl_engine_recvrec_buf(&c->sc.eng, &len);
+            int r = net_recv(c->sock, buf, (int)len);
+            if (r > 0) { br_ssl_engine_recvrec_ack(&c->sc.eng, (size_t)r); moved = 1; }
+        }
+        if (!moved) return;
+    }
+}
+
+static int fail(tls_conn *c, int rc)
+{
+    c->err = br_ssl_engine_last_error(&c->sc.eng);
+    c->state = ST_ERR;
+    c->rc = rc;
+    return rc;
+}
+
+int tls_poll(tls_conn *c)
+{
+    unsigned st;
+
+    if (!c) return -1;
+    if (c->state == ST_ERR) return c->rc;
+    if (c->state == ST_EOF) return TLS_EOF;
+
+    if (c->state == ST_CONNECTING) {
+        int ss = net_sock_state(c->sock);
+        if (ss == TCP_DONE || ss == TCP_CLOSED) {
+            TLSTRACE("tls: connect refused/dropped (tcp state %d)", ss);
+            return fail(c, -2);
+        }
+        if (ss != TCP_ESTABLISHED) return TLS_PENDING;
+        c->state = ST_HANDSHAKE;
+    }
+
+    pump(c);
+
+    st = br_ssl_engine_current_state(&c->sc.eng);
+    if (st & BR_SSL_CLOSED) {
+        int e = br_ssl_engine_last_error(&c->sc.eng);
+        if (e != BR_ERR_OK) { TLSTRACE("tls: engine closed, err %d", e); return fail(c, -5); }
+        c->state = ST_EOF;
+        return TLS_EOF;
+    }
+    /* A peer that hangs up without a close_notify is the common case on the
+     * public web, and the engine cannot tell that from a stalled record: it
+     * just keeps wanting more bytes. The transport can tell, so it decides.
+     * Checked only when nothing is buffered, so a truncated stream still
+     * delivers everything that did arrive. */
+    if (!(st & BR_SSL_RECVAPP)) {
+        int ss = net_sock_state(c->sock);
+        if (ss == TCP_DONE || ss == TCP_CLOSED) {
+            if (c->state == ST_HANDSHAKE) {
+                TLSTRACE("tls: peer closed mid-handshake");
+                return fail(c, -2);
+            }
+            c->state = ST_EOF;
+            return TLS_EOF;
+        }
+    }
+    if (st & BR_SSL_SENDAPP) c->state = ST_READY;    /* handshake is complete */
+    return (c->state == ST_READY) ? TLS_READY : TLS_PENDING;
+}
+
+int tls_send(tls_conn *c, const void *data, int len)
+{
+    unsigned st;
+    size_t alen;
+    unsigned char *buf;
+    int n, r;
+
+    if (!c || len < 0) return -1;
+    r = tls_poll(c);
+    if (r < 0) return -1;
+    if (r != TLS_READY || !len) return 0;
+    st = br_ssl_engine_current_state(&c->sc.eng);
+    if (!(st & BR_SSL_SENDAPP)) return 0;
+    buf = br_ssl_engine_sendapp_buf(&c->sc.eng, &alen);
+    if (!buf || !alen) return 0;
+    n = (len < (int)alen) ? len : (int)alen;
+    memcpy(buf, data, (size_t)n);
+    br_ssl_engine_sendapp_ack(&c->sc.eng, (size_t)n);
+    br_ssl_engine_flush(&c->sc.eng, 0);     /* close the record so it can go out */
+    pump(c);
+    return n;
+}
+
+int tls_recv(tls_conn *c, void *buf, int cap)
+{
+    unsigned st;
+    size_t alen;
+    unsigned char *p;
+    int r;
+
+    if (!c || cap <= 0) return -1;
+    r = tls_poll(c);
+    if (r < 0) return -1;
+    /* Drained BEFORE the EOF test: a Connection: close server sends its last
+     * data record, its close_notify and its FIN in one flight, and reporting
+     * the close first is how the response's tail gets thrown away. */
+    st = br_ssl_engine_current_state(&c->sc.eng);
+    if (st & BR_SSL_RECVAPP) {
+        p = br_ssl_engine_recvapp_buf(&c->sc.eng, &alen);
+        if (p && alen) {
+            int n = (cap < (int)alen) ? cap : (int)alen;
+            memcpy(buf, p, (size_t)n);
+            br_ssl_engine_recvapp_ack(&c->sc.eng, (size_t)n);
+            return n;
+        }
+    }
+    return (r == TLS_EOF) ? -1 : 0;
+}
+
+void tls_free(tls_conn *c)
+{
+    if (!c) return;
+    /* Our close_notify, best effort. NOT br_sslio_close() and NOT a wait for
+     * the peer's: when the peer's close_notify was already received a failed
+     * write deliberately does not fail the engine (ssl_io.c run_until, the RFC
+     * 5246 carve-out), so against a torn-down connection the polite loop calls
+     * write forever - 20 s of spin until the watchdog reset the machine, on
+     * exactly the Connection: close servers that are most of the web. This
+     * sends ours if the transport still takes it and gives up otherwise. */
+    if (c->state == ST_HANDSHAKE || c->state == ST_READY) {
+        int guard = 64;
+        br_ssl_engine_close(&c->sc.eng);
+        while (guard-- > 0) {
+            unsigned st = br_ssl_engine_current_state(&c->sc.eng);
+            if (st & BR_SSL_CLOSED) break;
+            if (st & BR_SSL_RECVAPP) {              /* discard late app data */
+                size_t l;
+                if (br_ssl_engine_recvapp_buf(&c->sc.eng, &l)) br_ssl_engine_recvapp_ack(&c->sc.eng, l);
+                continue;
+            }
+            if (st & BR_SSL_SENDREC) {
+                size_t l;
+                unsigned char *b = br_ssl_engine_sendrec_buf(&c->sc.eng, &l);
+                int w = net_send(c->sock, b, (int)l);
+                if (w > 0) { br_ssl_engine_sendrec_ack(&c->sc.eng, (size_t)w); continue; }
+                if (net_sock_state(c->sock) != TCP_ESTABLISHED) break;
+                net_poll();                          /* let the last ack land */
+                uno_pc64_delay_ms(1);
+                continue;
+            }
+            break;                                   /* nothing left we owe */
+        }
+    }
+    net_sock_close(c->sock);
+    free(c);
+}
+
+int tls_conn_error(tls_conn *c)
+{ return c ? (c->state == ST_ERR ? c->err : br_ssl_engine_last_error(&c->sc.eng)) : 0; }
+unsigned tls_conn_version(tls_conn *c) { return c ? c->sc.eng.session.version : 0; }
+unsigned tls_conn_cipher(tls_conn *c)  { return c ? c->sc.eng.session.cipher_suite : 0; }
+int tls_conn_sock(tls_conn *c)         { return c ? c->sock : -1; }
+
+/* ================= the legacy single-session API ========================= *
+ * One held handle, blocking, with the deadlines the old br_sslio callbacks
+ * had: ~3 s for the TCP open, ~4 s idle on a read, ~8 s of no progress on a
+ * write. Every error code is the one it always was, because apps/network.c,
+ * apps/studio_ai.c and pc64_http all read them. */
+
+static tls_conn *g_leg;
+static int       g_leg_err;             /* survives the free, for tls_last_error */
+
+static int leg_connect(const u8 dst[4], u16 port, const char *sni, int trust)
+{
+    int ms = 0;
+    long t = 4000000;                   /* hard iteration ceiling (backstop) */
+
+    tls_close();                        /* never leak a previous session     */
+    g_leg_err = 0;
+    g_leg = tls_open(dst, port, sni, trust);
+    if (!g_leg) {
+        int e = tls_open_error();
+        return (e == TLS_ENOENTROPY) ? TLS_ENOENTROPY : (e == -3 ? -3 : -1);
+    }
+    /* Returns as soon as the TCP is up, exactly as before: the handshake
+     * "completes on first I/O", inside the read/write deadlines below. */
+    for (;;) {
+        int r = tls_poll(g_leg);
+        if (r < 0) { g_leg_err = tls_conn_error(g_leg); tls_close(); return -2; }
+        if (g_leg->state != ST_CONNECTING) return 0;
+        net_poll();
+        uno_pc64_delay_ms(1);
+        if (++ms > 3000) { tls_close(); return -2; }  /* ~3s: SYN unanswered */
+        if (TLS_OUT_OF_BUDGET()) { tls_close(); return -2; }
+        if (--t <= 0) { tls_close(); return -2; }
+    }
+}
+
+int tls_connect(const u8 dst[4], u16 port, const char *sni)
+{ return leg_connect(dst, port, sni, TLS_TRUST_PINNED); }
+
+int tls_connect_ca(const u8 dst[4], u16 port, const char *sni)
+{ return leg_connect(dst, port, sni, TLS_TRUST_CA); }
 
 int tls_write(const void *data, int len)
 {
-    int r;
-    if (!g_open) return -1;
-    r = br_sslio_write_all(&g_io, data, (size_t)len);
-    if (r < 0) { TLSTRACE("tls: write_all failed, engine err %d",
-                          br_ssl_engine_last_error(&g_sc.eng)); return -1; }
-    r = br_sslio_flush(&g_io);      /* drives the handshake + sends the record */
-    if (r < 0) { TLSTRACE("tls: flush failed, engine err %d",
-                          br_ssl_engine_last_error(&g_sc.eng)); return -1; }
+    const unsigned char *p = (const unsigned char *)data;
+    int off = 0, ms = 0;
+    long tries = 12000000;              /* hard iteration ceiling (backstop) */
+
+    if (!g_leg) return -1;
+    while (off < len) {
+        int n = tls_send(g_leg, p + off, len - off);
+        if (n < 0) { g_leg_err = tls_conn_error(g_leg);
+                     TLSTRACE("tls: write %d/%d failed, engine err %d", off, len, g_leg_err);
+                     return -1; }
+        if (n > 0) { off += n; ms = 0; continue; }
+        net_poll();
+        uno_pc64_delay_ms(1);
+        if (++ms > 8000) { TLSTRACE("tls: write %d/%d (8s deadline)", off, len); return -1; }
+        if (TLS_OUT_OF_BUDGET()) {
+            TLSTRACE("tls: write %d/%d (test budget exhausted)", off, len); return -1; }
+        if (--tries <= 0) return -1;
+    }
     return len;
 }
 
 int tls_read(void *buf, int cap)
 {
-    int r;
-    if (!g_open) return -1;
-    r = br_sslio_read(&g_io, buf, (size_t)cap);
-    return r;                        /* >0 = bytes, <0 = closed/error */
+    int ms = 0;
+    long tries = 6000000;               /* hard iteration ceiling (backstop) */
+
+    if (!g_leg) return -1;
+    for (;;) {
+        int n = tls_recv(g_leg, buf, cap);
+        if (n > 0) return n;
+        if (n < 0) { g_leg_err = tls_conn_error(g_leg);
+                     TLSTRACE("tls: read EOF after %d ms (engine err %d)", ms, g_leg_err);
+                     return -1; }
+        net_poll();
+        uno_pc64_delay_ms(1);
+        if (++ms > 4000) { TLSTRACE("tls: read -1 (4s idle deadline)"); return -1; }
+        if (TLS_OUT_OF_BUDGET()) {
+            TLSTRACE("tls: read -1 (test budget exhausted after %d ms)", ms); return -1; }
+        if (--tries <= 0) return -1;
+    }
 }
 
 void tls_close(void)
 {
-    /* NOT br_sslio_close(): its loop runs until the engine reaches CLOSED,
-     * but when the peer's close_notify was already received (shutdown_recv)
-     * a failed low_write deliberately does NOT fail the engine (ssl_io.c
-     * run_until, the RFC 5246 carve-out) - so against a torn-down TCP
-     * connection it calls low_write forever. A Connection: close server
-     * (data + close_notify + FIN in one flight) hit exactly that: 20 s of
-     * spin until the watchdog reset the machine. This is the same polite
-     * close, but it gives up the moment the transport does. */
-    if (g_open) {
-        int guard = 16;
-        br_ssl_engine_close(&g_sc.eng);
-        while (br_ssl_engine_current_state(&g_sc.eng) != BR_SSL_CLOSED && guard-- > 0) {
-            unsigned st = br_ssl_engine_current_state(&g_sc.eng);
-            if (st & BR_SSL_SENDREC) {          /* our close_notify */
-                size_t len; unsigned char *buf = br_ssl_engine_sendrec_buf(&g_sc.eng, &len);
-                int w = low_write(0, buf, len);
-                if (w <= 0) break;              /* transport gone: peer won't wait (RFC 5246) */
-                br_ssl_engine_sendrec_ack(&g_sc.eng, (size_t)w);
-            } else if (st & BR_SSL_RECVAPP) {   /* discard late app data */
-                size_t len;
-                if (br_ssl_engine_recvapp_buf(&g_sc.eng, &len)) br_ssl_engine_recvapp_ack(&g_sc.eng, len);
-            } else if (st & BR_SSL_RECVREC) {   /* wait for the peer's close_notify */
-                size_t len; unsigned char *buf = br_ssl_engine_recvrec_buf(&g_sc.eng, &len);
-                int r = low_read(0, buf, len);
-                if (r <= 0) break;
-                br_ssl_engine_recvrec_ack(&g_sc.eng, (size_t)r);
-            } else break;
-        }
-        g_open = 0;
-    }
-    net_tcp_close();
+    if (!g_leg) return;
+    g_leg_err = tls_conn_error(g_leg);   /* tls_last_error() outlives the session */
+    tls_free(g_leg);
+    g_leg = 0;
 }
 
-int tls_last_error(void) { return br_ssl_engine_last_error(&g_sc.eng); }
-unsigned tls_version(void) { return g_sc.eng.session.version; }
-unsigned tls_cipher(void) { return g_sc.eng.session.cipher_suite; }
+int tls_last_error(void) { return g_leg ? tls_conn_error(g_leg) : g_leg_err; }
+unsigned tls_version(void) { return tls_conn_version(g_leg); }
+unsigned tls_cipher(void)  { return tls_conn_cipher(g_leg); }
