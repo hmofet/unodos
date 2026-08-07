@@ -16,6 +16,8 @@ into shots/*.png at each step.
   python3 harness.py wm_d       WM phase D gate (Alt-Tab, snap, show desktop).
   python3 harness.py wm_e       WM phase E gate (virtual desktops: the switch,
                                 the taskbar pager, move-and-follow, restore).
+  python3 harness.py unoapps    open every app the registry lists, by ID, one
+                                screenshot each (URC, so DEBUG build).
   python3 harness.py usbhid_drag  usb stack gate: a HELD button on a native USB
                                 mouse survives the frames with no report, so a
                                 drag holds (needs its own eager build - see the
@@ -2898,6 +2900,122 @@ def ssh_store():
     return 1 if fails else 0
 
 
+def unoapps():
+    """Open every app the registry lists, BY ID, one screenshot each.
+
+        UNO_DEBUG=1 ./build.sh && python3 harness.py unoapps
+
+    Rewritten 2026-08-07 because the old scene was wrong on every run and could
+    not say so. It opened the Start menu and pressed `down` 7 + i times, i.e. it
+    addressed apps by their POSITION in a menu it did not read, against a list
+    of names frozen on 2026-07-19. Two things then drifted underneath it:
+    UnoAmp joined the natives, and `music` / `network` stopped being registered
+    apps at all (pc64_music.c replaced the MUSIC.UNO bridge). So it shot UnoAmp
+    as `uno_dostris`, Dostris as `uno_pacman`, OutLast as `uno_music` and
+    Runner3D as `uno_network` - seven plausible screenshots, four of them of the
+    wrong app, and a clean exit every time. That is the failure mode of counting
+    keystrokes: an index cannot be wrong, it can only be somebody else's app.
+
+    So this asks the OS what it has (`apps list`) and opens each row by its own
+    id (`launch <id>`), which is the whole point of the app registry landed the
+    same day - see pc64/MODULES.md and docs/APP-REGISTRY-PLAN.md. Nothing here
+    is kept in step by hand: install an app and it gets a shot under its own id,
+    remove one and its row is simply gone.
+
+    It also CHECKS rather than assumes. Every window is titled from the same
+    registry row `apps list` reports (`build_legacy()` assigns `g_app[a].name`),
+    so the title that appears is a real assertion that the shot matches its
+    file name - which is exactly the check the old scene had no way to make.
+
+    Note this is a URC scene and needs the DEBUG build: the guest dials into the
+    harness. The old one drove QMP send-key against either build, but a scene
+    that reads the roster has to be able to ask, and `apps list` is URC."""
+    sys.path.insert(0, os.path.join(HERE, "tools"))
+    from urcui import UrcUi                      # boots, links up, screenshots
+
+    fails, shot_ids, skipped, sticky = [], [], [], []
+
+    def close_open(ui, limit=12):
+        """Close what will close; return the titles that would not.
+
+        `close` is close-the-TOP-window and the shell refuses on a UI_WIN_BARE
+        window - the rule that stops it closing the desktop and the taskbar
+        (pc64_uui.c close_focused). UnoAmp's three windows are BARE because the
+        Winamp skin draws its own chrome, so no URC verb can dismiss the player;
+        it stays on screen behind everything opened after it. Filed to the
+        toolkits lane. Until that lands, name what stuck and carry on: a scene
+        that stalled here would report a shell defect as an app failure, and
+        would stop before the eighteen apps that come after UnoAmp."""
+        stuck = ui.windows()
+        for _ in range(limit):
+            if not stuck:
+                return []
+            ui.link.command("close", timeout=10)
+            time.sleep(0.5)
+            now = ui.windows()
+            if now == stuck:                 # nothing moved: the rest won't either
+                return stuck
+            stuck = now
+        return stuck
+
+    def opened(before, after):
+        """The titles in `after` that were not already in `before`."""
+        rest, new = list(before), []
+        for t in after:
+            if t in rest:
+                rest.remove(t)
+            else:
+                new.append(t)
+        return new
+
+    with UrcUi() as ui:
+        roster = ui.apps()
+        print("registry: %d apps - %s" % (len(roster),
+                                          ", ".join(i for i, _ in roster)))
+        if not roster:
+            print("unoapps: `apps list` named nothing - is this the DEBUG build?")
+            return 1
+        for app_id, name in roster:
+            # The assertion is on the window this launch ADDED, not on the whole
+            # screen: anything left over from an app that would not close is
+            # still there, and matching against it would let one app vouch for
+            # another - the same substitution the old scene made by counting.
+            before = close_open(ui)
+            for t in before:
+                if t not in sticky:
+                    sticky.append(t)
+            try:
+                ui.launch_id(app_id, settle=2.5)
+            except RuntimeError as e:
+                # `launch` answers `err no-app` for a slot that cannot be opened
+                # on its own: the host slots (`userapp`, `pyapp`) hold whatever
+                # Studio or PYRT last built, and there is nothing there yet.
+                skipped.append(app_id)
+                print("  %-9s skip - %s" % (app_id, str(e).strip() or "refused"))
+                continue
+            new = opened(before, ui.windows())
+            if not any(t.startswith(name) for t in new):
+                print("  %-9s FAIL - wanted %r, opened %s"
+                      % (app_id, name, new or "no window"))
+                fails.append(app_id)
+                continue
+            ui.shot("uno_" + app_id)
+            shot_ids.append(app_id)
+            print("  %-9s ok   %s%s" % (app_id, name,
+                                        "   (behind: %s)" % ", ".join(before)
+                                        if before else ""))
+        close_open(ui)
+
+    print("unoapps: %d shot, %d skipped, %d FAILED"
+          % (len(shot_ids), len(skipped), len(fails)))
+    if sticky:
+        print("unoapps: would not close, so they sit behind later shots - %s"
+              % ", ".join(sticky))
+    if fails:
+        print("unoapps: " + ", ".join(fails))
+    return 1 if fails else 0
+
+
 def start_qemu(extra=None, log="build/ovmf.log", pointer="tablet"):
     """Boot one QEMU and connect QMP. Returns (proc, Qmp). A scenario that needs
     a REBOOT (session restore) calls this twice; build/esp is the same vvfat
@@ -2966,6 +3084,8 @@ def main():
         return ssh_verb()
     if len(sys.argv) > 1 and sys.argv[1] == "ssh_app":
         return ssh_app()                       # ditto: it owns its own sshd                     # ditto: it boots twice
+    if len(sys.argv) > 1 and sys.argv[1] == "unoapps":
+        return unoapps()                       # ditto: URC, it owns its boot
     subprocess.run(["cp", OVMF_VARS, "build/vars.fd"], check=True)
     if os.path.exists(QMP_SOCK):
         os.remove(QMP_SOCK)
@@ -3061,25 +3181,6 @@ def main():
             keys(q, "down", "down", "down"); keys(q, "ret")
             time.sleep(1.5)
             shot(q, "acpi_system")             # "ACPI AML: up ... bat 50% lid open"
-            return
-
-        # ---- M2 (decoupling): every bridge app is a .UNO module loaded from
-        # storage; open each through the launcher (menu order = app order,
-        # bridge apps at indices 7..13) and screenshot it running. ----------
-        if len(sys.argv) > 1 and sys.argv[1] == "unoapps":
-            bridge = ["dostris", "pacman", "outlast", "music",
-                      "tracker", "paint", "network"]
-            for i, name in enumerate(bridge):
-                q.cmd("send-key", keys=[{"type": "qcode", "data": "ctrl"},
-                                        {"type": "qcode", "data": "esc"}])
-                time.sleep(0.8)
-                keys(q, *(["down"] * (7 + i)))
-                keys(q, "ret")
-                time.sleep(2.0)
-                shot(q, "uno_" + name)
-                q.cmd("send-key", keys=[{"type": "qcode", "data": "ctrl"},
-                                        {"type": "qcode", "data": "w"}])
-                time.sleep(0.8)
             return
 
         # ---- Studio: the IDE loads from APPS\STUDIO.UNO, edits + builds +
