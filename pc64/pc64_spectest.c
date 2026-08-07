@@ -60,6 +60,10 @@ int  pc64_dbg_wr_open(int, const char *);
 #define SPECBUF 40960
 static char g_buf[SPECBUF];
 static int  g_len, g_pass, g_fail, g_skip;
+/* Shared flush budget for emit() AND emit_skip(): the buffer is rewritten whole
+ * on each flush, so flushing per-line is O(n^2). SKIP used to flush every line,
+ * so a SKIP-heavy netless run reintroduced the storm. Both routes now share it. */
+static int  g_since_flush;
 
 static void emit(const char *id, int ok, const char *fmt, ...)
 {
@@ -70,7 +74,6 @@ static void emit(const char *id, int ok, const char *fmt, ...)
     det[0] = 0;
     if (fmt) vsnprintf(det, sizeof det, fmt, ap);
     va_end(ap);
-    static int since_flush;
     if (ok) g_pass++; else g_fail++;
     n = snprintf(g_buf + g_len, (size_t)(SPECBUF - g_len - 1),
                  "%s %s%s%s\n", id, ok ? "PASS" : "FAIL",
@@ -85,7 +88,7 @@ static void emit(const char *id, int ok, const char *fmt, ...)
      * vvfat the resulting multi-cluster rewrites corrupt the image on
      * readback. Periodic + a final flush keeps the file durable enough to
      * survive a mid-run hang without hammering storage. */
-    if (++since_flush >= 6) { uno_dbg_write_crashfile("SPECTEST.TXT", g_buf, g_len); since_flush = 0; }
+    if (++g_since_flush >= 6) { uno_dbg_write_crashfile("SPECTEST.TXT", g_buf, g_len); g_since_flush = 0; }
 }
 #define OK(id)            emit(id, 1, 0)
 #define BAD(id, ...)      emit(id, 0, __VA_ARGS__)
@@ -100,7 +103,7 @@ static void emit_skip(const char *id, const char *why)
     uno_dbg_heartbeat();
     uno_dbg_progress("conformance: %s SKIP   (%d done)", id,
                      g_pass + g_fail + g_skip);
-    uno_dbg_write_crashfile("SPECTEST.TXT", g_buf, g_len);
+    if (++g_since_flush >= 6) { uno_dbg_write_crashfile("SPECTEST.TXT", g_buf, g_len); g_since_flush = 0; }
 }
 #define SKIP(id, why)     emit_skip(id, why)
 #define CHECK(id, cond)   do { if (cond) OK(id); else BAD(id, "condition false"); } while (0)
