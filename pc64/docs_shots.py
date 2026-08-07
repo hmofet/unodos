@@ -446,15 +446,26 @@ def sc_cp_network(q):
     key(q, "ret"); time.sleep(1.0)                   # click Refresh -> fresh status
     shot(q, "cp_network")
 
+# The two live-network figures fetch example.com, the canonical illustrative
+# domain, and that is what the manual should show. But the scene can only be
+# regenerated on a network whose resolver answers for it: this box's does NOT
+# (NXDOMAIN for example.com while google.com and cloudflare.com resolve), which
+# in 2026-08 read as "DNS is broken on production builds" and cost a filed
+# request before anyone checked the host. So the host is overridable: set
+# UNO_DOCS_HOST to regenerate these figures from somewhere else without
+# editing the scene, and note in the commit that the figure now shows a
+# different site.
+DOCS_HOST = os.environ.get("UNO_DOCS_HOST", "example.com")
+
 def sc_browser_http(q):
     close_all(q); launch(q, A_BROWSER, settle=2.0)
-    text(q, "http://example.com/"); time.sleep(0.3)
+    text(q, "http://%s/" % DOCS_HOST); time.sleep(0.3)
     key(q, "ret"); time.sleep(5.0)                   # DHCP+DNS+TCP+GET+render
     shot(q, "browser_http")
 
 def sc_browser_https(q):
     close_all(q); launch(q, A_BROWSER, settle=2.0)
-    text(q, "https://example.com/"); time.sleep(0.3)
+    text(q, "https://%s/" % DOCS_HOST); time.sleep(0.3)
     key(q, "ret"); time.sleep(10.0)                  # + TLS 1.2 handshake
     shot(q, "browser_https")
 
