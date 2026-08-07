@@ -8121,3 +8121,11 @@ there is no URC verb that READS a file back, so `tools/appreg_id_urc.py` has to
 pull `SHELL.CFG` off the raw disk image with mtools to check what the OS
 committed. A `get <vol> <path>` mirroring `put` would make on-disk assertions
 ordinary; the workaround is fine and this is not urgent.
+
+---
+
+**CLAIM 2026-08-07 (perf-render-fixes lane):** taking a small, additive edit
+to `unoui/themes/theme_aurora.c` `soft_shadow()` only - clipping each drop-shadow
+layer to the four regions around the body-covered band so the interior the opaque
+window body overwrites is not blended six times (byte-identical output, far less
+alpha overdraw). No signature or vtable change; other themes untouched.
