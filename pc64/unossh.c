@@ -20,11 +20,13 @@
  * that is non-blocking (pass timeout 0), which is what a shell session driven
  * from the shell's frame loop needs.
  *
- * HOST KEY TRUST IS NOT IMPLEMENTED HERE. The server's key is verified to have
- * signed the exchange hash - so the peer really does hold it - but nothing
- * checks it is the key we expected. ssh_host_fingerprint() exposes the SHA-256
- * that a known-hosts store will compare in ssh-d. Until then this authenticates
- * the channel, not the identity.
+ * HOST KEY TRUST: the handshake proves the peer holds the private half of the
+ * key it presented (its signature covers the exchange hash), and TOFU pinning
+ * now lives at the app layer - ssh_verify_host() compares ssh_host_fingerprint()
+ * against the known-hosts store (unossh_store.c). The transport ENFORCES that
+ * check: it refuses auth/channel traffic until ssh_verify_host() has recorded a
+ * result for the connection (the host_verified flag), so a caller that forgets
+ * cannot leak its signature or password to an unverified peer.
  * ======================================================================== */
 #include "bearssl_hash.h"
 #include "bearssl_hmac.h"
@@ -175,8 +177,15 @@ static int recv_packet_raw(ssh_conn *c, int timeout_ms)
     }
     plen = (int)(((unsigned)p[0] << 24) | ((unsigned)p[1] << 16) |
                  ((unsigned)p[2] << 8) | (unsigned)p[3]);
+    /* Validate plen DIRECTLY, before deriving total. plen comes straight off
+     * the wire, so total = 4 + plen must never be computed from an unbounded
+     * value: plen = 0x7FFFFFFC would wrap `4 + plen` to INT_MIN (signed
+     * overflow - UB, and a UBSan trap on the debug build), sail past a
+     * `total > RXCAP - 32` test as a negative, and hand a huge size_t to
+     * br_hmac_update as an OOB read. Bounding plen first makes total safe:
+     * total <= RXCAP - 32 is exactly plen <= RXCAP - 36. */
+    if (plen < 12 || plen > RXCAP - 36) { uns_err(c, "absurd packet length"); return -1; }
     total = 4 + plen;
-    if (plen < 12 || total > RXCAP - 32) { uns_err(c, "absurd packet length"); return -1; }
     if (c->encrypted && (total & 15)) { uns_err(c, "packet not a whole block"); return -1; }
 
     {   int have = c->encrypted ? 16 : 8;
@@ -692,6 +701,12 @@ static int ssh_t_exec(void *ctx)
     }
     sd_s("sshexec: transport up\n");
 
+    /* The transport now refuses auth until known-hosts has been consulted, the
+     * same contract the shipped callers honour. TOFU: an unknown host is added
+     * and we proceed; a mismatch is fatal. */
+    if (ssh_verify_host(h, host) == SSH_HOST_MISMATCH) {
+        sd_s("sshexec: HOST KEY MISMATCH\nsshexec: RESULT FAIL\n"); ssh_close(h); return 1;
+    }
     i = ssh_auth_key(h, user, kSshTestSeed);
     if (i != 0) {
         sd_s("sshexec: auth: "); sd_s(ssh_error(h));

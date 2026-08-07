@@ -27,6 +27,11 @@ typedef struct {
     char err[96];
 
     /* ---- auth + the session channel (unossh_auth.c) --------------------- */
+    /* host_verified records that ssh_verify_host() has consulted known-hosts
+     * for THIS connection. The transport refuses auth/channel traffic until it
+     * is set, so a caller that forgets to check the host key cannot leak the
+     * publickey signature or a password to an unverified peer. */
+    int host_verified;
     int authed;
     int ch_state;                    /* 0 = none/closed, 1 = open            */
     unsigned ch_local, ch_remote;

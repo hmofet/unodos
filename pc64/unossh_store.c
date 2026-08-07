@@ -31,10 +31,18 @@
 #include "tls_entropy.h"
 #include "ed25519.h"
 #include "unossh.h"
+#include "unossh_int.h"      /* ssh_conn, uns_get: record the host-key check */
 
 #define STORE_FILE "SSHSTORE.DAT"
 #define STORE_MAGIC "UNOSSH01"
-#define PBKDF2_ITERS 4096
+/* PBKDF2-HMAC-SHA256 work factor for at-rest private-key protection. Raised
+ * from a token 4096 - which a modern GPU clears at billions of guesses a
+ * second - to a figure that makes an offline dictionary attack on a stolen
+ * SSHSTORE.DAT cost real time per candidate. It is paid once per key load or
+ * save, not per packet. The AES-CTR zero IV in key_crypt() below is safe
+ * BECAUSE each entry carries its own 16-byte random salt, so the derived key
+ * (and thus the keystream) never repeats across entries - leave it. */
+#define PBKDF2_ITERS 200000
 
 typedef struct {
     char name[SSH_NAMELEN];
@@ -513,6 +521,16 @@ int ssh_known_forget(const char *host)
 int ssh_verify_host(int handle, const char *host)
 {
     const unsigned char *fp = ssh_host_fingerprint(handle);
+    ssh_conn *c = uns_get(handle);
+    int r;
     if (!fp) return SSH_HOST_UNKNOWN;
-    return ssh_known_check(host, fp);
+    r = ssh_known_check(host, fp);
+    /* Record that the caller consulted known-hosts for this connection. The
+     * transport gates auth/channel traffic on this flag (unossh_auth.c), so a
+     * caller that forgets to verify cannot reach auth at all. Recording the
+     * result is deliberately independent of what the result WAS: a MISMATCH
+     * is still the caller's to act on, and the shipped callers close the
+     * connection on it before any auth runs. */
+    if (c) c->host_verified = 1;
+    return r;
 }
