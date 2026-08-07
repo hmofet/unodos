@@ -24,6 +24,16 @@
 #include "pc64_fs.h"
 #include "fat.h"
 
+/* uefi.h carries only EFI_SUCCESS/EFI_NOT_READY; the boot-variable code needs to
+ * tell "variable absent" from "buffer too small", so define the two standard
+ * status codes locally (high bit = error, low bits = the spec value). */
+#ifndef EFI_BUFFER_TOO_SMALL
+#define EFI_BUFFER_TOO_SMALL ((EFI_STATUS)0x8000000000000005ULL)
+#endif
+#ifndef EFI_NOT_FOUND
+#define EFI_NOT_FOUND        ((EFI_STATUS)0x800000000000000EULL)
+#endif
+
 /* uefi_main.c */
 void *uno_pc64_st(void);
 void *uno_pc64_image_handle(void);
@@ -735,9 +745,13 @@ static int boot_slot(void)
             const CHAR16 *d = (const CHAR16 *)(v + 6);       /* description   */
             if (d[0]=='U'&&d[1]=='n'&&d[2]=='o'&&d[3]=='D'&&d[4]=='O'&&d[5]=='S'&&d[6]==0)
                 return idx;                                  /* reuse ours    */
-        } else if (freeslot < 0) {
-            freeslot = idx;                                  /* first hole    */
+            /* else a FOREIGN Boot#### occupies this slot - not free. */
+        } else if (s == EFI_NOT_FOUND && freeslot < 0) {
+            freeslot = idx;                                  /* genuinely empty */
         }
+        /* EFI_BUFFER_TOO_SMALL means a foreign entry larger than v[] lives here;
+         * a short EFI_SUCCESS is likewise an existing entry. Both are OCCUPIED -
+         * only EFI_NOT_FOUND is a free slot, so overwriting them is refused. */
     }
     return freeslot;
 }
@@ -793,9 +807,18 @@ static int write_boot_entry(const DP_NODE *prefix, int prefix_sz, int make_defau
     {
         static UINT16 bo[130], nbo[130];
         UINTN sz = sizeof(UINT16) * 128; int n = 0, m = 0;
+        EFI_STATUS gs;
         w16(wn, "BootOrder", 16);
-        if (rts()->GetVariable(wn, &gGlobal, 0, &sz, bo) == EFI_SUCCESS)
-            n = (int)(sz / 2);
+        gs = rts()->GetVariable(wn, &gGlobal, 0, &sz, bo);
+        if (gs == EFI_SUCCESS) n = (int)(sz / 2);
+        else if (gs != EFI_NOT_FOUND) {
+            /* BootOrder exists but we couldn't read it (too large for bo[], or a
+             * device error). Rewriting it now with only UnoDOS would erase every
+             * other OS from the boot menu - abort the splice rather than clobber
+             * it. The Boot#### entry we just wrote is left in place, unreferenced. */
+            err("cannot read BootOrder; leaving it unchanged");
+            return 0;
+        }
         if (make_default) nbo[m++] = (UINT16)idx;
         for (i = 0; i < n && m < 128; i++)
             if (bo[i] != (UINT16)idx) nbo[m++] = bo[i];
@@ -934,9 +957,26 @@ static int install_disk(target *t, int make_default,
     if (progress) progress(96, "Boot entry");
     {
         unsigned char hd[42];
-        const unsigned char *e1 = g_gpt + 512;               /* partition 1    */
+        /* Don't assume GPT entry 0 is the boot partition - a disk cloned from a
+         * layout where the ESP isn't first (or entry 0 is unused) would point
+         * the boot entry at the wrong partition. Prefer the first ESP-typed
+         * entry; fall back to the first USED entry. */
+        static const unsigned char esp_guid[16] = {
+            0x28,0x73,0x2A,0xC1, 0x1F,0xF8, 0xD2,0x11,
+            0xBA,0x4B,0x00,0xA0,0xC9,0x3E,0xC9,0x3B };   /* C12A7328-...-ESP */
+        static const unsigned char zero16[16] = { 0 };
+        UINT32 num = rd32(g_gpt + 80), esz = rd32(g_gpt + 84), k, pi = 0;
+        const unsigned char *e1 = 0, *first_used = 0; UINT32 first_used_i = 0;
+        for (k = 0; k < num; k++) {
+            const unsigned char *e = g_gpt + 512 + (UINTN)k * esz;
+            if (memcmp(e, zero16, 16) == 0) continue;        /* unused entry   */
+            if (!first_used) { first_used = e; first_used_i = k; }
+            if (memcmp(e, esp_guid, 16) == 0) { e1 = e; pi = k; break; }  /* the ESP */
+        }
+        if (!e1) { e1 = first_used; pi = first_used_i; }     /* else first used */
+        if (!e1) { err("target GPT has no usable boot partition"); return 0; }
         hd[0] = 4; hd[1] = 1; hd[2] = 42; hd[3] = 0;         /* Media/HD, len  */
-        wr32(hd + 4, 1);                                     /* partition #    */
+        wr32(hd + 4, pi + 1);                                /* partition # (1-based) */
         memcpy(hd + 8,  e1 + 32, 8);                         /* start LBA      */
         { UINT64 sz = rd64(e1 + 40) - rd64(e1 + 32) + 1; wr64(hd + 16, sz); }
         memcpy(hd + 24, e1 + 16, 16);                        /* unique GUID    */

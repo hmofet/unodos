@@ -358,17 +358,28 @@ static char *cat_int(char *p, int v)
   if (!v) t[n++] = '0'; while (v) { t[n++] = (char)('0' + v % 10); v /= 10; }
   while (n) *p++ = t[--n]; return p; }
 
+/* Ln/Col is an O(caret) scan; the status bar redraws every frame but the caret
+ * position only moves on an edit or caret-move. Cache the result keyed on
+ * (wr_caret, wr_len) so the scan runs only when one of them actually changes,
+ * not once per draw. */
+static int wr_st_ln = 0, wr_st_col = 0;
+static int wr_st_caret = -1, wr_st_len = -1;
+
 static void wr_update_status(void)
 {
-    int ln = 0, col = 0, i;
     char *p = wr_status;
-    for (i = 0; i < wr_caret && i < wr_len; i++) {
-        if (wr_text[i] == '\n') { ln++; col = 0; } else col++;
+    if (wr_st_caret != wr_caret || wr_st_len != wr_len) {
+        int ln = 0, col = 0, i;
+        for (i = 0; i < wr_caret && i < wr_len; i++) {
+            if (wr_text[i] == '\n') { ln++; col = 0; } else col++;
+        }
+        wr_st_ln = ln; wr_st_col = col;
+        wr_st_caret = wr_caret; wr_st_len = wr_len;
     }
     p = cat(p, wr_fname[0] ? wr_fname : "(untitled)");
     if (wr_modified) p = cat(p, " *");
-    p = cat(p, "   Ln "); p = cat_int(p, ln + 1);
-    p = cat(p, ", Col "); p = cat_int(p, col + 1);
+    p = cat(p, "   Ln "); p = cat_int(p, wr_st_ln + 1);
+    p = cat(p, ", Col "); p = cat_int(p, wr_st_col + 1);
     p = cat(p, "   ");    p = cat_int(p, wr_len);
     p = cat(p, " chars");
     if (wr_tick - wr_notice_tick < 240u) {         /* ~4 s at 60 Hz */
@@ -636,9 +647,16 @@ static int wr_open_from(int vol, const char *name)
     wr_len = 0; wr_caret = wr_sel = 0; wr_scroll = 0;
     if (n >= 12 && memcmp(wr_io, kMagic, 8) == 0) {
         int tl = wr_io[8] | (wr_io[9] << 8) | (wr_io[10] << 16);
-        const unsigned char *p = wr_io + 12 + tl, *end = wr_io + n;
+        const unsigned char *p; const unsigned char *end = wr_io + n;
         int at = 0;
+        /* The header length is attacker/corruption controlled (up to 0xFFFFFF)
+         * and independent of the bytes actually read. Clamp to what we read
+         * (n-12, floored at 0) BEFORE deriving `p` or the memcpy, or a short
+         * .UWD would splice ~32 KB of stale wr_io tail into the document. */
+        if (tl > (int)(n - 12)) tl = (int)(n - 12);
+        if (tl < 0) tl = 0;
         if (tl > WR_MAX - 1) tl = WR_MAX - 1;
+        p = wr_io + 12 + tl;
         memcpy(wr_text, wr_io + 12, (size_t)tl);
         wr_len = tl;
         for (i = 0; i < wr_len; i++) wr_style[i] = DEF_STYLE;

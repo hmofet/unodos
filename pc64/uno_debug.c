@@ -728,15 +728,26 @@ static const char *crash_dir(void)
     return g_mdir;
 }
 
-/* next free <dir>\XXnnn.TXT sequence number (by directory count - cheap and
- * monotonic enough; collisions just overwrite the same-numbered file) */
+/* next free <dir>\XXnnn.TXT sequence number.
+ *
+ * Was a full directory enumeration into a ~23 KB stack array (uno_fat_entry
+ * e[999]) on EVERY report/snapshot - including from inside the trap handler,
+ * where blowing that much stack on an already-faulting box is its own hazard.
+ * Now a cached monotonic counter: seed ONCE from the on-disk count (via a
+ * file-scope buffer, so no stack cost even on the seeding call), then just
+ * increment. Collisions across reboots still just overwrite the same-numbered
+ * file, exactly as before. */
+static int g_seq_next = -1;   /* -1 until seeded from disk */
 static int next_seq(int vol)
 {
-    uno_fat_entry e[999];
-    int n = uno_fat_list_ex(vol, crash_dir(), e, 999);
-    if (n < 0) n = 0;
-    if (n > 998) n = 998;
-    return n + 1;
+    if (g_seq_next < 0) {
+        static uno_fat_entry e[999];   /* .bss, not stack */
+        int n = uno_fat_list_ex(vol, crash_dir(), e, 999);
+        if (n < 0) n = 0;
+        if (n > 998) n = 998;
+        g_seq_next = n + 1;
+    }
+    return g_seq_next++;
 }
 
 static int disk_write_report(int kind)
@@ -1768,12 +1779,27 @@ void uno_dbg_boot_marker(void)
                  y, mo, d, h, mi, sec, g_build_id);
     snprintf(path, sizeof path, "%s\\BOOTS.TXT", crash_dir());
     g_in_disk = 1;
-    have = uno_fat_read(vol, path, (unsigned char *)buf,
-                        (long)sizeof buf - n - 1);
-    if (have < 0) have = 0;
-    memcpy(buf + have, line, (size_t)n);
-    uno_fat_write(vol, path, (const unsigned char *)buf,
-                  have + n);
+    {
+        /* Keep the file's TAIL, not its head. Reading the first ~2 KB and
+         * rewriting kept the OLDEST lines and dropped the recent ones once the
+         * file grew past the buffer - the opposite of what "how did it boot
+         * lately" wants. Read the last (buf - line - 1) bytes instead, so the
+         * most recent history survives. */
+        long keep = (long)sizeof buf - n - 1;
+        long sz = uno_fat_size(vol, path);
+        long off, start = 0;
+        if (sz < 0) sz = 0;
+        off = sz > keep ? sz - keep : 0;
+        have = uno_fat_read_at(vol, path, off, (unsigned char *)buf, keep);
+        if (have < 0) have = 0;
+        if (off > 0) {                         /* drop the partial leading line */
+            while (start < have && buf[start] != '\n') start++;
+            if (start < have) start++;
+        }
+        memcpy(buf + have, line, (size_t)n);
+        uno_fat_write(vol, path, (const unsigned char *)(buf + start),
+                      have + n - start);
+    }
     uno_fat_sync();
     g_in_disk = 0;
     uno_dbg_log("boot marker written (boot #%u)",

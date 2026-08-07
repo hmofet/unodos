@@ -114,20 +114,16 @@ static u64 rdmsr(u32 msr)
  * detach, but the carve is reserved BEFORE that. */
 #define MD_CONVENTIONAL 7                    /* EfiConventionalMemory         */
 
-static u64 ram_mb_uefi(void)
-{
-    static unsigned char map[48 * 1024];
-    EFI_SYSTEM_TABLE *st = (EFI_SYSTEM_TABLE *)uno_pc64_st();
-    typedef EFI_STATUS (*GMM_FN)(UINTN *, void *, UINTN *, UINTN *, UINT32 *);
-    UINTN sz = sizeof map, key = 0, dsz = 0, off;
-    UINT32 ver = 0;
-    u64 pages = 0;
+/* uefi.h carries only EFI_SUCCESS; GetMemoryMap signals "your buffer is short"
+ * with EFI_BUFFER_TOO_SMALL (high bit = error, low bits = spec value 5). */
+#ifndef EFI_BUFFER_TOO_SMALL
+#define EFI_BUFFER_TOO_SMALL ((EFI_STATUS)0x8000000000000005ULL)
+#endif
 
-    if (!st || uno_pc64_detached()) return 0;
-    if (((GMM_FN)st->BootServices->GetMemoryMap)(&sz, map, &key, &dsz, &ver)
-        != EFI_SUCCESS)
-        return 0;
-    if (dsz < 40 || sz > sizeof map) return 0;   /* a descriptor is >= 40 B   */
+/* Sum the EfiConventionalMemory descriptors of a memory map into MB. */
+static u64 ram_mb_count(const unsigned char *map, UINTN sz, UINTN dsz)
+{
+    UINTN off; u64 pages = 0;
     for (off = 0; off + dsz <= sz; off += dsz) {
         const unsigned char *d = map + off;
         u32 type    = *(const u32 *)d;
@@ -135,6 +131,38 @@ static u64 ram_mb_uefi(void)
         if (type == MD_CONVENTIONAL) pages += npages;
     }
     return (pages * 4096ull) >> 20;
+}
+
+static u64 ram_mb_uefi(void)
+{
+    static unsigned char map[48 * 1024];
+    EFI_SYSTEM_TABLE *st = (EFI_SYSTEM_TABLE *)uno_pc64_st();
+    typedef EFI_STATUS (*GMM_FN)(UINTN *, void *, UINTN *, UINTN *, UINT32 *);
+    UINTN sz = sizeof map, key = 0, dsz = 0;
+    UINT32 ver = 0;
+    EFI_STATUS s;
+
+    if (!st || uno_pc64_detached()) return 0;
+    s = ((GMM_FN)st->BootServices->GetMemoryMap)(&sz, map, &key, &dsz, &ver);
+    if (s == EFI_BUFFER_TOO_SMALL) {
+        /* The firmware's map is bigger than the 48 KB static buffer (common on
+         * big-RAM / heavily-fragmented machines). `sz` now holds the size the
+         * firmware wants; allocate that, plus a few descriptors of slack since
+         * the AllocatePool below may itself grow the map, and retry - rather
+         * than reporting 0 MB and failing the carve. */
+        void *buf = 0; u64 mb;
+        UINTN need = sz + 4 * (dsz ? dsz : 48);
+        if (st->BootServices->AllocatePool(2 /*EfiLoaderData*/, need, &buf) != EFI_SUCCESS || !buf)
+            return 0;
+        sz = need;
+        s = ((GMM_FN)st->BootServices->GetMemoryMap)(&sz, buf, &key, &dsz, &ver);
+        mb = (s == EFI_SUCCESS && dsz >= 40) ? ram_mb_count((const unsigned char *)buf, sz, dsz) : 0;
+        st->BootServices->FreePool(buf);
+        return mb;
+    }
+    if (s != EFI_SUCCESS) return 0;
+    if (dsz < 40 || sz > sizeof map) return 0;   /* a descriptor is >= 40 B   */
+    return ram_mb_count(map, sz, dsz);
 }
 
 static u64 ram_mb_bios(const uno_bootinfo *bi)

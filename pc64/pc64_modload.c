@@ -532,14 +532,18 @@ static void *mod_instantiate(long n, unsigned short *flags_out,
 static UnoAppEntry mod_load(const char *file)
 {
     unsigned short flags = 0;
+    unsigned char *base = 0; unsigned long np = 0;
     void *e;
     long n = mod_read(file, gModBuf, MODBUF_MAX);
     mdbg("modload: "); mdbg(file); mdbg("\n");
-    e = mod_instantiate(n, &flags, 0, 0, 0, 0);
+    e = mod_instantiate(n, &flags, 0, 0, &base, &np);
     if (e && (flags & UNO_MODF_UUI)) {
         /* a unoui-class module in the classic roster would be called with
-         * the wrong entry signature - refuse it here */
+         * the wrong entry signature - refuse it here, and free its pages: a
+         * wrong-tier .UNO retried per launch would otherwise exhaust the 4 MB
+         * post-detach arena. */
         mdbg("modload: uui module in classic slot\n");
+        mod_free(base, np);
         return 0;
     }
     return (UnoAppEntry)e;
@@ -568,6 +572,7 @@ static UnoAppEntry mod_load(const char *file)
 void *uno_mod_load_drv(int vol, const char *file)
 {
     unsigned short flags = 0;
+    unsigned char *base = 0; unsigned long np = 0;
     void *e;
     char p[80];
     long n;
@@ -576,8 +581,8 @@ void *uno_mod_load_drv(int vol, const char *file)
     n = uno_fat_read(vol, p, gModBuf, MODBUF_MAX);
     if (n <= 0) return 0;
     mdbg("modload(drv): "); mdbg(file); mdbg("\n");
-    e = mod_instantiate(n, &flags, 0, 0, 0, 0);
-    if (e && !(flags & 0x0008)) { mdbg("modload: not a driver module\n"); e = 0; }
+    e = mod_instantiate(n, &flags, 0, 0, &base, &np);
+    if (e && !(flags & 0x0008)) { mdbg("modload: not a driver module\n"); mod_free(base, np); e = 0; }
     return e;
 }
 
@@ -825,11 +830,12 @@ int uno_mod_scan(UnoAppDesc *out, char (*file)[16], signed char *vol,
 UnoUuiEntry uno_mod_load_uui(const char *file)
 {
     unsigned short flags = 0;
+    unsigned char *base = 0; unsigned long np = 0;
     void *e;
     long n = mod_read(file, gModBuf, MODBUF_MAX);
     mdbg("modload(uui): "); mdbg(file); mdbg("\n");
-    e = mod_instantiate(n, &flags, 0, 0, 0, 0);
-    if (e && !(flags & UNO_MODF_UUI)) { mdbg("modload: not a uui module\n"); e = 0; }
+    e = mod_instantiate(n, &flags, 0, 0, &base, &np);
+    if (e && !(flags & UNO_MODF_UUI)) { mdbg("modload: not a uui module\n"); mod_free(base, np); e = 0; }
     { UnoAutoModEv ev; ev.file = file; ev.ok = e != 0;
       unoauto_hook_fire("mod.load", &ev); }
     return (UnoUuiEntry)e;
@@ -842,11 +848,12 @@ UnoUuiEntry uno_mod_load_uui(const char *file)
 PyHostEntry uno_mod_load_pyrt(void)
 {
     unsigned short flags = 0;
+    unsigned char *base = 0; unsigned long np = 0;
     void *e;
     long n = mod_read("PYRT.UNO", gModBuf, MODBUF_MAX);
     mdbg("modload(pyrt)\n");
-    e = mod_instantiate(n, &flags, 0, 0, 0, 0);
-    if (e && !(flags & UNO_MODF_PY)) { mdbg("modload: not a pyrt module\n"); return 0; }
+    e = mod_instantiate(n, &flags, 0, 0, &base, &np);
+    if (e && !(flags & UNO_MODF_PY)) { mdbg("modload: not a pyrt module\n"); mod_free(base, np); return 0; }
     return (PyHostEntry)e;
 }
 
