@@ -18,14 +18,9 @@ void uno_xhci_status(int *p, int *n, int *d, unsigned *e)
 { if (p)*p=0; if (n)*n=0; if (d)*d=0; if (e)*e=0; }
 void uno_xhci_diag(int *s, int *a, int *d, int *sp)
 { if (s)*s=0; if (a)*a=0; if (d)*d=0; if (sp)*sp=0; }
-/* the last hub scan's per-port status words, for the debug env block */
-void uno_xhci_hub_ports(unsigned *out, int max)
-{
-    int i;
-    for (i = 0; i < max && i < 16; i++) out[i] = g_hubport_sts[i];
-}
-
 void uno_xhci_diag2(unsigned *sts, unsigned *ev0, int *disc) { if (sts)*sts=0; if (ev0)*ev0=0; if (disc)*disc=0; }
+/* the last hub scan's per-port status words, for the debug env block. There is
+ * no g_hubport_sts[] in the stub build, so this just zero-fills. */
 void uno_xhci_hub_ports(unsigned *out, int max) { int i; for (i=0;i<max;i++) out[i]=0; }
 int uno_usb_control(int dev, unsigned char rt, unsigned char req, unsigned short val,
                     unsigned short idx, void *data, int len)
@@ -49,6 +44,8 @@ int uno_usb_bulk_in_poll(int dev) { (void)dev; return -1; }
 int uno_pc64_pci_disconnect(int bus, int dev, int fn);
 int uno_pc64_detached(void);
 void uno_pc64_delay_ms(int ms);   /* TSC-backed once detached - a real ms */
+unsigned long long uno_native_rdtsc(void);       /* pc64_native.c: raw TSC     */
+unsigned long long uno_native_tsc_per_us(void);  /* 0 until the TSC is calibrated */
 
 typedef unsigned char  u8;
 typedef unsigned short u16;
@@ -111,6 +108,7 @@ typedef struct { u64 param; u32 status; u32 control; } __attribute__((packed)) t
 #define TR_NORMAL      1
 #define TR_LINK        6
 #define TR_ENABLE_SLOT 9
+#define TR_DISABLE_SLOT 10     /* release a slot enabled by ENABLE_SLOT       */
 #define TR_ADDRESS_DEV 11
 #define TR_CONFIG_EP   12
 #define TR_EVAL_CTX    13      /* re-evaluate a context (EP0 max packet)     */
@@ -273,6 +271,20 @@ static int poll_event(trb_t *out, int budget)
 static int poll_event_ms(trb_t *out, int ms)
 {
     int t;
+    /* Spin-sweep the ring for ~100us BEFORE paying the first 1ms sleep quantum.
+     * A BOT command (CBW out, CSW in) and most control transfers complete in
+     * microseconds; without this, uno_pc64_delay_ms(1) rounds every such phase
+     * up to a whole millisecond, and a multi-phase SCSI op pays that several
+     * times over. TSC-bounded so the window is real wall-clock in every build
+     * (the same reason poll_event's spin count is a poor deadline). If the TSC
+     * is not calibrated yet (per_us == 0), skip straight to the ms loop. */
+    unsigned long long per_us = uno_native_tsc_per_us();
+    if (per_us) {
+        unsigned long long end = uno_native_rdtsc() + 100ull * per_us;
+        do {
+            if (poll_event(out, 64)) return 1;
+        } while (uno_native_rdtsc() < end);
+    }
     for (t = 0; t <= ms; t++) {
         if (poll_event(out, 64)) return 1;      /* one sweep of the ring */
         /* uno_pc64_delay_ms, not the local mdelay(): mdelay is a calibrated
@@ -472,6 +484,18 @@ static int get_device_descriptor(int di, int slot, u8 *out, int len)
  * split-transact to it, and the device answers nothing. */
 static void hub_scan(int hub_di);              /* recursion: hub -> its ports */
 
+/* ENABLE_SLOT succeeded but a later step (Address Device, the descriptor fetch)
+ * failed. Give the slot back with DISABLE_SLOT and clear its DCBAA entry, or
+ * every retry orphans another slot until ENABLE_SLOT itself starts failing.
+ * Completion code is ignored: a slot we cannot even disable is not a reason to
+ * keep pretending it is in use. */
+static int enum_fail(int slot)
+{
+    run_command(0, TRB_TYPE(TR_DISABLE_SLOT) | ((u32)slot << 24), 0);
+    g_dcbaa[slot] = 0;
+    return -1;
+}
+
 static int enumerate_dev(int root_port, u32 route, int tier, int speed,
                          int tt_slot, int tt_port)
 {
@@ -509,7 +533,7 @@ static int enumerate_dev(int root_port, u32 route, int tier, int speed,
     g_dcbaa[slot] = (u64)(uintptr_t)g_devctx[di];               /* output ctx, before Address Device */
     cc = run_command((u64)(uintptr_t)g_inctx[di], TRB_TYPE(TR_ADDRESS_DEV) | ((u32)slot<<24), 0);
     g_dbg_addr = (int)cc;
-    if (cc != CC_SUCCESS) return -1;
+    if (cc != CC_SUCCESS) return enum_fail(slot);
     mdelay(2);                                                  /* let the address settle */
 
     /* publish slot/port/speed BEFORE the descriptor fetch: control_xfer reads
@@ -561,7 +585,7 @@ static int enumerate_dev(int root_port, u32 route, int tier, int speed,
     xd(" bDescType="); xd_i(g_dbg_desc);
     xd(" vid="); xd_h((unsigned)(g_descbuf[8]|(g_descbuf[9]<<8)));
     xd(" pid="); xd_h((unsigned)(g_descbuf[10]|(g_descbuf[11]<<8))); xd("\n");
-    if (g_dbg_desc != 1) return -1;                             /* must be a device descriptor */
+    if (g_dbg_desc != 1) return enum_fail(slot);                /* must be a device descriptor */
     g_devs[di].vendor  = (u16)(g_descbuf[8]  | (g_descbuf[9]  << 8));
     g_devs[di].product = (u16)(g_descbuf[10] | (g_descbuf[11] << 8));
     g_devs[di].dev_class    = g_descbuf[4];
@@ -1230,10 +1254,14 @@ void uno_xhci_hub_ports(unsigned *out, int max)
 void uno_xhci_diag2(unsigned *sts, unsigned *ev0, int *disc)
 { if (sts) *sts = g_dbg_sts; if (ev0) *ev0 = g_dbg_ev0; if (disc) *disc = g_dbg_disc; }
 
-#endif /* UNO_XHCI */
-
 /* ===========================================================================
  * unodevices phase 3 - publish what we enumerated into the device tree
+ *
+ * Inside the UNO_XHCI guard (the #endif is at end of file): publishing the tree
+ * and the driver registration both consume enabled-only state (g_present, the
+ * device list, the u8 typedef), and the stub already supplies its own empty
+ * uno_xhci_publish_tree() up top. Leaving them outside the guard made the stub
+ * fail to build with a redefinition and undeclared symbols.
  *
  * "Drivers create children" (UNODEVICES-PLAN decision 2): the manager knows
  * nothing about USB beyond the shape of an address, and this is the code that
@@ -1311,3 +1339,5 @@ static const uno_driver xhci_drv = {
     "xhci", UNO_BUS_PCI, UNO_DEVMGR_API, xhci_match, xhci_probe, 0
 };
 UNO_DRIVER(xhci_drv);
+
+#endif /* UNO_XHCI */
