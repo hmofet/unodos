@@ -527,14 +527,28 @@ ever arrives, and a console that never delivers a byte is indistinguishable
 from a closed one. Output was enough to watch a kernel boot and is not enough
 to hold a shell open.
 
-That work is small and well-shaped, and it is the next thing to do:
+**The receive path is now in** - an RX FIFO, LSR bit 0 following it, a queued
+seed handed over on the first poll that finds it empty, and the MCR loopback
+the driver's autoconfig actually tests (a port that answers a constant fails
+that test and is registered as hardware the driver will not really drive).
 
-- a receive FIFO in the 8250 model, with LSR bit 0 set while it has bytes;
-- UnoDOS keystrokes pushed into it from the shell's frame loop, which already
-  owns the keyboard and already calls `uno_vmm_tick`;
-- and, so the guest does not have to poll, the transport's own interrupt
-  injected on arrival - A4 proved that path with vector 0x20 and it has been
-  idle since.
+**And the shell still exits with status 0.** So the missing thing is not the
+bytes, it is the WAKE-UP: nothing ever interrupts the guest. The 8250 driver
+is interrupt-driven - it enables the receive interrupt and waits for IRQ4 -
+and this guest has no interrupt controller at all, so no byte we queue is ever
+collected, and a blocking read has nothing to wake it.
+
+That is the next piece, and it is bigger than the receive path was:
+
+- an 8259 model (ports 0x20/0x21, 0xA0/0xA1) so the guest can unmask and
+  acknowledge, since `nolapic` means Linux uses the legacy PIC;
+- IRQ4 injected when the RX FIFO gains a byte, and IRQ0 from the PIT so the
+  guest has a periodic tick at all;
+- both delivered through `VM_ENTRY_INTR_INFO`, which **A4 already proved**
+  with vector 0x20 and which has been idle ever since.
+
+Everything under it is in place: the queue, the status bit, the injection
+mechanism and the frame loop that would drive them.
 
 ### What is left before a shell
 
