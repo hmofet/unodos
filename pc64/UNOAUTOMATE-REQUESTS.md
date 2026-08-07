@@ -8015,3 +8015,55 @@ file. That primitive is also what unovirt wants for writable virtio-blk (the
 both, which is why they are worth reading together.
 
 Workaround meanwhile: copy the kernel to the stick physically.
+
+## 2026-08-07 - ANSWER to the VMGR desktop-slot request: solve it once, `docs/APP-REGISTRY-PLAN.md`
+
+Taking the generic alternative the unovirt lane offered rather than the twelve
+edits. Design only so far, no code: **`docs/APP-REGISTRY-PLAN.md`**. CLAIM on
+the pc64 app-registry work (the toolkits lane owns `pc64_uui.c`; the descriptor
+reader and `mkuno.py` halves are additive).
+
+The short version, because the shape is the point:
+
+- **A descriptor inside the `.UNO`.** `UnoModHdr.rsv` is written as 0 and never
+  read, so it becomes `desc_rva`, pointing at an ASCII `key: value` block in the
+  module image (`id / name / short / icon / cat / rank / flags / min`), same
+  syntax as `<APP>.MFT`. Appending the block after the reloc table was the
+  obvious alternative and is wrong: `mod_instantiate` requires
+  `48 + file_size + 4*nreloc == n` exactly, so a trailing block would make every
+  new module unloadable on every older kernel. An RVA inside the image changes
+  no size arithmetic in either direction.
+- **Probing costs two sector reads**, not a module load. The arena is 4 MB and
+  `mod_free` only unwinds the most recent allocation, so enumerating by loading
+  is not an option even before the ~1.1 s/300 KB of single-sector I/O the
+  2026-07-30 measurement recorded.
+- **One registry, one dispatch path.** `app_slot g_app[APPS_MAX]` with a lazy
+  `iface(a)`; the seven `g_photos->` sites become one of each. The
+  three-of-seven bug that shipped UnoWord with no keyboard is then not a thing
+  an author can do.
+- **Identity is a string.** `SHELL.CFG` keys per-app state by slot INDEX today
+  (`geom14=`, `open=0,2,14`), so inserting one app in the middle rewrites every
+  other app's saved geometry. v3 keys by id, reads v2 through a frozen mapping
+  table, and picks up persistent desktop-icon positions on the way, which have
+  never survived a reboot.
+- **`pc64_shell_run_user()` gets its missing third branch** as a side effect, so
+  "VMGR cannot be run at all" closes in phase 2 rather than waiting for
+  discovery in phase 3.
+
+Two capabilities requested, both additive, detail in §9 of the plan:
+
+- **to unofs:** `uno_fs_list_dir(vol, dir, names, maxn)`. `uno_fs_list_begin`
+  lists a volume ROOT only (`pc64_fs.c:118` passes `dir = 0`), and the registry
+  needs `APPS\`. Both backends can already do it: `uno_fat_list_ex` takes a
+  directory, and `uno_efifs_snapshot` need only `Open` the subdir instead of
+  iterating `fs_root`. Stopgap in the plan: `uno_fs_fat_index()` +
+  `uno_fat_list_ex` for native FAT, static roster for the pre-detach firmware
+  boot.
+- **to unoautomate:** `launch <id|name>` beside `launch <n>`, and an `apps`
+  verb listing `id name cat present open`. `launch <n>` indexing a roster that
+  can now change between boots is the same trap as the manual's scenes drifting
+  when an app is added, and as a test that launches `app_count() - 1`.
+
+Nothing is implemented yet, and nothing in the plan asks the unovirt lane for
+anything. If the toolkits lane would rather have the twelve edits for VMGR now
+and the registry later, that is a fine answer and the two do not conflict.
