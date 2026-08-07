@@ -589,7 +589,7 @@ struct http_req {
     /* chunked-transfer framing state (see chunk_frame): a persistent cursor
      * plus a two-state machine, so the terminator is found by real framing and
      * not by a substring scan that ordinary body bytes can imitate. */
-    int   ch_state;                 /* 0 = expecting a size line, 1 = in chunk data */
+    int   ch_state;                 /* 0 = size line, 1 = chunk data, 2 = trailer section */
     int   ch_cur;                   /* how far into raw[] framing has consumed      */
     long  ch_rem;                   /* bytes left in the current chunk's data       */
     long  clen;
@@ -876,10 +876,9 @@ static void chunk_frame(http_req *r)
             while (j < r->rn && r->raw[j] != '\n') j++;/* skip chunk extensions */
             if (j >= r->rn) return;                   /* size line not complete yet */
             r->ch_cur = j + 1;                        /* past the LF */
-            if (sz == 0) { r->done = 1; return; }     /* the real terminator */
-            r->ch_rem = (long)sz;
-            r->ch_state = 1;
-        } else {                                      /* ch_state 1: consuming data */
+            if (sz == 0) { r->ch_state = 2; }         /* zero chunk: consume trailers next */
+            else { r->ch_rem = (long)sz; r->ch_state = 1; }
+        } else if (r->ch_state == 1) {                /* consuming chunk data */
             long avail = (long)(r->rn - r->ch_cur);
             long take = (avail < r->ch_rem) ? avail : r->ch_rem;
             if (take < 0) take = 0;
@@ -887,6 +886,20 @@ static void chunk_frame(http_req *r)
             r->ch_rem -= take;
             if (r->ch_rem > 0) return;                /* need more of this chunk */
             r->ch_state = 0;                          /* trailing CRLF eaten by the size-line skip */
+        } else {                                      /* ch_state 2: trailer section, ends on a blank line */
+            /* The zero-size chunk is followed by optional trailer headers and a
+             * terminating blank line. Only mark done once that blank line has
+             * fully arrived - otherwise the trailing CRLF (or trailer bytes)
+             * are still on the wire, and pooling the connection would hand them
+             * to the next request as its first bytes. */
+            int i = r->ch_cur, j, content;
+            j = i; while (j < r->rn && r->raw[j] != '\n') j++;
+            if (j >= r->rn) return;                   /* line not complete yet */
+            content = j - i;
+            if (content > 0 && r->raw[j-1] == '\r') content--;
+            r->ch_cur = j + 1;                        /* past the LF */
+            if (content == 0) { r->done = 1; return; }/* blank line: the true end */
+            /* a trailer header line - consume it and look for the next */
         }
     }
 }
