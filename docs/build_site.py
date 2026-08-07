@@ -25,6 +25,7 @@ NAV = [
     ("ssh.html",             "SSH client"),
     ("networking.html",      "Networking"),
     ("logging.html",         "System log"),
+    ("appliances.html",      "Appliances"),
     ("ports.html",           "The UnoDOS family"),
     (None,                   "Developer"),          # section header
     ("developer.html",       "Overview &amp; architecture"),
@@ -668,7 +669,13 @@ probe
   2 3 1 12 shell
   1 1 1 0 Files
   ok
-launch 0
+apps list
+  control Control Panel
+  files Files
+  browser Browser
+  ...
+  ok
+launch browser
   launched
   ok
 py print(6*7)
@@ -683,7 +690,7 @@ link.listen()
 link.wait_connected()                                # pc64 dials in
 
 print(link.probe())              # [{'kind':2,'name':'heap',...}, ...]
-link.launch(0)                   # open the first app
+link.launch("browser")           # open an app by its id, never by number
 print(link.eval("print(6*7)"))   # run Python on the device -> ['42']
 
 # commands can go the other way too: the device can drive your PC
@@ -757,6 +764,8 @@ PAGES["index.html"] = ("Overview", f"""
   <div class="card"><h4>A built-in IDE</h4><p><a href="studio.html">Studio</a> lets you write, compile and run your own apps in <strong>UnoC or Python</strong> on the machine itself - a syntax-highlighting editor, a real compiler and an AI assistant, no PC needed.</p></div>
   <div class="card"><h4>Networking</h4><p>Connect over Ethernet, get an address automatically, and browse the web, including secure (HTTPS) sites.</p></div>
   <div class="card"><h4>Hardware support</h4><p>Your screen, keyboard, mouse and trackpad, and USB. Sound plays through the machine's audio hardware (HD&nbsp;Audio or AC'97), and UnoDOS drives SATA, NVMe and eMMC/SD storage with its own drivers.</p></div>
+  <div class="card"><h4>Add your own apps</h4><p>Copy a <code>.UNO</code> file into the <code>APPS</code> folder and it becomes an app, with its own icon and menu row - no restart. Rename, hide or pin anything in the list. <a href="apps.html#installing">Installing an app</a>.</p></div>
+  <div class="card"><h4>Appliances <span class="pill">preview</span></h4><p>UnoDOS can boot a Linux kernel inside a window and give you a console to type at. It needs hardware virtualisation and a kernel you supply; the limits are on the <a href="appliances.html">Appliances</a> page.</p></div>
 </div>
 
 <p class="kv">New here? Start with <a href="getting-started.html">Getting started</a>, then take the
@@ -905,7 +914,9 @@ live clock. Every control works by keyboard or pointer.</p>
 <h2 id="furniture">Desktop furniture</h2>
 <ul>
   <li><strong>Desktop icons</strong> launch apps directly. Arrange them in columns or rows,
-      in launcher order or by name, from the Control Panel.</li>
+      in launcher order or by name, from the Control Panel - or <strong>drag one where you want it</strong>,
+      and it stays there across a restart. So do each app's window size and position, so the desktop you
+      arrange is the desktop you come back to.</li>
   <li>The <strong>Start button</strong> at the bottom-left (the UnoDOS brand mark and the word
       <strong>Start</strong>) opens the <strong>Start menu</strong>, which has <strong>two panes</strong>:
       the things you <em>open</em> on the left - every app, in one scrolling list - and the things you
@@ -1243,12 +1254,52 @@ with no PC or toolchain. The full story, including the built-in ChatGPT / Claude
 the <a href="studio.html">Studio</a> page.</p>
 {fig("studio.png", "<b>Studio</b>: the built-in IDE - a syntax-highlighting editor, a project list, and a compiler that turns your code into a runnable app right on the machine.")}
 
+<h2 id="appliances">Appliances: another operating system in a window</h2>
+<p><strong>Appliances</strong> boots a Linux kernel inside a window on the desktop, with a console you
+can type into. It needs hardware virtualisation and a kernel you supply, and it is the newest and
+least finished thing here, so it has its own page with the limits spelled out:
+<a href="appliances.html">Appliances</a>.</p>
+
 <h2 id="modules">Apps live on the disk</h2>
 <p>The games and creative tools are not baked into the system: each one is a small
 <code>.UNO</code> file in the <code>APPS</code> folder of the UnoDOS disk, loaded the first time you
 open it. Installing UnoDOS onto a PC copies them along automatically. If an app's file is missing,
 its window simply says so - nothing crashes. (Studio itself is one of these files, so a build can
 include or omit it freely.)</p>
+
+<h2 id="installing">Installing an app</h2>
+<p><strong>Copy a <code>.UNO</code> file into the <code>APPS</code> folder and it becomes an app.</strong>
+It gets a desktop icon, a row in the Start menu, an entry on the taskbar and a window, and nothing has to
+be told about it: the file carries its own name, icon and category, and the desktop reads them.</p>
+<p>You do not have to restart. Press <strong>Rescan apps</strong> in the Control Panel and anything new
+in the folder appears; the button tells you how many were found. Restarting works too, and finds them
+the same way.</p>
+{note('An app you install is ordinary software from somewhere else. UnoDOS will run it, and running it is your decision - the same one you make when you install anything on any computer.', kind="warn", title="Where the file came from is up to you")}
+
+<h2 id="arranging">Making the list yours</h2>
+<p>Apps are listed the way whoever wrote them suggested, which will not always be what you want. A file
+called <code>APPS.CFG</code>, beside the apps themselves, is where you say otherwise. Each line names an
+app and one thing to change about it. It sits in the top level of the disk, next to
+<code>SHELL.CFG</code>:</p>
+<pre><code>name.dostris=Blocks
+hide.install=1
+pin.uoword=1
+cat.paint=3</code></pre>
+<ul>
+<li><strong>Rename</strong> an app to whatever you call it.</li>
+<li><strong>Hide</strong> one you never use - it leaves the desktop and the menu, and is still there if
+you change your mind.</li>
+<li><strong>Pin</strong> one to the taskbar so it is one click away whether or not it is open.</li>
+<li><strong>Recategorise</strong> one: <code>0</code> System, <code>1</code> Network, <code>2</code>
+Tools, <code>3</code> Media, <code>4</code> Games, <code>5</code> Other. This matters if you turn on the
+Start menu's category headings in the Control Panel; they are off to begin with, and the menu is one
+flat list.</li>
+</ul>
+<p>The name after the dot is the app's own short id, which is what the file it came from calls itself.
+<code>name.</code>, <code>short.</code>, <code>hide.</code>, <code>pin.</code>, <code>cat.</code> and
+<code>rank.</code> are the whole set.</p>
+<p>Where you drag a desktop icon to is remembered as well, along with each app's window size and
+position, so the desktop you arrange is the desktop you get back after a restart.</p>
 """)
 
 PAGES["office.html"] = ("UnoOffice", f"""
@@ -1498,12 +1549,12 @@ from <em>emerg</em> (the machine is unusable) down to <em>debug</em> (everything
 <tr><td>debug</td><td>Everything</td></tr>
 </table>
 {note('Turning the level up does not recover what was already dropped - a record filtered out is gone. If you are chasing something intermittent, turn the level up <b>first</b> and then reproduce it.', kind="warn", title="Set the level before you reproduce the problem")}
-<p>Your choice is saved to <code>\LOGS\LOG.CFG</code> straight away, so it survives a restart.
+<p>Your choice is saved to <code>\\LOGS\\LOG.CFG</code> straight away, so it survives a restart.
 <strong>All</strong> cycles through the parts of the system, so you can look at just the network or just
 the browser. <strong>Write</strong> saves the log to disk immediately.</p>
 
 <h2 id="file">The log on disk</h2>
-<p>The log is written to <code>\LOGS\SYSTEM.LOG</code> as plain text you can open in the Editor or
+<p>The log is written to <code>\\LOGS\\SYSTEM.LOG</code> as plain text you can open in the Editor or
 copy to another machine. It is written every few seconds, and <strong>immediately</strong> for anything
 at error level or worse - so the lines explaining a machine that is about to stop working reach the disk
 before it does. When the file gets large it rolls over to <code>SYSTEM.1</code> and starts again.</p>
@@ -1511,7 +1562,7 @@ before it does. When the file gets large it rolls over to <code>SYSTEM.1</code> 
 <h2 id="syslog">Sending the log to a server</h2>
 <p>If you run a logging server - <strong>rsyslog</strong>, <strong>syslog-ng</strong> or anything else
 that speaks syslog - UnoDOS can send its log there, so a machine's record survives the machine. Put the
-server's address in <code>\LOGS\LOG.CFG</code>:</p>
+server's address in <code>\\LOGS\\LOG.CFG</code>:</p>
 <pre><code>level=5
 remote_level=4
 remote=192.168.1.10:514
@@ -1527,6 +1578,74 @@ worse while keeping more than that on disk.</p>
 viewer) and UnoDOS accepts syslog from other machines on the network and files it alongside its own,
 tagged with the sender's address. One UnoDOS machine can be the place you read the logs of several.</p>
 {note('The listener accepts messages from anyone who can reach the machine - there is no password on it. Turn it on for a network you trust, not one you share. It is off unless you turn it on.', kind="warn", title="An open listener")}
+""")
+
+PAGES["appliances.html"] = ("Appliances", f"""
+<h1>Appliances</h1>
+<p class="lede">UnoDOS can run another operating system inside a window on the desktop. An
+<strong>appliance</strong> is a Linux kernel that UnoDOS boots itself, on the same machine, at the same
+time, with a console you can type into.</p>
+
+{note('This is the newest thing in UnoDOS and the least finished. It works, and what it does it does for real - but it asks you to supply the kernel, it runs one appliance at a time, and it has only been proven on Intel machines. Read <a href="#limits">What it cannot do yet</a> before you plan anything around it.', kind="warn", title="A preview, honestly labelled")}
+
+<h2 id="what">What it actually does</h2>
+<p>Open <strong>Appliances</strong> from the Start menu or its desktop icon. It has two views, and
+<kbd>Tab</kbd> switches between them: a <strong>list</strong> of the appliances this machine has, and
+the <strong>console</strong> of the one that is running.</p>
+{fig("appliances.png", "<b>Appliances</b> on a machine that has none yet: <b>New</b> makes one, and the line above the buttons is the status - here <i>no appliance running</i>, and on a machine that cannot host a guest at all, the reason why.")}
+<p>The console is the part that matters. What you type goes into the guest's serial port at exactly
+the place a real keystroke would arrive, so the guest's own driver wakes up and its own shell reads the
+byte. Nothing is being simulated at the top: a Linux shell reads your command and answers it.</p>
+<p>On the way there UnoDOS also gives the guest a clock and an interrupt controller of its own, memory
+it cannot see out of, a disk (an ordinary file on a UnoDOS volume, which the guest mounts as a real
+filesystem) and a network interface it can bring up and ping over.</p>
+
+<h2 id="requires">What your machine needs</h2>
+<p>Hardware virtualisation, which most PCs made since about 2010 have but many ship with turned off. The
+status line above the buttons tells you which it is, in one sentence, when you try to start an
+appliance. If it is off, turn on <strong>Intel VT-x</strong> or <strong>AMD-V</strong> (sometimes
+<em>SVM Mode</em>) in the firmware setup and start again.</p>
+<p>Memory is the other requirement. UnoDOS sets aside a block of it for guests while it is starting up,
+and how much it can spare depends on the machine; a new appliance asks for 512&nbsp;MB and gets no more
+than that block. On a machine with too little to set aside there is no guest at all, and the status
+line says so.</p>
+
+<h2 id="making">Making an appliance</h2>
+<p><strong>New</strong> adds a row, and each row is four things you can edit:</p>
+<table>
+<tr><th>Field</th><th>What it is</th></tr>
+<tr><td>Name</td><td>What you want to call it</td></tr>
+<tr><td>Kernel</td><td>A Linux <code>bzImage</code> on a UnoDOS volume</td></tr>
+<tr><td>Initrd</td><td>An initial ramdisk, usually a small busybox image. May be empty.</td></tr>
+<tr><td>Disk</td><td>A disk image file, which the guest sees as a drive. May be empty.</td></tr>
+</table>
+<p>Copy the kernel and initrd onto the UnoDOS disk the same way you would copy anything else, then name
+them here. <strong>Start</strong> boots it, <strong>Console</strong> switches to its console and
+<strong>Stop</strong> shuts it down. A brand-new appliance with its paths left empty boots whatever is
+already staged in <code>EFI\\UNODOS\\VM</code>, so it starts rather than failing at you.</p>
+<p>Your appliances are kept in <code>EFI\\UNODOS\\VM\\VMS.CFG</code>, one line each, as plain text. It
+is deliberately a file you can read and fix in the Editor rather than something only the app
+understands, and it holds up to eight appliances.</p>
+
+<h2 id="limits">What it cannot do yet</h2>
+<ul>
+<li><strong>One appliance at a time.</strong> Start refuses while another is running rather than
+quietly replacing it. This is a real limit of how the guest is set up, not an oversight.</li>
+<li><strong>Guest disks are read-only.</strong> The guest can mount a disk image and read it; it cannot
+write to it. Writing needs a change further down in the filesystem code.</li>
+<li><strong>The guest's network does not reach yours.</strong> It has a working network interface and
+can send and receive over it, but the other end is inside UnoDOS rather than on your wire. Bridging a
+guest onto the real network is the next piece of work, not a setting.</li>
+<li><strong>No kernel is included.</strong> UnoDOS does not ship a Linux to run, so a fresh appliance
+has nothing to boot until you put a kernel on the disk.</li>
+<li><strong>Proven on Intel.</strong> Everything above has been demonstrated on Intel VT-x. The AMD
+side is written and builds, but has not yet been seen to run a guest, so on an AMD machine treat this
+as untested rather than supported.</li>
+<li><strong>The guest gets a slice, not a core.</strong> It runs a short budget of time each frame
+alongside the desktop, so it is unhurried by design. It is for a shell and a service, not for
+work you are timing.</li>
+</ul>
+{note('No graphics: a guest has a serial console, not a screen. What you get is a terminal in a window, which is what a small Linux appliance usually wants anyway.', title="Text, not pixels")}
 """)
 
 PAGES["ports.html"] = ("The UnoDOS family", f"""
@@ -1941,6 +2060,7 @@ falls back to the portable default, so the same widgets render on 1-bit through 
 <tr><td><code>xhci</code> / <code>ax88179</code> / <code>rtl8152</code> / <code>usbmsc</code></td><td>Opt-in (<code>-DUNO_XHCI</code>) polled xHCI host, ASIX and Realtek USB-gigabit drivers (each publishing a <code>uno_nic_t</code>), and USB mass storage (Bulk-Only Transport).</td></tr>
 <tr><td><code>iwlwifi</code> / <code>rtwifi</code> / <code>mrvlwifi</code></td><td>Early Intel (AX201/AX210), Realtek and Marvell Wi-Fi drivers. They map the device and load its firmware, but association is not yet working on any hardware.</td></tr>
 <tr><td><code>pc64_font</code></td><td>Optional TrueType engine; registers as the fb text provider with subpixel smoothing, falling back to the built-in bitmap font.</td></tr>
+<tr><td><code>unovirt</code> / <code>hv_vmx</code> / <code>hv_svm</code> / <code>unovdev</code></td><td>The hypervisor behind <a href="appliances.html">Appliances</a>: a capability gate that says whether this machine can host a guest and why not, a backend seam with Intel VMX and AMD SVM implementations, second-stage paging into a memory carve taken at detach, a budgeted slice run from the shell's frame loop, and virtio-mmio device models (console, block, net) plus the 8250 and 8259 a Linux kernel expects. Proven on VMX; the SVM side builds but has not yet run a guest. See <a href="https://github.com/hmofet/unodos/blob/master/pc64/UNOVIRT.md" target="_blank" rel="noopener"><code>UNOVIRT.md</code></a>.</td></tr>
 </tbody>
 </table></div>
 
@@ -1970,7 +2090,7 @@ build every call is an inert stub and <code>available()</code> returns <code>Fal
 <tr><td><code>key(scan, uni, ctrl=0)</code></td><td>Inject a keypress, processed on the next frame.</td></tr>
 <tr><td><code>pointer(x, y, btn)</code></td><td>Inject a pointer event.</td></tr>
 <tr><td><code>apps()</code></td><td>Number of launchable apps.</td></tr>
-<tr><td><code>launch(i)</code></td><td>Open app <code>i</code>; True on success.</td></tr>
+<tr><td><code>launch(i)</code></td><td>Open app <code>i</code>; True on success. The id form over the wire (<code>launch &lt;id&gt;</code>) is the one to prefer in anything durable.</td></tr>
 <tr><td><code>close_top()</code></td><td>Close the top window.</td></tr>
 <tr><td><code>uptime()</code></td><td>Milliseconds since boot.</td></tr>
 <tr><td><code>deadline_left()</code></td><td>Milliseconds left in the current test budget, or -1 if none is armed.</td></tr>
@@ -1996,7 +2116,7 @@ build every call is an inert stub and <code>available()</code> returns <code>Fal
 <tr><td><code>command(verb, *args, timeout=5)</code></td><td>Run any command; returns its reply lines.</td></tr>
 <tr><td><code>probe()</code></td><td>Snapshot as a list of dicts (keys: kind, state, v1, v2, name).</td></tr>
 <tr><td><code>vols()</code></td><td>Volumes as a list of dicts (keys: vol, kind, writable, name).</td></tr>
-<tr><td><code>launch(n)</code> / <code>close_top()</code> / <code>apps()</code></td><td>App control.</td></tr>
+<tr><td><code>launch(id)</code> / <code>close_top()</code> / <code>apps()</code></td><td>App control. <code>launch</code> takes an app <strong>id</strong> (<code>"browser"</code>) or a slot number; prefer the id, since a number is this boot's ordering of whatever is installed. <code>command("apps", "list")</code> lists them.</td></tr>
 <tr><td><code>key(scan, uni, ctrl=0)</code> / <code>pointer(x, y, btn=0)</code></td><td>Inject input.</td></tr>
 <tr><td><code>eval(src)</code></td><td>Run a line of Python on the device; returns its output.</td></tr>
 <tr><td><code>test(suite="")</code></td><td>Run a conformance suite; returns the report.</td></tr>
@@ -2099,8 +2219,18 @@ the keyboard.</p>
 <pre><code>python3 docs_shots.py                               # all scenes
 python3 docs_shots.py themes editor browser_docs    # selected scenes
 UNO_NIC=1 python3 docs_shots.py browser_http        # networking scenes</code></pre>
-<p>Copy the PNGs you need into <code>docs/assets/img/</code>, then rebuild and commit. If the shell's app roster or
-the Control Panel tab order changes, update the scene offsets in <code>docs_shots.py</code> first.</p>
+<p>Copy the PNGs you need into <code>docs/assets/img/</code>, then rebuild and commit.</p>
+<p>Scenes name apps by <strong>id</strong> - <code>A("uocalc")</code>, never a row number - because the Start-menu
+order moves whenever an app is added and a scene that counts keystrokes does not fail when it does: it opens the
+next app along and files the picture under the old name. The order comes from
+<code>pc64/build/apps_roster.txt</code>, written by a run that opened every app by id over URC and checked the
+window that appeared:</p>
+<pre><code>UNO_DEBUG=1 ./build.sh &amp;&amp; python3 harness.py unoapps   # measure the order
+./build.sh &amp;&amp; python3 docs_shots.py                     # capture the figures</code></pre>
+<p>The figures come from a production build, where URC would want a token typed at the console, so the order is
+measured on a debug build of the same tree. Before it captures anything, <code>docs_shots.py</code> asks the
+live menu how many rows it has and stops the run if that disagrees with the roster, which is what makes borrowing
+the order from the other build safe. If the Control Panel's tab order changes, that is still a hand edit.</p>
 """)
 
 PAGES["dev-remote.html"] = ("Remote control & automation", f"""
@@ -2163,7 +2293,8 @@ device are short, human-typable lines - you can even reach them with <code>nc</c
 <tr><td><code>vols</code></td><td>List storage volumes: index, kind (RAM / native-FAT / firmware), whether it is writable, and its name.</td></tr>
 <tr><td><code>key</code> / <code>pointer</code></td><td>Inject a keypress or a pointer event, processed exactly like a human's on the next frame.</td></tr>
 <tr><td><code>screen</code></td><td>Grab the desktop as a compressed image - the video feed behind the <a href="#unoremote">UnoRemote</a> remote-desktop client.</td></tr>
-<tr><td><code>apps</code> / <code>launch &lt;n&gt;</code> / <code>close</code></td><td>Count launchable apps, open one, or close the top window.</td></tr>
+<tr><td><code>apps</code> / <code>apps list</code></td><td>How many apps there are, and what they are: one <code>id name</code> row each. The set depends on what is installed, so a script that wants to drive one has to be able to look it up.</td></tr>
+<tr><td><code>launch &lt;id&gt;</code> / <code>rescan</code> / <code>close</code></td><td>Open an app <strong>by its id</strong>, pick up apps that have appeared in <code>APPS\\</code> since boot, or close the top window. <code>launch</code> still takes a slot number, but a number is this boot's ordering of whatever happens to be installed - install one app and the same number opens a different one, without failing. Use the id.</td></tr>
 <tr><td><code>py &lt;source&gt;</code></td><td>Run a line of Python <em>on the device</em> and get its output back.</td></tr>
 <tr><td><code>test &lt;suite&gt;</code></td><td>Run a built-in conformance suite and stream the report.</td></tr>
 <tr><td><code>uptime</code> / <code>poweroff</code> / <code>reboot</code></td><td>Read the uptime, or shut down / restart the machine.</td></tr>

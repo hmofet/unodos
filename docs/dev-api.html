@@ -74,7 +74,7 @@
     <span class="logo"><i></i><i></i><i></i><i></i></span>
     <span><b>UnoDOS <span style="color:var(--accent-2)">pc64</span></b><span class="sub">User manual</span></span>
   </a>
-  <ul class="nav"><li><a class="" href="index.html">Overview</a></li><li><a class="" href="getting-started.html">Getting started</a></li><li><a class="" href="desktop.html">The desktop</a></li><li><a class="" href="windows.html">Windows &amp; desktops</a></li><li><a class="" href="appearance.html">Themes &amp; appearance</a></li><li><a class="" href="apps.html">Applications</a></li><li><a class="" href="office.html">UnoOffice</a></li><li><a class="" href="browser.html">Web browser</a></li><li><a class="" href="ssh.html">SSH client</a></li><li><a class="" href="networking.html">Networking</a></li><li><a class="" href="logging.html">System log</a></li><li><a class="" href="ports.html">The UnoDOS family</a></li><li class="sec">Developer</li><li><a class="" href="developer.html">Overview &amp; architecture</a></li><li><a class="" href="studio.html">Studio: the built-in IDE</a></li><li><a class="" href="dev-apps.html">Writing apps</a></li><li><a class="" href="dev-python.html">Python apps</a></li><li><a class="active" href="dev-api.html">API reference</a></li><li><a class="" href="dev-build.html">Building &amp; tooling</a></li><li><a class="" href="dev-remote.html">Remote control &amp; automation</a></li></ul>
+  <ul class="nav"><li><a class="" href="index.html">Overview</a></li><li><a class="" href="getting-started.html">Getting started</a></li><li><a class="" href="desktop.html">The desktop</a></li><li><a class="" href="windows.html">Windows &amp; desktops</a></li><li><a class="" href="appearance.html">Themes &amp; appearance</a></li><li><a class="" href="apps.html">Applications</a></li><li><a class="" href="office.html">UnoOffice</a></li><li><a class="" href="browser.html">Web browser</a></li><li><a class="" href="ssh.html">SSH client</a></li><li><a class="" href="networking.html">Networking</a></li><li><a class="" href="logging.html">System log</a></li><li><a class="" href="appliances.html">Appliances</a></li><li><a class="" href="ports.html">The UnoDOS family</a></li><li class="sec">Developer</li><li><a class="" href="developer.html">Overview &amp; architecture</a></li><li><a class="" href="studio.html">Studio: the built-in IDE</a></li><li><a class="" href="dev-apps.html">Writing apps</a></li><li><a class="" href="dev-python.html">Python apps</a></li><li><a class="active" href="dev-api.html">API reference</a></li><li><a class="" href="dev-build.html">Building &amp; tooling</a></li><li><a class="" href="dev-remote.html">Remote control &amp; automation</a></li></ul>
   <div class="side-foot">
     <a href="https://github.com/hmofet/unodos" target="_blank" rel="noopener">GitHub&nbsp;&rsaquo; hmofet/unodos</a><br>
     <a href="#" onclick="__t();return false">Toggle light / dark</a>
@@ -228,6 +228,7 @@ int  fb_big_text(int x,int y,const char *s,fb_px fg,long bg,int scale);
 <tr><td><code>xhci</code> / <code>ax88179</code> / <code>rtl8152</code> / <code>usbmsc</code></td><td>Opt-in (<code>-DUNO_XHCI</code>) polled xHCI host, ASIX and Realtek USB-gigabit drivers (each publishing a <code>uno_nic_t</code>), and USB mass storage (Bulk-Only Transport).</td></tr>
 <tr><td><code>iwlwifi</code> / <code>rtwifi</code> / <code>mrvlwifi</code></td><td>Early Intel (AX201/AX210), Realtek and Marvell Wi-Fi drivers. They map the device and load its firmware, but association is not yet working on any hardware.</td></tr>
 <tr><td><code>pc64_font</code></td><td>Optional TrueType engine; registers as the fb text provider with subpixel smoothing, falling back to the built-in bitmap font.</td></tr>
+<tr><td><code>unovirt</code> / <code>hv_vmx</code> / <code>hv_svm</code> / <code>unovdev</code></td><td>The hypervisor behind <a href="appliances.html">Appliances</a>: a capability gate that says whether this machine can host a guest and why not, a backend seam with Intel VMX and AMD SVM implementations, second-stage paging into a memory carve taken at detach, a budgeted slice run from the shell's frame loop, and virtio-mmio device models (console, block, net) plus the 8250 and 8259 a Linux kernel expects. Proven on VMX; the SVM side builds but has not yet run a guest. See <a href="https://github.com/hmofet/unodos/blob/master/pc64/UNOVIRT.md" target="_blank" rel="noopener"><code>UNOVIRT.md</code></a>.</td></tr>
 </tbody>
 </table></div>
 
@@ -300,7 +301,7 @@ build every call is an inert stub and <code>available()</code> returns <code>Fal
 <tr><td><code>key(scan, uni, ctrl=0)</code></td><td>Inject a keypress, processed on the next frame.</td></tr>
 <tr><td><code>pointer(x, y, btn)</code></td><td>Inject a pointer event.</td></tr>
 <tr><td><code>apps()</code></td><td>Number of launchable apps.</td></tr>
-<tr><td><code>launch(i)</code></td><td>Open app <code>i</code>; True on success.</td></tr>
+<tr><td><code>launch(i)</code></td><td>Open app <code>i</code>; True on success. The id form over the wire (<code>launch &lt;id&gt;</code>) is the one to prefer in anything durable.</td></tr>
 <tr><td><code>close_top()</code></td><td>Close the top window.</td></tr>
 <tr><td><code>uptime()</code></td><td>Milliseconds since boot.</td></tr>
 <tr><td><code>deadline_left()</code></td><td>Milliseconds left in the current test budget, or -1 if none is armed.</td></tr>
@@ -326,7 +327,7 @@ build every call is an inert stub and <code>available()</code> returns <code>Fal
 <tr><td><code>command(verb, *args, timeout=5)</code></td><td>Run any command; returns its reply lines.</td></tr>
 <tr><td><code>probe()</code></td><td>Snapshot as a list of dicts (keys: kind, state, v1, v2, name).</td></tr>
 <tr><td><code>vols()</code></td><td>Volumes as a list of dicts (keys: vol, kind, writable, name).</td></tr>
-<tr><td><code>launch(n)</code> / <code>close_top()</code> / <code>apps()</code></td><td>App control.</td></tr>
+<tr><td><code>launch(id)</code> / <code>close_top()</code> / <code>apps()</code></td><td>App control. <code>launch</code> takes an app <strong>id</strong> (<code>"browser"</code>) or a slot number; prefer the id, since a number is this boot's ordering of whatever is installed. <code>command("apps", "list")</code> lists them.</td></tr>
 <tr><td><code>key(scan, uni, ctrl=0)</code> / <code>pointer(x, y, btn=0)</code></td><td>Inject input.</td></tr>
 <tr><td><code>eval(src)</code></td><td>Run a line of Python on the device; returns its output.</td></tr>
 <tr><td><code>test(suite="")</code></td><td>Run a conformance suite; returns the report.</td></tr>
