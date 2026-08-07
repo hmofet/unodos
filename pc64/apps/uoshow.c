@@ -21,6 +21,7 @@
  * than approximated by something that stutters.
  * ======================================================================== */
 #include "uno_uuiapp.h"
+#include "uno_appdesc.h"
 #include "unoui.h"
 #include "fb.h"
 #include "uochrome.h"
@@ -1089,6 +1090,13 @@ static void uw_opened(void)
     ST.pos  = "Default";
     sync_status();
 }
+
+/* what the shell shows for this app, carried in the module (uno_appdesc.h) */
+UNO_APP_DESC("id: uoshow\n"
+             "name: UnoShow\n"
+             "icon: uoshow\n"
+             "cat: tools\n"
+             "rank: 40\n");
 
 static const UnoUuiApp kApp = {
     UNO_UUIAPP_ABI, "UnoShow",

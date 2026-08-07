@@ -15,6 +15,7 @@
 #include "unoui_theme.h"
 #include "fb.h"
 #include "uno_uuiapp.h"
+#include "uno_appdesc.h"
 #include "ucc.h"
 #include "studio_hl.h"
 #include "studio_ai.h"
@@ -936,6 +937,13 @@ static void studio_opened(void)
 static void studio_closed(void) { menu_open = -1; }
 static int  studio_canvas_index(void) { return 0; }
 static void studio_frame(void) { studio_ai_frame(); }
+
+/* what the shell shows for this app, carried in the module (uno_appdesc.h) */
+UNO_APP_DESC("id: studio\n"
+             "name: Studio\n"
+             "icon: studio\n"
+             "cat: tools\n"
+             "rank: 10\n");
 
 static const UnoUuiApp kStudio = {
     UNO_UUIAPP_ABI, "Studio",

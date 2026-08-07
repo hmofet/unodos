@@ -38,7 +38,14 @@ typedef struct UnoUuiApp {
 typedef const UnoUuiApp *(*UnoUuiEntry)(void *reserved);
 
 /* loader side (pc64_modload.c) */
+struct UnoAppDesc;
 int         uno_mod_present(const char *file);    /* APPS\<file> exists?     */
+/* which volume + full path APPS\<file> was found at (1 = found) */
+int         uno_mod_find(const char *file, int *vol_out, char *path_out, int max);
+/* the launcher metadata, WITHOUT loading the module: 0 = descriptor read,
+ * 1 = module with no descriptor (defaults from the filename), -1 = not a
+ * module.  See uno_appdesc.h. */
+int         uno_mod_desc_read(int vol, const char *path, struct UnoAppDesc *out);
 UnoUuiEntry uno_mod_load_uui(const char *file);   /* load, require flags bit0 */
 void        uno_mod_unload_user(void);            /* drop the user-app slot  */
 

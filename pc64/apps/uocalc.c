@@ -13,6 +13,7 @@
  * VISIBLE RECTANGLE and look each cell up, which is O(visible log live).
  * ======================================================================== */
 #include "uno_uuiapp.h"
+#include "uno_appdesc.h"
 #include "unoui.h"
 #include "fb.h"
 #include "uochrome.h"
@@ -857,6 +858,13 @@ static void uw_opened(void)
 }
 static void uw_closed(void) { }
 static int  uw_canvas_index(void) { return g_cidx; }
+
+/* what the shell shows for this app, carried in the module (uno_appdesc.h) */
+UNO_APP_DESC("id: uocalc\n"
+             "name: UnoCalc\n"
+             "icon: uocalc\n"
+             "cat: tools\n"
+             "rank: 30\n");
 
 static const UnoUuiApp kApp = {
     UNO_UUIAPP_ABI, "UnoCalc",

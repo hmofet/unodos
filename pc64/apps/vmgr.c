@@ -11,6 +11,7 @@
  * shell reads a byte with nothing else involved.
  */
 #include "uno_uuiapp.h"
+#include "uno_appdesc.h"
 #include "unoui.h"
 #include "unoui_theme.h"
 #include "fb.h"
@@ -337,6 +338,14 @@ static void vm_build(unoui_window *win)
 
 static void vm_opened(void) { g_view = V_LIST; g_edit = -1; g_follow = 1; }
 static int  vm_canvas_index(void) { return 0; }
+
+/* what the shell shows for this app, carried in the module (uno_appdesc.h) */
+UNO_APP_DESC("id: vmgr\n"
+             "name: Appliances\n"
+             "icon: sys\n"
+             "cat: system\n"
+             "rank: 60\n"
+             "min: 560x380\n");
 
 static const UnoUuiApp kVmgr = {
     UNO_UUIAPP_ABI, "Appliances",

@@ -21,8 +21,14 @@
 #   u32 magic 'UNO1'   u16 abi   u16 flags
 #   u32 entry_rva      u32 mem_size (SizeOfImage)   u32 file_size
 #   u32 nreloc         u32 imp_rva   u32 imp_count
-#   u64 pref_base      u32 crc32 (of everything after the header)  u32 rsv
+#   u64 pref_base      u32 crc32 (of everything after the header)  u32 desc_rva
 #   image[file_size]   reloc_rva[nreloc] (u32 each)
+#
+# desc_rva (the header word formerly called `rsv`, always written 0) points at
+# the app descriptor - the launcher metadata a module carries about itself, in
+# its own `.unodesc` section.  See pc64/uno_appdesc.h.  Validation happens HERE,
+# at build time, for the same reason the kExports import check does: a typo
+# should be a build failure, not an app that installs itself wrongly.
 # ===========================================================================
 import struct, sys, zlib
 
@@ -33,6 +39,82 @@ HDR_FMT = "<IHHIIIIIIQII"   # 48 bytes
 IMAGE_REL_BASED_ABSOLUTE = 0
 IMAGE_REL_BASED_DIR64    = 10
 UNO_MODF_PYAPP = 0x0004     # source-container tier (no code/relocs/imports)
+
+# ---- app descriptor (uno_appdesc.h) ---------------------------------------
+DESC_MAGIC = 0x50504155     # 'UAPP'
+DESC_VER   = 1
+DESC_MAX   = 1024
+DESC_CATS  = ("system", "net", "tools", "media", "games", "other")
+DESC_FLAGS = ("singleton", "hidden", "game", "nosession")
+DESC_KEYS  = ("id", "name", "short", "icon", "cat", "rank", "flags", "min",
+              "needs")
+ID_OK = set("abcdefghijklmnopqrstuvwxyz0123456789._-")
+
+
+def check_desc(img, va, vsz, path):
+    """Validate the .unodesc block at RVA `va` and return its length.
+
+    Refuses: a bad prologue, a second block in the section (two translation
+    units in one module each declaring UNO_APP_DESC), an unknown category, an
+    unknown flag, a malformed `min:`, and an `id:` with characters that cannot
+    survive being a config key.  An unknown KEY is fine and always will be -
+    that is the format's extension point."""
+    if vsz < 8:
+        sys.exit("mkuno: %s .unodesc is %d bytes, too small" % (path, vsz))
+    magic, ver, ln = struct.unpack_from("<IHH", img, va)
+    if magic != DESC_MAGIC:
+        sys.exit("mkuno: %s .unodesc has bad magic 0x%08x "
+                 "(use the UNO_APP_DESC macro)" % (path, magic))
+    if ver != DESC_VER:
+        sys.exit("mkuno: %s .unodesc version %d, this mkuno speaks %d"
+                 % (path, ver, DESC_VER))
+    if ln <= 8 or ln > DESC_MAX or ln > vsz:
+        sys.exit("mkuno: %s .unodesc length %d out of range (8 < len <= %d)"
+                 % (path, ln, min(DESC_MAX, vsz)))
+    if struct.pack("<I", DESC_MAGIC) in bytes(img[va + 8: va + vsz]):
+        sys.exit("mkuno: %s has more than one UNO_APP_DESC block - a module "
+                 "describes itself once" % path)
+
+    body = bytes(img[va + 8: va + ln]).split(b"\0")[0].decode("ascii", "replace")
+    seen = set()
+    for raw in body.split("\n"):
+        line = raw.strip()
+        if not line:
+            continue
+        if ":" not in line:
+            sys.exit("mkuno: %s .unodesc line is not 'key: value': %r"
+                     % (path, line))
+        k, v = line.split(":", 1)
+        k, v = k.strip(), v.strip()
+        if k in seen:
+            sys.exit("mkuno: %s .unodesc repeats key '%s'" % (path, k))
+        seen.add(k)
+        if k not in DESC_KEYS:
+            print("mkuno: note: %s .unodesc has unknown key '%s' (ignored at "
+                  "runtime, kept for forward compatibility)" % (path, k))
+            continue
+        if k == "id":
+            if not v or len(v) > 15 or any(c not in ID_OK for c in v):
+                sys.exit("mkuno: %s .unodesc id '%s' must be 1-15 chars of "
+                         "[a-z0-9._-]" % (path, v))
+        elif k == "cat" and v not in DESC_CATS:
+            sys.exit("mkuno: %s .unodesc unknown cat '%s' (one of %s)"
+                     % (path, v, "/".join(DESC_CATS)))
+        elif k == "flags":
+            for f in [f.strip() for f in v.split(",") if f.strip()]:
+                if f not in DESC_FLAGS:
+                    sys.exit("mkuno: %s .unodesc unknown flag '%s' (one of %s)"
+                             % (path, f, "/".join(DESC_FLAGS)))
+        elif k == "rank":
+            if not v.isdigit() or int(v) > 255:
+                sys.exit("mkuno: %s .unodesc rank '%s' must be 0-255"
+                         % (path, v))
+        elif k == "min":
+            wh = v.lower().split("x")
+            if len(wh) != 2 or not all(p.isdigit() and 0 < int(p) < 8192
+                                       for p in wh):
+                sys.exit("mkuno: %s .unodesc min '%s' must be WxH" % (path, v))
+    return ln
 
 
 def pyapp(py_path, uno_path):
@@ -105,6 +187,7 @@ def convert(dll_path, uno_path, flags=0):
     # ---- flatten sections at their RVAs ----------------------------------
     img = bytearray(size_image)
     imp_rva = imp_size = 0
+    desc_rva = desc_size = 0
     shoff = opt + opt_sz
     for i in range(nsect):
         name, vsz, va, rsz, roff = struct.unpack_from("<8sIIII", d, shoff + 40 * i)
@@ -114,6 +197,8 @@ def convert(dll_path, uno_path, flags=0):
             img[va:va + n] = d[roff:roff + n]
         if name == ".unoimp":
             imp_rva, imp_size = va, vsz
+        if name == ".unodesc":
+            desc_rva, desc_size = va, min(vsz, rsz)
     if imp_size % 32:
         sys.exit("mkuno: .unoimp size %d not a multiple of 32" % imp_size)
     imp_count = imp_size // 32
@@ -157,18 +242,31 @@ def convert(dll_path, uno_path, flags=0):
         file_size -= 1
     file_size = (file_size + 7) & ~7
 
+    # ---- the app descriptor ----------------------------------------------
+    desc_len = 0
+    if desc_rva:
+        desc_len = check_desc(img, desc_rva, desc_size, uno_path)
+        # The block MUST be inside the trimmed file image: the shell reads it
+        # straight off disk at 48 + desc_rva without loading the module, and a
+        # descriptor left in bss is a descriptor nothing can read.
+        if desc_rva + desc_len > file_size:
+            sys.exit("mkuno: %s .unodesc at RVA 0x%x+%d is past the trimmed "
+                     "image (%d bytes) and could not be read from disk"
+                     % (uno_path, desc_rva, desc_len, file_size))
+
     payload = bytes(img[:file_size]) + struct.pack("<%dI" % len(relocs), *relocs)
     hdr = struct.pack(HDR_FMT, MAGIC, ABI, flags, entry, size_image, file_size,
                       len(relocs), imp_rva, imp_count, image_base,
-                      zlib.crc32(payload) & 0xFFFFFFFF, 0)
+                      zlib.crc32(payload) & 0xFFFFFFFF, desc_rva)
     open(uno_path, "wb").write(hdr + payload)
     names = []
     for i in range(imp_count):
         nm = bytes(img[imp_rva + 32 * i: imp_rva + 32 * i + NAME_MAX + 1])
         names.append(nm.split(b"\0")[0].decode())
-    print("mkuno: %s  entry=0x%x mem=%dK file=%dK relocs=%d imports=%d (%s)"
+    print("mkuno: %s  entry=0x%x mem=%dK file=%dK relocs=%d imports=%d (%s)%s"
           % (uno_path, entry, size_image // 1024, (48 + len(payload)) // 1024,
-             len(relocs), imp_count, " ".join(names) if imp_count else "-"))
+             len(relocs), imp_count, " ".join(names) if imp_count else "-",
+             "  desc=%dB" % desc_len if desc_len else "  NO DESCRIPTOR"))
 
 
 if __name__ == "__main__":
