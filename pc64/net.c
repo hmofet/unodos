@@ -358,6 +358,7 @@ typedef struct {
      * tail (S-NET-15) and the stream comes out corrupt. */
     u8    rxq[8192]; int rxq_len;
     int   accept_owner;          /* SYN_RCVD child: index of the LISTEN socket */
+    int   born_at;               /* tick the child was created - see tcp_reap */
 } sock_t;
 
 static sock_t sk[NSOCK];
@@ -630,6 +631,7 @@ static void tcp_recv(const u8 *ip, const u8 *seg, int len)
             c->snd_nxt = 0x2000; c->snd_una = c->snd_nxt;
             c->state = TCP_SYN_RCVD;
             c->accept_owner = (int)(l - sk) + 1;   /* +1 so 0 = "no owner" */
+            c->born_at = g_ticks;                  /* tcp_reap ages it from here */
             c->retx_at = g_ticks + 30;
             tcp_out(c, 0x12, 0, 0);                /* SYN|ACK */
             c->snd_nxt++;
@@ -687,9 +689,54 @@ static void tcp_recv(const u8 *ip, const u8 *seg, int len)
     }
 }
 
+/* ---- reaping children nobody ever accepted --------------------------------
+ * A SYN on a LISTEN socket allocates a child slot. Until now the ONLY thing
+ * that freed one was an app accepting it and later closing it, so every child
+ * that was never accepted stayed allocated for the life of the boot: a
+ * half-open handshake, a port scan, a client that connected while the app was
+ * already busy with another, or one that connected and left without a clean
+ * close. NSOCK is 16. Eight connect/query/close cycles against URC listen mode
+ * filled the table, sock_alloc started failing, inbound SYNs were dropped, and
+ * the box stopped accepting anything while still answering pings - which is
+ * exactly the wedge filed against listen mode (UNOAUTOMATE-REQUESTS.md,
+ * 2026-08-04), where a disarm/re-arm at the console did not clear it either,
+ * because the leaked slots outlive the listener.
+ *
+ * REAPED (only ever an UNACCEPTED child - once accept_owner is cleared the
+ * slot belongs to an app and is none of our business):
+ *   - dead (FIN/RST) with nothing left to read: nobody can reach it, since
+ *     net_accept only hands out ESTABLISHED children;
+ *   - stuck mid-handshake past ~5 s of SYN|ACK retransmits;
+ *   - established but unaccepted for ~30 s, which is an app that is never
+ *     coming for it.
+ * Ticks are net_poll iterations (~60-125/s depending on the caller's cadence),
+ * the same base the retransmit timer uses at 30. */
+#define REAP_SYN_TICKS      600      /* handshake that never completed  */
+#define REAP_IDLE_TICKS    3600      /* established, nobody accepted it */
+
+static void tcp_reap(void)
+{
+    int i;
+    for (i = 0; i < NSOCK; i++) {
+        sock_t *c = &sk[i];
+        int age;
+        if (c->type != SOCK_TCP || !c->accept_owner) continue;
+        age = (int)(g_ticks - (u32)c->born_at);
+        if ((c->state == TCP_DONE || c->state == TCP_CLOSED) && c->rxq_len == 0) {
+            c->type = SOCK_NONE; c->state = TCP_CLOSED; c->accept_owner = 0;
+        } else if (c->state == TCP_SYN_RCVD && age > REAP_SYN_TICKS) {
+            c->type = SOCK_NONE; c->state = TCP_CLOSED; c->accept_owner = 0;
+        } else if (c->state == TCP_ESTABLISHED && age > REAP_IDLE_TICKS) {
+            net_sock_close(i);                    /* a real FIN: it is a live peer */
+            c->accept_owner = 0;
+        }
+    }
+}
+
 static void tcp_tick(void)
 {
     int i;
+    tcp_reap();
     for (i = 0; i < NSOCK; i++) {
         sock_t *c = &sk[i];
         if (c->type != SOCK_TCP) continue;
