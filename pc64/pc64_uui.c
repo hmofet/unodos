@@ -6519,6 +6519,10 @@ int main(void)
                                            and the syslog socket. Everything
                                            expensive lives here so unolog()
                                            itself costs only a formatted line  */
+        { void unostream_tick(void); unostream_tick(); }
+                                        /* unostream: live demo-video streaming
+                                           (armed by the URC `stream` verb; a
+                                           no-op while idle)                   */
         /* pc64_stress_tick() REMOVED 2026-07-21 (user request): the continuous
          * fuzz driver ran even when unticked / looped forever. Disconnected here
          * AND hard-disabled in pc64_stress.c so no DEBUG.CFG value can revive

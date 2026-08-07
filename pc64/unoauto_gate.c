@@ -103,6 +103,9 @@ static const GateRow GATE[] = {
     { "disc",     UNOAUTO_P_OBSERVE },   /* self-test verb: debug builds only    */
 #endif
     { "caps",     UNOAUTO_P_OBSERVE },
+    /* unostream: exports what the screen shows (plus nothing else), so it is
+     * OBSERVE exactly like `screen` - see the judgement notes above. */
+    { "stream",   UNOAUTO_P_OBSERVE },
 
     /* -- DRIVE -- */
     { "key",      UNOAUTO_P_DRIVE },

@@ -781,6 +781,27 @@ __attribute__((weak)) int uno_hw_wdt_cmd(const char *line, char *out, int cap)
     return -1;
 }
 
+/* stream verb pass-through target. unostream (unostream.c, pc64/UNOSTREAM.md)
+ * lands the real unostream_cmd() - outbound TCP screen streaming for demo
+ * capture, paced on its own tick and socket (it deliberately does NOT ride
+ * this file's 512 B/tick TX pump). Declared locally + weak-stubbed here, the
+ * r8169_dbg_cmd pattern above: definition and caller share THIS TU (a weak def
+ * in another TU is an undefined reference with this toolchain), and the
+ * linker prefers unostream.o's strong definition the moment it is in the
+ * link. Per the 2026-08-07 unostream entry in UNOAUTOMATE-REQUESTS.md. */
+int unostream_cmd(char *line, char *out, int cap);
+__attribute__((weak)) int unostream_cmd(char *line, char *out, int cap)
+{
+    static const char msg[] = "unostream not built";
+    int i = 0;
+    (void)line;
+    if (out && cap > 0) {
+        for (; msg[i] && i < cap - 1; i++) out[i] = msg[i];
+        out[i] = 0;
+    }
+    return -1;
+}
+
 /* session token echoed at `guard` arm; `safe` must present it (a stale disarm
  * from a prior session must not stand a fresh guard down). Cheap, not secret. */
 static unsigned g_guard_token;
@@ -1086,6 +1107,16 @@ static void dispatch_cmd(const char *id, char *verb, char *args)
      * tiles with `grab delta`) and stream it base64 (like readsec). Read-only,
      * no arm gate. Pairs with key/pointer (the IN half). See unoauto_screen.c. */
     if (!strcmp_(verb, "screen")) { do_screen(id, args); return; }
+    /* stream start|stop|status - unostream: the guest dials a host receiver
+     * and pushes QOI keyframe/delta frames live on its own socket + tick (demo
+     * video capture; see pc64/UNOSTREAM.md). OBSERVE, like `screen`. Additive
+     * pass-through to unostream_cmd (weak-stubbed above). */
+    if (!strcmp_(verb, "stream")) {
+        static char none[1];                  /* tokenised in place: no literal */
+        int n = unostream_cmd(args ? args : none, g_report, (int)sizeof g_report);
+        rsp(id, n >= 0 ? "ok" : "err", g_report);
+        rsp(id, "end", 0); return;
+    }
     if (!strcmp_(verb, "uptime")) {
         char t[24]; SB b; sb_init(&b, t, sizeof t); sb_i(&b, (long)uno_dbg_uptime_ms()); t[b.len] = 0;
         rsp(id, "ok", t); rsp(id, "end", 0); return;

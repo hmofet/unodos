@@ -8245,3 +8245,18 @@ outbound TCP screen streaming for demo capture (guest dials a host receiver
 and pushes QOI keyframe/delta frames on its own tick, cursor composited).
 Adds a `stream start|stop|status` verb via URC (OBSERVE, like `screen`).
 Registry row + contract doc land with the subsystem's first commit.
+
+### 2026-08-07 unostream: `stream` verb wired into unoauto_remote.c (append noted)
+
+No generic verb-registration seam exists in `unoauto_remote.c` (dispatch is the
+`strcmp_` chain), so unostream added the minimal additive dispatch append -
+the same shape `iwl`/`eth`/`hwwdt`/`devices` used: a locally-declared
+`unostream_cmd(char *line, char *out, int cap)` with a weak fallback stub IN
+THE SAME TU (weak def + caller sharing a TU is the pattern this toolchain
+links; unostream.o's strong definition wins in the real image), one
+`if (!strcmp_(verb, "stream"))` block right after `screen`, a GATE[] OBSERVE
+row (same commit, fail-closed table), and three rows + the Watch-power list in
+REMOTE.md. If unoautomate later grows a real registration table for verbs,
+`stream` is a one-line migration - nothing else of unoautomate's was touched
+(the 512 B/tick TX pump in particular is bypassed, not modified: the stream
+rides its own netsock socket).
