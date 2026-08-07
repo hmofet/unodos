@@ -106,6 +106,11 @@ static const GateRow GATE[] = {
     { "key",      UNOAUTO_P_DRIVE },
     { "pointer",  UNOAUTO_P_DRIVE },
     { "launch",   UNOAUTO_P_DRIVE },
+    /* rescan re-reads APPS\ and can change the app set the shell offers, so it
+     * is DRIVE rather than OBSERVE: it changes the machine, not just the view.
+     * The table is fail-closed, so this row lands in the same commit as the
+     * verb - a verb without a row is refused, never ambient. */
+    { "rescan",   UNOAUTO_P_DRIVE },
     { "close",    UNOAUTO_P_DRIVE },
     { "test",     UNOAUTO_P_DRIVE },
     { "guard",    UNOAUTO_P_DRIVE },

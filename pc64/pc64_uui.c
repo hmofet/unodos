@@ -409,6 +409,11 @@ static void app_reg_module(int a, const char *file, const char *fb_id,
 
 static void app_discover(void);
 static int  app_by_id(const char *id);
+static void app_overrides_apply(void);
+/* the SHELL.CFG readers, shared with APPS.CFG (same line format) */
+static const char *cfg_line_val(const char *buf, const char *key);
+static const char *cfg_app_val(const char *buf, const char *prefix, int a);
+static int  cfg_num(const char **pp);
 
 static void app_registry_init(void)
 {
@@ -513,6 +518,7 @@ static void app_discover(void)
         g_napps++;
     }
     if (nord && g_napps >= APPS_MAX) g_apps_over = 1;
+    app_overrides_apply();          /* the user's say, last */
 }
 
 
@@ -524,6 +530,60 @@ static int app_by_id(const char *id)
     if (!id || !*id) return -1;
     for (a = 0; a < NAPPS; a++) if (!strcmp(g_app[a].id, id)) return a;
     return -1;
+}
+
+/* ---- APPS.CFG: the user's say over what a module declared ------------------
+ * A module describes itself, which is right, and the person using the machine
+ * gets the last word, which is also right.  This is where the second one
+ * lives, so overriding a name or hiding an app never means editing a `.UNO`
+ * (and never survives to whoever else installs that module).
+ *
+ *     hide.vmgr=1
+ *     name.vmgr=VMs
+ *     cat.vmgr=tools
+ *     rank.vmgr=5
+ *
+ * Same line format and the same additive rule as SHELL.CFG: an unknown key or
+ * an id this system does not have is ignored, not an error. */
+static void app_overrides_apply(void)
+{
+    static unsigned char buf[1024];
+    int v = uno_fs_volumes(), i;
+    long got = -1;
+    for (i = 0; i < v && got < 0; i++)
+        got = uno_fs_read(i, "APPS.CFG", buf, (long)sizeof buf - 1);
+    if (got <= 0) return;
+    buf[got] = 0;
+    for (i = 0; i < NAPPS; i++) {
+        const char *p;
+        if ((p = cfg_app_val((const char *)buf, "hide", i)) != 0) {
+            if (*p == '1') g_app[i].flags |= UAF_HIDDEN;
+            else           g_app[i].flags &= (unsigned short)~UAF_HIDDEN;
+        }
+        if ((p = cfg_app_val((const char *)buf, "name", i)) != 0) {
+            int k = 0;
+            while (p[k] && p[k] != '\r' && p[k] != '\n' &&
+                   k < (int)sizeof g_app[i].name - 1) { g_app[i].name[k] = p[k]; k++; }
+            g_app[i].name[k] = 0;
+            /* the short label follows the long one unless it too is overridden
+             * below - a user who renames an app means both */
+            for (k = 0; g_app[i].name[k] && k < (int)sizeof g_app[i].shortnm - 1; k++)
+                g_app[i].shortnm[k] = g_app[i].name[k];
+            g_app[i].shortnm[k] = 0;
+        }
+        if ((p = cfg_app_val((const char *)buf, "short", i)) != 0) {
+            int k = 0;
+            while (p[k] && p[k] != '\r' && p[k] != '\n' &&
+                   k < (int)sizeof g_app[i].shortnm - 1) { g_app[i].shortnm[k] = p[k]; k++; }
+            g_app[i].shortnm[k] = 0;
+        }
+        if ((p = cfg_app_val((const char *)buf, "cat", i)) != 0) {
+            int c = cfg_num(&p); if (c >= 0 && c < UAC_NCAT) g_app[i].cat = (unsigned char)c;
+        }
+        if ((p = cfg_app_val((const char *)buf, "rank", i)) != 0) {
+            int r = cfg_num(&p); if (r >= 0 && r <= 255) g_app[i].rank = (unsigned char)r;
+        }
+    }
 }
 
 /* ---- desktop icon arrangement (Control Panel) ------------------------------
@@ -538,7 +598,7 @@ static int app_by_id(const char *id)
 static int g_desk_flow, g_desk_sort;
 static int g_desk_snap = 1;             /* snap dragged icons to the grid     */
 static int g_desk_lock;                 /* lock: no dragging at all           */
-static struct { short x, y; unsigned char placed; } g_icon_pos[32];
+static struct { short x, y; unsigned char placed; } g_icon_pos[APPS_MAX];
 
 /* ---- tray / wallpaper preferences (Control Panel) --------------------------
  * All in-memory, like the desktop-arrangement settings above: they rebuild the
@@ -2874,7 +2934,7 @@ static void build_desktop(void)
         row = g_desk_flow ? (kk / percol_rows) : (kk % percol);
         kk++;
         ix = 16 + col * colw; iy = 14 + row * pitch;
-        if (i < 32 && g_icon_pos[i].placed) {      /* the user put it here */
+        if (g_icon_pos[i].placed) {      /* the user put it here */
             ix = g_icon_pos[i].x; iy = g_icon_pos[i].y;
         }
         ic = unoui_add_icon(&g_desk, ix, iy, app_short(i));
@@ -4043,7 +4103,7 @@ static void pop_hover(int mx, int my)
     if (g_pop_hot != old) g_dirty = 1;
 }
 
-/* ---- session restore (SHELL.CFG v2) ---------------------------------------
+/* ---- session restore (SHELL.CFG v3) ---------------------------------------
  * Persist the "restore" preference, the set of open restorable windows, and
  * each one's geometry, so the next boot reopens them WHERE THEY WERE. Only
  * stable apps are saved (native apps + the Browser); games, transient
@@ -4054,12 +4114,72 @@ static void pop_hover(int mx, int my)
  * reading an older file just finds no geometry and uses the designed position.
  *
  *   restore=1
- *   open=0,2,14
- *   geom0=40,20,520,380      x,y,w,h - the RESTORE rect, not the snapped one
- *   snap0=0                  UI_SNAP_*
- */
+ *   open=files,browser
+ *   geom.files=40,20,520,380   x,y,w,h - the RESTORE rect, not the snapped one
+ *   snap.files=0               UI_SNAP_*
+ *   icon.photos=320,140        where the user dragged the desktop icon
+ *
+ * V2 KEYED EVERY ONE OF THESE BY SLOT INDEX (`open=0,2,14`, `geom14=`), which
+ * was fine while the app list was a compile-time constant and is a corruption
+ * bug the moment apps are discovered at runtime: install one app that sorts
+ * before another and every later app restores into its neighbour's geometry.
+ * v3 keys by the app's id. v2 files are still read - kV2Slots below is the
+ * frozen index->id map, and it must never be reordered or renumbered, only
+ * appended to if some future build needs to freeze a later layout - and the
+ * next save writes v3, so a machine migrates exactly once and silently.
+ *
+ * The same change is what finally makes DESKTOP ICON POSITIONS persistent.
+ * They were in-memory only, so a dragged icon never survived a reboot; there
+ * was no point storing them while the key would have meant a different app on
+ * the next boot. */
+static const char *kV2Slots[NBUILTIN] = {
+    "control", "editor", "files", "system", "clock", "install", "music",
+    "unoamp",                                            /* 0..7  natives  */
+    "dostris", "pacman", "outlast", "tracker", "paint",  /* 8..12 bridge   */
+    "runner3d", "browser", "studio", "photos", "userapp", "pyapp", "ssh",
+    "uoword", "uocalc", "uoshow", "logview"              /* 13..23 extras  */
+};
+
 static int app_restorable(int a)
 { return (a >= 0 && a < NNATIVE) || a == EX_BROWSER; }
+
+/* a v2 `open=` entry (a decimal slot number) -> this boot's slot, or -1 */
+static int session_v2_slot(const char *s)
+{
+    int n = 0;
+    if (!s || !*s) return -1;
+    while (*s >= '0' && *s <= '9') n = n * 10 + (*s++ - '0');
+    if (*s || n < 0 || n >= NBUILTIN) return -1;
+    return app_by_id(kV2Slots[n]);
+}
+
+/* write `<prefix>.<id>=` into key[] (v3), returning the end */
+static char *ap_appkey(char *k, const char *prefix, int a)
+{
+    k = ap_str(k, prefix); *k++ = '.';
+    k = ap_str(k, g_app[a].id); *k++ = '='; *k = 0;
+    return k;
+}
+
+/* Read a per-app value: v3's `<prefix>.<id>=` first, then v2's `<prefix><N>=`
+ * where N is the slot this app occupied in the frozen v2 layout.  Returns 0
+ * when neither is present, which every caller already treats as "use the
+ * designed default". */
+static const char *cfg_app_val(const char *buf, const char *prefix, int a)
+{
+    char key[40]; char *k = key;
+    const char *p;
+    int i;
+    ap_appkey(k, prefix, a);
+    p = cfg_line_val(buf, key);
+    if (p) return p;
+    for (i = 0; i < NBUILTIN; i++)
+        if (!strcmp(kV2Slots[i], g_app[a].id)) {
+            k = key; k = ap_str(k, prefix); k = ap_int(k, i); *k++ = '='; *k = 0;
+            return cfg_line_val(buf, key);
+        }
+    return 0;                    /* a discovered app has no v2 identity at all */
+}
 
 /* Where SHELL.CFG belongs. Volume 0 is the RAM disk, so "the first writable
  * volume" - what this used to do - wrote the session to a filesystem that dies
@@ -4116,9 +4236,20 @@ static void session_save(void)
     for (a = 0; a < NAPPS; a++) {
         if (!g_open[a] || !app_restorable(a)) continue;
         if (!first) *p++ = ',';
-        p = ap_int(p, a); first = 0;
+        p = ap_str(p, g_app[a].id); first = 0;
     }
     *p++ = '\r'; *p++ = '\n';
+    /* Desktop icon positions, for every app that has one - open or not, since
+     * an icon is on the desktop whether its window is up.  These never
+     * persisted before v3, because an index-keyed position would have moved a
+     * different app's icon on the next boot. */
+    for (a = 0; a < NAPPS; a++) {
+        if (!g_icon_pos[a].placed) continue;
+        p = ap_appkey(p, "icon", a);
+        p = ap_int(p, g_icon_pos[a].x); *p++ = ',';
+        p = ap_int(p, g_icon_pos[a].y);
+        *p++ = '\r'; *p++ = '\n';
+    }
     for (a = 0; a < NAPPS; a++) {
         /* A snapped window's rect is re-derived from the work area at restore
          * time, so what gets saved is the rect it would go back to - otherwise
@@ -4134,34 +4265,34 @@ static void session_save(void)
          * and move-only cases can be caught mid-flight - which are exactly the
          * two that persist g_win[a].r rather than restore_r. */
         if (g_win[a].snap == UI_SNAP_NONE) unoui_geom_target(&UI, &g_win[a], &r);
-        p = ap_str(p, "geom"); p = ap_int(p, a); *p++ = '=';
+        p = ap_appkey(p, "geom", a);
         p = ap_int(p, r.x); *p++ = ',';
         p = ap_int(p, r.y); *p++ = ',';
         p = ap_int(p, r.w); *p++ = ',';
         p = ap_int(p, r.h);
         *p++ = '\r'; *p++ = '\n';
-        p = ap_str(p, "snap"); p = ap_int(p, a); *p++ = '=';
+        p = ap_appkey(p, "snap", a);
         p = ap_int(p, g_win[a].snap);
         *p++ = '\r'; *p++ = '\n';
         /* parked = minimized. Only the parked apps get a line; an absent
-         * minN= reads as 0, so an older file behaves as it always did. */
+         * min.<id>= reads as 0, so an older file behaves as it always did. */
         if (g_parked[a]) {
-            p = ap_str(p, "min"); p = ap_int(p, a);
-            *p++ = '='; *p++ = '1'; *p++ = '\r'; *p++ = '\n';
+            p = ap_appkey(p, "min", a);
+            *p++ = '1'; *p++ = '\r'; *p++ = '\n';
         }
         /* virtual desktop. Desktop 0 is the default, so only a window that
-         * lives elsewhere gets a line - an absent deskN= reads as 0, which is
-         * exactly what an older file (and a build without desktops) means. */
+         * lives elsewhere gets a line - an absent desk.<id>= reads as 0, which
+         * is exactly what an older file (and a build without desktops) means. */
         if (g_desk_of[a]) {
-            p = ap_str(p, "desk"); p = ap_int(p, a); *p++ = '=';
+            p = ap_appkey(p, "desk", a);
             p = ap_int(p, g_desk_of[a]);
             *p++ = '\r'; *p++ = '\n';
         }
         /* link-group membership, same rule: only the grouped apps get a line,
-         * so an absent grpN= reads as ungrouped and an older file behaves as
-         * it always did. */
+         * so an absent grp.<id>= reads as ungrouped and an older file behaves
+         * as it always did. */
         if (g_group[a]) {
-            p = ap_str(p, "grp"); p = ap_int(p, a); *p++ = '=';
+            p = ap_appkey(p, "grp", a);
             p = ap_int(p, g_group[a]); *p++ = '\r'; *p++ = '\n';
         }
     }
@@ -4200,11 +4331,9 @@ static int cfg_num(const char **pp)
  * rect is what gets painted rather than a jump on the second frame. */
 static void session_restore_geom(const char *buf, int a)
 {
-    char key[10]; char *k = key;
     const char *p;
     unoui_rect r;
-    k = ap_str(k, "geom"); k = ap_int(k, a); *k++ = '='; *k = 0;
-    p = cfg_line_val(buf, key);
+    p = cfg_app_val(buf, "geom", a);
     if (!p) return;                          /* an older file: designed position */
     r.x = cfg_num(&p); r.y = cfg_num(&p); r.w = cfg_num(&p); r.h = cfg_num(&p);
     if (r.w < 60 || r.h < 40) return;        /* corrupt: leave the window alone  */
@@ -4220,8 +4349,7 @@ static void session_restore_geom(const char *buf, int a)
     /* geom applies BEFORE snap, and a snapped window re-derives its rect from
      * the live work area - so a maximized window tracks a font-size change
      * between boots instead of restoring a stale rect. */
-    k = key; k = ap_str(k, "snap"); k = ap_int(k, a); *k++ = '='; *k = 0;
-    p = cfg_line_val(buf, key);
+    p = cfg_app_val(buf, "snap", a);
     if (p) {
         int s = cfg_num(&p);
         if (s > UI_SNAP_NONE && s <= UI_SNAP_BR) {
@@ -4338,51 +4466,65 @@ static void session_load(void)
     rp = cfg_line_val((char *)buf, "restore=");
     if (rp) g_session_restore = (*rp == '0') ? 0 : 1;
     if (!g_session_restore) { open_app(APP_CTRL); g_session_ready = 1; return; }
+    /* `open=` is a comma list of app IDS in v3 and of slot NUMBERS in v2; the
+     * first character says which, since an id can never start with a digit
+     * (uno_appdesc.h and the mkuno validator both enforce [a-z0-9._-] with the
+     * id derived from a filename stem otherwise). */
     op = cfg_line_val((char *)buf, "open=");
-    { int any = 0, val = 0, have = 0;
+    { int any = 0, n = 0; char tok[16];
+      int v2 = op && *op >= '0' && *op <= '9';
       for (; op && *op && *op != '\r' && *op != '\n'; op++) {
-          if (*op >= '0' && *op <= '9') { val = val * 10 + (*op - '0'); have = 1; }
-          else if (*op == ',') {
-              if (have && app_restorable(val) && !app_hidden(val)) {
-                  open_app(val); session_restore_geom((char *)buf, val); any = 1; }
-              val = 0; have = 0;
-          }
+          if (*op != ',') { if (n < (int)sizeof tok - 1) tok[n++] = *op; continue; }
+          tok[n] = 0; n = 0;
+          { int a2 = v2 ? session_v2_slot(tok) : app_by_id(tok);
+            if (a2 >= 0 && app_restorable(a2) && !app_hidden(a2)) {
+                open_app(a2); session_restore_geom((char *)buf, a2); any = 1; } }
       }
-      if (have && app_restorable(val) && !app_hidden(val)) {
-          open_app(val); session_restore_geom((char *)buf, val); any = 1; }
+      tok[n] = 0;
+      if (n) { int a2 = v2 ? session_v2_slot(tok) : app_by_id(tok);
+               if (a2 >= 0 && app_restorable(a2) && !app_hidden(a2)) {
+                   open_app(a2); session_restore_geom((char *)buf, a2); any = 1; } }
       if (!any) open_app(APP_CTRL);
+    }
+    /* desktop icon positions, keyed by id (v3 only - v2 never stored them) */
+    { int a; const char *ip;
+      for (a = 0; a < NAPPS; a++) {
+          char key[40]; ap_appkey(key, "icon", a);
+          ip = cfg_line_val((const char *)buf, key);
+          if (!ip) continue;
+          g_icon_pos[a].x = (short)cfg_num(&ip);
+          g_icon_pos[a].y = (short)cfg_num(&ip);
+          g_icon_pos[a].placed = 1;
+      }
+      build_desktop();                       /* lay them out where they were */
     }
     /* link groups BEFORE the re-park below, or minimize_app would only park
      * the one app instead of its whole set. */
-    { int a; char key[10];
+    { int a;
       for (a = 0; a < NAPPS; a++) {
-          char *k = key; const char *gp;
+          const char *gp;
           if (!g_open[a]) continue;
-          k = ap_str(k, "grp"); k = ap_int(k, a); *k++ = '='; *k = 0;
-          gp = cfg_line_val((const char *)buf, key);
+          gp = cfg_app_val((const char *)buf, "grp", a);
           if (gp) { int g = cfg_num(&gp);
                     if (g > 0 && g <= WM_NGROUP) g_group[a] = (unsigned char)g; }
       } }
     /* re-park whatever was parked, after the whole open set is up so the
      * windows land in the z-order they were saved in. */
-    { int a; char key[10];
+    { int a;
       for (a = 0; a < NAPPS; a++) {
-          char *k = key; const char *mp;
+          const char *mp;
           if (!g_open[a]) continue;
-          k = ap_str(k, "min"); k = ap_int(k, a); *k++ = '='; *k = 0;
-          mp = cfg_line_val((const char *)buf, key);
+          mp = cfg_app_val((const char *)buf, "min", a);
           if (mp && *mp == '1') minimize_app(a);
       } }
     /* Desktops LAST. Every window above was opened while g_cur_desk was still
      * 0, so open_app assigned them all to desktop 1; the file is what actually
      * decides, and it can only be applied once the whole set is up. Then land
      * on the desktop the session was left on and let the scene follow. */
-    { int a; char key[12]; const char *dp;
+    { int a; const char *dp;
       for (a = 0; a < NAPPS; a++) {
-          char *k = key;
           if (!g_open[a]) continue;
-          k = ap_str(k, "desk"); k = ap_int(k, a); *k++ = '='; *k = 0;
-          dp = cfg_line_val((const char *)buf, key);
+          dp = cfg_app_val((const char *)buf, "desk", a);
           if (!dp) continue;
           { int d = cfg_num(&dp);
             if (d > 0 && d < NDESK) g_desk_of[a] = (signed char)d; }
@@ -4949,6 +5091,17 @@ int pc64_shell_launch(int a)
     open_app(a);
     return 1;
 }
+
+/* The slot an app id names, or -1.  THE call a test, a script or a doc scene
+ * should use: a slot index is this boot's ordering of whatever happens to be
+ * installed, so `launch(app_count() - 1)` does not fail when an app is added,
+ * it silently drives the new one instead - which is how uoword_urc.py spent a
+ * run typing into UnoCalc, and how the manual's scenes drift. */
+int pc64_shell_app_by_id(const char *id) { return app_by_id(id); }
+
+/* the id of a slot, "" out of range - the other half of the same contract */
+const char *pc64_shell_app_id(int a)
+{ return (a >= 0 && a < NAPPS) ? g_app[a].id : ""; }
 void pc64_shell_close_top(void) { close_focused(); }
 
 /* bounded string append: writes s at dst[at..], NUL-terminates, returns new len */
@@ -4965,7 +5118,11 @@ int pc64_shell_app_message(int idx, const char *msg, char *reply, int cap)
     if (!reply || cap <= 0) return 0;
     if (idx < 0 || idx >= NAPPS || !msg) return sput(reply, cap, 0, "bad-idx");
     if (!strcmp(msg, "info")) {
-        int at = sput(reply, cap, 0, "name=");
+        /* `id` first: it is the only field a caller should ever store or match
+         * on, and a name can be whatever the module felt like calling itself. */
+        int at = sput(reply, cap, 0, "id=");
+        at = sput(reply, cap, at, g_app[idx].id);
+        at = sput(reply, cap, at, " name=");
         at = sput(reply, cap, at, app_name(idx));
         at = sput(reply, cap, at, g_open[idx] ? " open=1" : " open=0");
         at = sput(reply, cap, at, (focused_app() == idx) ? " focused=1" : " focused=0");
@@ -5296,8 +5453,8 @@ static void on_action(const unoui_action *a)
     case ID_DSNAP:  g_desk_snap = a->value ? 1 : 0; session_save(); break;
     case ID_DLOCK:  g_desk_lock = a->value ? 1 : 0; session_save(); break;
     case ID_DARRANGE: {          /* forget every hand placement and reflow */
-        int i; for (i = 0; i < 32; i++) g_icon_pos[i].placed = 0;
-        build_desktop(); g_dirty = 1; break; }
+        int i; for (i = 0; i < APPS_MAX; i++) g_icon_pos[i].placed = 0;
+        build_desktop(); session_save(); g_dirty = 1; break; }
     case ID_VOL:   g_pref_vol = a->value; uno_snd_volume(a->value);
                    session_save(); break;              /* PCM gain; PC speaker has none */
     /* Selecting only selects.  This used to call uno_pc64_res_set() straight
@@ -5442,10 +5599,11 @@ static int pump_input(void)
                   if (g_desk_snap) desk_snap_free(g_drag_icon, &x, &y);
                   g_desk.w[g_drag_icon].r.x = x;
                   g_desk.w[g_drag_icon].r.y = y;
-                  if (g_drag_app >= 0 && g_drag_app < 32) {
+                  if (g_drag_app >= 0 && g_drag_app < NAPPS) {
                       g_icon_pos[g_drag_app].x = (short)x;
                       g_icon_pos[g_drag_app].y = (short)y;
                       g_icon_pos[g_drag_app].placed = 1;
+                      session_save();   /* v3 keys these by id, so they keep */
                   }
               }
               g_drag_icon = -1;

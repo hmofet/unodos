@@ -232,8 +232,16 @@ user granted at arm time (see the table above); the reply on refusal is
 | `screen record stop` \| `screen record status` | stop (ring retained for reading) / query without stopping | the same `ok frames …` stat line then `end` |
 | `screen record read <off-hex> [len]` | read `len` (≤2880) bytes of the recorded ring at `<off>`, base64 (like `screen read`); the client pulls the whole ring and reconstructs each frame | base64 `ok` lines then `end` / `err no-data` |
 | `apps` | count of launchable apps | `ok <n>` |
-| `launch <n>` | launch app `n` | `ok launched` / `err no-app` |
+| `apps list` | one `id name` row per app slot | `ok <id> <name>` per app |
+| `launch <n\|id>` | launch app `n`, or the app with that id | `ok launched` / `err no-app` |
+| `rescan` | re-read `APPS\` and register anything new (DRIVE) | `ok <n>` |
 | `close` | close the top window | `ok` |
+
+**Launch by id, not by number.** The app set is discovered from `APPS\` at boot
+(`docs/APP-REGISTRY-PLAN.md`), so a slot index is this boot's ordering of
+whatever happens to be installed. A script that launches `apps - 1` does not
+FAIL when someone installs an app; it silently drives a different one.
+`apps list` gives you the ids.
 | `uptime` | ms since boot | `ok <ms>` |
 | `test [suite]` | run a conformance suite (`storage`/`system`/…, empty = all) | the report, line by line, then `ok rc=<n>` |
 | `py <source>` | exec Python on-device (one line; shares the VM with any running Python app) | captured stdout, line by line |
