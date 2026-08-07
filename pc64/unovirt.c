@@ -346,6 +346,25 @@ static char g_carve_note[96];
 unsigned long long uno_vmm_carve_base(void) { return g_carve_base; }
 unsigned long long uno_vmm_carve_size(void) { return g_carve_size; }
 
+/* ---- how much CPU the guest has actually had -----------------------------
+ *
+ * Wall time and guest time are not the same thing here and the gap is the
+ * whole design: a guest gets 4 ms of every 16 ms frame, so a quarter.  A
+ * periodic device driven by WALL time therefore fires four times faster than
+ * the guest can service it, and a timer that outruns its own handler is not
+ * a fast clock, it is a livelock - the guest re-enters the handler forever
+ * and never returns to what it was doing.
+ *
+ * So the backends accumulate the TSC actually spent INSIDE the guest, and a
+ * device that models a periodic interrupt counts against this instead.  The
+ * guest's jiffies then run slow against the wall, which is the honest cost of
+ * a sliced core and not a bug: wall time in the guest comes from the TSC
+ * clocksource, which it reads directly and which never stopped. */
+static unsigned long long g_guest_cycles;
+
+void uno_vmm_add_guest_cycles(unsigned long long d) { g_guest_cycles += d; }
+unsigned long long uno_vmm_guest_cycles(void) { return g_guest_cycles; }
+
 void *uno_vmm_gpa(unsigned long long gpa, unsigned long long len)
 {
     /* Both halves of the check matter, and so does their order: without the
@@ -654,21 +673,34 @@ void uno_vmm_tick(void)
      * guest is a guest, and the desktop's frame is the thing being protected. */
     if (g_lin_armed && g_hv && g_hv->linux_slice) {
         int lines = g_lin.lines;
+        static int logged_exits = -1;
         if (!g_hv->linux_slice(SLICE_BUDGET_US, &g_lin)) g_lin_armed = 0;
         uno_dbg_heartbeat();
         /* A kernel that stops printing has not necessarily stopped: it can
          * be spinning on a port waiting for hardware nobody emulated. The
-         * exit count and the port it is sitting on say which. */
-        if ((g_lin.exits & 0x3FFF) == 0)
+         * exit count and the port it is sitting on say which. The
+         * changed-since guard matters once a guest can PARK on a hlt: a
+         * parked guest's exit count stands still, and a count that stands
+         * still on a 16 K boundary would otherwise log every frame. */
+        if ((g_lin.exits & 0x3FFF) == 0 && g_lin.exits != logged_exits) {
+            logged_exits = g_lin.exits;
             uno_dbg_log("vm linux: %d exits %d pio, sitting on port %x, "
                         "%d lines", g_lin.exits, g_lin.pio, g_lin.last_port,
                         g_lin.lines);
+        }
         if (g_lin.lines != lines || !g_lin_armed) {
+            /* `shell` is the claim worth making and the only one that needs
+             * the whole stack: the kernel's own output proves a kernel runs,
+             * but a REPLY proves the guest read a line we sent it, ran it and
+             * answered - the receive FIFO, the 8259, and the injection. */
             snprintf(g_lin_str, sizeof g_lin_str,
-                     "%s: %d lines %d chars, %d exits, %d pio%s%s",
+                     "%s: %d lines %d chars, %d exits, %d pio, %d irq, "
+                     "shell %s%s%s",
                      g_lin_armed ? "running" : "stopped",
                      g_lin.lines, g_lin.chars, g_lin.exits, g_lin.pio,
-                     g_lin_armed ? "" : " on ",
+                     g_lin.injects,
+                     g_lin.shell_ok ? "ANSWERED" : "silent",
+                     g_lin_armed ? "" : " - stopped on ",
                      g_lin_armed ? "" : (g_lin.stop_reason == 12 ? "hlt" : "an exit"));
             if (!g_lin_armed && !g_lin_reported) {
                 g_lin_reported = 1;

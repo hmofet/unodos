@@ -25,6 +25,22 @@ this script produced on 2026-08-06:
 It needs the image to carry `vm-selftest` in the FIRST 512 bytes of
 DEBUG.CFG - the config reader truncates there and says nothing (reported in
 pc64/UNOAUTOMATE-REQUESTS.md), so this script checks rather than trusting it.
+
+IT ALSO NEEDS `noshutdown`, AND THAT ONE COST A WHOLE INVESTIGATION.  The
+shipped DEBUG.CFG carries `passes=3`, which means the stress driver finishes
+its passes and POWERS THE MACHINE OFF - about nineteen seconds in.  A guest
+runs from the shell's frame loop at 4 ms a frame, so nineteen seconds of wall
+time is roughly a tenth of a second of guest CPU: the kernel is still
+decompressing itself when the lights go out.  The symptom is a single line of
+guest output and a kernel that looks wedged, which is indistinguishable from
+a real hang and was chased as one.  `noshutdown` leaves the desktop up and
+lets the QEMU timeout bound the run instead.
+
+    UNO_DEBUG=1 UNO_DETACH=1 UNO_DBGCON=1 ./build.sh
+    cp build/bzImage  build/esp/EFI/UNODOS/VM/BZIMAGE
+    cp build/initrd.gz build/esp/EFI/UNODOS/VM/INITRD
+    printf 'vm-selftest\\nnoshutdown\\n' | cat - build/esp/DEBUG.CFG > /tmp/d.cfg
+    cp /tmp/d.cfg build/esp/DEBUG.CFG && python3 tools/mkuefi.py
 """
 import os, subprocess, sys
 
@@ -41,9 +57,12 @@ timeout {t} qemu-system-x86_64 -machine q35 -m 4096 -cpu host -enable-kvm \
   -device qemu-xhci -device usb-tablet -nic none -display none \
   -debugcon file:/tmp/hv.log -global isa-debugcon.iobase=0x402 >/dev/null 2>&1
 echo '--- trace ---'
-grep 'hv\]' /tmp/hv.log || echo '(no hv trace: is vm-selftest set, and near the TOP of DEBUG.CFG?)'
+grep 'hv\]' /tmp/hv.log | head -40 || echo '(no hv trace: is vm-selftest set, and near the TOP of DEBUG.CFG?)'
 echo '--- verdict ---'
 strings -a {img} | grep -e '^HV:' -e 'selftest:' | tail -2
+echo '--- the guest said ---'
+grep 'lin\]' /tmp/hv.log | grep -v '  [a-z]*=' | tail -12
+echo "guest lines: $(grep -c 'lin\]' /tmp/hv.log)"
 echo '--- the boot carried on? ---'
 tail -3 /tmp/hv.log
 """
@@ -95,6 +114,12 @@ def main():
         shot(host)
     ok = "round trip" in r.stdout and "OK" in r.stdout
     print("hv remote: %s" % ("PASS" if ok else "no round trip - read the trace above"))
+    # A6: the guest shell answering is a separate claim from the foothold, and
+    # it is reported separately rather than folded into PASS - a machine with
+    # no bzImage on it still passes everything this script is really for.
+    if "GUEST" in r.stdout or "linux:" in r.stdout:
+        shell = "UNODOS-GUEST-SHELL-OK" in r.stdout or "shell ANSWERED" in r.stdout
+        print("guest shell: %s" % ("ANSWERED" if shell else "no reply seen"))
     return 0 if ok else 1
 
 

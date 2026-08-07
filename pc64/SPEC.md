@@ -1768,6 +1768,53 @@ faults on the first instruction that assumes it.
   `in` and `out` NATIVELY against this machine's ports, which is both wrong
   and dangerous. The symptom is a guest doing no I/O at all, and a booting
   kernel that touches zero ports is impossible.
+- **S-HV-34** [auto] A guest MUST have an interrupt controller. A driver that
+  enables a device interrupt and blocks is not waiting for data, it is
+  waiting for a WAKE-UP, and a byte delivered to a queue nobody announces is
+  never collected: the 8250's receive FIFO, its data-ready bit and a queued
+  byte were all in place and the shell still exited on end-of-file. The
+  8259 pair answers ports 0x20/0x21 and 0xA0/0xA1 (ICW1-4, the mask, both EOI
+  forms, OCW3's register select), because `nolapic` means Linux drives the
+  legacy PIC. site: `unovdev_pc.c pic_io`.
+- **S-HV-35** [auto] An injected vector MUST be the one the GUEST programmed
+  in ICW2, not the ISA line number. Linux remaps the legacy lines to 0x30,
+  and a hypervisor that injects the line number delivers IRQ0 as vector 0 -
+  a divide-error into the guest's own handler, which is a plausible-looking
+  crash a long way from its cause.
+- **S-HV-36** [auto] Injection MUST NOT depend on catching the guest at a
+  convenient moment. A guest spends much of its life unable to take an
+  interrupt (IF clear, an interrupt shadow, an injection still pending), and
+  a hypervisor that only offers a vector when it happens to look at a good
+  instant starves it. With a vector pending and the guest unable to take it,
+  **interrupt-window exiting MUST be armed** so the CPU exits the moment the
+  guest becomes ready. site: `hv_vmx.c lin_intr_window`.
+- **S-HV-37** [auto] Stepping a guest past an intercepted `hlt` MUST retire
+  the interrupt shadow. The idle loop is `sti; hlt`, so the shadow STI leaves
+  covers exactly the HLT, and the HLT exit therefore arrives with it set.
+  Treating that as "cannot take an interrupt now" refuses to wake the guest
+  whose HLT was just consumed: it loops through its idle path forever, taking
+  no tick and doing no work, while looking busy from outside. On hardware the
+  interrupt is delivered AT the HLT, which ends it.
+- **S-HV-38** [auto] A device modelling a PERIODIC interrupt MUST count
+  against guest-executed time (`uno_vmm_guest_cycles`), not the wall. A guest
+  gets a slice of each frame - about a quarter of a core - so a wall-driven
+  tick arrives about four times faster than the guest can service it, and a
+  timer that outruns its own handler is a livelock rather than a fast clock.
+  A device the guest merely READS (the PIT's calibration channel) is the
+  opposite case and MUST follow the wall, because the guest compares it
+  against the real TSC it reads directly. site: `unovdev_pc.c pit0_elapsed`
+  vs `pit_cycles_since`.
+- **S-HV-39** [auto] A UART's transmit-empty interrupt MUST be a LATCH that
+  reading IIR clears, not a level. This transmitter never fills, so "holding
+  register empty" is true forever; modelled as a level the request cannot be
+  quieted by anything the driver does, and the guest services that one
+  interrupt for as long as it has transmit interrupts enabled. Received-data
+  is the genuine level, and deasserts when the driver drains RBR.
+- **S-HV-40** [assert] The UART's DLAB (LCR bit 7) MUST redirect the first
+  two ports to the divisor latch. Unmodelled, the driver's baud programming
+  lands on the live registers: the low byte becomes a character on the
+  console and **the high byte overwrites the IER**, so setting the speed
+  silently disarms every interrupt the driver just enabled.
 - **S-HV-11** [assert] The probe MUST count only free conventional memory
   (`EfiConventionalMemory` / E820 type 1). Counting firmware-reserved or
   boot-services ranges would overstate a machine sitting on the floor, which
