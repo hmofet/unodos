@@ -578,6 +578,7 @@ UOF_MENU_OPEN = (70, 109)      # its "Open..." row
 UOF_COMBO_ARROW = (383, 87)    # the Look-in combo's drop arrow
 UOF_COMBO_DOCS = (300, 143)    # popup row 2: the DOCS volume (disk B; row 0
                                # RAM, row 1 NO NAME/ESP, row 2 DOCS)
+UOF_NAME = (300, 228)          # the File-name edit field
 UOCALC_A2 = (112, 201)         # grid cell A2 (holds =(1+2)*3)
 
 
@@ -639,11 +640,16 @@ def s04_office(d):
     d.click(*UOF_MENU_OPEN, settle=1.4)              # is decorative - click
     d.click(*UOF_COMBO_ARROW, settle=0.8)            # Look-in ...
     d.click(*UOF_COMBO_DOCS, settle=1.2)             # ... -> the DOCS volume
-    # DOCS holds PIC.DOC + SMALL.PPT; the type filter shows presentations, so
-    # SMALL.PPT is at/near row 0. UnoShow's key bridge maps Down, so a click
-    # into the list to focus + select, then Open.
-    d.click(*UOF_ROW0, settle=0.8)                   # row 0
-    d.key(0, S_DOWN, settle=0.5)                     # ensure SMALL.PPT selected
+    # The FAT lister marks every file as a directory (uno_fat_list_ex returns
+    # >=0 for a file path, so uofile.c appends '\' and never mirrors the name
+    # into the File-name field - a pc64_fs bug, reported separately). Clicking
+    # a row therefore can't select the file; instead TYPE the name into the
+    # File-name field (uof_name() reads that on OK), which the bug doesn't
+    # touch. UnoShow reads .ppt <= 4 MB (UOS_IOCAP), so small.ppt fits.
+    d.click(*UOF_NAME, settle=0.6)                   # focus the File-name field
+    for _ in range(16):
+        d.key(8, settle=0.03)                        # clear "README.TXT"
+    d.text("SMALL.PPT", settle=0.06)
     d.click(*UOF_OPEN, settle=3.0)
     time.sleep(2.0)
     d.beat("close")
@@ -755,7 +761,7 @@ def s08_pre(d):
     d.link.eval('import uno; uno.run_app(%d, "APPS\\\\DUUM.UNO")' % espv,
                 timeout=30)
     for _ in range(30):                              # WAD parse + first frame
-        if any(t.startswith("Duum") for t in d.windows()):
+        if any("DUUM" in t.upper() for t in d.windows()):
             return True
         time.sleep(2.0)
     print("  s08: Duum window did not appear after run_app - recording anyway")
