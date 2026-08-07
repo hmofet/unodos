@@ -192,7 +192,16 @@ class Demo(object):
         os.makedirs(OUT, exist_ok=True)
         os.makedirs(PROBE, exist_ok=True)
         self.link = UnoAutoLink("127.0.0.1", RQ.PORT)
-        self.link.listen()
+        try:
+            self.link.listen()
+        except OSError as e:
+            # A stale run's listener (or its QEMU still dialing) makes the
+            # guest connect to the WRONG process and this one wait forever -
+            # which presents as "never dialled in" and cost an hour to see.
+            raise SystemExit(
+                "cannot bind 127.0.0.1:%d (%s) - a previous run is still "
+                "alive; kill stale scenes.py/*_qemu.py and qemu processes "
+                "first" % (RQ.PORT, e))
         build_disk()
         self.qemu = boot_qemu()
         if not self.link.wait_connected(180):
