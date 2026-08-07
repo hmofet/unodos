@@ -8186,3 +8186,56 @@ to `unoui/themes/theme_aurora.c` `soft_shadow()` only - clipping each drop-shado
 layer to the four regions around the body-covered band so the interior the opaque
 window body overwrites is not blended six times (byte-identical output, far less
 alpha overdraw). No signature or vtable change; other themes untouched.
+
+---
+
+**DEFERRED WORK 2026-08-07 (pc64 perf/bug/security review):** the review swept
+across ten lanes and landed to master (see `pc64/REVIEW-PLAN-2026-08.md` for the
+full findings + rationale). The items below were deliberately NOT done in that
+sweep and each wants its own slice - recording them here so the next agent does
+not re-derive intent or assume they were missed.
+
+- **Timer-IRQ idle (the single biggest perf lever) - NOT attempted.** The shell's
+  idle wait busy-spins a full core (`pc64_native.c:44-49`, every `uno_pc64_delay_ms`
+  is an `rdtsc`/`pause` spin; the idle path is `pc64_uui.c` `uno_pc64_delay_ms(16)`).
+  Fixing it means idle `hlt`, which needs a wake source - i.e. an actual host
+  interrupt subsystem. There is NONE today: the OS is fully polled, the only "timer"
+  is the PCH TCO *hardware* watchdog (not an ISR), and no IDT is installed for the
+  running OS. So this is IDT + ISR stubs + LAPIC-or-PIT programming + `sti`/EOI built
+  from scratch in a post-ExitBootServices environment; its failure mode is a
+  triple-fault/reboot loop, and it must be validated on the real X1 Carbon / X13 Yoga
+  / Surface / Latitude fleet (QEMU passing is not sufficient for interrupt
+  controllers). Dedicated hardware-in-the-loop slice only. Related:
+  `unodos-ports-hardware-blocked`.
+
+- **Browser full flow-layout retained cache (P3) - only the safe part shipped.** The
+  space-width hoist out of the per-word loop is done; the retained run-list cache was
+  deferred. `render_html` (RENDER_FLOW, the default) re-walks the DOM and re-measures
+  every word every paint (`pc64_browser.c:944-952`, `fl_word` `:151-190`), but the
+  painter is immediate-mode with per-paint find/link side effects and a
+  source-walking Markdown path with interleaved rect draws. A faithful cache is a
+  large refactor of the Ctrl-F / link-hit correctness surface; a half-correct version
+  regresses those. Own slice. (The `uw` engine already caches on `g_dom_gen` at
+  `pc64_browser.c:833` - a model for what the flow path needs.)
+
+- **Two rtwifi metal-pending items - skipped (need the physical card).** (a) The
+  station MAC is never read from efuse/registers (`rtwifi.c:55,491,552`), so the
+  datapath/EAPOL run with 00:00:00:00:00:00 - but the MAC bring-up is itself a
+  scaffolded metal gap (registers read garbage until the power-on sequence lands), so
+  a fix cannot be validated as correct without hardware. (b) TX completion /
+  backpressure (gating the write pointer against the HW read pointer) needs real
+  ring-completion semantics only confirmable on the card. Do these when a real RTL
+  WiFi part is on the bench.
+
+- **Minor platform polish (low-value P3/P4) - left as follow-ups:** taskbar metric
+  cache (`pc64_uui.c:2576-2586` re-measures constant strings every draw), the
+  half-second housekeeping repaint guard (`pc64_uui.c:6564-6576` sets `g_dirty`
+  unconditionally; risk = caret-blink regression if the "is a caret visible" test is
+  wrong), and live-drag partial restore (`uefi_main.c:186-187` memcpys the whole fb
+  per moved frame). None are urgent.
+
+- **Metal-pending changes that DID land (build + QEMU-smoke clean) but want HARDWARE
+  validation before being relied on:** SDHCI multi-block CMD18/25 + SDMA (single-block
+  fallback retained, so a device it mishandles still completes), the e1000e/igb
+  read-MAC-before-reset reorder, and the rtwifi/mrvlwifi/iwlwifi fixes. Validate on
+  the Surface Go eMMC and the respective NICs.
