@@ -7963,3 +7963,55 @@ Worth doing when convenient, and it matters a little more here than it did for
 the log viewer: a virtual machine is a thing a user goes looking for, and an
 appliance manager you can only reach through the file browser is one most
 people will never find.
+
+## 2026-08-07 - CORRECTION to my own VMGR request above, and it changes its weight
+
+I wrote that `APPS\VMGR.UNO` "works today from Files or `uno.run_app`" and that a
+desktop slot was "worth doing when convenient". **Both halves are wrong**, found
+by trying it on the ZimaBlade rather than by reading:
+
+- `pc64_shell_run_user()` handles exactly two kinds of module: a PYAPP, and a
+  CLASSIC `.UNO` through `unoapp_user_run()`, which calls the entry point and
+  then requires a `UnoAppIface` with a `draw` member. A unoui-class module
+  returns a `UnoUuiApp` instead, so the check fails and Files reports
+  `Could not launch that .UNO.` There is no third branch.
+- `uno.run_app` does not exist. The `uno` MicroPython module exposes
+  `read, write, App, beep, devices, mkdir, pci, quiet, read_at, rgb, size`, and
+  `uno.App` has no public methods. The URC `launch <n>` verb calls
+  `pc64_shell_launch(n)`, which indexes the shell's built-in slots only.
+
+So the slot is not discoverability, it is **the only way to run the app at all**,
+and the same is true of any future unoui-class module. I got this wrong by
+generalising from LOGVIEW's note that it "opens from Files" - LOGVIEW was a PYAPP
+when that was true, and it gained `EX_LOGVIEW` in the same commit that made it
+unoui-class. The note describes two different things a paragraph apart.
+
+Not asking anyone to hurry; recording it because a request that says "when
+convenient" and means "nothing can run this" is worse than no request.
+
+**The generic alternative, if the toolkits lane would rather solve it once:** a
+branch in `pc64_shell_run_user()` for `UNO_MODF_UUI` that hosts the module in a
+shared slot the way `EX_PYAPP` hosts Python apps. That costs one slot instead of
+one per app, and it is the difference between "add twelve lines per module
+forever" and "unoui-class modules are loadable". Its known limitation is the one
+LOGVIEW hit: a single shared slot means opening a second such module evicts the
+first, and the window title comes from the module rather than the file.
+
+## 2026-08-07 - REQUEST to the unoautomate lane: `push` cannot carry a file over 8 MiB
+
+Also from the ZimaBlade run. `PUT_MAX` in `unoauto_remote.c` is
+`8 * 1024 * 1024` and `g_put` is a `.bss` array of that size: the whole file is
+staged in RAM and written at `end`, so a larger file is refused mid-transfer with
+`bad-base64-or-too-big`. The appliance kernel is a 17 MB `bzImage`, so the
+appliance cannot currently be delivered over URC at all - `ROOTFS.IMG` (8 MiB
+exactly) and `INITRD` fit, and `BZIMAGE` stops at 8386200 bytes.
+
+Raising the constant would work and costs another N MB of `.bss` permanently. The
+better shape, if the lane wants it, is a **streaming write**: `uno_fs_write` is
+whole-file only today, but the native FAT layer could take chunks appended at an
+offset, and then `push` needs a buffer the size of one chunk rather than of the
+file. That primitive is also what unovirt wants for writable virtio-blk (the
+`uno_fs_write_at` request filed earlier the same day) - one primitive answers
+both, which is why they are worth reading together.
+
+Workaround meanwhile: copy the kernel to the stick physically.

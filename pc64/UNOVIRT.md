@@ -766,6 +766,39 @@ when it sees a newline, so a marker file written without a trailing newline is
 read correctly, delivered correctly, and never appears. It looked like a hang
 in the read path.
 
+### The manager on real hardware, and the thing that stops it
+
+Installed to the ZimaBlade (the always-on metal box) over URC on 2026-08-07:
+kernel, `APPS\VMGR.UNO`, `ROOTFS.IMG` and `INITRD` all pushed and verified,
+`BUILD.TXT` reporting `debug-c958b2e2` so the box is provably running this
+code rather than an older one - which on that box is a claim worth checking
+every time.
+
+**The application cannot be launched, and it is not its fault.**
+`pc64_shell_run_user()` - what Files calls when you open a `.UNO` - handles a
+PYAPP and a CLASSIC app, the latter through `unoapp_user_run()`, which requires
+the entry point to return a `UnoAppIface` with a `draw` member. A unoui-class
+module returns a `UnoUuiApp`, so the load is refused and Files says
+`Could not launch that .UNO.` There is no third branch, `uno.run_app` does not
+exist, and the URC `launch <n>` verb indexes the shell's built-in slots. **A
+unoui-class module without a desktop slot cannot be run by any means.**
+
+That was recorded here as "it opens from Files meanwhile", which was wrong and
+was inferred rather than tried: LOGVIEW's note says it opens from Files, but
+LOGVIEW was a PYAPP when that was true and gained `EX_LOGVIEW` in the same
+commit that made it unoui-class. The slot is a prerequisite, not a convenience,
+and the request in `pc64/UNOAUTOMATE-REQUESTS.md` now says so.
+
+**Two other things the run established**, both about the delivery path rather
+than the hypervisor:
+
+- **URC cannot carry the appliance kernel.** `PUT_MAX` is a fixed 8 MiB staging
+  buffer, and the `bzImage` is 17 MB; it fails at 8386200 bytes. The disk image
+  and initramfs fit. Requested of the unoautomate lane.
+- **Files lists a directory in FAT order and does not scroll**, so a file pushed
+  last is invisible in a directory of twenty. Neither is a unovirt problem; both
+  are worth knowing before planning another hardware session.
+
 ### What is left
 
 - **A real console, not a seeded one.** Input still comes from a string
