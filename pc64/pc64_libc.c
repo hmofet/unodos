@@ -356,12 +356,18 @@ int vsnprintf(char *buf, size_t cap, const char *fmt, va_list ap)
     for (; *fmt; fmt++) {
         if (*fmt != '%') { PUT(*fmt); continue; }
         fmt++;
-        { int left = 0, zero = 0, plus = 0, width = 0, lng = 0, i, neg = 0; char nb[24]; int nn;
+        { int left = 0, zero = 0, plus = 0, width = 0, prec = -1, lng = 0, i, neg = 0; char nb[24]; int nn;
           unsigned long long uv; long long sv;
           while (*fmt=='-'||*fmt=='0'||*fmt=='+'||*fmt==' '||*fmt=='#') {
               if (*fmt=='-') left=1; else if (*fmt=='0') zero=1; else if (*fmt=='+') plus=1; fmt++; }
-          while (*fmt >= '0' && *fmt <= '9') width = width*10 + (*fmt++ - '0');
-          if (*fmt=='.') { fmt++; while (*fmt>='0'&&*fmt<='9') fmt++; }  /* precision parsed, ignored for ints */
+          /* `*` width consumes an int arg; a negative width means left-align. */
+          if (*fmt=='*') { fmt++; width = va_arg(ap,int); if (width < 0) { left = 1; width = -width; } }
+          else while (*fmt >= '0' && *fmt <= '9') width = width*10 + (*fmt++ - '0');
+          /* `.` precision: `.*` consumes an int arg (negative == omitted). Applied
+           * to %s below (clamp printed length); still ignored for integer conv. */
+          if (*fmt=='.') { fmt++;
+              if (*fmt=='*') { fmt++; prec = va_arg(ap,int); if (prec < 0) prec = -1; }
+              else { prec = 0; while (*fmt>='0'&&*fmt<='9') prec = prec*10 + (*fmt++ - '0'); } }
           while (*fmt=='l'||*fmt=='z'||*fmt=='h'||*fmt=='j'||*fmt=='t') { if (*fmt=='l') lng++; if (*fmt=='z'||*fmt=='j'||*fmt=='t') lng=2; fmt++; }
           switch (*fmt) {
           case 'd': case 'i':
@@ -375,9 +381,11 @@ int vsnprintf(char *buf, size_t cap, const char *fmt, va_list ap)
           case 'p': PUT('0'); PUT('x'); uv=(unsigned long long)(uintptr_t)va_arg(ap,void*); nn=u64_str(uv,16,0,nb); for(i=0;i<nn;i++) PUT(nb[i]); break;
           case 'c': PUT((char)va_arg(ap,int)); break;
           case 's': { const char *s = va_arg(ap,const char*); int pad; if(!s) s="(null)";
-                      { int sl=0; while(s[sl]) sl++; pad=width-sl;
+                      { int sl=0; while(s[sl]) sl++;
+                        if (prec >= 0 && sl > prec) sl = prec;   /* clamp to precision */
+                        pad=width-sl;
                         if(!left) while(pad-->0) PUT(' ');
-                        while(*s) PUT(*s++);
+                        { int j; for(j=0;j<sl;j++) PUT(s[j]); }
                         if(left) while(pad-->0) PUT(' '); } } break;
           case 'f': case 'g': case 'e': { double dd = va_arg(ap,double); (void)dd; const char *m="<flt>"; while(*m) PUT(*m++); } break;
           case '%': PUT('%'); break;
