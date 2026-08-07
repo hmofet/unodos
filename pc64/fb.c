@@ -245,6 +245,38 @@ void fb_blend_pixel_sub(int x, int y, fb_px fg, int aR, int aG, int aB)
     }
 }
 
+/* Blend a horizontal run of `n` per-channel coverage samples of `fg` starting
+ * at (x,y): the row-at-a-time form of fb_blend_pixel_sub. The clip is resolved
+ * ONCE for the whole row (an off-screen left/right margin is trimmed to a sub-
+ * span) instead of per pixel, which is the hot path for anti-aliased glyph
+ * compositing. covR/covG/covB[i] is the 0..255 alpha for pixel x+i; pass the
+ * same pointer three times for a plain grayscale-AA run. Coverage 0 is an
+ * identity blend, so callers may include fully-transparent pixels in the run. */
+void fb_blend_row_sub(int x, int y, int n, fb_px fg,
+                      const unsigned char *covR, const unsigned char *covG,
+                      const unsigned char *covB)
+{
+    int x0, y0, x1, y1, i, i0, i1;
+    clip_bounds(&x0, &y0, &x1, &y1);
+    if (y < y0 || y >= y1) return;
+    i0 = (x < x0) ? x0 - x : 0;
+    i1 = (x + n > x1) ? x1 - x : n;
+    if (i1 <= i0) return;
+    {
+        fb_px *base = &fb[y * FB_W + x];
+        unsigned fr = fg & 0xFF, fgn = (fg >> 8) & 0xFF, fbn = (fg >> 16) & 0xFF;
+        for (i = i0; i < i1; i++) {
+            unsigned aR = covR[i], aG = covG[i], aB = covB[i];
+            fb_px d = base[i];
+            unsigned dr = d & 0xFF, dg = (d >> 8) & 0xFF, db = (d >> 16) & 0xFF;
+            unsigned r = div255(dr * (255u - aR) + fr  * aR);
+            unsigned g = div255(dg * (255u - aG) + fgn * aG);
+            unsigned b = div255(db * (255u - aB) + fbn * aB);
+            base[i] = 0xFF000000u | (b << 16) | (g << 8) | r;
+        }
+    }
+}
+
 /* optional text provider (TrueType); NULL = the built-in bitmap font */
 static const fb_font *g_font = 0;
 void fb_set_font(const fb_font *f) { g_font = f; }
