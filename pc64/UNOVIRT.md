@@ -184,11 +184,12 @@ runs, and it halts with nothing to catch it and GIF clear. The symptom is
 indistinguishable from the wedge above, which is why finding it did not end the
 investigation.
 
-**DEBUG.CFG is read into a 512-byte buffer** (`pc64_stress.c dbg_cfg_read`) and
-the shipped file is already 536 bytes of comments. A key appended to the end of
-it is **silently ignored** - it never reaches the parser. `vm-selftest` has to
-go near the top. That is the debug harness's lane, reported in
-`pc64/UNOAUTOMATE-REQUESTS.md` rather than fixed here.
+**DEBUG.CFG was read into a 512-byte buffer** (`pc64_stress.c dbg_cfg_read`)
+while the shipped file was already 536 bytes of comments, so a key appended to
+the end was **silently ignored** - it never reached the parser. `vm-selftest`
+had to go near the top. Reported to the debug-harness lane rather than fixed
+here, and **fixed there on 2026-08-02**: the reader takes the whole file and
+says so when it does not fit. Keys still go at the top out of habit.
 
 ## A2: the guest gets an address space
 
@@ -642,7 +643,7 @@ exits, meaning it was busy and not stuck.
 
 What makes it worth writing down is that the failure is indistinguishable from
 the real thing and the fix is one word: **`noshutdown` goes in DEBUG.CFG
-beside `vm-selftest`**, both inside the first 512 bytes. `tools/hv_remote.py`
+beside `vm-selftest`**. `tools/hv_remote.py`
 carries the recipe in its docstring and now prints the guest's own output and
 line count, so the next person reads the answer instead of ssh-ing for it.
 
