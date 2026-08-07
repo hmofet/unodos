@@ -25,6 +25,7 @@
 #include "unoui_theme.h"
 #include "fb.h"
 #include "uno_uuiapp.h"
+#include "uno_appdesc.h"
 #include "fat.h"
 #include "unomedia.h"
 
@@ -789,6 +790,13 @@ static void photos_frame(void)
     ph_cache_ok = 0;
     pc64_shell_dirty();
 }
+
+/* what the shell shows for this app, carried in the module (uno_appdesc.h) */
+UNO_APP_DESC("id: photos\n"
+             "name: Photos\n"
+             "icon: photos\n"
+             "cat: media\n"
+             "rank: 20\n");
 
 static const UnoUuiApp kPhotos = {
     UNO_UUIAPP_ABI, "Photos",

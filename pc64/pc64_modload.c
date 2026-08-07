@@ -21,6 +21,7 @@
  * ======================================================================== */
 #include "uno_app.h"        /* AppInterface/KernelApi + mac_compat.h Toolbox */
 #include "uno_uuiapp.h"     /* the unoui-class module ABI (flags bit 0) */
+#include "uno_appdesc.h"    /* what a .UNO says about itself (desc_rva)   */
 #include "pyhost.h"     /* Python-runtime + Python-app module tiers */
 #include "unoauto.h"    /* mod.load / mod.unload tap points (no-op in prod) */
 #include "unolog.h"
@@ -326,7 +327,11 @@ typedef struct {
     unsigned int       entry, mem_size, file_size, nreloc;
     unsigned int       imp_rva, imp_count;
     unsigned long long pref_base;
-    unsigned int       crc, rsv;
+    unsigned int       crc;
+    /* was `rsv`, always written 0 and never read.  Now the RVA of the app
+     * descriptor block inside the image (uno_appdesc.h); 0 = no descriptor,
+     * which is what every module built before 2026-08-07 says. */
+    unsigned int       desc_rva;
 } UnoModHdr;                                /* 48 bytes */
 
 static unsigned int mod_crc32(const unsigned char *p, long n)
@@ -587,6 +592,182 @@ int uno_mod_present(const char *file)
     strcpy(p, "EFI\\UNODOS\\APPS\\"); strcat(p, file);
     for (v = 1; v < nv; v++)
         if (uno_fs_size(v, p) >= 48) return 1;
+    return 0;
+}
+
+/* Where APPS\<file> actually is.  uno_mod_present answers yes/no; this answers
+ * "which volume and under which of the two layouts", which is what the registry
+ * needs so a later read does not search all over again. */
+int uno_mod_find(const char *file, int *vol_out, char *path_out, int max)
+{
+    int nv = uno_fs_volumes(), v, pass;
+    char p[64];
+    for (pass = 0; pass < 2; pass++) {
+        strcpy(p, pass ? "EFI\\UNODOS\\APPS\\" : "APPS\\");
+        strcat(p, file);
+        for (v = pass; v < nv; v++)          /* the ESP layout skips volume 0 */
+            if (uno_fs_size(v, p) >= 48) {
+                if (vol_out) *vol_out = v;
+                if (path_out && max > 0) {
+                    int i = 0;
+                    while (p[i] && i < max - 1) { path_out[i] = p[i]; i++; }
+                    path_out[i] = 0;
+                }
+                return 1;
+            }
+    }
+    return 0;
+}
+
+/* ---- the app descriptor: metadata WITHOUT loading the module ---------------
+ * Two reads, no arena, no relocation, nothing executed.  See uno_appdesc.h for
+ * why that constraint drives the whole format. */
+
+static void d_setstr(char *dst, int cap, const char *src, int n)
+{
+    int i = 0;
+    while (i < n && i < cap - 1 && src[i]) { dst[i] = src[i]; i++; }
+    dst[i] = 0;
+}
+
+/* lowercase and keep [a-z0-9._-] only: how an id is derived from a filename
+ * stem, and how a hand-written `id:` is sanitised.  `n` bounds the source. */
+static void d_ident(char *dst, int cap, const char *src, int n)
+{
+    int i = 0, j = 0;
+    while (j < n && src[j] && i < cap - 1) {
+        char c = src[j++];
+        if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+        if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
+            c == '.' || c == '_' || c == '-') dst[i++] = c;
+    }
+    dst[i] = 0;
+}
+
+/* "APPS\\VMGR.UNO" -> "VMGR" */
+static void d_stem(char *dst, int cap, const char *path)
+{
+    const char *b = path, *p = path, *dot = 0;
+    int i = 0;
+    for (; *p; p++) if (*p == '\\' || *p == '/') b = p + 1;
+    for (p = b; *p; p++) if (*p == '.') dot = p;
+    for (p = b; *p && (!dot || p < dot) && i < cap - 1; p++) dst[i++] = *p;
+    dst[i] = 0;
+}
+
+static const char *kCatName[UAC_NCAT] =
+    { "system", "net", "tools", "media", "games", "other" };
+
+/* one "key: value" line; `k`/`v` point into the body, lengths are exact */
+static void desc_apply(UnoAppDesc *d, const char *k, int kn,
+                       const char *v, int vn)
+{
+    int i;
+    if (kn == 2 && !memcmp(k, "id", 2))          d_ident(d->id, sizeof d->id, v, vn);
+    else if (kn == 4 && !memcmp(k, "name", 4))   d_setstr(d->name, sizeof d->name, v, vn);
+    else if (kn == 5 && !memcmp(k, "short", 5))  d_setstr(d->shortnm, sizeof d->shortnm, v, vn);
+    else if (kn == 4 && !memcmp(k, "icon", 4))   d_setstr(d->icon, sizeof d->icon, v, vn);
+    else if (kn == 3 && !memcmp(k, "cat", 3)) {
+        for (i = 0; i < UAC_NCAT; i++) {
+            int n = 0; while (kCatName[i][n]) n++;
+            if (n == vn && !memcmp(v, kCatName[i], (unsigned)n)) { d->cat = (unsigned char)i; break; }
+        }
+    } else if (kn == 4 && !memcmp(k, "rank", 4)) {
+        int r = 0;
+        for (i = 0; i < vn && v[i] >= '0' && v[i] <= '9'; i++) r = r * 10 + (v[i] - '0');
+        if (r > 255) r = 255;
+        d->rank = (unsigned char)r;
+    } else if (kn == 5 && !memcmp(k, "flags", 5)) {
+        int s = 0;
+        for (i = 0; i <= vn; i++) {
+            if (i == vn || v[i] == ',') {
+                int n = i - s; const char *f = v + s;
+                if (n == 9 && !memcmp(f, "singleton", 9)) d->flags |= UAF_SINGLETON;
+                else if (n == 6 && !memcmp(f, "hidden", 6))    d->flags |= UAF_HIDDEN;
+                else if (n == 4 && !memcmp(f, "game", 4))      d->flags |= UAF_GAME;
+                else if (n == 9 && !memcmp(f, "nosession", 9)) d->flags |= UAF_NOSESSION;
+                s = i + 1;
+                while (s < vn && v[s] == ' ') s++;
+            }
+        }
+    } else if (kn == 3 && !memcmp(k, "min", 3)) {
+        int w = 0, h = 0;
+        for (i = 0; i < vn && v[i] >= '0' && v[i] <= '9'; i++) w = w * 10 + (v[i] - '0');
+        if (i < vn && (v[i] == 'x' || v[i] == 'X')) {
+            for (i++; i < vn && v[i] >= '0' && v[i] <= '9'; i++) h = h * 10 + (v[i] - '0');
+            if (w > 0 && w < 8192 && h > 0 && h < 8192)
+                { d->pref_w = (short)w; d->pref_h = (short)h; }
+        }
+    }
+    /* every other key, including `needs:`, is deliberately ignored here: the
+     * enforced capability grant is the signed .MFT, and an unknown key must
+     * never fail a parse or the format stops being extensible. */
+}
+
+static void desc_parse(UnoAppDesc *d, const char *body, int n)
+{
+    int i = 0;
+    while (i < n) {
+        int ks = i, ke, vs, ve;
+        while (i < n && body[i] != '\n') i++;
+        ve = i; if (ve > ks && body[ve - 1] == '\r') ve--;
+        for (ke = ks; ke < ve && body[ke] != ':'; ke++) { }
+        if (ke < ve) {
+            vs = ke + 1;
+            while (vs < ve && (body[vs] == ' ' || body[vs] == '\t')) vs++;
+            while (ve > vs && (body[ve - 1] == ' ' || body[ve - 1] == '\t')) ve--;
+            if (ke > ks) desc_apply(d, body + ks, ke - ks, body + vs, ve - vs);
+        }
+        i++;                                     /* step over the newline */
+    }
+}
+
+/* 0 = descriptor read, 1 = a module with no descriptor (defaults filled in),
+ * -1 = not a module at all.  Never allocates and never runs module code. */
+int uno_mod_desc_read(int vol, const char *path, UnoAppDesc *out)
+{
+    unsigned char hdr[48], blk[UNO_APPDESC_MAX];
+    const UnoModHdr *h = (const UnoModHdr *)hdr;
+    const UnoAppDescHdr *dh = (const UnoAppDescHdr *)blk;
+    char stem[16];
+    long n;
+    int len;
+
+    if (!out) return -1;
+    n = uno_fs_read(vol, path, hdr, (long)sizeof hdr);
+    if (n < (long)sizeof hdr || h->magic != UNO_MOD_MAGIC ||
+        h->abi != UNO_ABI_VERSION) return -1;
+
+    /* defaults first, so every later failure degrades instead of refusing */
+    memset(out, 0, sizeof *out);
+    out->cat = UAC_OTHER;
+    out->rank = 100;
+    out->tier = h->flags;
+    d_stem(stem, sizeof stem, path);
+    d_ident(out->id, sizeof out->id, stem, (int)sizeof stem);
+    /* FAT gives us "VMGR"; title-case it so a module with no descriptor still
+     * reads as a name rather than as shouting. */
+    d_setstr(out->name, sizeof out->name, stem, (int)sizeof stem);
+    { int i; for (i = 1; out->name[i]; i++)
+        if (out->name[i] >= 'A' && out->name[i] <= 'Z')
+            out->name[i] = (char)(out->name[i] - 'A' + 'a'); }
+    d_setstr(out->shortnm, sizeof out->shortnm, out->name, (int)sizeof out->name);
+
+    if (!h->desc_rva || h->desc_rva >= h->file_size) return 1;
+    n = uno_fs_read_at(vol, path, (long)(sizeof hdr + h->desc_rva),
+                       blk, (long)sizeof blk);
+    if (n < (long)sizeof *dh) return 1;
+    if (dh->magic != UNO_APPDESC_MAGIC || dh->ver != UNO_APPDESC_VER) return 1;
+    len = dh->len;
+    if (len <= (int)sizeof *dh || len > (int)sizeof blk || len > (int)n) return 1;
+
+    out->shortnm[0] = 0;                 /* so `short:` can be seen to be set */
+    desc_parse(out, (const char *)blk + sizeof *dh, len - (int)sizeof *dh);
+    if (!out->id[0])                     /* an `id:` of pure punctuation      */
+        d_ident(out->id, sizeof out->id, stem, (int)sizeof stem);
+    if (!out->shortnm[0])                /* `short:` defaults to `name:`      */
+        d_setstr(out->shortnm, sizeof out->shortnm, out->name,
+                 (int)sizeof out->name);
     return 0;
 }
 

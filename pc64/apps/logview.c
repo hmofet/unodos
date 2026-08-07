@@ -14,6 +14,7 @@
  * shows a subset teaches you to trust a complete-looking list that is not one.
  */
 #include "uno_uuiapp.h"
+#include "uno_appdesc.h"
 #include "unoui.h"
 #include "unoui_theme.h"
 #include "fb.h"
@@ -247,6 +248,14 @@ static void lv_build(unoui_window *win)
 
 static void lv_opened(void) { g_follow = 1; g_seen = 0; }
 static int  lv_canvas_index(void) { return 0; }
+
+/* what the shell shows for this app, carried in the module (uno_appdesc.h) */
+UNO_APP_DESC("id: logview\n"
+             "name: System Log\n"
+             "short: Log\n"
+             "icon: sys\n"
+             "cat: system\n"
+             "rank: 70\n");
 
 static const UnoUuiApp kLogView = {
     UNO_UUIAPP_ABI, "System Log",
