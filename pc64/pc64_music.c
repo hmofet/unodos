@@ -44,6 +44,7 @@ enum {
 #define MU_MAXE   128
 #define MU_PCM    4096                  /* decode chunk, frames               */
 #define VOL_TUNES 0                     /* dropdown slot 0 = the tune library */
+#define MU_NSEG   28                    /* level-meter segments (draw + tick) */
 
 /* ---- the built-in tunes (kept from the old app) ---------------------------- */
 #define QN 30
@@ -123,6 +124,18 @@ static short mu_pcm[MU_PCM * 2];
 static int   mu_gain = 70;
 static int   mu_level, mu_peak_hold;
 static int   mu_seek_drag;
+
+/* Repaint throttle. The player used to force a full-scene repaint every frame
+ * while not stopped (paused included); now it asks for one only when something
+ * the eye can actually see has changed since the canvas last DREW it: the
+ * meter's lit-segment / peak-segment counts, the elapsed readout, or the seek
+ * knob. mu_shown is bumped by the canvas each time it paints; requesting a
+ * repaint at most once until that paint lands means a parked or fully-occluded
+ * window (whose canvas never redraws) stops asking after the first frame. */
+static int   mu_drawn_lit = -1, mu_drawn_peak = -1, mu_drawn_seek = -1;
+static char  mu_drawn_time[40] = "";
+static unsigned mu_shown, mu_dirty_shown = (unsigned)-1;
+static int   mu_seg(int v) { int s = (v * MU_NSEG) / 100; return s < 0 ? 0 : s; }
 
 static unoui_window *mu_win;
 static unoui_widget *mu_w_play, *mu_w_list, *mu_w_seek, *mu_w_vol, *mu_w_vol_dd;
@@ -382,15 +395,38 @@ void pc64_music_tick(void)
         if (mu_w_seek && !mu_seek_drag && mu_info.duration_ms > 0)
             mu_w_seek->value = (int)((pos * 1000) / mu_info.duration_ms);
     }
-    if (mu_state != ST_STOP) pc64_shell_dirty();
+    /* Ask for a repaint only when a VISIBLE value moved since the canvas last
+     * drew, and only once until that draw lands (mu_shown advances) - so a
+     * parked/occluded window stops requesting after one frame. */
+    {
+        int lit  = mu_seg(mu_level);
+        int peak = mu_seg(mu_peak_hold);
+        int seek = mu_w_seek ? mu_w_seek->value : 0;
+        int changed = lit != mu_drawn_lit || peak != mu_drawn_peak ||
+                      seek != mu_drawn_seek || strcmp(mu_time, mu_drawn_time) != 0;
+        if (changed && mu_shown != mu_dirty_shown) {
+            mu_dirty_shown = mu_shown;
+            pc64_shell_dirty();
+        }
+    }
 }
 
 /* ---- the level meter (the one legitimate canvas here) ----------------------- */
 static void mu_canvas_draw(struct unoui_widget *w, unoui_rect r, void *ctx)
 {
     const unoui_theme *t = pc64_shell_theme();
-    int i, nseg = 28, gap = 2, sw;
+    int i, nseg = MU_NSEG, gap = 2, sw;
     (void)w; (void)ctx;
+    /* Record the state this frame is being painted with, so pc64_music_tick can
+     * tell when the on-screen picture would actually change. This runs only
+     * when the window is genuinely drawn, which is what lets the tick stop
+     * requesting repaints for a parked/occluded player. */
+    mu_drawn_lit  = mu_seg(mu_level);
+    mu_drawn_peak = mu_seg(mu_peak_hold);
+    mu_drawn_seek = mu_w_seek ? mu_w_seek->value : 0;
+    strncpy(mu_drawn_time, mu_time, sizeof mu_drawn_time - 1);
+    mu_drawn_time[sizeof mu_drawn_time - 1] = 0;
+    mu_shown++;
     fb_fill_rect(r.x, r.y, r.w, r.h, t->pal.field_bg);
     sw = (r.w - (nseg - 1) * gap) / nseg;
     if (sw < 1) sw = 1;
