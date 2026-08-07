@@ -81,7 +81,10 @@ class UrcUi(object):
         self.link.wait_hello(30.0)
         time.sleep(2.0)                    # let the desktop settle
         try:
-            self._w, self._h, _ = self.link.screen_info(timeout=15)
+            # screen_info returns a 2-TUPLE (w, h). This line used to unpack
+            # three values, so it ALWAYS raised and every UrcUi silently ran
+            # with the 640x400 fallback whatever the guest's real resolution.
+            self._w, self._h = self.link.screen_info(timeout=15)
         except Exception:
             self._w, self._h = 640, 400
         return self
