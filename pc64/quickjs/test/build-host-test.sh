@@ -14,7 +14,7 @@ CC="${CC:-x86_64-w64-mingw32-gcc}"
 # but __wasi__ also compiles out the C-stack overflow check, and quickjs
 # recurses the C stack on the kernel's guard-pageless UEFI stack.
 FLAGS="-O2 -w -ffreestanding -fno-stack-protector -fno-stack-check -nostdinc \
-       -Iquickjs/compat -Iinclude -Iquickjs \
+       -Iquickjs/compat -Iinclude -Iquickjs -I../unojs \
        -D__DJGPP -U_WIN32 -U_WIN64 -U__MINGW32__ -U__MINGW64__ \
        -Dalloca=__builtin_alloca -DJS_NAN_BOXING=0 -DUNO_PC64"
 mkdir -p build
