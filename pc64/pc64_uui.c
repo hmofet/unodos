@@ -6403,7 +6403,17 @@ int main(void)
      * off at its frame, then carry on booting.  Before the login gate, so a
      * machine with accounts still reports. */
     { int pc64_stress_cfg_flag(const char *key);          /* pc64_stress.c */
-      if (pc64_stress_cfg_flag("layout-audit") > 0) layout_audit_run(); }
+      if (pc64_stress_cfg_flag("layout-audit") > 0) layout_audit_run();
+      /* DEBUG.CFG `nohud`: turn the red perf HUD (and the stress status line
+       * drawn under it) OFF for this boot.  A debug build is the only one that
+       * dials out on its own and honours `ui-unlock`, so it is the only build
+       * you can drive remotely - but the HUD is burnt into every frame, which
+       * makes that build useless for filming.  `nohud` is the switch: the
+       * telemetry keeps being COLLECTED either way (uno_dbg_frame_* still run,
+       * CRASH\PF###.TXT still gets its perf line), only the on-screen readout
+       * goes.  g_hud_on defaults on and nothing else toggles it, so the one
+       * flip here is the whole mechanism. */
+      if (pc64_stress_cfg_flag("nohud") > 0) uno_dbg_hud_toggle(); }
 #endif
     /* Security: register the escalation consent sheet with unosecure, then run
      * the boot login gate.  The gate is a no-op on a fresh machine (no accounts
@@ -6726,23 +6736,30 @@ int main(void)
                    UBSan-traps (crash CR005/CR009 - a long status string on a
                    narrow desktop went to x=-42). Clamp here; the underlying
                    renderer weakness is catalogued as F7. */
+                /* uno_dbg_hud() returns 0 - leaving `hud` UNWRITTEN - when the
+                   HUD is off (DEBUG.CFG `nohud`), so both the width measure and
+                   the status line below it live inside the n > 0 arm: measuring
+                   an unwritten buffer read uninitialised stack, and a lone
+                   status line floating where the HUD used to be is still red
+                   text burnt into the footage. One flag, both overlays. */
                 { char hud[96];
                   int n = uno_dbg_hud(hud, sizeof hud);
-                  int hx = FB_W - fb_text_w(hud) - 4; if (hx < 0) hx = 0;
-                  if (n > 0) fb_text(hx, 3, hud,
-                                     FB_RGB(255, 70, 60), FB_RGB(28, 30, 48));
-                  /* run state under the HUD: the operator must be able to see
-                     at a glance whether a bounded run has FINISHED (safe to
-                     shut down) or is merely slow - guessing that is how a run
-                     gets powered off mid-pass. */
-                  { const char *st = pc64_stress_status();
-                    if (st) {
-                        int done = (st[7] == 'C' || st[7] == 'S');   /* COMPLETE/STOPPED */
-                        int sx = FB_W - fb_text_w(st) - 4; if (sx < 0) sx = 0;
-                        fb_text(sx, 3 + fb_text_h() + 2, st,
-                                done ? FB_RGB(120, 255, 140) : FB_RGB(160, 200, 255),
-                                FB_RGB(28, 30, 48));
-                    } } }
+                  if (n > 0) {
+                    int hx = FB_W - fb_text_w(hud) - 4; if (hx < 0) hx = 0;
+                    fb_text(hx, 3, hud,
+                            FB_RGB(255, 70, 60), FB_RGB(28, 30, 48));
+                    /* run state under the HUD: the operator must be able to see
+                       at a glance whether a bounded run has FINISHED (safe to
+                       shut down) or is merely slow - guessing that is how a run
+                       gets powered off mid-pass. */
+                    { const char *st = pc64_stress_status();
+                      if (st) {
+                          int done = (st[7] == 'C' || st[7] == 'S');   /* COMPLETE/STOPPED */
+                          int sx = FB_W - fb_text_w(st) - 4; if (sx < 0) sx = 0;
+                          fb_text(sx, 3 + fb_text_h() + 2, st,
+                                  done ? FB_RGB(120, 255, 140) : FB_RGB(160, 200, 255),
+                                  FB_RGB(28, 30, 48));
+                      } } } }
                 t1 = uno_native_rdtsc();
                 uno_pc64_present();
                 uno_dbg_frame_present_cyc(uno_native_rdtsc() - t1);
