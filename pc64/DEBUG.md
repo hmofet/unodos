@@ -136,6 +136,14 @@ finding F1, which armed `allow-force` on every "safe" stick):
   still run). This is the real OFF switch: without it the only "off" was
   `passes=0`, which the driver reads as ENDLESS, so a "disabled" stick fuzzed
   forever. The flasher's Stress Test suite writes this when you untick it.
+- `nohud` - hide the red perf HUD in the top-right corner **and** the stress
+  run-state line under it. For filming or screenshotting a debug build: the
+  debug build is the only one that dials out on its own (`remote=`) and honours
+  `ui-unlock`, so it is the only one you can drive without a human at the
+  console - but its HUD is drawn into every frame. Telemetry is still
+  *collected* (the perf line in `CRASH\PF###.TXT`, `perf` over URC); only the
+  on-screen readout goes. The boot log prints `hud_len=0 (HUD DISABLED)` when
+  it took effect. Debug builds only - production has no HUD to hide.
 - `fast` / `slow` - action cadence (default: one action every 4 frames)
 - `allow-force` - **opt in** to a forced `#PF` on pass 1 that proves the crash
   pipeline end to end. Off by default so an armed stick never self-crashes.
