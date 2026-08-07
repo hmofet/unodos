@@ -33,7 +33,7 @@ alongside the HTML.
 
 | Images | Produced by | How |
 |--------|-------------|-----|
-| Desktop, themes, apps, browser, networking (`desktop.png`, `theme_*.png`, `app`/browser/network shots) | [`pc64/docs_shots.py`](../pc64/docs_shots.py) | Boots the real ESP under **QEMU + OVMF** headless and drives the desktop over QMP (keyboard-only; the emulated pointer doesn't reach the shell), dumping each scene to PNG. Run scenes by name, e.g. `python3 docs_shots.py themes editor browser_docs`. |
+| Desktop, themes, apps, browser, networking (`desktop.png`, `theme_*.png`, `app`/browser/network shots) | [`pc64/docs_shots.py`](../pc64/docs_shots.py) | Boots the real ESP under **QEMU + OVMF** headless and drives the desktop over QMP (keyboard-only; the emulated pointer doesn't reach the shell), dumping each scene to PNG. Run scenes by name, e.g. `python3 docs_shots.py themes editor browser_docs`. Scenes name apps by **id**, from `pc64/build/apps_roster.txt` (see below), and the run stops before capturing anything if the live Start menu has a different number of rows. |
 | The **Windows** flasher UI (`flasher-windows.png`) | [`pc64/flash/capture/`](../pc64/flash/capture/) | A scheduled task (registered once with highest privileges) launches the released flasher and captures its window with Win32 `PrintWindow`. |
 | The **macOS** flasher UI (`flasher-macos.png`) | [`pc64/flash/capture/mac/`](../pc64/flash/capture/mac/) | A small app bundle (granted Screen Recording once) captures the flasher window in-process via ScreenCaptureKit and auto-trims it. |
 
@@ -58,11 +58,29 @@ names** (and be a normal, non-prerelease release so `latest` resolves).
 1. Edit the relevant page content in `build_site.py` and run it to regenerate the HTML.
 2. Regenerate any affected screenshots (`docs_shots.py` for the desktop; the
    `flash/capture` pipelines for the flasher UI) and copy the PNGs into `assets/img/`.
+   **If the app list changed**, measure the new Start-menu order first - the figures
+   come from a production build, where URC would want a token typed at the console,
+   so the order is measured on a debug build of the same tree:
+
+   ```
+   cd pc64
+   UNO_DEBUG=1 ./build.sh && python3 harness.py unoapps   # writes build/apps_roster.txt
+   rm -rf build/esp && ./build.sh                          # production, for the figures
+   python3 docs_shots.py
+   ```
+
+   Skipping the first two lines is safe: `docs_shots.py` falls back to the order
+   checked into it, and either way it counts the live menu's rows before it
+   captures and refuses to run if they disagree. The three live-network figures
+   (`browser_http`, `browser_https`, `cp_network`) need `UNO_NIC=1`, and
+   `UNO_DOCS_HOST=<a name this network resolves>` if yours does not answer for
+   `example.com`.
 3. Rebuild the flashers, cut a new **GitHub Release** (`flasher-vX.Y.Z`) with both
    binaries, and push `docs/` to `master`. Pages redeploys automatically.
 
 ## Pages in the site
 
-`index` · `getting-started` · `desktop` · `appearance` · `apps` · `browser` ·
-`networking` · `ports`, then the **Developer** section: `developer`
-(overview & architecture), `dev-apps`, `dev-api`, `dev-build`.
+`index` · `getting-started` · `desktop` · `windows` · `appearance` · `apps` ·
+`office` · `browser` · `ssh` · `networking` · `logging` · `appliances` · `ports`,
+then the **Developer** section: `developer` (overview & architecture), `studio`,
+`dev-apps`, `dev-python`, `dev-api`, `dev-build`, `dev-remote`.

@@ -74,7 +74,7 @@
     <span class="logo"><i></i><i></i><i></i><i></i></span>
     <span><b>UnoDOS <span style="color:var(--accent-2)">pc64</span></b><span class="sub">User manual</span></span>
   </a>
-  <ul class="nav"><li><a class="" href="index.html">Overview</a></li><li><a class="" href="getting-started.html">Getting started</a></li><li><a class="" href="desktop.html">The desktop</a></li><li><a class="" href="windows.html">Windows &amp; desktops</a></li><li><a class="" href="appearance.html">Themes &amp; appearance</a></li><li><a class="" href="apps.html">Applications</a></li><li><a class="" href="office.html">UnoOffice</a></li><li><a class="" href="browser.html">Web browser</a></li><li><a class="" href="ssh.html">SSH client</a></li><li><a class="" href="networking.html">Networking</a></li><li><a class="" href="logging.html">System log</a></li><li><a class="" href="ports.html">The UnoDOS family</a></li><li class="sec">Developer</li><li><a class="" href="developer.html">Overview &amp; architecture</a></li><li><a class="" href="studio.html">Studio: the built-in IDE</a></li><li><a class="" href="dev-apps.html">Writing apps</a></li><li><a class="" href="dev-python.html">Python apps</a></li><li><a class="" href="dev-api.html">API reference</a></li><li><a class="" href="dev-build.html">Building &amp; tooling</a></li><li><a class="active" href="dev-remote.html">Remote control &amp; automation</a></li></ul>
+  <ul class="nav"><li><a class="" href="index.html">Overview</a></li><li><a class="" href="getting-started.html">Getting started</a></li><li><a class="" href="desktop.html">The desktop</a></li><li><a class="" href="windows.html">Windows &amp; desktops</a></li><li><a class="" href="appearance.html">Themes &amp; appearance</a></li><li><a class="" href="apps.html">Applications</a></li><li><a class="" href="office.html">UnoOffice</a></li><li><a class="" href="browser.html">Web browser</a></li><li><a class="" href="ssh.html">SSH client</a></li><li><a class="" href="networking.html">Networking</a></li><li><a class="" href="logging.html">System log</a></li><li><a class="" href="appliances.html">Appliances</a></li><li><a class="" href="ports.html">The UnoDOS family</a></li><li class="sec">Developer</li><li><a class="" href="developer.html">Overview &amp; architecture</a></li><li><a class="" href="studio.html">Studio: the built-in IDE</a></li><li><a class="" href="dev-apps.html">Writing apps</a></li><li><a class="" href="dev-python.html">Python apps</a></li><li><a class="" href="dev-api.html">API reference</a></li><li><a class="" href="dev-build.html">Building &amp; tooling</a></li><li><a class="active" href="dev-remote.html">Remote control &amp; automation</a></li></ul>
   <div class="side-foot">
     <a href="https://github.com/hmofet/unodos" target="_blank" rel="noopener">GitHub&nbsp;&rsaquo; hmofet/unodos</a><br>
     <a href="#" onclick="__t();return false">Toggle light / dark</a>
@@ -141,7 +141,8 @@ device are short, human-typable lines - you can even reach them with <code>nc</c
 <tr><td><code>vols</code></td><td>List storage volumes: index, kind (RAM / native-FAT / firmware), whether it is writable, and its name.</td></tr>
 <tr><td><code>key</code> / <code>pointer</code></td><td>Inject a keypress or a pointer event, processed exactly like a human's on the next frame.</td></tr>
 <tr><td><code>screen</code></td><td>Grab the desktop as a compressed image - the video feed behind the <a href="#unoremote">UnoRemote</a> remote-desktop client.</td></tr>
-<tr><td><code>apps</code> / <code>launch &lt;n&gt;</code> / <code>close</code></td><td>Count launchable apps, open one, or close the top window.</td></tr>
+<tr><td><code>apps</code> / <code>apps list</code></td><td>How many apps there are, and what they are: one <code>id name</code> row each. The set depends on what is installed, so a script that wants to drive one has to be able to look it up.</td></tr>
+<tr><td><code>launch &lt;id&gt;</code> / <code>rescan</code> / <code>close</code></td><td>Open an app <strong>by its id</strong>, pick up apps that have appeared in <code>APPS\</code> since boot, or close the top window. <code>launch</code> still takes a slot number, but a number is this boot's ordering of whatever happens to be installed - install one app and the same number opens a different one, without failing. Use the id.</td></tr>
 <tr><td><code>py &lt;source&gt;</code></td><td>Run a line of Python <em>on the device</em> and get its output back.</td></tr>
 <tr><td><code>test &lt;suite&gt;</code></td><td>Run a built-in conformance suite and stream the report.</td></tr>
 <tr><td><code>uptime</code> / <code>poweroff</code> / <code>reboot</code></td><td>Read the uptime, or shut down / restart the machine.</td></tr>
@@ -171,7 +172,13 @@ probe
   2 3 1 12 shell
   1 1 1 0 Files
   ok
-launch 0
+apps list
+  control Control Panel
+  files Files
+  browser Browser
+  ...
+  ok
+launch browser
   launched
   ok
 py print(6*7)
@@ -187,7 +194,7 @@ link.listen()
 link.wait_connected()                                # pc64 dials in
 
 print(link.probe())              # [{&#x27;kind&#x27;:2,&#x27;name&#x27;:&#x27;heap&#x27;,...}, ...]
-link.launch(0)                   # open the first app
+link.launch(&quot;browser&quot;)           # open an app by its id, never by number
 print(link.eval(&quot;print(6*7)&quot;))   # run Python on the device -&gt; [&#x27;42&#x27;]
 
 # commands can go the other way too: the device can drive your PC

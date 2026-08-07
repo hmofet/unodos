@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Appliances · UnoDOS pc64 manual</title>
+<meta name="description" content="User manual for UnoDOS pc64, the x86-64/UEFI world of the UnoDOS operating-system family.">
+<link rel="stylesheet" href="assets/style.css">
+
+<script>
+(function(){
+  var r=document.documentElement, k='unodos-doc-theme';
+  try{var s=localStorage.getItem(k); if(s)r.setAttribute('data-theme',s);}catch(e){}
+  window.__t=function(){
+    var cur=r.getAttribute('data-theme');
+    if(!cur){cur=matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';}
+    var nx=cur==='dark'?'light':'dark';
+    r.setAttribute('data-theme',nx);
+    try{localStorage.setItem(k,nx);}catch(e){}
+  };
+})();
+</script>
+<script>
+/* Lightbox: click (or Enter/Space on) a screenshot to see it full size.
+   Manual shots are scaled into the text column, where fine UI detail - a
+   status line, an icon, a menu entry - is too small to read. Built once at
+   load and reused; Esc or a click anywhere closes it. */
+(function(){
+  var lb,img,cap;
+  function build(){
+    lb=document.createElement('div'); lb.id='lb'; lb.setAttribute('role','dialog');
+    lb.setAttribute('aria-modal','true');
+    img=document.createElement('img');
+    cap=document.createElement('figcaption');
+    var x=document.createElement('button');
+    x.className='x'; x.innerHTML='&times;'; x.setAttribute('aria-label','Close');
+    lb.appendChild(x); lb.appendChild(img); lb.appendChild(cap);
+    document.body.appendChild(lb);
+    lb.addEventListener('click', close);
+  }
+  function open(src, text){
+    if(!lb) build();
+    img.src=src; img.alt=text||''; cap.textContent=text||'';
+    lb.classList.add('on'); document.body.style.overflow='hidden';
+  }
+  function close(){
+    if(!lb) return;
+    lb.classList.remove('on'); img.src=''; document.body.style.overflow='';
+  }
+  document.addEventListener('click', function(e){
+    var b=e.target.closest && e.target.closest('button.zoom');
+    if(!b) return;
+    e.preventDefault();
+    var f=b.parentNode.querySelector('figcaption');
+    open(b.getAttribute('data-full'), f?f.textContent:'');
+  });
+  document.addEventListener('keydown', function(e){
+    if(e.key==='Escape') close();
+  });
+})();
+</script>
+
+</head>
+<body>
+<input type="checkbox" id="mnav">
+<div class="topbar">
+  <label class="menu-btn" for="mnav">☰ Menu</label>
+  <b>UnoDOS pc64</b>
+</div>
+<div class="layout">
+
+<aside class="sidebar">
+  <a class="brand" href="index.html" style="text-decoration:none;color:inherit">
+    <span class="logo"><i></i><i></i><i></i><i></i></span>
+    <span><b>UnoDOS <span style="color:var(--accent-2)">pc64</span></b><span class="sub">User manual</span></span>
+  </a>
+  <ul class="nav"><li><a class="" href="index.html">Overview</a></li><li><a class="" href="getting-started.html">Getting started</a></li><li><a class="" href="desktop.html">The desktop</a></li><li><a class="" href="windows.html">Windows &amp; desktops</a></li><li><a class="" href="appearance.html">Themes &amp; appearance</a></li><li><a class="" href="apps.html">Applications</a></li><li><a class="" href="office.html">UnoOffice</a></li><li><a class="" href="browser.html">Web browser</a></li><li><a class="" href="ssh.html">SSH client</a></li><li><a class="" href="networking.html">Networking</a></li><li><a class="" href="logging.html">System log</a></li><li><a class="active" href="appliances.html">Appliances</a></li><li><a class="" href="ports.html">The UnoDOS family</a></li><li class="sec">Developer</li><li><a class="" href="developer.html">Overview &amp; architecture</a></li><li><a class="" href="studio.html">Studio: the built-in IDE</a></li><li><a class="" href="dev-apps.html">Writing apps</a></li><li><a class="" href="dev-python.html">Python apps</a></li><li><a class="" href="dev-api.html">API reference</a></li><li><a class="" href="dev-build.html">Building &amp; tooling</a></li><li><a class="" href="dev-remote.html">Remote control &amp; automation</a></li></ul>
+  <div class="side-foot">
+    <a href="https://github.com/hmofet/unodos" target="_blank" rel="noopener">GitHub&nbsp;&rsaquo; hmofet/unodos</a><br>
+    <a href="#" onclick="__t();return false">Toggle light / dark</a>
+  </div>
+</aside>
+<main class="main"><div class="wrap">
+
+<h1>Appliances</h1>
+<p class="lede">UnoDOS can run another operating system inside a window on the desktop. An
+<strong>appliance</strong> is a Linux kernel that UnoDOS boots itself, on the same machine, at the same
+time, with a console you can type into.</p>
+
+<div class="note warn"><b>A preview, honestly labelled</b>This is the newest thing in UnoDOS and the least finished. It works, and what it does it does for real - but it asks you to supply the kernel, it runs one appliance at a time, and it has only been proven on Intel machines. Read <a href="#limits">What it cannot do yet</a> before you plan anything around it.</div>
+
+<h2 id="what">What it actually does</h2>
+<p>Open <strong>Appliances</strong> from the Start menu or its desktop icon. It has two views, and
+<kbd>Tab</kbd> switches between them: a <strong>list</strong> of the appliances this machine has, and
+the <strong>console</strong> of the one that is running.</p>
+<figure><button type="button" class="zoom" data-full="assets/img/appliances.png" aria-label="Enlarge: Appliances on a machine that has none yet: New makes one, and the line above the buttons is the status - here no appliance running, and on a machine that cannot host a guest at all, the reason why."><img src="assets/img/appliances.png" alt="Appliances on a machine that has none yet: New makes one, and the line above the buttons is the status - here no appliance running, and on a machine that cannot host a guest at all, the reason why." loading="lazy"></button><figcaption><b>Appliances</b> on a machine that has none yet: <b>New</b> makes one, and the line above the buttons is the status - here <i>no appliance running</i>, and on a machine that cannot host a guest at all, the reason why.</figcaption></figure>
+<p>The console is the part that matters. What you type goes into the guest's serial port at exactly
+the place a real keystroke would arrive, so the guest's own driver wakes up and its own shell reads the
+byte. Nothing is being simulated at the top: a Linux shell reads your command and answers it.</p>
+<p>On the way there UnoDOS also gives the guest a clock and an interrupt controller of its own, memory
+it cannot see out of, a disk (an ordinary file on a UnoDOS volume, which the guest mounts as a real
+filesystem) and a network interface it can bring up and ping over.</p>
+
+<h2 id="requires">What your machine needs</h2>
+<p>Hardware virtualisation, which most PCs made since about 2010 have but many ship with turned off. The
+status line above the buttons tells you which it is, in one sentence, when you try to start an
+appliance. If it is off, turn on <strong>Intel VT-x</strong> or <strong>AMD-V</strong> (sometimes
+<em>SVM Mode</em>) in the firmware setup and start again.</p>
+<p>Memory is the other requirement. UnoDOS sets aside a block of it for guests while it is starting up,
+and how much it can spare depends on the machine; a new appliance asks for 512&nbsp;MB and gets no more
+than that block. On a machine with too little to set aside there is no guest at all, and the status
+line says so.</p>
+
+<h2 id="making">Making an appliance</h2>
+<p><strong>New</strong> adds a row, and each row is four things you can edit:</p>
+<table>
+<tr><th>Field</th><th>What it is</th></tr>
+<tr><td>Name</td><td>What you want to call it</td></tr>
+<tr><td>Kernel</td><td>A Linux <code>bzImage</code> on a UnoDOS volume</td></tr>
+<tr><td>Initrd</td><td>An initial ramdisk, usually a small busybox image. May be empty.</td></tr>
+<tr><td>Disk</td><td>A disk image file, which the guest sees as a drive. May be empty.</td></tr>
+</table>
+<p>Copy the kernel and initrd onto the UnoDOS disk the same way you would copy anything else, then name
+them here. <strong>Start</strong> boots it, <strong>Console</strong> switches to its console and
+<strong>Stop</strong> shuts it down. A brand-new appliance with its paths left empty boots whatever is
+already staged in <code>EFI\UNODOS\VM</code>, so it starts rather than failing at you.</p>
+<p>Your appliances are kept in <code>EFI\UNODOS\VM\VMS.CFG</code>, one line each, as plain text. It
+is deliberately a file you can read and fix in the Editor rather than something only the app
+understands, and it holds up to eight appliances.</p>
+
+<h2 id="limits">What it cannot do yet</h2>
+<ul>
+<li><strong>One appliance at a time.</strong> Start refuses while another is running rather than
+quietly replacing it. This is a real limit of how the guest is set up, not an oversight.</li>
+<li><strong>Guest disks are read-only.</strong> The guest can mount a disk image and read it; it cannot
+write to it. Writing needs a change further down in the filesystem code.</li>
+<li><strong>The guest's network does not reach yours.</strong> It has a working network interface and
+can send and receive over it, but the other end is inside UnoDOS rather than on your wire. Bridging a
+guest onto the real network is the next piece of work, not a setting.</li>
+<li><strong>No kernel is included.</strong> UnoDOS does not ship a Linux to run, so a fresh appliance
+has nothing to boot until you put a kernel on the disk.</li>
+<li><strong>Proven on Intel.</strong> Everything above has been demonstrated on Intel VT-x. The AMD
+side is written and builds, but has not yet been seen to run a guest, so on an AMD machine treat this
+as untested rather than supported.</li>
+<li><strong>The guest gets a slice, not a core.</strong> It runs a short budget of time each frame
+alongside the desktop, so it is unhurried by design. It is for a shell and a service, not for
+work you are timing.</li>
+</ul>
+<div class="note"><b>Text, not pixels</b>No graphics: a guest has a serial console, not a screen. What you get is a terminal in a window, which is what a small Linux appliance usually wants anyway.</div>
+
+<nav class="pagenav"><a href="logging.html">&lsaquo; System log</a><a class="nxt" href="ports.html">The UnoDOS family &rsaquo;</a></nav>
+</div></main>
+</div>
+</body>
+</html>
