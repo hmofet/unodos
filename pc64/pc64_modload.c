@@ -23,7 +23,8 @@
 #include "uno_uuiapp.h"     /* the unoui-class module ABI (flags bit 0) */
 #include "pyhost.h"     /* Python-runtime + Python-app module tiers */
 #include "unoauto.h"    /* mod.load / mod.unload tap points (no-op in prod) */
-#include "unolog.h"     /* the system log: exported to apps + the uno module */
+#include "unolog.h"
+#include "unovirt_mgr.h"     /* appliances: the manager surface VMGR.UNO uses */
 #include "pc64_fs.h"
 #include "fat.h"
 #include "pc64_font.h"
@@ -268,6 +269,14 @@ static const struct { const char *name; void *addr; } kExports[] = {
     /* unolog (pc64/UNOLOG.md): the system log, for the uno.log* Python
      * bindings and for LOGVIEW.UNO. The read side is exported as well as the
      * write side - a viewer that could only append would be a strange thing. */
+    /* unovirt: what the appliance manager (APPS\VMGR.UNO) needs. The
+     * hypervisor itself is not exported and must not be - a module gets
+     * the manager's surface, not a vCPU. */
+    KX(uno_vm_count), KX(uno_vm_get), KX(uno_vm_add), KX(uno_vm_set),
+    KX(uno_vm_del), KX(uno_vm_save), KX(uno_vm_start), KX(uno_vm_stop),
+    KX(uno_vm_running), KX(uno_vm_status),
+    KX(uno_vm_con_lines), KX(uno_vm_con_line), KX(uno_vm_con_seq),
+    KX(uno_vm_con_key), KX(uno_vm_con_clear),
     KX(unolog), KX(unolog_flush), KX(unolog_format),
     KX(unolog_level), KX(unolog_set_level),
     KX(unolog_remote_level), KX(unolog_set_remote_level),

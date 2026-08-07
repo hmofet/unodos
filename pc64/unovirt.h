@@ -118,6 +118,12 @@ void *uno_vmm_gpa(unsigned long long gpa, unsigned long long len);
  * a timer that outruns its own handler is a livelock rather than a fast
  * clock.  (A device the guest merely READS - the PIT's calibration channel -
  * wants the wall instead, because the guest reads the real TSC beside it.) */
+/* Start or stop a guest on request (unovirt_mgr.c drives these for the
+ * manager application). `place` returns 1 when a kernel is loaded and armed;
+ * the frame loop runs it from there, exactly as the selftest's guest runs. */
+int  uno_vmm_place_guest(void);
+void uno_vmm_stop_guest(void);
+
 void uno_vmm_add_guest_cycles(unsigned long long delta);
 unsigned long long uno_vmm_guest_cycles(void);
 
