@@ -4,7 +4,7 @@ The appliance machinery: can this machine host a guest, and later, the guest
 itself. The programme and its phases are `docs/UNOVIRT-PLAN.md`; this file is
 the API surface, its changelog, and the things a consumer has to know.
 
-**Status: A0 through A5 [implemented on VMX]. A6 [in progress: **Linux completes its boot and panics for want of a root filesystem**]. A1 [unproved on SVM].** The
+**Status: A0 through A5 [implemented on VMX]. A6 [in progress: **Linux reaches userspace and runs /init**; the shell itself does not stay up yet]. A1 [unproved on SVM].** The
 capability gate runs on every boot. The foothold is real on Intel: on devbuntu
 (bare metal, nested KVM) UnoDOS enters VMX operation, runs a guest, takes it
 through a CPUID intercept, reads its marker back out of guest memory, and then
@@ -472,6 +472,42 @@ to there took four fixes and three of them are the same fix:
 The shared shape, across INVPCID, port I/O, XSETBV and the status registers:
 **the default is never "works as on real hardware"**. It is either "traps", or
 "reads as busy forever", and CPUID will happily tell the guest otherwise.
+
+### Userspace
+
+    Freeing unused kernel image (initmem) memory: 5292K
+    Run /init as init process
+    Kernel panic - not syncing: Attempted to kill init! exitcode=0x00000000
+
+**The kernel reaches userspace.** A 1.1 MB gzipped initramfs (static busybox)
+is read into the carve at guest-physical `0x20000000` and handed over through
+the two fields that are the whole interface, `ramdisk_image` and
+`ramdisk_size`. Linux unpacks it and execs `/init`.
+
+Two fixes were needed to get there, and the first is the more interesting:
+
+**The SYSCALL MSRs have to reach the real machine.** `LSTAR`, `STAR`, `SFMASK`
+and `KERNEL_GS_BASE` were being held in a C variable, which is fine right up
+until userspace executes its first `syscall` - because SYSCALL reads LSTAR out
+of the CPU, not out of us, and a value we kept to ourselves sent the guest
+into the host's syscall handler or to address zero. `SWAPGS` is the same
+argument for `KERNEL_GS_BASE`: it exchanges with the register, and an exchange
+with a value never written swaps in nothing. Writing through is safe here for
+a reason specific to this OS - UnoDOS is a ring-0 monolith that executes
+neither instruction, so it has no values of its own to lose. An OS that did
+would have to save and restore them around every entry.
+
+**An initramfs with an empty `/dev` has no console.** The kernel opens
+`/dev/console` for init; without the node, init gets no stdin, and a shell
+that reads EOF exits immediately - which the kernel reports as "Attempted to
+kill init".
+
+**Where it stands: `/init` still exits with code 0 and prints nothing**, so it
+is failing before its first `echo`. The likeliest cause is a redirection that
+fails (`exec 0</dev/console` after a `mknod` that did not take), which in a
+non-interactive shell is fatal and silent. The next step is to find out which,
+with an init script that cannot fail quietly - a `busybox echo` on line one,
+before any redirection.
 
 ### What is left before a shell
 

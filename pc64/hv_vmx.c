@@ -505,6 +505,7 @@ static int g_quiet;
  * for the host too and leave it that way. The guest's value is applied around
  * its entries and the host's put back afterwards. */
 static u64 g_host_xcr0, g_guest_xcr0;
+static long g_initrd_size;
 
 static int host_osxsave(void)
 { u64 c4; __asm__ volatile ("mov %%cr4, %0" : "=r"(c4)); return (int)((c4 >> 18) & 1); }
@@ -1323,6 +1324,7 @@ static int vmx_virtio(uno_vm_virtio *out)
 #define L_CMDLINE 0x800000ull
 #define L_ZEROPG  0x900000ull
 #define L_KERNEL  0x1000000ull           /* 16 MiB, clear of everything      */
+#define L_INITRD  0x20000000ull          /* 512 MiB: past the kernel's reach */
 #define EXIT_IO   30
 #define EXIT_CR   28
 #define EXIT_XSETBV 55
@@ -1417,8 +1419,12 @@ static int lin_zeropage(const u8 *setup, u64 carve)
     *(u32 *)(zp + 0x214) = (u32)L_KERNEL;
     *(u32 *)(zp + 0x224) = 0;             /* heap_end_ptr: none, and say so  */
     *(u32 *)(zp + 0x228) = (u32)L_CMDLINE;
-    *(u32 *)(zp + 0x218) = 0;             /* no initrd yet                   */
-    *(u32 *)(zp + 0x21C) = 0;
+    /* The initramfs, and its two fields are the whole interface: an address
+     * and a length. Linux unpacks it into a tmpfs and runs /init out of it,
+     * which is the difference between a kernel that boots and a machine
+     * somebody can use. */
+    *(u32 *)(zp + 0x218) = g_initrd_size ? (u32)L_INITRD : 0;
+    *(u32 *)(zp + 0x21C) = (u32)g_initrd_size;
 
     e820_add(zp, &n, 0x00000000, 0x0009FC00, 1);
     e820_add(zp, &n, 0x0009FC00, 0x00000400, 2);
@@ -1428,6 +1434,35 @@ static int lin_zeropage(const u8 *setup, u64 carve)
     e820_add(zp, &n, 0x01000000, carve - 0x01000000, 1);
     zp[0x1E8] = (u8)n;
     return 1;
+}
+
+/* The initramfs, read into the carve the same way the kernel is.  Absent is
+ * not an error: a kernel with no initrd still boots, it just has nowhere to
+ * go afterwards. */
+static long lin_initrd(void)
+{
+    const char *paths[2];
+    int vol, nvol = uno_fs_volumes(), i;
+    paths[0] = "EFI\\UNODOS\\VM\\INITRD";
+    paths[1] = "INITRD";
+    for (vol = 0; vol < nvol; vol++) {
+        for (i = 0; i < 2; i++) {
+            long size = uno_fs_size(vol, paths[i]), got = 0;
+            u8 *dst;
+            if (size <= 0) continue;
+            dst = (u8 *)uno_vmm_gpa(L_INITRD, (u64)size);
+            if (!dst) return 0;
+            while (got < size) {
+                long want = size - got, r;
+                if (want > 0x40000) want = 0x40000;
+                r = uno_fs_read_at(vol, paths[i], got, dst + got, want);
+                if (r <= 0) break;
+                got += r;
+            }
+            return got == size ? size : 0;
+        }
+    }
+    return 0;
 }
 
 /* Read the kernel out of the filesystem straight into the carve. */
@@ -1506,7 +1541,6 @@ static void lin_cpuid(void)
     g_ctx.rax = ra; g_ctx.rbx = rb; g_ctx.rcx = rc; g_ctx.rdx = rd;
 }
 
-static u64 g_kernel_gs;
 
 static void lin_msr(int write)
 {
@@ -1522,8 +1556,23 @@ static void lin_msr(int write)
     case 0xC0000101u:                        /* GS_BASE                      */
         if (write) vmwrite(GUEST_GS_BASE, v); else v = vmread(GUEST_GS_BASE);
         break;
+    case 0xC0000081u:                        /* STAR                         */
+    case 0xC0000082u:                        /* LSTAR                        */
+    case 0xC0000084u:                        /* SFMASK                       */
     case 0xC0000102u:                        /* KERNEL_GS_BASE               */
-        if (write) g_kernel_gs = v; else v = g_kernel_gs;
+        /* THESE GO TO THE REAL MSRs, and holding them in a variable is why
+         * userspace died on its first syscall. SYSCALL reads LSTAR out of the
+         * machine, not out of us: a value we kept to ourselves left the guest
+         * entering the HOST's syscall handler, or address zero. SWAPGS is the
+         * same argument for KERNEL_GS_BASE - it exchanges with the register,
+         * and an exchange with a value that was never written swaps in
+         * nothing.
+         *
+         * Writing through is safe here for a reason specific to this OS:
+         * UnoDOS is a ring-0 monolith that never executes `syscall` or
+         * `swapgs`, so it has no values of its own to lose. An OS that did
+         * would have to save and restore these around every entry. */
+        if (write) wrmsr(idx, v); else v = rdmsr(idx);
         break;
     default:
         /* Zero for everything else. A kernel reading an MSR that answers 0 is
@@ -1548,7 +1597,7 @@ static int vmx_linux(uno_vm_linux *out)
     out->last = ""; out->stop_reason = 0; out->stop_rip = 0;
     out->fault_vec = 0xFFFF; out->fault_err = 0; out->fault_addr = 0;
     out->pio = 0; out->pio_n = 0; g_lin_lastport = 0xFFFFFFFFu;
-    g_lin_lines = 0; g_lin_last[0] = 0; g_kernel_gs = 0;
+    g_lin_lines = 0; g_lin_last[0] = 0;
 
     if (!uno_vmm_probe()->slat || !carve) return 0;
     eptp = ept_build();
@@ -1557,6 +1606,7 @@ static int vmx_linux(uno_vm_linux *out)
     n = lin_load(&entry);
     if (n <= 0) { out->stop_reason = (unsigned)(-n); return 0; }
     out->loaded = n;
+    g_initrd_size = lin_initrd();
     setup = (const u8 *)uno_vmm_gpa(L_ZEROPG + 0x1000, 4096);
     if (!setup || !lin_paging() || !lin_zeropage(setup, carve)) return 0;
 
