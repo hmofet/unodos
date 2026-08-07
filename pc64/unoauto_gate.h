@@ -38,6 +38,7 @@
 #define UNOAUTO_GATE_H
 
 #include "unoscript.h"          /* usc_cap_t / usc_uid_t */
+#include "unosecure.h"          /* usec_session_t - the link's REMOTE session */
 
 /* Token: a 6-DIGIT PIN + NUL.  It used to be 16 hex characters, which is a
  * fine credential and a bad thing to ask a person to do: it is read off one
@@ -83,6 +84,13 @@ const char *unoauto_gate_token(void);   /* the token to type on the dev PC,
                                            "" when disarmed                    */
 usc_uid_t   unoauto_gate_owner(void);   /* uid the link runs as                */
 const char *unoauto_gate_owner_name(void); /* "" when disarmed                 */
+
+/* The link's own REMOTE-trust session (UNOSEC_TRUST_REMOTE), opened at arm time.
+ * The URC dispatcher enters it around remote-originated work - `py` in
+ * particular - so that work runs under REMOTE trust and the arming user's uid,
+ * not under whatever INTERACTIVE session the shell happens to have bound.  0
+ * when disarmed. */
+usec_session_t unoauto_gate_link_session(void);
 
 /* Called every shell frame from the same place unoauto_remote_tick is pumped:
  * revalidates the arming session and disarms if the owner logged out or their
