@@ -19,6 +19,7 @@
 #include "uno_devmgr.h"
 #include "uno_nic.h"
 #include <stdint.h>
+#include <string.h>
 
 typedef unsigned char  u8;
 typedef unsigned short u16;
@@ -71,7 +72,7 @@ typedef unsigned long long u64;      /* mingw is LLP64: `long` is 32-bit! */
 #define RXD_STA_DD   0x01
 #define RXD_STA_EOP  0x02
 
-#define NDESC 16                     /* 16*16 = 256B rings (mult of 128) */
+#define NDESC 64                     /* 64*16 = 1KB rings; deeper ring absorbs RX bursts */
 #define BUFSZ 2048
 
 struct rxdesc { u64 addr; u16 len; u16 csum; u8 status; u8 err; u16 special; }
@@ -170,14 +171,12 @@ static void tx_init(void)
 static int e1000_send(void *ctx, const void *pkt, int len)
 {
     volatile struct txdesc *d;
-    const u8 *p = (const u8 *)pkt;
-    int i;
     (void)ctx;
     if (len <= 0 || len > BUFSZ) return -1;
     d = &tx_ring[tx_cur];
     /* wait for the descriptor we're about to reuse to be done */
     { int spins = 1000000; while (!(d->status & TXD_STA_DD) && spins--) spin(10); }
-    for (i = 0; i < len; i++) tx_buf[tx_cur][i] = p[i];
+    memcpy(tx_buf[tx_cur], pkt, (size_t)len);
     d->addr = (u64)(uintptr_t)tx_buf[tx_cur];
     d->len = (u16)len;
     d->cso = 0;
@@ -191,13 +190,13 @@ static int e1000_send(void *ctx, const void *pkt, int len)
 static int e1000_recv(void *ctx, void *pkt, int cap)
 {
     volatile struct rxdesc *d = &rx_ring[rx_cur];
-    int len, i;
-    u8 *out = (u8 *)pkt;
+    int len;
     (void)ctx;
     if (!(d->status & RXD_STA_DD)) return 0;    /* nothing ready */
+    __asm__ volatile("" ::: "memory");          /* order the DD read before reading the buffer */
     len = d->len;
     if (len > cap) len = cap;
-    for (i = 0; i < len; i++) out[i] = rx_buf[rx_cur][i];
+    if (len > 0) memcpy(pkt, rx_buf[rx_cur], (size_t)len);
     d->status = 0;
     e_wr(REG_RDT, rx_cur);                       /* hand the buffer back */
     rx_cur = (rx_cur + 1) % NDESC;
