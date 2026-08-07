@@ -49,9 +49,11 @@ static uw_node *node_of(int h)
     return g_node[h - 1];
 }
 
+static void qsa_invalidate(void);
+
 /* Every mutation goes through here: a tree change that layout never hears
  * about is a change the user cannot see. */
-static void touched(void) { g_dirty = 1; }
+static void touched(void) { g_dirty = 1; qsa_invalidate(); }
 
 int webjs_take_dirty(void) { int d = g_dirty; g_dirty = 0; return d; }
 
@@ -84,11 +86,48 @@ static uw_node *sel_nth(const char *sel, int nth, int *total)
 static void n_query(webjs_args *a)
 { webjs_ret_int(a, handle_of(sel_nth(webjs_arg_str(a, 0), 0, NULL))); }
 
+/* querySelectorAll's backing store. It used to cost a FULL document traversal
+ * per index: n_query_count walked the whole tree to count, and then
+ * n_query_at walked it again, from the top, for every i - O(N*matches), which
+ * a page with a few hundred matched elements turned into a visible stall.
+ * Collected once here, bounded, and then indexed. Invalidated on any DOM
+ * mutation (touched) and at page teardown, so the snapshot a querySelectorAll
+ * loop reads is always of the current tree. */
+#define QSA_MAX 256
+static uw_node *g_qsa[QSA_MAX];
+static int      g_qsa_n;
+static char     g_qsa_sel[128];
+static int      g_qsa_valid;
+
+static void qsa_invalidate(void) { g_qsa_valid = 0; }
+
+static void qsa_build(const char *sel)
+{
+    uw_node *n;
+    int k = 0;
+    if (g_qsa_valid && !strcmp(g_qsa_sel, sel)) return;   /* reuse this call's snapshot */
+    g_qsa_n = 0;
+    for (n = uw_next_in_order(uw_document(g_doc), uw_document(g_doc)); n;
+         n = uw_next_in_order(n, uw_document(g_doc))) {
+        if (uw_type(n) != UW_NODE_ELEMENT) continue;
+        if (!uw_matches(g_doc, n, sel)) continue;
+        if (g_qsa_n >= QSA_MAX) break;    /* bounded: script cannot demand unbounded handles */
+        g_qsa[g_qsa_n++] = n;
+    }
+    while (sel[k] && k < (int)sizeof g_qsa_sel - 1) { g_qsa_sel[k] = sel[k]; k++; }
+    g_qsa_sel[k] = 0;
+    g_qsa_valid = 1;
+}
+
 static void n_query_count(webjs_args *a)
-{ int t = 0; sel_nth(webjs_arg_str(a, 0), -1, &t); webjs_ret_int(a, t); }
+{ qsa_build(webjs_arg_str(a, 0)); webjs_ret_int(a, g_qsa_n); }
 
 static void n_query_at(webjs_args *a)
-{ webjs_ret_int(a, handle_of(sel_nth(webjs_arg_str(a, 0), webjs_arg_int(a, 1), NULL))); }
+{
+    int i = webjs_arg_int(a, 1);
+    qsa_build(webjs_arg_str(a, 0));
+    webjs_ret_int(a, (i >= 0 && i < g_qsa_n) ? handle_of(g_qsa[i]) : 0);
+}
 
 static void n_tag(webjs_args *a)
 {
@@ -452,6 +491,7 @@ void webjs_page_end(void)
     g_nlisten = 0;
     memset(g_timer, 0, sizeof g_timer);
     g_dirty = 0;
+    g_qsa_valid = 0; g_qsa_n = 0;    /* the snapshot belonged to the old tree */
 }
 
 /* Why the last page_begin failed - "" when it did not. A binding layer that
@@ -535,7 +575,17 @@ static int fire_cb(int cb, const char *arg)
             while (v) { num[k++] = (char)('0' + v % 10); v /= 10; }
             while (k) call[n++] = num[--k]; }
         call[n++] = ','; call[n++] = '\'';
-        while (*arg && n < (int)sizeof call - 4) call[n++] = *arg++;
+        /* Escape into the single-quoted JS literal. The arg is 'timer' or an
+         * event type today, but a quote/backslash/newline spliced in raw would
+         * break out of the literal - so it is escaped rather than trusted, and
+         * the callback always sees exactly the string that was passed. */
+        while (*arg && n < (int)sizeof call - 6) {
+            char c = *arg++;
+            if (c == '\'' || c == '\\') { call[n++] = '\\'; call[n++] = c; }
+            else if (c == '\n')         { call[n++] = '\\'; call[n++] = 'n'; }
+            else if (c == '\r')         { call[n++] = '\\'; call[n++] = 'r'; }
+            else                          call[n++] = c;
+        }
         call[n++] = '\''; call[n++] = ')'; call[n] = 0;
     }
     err[0] = 0;
