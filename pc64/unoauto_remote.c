@@ -17,6 +17,7 @@
 #include "unostorage.h"     /* disk authoring (brings blkdev.h): the disk verbs */
 #include "unoauto_serial.h" /* 16550 UART backend: the NIC-independent transport */
 #include "unoauto_screen.h" /* framebuffer QOI grab: the `screen` verb (remote desktop) */
+#include "unolog.h"         /* the system log: what the listener is doing */
 
 
 /* ---- freestanding libc + debug kernel symbols (no public header) --------- */
@@ -1313,17 +1314,36 @@ static int  lst_open(void)
     if (g_sock >= 0) { net_sock_close(g_sock); g_sock = -1; }   /* drop any prior child */
     return 0;
 }
+/* Say what the listener is doing. Nothing announced accept or disconnect, so
+ * from the client end a wedged listener and a crashed box looked identical -
+ * the second half of the listen-mode request (2026-08-04). One line each way
+ * is enough to tell them apart in seconds. */
+static void lst_log(const char *what, int sock)
+{
+    unsigned char ip[4]; unsigned short port = 0;
+    if (sock >= 0 && net_sock_peer(sock, ip, &port) == 0)
+        ulog_notice(LF_KERNEL, "remote: %s %u.%u.%u.%u:%u (listening on %u)",
+                    what, ip[0], ip[1], ip[2], ip[3], port, (unsigned)g_port);
+    else
+        ulog_notice(LF_KERNEL, "remote: %s (listening on %u)", what, (unsigned)g_port);
+}
+
 static int  lst_state(void)
 {
     if (g_sock >= 0) {                              /* a client is connected */
         int st = net_sock_state(g_sock);
         if (st == TCP_ESTABLISHED) return LINK_UP;
+        lst_log("client gone, listening again", g_sock);
         net_sock_close(g_sock); g_sock = -1;        /* it left - report the drop and */
         return LINK_CONNECTING;                      /* accept the next one on a later tick */
     }
     if (g_listen_sock >= 0) {                       /* try to accept a dial-in */
         int c = net_accept(g_listen_sock);
-        if (c >= 0) { g_sock = c; return LINK_UP; } /* freshly-established child */
+        if (c >= 0) {                               /* freshly-established child */
+            g_sock = c;
+            lst_log("client accepted", c);
+            return LINK_UP;
+        }
     }
     return LINK_CONNECTING;                          /* still waiting for a client */
 }
