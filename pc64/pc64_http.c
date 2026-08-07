@@ -335,32 +335,46 @@ static int hdr_split(const char *raw, int rn)
 }
 
 /* De-chunk in place. Returns the decoded length, or -1 if the terminating
- * zero-size chunk has not arrived yet (so the caller keeps reading). */
+ * zero-size chunk has not arrived yet (so the caller keeps reading), or if the
+ * framing is malformed.
+ *
+ * All arithmetic is unsigned/size_t and the hex size is digit-capped. A hex
+ * chunk size with the top bit set used to accumulate into a `long` and go
+ * NEGATIVE, which made the `in+sz > len` framing check pass (a negative sz is
+ * "small") and then ran memmove with (size_t)sz == ~SIZE_MAX over
+ * attacker-controlled response bytes - a remote heap overflow reachable from
+ * any navigation. Capping the digit count keeps sz far below any wrap, and the
+ * checks below are done in size_t so the framing test itself cannot wrap. */
 static int dechunk(char *body, int len)
 {
-    int in = 0, out = 0;
+    size_t in = 0, out = 0, L = (len > 0) ? (size_t)len : 0;
     for (;;) {
-        long sz = 0;
+        unsigned long sz = 0;
         int digits = 0;
-        while (in < len && (body[in]=='\r' || body[in]=='\n')) in++;   /* CRLF between chunks */
-        while (in < len) {                                            /* hex size */
+        while (in < L && (body[in]=='\r' || body[in]=='\n')) in++;    /* CRLF between chunks */
+        while (in < L) {                                             /* hex size */
             char c = body[in];
             int v = (c>='0'&&c<='9') ? c-'0' :
                     (c>='a'&&c<='f') ? c-'a'+10 :
                     (c>='A'&&c<='F') ? c-'A'+10 : -1;
             if (v < 0) break;
-            sz = sz * 16 + v;
+            if (digits >= 8) return -1;               /* >8 hex digits: absurd, refuse */
+            sz = sz * 16u + (unsigned long)v;
             in++; digits++;
         }
         if (!digits) return -1;                       /* size line incomplete */
-        while (in < len && body[in] != '\n') in++;    /* skip any chunk-ext   */
-        if (in >= len) return -1;
+        while (in < L && body[in] != '\n') in++;      /* skip any chunk-ext   */
+        if (in >= L) return -1;
         in++;                                         /* past the LF          */
-        if (sz == 0) { body[out] = 0; return out; }   /* the terminator       */
-        if (in + sz > len) return -1;                 /* chunk not all here   */
+        if (sz == 0) { body[out] = 0; return (int)out; } /* the terminator    */
+        /* Both halves matter: `sz > L` rejects a size larger than everything we
+         * hold (which also stops the second test from wrapping on a 32-bit
+         * size_t), and `in + sz > L` rejects a chunk whose body is not all in
+         * yet. Either way we never memmove past the buffer. */
+        if (sz > L || in + (size_t)sz > L) return -1; /* not all here / bogus  */
         memmove(body + out, body + in, (size_t)sz);
-        out += (int)sz;
-        in += (int)sz;
+        out += (size_t)sz;
+        in += (size_t)sz;
     }
 }
 
@@ -572,6 +586,12 @@ struct http_req {
     char  req[2048]; int reqn, reqoff;
     char *raw; int rn, rcap, capped;
     int   split, chunked, done, next_report;
+    /* chunked-transfer framing state (see chunk_frame): a persistent cursor
+     * plus a two-state machine, so the terminator is found by real framing and
+     * not by a substring scan that ordinary body bytes can imitate. */
+    int   ch_state;                 /* 0 = expecting a size line, 1 = in chunk data */
+    int   ch_cur;                   /* how far into raw[] framing has consumed      */
+    long  ch_rem;                   /* bytes left in the current chunk's data       */
     long  clen;
     unsigned t0;
     int   body_off, body_len;
@@ -641,6 +661,7 @@ static int hop_start(http_req *r, int no_reuse)
     r->secure = 0; r->port = 80; r->reused = 0;
     r->reqn = r->reqoff = 0;
     r->rn = 0; r->split = -1; r->chunked = 0; r->done = 0; r->next_report = 0;
+    r->ch_state = 0; r->ch_cur = 0; r->ch_rem = 0;  /* per hop: fresh chunk framing */
     r->capped = 0;                  /* per hop: a redirect starts clean */
     r->clen = -1;
 
@@ -823,6 +844,53 @@ static void step_send(http_req *r)
     else if (http_ms() - r->t0 > SEND_MS) req_fail(r, -7, "Request send timed out");
 }
 
+/* Incremental chunk FRAMING (not decoding): given the bytes in raw[] so far,
+ * advance a small state machine to decide whether the terminating zero-size
+ * chunk has actually arrived, and set r->done only then.
+ *
+ * This replaces a substring scan for "\n0\r"/"\n0\n", which matched ordinary
+ * body bytes: a mid-stream connection carrying that sequence in its data was
+ * marked done and returned to the keep-alive pool, so the NEXT request on it
+ * read the first response's leftover bytes as its own. Real framing cannot be
+ * fooled by payload because it only ever looks at a size line where a size line
+ * is due. The cursor (ch_cur) persists across recvs, so this is O(total bytes)
+ * rather than the O(n^2) of rescanning the whole body every arrival. */
+static void chunk_frame(http_req *r)
+{
+    if (r->ch_cur < r->split) r->ch_cur = r->split;   /* framing starts at the body */
+    for (;;) {
+        if (r->ch_state == 0) {                       /* expecting a chunk-size line */
+            int i = r->ch_cur, j;
+            unsigned long sz = 0;
+            int digits = 0;
+            while (i < r->rn && (r->raw[i]=='\r' || r->raw[i]=='\n')) i++;
+            for (j = i; j < r->rn; j++) {
+                char c = r->raw[j];
+                int v = (c>='0'&&c<='9') ? c-'0' :
+                        (c>='a'&&c<='f') ? c-'a'+10 :
+                        (c>='A'&&c<='F') ? c-'A'+10 : -1;
+                if (v < 0) break;
+                if (digits < 8) { sz = sz*16u + (unsigned long)v; digits++; }
+            }
+            if (j == i) return;                       /* no size digits yet / malformed - wait */
+            while (j < r->rn && r->raw[j] != '\n') j++;/* skip chunk extensions */
+            if (j >= r->rn) return;                   /* size line not complete yet */
+            r->ch_cur = j + 1;                        /* past the LF */
+            if (sz == 0) { r->done = 1; return; }     /* the real terminator */
+            r->ch_rem = (long)sz;
+            r->ch_state = 1;
+        } else {                                      /* ch_state 1: consuming data */
+            long avail = (long)(r->rn - r->ch_cur);
+            long take = (avail < r->ch_rem) ? avail : r->ch_rem;
+            if (take < 0) take = 0;
+            r->ch_cur += (int)take;
+            r->ch_rem -= take;
+            if (r->ch_rem > 0) return;                /* need more of this chunk */
+            r->ch_state = 0;                          /* trailing CRLF eaten by the size-line skip */
+        }
+    }
+}
+
 /* Update the framing state from whatever is in raw[] now. Split out because
  * both the arrival path and the finish path need it to agree. */
 static void frame_update(http_req *r)
@@ -834,7 +902,15 @@ static void frame_update(http_req *r)
             r->raw[r->rn] = 0;
             if (http_header(r->raw, r->split, "content-length", v, sizeof v)) {
                 long q = 0; const char *p2 = v;
-                while (*p2 >= '0' && *p2 <= '9') q = q * 10 + (*p2++ - '0');
+                /* Cap at RAW_MAX so a header with enough digits cannot overflow
+                 * `q` negative - a negative clen reads as "already complete"
+                 * (rn-split >= clen) and mis-frames the response. The transport
+                 * never holds more than RAW_MAX anyway; a larger resource is
+                 * caught by the capped path. */
+                while (*p2 >= '0' && *p2 <= '9') {
+                    q = q * 10 + (*p2++ - '0');
+                    if (q > (long)RAW_MAX) { q = (long)RAW_MAX; break; }
+                }
                 r->clen = q;
             }
             if (http_header(r->raw, r->split, "transfer-encoding", v, sizeof v)) {
@@ -844,14 +920,8 @@ static void frame_update(http_req *r)
         }
     }
     if (r->split >= 0 && !r->done) {
-        if (r->chunked) {
-            /* peek: dechunk on a COPY would cost a second buffer, so probe for
-             * the terminator instead and decode once, at the finish */
-            int i;
-            for (i = r->split; i + 4 < r->rn; i++)
-                if (r->raw[i]=='\n' && r->raw[i+1]=='0' &&
-                    (r->raw[i+2]=='\r' || r->raw[i+2]=='\n')) { r->done = 1; break; }
-        } else if (r->clen >= 0 && (long)(r->rn - r->split) >= r->clen) r->done = 1;
+        if (r->chunked) chunk_frame(r);
+        else if (r->clen >= 0 && (long)(r->rn - r->split) >= r->clen) r->done = 1;
     }
 }
 
@@ -860,12 +930,15 @@ static void step_recv(http_req *r)
     int eof = 0;
 
     for (;;) {
-        char tmp[1460];
+        /* Read straight into raw[] at the write cursor. raw_room() already
+         * leaves one byte spare (everything downstream NUL-terminates at rn)
+         * and grows the buffer on demand, so there is no reason to stage the
+         * bytes through a 1460-byte stack buffer and memcpy them across - that
+         * was a full copy of every byte the page is made of. */
         int n, room = raw_room(r);
         if (room <= 0) break;
-        if (room > (int)sizeof tmp) room = (int)sizeof tmp;
-        n = r->secure ? tls_recv(r->c.tls, tmp, room)
-                      : net_recv(r->c.sock, tmp, room);
+        n = r->secure ? tls_recv(r->c.tls, r->raw + r->rn, room)
+                      : net_recv(r->c.sock, r->raw + r->rn, room);
         if (n < 0) { eof = 1; break; }              /* TLS closed or failed */
         if (n == 0) {
             if (!r->secure) {
@@ -874,7 +947,6 @@ static void step_recv(http_req *r)
             }
             break;
         }
-        memcpy(r->raw + r->rn, tmp, (size_t)n);
         r->rn += n;
         r->t0 = http_ms();
     }
@@ -912,8 +984,9 @@ static void step_recv(http_req *r)
 }
 
 /* Resolve a Location into an absolute URL, into r->cur. Handles absolute
- * Locations, root-relative ("/path"), and http<->https upgrades (google.com ->
- * www.google.com, apex -> www, http -> https all land here). */
+ * Locations, root-relative ("/path"), path-relative ("page", "sub/page") and
+ * http<->https upgrades (google.com -> www.google.com, apex -> www, http ->
+ * https all land here). */
 static void redirect_to(http_req *r, const char *loc)
 {
     char next[512];
@@ -927,8 +1000,19 @@ static void redirect_to(http_req *r, const char *loc)
         RPUT(r->host);
         if (v != defport) { RPUT(":"); if(!v)pnum[k++]='0'; while(v){pnum[k++]=(char)('0'+v%10);v/=10;}
                             while (k && o<redirmax-1) next[o++]=pnum[--k]; }
-        if (loc[0] != '/') RPUT("/");
-        RPUT(loc);
+        if (loc[0] == '/') {
+            RPUT(loc);                              /* root-relative: replaces the path */
+        } else {
+            /* Path-relative: resolve against the DIRECTORY of the current path,
+             * not the root. A bare "next" from /docs/a used to become /next,
+             * dropping /docs/ - so a relative redirect walked out of its own
+             * directory. Copy r->path up to and including its last '/', then
+             * append the relative target. */
+            int cut = 0, i;
+            for (i = 0; r->path[i]; i++) if (r->path[i] == '/') cut = i + 1;
+            { int j; for (j = 0; j < cut && o < redirmax-1; j++) next[o++] = r->path[j]; }
+            RPUT(loc);
+        }
     }
     #undef RPUT
     next[o] = 0;
