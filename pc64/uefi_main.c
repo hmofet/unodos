@@ -2539,6 +2539,38 @@ int uno_efifs_snapshot(int vol, char (*names)[32], int maxn)
     root->Close(root);
     return cnt;
 }
+
+/* Same, for a SUBDIRECTORY.  The app registry needs to enumerate APPS\, and
+ * before this the only listing the firmware backend offered was of a volume's
+ * root - which is why uno_fs_list_begin has no path parameter.  Iterating a
+ * subdirectory is the same loop with one Open in front of it.
+ *
+ * Returns the TOTAL entry count, which may exceed maxn: a caller that silently
+ * truncated would present a missing app as "it did not install". */
+int uno_efifs_snapshot_dir(int vol, const char *dir, char (*names)[32], int maxn)
+{
+    EFI_FILE_PROTOCOL *root = fs_root(vol), *d = 0;
+    static unsigned char info[1024];
+    CHAR16 wd[96];
+    int cnt = 0;
+    if (!root) return 0;
+    if (!dir || !*dir) { root->Close(root); return 0; }
+    a_to16(wd, dir, 96);
+    if (root->Open(root, &d, wd, 1, 0) != EFI_SUCCESS || !d)
+        { root->Close(root); return 0; }
+    for (;;) {
+        UINTN sz = sizeof info;
+        if (d->Read(d, &sz, info) != EFI_SUCCESS || sz == 0) break;
+        { EFI_FILE_INFO *fi = (EFI_FILE_INFO *)info;
+          if (!(fi->Attribute & 0x10) && fi->FileName[0] != '.') {
+              if (cnt < maxn) a_from16(names[cnt], fi->FileName, 32);
+              cnt++;
+          } }
+    }
+    d->Close(d);
+    root->Close(root);
+    return cnt;
+}
 /* Read `max` bytes from byte `off`.  The media decoders stream through this
  * so a song never has to be resident; SetPosition does the seek. */
 long uno_efifs_read_at(int vol, const char *name, long off,

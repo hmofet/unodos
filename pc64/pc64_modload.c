@@ -771,6 +771,56 @@ int uno_mod_desc_read(int vol, const char *path, UnoAppDesc *out)
     return 0;
 }
 
+/* ---- the scan: every .UNO on the system, described, none of them loaded -----
+ * Walks APPS\ on every volume and then EFI\UNODOS\APPS\ on volumes 1.., the
+ * same two layouts uno_mod_find already searches, and de-duplicates by FILENAME
+ * so an installed copy and a stick copy count once (the first found wins, which
+ * matches which one uno_mod_find/mod_read would go on to load).
+ *
+ * `*over` (nullable) is set when a directory held more entries than fitted:
+ * the caller reports that rather than quietly showing a short list, because a
+ * truncated app list looks exactly like an app that failed to install.
+ *
+ * Costs two sector reads per module. Nothing here allocates and nothing here
+ * runs module code - see uno_appdesc.h for why that is the whole point. */
+int uno_mod_scan(UnoAppDesc *out, char (*file)[16], signed char *vol,
+                 int maxn, int *over)
+{
+    int nv = uno_fs_volumes(), v, pass, n = 0, i, j;
+    char names[48][16];
+    if (over) *over = 0;
+    if (!out || !file || !vol || maxn <= 0) return 0;
+    for (pass = 0; pass < 2; pass++) {
+        const char *dir = pass ? "EFI\\UNODOS\\APPS" : "APPS";
+        for (v = pass; v < nv; v++) {
+            int total = uno_fs_list_dir(v, dir, names, 48);
+            if (total > 48) { if (over) *over = 1; total = 48; }
+            for (i = 0; i < total; i++) {
+                char path[64];
+                UnoAppDesc d;
+                int k = 0; const char *p;
+                /* .UNO only - APPS\ also holds .MFT manifests and .PY sources */
+                for (j = 0; names[i][j]; j++) { }
+                if (j < 5 || names[i][j-4] != '.' || names[i][j-3] != 'U' ||
+                    names[i][j-2] != 'N' || names[i][j-1] != 'O') continue;
+                for (j = 0; j < n; j++) if (!strcmp(file[j], names[i])) break;
+                if (j < n) continue;                    /* already seen this file */
+                if (n >= maxn) { if (over) *over = 1; return n; }
+                for (p = dir; *p && k < 63; ) path[k++] = *p++;
+                if (k < 63) path[k++] = '\\';
+                for (p = names[i]; *p && k < 63; ) path[k++] = *p++;
+                path[k] = 0;
+                if (uno_mod_desc_read(v, path, &d) < 0) continue;  /* not a module */
+                out[n] = d;
+                strcpy(file[n], names[i]);
+                vol[n] = (signed char)v;
+                n++;
+            }
+        }
+    }
+    return n;
+}
+
 UnoUuiEntry uno_mod_load_uui(const char *file)
 {
     unsigned short flags = 0;

@@ -407,6 +407,9 @@ static void app_reg_module(int a, const char *file, const char *fb_id,
     if (d.icon[0]) { int e = pc64_icon_by_name(d.icon); if (e >= 0) s->icon = (unsigned char)e; }
 }
 
+static void app_discover(void);
+static int  app_by_id(const char *id);
+
 static void app_registry_init(void)
 {
     int i;
@@ -443,7 +446,75 @@ static void app_registry_init(void)
     app_reg_module(EX_UOSHOW,  "UOSHOW.UNO",  "uoshow",  "UnoShow",    "UnoShow", PCI_UOSHOW, UAC_TOOLS, 40);
     app_reg_module(EX_LOGVIEW, "LOGVIEW.UNO", "logview", "System Log", "Log",    PCI_SYS,    UAC_SYSTEM, 70);
     g_napps = NBUILTIN;
+    app_discover();
 }
+
+/* ---- discovery: a .UNO in APPS\ that nobody compiled a slot for -------------
+ * The point of the whole exercise.  Everything above is a slot this build knows
+ * about by name; everything here is a module that simply turned up on the disk,
+ * and it gets a desktop icon, a Start-menu row, a taskbar entry and a window on
+ * the strength of its own descriptor.
+ *
+ * A module whose id matches a built-in row is NOT registered twice - that is how
+ * STUDIO.UNO and the rest, which the scan also finds, stay in the slots they
+ * have always had.  Rows are appended after the built-ins in (cat, rank, name)
+ * order so the ordering is a property of the apps rather than of the FAT
+ * directory, and so it is the same on every boot of the same install. */
+static int g_apps_over;                 /* the scan had to leave something out */
+/* what the last rescan found, shown beside the Control Panel button.  A static
+ * string, never a formatted buffer: unoui_add_label keeps the POINTER. */
+static const char *g_appscan_msg = "";
+
+static int disc_before(const UnoAppDesc *a, const UnoAppDesc *b)
+{
+    if (a->cat != b->cat) return a->cat < b->cat;
+    if (a->rank != b->rank) return a->rank < b->rank;
+    return strcmp(a->name, b->name) < 0;
+}
+
+static void app_discover(void)
+{
+    static UnoAppDesc d[APPS_MAX];
+    static char file[APPS_MAX][16];
+    static signed char vol[APPS_MAX];
+    int n, i, j, ord[APPS_MAX], nord = 0;
+
+    n = uno_mod_scan(d, file, vol, APPS_MAX, &g_apps_over);
+    for (i = 0; i < n; i++) {
+        /* only unoui-class modules get a slot.  A classic .UNO is hosted by the
+         * bridge rows, PYRT is the Python runtime, a PYAPP is a document that
+         * PYRT opens, and a driver belongs to devmgr - none of them is a
+         * desktop citizen, and giving one an icon would be an icon that cannot
+         * open anything. */
+        if (!(d[i].tier & UNO_MODF_UUI)) continue;
+        if (app_by_id(d[i].id) >= 0) continue;          /* a built-in row owns it */
+        for (j = 0; j < nord; j++) if (!strcmp(d[ord[j]].id, d[i].id)) break;
+        if (j < nord) continue;                          /* two files, one id     */
+        /* insertion sort into the display order */
+        for (j = nord; j > 0 && disc_before(&d[i], &d[ord[j - 1]]); j--)
+            ord[j] = ord[j - 1];
+        ord[j] = i; nord++;
+    }
+    for (j = 0; j < nord && g_napps < APPS_MAX; j++) {
+        int a = g_napps, k = ord[j];
+        app_slot *s = &g_app[a];
+        app_reg(a, d[k].id, d[k].name, d[k].shortnm, AK_UUIMOD, PCI_GENERIC,
+                d[k].cat, d[k].rank, -1);
+        slot_str(s->file, sizeof s->file, file[k]);
+        s->vol = vol[k];
+        s->flags = d[k].flags;
+        s->pref_w = d[k].pref_w; s->pref_h = d[k].pref_h;
+        if (d[k].icon[0]) { int e = pc64_icon_by_name(d[k].icon);
+                            if (e >= 0) s->icon = (unsigned char)e; }
+        /* the path the loader will use: uno_mod_load_uui searches by filename
+         * exactly as uno_mod_find did, so the slot only has to remember which
+         * file it is */
+        uno_mod_find(file[k], 0, s->path, (int)sizeof s->path);
+        g_napps++;
+    }
+    if (nord && g_napps >= APPS_MAX) g_apps_over = 1;
+}
+
 
 /* the slot with this id, or -1.  The ONLY way anything durable should name an
  * app: indices are this boot's ordering and nothing more. */
@@ -496,7 +567,7 @@ enum { ID_THEME = 1, ID_RES, ID_DARK, ID_WRAP, ID_VOL, ID_SCALE, ID_ABOUT,
        ID_ILIST, ID_IDEF, ID_IRESCAN, ID_IGO, ID_ICONF, ID_LIDSLP,
        ID_DFLOW, ID_DSORT, ID_PSPEED, ID_DSNAP, ID_DLOCK, ID_DARRANGE,
        ID_LIC, ID_ACCT, ID_REMOTE, ID_WALL, ID_CLOCKFMT, ID_BATTMODE,
-       ID_CPTAB, ID_NETREFRESH, ID_NETRENEW, ID_SESSION,
+       ID_CPTAB, ID_NETREFRESH, ID_NETRENEW, ID_SESSION, ID_APPSCAN,
        ID_RESAPPLY, ID_RESKEEP, ID_RESREVERT,
        ID_WIFISCAN, ID_WIFILIST, ID_WIFIPSK, ID_WIFIJOIN, ID_WIFIFORGET,
        ID_START = 90, ID_SHUTDOWN = 91, ID_RESTART = 92,
@@ -1253,6 +1324,18 @@ static void build_ctrl(unoui_window *w)
          * the ONLY way to turn remote control on (unoauto_gate.h). */
         x = unoui_add_button(w, 8, y, fb_text_w("Remote control...") + 26,
                              "Remote control...", 0); x->id = ID_REMOTE;
+        y += bh + 8;
+        /* Apps are discovered from APPS\ at boot; this picks up one that has
+         * landed since - a URC `push`, an install, a stick plugged in - so
+         * installing an app does not need a reboot.  The label reports the one
+         * failure mode that would otherwise be invisible: a scan that had to
+         * leave something out looks exactly like an app that never installed. */
+        { int bw2 = fb_text_w("Rescan apps") + 26;
+          x = unoui_add_button(w, 8, y, bw2, "Rescan apps", 0);
+          x->id = ID_APPSCAN;
+          unoui_add_label(w, 8 + bw2 + 10, y + lofs,
+                          g_apps_over ? "some apps were left out (table full)"
+                                      : g_appscan_msg); }
         y += bh + 8;
         break;
     }
@@ -5034,6 +5117,31 @@ void pc64_music_closed(void);
 int pc64_write_key(int uni, int ctrl);
 void pc64_write_frame(void);
 
+/* Re-read APPS\ and pick up anything that has appeared since boot - after a URC
+ * `push`, after an install, or from the Control Panel's button.  Installing an
+ * app stops needing a reboot.
+ *
+ * Discovered rows that are currently OPEN are kept exactly as they are: their
+ * slot holds a live UnoUuiApp and a window in the scene, and rebuilding one out
+ * from under itself would leave the shell dispatching into a stale module.  So
+ * the truncation point is the last open discovered row, not NBUILTIN. */
+void pc64_shell_apps_rescan(void)
+{
+    int a, keep = NBUILTIN, was = NAPPS;
+    for (a = NBUILTIN; a < NAPPS; a++) if (g_open[a]) keep = a + 1;
+    g_napps = keep;
+    app_discover();
+    g_appscan_msg = NAPPS > was ? "found a new app"
+                  : NAPPS < was ? "an app is no longer installed"
+                                : "no change";
+    build_desktop();
+    menu_refresh();
+    build_launcher();
+    { UnoAutoModEv ev; ev.file = "APPS"; ev.ok = 1;
+      unoauto_hook_fire("apps.changed", &ev); }
+    g_dirty = 1;
+}
+
 /* Rebuild everything laid out in font-space (native app windows, taskbar,
  * desktop icon grid, Start menu) after a font or UI-scale change. Open native
  * windows are torn down and reopened at the new metrics; module/bridge apps
@@ -5206,6 +5314,8 @@ static void on_action(const unoui_action *a)
                    open_app(EX_BROWSER); break;
     case ID_ACCT:  pc64_accounts_open(); g_dirty = 1; break;   /* Accounts manager */
     case ID_REMOTE: pc64_remote_open(); g_dirty = 1; break;    /* arm/disarm URC   */
+    case ID_APPSCAN: pc64_shell_apps_rescan();                 /* pick up new .UNOs */
+                     rebuild_ctrl_window(); break;             /* show the outcome  */
     case ID_SETDT: {                    /* time spinners; the date stays as-is */
         int yy = 2026, mo = 1, dd = 1;
         uno_pc64_time(&yy, &mo, &dd, 0, 0, 0);
