@@ -1338,7 +1338,7 @@ static int vmx_virtio(uno_vm_virtio *out)
 #define VM_EXIT_INTR_ERROR 0x4406
 #define L_CMDLINE_TEXT \
     "earlyprintk=serial,ttyS0,115200 console=ttyS0 nolapic no_timer_check " \
-    "panic=-1 nokaslr lpj=4000000"
+    "panic=-1 nokaslr lpj=4000000 rdinit=/bin/sh"
 
 static int g_lin_lines;
 static unsigned g_lin_lastport;
