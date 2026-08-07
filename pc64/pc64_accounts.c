@@ -159,6 +159,14 @@ static int modal_frame(unoui_action *out)
      *     driving it. */
     uno_dbg_heartbeat();
     unoauto_remote_tick();
+    /* Pump the gate too (item 1b).  The gate's lockout - three bad auths stands
+     * the channel down - is otherwise only serviced from the shell's frame loop,
+     * which does not run while this modal is up.  Without this, an attacker could
+     * hammer the PIN for as long as the arming panel stayed open and never trip
+     * the disarm.  unoauto_gate_auth now also disarms inline, but pumping the
+     * tick here closes the case where the strikes stop short of the inline path
+     * (e.g. exactly three guesses, then silence). */
+    unoauto_gate_tick();
 
     /* SLEEP ONLY WHEN THE FRAME HAD NOTHING TO SHOW.
      *
@@ -344,10 +352,15 @@ static usec_session_t g_shell_session;      /* the session the shell runs under 
 static int try_login_bind(usc_trust_t trust)
 {
     usec_session_t s = unosec_login(s_name, g_pw, trust);
-    if (!s) return 0;
-    if (!unosec_enter_session(s)) { unosec_logout(s); return 0; }
-    g_shell_session = s;
-    return 1;
+    int ok = 0;
+    if (s) {
+        if (unosec_enter_session(s)) { g_shell_session = s; ok = 1; }
+        else unosec_logout(s);
+    }
+    /* The password has been hashed and checked; do not let the cleartext sit in
+     * the static buffer any longer than the login call itself (item 8). */
+    memset(g_pw, 0, sizeof g_pw);
+    return ok;
 }
 
 static int verify_interactive(void)
@@ -568,12 +581,13 @@ static int ensure_authority(int *pushed)
 static void do_new_user(char *status, int cap)
 {
     int r = cred_sheet("New account", "Create a user account.", 1, 0, 0);
-    if (r != ID_OK) { snprintf(status, cap, "New account cancelled."); return; }
-    if (!s_name[0] || !g_pw[0]) { snprintf(status, cap, "Name and password required."); return; }
+    if (r != ID_OK) { snprintf(status, cap, "New account cancelled."); memset(g_pw, 0, sizeof g_pw); return; }
+    if (!s_name[0] || !g_pw[0]) { snprintf(status, cap, "Name and password required."); memset(g_pw, 0, sizeof g_pw); return; }
     if (unosec_account_create(s_name, g_pw, k_roles[s_role_sel]))
         snprintf(status, cap, "Created '%s' (%s).", s_name, k_roles[s_role_sel]);
     else
         snprintf(status, cap, "Could not create '%s' (exists / no authority).", s_name);
+    memset(g_pw, 0, sizeof g_pw);        /* item 8: wipe the cleartext */
 }
 
 static void do_set_password(usc_uid_t uid, char *status, int cap)
@@ -581,12 +595,13 @@ static void do_set_password(usc_uid_t uid, char *status, int cap)
     const char *nm = unosec_account_name(uid);
     int r = cred_sheet("Set password", "Enter a new password for the account.",
                        0, 0, 0);
-    if (r != ID_OK) { snprintf(status, cap, "Password change cancelled."); return; }
-    if (!g_pw[0]) { snprintf(status, cap, "Password cannot be empty."); return; }
+    if (r != ID_OK) { snprintf(status, cap, "Password change cancelled."); memset(g_pw, 0, sizeof g_pw); return; }
+    if (!g_pw[0]) { snprintf(status, cap, "Password cannot be empty."); memset(g_pw, 0, sizeof g_pw); return; }
     if (unosec_account_set_password(uid, g_pw))
         snprintf(status, cap, "Password updated for '%s'.", nm ? nm : "?");
     else
         snprintf(status, cap, "Could not update password (no authority).");
+    memset(g_pw, 0, sizeof g_pw);        /* item 8: wipe the cleartext */
 }
 
 void pc64_accounts_open(void)

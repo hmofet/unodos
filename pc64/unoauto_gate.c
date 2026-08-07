@@ -99,7 +99,9 @@ static const GateRow GATE[] = {
     { "disks",    UNOAUTO_P_OBSERVE },
     { "devices",  UNOAUTO_P_OBSERVE },
     { "screen",   UNOAUTO_P_OBSERVE },
-    { "disc",     UNOAUTO_P_OBSERVE },
+#ifdef UNO_DEBUG
+    { "disc",     UNOAUTO_P_OBSERVE },   /* self-test verb: debug builds only    */
+#endif
     { "caps",     UNOAUTO_P_OBSERVE },
 
     /* -- DRIVE -- */
@@ -137,7 +139,9 @@ static const GateRow GATE[] = {
     { "iwl",      UNOAUTO_P_SYSTEM },
     { "eth",      UNOAUTO_P_SYSTEM },
     { "hwwdt",    UNOAUTO_P_SYSTEM },
-    { "nst",      UNOAUTO_P_SYSTEM },
+#ifdef UNO_DEBUG
+    { "nst",      UNOAUTO_P_SYSTEM },    /* netsock self-test: debug builds only */
+#endif
 };
 #define GATE_N ((int)(sizeof GATE / sizeof GATE[0]))
 
@@ -297,6 +301,7 @@ unsigned    unoauto_gate_powers(void)     { return g_powers; }
 const char *unoauto_gate_token(void)      { return g_armed ? g_token : ""; }
 usc_uid_t   unoauto_gate_owner(void)      { return g_owner; }
 const char *unoauto_gate_owner_name(void) { return g_armed ? g_owner_name : ""; }
+usec_session_t unoauto_gate_link_session(void) { return g_armed ? g_link_sess : 0; }
 
 void unoauto_gate_tick(void)
 {
@@ -392,6 +397,20 @@ int unoauto_gate_auth(const char *token)
     if (!auth_forced()) { g_authed = 1; return 1; }
     if (!g_armed || !token) return 0;
 
+    /* Already at (or past) the strike limit, or a lockout is pending: do NOT
+     * compare, and stand the channel down INLINE rather than deferring to the
+     * next tick.  The deferral was the hole: drain_rx dispatches every
+     * newline-delimited line in one socket read before the tick runs, so an
+     * attacker could PIPELINE hundreds of `auth` lines into a single window and
+     * a correct guess sitting AFTER the third wrong one still authenticated.
+     * Refusing (and disarming) before any comparison closes that window - no
+     * further guess in the same read can slip through, and the channel is gone
+     * by the time control returns to drain_rx. */
+    if (g_lockout || g_badauth >= BADAUTH_MAX) {
+        unoauto_gate_disarm("failed authentication");
+        return 0;
+    }
+
     /* Constant-time over the fixed token length: compare every byte whatever
      * happens, so timing does not leak the length of a correct prefix. */
     for (i = 0; i < UNOAUTO_TOKEN_CHARS; i++) {
@@ -432,6 +451,20 @@ int unoauto_gate_verb(const char *verb, const char **why)
     if (why) *why = 0;
     r = gate_find(verb);
 
+    /* AUTHENTICATE FIRST (do not leak console state to a stranger).  The
+     * input-locked DRIVE refusal below is a per-verb SIGNAL: it fires only while
+     * a security dialog is open at the console.  Run before the auth gate, it
+     * would hand an UNAUTHENTICATED peer an oracle - send a DRIVE verb and read
+     * "refused (dialog open)" vs "auth-required" to learn whether someone is at
+     * a security sheet.  So the auth checks come first: a peer that has not
+     * authenticated always gets the same generic denial, whatever is on screen.
+     * (Only meaningful when auth is forced; a transparent debug build has no
+     * pre-auth peer to protect from.) */
+    if (auth_forced()) {
+        if (!g_armed)  { if (why) *why = "not-armed";     return 0; }
+        if (!g_authed) { if (why) *why = "auth-required"; return 0; }
+    }
+
     /* A security dialog is open at the console.  Refuse the DRIVE class rather
      * than let it inject into a sheet that decides identity and authority - the
      * injection is already dropped at the source (uefi_main.c), but answering
@@ -441,19 +474,17 @@ int unoauto_gate_verb(const char *verb, const char **why)
      * SYSTEM class keeps `reboot` available as the escape hatch from a dialog
      * nobody is there to close.
      *
-     * ABOVE the auth_forced() gate deliberately: this is UI safety, not
-     * authorization, so it applies in a debug build too.  Metal-caught on the
-     * ZimaBlade 2026-08-03 with the check below it - the injection was dropped
-     * correctly but `launch` still answered "launched", which is a lie. */
+     * Kept ABOVE the debug transparent return so it still applies in a debug
+     * build (this is UI safety, not authorization; metal-caught on the ZimaBlade
+     * 2026-08-03 - the injection was dropped correctly but `launch` still
+     * answered "launched", which is a lie).  It now sits AFTER the auth gate so
+     * it can never be a pre-auth oracle (see above). */
     if (r && (r->power & UNOAUTO_P_DRIVE) && uno_pc64_input_locked()) {
         if (why) *why = "refused (a security dialog is open at the console)";
         return 0;
     }
 
     if (!auth_forced()) return 1;                /* debug harness: transparent */
-
-    if (!g_armed)  { if (why) *why = "not-armed";        return 0; }
-    if (!g_authed) { if (why) *why = "auth-required";    return 0; }
 
     if (!r)        { if (why) *why = "unknown-verb";     return 0; }
     if (!r->power) return 1;                     /* ungated handshake verb */

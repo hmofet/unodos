@@ -6,16 +6,20 @@
  * / audit surface.  PRODUCTION, always-on, fail-closed: any ambiguity, missing
  * session, storage error or policy gap denies.
  *
- * Crypto is self-contained (BearSSL, already in the tree): PBKDF2-HMAC-SHA256
- * for password hashing, SHA-256 for the tamper-evident audit chain, HMAC-SHA256
- * for manifest signatures.  Storage is a single root-only unofs blob; the audit
- * trail is an append-only hash-chained log.  See UNOSECURE-SPEC.md (contract)
- * and UNOSECURE.md (formats + the thread->session binding).
+ * Crypto is self-contained: PBKDF2-HMAC-SHA256 (BearSSL) for password hashing,
+ * SHA-256 for the tamper-evident audit chain, and ASYMMETRIC ed25519 (the tree's
+ * own RFC 8032 implementation) for manifest signatures - verified against a
+ * PUBLIC key so the machine never holds the secret that could forge one.
+ * Storage is a single root-only unofs blob; the audit trail is an append-only
+ * hash-chained log.  See UNOSECURE-SPEC.md (contract) and UNOSECURE.md (formats
+ * + the thread->session binding).
  * ======================================================================== */
 #include "unosecure.h"
 #include "pc64_fs.h"
 #include "bearssl_hash.h"
 #include "bearssl_hmac.h"
+#include "ed25519.h"        /* asymmetric manifest signatures (item 4)        */
+#include "tls_entropy.h"    /* fail-closed entropy source, shared with TLS    */
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -87,7 +91,7 @@ typedef struct {
 typedef struct {
     int32_t used;
     char    id[NAME_MAX];
-    uint8_t key[32];
+    uint8_t key[32];               /* an ed25519 PUBLIC key (item 4); never a secret */
 } trustkey_t;
 
 typedef struct {
@@ -167,17 +171,6 @@ static void sha256(const void *d, size_t n, unsigned char out[32])
     br_sha256_out(&c, out);
 }
 
-static void hmac256(const unsigned char *key, int klen,
-                    const void *msg, size_t mlen, unsigned char out[32])
-{
-    br_hmac_key_context kc;
-    br_hmac_context     hc;
-    br_hmac_key_init(&kc, &br_sha256_vtable, key, (size_t)klen);
-    br_hmac_init(&hc, &kc, 0);
-    br_hmac_update(&hc, msg, mlen);
-    br_hmac_out(&hc, out);
-}
-
 /* PBKDF2-HMAC-SHA256, dkLen == hLen == 32 (one block). */
 static void pbkdf2(const char *pw, int pwlen,
                    const unsigned char *salt, int slen,
@@ -204,6 +197,8 @@ static void pbkdf2(const char *pw, int pwlen,
         for (j = 0; j < 32; j++) t[j] ^= u[j];
     }
     memcpy(out, t, 32);
+    /* Don't leave derived-key material on the stack (item 8). */
+    memset(u, 0, sizeof u); memset(t, 0, sizeof t); memset(seed, 0, sizeof seed);
 }
 
 /* constant-time equality (never branch on secret compare) */
@@ -214,67 +209,25 @@ static int ct_eq(const unsigned char *a, const unsigned char *b, int n)
     return d == 0;
 }
 
-/* ---- entropy for salts: RDRAND if present, else a whitened TSC mix -------- */
-/* RDRAND is NOT a universal instruction, and a CPU without it does not
- * politely return carry-clear - it takes an INVALID OPCODE fault.  This code
- * was written as though a bounded retry could ride out a missing DRNG, so on
- * any pre-Ivy-Bridge machine, and on QEMU's default `qemu64` model, creating
- * the first account faulted the OS at #UD inside gen_random.  Metal-equivalent
- * proof: a plain QEMU boot, "Create the first administrator", Enter, reset.
+/* ---- entropy for salts: the fail-closed TLS source ------------------------
+ * Salts used to come from RDRAND with a raw-TSC fallback, which had two faults.
+ * RDRAND is not universal - a CPU without it takes an INVALID-OPCODE fault
+ * rather than returning carry-clear, so creating the first account #UD'd the OS
+ * on qemu64 / pre-Ivy-Bridge - and the fallback whitened a weak TSC counter
+ * straight into the salt, so a box with no real DRNG persisted a guessable salt.
  *
- * CPUID.01H:ECX[30] is the only safe way to ask, and it is asked ONCE - the
- * answer cannot change while the machine is running, and the check must not
- * sit inside the retry loop it guards.  tls_entropy.c has always done this;
- * unosecure simply never did. */
-static unsigned cpuid_ecx1(void)
+ * tls_entropy.c already solved both for TLS keys: it probes RDRAND ONCE via
+ * CPUID, falls back to health-tested conditioned CPU jitter, and FAILS CLOSED
+ * when neither qualifies.  Route salts through that same source so the tree has
+ * one entropy story and no path that lands a predictable salt on disk.  Returns
+ * 0 when no source qualifies; the caller MUST then refuse the operation rather
+ * than hash a password under a weak salt - the same argument tls_entropy.c makes
+ * for keys. */
+static int gen_random(unsigned char *out, int n)
 {
-    unsigned a, b, c, d;
-    __asm__ volatile ("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d)
-                              : "a"(1), "c"(0));
-    return c;
-}
-static int have_rdrand(void)
-{
-    static int cached = -1;
-    if (cached < 0) cached = (int)((cpuid_ecx1() >> 30) & 1u);
-    return cached;
-}
-static int rdrand64(unsigned long long *v)
-{
-    unsigned char ok;
-    if (!have_rdrand()) return 0;        /* no DRNG: fall through to the TSC path */
-    __asm__ volatile ("rdrand %0; setc %1" : "=r"(*v), "=qm"(ok));
-    return ok;
-}
-static unsigned long long rdtsc_(void)
-{
-    unsigned lo, hi;
-    __asm__ volatile ("rdtsc" : "=a"(lo), "=d"(hi));
-    return ((unsigned long long)hi << 32) | lo;
-}
-static void gen_random(unsigned char *out, int n)
-{
-    static unsigned long long ctr;      /* de-correlate repeated TSC reads    */
-    int i;
-    for (i = 0; i < n; i += 8) {
-        unsigned long long v;
-        unsigned char blk[32];
-        int t = 8;
-        v = 0;                           /* the retry may never assign it */
-        while (!rdrand64(&v) && t--) ;   /* bounded retry; TSC fallback below  */
-        if (t < 0) v = rdtsc_() ^ (ctr * 0x9E3779B97F4A7C15ULL);
-        ctr++;
-        /* whiten so a weak source never lands raw in the salt */
-        {
-            unsigned char seed[16];
-            memcpy(seed, &v, 8); memcpy(seed + 8, &ctr, 8);
-            sha256(seed, sizeof seed, blk);
-        }
-        {
-            int k = (n - i < 8) ? (n - i) : 8;
-            memcpy(out + i, blk, (size_t)k);
-        }
-    }
+    if (out && n > 0 && tls_entropy_get(out, n)) return 1;
+    if (out && n > 0) memset(out, 0, (size_t)n);
+    return 0;
 }
 
 static void tohex(const unsigned char *in, int n, char *out)
@@ -898,7 +851,10 @@ static usc_uid_t account_create_internal(const char *name, const char *password,
     a->used = 1;
     a->uid  = g_db.next_uid++;
     strncpy(a->name, name, NAME_MAX - 1);
-    gen_random(a->salt, SALT_LEN);
+    if (!gen_random(a->salt, SALT_LEN)) {     /* no defensible entropy: refuse */
+        memset(a, 0, sizeof *a);
+        return 0;
+    }
     pbkdf2(password, (int)strlen(password), a->salt, SALT_LEN, a->hash);
     if (role && role[0] && role_find(role)) {
         strncpy(a->roles[0], role, NAME_MAX - 1);
@@ -973,7 +929,10 @@ int unosec_account_set_password(usc_uid_t u, const char *password)
         audit_emit(me, "sec.passwd", a->name, 0);
         return 0;
     }
-    gen_random(a->salt, SALT_LEN);
+    if (!gen_random(a->salt, SALT_LEN)) {     /* no defensible entropy: refuse */
+        audit_emit(me, "sec.passwd", "no-entropy", 0);
+        return 0;
+    }
     pbkdf2(password, (int)strlen(password), a->salt, SALT_LEN, a->hash);
     db_save();
     audit_emit(me, "sec.passwd", a->name, 1);
@@ -1041,6 +1000,58 @@ int unosec_role_exists(const char *role) { return role_find(role) != 0; }
 /* ===========================================================================
  * Authentication & sessions.
  * ======================================================================== */
+
+/* ---- login throttle (item 7) ---------------------------------------------
+ * account_t.locked is a PERSISTENT lock flag, but nothing ever set it, so a
+ * mistyped-password attacker had unlimited guesses against the hash.  A
+ * per-account failure counter is the fix - but it cannot live in account_t:
+ * db_blob_t is serialised by exact sizeof and db_load rejects any size change
+ * (see the magic[7] note), so growing the struct would fail every existing
+ * store's load and silently wipe accounts on upgrade.  So the counter lives in
+ * RAM, keyed by uid, and imposes a backoff window after too many misses.  It is
+ * deliberately NOT persisted: a reboot is a heavy enough reset that a local
+ * attacker gains nothing from it clearing, and it can never brick the sole admin
+ * across boots.  The persistent `locked` flag is still honoured below as a
+ * separate admin/kiosk hook. */
+#define LOGIN_FAIL_MAX     5
+#define LOGIN_BACKOFF_MS   30000
+typedef struct { usc_uid_t uid; int used; int fails; unsigned long long until; } loginfail_t;
+static loginfail_t g_loginfail[MAX_USERS];
+
+static loginfail_t *loginfail_slot(usc_uid_t uid)
+{
+    int i, freeslot = -1;
+    for (i = 0; i < MAX_USERS; i++) {
+        if (g_loginfail[i].used && g_loginfail[i].uid == uid) return &g_loginfail[i];
+        if (!g_loginfail[i].used && freeslot < 0) freeslot = i;
+    }
+    if (freeslot < 0) return 0;
+    g_loginfail[freeslot].used = 1; g_loginfail[freeslot].uid = uid;
+    g_loginfail[freeslot].fails = 0; g_loginfail[freeslot].until = 0;
+    return &g_loginfail[freeslot];
+}
+/* 1 if uid is currently inside a backoff window (lazily expiring a stale one). */
+static int login_backed_off(usc_uid_t uid)
+{
+    loginfail_t *f = loginfail_slot(uid);
+    if (!f || !f->until) return 0;
+    if (now_ticks() < f->until) return 1;
+    f->until = 0; f->fails = 0;                 /* window elapsed: reset          */
+    return 0;
+}
+static void login_note_fail(usc_uid_t uid)
+{
+    loginfail_t *f = loginfail_slot(uid);
+    if (!f) return;
+    if (++f->fails >= LOGIN_FAIL_MAX)
+        f->until = now_ticks() + ms_to_ticks(LOGIN_BACKOFF_MS);
+}
+static void login_note_ok(usc_uid_t uid)
+{
+    loginfail_t *f = loginfail_slot(uid);
+    if (f) { f->fails = 0; f->until = 0; }
+}
+
 usec_session_t unosec_login(const char *name, const char *password,
                             usc_trust_t trust)
 {
@@ -1048,12 +1059,23 @@ usec_session_t unosec_login(const char *name, const char *password,
     unsigned char probe[HASH_LEN];
     int ok = 0;
     if (!g_up) return 0;
+
+    /* Too many recent failures for this account: refuse without even hashing,
+     * so the backoff cannot be sidestepped by hammering (item 7). */
+    if (a && login_backed_off((usc_uid_t)a->uid)) {
+        audit_emit((usc_uid_t)a->uid, "auth.login", "locked-out (too many attempts)", 0);
+        return 0;
+    }
+
     if (a && !a->locked && password) {
         pbkdf2(password, (int)strlen(password), a->salt, SALT_LEN, probe);
         ok = ct_eq(probe, a->hash, HASH_LEN);
+        memset(probe, 0, sizeof probe);         /* item 8: don't leave the probe */
     }
     audit_emit(a ? (usc_uid_t)a->uid : UNOSEC_UID_NONE, "auth.login",
                name ? name : "?", ok);
+    if (a) { if (ok) login_note_ok((usc_uid_t)a->uid);
+             else    login_note_fail((usc_uid_t)a->uid); }
     if (!ok) return 0;
     return sess_alloc((usc_uid_t)a->uid, trust);
 }
@@ -1117,6 +1139,10 @@ void unosec_set_consent_provider(unosec_consent_fn fn, void *ctx)
 /* ===========================================================================
  * Signed manifests & the trust store.
  * ======================================================================== */
+/* Add/replace a trusted manifest key.  `key` is a 32-byte ed25519 PUBLIC key
+ * (item 4); the private half stays off the machine.  The 32-byte on-disk slot
+ * is unchanged from the old symmetric scheme, so existing stores load, but any
+ * key added before this change was an HMAC secret and no longer verifies. */
 int unosec_trust_add_key(const char *key_id, const unsigned char key[32])
 {
     int i;
@@ -1161,8 +1187,8 @@ int unosec_manifest_apply(const char *manifest)
 {
     session_t *s = cur_sess();
     const char *sigline, *p;
-    char keyid[NAME_MAX] = {0}, sighex[80] = {0}, caps[256] = {0};
-    unsigned char want[32], got[32];
+    char keyid[NAME_MAX] = {0}, sighex[160] = {0}, caps[256] = {0};
+    unsigned char got[64];                 /* ed25519 sig is 64 bytes (128 hex) */
     trustkey_t *tk;
     int granted = 0;
 
@@ -1184,10 +1210,16 @@ int unosec_manifest_apply(const char *manifest)
     tk = trust_find(keyid);
     if (!tk) { audit_emit(s->uid, "sec.manifest", keyid, 0); return 0; }
 
-    /* HMAC over the canonical body: everything up to and including the '\n'
-     * that precedes the sig line. */
-    hmac256(tk->key, 32, manifest, (size_t)(sigline - manifest) + 1, want);
-    if (fromhex(sighex, got, 32) != 32 || !ct_eq(want, got, 32)) {
+    /* Verify an ASYMMETRIC ed25519 signature over the canonical body (everything
+     * up to and including the '\n' before the sig line) against the trusted
+     * PUBLIC key.  This is the whole point of the change (item 4): the old scheme
+     * was a symmetric HMAC whose key was stored on the device that verifies it,
+     * so anyone who could read UNOSEC.DB held the signing secret and could forge
+     * an any-capability manifest.  With ed25519 the store holds only a public
+     * key; the private half that signs manifests never touches this machine. */
+    if (fromhex(sighex, got, 64) != 64 ||
+        !ed25519_verify(got, (const unsigned char *)manifest,
+                        (int)(sigline - manifest) + 1, tk->key)) {
         audit_emit(s->uid, "sec.manifest", "bad-signature", 0);
         return 0;
     }
