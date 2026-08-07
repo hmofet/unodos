@@ -123,8 +123,18 @@ typedef struct {
  * keeps both rasterized. The old single cache was invalidated on every font
  * switch, re-rendering every glyph of both fonts once per redraw. */
 #define NBANK 6
-typedef struct { int slot, px, sub; unsigned stamp; gcache g[GC_COUNT]; } gbank;
+/* Each bank also carries a lazily-filled kerning table for the ASCII range, so
+ * kern26() is an array lookup after the first time a pair is seen rather than a
+ * stb_truetype table walk on every draw AND every measure. The stored value is
+ * the final 26.6 result, valid for the whole bank because px (hence g_scale) is
+ * part of the bank key; kern_have[a][b] tells filled-with-0 from not-yet. */
+typedef struct {
+    int slot, px, sub; unsigned stamp; gcache g[GC_COUNT];
+    short         kern[GC_COUNT][GC_COUNT];
+    unsigned char kern_have[GC_COUNT][GC_COUNT];
+} gbank;
 static gbank g_banks[NBANK];
+static gbank *g_bank = &g_banks[0];        /* active bank */
 static gcache *g_cache = g_banks[0].g;     /* active bank's glyphs */
 static unsigned g_stamp;
 
@@ -157,14 +167,15 @@ static void bank_select(void)
     for (i = 0; i < NBANK; i++) {
         gbank *b = &g_banks[i];
         if (b->stamp && b->slot == g_active && b->px == px && b->sub == sub) {
-            b->stamp = ++g_stamp; g_cache = b->g; return;
+            b->stamp = ++g_stamp; g_cache = b->g; g_bank = b; return;
         }
         if (b->stamp < g_banks[lru].stamp) lru = i;
     }
     { gbank *b = &g_banks[lru];
       b->slot = g_active; b->px = px; b->sub = sub; b->stamp = ++g_stamp;
       for (i = 0; i < GC_COUNT; i++) b->g[i].ready = 0;
-      g_cache = b->g; }
+      memset(b->kern_have, 0, sizeof b->kern_have);   /* stale pairs are void */
+      g_cache = b->g; g_bank = b; }
 }
 
 static void set_metrics(void)
@@ -211,12 +222,30 @@ static void render_glyph(int cp)
     gc->ready = 1;
 }
 
-/* kerning between two codepoints, 26.6 px (0 for fonts without a kern table) */
-static int kern26(int a, int b)
+/* raw stb kern -> 26.6 px at the active scale (0 for fonts without a table) */
+static int kern26_calc(int a, int b)
 {
     fslot *f = &g_fonts[g_active];
     int k = stbtt_GetCodepointKernAdvance(&f->info, a, b);
     return k ? (int)(k * g_scale * 64.0f + (k > 0 ? 0.5f : -0.5f)) : 0;
+}
+
+/* kerning between two codepoints, 26.6 px. The ASCII pair grid is cached per
+ * bank and filled lazily, so a repeated pair (i.e. every pair, after the first
+ * frame) is an array read rather than a stb_truetype kern-table walk - kern26
+ * runs on every glyph of every draw AND every measure. */
+static int kern26(int a, int b)
+{
+    int ai, bi;
+    if (a < GC_FIRST || a >= GC_FIRST + GC_COUNT ||
+        b < GC_FIRST || b >= GC_FIRST + GC_COUNT || !g_bank)
+        return kern26_calc(a, b);               /* outside the cached range */
+    ai = a - GC_FIRST; bi = b - GC_FIRST;
+    if (!g_bank->kern_have[ai][bi]) {
+        g_bank->kern[ai][bi] = (short)kern26_calc(a, b);
+        g_bank->kern_have[ai][bi] = 1;
+    }
+    return g_bank->kern[ai][bi];
 }
 
 /* floor division by 3 (ox3 can be negative for glyphs with negative lsb) */
@@ -238,10 +267,16 @@ static void paint_cov(int pen26, int y, gcache *gc, fb_px fg, int italic)
         ox3s = gc->ox3 + f3;
         pixox = fdiv3(ox3s); base = 3 * pixox - ox3s;
         wout = (cw3 - base) / 3 + 2;
+        if (wout > GMAXW * 3) wout = GMAXW * 3;       /* buffer guard (wout<=42) */
         for (r = 0; r < gc->h; r++) {
             const unsigned char *row = gc->cov + r * cw3;
             int Y = y + g_baseline + gc->oy + r;
             int sk = italic ? ((g_baseline - gc->oy - r) >> 2) : 0;
+            /* Build the row's per-channel coverage once, then blend the whole
+             * span with a single clip (fb_blend_row_sub) instead of a clip per
+             * pixel. Zero-coverage pixels stay in the run - they blend to a
+             * no-op - which keeps the span contiguous. */
+            unsigned char bR[GMAXW * 3], bG[GMAXW * 3], bB[GMAXW * 3];
             for (X = 0; X < wout; X++) {
                 int j = base + 3 * X;                /* subpixel index of this pixel's R */
                 int a = (j-1 >= 0 && j-1 < cw3) ? row[j-1] : 0;
@@ -249,20 +284,21 @@ static void paint_cov(int pen26, int y, gcache *gc, fb_px fg, int italic)
                 int c = (j+1 >= 0 && j+1 < cw3) ? row[j+1] : 0;
                 int d = (j+2 >= 0 && j+2 < cw3) ? row[j+2] : 0;
                 int e = (j+3 >= 0 && j+3 < cw3) ? row[j+3] : 0;
-                int cR = (a + 2*b + c) / 4, cG = (b + 2*c + d) / 4, cB = (c + 2*d + e) / 4;
-                if (cR | cG | cB) fb_blend_pixel_sub(xi + pixox + X + sk, Y, fg, cR, cG, cB);
+                bR[X] = (unsigned char)((a + 2*b + c) / 4);
+                bG[X] = (unsigned char)((b + 2*c + d) / 4);
+                bB[X] = (unsigned char)((c + 2*d + e) / 4);
             }
+            fb_blend_row_sub(xi + pixox + sk, Y, wout, fg, bR, bG, bB);
         }
     } else {
-        int xg = (pen26 + 32) >> 6, r, c;
+        int xg = (pen26 + 32) >> 6, r;
         for (r = 0; r < gc->h; r++) {
             const unsigned char *row = gc->cov + r * gc->w;
             int Y = y + g_baseline + gc->oy + r;
             int sk = italic ? ((g_baseline - gc->oy - r) >> 2) : 0;
-            for (c = 0; c < gc->w; c++) {
-                int cov = row[c];
-                if (cov) fb_blend_pixel_sub(xg + gc->ox + c + sk, Y, fg, cov, cov, cov);
-            }
+            /* grayscale: one coverage byte per pixel, same value on all three
+             * channels - hand `row` to the R/G/B slots directly. */
+            fb_blend_row_sub(xg + gc->ox + sk, Y, gc->w, fg, row, row, row);
         }
     }
 }

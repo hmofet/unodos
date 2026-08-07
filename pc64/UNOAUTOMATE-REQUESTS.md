@@ -8179,3 +8179,10 @@ window through `remove_win()` rather than the app's own close path, so were the
 flag test relaxed alone, `unoamp_ui_show_eq/pl`'s `g_eq_open` / `g_pl_open`
 would stay 1 with the windows gone, and the next toggle would be inverted.
 `close_app()` -> `unoamp_ui_close()` is the path that gets this right.
+---
+
+**CLAIM 2026-08-07 (perf-render-fixes lane):** taking a small, additive edit
+to `unoui/themes/theme_aurora.c` `soft_shadow()` only - clipping each drop-shadow
+layer to the four regions around the body-covered band so the interior the opaque
+window body overwrites is not blended six times (byte-identical output, far less
+alpha overdraw). No signature or vtable change; other themes untouched.
