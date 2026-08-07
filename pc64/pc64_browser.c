@@ -147,6 +147,21 @@ static int br_px(const bstyle *s)    { int sc = s->scale ? s->scale : 1;
 static int br_style(const bstyle *s) { return (s->bold ? UNO_FS_BOLD   : 0)
                                             | (s->ital ? UNO_FS_ITALIC : 0); }
 
+/* the width of a space in a given face - a CONSTANT per (slot,px,style) that
+ * used to be re-measured with a full font call for EVERY word placed, every
+ * paint. Memoised on the last face, which a run of same-styled words (i.e. most
+ * of a paragraph) hits every time. */
+static int fl_space_w(int slot, int px, int st)
+{
+    static int c_slot = -1, c_px = -1, c_st = -1, c_w = 0;
+    if (slot != c_slot || px != c_px || st != c_st) {
+        c_w = uno_font_text_w_styled(slot, px, st, " ");
+        if (c_w <= 0) c_w = px / 2;
+        c_slot = slot; c_px = px; c_st = st;
+    }
+    return c_w;
+}
+
 /* place one word (already NUL-terminated in `buf`); wraps at the right edge */
 static void fl_word(const char *buf, int indent, bstyle *s)
 {
@@ -154,8 +169,7 @@ static void fl_word(const char *buf, int indent, bstyle *s)
     int ww = uno_font_text_w_styled(slot, px, st, buf);
     int ch = uno_font_height_px(slot, px);           /* cell height */
     int lh = ch + 3, dy;                             /* + leading */
-    int sp = uno_font_text_w_styled(slot, px, st, " ");
-    if (sp <= 0) sp = px / 2;
+    int sp = fl_space_w(slot, px, st);
     if (lh > flh) flh = lh;
     if (fx + ww > fright && fx > fleft + indent) fl_nl();
     if (fx == fleft) fx = fleft + indent;
@@ -320,7 +334,16 @@ static const char *renderer_name(int r)
 
 static void img_cache_reset(void);   /* defined with the image cache below */
 static uw_doc  *g_dom;
-static unsigned g_dom_sig;
+/* The document buffer's generation, bumped once each time a loader WRITES a new
+ * document (load_loc, load_progress, the not-found and reply paths). dom_sync
+ * re-parses when it differs from the tree's stored generation. This replaced a
+ * doc_sig() that FNV-hashed the ENTIRE document on every single br_draw just to
+ * detect a change that only ever happens on load - a full pass over up to a
+ * megabyte of source per frame, to answer a question a one-word counter answers
+ * for free. Every place that used to signal "content changed" by zeroing the
+ * old fingerprint now just bumps this. */
+static unsigned g_src_gen;
+static unsigned g_dom_src_gen;       /* the generation the current tree was built from */
 /* Which TREE this is, as opposed to which SOURCE it came from. The two are not
  * the same thing and the difference rendered pages blank: the layout cache
  * keyed off the source fingerprint, so re-parsing the SAME text - which is
@@ -329,18 +352,6 @@ static unsigned g_dom_sig;
  * and was therefore never laid out or painted at all. Bumped once per rebuild,
  * so a new tree can never be mistaken for the one on screen. */
 static unsigned g_dom_gen;
-
-/* Fingerprint the source rather than plumb an "invalidate" call through every
- * loader: g_doc is refilled from several places (a built-in demo, a local
- * file, a fetch, and the not-found page), and one missed call would leave a
- * stale tree on screen. Hashing 32 KB once per frame is nothing next to
- * painting it. */
-static unsigned doc_sig(const char *s)
-{
-    unsigned h = 2166136261u;
-    while (*s) { h ^= (unsigned char)*s++; h *= 16777619u; }
-    return h ? h : 1;
-}
 
 /* The location the current document came from: subresource URLs resolve
  * against it. Set by load_loc; "" for the built-in pages, which reference
@@ -493,8 +504,7 @@ static void note_arena_full(void)
 static void dom_sync(const char *src)
 {
     uw_config c;
-    unsigned sig = doc_sig(src);
-    if (g_dom && sig == g_dom_sig) return;
+    if (g_dom && g_dom_src_gen == g_src_gen) return;
     if (g_dom) { uw_doc_free(g_dom); g_dom = NULL; }
     img_cache_reset();               /* decoded frames belong to the old page */
     memset(&c, 0, sizeof c);
@@ -529,7 +539,7 @@ static void dom_sync(const char *src)
     }
     c.max_depth = 96;
     g_dom = uw_parse_string(src, -1, &c);
-    g_dom_sig = sig;
+    g_dom_src_gen = g_src_gen;
     g_dom_gen++;                     /* a new tree, whatever the text says */
     note_arena_full();
     /* Subresources, linked sheets and page scripts belong to the ENGINE path:
@@ -895,14 +905,28 @@ static void render_uw(const char *src, unoui_rect r, int scroll)
                     /* Layout scaled the box to fit the column, so the pixels
                      * follow. Nearest neighbour, ONE ROW AT A TIME: it needs no
                      * second full-size buffer, which matters when the decoded
-                     * frame is already megabytes. */
+                     * frame is already megabytes.
+                     *
+                     * The source COLUMN for each destination column depends only
+                     * on the two widths, so it is precomputed once into colmap
+                     * and reused for every row AND every repaint at the same
+                     * size - which turned a 64-bit multiply-and-divide per pixel
+                     * (c->w * c->h of them, every single frame) into one array
+                     * read. Same idea as present's gColMap. */
                     static fb_px row[2048];
+                    static int   colmap[2048];
+                    static int   cm_sw = -1, cm_dw = -1;
                     int ry, rx;
                     int w = c->w > 2048 ? 2048 : c->w;
+                    if (cm_sw != e->w || cm_dw != c->w) {
+                        for (rx = 0; rx < w; rx++)
+                            colmap[rx] = (int)((long)rx * e->w / c->w);
+                        cm_sw = e->w; cm_dw = c->w;
+                    }
                     for (ry = 0; ry < c->h; ry++) {
                         const um_px *srow = e->px + (long)((long)ry * e->h / c->h) * e->w;
                         for (rx = 0; rx < w; rx++)
-                            row[rx] = (fb_px)srow[(long)rx * e->w / c->w];
+                            row[rx] = (fb_px)srow[colmap[rx]];
                         fb_blit(x, y + ry, w, 1, row, w);
                     }
                 }
@@ -1499,6 +1523,7 @@ static void tab_close(int i)
         for (k = i; k >= 0; k--) if (g_tab[k].used) { g_cur = k; break; }
         if (!g_tab[g_cur].used)
             for (k = 0; k < MAXTABS; k++) if (g_tab[k].used) { g_cur = k; break; }
+        g_src_gen++;    /* the visible tab changed - its document must be re-parsed */
     }
     g_link_sel = -1;
 }
@@ -1592,7 +1617,7 @@ static void load_progress(const char *body, int len, long total)
     memcpy(d, body, (size_t)len);
     d[len] = 0;
     t->is_html = 1;
-    g_dom_sig = 0;                    /* the tree must be rebuilt from this */
+    g_src_gen++;                      /* the tree must be rebuilt from this */
     if (g_rect.w > 0) {
         g_in_progress_paint = 1;
         br_draw(0, g_rect, 0);
@@ -1610,6 +1635,11 @@ static void load_loc(btab *t, const char *loc)
      * The RESULT of a network load is logged separately by pc64_http, which
      * is the layer that knows whether it worked. */
     ulog_info(LF_BROWSER, "open %s", loc);
+    /* A load is about to replace this tab's document: bump the source
+     * generation so dom_sync re-parses. load_loc is the single funnel for every
+     * navigation (built-in, file, network, back/forward, reload), so one bump
+     * here is what the whole-document re-hash used to compute per frame. */
+    g_src_gen++;
     t->scroll = 0;
     t->start = 0;
     g_link_sel = -1;
@@ -1663,7 +1693,7 @@ static void load_loc(btab *t, const char *loc)
          * silently swallow every keystroke into an element nothing renders. */
         if (g_renderer == RENDER_FLOW) g_form_focus = 0;
         g_uw_w = 0;                    /* force restyle+relayout on next paint */
-        g_dom_sig = 0;                 /* and a re-parse: the paths disagree about
+        g_src_gen++;                   /* and a re-parse: the paths disagree about
                                         * who runs <script>, so the tree the other
                                         * renderer built is not the one we want */
         p = sapp(p, end, "<h1>Engines</h1>"
@@ -1770,9 +1800,9 @@ static void load_loc(btab *t, const char *loc)
         /* Force one more parse now that the document is COMPLETE and the
          * re-entrancy guard is clear. Without this the last progressive
          * paint's cached tree is reused - the text is identical, so the
-         * document-signature cache short-circuits - and the page's
+         * document-generation cache short-circuits - and the page's
          * stylesheets are never fetched at all. */
-        g_dom_sig = 0;
+        g_src_gen++;
         if (n < 0) { doc_error(t, loc, g_status); return; }
         /* pick MD vs HTML from the suffix; HTML is the default (it also
          * renders plain text sensibly) */
@@ -1874,7 +1904,7 @@ static void form_submit(btab *t, uw_node *ctl)
             sput(t->loc, LOCMAX, url);
             sput(g_page_base, LOCMAX, url);
             t->scroll = 0;
-            g_dom_sig = 0;                 /* force a re-parse of the reply */
+            g_src_gen++;                   /* force a re-parse of the reply */
         }
         return;
     }
@@ -2859,6 +2889,7 @@ static int br_event(struct unoui_widget *w, const void *ev, void *ctx)
             part = unoui_tabs_hit(TH(), band_tabs(r), &m, e->x, e->y, &slot);
             if (part == UI_TAB_CLOSE && slot >= 0) { tab_close(g_tab_map[slot]); return 1; }
             if (part == UI_TAB_SEL && slot >= 0) {
+                if (g_cur != g_tab_map[slot]) g_src_gen++;   /* switching tabs: re-parse the new one */
                 g_cur = g_tab_map[slot]; g_link_sel = -1;
                 if (!g_addr_focus) { sput(g_addr, LOCMAX, g_tab[g_cur].loc);
                                      g_addr_caret = (int)strlen(g_addr); }
