@@ -6,11 +6,33 @@
 #ifndef UNO_VDEV_H
 #define UNO_VDEV_H
 
-#define UNO_VDEV_API 1
+#define UNO_VDEV_API 2
+
+/* One descriptor's buffer, already bounds-checked into an address this
+ * machine may touch.  `write` is the DEVICE's direction: 1 = the device
+ * fills it (a block read's data, a status byte), 0 = the guest filled it. */
+typedef struct {
+    unsigned char *p;
+    unsigned       len;
+    int            write;
+} uno_vseg;
 
 /* 1 = this address belongs to a device and *val has been read or written. */
 int uno_vdev_mmio(unsigned long long gpa, int is_write, unsigned size,
                   unsigned long long *val);
+
+/* Is a virtio device wired to this PIC line asking for attention?  A level:
+ * it stays up until the driver writes InterruptACK. */
+int uno_vdev_mmio_irq_level(int irq);
+
+/* The block device's backing file and what it has served, for the status
+ * block: "1024 KB ro on vol 1, 12 reads 340 sectors" or "no ROOTFS.IMG". */
+int uno_vdev_blk_str(char *buf, int cap);
+
+/* The register traffic, one transaction per call: dev<<45 | write<<44 |
+ * off<<32 | value, 0 past the end.  A driver reports its conclusion ("device
+ * refuses features"); this is what it actually saw. */
+unsigned long long uno_vdev_dbg_entry(int i);
 
 void uno_vdev_reset(void);
 

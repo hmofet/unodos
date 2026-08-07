@@ -16,6 +16,7 @@
  * ======================================================================== */
 #include "unovirt.h"
 #include "unovirt_hv.h"
+#include "unovdev.h"         /* the appliance's disk, for the status block   */
 #include "uefi.h"
 #include "bootinfo.h"
 #include <stdio.h>
@@ -795,6 +796,18 @@ int uno_vmm_status_str(char *buf, int cap)
         int k = snprintf(buf + n, (unsigned)(cap - n),
                          "\n            slice: %s", g_slice_str);
         if (k > 0) n = (n + k >= cap) ? cap - 1 : n + k;
+    }
+    /* A7: the appliance's disk, whether or not a guest ever ran. "no
+     * ROOTFS.IMG" is the common and correct answer on a machine that carries
+     * no appliance, and saying it beats a silent absence that reads as a
+     * broken device. */
+    if (g_lin_armed && n + 24 < cap) {
+        int k = snprintf(buf + n, (unsigned)(cap - n), "\n            disk: ");
+        if (k > 0) {
+            n += k;
+            k = uno_vdev_blk_str(buf + n, cap - n);
+            if (k > 0) n = (n + k >= cap) ? cap - 1 : n + k;
+        }
     }
     return n;
 }

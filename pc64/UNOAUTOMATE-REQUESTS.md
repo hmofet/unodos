@@ -7910,3 +7910,39 @@ NETLOG).  The two lines that decide the next move:
   the GTK bytes out of the EAPOL key data, and `wifi_wpa.c` owns that.
 - `sta=0` on our AP's frames - the firmware does not recognise the transmitter
   as a station at all, which is the same retarget suspicion from the other end.
+
+## 2026-08-07 - REQUEST to the unofs lane: a write-at-offset primitive
+
+From unovirt/unovdev, wiring virtio-blk (A7a). The appliance's disk is a file
+on a real volume - `EFI\UNODOS\VM\ROOTFS.IMG` - and the READ side is already
+exactly right: `uno_fs_read_at` (and `uno_fat_read_at` under it) takes an
+offset, which is what the audio decoders stream large media through, and it is
+what makes a disk image work at all.
+
+There is no counterpart for writing. `uno_fs_write` / `uno_fat_write` create or
+overwrite a file with exactly `len` bytes, so a guest writing one 512-byte
+sector means rewriting a multi-megabyte image, and there is nowhere to put the
+rest of it while that happens.
+
+So the block device is offered to the guest as read-only (`VIRTIO_BLK_F_RO`),
+which is honest and not a disaster: the guest is told before it tries, a
+confusing failure deep inside a filesystem becomes `mount: read-only`, and a
+read-only rootfs under a tmpfs overlay is the ordinary shape for an appliance.
+It does close off a guest that keeps state, which A10's lifecycle work will
+want.
+
+What would unblock it, in whatever shape suits the lane:
+
+    long uno_fs_write_at(int vol, const char *name, long off,
+                         const unsigned char *buf, long len);
+
+writing INTO an existing file without changing its length, returning bytes
+written. In-place sector writes are the whole requirement; extending a file is
+not, and neither is creating one. The native FAT layer already walks the
+cluster chain for `uno_fat_read_at`, so this is the same walk with the copy
+turned around, plus the dirty-sector write-back the write path already has.
+
+No hurry: A7's exit criterion is a guest that mounts its rootfs and reaches the
+network, and read-only reaches both. Recording it because the constraint is
+invisible from the outside - "the appliance disk is read-only" looks like a
+policy decision and is really a missing primitive one layer down.

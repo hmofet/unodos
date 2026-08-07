@@ -1815,6 +1815,30 @@ faults on the first instruction that assumes it.
   lands on the live registers: the low byte becomes a character on the
   console and **the high byte overwrites the IER**, so setting the speed
   silently disarms every interrupt the driver just enabled.
+- **S-HV-41** [assert] The instruction decoder's register table MUST map every
+  x86 encoding to the right slot, and it MUST be checked against the encoding
+  order rather than read for plausibility. Encodings 6 and 7 are RSI and RDI
+  and were mapped to each other's slots from A5 until A7: invisible, because
+  the hand-written test guests use rax/rbx/rcx/rdx and guest port I/O goes
+  through rax. A real driver used ESI, and the symptom named an unrelated
+  subsystem (`virtio: device refuses features`). site: `hv_vmx.c gpr`.
+- **S-HV-42** [auto] A version-2 virtio transport MUST offer
+  `VIRTIO_F_VERSION_1` and MUST honour FEATURES_OK: the driver sets the bit,
+  reads the status back, and refuses the device if it did not stick. Offering
+  no features is honest only for a device nobody drives.
+- **S-HV-43** [auto] A device MUST know which of its queues the guest FILLS
+  and which it merely lends. A console's queue 0 is receive; completing a
+  receive buffer means "here is your input", so completing them all
+  immediately with zero bytes is an interrupt storm that stops the guest dead.
+  A buffer with nothing to put in it is HELD.
+- **S-HV-44** [auto] A descriptor chain walk MUST preserve each buffer's
+  DIRECTION (`VIRTQ_DESC_F_WRITE`), not flatten the chain. A block request is
+  a readable header, data segments either way, and a writable status byte
+  found by position - and a device that scans for the status byte instead will
+  eventually pick a data buffer.
+- **S-HV-45** [auto] A short read MUST pad with zeroes, never leave the
+  buffer's previous contents. Whatever was there came from the guest, and
+  returning it as disk contents is a disclosure dressed as a read.
 - **S-HV-11** [assert] The probe MUST count only free conventional memory
   (`EfiConventionalMemory` / E820 type 1). Counting firmware-reserved or
   boot-services ranges would overstate a machine sitting on the floor, which
