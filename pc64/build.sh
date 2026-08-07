@@ -88,16 +88,30 @@ if [ "$UNO_DEBUG" != "0" ]; then
     DBG_ID="debug-$(git rev-parse --short HEAD 2>/dev/null || echo local)-$(date -u +%Y%m%d-%H%M 2>/dev/null || echo x)"
     DBGDEF="-DUNO_DEBUG -DUNO_BUILD_ID=\"$DBG_ID\" -fno-omit-frame-pointer"
     [ "${UNO_DBGCON:-0}" != "0" ] && DBGDEF="$DBGDEF -DUNO_DBGCON"
-    # DETACH OFF BY DEFAULT IN THE DEBUG BUILD (finding F8).
-    # The native stack has no USB mass-storage driver, so ExitBootServices on a
-    # USB-booted system strands its own boot volume: telemetry cannot be
-    # written and the stress driver cannot read STRESS.CFG. The Latitude
-    # (detach_blocked=0) hit exactly this and was untestable. Every test boot is
-    # from USB, so detaching makes the harness useless on any machine that
-    # qualifies. UNO_DETACH=1 re-enables it for deliberately testing detach.
-    if [ "${UNO_DETACH:-0}" = "0" ]; then
+    # DETACH ON BY DEFAULT IN THE DEBUG BUILD, as of 2026-08-06.
+    #
+    # It used to be off, on finding F8: "the native stack has no USB mass-storage
+    # driver, so ExitBootServices on a USB-booted system strands its own boot
+    # volume" - telemetry unwritable, STRESS.CFG unreadable, and every test boot
+    # is from USB. That reason stopped being true when usbmsc.c landed:
+    # try_detach() has read "a USB boot detaches by DEFAULT as of 2026-07-30,
+    # confirmed on metal" since, and the ZimaBlade runs detached off a stick with
+    # storage, network, keyboard and mouse all native.
+    #
+    # Leaving the old default in place had a cost that outweighed the risk it was
+    # still guarding: the debug build is the ONLY build that produces a BOOTLOG,
+    # so the one build that can observe detach was the one build that compiled it
+    # out, and anyone testing detach had to know to say UNO_DETACH=1 (requests
+    # file, 2026-08-04). The risk itself now has a RUNTIME escape hatch that
+    # needs no rebuild: `DETACH.CFG: off` (never detach) or `nousb` (detach
+    # unless this is a USB boot), dropped on the stick from any other machine.
+    #
+    # UNO_DETACH=0 restores the old compile-time behaviour.
+    if [ "${UNO_DETACH:-1}" = "0" ]; then
         DBGDEF="$DBGDEF -DUNO_NO_DETACH"
-        echo "[dbg] detach DISABLED (F8: it strands a USB boot volume). UNO_DETACH=1 to re-enable."
+        echo "[dbg] detach compiled OUT (UNO_DETACH=0)."
+    else
+        echo "[dbg] detach ENABLED (default since 2026-08-06; DETACH.CFG: off|nousb to override at runtime)."
     fi
     if [ "${UNO_UBSAN:-1}" != "0" ]; then
         # trap-on-error routes every caught UB to a ud2 -> our #UD handler ->
@@ -178,7 +192,7 @@ if [ "$1" != "legacy" ]; then
     # uACPI. Both engines always compile, same rule as the browser's two
     # painters.
     QJSCF="-O2 -ffreestanding -fno-stack-protector -fno-stack-check -nostdinc \
-           -Iquickjs/compat -Iinclude -Iquickjs -I. \
+           -Iquickjs/compat -Iinclude -Iquickjs -I. -I../unojs \
            -D__DJGPP -U_WIN32 -U_WIN64 -U__MINGW32__ -U__MINGW64__ \
            -Dalloca=__builtin_alloca -DJS_NAN_BOXING=0 -DUNO_COLOR=1 -DUNO_PC64 ${UNO_EXTRA:-} $DBGDEF"
     for f in quickjs libregexp libunicode dtoa qjs_port; do
