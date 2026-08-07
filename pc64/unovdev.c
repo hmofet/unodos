@@ -28,6 +28,7 @@
 #include "unovirt.h"
 #include "unovdev.h"
 #include "pc64_fs.h"       /* the block device is a FILE on a real volume   */
+#include "unovirt_mgr.h"   /* the running appliance names its own disk      */
 #include <stdio.h>
 
 typedef unsigned int       u32;
@@ -321,10 +322,14 @@ static struct {
 
 static void blk_attach(void)
 {
-    static const char *paths[2] = { "EFI\\UNODOS\\VM\\ROOTFS.IMG", "ROOTFS.IMG" };
+    const char *paths[2];
     int nvol, v, i;
     if (BLK.tried) return;
     BLK.tried = 1;
+    /* The running appliance's own disk, or the one already staged. */
+    paths[0] = uno_vm_path_disk();
+    if (!paths[0][0]) paths[0] = "EFI\\UNODOS\\VM\\ROOTFS.IMG";
+    paths[1] = "ROOTFS.IMG";
     nvol = uno_fs_volumes();
     for (v = 0; v < nvol; v++) {
         for (i = 0; i < 2; i++) {

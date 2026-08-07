@@ -17,6 +17,7 @@
 #include "unovirt.h"
 #include "unovirt_hv.h"
 #include "unovdev.h"         /* the appliance's disk, for the status block   */
+#include "unovirt_mgr.h"     /* appliances as things a user has              */
 #include "uefi.h"
 #include "bootinfo.h"
 #include <stdio.h>
@@ -746,6 +747,43 @@ void uno_vmm_tick(void)
          * heartbeat and at shutdown. */
         uno_dbg_log("vm slice: %s", g_slice_str);
     }
+}
+
+/* ---- starting a guest because somebody asked, not because a flag was set --
+ *
+ * The selftest places its kernel as the last step of a proof. This is the
+ * other way in: a manager application picks an appliance and starts it, on a
+ * machine that may never have run the selftest at all.
+ *
+ * It still enters host mode through the same gate, and it still refuses
+ * rather than guesses - `uno_vmm_eligible()` first, then the backend's own
+ * `enable`, which is the call that can fail on a machine whose firmware
+ * locked virtualization off. */
+int uno_vmm_place_guest(void)
+{
+    const uno_vm_caps *c = uno_vmm_probe();
+    const char *why = 0;
+    unsigned m = 0;
+
+    if (!uno_vmm_eligible(&m)) return 0;
+    if (!g_hv) {
+        if (c->vendor == UNO_HV_VMX) g_hv = uno_hv_vmx();
+        else if (c->vendor == UNO_HV_SVM) g_hv = uno_hv_svm();
+    }
+    if (!g_hv || !g_hv->linux_boot) return 0;
+    if (!g_hv->enable(&why)) return 0;
+    if (!g_hv->linux_boot(&g_lin)) return 0;
+    g_lin_armed = 1;
+    g_lin_reported = 0;
+    g_slice_armed = 0;              /* one VMCS, so one guest (A6b)         */
+    snprintf(g_lin_str, sizeof g_lin_str, "starting");
+    return 1;
+}
+
+void uno_vmm_stop_guest(void)
+{
+    g_lin_armed = 0;
+    snprintf(g_lin_str, sizeof g_lin_str, "stopped by request");
 }
 
 int uno_vmm_status_str(char *buf, int cap)

@@ -23,6 +23,7 @@
 #include "pc64_native.h" /* the calibrated TSC rate, for the slice budget */
 #include "unovdev.h"     /* the device the MMIO decode answers for        */
 #include "pc64_fs.h"     /* A6 reads the kernel off the filesystem        */
+#include "unovirt_mgr.h" /* which appliance the user asked for            */
 
 typedef unsigned int       u32;
 typedef unsigned short     u16;
@@ -1416,6 +1417,7 @@ static void lin_sink(const char *s)
     g_lin_last[i] = 0;
     for (i = 0; SHELL_MARK[i] && s[i] == SHELL_MARK[i]; i++) { }
     if (!SHELL_MARK[i]) g_lin_shell_ok++;
+    uno_vm_con_push(s);              /* the manager app's console view      */
     trace("[lin] "); trace(s); trace("\n");
 }
 
@@ -1505,7 +1507,8 @@ static long lin_initrd(void)
 {
     const char *paths[2];
     int vol, nvol = uno_fs_volumes(), i;
-    paths[0] = "EFI\\UNODOS\\VM\\INITRD";
+    paths[0] = uno_vm_path_initrd();
+    if (!paths[0][0]) paths[0] = "EFI\\UNODOS\\VM\\INITRD";
     paths[1] = "INITRD";
     for (vol = 0; vol < nvol; vol++) {
         for (i = 0; i < 2; i++) {
@@ -1532,7 +1535,11 @@ static long lin_load(u64 *entry)
 {
     long size, off, got;
     int vol, nvol = uno_fs_volumes();
-    const char *path = "EFI\\UNODOS\\VM\\BZIMAGE";
+    /* The running appliance's own kernel when it has one. An unconfigured VM
+     * falls back to the appliance already on the disk rather than failing,
+     * which is what lets a freshly created VM boot at all. */
+    const char *want = uno_vm_path_kernel();
+    const char *path = want[0] ? want : "EFI\\UNODOS\\VM\\BZIMAGE";
     u8 *setup = (u8 *)uno_vmm_gpa(L_ZEROPG + 0x1000, 4096);   /* scratch     */
     u8 *dst;
     unsigned setup_sects;

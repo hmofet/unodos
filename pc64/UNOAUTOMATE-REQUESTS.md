@@ -7946,3 +7946,20 @@ No hurry: A7's exit criterion is a guest that mounts its rootfs and reaches the
 network, and read-only reaches both. Recording it because the constraint is
 invisible from the outside - "the appliance disk is read-only" looks like a
 policy decision and is really a missing primitive one layer down.
+
+## 2026-08-07 - REQUEST to the toolkits lane: a desktop slot for APPS\VMGR.UNO
+
+From unovirt. `VMGR.UNO` ("Appliances") is a unoui-class module, built and
+shipping, and it works today from Files or `uno.run_app` - it just has no
+icon, exactly like LOGVIEW.UNO before its slot landed.
+
+Giving it one means the same dozen edits in `pc64_uui.c` that LOGVIEW needed:
+an `EX_VMGR`, `NEXTRA` +1, both name tables, the hidden test, an icon, and the
+launch/key/frame dispatch. AGENTS.md §2 allows me one appended tick call
+there, which unovirt has already used for `uno_vmm_tick()`, so this is yours
+rather than mine.
+
+Worth doing when convenient, and it matters a little more here than it did for
+the log viewer: a virtual machine is a thing a user goes looking for, and an
+appliance manager you can only reach through the file browser is one most
+people will never find.
