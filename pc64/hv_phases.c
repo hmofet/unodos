@@ -738,13 +738,22 @@ static int a5_emit(void)
     for (i = 0; i < 8; i++) p[0x0C + i] = (u8)((u64)GP_CELLS >> (8 * i));
     p[0x14] = 0x8B; p[0x15] = 0x03;
     p[0x16] = 0x89; p[0x17] = 0x01;
-    p[0x18] = 0x31; p[0x19] = 0xC0;
-    p[0x1A] = 0x89; p[0x1B] = 0x43; p[0x1C] = 0x50;
-    p[0x1D] = 0x48; p[0x1E] = 0xBA;
-    for (i = 0; i < 8; i++) p[0x1F + i] = (u8)((u64)GP_VQ_USED >> (8 * i));
-    p[0x27] = 0x8B; p[0x28] = 0x42; p[0x29] = 0x02;
-    p[0x2A] = 0x89; p[0x2B] = 0x41; p[0x2C] = 0x04;
-    p[0x2D] = 0xF4;
+    /* QUEUE 1, THE TRANSMIT QUEUE. This used to ring queue 0, which was a
+     * latent disagreement with the spec rather than a bug anyone could see:
+     * A5's device had one queue and obliged. A virtio console's queue 0 is
+     * RECEIVE and queue 1 is TRANSMIT, and once the device learned the
+     * difference - which it had to, because a real driver posts receive
+     * buffers first - this guest was ringing the queue with nothing to send.
+     * `mov eax, 1` is five bytes where `xor eax, eax` was two, so everything
+     * after it shifts by three. */
+    p[0x18] = 0xB8;
+    p[0x19] = 0x01; p[0x1A] = 0; p[0x1B] = 0; p[0x1C] = 0;
+    p[0x1D] = 0x89; p[0x1E] = 0x43; p[0x1F] = 0x50;
+    p[0x20] = 0x48; p[0x21] = 0xBA;
+    for (i = 0; i < 8; i++) p[0x22 + i] = (u8)((u64)GP_VQ_USED >> (8 * i));
+    p[0x2A] = 0x8B; p[0x2B] = 0x42; p[0x2C] = 0x02;
+    p[0x2D] = 0x89; p[0x2E] = 0x41; p[0x2F] = 0x04;
+    p[0x30] = 0xF4;
     return 1;
 }
 
