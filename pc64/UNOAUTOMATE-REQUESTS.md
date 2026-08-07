@@ -11,6 +11,180 @@ fulfilled.
 
 
 
+## 2026-08-06 — SWEEP: the open pc64 requests, answered (branch `reqsweep`)
+
+One pass over every pc64 request still open, WiFi on the Surface Go excluded by
+the user. Taken in one branch because they are one-file changes in six lanes;
+landed as one commit per lane. Answers below in the order of the entries.
+
+### 1. "DNS fails on a PRODUCTION build" — NOT A DEFECT, and the build is not the variable
+
+**Reproduced first, then falsified.** The production image does fail exactly as
+filed, so the report was accurate. What it was not is a property of the build.
+
+Widening the browser's own failure string to carry what `net.c` already counts
+gave the answer in one run:
+
+    DNS lookup failed [srv 10.0.2.3 optdns=1 sent=4 rx=3 badid=0 neg=3]
+
+The resolver address is right, it came from a real DHCP option 6, and it
+ANSWERED - three times, every answer carrying zero records. That is not a
+broken resolver, it is a resolver saying "no such name", so the question moved
+to the host:
+
+    WSL:      google.com 142.250.137.139   cloudflare.com 104.16.133.229
+              example.com FAILED (Name or service not known)
+    Windows:  Resolve-DnsName example.com  -> "DNS name does not exist"
+              Resolve-DnsName example.com -Server 1.1.1.1 -> answers
+
+**This network's resolver NXDOMAINs example.com**, which is the host the two
+manual scenes fetch. The same production image fetches `http://google.com/` and
+renders it, `HTTP/1.0 200 OK`. The debug-build evidence in the original entry
+was `netverify_urc.py` (a local server, no DNS) and the size-cap work (google),
+so debug-vs-production was never actually tested against the same name.
+
+Landed anyway, because the report cost more than it should have:
+
+- **The error now says which of the two happened** - "nothing answered" vs "no
+  address for that name" vs "replies did not match our query" - and names the
+  resolver it asked and how many queries it took. `pc64_http.c`.
+- **`docs_shots.py` takes `UNO_DOCS_HOST`**, so the figures can be regenerated
+  from a network where example.com resolves without editing the scene. The
+  committed figures are untouched.
+
+### 2. "an exhausted arena draws NOTHING, not less" — FIXED
+
+Both halves. The mechanism turned out to be that the arena never frees, so
+exhaustion is TERMINAL: whichever phase hits the wall takes every later phase
+with it, and paint is last. Two changes, in `unoweb`:
+
+- **The display list's first block is reserved at document construction**
+  (`uw_paint_reserve`, 512 commands), before the tree can spend the arena. The
+  paint walk is in document order, so what survives is the top of the page.
+- **The parse gets half the arena**, released by `uw_parse_end`. The parse is
+  the cheapest phase by an order of magnitude, so this never bites a document
+  that renders; what it stops is a tree eating the room that styling, layout
+  and painting were going to need. In the same place: `ensure_body` now runs
+  even on a truncated parse, because `uw_layout` starts at `uw_body()` and
+  returns -1 without one, which was its own path to a blank page.
+
+Measured with your repro, same program both sides:
+
+    <p>s  arena   before   after
+     500   1 MB      512    1024
+    1000   1 MB        0     512
+    1000   2 MB     2048    2048
+    2000   1 MB        0     512
+    2000   2 MB        0     512
+    2000   4 MB     4096    4096
+
+Every zero is now the top of the page; no case is worse; every document that
+fitted paints the identical count. Regression test committed
+(`unoweb/test/run_tests.c`, "arena-exhausted-paints-something"), 73 checks green
+including ASan.
+
+`unoweb.h` also stops implying the flag is parse-time - the header now says
+outright that four phases draw on the arena and that a consumer must re-check
+`uw_doc_truncated()` after `uw_paint()`.
+
+### 3. "the keep-alive test page renders NOTHING" — ALREADY FIXED, closing it
+
+`tools/netverify_urc.py` on today's master:
+
+    pass the h1 is drawn in the colour c.css set
+    pass the body text is drawn in the colour a.css set
+
+The `<link rel=stylesheet>` page renders WITH its sheets applied. Something
+between `f44d12c5` and now fixed it, most likely the renderer becoming a runtime
+switch (`0e848030`), which moved `dom_sync`'s sheet work out of the `#ifdef`.
+
+**But the same run has two failures, and they are on master, not on this
+branch** - I built pristine `1a133f6b` and ran the same harness to be sure:
+
+    FAIL keep-alive: the second page reuses pooled connections
+    FAIL a pool the server dropped still serves the page
+
+11 pass / 2 fail, identical both sides. M7 recorded keep-alive as landed and
+measured, so this is a regression after it, not an unbuilt feature. Filed here
+rather than fixed - it is the browser/unonet lane's call and it wants the
+connection-reuse path, not a sweep.
+
+### 4. "the listener does not reliably return to accepting" — FIXED, and the cause is not in listen mode
+
+The listener was never the leak. `net.c` allocates a socket slot for every
+inbound SYN and, until now, the ONLY thing that ever freed one was an app
+accepting the child and later closing it. Everything else stayed allocated for
+the life of the boot: half-open handshakes, port scans, a client that connected
+while URC was already busy with another, and - your repro - a client that left
+without a clean BYE. `NSOCK` is 16. Eight connect/query/close cycles filled the
+table, `sock_alloc` began failing, inbound SYNs were dropped, and the box went
+on answering pings while accepting nothing. It also explains the part that
+looked strangest: a disarm/re-arm at the console did not clear it, because the
+leaked slots outlive the listener.
+
+`tcp_reap()` in `net.c` now frees an UNACCEPTED child that is dead with nothing
+left to read, stuck mid-handshake past ~5 s, or established and unclaimed for
+~30 s. An accepted socket belongs to its app and is never touched.
+
+Second half done too: `lst_state` logs one line each way - "remote: client
+accepted 10.0.2.2:49871 (listening on 5099)" and "remote: client gone,
+listening again" - so a wedged listener and a crashed box stop looking alike.
+
+Not reproduced on hardware; the repro you suggested (`tools/listen_qemu.py`,
+drop N clients without BYE) is the right test and I have not run it.
+
+### 5. "qjs_port.c has the RTC test inverted" — FIXED
+
+`rtc_epoch_s` now tests `!uno_native_rtc_read(...)`. `Date` in quickjs was
+permanently at the epoch on every machine with a working clock. Your suggested
+one-line doc comment is on `uno_native_rtc_read` in `pc64_native.h`, naming all
+three callers that got it wrong so a fourth does not. The stub in
+`quickjs/test/webjs_test.c` had the same inversion as the one you fixed in
+`cache_test.c` - it returned 0 for success - and is corrected.
+
+### 6. "bless ujs_math as a stable double-math surface" — DONE
+
+`unojs/ujs_math.h` is public and **[STABLE]**, documented in `UNOJS.md` with its
+contract and its limit (C99 semantics for finite inputs, not correctly-rounded).
+`ujs_int.h` now includes it instead of declaring the set, and the quickjs compat
+header consumes it instead of hand-declaring fourteen symbols. Both the kernel
+build and `quickjs/test/build-host-test.sh` gained `-I../unojs`; they are
+supposed to mirror each other and the host script caught the drift immediately.
+
+### 7. "a one-line tap in uno_dbg_log" — DONE
+
+`uno_dbg_log()` ends with `unolog_tap(LOG_DEBUG, body)` on the weak-symbol seam
+that file already uses for the TCO watchdog, so it links with or without unolog
+and needs no ordering. The uptime stamp is stripped (unolog stamps its own) and
+the trailing newline dropped (a record is a line). ~96 call sites - NIC
+bring-up, i2c-hid enumeration, account layout - now reach the System Log.
+
+### 8. "the debug build cannot test detach at all" — DONE, the default is flipped
+
+`build.sh` no longer adds `-DUNO_NO_DETACH` to a `UNO_DEBUG=1` build. Finding F8
+stopped being true when `usbmsc.c` landed - `try_detach()` has said so since
+2026-07-30 - and the cost of leaving it was that the only build producing a
+BOOTLOG was the only build that compiled detach out. The risk it guarded now has
+a runtime escape hatch needing no rebuild (`DETACH.CFG: off` / `nousb`).
+`UNO_DETACH=0` restores the old behaviour.
+
+### Not addressed, and why
+
+- **The quickjs DOM adapter stays pinned** (`js.c`). I reproduced the crash and
+  narrowed it: it is genuinely PRE-MAIN (a `printf`+`fflush` as main's first
+  statement never appears, captured to a file so no buffer can eat it), it is
+  `0xC0000005`, and it is triggered by the mere PRESENCE of a second
+  `suite(JS_ENGINE_QUICKJS, ...)` call - un-pinning `webjs_engine_current()`
+  with one suite passes 17/17. So the fault is in the host test BINARY's
+  startup, not in running the binding. That is not enough to clear the adapter
+  for the OS, so the pin stands. `webjs_test.c` now flushes per line, which is
+  what made "dies before main" checkable rather than inferred.
+- **PYRT.UNO hung once** needs `\CRASH\DEFAULTS\HG005.TXT` read off the
+  ZimaBlade; it has not reproduced and there is nothing to work from without it.
+- **`mtrr-wc`** is closed by the hardware, not by code.
+- **WiFi on the Surface Go**, excluded by the user for this pass.
+
+
 ## 2026-08-06 — docs/browser → unonet owner: DNS fails on a PRODUCTION build
 
 Found while regenerating the manual, and it stopped three figures from
