@@ -1,14 +1,20 @@
 # pc64 app registry: apps that install themselves
 
-Status: DESIGN, not yet implemented. Written 2026-08-07 in answer to the
-2026-08-07 request + correction in `pc64/UNOAUTOMATE-REQUESTS.md` ("a desktop
+**Status: IMPLEMENTED, all five phases, 2026-08-07.** Written the same day in
+answer to the request + correction in `pc64/UNOAUTOMATE-REQUESTS.md` ("a desktop
 slot for APPS\VMGR.UNO", and the correction that a slot is not discoverability
 but the only way to run a unoui-class module at all).
 
+This document is kept as the RATIONALE - why the format is shaped the way it is,
+and which constraints are load-bearing. The contract an app author needs is
+`pc64/MODULES.md` and `pc64/uno_appdesc.h`. §12 records where the plan turned
+out to be wrong.
+
 Owner of the largest piece: the **toolkits lane** (`pc64_uui.c`). Additive
-pieces land in `pc64_modload.c` (choke-point), `tools/mkuno.py` and
-`pc64/build.sh`. Two small capabilities are requested from other lanes and are
-listed in §9.
+pieces landed in `pc64_modload.c` (choke-point), `tools/mkuno.py` and
+`pc64/build.sh`. Two small capabilities were needed from other lanes and are
+listed in §9; both were built here rather than filed, since neither is more than
+a listing call.
 
 ---
 
@@ -357,15 +363,15 @@ pin.vmgr=1
 
 ## 10. Phasing, each phase shippable on its own
 
-| Phase | Content | Gate |
-|---|---|---|
-| 1 | Descriptor format, `UNO_APP_DESC`, `mkuno.py` support, `uno_mod_desc_read`. Descriptors added to PHOTOS/LOGVIEW/VMGR. No shell change. | host round-trip test; QEMU diskboot unchanged; old kernel still loads the new modules |
-| 2 | The registry inside `pc64_uui.c`, replacing `EX_*` for the five existing uui modules and the natives/bridge. Behaviour identical. | `harness.py unoapps`; Start menu and desktop screenshot-identical to master |
-| 3 | Discovery: scan `APPS\`, register unknown modules. VMGR appears with zero code written for it. | drop a `.UNO` onto the ESP, boot, it is in the menu and it opens; over-cap scan reports rather than truncates |
-| 4 | `SHELL.CFG` v3 + `APPS.CFG` + id-based automation. | a v2 config restores correctly once and is rewritten as v3; `launch_id` drives the manual scenes |
-| 5 | Optional: categories in the menu, pinning, QOI icons, `AK_CLASSICMOD`. | per feature |
+| Phase | Content | Gate | Landed |
+|---|---|---|---|
+| 1 | Descriptor format, `UNO_APP_DESC`, `mkuno.py` support, `uno_mod_desc_read`. Descriptors on all seven uui modules. No shell change. | `tools/appdesc_test.py`; both builds | `c68a2256` |
+| 2 | The registry inside `pc64_uui.c`, replacing `EX_*` for the modules and the natives/bridge. Behaviour identical. | `harness.py unoapps` run against master AND the branch, all 8 scenes pixel-compared | `516d3b20` |
+| 3 | Discovery: scan `APPS\`, register unknown modules. VMGR appears with zero code written for it. | `tools/appreg_urc.py` | `7d67ae2f` |
+| 4 | `SHELL.CFG` v3 + `APPS.CFG` + id-based automation. | `tools/appreg_id_urc.py`, `tools/appreg_v2_urc.py` | `81b2c289` |
+| 5 | Categories in the menu, pinning, QOI icons, classic tier. | `tools/qoi_test.py`, `tools/appreg_p5_urc.py` | `0b58b973` |
 
-Phase 3 is the one the user asked for. Phases 1 and 2 are what make it not a
+Phase 3 is the one that was asked for. Phases 1 and 2 are what make it not a
 pile of special cases, and phase 4 is what stops it corrupting saved sessions
 the first time somebody installs an app.
 
@@ -380,3 +386,64 @@ the first time somebody installs an app.
   is known to corrupt writes on this project.
 - **Do not run `gate.sh | tail`**: the pipe throws the exit status away and a
   failed gate reads as a pass.
+
+## 12. Where the plan was wrong, and what implementing it taught
+
+Kept because the corrections are more useful than the parts that were right.
+
+**The descriptor block needed its own SECTION, and the attribute goes on the
+declarator.** The plan said "a `const` struct in section `.unodesc`" and left it
+there. `__attribute__((section(...)))` written after a struct's closing brace
+attaches to the anonymous TYPE, where `section` is silently dropped: the block
+lands in `.rdata` with nothing to find it by, and every module reports NO
+DESCRIPTOR. Cost one build cycle to find, and it is in the macro's comment now
+so nobody rediscovers it.
+
+**A separate section costs a page per module.** `.unodesc` lands before `.bss`
+(verified on all seven), so the file image grows by one section alignment page
+rather than by the bss gap - about 4 KB for a 67-byte descriptor. Accepted for
+determinism: locating the block by section NAME cannot false-positive, whereas
+scanning the image for a magic number could.
+
+**The built-in slots did NOT need renumbering, and not renumbering them was the
+right call.** The plan described sorting every app by `(cat, rank, name)`. Doing
+that would have moved every existing index in one commit, before the id-keyed
+persistence of phase 4 existed to absorb it. Built-ins keep their indices;
+discovered rows append. The registry got all of its value without the churn.
+
+**`app_restorable` was left exactly as it was** (natives plus the Browser).
+Widening it to "anything that is not a host slot" would have been a behaviour
+change smuggled into a refactor, and the flag that would justify it
+(`UAF_NOSESSION`) has no consumer asking for it yet.
+
+**The hand-written dispatch lists were still wrong when phase 2 landed**, which
+is a stronger argument for the registry than the plan made. LOGVIEW was missing
+from both the `action` list and the `key` list, and its `canvas_index` case said
+`return m->canvas_index();` inside a void function - the same bug the comment
+three lines above it described as already fixed for the other three. gcc had
+been reporting it as `'return' with a value, in function returning void` the
+whole time.
+
+**Sections in the Start menu had to be opt-in.** The plan treated grouping as a
+free win once `cat:` existed. It is not free: it REORDERS the menu, and every
+harness scene and manual figure that reaches an app by counting `down` presses
+depends on the flat order. Default off, with the toggle in the Control Panel,
+until those scenes use `launch <id>`.
+
+**QOI arrived in phase 5 rather than "later, cheaply".** It was worth doing
+immediately, because a named emblem still requires a case in the kernel and so
+is not actually available to an app that arrives on a stick - which is the whole
+population this design exists for. Eighty lines, no tables, no allocation, and
+the encoder was already in the tree.
+
+**Pinning is not a flag a module may declare.** The plan listed `pin` beside
+`hide` and `name` in `APPS.CFG` without saying why it could not also be a
+descriptor key. It cannot: an app that could pin itself to the taskbar would,
+and the bar would be whatever was installed last rather than what its owner
+chose.
+
+**One bug the gates found that reading did not:** an `APPS.CFG` rename renamed
+the app in the launcher, on the desktop and on the taskbar, and not in its title
+bar, because the module titles its own window from its `UnoUuiApp.name`. The
+registry is the authority for what an app is called; the module stays the
+authority for everything inside the frame.

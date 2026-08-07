@@ -32,6 +32,77 @@ uno3d / the HTML engine directly and have no AppInterface counterpart.
 The classic games' native canvases in `pc64_games.c` are no longer routed;
 the `.UNO` bridge versions run instead, so ALL apps load from storage.)
 
+## The app descriptor: what a module says about itself
+
+A module carries the metadata the launcher needs, so **dropping a `.UNO` into
+`APPS\` is the whole install**: it gets a desktop icon, a Start-menu row, a
+taskbar chip and a window with no kernel edit and no rebuild. One macro, beside
+your `UnoUuiApp`:
+
+```c
+#include "uno_appdesc.h"
+
+UNO_APP_DESC("id: myapp\n"          /* stable identity - EVERYTHING durable   */
+             "name: My App\n"       /*   is keyed by it, never by slot index  */
+             "short: MyApp\n"       /* desktop-icon label (defaults to name)  */
+             "icon: tools\n"        /* a named emblem, or file:MYAPP.QOI      */
+             "cat: tools\n"         /* system|net|tools|media|games|other     */
+             "rank: 50\n"           /* sort within the section                */
+             "min: 480x320\n");     /* preferred window size                  */
+```
+
+`mkuno.py convert` validates this at BUILD time - an unknown category, an
+unknown flag, a bad id, a malformed `min`, a repeated key or a second block in
+one module are all build failures. An unknown KEY is deliberately accepted and
+ignored at runtime; that is the format's extension point.
+
+**The attribute goes on the declarator.** `__attribute__((section(...)))`
+written after a struct's closing brace attaches to the anonymous TYPE, is
+silently dropped, and the block vanishes into `.rdata` with nothing to find it
+by. The macro gets this right; a hand-rolled one may not.
+
+### How the shell reads it, and why the format is shaped this way
+
+`UnoModHdr.desc_rva` (the header word formerly called `rsv`) points at the block
+inside the module image. Reading it is **two `uno_fs_read` calls and executes
+nothing**: 48 bytes for the header, then at most 1 KB at `48 + desc_rva`. That
+constraint drives the whole design - the module arena is 4 MB and `mod_free`
+only unwinds the most recent allocation, so enumerating apps by loading them is
+not available at any price, and a 300 KB module is ~1.1 s of single-sector I/O
+besides.
+
+Compatible in both directions: an older kernel ignores `desc_rva` and loads a
+new module exactly as before; a newer kernel meeting an old module sees 0 and
+derives an id and name from the filename. (Appending the block after the reloc
+table was the obvious alternative and is wrong: `mod_instantiate` requires
+`48 + file_size + 4*nreloc == n` EXACTLY.)
+
+### Shipping your own icon
+
+`icon: file:MYAPP.QOI` names a QOI file beside the module. QOI because the shell
+draws an app's icon *before* it would load a byte of that app's code, so the
+decoder is in the kernel (`pc64_qoi.c`) - and the OS already encodes QOI for
+remote desktop, so this is the other half of a format it speaks. 32x32 RGBA,
+alpha as a 1-bit key. Author one with `tools/mkicon.py`. Twelve custom emblems
+fit; past that an app keeps its named emblem, so a bad or absent icon costs a
+plainer icon and nothing else.
+
+### Which tiers get a desktop slot
+
+**unoui-class** modules (flags bit 0) are full desktop citizens. **Classic**
+KernelApi modules get a row too if they carry a descriptor, but they run in the
+shared user slot, so only one can be resident at a time - a limit of that tier,
+and the reason to write new apps to the unoui one. PYRT, `.PY` containers and
+`\DRIVERS\` modules deliberately get no row: an icon for any of them would be an
+icon that opens nothing.
+
+### The user's last word
+
+`APPS.CFG`, beside `SHELL.CFG`, overrides what a module declared:
+`name.<id>=`, `short.<id>=`, `cat.<id>=`, `rank.<id>=`, `hide.<id>=1`,
+`pin.<id>=1`. Renaming or hiding an app never means editing somebody's `.UNO`.
+Pinning is not a flag a module may declare about itself.
+
 ## Container format (`tools/mkuno.py`)
 
 A `.UNO` is a flattened PE32+ DLL: a 48-byte header, the section image laid
@@ -68,8 +139,21 @@ that table for the import check, and the kernel link fails on a typo.
 
 ## Verification
 
+- `python3 tools/appdesc_test.py`: mkuno's validator rejects what it promises
+  to, and every shipped `.UNO`'s descriptor parses the same way an independent
+  re-implementation of the kernel's reader parses it.
+- `python3 tools/qoi_test.py`: compiles the kernel's QOI decoder with the host
+  gcc and round-trips it against `mkicon.py`'s encoder, plus six malformed
+  inputs it must refuse.
+- `UNO_DEBUG=1 ./build.sh && python3 tools/appreg_urc.py`: a module with no
+  compiled-in slot (`APPS\VMGR.UNO`) gets a row and opens. Also
+  `appreg_id_urc.py` (launch by id, `SHELL.CFG` v3), `appreg_v2_urc.py` (a v2
+  session file still restores and migrates), `appreg_p5_urc.py` (`APPS.CFG`
+  overrides, pinning, a shipped icon).
 - `python3 harness.py unoapps`: boots the shell in QEMU and opens all 7
-  module apps through the Start menu, one screenshot each.
+  module apps through the Start menu, one screenshot each. **Note this scene
+  navigates by counting `down` presses and has been off by one for some time;
+  new scenes should use URC `launch <id>`.**
 - `python3 tools/install_test.py`: end-to-end: install to a disk (both
   modes), reboot from the installed disk alone, verify the module files on
   the installed ESP offline (mtools) and open a `.UNO` app on the installed

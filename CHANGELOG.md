@@ -5,6 +5,61 @@ All notable changes to UnoDOS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [pc64: a `.UNO` in `APPS\` installs itself] - 2026-08-07
+
+Adding an app to pc64 meant about a dozen edits in `pc64_uui.c` - an `EX_`
+index, two name tables, a presence probe, an icon row and seven separate hook
+dispatch sites - in a file the adding lane usually does not own. Until they were
+made, a shipped module could not be run at all: `APPS\VMGR.UNO` was installed on
+a machine and there was no path to it from Files, from Python or over URC.
+
+Now the module carries what the launcher needs to know and the shell finds it.
+Plan and rationale: [docs/APP-REGISTRY-PLAN.md](docs/APP-REGISTRY-PLAN.md).
+
+### The app descriptor
+
+- A `.UNO` carries a `.unodesc` block (`id / name / short / icon / cat / rank /
+  flags / min`) that `UnoModHdr.desc_rva` points at - the header word formerly
+  called `rsv`, so an older kernel loads a new module unchanged and a newer
+  kernel derives defaults from the filename for an older one.
+- Reading it costs **two sector reads and executes nothing**. The module arena
+  is 4 MB and never frees, so enumerating apps by loading them was never
+  available; a 300 KB module is also ~1.1 s of single-sector I/O.
+- `mkuno.py` validates at build time: unknown category, unknown flag, bad id,
+  malformed size, a repeated key, a second block in one module. An unknown KEY
+  is accepted and ignored - that is the extension point.
+
+### The registry
+
+- An app is a row in `g_app[]` rather than an index in nine switches. One
+  loader, one of each hook. That retires a whole bug class: three of the seven
+  sites had already been missed once, shipping UnoWord deaf to the keyboard, and
+  two of them were still wrong for the log viewer when this landed.
+- `APPS\` is scanned at boot and on demand (`rescan`, or the Control Panel
+  button), so installing an app no longer needs a reboot. Truncation is
+  reported, never silent.
+- `pc64_shell_run_user()` gained its missing branch for unoui-class modules.
+
+### Identity
+
+- **`SHELL.CFG` v3 keys per-app state by id**, not by slot index; v2 files are
+  read through a frozen map and rewritten once. Index-keyed geometry would have
+  handed every later app its neighbour's saved window the first time anyone
+  installed anything. Desktop icon positions persist for the first time.
+- `APPS.CFG` holds user overrides (rename, hide, recategorise, pin).
+- URC gains `apps list`, `launch <id>` and `rescan`; **launch by id, not by
+  number** (`pc64/REMOTE.md`).
+
+### Artwork and grouping
+
+- An app may ship its own icon: `icon: file:NAME.QOI`, decoded by the new
+  `pc64_qoi.c`. QOI because the shell draws the icon before it would load the
+  app's code, so the decoder is in the kernel - and the OS already encodes QOI
+  for remote desktop, so this is the other half of a format it speaks.
+- Start-menu sections by category, off by default (they reorder the menu, and
+  scenes that count keypresses depend on the flat order).
+- Taskbar pinning, and classic-tier modules with a descriptor get a row too.
+
 ## [pc64 firmware detach completed, and a device manager that binds] - 2026-07-30
 
 Two programmes finished on the same day, and one metal run proved both.
