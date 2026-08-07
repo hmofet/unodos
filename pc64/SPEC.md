@@ -1787,7 +1787,8 @@ faults on the first instruction that assumes it.
   a hypervisor that only offers a vector when it happens to look at a good
   instant starves it. With a vector pending and the guest unable to take it,
   **interrupt-window exiting MUST be armed** so the CPU exits the moment the
-  guest becomes ready. site: `hv_vmx.c lin_intr_window`.
+  guest becomes ready. site: `hv_phases.c lin_try_inject` (the policy) over
+  `UNO_VR_INTR_WINDOW` in each backend (the mechanism).
 - **S-HV-37** [auto] Stepping a guest past an intercepted `hlt` MUST retire
   the interrupt shadow. The idle loop is `sti; hlt`, so the shadow STI leaves
   covers exactly the HLT, and the HLT exit therefore arrives with it set.

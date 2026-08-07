@@ -1,17 +1,25 @@
 /* ===========================================================================
  * unovirt - the AMD-V (SVM) backend.  See unovirt_hv.h, pc64/UNOVIRT.md.
  *
- * Phase A1: enter host SVM operation, run a guest, get control back, and prove
- * all three rather than asserting them.
+ * The vendor half only: how a VMCB is laid out, how a guest is entered, how an
+ * exit code is spelled, and where a guest register lives.  The guests, the
+ * device models, the instruction decode and the phase tests are in
+ * hv_phases.c, above the seam.
  *
- * WHAT A1 DELIBERATELY DOES NOT DO: nested paging.  With NP_ENABLE clear a
- * guest's physical addresses ARE host physical addresses, so this guest could
- * reach any byte in the machine.  That is survivable here for exactly one
- * reason - the guest is eleven bytes of machine code in this file, and its
- * segment bases are set so those eleven bytes address nothing else.  It is
- * NOT survivable for anything else, and A2 (NPT + the carve) is what makes an
- * untrusted guest expressible.  Glide's V2/V3a split is the same split for the
- * same reason: prove the round trip first, then take away the machine.
+ * WHAT THIS BACKEND STILL OWES, and it is now exactly one thing: `map`.  With
+ * nested paging absent a guest's physical addresses ARE host physical
+ * addresses, so a guest could reach any byte in the machine - survivable for
+ * A1's eleven bytes of machine code, whose segment bases address nothing else,
+ * and for nothing beyond it.  So `map` is NULL, every phase from A2 on
+ * declines with attribution, and the boot carries on.  It used to owe nine
+ * test guests as well; those were on the wrong side of the seam and are not
+ * this file's business any more.
+ *
+ * A1 runs in REAL MODE here, because on AMD that needs no permission: a guest
+ * may start with CR0.PE clear and no tables at all.  (Intel needs the
+ * "unrestricted guest" control for the same thing, which is why hv_vmx.c
+ * refuses this mode and gets the long-mode arrangement instead.)  Eleven bytes
+ * of guest do not justify building a GDT, page tables and a 64-bit entry path.
  * ======================================================================== */
 #include "unovirt_hv.h"
 #include "unovirt.h"
@@ -49,14 +57,18 @@ typedef unsigned long long u64;
 #define VMCB_INTERCEPT2   0x010          /* VMRUN..MWAIT (u32)               */
 #define VMCB_ASID         0x058          /* u32, MUST be non-zero            */
 #define VMCB_TLB_CTL      0x05C          /* u8                               */
+#define VMCB_INT_STATE    0x068          /* u64, bit 0 = interrupt shadow    */
 #define VMCB_EXITCODE     0x070          /* u64                              */
 #define VMCB_EXITINFO1    0x078
 #define VMCB_EXITINFO2    0x080
+#define VMCB_EVENTINJ     0x0A8          /* u64, the injection field         */
 #define VMCB_NP_ENABLE    0x090          /* u64, bit 0                       */
+#define VMCB_NRIP         0x0C8          /* u64, next RIP when the part has it */
 #define VMCB_SAVE         0x400          /* the state save area starts here  */
 
 /* Instruction-intercept word 1 (VMCB_INTERCEPT1) */
 #define INT1_INTR         (1u << 0)
+#define INT1_VINTR        (1u << 2)      /* the interrupt window             */
 #define INT1_CPUID        (1u << 18)
 #define INT1_HLT          (1u << 24)
 #define INT1_SHUTDOWN     (1u << 31)
@@ -88,27 +100,28 @@ typedef unsigned long long u64;
 #define SS_RAX  0x1F8
 
 /* SVM exit codes we name */
+#define SVM_EXIT_CR0_WRITE 0x10          /* 0x10..0x1F: a write to CR0..15   */
 #define SVM_EXIT_INTR      0x60
+#define SVM_EXIT_VINTR     0x64
 #define SVM_EXIT_CPUID     0x72
 #define SVM_EXIT_HLT       0x78
+#define SVM_EXIT_IOIO      0x7B
+#define SVM_EXIT_MSR       0x7C
 #define SVM_EXIT_SHUTDOWN  0x7F
+#define SVM_EXIT_XSETBV    0x8D
 #define SVM_EXIT_NPF       0x400
 #define SVM_EXIT_INVALID   0xFFFFFFFFFFFFFFFFull
 
 /* ---- the pages ------------------------------------------------------------
  * .bss, 4 KiB aligned.  The image is identity-mapped, so a virtual address IS
  * a physical address here; that is also why the guest can be handed the same
- * pointer the host uses.  When A2 introduces a carve this stops being true and
- * the translation gets a single seam (uno_vm_gpa), which is the point of doing
- * it there rather than here. */
+ * pointer the host uses.  When `map` lands and a carve exists this stops being
+ * true, and the translation already has its single seam (uno_vmm_gpa). */
 __attribute__((aligned(4096))) static u8 g_vmcb[4096];
 __attribute__((aligned(4096))) static u8 g_hsave[4096];
-__attribute__((aligned(4096))) static u8 g_guest[8192];   /* code + its data */
-
-#define GUEST_DATA 0x1000        /* offset in g_guest the guest writes into  */
 
 static int g_enabled;
-static uno_gprs g_ctx;
+static u64 g_guest_xcr0;
 
 /* ---- bring-up trace, opt-in ----------------------------------------------
  * Every step of a first VMRUN is a candidate for a hang with no output: the
@@ -155,6 +168,7 @@ static void wrmsr(u32 msr, u64 v)
 
 static void put32(u8 *p, unsigned off, u32 v) { *(u32 *)(p + off) = v; }
 static void put64(u8 *p, unsigned off, u64 v) { *(u64 *)(p + off) = v; }
+static u32  get32(const u8 *p, unsigned off)  { return *(const u32 *)(p + off); }
 static u64  get64(const u8 *p, unsigned off)  { return *(const u64 *)(p + off); }
 
 static void seg(u8 *save, unsigned off, u16 sel, u16 attrib, u32 limit, u64 base)
@@ -256,29 +270,32 @@ static void svm_entry(u64 vmcb_pa, uno_gprs *g)
 
 /* ---- a machine for a guest to run on -------------------------------------- */
 
-/* Real mode, because on AMD it needs no permission: a guest may start with
- * CR0.PE clear and no tables at all.  (Intel needs the "unrestricted guest"
- * control for the same thing, which is why that bit is in the capability
- * report.)  Eleven bytes of guest do not justify building a GDT, page tables
- * and a 64-bit entry path. */
-static void vmcb_reset(u64 code_base, u64 rip, int idtr_limit)
+static int svm_vcpu_create(uno_vcpu *v, const uno_vm_cfg *cfg)
 {
-    u8 *v = g_vmcb, *s = g_vmcb + VMCB_SAVE;
+    u8 *vm = g_vmcb, *s = g_vmcb + VMCB_SAVE;
     unsigned i;
-    for (i = 0; i < sizeof g_vmcb; i++) v[i] = 0;
 
-    put32(v, VMCB_INTERCEPT1, INT1_CPUID | INT1_HLT | INT1_SHUTDOWN | INT1_INTR);
-    put32(v, VMCB_INTERCEPT2, INT2_VMRUN);
-    put32(v, VMCB_ASID, 1);                    /* 0 is illegal              */
-    put32(v, VMCB_TLB_CTL, 1);                 /* flush this guest's TLB    */
+    /* Long mode would need a GDT, page tables and a 64-bit entry path built
+     * here, and nothing above the seam needs it until `map` exists - so it is
+     * refused rather than half-built, and A1 takes the real-mode arrangement.
+     * Second stage is the same answer for the same reason. */
+    if (cfg->mode != UNO_VM_REAL16) return 0;
+    if (cfg->features & UNO_VMF_SLAT) return 0;
+
+    for (i = 0; i < sizeof g_vmcb; i++) vm[i] = 0;
+
+    put32(vm, VMCB_INTERCEPT1, INT1_CPUID | INT1_HLT | INT1_SHUTDOWN | INT1_INTR);
+    put32(vm, VMCB_INTERCEPT2, INT2_VMRUN);
+    put32(vm, VMCB_ASID, 1);                   /* 0 is illegal              */
+    put32(vm, VMCB_TLB_CTL, 1);                /* flush this guest's TLB    */
 
     /* Real-mode segments whose BASE is where the guest's code actually is.
      * The guest addresses everything through them, which is the only reason a
      * guest with no second-stage translation is bounded at all here. */
-    seg(s, SS_CS, (u16)(code_base >> 4), 0x009B, 0xFFFF, code_base);
-    seg(s, SS_DS, (u16)(code_base >> 4), 0x0093, 0xFFFF, code_base);
-    seg(s, SS_ES, (u16)(code_base >> 4), 0x0093, 0xFFFF, code_base);
-    seg(s, SS_SS, (u16)(code_base >> 4), 0x0093, 0xFFFF, code_base);
+    seg(s, SS_CS, (u16)(cfg->seg_base >> 4), 0x009B, 0xFFFF, cfg->seg_base);
+    seg(s, SS_DS, (u16)(cfg->seg_base >> 4), 0x0093, 0xFFFF, cfg->seg_base);
+    seg(s, SS_ES, (u16)(cfg->seg_base >> 4), 0x0093, 0xFFFF, cfg->seg_base);
+    seg(s, SS_SS, (u16)(cfg->seg_base >> 4), 0x0093, 0xFFFF, cfg->seg_base);
     seg(s, SS_FS, 0, 0x0093, 0xFFFF, 0);
     seg(s, SS_GS, 0, 0x0093, 0xFFFF, 0);
     seg(s, SS_GDTR, 0, 0, 0, 0);
@@ -287,7 +304,7 @@ static void vmcb_reset(u64 code_base, u64 rip, int idtr_limit)
     /* The IDT is the crasher's whole mechanism: limit 0 means the first
      * exception cannot be delivered, which raises another, which is a triple
      * fault - SHUTDOWN, intercepted.  A working guest never touches it. */
-    seg(s, SS_IDTR, 0, 0, (u32)idtr_limit, code_base);
+    seg(s, SS_IDTR, 0, 0, (u32)cfg->idt_limit, cfg->idt_base);
 
     put64(s, SS_CR0, 0x00000010ull);           /* ET; PE and PG both clear  */
     put64(s, SS_CR4, 0);
@@ -299,119 +316,182 @@ static void vmcb_reset(u64 code_base, u64 rip, int idtr_limit)
      * first-VMRUN failure and it is not intuitive: the guest is not running a
      * hypervisor, but the bit is still required. */
     put64(s, SS_EFER, EFER_SVME);
-    put64(s, SS_RFLAGS, 0x2);                  /* IF clear: nothing lands   */
-    put64(s, SS_RIP, rip);
-    put64(s, SS_RSP, 0x0F00);
+    put64(s, SS_RFLAGS, cfg->rflags);
+    put64(s, SS_RIP, cfg->rip);
+    put64(s, SS_RSP, cfg->rsp);
     put64(s, SS_RAX, 0);
     *(u8 *)(s + SS_CPL) = 0;
-    put64(v, VMCB_NP_ENABLE, 0);               /* A2 turns this on          */
+    put64(vm, VMCB_NP_ENABLE, 0);              /* `map` turns this on       */
+
+    for (i = 0; i < sizeof v->gprs / sizeof(u64); i++) ((u64 *)&v->gprs)[i] = 0;
+    v->quiet = 0;
+    v->impl = g_vmcb;
+    return 1;
+}
+
+/* How long was the instruction that exited?  The part may save the next RIP
+ * for us, and where it does that is the right answer for every encoding.
+ * Where it does not, the exits this backend actually services have known
+ * lengths, and inventing one for an exit we do not service would be worse than
+ * leaving it 0 - a caller stepping by 0 loops visibly, a caller stepping by a
+ * guess corrupts the guest silently. */
+static unsigned svm_instr_len(u64 code, u64 rip)
+{
+    u64 nrip = get64(g_vmcb, VMCB_NRIP);
+    if (uno_vmm_probe()->nrip && nrip > rip && nrip - rip <= 15)
+        return (unsigned)(nrip - rip);
+    switch (code) {
+    case SVM_EXIT_CPUID: return 2;             /* 0F A2, always             */
+    case SVM_EXIT_MSR:   return 2;             /* 0F 30 / 0F 32             */
+    case SVM_EXIT_HLT:   return 1;
+    case SVM_EXIT_IOIO: {                      /* EXITINFO2 is the next RIP */
+        u64 next = get64(g_vmcb, VMCB_EXITINFO2);
+        return (next > rip && next - rip <= 15) ? (unsigned)(next - rip) : 0;
+    }
+    default:             return 0;
+    }
 }
 
 static void classify(uno_vmexit *out)
 {
     u64 code = get64(g_vmcb, VMCB_EXITCODE);
+    u64 i1   = get64(g_vmcb, VMCB_EXITINFO1);
     out->raw   = code;
     out->rip   = get64(g_vmcb + VMCB_SAVE, SS_RIP);
-    out->info1 = get64(g_vmcb, VMCB_EXITINFO1);
+    out->info1 = i1;
     out->info2 = get64(g_vmcb, VMCB_EXITINFO2);
+    out->instr_len = svm_instr_len(code, out->rip);
     switch (code) {
     case SVM_EXIT_CPUID:    out->reason = UNO_VX_CPUID;    break;
     case SVM_EXIT_HLT:      out->reason = UNO_VX_HLT;      break;
     case SVM_EXIT_SHUTDOWN: out->reason = UNO_VX_SHUTDOWN; break;
     case SVM_EXIT_INTR:     out->reason = UNO_VX_INTR;     break;
-    case SVM_EXIT_NPF:      out->reason = UNO_VX_NPF;      break;
+    case SVM_EXIT_VINTR:    out->reason = UNO_VX_INTR_WINDOW; break;
+    case SVM_EXIT_XSETBV:   out->reason = UNO_VX_XSETBV;   break;
     case SVM_EXIT_INVALID:  out->reason = UNO_VX_INVALID;  break;
-    default:                out->reason = UNO_VX_UNKNOWN;  break;
-    }
-}
-
-static void run_once(uno_vmexit *out)
-{
-    put64(g_vmcb + VMCB_SAVE, SS_RAX, g_ctx.rax);
-    tracex("[hv] vmrun rip=", get64(g_vmcb + VMCB_SAVE, SS_RIP));
-    svm_entry((u64)(unsigned long long)(void *)g_vmcb, &g_ctx);
-    tracex("[hv] exit  code=", get64(g_vmcb, VMCB_EXITCODE));
-    g_ctx.rax = get64(g_vmcb + VMCB_SAVE, SS_RAX);
-    classify(out);
-}
-
-/* ---- A1: the round trip ---------------------------------------------------
- *
- *   0F A2              cpuid            -> intercepted; we answer in EAX:EDX
- *   66 A3 00 10        mov [0x1000], eax
- *   66 89 16 04 10     mov [0x1004], edx
- *   F4                 hlt              -> intercepted; the guest is done
- *
- * The evidence is the two dwords at GUEST_DATA, not the exit codes.  A guest
- * that never ran leaves them zero; a hypervisor that failed to advance RIP
- * past the cpuid never reaches them at all (it re-executes the same
- * instruction forever, which is a hang rather than a wrong answer); and a
- * value that arrives has been through the guest's registers, the guest's
- * segment base and the guest's own store instruction. */
-static const u8 GUEST_MARKER[] = {
-    0x0F, 0xA2,
-    0x66, 0xA3, 0x00, 0x10,
-    0x66, 0x89, 0x16, 0x04, 0x10,
-    0xF4
-};
-static const u8 GUEST_CRASHER[] = { 0xCD, 0x03 };   /* int3 with no IDT      */
-
-static int svm_marker(u64 want, u64 *got, uno_vmexit *last)
-{
-    u64 base = (u64)(unsigned long long)(void *)g_guest;
-    unsigned i;
-    int guard = 0;
-
-    for (i = 0; i < sizeof g_guest; i++) g_guest[i] = 0;
-    for (i = 0; i < sizeof GUEST_MARKER; i++) g_guest[i] = GUEST_MARKER[i];
-    for (i = 0; i < sizeof g_ctx / sizeof(u64); i++) ((u64 *)&g_ctx)[i] = 0;
-
-    vmcb_reset(base, 0, 0xFFFF);
-    *got = 0;
-
-    /* Bounded, because an exit we do not handle must end the guest rather
-     * than the machine.  Four is generous for a guest with two exits. */
-    for (guard = 0; guard < 8; guard++) {
-        run_once(last);
-        if (last->reason == UNO_VX_CPUID) {
-            /* Answer as the "device" this guest is talking to, then step it
-             * past the two-byte instruction.  Nothing advances RIP for us:
-             * an intercept leaves it pointing AT the instruction, and the
-             * next-RIP field is optional silicon we have not required. */
-            g_ctx.rax = want & 0xFFFFFFFFull;
-            g_ctx.rdx = (want >> 32) & 0xFFFFFFFFull;
-            g_ctx.rbx = 0;
-            g_ctx.rcx = 0;
-            put64(g_vmcb + VMCB_SAVE, SS_RIP,
-                  get64(g_vmcb + VMCB_SAVE, SS_RIP) + 2);
-            continue;
+    case SVM_EXIT_MSR:
+        out->reason = (i1 & 1) ? UNO_VX_WRMSR : UNO_VX_RDMSR;
+        break;
+    case SVM_EXIT_NPF:
+        out->reason    = UNO_VX_NPF;
+        out->gpa       = out->info2;
+        out->npf_write = (i1 & 2) ? 1 : 0;
+        break;
+    case SVM_EXIT_IOIO:
+        /* EXITINFO1 carries the whole access: direction, string, the size as
+         * three separate bits, and the port in the top half. */
+        out->reason    = UNO_VX_IO;
+        out->io_in     = (i1 & 1) ? 1 : 0;
+        out->io_string = (i1 & 4) ? 1 : 0;
+        out->io_size   = (i1 & 0x10) ? 1 : ((i1 & 0x20) ? 2 : 4);
+        out->io_port   = (unsigned)(i1 >> 16) & 0xFFFF;
+        break;
+    default:
+        if (code >= SVM_EXIT_CR0_WRITE && code < SVM_EXIT_CR0_WRITE + 16) {
+            out->reason    = UNO_VX_CR;
+            out->cr_num    = (unsigned)(code - SVM_EXIT_CR0_WRITE);
+            out->cr_access = 0;                /* a write to the register   */
+            /* Which register it came FROM needs the instruction decoded, and
+             * nothing above the seam can act on a source it does not know -
+             * so this stays 0 (RAX) and a CR exit ends the guest with a
+             * report until decode-assist lands. */
+            out->cr_reg    = 0;
+        } else {
+            out->reason = UNO_VX_UNKNOWN;
         }
-        if (last->reason == UNO_VX_INTR) continue;   /* re-enter, nothing else */
         break;
     }
-    if (last->reason != UNO_VX_HLT) return 0;
-
-    *got = (u64)*(u32 *)(g_guest + GUEST_DATA)
-         | ((u64)*(u32 *)(g_guest + GUEST_DATA + 4) << 32);
-    return *got == want;
 }
 
-static int svm_crasher(uno_vmexit *out)
+/* SVM has no preemption timer, so `budget_us` is not honoured here: the slice
+ * clock on AMD is an intercepted local-APIC one-shot, which arrives with the
+ * rest of A3.  Until then a guest that does not end its own turn is a guest
+ * this backend must not be handed - which is what UNO_VMF_PREEMPT being
+ * refused by `vcpu_create` (via UNO_VMF_SLAT) already ensures. */
+static int svm_vcpu_run(uno_vcpu *v, unsigned budget_us, uno_vmexit *out)
 {
-    u64 base = (u64)(unsigned long long)(void *)g_guest;
-    unsigned i;
-    for (i = 0; i < sizeof g_guest; i++) g_guest[i] = 0;
-    for (i = 0; i < sizeof GUEST_CRASHER; i++) g_guest[i] = GUEST_CRASHER[i];
-    for (i = 0; i < sizeof g_ctx / sizeof(u64); i++) ((u64 *)&g_ctx)[i] = 0;
-
-    vmcb_reset(base, 0, 0);          /* IDT limit 0: no exception can land  */
-    run_once(out);
-    /* Either the CPU refused the guest outright or the guest destroyed
-     * itself.  Both are contained; neither may be a hang or a host fault,
-     * which is the whole claim being tested. */
-    return out->reason == UNO_VX_SHUTDOWN || out->reason == UNO_VX_INVALID;
+    (void)budget_us;
+    put64(g_vmcb + VMCB_SAVE, SS_RAX, v->gprs.rax);
+    if (!v->quiet) tracex("[hv] vmrun rip=", get64(g_vmcb + VMCB_SAVE, SS_RIP));
+    svm_entry((u64)(unsigned long long)(void *)g_vmcb, &v->gprs);
+    if (!v->quiet) tracex("[hv] exit  code=", get64(g_vmcb, VMCB_EXITCODE));
+    v->gprs.rax = get64(g_vmcb + VMCB_SAVE, SS_RAX);
+    classify(out);
+    return 1;
 }
 
-static const uno_hv_t SVM = { "svm", svm_enable, svm_marker, svm_crasher };
+/* The event-injection field: vector, type, an optional error code, and the
+ * valid bit the CPU clears once it has delivered. */
+static void svm_inject(uno_vcpu *v, unsigned vector, unsigned err, int has_err)
+{
+    u64 ev = (1ull << 31) | (vector & 0xFF);   /* type 0 = external interrupt */
+    (void)v;
+    if (has_err) ev |= (1ull << 11) | ((u64)err << 32);
+    put64(g_vmcb, VMCB_EVENTINJ, ev);
+}
+
+/* ---- the state window ----------------------------------------------------- */
+
+static u64 svm_get(uno_vcpu *v, int what)
+{
+    u8 *s = g_vmcb + VMCB_SAVE;
+    (void)v;
+    switch (what) {
+    case UNO_VR_RIP:        return get64(s, SS_RIP);
+    case UNO_VR_RSP:        return get64(s, SS_RSP);
+    case UNO_VR_RFLAGS:     return get64(s, SS_RFLAGS);
+    case UNO_VR_CR0:        return get64(s, SS_CR0);
+    case UNO_VR_CR3:        return get64(s, SS_CR3);
+    case UNO_VR_CR4:        return get64(s, SS_CR4);
+    case UNO_VR_EFER:       return get64(s, SS_EFER);
+    case UNO_VR_FS_BASE:    return get64(s, SS_FS + 8);
+    case UNO_VR_GS_BASE:    return get64(s, SS_GS + 8);
+    case UNO_VR_INTR_SHADOW: return get64(g_vmcb, VMCB_INT_STATE) & 1;
+    case UNO_VR_XCR0:       return g_guest_xcr0;
+    case UNO_VR_CAN_INJECT:
+        if (get64(g_vmcb, VMCB_EVENTINJ) & (1ull << 31)) return 0;
+        if (!(get64(s, SS_RFLAGS) & 0x200)) return 0;
+        if (get64(g_vmcb, VMCB_INT_STATE) & 1) return 0;
+        return 1;
+    default:                return 0;          /* no CR shadows on AMD:
+                                                  the guest owns its CR4     */
+    }
+}
+
+static void svm_set(uno_vcpu *v, int what, u64 val)
+{
+    u8 *s = g_vmcb + VMCB_SAVE;
+    (void)v;
+    switch (what) {
+    case UNO_VR_RIP:        put64(s, SS_RIP, val); break;
+    case UNO_VR_RSP:        put64(s, SS_RSP, val); break;
+    case UNO_VR_RFLAGS:     put64(s, SS_RFLAGS, val); break;
+    case UNO_VR_CR0:        put64(s, SS_CR0, val); break;
+    case UNO_VR_CR3:        put64(s, SS_CR3, val); break;
+    case UNO_VR_CR4:        put64(s, SS_CR4, val); break;
+    case UNO_VR_EFER:       put64(s, SS_EFER, val | EFER_SVME); break;
+    case UNO_VR_FS_BASE:    put64(s, SS_FS + 8, val); break;
+    case UNO_VR_GS_BASE:    put64(s, SS_GS + 8, val); break;
+    case UNO_VR_INTR_SHADOW: {
+        u64 st = get64(g_vmcb, VMCB_INT_STATE);
+        put64(g_vmcb, VMCB_INT_STATE, (st & ~1ull) | (val & 1));
+        break;
+    }
+    case UNO_VR_INTR_WINDOW: {
+        /* AMD's interrupt window is the VINTR intercept: arm it and the CPU
+         * exits the instant the guest becomes able to take one. */
+        u32 w = get32(g_vmcb, VMCB_INTERCEPT1);
+        put32(g_vmcb, VMCB_INTERCEPT1, val ? (w | INT1_VINTR) : (w & ~INT1_VINTR));
+        break;
+    }
+    case UNO_VR_XCR0:       g_guest_xcr0 = val; break;
+    default: break;                            /* CR shadows: see svm_get   */
+    }
+}
+
+/* `map` is NULL: no nested paging yet, so everything from A2 on declines with
+ * attribution rather than running a guest that could reach the whole machine. */
+static const uno_hv_t SVM = { "svm", svm_enable, svm_vcpu_create, svm_vcpu_run,
+                              0, svm_inject, svm_get, svm_set };
 
 const uno_hv_t *uno_hv_svm(void) { return &SVM; }
