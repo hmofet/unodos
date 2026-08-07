@@ -322,39 +322,12 @@ void ujs_gc_maybe(ujs_vm *vm);
 /* ---- math ----------------------------------------------------------------
  * unojs carries its own double-precision math (ujs_math.c) rather than linking
  * a host libm: pc64's is float-only, and the number formatter needs double
- * exactness. Same code on the host tests and on metal - see ujs_math.c. */
-#ifdef UJS_USE_LIBM
-#include <math.h>
-#define ujs_fabs  fabs
-#define ujs_floor floor
-#define ujs_ceil  ceil
-#define ujs_fmod  fmod
-#define ujs_sqrt  sqrt
-#define ujs_pow   pow
-#define ujs_exp   exp
-#define ujs_log   log
-#define ujs_log10 log10
-#define ujs_sin   sin
-#define ujs_cos   cos
-#define ujs_tan   tan
-#define ujs_atan  atan
-#define ujs_atan2 atan2
-#else
-double ujs_fabs(double x);
-double ujs_floor(double x);
-double ujs_ceil(double x);
-double ujs_fmod(double x, double y);
-double ujs_sqrt(double x);
-double ujs_pow(double x, double y);
-double ujs_exp(double x);
-double ujs_log(double x);
-double ujs_log10(double x);
-double ujs_sin(double x);
-double ujs_cos(double x);
-double ujs_tan(double x);
-double ujs_atan(double x);
-double ujs_atan2(double y, double x);
-#endif
+ * exactness. Same code on the host tests and on metal - see ujs_math.c.
+ *
+ * The declarations moved to `ujs_math.h`, which is PUBLIC and [STABLE]: the
+ * quickjs port needs real doubles too and was declaring them by hand against
+ * this internal header. Keep the surface there, not here. */
+#include "ujs_math.h"
 
 /* the exception helper the VM and library share */
 ujs_val ujs_throwf(ujs_vm *vm, const char *kind, const char *fmt, ...);

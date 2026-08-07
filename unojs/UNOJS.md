@@ -38,6 +38,24 @@ It does need the **compiler runtime** (`-lgcc` on the pc64 link): the decimal
 conversions use `__int128`, which lowers to `__udivti3` / `__floatuntidf`.
 PYRT links it for the same reason.
 
+### `ujs_math.h`, the double-math surface: **[STABLE]** as of 2026-08-06
+
+That mini-libm is now a **public** surface, not an unojs internal. The fourteen
+functions `ujs_fabs floor ceil fmod sqrt pow exp log log10 sin cos tan atan
+atan2` are declared in [`ujs_math.h`](ujs_math.h) and any freestanding consumer
+in the tree may include it. Blessing it was a request from the quickjs port
+(`pc64/quickjs/compat/math.h`), which needed real doubles for the same reason
+unojs does and had been hand-declaring the symbols against `ujs_int.h`, a
+header it has no business reading.
+
+The contract, and its limit: each has the semantics of its C99 namesake for
+finite inputs including the sign and NaN/infinity cases ECMAScript's `Math`
+requires, and the accuracy is "good enough for JS number formatting", not
+correctly-rounded. Under `UJS_USE_LIBM` (the host tests) they fold to the
+platform's libm, so include the header rather than declaring the symbols and
+you get the right one in both worlds. Breaking any of this bumps a version
+marker here per AGENTS.md §6.
+
 Host tests:
 
 ```bash
