@@ -450,7 +450,10 @@ static void splash_step(int done, const char *msg)
     g_splash_msg = msg;             /* white "what's loading" text under the bar */
     splash_draw(done);
     uno_pc64_present();
-    uno_pc64_delay_ms(done >= SPLASH_STEPS ? 700 : 400);
+    /* Just enough for the bar segment to register visually - the old 400/700 ms
+     * put ~1.9 s of pure delay on every boot (four steps), independent of how
+     * fast the hardware actually was. 100/150 ms keeps the bar legible. */
+    uno_pc64_delay_ms(done >= SPLASH_STEPS ? 150 : 100);
 }
 
 /* Name the bring-up step currently running, under the loading bar.
@@ -2390,14 +2393,22 @@ int uno_pc64_add_boot_entry(const void *disk_dp, unsigned long long first_lba,
 
     for (i = 0; i < 0x100; i++) {                         /* find a Boot#### slot */
         static unsigned char v[512]; UINTN sz = sizeof v; UINT32 at; CHAR16 bn[9];
+        EFI_STATUS gs;
         bootname16(bn, i);
-        if (getv(bn, &gv, &at, &sz, v) == EFI_SUCCESS) {
+        gs = getv(bn, &gv, &at, &sz, v);
+        if (gs == EFI_SUCCESS) {
             if (sz > 8) { const CHAR16 *d = (const CHAR16 *)(v + 6); int m = 1, j;
                 for (j = 0; j <= dsl; j++) {
                     CHAR16 want = (j < dsl) ? (CHAR16)(unsigned char)desc[j] : 0;
                     if (d[j] != want) { m = 0; break; } }
                 if (m) { idx = i; break; } }
-        } else if (freeslot < 0) freeslot = i;
+        } else if (gs == EFI_NOT_FOUND) {
+            if (freeslot < 0) freeslot = i;               /* genuinely empty     */
+        }
+        /* Any other status - notably EFI_BUFFER_TOO_SMALL for a foreign entry
+         * larger than v[512] (long device paths + vendor data) - means the slot
+         * is OCCUPIED. The old code treated that as free and overwrote an OEM /
+         * recovery boot entry. Skip it. */
     }
     if (idx < 0) idx = freeslot;
     if (idx < 0) return 0;
@@ -2417,8 +2428,17 @@ int uno_pc64_add_boot_entry(const void *disk_dp, unsigned long long first_lba,
     {
         static UINT16 bo[130], nbo[130];
         UINTN sz = sizeof(UINT16) * 128; UINT32 at; int n = 0, m = 0;
+        EFI_STATUS gs;
         CHAR16 bon[10] = {'B','o','o','t','O','r','d','e','r',0};
-        if (getv(bon, &gv, &at, &sz, bo) == EFI_SUCCESS) n = (int)(sz / 2);
+        gs = getv(bon, &gv, &at, &sz, bo);
+        if (gs == EFI_SUCCESS) n = (int)(sz / 2);
+        else if (gs != EFI_NOT_FOUND) {
+            /* BootOrder exists but we could not read it (too small for >128
+             * entries, or a device error). Rewriting it now with only our own
+             * entry would ORPHAN every other OS. Leave it alone - the Boot####
+             * entry we just wrote is still selectable from the firmware menu. */
+            return 1;
+        }
         if (make_default) nbo[m++] = (UINT16)idx;
         for (i = 0; i < n && m < 128; i++) if (bo[i] != (UINT16)idx) nbo[m++] = bo[i];
         if (!make_default && m < 128) nbo[m++] = (UINT16)idx;
@@ -2604,29 +2624,82 @@ long uno_efifs_read(int vol, const char *name, unsigned char *buf, long max)
  * subdirs (e.g. "EFI\\BOOT\\BOOTX64.EFI") but creates no directories.  This is
  * what makes an attached machine's USB stick writable - the A/B OS-update path
  * in the unoautomate remote channel (see REMOTE.md) rides on it. */
-long uno_efifs_write(int vol, const char *name, const unsigned char *buf, long len)
+/* Write `buf`/`len` fully into an already-open CREATE handle. Returns 1 iff every
+ * byte landed. Shared by the temp-file and fallback paths below. */
+static int efifs_write_all(EFI_FILE_PROTOCOL *f, const unsigned char *buf, long len)
 {
-    EFI_FILE_PROTOCOL *root = fs_root(vol), *f = 0; CHAR16 wn[80]; long done = 0;
-    const UINT64 MODE_RW     = 3;                        /* READ|WRITE          */
-    const UINT64 MODE_CREATE = 0x8000000000000003ULL;    /* CREATE|READ|WRITE   */
-    if (!root) return 0;
-    a_to16(wn, name, 80);
-    /* delete an existing file so the replacement's size is exact */
-    if (root->Open(root, &f, wn, MODE_RW, 0) == EFI_SUCCESS && f) {
-        f->Delete(f);                                    /* closes + removes    */
-        f = 0;
-    }
-    if (root->Open(root, &f, wn, MODE_CREATE, 0) != EFI_SUCCESS || !f) {
-        root->Close(root); return 0;
-    }
+    long done = 0;
     while (done < len) {
         UINTN sz = (UINTN)(len - done);
         if (f->Write(f, &sz, (void *)(buf + done)) != EFI_SUCCESS || sz == 0) break;
         done += (long)sz;
     }
     f->Flush(f);
-    f->Close(f); root->Close(root);
-    return done == len ? 1 : 0;
+    return done == len;
+}
+
+long uno_efifs_write(int vol, const char *name, const unsigned char *buf, long len)
+{
+    /* EFI_FILE_INFO_ID - the GUID SetInfo takes to rename a file (distinct from
+     * the Simple-FS protocol GUID above). */
+    static EFI_GUID gFileInfoGuid = { 0x09576e92, 0x6d3f, 0x11d2,
+                                      { 0x8e, 0x39, 0x00, 0xa0, 0xc9, 0x69, 0x72, 0x3b } };
+    EFI_FILE_PROTOCOL *root = fs_root(vol), *f = 0; CHAR16 wn[80], wtmp[84]; long i;
+    const UINT64 MODE_RW     = 3;                        /* READ|WRITE          */
+    const UINT64 MODE_CREATE = 0x8000000000000003ULL;    /* CREATE|READ|WRITE   */
+    int base;
+    if (!root) return 0;
+    a_to16(wn, name, 80);
+    /* Old behaviour deleted the target BEFORE writing the replacement: a failed
+     * create or a power loss mid-write then destroyed the only copy - fatal on
+     * the A/B OS-update path (REMOTE.md), which replaces BOOTX64.EFI in place.
+     * Instead write the full new content to "<name>.new" first, so a complete
+     * copy exists on disk before the original is touched, then rename over the
+     * original. If the firmware can't rename, fall back to the in-memory buffer
+     * (which we still hold) - never worse than the old path. */
+    { char tmpn[84]; long k = 0;
+      for (k = 0; name[k] && k < 79; k++) tmpn[k] = name[k];
+      tmpn[k++] = '.'; tmpn[k++] = 'n'; tmpn[k++] = 'e'; tmpn[k++] = 'w'; tmpn[k] = 0;
+      a_to16(wtmp, tmpn, 84); }
+
+    if (root->Open(root, &f, wtmp, MODE_RW, 0) == EFI_SUCCESS && f) { f->Delete(f); f = 0; }
+    if (root->Open(root, &f, wtmp, MODE_CREATE, 0) != EFI_SUCCESS || !f) {
+        root->Close(root); return 0;
+    }
+    if (!efifs_write_all(f, buf, len)) { f->Delete(f); root->Close(root); return 0; }
+    /* temp holds the full new content; the original is still intact here. */
+
+    /* basename of `name` (rename sets the file's name within its own directory) */
+    for (base = 0, i = 0; name[i]; i++) if (name[i] == '\\' || name[i] == '/') base = (int)i + 1;
+
+    { EFI_FILE_PROTOCOL *old = 0;
+      if (root->Open(root, &old, wn, MODE_RW, 0) == EFI_SUCCESS && old) { old->Delete(old); }
+      /* rename temp -> original via SetInfo{FileName=basename} */
+      { unsigned char ib[sizeof(EFI_FILE_INFO) + sizeof(CHAR16) * 80];
+        EFI_FILE_INFO *fi = (EFI_FILE_INFO *)ib; UINTN isz; int j;
+        for (j = 0; j < (int)sizeof ib; j++) ib[j] = 0;
+        for (j = 0; name[base + j] && j < 79; j++) fi->FileName[j] = (unsigned char)name[base + j];
+        fi->FileName[j] = 0;
+        isz = sizeof(EFI_FILE_INFO) + (UINTN)(j + 1) * sizeof(CHAR16);
+        fi->Size = isz;
+        if (f->SetInfo(f, &gFileInfoGuid, isz, fi) == EFI_SUCCESS) {
+            f->Close(f); root->Close(root); return 1;      /* renamed into place */
+        }
+      }
+    }
+    /* firmware refused the rename: create the original and write from memory (the
+     * classic path), then drop the temp. */
+    f->Close(f);
+    { EFI_FILE_PROTOCOL *dst = 0; int ok;
+      if (root->Open(root, &dst, wn, MODE_CREATE, 0) != EFI_SUCCESS || !dst) {
+          root->Close(root); return 0;
+      }
+      ok = efifs_write_all(dst, buf, len);
+      dst->Close(dst);
+      if (root->Open(root, &f, wtmp, MODE_RW, 0) == EFI_SUCCESS && f) { f->Delete(f); }
+      root->Close(root);
+      return ok ? 1 : 0;
+    }
 }
 
 #ifdef UNO_DEBUG
