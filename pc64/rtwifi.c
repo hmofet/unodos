@@ -372,6 +372,7 @@ static int rtw89_h2c_send(u8 cat,u8 cls,u8 func,int rack,int dack,const void *bo
     /* enqueue on CH12 + doorbell (register-exact; a real WD page wraps this) */
     g_h2cbd[idx].a=(u16)(blen+8); g_h2cbd[idx].b=0; g_h2cbd[idx].dma=(u32)phys(pkt);
     g_h2c_wp = (g_h2c_wp + 1) & (TXN-1);
+    __asm__ volatile("" ::: "memory");       /* descriptor visible before the doorbell */
     w32(R_AX_CH12_TXBD_IDX, g_h2c_wp & RTK_TRX_BD_IDX_MASK);
     return 0;
 }
@@ -396,23 +397,29 @@ static void rtw89_sec_key(int sec_cam_idx,const u8 *key)
 static const u8 SNAP[6] = { 0xAA,0xAA,0x03,0x00,0x00,0x00 };
 static wpa_sm_t g_wpa; static int g_keys_done; static u8 g_bssid[6];
 
-static int wifi_to_eth(const u8 *f,int len,u8 *out)
+/* Translate an 802.11 data frame to Ethernet into out[cap]. The output capacity
+ * is mandatory and checked BEFORE the copy: `len` derives from a DMA'd RX
+ * descriptor length field (attacker/hardware controlled), so the payload size
+ * must be validated against `cap` before any byte is written, not after. */
+static int wifi_to_eth(const u8 *f,int len,u8 *out,int cap)
 {
     u16 fc = (u16)(f[0]|(f[1]<<8));
-    int qos = ((fc>>4)&0xF)==8, hdr = 24 + (qos?2:0);
+    int qos = ((fc>>4)&0xF)==8, hdr = 24 + (qos?2:0), payload;
     const u8 *da,*sa,*llc; u16 et;
     if (len < hdr+8) return -1;
+    payload = len-hdr-8;
+    if (payload < 0 || 14 + payload > cap) return -1;   /* reject before the copy */
     da=f+4; sa=f+16; llc=f+hdr;              /* FromDS: a1=DA a2=BSSID a3=SA */
     if (memcmp(llc,SNAP,6)!=0) return -1;
     et=(u16)((llc[6]<<8)|llc[7]);
     memcpy(out,da,6); memcpy(out+6,sa,6); out[12]=(u8)(et>>8); out[13]=(u8)et;
-    memcpy(out+14, llc+8, len-hdr-8);
-    return 14 + (len-hdr-8);
+    memcpy(out+14, llc+8, payload);
+    return 14 + payload;
 }
 static void queue_data(const u8 *frame,int len)
 {
-    u8 eth[1600]; int n = wifi_to_eth(frame,len,eth), nx;
-    if (n<=0||n>1600) return;
+    u8 eth[1600]; int n = wifi_to_eth(frame,len,eth,(int)sizeof eth), nx;
+    if (n<=0) return;                        /* n is <= sizeof eth by construction */
     nx=(g_dq_head+1)%DATAQ; if(nx==g_dq_tail) return;
     memcpy(g_dataq[g_dq_head].buf,eth,n); g_dataq[g_dq_head].len=n; g_dq_head=nx;
 }
@@ -448,8 +455,12 @@ static void rx_process(const u8 *page)
         u32 w0=le32(page), w2=le32(page+8);
         int plen=w0&0x3FFF, drv=(w0>>16)&0xF, shift=(w0>>24)&3;
         int c2h=(w2>>28)&1;
-        const u8 *frame = page + 24 + drv*8 + shift;
+        int off = 24 + drv*8 + shift;         /* frame start within the RX page */
+        const u8 *frame = page + off;
         if (plen<=0 || (w0&0x4000)/*CRC err*/) return;
+        /* plen comes from the DMA'd descriptor: the frame [off, off+plen) must
+         * stay inside the RXBUF page, or the reads below walk off the buffer. */
+        if (off < 0 || off >= RXBUF || plen > RXBUF - off) return;
         if (c2h) return;                      /* C2H event: ignore for a minimal client */
         { u16 fc=(u16)(frame[0]|(frame[1]<<8)); int hl=24+(((fc>>4)&0xF)==8?2:0);
           if (plen>hl+8 && !memcmp(frame+hl,SNAP,6)) {
@@ -460,8 +471,11 @@ static void rx_process(const u8 *page)
         u32 d0=le32(page);
         int plen=d0&0x3FFF, shift=(d0>>14)&3, drv=(d0>>28)&7;
         int type=(d0>>24)&0xF, longd=(d0>>31)&1;
-        const u8 *frame = page + (longd?32:16) + (shift<<1) + (drv<<3);
+        int off = (longd?32:16) + (shift<<1) + (drv<<3);
+        const u8 *frame = page + off;
         if (type!=0/*WIFI*/ || plen<=0) return;
+        /* bound the device-supplied length to the RX page (see G88 branch) */
+        if (off < 0 || off >= RXBUF || plen > RXBUF - off) return;
         { u16 fc=(u16)(frame[0]|(frame[1]<<8)); int hl=24+(((fc>>4)&0xF)==8?2:0);
           if (plen>hl+8 && !memcmp(frame+hl,SNAP,6)) {
               u16 et=(u16)((frame[hl+6]<<8)|frame[hl+7]);
@@ -473,11 +487,15 @@ static void rx_poll(void)
 {
     u32 idxreg = (g_gen==RTW_G88)? RTK_RXBD_IDX_MPDUQ : R_AX_RXQ_RXBD_IDX;
     int hw = (r32(idxreg) >> RTK_TRX_HW_IDX_SHIFT) & RTK_TRX_BD_IDX_MASK;
+    int consumed = 0;
     while (g_rx_rp != hw) {
         rx_process(g_rxpage[g_rx_rp]);
         g_rx_rp = (g_rx_rp + 1) % RXN;
-        w16((u16)idxreg, (u16)g_rx_rp);       /* return the buffer */
+        consumed = 1;
     }
+    /* return the buffers in one MMIO write per drain, not one per frame: the HW
+     * read index only needs the final position and each w16 is a bus round-trip. */
+    if (consumed) w16((u16)idxreg, (u16)g_rx_rp);
 }
 
 /* =====================================================================
@@ -509,7 +527,11 @@ static void tx_raw80211(const u8 *frame,int flen,int encrypt)
         buf[0]=(u8)w0;buf[1]=(u8)(w0>>8);buf[2]=(u8)(w0>>16);buf[3]=(u8)(w0>>24);
         buf[4]=(u8)w1;buf[5]=(u8)(w1>>8);buf[6]=(u8)(w1>>16);buf[7]=(u8)(w1>>24);
         buf[32]|=0x80/*EN_HWSEQ hi*/;
-        for (i=0;i<20;i++) ck^=(u16)(buf[i*2]|(buf[i*2+1]<<8)); /* W7[15:0] XOR checksum */
+        /* rtw88 TX-desc checksum is the XOR of the first 16 half-words (32 bytes),
+         * with the W7[15:0] checksum field pre-zeroed - matches Linux rtw88
+         * fill_txdesc_checksum_common(txdesc, 16). It was 20 (40 bytes), which
+         * wrongly folded in W8+ (incl. the EN_HWSEQ byte) and would be rejected. */
+        for (i=0;i<16;i++) ck^=(u16)(buf[i*2]|(buf[i*2+1]<<8)); /* W7[15:0] XOR checksum */
         w7=ck; buf[28]=(u8)w7; buf[29]=(u8)(w7>>8);
         memcpy(buf+40, frame, flen);
         /* two buffer-descriptor elements: [0]=desc, [1]=frame */
@@ -521,6 +543,9 @@ static void tx_raw80211(const u8 *frame,int flen,int encrypt)
         g_txbd[idx].a=(u16)flen; g_txbd[idx].b=(1u<<14/*LS*/); g_txbd[idx].dma=(u32)phys(buf);
     }
     g_tx_wp = (g_tx_wp + 1) & (TXN-1);
+    /* the descriptor + frame writes above must be globally visible before the
+     * doorbell, or the NIC can DMA a half-written descriptor */
+    __asm__ volatile("" ::: "memory");
     w16((u16)((g_gen==RTW_G88)?RTK_TXBD_IDX_BEQ:R_AX_ACH0_TXBD_IDX), (u16)(g_tx_wp & RTK_TRX_BD_IDX_MASK));
 }
 static void tx_data_frame(const u8 *payload,int plen,int is_eapol)
@@ -551,6 +576,7 @@ static void connect(void)
     wpa_pmk_from_psk(g_cfg_ssid,(int)strlen(g_cfg_ssid),g_cfg_psk,pmk);
     wpa_sm_init(&g_wpa,pmk,g_mac,g_bssid);
     strncpy(g_ssid_str,g_cfg_ssid,sizeof g_ssid_str-1);
+    g_ssid_str[sizeof g_ssid_str-1]=0;       /* strncpy leaves it unterminated at the cap */
 }
 
 /* =====================================================================
@@ -577,8 +603,17 @@ static int read_config(int vol)
             while(i<n&&buf[i]!='\n'&&buf[i]!='\r'&&v<79) val[v++]=buf[i++];
             while(v>0&&(val[v-1]==' '||val[v-1]=='\t'))v--;
             val[v]=0;
-            if(!strcmp(key,"ssid")) strcpy(g_cfg_ssid,val);
-            else if(!strcmp(key,"psk")) strcpy(g_cfg_psk,val);
+            /* val[80] can hold up to 79 chars; g_cfg_ssid[36] holds a 32-byte
+             * SSID + NUL. A bare strcpy overflowed g_cfg_ssid into g_cfg_psk.
+             * Bound both: reject an over-long SSID, cap the PSK to its buffer. */
+            if(!strcmp(key,"ssid")){
+                if(v<=32){ memcpy(g_cfg_ssid,val,(unsigned)v); g_cfg_ssid[v]=0; }
+                else g_cfg_ssid[0]=0;         /* > 32 bytes is not a valid SSID */
+            }
+            else if(!strcmp(key,"psk")){
+                if(v>(int)sizeof g_cfg_psk-1) v=(int)sizeof g_cfg_psk-1;
+                memcpy(g_cfg_psk,val,(unsigned)v); g_cfg_psk[v]=0;
+            }
         }
         while (i<n && buf[i]!='\n') i++;
     }
