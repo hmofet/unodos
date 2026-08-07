@@ -74,7 +74,7 @@
     <span class="logo"><i></i><i></i><i></i><i></i></span>
     <span><b>UnoDOS <span style="color:var(--accent-2)">pc64</span></b><span class="sub">User manual</span></span>
   </a>
-  <ul class="nav"><li><a class="" href="index.html">Overview</a></li><li><a class="" href="getting-started.html">Getting started</a></li><li><a class="" href="desktop.html">The desktop</a></li><li><a class="" href="windows.html">Windows &amp; desktops</a></li><li><a class="" href="appearance.html">Themes &amp; appearance</a></li><li><a class="" href="apps.html">Applications</a></li><li><a class="" href="office.html">UnoOffice</a></li><li><a class="" href="browser.html">Web browser</a></li><li><a class="" href="ssh.html">SSH client</a></li><li><a class="" href="networking.html">Networking</a></li><li><a class="" href="logging.html">System log</a></li><li><a class="" href="ports.html">The UnoDOS family</a></li><li class="sec">Developer</li><li><a class="" href="developer.html">Overview &amp; architecture</a></li><li><a class="" href="studio.html">Studio: the built-in IDE</a></li><li><a class="" href="dev-apps.html">Writing apps</a></li><li><a class="" href="dev-python.html">Python apps</a></li><li><a class="" href="dev-api.html">API reference</a></li><li><a class="active" href="dev-build.html">Building &amp; tooling</a></li><li><a class="" href="dev-remote.html">Remote control &amp; automation</a></li></ul>
+  <ul class="nav"><li><a class="" href="index.html">Overview</a></li><li><a class="" href="getting-started.html">Getting started</a></li><li><a class="" href="desktop.html">The desktop</a></li><li><a class="" href="windows.html">Windows &amp; desktops</a></li><li><a class="" href="appearance.html">Themes &amp; appearance</a></li><li><a class="" href="apps.html">Applications</a></li><li><a class="" href="office.html">UnoOffice</a></li><li><a class="" href="browser.html">Web browser</a></li><li><a class="" href="ssh.html">SSH client</a></li><li><a class="" href="networking.html">Networking</a></li><li><a class="" href="logging.html">System log</a></li><li><a class="" href="appliances.html">Appliances</a></li><li><a class="" href="ports.html">The UnoDOS family</a></li><li class="sec">Developer</li><li><a class="" href="developer.html">Overview &amp; architecture</a></li><li><a class="" href="studio.html">Studio: the built-in IDE</a></li><li><a class="" href="dev-apps.html">Writing apps</a></li><li><a class="" href="dev-python.html">Python apps</a></li><li><a class="" href="dev-api.html">API reference</a></li><li><a class="active" href="dev-build.html">Building &amp; tooling</a></li><li><a class="" href="dev-remote.html">Remote control &amp; automation</a></li></ul>
   <div class="side-foot">
     <a href="https://github.com/hmofet/unodos" target="_blank" rel="noopener">GitHub&nbsp;&rsaquo; hmofet/unodos</a><br>
     <a href="#" onclick="__t();return false">Toggle light / dark</a>
@@ -169,8 +169,18 @@ the keyboard.</p>
 <pre><code>python3 docs_shots.py                               # all scenes
 python3 docs_shots.py themes editor browser_docs    # selected scenes
 UNO_NIC=1 python3 docs_shots.py browser_http        # networking scenes</code></pre>
-<p>Copy the PNGs you need into <code>docs/assets/img/</code>, then rebuild and commit. If the shell's app roster or
-the Control Panel tab order changes, update the scene offsets in <code>docs_shots.py</code> first.</p>
+<p>Copy the PNGs you need into <code>docs/assets/img/</code>, then rebuild and commit.</p>
+<p>Scenes name apps by <strong>id</strong> - <code>A("uocalc")</code>, never a row number - because the Start-menu
+order moves whenever an app is added and a scene that counts keystrokes does not fail when it does: it opens the
+next app along and files the picture under the old name. The order comes from
+<code>pc64/build/apps_roster.txt</code>, written by a run that opened every app by id over URC and checked the
+window that appeared:</p>
+<pre><code>UNO_DEBUG=1 ./build.sh &amp;&amp; python3 harness.py unoapps   # measure the order
+./build.sh &amp;&amp; python3 docs_shots.py                     # capture the figures</code></pre>
+<p>The figures come from a production build, where URC would want a token typed at the console, so the order is
+measured on a debug build of the same tree. Before it captures anything, <code>docs_shots.py</code> asks the
+live menu how many rows it has and stops the run if that disagrees with the roster, which is what makes borrowing
+the order from the other build safe. If the Control Panel's tab order changes, that is still a hand edit.</p>
 
 <nav class="pagenav"><a href="dev-api.html">&lsaquo; API reference</a><a class="nxt" href="dev-remote.html">Remote control &amp; automation &rsaquo;</a></nav>
 </div></main>

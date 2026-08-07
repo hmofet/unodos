@@ -2933,7 +2933,7 @@ def unoapps():
     sys.path.insert(0, os.path.join(HERE, "tools"))
     from urcui import UrcUi                      # boots, links up, screenshots
 
-    fails, shot_ids, skipped, sticky = [], [], [], []
+    fails, shot_ids, skipped, sticky, menu = [], [], [], [], []
 
     def close_open(ui, limit=12):
         """Close what will close; return the titles that would not.
@@ -3001,6 +3001,7 @@ def unoapps():
                 continue
             ui.shot("uno_" + app_id)
             shot_ids.append(app_id)
+            menu.append((app_id, name))
             print("  %-9s ok   %s%s" % (app_id, name,
                                         "   (behind: %s)" % ", ".join(before)
                                         if before else ""))
@@ -3013,7 +3014,53 @@ def unoapps():
               % ", ".join(sticky))
     if fails:
         print("unoapps: " + ", ".join(fails))
-    return 1 if fails else 0
+        return 1
+    write_app_roster(menu)
+    return 0
+
+
+ROSTER = "build/apps_roster.txt"
+
+
+def write_app_roster(menu):
+    """Record the Start-menu order for docs_shots.py, as a by-product of proving it.
+
+    docs_shots.py captures the manual's figures on a PRODUCTION build, because
+    the debug build paints a perf HUD across every frame and nothing toggles it
+    off (`uno_dbg_hud_toggle` has no caller), and URC on a production build wants
+    a token typed at the console. So the capture run cannot ask the OS what its
+    apps are, and it carried a hand-written table of menu indices instead - the
+    same construction this scene just stopped using, and it drifted the same way
+    on 2026-08-04, nearly shipping a picture of Paint as `tracker.png`.
+
+    The app set is a property of the build and of `APPS\\`, not of UNO_DEBUG, so
+    the order proved here is the order the production menu shows. Only the apps
+    that OPENED are written: the menu hides the host slots (`userapp`, `pyapp`)
+    until Studio or PYRT puts something in them, and those are exactly the ids
+    that answered `err no-app` above - detected by asking rather than by name, so
+    a third host slot needs no edit here.
+
+    Written only when every app checked out. A roster from a run that captured
+    the wrong app for one row would be worse than no roster at all, because
+    docs_shots trusts this file over its own table.
+
+    What this CANNOT see is an app the menu hides for a reason `launch` does not
+    report: a module registered but missing from the volume opens a window (one
+    that says it is missing) while the menu leaves it out, and `probe`'s module
+    rows are the loader's legacy file list rather than the registry's, so they
+    do not answer the question either. That case is caught where it can be, on
+    the machine being photographed: docs_shots counts the live menu's rows
+    before it captures anything and stops if the number disagrees."""
+    apps = sorted(os.listdir("build/esp/APPS")) if os.path.isdir("build/esp/APPS") else []
+    head = subprocess.run(["git", "rev-parse", "--short", "HEAD"],
+                          capture_output=True, text=True)
+    with open(ROSTER, "w") as f:
+        f.write("# UnoDOS pc64 Start-menu order, measured by harness.py unoapps\n")
+        f.write("# commit %s\n" % (head.stdout.strip() or "unknown"))
+        f.write("# apps %s\n" % " ".join(apps))
+        for app_id, name in menu:
+            f.write("%s %s\n" % (app_id, name))
+    print("unoapps: wrote %s (%d rows)" % (ROSTER, len(menu)))
 
 
 def start_qemu(extra=None, log="build/ovmf.log", pointer="tablet"):
