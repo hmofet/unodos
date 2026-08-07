@@ -94,6 +94,13 @@ void fb_round_rect_a(int x, int y, int w, int h, int rad, fb_px c, int a, int co
  * aR==aG==aB this is a plain grayscale-AA plot. Clip-safe. */
 void fb_blend_pixel_sub(int x, int y, fb_px fg, int aR, int aG, int aB);
 
+/* Row-at-a-time fb_blend_pixel_sub: blend `n` per-channel coverage samples of
+ * `fg` from (x,y) rightward, clipping ONCE for the row. covR/covG/covB[i] is
+ * the alpha (0..255) for pixel x+i; pass one pointer thrice for grayscale AA. */
+void fb_blend_row_sub(int x, int y, int n, fb_px fg,
+                      const unsigned char *covR, const unsigned char *covG,
+                      const unsigned char *covB);
+
 /* Optional text provider: when registered, fb_glyph/fb_text/fb_text_w route
  * through it (e.g. a TrueType engine) instead of the built-in 8x8 bitmap font.
  * Register NULL to fall back to the bitmap font. Additive + default-safe: ports

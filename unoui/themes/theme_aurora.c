@@ -35,13 +35,50 @@ int unoui_aurora_lite = 0;
 
 /* soft drop shadow: several expanding low-alpha rounded layers, offset down.
  * In LITE mode there is no per-frame alpha: the window simply sits flat (a 1px
- * frame gives it definition), so the shadow is skipped entirely. */
+ * frame gives it definition), so the shadow is skipped entirely.
+ *
+ * The six layers together alpha-blend the whole window footprint (and a little
+ * more) six times over - and then a_window paints the OPAQUE body straight on
+ * top of nearly all of it, so most of that alpha work is invisible. The rows
+ * [y+rad, y+h-rad) across [x, x+w) are full-width solid in the rounded body, so
+ * any shadow blended there is overwritten: skipping it is byte-identical. We
+ * clip each layer to the four regions AROUND that covered band (top, bottom,
+ * left sliver, right sliver) - disjoint and exhaustive over "everything but the
+ * band", so every still-visible shadow pixel is blended exactly as before, just
+ * without repainting the interior the body is about to cover. */
 static void soft_shadow(int x,int y,int w,int h,int rad)
 {
-    int i;
+    int i, gx, gy, gw, gh, gx1, gy1;
+    int by0 = y + rad, by1 = y + h - rad;   /* the body-covered row band */
     if (unoui_aurora_lite) return;
-    for (i = 6; i >= 1; i--)
-        aa_fill_a(x-i, y-i+4, w+2*i, h+2*i, rad+i, FB_RGB(0,0,0), 8, C_ALL);
+    if (w <= 0 || by1 <= by0) {             /* too small to have a covered band */
+        for (i = 6; i >= 1; i--)
+            aa_fill_a(x-i, y-i+4, w+2*i, h+2*i, rad+i, FB_RGB(0,0,0), 8, C_ALL);
+        return;
+    }
+    fb_get_clip(&gx, &gy, &gw, &gh);
+    gx1 = gx + gw; gy1 = gy + gh;
+    {
+        /* [x0,y0,x1,y1) of the four regions, pre-intersection with the clip */
+        int reg[4][4] = {
+            { gx,  gy,  gx1,   by0 },        /* TOP:    rows above the band     */
+            { gx,  by1, gx1,   gy1 },        /* BOTTOM: rows below the band     */
+            { gx,  by0, x,     by1 },        /* LEFT sliver                     */
+            { x+w, by0, gx1,   by1 },        /* RIGHT sliver                    */
+        };
+        int k;
+        for (k = 0; k < 4; k++) {
+            int cx0 = reg[k][0] > gx  ? reg[k][0] : gx;
+            int cy0 = reg[k][1] > gy  ? reg[k][1] : gy;
+            int cx1 = reg[k][2] < gx1 ? reg[k][2] : gx1;
+            int cy1 = reg[k][3] < gy1 ? reg[k][3] : gy1;
+            if (cx1 <= cx0 || cy1 <= cy0) continue;
+            fb_set_clip(cx0, cy0, cx1 - cx0, cy1 - cy0);
+            for (i = 6; i >= 1; i--)
+                aa_fill_a(x-i, y-i+4, w+2*i, h+2*i, rad+i, FB_RGB(0,0,0), 8, C_ALL);
+        }
+        fb_set_clip(gx, gy, gw, gh);        /* restore the caller's clip */
+    }
 }
 
 /* window/title corner radius: 0 in LITE (squared corners avoid the anti-aliased

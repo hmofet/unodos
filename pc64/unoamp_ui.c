@@ -113,34 +113,39 @@ static void origin(int *ox, int *oy)
 
 /* ---- blitting ------------------------------------------------------------- */
 
-/* One sprite, scaled by g_scale, clipped by fb_pixel. Nearest-neighbour on
- * purpose: a pixel-art skin bilinearly filtered is a smear. */
+/* One sprite, scaled by g_scale. Nearest-neighbour on purpose: a pixel-art skin
+ * bilinearly filtered is a smear. Each source row is expanded once into a
+ * scaled row buffer and pushed with fb_blit (which clips the whole run once),
+ * rather than plotting every scaled sub-pixel through the per-pixel-clipping
+ * fb_pixel - a WIN_W-wide MAIN.BMP is ~275*116 source pixels a frame. */
 static int spr(const spr_t *s, int dx, int dy)
 {
     const unoamp_skin *sk = unoamp_skin_get();
     const unoamp_sheet *sh;
-    int px, py, sx, sy;
-    int ox, oy;
+    int px, py, i, k = g_scale, ox, oy, p0, p1, sw;
+    fb_px rowbuf[WIN_W * 4];        /* max scaled run: WIN_W(275) * scale(<=4) */
     if (!sk) return 0;
     sh = &sk->sheet[s->sheet];
     if (!sh->px) return 0;
     origin(&ox, &oy);
+    /* In-sheet source column span [p0,p1): out-of-sheet columns are dropped,
+     * exactly as the old per-pixel `continue` did, and can only be a run at the
+     * ends (source x is monotonic), so the visible run stays contiguous. */
+    p0 = s->sx < 0 ? -s->sx : 0;
+    p1 = s->sx + s->w > sh->w ? sh->w - s->sx : s->w;
+    if (p1 <= p0) return 1;
+    sw = (p1 - p0) * k;
+    if (sw > WIN_W * 4) sw = WIN_W * 4;             /* buffer guard            */
     for (py = 0; py < s->h; py++) {
-        sy = s->sy + py;
+        int sy = s->sy + py, dstx, dsty, w = 0;
         if (sy < 0 || sy >= sh->h) continue;
-        for (px = 0; px < s->w; px++) {
-            unsigned c;
-            int i, j;
-            sx = s->sx + px;
-            if (sx < 0 || sx >= sh->w) continue;
-            c = sh->px[(long)sy * sh->w + sx];
-            /* Scale by replication. The inner loops are tiny (2x2 or 3x3) and
-             * this runs once per dirty frame, not per sample. */
-            for (j = 0; j < g_scale; j++)
-                for (i = 0; i < g_scale; i++)
-                    fb_pixel(ox + (dx + px) * g_scale + i,
-                             oy + (dy + py) * g_scale + j, c);
+        for (px = p0; px < p1; px++) {
+            unsigned c = sh->px[(long)sy * sh->w + s->sx + px];
+            for (i = 0; i < k && w < sw; i++) rowbuf[w++] = c;
         }
+        dstx = ox + (dx + p0) * k;
+        dsty = oy + (dy + py) * k;
+        for (i = 0; i < k; i++) fb_blit(dstx, dsty + i, w, 1, rowbuf, w);
     }
     return 1;
 }
@@ -674,10 +679,19 @@ void unoamp_ui_set_scale(int s)
 }
 
 /* One tick of animation: the title scroll. Deliberately slower than the frame
- * rate - a title that scrolls at 60 characters a second is unreadable. */
+ * rate - a title that scrolls at 60 characters a second is unreadable.
+ *
+ * The scroll (and the ~7.5 Hz repaint it forced) only means anything when the
+ * title actually OVERRUNS the display - draw_main scrolls a long title and
+ * static-prints a short one. So a title that fits, or a windowshaded player
+ * whose title strip is hidden, advances nothing and asks for no repaint; the
+ * shell then sits idle instead of compositing the whole scene eight times a
+ * second for a marquee that is not moving. */
 void unoamp_ui_tick(void)
 {
     static int div_;
+    int n = (int)strlen(g_title), vis = TEXT_W / CH_W;
+    if (g_shade || n <= vis) return;
     if (++div_ >= 8) { div_ = 0; g_scroll++; pc64_shell_dirty(); }
 }
 
