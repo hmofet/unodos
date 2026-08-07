@@ -11,10 +11,12 @@
  * Card bring-up follows the standard dual identity probe: CMD0, then the SD
  * handshake (CMD8 + ACMD41); if the card ignores it, the MMC/eMMC handshake
  * (CMD1, host-assigned RCA, EXT_CSD for capacity). The data plane is
- * identical either way: 4-bit bus at ~25 MHz, single-block CMD17/CMD24 with
- * PIO through the buffer-data port - byte-bounded, no DMA descriptors, and
- * plenty for post-detach .UNO loads + document saves (multi-block/SDMA is
- * the upgrade path if this ever becomes the bottleneck).
+ * identical either way: 4-bit bus at ~25 MHz. The data plane collapses a run
+ * of contiguous sectors into ONE multi-block command (CMD18/CMD25 + Auto
+ * CMD12) instead of a command per 512 bytes, and moves the bytes by SDMA when
+ * the controller and buffer allow it (else PIO through the buffer-data port).
+ * Single-block CMD17/CMD24 PIO remains the fallback for n==1 and for any path a
+ * multi-block/DMA transfer declines or fails.
  *
  * Like ahci/nvme this normally runs DETACHED only (the firmware owns the
  * controller while boot services live). -DUNO_SDHCI_TEST brings it up
@@ -32,6 +34,7 @@ int uno_pc64_detached(void);   /* uefi_main.c: the storage probe gate */
 #include <stdint.h>
 
 /* ---- SDHCI registers (offsets into BAR0) ---------------------------------- */
+#define R_SDMA    0x00                 /* 32-bit: SDMA system address          */
 #define R_BLKSZ   0x04                 /* 16-bit: transfer block size          */
 #define R_BLKCNT  0x06                 /* 16-bit                               */
 #define R_ARG     0x08
@@ -54,6 +57,7 @@ int uno_pc64_detached(void);   /* uefi_main.c: the storage probe gate */
 
 #define IS_CMD_DONE  0x0001
 #define IS_XFER_DONE 0x0002
+#define IS_DMA_INT   0x0008            /* SDMA buffer-boundary interrupt        */
 #define IS_WR_READY  0x0010
 #define IS_RD_READY  0x0020
 #define IS_ERROR     0x8000
@@ -68,11 +72,17 @@ int uno_pc64_detached(void);   /* uefi_main.c: the storage probe gate */
 
 #define SPIN_MAX  4000000u
 #define SECT      512u
+/* Cap on blocks per multi-block command. Kept at 256 KiB so an SDMA transfer
+ * never reaches the 512 KiB buffer boundary (see xfer_multi), i.e. no boundary
+ * interrupt in the common case. The FAT bulk arm hands runs of up to 64
+ * sectors, well under this. */
+#define MULTI_MAX 512u
 
 static volatile uint8_t *gM;
 static pci_dev  g_pci;
 static int      g_present;             /* controller up                        */
 static int      g_is_mmc;              /* 1 = eMMC/MMC, 0 = SD                 */
+static int      g_use_sdma;            /* controller advertises SDMA (caps 22) */
 static int      g_blockaddr;           /* 1 = LBA arguments, 0 = byte offsets  */
 static uint32_t g_rca;                 /* RCA<<16, ready to OR into arguments  */
 static unsigned long long g_sectors;
@@ -164,6 +174,7 @@ static int host_up(void)
     w16(R_ISTAT, 0xFFFF); w16(R_ESTAT, 0xFFFF);
     w8(R_TMO, 0x0E);                               /* max data timeout         */
     caps = r32(R_CAPS);
+    g_use_sdma = (caps & (1u << 22)) != 0;         /* SDMA Support (caps bit 22) */
     w8(R_PWR, 0);
     if      (caps & (1u << 24)) w8(R_PWR, 0x0F);   /* 3.3 V                    */
     else if (caps & (1u << 25)) w8(R_PWR, 0x0D);   /* 3.0 V                    */
@@ -276,20 +287,105 @@ static int one_block(unsigned long long lba, void *buf, int write)
     return 1;
 }
 
+/* ---- multi-block data plane (CMD18/CMD25) --------------------------------
+ * One command moves `n` contiguous blocks instead of one command per sector,
+ * which is where the throughput lives: the FAT bulk arm hands runs of up to 64
+ * sectors, and the single-block path paid a full command handshake + inhibit
+ * wait for each. Auto CMD12 (transfer-mode bits 3:2 = 01) lets the controller
+ * close the open-ended read/write itself once the block count is exhausted.
+ *
+ * Two engines share the setup:
+ *   - SDMA: the controller masters the bus into `buf` directly (no CPU in the
+ *     copy loop). 32-bit engine, so it needs a 4-byte-aligned buffer wholly
+ *     below 4 GiB; xfer_multi() checks that and falls back to PIO otherwise.
+ *   - PIO multi-block: still one command, but the CPU drains/fills the buffer
+ *     port per block. The universal fallback - no address/caps constraints. */
+
+/* SDMA. Returns 1 ok, 0 hardware error, -1 "this buffer can't do SDMA" (caller
+ * should try PIO). */
+static int sdma_multi(unsigned long long lba, void *buf, unsigned n, int write)
+{
+    uint32_t arg = g_blockaddr ? (uint32_t)lba : (uint32_t)(lba * SECT);
+    uintptr_t addr = (uintptr_t)buf;
+    unsigned i;
+    if ((addr & 3) ||
+        (addr + (unsigned long long)n * SECT) > 0xFFFFFFFFull) return -1;
+    w32(R_SDMA, (uint32_t)addr);
+    w16(R_BLKSZ, (uint16_t)(0x7000u | SECT));      /* 512-byte blocks, 512K DMA bnd */
+    w16(R_BLKCNT, (uint16_t)n);
+    /* DMA en | BlockCount en | Auto CMD12 | multi (+ read dir) */
+    w16(R_XFER, (uint16_t)(0x27 | (write ? 0 : 0x10)));
+    if (!cmd(write ? 25 : 18, arg, RSP_R1, 1)) return 0;
+    for (i = 0; i < SPIN_MAX; i++) {
+        uint16_t s = r16(R_ISTAT);
+        if (s & IS_ERROR) { recover(); return 0; }
+        if (s & IS_DMA_INT) {                      /* buffer boundary: resume    */
+            w16(R_ISTAT, IS_DMA_INT);
+            w32(R_SDMA, r32(R_SDMA));              /* readback = next address    */
+            continue;
+        }
+        if (s & IS_XFER_DONE) { w16(R_ISTAT, IS_XFER_DONE); return 1; }
+    }
+    recover();
+    return 0;
+}
+
+/* PIO multi-block: one CMD18/CMD25, then per-block buffer-ready + word copy. */
+static int pio_multi(unsigned long long lba, void *buf, unsigned n, int write)
+{
+    uint32_t arg = g_blockaddr ? (uint32_t)lba : (uint32_t)(lba * SECT);
+    uint32_t *p = (uint32_t *)buf;
+    unsigned b, w;
+    w16(R_BLKSZ, SECT);
+    w16(R_BLKCNT, (uint16_t)n);
+    /* BlockCount en | Auto CMD12 | multi (+ read dir), no DMA */
+    w16(R_XFER, (uint16_t)(0x26 | (write ? 0 : 0x10)));
+    if (!cmd(write ? 25 : 18, arg, RSP_R1, 1)) return 0;
+    for (b = 0; b < n; b++) {
+        if (!spin_stat(write ? IS_WR_READY : IS_RD_READY)) { recover(); return 0; }
+        if (write) for (w = 0; w < SECT / 4; w++) w32(R_DATA, *p++);
+        else       for (w = 0; w < SECT / 4; w++) *p++ = r32(R_DATA);
+    }
+    if (!spin_stat(IS_XFER_DONE)) { recover(); return 0; }
+    return 1;
+}
+
+/* One multi-block transfer of `n` (>=2) blocks: SDMA when the controller and
+ * the buffer both allow it, PIO multi-block otherwise. 1 ok, 0 fail. */
+static int xfer_multi(unsigned long long lba, void *buf, unsigned n, int write)
+{
+    if (g_use_sdma) {
+        int r = sdma_multi(lba, buf, n, write);
+        if (r >= 0) return r;                      /* 1 ok / 0 real error        */
+        /* r == -1: buffer not SDMA-able (alignment / > 4 GiB) - fall to PIO */
+    }
+    return pio_multi(lba, buf, n, write);
+}
+
 static int drv_read(uno_bdev *b, unsigned long long lba, unsigned int n, void *buf)
 {
-    uint8_t *out = (uint8_t *)buf; (void)b;
-    while (n--) {
+    uint8_t *out = (uint8_t *)buf; int multi = 1; (void)b;
+    while (n) {
+        if (multi && n > 1) {
+            unsigned c = n > MULTI_MAX ? MULTI_MAX : n;
+            if (xfer_multi(lba, out, c, 0)) { lba += c; out += c * SECT; n -= c; continue; }
+            multi = 0;                             /* one-off multi failure: finish */
+        }                                          /* on the known-good single path */
         if (!one_block(lba, out, 0)) return 0;
-        lba++; out += SECT;
+        lba++; out += SECT; n--;
     }
     return 1;
 }
 
 static int drv_write(uno_bdev *b, unsigned long long lba, unsigned int n, const void *buf)
 {
-    const uint8_t *in = (const uint8_t *)buf; (void)b;
-    while (n--) {
+    const uint8_t *in = (const uint8_t *)buf; int multi = 1; (void)b;
+    while (n) {
+        if (multi && n > 1) {
+            unsigned c = n > MULTI_MAX ? MULTI_MAX : n;
+            if (xfer_multi(lba, (void *)in, c, 1)) { lba += c; in += c * SECT; n -= c; continue; }
+            multi = 0;
+        }
         if (!one_block(lba, (void *)in, 1)) return 0;
         lba++; in += SECT;
     }
@@ -339,7 +435,7 @@ int uno_sdhci_init(void)
         goto reg;
     }
     if (!pci_find_class(0x08, 0x05, &g_pci)) return 0;
-    pci_enable_bus_master(&g_pci);                 /* mem decode (PIO needs no BM) */
+    pci_enable_bus_master(&g_pci);                 /* mem decode + BM (SDMA masters) */
     gM = (volatile uint8_t *)(uintptr_t)pci_bar(&g_pci, 0);
     if (!gM) return 0;
     if (!host_up()) return 0;
