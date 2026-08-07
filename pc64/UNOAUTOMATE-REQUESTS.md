@@ -8239,3 +8239,9 @@ not re-derive intent or assume they were missed.
   fallback retained, so a device it mishandles still completes), the e1000e/igb
   read-MAC-before-reset reorder, and the rtwifi/mrvlwifi/iwlwifi fixes. Validate on
   the Surface Go eMMC and the respective NICs.
+
+**CLAIM 2026-08-07 (unostream lane):** taking NEW subsystem `unostream`:
+outbound TCP screen streaming for demo capture (guest dials a host receiver
+and pushes QOI keyframe/delta frames on its own tick, cursor composited).
+Adds a `stream start|stop|status` verb via URC (OBSERVE, like `screen`).
+Registry row + contract doc land with the subsystem's first commit.
