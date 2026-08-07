@@ -734,13 +734,17 @@ static Boolean fat12_write(const char *name, const unsigned char *buf, long len)
 {
     unsigned char n11[11];
     short sec, off;
-    unsigned short first = 0, prev = 0;
+    unsigned short first = 0, prev = 0, old_chain = 0;
     long put = 0;
     if (!gFatMounted) return false;
     fat_name_to_83(name, n11);
-    /* overwrite: free the old chain, reuse the entry */
+    /* overwrite: reuse the entry, but CAPTURE the old chain instead of freeing
+       it now. Freeing before the new chain is built means a disk-full mid-write
+       leaves the entry pointing at freed clusters another file can reclaim
+       (cross-link). Free it only after the new chain + entry are committed -
+       the same S-FAT-28 fix already in fat.c uno_fat_write. */
     if (fat_find(n11, &sec, &off)) {
-        fat_free_chain(fat_rd16(gFatSec + off + 26));
+        old_chain = fat_rd16(gFatSec + off + 26);
     } else {
         if (!fat_free_slot(&sec, &off)) return false;
         memset(gFatSec + off, 0, 32);
@@ -778,6 +782,9 @@ static Boolean fat12_write(const char *name, const unsigned char *buf, long len)
     fat_wr16(gFatSec + off + 26, first);
     fat_wr32(gFatSec + off + 28, (unsigned long)len);
     if (!gFatDev(true, (short)(gFatRootStart + sec), gFatSec)) return false;
+    /* new chain + entry committed: NOW release the old chain (fat_alloc never
+       hands back an in-use cluster, so it can't be the new chain we just wrote) */
+    if (old_chain >= 2 && old_chain != first) fat_free_chain(old_chain);
     return fat_flush();
 }
 
