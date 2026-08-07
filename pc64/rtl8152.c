@@ -24,6 +24,19 @@ typedef unsigned short u16;
 typedef unsigned int   u32;
 
 void uno_pc64_delay_ms(int ms);
+/* production-safe millisecond clock (same source the browser/http timeouts use;
+ * uno_dbg_uptime_ms is debug-only). Uncalibrated TSC falls back to a call count. */
+unsigned long long uno_native_rdtsc(void);
+unsigned long long uno_native_tsc_per_us(void);
+static unsigned rtl_ms(void)
+{
+    static unsigned long long t0; static unsigned tick;
+    unsigned long long per_ms = uno_native_tsc_per_us() * 1000ull, now;
+    if (!per_ms) return ++tick;
+    now = uno_native_rdtsc();
+    if (!t0) t0 = now;
+    return (unsigned)((now - t0) / per_ms);
+}
 
 /* ---- vendor request protocol -------------------------------------------- */
 #define REQT_READ        0xc0
@@ -411,6 +424,25 @@ static int poll_link(void)
     return g_link_up;
 }
 
+/* poll_link() is a synchronous USB vendor control round-trip (one OCP read).
+ * rtl_recv() runs inside the stack's `while (recv() > 0)` drain, so calling
+ * poll_link() at the top of every recv turned each drained frame into a blocking
+ * USB transfer. Cache the link state and only re-poll every LINK_REFRESH_MS - the
+ * same shape ax88179 uses (its recv never touches the PHY). Explicit link()
+ * queries still force a fresh poll so association/DHCP detect link promptly. */
+#define LINK_REFRESH_MS 250
+static unsigned g_link_ms;      /* rtl_ms() of the last real poll */
+static int      g_link_valid;   /* have we polled at least once? */
+static int link_refresh(int force)
+{
+    unsigned now = rtl_ms();
+    if (force || !g_link_valid || (now - g_link_ms) >= LINK_REFRESH_MS) {
+        poll_link();
+        g_link_ms = now; g_link_valid = 1;
+    }
+    return g_link_up;
+}
+
 /* ---- uno_nic_t: send / recv / link -------------------------------------- */
 static int rtl_send(void *ctx, const void *pkt, int len)
 {
@@ -434,7 +466,7 @@ static int rtl_recv(void *ctx, void *pkt, int cap)
 {
     (void)ctx;
     if (!g_bound) return 0;
-    poll_link();
+    link_refresh(0);                 /* cached: avoid a USB round-trip per frame */
     if (!g_link_up) return 0;
 
     /* pop remaining packets from the current aggregation buffer first */
