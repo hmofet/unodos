@@ -89,6 +89,8 @@ typedef struct uno_vm_linux {
     unsigned fault_vec, fault_err;      /* 0xFFFF when it was not a fault   */
     unsigned long long fault_addr;
     int pio, pio_n;                     /* port I/O: how much, and where    */
+    int injects;                        /* interrupts handed to the guest   */
+    int shell_ok;                       /* the shell READ a line and replied */
     unsigned last_port;                 /* the one it is sitting on         */
     unsigned short pio_ports[8];
 } uno_vm_linux;

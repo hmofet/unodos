@@ -23,10 +23,27 @@ int uno_vdev_pio(unsigned port, int is_write, unsigned size,
 int uno_vdev_serial_chars(void);
 
 /* The receive half: push a byte the guest will read from COM1, or queue a
- * string handed over on the first poll that finds the FIFO empty. */
+ * string handed over when the driver arms the receive interrupt. */
 void uno_vdev_serial_push(int c);
 void uno_vdev_serial_seed(const char *s);
 unsigned long long uno_vdev_base(void);
+
+/* The 8259 pair's answer to "may a vector be injected right now".  `pending`
+ * peeks; `take` commits (ISR up, an edge source marks itself delivered) and
+ * returns the vector THE GUEST programmed in ICW2, or -1.  The caller checks
+ * the guest can accept (IF set, no interrupt shadow) BEFORE taking: a taken
+ * vector is owed an injection. */
+int uno_vdev_irq_pending(void);
+int uno_vdev_irq_take(void);
+
+/* LCR | IER<<8 | MCR<<16 | master IMR<<24.  A guest that has gone quiet is
+ * either not writing or writing somewhere nobody is listening, and these are
+ * the registers that decide which. */
+unsigned uno_vdev_pc_state(void);
+
+/* IRR | ISR<<8 | IMR<<16 | inited<<24 | icw<<28 | ch0 mode<<32 |
+ * ch0 reload<<40 | armed<<56 | oneshot_done<<57. */
+unsigned long long uno_vdev_pic_state(void);
 
 /* Place a queue's rings on the guest's behalf (A5's guest is eighteen
  * instructions; A6's guest is Linux and does this itself through the

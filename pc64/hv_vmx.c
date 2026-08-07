@@ -517,9 +517,17 @@ static void xsetbv0(u64 v)
 static void run_once(uno_vmexit *out)
 {
     int swap = g_guest_xcr0 && host_osxsave();
+    u64 t0;
     if (!g_quiet) tracex("[hv] vmentry rip=", vmread(GUEST_RIP));
     if (swap) xsetbv0(g_guest_xcr0);
+    t0 = uno_native_rdtsc();
     vmx_entry(&g_ctx);
+    /* What the guest actually got, as opposed to what the wall did. The
+     * periodic devices count against this; see uno_vmm_guest_cycles. It
+     * over-counts by the entry and exit themselves, which is a rounding
+     * error against a millisecond slice and errs the safe way (a tick
+     * slightly early beats a tick that outruns its handler). */
+    uno_vmm_add_guest_cycles(uno_native_rdtsc() - t0);
     if (swap) xsetbv0(g_host_xcr0);
     if (!g_entry_failed) g_launched = 1;
     classify(out);
@@ -1343,10 +1351,22 @@ static int vmx_virtio(uno_vm_virtio *out)
 static int g_lin_lines;
 static unsigned g_lin_lastport;
 static int g_lin_running;
+static int g_lin_halted;         /* parked on a hlt, waiting for a line     */
 static int g_lin_mark;
+static int g_lin_injects, g_lin_lastvec = -1;
+static u32 g_lin_proc;           /* the primary controls, already adjusted  */
 
 
 static char g_lin_last[120];
+
+/* What the shell is asked to say, and the whole difference between a console
+ * that prints and one that WORKS. The kernel's own output proves the kernel
+ * runs; only a reply proves the guest read something we sent, ran it, and
+ * answered - which is the receive path, the 8259 and the injection all at
+ * once. The echoed command line reads `~ # echo UNODOS-...`, so the reply is
+ * distinguished by being the line that STARTS with the marker. */
+#define SHELL_MARK "UNODOS-GUEST-SHELL-OK"
+static int g_lin_shell_ok;
 
 static void lin_sink(const char *s)
 {
@@ -1354,6 +1374,8 @@ static void lin_sink(const char *s)
     g_lin_lines++;
     for (i = 0; i + 1 < sizeof g_lin_last && s[i]; i++) g_lin_last[i] = s[i];
     g_lin_last[i] = 0;
+    for (i = 0; SHELL_MARK[i] && s[i] == SHELL_MARK[i]; i++) { }
+    if (!SHELL_MARK[i]) g_lin_shell_ok++;
     trace("[lin] "); trace(s); trace("\n");
 }
 
@@ -1597,7 +1619,9 @@ static int vmx_linux(uno_vm_linux *out)
     out->last = ""; out->stop_reason = 0; out->stop_rip = 0;
     out->fault_vec = 0xFFFF; out->fault_err = 0; out->fault_addr = 0;
     out->pio = 0; out->pio_n = 0; g_lin_lastport = 0xFFFFFFFFu;
+    out->injects = 0; out->shell_ok = 0;
     g_lin_lines = 0; g_lin_last[0] = 0;
+    g_lin_injects = 0; g_lin_shell_ok = 0; g_lin_lastvec = -1;
 
     if (!uno_vmm_probe()->slat || !carve) return 0;
     eptp = ept_build();
@@ -1663,6 +1687,11 @@ static int vmx_linux(uno_vm_linux *out)
     vmwrite(PIN_BASED_CTLS, pin);
     vmwrite(PROC_BASED_CTLS, proc);
     vmwrite(PROC_BASED_CTLS2, proc2);
+    /* Kept, because interrupt-window exiting is turned on and off inside the
+     * slice: the base has already been through the machine's allowed-0 and
+     * allowed-1 masks, and re-adjusting on every entry would be that work
+     * repeated thousands of times a second for an answer that cannot change. */
+    g_lin_proc = proc;
     vmwrite(EPT_POINTER, eptp);
     vmwrite(GUEST_CR3, L_PML4);
     vmwrite(GUEST_GDTR_BASE, L_GDT);
@@ -1716,10 +1745,80 @@ static int vmx_linux(uno_vm_linux *out)
     uno_vdev_serial_seed("\necho UNODOS-GUEST-SHELL-OK\nuname -a\n"
                          "busybox ls /bin\n");
     g_lin_running = 1;
+    g_lin_halted = 0;
     out->lines = 0;
     out->last = g_lin_last;
     out->chars = 0;
     return 1;                                 /* placed and ready to run     */
+}
+
+/* A6e: the injection, at last through the door A4 proved.  Three gates, and
+ * each is the difference between an interrupt and a corruption: the previous
+ * injection must be gone (the CPU clears the valid bit on delivery, so a set
+ * bit means an entry that never happened), the guest must have IF open, and
+ * it must not be in an interrupt shadow.  Injection does NOT check IF on its
+ * own - VM entry delivers the event regardless, straight through whatever
+ * critical section the guest thought it was protecting. */
+/* Can the guest take an external interrupt at this instant?  Three things say
+ * no, and only two of them are the guest's own state: an entry field still
+ * valid is an injection that has not been delivered yet, IF clear is a guest
+ * in a critical section, and an interrupt shadow is the one instruction after
+ * STI or MOV-SS. */
+static int lin_can_take(void)
+{
+    if (vmread(VM_ENTRY_INTR_INFO) & VM_ENTRY_INTR_VALID) return 0;
+    if (!(vmread(GUEST_RFLAGS) & 0x200)) return 0;
+    if (vmread(GUEST_INTERRUPTIBILITY) & 3) return 0;
+    return 1;
+}
+
+/* ASKING AT THE RIGHT MOMENT IS NOT SOMETHING WE CAN DO BY LOOKING.  A guest
+ * spends much of its life unable to take an interrupt, and a hypervisor that
+ * only offers one when it happens to glance at a good moment starves it - the
+ * machine has a mechanism for exactly this, and interrupt-window exiting is
+ * it: arm it with a vector waiting, and the CPU exits the instant the guest
+ * becomes ready.  Then delivery is prompt by construction rather than by
+ * luck, which is the difference between a shell that responds and one that
+ * responds when the sampling happens to line up. */
+#define PROC_INTR_WINDOW  (1u << 2)
+#define EXIT_INTR_WINDOW  7
+
+static void lin_intr_window(int want)
+{
+    u32 p = want ? (g_lin_proc | PROC_INTR_WINDOW)
+                 : (g_lin_proc & ~PROC_INTR_WINDOW);
+    if (p != (u32)vmread(PROC_BASED_CTLS)) vmwrite(PROC_BASED_CTLS, p);
+}
+
+/* THE IDLE LOOP IS `sti; hlt`, AND THAT IS WHY THIS EXISTS.  STI leaves an
+ * interrupt shadow covering exactly one instruction, and that instruction is
+ * the HLT - so the HLT exit arrives with the shadow set, and a hypervisor
+ * that treats the shadow as "not now" refuses to wake the guest it just
+ * stepped past the HLT of.  The guest then loops around its idle path
+ * forever, taking no tick and doing no work, which is precisely how this
+ * presented: no output, injections frozen, and the guest apparently busy.
+ *
+ * On real silicon the interrupt is delivered AT the HLT, ending it; once we
+ * have consumed the HLT the shadow has done its whole job and retiring it is
+ * the accurate model, not a workaround. */
+static void lin_wake_shadow(void)
+{
+    u64 s = vmread(GUEST_INTERRUPTIBILITY);
+    if (s & 3) vmwrite(GUEST_INTERRUPTIBILITY, s & ~3ull);
+}
+
+static void lin_try_inject(void)
+{
+    int vec;
+    if (!uno_vdev_irq_pending()) { lin_intr_window(0); return; }
+    if (!lin_can_take()) { lin_intr_window(1); return; }
+    lin_intr_window(0);
+    vec = uno_vdev_irq_take();
+    if (vec >= 0) {
+        vmwrite(VM_ENTRY_INTR_INFO, VM_ENTRY_INTR_VALID | (unsigned)vec);
+        g_lin_injects++;
+        g_lin_lastvec = vec;
+    }
 }
 
 /* One budgeted slice of the kernel, and everything its exits need.  This is
@@ -1742,15 +1841,44 @@ static int vmx_linux_slice(unsigned budget_us, uno_vm_linux *out)
     ticks = (per_us * budget_us) >> shift;
     if (!ticks) ticks = 1;
 
+    /* Parked on a hlt.  RIP is still AT the hlt, and stays there until a
+     * line rises, because delivery order is the fidelity that matters: on
+     * real silicon an interrupt wakes the core, is delivered with the return
+     * address AFTER the hlt, and the idle loop re-checks its condition. So
+     * the RIP moves past the hlt in the same breath as the injection and
+     * never before - waking the guest without a vector would send the idle
+     * loop around without the tick it is waiting for. */
+    if (g_lin_halted) {
+        if (!uno_vdev_irq_pending()) {
+            out->lines = g_lin_lines;
+            out->last = g_lin_last;
+            return 1;                              /* asleep is not stopped */
+        }
+        vmwrite(GUEST_RIP, vmread(GUEST_RIP) + 1); /* hlt is one byte       */
+        lin_wake_shadow();
+        g_lin_halted = 0;
+    }
+
     /* Several entries per frame: most exits are a CPUID or a port write that
      * costs a microsecond to answer, and returning to the frame loop after
      * each one would spend the whole budget on the round trip. */
     for (n = 0; n < 512; n++) {
+        lin_try_inject();
         vmwrite(VMX_PREEMPT_VALUE, ticks);
         run_once(&ex);
+        /* The per-entry trace is right for a selftest that enters three times
+         * and ruinous for a kernel that enters tens of thousands of times:
+         * every entry is two writes to the debug console, each of which is
+         * itself an exit to the far side, and the guest ends up spending its
+         * slice on our narration. The same `g_quiet` the A3 slice sets, and
+         * for the same reason - the first entry is traced, the rest are not. */
+        g_quiet = 1;
         out->exits++;
         if (ex.raw == EXIT_PREEMPT) break;         /* the budget is spent    */
         if (ex.raw == EXIT_EXT_INTR) break;
+        /* The guest just became able to take one: nothing to do here, the
+         * next pass through the top of this loop is the injection. */
+        if (ex.raw == EXIT_INTR_WINDOW) continue;
         if (ex.raw == EXIT_CPUID) {
             lin_cpuid();
             vmwrite(GUEST_RIP, vmread(GUEST_RIP) + vmread(VM_EXIT_INSTR_LEN));
@@ -1770,6 +1898,12 @@ static int vmx_linux_slice(unsigned budget_us, uno_vm_linux *out)
             v = g_ctx.rax;
             out->pio++;
             out->last_port = port;
+            /* A rolling record of the last eight ports. One port says where
+             * a guest is sitting; eight say what LOOP it is in, which is the
+             * difference between "spinning on the interrupt-enable register"
+             * and "servicing an interrupt storm that reaches it". */
+            out->pio_ports[out->pio_n & 7] = (unsigned short)port;
+            out->pio_n++;
             uno_vdev_pio(port, !is_in, size, &v, lin_sink);
             if (is_in) {
                 if (size == 1) g_ctx.rax = (g_ctx.rax & ~0xFFull) | (v & 0xFF);
@@ -1808,12 +1942,18 @@ static int vmx_linux_slice(unsigned budget_us, uno_vm_linux *out)
         }
         if (ex.raw == EXIT_EPT_VIOLATION && mmio_service()) continue;
         if (ex.raw == EXIT_HLT) {
-            /* A halted kernel is waiting for an interrupt it will not get
-             * until there is a timer. Stopping here rather than spinning
-             * says so, instead of burning a slice a frame forever. */
-            g_lin_running = 0;
-            out->stop_reason = (unsigned)ex.raw;
-            out->stop_rip = ex.rip;
+            /* A6d stopped the run here, and for a guest with no interrupt
+             * controller that was the honest reading: a hlt nothing can end.
+             * With the 8259 in, hlt means what it means - wait. A line
+             * already up ends it now (step past, and the loop's next entry
+             * injects); otherwise the guest parks, costing nothing per frame
+             * until a line rises. */
+            if (uno_vdev_irq_pending()) {
+                vmwrite(GUEST_RIP, vmread(GUEST_RIP) + vmread(VM_EXIT_INSTR_LEN));
+                lin_wake_shadow();
+                continue;
+            }
+            g_lin_halted = 1;
             break;
         }
         g_lin_running = 0;
@@ -1824,12 +1964,34 @@ static int vmx_linux_slice(unsigned budget_us, uno_vm_linux *out)
     out->lines = g_lin_lines;
     out->last = g_lin_last;
     out->chars = uno_vdev_serial_chars();
+    out->injects = g_lin_injects;
+    out->shell_ok = g_lin_shell_ok;
     /* On the debug console rather than the kernel log: a kernel that stops
      * printing may be spinning on a port nobody emulated, and the boot log is
      * only flushed on a timer this run does not reach. */
     if ((out->exits >> 14) != g_lin_mark) {
         g_lin_mark = out->exits >> 14;
-        tracex("[lin] still going, port=", (u64)out->last_port);
+        /* exits | lines | port | LCR,IER,MCR,IMR, in one line: between them
+         * they separate "stopped", "spinning on a port nobody emulated" and
+         * "still talking, to a register we are not listening on". */
+        u64 ring = 0;
+        int k;
+        for (k = 0; k < 4; k++)              /* four ports fit in a word     */
+            ring = (ring << 16) | out->pio_ports[(out->pio_n + 4 + k) & 7];
+        /* Five numbers, each of which failed differently during A6e and each
+         * of which is unreadable without the others. Lines that stop while
+         * exits climb is a guest running and saying nothing; injections that
+         * stop while the PIC shows a line up is a guest being starved of the
+         * interrupt it is waiting for (which is how the idle loop's STI
+         * shadow was found); and the port ring is the LOOP rather than the
+         * instant, which is what separates "spinning on a register" from
+         * "servicing an interrupt that reaches it". */
+        tracex("[lin] exits=", (u64)out->exits);
+        tracex("[lin]   lines=", (u64)out->lines);
+        tracex("[lin]   ports=", ring);
+        tracex("[lin]   picstate=", uno_vdev_pic_state());
+        tracex("[lin]   injects=", (u64)g_lin_injects);
+        tracex("[lin]   rip=", vmread(GUEST_RIP));
     }
     return g_lin_running;
 }

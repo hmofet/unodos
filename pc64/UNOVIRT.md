@@ -4,7 +4,9 @@ The appliance machinery: can this machine host a guest, and later, the guest
 itself. The programme and its phases are `docs/UNOVIRT-PLAN.md`; this file is
 the API surface, its changelog, and the things a consumer has to know.
 
-**Status: A0 through A5 [implemented on VMX]. A6 [in progress: **userspace runs and the console registers**; the shell exits on EOF for want of a UART receive path]. A1 [unproved on SVM].** The
+**Status: A0 through A6 [implemented on VMX]. A1 [unproved on SVM].** A real
+Ubuntu kernel boots under UnoDOS, reaches userspace, and **its shell reads a
+command and answers** - which is A6's exit criterion. The
 capability gate runs on every boot. The foothold is real on Intel: on devbuntu
 (bare metal, nested KVM) UnoDOS enters VMX operation, runs a guest, takes it
 through a CPUID intercept, reads its marker back out of guest memory, and then
@@ -360,8 +362,10 @@ to terminate hangs the machine on request.
 
 ## A6: Linux boots, and says so
 
-**Not finished** - the criterion is a shell on virtio-console. What exists is a
-kernel that runs.
+The criterion named a shell on virtio-console; what it has is a shell on the
+8250, which is the same claim through the device the kernel could actually
+talk to from its first millisecond. The sections below are the order it was
+reached in, because each fault was further in than the last.
 
     linux SPOKE: 16870 KB, 1542 chars 24 lines over 3666 exits, 3100 pio
 
@@ -550,19 +554,119 @@ That is the next piece, and it is bigger than the receive path was:
 Everything under it is in place: the queue, the status bit, the injection
 mechanism and the frame loop that would drive them.
 
-### What is left before a shell
+### A6e: the shell answers
 
-- **An initramfs.** This is now the only thing between here and userspace, and
-  it is supply rather than mechanism: `ramdisk_image`/`ramdisk_size` in the
-  zero page are already wired and set to zero.
-- **A LAPIC and a timer.** `nolapic no_timer_check` papers over their absence,
-  and a kernel with no timer cannot schedule - which is most of what reaching
-  a shell means.
-- **An initramfs**, and A5's virtio-console wired up as the guest's real
-  console instead of the 8250 standing in for it.
+    ~ # echo UNODOS-GUEST-SHELL-OK
+    UNODOS-GUEST-SHELL-OK
+    ~ # uname -a
+    Linux (none) 7.0.0-28-generic #28-Ubuntu SMP PREEMPT_DYNAMIC ... x86_64 GNU/Linux
+    ~ # busybox ls /bin
+    busybox  cat      echo     ls       mount    sh       uname
+
+**A6's criterion, and the reply is the whole of it.** The kernel's own output
+only ever proved a kernel runs. A reply proves the guest read a line we sent
+it, ran it, and answered - the receive FIFO, the 8259, the injection and the
+frame loop, end to end, in one line that cannot be produced any other way.
+It is checked rather than eyeballed: `lin_sink` counts lines that START with
+the marker (the echoed command line begins `~ # echo`), and the status block
+says `shell ANSWERED` or `shell silent`.
+
+The 8259 pair is in `unovdev_pc.c`, which is where the legacy PC now lives:
+`unovdev.c` says "virtio-mmio transport" at the top and had quietly become
+half a chipset, so the port-I/O world was split out before adding a third
+device to it. The interrupt itself carries the vector **the guest programmed
+in ICW2** (Linux remaps to 0x30), because injecting the ISA line number
+delivers IRQ0 as vector 0 - a divide-error in the guest's own handler, a
+plausible crash a long way from its cause (S-HV-35).
+
+### Five findings, and only the first one was the interrupt controller
+
+**One.** An 8259, IRQ4 on a received byte and IRQ0 from the PIT was the piece
+that was actually missing, and it was also the smallest of the five.
+
+**Two: the idle loop is `sti; hlt`, and that is a trap for the injector.**
+STI leaves an interrupt shadow covering exactly one instruction, and that
+instruction is the HLT - so the HLT exit arrives with the shadow set. Refusing
+to inject while a shadow is set (which is otherwise correct) means refusing to
+wake the guest whose HLT you just stepped past: it loops through its idle path
+forever, takes no tick, does no work, and looks busy from the outside. The log
+said so plainly once the right numbers were in it - **injections frozen at 76
+while the PIC showed both lines up and nothing in service**. On hardware the
+interrupt is delivered AT the HLT, which ends it; once the HLT is consumed the
+shadow has done its job and retiring it is the accurate model (S-HV-37).
+
+**Three: delivery must not depend on looking at a lucky moment.** Sampling the
+guest's state once per entry and injecting if it happens to be ready is
+starvation dressed as a policy, because a guest spends much of its life with
+IF clear. Interrupt-window exiting is the mechanism the machine provides for
+exactly this: arm it with a vector waiting and the CPU exits the instant the
+guest becomes ready (S-HV-36). This is the fix that made the shell responsive
+rather than occasionally responsive.
+
+**Four: a periodic device must count GUEST time; a device the guest reads must
+count the wall.** The two PIT channels want opposite clocks and each is wrong
+with the other's. Channel 2 is compared by the guest against the real TSC it
+reads directly, so it follows the wall (A6b). Channel 0 is a tick the guest
+must SERVICE, and a guest with a quarter of a core driven by a wall-time tick
+gets four periods per period of service: it re-enters the timer interrupt
+forever. That is a livelock, not a fast clock (S-HV-38).
+
+**Five: transmit-empty is a latch, received-data is a level.** This
+transmitter never fills, so "holding register empty" is true forever - and
+modelled as a level, the request cannot be quieted by anything the driver
+does. The shell wedged mid-`ls`, at the exact moment the kernel first enabled
+interrupt-driven transmit for a long output, and from then on did nothing but
+service IRQ4 with its output frozen. On a real 8250 the THRE request is
+latched and **reading IIR clears it** (S-HV-39). The DLAB bit belongs to the
+same family: unmodelled, the driver's baud programming puts the low byte on
+the console and **the high byte over the IER**, so setting the speed disarms
+the interrupts just enabled (S-HV-40).
+
+**The shape all five share** is the one A6b already named and this phase paid
+for again: the default is never "works as on real hardware". Here it is
+sharper - three of the five are cases where the *conservative* choice is the
+broken one. Refusing to inject into a shadow, asserting a line that is
+genuinely true, and counting real time are each defensible in isolation, and
+each one stops the guest dead.
+
+### The trap that cost more than any of them: `passes=3`
+
+Two whole investigations went into a kernel that stopped after one line of
+output, looking exactly like a hang. It was not a hang. **The shipped
+DEBUG.CFG carries `passes=3`, so the stress driver finishes its passes and
+powers the machine off about nineteen seconds in** - and a guest that runs at
+4 ms per frame gets roughly a tenth of a second of CPU out of those nineteen
+seconds, which is not enough to finish decompressing itself. The tell was
+available and missed: the guest's exits were nearly all preemption-timer
+exits, meaning it was busy and not stuck.
+
+What makes it worth writing down is that the failure is indistinguishable from
+the real thing and the fix is one word: **`noshutdown` goes in DEBUG.CFG
+beside `vm-selftest`**, both inside the first 512 bytes. `tools/hv_remote.py`
+carries the recipe in its docstring and now prints the guest's own output and
+line count, so the next person reads the answer instead of ssh-ing for it.
+
+### What is left
+
+- **A real console, not a seeded one.** Input still comes from a string
+  handed over when the driver arms its receive interrupt. Real keystrokes come
+  from the frame loop, which already owns the keyboard, and that is A8's work
+  when the guest gets a window.
+- **A LAPIC.** `nolapic` is doing real work here: the guest has one legacy PIC
+  and no per-CPU timer, which is fine for one core and is the thing A9 has to
+  replace before a guest gets a core of its own.
+- **virtio-console** as the guest's real console instead of the 8250 standing
+  in for it, and virtio-blk/net (A7).
 
 ## Changelog
 
+- **2026-08-07, API 1.** A6e, and **A6 is met**: an 8259 pair, IRQ0 from the
+  PIT and IRQ4 from the UART, injected through `VM_ENTRY_INTR_INFO` with
+  interrupt-window exiting so delivery is prompt by construction. The guest
+  shell reads a command and answers. `unovdev_pc.c` (the legacy PC platform)
+  split out of `unovdev.c` (the virtio transport) first, as a pure move.
+  New: `uno_vdev_irq_pending/take`, `uno_vdev_pc_state`, `uno_vdev_pic_state`,
+  `uno_vmm_guest_cycles`. Contracts S-HV-34..40.
 - **2026-08-06, API 1.** A0: the capability gate. `uno_vmm_probe`,
   `uno_vmm_eligible`, `uno_vmm_blocker_str`, `uno_vmm_carve_mb`,
   `uno_vmm_status_str`. Contracts S-HV-01..11.

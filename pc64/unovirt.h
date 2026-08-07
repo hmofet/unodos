@@ -111,6 +111,16 @@ unsigned long long uno_vmm_carve_size(void);
  * gpa near the top, and `gpa + len` then wraps to something small. */
 void *uno_vmm_gpa(unsigned long long gpa, unsigned long long len);
 
+/* TSC cycles actually spent inside a guest, summed by the backend across
+ * every entry.  A device that models a PERIODIC interrupt must count against
+ * this rather than against the wall: a guest gets a quarter of a core, so a
+ * wall-driven tick fires four times faster than the guest can service it, and
+ * a timer that outruns its own handler is a livelock rather than a fast
+ * clock.  (A device the guest merely READS - the PIT's calibration channel -
+ * wants the wall instead, because the guest reads the real TSC beside it.) */
+void uno_vmm_add_guest_cycles(unsigned long long delta);
+unsigned long long uno_vmm_guest_cycles(void);
+
 /* A1: enter host virtualization mode, run the marker guest, then run a guest
  * that destroys itself.  1 = the foothold is real: we entered, a guest ran,
  * control came back, and a guest that went wrong took only itself with it.
