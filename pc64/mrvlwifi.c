@@ -344,6 +344,8 @@ static void tx_ethernet(const u8 *eth, int ethlen)
     g_txbd_wr += (1u << g_reg->tx_start_shift);
     if ((g_txbd_wr & g_reg->tx_mask) == (u32)(MAXTXRX_BD << g_reg->tx_start_shift))
         g_txbd_wr = (g_txbd_wr & g_reg->tx_roll) ^ g_reg->tx_roll;
+    /* TxPD + descriptor writes must land before the ring-pointer/doorbell MMIO */
+    __asm__ volatile("" ::: "memory");
     wr(g_reg->tx_wr, g_txbd_wr | (g_rxbd_rd & g_reg->rx_wrap));
     wr(PCIE_CPU_INT_EVENT, CPU_INTR_DNLD_RDY);
 }
@@ -401,6 +403,7 @@ static void rx_one(const u8 *buf)
 static void rx_poll(void)
 {
     u32 wrptr = rd(g_reg->rx_wr);
+    int consumed = 0;
     g_rxbd_wr = wrptr;
     while ((g_rxbd_wr & g_reg->rx_mask) != (g_rxbd_rd & g_reg->rx_mask) ||
            (g_rxbd_wr & g_reg->rx_roll) == (g_rxbd_rd & g_reg->rx_roll)) {
@@ -411,8 +414,14 @@ static void rx_poll(void)
         g_rxring[ri].frag_len = RXDATA_BUF; g_rxring[ri].offset = 0;
         if (((++g_rxbd_rd) & g_reg->rx_mask) == MAXTXRX_BD)
             g_rxbd_rd = (g_rxbd_rd & g_reg->rx_roll) ^ g_reg->rx_roll;
-        wr(g_reg->rx_rd, g_rxbd_rd | (g_txbd_wr & g_reg->tx_wrap));
+        consumed = 1;
         if ((g_rxbd_rd & g_reg->rx_mask) == (wrptr & g_reg->rx_mask)) break;
+    }
+    /* publish the read pointer once per drain (the re-armed descriptors above
+     * must be visible first), not once per consumed frame */
+    if (consumed) {
+        __asm__ volatile("" ::: "memory");
+        wr(g_reg->rx_rd, g_rxbd_rd | (g_txbd_wr & g_reg->tx_wrap));
     }
     /* ack the RX interrupt bit */
     if (rd(PCIE_HOST_INT_STATUS) & HOST_INTR_UPLD_RDY) wr(PCIE_HOST_INT_STATUS, ~HOST_INTR_UPLD_RDY);

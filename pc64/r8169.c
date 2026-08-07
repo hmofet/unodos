@@ -98,7 +98,10 @@ static pci_dev g_pci;
 static int g_present, g_up, g_is8125;
 static u8  g_mac[6];
 static u16 g_devid;
-static int g_tx_cur, g_rx_cur;
+/* unsigned + power-of-two mask: a signed cursor eventually overflows to a
+ * negative value and `negative % TXN` indexes the ring out of bounds. TXN/RXN
+ * are powers of two so the mask is exact. */
+static unsigned g_tx_cur, g_rx_cur;
 static int g_rx_kicks;              /* RX-overflow recoveries (metal RX-stall fix) */
 static uno_nic_t g_nic;
 static u64 phys(const void *p){ return (u64)(uintptr_t)p; }
@@ -211,7 +214,7 @@ static int hw_start(void)
 /* ---- uno_nic_t ---------------------------------------------------------- */
 static int r8169_send(void *ctx, const void *pkt, int len)
 {
-    int idx = g_tx_cur % TXN;
+    int idx = (int)(g_tx_cur & (TXN-1));
     struct desc *d = &g_tx[idx];
     u32 opts1;
     (void)ctx;
@@ -233,7 +236,7 @@ static int r8169_send(void *ctx, const void *pkt, int len)
 
 static int r8169_recv(void *ctx, void *pkt, int cap)
 {
-    int idx = g_rx_cur % RXN;
+    int idx = (int)(g_rx_cur & (RXN-1));
     struct desc *d = &g_rx[idx];
     u32 st;
     int len;

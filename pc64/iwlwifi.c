@@ -1256,7 +1256,9 @@ static void rx_restock(void)
 static u16 rx_closed(void)
 {
     if (g_family >= FAM_AX210) return *(volatile u16 *)&g_rbstts;
-    return g_rbstts.closed_rb_num & 0xFFF;
+    /* the device DMA-writes closed_rb_num; read through volatile so a poll loop
+     * re-reads DRAM each iteration instead of caching the first value */
+    return ((volatile struct rb_status *)&g_rbstts)->closed_rb_num & 0xFFF;
 }
 
 /* =====================================================================
@@ -1753,7 +1755,7 @@ static const u8 *wait_notif(int group, int cmd, int *out_len, int timeout_ms)
         u16 closed = rx_closed() & (RXQ_N - 1);
         while (g_rx_read != closed) {
             const u8 *found = 0; int flen = 0;
-            int vid = g_mq_rx ? (int)(g_rbd_used[g_rx_read] & 0xFFF) : (g_rx_read + 1);
+            int vid = g_mq_rx ? (int)(((volatile u64 *)g_rbd_used)[g_rx_read] & 0xFFF) : (g_rx_read + 1);
             const u8 *rb = (vid >= 1 && vid <= RXQ_N) ? g_rb[vid-1] : g_rb[g_rx_read];
             rx_process_rb(rb, RB_SIZE, group, cmd, &found, &flen);
             g_rx_read = (g_rx_read + 1) & (RXQ_N - 1);
@@ -1794,7 +1796,7 @@ static void rx_pump_once(void)
     u16 closed = rx_closed() & (RXQ_N - 1);
     while (g_rx_read != closed) {
         const u8 *found = 0; int fl = 0;
-        int vid = g_mq_rx ? (int)(g_rbd_used[g_rx_read] & 0xFFF) : (g_rx_read + 1);
+        int vid = g_mq_rx ? (int)(((volatile u64 *)g_rbd_used)[g_rx_read] & 0xFFF) : (g_rx_read + 1);
         const u8 *rb = (vid >= 1 && vid <= RXQ_N) ? g_rb[vid-1] : g_rb[g_rx_read];
         rx_process_rb(rb, RB_SIZE, -1, -1, &found, &fl);
         g_rx_read = (g_rx_read + 1) & (RXQ_N - 1);

@@ -16,6 +16,7 @@
 #include "igb.h"
 #include "pc64_pci.h"
 #include <stdint.h>
+#include <string.h>
 
 typedef unsigned char  u8;
 typedef unsigned short u16;
@@ -83,7 +84,7 @@ void uno_pc64_delay_ms(int ms);
 #define RXD_STAT_DD  0x01
 #define TXD_STAT_DD  0x01
 
-#define NDESC 16
+#define NDESC 64                     /* deeper ring absorbs RX bursts (bss cost only) */
 #define BUFSZ 2048
 
 /* advanced descriptors (16 bytes; read + write-back share storage) */
@@ -192,13 +193,13 @@ static void tx_init(void)
 /* ---- uno_nic_t ---------------------------------------------------------- */
 static int igb_send(void *ctx,const void *pkt,int len)
 {
-    volatile struct adv_tx *d; const u8 *p=(const u8*)pkt; int i;
+    volatile struct adv_tx *d;
     (void)ctx;
     if (!g_up || len<=0 || len>BUFSZ) return -1;
     d=&tx_ring[tx_cur];
     /* wait for the write-back DD on the slot we're about to reuse (olinfo bit0) */
     { int s=1000000; while((d->olinfo_status & TXD_STAT_DD)==0 && (d->cmd_type_len!=0) && s--) spin(10); }
-    for (i=0;i<len;i++) tx_buf[tx_cur][i]=p[i];
+    memcpy(tx_buf[tx_cur], pkt, (size_t)len);
     d->addr=(u64)(uintptr_t)tx_buf[tx_cur];
     d->cmd_type_len=(u32)len | ADVTXD_DTYP_DATA | ADVTXD_DCMD_DEXT |
                     ADVTXD_DCMD_EOP | ADVTXD_DCMD_IFCS | ADVTXD_DCMD_RS;
@@ -210,13 +211,13 @@ static int igb_send(void *ctx,const void *pkt,int len)
 static int igb_recv(void *ctx,void *pkt,int cap)
 {
     volatile struct adv_rx_wb *wb=(volatile struct adv_rx_wb *)&rx_ring[rx_cur];
-    int len,i; u8 *out=(u8*)pkt;
+    int len;
     (void)ctx;
     if (!g_up) return 0;
     if (!(wb->status_error & RXD_STAT_DD)) return 0;
     __asm__ volatile("" ::: "memory");
     len=wb->length; if(len>cap) len=cap; if(len<0) len=0;
-    for (i=0;i<len;i++) out[i]=rx_buf[rx_cur][i];
+    if (len>0) memcpy(pkt, rx_buf[rx_cur], (size_t)len);
     /* recycle: rewrite the read-format address DWORDs (the write-back clobbered them) */
     rx_ring[rx_cur].pkt_addr=(u64)(uintptr_t)rx_buf[rx_cur];
     rx_ring[rx_cur].hdr_addr=0;
@@ -245,6 +246,8 @@ uno_nic_t *igb_nic(void)
     g_mmio=(volatile u8*)(uintptr_t)pci_bar(&g_pci, 0);
     if (!g_mmio) return 0;
 
+    read_mac();                     /* BEFORE reset: CTRL_RST clears RAR0 */
+
     /* reset */
     e_wr(REG_IMC, 0xFFFFFFFFu);
     e_wr(REG_RCTL, 0); e_wr(REG_TCTL, TCTL_PSP);
@@ -254,7 +257,6 @@ uno_nic_t *igb_nic(void)
     mdelay_(3);
     e_wr(REG_IMC, 0xFFFFFFFFu); (void)e_rd(REG_ICR);
 
-    read_mac();
     e_wr(REG_RAL0, g_mac[0]|(g_mac[1]<<8)|(g_mac[2]<<16)|((u32)g_mac[3]<<24));
     e_wr(REG_RAH0, g_mac[4]|(g_mac[5]<<8)|RAH_AV);
     { int i; for (i=0;i<128;i++) e_wr(REG_MTA + i*4, 0); }
