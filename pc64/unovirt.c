@@ -18,6 +18,7 @@
 #include "unovirt_hv.h"
 #include "unovdev.h"         /* the appliance's disk, for the status block   */
 #include "unovirt_mgr.h"     /* appliances as things a user has              */
+#include "unovirt_phase.h"   /* the phase tests, now above the vendor seam   */
 #include "uefi.h"
 #include "bootinfo.h"
 #include <stdio.h>
@@ -531,7 +532,7 @@ int uno_vmm_selftest(void)
     }
 
     ex.reason = UNO_VX_UNKNOWN; ex.raw = 0; ex.rip = 0; ex.info1 = 0; ex.info2 = 0;
-    if (!hv->marker(VM_MARKER, &got, &ex)) {
+    if (!uno_hvp_marker(hv, VM_MARKER, &got, &ex)) {
         snprintf(g_self, sizeof g_self,
                  "%s: entered, but the guest did not come back - got %llx "
                  "want %llx, last exit %llx at rip %llx",
@@ -542,7 +543,7 @@ int uno_vmm_selftest(void)
         uno_vmexit cr;
         int contained;
         cr.reason = UNO_VX_UNKNOWN; cr.raw = 0; cr.rip = 0; cr.info1 = 0; cr.info2 = 0;
-        contained = hv->crasher(&cr);
+        contained = uno_hvp_crasher(hv, &cr);
         snprintf(g_self, sizeof g_self,
                  "%s: entered, guest round trip -> %llx OK, crasher %s "
                  "(exit %llx rip %llx)",
@@ -558,13 +559,15 @@ int uno_vmm_selftest(void)
      * second stage been quietly off, the store would have gone to host
      * physical 0x100000 - which is the kernel's own low memory - and nothing
      * would have appeared where we looked. */
-    if (g_self_ok && hv->ept) {
+    /* `map` is the question "does this backend have a second stage at all",
+     * and every phase from here on needs one. */
+    if (g_self_ok && hv->map) {
         uno_vmexit ex2;
         unsigned long long g2 = 0, hpa = 0;
         int ok2;
         ex2.reason = UNO_VX_UNKNOWN; ex2.raw = 0; ex2.rip = 0;
         ex2.info1 = 0; ex2.info2 = 0;
-        ok2 = hv->ept(VM_MARKER + 1, 0x100000ull, &g2, &hpa, &ex2);
+        ok2 = uno_hvp_ept(hv, VM_MARKER + 1, 0x100000ull, &g2, &hpa, &ex2);
         {   int n = (int)strlen(g_self);
             snprintf(g_self + n, sizeof g_self - (unsigned)n,
                      "; ept %s gpa 0x100000 -> pa %llx wrote %llx (memtype %d, %s)",
@@ -575,13 +578,13 @@ int uno_vmm_selftest(void)
     } else if (g_self_ok) {
         int n = (int)strlen(g_self);
         snprintf(g_self + n, sizeof g_self - (unsigned)n,
-                 "; ept not implemented for %s", hv->name);
+                 "; second stage not implemented for %s", hv->name);
     }
 
     /* ---- A4: a clock, an interrupt, and an MSR space -------------------- */
-    if (g_self_ok && hv->clockirq) {
+    if (g_self_ok && hv->map) {
         uno_vm_clockirq k;
-        int ok4 = hv->clockirq(&k);
+        int ok4 = uno_hvp_clockirq(hv, &k);
         int n = (int)strlen(g_self);
         snprintf(g_self + n, sizeof g_self - (unsigned)n,
                  "; clock %s (+%llu over %d exits), irq %s (%d, %sredelivered), "
@@ -594,9 +597,9 @@ int uno_vmm_selftest(void)
     }
 
     /* ---- A5: a device the guest discovers and talks to ------------------ */
-    if (g_self_ok && hv->virtio) {
+    if (g_self_ok && hv->map) {
         uno_vm_virtio v;
-        int ok5 = hv->virtio(&v);
+        int ok5 = uno_hvp_virtio(hv, &v);
         int n = (int)strlen(g_self);
         snprintf(g_self + n, sizeof g_self - (unsigned)n,
                  "; virtio %s magic %x, used.idx %u, %d bytes in %d notify, "
@@ -612,8 +615,8 @@ int uno_vmm_selftest(void)
      * places the kernel; uno_vmm_tick() runs it a slice at a time for as long
      * as it takes. A missing bzImage is not a failure of anything: most
      * machines will not carry one. */
-    if (g_self_ok && hv->linux_boot) {
-        int placed = hv->linux_boot(&g_lin);
+    if (g_self_ok && hv->map) {
+        int placed = uno_hvp_linux_boot(hv, &g_lin);
         int n = (int)strlen(g_self);
         if (!g_lin.loaded)
             snprintf(g_self + n, sizeof g_self - (unsigned)n,
@@ -636,7 +639,7 @@ int uno_vmm_selftest(void)
      * and the only symptom is a kernel that stops saying anything. A6b's
      * kernel wins; the A3 measurement has already been taken on machines
      * without one. */
-    if (g_self_ok && !g_lin_armed && hv->spin_start && hv->spin_start()) {
+    if (g_self_ok && !g_lin_armed && hv->map && uno_hvp_spin_start(hv)) {
         g_slice_armed = 1;
         snprintf(g_slice_str, sizeof g_slice_str, "armed, running");
     } else if (g_self_ok) {
@@ -673,10 +676,10 @@ void uno_vmm_tick(void)
     /* A6b: the kernel gets its slice first, because it is the guest with
      * somewhere to get to. The budget is the same 4 ms the spinner gets - a
      * guest is a guest, and the desktop's frame is the thing being protected. */
-    if (g_lin_armed && g_hv && g_hv->linux_slice) {
+    if (g_lin_armed && g_hv) {
         int lines = g_lin.lines;
         static int logged_exits = -1;
-        if (!g_hv->linux_slice(SLICE_BUDGET_US, &g_lin)) g_lin_armed = 0;
+        if (!uno_hvp_linux_slice(g_hv, SLICE_BUDGET_US, &g_lin)) g_lin_armed = 0;
         uno_dbg_heartbeat();
         /* A kernel that stops printing has not necessarily stopped: it can
          * be spinning on a port waiting for hardware nobody emulated. The
@@ -713,10 +716,10 @@ void uno_vmm_tick(void)
         return;                  /* one guest per frame; the spinner waits  */
     }
 
-    if (!g_slice_armed || !g_hv || !g_hv->slice) return;
+    if (!g_slice_armed || !g_hv) return;
 
     t0 = uno_native_rdtsc();
-    if (!g_hv->slice(SLICE_BUDGET_US, &ex)) { g_slice_armed = 0; return; }
+    if (!uno_hvp_slice(g_hv, SLICE_BUDGET_US, &ex)) { g_slice_armed = 0; return; }
     dt = uno_native_rdtsc() - t0;
 
     /* Feed the watchdog on the far side of the slice as well as at the top of
@@ -770,9 +773,12 @@ int uno_vmm_place_guest(void)
         if (c->vendor == UNO_HV_VMX) g_hv = uno_hv_vmx();
         else if (c->vendor == UNO_HV_SVM) g_hv = uno_hv_svm();
     }
-    if (!g_hv || !g_hv->linux_boot) return 0;
+    /* Through the PHASE layer, not the vendor seam: loading a bzImage and
+     * filling a zero page is the same work on both vendors, which is the
+     * whole point of the seam being generic. */
+    if (!g_hv) return 0;
     if (!g_hv->enable(&why)) return 0;
-    if (!g_hv->linux_boot(&g_lin)) return 0;
+    if (!uno_hvp_linux_boot(g_hv, &g_lin)) return 0;
     g_lin_armed = 1;
     g_lin_reported = 0;
     g_slice_armed = 0;              /* one VMCS, so one guest (A6b)         */

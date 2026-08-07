@@ -154,12 +154,14 @@ handles every such split, with a backend vtable (`uno3d`'s rasterisers,
 ```c
 typedef struct uno_hv {
     const char *name;                       /* "vmx" | "svm"                  */
-    int  (*probe)(uno_hv_caps *out);        /* 0 = unavailable, with a reason */
-    int  (*enable)(void);                   /* VMXON / EFER.SVME              */
+    int  (*enable)(const char **why);       /* VMXON / EFER.SVME              */
     int  (*vcpu_create)(uno_vcpu *, const uno_vm_cfg *);
     int  (*vcpu_run)(uno_vcpu *, unsigned budget_us, uno_vmexit *out);
-    int  (*map)(uno_vm *, u64 gpa, u64 hpa, u64 len, unsigned prot, unsigned memtype);
+    int  (*map)(u64 gpa, u64 hpa, u64 len, unsigned prot, unsigned memtype);
     void (*inject)(uno_vcpu *, unsigned vector, unsigned err, int has_err);
+    /* the narrow window on vCPU state an exit handler has to read and write */
+    u64  (*get)(uno_vcpu *, int what);      /* UNO_VR_*                       */
+    void (*set)(uno_vcpu *, int what, u64 val);
 } uno_hv_t;
 ```
 
@@ -167,6 +169,25 @@ typedef struct uno_hv {
 device models, the scheduler slice and the debug reporting free of vendor
 detail. Exactly one file per vendor decodes exit reasons into that struct; every
 other file in the subsystem compiles once.
+
+**The phase tests are CALLERS of this, not entries in it** (`pc64/hv_phases.c`).
+That is worth stating because the first implementation got it wrong: `uno_hv_t`
+grew one pointer per phase - `marker`, `crasher`, `ept`, `spin_start`, `slice`,
+`clockirq`, `virtio`, `linux_boot`, `linux_slice` - and every one of those was a
+*test*, so putting it behind a vendor seam meant owing it twice. The SVM backend
+could not reach A2 without reimplementing nine guests that have nothing
+vendor-specific about them: an x86 instruction encoding is an x86 instruction
+encoding on both, and so is servicing the exit it causes. With the generic seam
+a backend owes seven operations and gets A1..A6 for free, and `map` being NULL
+is precisely the question "has this backend a second stage yet".
+
+`get`/`set` are the concession the four-call sketch above did not make, and the
+list is deliberately short (RIP, RSP, RFLAGS, the control registers and their
+read shadows, EFER, the segment-base MSRs, the interrupt shadow, the
+interrupt-window arm, XCR0). Each entry is something an exit handler above the
+seam must touch and each is spelled differently by the two vendors; `set` on a
+control register applies whatever bits that vendor requires of a guest, which is
+why it is a call rather than a struct field.
 
 ### 3.2 Eligibility, and the ways this is unavailable
 
@@ -469,7 +490,7 @@ New rows for `/AGENTS.md` §1, added in each phase's first commit:
 
 | Subsystem | Contract / spec | Root files |
 |---|---|---|
-| unovirt (VMX/SVM, EPT/NPT, vCPU, exit decode, guest carve) | `docs/UNOVIRT-PLAN.md`, `pc64/UNOVIRT.md` | `unovirt*`, `hv_vmx*`, `hv_svm*` |
+| unovirt (VMX/SVM, EPT/NPT, vCPU, exit decode, guest carve) | `docs/UNOVIRT-PLAN.md`, `pc64/UNOVIRT.md` | `unovirt*`, `hv_phases*`, `hv_vmx*`, `hv_svm*` |
 | unovdev (virtio-mmio transport and device models) | `pc64/UNOVDEV.md` | `unovdev*` |
 | unoguest (channel, agents, appliance images, seamless windows) | `pc64/UNOGUEST.md` | `unoguest*`, `guest/` |
 | unowin32 (native PE32+ personality) | `pc64/UNOWIN32.md` | `unowin32*` |
@@ -530,7 +551,7 @@ Track C are parallel-safe from day one; Track A is a serial spine.
 | **A1** | SVME/VMXON, a vCPU context, the `cpuid` round trip, and the crasher guest | **MET on VMX 2026-08-06**: `guest round trip -> 534f444f4e55 OK, crasher contained (exit 2)`, and the boot continues. The `GF###` report family is still to come (A3), since nothing yet runs a guest outside the selftest. | 2..3 (spent: 2) |
 | ↳ A1a | **WRITTEN, NOT PROVED 2026-08-06:** the `uno_hv_t` seam, the SVM backend, the full lower-register vCPU context (Glide's V3c.1 lesson taken up front), the marker guest and the crasher. `EFER.SVME` sets and the host save area is accepted; **the first VMRUN does not return**, reproducibly, on the only machine available - which is three levels of nesting deep (Hyper-V → WSL2 → KVM → UnoDOS). Not known whether that is this code or that environment. The selftest is therefore opt-in (DEBUG.CFG `vm-selftest`), because a VMRUN that does not return leaves GIF clear and no interrupt, including the watchdog, can reach that core again. | 1 |
 | ↳ A1b | **DONE 2026-08-06:** the VMX backend, and the first run at **one** level of nesting (devbuntu, bare metal, Intel, `kvm_intel nested=Y`). VMXON, a guest, a CPUID intercept answered, the marker read back out of GUEST memory, the guest resumed at RIP+2 to its `hlt`, then a guest that triple-faults on purpose and a boot that carries on past it into the shell's frame loop. `tools/hv_remote.py` reruns it. It also gives the Intel arm of A0 its first real numbers: `ept wb 2m 1g unrestricted vpid preempt`. | 2..3 (spent: 1) |
-| ↳ A1c | The SVM row stays unproved: no AMD machine with KVM at L0 is on the LAN. Not blocking - A2 can be built and gated on VMX, with the AMD backend following the same seam. | 1 |
+| ↳ A1c | The SVM row stays unproved: no AMD machine with KVM at L0 is on the LAN. Not blocking - A2 can be built and gated on VMX, with the AMD backend following the same seam. **2026-08-07:** what the AMD backend still owes is now exactly one thing, `map`. The seam used to carry a pointer per phase, so SVM owed nine test guests before it could claim A2; those live above the seam in `hv_phases.c` now and compile once, and NPT plus the second-stage tables is the whole remaining gap. | 1 |
 | ~~**A2**~~ | ~~EPT/NPT, the carve, WB memory type~~ | **DONE 2026-08-06 on VMX**: `ept OK gpa 0x100000 -> pa 1bf00000 wrote 534f444f4e56 (memtype 6, 1536 MB at 1be00000)`. The exit criterion word for word, plus the `uno_vmm_gpa()` bounds seam the device models will be built on. Trap: a 2 MiB second-stage leaf must be 2 MiB ALIGNED and `AllocatePages` promises 4 KiB, which presents as EPT misconfiguration (exit 49). NPT on the SVM backend waits on A1c. | 2 (spent: 1) |
 | ~~**A3**~~ | ~~the frame-loop slice~~ | **DONE 2026-08-06 on VMX**: `120 slices x 4000 us budget: max 4811 us, mean 4025 us, 0 exits that were not the clock`, with `shots/hv_slice.png` showing the desktop painting mid-run (HUD: 0.5 ms render, 93% idle, no crash reports). Found and fixed a defect in A1/A2: a VM exit loads host RFLAGS with IF clear, so the host had been running with interrupts disabled since its first guest - invisible, because only the watchdog uses them. **Still owed: the 10-minute soak and a real window drag, both metal.** | 2 (spent: 1) |
 | ~~**A4**~~ | ~~guest clock, interrupt, MSR space~~ | **DONE 2026-08-06 on VMX**: `clock ticks (+59145778 over 140 exits), irq taken once (1, not redelivered), msr answered`. The criterion word for word. The clock is sampled ACROSS slices rather than within one, and the interrupt count is re-checked after forty more entries, because delivered-forever and never-delivered look the same for the first millisecond. **Carried forward:** an MSR bitmap (today every MSR access exits, fine for eighteen instructions, unworkable for Linux) and a virtual LAPIC, both of which belong with A5's device work rather than here. | 2..3 (spent: 1) |

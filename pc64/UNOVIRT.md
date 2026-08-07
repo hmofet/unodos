@@ -37,6 +37,39 @@ behind EPT, in an address space of its own.
 `probe` is latched; `eligible` is live, because detaching from the firmware
 changes the answer and nothing else does.
 
+## The backend seam, and the mistake it made first
+
+`uno_hv_t` (`unovirt_hv.h`) is the vendor split, and it is now the small generic
+interface `docs/UNOVIRT-PLAN.md` §3.1 asked for: `enable`, `vcpu_create`,
+`vcpu_run`, `map`, `inject`, and a `get`/`set` window on the vCPU state an exit
+handler has to touch. Exactly two files implement it, `hv_vmx.c` and `hv_svm.c`.
+
+**It used to carry one pointer per PHASE** - `marker`, `crasher`, `ept`,
+`spin_start`, `slice`, `clockirq`, `virtio`, `linux_boot`, `linux_slice` - and
+every one of those was a *test*. A test behind a vendor seam is a test written
+twice, so the SVM backend could not reach A2 without reimplementing nine guests
+that have nothing vendor-specific about them: the guests are x86 machine code,
+which is the same machine code on both, and servicing their exits is x86
+register work, which is the same work. That is why `hv_svm.c` sat at A1.
+
+The phases are CALLERS of the seam now, in `hv_phases.c`, and they compile once.
+So does the MMIO instruction decoder, the guest page-table walk, the Linux boot
+protocol and every hand-assembled guest. A backend owes seven operations and
+gets A1..A6; what `hv_svm.c` still owes is exactly one of them, `map`, and its
+being NULL is the question "has this backend a second stage yet" asked in the
+only place that can answer it.
+
+Two things are worth knowing before writing a third backend:
+
+- **`vcpu_create` refuses a configuration it cannot host**, and A1 uses that:
+  it asks for a flat 64-bit guest first and falls back to a real-mode one.
+  Intel needs the "unrestricted guest" control to run a guest with paging off
+  and that control needs EPT, which would drag A2 into A1; AMD needs nothing.
+  So the same phase runs both arrangements without either backend pretending.
+- **`vcpu_run` returns 1 for "the entry was attempted"**, not for "it went
+  well". A machine that refuses the guest state is `UNO_VX_INVALID` in the
+  exit, which is a result the caller reports rather than a failure it retries.
+
 ## Three things a consumer must not assume
 
 **Eligible does not mean it works.** The gate reads what the machine says about
@@ -657,7 +690,7 @@ line count, so the next person reads the answer instead of ssh-ing for it.
     UNODOS-GUEST-DISK-OK
 
 **The guest mounted a filesystem out of an ordinary file on a UnoDOS volume.**
-`EFI\UNODOS\VM\ROOTFS.IMG` is read through `uno_fs_read_at`, served as
+`EFINODOSVMROOTFS.IMG` is read through `uno_fs_read_at`, served as
 virtio-blk, and Linux found an ext4 superblock in it, mounted it, and read a
 file back. Every layer is under test at once: the transport, the feature
 negotiation, a descriptor chain the DEVICE fills, the interrupt that announces
@@ -747,7 +780,18 @@ in the read path.
 
 ## Changelog
 
-- **2026-08-07, API 1.** A7a: virtio-blk over `EFI\\UNODOS\\VM\\ROOTFS.IMG`, read-only (the
+- **2026-08-07, API 1.** The backend seam is generic. `uno_hv_t` loses its nine
+  per-phase entries and gains `vcpu_create` / `vcpu_run` / `map` / `inject` plus
+  a `get`/`set` window on vCPU state; the phase tests move to `hv_phases.c`
+  above the seam, with `unovirt_phase.h` declaring them and carrying the three
+  result structs. `uno_vmexit` grows the neutral decodes a caller acts on
+  (`instr_len`, `gpa`, `io_*`, `cr_*`) so port I/O, control-register writes and
+  second-stage faults are handled once rather than per vendor. In `hv_vmx.c`
+  the forty-line block that opened all six phase functions is one `vmcs_begin`.
+  No behaviour change: A0..A6 pass on devbuntu with the selftest string
+  field-for-field identical and the guest shell still answering. `uno_vmm_*` is
+  untouched, so nothing outside the subsystem sees this.
+- **2026-08-07, API 1.** A7a: virtio-blk over `EFI\UNODOS\VM\ROOTFS.IMG`, read-only (the
   layer below writes whole files only). The transport went from one device
   with one queue to several with two, the chain walk returns SEGMENTS with
   their direction, and the console learned that queue 0 is receive. Found a
@@ -766,7 +810,8 @@ in the read path.
 - **2026-08-06, API 1.** A1 written: the `uno_hv_t` backend seam, the SVM
   backend (`hv_svm.c`), the vCPU register context, the marker guest and the
   crasher. `uno_vmm_selftest` / `uno_vmm_selftest_str`, opt-in behind DEBUG.CFG
-  `vm-selftest`. Unproved on AMD: see the wedge above.
+  `vm-selftest`. Unproved on AMD: see the wedge above. (The seam carried a
+  pointer per phase until 2026-08-07; see the entry at the top.)
 - **2026-08-06, API 1.** A1 PASSES on VMX (`hv_vmx.c`), on devbuntu under KVM
   at L0: entered, round trip, crasher contained, boot continued. `tools/
   hv_remote.py` runs it.

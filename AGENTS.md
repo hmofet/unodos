@@ -56,7 +56,7 @@ re-home"). Ownership is of the CODE; the whole OS is a shared goal.
 | unossh (SSH client: protocol, crypto, key + session store) | `docs/SSH-CLIENT-SPEC.md`, `ed25519.h`, `unossh.h` | `unossh*`, `ed25519.*`, `sshapp_*` |
 | unodoc (document formats: CFB + doc/xls/ppt + Escher, R/W) | `unodoc/UNODOC.md`, `docs/OFFICE97-PLAN.md` §4 | `unodoc/*` |
 | unoffice (Office 97 suite: uochrome + UnoWord/UnoCalc/UnoShow) | `pc64/uoffice/UOFFICE.md`, `docs/OFFICE97-PLAN.md`, `docs/OFFICE97-SPEC.md` | `pc64/uoffice/*`, `pc64/apps/uo*.c` |
-| unovirt (VMX/SVM hypervisor: capability gate, vCPU, EPT/NPT, guest carve, exit decode) | `docs/UNOVIRT-PLAN.md`, `pc64/UNOVIRT.md`, `unovirt.h` | `unovirt*`, `hv_vmx*`, `hv_svm*` |
+| unovirt (VMX/SVM hypervisor: capability gate, vCPU, EPT/NPT, guest carve, exit decode) | `docs/UNOVIRT-PLAN.md`, `pc64/UNOVIRT.md`, `unovirt.h` | `unovirt*`, `hv_phases*`, `hv_vmx*`, `hv_svm*` |
 | unovdev (virtio-mmio transport + device models for the appliance) | `pc64/UNOVDEV.md` | `unovdev*` |
 | unoguest (seamless-window channel, guest agents, appliance images) | `pc64/UNOGUEST.md` | `unoguest*`, `guest/` |
 | unowin32 (native PE32+ Win32 personality over unoui) | `pc64/UNOWIN32.md` | `unowin32*` |
