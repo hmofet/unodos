@@ -58,6 +58,9 @@ void pc64_clock_tick(void);
 #include "acpi_host.h"       /* pc64 bring-up status (RSDP) for the System readout */
 #include "snd_pcm.h"         /* PCM audio (HDA/AC'97): the Volume slider target */
 #endif
+#include "uno_uuiapp.h"      /* the unoui-class module ABI (the registry's rows) */
+#include "uno_appdesc.h"     /* what a .UNO says about itself                    */
+#include "pyhost.h"          /* Python-runtime + Python-app module tiers         */
 #include "installer.h"       /* install to a local disk (the Install app) */
 #include "blkdev.h"          /* native block layer (System readout) */
 #include "fat.h"             /* native FAT mounts (System readout) */
@@ -97,11 +100,58 @@ enum { APP_CTRL, APP_EDIT, APP_FILES, APP_SYS, APP_CLOCK, APP_SETUP,
 #define EX_UOCALC  (NNATIVE + UNOAPP_COUNT + 8)   /* UnoCalc (a .UNO module)      */
 #define EX_UOSHOW  (NNATIVE + UNOAPP_COUNT + 9)   /* UnoShow (a .UNO module)      */
 #define EX_LOGVIEW (NNATIVE + UNOAPP_COUNT + 10)  /* System Log (a .UNO module)   */
-#define NAPPS  (NNATIVE + UNOAPP_COUNT + NEXTRA)
+#define NBUILTIN (NNATIVE + UNOAPP_COUNT + NEXTRA) /* slots this build compiles in */
 #define APP_TBAR 18                       /* legacy apps' own title-bar height */
 static const char *kAppNames[NNATIVE] =
     { "Control Panel", "Editor", "Files", "System", "Clock", "Install",
       "Music", "UnoAmp" };
+
+/* ---- the app registry ------------------------------------------------------
+ * An app used to BE its index: a name in one ternary chain, a short name in
+ * another, an icon in a third, a presence probe, and seven separate hook
+ * dispatch sites, all keyed off an EX_* constant.  Adding APPS\VMGR.UNO cost a
+ * dozen edits in this file, and until they were made the module could not be
+ * run at all - not from Files, not from Python, not over URC.  See
+ * docs/APP-REGISTRY-PLAN.md.
+ *
+ * Now an app is a ROW.  The built-in slots keep the indices they have always
+ * had (EX_* above still name them, and nothing renumbers), but everything the
+ * shell wants to know about an app is a field rather than a case, and a module
+ * fills its own fields from the descriptor it carries (uno_appdesc.h).  Rows
+ * past NBUILTIN are discovered on disk, which is why the table is capacity
+ * APPS_MAX and the count is a variable.
+ *
+ * NAPPS is now that variable.  Every loop and bounds check in this file reads
+ * it, so they all became dynamic for free; only the array DECLARATIONS say
+ * APPS_MAX. */
+#define APPS_MAX 48                        /* table capacity: array sizing only */
+
+typedef enum {
+    AK_NATIVE,      /* built from unoui widgets in this file            */
+    AK_BRIDGE,      /* a legacy app hosted in a canvas (pc64_uui_apps)  */
+    AK_SHELL,       /* a native shell canvas (Runner3D, Browser, SSH)   */
+    AK_UUIMOD,      /* a unoui-class .UNO module                        */
+    AK_HOSTSLOT     /* hosts whatever is running (user app / Python app)*/
+} app_kind;
+
+typedef struct {
+    char id[16];                 /* stable identity; NOTHING durable uses index */
+    char name[32], shortnm[16];
+    unsigned char kind, icon, cat, rank;
+    unsigned short flags;        /* UAF_* */
+    unsigned char present;       /* AK_UUIMOD: its file is on a mounted volume */
+    char file[16];               /* AK_UUIMOD: "VMGR.UNO"                      */
+    signed char vol;             /* AK_UUIMOD: the volume it was found on      */
+    char path[40];               /* AK_UUIMOD: full path, as found             */
+    const UnoUuiApp *iface;      /* AK_UUIMOD: resolved on first open          */
+    unsigned char tried;         /* AK_UUIMOD: load attempted                  */
+    short ordinal;               /* AK_NATIVE / AK_BRIDGE: index into its table*/
+    short pref_w, pref_h;        /* declared window size, 0 = shell default    */
+} app_slot;
+
+static app_slot g_app[APPS_MAX];
+static int      g_napps = NBUILTIN;   /* real value set by app_registry_init() */
+#define NAPPS (g_napps)
 
 /* taskbar height follows the active font (26 px under the classic 8px font) */
 static int tb_h(void) { int h = fb_text_h() + 12; return h < 26 ? 26 : h; }
@@ -154,8 +204,8 @@ const struct unoui_theme *pc64_shell_theme(void) { return UI.theme; }
 static unoui_window g_launch;             /* app menu, opened by the Start button */
 static unoui_window g_desk;               /* bare/bottom: the desktop-icon layer */
 static unoui_window g_task;               /* bare/top: the taskbar */
-static unoui_window g_win[NAPPS];
-static int          g_built[NAPPS], g_open[NAPPS];
+static unoui_window g_win[APPS_MAX];
+static int          g_built[APPS_MAX], g_open[APPS_MAX];
 static int          g_dirty = 1;
 
 /* ---- lid-close deep-idle sleep (ACPI) -------------------------------------
@@ -192,23 +242,32 @@ static void uui_sleep_wake(void)
 static unoui_canvas g_lcanvas[UNOAPP_COUNT];
 static int          g_lidx[UNOAPP_COUNT];
 
-/* ---- Studio: the IDE, a unoui-CLASS module (APPS\STUDIO.UNO) --------------
- * Not linked into the kernel: the shell probes for the file, loads it on
- * first open, and drives it through the same build/action/key/frame hooks
- * the built-in apps use.  A distro without the file just has no Studio. */
-#include "uno_uuiapp.h"
-#include "pyhost.h"
-static const UnoUuiApp *g_studio;
-static int  g_studio_tried, g_studio_present;
-static void studio_ensure(void)
+/* ---- unoui-CLASS modules: ONE loader, not one per app ----------------------
+ * A unoui-class .UNO is not linked into the kernel.  The registry learns it
+ * exists from its file and its descriptor; the CODE is loaded here, on the
+ * first open, and driven through the same build/action/key/frame hooks the
+ * built-in apps use.  A distro without the file simply has no such app.
+ *
+ * There used to be one of these per module - g_studio / g_photos / g_uoword /
+ * g_uocalc / g_uoshow / g_logview, each with its own _tried, _present and
+ * _ensure() - and then seven dispatch sites per app that had to name the right
+ * global.  Wiring three of the seven is what shipped UnoWord with a window that
+ * ignored every keystroke.  There is now one of each, so that class of bug has
+ * nowhere left to live. */
+static const UnoUuiApp *app_iface(int a)
 {
-    if (g_studio || g_studio_tried) return;
-    g_studio_tried = 1;
+    app_slot *s;
+    if (a < 0 || a >= NAPPS) return 0;
+    s = &g_app[a];
+    if (s->kind != AK_UUIMOD) return 0;
+    if (s->iface || s->tried) return s->iface;
+    s->tried = 1;                       /* one attempt per boot, hit or miss */
     {
-        UnoUuiEntry e = uno_mod_load_uui("STUDIO.UNO");
-        if (e) g_studio = e(0);
-        if (g_studio && g_studio->abi != UNO_UUIAPP_ABI) g_studio = 0;
+        UnoUuiEntry e = uno_mod_load_uui(s->file);
+        if (e) s->iface = e(0);
+        if (s->iface && s->iface->abi != UNO_UUIAPP_ABI) s->iface = 0;
     }
+    return s->iface;
 }
 
 /* ---- PYRT: the Python runtime module (APPS\PYRT.UNO), optional -----------
@@ -240,128 +299,46 @@ static void pyrt_ensure(void)
     }
 }
 
-/* ---- Photos: the image viewer, the second unoui-CLASS module --------------
- * (APPS\PHOTOS.UNO - the unomedia decoders ride inside the module).  Same
- * hosting contract as Studio; a distro without the file has no Photos. */
-static const UnoUuiApp *g_photos;
-static int  g_photos_tried, g_photos_present;
-static void photos_ensure(void)
-{
-    if (g_photos || g_photos_tried) return;
-    g_photos_tried = 1;
-    {
-        UnoUuiEntry e = uno_mod_load_uui("PHOTOS.UNO");
-        if (e) g_photos = e(0);
-        if (g_photos && g_photos->abi != UNO_UUIAPP_ABI) g_photos = 0;
-    }
-}
-
-/* ---- UnoWord: the word processor, a unoui-CLASS module --------------------
- * (APPS\\UOWORD.UNO - the whole uoffice chrome lane and unodoc's Word half
- * ride inside the module).  Same hosting contract as Studio and Photos; a
- * distro without the file simply has no UnoWord. */
-static const UnoUuiApp *g_uoword;
-static int  g_uoword_tried, g_uoword_present;
-static void uoword_ensure(void)
-{
-    if (g_uoword || g_uoword_tried) return;
-    g_uoword_tried = 1;
-    {
-        UnoUuiEntry e = uno_mod_load_uui("UOWORD.UNO");
-        if (e) g_uoword = e(0);
-        if (g_uoword && g_uoword->abi != UNO_UUIAPP_ABI) g_uoword = 0;
-    }
-}
-
-/* ---- System Log: unolog's viewer, a unoui-CLASS module -------------------
- * (APPS\LOGVIEW.UNO).  Same hosting contract as Studio and Photos: a distro
- * without the file simply has no viewer, and unolog still keeps the log. */
-static const UnoUuiApp *g_logview;
-static int  g_logview_tried, g_logview_present;
-static void logview_ensure(void)
-{
-    if (g_logview || g_logview_tried) return;
-    g_logview_tried = 1;
-    {
-        UnoUuiEntry e = uno_mod_load_uui("LOGVIEW.UNO");
-        if (e) g_logview = e(0);
-        if (g_logview && g_logview->abi != UNO_UUIAPP_ABI) g_logview = 0;
-    }
-}
-
-static const UnoUuiApp *g_uoshow;
-static int  g_uoshow_tried, g_uoshow_present;
-static void uoshow_ensure(void)
-{
-    if (g_uoshow || g_uoshow_tried) return;
-    g_uoshow_tried = 1;
-    {
-        UnoUuiEntry e = uno_mod_load_uui("UOSHOW.UNO");
-        if (e) g_uoshow = e(0);
-        if (g_uoshow && g_uoshow->abi != UNO_UUIAPP_ABI) g_uoshow = 0;
-    }
-}
-
-static const UnoUuiApp *g_uocalc;
-static int  g_uocalc_tried, g_uocalc_present;
-static void uocalc_ensure(void)
-{
-    if (g_uocalc || g_uocalc_tried) return;
-    g_uocalc_tried = 1;
-    {
-        UnoUuiEntry e = uno_mod_load_uui("UOCALC.UNO");
-        if (e) g_uocalc = e(0);
-        if (g_uocalc && g_uocalc->abi != UNO_UUIAPP_ABI) g_uocalc = 0;
-    }
-}
-
 static const char *kNativeShort[NNATIVE] =
     { "Control", "Editor", "Files", "System", "Clock", "Install",
       "Music", "UnoAmp" };
 static const char *py_app_name(void)
 { return (g_pyapp && g_pyapp->name) ? g_pyapp->name : "Python app"; }
-static const char *app_name(int a)
-{ return a == EX_RUNNER ? "Runner3D" : a == EX_BROWSER ? "Browser"
-       : a == EX_SSH ? "SSH"
-       : a == EX_STUDIO ? "Studio" : a == EX_PHOTOS ? "Photos"
-       : a == EX_UOWORD ? "UnoWord"
-       : a == EX_UOCALC ? "UnoCalc"
-       : a == EX_UOSHOW ? "UnoShow"
-       : a == EX_USERAPP ? unoapp_user_title()
-       : a == EX_PYAPP ? py_app_name()
-       : a == EX_LOGVIEW ? "System Log"
-       : a < NNATIVE ? kAppNames[a] : unoapp_name(a - NNATIVE); }
-static const char *app_short(int a)
-{ return a == EX_RUNNER ? "Runner" : a == EX_BROWSER ? "Browser"
-       : a == EX_SSH ? "SSH"
-       : a == EX_STUDIO ? "Studio" : a == EX_PHOTOS ? "Photos"
-       : a == EX_UOWORD ? "UnoWord"
-       : a == EX_UOCALC ? "UnoCalc"
-       : a == EX_UOSHOW ? "UnoShow"
-       : a == EX_USERAPP ? unoapp_user_title()
-       : a == EX_PYAPP ? py_app_name()
-       : a == EX_LOGVIEW ? "Log"
-       : a < NNATIVE ? kNativeShort[a] : unoapp_name(a - NNATIVE); }
 
-/* hidden from the launcher + desktop: the user/py-app slots until something
- * runs in them, and Studio when no STUDIO.UNO ships on this system */
+/* Names are table reads now, with exactly two exceptions, and they are honest
+ * ones: the two HOST slots are named after whatever is running in them this
+ * second, so their label cannot be a stored string. */
+static const char *app_name(int a)
+{
+    if (a < 0 || a >= NAPPS) return "?";
+    if (a == EX_USERAPP) return unoapp_user_title();
+    if (a == EX_PYAPP)   return py_app_name();
+    return g_app[a].name;
+}
+static const char *app_short(int a)
+{
+    if (a < 0 || a >= NAPPS) return "?";
+    if (a == EX_USERAPP) return unoapp_user_title();
+    if (a == EX_PYAPP)   return py_app_name();
+    return g_app[a].shortnm;
+}
+
+/* Hidden from the launcher + desktop: a host slot with nothing running in it,
+ * a module whose file is not on this system, and anything that asked to be
+ * hidden (`flags: hidden` - a service or a helper that is launchable by id but
+ * has no business owning a desktop icon). */
 static int app_hidden(int a)
 {
-    if (a == EX_USERAPP) return !g_open[EX_USERAPP];
-    if (a == EX_PYAPP)   return !g_open[EX_PYAPP];
-    if (a == EX_STUDIO)  return !g_studio_present;
-    if (a == EX_PHOTOS)  return !g_photos_present;
-    if (a == EX_UOWORD)  return !g_uoword_present;
-    if (a == EX_UOCALC)  return !g_uocalc_present;
-    if (a == EX_UOSHOW)  return !g_uoshow_present;
-    if (a == EX_LOGVIEW) return !g_logview_present;
-    return 0;
+    if (a < 0 || a >= NAPPS) return 1;
+    if (g_app[a].kind == AK_HOSTSLOT) return !g_open[a];
+    if (g_app[a].kind == AK_UUIMOD && !g_app[a].present) return 1;
+    return (g_app[a].flags & UAF_HIDDEN) != 0;
 }
 
 /* Which emblem an app wears. A LOOKUP, not the app's index: apps come and go
- * (and will eventually be loaded from storage, where no static numbering can
- * predict them), so an app names its icon and everyone else's stays put.
- * Anything unrecognised gets PCI_GENERIC rather than a neighbour's art. */
+ * (and are now loaded from storage, where no static numbering could predict
+ * them), so an app NAMES its icon and everyone else's stays put. Anything
+ * unrecognised gets PCI_GENERIC rather than a neighbour's art. */
 static const unsigned char kNativeIcon[NNATIVE] = {
     PCI_CTRL, PCI_EDIT, PCI_FILES, PCI_SYS, PCI_CLOCK, PCI_SETUP, PCI_MUSIC,
     PCI_MUSIC        /* UnoAmp shares the note icon - it IS the music app */
@@ -370,20 +347,112 @@ static const unsigned char kBridgeIcon[UNOAPP_COUNT] = {
     PCI_DOSTRIS, PCI_PACMAN, PCI_OUTLAST, PCI_TRACKER, PCI_PAINT
 };
 static int app_icon(int a)
+{ return (a >= 0 && a < NAPPS) ? g_app[a].icon : PCI_GENERIC; }
+
+/* ---- building the registry -------------------------------------------------
+ * Built-in rows first, in the order they have always had, so no index moves and
+ * a saved session from an older build still restores.  A module row carries
+ * only its FILENAME here; everything the launcher shows comes from the
+ * descriptor inside the file (uno_appdesc.h), read with two sector reads and
+ * without loading a byte of module code.
+ *
+ * A module that is not on this system is registered anyway, and hidden.  That
+ * is deliberate: the slot index stays put whether or not the distro ships the
+ * file, so a session saved on a machine with UnoWord restores correctly on one
+ * without it. */
+static void slot_str(char *dst, int cap, const char *src)
+{ int i = 0; if (!src) { dst[0] = 0; return; }
+  while (src[i] && i < cap - 1) { dst[i] = src[i]; i++; } dst[i] = 0; }
+
+static void app_reg(int a, const char *id, const char *name, const char *shortnm,
+                    app_kind kind, int icon, int cat, int rank, int ordinal)
 {
-    if (a == EX_RUNNER)  return PCI_RUNNER;
-    if (a == EX_BROWSER) return PCI_BROWSER;
-    if (a == EX_STUDIO)  return PCI_STUDIO;
-    if (a == EX_PHOTOS)  return PCI_PHOTOS;
-    if (a == EX_UOWORD)  return PCI_UOWORD;
-    if (a == EX_UOCALC)  return PCI_UOCALC;
-    if (a == EX_UOSHOW)  return PCI_UOSHOW;
-    if (a == EX_LOGVIEW) return PCI_SYS;   /* the system-ish emblem */
-    if (a == EX_USERAPP) return PCI_GENERIC;
-    if (a == EX_PYAPP)   return PCI_GENERIC;
-    if (a >= 0 && a < NNATIVE) return kNativeIcon[a];
-    if (a >= NNATIVE && a - NNATIVE < UNOAPP_COUNT) return kBridgeIcon[a - NNATIVE];
-    return PCI_GENERIC;
+    app_slot *s = &g_app[a];
+    memset(s, 0, sizeof *s);
+    slot_str(s->id, sizeof s->id, id);
+    slot_str(s->name, sizeof s->name, name);
+    slot_str(s->shortnm, sizeof s->shortnm, shortnm ? shortnm : name);
+    s->kind = (unsigned char)kind;
+    s->icon = (unsigned char)icon;
+    s->cat  = (unsigned char)cat;
+    s->rank = (unsigned char)rank;
+    s->vol  = -1;
+    s->ordinal = (short)ordinal;
+    s->present = 1;                       /* everything but a module is here */
+}
+
+/* Register a unoui-class module slot: find the file, read its descriptor, and
+ * let the MODULE decide its name, icon, category and rank.  The `fallback`
+ * strings are what the row shows if the file is present but carries no
+ * descriptor (every module built before 2026-08-07). */
+static void app_reg_module(int a, const char *file, const char *fb_id,
+                           const char *fb_name, const char *fb_short, int fb_icon,
+                           int fb_cat, int fb_rank)
+{
+    app_slot *s = &g_app[a];
+    UnoAppDesc d;
+    int vol = -1;
+    app_reg(a, fb_id, fb_name, fb_short, AK_UUIMOD, fb_icon, fb_cat, fb_rank, -1);
+    slot_str(s->file, sizeof s->file, file);
+    s->present = 0;
+    if (!uno_mod_find(file, &vol, s->path, (int)sizeof s->path)) return;
+    s->present = 1;
+    s->vol = (signed char)vol;
+    if (uno_mod_desc_read(vol, s->path, &d) != 0) return;   /* no descriptor */
+    slot_str(s->id, sizeof s->id, d.id);
+    slot_str(s->name, sizeof s->name, d.name);
+    slot_str(s->shortnm, sizeof s->shortnm, d.shortnm);
+    s->cat = d.cat; s->rank = d.rank; s->flags = d.flags;
+    s->pref_w = d.pref_w; s->pref_h = d.pref_h;
+    if (d.icon[0]) { int e = pc64_icon_by_name(d.icon); if (e >= 0) s->icon = (unsigned char)e; }
+}
+
+static void app_registry_init(void)
+{
+    int i;
+    static const struct { const char *id; int cat, rank; } kNat[NNATIVE] = {
+        { "control", UAC_SYSTEM, 10 }, { "editor",  UAC_TOOLS,  50 },
+        { "files",   UAC_SYSTEM, 20 }, { "system",  UAC_SYSTEM, 30 },
+        { "clock",   UAC_TOOLS,  60 }, { "install", UAC_SYSTEM, 40 },
+        { "music",   UAC_MEDIA,  10 }, { "unoamp",  UAC_MEDIA,  15 },
+    };
+    static const char *kBridgeId[UNOAPP_COUNT] =
+        { "dostris", "pacman", "outlast", "tracker", "paint" };
+
+    for (i = 0; i < NNATIVE; i++)
+        app_reg(i, kNat[i].id, kAppNames[i], kNativeShort[i], AK_NATIVE,
+                kNativeIcon[i], kNat[i].cat, kNat[i].rank, i);
+    for (i = 0; i < UNOAPP_COUNT; i++) {
+        int a = NNATIVE + i;
+        app_reg(a, kBridgeId[i], unoapp_name(i), unoapp_name(i), AK_BRIDGE,
+                kBridgeIcon[i], i == 4 ? UAC_TOOLS : UAC_GAMES, 20 + i, i);
+        if (i != 4) g_app[a].flags |= UAF_GAME;      /* Paint is not a game */
+    }
+    app_reg(EX_RUNNER,  "runner3d", "Runner3D", "Runner",  AK_SHELL, PCI_RUNNER,  UAC_GAMES, 10, -1);
+    app_reg(EX_BROWSER, "browser",  "Browser",  "Browser", AK_SHELL, PCI_BROWSER, UAC_NET,   10, -1);
+    app_reg(EX_SSH,     "ssh",      "SSH",      "SSH",     AK_SHELL, PCI_NETWORK, UAC_NET,   20, -1);
+    app_reg(EX_USERAPP, "userapp",  "User app", "User app", AK_HOSTSLOT, PCI_GENERIC, UAC_OTHER, 90, -1);
+    app_reg(EX_PYAPP,   "pyapp",    "Python app", "Python app", AK_HOSTSLOT, PCI_GENERIC, UAC_OTHER, 91, -1);
+    g_app[EX_USERAPP].flags |= UAF_NOSESSION;
+    g_app[EX_PYAPP].flags   |= UAF_NOSESSION;
+
+    app_reg_module(EX_STUDIO,  "STUDIO.UNO",  "studio",  "Studio",     "Studio", PCI_STUDIO, UAC_TOOLS,  10);
+    app_reg_module(EX_PHOTOS,  "PHOTOS.UNO",  "photos",  "Photos",     "Photos", PCI_PHOTOS, UAC_MEDIA,  20);
+    app_reg_module(EX_UOWORD,  "UOWORD.UNO",  "uoword",  "UnoWord",    "UnoWord", PCI_UOWORD, UAC_TOOLS, 20);
+    app_reg_module(EX_UOCALC,  "UOCALC.UNO",  "uocalc",  "UnoCalc",    "UnoCalc", PCI_UOCALC, UAC_TOOLS, 30);
+    app_reg_module(EX_UOSHOW,  "UOSHOW.UNO",  "uoshow",  "UnoShow",    "UnoShow", PCI_UOSHOW, UAC_TOOLS, 40);
+    app_reg_module(EX_LOGVIEW, "LOGVIEW.UNO", "logview", "System Log", "Log",    PCI_SYS,    UAC_SYSTEM, 70);
+    g_napps = NBUILTIN;
+}
+
+/* the slot with this id, or -1.  The ONLY way anything durable should name an
+ * app: indices are this boot's ordering and nothing more. */
+static int app_by_id(const char *id)
+{
+    int a;
+    if (!id || !*id) return -1;
+    for (a = 0; a < NAPPS; a++) if (!strcmp(g_app[a].id, id)) return a;
+    return -1;
 }
 
 /* ---- desktop icon arrangement (Control Panel) ------------------------------
@@ -2074,7 +2143,7 @@ static void remove_win(unoui_window *win)
  * The Alt-Tab switcher steps app windows most-recently-focused first, which is
  * what makes "Alt-Tab takes me back to what I was just doing" true. The stack
  * holds app indices; slot 0 is the most recently focused. */
-static short g_mru[NAPPS];
+static short g_mru[APPS_MAX];
 static int   g_nmru;
 
 static void wm_note_focus(int a)
@@ -2094,7 +2163,7 @@ static void wm_note_focus(int a)
  * scene. Alt+D (show desktop) parks the set; phase B's minimize adopts this
  * flag. A parked window is not in UI.win[], so raising it is a no-op - every
  * route back to the app must unpark first, which open_app does. */
-static int g_parked[NAPPS];
+static int g_parked[APPS_MAX];
 
 static void wm_unpark(int a)
 {
@@ -2129,14 +2198,14 @@ static void wm_park(int a)
  * policy, after focus_next_mru(). */
 #define NDESK 4
 static int  g_cur_desk;                    /* 0-based; the desktop on screen  */
-static signed char g_desk_of[NAPPS];       /* which desktop each app lives on */
+static signed char g_desk_of[APPS_MAX];       /* which desktop each app lives on */
 /* Saved z-order per desktop, bottom-to-top, storing app index PLUS ONE and
  * terminated by a 0. The +1 is not decoration: a bss array reads as all-zero,
  * and with a plain "-1 terminates" convention every untouched desktop would
  * decode as NAPPS copies of app 0 with no terminator - which is exactly the
  * out-of-bounds write UBSan trapped on the first Alt+Ctrl+Fn of a fresh boot.
  * Encoded this way, zero-initialized means "empty", which is the truth. */
-static signed char g_dz[NDESK][NAPPS];
+static signed char g_dz[NDESK][APPS_MAX];
 
 static void wm_desk_switch(int d);
 
@@ -2158,7 +2227,7 @@ static int wm_in_scene(int a)
  * it through exactly one hook (unoui_win_badge), which paints the title-bar
  * dot; it has no other notion of a group. */
 #define WM_NGROUP 2                       /* the menu offers "A" and "B"       */
-static unsigned char g_group[NAPPS];
+static unsigned char g_group[APPS_MAX];
 
 /* Fill `out` with every OPEN app linked to `a`, `a` itself included, and return
  * the count. An ungrouped app is a set of one, so no caller needs a special
@@ -2192,7 +2261,7 @@ static int shell_win_badge(const unoui_window *w)
  * - a stale cap_win would hand the rest of a live drag to the wrong window. */
 static void wm_raise_group(int a)
 {
-    int set[NAPPS], n, i, fwi = UI.focus_wi;
+    int set[APPS_MAX], n, i, fwi = UI.focus_wi;
     unoui_window *capw = (UI.cap_mode != UI_CAP_NONE &&
                           UI.cap_win >= 0 && UI.cap_win < UI.nwin)
                        ? UI.win[UI.cap_win] : 0;
@@ -2240,7 +2309,7 @@ static int win_titlebar_app_at(int mx, int my)
 
 static void wm_group_drag(void)
 {
-    int a = -1, i, dx, dy, set[NAPPS], n;
+    int a = -1, i, dx, dy, set[APPS_MAX], n;
     if (UI.cap_mode == UI_CAP_WINDOW && UI.cap_win >= 0 && UI.cap_win < UI.nwin)
         for (i = 0; i < NAPPS; i++)
             if (UI.win[UI.cap_win] == &g_win[i] && g_open[i]) { a = i; break; }
@@ -2409,7 +2478,7 @@ static int tb_nvis(int n)
  * chip there (Start button, bare bar or the tray) */
 static int tb_chip_app_at(int px)
 {
-    int list[NAPPS], nopen = tb_open_list(list), nvis = tb_nvis(nopen);
+    int list[APPS_MAX], nopen = tb_open_list(list), nvis = tb_nvis(nopen);
     int x = tb_chip_x(), cw = tb_chip_w(), k;
     for (k = 0; k < nvis; k++, x += tb_chip_gap())
         if (px >= x && px < x + cw) return list[k];
@@ -2505,7 +2574,7 @@ static void taskbar_draw(struct unoui_widget *w, unoui_rect r, void *ctx)
        colliding. */
     x = r.x + tb_chip_x();
     { int cw = tb_chip_w(), fh = fb_text_h(), es = bh - 4 > 16 ? 16 : bh - 4;
-      int list[NAPPS], nopen = tb_open_list(list), nvis = tb_nvis(nopen), k;
+      int list[APPS_MAX], nopen = tb_open_list(list), nvis = tb_nvis(nopen), k;
     for (k = 0; k < nvis; k++) {
         int d, park;
         unoui_rect eb;
@@ -2706,7 +2775,7 @@ static void build_desktop(void)
 {
     int k, fh = fb_text_h();
     int ich = 34 + fh, pitch = ich + 8, colw = 20 + fb_text_w("MMMMMMMM");
-    int percol, percol_rows, order[NAPPS];
+    int percol, percol_rows, order[APPS_MAX];
     unoui_window_init(&g_desk, "", 0, 0, FB_W, FB_H - TASKH);
     g_desk.flags = UI_WIN_BARE | UI_WIN_BOTTOM;
     percol      = (FB_H - TASKH - 20) / pitch; if (percol < 1) percol = 1;
@@ -2823,50 +2892,23 @@ static void build_legacy(int a)
         g_win[a].flags |= UI_WIN_RESIZE;    /* text reflows to the new width */
         return;
     }
-    if (a == EX_PHOTOS) {              /* the viewer module fills its window */
-        photos_ensure();
-        if (g_photos) { g_photos->build(&g_win[a]); return; }
-        unoui_window_init(&g_win[a], "Photos", 60, 40, 300, 90);
-        unoui_add_label(&g_win[a], 8, 10, "APPS\\PHOTOS.UNO is missing");
-        unoui_add_label(&g_win[a], 8, 28, "This system ships without the viewer.");
-        return;
-    }
-    if (a == EX_LOGVIEW) {             /* the log viewer fills its window    */
-        logview_ensure();
-        if (g_logview) { g_logview->build(&g_win[a]); return; }
-        unoui_window_init(&g_win[a], "System Log", 60, 40, 340, 90);
-        unoui_add_label(&g_win[a], 8, 10, "APPS\LOGVIEW.UNO is missing");
-        unoui_add_label(&g_win[a], 8, 28, "The log is still kept in \LOGS.");
-        return;
-    }
-    if (a == EX_UOSHOW) {              /* the presentation app fills it too  */
-        uoshow_ensure();
-        if (g_uoshow) { g_uoshow->build(&g_win[a]); return; }
-        unoui_window_init(&g_win[a], "UnoShow", 60, 40, 320, 90);
-        unoui_add_label(&g_win[a], 8, 10, "APPS\\UOSHOW.UNO is missing");
-        return;
-    }
-    if (a == EX_UOCALC) {              /* the spreadsheet fills its window   */
-        uocalc_ensure();
-        if (g_uocalc) { g_uocalc->build(&g_win[a]); return; }
-        unoui_window_init(&g_win[a], "UnoCalc", 60, 40, 320, 90);
-        unoui_add_label(&g_win[a], 8, 10, "APPS\\UOCALC.UNO is missing");
-        return;
-    }
-    if (a == EX_UOWORD) {              /* the word processor fills its window */
-        uoword_ensure();
-        if (g_uoword) { g_uoword->build(&g_win[a]); return; }
-        unoui_window_init(&g_win[a], "UnoWord", 60, 40, 320, 90);
-        unoui_add_label(&g_win[a], 8, 10, "APPS\\UOWORD.UNO is missing");
-        unoui_add_label(&g_win[a], 8, 28, "This system ships without the word processor.");
-        return;
-    }
-    if (a == EX_STUDIO) {              /* the IDE module fills its own window */
-        studio_ensure();
-        if (g_studio) { g_studio->build(&g_win[a]); return; }
-        unoui_window_init(&g_win[a], "Studio", 60, 40, 280, 90);
-        unoui_add_label(&g_win[a], 8, 10, "APPS\\STUDIO.UNO is missing");
-        unoui_add_label(&g_win[a], 8, 28, "This system ships without the IDE.");
+    if (g_app[a].kind == AK_UUIMOD) {  /* the module fills its own window */
+        const UnoUuiApp *m = app_iface(a);
+        if (m) { m->build(&g_win[a]); return; }
+        /* Missing, or present and refused to load.  Those are different
+         * problems - "ships without it" versus "the loader rejected it" - and
+         * they used to read identically.  Note the labels point at strings that
+         * OUTLIVE this call: unoui_add_label stores the pointer, so the file
+         * name comes from the slot, never from a local buffer. */
+        unoui_window_init(&g_win[a], app_name(a), 60, 40, 360, 96);
+        unoui_add_label(&g_win[a], 8, 10,
+                        g_app[a].present ? "This module would not load:"
+                                         : "This module is not installed:");
+        unoui_add_label(&g_win[a], 8, 28, g_app[a].file);
+        unoui_add_label(&g_win[a], 8, 46,
+                        g_app[a].present
+                          ? "It is on disk; the loader refused the image."
+                          : "Put it in APPS\\ and reopen, or rescan from the Control Panel.");
         return;
     }
     if (a == EX_USERAPP) {             /* the app Studio just built */
@@ -2956,12 +2998,8 @@ static void open_app(int a)
         if (g >= 0)                 pc64_game_open(g);           /* native game   */
         else if (a == EX_BROWSER)   pc64_browser_open();         /* browser       */
         else if (a == EX_SSH)       pc64_sshapp_open();          /* ssh client    */
-        else if (a == EX_STUDIO)    { if (g_studio && g_studio->opened) g_studio->opened(); }
-        else if (a == EX_PHOTOS)    { if (g_photos && g_photos->opened) g_photos->opened(); }
-        else if (a == EX_LOGVIEW)   { if (g_logview && g_logview->opened) g_logview->opened(); }
-        else if (a == EX_UOWORD)    { if (g_uoword && g_uoword->opened) g_uoword->opened(); }
-        else if (a == EX_UOCALC)    { if (g_uocalc && g_uocalc->opened) g_uocalc->opened(); }
-        else if (a == EX_UOSHOW)    { if (g_uoshow && g_uoshow->opened) g_uoshow->opened(); }
+        else if (g_app[a].kind == AK_UUIMOD)
+            { const UnoUuiApp *m = app_iface(a); if (m && m->opened) m->opened(); }
         else if (a == EX_PYAPP)     { if (g_pyapp && g_pyapp->opened) g_pyapp->opened(); }
         else if (a == EX_USERAPP)   { }                          /* run() opened it */
         else if (app_is_bridge(a))  unoapp_open(a - NNATIVE);    /* bridge app    */
@@ -2980,24 +3018,18 @@ static void open_app(int a)
     if (a >= NNATIVE) UI.focus_wi = 0;   /* focus the app's canvas for keyboard */
     if (a == APP_EDIT)  { int wi = pc64_write_canvas_index(); if (wi >= 0) UI.focus_wi = wi; }
     if (a == APP_FILES) { int wi = pc64_files_canvas_index(); if (wi >= 0) UI.focus_wi = wi; }
-    if (a == EX_STUDIO && g_studio && g_studio->canvas_index)
-        { int wi = g_studio->canvas_index(); if (wi >= 0) UI.focus_wi = wi; }
-    /* These three said `return g_uoshow->canvas_index();` in a void function -
-     * they RETURNED OUT OF open_app instead of setting the focus index, so
-     * opening UnoWord, UnoCalc or UnoShow skipped everything below: the MRU
-     * never learned the window was front, and g_dirty was never set, so the
-     * app appeared only on the next unrelated repaint.  Same shape as every
-     * other app now. */
-    if (a == EX_UOSHOW && g_uoshow && g_uoshow->canvas_index)
-        { int wi = g_uoshow->canvas_index(); if (wi >= 0) UI.focus_wi = wi; }
-    if (a == EX_UOCALC && g_uocalc && g_uocalc->canvas_index)
-        { int wi = g_uocalc->canvas_index(); if (wi >= 0) UI.focus_wi = wi; }
-    if (a == EX_UOWORD && g_uoword && g_uoword->canvas_index)
-        { int wi = g_uoword->canvas_index(); if (wi >= 0) UI.focus_wi = wi; }
-    if (a == EX_LOGVIEW && g_logview && g_logview->canvas_index)
-        return g_logview->canvas_index();
-    if (a == EX_PHOTOS && g_photos && g_photos->canvas_index)
-        { int wi = g_photos->canvas_index(); if (wi >= 0) UI.focus_wi = wi; }
+    /* ONE canvas_index site for every module.  Five of the six used to be
+     * written out separately here, and the divergence was not cosmetic: three
+     * of them said `return m->canvas_index();` in a VOID function, so opening
+     * UnoWord, UnoCalc or UnoShow returned out of open_app and skipped
+     * everything below - the MRU never learned the window was front and
+     * g_dirty was never set, so the app appeared only on the next unrelated
+     * repaint. Those three were fixed by hand; LOGVIEW still had the bug when
+     * this landed, which is the whole argument for there being one site. */
+    if (g_app[a].kind == AK_UUIMOD) {
+        const UnoUuiApp *m = app_iface(a);
+        if (m && m->canvas_index) { int wi = m->canvas_index(); if (wi >= 0) UI.focus_wi = wi; }
+    }
     if (a == EX_PYAPP && g_pyapp && g_pyapp->canvas_index)
         { int wi = g_pyapp->canvas_index(); if (wi >= 0) UI.focus_wi = wi; }
     /* native games scale to any rect, so they can fill the screen (Esc returns).
@@ -3185,7 +3217,7 @@ static unoui_window g_sw;                  /* the overlay window (bare + top)  *
 static int   g_sw_open, g_sw_sel, g_sw_n, g_sw_timer, g_sw_alt;
 static int   g_sw_hl;                      /* animated highlight x, px         */
 static unoui_anim_h g_sw_hl_h;             /* its tween                        */
-static short g_sw_list[NAPPS];
+static short g_sw_list[APPS_MAX];
 
 static int sw_cols(void) { return g_sw_n < 1 ? 1 : g_sw_n; }
 
@@ -3540,7 +3572,7 @@ static void wm_desk_move(int a, int d, int follow)
 
 static void minimize_app(int a)
 {
-    int set[NAPPS], n, i;
+    int set[APPS_MAX], n, i;
     if (a < 0 || a >= NAPPS || !g_open[a] || g_parked[a]) return;
     n = wm_group_set(a, set);       /* a linked set minimizes as one (phase F) */
     for (i = 0; i < n; i++) {
@@ -3556,7 +3588,7 @@ static void minimize_app(int a)
 
 static void restore_app(int a)
 {
-    int set[NAPPS], n, i;
+    int set[APPS_MAX], n, i;
     if (a < 0 || a >= NAPPS || !g_open[a] || !g_parked[a]) return;
     g_showdesk = 0;                 /* the show-desktop set is broken up now */
     n = wm_group_set(a, set);       /* ...and comes back as one               */
@@ -3584,9 +3616,8 @@ static void close_app(int a)
     g_win[a].snap = UI_SNAP_NONE;
     if (g >= 0)              pc64_game_close(g);        /* native game teardown */
     else if (a == APP_MUSIC) pc64_music_closed();       /* stop playback      */
-    else if (a == EX_STUDIO) { if (g_studio && g_studio->closed) g_studio->closed(); }
-    else if (a == EX_PHOTOS) { if (g_photos && g_photos->closed) g_photos->closed(); }
-    else if (a == EX_LOGVIEW) { if (g_logview && g_logview->closed) g_logview->closed(); }
+    else if (g_app[a].kind == AK_UUIMOD)
+        { const UnoUuiApp *m = app_iface(a); if (m && m->closed) m->closed(); }
     else if (a == EX_PYAPP)  { if (g_pyapp) { unoscript_app_caps_end();
                                  if (g_pyapp->closed) g_pyapp->closed();
                                  if (g_pyrt) g_pyrt->unload();
@@ -3665,7 +3696,7 @@ static void wm_tile(void)
 {
     static const unsigned char kQuad[4] =
         { UI_SNAP_TL, UI_SNAP_TR, UI_SNAP_BL, UI_SNAP_BR };
-    int list[NAPPS], n = wm_tile_list(list), i;
+    int list[APPS_MAX], n = wm_tile_list(list), i;
     if (n <= 0) return;
     if (n == 1)
         unoui_snap_apply(&UI, &g_win[list[0]], UI_SNAP_MAX);
@@ -3698,7 +3729,7 @@ static void wm_tile(void)
 static void wm_cascade(void)
 {
     unoui_rect wk = unoui_work_area(&UI);
-    int list[NAPPS], n = wm_tile_list(list), i;
+    int list[APPS_MAX], n = wm_tile_list(list), i;
     int x = wk.x, y = wk.y, step = 24;
     for (i = 0; i < n; i++) {
         unoui_window *w = &g_win[list[i]];
@@ -3715,7 +3746,7 @@ static void wm_cascade(void)
 
 static void wm_minimize_all(void)
 {
-    int list[NAPPS], n = wm_tile_list(list), i;
+    int list[APPS_MAX], n = wm_tile_list(list), i;
     if (UI.full) { unoui_fullscreen(&UI, 0); UI.focus_wi = 0; }
     for (i = 0; i < n; i++) wm_park(list[i]);
     if (n) { g_showdesk = 1; focus_next_mru(); rebuild_taskbar(); session_save(); }
@@ -3728,7 +3759,7 @@ static void wm_minimize_all(void)
  * builder - so wm_desk_move's `follow` is 0 for every member. */
 static void wm_group_desk_move(int a, int d, int follow)
 {
-    int set[NAPPS], n, i;
+    int set[APPS_MAX], n, i;
     n = wm_group_set(a, set);
     for (i = 0; i < n; i++) wm_desk_move(set[i], d, i == n - 1 ? follow : 0);
     rebuild_taskbar();
@@ -3904,7 +3935,7 @@ static void pop_task_menu(int x, int y)
  * a chip (parked -> restore, otherwise raise + focus) */
 static void pop_overflow(int px, int py)
 {
-    int list[NAPPS], nopen = tb_open_list(list), nvis = tb_nvis(nopen), k;
+    int list[APPS_MAX], nopen = tb_open_list(list), nvis = tb_nvis(nopen), k;
     (void)py;
     g_pop_app = -1; g_pop_n = 0;
     for (k = nvis; k < nopen; k++)
@@ -4321,7 +4352,7 @@ static int menu_maxvis(void)
 
 /* the launcher lists only visible apps (Studio needs its module on disk;
  * the user-app slot appears once something has run in it) */
-static int menu_apps[NAPPS];
+static int menu_apps[APPS_MAX];
 static int menu_napps;
 static void menu_refresh(void)
 {
@@ -4962,10 +4993,25 @@ int pc64_shell_py_exec(const char *src, char *out, int cap)
     return g_pyrt->run_src(src, (int)n, out, cap);
 }
 
+/* The path Files takes when you open a `.UNO`.  It handled exactly two kinds of
+ * module - a PYAPP, and a CLASSIC app through unoapp_user_run() - and a
+ * unoui-class module returns a UnoUuiApp rather than a UnoAppIface, so it fell
+ * out of the classic branch as "Could not launch that .UNO."  With no desktop
+ * slot and no `uno.run_app`, that made APPS\VMGR.UNO unrunnable by any means on
+ * a machine it was installed on.  This is the missing third branch. */
 int pc64_shell_run_user(int vol, const char *path)
 {
-    if (uno_mod_peek_flags(vol, path) & UNO_MODF_PYAPP)   /* a Python app */
+    unsigned short fl = uno_mod_peek_flags(vol, path);
+    if (fl & UNO_MODF_PYAPP)                              /* a Python app */
         return pc64_shell_run_python(vol, path);
+    if (fl & UNO_MODF_UUI) {                              /* a unoui-class module */
+        UnoAppDesc d;
+        int a = -1;
+        if (uno_mod_desc_read(vol, path, &d) >= 0) a = app_by_id(d.id);
+        if (a < 0) return -1;         /* not registered: phase 3 discovers these */
+        open_app(a);
+        return 0;
+    }
     if (unoapp_user_run(vol, path) < 0) return -1;
     if (g_open[EX_USERAPP]) {            /* rebuild for the new size/title */
         remove_win(&g_win[EX_USERAPP]);
@@ -4994,7 +5040,7 @@ void pc64_write_frame(void);
  * keep their canvases and just get clamped. */
 static void rebuild_shell(void)
 {
-    int a, wasopen[NAPPS], wasdesk[NAPPS];
+    int a, wasopen[APPS_MAX], wasdesk[APPS_MAX];
     sw_close();                        /* the overlay is sized in font-space */
     g_showdesk = 0;
     if (g_launch_open) { remove_win(&g_launch); g_launch_open = 0; }
@@ -5056,16 +5102,12 @@ static void on_action(const unoui_action *a)
     if (pc64_files_action(a)) return;           /* the file manager's toolbar */
     if (pc64_music_action(a)) return;           /* the media player           */
     if (pc64_clock_action(a)) return;           /* the world clock            */
-    if (g_studio && g_open[EX_STUDIO] && g_studio->action &&
-        g_studio->action(a)) return;            /* the Studio module          */
-    if (g_photos && g_open[EX_PHOTOS] && g_photos->action &&
-        g_photos->action(a)) return;            /* the Photos module          */
-    if (g_uoword && g_open[EX_UOWORD] && g_uoword->action &&
-        g_uoword->action(a)) return;            /* the UnoWord module         */
-    if (g_uocalc && g_open[EX_UOCALC] && g_uocalc->action &&
-        g_uocalc->action(a)) return;            /* the UnoCalc module         */
-    if (g_uoshow && g_open[EX_UOSHOW] && g_uoshow->action &&
-        g_uoshow->action(a)) return;            /* the UnoShow module         */
+    /* every OPEN unoui-class module gets a look, in slot order.  LOGVIEW was
+     * missing from the hand-written version of this list. */
+    { int mi;
+      for (mi = 0; mi < NAPPS; mi++)
+          if (g_app[mi].kind == AK_UUIMOD && g_open[mi] && g_app[mi].iface &&
+              g_app[mi].iface->action && g_app[mi].iface->action(a)) return; }
     if (g_pyapp && g_open[EX_PYAPP] && g_pyapp->action &&
         g_pyapp->action(a)) return;             /* the running Python app      */
     switch (a->id) {
@@ -5413,44 +5455,28 @@ static int pump_input(void)
             UI.win[UI.focus_win] == &g_win[APP_EDIT]) {
             if (pc64_write_key(uni, 1)) { g_dirty = 1; continue; }
         }
-        /* Studio accelerators (Ctrl-S/F, F5 Run, F7 Build, ...) - only while
-           its window is in front; the module owns the mapping. */
-        if (!g_launch_open && !UI.full && g_studio && g_open[EX_STUDIO] &&
-            UI.focus_win >= 0 && UI.focus_win < UI.nwin &&
-            UI.win[UI.focus_win] == &g_win[EX_STUDIO] && g_studio->key) {
-            if (g_studio->key(uni, scan, ctrl)) { g_dirty = 1; continue; }
-        }
-        if (!g_launch_open && !UI.full && g_photos && g_open[EX_PHOTOS] &&
-            UI.focus_win >= 0 && UI.focus_win < UI.nwin &&
-            UI.win[UI.focus_win] == &g_win[EX_PHOTOS] && g_photos->key) {
-            if (g_photos->key(uni, scan, ctrl)) { g_dirty = 1; continue; }
-        }
-        if (!g_launch_open && !UI.full && g_logview && g_open[EX_LOGVIEW] &&
-            UI.focus_win >= 0 && UI.focus_win < UI.nwin &&
-            UI.win[UI.focus_win] == &g_win[EX_LOGVIEW] && g_logview->key) {
-            if (g_logview->key(uni, scan, ctrl)) { g_dirty = 1; continue; }
-        }
-        /* UnoWord takes EVERY key while it is in front - it is a word
-           processor, so the plain characters are the point, not just the
-           accelerators. */
-        if (!g_launch_open && !UI.full && g_uoword && g_open[EX_UOWORD] &&
-            UI.focus_win >= 0 && UI.focus_win < UI.nwin &&
-            UI.win[UI.focus_win] == &g_win[EX_UOWORD] && g_uoword->key) {
-            if (g_uoword->key(uni, scan, ctrl)) { g_dirty = 1; continue; }
-        }
-        if (!g_launch_open && !UI.full && g_uocalc && g_open[EX_UOCALC] &&
-            UI.focus_win >= 0 && UI.focus_win < UI.nwin &&
-            UI.win[UI.focus_win] == &g_win[EX_UOCALC] && g_uocalc->key) {
-            if (g_uocalc->key(uni, scan, ctrl)) { g_dirty = 1; continue; }
-        }
-        /* UnoShow's slide show runs FULL-SCREEN, so unlike the other two
-         * its key hook must be reachable with UI.full set - that is the
-         * whole point of the mode. */
-        if (!g_launch_open && g_uoshow && g_open[EX_UOSHOW] &&
-            (UI.full == &g_win[EX_UOSHOW] ||
-             (!UI.full && UI.focus_win >= 0 && UI.focus_win < UI.nwin &&
-              UI.win[UI.focus_win] == &g_win[EX_UOSHOW])) && g_uoshow->key) {
-            if (g_uoshow->key(uni, scan, ctrl)) { g_dirty = 1; continue; }
+        /* ONE key site for every unoui-class module: Studio's accelerators,
+         * UnoWord taking every plain character because it is a word processor,
+         * UnoShow's slide show - all the same rule, "the module in front gets
+         * the key".  Written out six times, one of the six (LOGVIEW) simply
+         * never appeared, and UnoWord shipped deaf for a fortnight.
+         *
+         * UnoShow's exception generalises rather than disappearing: a module
+         * that has put ITSELF fullscreen still gets keys, which is the only way
+         * out of a fullscreen mode.  Any other fullscreen window still shuts
+         * every module out, exactly as before. */
+        if (!g_launch_open) {
+            int mi, took = 0;
+            for (mi = 0; mi < NAPPS && !took; mi++) {
+                const UnoUuiApp *m = g_app[mi].iface;
+                if (g_app[mi].kind != AK_UUIMOD || !g_open[mi] || !m || !m->key)
+                    continue;
+                if (UI.full) { if (UI.full != &g_win[mi]) continue; }
+                else if (!(UI.focus_win >= 0 && UI.focus_win < UI.nwin &&
+                           UI.win[UI.focus_win] == &g_win[mi])) continue;
+                took = m->key(uni, scan, ctrl);
+            }
+            if (took) { g_dirty = 1; continue; }
         }
         /* a focused Python app's accelerators */
         if (!g_launch_open && !UI.full && g_pyapp && g_open[EX_PYAPP] &&
@@ -5659,12 +5685,12 @@ static unsigned long long drag_cyc_now(void) { return 0; }
  * link group, every member of that set - they all move, so they must all be
  * missing from the snapshot and all be repainted per frame. Bottom-to-top z
  * order, which is also the order they are repainted in. */
-static unoui_window *g_dragset[NAPPS];
+static unoui_window *g_dragset[APPS_MAX];
 static int g_ndragset;
 
 static void drag_set_build(unoui_window *dw)
 {
-    int a = -1, i, k, set[NAPPS], n;
+    int a = -1, i, k, set[APPS_MAX], n;
     g_ndragset = 0;
     if (!dw) return;
     for (i = 0; i < NAPPS; i++) if (&g_win[i] == dw) { a = i; break; }
@@ -5927,12 +5953,11 @@ int main(void)
     uno_seq_init();                     /* UnoSound: PC-speaker voice */
     uno_seq_backend(uno_pc64_snd_note, uno_pc64_snd_quiet);
     unoapp_setup(&g_dirty);             /* wire the legacy-app KernelApi */
-    g_studio_present = uno_mod_present("STUDIO.UNO");   /* IDE shipped here? */
-    g_photos_present = uno_mod_present("PHOTOS.UNO");   /* viewer shipped?   */
-    g_logview_present = uno_mod_present("LOGVIEW.UNO"); /* the log viewer?   */
-    g_uoword_present = uno_mod_present("UOWORD.UNO");   /* UnoWord shipped?  */
-    g_uocalc_present = uno_mod_present("UOCALC.UNO");   /* UnoCalc shipped?  */
-    g_uoshow_present = uno_mod_present("UOSHOW.UNO");   /* UnoShow shipped?  */
+    /* Build the app table.  This replaces six hand-written presence probes,
+     * and it does more than they did: a module that IS here also hands over
+     * its name, icon, category and rank, read straight off the disk without
+     * loading a byte of its code. */
+    app_registry_init();
     uno_font_set_subpixel(1);           /* subpixel AA for the outline faces  */
     /* Default to the bundled Chicago-style bitmap face (slot 0). It renders at
      * its native px with AA off (crisp 1:1 pixels). If its TTF can't be loaded
@@ -6145,18 +6170,13 @@ int main(void)
          * here would stop the clock ticking for as long as anything was
          * animating. A repaint is all an animation needs. */
         pc64_write_frame();             /* Editor caret blink / autoscroll */
-        if (g_studio && g_open[EX_STUDIO] && g_studio->frame)
-            g_studio->frame();          /* Studio caret blink / build pumps */
-        if (g_photos && g_open[EX_PHOTOS] && g_photos->frame)
-            g_photos->frame();          /* Photos: GIF animation pump */
-        if (g_logview && g_open[EX_LOGVIEW] && g_logview->frame)
-            g_logview->frame();         /* System Log: follow the tail  */
-        if (g_uoword && g_open[EX_UOWORD] && g_uoword->frame)
-            g_uoword->frame();          /* UnoWord: caret blink              */
-        if (g_uocalc && g_open[EX_UOCALC] && g_uocalc->frame)
-            g_uocalc->frame();          /* UnoCalc: per-frame tick           */
-        if (g_uoshow && g_open[EX_UOSHOW] && g_uoshow->frame)
-            g_uoshow->frame();          /* UnoShow: the transition clock     */
+        /* every OPEN module's per-frame hook: caret blinks, Studio's build
+         * pumps, the GIF clock, UnoShow's transitions, the log tail */
+        { int mi;
+          for (mi = 0; mi < NAPPS; mi++)
+              if (g_app[mi].kind == AK_UUIMOD && g_open[mi] &&
+                  g_app[mi].iface && g_app[mi].iface->frame)
+                  g_app[mi].iface->frame(); }
         if (g_pyapp && g_open[EX_PYAPP] && g_pyapp->frame)
             g_pyapp->frame();           /* the Python app's per-frame tick   */
         if (g_open[EX_USERAPP]) unoapp_user_tick();  /* the user's app clock */

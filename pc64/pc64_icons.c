@@ -103,6 +103,37 @@ static void seg(int x0, int y0, int x1, int y1, fb_px c)
 static void thick(int x0, int y0, int x1, int y1, int w, fb_px c)
 { int k; for (k = 0; k < w; k++) seg(x0 + k, y0, x1 + k, y1, c); }
 
+/* ---- emblems by NAME -------------------------------------------------------
+ * The table an app descriptor's `icon:` is looked up in.  Order does not matter
+ * and it is safe to append: a name this build does not know returns -1 and the
+ * caller keeps PCI_GENERIC, which is exactly what should happen when a module
+ * built against a later emblem set lands on an earlier system. */
+static const struct { const char *name; unsigned char id; } kIconNames[] = {
+    { "generic", PCI_GENERIC }, { "ctrl",    PCI_CTRL    },
+    { "edit",    PCI_EDIT    }, { "files",   PCI_FILES   },
+    { "sys",     PCI_SYS     }, { "clock",   PCI_CLOCK   },
+    { "setup",   PCI_SETUP   }, { "music",   PCI_MUSIC   },
+    { "dostris", PCI_DOSTRIS }, { "pacman",  PCI_PACMAN  },
+    { "outlast", PCI_OUTLAST }, { "tracker", PCI_TRACKER },
+    { "paint",   PCI_PAINT   }, { "network", PCI_NETWORK },
+    { "runner",  PCI_RUNNER  }, { "browser", PCI_BROWSER },
+    { "studio",  PCI_STUDIO  }, { "photos",  PCI_PHOTOS  },
+    { "uoword",  PCI_UOWORD  }, { "uocalc",  PCI_UOCALC  },
+    { "uoshow",  PCI_UOSHOW  }
+};
+
+int pc64_icon_by_name(const char *name)
+{
+    unsigned i;
+    if (!name || !*name) return -1;
+    for (i = 0; i < sizeof kIconNames / sizeof kIconNames[0]; i++) {
+        const char *a = name, *b = kIconNames[i].name;
+        while (*a && *a == *b) { a++; b++; }
+        if (!*a && !*b) return kIconNames[i].id;
+    }
+    return -1;
+}
+
 void pc64_icon_emblem(int icon, unoui_rect box)
 {
     int s  = (box.w < box.h ? box.w : box.h);

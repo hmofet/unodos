@@ -24,6 +24,12 @@ typedef enum {
     PCI_UOWORD, PCI_UOCALC, PCI_UOSHOW
 } pc64_icon_id;
 
+/* The emblem an app NAMES, resolved to its PCI_* id, or -1 if this build has
+ * no such emblem.  A module carries an icon name in its descriptor
+ * (uno_appdesc.h) rather than an id, because an id is this build's numbering
+ * and the module was built separately: names survive that, numbers do not. */
+int pc64_icon_by_name(const char *name);
+
 /* draw emblem `icon` (a PCI_*) to fit `box` (no label) - used by the taskbar */
 void pc64_icon_emblem(int icon, unoui_rect box);
 
