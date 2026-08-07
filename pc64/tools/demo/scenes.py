@@ -580,6 +580,7 @@ UOF_COMBO_DOCS = (300, 143)    # popup row 2: the DOCS volume (disk B; row 0
                                # RAM, row 1 NO NAME/ESP, row 2 DOCS)
 UOF_NAME = (300, 228)          # the File-name edit field
 UOCALC_A2 = (112, 201)         # grid cell A2 (holds =(1+2)*3)
+UOSHOW_TITLE = (320, 195)      # the deck's "Click to add title" placeholder
 
 
 def uof_open_row(d, row):
@@ -634,24 +635,29 @@ def s04_office(d):
     time.sleep(1.2)
     d.ctrl("w", settle=1.2)
 
-    d.beat("unoshow-open-small-ppt")
+    # UnoShow. The brief wants "open small.ppt in UnoShow briefly", but that
+    # cannot be driven in this build (two source bugs, both outside the demo
+    # lane, reported to their owners):
+    #   1. the native-FAT lister marks EVERY file as a directory
+    #      (uno_fat_list_ex returns >=0 for a file path), so the shared Open
+    #      dialog appends '\' to each entry and NEVER mirrors a filename into
+    #      the File-name field - clicking a row selects nothing openable;
+    #   2. UnoShow's dialog key-bridge (apps/uoshow.c) swallows Backspace
+    #      (uni 8 is neither a printable nor a mapped key), so the stale
+    #      "README.TXT" the field carries from the RAM volume can't be
+    #      cleared to type the real name either.
+    # The file itself is fine (uno.read returns 463 KB of valid CFB, and
+    # UnoShow reads .ppt <= 4 MB), so this is purely a driving/UI-plumbing
+    # gap. Degrade to a clean, honest beat: open UnoShow and author a titled
+    # slide so the app is shown doing something real, not a blank deck.
+    d.beat("unoshow-cannot-open-ppt-see-report")
     d.launch("uoshow", settle=3.0)
-    d.click(*UOF_MENU_FILE, settle=0.8)              # UnoShow's Ctrl+O label
-    d.click(*UOF_MENU_OPEN, settle=1.4)              # is decorative - click
-    d.click(*UOF_COMBO_ARROW, settle=0.8)            # Look-in ...
-    d.click(*UOF_COMBO_DOCS, settle=1.2)             # ... -> the DOCS volume
-    # The FAT lister marks every file as a directory (uno_fat_list_ex returns
-    # >=0 for a file path, so uofile.c appends '\' and never mirrors the name
-    # into the File-name field - a pc64_fs bug, reported separately). Clicking
-    # a row therefore can't select the file; instead TYPE the name into the
-    # File-name field (uof_name() reads that on OK), which the bug doesn't
-    # touch. UnoShow reads .ppt <= 4 MB (UOS_IOCAP), so small.ppt fits.
-    d.click(*UOF_NAME, settle=0.6)                   # focus the File-name field
-    for _ in range(16):
-        d.key(8, settle=0.03)                        # clear "README.TXT"
-    d.text("SMALL.PPT", settle=0.06)
-    d.click(*UOF_OPEN, settle=3.0)
-    time.sleep(2.0)
+    d.beat("author-a-titled-slide")
+    # first click selects the placeholder, a second on the SAME one enters
+    # text edit (apps/uoshow.c: hit==g_sel -> g_editing=1), then typing lands.
+    d.dblclick(*UOSHOW_TITLE, settle=0.8)            # "Click to add title"
+    d.text("UnoDOS runs UnoShow.", settle=0.06)
+    time.sleep(1.5)
     d.beat("close")
     d.ctrl("w", settle=1.0)
 
