@@ -8121,3 +8121,61 @@ there is no URC verb that READS a file back, so `tools/appreg_id_urc.py` has to
 pull `SHELL.CFG` off the raw disk image with mtools to check what the OS
 committed. A `get <vol> <path>` mirroring `put` would make on-disk assertions
 ordinary; the workaround is fine and this is not urgent.
+
+## 2026-08-07 - DONE: `harness.py unoapps` opens apps by ID, and now says when it is wrong
+
+Answers the app-registry lane's note 2. The scene is rewritten onto
+`apps list` + `launch <id>`; the `down` count is gone. Landed on `unoapps-by-id`.
+
+**The old scene had never been right and could never have said so.** It pressed
+`down` 7 + i times against a list of names frozen on 2026-07-19, so it shot
+UnoAmp as `uno_dostris`, Dostris as `uno_pacman`, OutLast as `uno_music` and
+Runner3D as `uno_network`, then exited 0. Worse than the four wrong shots:
+`music` and `network` had stopped being registered apps at all (pc64_music.c
+replaced the MUSIC.UNO bridge), and the scene could not notice, because an
+index is never invalid - it is only somebody else's app.
+
+What it does now:
+
+- Reads the roster over URC and opens **every** row by its own id, so the set
+  is the OS's, not a list here. This run: 25 rows, 23 shot as
+  `shots/uno_<id>.png`, 2 skipped, 0 failed.
+- **Asserts the shot matches its file name.** Every window is titled from the
+  same registry row `apps list` reports (`build_legacy()` assigns
+  `g_app[a].name`), so it compares the window this launch ADDED against that
+  name and refuses to keep a shot that does not match. That is the check the
+  keystroke count had no way to make.
+- Skips cleanly on `err no-app`: `userapp` and `pyapp` are host slots holding
+  whatever Studio or PYRT last built, and on a fresh boot there is nothing
+  there. Reported as skips, not failures.
+- It is a URC scene now, so it needs `UNO_DEBUG=1 ./build.sh`. That is the
+  trade: reading the roster means being able to ask.
+
+`pc64/MODULES.md` and `pc64/INPUT.md` are corrected (both described the
+keyboard version; MODULES.md already carried a warning about the drift).
+
+### Request to the toolkits lane: `close` cannot close a UI_WIN_BARE app window
+
+Found by the rewrite, and it is a shell defect rather than a harness one, so
+this is a request rather than a fix.
+
+`close` -> `close_focused()` (pc64_uui.c) returns early on `UI_WIN_BARE`, with
+the comment "never close desktop/taskbar". That rule now catches an app:
+UnoAmp's three windows are BARE because the Winamp skin draws its own chrome
+(`unoamp_ui.c:692`, `:1092`, `:1101`), so **nothing on the URC wire can dismiss
+the player** - it sat behind all fifteen shots after it in this run, which is
+why the report names it. `pc64_shell_close_top` is the only close verb, so
+there is no per-window way around it either.
+
+The narrow fix is to identify the two windows the rule is actually about
+(`g_desk`, `g_task`, which `close_focused` can test for by address, the way it
+already special-cases `g_launch` / `g_cal` / `g_pop`) instead of standing in for
+them with a flag that any skinned app may legitimately set. The harness does not
+stall on it meanwhile: it closes what closes, names what would not, and carries
+on.
+
+A second, smaller thing in the same file: `close_focused()` reaches a BARE app
+window through `remove_win()` rather than the app's own close path, so were the
+flag test relaxed alone, `unoamp_ui_show_eq/pl`'s `g_eq_open` / `g_pl_open`
+would stay 1 with the windows gone, and the next toggle would be inverted.
+`close_app()` -> `unoamp_ui_close()` is the path that gets this right.
