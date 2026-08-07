@@ -16,7 +16,7 @@
 
 /* uno_native_* stubs (qjs_port's clocks) */
 int uno_native_rtc_read(int *y, int *mo, int *d, int *h, int *mi, int *s)
-{ *y = 2026; *mo = 8; *d = 6; *h = 12; *mi = 0; *s = 0; return 0; }
+{ *y = 2026; *mo = 8; *d = 6; *h = 12; *mi = 0; *s = 0; return 1; }  /* 1 = OK */
 unsigned long long uno_native_rdtsc(void) { static unsigned long long t; return t += 1000; }
 unsigned long long uno_native_tsc_per_us(void) { return 0; }
 
@@ -190,6 +190,7 @@ int main(void)
      * unojs binding a second time under the label "quickjs" and report a
      * passing suite for a path that is not selected - the worst kind of
      * green. Restore the second pass in the same commit that unpins it. */
+    printf("MARKER: main entered\n"); fflush(0);
     suite(JS_ENGINE_UNOJS, "unojs");
     printf("\n%d pass, %d fail\n", g_pass, g_fail);
     return g_fail != 0;

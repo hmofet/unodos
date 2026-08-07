@@ -31,24 +31,12 @@ long qjs_lrint(double x);
 #define isfinite(x) __builtin_isfinite(x)
 #define signbit(x)  __builtin_signbit(x)
 
-/* unojs's double math (ujs_math.c). Declared here rather than via
- * unojs/ujs_int.h because that header is unojs-internal; the request to
- * bless these as a stable mini-libm surface is filed in
- * pc64/UNOAUTOMATE-REQUESTS.md. */
-double ujs_fabs(double x);
-double ujs_floor(double x);
-double ujs_ceil(double x);
-double ujs_fmod(double x, double y);
-double ujs_sqrt(double x);
-double ujs_exp(double x);
-double ujs_log(double x);
-double ujs_log10(double x);
-double ujs_pow(double x, double y);
-double ujs_sin(double x);
-double ujs_cos(double x);
-double ujs_tan(double x);
-double ujs_atan(double x);
-double ujs_atan2(double y, double x);
+/* unojs's double math. These used to be declared by hand right here, because
+ * the only declaration in the tree was in unojs-internal `ujs_int.h`. The
+ * unojs owner blessed the set as a public [STABLE] surface on 2026-08-06, so
+ * consume it: one declaration, and the hosted/freestanding split handled
+ * there rather than assumed here. */
+#include "ujs_math.h"
 
 /* the remainder, derived in qjs_port.c */
 double qjs_trunc(double x);

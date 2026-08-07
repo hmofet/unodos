@@ -243,7 +243,12 @@ static long long civil_days(int y, int m, int d)   /* Hinnant, m 1-12 */
 static long long rtc_epoch_s(void)
 {
     int y, mo, d, h, mi, s;
-    if (uno_native_rtc_read(&y, &mo, &d, &h, &mi, &s) != 0)
+    /* rtc_read returns 1 on SUCCESS (its only 0 is the UIP spin timing out),
+     * so this test used to be inverted: every machine with a working clock
+     * took the "dead CMOS" arm and Date was permanently at the epoch. Filed
+     * by the unolog lane 2026-08-06, alongside the same inversion in
+     * pc64_cache.c / pc64_cookie.c (fixed there in 3c8d5a86). */
+    if (!uno_native_rtc_read(&y, &mo, &d, &h, &mi, &s))
         return 0;                                    /* dead CMOS: epoch 0    */
     return civil_days(y, mo, d) * 86400ll + h * 3600ll + mi * 60ll + s;
 }
