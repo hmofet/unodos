@@ -14,7 +14,11 @@ void uno_native_delay_us(unsigned long us);
  * animation clock has to work in production. */
 unsigned long long uno_native_tsc_per_us(void);
 
-/* CMOS RTC */
+/* CMOS RTC.
+ * rtc_read returns 1 on SUCCESS and 0 only when the UIP spin times out (a dead
+ * or absent CMOS). Three callers wrote `if (rtc_read(...) != 0) give_up();` and
+ * so treated every working clock as dead: the browser response cache, the
+ * cookie jar (3c8d5a86) and quickjs's Date. Say it here so a fourth does not. */
 int uno_native_rtc_read(int *y, int *mo, int *d, int *h, int *mi, int *s);
 int uno_native_rtc_write(int y, int mo, int d, int h, int mi, int s);
 

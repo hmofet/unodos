@@ -183,6 +183,16 @@ static void log_raw(const char *s, int n)
     }
 }
 
+/* The system-log tap (unolog's request, 2026-08-06), on the weak-symbol seam
+ * this file already uses for the TCO watchdog: unolog.c defines the real one,
+ * and a link without unolog - the host harnesses - gets this no-op. The
+ * severity is unolog.h's LOG_DEBUG; it is spelled out rather than included so
+ * this file keeps consuming nothing from that lane but the one symbol. */
+void unolog_tap(int sev, const char *line);
+__attribute__((weak)) void unolog_tap(int sev, const char *line)
+{ (void)sev; (void)line; }
+#define UNO_DBGLOG_TAP_SEV 7            /* == LOG_DEBUG in unolog.h */
+
 void uno_dbg_log(const char *fmt, ...)
 {
     char line[256];
@@ -198,6 +208,25 @@ void uno_dbg_log(const char *fmt, ...)
     line[n++] = '\n'; line[n] = 0;
     log_raw(line, n);
     d_dbgcon(line);
+    /* ...and into the system log, if one is linked (unolog's request,
+     * 2026-08-06). There are ~96 uno_dbg_log call sites - NIC bring-up,
+     * i2c-hid enumeration, account layout - and every one is a sentence
+     * somebody reading a system log would want; they were invisible outside
+     * a debug build's BOOTLOG. Weak, per AGENTS.md §2, so this links green
+     * with or without unolog and needs no ordering between the two.
+     *
+     * Two deliberate details: the leading "[   12.345] " uptime stamp is
+     * skipped, because unolog stamps its own records and a doubled timestamp
+     * reads as a bug; and the trailing newline is dropped, because a log
+     * record is a line, not a line plus a terminator. */
+    {
+        char *body = line;
+        if (*body == '[') { while (*body && *body != ']') body++; if (*body) body++; }
+        while (*body == ' ') body++;
+        line[n - 1] = 0;                       /* n >= 1: we just wrote '\n' */
+        unolog_tap(UNO_DBGLOG_TAP_SEV, body);
+        line[n - 1] = '\n';
+    }
 }
 
 void uno_dbg_note(const char *fmt, ...)
