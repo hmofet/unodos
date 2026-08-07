@@ -81,11 +81,22 @@ typedef struct fnscope {
     u32       name_atom;
 } fnscope;
 
+/* Cap on recursive-descent nesting. The parser recurses through the C stack
+ * with no guard page on the UEFI target, so a pathologically nested but
+ * otherwise valid input (`((((...))))`, `[[[[...]]]]`, `!!!!...`) would
+ * overrun the native stack and reboot the machine with no diagnosis. The
+ * counter is bumped on entry to the three functions that carry the recursion
+ * - primary, assign_expr and unary - and tripped as a clean compile error well
+ * before the stack is in danger. Real code nests only a handful deep; 200 is
+ * far past anything a human writes and far short of the stack limit. */
+#define UJS_MAX_PARSE_DEPTH 200
+
 typedef struct {
     ujs_vm    *vm;
     ujs_lexer  lx;
     fnscope   *fn;
     int        haderr;
+    int        depth;               /* current recursive-descent nesting */
     char       err[192];
 } compiler;
 
@@ -97,6 +108,21 @@ static void cerr(compiler *c, const char *fmt, const char *a)
     if (a) snprintf(c->err, sizeof c->err, "%s '%s' (line %d)", fmt, a, c->lx.line);
     else   snprintf(c->err, sizeof c->err, "%s (line %d)", fmt, c->lx.line);
 }
+
+/* Recursive-descent depth guard. parse_enter() bumps the counter and, on the
+ * cap, raises a compile error and returns 1 so the caller bails immediately
+ * (leaving the counter unchanged); every successful enter pairs with a
+ * parse_leave(). See UJS_MAX_PARSE_DEPTH. */
+static int parse_enter(compiler *c)
+{
+    if (++c->depth > UJS_MAX_PARSE_DEPTH) {
+        c->depth--;
+        cerr(c, "expression nested too deeply", NULL);
+        return 1;
+    }
+    return 0;
+}
+static void parse_leave(compiler *c) { if (c->depth > 0) c->depth--; }
 
 /* ---- emit ---------------------------------------------------------------- */
 static void emit(compiler *c, u8 b)
@@ -449,7 +475,16 @@ static int looks_like_arrow(compiler *c)
     return res;
 }
 
+static void primary_body(compiler *c);
 static void primary(compiler *c)
+{
+    if (c->haderr) return;
+    if (parse_enter(c)) return;
+    primary_body(c);
+    parse_leave(c);
+}
+
+static void primary_body(compiler *c)
 {
     if (c->haderr) return;
     switch (c->lx.tok) {
@@ -666,7 +701,16 @@ static void postfix(compiler *c)
 }
 
 /* ---- unary / binary ladder ----------------------------------------------- */
+static void unary_body(compiler *c);
 static void unary(compiler *c)
+{
+    if (c->haderr) return;
+    if (parse_enter(c)) return;
+    unary_body(c);
+    parse_leave(c);
+}
+
+static void unary_body(compiler *c)
 {
     if (c->haderr) return;
     switch (c->lx.tok) {
@@ -803,7 +847,16 @@ static void conditional(compiler *c)
  * left side. Rather than build an AST, remember where the left side's code
  * began and what its last instruction was: a GETLOC/GETGLOB/GETPROP/GETIDX is
  * a valid target and is rewritten into the matching store. */
+static void assign_expr_body(compiler *c);
 static void assign_expr(compiler *c)
+{
+    if (c->haderr) return;
+    if (parse_enter(c)) return;
+    assign_expr_body(c);
+    parse_leave(c);
+}
+
+static void assign_expr_body(compiler *c)
 {
     fnscope *f = c->fn;
     u32 start = f->nbc;
