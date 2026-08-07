@@ -13,8 +13,12 @@
 #include "../quickjs.h"
 
 /* ---- uno_native_* stubs: a frozen clock ---------------------------------- */
+/* 1 = read OK. This returned 0 while qjs_port.c's rtc_epoch_s treated non-zero
+ * as the failure, so stub and caller were wrong in the same direction and the
+ * date checks passed over a clock that was never actually read. Correcting the
+ * caller made this stub fail them, which is the gate doing its job. */
 int uno_native_rtc_read(int *y, int *mo, int *d, int *h, int *mi, int *s)
-{ *y = 2026; *mo = 8; *d = 5; *h = 12; *mi = 0; *s = 0; return 0; }
+{ *y = 2026; *mo = 8; *d = 5; *h = 12; *mi = 0; *s = 0; return 1; }
 unsigned long long uno_native_rdtsc(void) { static unsigned long long t; return t += 1000; }
 unsigned long long uno_native_tsc_per_us(void) { return 0; }   /* RTC fallback path */
 
