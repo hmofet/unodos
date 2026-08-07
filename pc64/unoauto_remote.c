@@ -9,6 +9,7 @@
 #include "unoauto.h"
 #include "unoauto_remote.h"
 #include "unoauto_gate.h"   /* the privilege gate: who may run which verb */
+#include "unosecure.h"      /* enter/leave the link's REMOTE session for `py` */
 #include "net.h"            /* u8/u16, net_tcp_*, net_poll */
 #include "netsock.h"        /* multi-connection socket API (own link socket) */
 #include "netdisc.h"        /* zero-config discovery: auto-dial the found host */
@@ -26,6 +27,7 @@ void        *memmove(void *, const void *, unsigned long);
 unsigned long strlen(const char *);
 void  uno_pc64_inject_key(int scan, int uni, int ctrl);
 void  uno_pc64_inject_pointer(int x, int y, int btn);
+int   uno_pc64_input_locked(void);   /* a security dialog is modal at the console */
 int   pc64_shell_app_count(void);
 int   pc64_shell_launch(int a);
 int   pc64_shell_app_by_id(const char *id);      /* the registry: id -> slot   */
@@ -120,6 +122,15 @@ static unsigned g_tx_dropped;
  * the 8 KB TCP rxq. */
 static char     g_rx[4096];
 static int      g_rxlen;
+
+/* Auth attempts are capped per drain_rx pass (item 1c): drain_rx dispatches
+ * every newline-delimited line in one socket read, so without a cap an attacker
+ * could pipeline hundreds of `auth` guesses into a single window.  The gate's
+ * three-strike lockout (BADAUTH_MAX) already stands the channel down, but this
+ * is a cheap belt-and-braces bound so the pipeline is throttled at the source
+ * even before the gate reacts. */
+#define AUTH_PER_DRAIN_MAX 4
+static int      g_auth_in_drain;
 
 /* inbound MSG queue handed to Python via unoauto_remote_recv */
 #define INQN 8
@@ -773,6 +784,7 @@ __attribute__((weak)) int uno_hw_wdt_cmd(const char *line, char *out, int cap)
 /* session token echoed at `guard` arm; `safe` must present it (a stale disarm
  * from a prior session must not stand a fresh guard down). Cheap, not secret. */
 static unsigned g_guard_token;
+static int      g_guard_token_minted;   /* a token has been issued -> `safe` needs it */
 
 /* execute `verb args...` (id echoed on every RSP). args is the remainder. */
 /* ---- screen grab (remote desktop, OUT half) ------------------------------ */
@@ -863,6 +875,17 @@ static void do_screen(const char *id, char *args)
 {
     char *sub = tok(&args);
     int w = 0, h = 0;
+    /* A security dialog is modal at the console.  `screen` is OBSERVE and so
+     * passes the gate (the input-lock there only refuses DRIVE), but a screen
+     * grab while a login / consent / accounts sheet is up captures exactly the
+     * credentials being typed into it.  Mirror the DRIVE refusal for the
+     * data-bearing subcommands (grab / read / record); `info` is only geometry,
+     * so it stays available for a client that is just polling the link. */
+    if (sub && uno_pc64_input_locked() &&
+        (!strcmp_(sub, "grab") || !strcmp_(sub, "read") || !strcmp_(sub, "record"))) {
+        rsp(id, "err", "refused (a security dialog is open at the console)");
+        rsp(id, "end", 0); return;
+    }
     if (!sub || !strcmp_(sub, "info")) {          /* `screen` / `screen info` */
         char t[48]; SB b;
         uno_screen_size(&w, &h);
@@ -937,6 +960,11 @@ static void do_auth(const char *id, char *args)
     if (!unoauto_gate_needs_auth()) {
         rsp(id, "ok", "open (debug build - no auth required)");
         rsp(id, "end", 0); return;
+    }
+    /* Throttle: at most AUTH_PER_DRAIN_MAX guesses are even evaluated per socket
+     * read, so a pipelined burst cannot outrun the gate's lockout (item 1c). */
+    if (++g_auth_in_drain > AUTH_PER_DRAIN_MAX) {
+        rsp(id, "err", "auth failed"); rsp(id, "end", 0); return;
     }
     if (unoauto_gate_auth(tokv ? tokv : "")) {
         char t[96]; SB b; unsigned p = unoauto_gate_powers();
@@ -1160,6 +1188,7 @@ static void dispatch_cmd(const char *id, char *verb, char *args)
         }
         g_guard_token = g_guard_token * 1664525u + 1013904223u
                         + (unsigned)uno_dbg_uptime_ms();
+        g_guard_token_minted = 1;               /* `safe` now requires this token */
         uno_dbg_guard_arm((unsigned)secs * 1000u);
         {
             char t[64]; SB b; sb_init(&b, t, sizeof t);
@@ -1177,17 +1206,27 @@ static void dispatch_cmd(const char *id, char *verb, char *args)
         rsp(id, "ok", uno_dbg_guard_armed() ? "petted" : "not-armed");
         rsp(id, "end", 0); return;
     }
-    /* safe [token] - disarm; the guarded op returned, stand down. If a token is
-     * given it must match the one from `guard` (prevents a stale disarm from a
-     * previous session clearing a fresh guard). */
+    /* safe [token] - disarm; the guarded op returned, stand down. Once a token
+     * has been minted by `guard`, `safe` MUST present it: a tokenless disarm
+     * used to clear any live guard, so a stale (or hostile) `safe` from another
+     * session could stand a fresh guard down. Require the match whenever a token
+     * exists; only a guard that never issued one accepts a bare `safe`. */
     if (!strcmp_(verb, "safe")) {
         char *a = tok(&args);
-        if (a && (unsigned)atol_(a) != g_guard_token) {
-            rsp(id, "err", "bad-token"); rsp(id, "end", 0); return;
+        if (g_guard_token_minted) {
+            if (!a) { rsp(id, "err", "token-required"); rsp(id, "end", 0); return; }
+            if ((unsigned)atol_(a) != g_guard_token) {
+                rsp(id, "err", "bad-token"); rsp(id, "end", 0); return;
+            }
         }
         uno_dbg_guard_clear();
         rsp(id, "ok", "disarmed"); rsp(id, "end", 0); return;
     }
+#ifdef UNO_DEBUG
+    /* nst and disc are pure self-test verbs (netsock / discovery harnesses driven
+     * by tools/*.py). They have no place in a shipped image, so they compile out
+     * entirely in production - and their GATE rows are #ifdef'd out too, so even
+     * naming one on a production link is refused as unknown rather than reachable. */
     /* nst <p1> <p2> - netsock self-test (debug): prove the multi-connection
      * layer. Open TWO simultaneous outbound TCP connections (to 10.0.2.2:p1 and
      * :p2), plus a LISTEN socket on 9099 that accepts one inbound connection
@@ -1243,12 +1282,22 @@ static void dispatch_cmd(const char *id, char *verb, char *args)
         sb_init(&b, t, sizeof t); sb_s(&b, "link=");       sb_i(&b, g_state);            t[b.len]=0; rsp(id,"ok",t);
         rsp(id, "end", 0); return;
     }
+#endif /* UNO_DEBUG - nst / disc */
     if (!strcmp_(verb, "test")) {
         do_test(id, tok(&args)); return;
     }
     if (!strcmp_(verb, "py")) {
+        /* Run under the link's REMOTE-trust session, not whatever INTERACTIVE
+         * session the shell has bound.  pc64_shell_py_exec binds no identity of
+         * its own, so without this the remote `py` would execute as the console
+         * user - REMOTE-trust restrictions and the arming user's uid are what
+         * should apply to code that arrived over the wire.  Enter the link
+         * session around the call; leave restores the prior binding. */
+        usec_session_t ls = unoauto_gate_link_session();
+        int entered = (ls != 0) && unosec_enter_session(ls);
         int rc = pc64_shell_py_exec(args ? args : "", g_report, (int)sizeof g_report);
         char *p = g_report;
+        if (entered) unosec_leave();
         while (*p) {                              /* stream captured output */
             char *nl = p; while (*nl && *nl != '\n') nl++;
             { char save = *nl; *nl = 0; rsp(id, rc == 0 ? "ok" : "err", p); *nl = save; }
@@ -1419,6 +1468,7 @@ static void drain_rx(void)
 {
     unsigned char buf[512];
     int n, i;
+    g_auth_in_drain = 0;                 /* fresh auth budget per pass (item 1c) */
     while ((n = g_tp->recv(buf, (int)sizeof buf)) > 0) {
         for (i = 0; i < n; i++) {
             char c = (char)buf[i];
@@ -1512,8 +1562,14 @@ void unoauto_remote_boot(void)
             g_tp = &TP_TCP_LISTEN;
             if (g_sink < 0)
                 g_sink = unoauto_sink_add((1u << UA_CH_COUNT) - 1, remote_sink, 0);
-            netdisc_listen(5099);          /* answer scans, so the client can find us */
-            unoauto_log(UA_CH_SCRIPT, "remote: armed, listening on :5099");
+            /* Deliberately NOT netdisc_listen() here (item 2).  Auto-advertising
+             * on the LAN whenever the box is armed lets any unauthenticated
+             * scanner enumerate it and its listen port.  The operator already has
+             * the address AND the PIN off the Remote Control panel, so discovery
+             * buys nothing in production and only widens the pre-auth surface -
+             * the responder is opt-in via the explicit `listen` DEBUG.CFG path
+             * (a dev/debug choice), off by default on a shipped machine. */
+            unoauto_log(UA_CH_SCRIPT, "remote: armed, listening on :5099 (discovery off)");
             start_connect();
         }
         return;
