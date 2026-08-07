@@ -5,8 +5,10 @@ transport, and the legacy PC platform a kernel talks to before it can drive
 anything else. The hypervisor itself is `pc64/UNOVIRT.md`; this file is what
 sits on the far side of a decoded guest access.
 
-**Status: [implemented]** for the console transport (A5) and the legacy
-platform an Ubuntu kernel needs to reach a shell (A6). One guest, one queue.
+**Status: [implemented]** for the console transport (A5), the legacy platform
+an Ubuntu kernel needs to reach a shell (A6), and **virtio-blk over a disk
+image file (A7a)** - a guest mounts an ext4 filesystem out of
+`EFI\UNODOS\VM\ROOTFS.IMG` and reads files from it. virtio-net is next.
 
 ## The seam, and why it is this narrow
 
@@ -88,14 +90,52 @@ first two ports at the divisor latch; unmodelled, a driver setting its baud
 rate puts one byte on the console and the other **over the interrupt-enable
 register** (S-HV-40).
 
+## What a REAL driver demanded that a test guest never did
+
+A5's device answered a guest we wrote. A7 put a Linux driver on the other end,
+and it found four things wrong that no test could have.
+
+**A version-2 transport must offer VIRTIO_F_VERSION_1 and mean it.** Offering
+no features at all is honest for a device nobody drives and fatal for one that
+is: the driver writes FEATURES_OK, reads the status back, and refuses the
+device if the bit did not stick.
+
+**Queue 0 is receive and queue 1 is transmit, and conflating them is an
+interrupt storm.** A console driver's first act is to hand the device a pile of
+empty RECEIVE buffers. Completing one means "here is your input" - so a device
+that completes them all immediately, with zero bytes, tells the driver it has
+input forever. It refills, the device completes, the line never drops, and the
+guest does nothing else ever again. It stalled the boot exactly where the
+console driver initialises. A receive buffer with nothing to put in it is
+**held**, which is what real hardware does.
+
+**A block read fills descriptors the DEVICE writes.** A5's chain walk flattened
+a chain into a byte buffer, which is all a console-out queue needs; a block
+request is a readable 16-byte header, then data segments whose direction is
+carried in the descriptor flags, then a writable status byte. The walk returns
+segments now, and the status byte is found by POSITION (last), because that is
+what the spec fixes and a device that scans for it will one day pick a data
+buffer.
+
+**Short reads pad with zeroes, never with what was already there.** Whatever
+was in that buffer came from the guest, and handing it back as disk contents is
+a disclosure dressed up as a read.
+
 ## What is deliberately not here
 
 - **No PCI.** Linux takes its mmio transports from the command line
   (`virtio_mmio.device=`), so a whole host bridge and its config space are
   avoidable. A Windows appliance cannot work this way and is a separate phase.
-- **No second queue and no second device.** One console queue is what A5 and
-  A6 need; blk and net are A7, and they are what the bounds seam was written
-  for.
+- **No writes to the disk.** Both unofs and the native FAT driver read from an
+  offset and write only WHOLE FILES, so one 512-byte sector write would mean
+  rewriting a multi-megabyte image. `VIRTIO_BLK_F_RO` is offered so the guest
+  knows before it tries - which turns a confusing error deep inside a
+  filesystem into `mount: read-only`, and a read-only rootfs under a tmpfs
+  overlay is the ordinary shape for an appliance anyway. A write-at-offset
+  primitive is filed with the unofs lane.
+- **No virtio-net yet.** It is the other half of A7 and crosses into the
+  `uno_nic_t` seam, where one MAC has to carry both the guest's traffic and
+  the host's (UNOVIRT-PLAN R3).
 - **No interrupt for the transport.** `R_INTR_STATUS` is maintained but the
   guest is never interrupted by the virtio device: its console is the 8250
   today. That changes when virtio-console becomes the real console.

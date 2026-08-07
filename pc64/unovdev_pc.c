@@ -265,8 +265,17 @@ static int uart_irq_level(void);                 /* below, needs U          */
 static void pic_refresh(void)
 {
     u8 irr = 0;
+    int i;
     if (pit0_irq_pending())  irr |= 1u << 0;
     if (uart_irq_level())    irr |= 1u << 4;
+    /* The virtio transports, which live in unovdev.c and are told their line
+     * on the guest's own command line (`...@0xd0000000:5`). Their level is a
+     * level in the same sense the UART's received-data is: it stays up until
+     * the driver writes InterruptACK, so a driver that returns from its
+     * handler without acknowledging is interrupted again - which is what the
+     * register is for and what a real device does. */
+    for (i = 5; i <= 7; i++)
+        if (uno_vdev_mmio_irq_level(i)) irr |= (u8)(1u << i);
     PICM.irr = irr;
 }
 

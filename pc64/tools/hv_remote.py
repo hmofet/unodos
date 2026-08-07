@@ -40,6 +40,18 @@ lets the QEMU timeout bound the run instead.  The tell, in hindsight: the
 guest's exits were nearly all preemption-timer exits, which means busy rather
 than stuck.
 
+THE "OCCASIONAL EMPTY CAPTURE" HAD A CAUSE, and it was not flakiness: a run
+that is killed by its timeout can leave qemu-system-x86_64 ALIVE, and the next
+run's QEMU then shares `-debugcon file:/tmp/hv.log` with it.  Two processes
+writing one file from their own offsets is a log that looks empty, truncated
+or interleaved at random.  Five of them had accumulated before this was
+noticed.  The run now kills stragglers before it starts, and it matches on the
+process NAME rather than with `pkill -f`: this whole script arrives as the
+remote shell's own command line and mentions qemu-system-x86_64 further down,
+so a full-command-line match kills the run itself before it starts - silently,
+with no output to explain where it went.  (The usual `[q]emu` bracket trick
+does not save you either, for the same reason.)
+
     UNO_DEBUG=1 UNO_DETACH=1 UNO_DBGCON=1 ./build.sh
     cp build/bzImage  build/esp/EFI/UNODOS/VM/BZIMAGE
     cp build/initrd.gz build/esp/EFI/UNODOS/VM/INITRD
@@ -53,13 +65,35 @@ os.chdir(HERE)
 IMG = "build/unodos-uefi.img"
 REMOTE_IMG = "/tmp/unodos-uefi.img"
 
-RUN = r"""cd /tmp && cp /usr/share/OVMF/OVMF_VARS_4M.fd hv_vars.fd &&
+RUN = r"""# WAIT for the stragglers to go, do not guess.  A fixed `sleep 1` after the
+# kill left runs failing in alternation: QEMU holds a write lock on the image
+# and the debugcon log, a killed one takes a moment to release them, and the
+# next run then either starts cleanly or starts against a locked image
+# depending on timing.  Polling for the condition is both faster and certain.
+pkill qemu-system 2>/dev/null
+for i in $(seq 1 40); do
+  pgrep qemu-system >/dev/null 2>&1 || break
+  sleep 0.25
+done
+pkill -9 qemu-system 2>/dev/null; sleep 1
+cd /tmp && cp /usr/share/OVMF/OVMF_VARS_4M.fd hv_vars.fd &&
 timeout {t} qemu-system-x86_64 -machine q35 -m 4096 -cpu host -enable-kvm \
   -drive if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE_4M.fd \
   -drive if=pflash,format=raw,file=hv_vars.fd \
   -drive format=raw,file={img} \
   -device qemu-xhci -device usb-tablet -nic none -display none \
-  -debugcon file:/tmp/hv.log -global isa-debugcon.iobase=0x402 >/dev/null 2>&1
+  -debugcon file:/tmp/hv.log -global isa-debugcon.iobase=0x402 \
+  >/dev/null 2>/tmp/hv_qemu.err
+rc=$?
+# QEMU's own stderr used to go to /dev/null, which hid the one failure this
+# harness actually suffers: a straggler still holding the image's write lock,
+# so the new QEMU exits INSTANTLY and every section below prints nothing.
+# That reads exactly like a guest which produced no output.  `timeout` reports
+# 124 when it did its job, and anything else here is worth seeing.
+if [ $rc -ne 124 ] && [ $rc -ne 0 ]; then
+  echo "--- qemu exited $rc immediately ---"
+  head -3 /tmp/hv_qemu.err
+fi
 echo '--- trace ---'
 grep 'hv\]' /tmp/hv.log | head -40 || echo '(no hv trace: is vm-selftest set, and near the TOP of DEBUG.CFG?)'
 echo '--- verdict ---'
@@ -96,11 +130,25 @@ def shot(host):
 
 def main():
     host = sys.argv[1] if len(sys.argv) > 1 else "devbuntu.local"
+    # How long the guest gets, in seconds of WALL time - of which it sees a
+    # slice per frame, so a couple of minutes of wall is a couple of seconds
+    # of guest. Every device added since A6 costs the guest more of its own
+    # boot, and a run that ends mid-command reads exactly like a hang.
+    secs = 90
+    for a in sys.argv[2:]:
+        if a.startswith("--time="):
+            secs = int(a.split("=", 1)[1])
     if not os.path.exists(IMG):
         sys.exit("no %s - build with UNO_DEBUG=1 UNO_DETACH=1 UNO_DBGCON=1, "
                  "then tools/mkuefi.py" % IMG)
+    # The WHOLE image, not the first few megabytes.  DEBUG.CFG's position in
+    # the FAT depends on what else is staged, and once the appliance payload
+    # (a 17 MB kernel, an initramfs, a disk image) went in beside it, it moved
+    # past a 4 MB window and this check started crying wolf on a perfectly
+    # armed image - which is worse than not checking, because the warning
+    # sends you looking at the wrong thing.
     with open(IMG, "rb") as f:
-        head = f.read(4 * 1024 * 1024)
+        head = f.read()
     if b"vm-selftest" not in head:
         print("warning: no `vm-selftest` found near the start of the image; "
               "the selftest will stay opt-out")
@@ -108,8 +156,19 @@ def main():
     print("copying %s to %s ..." % (IMG, host))
     if subprocess.run(["scp", "-q", IMG, "%s:%s" % (host, REMOTE_IMG)]).returncode:
         sys.exit("scp failed")
-    r = subprocess.run(["ssh", "-o", "BatchMode=yes", host,
-                        RUN.format(t=90, img=REMOTE_IMG)],
+    # THE SCRIPT GOES OVER AS A FILE, not as an ssh argument.  Passed inline
+    # it is one argument containing newlines, line continuations and a `pkill`,
+    # and the combination started failing with ssh exit 255 and no output at
+    # all on either stream - the least diagnosable failure available.  A file
+    # is also what you want when debugging: it can be run by hand, or with
+    # `bash -x`, exactly as the harness runs it.
+    script = "/tmp/hv_run.sh"
+    with open("build/hv_run.sh", "w", newline="\n") as f:
+        f.write(RUN.format(t=secs, img=REMOTE_IMG))
+    if subprocess.run(["scp", "-q", "build/hv_run.sh",
+                       "%s:%s" % (host, script)]).returncode:
+        sys.exit("scp of the run script failed")
+    r = subprocess.run(["ssh", "-o", "BatchMode=yes", host, "bash " + script],
                        capture_output=True, text=True)
     print(r.stdout)
     if r.stderr.strip():

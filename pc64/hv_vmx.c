@@ -1123,11 +1123,23 @@ static int decode_mov(const u8 *ins, int *reg, unsigned *size, int *is_store)
 
 /* The guest's register file, addressed the way an instruction encoding does.
  * RSP is index 4 and lives in the VMCS rather than the context, which is the
- * one hole a table like this always has. */
+ * one hole a table like this always has.
+ *
+ * THIS TABLE HAD RSI AND RDI THE WRONG WAY ROUND, and it is worth saying how
+ * that surfaced. Encoding 6 is RSI and 7 is RDI; `uno_gprs` declares rsi then
+ * rdi at slots 4 and 5. The table sent each to the other's slot, so an MMIO
+ * access through either register carried the OTHER one's value - and nothing
+ * noticed for two phases, because A5's guest was hand-written to use rax/rbx/
+ * rcx/rdx and Linux's port I/O goes through rax. It took a real driver: the
+ * virtio-mmio driver writes its status byte from ESI, so every status write
+ * arrived as an unrelated 0x04ef0000, the status register read back as zero,
+ * and the driver reported `device refuses features: 0` - a conclusion about
+ * FEATURES that had nothing to do with features. A wrong register file is
+ * invisible until something uses the register you got wrong. */
 static u64 *gpr(int n)
 {
     u64 *c = (u64 *)&g_ctx;
-    static const int map[16] = { 0, 2, 3, 1, -1, 6, 5, 4,
+    static const int map[16] = { 0, 2, 3, 1, -1, 6, 4, 5,
                                  7, 8, 9, 10, 11, 12, 13, 14 };
     /* rax rcx rdx rbx rsp rbp rsi rdi r8..r15 -> uno_gprs order */
     if (n < 0 || n > 15 || map[n] < 0) return 0;
@@ -1184,12 +1196,20 @@ static int mmio_service(void)
  *   0A: 48 B9 <cells>  mov rcx, 0x100000
  *   14: 8B 03          mov eax, [rbx]        ; MagicValue  -> a load exit
  *   16: 89 01          mov [rcx], eax
- *   18: 31 C0          xor eax, eax
- *   1A: 89 43 50       mov [rbx+0x50], eax   ; QueueNotify -> a store exit
- *   1D: 48 BA <used>   mov rdx, 0x202000
- *   27: 8B 42 02       mov eax, [rdx+2]      ; used.idx, written by the device
- *   2A: 89 41 04       mov [rcx+4], eax
- *   2D: F4             hlt
+ *   18: B8 01000000    mov eax, 1            ; QUEUE 1, THE TRANSMIT QUEUE
+ *   1D: 89 43 50       mov [rbx+0x50], eax   ; QueueNotify -> a store exit
+ *   20: 48 BA <used>   mov rdx, 0x202000
+ *   2A: 8B 42 02       mov eax, [rdx+2]      ; used.idx, written by the device
+ *   2D: 89 41 04       mov [rcx+4], eax
+ *   30: F4             hlt
+ *
+ * IT USED TO RING QUEUE 0, and that was a latent disagreement with the spec
+ * rather than a bug anyone could see: A5's device had one queue and obliged.
+ * A virtio console's queue 0 is RECEIVE and queue 1 is TRANSMIT, and once the
+ * device learned the difference - which it had to, because a real driver's
+ * first act is to post receive buffers - this guest was ringing the queue
+ * that has nothing to send.  The test was right about the mechanism and wrong
+ * about the number.
  */
 #define GP_VQ_DESC  0x200000
 #define GP_VQ_AVAIL 0x201000
@@ -1209,13 +1229,14 @@ static int a5_emit(void)
     for (i = 0; i < 8; i++) p[0x0C + i] = (u8)((u64)GP_CELLS >> (8 * i));
     p[0x14] = 0x8B; p[0x15] = 0x03;
     p[0x16] = 0x89; p[0x17] = 0x01;
-    p[0x18] = 0x31; p[0x19] = 0xC0;
-    p[0x1A] = 0x89; p[0x1B] = 0x43; p[0x1C] = 0x50;
-    p[0x1D] = 0x48; p[0x1E] = 0xBA;
-    for (i = 0; i < 8; i++) p[0x1F + i] = (u8)((u64)GP_VQ_USED >> (8 * i));
-    p[0x27] = 0x8B; p[0x28] = 0x42; p[0x29] = 0x02;
-    p[0x2A] = 0x89; p[0x2B] = 0x41; p[0x2C] = 0x04;
-    p[0x2D] = 0xF4;
+    p[0x18] = 0xB8;                              /* mov eax, 1 (queue 1)     */
+    p[0x19] = 0x01; p[0x1A] = 0; p[0x1B] = 0; p[0x1C] = 0;
+    p[0x1D] = 0x89; p[0x1E] = 0x43; p[0x1F] = 0x50;
+    p[0x20] = 0x48; p[0x21] = 0xBA;
+    for (i = 0; i < 8; i++) p[0x22 + i] = (u8)((u64)GP_VQ_USED >> (8 * i));
+    p[0x2A] = 0x8B; p[0x2B] = 0x42; p[0x2C] = 0x02;
+    p[0x2D] = 0x89; p[0x2E] = 0x41; p[0x2F] = 0x04;
+    p[0x30] = 0xF4;
     return 1;
 }
 
@@ -1344,9 +1365,18 @@ static int vmx_virtio(uno_vm_virtio *out)
 #define CR4_VMXE           (1ull << 13)
 #define VM_EXIT_INTR_INFO  0x4404
 #define VM_EXIT_INTR_ERROR 0x4406
+/* THE COMMAND LINE IS HOW THE GUEST LEARNS ITS DEVICES, and that is the whole
+ * reason there is no PCI host bridge here: Linux takes virtio-mmio transports
+ * from `virtio_mmio.device=<size>@<base>:<irq>`, so a bus, its config space
+ * and its enumeration are all replaced by a string. The addresses match
+ * unovdev.c's VDEV_BASE and stride, and the IRQs match the PIC lines it
+ * asserts - three numbers that have to agree across two files, which is why
+ * they are named in both. */
 #define L_CMDLINE_TEXT \
     "earlyprintk=serial,ttyS0,115200 console=ttyS0 nolapic no_timer_check " \
-    "panic=-1 nokaslr lpj=4000000 rdinit=/bin/sh"
+    "panic=-1 nokaslr lpj=4000000 rdinit=/bin/sh " \
+    "virtio_mmio.device=0x200@0xd0000000:5 " \
+    "virtio_mmio.device=0x200@0xd0000200:6"
 
 static int g_lin_lines;
 static unsigned g_lin_lastport;
@@ -1354,6 +1384,7 @@ static int g_lin_running;
 static int g_lin_halted;         /* parked on a hlt, waiting for a line     */
 static int g_lin_mark;
 static int g_lin_injects, g_lin_lastvec = -1;
+static int g_lin_vdump;          /* the virtio probe is dumped once         */
 static u32 g_lin_proc;           /* the primary controls, already adjusted  */
 
 
@@ -1742,8 +1773,24 @@ static int vmx_linux(uno_vm_linux *out)
 
     /* Something for the shell to read the moment it asks. Without it the
      * first read is end-of-file and the shell exits before printing. */
+    /* A7: the mount is the claim. `cat` of a file on /dev/vda can only
+     * succeed if the guest drove the transport, negotiated features, walked a
+     * descriptor chain the DEVICE filled, took the interrupt that said so,
+     * and found a filesystem in what came back - out of an ordinary file on
+     * an ordinary UnoDOS volume. */
+    /* devtmpfs FIRST, and it is not a detail: this initramfs carries exactly
+     * one device node, `/dev/console`, because that is the one the kernel
+     * opens before init runs (A6c). Nothing populates /dev afterwards - there
+     * is no udev here - so a perfectly working disk has no node to open, and
+     * the shell reports the same "No such file or directory" for a missing
+     * node as for a missing filesystem. Mounting devtmpfs is the kernel
+     * offering the nodes it already knows about. */
     uno_vdev_serial_seed("\necho UNODOS-GUEST-SHELL-OK\nuname -a\n"
-                         "busybox ls /bin\n");
+                         "busybox ls /bin\n"
+                         "mount -t devtmpfs dev /dev\n"
+                         "busybox mkdir -p /mnt\n"
+                         "mount -t ext4 -o ro /dev/vda /mnt\n"
+                         "cat /mnt/HELLO\n");
     g_lin_running = 1;
     g_lin_halted = 0;
     out->lines = 0;
@@ -1956,9 +2003,17 @@ static int vmx_linux_slice(unsigned budget_us, uno_vm_linux *out)
             g_lin_halted = 1;
             break;
         }
+        /* A guest that stops EARLY is otherwise invisible here: the periodic
+         * trace below fires every 16384 exits, so a kernel that dies in its
+         * first dozen says nothing at all and reads as a kernel that never
+         * ran. The stop is the one event always worth a line. */
         g_lin_running = 0;
         out->stop_reason = (unsigned)ex.raw;
         out->stop_rip = ex.rip;
+        tracex("[lin] STOPPED, exit=", ex.raw);
+        tracex("[lin]   at rip=", ex.rip);
+        tracex("[lin]   after exits=", (u64)out->exits);
+        tracex("[lin]   qual=", vmread(EXIT_QUALIFICATION));
         break;
     }
     out->lines = g_lin_lines;
@@ -1986,6 +2041,19 @@ static int vmx_linux_slice(unsigned budget_us, uno_vm_linux *out)
          * shadow was found); and the port ring is the LOOP rather than the
          * instant, which is what separates "spinning on a register" from
          * "servicing an interrupt that reaches it". */
+        /* The virtio register traffic, dumped once: it is the driver's whole
+         * probe, and a driver reports its conclusion rather than what it
+         * saw. dev<<45 | write<<44 | off<<32 | value. */
+        {   /* Streamed from a cursor rather than dumped once. Dumping once
+             * at the first of these fires long before the driver probes, and
+             * shows the previous phase's traffic instead - which is exactly
+             * the wrong answer delivered confidently. */
+            u64 v;
+            while ((v = uno_vdev_dbg_entry(g_lin_vdump)) != 0) {
+                g_lin_vdump++;
+                tracex("[lin]   vdev=", v);
+            }
+        }
         tracex("[lin] exits=", (u64)out->exits);
         tracex("[lin]   lines=", (u64)out->lines);
         tracex("[lin]   ports=", ring);

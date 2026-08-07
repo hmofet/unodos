@@ -4,9 +4,10 @@ The appliance machinery: can this machine host a guest, and later, the guest
 itself. The programme and its phases are `docs/UNOVIRT-PLAN.md`; this file is
 the API surface, its changelog, and the things a consumer has to know.
 
-**Status: A0 through A6 [implemented on VMX]. A1 [unproved on SVM].** A real
-Ubuntu kernel boots under UnoDOS, reaches userspace, and **its shell reads a
-command and answers** - which is A6's exit criterion. The
+**Status: A0 through A6 [implemented on VMX]. A7a [virtio-blk: the guest
+mounts a disk]. A1 [unproved on SVM].** A real Ubuntu kernel boots under
+UnoDOS, reaches userspace, **its shell reads a command and answers**, and it
+**mounts an ext4 filesystem served from a file on a UnoDOS volume**. The
 capability gate runs on every boot. The foothold is real on Intel: on devbuntu
 (bare metal, nested KVM) UnoDOS enters VMX operation, runs a guest, takes it
 through a CPUID intercept, reads its marker back out of guest memory, and then
@@ -647,6 +648,91 @@ beside `vm-selftest`**. `tools/hv_remote.py`
 carries the recipe in its docstring and now prints the guest's own output and
 line count, so the next person reads the answer instead of ssh-ing for it.
 
+## A7a: a disk, and the bug only a real driver could find
+
+    ~ # mount -t devtmpfs dev /dev
+    ~ # mount -t ext4 -o ro /dev/vda /mnt
+    EXT4-fs (vda): mounted filesystem ba1e8a88-... ro without journal
+    ~ # cat /mnt/HELLO
+    UNODOS-GUEST-DISK-OK
+
+**The guest mounted a filesystem out of an ordinary file on a UnoDOS volume.**
+`EFI\UNODOS\VM\ROOTFS.IMG` is read through `uno_fs_read_at`, served as
+virtio-blk, and Linux found an ext4 superblock in it, mounted it, and read a
+file back. Every layer is under test at once: the transport, the feature
+negotiation, a descriptor chain the DEVICE fills, the interrupt that announces
+it, and the FAT read path underneath.
+
+It is **read-only**, and that is the layer below rather than a choice: unofs
+and the native FAT driver both read from an offset and write only whole files,
+so one sector write would rewrite the whole image. `VIRTIO_BLK_F_RO` is offered
+so the guest knows before it tries.
+
+### The bug: RSI and RDI were swapped in the instruction decoder
+
+`gpr()` maps an x86 register encoding onto our saved register file, and it had
+encodings 6 and 7 - RSI and RDI - pointing at each other's slots. Every MMIO
+access through either register therefore carried the OTHER one's value.
+
+**It had been wrong since A5 and nothing noticed**, because nothing had used
+those registers: A5's guest is hand-written and uses rax/rbx/rcx/rdx, and
+Linux's port I/O goes through rax. It took a real driver. virtio-mmio writes
+its status byte from ESI, so every status write arrived as an unrelated
+`0x04ef0000`, the status register read back as zero, and the driver reported
+`device refuses features: 0` - a conclusion about FEATURES that had nothing
+whatever to do with features.
+
+**A wrong register file is invisible until something uses the register you got
+wrong**, and the report you get names the wrong subsystem. What found it was
+recording the register TRAFFIC - which register, which way, what value - and
+reading the driver's side of the conversation instead of its conclusion. The
+driver's half was perfect throughout: it read the magic, the version and the
+device id, selected both feature halves, and accepted `VIRTIO_F_VERSION_1`.
+Only the writes were nonsense, and only from one register.
+
+### And one that was not our bug at all
+
+`/dev/vda` did not exist even after the driver created it, because this
+initramfs carries exactly one device node - `/dev/console`, added in A6c
+because the kernel opens it before init runs. Nothing populates `/dev`
+afterwards; there is no udev here. `mount -t devtmpfs dev /dev` is the kernel
+offering the nodes it already knows about. The shell reports the same "No such
+file or directory" for a missing node as for a missing filesystem, so the
+message pointed at the disk rather than at `/dev`.
+
+### The harness cost more than the phase did
+
+Four separate things, none of them about virtualization, each of which
+produced a run that looked like a guest failure:
+
+- **The "occasional empty capture" had a cause and was never flakiness.** A run
+  killed by its timeout can leave QEMU alive, holding a write lock on the image
+  and on `/tmp/hv.log`; the next run then shares the log with it, or fails to
+  start at all. Five had accumulated. The run now waits for stragglers to go
+  rather than sleeping a fixed second and hoping.
+- **QEMU's stderr went to `/dev/null`**, so a QEMU that exited instantly on a
+  locked image printed nothing and read exactly like a guest that said nothing.
+- **`pkill -f qemu-system-x86_64` matched the run script itself**, because the
+  whole script arrives as the remote shell's command line and names QEMU
+  further down. The run killed itself before it started - silently, ssh exit
+  255, nothing on either stream. Matching the process NAME fixes it; the usual
+  `[q]emu` bracket trick does not.
+- **The image check scanned the first 4 MB.** Once a 17 MB kernel and a disk
+  image were staged beside `DEBUG.CFG`, it moved past that window and the
+  harness started warning that a perfectly armed image was not armed - worse
+  than not checking, because the warning sends you looking at the wrong thing.
+
+The script is shipped to the box as a FILE now, which sidesteps the argument
+quoting entirely and can be run by hand or under `bash -x` exactly as the
+harness runs it. `tools/vm_stage.py` stages the payload and arms DEBUG.CFG in
+one step, because the five hand-run commands it replaces are each silent when
+skipped.
+
+**One last trap worth the line it costs:** the console sink only emits a line
+when it sees a newline, so a marker file written without a trailing newline is
+read correctly, delivered correctly, and never appears. It looked like a hang
+in the read path.
+
 ### What is left
 
 - **A real console, not a seeded one.** Input still comes from a string
@@ -661,6 +747,12 @@ line count, so the next person reads the answer instead of ssh-ing for it.
 
 ## Changelog
 
+- **2026-08-07, API 1.** A7a: virtio-blk over `EFI\\UNODOS\\VM\\ROOTFS.IMG`, read-only (the
+  layer below writes whole files only). The transport went from one device
+  with one queue to several with two, the chain walk returns SEGMENTS with
+  their direction, and the console learned that queue 0 is receive. Found a
+  decoder bug latent since A5: **RSI and RDI were swapped in `gpr()`**,
+  invisible until a real driver used them. Contracts S-HV-41..45.
 - **2026-08-07, API 1.** A6e, and **A6 is met**: an 8259 pair, IRQ0 from the
   PIT and IRQ4 from the UART, injected through `VM_ENTRY_INTR_INFO` with
   interrupt-window exiting so delivery is prompt by construction. The guest
