@@ -54,8 +54,14 @@ typedef struct {
     void  *alloc_user;
 
     /* Hard ceiling on the document arena in bytes; 0 = the default (16 MB).
-     * Hitting it stops the parse and flags uw_doc_truncated(), rather than
-     * growing without bound on a hostile or runaway page. */
+     * Hitting it flags uw_doc_truncated() rather than growing without bound on
+     * a hostile or runaway page.
+     *
+     * Read the note on uw_doc_truncated before sizing this: the arena holds
+     * far more than the tree, the parse is the CHEAPEST of the four phases
+     * that draw on it, and what it needs tracks the ELEMENT COUNT rather than
+     * the byte count. Measured through the whole pipeline: a 4,000-element
+     * page parses inside 1 MB and needs 16 MB to paint. */
     size_t arena_max;
 
     /* Maximum open-element depth; 0 = the default (256). Deeply nested markup
@@ -68,7 +74,22 @@ typedef struct {
 uw_doc *uw_doc_new(const uw_config *cfg);
 void    uw_doc_free(uw_doc *d);
 
-/* 1 if the arena ceiling or a depth limit cut the document short. */
+/* 1 if the arena ceiling or a depth limit cut the document short.
+ *
+ * NOT a parse-time property, whatever the name suggests, and this cost a filed
+ * request to discover: FOUR phases draw on the arena - parse, style, layout
+ * and paint - and the flag is set by whichever one exhausts it. Style, layout
+ * boxes and the display list together spend far more than the parse, so the
+ * common shape is a document that parses clean, reports 0 here, and is then
+ * cut short later. **Check it again after uw_paint(), not only after
+ * uw_parse_string().**
+ *
+ * The arena never frees, so exhaustion is terminal: everything after the first
+ * failed allocation fails too. What that means for a consumer is that a
+ * truncated document is not "slightly short" - the phases after the wall
+ * produce nothing at all. uw_paint reserves its first block up front precisely
+ * so that a document which runs dry still paints the TOP of the page rather
+ * than an empty screen; expect a short display list, and say so in your UI. */
 int     uw_doc_truncated(uw_doc *d);
 size_t  uw_doc_used(uw_doc *d);
 

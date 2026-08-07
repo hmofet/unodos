@@ -1030,6 +1030,40 @@ int main(int argc, char **argv)
         /* reaching here without a crash IS the assertion */
     }
 
+    /* ---- an exhausted arena still paints the TOP of the page ------------
+     * The arena never frees, so exhaustion is terminal and whichever phase
+     * hits the wall takes the rest with it. Paint is last, so paint was what
+     * got lost: a page one element over the limit drew NOTHING while the same
+     * page one element under drew in full (UNOAUTOMATE-REQUESTS 2026-08-06).
+     * uw_paint_reserve takes the display list's first block at construction,
+     * before the tree can spend the arena, so the beginning of the document
+     * always has somewhere to go. Deliberately a starved arena: 256 KB against
+     * a page that needs megabytes. */
+    if (want("arena-exhausted-paints-something")) {
+        char src[64000];
+        uw_config cfg;
+        uw_metrics m;
+        uw_doc *d;
+        int at = 0, i, n;
+        at += sprintf(src + at, "<html><body><h1>top of the page</h1>");
+        for (i = 0; i < 1200; i++)
+            at += sprintf(src + at, "<p>paragraph %04d</p>", i);
+        sprintf(src + at, "</body></html>");
+        memset(&cfg, 0, sizeof cfg); cfg.arena_max = 256u << 10; cfg.max_depth = 96;
+        run++;
+        d = uw_parse_string(src, -1, &cfg);
+        memset(&m, 0, sizeof m); m.text_width = fake_width; m.line_height = fake_lineh;
+        uw_style_document(d, 800, 600);
+        uw_layout(d, 800, 600, &m);
+        n = uw_paint(d);
+        if (!uw_doc_truncated(d)) {
+            printf("  FAIL arena-exhausted (256 KB was not actually exhausted)\n"); fails++;
+        } else if (n <= 0) {
+            printf("  FAIL arena-exhausted (painted %d commands, want > 0)\n", n); fails++;
+        }
+        uw_doc_free(d);
+    }
+
     printf("%s: %d checks, %d failures\n", fails ? "FAIL" : "PASS", run, fails);
     return fails ? 1 : 0;
 }

@@ -33,7 +33,11 @@ void *uw_arena(uw_doc *d, size_t n)
     {   size_t want = n + sizeof(uw_chunk);
         size_t cap = want > UW_CHUNK_MIN ? want : UW_CHUNK_MIN;
         uw_chunk *nc;
-        if (d->used + cap > d->max) { d->truncated = 1; return NULL; }
+        /* soft_max is the PARSE's share of the arena (see uw_parse_begin): the
+         * tree must not be allowed to spend everything, because style, layout
+         * and paint each need more than it does and the arena never frees. */
+        {   size_t lim = (d->soft_max && d->soft_max < d->max) ? d->soft_max : d->max;
+            if (d->used + cap > lim) { d->truncated = 1; return NULL; } }
         nc = (uw_chunk *)raw_alloc(d, cap);
         if (!nc) { d->truncated = 1; return NULL; }
         nc->cap = cap - sizeof(uw_chunk);
@@ -182,6 +186,7 @@ uw_doc *uw_doc_new(const uw_config *cfg)
     d->max_depth = c.max_depth ? c.max_depth : 256;
     d->document = uw_node_new(d, UW_NODE_DOCUMENT);
     if (!d->document) { uw_doc_free(d); return NULL; }
+    uw_paint_reserve(d);             /* before the tree can eat the arena */
     return d;
 }
 

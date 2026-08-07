@@ -673,6 +673,22 @@ uw_parser *uw_parse_begin(uw_doc *d, const uw_hooks *hooks)
     p->d = d;
     p->in_head_only = 1;
     if (hooks) { p->hooks = *hooks; p->have_hooks = 1; }
+    /* The parse gets HALF the arena, and uw_parse_end gives the rest back.
+     *
+     * Without this the tree could spend everything, and because the arena never
+     * frees, that is terminal: style, layout and paint then allocate nothing at
+     * all and the page renders BLANK - worse than the same page rendered short
+     * (UNOAUTOMATE-REQUESTS 2026-08-06, "an exhausted arena draws NOTHING, not
+     * less"). Truncating the parse instead means fewer elements, all of which
+     * are styled, laid out and painted.
+     *
+     * Half is deliberately generous to the later phases, and it costs nothing
+     * on a document that fits: the parse is by far the CHEAPEST phase - 4,000
+     * elements parse inside 1 MB and need 16 MB to paint, i.e. the tree is
+     * about 6% of the pipeline's peak - so a document whose parse alone wants
+     * more than half the arena was never going to render under the old rule
+     * either. It would have parsed, then drawn nothing. */
+    if (!d->soft_max) d->soft_max = d->max / 2;
     return p;
 }
 
@@ -754,8 +770,16 @@ int uw_parse_end(uw_parser *p)
     if (!p) return -1;
     d = p->d;
     rc = run(p, 1);
-    /* a document always has html/head/body, even if the source had none */
-    if (!d->truncated) ensure_body(p);
+    /* Hand the parse's reserved half back: everything from here - the cascade,
+     * the box tree, the display list - draws on the full arena. */
+    d->soft_max = 0;
+    /* A document always has html/head/body, even if the source had none. This
+     * used to be skipped on a truncated parse, which turned "some of the page"
+     * into "none of it": uw_layout starts at uw_body() and returns -1 without
+     * one, so a document that ran out of room mid-parse had no body, no boxes
+     * and nothing to paint. It is a handful of nodes and the half-arena above
+     * is there to pay for them. */
+    ensure_body(p);
     if (p->open) { if (d->cfg.free) d->cfg.free(d->cfg.alloc_user, p->open); else free(p->open); }
     if (p->buf)  { if (d->cfg.free) d->cfg.free(d->cfg.alloc_user, p->buf);  else free(p->buf); }
     if (d->cfg.free) d->cfg.free(d->cfg.alloc_user, p); else free(p);
