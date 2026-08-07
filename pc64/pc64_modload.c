@@ -768,6 +768,7 @@ int uno_mod_desc_read(int vol, const char *path, UnoAppDesc *out)
     if (!out->shortnm[0])                /* `short:` defaults to `name:`      */
         d_setstr(out->shortnm, sizeof out->shortnm, out->name,
                  (int)sizeof out->name);
+    out->has_desc = 1;
     return 0;
 }
 

@@ -342,7 +342,7 @@ static int  vm_canvas_index(void) { return 0; }
 /* what the shell shows for this app, carried in the module (uno_appdesc.h) */
 UNO_APP_DESC("id: vmgr\n"
              "name: Appliances\n"
-             "icon: sys\n"
+             "icon: file:VMGR.QOI\n"
              "cat: system\n"
              "rank: 60\n"
              "min: 560x380\n");
