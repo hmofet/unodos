@@ -46,7 +46,7 @@ static unoui_rect g_btn[B_N];
  * counters is not worth it. */
 static char *u2s(unsigned long v, char *out)
 {
-    char tmp[12];
+    char tmp[24];   /* up to 20 digits for a 64-bit unsigned long, + slack */
     int t = 0, i = 0;
     if (!v) { out[0] = '0'; out[1] = 0; return out; }
     while (v) { tmp[t++] = (char)('0' + v % 10); v /= 10; }
