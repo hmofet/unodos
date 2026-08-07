@@ -1711,6 +1711,10 @@ static int vmx_linux(uno_vm_linux *out)
     vmwrite(GUEST_RFLAGS, 0x2);              /* interrupts off, as required  */
     g_ctx.rsi = L_ZEROPG;                    /* THE zero page, in RSI        */
 
+    /* Something for the shell to read the moment it asks. Without it the
+     * first read is end-of-file and the shell exits before printing. */
+    uno_vdev_serial_seed("\necho UNODOS-GUEST-SHELL-OK\nuname -a\n"
+                         "busybox ls /bin\n");
     g_lin_running = 1;
     out->lines = 0;
     out->last = g_lin_last;

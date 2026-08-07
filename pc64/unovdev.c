@@ -290,7 +290,41 @@ static int pit_io(unsigned port, int is_write, unsigned long long *val)
 }
 
 #define COM1 0x3F8
-static struct { char line[160]; int n; int chars; } U;
+static struct { char line[160]; int n; int chars; u8 mcr, ier; } U;
+
+/* ---- the receive half, without which a console is a closed one -----------
+ * A shell whose stdin never delivers a byte exits, and the exit code says so:
+ * "Attempted to kill init! exitcode=0x00000000" is a shell that reached
+ * end-of-file. Output alone was enough to watch a kernel boot and is not
+ * enough to hold a shell open.
+ *
+ * The seed is queued and handed over on the first poll that finds the FIFO
+ * empty - which is the shell asking, since nothing else polls. That is the
+ * same shape Glide's first virtio console had ("input is queued BEFORE the
+ * guest runs... a working console, not a finished one"), and the honest
+ * version is the same too: real keystrokes come from the frame loop, which
+ * already owns the keyboard. */
+static struct { u8 buf[512]; int head, tail; const char *seed; } RX;
+
+static int rx_empty(void) { return RX.head == RX.tail; }
+
+void uno_vdev_serial_push(int c)
+{
+    int nxt = (RX.tail + 1) % (int)sizeof RX.buf;
+    if (nxt == RX.head) return;                  /* full: drop, do not wrap  */
+    RX.buf[RX.tail] = (u8)c;
+    RX.tail = nxt;
+}
+
+void uno_vdev_serial_seed(const char *s) { RX.seed = s; }
+
+static void rx_feed_seed(void)
+{
+    const char *s = RX.seed;
+    if (!s) return;
+    RX.seed = 0;
+    while (*s) uno_vdev_serial_push(*s++);
+}
 
 int uno_vdev_pio(unsigned port, int is_write, unsigned size,
                  unsigned long long *val, void (*sink)(const char *))
@@ -306,6 +340,8 @@ int uno_vdev_pio(unsigned port, int is_write, unsigned size,
         return 1;
     }
     if (is_write) {
+        if (port == COM1 + 4) U.mcr = (u8)(*val & 0xFF);
+        if (port == COM1 + 1) U.ier = (u8)(*val & 0xFF);
         if (port == COM1) {
             char c = (char)(*val & 0xFF);
             U.chars++;
@@ -320,9 +356,34 @@ int uno_vdev_pio(unsigned port, int is_write, unsigned size,
         return 1;
     }
     switch (port) {
-    case COM1 + 5: *val = 0x60; break;   /* LSR: holding + shift both empty */
+    case COM1 + 0:                       /* RBR: the byte itself            */
+        if (rx_empty()) { *val = 0; break; }
+        *val = RX.buf[RX.head];
+        RX.head = (RX.head + 1) % (int)sizeof RX.buf;
+        break;
+    case COM1 + 5:
+        /* LSR. Bit 0 is data-ready and it is the whole difference: a driver
+         * only reads RBR when this says there is something there. */
+        if (rx_empty()) rx_feed_seed();
+        *val = 0x60 | (rx_empty() ? 0u : 1u);
+        break;
     case COM1 + 2: *val = 0x01; break;   /* IIR: no interrupt pending       */
-    case COM1 + 6: *val = 0xB0; break;   /* MSR: carrier, DSR, CTS          */
+    case COM1 + 6:
+        /* MSR, WITH LOOPBACK. The 8250 driver's autoconfig writes MCR with
+         * LOOP set and checks that the modem inputs follow the outputs; a
+         * port that answers a constant fails that test and is registered as
+         * hardware the driver will not really drive. Reflecting the four bits
+         * is the whole of what it wants. */
+        if (U.mcr & 0x10)
+            *val = (unsigned)(((U.mcr & 0x01) << 5)   /* DTR  -> DSR        */
+                            | ((U.mcr & 0x02) << 3)   /* RTS  -> CTS        */
+                            | ((U.mcr & 0x04) << 4)   /* OUT1 -> RI         */
+                            | ((U.mcr & 0x08) << 4)); /* OUT2 -> DCD        */
+        else
+            *val = 0xB0;                 /* carrier, DSR, CTS               */
+        break;
+    case COM1 + 1: *val = U.ier; break;  /* IER, read back as written       */
+    case COM1 + 4: *val = U.mcr; break;
     default:       *val = 0x00; break;
     }
     return 1;

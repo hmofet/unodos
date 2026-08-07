@@ -21,6 +21,11 @@ void uno_vdev_reset(void);
 int uno_vdev_pio(unsigned port, int is_write, unsigned size,
                  unsigned long long *val, void (*sink)(const char *));
 int uno_vdev_serial_chars(void);
+
+/* The receive half: push a byte the guest will read from COM1, or queue a
+ * string handed over on the first poll that finds the FIFO empty. */
+void uno_vdev_serial_push(int c);
+void uno_vdev_serial_seed(const char *s);
 unsigned long long uno_vdev_base(void);
 
 /* Place a queue's rings on the guest's behalf (A5's guest is eighteen
