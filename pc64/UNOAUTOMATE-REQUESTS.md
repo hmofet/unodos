@@ -8067,3 +8067,57 @@ Two capabilities requested, both additive, detail in §9 of the plan:
 Nothing is implemented yet, and nothing in the plan asks the unovirt lane for
 anything. If the toolkits lane would rather have the twelve edits for VMGR now
 and the registry later, that is a fine answer and the two do not conflict.
+
+## 2026-08-07 - DONE: the app registry, and `APPS\VMGR.UNO` is a real desktop app
+
+Answers the VMGR desktop-slot request and its correction, by the generic route
+rather than the twelve edits. Landed as five commits on `app-registry`; rationale
+and the retrospective in `docs/APP-REGISTRY-PLAN.md`, the contract app authors
+need in `pc64/MODULES.md`.
+
+**The request's own words are the acceptance test, and they pass.** VMGR now has
+a desktop icon, a Start-menu row, a taskbar chip and a window, and nothing was
+written for it: the shell reads the descriptor inside the file. It is also
+runnable from Files now - `pc64_shell_run_user()` gained the missing third
+branch for `UNO_MODF_UUI`, which is the hole the correction identified.
+
+What landed, in the order it matters:
+
+- **A `.UNO` carries its own launcher metadata** in a `.unodesc` block that
+  `UnoModHdr.desc_rva` points at - the header word formerly called `rsv`, so an
+  older kernel loads a new module unchanged. Reading it is TWO SECTOR READS and
+  executes nothing, which is the constraint the whole format is shaped around:
+  the arena is 4 MB and never frees, so enumerating by loading was never
+  available at any price.
+- **One registry, one dispatch path.** The seven `g_photos->` sites became one
+  apiece. That was not tidying: LOGVIEW was missing from the `action` and `key`
+  lists and had the void-function `return` bug in `canvas_index` when this
+  started, which is the same shape as the UnoWord keyboard bug from 2026-08-03.
+- **`SHELL.CFG` v3 keys per-app state by ID.** v2 keyed it by slot index, which
+  becomes a corruption bug the moment apps are discovered: install one app that
+  sorts early and every later app restores into its neighbour's geometry. v2
+  files migrate once through a frozen map, verified end to end.
+- **URC: `apps list`, `launch <id>`, `rescan`.** Rows appended to `REMOTE.md`
+  and to `GATE[]` in the same commit as the verb, per AGENTS.md §2 - `rescan`
+  is DRIVE, since it changes the app set rather than the view.
+
+**Two notes for the unoautomate lane specifically.**
+
+1. `launch <n>` is now a foot-gun and the docs say so. The app set depends on
+   what is installed, so an index is this boot's ordering; a script that
+   launches `apps - 1` does not FAIL when an app appears, it drives a different
+   app. `launch <id>` is the fix. `tools/urcui.py` gains `apps()`,
+   `launch_id()` and `rescan()`.
+2. **`harness.py unoapps` is off by one, on master, today** - it opens UnoAmp
+   for `dostris`, Dostris for `pacman`, and Runner3D for `network`. Found by
+   running it against master and this branch side by side while proving the
+   registry changed nothing; both produce the identical wrong screenshots. Not
+   fixed here because it is your scene and the fix is a rewrite onto
+   `launch <id>` rather than a nudge to the `down` count. The same drift is what
+   the pc64 manual's scenes have.
+
+Also filed as an observation rather than a request: `screen`/`put` exist but
+there is no URC verb that READS a file back, so `tools/appreg_id_urc.py` has to
+pull `SHELL.CFG` off the raw disk image with mtools to check what the OS
+committed. A `get <vol> <path>` mirroring `put` would make on-disk assertions
+ordinary; the workaround is fine and this is not urgent.
