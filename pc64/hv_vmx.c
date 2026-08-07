@@ -1371,12 +1371,20 @@ static int vmx_virtio(uno_vm_virtio *out)
  * and its enumeration are all replaced by a string. The addresses match
  * unovdev.c's VDEV_BASE and stride, and the IRQs match the PIC lines it
  * asserts - three numbers that have to agree across two files, which is why
- * they are named in both. */
+ * they are named in both.
+ *
+ * THE CONSOLE AT 0xd0000000 IS DELIBERATELY NOT LISTED. It exists for A5,
+ * which proved the transport with it, and this guest's console is ttyS0 -
+ * telling Linux about a second one gives it a device to drive that nobody
+ * wants driven, and it does not sit quietly: its driver posts a ring full of
+ * receive buffers and rings the doorbell for each, which is harmless in
+ * itself and drowns out everything else. A device a guest has no use for is
+ * a liability, not a spare. */
 #define L_CMDLINE_TEXT \
     "earlyprintk=serial,ttyS0,115200 console=ttyS0 nolapic no_timer_check " \
     "panic=-1 nokaslr lpj=4000000 rdinit=/bin/sh " \
-    "virtio_mmio.device=0x200@0xd0000000:5 " \
-    "virtio_mmio.device=0x200@0xd0000200:6"
+    "virtio_mmio.device=0x200@0xd0000200:6 " \
+    "virtio_mmio.device=0x200@0xd0000400:7"
 
 static int g_lin_lines;
 static unsigned g_lin_lastport;
@@ -1385,6 +1393,7 @@ static int g_lin_halted;         /* parked on a hlt, waiting for a line     */
 static int g_lin_mark;
 static int g_lin_injects, g_lin_lastvec = -1;
 static int g_lin_vdump;          /* the virtio probe is dumped once         */
+static u64 g_lin_netstats = ~0ull;
 static u32 g_lin_proc;           /* the primary controls, already adjusted  */
 
 
@@ -1785,12 +1794,23 @@ static int vmx_linux(uno_vm_linux *out)
      * the shell reports the same "No such file or directory" for a missing
      * node as for a missing filesystem. Mounting devtmpfs is the kernel
      * offering the nodes it already knows about. */
+    /* The network half is proved by a PING, and a ping is a strong claim
+     * here: the request left the guest through the transmit queue, reached
+     * the peer, and the reply came back through a receive buffer the guest
+     * had posted and an interrupt it took. Static addressing rather than
+     * DHCP, because udhcpc wants a script this initramfs does not carry -
+     * and the address is not what is being tested, the datapath is. */
     uno_vdev_serial_seed("\necho UNODOS-GUEST-SHELL-OK\nuname -a\n"
                          "busybox ls /bin\n"
                          "mount -t devtmpfs dev /dev\n"
                          "busybox mkdir -p /mnt\n"
                          "mount -t ext4 -o ro /dev/vda /mnt\n"
-                         "cat /mnt/HELLO\n");
+                         "cat /mnt/HELLO\n"
+                         "busybox ip link set eth0 up\n"
+                         "busybox ip addr add 10.77.0.2/24 dev eth0\n"
+                         "busybox ip link show\n"
+                         "busybox ping -c 2 -W 1 10.77.0.1\n"
+                         "busybox ip -s link show eth0\n");
     g_lin_running = 1;
     g_lin_halted = 0;
     out->lines = 0;
@@ -2016,6 +2036,14 @@ static int vmx_linux_slice(unsigned budget_us, uno_vm_linux *out)
         tracex("[lin]   qual=", vmread(EXIT_QUALIFICATION));
         break;
     }
+    /* On CHANGE rather than on a schedule. The periodic trace below fires
+     * every 16384 exits, which is a fine cadence for "is it still going" and
+     * useless for "did the first packet ever arrive" - the sample that
+     * matters can easily land before the guest gets to the command. Once per
+     * slice, and only when something moved. */
+    {   u64 ns = uno_vdev_net_stats();
+        if (ns != g_lin_netstats) { g_lin_netstats = ns; tracex("[lin] net!=", ns); }
+    }
     out->lines = g_lin_lines;
     out->last = g_lin_last;
     out->chars = uno_vdev_serial_chars();
@@ -2058,6 +2086,7 @@ static int vmx_linux_slice(unsigned budget_us, uno_vm_linux *out)
         tracex("[lin]   lines=", (u64)out->lines);
         tracex("[lin]   ports=", ring);
         tracex("[lin]   picstate=", uno_vdev_pic_state());
+        tracex("[lin]   net=", uno_vdev_net_stats());
         tracex("[lin]   injects=", (u64)g_lin_injects);
         tracex("[lin]   rip=", vmread(GUEST_RIP));
     }

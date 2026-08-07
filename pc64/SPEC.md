@@ -1839,6 +1839,20 @@ faults on the first instruction that assumes it.
 - **S-HV-45** [auto] A short read MUST pad with zeroes, never leave the
   buffer's previous contents. Whatever was there came from the guest, and
   returning it as disk contents is a disclosure dressed as a read.
+- **S-HV-46** [auto] A doorbell on a RECEIVE queue means "buffers are
+  available", not "here is work". A transport that consumes every available
+  chain when the doorbell rings destroys the buffers the device will need:
+  the guest posted 64 receive buffers, all 64 were swallowed on arrival, and
+  the first frame the device had to deliver was dropped for want of one. Such
+  queues MUST be left alone and pulled from when there is data.
+- **S-HV-47** [auto] A virtio-net frame carries a 12-byte header in BOTH
+  directions. Under `VIRTIO_F_VERSION_1` it is always the 12-byte v1 form,
+  even without buffer merging, and a wrong length shifts every frame - which
+  presents as a peer talking nonsense rather than as a header problem.
+- **S-HV-48** [auto] A frame with no receive buffer to put it in MUST be
+  DROPPED and counted, never queued indefinitely. That is what real hardware
+  does when a driver has not kept its ring fed, and it keeps the device's
+  progress independent of the guest's housekeeping.
 - **S-HV-11** [assert] The probe MUST count only free conventional memory
   (`EfiConventionalMemory` / E820 type 1). Counting firmware-reserved or
   boot-services ranges would overstate a machine sitting on the floor, which
