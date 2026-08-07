@@ -22,9 +22,11 @@ this script produced on 2026-08-06:
     [hv] vmentry rip=0000000142d31000   exit reason=2   (triple fault, the crasher)
     selftest: vmx: entered, guest round trip -> 534f444f4e55 OK, crasher contained
 
-It needs the image to carry `vm-selftest` in the FIRST 512 bytes of
-DEBUG.CFG - the config reader truncates there and says nothing (reported in
-pc64/UNOAUTOMATE-REQUESTS.md), so this script checks rather than trusting it.
+It needs the image to carry `vm-selftest` in DEBUG.CFG, so this script checks
+rather than trusting it.  (Until 2026-08-02 the parse window was 511 bytes
+while the shipped header alone was longer, so a key appended to the end was
+silently ignored - the harness lane reads the whole file now and says so when
+it does not fit.  Putting keys at the top is still the habit worth keeping.)
 
 IT ALSO NEEDS `noshutdown`, AND THAT ONE COST A WHOLE INVESTIGATION.  The
 shipped DEBUG.CFG carries `passes=3`, which means the stress driver finishes
@@ -34,7 +36,9 @@ time is roughly a tenth of a second of guest CPU: the kernel is still
 decompressing itself when the lights go out.  The symptom is a single line of
 guest output and a kernel that looks wedged, which is indistinguishable from
 a real hang and was chased as one.  `noshutdown` leaves the desktop up and
-lets the QEMU timeout bound the run instead.
+lets the QEMU timeout bound the run instead.  The tell, in hindsight: the
+guest's exits were nearly all preemption-timer exits, which means busy rather
+than stuck.
 
     UNO_DEBUG=1 UNO_DETACH=1 UNO_DBGCON=1 ./build.sh
     cp build/bzImage  build/esp/EFI/UNODOS/VM/BZIMAGE
