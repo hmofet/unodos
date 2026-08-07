@@ -8260,3 +8260,9 @@ REMOTE.md. If unoautomate later grows a real registration table for verbs,
 `stream` is a one-line migration - nothing else of unoautomate's was touched
 (the 512 B/tick TX pump in particular is bypassed, not modified: the stream
 rides its own netsock socket).
+
+**CLAIM 2026-08-07 (debug-harness lane):** taking `nohud` - a DEBUG.CFG flag that
+suppresses the red perf HUD (and the stress status line under it) in UNO_DEBUG
+builds, so a debug stick can be filmed; touches `uno_debug`'s existing
+`uno_dbg_hud_toggle()`, `pc64/DEBUG.md`, and one additive append in the
+`#ifdef UNO_DEBUG` render path of `pc64_uui.c`.
