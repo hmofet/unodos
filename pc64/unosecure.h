@@ -190,10 +190,12 @@ void unosec_set_consent_provider(unosec_consent_fn fn, void *ctx);
  *     name: <script name>\n
  *     caps: <comma-separated cap names>\n
  *     key:  <trusted key id>\n
- *     sig:  <hex HMAC-SHA256 over the canonical body above, sans the sig line>\n
- * The trust store maps key id -> a 32-byte secret.  (HMAC keeps the crypto self
- * -contained; an ECDSA trust store - bearssl br_ecdsa_* - is a drop-in for the
- * verify step and the on-disk key, see UNOSECURE.md.) */
+ *     sig:  <hex ed25519 signature over the canonical body above, sans sig>\n
+ * The trust store maps key id -> a 32-byte ed25519 PUBLIC key.  Verification is
+ * ASYMMETRIC: the signing secret never lives on the machine, so read access to
+ * UNOSEC.DB no longer lets an attacker forge a manifest (it used to be a
+ * symmetric HMAC whose key was stored right here).  `key` below is that public
+ * key. */
 int  unosec_trust_add_key(const char *key_id, const unsigned char key[32]);
 
 /* Verify `manifest` against the trust store and, if valid AND the caller's
