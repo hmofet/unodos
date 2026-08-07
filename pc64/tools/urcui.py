@@ -145,6 +145,40 @@ class UrcUi(object):
         self.link.command("launch", index, timeout=15)
         time.sleep(settle)
 
+    def apps(self):
+        """[(id, name)] for every app slot, in this boot's order."""
+        out = []
+        for line in self.link.command("apps", "list", timeout=15):
+            s = line.strip()
+            if not s or s.startswith("end"):
+                continue
+            if s.startswith("ok "):
+                s = s[3:].strip()
+            id_, _, name = s.partition(" ")
+            if id_:
+                out.append((id_, name.strip()))
+        return out
+
+    def launch_id(self, app_id, settle=4.0):
+        """Open the app with this ID - one command, no searching, no drift.
+
+        Prefer this to launch(index) and to launch_named(): an id is the app's
+        own stable name, while an index is this boot's ordering of whatever is
+        installed. The registry can add a row between two boots (someone
+        installs an app), and a test that counted rows would then drive the
+        wrong one without failing."""
+        self.link.command("launch", app_id, timeout=15)
+        time.sleep(settle)
+
+    def rescan(self):
+        """Re-read APPS\\ and return the new app count (no reboot)."""
+        r = self.link.command("rescan", timeout=20)
+        for line in r:
+            for tokn in line.split():
+                if tokn.isdigit():
+                    return int(tokn)
+        return 0
+
     def windows(self):
         """Titles of the windows currently open (PROBE kind 1)."""
         return [r["name"] for r in self.link.probe(timeout=10) if r["kind"] == 1]

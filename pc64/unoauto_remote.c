@@ -28,6 +28,10 @@ void  uno_pc64_inject_key(int scan, int uni, int ctrl);
 void  uno_pc64_inject_pointer(int x, int y, int btn);
 int   pc64_shell_app_count(void);
 int   pc64_shell_launch(int a);
+int   pc64_shell_app_by_id(const char *id);      /* the registry: id -> slot   */
+const char *pc64_shell_app_id(int a);
+const char *pc64_shell_app_name(int a);
+void  pc64_shell_apps_rescan(void);              /* re-read APPS\ (no reboot)  */
 void  pc64_shell_close_top(void);
 void  uno_pc64_shutdown(void);
 unsigned long long uno_dbg_uptime_ms(void);
@@ -1007,13 +1011,44 @@ static void dispatch_cmd(const char *id, char *verb, char *args)
         uno_pc64_inject_pointer((int)atol_(a1), (int)atol_(a2), (int)atol_(a3));
         rsp(id, "ok", 0); rsp(id, "end", 0); return;
     }
+    /* `apps` alone is the count, as it always was.  `apps list` names them: one
+     * `id name` row per slot.  The registry means the SET of apps now depends on
+     * what is installed rather than on the build, so a caller that wants to
+     * drive one has to be able to look it up. */
     if (!strcmp_(verb, "apps")) {
-        char t[16]; SB b; sb_init(&b, t, sizeof t); sb_i(&b, pc64_shell_app_count()); t[b.len] = 0;
-        rsp(id, "ok", t); rsp(id, "end", 0); return;
+        char *a1 = tok(&args);
+        if (a1 && !strcmp_(a1, "list")) {
+            int i, n = pc64_shell_app_count();
+            for (i = 0; i < n; i++) {
+                char t[64]; SB b; sb_init(&b, t, sizeof t);
+                sb_s(&b, pc64_shell_app_id(i)); sb_s(&b, " ");
+                sb_s(&b, pc64_shell_app_name(i)); t[b.len] = 0;
+                rsp(id, "ok", t);
+            }
+            rsp(id, "end", 0); return;
+        }
+        { char t[16]; SB b; sb_init(&b, t, sizeof t); sb_i(&b, pc64_shell_app_count()); t[b.len] = 0;
+          rsp(id, "ok", t); rsp(id, "end", 0); return; }
     }
+    /* `launch <n>` or `launch <id>`.  The id form is the one to use: a slot
+     * index is this boot's ordering of whatever is installed, so a test that
+     * launches by number does not FAIL when an app is added, it quietly drives
+     * a different app.  An argument starting with a digit is a number, and an
+     * id can never start with one. */
     if (!strcmp_(verb, "launch")) {
-        int ok = pc64_shell_launch((int)atol_(tok(&args)));
+        char *a1 = tok(&args);
+        int a = (a1 && *a1 >= '0' && *a1 <= '9') ? (int)atol_(a1)
+              : (a1 ? pc64_shell_app_by_id(a1) : -1);
+        int ok = pc64_shell_launch(a);
         rsp(id, ok ? "ok" : "err", ok ? "launched" : "no-app"); rsp(id, "end", 0); return;
+    }
+    /* pick up a .UNO that has landed since boot (a `push` into APPS\, an
+     * install, a stick) without a reboot */
+    if (!strcmp_(verb, "rescan")) {
+        char t[16]; SB b;
+        pc64_shell_apps_rescan();
+        sb_init(&b, t, sizeof t); sb_i(&b, pc64_shell_app_count()); t[b.len] = 0;
+        rsp(id, "ok", t); rsp(id, "end", 0); return;
     }
     if (!strcmp_(verb, "close")) {
         pc64_shell_close_top(); rsp(id, "ok", 0); rsp(id, "end", 0); return;
