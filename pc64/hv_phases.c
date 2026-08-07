@@ -641,11 +641,24 @@ static int decode_mov(const u8 *ins, int *reg, unsigned *size, int *is_store)
 
 /* The guest's register file, addressed the way an instruction encoding does.
  * RSP is index 4 and lives in the control block rather than the context,
- * which is the one hole a table like this always has. */
+ * which is the one hole a table like this always has.
+ *
+ * THIS TABLE HAD RSI AND RDI THE WRONG WAY ROUND, and it is worth saying how
+ * that surfaced. Encoding 6 is RSI and 7 is RDI; `uno_gprs` declares rsi then
+ * rdi at slots 4 and 5. The table sent each to the other's slot, so an MMIO
+ * access through either register carried the OTHER one's value - and nothing
+ * noticed for two phases, because A5's guest is hand-written to use rax/rbx/
+ * rcx/rdx and Linux's port I/O goes through rax. It took a real driver: the
+ * virtio-mmio driver writes its status byte from ESI, so every status write
+ * arrived as an unrelated 0x04ef0000, the status register read back as zero,
+ * and the driver reported `device refuses features: 0` - a conclusion about
+ * FEATURES that had nothing to do with features. A wrong register file is
+ * invisible until something uses the register you got wrong, and the report
+ * you get names the wrong subsystem. */
 static u64 *gpr(int n)
 {
     u64 *c = (u64 *)&g_vcpu.gprs;
-    static const int map[16] = { 0, 2, 3, 1, -1, 6, 5, 4,
+    static const int map[16] = { 0, 2, 3, 1, -1, 6, 4, 5,
                                  7, 8, 9, 10, 11, 12, 13, 14 };
     /* rax rcx rdx rbx rsp rbp rsi rdi r8..r15 -> uno_gprs order */
     if (n < 0 || n > 15 || map[n] < 0) return 0;
