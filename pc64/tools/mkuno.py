@@ -97,6 +97,22 @@ def check_desc(img, va, vsz, path):
             if not v or len(v) > 15 or any(c not in ID_OK for c in v):
                 sys.exit("mkuno: %s .unodesc id '%s' must be 1-15 chars of "
                          "[a-z0-9._-]" % (path, v))
+        elif k == "icon":
+            # two forms: a NAME from the kernel's emblem set (validated at
+            # runtime - a name this build does not know falls back to the
+            # generic emblem rather than failing), or `file:NAME.QOI`, art the
+            # app ships beside its own .UNO. QOI because the shell has to draw
+            # the icon before it would load the app's code, so the decoder is
+            # in the kernel, and PNG's inflate is not going in there.
+            if v.startswith("file:"):
+                fn = v[5:]
+                if not fn or "\\" in fn or "/" in fn:
+                    sys.exit("mkuno: %s .unodesc icon file '%s' must be a bare "
+                             "name beside the module" % (path, fn))
+                if not fn.upper().endswith(".QOI"):
+                    sys.exit("mkuno: %s .unodesc icon file '%s' must be .QOI - "
+                             "it is the only format the kernel can decode "
+                             "without loading a module" % (path, fn))
         elif k == "cat" and v not in DESC_CATS:
             sys.exit("mkuno: %s .unodesc unknown cat '%s' (one of %s)"
                      % (path, v, "/".join(DESC_CATS)))

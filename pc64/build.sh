@@ -166,7 +166,7 @@ if [ "$1" != "legacy" ]; then
     # and harnesses say BROWSER_ENGINE=uw to mean "boot with the engine", and
     # because the flow painter remains the default.
     if [ "${BROWSER_ENGINE:-}" = "uw" ]; then UCF="$UCF -DUW_ENGINE"; fi
-    for f in pc64_fetch pc64_cookie pc64_cache webjs fb mac_compat pc64_libc pc64_io pc64_pci uno_devmgr pc64_math pc64_fs blkdev ahci nvme sdhci ide fat unostorage hid_kbd i2c_hid xhci usbio usbboot usbmsc usbhid detachgate unovirt hv_svm hv_vmx unovdev unoamp_out unoamp_in unoamp_skin unoamp_vis unoamp_dsp unoamp_enc unoamp_mod unoamp_app unoamp_ui pc64_mtrr ax88179 rtl8152 iwlwifi rtwifi mrvlwifi wifi_wpa uefi_main bios_entry pc64_native pc64_uui pc64_uui_apps pc64_write pc64_files pc64_music pc64_clock pc64_media pc64_modload pc64_games js pc64_http pc64_font pc64_browser pc64_icons e1000 e1000e igb r8169 net netdisc tls tls_entropy tls_ca acpi_host installer snd_pcm hdaudio ac97 unosecure unoscript unoscript_path pc64_accounts unoauto unoauto_compat unoauto_gate unoauto_probe unoauto_remote unoauto_serial unoauto_screen ed25519 unossh_wire unossh unossh_auth unossh_store unossh_cmd sshapp_ui unolog unovdev_pc hv_phases unovdev_net unovirt_mgr; do
+    for f in pc64_fetch pc64_cookie pc64_cache webjs fb mac_compat pc64_libc pc64_io pc64_pci uno_devmgr pc64_math pc64_fs blkdev ahci nvme sdhci ide fat unostorage hid_kbd i2c_hid xhci usbio usbboot usbmsc usbhid detachgate unovirt hv_svm hv_vmx unovdev unoamp_out unoamp_in unoamp_skin unoamp_vis unoamp_dsp unoamp_enc unoamp_mod unoamp_app unoamp_ui pc64_mtrr ax88179 rtl8152 iwlwifi rtwifi mrvlwifi wifi_wpa uefi_main bios_entry pc64_native pc64_uui pc64_uui_apps pc64_write pc64_files pc64_music pc64_clock pc64_media pc64_modload pc64_games js pc64_http pc64_font pc64_browser pc64_icons pc64_qoi e1000 e1000e igb r8169 net netdisc tls tls_entropy tls_ca acpi_host installer snd_pcm hdaudio ac97 unosecure unoscript unoscript_path pc64_accounts unoauto unoauto_compat unoauto_gate unoauto_probe unoauto_remote unoauto_serial unoauto_screen ed25519 unossh_wire unossh unossh_auth unossh_store unossh_cmd sshapp_ui unolog unovdev_pc hv_phases unovdev_net unovirt_mgr; do
         pc "$CC" $UCF $DBGSAN -c -o "build/$f.o" "$f.c"; OBJS="$OBJS build/$f.o"
     done
     # unojs: the JavaScript engine, its own subsystem (unojs/UNOJS.md).  Plain
@@ -557,6 +557,11 @@ if [ "$1" != "legacy" ]; then
     "$CC" -c -o build/apps/vmgr_thunks.o build/apps/vmgr_thunks.s
     "$CC" -shared -nostdlib -e uno_app_main -Wl,--exclude-all-symbols -o build/apps/vmgr.dll build/apps/vmgr.o build/apps/vmgr_thunks.o
     "$PY" tools/mkuno.py convert build/apps/vmgr.dll build/esp/APPS/VMGR.UNO 1
+    # VMGR ships its OWN artwork rather than naming one of the kernel's emblems
+    # - it is the app that arrived without a compiled-in slot, so it is the
+    # right one to prove that an app from disk can bring its own icon too
+    # (`icon: file:VMGR.QOI` in its descriptor; decoded by pc64_qoi.c).
+    "$PY" tools/mkicon.py --demo build/esp/APPS/VMGR.QOI
     if [ "${UNO_PHOTOS:-1}" != "0" ]; then
         echo "[3d] building PHOTOS.UNO (the image viewer + unomedia)..."
         POBJ="build/apps/photos.o"

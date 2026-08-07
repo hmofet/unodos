@@ -60,6 +60,7 @@ void pc64_clock_tick(void);
 #endif
 #include "uno_uuiapp.h"      /* the unoui-class module ABI (the registry's rows) */
 #include "uno_appdesc.h"     /* what a .UNO says about itself                    */
+#include "uno_devmgr.h"      /* UNO_MODF_DRV: a driver is not a desktop app      */
 #include "pyhost.h"          /* Python-runtime + Python-app module tiers         */
 #include "installer.h"       /* install to a local disk (the Install app) */
 #include "blkdev.h"          /* native block layer (System readout) */
@@ -131,6 +132,7 @@ typedef enum {
     AK_BRIDGE,      /* a legacy app hosted in a canvas (pc64_uui_apps)  */
     AK_SHELL,       /* a native shell canvas (Runner3D, Browser, SSH)   */
     AK_UUIMOD,      /* a unoui-class .UNO module                        */
+    AK_CLASSICMOD,  /* a classic (KernelApi) .UNO found on disk         */
     AK_HOSTSLOT     /* hosts whatever is running (user app / Python app)*/
 } app_kind;
 
@@ -364,6 +366,32 @@ static void slot_str(char *dst, int cap, const char *src)
 { int i = 0; if (!src) { dst[0] = 0; return; }
   while (src[i] && i < cap - 1) { dst[i] = src[i]; i++; } dst[i] = 0; }
 
+/* Resolve a descriptor's `icon:` to an emblem id, or -1 to keep the fallback.
+ * Two forms: a NAME from this build's emblem set, and `file:NAME.QOI` - art the
+ * app ships beside its own module, which is the only form available to an app
+ * that arrived on a stick and cannot add a case to a switch in the kernel.
+ *
+ * The file is looked for beside the module, on the same volume, so an app is
+ * one directory rather than a module plus something registered elsewhere. */
+static int app_icon_resolve(const char *spec, int vol, const char *modpath)
+{
+    static unsigned char qoi[16 * 1024];        /* a 32x32 emblem is ~2 KB */
+    char path[64];
+    int k = 0, i;
+    long n;
+    if (!spec || !spec[0]) return -1;
+    if (strncmp(spec, "file:", 5) != 0) return pc64_icon_by_name(spec);
+    if (vol < 0 || !modpath) return -1;
+    /* the module's directory + the named file */
+    for (i = 0; modpath[i]; i++) if (modpath[i] == '\\') k = i + 1;
+    for (i = 0; i < k && i < (int)sizeof path - 1; i++) path[i] = modpath[i];
+    for (n = 5; spec[n] && i < (int)sizeof path - 1; n++) path[i++] = spec[(int)n];
+    path[i] = 0;
+    n = uno_fs_read(vol, path, qoi, (long)sizeof qoi);
+    if (n <= 0) return -1;
+    return pc64_icon_custom_load(qoi, n);
+}
+
 static void app_reg(int a, const char *id, const char *name, const char *shortnm,
                     app_kind kind, int icon, int cat, int rank, int ordinal)
 {
@@ -404,7 +432,8 @@ static void app_reg_module(int a, const char *file, const char *fb_id,
     slot_str(s->shortnm, sizeof s->shortnm, d.shortnm);
     s->cat = d.cat; s->rank = d.rank; s->flags = d.flags;
     s->pref_w = d.pref_w; s->pref_h = d.pref_h;
-    if (d.icon[0]) { int e = pc64_icon_by_name(d.icon); if (e >= 0) s->icon = (unsigned char)e; }
+    { int e = app_icon_resolve(d.icon, vol, s->path);
+      if (e >= 0) s->icon = (unsigned char)e; }
 }
 
 static void app_discover(void);
@@ -486,12 +515,22 @@ static void app_discover(void)
 
     n = uno_mod_scan(d, file, vol, APPS_MAX, &g_apps_over);
     for (i = 0; i < n; i++) {
-        /* only unoui-class modules get a slot.  A classic .UNO is hosted by the
-         * bridge rows, PYRT is the Python runtime, a PYAPP is a document that
-         * PYRT opens, and a driver belongs to devmgr - none of them is a
-         * desktop citizen, and giving one an icon would be an icon that cannot
-         * open anything. */
-        if (!(d[i].tier & UNO_MODF_UUI)) continue;
+        /* Two tiers get a row: unoui-class modules (full desktop citizens) and
+         * CLASSIC KernelApi modules, which run in the shared user slot.  The
+         * rest deliberately do not - PYRT is the Python runtime, a PYAPP is a
+         * document PYRT opens, and a driver belongs to devmgr; an icon for any
+         * of them would be an icon that opens nothing.
+         *
+         * A classic module also needs a DESCRIPTOR to earn a row.  Without one
+         * there is nothing to distinguish an app the user installed from the
+         * shell's own DOSTRIS.UNO and friends, which are already on the desktop
+         * under the bridge rows - and duplicating those is worse than missing
+         * a third-party classic app that has not declared itself. */
+        int uui = (d[i].tier & UNO_MODF_UUI) != 0;
+        int classic = d[i].has_desc &&
+                      !(d[i].tier & (UNO_MODF_UUI | UNO_MODF_PY | UNO_MODF_PYAPP
+                                     | UNO_MODF_DRV));
+        if (!uui && !classic) continue;
         if (app_by_id(d[i].id) >= 0) continue;          /* a built-in row owns it */
         for (j = 0; j < nord; j++) if (!strcmp(d[ord[j]].id, d[i].id)) break;
         if (j < nord) continue;                          /* two files, one id     */
@@ -503,18 +542,20 @@ static void app_discover(void)
     for (j = 0; j < nord && g_napps < APPS_MAX; j++) {
         int a = g_napps, k = ord[j];
         app_slot *s = &g_app[a];
-        app_reg(a, d[k].id, d[k].name, d[k].shortnm, AK_UUIMOD, PCI_GENERIC,
-                d[k].cat, d[k].rank, -1);
+        app_reg(a, d[k].id, d[k].name, d[k].shortnm,
+                (d[k].tier & UNO_MODF_UUI) ? AK_UUIMOD : AK_CLASSICMOD,
+                PCI_GENERIC, d[k].cat, d[k].rank, -1);
         slot_str(s->file, sizeof s->file, file[k]);
         s->vol = vol[k];
         s->flags = d[k].flags;
         s->pref_w = d[k].pref_w; s->pref_h = d[k].pref_h;
-        if (d[k].icon[0]) { int e = pc64_icon_by_name(d[k].icon);
-                            if (e >= 0) s->icon = (unsigned char)e; }
         /* the path the loader will use: uno_mod_load_uui searches by filename
          * exactly as uno_mod_find did, so the slot only has to remember which
-         * file it is */
+         * file it is.  BEFORE the icon: a `file:` icon is looked for in the
+         * module's own directory, which is what this fills in. */
         uno_mod_find(file[k], 0, s->path, (int)sizeof s->path);
+        { int e = app_icon_resolve(d[k].icon, vol[k], s->path);
+          if (e >= 0) s->icon = (unsigned char)e; }
         g_napps++;
     }
     if (nord && g_napps >= APPS_MAX) g_apps_over = 1;
@@ -583,6 +624,10 @@ static void app_overrides_apply(void)
         if ((p = cfg_app_val((const char *)buf, "rank", i)) != 0) {
             int r = cfg_num(&p); if (r >= 0 && r <= 255) g_app[i].rank = (unsigned char)r;
         }
+        if ((p = cfg_app_val((const char *)buf, "pin", i)) != 0) {
+            if (*p == '1') g_app[i].flags |= UAF_PINNED;
+            else           g_app[i].flags &= (unsigned short)~UAF_PINNED;
+        }
     }
 }
 
@@ -598,6 +643,11 @@ static void app_overrides_apply(void)
 static int g_desk_flow, g_desk_sort;
 static int g_desk_snap = 1;             /* snap dragged icons to the grid     */
 static int g_desk_lock;                 /* lock: no dragging at all           */
+/* Start menu shape: 0 = one flat list (as it has always been), 1 = grouped
+ * under the categories apps declare in their descriptors.  Lives here with the
+ * other desktop preferences because that is where it is edited and persisted;
+ * menu_refresh() below is what acts on it. */
+static int g_menu_sections;
 static struct { short x, y; unsigned char placed; } g_icon_pos[APPS_MAX];
 
 /* ---- tray / wallpaper preferences (Control Panel) --------------------------
@@ -627,7 +677,7 @@ enum { ID_THEME = 1, ID_RES, ID_DARK, ID_WRAP, ID_VOL, ID_SCALE, ID_ABOUT,
        ID_ILIST, ID_IDEF, ID_IRESCAN, ID_IGO, ID_ICONF, ID_LIDSLP,
        ID_DFLOW, ID_DSORT, ID_PSPEED, ID_DSNAP, ID_DLOCK, ID_DARRANGE,
        ID_LIC, ID_ACCT, ID_REMOTE, ID_WALL, ID_CLOCKFMT, ID_BATTMODE,
-       ID_CPTAB, ID_NETREFRESH, ID_NETRENEW, ID_SESSION, ID_APPSCAN,
+       ID_CPTAB, ID_NETREFRESH, ID_NETRENEW, ID_SESSION, ID_APPSCAN, ID_MSECT,
        ID_RESAPPLY, ID_RESKEEP, ID_RESREVERT,
        ID_WIFISCAN, ID_WIFILIST, ID_WIFIPSK, ID_WIFIJOIN, ID_WIFIFORGET,
        ID_START = 90, ID_SHUTDOWN = 91, ID_RESTART = 92,
@@ -1141,6 +1191,17 @@ static void build_ctrl(unoui_window *w)
           w->w[w->nw-1].id = ID_DLOCK;
           unoui_add_button(w, cw - bw - 8, y - 4, bw, "Auto-arrange", 0);
           w->w[w->nw-1].id = ID_DARRANGE; }
+        y += ch + 10;
+        /* Grouping is OFF by default and deliberately so.  It is the better
+         * shape once apps arrive from disk - a flat list of 25 rows in an
+         * 11-row menu is a scroll with no landmarks - but it also REORDERS the
+         * menu, and every harness scene and manual figure that counts `down`
+         * presses to reach an app depends on the flat order.  Those should be
+         * using `launch <id>` (REMOTE.md); until they do, the old order stays
+         * the default and this is the opt-in. */
+        unoui_add_check(w, 8, y, "Group the Start menu by category",
+                        g_menu_sections);
+        w->w[w->nw-1].id = ID_MSECT;
         y += ch + 10;
         break;
 
@@ -2600,11 +2661,23 @@ static int tb_maxchips(void)
 /* The apps that get a chip, in bar order: open, and on the desktop currently
  * on screen (phase E). The draw, the hit-test and the overflow popover all
  * read this ONE list, so they cannot disagree about what is on the bar. */
+/* The chips on the bar: every open window on this desktop, then any PINNED app
+ * that is not open.  A pinned chip is drawn faint and clicking it launches the
+ * app, so the bar becomes somewhere to keep the two or three things you use
+ * constantly - which matters more now that the app list can be long and
+ * discovered rather than short and known.
+ *
+ * Pinning is a per-app flag in APPS.CFG (`pin.<id>=1`), so it is keyed by the
+ * app's id like everything else durable, and it survives an app being
+ * installed, uninstalled and reinstalled. */
 static int tb_open_list(int *out)
 {
     int i, n = 0;
     for (i = 0; i < NAPPS; i++)
         if (g_open[i] && g_desk_of[i] == g_cur_desk) out[n++] = i;
+    for (i = 0; i < NAPPS; i++)
+        if (!g_open[i] && (g_app[i].flags & UAF_PINNED) && !app_hidden(i))
+            out[n++] = i;
     return n;
 }
 
@@ -2723,10 +2796,11 @@ static void taskbar_draw(struct unoui_widget *w, unoui_rect r, void *ctx)
         unoui_rect eb;
         i = list[k];
         d = (i == act) ? 1 : 0;
-        park = g_parked[i];                  /* minimized: running, off-screen */
-        /* a parked chip reads as "still running, not on screen": fainter
-           panel, no accent underline (it cannot be the active window) and
-           dimmed text. Same palette, no new colours. */
+        /* Two kinds of faint chip, and they mean nearly the same thing so they
+           look the same: PARKED is "running, not on screen", PINNED-not-open is
+           "here whenever you want it". Both are fainter panel, no accent
+           underline, dimmed text. Same palette, no new colours. */
+        park = g_parked[i] || !g_open[i];
         if (modern) {
             if (d) { fb_round_rect_a(x, by, cw, bh, cr, t->pal.accent, 48, FB_CORNER_ALL);
                      fb_fill_rect(x + 8, by + bh - 2, cw - 16, 2, t->pal.accent); }
@@ -2828,7 +2902,8 @@ static int taskbar_event(struct unoui_widget *w, const void *ev, void *ctx)
            -1 and every chip click would read as "not focused". g_mru[0]
            still names the app that had focus, because raising shell
            chrome never calls wm_note_focus(). */
-        if (g_parked[i])                        restore_app(i);
+        if (!g_open[i])                         open_app(i);   /* a pinned chip */
+        else if (g_parked[i])                   restore_app(i);
         else if (g_nmru && g_mru[0] == i)       minimize_app(i);
         else                                    open_app(i);
         return 1;
@@ -3037,7 +3112,17 @@ static void build_legacy(int a)
     }
     if (g_app[a].kind == AK_UUIMOD) {  /* the module fills its own window */
         const UnoUuiApp *m = app_iface(a);
-        if (m) { m->build(&g_win[a]); return; }
+        if (m) {
+            m->build(&g_win[a]);
+            /* The module titled its own window from its UnoUuiApp.name, which
+             * is right until the user renames the app in APPS.CFG - and then
+             * the taskbar chip said one thing and the title bar another. The
+             * registry is the authority for what an app is CALLED; the module
+             * stays the authority for everything inside the frame. (The slot
+             * owns this string, so the pointer outlives the call.) */
+            g_win[a].title = g_app[a].name;
+            return;
+        }
         /* Missing, or present and refused to load.  Those are different
          * problems - "ships without it" versus "the loader rejected it" - and
          * they used to read identically.  Note the labels point at strings that
@@ -3092,6 +3177,19 @@ static void build_legacy(int a)
 static void open_app(int a)
 {
     if (a < 0 || a >= NAPPS) return;
+    /* A CLASSIC-tier module found on disk has no window of its own: it is a
+     * KernelApi app, and the shell hosts exactly one of those at a time in the
+     * user slot (a 512 KB fixed region - see uno_mod_load_user).  So its row is
+     * a launcher entry that runs it there, the same thing Files does when you
+     * open the file.  That is a real limit and it is the module tier's, not the
+     * registry's: two classic apps cannot be resident at once. The unoui tier
+     * has no such restriction, which is why new apps should be written to it. */
+    if (g_app[a].kind == AK_CLASSICMOD) {
+        pc64_shell_run_user(g_app[a].vol, g_app[a].path);
+        if (g_launch_open) { remove_win(&g_launch); g_launch_open = 0; }
+        g_dirty = 1;
+        return;
+    }
     /* Virtual desktops: these are single-instance apps, so "open" an app that
      * is already up on another desktop means GO TO IT - dragging its window
      * across would lose the layout the user left there. A window that is not
@@ -4229,6 +4327,7 @@ static void session_save(void)
     p = ap_str(p, "dsort=");    p = ap_int(p, g_desk_sort);           *p++='\r'; *p++='\n';
     p = ap_str(p, "dsnap=");    p = ap_int(p, g_desk_snap);           *p++='\r'; *p++='\n';
     p = ap_str(p, "dlock=");    p = ap_int(p, g_desk_lock);           *p++='\r'; *p++='\n';
+    p = ap_str(p, "msect=");    p = ap_int(p, g_menu_sections);       *p++='\r'; *p++='\n';
     p = ap_str(p, "lidsleep="); p = ap_int(p, g_lidsleep);            *p++='\r'; *p++='\n';
     p = ap_str(p, "pspeed=");   p = ap_int(p, uno_pc64_pointer_speed_get());
     *p++='\r'; *p++='\n';
@@ -4448,6 +4547,8 @@ static void prefs_apply_late(void)
     if (p) g_desk_snap = cfg_num(&p) ? 1 : 0;
     p = cfg_line_val((const char *)buf, "dlock=");
     if (p) g_desk_lock = cfg_num(&p) ? 1 : 0;
+    p = cfg_line_val((const char *)buf, "msect=");
+    if (p) g_menu_sections = cfg_num(&p) ? 1 : 0;
     p = cfg_line_val((const char *)buf, "lidsleep=");
     if (p) g_lidsleep = cfg_num(&p) ? 1 : 0;
     p = cfg_line_val((const char *)buf, "pspeed=");
@@ -4577,23 +4678,61 @@ static int menu_maxvis(void)
 
 /* the launcher lists only visible apps (Studio needs its module on disk;
  * the user-app slot appears once something has run in it) */
-static int menu_apps[APPS_MAX];
+/* +UAC_NCAT: the section headers are rows too */
+static int menu_apps[APPS_MAX + UAC_NCAT];
 static int menu_napps;
+/* Build the launcher list.  Two shapes, and the choice is the user's:
+ *
+ *   FLAT (default) - every visible app in slot order, which is what the menu
+ *   has always been and what every scene that counts `down` presses assumes.
+ *
+ *   SECTIONS - grouped under System / Network / Tools / Media / Games / Other,
+ *   the categories a module declares in its descriptor.  Worth having once apps
+ *   arrive from disk: a flat list of 25 rows on an 11-row menu is a scroll with
+ *   no landmarks, and a newly installed app lands wherever discovery put it.
+ *
+ * A row < 0 is a section header carrying `-1 - cat`; headers are not selectable
+ * and both the keyboard and the pointer step over them, exactly as the right
+ * pane's headers already do. */
 static void menu_refresh(void)
 {
-    int a;
+    int a, c;
     menu_napps = 0;
-    for (a = 0; a < NAPPS; a++) if (!app_hidden(a)) menu_apps[menu_napps++] = a;
+    if (!g_menu_sections) {
+        for (a = 0; a < NAPPS; a++)
+            if (!app_hidden(a) && menu_napps < APPS_MAX) menu_apps[menu_napps++] = a;
+        return;
+    }
+    for (c = 0; c < UAC_NCAT; c++) {
+        int head = menu_napps, r;
+        for (a = 0; a < NAPPS; a++) if (!app_hidden(a) && g_app[a].cat == c) break;
+        if (a >= NAPPS) continue;                 /* an empty section is no section */
+        if (menu_napps < APPS_MAX + UAC_NCAT) menu_apps[menu_napps++] = -1 - c;
+        /* rank, then slot order for ties: a stable sort by insertion, so two
+         * apps that declare the same rank keep the order discovery gave them */
+        for (r = 0; r <= 255; r++)
+            for (a = 0; a < NAPPS; a++)
+                if (!app_hidden(a) && g_app[a].cat == c && g_app[a].rank == r &&
+                    menu_napps < APPS_MAX + UAC_NCAT)
+                    menu_apps[menu_napps++] = a;
+        if (menu_napps == head + 1) menu_napps--;  /* nothing under it after all */
+    }
 }
 /* ---- left pane: the launcher --------------------------------------------- */
+static const char *kCatLabel[UAC_NCAT] =
+    { "System", "Network", "Tools", "Media", "Games", "Other" };
 static int  menu_count(void) { return menu_napps; }
-static const char *menu_label(int i) { return app_name(menu_apps[i]); }
-static int  menu_icon(int i) { return app_icon(menu_apps[i]); }
+static int  menu_is_head(int i)
+{ return i >= 0 && i < menu_napps && menu_apps[i] < 0; }
+static const char *menu_label(int i)
+{ return menu_is_head(i) ? kCatLabel[-1 - menu_apps[i]] : app_name(menu_apps[i]); }
+static int  menu_icon(int i)
+{ return menu_is_head(i) ? -1 : app_icon(menu_apps[i]); }
 static int  menu_vis(void)   { int t = menu_count(); return t < MENU_MAXVIS ? t : MENU_MAXVIS; }
 
 static void menu_activate(int i)
 {
-    if (i < 0 || i >= menu_count()) return;
+    if (i < 0 || i >= menu_count() || menu_is_head(i)) return;
     open_app(menu_apps[i]);                       /* closes the launcher */
 }
 
@@ -4638,8 +4777,16 @@ static void launcher_draw(struct unoui_widget *w, unoui_rect r, void *ctx)
     (void)w; (void)ctx;
     for (i = 0; i < vis; i++) {
         int idx = g_menu_scroll + i, ry = r.y + i * MROW;
-        int hot = (g_menu_pane == 0 && idx == g_menu_hot);
+        int hot = (g_menu_pane == 0 && idx == g_menu_hot && !menu_is_head(idx));
         if (idx >= total) break;
+        if (menu_is_head(idx)) {
+            /* same treatment as the right pane's headers: dim, with the rule
+             * ABOVE rather than through the text */
+            if (idx) fb_hline(r.x + 6, ry + 2, r.w - 10, t->pal.shadow);
+            fb_text(r.x + 10, ry + (MROW - fb_text_h()) / 2 + 3,
+                    menu_label(idx), t->pal.text_dim, -1);
+            continue;
+        }
         if (hot) fb_fill_rect(r.x, ry, r.w, MROW, t->pal.accent);
         if (menu_icon(idx) >= 0) { unoui_rect eb = { r.x + 3, ry + (MROW - 18) / 2, 18, 18 }; pc64_icon_emblem(menu_icon(idx), eb); }
         fb_text(r.x + 26, ry + (MROW - fb_text_h()) / 2, menu_label(idx),
@@ -4715,14 +4862,20 @@ static int launcher_event(struct unoui_widget *w, const void *ev, void *ctx)
          * two of them is that the keyboard can stay out of the power column */
         if (e->key == UI_KEY_LEFT)  { menu_pane(0); return 1; }
         if (e->key == UI_KEY_RIGHT) { menu_pane(1); return 1; }
+        /* the left pane steps over its section headers the same way the right
+         * one does - a header is a label, not a thing you can open */
         if (e->key == UI_KEY_DOWN) {
             if (g_menu_pane) sys_step(+1);
-            else if (g_menu_hot < total - 1) { g_menu_hot++; menu_reveal(); }
+            else { int i = g_menu_hot;
+                   do { i++; } while (i < total && menu_is_head(i));
+                   if (i < total) { g_menu_hot = i; menu_reveal(); } }
             g_dirty = 1; return 1;
         }
         if (e->key == UI_KEY_UP) {
             if (g_menu_pane) sys_step(-1);
-            else if (g_menu_hot > 0) { g_menu_hot--; menu_reveal(); }
+            else { int i = g_menu_hot;
+                   do { i--; } while (i >= 0 && menu_is_head(i));
+                   if (i >= 0) { g_menu_hot = i; menu_reveal(); } }
             g_dirty = 1; return 1;
         }
         if (e->key == UI_KEY_ENTER) {
@@ -4776,7 +4929,8 @@ static void launcher_hover(int mx, int my)
             return;
         }
         g_scroll_tmr = 0;
-        if (row >= 0 && row < vis) { g_menu_pane = 0; g_menu_hot = g_menu_scroll + row; }
+        if (row >= 0 && row < vis && !menu_is_head(g_menu_scroll + row))
+            { g_menu_pane = 0; g_menu_hot = g_menu_scroll + row; }
     }
     if (g_menu_hot != oldhot || g_menu_pane != oldpane) g_dirty = 1;
 }
@@ -5473,6 +5627,11 @@ static void on_action(const unoui_action *a)
     case ID_REMOTE: pc64_remote_open(); g_dirty = 1; break;    /* arm/disarm URC   */
     case ID_APPSCAN: pc64_shell_apps_rescan();                 /* pick up new .UNOs */
                      rebuild_ctrl_window(); break;             /* show the outcome  */
+    case ID_MSECT:  g_menu_sections = a->value ? 1 : 0;
+                    menu_refresh(); build_launcher();
+                    g_menu_hot = -1; g_menu_scroll = 0;        /* the rows moved   */
+                    build_desktop();                  /* "launcher order" follows */
+                    session_save(); g_dirty = 1; break;
     case ID_SETDT: {                    /* time spinners; the date stays as-is */
         int yy = 2026, mo = 1, dd = 1;
         uno_pc64_time(&yy, &mo, &dd, 0, 0, 0);

@@ -7,6 +7,7 @@
  * the same art serves a big desktop icon and a small taskbar chip.
  * ======================================================================== */
 #include "pc64_icons.h"
+#include "pc64_qoi.h"       /* custom emblems: art an app ships beside its .UNO */
 #include "fb.h"
 #include "unoui_theme.h"
 
@@ -134,10 +135,61 @@ int pc64_icon_by_name(const char *name)
     return -1;
 }
 
+/* ---- custom emblems: art an app ships beside its own .UNO -----------------
+ * Everything above is procedural, drawn from this file's own vocabulary, which
+ * is right for the apps the OS ships and useless to an app that arrives on a
+ * stick - it cannot add a `case` to a switch in the kernel.  So a descriptor
+ * may say `icon: file:NAME.QOI` and the shell decodes that file into one of
+ * these slots (pc64_qoi.c).
+ *
+ * A fixed slab rather than an allocation: 12 slots at 32x32 RGBA is 48 KB of
+ * bss, the shell never frees icons anyway, and a bounded slab cannot be the
+ * thing that exhausts memory on a machine with a directory full of .UNOs.
+ * Past twelve, later apps keep the emblem they named or PCI_GENERIC - the
+ * degradation is a plainer icon, never a failure to appear. */
+#define CUSTOM_DIM 32
+static struct { unsigned char rgba[CUSTOM_DIM * CUSTOM_DIM * 4]; short w, h; }
+    g_custom[PCI_CUSTOM_N];
+static int g_ncustom;
+
+int pc64_icon_custom_load(const unsigned char *qoi, long n)
+{
+    int w = 0, h = 0, slot = g_ncustom;
+    if (slot >= PCI_CUSTOM_N) return -1;
+    if (uno_qoi_decode(qoi, n, g_custom[slot].rgba, CUSTOM_DIM, CUSTOM_DIM,
+                       &w, &h) != 0) return -1;
+    g_custom[slot].w = (short)w; g_custom[slot].h = (short)h;
+    g_ncustom++;
+    return PCI_CUSTOM0 + slot;
+}
+
+int pc64_icon_custom_count(void) { return g_ncustom; }
+
+/* Nearest-neighbour into the box, alpha as a 1-bit key.  Sharp rather than
+ * smooth on purpose: these are 32x32 emblems next to procedural art drawn with
+ * hard edges, and a blurred one would be the odd one out. */
+static void custom_draw(int slot, unoui_rect box)
+{
+    int s = (box.w < box.h ? box.w : box.h);
+    int ox, oy, y, x, sw = g_custom[slot].w, sh = g_custom[slot].h;
+    const unsigned char *p = g_custom[slot].rgba;
+    if (s < 4 || sw <= 0 || sh <= 0) return;
+    ox = box.x + (box.w - s) / 2;
+    oy = box.y + (box.h - s) / 2;
+    for (y = 0; y < s; y++)
+        for (x = 0; x < s; x++) {
+            const unsigned char *q = p + ((y * sh / s) * sw + (x * sw / s)) * 4;
+            if (q[3] < 128) continue;              /* transparent: leave it */
+            fb_pixel(ox + x, oy + y, FB_RGB(q[0], q[1], q[2]));
+        }
+}
+
 void pc64_icon_emblem(int icon, unoui_rect box)
 {
     int s  = (box.w < box.h ? box.w : box.h);
     int ox, oy, cx, cy;
+    if (icon >= PCI_CUSTOM0 && icon < PCI_CUSTOM0 + g_ncustom)
+        { custom_draw(icon - PCI_CUSTOM0, box); return; }
     g_ith = pc64_shell_theme();                      /* recolour to live theme */
     if (s < 8) s = 8;
     ox = box.x + (box.w - s) / 2;

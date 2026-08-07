@@ -24,11 +24,26 @@ typedef enum {
     PCI_UOWORD, PCI_UOCALC, PCI_UOSHOW
 } pc64_icon_id;
 
+/* Ids at or above PCI_CUSTOM0 are art an app SHIPPED, decoded from a QOI file
+ * beside its .UNO rather than drawn by this module.  They live above the named
+ * emblems so the two never collide, and so appending a named emblem stays the
+ * additive change it has always been. An app that arrives on a stick cannot add
+ * a case to a switch in the kernel, which is the whole reason this exists. */
+#define PCI_CUSTOM0 128
+#define PCI_CUSTOM_N 12                 /* slab size; 12 * 32*32*4 = 48 KB */
+
 /* The emblem an app NAMES, resolved to its PCI_* id, or -1 if this build has
  * no such emblem.  A module carries an icon name in its descriptor
  * (uno_appdesc.h) rather than an id, because an id is this build's numbering
  * and the module was built separately: names survive that, numbers do not. */
 int pc64_icon_by_name(const char *name);
+
+/* Decode a QOI file into a custom emblem slot and return its id (>= PCI_CUSTOM0),
+ * or -1 if the slab is full or the file is not decodable art.  -1 is not a
+ * failure the user should ever see: the caller keeps the emblem the app named,
+ * or PCI_GENERIC, so a bad icon file costs a plainer icon and nothing else. */
+int pc64_icon_custom_load(const unsigned char *qoi, long n);
+int pc64_icon_custom_count(void);
 
 /* draw emblem `icon` (a PCI_*) to fit `box` (no label) - used by the taskbar */
 void pc64_icon_emblem(int icon, unoui_rect box);

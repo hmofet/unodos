@@ -61,6 +61,11 @@ enum { UAC_SYSTEM = 0, UAC_NET, UAC_TOOLS, UAC_MEDIA, UAC_GAMES, UAC_OTHER,
 #define UAF_HIDDEN    0x0002   /* registered + launchable by id, no icon/row */
 #define UAF_GAME      0x0004   /* fullscreen-preferred (cf. unoapp_is_game)  */
 #define UAF_NOSESSION 0x0008   /* never restored by SHELL.CFG                */
+/* Not a `flags:` value a module may declare: pinning is the USER's decision,
+ * set in APPS.CFG (`pin.<id>=1`).  An app that could pin itself to the taskbar
+ * by shipping a line in its own descriptor would, and then the bar would be
+ * whatever was installed last rather than what its owner chose. */
+#define UAF_PINNED    0x0100
 
 /* the parsed form the shell and the loader pass around */
 typedef struct UnoAppDesc {
@@ -73,6 +78,8 @@ typedef struct UnoAppDesc {
     unsigned short flags;      /* UAF_*                                       */
     unsigned short tier;       /* UnoModHdr.flags, so the reader learns the   */
                                /* hosting tier from the same probe            */
+    unsigned char has_desc;    /* 1 = the module carried a block; 0 = every   */
+                               /* field above was derived from the filename   */
     short pref_w, pref_h;      /* 0 = the shell's default size                */
 } UnoAppDesc;
 
