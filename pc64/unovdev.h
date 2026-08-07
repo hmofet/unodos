@@ -29,6 +29,18 @@ int uno_vdev_mmio_irq_level(int irq);
  * block: "1024 KB ro on vol 1, 12 reads 340 sectors" or "no ROOTFS.IMG". */
 int uno_vdev_blk_str(char *buf, int cap);
 
+/* The network device's counters plus its peer's: "tx 4 rx 4, no-buffer 0,
+ * arp 1 icmp 3 other 0 replied 4". */
+int uno_vdev_net_str(char *buf, int cap);
+unsigned long long uno_vdev_net_stats(void);
+
+/* The peer on the other end of the guest's cable (unovdev_net.c).  One frame
+ * in, at most one frame out; 0 = nothing to say.  No virtio in it at all. */
+int uno_vnet_respond(const unsigned char *in, int len,
+                     unsigned char *out, int cap);
+const unsigned char *uno_vnet_guest_mac(void);
+int uno_vnet_str(char *buf, int cap);
+
 /* The register traffic, one transaction per call: dev<<45 | write<<44 |
  * off<<32 | value, 0 past the end.  A driver reports its conclusion ("device
  * refuses features"); this is what it actually saw. */

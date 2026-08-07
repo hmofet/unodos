@@ -6,9 +6,10 @@ anything else. The hypervisor itself is `pc64/UNOVIRT.md`; this file is what
 sits on the far side of a decoded guest access.
 
 **Status: [implemented]** for the console transport (A5), the legacy platform
-an Ubuntu kernel needs to reach a shell (A6), and **virtio-blk over a disk
-image file (A7a)** - a guest mounts an ext4 filesystem out of
-`EFI\UNODOS\VM\ROOTFS.IMG` and reads files from it. virtio-net is next.
+an Ubuntu kernel needs to reach a shell (A6), **virtio-blk over a disk image
+file (A7a)**, and **virtio-net against a synthetic peer (A7b)** - the guest
+mounts an ext4 filesystem out of `EFI\UNODOS\VM\ROOTFS.IMG`, and it pings.
+Bridging that network to a real wire is the next slice.
 
 ## The seam, and why it is this narrow
 
@@ -116,6 +117,16 @@ carried in the descriptor flags, then a writable status byte. The walk returns
 segments now, and the status byte is found by POSITION (last), because that is
 what the spec fixes and a device that scans for it will one day pick a data
 buffer.
+
+**A RECEIVE QUEUE'S BUFFERS MUST NOT BE TAKEN WHEN THEY ARE OFFERED.** This
+is the one that took longest, and it is a property of the TRANSPORT rather
+than of any device. A doorbell on a receive queue means "there are buffers
+now", not "here is work" - so a generic loop that consumes every available
+chain and advances `last_avail` before calling the device throws all of them
+away. The guest posted sixty-four receive buffers, the transport swallowed
+all sixty-four, and the first frame the device had to deliver was dropped for
+want of one. Queues named in `hold_mask` are left alone, and a device pulls a
+chain with `vq_pull` at the moment it has something to put in it.
 
 **Short reads pad with zeroes, never with what was already there.** Whatever
 was in that buffer came from the guest, and handing it back as disk contents is

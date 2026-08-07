@@ -105,6 +105,11 @@ typedef struct {
     u32 device_id;
     u32 feat_lo, feat_hi;
     int nq;
+    /* Queues whose available chains must NOT be consumed when the doorbell
+     * rings.  See the doorbell handler: for a RECEIVE queue the doorbell
+     * means "there are buffers now", and taking them at that moment throws
+     * them away, because there is nothing to put in them yet. */
+    unsigned hold_mask;
     void (*notify)(struct vdev *d, int qidx);
     u64  (*config)(struct vdev *d, u32 off, unsigned size);
 } vdev_ops;
@@ -209,6 +214,26 @@ static void used_complete(vdev *d, vq *q, u16 head, u32 len)
     d->intr |= 1;                             /* used-buffer notification    */
 }
 
+/* Take the next available chain from a HELD queue - one the doorbell loop
+ * deliberately left alone.  This is how a device with something to deliver
+ * gets a buffer at the moment it needs one, rather than hoarding buffers it
+ * was handed earlier.  Returns the segment count, or -1 when the queue is
+ * empty or the chain is malformed. */
+static int vq_pull(vq *q, u16 *head, uno_vseg *segs, int max)
+{
+    const u8 *a;
+    int n;
+    if (!q->num || !q->ready) return -1;
+    a = (const u8 *)uno_vmm_gpa(q->avail, 4 + 2 * (u64)q->num);
+    if (!a) return -1;
+    if (q->last_avail == *(const u16 *)(a + 2)) return -1;   /* nothing posted */
+    *head = *(const u16 *)(a + 4 + 2 * (q->last_avail % q->num));
+    n = chain_walk(q, *head, segs, max);
+    if (n < 0) return -1;
+    q->last_avail++;
+    return n;
+}
+
 /* The chain a hook is being asked about.  Handed over through these rather
  * than through a parameter list every future device would have to repeat,
  * and set only by the doorbell loop below. */
@@ -261,7 +286,7 @@ static void con_notify(vdev *d, int qidx)
 }
 
 static const vdev_ops CON_OPS = { "console", 3, 0, F_VERSION_1_HI, 2,
-                                  con_notify, 0 };
+                                  1u << 0, con_notify, 0 };
 
 /* ---- device 1: virtio-blk over a FILE on a real volume -------------------
  *
@@ -396,7 +421,131 @@ static void blk_notify(vdev *d, int qidx)
 }
 
 static const vdev_ops BLK_OPS = { "blk", 2, VIRTIO_BLK_F_RO, F_VERSION_1_HI, 1,
-                                  blk_notify, blk_config };
+                                  0, blk_notify, blk_config };
+
+/* ---- device 2: virtio-net, and the receive queue is the interesting half --
+ *
+ * Queue 0 is receive and queue 1 is transmit, as on the console - but where
+ * the console has nothing to receive and simply holds its buffers, this
+ * device DOES eventually fill them, which makes the discipline explicit:
+ *
+ * A POSTED RECEIVE BUFFER IS NOT CONSUMED WHEN IT ARRIVES.  The doorbell on
+ * queue 0 means "there are buffers available now", not "here is work".  So
+ * that notify does nothing at all, `last_avail` stays where it is, and a
+ * buffer is only taken at the moment there is a frame to put in it.  The
+ * alternative - taking buffers as they are offered and remembering them - is
+ * a second queue of our own to keep in step with the guest's, for no gain.
+ *
+ * Every frame carries a 12-byte virtio_net_hdr in front of it, in BOTH
+ * directions.  With VIRTIO_F_VERSION_1 the header is always the 12-byte v1
+ * form (it carries num_buffers even when buffer merging is off), and getting
+ * that length wrong shifts every frame by four bytes - which presents as a
+ * peer that talks nonsense rather than as a header problem. */
+#define VIRTIO_NET_F_MAC (1u << 5)
+#define NET_HDR 12
+#define NET_MTU 1600
+
+static struct { int tx, rx, dropped_norx, too_big, kick0, kick1, badchain; } NET;
+
+/* Put one frame into a receive buffer the guest has posted, if it has posted
+ * one.  No buffer means the frame is DROPPED and counted - which is what a
+ * real NIC does when the driver has not kept the ring fed, and is much better
+ * than blocking the device on the guest's housekeeping. */
+static int net_rx_deliver(vdev *d, const u8 *frame, int len)
+{
+    vq *q = &d->q[0];
+    u16 head = 0;
+    uno_vseg segs[8];
+    int n, i, off = 0, wrote = 0;
+
+    n = vq_pull(q, &head, segs, 8);
+    if (n < 0) { NET.dropped_norx++; return 0; }
+
+    for (i = 0; i < n && off < NET_HDR + len; i++) {
+        u32 k;
+        if (!segs[i].write) continue;         /* a receive buffer is writable */
+        for (k = 0; k < segs[i].len && off < NET_HDR + len; k++, off++) {
+            segs[i].p[k] = (off < NET_HDR) ? 0 : frame[off - NET_HDR];
+            wrote++;
+        }
+    }
+    used_complete(d, q, head, (u32)wrote);
+    NET.rx++;
+    return 1;
+}
+
+static void net_notify(vdev *d, int qidx)
+{
+    uno_vseg segs[8];
+    static u8 frame[NET_MTU], reply[NET_MTU];
+    int n, i, len = 0, rl;
+
+    if (qidx == 0) { NET.kick0++; return; }   /* buffers offered, not work   */
+    NET.kick1++;
+
+    n = chain_walk(g_cur_q, g_cur_head, segs, 8);
+    if (n < 0) { NET.badchain++; return; }
+    /* Flatten the readable part and drop the 12-byte header. */
+    for (i = 0; i < n; i++) {
+        u32 k;
+        if (segs[i].write) continue;
+        for (k = 0; k < segs[i].len; k++) {
+            if (len < (int)sizeof frame) frame[len++] = segs[i].p[k];
+        }
+    }
+    used_complete(d, g_cur_q, g_cur_head, 0);   /* transmit writes nothing   */
+    if (len <= NET_HDR) return;
+    if (len >= (int)sizeof frame) { NET.too_big++; return; }
+    NET.tx++;
+
+    /* The peer is on the other side of unovdev_net.c: a frame in, a frame
+     * out, and no idea any of this is virtual. */
+    rl = uno_vnet_respond(frame + NET_HDR, len - NET_HDR, reply, (int)sizeof reply);
+    if (rl > 0) net_rx_deliver(d, reply, rl);
+}
+
+/* The MAC lives in config space, and VIRTIO_NET_F_MAC is what tells the guest
+ * to read it rather than invent a random one.  Byte-addressed, because that
+ * is how a driver reads a six-byte field. */
+static u64 net_config(vdev *d, u32 off, unsigned size)
+{
+    const u8 *mac = uno_vnet_guest_mac();
+    u64 v = 0;
+    unsigned k;
+    (void)d;
+    if (!size) size = 1;
+    for (k = 0; k < size && k < 8; k++) {
+        u32 o = off + k;
+        u8 b = (o < 6) ? mac[o] : 0;          /* then status, which is 0     */
+        v |= (u64)b << (8 * k);
+    }
+    return v;
+}
+
+static const vdev_ops NET_OPS = { "net", 1, VIRTIO_NET_F_MAC, F_VERSION_1_HI, 2,
+                                  1u << 0, net_notify, net_config };
+
+/* tx | rx<<8 | no-buffer<<16 | too-big<<24, for the one-line trace: whether
+ * the guest's frames reach us at all is the first question, and whether our
+ * replies find a posted buffer is the second. */
+unsigned long long uno_vdev_net_stats(void)
+{
+    return (unsigned long long)(NET.tx & 0xFF)
+         | ((unsigned long long)(NET.rx & 0xFF) << 8)
+         | ((unsigned long long)(NET.dropped_norx & 0xFF) << 16)
+         | ((unsigned long long)(NET.too_big & 0xFF) << 24)
+         | ((unsigned long long)(NET.kick0 & 0xFF) << 32)
+         | ((unsigned long long)(NET.kick1 & 0xFF) << 40)
+         | ((unsigned long long)(NET.badchain & 0xFF) << 48);
+}
+
+int uno_vdev_net_str(char *buf, int cap)
+{
+    int n = snprintf(buf, (unsigned)cap, "tx %d rx %d, no-buffer %d, ",
+                     NET.tx, NET.rx, NET.dropped_norx);
+    if (n < 0 || n >= cap) return 0;
+    return n + uno_vnet_str(buf + n, cap - n);
+}
 
 /* ---- the register file ---------------------------------------------------- */
 
@@ -406,9 +555,11 @@ void uno_vdev_reset(void)
     for (i = 0; i < sizeof V; i++) ((u8 *)&V)[i] = 0;
     for (i = 0; i < sizeof CON; i++) ((u8 *)&CON)[i] = 0;
     for (i = 0; i < sizeof BLK; i++) ((u8 *)&BLK)[i] = 0;
+    for (i = 0; i < sizeof NET; i++) ((u8 *)&NET)[i] = 0;
     V[0].ops = &CON_OPS; V[0].irq = 5;
     V[1].ops = &BLK_OPS; V[1].irq = 6;
-    g_ndev = 2;
+    V[2].ops = &NET_OPS; V[2].irq = 7;
+    g_ndev = 3;
 }
 
 static u32 dev_feat(vdev *d)
@@ -466,7 +617,11 @@ int uno_vdev_mmio(u64 gpa, int is_write, unsigned size, u64 *val)
     case R_QUEUE_READY:  q->ready = (u32)*val; break;
     case R_QUEUE_NOTIFY:
         {   unsigned qi = (unsigned)*val;
-            if (qi < 2 && d->q[qi].num) {
+            if (qi < 2 && (d->ops->hold_mask & (1u << qi))) {
+                /* A held queue: tell the device buffers arrived and let it
+                 * pull one when it has something to put in it. */
+                if (d->ops->notify) d->ops->notify(d, (int)qi);
+            } else if (qi < 2 && d->q[qi].num) {
                 vq *nq = &d->q[qi];
                 const u8 *a = (const u8 *)uno_vmm_gpa(nq->avail,
                                                       4 + 2 * (u64)nq->num);
