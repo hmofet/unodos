@@ -62,6 +62,7 @@ re-home"). Ownership is of the CODE; the whole OS is a shared goal.
 | unoguest (seamless-window channel, guest agents, appliance images) | `pc64/UNOGUEST.md` | `unoguest*`, `guest/` |
 | unowin32 (native PE32+ Win32 personality over unoui) | `pc64/UNOWIN32.md` | `unowin32*` |
 | per-port ports | `AUDIT-<port>.md` | `amiga/`, `c64/`, `nes/`, `snes/`, ... |
+| unostream (guest screen streamer for demo video + host receiver/gate) | `pc64/UNOSTREAM.md` | `pc64/unostream.*`, `pc64/tools/demo/` |
 
 Whoever is actively working a subsystem this session **claims it in the requests
 file (§4)** so two agents never grab the same one.
