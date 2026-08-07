@@ -113,6 +113,7 @@ int ssh_auth_password(int handle, const char *user, const char *pass)
     unsigned char m[512];
     ssh_buf b;
     if (!c) return -1;
+    if (!c->host_verified) { uns_err(c, "host key not verified; call ssh_verify_host first"); return -1; }
     if (!c->authed && request_userauth(c) < 0) return -1;
     ssh_buf_init(&b, m, (int)sizeof m);
     ssh_put_u8(&b, MSG_USERAUTH_REQUEST);
@@ -134,6 +135,7 @@ int ssh_auth_key(int handle, const char *user, const unsigned char seed[32])
     int reqlen;
 
     if (!c) return -1;
+    if (!c->host_verified) { uns_err(c, "host key not verified; call ssh_verify_host first"); return -1; }
     if (!c->authed && request_userauth(c) < 0) return -1;
 
     ed25519_pubkey(pk, seed);
@@ -210,8 +212,11 @@ static int channel_dispatch(ssh_conn *c)
             ring_put(c, d, n);
             /* Top the window back up. Without this the server sends exactly
              * one window's worth and then stops, which looks like a hang and
-             * reports nothing anywhere. */
-            c->win_in -= (unsigned)n;
+             * reports nothing anywhere. Clamp at 0: a server that overruns the
+             * window it was advertised would otherwise wrap win_in (unsigned)
+             * to a huge value, which permanently suppresses WINDOW_ADJUST and
+             * stalls the channel - a self-inflicted hang. */
+            if ((unsigned)n > c->win_in) c->win_in = 0; else c->win_in -= (unsigned)n;
             if (c->win_in < WIN_INIT / 2) {
                 unsigned char m[16];
                 ssh_buf b;
@@ -228,7 +233,8 @@ static int channel_dispatch(ssh_conn *c)
         int n;
         ssh_get_u32(&r); ssh_get_u32(&r);          /* channel, data type */
         d = ssh_get_str(&r, &n);
-        if (d && n > 0) { ring_put(c, d, n); c->win_in -= (unsigned)n; }
+        if (d && n > 0) { ring_put(c, d, n);
+            if ((unsigned)n > c->win_in) c->win_in = 0; else c->win_in -= (unsigned)n; }
         return 0; }
     case MSG_CHANNEL_WINDOW_ADJUST:
         ssh_get_u32(&r);
