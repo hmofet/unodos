@@ -150,10 +150,13 @@ that table for the import check, and the kernel link fails on a typo.
   `appreg_id_urc.py` (launch by id, `SHELL.CFG` v3), `appreg_v2_urc.py` (a v2
   session file still restores and migrates), `appreg_p5_urc.py` (`APPS.CFG`
   overrides, pinning, a shipped icon).
-- `python3 harness.py unoapps`: boots the shell in QEMU and opens all 7
-  module apps through the Start menu, one screenshot each. **Note this scene
-  navigates by counting `down` presses and has been off by one for some time;
-  new scenes should use URC `launch <id>`.**
+- `UNO_DEBUG=1 ./build.sh && python3 harness.py unoapps`: reads the roster with
+  `apps list` and opens **every** row by its own id, one screenshot each, named
+  `shots/uno_<id>.png`. It asserts the window that appeared is that app's before
+  keeping the shot, so a wrong shot fails rather than being filed under the
+  wrong name. Rewritten 2026-08-07: it used to count `down` presses from the
+  Start menu and had been off by one since UnoAmp joined the natives, filing
+  UnoAmp as `dostris` and Runner3D as `network` without ever failing.
 - `python3 tools/install_test.py`: end-to-end: install to a disk (both
   modes), reboot from the installed disk alone, verify the module files on
   the installed ESP offline (mtools) and open a `.UNO` app on the installed

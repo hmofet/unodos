@@ -114,7 +114,8 @@ dead trackpad on real hardware could not be diagnosed at all.
 
 ## Verifying
 
-- QEMU: `harness.py unoapps` (keyboard nav opens every app); `-device usb-kbd`
+- QEMU: `harness.py unoapps` (opens every app; **URC `launch <id>` since
+  2026-08-07, no longer keyboard nav** - see pc64/MODULES.md); `-device usb-kbd`
   + `-DUNO_XHCI -DUNO_USBHID_TEST` logs `usbhid: claimed kbd=1 mouse=1`.
   **Correction (2026-07-31): keys DO reach an emulated usb-kbd.** The old note
   here said routing to it was a QEMU limit and that USB typing was metal-first;
