@@ -16,6 +16,7 @@
 #include "e1000e.h"
 #include "pc64_pci.h"
 #include <stdint.h>
+#include <string.h>
 
 typedef unsigned char  u8;
 typedef unsigned short u16;
@@ -78,7 +79,7 @@ void uno_pc64_delay_ms(int ms);
 #define MDIC_READY    0x10000000u
 #define MDIC_ERROR    0x40000000u
 
-#define NDESC 16
+#define NDESC 64                     /* deeper ring absorbs RX bursts (bss cost only) */
 #define BUFSZ 2048
 struct rxdesc { u64 addr; u16 len; u16 csum; u8 status; u8 err; u16 special; } __attribute__((packed));
 struct txdesc { u64 addr; u16 len; u8 cso; u8 cmd; u8 status; u8 css; u16 special; } __attribute__((packed));
@@ -197,12 +198,12 @@ static void tx_init(void)
 /* ---- uno_nic_t ---------------------------------------------------------- */
 static int e1000e_send(void *ctx,const void *pkt,int len)
 {
-    volatile struct txdesc *d; const u8 *p=(const u8*)pkt; int i;
+    volatile struct txdesc *d;
     (void)ctx;
     if (!g_up || len<=0 || len>BUFSZ) return -1;
     d = &tx_ring[tx_cur];
     { int s=1000000; while(!(d->status&0x01) && s--) spin(10); }
-    for (i=0;i<len;i++) tx_buf[tx_cur][i]=p[i];
+    memcpy(tx_buf[tx_cur], pkt, (size_t)len);
     d->addr=(u64)(uintptr_t)tx_buf[tx_cur]; d->len=(u16)len; d->cso=0;
     d->cmd=0x01|0x02|0x08;                 /* EOP | IFCS | RS */
     d->status=0;
@@ -212,11 +213,12 @@ static int e1000e_send(void *ctx,const void *pkt,int len)
 }
 static int e1000e_recv(void *ctx,void *pkt,int cap)
 {
-    volatile struct rxdesc *d=&rx_ring[rx_cur]; int len,i; u8 *out=(u8*)pkt;
+    volatile struct rxdesc *d=&rx_ring[rx_cur]; int len;
     (void)ctx;
     if (!g_up || !(d->status&0x01)) return 0;
+    __asm__ volatile("" ::: "memory");          /* order the DD read before reading the buffer */
     len=d->len; if(len>cap) len=cap;
-    for (i=0;i<len;i++) out[i]=rx_buf[rx_cur][i];
+    if (len>0) memcpy(pkt, rx_buf[rx_cur], (size_t)len);
     d->status=0;
     e_wr(REG_RDT, rx_cur);
     rx_cur=(rx_cur+1)%NDESC;
@@ -244,6 +246,8 @@ uno_nic_t *e1000e_nic(void)
     if (!g_mmio) return 0;
     g_has_me = (e_rd(REG_FWSM) & ICH_FWSM_FW_VALID) ? 1 : 0;
 
+    read_mac();                                     /* BEFORE reset: CTRL_RST clears RAR0 */
+
     e_wr(REG_IMC, 0xFFFFFFFFu);                     /* mask all interrupts */
     e_wr(REG_RCTL, 0); e_wr(REG_TCTL, TCTL_PSP);
     (void)e_rd(REG_STATUS); mdelay_(10);
@@ -262,7 +266,6 @@ uno_nic_t *e1000e_nic(void)
     }
     e_wr(REG_IMC, 0xFFFFFFFFu); (void)e_rd(REG_ICR);
 
-    read_mac();
     /* restore RAR0 (cleared by reset) + AV */
     e_wr(REG_RAL0, g_mac[0]|(g_mac[1]<<8)|(g_mac[2]<<16)|((u32)g_mac[3]<<24));
     e_wr(REG_RAH0, g_mac[4]|(g_mac[5]<<8)|RAH_AV);
