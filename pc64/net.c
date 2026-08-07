@@ -345,18 +345,50 @@ static void udp_recv(const u8 *ip, const u8 *udp, int len)
  * pc64_http / unoauto_remote / the .UNO app ABI are unchanged. */
 #include "netsock.h"
 
+/* --- TCP tuning (perf) ---------------------------------------------------- *
+ * The old engine was stop-and-wait with a single 512-byte pend[] segment: one
+ * unacked segment at a time and no MSS negotiation, so throughput was one
+ * segment per round trip. These let it keep many full-size segments in flight
+ * up to the peer's advertised window, the way a real TCP does. */
+#define TCP_MSS      1460   /* our advertised MSS + the largest payload we emit */
+#define SND_BUF      8192   /* per-socket send buffer: many segments in flight  */
+#define RXQ_SZ      32768   /* per-socket rx queue = the window we advertise     */
+#define RTO_MS_INIT   500   /* initial retransmit timeout (wall clock, ms)       */
+#define RTO_MS_MAX   4000   /* exponential-backoff ceiling                       */
+
+/* Wall-clock milliseconds off the calibrated TSC (net_ms). The retransmit timer
+ * used to count net_poll iterations, whose rate swings with the caller's cadence
+ * (60-200 Hz), so the effective RTO wandered by 3x. This gives it a real time
+ * base. uno_native_tsc_per_us() is 0 only before the boot-time calibration, in
+ * which case we fall back to a coarse per-poll estimate so timing still runs. */
+unsigned long long uno_native_rdtsc(void);
+unsigned long long uno_native_tsc_per_us(void);
+static u32 net_ms(void)
+{
+    unsigned long long per_us = uno_native_tsc_per_us();
+    if (per_us) return (u32)(uno_native_rdtsc() / (per_us * 1000ULL));
+    return g_ticks * 5u;            /* no TSC base yet: ~5 ms per net_poll */
+}
+
 typedef struct {
     int   type;                  /* SOCK_NONE / SOCK_TCP / SOCK_UDP */
     int   state;                 /* TCP_* (SOCK_TCP); 1 if bound (SOCK_UDP) */
     u8    raddr[4];              /* remote peer IP */
     u16   lport, rport;          /* local, remote ports */
     u32   snd_nxt, snd_una, rcv_nxt;
-    int   retx_at;               /* tick to retransmit the unacked control/data */
-    u8    pend[512]; int pend_len;   /* the single outstanding data segment */
-    /* 8 KB rx queue per connection: a CA-validated TLS handshake's certificate
-     * flight is ~4-5 KB arriving back-to-back; a smaller queue overflows the
-     * tail (S-NET-15) and the stream comes out corrupt. */
-    u8    rxq[8192]; int rxq_len;
+    int   retx_at;               /* wall-clock ms (net_ms) to retransmit at */
+    int   rto_ms;                /* current retransmit timeout; backs off on loss */
+    u16   snd_wnd;               /* peer's last advertised receive window (bytes) */
+    u16   mss;                   /* peer MSS from its SYN option, clamped to ours */
+    /* Send buffer holding bytes [snd_una, snd_una+snd_len): those below snd_nxt
+     * are sent-but-unacked, the rest queued-unsent. Replaces the old single
+     * pend[512] so the pump can fill the peer's window with many segments. */
+    u8    snd[SND_BUF]; int snd_len;
+    /* rx queue per connection: a CA-validated TLS handshake's certificate flight
+     * is ~4-5 KB back-to-back; too small a queue overflows the tail (S-NET-15)
+     * and the stream comes out corrupt. Also the window we advertise, so a
+     * bigger queue is a bigger window and a faster download. */
+    u8    rxq[RXQ_SZ]; int rxq_len;
     int   accept_owner;          /* SYN_RCVD child: index of the LISTEN socket */
     int   born_at;               /* tick the child was created - see tcp_reap */
 } sock_t;
@@ -385,23 +417,76 @@ static int sk_valid(int s) { return s >= 0 && s < NSOCK && sk[s].type; }
 /* emit one segment for connection c */
 static void tcp_out(sock_t *c, u8 flags, const u8 *data, int dlen)
 {
-    u8 seg[20 + 512];
-    int flen;
+    u8 seg[24 + TCP_MSS];
+    int flen, hlen;
     u32 seed;
-    memset(seg, 0, 20);
+    hlen = (flags & 0x02) ? 24 : 20;   /* SYN carries a 4-byte MSS option */
+    memset(seg, 0, hlen);
     wr16(seg + 0, c->lport); wr16(seg + 2, c->rport);
     wr32(seg + 4, c->snd_nxt);
     wr32(seg + 8, c->rcv_nxt);
-    seg[12] = 0x50;              /* data offset 5 words */
+    seg[12] = (u8)((hlen / 4) << 4);   /* data offset in 32-bit words */
     seg[13] = flags;
     /* advertise the space we can actually store (S-NET-23) */
     wr16(seg + 14, (u16)((int)sizeof c->rxq - c->rxq_len));
     wr16(seg + 16, 0);          /* checksum (filled below) */
-    if (dlen > 0) memcpy(seg + 20, data, dlen);
-    seed = pseudo_seed(MYIP, c->raddr, 6, 20 + dlen);
-    wr16(seg + 16, cksum(seg, 20 + dlen, seed));
-    flen = ip_build(c->raddr, 6, seg, 20 + dlen);
+    if (flags & 0x02) {         /* MSS option so peers stop capping us at 536 */
+        seg[20] = 2; seg[21] = 4; wr16(seg + 22, TCP_MSS);
+    }
+    if (dlen > 0) memcpy(seg + hlen, data, dlen);   /* SYN never carries data */
+    seed = pseudo_seed(MYIP, c->raddr, 6, hlen + dlen);
+    wr16(seg + 16, cksum(seg, hlen + dlen, seed));
+    flen = ip_build(c->raddr, 6, seg, hlen + dlen);
     if (flen > 0) nic_tx(flen);
+}
+
+/* Peer's usable MSS from a SYN's option area: the advertised value clamped to
+ * our own segment cap and floored at a sane minimum, or the RFC default 536 when
+ * the SYN carried no MSS option. Walks TCP options in [20,hl). */
+static u16 tcp_peer_mss(const u8 *seg, int hl)
+{
+    u16 m = 0;
+    int i = 20;
+    while (i + 1 < hl) {
+        u8 k = seg[i], l;
+        if (k == 0) break;                 /* EOL */
+        if (k == 1) { i++; continue; }     /* NOP */
+        l = seg[i + 1];
+        if (l < 2 || i + l > hl) break;    /* malformed / runs off the header */
+        if (k == 2 && l == 4) { m = (u16)((seg[i + 2] << 8) | seg[i + 3]); break; }
+        i += l;
+    }
+    if (m == 0)        m = 536;            /* no option: RFC default */
+    if (m < 216)       m = 216;           /* absurdly small: floor it */
+    if (m > TCP_MSS)   m = TCP_MSS;        /* never exceed our own cap */
+    return m;
+}
+
+/* Send as many full segments as the peer's window and our buffered-but-unsent
+ * data allow. Called after net_send queues data, after an ACK opens the window,
+ * and by the RTO path (which first rewinds snd_nxt to snd_una to resend). */
+static void tcp_pump(sock_t *c)
+{
+    while (c->state == TCP_ESTABLISHED) {
+        int inflight = (int)(c->snd_nxt - c->snd_una);   /* sent, not yet acked */
+        int unsent   = c->snd_len - inflight;            /* buffered, not sent  */
+        int room     = (int)c->snd_wnd - inflight;       /* space in peer window */
+        int seg;
+        if (unsent <= 0) break;
+        if (room <= 0) {
+            /* Closed/zero window. Only probe with a single segment when nothing
+             * is in flight, so a stalled window can never wedge the connection
+             * (and this preserves the old code's always-send liveness). */
+            if (inflight > 0) break;
+            room = 1;
+        }
+        seg = unsent;
+        if (seg > c->mss) seg = c->mss;
+        if (seg > room)   seg = room;
+        tcp_out(c, 0x18, c->snd + inflight, seg);        /* PSH|ACK */
+        c->snd_nxt += (u32)seg;
+        c->retx_at = (int)net_ms() + c->rto_ms;          /* (re)arm the RTO */
+    }
 }
 
 /* ---- socket API (netsock.h) -------------------------------------------- */
@@ -436,10 +521,11 @@ int net_connect(int s, const unsigned char dst[4], unsigned short dport)
     if (!c->lport) c->lport = eport_next();
     c->snd_nxt = 0x1000; c->snd_una = c->snd_nxt; c->rcv_nxt = 0;
     c->state = TCP_SYN_SENT;
-    c->pend_len = 0; c->rxq_len = 0;
+    c->snd_len = 0; c->rxq_len = 0;
+    c->snd_wnd = TCP_MSS; c->mss = 536; c->rto_ms = RTO_MS_INIT;  /* until SYN|ACK */
     tcp_out(c, 0x02, 0, 0);        /* SYN */
     c->snd_nxt++;                  /* SYN consumes a sequence number */
-    c->retx_at = g_ticks + 30;
+    c->retx_at = (int)net_ms() + c->rto_ms;
     return 0;
 }
 
@@ -448,15 +534,18 @@ int net_sock_state(int s) { return sk_valid(s) ? sk[s].state : TCP_CLOSED; }
 int net_send(int s, const void *data, int len)
 {
     sock_t *c;
+    int room;
     if (!sk_valid(s) || sk[s].type != SOCK_TCP) return -1;
     c = &sk[s];
-    if (c->state != TCP_ESTABLISHED || c->pend_len) return -1;   /* one in flight */
-    if (len > 512) len = 512;
-    memcpy(c->pend, data, len);
-    c->pend_len = len;
-    tcp_out(c, 0x18, c->pend, len);      /* PSH|ACK */
-    c->snd_nxt += len;
-    c->retx_at = g_ticks + 30;
+    if (c->state != TCP_ESTABLISHED) return -1;    /* not writable / lost */
+    if (len < 0) len = 0;
+    /* Queue what fits in the send buffer, then pump segments out to the peer's
+     * window. Returning fewer bytes than asked (0 when full) is the normal
+     * back-pressure signal; every caller already loops on the partial count. */
+    room = (int)sizeof c->snd - c->snd_len;
+    if (len > room) len = room;
+    if (len > 0) { memcpy(c->snd + c->snd_len, data, len); c->snd_len += len; }
+    tcp_pump(c);
     return len;
 }
 
@@ -536,6 +625,7 @@ void net_sock_close(int s)
     if (!sk_valid(s)) return;
     c = &sk[s];
     if (c->type == SOCK_TCP && c->state == TCP_ESTABLISHED) {
+        tcp_pump(c);                      /* flush any queued data before the FIN */
         tcp_out(c, 0x11, 0, 0);           /* FIN|ACK */
         c->snd_nxt++;
     }
@@ -560,11 +650,12 @@ int net_tcp_connect(const u8 dst[4], u16 dport)
     c->lport = eport_next();
     c->snd_nxt = 0x1000; c->snd_una = c->snd_nxt; c->rcv_nxt = 0;
     c->state = TCP_SYN_SENT;
-    c->pend_len = 0; c->rxq_len = 0;
+    c->snd_len = 0; c->rxq_len = 0;
+    c->snd_wnd = TCP_MSS; c->mss = 536; c->rto_ms = RTO_MS_INIT;  /* until SYN|ACK */
     c->accept_owner = 0;
     tcp_out(c, 0x02, 0, 0);        /* SYN */
     c->snd_nxt++;
-    c->retx_at = g_ticks + 30;
+    c->retx_at = (int)net_ms() + c->rto_ms;
     return 0;
 }
 
@@ -578,6 +669,7 @@ void net_tcp_close(void)
     if (g_legacy < 0) return;
     c = &sk[g_legacy];
     if (c->state == TCP_ESTABLISHED) {
+        tcp_pump(c);                      /* flush any queued data before the FIN */
         tcp_out(c, 0x11, 0, 0);           /* FIN|ACK */
         c->snd_nxt++;
         c->state = TCP_FIN_WAIT;          /* keep the slot: peer's FIN/ACK still drains */
@@ -630,9 +722,12 @@ static void tcp_recv(const u8 *ip, const u8 *seg, int len)
             c->rcv_nxt = seq + 1;
             c->snd_nxt = 0x2000; c->snd_una = c->snd_nxt;
             c->state = TCP_SYN_RCVD;
+            c->snd_wnd = rd16(seg + 14);           /* peer's initial window */
+            c->mss = tcp_peer_mss(seg, hl);        /* peer MSS, clamped to ours */
+            c->rto_ms = RTO_MS_INIT;
             c->accept_owner = (int)(l - sk) + 1;   /* +1 so 0 = "no owner" */
             c->born_at = g_ticks;                  /* tcp_reap ages it from here */
-            c->retx_at = g_ticks + 30;
+            c->retx_at = (int)net_ms() + c->rto_ms;
             tcp_out(c, 0x12, 0, 0);                /* SYN|ACK */
             c->snd_nxt++;
         }
@@ -644,7 +739,9 @@ static void tcp_recv(const u8 *ip, const u8 *seg, int len)
     if (c->state == TCP_SYN_SENT) {
         if ((flags & 0x12) == 0x12) {           /* SYN|ACK */
             c->rcv_nxt = seq + 1;
-            c->snd_una = ack;
+            c->snd_una = ack;                   /* the base of the send buffer */
+            c->snd_wnd = rd16(seg + 14);
+            c->mss = tcp_peer_mss(seg, hl);
             c->state = TCP_ESTABLISHED;
             tcp_out(c, 0x10, 0, 0);             /* ACK */
         }
@@ -659,10 +756,23 @@ static void tcp_recv(const u8 *ip, const u8 *seg, int len)
         /* fall through: this ACK may piggyback the peer's first data */
     }
 
-    if (ack > c->snd_una) {                      /* our data/FIN acked */
+    c->snd_wnd = rd16(seg + 14);                 /* track the peer's window */
+    /* Serial-number-safe: (int32)(a-b) > 0 orders correctly across a 2^32 wrap,
+     * which a plain unsigned `ack > snd_una` gets wrong on a long-lived stream. */
+    if ((int)(ack - c->snd_una) > 0) {           /* our data/FIN acked */
+        u32 acked = ack - c->snd_una;
+        int d = (int)acked; if (d > c->snd_len) d = c->snd_len;
+        if (d > 0) {                             /* retire acked bytes from the buffer */
+            if (d < c->snd_len) memmove(c->snd, c->snd + d, c->snd_len - d);
+            c->snd_len -= d;
+        }
         c->snd_una = ack;
-        if (c->pend_len && c->snd_una >= c->snd_nxt) c->pend_len = 0;
+        c->rto_ms  = RTO_MS_INIT;                /* forward progress: reset backoff */
     }
+    /* a wider window or freed room may let queued data go out now */
+    if (c->state == TCP_ESTABLISHED) tcp_pump(c);
+    if ((int)(c->snd_una - c->snd_nxt) < 0)      /* still unacked: keep the RTO live */
+        c->retx_at = (int)net_ms() + c->rto_ms;
 
     if (dlen > 0) {
         u32 diff = c->rcv_nxt - seq;             /* 0 = in-order; (0,dlen) = overlap */
@@ -677,8 +787,12 @@ static void tcp_recv(const u8 *ip, const u8 *seg, int len)
             tcp_out(c, 0x10, 0, 0);              /* ACK what fits */
         } else if (diff >= (u32)dlen && diff < 0x40000000u) {
             tcp_out(c, 0x10, 0, 0);              /* stale duplicate: re-ACK */
+        } else {
+            /* a future segment: there is a gap before it. Send an immediate
+             * duplicate ACK of rcv_nxt (never advancing it) so the peer
+             * fast-retransmits the hole instead of waiting out its RTO. */
+            tcp_out(c, 0x10, 0, 0);
         }
-        /* else: a future segment - drop, the peer resends */
     }
 
     /* FIN counts only at exactly rcv_nxt (after all its data was accepted) */
@@ -740,8 +854,12 @@ static void tcp_tick(void)
     for (i = 0; i < NSOCK; i++) {
         sock_t *c = &sk[i];
         if (c->type != SOCK_TCP) continue;
-        if ((c->state == TCP_SYN_SENT || c->state == TCP_SYN_RCVD || c->pend_len) &&
-            (int)(g_ticks - c->retx_at) >= 0) {
+        /* unacked = the SYN handshake, or any send bytes/ FIN below snd_nxt. The
+         * timer is a wall-clock ms deadline (net_ms), so the RTO is a real time
+         * and not a count of net_poll iterations at the caller's varying rate. */
+        if ((c->state == TCP_SYN_SENT || c->state == TCP_SYN_RCVD ||
+             (c->state == TCP_ESTABLISHED && (int)(c->snd_una - c->snd_nxt) < 0)) &&
+            (int)((u32)net_ms() - (u32)c->retx_at) >= 0) {
             if (c->state == TCP_SYN_SENT) {
                 c->snd_nxt = c->snd_una;
                 tcp_out(c, 0x02, 0, 0); c->snd_nxt = c->snd_una + 1;
@@ -749,11 +867,14 @@ static void tcp_tick(void)
                 c->snd_nxt = c->snd_una;
                 tcp_out(c, 0x12, 0, 0); c->snd_nxt = c->snd_una + 1;
             } else {
-                c->snd_nxt = c->snd_una;                 /* retransmit from the unacked start */
-                tcp_out(c, 0x18, c->pend, c->pend_len);
-                c->snd_nxt = c->snd_una + c->pend_len;
+                /* rewind to the unacked start and resend the buffered data; the
+                 * pump re-emits it a segment at a time up to the peer window. */
+                c->snd_nxt = c->snd_una;
+                tcp_pump(c);
             }
-            c->retx_at = g_ticks + 30;
+            /* exponential backoff so a lossy path is not hammered every RTO */
+            c->rto_ms += c->rto_ms; if (c->rto_ms > RTO_MS_MAX) c->rto_ms = RTO_MS_MAX;
+            c->retx_at = (int)net_ms() + c->rto_ms;
         }
     }
 }
@@ -769,7 +890,7 @@ static void dhcp_send(int type, const u8 *reqip, const u8 *srvip)
     static const u8 bcast_ip[4] = {255,255,255,255};
     static const u8 zero_ip[4] = {0,0,0,0};
     u8 pkt[300];
-    int i = 0, olen;
+    int olen;
     memset(pkt, 0, sizeof pkt);
     pkt[0] = 1; pkt[1] = 1; pkt[2] = 6;         /* BOOTREQUEST, ethernet, hlen 6 */
     memcpy(pkt + 4, g_dhcp_xid, 4);
@@ -839,6 +960,10 @@ static const u8 *dhcp_opt(const u8 *o, int len, u8 want, int *olen)
         if (t == 255) break;
         if (t == 0) { i++; continue; }
         l = o[i + 1];
+        /* the value must lie wholly inside the option area - a truncated ACK (or
+         * a crafted length) must never hand a caller a pointer + length that
+         * runs off the datagram (callers memcpy up to `l` bytes from it). */
+        if (i + 2 + (int)l > len) break;
         if (t == want) { *olen = l; return o + i + 2; }
         i += 2 + l;
     }
@@ -926,6 +1051,8 @@ static void ip_recv(const u8 *ip, int len)
     else if (proto == 6)  tcp_recv(ip, ip + hl, plen);
 }
 
+static void dns_cache_clear(void);       /* defined with the DNS resolver below */
+
 void net_init(uno_nic_t *nic, const u8 mac[6])
 {
     g_nic = nic;
@@ -938,6 +1065,7 @@ void net_init(uno_nic_t *nic, const u8 mac[6])
     g_ticks = 0;
     g_tx_frames = g_rx_frames = g_rx_arp = g_rx_ip = 0;
     g_link_mbps = 0;
+    dns_cache_clear();                    /* a fresh link may resolve differently */
 }
 
 int net_link(void) { return g_nic ? g_nic->link(g_nic->ctx) : 0; }
@@ -971,10 +1099,53 @@ static int dns_name(u8 *o, const char *host)   /* encode "a.b.c" as labels */
     return n;
 }
 
+/* DNS tuning: more retries and a finer poll quantum than the old 4 x 8 ms, so a
+ * cold-cache forwarder gets more chances while the UI stalls in smaller slices;
+ * plus a tiny TTL cache so a repeat lookup (every page load hits the same few
+ * hosts) is instant instead of another ~1 s round trip. */
+#define DNS_TRIES     5
+#define DNS_WAIT_N  500       /* poll iterations per try (x DNS_QUANTUM ms)      */
+#define DNS_QUANTUM   2       /* ms per poll: was 8 - snappier + tighter budget  */
+#define DNS_CACHE_N   8
+#define DNS_TTL_MIN  30u      /* clamp the honoured TTL to a useful, bounded band */
+#define DNS_TTL_MAX 3600u
+
+static struct { char host[64]; u8 ip[4]; u32 expire_ms; int used; }
+    dns_cache[DNS_CACHE_N];
+
+static void dns_cache_clear(void) { memset(dns_cache, 0, sizeof dns_cache); }
+
+static int dns_cache_get(const char *host, u8 out[4])
+{
+    int i; u32 now = net_ms();
+    for (i = 0; i < DNS_CACHE_N; i++)
+        if (dns_cache[i].used && (int)(dns_cache[i].expire_ms - now) > 0 &&
+            !strcmp(dns_cache[i].host, host)) { memcpy(out, dns_cache[i].ip, 4); return 1; }
+    return 0;
+}
+static void dns_cache_put(const char *host, const u8 ip[4], u32 ttl)
+{
+    int i, slot = -1; u32 now = net_ms(); unsigned hl = 0;
+    while (host[hl]) hl++;
+    if (hl >= sizeof dns_cache[0].host) return;           /* too long to cache */
+    if (ttl < DNS_TTL_MIN) ttl = DNS_TTL_MIN;
+    if (ttl > DNS_TTL_MAX) ttl = DNS_TTL_MAX;
+    for (i = 0; i < DNS_CACHE_N; i++) {                    /* reuse / take a free-or-expired slot */
+        if (dns_cache[i].used && !strcmp(dns_cache[i].host, host)) { slot = i; break; }
+        if (slot < 0 && (!dns_cache[i].used || (int)(dns_cache[i].expire_ms - now) <= 0)) slot = i;
+    }
+    if (slot < 0) slot = 0;
+    memcpy(dns_cache[slot].host, host, hl + 1);
+    memcpy(dns_cache[slot].ip, ip, 4);
+    dns_cache[slot].expire_ms = now + ttl * 1000u;
+    dns_cache[slot].used = 1;
+}
+
 int net_dns_query(const char *host, u8 out[4])
 {
     u8 q[300]; int qn = 0, ql, tries;
     const u16 sport = 5300;
+    if (dns_cache_get(host, out)) return 1;    /* fresh cache hit: no round trip */
     /* header: id, flags(RD), qd=1 */
     q[0]=0x51; q[1]=0x53; q[2]=0x01; q[3]=0x00;
     q[4]=0; q[5]=1; q[6]=0; q[7]=0; q[8]=0; q[9]=0; q[10]=0; q[11]=0;
@@ -983,7 +1154,7 @@ int net_dns_query(const char *host, u8 out[4])
     q[qn++]=0; q[qn++]=1;                       /* QTYPE  A  */
     q[qn++]=0; q[qn++]=1;                       /* QCLASS IN */
     g_dns_sent = g_dns_rx = g_dns_badid = g_dns_neg = 0;
-    for (tries = 0; tries < 4; tries++) {       /* (re)send, then wait */
+    for (tries = 0; tries < DNS_TRIES; tries++) { /* (re)send, then wait */
         int waited;
         /* Cooperative wall-clock budget (unoauto_deadline_left_ms): the TEST
          * runner cannot preempt a synchronous wait, so a dead resolver used to
@@ -997,9 +1168,9 @@ int net_dns_query(const char *host, u8 out[4])
         if (tries) uno_pc64_delay_ms(300);
         net_udp_send(DNS, 53, sport, q, qn);
         g_dns_sent++;
-        for (waited = 0; waited < 120; waited++) {
+        for (waited = 0; waited < DNS_WAIT_N; waited++) {
             u8 r[512]; u8 src[4]; u16 sp; int n, i, qd, an;
-            net_poll(); uno_pc64_delay_ms(8);
+            net_poll(); uno_pc64_delay_ms(DNS_QUANTUM);
             if (unoauto_deadline_left_ms() == 0) return 0;   /* budget, as above */
             n = net_udp_recv(sport, r, sizeof r, src, &sp);
             if (n < 12) continue;
@@ -1022,14 +1193,19 @@ int net_dns_query(const char *host, u8 out[4])
                 i++; i += 4;                     /* null + QTYPE + QCLASS */
             }
             for (; an > 0 && i + 12 <= n; an--) { /* answers */
-                u16 type, rdl;
+                u16 type, rdl; u32 ttl;
                 if ((r[i]&0xC0)==0xC0) i += 2;   /* compressed name */
                 else { while (i < n && r[i]) i += r[i]+1; i++; }
                 if (i + 10 > n) { an = 0; break; } /* name walk ran off the buffer */
                 type = (r[i]<<8)|r[i+1];
+                ttl  = ((u32)r[i+4]<<24)|((u32)r[i+5]<<16)|((u32)r[i+6]<<8)|r[i+7];
                 rdl  = (r[i+8]<<8)|r[i+9];
                 i += 10;
-                if (type == 1 && rdl == 4 && i + 4 <= n) { memcpy(out, r + i, 4); return 1; }
+                if (type == 1 && rdl == 4 && i + 4 <= n) {
+                    memcpy(out, r + i, 4);
+                    dns_cache_put(host, out, ttl);   /* remember it for next time */
+                    return 1;
+                }
                 i += rdl;
             }
             break;                               /* parsed but no A record: retry */

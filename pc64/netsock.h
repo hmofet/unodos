@@ -29,7 +29,9 @@ enum { SOCK_NONE = 0, SOCK_TCP, SOCK_UDP };
  * table is SHARED with the URC link, its listener's accepted child, and
  * discovery. A browser that could crowd those out would take the machine's
  * remote channel down with it - which on a box driven only over URC means
- * losing the machine. Each slot costs its 8 KB rx queue, so this is ~35 KB. */
+ * losing the machine. Each slot carries a 32 KB rx queue (the advertised TCP
+ * window) plus an 8 KB send buffer, so the table is ~640 KB of bss - fine for a
+ * 64-bit box, and the window size is what makes downloads fast (see net.c). */
 #ifndef NSOCK
 #define NSOCK 16
 #endif
