@@ -62,6 +62,7 @@ struct uw_doc {
     uw_chunk *chunks;
     size_t    used, max;
     int       truncated;
+    size_t    soft_max;            /* parse-phase ceiling; 0 = the full arena */
     int       max_depth;
 
     /* atoms: interned tag/attribute names, arena-allocated and never freed */
@@ -93,6 +94,11 @@ struct uw_doc {
  * without touching the property code. */
 typedef struct uw_rule uw_rule;
 typedef struct uw_decl uw_decl;
+
+/* uw_layout.c: take the paint list's first block while the arena is still
+ * empty, so an exhausted document can still record the top of the page. Called
+ * from uw_doc_new; see the comment on PAINT_RESERVE. */
+void        uw_paint_reserve(uw_doc *d);
 
 uw_rule    *uw_sheet_rules(uw_sheet *s);
 uw_rule    *uw_rule_next(uw_rule *r);

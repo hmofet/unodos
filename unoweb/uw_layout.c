@@ -35,6 +35,39 @@ struct uw_paint_list {
     int n, cap;
 };
 
+/* ---- the paint-list reserve -----------------------------------------------
+ * The arena never frees, so exhaustion is TERMINAL: the first allocation that
+ * does not fit means every later one fails too, and whichever phase hits the
+ * wall takes everything downstream with it. Paint is last, so paint is what
+ * used to be lost - and a reader with a blank canvas cannot tell a big page
+ * from a broken browser (the finding: unoweb draws NOTHING, not less,
+ * UNOAUTOMATE-REQUESTS.md 2026-08-06).
+ *
+ * So the list's first block is taken at document construction, before the tree
+ * exists and while the arena is certainly empty. A document that later runs
+ * the arena dry still has somewhere to record the top of the page: the walk is
+ * in document order, so what survives is the beginning, which is the part a
+ * reader wants. Growth beyond the reserve works exactly as before.
+ *
+ * The cost is fixed and small (PAINT_RESERVE commands, about 26 KB at 512),
+ * paid by every document including the ones that never need it - which is the
+ * trade this is: a bounded charge on every page against a blank screen on the
+ * ones that overrun. */
+#define PAINT_RESERVE 512
+
+void uw_paint_reserve(uw_doc *d)
+{
+    struct uw_paint_list *p;
+    if (!d || d->paint) return;
+    p = (struct uw_paint_list *)uw_arena(d, sizeof *p);
+    if (!p) return;
+    p->n = 0;
+    p->cap = PAINT_RESERVE;
+    p->v = (uw_paint_cmd *)uw_arena(d, (size_t)p->cap * sizeof *p->v);
+    if (!p->v) p->cap = 0;           /* an arena this small: grow later or not at all */
+    d->paint = p;
+}
+
 /* ---- default metrics -----------------------------------------------------
  * If the embedder supplies none, assume a monospace-ish 0.55em advance. The
  * numbers do not matter for correctness of the ALGORITHM, only for the pixels,
