@@ -34,10 +34,12 @@ typedef struct {
     uno_bdev *dev;
     uint64_t  part_lba;                     /* partition start sector        */
     int       fat32;
-    uint32_t  fat_start;                    /* abs LBA of FAT #0             */
+    uint64_t  fat_start;                    /* abs LBA of FAT #0 (64-bit: a
+                                               partition can start past 2^32) */
     uint32_t  fat_sectors;
-    uint32_t  data_start;                   /* abs LBA of cluster 2          */
-    uint32_t  root_start;                   /* FAT16: abs LBA of root dir    */
+    uint32_t  nfats;                        /* number of FAT copies to mirror */
+    uint64_t  data_start;                   /* abs LBA of cluster 2          */
+    uint64_t  root_start;                   /* FAT16: abs LBA of root dir    */
     uint32_t  root_sectors;                 /* FAT16 fixed root              */
     uint32_t  root_clus;                    /* FAT32 root cluster            */
     uint32_t  sec_per_clus;
@@ -121,6 +123,18 @@ static void cache_flush_range(uno_bdev *dev, uint64_t lba, uint32_t n)
             g_ch[i].lba >= lba && g_ch[i].lba < lba + n)
             cache_flush_line(&g_ch[i]);
 }
+/* Drop (WITHOUT flushing) any cache line inside [lba, lba+n) - for the bulk
+ * WRITE path, which pushes whole cluster runs straight to the device. Flushing
+ * would be wrong: our just-written data is authoritative, so a stale cached
+ * copy of those sectors must be discarded, not written back over it. */
+static void cache_invalidate_range(uno_bdev *dev, uint64_t lba, uint32_t n)
+{
+    int i;
+    for (i = 0; i < CH_N; i++)
+        if (g_ch[i].valid && g_ch[i].dev == dev &&
+            g_ch[i].lba >= lba && g_ch[i].lba < lba + n)
+            { g_ch[i].valid = 0; g_ch[i].dirty = 0; }
+}
 static void cache_sync(void) { int i; for (i = 0; i < CH_N; i++) cache_flush_line(&g_ch[i]); }
 static void cache_drop(uno_bdev *dev)   /* invalidate a device's lines after raw IO */
 { int i; for (i = 0; i < CH_N; i++) if (g_ch[i].dev == dev) { cache_flush_line(&g_ch[i]); g_ch[i].valid = 0; } }
@@ -153,11 +167,12 @@ static int mount_at(uno_bdev *dev, uint64_t start)
     v.fat32 = (fatsz == 0);
     if (v.fat32) fatsz = rd32(bs + 36);
     v.fat_sectors  = fatsz;
-    v.fat_start    = (uint32_t)start + resv;
+    v.nfats        = nfats;
+    v.fat_start    = start + resv;                             /* 64-bit LBA   */
     rootdir_sectors = v.fat32 ? 0 : ((rd16(bs + 17) * 32u) + SECT - 1) / SECT;
     v.root_sectors = rootdir_sectors;
-    v.data_start   = (uint32_t)start + resv + nfats * fatsz + rootdir_sectors;
-    v.root_start   = (uint32_t)start + resv + nfats * fatsz;   /* FAT16 root   */
+    v.data_start   = start + resv + (uint64_t)nfats * fatsz + rootdir_sectors;
+    v.root_start   = start + resv + (uint64_t)nfats * fatsz;   /* FAT16 root   */
     /* Crafted-BPB guard: if TotalSectors is below the reserved+FAT+root region,
      * this unsigned subtraction underflows to ~4 billion clusters and the first
      * fat_alloc scan effectively hangs the machine. Compute the metadata span in
@@ -205,6 +220,12 @@ static void scan_disk(uno_bdev *dev)
             uint64_t elba = ((uint64_t)rd32(gh + 76) << 32) | rd32(gh + 72);
             uint32_t num  = rd32(gh + 80), esz = rd32(gh + 84), e;
             uint8_t  tbl[SECT];
+            /* num/esz come straight off the medium: a crafted/corrupt GPT with
+             * num=0xFFFFFFFF would drive billions of sector reads and hang the
+             * boot. Clamp the entry count and validate the entry size to the
+             * spec range (mirrors installer.c read_src_gpt). */
+            if (num > 512) num = 512;
+            if (esz < 128 || esz > 4096 || (esz & 7)) return;
             for (e = 0; e < num && g_nvol < MAXVOL; e++) {
                 uint64_t entry_byte = (uint64_t)e * esz;
                 uint64_t sec_lba = elba + entry_byte / SECT;
@@ -424,38 +445,49 @@ struct uno_bdev *uno_fat_dev(int vol) { return (vol >= 0 && vol < g_nvol) ? g_vo
 static uint32_t fat_get(fatvol *v, uint32_t clus)
 {
     if (v->fat32) {
-        uint32_t off = clus * 4, lba = v->fat_start + off / SECT;
+        uint32_t off = clus * 4; uint64_t lba = v->fat_start + off / SECT;
         cline *c = cache_get(v->dev, lba);
         if (!c) return 0x0FFFFFFF;
         return rd32(c->buf + (off % SECT)) & 0x0FFFFFFF;
     } else {
-        uint32_t off = clus * 2, lba = v->fat_start + off / SECT;
+        uint32_t off = clus * 2; uint64_t lba = v->fat_start + off / SECT;
         cline *c = cache_get(v->dev, lba);
         if (!c) return 0xFFFF;
         return rd16(c->buf + (off % SECT));
     }
 }
+/* Update the entry in EVERY FAT copy. mkfs writes `nfats` mirrored FATs; a
+ * driver that only touched FAT#0 leaves the mirror stale, so a chkdsk (or any
+ * OS that trusts FAT#1) sees a different allocation state - silent corruption.
+ * Each copy k lives at fat_start + k*fat_sectors. */
 static void fat_set(fatvol *v, uint32_t clus, uint32_t val)
 {
+    uint32_t k, nf = v->nfats ? v->nfats : 1;
     if (v->fat32) {
-        uint32_t off = clus * 4, lba = v->fat_start + off / SECT;
-        cline *c = cache_get(v->dev, lba);
-        if (!c) return;
-        wr32(c->buf + (off % SECT), (rd32(c->buf + (off % SECT)) & 0xF0000000) | (val & 0x0FFFFFFF));
-        cache_put(c);
+        uint32_t off = clus * 4;
+        for (k = 0; k < nf; k++) {
+            uint64_t lba = v->fat_start + (uint64_t)k * v->fat_sectors + off / SECT;
+            cline *c = cache_get(v->dev, lba);
+            if (!c) return;
+            wr32(c->buf + (off % SECT), (rd32(c->buf + (off % SECT)) & 0xF0000000) | (val & 0x0FFFFFFF));
+            cache_put(c);
+        }
     } else {
-        uint32_t off = clus * 2, lba = v->fat_start + off / SECT;
-        cline *c = cache_get(v->dev, lba);
-        if (!c) return;
-        wr16(c->buf + (off % SECT), (uint16_t)val);
-        cache_put(c);
+        uint32_t off = clus * 2;
+        for (k = 0; k < nf; k++) {
+            uint64_t lba = v->fat_start + (uint64_t)k * v->fat_sectors + off / SECT;
+            cline *c = cache_get(v->dev, lba);
+            if (!c) return;
+            wr16(c->buf + (off % SECT), (uint16_t)val);
+            cache_put(c);
+        }
     }
 }
 static int fat_eoc(fatvol *v, uint32_t c)
 { return v->fat32 ? (c >= 0x0FFFFFF8) : (c >= 0xFFF8); }
 
-static uint32_t clus_lba(fatvol *v, uint32_t clus)
-{ return v->data_start + (clus - 2) * v->sec_per_clus; }
+static uint64_t clus_lba(fatvol *v, uint32_t clus)
+{ return v->data_start + (uint64_t)(clus - 2) * v->sec_per_clus; }
 
 /* allocate one free cluster, mark EOC; 0 = disk full */
 static uint32_t fat_alloc(fatvol *v)
@@ -499,7 +531,8 @@ static void fat_free_chain(fatvol *v, uint32_t clus)
 typedef struct {
     fatvol  *v;
     int      is_fixed;                      /* FAT16 root                    */
-    uint32_t lba;                           /* current sector                */
+    int      bad;                           /* start cluster < 2 (invalid)   */
+    uint64_t lba;                           /* current sector (64-bit LBA)   */
     uint32_t clus;                          /* current cluster (chained)     */
     uint32_t sec_in_clus;
     uint32_t fixed_left;                    /* sectors left (fixed root)     */
@@ -508,9 +541,16 @@ typedef struct {
 
 static void dir_open(dircur *d, fatvol *v, uint32_t start_clus, int fixed_root)
 {
-    d->v = v; d->guard = 0;
+    d->v = v; d->guard = 0; d->bad = 0;
     if (fixed_root) {
         d->is_fixed = 1; d->lba = v->root_start; d->fixed_left = v->root_sectors;
+    } else if (start_clus < 2) {
+        /* a cluster < 2 is the FAT/root region, not data: a directory whose
+         * chain head is 0/1 (corrupt, or a ".."/"." storing cluster 0) must
+         * not be walked, or clus_lba() lands the cursor in metadata and a
+         * write plants dir entries into the FAT. Present it as an empty dir. */
+        d->is_fixed = 0; d->bad = 1; d->clus = start_clus;
+        d->sec_in_clus = 0; d->lba = 0;
     } else {
         d->is_fixed = 0; d->clus = start_clus; d->sec_in_clus = 0;
         d->lba = clus_lba(v, start_clus);
@@ -564,9 +604,10 @@ static void unpack83(const uint8_t *e, char *out)
 /* find entry `name83` in the directory rooted at start_clus/fixed_root.
  * fills *lba,*off of the 32-byte entry and returns 1; else 0. */
 static int dir_find(fatvol *v, uint32_t start_clus, int fixed,
-                    const uint8_t name83[11], uint32_t *lba, int *off)
+                    const uint8_t name83[11], uint64_t *lba, int *off)
 {
     dircur d; dir_open(&d, v, start_clus, fixed);
+    if (d.bad) return 0;
     do {
         cline *c = cache_get(v->dev, d.lba);
         int i;
@@ -597,17 +638,23 @@ static int resolve_parent(fatvol *v, const char *path,
         while (*slash && *slash != '\\' && *slash != '/') slash++;
         while (seg < slash && pl < 15) part[pl++] = *seg++;
         part[pl] = 0;
+        /* "." / ".." are not addressable components here: honouring them would
+         * chase a stored parent/self link (whose cluster may be 0) out of the
+         * data region. Reject them outright. */
+        if (part[0] == '.' && (part[1] == 0 || (part[1] == '.' && part[2] == 0)))
+            return 0;
         if (!*slash) {                                /* leaf                 */
             *start_clus = clus; *fixed = fx;
             return pack83(part, leaf);
         }
         {                                             /* descend into a subdir */
-            uint8_t d83[11]; uint32_t elba; int eoff; cline *c;
+            uint8_t d83[11]; uint64_t elba; int eoff; cline *c;
             if (!pack83(part, d83)) return 0;
             if (!dir_find(v, clus, fx, d83, &elba, &eoff)) return 0;
             c = cache_get(v->dev, elba);
             if (!c || !(c->buf[eoff + 11] & 0x10)) return 0;    /* not a dir   */
             clus = ((uint32_t)rd16(c->buf + eoff + 20) << 16) | rd16(c->buf + eoff + 26);
+            if (clus < 2) return 0;                   /* subdir head must be data */
             fx = 0;
         }
         seg = slash + 1;
@@ -618,7 +665,7 @@ static int resolve_parent(fatvol *v, const char *path,
  * start for a cursor: fills *clus,*fixed and returns 1, else 0. */
 static int dir_locate(fatvol *v, const char *dir, uint32_t *clus, int *fixed)
 {
-    uint8_t leaf[11]; uint32_t elba; int eoff; cline *c;
+    uint8_t leaf[11]; uint64_t elba; int eoff; cline *c;
     if (!dir || !dir[0]) {
         *clus = v->fat32 ? v->root_clus : 0; *fixed = v->fat32 ? 0 : 1;
         return 1;
@@ -629,6 +676,7 @@ static int dir_locate(fatvol *v, const char *dir, uint32_t *clus, int *fixed)
     c = cache_get(v->dev, elba);
     if (!c || !(c->buf[eoff + 11] & 0x10)) return 0;    /* not a dir          */
     *clus = ((uint32_t)rd16(c->buf + eoff + 20) << 16) | rd16(c->buf + eoff + 26);
+    if (*clus < 2) return 0;                            /* subdir head must be data */
     *fixed = 0;
     return 1;
 }
@@ -642,6 +690,7 @@ int uno_fat_list(int vol, const char *dir, char (*names)[13], int maxn)
     if (!dir_locate(v, dir, &clus, &fixed)) return 0;
     {
         dircur d; dir_open(&d, v, clus, fixed);
+        if (d.bad) return 0;
         do {
             cline *c = cache_get(v->dev, d.lba); int i;
             if (!c) break;
@@ -669,6 +718,7 @@ int uno_fat_list_ex(int vol, const char *dir, uno_fat_entry *ents, int maxn)
     if (!dir_locate(v, dir, &clus, &fixed)) return 0;
     {
         dircur d; dir_open(&d, v, clus, fixed);
+        if (d.bad) return 0;
         do {
             cline *c = cache_get(v->dev, d.lba); int i;
             if (!c) break;
@@ -694,7 +744,7 @@ int uno_fat_list_ex(int vol, const char *dir, uno_fat_entry *ents, int maxn)
 static int file_locate(fatvol *v, const char *path, uint32_t *clus, uint32_t *size)
 {
     uint32_t pclus; int fixed; uint8_t leaf[11];
-    uint32_t elba; int eoff; cline *c;
+    uint64_t elba; int eoff; cline *c;
     if (!resolve_parent(v, path, &pclus, &fixed, leaf)) return 0;
     if (!dir_find(v, pclus, fixed, leaf, &elba, &eoff)) return 0;
     c = cache_get(v->dev, elba); if (!c) return 0;
@@ -727,7 +777,15 @@ static struct {
     char     path[80];
     long     off;                       /* byte offset this cluster starts at */
     uint32_t clus;
-    int      valid;
+    int      valid;                     /* the (off->clus) cursor is live     */
+    /* Resolved directory lookup for the same (vol,path). file_locate walks
+     * resolve_parent + dir_find on EVERY uno_fat_read_at; while a decoder
+     * streams one file that is the same path over and over, so cache the
+     * start-cluster + size and skip the whole directory walk. Invalidated by
+     * uno_fat_seq_flush, which every write/delete/rename already calls. */
+    int      loc_valid;
+    uint32_t start;
+    uint32_t size;
 } g_seq;
 
 static int seq_hit(int vol, const char *path, long off, uint32_t *clus, long *rem)
@@ -750,8 +808,32 @@ static void seq_save(int vol, const char *path, long off, uint32_t clus)
     g_seq.vol = vol; g_seq.off = off; g_seq.clus = clus; g_seq.valid = 1;
 }
 
-/* any write/delete/rename can move a chain out from under the cursor */
-void uno_fat_seq_flush(void) { g_seq.valid = 0; }
+/* any write/delete/rename can move a chain out from under the cursor AND change
+ * a path's start-cluster/size, so drop both the cursor and the location cache */
+void uno_fat_seq_flush(void) { g_seq.valid = 0; g_seq.loc_valid = 0; }
+
+/* file_locate, but served from the g_seq cache when this is the same (vol,path)
+ * we last resolved. A fresh resolution resets the sequential cursor, since the
+ * (off->clus) cursor belongs to whatever file we were previously streaming. */
+static int file_locate_cached(int vol, fatvol *v, const char *path,
+                              uint32_t *clus, uint32_t *size)
+{
+    int i;
+    if (g_seq.loc_valid && g_seq.vol == vol) {
+        for (i = 0; i < 79 && path[i]; i++)
+            if (g_seq.path[i] != path[i]) goto miss;
+        if (g_seq.path[i] == 0 && path[i] == 0) {
+            *clus = g_seq.start; *size = g_seq.size; return 1;
+        }
+    }
+miss:
+    if (!file_locate(v, path, clus, size)) return 0;
+    for (i = 0; i < 79 && path[i]; i++) g_seq.path[i] = path[i];
+    g_seq.path[i] = 0;
+    g_seq.vol = vol; g_seq.start = *clus; g_seq.size = *size;
+    g_seq.loc_valid = 1; g_seq.valid = 0;   /* new file: cursor not yet placed */
+    return 1;
+}
 
 long uno_fat_read_at(int vol, const char *path, long off,
                      unsigned char *buf, long max)
@@ -761,7 +843,7 @@ long uno_fat_read_at(int vol, const char *path, long off,
     long skip_byte, walked = 0;
     if (vol < 0 || vol >= g_nvol || off < 0) return -1;
     v = &g_vol[vol];
-    if (!file_locate(v, path, &clus, &size)) return -1;
+    if (!file_locate_cached(vol, v, path, &clus, &size)) return -1;
     if (off >= (long)size) return 0;
     if (max > (long)size - off) max = (long)size - off;
     if (max <= 0) return 0;
@@ -869,14 +951,16 @@ long uno_fat_read(int vol, const char *path, unsigned char *buf, long max)
 }
 
 /* ---- public: write (create/overwrite) ------------------------------------- */
-static int dir_alloc_slot(fatvol *v, uint32_t pclus, int fixed, uint32_t *lba, int *off);
+static int dir_alloc_slot(fatvol *v, uint32_t pclus, int fixed, uint64_t *lba, int *off);
 
 int uno_fat_write(int vol, const char *path, const unsigned char *buf, long len)
 {
     uno_fat_seq_flush();   /* chains may move under the read cursor */
     fatvol *v; uint32_t pclus; int fixed; uint8_t leaf[11];
-    uint32_t elba; int eoff; cline *c;
+    uint64_t elba; int eoff; cline *c;
     uint32_t first = 0, prev = 0, need, made = 0;
+    uint32_t old_chain = 0;
+    int created = 0;
     long left = len;
     if (vol < 0 || vol >= g_nvol) return 0;
     v = &g_vol[vol];
@@ -888,7 +972,6 @@ int uno_fat_write(int vol, const char *path, const unsigned char *buf, long len)
      * means an ENOSPC mid-write leaves the entry pointing at freed clusters
      * that another file can then claim (cross-link corruption). Free it only
      * after the new chain and entry are committed. */
-    uint32_t old_chain = 0;
     if (dir_find(v, pclus, fixed, leaf, &elba, &eoff)) {
         c = cache_get(v->dev, elba); if (!c) return 0;
         old_chain = ((uint32_t)rd16(c->buf + eoff + 20) << 16) | rd16(c->buf + eoff + 26);
@@ -903,32 +986,76 @@ int uno_fat_write(int vol, const char *path, const unsigned char *buf, long len)
                            the name - the final entry-fill then re-reads the
                            old sector and stamps cluster/size into a slot whose
                            name is zeroed (invisible file, leaked chain) */
+        created = 1;
     }
 
-    /* write data cluster by cluster */
+    /* Write the data, coalescing physically-CONTIGUOUS freshly-allocated
+     * clusters into one straight-through dev->write. This mirrors the bulk READ
+     * arm: whole runs of up to FAT_BULK_SEC sectors go to the device in a single
+     * transaction out of the aligned staging buffer, and the overlapping cache
+     * lines are dropped rather than read-modify-written a sector at a time. The
+     * old path did one cache_get (a device READ) + tmp[512] memset/memcpy per
+     * sector; on real storage that is the same per-sector transaction count the
+     * read path's bulk arm was added to kill. */
     need = (uint32_t)((len + (long)v->sec_per_clus * SECT - 1) / ((long)v->sec_per_clus * SECT));
-    while (made < need) {
-        uint32_t cl = fat_alloc(v), s;
-        uno_dbg_heartbeat();   /* a multi-MB write must not starve the watchdog */
-        if (!cl) { if (first) fat_free_chain(v, first); return 0; }  /* old chain intact */
-        if (!first) first = cl; else fat_set(v, prev, cl);
-        prev = cl;
-        for (s = 0; s < v->sec_per_clus; s++) {
-            uint8_t tmp[SECT]; long n = left; cline *dc;
-            if (n > SECT) n = SECT;
-            if (n < 0) n = 0;
-            memset(tmp, 0, SECT);
-            if (n) memcpy(tmp, buf + (len - left), (size_t)n);
-            dc = cache_get(v->dev, clus_lba(v, cl) + s);
-            if (!dc) return 0;
-            memcpy(dc->buf, tmp, SECT); cache_put(dc);
-            left -= n;
+    {
+        uint32_t maxcl = FAT_BULK_SEC / v->sec_per_clus;   /* clusters per xfer */
+        uint32_t carry = 0;                 /* a cluster allocated, not yet written */
+        if (maxcl < 1) maxcl = 1;
+        while (made < need) {
+            uint32_t runstart, last, run = 1, nsec;
+            uint64_t base;
+            long src;
+            uint32_t cl, done;
+            /* head of the run: reuse a carried-over allocation, else grab one */
+            if (carry) { cl = carry; carry = 0; }
+            else {
+                cl = fat_alloc(v);
+                uno_dbg_heartbeat();
+                if (!cl) goto wr_fail;
+                if (!first) first = cl; else fat_set(v, prev, cl);
+                prev = cl;
+            }
+            runstart = last = cl;
+            /* extend the run with clusters that come out physically contiguous */
+            while (run < maxcl && made + run < need) {
+                uint32_t nc = fat_alloc(v);
+                uno_dbg_heartbeat();
+                if (!nc) goto wr_fail;
+                fat_set(v, prev, nc); prev = nc;
+                if (nc == last + 1) { last = nc; run++; }
+                else { carry = nc; break; }  /* discontiguous: head of next run */
+            }
+            /* stage + write the run's sectors. maxcl caps a run at FAT_BULK_SEC
+             * sectors, but a single cluster can itself exceed the staging buffer
+             * (>32 KB clusters), so transfer in FAT_BULK_SEC batches, zero-
+             * padding a short tail. `left` = bytes of the file still unwritten
+             * at this run's start; it is read (not mutated) inside the loop. */
+            nsec = run * v->sec_per_clus;
+            base = clus_lba(v, runstart);
+            src  = len - left;
+            for (done = 0; done < nsec; ) {
+                uint32_t batch = nsec - done;
+                long byteoff, avail, take;
+                if (batch > FAT_BULK_SEC) batch = FAT_BULK_SEC;
+                byteoff = (long)done * SECT;
+                avail   = left - byteoff;               /* real bytes still due */
+                if (avail < 0) avail = 0;
+                take = (long)batch * SECT;
+                if (avail > take) avail = take;
+                if (avail) memcpy(g_bulk, buf + src + byteoff, (size_t)avail);
+                if (avail < take) memset(g_bulk + avail, 0, (size_t)(take - avail));
+                if (!v->dev->write(v->dev, base + done, batch, g_bulk)) goto wr_fail;
+                cache_invalidate_range(v->dev, base + done, batch);
+                done += batch;
+            }
+            left -= (left < (long)nsec * SECT) ? left : (long)nsec * SECT;
+            made += run;
         }
-        made++;
     }
 
     /* fill the directory entry (re-fetch: fat ops may have evicted the line) */
-    c = cache_get(v->dev, elba); if (!c) return 0;
+    c = cache_get(v->dev, elba); if (!c) goto wr_fail;
     wr16(c->buf + eoff + 26, (uint16_t)(first & 0xFFFF));         /* lo cluster */
     wr16(c->buf + eoff + 20, (uint16_t)((first >> 16) & 0xFFFF)); /* hi cluster */
     wr32(c->buf + eoff + 28, (uint32_t)len);                     /* size       */
@@ -940,12 +1067,28 @@ int uno_fat_write(int vol, const char *path, const unsigned char *buf, long len)
     cache_sync();
     cache_drop(v->dev);
     return 1;
+
+    /* Any failure after the slot was stamped: unwind so nothing leaks. Free the
+     * partial new chain, and if WE created the directory entry, delete it (an
+     * overwrite of an existing file leaves that file's entry + old_chain intact
+     * - the pre-existing file survives, which is the safe outcome). The old
+     * chain is never freed on this path, so it is never orphaned. */
+wr_fail:
+    if (first) fat_free_chain(v, first);
+    if (created) {
+        cline *ec = cache_get(v->dev, elba);
+        if (ec) { ec->buf[eoff] = 0xE5; cache_put(ec); }
+    }
+    cache_sync();
+    cache_drop(v->dev);
+    return 0;
 }
 
 /* find (or grow into) a free 32-byte slot in a directory */
-static int dir_alloc_slot(fatvol *v, uint32_t pclus, int fixed, uint32_t *lba, int *off)
+static int dir_alloc_slot(fatvol *v, uint32_t pclus, int fixed, uint64_t *lba, int *off)
 {
     dircur d; dir_open(&d, v, pclus, fixed);
+    if (d.bad) return 0;
     do {
         cline *c = cache_get(v->dev, d.lba); int i;
         if (!c) return 0;
@@ -974,7 +1117,7 @@ int uno_fat_delete(int vol, const char *path)
 {
     uno_fat_seq_flush();   /* chains may move under the read cursor */
     fatvol *v; uint32_t pclus; int fixed; uint8_t leaf[11];
-    uint32_t elba; int eoff; cline *c; uint32_t clus;
+    uint64_t elba; int eoff; cline *c; uint32_t clus;
     if (vol < 0 || vol >= g_nvol) return 0;
     v = &g_vol[vol];
     if (v->dev->write == 0) return 0;
@@ -992,8 +1135,8 @@ int uno_fat_delete(int vol, const char *path)
 int uno_fat_mkdir(int vol, const char *path)
 {
     fatvol *v; uint32_t pclus; int fixed; uint8_t leaf[11];
-    uint32_t elba; int eoff; cline *c;
-    uint32_t nc, dotdot, s;
+    uint64_t elba; int eoff; cline *c;
+    uint32_t nc = 0, dotdot, s;
     if (vol < 0 || vol >= g_nvol) return 0;
     v = &g_vol[vol];
     if (v->dev->write == 0) return 0;
@@ -1010,15 +1153,11 @@ int uno_fat_mkdir(int vol, const char *path)
                        eviction discards the name */
 
     nc = fat_alloc(v);
-    if (!nc) {                                        /* disk full: undo slot */
-        c = cache_get(v->dev, elba);
-        if (c) { c->buf[eoff] = 0xE5; cache_put(c); cache_sync(); }
-        return 0;
-    }
+    if (!nc) goto md_undo;                            /* disk full: undo slot */
     /* zero the directory's cluster (a 0x00 first byte = end-of-dir) */
     for (s = 0; s < v->sec_per_clus; s++) {
         cline *cc = cache_get(v->dev, clus_lba(v, nc) + s);
-        if (!cc) return 0;
+        if (!cc) goto md_undo;
         memset(cc->buf, 0, SECT); cache_put(cc);
     }
     /* "." = this dir; ".." = the parent - except the root, whose ".." link is
@@ -1027,7 +1166,7 @@ int uno_fat_mkdir(int vol, const char *path)
     dotdot = (fixed || (v->fat32 && pclus == v->root_clus)) ? 0 : pclus;
     {
         cline *cc = cache_get(v->dev, clus_lba(v, nc));
-        if (!cc) return 0;
+        if (!cc) goto md_undo;
         memcpy(cc->buf, ".          ", 11);
         cc->buf[11] = 0x10;
         wr16(cc->buf + 26, (uint16_t)(nc & 0xFFFF));
@@ -1039,7 +1178,7 @@ int uno_fat_mkdir(int vol, const char *path)
         cache_put(cc);
     }
     /* fill the parent entry (re-fetch: fat ops may have evicted the line) */
-    c = cache_get(v->dev, elba); if (!c) return 0;
+    c = cache_get(v->dev, elba); if (!c) goto md_undo;
     wr16(c->buf + eoff + 26, (uint16_t)(nc & 0xFFFF));            /* lo cluster */
     wr16(c->buf + eoff + 20, (uint16_t)((nc >> 16) & 0xFFFF));    /* hi cluster */
     wr32(c->buf + eoff + 28, 0);                                  /* dirs: size 0 */
@@ -1047,6 +1186,19 @@ int uno_fat_mkdir(int vol, const char *path)
     cache_sync();
     cache_drop(v->dev);
     return 1;
+
+    /* undo on any failure after the slot was stamped: delete the parent entry
+     * and release the directory's cluster, so a full/failing disk leaks
+     * neither a half-built dir nor a dangling name */
+md_undo:
+    {
+        cline *ec = cache_get(v->dev, elba);
+        if (ec) { ec->buf[eoff] = 0xE5; cache_put(ec); }
+    }
+    if (nc >= 2) fat_free_chain(v, nc);
+    cache_sync();
+    cache_drop(v->dev);
+    return 0;
 }
 
 /* ---- public: rename ------------------------------------------------------- */
@@ -1054,7 +1206,7 @@ int uno_fat_rename(int vol, const char *path, const char *newname)
 {
     uno_fat_seq_flush();   /* chains may move under the read cursor */
     fatvol *v; uint32_t pclus; int fixed; uint8_t leaf[11], new83[11];
-    uint32_t elba, dlba; int eoff, doff, i; cline *c;
+    uint64_t elba, dlba; int eoff, doff; int i; cline *c;
     if (vol < 0 || vol >= g_nvol) return 0;
     v = &g_vol[vol];
     if (v->dev->write == 0) return 0;
