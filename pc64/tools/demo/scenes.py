@@ -69,11 +69,13 @@ OFFICE = [("fmt.doc", "FMT.DOC"), ("pic.doc", "PIC.DOC"),
 
 
 def stage_office():
-    """Corpus documents -> build/esp/DOCS\\ so the Files app can browse to
-    them. The office apps' shared Open dialog CANNOT reach DOCS\\ (uofile.c
-    lists a volume's ROOT only, and its Look-in starts on volume 0, the RAM
-    disk), so s04 additionally `put`s the same four files onto the RAM volume
-    at runtime and opens those. Returns the staged names."""
+    """Corpus documents -> build/esp/DOCS\\ (for the Files browse beat) AND
+    the ESP ROOT (for the office apps' shared Open dialog, which lists a
+    volume's root only - uofile.c). The small ones are also `put` onto the
+    RAM volume at runtime (s04_pre): the dialog's Look-in STARTS there, and
+    a 3-row RAM listing photographs better than a 15-file root. SMALL.PPT
+    cannot ride the RAM disk (per-file cap is 256 KB, pc64_io.c FILE_MAX),
+    hence the root copies + the Look-in switch in the UnoShow beat."""
     dst = os.path.join(RQ.ESP, "DOCS")
     os.makedirs(dst, exist_ok=True)
     staged = []
@@ -81,6 +83,7 @@ def stage_office():
         p = os.path.join(CORPUS, src)
         if os.path.exists(p):
             shutil.copyfile(p, os.path.join(dst, name))
+            shutil.copyfile(p, os.path.join(RQ.ESP, name))
             staged.append(name)
     return staged
 
@@ -147,11 +150,55 @@ def boot_qemu():
     return subprocess.Popen(cmd, stderr=subprocess.DEVNULL)
 
 
-def build_disk():
+def build_diskB(docs):
+    """Author disk B as GPT + one ESP FAT32 labelled DOCS carrying `docs`
+    (host paths), so it mounts as ONE clean native-FAT volume. UnoShow's
+    Open dialog lists a volume's root only and cannot scroll (uodlg's list
+    has no scroll offset), so a big document like small.ppt is unreachable
+    from the crowded ESP root - a two-file DOCS volume puts it at row 0.
+    Same GPT+ESP recipe RQ.build_disk uses for the boot disk."""
+    SECTOR, MIB = 512, 1 << 20
+    disk_sectors = 96 * 2048
+    with open(RQ.DISK2, "wb") as f:
+        f.truncate(disk_sectors * SECTOR)
+    subprocess.run(["sgdisk", "--zap-all", RQ.DISK2],
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    subprocess.run(["sgdisk", "-n", "1:2048:0", "-t", "1:EF00", "-c", "1:DOCS",
+                    RQ.DISK2], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    part_start = 2048
+    part_sectors = disk_sectors - part_start - 2048
+    fat = "/tmp/demo_docs_fat.img"
+    with open(fat, "wb") as f:
+        f.truncate(part_sectors * SECTOR)
+    subprocess.run(["mformat", "-i", fat, "-v", "DOCS", "-F",
+                    "-T", str(part_sectors), "::"],
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    for src in docs:
+        subprocess.run(["mcopy", "-i", fat, "-o", src,
+                        "::/" + os.path.basename(src).upper()],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    with open(fat, "rb") as pf, open(RQ.DISK2, "r+b") as df:
+        df.seek(part_start * SECTOR)
+        while True:
+            b = pf.read(MIB)
+            if not b:
+                break
+            df.write(b)
+
+
+def build_disk(docs_for_b=None):
     """RQ.build_disk(), then our DEBUG.CFG (same keys + noshutdown) mcopy'd
     over the one it wrote. Keeping RQ's builder authoritative for the disk
     geometry means this file cannot drift from the harness everyone else
-    boots."""
+    boots. Disk B becomes the DOCS volume (or blank) - either way
+    deterministic, so a stale TESTVOL from a prior gate never leaks in."""
+    if docs_for_b:
+        build_diskB(docs_for_b)
+    else:
+        try:
+            os.unlink(RQ.DISK2)
+        except OSError:
+            pass
     RQ.build_disk()
     # nostress = the fuzz driver's real off switch (it would otherwise open a
     # random app every few frames and fight the choreography); noshutdown
@@ -202,7 +249,16 @@ class Demo(object):
                 "cannot bind 127.0.0.1:%d (%s) - a previous run is still "
                 "alive; kill stale scenes.py/*_qemu.py and qemu processes "
                 "first" % (RQ.PORT, e))
-        build_disk()
+        # disk B carries the big office docs (pic.doc, small.ppt) as a clean
+        # DOCS volume - too large for the RAM disk and unreachable in the
+        # crowded, un-scrollable ESP-root Open dialog.
+        docsb = []
+        for src, _ in OFFICE:
+            if src in ("pic.doc", "small.ppt"):
+                p = os.path.join(CORPUS, src)
+                if os.path.exists(p):
+                    docsb.append(p)
+        build_disk(docs_for_b=docsb or None)
         self.qemu = boot_qemu()
         if not self.link.wait_connected(180):
             raise SystemExit("the guest never dialled in - is this the DEBUG build?")
@@ -446,20 +502,21 @@ def s02_wm(d):
     # Alt-Tab cannot be driven (no ALT over URC): F2 is the shell's own
     # no-Alt switcher; each press steps, it commits on its timer.
     d.beat("switcher-f2")
-    d.key(0, S_F2, settle=0.9)                       # overlay up, step 1
-    d.key(0, S_F2, settle=0.9)                       # step 2, visible walk
-    time.sleep(1.4)                                  # timer commit
+    d.key(0, S_F2, settle=0.5)                       # overlay up, step 1
+    d.key(0, S_F2, settle=0.5)                       # step 2 (commit timer is
+    time.sleep(1.6)                                  # ~0.8 s; stay under it
+                                                     # between steps)
 
     # move the (snapped) Editor to desktop 2 via its title-bar context menu.
-    # Snapped right, its bar spans the right half; right-click it there.
+    # Snapped right, its bar spans the right half; right-click it there. With
+    # the rclick at (w/2+40, 8) the popup lands at a stable spot; the desktop
+    # rows sit at y = 152/174/196/218 for To-desktop-1..4 (measured off
+    # d4_snap_popmenu, upscaled + read).
     mx, my = d.w // 2 + 40, 8
     d.beat("titlebar-menu")
     d.rclick(mx, my, settle=1.0)
-    # menu rows (pop_window_menu): 0 Restore .. 4 Snap right, 5 sep,
-    # 6 'To desktop 1', 7 'To desktop 2'. Row height = fb_text_h()+6 (>=20).
-    rh = POP_ROW_H
     d.beat("to-desktop-2")
-    d.click(mx + 40, my + 1 + 7 * rh + rh // 2, settle=1.2)
+    d.click(*POP_TO_DESK2, settle=1.2)
     d.beat("switch-to-desktop-2")
     d.desk(2, settle=1.6)                            # the Editor lives here
     d.beat("switch-back-to-desktop-1")
@@ -471,8 +528,8 @@ def s02_wm(d):
     d.desk(1, settle=0.8)
 
 
-POP_ROW_H = 20     # pop_row_h() at the default font; verified against a probe
-                   # shot in dev (see SCENES.md "measured constants")
+POP_TO_DESK2 = (410, 174)      # "To desktop 2" in the title-bar context menu,
+                               # popup anchored by rclick at (w/2+40, 8)
 
 
 def s03_themes(d):
@@ -507,32 +564,39 @@ def s03_themes(d):
     d.ctrl("w", settle=1.0)
 
 
-# The shared Open dialog (uofile.c), measured coordinates. The dialog's
-# Look-in starts on volume 0 (the RAM disk); the file list mirrors row 0 into
-# the name field on every event, and arrow keys never reach the list in
-# UnoWord/UnoCalc - so the drive is: click the row, click Open. From
-# uofile_urc.py ("COORDINATES ARE MEASURED, NEVER COMPUTED"):
-UOF_ROW0 = (250, 112)          # first file-list row
+# The shared Open dialog (uofile.c), coordinates measured off d3_* probe
+# shots (640x400, default font). The dialog's Look-in starts on volume 0
+# (RAM: README.TXT row 0, then the s04_pre pushes); the list mirrors the
+# selected row into the name field, and arrow keys never reach the list in
+# UnoWord or UnoCalc - so the drive there is: click the row, click Open.
+# UnoShow's key bridge DOES map arrows, which is what the ESP walk rides.
+UOF_ROW0 = (250, 112)          # first file-list row (click centre)
 UOF_OPEN = (427, 228)          # the Open button
-UOF_ROW_PITCH = 15             # fb_text_h()+2 at the default font
+UOF_ROW_PITCH = 18             # verified: +18 hits row 1, +36 row 2
 UOF_MENU_FILE = (54, 67)       # "File" on the uochrome menu bar
 UOF_MENU_OPEN = (70, 109)      # its "Open..." row
+UOF_COMBO_ARROW = (383, 87)    # the Look-in combo's drop arrow
+UOF_COMBO_DOCS = (300, 143)    # popup row 2: the DOCS volume (disk B; row 0
+                               # RAM, row 1 NO NAME/ESP, row 2 DOCS)
+UOCALC_A2 = (112, 201)         # grid cell A2 (holds =(1+2)*3)
 
 
 def uof_open_row(d, row):
-    """Drive File-list row `row` through the shared Open dialog."""
+    """Click file-list row `row` in the shared Open dialog, then Open."""
     d.click(UOF_ROW0[0], UOF_ROW0[1] + row * UOF_ROW_PITCH, settle=0.7)
-    d.click(*UOF_OPEN, settle=2.0)
+    d.click(*UOF_OPEN, settle=2.5)
 
 
 def s04_pre(d):
-    """Stage the RAM-volume copies for the root-only Open dialog before the
-    stream rolls (a base64 `put` on camera is nothing to look at). Push order
-    is list order: rows are FMT.DOC 0, FORMULAS.XLS 1, PIC.DOC 2, SMALL.PPT 3."""
+    """Stage the RAM copies for the Open dialog before the stream rolls (a
+    base64 `put` on camera is nothing to look at). ONLY the small two: the
+    RAM disk's per-file cap is 256 KB (pc64_io.c FILE_MAX), which refuses
+    pic.doc and small.ppt. Push order is list order, and README.TXT is
+    seeded first, so the dialog rows are FMT.DOC 1, FORMULAS.XLS 2."""
     if not getattr(d, "office_staged", None):
         print("  s04: SKIP - office corpus not staged")
         return False
-    for name in ["FMT.DOC", "FORMULAS.XLS", "PIC.DOC", "SMALL.PPT"]:
+    for name in ["FMT.DOC", "FORMULAS.XLS"]:
         src = dict((s.upper(), os.path.join(CORPUS, s))
                    for s, _ in OFFICE)[name]
         d.link.push_file(0, name, src)
@@ -540,44 +604,50 @@ def s04_pre(d):
 
 
 def s04_office(d):
-    """UnoWord scrolls fmt.doc, UnoCalc opens formulas.xls on a formula cell,
-    UnoShow shows small.ppt. Docs staged to DOCS\\ on the ESP (Files shows
-    them) + put onto the RAM volume for the root-only Open dialog."""
+    """Files shows the staged docs on the RAM volume; UnoWord opens fmt.doc
+    (select-all in place of scrolling: UnoWord scrolls by mouse WHEEL only,
+    which URC cannot inject, and fmt.doc is one page anyway); UnoCalc opens
+    formulas.xls and clicks a formula cell; UnoShow opens small.ppt from the
+    clean DOCS volume (disk B)."""
     d.beat("files-sees-the-documents")
-    d.launch("files", settle=2.5)                    # opens on the RAM volume
-    time.sleep(1.5)                                  # the four docs on show
+    d.launch("files", settle=2.5)                    # RAM: README + the 2 docs
+    time.sleep(2.0)                                  # FMT.DOC/FORMULAS.XLS
     d.ctrl("w", settle=1.0)
 
     d.beat("unoword-open-fmt-doc")
     d.launch("uoword", settle=3.0)
-    d.ctrl("o", settle=1.2)
-    uof_open_row(d, 0)                               # FMT.DOC
-    d.beat("scroll-the-document")
-    for _ in range(10):
-        d.key(0, S_DOWN, settle=0.25)
+    d.ctrl("o", settle=1.4)
+    uof_open_row(d, 1)                               # FMT.DOC (RAM row 1)
+    d.beat("select-all-sweep")                       # in place of the wheel-
+    d.click(300, 240, glide=True, settle=0.6)        # only scroll (see above)
+    d.ctrl("a", settle=1.2)
     time.sleep(1.0)
     d.ctrl("w", settle=1.2)
 
     d.beat("unocalc-open-formulas-xls")
     d.launch("uocalc", settle=3.0)
-    d.ctrl("o", settle=1.2)
-    uof_open_row(d, 1)                               # FORMULAS.XLS
+    d.ctrl("o", settle=1.4)
+    uof_open_row(d, 2)                               # FORMULAS.XLS (RAM row 2)
     d.beat("click-a-formula-cell")
-    d.click(*UOCALC_A1, settle=1.5)                  # A1 holds =1+2*3
-    time.sleep(1.0)
+    d.click(*UOCALC_A2, settle=1.5)                  # formula bar: =(1+2)*3
+    time.sleep(1.2)
     d.ctrl("w", settle=1.2)
 
     d.beat("unoshow-open-small-ppt")
     d.launch("uoshow", settle=3.0)
-    d.click(*UOF_MENU_FILE, settle=0.7)              # UnoShow has no Ctrl-O
-    d.click(*UOF_MENU_OPEN, settle=1.2)
-    uof_open_row(d, 3)                               # SMALL.PPT
+    d.click(*UOF_MENU_FILE, settle=0.8)              # UnoShow's Ctrl+O label
+    d.click(*UOF_MENU_OPEN, settle=1.4)              # is decorative - click
+    d.click(*UOF_COMBO_ARROW, settle=0.8)            # Look-in ...
+    d.click(*UOF_COMBO_DOCS, settle=1.2)             # ... -> the DOCS volume
+    # DOCS holds PIC.DOC + SMALL.PPT; the type filter shows presentations, so
+    # SMALL.PPT is at/near row 0. UnoShow's key bridge maps Down, so a click
+    # into the list to focus + select, then Open.
+    d.click(*UOF_ROW0, settle=0.8)                   # row 0
+    d.key(0, S_DOWN, settle=0.5)                     # ensure SMALL.PPT selected
+    d.click(*UOF_OPEN, settle=3.0)
     time.sleep(2.0)
     d.beat("close")
     d.ctrl("w", settle=1.0)
-
-
-UOCALC_A1 = (60, 120)          # cell A1; measured from a dev shot
 
 
 def s05_browser(d, with_net=False):
@@ -640,11 +710,13 @@ def s07_studio(d):
     d.launch("studio", settle=3.0)
     # File > New via the in-window menu bar (measured in dev; Studio opens at
     # (24,20), menu bar directly under the title bar, "File" first).
+    # File > New via the in-window menu bar (measured off d4_studio_filemenu:
+    # Studio opens at (24,20), "File" title at (54,48), "New" row at (60,68)).
     d.beat("file-new")
     d.click(*STUDIO_FILE_XY, settle=0.8)
-    d.click(*STUDIO_NEW_XY, settle=0.8)
+    d.click(*STUDIO_NEW_XY, settle=0.9)
     d.text("DEMO.C", settle=0.10)                    # the status-bar name box
-    d.key(13, settle=0.8)
+    d.key(13, settle=1.0)
     d.beat("type-the-program")
     d.text(STUDIO_PROG, settle=0.035)
     d.beat("save")
@@ -661,66 +733,53 @@ def s07_studio(d):
     d.close_all()
 
 
-STUDIO_FILE_XY = (46, 60)      # "File" menu title; measured from a dev shot
-STUDIO_NEW_XY = (52, 78)       # its "New" row
+STUDIO_FILE_XY = (54, 48)      # "File" menu title (d4_studio_filemenu)
+STUDIO_NEW_XY = (60, 68)       # its "New" row
 
 
 def s08_pre(d):
-    """Guard only: no WAD in pc64/wads means a clean no-op, never a download."""
+    """Guard: no WAD in pc64/wads means a clean no-op, never a download. If a
+    WAD is present, pre-launch Duum here (before the stream) so its WAD
+    directory parse + first raycast frame - slow under TCG - are not dead air
+    on camera. Returns True to record if the Duum window came up."""
     if not getattr(d, "wad_staged", None):
         print("  s08: SKIP - no WAD in pc64/wads, scene no-ops by design")
         return False
+    # A PYAPP has no Start-menu row (it is a document PYRT opens), and the
+    # reliable launch is the exact call Files makes on a double-click:
+    # uno.run_app(vol, "APPS\\DUUM.UNO"), which pc64_shell_run_user runs on
+    # PYRT. The ESP is the boot volume; find it rather than assume an index.
+    espv = next((v["vol"] for v in d.link.vols()
+                 if v["kind"] == 1 and v["name"].strip() in ("NO NAME", "")), 1)
+    d._esp_vol = espv
+    d.link.eval('import uno; uno.run_app(%d, "APPS\\\\DUUM.UNO")' % espv,
+                timeout=30)
+    for _ in range(30):                              # WAD parse + first frame
+        if any(t.startswith("Duum") for t in d.windows()):
+            return True
+        time.sleep(2.0)
+    print("  s08: Duum window did not appear after run_app - recording anyway")
     return True
 
 
 def s08_duum(d):
-    """Duum (the Python Doom engine). A PYAPP has no Start-menu row - it is a
-    document PYRT opens - so the on-camera route is the documented one: Files
-    -> APPS\\ -> DUUM.UNO -> Enter (pc64/docs_esp/DUUM.MD)."""
-    d.beat("files-to-apps-folder")
-    d.launch("files", settle=2.5)
-    # Files opens on the RAM volume; step the volume dropdown to the ESP,
-    # then walk to APPS\ by keyboard (canvas is focused on open).
-    d.click(*FILES_VOLDROP, settle=0.8)              # volume dropdown
-    d.click(FILES_VOLDROP[0], FILES_VOLDROP[1] + FILES_VOL_ESP_DY, settle=1.2)
-    for _ in range(FILES_ROWS_TO_APPS):
-        d.key(0, S_DOWN, settle=0.22)
-    d.key(13, settle=1.2)                            # into APPS\
-    d.beat("launch-duum-uno")
-    for _ in range(FILES_ROWS_TO_DUUM):
-        d.key(0, S_DOWN, settle=0.22)
-    d.key(13, settle=2.0)                            # PYRT hosts DUUM.UNO
-    # WAD directory parse + first frame can take a while under TCG
-    opened = False
-    for _ in range(30):
-        if any(t.startswith("Duum") for t in d.windows()):
-            opened = True
-            break
-        time.sleep(2.0)
-    if not opened:
-        # fall back to the documented URC route (the exact call Files makes)
-        d.beat("fallback-uno-run_app")
-        d.link.eval('import uno; uno.run_app(%d, "APPS\\\\DUUM.UNO")' % ESP_VOL,
-                    timeout=30)
-        time.sleep(6.0)
-    time.sleep(2.0)
-    d.beat("walk-the-map")
+    """Duum is already up (s08_pre launched it pre-stream). Show it running,
+    then walk + turn through the map with the arrow keys (DUUM.PY: Up/Down
+    move, Left/Right turn)."""
+    d.beat("duum-running")
+    time.sleep(1.5)
+    d.beat("walk-forward")
+    for _ in range(8):
+        d.key(0, S_UP, settle=0.35)
+    d.beat("turn")
+    for _ in range(5):
+        d.key(0, S_RIGHT, settle=0.35)
+    d.beat("walk-on")
     for _ in range(6):
-        d.key(0, S_UP, settle=0.35)                  # forward
-    for _ in range(4):
-        d.key(0, S_RIGHT, settle=0.35)               # turn
-    for _ in range(4):
         d.key(0, S_UP, settle=0.35)
     time.sleep(1.0)
     d.beat("close")
     d.close_all()
-
-
-FILES_VOLDROP = (0, 0)         # toolbar volume dropdown; measured in dev
-FILES_VOL_ESP_DY = 16          # dropdown row offset to the ESP volume
-FILES_ROWS_TO_APPS = 0         # Down-presses to APPS\ in the ESP root (dev)
-FILES_ROWS_TO_DUUM = 0         # Down-presses to DUUM.UNO inside APPS\ (dev)
-ESP_VOL = 1                    # the boot ESP volume index (vols: RAM=0, ESP=1)
 
 
 def s09_pre(d):
