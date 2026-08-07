@@ -18,6 +18,8 @@
 #include "unolog.h"       /* the system log: what the network actually did */
 #include <string.h>
 #include <stdlib.h>
+#include <stdio.h>        /* snprintf: implicitly declared, it returns through
+                           * the wrong register - see quickjs/VENDOR.md's strtod */
 
 void uno_pc64_delay_ms(int ms);          /* firmware Stall (uefi_main) */
 
@@ -662,7 +664,24 @@ static int hop_start(http_req *r, int no_reuse)
     /* The one blocking step left, and the only one: net_dns_query is
      * synchronous by contract (net.h). Memoised per host, so a page's whole
      * subresource set pays it once. */
-    if (!resolve_host(r->host, r->ip)) return req_fail(r, -4, "DNS lookup failed");
+    /* "DNS lookup failed" on its own cost a filed request and a code probe to
+     * learn what had actually happened (2026-08-06: a build was blamed for a
+     * name this network's resolver NXDOMAINs). net.c already counts what the
+     * resolver did; spending it here tells the difference between "nothing
+     * answered" and "something answered, and said no". */
+    if (!resolve_host(r->host, r->ip)) {
+        static char dbuf[200];
+        const unsigned char *d = net_dns();
+        const char *why =
+            net_dns_rx() == 0    ? "nothing answered"                       :
+            net_dns_neg() > 0    ? "no address for that name"               :
+            net_dns_badid() > 0  ? "replies did not match our query"        :
+                                   "the reply carried no address record";
+        snprintf(dbuf, sizeof dbuf,
+                 "DNS lookup failed - %s (asked %u.%u.%u.%u, %d queries, %d answered)",
+                 why, d[0], d[1], d[2], d[3], net_dns_sent(), net_dns_rx());
+        return req_fail(r, -4, dbuf);
+    }
 
     if (!no_reuse && pool_take(r->host, r->port, r->secure, &r->c)) {
         r->reused = 1;
