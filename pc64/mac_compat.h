@@ -281,6 +281,7 @@ void uno_dc_present(void);      /* fb -> RGB565 framebuffer each vblank */
 void uno_pc64_init(void);       /* modern-PC UEFI platform (uefi_main.c) */
 void uno_pc64_poll(void);       /* UEFI SimpleTextIn keyboard + pointer */
 void uno_pc64_present(void);    /* fb -> GOP framebuffer each frame */
+void uno_pc64_present_cursor(void); /* present when only the pointer moved (band-bounded) */
 void uno_pc64_scene_save(void);    /* snapshot the rendered scene (drag fast-path) */
 void uno_pc64_scene_restore(void); /* restore the snapshot before drawing the outline */
 void uno_pc64_lowres(int on);   /* low-res render mode (full-screen 3D) */

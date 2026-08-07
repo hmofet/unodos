@@ -6746,14 +6746,14 @@ int main(void)
                 uno_dbg_frame_idle(0);
             } else if (cursor_only) {
                 unsigned long long t1 = uno_native_rdtsc();
-                uno_pc64_present();
+                uno_pc64_present_cursor();
                 uno_dbg_frame_present_cyc(uno_native_rdtsc() - t1);
                 uno_dbg_frame_idle(0);
             } else { uno_pc64_delay_ms(16); uno_dbg_frame_idle(1); }
 #else
             if (g_dirty) { unoui_render_ui(&UI); ghost_draw();
                            uno_pc64_present(); g_dirty = 0; }
-            else if (cursor_only) uno_pc64_present();  /* cursor moved: recomposite only */
+            else if (cursor_only) uno_pc64_present_cursor();  /* cursor moved: recomposite only */
             else uno_pc64_delay_ms(16);
 #endif
         }

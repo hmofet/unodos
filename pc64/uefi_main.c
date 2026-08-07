@@ -2010,19 +2010,43 @@ static void blt_present_banded(const fb_px *fb, int fbw, int fbh)
     }
 }
 
+/* cursor Y at the last present, so a cursor-only frame can bound its scan to
+ * the union of the old and new cursor bands instead of the whole framebuffer. */
+static int g_cur_prev_y = -1;
+static int g_present_conly;             /* set by uno_pc64_present_cursor()    */
+
 void uno_pc64_present(void)
 {
     int x, oy, sy, fbw = FB_W, fbh = FB_H, any_dirty = 0, built_sy = -1;
     int built_ox0 = 0, built_ox1 = -1;
+    int sy0 = 0, sy1 = fbh - 1;
     {
         static int first = 1;
         if (first) { stage_mark2(0, 0x000080FF); first = 0; }  /* gray -> blue */
     }
 
+    /* Cursor-only frame: the framebuffer is unchanged except that the pointer
+       moved, so only rows in the union of the previous and current cursor bands
+       (15px tall) can differ from the shadow. Bound pass 1 to that band and mark
+       every other row clean - turning a full-screen ~W*H compare (millions of
+       pixels at 1920x1200, every mouse move) into a scan of ~30 rows. Only when
+       the shadow is valid; otherwise fall through to a full scan. */
+    if (g_present_conly && gShadowValid) {
+        int a = (g_cur_prev_y < 0) ? g_cy : g_cur_prev_y, b = g_cy;
+        if (a > b) { int t = a; a = b; b = t; }
+        a -= 1; b += 15 + 1;
+        if (a < 0) a = 0;
+        if (b > fbh - 1) b = fbh - 1;
+        sy0 = a; sy1 = b;
+        for (sy = 0; sy < fbh; sy++) gDirtyRow[sy] = 0;   /* rows outside band clean */
+    }
+    g_present_conly = 0;
+    g_cur_prev_y = g_cy;
+
     /* pass 1: composite the cursor into each source row, and record BOTH that
        the row changed and the column extent that changed.  Scanning inward
        from each end finds the extent without walking the whole row twice. */
-    for (sy = 0; sy < fbh; sy++) {
+    for (sy = sy0; sy <= sy1; sy++) {
         const fb_px *src = cursor_row(sy, fb + sy * fbw);
         fb_px *sh = gShadow + sy * fbw;
         int x0 = 0, x1 = fbw - 1;
@@ -2125,6 +2149,15 @@ void uno_pc64_present(void)
     /* light pacing only - the main loop already sleeps 16 ms on idle frames, so
        an 8 ms tail here just added latency to every interactive (drag) frame. */
     uno_pc64_delay_ms(1);
+}
+
+/* Present a frame in which ONLY the pointer moved (the shell's cursor-only
+ * path): identical to uno_pc64_present() but bounds the compare pass to the
+ * cursor band. Falls back to a full present when the shadow is not valid. */
+void uno_pc64_present_cursor(void)
+{
+    g_present_conly = 1;
+    uno_pc64_present();
 }
 
 /* ===========================================================================
