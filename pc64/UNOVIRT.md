@@ -4,7 +4,7 @@ The appliance machinery: can this machine host a guest, and later, the guest
 itself. The programme and its phases are `docs/UNOVIRT-PLAN.md`; this file is
 the API surface, its changelog, and the things a consumer has to know.
 
-**Status: A0 through A5 [implemented on VMX]. A6 [in progress: **Linux reaches userspace and runs /init**; the shell itself does not stay up yet]. A1 [unproved on SVM].** The
+**Status: A0 through A5 [implemented on VMX]. A6 [in progress: **userspace runs and the console registers**; the shell exits on EOF for want of a UART receive path]. A1 [unproved on SVM].** The
 capability gate runs on every boot. The foothold is real on Intel: on devbuntu
 (bare metal, nested KVM) UnoDOS enters VMX operation, runs a guest, takes it
 through a CPUID intercept, reads its marker back out of guest memory, and then
@@ -502,12 +502,39 @@ would have to save and restore them around every entry.
 that reads EOF exits immediately - which the kernel reports as "Attempted to
 kill init".
 
-**Where it stands: `/init` still exits with code 0 and prints nothing**, so it
-is failing before its first `echo`. The likeliest cause is a redirection that
-fails (`exec 0</dev/console` after a `mknod` that did not take), which in a
-non-interactive shell is fatal and silent. The next step is to find out which,
-with an init script that cannot fail quietly - a `busybox echo` on line one,
-before any redirection.
+**Where it stands, and the cause is now known.**
+
+    printk: legacy console [ttyS0] enabled
+    Run /init as init process
+    Kernel panic - not syncing: Attempted to kill init! exitcode=0x00000000
+
+The console node is in the cpio now, and it had to be: the kernel opens
+`/dev/console` to give init its stdin **before** init runs, so an init that
+creates the node itself is already too late - and cannot say so, because the
+echo reporting the failure has nowhere to go either. That is why the first
+attempt exited in silence. With the node present, `ttyS0` registers as a real
+console rather than just an earlyprintk.
+
+**The shell then exits with status 0, and that number is the diagnosis.** A
+shell whose stdin is at end-of-file exits cleanly, and `exitcode=0x00000000`
+is the kernel reporting exactly that. It is not a crash and not a missing
+binary: `rdinit=/bin/sh` execs busybox directly, bypassing the script and
+binfmt_script entirely, and the result is identical.
+
+**The missing piece is the UART's receive path.** `uno_vdev_pio` answers LSR
+with `0x60` - transmitter empty, and **data-ready always clear** - so nothing
+ever arrives, and a console that never delivers a byte is indistinguishable
+from a closed one. Output was enough to watch a kernel boot and is not enough
+to hold a shell open.
+
+That work is small and well-shaped, and it is the next thing to do:
+
+- a receive FIFO in the 8250 model, with LSR bit 0 set while it has bytes;
+- UnoDOS keystrokes pushed into it from the shell's frame loop, which already
+  owns the keyboard and already calls `uno_vmm_tick`;
+- and, so the guest does not have to poll, the transport's own interrupt
+  injected on arrival - A4 proved that path with vector 0x20 and it has been
+  idle since.
 
 ### What is left before a shell
 
