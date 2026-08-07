@@ -32,6 +32,7 @@ int  uno_ramfs_write(const char *name, const unsigned char *buf, long len);
 /* uefi_main.c (EFI Simple File System) */
 int  uno_efifs_volumes(void);
 int  uno_efifs_snapshot(int vol, char (*names)[32], int maxn);
+int  uno_efifs_snapshot_dir(int vol, const char *dir, char (*names)[32], int maxn);
 long uno_efifs_read(int vol, const char *name, unsigned char *buf, long max);
 long uno_efifs_read_at(int vol, const char *name, long off,
                        unsigned char *buf, long max);
@@ -125,6 +126,45 @@ int uno_fs_list_begin(int vol)
     g_cache_vol = vol;
     g_cache_n = uno_efifs_snapshot(g_map[vol].idx, g_cache, 64);
     return g_cache_n;
+}
+
+/* List a SUBDIRECTORY.  uno_fs_list_begin/_get answer for a volume's ROOT only
+ * (they pass dir = 0 below), which was fine while every consumer wanted the
+ * root and wrong the moment the app registry needed APPS\.  Both backends could
+ * already do it one layer down - uno_fat_list takes a directory and the
+ * firmware SFS only needed an Open in front of its read loop.
+ *
+ * Writes at most `maxn` names into the CALLER's array (no shared snapshot
+ * cache, so this cannot disturb a listing the Files window is walking) and
+ * returns the TOTAL number of entries, which may be larger.  A caller that
+ * silently truncated would report a missing app as "it never installed", so the
+ * over-cap case is made visible rather than hidden.
+ *
+ * The RAM disk is flat and has no subdirectories: it answers 0. */
+int uno_fs_list_dir(int vol, const char *dir, char (*names)[16], int maxn)
+{
+    build_map();
+    if (vol < 0 || vol >= g_nmap || fw_dead(vol) || !dir || !*dir || maxn < 0)
+        return 0;
+    if (g_map[vol].kind == KIND_RAM) return 0;
+    if (g_map[vol].kind == KIND_FAT) {
+        static char fn[64][13];
+        int n = uno_fat_list(g_map[vol].idx, dir, fn, 64), i;
+        for (i = 0; i < n && i < 64 && i < maxn; i++) {
+            int j; for (j = 0; j < 12 && fn[i][j]; j++) names[i][j] = fn[i][j];
+            names[i][j] = 0;
+        }
+        return n;
+    }
+    {
+        static char en[64][32];
+        int n = uno_efifs_snapshot_dir(g_map[vol].idx, dir, en, 64), i;
+        for (i = 0; i < n && i < 64 && i < maxn; i++) {
+            int j; for (j = 0; j < 15 && en[i][j]; j++) names[i][j] = en[i][j];
+            names[i][j] = 0;
+        }
+        return n;
+    }
 }
 
 int uno_fs_list_get(int vol, int idx, char *name, int max)

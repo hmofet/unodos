@@ -17,6 +17,13 @@ const char *uno_fs_volume_name(int vol);         /* short label, e.g. "RAM"     
 int  uno_fs_list_begin(int vol);
 int  uno_fs_list_get(int vol, int idx, char *name, int max);
 
+/* list a SUBDIRECTORY into the caller's array (no shared snapshot cache).
+ * Returns the TOTAL entry count, which may exceed `maxn` - so a caller can
+ * tell "these are all of them" from "there were more than I asked for", and
+ * never presents a truncated list as a complete one.  0 on the RAM disk
+ * (flat), on a missing directory, or on a dead firmware volume. */
+int  uno_fs_list_dir(int vol, const char *dir, char (*names)[16], int maxn);
+
 /* read a file from a volume's root; returns bytes read, or -1 */
 long uno_fs_read(int vol, const char *name, unsigned char *buf, long max);
 

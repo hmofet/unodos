@@ -46,6 +46,11 @@ int         uno_mod_find(const char *file, int *vol_out, char *path_out, int max
  * 1 = module with no descriptor (defaults from the filename), -1 = not a
  * module.  See uno_appdesc.h. */
 int         uno_mod_desc_read(int vol, const char *path, struct UnoAppDesc *out);
+/* every .UNO on the system, described but NOT loaded.  Fills out[]/file[]/vol[]
+ * and returns how many; *over (nullable) is set if anything was left out, so a
+ * short list is never presented as a complete one. */
+int         uno_mod_scan(struct UnoAppDesc *out, char (*file)[16],
+                         signed char *vol, int maxn, int *over);
 UnoUuiEntry uno_mod_load_uui(const char *file);   /* load, require flags bit0 */
 void        uno_mod_unload_user(void);            /* drop the user-app slot  */
 
