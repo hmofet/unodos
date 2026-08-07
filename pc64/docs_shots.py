@@ -7,12 +7,37 @@ surface to shots/manual/<tag>.png at each scene.
 
   python3 docs_shots.py [scene ...]     run named scenes (default: all core)
 
-The desktop is deterministic, so the Start-menu order is fixed - but it MOVES
-when an app is added, and nothing here fails when it does: the harness launches
-the next app along and captures it under the old name. So the order lives in
-named constants below (A_EDITOR, A_UOCALC, ...), measured off the launcher
-rather than derived, and those names are what the scenes use.
+Scenes name apps by ID - A("uocalc"), never a number. The Start-menu order is
+fixed for a build but MOVES when an app is added, and a scene that counts
+`down` presses does not fail when it does: it opens the next app along and
+captures it under the old name. That shipped once already (2026-08-04, UnoAmp
+at 7 pushed every game down one) and it is what `harness.py unoapps` had been
+doing wrong for three weeks.
+
+Two things stop it here. The order comes from build/apps_roster.txt, written by
+`UNO_DEBUG=1 ./build.sh && python3 harness.py unoapps` - a run that opens every
+app BY ID over URC and checks the window that appeared, so the file is a record
+of a proof rather than a table somebody maintained. And before any scene runs,
+count_menu_rows() asks the live production menu how many rows it has and refuses
+to capture anything if that disagrees with the roster.
+
+Why not read the roster from the machine being photographed: these figures come
+from a PRODUCTION build (the debug build paints a perf HUD over every frame and
+nothing toggles it off), and URC on a production build wants a token typed at
+the console. The app set is a property of the build and of APPS\\, not of
+UNO_DEBUG, so measuring it on the debug build of the same tree is sound - and
+the row-count check is what makes that assumption say so when it is wrong.
+
 Launch app N: Ctrl-Esc, Down*N, Enter.  Close focused window: Ctrl-W.
+
+What none of this removes: a launch is still `Down` pressed N times, and a
+dropped keystroke opens the app ABOVE the one asked for. The row count proves
+the ROSTER matches the machine, not that any one walk down the menu arrived
+where it meant to - it caught itself doing exactly that, twice, before the
+retry below was added. A dropped key is visible in the figure (it is a picture
+of the wrong app under the right name), so proof-read a regenerated set rather
+than assuming it. The way to close this properly is URC on a production build,
+which needs a token typed at the console.
 """
 import json, os, socket, subprocess, sys, time
 
@@ -180,21 +205,125 @@ def launch(q, idx, settle=1.6):
     key(q, "ret"); time.sleep(settle)
 
 
-# ---------------------------------------------------------------- app indices
-# Start-menu order = the app enum order in pc64_uui.c, minus the hidden slots
-# (the Studio-built app and a running Python app appear only once they exist).
-# MEASURED off the launcher, not derived: `probe` shots at Down x15/18/20.
-#
-# This list moved on 2026-08-04 when UnoAmp was added at 7, which pushed every
-# game and tool down by one. Nothing failed - the harness happily launched the
-# NEXT app along and captured it under the old name, so `tracker.png` would
-# have shipped a picture of Paint. Hence names, not numbers, below.
-A_CONTROL, A_EDITOR, A_FILES, A_SYSTEM, A_CLOCK, A_INSTALL = 0, 1, 2, 3, 4, 5
-A_MUSIC, A_UNOAMP = 6, 7
-A_DOSTRIS, A_PACMAN, A_OUTLAST, A_TRACKER, A_PAINT = 8, 9, 10, 11, 12
-A_RUNNER3D, A_BROWSER, A_STUDIO, A_PHOTOS, A_SSH = 13, 14, 15, 16, 17
-A_UOWORD, A_UOCALC, A_UOSHOW = 18, 19, 20
-A_LOGVIEW = 21                   # System Log; appended, so 0..20 held
+# ------------------------------------------------------------------ the roster
+# The Start-menu order, by id. Written by `harness.py unoapps` on a debug build
+# of this tree: it opens every app by id over URC and checks the window that
+# appeared, so this list is the residue of a proof. FALLBACK below is what the
+# file said when this was written, kept so the manual can be regenerated from a
+# single production build - it is checked against the live menu either way, so
+# a stale fallback stops the run instead of mislabelling a figure.
+ROSTER_FILE = "build/apps_roster.txt"
+FALLBACK = ["control", "editor", "files", "system", "clock", "install",
+            "music", "unoamp", "dostris", "pacman", "outlast", "tracker",
+            "paint", "runner3d", "browser", "studio", "photos", "ssh",
+            "uoword", "uocalc", "uoshow", "logview", "vmgr"]
+MENU = []                                    # ids in menu order, filled by main
+
+
+def load_roster():
+    """The menu order: the measured file if there is one, else FALLBACK."""
+    if not os.path.exists(ROSTER_FILE):
+        print("roster: %s absent, using the built-in fallback (%d apps). "
+              "Measure it with: UNO_DEBUG=1 ./build.sh && python3 harness.py "
+              "unoapps" % (ROSTER_FILE, len(FALLBACK)))
+        return list(FALLBACK)
+    ids, stamp = [], ""
+    with open(ROSTER_FILE) as f:
+        for line in f:
+            line = line.strip()
+            if line.startswith("# commit"):
+                stamp = line[2:]
+            if not line or line.startswith("#"):
+                continue
+            ids.append(line.split()[0])
+    print("roster: %s, %d apps (%s)" % (ROSTER_FILE, len(ids), stamp))
+    return ids
+
+
+def A(app_id):
+    """The menu index of an app, by id. Raises rather than guessing.
+
+    A scene that asked for an app this build does not have used to be
+    impossible to write - the constants were numbers, so a removed app silently
+    became its neighbour. Now it stops the scene and names what it wanted."""
+    try:
+        return MENU.index(app_id)
+    except ValueError:
+        raise KeyError("no app %r in the menu (%s)" % (app_id, ", ".join(MENU)))
+
+
+def frame_above_taskbar(path, drop=72):
+    """A screendump's pixels with the taskbar cropped off.
+
+    The taskbar clock shows SECONDS, so two full frames of an unchanged screen
+    are never equal and any comparison of whole frames answers "different"
+    whatever it was asked. That is not a hypothetical: it is what the row count
+    below reported the first time it ran."""
+    with open(path, "rb") as f:
+        if f.readline().strip() != b"P6":
+            raise ValueError("not a P6 ppm: " + path)
+        line = f.readline()
+        while line.startswith(b"#"):
+            line = f.readline()
+        w, h = map(int, line.split())
+        f.readline()                                  # maxval
+        px = f.read()
+    return px[:max(0, h - drop) * w * 3]
+
+
+def count_menu_rows(q, expect, probe="_rows", tries=3):
+    """Prove the live menu has `expect` rows, before anything is captured.
+
+    The launcher CLAMPS at its last row (`if (i < total)` in launcher_event), so
+    pressing Down far more times than there are rows always lands on the last
+    one. Call that frame `end`. Then the roster is right exactly when Down
+    pressed expect-1 times reaches `end` and expect-2 times does not.
+
+    SETTLE IS LOAD-BEARING, and it cost two whole capture runs to learn. At a
+    0.35 s settle this reported "the menu is longer than the roster" three times
+    running on a menu that was exactly the right length: the screendump was
+    racing the repaint after the last keypress, so the frame it compared was one
+    the shell had not finished drawing. Measured afterwards at 1.2 s, 22 downs
+    reaches the end and 21 does not, which is a 23-row menu to the row. A check
+    that cries wolf is worse than no check, because the next person turns it off.
+
+    The retries below are insurance on top of that, and they are one-sided for a
+    reason: anything that goes wrong here - a dropped keystroke, a frame caught
+    early - leaves you EARLIER in the list, never further along. So it can make
+    expect-1 fall short of `end` (retryable, and a false alarm) but it cannot
+    make expect-2 reach `end` (so one comparison settles that direction)."""
+    def menu_frame(downs, tag):
+        combo(q, "ctrl", "esc"); time.sleep(0.8)      # toggle_launcher resets
+        for _ in range(downs):                        # scroll and hot row, so
+            key(q, "down", gap=0.09)                  # each open starts at 0
+        time.sleep(1.2)                               # see SETTLE above
+        path = "%s/%s%s.ppm" % (OUTDIR, probe, tag)
+        q.cmd("screendump", filename=path); time.sleep(0.4)
+        combo(q, "ctrl", "esc"); time.sleep(0.4)
+        data = frame_above_taskbar(path)
+        os.remove(path)
+        return data
+
+    os.makedirs(OUTDIR, exist_ok=True)
+    end = menu_frame(expect + 8, "end")               # certainly the last row
+    for attempt in range(tries):
+        if menu_frame(expect - 1, "at") == end:
+            break
+        print("menu: row %d did not reach the end, retrying (%d/%d)"
+              % (expect - 1, attempt + 1, tries))
+    else:
+        raise SystemExit(
+            "menu row count: the roster says %d apps but %d presses never "
+            "reached the last row in %d tries, so the menu is longer. "
+            "Re-measure it: UNO_DEBUG=1 ./build.sh && python3 harness.py "
+            "unoapps" % (expect, expect - 1, tries))
+    if menu_frame(expect - 2, "before") == end:
+        raise SystemExit(
+            "menu row count: the roster says %d apps but %d presses already "
+            "reach the last row, so the menu is shorter. Re-measure it: "
+            "UNO_DEBUG=1 ./build.sh && python3 harness.py unoapps"
+            % (expect, expect - 2))
+    print("menu: %d rows, matching the roster" % expect)
 
 # ---- scenes ---------------------------------------------------------------
 def sc_desktop(q):
@@ -221,7 +350,7 @@ def cp_open_tab(q, tab_idx):
     strip; a following Tab steps into that tab's first control. The Panel
     reopens on its LAST-viewed tab, so clamp left to Display (tab 0) first, then
     walk right - deterministic regardless of the remembered tab."""
-    close_all(q); launch(q, A_CONTROL)
+    close_all(q); launch(q, A("control"))
     key(q, "tab"); time.sleep(0.3)                   # focus the tab strip
     for _ in range(6):
         key(q, "left", gap=0.12)                     # clamp at Display (tab 0)
@@ -231,7 +360,7 @@ def cp_open_tab(q, tab_idx):
 
 def sc_controlpanel(q):
     close_all(q)
-    launch(q, A_CONTROL)
+    launch(q, A("control"))
     shot(q, "controlpanel")                          # opens on the Display tab
 
 def sc_personalization(q):
@@ -285,7 +414,7 @@ def sc_uiscale(q):
     bump("up")                                       # 125% -> 100%
 
 def sc_editor(q):
-    close_all(q); launch(q, A_EDITOR)
+    close_all(q); launch(q, A("editor"))
     shot(q, "editor")
     # rich text: select all, bold + italic via the Ctrl accelerators
     combo(q, "ctrl", "a"); time.sleep(0.3)
@@ -293,17 +422,17 @@ def sc_editor(q):
     shot(q, "editor_rich")
 
 def sc_files(q):
-    close_all(q); launch(q, A_FILES)
+    close_all(q); launch(q, A("files"))
     shot(q, "files")
     text(q, "2"); time.sleep(0.6)                    # two-pane commander view
     shot(q, "files_two")
 
 def sc_system(q):
-    close_all(q); launch(q, A_SYSTEM)
+    close_all(q); launch(q, A("system"))
     shot(q, "system")
 
 def sc_clock(q):
-    close_all(q); launch(q, A_CLOCK)
+    close_all(q); launch(q, A("clock"))
     shot(q, "clock")
 
 def sc_logview(q):
@@ -333,13 +462,13 @@ def sc_logview(q):
         text(q, loc); key(q, "ret"); time.sleep(settle)
 
     close_all(q)
-    launch(q, A_LOGVIEW, settle=2.4)
+    launch(q, A("logview"), settle=2.4)
     # RAISE THE LEVEL FIRST, then generate the traffic. A record dropped
     # for being over the level is gone - turning the level up afterwards
     # shows an empty log and a "dropped 5" counter, which is honest and
     # useless as a figure.
     text(q, "="); time.sleep(0.6)          # More: notice -> info
-    launch(q, A_BROWSER, settle=2.0)
+    launch(q, A("browser"), settle=2.0)
     goto("uno:sample")
     goto("uno:script")
     goto("uno:engine")
@@ -347,11 +476,11 @@ def sc_logview(q):
     shot(q, "logview")
 
 def sc_install(q):
-    close_all(q); launch(q, A_INSTALL, settle=2.0)
+    close_all(q); launch(q, A("install"), settle=2.0)
     shot(q, "install")
 
 def sc_dostris(q):
-    close_all(q); launch(q, A_DOSTRIS)
+    close_all(q); launch(q, A("dostris"))
     key(q, "n"); time.sleep(0.5)
     for _ in range(4):
         key(q, "left", gap=0.15); key(q, "spc", gap=0.25)
@@ -359,7 +488,7 @@ def sc_dostris(q):
     shot(q, "dostris")
 
 def sc_pacman(q):
-    close_all(q); launch(q, A_PACMAN)
+    close_all(q); launch(q, A("pacman"))
     key(q, "n"); time.sleep(0.4)
     for _ in range(3):
         key(q, "right", gap=0.2)
@@ -367,30 +496,30 @@ def sc_pacman(q):
     shot(q, "pacman")
 
 def sc_outlast(q):
-    close_all(q); launch(q, A_OUTLAST)
+    close_all(q); launch(q, A("outlast"))
     key(q, "n"); time.sleep(0.5)
     shot(q, "outlast")
 
 def sc_music(q):
-    close_all(q); launch(q, A_MUSIC)
+    close_all(q); launch(q, A("music"))
     shot(q, "music")
 
 def sc_tracker(q):
-    close_all(q); launch(q, A_TRACKER)
+    close_all(q); launch(q, A("tracker"))
     shot(q, "tracker")
 
 def sc_paint(q):
-    close_all(q); launch(q, A_PAINT)
+    close_all(q); launch(q, A("paint"))
     shot(q, "paint")
 
 def sc_runner3d(q):
-    close_all(q); launch(q, A_RUNNER3D, settle=2.2)
+    close_all(q); launch(q, A("runner3d"), settle=2.2)
     time.sleep(1.0)
     shot(q, "runner3d")
 
 def sc_studio(q):
     # The IDE (Start-menu index 14). Greets with SDK\SAMPLE.C, syntax-lit.
-    close_all(q); launch(q, A_STUDIO, settle=2.8)
+    close_all(q); launch(q, A("studio"), settle=2.8)
     shot(q, "studio")
     combo(q, "ctrl", "b"); time.sleep(2.8)           # build -> SAMPLE.UNO
     shot(q, "studio_build")                          # build-output pane
@@ -400,28 +529,28 @@ def sc_studio(q):
 def sc_studio_ai(q):
     # The AI column needs a wide desktop, so bump the resolution first
     # (Control Panel -> Resolution dropdown -> a bigger mode), then open Studio.
-    close_all(q); launch(q, A_CONTROL)
+    close_all(q); launch(q, A("control"))
     key(q, "tab", "tab"); time.sleep(0.3)            # focus Resolution dropdown
     key(q, "down", gap=0.5); key(q, "down", gap=0.5) # up two modes; shell reflows
     time.sleep(1.4)
     close_all(q)
-    launch(q, A_STUDIO, settle=2.8)                        # Studio, now wide -> AI column shows
+    launch(q, A("studio"), settle=2.8)                        # Studio, now wide -> AI column shows
     shot(q, "studio_ai")
     # back to the default resolution so later scenes match
-    close_all(q); launch(q, A_CONTROL)
+    close_all(q); launch(q, A("control"))
     key(q, "tab", "tab"); time.sleep(0.3)
     key(q, "up", gap=0.5); key(q, "up", gap=0.5)
     time.sleep(1.0); close_all(q)
 
 def sc_browser_disk(q):
-    close_all(q); launch(q, A_BROWSER, settle=2.0)
+    close_all(q); launch(q, A("browser"), settle=2.0)
     shot(q, "browser_files")
 
 def _browser_open(q, row, tag, settle=1.6):
     # Fresh browser each time. Entering the list from the address bar lands on
     # row 1 (Sample.html); Up from row 0 jumps BACK to the address bar, so we
     # navigate RELATIVE to row 1 and never go above row 0.
-    close_all(q); launch(q, A_BROWSER, settle=2.0)
+    close_all(q); launch(q, A("browser"), settle=2.0)
     key(q, "down"); time.sleep(0.3)                  # address bar -> list row 1
     delta = row - 1
     for _ in range(abs(delta)):
@@ -438,8 +567,8 @@ def sc_cp_network(q):
     # 2026-07-26). Needs a NIC (run with UNO_NIC=1). pc64 binds the NIC lazily -
     # on first network use - so bring the link up by loading a page in the
     # Browser first, then read the live status in the tab (Refresh to update it).
-    close_all(q); launch(q, A_BROWSER, settle=2.0)          # Browser
-    text(q, "http://example.com/"); time.sleep(0.3)
+    close_all(q); launch(q, A("browser"), settle=2.0)          # Browser
+    text(q, "http://%s/" % DOCS_HOST); time.sleep(0.3)
     key(q, "ret"); time.sleep(6.0)                   # DHCP+DNS+GET brings the link up
     cp_open_tab(q, 2)                                # Display -> ... -> Network
     key(q, "tab"); time.sleep(0.2)                   # strip -> Refresh button
@@ -458,13 +587,13 @@ def sc_cp_network(q):
 DOCS_HOST = os.environ.get("UNO_DOCS_HOST", "example.com")
 
 def sc_browser_http(q):
-    close_all(q); launch(q, A_BROWSER, settle=2.0)
+    close_all(q); launch(q, A("browser"), settle=2.0)
     text(q, "http://%s/" % DOCS_HOST); time.sleep(0.3)
     key(q, "ret"); time.sleep(5.0)                   # DHCP+DNS+TCP+GET+render
     shot(q, "browser_http")
 
 def sc_browser_https(q):
-    close_all(q); launch(q, A_BROWSER, settle=2.0)
+    close_all(q); launch(q, A("browser"), settle=2.0)
     text(q, "https://%s/" % DOCS_HOST); time.sleep(0.3)
     key(q, "ret"); time.sleep(10.0)                  # + TLS 1.2 handshake
     shot(q, "browser_https")
@@ -474,14 +603,14 @@ def sc_winsnap(q):
     """A window snapped to half the screen, with the desktop pager beside the
     Start button. Both are new: drag-to-edge snapping and four virtual
     desktops."""
-    close_all(q); launch(q, A_EDITOR, settle=2.0)          # Editor
+    close_all(q); launch(q, A("editor"), settle=2.0)          # Editor
     combo(q, "alt", "left"); time.sleep(1.0)        # snap to the left half
     shot(q, "winsnap")
 
 def sc_desktops(q):
     """Desktop 2, reached with Ctrl+F2. The pager cell for the current desktop
     is filled, and a dot marks any desktop that has windows on it."""
-    close_all(q); launch(q, A_EDITOR, settle=2.0)
+    close_all(q); launch(q, A("editor"), settle=2.0)
     combo(q, "ctrl", "f2"); time.sleep(1.2)
     shot(q, "desktops")
     combo(q, "ctrl", "f1"); time.sleep(0.6)
@@ -489,7 +618,7 @@ def sc_desktops(q):
 def sc_switcher(q):
     """The Alt-Tab switcher overlay. F2 drives the same overlay from a keyboard
     with no working Alt, which is why it exists."""
-    close_all(q); launch(q, A_EDITOR, settle=2.0); launch(q, A_FILES, settle=2.0)
+    close_all(q); launch(q, A("editor"), settle=2.0); launch(q, A("files"), settle=2.0)
     key(q, "f2"); time.sleep(0.5)
     shot(q, "switcher")
     key(q, "esc"); time.sleep(0.4)
@@ -500,7 +629,7 @@ def _sc_ssh_at(q, idx, tag):
 
 # The SSH client sits last in the launcher, at 17. Probed rather than assumed:
 # the first guess was 19 and opened nothing at all.
-def sc_ssh(q): _sc_ssh_at(q, A_SSH, "ssh")
+def sc_ssh(q): _sc_ssh_at(q, A("ssh"), "ssh")
 
 
 # ---- UnoOffice ------------------------------------------------------------
@@ -509,14 +638,14 @@ def sc_ssh(q): _sc_ssh_at(q, A_SSH, "ssh")
 # nothing. Keyboard only - these apps are driven here exactly as someone without
 # a mouse would drive them.
 def sc_uoword(q):
-    close_all(q); launch(q, A_UOWORD, settle=3.0)
+    close_all(q); launch(q, A("uoword"), settle=3.0)
     shot(q, "uoword")
     text(q, "UnoDOS runs a word processor.")
     time.sleep(0.4)
     shot(q, "uoword_typed")
 
 def sc_uocalc(q):
-    close_all(q); launch(q, A_UOCALC, settle=3.0)
+    close_all(q); launch(q, A("uocalc"), settle=3.0)
     shot(q, "uocalc")
     # a formula, so the figure shows a RESULT and the formula bar together -
     # the one thing that tells a spreadsheet apart from a grid of text
@@ -528,19 +657,30 @@ def sc_uocalc(q):
     shot(q, "uocalc_formula")
 
 def sc_uoshow(q):
-    close_all(q); launch(q, A_UOSHOW, settle=3.0)
+    close_all(q); launch(q, A("uoshow"), settle=3.0)
     shot(q, "uoshow")
 
 def sc_unoamp(q):
-    close_all(q); launch(q, A_UNOAMP, settle=2.4)
+    close_all(q); launch(q, A("unoamp"), settle=2.4)
     shot(q, "unoamp")
+
+def sc_appliances(q):
+    """The appliance manager's list view (APPS\\VMGR.UNO).
+
+    The list, not the console: a console figure needs a guest, and starting one
+    needs a kernel staged on the volume, which this capture image does not
+    carry. The status line under the list is the useful part anyway - on a
+    machine that cannot host a guest it says which capability is missing, and
+    QEMU without `-cpu ...,+vmx` is exactly such a machine."""
+    close_all(q); launch(q, A("vmgr"), settle=2.6)
+    shot(q, "appliances")
 
 
 SCENES = {
     "winsnap": sc_winsnap, "desktops": sc_desktops, "switcher": sc_switcher,
     "ssh": sc_ssh,
     "uoword": sc_uoword, "uocalc": sc_uocalc, "uoshow": sc_uoshow,
-    "unoamp": sc_unoamp,
+    "unoamp": sc_unoamp, "appliances": sc_appliances,
     "desktop": sc_desktop, "startmenu": sc_startmenu, "controlpanel": sc_controlpanel,
     "personalization": sc_personalization,
     "themes": sc_themes, "fonts": sc_fonts, "resolution": sc_resolution,
@@ -557,9 +697,24 @@ SCENES = {
 }
 CORE = list(SCENES.keys())
 
+# Scenes that leave something on screen, and therefore go LAST whatever order
+# they were asked for. `close_all` is Ctrl-W, which the shell refuses on a
+# UI_WIN_BARE window - the rule that stops it closing the desktop and the
+# taskbar - and UnoAmp's three windows are BARE because the Winamp skin draws
+# its own chrome. So once `unoamp` has run, the player is on screen for the rest
+# of the boot: it put its dark chassis across the middle of `desktop.png` and a
+# taskbar chip on every figure after it, in a run that reported no failures.
+# Filed to the toolkits lane; deferring the scene is the fix that is available
+# here, and it is a real one - nothing else in the set leaves a window.
+DEFERRED = ["unoamp"]
+
 
 def main():
+    global MENU
     want = sys.argv[1:] or CORE
+    want = ([w for w in want if w not in DEFERRED] +
+            [w for w in want if w in DEFERRED])
+    MENU = load_roster()
     use_nic = os.environ.get("UNO_NIC") == "1"
     full = os.environ.get("UNO_NETDEV")              # full SLIRP string override
     cpu = ["-cpu", "max"] if full else []            # RDRAND for the TLS test
@@ -595,6 +750,11 @@ def main():
             time.sleep(15.0)
         else:
             time.sleep(18)
+        # Before anything is captured, not after: a mislabelled figure is only
+        # ever found by someone reading the manual, and every scene below this
+        # line depends on the roster being the menu the machine actually has.
+        close_all(q)
+        count_menu_rows(q, len(MENU))
         for name in want:
             if name not in SCENES:
                 print("?? unknown scene", name); continue
