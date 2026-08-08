@@ -46,11 +46,11 @@
       "id": "s04",
       "cues": [
         { "id": "s04a", "at": "files-sees-the-documents",
-          "text": "UnoDOS ships a small office suite, and it reads the real file formats." },
+          "text": "UnoDOS ships its own office suite: a faithful recreation of Office 97." },
         { "id": "s04b", "at": "unoword-open-fmt-doc",
           "text": "This is an actual Word document, opened from disk. Not an export, not a simplified copy: the fonts, the formatting and the layout all come out of the original file." },
         { "id": "s04c", "at": "unocalc-open-formulas-xls",
-          "text": "And this is a real Excel workbook." },
+          "text": "And this is a real Excel workbook. The whole suite was rebuilt from nothing, and checked against a live copy of Office 97." },
         { "id": "s04d", "at": "click-a-formula-cell",
           "text": "Its formulas are intact and recalculating. A document written on this machine opens on a normal PC, and one written on a PC opens here." }
       ]
@@ -89,13 +89,17 @@
       "id": "s07",
       "cues": [
         { "id": "s07a", "at": "launch-studio",
-          "text": "This is where it gets unusual. UnoDOS carries its own development environment, and its own C compiler." },
-        { "id": "s07b", "at": "open-it",
+          "text": "This is where it gets unusual. UnoDOS carries its own development environment, and both C and Python are first class citizens in it." },
+        { "id": "s07b", "at": "pick-sample-c-in-the-project",
           "text": "This is a real C program, open on the machine that is about to compile it." },
-        { "id": "s07c", "at": "build",
+        { "id": "s07c", "at": "build-the-c",
           "text": "Control B compiles it, with a real sixty-four bit backend." },
-        { "id": "s07d", "at": "run",
-          "text": "Control R runs it, and the application opens beside the editor. No second computer, no cross compiler, no toolchain anywhere else." }
+        { "id": "s07d", "at": "run-the-c",
+          "text": "Control R runs it, and the application opens beside the editor. No second computer, no cross compiler, no toolchain anywhere else." },
+        { "id": "s07e", "at": "pick-sample-py-in-the-project",
+          "text": "And the same editor, with the same two keystrokes, will take Python instead. Either language is a first class way to write software for this machine." },
+        { "id": "s07f", "at": "run-the-python",
+          "text": "That one runs on the system's own Python runtime, and opens as an ordinary application." }
       ]
     },
     {
@@ -109,6 +113,45 @@
           "text": "It is walking the same level geometry the original game did, textured and perspective correct, on an operating system that also has to be a desktop." },
         { "id": "s08d", "at": "look-around",
           "text": "The game data is the original WAD file, read straight off the disk." }
+      ]
+    },
+    {
+      "id": "s09",
+      "cues": [
+        { "id": "s09a", "at": "open-the-automation-script",
+          "text": "The machine can also be automated, and Python is how you do it." },
+        { "id": "s09b", "at": "read-the-script",
+          "text": "This script asks the system about itself: how much memory is free, which volumes are mounted, what the network card has sent, which windows are open." },
+        { "id": "s09c", "at": "run-it",
+          "text": "Then it starts driving." },
+        { "id": "s09d", "at": "the-machine-drives-itself",
+          "text": "Those keystrokes are coming from the script. It opens the menu, walks down it, launches an application, and then asks the system what changed. The machine is operating itself." }
+      ]
+    },
+    {
+      "id": "s13",
+      "cues": [
+        { "id": "s13a", "at": "open-the-ssh-client",
+          "text": "There is an SSH client, and it is the same SSH the rest of the world uses." },
+        { "id": "s13b", "at": "connect",
+          "text": "Curve twenty five five one nine key exchange, an Ed25519 key, AES encryption. All of it written for this project, and tested against OpenSSH." },
+        { "id": "s13c", "at": "a-shell-on-another-machine",
+          "text": "That is a real shell on a real Linux box across the network." },
+        { "id": "s13d", "at": "run-uname",
+          "text": "The answers are coming from that machine, not this one." }
+      ]
+    },
+    {
+      "id": "s12",
+      "cues": [
+        { "id": "s12a", "at": "dostris-play",
+          "text": "There are games, and they are the project's own. This is Dostris, with its music coming out of the machine's own sequencer." },
+        { "id": "s12b", "at": "pacman-play",
+          "text": "Pac-Man, with ghosts that actually hunt you. This one runs silent: its sound was never written." },
+        { "id": "s12c", "at": "outlast-play",
+          "text": "And OutLast, keeping score while the road comes at you." },
+        { "id": "s12d", "at": "tracker-play",
+          "text": "The music is the machine's too. This is the built-in tracker, four channels, playing a pattern live." }
       ]
     },
     {
