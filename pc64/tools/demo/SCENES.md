@@ -17,6 +17,60 @@ python3 scenes.py --all                     # the whole spine, one boot
 Run under WSL (`qemu-system-x86_64`, OVMF, `sgdisk`, mtools, `ffmpeg` - the
 same toolchain every `tools/*_qemu.py` gate needs).
 
+## `--metal`: recording real hardware
+
+The final cut is filmed on the **X13 Yoga**, booting a stick built from master
+with `DEBUG.CFG` = `nohud`, `nostress`, `noshutdown`, `ui-unlock`,
+`remote=192.168.2.100:5101`. The box **dials OUT** to that address and re-dials
+about 45 s after every reboot, so the driver has to run on **devbuntu**
+(192.168.2.100) - a Windows dev box cannot accept the inbound connection.
+
+```
+sh tools/demo/deploy.sh                     # scp the driver + corpus to devbuntu
+ssh devbuntu
+  pkill -f '[w]atcher.py'                   # frees :5101 if a watcher holds it
+  cd ~/demo && python3 scenes.py --metal --all
+```
+
+`--metal [PORT]` (default 5101) changes four things and nothing else:
+
+- **No boot, no staging.** It binds `0.0.0.0:PORT` and waits up to 10 minutes
+  for the box to dial in, so it can be started before the box is. `remote_qemu`
+  is imported defensively, so the module loads on a host with no QEMU/OVMF.
+- **The stream target is a LAN address**, derived from the live connection's
+  peer (`_local_ip_toward`), not hardcoded. `--stream-host IP` overrides.
+  The receiver binds `0.0.0.0` instead of loopback.
+- **Assets are re-probed on the stick** (`probe_metal_assets`): the volume
+  carrying `DOOM1.WAD` / `DOCS\` is found at runtime rather than trusting a
+  QEMU-era index. The office documents are still pushed to the RAM volume, from
+  `./corpus` (deploy.sh puts them there - the repo is not on devbuntu).
+- **The box is never powered off** on teardown. s09 (appliance) is QEMU-only.
+
+## Resolution
+
+`--min-width` (default 1024) raises the desktop **once at session start**,
+before any stream exists - a resolution change mid-stream makes the guest emit
+a fresh hello, which stream_recv treats as a reset and splits the mp4 into
+`-2.mp4`. QEMU boots at 640x400, which is too small to film; the raise takes it
+to 1280x800. Pass `--min-width 0` to leave it alone.
+
+It is driven entirely by keyboard, because the screen changes size underneath
+the sequence and any coordinate read beforehand would be stale halfway through.
+Three things about that flow are not what the layout suggests, and each one
+failed *silently* before it was pinned down:
+
+- A successful Apply **disables the Apply button** (`g_res_sel ==
+  res_active_index()`, pc64_uui.c:1132) and unoui refuses focus to a disabled
+  widget (`interactive()`, unoui_input.c:89), so **Tab skips it**. Any Tab count
+  derived from the visible layout is one too many and lands on "Revert now".
+- The rebuilt panel leaves focus **on Keep** already, so the confirm is a bare
+  Enter - no walk at all. (Verified from a screenshot: Keep carries the focus
+  ring, Apply is greyed.)
+- The mode reads back as the NEW size for the whole 15 s probation window, so a
+  prompt check **cannot tell "kept" from "about to revert"** and reports success
+  either way. The verification therefore sleeps past `RES_CONFIRM_S` and asks
+  again. Doing nothing is always safe: unconfirmed modes revert themselves.
+
 ## Outputs (per scene, into `out/`)
 
 | file | what |
@@ -72,17 +126,32 @@ nostress          <- the fuzz driver's real off switch (it opens a random app
 noshutdown        <- belt-and-braces on the stress auto power-off
 ```
 
-## Measured constants (re-measure after a theme/font/layout change)
+## Coordinates and resolution
 
-All in scenes.py, each annotated at the definition:
+Every coordinate here was first read off a **640x400** probe shot, and metal
+runs at 1280x800. They fall into three classes and only the third needed work:
 
-- `POP_ROW_H` - title-bar context-menu row height ("To desktop 2" click).
-- `UOF_ROW0/UOF_OPEN/UOF_ROW_PITCH/UOF_MENU_*` - shared Open dialog + uochrome
-  menu geometry (from `tools/uofile_urc.py`, verified against probe shots).
-- `UOCALC_A1` - the first grid cell.
-- `STUDIO_FILE_XY/STUDIO_NEW_XY` - Studio's in-window menu bar.
-- `FILES_VOLDROP/FILES_VOL_ESP_DY/FILES_ROWS_TO_APPS/FILES_ROWS_TO_DUUM` -
-  Files toolbar + row walks for s08.
+1. **Window-relative, with a hardcoded window origin** - Control Panel (150,24),
+   Studio (24,20), UnoCalc (24,20), UnoShow (20,16), Files (120,64), Editor
+   (90,36). Menu bars, toolbars and grids are laid out from that corner, so
+   these are resolution-independent and stay as literals:
+   `STUDIO_FILE_XY`, `STUDIO_NEW_XY`, `UOF_MENU_FILE`, `UOF_MENU_OPEN`,
+   `UOCALC_A2`, the Files volume dropdown, the Editor title bar.
+2. **Already computed** from the live size - the snap edge is `d.w - 4`.
+3. **Screen-centred or clamped**, i.e. they MOVE with resolution. Baked
+   literals would have missed every one of these, so they are derived at
+   runtime:
+   - the shared **Open dialog** - `Demo.dlg()` applies `uod_open`'s own formula
+     (`x=(sw-dw)/2`, `y=(sh-dh)/3`) to the live size. Verified: at 640x400 it
+     predicts x0=173, which matched the probe shot to the pixel.
+   - the **title-bar context menu** - `Demo.rclick_menu()` grabs before and
+     after the right-click and takes the changed region as the popup, then
+     indexes rows within it. The popup is anchored at the click but clamped
+     against the taskbar, so its position is not predictable from the anchor.
+   - **UnoShow's slide page** - `Demo.slide_rect()` finds the white page
+     bounded by the grey mat on a live grab; `UOSHOW_TITLE_F` is a *fraction*
+     of that page, not a pixel.
 
-Take probe shots liberally (`Demo.shot`) when re-measuring; read coordinates
-off screenshots, never compute them from theory - menu bands move.
+Re-measure after a theme/font/UI-scale change. Take probe shots liberally
+(`Demo.shot`); read coordinates off screenshots, never compute them from
+theory - menu bands move.
