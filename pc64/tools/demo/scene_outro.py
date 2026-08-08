@@ -17,7 +17,7 @@ docs cite. Hardware names and their spelling come from that table, so this
 montage and the manual cannot drift apart.
 
 BUILD SHAPE. Two ffmpeg passes rather than one enormous filtergraph:
-  1. per platform, one 640x400 card PNG - the screenshot fitted (never cropped,
+  1. per platform, one full-size card PNG - the screenshot fitted (never cropped,
      never stretched) onto black, with a caption bar burned in;
   2. those cards, each held `--hold` seconds, chained through xfade.
 Splitting it keeps every intermediate inspectable, which matters when the input
@@ -27,8 +27,8 @@ import argparse, json, os, subprocess, sys, time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from demo_common import (OUT, REPO, VID_W, VID_H, FPS, font_path, probe,  # noqa: E402
-                         Beats, clean_outputs)
+from demo_common import (OUT, REPO, FPS, font_path, probe, Beats,  # noqa: E402
+                         clean_outputs)
 
 # (caption, repo-relative image, crop-or-None). Order is roughly by era, so
 # the montage reads as a lineage rather than a shuffled grid. Every name is
@@ -81,34 +81,50 @@ def esc(s):
     return s.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
 
 
-def make_card(src, caption, dst, font, index=None, total=None, crop=None):
-    """One 640x400 card: the screenshot fitted onto black, a caption bar and
-    the platform name. `fit` never crops - a console frame is 256x224 and a
-    pc64 desktop is 1280x800, and cropping either to fill would be a lie about
-    what the machine draws.
+# RENDER SIZE. This scene is built from stills by ffmpeg, so unlike s01 and s06
+# it has no native resolution of its own - it should be authored AT the size the
+# final cut is assembled at, not authored small and scaled up. The cut is
+# 1280x800, so that is the default; --width/--height re-target it. Every
+# dimension below is expressed against a 640x400 reference and multiplied by
+# SC = height/400, so one number moves the whole layout and the captions get
+# real pixels instead of an upscale.
+DEF_W, DEF_H = 1280, 800
 
-    A 256x224 console frame and a 1280x800 desktop are both real frames and
-    both have to stay real, so both are letterboxed rather than filled."""
-    bar_h = 46
-    inner_h = VID_H - bar_h
+
+def make_card(src, caption, dst, font, w, h, index=None, total=None, crop=None):
+    """One card: the screenshot fitted onto the backdrop, a caption bar and the
+    platform name.
+
+    `fit` never crops. A 256x224 console frame and a 1280x800 desktop are both
+    real frames and both have to stay real, so both are letterboxed rather than
+    filled. Console frames are upscaled with NEAREST - a 224-line frame blown up
+    to 800 with lanczos is a smear of the pixel art it is meant to show - while
+    anything already at or above the target keeps lanczos for the downscale.
+    """
+    sc = h / 400.0
+    bar_h = int(46 * sc)
+    inner_h = h - bar_h
+    src_h = probe(src).get("h") or 0
+    flags = "neighbor" if src_h and src_h * 1.6 < inner_h else "lanczos"
     vf = (
         ("crop=%s," % crop if crop else "") +
-        "scale=%d:%d:force_original_aspect_ratio=decrease:flags=lanczos,"
+        "scale=%d:%d:force_original_aspect_ratio=decrease:flags=%s,"
         "pad=%d:%d:(ow-iw)/2:(oh-ih)/2:color=0x0B0E14,"
         "pad=%d:%d:0:0:color=0x0B0E14,setsar=1,"
         "drawbox=x=0:y=%d:w=%d:h=%d:color=0x11161F@1:t=fill,"
-        "drawbox=x=0:y=%d:w=%d:h=2:color=0x3C82F6@1:t=fill,"
-        "drawtext=fontfile='%s':text='%s':fontcolor=0xFFFFFF:fontsize=26:"
-        "x=24:y=%d"
-        % (VID_W, inner_h, VID_W, inner_h, VID_W, VID_H,
-           inner_h, VID_W, bar_h,
-           inner_h, VID_W,
-           font, esc(caption), inner_h + 10)
+        "drawbox=x=0:y=%d:w=%d:h=%d:color=0x3C82F6@1:t=fill,"
+        "drawtext=fontfile='%s':text='%s':fontcolor=0xFFFFFF:fontsize=%d:"
+        "x=%d:y=%d"
+        % (w, inner_h, flags, w, inner_h, w, h,
+           inner_h, w, bar_h,
+           inner_h, w, max(2, int(2 * sc)),
+           font, esc(caption), int(26 * sc), int(24 * sc), inner_h + int(10 * sc))
     )
     if index is not None:
         vf += (",drawtext=fontfile='%s':text='%s':fontcolor=0x8A93A6:"
-               "fontsize=18:x=w-tw-24:y=%d"
-               % (font, esc("%d / %d" % (index, total)), inner_h + 15))
+               "fontsize=%d:x=w-tw-%d:y=%d"
+               % (font, esc("%d / %d" % (index, total)), int(18 * sc),
+                  int(24 * sc), inner_h + int(15 * sc)))
     r = subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", src,
                         "-vf", vf, "-frames:v", "1", dst])
     if r.returncode != 0:
@@ -116,26 +132,30 @@ def make_card(src, caption, dst, font, index=None, total=None, crop=None):
     return dst
 
 
-def make_endcard(dst, font):
+def make_endcard(dst, font, w, h):
+    sc = h / 400.0
     vf = (
-        "drawtext=fontfile='%s':text='%s':fontcolor=0xFFFFFF:fontsize=64:"
-        "x=(w-tw)/2:y=118,"
-        "drawbox=x=(iw-160)/2:y=196:w=160:h=2:color=0x3C82F6@1:t=fill,"
-        "drawtext=fontfile='%s':text='%s':fontcolor=0xC7CEDB:fontsize=21:"
-        "x=(w-tw)/2:y=228,"
-        "drawtext=fontfile='%s':text='%s':fontcolor=0xC7CEDB:fontsize=21:"
-        "x=(w-tw)/2:y=258"
-        % (font, esc(CARD_TITLE), font, esc(CARD_LINE), font, esc(CARD_LINE2))
+        "drawtext=fontfile='%s':text='%s':fontcolor=0xFFFFFF:fontsize=%d:"
+        "x=(w-tw)/2:y=%d,"
+        "drawbox=x=(iw-%d)/2:y=%d:w=%d:h=%d:color=0x3C82F6@1:t=fill,"
+        "drawtext=fontfile='%s':text='%s':fontcolor=0xC7CEDB:fontsize=%d:"
+        "x=(w-tw)/2:y=%d,"
+        "drawtext=fontfile='%s':text='%s':fontcolor=0xC7CEDB:fontsize=%d:"
+        "x=(w-tw)/2:y=%d"
+        % (font, esc(CARD_TITLE), int(64 * sc), int(118 * sc),
+           int(160 * sc), int(196 * sc), int(160 * sc), max(2, int(2 * sc)),
+           font, esc(CARD_LINE), int(21 * sc), int(228 * sc),
+           font, esc(CARD_LINE2), int(21 * sc), int(258 * sc))
     )
     r = subprocess.run(["ffmpeg", "-y", "-loglevel", "error",
-                        "-f", "lavfi", "-i", "color=c=0x0B0E14:s=%dx%d" % (VID_W, VID_H),
+                        "-f", "lavfi", "-i", "color=c=0x0B0E14:s=%dx%d" % (w, h),
                         "-vf", vf, "-frames:v", "1", dst])
     if r.returncode != 0:
         raise RuntimeError("end card build failed")
     return dst
 
 
-def build(hold, xfade, card_hold, outfile, beats):
+def build(hold, xfade, card_hold, outfile, beats, w, h):
     font = font_path()
     work = os.path.join(OUT, "s11_cards")
     os.makedirs(work, exist_ok=True)
@@ -149,11 +169,12 @@ def build(hold, xfade, card_hold, outfile, beats):
             missing.append(rel)
             continue
         dst = os.path.join(work, "c%02d.png" % i)
-        make_card(src, name, dst, font, index=len(cards) + 1, total=n, crop=crop)
+        make_card(src, name, dst, font, w, h,
+                  index=len(cards) + 1, total=n, crop=crop)
         cards.append((name, dst))
     if missing:
         raise SystemExit("missing source screenshots: %s" % missing)
-    end = make_endcard(os.path.join(work, "zz_end.png"), font)
+    end = make_endcard(os.path.join(work, "zz_end.png"), font, w, h)
 
     # xfade chain. Each input is a still looped for `hold`; the transition
     # eats `xfade` seconds of overlap, so a card is on screen alone for
@@ -194,10 +215,15 @@ def build(hold, xfade, card_hold, outfile, beats):
 
 def main(argv):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--hold", type=float, default=1.25,
+    # 22 platforms + the end card in ~20 s: 22*(hold-xfade) + card_hold.
+    # The hold shortens, the roster does not - every port earns its frame.
+    ap.add_argument("--hold", type=float, default=1.05,
                     help="seconds each card is held (incl. its crossfade)")
-    ap.add_argument("--xfade", type=float, default=0.35)
-    ap.add_argument("--card-hold", type=float, default=4.2)
+    ap.add_argument("--xfade", type=float, default=0.30)
+    ap.add_argument("--card-hold", type=float, default=3.6)
+    ap.add_argument("--width", type=int, default=DEF_W,
+                    help="render width (default %d - the final cut's size)" % DEF_W)
+    ap.add_argument("--height", type=int, default=DEF_H)
     ap.add_argument("--check", action="store_true",
                     help="verify every source image exists, build nothing")
     a = ap.parse_args(argv)
@@ -215,7 +241,8 @@ def main(argv):
     clean_outputs(base)
     beats = Beats(base + ".beats.jsonl")
     try:
-        build(a.hold, a.xfade, a.card_hold, base + ".mp4", beats)
+        build(a.hold, a.xfade, a.card_hold, base + ".mp4", beats,
+              a.width, a.height)
     finally:
         beats.close()
     info = probe(base + ".mp4")
