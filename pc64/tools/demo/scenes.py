@@ -54,7 +54,7 @@ try:
 except Exception:                               # noqa: BLE001
     RQ = None
 
-OUT    = os.path.join(HERE, "out")
+OUT    = os.path.join(HERE, "out")             # --out-dir overrides
 PROBE  = os.path.join(OUT, "probe")            # dev screenshots (not deliverables)
 SPORT0 = 5460                                  # first stream port; +1 per scene
 
@@ -224,12 +224,22 @@ def build_disk(docs_for_b=None):
         except OSError:
             pass
     RQ.build_disk()
-    # nostress = the fuzz driver's real off switch (it would otherwise open a
-    # random app every few frames and fight the choreography); noshutdown
-    # belts-and-braces the auto power-off on top.
+    # THIS is where the harness's DEBUG.CFG is authored, and the only place a
+    # key survives: RQ.build_disk() writes its own DEBUG.CFG into the FAT
+    # image, so a key added to build/esp by hand is silently overwritten.
+    #   nostress  - the fuzz driver's real off switch (it would otherwise open
+    #               a random app every few frames and fight the choreography)
+    #   noshutdown- belt-and-braces on the stress auto power-off
+    #   nohud     - hide the red perf HUD (and the stress status line under
+    #               it). A debug build is the only one that dials out on its
+    #               own, so it is the only one we can drive - but it paints
+    #               that HUD into every frame. Telemetry is still collected;
+    #               only the on-screen readout goes. (pc64/DEBUG.md; the boot
+    #               log prints `hud_len=0 (HUD DISABLED)`.)
     cfg = os.path.join(os.path.dirname(RQ.DISK), "demo_debug.cfg")
     with open(cfg, "w", newline="\r\n") as f:
-        f.write("remote=10.0.2.2:%d\nnonet\nnostress\nnoshutdown\n" % RQ.PORT)
+        f.write("remote=10.0.2.2:%d\nnonet\nnostress\nnoshutdown\nnohud\n"
+                % RQ.PORT)
     subprocess.run(["mcopy", "-i", RQ.FAT, "-o", cfg, "::/DEBUG.CFG"],
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     # re-splice the FAT image into the disk (build_disk already dd'd it once)
@@ -1279,7 +1289,7 @@ SCENES = [
 
 
 def main(argv):
-    global MODE, METAL_PORT, STREAM_HOST
+    global MODE, METAL_PORT, STREAM_HOST, OUT, PROBE
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--scene", action="append", default=[],
                     help="run one scene (repeatable)")
@@ -1299,6 +1309,9 @@ def main(argv):
     ap.add_argument("--min-width", type=int, default=1024,
                     help="raise the desktop to at least this width at session "
                          "start (0 = leave the resolution alone)")
+    ap.add_argument("--out-dir", metavar="DIR",
+                    help="where the recordings go (default tools/demo/out); "
+                         "use a fresh directory to keep an earlier cut intact")
     a = ap.parse_args(argv)
     names = [n for n, _ in SCENES]
     if a.list:
@@ -1311,6 +1324,10 @@ def main(argv):
     if bad:
         ap.error("unknown scene(s) %s (have: %s)" % (bad, " ".join(names)))
 
+    if a.out_dir:
+        OUT = a.out_dir if os.path.isabs(a.out_dir) \
+            else os.path.join(HERE, a.out_dir)
+        PROBE = os.path.join(OUT, "probe")
     if a.metal:
         MODE, METAL_PORT = "metal", a.metal
     if a.stream_host:
