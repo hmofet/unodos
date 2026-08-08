@@ -212,18 +212,21 @@ def measure_window(d, app_id, grab_scale=2):
     return box
 
 
-def drag(d, x0, y0, x1, y1, step=56, hold=0.3):
+def drag(d, x0, y0, x1, y1, step=64, hold=0.25):
     """One press-move-release, read as a single gesture.
 
-    The 0.35 s holds either side are scenes.py's convention and are not
-    decoration: the shell samples pointer state once per frame, so a press and
-    a move inside one sample are one event and the window never picks up."""
-    d.sweep(x0, y0)
-    d.move(x0, y0, 0, settle=0.12)
+    The holds either side are scenes.py's convention and are not decoration:
+    the shell samples pointer state once per frame, so a press and a move
+    inside one sample are one event and the window never picks up. The approach
+    glide is deliberately coarser than a normal pointer move - it is travel
+    between two beats, not part of either, and the injected-pointer queue cares
+    about the RATE of injections, not how far each one moves."""
+    d.sweep(x0, y0, step=step, pace=0.028)
+    d.move(x0, y0, 0, settle=0.1)
     d.move(x0, y0, 1, settle=hold)
-    d.sweep(x1, y1, btn=1, step=step, pace=0.03)
+    d.sweep(x1, y1, btn=1, step=step, pace=0.028)
     d.move(x1, y1, 1, settle=hold)
-    d.move(x1, y1, 0, settle=0.25)
+    d.move(x1, y1, 0, settle=0.2)
 
 
 # ---------------------------------------------------------------------------
@@ -315,9 +318,9 @@ def play_outlast(d, seconds):
 # song and has no `closed` handler to stop it, so without this the next game is
 # filmed - and MEASURED - over Korobeiniki.
 GAMES = [
-    ("dostris", "dostris", play_dostris, 0.8, True),
-    ("pacman",  "pacman",  play_pacman,  2.0, False),   # PM_READY holds 40 frames
-    ("outlast", "outlast", play_outlast, 0.8, False),   # outlast_closed -> gm_stop
+    ("dostris", "dostris", play_dostris, 0.6, True),
+    ("pacman",  "pacman",  play_pacman,  1.7, False),   # PM_READY holds 40 frames
+    ("outlast", "outlast", play_outlast, 0.6, False),   # outlast_closed -> gm_stop
 ]
 
 
@@ -348,9 +351,14 @@ def s12(d, hold, tracker_hold, win_org):
     if win_org:
         grab = (win_org[0] + 110, win_org[1] + 13)     # title bar, left of the
         target = (d.w // 2 - 230 + 110, d.h // 2 - 230 + 13)   # window buttons
+    # PACING. Everything between two games is dead time - an empty desktop, a
+    # window appearing, a drag - and take 1 spent 8 s on each of those handoffs
+    # against 12 s of the game itself. Nothing that is ON SCREEN was shortened
+    # here; what came out is settle after the guest has already finished (a
+    # window is up well before 2 s) and the pointer's travel between beats.
     for app_id, stem, player, s_new, needs_quiet in GAMES:
-        d.beat("launch-" + stem, settle=0.3)
-        d.launch(app_id, settle=2.0)
+        d.beat("launch-" + stem, settle=0.2)
+        d.launch(app_id, settle=1.3)
         if win_org:
             # Off the icon field and into the middle of the screen. The games
             # are windowed (see the module docstring) and a 336x410 window in
@@ -362,21 +370,21 @@ def s12(d, hold, tracker_hold, win_org):
         player(d, hold)
         d.beat(stem + "-close", settle=0.0)
         d.link.command("close", timeout=10)
-        time.sleep(0.8)
+        time.sleep(0.5)
         if needs_quiet:
             quiet(d)
-            d.beat(stem + "-sequencer-silenced", settle=0.3)
+            d.beat(stem + "-sequencer-silenced", settle=0.2)
 
     # The music the games do not all have. `d` loads kTkDemo (the module opens
     # with an EMPTY pattern - kTkDemo is only reachable from that key), space
     # toggles play, and closing the window is `tracker_closed -> tk_stop ->
     # music_quiet`, which is the A/V anchor.
-    d.beat("launch-tracker", settle=0.3)
-    d.launch("tracker", settle=2.0)
+    d.beat("launch-tracker", settle=0.2)
+    d.launch("tracker", settle=1.3)
     if win_org:
         drag(d, grab[0], grab[1], target[0], target[1])
     d.beat("tracker-load-pattern", settle=0.2)
-    d.key(ord('d'), 0, settle=0.6)
+    d.key(ord('d'), 0, settle=0.5)
     d.beat("tracker-play", settle=0.0)
     d.key(ord(' '), 0, settle=0.0)
     time.sleep(tracker_hold)
