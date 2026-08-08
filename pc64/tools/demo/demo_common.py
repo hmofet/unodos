@@ -95,6 +95,14 @@ S06_STREAM = 5481
 S06_DISK  = "/tmp/demo_s06_disk.img"
 S06_FAT   = "/tmp/demo_s06_fat.img"
 S06_VARS  = "/tmp/demo_s06_vars.fd"
+# s12 (games, with sound) gets its OWN port pair and image paths so it can be
+# recorded while s06 - or a scenes.py run - is live on the same box. Nothing
+# below may collide with 5399/5471/5481 or /tmp/remote_*.img, /tmp/demo_s0*.
+S12_URC   = 5473
+S12_STREAM = 5483
+S12_DISK  = "/tmp/demo_s12_disk.img"
+S12_FAT   = "/tmp/demo_s12_fat.img"
+S12_VARS  = "/tmp/demo_s12_vars.fd"
 
 SECTOR, MIB = 512, 1 << 20
 
@@ -441,6 +449,42 @@ def wav_measure(path, win_ms=50):
             "peak": peak, "peak_dbfs": db(peak),
             "rms": round(rms, 1), "rms_dbfs": db(rms),
             "win_ms": win_ms, "env": env}
+
+
+def volumedetect(path, ss=None, t=None):
+    """ffmpeg's own `volumedetect` over a wav, optionally over one slice.
+
+    wav_measure() above already computes peak and RMS from the samples, so this
+    is not new information - it is INDEPENDENT information, from a tool nobody
+    here wrote, which is the point when the claim being made is "the guest
+    really made a noise". Reported per game window as well as whole-file:
+    a scene can be loud in aggregate and silent where it matters.
+
+    Returns {mean_db, max_db, n_samples, seconds} - mean_db None if ffmpeg
+    printed nothing (an empty slice), which the caller must treat as silence
+    rather than as success.
+    """
+    cmd = ["ffmpeg", "-v", "info", "-hide_banner"]
+    if ss is not None:
+        cmd += ["-ss", "%.3f" % max(0.0, ss)]
+    if t is not None:
+        cmd += ["-t", "%.3f" % max(0.0, t)]
+    cmd += ["-i", path, "-af", "volumedetect", "-f", "null", "-"]
+    r = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    out = {"mean_db": None, "max_db": None, "n_samples": None,
+           "start_s": round(ss, 2) if ss is not None else 0.0,
+           "seconds": round(t, 2) if t is not None else None}
+    for line in r.stderr.decode("utf-8", "replace").splitlines():
+        if "mean_volume:" in line:
+            out["mean_db"] = float(line.split("mean_volume:")[1].split("dB")[0])
+        elif "max_volume:" in line:
+            out["max_db"] = float(line.split("max_volume:")[1].split("dB")[0])
+        elif "n_samples:" in line:
+            try:
+                out["n_samples"] = int(line.split("n_samples:")[1].split()[0])
+            except (ValueError, IndexError):
+                pass
+    return out
 
 
 def sustained_onset(env, win_ms, thresh, hold_ms=400):
