@@ -687,10 +687,30 @@ void unoamp_ui_set_scale(int s)
  * whose title strip is hidden, advances nothing and asks for no repaint; the
  * shell then sits idle instead of compositing the whole scene eight times a
  * second for a marquee that is not moving. */
+/* How many frames between repaints asked for by a PLAYING player. The shell
+ * runs at ~60 Hz, so 2 is ~30 Hz - fast enough that the analyser reads as
+ * moving, and half the repaint cost of asking every frame the way a native
+ * game does. */
+#define VIS_REPAINT_DIV 2
+
 void unoamp_ui_tick(void)
 {
-    static int div_;
+    static int div_, vdiv_;
     int n = (int)strlen(g_title), vis = TEXT_W / CH_W;
+    /* A playing player asks for its OWN repaints.  Until this existed the only
+     * repaint request here was the marquee advance below, which returns early
+     * for a title that fits the 153-pixel well - and a title is a playlist
+     * entry, i.e. an 8.3 name of at most 12 characters against ~30 shown, so
+     * it never scrolls and the request was never made.  The visualiser was
+     * therefore redrawn only when some other part of the shell happened to
+     * mark dirty: measured at 8 of 107 frames (~2.3 Hz) over 3.5 s of skinned
+     * playback, which is a picture of an analyser rather than an analyser.
+     * The spectrum data was always there; only the repaints were missing. */
+    if (!g_shade && g_win) {
+        const unoamp_in *in = unoamp_playing();
+        if (in && (!in->IsPaused || !in->IsPaused()))
+            if (++vdiv_ >= VIS_REPAINT_DIV) { vdiv_ = 0; pc64_shell_dirty(); }
+    }
     if (g_shade || n <= vis) return;
     if (++div_ >= 8) { div_ = 0; g_scroll++; pc64_shell_dirty(); }
 }
@@ -1155,12 +1175,33 @@ void unoamp_ui_show_pl(int on)
 
 /* Closing the player closes all three and stops playback. A music player that
  * kept playing after its window went away would be a bug report, not a
- * feature. */
+ * feature.
+ *
+ * The main window is closed THROUGH THE SHELL, not by removing it here.  A
+ * skinned chassis is a UI_WIN_BARE window, which close_focused() deliberately
+ * never touches, so this used to be the only teardown - and it was only half
+ * of one: the shell's g_open[] stayed set, so the taskbar chip outlived the
+ * player for the rest of the session and reopening from the launcher raised a
+ * window that was no longer in the scene.  pc64_shell_app_close() runs the
+ * same teardown every other app gets.  It calls back here (that is how a close
+ * from the taskbar or a script also stops playback); the guard makes either
+ * direction exactly one teardown, and g_win keeps pointing at the shell's
+ * window struct because unoamp_ui_build() runs once per boot and a reopen
+ * needs the geometry it holds. */
 void unoamp_ui_close(void)
 {
+    static int closing;
+    int a;
+    int pc64_shell_app_by_id(const char *id);
+    int pc64_shell_app_close(int a);
+    if (closing) return;
+    closing = 1;
     unoamp_stop();
     unoamp_ui_show_eq(0);
     unoamp_ui_show_pl(0);
-    if (g_win) { pc64_shell_remove_window(g_win); g_win = 0; }
+    a = pc64_shell_app_by_id("unoamp");
+    if (a >= 0) pc64_shell_app_close(a);
+    else if (g_win) pc64_shell_remove_window(g_win);   /* no slot: last resort */
     pc64_shell_dirty();
+    closing = 0;
 }
