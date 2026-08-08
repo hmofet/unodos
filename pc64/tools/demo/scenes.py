@@ -859,8 +859,13 @@ class Demo(object):
 # scenes
 # ---------------------------------------------------------------------------
 def s02_wm(d):
-    """WM: Start menu rises, three apps, drag-to-edge snap, F2 switcher,
-    'To desktop 2' via the title-bar menu, desktop switch, close all."""
+    """WM: Start menu rises, two apps, drag-to-edge snap, F2 switcher,
+    'To desktop 2' via the title-bar menu, desktop switch back.
+
+    Trimmed from 50 s to ~36 s against measured per-beat costs (2026-08-07):
+    the third app, the redundant focus click and the on-camera teardown went;
+    every hero moment stayed. Teardown now happens in reset(), AFTER the
+    stream stops, so it costs the cut nothing."""
     # the Start menu IS the shot here: open it, walk to Files, Enter.
     d.beat("start-menu-rises")
     d.key(0, S_ESC, 1, settle=1.4)                   # Ctrl-Esc; menu tween
@@ -871,15 +876,14 @@ def s02_wm(d):
     d.key(13, settle=2.5)                            # Enter
     d.beat("launch-editor")
     d.launch("editor", settle=2.2)
-    d.beat("launch-clock")
-    d.launch("clock", settle=2.2)
+    # Clock was a third launch making the same point as the second (-3.1 s).
 
     # drag the Editor by its title bar to the right edge -> snap tween.
     # The Editor window opens at (90,36) (pc64_write.c); its title bar is the
-    # top ~18 px. Click it first: launching Clock left Clock focused.
+    # top ~18 px. No separate focus click: the Editor is the app just
+    # launched, and drag() sweeps to the bar and presses there anyway, which
+    # focuses it on mouse-down (-4.5 s).
     tx, ty = 200, 44
-    d.beat("focus-editor")
-    d.click(tx, ty, settle=0.8)
     d.beat("drag-editor-to-right-edge-snap")
     d.drag(tx, ty, d.w - 4, d.h // 2 - 60, settle=1.4)   # <8 px arms SNAP_R
 
@@ -906,11 +910,9 @@ def s02_wm(d):
     d.desk(2, settle=1.6)                            # the Editor lives here
     d.beat("switch-back-to-desktop-1")
     d.desk(1, settle=1.6)
-    d.beat("close-all")
-    d.close_all()                                    # clock + files here
-    d.desk(2, settle=0.8)
-    d.close_all()                                    # the moved editor
-    d.desk(1, settle=0.8)
+    # No on-camera teardown (-5.7 s): reset() empties every desktop after the
+    # stream has stopped, so the scene ends on the desktop switch instead of
+    # on five seconds of windows closing.
 
 
 def s03_themes(d):
@@ -986,10 +988,18 @@ def s04_pre(d):
 
 def s04_office(d):
     """Files shows the staged docs on the RAM volume; UnoWord opens fmt.doc
-    (select-all in place of scrolling: UnoWord scrolls by mouse WHEEL only,
-    which URC cannot inject, and fmt.doc is one page anyway); UnoCalc opens
-    formulas.xls and clicks a formula cell; UnoShow opens small.ppt from the
-    clean DOCS volume (disk B)."""
+    with its formatting visible; UnoCalc opens formulas.xls and selects a
+    formula cell.
+
+    Trimmed from 65 s to ~40 s against measured per-beat costs (2026-08-07).
+    Two beats went:
+      - the select-all sweep (-7.8 s), which read as a SELECTION rather than
+        the scroll it stood in for (UnoWord scrolls by mouse wheel only and
+        URC has no wheel injection). A still hold on the open document shows
+        the formatting better and costs a third as much.
+      - the whole UnoShow block (-19.7 s): it was already the degraded
+        substitute for the broken Open path (see the requests entry), it cost
+        17 s of the 65, and the narration does not claim a presentation app."""
     d.beat("files-sees-the-documents")
     d.launch("files", settle=2.5)                    # RAM: README + the 2 docs
     time.sleep(2.0)                                  # FMT.DOC/FORMULAS.XLS
@@ -999,10 +1009,7 @@ def s04_office(d):
     d.launch("uoword", settle=3.0)
     d.ctrl("o", settle=1.4)
     uof_open_row(d, 1)                               # FMT.DOC (RAM row 1)
-    d.beat("select-all-sweep")                       # in place of the wheel-
-    d.click(300, 240, glide=True, settle=0.6)        # only scroll (see above)
-    d.ctrl("a", settle=1.2)
-    time.sleep(1.0)
+    time.sleep(3.0)                                  # hold: bold/italic/sizes
     d.ctrl("w", settle=1.2)
 
     d.beat("unocalc-open-formulas-xls")
@@ -1011,48 +1018,23 @@ def s04_office(d):
     uof_open_row(d, 2)                               # FORMULAS.XLS (RAM row 2)
     d.beat("click-a-formula-cell")
     d.click(*UOCALC_A2, settle=1.5)                  # formula bar: =(1+2)*3
-    time.sleep(1.2)
-    d.ctrl("w", settle=1.2)
+    time.sleep(2.0)                                  # hold on the formula bar
+    # No final Ctrl-W: reset() closes UnoCalc after the stream stops.
 
-    # UnoShow. The brief wants "open small.ppt in UnoShow briefly", but that
-    # cannot be driven in this build (two source bugs, both outside the demo
-    # lane, reported to their owners):
-    #   1. the native-FAT lister marks EVERY file as a directory
-    #      (uno_fat_list_ex returns >=0 for a file path), so the shared Open
-    #      dialog appends '\' to each entry and NEVER mirrors a filename into
-    #      the File-name field - clicking a row selects nothing openable;
-    #   2. UnoShow's dialog key-bridge (apps/uoshow.c) swallows Backspace
-    #      (uni 8 is neither a printable nor a mapped key), so the stale
-    #      "README.TXT" the field carries from the RAM volume can't be
-    #      cleared to type the real name either.
-    # The file itself is fine (uno.read returns 463 KB of valid CFB, and
-    # UnoShow reads .ppt <= 4 MB), so this is purely a driving/UI-plumbing
-    # gap. Degrade to a clean, honest beat: open UnoShow and author a titled
-    # slide so the app is shown doing something real, not a blank deck.
-    d.beat("unoshow-cannot-open-ppt-see-report")
-    d.launch("uoshow", settle=4.5)                   # slower to paint at 1280x800
-    # Locate the page BEFORE the beat marker: slide_rect() pulls a whole
-    # screen grab, which at 1280x800 is seconds, and doing it inside the beat
-    # ate the time the typing needed - the scene reached its close beat with
-    # the placeholder selected but the text not yet in.
-    pt = d.slide_point(*UOSHOW_TITLE_F)
-    d.beat("author-a-titled-slide")
-    # The page is located on a live grab (UOSHOW_TITLE_F is its FRACTION of
-    # the page, not a pixel) because UnoShow's window - and so the page -
-    # scales with the framebuffer.
+    # UnoShow is DELIBERATELY not in this scene any more (trimmed 2026-08-07).
+    # It could not open small.ppt in this build - the native-FAT lister marks
+    # every file as a directory and UnoShow's dialog bridge swallows Backspace,
+    # so neither clicking a row nor typing a name reaches the file (both filed
+    # in pc64/UNOAUTOMATE-REQUESTS.md, 2026-08-07). The standing beat was the
+    # degraded substitute, authoring a titled slide, and at ~17 s of a 65 s
+    # scene it was the most expensive thing here for the least payoff.
     #
-    # Two SEPARATE clicks, not dblclick, and not tight: uoshow.c's rule is
-    # `hit != g_sel` selects and `hit == g_sel` enters text edit, so the pair
-    # has to be seen as two events on the same placeholder. At 1280x800 the
-    # first of a tight pair was still being swallowed while the app painted,
-    # leaving the placeholder SELECTED but never in edit mode - the text then
-    # went nowhere and the beat silently produced an empty slide.
-    d.click(*pt, settle=1.0)                         # select the placeholder
-    d.click(*pt, glide=False, settle=1.0)            # ...and enter text edit
-    d.text("UnoDOS runs UnoShow.", settle=0.06)
-    time.sleep(3.0)                                  # hold on the finished slide
-    d.beat("close")
-    d.ctrl("w", settle=1.0)
+    # To RESTORE it once those two bugs land, the beat is:
+    #     d.launch("uoshow", settle=4.5)
+    #     d.ctrl("o"); ... uof_open_row(d, <row>)      # the real Open path
+    # `Demo.slide_rect` / `slide_point` / `UOSHOW_TITLE_F` are kept for it -
+    # they locate the slide page on a live grab, which is what makes any
+    # UnoShow beat survive a resolution change.
 
 
 def s05_browser(d, with_net=False):
@@ -1110,7 +1092,13 @@ STUDIO_PROG = (
 
 
 def s07_studio(d):
-    """Studio: File > New, type a small UnoC app, ^B build, ^R run, close."""
+    """Studio: File > New, type a small UnoC app, ^B build, ^R run.
+
+    Trimmed from 41.5 s to ~37 s (2026-08-07) by dropping the on-camera
+    teardown only. The typing is 15.6 s of it and stays at its measured
+    speed: it IS the content here, and typing faster is the one thing the
+    pacing note rules out. Shortening the program instead would risk the
+    build moment, which is the beat this scene exists for."""
     d.beat("launch-studio")
     d.launch("studio", settle=3.0)
     # File > New via the in-window menu bar (measured off d4_studio_filemenu:
@@ -1130,11 +1118,11 @@ def s07_studio(d):
     time.sleep(3.0)                                  # ucc + status line
     d.beat("run")
     d.ctrl("r", settle=0.2)
-    time.sleep(3.0)                                  # the app window opens
-    d.beat("close-the-app")
-    d.close_top(settle=1.0)
-    d.beat("close-studio")
-    d.close_all()
+    time.sleep(4.0)                                  # the app window opens and
+                                                     # bounces - hold on it
+    # No on-camera teardown (-4.3 s): the scene ends on the app it just built
+    # running, which is the point of it. reset() closes both windows after the
+    # stream stops.
 
 
 STUDIO_FILE_XY = (54, 48)      # "File" menu title (d4_studio_filemenu)
