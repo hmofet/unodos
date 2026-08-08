@@ -8735,3 +8735,217 @@ in `HANDOFF-perf.md`; this is one more, sharply-quantified data point.
   narration had to be fact-checked against source before it was spoken.
 
 *(Filed by the demo lane. Nothing here is claimed - every row is free to take.)*
+
+---
+
+### 2026-08-08 CLAIM (demo-defects lane, branch `demo-defects`): taking ten of the fourteen
+
+Answering the index above. Claimed, in the order it lists them: **#1** (the PYRT
+stack ceiling: `apps/pyrt.c`, `upy_port/pc64_upy_port.c`), **#2** (the `ssh`
+verb's dispatch clause + `GATE[]` row + `REMOTE.md` rows, and a key/session
+editor in `sshapp_ui.c`), **#3** (`fat.c`, `fat.h`, `pc64_fs.c`), **#4**
+(`apps/uoshow.c`), **#7 #8 #9** (`apps/pacman.c`, `apps/dostris.c`), **#11 #12**
+(`unoamp_ui.c`, plus ONE additive export in `pc64_uui.c`).
+
+**#13 and #14 are NOT claimed**, and **#10 turns out to be half a non-repro** -
+all three are reported at the end of the entry below rather than silently left
+in the table.
+
+---
+
+### 2026-08-08 demo-defects lane -> DONE: ten of the fourteen, with the A/B that proves the worst one
+
+Every fix below is on `demo-defects`, one commit per lane, prod and debug both
+building, QEMU-verified where the change is observable. Numbering follows the
+index entry above.
+
+**#1. `py` then Studio's ^R no longer wedges the box - and the cause was NOT
+"a different stack" in the vague sense, it was one unsigned subtraction.**
+
+`gc_helper_collect_regs_and_stack()` (upy/shared/runtime/gchelper_native.c)
+traces the C stack as:
+
+```c
+gc_collect_root((void **)sp, ((uintptr_t)MP_STATE_THREAD(stack_top) - sp) / sizeof(uintptr_t));
+```
+
+`stack_top` is recorded ONCE, by `mp_stack_ctrl_init()` inside `py_init`, on
+whichever path happened to reach `pyrt_ensure()` first. The URC `py` verb's
+path is the DEEPER of the two, so it records a LOW ceiling; Studio's ^R then
+enters from the shell's key dispatch with a HIGHER `sp`, the subtraction
+underflows, and the GC is asked to scan about 2^61 words. That is the wedge:
+no fault, no log line, nothing for a watchdog to notice, forever. It also
+explains why all four documented workarounds failed - none of them changed
+which path recorded the ceiling.
+
+*The fix:* every host entry into the VM re-arms the ceiling from its own frame
+(`vm_enter`/`vm_leave` in `apps/pyrt.c`, wrapping `call0/call1/call3`,
+`py_load`, `py_run_src`, `py_unload`, `tr_build`). A depth counter keeps the
+OUTERMOST entry's value, because re-arming on a nested entry would hide the
+outer C frames from the root scan - that trades a hang for a use-after-free.
+`pyrt_set_stack_top()` in `upy_port/pc64_upy_port.c` stops being a no-op, and
+`gc_collect()` additionally raises a ceiling that is below its own frame rather
+than ever handing the helper a negative range.
+
+*Measured, same script, same steps, two builds* (the script is the minimised
+repro from the entry above: push `sdk/SAMPLE.PY` to the RAM disk, ONE `py`
+command, open it in Studio, `^S ^B ^R`, then ask for `uptime` six times over
+18 s):
+
+| build | after ^R |
+|---|---|
+| `origin/master` 7318dadb | `NO RESPONSE (TimeoutError)` x6, then `screen` timed out too - wedged |
+| this branch | `uptime` answered all six times; `SAMPLE.UNO` opened and the Python ball bounced |
+
+So `tools/demo/scenes.py` can drop `needs_ctrl_r()` and `pyeval()`'s ordering
+rule whenever that lane next touches the file - s07 and s09 have their metal
+path back. I have NOT edited scenes.py; it is not my lane and the workaround is
+harmless, only unnecessary.
+
+**#2. The `ssh` verb is dispatched, and the SSH client can be used by someone
+who owns one machine.**
+
+The four-line pass-through the 2026-08-01 unossh entry asked for is landed
+exactly as `iwl`/`eth`/`skin` do it - locally declared and weak-stubbed in
+`unoauto_remote.c`'s own TU - with its `GATE[]` row in the SAME commit and six
+rows appended to `REMOTE.md`. **SYSTEM, not DRIVE:** the verb generates and
+stores private keys and runs commands on other machines with this box's
+credentials, so its blast radius reaches past this machine, which is what
+separates the tier from `launch`. Reclassify freely, it is your table.
+
+Verified over URC on the running guest, not by inspection:
+
+```
+ssh help    -> keys | keygen <n> | ... | close
+ssh keys    -> no keys
+ssh keygen demo -> generated demo
+ssh keys    -> demo (unprotected)
+ssh sessadd box 10.0.2.2 22 arin demo -> saved box
+ssh sess    -> box arin@10.0.2.2:22 key=demo
+```
+
+**But a client that needs a SECOND machine to become usable is not a client**,
+so `sshapp_ui.c` got the writer it never had. The Manage tab now takes `n` (new
+session: name/host/port/user/key), `g` (generate a key), `p` (print the public
+half in `authorized_keys` form, to paste into a server), `d` (delete in the
+focused pane) and Up/Down. It is a one-line prompt in the status band, not a
+modal dialog: this is a CANVAS, so a dialog would mean hosting widgets and a
+focus model inside it, and the band is already painted every frame. Nothing is
+written to the store until the last field is entered, so an abandoned edit
+leaves no trace. Keys are generated WITHOUT a passphrase on purpose - there is
+nowhere to type one at connect time yet, and `ssh keygen <n> <pass>` over URC
+still takes one.
+
+Still open and NOT taken: the passphrase-protected import (item 3 of that
+entry) - `bcrypt_pbkdf` is genuinely not in the tree.
+
+**#3. `uno_fs_isdir` answers the question it is named for.** The old predicate
+asked `uno_fat_list_ex(...) >= 0`, which is an ENTRY COUNT and therefore always
+true - a file scored 0 exactly like an empty directory. `uno_fat_isdir()` (new,
+`fat.c`) asks `dir_locate()`, which is already precisely this question: it
+succeeds for the root and a real subdirectory and fails for a file, a missing
+name, or a `.`/`..` component.
+
+**This was two bugs, not one.** The Office Open dialog was the reported half.
+The other: the URC `mkdir` verb short-circuits on `uno_fs_isdir` and so
+reported `exists` for every path it had never created - i.e. **remote `mkdir`
+on a native-FAT volume never created anything**. On the guest, before and after
+is the whole story:
+
+```
+mkdir 1 DEMODIR   -> created      (this used to be "exists", with no directory)
+mkdir 1 DEMODIR   -> exists
+mkdir 1 AFILE.TXT -> refused      (a file is not a folder; it used to be "exists")
+```
+
+`installer.c`'s `EFI\UNODOS` guard becomes real too - it could not fire before.
+
+**#4. UnoShow's dialog bridge forwards Backspace**, one line, matching
+UnoWord's. The File-name field can be corrected, so Open is reachable.
+
+**#7. Pac-Man has its voice back.** The waka (72,2), the power-pellet chime
+(55,10) and the death wail (45,22) are ported from the native `pc64_games.c`
+version into the module that actually ships, through the KernelApi's
+`music_note_on`, which IS the `uno_seq_beep` the native code calls.
+
+**#8. Dostris stops its music when it closes.** A `closed` handler calling
+`gm_stop()`, in the vtable slot that was null - `unoapp_close()` has always
+called it, and `apps/outlast.c` has always had one.
+
+**#9. The score panels are readable on every theme, and the fix is bigger than
+the numbers.** Both games draw their readouts TRANSPARENTLY while naming
+`C_BLUE` as a background they never paint, so everything landed on the shell's
+themed window fill; `C_WHITE` values were white-on-white while the `C_CYAN`
+labels stayed readable, which is why it looked like missing numbers rather than
+a colour bug. Each game now paints the backdrop it always claimed - a blue HUD
+strip for Dostris, the maze's own black extended across Pac-Man's panel. **The
+same defect had eaten Dostris' playfield border**: `uno_box(&b, C_WHITE)`
+straight onto a light theme is invisible, so the well had no edge at all and
+the pieces floated in the window. The well is filled before it is framed now.
+Shots: `shots/verify_dostris2.png`, `shots/verify_pacman.png`.
+
+**#11. A playing player asks for its own repaints.** `unoamp_ui_tick()` marks
+dirty every second frame (~30 Hz) while something is playing and not paused and
+the window is not shaded - half the cost of the every-frame dirty a native game
+sets, and enough that the analyser reads as moving. The marquee early-out is
+untouched.
+
+**#12. UnoAmp closes properly, and - this was not in the report - can be
+REOPENED.** `pc64_shell_app_close(int)` is exported beside `pc64_shell_launch()`
+(the two-line change that entry asked for), and `unoamp_ui_close()` goes through
+it instead of removing its own window. The chip outliving the player was the
+visible half; the invisible half was that `g_open[]` stayed set, so `open_app()`
+took the already-open branch and raised a window no longer in the scene - the
+player could never come back in that session. `close_app()` also calls
+`unoamp_ui_close()` now, so a close from the taskbar or a script stops playback
+too; the two directions cannot recurse because `close_app` clears `g_open`
+before dispatching teardown. Verified on the guest: taskbar chip gone
+(`shots/verify_unoamp_closed.png`), reopen works
+(`shots/verify_unoamp_reopened.png`).
+
+---
+
+### The four rows I did not fix, and why - please read before taking one
+
+**#10 does not reproduce as written, and the rest of it is a design question.**
+"Maximizing gives a big empty window with a small game in it" is not what this
+build does: a bridge app's window is deliberately built without `UI_WIN_RESIZE`
+("a fixed pixel layout must not be stretched", `build_legacy`), and both halves
+of the toolkit already honour that - `unoui.c` draws the maxbox DISABLED for
+such a window, and `pc64_uui.c`'s `UI_ACT_MAX` handler explicitly leaves it
+alone rather than centring it. What remains true is the first half: the three
+games set `UAF_GAME` and nothing acts on it.
+
+I deliberately did not "fix" that by routing them through `unoui_fullscreen()`,
+because it would PRODUCE the state the row complains about: the window would go
+full-screen while its canvas stayed its built size in the corner, since the
+legacy bridge has no scaled blit (only the native canvases scale, and they do
+it themselves). Honouring the flag needs one of two decisions that are not mine
+to take alone: give the bridge a scaling blit, or drop `UAF_GAME` from the
+three games so the registry stops promising something the layout cannot keep.
+
+**#13 (2.5 fps on metal) is untouched.** It needs the hardware and it is the
+fleet-wide render/present problem in `HANDOFF-perf.md`; nothing here would move
+it, and there is no metal in this session.
+
+**#14 is already fixed on master, and I verified it rather than editing it.**
+`af7fcfe4` ("the manual's image sizes, measured off a build instead of
+remembered") replaced the 660 KB claim. Measured on this branch:
+
+| manual says | actual |
+|---|---|
+| kernel "about 3.8 MB" | 4,018,143 B (`UNO_DEBUG=0`) |
+| tree "about 14 MB" | 14,895,164 B |
+| debug kernel "about 4.4 MB" | 4,565,141 B |
+
+The TLS half is closed too: `docs/build_site.py:2057` now applies "from-scratch"
+only to the network stack (ARP/IPv4/ICMP/UDP/DHCP/DNS/TCP), which IS the
+project's own work, and 2059 discloses BearSSL by name. Someone should mark the
+row FIXED in the index table when they are next editing near it - I have not
+edited an entry I did not write.
+
+**Not a defect, noticed while in `unoamp_ui.c`:** `unoamp_ui_window()` has no
+callers anywhere in the tree.
+
+*(demo-defects lane. Everything above is landed; the three rows in this last
+section are free to take.)*
