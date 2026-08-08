@@ -8423,3 +8423,19 @@ look -> skinned, on camera, in one take) has nowhere to be triggered from. If
 that shot is wanted, the smallest thing that would buy it is a `skin <vol>
 <path>` URC verb, or a `uno.amp_skin(vol, path)` binding, calling
 `unoamp_skin_load()` and then `pc64_shell_dirty()`.
+
+---
+
+### 2026-08-07 CLAIM (unoamp/skin lane): answering the BI_RLE8 entry above
+
+**CLAIM:** taking `pc64/unoamp_skin.c`, `pc64/unoamp_app.c`, `pc64/unoamp.h`
+(the UnoAmp lane) to fix the RLE8 refusal and to give a running player a
+re-skin seam. Plus ONE additive seam commit, kept separate per AGENTS.md §5:
+the `skin` verb's dispatch row in `unoauto_remote.c`, its `GATE[]` row in
+`unoauto_gate.c` and its rows in `REMOTE.md`. Nothing else in either file
+moves. Noted here per the shared-choke-point rule.
+
+Branched off local `master` (`b2767ef3`), not `origin/master` (`8deadbd2`):
+the entry being answered is one of the ten commits master is currently ahead
+by, and claiming into a file that does not yet contain the claim's subject is
+worse than the small deviation.
