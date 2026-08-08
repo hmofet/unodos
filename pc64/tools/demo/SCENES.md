@@ -89,9 +89,9 @@ failed *silently* before it was pinned down:
 | s02 | WM: Start menu rises, Files + Editor, title-bar drag to the right edge (snap tween), the F2 switcher, "To desktop 2" via the title-bar menu, desktop switch and back | ~36 s. Alt-Tab is undrivable over URC (no ALT bit): F2 is the shell's own no-Alt switcher and is what the scene uses. The desktop move rides the title-bar right-click menu, not Alt+Ctrl+F2, same reason. |
 | s03 | Themes: Aurora Dark -> Mac OS 7 -> Windows 3.1 -> C64 -> Aurora Light, ~1.5 s hold each; a wallpaper on and off; ends on the Aurora default | Driven by keyboard through Control Panel > Personalization (tab strip -> Theme dropdown; Down cycles live). |
 | s04 | Office: Files shows the staged docs (RAM volume); UnoWord opens `fmt.doc` with its formatting visible; UnoCalc opens `formulas.xls` and selects a formula cell | ~40 s. Docs are `put` onto the RAM volume at runtime and opened there - the shared Open dialog lists a volume's ROOT only (uofile.c) and cannot reach `DOCS\`. **UnoShow was cut** (2026-08-07): it could not open small.ppt in this build (two source bugs, filed in UNOAUTOMATE-REQUESTS.md), the standing beat was the degraded substitute, and it cost 17 s of a 65 s scene. The select-all sweep also went - it read as a selection, not the scroll it stood in for (UnoWord scrolls by mouse wheel only and URC has no wheel injection). |
-| s05 | Browser: `uno:script` (JS writes the page body), scroll; `uno:engine`; switch the script engine by navigating `uno:engine/quickjs`; `uno:script` again on QuickJS | Local pages only. `--with-net` is a stub: HTTP/HTTPS beats are metal-only and log-skip here. No built-in `uno:` page mutates the DOM on a timer/click; `uno:script`'s document.write output is the visible JS payoff. |
-| s07 | Studio: File > New, type a small UnoC app live, Ctrl-S, Ctrl-B build, Ctrl-R run, the app opens | ~38 s. The typed program is `STUDIO_PROG` in scenes.py (AppInterface + text_at, the SAMPLE.C shape). The teardown is off-camera; the 15.6 s of typing stays at its measured speed - it is the content, and shortening the program would risk the build moment. |
-| s08 | Duum: Files -> ESP -> `APPS\` -> `DUUM.UNO` -> Enter (a PYAPP is a document PYRT opens - no Start-menu row), walk + turn, close | Guard: no WAD in `pc64/wads/` = clean no-op with a log line. Never downloads. Falls back to `uno.run_app` over URC if the Files walk misses. |
+| s05 | Browser: `uno:script` (JS writes the page body), scroll; `uno:engine`; switch the script engine by navigating `uno:engine/quickjs`; `uno:script` again on QuickJS; then MAXIMIZE and load `https://en.wikipedia.org/wiki/Unix` over TLS, and scroll to the article | ~64 s. The network half is no longer metal-only: the URC link is TCP over the same stack, so the guest is leased and routed before any scene runs (`nonet` in DEBUG.CFG skips the boot NET TEST and the desktop's net_boot fallback, not the stack), and slirp resolves DNS for a DEBUG image. The page loads WHOLE (200 OK; DOC_MAX/RAW_MAX are 1 MB now, the old 48 KB cut is gone) - what it costs is scrolling, because Wikipedia's Vector skin emits the entire navigation sidebar before the `<h1>`. Nine PgDn lands on it. `wait_stable()` replaces a fixed settle: the load measured 6-20 s across runs. `--with-net` is now a no-op flag. |
+| s07 | Studio: open `SAMPLE.C` from the Project pane, type a one-line comment as a live edit, Ctrl-S, Ctrl-B build, Ctrl-R run - the compiled app opens and its ball bounces | ~33 s. REWRITTEN 2026-08-08 because the old take SHIPPED BROKEN: it typed a whole UnoC program after File > New, the File > New click missed at 1280x800 (the dropdown row is laid out from the mono line height, not the 640x400 literal), the C landed in the SAMPLE.PY Studio greets with, packed as a PYTHON app and ended on "Run failed". Open a shipped source file; type only what cannot break the build. Two traps: the Project pane lists ONE volume and at first open that is the RAM disk, not the ESP (`proj_vol = ed_vol`, and ed_vol is -1 before the greet), so `s07_pre` pushes SAMPLE.C there; and a row that is ALREADY selected activates on the first click and `proj_activate()` hands focus back to the editor - so clicking row 0 opens README.TXT and every later key goes to the editor. |
+| s08 | Duum: pre-launched off camera via `uno.run_app` (a PYAPP is a document PYRT opens - no Start-menu row), then ~26 s of walking and turning through E1M1 | ~34 s (was 13.6 s - it is the best moment in the cut and it was over before it registered). DUUM.PY's own step sizes are small (MOVE = 12 map units, TURN = 0.20 rad per press), which is why the press counts look large. Guard: no WAD in `pc64/wads/` = clean no-op with a log line. Never downloads. |
 | s09 | Appliances: vmgr Start, the Linux guest boots (BEFORE the stream - it gets ~4 ms/frame, boot is minutes of dead air), then on camera: `ls /` + `uname -a` into the console | Guards: needs `build/bzImage` + `initrd.gz` (vm_stage payload; `VMS.CFG` row is written by the driver - vm_stage.py doesn't), AND `UNO_DEMO_KVM=1`. Plain TCG can never host a guest (TCG drops vmx; `-m 512` is under the 1800 MB carve floor; eligibility needs a `UNO_DETACH=1` build) - the harnesses all use `-m 4096 -cpu host -enable-kvm`, so that is what `UNO_DEMO_KVM=1` boots. On an AMD host it stays skipped (the SVM backend has never completed a VMRUN). |
 | s10 | System readout (hold), the log viewer raised to info level, browser navigations landing in the tail, close | The level goes up BEFORE the traffic (a dropped record is gone). |
 
@@ -173,3 +173,56 @@ runs at 1280x800. They fall into three classes and only the third needed work:
 Re-measure after a theme/font/UI-scale change. Take probe shots liberally
 (`Demo.shot`); read coordinates off screenshots, never compute them from
 theory - menu bands move.
+
+## The taskbar clock is in every screen grab (2026-08-08)
+
+Two helpers compare a pair of grabs taken a second or more apart, and **both
+were wrong for the same reason**: the taskbar carries a clock that reticks
+every second, so a pair of grabs *always* differs there.
+
+- `Demo.diff_box()` returns the **bounding box** of everything that changed.
+  With a 148 px menu in one corner and a clock in the other, that box came out
+  **600 px wide**, `rclick_menu` derived its row pitch from it, and s02's "To
+  desktop 2" click landed 200 px below the real menu. The menu simply closed;
+  the window never moved; the beat log recorded success. **An extracted frame
+  was the only thing that showed it.**
+- `Demo.wait_stable()` waits for the screen to stop changing, so it never
+  matched and burned its whole timeout (28 s of dead air) on a page that had
+  loaded twenty seconds earlier.
+
+Both now exclude the bottom 40 px (`diff_box(..., skip_bottom=40)`), and
+`rclick_menu` warns when the box it located is too wide to be a menu. Any new
+helper that diffs two grabs must do the same.
+
+The generalisation: **a beat that measures the screen must exclude anything
+that changes on its own** - the clock today, an animation or a blinking caret
+tomorrow. And a beat whose success is not visible in a frame is not verified.
+
+## Studio's Project pane (s07)
+
+Three facts, each of which cost a take:
+
+1. The pane lists **one volume**, `proj_vol = ed_vol`. At first open `ed_vol`
+   is -1, so `refresh_project()` falls back to "the first WRITABLE volume" -
+   the RAM disk, not the ESP. A file staged onto the ESP is invisible there;
+   `s07_pre` pushes SAMPLE.C onto the RAM volume with `push_file(0, ...)`.
+2. Rows are in **creation order**, so the row index depends on what earlier
+   scenes pushed. `s04_pre` records its pushes in `d.ram_pushed` and `s07_pre`
+   counts from that rather than assuming.
+3. A row that is **already selected activates on the first click**
+   (`if (row == proj_sel) proj_activate(); else proj_sel = row`), and
+   `proj_activate()` sets `g_focus = PANE_EDIT`. So clicking row 0 opens
+   README.TXT and every key after it goes to the **editor**, not the list.
+   Click the row you actually want, then Enter.
+
+There is **no File > Open** in Studio, so the pane is the only way to open a
+file - which is why all of the above matters.
+
+## Studio drew no punctuation (fixed 2026-08-08)
+
+Worth knowing if you meet an old take: `draw_editor()` paints only the
+characters a highlighter span covers, and both tokenizers fell through
+operators with a bare `i++`, emitting no span. Every `(`, `)`, `*`, `,`, `;`,
+`=` occupied its column and rendered **blank**, so code in Studio read as if
+the input path had dropped the punctuation. It had not - the text was always
+in the buffer. Fixed in `pc64/apps/studio_hl.c` (emit `HL_PUNCT`).
