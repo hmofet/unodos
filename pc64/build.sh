@@ -384,6 +384,19 @@ if [ "$1" != "legacy" ]; then
         cp fw-blobs/*.PNV build/esp/FIRMWARE/ 2>/dev/null || true
         # (no starter WIFI.CFG here - see the dbg staging step: a shipped
         # placeholder shadows the flasher-staged wifi.txt credentials)
+    elif [ "${UNO_NOFW:-0}" != "0" ]; then
+        # UNO_NOFW has to REMOVE, not merely skip. build/esp is populated
+        # incrementally and is not wiped between builds, so a default build
+        # (which bundles the blobs) leaves build/esp/FIRMWARE/ behind, and a
+        # later UNO_NOFW=1 build silently inherits it. Every image cut from
+        # that tree - the hybrid .img and the ISO alike - then carries Intel's
+        # firmware into a public release, which is the exact thing the flag
+        # exists to prevent. Skipping the copy is not enough; delete it.
+        if [ -d build/esp/FIRMWARE ]; then
+            echo "[fw] UNO_NOFW=1: removing firmware staged by an earlier build"
+            rm -rf build/esp/FIRMWARE
+        fi
+        echo "[fw] firmware-free image (safe to publish)"
     fi
 
     # ---- .UNO app modules: every app is loaded from storage at runtime -----
