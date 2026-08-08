@@ -735,7 +735,7 @@ PAGES["index.html"] = ("Overview", f"""
   command line required. This manual covers the <strong>pc64</strong> version.</p>
   <div>
     <span class="pill">x86-64 · UEFI</span>
-    <span class="pill">~660&nbsp;KB image</span>
+    <span class="pill">~14&nbsp;MB image</span>
     <span class="pill">10 themes</span>
     <span class="pill">Keyboard-first</span>
     <span class="pill">QEMU &amp; real-metal verified</span>
@@ -759,7 +759,7 @@ PAGES["index.html"] = ("Overview", f"""
   <div class="card"><h4>A real desktop</h4><p>Window manager, taskbar, desktop icons you can arrange, and windows you can move and resize, all by keyboard or pointer. The Start button, a right-click on the desktop, or <kbd>Ctrl</kbd>+<kbd>Esc</kbd> all open the programs menu.</p></div>
   <div class="card"><h4>10 live themes</h4><p>A modern <em>Aurora</em> look (light and dark) plus eight retro skins, switchable live from the Control Panel &mdash; with proportional TrueType text and a real UI-scale setting.</p></div>
   <div class="card"><h4>An office suite</h4><p><a href="office.html">UnoOffice</a>: a word processor, a spreadsheet and a presentation designer that read and write the real <strong>.doc</strong>, <strong>.xls</strong> and <strong>.ppt</strong> formats.</p></div>
-  <div class="card"><h4>Applications</h4><p>A WordPad-class rich-text <strong>Editor</strong>, a real <strong>Files</strong> manager with a two-pane mode, System, Clock, a Canvas demo, plus Paint, Music, a Tracker, UnoAmp, three games and a 3D runner.</p></div>
+  <div class="card"><h4>Applications</h4><p>A WordPad-class rich-text <strong>Editor</strong>, a real <strong>Files</strong> manager with a two-pane mode, System, Clock, a Canvas demo, plus Paint, Photos, Music, a Tracker, UnoAmp, three games and a 3D runner.</p></div>
   <div class="card"><h4>A web browser</h4><p>Shows HTML, Markdown and CSS, runs JavaScript, and loads pages over HTTP and HTTPS.</p></div>
   <div class="card"><h4>A built-in IDE</h4><p><a href="studio.html">Studio</a> lets you write, compile and run your own apps in <strong>UnoC or Python</strong> on the machine itself - a syntax-highlighting editor, a real compiler and an AI assistant, no PC needed.</p></div>
   <div class="card"><h4>Networking</h4><p>Connect over Ethernet, get an address automatically, and browse the web, including secure (HTTPS) sites.</p></div>
@@ -2156,8 +2156,12 @@ building the flashers, and regenerating this manual.</p>
 <p>From the <code>pc64/</code> directory:</p>
 {CODE_BUILD}
 <p>The build compiles the platform, framebuffer, toolkit, ten themes, apps and drivers freestanding, and links a
-single <code>BOOTX64.EFI</code> into a bootable <strong>ESP</strong> tree in <code>build/esp/</code>. The default
-image is about 660&nbsp;KB.</p>
+single <code>BOOTX64.EFI</code> into a bootable <strong>ESP</strong> tree in <code>build/esp/</code>. That kernel is
+about <strong>3.8&nbsp;MB</strong> and the whole tree about <strong>14&nbsp;MB</strong>: the rest is the
+<code>.UNO</code> apps, the four TrueType fonts, the sample media and the SDK beside it. Two local extras grow it
+if you have them, and neither is in the repository: the Wi-Fi firmware blobs in <code>fw-blobs/</code> add about
+7&nbsp;MB, and a Doom WAD in <code>wads/</code> adds its own size again. <code>UNO_DEBUG=1</code> links a bigger
+kernel, about 4.4&nbsp;MB.</p>
 {note('The desktop is fully keyboard-driven, so QEMU needs no special input setup. QEMU is also scriptable over QMP (<code>send-key</code> + <code>screendump</code>), which is how the screenshots in this manual are made.', title="Keyboard-first")}
 
 <h2 id="image">Pack a real USB disk image</h2>
@@ -2422,7 +2426,7 @@ python tools/uno_manifest.py sign --name mybot --caps proc.enum,fs.sys \\
 <h2 id="ab">A/B updates: push a new build over the link</h2>
 <p>The headline use: iterate on the OS itself without touching a USB stick. Run <strong>two</strong> sticks -
 <strong>A</strong>, the machine you are working on, and <strong>B</strong>, a spare - and push only a freshly
-built kernel (<code>EFI\\BOOT\\BOOTX64.EFI</code>, about 1.5&nbsp;MB) to stick B over the wire, then reboot into
+built kernel (<code>EFI\\BOOT\\BOOTX64.EFI</code>, about 4&nbsp;MB) to stick B over the wire, then reboot into
 it. A driver change touches only that one file; everything else on the stick is untouched, and stick A stays as
 a known-good fallback.</p>
 {CODE_REMOTE_PUSH}
@@ -2512,7 +2516,7 @@ reading a log file after the fact. unoautomate collapses that:</p>
   <li><strong>Watch the bring-up live.</strong> Every line the driver logs - each register write, each
       firmware handshake, exactly where it stalls - streams to your PC as it happens, instead of being read
       from <code>CRASH\\NETLOG.TXT</code> after a hang.</li>
-  <li><strong>Reflash in seconds, not minutes.</strong> The A/B push writes only the ~1.5&nbsp;MB kernel to the
+  <li><strong>Reflash in seconds, not minutes.</strong> The A/B push writes only the ~4&nbsp;MB kernel to the
       spare stick and reboots into it; a driver change touches one file and the round trip is a keystroke.</li>
   <li><strong>Poke the hardware without a rebuild.</strong> Run a line of Python on the device with
       <code>py</code> / <code>link.eval()</code> to read back state between builds, and <code>probe</code> to

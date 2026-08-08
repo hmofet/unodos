@@ -303,7 +303,7 @@ python tools/uno_manifest.py sign --name mybot --caps proc.enum,fs.sys \
 <h2 id="ab">A/B updates: push a new build over the link</h2>
 <p>The headline use: iterate on the OS itself without touching a USB stick. Run <strong>two</strong> sticks -
 <strong>A</strong>, the machine you are working on, and <strong>B</strong>, a spare - and push only a freshly
-built kernel (<code>EFI\BOOT\BOOTX64.EFI</code>, about 1.5&nbsp;MB) to stick B over the wire, then reboot into
+built kernel (<code>EFI\BOOT\BOOTX64.EFI</code>, about 4&nbsp;MB) to stick B over the wire, then reboot into
 it. A driver change touches only that one file; everything else on the stick is untouched, and stick A stays as
 a known-good fallback.</p>
 <pre><code># find which volume is the spare stick B (a writable &quot;kind 2&quot; volume)
@@ -409,7 +409,7 @@ reading a log file after the fact. unoautomate collapses that:</p>
   <li><strong>Watch the bring-up live.</strong> Every line the driver logs - each register write, each
       firmware handshake, exactly where it stalls - streams to your PC as it happens, instead of being read
       from <code>CRASH\NETLOG.TXT</code> after a hang.</li>
-  <li><strong>Reflash in seconds, not minutes.</strong> The A/B push writes only the ~1.5&nbsp;MB kernel to the
+  <li><strong>Reflash in seconds, not minutes.</strong> The A/B push writes only the ~4&nbsp;MB kernel to the
       spare stick and reboots into it; a driver change touches one file and the round trip is a keystroke.</li>
   <li><strong>Poke the hardware without a rebuild.</strong> Run a line of Python on the device with
       <code>py</code> / <code>link.eval()</code> to read back state between builds, and <code>probe</code> to
