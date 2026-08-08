@@ -101,6 +101,37 @@ for line in $(echo "$SPECS" | tr -d ' '); do
     [ -f "$src" ] || absent=$((absent + 1))
 done
 
+# ---- the Wi-Fi firmware helper -----------------------------------------
+# Zipped here rather than listed in SPECS, because SPECS entries are copied
+# out of the tree and $OUT is wiped above: a spec pointing into $OUT would
+# read a file this script had just deleted.
+#
+# It ships because the images deliberately carry no Intel firmware, and
+# telling someone to "supply the blobs yourself" without handing them the
+# tool that does it is an instruction, not a solution.
+if command -v python3 >/dev/null 2>&1; then
+    python3 - "$ROOT" "$OUT" <<'PYEOF'
+import pathlib, sys, zipfile
+root, out = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
+tools = root / "pc64" / "tools"
+names = ["uno-wifi-fw.py", "uno-wifi-fw.cmd", "uno-wifi-fw.command"]
+missing = [n for n in names if not (tools / n).is_file()]
+if missing:
+    sys.exit("mkrelease: missing firmware helper files: %s" % missing)
+readme = (root / "tools" / "wifi-fw-README.txt")
+with zipfile.ZipFile(out / "unodos-wifi-firmware-tool.zip", "w",
+                     zipfile.ZIP_DEFLATED) as z:
+    for n in names:
+        z.write(tools / n, n)
+    if readme.is_file():
+        z.write(readme, "README.txt")
+print("  %-10s %-28s %10d" % ("pc64", "unodos-wifi-firmware-tool.zip",
+      (out / "unodos-wifi-firmware-tool.zip").stat().st_size))
+PYEOF
+else
+    echo "  WARNING: python3 not found, Wi-Fi firmware helper NOT staged" >&2
+fi
+
 ( cd "$OUT" && sha256sum ./* > SHA256SUMS 2>/dev/null || true )
 
 echo
