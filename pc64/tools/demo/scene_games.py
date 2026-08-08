@@ -644,7 +644,7 @@ def main(argv):
                 "the close lands, so those two are one instant")
             st["av_offset_meaning"] = (
                 "wav_time = video_time - av_offset_seconds; to lay the wav "
-                "under the cut, trim %.2f s off its front" % off)
+                "under the cut, trim %.2f s off its front" % -off)
         st["audio_ok"] = bool(m["peak"] > 1000 and end)
 
         # PER APP. `volumedetect` is ffmpeg's own measurement over the slice of
