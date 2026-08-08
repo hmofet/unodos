@@ -172,10 +172,13 @@ def mark_beats(frames, beats):
         rr, gg, bb = px[o], px[o + 1], px[o + 2]
         return bb > 34 and bb > rr + 12 and gg < 90
 
-    # 1. firmware: the first frame that is not black at all
+    # 1. firmware: the first frame that is not black at all. The threshold is
+    #    LOW on purpose - OVMF's own mark is a small logo on a black field and
+    #    barely lifts the mean, so a threshold tuned for the splash labels the
+    #    splash as the firmware and the two beats land on the same frame.
     for p, w, h, t, mean, sig in frames:
-        if mean > 6:
-            got["firmware-handoff"] = t
+        if mean > 0.5:
+            got["firmware-logo"] = t
             break
     # 2. splash: the first UnoDOS navy backdrop
     for p, w, h, t, mean, sig in frames:
@@ -221,7 +224,7 @@ def mark_beats(frames, beats):
                     break
             else:
                 quiet_from = None
-    for k in ("firmware-handoff", "unodos-splash", "boot-progress",
+    for k in ("firmware-logo", "unodos-splash", "boot-progress",
               "desktop-first-paint", "desktop-settled"):
         if k in got:
             beats.mark(k, t=got[k])
@@ -350,7 +353,10 @@ def main(argv):
           "capture_fps": round(fps_real, 2),
           "screendump_sizes": ["%dx%d" % s for s in sizes],
           "boot_to_first_frame": round(t_first - t_boot, 2),
-          "beats": {k: round(v - t_first, 2) for k, v in got.items()},
+          # relative to the first KEPT frame, i.e. to t=0 of the mp4 - which is
+          # what an editor needs. The .beats.jsonl sidecar keeps absolute wall
+          # clock, the same convention scenes.py writes for s02-s10.
+          "beats": {k: round(v - kept[0][3], 2) for k, v in got.items()},
           "mp4": base + ".mp4", "mp4_bytes": info.get("bytes"),
           "dur": info.get("dur"), "w": info.get("w"), "h": info.get("h"),
           "fps": info.get("rate")}

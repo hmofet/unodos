@@ -27,17 +27,32 @@ ties them together, so at the end the music's onset is located in the wav
 The measured offset goes in out/s06.stats.json as `av_offset_seconds`: add it
 to a video timestamp to get the wav timestamp.
 
-WHAT THE SKIN BEAT CAN AND CANNOT BE. The brief asks the chassis to visibly
-RE-skin on camera. It cannot in this build, and the reason is in the source,
-not in the driving: unoamp_app.c's `load_a_skin()` runs from `unoamp_start()`,
-which is guarded by a one-shot `g_started`, and `unoamp_start()` is called once
-from `unoamp_ui_build()`. Closing and reopening the player does not re-run it,
-nothing resets `g_started`, and `unoamp_skin_load()` is exported to neither the
-URC verb table nor the `uno` Python module - so there is no reachable way to
-change skin while the machine is up. The scene therefore stages the real
-BASE291.WSZ at the volume ROOT (uno_fs lists roots only, unoamp_app.c:288 -
-a nested folder is invisible) and UnoAmp comes up WEARING it, decoded live from
-the ZIP by unoamp_skin.c. See the report for the one-line fix.
+THE SKIN BEAT DOES NOT HAPPEN, AND THE REASON IS A BUG. Two separate things
+block it, both in the unoamp lane and neither in the driving:
+
+  1. BASE291.WSZ DOES NOT LOAD AT ALL. Ten of its thirteen sheets - MAIN.BMP
+     included, and MAIN is the load gate - are BI_RLE8 BMPs, and
+     unoamp_skin.c's bmp_decode() refuses any compressed BMP outright:
+     `if (comp != 0) return 0;   /* RLE skins do not exist */`.
+     They do; a stock Winamp 2.9x skin is full of them. Reproduced host-side
+     in one second, no emulator involved:
+         cc -I. -I../unomedia -o /tmp/skintest tools/skintest.c unoamp_skin.c \\
+            ../unomedia/um_inflate.c ../unomedia/unomedia.c
+         /tmp/skintest wads/BASE291.WSZ      -> FAILED, MAIN.BMP did not decode
+     Un-RLE the ten sheets and the same archive loads 13/13 with VISCOLOR and
+     PLEDIT, which is the whole diagnosis.
+  2. EVEN FIXED, IT COULD NOT RE-SKIN ON CAMERA. `load_a_skin()` runs from
+     `unoamp_start()`, guarded by a one-shot `g_started` and called once from
+     `unoamp_ui_build()`. Reopening the player does not re-run it, nothing
+     resets `g_started`, and `unoamp_skin_load()` is exported to neither the
+     URC verb table nor the `uno` Python module. A skin is chosen once per
+     boot, so a live re-skin has nowhere to be triggered from.
+
+The scene still stages the real BASE291.WSZ at the volume ROOT (uno_fs lists
+roots only - unoamp_app.c:288 - so a nested folder is invisible to it), because
+that is what makes the bug visible and what will produce a skinned chassis the
+day bmp_decode learns RLE8. Today the player is filmed in its built-in look and
+the beat is named for what it is.
 """
 import argparse, json, os, subprocess, sys, threading, time
 
@@ -235,9 +250,17 @@ def uamp_close(fb_w):
 # ---------------------------------------------------------------------------
 def s06(d):
     fbw = d.w
+    # A machine with no saved session boots with the Control Panel open
+    # (pc64_uui.c session_load: no SHELL.CFG -> open_app(APP_CTRL)), and there
+    # is no setting that boots to a bare desktop. Clear it BEFORE the first
+    # beat, or every shot in the scene has a stray window behind it.
+    d.close_all()
     d.beat("launch-unoamp", settle=0.4)
-    d.launch("unoamp", settle=4.0)          # skin decode + playlist scan
-    d.beat("unoamp-wearing-base291-wsz", settle=2.5)
+    d.launch("unoamp", settle=3.0)          # skin attempt + playlist scan
+    # Named for what is on screen. The staged BASE291.WSZ is refused by
+    # bmp_decode (BI_RLE8 - see the module docstring), so this is the built-in
+    # theme-coloured chassis, not the Winamp skin.
+    d.beat("unoamp-opens-builtin-look", settle=2.0)
 
     # Glide FIRST, mark the beat, then press. The beat's wall clock is what
     # pins the video clock to the wav clock later, so it has to sit next to the
@@ -247,27 +270,35 @@ def s06(d):
     d.beat("play-flyhigh-mp3", settle=0.0)
     d.click(*play, glide=False, settle=1.2)
 
-    d.beat("hold-on-the-visualiser", settle=0.2)
-    time.sleep(7.0)                          # the bar analyser + time counter
+    # The elapsed-time digits and the position bar are what move here. The
+    # visualiser well is drawn but effectively frozen: measured over 6 s of
+    # this recording it changed on 11 of 179 frames, because the player only
+    # asks the shell to repaint when its title MARQUEE advances
+    # (unoamp_ui_tick) and "FLYHIGH" is short enough to fit without scrolling.
+    d.beat("hold-playing", settle=0.2)
+    time.sleep(4.5)
 
     d.beat("open-the-10-band-eq", settle=0.2)
     d.click(*uamp_eq(fbw), settle=1.0)
-    time.sleep(5.0)                          # the EQ window docks below
+    time.sleep(3.5)                          # the EQ window docks below
 
     d.beat("stop", settle=0.2)
-    d.click(*uamp_btn(fbw, T_STOP), settle=1.0)
+    d.click(*uamp_btn(fbw, T_STOP), settle=0.8)
+    # The skin's own close box: it calls unoamp_ui_close(), which takes the
+    # player AND its EQ/playlist windows down together. The shell's `close`
+    # verb would only remove whichever one happens to be focused.
     d.beat("close-unoamp", settle=0.2)
-    d.click(*uamp_close(fbw), settle=1.5)
-    d.close_all()
+    d.click(*uamp_close(fbw), settle=1.2)
+    d.close_all(3)              # belt and braces: the first take left a
+                                # "UnoAmp" chip on the taskbar through Photos
 
     d.beat("launch-photos", settle=0.3)
-    d.launch("photos", settle=4.5)           # opens straight into PICTURES\
-    d.beat("jpeg-sunset", settle=0.2)
-    time.sleep(2.5)
-    for tag, hold in (("png-with-alpha", 2.5),
-                      ("animated-gif", 6.0),   # hold: the animation IS the beat
-                      ("bmp", 2.5),
-                      ("qoi", 2.2)):
+    d.launch("photos", settle=3.5)           # opens straight into PICTURES\
+    d.beat("jpeg", settle=0.2)
+    time.sleep(2.0)
+    for tag, hold in (("png-alpha", 2.0),
+                      ("animated-gif", 4.5),   # hold: the animation IS the beat
+                      ("bmp", 2.2)):
         d.beat(tag, settle=0.2)
         d.key(0, S_RIGHT, settle=0.4)
         time.sleep(hold)
