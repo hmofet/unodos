@@ -12,6 +12,10 @@ reported, so a partial cut still assembles.
 """
 import argparse, json, os, subprocess, sys
 
+# The cut's ORDER, which is not the recording order: scenes.py records s09
+# before s08 (Studio's Ctrl-R must run before anything touches the URC `py`
+# verb - see the note above pyeval() there), and s14, the appliances scene,
+# stays out of the cut entirely because it needs a hypervisor-capable host.
 SPINE = [
     ("s01", "Cold boot"),
     ("s02", "Desktop and window manager"),
@@ -20,8 +24,10 @@ SPINE = [
     ("s05", "Web browser"),
     ("s06", "Media"),
     ("s07", "Studio IDE"),
+    ("s09", "Automation in Python"),
     ("s08", "Duum"),
-    ("s09", "Appliances"),
+    ("s12", "The games"),
+    ("s13", "SSH"),
     ("s10", "Under the hood"),
     ("s11", "The family"),
 ]
