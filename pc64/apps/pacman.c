@@ -95,7 +95,16 @@ static void pm_ghost_steer(short gi){
           if(dist<bestd){bestd=dist;best=d;} } }
     if(best>=0) g->dir=best;
 }
-static void pm_kill_pac(void){ gPmLives--;
+/* The three sounds.  They existed only in the NATIVE Pac-Man (pc64_games.c),
+   which no longer ships - app_game() maps just Runner3D onto a native canvas -
+   so the Pac-Man a user actually plays was measured at digital silence
+   (-91 dBFS mean AND max over 12 s).  music_note_on is the KernelApi's
+   one-shot note, i.e. exactly the uno_seq_beep the native version calls. */
+#define PM_SND_WAKA()   music_note_on(72, 2)
+#define PM_SND_PELLET() music_note_on(55, 10)
+#define PM_SND_DEATH()  music_note_on(45, 22)
+
+static void pm_kill_pac(void){ gPmLives--; PM_SND_DEATH();
     if(gPmLives<=0){ gPmState=PM_OVER; if(gPmScore>gPmHi)gPmHi=gPmScore; gm_stop(); }
     else { pm_reset_actors(); gPmState=PM_READY; gPmStateT=TickCount()+66; } }
 static void pm_step(void){
@@ -105,8 +114,8 @@ static void pm_step(void){
         for(i=0;i<3;i++) if(gPmGh[i].state==GH_SCATTER||gPmGh[i].state==GH_CHASE){ gPmGh[i].state=pm_mode_state(); gPmGh[i].dir^=2; } } }
     for(sub=0;sub<2;sub++){
         if((gPmX%PM_TILE)==0&&(gPmY%PM_TILE)==0){ short tx=gPmX/PM_TILE,ty=gPmY/PM_TILE; unsigned char *t=&gPmMaze[ty][tx];
-            if(*t==2){*t=0;gPmScore+=10;gPmDots--;}
-            else if(*t==3){*t=0;gPmScore+=50;gPmDots--;gPmFright=200;gPmKills=0;
+            if(*t==2){*t=0;gPmScore+=10;gPmDots--; PM_SND_WAKA();}
+            else if(*t==3){*t=0;gPmScore+=50;gPmDots--;gPmFright=200;gPmKills=0; PM_SND_PELLET();
                 for(i=0;i<3;i++) if(gPmGh[i].state==GH_SCATTER||gPmGh[i].state==GH_CHASE){gPmGh[i].state=GH_FRIGHT;gPmGh[i].dir^=2;} }
             if(!gPmDots){ gPmLevel++; pm_load_maze(); pm_reset_actors(); gPmState=PM_READY; gPmStateT=TickCount()+66; return; }
             if(pm_walkable(tx+kPmDX[gPmNextDir],ty+kPmDY[gPmNextDir],0,0)) gPmDir=gPmNextDir;
@@ -150,6 +159,15 @@ static void pacman_draw(UnoWin *w){
         if(g->state==GH_EATEN){ InsetRect(&q,2,2); uno_fill(&q,C_WHITE); }
         else { fill_rgb(&q,grgb); { Rect e=q; e.right=e.left+2; e.bottom=e.top+2; OffsetRect(&e,1,1); uno_fill(&e,C_WHITE); OffsetRect(&e,3,0); uno_fill(&e,C_WHITE);} } }
     px=w->bounds.left+4+PM_COLS*PM_TILE+8;
+    /* Extend the maze's black backdrop across the score panel.  The readouts
+       are drawn transparently (they name C_BLUE as a background but never
+       paint it), so they landed on the shell's themed window fill and the
+       C_WHITE values were white-on-white on a light theme, while the C_CYAN
+       labels beside them stayed readable.  One cabinet-black strip, and the
+       panel reads the same on all ten themes. */
+    { Rect p; SetRect(&p,w->bounds.left+4+PM_COLS*PM_TILE,w->bounds.top+TBAR_H+2,
+                      w->bounds.right,w->bounds.top+TBAR_H+2+PM_ROWS*PM_TILE);
+      { RGBColor blk={0,0,0}; RGBForeColor(&blk); PaintRect(&p); RGBForeColor(&kBlack); } }
     text_at(px,w->bounds.top+TBAR_H+14,"SCORE",C_CYAN,C_BLUE,false); fmt_u(gPmScore,num); text_at(px,w->bounds.top+TBAR_H+28,num,C_WHITE,C_BLUE,false);
     text_at(px,w->bounds.top+TBAR_H+48,"HI",C_CYAN,C_BLUE,false); fmt_u(gPmHi,num); text_at(px,w->bounds.top+TBAR_H+62,num,C_WHITE,C_BLUE,false);
     text_at(px,w->bounds.top+TBAR_H+82,"LIVES",C_CYAN,C_BLUE,false); fmt_u(gPmLives,num); text_at(px,w->bounds.top+TBAR_H+96,num,C_WHITE,C_BLUE,false);
