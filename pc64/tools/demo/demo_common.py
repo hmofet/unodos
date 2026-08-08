@@ -7,8 +7,7 @@ scenes need, and mirrors its conventions so the outputs stitch:
 
   - everything lands in tools/demo/out/ as sNN.mp4 (+ .beats.jsonl,
     .timing.jsonl, .stats.json) exactly like scenes.py's record();
-  - the cut is 640x400 @ 30 fps (measured off the existing out/s03.mp4 -
-    the QEMU desktop's own GOP mode, not a choice made here);
+  - the cut is 1280x800 @ 30 fps, NATIVELY (see "One resolution" below);
   - beats are wall-clock lines in sNN.beats.jsonl.
 
 Three capture paths live here:
@@ -38,12 +37,52 @@ OUT   = os.path.join(HERE, "out")
 PROBE = os.path.join(OUT, "probe")
 ESP   = os.path.join(PC64, "build", "esp")
 
-# The cut's format. Measured, not chosen: `ffprobe out/s03.mp4` on the scenes
-# scenes.py already produced says 640x400 @ 30/1.
-VID_W, VID_H, FPS = 640, 400, 30
+# ---------------------------------------------------------------------------
+# ONE RESOLUTION FOR THE WHOLE VIDEO - 1280x800, and every scene reaches it
+# natively rather than by being blown up at stitch time.
+#
+# The desktop is not the panel. uefi_main.c never calls SetMode; it takes the
+# GOP mode the firmware left, and its default desktop is deliberately HALF of
+# it (`apply_desktop(gModeW / 2, gModeH / 2)`, uefi_main.c:641), presented back
+# up to the panel at a whole-number zoom. So OVMF's own 1280x800 gives a
+# 640x400 desktop, and that - not the container, not the encoder - is why the
+# first cut of s01/s06 was 640x400.
+#
+# The fix is therefore at the panel, not at the encoder: hand QEMU's VGA an
+# EDID twice the size and the halving lands exactly on 1280x800.
+#
+#     -vga none -device VGA,edid=on,xres=2560,yres=1600,vgamem_mb=64
+#
+# Verified (2026-08-08) against a booted image: OVMF adopts the EDID's
+# preferred mode, the Control Panel's Display tab reads "1280x800", and the
+# desktop draws at native 1280x800. vgamem_mb has to be raised because
+# 2560*1600*4 = 16.4 MB is just over the 16 MB default and the mode would not
+# be offered at all.
+#
+# NOTHING IS UPSCALED ANYWHERE. The panel is an exact integer 2x of the
+# desktop, so a 2:1 `area` downscale averages four copies of one guest pixel
+# and returns that pixel. Proved rather than argued: area-halving a captured
+# 2560x1600 screendump and then nearest-doubling it back is BYTE-IDENTICAL to
+# the original PPM.
+VID_W, VID_H, FPS = 1280, 800, 30
+GOP_W, GOP_H = VID_W * 2, VID_H * 2
 
 OVMF_CODE = "/usr/share/OVMF/OVMF_CODE_4M.fd"
 OVMF_VARS = "/usr/share/OVMF/OVMF_VARS_4M.fd"
+
+
+def vga_args(gop_w=GOP_W, gop_h=GOP_H):
+    """QEMU args for a panel whose half is the desktop we want to film.
+
+    `-vga none` first, because q35 already gives you a std VGA and adding a
+    second one leaves the firmware talking to the wrong card. Pass gop_w=0 to
+    keep the machine's default panel (and therefore the 640x400 desktop).
+    """
+    if not gop_w or not gop_h:
+        return []
+    return ["-vga", "none",
+            "-device", "VGA,edid=on,xres=%d,yres=%d,vgamem_mb=64"
+                       % (gop_w, gop_h)]
 
 # Ports and image paths that CANNOT collide with a concurrent scenes.py /
 # remote_qemu.py run (5399 + /tmp/remote_*.img are theirs).
@@ -291,7 +330,13 @@ def sig_diff(a, b):
 # ---------------------------------------------------------------------------
 # ffmpeg
 # ---------------------------------------------------------------------------
-FIT = ("scale=%d:%d:force_original_aspect_ratio=decrease:flags=lanczos,"
+# `area`, not lanczos. The only real downscale this does is the exact 2:1 from
+# the 2560x1600 panel back to the 1280x800 desktop, and at exactly 2:1 area
+# averages the 2x2 block - which, the panel being a nearest 2x of the desktop,
+# is four copies of one guest pixel. That makes the step lossless (proved by
+# round-trip: area-half then nearest-double == the original PPM, byte for
+# byte). lanczos would ring on the same pixels for no gain.
+FIT = ("scale=%d:%d:force_original_aspect_ratio=decrease:flags=area,"
        "pad=%d:%d:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1"
        % (VID_W, VID_H, VID_W, VID_H))
 
