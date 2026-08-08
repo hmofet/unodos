@@ -2,7 +2,7 @@
 # UnoDOS / PC Engine build (HuC6280, ca65) -> .pce HuCard ROM.
 set -e
 cd "$(dirname "$0")"
-PY="${PY:-python}"
+PY="${PY:-python3}"
 CA65="${CA65:-/c/Users/arin/snes-tools/bin/ca65}"
 LD65="${LD65:-/c/Users/arin/snes-tools/bin/ld65}"
 mkdir -p build

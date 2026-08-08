@@ -3,7 +3,7 @@
 # Usage: ./build.sh [nav|app|clock|theme|music|dostris]
 set -e
 cd "$(dirname "$0")"
-PY="${PY:-python}"
+PY="${PY:-python3}"
 NASM="${NASM:-/c/Users/arin/nasm-tools/nasm-2.16.01/nasm.exe}"
 mkdir -p build
 echo "[1/3] generating tiles + data..."
