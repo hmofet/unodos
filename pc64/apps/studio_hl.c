@@ -5,6 +5,16 @@ static int is_id0(int c){ return (c>='a'&&c<='z')||(c>='A'&&c<='Z')||c=='_'; }
 static int is_id (int c){ return is_id0(c)||(c>='0'&&c<='9'); }
 static int is_dig(int c){ return c>='0'&&c<='9'; }
 
+/* A punctuation run ends at anything that STARTS another token, so the
+ * coalescing below can never swallow a comment, string, number or word.
+ * (Whitespace ends it too - the editor draws per span, so a run must not
+ *  span a gap it would then paint over.) */
+static int punct_run_char(int c)
+{
+    return !(c == ' ' || c == '\t' || c == '"' || c == '\'' || c == '#' ||
+             c == '/' || is_id0(c) || is_dig(c) || c == '.');
+}
+
 /* the UnoC keyword + type sets (kept small; matches docs_esp/LANG.MD) */
 static int classify_word(const char *p, int n)
 {
@@ -107,7 +117,18 @@ static int py_hl_line(const char *p, int n, int *in_triple, HlSpan *sp, int maxs
             EMITP(s, i - s, py_classify(p + s, i - s));
             continue;
         }
-        i++;
+        /* PUNCTUATION IS A SPAN, NOT A GAP.  draw_editor() paints only the
+         * characters a span covers, so a bare `i++` here made every operator
+         * INVISIBLE - `(`, `)`, `*`, `,`, `;`, `=`, `+` all rendered as blank
+         * columns while still occupying them.  Code typed or opened in Studio
+         * therefore read as if the keyboard had dropped the punctuation; the
+         * text was always in the buffer, only never drawn. */
+        {
+            int s = i;
+            while (i < n && punct_run_char((unsigned char)p[i])) i++;
+            if (i == s) i++;                 /* belt: never stall the loop */
+            EMITP(s, i - s, HL_PUNCT);
+        }
     }
     #undef EMITP
     return ns;
@@ -188,7 +209,12 @@ int studio_hl_line(const char *p, int n, int *in_comment, HlSpan *sp, int maxsp)
             EMIT(s, i - s, classify_word(p + s, i - s));
             continue;
         }
-        i++;                                                /* punctuation */
+        {                                                   /* punctuation */
+            int s = i;
+            while (i < n && punct_run_char((unsigned char)p[i])) i++;
+            if (i == s) i++;                 /* belt: never stall the loop */
+            EMIT(s, i - s, HL_PUNCT);
+        }
     }
     #undef EMIT
     return ns;
