@@ -8609,3 +8609,66 @@ stack and a blank score. The labels use a theme colour; the numbers do not.
 Nothing here blocks the video - s12 ships as recorded, reports Pac-Man as
 silent, and closes on the Tracker playing its demo pattern so the cut still has
 music on its own terms.
+
+---
+
+## 2026-08-08 - demo lane (unostream) -> Studio/PYRT, and unossh
+
+Three findings from recording the pc64 demo video's s07/s09/s13. None of them
+is in my lane; all three were measured, not inferred.
+
+**1. STUDIO'S Ctrl-R HARD-WEDGES THE MACHINE IF THE URC `py` VERB RAN FIRST.**
+This one is severe: the box stops servicing URC entirely and never comes back
+(watched for 140 s, no log line, no watchdog reset), so a driver sees only
+"no response to 'uptime'" and a recording that stops mid-scene.
+
+| session | result |
+|---|---|
+| `py print(uno.size(0,"SAMPLE.C"))` ... then Studio ^R on a `.PY` | **WEDGED** |
+| no `py` at all ... then Studio ^R on the same `.PY` | fine |
+
+Reproduce (WSL, `UNO_DEBUG=1 ./build.sh`): boot the harness, push
+`sdk/SAMPLE.PY` to the RAM disk, send ONE `py` command, open the file in
+Studio, `^S ^B ^R`. Drop the `py` and it works every time.
+
+It is not the file, the app, or the `.UNO` name. The difference is who
+initialised PYRT's MicroPython VM first: `pyrt_ensure()` runs `py_init()` once
+and `py_init` records a stack top (`pyrt_set_stack_top(&stack_marker)`,
+`apps/pyrt.c`). Reached first through `pc64_shell_py_exec` from the URC command
+path, that top belongs to a stack that the shell's key dispatch - where
+`studio_key` -> `do_run` -> `pc64_shell_run_python` runs - is nowhere near.
+`uno.run_app` from the `py` verb never wedges, which fits: that entry is on the
+same stack the limit was recorded on.
+
+Four workarounds were tried and all four still wedged, so please do not assume
+one exists: opening and closing a tiny PYAPP first; leaving one open on another
+desktop; leaving one open and drawn on the current desktop; and host-packing
+the very same `.UNO` and `uno.run_app`-ing it before the ^R. Only "never touch
+`py` first" works, and that is what the demo driver now enforces
+(`pyeval()` + `needs_ctrl_r()` in `tools/demo/scenes.py`, documented in
+`tools/demo/SCENES.md`). It costs the metal path s07 and s09 outright, because
+`probe_metal_assets` has to use `py`.
+
+**2. Nothing on the device can populate the SSH store.** The `ssh` verb in
+`unossh_cmd.c` is complete (`keys|keygen|keypub|keyrm|sess|sessadd|sessrm|
+hosts|run|get|close`) and its header says unoautomate "lands a weak stub and a
+four-line dispatch clause once" - but that clause was never landed:
+`grep -n ssh unoauto_remote.c` returns nothing, and there is no `GATE[]` row
+either. So the verb is dead code from every caller's point of view. Meanwhile
+`sshapp_ui.c` has no "add session" and no "import key" control, and the only
+callers of `ssh_sess_set` / `ssh_key_import` in the tree are SPECTEST suites.
+Net effect: **a user who installs UnoDOS cannot use the SSH client at all** -
+it can only ever connect to sessions that do not exist. `docs/SSH-CLIENT-SPEC.md`
+still lists `ssh key import` and "a key manager pane: list, generate, import,
+export" as the intended surface.
+
+s13 works around it by authoring `SSHSTORE.DAT` on the host
+(`tools/demo/sshstore.py`, which replicates the container plus PBKDF2 200k /
+AES-256-CTR / HMAC exactly) and staging it. That is fine for a demo and wrong
+as a product. The four-line dispatch clause plus a `GATE[]` row would fix the
+automation half in one commit; the app needs a real key/session editor.
+
+**3. `unossh` cannot import a passphrase-protected key**, by design
+(`ssh_key_import` returns -3 for `ciphername != "none"`; bcrypt_pbkdf is not
+in the tree). Worth stating in the manual next to the import UI when it exists,
+because the failure is otherwise indistinguishable from a corrupt key.
