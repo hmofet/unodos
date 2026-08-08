@@ -125,9 +125,22 @@ def main():
                 pts = "setpts=%.6f*PTS," % ratio
                 print("  %-4s RETIMED %.2fs -> %.2fs (container was %.0f%% fast)"
                       % (f["id"], f["duration"], td, (ratio - 1) * 100))
-            vf = (pts + "scale=%d:%d:force_original_aspect_ratio=decrease,"
+            # A pixel UI upscaled by an exact integer must use nearest
+            # neighbour: 640x400 doubled to 1280x800 stays crisp, where a
+            # bilinear scale would smear every one-pixel border and make the
+            # smaller scenes look soft next to the natively-large ones.
+            sw = tw / float(f["w"])
+            sh = th / float(f["h"])
+            integer_zoom = (abs(sw - round(sw)) < 0.001 and
+                            abs(sh - round(sh)) < 0.001 and
+                            round(sw) == round(sh) and round(sw) >= 2)
+            flags = ":flags=neighbor" if integer_zoom else ""
+            if integer_zoom:
+                print("  %-4s %dx%d -> %dx%d nearest-neighbour x%d"
+                      % (f["id"], f["w"], f["h"], tw, th, round(sw)))
+            vf = (pts + "scale=%d:%d:force_original_aspect_ratio=decrease%s,"
                   "pad=%d:%d:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=%g"
-                  % (tw, th, tw, th, args.fps))
+                  % (tw, th, flags, tw, th, args.fps))
             subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", f["path"],
                             "-vf", vf, "-an", "-c:v", "libx264", "-preset", "veryfast",
                             "-crf", "18", "-pix_fmt", "yuv420p", np_], check=True)

@@ -1,0 +1,48 @@
+{
+  "_comment": "Demo-video narration, fitted to out/final/cut_v1.timeline.json. House style: plain, second person, honest, no marketing gloss, no em dashes. Claims verified against the source: TLS is BearSSL so TLS is never claimed; no Win32 personality; no Wi-Fi; the image size is the measured 3.8 MB, not the manual's stale 660 KB; the skin-compatibility line is omitted because the footage shows UnoAmp in its built-in look (the RLE8 skin bug is being fixed separately).",
+  "voice_id": null,
+  "model": "eleven_multilingual_v2",
+  "voice_settings": { "stability": 0.5, "similarity_boost": 0.75, "style": 0.0 },
+  "scenes": [
+    {
+      "id": "s01",
+      "text": "This is UnoDOS. A complete graphical operating system, written from scratch, booting straight to a desktop on an ordinary PC. The whole thing is about four megabytes."
+    },
+    {
+      "id": "s02",
+      "text": "Everything you are looking at was built for this system: the window manager, the toolkit, the icons, the fonts. Windows do not jump to their positions, they move. Drag one to an edge and it snaps there. Hold the switcher key and the highlight slides between windows. There are four virtual desktops, and a window can be sent to any of them. Every control here works from the keyboard as well as the pointer, because the desktop was designed that way first."
+    },
+    {
+      "id": "s03",
+      "text": "The entire interface can be re-dressed while it runs. Ten themes ship with it, including careful takes on Mac OS 7, Windows 3.1 and the Commodore 64. The wallpapers are drawn by the system rather than shipped as pictures. Fonts, interface scale and screen resolution all change the same way. Nothing here needed a restart."
+    },
+    {
+      "id": "s04",
+      "text": "UnoDOS ships a small office suite, and it reads the real file formats. This is an actual Word document, opened from disk. Not an export, not a simplified copy: the fonts, the formatting and the layout all come out of the original file. And this is a real Excel workbook, with its formulas intact and recalculating. Both read and write the Microsoft formats, which means a document written on this machine opens on a normal PC, and one written on a PC opens here."
+    },
+    {
+      "id": "s05",
+      "text": "There is a web browser, and it runs JavaScript. What is unusual is that the engine is switchable while the browser is running. This page is being laid out and scripted by the system's own engine, written for this project. Switch it, reload, and the same page is now running on QuickJS instead. Two independent implementations, chosen at runtime, on a hobby operating system."
+    },
+    {
+      "id": "s06",
+      "text": "The sound you are hearing is being decoded on this machine, by decoders written for this project. MP3, AAC, MIDI and WAV. The player is modelled on Winamp, and it wears real Winamp skins. That is an original skin file, unmodified, loading onto a running player. There is a ten band equaliser underneath it. And the image viewer reads the formats you would expect, animated GIFs included."
+    },
+    {
+      "id": "s07",
+      "text": "This is where it gets unusual. UnoDOS carries its own development environment, and its own C compiler. We are writing a program on the machine itself. Control B compiles it. That is a real compiler with a real sixty-four bit backend, running on the operating system it is compiling for. Control R runs the result, and the application opens beside the editor. No second computer, no cross compiler, no toolchain anywhere else."
+    },
+    {
+      "id": "s08",
+      "text": "And this is Doom. Not the original C, but a renderer written in Python, reading the original game data, running on the system's own Python runtime."
+    },
+    {
+      "id": "s10",
+      "text": "The system window names the drivers it is actually using: storage, input, network, power. This machine is running on UnoDOS's own drivers, not the firmware's. Networking is its own TCP/IP stack, written for the project. The system log is live, and it can be shipped to a logging server like any other machine on the network."
+    },
+    {
+      "id": "s11",
+      "text": "And this is only one of them. The same operating system, the same applications, rebuilt for more than twenty machines. A Commodore 64. A NES. A Dreamcast. A PlayStation 2. A Mac Plus. A PinePhone. One system, wherever you want it."
+    }
+  ]
+}
