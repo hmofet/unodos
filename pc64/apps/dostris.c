@@ -77,11 +77,24 @@ static void dt_cell(UnoWin *w, short c, short r, short piece){
 static void dostris_draw(UnoWin *w){
     Rect r=w->bounds,b; short c,rr,i,px; char num[16];
     SetRect(&b,r.left+DT_BX-2,r.top+TBAR_H+DT_BY-2,r.left+DT_BX+DT_COLS*DT_CELL+1,r.top+TBAR_H+DT_BY+DT_ROWS*DT_CELL+1);
+    /* The well is filled before it is framed, for the reason in the panel
+       comment below: a C_WHITE frame drawn straight onto a light theme's
+       window fill is white on white, so the playfield had no visible edge at
+       all - the pieces just floated in the window. */
+    uno_fill(&b,C_BLUE);
     uno_box(&b,C_WHITE);
     for(rr=0;rr<DT_ROWS;rr++) for(c=0;c<DT_COLS;c++) if(gDtBoard[rr][c]) dt_cell(w,c,rr,gDtBoard[rr][c]-1);
     if(gDtState==1||gDtState==2){ const signed char *sh=kDtShape[gDtPiece][gDtRot];
         for(i=0;i<4;i++){ short cc=gDtCol+sh[i*2],cr=gDtRow+sh[i*2+1]; if(cr>=0) dt_cell(w,cc,cr,gDtPiece);} }
     px=r.left+DT_BX+DT_COLS*DT_CELL+14;
+    /* The side panel gets its OWN background.  Every text_at below names
+       C_BLUE as its background but draws transparently, so the readouts
+       actually landed on the shell's themed window fill - and the values are
+       C_WHITE, which is invisible on a light theme (the C_CYAN labels beside
+       them stayed readable, which is why this looked like missing numbers
+       rather than a colour bug).  Painting the strip the colour the app has
+       always claimed makes it true on all ten themes. */
+    { Rect p; SetRect(&p,px-10,r.top+TBAR_H,r.right,r.bottom); uno_fill(&p,C_BLUE); }
     text_at(px,r.top+TBAR_H+20,"DOSTRIS",C_MAG,C_BLUE,false);
     text_at(px,r.top+TBAR_H+44,"Score",C_CYAN,C_BLUE,false); fmt_u(gDtScore,num); text_at(px+56,r.top+TBAR_H+44,num,C_WHITE,C_BLUE,false);
     text_at(px,r.top+TBAR_H+60,"Lines",C_CYAN,C_BLUE,false); fmt_u(gDtLines,num); text_at(px+56,r.top+TBAR_H+60,num,C_WHITE,C_BLUE,false);
@@ -109,8 +122,14 @@ static void dostris_tick(void){
     dt_redraw();
 }
 
+/* gm_start plays on the ONE global sequencer, so a Dostris that goes away
+ * without stopping it leaves Korobeiniki looping over whatever opens next -
+ * and over an empty desktop.  unoapp_close() calls this slot; it was null.
+ * apps/outlast.c has had the same handler since it was written. */
+static void dostris_closed(void){ gm_stop(); }
+
 static const AppInterface kIface = {
-    dostris_draw, dostris_key, 0, dostris_tick, 0, 0,
+    dostris_draw, dostris_key, 0, dostris_tick, 0, dostris_closed,
     "Dostris", { 20, 10, 330, 388 }
 };
 const AppInterface *uno_app_main(const KernelApi *k){ gK = k; return &kIface; }
