@@ -106,8 +106,12 @@ python3 tools/mkuefi.py 512   # pack build/esp/ into build/unodos-uefi.img (512 
 python3 harness.py boot    # scripted QEMU boot + screenshot
 python3 nettest.py         # headless network + TLS verification</code></pre>
 <p>The build compiles the platform, framebuffer, toolkit, ten themes, apps and drivers freestanding, and links a
-single <code>BOOTX64.EFI</code> into a bootable <strong>ESP</strong> tree in <code>build/esp/</code>. The default
-image is about 660&nbsp;KB.</p>
+single <code>BOOTX64.EFI</code> into a bootable <strong>ESP</strong> tree in <code>build/esp/</code>. That kernel is
+about <strong>3.8&nbsp;MB</strong> and the whole tree about <strong>14&nbsp;MB</strong>: the rest is the
+<code>.UNO</code> apps, the four TrueType fonts, the sample media and the SDK beside it. Two local extras grow it
+if you have them, and neither is in the repository: the Wi-Fi firmware blobs in <code>fw-blobs/</code> add about
+7&nbsp;MB, and a Doom WAD in <code>wads/</code> adds its own size again. <code>UNO_DEBUG=1</code> links a bigger
+kernel, about 4.4&nbsp;MB.</p>
 <div class="note"><b>Keyboard-first</b>The desktop is fully keyboard-driven, so QEMU needs no special input setup. QEMU is also scriptable over QMP (<code>send-key</code> + <code>screendump</code>), which is how the screenshots in this manual are made.</div>
 
 <h2 id="image">Pack a real USB disk image</h2>
