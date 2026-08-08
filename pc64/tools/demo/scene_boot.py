@@ -39,7 +39,8 @@ sys.path.insert(0, HERE)
 from demo_common import (OUT, PROBE, ESP, VID_W, VID_H, FPS, OVMF_CODE,      # noqa: E402
                          OVMF_VARS, S01_QMP, S01_DISK, S01_FAT, S01_VARS,
                          Qmp, Beats, build_fat_disk, screendump, frame_stats,
-                         sig_diff, encode_concat, probe, clean_outputs, sh)
+                         sig_diff, encode_concat, probe, clean_outputs, sh,
+                         send_key)
 
 # The demo stick's keys (pc64/tools/demo/deploy.sh) minus `remote=`: s01 drives
 # nothing, so there is no receiver to dial and an unanswered dial is just noise.
@@ -75,6 +76,107 @@ def boot(disk, qmp_sock):
         "-qmp", "unix:%s,server,nowait" % qmp_sock,
     ]
     return subprocess.Popen(cmd, stderr=subprocess.DEVNULL)
+
+
+def wait_desktop(q, probe_ppm, max_secs=90.0, quiet_secs=2.0, big=0.20):
+    """Poll screendumps until the desktop is up and still. Same two-part test
+    the capture loop uses - a LARGE repaint (splash -> desktop) followed by
+    quiet - because quiet alone cannot tell an arrival from one of the boot's
+    multi-second pauses. Returns the settled frame's signature, or None."""
+    t0 = time.time()
+    prev = None
+    seen_big = False
+    quiet_since = None
+    while time.time() - t0 < max_secs:
+        r = screendump(q, probe_ppm)
+        if r is None:
+            time.sleep(0.2)
+            continue
+        w, h, px, t = r
+        mean, sig = frame_stats(px, w, h)
+        d = sig_diff(prev, sig)
+        prev = sig
+        if mean > 8 and d > big:
+            seen_big = True
+        if seen_big and mean > 8 and d < 0.004:
+            if quiet_since is None:
+                quiet_since = t
+            elif t - quiet_since >= quiet_secs:
+                return sig
+        else:
+            quiet_since = None
+        time.sleep(0.15)
+    return None
+
+
+def seed_used_session(disk, qmp_sock, verbose=True):
+    """FIRST BOOT, not recorded: use the machine once, the way a person would,
+    so that the SECOND boot restores a bare desktop.
+
+    WHY THIS IS NEEDED AND WHY IT IS NOT A CHEAT. A machine with no SHELL.CFG
+    opens the Control Panel (pc64_uui.c session_load: `if (got < 0) {
+    open_app(APP_CTRL); ... }`), and so does one whose saved session is EMPTY -
+    `open=` with nothing after it still falls through to `if (!any)
+    open_app(APP_CTRL)`. There is no setting, and no file, that makes pc64 boot
+    to nothing. So the opening shot cannot be a bare desktop by configuration.
+
+    It CAN be one by use. `Alt+Ctrl+F2` moves the focused window to desktop 2
+    and follows it; `Ctrl+F1` comes back. Both are documented shortcuts
+    (pc64_uui.c:5841), both are two keystrokes, and the move calls
+    `session_save()`, which writes `desk.control=1` and `cur_desk=0` into
+    SHELL.CFG on the disk - the same file, written by the same function, that a
+    person doing the same thing would leave behind. The next boot restores
+    exactly that: desktop 1 empty, the Control Panel still open on desktop 2.
+
+    Nothing is hand-written here. The OS writes its own session file; this only
+    supplies the keystrokes, over QMP, because a production build has no URC.
+    Returns True if the desktop went bare before the reboot.
+    """
+    probe_ppm = "/tmp/demo_s01_seed.ppm"
+    qemu = boot(disk, qmp_sock)
+    try:
+        q = Qmp(qmp_sock)
+        if wait_desktop(q, probe_ppm) is None:
+            print("  seed: the desktop never settled - leaving the disk fresh")
+            return False
+        send_key(q, "alt", "ctrl", "f2")      # move the window to desktop 2
+        time.sleep(2.0)
+        send_key(q, "ctrl", "f1")             # and come back to desktop 1
+        time.sleep(3.0)                       # let session_save reach the disk
+    finally:
+        try:
+            q.cmd("quit")
+            q.close()
+        except Exception:                     # noqa: BLE001
+            pass
+        time.sleep(0.5)
+        qemu.kill()
+        try:
+            os.unlink(probe_ppm)
+        except OSError:
+            pass
+    # Verify against the FILE the next boot will actually read, not against
+    # pixels. A first pass compared the before/after screendumps and called a
+    # working seed a failure: the Control Panel is ~10% of a 1280x800 frame and
+    # the row-sum signature barely moves when it goes. SHELL.CFG is
+    # unambiguous - and it is the thing session_load consumes.
+    cfg = read_shell_cfg(disk)
+    ok = bool(cfg) and "desk.control=" in cfg and "cur_desk=0" in cfg
+    if verbose:
+        print("  seed: SHELL.CFG %s" %
+              ("written by the guest, Control Panel parked on desktop 2"
+               if ok else "MISSING or unexpected - the recorded boot will show "
+               "the out-of-box Control Panel:\n%s" % (cfg or "<no file>")))
+    return ok
+
+
+def read_shell_cfg(disk, part_off=2048 * 512):
+    """The SHELL.CFG the guest wrote, read back off the disk image with
+    mtools. `disk@@<byte offset>` is how mtools addresses a partition."""
+    r = subprocess.run(["mtype", "-i", "%s@@%d" % (disk, part_off),
+                        "::/SHELL.CFG"], stdout=subprocess.PIPE,
+                       stderr=subprocess.DEVNULL)
+    return r.stdout.decode("latin-1") if r.returncode == 0 else ""
 
 
 def capture(q, frames_dir, max_secs, quiet_secs, verbose=True, big=0.20,
@@ -278,6 +380,13 @@ def main(argv):
     ap.add_argument("--suffix", default="",
                     help="write s01<suffix>.* instead of s01.* (for an "
                          "alternate take)")
+    ap.add_argument("--session", choices=("used", "fresh"), default="used",
+                    help="'used': an unrecorded first boot moves the "
+                         "Control-Panel window to desktop 2 (Alt+Ctrl+F2, "
+                         "Ctrl+F1), so the RECORDED boot restores a bare "
+                         "desktop - what a machine that has been switched on "
+                         "once looks like. 'fresh': record the very first "
+                         "boot, which opens the Control Panel by design.")
     a = ap.parse_args(argv)
 
     esp = a.esp or (PROD_ESP if os.path.isdir(PROD_ESP) else ESP)
@@ -304,6 +413,12 @@ def main(argv):
 
     print("staging %s" % S01_DISK)
     build_fat_disk(S01_DISK, S01_FAT, DEBUG_CFG, esp=esp)
+    seeded = False
+    if a.session == "used":
+        print("seeding a used session (unrecorded first boot)")
+        seeded = seed_used_session(S01_DISK, S01_QMP)
+        # The disk is NOT rebuilt after this: the SHELL.CFG the guest just
+        # wrote is the whole point, and re-authoring the image would erase it.
 
     beats = Beats(base + ".beats.jsonl")
     q = None
@@ -347,6 +462,8 @@ def main(argv):
     info = probe(base + ".mp4")
     sizes = sorted(set((w, h) for _, w, h, _, _, _ in frames))
     st = {"scene": "s01" + a.suffix, "esp": esp, "build": build_id,
+          "session": a.session, "session_seeded": seeded,
+          "shell_cfg": read_shell_cfg(S01_DISK).replace("\r\n", " ").strip(),
           "frames_captured": len(frames),
           "frames_kept": len(kept),
           "capture_seconds": round(t_last - t_first, 2),
