@@ -72,27 +72,115 @@ static int z_out(void *ctx, const unsigned char *p, long n)
 static void *arena_alloc(unsigned long n);   /* the skin arena, below */
 
 /* ---- BMP ------------------------------------------------------------------
- * A skin sheet is always an uncompressed Windows BMP, so this reads one
- * directly rather than going through unomedia's image layer. That is a
- * deliberate call, for two reasons:
+ * A skin sheet is a Windows BMP, read directly here rather than through
+ * unomedia's image layer. That is a deliberate call, for two reasons:
  *
  *   1. um_image's decoder roster is all-or-nothing - linking it pulls PNG,
  *      JPEG, GIF, WebP and VP8 into the kernel. Paying a video-codec's worth
  *      of image for a 275x116 titlebar is not a trade worth making.
- *   2. um_image is a SINGLETON, and with BROWSER_ENGINE=uw the browser holds
- *      it while decoding <img>. A skin load must not be able to yank a decode
- *      out from under the browser.
+ *   2. um_image is a SINGLETON - one static decode state, one um_read source -
+ *      and with BROWSER_ENGINE=uw the browser holds it while decoding <img>.
+ *      A skin load must not be able to yank a decode out from under the
+ *      browser. That is a correctness hazard, not a size one, and it is why
+ *      this stayed local even after the image half became unconditional in the
+ *      kernel link (build.sh, the umi_* objects): um_bmp.c decodes RLE
+ *      correctly but it is only reachable through um_image_open(), which takes
+ *      the singleton.
  *
  * um_inflate IS shared - that one is standalone and ZIP method 8 is exactly
  * what it does.
  *
  * Handles 1/4/8-bit palette, 24-bit BGR and 32-bit BGRA, top-down or
- * bottom-up.
+ * bottom-up, uncompressed or BI_RLE8 / BI_RLE4.
+ *
+ * RLE IS NOT EXOTIC. The first cut refused any compressed BMP outright, on the
+ * assumption that skins ship raw. A stock Winamp 2.91 skin stores TEN of its
+ * thirteen sheets as BI_RLE8, MAIN.BMP among them - and MAIN is the load gate,
+ * so that one `return 0` refused the whole skin and every skin like it.
  *
  * BMP stores pixels B,G,R and the framebuffer word is 0xAABBGGRR (see FB_RGB
  * in fb.h - blue at bits 16..23, red at 0..7), so BMP byte order maps STRAIGHT
  * ACROSS with no swap. Writing the intuitive 0xAARRGGBB here would render
  * every skin with red and blue exchanged. */
+
+/* One palette entry as a framebuffer word. `pEnd` is the end of the whole
+ * file: a short palette yields opaque black rather than a read past it. */
+static unsigned bmp_pal(const unsigned char *pal, const unsigned char *pEnd,
+                        unsigned pal_n, unsigned idx)
+{
+    if (idx >= pal_n) idx = 0;
+    if (pal + idx * 4u + 3u > pEnd) return 0xFF000000u;
+    return 0xFF000000u | ((unsigned)pal[idx*4] << 16) |
+           ((unsigned)pal[idx*4+1] << 8) | (unsigned)pal[idx*4+2];
+}
+
+/* Every RLE write goes through here, so an adversarial stream cannot place a
+ * pixel outside the frame however it drives the cursors. */
+static void rle_put(unsigned *px, int w, int h, int top_down,
+                    int x, int row, unsigned col)
+{
+    int y;
+    if (x < 0 || x >= w || row < 0 || row >= h) return;
+    y = top_down ? row : h - 1 - row;
+    px[(long)y * w + x] = col;
+}
+
+/* BI_RLE8 / BI_RLE4, with the EOL / end-of-bitmap / delta escapes.
+ *
+ * Two rules keep this safe on a file that came off a USB stick:
+ *   - every write goes through rle_put(), which drops anything off-frame, so
+ *     the runs are CLAMPED rather than trusted;
+ *   - the cursors are re-clamped to w/h after each opcode, so no sequence of
+ *     deltas can walk them far enough to overflow an int.
+ * A truncated stream stops and keeps what it decoded, the way Winamp's own
+ * loader tolerates a short sheet. Pixels an escape skips over are left as
+ * palette entry 0 - the spec calls them undefined, and this is what every
+ * other decoder does with them. */
+static void rle_decode(const unsigned char *s, const unsigned char *sEnd,
+                       unsigned *px, int w, int h, int top_down, int four,
+                       const unsigned char *pal, const unsigned char *pEnd,
+                       unsigned pal_n)
+{
+    int x = 0, row = 0;
+    long i, npx = (long)w * h;
+    unsigned c0 = bmp_pal(pal, pEnd, pal_n, 0);
+
+    for (i = 0; i < npx; i++) px[i] = c0;
+
+    while (sEnd - s >= 2) {
+        unsigned c = *s++, v = *s++, k;
+        if (c > 0) {                           /* encoded run: c pixels of v  */
+            for (k = 0; k < c; k++, x++)
+                rle_put(px, w, h, top_down, x, row,
+                        bmp_pal(pal, pEnd, pal_n,
+                                four ? ((k & 1u) ? (v & 15u) : (v >> 4)) : v));
+        } else if (v == 0) {                   /* end of line                 */
+            x = 0; row++;
+        } else if (v == 1) {                   /* end of bitmap               */
+            break;
+        } else if (v == 2) {                   /* delta: skip dx right, dy up */
+            if (sEnd - s < 2) break;
+            x += *s++; row += *s++;
+        } else {                               /* absolute run of v pixels    */
+            unsigned nb = four ? (v + 1u) / 2u : v;
+            if ((unsigned long)(sEnd - s) < (unsigned long)nb) break;
+            for (k = 0; k < v; k++, x++) {
+                unsigned b = four ? s[k >> 1] : s[k];
+                rle_put(px, w, h, top_down, x, row,
+                        bmp_pal(pal, pEnd, pal_n,
+                                four ? ((k & 1u) ? (b & 15u) : (b >> 4)) : b));
+            }
+            s += nb;
+            if (nb & 1u) {                     /* runs pad to a word boundary */
+                if (sEnd - s < 1) break;
+                s++;
+            }
+        }
+        if (x > w) x = w;                      /* keep the cursors bounded    */
+        if (row > h) row = h;
+    }
+}
+
 static int bmp_decode(const unsigned char *p, long n, unsigned **out,
                       int *ow, int *oh)
 {
@@ -109,7 +197,12 @@ static int bmp_decode(const unsigned char *p, long n, unsigned **out,
     h    = (int)rd32(p + 22);
     bpp  = rd16(p + 28);
     comp = rd32(p + 30);
-    if (comp != 0) return 0;               /* RLE skins do not exist          */
+    /* 0 = BI_RGB, 1 = BI_RLE8, 2 = BI_RLE4. BI_BITFIELDS and the JPEG/PNG
+     * payload types do not appear in skins; refuse them by name rather than
+     * decoding garbage. Each RLE form is defined only at its own depth. */
+    if (comp > 2) return 0;
+    if (comp == 1 && bpp != 8) return 0;
+    if (comp == 2 && bpp != 4) return 0;
     top_down = h < 0;
     if (top_down) h = -h;
     if (w <= 0 || h <= 0 || w > 4096 || h > 4096) return 0;
@@ -121,10 +214,19 @@ static int bmp_decode(const unsigned char *p, long n, unsigned **out,
     if (off > (unsigned)n) return 0;
     bits  = p + off;
     rowb  = (((unsigned)w * bpp + 31u) / 32u) * 4u;   /* rows pad to 4 bytes  */
-    if ((long)(off + rowb * (unsigned)h) > n) return 0;
+    /* An RLE sheet has no fixed row stride, so this check applies only to the
+     * uncompressed path - the RLE walk bounds itself against the file end. */
+    if (comp == 0 && (long)(off + rowb * (unsigned)h) > n) return 0;
 
     px = (unsigned *)arena_alloc((unsigned long)w * (unsigned long)h * 4u);
     if (!px) return 0;
+
+    if (comp != 0) {
+        rle_decode(bits, p + n, px, w, h, top_down, comp == 2,
+                   pal, p + n, pal_n);
+        *out = px; *ow = w; *oh = h;
+        return 1;
+    }
 
     for (y = 0; y < h; y++) {
         /* BMP stores bottom-up unless the height was negative. */
@@ -140,10 +242,7 @@ static int bmp_decode(const unsigned char *p, long n, unsigned **out,
                 if (bpp == 8)      idx = r[x];
                 else if (bpp == 4) idx = (x & 1) ? (r[x>>1] & 15u) : (r[x>>1] >> 4);
                 else               idx = (r[x>>3] >> (7 - (x & 7))) & 1u;
-                if (idx >= pal_n) idx = 0;
-                if (pal + idx * 4u + 3u > p + n) { d[x] = 0xFF000000u; continue; }
-                d[x] = 0xFF000000u | ((unsigned)pal[idx*4] << 16) |
-                       ((unsigned)pal[idx*4+1] << 8) | (unsigned)pal[idx*4+2];
+                d[x] = bmp_pal(pal, p + n, pal_n, idx);
             }
         }
     }
