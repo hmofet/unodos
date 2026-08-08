@@ -1816,7 +1816,7 @@ static void build_sys(unoui_window *w)
      * 420 was a constant chosen against the 8 px bitmap face; at 150% the
      * licence line and the two buttons were already past the right edge. */
     { int need = fb_text_w("x86-64 legacy BIOS  -  bare metal  -  10 themes");
-      int t2 = fb_text_w("CC BY-NC 4.0 + MIT/Apache-2.0 parts")
+      int t2 = fb_text_w("MPL 2.0 + MIT/Apache-2.0 parts")
              + fb_text_w("View licenses") + 26 + 24;
       int t3 = fb_text_w("Manage accounts...") + fb_text_w("Remote control...")
              + 2 * 26 + 8 + 2 * gx;
@@ -1843,7 +1843,7 @@ static void build_sys(unoui_window *w)
     y += lh;
     { int bw = fb_text_w("View licenses") + 26;
       unoui_widget *b;
-      unoui_add_label(w, gx, y, "CC BY-NC 4.0 + MIT/Apache-2.0 parts");
+      unoui_add_label(w, gx, y, "MPL 2.0 + MIT/Apache-2.0 parts");
       b = unoui_add_button(w, cw - gx - 4 - bw, y - 3, bw, "View licenses", 0);
       b->id = ID_LIC; y += lh + 8; }
     /* accounts & security: opens the Accounts manager (login/RBAC via unosecure) */

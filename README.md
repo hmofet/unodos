@@ -2,7 +2,7 @@
 
 A GUI-first operating system whose original IBM PC/XT kernel is written entirely in x86 assembly, now a whole family spanning 20+ hardware targets, from 8-bit consoles to a modern **x86-64 / UEFI** world ([`pc64/`](pc64/)) written in C.
 
-![License](https://img.shields.io/badge/license-CC%20BY--NC%204.0-blue)
+![License](https://img.shields.io/badge/license-MPL--2.0-blue)
 
 > **Active repo, [`github.com/hmofet/unodos`](https://github.com/hmofet/unodos).**
 > All current development happens here, on `master`.
@@ -541,7 +541,7 @@ unodos/
 ├── Makefile
 ├── CHANGELOG.md             # Version history (425 builds)
 ├── CONTRIBUTING.md          # Contribution guidelines
-├── LICENSE                  # CC BY-NC 4.0
+├── LICENSE                  # MPL 2.0
 └── TODO.md                  # Roadmap
 ```
 
@@ -694,11 +694,21 @@ Current version: **v3.32.0** (Build 425)
 
 Copyright (c) 2026 Arin Bakht
 
-This project is licensed under the [Creative Commons Attribution-NonCommercial 4.0 International License](LICENSE) (CC BY-NC 4.0).
+This project is licensed under the [Mozilla Public License 2.0](LICENSE)
+(MPL 2.0).
 
-- **Modification**: Allowed
-- **Attribution**: Required, credit the original author and link to this repository
-- **Commercial use**: Not permitted
+- **Use**: Free, including commercially, with no royalty
+- **Inspection**: The full source is here, and always will be
+- **Modification**: Allowed, but if you distribute a modified version of a file
+  from this project, that file's source must be published under MPL 2.0. You
+  cannot take UnoDOS private.
+- **Larger works**: You may combine UnoDOS with proprietary code of your own and
+  license the combined work however you like. Only the UnoDOS files stay MPL.
+- **Attribution**: Required, retain the copyright notice and the license text
+
+Third-party components keep their own licenses and are unaffected by the above
+(MIT, Apache-2.0, BSD-3-Clause, public domain, and CC BY for two fonts). Every
+one of them is listed in [THIRD-PARTY.md](THIRD-PARTY.md).
 
 ---
 

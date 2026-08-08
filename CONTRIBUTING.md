@@ -91,4 +91,4 @@ The `BUILD_NUMBER` file tracks sequential builds. Don't increment it in your PR,
 
 ## License
 
-By contributing, you agree that your contributions will be licensed under the project's [CC BY-NC 4.0](LICENSE) license.
+By contributing, you agree that your contributions will be licensed under the project's [MPL 2.0](LICENSE) license.

@@ -3,7 +3,7 @@
 UnoDOS is an original work. Everything not listed below - the kernel, the
 shell, every port, the unoui/uno3d/unosound/unomedia libraries and all of
 their decoders - was written from scratch for this project and is licensed
-**Creative Commons Attribution-NonCommercial 4.0** (CC BY-NC 4.0).
+the **Mozilla Public License 2.0** (MPL 2.0).
 
 A small number of components ship with their own open licenses. This page is
 the required notice for each; it is reachable from **System > Licenses** and
@@ -31,7 +31,7 @@ lives at `DOCS\LICENSES.MD` on the system volume.
   Huffman codebooks, scalefactor codebook and scalefactor-band offset tables
   are derived from **OpenCORE aacdec** (Android Open Source Project),
   licensed **Apache License 2.0**, below. The AAC decoder CODE around those
-  tables is this project's own (CC BY-NC 4.0); only the ISO constant data
+  tables is this project's own (MPL 2.0); only the ISO constant data
   derives from OpenCORE. Derivation is scripted and documented in
   `unomedia/tools/mkaactables.py`.
 - **MP3 decoding tables** (in unomedia's `mp3_tables.h`) - the ISO constant
