@@ -769,15 +769,23 @@ class Demo(object):
         return w, h, rgba, scale
 
     @staticmethod
-    def diff_box(a, b, thresh=24):
+    def diff_box(a, b, thresh=24, skip_bottom=40):
         """Bounding box (native coords) of what changed between two grabs.
-        This is how the popup is located: whatever appeared IS the popup."""
+        This is how the popup is located: whatever appeared IS the popup.
+
+        `skip_bottom` (native px) EXCLUDES THE TASKBAR, and it is not optional.
+        The taskbar carries a clock that reticks every second, so on any pair
+        of grabs a second apart the clock is also "what changed" - and the
+        BOUNDING BOX of a 130 px menu plus a clock in the far corner is 600 px
+        wide. rclick_menu then derived its row pitch from that box and clicked
+        200 px below the real menu: the popup just closed and the command
+        never ran, silently. Only an extracted frame showed it."""
         aw, ah, ar, sc = a
         bw, bh, br, _ = b
         if aw != bw or ah != bh:
             return None
         x0, y0, x1, y1 = aw, ah, -1, -1
-        for y in range(ah):
+        for y in range(max(0, ah - skip_bottom // max(1, sc))):
             ro = y * aw * 4
             for x in range(aw):
                 o = ro + x * 4
@@ -842,6 +850,15 @@ class Demo(object):
             raise RuntimeError("the title-bar menu did not appear at %d,%d"
                                % (x, y))
         bx0, by0, bx1, by1 = box
+        # SANITY. A window menu is ~130 px wide; anything much wider means
+        # something other than the popup repainted across the right-click and
+        # the row pitch derived from this box is fiction. Say so loudly - the
+        # failure is otherwise completely silent (the menu simply closes and
+        # the command never runs).
+        if (bx1 - bx0) > 320:
+            print("    WARNING: located 'popup' is %d px wide - that is a "
+                  "window repaint, not a menu. Row %d will miss."
+                  % (bx1 - bx0, row))
         rh = float(by1 - by0 - 2) / nrows
         cx = bx0 + min(60, (bx1 - bx0) // 2)
         cy = int(by0 + 1 + row * rh + rh / 2)
@@ -858,13 +875,21 @@ class Demo(object):
         across probe runs, and a fixed settle is wrong in both directions -
         too short records a half-drawn page, too long records dead air. Two
         identical scale-4 grabs in a row means the paint has finished.
+        THE TASKBAR IS EXCLUDED, and that is the whole trick: it carries a
+        CLOCK that reticks every second, so a whole-frame comparison never
+        matches and this waited out its full timeout on a page that had
+        finished loading twenty seconds earlier (measured: 28 s of dead air in
+        the first s05 take). Only the rows above the bar are compared.
+
         Returns the seconds waited."""
         t0 = time.time()
         last, same = None, 0
+        cut = max(1, 40 // scale)                # taskbar rows, at this scale
         while time.time() - t0 < timeout:
             time.sleep(poll)
             try:
-                cur = self.link.screen_grab(scale, timeout=60)[2]
+                gw, gh, rgba = self.link.screen_grab(scale, timeout=60)
+                cur = bytes(rgba[:max(0, (gh - cut)) * gw * 4])
             except Exception:                    # noqa: BLE001
                 continue
             if last is not None and cur == last:
@@ -1002,6 +1027,15 @@ def s02_wm(d):
     #   6..9 To desktop 1..4   10 sep  11..13 Group  14 sep  15 Close
     mx, my = d.w // 2 + 40, 8
     d.beat("titlebar-menu")
+    # RAISE IT FIRST, with a plain click on the same bar. rclick_menu locates
+    # the popup as "whatever changed across the right-click", so anything ELSE
+    # that repaints in that window is measured as part of the popup. After the
+    # F2 switcher the Editor is not the front window, and the right-click
+    # raises it - which repainted the whole snapped-right window and gave a
+    # 584x788 "popup". Row 7 of that is 200 px below the real menu, so the
+    # click landed in the document, the menu just closed, and the window never
+    # moved to desktop 2. Nothing in the beat log said so; only a frame did.
+    d.click(mx, my, settle=1.0)
     d.beat("to-desktop-2")
     d.rclick_menu(mx, my, row=7, nrows=16)
     d.beat("switch-to-desktop-2")
@@ -1154,7 +1188,7 @@ BROWSER_MAX_XY = (461, 27)
 # Vector skin emits the entire navigation sidebar BEFORE the article, so the
 # <h1> is about seven PgDn down. That is why the window is maximized first.
 WIKI_URL = "https://en.wikipedia.org/wiki/Unix"
-WIKI_PGDN = 7
+WIKI_PGDN = 9                                    # measured: lands on the <h1>
 
 
 def s05_browser(d, with_net=False):
@@ -1168,7 +1202,11 @@ def s05_browser(d, with_net=False):
     def goto(loc, settle=2.2):
         d.ctrl("l", settle=0.4)
         d.key(0, S_END, settle=0.1)
-        for _ in range(60):                          # no select-all in the bar
+        # No select-all in the address bar. 40 is enough for every location
+        # this scene types (the longest is the 38-character Wikipedia URL, and
+        # nothing is typed after it), and each extra backspace is a URC round
+        # trip - 20 of them across six navigations is five seconds of nothing.
+        for _ in range(40):
             d.key(8, settle=0.02)
         d.text(loc, settle=0.06)
         d.key(13, settle=settle)
@@ -1191,15 +1229,15 @@ def s05_browser(d, with_net=False):
         d.key(0, S_DOWN, settle=0.35)
     # ---- and now the open internet ------------------------------------
     d.beat("maximize-for-the-web")
-    d.click(*BROWSER_MAX_XY, settle=1.6)
+    d.click(*BROWSER_MAX_XY, settle=1.2)
     d.beat("load-wikipedia")
     goto(WIKI_URL, settle=1.0)
     d.wait_stable(timeout=28.0)                      # TLS + a 200 KB document
-    time.sleep(1.2)                                  # hold on the loaded page
+    time.sleep(1.0)                                  # hold on the loaded page
     d.beat("scroll-to-the-article")
     for _ in range(WIKI_PGDN):
-        d.key(0, S_PGDN, settle=0.55)
-    time.sleep(1.6)                                  # hold on the Unix heading
+        d.key(0, S_PGDN, settle=0.45)
+    time.sleep(1.8)                                  # hold on the Unix heading
     if with_net:
         d.beat("net-beats-are-in-the-spine-now")     # --with-net is a no-op
     d.beat("close")
