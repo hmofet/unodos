@@ -540,28 +540,54 @@ class Demo(object):
         time.sleep(3.5)
         return self.link.screen_info(timeout=20)
 
+    ACCENT = (76, 110, 245)            # the theme accent: Keep's fill
+
+    def find_keep_button(self):
+        """Locate the probation row's **Keep** button on a live grab.
+
+        Keep is the only accent-FILLED control on the Display tab, and it is
+        the lowest one on screen once the taskbar (whose Start chip is the
+        same colour) is excluded. Returns its centre, or None.
+
+        Three keyboard routes to this button were tried and all three failed
+        SILENTLY - see raise_resolution's note. The button is found and
+        clicked instead, which needs no assumption about focus at all."""
+        w, h, rgba, sc = self.grab(1)
+        cr, cg, cb = self.ACCENT
+        rows = {}
+        for y in range(max(0, h - 40)):          # taskbar excluded
+            ro = y * w * 4
+            r = [x for x in range(w)
+                 if abs(rgba[ro + x * 4] - cr) < 14
+                 and abs(rgba[ro + x * 4 + 1] - cg) < 14
+                 and abs(rgba[ro + x * 4 + 2] - cb) < 14]
+            if r and len(r) <= 150:              # skip the window's underline
+                rows[y] = r
+        if not rows:
+            return None
+        ys = sorted(rows)
+        groups = [[ys[0]]]
+        for y in ys[1:]:
+            if y - groups[-1][-1] <= 2:
+                groups[-1].append(y)
+            else:
+                groups.append([y])
+        g = groups[-1]                           # the lowest cluster = Keep
+        xs = [x for y in g for x in rows[y]]
+        return ((min(xs) + max(xs)) // 2 * sc, (g[0] + g[-1]) // 2 * sc)
+
     def _res_confirm(self, keep):
-        """Click Keep (or Revert now) on the probation row.
-
-        The panel is REBUILT at the new size when Apply reflows, so focus is
-        not where we left it - closing and relaunching gives a deterministic
-        Tab walk instead of a guess, and the probation row is still there
-        because it is shell state, not window state.
-
-        THE TAB COUNT IS NOT WHAT THE LAYOUT SUGGESTS, and getting it wrong is
-        silent: a successful Apply leaves the Apply button DISABLED
-        (`g_res_sel == res_active_index()` in pc64_uui.c:1132), and unoui's
-        `interactive()` refuses focus to a disabled widget
-        (unoui_input.c:89-93), so Tab SKIPS it. The live order is therefore
-            strip -> Resolution -> Keep -> Revert now
-        not ...-> Apply -> Keep. Counting Apply in cost a whole validation run:
-        3 Tabs landed on "Revert now", Enter reverted the mode instantly, and
-        because the check ran inside the 15 s probation window it still
-        reported 1280x800 - the recording came out 640x400 anyway."""
-        self._cp_display_tab()
-        for _ in range(2 if keep else 3):
-            self.key(9, settle=0.45)
-        self.key(13, settle=1.5)
+        """Confirm (Keep) or reject (Revert now) the mode on probation, by
+        CLICKING - the one route that needs no assumption about focus."""
+        pt = self.find_keep_button()
+        if pt is None:
+            print("resolution: could not find the Keep button on screen")
+            return
+        if not keep:
+            # "Revert now" sits immediately right of Keep; a button-width over
+            # lands on it. Doing nothing would also revert, but not promptly.
+            pt = (pt[0] + 90, pt[1])
+        self.click(pt[0], pt[1], settle=1.5)
         time.sleep(2.0)
 
     def raise_resolution(self, min_w=1024):
@@ -572,14 +598,22 @@ class Demo(object):
         hello, which stream_recv treats as a stream reset and splits the
         recording into `<name>-2.mp4`. That is the whole reason this runs here.
 
-        Driven entirely by KEYBOARD, because the screen changes size underneath
-        this very sequence and any coordinate read beforehand would be stale
-        halfway through. Enter activates a focused button in unoui
-        (unoui_input.c:707, UI_BUTTON + UI_KEY_ENTER -> activate), so Apply and
-        the probation row's Keep both work without a single click.
+        Selecting and applying is KEYBOARD-driven (the screen changes size
+        underneath the sequence, so any coordinate read beforehand would be
+        stale halfway through). CONFIRMING is a located CLICK, because three
+        separate keyboard routes to Keep each failed silently:
+          - Tab-counting the visible layout lands on "Revert now": a
+            successful Apply DISABLES the Apply button (pc64_uui.c:1132) and
+            unoui refuses focus to a disabled widget (unoui_input.c:89), so
+            Tab skips it and every count is one too many.
+          - closing and reopening the panel for a deterministic walk raced the
+            15 s probation clock.
+          - a bare Enter does nothing: Keep's blue fill is the UI_F_DEFAULT
+            ring (unoui.c:579), not focus - which is what made this look
+            solved when it was not.
 
         The 15 s auto-revert is the safety net: if a mode comes up unreadable,
-        or this walk misses, doing NOTHING puts the old mode back."""
+        or the click misses, doing NOTHING puts the old mode back."""
         if self.w >= min_w:
             print("resolution: already %dx%d, leaving it" % (self.w, self.h))
             return True
@@ -996,14 +1030,21 @@ def s04_office(d):
     # gap. Degrade to a clean, honest beat: open UnoShow and author a titled
     # slide so the app is shown doing something real, not a blank deck.
     d.beat("unoshow-cannot-open-ppt-see-report")
-    d.launch("uoshow", settle=3.0)
+    d.launch("uoshow", settle=4.5)                   # slower to paint at 1280x800
     d.beat("author-a-titled-slide")
-    # first click selects the placeholder, a second on the SAME one enters
-    # text edit (apps/uoshow.c: hit==g_sel -> g_editing=1), then typing lands.
-    # The page is located on a live grab (UOSHOW_TITLE_F is its fraction, not
-    # a pixel) because UnoShow's window - and so the page - scales with the
-    # framebuffer.
-    d.dblclick(*d.slide_point(*UOSHOW_TITLE_F), settle=0.8)
+    # The page is located on a live grab (UOSHOW_TITLE_F is its FRACTION of
+    # the page, not a pixel) because UnoShow's window - and so the page -
+    # scales with the framebuffer.
+    #
+    # Two SEPARATE clicks, not dblclick, and not tight: uoshow.c's rule is
+    # `hit != g_sel` selects and `hit == g_sel` enters text edit, so the pair
+    # has to be seen as two events on the same placeholder. At 1280x800 the
+    # first of a tight pair was still being swallowed while the app painted,
+    # leaving the placeholder SELECTED but never in edit mode - the text then
+    # went nowhere and the beat silently produced an empty slide.
+    pt = d.slide_point(*UOSHOW_TITLE_F)
+    d.click(*pt, settle=1.0)                         # select the placeholder
+    d.click(*pt, glide=False, settle=1.0)            # ...and enter text edit
     d.text("UnoDOS runs UnoShow.", settle=0.06)
     time.sleep(1.5)
     d.beat("close")
