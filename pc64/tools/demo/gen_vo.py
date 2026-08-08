@@ -74,7 +74,20 @@ def main():
         spec = json.load(fh)
     voice = args.voice or spec.get("voice_id")
     model = args.model or spec.get("model", "eleven_multilingual_v2")
-    scenes = [s for s in spec["scenes"] if not args.scene or s["id"] == args.scene]
+
+    # A scene is either one block of narration or several cues anchored to
+    # named beats. Flatten to cues: each is generated and billed separately, so
+    # rewording one line costs that line.
+    scenes = []
+    for sc in spec["scenes"]:
+        if args.scene and sc["id"] != args.scene and not args.scene.startswith(sc["id"]):
+            continue
+        for cue in (sc["cues"] if "cues" in sc
+                    else [{"id": sc["id"], "text": sc["text"]}]):
+            if args.scene and args.scene not in (sc["id"], cue["id"]):
+                continue
+            scenes.append({"id": cue["id"], "text": cue["text"],
+                           "scene": sc["id"]})
     if not scenes:
         sys.exit("no scenes matched")
 
@@ -83,6 +96,11 @@ def main():
         with open(args.timeline, encoding="utf-8") as fh:
             for s in json.load(fh)["scenes"]:
                 budgets[s["id"]] = s["duration"]
+
+    # Measured on this voice rather than assumed: Brian reads at about 2.9
+    # words per second, not the 2.4 the first pass budgeted for, which left
+    # every line short of its scene and 28% of the film silent.
+    WPS = float(os.environ.get("VO_WPS", "2.9"))
 
     total_chars = sum(len(s["text"]) for s in scenes)
     used, limit, tier = quota(api_key())
@@ -96,16 +114,21 @@ def main():
               % (len(scenes), total_chars))
     print("voice: %s   model: %s\n" % (voice or "(unset)", model))
 
+    per_scene = {}
     for s in scenes:
-        words = len(s["text"].split())
-        b = budgets.get(s["id"])
-        fit = ""
-        if b:
-            # 2.4 words/sec is a comfortable narration pace
-            est = words / 2.4
-            fit = "  scene %.1fs, read ~%.1fs%s" % (
-                b, est, "  OVER" if est > b * 0.95 else "")
-        print("  %-4s %4d chars %3d words%s" % (s["id"], len(s["text"]), words, fit))
+        per_scene.setdefault(s.get("scene", s["id"]), []).append(s)
+    for sid, cues in per_scene.items():
+        b = budgets.get(sid)
+        words = sum(len(c["text"].split()) for c in cues)
+        est = words / WPS
+        fit = ("  scene %.1fs, read ~%.1fs (%.0f%% full)%s"
+               % (b, est, 100.0 * est / b, "  OVER" if est > b * 0.95 else "")
+               ) if b else ""
+        print("  %-5s %d cue(s) %4d words%s" % (sid, len(cues), words, fit))
+        for c in cues:
+            print("      %-6s %4d chars %3d words ~%.1fs"
+                  % (c["id"], len(c["text"]), len(c["text"].split()),
+                     len(c["text"].split()) / WPS))
 
     if args.dry_run:
         print("\ndry run - nothing generated, no credits spent")
