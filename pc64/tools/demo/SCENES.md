@@ -86,17 +86,35 @@ failed *silently* before it was pinned down:
 
 | scene | what it shows | notes / guards |
 |---|---|---|
-| s02 | WM: Start menu rises, Files/Editor/Clock, title-bar drag to the right edge (snap tween), the F2 switcher, "To desktop 2" via the title-bar menu, desktop switch and back, close all | Alt-Tab is undrivable over URC (no ALT bit): F2 is the shell's own no-Alt switcher and is what the scene uses. The desktop move rides the title-bar right-click menu, not Alt+Ctrl+F2, same reason. |
+| s02 | WM: Start menu rises, Files + Editor, title-bar drag to the right edge (snap tween), the F2 switcher, "To desktop 2" via the title-bar menu, desktop switch and back | ~36 s. Alt-Tab is undrivable over URC (no ALT bit): F2 is the shell's own no-Alt switcher and is what the scene uses. The desktop move rides the title-bar right-click menu, not Alt+Ctrl+F2, same reason. |
 | s03 | Themes: Aurora Dark -> Mac OS 7 -> Windows 3.1 -> C64 -> Aurora Light, ~1.5 s hold each; a wallpaper on and off; ends on the Aurora default | Driven by keyboard through Control Panel > Personalization (tab strip -> Theme dropdown; Down cycles live). |
-| s04 | Office: Files shows the staged docs (RAM volume); UnoWord opens `fmt.doc`; UnoCalc opens `formulas.xls`, clicks a formula cell; UnoShow authors a titled slide | fmt.doc/formulas.xls are `put` onto the RAM volume at runtime and opened there - the shared Open dialog lists a volume's ROOT only (uofile.c) and cannot reach `DOCS\`. **UnoShow cannot open small.ppt in this build** - two source bugs, both outside this lane: (1) the native-FAT lister marks every file as a directory (`uno_fat_list_ex` returns >=0 for a file path), so the Open dialog appends `\` and never mirrors a filename into the File-name field; (2) UnoShow's dialog key-bridge (`apps/uoshow.c`) swallows Backspace (uni 8), so the stale name can't be cleared to type the real one either. The file is fine (`uno.read` returns 463 KB of valid CFB). The beat degrades to authoring a titled slide. UnoWord "scroll" is a select-all - UnoWord scrolls by mouse WHEEL only, which URC cannot inject. |
+| s04 | Office: Files shows the staged docs (RAM volume); UnoWord opens `fmt.doc` with its formatting visible; UnoCalc opens `formulas.xls` and selects a formula cell | ~40 s. Docs are `put` onto the RAM volume at runtime and opened there - the shared Open dialog lists a volume's ROOT only (uofile.c) and cannot reach `DOCS\`. **UnoShow was cut** (2026-08-07): it could not open small.ppt in this build (two source bugs, filed in UNOAUTOMATE-REQUESTS.md), the standing beat was the degraded substitute, and it cost 17 s of a 65 s scene. The select-all sweep also went - it read as a selection, not the scroll it stood in for (UnoWord scrolls by mouse wheel only and URC has no wheel injection). |
 | s05 | Browser: `uno:script` (JS writes the page body), scroll; `uno:engine`; switch the script engine by navigating `uno:engine/quickjs`; `uno:script` again on QuickJS | Local pages only. `--with-net` is a stub: HTTP/HTTPS beats are metal-only and log-skip here. No built-in `uno:` page mutates the DOM on a timer/click; `uno:script`'s document.write output is the visible JS payoff. |
-| s07 | Studio: File > New, type a small UnoC app live, Ctrl-S, Ctrl-B build, Ctrl-R run, the app opens, close | The typed program is `STUDIO_PROG` in scenes.py (AppInterface + text_at, the SAMPLE.C shape). |
+| s07 | Studio: File > New, type a small UnoC app live, Ctrl-S, Ctrl-B build, Ctrl-R run, the app opens | ~38 s. The typed program is `STUDIO_PROG` in scenes.py (AppInterface + text_at, the SAMPLE.C shape). The teardown is off-camera; the 15.6 s of typing stays at its measured speed - it is the content, and shortening the program would risk the build moment. |
 | s08 | Duum: Files -> ESP -> `APPS\` -> `DUUM.UNO` -> Enter (a PYAPP is a document PYRT opens - no Start-menu row), walk + turn, close | Guard: no WAD in `pc64/wads/` = clean no-op with a log line. Never downloads. Falls back to `uno.run_app` over URC if the Files walk misses. |
 | s09 | Appliances: vmgr Start, the Linux guest boots (BEFORE the stream - it gets ~4 ms/frame, boot is minutes of dead air), then on camera: `ls /` + `uname -a` into the console | Guards: needs `build/bzImage` + `initrd.gz` (vm_stage payload; `VMS.CFG` row is written by the driver - vm_stage.py doesn't), AND `UNO_DEMO_KVM=1`. Plain TCG can never host a guest (TCG drops vmx; `-m 512` is under the 1800 MB carve floor; eligibility needs a `UNO_DETACH=1` build) - the harnesses all use `-m 4096 -cpu host -enable-kvm`, so that is what `UNO_DEMO_KVM=1` boots. On an AMD host it stays skipped (the SVM backend has never completed a VMRUN). |
 | s10 | System readout (hold), the log viewer raised to info level, browser navigations landing in the tail, close | The level goes up BEFORE the traffic (a dropped record is gone). |
 
 s01/s06/s11 (boot, media/audio, outro) are deliberately absent - a different
 pipeline owns them.
+
+## Runtime budget
+
+Trimmed 2026-08-07 against **measured** per-beat costs (each scene's
+`.beats.jsonl` deltas), not estimates, to bring the stitched master toward the
+4:30 target:
+
+| scene | was | now | what went |
+|---|---|---|---|
+| s02 | 49.9 s | ~36.6 s | the third app launch (-3.1), a redundant focus click before the drag (-4.5, `drag()` presses on the title bar anyway), the on-camera teardown (-5.7) |
+| s04 | 64.7 s | ~39.8 s | the select-all sweep (-7.8, +3.0 back as a still hold), the whole UnoShow block (-19.7), the trailing Ctrl-W (-1.2) |
+| s07 | 41.4 s | ~38.1 s | the on-camera teardown (-4.3, +1.0 back holding on the app it just built) |
+
+**Teardown belongs in `reset()`, not in a beat list.** It runs after
+`record()` has stopped the stream, so closing windows costs the cut nothing -
+and every scene that ended by closing things now ends on its payoff instead.
+
+Pacing itself is unchanged: no settle was shortened and nothing types faster.
 
 ## Pacing rules (the point of the file)
 
