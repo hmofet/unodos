@@ -85,7 +85,7 @@ real capability the user must hold or be granted:
 |---|---|---|---|
 | **Watch** | `automate.observe` | ADMIN | `probe` `log` `uptime` `apps` `vols` `disks` `devices` `screen` `stream` `disc` `caps` |
 | **Control** | `automate.drive` | ADMIN | `key` `pointer` `launch` `close` `test` `guard` `pet` `safe` |
-| **Full access** | `automate.system` | KERNEL | `put` `mkdir` `install` `arm` `disarm` `readsec` `writesec` `gptinit` `mkpart` `mkfs` `prepdisk` `makeboot` `bootnext` `reboot` `poweroff` `py` `iwl` `eth` `hwwdt` `nst` |
+| **Full access** | `automate.system` | KERNEL | `put` `mkdir` `install` `arm` `disarm` `readsec` `writesec` `gptinit` `mkpart` `mkfs` `prepdisk` `makeboot` `bootnext` `reboot` `poweroff` `py` `iwl` `eth` `hwwdt` `ssh` `nst` |
 
 Enabling runs `unosec_request(cap, SESSION)` per ticked level. A user whose
 roles already cover one gets it silently (the built-in `admin` role holds every
@@ -287,6 +287,12 @@ FAIL when someone installs an app; it silently drives a different one.
 | `stream start <ip4> <port> [fps] [scale]` | **unostream** (demo-video capture): the guest dials OUT to `<ip4>:<port>` on its OWN netsock socket and pushes binary QOI keyframe/delta frames live, paced on the shell tick at `fps` (1..60, default 30; `scale` >=1 downsamples). Deliberately bypasses this channel's 512 B/tick TX pump - the video never starves the command link. Cursor composited into every frame. Wire protocol + host receiver (`tools/demo/stream_recv.py` -> ffmpeg mp4): `pc64/UNOSTREAM.md` | `ok dialing <ip>:<port> fps=<f> scale=<s>` / `err …` |
 | `stream stop` | close the stream (idempotent) | the `ok on=… ` status line |
 | `stream status` | live stream counters | `ok on=<0/1> fps=<n> sent=<frames> bytes=<n> drops=<n>` |
+| `ssh keys` / `ssh keygen <name>` / `ssh keypub <name>` / `ssh keyrm <name>` | the on-device SSH key store (pass-through to unossh's `ssh_dbg_cmd`): list, generate an ed25519 pair, print a public key in `authorized_keys` form, delete one. **This is the only way to put a key on the box** - the client app has no key manager yet | the report, then `ok`/`err` |
+| `ssh sess` / `ssh sessadd <name> <host> <port> <user> <key>` / `ssh sessrm <name>` | the saved-session list the SSH app connects from. Same story: nothing on the device can populate it, so without this verb the app can only offer sessions that do not exist | the report, then `ok`/`err` |
+| `ssh hosts` | the known-hosts table (host key fingerprints learned so far) | the report, then `ok`/`err` |
+| `ssh run <sess\|user@host> <cmd…>` | log in and run one command; the output is **captured, not returned** - a remote command's output is unbounded and this channel's TX buffer is 8 KB | `ok id=<n> len=<n> exit=<n>` |
+| `ssh get <id> <off>` | one bounded slice (≤1 KB) of a captured output; loop until `off >= len`. Same idiom as `readsec` / `screen read` | the slice, then `ok` |
+| `ssh close` | drop the current connection (idempotent) | `ok`/`err` |
 | `hwwdt <subcmd…>` | PCH TCO hardware watchdog (unodevices' `uno_hw_wdt_cmd`), the guard's IRQs-off backstop. `status` (present/gen/TCOBASE + raw `GEN_PMCON_A` `fw=0x..` dump); `arm <s>`/`pet`/`disarm` drive the TCO directly (**safe**: an armed-but-unpetted TCO resets in ~`<s>`, and if NO_REBOOT wasn't truly cleared it simply doesn't, never a hard hang); `selftest <s>`/`wedge` cli-spin to trigger the IRQs-off wedge (never returns; only the TCO recovers) | the report, then `ok`/`err` |
 
 > **Durability.** The native FAT cache is write-back, and post-detach nothing

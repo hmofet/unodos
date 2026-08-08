@@ -148,6 +148,12 @@ static const GateRow GATE[] = {
     { "iwl",      UNOAUTO_P_SYSTEM },
     { "eth",      UNOAUTO_P_SYSTEM },
     { "hwwdt",    UNOAUTO_P_SYSTEM },
+    /* ssh: generates and stores PRIVATE KEYS on disk and runs commands on
+     * other machines with this box's credentials, so its blast radius reaches
+     * past this machine entirely - SYSTEM, alongside `py` and the raw-sector
+     * verbs, not DRIVE with `launch`. Same-commit row: the table is
+     * fail-closed, so the verb would be refused without it. */
+    { "ssh",      UNOAUTO_P_SYSTEM },
 #ifdef UNO_DEBUG
     { "nst",      UNOAUTO_P_SYSTEM },    /* netsock self-test: debug builds only */
 #endif
