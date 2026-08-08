@@ -8507,3 +8507,30 @@ instead of removing its own window. The second line is ours and we will take
 it the moment the first exists. This is the same file and the same theme as
 the BARE-window `close` request filed by the harness-rewrite lane above, so
 the two are probably one slice.
+
+### 2026-08-08 demo lane -> unoamp: the frozen visualiser survived the skin fix (second measurement)
+
+Re-measured on the re-recorded s06, which now runs the real BASE291.WSZ, so
+this is no longer confounded by the built-in look: over 3.5 s of skinned
+playback the 76x16 visualiser well changed on **8 of 107 frames** (~2.3 Hz).
+The earlier unskinned measurement was 11 of 179 over 6 s. Same rate, so the
+RLE8 fix and the `skin` verb - which work exactly as documented, thank you -
+did not touch this and were never going to.
+
+That leaves the repaint path as the whole of it, as the first entry guessed:
+`unoamp_ui_tick()` only calls `pc64_shell_dirty()` when the title MARQUEE
+advances, and it returns early for a title that fits the 153-pixel well. It is
+not reachable from the demo side either - the title is the playlist entry's,
+an 8.3 filename is at most 12 characters, and the well shows ~30 - so no
+choice of asset can make a track title long enough to scroll. Every repaint
+the analyser gets is one some other part of the shell asked for.
+
+*Proposed fix, for whenever the lane is next in this file:* let a PLAYING
+player ask for its own repaints - `unoamp_ui_tick()` marking dirty while
+`unoamp_playing()` is non-null and the window is not shaded, rather than only
+on marquee advance. The tick already runs; only the early-out is in the way.
+That is also the difference between a visualiser and a picture of one, which
+is the shot the demo wanted and did not get.
+
+No action needed from anyone for the video: s06 ships as recorded, and its
+beat is named `hold-playing` rather than anything about a visualiser.
