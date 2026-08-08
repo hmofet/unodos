@@ -8566,3 +8566,46 @@ I touched:
   push its source file onto the RAM disk to be able to open it at all.
 - There is no **File > Open**. The Project pane is the only route to a file,
   which makes the point above load-bearing rather than cosmetic.
+
+### 2026-08-08 demo lane -> the apps lane: Dostris' song outlives Dostris, and Pac-Man has lost its voice
+
+Found while recording s12 (the games scene, `tools/demo/scene_games.py`), which
+captures the guest's real audio through QEMU's wav sink. Neither of these is in
+my lane; both are reported with measurements rather than impressions.
+
+**1. Closing Dostris does not stop its music.** `apps/dostris.c` calls
+`gm_start(kKoro, ...)` from `dt_new_game()`, and `gm_start` is `uno_seq_play` on
+the ONE global sequencer (`pc64_uui_apps.c:100`). Its `AppInterface` has a null
+`closed` slot, so nothing calls `gm_stop()` when the window goes: Korobeiniki
+keeps looping over whatever opens next, and over an empty desktop. `apps/
+outlast.c` has exactly the handler that is missing here -
+`static void outlast_closed(void){ gm_stop(); }` - so the fix is one line and
+one slot in the vtable.
+
+Measured: the first rehearsal of s12 recorded Pac-Man's window at **-12 dBFS
+mean** and would have reported a silent game as loud. That was Dostris, still
+playing, three windows later. The scene now sends `py import uno; uno.quiet()`
+between the two games so the measurement is honest, but that is a workaround in
+a test harness standing in for an app teardown.
+
+**2. The Pac-Man that ships makes no sound at all.** `apps/pacman.c` calls
+`gm_stop()` on game over and nothing else - no music and, more surprisingly, no
+SFX. The waka on every dot, the chime on a power pellet and the death wail all
+exist in the NATIVE Pac-Man in `pc64_games.c` (`uno_seq_beep(72,2)` /
+`(55,10)` / `(45,22)`), which does not ship: `app_game()` in `pc64_uui.c:3073`
+maps only Runner3D onto those canvases, so the bridge module is what runs.
+Measured over 12 s of play in the final take: **-91.0 dBFS mean AND max**, i.e.
+digital silence, against -12.1 for Dostris and -12.4 for OutLast in the same
+recording. The three `uno_seq_beep` calls would port across as they stand.
+
+**3. Cosmetic, same family: the score readouts are invisible on a light theme.**
+Dostris draws its values as `text_at(px+56, ..., num, C_WHITE, C_BLUE, false)`
+and Pac-Man does the same for SCORE/HI/LIVES/LEVEL. On Aurora Light the window
+is white, so the labels ("Score", "Lines", "Level") are readable and the numbers
+beside them are white on white. Visible in every s12 frame:
+`tools/demo/out/final2/s12_frames/s12_dostris_late.png` shows a seven-piece
+stack and a blank score. The labels use a theme colour; the numbers do not.
+
+Nothing here blocks the video - s12 ships as recorded, reports Pac-Man as
+silent, and closes on the Tracker playing its demo pattern so the cut still has
+music on its own terms.
