@@ -1000,6 +1000,12 @@ static int uw_key(int uni, int scan, int ctrl)
         else if (uni == '\r' || uni == '\n') { e.kind = UI_EV_KEY; e.key = UI_KEY_ENTER; }
         else if (uni == 27)                   { e.kind = UI_EV_KEY; e.key = UI_KEY_ESC; }
         else if (uni == '\t')                { e.kind = UI_EV_KEY; e.key = UI_KEY_TAB; }
+        /* Backspace is a CHAR to uod_handle (uoffice/uodlg.c), not a key - and
+         * without this clause it died in the `else return 1` below, so a wrong
+         * File-name could never be corrected and Open was unreachable on any
+         * volume whose row 0 was not the wanted file.  UnoWord's bridge
+         * (apps/uoword.c) has always forwarded it; this is the same line. */
+        else if (uni == 8)                    { e.kind = UI_EV_CHAR; e.ch = 8; }
         else if (scan == 0x02)                { e.kind = UI_EV_KEY; e.key = UI_KEY_DOWN; }
         else if (scan == 0x01)                { e.kind = UI_EV_KEY; e.key = UI_KEY_UP; }
         else return 1;
