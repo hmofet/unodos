@@ -20,12 +20,20 @@ audio device at all, so this scene had to grow its own boot rather than borrow
 scenes.py's.
 
 TWO INDEPENDENT CLOCKS, and the reason this file measures rather than assumes.
-The wav sink starts with the MACHINE (QEMU opens it before OVMF runs) and the
-video starts when the GUEST dials the receiver, tens of seconds later. Nothing
-ties them together, so at the end the music's onset is located in the wav
-(the longest loud run) and compared with the wall clock of the `play` beat.
-The measured offset goes in out/s06.stats.json as `av_offset_seconds`: add it
-to a video timestamp to get the wav timestamp.
+The wav sink starts with the MACHINE and the video starts when the GUEST dials
+the receiver, tens of seconds later. Nothing ties them together, so the music
+is located in the wav (the longest loud run, widened to its real attack and
+decay) and joined to the video at the one pair of events that is simultaneous
+BY CONSTRUCTION: the `stop` beat and the end of the music. Stopping silences
+the DAC in the frame the click lands, so those two are the same instant.
+
+`play` is deliberately NOT the anchor, though it is still reported. The click
+precedes the first sample by however long UnoAmp takes to open and decode the
+file - ~1.4 s on this build, read off the player's own elapsed counter in the
+captured frames - and anchoring there (which this file used to do) folds that
+latency into the constant and starts the music early. The two numbers bracket
+the honest range; their difference is that latency plus the wav sink's own
+drift, which under TCG runs a few percent short.
 
 THE RE-SKIN IS THE CENTREPIECE, AND WHY THE SKIN IS STAGED IN `SKINS\\`.
 Two fixes landed on master (7390ebf0, 96e32db4, fb3eeb00) after the first cut
@@ -46,6 +54,21 @@ is the same untouched archive, decoded live from its ZIP by unoamp_skin.c.
 
 `skin` is DRIVE-gated rather than #ifdef'd, so this works on a production build
 too; the debug build is used here only because the scene also needs URC itself.
+
+RESOLUTION: 1280x800, and the desktop is really that size - nothing here is
+scaled. unostream sends the DESKTOP framebuffer (uno_fb_w x uno_fb_h), and
+uefi_main.c makes that half the firmware's GOP mode (uefi_main.c:641), so
+OVMF's default 1280x800 panel produced a 640x400 stream. The panel is doubled
+instead - `-vga none -device VGA,edid=on,xres=2560,yres=1600,vgamem_mb=64`,
+see demo_common.vga_args - and the halving lands on 1280x800, so the mp4 comes
+off the wire at the size the whole cut is assembled at.
+
+That also avoids raising the desktop through Control Panel > Display, which
+would have been the alternative: that path has a 15-second "Keep this
+resolution?" probation that silently reverts if the confirm misses, AND a
+resolution change makes the guest emit a fresh unostream hello, which
+stream_recv reads as a reset and splits the mp4 in two. Booting at the right
+size has neither problem.
 """
 import argparse, json, os, subprocess, sys, threading, time
 
@@ -58,6 +81,7 @@ from unoauto_remote import UnoAutoLink                      # noqa: E402
 from stream_recv import StreamReceiver, write_png           # noqa: E402
 from demo_common import (OUT, PROBE, PC64, ESP, OVMF_CODE, OVMF_VARS,  # noqa: E402
                          S06_URC, S06_STREAM, S06_DISK, S06_FAT, S06_VARS,
+                         GOP_W, GOP_H, VID_W, VID_H, vga_args,
                          Qmp, Beats, build_fat_disk, probe, clean_outputs,
                          wav_measure, sh)
 
@@ -128,7 +152,7 @@ PICS = ["SUNSET.JPG",     # baseline JPEG
         "MOON.PGM"]       # netpbm greyscale
 
 
-def boot_qemu(disk, wav, ac97=False, no_audio=False):
+def boot_qemu(disk, wav, ac97=False, no_audio=False, gop=(GOP_W, GOP_H)):
     sh(["cp", OVMF_VARS, S06_VARS])
     if os.path.exists(S06_QMP):
         os.remove(S06_QMP)
@@ -140,6 +164,7 @@ def boot_qemu(disk, wav, ac97=False, no_audio=False):
         "-drive", "if=pflash,format=raw,file=" + S06_VARS,
         "-drive", "format=raw,file=" + disk,
         "-netdev", "user,id=n0", "-device", "e1000,netdev=n0",
+    ] + vga_args(*gop) + [
         "-display", "none",
         "-qmp", "unix:%s,server,nowait" % S06_QMP,
     ]
@@ -178,10 +203,25 @@ class Driver(object):
         self.px, self.py = x, y
         time.sleep(settle)
 
-    def sweep(self, x1, y1, btn=0, step=12, pace=0.035, burst=20):
+    def glide_step(self):
+        """Pixels per pointer step, scaled to the desktop.
+
+        The 12 px in scenes.py is a distance on a 640-wide desktop, and this
+        scene now films a 1280-wide one: keeping it literal doubles the number
+        of injections for the same journey, and pointer travel is host-paced,
+        so every glide takes twice as long in wall clock. (Measured: it was
+        most of the 8.8 s this scene grew when the desktop doubled.) Scaling
+        the step keeps the pointer's SPEED ACROSS THE SCREEN the same, which is
+        what the pacing was tuned for, and leaves the constraint that actually
+        matters untouched - the injected-pointer queue cares about the RATE of
+        injections, not how far each one moves.
+        """
+        return max(12, int(round(12 * (self.w or 640) / 640.0)))
+
+    def sweep(self, x1, y1, btn=0, step=None, pace=0.035, burst=20):
         x0, y0 = self.px, self.py
         dx, dy = x1 - x0, y1 - y0
-        n = max(1, int(max(abs(dx), abs(dy)) / step))
+        n = max(1, int(max(abs(dx), abs(dy)) / (step or self.glide_step())))
         for i in range(1, n + 1):
             self.move(x0 + dx * i // n, y0 + dy * i // n, btn, settle=pace)
             if i % burst == 0:
@@ -300,8 +340,17 @@ def s06(d):
     d.click(*uamp_eq(fbw), settle=1.0)
     time.sleep(3.0)                          # the skinned EQMAIN docks below
 
-    d.beat("stop", settle=0.2)
-    d.click(*uamp_btn(fbw, T_STOP), settle=0.8)
+    # Glide FIRST, then mark, then press - same shape as the play beat, and for
+    # a sharper reason: this beat is the A/V ANCHOR. Stopping kills the sound in
+    # the frame it lands, so `stop` in the video and the end of the music in the
+    # wav are the same instant, which is the pair the offset is measured from.
+    # (Play is NOT such a pair: the click precedes the first sample by however
+    # long the player takes to open and decode the file - measured at ~1.4 s on
+    # this build, and that bias used to go straight into av_offset_seconds.)
+    stop_pt = uamp_btn(fbw, T_STOP)
+    d.sweep(*stop_pt)
+    d.beat("stop", settle=0.0)
+    d.click(*stop_pt, glide=False, settle=0.8)
     # The skin's own close box: it calls unoamp_ui_close(), which takes the
     # player AND its EQ/playlist windows down together. The shell's `close`
     # verb would only remove whichever one happens to be focused.
@@ -374,6 +423,23 @@ def probe_skin(link):
     print("status   : %r" % (link.command("skin", "status", timeout=10),))
 
 
+def widen_run(env, i0, n, soft):
+    """Grow a loud run outwards while the envelope stays above `soft`.
+
+    The run finder needs a HIGH threshold to be sure it has found the music
+    and not the boot chime, and a high threshold clips the attack and the
+    decay - which are exactly the two edges the offset is measured against.
+    Widening at a floor just above true silence puts them back. (The silence
+    in this capture really is 0.0 RMS, so "just above" is not delicate.)
+    """
+    a, b = i0, i0 + n
+    while a > 0 and env[a - 1] >= soft:
+        a -= 1
+    while b < len(env) and env[b] >= soft:
+        b += 1
+    return a, b - a
+
+
 def longest_loud_run(env, thresh):
     """(start index, length) of the longest run of windows at or above
     `thresh`. The music is by far the longest loud thing in the capture (the
@@ -411,7 +477,21 @@ def main(argv):
                     help="where the artifacts land, absolute or relative to "
                          "tools/demo (default out/final - beside the rest of "
                          "the final cut)")
+    ap.add_argument("--gop", default="%dx%d" % (GOP_W, GOP_H),
+                    help="panel size to force on QEMU's VGA via EDID. The "
+                         "DESKTOP - which is what unostream sends - is half of "
+                         "it (uefi_main.c:641), so the default %dx%d is how "
+                         "this scene records natively at %dx%d. '0x0' keeps "
+                         "QEMU's own panel and the 640x400 desktop with it."
+                         % (GOP_W, GOP_H, VID_W, VID_H))
     a = ap.parse_args(argv)
+
+    try:
+        gop = tuple(int(v) for v in a.gop.lower().split("x"))
+        if len(gop) != 2:
+            raise ValueError
+    except ValueError:
+        raise SystemExit("--gop wants WxH (e.g. 2560x1600, or 0x0)")
 
     esp = a.esp or (DBG_ESP if os.path.isdir(DBG_ESP) else ESP)
     if not os.path.isdir(esp):
@@ -466,7 +546,8 @@ def main(argv):
     beats = Beats(base + ".beats.jsonl")
     err = None
     try:
-        qemu = boot_qemu(S06_DISK, wav, ac97=a.ac97, no_audio=a.no_audio)
+        qemu = boot_qemu(S06_DISK, wav, ac97=a.ac97, no_audio=a.no_audio,
+                         gop=gop)
         q = Qmp(S06_QMP)
         print("qemu up (audio=%s), waiting for the guest to dial in"
               % ("none" if a.no_audio else ("ac97" if a.ac97 else "hda")))
@@ -479,6 +560,16 @@ def main(argv):
         d.w, d.h = link.screen_info(timeout=20)
         d.px, d.py = d.w // 2, d.h // 2
         print("desktop %dx%d, UnoAmp scale %d" % (d.w, d.h, uamp_scale(d.w)))
+        # Ask the guest, before the stream exists, whether the panel trick
+        # actually took. A wrong answer here is a whole take recorded at the
+        # wrong size, and the guest's own screen_info is the only witness that
+        # cannot be argued with.
+        if gop[0] and (d.w, d.h) != (gop[0] // 2, gop[1] // 2):
+            raise SystemExit(
+                "the desktop came up %dx%d, not the %dx%d that halving a "
+                "%dx%d panel should give - did OVMF refuse the EDID (check "
+                "vgamem_mb) or has apply_desktop's default changed?"
+                % (d.w, d.h, gop[0] // 2, gop[1] // 2, gop[0], gop[1]))
 
         # WHICH VOLUME THE SKIN IS ON, asked rather than assumed. The volume
         # index is this boot's mount order, not a property of the disk, and a
@@ -550,6 +641,7 @@ def main(argv):
           "mp4": base + ".mp4",
           "mp4_bytes": info.get("bytes"), "dur": info.get("dur"),
           "w": info.get("w"), "h": info.get("h"), "fps": info.get("rate"),
+          "panel": ("%dx%d" % gop) if gop[0] else "qemu-default",
           "skin_after": skin_after,
           # stream_recv rescales each segment's timestamps at close (8956f168),
           # so the container is already wall-clock truth. Recorded so nothing
@@ -571,24 +663,65 @@ def main(argv):
         env = m.pop("env")
         st["audio"] = m
         peak = max(env) if env else 0.0
+        # High threshold to FIND the music (the boot chime is the only other
+        # loud thing in the file and the music is much the longer), then
+        # widened at a near-silence floor to recover the attack and the decay.
         thresh = max(300.0, peak * 0.12)
         i0, n = longest_loud_run(env, thresh)
         if n:
+            i0, n = widen_run(env, i0, n, max(60.0, peak * 0.02))
             music_t = i0 * m["win_ms"] / 1000.0
+            music_end = (i0 + n) * m["win_ms"] / 1000.0
             st["audio"]["music_onset_s"] = round(music_t, 2)
+            st["audio"]["music_end_s"] = round(music_end, 2)
             st["audio"]["music_length_s"] = round(n * m["win_ms"] / 1000.0, 2)
             st["audio"]["onset_threshold_rms"] = round(thresh, 1)
-            # the whole point of the two clocks: video t of the play beat,
-            # minus wav t of the music, is the constant the editor needs.
-            play_wall = next((t for nm, t in beats.marks
-                              if nm == "play-flyhigh-mp3"), None)
-            if play_wall and rx and rx.t_first:
-                vt = play_wall - rx.t_first
-                st["audio"]["play_beat_video_s"] = round(vt, 2)
-                st["av_offset_seconds"] = round(vt - music_t, 2)
+
+            # THE TWO CLOCKS, and which pair of events is allowed to join them.
+            #
+            # The wav sink starts with the MACHINE and the video starts when
+            # the guest dials the receiver, so the constant between them has to
+            # be measured against something that happens in both - and the two
+            # candidates are not equally good:
+            #
+            #   STOP  is simultaneous BY CONSTRUCTION. The click silences the
+            #         DAC in the frame it lands, so `stop` in the video and the
+            #         end of the music in the wav are the same instant. This is
+            #         the anchor.
+            #   PLAY  is not. The click precedes the first sample by however
+            #         long UnoAmp takes to open and decode the file - measured
+            #         at ~1.4 s on this build by reading the player's own
+            #         elapsed counter off the frames. Anchoring here (which is
+            #         what this file used to do) puts that latency straight
+            #         into the offset and starts the music early.
+            #
+            # Both are reported, because their DIFFERENCE is worth seeing: it
+            # is that open latency plus whatever the wav sink's own clock has
+            # drifted, and the sink does drift - under TCG it writes short, so
+            # no single constant is exact across the whole passage.
+            def vt(name):
+                w = next((t for nm, t in beats.marks if nm == name), None)
+                return (w - rx.t_first) if (w and rx and rx.t_first) else None
+
+            vt_play, vt_stop = vt("play-flyhigh-mp3"), vt("stop")
+            if vt_play is not None:
+                st["audio"]["play_beat_video_s"] = round(vt_play, 2)
+                st["av_offset_from_play_beat_s"] = round(vt_play - music_t, 2)
+            if vt_stop is not None:
+                st["audio"]["stop_beat_video_s"] = round(vt_stop, 2)
+                st["av_offset_seconds"] = round(vt_stop - music_end, 2)
+                st["av_offset_anchor"] = "stop beat vs end of music"
                 st["av_offset_meaning"] = (
-                    "wav_time = video_time - av_offset_seconds "
-                    "(i.e. the wav starts av_offset_seconds BEFORE the video)")
+                    "wav_time = video_time - av_offset_seconds; to lay the wav "
+                    "under the cut, trim %.2f s off its front"
+                    % -round(vt_stop - music_end, 2))
+                if vt_play is not None:
+                    st["av_offset_spread_s"] = round(
+                        (vt_stop - music_end) - (vt_play - music_t), 2)
+                    st["av_offset_spread_meaning"] = (
+                        "stop-anchored minus play-anchored = the player's open "
+                        "latency plus the wav sink's drift over the passage; "
+                        "the two anchors bracket the honest range")
             st["audio"]["qemu_start_to_stream_s"] = (
                 round(rx.t_first - t_qemu, 2) if rx and rx.t_first else None)
         st["audio_ok"] = bool(m["peak"] > 1000 and n)
