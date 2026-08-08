@@ -3888,11 +3888,24 @@ static void close_focused(void)
     unoui_window *win;
     if (f < 0 || f >= UI.nwin) return;
     win = UI.win[f];
-    if (win->flags & UI_WIN_BARE) return;         /* never close desktop/taskbar */
+    /* NAME the two windows the rule is about, rather than standing in for them
+     * with a flag any skinned app may legitimately set. UI_WIN_BARE only means
+     * "draws its own chrome", and UnoAmp's player is BARE for exactly that
+     * reason - so a blanket early-out here made the player unclosable from the
+     * URC wire, and it sat behind every later shot of a harness run. Also note
+     * g_launch / g_cal / g_pop are BARE too, so their clauses below were dead
+     * code under the old test. */
+    if (win == &g_desk || win == &g_task) return;
     if (win == &g_launch) { remove_win(&g_launch); g_launch_open = 0; g_dirty = 1; return; }
     if (win == &g_cal)    { remove_win(&g_cal);    g_cal_open = 0;    g_dirty = 1; return; }
     if (win == &g_pop)    { pop_close(); return; }
     for (i = 0; i < NAPPS; i++) if (&g_win[i] == win) { close_app(i); return; }
+    /* An app's own AUXILIARY chrome (UnoAmp's equaliser and playlist are the
+     * live example): not in g_win[], so the loop above cannot route it, and
+     * remove_win() alone would drop the window while the owner's g_eq_open /
+     * g_pl_open stayed 1 and the next toggle came out inverted. Only the owner
+     * knows how to take one of these down - closing the app does it properly. */
+    if (win->flags & UI_WIN_BARE) return;
     remove_win(win);
     /* Hand focus on, exactly as minimizing does. Without this, remove_win()
        leaves focus_win pointing at whatever slid into the closed window's
