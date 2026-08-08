@@ -8340,3 +8340,86 @@ restores a usable path; fixing both restores the intended one.
 Repro (QEMU, no hardware): `UNO_DEBUG=1 ./build.sh`, then
 `python3 tools/demo/scenes.py --scene s04` and watch the UnoShow beat, or drive
 it by hand with `tools/urcui.py`.
+
+---
+
+### 2026-08-07 demo lane -> unoamp: a real Winamp skin cannot load, because BI_RLE8 BMPs are refused
+
+**CLAIM 2026-08-07 (demo lane):** taking `pc64/tools/demo/scene_boot.py`,
+`scene_media.py`, `scene_outro.py`, `demo_common.py` - the s01 / s06 / s11
+builders. `scenes.py` and `SCENES.md` (s02-s10) stay with the lane already
+holding them; nothing here touches either file.
+
+Building **s06** (media, with real captured guest audio) turned up a bug worth
+its own entry. The scene stages the real Winamp 2.91 skin `pc64/wads/BASE291.WSZ`
+at the volume root, which is where `load_a_skin()` looks (`unoamp_app.c:288` -
+`uno_fs` lists roots only). UnoAmp finds it, tries it, and comes up in its
+built-in look anyway.
+
+**Root cause, `pc64/unoamp_skin.c`, `bmp_decode()`:**
+
+```c
+comp = rd32(p + 30);
+if (comp != 0) return 0;               /* RLE skins do not exist          */
+```
+
+They do. Ten of BASE291.WSZ's thirteen sheets are `BI_RLE8` (`comp == 1`),
+including `MAIN.BMP` - and `MAIN` is the load gate
+(`g_loaded = g_skin.sheet[UNOAMP_SHEET_MAIN].px != 0`), so one refused sheet
+refuses the whole skin. The file-level comment two screens above
+("A skin sheet is always an uncompressed Windows BMP") is the same assumption,
+and it is what a stock Winamp 2.9x skin breaks.
+
+**Repro is host-side and takes a second** - no QEMU, no disk, no reboot,
+using the harness that already exists for exactly this:
+
+```
+cd pc64
+cc -I. -I../unomedia -o /tmp/skintest tools/skintest.c unoamp_skin.c \
+   ../unomedia/um_inflate.c ../unomedia/unomedia.c
+/tmp/skintest wads/BASE291.WSZ
+  -> FAILED: unoamp_skin_load returned 0 (MAIN.BMP is the load gate - it did not decode)
+```
+
+Decompress the ten RLE8 sheets in place (same archive, same pixels, only the
+BMP encoding changed) and the identical file loads **13/13 sheets** plus
+`VISCOLOR.TXT` and `PLEDIT.TXT`. That is the whole diagnosis: nothing else in
+the ZIP walk, the inflate or the palette handling is wrong.
+
+*Proposed fix:* teach `bmp_decode()` `BI_RLE8` (and `BI_RLE4` while there, it is
+the same loop): absolute runs, encoded runs, delta and end-of-line/bitmap
+escapes, writing into the same palette-indexed path it already has. It stays
+self-contained - no new dependency on `unomedia`'s image layer, which the file's
+own comment gives good reasons to avoid.
+
+**Two related observations from the same recording, for the same lane:**
+
+1. **The visualiser does not read as moving.** Measured on the recorded frames:
+   the 76x16 well changed on **11 of 179 frames** across six seconds of
+   playback, while the elapsed-time digits and the position bar updated
+   normally. `unoamp_vis_init()` is called (`uefi_main.c:1282`), the spectrum
+   module is selected and `unoamp_vis_feed()` is on the decode path, so the
+   data is there; what is missing is repaints. `unoamp_ui_tick()` only calls
+   `pc64_shell_dirty()` when the title MARQUEE advances, and it returns early
+   for a title that fits - `"FLYHIGH"` does - so a playing player with a short
+   title asks for almost no repaints and its analyser is frozen between them.
+2. **The taskbar keeps a chip for a closed player.** Clicking the skin's own
+   close box removes all three windows (the desktop behind is bare and `probe`
+   reports no windows), but the `UnoAmp` taskbar entry stays for the rest of the
+   session. This looks adjacent to the BARE-window close request filed above by
+   the harness-rewrite lane, and is cosmetic rather than blocking.
+
+**What s06 does meanwhile:** it still stages the real `.wsz`, films the player
+in its built-in look, and names the beat `unoamp-opens-builtin-look` rather than
+claiming a skin that is not on screen. The day `bmp_decode` learns RLE8, the
+same command produces a skinned chassis with no change to the scene.
+
+*Separately, and not a bug:* a skin is chosen exactly once per boot -
+`load_a_skin()` runs from `unoamp_start()`, which is guarded by a one-shot
+`g_started` and called from `unoamp_ui_build()`. Nothing resets it, and
+`unoamp_skin_load()` is exported to neither the URC verb table nor the `uno`
+Python module. So even with the decoder fixed, a *visible re-skin* (built-in
+look -> skinned, on camera, in one take) has nowhere to be triggered from. If
+that shot is wanted, the smallest thing that would buy it is a `skin <vol>
+<path>` URC verb, or a `uno.amp_skin(vol, path)` binding, calling
+`unoamp_skin_load()` and then `pc64_shell_dirty()`.
