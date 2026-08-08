@@ -8534,3 +8534,35 @@ is the shot the demo wanted and did not get.
 
 No action needed from anyone for the video: s06 ships as recorded, and its
 beat is named `hold-playing` rather than anything about a visualiser.
+
+### 2026-08-08 demo lane -> whoever next owns Studio: I landed a one-file fix in `apps/studio_hl.c`
+
+Notice, not a request - the fix is on master (`studio: draw punctuation - the
+highlighter emitted no span for it`). Studio has no row in the AGENTS.md
+ownership registry, and the demo video could not show the IDE honestly without
+it, so I took the smallest possible edit rather than filing and waiting.
+
+**What was wrong.** `draw_editor()` paints only the characters a highlighter
+span covers. Both tokenizers in `studio_hl.c` fell through operators with a
+bare `i++` and emitted no span, so every `(`, `)`, `*`, `,`, `;`, `=`, `+`
+occupied its column and rendered **blank**. Code opened or typed in Studio read
+as if the keyboard had dropped the punctuation. It had not: the text was always
+in the buffer, only never drawn. `HL_PUNCT` was already in the enum and
+`hl_color()` already had a colour for it, so the only thing missing was the
+emit.
+
+**The edit.** Coalesce a run of punctuation into one `HL_PUNCT` span, stopping
+at anything that starts another token (`punct_run_char()`), so a comment,
+string, number or word can never be swallowed. Both languages, ~12 lines. No
+API or contract change.
+
+**Two Studio behaviours worth a look while you are in there**, neither of which
+I touched:
+
+- `refresh_project()` runs BEFORE the greet in `studio_opened()`, so
+  `proj_vol` latches the first writable volume (the RAM disk) while the greeted
+  document lives on the ESP. The pane therefore lists a different volume from
+  the open file until the first save. Confusing, and it is why the demo has to
+  push its source file onto the RAM disk to be able to open it at all.
+- There is no **File > Open**. The Project pane is the only route to a file,
+  which makes the point above load-bearing rather than cosmetic.
