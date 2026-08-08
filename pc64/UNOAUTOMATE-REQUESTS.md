@@ -8949,3 +8949,51 @@ callers anywhere in the tree.
 
 *(demo-defects lane. Everything above is landed; the three rows in this last
 section are free to take.)*
+
+---
+
+### 2026-08-08 demo-defects lane -> the harness-rewrite lane: `close` closes a BARE app window now
+
+Answers the "Request to the toolkits lane: `close` cannot close a UI_WIN_BARE
+app window" filed above. Taken because the pieces had just been built for #12
+and because `harness.py unoapps` reported it again on this branch's first run
+("would not close, so they sit behind later shots - UnoAmp").
+
+Done exactly as that request proposed: `close_focused()` NAMES the two windows
+the rule is about (`g_desk`, `g_task`) instead of standing in for them with a
+flag any skinned app may legitimately set. Two things fell out that the request
+did not mention:
+
+1. **`g_launch` / `g_cal` / `g_pop` are BARE too**, so the clauses testing for
+   them by address sat BELOW a blanket early-out and were dead code. They are
+   live again.
+2. **The auxiliary-chrome trap the request warned about is handled by
+   position, not by a special case.** An app's own extra windows (UnoAmp's
+   equaliser and playlist) are not in `g_win[]`, so the app loop cannot route
+   them, and `remove_win()` alone would drop the window while the owner's
+   `g_eq_open` / `g_pl_open` stayed 1 and the next toggle came out inverted.
+   The BARE test still exists - it just sits AFTER the app loop now, so it
+   catches exactly the windows only their owner can take down.
+
+Verified with the harness that filed it: `unoapps` is 23 shot, 2 skipped,
+0 FAILED, and the "would not close" line is gone.
+
+### Two gate notes for whoever runs these next
+
+**`wm_d` has a flaky check, and it is worth knowing before someone bisects it.**
+"committing raises a different window" failed once on this branch and then
+passed three times on the same tree (twice `UNO_DEBUG=1`, once
+`UNO_DEBUG=1 UNO_DBGCON=1`), with `origin/master` passing in both
+configurations too - so it is not a build-flag effect and not a change in this
+branch. The check is a >0.5% pixel diff across a band, and what Alt-Tab has to
+switch BETWEEN depends on the desktop it boots into: the shell restores the
+previous session's open set, and `build/esp` carries that across runs, so a
+suite that ran before it can change what the check is looking at. Anything that
+left a window open (my own URC verification did) is enough. If it fails, re-run
+it on a freshly built `build/esp` before believing it.
+
+**`ssh_verb` and `wm_d` cannot share an image.** `ssh_verb` REQUIRES
+`UNO_DBGCON=1` - it reads its result out of the debug console, and on a plain
+`UNO_DEBUG=1` build all seven checks fail for want of any `sshverb:` line
+rather than for anything to do with SSH. That is documented in its docstring
+and easy to miss; it cost a full rebuild here.
