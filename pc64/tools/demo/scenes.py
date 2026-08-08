@@ -123,6 +123,27 @@ def stage_wad():
     return None
 
 
+def stage_sdk():
+    """sdk/SAMPLE.C -> the ESP ROOT, so s07 can OPEN a shipped, known-good
+    source file instead of typing a program in.
+
+    Studio's Project pane lists ONE volume's root (refresh_project, studio.c)
+    and there is no File > Open, so a source file that lives in SDK\\ is
+    unreachable from the IDE. The SDK copy stays where it is; this is a second
+    copy at the root purely so the pane has a row to open. It is also the file
+    Ctrl-S writes back to (doc_save uses the basename against ed_vol), which
+    keeps the demo's edit off the shipped SDK copy.
+
+    Typing a whole program on camera was the old s07 and it is what broke the
+    take: File > New silently missed at 1280x800, so the C source landed in
+    the greeted SAMPLE.PY, packed as Python, and could never build."""
+    src = os.path.join(PC64, "sdk", "SAMPLE.C")
+    if not os.path.exists(src):
+        return None
+    shutil.copyfile(src, os.path.join(RQ.ESP, "SAMPLE.C"))
+    return "SAMPLE.C"
+
+
 def stage_vm():
     """The appliance payload (bzImage/initrd/rootfs from build/), mirroring
     tools/vm_stage.py's staging (not its DEBUG.CFG edit - ours below carries
@@ -829,6 +850,35 @@ class Demo(object):
         self.click(cx, cy, settle=1.2)
 
     # ---- output -----------------------------------------------------------
+    def wait_stable(self, timeout=25.0, poll=1.6, quiet=2, scale=4):
+        """Block until the screen stops changing, or `timeout`.
+
+        A network page load is the one beat whose length is not ours to
+        choose: en.wikipedia.org over TLS under TCG took between 6 and 20 s
+        across probe runs, and a fixed settle is wrong in both directions -
+        too short records a half-drawn page, too long records dead air. Two
+        identical scale-4 grabs in a row means the paint has finished.
+        Returns the seconds waited."""
+        t0 = time.time()
+        last, same = None, 0
+        while time.time() - t0 < timeout:
+            time.sleep(poll)
+            try:
+                cur = self.link.screen_grab(scale, timeout=60)[2]
+            except Exception:                    # noqa: BLE001
+                continue
+            if last is not None and cur == last:
+                same += 1
+                if same >= quiet:
+                    break
+            else:
+                same = 0
+            last = cur
+        dt = time.time() - t0
+        if self.verbose:
+            print("    wait_stable: %.1f s" % dt)
+        return dt
+
     def shot(self, tag):
         """Probe screenshot (development + state polling; NOT the recording)."""
         w, h, rgba = self.link.screen_grab(1, timeout=40)
@@ -886,6 +936,12 @@ class Demo(object):
         st = {"scene": name, "dur": round(dur, 1), "frames": rx.frames,
               "keyframes": rx.keyframes, "deltas": rx.deltas,
               "decode_errors": rx.decode_errors,
+              "w": rx.w, "h": rx.h,
+              # unostream delivers well under the requested rate at 1280x800,
+              # so the receiver rescales the container's timestamps to the
+              # rate frames ACTUALLY arrived. Whether it had to is part of the
+              # per-scene report, so record it next to the frame counts.
+              "retimed_by_receiver": bool(getattr(rx, "retimed", False)),
               "mp4": base + ".mp4",
               "mp4_bytes": (os.path.getsize(base + ".mp4")
                             if os.path.exists(base + ".mp4") else 0)}
@@ -1021,10 +1077,16 @@ def s04_pre(d):
     if not getattr(d, "office_staged", None):
         print("  s04: SKIP - office corpus not staged")
         return False
+    pushed = list(getattr(d, "ram_pushed", []))
     for name in ["FMT.DOC", "FORMULAS.XLS"]:
         src = dict((s.upper(), os.path.join(CORPUS, s))
                    for s, _ in OFFICE)[name]
         d.link.push_file(0, name, src)
+        pushed.append(name)
+    # s07 opens a source file out of the SAME pane this fills, and the pane
+    # lists in creation order - so who pushed what, in what order, is state
+    # the later scene needs. Recorded here rather than re-derived there.
+    d.ram_pushed = pushed
     return True
 
 
@@ -1079,12 +1141,34 @@ def s04_office(d):
     # UnoShow beat survive a resolution change.
 
 
+# The browser's maximize box. The Browser window opens at a FIXED origin and
+# a FIXED size (it is not sized from the framebuffer), so like Studio's menu
+# bar this is window-relative and holds at any desktop size - verified on a
+# 1280x800 probe shot, where the box sits at the window's top right.
+BROWSER_MAX_XY = (461, 27)
+
+# The real site. `https://en.wikipedia.org/wiki/Unix` is what a viewer
+# recognises, and the page loads whole (HTTP/1.1 200 OK, the full article and
+# its table of contents are all in the document - the old 48 KB cut is gone,
+# DOC_MAX/RAW_MAX are 1 MB now). What it costs is scrolling: Wikipedia's
+# Vector skin emits the entire navigation sidebar BEFORE the article, so the
+# <h1> is about seven PgDn down. That is why the window is maximized first.
+WIKI_URL = "https://en.wikipedia.org/wiki/Unix"
+WIKI_PGDN = 7
+
+
 def s05_browser(d, with_net=False):
-    """Local uno: pages: JS demo, engine switch to QuickJS, same page again."""
+    """The browser: local JS pages and the engine switch, then a REAL site.
+
+    The network half was `--with-net`-gated and metal-only until 2026-08-08.
+    It works here: the URC link itself is TCP over the same stack, so the
+    guest is leased and routed before a scene ever runs (`nonet` in DEBUG.CFG
+    only skips the boot NET TEST and the desktop's net_boot fallback, not the
+    stack), and slirp's DNS resolves for a DEBUG image."""
     def goto(loc, settle=2.2):
         d.ctrl("l", settle=0.4)
         d.key(0, S_END, settle=0.1)
-        for _ in range(40):
+        for _ in range(60):                          # no select-all in the bar
             d.key(8, settle=0.02)
         d.text(loc, settle=0.06)
         d.key(13, settle=settle)
@@ -1105,70 +1189,111 @@ def s05_browser(d, with_net=False):
     goto("uno:script", settle=2.5)
     for _ in range(4):
         d.key(0, S_DOWN, settle=0.35)
+    # ---- and now the open internet ------------------------------------
+    d.beat("maximize-for-the-web")
+    d.click(*BROWSER_MAX_XY, settle=1.6)
+    d.beat("load-wikipedia")
+    goto(WIKI_URL, settle=1.0)
+    d.wait_stable(timeout=28.0)                      # TLS + a 200 KB document
+    time.sleep(1.2)                                  # hold on the loaded page
+    d.beat("scroll-to-the-article")
+    for _ in range(WIKI_PGDN):
+        d.key(0, S_PGDN, settle=0.55)
+    time.sleep(1.6)                                  # hold on the Unix heading
     if with_net:
-        d.beat("SKIP-net-beats-are-metal-only")      # --with-net stub
+        d.beat("net-beats-are-in-the-spine-now")     # --with-net is a no-op
     d.beat("close")
     d.ctrl("w", settle=1.0)
 
 
-STUDIO_PROG = (
-    '#include "UNO.H"\n'
-    '\n'
-    'static void demo_draw(UnoWin *w)\n'
-    '{\n'
-    'text_at(w->bounds.left + 16,\n'
-    'w->bounds.top + TBAR_H + 24,\n'
-    '"Hello from Studio!", C_WHITE, C_BLUE, true);\n'
-    '}\n'
-    '\n'
-    'static const AppInterface kApp = {\n'
-    'demo_draw, 0, 0, 0, 0, 0,\n'
-    '"Demo", { 40, 40, 340, 200 }\n'
-    '};\n'
-    '\n'
-    'const AppInterface *uno_app_main(const KernelApi *k)\n'
-    '{\n'
-    'gK = k;\n'
-    'return &kApp;\n'
-    '}\n')
+STUDIO_FILE_XY = (54, 48)      # "File" menu title (d4_studio_filemenu)
+STUDIO_NEW_XY = (60, 68)       # its "New" row
+
+# The Project pane. Studio opens at a FIXED (24, 20) and the pane is laid out
+# from that corner, so these are window-relative (SCENES.md class 1) and were
+# read off a 1280x800 probe shot: row 0 at y=108, one mono line-height apart.
+STUDIO_PROJ_X = 90
+STUDIO_PROJ_Y0 = 108
+STUDIO_PROJ_DY = 16
+
+# The live edit. A COMMENT: it changes the file visibly, it is the one edit
+# that cannot break the build, and every character of it renders (a comment is
+# one highlighter span). Kept to one line so the scene spends its time on the
+# build, not on typing.
+STUDIO_EDIT = "/* a live edit, compiled on the box */\n"
+
+
+def s07_pre(d):
+    """Push the SDK's SAMPLE.C onto the RAM volume, off camera.
+
+    WHY THE RAM VOLUME AND NOT THE ESP. Studio's Project pane lists exactly
+    one volume - `proj_vol = ed_vol`, and at first open ed_vol is -1, so
+    refresh_project() falls back to "the first WRITABLE volume", which is the
+    RAM disk (the one carrying README.TXT). The ESP copy stage_sdk() makes is
+    therefore invisible in the pane; the file has to be here to be openable.
+
+    Order matters: the pane lists in creation order, README.TXT is seeded by
+    the OS at index 0 and s04_pre pushes ahead of us, so the row index is
+    computed from what has actually been pushed rather than assumed."""
+    ram = ["README.TXT"] + list(getattr(d, "ram_pushed", []))
+    src = os.path.join(PC64, "sdk", "SAMPLE.C")
+    if not os.path.exists(src):
+        print("  s07: SKIP - pc64/sdk/SAMPLE.C is missing")
+        return False
+    d.link.push_file(0, "SAMPLE.C", src)
+    ram.append("SAMPLE.C")
+    d.ram_pushed = ram[1:]
+    d.studio_row = len(ram) - 1
+    n = int(d.link.eval('print(__import__("uno").size(0,"SAMPLE.C"))',
+                        timeout=25)[0])
+    if n <= 0:
+        print("  s07: SKIP - SAMPLE.C did not land on the RAM volume")
+        return False
+    print("  s07: SAMPLE.C on the RAM volume (%d bytes), Project row %d"
+          % (n, d.studio_row))
+    return True
 
 
 def s07_studio(d):
-    """Studio: File > New, type a small UnoC app, ^B build, ^R run.
+    """Studio: open the SDK's SAMPLE.C, edit it, ^S, ^B build, ^R run - and
+    the app it just compiled opens and animates.
 
-    Trimmed from 41.5 s to ~37 s (2026-08-07) by dropping the on-camera
-    teardown only. The typing is 15.6 s of it and stays at its measured
-    speed: it IS the content here, and typing faster is the one thing the
-    pacing note rules out. Shortening the program instead would risk the
-    build moment, which is the beat this scene exists for."""
+    REWRITTEN 2026-08-08, because the old take shipped BROKEN. It typed a
+    whole UnoC program in after File > New; the File > New click missed at
+    1280x800 (the dropdown row is laid out from the mono line height, not from
+    the 640x400 literal it was measured at), so the C source went into the
+    SAMPLE.PY that Studio greets with, packed as a PYTHON app, and ended on
+    "Run failed" with a SyntaxError. Nothing in the beat log said so.
+
+    Two rules came out of that and both are encoded here:
+      - OPEN a shipped, known-good source file rather than typing a program
+        through the input path. The only edit typed on camera is a comment.
+      - A project row that is ALREADY selected activates on the first click
+        (studio.c: `if (row == proj_sel) proj_activate(); else proj_sel = row`)
+        and proj_activate() hands focus back to the editor - so clicking row 0
+        opens README.TXT and every later key goes to the editor. Click the row
+        we actually want (never row 0, which is pre-selected), then Enter."""
+    row = getattr(d, "studio_row", 3)
     d.beat("launch-studio")
-    d.launch("studio", settle=3.0)
-    # File > New via the in-window menu bar (measured off d4_studio_filemenu:
-    # Studio opens at a FIXED (24,20), so "File" at (54,48) and its "New" row
-    # at (60,68) are window-relative and hold at any resolution).
-    d.beat("file-new")
-    d.click(*STUDIO_FILE_XY, settle=0.8)
-    d.click(*STUDIO_NEW_XY, settle=0.9)
-    d.text("DEMO.C", settle=0.10)                    # the status-bar name box
-    d.key(13, settle=1.0)
-    d.beat("type-the-program")
-    d.text(STUDIO_PROG, settle=0.035)
+    d.launch("studio", settle=3.2)
+    d.beat("pick-sample-c-in-the-project")
+    d.click(STUDIO_PROJ_X, STUDIO_PROJ_Y0 + row * STUDIO_PROJ_DY, settle=1.1)
+    d.beat("open-it")
+    d.key(13, settle=1.6)                            # Enter activates the row
+    time.sleep(1.2)                                  # hold on the C source
+    d.beat("type-a-live-edit")
+    d.text(STUDIO_EDIT, settle=0.06)
     d.beat("save")
-    d.ctrl("s", settle=1.0)
+    d.ctrl("s", settle=1.4)
     d.beat("build")
     d.ctrl("b", settle=0.2)
-    time.sleep(3.0)                                  # ucc + status line
+    time.sleep(3.5)                                  # ucc + the Built line
     d.beat("run")
     d.ctrl("r", settle=0.2)
-    time.sleep(4.0)                                  # the app window opens and
-                                                     # bounces - hold on it
-    # No on-camera teardown (-4.3 s): the scene ends on the app it just built
-    # running, which is the point of it. reset() closes both windows after the
-    # stream stops.
-
-
-STUDIO_FILE_XY = (54, 48)      # "File" menu title (d4_studio_filemenu)
-STUDIO_NEW_XY = (60, 68)       # its "New" row
+    time.sleep(6.5)                                  # the app window opens and
+                                                     # the ball bounces
+    # No on-camera teardown: the scene ends on the app it just compiled,
+    # running. reset() closes both windows after the stream stops.
 
 
 def s08_pre(d):
@@ -1201,23 +1326,40 @@ def s08_pre(d):
 
 
 def s08_duum(d):
-    """Duum is already up (s08_pre launched it pre-stream). Show it running,
-    then walk + turn through the map with the arrow keys (DUUM.PY: Up/Down
-    move, Left/Right turn)."""
+    """Duum is already up (s08_pre launched it pre-stream). Walk the E1M1
+    geometry: forward, turn, forward, turn back, forward.
+
+    ~26 s (was 13.6 s). This is the best moment in the cut and it was over
+    before it registered, so it now gets a proper walk instead of a sample.
+    The step sizes are DUUM.PY's own: MOVE = 12 map units and TURN = 0.20 rad
+    per press, so a press is a small step and a quarter turn is 8 presses -
+    which is why the counts here look large. Held at 0.30 s/press: fast
+    enough to read as walking, slow enough that the software raycaster (a
+    Python app, under TCG) has drawn the frame before the next key lands."""
     d.beat("duum-running")
-    time.sleep(1.5)
-    d.beat("walk-forward")
-    for _ in range(8):
-        d.key(0, S_UP, settle=0.35)
-    d.beat("turn")
-    for _ in range(5):
-        d.key(0, S_RIGHT, settle=0.35)
+    time.sleep(2.0)
+    d.beat("walk-into-the-room")
+    for _ in range(14):
+        d.key(0, S_UP, settle=0.30)
+    d.beat("turn-right")
+    for _ in range(8):                               # ~90 degrees
+        d.key(0, S_RIGHT, settle=0.30)
     d.beat("walk-on")
+    for _ in range(14):
+        d.key(0, S_UP, settle=0.30)
+    d.beat("turn-back-left")
+    for _ in range(8):
+        d.key(0, S_LEFT, settle=0.30)
+    d.beat("walk-through")
+    for _ in range(12):
+        d.key(0, S_UP, settle=0.30)
+    d.beat("look-around")
     for _ in range(6):
-        d.key(0, S_UP, settle=0.35)
-    time.sleep(1.0)
-    d.beat("close")
-    d.close_all()
+        d.key(0, S_LEFT, settle=0.30)
+    for _ in range(10):
+        d.key(0, S_UP, settle=0.30)
+    time.sleep(1.5)
+    # No on-camera teardown: reset() closes Duum after the stream stops.
 
 
 def s09_pre(d):
@@ -1313,7 +1455,7 @@ SCENES = [
     ("s03", (None, s03_themes)),
     ("s04", (s04_pre, s04_office)),
     ("s05", (None, s05_browser)),
-    ("s07", (None, s07_studio)),
+    ("s07", (s07_pre, s07_studio)),
     ("s08", (s08_pre, s08_duum)),
     ("s09", (s09_pre, s09_console)),
     ("s10", (None, s10_system_log)),
@@ -1372,9 +1514,10 @@ def main(argv):
     if MODE == "qemu":
         d.office_staged = stage_office()
         d.wad_staged = stage_wad()
+        d.sdk_staged = stage_sdk()
         d.vm_staged = stage_vm()
-        print("staged: office=%s wad=%s vm=%s" %
-              (d.office_staged, d.wad_staged, d.vm_staged))
+        print("staged: office=%s wad=%s sdk=%s vm=%s" %
+              (d.office_staged, d.wad_staged, d.sdk_staged, d.vm_staged))
     else:
         # Nothing is staged on metal: the stick already carries DOOM1.WAD,
         # DOCS\ and the rest, and the office documents are pushed to the RAM
