@@ -42,13 +42,32 @@ REPO  = os.path.dirname(PC64)
 sys.path.insert(0, TOOLS)
 sys.path.insert(0, HERE)
 
-import remote_qemu as RQ                        # noqa: E402  (paths + boot_qemu)
 from unoauto_remote import UnoAutoLink          # noqa: E402
 from stream_recv import StreamReceiver, write_png  # noqa: E402
+
+# remote_qemu is the QEMU path ONLY. On the metal driver host (devbuntu) there
+# is no OVMF, no mtools and no build tree, and importing it there used to be a
+# hard ImportError that stopped `--metal` before it bound a port. It is
+# optional: every use is guarded by MODE == "qemu".
+try:
+    import remote_qemu as RQ                    # noqa: E402  (paths + boot_qemu)
+except Exception:                               # noqa: BLE001
+    RQ = None
 
 OUT    = os.path.join(HERE, "out")
 PROBE  = os.path.join(OUT, "probe")            # dev screenshots (not deliverables)
 SPORT0 = 5460                                  # first stream port; +1 per scene
+
+# ---- mode ------------------------------------------------------------------
+# "qemu"  : boot the DEBUG image here, guest reaches the receiver at 10.0.2.2.
+# "metal" : the X13 Yoga boots a stick whose DEBUG.CFG says
+#           remote=<this-host>:5101, so it DIALS US. We only listen; there is
+#           no disk to stage and no QEMU to boot, and the stream target is this
+#           host's LAN address.
+MODE = "qemu"
+METAL_PORT = 5101
+RES_CONFIRM_S = 15                             # pc64_uui.c's probation clock
+STREAM_HOST = None                             # resolved at boot (or --stream-host)
 
 # EFI scan codes (the `key` verb's scan field) - see map_key in uefi_main.c
 S_UP, S_DOWN, S_RIGHT, S_LEFT = 0x01, 0x02, 0x03, 0x04
@@ -63,7 +82,12 @@ S_ESC                          = 0x17
 # appliance payload staging happen here, against build/esp, BEFORE build_disk
 # copies the tree into the FAT image.
 # ---------------------------------------------------------------------------
+# The corpus lives in the repo, but the METAL driver runs on devbuntu where
+# there is no repo - deploy.sh rsyncs the four documents into ./corpus/, so
+# prefer that when the repo path is absent.
 CORPUS = os.path.join(REPO, "unodoc", "test", "corpus")
+if not os.path.isdir(CORPUS):
+    CORPUS = os.path.join(HERE, "corpus")
 OFFICE = [("fmt.doc", "FMT.DOC"), ("pic.doc", "PIC.DOC"),
           ("formulas.xls", "FORMULAS.XLS"), ("small.ppt", "SMALL.PPT")]
 
@@ -234,6 +258,8 @@ class Demo(object):
 
     # ---- lifecycle --------------------------------------------------------
     def boot(self):
+        if MODE == "metal":
+            return self.boot_metal()
         if not os.path.isdir(RQ.ESP):
             raise SystemExit("no build/esp - run UNO_DEBUG=1 ./build.sh first")
         os.makedirs(OUT, exist_ok=True)
@@ -271,9 +297,94 @@ class Demo(object):
             print("booted: %dx%d, %d apps" % (self.w, self.h, len(self._menu)))
         return self
 
+    # ---- metal ------------------------------------------------------------
+    def boot_metal(self, wait=600.0):
+        """Wait for the metal box to dial IN. Nothing is booted or staged here:
+        the stick's own DEBUG.CFG (nohud, nostress, noshutdown, ui-unlock,
+        remote=<this-host>:5101) does that, and it re-dials ~45 s after every
+        reboot - so this can be started before the box is, and simply waits."""
+        global STREAM_HOST
+        os.makedirs(OUT, exist_ok=True)
+        os.makedirs(PROBE, exist_ok=True)
+        self.link = UnoAutoLink("0.0.0.0", METAL_PORT)
+        try:
+            self.link.listen()
+        except OSError as e:
+            raise SystemExit(
+                "cannot bind 0.0.0.0:%d (%s) - something else holds it. On "
+                "devbuntu that is usually the watcher: "
+                "pkill -f '[w]atcher.py'" % (METAL_PORT, e))
+        print("metal: listening on 0.0.0.0:%d - waiting up to %.0f min for the "
+              "box to dial in (it re-dials ~45 s after a reboot)"
+              % (METAL_PORT, wait / 60.0))
+        if not self.link.wait_connected(wait):
+            raise SystemExit(
+                "no dial-in within %.0f min. Check the box is powered on and "
+                "its DEBUG.CFG says remote=<this-host>:%d" % (wait / 60.0,
+                                                              METAL_PORT))
+        self.link.wait_hello(60.0)
+        time.sleep(2.5)
+        # The stream target is OUR LAN address as the box can route to it.
+        # Derived from the live connection (its peer is the box) rather than
+        # hardcoded, so this works on any driver host / subnet.
+        if STREAM_HOST is None:
+            STREAM_HOST = self._host_ip_toward_box()
+        self.w, self.h = self.link.screen_info(timeout=20)
+        self.px, self.py = self.w // 2, self.h // 2
+        self._menu = [i for i, _ in self.apps()]
+        print("metal: box dialed in - %dx%d, %d apps, stream target %s"
+              % (self.w, self.h, len(self._menu), STREAM_HOST))
+        return self
+
+    def _host_ip_toward_box(self):
+        """This host's address ON THE PATH TO THE BOX. Uses the live socket's
+        peer when we can see it (exact), else routes toward the LAN."""
+        peer = None
+        try:
+            peer = self.link._sock.getpeername()[0]
+        except Exception:                       # noqa: BLE001
+            pass
+        return UnoAutoLink._local_ip_toward(peer or "8.8.8.8")
+
+    def probe_metal_assets(self):
+        """Find what the STICK actually carries, rather than trusting the
+        QEMU-era volume indices. On metal the assets are already there:
+        DOOM1.WAD, BASE291.WSZ, FLYHIGH.MP3 and DOCS\\ at the volume root."""
+        self.wad_staged = None
+        self._esp_vol = None
+        for v in self.link.vols(timeout=15):
+            if v["kind"] == 0:                  # the RAM disk carries nothing
+                continue
+            try:
+                out = self.link.eval(
+                    'import uno\nprint(uno.size(%d,"DOOM1.WAD"), '
+                    'uno.size(%d,"DOCS\\\\FMT.DOC"))' % (v["vol"], v["vol"]),
+                    timeout=25)
+                wad, doc = (int(t) for t in out[0].split())
+            except Exception:                   # noqa: BLE001
+                continue
+            if wad > 0 or doc > 0:
+                self._esp_vol = v["vol"]
+                if wad > 0:
+                    self.wad_staged = "DOOM1.WAD"
+                print("metal: assets on vol %d (%s) wad=%d docs=%s"
+                      % (v["vol"], v["name"].strip(), wad, doc > 0))
+                break
+        if self._esp_vol is None:
+            print("metal: WARNING - found no volume carrying DOOM1.WAD or "
+                  "DOCS\\, s08 will skip")
+
+    def stream_target(self):
+        """Where the guest should dial the receiver. QEMU SLIRP maps the host
+        to 10.0.2.2; on metal it is a real LAN address."""
+        return "10.0.2.2" if MODE == "qemu" else STREAM_HOST
+
     def stop(self):
         try:
-            if self.link:
+            # NEVER power the metal box off: it is a physical machine somebody
+            # has to walk to, and the whole point of the stick is that it stays
+            # up and re-dials. Only the throwaway QEMU guest gets shut down.
+            if self.link and MODE == "qemu":
                 self.link.command("poweroff", timeout=2)
         except Exception:               # noqa: BLE001
             pass
@@ -397,6 +508,119 @@ class Demo(object):
         """Switch to virtual desktop n (1-based): Ctrl+F1..F4."""
         self.key(0, S_F1 + (n - 1), 1, settle)
 
+    def _cp_display_tab(self):
+        """Open the Control Panel clamped to the Display tab, focus on the tab
+        strip. Deterministic whatever tab it last remembered."""
+        self.close_all()
+        self.launch("control", settle=2.5)
+        self.key(9, settle=0.5)                  # Tab -> the tab strip
+        for _ in range(6):
+            self.key(0, S_LEFT, settle=0.15)     # clamp at Display (tab 0)
+
+    def _res_try(self, up_from_end):
+        """Select the mode `up_from_end` rows above the LAST dropdown row,
+        press Apply, and report the (w, h) it produced. Leaves the panel on
+        probation - the caller Keeps or Reverts.
+
+        Rows are addressed from the END because the mode list cannot be
+        enumerated over URC (`uno.res_count` is not exported to the Python
+        module - that is the pc64-python lane's file, not this one), but the
+        dropdown CLAMPS at its last row, so pressing Down 14 times always
+        lands there whatever the list length. The firmware's largest mode is
+        typically at or near the end."""
+        self._cp_display_tab()
+        self.key(9, settle=0.5)                  # -> the Resolution dropdown
+        for _ in range(14):
+            self.key(0, S_DOWN, settle=0.12)     # clamp at the LAST row
+        for _ in range(up_from_end):
+            self.key(0, S_UP, settle=0.18)
+        time.sleep(0.6)
+        self.key(9, settle=0.5)                  # -> Apply
+        self.key(13, settle=0.2)                 # commit; the shell reflows
+        time.sleep(3.5)
+        return self.link.screen_info(timeout=20)
+
+    def _res_confirm(self, keep):
+        """Click Keep (or Revert now) on the probation row.
+
+        The panel is REBUILT at the new size when Apply reflows, so focus is
+        not where we left it - closing and relaunching gives a deterministic
+        Tab walk instead of a guess, and the probation row is still there
+        because it is shell state, not window state.
+
+        THE TAB COUNT IS NOT WHAT THE LAYOUT SUGGESTS, and getting it wrong is
+        silent: a successful Apply leaves the Apply button DISABLED
+        (`g_res_sel == res_active_index()` in pc64_uui.c:1132), and unoui's
+        `interactive()` refuses focus to a disabled widget
+        (unoui_input.c:89-93), so Tab SKIPS it. The live order is therefore
+            strip -> Resolution -> Keep -> Revert now
+        not ...-> Apply -> Keep. Counting Apply in cost a whole validation run:
+        3 Tabs landed on "Revert now", Enter reverted the mode instantly, and
+        because the check ran inside the 15 s probation window it still
+        reported 1280x800 - the recording came out 640x400 anyway."""
+        self._cp_display_tab()
+        for _ in range(2 if keep else 3):
+            self.key(9, settle=0.45)
+        self.key(13, settle=1.5)
+        time.sleep(2.0)
+
+    def raise_resolution(self, min_w=1024):
+        """Pick a big mode and CONFIRM it, once, at session start - before any
+        stream exists.
+
+        Never mid-stream: a resolution change makes the guest emit a fresh
+        hello, which stream_recv treats as a stream reset and splits the
+        recording into `<name>-2.mp4`. That is the whole reason this runs here.
+
+        Driven entirely by KEYBOARD, because the screen changes size underneath
+        this very sequence and any coordinate read beforehand would be stale
+        halfway through. Enter activates a focused button in unoui
+        (unoui_input.c:707, UI_BUTTON + UI_KEY_ENTER -> activate), so Apply and
+        the probation row's Keep both work without a single click.
+
+        The 15 s auto-revert is the safety net: if a mode comes up unreadable,
+        or this walk misses, doing NOTHING puts the old mode back."""
+        if self.w >= min_w:
+            print("resolution: already %dx%d, leaving it" % (self.w, self.h))
+            return True
+        start = (self.w, self.h)
+        best = None
+        for k in range(6):                       # last row first, then upward
+            try:
+                w, h = self._res_try(k)
+            except Exception as e:               # noqa: BLE001
+                print("resolution: probe %d failed (%s)" % (k, e))
+                break
+            if (w, h) == start:
+                print("resolution: row -%d changed nothing (Apply disabled?)" % k)
+                continue                         # no probation armed to undo
+            if w >= min_w:
+                self._res_confirm(keep=True)
+                # OUTLAST THE PROBATION before believing it. RES_CONFIRM_S is
+                # 15 s, and a mode that was applied but not confirmed reads as
+                # the NEW size right up until it snaps back - so a check made
+                # promptly cannot tell "kept" from "about to revert", and
+                # reports success either way. Ask again on the far side.
+                time.sleep(RES_CONFIRM_S + 4)
+                w2, h2 = self.link.screen_info(timeout=20)
+                if (w2, h2) == (w, h):
+                    best = (w, h)
+                    break
+                print("resolution: %dx%d did NOT stick (now %dx%d) - the Keep "
+                      "click missed and it auto-reverted" % (w, h, w2, h2))
+                continue
+            print("resolution: row -%d gave %dx%d, too small - reverting" % (k, w, h))
+            self._res_confirm(keep=False)
+        self.close_all()
+        w, h = self.link.screen_info(timeout=20)
+        self.w, self.h = w, h
+        self.px, self.py = w // 2, h // 2
+        ok = w >= min_w
+        print("resolution: now %dx%d (%s)"
+              % (w, h, "raised + confirmed" if ok
+                 else "NOT raised - beats will be small"))
+        return ok
+
     def reset(self):
         """Between scenes: every desktop back to empty, desktop 1 current."""
         for d in (1, 2, 3, 4):
@@ -404,6 +628,129 @@ class Demo(object):
             self.close_all()
         self.desk(1, settle=0.6)
         time.sleep(0.6)
+
+    # ---- runtime geometry -------------------------------------------------
+    # THE RESOLUTION PROBLEM. Every coordinate in this file was first read off
+    # a 640x400 probe shot, and the metal box runs at 1280x800 or better. They
+    # fall into three classes, and only the third needed fixing:
+    #
+    #  1. WINDOW-RELATIVE, and the window origin is HARDCODED in the app -
+    #     Control Panel (150,24), Studio (24,20), UnoCalc (24,20), UnoShow
+    #     (20,16), Files (120,64), Editor (90,36). Their menu bars, toolbars
+    #     and grids are laid out from that top-left corner, so those clicks are
+    #     resolution-INDEPENDENT and stay as literals.
+    #  2. COMPUTED from the live size already (the snap edge is d.w - 4).
+    #  3. SCREEN-CENTRED - the shared Open dialog (uod_open: x=(sw-dw)/2,
+    #     y=(sh-dh)/3) and the title-bar popup (pop_show anchors at the click
+    #     then clamps against the taskbar). These MOVE with resolution, and
+    #     baked literals would have missed every one of them. They are derived
+    #     at runtime below.
+    DLG_W, DLG_H = 294, 244            # the Open dialog, measured at 640x400;
+                                       # x0=(640-294)/2=173 matched the probe
+                                       # shot to the pixel, so the formula (not
+                                       # the literal) is what is trusted here.
+    DLG_REL = {"row0":  (77, 60),      # offsets from the dialog's top-left
+               "open":  (254, 176),
+               "name":  (127, 176),
+               "combo": (210, 35),
+               "vol2":  (127, 91)}
+    DLG_ROW_PITCH = 18
+
+    def dlg(self, what, row=0):
+        """A point inside the shared Open dialog, for THIS resolution."""
+        x0 = max(0, (self.w - self.DLG_W) // 2)      # uod_open's own formula
+        y0 = max(0, (self.h - self.DLG_H) // 3)
+        dx, dy = self.DLG_REL[what]
+        return (x0 + dx, y0 + dy + row * self.DLG_ROW_PITCH)
+
+    def grab(self, scale=4):
+        """A downscaled screen grab as (w, h, rgba, scale). Scale 4 keeps a
+        1280x800 frame small enough to pull over URC in about a second, and
+        every feature located from it is >= 20 px, so 4 px of quantisation is
+        harmless."""
+        w, h, rgba = self.link.screen_grab(scale, timeout=60)
+        return w, h, rgba, scale
+
+    @staticmethod
+    def diff_box(a, b, thresh=24):
+        """Bounding box (native coords) of what changed between two grabs.
+        This is how the popup is located: whatever appeared IS the popup."""
+        aw, ah, ar, sc = a
+        bw, bh, br, _ = b
+        if aw != bw or ah != bh:
+            return None
+        x0, y0, x1, y1 = aw, ah, -1, -1
+        for y in range(ah):
+            ro = y * aw * 4
+            for x in range(aw):
+                o = ro + x * 4
+                if (abs(ar[o] - br[o]) + abs(ar[o + 1] - br[o + 1]) +
+                        abs(ar[o + 2] - br[o + 2])) > thresh:
+                    if x < x0: x0 = x
+                    if x > x1: x1 = x
+                    if y < y0: y0 = y
+                    if y > y1: y1 = y
+        if x1 < 0:
+            return None
+        return (x0 * sc, y0 * sc, (x1 + 1) * sc, (y1 + 1) * sc)
+
+    def slide_rect(self):
+        """The white slide page inside UnoShow, located on a live grab.
+
+        UnoShow's window is sized from the framebuffer and the page is centred
+        inside it, so nothing about this is fixed across resolutions. The page
+        is the one big pure-white run bounded by the editor's grey mat, which
+        is unambiguous enough to find directly."""
+        w, h, rgba, sc = self.grab(2)
+        def white(o):
+            return rgba[o] > 240 and rgba[o + 1] > 240 and rgba[o + 2] > 240
+        def grey(o):
+            r, g, b = rgba[o], rgba[o + 1], rgba[o + 2]
+            return 90 < r < 190 and abs(r - g) < 12 and abs(g - b) < 12
+        runs = {}
+        for y in range(h):
+            ro, x = y * w * 4, 0
+            while x < w:
+                if white(ro + x * 4):
+                    s = x
+                    while x < w and white(ro + x * 4):
+                        x += 1
+                    e = x - 1
+                    if (e - s) > 40 and s > 0 and e < w - 1 and \
+                            grey(ro + (s - 1) * 4) and grey(ro + (e + 1) * 4):
+                        runs.setdefault((s, e), []).append(y)
+                else:
+                    x += 1
+        if not runs:
+            raise RuntimeError("no slide page found on screen")
+        (s, e), ys = max(runs.items(), key=lambda kv: len(kv[1]))
+        return (s * sc, min(ys) * sc, (e + 1) * sc, (max(ys) + 1) * sc)
+
+    def slide_point(self, fx, fy):
+        """A point at fractional (fx, fy) of UnoShow's slide page."""
+        x0, y0, x1, y1 = self.slide_rect()
+        return (int(x0 + (x1 - x0) * fx), int(y0 + (y1 - y0) * fy))
+
+    def rclick_menu(self, x, y, row, nrows=16, settle=1.0):
+        """Right-click at (x, y), LOCATE the popup that appeared, and click
+        row `row` of it. The popup is anchored at the click but then clamped
+        against the taskbar, so where it lands depends on the resolution and
+        on how tall it is - which is exactly why this measures rather than
+        assumes."""
+        before = self.grab()
+        self.rclick(x, y, settle=settle)
+        after = self.grab()
+        box = self.diff_box(before, after)
+        if not box:
+            raise RuntimeError("the title-bar menu did not appear at %d,%d"
+                               % (x, y))
+        bx0, by0, bx1, by1 = box
+        rh = float(by1 - by0 - 2) / nrows
+        cx = bx0 + min(60, (bx1 - bx0) // 2)
+        cy = int(by0 + 1 + row * rh + rh / 2)
+        if self.verbose:
+            print("    popup at %r, row %d -> (%d,%d)" % (box, row, cx, cy))
+        self.click(cx, cy, settle=1.2)
 
     # ---- output -----------------------------------------------------------
     def shot(self, tag):
@@ -424,7 +771,10 @@ class Demo(object):
                 os.unlink(base + ext)
             except OSError:
                 pass
-        rx = StreamReceiver(port, out=base + ".mp4", host="127.0.0.1")
+        # QEMU dials the host over loopback; the metal box dials a LAN address,
+        # so the receiver has to be bound on all interfaces there.
+        rx = StreamReceiver(port, out=base + ".mp4",
+                            host="127.0.0.1" if MODE == "qemu" else "0.0.0.0")
         rx.listen()
         th = threading.Thread(target=rx.serve_once,
                               kwargs={"accept_timeout": 60.0}, daemon=True)
@@ -433,8 +783,8 @@ class Demo(object):
         t0 = time.time()
         err = None
         try:
-            r = self.link.command("stream", "start", "10.0.2.2", port, 30,
-                                  timeout=10)
+            r = self.link.command("stream", "start", self.stream_target(),
+                                  port, 30, timeout=10)
             if not (r and r[0].startswith("dialing")):
                 raise RuntimeError("stream start refused: %r" % r)
             for _ in range(100):
@@ -508,15 +858,16 @@ def s02_wm(d):
                                                      # between steps)
 
     # move the (snapped) Editor to desktop 2 via its title-bar context menu.
-    # Snapped right, its bar spans the right half; right-click it there. With
-    # the rclick at (w/2+40, 8) the popup lands at a stable spot; the desktop
-    # rows sit at y = 152/174/196/218 for To-desktop-1..4 (measured off
-    # d4_snap_popmenu, upscaled + read).
+    # Snapped right, its bar spans the right half; right-click it there.
+    # The popup is anchored at the click but then CLAMPED against the taskbar,
+    # so where it lands depends on the resolution - rclick_menu locates it from
+    # a before/after grab and clicks row 7 ("To desktop 2") of its 16.
+    #   0 Restore  1 Minimize  2 Maximize  3 Snap left  4 Snap right  5 sep
+    #   6..9 To desktop 1..4   10 sep  11..13 Group  14 sep  15 Close
     mx, my = d.w // 2 + 40, 8
     d.beat("titlebar-menu")
-    d.rclick(mx, my, settle=1.0)
     d.beat("to-desktop-2")
-    d.click(*POP_TO_DESK2, settle=1.2)
+    d.rclick_menu(mx, my, row=7, nrows=16)
     d.beat("switch-to-desktop-2")
     d.desk(2, settle=1.6)                            # the Editor lives here
     d.beat("switch-back-to-desktop-1")
@@ -526,10 +877,6 @@ def s02_wm(d):
     d.desk(2, settle=0.8)
     d.close_all()                                    # the moved editor
     d.desk(1, settle=0.8)
-
-
-POP_TO_DESK2 = (410, 174)      # "To desktop 2" in the title-bar context menu,
-                               # popup anchored by rclick at (w/2+40, 8)
 
 
 def s03_themes(d):
@@ -564,29 +911,27 @@ def s03_themes(d):
     d.ctrl("w", settle=1.0)
 
 
-# The shared Open dialog (uofile.c), coordinates measured off d3_* probe
-# shots (640x400, default font). The dialog's Look-in starts on volume 0
-# (RAM: README.TXT row 0, then the s04_pre pushes); the list mirrors the
-# selected row into the name field, and arrow keys never reach the list in
-# UnoWord or UnoCalc - so the drive there is: click the row, click Open.
-# UnoShow's key bridge DOES map arrows, which is what the ESP walk rides.
-UOF_ROW0 = (250, 112)          # first file-list row (click centre)
-UOF_OPEN = (427, 228)          # the Open button
-UOF_ROW_PITCH = 18             # verified: +18 hits row 1, +36 row 2
+# The office apps' own chrome is WINDOW-relative and every one of these
+# windows opens at a hardcoded origin (UnoWord/UnoCalc 24,20; UnoShow 20,16),
+# so these literals hold at any resolution. The shared Open DIALOG is
+# screen-centred and does NOT - see Demo.dlg(), which derives it.
 UOF_MENU_FILE = (54, 67)       # "File" on the uochrome menu bar
 UOF_MENU_OPEN = (70, 109)      # its "Open..." row
-UOF_COMBO_ARROW = (383, 87)    # the Look-in combo's drop arrow
-UOF_COMBO_DOCS = (300, 143)    # popup row 2: the DOCS volume (disk B; row 0
-                               # RAM, row 1 NO NAME/ESP, row 2 DOCS)
-UOF_NAME = (300, 228)          # the File-name edit field
 UOCALC_A2 = (112, 201)         # grid cell A2 (holds =(1+2)*3)
-UOSHOW_TITLE = (320, 195)      # the deck's "Click to add title" placeholder
+UOSHOW_TITLE_F = (0.505, 0.417)  # the "Click to add title" placeholder, as a
+                                 # FRACTION of the slide page (measured at
+                                 # 640x400, resolved live by slide_point)
 
 
 def uof_open_row(d, row):
-    """Click file-list row `row` in the shared Open dialog, then Open."""
-    d.click(UOF_ROW0[0], UOF_ROW0[1] + row * UOF_ROW_PITCH, settle=0.7)
-    d.click(*UOF_OPEN, settle=2.5)
+    """Click file-list row `row` in the shared Open dialog, then Open.
+
+    The list mirrors the selected row into the File-name field, and arrow keys
+    never reach the list in UnoWord/UnoCalc, so clicking the row is the only
+    way in. Coordinates come from d.dlg(), which re-derives the dialog origin
+    for the live resolution."""
+    d.click(*d.dlg("row0", row), settle=0.7)
+    d.click(*d.dlg("open"), settle=2.5)
 
 
 def s04_pre(d):
@@ -655,7 +1000,10 @@ def s04_office(d):
     d.beat("author-a-titled-slide")
     # first click selects the placeholder, a second on the SAME one enters
     # text edit (apps/uoshow.c: hit==g_sel -> g_editing=1), then typing lands.
-    d.dblclick(*UOSHOW_TITLE, settle=0.8)            # "Click to add title"
+    # The page is located on a live grab (UOSHOW_TITLE_F is its fraction, not
+    # a pixel) because UnoShow's window - and so the page - scales with the
+    # framebuffer.
+    d.dblclick(*d.slide_point(*UOSHOW_TITLE_F), settle=0.8)
     d.text("UnoDOS runs UnoShow.", settle=0.06)
     time.sleep(1.5)
     d.beat("close")
@@ -720,10 +1068,9 @@ def s07_studio(d):
     """Studio: File > New, type a small UnoC app, ^B build, ^R run, close."""
     d.beat("launch-studio")
     d.launch("studio", settle=3.0)
-    # File > New via the in-window menu bar (measured in dev; Studio opens at
-    # (24,20), menu bar directly under the title bar, "File" first).
     # File > New via the in-window menu bar (measured off d4_studio_filemenu:
-    # Studio opens at (24,20), "File" title at (54,48), "New" row at (60,68)).
+    # Studio opens at a FIXED (24,20), so "File" at (54,48) and its "New" row
+    # at (60,68) are window-relative and hold at any resolution).
     d.beat("file-new")
     d.click(*STUDIO_FILE_XY, settle=0.8)
     d.click(*STUDIO_NEW_XY, settle=0.9)
@@ -755,15 +1102,19 @@ def s08_pre(d):
     directory parse + first raycast frame - slow under TCG - are not dead air
     on camera. Returns True to record if the Duum window came up."""
     if not getattr(d, "wad_staged", None):
-        print("  s08: SKIP - no WAD in pc64/wads, scene no-ops by design")
+        print("  s08: SKIP - no WAD (pc64/wads on QEMU, the stick's root on "
+              "metal), scene no-ops by design")
         return False
     # A PYAPP has no Start-menu row (it is a document PYRT opens), and the
     # reliable launch is the exact call Files makes on a double-click:
     # uno.run_app(vol, "APPS\\DUUM.UNO"), which pc64_shell_run_user runs on
-    # PYRT. The ESP is the boot volume; find it rather than assume an index.
-    espv = next((v["vol"] for v in d.link.vols()
-                 if v["kind"] == 1 and v["name"].strip() in ("NO NAME", "")), 1)
-    d._esp_vol = espv
+    # PYRT. On metal probe_metal_assets() already found the volume; on QEMU
+    # find it rather than assume an index.
+    espv = getattr(d, "_esp_vol", None)
+    if espv is None:
+        espv = next((v["vol"] for v in d.link.vols()
+                     if v["kind"] == 1 and v["name"].strip() in ("NO NAME", "")), 1)
+        d._esp_vol = espv
     d.link.eval('import uno; uno.run_app(%d, "APPS\\\\DUUM.UNO")' % espv,
                 timeout=30)
     for _ in range(30):                              # WAD parse + first frame
@@ -895,6 +1246,7 @@ SCENES = [
 
 
 def main(argv):
+    global MODE, METAL_PORT, STREAM_HOST
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--scene", action="append", default=[],
                     help="run one scene (repeatable)")
@@ -902,6 +1254,18 @@ def main(argv):
     ap.add_argument("--list", action="store_true")
     ap.add_argument("--with-net", action="store_true",
                     help="(stub) networking beats are metal-only; logged+skipped")
+    ap.add_argument("--metal", nargs="?", const=METAL_PORT, type=int,
+                    metavar="PORT",
+                    help="record REAL HARDWARE: do not boot or stage anything, "
+                         "just listen on PORT (default %d) for the box to dial "
+                         "in. Run this on the host its DEBUG.CFG names."
+                         % METAL_PORT)
+    ap.add_argument("--stream-host", metavar="IP",
+                    help="address the box should push video to (default: this "
+                         "host's address on the path to the box)")
+    ap.add_argument("--min-width", type=int, default=1024,
+                    help="raise the desktop to at least this width at session "
+                         "start (0 = leave the resolution alone)")
     a = ap.parse_args(argv)
     names = [n for n, _ in SCENES]
     if a.list:
@@ -914,16 +1278,37 @@ def main(argv):
     if bad:
         ap.error("unknown scene(s) %s (have: %s)" % (bad, " ".join(names)))
 
+    if a.metal:
+        MODE, METAL_PORT = "metal", a.metal
+    if a.stream_host:
+        STREAM_HOST = a.stream_host
+    if MODE == "qemu" and RQ is None:
+        ap.error("remote_qemu is unavailable (no QEMU/OVMF on this host?) - "
+                 "this host can only drive --metal")
+
     d = Demo()
-    d.office_staged = stage_office()
-    d.wad_staged = stage_wad()
-    d.vm_staged = stage_vm()
-    print("staged: office=%s wad=%s vm=%s" %
-          (d.office_staged, d.wad_staged, d.vm_staged))
+    if MODE == "qemu":
+        d.office_staged = stage_office()
+        d.wad_staged = stage_wad()
+        d.vm_staged = stage_vm()
+        print("staged: office=%s wad=%s vm=%s" %
+              (d.office_staged, d.wad_staged, d.vm_staged))
+    else:
+        # Nothing is staged on metal: the stick already carries DOOM1.WAD,
+        # DOCS\ and the rest, and the office documents are pushed to the RAM
+        # volume at runtime from ./corpus. The guards below are therefore
+        # about what is REACHABLE, re-probed after the box dials in.
+        d.office_staged = [n for s, n in OFFICE
+                           if os.path.exists(os.path.join(CORPUS, s))]
+        d.vm_staged = False                  # the appliance is a QEMU-only scene
     results = []
     t0 = time.time()
     try:
         d.boot()
+        if MODE == "metal":
+            d.probe_metal_assets()
+        if a.min_width:
+            d.raise_resolution(a.min_width)
         for i, (wname, (pre, fn)) in enumerate(SCENES):
             if wname not in want:
                 continue
