@@ -21,3 +21,7 @@ wads/*.zip
 # local Wi-Fi credentials / debug config (never commit - hold ssid+psk)
 DEBUG.CFG
 wifi.creds
+
+# third-party Winamp skins staged for demo capture - never commit
+*.wsz
+*.WSZ
