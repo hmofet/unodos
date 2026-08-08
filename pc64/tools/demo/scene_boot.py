@@ -18,6 +18,28 @@ pretend otherwise: the concat list it hands ffmpeg gives every frame its REAL
 measured duration, so the mp4 runs at the speed the boot actually happened.
 The achieved rate is measured and written into out/s01.stats.json.
 
+HOW IT BOOTS STRAIGHT INTO A NATIVE 1280x800 DESKTOP. The whole cut is one
+resolution, and this scene reaches it before a single pixel is drawn rather
+than by being scaled afterwards. uefi_main.c never calls SetMode: it takes the
+GOP mode the firmware left and gives the desktop HALF of it
+(`apply_desktop(gModeW / 2, gModeH / 2)`, uefi_main.c:641), presented back up
+to the panel at a whole-number zoom. OVMF's own default panel is 1280x800,
+which is exactly why the first cut of this scene was a 640x400 desktop.
+
+So the panel is doubled instead, with an EDID QEMU will honour (see
+demo_common.vga_args): `-vga none -device VGA,edid=on,xres=2560,yres=1600,
+vgamem_mb=64`. OVMF adopts the EDID's preferred mode, the halving lands on
+1280x800, and the desktop draws at 1280x800 for real - confirmed on a booted
+image, where the Control Panel's own Display tab reads "1280x800".
+
+The capture is therefore 2560x1600 PPMs of a panel that is an exact integer 2x
+of the desktop, and the encode's 2:1 `area` step recovers the desktop's own
+pixels EXACTLY - not approximately: area-halving a captured frame and
+nearest-doubling it back is byte-identical to the original. `--verify-doubling`
+checks that 2x2 property on the real captured frames and records it in
+out/s01.stats.json, so the "nothing was upscaled" claim is measured, not
+asserted. `--gop 0x0` records the old 640x400 desktop instead.
+
 WHICH BUILD, AND WHY IT IS NOT THE DEBUG ONE. `nohud` (pc64/DEBUG.md,
 pc64_uui.c:6407) takes the red perf HUD and the stress status line out of the
 DESKTOP, and the DEBUG.CFG below sets it - but it does not touch the boot
@@ -36,8 +58,9 @@ import argparse, json, os, shutil, subprocess, sys, time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from demo_common import (OUT, PROBE, ESP, VID_W, VID_H, FPS, OVMF_CODE,      # noqa: E402
+from demo_common import (PROBE, ESP, VID_W, VID_H, OVMF_CODE,               # noqa: E402
                          OVMF_VARS, S01_QMP, S01_DISK, S01_FAT, S01_VARS,
+                         GOP_W, GOP_H, vga_args, ppm_read,
                          Qmp, Beats, build_fat_disk, screendump, frame_stats,
                          sig_diff, encode_concat, probe, clean_outputs, sh,
                          send_key)
@@ -59,7 +82,7 @@ DEBUG_CFG = ("nohud\n"          # no red perf HUD / stress status line: filmable
 PROD_ESP = os.path.expanduser("~/unodos-s01prod/pc64/build/esp")
 
 
-def boot(disk, qmp_sock):
+def boot(disk, qmp_sock, gop=(GOP_W, GOP_H)):
     sh(["cp", OVMF_VARS, S01_VARS])
     for p in (qmp_sock,):
         if os.path.exists(p):
@@ -72,10 +95,23 @@ def boot(disk, qmp_sock):
         # the same NIC the rest of the cut boots with, so the boot this films
         # is the boot those scenes started from
         "-netdev", "user,id=n0", "-device", "e1000,netdev=n0",
+    ] + vga_args(*gop) + [
         "-display", "none",
         "-qmp", "unix:%s,server,nowait" % qmp_sock,
     ]
     return subprocess.Popen(cmd, stderr=subprocess.DEVNULL)
+
+
+def stats_step(w):
+    """Subsample stride for frame_stats, held at a constant COST per frame.
+
+    frame_stats is pure Python, so its price is the number of samples, not the
+    size of the picture. A stride tuned at 640 wide costs 16x as much on the
+    2560-wide panel this scene now captures - enough to pace the capture loop
+    itself instead of the 30 fps it is asked for. Scaling the stride with the
+    width keeps ~180 columns a frame whatever the panel is.
+    """
+    return max(7, int(round(w / 183.0)))
 
 
 def wait_desktop(q, probe_ppm, max_secs=90.0, quiet_secs=2.0, big=0.20):
@@ -93,7 +129,7 @@ def wait_desktop(q, probe_ppm, max_secs=90.0, quiet_secs=2.0, big=0.20):
             time.sleep(0.2)
             continue
         w, h, px, t = r
-        mean, sig = frame_stats(px, w, h)
+        mean, sig = frame_stats(px, w, h, step=stats_step(w))
         d = sig_diff(prev, sig)
         prev = sig
         if mean > 8 and d > big:
@@ -109,7 +145,7 @@ def wait_desktop(q, probe_ppm, max_secs=90.0, quiet_secs=2.0, big=0.20):
     return None
 
 
-def seed_used_session(disk, qmp_sock, verbose=True):
+def seed_used_session(disk, qmp_sock, gop=(GOP_W, GOP_H), verbose=True):
     """FIRST BOOT, not recorded: use the machine once, the way a person would,
     so that the SECOND boot restores a bare desktop.
 
@@ -133,7 +169,7 @@ def seed_used_session(disk, qmp_sock, verbose=True):
     Returns True if the desktop went bare before the reboot.
     """
     probe_ppm = "/tmp/demo_s01_seed.ppm"
-    qemu = boot(disk, qmp_sock)
+    qemu = boot(disk, qmp_sock, gop=gop)
     try:
         q = Qmp(qmp_sock)
         if wait_desktop(q, probe_ppm) is None:
@@ -196,8 +232,8 @@ def capture(q, frames_dir, max_secs, quiet_secs, verbose=True, big=0.20,
     PACING. Unpaced, this loop sustained ~90 screendumps/second on this box
     once the PPM sequence was moved off the 9p /mnt/c mount (the first take,
     writing frames into out/, managed 3.4). Ninety is well above both the
-    guest's own refresh and the 30 fps container, and each 1280x800 PPM is
-    3 MB, so the loop is paced to `target_fps` instead: still every frame the
+    guest's own refresh and the 30 fps container, and each 2560x1600 PPM is
+    12 MB, so the loop is paced to `target_fps` instead: still every frame the
     output can carry, at a third of the disk. The measured rate goes in
     out/s01.stats.json either way.
     """
@@ -219,7 +255,7 @@ def capture(q, frames_dir, max_secs, quiet_secs, verbose=True, big=0.20,
             time.sleep(0.2)
             continue
         w, h, px, t = r
-        mean, sig = frame_stats(px, w, h)
+        mean, sig = frame_stats(px, w, h, step=stats_step(w))
         out.append((path, w, h, t, mean, sig))
         d = sig_diff(prev_sig, sig)
         prev_sig = sig
@@ -265,7 +301,6 @@ def mark_beats(frames, beats):
 
     def corner_navy(path, w):
         # re-read the pixel rather than trusting the subsampled signature
-        from demo_common import ppm_read
         r = ppm_read(path)
         if not r:
             return False
@@ -333,6 +368,42 @@ def mark_beats(frames, beats):
     return got
 
 
+def doubling_ratio(path, step=3):
+    """Fraction of 2x2 blocks in a captured PPM whose four pixels are equal.
+
+    This is the measurement behind "nothing is upscaled". The desktop is
+    uno_fb_w x uno_fb_h and the panel is an integer zoom of it, so if the panel
+    is exactly twice the desktop then every 2x2 block of the CAPTURE is four
+    copies of one desktop pixel - and the encode's 2:1 area step, which
+    averages that block, gives that pixel back unchanged. A ratio of 1.0 is
+    proof the frame carries a native 1280x800 desktop; a ratio near 0.25 (the
+    chance level for photographic content) would mean the zoom is not 2 and the
+    downscale is really resampling.
+
+    Sampled every `step` blocks in each axis - the property is structural, so a
+    tenth of the blocks settles it and the whole point is that this stays cheap
+    enough to run on real frames rather than on one hand-picked one.
+    """
+    r = ppm_read(path)
+    if not r:
+        return None
+    w, h, px = r
+    if w % 2 or h % 2:
+        return 0.0
+    same = tot = 0
+    for by in range(0, h // 2, step):
+        r0 = (2 * by) * w * 3
+        r1 = r0 + w * 3
+        for bx in range(0, w // 2, step):
+            o = bx * 6
+            a, b = r0 + o, r1 + o
+            tot += 1
+            if (px[a:a + 3] == px[a + 3:a + 6] == px[b:b + 3]
+                    == px[b + 3:b + 6]):
+                same += 1
+    return (same / float(tot)) if tot else None
+
+
 def build_video(frames, out_mp4, head_black_secs=1.0, tail_pad=1.0):
     """concat-demuxer list with REAL per-frame durations -> a 30 fps mp4.
 
@@ -380,6 +451,19 @@ def main(argv):
     ap.add_argument("--suffix", default="",
                     help="write s01<suffix>.* instead of s01.* (for an "
                          "alternate take)")
+    ap.add_argument("--out-dir", metavar="DIR", default="out",
+                    help="where the artifacts land, absolute or relative to "
+                         "tools/demo (default out)")
+    ap.add_argument("--gop", default="%dx%d" % (GOP_W, GOP_H),
+                    help="panel size to force on QEMU's VGA via EDID. The "
+                         "DESKTOP is half of it (uefi_main.c:641), so the "
+                         "default %dx%d is how this scene boots natively at "
+                         "%dx%d. '0x0' keeps QEMU's own panel, and the "
+                         "640x400 desktop that comes with it."
+                         % (GOP_W, GOP_H, VID_W, VID_H))
+    ap.add_argument("--no-verify-doubling", dest="verify_doubling",
+                    action="store_false",
+                    help="skip the 2x2-block check on the captured frames")
     ap.add_argument("--session", choices=("used", "fresh"), default="used",
                     help="'used': an unrecorded first boot moves the "
                          "Control-Panel window to desktop 2 (Alt+Ctrl+F2, "
@@ -401,14 +485,28 @@ def main(argv):
         efi = os.path.join(esp, "EFI", "BOOT", "BOOTX64.EFI")
         build_id = "UNO_DEBUG=0 (no BUILD.TXT) | BOOTX64.EFI %d bytes" % (
             os.path.getsize(efi) if os.path.exists(efi) else -1)
+    try:
+        gop = tuple(int(v) for v in a.gop.lower().split("x"))
+        if len(gop) != 2:
+            raise ValueError
+    except ValueError:
+        raise SystemExit("--gop wants WxH (e.g. 2560x1600, or 0x0)")
     print("esp: %s\nbuild: %s" % (esp, build_id))
-    os.makedirs(OUT, exist_ok=True)
+    if gop[0] and gop[1]:
+        print("panel: %dx%d forced by EDID -> desktop %dx%d"
+              % (gop[0], gop[1], gop[0] // 2, gop[1] // 2))
+    else:
+        print("panel: QEMU's own (desktop = half of whatever OVMF sets)")
+    out_dir = a.out_dir if os.path.isabs(a.out_dir) \
+        else os.path.join(HERE, a.out_dir)
+    os.makedirs(out_dir, exist_ok=True)
     os.makedirs(PROBE, exist_ok=True)
-    base = os.path.join(OUT, "s01" + a.suffix)
+    base = os.path.join(out_dir, "s01" + a.suffix)
     clean_outputs(base)
     # The PPM sequence lands on the WSL-native filesystem, NOT in out/. A
-    # 1280x800 PPM is 3 MB and out/ is on /mnt/c: writing the sequence through
-    # the 9p mount, not screendump itself, was the first capture's bottleneck.
+    # 2560x1600 PPM is 12 MB and out/ is on /mnt/c: writing the sequence
+    # through the 9p mount, not screendump itself, was the first capture's
+    # bottleneck (and that was at a quarter of these bytes).
     frames_dir = "/tmp/demo_s01_frames"
 
     print("staging %s" % S01_DISK)
@@ -416,7 +514,7 @@ def main(argv):
     seeded = False
     if a.session == "used":
         print("seeding a used session (unrecorded first boot)")
-        seeded = seed_used_session(S01_DISK, S01_QMP)
+        seeded = seed_used_session(S01_DISK, S01_QMP, gop=gop)
         # The disk is NOT rebuilt after this: the SHELL.CFG the guest just
         # wrote is the whole point, and re-authoring the image would erase it.
 
@@ -425,7 +523,7 @@ def main(argv):
     qemu = None
     t_boot = time.time()
     try:
-        qemu = boot(S01_DISK, S01_QMP)
+        qemu = boot(S01_DISK, S01_QMP, gop=gop)
         q = Qmp(S01_QMP)
         print("qemu up, capturing")
         frames = capture(q, frames_dir, a.max_secs, a.quiet_secs,
@@ -455,12 +553,25 @@ def main(argv):
     beats.close()
 
     kept, listfile = build_video(frames, base + ".mp4")
-    # the final canvas, as a PNG, like stream_recv leaves for the other scenes
+    # The final canvas, as a PNG, like stream_recv leaves for the other scenes -
+    # and through the SAME area step as the video, so the sidecar is the
+    # desktop's own pixels rather than the doubled panel's.
     subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", kept[-1][0],
+                    "-vf", "scale=%d:%d:flags=area" % (VID_W, VID_H),
                     base + ".png"])
 
     info = probe(base + ".mp4")
     sizes = sorted(set((w, h) for _, w, h, _, _, _ in frames))
+    # "nothing was upscaled", measured on the frames that were actually kept:
+    # the last one, and one from the middle of the desktop stretch.
+    dbl = {}
+    if a.verify_doubling:
+        for tag, fr in (("last", kept[-1]), ("mid", kept[len(kept) // 2])):
+            r = doubling_ratio(fr[0])
+            if r is not None:
+                dbl[tag] = round(r, 4)
+        print("2x2-block ratio (1.0 = the panel is an exact 2x of the desktop, "
+              "so the 2:1 downscale is lossless): %r" % (dbl,))
     st = {"scene": "s01" + a.suffix, "esp": esp, "build": build_id,
           "session": a.session, "session_seeded": seeded,
           "shell_cfg": read_shell_cfg(S01_DISK).replace("\r\n", " ").strip(),
@@ -469,6 +580,10 @@ def main(argv):
           "capture_seconds": round(t_last - t_first, 2),
           "capture_fps": round(fps_real, 2),
           "screendump_sizes": ["%dx%d" % s for s in sizes],
+          "panel": ("%dx%d" % gop) if gop[0] else "qemu-default",
+          "desktop": ("%dx%d" % (gop[0] // 2, gop[1] // 2)) if gop[0] else None,
+          "panel_is_2x_desktop": dbl or None,
+          "downscale": "area 2:1 (lossless at an integer 2x - see demo_common)",
           "boot_to_first_frame": round(t_first - t_boot, 2),
           # relative to the first KEPT frame, i.e. to t=0 of the mp4 - which is
           # what an editor needs. The .beats.jsonl sidecar keeps absolute wall
