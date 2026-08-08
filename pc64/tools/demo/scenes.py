@@ -366,10 +366,14 @@ class Demo(object):
             if v["kind"] == 0:                  # the RAM disk carries nothing
                 continue
             try:
+                # ONE LINE. The `py` verb is a single-line exec: a script with
+                # an embedded newline returns EMPTY for paths that read
+                # perfectly, so a multi-line probe reported "no assets" on a
+                # stick that carries all of them and silently skipped Duum.
                 out = self.link.eval(
-                    'import uno\nprint(uno.size(%d,"DOOM1.WAD"), '
-                    'uno.size(%d,"DOCS\\\\FMT.DOC"))' % (v["vol"], v["vol"]),
-                    timeout=25)
+                    'print(__import__("uno").size(%d,"DOOM1.WAD"),'
+                    '__import__("uno").size(%d,"DOCS\\\\FMT.DOC"))'
+                    % (v["vol"], v["vol"]), timeout=25)
                 wad, doc = (int(t) for t in out[0].split())
             except Exception:                   # noqa: BLE001
                 continue
@@ -580,6 +584,13 @@ class Demo(object):
         SILENTLY - see raise_resolution's note. The button is found and
         clicked instead, which needs no assumption about focus at all."""
         w, h, rgba, sc = self.grab(1)
+        # Keep the exact frame the decision was made on. When this locator
+        # picks the wrong accent-filled control the mode silently reverts and
+        # there is otherwise nothing to look at afterwards.
+        try:
+            write_png(os.path.join(PROBE, "keep_probe.png"), w, h, rgba)
+        except Exception:                        # noqa: BLE001
+            pass
         cr, cg, cb = self.ACCENT
         rows = {}
         for y in range(max(0, h - 40)):          # taskbar excluded
@@ -601,7 +612,11 @@ class Demo(object):
                 groups.append([y])
         g = groups[-1]                           # the lowest cluster = Keep
         xs = [x for y in g for x in rows[y]]
-        return ((min(xs) + max(xs)) // 2 * sc, (g[0] + g[-1]) // 2 * sc)
+        pt = ((min(xs) + max(xs)) // 2 * sc, (g[0] + g[-1]) // 2 * sc)
+        if self.verbose:
+            print("  keep-probe: %d accent cluster(s), chose y=%d-%d x=%d-%d "
+                  "-> %s" % (len(groups), g[0], g[-1], min(xs), max(xs), pt))
+        return pt
 
     def _res_confirm(self, keep):
         """Confirm (Keep) or reject (Revert now) the mode on probation, by
