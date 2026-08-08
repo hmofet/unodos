@@ -236,6 +236,20 @@ user granted at arm time (see the table above); the reply on refusal is
 | `launch <n\|id>` | launch app `n`, or the app with that id | `ok launched` / `err no-app` |
 | `rescan` | re-read `APPS\` and register anything new (DRIVE) | `ok <n>` |
 | `close` | close the top window | `ok` |
+| `skin` / `skin status` | what UnoAmp is currently wearing | `ok skinned vol=<v> <FILE.WSZ>` / `ok built-in (no skin loaded)` |
+| `skin list` | every `.wsz` on every volume ROOT, as `vol:NAME` | `ok 0:BASE291.WSZ …` / `ok (no .wsz on any volume root)` |
+| `skin load <vol> <file.wsz>` | wear that skin **now** and repaint (`skin load <file.wsz>` = volume 0). DRIVE | `ok skinned vol=<v> <FILE.WSZ>` / `err refused (…)` |
+| `skin scan` | re-run UnoAmp's boot-time scan and take the first loadable skin - the one that reaches a `.wsz` copied in *after* the player opened | `ok skinned …` / `err no loadable .wsz on any volume root` |
+| `skin off` | back to the built-in look | `ok built-in look` |
+
+**`skin` re-skins a RUNNING player.** UnoAmp used to pick a skin exactly once
+per boot, so a skin change could not be seen without rebooting. These five
+subcommands are a pass-through to `unoamp_skin_cmd()` (`unoamp_app.c`), which
+repaints, so the player re-skins on screen in one command. They work on a
+PRODUCTION build - the gate, not an `#ifdef`, is what restricts them. Safe with
+no player open. Note that a refused `load` leaves the **built-in** look rather
+than the previous skin: the skin arena is reset before the new file is parsed,
+so by the time a load can fail the old sheets are already gone.
 
 **Launch by id, not by number.** The app set is discovered from `APPS\` at boot
 (`docs/APP-REGISTRY-PLAN.md`), so a slot index is this boot's ordering of
