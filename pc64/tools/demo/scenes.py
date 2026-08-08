@@ -123,6 +123,18 @@ def stage_wad():
     return None
 
 
+ASSETS = os.path.join(HERE, "assets")
+
+# The private key s13 logs in with. NOT in the repo and not committed: it is a
+# real credential whose public half sits in devbuntu's authorized_keys. Point
+# UNO_DEMO_SSH_KEY at it, or drop it at assets/ssh_demo_key (gitignored).
+# It MUST have no passphrase - see sshstore.parse_openssh_ed25519.
+SSH_KEY = os.environ.get("UNO_DEMO_SSH_KEY",
+                         os.path.join(ASSETS, "ssh_demo_key"))
+SSH_HOST, SSH_PORT, SSH_USER = "192.168.2.100", 22, "arin"
+SSH_SESS, SSH_KEYNAME = "devbuntu", "demo"
+
+
 def stage_sdk():
     """sdk/SAMPLE.C -> the ESP ROOT, so s07 can OPEN a shipped, known-good
     source file instead of typing a program in.
@@ -166,8 +178,9 @@ def stage_vm():
     return True
 
 
-# s09 needs a HYPERVISOR-CAPABLE boot, which the shared harness's TCG boot is
-# not: TCG silently drops +vmx (every hv_test.py TCG row ends "eligible: no"),
+# s14 (appliances) needs a HYPERVISOR-CAPABLE boot, which the shared harness's
+# TCG boot is not: TCG silently drops +vmx (every hv_test.py TCG row ends
+# "eligible: no"),
 # unovirt's carve floor is 1800 MB (so -m 512 is a guaranteed refusal), and
 # eligibility also demands a UNO_DETACH=1 build. The unovirt harnesses all use
 # `-m 4096 -cpu host -enable-kvm` (hv_remote.py / hv_test.py). Opt in with
@@ -383,6 +396,8 @@ class Demo(object):
         DOOM1.WAD, BASE291.WSZ, FLYHIGH.MP3 and DOCS\\ at the volume root."""
         self.wad_staged = None
         self._esp_vol = None
+        self.py_used = True                     # this probe IS `py` traffic -
+                                                # see the note above pyeval()
         for v in self.link.vols(timeout=15):
             if v["kind"] == 0:                  # the RAM disk carries nothing
                 continue
@@ -1256,13 +1271,78 @@ STUDIO_PROJ_DY = 16
 
 # The live edit. A COMMENT: it changes the file visibly, it is the one edit
 # that cannot break the build, and every character of it renders (a comment is
-# one highlighter span). Kept to one line so the scene spends its time on the
-# build, not on typing.
-STUDIO_EDIT = "/* a live edit, compiled on the box */\n"
+# one highlighter span). Kept short so the scene spends its time on the build,
+# not on typing - each character is a URC round trip.
+STUDIO_EDIT_C = "/* a live edit, compiled on the box */\n"
+STUDIO_EDIT_PY = "# the same IDE, the other language\n"
+
+
+# ---------------------------------------------------------------------------
+# THE URC `py` VERB POISONS STUDIO'S Ctrl-R. Read this before adding a scene.
+# ---------------------------------------------------------------------------
+# Measured 2026-08-08, three boots, and it is the single worst failure in this
+# file because it is TOTALLY SILENT: the machine stops answering URC, stops
+# sending video, and never comes back. The beat list runs on to the end against
+# a dead box and the recording just stops mid-scene.
+#
+#   `py` (e.g. uno.size) ................. then Studio ^R on a .PY  -> WEDGED
+#   nothing ............................... then Studio ^R on a .PY  -> fine
+#
+# It is not the app, the file, or the .UNO name: the identical ^R on the
+# identical file works perfectly on a boot where the `py` verb was never used.
+# What differs is who initialised PYRT's MicroPython VM first - pyrt_ensure()
+# runs py_init() once and py_init records a stack top (pyrt_set_stack_top,
+# apps/pyrt.c) on THAT call path. Entered later from the shell's key dispatch,
+# which is a completely different stack, it never returns.
+#
+# Four workarounds were tried and all four still wedged: opening and closing a
+# tiny PYAPP first; leaving one open on another desktop; leaving one open and
+# DRAWN on the current desktop; and pre-packing the very same .UNO on the host
+# and run_app-ing it first. Only "do not touch `py` first" works.
+#
+# THE RULE: a scene that presses Ctrl-R must run before any `py` traffic in the
+# session, and its own `pre` must not use `py` either. `pyeval` below is the
+# one door to the verb, so the flag it sets is complete, and s07/s09 shout if
+# the rule has already been broken. Filed for the Studio/PYRT lane in
+# pc64/UNOAUTOMATE-REQUESTS.md.
+def pyeval(d, src, **k):
+    """The ONE way this file reaches the URC `py` verb - see above."""
+    d.py_used = True
+    return d.link.eval(src, **k)
+
+
+def needs_ctrl_r(d, scene):
+    if getattr(d, "py_used", False):
+        print("  %s: WARNING - the `py` verb has already run this session, so "
+              "Ctrl-R will wedge the box. Record this scene before anything "
+              "that uses `py` (s08/s13/s14)." % scene)
+
+
+def esp_vol(d):
+    """The volume the staged ESP tree mounts as, found once and cached. On
+    metal probe_metal_assets() has already set it."""
+    v = getattr(d, "_esp_vol", None)
+    if v is None:
+        v = next((x["vol"] for x in d.link.vols()
+                  if x["kind"] == 1 and x["name"].strip() in ("NO NAME", "")), 1)
+        d._esp_vol = v
+    return v
+
+
+def studio_row_of(d, name):
+    """Which Project-pane row `name` is on.
+
+    The pane lists ONE volume's root in CREATION order (refresh_project,
+    studio.c), the OS seeds README.TXT at index 0, and s04_pre/s07_pre push
+    after it - so the row is a function of what has actually been pushed, in
+    order, which `d.ram_pushed` records. Never a literal."""
+    ram = ["README.TXT"] + list(getattr(d, "ram_pushed", []))
+    return ram.index(name)
 
 
 def s07_pre(d):
-    """Push the SDK's SAMPLE.C onto the RAM volume, off camera.
+    """Push the SDK's SAMPLE.C **and SAMPLE.PY** onto the RAM volume, off
+    camera - the two halves of the same bouncing-ball app, one per language.
 
     WHY THE RAM VOLUME AND NOT THE ESP. Studio's Project pane lists exactly
     one volume - `proj_vol = ed_vol`, and at first open ed_vol is -1, so
@@ -1273,63 +1353,114 @@ def s07_pre(d):
     Order matters: the pane lists in creation order, README.TXT is seeded by
     the OS at index 0 and s04_pre pushes ahead of us, so the row index is
     computed from what has actually been pushed rather than assumed."""
-    ram = ["README.TXT"] + list(getattr(d, "ram_pushed", []))
-    src = os.path.join(PC64, "sdk", "SAMPLE.C")
-    if not os.path.exists(src):
-        print("  s07: SKIP - pc64/sdk/SAMPLE.C is missing")
-        return False
-    d.link.push_file(0, "SAMPLE.C", src)
-    ram.append("SAMPLE.C")
-    d.ram_pushed = ram[1:]
-    d.studio_row = len(ram) - 1
-    n = int(d.link.eval('print(__import__("uno").size(0,"SAMPLE.C"))',
-                        timeout=25)[0])
-    if n <= 0:
-        print("  s07: SKIP - SAMPLE.C did not land on the RAM volume")
-        return False
-    print("  s07: SAMPLE.C on the RAM volume (%d bytes), Project row %d"
-          % (n, d.studio_row))
+    needs_ctrl_r(d, "s07")
+    pushed = list(getattr(d, "ram_pushed", []))
+    for name in ("SAMPLE.C", "SAMPLE.PY"):
+        src = os.path.join(PC64, "sdk", name)
+        if not os.path.exists(src):
+            print("  s07: SKIP - pc64/sdk/%s is missing" % name)
+            return False
+        # push_file finalises with a READ-BACK VERIFY on the device and only
+        # then reports "verified", so its return value is the landing check.
+        # It used to be a `py` call to uno.size - which is exactly the traffic
+        # that makes this scene's Ctrl-R kill the machine (see above).
+        if not d.link.push_file(0, name, src):
+            print("  s07: SKIP - %s did not verify on the RAM volume" % name)
+            return False
+        pushed.append(name)
+    d.ram_pushed = pushed
+    d.studio_row = studio_row_of(d, "SAMPLE.C")
+    d.studio_py_row = studio_row_of(d, "SAMPLE.PY")
+    print("  s07: SAMPLE.C row %d, SAMPLE.PY row %d"
+          % (d.studio_row, d.studio_py_row))
     return True
 
 
+def studio_open_row(d, row, hold=1.2):
+    """Click Project row `row`, then Enter to open it.
+
+    A row that is ALREADY selected activates on the FIRST click
+    (studio.c: `if (row == proj_sel) proj_activate(); else proj_sel = row`)
+    and proj_activate() sets g_focus = PANE_EDIT - so clicking row 0, which is
+    pre-selected, opens README.TXT and every later key goes to the editor.
+    Clicking a DIFFERENT row only selects it, and Enter (handled while
+    g_focus == PANE_PROJ) is what opens it. Never call this on row 0."""
+    d.click(STUDIO_PROJ_X, STUDIO_PROJ_Y0 + row * STUDIO_PROJ_DY, settle=1.1)
+    d.key(13, settle=1.6)
+    time.sleep(hold)
+
+
 def s07_studio(d):
-    """Studio: open the SDK's SAMPLE.C, edit it, ^S, ^B build, ^R run - and
-    the app it just compiled opens and animates.
+    """Studio: build and run the SAME app twice, once from UnoC and once from
+    Python - open SAMPLE.C, edit it, ^S, ^B, ^R and the compiled app bounces;
+    then open SAMPLE.PY, edit that, ^S, ^B, ^R and the Python one bounces.
+
+    C AND PYTHON ARE BOTH FIRST-CLASS here and one language alone understates
+    it, which is why this scene runs the whole loop twice. The two halves are
+    genuinely different code paths in studio.c's do_build(): the C file goes
+    through `ucc_compile` and reports "Built SAMPLE.UNO <summary>", the Python
+    one through `studio_py_pack` and reports "Packed SAMPLE.UNO (Python - runs
+    on PYRT.UNO)". Both write the same .UNO name (uno_name() cuts at the dot),
+    which is fine because the second overwrites the first AFTER the first has
+    been run and closed - and pc64_shell_run_user re-peeks the module flags, so
+    the PYAPP bit routes it to PYRT rather than the classic loader.
 
     REWRITTEN 2026-08-08, because the old take shipped BROKEN. It typed a
     whole UnoC program in after File > New; the File > New click missed at
     1280x800 (the dropdown row is laid out from the mono line height, not from
     the 640x400 literal it was measured at), so the C source went into the
     SAMPLE.PY that Studio greets with, packed as a PYTHON app, and ended on
-    "Run failed" with a SyntaxError. Nothing in the beat log said so.
-
-    Two rules came out of that and both are encoded here:
-      - OPEN a shipped, known-good source file rather than typing a program
-        through the input path. The only edit typed on camera is a comment.
-      - A project row that is ALREADY selected activates on the first click
-        (studio.c: `if (row == proj_sel) proj_activate(); else proj_sel = row`)
-        and proj_activate() hands focus back to the editor - so clicking row 0
-        opens README.TXT and every later key goes to the editor. Click the row
-        we actually want (never row 0, which is pre-selected), then Enter."""
-    row = getattr(d, "studio_row", 3)
+    "Run failed" with a SyntaxError. Nothing in the beat log said so - which is
+    why BOTH halves here are verified from extracted frames, never from beats."""
+    row_c = getattr(d, "studio_row", 3)
+    row_py = getattr(d, "studio_py_row", 4)
     d.beat("launch-studio")
     d.launch("studio", settle=3.2)
+
+    # ---- the C half ----------------------------------------------------
     d.beat("pick-sample-c-in-the-project")
-    d.click(STUDIO_PROJ_X, STUDIO_PROJ_Y0 + row * STUDIO_PROJ_DY, settle=1.1)
-    d.beat("open-it")
-    d.key(13, settle=1.6)                            # Enter activates the row
-    time.sleep(1.2)                                  # hold on the C source
+    studio_open_row(d, row_c)
     d.beat("type-a-live-edit")
-    d.text(STUDIO_EDIT, settle=0.06)
+    d.text(STUDIO_EDIT_C, settle=0.06)
     d.beat("save")
-    d.ctrl("s", settle=1.4)
-    d.beat("build")
+    d.ctrl("s", settle=1.2)
+    d.beat("build-the-c")
     d.ctrl("b", settle=0.2)
-    time.sleep(3.5)                                  # ucc + the Built line
-    d.beat("run")
+    time.sleep(3.2)                                  # ucc + the "Built" line
+    d.beat("run-the-c")
     d.ctrl("r", settle=0.2)
-    time.sleep(6.5)                                  # the app window opens and
-                                                     # the ball bounces
+    time.sleep(5.0)                                  # the window opens, the
+                                                     # ball bounces
+
+    # ---- and the same app again, in Python -----------------------------
+    # Close the C app first: it holds the EX_USERAPP slot and its window sits
+    # over Studio. close_top() targets exactly it (the app just launched IS the
+    # top window), and the click on the Project row below re-focuses Studio, so
+    # ^S/^B/^R reach Studio's key hook and not the app's.
+    d.beat("close-the-c-app")
+    d.close_top(settle=1.0)
+    d.beat("pick-sample-py-in-the-project")
+    studio_open_row(d, row_py, hold=1.5)
+    d.beat("type-a-live-edit-in-python")
+    d.text(STUDIO_EDIT_PY, settle=0.06)
+    d.beat("save-the-python")
+    d.ctrl("s", settle=1.2)
+    d.beat("pack-the-python")
+    d.ctrl("b", settle=0.2)
+    time.sleep(2.2)                                  # studio_py_pack + the
+                                                     # "Packed ..." line
+    d.beat("run-the-python")
+    d.ctrl("r", settle=0.2)
+    time.sleep(6.0)                                  # PYRT opens the window and
+                                                     # the Python ball bounces
+    # THE BUILD LEFT A FILE ON THE VOLUME, and the next Studio scene indexes
+    # its Project rows by position. SAMPLE.UNO is created by ^B (both halves
+    # write the same name) and lands after SAMPLE.PY in creation order, so
+    # every row below it shifts by one. s09 clicked the row it had computed
+    # without this, opened the 2.5 KB BINARY sitting there instead of AUTO.PY,
+    # and Studio said "Build failed: unexpected character in source" - on
+    # camera, in a scene whose beat log was entirely green.
+    d.ram_pushed = list(getattr(d, "ram_pushed", [])) + ["SAMPLE.UNO"]
     # No on-camera teardown: the scene ends on the app it just compiled,
     # running. reset() closes both windows after the stream stops.
 
@@ -1348,13 +1479,8 @@ def s08_pre(d):
     # uno.run_app(vol, "APPS\\DUUM.UNO"), which pc64_shell_run_user runs on
     # PYRT. On metal probe_metal_assets() already found the volume; on QEMU
     # find it rather than assume an index.
-    espv = getattr(d, "_esp_vol", None)
-    if espv is None:
-        espv = next((v["vol"] for v in d.link.vols()
-                     if v["kind"] == 1 and v["name"].strip() in ("NO NAME", "")), 1)
-        d._esp_vol = espv
-    d.link.eval('import uno; uno.run_app(%d, "APPS\\\\DUUM.UNO")' % espv,
-                timeout=30)
+    pyeval(d, 'import uno; uno.run_app(%d, "APPS\\\\DUUM.UNO")' % esp_vol(d),
+           timeout=30)
     for _ in range(30):                              # WAD parse + first frame
         if any("DUUM" in t.upper() for t in d.windows()):
             return True
@@ -1400,8 +1526,128 @@ def s08_duum(d):
     # No on-camera teardown: reset() closes Duum after the stream stops.
 
 
+# ---------------------------------------------------------------------------
+# s09 - unoautomate, driven by Python
+# ---------------------------------------------------------------------------
+# The demo is assets/AUTO.PY: a Python APP that first OBSERVES the running
+# system through `unoauto.probe()` (heap, filesystems, the NIC's frame
+# counters, the live window list) and then DRIVES it through
+# `unoauto.key()` - it opens the Start menu with Ctrl+Esc, walks down to
+# Clock and presses Enter - and finally probes again, so its own effect shows
+# up in its own output.
+#
+# WHY THIS ONE. The brief was the most VISUALLY LEGIBLE demonstration, and
+# the constraint that decides it is that the viewer must see the script and
+# see it act IN THE SAME FRAME. Three candidates were considered:
+#   - `unoscript` from the shell: legible, but its effect is text in a pane,
+#     so there is nothing to watch.
+#   - a driver-side script over URC: that is every other scene already, and
+#     the Python would be off-screen on the host.
+#   - THIS: the script is open in Studio on the left, the app it becomes is
+#     printing its own transcript on the right, and the Start menu opens by
+#     itself in between. Keyboard injection was chosen over `unoauto.launch`
+#     (which takes an app INDEX and does its work invisibly) precisely because
+#     a menu rising and walking on its own is the thing you can SEE.
+#
+# The script paces itself on `unoauto.uptime()`, in milliseconds, and never on
+# a frame count: the guest's frame rate under TCG is neither known nor stable,
+# so a frame-counted script is a different length on every run.
+AUTO_PY = os.path.join(ASSETS, "AUTO.PY")
+
+
 def s09_pre(d):
-    """s09's UNRECORDED half: boot the guest and wait for its shell. Returns
+    """Push AUTO.PY onto the RAM volume with Clock's REAL Start-menu row
+    substituted in, off camera.
+
+    The row is not a constant: the Start menu is built from the app table, so
+    the walk length depends on which apps this build ships. `menu_index` reads
+    it from the live `apps list`, exactly as s02 does for Files."""
+    if not os.path.exists(AUTO_PY):
+        print("  s09: SKIP - %s is missing" % AUTO_PY)
+        return False
+    needs_ctrl_r(d, "s09")
+    # STUDIO'S PANE FOLLOWS ed_vol, AND THE GREET PUTS ed_vol ON THE ESP.
+    # refresh_project() sets `proj_vol = ed_vol`, and on the FIRST open it runs
+    # BEFORE the greet (ed_vol == -1 -> the RAM disk), which is why s07 sees the
+    # RAM listing. But the greet then loads SDK\SAMPLE.PY off the ESP and sets
+    # ed_vol to it - so on any LATER open the pane lists THE ESP ROOT instead,
+    # and a row index computed for the RAM disk opens whatever the ESP happens
+    # to have there. Measured: it opened DOOM1.WAD, 11 MB of binary, and Studio
+    # answered "Build failed: unexpected character in source".
+    # What pins it back is opening a file ON the RAM disk, which s07 does. In
+    # the spine s07 always runs first; running s09 alone, do the same off
+    # camera, on a fresh Studio whose pane is still the RAM disk.
+    if "SAMPLE.C" not in list(getattr(d, "ram_pushed", [])):
+        if not s07_pre(d):
+            return False
+        d.launch("studio", settle=3.2)
+        studio_open_row(d, studio_row_of(d, "SAMPLE.C"), hold=0.4)
+        d.close_all()
+    row = d.menu_index("clock")
+    with open(AUTO_PY) as f:
+        src = f.read()
+    out, hit = [], False
+    for line in src.splitlines(True):
+        if line.startswith("CLOCK_ROW"):
+            line = ("CLOCK_ROW = %d" % row).ljust(33) + \
+                   "# Clock's row in the Start menu\n"
+            hit = True
+        out.append(line)
+    if not hit:
+        print("  s09: SKIP - no CLOCK_ROW line in AUTO.PY to substitute")
+        return False
+    tmp = os.path.join(OUT, "AUTO.PY")
+    with open(tmp, "w") as f:
+        f.write("".join(out))
+    if not d.link.push_file(0, "AUTO.PY", tmp):   # push_file read-back-verifies
+        print("  s09: SKIP - AUTO.PY did not verify on the RAM volume")
+        return False
+    d.ram_pushed = list(getattr(d, "ram_pushed", [])) + ["AUTO.PY"]
+    d.auto_row = studio_row_of(d, "AUTO.PY")
+    print("  s09: AUTO.PY on the RAM volume, Project row %d, "
+          "Clock is Start-menu row %d" % (d.auto_row, row))
+    return True
+
+
+def s09_automate(d):
+    """Open AUTO.PY in Studio, read it, run it - and watch the machine drive
+    itself while the source stays on screen beside its output."""
+    row = getattr(d, "auto_row", 5)
+    d.beat("open-the-automation-script")
+    d.launch("studio", settle=3.2)
+    studio_open_row(d, row, hold=2.0)
+    d.beat("read-the-script")
+    for _ in range(6):                               # scroll into script()
+        d.key(0, S_DOWN, settle=0.18)
+    time.sleep(1.8)                                  # hold on the script body
+    d.beat("run-it")
+    d.ctrl("r", settle=0.2)
+    time.sleep(2.5)                                  # pack + PYRT opens it
+
+    # PYRT builds its window at a FIXED (40, 24), 544x420 at this desktop size
+    # (pyrt.c tr_build: 520x380 of canvas, capped), directly on top of Studio's
+    # (24, 20). Slide it right so the SOURCE and the TRANSCRIPT are both
+    # readable - which is the whole point of the shot. Its title bar is the
+    # ~22 px under y=24, and it is the topmost window there, so the grab cannot
+    # land on Studio.
+    #
+    # IT MUST FINISH BEFORE THE SCRIPT TOUCHES THE SHELL. Pressing on this
+    # title bar takes the keyboard focus, and the first take's drag landed
+    # while the Start menu was already up: the menu lost focus, every injected
+    # Down and the Enter went to this window instead, Clock never opened - and
+    # the transcript still printed "the machine opened that one itself",
+    # because the script has no way to know. AUTO.PY's observe phase is 8.5 s
+    # for exactly this reason; the drag costs about 5.
+    d.beat("put-them-side-by-side")
+    d.drag(250, 35, 900, 60, settle=1.0)
+    d.beat("the-machine-drives-itself")
+    time.sleep(13.0)                                 # Ctrl+Esc, the walk down,
+                                                     # Enter, and the re-probe
+    time.sleep(1.5)                                  # hold on the final list
+
+
+def s14_pre(d):
+    """s14's UNRECORDED half: boot the guest and wait for its shell. Returns
     True to record the console half, False to skip the scene.
 
     The guest gets ~4 ms of every ~16 ms frame, so its boot takes minutes -
@@ -1412,10 +1658,10 @@ def s09_pre(d):
     1800 MB carve floor, and eligibility needs a UNO_DETACH=1 build), so the
     scene logs the reason and no-ops rather than recording a refusal."""
     if not getattr(d, "vm_staged", None):
-        print("  s09: SKIP - no bzImage/initrd.gz under pc64/build")
+        print("  s14: SKIP - no bzImage/initrd.gz under pc64/build")
         return False
     if not DEMO_KVM:
-        print("  s09: SKIP - hypervisor ineligible under TCG; set "
+        print("  s14: SKIP - hypervisor ineligible under TCG; set "
               "UNO_DEMO_KVM=1 after UNO_DEBUG=1 UNO_DETACH=1 ./build.sh "
               "on an Intel/nested-KVM host")
         return False
@@ -1427,7 +1673,7 @@ def s09_pre(d):
     settled = 0
     for _ in range(90):                              # up to ~15 min of wall
         time.sleep(10.0)
-        _, w, h, rgba = d.shot("s09_boot_poll")
+        _, w, h, rgba = d.shot("s14_boot_poll")
         region = bytes(rgba[len(rgba) // 3: 2 * len(rgba) // 3])
         if region == prev:
             settled += 1
@@ -1439,8 +1685,8 @@ def s09_pre(d):
     return True
 
 
-def s09_console(d):
-    """s09's RECORDED half (the stream starts between the two)."""
+def s14_console(d):
+    """s14's RECORDED half (the stream starts between the two)."""
     d.beat("guest-console")
     time.sleep(1.5)
     d.beat("type-ls")
@@ -1454,6 +1700,133 @@ def s09_console(d):
     d.beat("close")
     d.key(0, S_ESC, settle=0.8)                      # console -> list view
     d.close_all()
+
+
+# ---------------------------------------------------------------------------
+# s13 - a real SSH session, to a real machine on the LAN
+# ---------------------------------------------------------------------------
+# The SSH window is built at a FIXED origin (40, 30) with a 470x300 canvas
+# (pc64_uui.c, EX_SSH), so everything inside it is SCENES.md class 1 -
+# window-relative and resolution-independent. These were read off a 1280x800
+# probe shot (out/probe/s13_*.png).
+SSH_SESS_ROW0 = (150, 136)              # "devbuntu", row 0 of the Sessions pane
+SSH_TAB_PLUS = (194, 80)                # the "+" after the Manage tab: CONNECT
+SSH_MAX_XY = (507, 43)                  # the title bar's maximize box
+
+# What the session runs on camera. Plain text only: the terminal is a
+# scrollback of lines with NO escape parsing at all (draw_term in sshapp_ui.c
+# walks newlines and turns \r and \t into spaces), so anything full-screen -
+# vim, htop, top - would paint its control codes as literal rubbish.
+#
+# That is also why the first line is `exec sh`. Ubuntu 26.04's bash decorates
+# every single prompt with an OSC 133 shell-integration blob - a 200-character
+# `]3008;start=...;machineid=...;bootid=...` string before each command and an
+# `end=...;exit=success` after it - plus bracketed-paste markers and SGR colour
+# runs, and the first take rendered all of it verbatim between the answers.
+# Plain POSIX sh has no PROMPT_COMMAND, no PS0, and no readline, so it emits
+# none of it: from the second prompt on the transcript is exactly the commands
+# and their output. (`PS1='$ '; PS0=; unset PROMPT_COMMAND; bind 'set
+# enable-bracketed-paste off'` also works and is 70 characters to type.)
+SSH_SETUP = "exec sh"
+SSH_CMDS = ["hostname", "uname -a", "uptime", "ls /"]
+
+
+def s13_pre(d):
+    """Author SSHSTORE.DAT on the host and stage it onto the volume the device
+    will look for it on.
+
+    THERE IS NO OTHER WAY IN. `sshapp_ui.c` lists sessions and keys and
+    connects to the selected one; it has no "add session" and no "import key"
+    control. `unossh_cmd.c` implements a full `ssh` verb (keygen / sessadd /
+    run), and its header says unoautomate "lands a weak stub and a four-line
+    dispatch clause once" - but `grep ssh unoauto_remote.c` is EMPTY, so that
+    clause was never landed and the verb is unreachable over URC. The only
+    other callers of ssh_sess_set / ssh_key_import in the tree are SPECTEST
+    suites that seed a fixed 10.0.2.2:2222 session. So the store is authored
+    off-device (sshstore.py) and pushed, which is staging, not faking: the
+    device then loads, decrypts and uses it through its own code.
+
+    THE VOLUME IS THE WHOLE TRICK. unossh_store.c's pick_vol() prefers the
+    first NATIVE-FAT writable volume and only falls back to the RAM disk, and
+    store_load() silently replaces a file that is not exactly sizeof(ssh_store)
+    bytes with an empty store - so a push to the wrong volume presents as "no
+    saved sessions", not as an error. pick_vol is reproduced here against the
+    LIVE volume list rather than assumed."""
+    if not os.path.exists(SSH_KEY):
+        print("  s13: SKIP - no private key at %s (set UNO_DEMO_SSH_KEY). It "
+              "must be an UNENCRYPTED ed25519 key whose public half is in "
+              "%s@%s:~/.ssh/authorized_keys" % (SSH_KEY, SSH_USER, SSH_HOST))
+        return False
+    try:
+        import sshstore
+    except Exception as e:                           # noqa: BLE001
+        print("  s13: SKIP - cannot import sshstore (%s)" % e)
+        return False
+    try:
+        with open(SSH_KEY) as f:
+            blob = sshstore.build(f.read(), SSH_KEYNAME, SSH_SESS,
+                                  SSH_HOST, SSH_PORT, SSH_USER)
+    except Exception as e:                           # noqa: BLE001
+        print("  s13: SKIP - %s" % e)
+        return False
+    # pick_vol(), against the live list: a real partition first, then anything
+    # writable above the RAM disk, then the RAM disk.
+    vols = d.link.vols(timeout=15)
+    tgt = next((v["vol"] for v in vols
+                if v["vol"] > 0 and v["kind"] == 1 and v["writable"]), None)
+    if tgt is None:
+        tgt = next((v["vol"] for v in vols
+                    if v["vol"] > 0 and v["writable"]), 0)
+    tmp = os.path.join(OUT, "SSHSTORE.DAT")
+    with open(tmp, "wb") as f:
+        f.write(blob)
+    # push_file read-back-verifies on the device before reporting "verified",
+    # which is the check that matters: store_load() accepts the file ONLY at
+    # exactly sizeof(ssh_store) and silently empties the store otherwise.
+    if not d.link.push_file(tgt, "SSHSTORE.DAT", tmp):
+        print("  s13: SKIP - the store did not verify on vol %d" % tgt)
+        return False
+    print("  s13: SSHSTORE.DAT (%d bytes) on vol %d, session %r -> %s@%s:%d"
+          % (len(blob), tgt, SSH_SESS, SSH_USER, SSH_HOST, SSH_PORT))
+    return True
+
+
+def s13_ssh(d):
+    """Connect to devbuntu over SSH and run a few commands whose output could
+    only have come from another machine.
+
+    QEMU's SLIRP is outbound-only, which is fine: this dials OUT to a LAN
+    address, exactly as the URC link itself does."""
+    d.beat("open-the-ssh-client")
+    d.launch("ssh", settle=2.5)
+    time.sleep(1.5)                                  # hold on Sessions + Keys
+    d.beat("pick-the-saved-session")
+    d.click(*SSH_SESS_ROW0, settle=1.2)
+    d.beat("connect")
+    d.click(*SSH_TAB_PLUS, settle=1.0)
+    # ssh_connect + handshake + auth run SYNCHRONOUSLY inside the click
+    # handler (sshapp_ui.c connect_selected), so the desktop holds one frame
+    # for the whole exchange - curve25519 + ed25519 under TCG is seconds.
+    time.sleep(9.0)
+    d.beat("a-shell-on-another-machine")
+    # The window is only 470x300 (EX_SSH's fixed size) and the remote output is
+    # the point of the scene, so give the terminal the whole desktop. Maximize
+    # AFTER connecting: the "+" is laid out from the left of the tab strip and
+    # does not move, but there is no reason to risk it.
+    d.click(*SSH_MAX_XY, settle=1.5)
+    time.sleep(1.5)
+    d.beat("plain-shell")
+    d.text(SSH_SETUP, settle=0.07)
+    d.key(13, settle=0.4)
+    time.sleep(2.0)
+    for cmd in SSH_CMDS:
+        d.beat("run-" + cmd.split()[0])
+        d.text(cmd, settle=0.07)
+        d.key(13, settle=0.4)
+        time.sleep(2.6)                              # the answer arrives on the
+                                                     # next pump_connections()
+    time.sleep(2.0)                                  # hold on the transcript
+    # No on-camera teardown: reset() closes the window after the stream stops.
 
 
 def s10_system_log(d):
@@ -1494,9 +1867,15 @@ SCENES = [
     ("s04", (s04_pre, s04_office)),
     ("s05", (None, s05_browser)),
     ("s07", (s07_pre, s07_studio)),
+    ("s09", (s09_pre, s09_automate)),
     ("s08", (s08_pre, s08_duum)),
-    ("s09", (s09_pre, s09_console)),
+    ("s13", (s13_pre, s13_ssh)),
     ("s10", (None, s10_system_log)),
+    # s14 (appliances) is LAST and out of the cut's spine: it is the only
+    # scene that needs UNO_DEMO_KVM=1 plus a UNO_DETACH=1 build, so it skips
+    # itself on every ordinary run. It kept the number it was recorded under
+    # until 2026-08-08, when s09 became the automation scene.
+    ("s14", (s14_pre, s14_console)),
 ]
 
 
