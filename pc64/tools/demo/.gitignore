@@ -1,1 +1,4 @@
 out/
+# a REAL private key: its public half is in devbuntu's authorized_keys. s13
+# needs it (or UNO_DEMO_SSH_KEY pointing elsewhere); it is never committed.
+assets/ssh_demo_key
