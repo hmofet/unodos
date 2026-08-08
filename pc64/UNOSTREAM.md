@@ -96,6 +96,24 @@ user sees, pointer included. Nothing is written into the live `fb[]`.
   (`-f rawvideo -pixel_format rgba ... -c:v libx264 -crf 18`), writes
   `out.timing.jsonl` (one JSON line per frame: index, wall clock, bytes,
   type) and a final `out.png` canvas snapshot + `out.stats.json`.
+
+  **Duration is corrected at segment close** (`_retime_segment`, 2026-08-07).
+  Raw frames carry no timestamps, so ffmpeg must be told a rate up front, and
+  the only rate known then is the one the guest was *asked* for. The guest
+  paces on its shell tick and delivers what it can - 30 requested, 16-24
+  delivered at 1280x800 - so files came out short and played fast (24-86% in
+  one measured run). The true rate is known only once the segment ends, which
+  is when the receiver rescales the container's timestamps with
+  `-itsscale` + `-c copy`: lossless, no re-encode, about a second. It is
+  skipped when the measured rate is within 2% of the request, and on any
+  failure the original file is kept (`retimed` reports whether it fired).
+
+  > **Consumers that used to correct for this must stop.** Footage recorded
+  > BEFORE this change is still short-and-fast and needs retiming from the
+  > sidecar; footage recorded after is already correct, and retiming it again
+  > double-corrects. `tools/demo/stitch.py` retimes only when the sidecar and
+  > the container disagree by more than 2%, so it becomes a no-op on new
+  > recordings by construction - but check any other tool that does this.
 - `stream_gate_qemu.py` - the QEMU merge gate: boots the DEBUG image like
   `tools/remote_qemu.py`, starts a receiver on a second host port, issues
   `stream start 10.0.2.2 <port> 30`, drives visible activity via URC, and
