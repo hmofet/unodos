@@ -8672,3 +8672,66 @@ automation half in one commit; the app needs a real key/session editor.
 (`ssh_key_import` returns -3 for `ciphername != "none"`; bcrypt_pbkdf is not
 in the tree). Worth stating in the manual next to the import UI when it exists,
 because the failure is otherwise indistinguishable from a corrupt key.
+
+### 2026-08-08 demo lane -> ALL LANES: index of everything the demo-video shoot found
+
+Filming the pc64 walkthrough exercised the shipped OS the way a user does, from
+boot to shutdown, and turned up 14 defects. They are individually written up
+above (or below, for the three that were never filed); this entry exists so one
+agent can pick the whole set up without reconstructing it from a video project.
+
+**Ordered by what a user notices. "OPEN" means nobody has taken it.**
+
+| # | What | Where | Status |
+|---|---|---|---|
+| 1 | `py` verb hard-wedges Studio's ^R: one `py` anywhere earlier in the session and running a `.PY` kills the box for 140 s, no log line, no recovery, every harness beat still green | `pyrt_ensure()`/`py_init()` stack-top recording | **OPEN, worst of the set** - see the 2026-08-08 entry |
+| 2 | The SSH client cannot be used at all as shipped: no add-session / import-key UI, and `unossh_cmd.c`'s complete `ssh` verb was never given its dispatch clause or `GATE[]` row, so it is dead code from every caller | `sshapp_ui.c`, `unoauto_remote.c` | **OPEN** - see the 2026-08-08 entry |
+| 3 | Open-from-FAT is broken for the whole Office suite: `uno_fs_isdir` treats every file as a directory | `pc64_fs.c:248`, `uno_fat_list_ex` | **OPEN** - 2026-08-07 entry |
+| 4 | UnoShow's dialog key bridge swallows Backspace, so a wrong filename cannot be cleared | `apps/uoshow.c:997-1006` | **OPEN** - same entry |
+| 5 | Studio drew NO punctuation: `draw_editor()` paints only what a highlighter span covers and both tokenizers fell through operators with a bare `i++`, so every `( ) * , ; = +` rendered blank while sitting in the buffer | `apps/studio_hl.c` | **FIXED** `213eeb0f` |
+| 6 | UnoAmp refused every RLE8 Winamp skin (10 of 13 sheets in a stock 2.91 skin), so real skins never loaded | `unoamp_skin.c bmp_decode()` | **FIXED + merged**, plus a `skin` URC verb |
+| 7 | Pac-Man is completely silent: its beeps only ever existed in `pc64_games.c`, which no longer ships | `apps/pacman.c` | **OPEN** - 2026-08-08 entry |
+| 8 | Dostris' music outlives Dostris (global sequencer + null `closed` slot), so it plays over whatever opens next | `apps/dostris.c`, `gm_start` | **OPEN** - same entry |
+| 9 | Dostris and Pac-Man draw their score VALUES white-on-white under a light theme (labels visible, numbers not) | both apps | **OPEN** - same entry |
+| 10 | The three shipping games set `UAF_GAME` ("fullscreen-preferred") but only Runner3D is mapped onto a native canvas, so they never fullscreen, and maximizing gives a big empty window with a small game in it | `app_game()` `pc64_uui.c:3073` | **OPEN** - same entry |
+| 11 | UnoAmp's visualiser only repaints when the title marquee advances, and an 8.3 filename never scrolls, so it never visibly moves | `unoamp_ui_tick()` | **OPEN** - 2026-08-08 entry |
+| 12 | A UnoAmp taskbar chip survives closing the player (`unoamp_ui_close` never clears `g_open[APP_UNOAMP]`; needs a `pc64_shell_app_close(int)` export beside the existing `_app_open`) | `unoamp_app.c` + `pc64_uui.c` | **OPEN** - filed with the skin entry |
+| 13 | Rendering on real hardware is ~2.5 fps, which makes the machine unfilmable and, more importantly, sluggish to use | see below | **OPEN, NOT PREVIOUSLY FILED** |
+| 14 | Two manual claims are false | `docs/build_site.py` | **OPEN, NOT PREVIOUSLY FILED** |
+
+---
+
+**13. Real-hardware rendering is ~2.5 fps (measured 2026-08-07, X13 Yoga).**
+
+Not an idle-desktop artifact: across a driven scene only **22 of 233 frames**
+arrived faster than 100 ms and 210 were at 4 fps or slower, *during* window
+drags and menu animation. Ruled out by measurement: the "Aurora lite (no live
+compositing)" switch makes no difference (2.4 vs 2.5 fps), and it is not the
+capture path (`unostream` sustains 20-30 fps against QEMU on the same host).
+
+A second-order effect worth knowing because it wastes a session: **at 2.5 fps
+the shell samples pointer state once per ~400 ms, so a synthetic click whose
+press and release are 180 ms apart falls between samples and is silently lost.**
+That is why the Display panel's "Keep this resolution?" confirmation kept
+missing and the mode auto-reverted with no error. A ~1.2 s press hold works.
+
+Also observed while chasing it: booting with `mtrr-wc` produced a session whose
+TSC came up **uncalibrated** ("Animation clock: frame-counted (TSC uncalibrated)"
+in the System window), and unostream - which paces off the millisecond clock -
+then emitted zero frames while reporting `on=1 sent=0 drops=0`. Reverted, not
+diagnosed. It may be unrelated to the fps problem or it may be the same clock.
+
+This is almost certainly the fleet-wide render/present slowness already recorded
+in `HANDOFF-perf.md`; this is one more, sharply-quantified data point.
+
+**14. Two false claims in the user manual.**
+
+- `docs/build_site.py:738` and `:2160` say the image is "about 660 KB". A clean
+  `UNO_DEBUG=0` build measured 2026-08-08 is **4,013,748 bytes**. Off by ~6x; it
+  predates the browser engines, quickjs/libcss, the office suite and unovirt.
+- The overview page's "from scratch" framing extends to TLS, which is
+  **BearSSL** (vendored, disclosed in `THIRD-PARTY.md`). The TCP/IP stack IS the
+  project's own work; TLS is not. Both were caught only because the demo
+  narration had to be fact-checked against source before it was spoken.
+
+*(Filed by the demo lane. Nothing here is claimed - every row is free to take.)*
