@@ -21,9 +21,12 @@ PC64=$(dirname "$(dirname "$HERE")")
 REPO=$(dirname "$PC64")
 
 ssh "$HOST" "mkdir -p $DEST/corpus"
-# the driver + everything it imports. remote_qemu.py comes along so the module
-# imports cleanly, but --metal never calls it (and tolerates its absence).
-scp -q "$HERE/scenes.py" "$HERE/stream_recv.py" "$HERE/SCENES.md" \
+# The whole demo lane, not just scenes.py: s01/s06/s11 live in their own
+# files (scene_boot.py, scene_media.py, scene_outro.py + demo_common.py) and
+# stitch.py assembles the master, so the driver host wants all of them.
+# remote_qemu.py comes along so the modules import cleanly on a host with no
+# QEMU; --metal never calls it.
+scp -q "$HERE"/*.py "$HERE/SCENES.md" \
        "$PC64/tools/unoauto_remote.py" "$PC64/tools/urcui.py" \
        "$PC64/tools/remote_qemu.py" \
        "$HOST:$DEST/"
