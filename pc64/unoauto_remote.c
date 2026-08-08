@@ -822,6 +822,28 @@ __attribute__((weak)) int unoamp_skin_cmd(char *line, char *out, int cap)
     return -1;
 }
 
+/* ssh verb pass-through target. unossh (unossh_cmd.c) lands the real
+ * ssh_dbg_cmd() - log into another machine, run a command, hand back its
+ * output in bounded slices. Same shape and same reason as the three above:
+ * declared locally and weak-stubbed HERE, so this file links with or without
+ * unossh in the build. Answers the 2026-08-01 unossh request ("one weak stub
+ * and one clause, when convenient"), which the 2026-08-08 demo-lane index
+ * found had never been landed: the verb was complete and unreachable, and
+ * with no other way to add a key or a session, the SSH client could not be
+ * used at all as shipped. */
+int ssh_dbg_cmd(const char *line, char *out, int cap);
+__attribute__((weak)) int ssh_dbg_cmd(const char *line, char *out, int cap)
+{
+    static const char msg[] = "unossh not built";
+    int i = 0;
+    (void)line;
+    if (out && cap > 0) {
+        for (; msg[i] && i < cap - 1; i++) out[i] = msg[i];
+        out[i] = 0;
+    }
+    return -1;
+}
+
 /* session token echoed at `guard` arm; `safe` must present it (a stale disarm
  * from a prior session must not stand a fresh guard down). Cheap, not secret. */
 static unsigned g_guard_token;
@@ -1226,6 +1248,17 @@ static void dispatch_cmd(const char *id, char *verb, char *args)
         static char none[1];                  /* tokenised in place: no literal */
         int n = unoamp_skin_cmd(args ? args : none, g_report, (int)sizeof g_report);
         rsp(id, n >= 0 ? "ok" : "err", g_report);
+        rsp(id, "end", 0); return;
+    }
+    /* ssh [keys|keygen|keypub|keyrm|sess|sessadd|sessrm|hosts|run|get|close]
+     * - the SSH client's own sub-verb grammar, verbatim; the output format is
+     * unossh's and does not come back here. SYSTEM, not DRIVE: it generates
+     * and stores PRIVATE KEYS, writes them to disk, and runs commands on other
+     * machines with this box's credentials - a blast radius past this machine,
+     * which is the whole reason the tier exists. Same-commit GATE[] row. */
+    if (!strcmp_(verb, "ssh")) {
+        int n = ssh_dbg_cmd(args ? args : "", g_report, (int)sizeof g_report);
+        rsp(id, n >= 0 ? "ok" : "err", n >= 0 ? g_report : "bad-cmd (try: ssh help)");
         rsp(id, "end", 0); return;
     }
     if (!strcmp_(verb, "bootnext")) {
