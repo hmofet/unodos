@@ -681,6 +681,19 @@ static int dir_locate(fatvol *v, const char *dir, uint32_t *clus, int *fixed)
     return 1;
 }
 
+/* ---- public: is this path a directory? ------------------------------------
+ * dir_locate is already exactly this question - it succeeds for the root and
+ * for a real subdirectory and fails for a plain file, a missing name, or a
+ * "."/".." component.  Callers used to ask it of uno_fat_list_ex instead,
+ * which answers "how many entries did I see" (0 for a file AND 0 for an empty
+ * directory), so every FAT path read as a directory.  This says what it means. */
+int uno_fat_isdir(int vol, const char *path)
+{
+    uint32_t clus; int fixed;
+    if (vol < 0 || vol >= g_nvol) return 0;
+    return dir_locate(&g_vol[vol], path, &clus, &fixed) ? 1 : 0;
+}
+
 /* ---- public: list --------------------------------------------------------- */
 int uno_fat_list(int vol, const char *dir, char (*names)[13], int maxn)
 {

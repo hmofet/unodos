@@ -242,17 +242,23 @@ int uno_fs_mkdir(int vol, const char *path)
     return 0;
 }
 
-/* 1 if `path` names an existing directory (native FAT only): listing it as a
- * directory succeeds (>= 0) only when it exists and is a dir - a missing name
- * or a plain file fails.  Used to make `mkdir` idempotent over the remote link. */
+/* 1 if `path` names an existing directory (native FAT only) - a plain file and
+ * a missing name both answer 0.  Used to make `mkdir` idempotent over the
+ * remote link, and by the Office suite's Open dialog to tell a folder from a
+ * document.
+ *
+ * This used to ask uno_fat_list_ex whether listing `path` returned >= 0, which
+ * it ALWAYS does: its return is an entry count, so a file scored 0 exactly
+ * like an empty directory and the predicate was true for everything on a FAT
+ * volume.  Two things were broken by that and are fixed here: the Open dialog
+ * sorted every document into the folder group and suffixed it with '\', so a
+ * click selected nothing openable; and the remote `mkdir` verb reported
+ * "exists" for a path it had never created. */
 int uno_fs_isdir(int vol, const char *path)
 {
     build_map();
     if (vol < 0 || vol >= g_nmap) return 0;
-    if (g_map[vol].kind == KIND_FAT) {
-        uno_fat_entry e;
-        return uno_fat_list_ex(g_map[vol].idx, path, &e, 1) >= 0;
-    }
+    if (g_map[vol].kind == KIND_FAT) return uno_fat_isdir(g_map[vol].idx, path);
     return 0;
 }
 

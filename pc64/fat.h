@@ -42,6 +42,12 @@ int  uno_fat_list(int vol, const char *dir, char (*names)[13], int maxn);
 typedef struct { char name[13]; int is_dir; long size; } uno_fat_entry;
 int  uno_fat_list_ex(int vol, const char *dir, uno_fat_entry *ents, int maxn);
 
+/* 1 if `path` names a directory on this volume ("" / NULL = the root, which
+ * always is).  A plain file and a missing name both answer 0 - do NOT infer
+ * this from uno_fat_list_ex's count, which cannot tell a file from an empty
+ * directory. */
+int  uno_fat_isdir(int vol, const char *path);
+
 /* read a file by path; returns bytes read (<= max), or -1 if not found */
 long uno_fat_read(int vol, const char *path, unsigned char *buf, long max);
 
