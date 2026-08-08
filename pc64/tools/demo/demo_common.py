@@ -85,8 +85,8 @@ def quiet(argv, **kw):
 # disk staging (our own paths - remote_qemu.build_disk hardcodes /tmp/remote_*)
 # ---------------------------------------------------------------------------
 def build_fat_disk(disk, fat, debug_cfg, extra=(), skip=(), ordered_dir=None,
-                   label="UNODOS", mib=96):
-    """GPT + one ESP FAT32 carrying build/esp, the same recipe
+                   label="UNODOS", mib=96, esp=None):
+    """GPT + one ESP FAT32 carrying an ESP tree, the same recipe
     remote_qemu.build_disk() uses, with three knobs it does not have:
 
       debug_cfg    the DEBUG.CFG text to write (ours carries `nohud`, which
@@ -99,7 +99,12 @@ def build_fat_disk(disk, fat, debug_cfg, extra=(), skip=(), ordered_dir=None,
                    sort: a directory lists in creation order, and Photos steps
                    through the listing, so the order files are written IS the
                    order the scene walks.
+      esp          which ESP tree to author (default pc64/build/esp). s01
+                   points this at a SEPARATE production build: two agents
+                   share pc64/build/esp and neither may rebuild it under the
+                   other, so a UNO_DEBUG=0 image has to come from its own tree.
     """
+    esp = esp or ESP
     disk_sectors = mib * 2048
     with open(disk, "wb") as f:
         f.truncate(disk_sectors * SECTOR)
@@ -113,8 +118,8 @@ def build_fat_disk(disk, fat, debug_cfg, extra=(), skip=(), ordered_dir=None,
 
     skip = set(skip)
     od_name = ordered_dir[0] if ordered_dir else None
-    for root, dirs, files in os.walk(ESP):
-        rel = os.path.relpath(root, ESP).replace(os.sep, "/")
+    for root, dirs, files in os.walk(esp):
+        rel = os.path.relpath(root, esp).replace(os.sep, "/")
         if od_name and (rel == od_name or rel.startswith(od_name + "/")):
             continue
         if rel != ".":
@@ -128,7 +133,7 @@ def build_fat_disk(disk, fat, debug_cfg, extra=(), skip=(), ordered_dir=None,
         name, names = ordered_dir
         quiet(["mmd", "-i", fat, "::/" + name])
         for n in names:
-            src = os.path.join(ESP, name, n)
+            src = os.path.join(esp, name, n)
             if os.path.exists(src):
                 quiet(["mcopy", "-i", fat, "-o", src, "::/%s/%s" % (name, n)])
     for src, dst in extra:
