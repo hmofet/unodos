@@ -66,6 +66,9 @@ class StreamReceiver:
         self.bytes_rx = 0
         self.decode_errors = 0
         self.segments = 0
+        self.retimed = False
+        self._seg_first = self._seg_last = None
+        self._seg_frames = 0
         self.t_first = self.t_last = None
         self.w = self.h = self.fps = self.scale = 0
         self.canvas = None
@@ -125,6 +128,8 @@ class StreamReceiver:
 
     def _start_segment(self):
         self.segments += 1
+        self._seg_first = self._seg_last = None
+        self._seg_frames = 0
         path = self._seg_path()
         cmd = [self.ffmpeg, "-y", "-loglevel", "error",
                "-f", "rawvideo", "-pixel_format", "rgba",
@@ -140,14 +145,65 @@ class StreamReceiver:
             print("stream_recv: segment %d -> %s (%dx%d @ %d fps)"
                   % (self.segments, path, self.w, self.h, self.fps))
 
+    def _retime_segment(self, path):
+        """Rewrite the segment's timestamps to the rate frames ACTUALLY
+        arrived at, so its duration is wall-clock truth.
+
+        Frames are piped in as rawvideo, which carries no timestamps, so
+        ffmpeg has to be told a rate UP FRONT - and the only rate known then
+        is the one the guest was ASKED for. The guest paces on its shell tick
+        and delivers whatever it can (a busy or high-resolution desktop
+        delivers well under the request: 30 requested, 16-24 delivered at
+        1280x800), so the file came out short and played fast - by 24 to 86
+        percent across one measured run.
+
+        The real rate is only knowable once the segment ends, which is exactly
+        when this runs. `-itsscale` + `-c copy` rescales the timestamps and
+        remuxes WITHOUT re-encoding, so the correction costs no quality and
+        about a second. On failure the original is left untouched: a wrongly
+        timed recording is recoverable (its .timing.jsonl still holds the wall
+        clock), a lost one is not."""
+        n, t0, t1 = self._seg_frames, self._seg_first, self._seg_last
+        if n < 2 or t0 is None or t1 is None or t1 <= t0:
+            return
+        nominal = float(self.fps or 30)
+        measured = (n - 1) / (t1 - t0)
+        if measured <= 0 or abs(measured - nominal) / nominal <= 0.02:
+            return                                 # already honest
+        ratio = nominal / measured
+        tmp = path + ".retime.mp4"
+        try:
+            r = subprocess.run([self.ffmpeg, "-y", "-loglevel", "error",
+                                "-itsscale", "%.6f" % ratio, "-i", path,
+                                "-c", "copy", tmp],
+                               stdout=subprocess.DEVNULL,
+                               stderr=subprocess.PIPE)
+            if r.returncode == 0 and os.path.getsize(tmp) > 0:
+                os.replace(tmp, path)
+                self.retimed = True
+                if self.verbose:
+                    print("stream_recv: retimed %s to %.1f fps measured "
+                          "(asked %.0f)" % (path, measured, nominal))
+            else:
+                if self.verbose:
+                    print("stream_recv: retime failed, keeping the original "
+                          "(%s)" % (r.stderr or b"").decode("utf-8", "replace")[:120])
+                if os.path.exists(tmp):
+                    os.unlink(tmp)
+        except OSError as e:
+            if self.verbose:
+                print("stream_recv: retime skipped (%s)" % e)
+
     def _close_segment(self):
         if self._ff:
+            path = self._seg_path()
             try:
                 self._ff.stdin.close()
             except OSError:
                 pass
             self._ff.wait()
             self._ff = None
+            self._retime_segment(path)
 
     def _hello(self, blob):
         if blob[:4] != b"UNSM":
@@ -214,6 +270,9 @@ class StreamReceiver:
             if self.t_first is None:
                 self.t_first = now
             self.t_last = now
+            if self._seg_first is None:
+                self._seg_first = now
+            self._seg_last = now
             try:
                 if b0[0] == 0:
                     rgba = qoi_decode(payload)
@@ -230,6 +289,7 @@ class StreamReceiver:
                     print("stream_recv: decode error on frame %d: %s" % (self.frames, e))
                 continue
             self.frames += 1
+            self._seg_frames += 1
             if self._ff:
                 try:
                     self._ff.stdin.write(self.canvas)

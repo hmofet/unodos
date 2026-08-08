@@ -339,7 +339,7 @@ class Demo(object):
         # hardcoded, so this works on any driver host / subnet.
         if STREAM_HOST is None:
             STREAM_HOST = self._host_ip_toward_box()
-        self.w, self.h = self.link.screen_info(timeout=20)
+        self.w, self.h = self.screen_size()
         self.px, self.py = self.w // 2, self.h // 2
         self._menu = [i for i, _ in self.apps()]
         print("metal: box dialed in - %dx%d, %d apps, stream target %s"
@@ -518,6 +518,23 @@ class Demo(object):
         """Switch to virtual desktop n (1-based): Ctrl+F1..F4."""
         self.key(0, S_F1 + (n - 1), 1, settle)
 
+    def screen_size(self, tries=4, timeout=20):
+        """screen_info with retries. A single timed-out round trip used to
+        abort a whole session from inside raise_resolution's verification -
+        the guest was merely busy repainting a fresh 1280x800 desktop. The
+        answer is worth waiting for, so ask again rather than give up."""
+        last = None
+        for i in range(tries):
+            try:
+                return self.link.screen_info(timeout=timeout)
+            except Exception as e:              # noqa: BLE001
+                last = e
+                if self.verbose:
+                    print("    screen_info timed out (%d/%d), retrying"
+                          % (i + 1, tries))
+                time.sleep(2.0)
+        raise RuntimeError("screen_info failed %d times: %r" % (tries, last))
+
     def _cp_display_tab(self):
         """Open the Control Panel clamped to the Display tab, focus on the tab
         strip. Deterministic whatever tab it last remembered."""
@@ -548,7 +565,7 @@ class Demo(object):
         self.key(9, settle=0.5)                  # -> Apply
         self.key(13, settle=0.2)                 # commit; the shell reflows
         time.sleep(3.5)
-        return self.link.screen_info(timeout=20)
+        return self.screen_size()
 
     ACCENT = (76, 110, 245)            # the theme accent: Keep's fill
 
@@ -646,7 +663,7 @@ class Demo(object):
                 # promptly cannot tell "kept" from "about to revert", and
                 # reports success either way. Ask again on the far side.
                 time.sleep(RES_CONFIRM_S + 4)
-                w2, h2 = self.link.screen_info(timeout=20)
+                w2, h2 = self.screen_size()
                 if (w2, h2) == (w, h):
                     best = (w, h)
                     break
@@ -656,7 +673,7 @@ class Demo(object):
             print("resolution: row -%d gave %dx%d, too small - reverting" % (k, w, h))
             self._res_confirm(keep=False)
         self.close_all()
-        w, h = self.link.screen_info(timeout=20)
+        w, h = self.screen_size()
         self.w, self.h = w, h
         self.px, self.py = w // 2, h // 2
         ok = w >= min_w
