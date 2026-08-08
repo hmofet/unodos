@@ -117,6 +117,12 @@ static const GateRow GATE[] = {
      * verb - a verb without a row is refused, never ambient. */
     { "rescan",   UNOAUTO_P_DRIVE },
     { "close",    UNOAUTO_P_DRIVE },
+    /* skin: re-skins a running UnoAmp. It changes what is ON THE SCREEN and
+     * nothing else - no disk write, no config, no privilege - so it sits with
+     * `launch` and `key` rather than in SYSTEM. It reads a .wsz the caller
+     * names, which is a file read a DRIVE peer could already trigger by
+     * driving the UI. Same-commit row: the table is fail-closed. */
+    { "skin",     UNOAUTO_P_DRIVE },
     { "test",     UNOAUTO_P_DRIVE },
     { "guard",    UNOAUTO_P_DRIVE },
     { "pet",      UNOAUTO_P_DRIVE },

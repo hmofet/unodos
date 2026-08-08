@@ -802,6 +802,26 @@ __attribute__((weak)) int unostream_cmd(char *line, char *out, int cap)
     return -1;
 }
 
+/* skin verb pass-through target. UnoAmp (unoamp_app.c) lands the real
+ * unoamp_skin_cmd() - re-skin a RUNNING player and repaint it, so a skin
+ * change is demonstrable without a reboot. Same shape as the two above:
+ * declared locally and weak-stubbed HERE, in this TU, because a weak
+ * definition in another TU is an undefined reference with this toolchain, and
+ * the linker takes unoamp_app.o's strong definition the moment it is in the
+ * link. Per the 2026-08-07 unoamp/skin claim in UNOAUTOMATE-REQUESTS.md. */
+int unoamp_skin_cmd(char *line, char *out, int cap);
+__attribute__((weak)) int unoamp_skin_cmd(char *line, char *out, int cap)
+{
+    static const char msg[] = "UnoAmp not built";
+    int i = 0;
+    (void)line;
+    if (out && cap > 0) {
+        for (; msg[i] && i < cap - 1; i++) out[i] = msg[i];
+        out[i] = 0;
+    }
+    return -1;
+}
+
 /* session token echoed at `guard` arm; `safe` must present it (a stale disarm
  * from a prior session must not stand a fresh guard down). Cheap, not secret. */
 static unsigned g_guard_token;
@@ -1195,6 +1215,17 @@ static void dispatch_cmd(const char *id, char *verb, char *args)
             if (!*nl) break;
             p = nl + 1;
         }
+        rsp(id, "end", 0); return;
+    }
+    /* skin [status|list|load <vol> <file.wsz>|scan|off] - re-skin a RUNNING
+     * UnoAmp and repaint it, so a skin change can be shown without a reboot
+     * (it used to be a one-shot at player open). Additive pass-through to
+     * unoamp_skin_cmd (weak-stubbed above). DRIVE, not OBSERVE: it changes
+     * what is on the screen, exactly like `launch`. */
+    if (!strcmp_(verb, "skin")) {
+        static char none[1];                  /* tokenised in place: no literal */
+        int n = unoamp_skin_cmd(args ? args : none, g_report, (int)sizeof g_report);
+        rsp(id, n >= 0 ? "ok" : "err", g_report);
         rsp(id, "end", 0); return;
     }
     if (!strcmp_(verb, "bootnext")) {
