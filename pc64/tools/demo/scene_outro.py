@@ -215,15 +215,24 @@ def build(hold, xfade, card_hold, outfile, beats, w, h):
 
 def main(argv):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    # 22 platforms + the end card in ~20 s: 22*(hold-xfade) + card_hold.
-    # The hold shortens, the roster does not - every port earns its frame.
-    ap.add_argument("--hold", type=float, default=1.05,
+    # 22 platforms + the end card: 22*(hold-xfade) + card_hold.
+    #
+    # SLOWED 2026-08-08, on the user's note that the closer went past too fast
+    # to see. Each card now holds 2.55 s and the crossfade is 0.55, so the
+    # sequence advances every 2.0 s and a platform is on screen ALONE for two
+    # full seconds - long enough to read the caption and look at the
+    # screenshot, which was the point of the montage. 22*2.0 + 4.6 = ~48.6 s.
+    # The roster does not shorten to pay for it: every port earns its frame.
+    ap.add_argument("--hold", type=float, default=2.55,
                     help="seconds each card is held (incl. its crossfade)")
-    ap.add_argument("--xfade", type=float, default=0.30)
-    ap.add_argument("--card-hold", type=float, default=3.6)
+    ap.add_argument("--xfade", type=float, default=0.55)
+    ap.add_argument("--card-hold", type=float, default=4.6)
     ap.add_argument("--width", type=int, default=DEF_W,
                     help="render width (default %d - the final cut's size)" % DEF_W)
     ap.add_argument("--height", type=int, default=DEF_H)
+    ap.add_argument("--out-dir", metavar="DIR", default="out",
+                    help="where the artifacts land, absolute or relative to "
+                         "tools/demo (default out)")
     ap.add_argument("--check", action="store_true",
                     help="verify every source image exists, build nothing")
     a = ap.parse_args(argv)
@@ -236,8 +245,10 @@ def main(argv):
             print("  MISSING " + b)
         return 1 if bad else 0
 
-    os.makedirs(OUT, exist_ok=True)
-    base = os.path.join(OUT, "s11")
+    out_dir = a.out_dir if os.path.isabs(a.out_dir) \
+        else os.path.join(HERE, a.out_dir)
+    os.makedirs(out_dir, exist_ok=True)
+    base = os.path.join(out_dir, "s11")
     clean_outputs(base)
     beats = Beats(base + ".beats.jsonl")
     try:
@@ -247,7 +258,9 @@ def main(argv):
         beats.close()
     info = probe(base + ".mp4")
     st = {"scene": "s11", "platforms": len(PLATFORMS), "hold": a.hold,
-          "xfade": a.xfade, "mp4": base + ".mp4", "mp4_bytes": info.get("bytes"),
+          "xfade": a.xfade, "card_hold": a.card_hold,
+          "seconds_per_platform": round(a.hold - a.xfade, 2),
+          "mp4": base + ".mp4", "mp4_bytes": info.get("bytes"),
           "dur": info.get("dur"), "w": info.get("w"), "h": info.get("h"),
           "fps": info.get("rate")}
     with open(base + ".stats.json", "w") as f:
