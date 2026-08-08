@@ -6,7 +6,7 @@ set -e
 cd "$(dirname "$0")"
 
 SJASM="${SJASM:-/c/Users/arin/z80-tools/sjasmplus-1.23.1.win/sjasmplus.exe}"
-PY="${PY:-python}"
+PY="${PY:-python3}"
 
 mkdir -p build
 echo "[1/2] generating tiles + palette from the shared assets..."

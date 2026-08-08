@@ -6,7 +6,7 @@
 set -e
 cd "$(dirname "$0")"
 
-PY="${PY:-python}"
+PY="${PY:-python3}"
 RGBASM="${RGBASM:-/c/Users/arin/gb-tools/rgbasm.exe}"
 RGBLINK="${RGBLINK:-/c/Users/arin/gb-tools/rgblink.exe}"
 RGBFIX="${RGBFIX:-/c/Users/arin/gb-tools/rgbfix.exe}"

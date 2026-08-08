@@ -17,7 +17,7 @@ cd "$(dirname "$0")"
 
 CA65="${CA65:-/c/Users/arin/snes-tools/bin/ca65.exe}"
 LD65="${LD65:-/c/Users/arin/snes-tools/bin/ld65.exe}"
-PY="${PY:-python}"
+PY="${PY:-python3}"
 
 mkdir -p build
 

@@ -6,7 +6,7 @@
 set -e
 cd "$(dirname "$0")"
 
-PY="${PY:-python}"
+PY="${PY:-python3}"
 REPO_WSL="/mnt/c/Users/arin/Documents/Github/unodos/rpi"
 AS=aarch64-linux-gnu-as
 LD=aarch64-linux-gnu-ld

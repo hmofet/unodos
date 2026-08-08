@@ -6,7 +6,7 @@
 set -e
 cd "$(dirname "$0")"
 
-PY="${PY:-python}"
+PY="${PY:-python3}"
 REPO_WSL="/mnt/c/Users/arin/Documents/Github/unodos/gba"
 
 mkdir -p build

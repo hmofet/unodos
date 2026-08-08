@@ -3,7 +3,7 @@
 # Usage: ./build.sh [nav|app|clock|theme|music|dostris]
 set -e
 cd "$(dirname "$0")"
-PY="${PY:-python}"
+PY="${PY:-python3}"
 DASM="${DASM:-/c/Users/arin/apple2-tools/dasm.exe}"
 mkdir -p build
 echo "[1/3] generating charset + data..."
