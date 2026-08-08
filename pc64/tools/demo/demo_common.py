@@ -85,7 +85,7 @@ def quiet(argv, **kw):
 # disk staging (our own paths - remote_qemu.build_disk hardcodes /tmp/remote_*)
 # ---------------------------------------------------------------------------
 def build_fat_disk(disk, fat, debug_cfg, extra=(), skip=(), ordered_dir=None,
-                   label="UNODOS", mib=96, esp=None):
+                   label="UNODOS", mib=96, esp=None, mkdirs=()):
     """GPT + one ESP FAT32 carrying an ESP tree, the same recipe
     remote_qemu.build_disk() uses, with three knobs it does not have:
 
@@ -99,10 +99,12 @@ def build_fat_disk(disk, fat, debug_cfg, extra=(), skip=(), ordered_dir=None,
                    sort: a directory lists in creation order, and Photos steps
                    through the listing, so the order files are written IS the
                    order the scene walks.
-      esp          which ESP tree to author (default pc64/build/esp). s01
-                   points this at a SEPARATE production build: two agents
-                   share pc64/build/esp and neither may rebuild it under the
-                   other, so a UNO_DEBUG=0 image has to come from its own tree.
+      esp          which ESP tree to author (default pc64/build/esp). s01 and
+                   s06 both point this at their own worktree build: several
+                   lanes share pc64/build/esp and rebuild it under each other
+                   (it has been both a debug and a production tree inside one
+                   afternoon), so a scene that needs a known build brings one.
+      mkdirs       directories to create before `extra` copies into them.
     """
     esp = esp or ESP
     disk_sectors = mib * 2048
@@ -136,6 +138,8 @@ def build_fat_disk(disk, fat, debug_cfg, extra=(), skip=(), ordered_dir=None,
             src = os.path.join(esp, name, n)
             if os.path.exists(src):
                 quiet(["mcopy", "-i", fat, "-o", src, "::/%s/%s" % (name, n)])
+    for d in mkdirs:                           # directories `extra` copies into
+        quiet(["mmd", "-i", fat, "::/" + d])
     for src, dst in extra:
         if os.path.exists(src):
             quiet(["mcopy", "-i", fat, "-o", src, dst])

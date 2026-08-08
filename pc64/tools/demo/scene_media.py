@@ -27,32 +27,25 @@ ties them together, so at the end the music's onset is located in the wav
 The measured offset goes in out/s06.stats.json as `av_offset_seconds`: add it
 to a video timestamp to get the wav timestamp.
 
-THE SKIN BEAT DOES NOT HAPPEN, AND THE REASON IS A BUG. Two separate things
-block it, both in the unoamp lane and neither in the driving:
+THE RE-SKIN IS THE CENTREPIECE, AND WHY THE SKIN IS STAGED IN `SKINS\\`.
+Two fixes landed on master (7390ebf0, 96e32db4, fb3eeb00) after the first cut
+of this scene: bmp_decode() learned BI_RLE8/BI_RLE4, so a stock Winamp 2.9x
+skin loads at all; and a `skin` URC verb re-skins a RUNNING player and repaints
+it. Both were needed - the first cut of this file could only film the built-in
+look and say why.
 
-  1. BASE291.WSZ DOES NOT LOAD AT ALL. Ten of its thirteen sheets - MAIN.BMP
-     included, and MAIN is the load gate - are BI_RLE8 BMPs, and
-     unoamp_skin.c's bmp_decode() refuses any compressed BMP outright:
-     `if (comp != 0) return 0;   /* RLE skins do not exist */`.
-     They do; a stock Winamp 2.9x skin is full of them. Reproduced host-side
-     in one second, no emulator involved:
-         cc -I. -I../unomedia -o /tmp/skintest tools/skintest.c unoamp_skin.c \\
-            ../unomedia/um_inflate.c ../unomedia/unomedia.c
-         /tmp/skintest wads/BASE291.WSZ      -> FAILED, MAIN.BMP did not decode
-     Un-RLE the ten sheets and the same archive loads 13/13 with VISCOLOR and
-     PLEDIT, which is the whole diagnosis.
-  2. EVEN FIXED, IT COULD NOT RE-SKIN ON CAMERA. `load_a_skin()` runs from
-     `unoamp_start()`, guarded by a one-shot `g_started` and called once from
-     `unoamp_ui_build()`. Reopening the player does not re-run it, nothing
-     resets `g_started`, and `unoamp_skin_load()` is exported to neither the
-     URC verb table nor the `uno` Python module. A skin is chosen once per
-     boot, so a live re-skin has nowhere to be triggered from.
+That creates a staging problem. `load_a_skin()` scans every volume ROOT when
+the player opens (unoamp_app.c), so a `.wsz` at the root means UnoAmp comes up
+ALREADY skinned and there is no transformation left to film. `skin list` and
+`skin scan` are root-only for the same reason. But `skin load <vol> <path>`
+passes its path straight to uno_fs_read, which reads a subdirectory fine - so a
+skin parked in `SKINS\\` is invisible to the boot scan and reachable by the
+verb. The player opens built-in, the music starts, and one command puts the
+real Base 2.91 chassis on screen mid-shot. Nothing about the file changes: it
+is the same untouched archive, decoded live from its ZIP by unoamp_skin.c.
 
-The scene still stages the real BASE291.WSZ at the volume ROOT (uno_fs lists
-roots only - unoamp_app.c:288 - so a nested folder is invisible to it), because
-that is what makes the bug visible and what will produce a skinned chassis the
-day bmp_decode learns RLE8. Today the player is filmed in its built-in look and
-the beat is named for what it is.
+`skin` is DRIVE-gated rather than #ifdef'd, so this works on a production build
+too; the debug build is used here only because the scene also needs URC itself.
 """
 import argparse, json, os, subprocess, sys, threading, time
 
@@ -69,6 +62,20 @@ from demo_common import (OUT, PROBE, PC64, ESP, OVMF_CODE, OVMF_VARS,  # noqa: E
                          wav_measure, sh)
 
 S06_QMP = "/tmp/unodos-demo-s06-qmp.sock"
+
+# pc64/build/esp is shared with other lanes and gets rebuilt under us (it was a
+# UNO_DEBUG=0 tree by the time this scene needed re-recording). s06 needs a
+# DEBUG build - it drives the whole scene over URC - so it prefers its own:
+#   git worktree add ~/unodos-s06dbg --detach <sha>
+#   cp -r pc64/fw-blobs ~/unodos-s06dbg/pc64/
+#   cd ~/unodos-s06dbg/pc64 && UNO_DEBUG=1 sh ./build.sh
+DBG_ESP = os.path.expanduser("~/unodos-s06dbg/pc64/build/esp")
+
+# Where the skin is parked ON THE GUEST. NOT the volume root: the boot scan
+# takes the first .wsz it finds at any root, and a player that opens already
+# skinned has no transformation to film. See the module docstring.
+SKIN_DIR = "SKINS"
+SKIN_NAME = "BASE291.WSZ"
 
 # EFI scan codes (the `key` verb's scan field) - map_key in uefi_main.c, the
 # same table scenes.py uses.
@@ -256,11 +263,10 @@ def s06(d):
     # beat, or every shot in the scene has a stray window behind it.
     d.close_all()
     d.beat("launch-unoamp", settle=0.4)
-    d.launch("unoamp", settle=3.0)          # skin attempt + playlist scan
-    # Named for what is on screen. The staged BASE291.WSZ is refused by
-    # bmp_decode (BI_RLE8 - see the module docstring), so this is the built-in
-    # theme-coloured chassis, not the Winamp skin.
-    d.beat("unoamp-opens-builtin-look", settle=2.0)
+    d.launch("unoamp", settle=2.6)          # playlist scan; no skin to find
+    # The player comes up in its built-in, theme-coloured look, because the only
+    # .wsz on the machine is in SKINS\ where the boot scan does not look.
+    d.beat("unoamp-builtin-look", settle=1.4)
 
     # Glide FIRST, mark the beat, then press. The beat's wall clock is what
     # pins the video clock to the wav clock later, so it has to sit next to the
@@ -271,16 +277,28 @@ def s06(d):
     d.click(*play, glide=False, settle=1.2)
 
     # The elapsed-time digits and the position bar are what move here. The
-    # visualiser well is drawn but effectively frozen: measured over 6 s of
-    # this recording it changed on 11 of 179 frames, because the player only
-    # asks the shell to repaint when its title MARQUEE advances
-    # (unoamp_ui_tick) and "FLYHIGH" is short enough to fit without scrolling.
+    # visualiser well is drawn but effectively frozen: measured over 6 s of an
+    # earlier take it changed on 11 of 179 frames, because the player only asks
+    # the shell to repaint when its title MARQUEE advances (unoamp_ui_tick) and
+    # "FLYHIGH" is short enough to fit without scrolling. Re-measured below and
+    # reported either way - the skin does not change that path.
     d.beat("hold-playing", settle=0.2)
-    time.sleep(4.5)
+    time.sleep(3.2)
+
+    # THE SHOT. One command, mid-playback, and the whole chassis changes: the
+    # real Base 2.91 sheets replace the theme-coloured fallback while the track
+    # keeps playing. `skin load` repaints, so the transformation lands inside a
+    # single frame rather than needing a nudge.
+    d.beat("skin-load-base291-wsz", settle=0.0)
+    r = d.link.command("skin", "load", d.skin_vol, SKIN_PATH, timeout=20)
+    print("    skin load -> %r" % (r,))
+    if not (r and r[0].startswith("skinned")):
+        raise RuntimeError("skin load refused: %r" % (r,))
+    time.sleep(4.6)                          # HOLD: this is the scene's point
 
     d.beat("open-the-10-band-eq", settle=0.2)
     d.click(*uamp_eq(fbw), settle=1.0)
-    time.sleep(3.5)                          # the EQ window docks below
+    time.sleep(3.0)                          # the skinned EQMAIN docks below
 
     d.beat("stop", settle=0.2)
     d.click(*uamp_btn(fbw, T_STOP), settle=0.8)
@@ -292,18 +310,68 @@ def s06(d):
     d.close_all(3)              # belt and braces: the first take left a
                                 # "UnoAmp" chip on the taskbar through Photos
 
+    # Photos pays for the re-skin. Three formats instead of four (BMP goes; the
+    # brief's floor was "3-4 including the animated GIF") and shorter holds -
+    # the GIF keeps the longest one, because an animation needs time to read as
+    # an animation and it is the only beat here that is not a still.
     d.beat("launch-photos", settle=0.3)
-    d.launch("photos", settle=3.5)           # opens straight into PICTURES\
+    d.launch("photos", settle=3.0)           # opens straight into PICTURES\
     d.beat("jpeg", settle=0.2)
-    time.sleep(2.0)
-    for tag, hold in (("png-alpha", 2.0),
-                      ("animated-gif", 4.5),   # hold: the animation IS the beat
-                      ("bmp", 2.2)):
+    time.sleep(1.5)
+    for tag, hold in (("png-alpha", 1.5),
+                      ("animated-gif", 3.8)):  # hold: the animation IS the beat
         d.beat(tag, settle=0.2)
         d.key(0, S_RIGHT, settle=0.4)
         time.sleep(hold)
     d.beat("close", settle=0.2)
     d.close_all()
+
+
+SKIN_PATH = "%s\\%s" % (SKIN_DIR, SKIN_NAME)
+
+
+def find_skin_vol(link, verbose=True):
+    """Which volume the skin loads from - established by LOADING it, off
+    camera, and then undone with `skin off` before the take.
+
+    A volume index is this boot's mount order, not a property of the disk, so
+    the on-camera `skin load` cannot be allowed to be the first attempt: a
+    refusal mid-take costs the whole recording. The obvious oracle, asking
+    `uno.size` whether the file is there, does not work - the `py` verb is a
+    ONE-LINE exec (REMOTE.md) and every multi-line probe came back empty, for
+    a path that turned out to be perfectly readable. So the preflight is the
+    real operation, which answers exactly the question that matters and cannot
+    disagree with the take.
+
+    Cheap to undo, and safe to get wrong: REMOTE.md says a refused `load`
+    leaves the built-in look rather than the previous skin, and `skin` is safe
+    with no player open (which is the case here - this runs before UnoAmp).
+    """
+    for v in link.vols(timeout=15):
+        try:
+            r = link.command("skin", "load", v["vol"], SKIN_PATH, timeout=30)
+        except Exception as e:                     # noqa: BLE001
+            if verbose:
+                print("  vol %d (kind %d): %s" % (v["vol"], v["kind"], e))
+            continue
+        ok = bool(r) and r[0].startswith("skinned")
+        if verbose:
+            print("  vol %d (kind %d, %r): skin load -> %r"
+                  % (v["vol"], v["kind"], v["name"].strip(), r))
+        if ok:
+            link.command("skin", "off", timeout=10)   # back to built-in
+            return v["vol"]
+    return None
+
+
+def probe_skin(link):
+    """--probe: everything the skin beat needs, and nothing else. A 50-second
+    boot is much cheaper than a failed take."""
+    print("vols     : %r" % (link.vols(timeout=15),))
+    print("skin list: %r" % (link.command("skin", "list", timeout=15),))
+    print("status   : %r" % (link.command("skin", "status", timeout=10),))
+    print("skin vol : %r" % (find_skin_vol(link),))
+    print("status   : %r" % (link.command("skin", "status", timeout=10),))
 
 
 def longest_loud_run(env, thresh):
@@ -334,25 +402,52 @@ def main(argv):
     ap.add_argument("--no-audio", action="store_true")
     ap.add_argument("--mp3", help="the track to stage at the volume root")
     ap.add_argument("--boot-timeout", type=float, default=240.0)
+    ap.add_argument("--esp", default=None,
+                    help="ESP tree to boot (default: the UNO_DEBUG=1 tree at "
+                         "%s if present, else pc64/build/esp)" % DBG_ESP)
+    ap.add_argument("--probe", action="store_true",
+                    help="boot, report what the skin beat needs, quit")
+    ap.add_argument("--out-dir", metavar="DIR", default="out/final",
+                    help="where the artifacts land, absolute or relative to "
+                         "tools/demo (default out/final - beside the rest of "
+                         "the final cut)")
     a = ap.parse_args(argv)
 
-    if not os.path.isdir(ESP):
-        raise SystemExit("no build/esp - run UNO_DEBUG=1 ./build.sh first")
+    esp = a.esp or (DBG_ESP if os.path.isdir(DBG_ESP) else ESP)
+    if not os.path.isdir(esp):
+        raise SystemExit("no ESP tree at %s - run UNO_DEBUG=1 ./build.sh" % esp)
+    buildtxt = os.path.join(esp, "BUILD.TXT")
+    if not os.path.exists(buildtxt):
+        raise SystemExit(
+            "%s has no BUILD.TXT, so it is a UNO_DEBUG=0 tree. s06 drives the "
+            "whole scene over URC, which a production build gates behind a "
+            "token typed at the console - build a debug tree (see DBG_ESP in "
+            "this file) and pass --esp." % esp)
+    build_id = open(buildtxt).read().strip().replace("\n", " | ")
     mp3 = find_mp3(a.mp3)
     if not mp3:
         raise SystemExit("no FLYHIGH.MP3 found (tried %s)" % MP3_CANDIDATES)
     if not os.path.exists(SKIN):
         raise SystemExit("missing skin: %s" % SKIN)
+    print("esp: %s\nbuild: %s" % (esp, build_id))
     print("assets: skin=%s track=%s" % (SKIN, mp3))
-    os.makedirs(OUT, exist_ok=True)
+
+    out_dir = a.out_dir if os.path.isabs(a.out_dir) \
+        else os.path.join(HERE, a.out_dir)
+    os.makedirs(out_dir, exist_ok=True)
     os.makedirs(PROBE, exist_ok=True)
-    base = os.path.join(OUT, "s06")
+    base = os.path.join(out_dir, "s06")
     clean_outputs(base)
     wav = base + ".wav"
 
     print("staging %s" % S06_DISK)
-    build_fat_disk(S06_DISK, S06_FAT, DEBUG_CFG,
-                   extra=[(SKIN, "::/BASE291.WSZ"), (mp3, "::/FLYHIGH.MP3")],
+    build_fat_disk(S06_DISK, S06_FAT, DEBUG_CFG, esp=esp,
+                   # The skin goes in SKINS\, NOT at the root: a root .wsz is
+                   # taken by the boot scan and the player opens already
+                   # skinned, which is the one thing this scene must not do.
+                   extra=[(SKIN, "::/%s/%s" % (SKIN_DIR, SKIN_NAME)),
+                          (mp3, "::/FLYHIGH.MP3")],
+                   mkdirs=(SKIN_DIR,),
                    skip=("DOOM1.WAD",),          # 11 MB, and nothing here plays it
                    ordered_dir=("PICTURES", PICS))
 
@@ -366,6 +461,7 @@ def main(argv):
     qemu = None
     q = None
     rx = None
+    skin_after = None
     t_qemu = time.time()
     beats = Beats(base + ".beats.jsonl")
     err = None
@@ -383,6 +479,21 @@ def main(argv):
         d.w, d.h = link.screen_info(timeout=20)
         d.px, d.py = d.w // 2, d.h // 2
         print("desktop %dx%d, UnoAmp scale %d" % (d.w, d.h, uamp_scale(d.w)))
+
+        # WHICH VOLUME THE SKIN IS ON, asked rather than assumed. The volume
+        # index is this boot's mount order, not a property of the disk, and a
+        # `skin load` against the wrong one is a refusal mid-take. uno.size is
+        # the cheapest question that can only be answered by the file existing.
+        if a.probe:
+            probe_skin(link)
+            return 0
+        d.skin_vol = find_skin_vol(link)
+        if d.skin_vol is None:
+            raise RuntimeError("no volume carries %s\\%s - staging failed"
+                               % (SKIN_DIR, SKIN_NAME))
+        # And prove the player starts BARE-CHESTED, so a skinned opening frame
+        # can never be mistaken for a re-skin that did not happen.
+        print("skin: before = %r" % (link.command("skin", "status", timeout=10),))
 
         rx = StreamReceiver(S06_STREAM, out=base + ".mp4", host="127.0.0.1")
         rx.listen()
@@ -407,6 +518,11 @@ def main(argv):
             print("  s06 body FAILED: %r" % e)
         time.sleep(1.0)
         try:
+            skin_after = link.command("skin", "status", timeout=10)
+            print("skin: after = %r" % (skin_after,))
+        except Exception:                          # noqa: BLE001
+            pass
+        try:
             link.command("stream", "stop", timeout=8)
         except Exception:                          # noqa: BLE001
             pass
@@ -430,9 +546,15 @@ def main(argv):
         link.close()
 
     info = probe(base + ".mp4")
-    st = {"scene": "s06", "mp4": base + ".mp4",
+    st = {"scene": "s06", "esp": esp, "build": build_id,
+          "mp4": base + ".mp4",
           "mp4_bytes": info.get("bytes"), "dur": info.get("dur"),
           "w": info.get("w"), "h": info.get("h"), "fps": info.get("rate"),
+          "skin_after": skin_after,
+          # stream_recv rescales each segment's timestamps at close (8956f168),
+          # so the container is already wall-clock truth. Recorded so nothing
+          # downstream retimes it a second time.
+          "retimed_by_receiver": bool(getattr(rx, "retimed", False)),
           "frames": rx.frames if rx else 0,
           "keyframes": rx.keyframes if rx else 0,
           "deltas": rx.deltas if rx else 0,
