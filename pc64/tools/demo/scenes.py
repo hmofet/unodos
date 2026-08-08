@@ -1031,6 +1031,11 @@ def s04_office(d):
     # slide so the app is shown doing something real, not a blank deck.
     d.beat("unoshow-cannot-open-ppt-see-report")
     d.launch("uoshow", settle=4.5)                   # slower to paint at 1280x800
+    # Locate the page BEFORE the beat marker: slide_rect() pulls a whole
+    # screen grab, which at 1280x800 is seconds, and doing it inside the beat
+    # ate the time the typing needed - the scene reached its close beat with
+    # the placeholder selected but the text not yet in.
+    pt = d.slide_point(*UOSHOW_TITLE_F)
     d.beat("author-a-titled-slide")
     # The page is located on a live grab (UOSHOW_TITLE_F is its FRACTION of
     # the page, not a pixel) because UnoShow's window - and so the page -
@@ -1042,11 +1047,10 @@ def s04_office(d):
     # first of a tight pair was still being swallowed while the app painted,
     # leaving the placeholder SELECTED but never in edit mode - the text then
     # went nowhere and the beat silently produced an empty slide.
-    pt = d.slide_point(*UOSHOW_TITLE_F)
     d.click(*pt, settle=1.0)                         # select the placeholder
     d.click(*pt, glide=False, settle=1.0)            # ...and enter text edit
     d.text("UnoDOS runs UnoShow.", settle=0.06)
-    time.sleep(1.5)
+    time.sleep(3.0)                                  # hold on the finished slide
     d.beat("close")
     d.ctrl("w", settle=1.0)
 

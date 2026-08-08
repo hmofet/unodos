@@ -50,8 +50,8 @@ from unoauto_remote import UnoAutoLink                      # noqa: E402
 from stream_recv import StreamReceiver, write_png           # noqa: E402
 from demo_common import (OUT, PROBE, PC64, ESP, OVMF_CODE, OVMF_VARS,  # noqa: E402
                          S06_URC, S06_STREAM, S06_DISK, S06_FAT, S06_VARS,
-                         Qmp, Beats, build_fat_disk, build_fat_disk as _bfd,
-                         probe, clean_outputs, wav_measure, sh)
+                         Qmp, Beats, build_fat_disk, probe, clean_outputs,
+                         wav_measure, sh)
 
 S06_QMP = "/tmp/unodos-demo-s06-qmp.sock"
 
@@ -72,10 +72,22 @@ DEBUG_CFG = ("nohud\n"          # no red perf HUD / stress status line
 # to it. FLYHIGH.MP3 ends up the ONLY playable file at any root, which is what
 # makes `g_sel == 0` and a single Play click deterministic.
 SKIN = os.path.join(PC64, "wads", "BASE291.WSZ")
-MP3  = os.path.join(os.path.expanduser("~"), "AppData", "Local", "Temp",
-                    "claude", "C--Users-arin",
-                    "3256c99b-ac54-4616-bece-ea49f590907d", "scratchpad",
-                    "demo-assets", "FLYHIGH.MP3")
+# The track lives outside the repo (it is not ours to commit). Candidates in
+# preference order; --mp3 overrides. The last is the copy build.sh's staging
+# already left on the ESP, so a machine without the scratchpad still records.
+MP3_CANDIDATES = [
+    "/mnt/c/Users/arin/AppData/Local/Temp/claude/C--Users-arin/"
+    "3256c99b-ac54-4616-bece-ea49f590907d/scratchpad/demo-assets/FLYHIGH.MP3",
+    os.path.join(PC64, "wads", "FLYHIGH.MP3"),
+    os.path.join(ESP, "FLYHIGH.MP3"),
+]
+
+
+def find_mp3(override=None):
+    for p in ([override] if override else []) + MP3_CANDIDATES:
+        if p and os.path.exists(p):
+            return p
+    return None
 
 # PICTURES\ in the order Photos will step through it. FAT has no sort - a
 # directory lists in creation order and Photos walks the listing - so writing
@@ -227,10 +239,13 @@ def s06(d):
     d.launch("unoamp", settle=4.0)          # skin decode + playlist scan
     d.beat("unoamp-wearing-base291-wsz", settle=2.5)
 
+    # Glide FIRST, mark the beat, then press. The beat's wall clock is what
+    # pins the video clock to the wav clock later, so it has to sit next to the
+    # button press and not a second and a half of pointer travel before it.
     play = uamp_btn(fbw, T_PLAY)
-    d.beat("play-flyhigh-mp3", settle=0.2)
-    t_play = d.beats.marks[-1][1] if d.beats else time.time()
-    d.click(*play, settle=1.2)
+    d.sweep(*play)
+    d.beat("play-flyhigh-mp3", settle=0.0)
+    d.click(*play, glide=False, settle=1.2)
 
     d.beat("hold-on-the-visualiser", settle=0.2)
     time.sleep(7.0)                          # the bar analyser + time counter
@@ -286,14 +301,18 @@ def main(argv):
                     help="use -device AC97 instead of Intel HDA (AUDIO.md's "
                          "fallback path)")
     ap.add_argument("--no-audio", action="store_true")
+    ap.add_argument("--mp3", help="the track to stage at the volume root")
     ap.add_argument("--boot-timeout", type=float, default=240.0)
     a = ap.parse_args(argv)
 
     if not os.path.isdir(ESP):
         raise SystemExit("no build/esp - run UNO_DEBUG=1 ./build.sh first")
-    for p in (SKIN, MP3):
-        if not os.path.exists(p):
-            raise SystemExit("missing asset: %s" % p)
+    mp3 = find_mp3(a.mp3)
+    if not mp3:
+        raise SystemExit("no FLYHIGH.MP3 found (tried %s)" % MP3_CANDIDATES)
+    if not os.path.exists(SKIN):
+        raise SystemExit("missing skin: %s" % SKIN)
+    print("assets: skin=%s track=%s" % (SKIN, mp3))
     os.makedirs(OUT, exist_ok=True)
     os.makedirs(PROBE, exist_ok=True)
     base = os.path.join(OUT, "s06")
@@ -302,7 +321,7 @@ def main(argv):
 
     print("staging %s" % S06_DISK)
     build_fat_disk(S06_DISK, S06_FAT, DEBUG_CFG,
-                   extra=[(SKIN, "::/BASE291.WSZ"), (MP3, "::/FLYHIGH.MP3")],
+                   extra=[(SKIN, "::/BASE291.WSZ"), (mp3, "::/FLYHIGH.MP3")],
                    skip=("DOOM1.WAD",),          # 11 MB, and nothing here plays it
                    ordered_dir=("PICTURES", PICS))
 

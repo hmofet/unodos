@@ -18,11 +18,16 @@ pretend otherwise: the concat list it hands ffmpeg gives every frame its REAL
 measured duration, so the mp4 runs at the speed the boot actually happened.
 The achieved rate is measured and written into out/s01.stats.json.
 
-NO RED HUD. The image is the DEBUG build (build/esp, the one every other scene
-in the cut is recorded from), with the DEBUG.CFG below - `nohud` is the flag
-that removes the red perf HUD and the stress status line from the frame
-(pc64/DEBUG.md, pc64_uui.c:6407). A UNO_DEBUG=0 build would also have no HUD
-but would not be the same binary as the rest of the cut.
+WHICH BUILD, AND WHY IT IS NOT THE DEBUG ONE. `nohud` (pc64/DEBUG.md,
+pc64_uui.c:6407) takes the red perf HUD and the stress status line out of the
+DESKTOP, and the DEBUG.CFG below sets it - but it does not touch the boot
+SPLASH, and the splash is most of this scene. uefi_main.c:430 stamps
+"DEBUG / STRESS BUILD <build id>" across it in yellow under a bare `#ifdef
+UNO_DEBUG`, with no runtime switch, so on a debug build that banner is in
+every frame of a boot. So s01 defaults to a UNO_DEBUG=0 ESP built in a
+SEPARATE git worktree (--esp), which leaves pc64/build/esp - shared with the
+scenes.py lane - untouched. `--esp <dir>` records any tree; pointing it at
+pc64/build/esp gives the debug boot instead, banner and all.
 
 Isolation: its own QMP socket and its own disk image, so it can run beside a
 scenes.py session (which owns /tmp/remote_*.img and port 5399).
@@ -36,14 +41,21 @@ from demo_common import (OUT, PROBE, ESP, VID_W, VID_H, FPS, OVMF_CODE,      # n
                          Qmp, Beats, build_fat_disk, screendump, frame_stats,
                          sig_diff, encode_concat, probe, clean_outputs, sh)
 
-# The same four keys the demo stick carries (pc64/tools/demo/deploy.sh), minus
-# `remote=`: s01 drives nothing, so there is no receiver to dial and an
-# unanswered dial is just noise in the log. `nonet` keeps the slow boot network
-# probe out of the shot, exactly as scenes.py does for s02-s10.
+# The demo stick's keys (pc64/tools/demo/deploy.sh) minus `remote=`: s01 drives
+# nothing, so there is no receiver to dial and an unanswered dial is just noise.
+# A UNO_DEBUG=0 image ignores this file entirely (it has no HUD, no fuzz driver
+# and no auto power-off to switch off); it is written anyway so that --esp
+# build/esp gives a filmable debug boot without a second code path.
 DEBUG_CFG = ("nohud\n"          # no red perf HUD / stress status line: filmable
              "nostress\n"       # the fuzz driver would open apps on camera
              "noshutdown\n"     # never power itself off mid-take
              "nonet\n")
+
+# The production ESP s01 prefers, built by:
+#   git worktree add ~/unodos-s01prod --detach HEAD
+#   cp -r pc64/fw-blobs ~/unodos-s01prod/pc64/
+#   cd ~/unodos-s01prod/pc64 && UNO_DEBUG=0 sh ./build.sh
+PROD_ESP = os.path.expanduser("~/unodos-s01prod/pc64/build/esp")
 
 
 def boot(disk, qmp_sock):
@@ -65,7 +77,8 @@ def boot(disk, qmp_sock):
     return subprocess.Popen(cmd, stderr=subprocess.DEVNULL)
 
 
-def capture(q, frames_dir, max_secs, quiet_secs, verbose=True, big=0.20):
+def capture(q, frames_dir, max_secs, quiet_secs, verbose=True, big=0.20,
+            target_fps=30.0):
     """Dump frames as fast as screendump will settle, and stop once the DESKTOP
     has been still for `quiet_secs` (or `max_secs` elapse).
 
@@ -77,7 +90,16 @@ def capture(q, frames_dir, max_secs, quiet_secs, verbose=True, big=0.20):
     own animation - a progress segment, a stage caption - moves a few percent
     of the frame; splash -> desktop repaints all of it, so the two are not
     close and the threshold is not delicate.
+
+    PACING. Unpaced, this loop sustained ~90 screendumps/second on this box
+    once the PPM sequence was moved off the 9p /mnt/c mount (the first take,
+    writing frames into out/, managed 3.4). Ninety is well above both the
+    guest's own refresh and the 30 fps container, and each 1280x800 PPM is
+    3 MB, so the loop is paced to `target_fps` instead: still every frame the
+    output can carry, at a third of the disk. The measured rate goes in
+    out/s01.stats.json either way.
     """
+    period = 1.0 / target_fps if target_fps else 0.0
     os.makedirs(frames_dir, exist_ok=True)
     for f in os.listdir(frames_dir):
         os.remove(os.path.join(frames_dir, f))
@@ -88,6 +110,7 @@ def capture(q, frames_dir, max_secs, quiet_secs, verbose=True, big=0.20):
     seen_big = False
     i = 0
     while time.time() - t0 < max_secs:
+        due = time.time() + period
         path = os.path.join(frames_dir, "%05d.ppm" % i)
         r = screendump(q, path)
         if r is None:
@@ -116,9 +139,12 @@ def capture(q, frames_dir, max_secs, quiet_secs, verbose=True, big=0.20):
         else:
             quiet_since = None
         i += 1
-        if verbose and i % 25 == 0:
+        if verbose and i % 60 == 0:
             print("  capture: %d frames, %.1fs, %.1f fps"
                   % (len(out), t - t0, len(out) / (t - t0)))
+        slack = due - time.time()
+        if slack > 0:
+            time.sleep(slack)
     return out
 
 
@@ -202,19 +228,23 @@ def mark_beats(frames, beats):
     return got
 
 
-def build_video(frames, out_mp4, head_black=3, tail_pad=1.0):
+def build_video(frames, out_mp4, head_black_secs=1.0, tail_pad=1.0):
     """concat-demuxer list with REAL per-frame durations -> a 30 fps mp4.
 
-    Trim the dead black head: OVMF holds a black screen for a while before it
-    draws anything, and that is not footage. A few black frames are kept so the
-    cut opens on black rather than snapping on mid-firmware.
+    Trim the dead black head: firmware holds a black screen for several seconds
+    before it hands over and that is not footage. `head_black_secs` of it stays,
+    because a cold boot that opens on a dark screen and then lights up reads as
+    a cold boot, while one that snaps straight to a splash reads as a cut.
     """
-    first_lit = 0
+    first_lit = len(frames) - 1
     for i, (p, w, h, t, mean, sig) in enumerate(frames):
         if mean > 6:
             first_lit = i
             break
-    start = max(0, first_lit - head_black)
+    t_lit = frames[first_lit][3]
+    start = first_lit
+    while start > 0 and t_lit - frames[start - 1][3] < head_black_secs:
+        start -= 1
     kept = frames[start:]
     if len(kept) < 2:
         raise RuntimeError("nothing captured worth encoding (%d frames)" % len(kept))
@@ -234,16 +264,35 @@ def main(argv):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--max-secs", type=float, default=150.0,
                     help="hard stop on the capture loop")
-    ap.add_argument("--quiet-secs", type=float, default=4.0,
-                    help="hold this long on a still desktop, then stop")
+    ap.add_argument("--quiet-secs", type=float, default=8.0,
+                    help="hold this long on the settled desktop, then stop")
+    ap.add_argument("--target-fps", type=float, default=30.0,
+                    help="pace the screendump loop (0 = as fast as it will go)")
     ap.add_argument("--keep-frames", action="store_true")
+    ap.add_argument("--esp", default=None,
+                    help="ESP tree to boot (default: the UNO_DEBUG=0 tree at "
+                         "%s if present, else pc64/build/esp)" % PROD_ESP)
+    ap.add_argument("--suffix", default="",
+                    help="write s01<suffix>.* instead of s01.* (for an "
+                         "alternate take)")
     a = ap.parse_args(argv)
 
-    if not os.path.isdir(ESP):
-        raise SystemExit("no build/esp - run UNO_DEBUG=1 ./build.sh first")
+    esp = a.esp or (PROD_ESP if os.path.isdir(PROD_ESP) else ESP)
+    if not os.path.isdir(esp):
+        raise SystemExit("no ESP tree at %s - run ./build.sh first" % esp)
+    # BUILD.TXT is written by the DEBUG build only, so its absence is itself
+    # the answer to "which build is this?".
+    buildtxt = os.path.join(esp, "BUILD.TXT")
+    if os.path.exists(buildtxt):
+        build_id = "UNO_DEBUG=1 | " + open(buildtxt).read().strip().replace("\n", " | ")
+    else:
+        efi = os.path.join(esp, "EFI", "BOOT", "BOOTX64.EFI")
+        build_id = "UNO_DEBUG=0 (no BUILD.TXT) | BOOTX64.EFI %d bytes" % (
+            os.path.getsize(efi) if os.path.exists(efi) else -1)
+    print("esp: %s\nbuild: %s" % (esp, build_id))
     os.makedirs(OUT, exist_ok=True)
     os.makedirs(PROBE, exist_ok=True)
-    base = os.path.join(OUT, "s01")
+    base = os.path.join(OUT, "s01" + a.suffix)
     clean_outputs(base)
     # The PPM sequence lands on the WSL-native filesystem, NOT in out/. A
     # 1280x800 PPM is 3 MB and out/ is on /mnt/c: writing the sequence through
@@ -251,7 +300,7 @@ def main(argv):
     frames_dir = "/tmp/demo_s01_frames"
 
     print("staging %s" % S01_DISK)
-    build_fat_disk(S01_DISK, S01_FAT, DEBUG_CFG)
+    build_fat_disk(S01_DISK, S01_FAT, DEBUG_CFG, esp=esp)
 
     beats = Beats(base + ".beats.jsonl")
     q = None
@@ -261,7 +310,8 @@ def main(argv):
         qemu = boot(S01_DISK, S01_QMP)
         q = Qmp(S01_QMP)
         print("qemu up, capturing")
-        frames = capture(q, frames_dir, a.max_secs, a.quiet_secs)
+        frames = capture(q, frames_dir, a.max_secs, a.quiet_secs,
+                         target_fps=a.target_fps)
     finally:
         try:
             if q:
@@ -293,7 +343,8 @@ def main(argv):
 
     info = probe(base + ".mp4")
     sizes = sorted(set((w, h) for _, w, h, _, _, _ in frames))
-    st = {"scene": "s01", "frames_captured": len(frames),
+    st = {"scene": "s01" + a.suffix, "esp": esp, "build": build_id,
+          "frames_captured": len(frames),
           "frames_kept": len(kept),
           "capture_seconds": round(t_last - t_first, 2),
           "capture_fps": round(fps_real, 2),
