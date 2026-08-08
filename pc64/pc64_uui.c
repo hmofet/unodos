@@ -3857,6 +3857,12 @@ static void close_app(int a)
     g_win[a].snap = UI_SNAP_NONE;
     if (g >= 0)              pc64_game_close(g);        /* native game teardown */
     else if (a == APP_MUSIC) pc64_music_closed();       /* stop playback      */
+    else if (a == APP_UNOAMP) { void unoamp_ui_close(void); unoamp_ui_close(); }
+                                       /* stop playback + drop the EQ/playlist
+                                        windows, whichever route got here. It
+                                        re-enters this function and lands on
+                                        the g_open test above, which is already
+                                        0 by now - so exactly one teardown. */
     else if (g_app[a].kind == AK_UUIMOD)
         { const UnoUuiApp *m = app_iface(a); if (m && m->closed) m->closed(); }
     else if (a == EX_PYAPP)  { if (g_pyapp) { unoscript_app_caps_end();
@@ -5243,6 +5249,22 @@ int pc64_shell_launch(int a)
 {
     if (a < 0 || a >= NAPPS || a == EX_PYAPP || a == EX_USERAPP) return 0;
     open_app(a);
+    return 1;
+}
+
+/* Close app `a`; 1 if it was open.  The counterpart to pc64_shell_launch(),
+ * and the missing half of the window lifecycle for an app that draws its own
+ * chrome: a UI_WIN_BARE window is deliberately skipped by close_focused(), so
+ * such an app had no way to close itself except removing its own window.  That
+ * left the shell believing it was still open - its taskbar chip outlived it
+ * for the rest of the session, and open_app() took the already-open branch and
+ * raised a window that was no longer in the scene, so it could not be reopened
+ * either.  Everything else (g_open/g_parked/g_group, the app's own teardown,
+ * focus hand-off, the taskbar rebuild, session_save) is close_app's, unchanged. */
+int pc64_shell_app_close(int a)
+{
+    if (a < 0 || a >= NAPPS || !g_open[a]) return 0;
+    close_app(a);
     return 1;
 }
 
