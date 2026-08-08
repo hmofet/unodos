@@ -71,6 +71,12 @@ PLATFORMS = [
 CARD_TITLE = "UnoDOS"
 CARD_LINE  = "One GUI-first operating system, written from scratch,"
 CARD_LINE2 = "running on more than twenty kinds of hardware."
+# ...and then the name again, alone, as the last thing on screen (asked for
+# 2026-08-08). It is rendered as a SECOND card - identical to the first plus
+# this one word - and crossfaded in, so the word gets a beat of its own instead
+# of arriving with the sentence it follows. Nothing else moves across that
+# fade, which is what makes it read as an arrival rather than a cut.
+CARD_CLOSER = "UnoDOS"
 
 
 def esc(s):
@@ -132,7 +138,13 @@ def make_card(src, caption, dst, font, w, h, index=None, total=None, crop=None):
     return dst
 
 
-def make_endcard(dst, font, w, h):
+def make_endcard(dst, font, w, h, closer=None):
+    """The closing card; with `closer`, the same card plus the final word.
+
+    Every dimension is against the same 400-line reference the platform cards
+    use, so the two cards are laid out by one number (sc) and the crossfade
+    between them cannot shift anything that is on both.
+    """
     sc = h / 400.0
     vf = (
         "drawtext=fontfile='%s':text='%s':fontcolor=0xFFFFFF:fontsize=%d:"
@@ -147,6 +159,14 @@ def make_endcard(dst, font, w, h):
            font, esc(CARD_LINE), int(21 * sc), int(228 * sc),
            font, esc(CARD_LINE2), int(21 * sc), int(258 * sc))
     )
+    if closer:
+        # The same font and the title's white, at a size between the title and
+        # the description - so it reads as the same voice signing off, not as a
+        # second heading. Centred on the same axis as everything above it, with
+        # a clear gap: it is meant to be alone on that part of the screen.
+        vf += (",drawtext=fontfile='%s':text='%s':fontcolor=0xFFFFFF:"
+               "fontsize=%d:x=(w-tw)/2:y=%d"
+               % (font, esc(closer), int(30 * sc), int(312 * sc)))
     r = subprocess.run(["ffmpeg", "-y", "-loglevel", "error",
                         "-f", "lavfi", "-i", "color=c=0x0B0E14:s=%dx%d" % (w, h),
                         "-vf", vf, "-frames:v", "1", dst])
@@ -155,7 +175,7 @@ def make_endcard(dst, font, w, h):
     return dst
 
 
-def build(hold, xfade, card_hold, outfile, beats, w, h):
+def build(hold, xfade, card_hold, card_tail, outfile, beats, w, h):
     font = font_path()
     work = os.path.join(OUT, "s11_cards")
     os.makedirs(work, exist_ok=True)
@@ -174,26 +194,36 @@ def build(hold, xfade, card_hold, outfile, beats, w, h):
         cards.append((name, dst))
     if missing:
         raise SystemExit("missing source screenshots: %s" % missing)
+    # TWO end cards: the card, then the card plus the closing word. See
+    # CARD_CLOSER - the word gets its own beat by being its own segment.
     end = make_endcard(os.path.join(work, "zz_end.png"), font, w, h)
+    end2 = make_endcard(os.path.join(work, "zz_end2.png"), font, w, h,
+                        closer=CARD_CLOSER)
 
-    # xfade chain. Each input is a still looped for `hold`; the transition
-    # eats `xfade` seconds of overlap, so a card is on screen alone for
-    # hold - xfade and the sequence advances every (hold - xfade).
+    # The timeline, as (label, still, seconds-on-screen-including-its-fade).
+    # This used to assume every segment lasted `hold` and derive one `step`
+    # from it, which was true only while the end card was last: an xfade offset
+    # is the sum of the PREVIOUS segments' lengths, so a second end card of a
+    # different length would have been composited into the middle of the first.
+    segs = ([("platform-" + name.lower().replace(" ", "-").replace("/", "-"),
+              p, hold) for name, p in cards] +
+            [("end-card", end, card_hold), ("closing-word", end2, card_tail)])
+
     inputs = []
-    for _, p in cards:
-        inputs += ["-loop", "1", "-t", str(hold), "-i", p]
-    inputs += ["-loop", "1", "-t", str(card_hold), "-i", end]
+    for _, p, dur in segs:
+        inputs += ["-loop", "1", "-t", str(dur), "-i", p]
 
-    step = hold - xfade
     fc = []
     prev = "0:v"
-    off = step
-    for i in range(1, len(cards) + 1):
+    off = segs[0][2] - xfade
+    starts = [0.0]
+    for i in range(1, len(segs)):
         lab = "x%d" % i
         fc.append("[%s][%d:v]xfade=transition=fade:duration=%s:offset=%s[%s]"
                   % (prev, i, xfade, round(off, 3), lab))
         prev = lab
-        off += step
+        starts.append(off)
+        off += segs[i][2] - xfade
     fc.append("[%s]format=yuv420p,fps=%d[v]" % (prev, FPS))
     cmd = (["ffmpeg", "-y", "-loglevel", "error"] + inputs +
            ["-filter_complex", ";".join(fc), "-map", "[v]",
@@ -203,13 +233,11 @@ def build(hold, xfade, card_hold, outfile, beats, w, h):
     if r.returncode != 0:
         raise RuntimeError("montage encode failed")
 
-    # Beats are DERIVED from the timeline we just built, so the sidecar and the
-    # video cannot disagree: card k is fully up at k*(hold-xfade).
+    # Beats are DERIVED from the timeline just built, so the sidecar and the
+    # video cannot disagree: segment k begins its fade-in at starts[k].
     t0 = time.time()
-    for i, (name, _) in enumerate(cards):
-        beats.mark("platform-" + name.lower().replace(" ", "-").replace("/", "-"),
-                   t=t0 + i * step)
-    beats.mark("end-card", t=t0 + len(cards) * step)
+    for (name, _, _), s in zip(segs, starts):
+        beats.mark(name, t=t0 + s)
     return outfile
 
 
@@ -227,6 +255,12 @@ def main(argv):
                     help="seconds each card is held (incl. its crossfade)")
     ap.add_argument("--xfade", type=float, default=0.55)
     ap.add_argument("--card-hold", type=float, default=4.6)
+    # The closing word's own beat. It costs card_tail - xfade = 2.65 s of extra
+    # runtime, which is the price of the word landing on its own instead of
+    # arriving inside the same still as the sentence above it.
+    ap.add_argument("--card-tail", type=float, default=3.2,
+                    help="seconds the card holds AFTER the closing word "
+                         "appears (incl. its crossfade)")
     ap.add_argument("--width", type=int, default=DEF_W,
                     help="render width (default %d - the final cut's size)" % DEF_W)
     ap.add_argument("--height", type=int, default=DEF_H)
@@ -252,13 +286,14 @@ def main(argv):
     clean_outputs(base)
     beats = Beats(base + ".beats.jsonl")
     try:
-        build(a.hold, a.xfade, a.card_hold, base + ".mp4", beats,
+        build(a.hold, a.xfade, a.card_hold, a.card_tail, base + ".mp4", beats,
               a.width, a.height)
     finally:
         beats.close()
     info = probe(base + ".mp4")
     st = {"scene": "s11", "platforms": len(PLATFORMS), "hold": a.hold,
-          "xfade": a.xfade, "card_hold": a.card_hold,
+          "xfade": a.xfade, "card_hold": a.card_hold, "card_tail": a.card_tail,
+          "closing_word": CARD_CLOSER,
           "seconds_per_platform": round(a.hold - a.xfade, 2),
           "mp4": base + ".mp4", "mp4_bytes": info.get("bytes"),
           "dur": info.get("dur"), "w": info.get("w"), "h": info.get("h"),
