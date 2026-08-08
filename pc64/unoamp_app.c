@@ -279,6 +279,44 @@ static int g_scan_vols, g_scan_files, g_scan_skins;
  * one. There is no settings store here yet, so this takes the first skin it
  * finds, in volume then directory order - deterministic, and a machine with
  * exactly one skin installed does the obvious thing. */
+/* What the player is currently wearing, so `skin status` can say. Empty path
+ * with g_skin_vol < 0 means the built-in look. */
+static char g_skin_path[80];
+static int  g_skin_vol = -1;
+
+static int is_wsz(const char *name)
+{
+    int k = 0;
+    while (name[k]) k++;
+    if (k < 5) return 0;
+    return (name[k-4] == '.') &&
+           (name[k-3] == 'W' || name[k-3] == 'w') &&
+           (name[k-2] == 'S' || name[k-2] == 's') &&
+           (name[k-1] == 'Z' || name[k-1] == 'z');
+}
+
+/* Apply one skin and remember it. The ONE place g_skin_path/g_skin_vol are
+ * set, so "what is on screen" and "what status reports" cannot drift.
+ *
+ * A FAILED load leaves the built-in look, not the previous skin:
+ * unoamp_skin_load() resets its arena before it parses, so by the time it can
+ * fail the old sheets are already gone. Saying so is better than pretending
+ * otherwise - and it is the safe direction, since the alternative is a
+ * half-applied skin drawn from a half-filled arena. */
+static int apply_skin(int vol, const char *path)
+{
+    if (!unoamp_skin_load(vol, path)) {
+        g_skin_path[0] = 0;
+        g_skin_vol = -1;
+        return 0;
+    }
+    g_skin_path[0] = 0;
+    strncpy(g_skin_path, path, sizeof g_skin_path - 1);
+    g_skin_path[sizeof g_skin_path - 1] = 0;
+    g_skin_vol = vol;
+    return 1;
+}
+
 static int load_a_skin(void)
 {
     int nv = uno_fs_volumes(), v, i, n;
@@ -291,19 +329,13 @@ static int load_a_skin(void)
          * has already cost this repo one silent wrong-disk read. */
         n = uno_fs_list_begin(v);
         for (i = 0; i < n; i++) {
-            int k;
             if (!uno_fs_list_get(v, i, name, (int)sizeof name)) continue;
-            k = 0; while (name[k]) k++;
-            if (k < 5) continue;
-            if (!((name[k-4] == '.') &&
-                  (name[k-3] == 'W' || name[k-3] == 'w') &&
-                  (name[k-2] == 'S' || name[k-2] == 's') &&
-                  (name[k-1] == 'Z' || name[k-1] == 'z'))) continue;
+            if (!is_wsz(name)) continue;
             path[0] = 0;
             strncpy(path, name, sizeof path - 1);
             path[sizeof path - 1] = 0;
             g_scan_skins++;
-            if (unoamp_skin_load(v, path)) return 1;
+            if (apply_skin(v, path)) return 1;
         }
     }
     return 0;
@@ -365,5 +397,169 @@ void unoamp_start(void)
         scan_report(t, (int)sizeof t);
         unoamp_ui_set_title(t);
     }
+}
+
+/* ---- re-skinning a RUNNING player -----------------------------------------
+ *
+ * A skin used to be chosen exactly once per boot: load_a_skin() runs from
+ * unoamp_start(), behind the one-shot g_started above, and nothing ever reset
+ * it. That is fine for a machine that boots with its skin already on the disk
+ * and wrong for everything else - a skin copied in while the player is open
+ * needed a REBOOT to be seen, and a re-skin could not be shown at all: not on
+ * camera, and not in a test.
+ *
+ * So the swap gets one entry point here, in the lane that owns the skin, and
+ * the URC `skin` verb is a thin pass-through to it (unoauto_remote.c, weak-
+ * stubbed there so a build without UnoAmp still links). The contract is
+ * iwl_dbg_cmd's, which is what makes that row three lines: reply length in
+ * `out`, or -1 for a bad subcommand or a refused load.
+ *
+ * REPAINTING IS THE WHOLE TRICK, and it is free. unoamp_ui.c reads
+ * unoamp_skin_get() live on every draw, and the control layout is fixed by the
+ * skin FORMAT rather than by the loaded skin (see the atlas at the top of that
+ * file), so no geometry is cached anywhere and one dirty flag is a complete
+ * re-skin. Nothing here has to rebuild a window.
+ *
+ * NOT DEBUG-ONLY, deliberately. It is privilege-gated on the wire instead -
+ * GATE[] gives `skin` DRIVE, alongside `launch`, `key` and `pointer` - which
+ * is the honest classification, since changing what is on the screen is
+ * exactly what DRIVE means. An `#ifdef UNO_DEBUG` seam would be one that
+ * cannot be demonstrated on the build that actually ships.
+ */
+static int sk_put(char *out, int cap, int n, const char *s)
+{
+    while (*s && n < cap - 1) out[n++] = *s++;
+    if (n < cap) out[n] = 0;
+    return n;
+}
+static int sk_puti(char *out, int cap, int n, int v)
+{
+    int d = 1;
+    if (v < 0) { if (n < cap - 1) out[n++] = '-'; v = -v; }
+    while (v / d >= 10) d *= 10;
+    while (d && n < cap - 1) { out[n++] = (char)('0' + (v / d) % 10); d /= 10; }
+    if (n < cap) out[n] = 0;
+    return n;
+}
+static int sk_eq(const char *a, const char *b)
+{
+    int i;
+    for (i = 0; a[i] || b[i]; i++) {
+        char x = a[i], y = b[i];
+        if (x >= 'A' && x <= 'Z') x = (char)(x + 32);
+        if (y >= 'A' && y <= 'Z') y = (char)(y + 32);
+        if (x != y) return 0;
+    }
+    return 1;
+}
+static int sk_atoi(const char *s)
+{
+    int v = 0;
+    while (*s >= '0' && *s <= '9') v = v * 10 + (*s++ - '0');
+    return v;
+}
+
+static int sk_status(char *out, int cap)
+{
+    int n;
+    if (!unoamp_skin_loaded())
+        return sk_put(out, cap, 0, "built-in (no skin loaded)");
+    n = sk_put(out, cap, 0, "skinned vol=");
+    n = sk_puti(out, cap, n, g_skin_vol);
+    n = sk_put(out, cap, n, " ");
+    n = sk_put(out, cap, n, g_skin_path);
+    return n;
+}
+
+int unoamp_skin_cmd(char *line, char *out, int cap)
+{
+    char *p = line, *verb, *a1, *a2;
+    static char empty[1];
+    int n;
+
+    if (!out || cap < 16) return -1;
+    out[0] = 0;
+    if (!p) p = empty;
+
+    /* three tokens, cut in place - the caller's buffer is already ours */
+    while (*p == ' ') p++;
+    verb = p; while (*p && *p != ' ') p++;
+    if (*p) *p++ = 0;
+    while (*p == ' ') p++;
+    a1 = p;   while (*p && *p != ' ') p++;
+    if (*p) *p++ = 0;
+    while (*p == ' ') p++;
+    a2 = p;   while (*p && *p != ' ' && *p != '\r' && *p != '\n') p++;
+    *p = 0;
+
+    if (!*verb || sk_eq(verb, "status"))
+        return sk_status(out, cap);
+
+    /* Every .wsz on every volume root, so a harness can discover one rather
+     * than being told where it is. Same place load_a_skin() looks. */
+    if (sk_eq(verb, "list")) {
+        int nv = uno_fs_volumes(), v, i, m;
+        char name[64];
+        n = 0;
+        for (v = 0; v < nv; v++) {
+            m = uno_fs_list_begin(v);
+            for (i = 0; i < m; i++) {
+                if (!uno_fs_list_get(v, i, name, (int)sizeof name)) continue;
+                if (!is_wsz(name)) continue;
+                if (n) n = sk_put(out, cap, n, " ");
+                n = sk_puti(out, cap, n, v);
+                n = sk_put(out, cap, n, ":");
+                n = sk_put(out, cap, n, name);
+            }
+        }
+        if (!n) n = sk_put(out, cap, 0, "(no .wsz on any volume root)");
+        return n;
+    }
+
+    if (sk_eq(verb, "off")) {
+        unoamp_skin_unload();
+        g_skin_path[0] = 0;
+        g_skin_vol = -1;
+        pc64_shell_dirty();
+        return sk_put(out, cap, 0, "built-in look");
+    }
+
+    /* Re-run the boot-time scan. This is the one that reaches a skin dropped
+     * on the disk after the player opened. */
+    if (sk_eq(verb, "scan")) {
+        int got = load_a_skin();
+        pc64_shell_dirty();
+        if (!got) {
+            sk_put(out, cap, 0, "no loadable .wsz on any volume root");
+            return -1;
+        }
+        return sk_status(out, cap);
+    }
+
+    if (sk_eq(verb, "load")) {
+        int v;
+        const char *path;
+        if (!*a1) {
+            sk_put(out, cap, 0, "usage: skin load <vol> <file.wsz>");
+            return -1;
+        }
+        /* "load 0 X.WSZ" and the shorthand "load X.WSZ" (volume 0) */
+        if (*a2) { v = sk_atoi(a1); path = a2; }
+        else     { v = 0;           path = a1; }
+        if (!apply_skin(v, path)) {
+            pc64_shell_dirty();       /* it dropped to built-in: show that */
+            n = sk_put(out, cap, 0, "refused (not a readable .wsz, or no "
+                                    "MAIN.BMP in it): ");
+            n = sk_puti(out, cap, n, v);
+            n = sk_put(out, cap, n, ":");
+            n = sk_put(out, cap, n, path);
+            return -1;
+        }
+        pc64_shell_dirty();
+        return sk_status(out, cap);
+    }
+
+    sk_put(out, cap, 0, "bad-cmd (status/list/load/scan/off)");
+    return -1;
 }
 

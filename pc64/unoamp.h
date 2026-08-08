@@ -228,6 +228,22 @@ void unoamp_tick(void);
  * best-effort - neither can stop the player opening. */
 void unoamp_start(void);
 
+/* Re-skin a player that is ALREADY RUNNING, and repaint it. `line` is a
+ * subcommand, cut in place:
+ *
+ *   status                    what it is wearing now (also the empty line)
+ *   list                      every .wsz on every volume root, as "vol:NAME"
+ *   load <vol> <file.wsz>     wear that one   ("load <file.wsz>" = volume 0)
+ *   scan                      re-run the boot-time scan, take the first hit
+ *   off                       back to the built-in look
+ *
+ * Returns the reply length written to `out`, or -1 for a bad subcommand or a
+ * refused load (`out` carries the reason either way). That is iwl_dbg_cmd's
+ * contract, so the URC `skin` verb is a three-line pass-through. Safe with no
+ * player open. A refused `load` leaves the BUILT-IN look, not the previous
+ * skin - see the comment on apply_skin() in unoamp_app.c. */
+int unoamp_skin_cmd(char *line, char *out, int cap);
+
 /* ---- the skinned windows (phase 4, unoamp_ui.c) --------------------------- */
 struct unoui_window;
 void unoamp_ui_build(struct unoui_window *win);
