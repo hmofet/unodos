@@ -226,6 +226,17 @@ def ppm_read(path):
         return None
 
 
+def send_key(q, *qcodes):
+    """One chord over QMP: send-key with every qcode pressed together.
+
+    This is the ONLY input channel a production build has. URC needs a token
+    typed at the console when UNO_DEBUG=0 (see pc64/docs_shots.py's header),
+    which is exactly why the manual's figures are driven this way too - and
+    unlike URC's `key` verb, a QMP chord CAN carry Alt.
+    """
+    q.cmd("send-key", keys=[{"type": "qcode", "data": k} for k in qcodes])
+
+
 def screendump(q, path, tries=12, gap=0.06):
     """One settled screendump. Returns (w, h, px, t) or None.
 
