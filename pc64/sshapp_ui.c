@@ -61,6 +61,35 @@ static char g_status[128];
 static int  g_alarm;                 /* 1 = paint the status line as a warning */
 static unoui_rect g_rect;
 
+/* ---- the editor -----------------------------------------------------------
+ * WHY THIS EXISTS. Until it did, the store this app reads had no writer on the
+ * device at all: the Manage tab could list sessions and keys but not create
+ * one, `ssh_sess_set` / `ssh_key_generate`'s only callers in the whole tree
+ * were the self-test suites, and the `ssh` URC verb - which can populate the
+ * store - had never been given its dispatch clause. So a user who installed
+ * UnoDOS could only ever connect to sessions that did not exist. The verb is
+ * wired now, but a client that needs a SECOND machine to become usable is not
+ * a client, so the app gets its own writer.
+ *
+ * It is a one-line prompt in the status band rather than a modal dialog: this
+ * is a CANVAS, so a dialog would mean hosting widgets and a focus model inside
+ * it, and the band is already drawn every frame and already the place the app
+ * talks to you from. Type, Backspace, Enter for the next field, Esc to
+ * abandon. Nothing is written to the store until the last field is entered. */
+enum { PR_NONE = 0, PR_SESS, PR_KEY };
+#define PR_MAXF 5
+static int  g_prompt;                /* PR_* - 0 when not editing            */
+static int  g_pfield;                /* which field is being typed           */
+static char g_pval[PR_MAXF][SSH_HOSTLEN];
+static int  g_pane;                  /* Manage tab: 0 = sessions, 1 = keys   */
+
+/* field labels, per prompt kind */
+static const char *kSessF[PR_MAXF] = { "Name", "Host", "Port", "User", "Key" };
+static const char *kKeyF[PR_MAXF]  = { "New key name", 0, 0, 0, 0 };
+static int prompt_nfields(void) { return g_prompt == PR_SESS ? 5 : 1; }
+static const char *prompt_label(int i)
+{ return (g_prompt == PR_SESS ? kSessF : kKeyF)[i]; }
+
 static const unoui_theme *TH(void) { return pc64_shell_theme(); }
 
 static void put(char *d, int cap, const char *s)
@@ -73,6 +102,48 @@ static void say(const char *a, const char *b, int alarm)
     for (j = 0; b && b[j] && i < (int)sizeof g_status - 1; j++) g_status[i++] = b[j];
     g_status[i] = 0;
     g_alarm = alarm;
+}
+
+/* ---- the editor: start, type, commit -------------------------------------- */
+static void prompt_start(int kind)
+{
+    int i;
+    g_prompt = kind; g_pfield = 0;
+    for (i = 0; i < PR_MAXF; i++) g_pval[i][0] = 0;
+    if (kind == PR_SESS) put(g_pval[2], SSH_HOSTLEN, "22");   /* the default port */
+    say("Esc cancels, Enter accepts each field.", 0, 0);
+}
+
+static int pr_num(const char *s)
+{ int v = 0; while (*s >= '0' && *s <= '9') v = v * 10 + (*s++ - '0'); return v; }
+
+/* Enter on the LAST field: write the store. Nothing before this point has
+ * touched it, so an abandoned edit leaves no trace. */
+static void prompt_commit(void)
+{
+    if (g_prompt == PR_SESS) {
+        int port = pr_num(g_pval[2]);
+        if (!g_pval[0][0] || !g_pval[1][0] || !g_pval[3][0])
+            { say("A session needs a name, a host and a user.", 0, 1); g_prompt = PR_NONE; return; }
+        if (port <= 0 || port > 65535) port = 22;
+        if (ssh_sess_set(g_pval[0], g_pval[1], port, g_pval[3], g_pval[4]) != 0)
+            say("Could not save that session (store full?).", 0, 1);
+        else if (!ssh_store_persistent())
+            say("Saved to the RAM disk - it will not survive a reboot: ", g_pval[0], 1);
+        else
+            say("Saved session ", g_pval[0], 0);
+    } else if (g_prompt == PR_KEY) {
+        if (!g_pval[0][0]) { say("A key needs a name.", 0, 1); g_prompt = PR_NONE; return; }
+        /* Generated WITHOUT a passphrase on purpose: ssh_key_load takes "" and
+         * there is nowhere yet to type one at connect time. A guarded key is
+         * still importable, and `ssh keygen <n> <pass>` over URC still takes
+         * one - this is the path that has to work with no second machine. */
+        if (ssh_key_generate(g_pval[0], "") != 0)
+            say("Could not generate that key (store full? name in use?).", 0, 1);
+        else
+            say("Generated key ", g_pval[0], 0);
+    }
+    g_prompt = PR_NONE;
 }
 
 /* ---- the store, reloaded into display form ------------------------------- */
@@ -290,7 +361,7 @@ static void ssh_draw(struct unoui_widget *w, unoui_rect r, void *ctx)
         g_tab[0].used = 1; g_tab[0].conn = -1;
         put(g_tab[0].title, sizeof g_tab[0].title, "Manage");
         g_ntab = 1;
-        say("Pick a session and press + to connect.", 0, 0);
+        say("+ connects.  n new session   g generate key   p show public key   d delete", 0, 0);
     }
 
     pump_connections();
@@ -311,8 +382,20 @@ static void ssh_draw(struct unoui_widget *w, unoui_rect r, void *ctx)
 
     fb_fill_rect(stat.x, stat.y, stat.w, stat.h, TH()->pal.face);
     fb_hline(stat.x, stat.y, stat.w, TH()->pal.shadow);
-    fb_text(stat.x + 6, stat.y + 3, g_status,
-            g_alarm ? FB_RGB(190, 40, 40) : TH()->pal.text, -1);
+    if (g_prompt) {                      /* the editor owns the band while open */
+        char line[160];
+        int i = 0, k;
+        const char *lab = prompt_label(g_pfield);
+        for (k = 0; lab[k] && i < (int)sizeof line - 3; k++) line[i++] = lab[k];
+        line[i++] = ':'; line[i++] = ' ';
+        for (k = 0; g_pval[g_pfield][k] && i < (int)sizeof line - 2; k++)
+            line[i++] = g_pval[g_pfield][k];
+        line[i++] = '_';                 /* a caret, so it reads as a field    */
+        line[i] = 0;
+        fb_text(stat.x + 6, stat.y + 3, line, TH()->pal.accent, -1);
+    } else
+        fb_text(stat.x + 6, stat.y + 3, g_status,
+                g_alarm ? FB_RGB(190, 40, 40) : TH()->pal.text, -1);
 }
 
 /* ---- input --------------------------------------------------------------- */
@@ -324,6 +407,76 @@ static int ssh_event(struct unoui_widget *w, const void *ev, void *ctx)
     strip = r; strip.h = band_tabs_h();
     body = r; body.y = strip.y + strip.h;
     body.h = r.h - strip.h - band_stat_h();
+
+    /* The editor swallows everything typed while it is open, INCLUDING the
+     * keys that would otherwise start another edit - a prompt you cannot type
+     * a 'g' into is not a prompt. */
+    if (g_prompt && (e->kind == UI_EV_CHAR || e->kind == UI_EV_KEY)) {
+        char *f = g_pval[g_pfield];
+        int n = 0;
+        while (f[n]) n++;
+        if (e->kind == UI_EV_CHAR && e->ch == 27) { g_prompt = PR_NONE; say("Cancelled.", 0, 0); return 1; }
+        if (e->kind == UI_EV_KEY && e->key == UI_KEY_ESC) { g_prompt = PR_NONE; say("Cancelled.", 0, 0); return 1; }
+        if (e->kind == UI_EV_CHAR && e->ch == 8) { if (n) f[n - 1] = 0; return 1; }
+        if (e->kind == UI_EV_KEY && e->key == UI_KEY_BACKSPACE) { if (n) f[n - 1] = 0; return 1; }
+        if ((e->kind == UI_EV_KEY && e->key == UI_KEY_ENTER) ||
+            (e->kind == UI_EV_CHAR && (e->ch == '\r' || e->ch == '\n'))) {
+            if (g_pfield + 1 < prompt_nfields()) g_pfield++;
+            else prompt_commit();
+            return 1;
+        }
+        if (e->kind == UI_EV_CHAR && e->ch >= ' ' && e->ch < 127 &&
+            n < SSH_HOSTLEN - 1) { f[n] = (char)e->ch; f[n + 1] = 0; }
+        return 1;
+    }
+
+    /* Manage-tab commands. The keys are the app's whole editor surface, so
+     * they are also what the status line offers when nothing is selected. */
+    if (g_cur == 0 && e->kind == UI_EV_CHAR) {
+        if (e->ch == 'n' || e->ch == 'N') { prompt_start(PR_SESS); return 1; }
+        if (e->ch == 'g' || e->ch == 'G') { prompt_start(PR_KEY);  return 1; }
+        if (e->ch == 'p' || e->ch == 'P') {          /* the public half, to paste */
+            char pub[256], name[SSH_NAMELEN];
+            reload_lists();
+            if (!g_nkeys) { say("No keys yet - press g to generate one.", 0, 1); return 1; }
+            if (ssh_key_list(g_key_sel, name, sizeof name, 0, 0) != 0) return 1;
+            if (ssh_key_export_pub(name, pub, sizeof pub) > 0) say(pub, 0, 0);
+            else say("Could not export that key.", 0, 1);
+            return 1;
+        }
+        if (e->ch == 'd' || e->ch == 'D') {          /* delete in the live pane   */
+            reload_lists();
+            if (g_pane == 0 && g_nsess) {
+                say(ssh_sess_delete(g_sessn[g_sess_sel]) == 0 ? "Deleted session "
+                                                             : "Could not delete ",
+                    g_sessn[g_sess_sel], 0);
+            } else if (g_pane == 1 && g_nkeys) {
+                char name[SSH_NAMELEN];
+                if (ssh_key_list(g_key_sel, name, sizeof name, 0, 0) == 0)
+                    say(ssh_key_delete(name) == 0 ? "Deleted key " : "Could not delete ",
+                        name, 0);
+            }
+            reload_lists();
+            return 1;
+        }
+    }
+    if (g_cur == 0 && e->kind == UI_EV_KEY &&
+        (e->key == UI_KEY_UP || e->key == UI_KEY_DOWN)) {
+        int d = (e->key == UI_KEY_DOWN) ? 1 : -1;
+        reload_lists();
+        if (g_pane == 0 && g_nsess) {
+            g_sess_sel += d;
+            if (g_sess_sel < 0) g_sess_sel = 0;
+            if (g_sess_sel >= g_nsess) g_sess_sel = g_nsess - 1;
+            say("Session: ", g_sessn[g_sess_sel], 0);
+        } else if (g_pane == 1 && g_nkeys) {
+            g_key_sel += d;
+            if (g_key_sel < 0) g_key_sel = 0;
+            if (g_key_sel >= g_nkeys) g_key_sel = g_nkeys - 1;
+            say("Key: ", g_keyn[g_key_sel], 0);
+        }
+        return 1;
+    }
 
     if (e->kind == UI_EV_MOUSE_DOWN) {
         unoui_tabs_model m;
@@ -347,6 +500,7 @@ static int ssh_event(struct unoui_widget *w, const void *ev, void *ctx)
             if (ci >= 0) {
                 unoui_rect in = unoui_mdi_content_rect(TH(), body, &g_mdi, ci);
                 unoui_mdi_raise(&g_mdi, ci);
+                g_pane = ci;              /* which list d / arrows act on */
                 if (e->y >= in.y && e->x >= in.x && e->x < in.x + in.w) {
                     if (ci == 0 && g_nsess) {
                         g_sess_sel = unoui_list_index_at(in, g_nsess, g_sess_top, e->y);
