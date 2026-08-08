@@ -1,6 +1,7 @@
 {
   "_comment": "Demo-video narration, fitted to out/final/cut_v1.timeline.json. House style: plain, second person, honest, no marketing gloss, no em dashes. Claims verified against the source: TLS is BearSSL so TLS is never claimed; no Win32 personality; no Wi-Fi; the image size is the measured 3.8 MB, not the manual's stale 660 KB; the skin-compatibility line is omitted because the footage shows UnoAmp in its built-in look (the RLE8 skin bug is being fixed separately).",
-  "voice_id": null,
+  "voice_id": "nPczCjzI2devNBz1zQrb",
+  "_voice": "Brian - Deep, Resonant and Comforting (chosen by arin 2026-08-07)",
   "model": "eleven_multilingual_v2",
   "voice_settings": { "stability": 0.5, "similarity_boost": 0.75, "style": 0.0 },
   "scenes": [

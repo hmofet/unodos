@@ -12,7 +12,7 @@ it has to sit over.
 The API key is read from the Under-a-Crescent-Moon .env (the only place it
 lives on this machine); it is never printed.
 """
-import argparse, json, os, subprocess, sys, urllib.request
+import argparse, hashlib, json, os, subprocess, sys, urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_SCRIPT = os.path.join(HERE, "vo_script.json")
@@ -21,9 +21,17 @@ KEY_PATHS = [
     r"\\wsl.localhost\Ubuntu-24.04\home\arin\Github\under-a-crescent-moon\.env",
     "/home/arin/Github/under-a-crescent-moon/.env",
 ]
-# ElevenLabs list price for the usual subscription tiers, used only to show an
-# estimate before spending. Verify against the account if it matters.
-USD_PER_1K_CHARS = 0.30
+def quota(key):
+    """Characters used/remaining this billing period, so a dry run reports the
+    real cost (quota already paid for) rather than an invented dollar figure."""
+    try:
+        req = urllib.request.Request(
+            "https://api.elevenlabs.io/v1/user/subscription",
+            headers={"xi-api-key": key})
+        d = json.load(urllib.request.urlopen(req))
+        return d.get("character_count"), d.get("character_limit"), d.get("tier")
+    except Exception:
+        return None, None, None
 
 
 def api_key():
@@ -58,6 +66,8 @@ def main():
     ap.add_argument("--model", default=None)
     ap.add_argument("--scene", default=None, help="regenerate just this scene id")
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--force", action="store_true",
+                    help="regenerate even scenes whose text is unchanged")
     args = ap.parse_args()
 
     with open(args.script, encoding="utf-8") as fh:
@@ -75,8 +85,15 @@ def main():
                 budgets[s["id"]] = s["duration"]
 
     total_chars = sum(len(s["text"]) for s in scenes)
-    print("scenes: %d   characters: %d   estimated cost: about $%.2f"
-          % (len(scenes), total_chars, total_chars / 1000.0 * USD_PER_1K_CHARS))
+    used, limit, tier = quota(api_key())
+    if limit:
+        left = limit - used
+        print("scenes: %d   characters: %d   (%.2f%% of the %s plan's %s remaining)"
+              % (len(scenes), total_chars, 100.0 * total_chars / left,
+                 tier, format(left, ",")))
+    else:
+        print("scenes: %d   characters: %d   (quota unknown)"
+              % (len(scenes), total_chars))
     print("voice: %s   model: %s\n" % (voice or "(unset)", model))
 
     for s in scenes:
@@ -98,8 +115,41 @@ def main():
 
     os.makedirs(args.out_dir, exist_ok=True)
     key = api_key()
-    print()
+
+    # Only pay for what actually changed. A scene is regenerated when its text,
+    # voice or model differs from what produced the clip on disk - so re-running
+    # after editing one line costs that line, not the whole script.
+    man_path = os.path.join(args.out_dir, "vo_manifest.json")
+    manifest = {}
+    if os.path.exists(man_path):
+        try:
+            with open(man_path, encoding="utf-8") as fh:
+                manifest = json.load(fh)
+        except Exception:
+            manifest = {}
+
+    def fingerprint(s):
+        h = hashlib.sha256()
+        h.update(("%s|%s|%s" % (voice, model, s["text"])).encode("utf-8"))
+        return h.hexdigest()
+
+    todo, skipped = [], []
     for s in scenes:
+        dest = os.path.join(args.out_dir, s["id"] + ".mp3")
+        if (not args.force and os.path.exists(dest)
+                and manifest.get(s["id"]) == fingerprint(s)):
+            skipped.append(s["id"])
+        else:
+            todo.append(s)
+    if skipped:
+        print("unchanged, keeping existing audio: %s" % ", ".join(skipped))
+    if not todo:
+        print("nothing to generate - every scene is current")
+        return
+    print("generating %d scene(s), %d characters\n"
+          % (len(todo), sum(len(s["text"]) for s in todo)))
+
+    for s in todo:
         dest = os.path.join(args.out_dir, s["id"] + ".mp3")
         body = json.dumps({
             "text": s["text"],
@@ -118,6 +168,9 @@ def main():
         if d and b:
             flag = "  vs scene %.1fs%s" % (b, "   TOO LONG" if d > b else "")
         print("  %-4s -> %s  %.1fs%s" % (s["id"], dest, d or -1, flag))
+        manifest[s["id"]] = fingerprint(s)
+        with open(man_path, "w", encoding="utf-8") as fh:
+            json.dump(manifest, fh, indent=2)
 
     print("\ndone. Check any TOO LONG scene: either tighten the line or hold the "
           "shot longer; do not speed the read up.")
