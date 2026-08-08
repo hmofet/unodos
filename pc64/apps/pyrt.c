@@ -66,29 +66,55 @@ void uno_clear_app_roots(void);              /* release GC-pinned app on unload 
 void uno_win_set(unoui_window *w);           /* stash the current window for uno.ui */
 mp_obj_t uno_canvas_obj(void);               /* the canvas arg passed to draw() */
 
+/* ---- the stack ceiling, re-armed per entry ---------------------------------
+ * MicroPython records ONE stack_top, at mp_stack_ctrl_init() in py_init, and
+ * uses it for two things: the datum mp_stack_usage() measures recursion
+ * against, and the ceiling the GC traces the C stack UP TO.  That is correct
+ * for a port entered from a single place and wrong for this one - the shell
+ * calls in from its key dispatch (Studio's Ctrl-R -> pc64_shell_run_python),
+ * unoautomate calls in from the URC command path (`py` -> pc64_shell_py_exec),
+ * and those are different depths of the same stack.  Whichever arrived first
+ * fixed the ceiling for the other, and when the other one turned out to be the
+ * SHALLOWER of the two, the GC's range underflowed and the machine wedged
+ * solid (see the note in upy_port/pc64_upy_port.c for the arithmetic).
+ *
+ * So every host entry re-arms it from its own frame.  The depth counter keeps
+ * the OUTERMOST entry's ceiling: re-arming on a nested entry would hide the
+ * outer C frames from the root scan, which trades a hang for a use-after-free. */
+static int gVmDepth;
+static void vm_enter(void *frame) { if (gVmDepth++ == 0) pyrt_set_stack_top(frame); }
+static void vm_leave(void) { if (gVmDepth > 0) gVmDepth--; }
+#define VM_ENTER() int vm_frame_; vm_enter(&vm_frame_)
+
 /* ---- NLR-fenced calls into Python ----------------------------------------- */
 static mp_obj_t call0(mp_obj_t fn)
 {
     if (fn == MP_OBJ_NULL) return mp_const_none;
     nlr_buf_t nlr;
+    VM_ENTER();
     if (nlr_push(&nlr) == 0) {
         mp_obj_t r = mp_call_function_0(fn);
         nlr_pop();
+        vm_leave();
         return r;
     }
     mp_obj_print_exception(&mp_plat_print, (mp_obj_t)nlr.ret_val);   /* -> pyrt_out */
+    vm_leave();
     return MP_OBJ_NULL;
 }
 static mp_obj_t call1(mp_obj_t fn, mp_obj_t a)
 {
     if (fn == MP_OBJ_NULL) return mp_const_none;
     nlr_buf_t nlr;
+    VM_ENTER();
     if (nlr_push(&nlr) == 0) {
         mp_obj_t r = mp_call_function_1(fn, a);
         nlr_pop();
+        vm_leave();
         return r;
     }
     mp_obj_print_exception(&mp_plat_print, (mp_obj_t)nlr.ret_val);
+    vm_leave();
     return MP_OBJ_NULL;
 }
 static mp_obj_t call3(mp_obj_t fn, mp_obj_t a, mp_obj_t b, mp_obj_t c)
@@ -96,12 +122,15 @@ static mp_obj_t call3(mp_obj_t fn, mp_obj_t a, mp_obj_t b, mp_obj_t c)
     if (fn == MP_OBJ_NULL) return mp_const_none;
     nlr_buf_t nlr;
     mp_obj_t args[3] = { a, b, c };
+    VM_ENTER();
     if (nlr_push(&nlr) == 0) {
         mp_obj_t r = mp_call_function_n_kw(fn, 3, 0, args);
         nlr_pop();
+        vm_leave();
         return r;
     }
     mp_obj_print_exception(&mp_plat_print, (mp_obj_t)nlr.ret_val);
+    vm_leave();
     return MP_OBJ_NULL;
 }
 
@@ -122,6 +151,7 @@ static unoui_canvas gCanvas = { py_canvas_draw, py_canvas_event, 0 };
 static void tr_build(unoui_window *w)
 {
     int aw = pc64_shell_workarea_w() - 120, ah = pc64_shell_workarea_h() - 120;
+    VM_ENTER();                 /* covers the trailing gc_collect() as well */
     if (aw > 520) aw = 520; if (aw < 200) aw = 200;
     if (ah > 380) ah = 380; if (ah < 140) ah = 140;
     uno_win_set(w);
@@ -134,6 +164,7 @@ static void tr_build(unoui_window *w)
     uno_set_draw_rect(0, 0, aw, ah);
     if (gApp.build) { call1(gApp.build, uno_canvas_obj()); rdbg_out("pyrt: build exc: "); }
     gc_collect();
+    vm_leave();
 }
 static int tr_action(const unoui_action *a)
 {
@@ -183,6 +214,7 @@ static const UnoUuiApp *py_load(const unsigned char *src, int len, const char *n
     nlr_buf_t nlr;
     int i;
     const char *base = name;
+    VM_ENTER();          /* Studio's Ctrl-R and the URC `py` verb both land here */
     for (i = 0; name && name[i]; i++) if (name[i] == '\\') base = name + i + 1;
     { int j = 0; while (base[j] && j < 31) { gName[j] = base[j]; j++; } gName[j] = 0; }
 
@@ -201,11 +233,13 @@ static const UnoUuiApp *py_load(const unsigned char *src, int len, const char *n
         nlr_pop();
     } else {
         mp_obj_print_exception(&mp_plat_print, (mp_obj_t)nlr.ret_val);
+        vm_leave();
         return 0;                            /* compile/exec error -> last_error */
     }
 
     if (!uno_bind_app(&gApp)) {              /* find the module-global `app` */
         mp_hal_stdout_tx_str("No `app` object. Define: app = MyApp()\n");
+        vm_leave();
         return 0;
     }
 
@@ -218,6 +252,7 @@ static const UnoUuiApp *py_load(const unsigned char *src, int len, const char *n
     gVt.opened = gApp.opened ? tr_opened : 0;
     gVt.closed = gApp.closed ? tr_closed : 0;
     gVt.canvas_index = tr_canvas_index;
+    vm_leave();
     return &gVt;
 }
 
@@ -228,7 +263,7 @@ static void py_unload(void)
         gApp.opened = gApp.closed = MP_OBJ_NULL;
     uno_clear_app_roots();          /* release the pinned app so GC can reap it */
     gDrewOnce = 0;
-    if (gInited) gc_collect();
+    if (gInited) { VM_ENTER(); gc_collect(); vm_leave(); }
 }
 
 static const char *py_last_error(void) { return pyrt_out_text(); }
@@ -239,9 +274,12 @@ static int py_run_src(const char *src, int len, char *out, int cap)
     nlr_buf_t nlr;
     int rc = 0, i;
     const char *o;
+    VM_ENTER();          /* the URC `py` verb's entry - a DIFFERENT depth from
+                          * Studio's, which is the whole point of vm_enter */
     if (!gInited) {
         const char *m = "[pyrt] not initialized";
         if (out && cap > 0) { i = 0; while (m[i] && i < cap - 1) { out[i] = m[i]; i++; } out[i] = 0; }
+        vm_leave();
         return -1;
     }
     pyrt_out_reset();
@@ -260,6 +298,7 @@ static int py_run_src(const char *src, int len, char *out, int cap)
     o = pyrt_out_text();
     if (out && cap > 0) { i = 0; while (o[i] && i < cap - 1) { out[i] = o[i]; i++; } out[i] = 0; }
     gc_collect();
+    vm_leave();
     return rc;
 }
 

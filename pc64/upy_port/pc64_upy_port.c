@@ -51,10 +51,35 @@ void mp_hal_stdout_tx_strn_cooked(const char *str, size_t len) { mp_hal_stdout_t
  * stack and traces from the current sp up to MP_STATE_THREAD(stack_top)
  * (set by mp_stack_ctrl_init in py_init). */
 void gc_helper_collect_regs_and_stack(void);   /* upy/shared/runtime/gchelper_native.c */
-void pyrt_set_stack_top(void *p) { (void)p; }  /* mp_stack_ctrl_init owns stack_top */
+
+/* THE STACK CEILING, re-armed by the host at every entry into the VM (see the
+ * vm_enter() block in apps/pyrt.c).  This used to be a no-op with the comment
+ * "mp_stack_ctrl_init owns stack_top", which is true of a port whose VM is
+ * only ever entered from ONE place.  pc64 enters PYRT from two: the URC `py`
+ * command path and the shell's key dispatch (Studio's Ctrl-R), at completely
+ * different depths of the same stack - and whichever ran first recorded the
+ * ceiling for both.
+ *
+ * The arithmetic when they disagree is in gc_helper_collect_regs_and_stack:
+ *
+ *     gc_collect_root((void **)sp, ((uintptr_t)stack_top - sp) / sizeof(uintptr_t))
+ *
+ * With stack_top BELOW sp - which it is the moment the second path is the
+ * shallower one - that subtraction underflows and the GC is asked to scan
+ * about 2^61 words. The machine stops there: no fault, no log line, nothing a
+ * watchdog notices, forever. That is the wedge a `py` verb followed by Studio
+ * Ctrl-R produced, and why four "warm the VM up differently" workarounds all
+ * failed - none of them changed which path recorded the ceiling. */
+void pyrt_set_stack_top(void *p) { MP_STATE_THREAD(stack_top) = (char *)p; }
 
 void gc_collect(void)
 {
+    volatile int here;
+    /* Belt and braces: a collection can only ever trace from HERE downwards,
+     * so a ceiling below this frame is meaningless whatever put it there.
+     * Raise it rather than hand the helper a negative range. */
+    if ((char *)&here > MP_STATE_THREAD(stack_top))
+        MP_STATE_THREAD(stack_top) = (char *)&here;
     gc_collect_start();
     gc_helper_collect_regs_and_stack();
     gc_collect_end();
