@@ -8266,3 +8266,77 @@ suppresses the red perf HUD (and the stress status line under it) in UNO_DEBUG
 builds, so a debug stick can be filmed; touches `uno_debug`'s existing
 `uno_dbg_hud_toggle()`, `pc64/DEBUG.md`, and one additive append in the
 `#ifdef UNO_DEBUG` render path of `pc64_uui.c`.
+
+### 2026-08-07 demo lane -> unofs + unoffice: two bugs that block Open-from-FAT for the whole Office suite
+
+Found while building the demo-video scene driver (`tools/demo/scenes.py`, scene
+s04). **Together they make it impossible to open ANY document from a native-FAT
+volume in UnoWord / UnoCalc / UnoShow** - by mouse or by keyboard. The demo
+scene had to degrade from "open small.ppt in UnoShow" to "author a titled
+slide", which is why they are worth a request rather than a note.
+
+Neither is a unoautomate bug and neither is in this lane; filing here because
+this is the async channel. The documents themselves are fine - over URC,
+`uno.read(vol,"SMALL.PPT")` returns all 463360 bytes with an intact CFB magic
+(`d0 cf 11 e0 a1 b1 1a e1`), and UnoShow reads `.ppt` up to `UOS_IOCAP` = 4 MB
+(`apps/uoshow.c:664`), so the file and the reader are both within their limits.
+
+**1. unofs - `uno_fs_isdir` says every FAT path is a directory.**
+`pc64_fs.c:248-257`:
+
+```c
+if (g_map[vol].kind == KIND_FAT) {
+    uno_fat_entry e;
+    return uno_fat_list_ex(g_map[vol].idx, path, &e, 1) >= 0;   /* <- */
+}
+```
+
+`uno_fat_list_ex` returns `>= 0` for a **file** path too, so the predicate is
+true for everything on a native-FAT volume. The visible effect is in the shared
+Open dialog (`uoffice/uofile.c:53-73`, `load_files`), which uses
+`g_fs->is_dir(vol, nm)` to decide what is a folder: every entry is sorted into
+the directory group and gets a `'\'` appended to its name. `uof_sync`
+(`uofile.c:178-186`) then refuses to mirror the selected row into the File-name
+field precisely because it ends in `'\'`, so **clicking a file selects nothing
+openable**. Confirmed on screen: a DOCS volume holding exactly `PIC.DOC` and
+`SMALL.PPT` lists them as `PIC.DOC\` and `SMALL.PPT\`.
+
+*Proposed fix:* make the predicate answer the question it is named for - have
+it return true only when the entry is a directory (test the returned
+`uno_fat_entry`'s directory attribute rather than the call's success), so a
+file path answers 0. Everything downstream (`uofile.c`'s grouping, the `'\'`
+suffix, and the name mirroring) then works unchanged.
+
+**2. unoffice - UnoShow's dialog key-bridge swallows Backspace.**
+`apps/uoshow.c:997-1006`, the `if (g_dlg)` branch translates keys into
+`unoui_event`s for `uod_handle`:
+
+```c
+if (uni >= ' ')                      { e.kind = UI_EV_CHAR; e.ch = uni; }
+else if (uni == '\r' || uni == '\n') { ... UI_KEY_ENTER ... }
+else if (uni == 27)                  { ... UI_KEY_ESC ... }
+else if (uni == '\t')                { ... UI_KEY_TAB ... }
+else if (scan == 0x02)               { ... UI_KEY_DOWN ... }
+else if (scan == 0x01)               { ... UI_KEY_UP ... }
+else return 1;                       /* <- backspace (uni 8) dies here */
+```
+
+`uod_handle` **does** implement backspace (`uoffice/uodlg.c:584-588`, on
+`UI_EV_CHAR` with `ch == 8`), and UnoWord's equivalent bridge forwards it
+(`apps/uoword.c:809`: `else if (uni == 8) { e.kind = UI_EV_CHAR; e.ch = 8; }`).
+UnoShow's does not, so the File-name field cannot be corrected - it keeps
+whatever the previous volume's row 0 put there and Open fails with "That is not
+a presentation this build reads."
+
+*Proposed fix:* one line, matching UnoWord -
+`else if (uni == 8) { e.kind = UI_EV_CHAR; e.ch = 8; }`.
+
+**Why they compound:** bug 1 removes the click route into the field, and bug 2
+removes the typing route out of a wrong value, so on a FAT volume there is no
+way left to name a file. Bug 2 alone would be survivable (click a row); bug 1
+alone would be survivable in UnoShow (type the name). Fixing EITHER one
+restores a usable path; fixing both restores the intended one.
+
+Repro (QEMU, no hardware): `UNO_DEBUG=1 ./build.sh`, then
+`python3 tools/demo/scenes.py --scene s04` and watch the UnoShow beat, or drive
+it by hand with `tools/urcui.py`.
