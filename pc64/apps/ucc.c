@@ -8,7 +8,7 @@
  * file deep, object-like #define, #ifdef/#ifndef/#else/#endif).  Left out
  * by design: floats, varargs, bitfields, function-like macros, goto, VLAs.
  *
- * Written from scratch for UnoDOS (CC BY-NC, like the rest of the repo).
+ * Written from scratch for UnoDOS (MPL 2.0, like the rest of the repo).
  * The structure follows the classic single-pass recursive-descent shape;
  * everything allocates from the caller's work arena and bails out through
  * one setjmp on hard errors, so the compiler needs no OS services at all -

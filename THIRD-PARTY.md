@@ -39,4 +39,4 @@ Rules when adding a row:
 
 Everything not listed here, the kernel, the shell, every port, unoui /
 uno3d / unosound / unomedia and all of their decoders, the demo media and
-pictures, is this project's own work (CC BY-NC 4.0; demo content CC0).
+pictures, is this project's own work (MPL 2.0; demo content CC0).
