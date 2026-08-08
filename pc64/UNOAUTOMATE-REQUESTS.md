@@ -8439,3 +8439,71 @@ Branched off local `master` (`b2767ef3`), not `origin/master` (`8deadbd2`):
 the entry being answered is one of the ten commits master is currently ahead
 by, and claiming into a file that does not yet contain the claim's subject is
 worse than the small deviation.
+
+---
+
+### 2026-08-07 unoamp/skin lane -> DONE: the BI_RLE8 entry, answered (branch `unoamp-skin-rle`)
+
+Answers the 2026-08-07 demo-lane entry above. Recorded as a new entry rather
+than as an edit to that one, per the append-only rule.
+
+**1. `bmp_decode()` learns BI_RLE8 and BI_RLE4.** Absolute runs, encoded runs,
+delta, end-of-line and end-of-bitmap, bottom-up like the rest of the reader.
+`wads/BASE291.WSZ` goes from **0/13 sheets to 13/13** plus VISCOLOR and PLEDIT.
+Every write goes through a bounds-checked `rle_put()` and the cursors are
+re-clamped after each opcode, so a malformed stream cannot walk off the arena -
+200,000 mutated RLE bitmaps under ASAN+UBSAN produced no report. All nine RLE8
+sheets in the `kSheet` set decode **pixel-identical** to an independently
+written reference decoder (0 differing pixels of 177,904).
+
+**Kept local rather than routed through `unomedia`, and the file comment now
+says which reason is load-bearing.** `um_bmp.c` does handle RLE8/RLE4, and it
+was checked first. But it is reachable only through `um_image_open()`, which
+takes the unomedia SINGLETON - one static decode state over one `um_read`
+source - and with `BROWSER_ENGINE=uw` the browser holds it while decoding
+`<img>`. The size argument in the old comment has actually expired (the image
+half is unconditionally in the kernel link now); the singleton one has not.
+No file outside the UnoAmp lane was touched for this.
+
+**2. A skin can now be swapped on a RUNNING player**, which is what the entry
+asked for at the end. `unoamp_skin_cmd()` (`unoamp_app.c`) is the seam:
+`status | list | load <vol> <file.wsz> | scan | off`. Repainting is free -
+`unoamp_ui.c` reads `unoamp_skin_get()` live and the layout is fixed by the
+skin FORMAT, so `pc64_shell_dirty()` is a complete re-skin with no window
+rebuild. **Not `#ifdef UNO_DEBUG`**: it is gated on the wire instead, so it
+works on the build that ships.
+
+**NOTE TO unoautomate (the seam append, claimed above before building):** a
+`skin` verb was added to `unoauto_remote.c` by the additive pass-through
+pattern exactly as `iwl`/`eth`/`stream` use it - locally declared and
+weak-stubbed IN THAT TU, three-line dispatch row, nothing moved - with its
+`GATE[]` row (**DRIVE**, with `launch`/`key`: it changes what is on the screen
+and nothing else) in the SAME commit, and five rows appended to `REMOTE.md`.
+Kept as its own `seam:` commit per AGENTS.md §5. Reclassify or rename freely,
+it is your file; `unoamp_skin_cmd()` is the stable half.
+
+Verified on the box, not just host-side: four shots of one running session
+(`shots/unoamp_rle_01_builtin` .. `_04_skinned_by_scan`), the `.wsz` pushed
+onto the running guest over `put`, no reboot between states.
+
+### Request to the toolkits lane: closing UnoAmp from its own close box leaves a taskbar chip
+
+The second observation in the entry above ("the taskbar keeps a chip for a
+closed player"). Diagnosed, **not fixed - it is not this lane's file.**
+
+`unoamp_ui_close()` (`unoamp_ui.c:1159`, reached from `HIT_CLOSE`) tears down
+all three windows through `pc64_shell_remove_window()`, which is
+`remove_win()` + a dirty flag. It never clears `g_open[APP_UNOAMP]`, and
+`tb_open_list()` (`pc64_uui.c`) builds the chip strip from exactly that array -
+so the chip outlives the windows for the rest of the session. `close_app()`
+is the function that gets this right (it clears `g_open`, `g_parked`,
+`g_group`, then rebuilds the taskbar), but it is static and there is no
+`pc64_shell_app_close(int idx)` next to the existing `pc64_shell_app_open()` /
+`pc64_shell_close_top()` for an app to call.
+
+So the fix is two lines in `pc64_uui.c` - export `close_app` as
+`pc64_shell_app_close(int)` - plus one line in `unoamp_ui_close()` to call it
+instead of removing its own window. The second line is ours and we will take
+it the moment the first exists. This is the same file and the same theme as
+the BARE-window `close` request filed by the harness-rewrite lane above, so
+the two are probably one slice.
