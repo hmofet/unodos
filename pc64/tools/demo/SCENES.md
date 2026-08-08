@@ -43,8 +43,12 @@ ssh devbuntu
 - **Assets are re-probed on the stick** (`probe_metal_assets`): the volume
   carrying `DOOM1.WAD` / `DOCS\` is found at runtime rather than trusting a
   QEMU-era index. The office documents are still pushed to the RAM volume, from
-  `./corpus` (deploy.sh puts them there - the repo is not on devbuntu).
-- **The box is never powered off** on teardown. s09 (appliance) is QEMU-only.
+  `./corpus` (deploy.sh puts them there - the repo is not on devbuntu). Note
+  that `probe_metal_assets` IS `py` traffic, so it poisons Studio's Ctrl-R for
+  the whole metal session (see below) - s07 and s09 are QEMU-only until that
+  bug lands.
+- **The box is never powered off** on teardown. s14 (appliances) is QEMU-only,
+  and so is s13, which stages an SSH store the stick does not carry.
 
 ## Resolution
 
@@ -90,13 +94,101 @@ failed *silently* before it was pinned down:
 | s03 | Themes: Aurora Dark -> Mac OS 7 -> Windows 3.1 -> C64 -> Aurora Light, ~1.5 s hold each; a wallpaper on and off; ends on the Aurora default | Driven by keyboard through Control Panel > Personalization (tab strip -> Theme dropdown; Down cycles live). |
 | s04 | Office: Files shows the staged docs (RAM volume); UnoWord opens `fmt.doc` with its formatting visible; UnoCalc opens `formulas.xls` and selects a formula cell | ~40 s. Docs are `put` onto the RAM volume at runtime and opened there - the shared Open dialog lists a volume's ROOT only (uofile.c) and cannot reach `DOCS\`. **UnoShow was cut** (2026-08-07): it could not open small.ppt in this build (two source bugs, filed in UNOAUTOMATE-REQUESTS.md), the standing beat was the degraded substitute, and it cost 17 s of a 65 s scene. The select-all sweep also went - it read as a selection, not the scroll it stood in for (UnoWord scrolls by mouse wheel only and URC has no wheel injection). |
 | s05 | Browser: `uno:script` (JS writes the page body), scroll; `uno:engine`; switch the script engine by navigating `uno:engine/quickjs`; `uno:script` again on QuickJS; then MAXIMIZE and load `https://en.wikipedia.org/wiki/Unix` over TLS, and scroll to the article | ~64 s. The network half is no longer metal-only: the URC link is TCP over the same stack, so the guest is leased and routed before any scene runs (`nonet` in DEBUG.CFG skips the boot NET TEST and the desktop's net_boot fallback, not the stack), and slirp resolves DNS for a DEBUG image. The page loads WHOLE (200 OK; DOC_MAX/RAW_MAX are 1 MB now, the old 48 KB cut is gone) - what it costs is scrolling, because Wikipedia's Vector skin emits the entire navigation sidebar before the `<h1>`. Nine PgDn lands on it. `wait_stable()` replaces a fixed settle: the load measured 6-20 s across runs. `--with-net` is now a no-op flag. |
-| s07 | Studio: open `SAMPLE.C` from the Project pane, type a one-line comment as a live edit, Ctrl-S, Ctrl-B build, Ctrl-R run - the compiled app opens and its ball bounces | ~33 s. REWRITTEN 2026-08-08 because the old take SHIPPED BROKEN: it typed a whole UnoC program after File > New, the File > New click missed at 1280x800 (the dropdown row is laid out from the mono line height, not the 640x400 literal), the C landed in the SAMPLE.PY Studio greets with, packed as a PYTHON app and ended on "Run failed". Open a shipped source file; type only what cannot break the build. Two traps: the Project pane lists ONE volume and at first open that is the RAM disk, not the ESP (`proj_vol = ed_vol`, and ed_vol is -1 before the greet), so `s07_pre` pushes SAMPLE.C there; and a row that is ALREADY selected activates on the first click and `proj_activate()` hands focus back to the editor - so clicking row 0 opens README.TXT and every later key goes to the editor. |
-| s08 | Duum: pre-launched off camera via `uno.run_app` (a PYAPP is a document PYRT opens - no Start-menu row), then ~26 s of walking and turning through E1M1 | ~34 s (was 13.6 s - it is the best moment in the cut and it was over before it registered). DUUM.PY's own step sizes are small (MOVE = 12 map units, TURN = 0.20 rad per press), which is why the press counts look large. Guard: no WAD in `pc64/wads/` = clean no-op with a log line. Never downloads. |
-| s09 | Appliances: vmgr Start, the Linux guest boots (BEFORE the stream - it gets ~4 ms/frame, boot is minutes of dead air), then on camera: `ls /` + `uname -a` into the console | Guards: needs `build/bzImage` + `initrd.gz` (vm_stage payload; `VMS.CFG` row is written by the driver - vm_stage.py doesn't), AND `UNO_DEMO_KVM=1`. Plain TCG can never host a guest (TCG drops vmx; `-m 512` is under the 1800 MB carve floor; eligibility needs a `UNO_DETACH=1` build) - the harnesses all use `-m 4096 -cpu host -enable-kvm`, so that is what `UNO_DEMO_KVM=1` boots. On an AMD host it stays skipped (the SVM backend has never completed a VMRUN). |
+| s07 | Studio: build and run the SAME app twice, once from UnoC and once from Python. Open `SAMPLE.C`, type a one-line comment, Ctrl-S, Ctrl-B, Ctrl-R - the compiled app opens and its ball bounces; close it, open `SAMPLE.PY`, edit, Ctrl-S, Ctrl-B, Ctrl-R - and the Python one bounces | ~54 s. **C and Python are both first-class**, and one language alone understated it (2026-08-08), so the loop runs twice. The two halves are different paths in `do_build()`: `ucc_compile` reports `Built SAMPLE.UNO code=... bytes=...`, `studio_py_pack` reports `Packed SAMPLE.UNO (Python - runs on PYRT.UNO)`. Both write the same `.UNO` name (`uno_name()` cuts at the dot) and that is fine - the second overwrites after the first has run and been closed, and `pc64_shell_run_user` re-peeks the module flags. Earlier rewrite (same day): the old take SHIPPED BROKEN, typing a whole UnoC program after a File > New click that silently missed at 1280x800, so the C landed in the greeted SAMPLE.PY, packed as Python, and ended on "Run failed". Open a shipped source file; type only what cannot break the build. |
+| s09 | unoautomate, driven by **Python**: `AUTO.PY` open in Studio on the left, the app it becomes printing its own transcript on the right, and the Start menu opening and walking to Clock **by itself** in between | ~42 s. The script probes the live system (`unoauto.probe()` - heap, volumes, the NIC's frame counters, the window list), then drives it with `unoauto.key()` (Ctrl+Esc, N x Down, Enter), then probes again so its own effect appears in its own output. Key injection was chosen over `unoauto.launch()` (an app INDEX, and invisible) because a menu rising on its own is the thing you can SEE. It paces on `unoauto.uptime()` in ms, never on frames - the guest's frame rate under TCG is neither known nor stable. |
+| s08 | Duum: pre-launched off camera via `uno.run_app` (a PYAPP is a document PYRT opens - no Start-menu row), then ~26 s of walking and turning through E1M1 | ~34 s (was 13.6 s - it is the best moment in the cut and it was over before it registered). DUUM.PY's own step sizes are small (MOVE = 12 map units, TURN = 0.20 rad per press), which is why the press counts look large. Guard: no WAD in `pc64/wads/` = clean no-op with a log line. Never downloads. **Records AFTER s07/s09** - see the `py` verb note below. |
+| s13 | SSH to **devbuntu** (192.168.2.100, user `arin`): pick the saved session, press `+`, watch it connect, maximize, then `exec sh`, `hostname`, `uname -a`, `uptime`, `ls /` | ~57 s. The output is unmistakably another machine's (Ubuntu 26.04 MOTD, `Linux devbuntu 7.0.0-28-generic`, `up 11 days`). QEMU's SLIRP is outbound-only, which is all this needs. See "Nothing can populate the SSH store" below for how the session and key get there, and why the first line typed is `exec sh`. |
 | s10 | System readout (hold), the log viewer raised to info level, browser navigations landing in the tail, close | The level goes up BEFORE the traffic (a dropped record is gone). |
+| s14 | Appliances: vmgr Start, the Linux guest boots (BEFORE the stream - it gets ~4 ms/frame, boot is minutes of dead air), then on camera: `ls /` + `uname -a` into the console | **Was s09 until 2026-08-08**, when s09 became the automation scene; renumbered rather than reordered so the recorded file names stay honest. Out of the cut's spine. Guards: needs `build/bzImage` + `initrd.gz` (vm_stage payload; `VMS.CFG` row is written by the driver - vm_stage.py doesn't), AND `UNO_DEMO_KVM=1`. Plain TCG can never host a guest (TCG drops vmx; `-m 512` is under the 1800 MB carve floor; eligibility needs a `UNO_DETACH=1` build) - the harnesses all use `-m 4096 -cpu host -enable-kvm`, so that is what `UNO_DEMO_KVM=1` boots. On an AMD host it stays skipped (the SVM backend has never completed a VMRUN). |
 
-s01/s06/s11 (boot, media/audio, outro) are deliberately absent - a different
-pipeline owns them.
+s01/s06/s11/s12 (boot, media/audio, outro, games) are deliberately absent - a
+different pipeline owns them.
+
+**Recording order is not cut order.** `scenes.py` records s09 before s08 and
+ends with s14; `stitch.py`'s SPINE is what orders the film (s01 s02 s03 s04 s05
+s06 s07 **s09** s08 **s12** **s13** s10 s11). The recording order is not
+cosmetic - see the next section.
+
+## The URC `py` verb poisons Studio's Ctrl-R (2026-08-08)
+
+The worst failure in this driver so far, because it is **totally silent**: the
+machine stops answering URC, stops sending video, and never comes back. The
+beat list runs on to the end against a dead box and the recording just stops
+mid-scene, with every beat logged green.
+
+| session | result |
+|---|---|
+| `py` (e.g. `uno.size`) ... then Studio ^R on a `.PY` | **WEDGED** (dead for 140 s, no log line, no recovery) |
+| nothing ... then Studio ^R on a `.PY` | fine |
+
+It is not the app, the file, or the `.UNO` name: the identical ^R on the
+identical file works perfectly on a boot where `py` was never used. What
+differs is who initialised PYRT's MicroPython VM first - `pyrt_ensure()` runs
+`py_init()` once and `py_init` records a stack top (`pyrt_set_stack_top`,
+apps/pyrt.c) on **that** call path. Entered later from the shell's key
+dispatch, a completely different stack, it never returns.
+
+Four workarounds were tried and **all four still wedged**: opening and closing
+a tiny PYAPP first; leaving one open on another desktop; leaving one open and
+drawn on the current desktop; and pre-packing the very same `.UNO` on the host
+and `uno.run_app`-ing it first. Only "do not touch `py` first" works.
+
+**The rule:** a scene that presses Ctrl-R runs before any `py` traffic in the
+session, and its own `pre` must not use `py` either. `pyeval()` is the single
+door to the verb so the flag it sets is complete, and `s07_pre`/`s09_pre` shout
+if the rule has already been broken. Landing checks use `push_file`'s return
+value instead - it read-back-verifies on the device before reporting
+`verified`, which is a better check than `uno.size` was anyway. Filed for the
+Studio/PYRT lane in `pc64/UNOAUTOMATE-REQUESTS.md`.
+
+## Nothing on the device can populate the SSH store (2026-08-08)
+
+s13 needs one saved session and one key. There is no way to create either from
+the running machine:
+
+- `sshapp_ui.c` only LISTS sessions and keys and connects to the selected one.
+  No "add session", no "import key" - the app has no creation UI at all.
+- `unossh_cmd.c` implements a complete `ssh` verb (`keygen` / `sessadd` /
+  `run` / `get`), and its own header comment says unoautomate "lands a weak
+  stub and a four-line dispatch clause once" - but that clause was never
+  landed. `grep ssh unoauto_remote.c` is **empty**, so the verb is unreachable
+  over URC.
+- the only callers of `ssh_key_import` / `ssh_sess_set` in the tree are the
+  SPECTEST suites in `unossh.c`, which seed a fixed `10.0.2.2:2222` session.
+
+So `sshstore.py` authors `SSHSTORE.DAT` on the host and the driver stages it,
+like any other asset - the device then loads, decrypts and uses it through its
+own code. That file replicates `ssh_key_add` + `ssh_sess_set` + `store_save`
+exactly: the container layout, PBKDF2-HMAC-SHA256 at 200000 iterations,
+AES-256-CTR with BearSSL's `iv(12) || BE32(cc)` counter block, and the
+HMAC-SHA256 over `salt || ct`. AES is implemented in it rather than imported,
+so no host needs a crypto package; `python3 sshstore.py --selftest` checks it
+against FIPS-197 C.3.
+
+Two things that bite:
+
+- **The volume.** `pick_vol()` prefers the first NATIVE-FAT writable volume and
+  only falls back to the RAM disk, and `store_load()` silently replaces a file
+  that is not *exactly* `sizeof(ssh_store)` (7116) bytes with an EMPTY store.
+  A push to the wrong volume therefore presents as "no saved sessions", not as
+  an error. `s13_pre` reproduces `pick_vol` against the live volume list.
+- **The key must have no passphrase.** `ssh_key_import` refuses an encrypted
+  openssh-key-v1 (`ciphername != "none"`) because neither the device nor this
+  tool has bcrypt_pbkdf. The demo key is passphrase-less for that reason. It is
+  a real credential and is **never committed**: `assets/ssh_demo_key` is
+  gitignored, `UNO_DEMO_SSH_KEY` overrides the path, and the scene skips with
+  an explanation when it is absent.
+
+`exec sh` is the first line typed for a reason. Ubuntu 26.04's bash decorates
+every prompt with an OSC 133 shell-integration blob - a ~200-character
+`]3008;start=...;machineid=...;bootid=...` before each command and an
+`end=...;exit=success` after it - plus bracketed-paste markers and SGR colour
+runs. `draw_term` (sshapp_ui.c) has **no escape parsing at all**; it walks
+newlines and turns `\r`/`\t` into spaces, so the first take rendered every byte
+of that verbatim between the answers. Plain POSIX `sh` has no PROMPT_COMMAND,
+no PS0 and no readline, so from the second prompt on the transcript is exactly
+the commands and their output. (`PS1='$ '; PS0=; unset PROMPT_COMMAND; bind
+'set enable-bracketed-paste off'` also works, and is 70 characters to type.)
 
 ## Runtime budget
 
@@ -109,6 +201,10 @@ Trimmed 2026-08-07 against **measured** per-beat costs (each scene's
 | s02 | 49.9 s | ~36.6 s | the third app launch (-3.1), a redundant focus click before the drag (-4.5, `drag()` presses on the title bar anyway), the on-camera teardown (-5.7) |
 | s04 | 64.7 s | ~39.8 s | the select-all sweep (-7.8, +3.0 back as a still hold), the whole UnoShow block (-19.7), the trailing Ctrl-W (-1.2) |
 | s07 | 41.4 s | ~38.1 s | the on-camera teardown (-4.3, +1.0 back holding on the app it just built) |
+
+s07 went back UP to ~54 s on 2026-08-08 when the Python half was added: it is
+two complete build-and-run loops now, not one, and that is the point of the
+scene.
 
 **Teardown belongs in `reset()`, not in a beat list.** It runs after
 `record()` has stopped the stream, so closing windows costs the cut nothing -
@@ -214,6 +310,18 @@ Three facts, each of which cost a take:
    `proj_activate()` sets `g_focus = PANE_EDIT`. So clicking row 0 opens
    README.TXT and every key after it goes to the **editor**, not the list.
    Click the row you actually want, then Enter.
+4. **On the SECOND open the pane lists the ESP, not the RAM disk.**
+   `refresh_project()` sets `proj_vol = ed_vol` and on the FIRST open it runs
+   *before* the greet, while `ed_vol` is still -1. The greet then loads
+   `SDK\SAMPLE.PY` off the ESP and sets `ed_vol` to it, so every later open
+   lists the ESP ROOT. Measured: s09 clicked its RAM-disk row index and opened
+   `DOOM1.WAD`, 11 MB of binary, and Studio said "Build failed: unexpected
+   character in source". What pins it back is opening a file ON the RAM disk,
+   which s07 does; `s09_pre` does the same off camera when it runs alone.
+5. **A build adds a row.** `^B` writes `SAMPLE.UNO` next to the source and
+   `refresh_project()` picks it up, so every row below it shifts by one for the
+   NEXT scene. `s07_studio` records it in `d.ram_pushed`; `studio_row_of()` is
+   the only thing that should ever compute a row.
 
 There is **no File > Open** in Studio, so the pane is the only way to open a
 file - which is why all of the above matters.
