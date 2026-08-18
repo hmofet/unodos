@@ -1,14 +1,20 @@
 # Duum - Doom, in Python
 
 Duum is a Doom engine **written in Python** (`SDK\DUUM.PY`), the proof that
-Python is a first-class app language on UnoDOS: it loads a real Doom IWAD,
-parses the map, and renders a first-person, BSP-traversed view of the level
-you can walk around - all from Python, through the `uno` API.
+Python is a first-class app language on UnoDOS: it loads a real Doom IWAD and
+plays it - not a corridor demo, the game.  BSP-traversed texture-mapped
+walls, perspective-correct floors and ceilings, the sky, monsters that see
+you, chase you and shoot back, weapons, doors, lifts, switches, teleporters,
+keycards, pickups, exploding barrels, the status bar, and level-to-level
+progression across all of Knee-Deep in the Dead.
 
-It exercises the whole platform at once: file I/O (it streams the multi-MB WAD
-with `uno.read_at`, never loading it whole), heavy compute (the BSP walk and
-the column renderer), the framebuffer (the `uno` canvas), keyboard input, and
-floating-point math (projection and trig).
+It exercises the whole platform at once: streaming file I/O (`uno.read_at`
+walks the multi-MB WAD lump by lump, never loading it whole), heavy float
+compute (the BSP walk, the column renderer, monster thinking), the
+framebuffer through three C fast paths (`cv.wall_span`, `cv.mask_span`,
+`cv.flat_span` - one call per rendered column, the per-pixel loops in C),
+keyboard input through the live held-key level (`uno.keys_down()`), the
+60Hz clock (`uno.ticks()`) and the beeper.
 
 ## Getting a WAD
 
@@ -16,10 +22,11 @@ Duum needs a Doom-format **IWAD** on the disk as `DOOM1.WAD`. None ships with
 UnoDOS - game data belongs to its makers - so supply one yourself:
 
 - **Freedoom** (freedoom.github.io) - a free, from-scratch, Doom-compatible
-  IWAD under a BSD license. This is the recommended free option; rename
-  `freedoom1.wad` to `DOOM1.WAD`.
+  IWAD under a BSD license. Rename `freedoom1.wad` to `DOOM1.WAD`.
 - **Doom shareware** - id Software's freely distributable shareware
   `DOOM1.WAD` ("Knee-Deep in the Dead"). `tools/fetch-wad.sh` downloads it.
+- A **registered** `DOOM.WAD` renamed to `DOOM1.WAD` works too (episode 1 is
+  what the level progression plays).
 
 Put the file next to the apps on the boot disk (the build stages it there
 automatically when you have one in `pc64/wads/`). Without a WAD, Duum opens
@@ -27,13 +34,11 @@ and tells you it is missing.
 
 ## Running it
 
-Duum is a Python app, so it runs on the Python runtime (`APPS\PYRT.UNO`) like
-any other. Two ways to launch:
+- **From Files** - open `APPS\DUUM.UNO` and press **Enter**.
+- **From Studio** - open `SDK\DUUM.PY`, press **Ctrl-R**.
 
-- **From Files** - open the Files app, find `APPS\DUUM.UNO`, and press
-  **Enter** (or double-click). Any `.UNO` app launches this way.
-- **From Studio** - open `SDK\DUUM.PY`, press **Ctrl-R**. Studio packages the
-  Python source and runs it.
+The first frame takes a moment - the interpreter parses the WAD and composes
+the visible textures - then the game runs continuously.
 
 ## Controls
 
@@ -42,24 +47,32 @@ any other. Two ways to launch:
 | Up / Down | move forward / back |
 | Left / Right | turn |
 | `,` / `.` | strafe left / right |
+| `F` (or Ctrl) | fire |
+| Space / `E` | use - doors, lifts, switches |
+| `1`..`6` | select weapon |
 
-The first frame takes a moment - the interpreter parses the WAD and walks the
-BSP tree - then the view redraws as you move.
+On native keyboards (USB, laptop I2C-HID, or PS/2 after detach) movement is
+true held-key: keys move you for exactly as long as they are down.  On the
+firmware input path there are no key-release events, so held movement falls
+back to typematic repeat.
+
+## The game
+
+E1M1 through E1M9, in order, with the E1M3 secret exit taking you to E1M9.
+Monsters (troopers, sergeants, imps, demons, and the E1M8 barons) idle until
+they see or hear you, then chase and attack; they take pain, die, and stay
+dead on the floor.  Weapons: fist, pistol, shotgun, chaingun, rocket
+launcher, plasma - hitscan or projectile, with ammo tracked per type and the
+real STBAR status bar (health, armor, ammo, arms, keycards, and the face)
+along the bottom.  Locked doors want their keycard.  Barrels explode.  The
+nukage hurts.  Dying offers the level again; the E1M8 exit ends the episode.
 
 ## Scope
 
-The **walls are texture-mapped** from the WAD (real Doom wall textures,
-composed from patches, perspective-correct, distance/light/orientation
-shaded). Floors and ceilings are flat-shaded, with sky filling open areas.
-It renders one level (E1M1) and has simple wall collision. **Flat (floor/
-ceiling) texturing, things (monsters/items), doors and combat are not
-implemented** - Duum is a proof that the platform can carry a real engine,
-not a complete port.
-
-The first frame takes several seconds while the textures for what you can see
-are composed and cached; after that, moving redraws faster. The textured
-column inner loop runs in C (`cv.wall_col`) so the per-pixel work does not go
-through the interpreter.
+What's deliberately not here: savegames, the automap, sound effects beyond
+the beeper, music, and difficulty selection (things spawn at
+Hurt-Me-Plenty).  Everything you see is data-driven from the WAD - textures,
+flats, sprites, maps, the status bar - so Freedoom reskins the whole game.
 
 See **[Python apps](PYTHON.MD)** for the app model and **[the `uno` API](PYAPI.MD)**
 for what Python code can reach.
