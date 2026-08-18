@@ -59,8 +59,31 @@ with UrcUi() as ui:
     print("screen %dx%d" % (w, h))
     ui.shot("duum_desktop")
 
-    idx = ui.launch_named("Duum", settle=6.0, tries=40)
-    check(idx >= 0, "a window titled 'Duum' opened")
+    # the shell restores the previous session's windows; clear them so Duum
+    # gets focus and the screen
+    for t in list(ui.windows()):
+        ui.link.command("close", timeout=10)
+        time.sleep(0.5)
+
+    # DUUM.UNO is a PYAPP - no descriptor, so it is not an app-registry row.
+    # Launch it the way Files does: pc64_shell_run_user, via uno.run_app on
+    # the URC `py` verb.  The .UNO lives on whichever FAT volume is the ESP.
+    vol = None
+    for v in range(4):
+        r = ui.link.command("py", "import uno; print(uno.size(%d, 'APPS/DUUM.UNO'))" % v,
+                            timeout=20)
+        if r and r[0].strip().lstrip("-").isdigit() and int(r[0]) > 0:
+            vol = v
+            break
+    print("DUUM.UNO on volume", vol)
+    check(vol is not None, "DUUM.UNO is on a volume")
+    r = ui.link.command("py", "import uno; print(uno.run_app(%d, 'APPS/DUUM.UNO'))" % vol,
+                        timeout=30)
+    print("run_app ->", r)
+    time.sleep(6.0)
+    titles = ui.windows()
+    print("windows:", titles)
+    check(any("duum" in t.lower() for t in titles), "a Duum window opened")
 
     # first frame: WAD parse + texture composition, generously waited
     time.sleep(25.0)
@@ -71,7 +94,9 @@ with UrcUi() as ui:
     check(nonblack_frac(rgba, gw, gw // 4, gh // 4, 3 * gw // 4, gh // 2) > 0.9,
           "the 3D view rendered (not black)")
     sig_before = region_signature(rgba, gw, gw // 4, gh // 4, 3 * gw // 4, 3 * gh // 4)
-    hud_before = region_signature(rgba, gw, 0, gh - 30, gw // 2, gh - 4)
+    # the ammo counter lives INSIDE Duum's window (it is a desktop app, not
+    # fullscreen): sample the window's lower-left, where the big digits are
+    hud_before = region_signature(rgba, gw, 60, 250, 200, 308)
 
     # turn left ~90 degrees: view must change
     for _ in range(8):
@@ -88,7 +113,7 @@ with UrcUi() as ui:
     time.sleep(2.0)
     ui.shot("duum_fired")
     gw, gh, rgba = grab(ui)
-    hud_after = region_signature(rgba, gw, 0, gh - 30, gw // 2, gh - 4)
+    hud_after = region_signature(rgba, gw, 60, 250, 200, 308)
     check(hud_after != hud_before, "firing changed the HUD (ammo digits)")
 
     # walk forward a few steps and confirm the view keeps changing
