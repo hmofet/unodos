@@ -605,6 +605,7 @@ class Duum(uno.App):
         self.dead = False
         self.finish = None            # (next level or None, entered-at)
         self.dmg_next = 0.0
+        self.e1m8_done = False
         self.mon_active = False
         self.anim_next = 0.0
         self.hud_key = None; self.hud_ops = []
@@ -828,6 +829,7 @@ class Duum(uno.App):
                 elif df < 0.68: df = 0.68
                 sh = int(lf * df * 256)
                 shw = (sh * wk) // 100
+                if shw > 256: shw = 256    # >256 overflows the byte math
                 dv = dist / vsc
                 yfc = int(hh - (fc - viewz) * vsc * invd)
                 yff = int(hh - (ff - viewz) * vsc * invd)
