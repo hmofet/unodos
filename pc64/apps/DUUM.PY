@@ -463,13 +463,14 @@ EP_ORDER = ["E1M1", "E1M2", "E1M3", "E1M4", "E1M5", "E1M6", "E1M7", "E1M8",
 SECRET_MAP = {"E1M3": "E1M9"}
 AFTER_SECRET = {"E1M9": "E1M4"}
 
-# decoration types that block movement
-SOLID_DECOR = frozenset((25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36, 37,
-                         41, 42, 43, 44, 45, 46, 47, 48, 54, 55, 56, 57, 2028))
+# decoration types that block movement (tuple: this MicroPython build has
+# no frozenset, and 25 entries scan fast enough)
+SOLID_DECOR = (25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36, 37,
+               41, 42, 43, 44, 45, 46, 47, 48, 54, 55, 56, 57, 2028)
 
 # W1/S1 specials fire once, then the line goes dead
-ONE_SHOT = frozenset((2, 3, 4, 10, 11, 16, 19, 21, 36, 37, 38, 39, 51, 52,
-                      103, 109, 110, 112, 113, 114, 121, 122, 124, 125))
+ONE_SHOT = (2, 3, 4, 10, 11, 16, 19, 21, 36, 37, 38, 39, 51, 52,
+            103, 109, 110, 112, 113, 114, 121, 122, 124, 125)
 
 
 class Mover:
