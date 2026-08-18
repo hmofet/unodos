@@ -11,6 +11,7 @@ int  uno_usb_hid_kbd_poll(uno_usb_key_fn e, void *c) { (void)e;(void)c; return 0
 int  uno_usb_hid_mouse_poll(int *dx, int *dy, int *b) { (void)dx;(void)dy;(void)b; return 0; }
 int  uno_usb_hid_wheel(void)       { return 0; }
 int  uno_usb_hid_mods(void)        { return 0; }
+int  uno_usb_hid_keys_held(void)   { return 0; }
 int  uno_usb_hid_present(void)     { return 0; }
 int  uno_usb_hid_kbd_present(void) { return 0; }
 void uno_usb_hid_status(int *nk, int *nm) { if (nk)*nk=0; if (nm)*nm=0; }
@@ -222,6 +223,15 @@ int uno_usb_hid_mods(void)
     int i, m = 0;
     for (i = 0; i < g_neps; i++)
         if (g_eps[i].is_kbd) m |= hid_kbd_mods(&g_eps[i].kbd);
+    return m;
+}
+
+/* Held navigation/action keys (UNO_KH_*), same live-read as the mods above. */
+int uno_usb_hid_keys_held(void)
+{
+    int i, m = 0;
+    for (i = 0; i < g_neps; i++)
+        if (g_eps[i].is_kbd) m |= hid_kbd_keys_held(&g_eps[i].kbd);
     return m;
 }
 

@@ -6,6 +6,17 @@
 from typing import Optional
 
 
+def ticks() -> int:
+    """The 60Hz system tick counter.  Use deltas for frame pacing."""
+    ...
+
+def keys_down() -> int:
+    """Navigation/action keys HELD RIGHT NOW, as a bitmask: 1 Up, 2 Down,
+    4 Right, 8 Left, 16 fire (F or Ctrl), 32 use (Space/E), 64 comma,
+    128 period.  0 on the firmware input path (no key-up events there);
+    fall back to timing out your own key() events in that case."""
+    ...
+
 def rgb(r: int, g: int, b: int) -> int:
     """Pack an (r, g, b) triple (0-255 each) into a colour value."""
     ...
@@ -66,6 +77,30 @@ class Canvas:
         `grid[texcol*th + v]` with .8 fixed-point texel coords v0_fp/dv_fp,
         shaded by sh/256, through the 768-byte RGB palette `pal`.  Built for
         Duum's renderer; grid and pal are bytes-like."""
+        ...
+
+    def wall_span(self, x: int, w: int, y0: int, count: int, grid, tw: int,
+                  th: int, texcol: int, v0_fp: int, dv_fp: int, pal,
+                  sh: int) -> None:
+        """wall_col widened to `w` duplicate canvas columns: the texel run is
+        composed once in C and blitted w times.  One call per rendered
+        column instead of one per canvas pixel column."""
+        ...
+
+    def mask_span(self, x: int, w: int, y0: int, count: int, grid, tw: int,
+                  th: int, texcol: int, v0_fp: int, dv_fp: int, pal,
+                  sh: int) -> None:
+        """wall_span for sprites/masked textures: texel 0xFF is transparent
+        and v does not wrap (rows outside [0, th) are skipped)."""
+        ...
+
+    def flat_span(self, x: int, w: int, y0: int, count: int, grid, pal,
+                  a: float, ycen: float, dirx: float, diry: float,
+                  wx0: float, wy0: float, lf: float) -> None:
+        """Perspective-correct 64x64 floor/ceiling column: per row
+        dist = a / (ycen - y - 0.5), world = (wx0, wy0) + dir*dist, texel
+        (x & 63, -y & 63) from the 4096-byte flat `grid`, lit by sector
+        light `lf` with the walls' distance falloff."""
         ...
 
 

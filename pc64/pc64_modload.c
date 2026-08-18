@@ -286,6 +286,8 @@ static const struct { const char *name; void *addr; } kExports[] = {
     KX(unolog_first), KX(unolog_next), KX(unolog_get),
     KX(unolog_dropped), KX(unolog_sent), KX(unolog_received),
     KX(unolog_sev_name), KX(unolog_fac_name),
+    /* held-keys level for PYRT's uno.keys_down() (Duum movement) */
+    KX(uno_pc64_keys_held),
 };
 #define NEXPORT ((int)(sizeof kExports / sizeof kExports[0]))
 

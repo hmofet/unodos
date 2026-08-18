@@ -109,8 +109,22 @@ class Canvas:
     def text(self, x, y, s, color):
         pass                                  # cosmetic on host shots
 
+    def wall_span(self, x, w, y0, count, grid, tw, th, tc, v0, dv, pal, sh):
+        for k in range(w):
+            self.wall_col(x + k, y0, count, grid, tw, th, tc, v0, dv, pal, sh)
+
+    def mask_span(self, x, w, y0, count, grid, tw, th, tc, v0, dv, pal, sh):
+        for k in range(w):
+            self.mask_col(x + k, y0, count, grid, tw, th, tc, v0, dv, pal, sh)
+
+    def flat_span(self, x, w, y0, count, grid, pal, a, ycen, dx, dy, wx, wy, lf):
+        for k in range(w):
+            self.flat_col(x + k, y0, count, grid, pal, a, ycen, dx, dy, wx, wy, lf)
+
     def wall_col(self, x, y0, count, grid, tw, th, texcol, v0, dv, pal, sh):
         """Byte-faithful mirror of cv_wall_col in mod_uno.c."""
+        if sh > 256:
+            sh = 256
         if tw <= 0 or th <= 0 or count <= 0:
             return
         texcol %= tw

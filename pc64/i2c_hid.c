@@ -12,6 +12,7 @@ int uno_i2c_hid_init(void) { return 0; }
 int uno_i2c_hid_poll(int *dx, int *dy, int *b) { (void)dx;(void)dy;(void)b; return 0; }
 int uno_i2c_hid_kbd_poll(uno_i2c_key_fn e, void *c) { (void)e;(void)c; return 0; }
 int uno_i2c_hid_kbd_present(void) { return 0; }
+int uno_i2c_hid_keys_held(void) { return 0; }
 int uno_i2c_hid_dump(unsigned char *o, int m) { (void)o;(void)m; return 0; }
 int uno_i2c_hid_present(void) { return 0; }
 void uno_i2c_hid_status(int *nb, int *nc, int *pr, int *ad, int *pa)
@@ -763,6 +764,9 @@ int uno_i2c_hid_dump(unsigned char *out, int max)
 
 int uno_i2c_hid_present(void)     { return g_ptr.present; }
 int uno_i2c_hid_kbd_present(void) { return g_kbd.present; }
+/* held navigation/action keys (UNO_KH_*), from the latched boot report */
+int uno_i2c_hid_keys_held(void)
+{ return g_kbd.present ? hid_kbd_keys_held(&g_kbd.kbd) : 0; }
 
 void uno_i2c_hid_status(int *nbars, int *nctrl, int *present, int *addr, int *parsed)
 {

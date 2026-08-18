@@ -558,6 +558,8 @@ class Duum(uno.App):
             self.pal = self.tex.pal
             self.spr = Sprites(self.wad)
             self.have_ticks = hasattr(uno, "ticks")
+            self.have_keys = hasattr(uno, "keys_down")
+            self.kd = 0; self.kd_prev = 0
             self.rng = 0x29A5D1
             self.new_game(LEVEL)
         except Exception as e:
@@ -1204,26 +1206,17 @@ class Duum(uno.App):
         vx, vy, hh = self.fmeta
         for op in self.frame:
             k = op[0]
-            if k == 'R':
-                cv.fill_rect(op[1], op[2], op[3], op[4], op[5])
-            elif k == 'W':
-                _, x, wpx, y0, count, grid, tw, th, tc, v0, dv, sh = op
-                xx = x
-                for _2 in range(wpx):
-                    cv.wall_col(xx, y0, count, grid, tw, th, tc, v0, dv, pal, sh)
-                    xx += 1
+            if k == 'W':
+                cv.wall_span(op[1], op[2], op[3], op[4], op[5], op[6], op[7],
+                             op[8], op[9], op[10], pal, op[11])
             elif k == 'M':
-                _, x, wpx, y0, count, grid, tw, th, tc, v0, dv, sh = op
-                xx = x
-                for _2 in range(wpx):
-                    cv.mask_col(xx, y0, count, grid, tw, th, tc, v0, dv, pal, sh)
-                    xx += 1
-            else:                                        # 'F': floor/ceiling
-                _, x, wpx, y0, count, grid, aa, ddx, ddy, lf = op
-                xx = x
-                for _2 in range(wpx):
-                    cv.flat_col(xx, y0, count, grid, pal, aa, hh, ddx, ddy, vx, vy, lf)
-                    xx += 1
+                cv.mask_span(op[1], op[2], op[3], op[4], op[5], op[6], op[7],
+                             op[8], op[9], op[10], pal, op[11])
+            elif k == 'F':
+                cv.flat_span(op[1], op[2], op[3], op[4], op[5], pal, op[6],
+                             hh, op[7], op[8], vx, vy, op[9])
+            else:
+                cv.fill_rect(op[1], op[2], op[3], op[4], op[5])
         if self.msg:
             cv.text(6, 6, self.msg, rgb(235, 235, 210))
         if self.finish is not None:
@@ -1284,7 +1277,13 @@ class Duum(uno.App):
         self.msg = s
         self.msg_until = self.now + 3.0
 
+    # key -> UNO_KH_* bit for the live held-state export (uno.keys_down)
+    KDBITS = {1: 1, 2: 2, 3: 4, 4: 8, 102: 16, 44: 64, 46: 128}
+
     def _held(self, k):
+        b = Duum.KDBITS.get(k, 0)
+        if self.kd & b:
+            return True
         e = self.held.get(k)
         return e is not None and e > self.now
 
@@ -1305,6 +1304,11 @@ class Duum(uno.App):
         if dt > 0.1:
             dt = 0.1
         self.now += dt
+        if self.have_keys:
+            self.kd_prev = self.kd
+            self.kd = uno.keys_down()
+            if (self.kd & 32) and not (self.kd_prev & 32):
+                self.use_press = True          # rising edge of Space/E
         moved = False
         if not self.dead and self.finish is None:
             moved = self.step_player(dt)

@@ -38,6 +38,8 @@ void fb_set_clip(int x, int y, int w, int h);
 void fb_reset_clip(void);
 void uno_seq_beep(int midi, int ticks);
 void uno_seq_stop(void);
+unsigned int TickCount(void);        /* Toolbox 60Hz tick counter */
+int uno_pc64_keys_held(void);        /* UNO_KH_* bits (hid_kbd.h) */
 long uno_fs_read(int vol, const char *name, unsigned char *buf, long max);
 long uno_fs_size(int vol, const char *name);
 long uno_fs_read_at(int vol, const char *name, long off, unsigned char *buf, long max);
@@ -136,6 +138,7 @@ static mp_obj_t cv_wall_col(size_t n, const mp_obj_t *a) {
     int sh = mp_obj_get_int(a[11]);
     const unsigned char *grid = (const unsigned char *)g.buf;
     const unsigned char *pal = (const unsigned char *)p.buf;
+    if (sh > 256) sh = 256;                     /* >256 overflows the byte math */
     if (tw <= 0 || th <= 0 || count <= 0) return mp_const_none;
     texcol %= tw; if (texcol < 0) texcol += tw;
     const unsigned char *gcol = grid + texcol * th;      /* hoisted column base */
@@ -165,6 +168,160 @@ static mp_obj_t cv_wall_col(size_t n, const mp_obj_t *a) {
 }
 static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(cv_wall_col_obj, 12, 12, cv_wall_col);
 
+/* Textured wall SPAN: wall_col widened to wpx duplicate canvas columns, so
+ * Duum makes ONE call per internal column instead of one per canvas pixel
+ * column.  The texel run is composed once and blitted wpx times.
+ * Args: x, w, y0, count, grid, tw, th, texcol, v0fp, dvfp, pal, sh */
+static mp_obj_t cv_wall_span(size_t n, const mp_obj_t *a) {
+    (void)n;
+    int x = gRX + mp_obj_get_int(a[1]);
+    int wpx = mp_obj_get_int(a[2]);
+    int y0 = gRY + mp_obj_get_int(a[3]);
+    int count = mp_obj_get_int(a[4]);
+    mp_buffer_info_t g, p;
+    mp_get_buffer_raise(a[5], &g, MP_BUFFER_READ);
+    int tw = mp_obj_get_int(a[6]), th = mp_obj_get_int(a[7]);
+    int texcol = mp_obj_get_int(a[8]);
+    long v = (long)mp_obj_get_int(a[9]), dv = (long)mp_obj_get_int(a[10]);
+    mp_get_buffer_raise(a[11], &p, MP_BUFFER_READ);
+    int sh = mp_obj_get_int(a[12]);
+    const unsigned char *grid = (const unsigned char *)g.buf;
+    const unsigned char *pal = (const unsigned char *)p.buf;
+    if (sh > 256) sh = 256;
+    if (tw <= 0 || th <= 0 || count <= 0 || wpx <= 0) return mp_const_none;
+    texcol %= tw; if (texcol < 0) texcol += tw;
+    { const unsigned char *gcol = grid + texcol * th;
+    for (int base = 0; base < count; ) {
+        int chunk = count - base;
+        if (chunk > FB_WALLCOL_MAX) chunk = FB_WALLCOL_MAX;
+        fb_px run[FB_WALLCOL_MAX];
+        for (int i = 0; i < chunk; i++) {
+            int vv = (int)((v >> 8) % th); if (vv < 0) vv += th;
+            const unsigned char *c = pal + gcol[vv] * 3;
+            unsigned rr = (c[0] * sh) >> 8, gg = (c[1] * sh) >> 8, bb = (c[2] * sh) >> 8;
+            run[i] = 0xFF000000u | (bb << 16) | (gg << 8) | rr;
+            v += dv;
+        }
+        for (int k = 0; k < wpx; k++)
+            fb_blit(x + k, y0 + base, 1, chunk, run, 1);
+        base += chunk;
+    } }
+    return mp_const_none;
+}
+static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(cv_wall_span_obj, 13, 13, cv_wall_span);
+
+/* Masked SPAN (sprites, masked midtextures, HUD): like wall_span but texel
+ * 0xFF is transparent and v does NOT wrap - out-of-range rows are skipped.
+ * Opaque stretches are batched into runs and blitted.
+ * Args: x, w, y0, count, grid, tw, th, texcol, v0fp, dvfp, pal, sh */
+static mp_obj_t cv_mask_span(size_t n, const mp_obj_t *a) {
+    (void)n;
+    int x = gRX + mp_obj_get_int(a[1]);
+    int wpx = mp_obj_get_int(a[2]);
+    int y0 = gRY + mp_obj_get_int(a[3]);
+    int count = mp_obj_get_int(a[4]);
+    mp_buffer_info_t g, p;
+    mp_get_buffer_raise(a[5], &g, MP_BUFFER_READ);
+    int tw = mp_obj_get_int(a[6]), th = mp_obj_get_int(a[7]);
+    int texcol = mp_obj_get_int(a[8]);
+    long v = (long)mp_obj_get_int(a[9]), dv = (long)mp_obj_get_int(a[10]);
+    mp_get_buffer_raise(a[11], &p, MP_BUFFER_READ);
+    int sh = mp_obj_get_int(a[12]);
+    const unsigned char *grid = (const unsigned char *)g.buf;
+    const unsigned char *pal = (const unsigned char *)p.buf;
+    if (sh > 256) sh = 256;
+    if (tw <= 0 || th <= 0 || count <= 0 || wpx <= 0) return mp_const_none;
+    texcol %= tw; if (texcol < 0) texcol += tw;
+    { const unsigned char *gcol = grid + texcol * th;
+    long vmax = (long)th << 8;
+    fb_px run[FB_WALLCOL_MAX];
+    int rlen = 0, rstart = 0;
+    for (int i = 0; i < count; i++, v += dv) {
+        int opaque = 0;
+        unsigned char t = 0;
+        if (v >= 0 && v < vmax) {
+            t = gcol[v >> 8];
+            opaque = (t != 0xFF);
+        }
+        if (opaque && rlen < FB_WALLCOL_MAX) {
+            const unsigned char *c = pal + t * 3;
+            unsigned rr = (c[0] * sh) >> 8, gg = (c[1] * sh) >> 8, bb = (c[2] * sh) >> 8;
+            if (rlen == 0) rstart = i;
+            run[rlen++] = 0xFF000000u | (bb << 16) | (gg << 8) | rr;
+        } else if (rlen) {
+            for (int k = 0; k < wpx; k++)
+                fb_blit(x + k, y0 + rstart, 1, rlen, run, 1);
+            rlen = 0;
+            if (opaque) { i--; v -= dv; }      /* retry this row in a new run */
+        }
+    }
+    if (rlen)
+        for (int k = 0; k < wpx; k++)
+            fb_blit(x + k, y0 + rstart, 1, rlen, run, 1);
+    }
+    return mp_const_none;
+}
+static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(cv_mask_span_obj, 13, 13, cv_mask_span);
+
+/* Perspective flat SPAN (floors/ceilings): 64x64 world-aligned texture.
+ * a = (plane_height - viewz) * vscale; per row dist = a / (ycen - y - 0.5),
+ * world = (wx0,wy0) + dir * dist, texel (x & 63, -y & 63), shaded by sector
+ * light * the walls' distance falloff.
+ * Args: x, w, y0, count, grid, pal, a, ycen, dirx, diry, wx0, wy0, lf */
+static mp_obj_t cv_flat_span(size_t n, const mp_obj_t *a) {
+    (void)n;
+    int x = gRX + mp_obj_get_int(a[1]);
+    int wpx = mp_obj_get_int(a[2]);
+    int y0i = mp_obj_get_int(a[3]);
+    int y0 = gRY + y0i;
+    int count = mp_obj_get_int(a[4]);
+    mp_buffer_info_t g, p;
+    mp_get_buffer_raise(a[5], &g, MP_BUFFER_READ);
+    mp_get_buffer_raise(a[6], &p, MP_BUFFER_READ);
+    float aa   = (float)mp_obj_get_float(a[7]);
+    float ycen = (float)mp_obj_get_float(a[8]);
+    float dirx = (float)mp_obj_get_float(a[9]);
+    float diry = (float)mp_obj_get_float(a[10]);
+    float wx0  = (float)mp_obj_get_float(a[11]);
+    float wy0  = (float)mp_obj_get_float(a[12]);
+    float lf   = (float)mp_obj_get_float(a[13]);
+    const unsigned char *grid = (const unsigned char *)g.buf;
+    const unsigned char *pal = (const unsigned char *)p.buf;
+    if (count <= 0 || wpx <= 0 || g.len < 4096) return mp_const_none;
+    for (int base = 0; base < count; ) {
+        int chunk = count - base;
+        if (chunk > FB_WALLCOL_MAX) chunk = FB_WALLCOL_MAX;
+        fb_px run[FB_WALLCOL_MAX];
+        for (int i = 0; i < chunk; i++) {
+            int yy = y0i + base + i;
+            float yd = ycen - ((float)yy + 0.5f);
+            fb_px px = 0xFF000000u;
+            if (yd != 0.0f) {
+                float dist = aa / yd;
+                float wx = wx0 + dirx * dist;
+                float wy = wy0 + diry * dist;
+                int ix = (int)wx; if (wx < (float)ix) ix--;
+                int iy = (int)wy; if (wy < (float)iy) iy--;
+                float df = 1200.0f / (dist + 650.0f);
+                if (df > 1.0f) df = 1.0f; else if (df < 0.68f) df = 0.68f;
+                int sh = (int)(lf * df * 256.0f);
+                if (sh > 256) sh = 256;
+                { const unsigned char *c =
+                      pal + grid[(((-iy) & 63) << 6) | (ix & 63)] * 3;
+                  unsigned rr = (c[0] * sh) >> 8, gg = (c[1] * sh) >> 8,
+                           bb = (c[2] * sh) >> 8;
+                  px = 0xFF000000u | (bb << 16) | (gg << 8) | rr; }
+            }
+            run[i] = px;
+        }
+        for (int k = 0; k < wpx; k++)
+            fb_blit(x + k, y0 + base, 1, chunk, run, 1);
+        base += chunk;
+    }
+    return mp_const_none;
+}
+static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(cv_flat_span_obj, 14, 14, cv_flat_span);
+
 static mp_obj_t cv_width(mp_obj_t self)  { (void)self; return mp_obj_new_int(gRW); }
 static MP_DEFINE_CONST_FUN_OBJ_1(cv_width_obj, cv_width);
 static mp_obj_t cv_height(mp_obj_t self) { (void)self; return mp_obj_new_int(gRH); }
@@ -181,6 +338,9 @@ static const mp_rom_map_elem_t canvas_locals[] = {
     { MP_ROM_QSTR(MP_QSTR_wall_col),  MP_ROM_PTR(&cv_wall_col_obj) },
     { MP_ROM_QSTR(MP_QSTR_width),     MP_ROM_PTR(&cv_width_obj) },
     { MP_ROM_QSTR(MP_QSTR_height),    MP_ROM_PTR(&cv_height_obj) },
+    { MP_ROM_QSTR(MP_QSTR_wall_span), MP_ROM_PTR(&cv_wall_span_obj) },
+    { MP_ROM_QSTR(MP_QSTR_mask_span), MP_ROM_PTR(&cv_mask_span_obj) },
+    { MP_ROM_QSTR(MP_QSTR_flat_span), MP_ROM_PTR(&cv_flat_span_obj) },
 };
 static MP_DEFINE_CONST_DICT(canvas_locals_dict, canvas_locals);
 MP_DEFINE_CONST_OBJ_TYPE(canvas_type, MP_QSTR_Canvas, MP_TYPE_FLAG_NONE,
@@ -196,6 +356,16 @@ static mp_obj_t m_beep(mp_obj_t midi, mp_obj_t ticks)
 static MP_DEFINE_CONST_FUN_OBJ_2(beep_obj, m_beep);
 static mp_obj_t m_quiet(void) { uno_seq_stop(); return mp_const_none; }
 static MP_DEFINE_CONST_FUN_OBJ_0(quiet_obj, m_quiet);
+
+/* uno.ticks() -> the 60Hz Toolbox tick counter (frame pacing / dt) */
+static mp_obj_t m_ticks(void) { return mp_obj_new_int((mp_int_t)TickCount()); }
+static MP_DEFINE_CONST_FUN_OBJ_0(ticks_obj, m_ticks);
+
+/* uno.keys_down() -> currently-held navigation keys (UNO_KH_* bits).
+ * 0 on the firmware input path, which has no key-up events. */
+static mp_obj_t m_keys_down(void)
+{ return mp_obj_new_int(uno_pc64_keys_held()); }
+static MP_DEFINE_CONST_FUN_OBJ_0(keys_down_obj, m_keys_down);
 
 /* read a whole file (small): uno.read(vol, name) -> bytes; vol default 0 */
 static mp_obj_t m_read(size_t n, const mp_obj_t *a) {
@@ -457,6 +627,8 @@ static const mp_rom_map_elem_t uno_globals_table[] = {
     { MP_ROM_QSTR(MP_QSTR_log_read),     MP_ROM_PTR(&log_read_obj) },
     { MP_ROM_QSTR(MP_QSTR_log_save),     MP_ROM_PTR(&log_save_obj) },
     { MP_ROM_QSTR(MP_QSTR_run_app),      MP_ROM_PTR(&run_app_obj) },
+    { MP_ROM_QSTR(MP_QSTR_ticks),        MP_ROM_PTR(&ticks_obj) },
+    { MP_ROM_QSTR(MP_QSTR_keys_down),    MP_ROM_PTR(&keys_down_obj) },
 };
 static MP_DEFINE_CONST_DICT(uno_globals, uno_globals_table);
 const mp_obj_module_t mp_module_uno = {
