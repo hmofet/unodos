@@ -23,9 +23,14 @@ LEVEL = "E1M1"
 FOV = math.pi / 2
 NEAR = 4.0
 EYE = 41
-VER = 1.5
+VER = 1.2          # Doom's 320x200-stretched-to-4:3 pixel aspect
 MOVE = 12.0
 TURN = 0.20
+
+# linedef flags
+ML_TWOSIDED   = 4
+ML_DONTPEGTOP = 8
+ML_DONTPEGBOT = 16
 
 
 def rgb(r, g, b):
@@ -238,16 +243,18 @@ class Duum(uno.App):
         bsd = ld[5] if side else ld[6]
         fs = m.sectors[m.sides[fsd][5]] if fsd != 0xFFFF else None
         bs = m.sectors[m.sides[bsd][5]] if bsd != 0xFFFF else None
-        return fs, bs, m.sides[fsd]
+        return fs, bs, m.sides[fsd], ld
 
     def point_sector(self, px, py):
+        # Doom's R_PointOnSide: side>0 means the point is on the RIGHT (front)
+        # of the partition vector, which is children[0] == nd[-2].
         m = self.lvl
         n = len(m.nodes) - 1
         while not (n & 0x8000):
             nd = m.nodes[n]
             side = (px - nd[0]) * nd[3] - (py - nd[1]) * nd[2]
-            n = nd[-2] if side <= 0 else nd[-1]
-        fs, _, _ = self.seg_sectors(m.segs[m.ssectors[n & 0x7FFF][1]])
+            n = nd[-2] if side > 0 else nd[-1]
+        fs, _, _, _ = self.seg_sectors(m.segs[m.ssectors[n & 0x7FFF][1]])
         return fs
 
     def render(self):
@@ -296,8 +303,10 @@ class Duum(uno.App):
             out.append(('W', x0, x1 - x0, y0, y1 - y0 + 1,
                         grid, tw, th, int(u), v0, int(dv * 256), sh))
 
+        state = [RW]                      # open (not yet closed) column count
+
         def draw_seg(seg):
-            fs, bs, fsd = self.seg_sectors(seg)
+            fs, bs, fsd, ld = self.seg_sectors(seg)
             if fs is None: return
             ax, ay = verts[seg[0]]; bx, by = verts[seg[1]]
             wk = 115 if abs(bx - ax) > abs(by - ay) else 88     # /100 contrast
@@ -327,12 +336,22 @@ class Duum(uno.App):
             uz1 = u1 * inv1; uz2 = u2 * inv2
             fc = fs[1]; ff = fs[0]; flight = fs[4]
             yoff = fsd[1]
+            flags = ld[2]
             mid_t = self.tex.get(_texname(fsd[4]))
             up_t = self.tex.get(_texname(fsd[2]))
             lo_t = self.tex.get(_texname(fsd[3]))
             twosided = bs is not None
+            # Texture pegging (Doom R_StoreWallRange): v_top is the texel row at
+            # the TOP of each wall piece; anchors move with the linedef flags.
+            v_mid = yoff
+            if (flags & ML_DONTPEGBOT) and mid_t:
+                v_mid = yoff + (ff + mid_t[1] - fc)      # bottom texel row at floor
             if twosided:
                 bc = bs[1]; bf = bs[0]
+                v_up = yoff
+                if not (flags & ML_DONTPEGTOP) and up_t:
+                    v_up = yoff + (bc + up_t[1] - fc)    # bottom texel row at back ceil
+                v_lo = yoff + ((fc - bf) if (flags & ML_DONTPEGBOT) else 0)
             lf = 0.72 + 0.28 * (flight / 255.0)
             span = rx2 - rx1
             for x in range(ix1, ix2 + 1):
@@ -356,8 +375,9 @@ class Duum(uno.App):
                 if yff < cb:
                     rect(x, (yff + 1) if (yff + 1) > ct else ct, cb, col_rgb(C_FLOOR, lf*0.9))
                 if not twosided:
-                    wall(x, yfc, yff, ct, cb, mid_t, u, yoff, dv, shw, (200, 188, 170))
+                    wall(x, yfc, yff, ct, cb, mid_t, u, v_mid, dv, shw, (200, 188, 170))
                     ceilc[x] = 1; floorc[x] = 0
+                    state[0] -= 1
                 else:
                     ybc = int(hh - (bc - viewz) * vsc * invd)
                     ybf = int(hh - (bf - viewz) * vsc * invd)
@@ -365,20 +385,56 @@ class Duum(uno.App):
                     newcb = cb if cb < yff else yff
                     if bc < fc:
                         if up_t:
-                            wall(x, yfc, ybc - 1, ct, cb, up_t, u, yoff, dv, shw, (172, 150, 122))
+                            wall(x, yfc, ybc - 1, ct, cb, up_t, u, v_up, dv, shw, (172, 150, 122))
                         else:
                             rect(x, yfc if yfc > ct else ct, (ybc-1) if (ybc-1) < cb else cb, col_rgb(C_CEIL, lf*df))
                         if ybc > newct: newct = ybc
                     if bf > ff:
                         if lo_t:
-                            wall(x, ybf + 1, yff, ct, cb, lo_t, u, yoff, dv, shw, (140, 150, 170))
+                            wall(x, ybf + 1, yff, ct, cb, lo_t, u, v_lo, dv, shw, (140, 150, 170))
                         else:
                             rect(x, (ybf+1) if (ybf+1) > ct else ct, yff if yff < cb else cb, col_rgb(C_FLOOR, lf*df))
                         if ybf < newcb: newcb = ybf
                     ceilc[x] = newct; floorc[x] = newcb
+                    if newct > newcb:
+                        state[0] -= 1
+
+        def bbox_vis(top, bot, left, right):
+            # Conservative frustum test: skip the far child only when all 4
+            # corners are behind the near plane or project past one screen
+            # edge, or every covered column is already closed.
+            all_behind = True
+            lo = 1e9; hi = -1e9
+            straddle = False
+            for (bx, by) in ((left, top), (right, top), (left, bot), (right, bot)):
+                dx = bx - px; dy = by - py
+                depth = dx * cos_a + dy * sin_a
+                sx = dy * cos_a - dx * sin_a
+                if depth >= NEAR:
+                    all_behind = False
+                    r = (RW / 2) + (sx / depth) * scale
+                    if r < lo: lo = r
+                    if r > hi: hi = r
+                else:
+                    straddle = True
+            if all_behind:
+                return False
+            if not straddle:
+                if hi < 0 or lo > RW - 1:
+                    return False
+                i0 = 0 if lo < 0 else int(lo)
+                i1 = RW - 1 if hi > RW - 1 else int(hi) + 1
+                if i1 > RW - 1: i1 = RW - 1
+                for x in range(i0, i1 + 1):
+                    if ceilc[x] <= floorc[x]:
+                        return True
+                return False
+            return True
 
         def walk(n):
-            while True:
+            # Front-to-back: descend the child the viewer is in first, then
+            # the far child (bbox-culled); stop once every column is closed.
+            while state[0] > 0:
                 if n & 0x8000:
                     ss = m.ssectors[n & 0x7FFF]
                     first = ss[1]
@@ -387,10 +443,14 @@ class Duum(uno.App):
                     return
                 nd = m.nodes[n]
                 side = (px - nd[0]) * nd[3] - (py - nd[1]) * nd[2]
-                if side <= 0:
-                    walk(nd[-2]); n = nd[-1]
+                if side > 0:
+                    walk(nd[-2])
+                    if not bbox_vis(nd[8], nd[9], nd[10], nd[11]): return
+                    n = nd[-1]
                 else:
-                    walk(nd[-1]); n = nd[-2]
+                    walk(nd[-1])
+                    if not bbox_vis(nd[4], nd[5], nd[6], nd[7]): return
+                    n = nd[-2]
 
         walk(len(m.nodes) - 1)
         sky = rgb(*C_SKY)
@@ -436,7 +496,7 @@ class Duum(uno.App):
         if s is None:
             return True
         cur = self.point_sector(self.px, self.py)
-        if cur is not None and s[0] - cur[0] > 32:
+        if cur is not None and s[0] - cur[0] > 24:     # Doom's max step height
             return True
         if s[1] - s[0] < 56:
             return True
