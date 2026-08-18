@@ -310,6 +310,39 @@ static int ps2_mods(void)
 }
 int uno_ps2_mods(void) { return ps2_mods(); }
 
+/* Held navigation/action keys, mirroring hid_kbd.h's UNO_KH_* wire format
+ * (restated here like PS2_MOD_* above: this file includes no headers).
+ * Tracked make/break like the modifiers, so it is a true LEVEL. */
+#define PS2_KH_UP     0x001
+#define PS2_KH_DOWN   0x002
+#define PS2_KH_RIGHT  0x004
+#define PS2_KH_LEFT   0x008
+#define PS2_KH_FIRE   0x010
+#define PS2_KH_USE    0x020
+#define PS2_KH_SLEFT  0x040
+#define PS2_KH_SRIGHT 0x080
+static int gHeldKeys;
+static void held_update(int e0, int code, int brk)
+{
+    int bit = 0;
+    if (e0) {
+        if      (code == 0x48) bit = PS2_KH_UP;
+        else if (code == 0x50) bit = PS2_KH_DOWN;
+        else if (code == 0x4D) bit = PS2_KH_RIGHT;
+        else if (code == 0x4B) bit = PS2_KH_LEFT;
+    } else {
+        if      (code == 0x21) bit = PS2_KH_FIRE;            /* F     */
+        else if (code == 0x39) bit = PS2_KH_USE;             /* space */
+        else if (code == 0x12) bit = PS2_KH_USE;             /* E     */
+        else if (code == 0x33) bit = PS2_KH_SLEFT;           /* comma */
+        else if (code == 0x34) bit = PS2_KH_SRIGHT;          /* period */
+    }
+    if (!bit) return;
+    if (brk) gHeldKeys &= ~bit; else gHeldKeys |= bit;
+}
+int uno_ps2_keys_held(void)
+{ return gHeldKeys | (gCtrl ? PS2_KH_FIRE : 0); }
+
 static void kq_push(int scan, int uni, int mods)
 {
     int n = (gKQt + 1) % KQ;
@@ -325,6 +358,7 @@ static void kbd_byte(unsigned char b)
     if (b == 0xE1) { return; }                 /* pause prefix - ignore        */
     brk  = b & 0x80;
     code = b & 0x7F;
+    held_update(gE0, code, brk);               /* LEVEL state; consumes nothing */
     if (gE0) {
         gE0 = 0;
         switch (code) {

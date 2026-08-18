@@ -48,6 +48,7 @@ int  uno_ps2_next_key(int *scan, int *uni, int *ctrl);
  * authoritative modifier source whenever native input owns the keyboard. */
 int  uno_ps2_next_key2(int *scan, int *uni, int *mods);
 int  uno_ps2_mods(void);
+int  uno_ps2_keys_held(void);      /* UNO_KH_* bits (hid_kbd.h), live level */
 int  uno_ps2_mouse(int *dx, int *dy, int *btn);
 int  uno_ps2_mouse_wheel(void);   /* notches since the last call (+ = down) */
 

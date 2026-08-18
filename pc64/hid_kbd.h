@@ -47,4 +47,19 @@ void hid_kbd_report(hid_kbd_state *s, const unsigned char *rep,
  * else pressed reports once and then stays silent. */
 int  hid_kbd_mods(const hid_kbd_state *s);
 
+/* Currently-HELD navigation/action keys as a bitmask, read from the same
+ * latched report hid_kbd_mods() reads.  These bits are the wire format
+ * uno_pc64_keys_held() (uefi_main.c) answers in and PYRT's uno.keys_down()
+ * hands to Python; the PS/2 tracker in pc64_native.c speaks it too.  A LEVEL,
+ * like hid_kbd_mods() - it lasts exactly as long as the key is down. */
+#define UNO_KH_UP     0x001
+#define UNO_KH_DOWN   0x002
+#define UNO_KH_RIGHT  0x004
+#define UNO_KH_LEFT   0x008
+#define UNO_KH_FIRE   0x010        /* F, or either Ctrl */
+#define UNO_KH_USE    0x020        /* Space or E */
+#define UNO_KH_SLEFT  0x040        /* comma */
+#define UNO_KH_SRIGHT 0x080        /* period */
+int  hid_kbd_keys_held(const hid_kbd_state *s);
+
 #endif

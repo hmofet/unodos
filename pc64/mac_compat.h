@@ -293,6 +293,7 @@ int  uno_pc64_next_key(int *scan, int *uni, int *ctrl);  /* raw key stream (unou
  * (USB HID, until the usb lane exposes its boot-report modifier byte). */
 int  uno_pc64_next_key2(int *scan, int *uni, int *mods);
 int  uno_pc64_mods(void);
+int  uno_pc64_keys_held(void);     /* UNO_KH_* bits (hid_kbd.h), live level */
 void uno_pc64_mouse(int *x, int *y, int *btn);           /* fb-space mouse + button */
 /* Synthetic-input lockout.  While set, uno_pc64_inject_key/_pointer DROP their
  * event, so no automation - local script or remote URC link - can drive the

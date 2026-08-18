@@ -1492,6 +1492,19 @@ int uno_pc64_mods(void)
     if (gDetached && !native_kbd_present()) return uno_ps2_mods();
     return gLiveMods;
 }
+
+/* Currently-held navigation/action keys (UNO_KH_* in hid_kbd.h), merged
+ * across every live keyboard source.  0 on the pure firmware path - EFI
+ * SimpleTextIn has no release edges, so callers (Duum) fall back to their
+ * key-event repeat timers there. */
+int uno_pc64_keys_held(void)
+{
+    int m = 0;
+    if (uno_usb_hid_kbd_present()) m |= uno_usb_hid_keys_held();
+    if (uno_i2c_hid_kbd_present()) m |= uno_i2c_hid_keys_held();
+    if (gDetached && !native_kbd_present()) m |= uno_ps2_keys_held();
+    return m;
+}
 void uno_pc64_mouse(int *x, int *y, int *btn) { *x = g_cx; *y = g_cy; *btn = g_prev_mb; }
 
 /* wheel notches since the last call (+ = down); the shell turns these into

@@ -43,6 +43,7 @@ int  uno_usb_hid_wheel(void);
  * not consume a report. This is the USB source for uno_pc64_mods(); without it
  * Alt and GUI are dead on every USB keyboard. */
 int  uno_usb_hid_mods(void);
+int  uno_usb_hid_keys_held(void);   /* UNO_KH_* bits (hid_kbd.h) */
 
 int  uno_usb_hid_present(void);       /* any HID endpoint claimed        */
 int  uno_usb_hid_kbd_present(void);   /* at least one keyboard           */

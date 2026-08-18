@@ -132,3 +132,27 @@ void hid_kbd_report(hid_kbd_state *s, const unsigned char *rep,
  * zero), so this stays current while a modifier is held with no key pressed,
  * and a poll that brings no report leaves it alone rather than clearing it. */
 int hid_kbd_mods(const hid_kbd_state *s) { return fold_mods(s->prevmod); }
+
+/* held navigation/action keys (UNO_KH_* in hid_kbd.h), from the latched
+ * report - the usage codes are Keyboard-page: arrows 0x4F-0x52, F 0x09,
+ * Space 0x2C, E 0x08, comma 0x36, period 0x37. */
+int hid_kbd_keys_held(const hid_kbd_state *s)
+{
+    int i, m = 0;
+    for (i = 0; i < 6; i++) {
+        switch (s->prev[i]) {
+        case 0x52: m |= UNO_KH_UP;     break;
+        case 0x51: m |= UNO_KH_DOWN;   break;
+        case 0x4F: m |= UNO_KH_RIGHT;  break;
+        case 0x50: m |= UNO_KH_LEFT;   break;
+        case 0x09: m |= UNO_KH_FIRE;   break;
+        case 0x2C: m |= UNO_KH_USE;    break;
+        case 0x08: m |= UNO_KH_USE;    break;
+        case 0x36: m |= UNO_KH_SLEFT;  break;
+        case 0x37: m |= UNO_KH_SRIGHT; break;
+        default: break;
+        }
+    }
+    if (s->prevmod & 0x11) m |= UNO_KH_FIRE;   /* either Ctrl */
+    return m;
+}

@@ -44,6 +44,7 @@ int  uno_i2c_hid_poll(int *dx, int *dy, int *buttons);
 typedef void (*uno_i2c_key_fn)(int scan, int uni, int ctrl, int mods, void *ctx);
 int  uno_i2c_hid_kbd_poll(uno_i2c_key_fn emit, void *ctx);
 int  uno_i2c_hid_kbd_present(void);
+int  uno_i2c_hid_keys_held(void);  /* UNO_KH_* bits (hid_kbd.h) */
 
 /* debug: copy the last raw input report (for nailing the parser). Returns
    its length. */
