@@ -120,14 +120,30 @@ class Oracle:
         out.sort(key=lambda c: c[0])
         return out
 
+    def eye_sector(self, px, py):
+        """Point location, BSP-free so it stays an independent check on
+        Duum's BSP walk: the FIRST linedef any ray from the eye crosses is a
+        boundary of the eye's own sector, and _crossings already names the
+        sidedef facing the eye.  Vote over several off-axis rays because a
+        single ray can pass exactly through a vertex of this integer geometry
+        and miss the true first line (which read as a 128-unit eye-height
+        error at one deathmatch spawn)."""
+        votes = {}
+        for k in range(8):
+            a = (k + 0.37) * (math.pi / 4)          # off-axis on purpose
+            for (u, li, fsec, bsec, fsd) in self._crossings(
+                    px, py, math.cos(a), math.sin(a)):
+                if fsec is not None:
+                    votes[fsec] = votes.get(fsec, 0) + 1
+                break                                # only the FIRST crossing
+        if not votes:
+            return None
+        return max(votes.items(), key=lambda e: e[1])[0]
+
     def viewz(self, px, py, pa):
-        """Eye height: floor of the sector the viewer is in + EYE.
-        Derived from the nearest crossing's front sector (BSP-free)."""
-        cr = self._crossings(px, py, math.cos(pa), math.sin(pa))
-        for (u, li, fsec, bsec, fsd) in cr:
-            if fsec is not None:
-                return self.lvl.sectors[fsec][0] + self.eye
-        return self.eye
+        """Eye height: floor of the sector the viewer is in + EYE."""
+        s = self.eye_sector(px, py)
+        return (self.lvl.sectors[s][0] if s is not None else 0) + self.eye
 
     def column(self, px, py, viewz, dx, dy):
         """One column's visible spans, front to back.

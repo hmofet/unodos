@@ -21,7 +21,12 @@ WADNAME = "DOOM1.WAD"
 LEVEL = "E1M1"
 
 FOV = math.pi / 2
-NEAR = 4.0
+# Near clip.  Duum's collision is sector-based (no linedef-radius test), so
+# unlike vanilla P_TryMove the player CAN press right up against a wall; at
+# 4.0 the whole seg fell inside the clip and the wall vanished, showing the
+# void through it whenever you walked into a corner.  1.0 still keeps the
+# projection well conditioned.
+NEAR = 1.0
 EYE = 41
 VER = 1.2          # Doom's 320x200-stretched-to-4:3 pixel aspect
 MOVSPD = 320.0     # units/s (Doom run speed ballpark)
