@@ -15,7 +15,7 @@ Scene 6 also carries real audio captured from the guest while it decoded an
 MP3, mixed underneath at the offset the capture harness measured (the wav
 clock and the video clock are independent).
 
-    python3 mux_vo.py --master out/final2/cut.mp4 --bed "s06:out/final2/s06.wav:6.68:0.22"
+    python3 mux_vo.py --master out/final2/final.mp4 --bed "s06:out/final2/s06.wav:6.68:0.22"
 """
 import argparse, json, os, subprocess, sys
 
@@ -72,11 +72,13 @@ def cues_of(scene):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--master", default=os.path.join(HERE, "out/final2/cut.mp4"))
+    ap.add_argument("--master", default=os.path.join(HERE, "out/final2/final.mp4"))
     ap.add_argument("--timeline", default=None)
     ap.add_argument("--script", default=os.path.join(HERE, "vo_script.json"))
     ap.add_argument("--vo-dir", default=os.path.join(HERE, "out/vo"))
-    ap.add_argument("--out", default=os.path.join(HERE, "out/final2/unodos-demo.mp4"))
+    ap.add_argument("--out",
+                    default=os.path.join(HERE,
+                                         "out/final2/unodos-demo-final.mp4"))
     ap.add_argument("--lead-in", type=float, default=0.6,
                     help="seconds after a beat fires before its line starts")
     ap.add_argument("--gap", type=float, default=0.35,
