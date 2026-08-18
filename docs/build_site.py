@@ -276,6 +276,32 @@ def sidebar(active):
   </div>
 </aside>"""
 
+# Cloudflare Web Analytics, the same beacon the Under a Crescent Moon site
+# uses. Pageviews, referrers and countries; cookieless, so no consent banner.
+#
+# The token is a PUBLIC beacon id, not a secret: it ships inside every page it
+# measures. It is a hardcoded constant rather than an environment variable on
+# purpose. These pages are GENERATED AND COMMITTED, so a token read from the
+# environment would silently vanish from the committed HTML the first time
+# somebody regenerated the site without it set, and nothing would fail.
+#
+# Empty string means no tag is emitted anywhere. Mint one at:
+# Cloudflare dashboard > Analytics & Logs > Web Analytics > Add a site >
+# hmofet.github.io, then paste the token out of the snippet here.
+#
+# Note this is the manual's one external asset. Everything else here is
+# self-contained by design, and a blocked or offline beacon is harmless: the
+# script is deferred, and nothing on the page depends on it loading.
+CF_BEACON_TOKEN = ""
+
+
+def analytics_tag() -> str:
+    if not CF_BEACON_TOKEN:
+        return ""
+    return ('<script defer src="https://static.cloudflareinsights.com/beacon.min.js" '
+            f"""data-cf-beacon='{{"token": "{CF_BEACON_TOKEN}"}}'></script>\n""")
+
+
 def page(fname, title, body):
     active = fname
     # prev/next
@@ -311,7 +337,7 @@ def page(fname, title, body):
 {pn}
 </div></main>
 </div>
-</body>
+{analytics_tag()}</body>
 </html>"""
 
 # --------------------------------------------------------------------------- helpers
@@ -2596,6 +2622,9 @@ def main():
         with open(os.path.join(OUT, fname), "w", newline="\n", encoding="utf-8") as f:
             f.write(page(fname, title, body))
         print("wrote", fname)
+    print("analytics:",
+          f"on, token {CF_BEACON_TOKEN[:8]}..." if CF_BEACON_TOKEN
+          else "OFF (CF_BEACON_TOKEN is empty)")
     print("done ->", OUT)
 
 if __name__ == "__main__":
