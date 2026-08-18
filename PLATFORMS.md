@@ -13,9 +13,12 @@ emulators or instruction-level harnesses.**
 distance between them is where operating systems actually break. They are kept
 in separate columns here for that reason.
 
-Last reconciled: 2026-08-08, against release
-[v3.32.0](https://github.com/hmofet/unodos/releases/tag/v3.32.0). Every binary
-in that release was built from this tree in one pass on that date.
+Last reconciled: 2026-08-18, against release
+[v3.33.0](https://github.com/hmofet/unodos/releases/tag/v3.33.0). Only the
+pc64 images were rebuilt for that release (Duum is now a full game and the
+images stage the Freedoom IWAD as `DOOM1.WAD`; UnoWord preserves document
+formatting). Every other artifact is byte-identical to v3.32.0, whose
+binaries were all built from this tree in one pass on 2026-08-08.
 
 ## Legend
 
@@ -102,7 +105,7 @@ emulated NIC. To enable Wi-Fi on real hardware, use
 ## How to check any of this yourself
 
 Every row above corresponds to a downloadable binary in
-[v3.32.0](https://github.com/hmofet/unodos/releases/tag/v3.32.0), and the
+[v3.33.0](https://github.com/hmofet/unodos/releases/tag/v3.33.0), and the
 emulator named in each row is the one that was used. Load the file and see. If
 something here is wrong, that is a bug in this file and worth reporting.
 
@@ -119,5 +122,6 @@ Known limitations of this reconciliation, stated so nobody over-trusts it:
   C64 entry above is taken from `c64/README.md`, which records it as
   harness-verified only.
 - Hardware dates are as recorded at the time of the test. Nothing above was
-  re-tested on physical hardware for this release; the binaries were rebuilt,
-  and a rebuilt binary is not a re-verified one.
+  re-tested on physical hardware for this release. Only the pc64 binaries
+  were rebuilt for v3.33.0, and a rebuilt binary is not a re-verified one;
+  every other artifact is the same bytes that shipped in v3.32.0.
