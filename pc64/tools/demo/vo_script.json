@@ -8,7 +8,7 @@
     {
       "id": "s01",
       "cues": [
-        { "id": "s01a", "at": "unodos-splash",
+        { "id": "s01a", "at": "firmware-logo",
           "text": "This is UnoDOS. A complete graphical operating system, written from scratch." },
         { "id": "s01b", "at": "desktop-first-paint",
           "text": "It boots on an ordinary PC, in about four megabytes, straight to a desktop. No install, and no command line." }
