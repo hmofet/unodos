@@ -71,12 +71,13 @@ PLATFORMS = [
 CARD_TITLE = "UnoDOS"
 CARD_LINE  = "One GUI-first operating system, written from scratch,"
 CARD_LINE2 = "running on more than twenty kinds of hardware."
-# ...and then the name again, alone, as the last thing on screen (asked for
-# 2026-08-08). It is rendered as a SECOND card - identical to the first plus
-# this one word - and crossfaded in, so the word gets a beat of its own instead
-# of arriving with the sentence it follows. Nothing else moves across that
-# fade, which is what makes it read as an arrival rather than a cut.
-CARD_CLOSER = "UnoDOS"
+# The name used to appear a SECOND time under the sentence, on its own card
+# crossfaded in after this one (added 2026-08-08, removed 2026-08-17). It was
+# the third "UnoDOS" on a card that already carries it in 96pt, and it read as
+# a stutter rather than a beat. make_endcard still takes `closer`, so putting
+# it back is one argument; the card's hold below absorbs the time either way,
+# which is why removing it does not shorten the outro.
+CARD_CLOSER = None
 
 
 def esc(s):
@@ -197,8 +198,8 @@ def build(hold, xfade, card_hold, card_tail, outfile, beats, w, h):
     # TWO end cards: the card, then the card plus the closing word. See
     # CARD_CLOSER - the word gets its own beat by being its own segment.
     end = make_endcard(os.path.join(work, "zz_end.png"), font, w, h)
-    end2 = make_endcard(os.path.join(work, "zz_end2.png"), font, w, h,
-                        closer=CARD_CLOSER)
+    end2 = (make_endcard(os.path.join(work, "zz_end2.png"), font, w, h,
+                         closer=CARD_CLOSER) if CARD_CLOSER else None)
 
     # The timeline, as (label, still, seconds-on-screen-including-its-fade).
     # This used to assume every segment lasted `hold` and derive one `step`
@@ -207,7 +208,12 @@ def build(hold, xfade, card_hold, card_tail, outfile, beats, w, h):
     # different length would have been composited into the middle of the first.
     segs = ([("platform-" + name.lower().replace(" ", "-").replace("/", "-"),
               p, hold) for name, p in cards] +
-            [("end-card", end, card_hold), ("closing-word", end2, card_tail)])
+            [("end-card", end,
+              # With no closing word there is no second segment and no fade
+              # into it, so the one card holds for what the pair used to take
+              # and the montage keeps its length and its pacing.
+              card_hold if end2 else card_hold + card_tail - xfade)] +
+            ([("closing-word", end2, card_tail)] if end2 else []))
 
     inputs = []
     for _, p, dur in segs:

@@ -108,7 +108,13 @@ SECTOR, MIB = 512, 1 << 20
 
 # A font that exists on THIS box. Segoe UI Bold is the Windows one; DejaVu is
 # the WSL fallback so the outro still builds on a machine without /mnt/c.
-FONTS = ["/mnt/c/Windows/Fonts/segoeuib.ttf",
+# UNO_DEMO_FONT wins when set. The outro renders wherever there is an ffmpeg,
+# and the box that builds it is not always the box that has Segoe: rendering it
+# with the DejaVu fallback instead re-letters the WHOLE montage, which is a
+# visible change to every platform caption, not just the card being edited.
+# Carry the real font to the render host and name it here instead.
+FONTS = [p for p in [os.environ.get("UNO_DEMO_FONT")] if p] + [
+         "/mnt/c/Windows/Fonts/segoeuib.ttf",
          "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"]
 
 
