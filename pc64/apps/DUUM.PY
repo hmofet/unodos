@@ -657,6 +657,7 @@ class Duum(uno.App):
         self.anim_next = 0.0
         self.hud_key = None; self.hud_ops = []
         self.psec_i = self.point_secidx(self.px, self.py)
+        self.segrec = None            # per-seg render records, built lazily
         self.load_things()
         self.dirty = True
 
@@ -702,6 +703,59 @@ class Duum(uno.App):
         bs = m.sectors[bsi] if bsi >= 0 else None
         return fs, bs, m.sides[fsd], ld, fsi, bsi
 
+    # Per-seg RENDER RECORD, built once per level instead of per seg per frame.
+    # render() used to re-derive all of this on every seg of every frame:
+    # seg_sectors(), three _texname() calls (each a bytes.find + a .decode,
+    # so a fresh str), three Textures.get() dict probes, two flat() probes and
+    # a math.sqrt - about 405 string builds and 2,700 dict lookups per frame
+    # for data that cannot change between frames.
+    #
+    # What is STATIC (here) vs DYNAMIC (still read per frame in draw_seg):
+    #   static  - geometry, wall length, u offset, fake contrast, the sector
+    #             LIST OBJECTS, texture tuples, flat grids, sector light
+    #   dynamic - floor/ceiling HEIGHTS, which doors and lifts mutate in place
+    #             on those same list objects, so holding the list is correct
+    # Switches are the one thing that edits a sidedef's texture at run time
+    # (flip_switch), so that path drops the cache and it rebuilds lazily.
+    R_AX, R_AY, R_BX, R_BY, R_WK, R_WLEN, R_U1 = 0, 1, 2, 3, 4, 5, 6
+    R_FS, R_BS, R_YOFF, R_FLAGS = 7, 8, 9, 10
+    R_MID, R_UP, R_LO, R_CSKY, R_BSKY, R_CGRID, R_FGRID, R_LF = \
+        11, 12, 13, 14, 15, 16, 17, 18
+
+    def seg_recs(self):
+        if self.segrec is not None:
+            return self.segrec
+        m = self.lvl
+        tex = self.tex
+        verts = m.verts
+        out = []
+        for seg in m.segs:
+            fs, bs, fsd, ld, fsi, bsi = self.seg_sectors(seg)
+            if fs is None:
+                out.append(None)
+                continue
+            ax, ay = verts[seg[0]]
+            bx, by = verts[seg[1]]
+            # vanilla fake contrast: N-S lighter, E-W darker, diagonals flat
+            wk = 88 if ay == by else 115 if ax == bx else 100
+            dx = bx - ax; dy = by - ay
+            wlen = math.sqrt(dx * dx + dy * dy)
+            twosided = bs is not None
+            out.append((
+                ax, ay, bx, by, wk, wlen, seg[5] + fsd[0],
+                fs, bs, fsd[1], ld[2],
+                (tex.getm if twosided else tex.get)(_texname(fsd[4])),
+                tex.get(_texname(fsd[2])),
+                tex.get(_texname(fsd[3])),
+                m.skyc[fsi],
+                (bsi >= 0 and m.skyc[bsi]),
+                None if m.skyc[fsi] else tex.flat(fs[3]),
+                tex.flat(fs[2]),
+                0.72 + 0.28 * (fs[4] / 255.0),
+            ))
+        self.segrec = out
+        return out
+
     def point_sector(self, px, py):
         # Doom's R_PointOnSide: side>0 means the point is on the RIGHT (front)
         # of the partition vector, which is children[0] == nd[-2].
@@ -735,6 +789,7 @@ class Duum(uno.App):
         viewz = (ps[0] if ps else 0) + EYE
         scale = (RW / 2) / math.tan(FOV / 2)         # column-space (for rx)
         vsc = ((cw / 2) / math.tan(FOV / 2)) * VER   # canvas-px vertical scale
+        inv_vsc = 1.0 / vsc                          # dv is a multiply, not a divide
         hh = ch / 2
         ceilc = [0] * RW
         floorc = [ch - 1] * RW
@@ -747,6 +802,7 @@ class Duum(uno.App):
         verts = m.verts
         segs = m.segs
         skyc = m.skyc
+        recs = self.seg_recs()
         C_CEIL = (84, 88, 104); C_FLOOR = (120, 100, 74); C_SKY = (96, 120, 170)
         # Per-column ray directions (unit forward component) for the flat
         # mapper, and the cylindrical sky texel column (1024 texels per turn,
@@ -813,13 +869,11 @@ class Duum(uno.App):
 
         state = [RW]                      # open (not yet closed) column count
 
-        def draw_seg(seg):
-            fs, bs, fsd, ld, fsi, bsi = self.seg_sectors(seg)
-            if fs is None: return
-            ax, ay = verts[seg[0]]; bx, by = verts[seg[1]]
-            # vanilla fake contrast: N-S walls lighter, E-W walls darker,
-            # diagonals neutral (was inverted, and hit diagonals too)
-            wk = 88 if ay == by else 115 if ax == bx else 100   # /100 contrast
+        def draw_seg(si):
+            rec = recs[si]
+            if rec is None: return
+            ax = rec[0]; ay = rec[1]; bx = rec[2]; by = rec[3]
+            wk = rec[4]
             d1x = ax - px; d1y = ay - py
             d2x = bx - px; d2y = by - py
             depth1 = d1x * cos_a + d1y * sin_a
@@ -828,8 +882,7 @@ class Duum(uno.App):
             # so what's clockwise of the view direction lands on the right.
             sx1 = d1x * sin_a - d1y * cos_a
             sx2 = d2x * sin_a - d2y * cos_a
-            wlen = math.sqrt((bx-ax)*(bx-ax) + (by-ay)*(by-ay))
-            u1 = seg[5] + fsd[0]; u2 = u1 + wlen
+            u1 = rec[6]; u2 = u1 + rec[5]
             if depth1 < NEAR and depth2 < NEAR: return
             if depth1 < NEAR:
                 t = (NEAR - depth1) / (depth2 - depth1)
@@ -848,52 +901,63 @@ class Duum(uno.App):
             if ix1 > ix2: return
             inv1 = 1.0 / depth1; inv2 = 1.0 / depth2
             uz1 = u1 * inv1; uz2 = u2 * inv2
-            fc = fs[1]; ff = fs[0]; flight = fs[4]
-            yoff = fsd[1]
-            flags = ld[2]
+            fs = rec[7]; bs = rec[8]
+            fc = fs[1]; ff = fs[0]          # DYNAMIC: doors and lifts move these
+            yoff = rec[9]
+            flags = rec[10]
+            mid_t = rec[11]; up_t = rec[12]; lo_t = rec[13]
+            csky = rec[14]
             twosided = bs is not None
-            # two-sided midtextures draw masked (gratings): sentinel grid
-            mid_t = (tex.getm if twosided else tex.get)(_texname(fsd[4]))
-            up_t = self.tex.get(_texname(fsd[2]))
-            lo_t = self.tex.get(_texname(fsd[3]))
             # Texture pegging (Doom R_StoreWallRange): v_top is the texel row at
             # the TOP of each wall piece; anchors move with the linedef flags.
             v_mid = yoff
             if (flags & ML_DONTPEGBOT) and mid_t:
                 v_mid = yoff + (ff + mid_t[1] - fc)      # bottom texel row at floor
-            csky = skyc[fsi]
             bothsky = False
             if twosided:
                 bc = bs[1]; bf = bs[0]
-                bothsky = csky and skyc[bsi]     # sky joins across the portal
+                bothsky = csky and rec[15]   # sky joins across the portal
                 v_up = yoff
                 if not (flags & ML_DONTPEGTOP) and up_t:
                     v_up = yoff + (bc + up_t[1] - fc)    # bottom texel row at back ceil
                 v_lo = yoff + ((fc - bf) if (flags & ML_DONTPEGBOT) else 0)
-            cgrid = None if csky else tex.flat(fs[3])
-            fgrid = tex.flat(fs[2])
-            lf = 0.72 + 0.28 * (flight / 255.0)
+            cgrid = rec[16]; fgrid = rec[17]
+            lf = rec[18]
             span = rx2 - rx1
+            # Per-seg constants the column loop used to rebuild on EVERY
+            # column: the plane-to-eye offsets scaled into screen space, and
+            # the per-column slopes of 1/depth and u/depth.  Folding the
+            # /span into the slope takes the interpolation from
+            # "divide, then multiply" to a single multiply.
+            kfc = (fc - viewz) * vsc
+            kff = (ff - viewz) * vsc
+            if twosided:
+                kbc = (bc - viewz) * vsc
+                kbf = (bf - viewz) * vsc
+            k_invd = (inv2 - inv1) / span
+            k_uz = (uz2 - uz1) / span
             for x in range(ix1, ix2 + 1):
                 ct = ceilc[x]; cb = floorc[x]
                 if ct > cb:
                     continue
-                t = (x - rx1) / span
-                invd = inv1 + (inv2 - inv1) * t
+                xf = x - rx1
+                invd = inv1 + k_invd * xf
                 dist = 1.0 / invd
-                u = (uz1 + (uz2 - uz1) * t) / invd
+                # dist is 1/invd, so these are multiplies, not divisions:
+                # five divisions per column became two.
+                u = (uz1 + k_uz * xf) * dist
                 df = 1200.0 / (dist + 650.0)
                 if df > 1.0: df = 1.0
                 elif df < 0.68: df = 0.68
                 sh = int(lf * df * 256)
                 shw = (sh * wk) // 100
                 if shw > 256: shw = 256    # >256 overflows the byte math
-                dv = dist / vsc
-                yfc = int(hh - (fc - viewz) * vsc * invd)
-                yff = int(hh - (ff - viewz) * vsc * invd)
+                dv = dist * inv_vsc
+                yfc = int(hh - kfc * invd)
+                yff = int(hh - kff * invd)
                 if twosided:
-                    ybc = int(hh - (bc - viewz) * vsc * invd)
-                    ybf = int(hh - (bf - viewz) * vsc * invd)
+                    ybc = int(hh - kbc * invd)
+                    ybf = int(hh - kbf * invd)
                     if bothsky and ybc > yfc:
                         yfc = ybc      # sky continues down to the back ceiling
                 if yfc > ct:
@@ -1005,7 +1069,7 @@ class Duum(uno.App):
                     ss = m.ssectors[n & 0x7FFF]
                     first = ss[1]
                     for i in range(first, first + ss[0]):
-                        draw_seg(segs[i])
+                        draw_seg(i)
                     return
                 nd = m.nodes[n]
                 side = (px - nd[0]) * nd[3] - (py - nd[1]) * nd[2]
@@ -1545,6 +1609,7 @@ class Duum(uno.App):
                 sd[f] = b"SW2" + n[3:]
             elif n[:3] == b"SW2":
                 sd[f] = b"SW1" + n[3:]
+        self.segrec = None            # cached texture tuples are now stale
         self.snd(50, 3)
 
     def _sector_busy(self, si):
