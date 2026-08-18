@@ -791,6 +791,9 @@ class Duum(uno.App):
         vsc = ((cw / 2) / math.tan(FOV / 2)) * VER   # canvas-px vertical scale
         inv_vsc = 1.0 / vsc                          # dv is a multiply, not a divide
         hh = ch / 2
+        # internal column -> canvas pixel edge, once per frame instead of
+        # twice per emitted op (exact tiling, so no seams)
+        colx = [(i * cw) // RW for i in range(RW + 1)]
         ceilc = [0] * RW
         floorc = [ch - 1] * RW
         # Per-column occlusion history for the sprite pass: (depth, ct, cb)
@@ -829,14 +832,14 @@ class Duum(uno.App):
             if y1 < y0: return
             if y0 < 0: y0 = 0
             if y1 > ch - 1: y1 = ch - 1
-            x0 = cx * cw // RW; x1 = (cx + 1) * cw // RW      # exact tiling (no gap)
+            x0 = colx[cx]; x1 = colx[cx + 1]
             out.append(('R', x0, y0, x1 - x0, y1 - y0 + 1, color))
 
         def flatspan(cx, y0, y1, fgrid, hz, lf):
             if y1 < y0: return
             if y0 < 0: y0 = 0
             if y1 > ch - 1: y1 = ch - 1
-            x0 = cx * cw // RW; x1 = (cx + 1) * cw // RW
+            x0 = colx[cx]; x1 = colx[cx + 1]
             out.append(('F', x0, x1 - x0, y0, y1 - y0 + 1, fgrid,
                         (hz - viewz) * vsc, dcx[cx], dcy[cx], lf))
 
@@ -844,7 +847,7 @@ class Duum(uno.App):
             if y1 < y0: return
             if y0 < 0: y0 = 0
             if y1 > ch - 1: y1 = ch - 1
-            x0 = cx * cw // RW; x1 = (cx + 1) * cw // RW
+            x0 = colx[cx]; x1 = colx[cx + 1]
             if sky_t is None:
                 out.append(('R', x0, y0, x1 - x0, y1 - y0 + 1, rgb(*C_SKY)))
             else:
@@ -857,7 +860,7 @@ class Duum(uno.App):
             if y0 < 0: y0 = 0
             if y1 > ch - 1: y1 = ch - 1
             if y1 < y0: return
-            x0 = cx * cw // RW; x1 = (cx + 1) * cw // RW
+            x0 = colx[cx]; x1 = colx[cx + 1]
             if tx is None:
                 out.append(('R', x0, y0, x1 - x0, y1 - y0 + 1,
                             rgb((fb[0]*sh) >> 8, (fb[1]*sh) >> 8, (fb[2]*sh) >> 8)))
@@ -1000,7 +1003,7 @@ class Duum(uno.App):
                         if my1 > cb: my1 = cb
                         if my1 > ch - 1: my1 = ch - 1
                         if my1 >= my0:
-                            x0m = x * cw // RW; x1m = (x + 1) * cw // RW
+                            x0m = colx[x]; x1m = colx[x + 1]
                             v0m = int((yoff + (my0 - ytt) * dv) * 256)
                             masked.append((dist, ('M', x0m, x1m - x0m, my0,
                                            my1 - my0 + 1, grid_m, tw_m, th_m,
@@ -1197,7 +1200,7 @@ class Duum(uno.App):
                 if y1 > ch - 1: y1 = ch - 1
                 if y1 < y0:
                     continue
-                x0s = x * cw // RW; x1s = (x + 1) * cw // RW
+                x0s = colx[x]; x1s = colx[x + 1]
                 out.append(('M', x0s, x1s - x0s, y0, y1 - y0 + 1, grid, w, h,
                             texcol, int((y0 - ytt) * dv * 256), dvfp, sh))
 
