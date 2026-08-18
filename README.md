@@ -28,6 +28,11 @@ of them run in an emulator within a minute; the
 [user manual](https://unodos.arinbakht.com/manual/) walks through booting real
 hardware, including one-click USB flasher apps for Windows and macOS.
 
+What has actually been verified is a separate question from what builds, and
+[PLATFORMS.md](PLATFORMS.md) is the ledger that answers it: per platform, what
+has booted on real hardware (and on which physical machine), what is
+emulator-verified only, and every known gap.
+
 ---
 
 ## UnoDOS pc64, the modern-PC flagship
