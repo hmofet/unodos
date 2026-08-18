@@ -9052,3 +9052,37 @@ took the frame rate about 1.5x on its own (commit 3e095f71, measured with
 
 Either fix the emitter or drop the claim from `mpconfigport.h`; as it stands
 the comment sends the next person down a dead end.
+
+---
+
+## The Duum frame rate is the PRESENT path, not the renderer (2026-08-18)
+
+Measured, so nobody optimises the wrong half again.
+
+**Control:** `tools/demo/TRIVIAL.PY` is a PYAPP that repaints every tick and
+draws one `clear` plus one `fill_rect`. In a single alternating boot under
+QEMU/KVM on quill:
+
+| app | frames/s |
+|---|---|
+| Duum | 2.64 |
+| TRIVIAL (draws nothing) | 6.83 |
+
+So ~6.8 f/s is everything the shell repaint + `uno_pc64_present` + unostream
+path yields for an app doing no work at all. Duum sits at 39% of that, which
+caps ALL further renderer optimisation at 2.6x.
+
+**And the renderer is cheap on real hardware.** On `mini` (Ryzen 7 5700X3D,
+bare metal, not a VM) Duum's entire geometry pass runs at **3.0-3.1 ms/frame** -
+about a fifth of a 60 fps budget - and that measurement still puts the column
+loop through the slow Python mirror rather than the C path the device uses.
+
+For scale, the same reference loop: **15.4 ms on mini, 69.0 ms on amanuensis**
+(a VM on a loaded leviathan), **45.3 ms on the QEMU guest** in MicroPython.
+MicroPython is NOT the slow interpreter the 2026-07-20 review assumed.
+
+**Where to look instead:** `unostream` QOI-encodes and ships a full 1280x800
+desktop per frame and is both the instrument and a load on what it measures;
+`uno_pc64_present` still does a full-framebuffer shadow compare (review P4-2);
+and the shell repaints the whole desktop for one app's dirty rect. A frame-rate
+number taken with the stream attached is a measurement of the stream.
