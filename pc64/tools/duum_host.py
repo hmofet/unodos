@@ -48,13 +48,17 @@ def _wad_path(name):
 
 
 class _Files:
+    # keyed by RESOLVED PATH, not by lump name: two WADs compared in one
+    # process both ask for "DOOM1.WAD", and a name-keyed cache silently
+    # serves the first one's handle for the second one's reads.
     _h = {}
     @classmethod
     def handle(cls, name):
-        f = cls._h.get(name)
+        p = _wad_path(name)
+        f = cls._h.get(p)
         if f is None:
-            f = open(_wad_path(name), "rb")
-            cls._h[name] = f
+            f = open(p, "rb")
+            cls._h[p] = f
         return f
 
 
