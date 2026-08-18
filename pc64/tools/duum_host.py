@@ -12,6 +12,7 @@ see on the host is what the device runs, minus MicroPython speed.
   python3 tools/duum_host.py walk out_dir N          N frames walking forward
   python3 tools/duum_host.py map out.png             top-down linedef map
   python3 tools/duum_host.py bench                   time a render() on the host
+  python3 tools/duum_host.py play [--scale N]        PLAY it in a window (tkinter)
 
 Global flags: --wad PATH serves that file for every WAD name (test any IWAD
 without touching wads/), --level E1M3 starts on another map.  The geometry
@@ -78,6 +79,7 @@ class Canvas:
     def __init__(self, w=CW, h=CH):
         self.w = w; self.h = h
         self.buf = bytearray(w * h * 3)      # RGB
+        self.texts = []                       # (x, y, s, color) - play mode
 
     def width(self):  return self.w
     def height(self): return self.h
@@ -89,6 +91,7 @@ class Canvas:
     def clear(self, color):
         r, g, b = self._rgb(color)
         self.buf[:] = bytes((r, g, b)) * (self.w * self.h)
+        self.texts = []
 
     def fill_rect(self, x, y, w, h, color):
         r, g, b = self._rgb(color)
@@ -117,7 +120,7 @@ class Canvas:
         self.fill_rect(x, y, 1, h, color)
 
     def text(self, x, y, s, color):
-        pass                                  # cosmetic on host shots
+        self.texts.append((x, y, s, color))   # play mode overlays these
 
     def wall_span(self, x, w, y0, count, grid, tw, th, tc, v0, dv, pal, sh):
         for k in range(w):
@@ -278,6 +281,79 @@ def run_keys(app, script):
             app.tick()
 
 
+def run_play(mod, scale=2):
+    """Interactive window: the real DUUM.PY, desktop Python, live keys.
+    320x200 canvas (pure-Python pixel replay is the frame budget) scaled up
+    with nearest-neighbour.  Arrows move/turn, comma/period strafe, F or
+    Ctrl fire, Space/E use, 1-6 weapons, Esc quits."""
+    import tkinter as tk
+    from PIL import Image, ImageTk, ImageDraw
+
+    app = mod.app
+    cv = Canvas(320, 200)
+    app.build(cv)
+    if app.err:
+        sys.exit("app.build failed: %s" % app.err)
+    uno = sys.modules["uno"]
+    t0 = time.monotonic()
+    uno.ticks = lambda: int((time.monotonic() - t0) * 60)   # real 60Hz clock
+
+    # live held-key state -> uno.keys_down bitmask (UNO_KH_* bits)
+    BITS = {"Up": 1, "Down": 2, "Right": 4, "Left": 8,
+            "f": 16, "F": 16, "space": 32, "e": 32, "E": 32,
+            "comma": 64, "period": 128}
+    kd = [0]
+    uno.keys_down = lambda: kd[0]
+    app.have_keys = True
+
+    root = tk.Tk()
+    root.title("Duum - %s (host)" % mod.LEVEL)
+    W, H = 320 * scale, 200 * scale
+    label = tk.Label(root, width=W, height=H, bd=0)
+    label.pack()
+
+    def press(ev):
+        ks = ev.keysym
+        if ks == "Escape":
+            root.destroy()
+            return
+        b = BITS.get(ks)
+        if b:
+            kd[0] |= b
+        if ks in ("space", "Return"):
+            app.key(32, 0, 0)          # restart hooks when dead/finished
+        elif len(ks) == 1 and ks.isdigit():
+            app.key(ord(ks), 0, 0)
+
+    def release(ev):
+        b = BITS.get(ev.keysym)
+        if b:
+            kd[0] &= ~b
+
+    root.bind("<KeyPress>", press)
+    root.bind("<KeyRelease>", release)
+    holder = {}
+
+    def frame():
+        drew = app.tick()
+        if drew or "ph" not in holder:
+            app.draw(cv)
+            img = Image.frombytes("RGB", (320, 200), bytes(cv.buf))
+            img = img.resize((W, H), Image.NEAREST)
+            if cv.texts:
+                d = ImageDraw.Draw(img)
+                for (x, y, s, color) in cv.texts:
+                    d.text((x * scale, y * scale), s,
+                           fill=Canvas._rgb(color))
+            ph = ImageTk.PhotoImage(img)
+            label.configure(image=ph)
+            holder["ph"] = ph
+        root.after(15, frame)
+
+    frame()
+    root.mainloop()
+
+
 def main():
     global WAD_OVERRIDE
     if "--wad" in sys.argv:
@@ -294,6 +370,13 @@ def main():
     mod = load_app()
     if lvl:
         mod.LEVEL = lvl
+
+    if cmd == "play":
+        sc = 2
+        if "--scale" in sys.argv:
+            sc = int(sys.argv[sys.argv.index("--scale") + 1])
+        run_play(mod, sc)
+        return
     app = mod.app
     cv = Canvas()
 
