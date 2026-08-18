@@ -63,6 +63,11 @@ int  uno_fs_copytree(int src_vol, int dst_vol, unsigned char *scratch, long cap,
 int  uno_fs_kind(int vol);      /* 0 = RAM disk, 1 = native FAT, 2 = firmware SFS, -1 bad */
 int  uno_fs_fat_index(int vol); /* fat.c volume index when kind==1, else -1 */
 
+/* 1 when this volume sits on the disk UnoDOS booted from.  Lets a caller that
+ * must persist state choose the medium the machine actually came up on, rather
+ * than whichever disk happens to enumerate first - see unosecure.c pick_vol(). */
+int  uno_fs_is_boot(int vol);
+
 /* M3 detach: rebuild the volume map after the block-device set changed */
 void uno_fs_remap(void);
 

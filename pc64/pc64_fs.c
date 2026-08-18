@@ -19,6 +19,7 @@
  * ======================================================================== */
 #include "pc64_fs.h"
 #include "fat.h"
+#include "blkdev.h"   /* uno_bdev.is_boot, for uno_fs_is_boot() */
 #include "unoauto.h"     /* fs.read / fs.write tap points (no-op in prod) */
 
 /* pc64_io.c (RAM disk) */
@@ -344,4 +345,15 @@ int uno_fs_fat_index(int vol)
     build_map();
     if (vol < 0 || vol >= g_nmap || g_map[vol].kind != KIND_FAT) return -1;
     return g_map[vol].idx;
+}
+
+/* Is this volume on the boot disk?  Only a native-FAT volume can be: the RAM
+ * disk is not a disk, and a firmware-SFS volume is gone the moment we detach. */
+int uno_fs_is_boot(int vol)
+{
+    struct uno_bdev *d;
+    build_map();
+    if (vol < 0 || vol >= g_nmap || g_map[vol].kind != KIND_FAT) return 0;
+    d = uno_fat_dev(g_map[vol].idx);
+    return d && d->is_boot;
 }
