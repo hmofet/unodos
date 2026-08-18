@@ -119,6 +119,8 @@ strong{font-weight:650}
 figure{margin:1.5em 0;background:var(--surface);border:1px solid var(--border);border-radius:12px;
   overflow:hidden;box-shadow:var(--shadow)}
 figure img{display:block;width:100%;height:auto;background:#0b0d13}
+figure.film video{display:block;width:100%;height:auto;background:#0b0d13}
+figure.film .fallback{padding:15px;margin:0;color:var(--muted)}
 figcaption{padding:10px 15px;font-size:13.5px;color:var(--muted);border-top:1px solid var(--border);background:var(--surface)}
 
 /* click-to-enlarge: the figure's image is a button, so it is keyboard
@@ -324,6 +326,25 @@ def fig(src, cap, cls=""):
             f'data-full="assets/img/{src}" aria-label="Enlarge: {alt}">'
             f'<img src="assets/img/{src}" alt="{alt}" loading="lazy">'
             f'</button><figcaption>{cap}</figcaption></figure>')
+
+DEMO_MP4 = "https://unodos.arinbakht.com/assets/unodos-demo.mp4"
+
+def film(poster, cap):
+    """The demo film, embedded the way fig() embeds a screenshot.
+
+    The film is 19 MB and this manual is a small static site that also has to
+    read sensibly offline, so the video is streamed from the UnoDOS website
+    rather than committed here, while the poster frame IS local. An offline
+    reader still gets the figure, the poster and the caption; only playback
+    needs a connection. preload="none" means the page costs nothing extra
+    until the reader presses play."""
+    alt = html.escape(re.sub(r"<[^>]+>", "", cap))
+    return (f'<figure class="film"><video controls preload="none" '
+            f'poster="assets/img/{poster}" aria-label="{alt}">'
+            f'<source src="{DEMO_MP4}" type="video/mp4">'
+            f'<p class="fallback">Your browser cannot play this video. '
+            f'<a href="{DEMO_MP4}">Download the film</a> instead.</p>'
+            f'</video><figcaption>{cap}</figcaption></figure>')
 
 def note(body, kind="", title="Note"):
     k = f" {kind}" if kind else ""
@@ -742,6 +763,7 @@ PAGES["index.html"] = ("Overview", f"""
   </div>
   <div class="btnrow">
     <a class="btn" href="getting-started.html">Get started &rsaquo;</a>
+    <a class="btn ghost" href="#film">Watch the demo</a>
     <a class="btn ghost" href="desktop.html">Tour the desktop</a>
   </div>
 </div>
@@ -749,6 +771,12 @@ PAGES["index.html"] = ("Overview", f"""
 <p>UnoDOS is a family of GUI-first operating systems that runs on more than 20 kinds of hardware.
 <strong>pc64</strong> is the modern-PC version: it runs on essentially any x86-64 PC built since about
 2007, and it has been tested in emulators and on real hardware booting from a USB stick.</p>
+
+<h2 id="film">See it running</h2>
+<p>Before you read any further, watch it work. Nothing in this film is a mock-up or an animation: it
+is the real system, recorded off a running machine, in one take per scene.</p>
+
+{film("demo-poster.jpg", 'Nine minutes and forty-one seconds of pc64, recorded from the running system: the <a href="windows.html">window manager</a> snapping and switching windows, the <a href="appearance.html">ten themes</a> changing live, real Word and Excel documents opening in <a href="office.html">UnoOffice</a>, the <a href="browser.html">browser</a> swapping JavaScript engines mid-session and then loading Wikipedia over HTTPS, music and images decoded by the machine itself, <a href="studio.html">Studio</a> compiling and running the same app twice - once in UnoC and once in Python - the built-in games and tracker, the <a href="ssh.html">SSH client</a> opening a shell on a Linux box across the network, and the <a href="ports.html">rest of the UnoDOS family</a>. The film streams from the UnoDOS website, so playing it needs a connection.')}
 
 {note('Download <strong>unodos-pc64.iso</strong> and write it to a spare USB stick with Rufus or balenaEtcher (or boot it in a VM) - or use the one-click <strong>USB flasher</strong>. No building required. See <a href="getting-started.html">Getting started</a>.', kind="tip", title="Just want to try it?")}
 
