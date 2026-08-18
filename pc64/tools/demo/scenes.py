@@ -1498,49 +1498,70 @@ def s08_duum(d):
     shoot back, doors, lifts, pickups, the real STBAR, level progression), and
     a walk-only scene sells a renderer when there is a game to show.
 
-    The step sizes are DUUM.PY's own: MOVE = 12 map units and TURN = 0.20 rad
-    per press, so a press is a small step and a quarter turn is 8 presses -
-    which is why the counts here look large. Held at 0.30 s/press: fast enough
-    to read as walking, slow enough that the software raycaster (a Python app,
-    under TCG) has drawn the frame before the next key lands. Firing gets a
-    longer settle because a shot is a state change worth seeing land: the
-    muzzle flash, the recoil frame, and the ammo counter dropping on the bar.
+    TURN COUNTS REWRITTEN 2026-08-18 (second pass). The old docstring's step
+    sizes - "MOVE = 12 map units, TURN = 0.20 rad per press, a quarter turn is
+    8 presses" - describe the step-per-keypress engine Duum USED to be. It now
+    moves on HELD keys: one press marks the key held 0.30 s, which is ~96 map
+    units or ~53 degrees, so the old 8-press turns were a 424-degree spin and
+    the old 14-press walks overshot the level. Counts here are for the current
+    engine.
+
+    Also note the guest does NOT travel the same distance per press as the
+    host shim: DUUM.PY clamps dt to 0.1 s, so at the guest's 5-14 fps its
+    clock runs behind the harness's fixed 0.30 s sleeps. Anything aimed
+    (firing) therefore goes STRAIGHT down the corridor rather than turning
+    onto a mark, which is correct wherever the walk actually ends.
+
+    The map is FREEDOOM's E1M1 (original geometry - only the format and
+    texture names are shared with id's), so this is a corridor walk, not the
+    old courtyard route.
 
     FOUR BEAT NAMES ARE LOAD-BEARING - duum-running, walk-into-the-room,
     turn-back-left and look-around each carry a narration cue in
     vo_script.json. Renaming one does not fail: mux_vo reports it and drops
     the line to the top of the scene, which is worse than an error because the
     film still builds. Add beats freely, rename these only with the script.
+
+    EVERY TURN IS A LOOK-AND-RETURN. The corridor is barely wider than the
+    player, and a single press is ~53 degrees, so turning and then WALKING
+    puts you into a wall within two presses - the first take of this route
+    spent 20 of its 28 seconds facing a grey wall. Turning and immediately
+    turning back shows the world moving without ever leaving the corridor
+    heading, which is what makes the walk safe wherever it actually ends.
     """
     d.beat("duum-running")
     time.sleep(2.5)                                  # the status bar, before anything moves
     d.beat("walk-into-the-room")
-    for _ in range(14):
+    for _ in range(8):
         d.key(0, S_UP, settle=0.30)
     d.beat("turn-right")
-    for _ in range(8):                               # ~90 degrees
-        d.key(0, S_RIGHT, settle=0.30)
+    d.key(0, S_RIGHT, settle=0.55)                   # look right...
+    d.key(0, S_LEFT, settle=0.35)                    # ...and back to the corridor
     d.beat("walk-on")
-    for _ in range(12):
+    for _ in range(4):
         d.key(0, S_UP, settle=0.30)
     d.beat("fire-the-weapon")
+    time.sleep(1.4)                                  # let a chaser walk into frame
     for _ in range(6):
         d.key(ord("f"), settle=0.45)                 # flash, recoil, ammo drops
     d.beat("turn-back-left")
-    for _ in range(8):
-        d.key(0, S_LEFT, settle=0.30)
+    d.key(0, S_LEFT, settle=0.55)                    # look left...
+    d.key(0, S_RIGHT, settle=0.35)                   # ...and back
     d.beat("walk-through")
-    for _ in range(12):
+    for _ in range(3):
         d.key(0, S_UP, settle=0.30)
     d.beat("work-a-door")
-    for _ in range(3):
+    for _ in range(2):
         d.key(ord(" "), settle=0.80)                 # use: doors, lifts, switches
+    # END IN THE CORRIDOR, not against a wall. The first two takes kept
+    # walking after the firefight and finished jammed into a corner, where a
+    # wall a few units from the eye fills the frame with magnified texels and
+    # the player has bled to a third of their health. The closing narration
+    # lands here, so it holds on the corridor instead.
     d.beat("look-around")
-    for _ in range(6):
-        d.key(0, S_LEFT, settle=0.30)
-    for _ in range(10):
-        d.key(0, S_UP, settle=0.30)
-    time.sleep(1.5)
+    d.key(0, S_LEFT, settle=0.55)
+    d.key(0, S_RIGHT, settle=0.35)
+    time.sleep(2.5)
     # No on-camera teardown: reset() closes Duum after the stream stops.
 
 
