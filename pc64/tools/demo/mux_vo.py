@@ -17,7 +17,7 @@ clock and the video clock are independent).
 
     python3 mux_vo.py --master out/final2/final.mp4 --bed "s06:out/final2/s06.wav:6.68:0.22"
 """
-import argparse, json, os, subprocess, sys
+import argparse, bisect, json, os, subprocess, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -30,24 +30,55 @@ def dur(path):
 
 
 def beat_times(scene_dir, sid):
-    """{beat name: seconds from the first recorded frame of that scene}.
+    """{beat name: seconds into the FINISHED scene where that beat is visible}.
 
-    beats.jsonl and timing.jsonl are both wall-clock, so the first frame's
-    timestamp is the scene's own zero.
+    Both logs are wall clock. The finished scene is not: stream_recv writes
+    frames at a constant rate and stitch retimes the scene to its true
+    wall-clock duration, so every frame occupies an equal slice of the cut.
+    The guest does NOT produce frames at a constant rate. It stalls precisely
+    when it is busy, which is precisely when the things worth narrating happen,
+    so wall-clock elapsed and on-screen elapsed drift apart inside a scene.
+
+    Using the first clock for the second is what put the lines in the wrong
+    place. Measured on the 2026-08-08 cut: `load-wikipedia` happened 39.1s into
+    the recording but lands 41.8s into the footage, because the guest nearly
+    stopped drawing while it fetched the page - so its line was spoken 2.7s
+    before the page appeared. s02's `switcher-f2` drifts 2.6s the OTHER way,
+    and its line arrived after the moment had passed.
+
+    The frame log converts between the clocks: find the frame carrying the
+    beat, then ask where that frame sits in the finished scene.
     """
     bpath = os.path.join(scene_dir, sid + ".beats.jsonl")
     tpath = os.path.join(scene_dir, sid + ".timing.jsonl")
     if not (os.path.exists(bpath) and os.path.exists(tpath)):
         return {}
-    t0 = None
+    stamps = []
     with open(tpath, encoding="utf-8") as fh:
         for line in fh:
             line = line.strip()
-            if line:
-                t0 = json.loads(line)["t"]
-                break
-    if t0 is None:
+            if not line:
+                continue
+            try:
+                stamps.append(json.loads(line)["t"])
+            except Exception:                        # noqa: BLE001
+                continue
+    if not stamps:
         return {}
+    t0 = stamps[0]
+    span = stamps[-1] - t0
+    n = len(stamps)
+
+    def on_screen(t):
+        # Fall back to the wall clock when there is nothing to convert with;
+        # a one-frame scene has no rate to speak of.
+        if n < 2 or span <= 0:
+            return t - t0
+        i = bisect.bisect_left(stamps, t)
+        if i >= n:
+            i = n - 1
+        return i * span / n
+
     out = {}
     with open(bpath, encoding="utf-8") as fh:
         for line in fh:
@@ -59,7 +90,7 @@ def beat_times(scene_dir, sid):
             except Exception:                        # noqa: BLE001
                 continue
             if "beat" in b and "t" in b:
-                out[b["beat"]] = max(0.0, b["t"] - t0)
+                out[b["beat"]] = max(0.0, on_screen(b["t"]))
     return out
 
 
