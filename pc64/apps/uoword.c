@@ -728,6 +728,16 @@ static void draw_doc(int cx, int cy, int cw, int ch)
                                      ? FB_RGB(0xFF,0xFF,0xFF) : col, -1);
             if (r->chp.underline)
                 fb_hline(cx + ln->x + r->x, y + ln->baseline + 1, r->w, col);
+            /* Strikethrough, drawn the same way the underline is. A third of
+             * the size above the baseline lands on the x-height for every font
+             * this ships with, which is where Word puts it; the clamp keeps a
+             * large run inside its own line rather than scoring the one above. */
+            if (r->chp.strike) {
+                int sy = y + ln->baseline - px_of(&r->chp) / 3;
+                if (sy < y) sy = y;
+                if (sy > y + ln->h - 1) sy = y + ln->h - 1;
+                fb_hline(cx + ln->x + r->x, sy, r->w, col);
+            }
         }
     }
     /* the caret */
