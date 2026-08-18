@@ -1,7 +1,7 @@
 # Flasher screenshot pipeline (Windows)
 
 Headlessly screenshot the UnoDOS Windows USB flasher, re-runnable on every
-release, for the [user manual](https://hmofet.github.io/unodos/getting-started.html).
+release, for the [user manual](https://unodos.arinbakht.com/manual/getting-started).
 
 The flasher requires Administrator, and an interactive UAC prompt cannot be
 automated. The fix is a **scheduled task registered to run with highest

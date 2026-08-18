@@ -1,9 +1,15 @@
 # UnoDOS pc64 user manual (`docs/`)
 
-This folder is the **user manual** for UnoDOS/pc64, published with GitHub Pages at
-**https://hmofet.github.io/unodos/** (Settings → Pages → *Deploy from branch:
-`master` / `/docs`*). It is a self-contained static site (`.nojekyll`), responsive
-and light/dark aware. The repo's developer `*.md` files also live here and are
+This folder is the **user manual** for UnoDOS/pc64, published at
+**https://unodos.arinbakht.com/manual/**. It is a self-contained static site
+(`.nojekyll`), responsive and light/dark aware.
+
+**It is no longer served by GitHub Pages** (turned off 2026-08-17). The
+`unodos-site` repo's `build.py` copies these pages and `assets/` into its own
+bundle at build time, so the manual sits behind the same Cloudflare Functions
+as the rest of the site and its traffic is counted like any other page.
+Regenerating the manual here is therefore only half the job: **rebuild and
+deploy `unodos-site` too**, or the published copy stays on the old version. The repo's developer `*.md` files also live here and are
 served as raw text; the site's own pages are the `*.html` files.
 
 ## How the site is built
