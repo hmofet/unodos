@@ -322,6 +322,334 @@ static mp_obj_t cv_flat_span(size_t n, const mp_obj_t *a) {
 }
 static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(cv_flat_span_obj, 14, 14, cv_flat_span);
 
+
+/* ===========================================================================
+ * Duum: the per-column seg rasteriser.
+ *
+ * WHY THIS IS IN C. Duum's renderer is Python by design and stays that way -
+ * the BSP walk, visibility, and every bit of game logic are Python. What was
+ * never a design choice is that the INNERMOST loop was interpreted too: it
+ * runs once per screen column per visible seg, a few thousand times a frame,
+ * and under MICROPY_OBJ_REPR_A every float intermediate is a GC heap
+ * allocation. The 2026-07-20 review proposed @micropython.viper for exactly
+ * this loop; that route is dead - the native emitter crashes the guest, see
+ * UNOAUTOMATE-REQUESTS.md - and this is the review's own stated fallback.
+ *
+ * CONTRACT: this emits the SAME display-list ops, in the same order, into the
+ * same Python lists as the interpreted loop did. Nothing downstream changes:
+ * draw() replays it unchanged, and tools/duum_verify.py still reads app.frame
+ * to check the renderer against an independent model of the level. The Python
+ * mirror in tools/duum_host.py is the readable reference implementation; keep
+ * the two in step and tools/duum_golden.py will catch it if they drift.
+ * ======================================================================== */
+typedef struct {
+    mp_obj_t out, ceilc, floorc, clips, masked;
+    mp_obj_t colx, dcx, dcy, skyu;
+    mp_obj_t sky_grid;                 /* MP_OBJ_NULL when the level has none */
+    int sky_tw, sky_th, dvsky;
+    int rw, ch;
+    double hh, viewz, vsc, inv_vsc;
+    int c_ceil[3], c_floor[3], fb_mid[3], fb_up[3], fb_lo[3];
+    int valid;
+} duum_ctx_t;
+static duum_ctx_t gD;
+
+static int d_geti(mp_obj_t seq, int i)
+{ return mp_obj_get_int(mp_obj_subscr(seq, MP_OBJ_NEW_SMALL_INT(i), MP_OBJ_SENTINEL)); }
+static void d_seti(mp_obj_t seq, int i, int v)
+{ mp_obj_subscr(seq, MP_OBJ_NEW_SMALL_INT(i), MP_OBJ_NEW_SMALL_INT(v)); }
+static void d_rgb3(mp_obj_t t, int *out3)
+{ int i; for (i = 0; i < 3; i++) out3[i] = d_geti(t, i); }
+
+/* DUUM.PY's rgb(): 0xFF000000 | b<<16 | g<<8 | r, each clamped at 255 */
+static unsigned d_rgb(int r, int g, int b)
+{
+    if (r > 255) r = 255;
+    if (g > 255) g = 255;
+    if (b > 255) b = 255;
+    if (r < 0) r = 0;
+    if (g < 0) g = 0;
+    if (b < 0) b = 0;
+    return 0xFF000000u | ((unsigned)b << 16) | ((unsigned)g << 8) | (unsigned)r;
+}
+/* col_rgb(base, f); (int) truncates toward zero exactly like Python's int() */
+static unsigned d_col_rgb(const int *base, double f)
+{ return d_rgb((int)(base[0] * f), (int)(base[1] * f), (int)(base[2] * f)); }
+
+static void d_push(mp_obj_t *items, size_t n)
+{ mp_obj_list_append(gD.out, mp_obj_new_tuple(n, items)); }
+
+/* ---- the emit helpers, faithful to the Python closures ------------------- */
+static void d_rect(int cx, int y0, int y1, unsigned color)
+{
+    int x0, x1;
+    if (y1 < y0) return;
+    if (y0 < 0) y0 = 0;
+    if (y1 > gD.ch - 1) y1 = gD.ch - 1;
+    if (y1 < y0) return;
+    x0 = d_geti(gD.colx, cx); x1 = d_geti(gD.colx, cx + 1);
+    { mp_obj_t it[6] = { MP_ROM_QSTR(MP_QSTR_R), mp_obj_new_int(x0),
+                         mp_obj_new_int(y0), mp_obj_new_int(x1 - x0),
+                         mp_obj_new_int(y1 - y0 + 1),
+                         mp_obj_new_int_from_uint(color) };
+      d_push(it, 6); }
+}
+
+static void d_flatspan(int cx, int y0, int y1, mp_obj_t grid, double k, double lf)
+{
+    int x0, x1;
+    if (y1 < y0) return;
+    if (y0 < 0) y0 = 0;
+    if (y1 > gD.ch - 1) y1 = gD.ch - 1;
+    if (y1 < y0) return;
+    x0 = d_geti(gD.colx, cx); x1 = d_geti(gD.colx, cx + 1);
+    { mp_obj_t it[10] = { MP_ROM_QSTR(MP_QSTR_F), mp_obj_new_int(x0),
+                          mp_obj_new_int(x1 - x0), mp_obj_new_int(y0),
+                          mp_obj_new_int(y1 - y0 + 1), grid,
+                          mp_obj_new_float(k),
+                          mp_obj_subscr(gD.dcx, MP_OBJ_NEW_SMALL_INT(cx), MP_OBJ_SENTINEL),
+                          mp_obj_subscr(gD.dcy, MP_OBJ_NEW_SMALL_INT(cx), MP_OBJ_SENTINEL),
+                          mp_obj_new_float(lf) };
+      d_push(it, 10); }
+}
+
+static void d_skyspan(int cx, int y0, int y1)
+{
+    int x0, x1;
+    if (y1 < y0) return;
+    if (y0 < 0) y0 = 0;
+    if (y1 > gD.ch - 1) y1 = gD.ch - 1;
+    if (y1 < y0) return;
+    if (gD.sky_grid == MP_OBJ_NULL) {
+        d_rect(cx, y0, y1, d_rgb(96, 120, 170));            /* C_SKY */
+        return;
+    }
+    x0 = d_geti(gD.colx, cx); x1 = d_geti(gD.colx, cx + 1);
+    { mp_obj_t it[12] = { MP_ROM_QSTR(MP_QSTR_W), mp_obj_new_int(x0),
+                          mp_obj_new_int(x1 - x0), mp_obj_new_int(y0),
+                          mp_obj_new_int(y1 - y0 + 1), gD.sky_grid,
+                          mp_obj_new_int(gD.sky_tw), mp_obj_new_int(gD.sky_th),
+                          mp_obj_subscr(gD.skyu, MP_OBJ_NEW_SMALL_INT(cx), MP_OBJ_SENTINEL),
+                          mp_obj_new_int(y0 * gD.dvsky),
+                          mp_obj_new_int(gD.dvsky), mp_obj_new_int(256) };
+      d_push(it, 12); }
+}
+
+/* wall(): tx is (tw, th, grid) or None; fb is the untextured fallback colour */
+static void d_wall(int cx, int ytop, int ybot, int ct, int cb, mp_obj_t tx,
+                   double u, double v_top, double dv, int sh, const int *fb)
+{
+    int x0, x1;
+    int y0 = ytop > ct ? ytop : ct;
+    int y1 = ybot < cb ? ybot : cb;
+    if (y0 < 0) y0 = 0;
+    if (y1 > gD.ch - 1) y1 = gD.ch - 1;
+    if (y1 < y0) return;
+    x0 = d_geti(gD.colx, cx); x1 = d_geti(gD.colx, cx + 1);
+    if (tx == mp_const_none) {
+        mp_obj_t it[6] = { MP_ROM_QSTR(MP_QSTR_R), mp_obj_new_int(x0),
+                           mp_obj_new_int(y0), mp_obj_new_int(x1 - x0),
+                           mp_obj_new_int(y1 - y0 + 1),
+                           mp_obj_new_int_from_uint(
+                               d_rgb((fb[0] * sh) >> 8, (fb[1] * sh) >> 8,
+                                     (fb[2] * sh) >> 8)) };
+        d_push(it, 6);
+        return;
+    }
+    { int tw = d_geti(tx, 0), th = d_geti(tx, 1);
+      mp_obj_t grid = mp_obj_subscr(tx, MP_OBJ_NEW_SMALL_INT(2), MP_OBJ_SENTINEL);
+      int v0 = (int)((v_top + (y0 - ytop) * dv) * 256.0);
+      mp_obj_t it[12] = { MP_ROM_QSTR(MP_QSTR_W), mp_obj_new_int(x0),
+                          mp_obj_new_int(x1 - x0), mp_obj_new_int(y0),
+                          mp_obj_new_int(y1 - y0 + 1), grid,
+                          mp_obj_new_int(tw), mp_obj_new_int(th),
+                          mp_obj_new_int((int)u), mp_obj_new_int(v0),
+                          mp_obj_new_int((int)(dv * 256.0)),
+                          mp_obj_new_int(sh) };
+      d_push(it, 12); }
+}
+
+/* cv.duum_frame(ctx) - per-frame state, set once instead of per seg.
+ * ctx: (out, ceilc, floorc, clips, masked, colx, dcx, dcy, skyu,
+ *       sky|None, dvsky, RW, ch, hh, viewz, vsc, inv_vsc,
+ *       C_CEIL, C_FLOOR, fb_mid, fb_up, fb_lo) */
+static mp_obj_t cv_duum_frame(mp_obj_t self, mp_obj_t ctx)
+{
+    (void)self;
+    mp_obj_t *f;
+    size_t n;
+    mp_obj_get_array(ctx, &n, &f);
+    if (n < 22) mp_raise_ValueError(MP_ERROR_TEXT("duum_frame: short ctx"));
+    gD.out = f[0]; gD.ceilc = f[1]; gD.floorc = f[2]; gD.clips = f[3];
+    gD.masked = f[4];
+    gD.colx = f[5]; gD.dcx = f[6]; gD.dcy = f[7]; gD.skyu = f[8];
+    if (f[9] == mp_const_none) {
+        gD.sky_grid = MP_OBJ_NULL; gD.sky_tw = gD.sky_th = 0;
+    } else {
+        gD.sky_tw = d_geti(f[9], 0); gD.sky_th = d_geti(f[9], 1);
+        gD.sky_grid = mp_obj_subscr(f[9], MP_OBJ_NEW_SMALL_INT(2), MP_OBJ_SENTINEL);
+    }
+    gD.dvsky = mp_obj_get_int(f[10]);
+    gD.rw = mp_obj_get_int(f[11]);
+    gD.ch = mp_obj_get_int(f[12]);
+    gD.hh = mp_obj_get_float(f[13]);
+    gD.viewz = mp_obj_get_float(f[14]);
+    gD.vsc = mp_obj_get_float(f[15]);
+    gD.inv_vsc = mp_obj_get_float(f[16]);
+    d_rgb3(f[17], gD.c_ceil);  d_rgb3(f[18], gD.c_floor);
+    d_rgb3(f[19], gD.fb_mid);  d_rgb3(f[20], gD.fb_up);  d_rgb3(f[21], gD.fb_lo);
+    gD.valid = 1;
+    return mp_const_none;
+}
+static MP_DEFINE_CONST_FUN_OBJ_2(cv_duum_frame_obj, cv_duum_frame);
+
+/* cv.seg_cols(...) - the whole per-column loop for ONE seg.  Returns how many
+ * columns this seg CLOSED, so the caller keeps its open-column count (the
+ * BSP walk stops when every column is closed).
+ * a[1..]: ix1 ix2 rx1 inv1 k_invd uz1 k_uz kfc kff kbc kbf sflags lf wk
+ *         mid_t up_t lo_t v_mid v_up v_lo cgrid fgrid fc ff bc bf ldflags yoff
+ * sflags: bit0 twosided, bit1 bothsky, bit2 csky */
+static mp_obj_t cv_seg_cols(size_t n, const mp_obj_t *a)
+{
+    if (!gD.valid) mp_raise_ValueError(MP_ERROR_TEXT("seg_cols: no duum_frame"));
+    (void)n;
+    int i = 1;
+    int ix1 = mp_obj_get_int(a[i++]), ix2 = mp_obj_get_int(a[i++]);
+    double rx1 = mp_obj_get_float(a[i++]);
+    double inv1 = mp_obj_get_float(a[i++]), k_invd = mp_obj_get_float(a[i++]);
+    double uz1 = mp_obj_get_float(a[i++]), k_uz = mp_obj_get_float(a[i++]);
+    double kfc = mp_obj_get_float(a[i++]), kff = mp_obj_get_float(a[i++]);
+    double kbc = mp_obj_get_float(a[i++]), kbf = mp_obj_get_float(a[i++]);
+    int sflags = mp_obj_get_int(a[i++]);
+    double lf = mp_obj_get_float(a[i++]);
+    int wk = mp_obj_get_int(a[i++]);
+    mp_obj_t mid_t = a[i++], up_t = a[i++], lo_t = a[i++];
+    double v_mid = mp_obj_get_float(a[i++]);
+    double v_up = mp_obj_get_float(a[i++]), v_lo = mp_obj_get_float(a[i++]);
+    mp_obj_t cgrid = a[i++], fgrid = a[i++];
+    double fc = mp_obj_get_float(a[i++]), ff = mp_obj_get_float(a[i++]);
+    double bc = mp_obj_get_float(a[i++]), bf = mp_obj_get_float(a[i++]);
+    int ldflags = mp_obj_get_int(a[i++]);
+    double yoff = mp_obj_get_float(a[i++]);
+
+    const int twosided = sflags & 1, bothsky = (sflags >> 1) & 1,
+              csky = (sflags >> 2) & 1;
+    const double hh = gD.hh, viewz = gD.viewz, vsc = gD.vsc;
+    int closed = 0;
+    int th_m = 0, tw_m = 0;
+    if (mid_t != mp_const_none) { tw_m = d_geti(mid_t, 0); th_m = d_geti(mid_t, 1); }
+
+    for (int x = ix1; x <= ix2; x++) {
+        int ct = d_geti(gD.ceilc, x), cb = d_geti(gD.floorc, x);
+        if (ct > cb) continue;
+        double xf = (double)x - rx1;
+        double invd = inv1 + k_invd * xf;
+        double dist = 1.0 / invd;
+        double u = (uz1 + k_uz * xf) * dist;
+        double df = 1200.0 / (dist + 650.0);
+        if (df > 1.0) df = 1.0; else if (df < 0.68) df = 0.68;
+        int sh = (int)(lf * df * 256.0);
+        int shw = (sh * wk) / 100;          /* both non-negative, so / == // */
+        if (shw > 256) shw = 256;
+        double dv = dist * gD.inv_vsc;
+        int yfc = (int)(hh - kfc * invd);
+        int yff = (int)(hh - kff * invd);
+        int ybc = 0, ybf = 0;
+        if (twosided) {
+            ybc = (int)(hh - kbc * invd);
+            ybf = (int)(hh - kbf * invd);
+            if (bothsky && ybc > yfc) yfc = ybc;
+        }
+        if (yfc > ct) {
+            int yb = (yfc - 1) < cb ? (yfc - 1) : cb;
+            if (csky)                       d_skyspan(x, ct, yb);
+            else if (cgrid != mp_const_none) d_flatspan(x, ct, yb, cgrid, kfc, lf);
+            else                            d_rect(x, ct, yb, d_col_rgb(gD.c_ceil, lf * 0.9));
+        }
+        if (yff < cb) {
+            int ya = (yff + 1) > ct ? (yff + 1) : ct;
+            if (fgrid != mp_const_none) d_flatspan(x, ya, cb, fgrid, kff, lf);
+            else                        d_rect(x, ya, cb, d_col_rgb(gD.c_floor, lf * 0.9));
+        }
+        if (!twosided) {
+            d_wall(x, yfc, yff, ct, cb, mid_t, u, v_mid, dv, shw, gD.fb_mid);
+            d_seti(gD.ceilc, x, 1); d_seti(gD.floorc, x, 0);
+            closed++;
+            { mp_obj_t it[3] = { mp_obj_new_float(dist), MP_OBJ_NEW_SMALL_INT(1),
+                                 MP_OBJ_NEW_SMALL_INT(0) };
+              mp_obj_list_append(
+                  mp_obj_subscr(gD.clips, MP_OBJ_NEW_SMALL_INT(x), MP_OBJ_SENTINEL),
+                  mp_obj_new_tuple(3, it)); }
+        } else {
+            int newct = ct > yfc ? ct : yfc;
+            int newcb = cb < yff ? cb : yff;
+            if (mid_t != mp_const_none) {
+                int yot = yfc > ybc ? yfc : ybc;
+                int yob = yff < ybf ? yff : ybf;
+                double zt = (ldflags & 16)                    /* ML_DONTPEGBOT */
+                    ? ((ff > bf ? ff : bf) + (double)th_m)
+                    : (fc < bc ? fc : bc);
+                double ytt = hh - (zt - viewz) * vsc * invd;
+                int my0 = (int)ytt;
+                int my1 = (int)(ytt + (double)th_m / dv);
+                if (my0 < yot) my0 = yot;
+                if (my0 < ct)  my0 = ct;
+                if (my0 < 0)   my0 = 0;
+                if (my1 > yob) my1 = yob;
+                if (my1 > cb)  my1 = cb;
+                if (my1 > gD.ch - 1) my1 = gD.ch - 1;
+                if (my1 >= my0) {
+                    int x0m = d_geti(gD.colx, x), x1m = d_geti(gD.colx, x + 1);
+                    int v0m = (int)((yoff + (my0 - ytt) * dv) * 256.0);
+                    mp_obj_t op[12] = {
+                        MP_ROM_QSTR(MP_QSTR_M), mp_obj_new_int(x0m),
+                        mp_obj_new_int(x1m - x0m), mp_obj_new_int(my0),
+                        mp_obj_new_int(my1 - my0 + 1),
+                        mp_obj_subscr(mid_t, MP_OBJ_NEW_SMALL_INT(2), MP_OBJ_SENTINEL),
+                        mp_obj_new_int(tw_m), mp_obj_new_int(th_m),
+                        mp_obj_new_int((int)u), mp_obj_new_int(v0m),
+                        mp_obj_new_int((int)(dv * 256.0)), mp_obj_new_int(shw) };
+                    mp_obj_t pair[2] = { mp_obj_new_float(dist),
+                                         mp_obj_new_tuple(12, op) };
+                    mp_obj_list_append(gD.masked, mp_obj_new_tuple(2, pair));
+                }
+            }
+            if (bc < fc && !bothsky) {
+                if (up_t != mp_const_none)
+                    d_wall(x, yfc, ybc - 1, ct, newcb, up_t, u, v_up, dv, shw, gD.fb_up);
+                else {
+                    int ya = yfc > ct ? yfc : ct;
+                    int yb = (ybc - 1) < newcb ? (ybc - 1) : newcb;
+                    d_rect(x, ya, yb, d_col_rgb(gD.c_ceil, lf * df));
+                }
+                if (ybc > newct) newct = ybc;
+            }
+            if (bf > ff) {
+                if (lo_t != mp_const_none)
+                    d_wall(x, ybf + 1, yff, newct, cb, lo_t, u, v_lo, dv, shw, gD.fb_lo);
+                else {
+                    int ya = (ybf + 1) > newct ? (ybf + 1) : newct;
+                    int yb = yff < cb ? yff : cb;
+                    d_rect(x, ya, yb, d_col_rgb(gD.c_floor, lf * df));
+                }
+                if (ybf < newcb) newcb = ybf;
+            }
+            d_seti(gD.ceilc, x, newct); d_seti(gD.floorc, x, newcb);
+            if (newct > newcb) closed++;
+            if (newct > ct || newcb < cb) {
+                mp_obj_t it[3] = { mp_obj_new_float(dist),
+                                   MP_OBJ_NEW_SMALL_INT(newct),
+                                   MP_OBJ_NEW_SMALL_INT(newcb) };
+                mp_obj_list_append(
+                    mp_obj_subscr(gD.clips, MP_OBJ_NEW_SMALL_INT(x), MP_OBJ_SENTINEL),
+                    mp_obj_new_tuple(3, it));
+            }
+        }
+    }
+    return mp_obj_new_int(closed);
+}
+static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(cv_seg_cols_obj, 29, 29, cv_seg_cols);
+
 static mp_obj_t cv_width(mp_obj_t self)  { (void)self; return mp_obj_new_int(gRW); }
 static MP_DEFINE_CONST_FUN_OBJ_1(cv_width_obj, cv_width);
 static mp_obj_t cv_height(mp_obj_t self) { (void)self; return mp_obj_new_int(gRH); }
@@ -341,6 +669,8 @@ static const mp_rom_map_elem_t canvas_locals[] = {
     { MP_ROM_QSTR(MP_QSTR_wall_span), MP_ROM_PTR(&cv_wall_span_obj) },
     { MP_ROM_QSTR(MP_QSTR_mask_span), MP_ROM_PTR(&cv_mask_span_obj) },
     { MP_ROM_QSTR(MP_QSTR_flat_span), MP_ROM_PTR(&cv_flat_span_obj) },
+    { MP_ROM_QSTR(MP_QSTR_duum_frame),MP_ROM_PTR(&cv_duum_frame_obj) },
+    { MP_ROM_QSTR(MP_QSTR_seg_cols),  MP_ROM_PTR(&cv_seg_cols_obj) },
 };
 static MP_DEFINE_CONST_DICT(canvas_locals_dict, canvas_locals);
 MP_DEFINE_CONST_OBJ_TYPE(canvas_type, MP_QSTR_Canvas, MP_TYPE_FLAG_NONE,

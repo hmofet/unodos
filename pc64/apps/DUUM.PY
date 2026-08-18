@@ -595,6 +595,7 @@ class Duum(uno.App):
     def build(self, cv):
         self.err = None
         self.frame = []
+        self.cv = cv          # singleton canvas; render() emits through it
         self.cw = cv.width()
         self.ch = cv.height()
         try:
@@ -824,6 +825,13 @@ class Duum(uno.App):
         sky_t = self.sky
         dvsky = int(100.0 / hh * 256)      # horizon at sky texel row 100
         self.fmeta = (px, py, hh)
+        # Hand the per-frame state to the C rasteriser ONCE, rather than
+        # passing twenty-odd arguments on every seg.
+        cv = self.cv
+        cv.duum_frame((out, ceilc, floorc, clips, masked, colx, dcx, dcy,
+                       skyu, sky_t, dvsky, RW, ch, float(hh), float(viewz),
+                       float(vsc), float(inv_vsc), C_CEIL, C_FLOOR,
+                       (200, 188, 170), (172, 150, 122), (140, 150, 170)))
 
         def col_rgb(base, f):
             return rgb(int(base[0]*f), int(base[1]*f), int(base[2]*f))
@@ -939,98 +947,24 @@ class Duum(uno.App):
                 kbf = (bf - viewz) * vsc
             k_invd = (inv2 - inv1) / span
             k_uz = (uz2 - uz1) / span
-            for x in range(ix1, ix2 + 1):
-                ct = ceilc[x]; cb = floorc[x]
-                if ct > cb:
-                    continue
-                xf = x - rx1
-                invd = inv1 + k_invd * xf
-                dist = 1.0 / invd
-                # dist is 1/invd, so these are multiplies, not divisions:
-                # five divisions per column became two.
-                u = (uz1 + k_uz * xf) * dist
-                df = 1200.0 / (dist + 650.0)
-                if df > 1.0: df = 1.0
-                elif df < 0.68: df = 0.68
-                sh = int(lf * df * 256)
-                shw = (sh * wk) // 100
-                if shw > 256: shw = 256    # >256 overflows the byte math
-                dv = dist * inv_vsc
-                yfc = int(hh - kfc * invd)
-                yff = int(hh - kff * invd)
-                if twosided:
-                    ybc = int(hh - kbc * invd)
-                    ybf = int(hh - kbf * invd)
-                    if bothsky and ybc > yfc:
-                        yfc = ybc      # sky continues down to the back ceiling
-                if yfc > ct:
-                    if csky:
-                        skyspan(x, ct, (yfc - 1) if (yfc - 1) < cb else cb)
-                    elif cgrid is not None:
-                        flatspan(x, ct, (yfc - 1) if (yfc - 1) < cb else cb, cgrid, fc, lf)
-                    else:
-                        rect(x, ct, (yfc - 1) if (yfc - 1) < cb else cb, col_rgb(C_CEIL, lf*0.9))
-                if yff < cb:
-                    if fgrid is not None:
-                        flatspan(x, (yff + 1) if (yff + 1) > ct else ct, cb, fgrid, ff, lf)
-                    else:
-                        rect(x, (yff + 1) if (yff + 1) > ct else ct, cb, col_rgb(C_FLOOR, lf*0.9))
-                if not twosided:
-                    wall(x, yfc, yff, ct, cb, mid_t, u, v_mid, dv, shw, (200, 188, 170))
-                    ceilc[x] = 1; floorc[x] = 0
-                    state[0] -= 1
-                    clips[x].append((dist, 1, 0))
-                else:
-                    newct = ct if ct > yfc else yfc
-                    newcb = cb if cb < yff else yff
-                    if mid_t is not None:
-                        # masked midtexture: drawn in the sprite pass, clipped
-                        # to the opening and window as they are RIGHT NOW
-                        yot = yfc if yfc > ybc else ybc
-                        yob = yff if yff < ybf else ybf
-                        tw_m, th_m, grid_m = mid_t
-                        if flags & ML_DONTPEGBOT:
-                            zt = (ff if ff > bf else bf) + th_m
-                        else:
-                            zt = fc if fc < bc else bc
-                        ytt = hh - (zt - viewz) * vsc * invd
-                        my0 = int(ytt)
-                        if my0 < yot: my0 = yot
-                        if my0 < ct: my0 = ct
-                        if my0 < 0: my0 = 0
-                        my1 = int(ytt + th_m / dv)
-                        if my1 > yob: my1 = yob
-                        if my1 > cb: my1 = cb
-                        if my1 > ch - 1: my1 = ch - 1
-                        if my1 >= my0:
-                            x0m = colx[x]; x1m = colx[x + 1]
-                            v0m = int((yoff + (my0 - ytt) * dv) * 256)
-                            masked.append((dist, ('M', x0m, x1m - x0m, my0,
-                                           my1 - my0 + 1, grid_m, tw_m, th_m,
-                                           int(u), v0m, int(dv * 256), shw)))
-                    # vanilla piece clipping (R_RenderSegLoop): the upper
-                    # piece stops at the seg's OWN floor (newcb), and the
-                    # lower piece starts below the seg's own ceiling/upper
-                    # piece (newct) - a closed portal (back floor >= front
-                    # ceiling, e.g. E1M8's raised arena walls) must not
-                    # paint its lower texture over the ceiling flat.
-                    if bc < fc and not bothsky:
-                        if up_t:
-                            wall(x, yfc, ybc - 1, ct, newcb, up_t, u, v_up, dv, shw, (172, 150, 122))
-                        else:
-                            rect(x, yfc if yfc > ct else ct, (ybc-1) if (ybc-1) < newcb else newcb, col_rgb(C_CEIL, lf*df))
-                        if ybc > newct: newct = ybc
-                    if bf > ff:
-                        if lo_t:
-                            wall(x, ybf + 1, yff, newct, cb, lo_t, u, v_lo, dv, shw, (140, 150, 170))
-                        else:
-                            rect(x, (ybf+1) if (ybf+1) > newct else newct, yff if yff < cb else cb, col_rgb(C_FLOOR, lf*df))
-                        if ybf < newcb: newcb = ybf
-                    ceilc[x] = newct; floorc[x] = newcb
-                    if newct > newcb:
-                        state[0] -= 1
-                    if newct > ct or newcb < cb:
-                        clips[x].append((dist, newct, newcb))
+            # THE COLUMN LOOP LIVES IN C (cv.seg_cols, upy_port/mod_uno.c).
+            # It runs once per column per visible seg - thousands of times a
+            # frame - and interpreted it allocated a GC object for every float
+            # intermediate. It emits exactly the ops this loop used to emit,
+            # into these same lists, so draw() and tools/duum_verify.py are
+            # unaffected. tools/duum_host.py carries the readable mirror.
+            sflags = (1 if twosided else 0) | (2 if bothsky else 0) | \
+                     (4 if csky else 0)
+            state[0] -= cv.seg_cols(
+                ix1, ix2, rx1, inv1, k_invd, uz1, k_uz,
+                kfc, kff,
+                kbc if twosided else 0.0, kbf if twosided else 0.0,
+                sflags, lf, wk, mid_t, up_t, lo_t,
+                float(v_mid), float(v_up if twosided else 0.0),
+                float(v_lo if twosided else 0.0), cgrid, fgrid,
+                float(fc), float(ff),
+                float(bc if twosided else 0.0), float(bf if twosided else 0.0),
+                flags, float(yoff))
 
         def bbox_vis(top, bot, left, right):
             # Conservative frustum test: skip the far child only when all 4
