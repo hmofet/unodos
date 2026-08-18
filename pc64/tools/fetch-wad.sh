@@ -19,10 +19,12 @@ mkdir -p wads
 
 if [ "$1" = "--shareware" ]; then
     OUT=wads/DOOM1.WAD
-    # Mirrors of the id shareware doom1.wad (IWAD header 'IWAD', ~4 MB).
+    # Mirrors of the id shareware doom1.wad (IWAD header 'IWAD', 4,196,020
+    # bytes, v1.9, md5 f0cefca49926d00903cf57551d901abe).  The slitaz and
+    # DOOM_wad mirrors listed before 2026-08 are both dead (404).
     MIRRORS="
-https://distro.ibiblio.org/slitaz/sources/packages/d/doom1.wad
-https://github.com/Akbar30Bill/DOOM_wad/raw/master/DOOM1.WAD
+https://raw.githubusercontent.com/Akbar30Bill/DOOM_wads/master/doom1.wad
+https://distro.ibiblio.org/pub/linux/distributions/slitaz/sources/packages/d/doom1.wad
 "
 else
     OUT=wads/freedoom1.wad
