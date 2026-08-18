@@ -2054,7 +2054,7 @@ and renders a first-person, BSP-traversed view of the level you can walk around,
 <code>uno</code> API. It exercises the whole platform at once: file I/O (it streams the multi-MB WAD with
 <code>uno.read_at</code>, never loading it whole), heavy compute (the BSP walk and the column renderer), the
 framebuffer, keyboard input, and floating-point math.</p>
-{film("duum-demo-poster.jpg", "One minute of Duum on the x86-64 build, recorded from the running system: the start room, a walk out into the toxic courtyard drawn from the WAD, a firefight, and the status bar built from the game's own artwork. The film streams from the UnoDOS website, so playing it needs a connection.", DUUM_MP4)}
+{film("duum-demo-poster.jpg", "Forty-eight seconds of Duum on the x86-64 build, recorded from the running system: the start room, a walk down the corridor drawn from the WAD, a firefight, and the status bar built from the game's own artwork. The film streams from the UnoDOS website, so playing it needs a connection.", DUUM_MP4)}
 {note('Duum needs a Doom-format IWAD on the disk as <code>DOOM1.WAD</code> - none ships with UnoDOS, game data belongs to its makers. Use <strong>Freedoom</strong> (freedoom.github.io, a free BSD-licensed IWAD; rename <code>freedoom1.wad</code> to <code>DOOM1.WAD</code>) or the freely distributable id Software shareware <code>DOOM1.WAD</code>. Put it next to the apps on the boot disk. Without a WAD, Duum opens and says it is missing.', title="Bring your own WAD")}
 <p>Walls, floors, ceilings and sky are all texture-mapped from the WAD (perspective-correct, distance-
 and orientation-shaded), with sprites for monsters, items and the weapon. It is a complete game rather
