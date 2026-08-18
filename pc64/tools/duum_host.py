@@ -131,6 +131,31 @@ class Canvas:
             v += dv
             yy += 1
 
+    def mask_col(self, x, y0, count, grid, tw, th, texcol, v0, dv, pal, sh):
+        """wall_col with a transparent sentinel (0xFF) and NO vertical wrap:
+        mirror of the planned cv_mask_col in mod_uno.c."""
+        if tw <= 0 or th <= 0 or count <= 0:
+            return
+        texcol %= tw
+        base_t = texcol * th
+        v = v0
+        w = self.w
+        thfp = th << 8
+        y1 = min(y0 + count, self.h)
+        yy = y0
+        buf = self.buf
+        while yy < y1:
+            if yy >= 0 and 0 <= v < thfp:
+                pi = grid[base_t + (v >> 8)]
+                if pi != 0xFF:
+                    pi *= 3
+                    base = (yy * w + x) * 3
+                    buf[base]     = (pal[pi] * sh) >> 8
+                    buf[base + 1] = (pal[pi + 1] * sh) >> 8
+                    buf[base + 2] = (pal[pi + 2] * sh) >> 8
+            v += dv
+            yy += 1
+
     def flat_col(self, x, y0, count, grid, pal, a, ycen, dirx, diry, wx0, wy0, lf):
         """Perspective flat mapper: mirror of the planned cv_flat_col in
         mod_uno.c.  a = (plane_height - viewz) * vscale; per pixel
