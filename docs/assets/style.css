@@ -78,6 +78,8 @@ strong{font-weight:650}
 figure{margin:1.5em 0;background:var(--surface);border:1px solid var(--border);border-radius:12px;
   overflow:hidden;box-shadow:var(--shadow)}
 figure img{display:block;width:100%;height:auto;background:#0b0d13}
+figure.film video{display:block;width:100%;height:auto;background:#0b0d13}
+figure.film .fallback{padding:15px;margin:0;color:var(--muted)}
 figcaption{padding:10px 15px;font-size:13.5px;color:var(--muted);border-top:1px solid var(--border);background:var(--surface)}
 
 /* click-to-enlarge: the figure's image is a button, so it is keyboard
