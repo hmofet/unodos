@@ -1,0 +1,47 @@
+{
+  "_comment": "Narration for the Duum demo (out/duum/cut.mp4). Each cue names the BEAT it lands on, from that scene's .beats.jsonl, so the voice tracks the picture. Budgeted at Brian's MEASURED 2.9 words/sec (from the UnoDOS OS demo). Claims checked against source: DUUM.PY is Python on PYRT/MicroPython; uno.read_at streams the WAD lump-by-lump (never slurped); render() (BSP walk + column loop) is Python, cv.wall_span/mask_span/flat_span are C; monster AI + weapons + E1M1-E1M9 exist. Combat footage shows firing + health dropping, NOT a clean framed kill, so the combat cue only claims what is on screen (they shoot back, health drops, you fire).",
+  "voice_id": "nPczCjzI2devNBz1zQrb",
+  "_voice": "Brian - Deep, Resonant and Comforting (matches arin's UnoDOS OS demo)",
+  "model": "eleven_multilingual_v2",
+  "voice_settings": {"stability": 0.5, "similarity_boost": 0.75, "style": 0.0},
+  "scenes": [
+    {
+      "id": "s01",
+      "cues": [
+        {"id": "s01a", "at": "duum-title",
+         "text": "This is Doom, running inside UnoDOS - and written entirely in Python."},
+        {"id": "s01b", "at": "look-back",
+         "text": "It runs as an ordinary app, on the operating system's own Python runtime."}
+      ]
+    },
+    {
+      "id": "s02",
+      "cues": [
+        {"id": "s02a", "at": "walk-in",
+         "text": "It streams a real Doom game file a piece at a time, never loading the whole thing into memory."},
+        {"id": "s02b", "at": "into-courtyard",
+         "text": "The walls, the floor, the ceiling and the sky are all drawn from that file, as a first-person, perspective-correct view."}
+      ]
+    },
+    {
+      "id": "s03",
+      "cues": [
+        {"id": "s03a", "at": "advance",
+         "text": "The former humans shoot back, and your health drops as you push through, firing."},
+        {"id": "s03b", "at": "enemies",
+         "text": "Weapons, monsters and pickups, across all nine levels of the first episode."}
+      ]
+    },
+    {
+      "id": "s04",
+      "cues": [
+        {"id": "s04a", "at": "hud-hold",
+         "text": "Only the per-pixel drawing is C. The geometry and the game logic are Python."},
+        {"id": "s04b", "at": "ports-line",
+         "text": "Every other port of this system rebuilds its own apps in each machine's language."},
+        {"id": "s04c", "at": "reverse-line",
+         "text": "Duum does the reverse - a whole outside game engine, in nothing but Python."}
+      ]
+    }
+  ]
+}
