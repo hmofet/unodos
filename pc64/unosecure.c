@@ -487,6 +487,28 @@ int unosec_audit_head(unsigned char out[32])
 static int pick_vol(void)
 {
     int n = uno_fs_volumes(), v;
+    /* THE BOOT VOLUME FIRST, and the reason is reachability, not preference.
+     *
+     * This used to take the lowest-indexed writable native volume, which is
+     * whichever disk enumerated first - not necessarily the one the machine came
+     * up on. Two machines were bitten by the same consequence:
+     *
+     *   - the ZimaBlade boots a USB stick while volume 1 is an internal eMMC that
+     *     enumerates, reports writable, and never completes a read. unosec_boot()
+     *     bound the store to it and BLOCKED, hanging the box on the splash at
+     *     stage 4, security (accounts / RBAC) - past init, before the desktop and
+     *     before the network, i.e. with no way in to diagnose it.
+     *   - the X13 Yoga keeps a UNOSEC.DB on its internal disk, so every boot hit a
+     *     sign-in gate for an account that had nothing to do with the stick that
+     *     booted, and reflashing the stick could not clear it.
+     *
+     * Binding to the boot medium fixes both: the store lives on the thing the
+     * operator actually flashed, and a broken or unrelated disk elsewhere in the
+     * machine can no longer take the security subsystem - and with it the boot -
+     * down. The old order stays as the fallback, so a machine whose boot volume is
+     * not a writable native FAT behaves exactly as it did. */
+    for (v = 1; v < n; v++)
+        if (uno_fs_kind(v) == 1 && uno_fs_writable(v) && uno_fs_is_boot(v)) return v;
     for (v = 1; v < n; v++)                       /* prefer persistent native FAT */
         if (uno_fs_kind(v) == 1 && uno_fs_writable(v)) return v;
     for (v = 1; v < n; v++)
