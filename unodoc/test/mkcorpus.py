@@ -35,6 +35,12 @@ NS = (
     'xmlns:xlink="http://www.w3.org/1999/xlink" '
     'xmlns:of="urn:oasis:names:tc:opendocument:xmlns:of:1.2" '
     'xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" '
+    # fo: carries font-weight, font-style, font-size, text-transform,
+    # text-align and the indents - most of the formatting this file exists to
+    # test. Leaving it undeclared does not fail: LibreOffice parses the
+    # document, drops every attribute in the unknown namespace, and writes a
+    # clean .doc with the formatting missing. See the note above FMT_RUNS.
+    'xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0" '
     'xmlns:number="urn:oasis:names:tc:opendocument:xmlns:datastyle:1.0"'
 )
 
@@ -73,18 +79,37 @@ def escattr(s):
 # marker up in the extracted text and assert on the properties found there -
 # nothing keyed on an offset we computed ourselves.
 #
-# THIS IS NOT YET A GATE, and the reason is worth recording.  LibreOffice
-# turns ODF automatic styles into Word CHARACTER AND PARAGRAPH STYLES, not
-# into direct formatting: measured on this very file, only 2 of the 7 runs
-# carry a CHPX at all, and the rest resolve through the style sheet.  unodoc
-# does not read the STSH yet, so it correctly reports "no direct formatting"
-# for those runs, and expectations written against the ODF source would fail
-# for a reason that is not a bug.
+# THE BUG THIS FILE HID FOR TWO WEEKS, recorded so nobody re-derives it.
+# Every property below except underline and strikethrough is an `fo:` attribute,
+# and NS did not declare the fo: namespace.  LibreOffice does not complain
+# about that: it parses the document, silently drops every attribute in the
+# unknown namespace, and writes a perfectly valid .doc with the formatting
+# simply absent.  The generated fmt.doc therefore contained no bold, no italic,
+# no size, no caps and no alignment - only the two style:* properties, which
+# were declared and came through.
 #
-# So fmt.doc ships as a text and fuzz target now, and becomes the fixture for
-# the STSH slice - which is exactly what it was built for.  The sprm
-# interpreter itself is proven meanwhile by doctest's hand-built document,
-# where the CHPX and PAPX are ours and known.
+# That was misread twice.  First as "LibreOffice turns automatic styles into
+# Word character styles", then as "unodoc cannot read the STSH yet", and the
+# gate was disabled to match.  Neither was true.  unodoc reads direct
+# formatting AND resolves the style hierarchy (phase 4b/4b'), and a
+# round-trip through our own writer reports bold, italic and alignment
+# correctly.  The document was empty of the things it claimed to carry, and
+# the reader was right to say so.
+#
+# The lesson is not about namespaces.  It is that a fixture asserting nothing
+# is indistinguishable from a fixture that passes: this file was generated,
+# committed, and cited in two conclusions before anyone checked whether it
+# contained what its own text said it did.  Assert against the SOURCE'S
+# INTENT, and when the answer disagrees, suspect the fixture too.
+#
+# MEASURED after the fix (2026-08-17), reading the regenerated file back:
+# bold, italic, underline, strike, caps, the larger size, and centre / right /
+# justify alignment and SPACEPARA's spacing all arrive.  TWO still do not:
+# INDENTPARA's fo:margin-left and FIRSTPARA's fo:text-indent read as 0, and
+# adding style:parent-style-name did not change that, so it is a separate
+# question about how LibreOffice exports paragraph indents rather than more of
+# the same namespace bug.  fmt_fixture() below is still not wired to a gate;
+# whoever wires it should expect those two to fail and find out why first.
 FMT_RUNS = [
     ("PLAINWORD",  "",                       {}),
     ("BOLDWORD",   'fo:font-weight="bold"',  {"bold": 1}),
