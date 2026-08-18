@@ -18,6 +18,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_SCRIPT = os.path.join(HERE, "vo_script.json")
 DEFAULT_OUT = os.path.join(HERE, "out", "vo")
 KEY_PATHS = [
+    r"C:/Repos/under-a-crescent-moon/.env",
     r"\\wsl.localhost\Ubuntu-24.04\home\arin\Github\under-a-crescent-moon\.env",
     "/home/arin/Github/under-a-crescent-moon/.env",
 ]
