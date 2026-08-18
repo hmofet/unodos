@@ -115,17 +115,16 @@ DEBUG_CFG = ("nohud\n"          # no red perf HUD / stress status line
 # The Winamp 2.91 skin and the track, both at the volume ROOT on purpose:
 # UnoAmp scans roots only (skins in unoamp_app.c:288, the playlist in
 # seed_playlist()) and has no file-open dialog, so anything nested is invisible
-# to it. FLYHIGH.MP3 ends up the ONLY playable file at any root, which is what
+# to it. FURELISE.MP3 ends up the ONLY playable file at any root, which is what
 # makes `g_sel == 0` and a single Play click deterministic.
 SKIN = os.path.join(PC64, "wads", "BASE291.WSZ")
 # The track lives outside the repo (it is not ours to commit). Candidates in
 # preference order; --mp3 overrides. The last is the copy build.sh's staging
 # already left on the ESP, so a machine without the scratchpad still records.
 MP3_CANDIDATES = [
-    "/mnt/c/Users/arin/AppData/Local/Temp/claude/C--Users-arin/"
-    "3256c99b-ac54-4616-bece-ea49f590907d/scratchpad/demo-assets/FLYHIGH.MP3",
-    os.path.join(PC64, "wads", "FLYHIGH.MP3"),
-    os.path.join(ESP, "FLYHIGH.MP3"),
+    os.path.join(PC64, "media", "FURELISE.MP3"),   # committed, public domain
+    os.path.join(PC64, "wads", "FURELISE.MP3"),
+    os.path.join(ESP, "FURELISE.MP3"),
 ]
 
 
@@ -297,16 +296,11 @@ def uamp_close(fb_w):
 # ---------------------------------------------------------------------------
 def s06(d):
     fbw = d.w
-    # A machine with no saved session boots with the Control Panel open
-    # (pc64_uui.c session_load: no SHELL.CFG -> open_app(APP_CTRL)), and there
-    # is no setting that boots to a bare desktop. Clear it BEFORE the first
-    # beat, or every shot in the scene has a stray window behind it.
-    d.close_all()
-    d.beat("launch-unoamp", settle=0.4)
-    d.launch("unoamp", settle=2.6)          # playlist scan; no skin to find
-    # The player comes up in its built-in, theme-coloured look, because the only
-    # .wsz on the machine is in SKINS\ where the boot scan does not look.
-    d.beat("unoamp-builtin-look", settle=1.4)
+    # UnoAmp is ALREADY up and wearing Base 2.91 - it was launched and skinned
+    # off camera, before the stream, in main(). So the first frame shows the
+    # real skin, not the built-in look, and there is no transformation to film.
+    # The Control Panel was cleared there too.
+    d.beat("unoamp-skinned", settle=1.4)
 
     # Glide FIRST, mark the beat, then press. The beat's wall clock is what
     # pins the video clock to the wav clock later, so it has to sit next to the
@@ -317,24 +311,12 @@ def s06(d):
     d.click(*play, glide=False, settle=1.2)
 
     # The elapsed-time digits and the position bar are what move here. The
-    # visualiser well is drawn but effectively frozen: measured over 6 s of an
-    # earlier take it changed on 11 of 179 frames, because the player only asks
-    # the shell to repaint when its title MARQUEE advances (unoamp_ui_tick) and
-    # "FLYHIGH" is short enough to fit without scrolling. Re-measured below and
-    # reported either way - the skin does not change that path.
+    # visualiser well is drawn but effectively frozen: the player only asks the
+    # shell to repaint when its title MARQUEE advances (unoamp_ui_tick) and
+    # "FURELISE" is short enough to fit without scrolling.
     d.beat("hold-playing", settle=0.2)
-    time.sleep(3.2)
-
-    # THE SHOT. One command, mid-playback, and the whole chassis changes: the
-    # real Base 2.91 sheets replace the theme-coloured fallback while the track
-    # keeps playing. `skin load` repaints, so the transformation lands inside a
-    # single frame rather than needing a nudge.
-    d.beat("skin-load-base291-wsz", settle=0.0)
-    r = d.link.command("skin", "load", d.skin_vol, SKIN_PATH, timeout=20)
-    print("    skin load -> %r" % (r,))
-    if not (r and r[0].startswith("skinned")):
-        raise RuntimeError("skin load refused: %r" % (r,))
-    time.sleep(4.6)                          # HOLD: this is the scene's point
+    time.sleep(7.6)                          # room for the "decoded on the
+                                             # machine itself" line, skinned
 
     d.beat("open-the-10-band-eq", settle=0.2)
     d.click(*uamp_eq(fbw), settle=1.0)
@@ -506,7 +488,7 @@ def main(argv):
     build_id = open(buildtxt).read().strip().replace("\n", " | ")
     mp3 = find_mp3(a.mp3)
     if not mp3:
-        raise SystemExit("no FLYHIGH.MP3 found (tried %s)" % MP3_CANDIDATES)
+        raise SystemExit("no FURELISE.MP3 found (tried %s)" % MP3_CANDIDATES)
     if not os.path.exists(SKIN):
         raise SystemExit("missing skin: %s" % SKIN)
     print("esp: %s\nbuild: %s" % (esp, build_id))
@@ -526,7 +508,7 @@ def main(argv):
                    # taken by the boot scan and the player opens already
                    # skinned, which is the one thing this scene must not do.
                    extra=[(SKIN, "::/%s/%s" % (SKIN_DIR, SKIN_NAME)),
-                          (mp3, "::/FLYHIGH.MP3")],
+                          (mp3, "::/FURELISE.MP3")],
                    mkdirs=(SKIN_DIR,),
                    skip=("DOOM1.WAD",),          # 11 MB, and nothing here plays it
                    ordered_dir=("PICTURES", PICS))
@@ -582,9 +564,20 @@ def main(argv):
         if d.skin_vol is None:
             raise RuntimeError("no volume carries %s\\%s - staging failed"
                                % (SKIN_DIR, SKIN_NAME))
-        # And prove the player starts BARE-CHESTED, so a skinned opening frame
-        # can never be mistaken for a re-skin that did not happen.
-        print("skin: before = %r" % (link.command("skin", "status", timeout=10),))
+        # Skin the player NOW, off camera, so the very first streamed frame is
+        # already wearing Base 2.91 (2026-08-18, user: the built-in-look opening
+        # read as glitchy). UnoAmp always launches built-in - the boot scan only
+        # looks at volume roots and the skin is parked in SKINS\ - so the only
+        # way to a skinned opening frame is to launch and `skin load` before the
+        # stream exists. s06() no longer does either.
+        d.close_all()
+        d.launch("unoamp", settle=2.6)
+        sr = link.command("skin", "load", d.skin_vol, SKIN_PATH, timeout=20)
+        if not (sr and sr[0].startswith("skinned")):
+            raise RuntimeError("pre-stream skin load refused: %r" % (sr,))
+        time.sleep(0.8)
+        print("skin: before stream = %r"
+              % (link.command("skin", "status", timeout=10),))
 
         rx = StreamReceiver(S06_STREAM, out=base + ".mp4", host="127.0.0.1")
         rx.listen()

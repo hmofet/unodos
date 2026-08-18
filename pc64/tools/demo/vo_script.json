@@ -75,12 +75,12 @@
     {
       "id": "s06",
       "cues": [
-        { "id": "s06a", "at": "unoamp-builtin-look",
+        { "id": "s06a", "at": "unoamp-skinned",
           "text": "The player is modelled on Winamp." },
         { "id": "s06b", "at": "play-flyhigh-mp3",
           "text": "This music is being decoded on the machine itself, by decoders written for this project. MP3, AAC, MIDI and WAV." },
         { "id": "s06c", "at": "open-the-10-band-eq",
-          "text": "And it wears real Winamp skins. That is an original skin file, unmodified, dropped onto a running player, with its ten band equaliser underneath." },
+          "text": "And it wears real Winamp skins. That is an original, unmodified skin file, with its ten band equaliser underneath." },
         { "id": "s06d", "at": "animated-gif",
           "text": "The image viewer reads the formats you would expect, animated GIFs included." }
       ]
