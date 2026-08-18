@@ -176,6 +176,7 @@ class Textures:
         for tl in ("TEXTURE1", "TEXTURE2"):
             self._parse_tex(wad.lump(tl))
         self.cache = {}
+        self.mcache = {}
         self.fcache = {}
 
     def flat(self, name8):
@@ -256,6 +257,44 @@ class Textures:
                             grid[base + dy] = pix[i]
         t = (w, h, grid)
         self.cache[name] = t
+        return t
+
+    def getm(self, name):
+        """get() for MASKED use (two-sided midtextures drawn with mask_span):
+        texels no patch covers become the 0xFF transparent sentinel, and real
+        palette index 255 is remapped to 254 like sprites - so the holes in a
+        grating show what is behind them instead of opaque palette color 0."""
+        if name is None:
+            return None
+        name = name.upper()
+        t = self.mcache.get(name)
+        if t is not None or name in self.mcache:
+            return t
+        td = self.defs.get(name)
+        if td is None:
+            self.mcache[name] = None
+            return None
+        w, h, pats = td
+        grid = bytearray(b"\xff" * (w * h))
+        for (ox, oy, pn) in pats:
+            pat = self._decode_patch(pn)
+            if pat is None:
+                continue
+            pw, ph, cols = pat
+            for cx in range(pw):
+                dx = ox + cx
+                if dx < 0 or dx >= w:
+                    continue
+                base = dx * h
+                for (top, pix) in cols[cx]:
+                    dy0 = oy + top
+                    for i in range(len(pix)):
+                        dy = dy0 + i
+                        if 0 <= dy < h:
+                            v = pix[i]
+                            grid[base + dy] = 254 if v == 255 else v
+        t = (w, h, grid)
+        self.mcache[name] = t
         return t
 
 
@@ -626,6 +665,8 @@ class Duum(uno.App):
         for (x, y, ang, typ, fl) in self.lvl.things:
             if fl & 16:                      # multiplayer-only
                 continue
+            if not (fl & 2):                 # skill flags: play Hurt-Me-Plenty
+                continue
             info = THINGTAB.get(typ)
             if info is None:
                 continue
@@ -711,7 +752,11 @@ class Duum(uno.App):
             k = ((x + 0.5) - RW / 2) / scale
             dcx[x] = cos_a + k * sin_a
             dcy[x] = sin_a - k * cos_a
-            skyu[x] = int((pa - math.atan(k)) * a2sky) & 255
+            sv = (pa - math.atan(k)) * a2sky
+            iv = int(sv)
+            if sv < iv:
+                iv -= 1                # floor(): int() truncates toward zero,
+            skyu[x] = iv & 255         # which seams the sky at the 0 wrap
         sky_t = self.sky
         dvsky = int(100.0 / hh * 256)      # horizon at sky texel row 100
         self.fmeta = (px, py, hh)
@@ -767,7 +812,9 @@ class Duum(uno.App):
             fs, bs, fsd, ld, fsi, bsi = self.seg_sectors(seg)
             if fs is None: return
             ax, ay = verts[seg[0]]; bx, by = verts[seg[1]]
-            wk = 115 if abs(bx - ax) > abs(by - ay) else 88     # /100 contrast
+            # vanilla fake contrast: N-S walls lighter, E-W walls darker,
+            # diagonals neutral (was inverted, and hit diagonals too)
+            wk = 88 if ay == by else 115 if ax == bx else 100   # /100 contrast
             d1x = ax - px; d1y = ay - py
             d2x = bx - px; d2y = by - py
             depth1 = d1x * cos_a + d1y * sin_a
@@ -789,7 +836,9 @@ class Duum(uno.App):
             rx2 = (RW / 2) + (sx2 / depth2) * scale
             if rx1 >= rx2: return
             ix1 = int(rx1 + 0.999); ix2 = int(rx2)
-            if ix1 < 0: ix1 = 0
+            if rx2 < ix2:              # int() truncates toward zero: floor(),
+                ix2 -= 1               # or a seg wholly off-screen left
+            if ix1 < 0: ix1 = 0        # (rx2 in (-1,0)) claims column 0
             if ix2 > RW - 1: ix2 = RW - 1
             if ix1 > ix2: return
             inv1 = 1.0 / depth1; inv2 = 1.0 / depth2
@@ -797,10 +846,11 @@ class Duum(uno.App):
             fc = fs[1]; ff = fs[0]; flight = fs[4]
             yoff = fsd[1]
             flags = ld[2]
-            mid_t = self.tex.get(_texname(fsd[4]))
+            twosided = bs is not None
+            # two-sided midtextures draw masked (gratings): sentinel grid
+            mid_t = (tex.getm if twosided else tex.get)(_texname(fsd[4]))
             up_t = self.tex.get(_texname(fsd[2]))
             lo_t = self.tex.get(_texname(fsd[3]))
-            twosided = bs is not None
             # Texture pegging (Doom R_StoreWallRange): v_top is the texel row at
             # the TOP of each wall piece; anchors move with the linedef flags.
             v_mid = yoff
@@ -886,17 +936,23 @@ class Duum(uno.App):
                             masked.append((dist, ('M', x0m, x1m - x0m, my0,
                                            my1 - my0 + 1, grid_m, tw_m, th_m,
                                            int(u), v0m, int(dv * 256), shw)))
+                    # vanilla piece clipping (R_RenderSegLoop): the upper
+                    # piece stops at the seg's OWN floor (newcb), and the
+                    # lower piece starts below the seg's own ceiling/upper
+                    # piece (newct) - a closed portal (back floor >= front
+                    # ceiling, e.g. E1M8's raised arena walls) must not
+                    # paint its lower texture over the ceiling flat.
                     if bc < fc and not bothsky:
                         if up_t:
-                            wall(x, yfc, ybc - 1, ct, cb, up_t, u, v_up, dv, shw, (172, 150, 122))
+                            wall(x, yfc, ybc - 1, ct, newcb, up_t, u, v_up, dv, shw, (172, 150, 122))
                         else:
-                            rect(x, yfc if yfc > ct else ct, (ybc-1) if (ybc-1) < cb else cb, col_rgb(C_CEIL, lf*df))
+                            rect(x, yfc if yfc > ct else ct, (ybc-1) if (ybc-1) < newcb else newcb, col_rgb(C_CEIL, lf*df))
                         if ybc > newct: newct = ybc
                     if bf > ff:
                         if lo_t:
-                            wall(x, ybf + 1, yff, ct, cb, lo_t, u, v_lo, dv, shw, (140, 150, 170))
+                            wall(x, ybf + 1, yff, newct, cb, lo_t, u, v_lo, dv, shw, (140, 150, 170))
                         else:
-                            rect(x, (ybf+1) if (ybf+1) > ct else ct, yff if yff < cb else cb, col_rgb(C_FLOOR, lf*df))
+                            rect(x, (ybf+1) if (ybf+1) > newct else newct, yff if yff < cb else cb, col_rgb(C_FLOOR, lf*df))
                         if ybf < newcb: newcb = ybf
                     ceilc[x] = newct; floorc[x] = newcb
                     if newct > newcb:

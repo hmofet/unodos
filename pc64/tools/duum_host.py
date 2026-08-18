@@ -13,6 +13,11 @@ see on the host is what the device runs, minus MicroPython speed.
   python3 tools/duum_host.py map out.png             top-down linedef map
   python3 tools/duum_host.py bench                   time a render() on the host
 
+Global flags: --wad PATH serves that file for every WAD name (test any IWAD
+without touching wads/), --level E1M3 starts on another map.  The geometry
+test suite is tools/duum_verify.py; tools/duum_vs_doom.py makes side-by-side
+sheets against Chocolate Doom.
+
 Key script letters: U/D = forward/back, L/R = turn, ,/. = strafe, SPACE = use,
 F = fire, 1..9 = weapon select.
 """
@@ -25,7 +30,12 @@ CW, CH = 640, 400        # host canvas: same aspect ballpark as the device windo
 
 
 # ---- the fake `uno` module -------------------------------------------------
+WAD_OVERRIDE = None      # --wad PATH: serve this file for every WAD name
+
+
 def _wad_path(name):
+    if WAD_OVERRIDE:
+        return WAD_OVERRIDE
     p = os.path.join(WADDIR, name)
     if os.path.exists(p):
         return p
@@ -269,8 +279,21 @@ def run_keys(app, script):
 
 
 def main():
+    global WAD_OVERRIDE
+    if "--wad" in sys.argv:
+        i = sys.argv.index("--wad")
+        WAD_OVERRIDE = os.path.abspath(sys.argv[i + 1])
+        del sys.argv[i:i + 2]
+    if "--level" in sys.argv:
+        i = sys.argv.index("--level")
+        lvl = sys.argv[i + 1]
+        del sys.argv[i:i + 2]
+    else:
+        lvl = None
     cmd = sys.argv[1] if len(sys.argv) > 1 else "shot"
     mod = load_app()
+    if lvl:
+        mod.LEVEL = lvl
     app = mod.app
     cv = Canvas()
 
