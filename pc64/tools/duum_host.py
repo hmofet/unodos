@@ -281,11 +281,14 @@ def run_keys(app, script):
             app.tick()
 
 
-def run_play(mod, scale=2):
+def run_play(mod, scale=2, sound=True):
     """Interactive window: the real DUUM.PY, desktop Python, live keys.
     320x200 canvas (pure-Python pixel replay is the frame budget) scaled up
-    with nearest-neighbour.  Arrows move/turn, comma/period strafe, F or
-    Ctrl fire, Space/E use, 1-6 weapons, Esc quits."""
+    with nearest-neighbour.
+
+    Standard PC Doom bindings: arrows move/turn, Alt+arrows strafe,
+    Ctrl fires, Space uses, Shift runs, comma/period strafe, 1-6 select
+    weapons, Esc quits."""
     import tkinter as tk
     from PIL import Image, ImageTk, ImageDraw
 
@@ -298,13 +301,40 @@ def run_play(mod, scale=2):
     t0 = time.monotonic()
     uno.ticks = lambda: int((time.monotonic() - t0) * 60)   # real 60Hz clock
 
-    # live held-key state -> uno.keys_down bitmask (UNO_KH_* bits)
-    BITS = {"Up": 1, "Down": 2, "Right": 4, "Left": 8,
-            "f": 16, "F": 16, "space": 32, "e": 32, "E": 32,
-            "comma": 64, "period": 128}
-    kd = [0]
-    uno.keys_down = lambda: kd[0]
+    # live held-key set -> uno.keys_down bitmask (UNO_KH_* bits), recomputed
+    # per query so Alt can retarget already-held arrows (turn <-> strafe)
+    held = set()
+
+    def kd_now():
+        alt = "Alt_L" in held or "Alt_R" in held
+        v = 0
+        if "Up" in held:    v |= 1
+        if "Down" in held:  v |= 2
+        if "Right" in held: v |= (128 if alt else 4)
+        if "Left" in held:  v |= (64 if alt else 8)
+        if "Control_L" in held or "Control_R" in held: v |= 16
+        if "space" in held:  v |= 32
+        if "comma" in held:  v |= 64
+        if "period" in held: v |= 128
+        return v
+
+    uno.keys_down = kd_now
     app.have_keys = True
+
+    base_mov, base_turn = mod.MOVSPD, mod.TURNSPD
+
+    def set_run(on):                    # vanilla: Shift doubles-ish speed
+        mod.MOVSPD = base_mov * 1.8 if on else base_mov
+        mod.TURNSPD = base_turn * 1.5 if on else base_turn
+
+    snd = None
+    if sound:
+        try:
+            import duum_sound
+            snd = duum_sound.Sound(app.wad)
+            uno.beep = snd.beep
+        except Exception as e:
+            print("sound disabled:", e)
 
     root = tk.Tk()
     root.title("Duum - %s (host)" % mod.LEVEL)
@@ -317,25 +347,32 @@ def run_play(mod, scale=2):
         if ks == "Escape":
             root.destroy()
             return
-        b = BITS.get(ks)
-        if b:
-            kd[0] |= b
-        if ks in ("space", "Return"):
+        held.add(ks)
+        if ks in ("Shift_L", "Shift_R"):
+            set_run(True)
+        elif ks in ("space", "Return"):
             app.key(32, 0, 0)          # restart hooks when dead/finished
         elif len(ks) == 1 and ks.isdigit():
             app.key(ord(ks), 0, 0)
 
     def release(ev):
-        b = BITS.get(ev.keysym)
-        if b:
-            kd[0] &= ~b
+        held.discard(ev.keysym)
+        if ev.keysym in ("Shift_L", "Shift_R"):
+            set_run(False)
+
+    def unfocus(ev):                    # don't leave keys stuck on Alt-Tab
+        held.clear()
+        set_run(False)
 
     root.bind("<KeyPress>", press)
     root.bind("<KeyRelease>", release)
+    root.bind("<FocusOut>", unfocus)
     holder = {}
 
     def frame():
         drew = app.tick()
+        if snd is not None:
+            snd.want_music(app.level)   # follows level changes
         if drew or "ph" not in holder:
             app.draw(cv)
             img = Image.frombytes("RGB", (320, 200), bytes(cv.buf))
@@ -352,6 +389,8 @@ def run_play(mod, scale=2):
 
     frame()
     root.mainloop()
+    if snd is not None:
+        snd.stop()
 
 
 def main():
@@ -375,7 +414,7 @@ def main():
         sc = 2
         if "--scale" in sys.argv:
             sc = int(sys.argv[sys.argv.index("--scale") + 1])
-        run_play(mod, sc)
+        run_play(mod, sc, sound="--nosound" not in sys.argv)
         return
     app = mod.app
     cv = Canvas()
