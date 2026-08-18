@@ -1879,6 +1879,70 @@ def s10_system_log(d):
 
 # name -> (pre, body). `pre` runs before the stream starts (None = nothing);
 # returning False skips the scene (already logged why).
+def poster_pre(d):
+    """Stage the still the website uses as the film's poster: Duum in front,
+    a formatted Word document open behind it.
+
+    A poster is a screenshot like any other here, so it is SCRIPTED rather
+    than cropped out of the footage by hand - rerun it and you get the same
+    frame. It wants both halves of the argument in one picture: the thing
+    that makes people look (a Doom level, textured, with the status bar) and
+    the thing that makes them stay (a real .doc, bold and centred, in a word
+    processor), on one desktop at the same time.
+
+    Everything happens here, before the stream, because the scene body only
+    has to hold still long enough to grab the frame.
+    """
+    if not getattr(d, "office_staged", None):
+        print("  poster: SKIP - office corpus not staged")
+        return False
+    if not getattr(d, "wad_staged", None):
+        print("  poster: SKIP - no WAD, and Duum is the front half of the shot")
+        return False
+
+    # Behind: UnoWord with FMT.DOC, the document whose own text names its
+    # formatting. Pushed to RAM first, exactly as s04 does it.
+    d.link.push_file(0, "FMT.DOC",
+                     dict((x.upper(), os.path.join(CORPUS, x))
+                          for x, _ in OFFICE)["FMT.DOC"])
+    d.launch("uoword", settle=3.0)
+    d.ctrl("o", settle=1.4)
+    uof_open_row(d, 1)
+    time.sleep(3.0)
+
+    # In front: Duum. run_app is the same call a double-click in Files makes.
+    pyeval(d, 'import uno; uno.run_app(%d, "APPS\\DUUM.UNO")' % esp_vol(d),
+           timeout=30)
+    for _ in range(30):
+        if any("DUUM" in t.upper() for t in d.windows()):
+            break
+        time.sleep(2.0)
+    # Walk a few steps so the frame is a room being played, not a spawn point.
+    time.sleep(2.0)
+    for _ in range(10):
+        d.key(0, S_UP, settle=0.30)
+    for _ in range(3):
+        d.key(0, S_RIGHT, settle=0.30)
+
+    # Duum opens top-left, exactly over the part of the document that carries
+    # the formatting, so the page behind it reads as blank. Move it down and
+    # right by its title bar: the formatted lines sit in the page's top-left,
+    # and this clears them. Dropped mid-screen, well away from the edges,
+    # because within 8 px of one the WM snaps the window instead.
+    d.drag(300, 36, 880, 372, settle=1.2)
+    time.sleep(1.5)
+    return True
+
+
+def poster_shot(d):
+    """Grab it. The stream is running but the picture is the point."""
+    d.beat("poster")
+    time.sleep(1.0)
+    p, w, h, _ = d.shot("poster")
+    print("  poster: %s (%dx%d)" % (p, w, h))
+    time.sleep(1.0)
+
+
 SCENES = [
     ("s02", (None, s02_wm)),
     ("s03", (None, s03_themes)),
@@ -1894,6 +1958,10 @@ SCENES = [
     # itself on every ordinary run. It kept the number it was recorded under
     # until 2026-08-08, when s09 became the automation scene.
     ("s14", (s14_pre, s14_console)),
+    # Not in the cut: this one exists to produce the website's poster frame.
+    # Run it on its own - `scenes.py --scene poster` - and take the PNG out of
+    # out/<dir>/probe/poster.png.
+    ("poster", (poster_pre, poster_shot)),
 ]
 
 

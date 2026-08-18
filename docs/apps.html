@@ -164,6 +164,31 @@ play. (Progressive JPEG and WebP are recognised but not decoded.)</p>
 </div>
 <div class="note"><b>3D graphics</b>Runner3D draws real-time 3D graphics entirely in software, so it needs no graphics card.</div>
 
+<h3 id="duum">Duum</h3>
+<p><strong>Duum</strong> is a Doom engine, written in Python, running on the machine's own Python
+runtime. It plays <strong>Knee-Deep in the Dead</strong> end to end: textured walls, floors and sky,
+monsters that see you, chase you and shoot back, weapons, doors, lifts, switches, teleporters,
+keycards, pickups, exploding barrels, the status bar along the bottom, and level-to-level progression.
+Move with the arrow keys, turn with left and right, strafe with <kbd>,</kbd> and <kbd>.</kbd>,
+fire with <kbd>F</kbd>, open doors with <kbd>Space</kbd>, and pick a weapon with <kbd>1</kbd> to
+<kbd>6</kbd>.</p>
+
+<h4>Duum needs a game file</h4>
+<p>Doom's levels, textures and sounds live in a data file called an <strong>IWAD</strong>, and it is
+separate from the engine. UnoDOS ships with <strong>Freedoom</strong>, a free, from-scratch,
+Doom-compatible IWAD, so Duum plays out of the box. If you own Doom you can use your own data
+instead, and it will look and play like the game you remember.</p>
+<ol>
+  <li>Find your <code>DOOM1.WAD</code> (or <code>DOOM.WAD</code> from the registered game, or
+      <code>freedoom1.wad</code> from <a href="https://freedoom.github.io/">freedoom.github.io</a>).</li>
+  <li>Rename it to <strong><code>DOOM1.WAD</code></strong> if it is not called that already.</li>
+  <li>Copy it into the <strong>top level</strong> of the UnoDOS disk - the same place the
+      <code>APPS</code> folder lives - replacing the one that is there.</li>
+  <li>Start Duum. It reads the file straight off the disk as it plays.</li>
+</ol>
+<div class="note"><b>Big files are fine</b>Duum reads the WAD a piece at a time rather than loading it into memory, so a large one is fine on a small machine. If the file is missing or is not a Doom IWAD, Duum opens and tells you so instead of failing.</div>
+<div class="note warn"><b>Whose data is whose</b>Game data belongs to whoever made it. Freedoom is included because its licence allows it to be given away with other software; the id Software WADs are yours to use but not ours to ship, so bring your own copy.</div>
+
 <h2 id="studio">Studio: make your own apps</h2>
 <p>UnoDOS comes with its own IDE. <strong>Studio</strong> is a code editor, a compiler and an AI
 assistant in one window: write an app in <strong>UnoC or Python</strong>, press

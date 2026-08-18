@@ -233,12 +233,15 @@ and renders a first-person, BSP-traversed view of the level you can walk around,
 <code>uno.read_at</code>, never loading it whole), heavy compute (the BSP walk and the column renderer), the
 framebuffer, keyboard input, and floating-point math.</p>
 <div class="note"><b>Bring your own WAD</b>Duum needs a Doom-format IWAD on the disk as <code>DOOM1.WAD</code> - none ships with UnoDOS, game data belongs to its makers. Use <strong>Freedoom</strong> (freedoom.github.io, a free BSD-licensed IWAD; rename <code>freedoom1.wad</code> to <code>DOOM1.WAD</code>) or the freely distributable id Software shareware <code>DOOM1.WAD</code>. Put it next to the apps on the boot disk. Without a WAD, Duum opens and says it is missing.</div>
-<p>Walls are texture-mapped from the WAD (perspective-correct, distance- and orientation-shaded); floors,
-ceilings and sky are flat-shaded. It renders one level (E1M1) with simple wall collision. Flat texturing,
-monsters, items, doors and combat are <em>not</em> implemented - Duum proves the platform can carry a real
-engine, it is not a complete port. The textured-column inner loop runs in C (<code>cv.wall_col</code>) so
-the per-pixel work does not go through the interpreter. Move with the arrows, strafe with <kbd>,</kbd> and
-<kbd>.</kbd>.</p>
+<p>Walls, floors, ceilings and sky are all texture-mapped from the WAD (perspective-correct, distance-
+and orientation-shaded), with sprites for monsters, items and the weapon. It is a complete game rather
+than a demo: monster AI, hitscan and projectile weapons, doors, lifts, switches, teleporters, keycards,
+pickups, exploding barrels, damage, the real STBAR status bar, and E1M1 through E1M9 in order. Three
+inner loops run in C (<code>cv.wall_span</code>, <code>cv.mask_span</code>, <code>cv.flat_span</code> -
+one call per rendered column) so the per-pixel work does not go through the interpreter, and input comes
+through the live held-key level (<code>uno.keys_down()</code>) with the 60&nbsp;Hz clock from
+<code>uno.ticks()</code>. Move with the arrows, strafe with <kbd>,</kbd> and <kbd>.</kbd>, fire with
+<kbd>F</kbd>, use with <kbd>Space</kbd>.</p>
 
 <p class="kv">Next: the full <a href="dev-api.html">API reference</a> (including the <a href="dev-api.html#uno-py">
 Python <code>uno</code> module</a>), and <a href="dev-build.html">Building &amp; tooling</a>.</p>
