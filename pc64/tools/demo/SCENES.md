@@ -104,6 +104,13 @@ failed *silently* before it was pinned down:
 s01/s06/s11/s12 (boot, media/audio, outro, games) are deliberately absent - a
 different pipeline owns them.
 
+**s12 left the CUT on 2026-08-17** (it is out of `stitch.py`'s SPINE, not
+deleted). Dostris, Pac-Man, OutLast and the Tracker all take their audio from
+the machine's own sequencer, and a QEMU guest cannot feed it fast enough for
+the music to sound like it does on metal. The footage, `s12.beats.jsonl` and
+the four narration cues are all still here: put the SPINE row back to restore
+it once the scene can be recorded somewhere that keeps up.
+
 **Recording order is not cut order.** `scenes.py` records s09 before s08 and
 ends with s14; `stitch.py`'s SPINE is what orders the film (s01 s02 s03 s04 s05
 s06 s07 **s09** s08 **s12** **s13** s10 s11). The recording order is not
