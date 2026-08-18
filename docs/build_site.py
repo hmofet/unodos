@@ -328,22 +328,24 @@ def fig(src, cap, cls=""):
             f'</button><figcaption>{cap}</figcaption></figure>')
 
 DEMO_MP4 = "https://unodos.arinbakht.com/assets/unodos-demo.mp4"
+DUUM_MP4 = "https://unodos.arinbakht.com/assets/duum-demo.mp4"
 
-def film(poster, cap):
-    """The demo film, embedded the way fig() embeds a screenshot.
+def film(poster, cap, mp4=DEMO_MP4):
+    """A demo film, embedded the way fig() embeds a screenshot.
 
-    The film is 19 MB and this manual is a small static site that also has to
+    The films are large and this manual is a small static site that also has to
     read sensibly offline, so the video is streamed from the UnoDOS website
     rather than committed here, while the poster frame IS local. An offline
     reader still gets the figure, the poster and the caption; only playback
     needs a connection. preload="none" means the page costs nothing extra
-    until the reader presses play."""
+    until the reader presses play. `mp4` picks which film (the whole-OS demo by
+    default, or the shorter Duum film on the Python page)."""
     alt = html.escape(re.sub(r"<[^>]+>", "", cap))
     return (f'<figure class="film"><video controls preload="none" '
             f'poster="assets/img/{poster}" aria-label="{alt}">'
-            f'<source src="{DEMO_MP4}" type="video/mp4">'
+            f'<source src="{mp4}" type="video/mp4">'
             f'<p class="fallback">Your browser cannot play this video. '
-            f'<a href="{DEMO_MP4}">Download the film</a> instead.</p>'
+            f'<a href="{mp4}">Download the film</a> instead.</p>'
             f'</video><figcaption>{cap}</figcaption></figure>')
 
 def note(body, kind="", title="Note"):
@@ -2052,6 +2054,7 @@ and renders a first-person, BSP-traversed view of the level you can walk around,
 <code>uno</code> API. It exercises the whole platform at once: file I/O (it streams the multi-MB WAD with
 <code>uno.read_at</code>, never loading it whole), heavy compute (the BSP walk and the column renderer), the
 framebuffer, keyboard input, and floating-point math.</p>
+{film("duum-demo-poster.jpg", "One minute of Duum on the x86-64 build, recorded from the running system: the start room, a walk out into the toxic courtyard drawn from the WAD, a firefight, and the status bar built from the game's own artwork. The film streams from the UnoDOS website, so playing it needs a connection.", DUUM_MP4)}
 {note('Duum needs a Doom-format IWAD on the disk as <code>DOOM1.WAD</code> - none ships with UnoDOS, game data belongs to its makers. Use <strong>Freedoom</strong> (freedoom.github.io, a free BSD-licensed IWAD; rename <code>freedoom1.wad</code> to <code>DOOM1.WAD</code>) or the freely distributable id Software shareware <code>DOOM1.WAD</code>. Put it next to the apps on the boot disk. Without a WAD, Duum opens and says it is missing.', title="Bring your own WAD")}
 <p>Walls, floors, ceilings and sky are all texture-mapped from the WAD (perspective-correct, distance-
 and orientation-shaded), with sprites for monsters, items and the weapon. It is a complete game rather
