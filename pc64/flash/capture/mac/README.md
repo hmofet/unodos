@@ -1,7 +1,7 @@
 # Flasher screenshot pipeline (macOS)
 
 Headlessly screenshot the UnoDOS macOS USB flasher, re-runnable per release, for
-the [user manual](https://hmofet.github.io/unodos/getting-started.html). The
+the [user manual](https://unodos.arinbakht.com/manual/getting-started). The
 macOS twin of `pc64/flash/capture/` (Windows).
 
 macOS gates screen/window capture behind **Screen Recording** permission (TCC),

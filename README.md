@@ -2,7 +2,7 @@
 
 ![License](https://img.shields.io/badge/license-MPL--2.0-blue)
 [![Release](https://img.shields.io/github/v/release/hmofet/unodos)](https://github.com/hmofet/unodos/releases)
-[![Manual](https://img.shields.io/badge/user%20manual-hmofet.github.io%2Funodos-8A2BE2)](https://hmofet.github.io/unodos/)
+[![Manual](https://img.shields.io/badge/user%20manual-unodos.arinbakht.com%2Fmanual-8A2BE2)](https://unodos.arinbakht.com/manual/)
 
 **One source tree, one design, twenty-two machines**, from an IBM PC/XT with an
 8088 to the modern laptop on your desk.
@@ -25,7 +25,7 @@ Prebuilt images for every platform are on the
 USB disk image for modern PCs, cartridge ROMs for the consoles and handhelds,
 disk images for the home computers, and SD-card payloads for the boards. Most
 of them run in an emulator within a minute; the
-[user manual](https://hmofet.github.io/unodos/) walks through booting real
+[user manual](https://unodos.arinbakht.com/manual/) walks through booting real
 hardware, including one-click USB flasher apps for Windows and macOS.
 
 ---
@@ -271,7 +271,7 @@ The ports stay small because the heavy machinery is shared:
 
 ## Documentation
 
-- **[User manual](https://hmofet.github.io/unodos/)**: install, desktop,
+- **[User manual](https://unodos.arinbakht.com/manual/)**: install, desktop,
   apps, networking, appliances and the developer guide, for people who just
   want to run it.
 - **[docs/](docs/)**: architecture, API reference, port spec, feature matrix,
