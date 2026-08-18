@@ -131,6 +131,34 @@ class Canvas:
             v += dv
             yy += 1
 
+    def flat_col(self, x, y0, count, grid, pal, a, ycen, dirx, diry, wx0, wy0, lf):
+        """Perspective flat mapper: mirror of the planned cv_flat_col in
+        mod_uno.c.  a = (plane_height - viewz) * vscale; per pixel
+        dist = a / (ycen - y - 0.5), world = view + dir * dist, texel 64x64."""
+        buf = self.buf
+        w = self.w
+        y1 = min(y0 + count, self.h)
+        yy = max(y0, 0)
+        while yy < y1:
+            yd = ycen - (yy + 0.5)
+            if yd != 0.0:
+                dist = a / yd
+                wx = wx0 + dirx * dist
+                wy = wy0 + diry * dist
+                ix = int(wx); ix = ix - 1 if wx < ix else ix     # floor()
+                iy = int(wy); iy = iy - 1 if wy < iy else iy
+                ti = (((-iy) & 63) << 6) | (ix & 63)
+                df = 1200.0 / (dist + 650.0)
+                if df > 1.0: df = 1.0
+                elif df < 0.68: df = 0.68
+                sh = int(lf * df * 256.0)
+                pi = grid[ti] * 3
+                base = (yy * w + x) * 3
+                buf[base]     = (pal[pi] * sh) >> 8
+                buf[base + 1] = (pal[pi + 1] * sh) >> 8
+                buf[base + 2] = (pal[pi + 2] * sh) >> 8
+            yy += 1
+
     def save(self, path):
         from PIL import Image
         img = Image.frombytes("RGB", (self.w, self.h), bytes(self.buf))
@@ -218,6 +246,11 @@ def main():
 
     if cmd == "shot":
         out = sys.argv[2] if len(sys.argv) > 2 else "duum_shot.png"
+        if "--pos" in sys.argv:
+            i = sys.argv.index("--pos")
+            app.px = float(sys.argv[i + 1]); app.py = float(sys.argv[i + 2])
+            app.pa = math.radians(float(sys.argv[i + 3]))
+            app.dirty = True
         if "--keys" in sys.argv:
             run_keys(app, sys.argv[sys.argv.index("--keys") + 1])
         app.tick()

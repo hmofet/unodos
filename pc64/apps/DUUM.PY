@@ -109,8 +109,10 @@ class Level:
         self.segs     = rows(lp[b"SEGS"], "<HHhHHh", 12)
         self.ssectors = rows(lp[b"SSECTORS"], "<HH", 4)
         self.nodes    = rows(lp[b"NODES"], "<hhhh8hHH", 28)
-        self.sectors  = rows(lp[b"SECTORS"], "<hh8s8shHH", 26)
+        # sectors are LISTS: doors/lifts mutate floor/ceiling heights live
+        self.sectors  = [list(t) for t in rows(lp[b"SECTORS"], "<hh8s8shHH", 26)]
         self.things   = rows(lp[b"THINGS"], "<hhHHH", 10)
+        self.skyc     = [s[3][:6] == b"F_SKY1" for s in self.sectors]
 
     def player_start(self):
         for x, y, ang, typ, fl in self.things:
@@ -144,6 +146,18 @@ class Textures:
         for tl in ("TEXTURE1", "TEXTURE2"):
             self._parse_tex(wad.lump(tl))
         self.cache = {}
+        self.fcache = {}
+
+    def flat(self, name8):
+        """64x64 flat lump by raw 8-byte sector field -> 4096 bytes or None."""
+        f = self.fcache.get(name8)
+        if f is not None or name8 in self.fcache:
+            return f
+        j = name8.find(b"\0")
+        d = self.wad.lump(name8[:j] if j >= 0 else name8)
+        f = d[:4096] if len(d) >= 4096 else None
+        self.fcache[name8] = f
+        return f
 
     def _parse_tex(self, d):
         if not d:
@@ -228,6 +242,7 @@ class Duum(uno.App):
             self.lvl = Level(self.wad, LEVEL)
             self.tex = Textures(self.wad)
             self.pal = self.tex.pal
+            self.sky = self.tex.get("SKY" + LEVEL[1])   # E<n> -> SKY<n>
             px, py, pa = self.lvl.player_start()
             self.px = float(px); self.py = float(py)
             self.pa = math.radians(pa)
@@ -241,9 +256,11 @@ class Duum(uno.App):
         side = seg[4]
         fsd = ld[6] if side else ld[5]
         bsd = ld[5] if side else ld[6]
-        fs = m.sectors[m.sides[fsd][5]] if fsd != 0xFFFF else None
-        bs = m.sectors[m.sides[bsd][5]] if bsd != 0xFFFF else None
-        return fs, bs, m.sides[fsd], ld
+        fsi = m.sides[fsd][5] if fsd != 0xFFFF else -1
+        bsi = m.sides[bsd][5] if bsd != 0xFFFF else -1
+        fs = m.sectors[fsi] if fsi >= 0 else None
+        bs = m.sectors[bsi] if bsi >= 0 else None
+        return fs, bs, m.sides[fsd], ld, fsi, bsi
 
     def point_sector(self, px, py):
         # Doom's R_PointOnSide: side>0 means the point is on the RIGHT (front)
@@ -254,7 +271,7 @@ class Duum(uno.App):
             nd = m.nodes[n]
             side = (px - nd[0]) * nd[3] - (py - nd[1]) * nd[2]
             n = nd[-2] if side > 0 else nd[-1]
-        fs, _, _, _ = self.seg_sectors(m.segs[m.ssectors[n & 0x7FFF][1]])
+        fs = self.seg_sectors(m.segs[m.ssectors[n & 0x7FFF][1]])[0]
         return fs
 
     def render(self):
@@ -275,7 +292,21 @@ class Duum(uno.App):
         out = []
         verts = m.verts
         segs = m.segs
+        skyc = m.skyc
         C_CEIL = (84, 88, 104); C_FLOOR = (120, 100, 74); C_SKY = (96, 120, 170)
+        # Per-column ray directions (unit forward component) for the flat
+        # mapper, and the cylindrical sky texel column (1024 texels per turn,
+        # Doom's ANGLETOSKYSHIFT convention).
+        dcx = [0.0] * RW; dcy = [0.0] * RW; skyu = [0] * RW
+        a2sky = 1024.0 / (2.0 * math.pi)
+        for x in range(RW):
+            k = ((x + 0.5) - RW / 2) / scale
+            dcx[x] = cos_a + k * sin_a
+            dcy[x] = sin_a - k * cos_a
+            skyu[x] = int((pa - math.atan(k)) * a2sky) & 255
+        sky_t = self.sky
+        dvsky = int(100.0 / hh * 256)      # horizon at sky texel row 100
+        self.fmeta = (px, py, hh)
 
         def col_rgb(base, f):
             return rgb(int(base[0]*f), int(base[1]*f), int(base[2]*f))
@@ -286,6 +317,25 @@ class Duum(uno.App):
             if y1 > ch - 1: y1 = ch - 1
             x0 = cx * cw // RW; x1 = (cx + 1) * cw // RW      # exact tiling (no gap)
             out.append(('R', x0, y0, x1 - x0, y1 - y0 + 1, color))
+
+        def flatspan(cx, y0, y1, fgrid, hz, lf):
+            if y1 < y0: return
+            if y0 < 0: y0 = 0
+            if y1 > ch - 1: y1 = ch - 1
+            x0 = cx * cw // RW; x1 = (cx + 1) * cw // RW
+            out.append(('F', x0, x1 - x0, y0, y1 - y0 + 1, fgrid,
+                        (hz - viewz) * vsc, dcx[cx], dcy[cx], lf))
+
+        def skyspan(cx, y0, y1):
+            if y1 < y0: return
+            if y0 < 0: y0 = 0
+            if y1 > ch - 1: y1 = ch - 1
+            x0 = cx * cw // RW; x1 = (cx + 1) * cw // RW
+            if sky_t is None:
+                out.append(('R', x0, y0, x1 - x0, y1 - y0 + 1, rgb(*C_SKY)))
+            else:
+                out.append(('W', x0, x1 - x0, y0, y1 - y0 + 1, sky_t[2],
+                            sky_t[0], sky_t[1], skyu[cx], y0 * dvsky, dvsky, 256))
 
         def wall(cx, ytop, ybot, ct, cb, tx, u, v_top, dv, sh, fb):
             y0 = ytop if ytop > ct else ct
@@ -306,7 +356,7 @@ class Duum(uno.App):
         state = [RW]                      # open (not yet closed) column count
 
         def draw_seg(seg):
-            fs, bs, fsd, ld = self.seg_sectors(seg)
+            fs, bs, fsd, ld, fsi, bsi = self.seg_sectors(seg)
             if fs is None: return
             ax, ay = verts[seg[0]]; bx, by = verts[seg[1]]
             wk = 115 if abs(bx - ax) > abs(by - ay) else 88     # /100 contrast
@@ -348,12 +398,17 @@ class Duum(uno.App):
             v_mid = yoff
             if (flags & ML_DONTPEGBOT) and mid_t:
                 v_mid = yoff + (ff + mid_t[1] - fc)      # bottom texel row at floor
+            csky = skyc[fsi]
+            bothsky = False
             if twosided:
                 bc = bs[1]; bf = bs[0]
+                bothsky = csky and skyc[bsi]     # sky joins across the portal
                 v_up = yoff
                 if not (flags & ML_DONTPEGTOP) and up_t:
                     v_up = yoff + (bc + up_t[1] - fc)    # bottom texel row at back ceil
                 v_lo = yoff + ((fc - bf) if (flags & ML_DONTPEGBOT) else 0)
+            cgrid = None if csky else tex.flat(fs[3])
+            fgrid = tex.flat(fs[2])
             lf = 0.72 + 0.28 * (flight / 255.0)
             span = rx2 - rx1
             for x in range(ix1, ix2 + 1):
@@ -372,20 +427,31 @@ class Duum(uno.App):
                 dv = dist / vsc
                 yfc = int(hh - (fc - viewz) * vsc * invd)
                 yff = int(hh - (ff - viewz) * vsc * invd)
+                if twosided:
+                    ybc = int(hh - (bc - viewz) * vsc * invd)
+                    ybf = int(hh - (bf - viewz) * vsc * invd)
+                    if bothsky and ybc > yfc:
+                        yfc = ybc      # sky continues down to the back ceiling
                 if yfc > ct:
-                    rect(x, ct, (yfc - 1) if (yfc - 1) < cb else cb, col_rgb(C_CEIL, lf*0.9))
+                    if csky:
+                        skyspan(x, ct, (yfc - 1) if (yfc - 1) < cb else cb)
+                    elif cgrid is not None:
+                        flatspan(x, ct, (yfc - 1) if (yfc - 1) < cb else cb, cgrid, fc, lf)
+                    else:
+                        rect(x, ct, (yfc - 1) if (yfc - 1) < cb else cb, col_rgb(C_CEIL, lf*0.9))
                 if yff < cb:
-                    rect(x, (yff + 1) if (yff + 1) > ct else ct, cb, col_rgb(C_FLOOR, lf*0.9))
+                    if fgrid is not None:
+                        flatspan(x, (yff + 1) if (yff + 1) > ct else ct, cb, fgrid, ff, lf)
+                    else:
+                        rect(x, (yff + 1) if (yff + 1) > ct else ct, cb, col_rgb(C_FLOOR, lf*0.9))
                 if not twosided:
                     wall(x, yfc, yff, ct, cb, mid_t, u, v_mid, dv, shw, (200, 188, 170))
                     ceilc[x] = 1; floorc[x] = 0
                     state[0] -= 1
                 else:
-                    ybc = int(hh - (bc - viewz) * vsc * invd)
-                    ybf = int(hh - (bf - viewz) * vsc * invd)
                     newct = ct if ct > yfc else yfc
                     newcb = cb if cb < yff else yff
-                    if bc < fc:
+                    if bc < fc and not bothsky:
                         if up_t:
                             wall(x, yfc, ybc - 1, ct, cb, up_t, u, v_up, dv, shw, (172, 150, 122))
                         else:
@@ -455,11 +521,9 @@ class Duum(uno.App):
                     n = nd[-2]
 
         walk(len(m.nodes) - 1)
-        sky = rgb(*C_SKY)
         for x in range(RW):
-            if ceilc[x] <= floorc[x]:
-                x0 = x * cw // RW; x1 = (x + 1) * cw // RW
-                out.append(('R', x0, ceilc[x], x1 - x0, floorc[x] - ceilc[x] + 1, sky))
+            if ceilc[x] <= floorc[x]:      # leftover openings show sky
+                skyspan(x, ceilc[x], floorc[x])
         self.frame = out
 
     def draw(self, cv):
@@ -471,14 +535,22 @@ class Duum(uno.App):
             return
         cv.clear(rgb(0, 0, 0))
         pal = self.pal
+        vx, vy, hh = self.fmeta
         for op in self.frame:
-            if op[0] == 'R':
+            k = op[0]
+            if k == 'R':
                 cv.fill_rect(op[1], op[2], op[3], op[4], op[5])
-            else:
+            elif k == 'W':
                 _, x, wpx, y0, count, grid, tw, th, tc, v0, dv, sh = op
                 xx = x
                 for _2 in range(wpx):
                     cv.wall_col(xx, y0, count, grid, tw, th, tc, v0, dv, pal, sh)
+                    xx += 1
+            else:                                        # 'F': floor/ceiling
+                _, x, wpx, y0, count, grid, aa, ddx, ddy, lf = op
+                xx = x
+                for _2 in range(wpx):
+                    cv.flat_col(xx, y0, count, grid, pal, aa, hh, ddx, ddy, vx, vy, lf)
                     xx += 1
         cv.text(6, 6, LEVEL + "  arrows move/turn", rgb(235, 235, 210))
 
@@ -509,19 +581,20 @@ class Duum(uno.App):
             return False
         ca = math.cos(self.pa); sa = math.sin(self.pa)
         nx, ny = self.px, self.py
-        # UnoDOS arrow scancodes: Up=1 Down=2 Right=3 Left=4
+        # UnoDOS arrow scancodes: Up=1 Down=2 Right=3 Left=4.
+        # Angles grow counter-clockwise (Doom BAMs), so Left = pa increasing.
         if scan == 0x04:
-            self.pa -= TURN; self.dirty = True; return True
-        if scan == 0x03:
             self.pa += TURN; self.dirty = True; return True
+        if scan == 0x03:
+            self.pa -= TURN; self.dirty = True; return True
         if scan == 0x01:
             nx = self.px + ca * MOVE; ny = self.py + sa * MOVE
         elif scan == 0x02:
             nx = self.px - ca * MOVE; ny = self.py - sa * MOVE
         elif uni == ord(','):
-            nx = self.px + sa * MOVE; ny = self.py - ca * MOVE
-        elif uni == ord('.'):
             nx = self.px - sa * MOVE; ny = self.py + ca * MOVE
+        elif uni == ord('.'):
+            nx = self.px + sa * MOVE; ny = self.py - ca * MOVE
         else:
             return False
         if not self._blocked(nx, ny):
