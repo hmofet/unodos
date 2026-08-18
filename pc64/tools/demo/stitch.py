@@ -16,16 +16,20 @@ import argparse, json, os, subprocess, sys
 # before s08 (Studio's Ctrl-R must run before anything touches the URC `py`
 # verb - see the note above pyeval() there), and s14, the appliances scene,
 # stays out of the cut entirely because it needs a hypervisor-capable host.
+#
+# Duum runs SECOND, right after the boot, as the early hook (2026-08-18, user):
+# Doom on the machine is the strongest image in the film and it used to sit
+# five minutes in. s09 (Automation in Python) is OUT of the cut for the same
+# reordering pass - its footage, beats and narration still exist if it returns.
 SPINE = [
     ("s01", "Cold boot"),
+    ("s08", "Duum"),
     ("s02", "Desktop and window manager"),
     ("s03", "Themes"),
     ("s04", "UnoOffice"),
     ("s05", "Web browser"),
     ("s06", "Media"),
     ("s07", "Studio IDE"),
-    ("s09", "Automation in Python"),
-    ("s08", "Duum"),
     # s12, the games and the tracker, is OUT of the cut (2026-08-17). Dostris,
     # Pac-Man and OutLast are driven by the machine's own sequencer, and under
     # QEMU the guest is too slow to keep the audio clean, so the music sounded
