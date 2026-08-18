@@ -229,6 +229,103 @@ class Textures:
         return t
 
 
+# ---- sprites ---------------------------------------------------------------
+class Sprites:
+    """S_START..S_END lump index + patch decoder.  Grids are column-major like
+    wall textures, with 0xFF as the transparent sentinel (real palette index
+    255 is remapped to 254; no stock sprite uses it visibly)."""
+    def __init__(self, wad):
+        self.wad = wad
+        self.idx = {}
+        self.cache = {}
+        on = False
+        for i in range(wad.n):
+            nm = wad.dir[i][0]
+            if nm == b"S_START" or nm == b"SS_START":
+                on = True; continue
+            if nm == b"S_END" or nm == b"SS_END":
+                break
+            if not on or len(nm) < 6:
+                continue
+            base = nm[:4]
+            self.idx[(base, nm[4:5], nm[5] - 48)] = (i, 0)
+            if len(nm) >= 8:
+                self.idx[(base, nm[6:7], nm[7] - 48)] = (i, 1)
+
+    def get(self, base, frame, rot):
+        """-> (w, h, leftoffs, topoffs, grid, mirror) or None."""
+        e = self.idx.get((base, frame, rot + 1))
+        if e is None:
+            e = self.idx.get((base, frame, 0))
+        if e is None:
+            return None
+        li, mirror = e
+        s = self.cache.get(li)
+        if s is None:
+            d = self.wad.lump_at(li)
+            w, h, lo, to = struct.unpack_from("<HHhh", d, 0)
+            colofs = struct.unpack_from("<%dI" % w, d, 8)
+            grid = bytearray(b"\xff" * (w * h))
+            n = len(d)
+            for c in range(w):
+                p = colofs[c]
+                base_i = c * h
+                while p < n and d[p] != 0xFF:
+                    top = d[p]; ln = d[p + 1]
+                    for i in range(ln):
+                        v = d[p + 3 + i]
+                        grid[base_i + top + i] = 254 if v == 255 else v
+                    p += ln + 4
+            s = (w, h, lo, to, grid)
+            self.cache[li] = s
+        return (s[0], s[1], s[2], s[3], s[4], mirror)
+
+
+# Thing render table: type -> (sprite base, idle frame cycle, hang-from-ceiling)
+# Gameplay state machines override the frame; this is what stands in the world.
+THINGTAB = {
+    # monsters
+    3004: (b"POSS", b"AB", 0), 9: (b"SPOS", b"AB", 0), 3001: (b"TROO", b"AB", 0),
+    3002: (b"SARG", b"AB", 0), 3005: (b"HEAD", b"A", 0), 3006: (b"SKUL", b"AB", 0),
+    3003: (b"BOSS", b"AB", 0), 7: (b"SPID", b"AB", 0), 16: (b"CYBR", b"AB", 0),
+    # weapons + ammo
+    2001: (b"SHOT", b"A", 0), 2002: (b"MGUN", b"A", 0), 2003: (b"LAUN", b"A", 0),
+    2004: (b"PLAS", b"A", 0), 2005: (b"CSAW", b"A", 0), 2006: (b"BFUG", b"A", 0),
+    2007: (b"CLIP", b"A", 0), 2008: (b"SHEL", b"A", 0), 2010: (b"ROCK", b"A", 0),
+    2046: (b"BROK", b"A", 0), 2047: (b"CELL", b"A", 0), 2048: (b"AMMO", b"A", 0),
+    2049: (b"SBOX", b"A", 0), 8: (b"BPAK", b"A", 0),
+    # health / armor / powerups
+    2011: (b"STIM", b"A", 0), 2012: (b"MEDI", b"A", 0),
+    2014: (b"BON1", b"ABCDCB", 0), 2015: (b"BON2", b"ABCDCB", 0),
+    2018: (b"ARM1", b"AB", 0), 2019: (b"ARM2", b"AB", 0),
+    2013: (b"SOUL", b"ABCDCB", 0), 2022: (b"PINV", b"ABCD", 0),
+    2023: (b"PSTR", b"A", 0), 2024: (b"PINS", b"ABCD", 0),
+    2025: (b"SUIT", b"A", 0), 2026: (b"PMAP", b"ABCDCB", 0),
+    2045: (b"PVIS", b"AB", 0),
+    # keys
+    5: (b"BKEY", b"AB", 0), 13: (b"RKEY", b"AB", 0), 6: (b"YKEY", b"AB", 0),
+    # decorations
+    2035: (b"BAR1", b"AB", 0), 2028: (b"COLU", b"A", 0),
+    30: (b"COL1", b"A", 0), 31: (b"COL2", b"A", 0), 32: (b"COL3", b"A", 0),
+    33: (b"COL4", b"A", 0), 36: (b"COL5", b"AB", 0), 37: (b"COL6", b"A", 0),
+    41: (b"CEYE", b"ABCB", 0), 42: (b"FSKU", b"ABC", 0),
+    43: (b"TRE1", b"A", 0), 54: (b"TRE2", b"A", 0), 47: (b"SMIT", b"A", 0),
+    44: (b"TBLU", b"ABCD", 0), 45: (b"TGRN", b"ABCD", 0), 46: (b"TRED", b"ABCD", 0),
+    55: (b"SMBT", b"ABCD", 0), 56: (b"SMGT", b"ABCD", 0), 57: (b"SMRT", b"ABCD", 0),
+    34: (b"CAND", b"A", 0), 35: (b"CBRA", b"A", 0),
+    27: (b"POL4", b"A", 0), 28: (b"POL2", b"A", 0), 29: (b"POL3", b"AB", 0),
+    25: (b"POL1", b"A", 0), 26: (b"POL6", b"AB", 0),
+    10: (b"PLAY", b"W", 0), 12: (b"PLAY", b"W", 0), 15: (b"PLAY", b"N", 0),
+    18: (b"POSS", b"L", 0), 19: (b"SPOS", b"L", 0), 20: (b"TROO", b"M", 0),
+    21: (b"SARG", b"N", 0), 22: (b"HEAD", b"L", 0), 24: (b"POB2", b"A", 0),
+    # hanging (ceiling)
+    48: (b"ELEC", b"A", 0), 49: (b"GOR1", b"ABCB", 1), 50: (b"GOR2", b"A", 1),
+    51: (b"GOR3", b"A", 1), 52: (b"GOR4", b"A", 1), 53: (b"GOR5", b"A", 1),
+    59: (b"GOR2", b"A", 1), 60: (b"GOR4", b"A", 1), 61: (b"GOR3", b"A", 1),
+    62: (b"GOR5", b"A", 1), 63: (b"GOR1", b"ABCB", 1),
+}
+
+
 # ---- the engine ------------------------------------------------------------
 class Duum(uno.App):
 
@@ -243,12 +340,32 @@ class Duum(uno.App):
             self.tex = Textures(self.wad)
             self.pal = self.tex.pal
             self.sky = self.tex.get("SKY" + LEVEL[1])   # E<n> -> SKY<n>
+            self.spr = Sprites(self.wad)
             px, py, pa = self.lvl.player_start()
             self.px = float(px); self.py = float(py)
             self.pa = math.radians(pa)
+            self.load_things()
             self.dirty = True
         except Exception as e:
             self.err = repr(e)
+
+    # live thing record indices
+    TX = 0; TY = 1; TANG = 2; TTYPE = 3; TSPR = 4; TFRAMES = 5; THANG = 6
+    TSEC = 7; TFI = 8
+
+    def load_things(self):
+        self.things_live = []
+        for (x, y, ang, typ, fl) in self.lvl.things:
+            if fl & 16:                      # multiplayer-only
+                continue
+            info = THINGTAB.get(typ)
+            if info is None:
+                continue
+            sec = self.point_sector(x, y)
+            if sec is None:
+                continue
+            self.things_live.append([float(x), float(y), math.radians(ang),
+                                     typ, info[0], info[1], info[2], sec, 0])
 
     def seg_sectors(self, seg):
         m = self.lvl
@@ -289,6 +406,11 @@ class Duum(uno.App):
         hh = ch / 2
         ceilc = [0] * RW
         floorc = [ch - 1] * RW
+        # Per-column occlusion history for the sprite pass: (depth, ct, cb)
+        # meaning "behind this depth only rows ct..cb are visible".  Appended
+        # front-to-back (the walk order guarantees it).
+        clips = [[] for _ in range(RW)]
+        masked = []                        # (depth, 'M' op) two-sided midtextures
         out = []
         verts = m.verts
         segs = m.segs
@@ -448,9 +570,35 @@ class Duum(uno.App):
                     wall(x, yfc, yff, ct, cb, mid_t, u, v_mid, dv, shw, (200, 188, 170))
                     ceilc[x] = 1; floorc[x] = 0
                     state[0] -= 1
+                    clips[x].append((dist, 1, 0))
                 else:
                     newct = ct if ct > yfc else yfc
                     newcb = cb if cb < yff else yff
+                    if mid_t is not None:
+                        # masked midtexture: drawn in the sprite pass, clipped
+                        # to the opening and window as they are RIGHT NOW
+                        yot = yfc if yfc > ybc else ybc
+                        yob = yff if yff < ybf else ybf
+                        tw_m, th_m, grid_m = mid_t
+                        if flags & ML_DONTPEGBOT:
+                            zt = (ff if ff > bf else bf) + th_m
+                        else:
+                            zt = fc if fc < bc else bc
+                        ytt = hh - (zt - viewz) * vsc * invd
+                        my0 = int(ytt)
+                        if my0 < yot: my0 = yot
+                        if my0 < ct: my0 = ct
+                        if my0 < 0: my0 = 0
+                        my1 = int(ytt + th_m / dv)
+                        if my1 > yob: my1 = yob
+                        if my1 > cb: my1 = cb
+                        if my1 > ch - 1: my1 = ch - 1
+                        if my1 >= my0:
+                            x0m = x * cw // RW; x1m = (x + 1) * cw // RW
+                            v0m = int((yoff + (my0 - ytt) * dv) * 256)
+                            masked.append((dist, ('M', x0m, x1m - x0m, my0,
+                                           my1 - my0 + 1, grid_m, tw_m, th_m,
+                                           int(u), v0m, int(dv * 256), shw)))
                     if bc < fc and not bothsky:
                         if up_t:
                             wall(x, yfc, ybc - 1, ct, cb, up_t, u, v_up, dv, shw, (172, 150, 122))
@@ -466,6 +614,8 @@ class Duum(uno.App):
                     ceilc[x] = newct; floorc[x] = newcb
                     if newct > newcb:
                         state[0] -= 1
+                    if newct > ct or newcb < cb:
+                        clips[x].append((dist, newct, newcb))
 
         def bbox_vis(top, bot, left, right):
             # Conservative frustum test: skip the far child only when all 4
@@ -524,6 +674,77 @@ class Duum(uno.App):
         for x in range(RW):
             if ceilc[x] <= floorc[x]:      # leftover openings show sky
                 skyspan(x, ceilc[x], floorc[x])
+
+        # ---- things: project, sort far-to-near with the masked midtextures,
+        # clip each column against the wall silhouette history --------------
+        vis = []
+        for t in self.things_live:
+            dxt = t[0] - px; dyt = t[1] - py
+            depth = dxt * cos_a + dyt * sin_a
+            if depth < NEAR:
+                continue
+            vis.append((depth, 1, t, dxt, dyt))
+        for (d, op) in masked:
+            vis.append((d, 0, op, 0.0, 0.0))
+        vis.sort(key=lambda e: -e[0])
+        spr = self.spr
+        HPI = math.pi; A202 = 3.5342917    # 202.5 degrees
+        for (depth, kind, t, dxt, dyt) in vis:
+            if kind == 0:
+                out.append(t)              # pre-built masked midtex column
+                continue
+            frames = t[5]
+            fch = frames[t[8] % len(frames):t[8] % len(frames) + 1]
+            # Doom: rot from (viewer->thing angle) - thing facing + 202.5 deg
+            rel = (math.atan2(dyt, dxt) - t[2] + A202) % 6.2831853
+            s = spr.get(t[4], fch, int(rel / 0.7853982) & 7)
+            if s is None:
+                continue
+            w, h, lo, to, grid, mirror = s
+            invd = 1.0 / depth
+            scr = scale * invd             # screen cols per world unit
+            sxc = dxt * sin_a - dyt * cos_a
+            rxl = (RW / 2) + (sxc - lo) * scr
+            du = depth / scale
+            sec = t[7]
+            ztop = sec[1] if t[6] else (sec[0] + to)
+            ytt = hh - (ztop - viewz) * vsc * invd
+            dv = depth / vsc
+            iy0 = int(ytt); iy1 = int(ytt + h / dv) - 1
+            if iy1 < 0 or iy0 > ch - 1:
+                continue
+            ix0 = int(rxl); ix1 = int(rxl + w * scr)
+            if ix0 < 0: ix0 = 0
+            if ix1 > RW - 1: ix1 = RW - 1
+            df = 1200.0 / (depth + 650.0)
+            if df > 1.0: df = 1.0
+            elif df < 0.68: df = 0.68
+            sh = int((0.72 + 0.28 * (sec[4] / 255.0)) * df * 256)
+            dvfp = int(dv * 256)
+            for x in range(ix0, ix1 + 1):
+                uf = (x + 0.5 - rxl) * du
+                if uf < 0 or uf >= w:
+                    continue
+                texcol = int(uf)
+                if mirror:
+                    texcol = w - 1 - texcol
+                s0 = 0; s1 = ch - 1
+                for (d, c0, c1) in clips[x]:
+                    if d < depth - 0.01:
+                        if c0 > s0: s0 = c0
+                        if c1 < s1: s1 = c1
+                        if s0 > s1: break
+                    else:
+                        break
+                y0 = iy0 if iy0 > s0 else s0
+                y1 = iy1 if iy1 < s1 else s1
+                if y0 < 0: y0 = 0
+                if y1 > ch - 1: y1 = ch - 1
+                if y1 < y0:
+                    continue
+                x0s = x * cw // RW; x1s = (x + 1) * cw // RW
+                out.append(('M', x0s, x1s - x0s, y0, y1 - y0 + 1, grid, w, h,
+                            texcol, int((y0 - ytt) * dv * 256), dvfp, sh))
         self.frame = out
 
     def draw(self, cv):
@@ -545,6 +766,12 @@ class Duum(uno.App):
                 xx = x
                 for _2 in range(wpx):
                     cv.wall_col(xx, y0, count, grid, tw, th, tc, v0, dv, pal, sh)
+                    xx += 1
+            elif k == 'M':
+                _, x, wpx, y0, count, grid, tw, th, tc, v0, dv, sh = op
+                xx = x
+                for _2 in range(wpx):
+                    cv.mask_col(xx, y0, count, grid, tw, th, tc, v0, dv, pal, sh)
                     xx += 1
             else:                                        # 'F': floor/ceiling
                 _, x, wpx, y0, count, grid, aa, ddx, ddy, lf = op
