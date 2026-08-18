@@ -26,7 +26,11 @@ SPINE = [
     ("s07", "Studio IDE"),
     ("s09", "Automation in Python"),
     ("s08", "Duum"),
-    ("s12", "The games"),
+    # s12, the games and the tracker, is OUT of the cut (2026-08-17). Dostris,
+    # Pac-Man and OutLast are driven by the machine's own sequencer, and under
+    # QEMU the guest is too slow to keep the audio clean, so the music sounded
+    # worse than it is. Put it back when the scene can be recorded somewhere
+    # that keeps up: the footage, its beats and its narration all still exist.
     ("s13", "SSH"),
     ("s10", "Under the hood"),
     ("s11", "The family"),
