@@ -1943,6 +1943,9 @@ class Duum(uno.App):
             if st == 2:                    # attack wind-up
                 t[2] = math.atan2(dy, dx)
                 t[11] -= dt
+                nfr = len(t[5])
+                pr = int((0.4 - t[11]) * nfr * 2.5)
+                t[8] = pr if pr < nfr else nfr - 1
                 if t[11] <= 0:
                     self.monster_attack(t, ms, dx, dy, dist2)
                     t[10] = 1
