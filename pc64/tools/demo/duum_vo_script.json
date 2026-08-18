@@ -1,5 +1,5 @@
 {
-  "_comment": "Narration for the Duum demo (out/duum/cut.mp4). Each cue names the BEAT it lands on, from that scene's .beats.jsonl, so the voice tracks the picture. Budgeted at Brian's MEASURED 2.9 words/sec (from the UnoDOS OS demo). Claims checked against source: DUUM.PY is Python on PYRT/MicroPython; uno.read_at streams the WAD lump-by-lump (never slurped); render() (BSP walk + column loop) is Python, cv.wall_span/mask_span/flat_span are C; monster AI + weapons + E1M1-E1M9 exist. Combat footage shows firing + health dropping, NOT a clean framed kill, so the combat cue only claims what is on screen (they shoot back, health drops, you fire).",
+  "_comment": "Narration for the Duum demo (out/duum/cut.mp4). Each cue names the BEAT it lands on, from that scene's .beats.jsonl, so the voice tracks the picture. Budgeted at Brian's MEASURED 2.9 words/sec (from the UnoDOS OS demo). Claims checked against source: DUUM.PY is Python on PYRT/MicroPython; uno.read_at streams the WAD lump-by-lump (never slurped); render() (BSP walk + column loop) is Python, cv.wall_span/mask_span/flat_span are C; monster AI + weapons + E1M1-E1M9 exist. REFILMED 2026-08-18 on FREEDOOM (BSD), so nothing licensed is in the published film; Freedoom ships ORIGINAL maps, so the footage is an interior corridor and NOT id's courtyard. Two claims were retired with that change: the SKY (no sky sector is on the new route) and 'former humans' (id's monster name). This take does land a clean framed kill, which the id-WAD takes never could.",
   "voice_id": "nPczCjzI2devNBz1zQrb",
   "_voice": "Brian - Deep, Resonant and Comforting (matches arin's UnoDOS OS demo)",
   "model": "eleven_multilingual_v2",
@@ -18,17 +18,17 @@
       "id": "s02",
       "cues": [
         {"id": "s02a", "at": "walk-in",
-         "text": "It streams a real Doom game file a piece at a time, never loading the whole thing into memory."},
-        {"id": "s02b", "at": "into-courtyard",
-         "text": "The walls, the floor, the ceiling and the sky are all drawn from that file, as a first-person, perspective-correct view."}
+         "text": "It streams a real Doom game file, never loading it whole."},
+        {"id": "s02b", "at": "deeper-in",
+         "text": "Walls, floors and ceilings, drawn perspective correct."}
       ]
     },
     {
       "id": "s03",
       "cues": [
         {"id": "s03a", "at": "advance",
-         "text": "The former humans shoot back, and your health drops as you push through, firing."},
-        {"id": "s03b", "at": "enemies",
+         "text": "The zombies shoot back, and your health drops as you push down the corridor."},
+        {"id": "s03b", "at": "firefight",
          "text": "Weapons, monsters and pickups, across all nine levels of the first episode."}
       ]
     },

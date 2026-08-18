@@ -169,7 +169,11 @@ class Duum(object):
             time.sleep(0.7)
 
     def key(self, letter, settle=0.30):
-        scan, uni = KEYMAP[letter]
+        e = KEYMAP.get(letter)
+        if e is None:                       # any unmapped letter ('-') is a
+            time.sleep(settle)              # WAIT of one press-time: lets a
+            return                          # chaser close in, mid-sequence
+        scan, uni = e
         self.link.key(scan, uni, 0, timeout=8)
         time.sleep(settle)
 
@@ -248,79 +252,95 @@ class Duum(object):
 # scenes  (beats designed + verified on the host shim; movement is
 # deterministic and 1:1 with the device, so the key sequences transfer)
 # ---------------------------------------------------------------------------
+# ROUTES ARE FOR FREEDOOM's E1M1, not id's.  Freedoom Phase 1 ships ORIGINAL
+# maps (only the format and texture NAMES are shared), so none of the id-E1M1
+# choreography transfers: there is no start-room-to-courtyard walk here, the
+# level opens inland through a computer hall into a crate corridor.  Every
+# sequence below was designed and verified frame by frame on the host shim
+# (tools/duum_host.py) at the device's own key timing - one press = one 0.30 s
+# hold = ~96 map units forward or ~53 degrees of turn - so it transfers 1:1.
 def s01_title(d):
     """The Duum window is already open on E1M1's start room. Let it read, then
-    a small look so it is obviously live 3D, not a screenshot."""
+    a small look so it is obviously live 3D, not a screenshot.  One press is
+    the smallest turn the key model can make (~53 deg)."""
     d.beat("duum-title", settle=4.5)
     d.beat("look-left", settle=0.4)
-    d.keys("LLL", settle=0.35)
+    d.keys("L", settle=0.35)
     d.beat("look-back", settle=0.6)
-    d.keys("RRR", settle=0.35)
+    d.keys("R", settle=0.35)
     d.beat("settle", settle=3.5)
 
 
 def s02_render(d):
-    """Walk from the start room out into the courtyard: textured walls, the
-    perspective floor and ceiling, sky, and the distant buildings. The
-    renderer showcase."""
+    """The renderer showcase: walk east out of the start room, through the
+    computer hall (banked terminals, lit ceiling, a full-height window) and on
+    into the crate corridor.  Straight-line walking on purpose - turning
+    mid-route then walking accumulates heading drift at 53 deg per press and
+    ends up in a wall."""
     d.beat("walk-in", settle=0.3)
-    d.keys("UUUUUUUU")
-    d.beat("toward-opening", settle=0.3)
-    d.keys("RRRRRR")
-    d.keys("LLL")
-    d.beat("step-out", settle=0.3)
-    d.keys("UUUUUUUU")
-    d.beat("into-courtyard", settle=0.3)
-    d.keys("RRUUUUUUUU")
-    d.beat("sweep-vista", settle=0.4)
-    d.keys("LL")
-    d.beat("hold-vista", settle=2.0)
-    d.keys("RR")
+    d.keys("UUUU")
+    d.beat("the-hall", settle=1.8)
+    d.keys("UUUU")
+    d.beat("deeper-in", settle=0.3)
+    d.keys("UU")
+    d.beat("hold-vista", settle=2.5)
 
 
 def s03_combat(d):
-    """Reach the courtyard where the former humans and a demon are, and open
-    fire from the entrance: the enemies are in frame, firing back, and the
-    pistol flashes as the ammo drops. Kept short so it ends on the firefight,
-    not on a death."""
+    """Combat: walk east down the corridor until a zombie closes to point
+    blank, turn onto it and fire until it drops.
+
+    This gets the shot ~15 takes could NOT get on id's E1M1 (see the
+    duum-demo-video memory): there the enemies were across a courtyard and
+    keys-only aiming could not frame a kill.  Here the corridor is straight
+    and the zombies walk INTO you, so the kill lands dead centre.
+
+    NO TURN, and the aim is never corrected: the host shim and the guest do
+    NOT travel the same distance per press.  DUUM.PY clamps dt to 0.1 s, so
+    at the guest's 5-14 fps its clock advances slower than wall clock while
+    the harness sleeps a fixed 0.30 s - the first take turned onto a wall
+    because it assumed the host's arrival point.  Walking straight and firing
+    straight down the corridor is correct wherever the walk actually ends,
+    and standing still lets the chaser close the gap."""
     d.beat("advance", settle=0.3)
-    d.keys("UUUUUUUU")
-    d.keys("RRRRRR")
-    d.keys("LLL")
-    d.keys("UUUUUUUU")                      # deeper into the courtyard/swarm
-    d.beat("enemies", settle=0.2)
-    d.keys("FFFFFFFF", settle=0.24)         # fire at the framed enemies
+    d.keys("UUUU")
+    d.keys("UUUU")
+    d.beat("enemies", settle=1.6)           # let the chaser walk into frame
+    d.keys("FFFF", settle=0.26)
     d.beat("firefight", settle=0.2)
-    d.keys("FFFFFFFF", settle=0.24)
-    d.beat("hold", settle=0.5)
+    d.keys("FFFFFF", settle=0.26)
+    d.beat("hold", settle=0.8)
 
 
 def s03_hero(d):
-    """Hero-combat take: push into the courtyard where the former humans and a
-    demon are, and fire a long burst so the enemies are on screen, firing back.
-    Recorded longer than the final scene needs so a good enemy-framed stretch
-    can be trimmed out; the player may die at the end - that tail gets cut."""
+    """Hero-combat take, same beat names as s03_combat so a good take can be
+    dropped in as s03 unchanged.
+
+    Walks FURTHER than the host shim says is needed (the guest's clamped dt
+    makes it travel less per press, and by a different amount every run
+    depending on the frame rate it happens to get), fires an early pair to
+    wake the corridor through DUUM.PY's noise_wake, then holds so the chasers
+    close in before the main burst.  Straight line, no aiming turns."""
     d.beat("advance", settle=0.3)
     d.keys("UUUUUUUU")
-    d.keys("RRRRRR")
-    d.keys("LLL")
-    d.beat("into-swarm", settle=0.2)
-    d.keys("UUUUUU")
-    d.beat("turn-to-chasers", settle=0.2)
-    d.keys("LLLL")                            # ~180: face the enemies chasing
+    d.keys("UUUUUUUU")
+    d.beat("enemies", settle=0.4)
+    d.keys("FF", settle=0.30)                 # wake the corridor
+    d.keys("--", settle=0.90)                 # let them walk in
     d.beat("firefight", settle=0.2)
-    d.keys("FFFFFFFFFFFF", settle=0.22)
-    d.beat("hold", settle=0.6)
+    d.keys("FFFFFFFF", settle=0.30)
+    d.beat("hold", settle=0.9)
 
 
 def s04_hud(d):
     """Hold on the start room so the status bar reads clearly: health, ammo,
     armor, the arms panel and the face. A slow look keeps it live while the
-    closing narration lands."""
+    closing narration lands.  Single presses: a turn is ~53 deg now that
+    movement is held-key continuous, so the old triples were a full spin."""
     d.beat("hud-hold", settle=3.5)
-    d.keys("LL", settle=0.5)
+    d.keys("L", settle=0.5)
     d.beat("ports-line", settle=4.0)
-    d.keys("RRR", settle=0.5)
+    d.keys("R", settle=0.5)
     d.beat("reverse-line", settle=4.5)
     d.keys("L", settle=0.4)
     d.beat("hud-settle", settle=2.0)
