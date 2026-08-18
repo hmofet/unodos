@@ -1274,6 +1274,31 @@ play. (Progressive JPEG and WebP are recognised but not decoded.)</p>
 </div>
 {note('Runner3D draws real-time 3D graphics entirely in software, so it needs no graphics card.', title="3D graphics")}
 
+<h3 id="duum">Duum</h3>
+<p><strong>Duum</strong> is a Doom engine, written in Python, running on the machine's own Python
+runtime. It plays <strong>Knee-Deep in the Dead</strong> end to end: textured walls, floors and sky,
+monsters that see you, chase you and shoot back, weapons, doors, lifts, switches, teleporters,
+keycards, pickups, exploding barrels, the status bar along the bottom, and level-to-level progression.
+Move with the arrow keys, turn with left and right, strafe with <kbd>,</kbd> and <kbd>.</kbd>,
+fire with <kbd>F</kbd>, open doors with <kbd>Space</kbd>, and pick a weapon with <kbd>1</kbd> to
+<kbd>6</kbd>.</p>
+
+<h4>Duum needs a game file</h4>
+<p>Doom's levels, textures and sounds live in a data file called an <strong>IWAD</strong>, and it is
+separate from the engine. UnoDOS ships with <strong>Freedoom</strong>, a free, from-scratch,
+Doom-compatible IWAD, so Duum plays out of the box. If you own Doom you can use your own data
+instead, and it will look and play like the game you remember.</p>
+<ol>
+  <li>Find your <code>DOOM1.WAD</code> (or <code>DOOM.WAD</code> from the registered game, or
+      <code>freedoom1.wad</code> from <a href="https://freedoom.github.io/">freedoom.github.io</a>).</li>
+  <li>Rename it to <strong><code>DOOM1.WAD</code></strong> if it is not called that already.</li>
+  <li>Copy it into the <strong>top level</strong> of the UnoDOS disk - the same place the
+      <code>APPS</code> folder lives - replacing the one that is there.</li>
+  <li>Start Duum. It reads the file straight off the disk as it plays.</li>
+</ol>
+{note('Duum reads the WAD a piece at a time rather than loading it into memory, so a large one is fine on a small machine. If the file is missing or is not a Doom IWAD, Duum opens and tells you so instead of failing.', title="Big files are fine")}
+{note('Game data belongs to whoever made it. Freedoom is included because its licence allows it to be given away with other software; the id Software WADs are yours to use but not ours to ship, so bring your own copy.', kind="warn", title="Whose data is whose")}
+
 <h2 id="studio">Studio: make your own apps</h2>
 <p>UnoDOS comes with its own IDE. <strong>Studio</strong> is a code editor, a compiler and an AI
 assistant in one window: write an app in <strong>UnoC or Python</strong>, press
@@ -2028,12 +2053,15 @@ and renders a first-person, BSP-traversed view of the level you can walk around,
 <code>uno.read_at</code>, never loading it whole), heavy compute (the BSP walk and the column renderer), the
 framebuffer, keyboard input, and floating-point math.</p>
 {note('Duum needs a Doom-format IWAD on the disk as <code>DOOM1.WAD</code> - none ships with UnoDOS, game data belongs to its makers. Use <strong>Freedoom</strong> (freedoom.github.io, a free BSD-licensed IWAD; rename <code>freedoom1.wad</code> to <code>DOOM1.WAD</code>) or the freely distributable id Software shareware <code>DOOM1.WAD</code>. Put it next to the apps on the boot disk. Without a WAD, Duum opens and says it is missing.', title="Bring your own WAD")}
-<p>Walls are texture-mapped from the WAD (perspective-correct, distance- and orientation-shaded); floors,
-ceilings and sky are flat-shaded. It renders one level (E1M1) with simple wall collision. Flat texturing,
-monsters, items, doors and combat are <em>not</em> implemented - Duum proves the platform can carry a real
-engine, it is not a complete port. The textured-column inner loop runs in C (<code>cv.wall_col</code>) so
-the per-pixel work does not go through the interpreter. Move with the arrows, strafe with <kbd>,</kbd> and
-<kbd>.</kbd>.</p>
+<p>Walls, floors, ceilings and sky are all texture-mapped from the WAD (perspective-correct, distance-
+and orientation-shaded), with sprites for monsters, items and the weapon. It is a complete game rather
+than a demo: monster AI, hitscan and projectile weapons, doors, lifts, switches, teleporters, keycards,
+pickups, exploding barrels, damage, the real STBAR status bar, and E1M1 through E1M9 in order. Three
+inner loops run in C (<code>cv.wall_span</code>, <code>cv.mask_span</code>, <code>cv.flat_span</code> -
+one call per rendered column) so the per-pixel work does not go through the interpreter, and input comes
+through the live held-key level (<code>uno.keys_down()</code>) with the 60&nbsp;Hz clock from
+<code>uno.ticks()</code>. Move with the arrows, strafe with <kbd>,</kbd> and <kbd>.</kbd>, fire with
+<kbd>F</kbd>, use with <kbd>Space</kbd>.</p>
 
 <p class="kv">Next: the full <a href="dev-api.html">API reference</a> (including the <a href="dev-api.html#uno-py">
 Python <code>uno</code> module</a>), and <a href="dev-build.html">Building &amp; tooling</a>.</p>
