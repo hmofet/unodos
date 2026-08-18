@@ -9008,3 +9008,47 @@ and, if held-key state needs a kernel export, ONE new `KX()` line in `pc64_modlo
 plus a small state-read export in the input path (`usbhid.c`/`uno_ps2`) - filed here as
 a request to the usb-stack owner; will keep the surface read-only (no behavior change
 to event delivery).
+
+---
+
+## PYRT: `@micropython.native` / `@micropython.viper` CRASH the guest (2026-08-18)
+
+**Owner: pc64-python / PYRT.** Filed from the Duum performance work; this
+closes open question 1 of `docs/reviews/2026-07-20-code-review/FINDINGS-duum.md`.
+
+`mpconfigport.h` enables the x64 native emitter with a comment saying it is on
+specifically so Duum's hot loop can be compiled with `@micropython.viper`.
+**It cannot be: the first native-compiled function kills the guest.**
+
+Measured on device (QEMU/KVM on quill, `UNO_DEBUG=1` build, via the URC `py`
+verb, `tools/demo/duum_viper_probe.py`):
+
+| probe | result |
+|---|---|
+| plain `def f(x): return x*2+1` | `R 41` |
+| same body under `@micropython.native` | no response; guest DEAD, link gone |
+| `@micropython.viper` | never reached (guest already gone) |
+
+The interpreted probe is built the *same* way through the same transport, so
+this is the emitter and not the harness.
+
+**Two quoting traps cost a false negative first, note them before re-testing:**
+the `py` verb execs ONE LINE, and it also **mangles a literal `@`** - the first
+run reported a hang that was really a corrupted decorator. Build the source
+with `chr(64)` for `@` and `chr(10)` for newlines and it is clean.
+
+Likely causes, both in the review: (1) **ABI** - `emitnx64`/`asmx64` emit SysV
+AMD64 calls (rdi/rsi/rdx) but PYRT is built with `x86_64-w64-mingw32-gcc`,
+which is MS x64 (rcx/rdx/r8/r9), so calls out through `mp_fun_table` put
+arguments in the wrong registers; (2) **W^X** - native code is allocated from
+the GC heap in kernel BSS and has to be mapped executable.
+
+**Consequence for Duum, and for anyone else eyeing viper:** the viper route is
+closed until this is fixed. The remaining step-change for the renderer is the
+review's own fallback - move the per-column loop into a C helper in
+`upy_port/mod_uno.c` - which neither failure mode affects. Python-side work
+took the frame rate about 1.5x on its own (commit 3e095f71, measured with
+`tools/demo/duum_ab.py`), but the loop is still interpreted.
+
+Either fix the emitter or drop the claim from `mpconfigport.h`; as it stands
+the comment sends the next person down a dead end.
