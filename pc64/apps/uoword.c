@@ -383,6 +383,94 @@ static long io_read(void *ctx, long off, unsigned char *dst, long n)
     return n;
 }
 
+/* Carry the document's formatting onto the loaded text.
+ *
+ * Opening a .doc used to keep the characters and throw everything else away:
+ * this app asked unodoc for ud_doc_plain() and never for ud_doc_chp_at() or
+ * ud_doc_pap_at(), so a bold word arrived unbold and a centred paragraph
+ * arrived flush left. The editor's own model has carried bold, italic,
+ * underline, strike, caps, size, alignment and indents all along - the toolbar
+ * sets them and save_doc() writes them out - so the loss was one-sided, and
+ * open-then-save quietly stripped a document on disk.
+ *
+ * unodoc reports formatting per character position, resolving the piece table
+ * itself, and cp here is the same position: the '\n' -> '\r' pass above is
+ * one-for-one, so no mapping is needed.
+ *
+ * Runs are coalesced rather than set per character. A 40,000 character
+ * document is 40,000 lookups either way, but uow_format over a whole run
+ * touches its piece list once instead of once per character.
+ *
+ * WHAT THIS CANNOT RECOVER, stated so the next reader does not re-diagnose it:
+ * unodoc resolves DIRECT formatting only. A document whose bold comes from a
+ * named character or paragraph STYLE still arrives unbold, because unodoc
+ * hands us a zero. Measured on unodoc/test/corpus/fmt.doc, which LibreOffice
+ * wrote entirely through styles: underline and strike come through, and bold,
+ * italic, size, caps and every paragraph alignment do not. Fixing that is
+ * unodoc's STSH slice, not this function's job. */
+static void load_doc_formatting(ud_doc *w, long len)
+{
+    long cp = 0;
+
+    if (len <= 0) return;
+
+    /* characters, in runs of identical formatting */
+    while (cp < len) {
+        ud_chp a, b;
+        uow_chp c;
+        long end;
+
+        ud_doc_chp_at(w, cp, &a);
+        for (end = cp + 1; end < len; end++) {
+            ud_doc_chp_at(w, end, &b);
+            if (b.bold != a.bold || b.italic != a.italic ||
+                b.underline != a.underline || b.strike != a.strike ||
+                b.caps != a.caps || b.smallcaps != a.smallcaps ||
+                b.super != a.super || b.sub != a.sub || b.size != a.size)
+                break;
+        }
+        uow_chp_at(DOC, cp, &c);              /* keep the face the editor chose */
+        c.bold      = (unsigned char)(a.bold      ? 1 : 0);
+        c.italic    = (unsigned char)(a.italic    ? 1 : 0);
+        c.underline = (unsigned char)(a.underline ? 1 : 0);
+        c.strike    = (unsigned char)(a.strike    ? 1 : 0);
+        c.caps      = (unsigned char)(a.caps      ? 1 : 0);
+        c.smallcaps = (unsigned char)(a.smallcaps ? 1 : 0);
+        c.super     = (unsigned char)(a.super     ? 1 : 0);
+        c.sub       = (unsigned char)(a.sub       ? 1 : 0);
+        /* size is half-points in both, and 0 means "not set directly": leave
+         * the editor's default standing rather than collapsing the text to 0pt */
+        if (a.size > 0) c.size = (unsigned short)a.size;
+        uow_format(DOC, cp, end - cp, &c);
+        cp = end;
+    }
+
+    /* paragraphs, one at a time: they are already the unit both sides use */
+    cp = 0;
+    while (cp < len) {
+        long e = uow_para_end(DOC, cp);
+        ud_pap a;
+        uow_pap p;
+
+        ud_doc_pap_at(w, cp, &a);
+        uow_pap_at(DOC, cp, &p);
+        switch (a.align) {
+        case 1:  p.align = UOW_AL_CENTER;  break;
+        case 2:  p.align = UOW_AL_RIGHT;   break;
+        case 3:  p.align = UOW_AL_JUSTIFY; break;
+        default: p.align = UOW_AL_LEFT;    break;
+        }
+        p.left   = (short)a.left;          /* twips on both sides */
+        p.right  = (short)a.right;
+        p.first  = (short)a.first;
+        p.before = (short)a.before;
+        p.after  = (short)a.after;
+        uow_format_para(DOC, cp, 1, &p);
+        if (e <= cp) break;                /* never loop on a stuck position */
+        cp = e + 1;
+    }
+}
+
 static int load_doc(int vol, const char *name)
 {
     ud_cfb *c;
@@ -414,6 +502,7 @@ static int load_doc(int vol, const char *name)
                 conv[n++] = (plain[i] == '\n') ? '\r' : plain[i];
             if (n && conv[n-1] == '\r') n--;      /* the doc has its own mark */
             if (n) uow_insert(DOC, 0, conv, n);
+            load_doc_formatting(w, n);
         }
         ud_doc_close(w);
         ok = 1;
