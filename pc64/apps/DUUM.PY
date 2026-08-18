@@ -314,8 +314,10 @@ class Duum(uno.App):
             d2x = bx - px; d2y = by - py
             depth1 = d1x * cos_a + d1y * sin_a
             depth2 = d2x * cos_a + d2y * sin_a
-            sx1 = d1y * cos_a - d1x * sin_a
-            sx2 = d2y * cos_a - d2x * sin_a
+            # screen-right axis is (sin a, -cos a): angles grow CCW in Doom,
+            # so what's clockwise of the view direction lands on the right.
+            sx1 = d1x * sin_a - d1y * cos_a
+            sx2 = d2x * sin_a - d2y * cos_a
             wlen = math.sqrt((bx-ax)*(bx-ax) + (by-ay)*(by-ay))
             u1 = seg[5] + fsd[0]; u2 = u1 + wlen
             if depth1 < NEAR and depth2 < NEAR: return
@@ -409,7 +411,7 @@ class Duum(uno.App):
             for (bx, by) in ((left, top), (right, top), (left, bot), (right, bot)):
                 dx = bx - px; dy = by - py
                 depth = dx * cos_a + dy * sin_a
-                sx = dy * cos_a - dx * sin_a
+                sx = dx * sin_a - dy * cos_a
                 if depth >= NEAR:
                     all_behind = False
                     r = (RW / 2) + (sx / depth) * scale
