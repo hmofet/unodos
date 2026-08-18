@@ -1490,18 +1490,30 @@ def s08_pre(d):
 
 
 def s08_duum(d):
-    """Duum is already up (s08_pre launched it pre-stream). Walk the E1M1
-    geometry: forward, turn, forward, turn back, forward.
+    """Duum is already up (s08_pre launched it pre-stream). Walk E1M1, shoot,
+    and work a door, so the footage shows the GAME and not just the renderer.
 
-    ~26 s (was 13.6 s). This is the best moment in the cut and it was over
-    before it registered, so it now gets a proper walk instead of a sample.
+    Rewritten 2026-08-18. The old version only walked, which was the whole of
+    Duum at the time; it is now a full game (weapons, monsters that chase and
+    shoot back, doors, lifts, pickups, the real STBAR, level progression), and
+    a walk-only scene sells a renderer when there is a game to show.
+
     The step sizes are DUUM.PY's own: MOVE = 12 map units and TURN = 0.20 rad
     per press, so a press is a small step and a quarter turn is 8 presses -
-    which is why the counts here look large. Held at 0.30 s/press: fast
-    enough to read as walking, slow enough that the software raycaster (a
-    Python app, under TCG) has drawn the frame before the next key lands."""
+    which is why the counts here look large. Held at 0.30 s/press: fast enough
+    to read as walking, slow enough that the software raycaster (a Python app,
+    under TCG) has drawn the frame before the next key lands. Firing gets a
+    longer settle because a shot is a state change worth seeing land: the
+    muzzle flash, the recoil frame, and the ammo counter dropping on the bar.
+
+    FOUR BEAT NAMES ARE LOAD-BEARING - duum-running, walk-into-the-room,
+    turn-back-left and look-around each carry a narration cue in
+    vo_script.json. Renaming one does not fail: mux_vo reports it and drops
+    the line to the top of the scene, which is worse than an error because the
+    film still builds. Add beats freely, rename these only with the script.
+    """
     d.beat("duum-running")
-    time.sleep(2.0)
+    time.sleep(2.5)                                  # the status bar, before anything moves
     d.beat("walk-into-the-room")
     for _ in range(14):
         d.key(0, S_UP, settle=0.30)
@@ -1509,14 +1521,20 @@ def s08_duum(d):
     for _ in range(8):                               # ~90 degrees
         d.key(0, S_RIGHT, settle=0.30)
     d.beat("walk-on")
-    for _ in range(14):
+    for _ in range(12):
         d.key(0, S_UP, settle=0.30)
+    d.beat("fire-the-weapon")
+    for _ in range(6):
+        d.key(ord("f"), settle=0.45)                 # flash, recoil, ammo drops
     d.beat("turn-back-left")
     for _ in range(8):
         d.key(0, S_LEFT, settle=0.30)
     d.beat("walk-through")
     for _ in range(12):
         d.key(0, S_UP, settle=0.30)
+    d.beat("work-a-door")
+    for _ in range(3):
+        d.key(ord(" "), settle=0.80)                 # use: doors, lifts, switches
     d.beat("look-around")
     for _ in range(6):
         d.key(0, S_LEFT, settle=0.30)
