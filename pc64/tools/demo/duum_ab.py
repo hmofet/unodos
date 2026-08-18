@@ -85,9 +85,13 @@ def main():
                 d.clean_desktop()
                 d.link.eval('import uno; uno.run_app(%d, "%s")'
                             % (vol, app.replace("\\", "\\\\")), timeout=30)
+                # match the window against the APP being launched, not a
+                # hardcoded name - a control app (TRIVIAL.UNO) opens a window
+                # titled after itself and was silently skipped.
+                want = app.split("\\")[-1].split(".")[0].upper()
                 up = False
                 for _ in range(40):
-                    if any("DUUM" in t.upper() for t in d.windows()):
+                    if any(want in t.upper() for t in d.windows()):
                         up = True
                         break
                     time.sleep(2.0)
