@@ -8997,3 +8997,14 @@ it on a freshly built `build/esp` before believing it.
 `UNO_DEBUG=1` build all seven checks fail for want of any `sshverb:` line
 rather than for anything to do with SSH. That is documented in its docstring
 and easy to miss; it cost a full rebuild here.
+
+### 2026-08-18 CLAIM (duum lane, branch `duum-complete`): taking Duum feature-complete
+
+**CLAIM:** taking `pc64/apps/DUUM.PY`, `pc64/tools/duum_host.py`, `pc64/docs_esp/DUUM.MD`
+for a feature-complete Duum (geometry fix + flats/sky + sprites + gameplay). Also
+appending (append-only, per AGENTS.md choke-point rules) new canvas/module bindings in
+`upy_port/mod_uno.c` (masked/flat column helpers, `uno.ticks()`, `uno.keys_down()`),
+and, if held-key state needs a kernel export, ONE new `KX()` line in `pc64_modload.c`
+plus a small state-read export in the input path (`usbhid.c`/`uno_ps2`) - filed here as
+a request to the usb-stack owner; will keep the surface read-only (no behavior change
+to event delivery).
