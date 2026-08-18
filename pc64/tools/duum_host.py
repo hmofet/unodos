@@ -209,8 +209,11 @@ def make_uno():
     m.rgb = lambda r, g, b: 0xFF000000 | (min(b,255) << 16) | (min(g,255) << 8) | min(r,255)
     m.beep = lambda midi, ticks: None
     m.quiet = lambda: None
-    t0 = time.monotonic()
-    m.ticks = lambda: int((time.monotonic() - t0) * 60) & 0x7FFFFFFF
+    # scripted clock: the harness advances it explicitly so tests are
+    # deterministic; ticks() is the same 60Hz counter the device exposes
+    m._t = [0.0]
+    m.ticks = lambda: int(m._t[0] * 60)
+    m.advance = lambda dt: m._t.__setitem__(0, m._t[0] + dt)
     m.keys_down = lambda: 0
     return m
 
@@ -232,15 +235,23 @@ KEYS = {"U": (0, 1), "D": (0, 2), "R": (0, 3), "L": (0, 4),
 
 
 def run_keys(app, script):
+    """Key letters press keys; each step then simulates 3 game ticks at 30Hz.
+    'W' waits half a second without input."""
+    uno = sys.modules["uno"]
     for k in script:
-        if k in KEYS:
+        steps = 3
+        if k == "W":
+            steps = 15
+        elif k in KEYS:
             uni, scan = KEYS[k]
+            app.key(uni, scan, 0)
         elif k.isdigit():
-            uni, scan = ord(k), 0
+            app.key(ord(k), 0, 0)
         else:
             continue
-        app.key(uni, scan, 0)
-        app.tick()
+        for _ in range(steps):
+            uno.advance(1.0 / 30.0)
+            app.tick()
 
 
 def main():
