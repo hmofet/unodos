@@ -1474,18 +1474,13 @@ def s08_pre(d):
         print("  s08: SKIP - no WAD (pc64/wads on QEMU, the stick's root on "
               "metal), scene no-ops by design")
         return False
-    # A PYAPP has no Start-menu row (it is a document PYRT opens), and the
-    # reliable launch is the exact call Files makes on a double-click:
-    # uno.run_app(vol, "APPS\\DUUM.UNO"), which pc64_shell_run_user runs on
-    # PYRT. On metal probe_metal_assets() already found the volume; on QEMU
-    # find it rather than assume an index.
-    pyeval(d, 'import uno; uno.run_app(%d, "APPS\\\\DUUM.UNO")' % esp_vol(d),
-           timeout=30)
-    for _ in range(30):                              # WAD parse + first frame
-        if any("DUUM" in t.upper() for t in d.windows()):
-            return True
-        time.sleep(2.0)
-    print("  s08: Duum window did not appear after run_app - recording anyway")
+    # THE PRE-LAUNCH IS GONE (2026-08-19), and so is the reason for it. This
+    # used to fire uno.run_app() off camera because "a PYAPP has no Start-menu
+    # row" - it is a document PYRT opens, so the shell gave it no way in and
+    # the only honest launch was the call Files makes on a double-click. Duum
+    # now carries an app descriptor and has a row and a desktop icon like
+    # anything else, so the launch is a shot rather than a workaround, and it
+    # happens on camera in s08_duum.
     return True
 
 
@@ -1529,6 +1524,32 @@ def s08_duum(d):
     turning back shows the world moving without ever leaving the corridor
     heading, which is what makes the walk safe wherever it actually ends.
     """
+    # Launch it on camera, from its own row. This is the shot the scene never
+    # had: the menu rises, walks to Duum, and the game comes up - which is
+    # also the only visible proof of the app-descriptor work, since what a
+    # descriptor buys is precisely the row being there at all.
+    #
+    # menu_index() resolves the row by ID against the app list the LIVE
+    # machine reported at boot, never a baked count. Adding an app moves every
+    # row below it, and a hardcoded number does not fail when that happens -
+    # it opens the app next door and films it under the wrong name.
+    d.beat("duum-from-the-menu")
+    d.key(0, S_ESC, 1, settle=1.4)                   # Ctrl-Esc; menu tween
+    for _ in range(d.menu_index("duum")):
+        d.key(0, S_DOWN, settle=0.20)
+    d.beat("launch-duum", settle=0.3)
+    d.key(13)                                        # Enter
+    # The WAD directory parse and the first raycast frame are real work and
+    # they are not instant. Wait for the WINDOW rather than a fixed sleep, so
+    # the beat carrying "And this is Doom." lands on the game being up rather
+    # than on a desktop still opening it.
+    for _ in range(40):
+        if any("DUUM" in t.upper() for t in d.windows()):
+            break
+        time.sleep(1.0)
+    else:
+        print("  s08: Duum window never appeared - recording anyway")
+
     d.beat("duum-running")
     time.sleep(2.5)                                  # the status bar, before anything moves
     d.beat("walk-into-the-room")
