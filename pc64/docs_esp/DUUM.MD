@@ -14,7 +14,9 @@ compute (the BSP walk, the column renderer, monster thinking), the
 framebuffer through three C fast paths (`cv.wall_span`, `cv.mask_span`,
 `cv.flat_span` - one call per rendered column, the per-pixel loops in C),
 keyboard input through the live held-key level (`uno.keys_down()`), the
-60Hz clock (`uno.ticks()`) and the beeper.
+60Hz clock (`uno.ticks()`), and - since 2026-08-19 - **sampled audio**: the
+WAD's own sound effects mixed by the system, and its music played through
+the OS's MIDI player.
 
 ## Getting a WAD
 
@@ -34,6 +36,8 @@ and tells you it is missing.
 
 ## Running it
 
+- **From the desktop or the Start menu** - Duum has its own row and icon,
+  like any other app.
 - **From Files** - open `APPS\DUUM.UNO` and press **Enter**.
 - **From Studio** - open `SDK\DUUM.PY`, press **Ctrl-R**.
 
@@ -50,6 +54,13 @@ the visible textures - then the game runs continuously.
 | `F` (or Ctrl) | fire |
 | Space / `E` | use - doors, lifts, switches |
 | `1`..`6` | select weapon |
+| Esc | the pause menu |
+
+**The pause menu** holds Resume and Options; Options holds an FPS counter and
+a **Controls** screen listing what every action is bound to, which you can
+change. The list is not a picture: it asks the system what each action is
+bound to, so it shows this machine's own keys. Arrows move, Enter chooses,
+and Esc backs out one screen at a time.
 
 On native keyboards (USB, laptop I2C-HID, or PS/2 after detach) movement is
 true held-key: keys move you for exactly as long as they are down.  On the
@@ -67,11 +78,22 @@ real STBAR status bar (health, armor, ammo, arms, keycards, and the face)
 along the bottom.  Locked doors want their keycard.  Barrels explode.  The
 nukage hurts.  Dying offers the level again; the E1M8 exit ends the episode.
 
+## Sound
+
+Duum plays the WAD's own audio, and it needs no setup: the effects are the
+`DS` sound lumps out of the same file the levels come from, and the music is
+that file's score.
+
+Two things follow from where the mixing happens. The effects are mixed **on
+top of** the music rather than instead of it, so firing does not cut the
+score off. And on a machine with no sound hardware at all, Duum falls back
+to the single note each event has always made - the way it sounded before
+any of this - rather than going silent.
+
 ## Scope
 
-What's deliberately not here: savegames, the automap, sound effects beyond
-the beeper, music, and difficulty selection (things spawn at
-Hurt-Me-Plenty).  Everything you see is data-driven from the WAD - textures,
+What's deliberately not here: savegames, the automap, and difficulty
+selection (things spawn at Hurt-Me-Plenty).  Everything you see is data-driven from the WAD - textures,
 flats, sprites, maps, the status bar - so Freedoom reskins the whole game.
 
 See **[Python apps](PYTHON.MD)** for the app model and **[the `uno` API](PYAPI.MD)**
