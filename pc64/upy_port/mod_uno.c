@@ -38,6 +38,11 @@ void fb_set_clip(int x, int y, int w, int h);
 void fb_reset_clip(void);
 void uno_seq_beep(int midi, int ticks);
 void uno_seq_stop(void);
+/* sampled audio (snd_pcm.h / snd_mus.h): the WAD's own effects and score */
+int  uno_snd_sfx_load(int slot, const unsigned char *pcm, int nsamples, int rate);
+int  uno_snd_sfx_play(int slot, int vol, int sep);
+int  uno_snd_mus_play(const unsigned char *smf, long len, int loop);
+void uno_snd_mus_stop(void);
 unsigned int TickCount(void);        /* Toolbox 60Hz tick counter */
 int uno_pc64_keys_held(void);        /* UNO_KH_* bits (hid_kbd.h) */
 /* key bindings + small app preferences (uno_binds.h) */
@@ -694,6 +699,51 @@ static MP_DEFINE_CONST_FUN_OBJ_2(beep_obj, m_beep);
 static mp_obj_t m_quiet(void) { uno_seq_stop(); return mp_const_none; }
 static MP_DEFINE_CONST_FUN_OBJ_0(quiet_obj, m_quiet);
 
+/* ---- sampled audio: effects by slot, and a score from memory --------------
+ * The four calls a game needs to sound like itself rather than like a beeper.
+ * They are OPTIONAL by contract - an engine hasattr-probes them and falls
+ * back to uno.beep - so keep the names and the argument order stable.
+ *
+ *   uno.sfx_load(slot, pcm, rate)   pcm = unsigned 8-bit mono, any buffer
+ *   uno.sfx_play(slot, vol, sep)    vol 0..255, sep 0 L / 128 C / 255 R
+ *   uno.mus_play(smf, loop=0)       a whole Standard MIDI File
+ *   uno.mus_stop()
+ *
+ * Each returns True/False rather than raising: a caller reads False as "this
+ * one did not play", where an exception means "this host has no sampled
+ * audio at all" and turns the whole path off. */
+static mp_obj_t m_sfx_load(mp_obj_t slot, mp_obj_t pcm, mp_obj_t rate)
+{
+    mp_buffer_info_t bi;
+    mp_get_buffer_raise(pcm, &bi, MP_BUFFER_READ);
+    return mp_obj_new_bool(uno_snd_sfx_load(mp_obj_get_int(slot),
+                                            (const unsigned char *)bi.buf,
+                                            (int)bi.len,
+                                            mp_obj_get_int(rate)));
+}
+static MP_DEFINE_CONST_FUN_OBJ_3(sfx_load_obj, m_sfx_load);
+
+static mp_obj_t m_sfx_play(mp_obj_t slot, mp_obj_t vol, mp_obj_t sep)
+{
+    return mp_obj_new_bool(uno_snd_sfx_play(mp_obj_get_int(slot),
+                                            mp_obj_get_int(vol),
+                                            mp_obj_get_int(sep)));
+}
+static MP_DEFINE_CONST_FUN_OBJ_3(sfx_play_obj, m_sfx_play);
+
+static mp_obj_t m_mus_play(size_t n, const mp_obj_t *a)
+{
+    mp_buffer_info_t bi;
+    mp_get_buffer_raise(a[0], &bi, MP_BUFFER_READ);
+    return mp_obj_new_bool(uno_snd_mus_play((const unsigned char *)bi.buf,
+                                            (long)bi.len,
+                                            n > 1 ? mp_obj_get_int(a[1]) : 0));
+}
+static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(mus_play_obj, 1, 2, m_mus_play);
+
+static mp_obj_t m_mus_stop(void) { uno_snd_mus_stop(); return mp_const_none; }
+static MP_DEFINE_CONST_FUN_OBJ_0(mus_stop_obj, m_mus_stop);
+
 /* uno.ticks() -> the 60Hz Toolbox tick counter (frame pacing / dt) */
 static mp_obj_t m_ticks(void) { return mp_obj_new_int((mp_int_t)TickCount()); }
 static MP_DEFINE_CONST_FUN_OBJ_0(ticks_obj, m_ticks);
@@ -998,6 +1048,10 @@ static const mp_rom_map_elem_t uno_globals_table[] = {
     { MP_ROM_QSTR(MP_QSTR_App),      MP_ROM_PTR(&uno_app_type) },
     { MP_ROM_QSTR(MP_QSTR_beep),     MP_ROM_PTR(&beep_obj) },
     { MP_ROM_QSTR(MP_QSTR_quiet),    MP_ROM_PTR(&quiet_obj) },
+    { MP_ROM_QSTR(MP_QSTR_sfx_load), MP_ROM_PTR(&sfx_load_obj) },
+    { MP_ROM_QSTR(MP_QSTR_sfx_play), MP_ROM_PTR(&sfx_play_obj) },
+    { MP_ROM_QSTR(MP_QSTR_mus_play), MP_ROM_PTR(&mus_play_obj) },
+    { MP_ROM_QSTR(MP_QSTR_mus_stop), MP_ROM_PTR(&mus_stop_obj) },
     { MP_ROM_QSTR(MP_QSTR_read),     MP_ROM_PTR(&read_obj) },
     { MP_ROM_QSTR(MP_QSTR_read_at),  MP_ROM_PTR(&read_at_obj) },
     { MP_ROM_QSTR(MP_QSTR_size),     MP_ROM_PTR(&fsize_obj) },
