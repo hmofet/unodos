@@ -214,9 +214,23 @@ Two things in the engine worth knowing about:
   MicroPython heap - so no change was asked for.
 
 **Still open, and only hardware can close it:** none of this has been heard on
-the ZimaBlade. QEMU's HDA and a real codec are not the same thing, and the
-same "asserted in QEMU, never run on metal" gap is exactly where the wall
-collision bug lived for months.
+metal. QEMU's HDA and a real codec are not the same thing, and the same
+"asserted in QEMU, never run on metal" gap is exactly where the wall collision
+bug lived for months.
+
+**The ZimaBlade cannot close it**, so do not go looking there: that box has no
+audio hardware at all. What it DID close is the other half of the contract -
+what these calls do on a machine with no DAC. They **raise `OSError`**, and
+they have to, because returning False leaves the engine mute: `sound()`
+ignores what `sfx_load` answers and `return`s after `sfx_play` whatever it
+answers, so an exception is the only signal that reaches `self.snd()` and the
+note the event has always made. Verified with `tools/duum_audio_test.py
+nosnd`, which boots with no sound device at all: all three calls raise, and
+after four shots the engine's own `have_sfx` and `have_mus` are both False -
+it is beeping, not silent.
+
+Metal verification of the audible path therefore waits on a machine with a
+real codec.
 
 ## Not in THIRD-PARTY.md, on purpose
 

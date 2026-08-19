@@ -214,6 +214,7 @@ static const struct { const char *name; void *addr; } kExports[] = {
     KX(uno_seq_playing), KX(uno_seq_tick), KX(uno_seq_backend),
     /* sampled audio: the WAD's own effects and score, for a game that has
        more to say than one square-wave note (snd_pcm.h, snd_mus.h) */
+    KX(uno_snd_active),
     KX(uno_snd_sfx_load), KX(uno_snd_sfx_play), KX(uno_snd_sfx_stop_all),
     KX(uno_snd_sfx_playing),
     KX(uno_snd_mus_play), KX(uno_snd_mus_stop), KX(uno_snd_mus_playing),

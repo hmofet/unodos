@@ -39,6 +39,7 @@ void fb_reset_clip(void);
 void uno_seq_beep(int midi, int ticks);
 void uno_seq_stop(void);
 /* sampled audio (snd_pcm.h / snd_mus.h): the WAD's own effects and score */
+int  uno_snd_active(void);
 int  uno_snd_sfx_load(int slot, const unsigned char *pcm, int nsamples, int rate);
 int  uno_snd_sfx_play(int slot, int vol, int sep);
 int  uno_snd_mus_play(const unsigned char *smf, long len, int loop);
@@ -709,12 +710,30 @@ static MP_DEFINE_CONST_FUN_OBJ_0(quiet_obj, m_quiet);
  *   uno.mus_play(smf, loop=0)       a whole Standard MIDI File
  *   uno.mus_stop()
  *
- * Each returns True/False rather than raising: a caller reads False as "this
- * one did not play", where an exception means "this host has no sampled
- * audio at all" and turns the whole path off. */
+ * The two answers are DIFFERENT and the difference is load-bearing:
+ *
+ *   False      "that one did not play" - a transient refusal (an empty slot,
+ *              the Music app holding the stream). The caller tries again
+ *              next time and keeps using sampled audio.
+ *   OSError    "this machine has no sampled audio AT ALL" - no PCM device
+ *              probed. A caller is expected to turn the whole path off and
+ *              fall back to beeps, permanently.
+ *
+ * Returning False for the second case is what a naive implementation does,
+ * and it is silently wrong: Duum ignores sfx_load's result and `return`s
+ * after sfx_play whatever it answers, so a machine with no DAC would go
+ * MUTE rather than dropping back to the note each event has always made.
+ * An exception is the only signal that reaches the fallback. */
+static void need_dac(void)
+{
+    if (!uno_snd_active())
+        mp_raise_msg(&mp_type_OSError, MP_ERROR_TEXT("no audio device"));
+}
+
 static mp_obj_t m_sfx_load(mp_obj_t slot, mp_obj_t pcm, mp_obj_t rate)
 {
     mp_buffer_info_t bi;
+    need_dac();
     mp_get_buffer_raise(pcm, &bi, MP_BUFFER_READ);
     return mp_obj_new_bool(uno_snd_sfx_load(mp_obj_get_int(slot),
                                             (const unsigned char *)bi.buf,
@@ -725,6 +744,7 @@ static MP_DEFINE_CONST_FUN_OBJ_3(sfx_load_obj, m_sfx_load);
 
 static mp_obj_t m_sfx_play(mp_obj_t slot, mp_obj_t vol, mp_obj_t sep)
 {
+    need_dac();
     return mp_obj_new_bool(uno_snd_sfx_play(mp_obj_get_int(slot),
                                             mp_obj_get_int(vol),
                                             mp_obj_get_int(sep)));
@@ -734,6 +754,7 @@ static MP_DEFINE_CONST_FUN_OBJ_3(sfx_play_obj, m_sfx_play);
 static mp_obj_t m_mus_play(size_t n, const mp_obj_t *a)
 {
     mp_buffer_info_t bi;
+    need_dac();
     mp_get_buffer_raise(a[0], &bi, MP_BUFFER_READ);
     return mp_obj_new_bool(uno_snd_mus_play((const unsigned char *)bi.buf,
                                             (long)bi.len,
