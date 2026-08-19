@@ -48,20 +48,52 @@ Then prove it, because a sync is a code drop from another repository:
 cd pc64
 python tools/duum_verify.py --wad wads/DOOM1.WAD       # 0 failing views
 python tools/duum_golden.py check --wad wads/DOOM1.WAD # 54/54 identical
-python tools/duum_collide.py --wad wads/DOOM1.WAD      # 4/4 checks
+python tools/duum_collide.py --wad wads/DOOM1.WAD      # 5/5 checks
 ```
 
 `duum_golden` compares against a saved baseline; if a sync is *meant* to
 change pixels, look at the diff first and then re-`save`. `duum_verify` is an
 independent oracle and must be 0 failing views regardless.
 
-`duum_collide` is neither, and it is the one a sync most needs. Both of the
-others take the player's POSITION as an input, so they render a perfectly good
-frame from inside a wall and report success, which is how a Duum with no wall
-collision at all shipped past both of them for months. It asserts about
-movement instead: a scripted walk into a known wall, randomised moves that may
-not cross a one-sided linedef, every use-door in the episode, and a rocket
-fired at a wall.
+`duum_collide` is neither of those, and it is the one a sync most needs. Both
+of the others take the player's POSITION as an input, so they render a
+perfectly good frame from inside a wall and report success, which is how a Duum
+with no wall collision at all shipped past both of them for months. It asserts
+about movement instead: a scripted walk into a known wall, randomised moves
+that may not cross a one-sided linedef, every use-door in the episode, and a
+rocket fired at a wall.
+
+Its fifth check is ours alone, and has no counterpart upstream: it drives the
+pause menu with **this machine's** Escape and asserts the menu offers only what
+this platform can actually do. The section below says why that is not
+paranoia.
+
+## What a port has to check that upstream cannot
+
+Upstream's gates all run on a desktop, and a desktop cannot see the two ways
+this port differs. Both were found by reading `hid_kbd.h` before a sync rather
+than by playing after one, and both would have left every gate on both sides
+green while the feature simply did not work here.
+
+**Escape is not one key code.** A desktop event carries ASCII 27. This machine
+reports non-character keys as a SCANCODE with `uni` 0, and its Escape is
+`0x17`. An engine that only knows 27 has a pause menu that never opens on the
+device. The engine now accepts both (`is_esc`), and `duum_collide` here drives
+the menu with `0x17` specifically, so a future sync cannot quietly lose it.
+
+**A menu must only offer what the platform can do.** Quit is a frontend
+action: the engine raises a flag and something closes the window. Our shell
+owns its own windows and has no such call, so the row is not offered here at
+all rather than sitting there doing nothing. Key remapping is the same story
+through the other end: the engine asks the host to name and change keys via
+optional hooks (`bind_name`, `bind_set`, `bind_reset`, `pref_get`,
+`pref_set`), we supply none of them yet, and the Controls screen says so in
+those words instead of showing an empty list.
+
+That last one is a standing invitation rather than a limitation. Implementing
+those five calls in `mod_uno.c` would give the device remappable keys and
+remembered settings with no change to the engine at all, because every one of
+them is probed with `hasattr`.
 
 ## Why the engine can be shared at all
 
