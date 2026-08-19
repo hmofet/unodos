@@ -205,6 +205,18 @@ def boot_qemu():
         "-device", "e1000,netdev=n0",
         "-display", "none",
     ]
+    # UNO_DEMO_WAV=<path> attaches a capture sink, for a scene whose subject
+    # now makes noise (Duum plays the WAD's own effects and score since
+    # 2026-08-19). AC'97 AND NOT INTEL HDA: with an intel-hda device attached
+    # this guest never reaches URC dial-out under KVM - measured with private
+    # disk paths so the shared-boot-disk race below cannot explain it, and
+    # identically on a build from before the sound work. snd_pcm sits above
+    # both backends, so the capture is of the same mixer either way.
+    # UNOAUTOMATE-REQUESTS.md, 2026-08-19, carries the matrix.
+    wav = os.environ.get("UNO_DEMO_WAV")
+    if wav:
+        cmd += ["-audiodev", "wav,id=snd0,path=" + wav,
+                "-device", "AC97,audiodev=snd0"]
     return subprocess.Popen(cmd, stderr=subprocess.DEVNULL)
 
 
@@ -329,6 +341,7 @@ class Demo(object):
                 if os.path.exists(p):
                     docsb.append(p)
         build_disk(docs_for_b=docsb or None)
+        self.t_qemu = time.time()      # the capture sink's own zero, if any
         self.qemu = boot_qemu()
         if not self.link.wait_connected(180):
             raise SystemExit("the guest never dialled in - is this the DEBUG build?")
@@ -430,6 +443,18 @@ class Demo(object):
         return "10.0.2.2" if MODE == "qemu" else STREAM_HOST
 
     def stop(self):
+        wav = os.environ.get("UNO_DEMO_WAV")
+        if wav and getattr(self, "t_qemu", 0):
+            # The sink starts writing when the GUEST opens the stream, not
+            # when QEMU starts, so its zero cannot be assumed - but it stops
+            # when QEMU dies, so t0 == t_end - (length of the wav). Record
+            # both ends here and let the stitcher do that subtraction.
+            try:
+                with open(os.path.splitext(wav)[0] + ".json", "w") as f:
+                    json.dump({"t0": self.t_qemu, "t_end": time.time(),
+                               "wav": wav}, f, indent=1)
+            except Exception:           # noqa: BLE001
+                pass
         try:
             # NEVER power the metal box off: it is a physical machine somebody
             # has to walk to, and the whole point of the stick is that it stays
@@ -1552,14 +1577,25 @@ def s08_duum(d):
 
     d.beat("duum-running")
     time.sleep(2.5)                                  # the status bar, before anything moves
+    # RE-TUNED 2026-08-19 against a build where Duum plays the WAD's music.
+    # The old 8 + 4 + 3 walk was authored for a silent guest; the MIDI synth
+    # is real work on the same core, the frame rate drops, and DUUM.PY clamps
+    # dt to 0.1 s - so each 0.30 s hold travels a different distance than it
+    # used to and the take spent its whole middle facing a wall. 4 presses
+    # reach the hall and 7 reach the corridor with the zombies in frame,
+    # measured on this build in the Duum film's own scenes.
+    # WALK FIRST, TURN LAST. A look-and-return between two walks reads well on
+    # paper and does not survive this guest: the two presses are the same 0.30 s
+    # hold, but they are consumed at different frame times, so the heading comes
+    # back slightly off and the next three presses go into the room's far wall.
+    # Three takes ended against one. Everything that moves the player now
+    # happens before anything that turns them.
     d.beat("walk-into-the-room")
-    for _ in range(8):
-        d.key(0, S_UP, settle=0.30)
-    d.beat("turn-right")
-    d.key(0, S_RIGHT, settle=0.55)                   # look right...
-    d.key(0, S_LEFT, settle=0.35)                    # ...and back to the corridor
-    d.beat("walk-on")
     for _ in range(4):
+        d.key(0, S_UP, settle=0.30)
+    d.beat("hold-the-hall", settle=1.2)              # was a look-and-return
+    d.beat("walk-on")
+    for _ in range(3):
         d.key(0, S_UP, settle=0.30)
     d.beat("fire-the-weapon")
     time.sleep(1.4)                                  # let a chaser walk into frame
@@ -1568,9 +1604,11 @@ def s08_duum(d):
     d.beat("turn-back-left")
     d.key(0, S_LEFT, settle=0.55)                    # look left...
     d.key(0, S_RIGHT, settle=0.35)                   # ...and back
-    d.beat("walk-through")
-    for _ in range(3):
-        d.key(0, S_UP, settle=0.30)
+    # NO WALKING AFTER THE FIREFIGHT. The firefight already happens in the
+    # open room with the barrels, a step from its far wall, and every take
+    # that moved afterwards closed on magnified grey texels with the last
+    # narration line playing over them.
+    d.beat("walk-through", settle=1.0)
     d.beat("work-a-door")
     for _ in range(2):
         d.key(ord(" "), settle=0.80)                 # use: doors, lifts, switches
@@ -1579,9 +1617,14 @@ def s08_duum(d):
     # wall a few units from the eye fills the frame with magnified texels and
     # the player has bled to a third of their health. The closing narration
     # lands here, so it holds on the corridor instead.
+    # Turn AWAY from the wall to close on, and stay turned. The player is a
+    # step from the room's far side by now, so a look-and-return finishes
+    # facing crates a few units from the eye; two lefts point the camera back
+    # across the room it just walked through, which is where the last line of
+    # narration wants to be.
     d.beat("look-around")
     d.key(0, S_LEFT, settle=0.55)
-    d.key(0, S_RIGHT, settle=0.35)
+    d.key(0, S_LEFT, settle=0.55)
     time.sleep(2.5)
     # No on-camera teardown: reset() closes Duum after the stream stops.
 
