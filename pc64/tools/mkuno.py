@@ -15,7 +15,8 @@
 #
 #   mkuno.py thunks  <syms.txt> <out.s>       generate the thunk assembly
 #   mkuno.py convert <in.dll>   <out.uno>     flatten the linked DLL
-#   mkuno.py pyapp   <in.py>    <out.uno>     wrap Python source (MODF_PYAPP)
+#   mkuno.py pyapp   <in.py>    <out.uno> [desc.txt]   wrap Python source
+#                                                       (MODF_PYAPP)
 #
 # .UNO layout (all little-endian):
 #   u32 magic 'UNO1'   u16 abi   u16 flags
@@ -133,20 +134,41 @@ def check_desc(img, va, vsz, path):
     return ln
 
 
-def pyapp(py_path, uno_path):
+def pyapp(py_path, uno_path, desc_path=None):
     """Wrap a .py file's source bytes into a UNO_MODF_PYAPP container: the
     48-byte header (flags=PYAPP, file_size=len(src), crc32(src)) followed by
     the raw source.  No image, no relocs, no imports - PYRT.UNO compiles the
     payload at load time.  Source is normalised to LF so an on-disk CRLF
-    checkout can't shift the crc away from what the on-device writer produces."""
+    checkout can't shift the crc away from what the on-device writer produces.
+
+    With `desc_path`, an app descriptor is appended AFTER the source and
+    `desc_rva` points at it.  After, not inside, for two reasons: the payload
+    is Python that PYRT compiles verbatim, so nothing may be spliced into it,
+    and `file_size` still covers only the source, so the crc and the loader's
+    bounds check are untouched.  The loader tolerates trailing bytes - it tests
+    `48 + file_size > n`, not `==` - which is what makes the room legal.
+
+    Beside the .py rather than inside it is also the only option here: DUUM.PY
+    is generated upstream and vendored verbatim, so a magic comment in the
+    source would be overwritten by the next sync."""
     src = open(py_path, "rb").read().replace(b"\r\n", b"\n")
+    blk, desc_rva = b"", 0
+    if desc_path:
+        body = open(desc_path, "rb").read().replace(b"\r\n", b"\n")
+        if not body.endswith(b"\n"):
+            body += b"\n"
+        body += b"\0"                       # the reader stops at the first NUL
+        blk = struct.pack("<IHH", DESC_MAGIC, DESC_VER, 8 + len(body)) + body
+        check_desc(bytearray(blk), 0, len(blk), uno_path)   # the C modules' gate
+        desc_rva = len(src)
     hdr = struct.pack(HDR_FMT, MAGIC, ABI, UNO_MODF_PYAPP,
                       0, len(src), len(src),   # entry=0, mem_size, file_size
                       0, 0, 0,                 # nreloc, imp_rva, imp_count
                       0,                       # pref_base
-                      zlib.crc32(src) & 0xFFFFFFFF, 0)
-    open(uno_path, "wb").write(hdr + src)
-    print("mkuno: %s  PYAPP src=%d bytes" % (uno_path, len(src)))
+                      zlib.crc32(src) & 0xFFFFFFFF, desc_rva)
+    open(uno_path, "wb").write(hdr + src + blk)
+    print("mkuno: %s  PYAPP src=%d bytes%s"
+          % (uno_path, len(src), (", desc %d bytes" % len(blk)) if blk else ""))
 
 
 def gen_thunks(syms_path, out_path):
@@ -288,8 +310,9 @@ def convert(dll_path, uno_path, flags=0):
 if __name__ == "__main__":
     if len(sys.argv) == 4 and sys.argv[1] == "thunks":
         gen_thunks(sys.argv[2], sys.argv[3])
-    elif len(sys.argv) == 4 and sys.argv[1] == "pyapp":
-        pyapp(sys.argv[2], sys.argv[3])
+    elif len(sys.argv) in (4, 5) and sys.argv[1] == "pyapp":
+        pyapp(sys.argv[2], sys.argv[3],
+              sys.argv[4] if len(sys.argv) == 5 else None)
     elif len(sys.argv) in (4, 5) and sys.argv[1] == "convert":
         # optional 4th arg: header flags (1 = unoui-class module)
         convert(sys.argv[2], sys.argv[3],

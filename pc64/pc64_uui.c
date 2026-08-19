@@ -532,7 +532,16 @@ static void app_discover(void)
         int classic = d[i].has_desc &&
                       !(d[i].tier & (UNO_MODF_UUI | UNO_MODF_PY | UNO_MODF_PYAPP
                                      | UNO_MODF_DRV));
-        if (!uui && !classic) continue;
+        /* A PYAPP that DECLARES itself gets a row too.  The paragraph above
+         * says an icon for one "would open nothing", and that was true when it
+         * was written; it is not now.  pc64_shell_run_user() has a PYAPP arm
+         * that hands the file to PYRT, which is exactly what Files does when
+         * you open DUUM.UNO - so the row runs it, the same way a classic row
+         * does.  The descriptor is still the price of admission: without one
+         * there is no way to tell an app the user installed from a .py that
+         * happens to be sitting in APPS\. */
+        int pyapp = d[i].has_desc && (d[i].tier & UNO_MODF_PYAPP) != 0;
+        if (!uui && !classic && !pyapp) continue;
         if (app_by_id(d[i].id) >= 0) continue;          /* a built-in row owns it */
         for (j = 0; j < nord; j++) if (!strcmp(d[ord[j]].id, d[i].id)) break;
         if (j < nord) continue;                          /* two files, one id     */
