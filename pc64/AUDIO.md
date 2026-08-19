@@ -94,6 +94,58 @@ Files stream from disk rather than being loaded: `uno_fs_read_at` (and the
 from an arbitrary offset, so resident memory is a 64 KB sliding window in
 `pc64_media.c` regardless of how long the song is.
 
+## A game's audio: effects mixed ON TOP, and a score from memory
+
+Everything above is one source at a time. A game is not: Duum fires a pistol
+while its own level music plays, and asking it to choose is asking it to cut
+the music off on every shot. Two additions, landed 2026-08-19, answer the
+four optional calls the engine probes for (`DUUM-UPSTREAM.md`):
+
+```
+uno.sfx_load(slot, pcm, rate)   ─► uno_snd_sfx_load   (snd_pcm.c)
+uno.sfx_play(slot, vol, sep)    ─► uno_snd_sfx_play      the effects voices
+uno.mus_play(smf, loop)         ─► uno_snd_mus_play   (snd_mus.c)
+uno.mus_stop()                  ─► uno_snd_mus_stop       the score
+```
+
+**The effects voices** (`snd_pcm.c`) are a 64-slot bank of unsigned 8-bit mono
+samples - the form a Doom `DS` lump already carries, kept as-is because
+converting 500 KB of effects to s16 would cost a megabyte to no benefit - and
+eight voices that resample per voice with a 16.16 phase. They are **summed
+into the ring as it is written**, on top of the square voice or the sample
+stream, so they never take the ring from anything:
+
+```
+     square voice ──┐
+  or sample FIFO ───┼──► + ──► clamp ──► the 48 kHz DMA ring
+   effects voices ──┘
+```
+
+The pan law is Doom's: both channels at full gain in the centre, the far
+channel fading to silence at the edge (`sep` 0 left, 128 centre, 255 right),
+so a centred sound is as loud as an unpanned one. The bank is capped at 2 MB
+and evicts the least recently played slot; the contract permits that because
+a caller that finds a slot silent simply loads it again.
+
+**The score** (`snd_mus.c`) is the unomedia MIDI player pointed at a buffer
+instead of a file: the game hands over a whole Standard MIDI File (Duum
+converts the WAD's `MUS` lump in Python), and the transport is the same
+FIFO pump `pc64_music.c` uses, driven from the shell frame loop. What is new
+is only the byte source and the ownership rule.
+
+**Two producers, one ring.** The Music app and a game's score both want the
+sample stream, and both drive the same unomedia audio instance, so the stream
+now carries an owner (`uno_snd_stream_begin_owned`). `uno_snd_mus_play`
+refuses while any stream is open - the user's Music app wins by being there
+first, and the game falls back to its beeps - and `uno_snd_mus_tick` re-checks
+the owner every frame, dropping its state **without closing the decoder** if
+Music has taken over since, because that decoder is no longer its to close.
+
+Gate: `tools/duum_audio_test.py` (and `tools/duum_audio_test.py duum` for the
+engine end to end). It captures QEMU's wav sink and asserts on the samples the
+DAC consumed, including one that nothing else here can prove - a 100 ms window
+containing the score's tone and an effect's tone at the same time.
+
 ## Decoders (moved to unomedia - the shared media foundation)
 
 Since phase 2 of unomedia (2026-07-20) the decoders live in `../unomedia/`

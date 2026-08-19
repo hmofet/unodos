@@ -9086,3 +9086,79 @@ desktop per frame and is both the instrument and a load on what it measures;
 `uno_pc64_present` still does a full-framebuffer shadow compare (review P4-2);
 and the shell repaints the whole desktop for one app's dirty rect. A frame-rate
 number taken with the stream attached is a measurement of the stream.
+
+---
+
+## 2026-08-19 - LANDED (toolkits/sound + pc64-python): sampled effects and a game's own score
+
+Taking, and releasing on landing, the sound toolkit (`snd_*`) and the four
+`uno` bindings. Answers upstream Duum's REQUEST of 2026-08-19 (quoted in
+`DUUM-UPSTREAM.md`): four OPTIONAL, `hasattr`-probed calls a game uses to play
+the WAD's own effects and music instead of one square-wave note per event.
+
+```
+uno.sfx_load(slot, pcm, rate)   uno.mus_play(smf, loop)
+uno.sfx_play(slot, vol, sep)    uno.mus_stop()
+```
+
+Nothing existing changes: no caller of `uno_snd_stream_begin` was touched, the
+square voice still owns the ring when nothing else does, and a host that never
+calls these sounds exactly as it did.
+
+### What is new, and where
+
+- **`snd_pcm.c`** grew the effects bank (64 slots of unsigned 8-bit mono, the
+  form a `DS` lump already carries, capped at 2 MB with least-recently-played
+  eviction) and eight voices, **summed into the ring as it is written** rather
+  than taking it. That is the whole point: `snd_pcm` used to be one source at a
+  time, so a naive effect would have cut the music off on every gunshot.
+- **`snd_mus.c`** (new) points `unomedia`'s MIDI player at a BUFFER instead of
+  a file - the engine converts the WAD's `MUS` lump in Python and hands over a
+  whole Standard MIDI File - and pumps it through the same FIFO transport
+  `pc64_music.c` uses, from one appended call in the frame loop.
+- **`snd_pcm.h`** gained a stream OWNER (`uno_snd_stream_begin_owned`,
+  `uno_snd_stream_owner`). `uno_snd_stream_begin` is unchanged and means
+  `UNO_SND_OWN_MEDIA`.
+- Four `KX()` exports, four entries in `mod_uno.c`'s table, one `snd_mus` in
+  `build.sh`'s file list, one tick and one teardown line in `pc64_uui.c` - all
+  appended, per the choke-point rule.
+
+### Three things worth carrying forward
+
+**1. Two producers, one ring, and one unomedia instance.** The Music app and a
+game's score both want the sample stream, and the kernel links ONE unomedia
+audio instance, so `um_audio_open` from a second place silently closes the
+first. `uno_snd_mus_play` therefore refuses while any stream is open (the user
+opening Music wins; the game falls back to beeps), and `uno_snd_mus_tick`
+re-checks the owner every frame and drops its state **without closing the
+decoder** if it has been displaced - closing it would silence whoever just
+took over.
+
+**2. `-fsanitize=shift` catches `(sample - 128) << 8`, and the first sound
+played took the guest down.** Converting unsigned 8-bit to s16 by shifting is
+undefined for the negative half of every waveform, so the DEBUG build trapped
+to `#UD` inside `uno_snd_poll` - which presents as the URC link going quiet on
+the command AFTER the one that started the sound, with nothing in the response
+to say why. Multiply by 256 instead. The debug console (`URC_DBGCON`) is how
+you find this in one run instead of three.
+
+**3. The gate asserts about samples the DAC consumed, not about calls.**
+`tools/duum_audio_test.py` boots the debug image with a QEMU wav-capture
+audiodev, drives the guest over URC, and analyses the capture. Stages are
+TAGGED BY FREQUENCY rather than by time, so nothing depends on wall-clock
+alignment with the recording: 1234 Hz centred, 1700 Hz hard left, 2300 Hz hard
+right, 440 Hz for the score. Two numbers are the ones that matter:
+
+| | |
+|---|---|
+| panning is real | sep=0 -> L 5210 / R 0; sep=255 -> L 0 / R 4866 |
+| the mixer is real | 5 windows of 100 ms carrying 440 Hz AND 1234 Hz at once |
+
+A share-of-spectrum test alone reads a WORKING mixer as a failure, because a
+loud effect takes almost all of the share while the score's own level is
+unchanged - so the "together" check uses absolute band level with a floor
+taken from the recording itself. And `tools/duum_audio_test.py duum` runs the
+real engine: `app.have_sfx` / `app.have_mus` True with `err` None, a WAD
+sample handed over on the first shot, 46 of 65 captured seconds non-silent.
+
+**Open:** never heard on the ZimaBlade. QEMU's HDA is not a real codec.

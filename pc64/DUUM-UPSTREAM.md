@@ -27,6 +27,7 @@ What still belongs to UnoDOS, and is edited here normally:
 | `pc64/tools/duum_golden.py`, `duum_verify.py`, `duum_collide.py` | the gates, run against the mirror above. Upstream carries its own copies pointed at its own rasteriser; both are wanted, and they check different implementations of the same contract. |
 | `pc64/tools/demo/duum_demo.py`, `duum_ab.py`, `duum_sound.py`, `duum_vs_doom.py` | device recording, on-device A/B, audio and oracle tooling. UnoDOS-specific. |
 | `pc64/build.sh` step 3e, `pc64/docs_esp/DUUM.MD`, `pc64/wads/` | packaging `DUUM.UNO`, the shipped user doc, and where a WAD goes. |
+| `pc64/snd_pcm.c` (the effects voices), `pc64/snd_mus.c` | how this device answers the four optional sound calls. The engine names a sample and a volume; the mixing and the DAC are ours. |
 
 ## Syncing a new version
 
@@ -112,10 +113,12 @@ purely for ports like this one.
 
 ## Why the engine can be shared at all
 
-Duum only ever asked its platform for six things (`size`, `read_at`, `beep`,
-`quiet`, and optionally `ticks` and `keys_down`) and only ever drew through
-a canvas with a span-writer contract. That is the whole porting surface, and
-it is why the same file runs on a desktop and on pc64 unchanged: upstream
+Duum asks its platform for very little - `size`, `read_at`, `beep`, `quiet`,
+and, all optional and `hasattr`-probed, `ticks`, `keys_down`, the five
+binding hooks and (since 2026-08-19) the four sound calls above - and only
+ever draws through a canvas with a span-writer contract. That is the whole
+porting surface, and it is why the same file runs on a desktop and on pc64
+unchanged: upstream
 supplies a pure-Python rasteriser, we supply a C one, and the engine cannot
 tell the difference.
 
@@ -167,14 +170,11 @@ reported UNVERIFIED rather than known-broken, for want of anything solid to
 stand against. All 110 use-doors in the episode now pass upstream's gate on the
 desktop, so the ZimaBlade re-test is the remaining half of that report.
 
-### SOUND - four optional calls arrived 2026-08-19, unimplemented here
+### SOUND - four optional calls offered 2026-08-19, IMPLEMENTED HERE the same day
 
-Not a bug, and not work this port owes anyone. Recorded because the vendored
-file changed shape and the next person to read it should know why.
-
-Duum now plays the WAD's own sound effects and its music. Both arrive through
-four calls that are OPTIONAL and `hasattr`-probed, exactly like `ticks`,
-`keys_down` and the five binding hooks:
+Duum plays the WAD's own sound effects and its music through four calls that
+are OPTIONAL and `hasattr`-probed, exactly like `ticks`, `keys_down` and the
+five binding hooks:
 
 ```
 sfx_load(slot, pcm, rate)     keep a sample under `slot`; sent once per sound
@@ -183,34 +183,40 @@ mus_play(smf, loop)           a whole Standard MIDI File
 mus_stop()
 ```
 
-**This port needs no change and has had none.** Checked against
-`tools/duum_host.py` after the sync rather than assumed: `have_sfx` and
-`have_mus` both come out False, `err` is None, and firing the pistol still
-calls `beep(55, 2)`, which is the note that event has always made. pc64 sounds
-exactly as it did before this sync.
+**pc64 now implements all four**, so the device plays the WAD's effects and
+its score instead of a square-wave note per event. The implementation is
+ours and is described in [AUDIO.md](AUDIO.md): an effects bank and eight
+voices summed into the DMA ring in `snd_pcm.c`, and `snd_mus.c`, which points
+`unomedia`'s MIDI player at the bytes the engine hands over. The vendored
+engine was not touched - it needed no change, which is what "optional and
+probed" is for.
 
-Two things came across in the engine that are worth knowing about:
+Verified on the device rather than assumed, by capturing QEMU's wav sink and
+asserting on the samples the DAC consumed (`tools/duum_audio_test.py`): an
+effect centred, one hard left and one hard right (L 5210 vs R 0, and its
+mirror), a Standard MIDI File playing, and - the thing a one-source-at-a-time
+ring could not do - five 100 ms windows carrying the score's tone and an
+effect's tone at once. Then the engine end to end
+(`tools/duum_audio_test.py duum`): `app.have_sfx` and `app.have_mus` both
+True with `err` None, a WAD sample handed over on the first pistol shot, and
+46 of 65 captured seconds non-silent.
+
+Two things in the engine worth knowing about:
 
 - `SFX` is a table of 49 rows naming a `DS` lump per game event, and `MSND`
-  gives each monster sprite family its own voice. On a host with no sample
-  playback these only supply the fallback note, so they cost a little RAM and
-  nothing else.
-- `mus_to_midi()` converts a `MUS` lump to a Standard MIDI File. It is present
-  and works in the vendored copy (D_E1M1 converts to 23,393 bytes of `MThd`),
-  but nothing calls it unless a host offers `mus_play`.
+  gives each monster sprite family its own voice. The midi/ticks pair in each
+  row is still the fallback note, so a host without the four calls (or one
+  whose PCM device failed to probe) sounds exactly as it always did.
+- `mus_to_midi()` converts a `MUS` lump to a Standard MIDI File in Python and
+  hands over the whole thing. Upstream offered to stream the conversion if the
+  spike is too much for a device; it is not - the largest in the shareware WAD
+  is `D_E1M8` at about 66 KB out, against a 32 MB kernel heap and a 16 MB
+  MicroPython heap - so no change was asked for.
 
-**If pc64 ever wants this, most of it is already written here and simply not
-exposed to MicroPython.** `snd_pcm.h` has the sample stream over HDA and AC'97
-(`uno_snd_stream_begin/space/write`), and `unomedia/um_midi.c` is a complete
-SMF player with its own polyphonic synthesiser, so `mus_play` is that decoder
-pointed at the bytes Duum already hands over. What is genuinely missing is a
-MIXER: `snd_pcm` takes one stream at a time and mutes the square voice while a
-stream holds the ring, so a naive `sfx_play` would cut the music off on every
-gunshot. Implementing only `mus_play`/`mus_stop` is a good half step, and the
-engine will not notice the difference.
-
-The full offer, with the memory numbers and the eviction rules, is the entry
-dated 2026-08-19 in upstream's `DUUM-REQUESTS.md`.
+**Still open, and only hardware can close it:** none of this has been heard on
+the ZimaBlade. QEMU's HDA and a real codec are not the same thing, and the
+same "asserted in QEMU, never run on metal" gap is exactly where the wall
+collision bug lived for months.
 
 ## Not in THIRD-PARTY.md, on purpose
 
