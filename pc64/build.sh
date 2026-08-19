@@ -866,6 +866,19 @@ if [ "$1" != "legacy" ]; then
         NASMV=""
         [ "${UNO_BIOS_VERBOSE:-0}" = "0" ] || NASMV="-dVERBOSE"
         [ "${UNO_BIOS_NOVIDEO:-0}" = "0" ] || NASMV="$NASMV -dVERBOSE -dNOVIDEO"
+        # UNO_BIOS_PREF=WxH overrides the preferred VBE mode stage2 asks for.
+        # ONLY for targets with no panel that could fail to sync it - an
+        # emulator. On real hardware a mode the display cannot take is a black
+        # screen with no way back, which is why the default stays 1024x768.
+        if [ -n "${UNO_BIOS_PREF:-}" ]; then
+            _pw=${UNO_BIOS_PREF%%x*}
+            _ph=${UNO_BIOS_PREF##*x}
+            case "$_pw$_ph" in
+                *[!0-9]*|"") echo "UNO_BIOS_PREF must be WxH, got '$UNO_BIOS_PREF'" >&2; exit 1 ;;
+            esac
+            NASMV="$NASMV -dPREF_W=$_pw -dPREF_H=$_ph"
+            echo "[bios] preferred mode overridden to ${_pw}x${_ph}"
+        fi
         nasm -f bin -o build/bios_boot.bin   boot/bios_boot.asm
         nasm -f bin $NASMV -o build/bios_stage2.bin boot/bios_stage2.asm
         "$PY" tools/mkbios.py build/bios_boot.bin build/bios_stage2.bin \

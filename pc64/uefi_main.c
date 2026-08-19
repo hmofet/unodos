@@ -526,10 +526,24 @@ static void apply_desktop(int fbw, int fbh)
 {
     UINT32 sx, sy;
     int i;
+    int oldw = uno_fb_w, oldh = uno_fb_h;
     if (fbw < 64) fbw = 64;  if (fbw > FB_MAX_W) fbw = FB_MAX_W;
     if (fbh < 48) fbh = 48;  if (fbh > FB_MAX_H) fbh = FB_MAX_H;
     uno_fb_w = fbw;
     uno_fb_h = fbh;
+
+    /* Carry the pointer across the resize by POSITION ON THE PANEL, not by
+     * coordinate. Every mode fills the same panel, so a coordinate means a
+     * different physical place either side of a change, and only clamping it
+     * (which is what this did) throws the pointer at an edge: coming DOWN from
+     * 1024 to 512, anything past x=511 pins to 511, which is the far right of
+     * the screen - and at a 2x fill-scale only a column or two of the cursor is
+     * still on it, so it reads as a pointer that has vanished rather than
+     * moved. Scaling keeps it under the same spot the user is looking at. */
+    if (oldw > 0 && oldh > 0 && (oldw != fbw || oldh != fbh)) {
+        g_cx = (int)(((long long)g_cx * fbw) / oldw);
+        g_cy = (int)(((long long)g_cy * fbh) / oldh);
+    }
 
 #ifndef UNO_UUI
     /* tell the legacy Toolbox shim the screen size (unoui reads FB_W/FB_H) */
@@ -590,7 +604,9 @@ static void apply_desktop(int fbw, int fbh)
         for (sy = 0; sy < gModeH; sy++)
             for (sx = 0; sx < gModeW; sx++) gVram[sy * gStride + sx] = 0;
     }
+    if (g_cx < 0) g_cx = 0;
     if (g_cx > uno_fb_w - 1) g_cx = uno_fb_w - 1;
+    if (g_cy < 0) g_cy = 0;
     if (g_cy > uno_fb_h - 1) g_cy = uno_fb_h - 1;
 }
 

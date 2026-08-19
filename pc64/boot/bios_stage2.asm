@@ -69,10 +69,36 @@ STACK_TOP   equ 0x90000
 ; made since 1995 supports, and otherwise take the largest within a cap that is
 ; still widely displayable. Raise MAX_W/MAX_H once a machine has proved it can
 ; take more; do not raise PREF_* without a way to recover from a blind boot.
-PREF_W      equ 1024
-PREF_H      equ 768
+;
+; PREF_* is overridable at assembly time (-dPREF_W=1280 -dPREF_H=1024, driven by
+; UNO_BIOS_PREF in build.sh) for targets where the "blind boot" risk above does
+; not exist because there is no panel to fail to sync: an emulator, where the
+; mode is whatever the virtual card is told. The DEFAULT is unchanged, so a real
+; machine still gets the conservative mode.
+%ifndef PREF_W
+%define PREF_W_VAL 1024
+%else
+%define PREF_W_VAL PREF_W
+%endif
+%ifndef PREF_H
+%define PREF_H_VAL 768
+%else
+%define PREF_H_VAL PREF_H
+%endif
+PREF_W      equ PREF_W_VAL
+PREF_H      equ PREF_H_VAL
+; The cap has to admit the preference, or a raised PREF_* would be filtered out
+; by the very list it is meant to select from.
+%if PREF_W_VAL > 1280
+MAX_W       equ PREF_W_VAL
+%else
 MAX_W       equ 1280
+%endif
+%if PREF_H_VAL > 1024
+MAX_H       equ PREF_H_VAL
+%else
 MAX_H       equ 1024
+%endif
 
 stage2_start:
     mov     [drive], dl
