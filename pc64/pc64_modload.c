@@ -46,6 +46,8 @@
 #include "mrvlwifi.h"
 #include "fb.h"             /* the full framebuffer surface (Python bindings) */
 #include "unosound.h"       /* uno_seq_* audio */
+#include "snd_pcm.h"        /* sampled effects (uno_snd_sfx_*) */
+#include "snd_mus.h"        /* a game's own score, from memory */
 #include "uno3d.h"          /* u3d_* 3D */
 #include "unoscript.h"      /* the production scripting surface: usc_ + unosec_ */
 #include "unoui_anim.h"     /* the shared tween clock the shell pumps */
@@ -210,6 +212,11 @@ static const struct { const char *name; void *addr; } kExports[] = {
     /* unosound */
     KX(uno_seq_init), KX(uno_seq_beep), KX(uno_seq_play), KX(uno_seq_stop),
     KX(uno_seq_playing), KX(uno_seq_tick), KX(uno_seq_backend),
+    /* sampled audio: the WAD's own effects and score, for a game that has
+       more to say than one square-wave note (snd_pcm.h, snd_mus.h) */
+    KX(uno_snd_sfx_load), KX(uno_snd_sfx_play), KX(uno_snd_sfx_stop_all),
+    KX(uno_snd_sfx_playing),
+    KX(uno_snd_mus_play), KX(uno_snd_mus_stop), KX(uno_snd_mus_playing),
     /* uno3d */
     KX(u3d_init), KX(u3d_shutdown), KX(u3d_begin), KX(u3d_end), KX(u3d_present),
     KX(u3d_perspective), KX(u3d_load_identity), KX(u3d_translate), KX(u3d_scale),

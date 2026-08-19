@@ -23,6 +23,8 @@
 #include "pc64_icons.h"      /* per-app icon artwork */
 #include "pc64_font.h"       /* TrueType text engine (system font) */
 #include "unosound.h"        /* UnoSound live sequencer (game/app audio) */
+#include "snd_mus.h"         /* a game's own score, pumped from the frame loop */
+#include "snd_pcm.h"         /* ...and its sampled effects */
 #include "xhci.h"            /* USB host controller (gated -DUNO_XHCI) */
 #include "detachgate.h"      /* which device is holding this machine attached */
 #include "uno_debug.h"       /* debug build: heartbeat/HUD/stress (no-ops otherwise) */
@@ -3868,7 +3870,12 @@ static void close_app(int a)
     else if (a == EX_PYAPP)  { if (g_pyapp) { unoscript_app_caps_end();
                                  if (g_pyapp->closed) g_pyapp->closed();
                                  if (g_pyrt) g_pyrt->unload();
-                                 g_pyapp = 0; } }
+                                 g_pyapp = 0; }
+                               /* Its sound goes with it. A Python app that
+                                  forgets to stop its own score would
+                                  otherwise play over whatever opens next -
+                                  the Dostris bug, one interpreter up. */
+                               uno_snd_mus_stop(); uno_snd_sfx_stop_all(); }
     else if (a == EX_USERAPP) unoapp_user_close();
     else if (app_is_bridge(a)) unoapp_close(a - NNATIVE); /* bridge app        */
     if (UI.full == &g_win[a]) unoui_fullscreen(&UI, 0);  /* fullscreen game    */
@@ -6672,6 +6679,10 @@ int main(void)
             g_pyapp->frame();           /* the Python app's per-frame tick   */
         if (g_open[EX_USERAPP]) unoapp_user_tick();  /* the user's app clock */
         uno_seq_tick();                 /* UnoSound: advance music/SFX ~60 Hz */
+        uno_snd_mus_tick();             /* a game's own score (snd_mus.c):
+                                        decode ahead into the PCM stream.
+                                        Returns immediately when nothing is
+                                        playing, which is almost always. */
         if (g_open[APP_CLOCK]) pc64_clock_tick();  /* self-throttling: only
                                         redraws when the second changes */
         if (g_open[APP_MUSIC]) pc64_music_tick();  /* decode ahead into the PCM
