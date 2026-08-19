@@ -25,6 +25,7 @@ from unoauto_remote import UnoAutoLink                     # noqa: E402
 from stream_recv import StreamReceiver, write_png          # noqa: E402
 
 OUT = os.path.join(HERE, "out", "duum")
+WAV = os.path.join(OUT, "audio.wav")     # the guest's own audio, whole run
 URC_PORT = 5410
 STREAM_BASE = 5420
 GOP_W, GOP_H = 2560, 1600            # -> 1280x800 desktop (half the panel)
@@ -35,7 +36,11 @@ K_FIRE = ord('f')
 K_USE = ord(' ')
 KEYMAP = {"U": (S_UP, 0), "D": (S_DOWN, 0), "R": (S_RIGHT, 0), "L": (S_LEFT, 0),
           "F": (0, K_FIRE), ".": (0, ord('.')), ",": (0, ord(',')),
-          " ": (0, K_USE), "S": (0, K_USE)}
+          " ": (0, K_USE), "S": (0, K_USE),
+          # the pause menu: Esc opens and backs out, Enter activates. The
+          # arrows above double as its cursor (the engine reads scan 1-4),
+          # so the menu needs no keys of its own beyond these two.
+          "X": (0x17, 27), "N": (0, 13)}
 for _dg in "123456":                    # weapon select
     KEYMAP[_dg] = (0, ord(_dg))
 
@@ -77,6 +82,20 @@ def boot_qemu():
         "-device", "e1000,netdev=n0",
         "-vga", "none",
         "-device", "VGA,edid=on,xres=%d,yres=%d,vgamem_mb=64" % (GOP_W, GOP_H),
+        # The game's own voice. QEMU's wav sink records everything the guest's
+        # DAC consumed, for the whole run, in ONE file - there is no per-scene
+        # sink - so the recorder stamps the wall clock it started at and the
+        # stitcher cuts each scene's audio out of it. See AUDIO in DUUM-DEMO.md.
+        #
+        # AC'97 AND NOT INTEL HDA, and this is not a preference. With an
+        # intel-hda device attached the guest never reaches URC dial-out UNDER
+        # KVM - measured 4 times out of 4, on this build and on one from before
+        # any of the sound work, so it is not a regression from it - while the
+        # same build with AC'97 dials in every time and the same HDA device
+        # under TCG is fine. Filed in UNOAUTOMATE-REQUESTS.md. snd_pcm sits
+        # above both backends, so the film records the same mixer either way.
+        "-audiodev", "wav,id=snd0,path=" + WAV,
+        "-device", "AC97,audiodev=snd0",
         "-display", "none",
     ]
     return subprocess.Popen(cmd, stderr=subprocess.DEVNULL)
@@ -86,6 +105,7 @@ class Duum(object):
     def __init__(self):
         self.link = None
         self.qemu = None
+        self.t_qemu = 0.0
         self.w = self.h = 0
         self._beats = None
         self._vol = None
@@ -94,9 +114,14 @@ class Duum(object):
         os.makedirs(OUT, exist_ok=True)
         if not os.path.isdir(RQ.ESP):
             raise SystemExit("no build/esp - run UNO_DEBUG=1 ./build.sh first")
+        try:
+            os.unlink(WAV)               # a stale wav would be sliced instead
+        except OSError:
+            pass
         self.link = UnoAutoLink("127.0.0.1", URC_PORT)
         self.link.listen()
         build_disk()
+        self.t_qemu = time.time()        # the wav's own zero
         self.qemu = boot_qemu()
         if not self.link.wait_connected(180):
             raise SystemExit("guest never dialled in - is this the DEBUG build?")
@@ -106,7 +131,24 @@ class Duum(object):
         print("booted: desktop %dx%d" % (self.w, self.h))
         return self
 
+    def audio_index(self):
+        """Where the wav's clock starts, so a scene can be cut out of it.
+
+        The wav and the video are on INDEPENDENT clocks: the sink writes what
+        the emulated DAC consumed, which under emulation runs a percent or two
+        off wall clock, and every frame in timing.jsonl is wall clock. One
+        number (t0) plus a measured drift is all the stitcher needs, and the
+        drift is measurable because the run's own length is known."""
+        idx = {"t0": self.t_qemu, "t_end": time.time(), "wav": WAV}
+        with open(os.path.join(OUT, "audio.json"), "w") as f:
+            json.dump(idx, f, indent=1)
+        return idx
+
     def stop(self):
+        try:
+            self.audio_index()
+        except Exception:
+            pass
         try:
             if self.link:
                 self.link.command("poweroff", timeout=2)
@@ -276,14 +318,20 @@ def s02_render(d):
     computer hall (banked terminals, lit ceiling, a full-height window) and on
     into the crate corridor.  Straight-line walking on purpose - turning
     mid-route then walking accumulates heading drift at 53 deg per press and
-    ends up in a wall."""
+    ends up in a wall.
+
+    STOP BEFORE THE CORRIDOR. Duum is a game now: its zombies chase, and the
+    ten-press version of this route walked straight into two of them and
+    ended the take at 1% health with a bloodied face - which is a combat
+    shot, not a renderer one, and the narration for a renderer scene cannot
+    play over it. Seven presses reach the hall and hold there; the fight is
+    s03's job."""
     d.beat("walk-in", settle=0.3)
     d.keys("UUUU")
-    d.beat("the-hall", settle=1.8)
-    d.keys("UUUU")
+    d.beat("the-hall", settle=1.6)
+    d.keys("UUU")
     d.beat("deeper-in", settle=0.3)
-    d.keys("UU")
-    d.beat("hold-vista", settle=2.5)
+    d.beat("hold-vista", settle=1.8)
 
 
 def s03_combat(d):
@@ -332,7 +380,38 @@ def s03_hero(d):
     d.beat("hold", settle=0.9)
 
 
-def s04_hud(d):
+def s04_menu(d):
+    """The pause menu, and the Controls screen inside it.
+
+    New since the last film, and the first time either has been exercised on
+    this port at all - upstream filed the Controls screen as unverified on
+    real hardware.  It lists what each action is bound to by asking the host
+    (uno.bind_name), so the screen is a readout of pc64's own binding table,
+    not a picture of one.
+
+    THREE Escs get out of Controls, not two: Esc backs up one screen at a
+    time (keys -> options -> main -> closed).  Two left the menu open with
+    the arrows still driving its cursor, and a rehearsal spent its whole
+    movement half pressing keys into a menu that was quietly eating them.
+
+    Every settle here is long by gameplay standards on purpose: the viewer
+    has to read a screen the player already knows."""
+    d.beat("menu-open", settle=0.4)
+    d.keys("X", settle=1.6)
+    d.beat("menu-shown", settle=2.2)
+    d.keys("D", settle=0.9)                  # cursor: Resume -> Options
+    d.keys("N", settle=1.6)                  # into Options
+    d.beat("menu-options", settle=2.4)
+    d.keys("D", settle=0.9)                  # cursor: FPS counter -> Controls
+    d.keys("N", settle=1.6)
+    d.beat("menu-controls", settle=5.0)      # hold: the whole list is readable
+    d.keys("XXX", settle=0.7)                # keys -> options -> main -> out
+    d.beat("resumed", settle=1.6)
+    d.keys("L", settle=0.5)                  # and the game is live again
+    d.beat("back-in-the-game", settle=2.0)
+
+
+def s05_hud(d):
     """Hold on the start room so the status bar reads clearly: health, ammo,
     armor, the arms panel and the face. A slow look keeps it live while the
     closing narration lands.  Single presses: a turn is ~53 deg now that
@@ -349,7 +428,7 @@ def s04_hud(d):
 # each scene relaunches Duum fresh, so it starts from the known start room and
 # its verified key route is independent of the others
 SCENES = [("s01", s01_title), ("s02", s02_render), ("s03", s03_combat),
-          ("s04", s04_hud)]
+          ("s04", s04_menu), ("s05", s05_hud)]
 
 
 # ---------------------------------------------------------------------------

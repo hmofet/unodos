@@ -1,46 +1,82 @@
 {
-  "_comment": "Narration for the Duum demo (out/duum/cut.mp4). Each cue names the BEAT it lands on, from that scene's .beats.jsonl, so the voice tracks the picture. Budgeted at Brian's MEASURED 2.9 words/sec (from the UnoDOS OS demo). Claims checked against source: DUUM.PY is Python on PYRT/MicroPython; uno.read_at streams the WAD lump-by-lump (never slurped); render() (BSP walk + column loop) is Python, cv.wall_span/mask_span/flat_span are C; monster AI + weapons + E1M1-E1M9 exist. REFILMED 2026-08-18 on FREEDOOM (BSD), so nothing licensed is in the published film; Freedoom ships ORIGINAL maps, so the footage is an interior corridor and NOT id's courtyard. Two claims were retired with that change: the SKY (no sky sector is on the new route) and 'former humans' (id's monster name). This take does land a clean framed kill, which the id-WAD takes never could.",
+  "_comment": "Narration for the Duum demo (out/duum/cut.mp4, 68.2s, 5 scenes). Each cue names the BEAT it lands on, from that scene's .beats.jsonl, so the voice tracks the picture. Budgeted at Brian's MEASURED 2.9 words/sec. REWRITTEN 2026-08-19 for the sound release: the film now carries the guest's own audio as a bed under the narration, so the score and the effects are audible rather than described. Claims checked against source this session: the effects mixer is 8 voices summed into the DMA ring in pc64/snd_pcm.c (it does NOT take the ring from the music - that is the whole design); the score is the WAD's own file handed to unomedia's MIDI player by pc64/snd_mus.c; Freedoom ships its music as finished Standard MIDI Files and the engine now passes those through unchanged; the Controls screen is filled by uno.bind_name, i.e. it reads pc64's binding table; render() and the game logic are Python and only the span writers are C. The WAD is Freedoom (BSD), never id's.",
   "voice_id": "nPczCjzI2devNBz1zQrb",
-  "_voice": "Brian - Deep, Resonant and Comforting (matches arin's UnoDOS OS demo)",
+  "_voice": "Brian - Deep, Resonant and Comforting (matches arin's UnoDOS OS demo and the previous Duum film)",
   "model": "eleven_multilingual_v2",
-  "voice_settings": {"stability": 0.5, "similarity_boost": 0.75, "style": 0.0},
+  "voice_settings": {
+    "stability": 0.5,
+    "similarity_boost": 0.75,
+    "style": 0.0
+  },
   "scenes": [
     {
       "id": "s01",
       "cues": [
-        {"id": "s01a", "at": "duum-title",
-         "text": "This is Doom, running inside UnoDOS - and written entirely in Python."},
-        {"id": "s01b", "at": "look-back",
-         "text": "It runs as an ordinary app, on the operating system's own Python runtime."}
+        {
+          "id": "s01a",
+          "at": "duum-title",
+          "text": "This is Doom, written entirely in Python, running as an app inside UnoDOS."
+        },
+        {
+          "id": "s01b",
+          "at": "settle",
+          "text": "And now you can hear it: the game file's own score."
+        }
       ]
     },
     {
       "id": "s02",
       "cues": [
-        {"id": "s02a", "at": "walk-in",
-         "text": "It streams a real Doom game file, never loading it whole."},
-        {"id": "s02b", "at": "deeper-in",
-         "text": "Walls, floors and ceilings, drawn perspective correct."}
+        {
+          "id": "s02a",
+          "at": "walk-in",
+          "text": "The world streams out of the WAD as you walk. This one is Freedoom, freely redistributable."
+        }
       ]
     },
     {
       "id": "s03",
       "cues": [
-        {"id": "s03a", "at": "advance",
-         "text": "The zombies shoot back, and your health drops as you push down the corridor."},
-        {"id": "s03b", "at": "firefight",
-         "text": "Weapons, monsters and pickups, across all nine levels of the first episode."}
+        {
+          "id": "s03a",
+          "at": "enemies",
+          "text": "Every sound is the WAD's own."
+        },
+        {
+          "id": "s03b",
+          "at": "firefight",
+          "text": "Mixed over the music, not instead of it."
+        }
       ]
     },
     {
       "id": "s04",
       "cues": [
-        {"id": "s04a", "at": "hud-hold",
-         "text": "Only the per-pixel drawing is C. The geometry and the game logic are Python."},
-        {"id": "s04b", "at": "ports-line",
-         "text": "Every other port of this system rebuilds its own apps in each machine's language."},
-        {"id": "s04c", "at": "reverse-line",
-         "text": "Duum does the reverse - a whole outside game engine, in nothing but Python."}
+        {
+          "id": "s04a",
+          "at": "menu-shown",
+          "text": "Escape brings up the pause menu."
+        },
+        {
+          "id": "s04b",
+          "at": "menu-controls",
+          "text": "The Controls screen asks the operating system what each action is bound to, so this list is the machine's own key table, not a picture of one."
+        }
+      ]
+    },
+    {
+      "id": "s05",
+      "cues": [
+        {
+          "id": "s05a",
+          "at": "hud-hold",
+          "text": "The geometry and the game logic are Python. Only the per-pixel drawing is C."
+        },
+        {
+          "id": "s05c",
+          "at": "reverse-line",
+          "text": "Every other port of this system rebuilds its apps per machine. Duum does the reverse."
+        }
       ]
     }
   ]
