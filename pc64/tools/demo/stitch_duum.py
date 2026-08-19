@@ -8,14 +8,71 @@ concatenate, and emit a timeline the narration is written against.
 """
 import argparse, json, os, subprocess, sys
 
+HERE = os.path.dirname(os.path.abspath(__file__))
+
 # game canvas within the 1280x800 desktop (measured off a probe frame)
 CROP_W, CROP_H, CROP_X, CROP_Y = 518, 382, 53, 48
 ZOOM = 2                        # integer, nearest-neighbour
 FPS = 30
 
-SCENES = ["s01", "s02", "s03", "s04"]
+SCENES = ["s01", "s02", "s03", "s04", "s05"]
 TITLES = {"s01": "Title", "s02": "The renderer", "s03": "Combat",
-          "s04": "The HUD"}
+          "s04": "The pause menu", "s05": "The HUD"}
+
+
+def wav_duration(wav):
+    n = subprocess.run(["ffprobe", "-v", "error", "-show_entries",
+                        "format=duration", "-of",
+                        "default=noprint_wrappers=1:nokey=1", wav],
+                       capture_output=True, text=True).stdout.strip()
+    return float(n) if n else 0.0
+
+
+def cut_audio(out_dir):
+    """Slice the run's single capture into one wav per scene.
+
+    QEMU's wav sink writes ONE file for the whole run, and it starts writing
+    when the guest opens the stream rather than when the emulator starts - so
+    its zero is not the recorder's zero and must not be assumed. It is
+    derivable instead: the sink stops when QEMU is killed, so
+
+        wav t=0  ==  t_end - (length of the wav)
+
+    which needs no guess about when audio began, and folds the sink's own
+    drift into one measured number. Each scene is then cut between its first
+    and last FRAME timestamps, which are wall clock in that same clock.
+
+    Prints the mapping, because a silent bed and a misaligned one look
+    identical in a file listing."""
+    idx_path = os.path.join(out_dir, "audio.json")
+    src = os.path.join(out_dir, "audio.wav")
+    if not (os.path.exists(idx_path) and os.path.exists(src)):
+        print("no audio capture (%s) - the cut will be silent" % src)
+        return {}
+    idx = json.load(open(idx_path))
+    dur = wav_duration(src)
+    wav_t0 = idx["t_end"] - dur
+    print("audio: %.1fs captured, its zero at t0+%.1fs"
+          % (dur, wav_t0 - idx["t0"]))
+    out = {}
+    for s in SCENES:
+        tj = os.path.join(out_dir, s + ".timing.jsonl")
+        if not os.path.exists(tj):
+            continue
+        rows = [json.loads(l) for l in open(tj) if l.strip()]
+        if not rows:
+            continue
+        a = rows[0]["t"] - wav_t0
+        b = rows[-1]["t"] - wav_t0
+        if a < 0 or b <= a:
+            print("  %s: outside the capture, skipped" % s)
+            continue
+        dst = os.path.join(out_dir, s + ".wav")
+        subprocess.run(["ffmpeg", "-v", "error", "-y", "-ss", "%.3f" % a,
+                        "-t", "%.3f" % (b - a), "-i", src, dst], check=True)
+        out[s] = dst
+        print("  %s: wav %.2f..%.2f (%.1fs)" % (s, a, b, b - a))
+    return out
 
 
 def true_duration(mp4):
@@ -37,6 +94,7 @@ def main():
           % (CROP_W, CROP_H, CROP_X, CROP_Y,
              CROP_W * ZOOM, CROP_H * ZOOM, FPS))
 
+    beds = cut_audio(args.out_dir)
     norm = []
     for s in SCENES:
         src = os.path.join(args.out_dir, s + ".mp4")
@@ -73,6 +131,12 @@ def main():
     for e in timeline:
         print("  %s %-14s %5.1fs  @ %5.1f" % (e["id"], e["title"],
                                               e["dur"], e["start"]))
+    if beds:
+        print()
+        print("beds for mux_vo (the game's own audio, under the narration):")
+        print("  " + " ".join('--bed "%s:%s:0:GAIN"'
+                              % (s, os.path.relpath(w, HERE))
+                              for s, w in beds.items()))
 
 
 if __name__ == "__main__":
