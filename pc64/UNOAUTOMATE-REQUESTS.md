@@ -9240,3 +9240,28 @@ machine with an HDA codec is the case this most resembles.
 
 **Workaround, in the recorder now:** film with `-device AC97`. `snd_pcm` sits
 above both backends, so the capture is of the same mixer either way.
+
+### The obvious confound, ruled out explicitly
+
+Another session was recording on the same host while the table above was
+measured, and `remote_qemu` names the boot disk `/tmp/remote_disk.img` - a
+fixed path, so two sessions build over each other and the loser boots the
+other tree (SCENES.md, 2026-08-19). That alone produces "guest never dialled
+in", because the disk it boots carries the other session's `DEBUG.CFG` and
+therefore the other session's remote port.
+
+So the whole matrix was re-run with **private disk, FAT, vars and OVMF paths
+per run**, with nothing else recording:
+
+| tree | audio | dials in |
+|---|---|---|
+| this one | `intel-hda` | **NO** (150 s timeout) |
+| this one | `intel-hda` | **NO** (150 s timeout) |
+| this one | `AC97` | yes, 54 s |
+| this one | none | yes, 57 s |
+| pre-sound build | `intel-hda` | **NO** (150 s timeout) |
+| pre-sound build | `AC97` | yes, 50 s |
+
+Same answer. The harness for it is small enough to rewrite in a minute:
+override `RQ.DISK/DISK2/FAT/VARS` before `build_disk()`, which is worth doing
+for any measurement on a shared host.
