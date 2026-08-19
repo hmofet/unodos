@@ -150,6 +150,21 @@ list, a password box and a <strong>Join</strong> button, with a spinner and a ru
 step while it works, since a join takes several seconds. Networks you join are remembered, so the machine
 can rejoin the last one by itself at the next boot.</p>
 
+<h2 id="emulator">Networking in the browser</h2>
+<p>UnoDOS <a href="https://unodos.arinbakht.com/try/">running in a browser tab</a> has a working network
+card. It takes an address by DHCP, answers a ping, resolves names and loads pages, and everything on this
+page behaves the way it does on a real machine. What is different is where the wire goes:
+<strong>it ends inside the tab</strong>.</p>
+<p>That is not a limitation somebody forgot to lift. A web page cannot open a network connection of the
+ordinary kind at all - the browser has no such capability to offer - so every emulator you have seen with
+real internet access is relaying its traffic through a server somebody runs and pays for. Rather than
+route your traffic through ours, the far side of the wire is a small network living in the same tab:
+a router at <code>10.0.2.2</code>, a name server at <code>10.0.2.3</code>, and one web server. Every name
+you type resolves to it, so any address reaches a page explaining where you are.</p>
+<div class="note"><b>Nothing leaves the tab</b>Nothing the emulated machine sends can leave your browser. There is no route out of it in the code - not to your own network, not to this website, not to anywhere else - so the machine is a safe place to point at things. Getting real internet access would mean deliberately adding a relay, which is exactly the decision this arrangement leaves in the open.</div>
+<p>On a real PC, or in a virtual machine of your own, none of this applies: the drivers above talk to
+real hardware and the machine is on your network like any other.</p>
+
 <nav class="pagenav"><a href="ssh.html">&lsaquo; SSH client</a><a class="nxt" href="logging.html">System log &rsaquo;</a></nav>
 </div></main>
 </div>

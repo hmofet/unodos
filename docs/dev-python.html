@@ -213,6 +213,24 @@ Studio routes purely by extension: a <code>.py</code> file is packaged for the r
 file is compiled by the UnoC compiler. Everything else - the editor, the project pane, build output, the
 AI assistant - is identical.</p>
 
+<h2 id="declare">Giving a Python app an icon</h2>
+<p>A packaged Python app runs, but by default the only way to reach it is to open its
+<code>.UNO</code> file in Files. To put it on the desktop and in the Start menu, ship a
+<strong>descriptor</strong> beside the source and name it when packaging:</p>
+<pre><code>id: myapp
+name: My App
+icon: file:MYAPP.QOI
+cat: tools
+rank: 20</code></pre>
+<pre><code>python3 tools/mkuno.py pyapp apps/MYAPP.PY APPS/MYAPP.UNO apps/MYAPP.DESC</code></pre>
+<p>The shell reads that block off the disk at startup - two sector reads, executing nothing - and the app
+gets a row of its own. <code>icon:</code> takes either the name of one of the system emblems or
+<code>file:NAME.QOI</code>, a 32x32 image you ship next to the module; the shell has to draw the icon
+before it would load a byte of your code, which is why the artwork is a separate file rather than
+something the app draws. Duum is packaged exactly this way, and
+<code>tools/mkicon.py</code> will author the QOI for you.</p>
+<div class="note"><b>Beside the source, not inside it</b>The descriptor is a file beside the source rather than a comment inside it, and that is deliberate: an app whose source is generated or vendored from somewhere else would lose a magic comment at the next update. Keeping it separate means the launcher metadata belongs to whoever packages the app, not to whoever wrote the code.</div>
+
 <h2 id="limits">Limits (v1)</h2>
 <ul>
   <li>One Python app runs at a time; launching another replaces it.</li>
