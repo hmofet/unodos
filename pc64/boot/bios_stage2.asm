@@ -75,29 +75,27 @@ STACK_TOP   equ 0x90000
 ; not exist because there is no panel to fail to sync: an emulator, where the
 ; mode is whatever the virtual card is told. The DEFAULT is unchanged, so a real
 ; machine still gets the conservative mode.
+;
+; These are %defines rather than `equ` labels because -d defines a macro of the
+; same name, and `PREF_W equ PREF_W` expands to `1280 equ 1280`, which is not a
+; statement.
 %ifndef PREF_W
-%define PREF_W_VAL 1024
-%else
-%define PREF_W_VAL PREF_W
+  %define PREF_W 1024
 %endif
 %ifndef PREF_H
-%define PREF_H_VAL 768
-%else
-%define PREF_H_VAL PREF_H
+  %define PREF_H 768
 %endif
-PREF_W      equ PREF_W_VAL
-PREF_H      equ PREF_H_VAL
 ; The cap has to admit the preference, or a raised PREF_* would be filtered out
 ; by the very list it is meant to select from.
-%if PREF_W_VAL > 1280
-MAX_W       equ PREF_W_VAL
+%if PREF_W > 1280
+  %define MAX_W PREF_W
 %else
-MAX_W       equ 1280
+  %define MAX_W 1280
 %endif
-%if PREF_H_VAL > 1024
-MAX_H       equ PREF_H_VAL
+%if PREF_H > 1024
+  %define MAX_H PREF_H
 %else
-MAX_H       equ 1024
+  %define MAX_H 1024
 %endif
 
 stage2_start:
