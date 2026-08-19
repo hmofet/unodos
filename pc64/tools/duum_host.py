@@ -250,6 +250,82 @@ class App:
     def closed(self): pass
 
 
+# ---- key bindings and preferences, mirroring uno_binds.c -------------------
+# The same reason this file mirrors the C canvas: a gate that runs against a
+# desktop's idea of these calls is testing a machine we do not ship.  So the
+# semantics here are uno_binds.c's, including the two that matter and would
+# never occur to a desktop implementation:
+#
+#   - a KEY ID is unshifted ASCII, or 0x101-0x105 for the keys with no
+#     character.  Not a keysym, not a scancode: the device has two keyboard
+#     transports in two different code spaces and this is what they agree on.
+#   - Use is REFUSED.  It is read as a key event on the device, not from the
+#     held bitmap this table feeds, so a stored binding would do nothing.
+#
+# The store is in memory rather than in a file.  The C side writes UNOPREF.CFG
+# on the boot volume; persistence is not what these gates are checking, and a
+# harness that scribbled on the developer's disk to prove it would be worse.
+
+BK_UP, BK_DOWN, BK_RIGHT, BK_LEFT, BK_CTRL = 0x101, 0x102, 0x103, 0x104, 0x105
+KH_UP, KH_DOWN, KH_RIGHT, KH_LEFT = 1, 2, 4, 8
+KH_FIRE, KH_USE, KH_SLEFT, KH_SRIGHT = 16, 32, 64, 128
+
+DEFAULT_BINDS = {
+    KH_UP:     [BK_UP],
+    KH_DOWN:   [BK_DOWN],
+    KH_RIGHT:  [BK_RIGHT],
+    KH_LEFT:   [BK_LEFT],
+    KH_FIRE:   [ord("f"), BK_CTRL],
+    KH_USE:    [ord(" "), ord("e")],
+    KH_SLEFT:  [ord(",")],
+    KH_SRIGHT: [ord(".")],
+}
+_WORD = {BK_UP: "Up", BK_DOWN: "Down", BK_RIGHT: "Right", BK_LEFT: "Left",
+         BK_CTRL: "Ctrl", ord(" "): "Space"}
+_binds = {}
+_prefs = {}
+
+
+def bind_reset():
+    _binds.clear()
+    for a in DEFAULT_BINDS:
+        _binds[a] = list(DEFAULT_BINDS[a])
+
+
+def bind_keyid(uni, scan):
+    if scan == 1: return BK_UP
+    if scan == 2: return BK_DOWN
+    if scan == 3: return BK_RIGHT
+    if scan == 4: return BK_LEFT
+    if 65 <= uni <= 90: uni += 32                  # bind the key, not the case
+    return uni if 32 <= uni < 127 else 0
+
+
+def bind_bits(keyid):
+    m = 0
+    for a in _binds:
+        if keyid in _binds[a]:
+            m |= a
+    return m
+
+
+def bind_name(action):
+    out = []
+    for k in _binds.get(action, ()):
+        out.append(_WORD.get(k, chr(k).upper()))
+    return " / ".join(out)
+
+
+def bind_set(action, uni, scan):
+    k = bind_keyid(uni, scan)
+    if not k or action == KH_USE:
+        return False
+    for a in _binds:
+        _binds[a] = [x for x in _binds[a] if x != k]
+    _binds[action] = [k]
+    return True
+
+
 def make_uno():
     m = types.ModuleType("uno")
     m.App = App
@@ -265,6 +341,13 @@ def make_uno():
     m.ticks = lambda: int(m._t[0] * 60)
     m.advance = lambda dt: m._t.__setitem__(0, m._t[0] + dt)
     m.keys_down = lambda: 0
+    bind_reset()
+    _prefs.clear()
+    m.bind_name = bind_name
+    m.bind_set = bind_set
+    m.bind_reset = bind_reset
+    m.pref_get = lambda name: _prefs.get(name)
+    m.pref_set = lambda name, value: bool(_prefs.__setitem__(name, value)) or True
     return m
 
 

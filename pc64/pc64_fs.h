@@ -68,6 +68,25 @@ int  uno_fs_fat_index(int vol); /* fat.c volume index when kind==1, else -1 */
  * than whichever disk happens to enumerate first - see unosecure.c pick_vol(). */
 int  uno_fs_is_boot(int vol);
 
+/* WHERE PERSISTENT STATE BELONGS, in one place instead of three.
+ *
+ * Volume 0 is the RAM disk, so "the first writable volume" writes state to a
+ * filesystem that dies with the power.  Worse, the lowest-indexed writable
+ * NATIVE volume is whichever disk enumerated first, and on the ZimaBlade that
+ * is an internal eMMC which enumerates, reports writable, and never completes
+ * a transfer: the write does not return and the machine stops dead, with no
+ * fault and nothing on disk.  That cost most of a day twice, once through
+ * SHELL.CFG and once through unosecure's store, because each had its own copy
+ * of the heuristic.
+ *
+ * So: the boot volume first, since it is the one medium the machine has
+ * already proved it can read and write; then any other native FAT volume;
+ * then anything writable; then the RAM disk, which at least does not hang.
+ *
+ * pc64_uui.c session_vol() and unosecure.c pick_vol() still carry their own
+ * copies of this and should be moved onto it - both belong to other lanes. */
+int  uno_fs_pref_vol(void);
+
 /* M3 detach: rebuild the volume map after the block-device set changed */
 void uno_fs_remap(void);
 

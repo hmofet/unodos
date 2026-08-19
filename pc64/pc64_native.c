@@ -310,38 +310,59 @@ static int ps2_mods(void)
 }
 int uno_ps2_mods(void) { return ps2_mods(); }
 
-/* Held navigation/action keys, mirroring hid_kbd.h's UNO_KH_* wire format
- * (restated here like PS2_MOD_* above: this file includes no headers).
- * Tracked make/break like the modifiers, so it is a true LEVEL. */
-#define PS2_KH_UP     0x001
-#define PS2_KH_DOWN   0x002
-#define PS2_KH_RIGHT  0x004
-#define PS2_KH_LEFT   0x008
-#define PS2_KH_FIRE   0x010
-#define PS2_KH_USE    0x020
-#define PS2_KH_SLEFT  0x040
-#define PS2_KH_SRIGHT 0x080
-static int gHeldKeys;
+/* Held navigation/action keys.  This used to latch UNO_KH_* BITS as the keys
+ * went down; it now holds BINDING KEY IDS (uno_binds.h - unshifted ASCII, or
+ * UNO_BK_* for the keys with no character) and asks what they are bound to
+ * only when someone reads the state.
+ *
+ * That is not a tidy-up.  make/break arrives from the keyboard handler, and
+ * the bindings live in a file that is read lazily; looking them up down there
+ * would put a filesystem read inside a key handler.  Holding the key and
+ * resolving it in app context keeps the read where it can afford to be, and
+ * has the side benefit that rebinding takes effect on a key that is already
+ * down. */
+#define PS2_HELD_MAX 8
+#define PS2_BK_UP     0x101       /* = UNO_BK_* (this file includes no headers) */
+#define PS2_BK_DOWN   0x102
+#define PS2_BK_RIGHT  0x103
+#define PS2_BK_LEFT   0x104
+#define PS2_BK_CTRL   0x105
+int uno_bind_bits(int keyid);                       /* uno_binds.c */
+static int gHeldK[PS2_HELD_MAX], gNHeldK;
+
+static int ps2_keyid(int e0, int code)
+{
+    if (e0) {
+        if (code == 0x48) return PS2_BK_UP;
+        if (code == 0x50) return PS2_BK_DOWN;
+        if (code == 0x4D) return PS2_BK_RIGHT;
+        if (code == 0x4B) return PS2_BK_LEFT;
+        return 0;
+    }
+    if (code < 0 || code > 127) return 0;
+    return (unsigned char)kSet1[code];              /* unshifted: 'w', ',', ' ' */
+}
+
 static void held_update(int e0, int code, int brk)
 {
-    int bit = 0;
-    if (e0) {
-        if      (code == 0x48) bit = PS2_KH_UP;
-        else if (code == 0x50) bit = PS2_KH_DOWN;
-        else if (code == 0x4D) bit = PS2_KH_RIGHT;
-        else if (code == 0x4B) bit = PS2_KH_LEFT;
-    } else {
-        if      (code == 0x21) bit = PS2_KH_FIRE;            /* F     */
-        else if (code == 0x39) bit = PS2_KH_USE;             /* space */
-        else if (code == 0x12) bit = PS2_KH_USE;             /* E     */
-        else if (code == 0x33) bit = PS2_KH_SLEFT;           /* comma */
-        else if (code == 0x34) bit = PS2_KH_SRIGHT;          /* period */
-    }
-    if (!bit) return;
-    if (brk) gHeldKeys &= ~bit; else gHeldKeys |= bit;
+    int k = ps2_keyid(e0, code), i;
+    if (!k) return;
+    for (i = 0; i < gNHeldK; i++)
+        if (gHeldK[i] == k) {
+            if (!brk) return;                       /* already held */
+            gHeldK[i] = gHeldK[--gNHeldK];
+            return;
+        }
+    if (!brk && gNHeldK < PS2_HELD_MAX) gHeldK[gNHeldK++] = k;
 }
+
 int uno_ps2_keys_held(void)
-{ return gHeldKeys | (gCtrl ? PS2_KH_FIRE : 0); }
+{
+    int i, m = 0;
+    for (i = 0; i < gNHeldK; i++) m |= uno_bind_bits(gHeldK[i]);
+    if (gCtrl) m |= uno_bind_bits(PS2_BK_CTRL);
+    return m;
+}
 
 static void kq_push(int scan, int uni, int mods)
 {

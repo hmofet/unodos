@@ -106,3 +106,6 @@ wifi.creds
 # uoffice host harness artifacts (regeneratable via pc64/uoffice/build.sh)
 pc64/uoffice/build/
 csslib/test/build/
+
+# per-WAD Duum golden baselines are local, like upstream keeps them
+pc64/tools/duum_golden.json

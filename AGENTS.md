@@ -44,6 +44,7 @@ re-home"). Ownership is of the CODE; the whole OS is a shared goal.
 | unoscript (scripting surface) | `UNOSCRIPT.md` | `unoscript.*`, `upy_port/mod_unoscript.c` |
 | unodevices (PCI device tree + driver registry) | `pc64/DEVICES.md` | `uno_devmgr.*` |
 | app registry (the app descriptor a `.UNO` carries, the shell's app table, `APPS\` discovery) | `docs/APP-REGISTRY-PLAN.md`, `uno_appdesc.h`, `pc64/MODULES.md` | `uno_appdesc.h`, `pc64_qoi.*`, `uno_mod_desc_read`/`uno_mod_scan` in `pc64_modload.c`, `g_app[]` in `pc64_uui.c` |
+| key bindings + app preferences (what a key DOES, and the small store behind it) | `pc64/uno_binds.h`, `pc64/DUUM-UPSTREAM.md` | `uno_binds.*`, `tools/binds_test.*`; the two producers (`hid_kbd.c`, `pc64_native.c`) translate their own key space and CONSUME it through a weak `uno_bind_bits` |
 | debug harness (IDT faults, watchdog, kernel log, telemetry to `\CRASH`) | `pc64/DEBUG.md` | `uno_debug.*`, `uno_hw_wdt.*`, `pc64_spectest.*`, `pc64_nettest.*` |
 | installer (install-to-disk + boot entries) | `INSTALL.md` | `installer.c` |
 | unomedia (image / audio decoders) | `IMAGES.md`, `AUDIO.md` | `unomedia/` |

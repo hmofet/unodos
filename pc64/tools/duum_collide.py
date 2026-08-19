@@ -40,6 +40,7 @@ import duum_host                                            # noqa: E402
 
 CW, CH = 518, 382                    # the device's Duum canvas
 engine = None                        # the vendored module, set by load()
+uno_mod = None                       # the `uno` the engine is talking to
 
 LEVELS = ["E1M%d" % i for i in range(1, 10)]
 PR = 16                              # player radius, as step_player uses
@@ -50,6 +51,8 @@ def load(wad):
     if wad:
         duum_host.WAD_OVERRIDE = os.path.abspath(wad)
     engine = duum_host.load_app()
+    global uno_mod
+    uno_mod = sys.modules["uno"]
     app = engine.app
     app.build(duum_host.Canvas(CW, CH))
     if app.err:
@@ -277,39 +280,79 @@ def check_proj(app):
 def check_menu(app):
     """The menu, through this port's eyes rather than a desktop's.
 
-    Everything here is a thing that is invisible upstream and broken here:
+    Everything here is a thing that is invisible upstream and breakable here:
 
     - Escape is ASCII 27 on a desktop and SCANCODE 0x17 with uni 0 on this
       machine (hid_kbd.h).  An engine that only knows the first has a menu
       that never opens, and every desktop gate stays green.
-    - Quit and Controls are offered only where something will act on them.
-      The shell owns the windows here and there are no binding hooks, so a
-      Quit row would sit there doing nothing and a Controls screen would lie.
-    - draw_menu goes through the C canvas mirror, so this also proves the
-      menu needs nothing the span-writer contract does not already have.
+    - Rebinding goes through uno_binds.c, whose semantics duum_host mirrors:
+      a KEY ID is unshifted ASCII or 0x101-0x105, and Use is REFUSED because
+      it is read as a key event rather than from the held bitmap the binding
+      table feeds.  A stored Use binding would do nothing.
+    - There is no frontend here, so the ENGINE captures the rebind and hands
+      the host the raw event.  That path only exists for ports like this one.
+    - Quit is still not offered: the shell owns its windows.
+    - draw_menu goes through the C canvas mirror, so this also proves the menu
+      needs nothing the span-writer contract does not already have.
     """
     app.load_level("E1M1")
     app.render()
     ok = True
 
+    def bad(msg):
+        print("  menu    %s  FAIL" % msg)
+
     if app.menu_open():
-        print("  menu    the menu was already open  FAIL")
-        ok = False
+        bad("the menu was already open"); ok = False
     app.key(0, 0x17, 0)
     if not app.menu_open():
-        print("  menu    the device's Esc scancode (0x17) did not open it  FAIL")
+        bad("the device's Esc scancode (0x17) did not open it")
         return False
-    rows = [r[0] for r in app.menu_rows()]
-    if "Quit" in rows:
-        print("  menu    Quit is offered, and nothing here can act on it  FAIL")
-        ok = False
-    app.menu = [app.M_KEYS, 0]
-    if app.can_bind():
-        print("  menu    claims it can remap keys, with no host hooks  FAIL")
-        ok = False
-    if "cannot remap" not in " ".join(r[0] for r in app.menu_rows()):
-        print("  menu    the Controls screen does not say why it is empty  FAIL")
-        ok = False
+    if "Quit" in [r[0] for r in app.menu_rows()]:
+        bad("Quit is offered, and nothing here can act on it"); ok = False
+    if not app.can_bind():
+        bad("the host hooks are there but the menu does not see them"); ok = False
+
+    # rebind Turn left onto K, with no frontend in the picture
+    app.menu = [app.M_KEYS, 2]
+    app.key(13, 0, 0)
+    if app.capture != engine.A_TURNL:
+        bad("selecting the row did not start a capture"); ok = False
+    app.key(ord("k"), 0, 0)
+    if app.capture is not None:
+        bad("the capture never ended"); ok = False
+    if "K" not in app.bind_name(engine.A_TURNL):
+        bad("the new key is not on the action: %r"
+            % app.bind_name(engine.A_TURNL)); ok = False
+    if duum_host.bind_bits(ord("k")) != engine.A_TURNL:
+        bad("the keyboard would not report the new key as turn-left"); ok = False
+    if duum_host.bind_bits(duum_host.BK_LEFT) != 0:
+        bad("the old key still turns left"); ok = False
+
+    # Use is refused, and says so rather than storing something inert
+    app.menu = [app.M_KEYS, 7]
+    app.key(13, 0, 0)
+    app.msg = ""
+    app.key(ord("j"), 0, 0)
+    if duum_host.bind_bits(ord("j")) & engine.A_USE:
+        bad("Use accepted a binding it cannot honour"); ok = False
+    if not app.msg:
+        bad("a refused rebind said nothing"); ok = False
+
+    if hasattr(uno_mod, "bind_reset"):
+        uno_mod.bind_reset()
+    if duum_host.bind_bits(duum_host.BK_LEFT) != engine.A_TURNL:
+        bad("reset did not restore the defaults"); ok = False
+
+    # the FPS toggle is remembered through the host, not in the app
+    app.menu = [app.M_OPTS, 0]
+    was = app.show_fps
+    app.key(13, 0, 0)
+    if app.show_fps == was:
+        bad("the FPS toggle did nothing"); ok = False
+    if uno_mod.pref_get("fps") != ("1" if app.show_fps else "0"):
+        bad("the FPS setting was not written through to the host"); ok = False
+
     app.menu = [app.M_MAIN, 0]
     app.show_fps = True
     try:
@@ -317,14 +360,12 @@ def check_menu(app):
         cv.clear(0)
         app.draw(cv)
     except Exception as e:
-        print("  menu    drawing it through the device canvas raised %r  FAIL" % e)
-        ok = False
+        bad("drawing it through the device canvas raised %r" % e); ok = False
     app.show_fps = False
     app.key(0, 0x17, 0)
     if app.menu_open():
-        print("  menu    the device's Esc did not close it  FAIL")
-        ok = False
-    print("  menu    device Esc opens and closes, offers only what works  %s"
+        bad("the device's Esc did not close it"); ok = False
+    print("  menu    device Esc, rebinding, refusals and prefs  %s"
           % ("ok" if ok else "FAIL"))
     return ok
 
