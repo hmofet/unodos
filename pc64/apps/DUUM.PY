@@ -1,6 +1,6 @@
 # Duum 0.1.0 - GENERATED FILE, DO NOT EDIT.
 #
-# Built from the duum package by tools/build.py on 2026-08-18.
+# Built from the duum package by tools/build.py on 2026-08-19.
 # Edit the package and rebuild; edits here are lost.
 # Source and licence (MPL-2.0): https://github.com/hmofet/duum
 #
@@ -60,6 +60,32 @@ ML_BLOCKMONST = 2
 ML_TWOSIDED   = 4
 ML_DONTPEGTOP = 8
 ML_DONTPEGBOT = 16
+
+# ---- actions, and who owns what about a key ------------------------------
+# An ACTION is the engine's idea ("turn left").  The PHYSICAL KEY behind it
+# belongs to the host, and deliberately so: UnoDOS's C keyboard code and a
+# tkinter window have no way of naming a key that means the same thing.  So
+# the engine names actions, asks the host what key is on one, and asks the
+# host to change it.  Both requests are optional (`hasattr`), so a host that
+# cannot remap simply says so in the menu.
+#
+# The ids are the same numbers the held-key bitmap uses, because that bitmap
+# is the contract and there is no sense in inventing a second numbering that
+# has to be kept in step with it.
+A_FWD    = 1
+A_BACK   = 2
+A_TURNR  = 4
+A_TURNL  = 8
+A_FIRE   = 16
+A_USE    = 32
+A_STRL   = 64
+A_STRR   = 128
+
+# Order is the order the Controls screen lists them in.
+ACTIONS = ((A_FWD, "Move forward"), (A_BACK, "Move back"),
+           (A_TURNL, "Turn left"), (A_TURNR, "Turn right"),
+           (A_STRL, "Strafe left"), (A_STRR, "Strafe right"),
+           (A_FIRE, "Fire"), (A_USE, "Open / use"))
 
 # collision
 MAXSTEP = 24       # tallest step a thing can climb without a jump
@@ -745,6 +771,7 @@ class Duum(uno.App):
             self.have_keys = hasattr(uno, "keys_down")
             self.kd = 0; self.kd_prev = 0
             self.rng = 0x29A5D1
+            self.menu_init()
             self.new_game(LEVEL)
         except Exception as e:
             self.err = repr(e)
@@ -1703,6 +1730,232 @@ class Duum(uno.App):
             else:
                 cv.text(cx - 60, cy - 4, "Entering " + nxt, rgb(235, 235, 210))
             cv.text(cx - 76, cy + 14, "press SPACE to continue", rgb(180, 180, 180))
+        self.fps_sample()
+        if self.show_fps:
+            cv.text(self.cw - 56, 6, "%d FPS" % (self.fps + 0.5),
+                    rgb(120, 250, 140))
+        if self.menu is not None:
+            self.draw_menu(cv)
+
+    # ---- menu, options and the FPS counter ----------------------------------
+    # The menu is drawn with `fill_rect` and `text`, the two canvas calls every
+    # port already has, so it costs the ports nothing and needs no change to
+    # the span-writer contract.
+    #
+    # It pauses the world by NOT ADVANCING THE CLOCK. `now` is an absolute time
+    # that refire, messages, door waits and every monster timer are compared
+    # against, so letting it run while paused would make all of them fire at
+    # once on resume.
+
+    M_MAIN, M_OPTS, M_KEYS = 0, 1, 2
+
+    # Escape is not one code across platforms and cannot be made into one.
+    # A desktop event carries the ASCII 27; UnoDOS reports non-character keys
+    # as a SCANCODE with uni 0, and its Escape is 0x17 (hid_kbd.h).  Accepting
+    # both is the whole of the platform difference, and getting it wrong is
+    # invisible on a desktop: the menu simply never opens on the device.
+    ESC_UNI = 27
+    ESC_SCAN = 0x17
+
+    def is_esc(self, uni, scan):
+        return uni == Duum.ESC_UNI or scan == Duum.ESC_SCAN
+
+    def menu_init(self):
+        self.menu = None            # None, or [screen, cursor]
+        self.menu_dirty = False
+        self.capture = None         # action id the host is capturing a key for
+        # A frontend that can actually close the program sets allow_quit, and
+        # then acts on self.quit.  UnoDOS's shell owns its own windows and has
+        # no such call, so the row is not offered there rather than being
+        # offered and doing nothing.
+        self.quit = False
+        self.allow_quit = getattr(self, "allow_quit", False)
+        self.fps = 0.0
+        self.fps_n = 0
+        self.fps_t = uno.ticks() if self.have_ticks else 0
+        self.show_fps = self.pref("fps", "0") == "1"
+
+    # -- optional host hooks.  Every one is PROBED, never required: a port with
+    #    none of them still runs the whole game, and the menu says as much
+    #    rather than offering a control that would do nothing.
+    def pref(self, name, default):
+        if hasattr(uno, "pref_get"):
+            try:
+                v = uno.pref_get(name)
+                if v is not None:
+                    return v
+            except Exception:
+                pass
+        return default
+
+    def pref_put(self, name, value):
+        if hasattr(uno, "pref_set"):
+            try:
+                uno.pref_set(name, value)
+            except Exception:
+                pass
+
+    def can_bind(self):
+        return hasattr(uno, "bind_name")
+
+    def bind_name(self, action):
+        try:
+            return uno.bind_name(action) or "-"
+        except Exception:
+            return "-"
+
+    def menu_open(self):
+        return self.menu is not None
+
+    def wants_raw(self):
+        """True when the frontend should forward every key press as an event.
+
+        Movement keys normally arrive as a HELD BITMAP and are deliberately not
+        sent as events, because `key()` marks a key held for 0.3s and that
+        would make walking sticky.  While the menu is up nothing is walking.
+        """
+        return self.menu is not None or self.capture is not None
+
+    def menu_rows(self):
+        """The current screen as [(label, value)]; value "" for a plain item."""
+        if self.menu is None:
+            return []
+        sc = self.menu[0]
+        if sc == Duum.M_MAIN:
+            rows = [("Resume", ""), ("Options", "")]
+            if self.allow_quit:
+                rows.append(("Quit", ""))
+            return rows
+        if sc == Duum.M_OPTS:
+            return [("FPS counter", "on" if self.show_fps else "off"),
+                    ("Controls", ""), ("Back", "")]
+        rows = []
+        if not self.can_bind():
+            rows.append(("this platform cannot remap keys", ""))
+        else:
+            for act, label in ACTIONS:
+                rows.append((label, self.bind_name(act)))
+            rows.append(("Reset to defaults", ""))
+        rows.append(("Back", ""))
+        return rows
+
+    def menu_key(self, uni, scan):
+        """Menu navigation: arrows, Enter, Esc, and never remappable.
+
+        A menu you can lock yourself out of by rebinding is worse than no menu,
+        so these four are fixed even though everything they configure is not.
+        """
+        if self.capture is not None:
+            return True                        # the frontend owns the next key
+        rows = self.menu_rows()
+        n = len(rows)
+        self.menu_dirty = True
+        if self.is_esc(uni, scan):             # Esc: back one screen, or out
+            if self.menu[0] == Duum.M_MAIN:
+                self.menu = None
+            else:
+                self.menu = [Duum.M_OPTS if self.menu[0] == Duum.M_KEYS
+                             else Duum.M_MAIN, 0]
+            return True
+        if scan == 1:                          # up
+            self.menu[1] = (self.menu[1] - 1) % n
+            return True
+        if scan == 2:                          # down
+            self.menu[1] = (self.menu[1] + 1) % n
+            return True
+        if scan == 3 or scan == 4:             # left/right change a value
+            if self.menu[0] == Duum.M_OPTS and self.menu[1] == 0:
+                self.toggle_fps()
+            return True
+        if uni == 13 or uni == 32:             # Enter / Space activates
+            self.menu_activate()
+            return True
+        return True                            # swallow everything else
+
+    def toggle_fps(self):
+        self.show_fps = not self.show_fps
+        self.pref_put("fps", "1" if self.show_fps else "0")
+
+    def menu_activate(self):
+        sc, i = self.menu
+        rows = self.menu_rows()
+        label = rows[i][0] if i < len(rows) else ""
+        if sc == Duum.M_MAIN:
+            if label == "Resume":
+                self.menu = None
+            elif label == "Options":
+                self.menu = [Duum.M_OPTS, 0]
+            elif label == "Quit":
+                self.quit = True
+        elif sc == Duum.M_OPTS:
+            if i == 0:
+                self.toggle_fps()
+            elif i == 1:
+                self.menu = [Duum.M_KEYS, 0]
+            else:
+                self.menu = [Duum.M_MAIN, 0]
+        else:
+            if label == "Back":
+                self.menu = [Duum.M_OPTS, 0]
+            elif label == "Reset to defaults":
+                if hasattr(uno, "bind_reset"):
+                    try:
+                        uno.bind_reset()
+                    except Exception:
+                        pass
+            elif self.can_bind() and i < len(ACTIONS):
+                self.capture = ACTIONS[i][0]
+
+    def capture_done(self, ok):
+        """The frontend has taken, or refused, a key for self.capture."""
+        self.capture = None
+        self.menu_dirty = True
+
+    def fps_sample(self):
+        """Frames per second over a ~1s window.
+
+        Counted in draw(), because draw() is one PAINT on every port and tick()
+        is not: UnoDOS repaints only when tick() reports something changed, so
+        counting ticks would report a frame rate the screen never showed.
+        """
+        if not self.have_ticks:
+            return
+        self.fps_n += 1
+        tk = uno.ticks()
+        d = tk - self.fps_t
+        if d >= 60:
+            self.fps = self.fps_n * 60.0 / d
+            self.fps_n = 0
+            self.fps_t = tk
+
+    def draw_menu(self, cv):
+        rows = self.menu_rows()
+        cw = self.cw; ch = self.ch
+        wide = self.menu[0] == Duum.M_KEYS
+        w = 236 if wide else 172
+        vx = w - (88 if wide else 60)      # the value column
+        h = 46 + 16 * len(rows)
+        x = (cw - w) // 2
+        y = (ch - h) // 2
+        cv.fill_rect(x - 2, y - 2, w + 4, h + 4, rgb(120, 30, 24))
+        cv.fill_rect(x, y, w, h, rgb(18, 16, 18))
+        cv.text(x + 10, y + 6, ("DUUM", "OPTIONS", "CONTROLS")[self.menu[0]],
+                rgb(240, 90, 70))
+        for i in range(len(rows)):
+            label, value = rows[i]
+            ry = y + 26 + 16 * i
+            on = (i == self.menu[1])
+            if on:
+                cv.fill_rect(x + 4, ry - 3, w - 8, 16, rgb(48, 26, 24))
+            col = rgb(255, 220, 140) if on else rgb(200, 190, 180)
+            cv.text(x + 12, ry, label, col)
+            if value:
+                if self.capture is not None and i < len(ACTIONS) and \
+                        ACTIONS[i][0] == self.capture:
+                    cv.text(x + vx, ry, "press a key", rgb(250, 120, 90))
+                else:
+                    cv.text(x + vx, ry, value, col)
+        cv.text(x + 12, y + h - 15, "arrows   enter   esc", rgb(122, 112, 108))
 
     # ---- input --------------------------------------------------------------
     # There are no key-up events on this platform.  A key event marks the key
@@ -1711,6 +1964,12 @@ class Duum(uno.App):
     def key(self, uni, scan, ctrl):
         if self.err is not None:
             return False
+        if self.menu is not None:
+            return self.menu_key(uni, scan)
+        if self.is_esc(uni, scan):                 # Esc opens the menu
+            self.menu = [Duum.M_MAIN, 0]
+            self.menu_dirty = True
+            return True
         if self.dead or self.finish is not None:
             if uni == 32 or scan == 0x01 or uni == 13:
                 if self.finish is not None:
@@ -1775,6 +2034,16 @@ class Duum(uno.App):
             dt = 0.033
         if dt > 0.1:
             dt = 0.1
+        if self.menu is not None:
+            # Paused.  `now` deliberately does not advance (see menu_init), and
+            # the held-key bitmap is dropped so releasing a key behind the menu
+            # cannot leave the player walking on resume.
+            self.kd_prev = self.kd = 0
+            self.held = {}
+            if self.menu_dirty:
+                self.menu_dirty = False
+                return True
+            return False
         self.now += dt
         if self.have_keys:
             self.kd_prev = self.kd

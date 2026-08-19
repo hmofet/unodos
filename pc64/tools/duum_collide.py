@@ -20,6 +20,8 @@ ZimaBlade bring-up (see METAL-FINDINGS.md).  This one asserts about MOVEMENT:
           Door operation was UNVERIFIED on hardware for want of anything
           solid to stand against
   proj    a rocket fired at a wall stops at it
+  menu    the pause menu opens with the DEVICE's Escape, and offers only what
+          this platform can actually do
 
   python3 tools/duum_collide.py [--wad W] [--level E1M1] [-n 4000]
 
@@ -271,6 +273,62 @@ def check_proj(app):
     return ok
 
 
+# ---- menu -----------------------------------------------------------------
+def check_menu(app):
+    """The menu, through this port's eyes rather than a desktop's.
+
+    Everything here is a thing that is invisible upstream and broken here:
+
+    - Escape is ASCII 27 on a desktop and SCANCODE 0x17 with uni 0 on this
+      machine (hid_kbd.h).  An engine that only knows the first has a menu
+      that never opens, and every desktop gate stays green.
+    - Quit and Controls are offered only where something will act on them.
+      The shell owns the windows here and there are no binding hooks, so a
+      Quit row would sit there doing nothing and a Controls screen would lie.
+    - draw_menu goes through the C canvas mirror, so this also proves the
+      menu needs nothing the span-writer contract does not already have.
+    """
+    app.load_level("E1M1")
+    app.render()
+    ok = True
+
+    if app.menu_open():
+        print("  menu    the menu was already open  FAIL")
+        ok = False
+    app.key(0, 0x17, 0)
+    if not app.menu_open():
+        print("  menu    the device's Esc scancode (0x17) did not open it  FAIL")
+        return False
+    rows = [r[0] for r in app.menu_rows()]
+    if "Quit" in rows:
+        print("  menu    Quit is offered, and nothing here can act on it  FAIL")
+        ok = False
+    app.menu = [app.M_KEYS, 0]
+    if app.can_bind():
+        print("  menu    claims it can remap keys, with no host hooks  FAIL")
+        ok = False
+    if "cannot remap" not in " ".join(r[0] for r in app.menu_rows()):
+        print("  menu    the Controls screen does not say why it is empty  FAIL")
+        ok = False
+    app.menu = [app.M_MAIN, 0]
+    app.show_fps = True
+    try:
+        cv = duum_host.Canvas(CW, CH)
+        cv.clear(0)
+        app.draw(cv)
+    except Exception as e:
+        print("  menu    drawing it through the device canvas raised %r  FAIL" % e)
+        ok = False
+    app.show_fps = False
+    app.key(0, 0x17, 0)
+    if app.menu_open():
+        print("  menu    the device's Esc did not close it  FAIL")
+        ok = False
+    print("  menu    device Esc opens and closes, offers only what works  %s"
+          % ("ok" if ok else "FAIL"))
+    return ok
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--wad", default=None)
@@ -285,7 +343,8 @@ def main():
     results = [check_walk(app),
                check_sweep(app, levels, args.n),
                check_doors(app, levels),
-               check_proj(app)]
+               check_proj(app),
+               check_menu(app)]
     bad = results.count(False)
     print("%d/%d check(s) passed" % (len(results) - bad, len(results)))
     return 1 if bad else 0
