@@ -124,6 +124,94 @@ in `mod_uno.c` (`cv_seg_cols`) from an earlier experiment; it is **no longer
 called**, upstream's engine does that loop in Python, and survives only as a
 reference transcription.
 
+**And it should stay uncalled.** A/B'd on real hardware (ZimaBlade, 2026-08-18,
+one alternating boot): the Python loop measured **15.608 ms per draw** against
+the C path's **15.584 ms** on an identical spawn view, 0.15% apart, with the C
+path nominally ahead, i.e. no difference. The MicroPython float-boxing worry did
+not materialise. Duum's renderer is also only ~11.7 ms of a ~46 ms frame there,
+so the frame is the present path and not this loop. Numbers and method in
+[METAL-FINDINGS.md](METAL-FINDINGS.md); harness in
+`tools/demo/duum_ab_metal.py`.
+
+## Open reports for upstream
+
+Things found on UnoDOS hardware that are **engine** bugs, so they are fixed in
+`hmofet/duum` and come back here as a sync. Do not patch `pc64/apps/DUUM.PY`.
+
+An entry stays here once it is answered, rewritten to say what came back rather
+than what was wanted, so nobody re-reads a closed report as open work. What is
+still genuinely outstanding is called out inside each entry.
+
+### WALL COLLISION - reported 2026-08-18, fixed upstream, landed 2026-08-19
+
+The player walked through walls, frequently and reproducibly.
+`blocked(ox, oy, nx, ny, r, selfthing)` referenced no linedef and no vertex,
+and its one wall-like guard, `point_sector(nx, ny) is None`, was dead code: a
+BSP partitions the entire plane, so the descent always lands in a subsector and
+always returns a sector.
+
+Fixed in `hmofet/duum` on 2026-08-18 and vendored here by the sync of
+2026-08-19. Upstream's standing check is its `tools/duum_collide.py`, which
+exists because neither rendering gate can catch this class of bug: both take
+the player's POSITION as an input, so a player standing inside a wall is an
+invalid viewpoint fed to a working renderer and both gates pass while the game
+is unplayable. It asserts about movement instead: a scripted walk into a known
+wall, 36,000 randomised moves that may not cross a one-sided linedef, every
+use-door in the episode, and a rocket fired at a wall.
+
+Method, numbers, and the renderer A/B this was found during, are in
+[METAL-FINDINGS.md](METAL-FINDINGS.md).
+
+**What is still open, and no gate here can close it.** Door operation was
+reported UNVERIFIED rather than known-broken, for want of anything solid to
+stand against. All 110 use-doors in the episode now pass upstream's gate on the
+desktop, so the ZimaBlade re-test is the remaining half of that report.
+
+### SOUND - four optional calls arrived 2026-08-19, unimplemented here
+
+Not a bug, and not work this port owes anyone. Recorded because the vendored
+file changed shape and the next person to read it should know why.
+
+Duum now plays the WAD's own sound effects and its music. Both arrive through
+four calls that are OPTIONAL and `hasattr`-probed, exactly like `ticks`,
+`keys_down` and the five binding hooks:
+
+```
+sfx_load(slot, pcm, rate)     keep a sample under `slot`; sent once per sound
+sfx_play(slot, vol, sep)      play it, mixed with whatever else is running
+mus_play(smf, loop)           a whole Standard MIDI File
+mus_stop()
+```
+
+**This port needs no change and has had none.** Checked against
+`tools/duum_host.py` after the sync rather than assumed: `have_sfx` and
+`have_mus` both come out False, `err` is None, and firing the pistol still
+calls `beep(55, 2)`, which is the note that event has always made. pc64 sounds
+exactly as it did before this sync.
+
+Two things came across in the engine that are worth knowing about:
+
+- `SFX` is a table of 49 rows naming a `DS` lump per game event, and `MSND`
+  gives each monster sprite family its own voice. On a host with no sample
+  playback these only supply the fallback note, so they cost a little RAM and
+  nothing else.
+- `mus_to_midi()` converts a `MUS` lump to a Standard MIDI File. It is present
+  and works in the vendored copy (D_E1M1 converts to 23,393 bytes of `MThd`),
+  but nothing calls it unless a host offers `mus_play`.
+
+**If pc64 ever wants this, most of it is already written here and simply not
+exposed to MicroPython.** `snd_pcm.h` has the sample stream over HDA and AC'97
+(`uno_snd_stream_begin/space/write`), and `unomedia/um_midi.c` is a complete
+SMF player with its own polyphonic synthesiser, so `mus_play` is that decoder
+pointed at the bytes Duum already hands over. What is genuinely missing is a
+MIXER: `snd_pcm` takes one stream at a time and mutes the square voice while a
+stream holds the ring, so a naive `sfx_play` would cut the music off on every
+gunshot. Implementing only `mus_play`/`mus_stop` is a good half step, and the
+engine will not notice the difference.
+
+The full offer, with the memory numbers and the eviction rules, is the entry
+dated 2026-08-19 in upstream's `DUUM-REQUESTS.md`.
+
 ## Not in THIRD-PARTY.md, on purpose
 
 `THIRD-PARTY.md` is the manifest of code belonging to **another entity**, and
