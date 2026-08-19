@@ -40,6 +40,13 @@ void uno_seq_beep(int midi, int ticks);
 void uno_seq_stop(void);
 unsigned int TickCount(void);        /* Toolbox 60Hz tick counter */
 int uno_pc64_keys_held(void);        /* UNO_KH_* bits (hid_kbd.h) */
+/* key bindings + small app preferences (uno_binds.h) */
+int  uno_bind_name(int action, char *buf, int cap);
+int  uno_bind_set(int action, int keyid);
+void uno_bind_reset(void);
+int  uno_bind_keyid(int uni, int scan);
+int  uno_pref_get(const char *name, char *buf, int cap);
+int  uno_pref_set(const char *name, const char *value);
 long uno_fs_read(int vol, const char *name, unsigned char *buf, long max);
 long uno_fs_size(int vol, const char *name);
 long uno_fs_read_at(int vol, const char *name, long off, unsigned char *buf, long max);
@@ -697,6 +704,58 @@ static mp_obj_t m_keys_down(void)
 { return mp_obj_new_int(uno_pc64_keys_held()); }
 static MP_DEFINE_CONST_FUN_OBJ_0(keys_down_obj, m_keys_down);
 
+/* ---- key bindings and app preferences -------------------------------------
+ * The five OPTIONAL calls Duum's pause menu probes for with hasattr.  A port
+ * without them still plays the whole game and the menu says the platform
+ * cannot remap keys; with them, the Controls screen works and the FPS toggle
+ * is remembered across boots.  See pc64/DUUM-UPSTREAM.md and uno_binds.h.
+ *
+ * Actions are named by their UNO_KH_* bit, which is also what keys_down()
+ * answers in, so there is one numbering rather than two kept in step. */
+
+/* uno.bind_name(action) -> "Left / A" */
+static mp_obj_t m_bind_name(mp_obj_t a) {
+    char buf[32];
+    int n = uno_bind_name(mp_obj_get_int(a), buf, (int)sizeof buf);
+    return mp_obj_new_str(buf, n);
+}
+static MP_DEFINE_CONST_FUN_OBJ_1(bind_name_obj, m_bind_name);
+
+/* uno.bind_set(action, uni, scan) -> bool
+ *
+ * Takes the key EVENT the app just received rather than a name, because the
+ * app has the event and this side owns what to call it.  Returns False for a
+ * key that cannot carry a binding, and for Use, which this machine reads as an
+ * event rather than from the held bitmap - storing that would be storing
+ * something that does nothing. */
+static mp_obj_t m_bind_set(mp_obj_t a, mp_obj_t u, mp_obj_t sc) {
+    int keyid = uno_bind_keyid(mp_obj_get_int(u), mp_obj_get_int(sc));
+    return mp_obj_new_bool(uno_bind_set(mp_obj_get_int(a), keyid));
+}
+static MP_DEFINE_CONST_FUN_OBJ_3(bind_set_obj, m_bind_set);
+
+/* uno.bind_reset() -> every binding back to the shipped default */
+static mp_obj_t m_bind_reset(void) { uno_bind_reset(); return mp_const_none; }
+static MP_DEFINE_CONST_FUN_OBJ_0(bind_reset_obj, m_bind_reset);
+
+/* uno.pref_get(name) -> str, or None when there is no such preference.
+ * None rather than "" so that an app can tell "never set" from "set empty"
+ * and fall back to its own default. */
+static mp_obj_t m_pref_get(mp_obj_t nm) {
+    char buf[32];
+    int n = uno_pref_get(mp_obj_str_get_str(nm), buf, (int)sizeof buf);
+    if (n <= 0) return mp_const_none;
+    return mp_obj_new_str(buf, n);
+}
+static MP_DEFINE_CONST_FUN_OBJ_1(pref_get_obj, m_pref_get);
+
+/* uno.pref_set(name, value) -> bool */
+static mp_obj_t m_pref_set(mp_obj_t nm, mp_obj_t v) {
+    return mp_obj_new_bool(uno_pref_set(mp_obj_str_get_str(nm),
+                                        mp_obj_str_get_str(v)));
+}
+static MP_DEFINE_CONST_FUN_OBJ_2(pref_set_obj, m_pref_set);
+
 /* read a whole file (small): uno.read(vol, name) -> bytes; vol default 0 */
 static mp_obj_t m_read(size_t n, const mp_obj_t *a) {
     int vol = n > 1 ? mp_obj_get_int(a[0]) : 0;
@@ -959,6 +1018,11 @@ static const mp_rom_map_elem_t uno_globals_table[] = {
     { MP_ROM_QSTR(MP_QSTR_run_app),      MP_ROM_PTR(&run_app_obj) },
     { MP_ROM_QSTR(MP_QSTR_ticks),        MP_ROM_PTR(&ticks_obj) },
     { MP_ROM_QSTR(MP_QSTR_keys_down),    MP_ROM_PTR(&keys_down_obj) },
+    { MP_ROM_QSTR(MP_QSTR_bind_name),    MP_ROM_PTR(&bind_name_obj) },
+    { MP_ROM_QSTR(MP_QSTR_bind_set),     MP_ROM_PTR(&bind_set_obj) },
+    { MP_ROM_QSTR(MP_QSTR_bind_reset),   MP_ROM_PTR(&bind_reset_obj) },
+    { MP_ROM_QSTR(MP_QSTR_pref_get),     MP_ROM_PTR(&pref_get_obj) },
+    { MP_ROM_QSTR(MP_QSTR_pref_set),     MP_ROM_PTR(&pref_set_obj) },
 };
 static MP_DEFINE_CONST_DICT(uno_globals, uno_globals_table);
 const mp_obj_module_t mp_module_uno = {

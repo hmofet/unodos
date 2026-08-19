@@ -1770,6 +1770,10 @@ class Duum(uno.App):
         # offered and doing nothing.
         self.quit = False
         self.allow_quit = getattr(self, "allow_quit", False)
+        # A frontend rich enough to name its own keys captures rebinds itself
+        # and says so; where nothing does, the engine hands the raw key event
+        # to the host, which is the side that knows what to call it either way.
+        self.captures_keys = getattr(self, "captures_keys", False)
         self.fps = 0.0
         self.fps_n = 0
         self.fps_t = uno.ticks() if self.have_ticks else 0
@@ -1906,10 +1910,35 @@ class Duum(uno.App):
             elif self.can_bind() and i < len(ACTIONS):
                 self.capture = ACTIONS[i][0]
 
+    def capture_key(self, uni, scan):
+        """Take the next key for the action being rebound, where no frontend
+        does it for us.
+
+        The engine still does not learn what a key is CALLED - it hands the
+        host the raw event and the host answers yes or no.  That is the whole
+        reason this can live here at all rather than needing a frontend on
+        every platform.
+        """
+        if self.is_esc(uni, scan):
+            self.capture_done(None)            # cancelled, binding untouched
+            return True
+        if not hasattr(uno, "bind_set"):
+            self.capture_done(False)
+            return True
+        try:
+            ok = uno.bind_set(self.capture, uni, scan)
+        except Exception:
+            ok = False
+        self.capture_done(ok)
+        return True
+
     def capture_done(self, ok):
-        """The frontend has taken, or refused, a key for self.capture."""
+        """A key has been taken, refused (False), or the capture cancelled
+        (None) for self.capture."""
         self.capture = None
         self.menu_dirty = True
+        if ok is False:
+            self.msgset("That key cannot be used for this.")
 
     def fps_sample(self):
         """Frames per second over a ~1s window.
@@ -1964,6 +1993,8 @@ class Duum(uno.App):
     def key(self, uni, scan, ctrl):
         if self.err is not None:
             return False
+        if self.capture is not None and not self.captures_keys:
+            return self.capture_key(uni, scan)
         if self.menu is not None:
             return self.menu_key(uni, scan)
         if self.is_esc(uni, scan):                 # Esc opens the menu

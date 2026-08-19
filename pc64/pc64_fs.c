@@ -357,3 +357,15 @@ int uno_fs_is_boot(int vol)
     d = uno_fat_dev(g_map[vol].idx);
     return d && d->is_boot;
 }
+
+/* Where persistent state belongs; the reasoning is in the header, and it is
+ * the expensive kind. */
+int uno_fs_pref_vol(void)
+{
+    int n = uno_fs_volumes(), v;
+    for (v = 1; v < n; v++)
+        if (uno_fs_kind(v) == 1 && uno_fs_writable(v) && uno_fs_is_boot(v)) return v;
+    for (v = 1; v < n; v++) if (uno_fs_kind(v) == 1 && uno_fs_writable(v)) return v;
+    for (v = 1; v < n; v++) if (uno_fs_writable(v)) return v;
+    return (n > 0 && uno_fs_writable(0)) ? 0 : -1;
+}

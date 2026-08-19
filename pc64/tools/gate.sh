@@ -69,6 +69,13 @@ hosttest ./build/fetch_test.exe
 # The TLS gates are host builds against a real echo server, and they are the
 # only assertion in the tree that a handshake completes: SPECTEST's network
 # area runs a NULL NIC and cannot reach TLS at all.
+# Key bindings: the defaults ARE what every app on this machine reads from the
+# keyboard, so a change to them is a change to input everywhere.  Runs twice,
+# with and without the bindings module, because hid_kbd.c's weak fallback is
+# what the legacy core links.
+step "key binding host gate"
+hosttest sh tools/binds_test.sh
+
 step "unonet TLS host gates"
 hosttest sh tools/tls_entropy_test.sh
 hosttest sh tools/tls_conc_test.sh

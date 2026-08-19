@@ -84,16 +84,31 @@ the menu with `0x17` specifically, so a future sync cannot quietly lose it.
 **A menu must only offer what the platform can do.** Quit is a frontend
 action: the engine raises a flag and something closes the window. Our shell
 owns its own windows and has no such call, so the row is not offered here at
-all rather than sitting there doing nothing. Key remapping is the same story
-through the other end: the engine asks the host to name and change keys via
-optional hooks (`bind_name`, `bind_set`, `bind_reset`, `pref_get`,
-`pref_set`), we supply none of them yet, and the Controls screen says so in
-those words instead of showing an empty list.
+all rather than sitting there doing nothing.
 
-That last one is a standing invitation rather than a limitation. Implementing
-those five calls in `mod_uno.c` would give the device remappable keys and
-remembered settings with no change to the engine at all, because every one of
-them is probed with `hasattr`.
+Key remapping was the same story until the five hooks landed. **They are
+implemented now** (`uno_binds.c`, exposed through `mod_uno.c` as `bind_name`,
+`bind_set`, `bind_reset`, `pref_get`, `pref_set`), so the Controls screen
+works on the device and the FPS setting survives a reboot in `UNOPREF.CFG` on
+the boot volume. The engine needed no porting layer for it: every one of the
+five is probed with `hasattr`, so supplying them was the whole job.
+
+Two things about that implementation are worth knowing before touching it:
+
+- **A binding is stored against a KEY ID, not a scancode.** This machine has
+  two keyboard transports in two different code spaces (HID Usage codes, PS/2
+  Set-1), so a binding is held as unshifted ASCII, or `UNO_BK_*` for the keys
+  with no character, and each producer translates its own space into that. A
+  third transport means writing one translation, not another copy of the
+  table.
+- **Use refuses to be rebound here.** It is the one action the engine reads as
+  a key EVENT rather than from the held bitmap, and the binding table only
+  feeds the bitmap, so a stored Use binding would do nothing. It says no, and
+  the menu says why, which is better than accepting it and going quiet.
+
+There is also no frontend on this machine to capture the new key, so the
+ENGINE captures it and hands us the raw event - a path that exists upstream
+purely for ports like this one.
 
 ## Why the engine can be shared at all
 

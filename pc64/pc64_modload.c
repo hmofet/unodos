@@ -27,6 +27,7 @@
 #include "unolog.h"
 #include "unovirt_mgr.h"     /* appliances: the manager surface VMGR.UNO uses */
 #include "pc64_fs.h"
+#include "uno_binds.h"    /* uno.bind_* / uno.pref_* exports */
 #include "fat.h"
 #include "pc64_font.h"
 #include "uefi.h"
@@ -288,6 +289,10 @@ static const struct { const char *name; void *addr; } kExports[] = {
     KX(unolog_sev_name), KX(unolog_fac_name),
     /* held-keys level for PYRT's uno.keys_down() (Duum movement) */
     KX(uno_pc64_keys_held),
+    /* key bindings + app preferences, for PYRT's uno.bind_* / uno.pref_*
+     * (Duum's Controls screen and its FPS toggle) */
+    KX(uno_bind_name), KX(uno_bind_set), KX(uno_bind_reset),
+    KX(uno_bind_keyid), KX(uno_pref_get), KX(uno_pref_set),
 };
 #define NEXPORT ((int)(sizeof kExports / sizeof kExports[0]))
 
