@@ -3,7 +3,7 @@
 **Canonical home: https://github.com/hmofet/duum** (MPL-2.0, same licence as
 UnoDOS).
 
-Duum started here, as `pc64/apps/DUUM.PY` — the acceptance test that Python is
+Duum started here, as `pc64/apps/DUUM.PY`, the acceptance test that Python is
 a first-class app language on this OS. It is now a standalone cross-platform
 Doom engine that runs anywhere CPython does, and UnoDOS is one of its ports
 rather than its home.
@@ -15,8 +15,8 @@ rather than its home.
 the next time anyone syncs, and worse, it silently forks the engine away from
 the upstream that every other platform builds on.
 
-A change to the engine — a rendering fix, an optimisation, a gameplay
-behaviour — goes to the duum repo, and comes back here as a sync.
+A change to the engine (a rendering fix, an optimisation, a gameplay
+behaviour) goes to the duum repo, and comes back here as a sync.
 
 What still belongs to UnoDOS, and is edited here normally:
 
@@ -38,8 +38,8 @@ python pc64/tools/sync_duum.py --from ../duum
 python pc64/tools/sync_duum.py --ref v0.1.0
 ```
 
-It drops upstream's `dist/unodos/DUUM.PY` — the engine only; the desktop
-rasteriser and tkinter frontend are not in that build — onto
+It drops upstream's `dist/unodos/DUUM.PY`, the engine only (the desktop
+rasteriser and tkinter frontend are not in that build), onto
 `pc64/apps/DUUM.PY`, and prints the version it landed.
 
 Then prove it, because a sync is a code drop from another repository:
@@ -57,7 +57,7 @@ independent oracle and must be 0 failing views regardless.
 
 `duum_collide` is neither, and it is the one a sync most needs. Both of the
 others take the player's POSITION as an input, so they render a perfectly good
-frame from inside a wall and report success — which is how a Duum with no wall
+frame from inside a wall and report success, which is how a Duum with no wall
 collision at all shipped past both of them for months. It asserts about
 movement instead: a scripted walk into a known wall, randomised moves that may
 not cross a one-sided linedef, every use-door in the episode, and a rocket
@@ -65,8 +65,8 @@ fired at a wall.
 
 ## Why the engine can be shared at all
 
-Duum only ever asked its platform for six things — `size`, `read_at`, `beep`,
-`quiet`, and optionally `ticks` and `keys_down` — and only ever drew through
+Duum only ever asked its platform for six things (`size`, `read_at`, `beep`,
+`quiet`, and optionally `ticks` and `keys_down`) and only ever drew through
 a canvas with a span-writer contract. That is the whole porting surface, and
 it is why the same file runs on a desktop and on pc64 unchanged: upstream
 supplies a pure-Python rasteriser, we supply a C one, and the engine cannot
@@ -74,7 +74,7 @@ tell the difference.
 
 The engine itself is pure Python on both. There is a C per-column rasteriser
 in `mod_uno.c` (`cv_seg_cols`) from an earlier experiment; it is **no longer
-called** — upstream's engine does that loop in Python — and survives only as a
+called**, upstream's engine does that loop in Python, and survives only as a
 reference transcription.
 
 ## Not in THIRD-PARTY.md, on purpose
