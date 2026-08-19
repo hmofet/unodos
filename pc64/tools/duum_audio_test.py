@@ -36,7 +36,8 @@ sys.path.insert(0, os.path.dirname(HERE))
 import remote_qemu as RQ                                    # noqa: E402
 from unoauto_remote import UnoAutoLink                      # noqa: E402
 
-duum_mode = "duum" in sys.argv[1:]         # `duum` = the end-to-end run
+duum_mode = "duum" in sys.argv[1:]         # `duum`  = the end-to-end run
+nosnd_mode = "nosnd" in sys.argv[1:]       # `nosnd` = a machine with no DAC
 WAV = os.path.join(os.path.dirname(HERE), "build",
                    "duum_audio_e2e.wav" if duum_mode else "duum_audio.wav")
 SR_SFX = 11025                      # the rate a Doom DS lump carries
@@ -153,10 +154,11 @@ def boot(link):
         "-drive", "format=raw,file=" + RQ.DISK2,
         "-netdev", "user,id=n0",
         "-device", "e1000,netdev=n0",
-        "-audiodev", "wav,id=snd0,path=" + WAV,
-        "-device", "intel-hda", "-device", "hda-output,audiodev=snd0",
         "-display", "none",
     ]
+    if not nosnd_mode:
+        cmd += ["-audiodev", "wav,id=snd0,path=" + WAV,
+                "-device", "intel-hda", "-device", "hda-output,audiodev=snd0"]
     # A guest that dies mid-stage times out on the NEXT command and says
     # nothing about why, so keep the debug console reachable the same way
     # RQ does. The first failure here was a UBSan trap in the mixer.
@@ -282,6 +284,60 @@ def analyse():
           "%d window(s)" % len(both))
 
 
+def drive_nosnd(link):
+    """A machine with no audio hardware at all - a ZimaBlade, say.
+
+    The interesting thing here is NOT that nothing plays; it is HOW nothing
+    plays. The engine ignores sfx_load's result and returns after sfx_play
+    whatever it answers, so a host that politely returns False leaves the game
+    MUTE. An exception is the only signal that routes back to `beep`, so these
+    calls must RAISE when no PCM device probed - and the proof is the engine's
+    own have_sfx going False after it has tried."""
+    def py(src, timeout=60):
+        return " ".join(link.command("py", src, timeout=timeout)).strip()
+
+    line = py("import uno; print(uno.__name__ and hasattr(uno,'sfx_play'))")
+    check("True" in line, "the calls are still THERE with no audio device", line)
+
+    # URC is line-based, so the source has to BE one line: the newlines below
+    # are two characters inside a string the guest's exec() unescapes.
+    def attempt(call):
+        return py("import uno; exec(\"try:\\n " + call +
+                  "\\n print('returned')\\nexcept OSError as e:\\n"
+                  " print('raised', e)\")")
+
+    line = attempt("uno.sfx_load(0, b'\\x80'*64, 11025)")
+    check(line.startswith("raised"), "sfx_load raises on a machine with no DAC", line)
+    line = attempt("uno.sfx_play(0,255,128)")
+    check(line.startswith("raised"), "sfx_play raises too", line)
+    line = attempt("uno.mus_play(b'MThd'+bytes(20),0)")
+    check(line.startswith("raised"), "mus_play raises too", line)
+
+    # ...and now the engine, which is the only thing that can prove the
+    # exception lands where the fallback is.
+    for _ in range(len(link.command("probe", timeout=15))):
+        link.command("close", timeout=10)
+        time.sleep(0.4)
+    vol = None
+    for v in range(4):
+        r = py("import uno; print(uno.size(%d,'APPS/DUUM.UNO'))" % v, timeout=20)
+        if r.strip().lstrip("-").isdigit() and int(r) > 0:
+            vol = v
+            break
+    if vol is None:
+        check(False, "DUUM.UNO is on a volume")
+        return
+    py("import uno; print(uno.run_app(%d,'APPS/DUUM.UNO'))" % vol, timeout=60)
+    time.sleep(40.0)
+    for _ in range(4):
+        link.key(0, ord('f'), 0, timeout=8)
+        time.sleep(0.7)
+    time.sleep(1.5)
+    line = py("print(app.have_sfx, app.have_mus, app.err)")
+    check(line.startswith("False False"),
+          "the engine fell back to beeps instead of going mute", line)
+
+
 def analyse_duum():
     rate, left, right = read_wav(WAV)
     print("  captured %.1f s at %d Hz" % (len(left) / float(rate), rate))
@@ -312,7 +368,9 @@ def main():
             return 1
         link.wait_hello(30.0)
         time.sleep(3.0)
-        if duum_mode:
+        if nosnd_mode:
+            drive_nosnd(link)
+        elif duum_mode:
             drive_duum(link)
         else:
             drive(link)
@@ -327,13 +385,11 @@ def main():
         except Exception:
             pass
 
-    if not os.path.exists(WAV):
-        print("FAIL: no capture at " + WAV)
-        return 1
-    if duum_mode:
-        analyse_duum()
-    else:
-        analyse()
+    if not nosnd_mode:             # nothing to capture there: that is the point
+        if not os.path.exists(WAV):
+            print("FAIL: no capture at " + WAV)
+            return 1
+        analyse_duum() if duum_mode else analyse()
 
     print()
     if fails:
@@ -341,7 +397,8 @@ def main():
         for f in fails:
             print("  - " + f)
         return 1
-    print("DUUM AUDIO: PASS (capture kept at %s)" % WAV)
+    print("DUUM AUDIO: PASS" +
+          ("" if nosnd_mode else " (capture kept at %s)" % WAV))
     return 0
 
 

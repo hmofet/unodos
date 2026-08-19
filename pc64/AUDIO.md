@@ -250,6 +250,9 @@ PC-speaker fallback path.
   QEMU-verified so far). If a machine stays silent, check the System window
   first: probe failure falls back to the PC speaker line.
 - AC'97 on a real ICH board (pre-2007 hardware).
+- The effects voices and the score player (above): QEMU-verified only. The
+  ZimaBlade is not the box for it - no audio hardware, so the whole path
+  correctly declines there.
 - LPIB accuracy on non-Intel HDA controllers (VIA/AMD sometimes need the
   DMA position buffer instead; not implemented, the symptom would be a
   wobbling write-ahead, i.e. crackle).

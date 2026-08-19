@@ -9161,4 +9161,25 @@ taken from the recording itself. And `tools/duum_audio_test.py duum` runs the
 real engine: `app.have_sfx` / `app.have_mus` True with `err` None, a WAD
 sample handed over on the first shot, 46 of 65 captured seconds non-silent.
 
-**Open:** never heard on the ZimaBlade. QEMU's HDA is not a real codec.
+### The fourth thing, found while writing the ZimaBlade note down
+
+**False and an exception mean different things, and getting that wrong makes a
+soundless machine MUTE rather than beeping.** The engine's `sound()` ignores
+what `sfx_load` returns and `return`s after `sfx_play` whatever it answers, so
+a polite `False` from a host with no DAC skips the fallback entirely. Only an
+exception reaches `self.snd()`. The bindings therefore split the two answers:
+
+| | |
+|---|---|
+| `False` | a transient refusal - empty slot, Music holding the stream. Try again later. |
+| `OSError` | no PCM device at all. Turn the path off; beep from now on. |
+
+`tools/duum_audio_test.py nosnd` is that case as a gate: it boots with NO
+sound device, checks all three calls raise, then launches the real engine,
+fires four times and reads back `have_sfx` / `have_mus` - both False, i.e. it
+is beeping.
+
+**Open:** never heard on metal - QEMU's HDA is not a real codec, and the
+ZimaBlade cannot settle it because it has no audio hardware (that box is the
+`nosnd` case above, and correctly declines). A machine with a real codec is
+the test, and one is planned.
