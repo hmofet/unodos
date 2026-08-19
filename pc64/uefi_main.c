@@ -491,7 +491,16 @@ static void read_mode(void)
         gModeH  = gBI->fb_height;
         gStride = gBI->fb_pitch / 4;        /* the field is BYTES per line */
         gUseBlt = 0;                        /* there is no Blt without a GOP */
-        gSwapRB = 0;                        /* VBE 32bpp is 8:8:8 = our FB_RGB */
+        /* VBE 32bpp is x8r8g8b8 - bytes B,G,R,X, i.e. red in bits 16-23 - and
+         * fb_px is 0xAABBGGRR with red in bits 0-7, so the two are REVERSED and
+         * the swizzle is required. The same layout arrives over GOP as
+         * PixelBlueGreenRedReserved, which sets gSwapRB below for exactly this
+         * reason. Getting this wrong is not subtle and it is not a crash: every
+         * blue in the theme comes out orange (Aurora's #4C6EF5 accent renders
+         * #F56E4C), which is what /try/ shipped with until 2026-08-19. The
+         * stage stripes above are the proof it is x8r8g8b8: they write raw
+         * 0x00RRGGBB into gVram on this very path and land the colour named. */
+        gSwapRB = 1;
         gVram   = (volatile UINT32 *)(UINTN)gBI->fb_addr;
         if (gModeW > GROW_W) gModeW = GROW_W;
         if (gModeH > GROW_H) gModeH = GROW_H;
