@@ -9183,3 +9183,60 @@ is beeping.
 ZimaBlade cannot settle it because it has no audio hardware (that box is the
 `nosnd` case above, and correctly declines). A machine with a real codec is
 the test, and one is planned.
+
+---
+
+## 2026-08-19 - REPORT (toolkits/sound, found while filming): with an Intel HDA device attached, the guest never reaches URC dial-out UNDER KVM
+
+Filming the Duum demo needs two things at once: KVM, because TCG renders the
+game at about 1 fps, and a sound device, because the film is about sound. That
+combination does not boot far enough to dial in.
+
+### The measurement
+
+`tools/demo/duum_demo.py`'s own QEMU line, varying one flag at a time, each
+run waiting 150 s for the guest to connect:
+
+| build | accelerator | audio device | dials in |
+|---|---|---|---|
+| this tree | KVM | none | yes (2 of 2) |
+| this tree | TCG | none | yes |
+| this tree | KVM | `intel-hda` + `hda-output` | **NO (2 of 2)** |
+| this tree | KVM | `AC97` | yes (2 of 2) |
+| a build from BEFORE the sound work | KVM | `intel-hda` | **NO (2 of 2)** |
+| a build from BEFORE the sound work | KVM | none | yes |
+
+So it is not a regression from the effects mixer or `snd_mus.c`: a tree built
+at 13:53, before any of it, fails identically. And it is not the audio layer in
+general - AC'97 is fine on the same build, same accelerator, same run.
+
+The guest is not silent about it: with `-serial file:` it reaches
+
+```
+UnoDOS 3.1 / pc64: firmware handoff...
+```
+
+and stops there, which is where a healthy boot also stops printing to serial,
+so serial cannot narrow it further. `-debugcon` produced an empty file on the
+failing runs, which is itself a clue: the debug console is up long before
+networking, so the hang is early.
+
+### Where to look
+
+`hdaudio.c`'s bring-up is polled with ITERATION-bounded waits (CORB/RIRB
+round trip, codec discovery, stream reset). Under KVM the guest runs roughly
+thirteen times faster than under TCG, so a wait sized in loop iterations
+expires in a fraction of the wall time it used to, and a device that would
+have answered is declared dead - or worse, a loop that never terminates on a
+response that arrives differently. Nothing here is claimed; that is the first
+place I would put a counter.
+
+### Why it matters beyond the film
+
+Every audio gate in the tree (`tools/audio_test.py`, `tools/music_test.py`,
+`tools/duum_audio_test.py`) runs under TCG, so the HDA path has never been
+exercised at KVM speed - and real hardware is faster still than KVM. A metal
+machine with an HDA codec is the case this most resembles.
+
+**Workaround, in the recorder now:** film with `-device AC97`. `snd_pcm` sits
+above both backends, so the capture is of the same mixer either way.
