@@ -24,7 +24,7 @@ What still belongs to UnoDOS, and is edited here normally:
 |---|---|
 | `pc64/upy_port/mod_uno.c` | the C canvas (`cv_wall_col`, `cv_flat_col`, …). This is the span-writer contract Duum draws through, and it is a pc64 implementation detail. |
 | `pc64/tools/duum_host.py` | the host **mirror of that C canvas**, so the gates below test the pixels the *device* would produce, not upstream's reference rasteriser. |
-| `pc64/tools/duum_golden.py`, `duum_verify.py` | the gates, run against the mirror above. Upstream carries its own copies pointed at its own rasteriser; both are wanted, and they check different implementations of the same contract. |
+| `pc64/tools/duum_golden.py`, `duum_verify.py`, `duum_collide.py` | the gates, run against the mirror above. Upstream carries its own copies pointed at its own rasteriser; both are wanted, and they check different implementations of the same contract. |
 | `pc64/tools/demo/duum_demo.py`, `duum_ab.py`, `duum_sound.py`, `duum_vs_doom.py` | device recording, on-device A/B, audio and oracle tooling. UnoDOS-specific. |
 | `pc64/build.sh` step 3e, `pc64/docs_esp/DUUM.MD`, `pc64/wads/` | packaging `DUUM.UNO`, the shipped user doc, and where a WAD goes. |
 
@@ -46,13 +46,22 @@ Then prove it, because a sync is a code drop from another repository:
 
 ```bash
 cd pc64
-python tools/duum_verify.py --wad wads/DOOM1.WAD      # 0 failing views
+python tools/duum_verify.py --wad wads/DOOM1.WAD       # 0 failing views
 python tools/duum_golden.py check --wad wads/DOOM1.WAD # 54/54 identical
+python tools/duum_collide.py --wad wads/DOOM1.WAD      # 4/4 checks
 ```
 
 `duum_golden` compares against a saved baseline; if a sync is *meant* to
 change pixels, look at the diff first and then re-`save`. `duum_verify` is an
 independent oracle and must be 0 failing views regardless.
+
+`duum_collide` is neither, and it is the one a sync most needs. Both of the
+others take the player's POSITION as an input, so they render a perfectly good
+frame from inside a wall and report success — which is how a Duum with no wall
+collision at all shipped past both of them for months. It asserts about
+movement instead: a scripted walk into a known wall, randomised moves that may
+not cross a one-sided linedef, every use-door in the episode, and a rocket
+fired at a wall.
 
 ## Why the engine can be shared at all
 

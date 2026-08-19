@@ -34,11 +34,12 @@ WADNAME = "DOOM1.WAD"
 LEVEL = "E1M1"
 
 FOV = math.pi / 2
-# Near clip.  Duum's collision is sector-based (no linedef-radius test), so
-# unlike vanilla P_TryMove the player CAN press right up against a wall; at
-# 4.0 the whole seg fell inside the clip and the wall vanished, showing the
-# void through it whenever you walked into a corner.  1.0 still keeps the
-# projection well conditioned.
+# Near clip.  This was tuned when collision was sector-based and a player
+# could stand ON a wall: at 4.0 the whole seg fell inside the clip and the
+# wall vanished, showing the void through it whenever you walked into a
+# corner.  Collision now keeps a thing a radius off the plane, so that case
+# is gone - but 1.0 stays, because the projection is still better conditioned
+# there and moving it would move pixels for no gain.
 NEAR = 1.0
 # Conservative world-space half-width for the thing frustum cull: no Doom
 # sprite reaches this far from its origin, so the cull never drops a thing
@@ -54,9 +55,16 @@ MOVSPD = 320.0     # units/s (Doom run speed ballpark)
 TURNSPD = 3.1      # rad/s
 
 # linedef flags
+ML_BLOCKING   = 1
+ML_BLOCKMONST = 2
 ML_TWOSIDED   = 4
 ML_DONTPEGTOP = 8
 ML_DONTPEGBOT = 16
+
+# collision
+MAXSTEP = 24       # tallest step a thing can climb without a jump
+MINHEAD = 56       # headroom a thing needs to fit through an opening
+BLKSH   = 7        # collision grid cell = 128 units, as Doom's BLOCKMAP
 
 
 def rgb(r, g, b):
@@ -64,6 +72,73 @@ def rgb(r, g, b):
     if g > 255: g = 255
     if b > 255: b = 255
     return 0xFF000000 | (b << 16) | (g << 8) | r
+
+
+# ---- 2D collision geometry -------------------------------------------------
+# Two exact predicates, shared by the collision grid (which uses the first to
+# decide which cells a linedef belongs to) and by the move test (which uses
+# both).  Integer-only where the inputs are integers, so the grid build cannot
+# drift from the test it feeds.
+
+def seg_box(x1, y1, x2, y2, l, b, r, t, touch=True):
+    """True if the segment (x1,y1)-(x2,y2) meets the box (l,b)-(r,t).
+
+    `touch` decides what a segment lying exactly ON the box edge counts as.
+    The collision grid wants it to count (a linedef along a cell boundary
+    belongs to both cells, and missing one loses the line entirely).  The move
+    test wants the opposite, and it is not a nicety: vanilla Doom puts a point
+    exactly on a linedef definitively on one side, which is what lets a
+    32-unit-wide player through a 32-unit-wide doorway with the door tracks
+    grazing both shoulders.  Count the graze as a hit and every narrow door in
+    the game seals shut - E1M8's do, and they are on the critical path.
+    """
+    if touch:
+        if x1 < x2:
+            if r < x1 or l > x2: return False
+        else:
+            if r < x2 or l > x1: return False
+        if y1 < y2:
+            if t < y1 or b > y2: return False
+        else:
+            if t < y2 or b > y1: return False
+    else:
+        if x1 < x2:
+            if r <= x1 or l >= x2: return False
+        else:
+            if r <= x2 or l >= x1: return False
+        if y1 < y2:
+            if t <= y1 or b >= y2: return False
+        else:
+            if t <= y2 or b >= y1: return False
+    dx = x2 - x1; dy = y2 - y1
+    if dx == 0 or dy == 0:
+        return True                 # axis aligned: the bbox test was exact
+    # Doom's P_BoxOnLineSide.  For a given slope only one diagonal of the box
+    # can straddle the line, so two corners settle it.
+    if (dx > 0) == (dy > 0):
+        ax, ay, bx, by = l, t, r, b
+    else:
+        ax, ay, bx, by = l, b, r, t
+    s1 = (ax - x1) * dy - (ay - y1) * dx
+    s2 = (bx - x1) * dy - (by - y1) * dx
+    if s1 == 0 or s2 == 0:
+        return touch                # a corner sits exactly on the line
+    return (s1 < 0) != (s2 < 0)
+
+
+def seg_cross(ax, ay, bx, by, cx, cy, dx, dy):
+    """True if segment a-b crosses segment c-d."""
+    rx = bx - ax; ry = by - ay
+    sx = dx - cx; sy = dy - cy
+    den = rx * sy - ry * sx
+    if den == 0:
+        return False                # parallel; the box test covers this case
+    ex = cx - ax; ey = cy - ay
+    t = (ex * sy - ey * sx) / den
+    if t < 0.0 or t > 1.0:
+        return False
+    u = (ex * ry - ey * rx) / den
+    return 0.0 <= u <= 1.0
 
 
 # ---- streaming WAD reader --------------------------------------------------
@@ -159,6 +234,48 @@ class Level:
         # trigger lines a move can cross (walkover specials)
         self.trig = [i for i in range(len(self.lines))
                      if self.lines[i][3] in ACT and ACT[self.lines[i][3]][1]]
+        self.build_grid()
+
+    # ---- collision grid ----------------------------------------------------
+    # Doom's BLOCKMAP, rebuilt rather than read: a move then tests only the
+    # linedefs in the 128-unit cells its box touches, instead of all ~470 of
+    # them.  Rebuilt because it costs one pass at load and because a WAD's own
+    # BLOCKMAP can be absent, truncated, or deliberately wrong (a well-known
+    # source of "this one map has invisible walls"), and we would rather not
+    # inherit that class of bug to save a lump read.
+    #
+    # Cells hold only the lines that ACTUALLY intersect them, via the same
+    # predicate the move test uses, so a long diagonal does not get smeared
+    # across its whole bounding box.
+    def build_grid(self):
+        verts = self.verts
+        xs = [v[0] for v in verts]
+        ys = [v[1] for v in verts]
+        self.gx0 = min(xs); self.gy0 = min(ys)
+        self.gw = ((max(xs) - self.gx0) >> BLKSH) + 1
+        self.gh = ((max(ys) - self.gy0) >> BLKSH) + 1
+        cell = 1 << BLKSH
+        grid = {}
+        for li in range(len(self.lines)):
+            ld = self.lines[li]
+            x1, y1 = verts[ld[0]]
+            x2, y2 = verts[ld[1]]
+            i0 = ((x1 if x1 < x2 else x2) - self.gx0) >> BLKSH
+            i1 = ((x1 if x1 > x2 else x2) - self.gx0) >> BLKSH
+            j0 = ((y1 if y1 < y2 else y2) - self.gy0) >> BLKSH
+            j1 = ((y1 if y1 > y2 else y2) - self.gy0) >> BLKSH
+            for j in range(j0, j1 + 1):
+                b = self.gy0 + (j << BLKSH); t = b + cell
+                row = j * self.gw
+                for i in range(i0, i1 + 1):
+                    l = self.gx0 + (i << BLKSH); r = l + cell
+                    if seg_box(x1, y1, x2, y2, l, b, r, t):
+                        k = row + i
+                        if k in grid:
+                            grid[k].append(li)
+                        else:
+                            grid[k] = [li]
+        self.grid = grid
 
     def rejects(self, a, b):
         """True if REJECT says sector a can never see sector b."""
@@ -1726,14 +1843,129 @@ class Duum(uno.App):
                 self.bobamp = 0.0
         return moved
 
+    def cells(self, l, b, r, t):
+        """Grid cell range covering the box (l,b)-(r,t), clamped to the map."""
+        m = self.lvl
+        i0 = int(l - m.gx0) >> BLKSH
+        i1 = int(r - m.gx0) >> BLKSH
+        j0 = int(b - m.gy0) >> BLKSH
+        j1 = int(t - m.gy0) >> BLKSH
+        if i0 < 0: i0 = 0
+        if j0 < 0: j0 = 0
+        if i1 >= m.gw: i1 = m.gw - 1
+        if j1 >= m.gh: j1 = m.gh - 1
+        return i0, i1, j0, j1
+
+    def hits_wall(self, ox, oy, nx, ny, r, ismon, fz):
+        """A linedef between (ox,oy) and (nx,ny) that a thing cannot pass.
+
+        Two predicates, and both are needed:
+
+        - the BOX test is vanilla Doom's - the thing's 2r square at the
+          DESTINATION must not straddle a solid line.  It is what keeps a
+          thing a radius clear of the wall instead of standing on it.
+        - the SWEEP test asks whether the straight path from old to new
+          crossed a line at all.  The box alone misses that whenever one step
+          is longer than the box is wide, and Duum steps by elapsed time, so
+          on a slow frame it is: at MOVSPD 320 a 0.3 s tick is 96 units and
+          the 32-unit box hops clean over the wall between them.
+
+        Neither is a superset of the other, so a line is solid if EITHER
+        fires.  Lines are not de-duplicated across cells: at one to a handful
+        of candidates, testing one twice is cheaper than the set that would
+        prevent it.
+        """
+        m = self.lvl
+        grid = m.grid
+        verts = m.verts; lines = m.lines; sides = m.sides; sectors = m.sectors
+        bl = nx - r; br = nx + r; bb = ny - r; bt = ny + r
+        # Look in the cells covering BOTH boxes, so the swept path's lines are
+        # in the candidate set too.  Over-including cells costs a few extra
+        # tests and can never cause a false stop: the two predicates above are
+        # exact, and they are what actually decides.
+        i0, i1, j0, j1 = self.cells(bl if ox > nx else ox - r,
+                                    bb if oy > ny else oy - r,
+                                    br if ox < nx else ox + r,
+                                    bt if oy < ny else oy + r)
+        for j in range(j0, j1 + 1):
+            row = j * m.gw
+            for i in range(i0, i1 + 1):
+                cand = grid.get(row + i)
+                if cand is None:
+                    continue
+                for li in cand:
+                    ld = lines[li]
+                    x1, y1 = verts[ld[0]]
+                    x2, y2 = verts[ld[1]]
+                    if not (seg_box(x1, y1, x2, y2, bl, bb, br, bt, False)
+                            or seg_cross(ox, oy, nx, ny, x1, y1, x2, y2)):
+                        continue
+                    fl = ld[2]
+                    if fl & ML_BLOCKING:
+                        return True
+                    if ld[6] == 0xFFFF or ld[5] == 0xFFFF:
+                        return True            # one-sided: solid, always
+                    if ismon and (fl & ML_BLOCKMONST):
+                        return True
+                    fs = sectors[sides[ld[5]][5]]
+                    bs = sectors[sides[ld[6]][5]]
+                    top = fs[1] if fs[1] < bs[1] else bs[1]
+                    bot = fs[0] if fs[0] > bs[0] else bs[0]
+                    # Heights are read live off the sector lists, which doors
+                    # and lifts mutate in place, so a door shutting on you
+                    # closes the opening here on the same tick it does on
+                    # screen.
+                    if top - bot < MINHEAD:
+                        return True
+                    if bot - fz > MAXSTEP:
+                        return True
+        return False
+
+    def wall_between(self, x0, y0, x1, y1, z):
+        """A linedef a projectile at height z cannot pass, on this path."""
+        m = self.lvl
+        grid = m.grid
+        verts = m.verts; lines = m.lines; sides = m.sides; sectors = m.sectors
+        i0, i1, j0, j1 = self.cells(x0 if x0 < x1 else x1,
+                                    y0 if y0 < y1 else y1,
+                                    x0 if x0 > x1 else x1,
+                                    y0 if y0 > y1 else y1)
+        for j in range(j0, j1 + 1):
+            row = j * m.gw
+            for i in range(i0, i1 + 1):
+                cand = grid.get(row + i)
+                if cand is None:
+                    continue
+                for li in cand:
+                    ld = lines[li]
+                    ax, ay = verts[ld[0]]
+                    bx, by = verts[ld[1]]
+                    if not seg_cross(x0, y0, x1, y1, ax, ay, bx, by):
+                        continue
+                    if ld[6] == 0xFFFF or ld[5] == 0xFFFF:
+                        return True
+                    fs = sectors[sides[ld[5]][5]]
+                    bs = sectors[sides[ld[6]][5]]
+                    top = fs[1] if fs[1] < bs[1] else bs[1]
+                    bot = fs[0] if fs[0] > bs[0] else bs[0]
+                    if z < bot or z > top:     # into the step, or the lintel
+                        return True
+        return False
+
     def blocked(self, ox, oy, nx, ny, r, selfthing):
-        s = self.point_sector(nx, ny)
-        if s is None:
-            return True
+        # Walls first.  There used to be a `point_sector(nx,ny) is None` guard
+        # here that read like a wall test and was dead code: point_sector is a
+        # plain BSP descent, a BSP partitions the whole plane, so it always
+        # lands in a subsector.  Nothing ever stopped a thing at a linedef.
         cur = self.point_sector(ox, oy)
-        if cur is not None and s[0] - cur[0] > 24:     # max step height
+        if self.hits_wall(ox, oy, nx, ny, r, selfthing is not None, cur[0]):
             return True
-        if s[1] - s[0] < 56:                           # headroom
+        s = self.point_sector(nx, ny)
+        # Sector-level backstop for the same two limits, which catches a
+        # destination reached without crossing a line at all.
+        if s[0] - cur[0] > MAXSTEP:                    # max step height
+            return True
+        if s[1] - s[0] < MINHEAD:                      # headroom
             return True
         for t in self.things_live:
             rr = t[12]
@@ -2381,10 +2613,20 @@ class Duum(uno.App):
             sdt = dt / steps
             hit = False
             for _ in range(steps):
+                lx = p[0]; ly = p[1]
                 p[0] += p[3] * sdt
                 p[1] += p[4] * sdt
+                # A rocket used to be stopped only by the sector it landed in,
+                # so it crossed a solid wall whenever the room on the far side
+                # happened to be tall enough to contain it.  Back it up to the
+                # last good point on impact, so the explosion draws outside
+                # the wall rather than inside it.
+                if self.wall_between(lx, ly, p[0], p[1], p[2]):
+                    p[0] = lx; p[1] = ly
+                    hit = True
+                    break
                 s = self.point_sector(p[0], p[1])
-                if s is None or p[2] < s[0] or p[2] > s[1]:
+                if p[2] < s[0] or p[2] > s[1]:
                     hit = True
                     break
                 if p[7] == 1:              # monster shot vs player
