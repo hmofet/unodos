@@ -57,9 +57,21 @@ echo "[1/3] exporting the shared font to a C array..."
 # cached in tools/, so this is offline after the first run.
 [ -f build/world_map.h ] || "$PY" tools/mkworldmap.py
 
+# UNO_DESKTOP=native starts the desktop at the panel's own size (1:1) instead
+# of the chunky half-res default.  For EMULATORS: see set_geometry() in
+# uefi_main.c for why a real panel keeps the chunky default.  Pairs with
+# UNO_BIOS_PREF below, which picks the surface that size is measured against.
+DESKDEF=""
+case "${UNO_DESKTOP:-half}" in
+    native) DESKDEF="-DUNO_DESKTOP_NATIVE=1"
+            echo "[build] desktop starts NATIVE (1:1), not half-res" ;;
+    half)   ;;
+    *)      echo "UNO_DESKTOP must be native or half, got '$UNO_DESKTOP'" >&2; exit 1 ;;
+esac
+
 CFLAGS="-O2 -Wall -Wextra -ffreestanding -fno-stack-protector -fno-stack-check \
         -nostdinc -Iinclude -I. -I../uno3d -Ibearssl/inc \
-        -DUNO_COLOR=1 -DUNO_PC64 -Dmain=uno_main ${UNO_EXTRA:-}"
+        -DUNO_COLOR=1 -DUNO_PC64 -Dmain=uno_main $DESKDEF ${UNO_EXTRA:-}"
 
 # ============================================================================
 # DEBUG BUILD (branch pc64-debug-stress) - crash reports, watchdog, kernel log,

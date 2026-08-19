@@ -642,12 +642,28 @@ static void choose_present_path(void)
 
 /* boot / mode-change default: a chunky desktop (~half the panel) that fills
    the screen. Half-res on a 16:9 panel fills exactly (2x) with no borders and
-   gives a comfortably large UI. */
+   gives a comfortably large UI.
+
+   UNO_DESKTOP_NATIVE=1 (build.sh: UNO_DESKTOP=native) starts at the panel's
+   own size instead, so one desktop pixel is one panel pixel. That is the right
+   default for an EMULATOR and the wrong one for a panel: half-res exists
+   because a 13" 1920x1200 laptop at 1:1 draws a UI you have to lean into, and
+   the machine cannot be zoomed by its viewer. A browser tab can be - and the
+   surface it shows is otherwise a 2x upscale of a 640x512 desktop, so three
+   quarters of the pixels it ships carry no information at all.
+
+   Either way this is only the STARTING size: Control Panel > Display lists
+   every standard resolution up to the fb ceiling and fill-scales whichever is
+   chosen, so nothing here takes a choice away. */
 static void set_geometry(int unused)
 {
     (void)unused;
     read_mode();
+#ifdef UNO_DESKTOP_NATIVE
+    apply_desktop((int)gModeW, (int)gModeH);   /* 1:1 - apply_desktop caps at FB_MAX */
+#else
     apply_desktop((int)(gModeW / 2), (int)(gModeH / 2));
+#endif
 }
 
 /* ---- the Settings app's resolution list (KernelApi pc64 tail) ------------
