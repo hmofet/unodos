@@ -875,6 +875,24 @@ CD-ROM <em>and</em> writes to a USB stick with any standard imaging tool.</p>
 <p>When you are finished with UnoDOS, turn Secure Boot back on the same way to return the PC to normal.</p>
 {note('<b>If the PC runs Windows with BitLocker:</b> changing Secure Boot can make Windows ask for your BitLocker recovery key the next time it starts. This is reversible and does not erase anything. Enter the 48-digit recovery key (find it in your Microsoft account at <b>aka.ms/myrecoverykey</b>, or from your IT department), or simply turn Secure Boot back on to stop the prompt. To avoid it altogether, suspend BitLocker before changing Secure Boot (search Windows for <b>Manage BitLocker</b>, then <b>Suspend protection</b>) and resume it afterwards.', kind="warn", title="BitLocker recovery prompt")}
 
+<h2 id="browser">Try it in your browser first</h2>
+<p>The quickest look costs nothing and installs nothing: <a href="https://unodos.arinbakht.com/try/">open
+UnoDOS in a browser tab</a>. It is the real release image running on an emulated PC compiled to
+WebAssembly, not a video and not a mock-up, and the desktop arrives in a few seconds on a current
+machine.</p>
+<ul>
+  <li>The screen is <strong>1600x900</strong>, one desktop pixel to one screen pixel. The
+      <strong>Size</strong> control above it picks the zoom; whole multiples stay pixel-sharp.</li>
+  <li>The disk is a RAM disk. You can write to it, and <strong>nothing survives a reload</strong> -
+      which makes it a good place to try the things this manual warns about.</li>
+  <li>The machine has a working network card and takes an address, but that network
+      <strong>ends inside the tab</strong>. See <a href="networking.html#emulator">Networking</a>.</li>
+  <li><a href="apps.html#duum">Duum</a> is on the disk with its game data, but an emulated PC runs it
+      at well under one frame a second. It is worth seeing rather than playing;
+      <a href="https://unodos.arinbakht.com/duum/">the browser port of Duum</a> plays properly.</li>
+</ul>
+{note('A tab in the background is throttled by the browser, which stops the emulated machine rather than just the picture. The page says <strong>paused</strong> when that happens; bring the tab back to the front and it carries on.', title="Leave the tab in front")}
+
 <h2 id="vm">Try it in a virtual machine first</h2>
 <p>Prefer not to touch hardware yet? <strong>unodos-pc64.iso</strong> boots in any UEFI-capable
 hypervisor. In <strong>VirtualBox</strong>:</p>
@@ -1285,6 +1303,10 @@ Move with the arrow keys, turn with left and right, strafe with <kbd>,</kbd> and
 fire with <kbd>F</kbd>, open doors with <kbd>Space</kbd>, and pick a weapon with <kbd>1</kbd> to
 <kbd>6</kbd>.</p>
 
+<p>Duum is on the desktop and in the <strong>Start</strong> menu under its own reticle icon, the
+same as any other app. It also sits on the disk as <code>APPS\\DUUM.UNO</code>, so opening that file
+in <a href="#files">Files</a> starts it too.</p>
+
 <h4>Duum needs a game file</h4>
 <p>Doom's levels, textures and sounds live in a data file called an <strong>IWAD</strong>, and it is
 separate from the engine. UnoDOS ships with <strong>Freedoom</strong>, a free, from-scratch,
@@ -1574,6 +1596,21 @@ to get online.</strong></p>
 list, a password box and a <strong>Join</strong> button, with a spinner and a running description of each
 step while it works, since a join takes several seconds. Networks you join are remembered, so the machine
 can rejoin the last one by itself at the next boot.</p>
+
+<h2 id="emulator">Networking in the browser</h2>
+<p>UnoDOS <a href="https://unodos.arinbakht.com/try/">running in a browser tab</a> has a working network
+card. It takes an address by DHCP, answers a ping, resolves names and loads pages, and everything on this
+page behaves the way it does on a real machine. What is different is where the wire goes:
+<strong>it ends inside the tab</strong>.</p>
+<p>That is not a limitation somebody forgot to lift. A web page cannot open a network connection of the
+ordinary kind at all - the browser has no such capability to offer - so every emulator you have seen with
+real internet access is relaying its traffic through a server somebody runs and pays for. Rather than
+route your traffic through ours, the far side of the wire is a small network living in the same tab:
+a router at <code>10.0.2.2</code>, a name server at <code>10.0.2.3</code>, and one web server. Every name
+you type resolves to it, so any address reaches a page explaining where you are.</p>
+{note('Nothing the emulated machine sends can leave your browser. There is no route out of it in the code - not to your own network, not to this website, not to anywhere else - so the machine is a safe place to point at things. Getting real internet access would mean deliberately adding a relay, which is exactly the decision this arrangement leaves in the open.', title="Nothing leaves the tab")}
+<p>On a real PC, or in a virtual machine of your own, none of this applies: the drivers above talk to
+real hardware and the machine is on your network like any other.</p>
 """)
 
 PAGES["logging.html"] = ("System log", f"""
@@ -2034,6 +2071,24 @@ source to <code>PYRT.UNO</code>, which compiles and executes it with the <code>u
 Studio routes purely by extension: a <code>.py</code> file is packaged for the runtime, a <code>.c</code>
 file is compiled by the UnoC compiler. Everything else - the editor, the project pane, build output, the
 AI assistant - is identical.</p>
+
+<h2 id="declare">Giving a Python app an icon</h2>
+<p>A packaged Python app runs, but by default the only way to reach it is to open its
+<code>.UNO</code> file in Files. To put it on the desktop and in the Start menu, ship a
+<strong>descriptor</strong> beside the source and name it when packaging:</p>
+<pre><code>id: myapp
+name: My App
+icon: file:MYAPP.QOI
+cat: tools
+rank: 20</code></pre>
+<pre><code>python3 tools/mkuno.py pyapp apps/MYAPP.PY APPS/MYAPP.UNO apps/MYAPP.DESC</code></pre>
+<p>The shell reads that block off the disk at startup - two sector reads, executing nothing - and the app
+gets a row of its own. <code>icon:</code> takes either the name of one of the system emblems or
+<code>file:NAME.QOI</code>, a 32x32 image you ship next to the module; the shell has to draw the icon
+before it would load a byte of your code, which is why the artwork is a separate file rather than
+something the app draws. Duum is packaged exactly this way, and
+<code>tools/mkicon.py</code> will author the QOI for you.</p>
+{note('The descriptor is a file beside the source rather than a comment inside it, and that is deliberate: an app whose source is generated or vendored from somewhere else would lose a magic comment at the next update. Keeping it separate means the launcher metadata belongs to whoever packages the app, not to whoever wrote the code.', title="Beside the source, not inside it")}
 
 <h2 id="limits">Limits (v1)</h2>
 <ul>
