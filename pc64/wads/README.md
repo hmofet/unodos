@@ -20,3 +20,7 @@ Drop one of these in as `wads/DOOM1.WAD`:
 The build stages whichever WAD is present onto the ESP as `DOOM1.WAD` (or
 `FREEDOOM.WAD`) so Duum can `uno.read_at` it. Duum never loads the whole
 ~4 MB file into memory; it reads the directory, then lumps on demand.
+
+Duum itself is developed upstream at https://github.com/hmofet/duum and is
+vendored into this repository as a generated file - see
+[`../DUUM-UPSTREAM.md`](../DUUM-UPSTREAM.md) before editing `apps/DUUM.PY`.

@@ -72,3 +72,11 @@ honest one: firing in the courtyard with health ticking down under enemy fire.
 The courtyard also renders ~8-9 fps (full-canvas flats + sky through a Python
 renderer under emulation); the interior scenes run ~21 fps. unostream retimes so
 the film plays at true speed.
+
+## The engine is vendored
+
+`pc64/apps/DUUM.PY` is generated from the upstream Duum repository
+(https://github.com/hmofet/duum) and must not be edited here; a gameplay or
+rendering change for the film goes upstream first. This recorder, and the
+device A/B in `duum_ab.py`, are UnoDOS-side and are edited normally. See
+[`../../DUUM-UPSTREAM.md`](../../DUUM-UPSTREAM.md).

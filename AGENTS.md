@@ -63,6 +63,7 @@ re-home"). Ownership is of the CODE; the whole OS is a shared goal.
 | unowin32 (native PE32+ Win32 personality over unoui) | `pc64/UNOWIN32.md` | `unowin32*` |
 | per-port ports | `AUDIT-<port>.md` | `amiga/`, `c64/`, `nes/`, `snes/`, ... |
 | unostream (guest screen streamer for demo video + host receiver/gate) | `pc64/UNOSTREAM.md` | `pc64/unostream.*`, `pc64/tools/demo/` |
+| Duum (the Python Doom engine) - **UPSTREAM, NOT OURS**: developed at github.com/hmofet/duum, vendored here as a generated file | `pc64/DUUM-UPSTREAM.md` | `pc64/apps/DUUM.PY` (generated - do not edit), `pc64/tools/sync_duum.py`; the C canvas it draws through (`upy_port/mod_uno.c`) and the host mirror + gates (`pc64/tools/duum_*.py`) ARE ours |
 
 Whoever is actively working a subsystem this session **claims it in the requests
 file (§4)** so two agents never grab the same one.

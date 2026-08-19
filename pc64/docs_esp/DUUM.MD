@@ -76,3 +76,9 @@ flats, sprites, maps, the status bar - so Freedoom reskins the whole game.
 
 See **[Python apps](PYTHON.MD)** for the app model and **[the `uno` API](PYAPI.MD)**
 for what Python code can reach.
+
+## Where Duum comes from
+
+Duum is its own project - **https://github.com/hmofet/duum** - under the
+Mozilla Public License 2.0, and it runs anywhere Python does, not just here.
+UnoDOS ships a build of it; the version is in the first line of `SDK\DUUM.PY`.

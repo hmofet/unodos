@@ -1,19 +1,32 @@
-# DUUM.PY - a Doom engine for UnoDOS, written in Python.
+# Duum 0.1.0 - GENERATED FILE, DO NOT EDIT.
 #
-# The acceptance test that Python is a first-class app language here: a subset
-# Doom renderer that loads a real IWAD (DOOM1.WAD / freedoom1.wad) and draws a
-# first-person, BSP-traversed, TEXTURE-MAPPED view of E1M1, walkable with the
-# arrow keys.
+# Built from the duum package by tools/build.py on 2026-08-18.
+# Edit the package and rebuild; edits here are lost.
+# Source and licence (MPL-2.0): https://github.com/hmofet/duum
 #
-# It exercises the whole platform from Python: file I/O (uno.read_at streams the
-# WAD - directory, map lumps, palette, textures and patches - never slurped),
-# heavy compute (BSP walk + column renderer + texture composition), the
-# framebuffer (uno canvas, incl. the cv.wall_col fast path), input and float
-# math.  Mirrors tools/duum_host.py, proven on the host first.
+# UnoDOS build: engine only; the device supplies `uno` and a C canvas.
+
+# duum/engine.py - Duum: a Doom engine written in Python.
 #
-# Controls: Up/Down move, Left/Right turn, comma/period strafe.
+# The BSP walk, the portal clipping, the perspective-correct texture mapping,
+# the thing projection and every line of the game logic below are pure Python.
+# There is no native code and no third-party package anywhere in this file: it
+# imports struct and math from the standard library, and nothing else.
+#
+# What this file does NOT do is write pixels.  render() builds a display list
+# of spans and draw() replays it into a Canvas; duum/raster.py holds the
+# reference Canvas, also pure Python.  That is the seam a port replaces to go
+# fast - UnoDOS hands in a C canvas, a desktop can hand in anything it likes -
+# and the engine does not change either way.
+#
+# The other seam is `uno` (see duum/hostapi.py): file I/O, a clock, and an
+# optional key-state read.  That is the entire platform surface.
+#
+# Controls: Up/Down move, Left/Right turn, comma/period strafe, space opens
+# and uses, ctrl fires, 1-7 pick a weapon.
 
 import uno
+
 import struct
 import math
 
@@ -27,6 +40,14 @@ FOV = math.pi / 2
 # void through it whenever you walked into a corner.  1.0 still keeps the
 # projection well conditioned.
 NEAR = 1.0
+# Conservative world-space half-width for the thing frustum cull: no Doom
+# sprite reaches this far from its origin, so the cull never drops a thing
+# that would have drawn.
+# Distance bounds where the light falloff 1200/(dist+650) saturates at
+# its 1.0 and 0.68 clamps.  Derived, not tuned: keep them with the curve.
+DF_NEAR = 1200.0 - 650.0
+DF_FAR = 1200.0 / 0.68 - 650.0
+SPR_HW = 512.0
 EYE = 41
 VER = 1.2          # Doom's 320x200-stretched-to-4:3 pixel aspect
 MOVSPD = 320.0     # units/s (Doom run speed ballpark)
@@ -659,6 +680,10 @@ class Duum(uno.App):
         self.hud_key = None; self.hud_ops = []
         self.psec_i = self.point_secidx(self.px, self.py)
         self.segrec = None            # per-seg render records, built lazily
+        self.colgeo = None            # viewer-independent per-column tables
+        self.sssec = None             # subsector -> sector index
+        self.seen = None              # per-sector 'walk reached it' stamps
+        self.stamp = 0
         self.load_things()
         self.dirty = True
 
@@ -722,6 +747,28 @@ class Duum(uno.App):
     R_FS, R_BS, R_YOFF, R_FLAGS = 7, 8, 9, 10
     R_MID, R_UP, R_LO, R_CSKY, R_BSKY, R_CGRID, R_FGRID, R_LF = \
         11, 12, 13, 14, 15, 16, 17, 18
+
+    # Subsector -> sector index, built once per level.  render() uses it to
+    # mark which sectors the BSP walk actually reached, which is what makes
+    # the thing pass affordable: a thing in a sector the walk never entered
+    # is behind something opaque, off the frustum, or past the point where
+    # every column had closed - in all three cases it cannot draw.  This is
+    # Doom's own rule (it adds sprites per subsector as it renders them),
+    # applied a level coarser so it stays conservative.
+    def ss_sectors(self):
+        if self.sssec is not None:
+            return self.sssec
+        m = self.lvl
+        out = []
+        for ss in m.ssectors:
+            si = -1
+            for i in range(ss[1], ss[1] + ss[0]):
+                si = self.seg_sectors(m.segs[i])[4]
+                if si >= 0:
+                    break
+            out.append(si)
+        self.sssec = out
+        return out
 
     def seg_recs(self):
         if self.segrec is not None:
@@ -789,12 +836,28 @@ class Duum(uno.App):
         ps = self.point_sector(px, py)
         viewz = (ps[0] if ps else 0) + EYE
         scale = (RW / 2) / math.tan(FOV / 2)         # column-space (for rx)
+        hwf = RW / 2                                 # screen centre, column space
         vsc = ((cw / 2) / math.tan(FOV / 2)) * VER   # canvas-px vertical scale
         inv_vsc = 1.0 / vsc                          # dv is a multiply, not a divide
         hh = ch / 2
         # internal column -> canvas pixel edge, once per frame instead of
         # twice per emitted op (exact tiling, so no seams)
-        colx = [(i * cw) // RW for i in range(RW + 1)]
+        # Per-column geometry that does not depend on where the viewer is:
+        # the column -> canvas edge table, the ray slope k, and atan(k) for
+        # the sky.  All three are functions of cw and RW alone, and rebuilding
+        # them per frame cost 220 divisions and 220 atan calls for values
+        # that had not changed.  The scratch arrays ride along so the frame
+        # overwrites them instead of allocating three fresh lists.
+        geo = self.colgeo
+        if geo is None or geo[0] != cw or geo[1] != RW:
+            geo = self.colgeo = (
+                cw, RW,
+                [(i * cw) // RW for i in range(RW + 1)],
+                [((i + 0.5) - RW / 2) / scale for i in range(RW)],
+                [((i + 1) * cw) // RW - (i * cw) // RW for i in range(RW)],
+                [math.atan(((i + 0.5) - RW / 2) / scale) for i in range(RW)],
+                [0.0] * RW, [0.0] * RW, [0] * RW)
+        colx = geo[2]; kcol = geo[3]; colw_ = geo[4]; atank = geo[5]
         ceilc = [0] * RW
         floorc = [ch - 1] * RW
         # Per-column occlusion history for the sprite pass: (depth, ct, cb)
@@ -811,13 +874,13 @@ class Duum(uno.App):
         # Per-column ray directions (unit forward component) for the flat
         # mapper, and the cylindrical sky texel column (1024 texels per turn,
         # Doom's ANGLETOSKYSHIFT convention).
-        dcx = [0.0] * RW; dcy = [0.0] * RW; skyu = [0] * RW
+        dcx = geo[6]; dcy = geo[7]; skyu = geo[8]
         a2sky = 1024.0 / (2.0 * math.pi)
         for x in range(RW):
-            k = ((x + 0.5) - RW / 2) / scale
+            k = kcol[x]
             dcx[x] = cos_a + k * sin_a
             dcy[x] = sin_a - k * cos_a
-            sv = (pa - math.atan(k)) * a2sky
+            sv = (pa - atank[x]) * a2sky
             iv = int(sv)
             if sv < iv:
                 iv -= 1                # floor(): int() truncates toward zero,
@@ -825,31 +888,22 @@ class Duum(uno.App):
         sky_t = self.sky
         dvsky = int(100.0 / hh * 256)      # horizon at sky texel row 100
         self.fmeta = (px, py, hh)
-        # Hand the per-frame state to the C rasteriser ONCE, rather than
-        # passing twenty-odd arguments on every seg.
-        cv = self.cv
-        cv.duum_frame((out, ceilc, floorc, clips, masked, colx, dcx, dcy,
-                       skyu, sky_t, dvsky, RW, ch, float(hh), float(viewz),
-                       float(vsc), float(inv_vsc), C_CEIL, C_FLOOR,
-                       (200, 188, 170), (172, 150, 122), (140, 150, 170)))
+        # ---- the rasteriser -------------------------------------------------
+        # PURE PYTHON, deliberately.  This is the hottest code in the app and
+        # an earlier pass moved it into C (cv.seg_cols, upy_port/mod_uno.c);
+        # that C is kept as a reference transcription but is no longer called.
+        # "The geometry and the game logic are Python" is a claim this project
+        # makes out loud, and this loop is where it has to be true.
+        #
+        # What buys the speed back is arrangement rather than a compiler.  Two
+        # rules do most of the work: every emitter is INLINED into the column
+        # loop, because a Python call plus the attribute lookups behind it cost
+        # more than the span it emits; and everything that does not vary per
+        # column is hoisted into a local before the loop starts.
+        sky_rgb = rgb(*C_SKY)
 
         def col_rgb(base, f):
             return rgb(int(base[0]*f), int(base[1]*f), int(base[2]*f))
-
-        def rect(cx, y0, y1, color):
-            if y1 < y0: return
-            if y0 < 0: y0 = 0
-            if y1 > ch - 1: y1 = ch - 1
-            x0 = colx[cx]; x1 = colx[cx + 1]
-            out.append(('R', x0, y0, x1 - x0, y1 - y0 + 1, color))
-
-        def flatspan(cx, y0, y1, fgrid, hz, lf):
-            if y1 < y0: return
-            if y0 < 0: y0 = 0
-            if y1 > ch - 1: y1 = ch - 1
-            x0 = colx[cx]; x1 = colx[cx + 1]
-            out.append(('F', x0, x1 - x0, y0, y1 - y0 + 1, fgrid,
-                        (hz - viewz) * vsc, dcx[cx], dcy[cx], lf))
 
         def skyspan(cx, y0, y1):
             if y1 < y0: return
@@ -857,34 +911,30 @@ class Duum(uno.App):
             if y1 > ch - 1: y1 = ch - 1
             x0 = colx[cx]; x1 = colx[cx + 1]
             if sky_t is None:
-                out.append(('R', x0, y0, x1 - x0, y1 - y0 + 1, rgb(*C_SKY)))
+                out.append(('R', x0, y0, x1 - x0, y1 - y0 + 1, sky_rgb))
             else:
                 out.append(('W', x0, x1 - x0, y0, y1 - y0 + 1, sky_t[2],
                             sky_t[0], sky_t[1], skyu[cx], y0 * dvsky, dvsky, 256))
 
-        def wall(cx, ytop, ybot, ct, cb, tx, u, v_top, dv, sh, fb):
-            y0 = ytop if ytop > ct else ct
-            y1 = ybot if ybot < cb else cb
-            if y0 < 0: y0 = 0
-            if y1 > ch - 1: y1 = ch - 1
-            if y1 < y0: return
-            x0 = colx[cx]; x1 = colx[cx + 1]
-            if tx is None:
-                out.append(('R', x0, y0, x1 - x0, y1 - y0 + 1,
-                            rgb((fb[0]*sh) >> 8, (fb[1]*sh) >> 8, (fb[2]*sh) >> 8)))
-                return
-            tw, th, grid = tx
-            v0 = int((v_top + (y0 - ytop) * dv) * 256)
-            out.append(('W', x0, x1 - x0, y0, y1 - y0 + 1,
-                        grid, tw, th, int(u), v0, int(dv * 256), sh))
+        # Which sectors the walk reaches.  A stamp counter rather than a
+        # cleared array: comparing against this frame's stamp is the same
+        # test as a fresh bytearray without touching every sector each frame.
+        sssec = self.ss_sectors()
+        seen = self.seen
+        if seen is None or len(seen) != len(m.sectors):
+            seen = self.seen = [0] * len(m.sectors)
+            self.stamp = 0
+        stamp = self.stamp = self.stamp + 1
 
         state = [RW]                      # open (not yet closed) column count
 
         def draw_seg(si):
             rec = recs[si]
             if rec is None: return
-            ax = rec[0]; ay = rec[1]; bx = rec[2]; by = rec[3]
-            wk = rec[4]
+            # One unpack beats nineteen subscripts, and it is cheaper even
+            # on the segs that turn round at the near-plane test below.
+            (ax, ay, bx, by, wk, wlen, ru1, fs, bs, yoff, flags,
+             mid_t, up_t, lo_t, csky, bsky, cgrid, fgrid, lf) = rec
             d1x = ax - px; d1y = ay - py
             d2x = bx - px; d2y = by - py
             depth1 = d1x * cos_a + d1y * sin_a
@@ -893,7 +943,7 @@ class Duum(uno.App):
             # so what's clockwise of the view direction lands on the right.
             sx1 = d1x * sin_a - d1y * cos_a
             sx2 = d2x * sin_a - d2y * cos_a
-            u1 = rec[6]; u2 = u1 + rec[5]
+            u1 = ru1; u2 = u1 + wlen
             if depth1 < NEAR and depth2 < NEAR: return
             if depth1 < NEAR:
                 t = (NEAR - depth1) / (depth2 - depth1)
@@ -912,12 +962,7 @@ class Duum(uno.App):
             if ix1 > ix2: return
             inv1 = 1.0 / depth1; inv2 = 1.0 / depth2
             uz1 = u1 * inv1; uz2 = u2 * inv2
-            fs = rec[7]; bs = rec[8]
             fc = fs[1]; ff = fs[0]          # DYNAMIC: doors and lifts move these
-            yoff = rec[9]
-            flags = rec[10]
-            mid_t = rec[11]; up_t = rec[12]; lo_t = rec[13]
-            csky = rec[14]
             twosided = bs is not None
             # Texture pegging (Doom R_StoreWallRange): v_top is the texel row at
             # the TOP of each wall piece; anchors move with the linedef flags.
@@ -927,13 +972,11 @@ class Duum(uno.App):
             bothsky = False
             if twosided:
                 bc = bs[1]; bf = bs[0]
-                bothsky = csky and rec[15]   # sky joins across the portal
+                bothsky = csky and bsky      # sky joins across the portal
                 v_up = yoff
                 if not (flags & ML_DONTPEGTOP) and up_t:
                     v_up = yoff + (bc + up_t[1] - fc)    # bottom texel row at back ceil
                 v_lo = yoff + ((fc - bf) if (flags & ML_DONTPEGBOT) else 0)
-            cgrid = rec[16]; fgrid = rec[17]
-            lf = rec[18]
             span = rx2 - rx1
             # Per-seg constants the column loop used to rebuild on EVERY
             # column: the plane-to-eye offsets scaled into screen space, and
@@ -947,43 +990,269 @@ class Duum(uno.App):
                 kbf = (bf - viewz) * vsc
             k_invd = (inv2 - inv1) / span
             k_uz = (uz2 - uz1) / span
-            # THE COLUMN LOOP LIVES IN C (cv.seg_cols, upy_port/mod_uno.c).
-            # It runs once per column per visible seg - thousands of times a
-            # frame - and interpreted it allocated a GC object for every float
-            # intermediate. It emits exactly the ops this loop used to emit,
-            # into these same lists, so draw() and tools/duum_verify.py are
-            # unaffected. tools/duum_host.py carries the readable mirror.
-            sflags = (1 if twosided else 0) | (2 if bothsky else 0) | \
-                     (4 if csky else 0)
-            state[0] -= cv.seg_cols(
-                ix1, ix2, rx1, inv1, k_invd, uz1, k_uz,
-                kfc, kff,
-                kbc if twosided else 0.0, kbf if twosided else 0.0,
-                sflags, lf, wk, mid_t, up_t, lo_t,
-                float(v_mid), float(v_up if twosided else 0.0),
-                float(v_lo if twosided else 0.0), cgrid, fgrid,
-                float(fc), float(ff),
-                float(bc if twosided else 0.0), float(bf if twosided else 0.0),
-                flags, float(yoff))
+            # ---- hoists.  Everything below is constant across this seg's
+            # columns, and the loop that follows can run a couple of hundred
+            # times for one seg, so each hoist is that many bytecode
+            # dispatches removed.
+            _out = out; _ceilc = ceilc; _floorc = floorc; _clips = clips
+            _colx = colx; _colw = colw_
+            _dcx = dcx; _dcy = dcy; _skyu = skyu
+            _append = out.append
+            _masked = masked
+            chm1 = ch - 1
+            # Texture tuples unpacked once instead of once per column.
+            if mid_t is None:
+                m_tw = m_th = m_grid = 0
+                th_m = 0
+            else:
+                m_tw = mid_t[0]; m_th = mid_t[1]; m_grid = mid_t[2]
+                th_m = m_th
+            if up_t is not None:
+                u_tw = up_t[0]; u_th = up_t[1]; u_grid = up_t[2]
+            if lo_t is not None:
+                l_tw = lo_t[0]; l_th = lo_t[1]; l_grid = lo_t[2]
+            # Where the falloff is saturated the shade is a function of the
+            # sector light and the fake-contrast weight alone - both per-seg -
+            # so both ends fold to a constant and the saturated columns, which
+            # are most of them, cost an assignment instead of a divide, a
+            # truncation, a multiply and a floor-divide.
+            shw_far = (int(lf * 0.68 * 256) * wk) // 100
+            if shw_far > 256: shw_far = 256
+            shw_near = (int(lf * 1.0 * 256) * wk) // 100
+            if shw_near > 256: shw_near = 256
+            # Flat-fallback colours depend only on the sector light.
+            ceil_fb = None if cgrid is not None else col_rgb(C_CEIL, lf * 0.9)
+            floor_fb = None if fgrid is not None else col_rgb(C_FLOOR, lf * 0.9)
+            # Masked midtexture: the top plane is a property of the seg, not
+            # of the column.  a * b * c already groups as (a * b) * c, so
+            # lifting (zt - viewz) * vsc out is exact, not an approximation.
+            # Texture coordinates are only needed if this seg actually has a
+            # textured piece.  A plain portal - an open doorway with no upper,
+            # lower or midtexture - emits nothing but flats, and computing u,
+            # dv and their fixed-point forms for it was pure waste.
+            if twosided:
+                need_uv = (mid_t is not None
+                           or (bc < fc and not bothsky and up_t is not None)
+                           or (bf > ff and lo_t is not None))
+            else:
+                need_uv = mid_t is not None
+            kzt = 0.0
+            if twosided and mid_t is not None:
+                if flags & ML_DONTPEGBOT:
+                    zt = (ff if ff > bf else bf) + th_m
+                else:
+                    zt = fc if fc < bc else bc
+                kzt = (zt - viewz) * vsc
+            closed = 0
+            for x in range(ix1, ix2 + 1):
+                ct = _ceilc[x]; cb = _floorc[x]
+                if ct > cb:
+                    continue
+                xf = x - rx1
+                invd = inv1 + k_invd * xf
+                dist = 1.0 / invd
+                # df saturates outside [DF_NEAR, DF_FAR], and most columns
+                # of most frames are outside it, so test the distance first
+                # and skip the divide.  Same values as clamping afterwards:
+                # at either bound the quotient is exactly the clamp.
+                if dist > DF_FAR:
+                    df = 0.68; shw = shw_far
+                elif dist < DF_NEAR:
+                    df = 1.0; shw = shw_near
+                else:
+                    df = 1200.0 / (dist + 650.0)
+                    shw = (int(lf * df * 256) * wk) // 100
+                    if shw > 256: shw = 256
+                if need_uv:
+                    u = (uz1 + k_uz * xf) * dist
+                    dv = dist * inv_vsc
+                    dvfp = int(dv * 256)
+                    iu = int(u)
+                yfc = int(hh - kfc * invd)
+                yff = int(hh - kff * invd)
+                x0 = _colx[x]; xw = _colw[x]
+                if twosided:
+                    ybc = int(hh - kbc * invd)
+                    ybf = int(hh - kbf * invd)
+                    if bothsky and ybc > yfc:
+                        yfc = ybc
+                # ---- ceiling (or sky) above the front ceiling
+                if yfc > ct:
+                    y1 = (yfc - 1) if (yfc - 1) < cb else cb
+                    y0 = ct
+                    if y1 >= y0:
+                        if y0 < 0: y0 = 0
+                        if y1 > chm1: y1 = chm1
+                        if y1 >= y0:
+                            if csky:
+                                if sky_t is None:
+                                    _append(('R', x0, y0, xw, y1 - y0 + 1,
+                                             sky_rgb))
+                                else:
+                                    _append(('W', x0, xw, y0, y1 - y0 + 1,
+                                             sky_t[2], sky_t[0], sky_t[1],
+                                             _skyu[x], y0 * dvsky, dvsky, 256))
+                            elif cgrid is not None:
+                                _append(('F', x0, xw, y0, y1 - y0 + 1, cgrid,
+                                         kfc, _dcx[x], _dcy[x], lf))
+                            else:
+                                _append(('R', x0, y0, xw, y1 - y0 + 1, ceil_fb))
+                # ---- floor below the front floor
+                if yff < cb:
+                    y0 = (yff + 1) if (yff + 1) > ct else ct
+                    y1 = cb
+                    if y1 >= y0:
+                        if y0 < 0: y0 = 0
+                        if y1 > chm1: y1 = chm1
+                        if y1 >= y0:
+                            if fgrid is not None:
+                                _append(('F', x0, xw, y0, y1 - y0 + 1, fgrid,
+                                         kff, _dcx[x], _dcy[x], lf))
+                            else:
+                                _append(('R', x0, y0, xw, y1 - y0 + 1, floor_fb))
+                if not twosided:
+                    # ---- solid wall: closes the column for good
+                    y0 = yfc if yfc > ct else ct
+                    y1 = yff if yff < cb else cb
+                    if y0 < 0: y0 = 0
+                    if y1 > chm1: y1 = chm1
+                    if y1 >= y0:
+                        if mid_t is None:
+                            _append(('R', x0, y0, xw, y1 - y0 + 1,
+                                     rgb((200 * shw) >> 8, (188 * shw) >> 8,
+                                         (170 * shw) >> 8)))
+                        else:
+                            _append(('W', x0, xw, y0, y1 - y0 + 1, m_grid,
+                                     m_tw, m_th, iu,
+                                     int((v_mid + (y0 - yfc) * dv) * 256),
+                                     dvfp, shw))
+                    _ceilc[x] = 1; _floorc[x] = 0
+                    closed += 1
+                    _clips[x].append((dist, 1, 0))
+                else:
+                    newct = ct if ct > yfc else yfc
+                    newcb = cb if cb < yff else yff
+                    # ---- two-sided midtexture (a grate, a bar): goes to the
+                    # depth-sorted masked pass, not straight out
+                    if mid_t is not None:
+                        yot = yfc if yfc > ybc else ybc
+                        yob = yff if yff < ybf else ybf
+                        ytt = hh - kzt * invd
+                        my0 = int(ytt)
+                        my1 = int(ytt + th_m / dv)
+                        if my0 < yot: my0 = yot
+                        if my0 < ct: my0 = ct
+                        if my0 < 0: my0 = 0
+                        if my1 > yob: my1 = yob
+                        if my1 > cb: my1 = cb
+                        if my1 > chm1: my1 = chm1
+                        if my1 >= my0:
+                            _masked.append((dist, ('M', x0, xw, my0,
+                                            my1 - my0 + 1, m_grid, m_tw, th_m,
+                                            iu,
+                                            int((yoff + (my0 - ytt) * dv) * 256),
+                                            dvfp, shw)))
+                    # ---- upper piece, where the back ceiling is lower
+                    if bc < fc and not bothsky:
+                        if up_t is not None:
+                            y0 = yfc if yfc > ct else ct
+                            y1 = (ybc - 1) if (ybc - 1) < newcb else newcb
+                            if y0 < 0: y0 = 0
+                            if y1 > chm1: y1 = chm1
+                            if y1 >= y0:
+                                _append(('W', x0, xw, y0, y1 - y0 + 1, u_grid,
+                                         u_tw, u_th, iu,
+                                         int((v_up + (y0 - yfc) * dv) * 256),
+                                         dvfp, shw))
+                        else:
+                            y0 = yfc if yfc > ct else ct
+                            y1 = (ybc - 1) if (ybc - 1) < newcb else newcb
+                            if y1 >= y0:
+                                if y0 < 0: y0 = 0
+                                if y1 > chm1: y1 = chm1
+                                if y1 >= y0:
+                                    _append(('R', x0, y0, xw, y1 - y0 + 1,
+                                             col_rgb(C_CEIL, lf * df)))
+                        if ybc > newct: newct = ybc
+                    # ---- lower piece, where the back floor is higher
+                    if bf > ff:
+                        if lo_t is not None:
+                            ybf1 = ybf + 1
+                            y0 = ybf1 if ybf1 > newct else newct
+                            y1 = yff if yff < cb else cb
+                            if y0 < 0: y0 = 0
+                            if y1 > chm1: y1 = chm1
+                            if y1 >= y0:
+                                _append(('W', x0, xw, y0, y1 - y0 + 1, l_grid,
+                                         l_tw, l_th, iu,
+                                         int((v_lo + (y0 - ybf1) * dv) * 256),
+                                         dvfp, shw))
+                        else:
+                            y0 = (ybf + 1) if (ybf + 1) > newct else newct
+                            y1 = yff if yff < cb else cb
+                            if y1 >= y0:
+                                if y0 < 0: y0 = 0
+                                if y1 > chm1: y1 = chm1
+                                if y1 >= y0:
+                                    _append(('R', x0, y0, xw, y1 - y0 + 1,
+                                             col_rgb(C_FLOOR, lf * df)))
+                        if ybf < newcb: newcb = ybf
+                    _ceilc[x] = newct; _floorc[x] = newcb
+                    if newct > newcb:
+                        closed += 1
+                    if newct > ct or newcb < cb:
+                        _clips[x].append((dist, newct, newcb))
+            state[0] -= closed
 
         def bbox_vis(top, bot, left, right):
             # Conservative frustum test: skip the far child only when all 4
             # corners are behind the near plane or project past one screen
             # edge, or every covered column is already closed.
+            #
+            # Unrolled over the four corners.  This runs for every node of
+            # the BSP, and the loop it replaces built a tuple of four tuples
+            # on each call, then recomputed both products per corner - when
+            # the four corners between them have only two distinct dx and
+            # two distinct dy, so eight products cover all sixteen terms.
+            dxl = left - px; dxr = right - px
+            dyt = top - py; dyb = bot - py
+            lc = dxl * cos_a; rc = dxr * cos_a
+            ts = dyt * sin_a; bs_ = dyb * sin_a
+            ls = dxl * sin_a; rs = dxr * sin_a
+            tc = dyt * cos_a; bc_ = dyb * cos_a
             all_behind = True
             lo = 1e9; hi = -1e9
             straddle = False
-            for (bx, by) in ((left, top), (right, top), (left, bot), (right, bot)):
-                dx = bx - px; dy = by - py
-                depth = dx * cos_a + dy * sin_a
-                sx = dx * sin_a - dy * cos_a
-                if depth >= NEAR:
-                    all_behind = False
-                    r = (RW / 2) + (sx / depth) * scale
-                    if r < lo: lo = r
-                    if r > hi: hi = r
-                else:
-                    straddle = True
+            depth = lc + ts
+            if depth >= NEAR:
+                all_behind = False
+                lo = hi = hwf + ((ls - tc) / depth) * scale
+            else:
+                straddle = True
+            depth = rc + ts
+            if depth >= NEAR:
+                all_behind = False
+                r = hwf + ((rs - tc) / depth) * scale
+                if r < lo: lo = r
+                if r > hi: hi = r
+            else:
+                straddle = True
+            depth = lc + bs_
+            if depth >= NEAR:
+                all_behind = False
+                r = hwf + ((ls - bc_) / depth) * scale
+                if r < lo: lo = r
+                if r > hi: hi = r
+            else:
+                straddle = True
+            depth = rc + bs_
+            if depth >= NEAR:
+                all_behind = False
+                r = hwf + ((rs - bc_) / depth) * scale
+                if r < lo: lo = r
+                if r > hi: hi = r
+            else:
+                straddle = True
             if all_behind:
                 return False
             if not straddle:
@@ -1003,7 +1272,9 @@ class Duum(uno.App):
             # the far child (bbox-culled); stop once every column is closed.
             while state[0] > 0:
                 if n & 0x8000:
-                    ss = m.ssectors[n & 0x7FFF]
+                    ssi = n & 0x7FFF
+                    ss = m.ssectors[ssi]
+                    seen[sssec[ssi]] = stamp     # this sector can show things
                     first = ss[1]
                     for i in range(first, first + ss[0]):
                         draw_seg(i)
@@ -1026,23 +1297,44 @@ class Duum(uno.App):
 
         # ---- things: project, sort far-to-near with the masked midtextures,
         # clip each column against the wall silhouette history --------------
+        # Reject a thing on two multiplies if it cannot put a pixel on
+        # screen.  The old test was `depth >= NEAR` alone, so everything in
+        # front of the viewer - including the whole level off to either side
+        # - paid for a sprite lookup, an atan2 and a full projection before
+        # the column clamps quietly threw the result away.  SPR_HW is a
+        # world-space half-width larger than any sprite's extent, which makes
+        # the cull conservative: it can only drop things whose projection
+        # would have clamped to an empty column range anyway.
         vis = []
+        tanh = (RW / 2) / scale          # half-width of the frustum per unit depth
         for t in self.things_live:
+            if seen[t[14]] != stamp:     # sector the walk never reached
+                continue
             dxt = t[0] - px; dyt = t[1] - py
             depth = dxt * cos_a + dyt * sin_a
             if depth < NEAR:
+                continue
+            lim = depth * tanh + SPR_HW
+            sxt = dxt * sin_a - dyt * cos_a
+            if sxt < -lim or sxt > lim:
                 continue
             vis.append((depth, 1, t, dxt, dyt))
         for f in self.fx:
             dxt = f[0] - px; dyt = f[1] - py
             depth = dxt * cos_a + dyt * sin_a
             if depth >= NEAR:
-                vis.append((depth, 2, f, dxt, dyt))
+                lim = depth * tanh + SPR_HW
+                sxt = dxt * sin_a - dyt * cos_a
+                if -lim <= sxt <= lim:
+                    vis.append((depth, 2, f, dxt, dyt))
         for p in self.proj:
             dxt = p[0] - px; dyt = p[1] - py
             depth = dxt * cos_a + dyt * sin_a
             if depth >= NEAR:
-                vis.append((depth, 3, p, dxt, dyt))
+                lim = depth * tanh + SPR_HW
+                sxt = dxt * sin_a - dyt * cos_a
+                if -lim <= sxt <= lim:
+                    vis.append((depth, 3, p, dxt, dyt))
         for (d, op) in masked:
             vis.append((d, 0, op, 0.0, 0.0))
         vis.sort(key=lambda e: -e[0])
