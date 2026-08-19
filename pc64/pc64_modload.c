@@ -773,7 +773,14 @@ int uno_mod_desc_read(int vol, const char *path, UnoAppDesc *out)
             out->name[i] = (char)(out->name[i] - 'A' + 'a'); }
     d_setstr(out->shortnm, sizeof out->shortnm, out->name, (int)sizeof out->name);
 
-    if (!h->desc_rva || h->desc_rva >= h->file_size) return 1;
+    /* A PYAPP's block sits AFTER the source rather than inside the image, so
+     * desc_rva == file_size there and the in-image bound would reject it. The
+     * payload is Python that PYRT compiles verbatim; nothing may be spliced
+     * into it, and file_size has to keep covering only the source or the crc
+     * would not match. The block validates itself below (magic, version,
+     * length), so letting it live past the source costs no checking. */
+    if (!h->desc_rva) return 1;
+    if (h->desc_rva >= h->file_size && !(h->flags & UNO_MODF_PYAPP)) return 1;
     n = uno_fs_read_at(vol, path, (long)(sizeof hdr + h->desc_rva),
                        blk, (long)sizeof blk);
     if (n < (long)sizeof *dh) return 1;

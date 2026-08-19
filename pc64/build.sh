@@ -738,7 +738,13 @@ if [ "$1" != "legacy" ]; then
     # when present.  Freedoom (BSD) is the shippable free default.
     if [ "${UNO_PYRT:-1}" != "0" ] && [ -f apps/DUUM.PY ]; then
         echo "[3e] packaging DUUM.UNO (the Python Doom engine)..."
-        "$PY" tools/mkuno.py pyapp apps/DUUM.PY build/esp/APPS/DUUM.UNO
+        # DUUM.DESC is what earns Duum a desktop icon and a Start-menu row.
+        # It is a file BESIDE the source rather than a comment inside it
+        # because apps/DUUM.PY is generated upstream and vendored verbatim -
+        # anything written into it is lost at the next sync_duum.py.
+        "$PY" tools/mkuno.py pyapp apps/DUUM.PY build/esp/APPS/DUUM.UNO \
+                             apps/DUUM.DESC
+        "$PY" tools/mkicon.py --duum build/esp/APPS/DUUM.QOI
         mkdir -p build/esp/SDK; cp apps/DUUM.PY build/esp/SDK/ 2>/dev/null || true
         if   [ -f wads/DOOM1.WAD ];     then WADSRC=wads/DOOM1.WAD
         elif [ -f wads/freedoom1.wad ]; then WADSRC=wads/freedoom1.wad

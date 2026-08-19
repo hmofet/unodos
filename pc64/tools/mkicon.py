@@ -4,6 +4,7 @@
 #
 #   python3 tools/mkicon.py <in.png|in.ppm|-> <out.QOI>
 #   python3 tools/mkicon.py --demo <out.QOI>      a built-in sample emblem
+#   python3 tools/mkicon.py --duum <out.QOI>      Duum's reticle emblem
 #
 # An app that ships from disk should be able to ship its own artwork, and the
 # shell has to draw that artwork BEFORE it would load a byte of the app's code -
@@ -96,15 +97,49 @@ def read_ppm(path):
     return w, h, bytes(px)
 
 
+def duum():
+    """Duum's emblem: a dark panel with a red targeting reticle.
+
+    Deliberately NOT a demon face. Duum is a Doom-compatible engine playing
+    Freedoom, which is a from-scratch asset set precisely so that none of id's
+    artwork has to travel with it; borrowing the iconography here would undo
+    that on the desktop. A reticle says first-person shooter without borrowing
+    anything, and it survives being 32 pixels wide, which a face does not."""
+    w = h = 32
+    cx = cy = 15.5
+    px = bytearray(w * h * 4)
+    for y in range(h):
+        for x in range(w):
+            o = (y * w + x) * 4
+            if not (2 <= x < 30 and 2 <= y < 30):
+                px[o:o + 4] = bytes((0, 0, 0, 0))
+                continue
+            d = ((x - cx) ** 2 + (y - cy) ** 2) ** 0.5
+            arm = (abs(x - cx) < 1.5 and 3 < d < 12) or \
+                  (abs(y - cy) < 1.5 and 3 < d < 12)
+            if 8.5 < d < 11 or arm:
+                px[o:o + 4] = bytes((214, 58, 44, 255))       # the reticle
+            elif d < 2.5:
+                px[o:o + 4] = bytes((236, 122, 60, 255))       # the pip
+            elif d < 13.5:
+                px[o:o + 4] = bytes((44, 40, 46, 255))         # the panel
+            else:
+                px[o:o + 4] = bytes((28, 25, 30, 255))         # its rim
+    return w, h, bytes(px)
+
+
 if __name__ == "__main__":
     if len(sys.argv) == 3 and sys.argv[1] == "--demo":
         w, h, px = demo()
+        out = sys.argv[2]
+    elif len(sys.argv) == 3 and sys.argv[1] == "--duum":
+        w, h, px = duum()
         out = sys.argv[2]
     elif len(sys.argv) == 3:
         w, h, px = read_ppm(sys.argv[1])
         out = sys.argv[2]
     else:
-        sys.exit(__doc__ or "usage: mkicon.py <in.ppm>|--demo <out.QOI>")
+        sys.exit(__doc__ or "usage: mkicon.py <in.ppm>|--demo|--duum <out.QOI>")
     if w > 32 or h > 32:
         sys.exit("mkicon: %dx%d is larger than the 32x32 the shell decodes"
                  % (w, h))
