@@ -4307,6 +4307,21 @@ static const char *cfg_app_val(const char *buf, const char *prefix, int a)
 static int session_vol(void)
 {
     int n = uno_fs_volumes(), v;
+    /* THE BOOT VOLUME FIRST - and this one is not a preference either.
+     *
+     * Taking the lowest-indexed writable native volume means writing SHELL.CFG
+     * to whichever disk enumerated first. On the ZimaBlade that is an internal
+     * eMMC which enumerates, reports writable, and never completes a transfer:
+     * session_save() ran from open_app(), the write never returned, and the
+     * machine stopped dead - no fault, no watchdog, no reset, nothing on disk,
+     * about ten seconds after opening ANY app. It looked like the app that
+     * happened to be open was at fault (Duum), which cost most of a day.
+     *
+     * unosecure.c pick_vol() had the identical bug and hung the same box at
+     * boot instead. Both now bind to the medium the machine came up on, which
+     * is the only volume it has already proved it can read and write. */
+    for (v = 1; v < n; v++)
+        if (uno_fs_kind(v) == 1 && uno_fs_writable(v) && uno_fs_is_boot(v)) return v;
     for (v = 1; v < n; v++) if (uno_fs_kind(v) == 1 && uno_fs_writable(v)) return v;
     for (v = 1; v < n; v++) if (uno_fs_writable(v)) return v;
     return (n > 0 && uno_fs_writable(0)) ? 0 : -1;
