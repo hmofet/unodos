@@ -483,6 +483,65 @@ if [ "$1" != "legacy" ]; then
         [ -d docs_esp ] && cp docs_esp/*.MD build/esp/DOCS/ 2>/dev/null || true
     fi
 
+    # ---- UNOCODE.UNO: the VS Code-class editor, a unoui-CLASS module -------
+    # Fourteen objects under unocode/ - the workbench, the editor, the JSONC
+    # parser, the regex engine the grammars run on, and the extension host
+    # over unojs.  Same pipeline as STUDIO.UNO; the only build difference is
+    # -Iunocode (its private header) and -I../unojs (the embedding API, whose
+    # entry points are exported from pc64_modload.c's kExports).
+    if [ "${UNO_UNOCODE:-1}" != "0" ]; then
+        echo "[3c2] building UNOCODE.UNO (the editor)..."
+        COBJ=""
+        for s in uc_main uc_util uc_json uc_rx uc_theme uc_cfg uc_lang uc_doc \
+                 uc_edit uc_view uc_cmd uc_term uc_ext uc_api; do
+            # -mno-stack-arg-probe: mingw calls ___chkstk_ms for any frame over
+            # 4 KB, and a loadable module has nothing to link that against - it
+            # surfaces as an unresolvable import at the kExports check, three
+            # files away from its cause.  The buffers that would need it here
+            # are static or heap for exactly that reason; the flag keeps a
+            # future one from becoming a link failure.
+            pc "$CC" $UCF -mno-stack-arg-probe -DUNO_APP_SYM=uno_app_main \
+                  -Iunocode -I../unojs -c -o "build/apps/$s.o" "unocode/$s.c"
+            COBJ="$COBJ build/apps/$s.o"
+        done
+        pcwait
+        "$NM" $COBJ | awk '$1=="U"&&$2!=""{u[$2]=1} \
+            $1!="U"&&NF>=3{d[$3]=1} \
+            END{for(s in u) if(!(s in d)) print s}' \
+            | sort -u > build/apps/unocode.syms
+        while read -r s; do
+            [ -z "$s" ] && continue
+            grep -qx "$s" build/apps/kexports.txt || {
+                echo "FAIL: UNOCODE imports '$s' which pc64_modload.c does not export"; exit 1; }
+        done < build/apps/unocode.syms
+        "$PY" tools/mkuno.py thunks "build/apps/unocode.syms" "build/apps/unocode_thunks.s"
+        "$CC" -c -o "build/apps/unocode_thunks.o" "build/apps/unocode_thunks.s"
+        "$CC" -shared -nostdlib -e uno_app_main -Wl,--exclude-all-symbols \
+            -o "build/apps/unocode.dll" $COBJ "build/apps/unocode_thunks.o"
+        "$PY" tools/mkuno.py convert "build/apps/unocode.dll" "build/esp/APPS/UNOCODE.UNO" 1
+        # the sample extensions ride on the ESP so a fresh stick has something
+        # in the Extensions view to look at and read
+        # Names go on the ESP UPPER-CASED, directories included: the volume is
+        # FAT with 8.3 names, and a manifest that says "THEMES/NORD.JSN" has
+        # to find it whatever case the host tree used.  Copying the tree
+        # verbatim shipped `themes/` once and the theme silently did not load.
+        if [ -d unocode/ext ]; then
+            for e in unocode/ext/*; do
+                [ -d "$e" ] || continue
+                E=$(basename "$e" | tr '[:lower:]' '[:upper:]')
+                mkdir -p "build/esp/EXT/$E"
+                ( cd "$e" && find . -mindepth 1 -type d -printf '%P
+' ) |                 while read -r d; do
+                    mkdir -p "build/esp/EXT/$E/$(echo "$d" | tr '[:lower:]' '[:upper:]')"
+                done
+                ( cd "$e" && find . -type f -printf '%P
+' ) | while read -r f; do
+                    cp "$e/$f" "build/esp/EXT/$E/$(echo "$f" | tr '[:lower:]' '[:upper:]')"
+                done
+            done
+        fi
+    fi
+
     # ---- PYRT.UNO: the Python runtime, a vendored-MicroPython module -------
     # (optional, header-flag 0x2 = UNO_MODF_PY).  Built like STUDIO.UNO but
     # multi-hundred-object: the whole py/ core + the port + the `uno` bindings.
