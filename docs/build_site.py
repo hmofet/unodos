@@ -2820,7 +2820,7 @@ UnoC has no varargs, so <code>put2()</code> composes the <code>MM:SS</code> read
 <p>Also in there: one-shot notes with <code>music_open_chan()</code> + <code>music_note_on()</code> for
 the alarm, and a countdown that rounds <i>up</i> (one remaining tick still reads 0:01) while the
 stopwatch rounds down - the small honesty every clock UI owes its user.</p>
-{fig("samples_timer.png", "TIMER.C running: a countdown, the drain bar, and the keys that drive it. The window title is the app's own <code>win_title</code>.")}
+{fig("samples_timer.png", "TIMER.C mid-countdown: 4:56 left, the bar draining, and the hint line switched from start to pause. The window title is the app's own <code>win_title</code>.")}
 {sdk_source("TIMER.C")}
 
 <h2 id="life">LIFE.C - Conway's Game of Life</h2>
