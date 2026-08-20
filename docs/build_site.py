@@ -1301,7 +1301,20 @@ monsters that see you, chase you and shoot back, weapons, doors, lifts, switches
 keycards, pickups, exploding barrels, the status bar along the bottom, and level-to-level progression.
 Move with the arrow keys, turn with left and right, strafe with <kbd>,</kbd> and <kbd>.</kbd>,
 fire with <kbd>F</kbd>, open doors with <kbd>Space</kbd>, and pick a weapon with <kbd>1</kbd> to
-<kbd>6</kbd>.</p>
+<kbd>6</kbd>. <kbd>Esc</kbd> pauses the game and opens its menu.</p>
+
+<h4>It sounds like the game, too</h4>
+<p>Duum plays the WAD's own audio, with nothing to set up: the effects come out of the same file the
+levels do, and so does the music. The effects are mixed <em>on top of</em> the score rather than
+instead of it, so firing does not cut the music off. On a machine with no sound hardware at all,
+Duum falls back to the single note each event has always made rather than going quiet.</p>
+
+<h4>The pause menu</h4>
+<p><kbd>Esc</kbd> pauses and opens a menu: <strong>Resume</strong>, and <strong>Options</strong> with
+an FPS counter and a <strong>Controls</strong> screen. Controls lists what every action is bound to
+and lets you change it - and the list is the machine's own key table rather than a picture of one, so
+it always tells the truth about your keyboard. Arrows move, <kbd>Enter</kbd> chooses, and
+<kbd>Esc</kbd> backs out one screen at a time.</p>
 
 <p>Duum is on the desktop and in the <strong>Start</strong> menu under its own reticle icon, the
 same as any other app. It also sits on the disk as <code>APPS\\DUUM.UNO</code>, so opening that file
