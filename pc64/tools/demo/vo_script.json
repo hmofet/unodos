@@ -218,14 +218,9 @@
           "text": "It walks real Doom level geometry, textured and perspective correct, on an operating system that also has to be a desktop."
         },
         {
-          "id": "s08e",
-          "at": "fire-the-weapon",
-          "text": "The sounds are the WAD's own, mixed by the system."
-        },
-        {
           "id": "s08d",
           "at": "look-around",
-          "text": "The game data is a Freedoom WAD, read straight off the disk."
+          "text": "The game data is a Freedoom WAD - its levels, its sounds and its music, straight off the disk."
         }
       ]
     },
