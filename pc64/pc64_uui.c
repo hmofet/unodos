@@ -3196,8 +3196,18 @@ static void open_app(int a)
      * registry's: two classic apps cannot be resident at once. The unoui tier
      * has no such restriction, which is why new apps should be written to it. */
     if (g_app[a].kind == AK_CLASSICMOD) {
-        pc64_shell_run_user(g_app[a].vol, g_app[a].path);
+        /* Close the Start menu BEFORE running it, not after. remove_win()
+         * clears UI.focus_wi, and the run below opens the user-slot window and
+         * focuses its canvas - so closing the menu afterwards took that focus
+         * straight back off, and the app never became the focused widget.
+         * Nothing about that failed loudly: keyboard delivery is the only thing
+         * gated on widget focus, so the app still drew and still ticked, and
+         * only its key() never fired. An installed UnoC app was input-dead from
+         * the Start menu while the same module run from Studio or Files - paths
+         * with no menu to close - answered every key. The ordinary path below
+         * has always done these two in this order, and says why. */
         if (g_launch_open) { remove_win(&g_launch); g_launch_open = 0; }
+        pc64_shell_run_user(g_app[a].vol, g_app[a].path);
         g_dirty = 1;
         return;
     }

@@ -9421,7 +9421,8 @@ same switch, using the EFI scan numbering `pc64_native.c` already agrees with.
 Filed rather than done because `hid_kbd.c` is the usb-stack lane's file, and
 "it is only four lines" is how a lane gets widened.
 
-## 2026-08-20 - REQUEST to the shell/app-registry lane: an installed CLASSIC app never receives keys
+## 2026-08-20 - HALF FIXED (by me, at arin's direction): an installed CLASSIC
+## app never receives keys
 
 Found while capturing the manual's sample-program figures, which launch each
 sample from the Start menu as a discovered `APPS\` module.
@@ -9499,3 +9500,34 @@ copy per module costs a few KB and cannot do that.
 No kExports change: the office apps carry their own unodoc, as they already
 did.
 
+
+### Update, same day: the routing half is FIXED; a first-key swallow is not
+
+**Fixed in `open_app` (pc64_uui.c).** The `AK_CLASSICMOD` branch closed the Start
+menu AFTER running the app:
+
+    pc64_shell_run_user(...);                       /* opens the window,      */
+                                                    /* focuses its canvas     */
+    if (g_launch_open) { remove_win(&g_launch); ... }   /* focus_wi = -1 again */
+
+`remove_win()` clears `UI.focus_wi`, and keyboard delivery is the only thing
+gated on the focused WIDGET - `canvas_forward()` needs the app's canvas to be
+it. So the app drew, ticked, and never saw a key. The ordinary path below that
+branch has always closed the menu FIRST and focused LAST, with a comment saying
+why; the branch now does the same. Measured before and after with a temporary
+`unolog` of `(focus_win, focus_wi)` at key time: `fwi=-1` before, `fwi=0` after,
+and a UnoC sample that ignored every keypress now answers them.
+
+That also explains why a PYAPP was unaffected: its keys come from the shell hook
+at `pc64_uui.c` ~5985, which is gated on the focused WINDOW, not the widget.
+
+**Still open, and it is yours, not mine: the FIRST key after a Start-menu launch
+is swallowed.** With the fix in, pressing Space once on the Timer sample does
+nothing and pressing it again starts it (04:58 on the second press, verified in
+QEMU). Every earlier probe was reading this and calling it "keys are dead": `m`
+then `n` looked like nothing happened because `n` resets a timer that was
+already at its start value, and Tab-then-Space "worked" only because Tab was the
+key that got eaten. It is not the focus fix - the log shows `fwi=0` for that
+first key too - so something between the keyboard drain and `feed()` consumes
+one event after a launch. I did not chase it further: the manual's figure presses
+twice and says so in the scene comment.
