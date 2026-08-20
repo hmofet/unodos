@@ -85,13 +85,12 @@ static void sk_set(char *d, int cap, const char *s)
 
 static int pick_vol(void)
 {
-    int n = uno_fs_volumes(), v;
-    for (v = 1; v < n; v++)                       /* a real partition first */
-        if (uno_fs_kind(v) == 1 && uno_fs_writable(v)) return v;
-    for (v = 1; v < n; v++)
-        if (uno_fs_writable(v)) return v;
-    if (n > 0 && uno_fs_writable(0)) return 0;    /* the RAM disk: NOT persistent */
-    return -1;
+    /* uno_fs_pref_vol() prefers the BOOT volume, then falls back through the
+     * old order.  A machine can carry a volume that enumerates writable and
+     * never completes a write (the ZimaBlade's eMMC); binding the key store
+     * there hangs the box, exactly as the security store did before it moved
+     * to the shared helper. */
+    return uno_fs_pref_vol();
 }
 
 static int magic_ok(void)
