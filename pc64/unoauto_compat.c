@@ -78,6 +78,17 @@ int uno_dbg_win_stat(int i, const char **title,
                                            unsigned long *max_us)
 { (void)i; (void)title; (void)cyc; (void)max_us; return 0; }
 
+/* ---- A/B frame instrumentation (uno_debug.c) -------------------------------
+ * The probe's perf row (frame count + TSC scale) and the per-slot call counts
+ * exist so a host can turn draw cycles into ms/frame.  Production has no draw
+ * profiler and no calibrated TSC scale, so all three answer 0: the perf row
+ * reads as "no data", the same honesty rule as the guard above, and the
+ * kind-3 profile loop terminates immediately because uno_dbg_win_stat already
+ * returns 0 rows here. */
+unsigned long      uno_dbg_frames(void)      { return 0; }
+unsigned long      uno_dbg_win_calls(int i)  { (void)i; return 0; }
+unsigned long long uno_dbg_tsc_per_ms(void)  { return 0; }
+
 /* NOTE: uno_heap_stats is NOT here.  pc64_libc.c already ships its own
  * production stub (zeros) beside the debug walker, so defining one here is a
  * duplicate-symbol link error, not a fallback. */
