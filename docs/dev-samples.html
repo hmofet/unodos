@@ -1,0 +1,997 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sample programs · UnoDOS pc64 manual</title>
+<meta name="description" content="User manual for UnoDOS pc64, the x86-64/UEFI world of the UnoDOS operating-system family.">
+<link rel="stylesheet" href="assets/style.css">
+
+<script>
+(function(){
+  var r=document.documentElement, k='unodos-doc-theme';
+  try{var s=localStorage.getItem(k); if(s)r.setAttribute('data-theme',s);}catch(e){}
+  window.__t=function(){
+    var cur=r.getAttribute('data-theme');
+    if(!cur){cur=matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';}
+    var nx=cur==='dark'?'light':'dark';
+    r.setAttribute('data-theme',nx);
+    try{localStorage.setItem(k,nx);}catch(e){}
+  };
+})();
+</script>
+<script>
+/* Lightbox: click (or Enter/Space on) a screenshot to see it full size.
+   Manual shots are scaled into the text column, where fine UI detail - a
+   status line, an icon, a menu entry - is too small to read. Built once at
+   load and reused; Esc or a click anywhere closes it. */
+(function(){
+  var lb,img,cap;
+  function build(){
+    lb=document.createElement('div'); lb.id='lb'; lb.setAttribute('role','dialog');
+    lb.setAttribute('aria-modal','true');
+    img=document.createElement('img');
+    cap=document.createElement('figcaption');
+    var x=document.createElement('button');
+    x.className='x'; x.innerHTML='&times;'; x.setAttribute('aria-label','Close');
+    lb.appendChild(x); lb.appendChild(img); lb.appendChild(cap);
+    document.body.appendChild(lb);
+    lb.addEventListener('click', close);
+  }
+  function open(src, text){
+    if(!lb) build();
+    img.src=src; img.alt=text||''; cap.textContent=text||'';
+    lb.classList.add('on'); document.body.style.overflow='hidden';
+  }
+  function close(){
+    if(!lb) return;
+    lb.classList.remove('on'); img.src=''; document.body.style.overflow='';
+  }
+  document.addEventListener('click', function(e){
+    var b=e.target.closest && e.target.closest('button.zoom');
+    if(!b) return;
+    e.preventDefault();
+    var f=b.parentNode.querySelector('figcaption');
+    open(b.getAttribute('data-full'), f?f.textContent:'');
+  });
+  document.addEventListener('keydown', function(e){
+    if(e.key==='Escape') close();
+  });
+})();
+</script>
+
+</head>
+<body>
+<input type="checkbox" id="mnav">
+<div class="topbar">
+  <label class="menu-btn" for="mnav">☰ Menu</label>
+  <b>UnoDOS pc64</b>
+</div>
+<div class="layout">
+
+<aside class="sidebar">
+  <a class="brand" href="index.html" style="text-decoration:none;color:inherit">
+    <span class="logo"><i></i><i></i><i></i><i></i></span>
+    <span><b>UnoDOS <span style="color:var(--accent-2)">pc64</span></b><span class="sub">User manual</span></span>
+  </a>
+  <ul class="nav"><li><a class="" href="index.html">Overview</a></li><li><a class="" href="try-browser.html">Try it in your browser</a></li><li><a class="" href="getting-started.html">Getting started</a></li><li><a class="" href="desktop.html">The desktop</a></li><li><a class="" href="windows.html">Windows &amp; desktops</a></li><li><a class="" href="appearance.html">Themes &amp; appearance</a></li><li><a class="" href="apps.html">Applications</a></li><li><a class="" href="office.html">UnoOffice</a></li><li><a class="" href="browser.html">Web browser</a></li><li><a class="" href="ssh.html">SSH client</a></li><li><a class="" href="networking.html">Networking</a></li><li><a class="" href="logging.html">System log</a></li><li><a class="" href="appliances.html">Appliances</a></li><li><a class="" href="ports.html">The UnoDOS family</a></li><li class="sec">Developer</li><li><a class="" href="developer.html">Overview &amp; architecture</a></li><li><a class="" href="studio.html">Studio: the built-in IDE</a></li><li><a class="" href="dev-apps.html">Writing apps</a></li><li><a class="" href="dev-python.html">Python apps</a></li><li><a class="active" href="dev-samples.html">Sample programs</a></li><li><a class="" href="dev-sdk-c.html">UnoC SDK reference</a></li><li><a class="" href="dev-sdk-python.html">Python SDK reference</a></li><li><a class="" href="dev-api.html">API reference</a></li><li><a class="" href="dev-build.html">Building &amp; tooling</a></li><li><a class="" href="dev-remote.html">Remote control &amp; automation</a></li></ul>
+  <div class="side-foot">
+    <a href="https://github.com/hmofet/unodos" target="_blank" rel="noopener">GitHub&nbsp;&rsaquo; hmofet/unodos</a><br>
+    <a href="#" onclick="__t();return false">Toggle light / dark</a>
+  </div>
+</aside>
+<main class="main"><div class="wrap">
+
+<h1>Sample programs</h1>
+<p class="lede">Complete, working programs to read, run and take apart. Every one of them ships on the
+device in <code>SDK\</code> - open it in <a href="studio.html">Studio</a>, press Ctrl-B to build and
+Ctrl-R to run. Each sample earns its place by teaching something the one before it didn't.</p>
+
+<div class="tw"><table>
+<thead><tr><th>Sample</th><th>Language</th><th>What it teaches</th></tr></thead>
+<tbody>
+<tr><td><a href="studio.html">SAMPLE.C</a> / <a href="dev-python.html">SAMPLE.PY</a></td><td>UnoC / Python</td>
+<td>The app skeleton: the vtable / the <code>uno.App</code> class, drawing, keys, ticks.</td></tr>
+<tr><td><a href="#timer">TIMER.C</a></td><td>UnoC</td><td>Real timekeeping, number formatting without
+printf, sound, deliberate repainting.</td></tr>
+<tr><td><a href="#life">LIFE.C</a></td><td>UnoC</td><td>Arrays and computation, randomness, pacing a
+simulation.</td></tr>
+<tr><td><a href="#todo">TODO.PY</a></td><td>Python</td><td>Files that survive reboots, both kinds of key,
+the idle idiom.</td></tr>
+<tr><td><a href="#chart">CHART.PY</a></td><td>Python</td><td>Parsing a file, scaling to the canvas,
+graceful fallbacks.</td></tr>
+<tr><td><a href="#goodnite">GOODNITE.PY</a></td><td>Python</td><td>Automation under the permission model -
+three calls at three tiers.</td></tr>
+<tr><td><a href="#dostris">DOSTRIS.C</a></td><td>UnoC</td><td>A complete shipped game, unchanged - the
+big worked example.</td></tr>
+<tr><td><a href="#bench">bench_snapshot.py</a></td><td>Python, on your PC</td><td>A genuinely scheduled
+task: your PC's scheduler drives the box over the remote link.</td></tr>
+</tbody>
+</table></div>
+
+<h2 id="timer">TIMER.C - a kitchen timer</h2>
+<p>The natural second program after SAMPLE.C, because it forces the three habits a real UnoC app needs.
+<b>The frame is the timebase - count your own ticks.</b> <code>tick()</code> arrives once per shell
+frame, ~60 a second, and the timer counts those calls; pausing works by simply not counting. It
+deliberately does <i>not</i> use <code>TickCount()</code> - on pc64 that is a
+<a href="dev-sdk-c.html#tickcount">call counter shared by every app</a>, not a clock.
+<b>Repaint deliberately</b>: a tick-driven app calls <code>repaint_all()</code>, and only when the
+displayed state changed - once a second here, not sixty times. And <b>numbers without printf</b>:
+UnoC has no varargs, so <code>put2()</code> composes the <code>MM:SS</code> readout and
+<code>fmt_u()</code> does general unsigned decimal.</p>
+<p>Also in there: one-shot notes with <code>music_open_chan()</code> + <code>music_note_on()</code> for
+the alarm, and a countdown that rounds <i>up</i> (one remaining tick still reads 0:01) while the
+stopwatch rounds down - the small honesty every clock UI owes its user.</p>
+<pre><code>/* TIMER.C - a kitchen timer and stopwatch for the UnoDOS desktop.
+ *
+ * Space starts and pauses.  + and - (or the Up/Down arrows) dial the
+ * countdown a minute at a time, M switches between countdown and
+ * stopwatch, N resets.  When the countdown reaches zero the window
+ * flashes and beeps until you press any key.
+ *
+ * What it demonstrates, beyond SAMPLE.C: keeping time by counting your
+ * own tick() calls (the shell ticks you ~60 times a second - and that,
+ * not TickCount(), is the platform&#x27;s timebase: TickCount() counts CALLS,
+ * shared by every app, so pace on your own frames), formatting numbers
+ * with put2() - there is no printf - playing notes with music_note_on(),
+ * and the repaint_all() redraw idiom.  Build with Ctrl-B, run with
+ * Ctrl-R.
+ */
+#include &quot;UNO.H&quot;
+
+#define BAR_W     240
+#define MAX_MIN   95
+#define START_T   18000              /* 5 minutes, in 60 Hz frames */
+#define CAP_T     359940             /* put2 shows 2 digits: 99:59 */
+
+static long  set_frames = START_T;   /* the dialled countdown duration */
+static long  left       = START_T;   /* countdown frames remaining     */
+static long  elapsed;                /* stopwatch frames accumulated   */
+static Boolean running   = false;
+static Boolean stopwatch  = false;   /* false = countdown mode         */
+static long  ring_frames;            /* nonzero while the alarm rings  */
+static long  beep_in;                /* frames until the next beep     */
+static long  shown = -1;             /* last second painted            */
+static Boolean flash;
+
+static const GameRGB kFace   = {  24,  26,  40, C_BLUE };
+static const GameRGB kRing   = { 200,  40,  40, C_MAG  };
+static const GameRGB kBarOn  = {  90, 210, 120, C_CYAN };
+static const GameRGB kBarOff = {  46,  50,  72, C_BLUE };
+
+static void timer_draw(UnoWin *w)
+{
+    Rect r;
+    char t[8];
+    short x0 = w-&gt;bounds.left + 14;
+    short y0 = w-&gt;bounds.top + TBAR_H + 10;
+    long frames_now = stopwatch ? elapsed : left;
+    /* a countdown rounds up (1 frame left still reads 0:01); a stopwatch
+     * rounds down, like every stopwatch you have ever held */
+    long secs = stopwatch ? frames_now / 60 : (frames_now + 59) / 60;
+    short fill;
+
+    SetRect(&amp;r, x0 - 4, y0 - 4, x0 + BAR_W + 4, y0 + 96);
+    fill_rgb(&amp;r, (ring_frames &amp;&amp; flash) ? &amp;kRing : &amp;kFace);
+    uno_box(&amp;r, C_WHITE);
+
+    text_at(x0, y0 + 6, stopwatch ? &quot;STOPWATCH&quot; : &quot;COUNTDOWN&quot;,
+            C_CYAN, C_BLUE, false);
+    put2(secs / 60, t);
+    t[2] = &#x27;:&#x27;;
+    put2(secs % 60, t + 3);
+    text_at(x0 + 170, y0 + 6, t, C_WHITE, C_BLUE, false);
+
+    /* the bar drains as the countdown runs */
+    SetRect(&amp;r, x0, y0 + 28, x0 + BAR_W, y0 + 44);
+    fill_rgb(&amp;r, &amp;kBarOff);
+    if (!stopwatch &amp;&amp; set_frames &gt; 0) {
+        fill = (short)((long)BAR_W * (left / 60) / (set_frames / 60));
+        if (fill &gt; 0) {
+            SetRect(&amp;r, x0, y0 + 28, x0 + fill, y0 + 44);
+            fill_rgb(&amp;r, &amp;kBarOn);
+        }
+    }
+
+    text_at(x0, y0 + 56, running ? &quot;Space: pause&quot; : &quot;Space: start&quot;,
+            C_WHITE, C_BLUE, false);
+    text_at(x0 + 110, y0 + 56, &quot;M: mode   N: reset&quot;, C_MAG, C_BLUE, false);
+    text_at(x0, y0 + 74, &quot;+ / - or Up / Down: dial the minutes&quot;,
+            C_CYAN, C_BLUE, false);
+}
+
+static void timer_reset(void)
+{
+    running = false;
+    left = set_frames;
+    elapsed = 0;
+    shown = -1;
+}
+
+static Boolean timer_key(char ch, short code, Boolean cmd)
+{
+    if (cmd) return false;
+    if (ring_frames) {                /* any key silences the alarm */
+        ring_frames = 0;
+        music_quiet();
+        repaint_all();
+        return true;
+    }
+    if (ch == &#x27; &#x27;) {
+        running = !running;
+        repaint_all();
+        return true;
+    }
+    if (ch == &#x27;n&#x27; || ch == &#x27;N&#x27;) {
+        timer_reset();
+        repaint_all();
+        return true;
+    }
+    if (ch == &#x27;m&#x27; || ch == &#x27;M&#x27;) {
+        stopwatch = !stopwatch;
+        timer_reset();
+        repaint_all();
+        return true;
+    }
+    if (ch == &#x27;+&#x27; || ch == &#x27;=&#x27; || ch == 0x1E) {        /* Up arrow */
+        if (set_frames &lt; (long)MAX_MIN * 60 * 60)
+            set_frames += 60 * 60;
+        if (!running) left = set_frames;
+        repaint_all();
+        return true;
+    }
+    if (ch == &#x27;-&#x27; || ch == 0x1F) {                     /* Down arrow */
+        if (set_frames &gt; 60 * 60)
+            set_frames -= 60 * 60;
+        if (!running) left = set_frames;
+        repaint_all();
+        return true;
+    }
+    (void)code;
+    return false;
+}
+
+/* tick() arrives once per shell frame, ~60/s: the frame IS the clock.
+ * Pausing works by not counting - a paused timer simply lets frames by. */
+static void timer_tick(void)
+{
+    long secs;
+
+    if (ring_frames) {
+        ring_frames--;
+        if (!ring_frames) {           /* rang long enough on its own */
+            music_quiet();
+            repaint_all();
+            return;
+        }
+        if (--beep_in &lt;= 0) {
+            music_note_on(96, 9);
+            beep_in = 24;
+        }
+        if (((ring_frames / 12) &amp; 1) != (long)flash) {
+            flash = (Boolean)((ring_frames / 12) &amp; 1);
+            repaint_all();
+        }
+        return;
+    }
+
+    if (!running) return;
+
+    if (stopwatch) {
+        if (elapsed &lt; CAP_T) elapsed++;
+        secs = elapsed / 60;
+    } else {
+        left--;
+        if (left &lt;= 0) {
+            left = 0;
+            running = false;
+            ring_frames = 300;        /* ring for five seconds */
+            beep_in = 1;
+            repaint_all();
+            return;
+        }
+        secs = (left + 59) / 60;
+    }
+    if (secs != shown) {              /* repaint once a second, not 60x */
+        shown = secs;
+        repaint_all();
+    }
+}
+
+static void timer_opened(void)
+{
+    music_open_chan();
+}
+
+static const AppInterface kIface = {
+    timer_draw, timer_key, 0, timer_tick, timer_opened, 0,
+    &quot;Timer&quot;, { 40, 40, 328, 194 }
+};
+
+const AppInterface *uno_app_main(const KernelApi *k)
+{
+    gK = k;
+    return &amp;kIface;
+}</code></pre>
+
+<h2 id="life">LIFE.C - Conway's Game of Life</h2>
+<p>Real computation in UnoC: 2-D <code>unsigned char</code> arrays, a double buffer flipped with one
+<code>memcpy</code>, and a wrapping neighbourhood via modular arithmetic. Three details worth stealing:
+the simulation is <b>paced</b> (a generation every 6 frames, counted by the app itself - the shell stays
+responsive and the motion reads as motion); the draw paints <b>only what is alive</b> over one background
+fill; and the board seeds
+<b>defensively</b>, stirring the cell coordinates into <code>Random()</code> so even a weak generator
+yields a live board. Note <code>opened()</code> can run again after a close and reopen - the board seeds
+only once.</p>
+<pre><code>/* LIFE.C - Conway&#x27;s Game of Life.
+ *
+ * The classic cellular automaton on a wrapping grid.  Space pauses,
+ * S steps one generation while paused, N reseeds the board, C clears it.
+ * Cells that survive a while cool from green to blue.
+ *
+ * What it demonstrates: 2-D arrays and real computation in UnoC, seeding
+ * randomness with Random(), pacing a simulation by counting tick() calls
+ * (the shell&#x27;s ~60 Hz frame is the platform&#x27;s timebase), and painting
+ * only what is alive instead of every cell.  Build with Ctrl-B, run with
+ * Ctrl-R.
+ */
+#include &quot;UNO.H&quot;
+
+#define COLS 44
+#define ROWS 30
+#define CELL 6
+
+static unsigned char g[ROWS][COLS];   /* 0 dead, else generations alive */
+static unsigned char nx[ROWS][COLS];
+static Boolean running = true;
+static Boolean seeded  = false;
+static long gen;
+static long pop;
+static short acc;                     /* frames since the last step */
+
+static const GameRGB kBack  = {  12,  14,  24, C_BLUE };
+static const GameRGB kYoung = { 120, 220, 140, C_CYAN };
+static const GameRGB kOld   = {  70, 140, 220, C_CYAN };
+
+static void life_seed(void)
+{
+    short r, c;
+    pop = 0;
+    for (r = 0; r &lt; ROWS; r++)
+        for (c = 0; c &lt; COLS; c++) {
+            /* stir the coordinates in so even a weak Random() seeds life */
+            short v = (short)(((Random() + r * 31 + c * 17) &amp; 0x7FFF) % 100);
+            g[r][c] = (unsigned char)(v &lt; 30 ? 1 : 0);
+            if (g[r][c]) pop++;
+        }
+    gen = 0;
+}
+
+static short life_neigh(short r, short c)
+{
+    short dr, dc, n = 0;
+    for (dr = -1; dr &lt;= 1; dr++)
+        for (dc = -1; dc &lt;= 1; dc++) {
+            short rr, cc;
+            if (dr == 0 &amp;&amp; dc == 0) continue;
+            rr = (short)((r + dr + ROWS) % ROWS);   /* the grid wraps */
+            cc = (short)((c + dc + COLS) % COLS);
+            if (g[rr][cc]) n++;
+        }
+    return n;
+}
+
+static void life_step(void)
+{
+    short r, c, n;
+    pop = 0;
+    for (r = 0; r &lt; ROWS; r++)
+        for (c = 0; c &lt; COLS; c++) {
+            n = life_neigh(r, c);
+            if (g[r][c])
+                nx[r][c] = (unsigned char)
+                    ((n == 2 || n == 3) ? (g[r][c] &lt; 200 ? g[r][c] + 1 : 200) : 0);
+            else
+                nx[r][c] = (unsigned char)(n == 3 ? 1 : 0);
+            if (nx[r][c]) pop++;
+        }
+    memcpy(g, nx, sizeof(g));
+    gen++;
+}
+
+static void life_draw(UnoWin *w)
+{
+    Rect f, q;
+    short r, c, x, y;
+    char num[16];
+    short x0 = w-&gt;bounds.left + 8;
+    short y0 = w-&gt;bounds.top + TBAR_H + 6;
+    short by = (short)(y0 + ROWS * CELL);
+
+    SetRect(&amp;f, x0 - 2, y0 - 2, x0 + COLS * CELL + 2, by + 2);
+    uno_box(&amp;f, C_WHITE);
+    SetRect(&amp;f, x0, y0, x0 + COLS * CELL, by);
+    fill_rgb(&amp;f, &amp;kBack);
+
+    for (r = 0; r &lt; ROWS; r++)
+        for (c = 0; c &lt; COLS; c++)
+            if (g[r][c]) {
+                x = (short)(x0 + c * CELL);
+                y = (short)(y0 + r * CELL);
+                SetRect(&amp;q, x, y, x + CELL - 1, y + CELL - 1);
+                fill_rgb(&amp;q, g[r][c] &gt; 4 ? &amp;kOld : &amp;kYoung);
+            }
+
+    text_at(x0, by + 8, &quot;Gen:&quot;, C_CYAN, C_BLUE, false);
+    fmt_u(gen, num);
+    text_at(x0 + 38, by + 8, num, C_WHITE, C_BLUE, false);
+    text_at(x0 + 100, by + 8, &quot;Pop:&quot;, C_CYAN, C_BLUE, false);
+    fmt_u(pop, num);
+    text_at(x0 + 138, by + 8, num, C_WHITE, C_BLUE, false);
+    text_at(x0, by + 24,
+            running ? &quot;Space: pause   N: reseed   C: clear&quot;
+                    : &quot;PAUSED - Space runs, S steps once&quot;,
+            C_MAG, C_BLUE, false);
+}
+
+static Boolean life_key(char ch, short code, Boolean cmd)
+{
+    if (cmd) return false;
+    if (ch == &#x27; &#x27;) {
+        running = !running;
+        repaint_all();
+        return true;
+    }
+    if (ch == &#x27;s&#x27; || ch == &#x27;S&#x27;) {
+        running = false;
+        life_step();
+        repaint_all();
+        return true;
+    }
+    if (ch == &#x27;n&#x27; || ch == &#x27;N&#x27;) {
+        life_seed();
+        repaint_all();
+        return true;
+    }
+    if (ch == &#x27;c&#x27; || ch == &#x27;C&#x27;) {
+        memset(g, 0, sizeof(g));
+        gen = 0;
+        pop = 0;
+        running = false;
+        repaint_all();
+        return true;
+    }
+    (void)code;
+    return false;
+}
+
+/* tick() arrives once per shell frame, ~60/s - count frames yourself
+ * rather than trusting TickCount(), which counts calls, not time. */
+static void life_tick(void)
+{
+    if (!running) return;
+    if (++acc &lt; 6) return;                /* ~10 generations a second */
+    acc = 0;
+    life_step();
+    repaint_all();
+}
+
+static void life_opened(void)
+{
+    if (!seeded) {                        /* opened() can run again after a
+                                           * close/reopen - keep the board */
+        life_seed();
+        seeded = true;
+    }
+}
+
+static const AppInterface kIface = {
+    life_draw, life_key, 0, life_tick, life_opened, 0,
+    &quot;Life&quot;, { 30, 30, 320, 280 }
+};
+
+const AppInterface *uno_app_main(const KernelApi *k)
+{
+    gK = k;
+    return &amp;kIface;
+}</code></pre>
+
+<h2 id="todo">TODO.PY - a to-do list that survives reboots</h2>
+<p>Persistence is two calls: <code>uno.read()</code> returns <code>None</code> if the file doesn't exist
+(a fine first run), and <code>uno.write()</code> returns <code>False</code> on a read-only volume - the
+app <i>shows</i> that state instead of hiding it. The format is plain text (<code>[x] task</code> /
+<code>[ ] task</code>), so Notepad can edit the same file. The <code>key()</code> handler routes both
+kinds of key - printable characters arrive in <code>uni</code>, special keys in <code>scan</code> - and
+<code>tick()</code> returns <code>False</code> whenever nothing changed, so a static window costs the
+machine nothing.</p>
+<pre><code># TODO.PY - a to-do list that survives reboots.
+#
+# Type a task and press Enter to add it.  Up/Down pick a task, Tab checks
+# it off, Delete removes it, Esc clears what you were typing.  The list is
+# written to TODO.TXT on the boot volume after every change and loaded
+# back the next time the app opens - it is plain text, so Notepad can read
+# and edit the same file.
+#
+# What it demonstrates, beyond SAMPLE.PY: persistence with uno.read() and
+# uno.write(), telling printable keys (uni) from special keys (scan) apart,
+# and the idle idiom - tick() returns False whenever nothing changed, so
+# the shell doesn&#x27;t repaint a static window 60 times a second.
+
+import uno
+
+FILE = &quot;TODO.TXT&quot;
+
+BG   = uno.rgb(20, 22, 36)
+INK  = uno.rgb(214, 218, 232)
+DIM  = uno.rgb(120, 126, 150)
+HEAD = uno.rgb(120, 200, 255)
+GOOD = uno.rgb(110, 210, 130)
+BAD  = uno.rgb(240, 120, 120)
+SELB = uno.rgb(44, 50, 80)
+
+
+class Todo(uno.App):
+
+    def build(self, cv):
+        self.items = []              # [done, text] pairs
+        self.sel = 0
+        self.edit = &quot;&quot;
+        self.saved = True
+        self.dirty = True
+        data = uno.read(FILE)        # None if the file doesn&#x27;t exist yet
+        if data:
+            for ln in data.decode(&quot;latin1&quot;).split(&quot;\n&quot;):
+                ln = ln.strip()
+                if ln.startswith(&quot;[x] &quot;):
+                    self.items.append([True, ln[4:]])
+                elif ln.startswith(&quot;[ ] &quot;):
+                    self.items.append([False, ln[4:]])
+
+    def save(self):
+        out = &quot;&quot;
+        for done, text in self.items:
+            out += (&quot;[x] &quot; if done else &quot;[ ] &quot;) + text + &quot;\n&quot;
+        # write() returns False on a read-only volume - show it, don&#x27;t hide it
+        self.saved = uno.write(FILE, out.encode())
+
+    def key(self, uni, scan, ctrl):
+        if scan == 1 and self.sel &gt; 0:                    # Up
+            self.sel -= 1
+        elif scan == 2 and self.sel + 1 &lt; len(self.items):  # Down
+            self.sel += 1
+        elif scan == 8 and self.items:                    # Delete: remove
+            self.items.pop(self.sel)
+            if self.sel and self.sel &gt;= len(self.items):
+                self.sel -= 1
+            self.save()
+        elif scan == 0x17:                                # Esc: drop the entry
+            self.edit = &quot;&quot;
+        elif uni == 13 and self.edit:                     # Enter: add
+            self.items.append([False, self.edit])
+            self.sel = len(self.items) - 1
+            self.edit = &quot;&quot;
+            self.save()
+        elif uni == 9 and self.items:                     # Tab: toggle done
+            self.items[self.sel][0] = not self.items[self.sel][0]
+            self.save()
+        elif uni == 8:                                    # Backspace
+            self.edit = self.edit[:-1]
+        elif 32 &lt;= uni &lt; 127 and len(self.edit) &lt; 48:     # typing
+            self.edit += chr(uni)
+        else:
+            return False
+        self.dirty = True
+        return True
+
+    def tick(self):
+        if self.dirty:
+            self.dirty = False
+            return None              # repaint this frame...
+        return False                 # ...and sleep the rest of the time
+
+    def draw(self, cv):
+        cv.clear(BG)
+        done = 0
+        for it in self.items:
+            if it[0]:
+                done += 1
+        cv.text(10, 8, &quot;TO-DO&quot;, HEAD)
+        cv.text(cv.width() - 110, 8, &quot;%d of %d done&quot; % (done, len(self.items)), DIM)
+        cv.hline(10, 24, cv.width() - 20, DIM)
+
+        # the list (the last 14 entries fit; older ones scroll away)
+        shown = self.items[-14:]
+        base = len(self.items) - len(shown)
+        y = 32
+        for i in range(len(shown)):
+            if base + i == self.sel:
+                cv.fill_rect(6, y - 2, cv.width() - 12, 15, SELB)
+            mark, text = shown[i][0], shown[i][1]
+            cv.text(10, y, &quot;[x]&quot; if mark else &quot;[ ]&quot;, GOOD if mark else DIM)
+            cv.text(42, y, text, DIM if mark else INK)
+            y += 16
+        if not self.items:
+            cv.text(42, 40, &quot;nothing yet - type a task, press Enter&quot;, DIM)
+
+        # the entry line and the save state
+        y = cv.height() - 44
+        cv.hline(10, y, cv.width() - 20, DIM)
+        cv.text(10, y + 6, &quot;&gt; &quot; + self.edit + &quot;_&quot;, INK)
+        cv.text(10, y + 22, &quot;Enter add   Tab done   Del remove&quot;, DIM)
+        cv.text(10, y + 34,
+                &quot;saved to &quot; + FILE if self.saved else &quot;NOT SAVED - volume is read-only&quot;,
+                GOOD if self.saved else BAD)
+
+
+app = Todo()</code></pre>
+
+<h2 id="chart">CHART.PY - a bar chart from a file</h2>
+<p>A small, genuinely useful tool: drop a <code>DATA.CSV</code> on the boot volume - one
+<code>label,value</code> per line - and it draws the chart, scaled to fit, with the biggest bar called
+out. Press R after editing the file in Notepad. It parses without a <code>csv</code> module (there
+isn't one): <code>split(",")</code>, <code>strip()</code>, and a <code>try/except ValueError</code>
+that makes header lines and junk simply vanish. Everything is scaled from
+<code>cv.width()</code>/<code>cv.height()</code> with integer math - never hardcode the canvas size,
+the shell picks your window. With no file it charts built-in demo data and says so, so the first launch
+teaches you what to do next.</p>
+<pre><code># CHART.PY - a bar chart drawn from a text file.
+#
+# Put a DATA.CSV on the boot volume - one &quot;label,value&quot; line each, like
+#
+#     MON,12
+#     TUE,19
+#     WED,7
+#
+# and this app charts it, scaled to fit the window, with the biggest bar
+# called out.  Edit the file in Notepad and press R here to reload it.
+# With no file it charts built-in demo data so you can see the shape first.
+#
+# What it demonstrates: reading and parsing a file with uno.read(), integer
+# scaling to a variable-size canvas (read cv.width()/height(), never
+# hardcode - the shell picks your window size), and a static app that only
+# repaints when its data changes.
+
+import uno
+
+FILE = &quot;DATA.CSV&quot;
+
+BG   = uno.rgb(18, 20, 34)
+INK  = uno.rgb(214, 218, 232)
+DIM  = uno.rgb(110, 116, 140)
+BAR  = uno.rgb(96, 170, 255)
+TOP  = uno.rgb(255, 170, 90)
+
+DEMO = [[&quot;MON&quot;, 12], [&quot;TUE&quot;, 19], [&quot;WED&quot;, 7], [&quot;THU&quot;, 23],
+        [&quot;FRI&quot;, 17], [&quot;SAT&quot;, 4], [&quot;SUN&quot;, 9]]
+
+
+class Chart(uno.App):
+
+    def build(self, cv):
+        self.load()
+
+    def load(self):
+        self.rows = []
+        self.demo = False
+        data = uno.read(FILE)
+        if data:
+            for ln in data.decode(&quot;latin1&quot;).split(&quot;\n&quot;):
+                parts = ln.strip().split(&quot;,&quot;)
+                if len(parts) &lt; 2:
+                    continue
+                try:
+                    v = int(parts[1].strip())
+                except ValueError:
+                    continue             # a header line, or junk - skip it
+                self.rows.append([parts[0].strip(), v if v &gt; 0 else 0])
+                if len(self.rows) == 16:  # more bars than that won&#x27;t fit
+                    break
+        if not self.rows:
+            self.rows = DEMO
+            self.demo = True
+        self.dirty = True
+
+    def key(self, uni, scan, ctrl):
+        if uni in (114, 82):             # r / R: reload the file
+            self.load()
+            return True
+        return False
+
+    def tick(self):
+        if self.dirty:
+            self.dirty = False
+            return None
+        return False
+
+    def draw(self, cv):
+        cv.clear(BG)
+        head = (&quot;%s not found - demo data (R reloads)&quot; % FILE) if self.demo else FILE
+        cv.text(10, 8, head, DIM if self.demo else INK)
+
+        x0, y0 = 34, 30                  # plot origin (top-left)
+        ph = cv.height() - y0 - 34       # plot height
+        pw = cv.width() - x0 - 10
+        base = y0 + ph                   # the x axis
+        mx = 1
+        for r in self.rows:
+            if r[1] &gt; mx:
+                mx = r[1]
+
+        cv.vline(x0, y0, ph, DIM)
+        cv.hline(x0, base, pw, DIM)
+        cv.text(4, y0 - 4, &quot;%d&quot; % mx, DIM)
+        cv.text(4, base - 10, &quot;0&quot;, DIM)
+
+        n = len(self.rows)
+        step = pw // n
+        bw = step - 6 if step &gt; 12 else step - 2
+        for i in range(n):
+            label, v = self.rows[i][0], self.rows[i][1]
+            h = v * ph // mx
+            x = x0 + 4 + i * step
+            cv.fill_rect(x, base - h, bw, h, TOP if v == mx else BAR)
+            cv.text(x, base - h - 12, &quot;%d&quot; % v, INK)
+            cv.text(x, base + 6, label[:5], DIM)
+
+
+app = Chart()</code></pre>
+
+<h2 id="goodnite">GOODNITE.PY - an end-of-day automation app</h2>
+<p>The bridge from apps to automation: one launch journals what you were working on, then offers to shut
+the machine down. It is the <a href="dev-remote.html#unoscript">permission model</a> made concrete -
+three calls at three tiers:</p>
+<div class="tw"><table>
+<thead><tr><th>Call</th><th>Capability</th><th>Tier</th></tr></thead>
+<tbody>
+<tr><td><code>u.ui.screen()</code> - read the window tree</td><td><code>ui.read</code></td><td>0,
+ambient</td></tr>
+<tr><td><code>u.fs.write("journal/...")</code> - into your home</td><td><code>fs.user</code></td>
+<td>1</td></tr>
+<tr><td><code>u.sys.power(0)</code> - shut down</td><td><code>power</code></td><td>2, consent</td></tr>
+</tbody>
+</table></div>
+<p>Two things to take away. <b>Denial is not an error state</b>: denied calls raise <code>OSError</code>
+(or <code>u.request()</code> answers <code>False</code>), the app handles both, and the same script runs
+everywhere - it just does less on a machine that trusts it less. And <b>the generator/tick pattern is
+load-bearing</b>: an injected action lands on the <i>next</i> shell frame, so an automation script yields
+between step and check, pacing those yields on <code>unoauto.uptime()</code> - the wall clock in
+milliseconds, and the only real clock an app can read. For unattended runs, a signed manifest
+(<a href="dev-remote.html#automation">.MFT sidecar</a>) grants the declared capabilities at launch, no
+prompts.</p>
+<pre><code># GOODNITE.PY - an end-of-day automation app.
+#
+# One launch journals what you were working on, then offers to shut the
+# machine down.  It is a worked example of `unoscript`, the production
+# automation surface, doing real work under the permission model:
+#
+#   - reading the window tree     u.ui.screen()      tier 0, ambient
+#   - writing into your home      u.fs.write()       tier 1, fs.user
+#   - powering the machine off    u.sys.power(0)     tier 2, `power` -
+#                                 granted only through an explicit consent
+#                                 (or a role, or a signed manifest)
+#
+# A capability you don&#x27;t hold never crashes the app: denied calls raise
+# OSError, and u.request() simply answers False.  Handle both and the same
+# script runs everywhere - it just does less on a machine that trusts it
+# less.
+#
+# The steps run from a generator paced by tick() on unoauto.uptime(),
+# the wall clock in milliseconds (ungated, real time in every build).
+# That pattern is load-bearing for every automation app: an injected
+# action lands on the NEXT shell frame, so a script must yield before it
+# looks at the result.
+
+import uno
+import unoauto
+import unoscript as u
+
+JOURNAL = &quot;journal/GOODNITE.LOG&quot;
+KEEP = 3000              # stay under unoscript&#x27;s 4 KB read cap
+
+BG   = uno.rgb(16, 18, 34)
+HEAD = uno.rgb(120, 200, 255)
+INK  = uno.rgb(214, 218, 232)
+WARN = uno.rgb(255, 170, 90)
+
+
+class GoodNight(uno.App):
+
+    def build(self, cv):
+        self.lines = []
+        self.armed = False
+        self.until = 0
+        self.gen = self.script()
+        self.dirty = True
+
+    def say(self, s):
+        self.lines.append(s)
+        self.dirty = True
+
+    # ---- the workflow; each yield is a pause in milliseconds -------------
+    def script(self):
+        uid = u.whoami()                 # 0xFFFFFFFF when nobody is signed in
+        self.say(&quot;Good night.&quot; if uid in (-1, 0xFFFFFFFF)
+                 else &quot;Good night, user %d.&quot; % uid)
+        yield 500
+
+        # 1. what is open right now?  (ui.read - ambient, tier 0)
+        try:
+            wins = [ln.strip() for ln in u.ui.screen().split(&quot;\n&quot;) if ln.strip()]
+        except OSError:
+            wins = []
+        self.say(&quot;open right now: %d window(s)&quot; % len(wins))
+        for w in wins[:6]:
+            self.say(&quot;  &quot; + w[:44])
+        yield 1000
+
+        # 2. journal it into your home  (fs.user, tier 1)
+        entry = &quot;-- session, uptime %d min, %d window(s)\n&quot; % (
+            unoauto.uptime() // 60000, len(wins))
+        for w in wins[:6]:
+            entry += &quot;   &quot; + w[:60] + &quot;\n&quot;
+        journaled = False
+        try:
+            try:
+                old = u.fs.read(JOURNAL).decode(&quot;latin1&quot;)
+            except OSError:
+                old = &quot;&quot;                     # first run: no journal yet
+            u.fs.write(JOURNAL, (old + entry)[-KEEP:].encode())
+            self.say(&quot;journaled to home:&quot; + JOURNAL)
+            journaled = True
+        except (OSError, NotImplementedError):
+            self.say(&quot;journal skipped - fs.user not granted&quot;)
+        yield 500
+
+        # 3. ask permission to power off  (power, tier 2)
+        if u.request(&quot;power&quot;):
+            self.say(&quot;&quot;)
+            self.say(&quot;Enter shuts the machine down.  Esc keeps it on.&quot;)
+            self.armed = True
+        else:
+            self.say(&quot;&quot;)
+            self.say(&quot;`power` not granted - leaving the machine on.&quot;)
+            if journaled:
+                self.say(&quot;(journal is written; close me when you&#x27;re done)&quot;)
+
+    def tick(self):
+        if self.gen:
+            now = unoauto.uptime()       # wall-clock milliseconds
+            if now &gt;= self.until:
+                try:
+                    self.until = now + next(self.gen)
+                except StopIteration:
+                    self.gen = None
+        if self.dirty:
+            self.dirty = False
+            return None
+        return False
+
+    def key(self, uni, scan, ctrl):
+        if self.armed and uni == 13:         # Enter: do it
+            self.say(&quot;shutting down...&quot;)
+            u.sys.power(0)                   # does not return when granted
+            return True
+        if self.armed and scan == 0x17:      # Esc: stand down
+            self.armed = False
+            self.say(&quot;cancelled - staying on.&quot;)
+            return True
+        return False
+
+    def draw(self, cv):
+        cv.clear(BG)
+        cv.text(10, 8, &quot;GOODNITE - end-of-day automation&quot;, HEAD)
+        cv.hline(10, 24, cv.width() - 20, uno.rgb(60, 66, 96))
+        y = 32
+        for s in self.lines[-14:]:
+            cv.text(10, y, s, WARN if self.armed and s.startswith(&quot;Enter&quot;) else INK)
+            y += 16
+
+
+app = GoodNight()</code></pre>
+
+<h2 id="bench">bench_snapshot.py - a genuinely scheduled task</h2>
+<p>There is no cron on the device - deliberately: pc64 has no preemptive scheduler, and background
+scripts are a reserved capability for a facility that doesn't exist yet. The honest scheduled-task story
+is <b>your PC schedules, the box answers</b>. Task Scheduler or cron runs this script nightly; it waits
+for the box to dial in over the <a href="dev-remote.html">remote link</a>, authenticates with the
+Remote-control code, appends one CSV row of uptime/heap/fs/net counters, saves a screenshot, and exits.
+A month later the folder answers "when did that start?" for free.</p>
+<p>Arm only <b>Watch</b> on the device - the script only observes, so give it only that - and put the
+6-digit code in <code>UNO_PIN</code> on the PC. The standing caveat applies: the link is plaintext and
+LAN-only by intent; the code proves who may drive the box, it does not encrypt the wire.</p>
+<pre><code>#!/usr/bin/env python3
+&quot;&quot;&quot;bench_snapshot.py - a scheduled health snapshot of a UnoDOS machine.
+
+Run this from your PC&#x27;s scheduler each night.  It waits for the box to
+dial in over the URC link, authenticates, and files one snapshot: a
+screenshot, plus a CSV row of uptime, heap, filesystem and network
+counters.  A month later you have a folder that answers &quot;when did that
+start&quot; for free.
+
+Everything it needs ships with UnoDOS: tools/unoauto_remote.py is the
+client library - keep this script next to it, or point PYTHONPATH at it.
+
+On the machine: Control Panel -&gt; Remote control..., tick Watch (and
+nothing else - this script only observes), note the 6-digit code, and
+choose discover so the box finds this PC by broadcast.  Put the code in
+the UNO_PIN environment variable on the PC.  Debug builds skip the code.
+
+Schedule it:
+  Windows:  schtasks /Create /TN UnoSnapshot /SC DAILY /ST 23:00 ^
+            /TR &quot;py C:\\unodos\\pc64\\tools\\bench_snapshot.py&quot;
+  Linux:    0 23 * * *  python3 /home/you/unodos/pc64/tools/bench_snapshot.py
+&quot;&quot;&quot;
+import os
+import sys
+import time
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from unoauto_remote import UnoAutoLink
+
+PIN = os.environ.get(&quot;UNO_PIN&quot;, &quot;&quot;)
+OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), &quot;snapshots&quot;)
+CSV = os.path.join(OUT, &quot;health.csv&quot;)
+
+
+def main():
+    os.makedirs(OUT, exist_ok=True)
+    stamp = time.strftime(&quot;%Y%m%d-%H%M%S&quot;)
+
+    link = UnoAutoLink(port=5099)
+    link.listen()                          # the box dials us
+    if not link.wait_connected(timeout=300):
+        print(&quot;no box dialled in - is it on, and is discover armed?&quot;)
+        return 1
+    link.wait_hello(timeout=30)            # booted and draining its link
+    if PIN:                                # production builds authenticate
+        link.command(&quot;auth&quot;, PIN)
+
+    # one CSV row of the numbers that drift
+    row = {&quot;uptime_s&quot;: link.uptime() // 1000}
+    for p in link.probe():                 # kind 2 = subsystem rows
+        if p[&quot;kind&quot;] == 2 and p[&quot;name&quot;] in (&quot;heap&quot;, &quot;fs&quot;, &quot;net&quot;):
+            row[p[&quot;name&quot;] + &quot;_v1&quot;] = p[&quot;v1&quot;]
+            row[p[&quot;name&quot;] + &quot;_v2&quot;] = p[&quot;v2&quot;]
+    new = not os.path.exists(CSV)
+    keys = sorted(row)
+    with open(CSV, &quot;a&quot;) as f:
+        if new:
+            f.write(&quot;stamp,&quot; + &quot;,&quot;.join(keys) + &quot;\n&quot;)
+        f.write(stamp + &quot;,&quot; + &quot;,&quot;.join(str(row[k]) for k in keys) + &quot;\n&quot;)
+
+    # and one screenshot, as a portable PPM
+    w, h, rgba = link.screen_grab()
+    shot = os.path.join(OUT, stamp + &quot;.ppm&quot;)
+    rgb = bytearray()
+    for i in range(0, len(rgba), 4):
+        rgb += rgba[i:i + 3]
+    with open(shot, &quot;wb&quot;) as f:
+        f.write(b&quot;P6\n%d %d\n255\n&quot; % (w, h))
+        f.write(bytes(rgb))
+
+    link.close()
+    print(&quot;snapshot %s: %dx%d screen, %s&quot; % (stamp, w, h,
+          &quot;, &quot;.join(&quot;%s=%s&quot; % (k, row[k]) for k in keys)))
+    return 0
+
+
+if __name__ == &quot;__main__&quot;:
+    sys.exit(main())</code></pre>
+<div class="note"><b>The scheduler is your PC's</b>Schedule it with the tools your PC already has: <code>schtasks /Create /TN UnoSnapshot /SC DAILY /ST 23:00 /TR "py ...\bench_snapshot.py"</code> on Windows, or <code>0 23 * * * python3 .../bench_snapshot.py</code> in a crontab.</div>
+
+<h2 id="dostris">DOSTRIS.C and the shipped sources</h2>
+<p><code>SDK\DOSTRIS.C</code> is the shipped game, ported to UnoC unchanged - the big worked example for
+game state, a piece table in nested initializers, line clearing and a looping <code>gm_start</code>
+song. <code>SDK\DUUM.PY</code> is the whole Doom-style engine in Python, streaming a real WAD with
+<code>uno.read_at</code>. Both reward reading with the <a href="dev-sdk-c.html">C</a> and
+<a href="dev-sdk-python.html">Python</a> references open beside them.</p>
+
+<p class="kv">Next: <a href="dev-apps.html">Writing apps</a> for the app model these all share, and the
+<a href="dev-sdk-c.html">UnoC SDK reference</a> / <a href="dev-sdk-python.html">Python SDK reference</a>
+for every call they make.</p>
+
+<nav class="pagenav"><a href="dev-python.html">&lsaquo; Python apps</a><a class="nxt" href="dev-sdk-c.html">UnoC SDK reference &rsaquo;</a></nav>
+</div></main>
+</div>
+</body>
+</html>

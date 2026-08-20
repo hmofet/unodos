@@ -74,7 +74,7 @@
     <span class="logo"><i></i><i></i><i></i><i></i></span>
     <span><b>UnoDOS <span style="color:var(--accent-2)">pc64</span></b><span class="sub">User manual</span></span>
   </a>
-  <ul class="nav"><li><a class="" href="index.html">Overview</a></li><li><a class="" href="try-browser.html">Try it in your browser</a></li><li><a class="" href="getting-started.html">Getting started</a></li><li><a class="" href="desktop.html">The desktop</a></li><li><a class="" href="windows.html">Windows &amp; desktops</a></li><li><a class="" href="appearance.html">Themes &amp; appearance</a></li><li><a class="" href="apps.html">Applications</a></li><li><a class="" href="office.html">UnoOffice</a></li><li><a class="" href="browser.html">Web browser</a></li><li><a class="" href="ssh.html">SSH client</a></li><li><a class="" href="networking.html">Networking</a></li><li><a class="" href="logging.html">System log</a></li><li><a class="" href="appliances.html">Appliances</a></li><li><a class="" href="ports.html">The UnoDOS family</a></li><li class="sec">Developer</li><li><a class="" href="developer.html">Overview &amp; architecture</a></li><li><a class="" href="studio.html">Studio: the built-in IDE</a></li><li><a class="active" href="dev-apps.html">Writing apps</a></li><li><a class="" href="dev-python.html">Python apps</a></li><li><a class="" href="dev-api.html">API reference</a></li><li><a class="" href="dev-build.html">Building &amp; tooling</a></li><li><a class="" href="dev-remote.html">Remote control &amp; automation</a></li></ul>
+  <ul class="nav"><li><a class="" href="index.html">Overview</a></li><li><a class="" href="try-browser.html">Try it in your browser</a></li><li><a class="" href="getting-started.html">Getting started</a></li><li><a class="" href="desktop.html">The desktop</a></li><li><a class="" href="windows.html">Windows &amp; desktops</a></li><li><a class="" href="appearance.html">Themes &amp; appearance</a></li><li><a class="" href="apps.html">Applications</a></li><li><a class="" href="office.html">UnoOffice</a></li><li><a class="" href="browser.html">Web browser</a></li><li><a class="" href="ssh.html">SSH client</a></li><li><a class="" href="networking.html">Networking</a></li><li><a class="" href="logging.html">System log</a></li><li><a class="" href="appliances.html">Appliances</a></li><li><a class="" href="ports.html">The UnoDOS family</a></li><li class="sec">Developer</li><li><a class="" href="developer.html">Overview &amp; architecture</a></li><li><a class="" href="studio.html">Studio: the built-in IDE</a></li><li><a class="active" href="dev-apps.html">Writing apps</a></li><li><a class="" href="dev-python.html">Python apps</a></li><li><a class="" href="dev-samples.html">Sample programs</a></li><li><a class="" href="dev-sdk-c.html">UnoC SDK reference</a></li><li><a class="" href="dev-sdk-python.html">Python SDK reference</a></li><li><a class="" href="dev-api.html">API reference</a></li><li><a class="" href="dev-build.html">Building &amp; tooling</a></li><li><a class="" href="dev-remote.html">Remote control &amp; automation</a></li></ul>
   <div class="side-foot">
     <a href="https://github.com/hmofet/unodos" target="_blank" rel="noopener">GitHub&nbsp;&rsaquo; hmofet/unodos</a><br>
     <a href="#" onclick="__t();return false">Toggle light / dark</a>
@@ -83,13 +83,177 @@
 <main class="main"><div class="wrap">
 
 <h1>Writing apps</h1>
-<p class="lede">A UnoDOS app is a small <code>.UNO</code> module loaded from the disk at runtime. You can
-build one right on the machine with <a href="studio.html">Studio</a>, or from a PC with the toolchain.
-This page covers apps written in <strong>UnoC</strong>; for <strong>Python</strong>, see
-<a href="dev-python.html">Python apps</a>. There are a few UnoC styles; the native widget app is the
-normal path for a built-in.</p>
+<p class="lede">Everything between "I have an idea" and "it's in the Start menu", in the order you'll
+meet it: pick a language, learn the lifecycle the desktop drives you through, draw, react, keep time,
+save, make sound, then package. The per-call contracts live in the
+<a href="dev-sdk-c.html">UnoC</a> and <a href="dev-sdk-python.html">Python</a> SDK references, and
+complete programs to take apart are on <a href="dev-samples.html">Sample programs</a> - this page is
+the map. The second half covers the deeper tiers the built-in apps use.</p>
 
-<div class="note tip"><b>Start with Studio</b>The friendliest way to write an app is <a href="studio.html">Studio</a>, the built-in IDE: edit, press <kbd>Ctrl</kbd>+<kbd>B</kbd> to compile it to a <code>.UNO</code>, and <kbd>Ctrl</kbd>+<kbd>R</kbd> to run it - no PC or toolchain needed. This page covers the app model itself, which Studio and the host build share.</div>
+<div class="note tip"><b>Start with Studio</b>The friendliest way to write an app is <a href="studio.html">Studio</a>, the built-in IDE: edit, press <kbd>Ctrl</kbd>+<kbd>B</kbd> to compile it to a <code>.UNO</code>, and <kbd>Ctrl</kbd>+<kbd>R</kbd> to run it - no PC or toolchain needed.</div>
+
+<h2 id="pick">1. Pick a language</h2>
+<div class="tw"><table>
+<thead><tr><th></th><th>UnoC</th><th>Python</th></tr></thead>
+<tbody>
+<tr><td>Runs</td><td>native x86-64, compiled on the device by Studio</td><td>on the PYRT runtime
+(MicroPython)</td></tr>
+<tr><td>Feels like</td><td>classic C against a Toolbox-style API</td><td>modern Python with a small,
+flat <code>uno</code> module</td></tr>
+<tr><td>Best for</td><td>games and tools that want every cycle</td><td>almost everything else - less
+ceremony, floats, exceptions, big ints</td></tr>
+<tr><td>Watch out for</td><td>no floating point, no printf, LLP64 (<code>long</code> is 4 bytes)</td>
+<td>no f-strings, no <code>time</code>/<code>random</code>/<code>json</code>, one file per app</td></tr>
+</tbody>
+</table></div>
+<p>Both compile and run entirely on the device: open Studio, write, <b>Ctrl-B</b> builds, <b>Ctrl-R</b>
+runs. Errors land in the output pane with a line number; click one and the caret jumps there.</p>
+
+<h2 id="lifecycle">2. The lifecycle: the desktop calls you</h2>
+<p>There is no <code>main()</code> and no event loop to write. Your app hands the desktop a small set of
+callbacks and the desktop drives them: <b>build/opened</b> once at open, <b>draw</b> on every repaint,
+<b>tick</b> ~60 times a second, <b>key</b>/<b>click</b> when input arrives for your window,
+<b>closed</b> on the way out. The two smallest complete apps:</p>
+<pre><code>#include &quot;UNO.H&quot;
+
+static void my_draw(UnoWin *w)
+{
+    short x0 = w-&gt;bounds.left + 10;
+    short y0 = w-&gt;bounds.top + TBAR_H + 10;
+    text_at(x0, y0, &quot;hello, UnoDOS&quot;, C_WHITE, C_BLUE, false);
+}
+
+static const AppInterface kIface = {
+    my_draw, 0, 0, 0, 0, 0,
+    &quot;Hello&quot;, { 40, 40, 260, 140 }
+};
+
+const AppInterface *uno_app_main(const KernelApi *k)
+{
+    gK = k;
+    return &amp;kIface;
+}</code></pre>
+<pre><code>import uno
+
+class Hello(uno.App):
+    def draw(self, cv):
+        cv.clear(uno.rgb(16, 18, 34))
+        cv.text(8, 8, &quot;hello, UnoDOS&quot;, uno.rgb(214, 218, 232))
+
+app = Hello()</code></pre>
+<p>Rules that hold in both languages:</p>
+<ul>
+<li><b>Never block.</b> Every callback runs on the shell's frame loop; a busy-wait freezes the whole
+desktop. Structure long work as increments driven from <code>tick()</code>.</li>
+<li><b>Draw only in draw.</b> State changes in <code>tick()</code>/<code>key()</code>, pixels in
+<code>draw()</code>; ask for a repaint rather than painting eagerly.</li>
+<li><b>Closing is not the end.</b> Treat <code>opened()</code> as "again", not "first time", and clean
+up - stop your music, free your memory - in <code>closed()</code>, because nobody does it for
+you.</li>
+</ul>
+
+<h2 id="drawing">3. Drawing</h2>
+<p>You draw into your window's content area - below the title bar - through the calls in the references
+(<a href="dev-sdk-c.html#drawing">UnoC</a>: rect fills, ovals, lines, <code>text_at</code>;
+<a href="dev-sdk-python.html#canvas">Python</a>: the <code>Canvas</code>). Two disciplines carry every
+sample:</p>
+<ul>
+<li><b>Read your size, don't assume it.</b> UnoC: <code>w-&gt;bounds</code> plus <code>TBAR_H</code>;
+Python: <code>cv.width()</code>/<code>cv.height()</code>. The shell picks window sizes and the user
+picks resolutions and fonts.</li>
+<li><b>Repaint on change, not on schedule.</b> UnoC: call <code>repaint_all()</code> from
+<code>tick()</code> when something moved. Python: return <code>False</code> from <code>tick()</code> on
+idle frames. A static window should cost nothing.</li>
+</ul>
+
+<h2 id="input">4. Input</h2>
+<p>Keys arrive as events; return true to consume one. Printable characters and special keys are
+distinguished for you (UnoC: <code>ch</code> vs <code>code</code>; Python: <code>uni</code> vs
+<code>scan</code> - full tables in the references). Some chords never reach you - Ctrl+Esc, Alt+Tab and
+friends belong to the shell. For held-key movement in games, Python has <code>uno.keys_down()</code>;
+UnoC games time out their own key events.</p>
+
+<h2 id="time">5. Time</h2>
+<p>Your <code>tick()</code> callback arrives once per shell frame, nominally 60 a second - <b>the frame
+is the platform's timebase, so count your own tick() calls</b>. Do not reach for
+<code>TickCount()</code>/<code>uno.ticks()</code> expecting a clock: it is a
+<a href="dev-sdk-c.html#tickcount">call counter shared by every app</a>, so it only behaves like frame
+pacing if you call it exactly once per tick and nothing else is calling it.
+<a href="dev-samples.html#timer">TIMER.C</a> is the worked example of frame counting. The one real
+clock an app can read is <code>unoauto.uptime()</code> (milliseconds since boot, available in every
+build) - automation scripts pace on it.</p>
+
+<h2 id="files">6. Files and settings</h2>
+<p>Volume 0 is the boot volume; names are 8.3. Whole-file read/write plus offset reads for streaming -
+the contracts (missing files, read-only volumes, size probes) are in the references, and
+<a href="dev-samples.html#todo">TODO.PY</a> shows the polite way to surface a failed save. For small
+settings, Python apps have <code>uno.pref_get</code>/<code>pref_set</code>; log through
+<code>uno.log()</code> so your traces land in the <a href="logging.html">system log</a> with everyone
+else's.</p>
+
+<h2 id="sound">7. Sound</h2>
+<p>The square-wave voice (<code>music_note_on</code> / <code>uno.beep</code>) works on every machine.
+Sampled effects and MIDI music need a DAC and fail detectably when there is none - always keep the beep
+fallback. Looping game music in UnoC is <code>gm_start</code>; stop it in <code>closed()</code>,
+because the shell won't.</p>
+
+<h2 id="package">8. Packaging: from the user slot to the Start menu</h2>
+<p>What Studio builds runs immediately - <b>the user slot</b> - and that is the whole story for a
+personal tool: the <code>.UNO</code> lands next to your source, Files can launch it, one such app is
+resident at a time.</p>
+<p>To make an <i>installed</i> app - a Start-menu row, a desktop icon, a durable name - the module must
+carry an <b>app descriptor</b>, and that is a host-side step today (Studio doesn't write
+descriptors):</p>
+<pre><code># on your PC, in pc64/:
+python3 tools/mkicon.py myicon.ppm MYAPP.QOI
+python3 tools/mkuno.py pyapp MYAPP.PY APPS/MYAPP.UNO MYAPP.DESC
+
+# MYAPP.DESC:
+#   id: myapp
+#   name: My App
+#   icon: file:MYAPP.QOI
+#   cat: tools
+#   rank: 50</code></pre>
+<p>Drop the result into <code>APPS\</code> on the device (Files' Copy, or <code>put</code> over the
+<a href="dev-remote.html">remote link</a>) and press Rescan in the Control Panel - no reboot. The
+descriptor's <code>id:</code> is your app's durable identity: window geometry, session restore and
+<code>launch &lt;id&gt;</code> all key off it. Icons are 32x32 QOI with hard-edged alpha; categories
+order the Start menu; the user's <code>APPS.CFG</code> gets the last word over your name and placement.
+The full descriptor grammar and limits are in the
+<a href="dev-sdk-c.html#descriptor">UnoC SDK reference</a>.</p>
+
+<h2 id="debug">9. When it goes wrong</h2>
+<ul>
+<li><b>Build errors</b> land in Studio's output pane with file and line; UnoC checks every call you make
+against the kernel's export table at build time, so a typo'd function is a compile error, never a
+mysterious crash.</li>
+<li><b>Python tracebacks</b> (with line numbers) print to the output pane; a raising callback is fenced -
+it never takes the desktop down.</li>
+<li><b>print() works</b> in Python (an 8&nbsp;KB buffer shown by Studio); UnoC apps put numbers on
+screen with <code>fmt_u</code> or into the system log.</li>
+<li>For anything deeper, the <a href="dev-remote.html">remote link</a> streams logs to your PC and can
+drive the app with injected input while you watch.</li>
+</ul>
+
+<h2 id="limits">10. The numbers</h2>
+<div class="tw"><table>
+<thead><tr><th>Limit</th><th>Value</th></tr></thead>
+<tbody>
+<tr><td>Source file (Studio editor)</td><td>192 KB</td></tr>
+<tr><td>Built <code>.UNO</code> (Studio)</td><td>256 KB</td></tr>
+<tr><td>UnoC user-app slot</td><td>512 KB, one resident app</td></tr>
+<tr><td>Python heap</td><td>16 MB</td></tr>
+<tr><td>Function parameters/arguments (UnoC)</td><td>8</td></tr>
+<tr><td>App descriptor</td><td>1024 bytes; id 15 chars, name 31</td></tr>
+<tr><td>Icon</td><td>32x32 QOI, 16 KB file, 12 custom slots system-wide</td></tr>
+<tr><td>Installed apps</td><td>48 registry rows</td></tr>
+</tbody>
+</table></div>
+
+<h2 id="tiers">Beyond the SDK: how the built-ins are made</h2>
+<p>Everything above is the classic tier - the SDK Studio compiles for. The built-in apps use two deeper
+tiers that today require the PC toolchain (see <a href="dev-build.html">Building &amp; tooling</a>).
+There are a few UnoC styles; the native widget app is the normal path for a built-in.</p>
 
 <ul>
   <li><strong>Native widget app</strong>: build a window out of toolkit widgets and let the shell run the event loop.</li>
