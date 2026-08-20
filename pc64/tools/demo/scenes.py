@@ -93,7 +93,7 @@ if not os.path.isdir(CORPUS):
 # one of every formatting property for a parser to check, so its text reads
 # "a BOLDWORD z" and shows a viewer nothing. The scene opens a CV instead,
 # which uses the same formatting and is recognisable at a glance.
-OFFICE = [("resume.doc", "RESUME.DOC"),
+OFFICE = [("resume.doc", "RESUME.DOC"), ("budget.xls", "BUDGET.XLS"),
           ("fmt.doc", "FMT.DOC"), ("pic.doc", "PIC.DOC"),
           ("formulas.xls", "FORMULAS.XLS"), ("small.ppt", "SMALL.PPT")]
 
@@ -1154,7 +1154,14 @@ def s03_themes(d):
 # screen-centred and does NOT - see Demo.dlg(), which derives it.
 UOF_MENU_FILE = (54, 67)       # "File" on the uochrome menu bar
 UOF_MENU_OPEN = (70, 109)      # its "Open..." row
-UOCALC_A2 = (112, 201)         # grid cell A2 (holds =(1+2)*3)
+UOCALC_A2 = (112, 201)         # grid cell A2
+# D9 in budget.xls: the SUM over the line totals, MEASURED off a recorded
+# frame rather than derived. The first attempt computed it from a guessed
+# pitch (76 px per column, 16 per row) and landed on D8, the blank spacer
+# row - an empty formula bar, and a beat that showed nothing. The real grid
+# at this window size is 20 px per row (row 1 at y=181) and ~78 per column
+# (D centres at x=347).
+UOCALC_SUBTOTAL = (347, 341)
 UOSHOW_TITLE_F = (0.505, 0.417)  # the "Click to add title" placeholder, as a
                                  # FRACTION of the slide page (measured at
                                  # 640x400, resolved live by slide_point)
@@ -1176,12 +1183,12 @@ def s04_pre(d):
     base64 `put` on camera is nothing to look at). ONLY the small two: the
     RAM disk's per-file cap is 256 KB (pc64_io.c FILE_MAX), which refuses
     pic.doc and small.ppt. Push order is list order, and README.TXT is
-    seeded first, so the dialog rows are RESUME.DOC 1, FORMULAS.XLS 2."""
+    seeded first, so the dialog rows are RESUME.DOC 1, BUDGET.XLS 2."""
     if not getattr(d, "office_staged", None):
         print("  s04: SKIP - office corpus not staged")
         return False
     pushed = list(getattr(d, "ram_pushed", []))
-    for name in ["RESUME.DOC", "FORMULAS.XLS"]:
+    for name in ["RESUME.DOC", "BUDGET.XLS"]:
         src = dict((s.upper(), office_src(s))
                    for s, _ in OFFICE)[name]
         d.link.push_file(0, name, src)
@@ -1226,13 +1233,20 @@ def s04_office(d):
     time.sleep(3.5)                                  # hold: the whole page
     d.ctrl("w", settle=1.2)
 
-    d.beat("unocalc-open-formulas-xls")
+    # A budget, not the decompiler fixture. formulas.xls is a column of
+    # one-cell expressions with their operands beside them, because its job is
+    # to make unodoc rebuild every formula shape BIFF8 can store; on camera it
+    # is a column of numbers nobody can read. budget.xls (mkdemo_sheet.py) has
+    # quantity times price on each line, a SUM over the lines, tax off the
+    # subtotal and a total that adds the two - so the cell this clicks holds a
+    # formula a viewer can check in their head.
+    d.beat("unocalc-open-the-budget")
     d.launch("uocalc", settle=3.0)
     d.ctrl("o", settle=1.4)
-    uof_open_row(d, 2)                               # FORMULAS.XLS (RAM row 2)
+    uof_open_row(d, 2)                               # BUDGET.XLS (RAM row 2)
     d.beat("click-a-formula-cell")
-    d.click(*UOCALC_A2, settle=1.5)                  # formula bar: =(1+2)*3
-    time.sleep(2.0)                                  # hold on the formula bar
+    d.click(*UOCALC_SUBTOTAL, settle=1.5)            # formula bar: =SUM(D3:D7)
+    time.sleep(2.5)                                  # hold on the formula bar
     # No final Ctrl-W: reset() closes UnoCalc after the stream stops.
 
     # UnoShow is DELIBERATELY not in this scene any more (trimmed 2026-08-07).
