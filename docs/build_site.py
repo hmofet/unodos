@@ -33,6 +33,9 @@ NAV = [
     ("studio.html",          "Studio: the built-in IDE"),
     ("dev-apps.html",        "Writing apps"),
     ("dev-python.html",      "Python apps"),
+    ("dev-samples.html",     "Sample programs"),
+    ("dev-sdk-c.html",       "UnoC SDK reference"),
+    ("dev-sdk-python.html",  "Python SDK reference"),
     ("dev-api.html",         "API reference"),
     ("dev-build.html",       "Building &amp; tooling"),
     ("dev-remote.html",      "Remote control &amp; automation"),
@@ -356,6 +359,12 @@ def note(body, kind="", title="Note"):
 def code(s):
     # plain concat (not an f-string) so C braces in `s` pass through untouched
     return "<pre><code>" + html.escape(s.strip("\n")) + "</code></pre>"
+
+def sdk_source(name):
+    """Quote a shipped SDK sample verbatim (pc64/sdk/), so the manual can
+    never drift from the file the user actually opens in Studio."""
+    with open(os.path.join(_HERE, "..", "pc64", "sdk", name), "r", encoding="utf-8") as f:
+        return code(f.read())
 
 # ---- code snippets (defined here so their { } don't clash with page f-strings) ----
 CODE_HELLO_NATIVE = code('''#include "unoui.h"
@@ -1336,7 +1345,7 @@ it always tells the truth about your keyboard. Arrows move, <kbd>Enter</kbd> cho
 
 <p>Duum is on the desktop and in the <strong>Start</strong> menu under its own reticle icon, the
 same as any other app. It also sits on the disk as <code>APPS\\DUUM.UNO</code>, so opening that file
-in <a href="#files">Files</a> starts it too.</p>
+in <a href="#filesapp">Files</a> starts it too.</p>
 
 <h4>Duum needs a game file</h4>
 <p>Doom's levels, textures and sounds live in a data file called an <strong>IWAD</strong>, and it is
@@ -1891,8 +1900,10 @@ in <code>pc64_libc.c</code>, and float math in <code>pc64_math.c</code>. Hot pat
 in <code>unodef/</code>. It keeps every port (from the 8-bit consoles to pc64) consistent. For a pc64 app author
 it is background: you code against the concrete C headers, <code>unoui.h</code> and <code>uno_app.h</code>.</p>
 
-<p class="kv">Next: <a href="dev-apps.html">Writing apps</a>, the <a href="dev-api.html">API reference</a>, and
-<a href="dev-build.html">Building &amp; tooling</a>.</p>
+<p class="kv">Next: <a href="dev-apps.html">Writing apps</a>, the worked
+<a href="dev-samples.html">sample programs</a>, the <a href="dev-sdk-c.html">UnoC</a> and
+<a href="dev-sdk-python.html">Python</a> SDK references, and <a href="dev-build.html">Building &amp;
+tooling</a>.</p>
 """)
 
 PAGES["studio.html"] = ("Studio: the built-in IDE", f"""
@@ -1985,15 +1996,185 @@ does not want the IDE simply leaves the file out - the rest of the system is ide
 does not appear in the programs menu.</p>
 """)
 
+CODE_GUIDE_FIRSTC = code('''#include "UNO.H"
+
+static void my_draw(UnoWin *w)
+{
+    short x0 = w->bounds.left + 10;
+    short y0 = w->bounds.top + TBAR_H + 10;
+    text_at(x0, y0, "hello, UnoDOS", C_WHITE, C_BLUE, false);
+}
+
+static const AppInterface kIface = {
+    my_draw, 0, 0, 0, 0, 0,
+    "Hello", { 40, 40, 260, 140 }
+};
+
+const AppInterface *uno_app_main(const KernelApi *k)
+{
+    gK = k;
+    return &kIface;
+}''')
+
+CODE_GUIDE_FIRSTPY = code('''import uno
+
+class Hello(uno.App):
+    def draw(self, cv):
+        cv.clear(uno.rgb(16, 18, 34))
+        cv.text(8, 8, "hello, UnoDOS", uno.rgb(214, 218, 232))
+
+app = Hello()''')
+
+CODE_GUIDE_DESC = code('''# on your PC, in pc64/:
+python3 tools/mkicon.py myicon.ppm MYAPP.QOI
+python3 tools/mkuno.py pyapp MYAPP.PY APPS/MYAPP.UNO MYAPP.DESC
+
+# MYAPP.DESC:
+#   id: myapp
+#   name: My App
+#   icon: file:MYAPP.QOI
+#   cat: tools
+#   rank: 50''')
+
 PAGES["dev-apps.html"] = ("Writing apps", f"""
 <h1>Writing apps</h1>
-<p class="lede">A UnoDOS app is a small <code>.UNO</code> module loaded from the disk at runtime. You can
-build one right on the machine with <a href="studio.html">Studio</a>, or from a PC with the toolchain.
-This page covers apps written in <strong>UnoC</strong>; for <strong>Python</strong>, see
-<a href="dev-python.html">Python apps</a>. There are a few UnoC styles; the native widget app is the
-normal path for a built-in.</p>
+<p class="lede">Everything between "I have an idea" and "it's in the Start menu", in the order you'll
+meet it: pick a language, learn the lifecycle the desktop drives you through, draw, react, keep time,
+save, make sound, then package. The per-call contracts live in the
+<a href="dev-sdk-c.html">UnoC</a> and <a href="dev-sdk-python.html">Python</a> SDK references, and
+complete programs to take apart are on <a href="dev-samples.html">Sample programs</a> - this page is
+the map. The second half covers the deeper tiers the built-in apps use.</p>
 
-{note('The friendliest way to write an app is <a href="studio.html">Studio</a>, the built-in IDE: edit, press <kbd>Ctrl</kbd>+<kbd>B</kbd> to compile it to a <code>.UNO</code>, and <kbd>Ctrl</kbd>+<kbd>R</kbd> to run it - no PC or toolchain needed. This page covers the app model itself, which Studio and the host build share.', kind="tip", title="Start with Studio")}
+{note('The friendliest way to write an app is <a href="studio.html">Studio</a>, the built-in IDE: edit, press <kbd>Ctrl</kbd>+<kbd>B</kbd> to compile it to a <code>.UNO</code>, and <kbd>Ctrl</kbd>+<kbd>R</kbd> to run it - no PC or toolchain needed.', kind="tip", title="Start with Studio")}
+
+<h2 id="pick">1. Pick a language</h2>
+<div class="tw"><table>
+<thead><tr><th></th><th>UnoC</th><th>Python</th></tr></thead>
+<tbody>
+<tr><td>Runs</td><td>native x86-64, compiled on the device by Studio</td><td>on the PYRT runtime
+(MicroPython)</td></tr>
+<tr><td>Feels like</td><td>classic C against a Toolbox-style API</td><td>modern Python with a small,
+flat <code>uno</code> module</td></tr>
+<tr><td>Best for</td><td>games and tools that want every cycle</td><td>almost everything else - less
+ceremony, floats, exceptions, big ints</td></tr>
+<tr><td>Watch out for</td><td>no floating point, no printf, LLP64 (<code>long</code> is 4 bytes)</td>
+<td>no f-strings, no <code>time</code>/<code>random</code>/<code>json</code>, one file per app</td></tr>
+</tbody>
+</table></div>
+<p>Both compile and run entirely on the device: open Studio, write, <b>Ctrl-B</b> builds, <b>Ctrl-R</b>
+runs. Errors land in the output pane with a line number; click one and the caret jumps there.</p>
+
+<h2 id="lifecycle">2. The lifecycle: the desktop calls you</h2>
+<p>There is no <code>main()</code> and no event loop to write. Your app hands the desktop a small set of
+callbacks and the desktop drives them: <b>build/opened</b> once at open, <b>draw</b> on every repaint,
+<b>tick</b> ~60 times a second, <b>key</b>/<b>click</b> when input arrives for your window,
+<b>closed</b> on the way out. The two smallest complete apps:</p>
+{CODE_GUIDE_FIRSTC}
+{CODE_GUIDE_FIRSTPY}
+<p>Rules that hold in both languages:</p>
+<ul>
+<li><b>Never block.</b> Every callback runs on the shell's frame loop; a busy-wait freezes the whole
+desktop. Structure long work as increments driven from <code>tick()</code>.</li>
+<li><b>Draw only in draw.</b> State changes in <code>tick()</code>/<code>key()</code>, pixels in
+<code>draw()</code>; ask for a repaint rather than painting eagerly.</li>
+<li><b>Closing is not the end.</b> Treat <code>opened()</code> as "again", not "first time", and clean
+up - stop your music, free your memory - in <code>closed()</code>, because nobody does it for
+you.</li>
+</ul>
+
+<h2 id="drawing">3. Drawing</h2>
+<p>You draw into your window's content area - below the title bar - through the calls in the references
+(<a href="dev-sdk-c.html#drawing">UnoC</a>: rect fills, ovals, lines, <code>text_at</code>;
+<a href="dev-sdk-python.html#canvas">Python</a>: the <code>Canvas</code>). Two disciplines carry every
+sample:</p>
+<ul>
+<li><b>Read your size, don't assume it.</b> UnoC: <code>w-&gt;bounds</code> plus <code>TBAR_H</code>;
+Python: <code>cv.width()</code>/<code>cv.height()</code>. The shell picks window sizes and the user
+picks resolutions and fonts.</li>
+<li><b>Repaint on change, not on schedule.</b> UnoC: call <code>repaint_all()</code> from
+<code>tick()</code> when something moved. Python: return <code>False</code> from <code>tick()</code> on
+idle frames. A static window should cost nothing.</li>
+</ul>
+
+<h2 id="input">4. Input</h2>
+<p>Keys arrive as events; return true to consume one. Printable characters and special keys are
+distinguished for you (UnoC: <code>ch</code> vs <code>code</code>; Python: <code>uni</code> vs
+<code>scan</code> - full tables in the references). Some chords never reach you - Ctrl+Esc, Alt+Tab and
+friends belong to the shell. For held-key movement in games, Python has <code>uno.keys_down()</code>;
+UnoC games time out their own key events.</p>
+
+<h2 id="time">5. Time</h2>
+<p>Your <code>tick()</code> callback arrives once per shell frame, nominally 60 a second - <b>the frame
+is the platform's timebase, so count your own tick() calls</b>. Do not reach for
+<code>TickCount()</code>/<code>uno.ticks()</code> expecting a clock: it is a
+<a href="dev-sdk-c.html#tickcount">call counter shared by every app</a>, so it only behaves like frame
+pacing if you call it exactly once per tick and nothing else is calling it.
+<a href="dev-samples.html#timer">TIMER.C</a> is the worked example of frame counting. The one real
+clock an app can read is <code>unoauto.uptime()</code> (milliseconds since boot, available in every
+build) - automation scripts pace on it.</p>
+
+<h2 id="files">6. Files and settings</h2>
+<p>Volume 0 is the boot volume; names are 8.3. Whole-file read/write plus offset reads for streaming -
+the contracts (missing files, read-only volumes, size probes) are in the references, and
+<a href="dev-samples.html#todo">TODO.PY</a> shows the polite way to surface a failed save. For small
+settings, Python apps have <code>uno.pref_get</code>/<code>pref_set</code>; log through
+<code>uno.log()</code> so your traces land in the <a href="logging.html">system log</a> with everyone
+else's.</p>
+
+<h2 id="sound">7. Sound</h2>
+<p>The square-wave voice (<code>music_note_on</code> / <code>uno.beep</code>) works on every machine.
+Sampled effects and MIDI music need a DAC and fail detectably when there is none - always keep the beep
+fallback. Looping game music in UnoC is <code>gm_start</code>; stop it in <code>closed()</code>,
+because the shell won't.</p>
+
+<h2 id="package">8. Packaging: from the user slot to the Start menu</h2>
+<p>What Studio builds runs immediately - <b>the user slot</b> - and that is the whole story for a
+personal tool: the <code>.UNO</code> lands next to your source, Files can launch it, one such app is
+resident at a time.</p>
+<p>To make an <i>installed</i> app - a Start-menu row, a desktop icon, a durable name - the module must
+carry an <b>app descriptor</b>, and that is a host-side step today (Studio doesn't write
+descriptors):</p>
+{CODE_GUIDE_DESC}
+<p>Drop the result into <code>APPS\\</code> on the device (Files' Copy, or <code>put</code> over the
+<a href="dev-remote.html">remote link</a>) and press Rescan in the Control Panel - no reboot. The
+descriptor's <code>id:</code> is your app's durable identity: window geometry, session restore and
+<code>launch &lt;id&gt;</code> all key off it. Icons are 32x32 QOI with hard-edged alpha; categories
+order the Start menu; the user's <code>APPS.CFG</code> gets the last word over your name and placement.
+The full descriptor grammar and limits are in the
+<a href="dev-sdk-c.html#descriptor">UnoC SDK reference</a>.</p>
+
+<h2 id="debug">9. When it goes wrong</h2>
+<ul>
+<li><b>Build errors</b> land in Studio's output pane with file and line; UnoC checks every call you make
+against the kernel's export table at build time, so a typo'd function is a compile error, never a
+mysterious crash.</li>
+<li><b>Python tracebacks</b> (with line numbers) print to the output pane; a raising callback is fenced -
+it never takes the desktop down.</li>
+<li><b>print() works</b> in Python (an 8&nbsp;KB buffer shown by Studio); UnoC apps put numbers on
+screen with <code>fmt_u</code> or into the system log.</li>
+<li>For anything deeper, the <a href="dev-remote.html">remote link</a> streams logs to your PC and can
+drive the app with injected input while you watch.</li>
+</ul>
+
+<h2 id="limits">10. The numbers</h2>
+<div class="tw"><table>
+<thead><tr><th>Limit</th><th>Value</th></tr></thead>
+<tbody>
+<tr><td>Source file (Studio editor)</td><td>192 KB</td></tr>
+<tr><td>Built <code>.UNO</code> (Studio)</td><td>256 KB</td></tr>
+<tr><td>UnoC user-app slot</td><td>512 KB, one resident app</td></tr>
+<tr><td>Python heap</td><td>16 MB</td></tr>
+<tr><td>Function parameters/arguments (UnoC)</td><td>8</td></tr>
+<tr><td>App descriptor</td><td>1024 bytes; id 15 chars, name 31</td></tr>
+<tr><td>Icon</td><td>32x32 QOI, 16 KB file, 12 custom slots system-wide</td></tr>
+<tr><td>Installed apps</td><td>48 registry rows</td></tr>
+</tbody>
+</table></div>
+
+<h2 id="tiers">Beyond the SDK: how the built-ins are made</h2>
+<p>Everything above is the classic tier - the SDK Studio compiles for. The built-in apps use two deeper
+tiers that today require the PC toolchain (see <a href="dev-build.html">Building &amp; tooling</a>).
+There are a few UnoC styles; the native widget app is the normal path for a built-in.</p>
 
 <ul>
   <li><strong>Native widget app</strong>: build a window out of toolkit widgets and let the shell run the event loop.</li>
@@ -2152,8 +2333,1030 @@ through the live held-key level (<code>uno.keys_down()</code>) with the 60&nbsp;
 <code>uno.ticks()</code>. Move with the arrows, strafe with <kbd>,</kbd> and <kbd>.</kbd>, fire with
 <kbd>F</kbd>, use with <kbd>Space</kbd>.</p>
 
-<p class="kv">Next: the full <a href="dev-api.html">API reference</a> (including the <a href="dev-api.html#uno-py">
-Python <code>uno</code> module</a>), and <a href="dev-build.html">Building &amp; tooling</a>.</p>
+<p class="kv">Next: complete programs to take apart on <a href="dev-samples.html">Sample programs</a>,
+and every call with its contract in the <a href="dev-sdk-python.html">Python SDK reference</a>.</p>
+""")
+
+# ---- sample programs (dev-samples.html) ------------------------------------
+# The device samples are quoted verbatim from pc64/sdk/ via sdk_source() so the
+# page can never drift from the files the user opens in Studio.
+# bench_snapshot.py is PC-side and has no repo home yet, so it rides inline.
+
+CODE_BENCH_SNAPSHOT = code(r'''
+#!/usr/bin/env python3
+"""bench_snapshot.py - a scheduled health snapshot of a UnoDOS machine.
+
+Run this from your PC's scheduler each night.  It waits for the box to
+dial in over the URC link, authenticates, and files one snapshot: a
+screenshot, plus a CSV row of uptime, heap, filesystem and network
+counters.  A month later you have a folder that answers "when did that
+start" for free.
+
+Everything it needs ships with UnoDOS: tools/unoauto_remote.py is the
+client library - keep this script next to it, or point PYTHONPATH at it.
+
+On the machine: Control Panel -> Remote control..., tick Watch (and
+nothing else - this script only observes), note the 6-digit code, and
+choose discover so the box finds this PC by broadcast.  Put the code in
+the UNO_PIN environment variable on the PC.  Debug builds skip the code.
+
+Schedule it:
+  Windows:  schtasks /Create /TN UnoSnapshot /SC DAILY /ST 23:00 ^
+            /TR "py C:\\unodos\\pc64\\tools\\bench_snapshot.py"
+  Linux:    0 23 * * *  python3 /home/you/unodos/pc64/tools/bench_snapshot.py
+"""
+import os
+import sys
+import time
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from unoauto_remote import UnoAutoLink
+
+PIN = os.environ.get("UNO_PIN", "")
+OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "snapshots")
+CSV = os.path.join(OUT, "health.csv")
+
+
+def main():
+    os.makedirs(OUT, exist_ok=True)
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+
+    link = UnoAutoLink(port=5099)
+    link.listen()                          # the box dials us
+    if not link.wait_connected(timeout=300):
+        print("no box dialled in - is it on, and is discover armed?")
+        return 1
+    link.wait_hello(timeout=30)            # booted and draining its link
+    if PIN:                                # production builds authenticate
+        link.command("auth", PIN)
+
+    # one CSV row of the numbers that drift
+    row = {"uptime_s": link.uptime() // 1000}
+    for p in link.probe():                 # kind 2 = subsystem rows
+        if p["kind"] == 2 and p["name"] in ("heap", "fs", "net"):
+            row[p["name"] + "_v1"] = p["v1"]
+            row[p["name"] + "_v2"] = p["v2"]
+    new = not os.path.exists(CSV)
+    keys = sorted(row)
+    with open(CSV, "a") as f:
+        if new:
+            f.write("stamp," + ",".join(keys) + "\n")
+        f.write(stamp + "," + ",".join(str(row[k]) for k in keys) + "\n")
+
+    # and one screenshot, as a portable PPM
+    w, h, rgba = link.screen_grab()
+    shot = os.path.join(OUT, stamp + ".ppm")
+    rgb = bytearray()
+    for i in range(0, len(rgba), 4):
+        rgb += rgba[i:i + 3]
+    with open(shot, "wb") as f:
+        f.write(b"P6\n%d %d\n255\n" % (w, h))
+        f.write(bytes(rgb))
+
+    link.close()
+    print("snapshot %s: %dx%d screen, %s" % (stamp, w, h,
+          ", ".join("%s=%s" % (k, row[k]) for k in keys)))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+''')
+
+NOTE_BENCH_SCHED = note('Schedule it with the tools your PC already has: '
+    '<code>schtasks /Create /TN UnoSnapshot /SC DAILY /ST 23:00 /TR "py ...\\bench_snapshot.py"</code> '
+    'on Windows, or <code>0 23 * * * python3 .../bench_snapshot.py</code> in a crontab.',
+    title="The scheduler is your PC's")
+
+PAGES["dev-samples.html"] = ("Sample programs", f"""
+<h1>Sample programs</h1>
+<p class="lede">Complete, working programs to read, run and take apart. Every one of them ships on the
+device in <code>SDK\\</code> - open it in <a href="studio.html">Studio</a>, press Ctrl-B to build and
+Ctrl-R to run. Each sample earns its place by teaching something the one before it didn't.</p>
+
+<div class="tw"><table>
+<thead><tr><th>Sample</th><th>Language</th><th>What it teaches</th></tr></thead>
+<tbody>
+<tr><td><a href="studio.html">SAMPLE.C</a> / <a href="dev-python.html">SAMPLE.PY</a></td><td>UnoC / Python</td>
+<td>The app skeleton: the vtable / the <code>uno.App</code> class, drawing, keys, ticks.</td></tr>
+<tr><td><a href="#timer">TIMER.C</a></td><td>UnoC</td><td>Real timekeeping, number formatting without
+printf, sound, deliberate repainting.</td></tr>
+<tr><td><a href="#life">LIFE.C</a></td><td>UnoC</td><td>Arrays and computation, randomness, pacing a
+simulation.</td></tr>
+<tr><td><a href="#todo">TODO.PY</a></td><td>Python</td><td>Files that survive reboots, both kinds of key,
+the idle idiom.</td></tr>
+<tr><td><a href="#chart">CHART.PY</a></td><td>Python</td><td>Parsing a file, scaling to the canvas,
+graceful fallbacks.</td></tr>
+<tr><td><a href="#goodnite">GOODNITE.PY</a></td><td>Python</td><td>Automation under the permission model -
+three calls at three tiers.</td></tr>
+<tr><td><a href="#dostris">DOSTRIS.C</a></td><td>UnoC</td><td>A complete shipped game, unchanged - the
+big worked example.</td></tr>
+<tr><td><a href="#bench">bench_snapshot.py</a></td><td>Python, on your PC</td><td>A genuinely scheduled
+task: your PC's scheduler drives the box over the remote link.</td></tr>
+</tbody>
+</table></div>
+
+<h2 id="timer">TIMER.C - a kitchen timer</h2>
+<p>The natural second program after SAMPLE.C, because it forces the three habits a real UnoC app needs.
+<b>The frame is the timebase - count your own ticks.</b> <code>tick()</code> arrives once per shell
+frame, ~60 a second, and the timer counts those calls; pausing works by simply not counting. It
+deliberately does <i>not</i> use <code>TickCount()</code> - on pc64 that is a
+<a href="dev-sdk-c.html#tickcount">call counter shared by every app</a>, not a clock.
+<b>Repaint deliberately</b>: a tick-driven app calls <code>repaint_all()</code>, and only when the
+displayed state changed - once a second here, not sixty times. And <b>numbers without printf</b>:
+UnoC has no varargs, so <code>put2()</code> composes the <code>MM:SS</code> readout and
+<code>fmt_u()</code> does general unsigned decimal.</p>
+<p>Also in there: one-shot notes with <code>music_open_chan()</code> + <code>music_note_on()</code> for
+the alarm, and a countdown that rounds <i>up</i> (one remaining tick still reads 0:01) while the
+stopwatch rounds down - the small honesty every clock UI owes its user.</p>
+{sdk_source("TIMER.C")}
+
+<h2 id="life">LIFE.C - Conway's Game of Life</h2>
+<p>Real computation in UnoC: 2-D <code>unsigned char</code> arrays, a double buffer flipped with one
+<code>memcpy</code>, and a wrapping neighbourhood via modular arithmetic. Three details worth stealing:
+the simulation is <b>paced</b> (a generation every 6 frames, counted by the app itself - the shell stays
+responsive and the motion reads as motion); the draw paints <b>only what is alive</b> over one background
+fill; and the board seeds
+<b>defensively</b>, stirring the cell coordinates into <code>Random()</code> so even a weak generator
+yields a live board. Note <code>opened()</code> can run again after a close and reopen - the board seeds
+only once.</p>
+{sdk_source("LIFE.C")}
+
+<h2 id="todo">TODO.PY - a to-do list that survives reboots</h2>
+<p>Persistence is two calls: <code>uno.read()</code> returns <code>None</code> if the file doesn't exist
+(a fine first run), and <code>uno.write()</code> returns <code>False</code> on a read-only volume - the
+app <i>shows</i> that state instead of hiding it. The format is plain text (<code>[x] task</code> /
+<code>[ ] task</code>), so Notepad can edit the same file. The <code>key()</code> handler routes both
+kinds of key - printable characters arrive in <code>uni</code>, special keys in <code>scan</code> - and
+<code>tick()</code> returns <code>False</code> whenever nothing changed, so a static window costs the
+machine nothing.</p>
+{sdk_source("TODO.PY")}
+
+<h2 id="chart">CHART.PY - a bar chart from a file</h2>
+<p>A small, genuinely useful tool: drop a <code>DATA.CSV</code> on the boot volume - one
+<code>label,value</code> per line - and it draws the chart, scaled to fit, with the biggest bar called
+out. Press R after editing the file in Notepad. It parses without a <code>csv</code> module (there
+isn't one): <code>split(",")</code>, <code>strip()</code>, and a <code>try/except ValueError</code>
+that makes header lines and junk simply vanish. Everything is scaled from
+<code>cv.width()</code>/<code>cv.height()</code> with integer math - never hardcode the canvas size,
+the shell picks your window. With no file it charts built-in demo data and says so, so the first launch
+teaches you what to do next.</p>
+{sdk_source("CHART.PY")}
+
+<h2 id="goodnite">GOODNITE.PY - an end-of-day automation app</h2>
+<p>The bridge from apps to automation: one launch journals what you were working on, then offers to shut
+the machine down. It is the <a href="dev-remote.html#unoscript">permission model</a> made concrete -
+three calls at three tiers:</p>
+<div class="tw"><table>
+<thead><tr><th>Call</th><th>Capability</th><th>Tier</th></tr></thead>
+<tbody>
+<tr><td><code>u.ui.screen()</code> - read the window tree</td><td><code>ui.read</code></td><td>0,
+ambient</td></tr>
+<tr><td><code>u.fs.write("journal/...")</code> - into your home</td><td><code>fs.user</code></td>
+<td>1</td></tr>
+<tr><td><code>u.sys.power(0)</code> - shut down</td><td><code>power</code></td><td>2, consent</td></tr>
+</tbody>
+</table></div>
+<p>Two things to take away. <b>Denial is not an error state</b>: denied calls raise <code>OSError</code>
+(or <code>u.request()</code> answers <code>False</code>), the app handles both, and the same script runs
+everywhere - it just does less on a machine that trusts it less. And <b>the generator/tick pattern is
+load-bearing</b>: an injected action lands on the <i>next</i> shell frame, so an automation script yields
+between step and check, pacing those yields on <code>unoauto.uptime()</code> - the wall clock in
+milliseconds, and the only real clock an app can read. For unattended runs, a signed manifest
+(<a href="dev-remote.html#automation">.MFT sidecar</a>) grants the declared capabilities at launch, no
+prompts.</p>
+{sdk_source("GOODNITE.PY")}
+
+<h2 id="bench">bench_snapshot.py - a genuinely scheduled task</h2>
+<p>There is no cron on the device - deliberately: pc64 has no preemptive scheduler, and background
+scripts are a reserved capability for a facility that doesn't exist yet. The honest scheduled-task story
+is <b>your PC schedules, the box answers</b>. Task Scheduler or cron runs this script nightly; it waits
+for the box to dial in over the <a href="dev-remote.html">remote link</a>, authenticates with the
+Remote-control code, appends one CSV row of uptime/heap/fs/net counters, saves a screenshot, and exits.
+A month later the folder answers "when did that start?" for free.</p>
+<p>Arm only <b>Watch</b> on the device - the script only observes, so give it only that - and put the
+6-digit code in <code>UNO_PIN</code> on the PC. The standing caveat applies: the link is plaintext and
+LAN-only by intent; the code proves who may drive the box, it does not encrypt the wire.</p>
+{CODE_BENCH_SNAPSHOT}
+{NOTE_BENCH_SCHED}
+
+<h2 id="dostris">DOSTRIS.C and the shipped sources</h2>
+<p><code>SDK\\DOSTRIS.C</code> is the shipped game, ported to UnoC unchanged - the big worked example for
+game state, a piece table in nested initializers, line clearing and a looping <code>gm_start</code>
+song. <code>SDK\\DUUM.PY</code> is the whole Doom-style engine in Python, streaming a real WAD with
+<code>uno.read_at</code>. Both reward reading with the <a href="dev-sdk-c.html">C</a> and
+<a href="dev-sdk-python.html">Python</a> references open beside them.</p>
+
+<p class="kv">Next: <a href="dev-apps.html">Writing apps</a> for the app model these all share, and the
+<a href="dev-sdk-c.html">UnoC SDK reference</a> / <a href="dev-sdk-python.html">Python SDK reference</a>
+for every call they make.</p>
+""")
+
+CODE_SDKC_ENTRY = code('''#include "UNO.H"
+
+static void my_draw(UnoWin *w) { ... }
+
+static const AppInterface kIface = {
+    my_draw,   /* draw   - required */
+    my_key,    /* key    - or 0     */
+    0,         /* click  - or 0     */
+    my_tick,   /* tick   - or 0     */
+    my_opened, /* opened - or 0     */
+    my_closed, /* closed - or 0     */
+    "My App",  { 40, 40, 360, 240 } /* title; l,t,r,b (only w x h used) */
+};
+
+const AppInterface *uno_app_main(const KernelApi *k)
+{
+    gK = k;          /* the UNO.H prelude macros expand through this */
+    return &kIface;
+}''')
+
+CODE_SDKC_ORIGIN = code('''static void my_draw(UnoWin *w)
+{
+    /* your content area starts below the title bar the shell draws */
+    short x0 = w->bounds.left;
+    short y0 = w->bounds.top + TBAR_H;
+    short cw = w->bounds.right - w->bounds.left;          /* canvas width  */
+    short ch = w->bounds.bottom - (w->bounds.top + TBAR_H); /* canvas height */
+    ...
+}''')
+
+CODE_SDKC_FILL = code('''Rect r;
+SetRect(&r, x0, y0, x0 + 100, y0 + 40);   /* half-open: [l,r) x [t,b) */
+uno_fill(&r, C_BLUE);                     /* palette fill              */
+uno_box(&r, C_WHITE);                     /* 1px outline               */
+uno_invert(&r);                           /* XOR the pixels            */''')
+
+CODE_SDKC_FILLRGB = code('''static const GameRGB kGold = { 240, 200, 40, C_WHITE };
+/* r, g, b are 0-255; .mono is the palette fallback for 1-bit ports -
+ * unused on pc64, but fill it in for portability */
+Rect q;
+SetRect(&q, x0, y0, x0 + 32, y0 + 32);
+fill_rgb(&q, &kGold);''')
+
+CODE_SDKC_TEXT = code('''text_at(x0, y, "Score:", C_CYAN, C_BLUE, false);   /* transparent  */
+text_at(x0, y, "MENU",  C_WHITE, C_MAG, true);     /* opaque cell  */
+text_at_max(x0, y, longname, C_WHITE, 120);        /* hard-cut at 120 px */''')
+
+CODE_SDKC_FMT = code('''char num[11];              /* fmt_u: up to 10 digits + NUL   */
+fmt_u(score, num);
+text_at(x0 + 60, y, num, C_WHITE, C_BLUE, false);
+
+char t[8];                 /* put2: "MM:SS" from two calls    */
+put2(secs / 60, t);  t[2] = ':';  put2(secs % 60, t + 3);''')
+
+CODE_SDKC_REDRAW = code('''static long frame;
+
+static void my_tick(void)          /* ~60/s while the app is open */
+{
+    frame++;
+    if (frame % 6) return;         /* pace: ~10 updates a second  */
+    advance_state();
+    repaint_all();                 /* deferred: painted at frame end */
+}''')
+
+CODE_SDKC_KEY = code('''static Boolean my_key(char ch, short code, Boolean cmd)
+{
+    if (ch == ' ')    { toggle();     repaint_all(); return true; }
+    if (ch == 0x1E)   { move_up();    repaint_all(); return true; }  /* Up   */
+    if (ch == 0x1F)   { move_down();  repaint_all(); return true; }  /* Down */
+    if (ch == 0x1C)   { move_left();  repaint_all(); return true; }  /* Left */
+    if (ch == 0x1D)   { move_right(); repaint_all(); return true; }  /* Right*/
+    if (ch == 0x0D)   { confirm();    repaint_all(); return true; }  /* Enter*/
+    (void)code; (void)cmd;
+    return false;                  /* not ours */
+}''')
+
+CODE_SDKC_CLICK = code('''static void my_click(UnoWin *w, Point p)
+{
+    /* p is in SCREEN pixels - convert to canvas coordinates yourself */
+    short cx = p.h - w->bounds.left;
+    short cy = p.v - (w->bounds.top + TBAR_H);
+    ...
+}''')
+
+CODE_SDKC_MOUSE = code('''Point m;
+GetMouse(&m);                      /* screen coords; also refreshes buttons */
+while (StillDown()) {              /* a classic drag loop                    */
+    GetMouse(&m);                  /* GetMouse also presents the frame       */
+    track(m.h - x0, m.v - y0);
+}''')
+
+CODE_SDKC_SOUND = code('''static const Note kTune[] = { {76,16},{72,16},{69,16},{0,8} };  /* 0 = rest */
+
+music_note_on(84, 12);             /* one beep: MIDI 84, 12 frames  */
+gm_start(kTune, 3, 0);             /* loop a score (owner ignored)  */
+gm_stop();                         /* stop it - also do this in closed() */''')
+
+CODE_SDKC_FILES = code('''static unsigned char buf[4096];
+long n = fat12_read("NOTES.TXT", buf, sizeof buf);
+if (n < 0) { /* missing, empty, or unreadable */ }
+
+/* WARNING: writing an existing name APPENDS (see remarks) */
+fat12_write("SCORES.TXT", data, len);''')
+
+CODE_SDKC_MEM = code('''Ptr p = NewPtr(4096);
+if (!p) return;                    /* NULL on failure - always check */
+memset(p, 0, 4096);               /* NewPtr does not zero            */
+...
+DisposePtr(p);                     /* NULL-safe */''')
+
+
+PAGES["dev-sdk-c.html"] = ("UnoC SDK reference", f"""
+<h1>UnoC SDK reference</h1>
+<p class="lede">Every call a UnoC app can make, with parameters, return values, remarks and a working
+snippet for each. <code>SDK\\UNO.H</code> is the whole SDK - the one header you include - and Studio's
+compiler checks every call against the kernel's export table at build time, so an unavailable function
+is a compile error with a line number, never a mystery crash. The app model is on
+<a href="dev-apps.html">Writing apps</a>; the language subset is summarised at the end.</p>
+
+<h2 id="entry">The entry point and the vtable</h2>
+<p>An app defines exactly one entry, <code>uno_app_main</code>, stashes the <code>KernelApi</code>
+pointer in <code>gK</code> (the UNO.H prelude macros expand through it), and returns an
+<code>AppInterface</code>:</p>
+{CODE_SDKC_ENTRY}
+<div class="tw"><table>
+<thead><tr><th>Member</th><th>Contract</th></tr></thead>
+<tbody>
+<tr><td><code>void draw(UnoWin *w)</code></td><td><b>Required</b> - the load is refused without it.
+Called once per repaint of the whole scene, in z-order, even when your window is occluded; not called
+when closed or on another virtual desktop. The canvas is <b>not</b> cleared for you - paint everything
+you own. <code>w-&gt;bounds</code> is in absolute screen pixels; content starts at
+<code>bounds.top + TBAR_H</code> (18&nbsp;px).</td></tr>
+<tr><td><code>Boolean key(char ch, short code, Boolean cmd)</code></td><td>Focused window only. Printable
+ASCII (32..126) arrives in <code>ch</code> with <code>code</code> 0. Exactly six special keys are
+delivered: arrows (<code>ch</code> 0x1C left, 0x1D right, 0x1E up, 0x1F down, with <code>code</code>
+0x7B-0x7E), Enter (0x0D) and Backspace (0x08). Esc, Tab, Delete, Home/End and the function keys never
+reach an app. <code>cmd</code> is the Ctrl flag <i>for those six keys only</i> - printable characters
+always arrive with <code>cmd == false</code>, so Ctrl-letter accelerators are not receivable. Return
+<code>true</code> to consume (which also marks the screen dirty).</td></tr>
+<tr><td><code>void click(UnoWin *w, Point p)</code></td><td>Left-button <b>press only</b> - no release,
+no motion, no right button. <code>p</code> is in <b>screen</b> pixels, not window pixels (see below).
+Only clicks inside your canvas arrive; the title bar belongs to the shell. A delivered click always
+triggers a repaint.</td></tr>
+<tr><td><code>void tick(void)</code></td><td>Once per shell frame while the app is open - focused or
+not - nominally 60/s, slower under load. <b>Does not repaint</b>: call <code>repaint_all()</code>
+yourself when something visible changed.</td></tr>
+<tr><td><code>void opened(void)</code> / <code>void closed(void)</code></td><td><code>opened</code> runs
+once per Run, right after <code>uno_app_main</code>. Closing the window calls <code>closed()</code> but
+keeps the module resident; the next Run replaces it wholesale and re-zeroes all globals, so every
+<code>opened()</code> starts from pristine state. <b>Nothing is cleaned up for you on close</b> - stop
+your music and free your memory in <code>closed()</code>.</td></tr>
+<tr><td><code>const char *win_title</code></td><td>Window title, taskbar chip and launcher label. The
+pointer is borrowed - use a string literal. NULL falls back to "My App".</td></tr>
+<tr><td><code>short win_rect[4]</code></td><td><code>{{left, top, right, bottom}}</code> - <b>only the
+width and height are used</b>; the shell places the window itself. Height includes the 18&nbsp;px title
+bar you never draw, so the canvas is <code>w x (h-18)</code>. Minimum window 140x100; the window is not
+resizable.</td></tr>
+</tbody>
+</table></div>
+{note("There is no memory protection: your app runs at kernel privilege in the kernel's address "
+      "space. A wild pointer or an out-of-range palette index doesn't crash your app, it crashes "
+      "<i>the machine</i> (a debug build prints a register dump and writes a crash report first; a "
+      "production build simply resets). Treat every call here as a kernel call.", kind="warn",
+      title="You are the kernel")}
+
+<h2 id="coords">Coordinates and the window</h2>
+{CODE_SDKC_ORIGIN}
+<p>All drawing is clipped to your canvas - with two exceptions noted below. Rects are half-open:
+<code>SetRect(&amp;r, 0, 0, 10, 10)</code> covers pixels 0..9. An inverted or empty rect draws
+nothing.</p>
+
+<h2 id="drawing">Drawing</h2>
+<h3><code>void uno_fill(Rect *r, short c)</code> / <code>void uno_box(Rect *r, short c)</code> /
+<code>void uno_invert(Rect *r)</code></h3>
+<div class="tw"><table>
+<thead><tr><th>Parameter</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td><code>r</code></td><td>The rectangle, screen coordinates, half-open.</td></tr>
+<tr><td><code>c</code></td><td>A palette index: <code>C_BLUE</code>(0) <code>C_CYAN</code>(1)
+<code>C_MAG</code>(2) <code>C_WHITE</code>(3). <b>Not bounds-checked</b> - anything else reads past a
+4-entry table.</td></tr>
+</tbody>
+</table></div>
+<p><b>Remarks.</b> <code>uno_fill</code> fills, <code>uno_box</code> draws a 1-pixel outline,
+<code>uno_invert</code> XORs the pixels (colour channels only). All three are clipped to your canvas
+and treat an empty rect as a no-op. The fill and box honour the global pen mode - after
+<code>PenMode(patXor)</code> they invert instead of painting - and both leave the global fore colour
+set to black on return.</p>
+{CODE_SDKC_FILL}
+
+<h3><code>void fill_rgb(Rect *q, const GameRGB *c)</code></h3>
+<p>True-colour fill: <code>GameRGB</code> carries 0-255 <code>r,g,b</code> and a <code>mono</code>
+palette fallback used by the 1-bit ports (ignored on pc64 - set it to the nearest <code>C_*</code> so
+the same source works everywhere). Clipped; empty rect is a no-op; leaves fore colour black.</p>
+{CODE_SDKC_FILLRGB}
+
+<h3><code>void text_at(short x, short y, const char *s, short fg, short bg, Boolean opaque)</code></h3>
+<div class="tw"><table>
+<thead><tr><th>Parameter</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td><code>x, y</code></td><td>Screen coordinates. <code>y</code> is neither the cell top nor the
+baseline: with the default font the 16-px text cell occupies roughly <code>[y-7, y+9)</code> and the
+baseline lands at <code>y+5</code>. Space rows at least 16&nbsp;px apart (the samples use 18).</td></tr>
+<tr><td><code>fg, bg</code></td><td>Palette indices 0..3, unchecked. <code>bg</code> is used <b>only</b>
+when <code>opaque</code> is true.</td></tr>
+<tr><td><code>opaque</code></td><td><code>false</code>: only glyph pixels are written.
+<code>true</code>: each character's advance cell is filled with <code>bg</code> first.</td></tr>
+</tbody>
+</table></div>
+<p><b>Remarks.</b> The default face is a proportional Chicago-style TrueType at 15&nbsp;px - <b>there is
+no fixed character width</b>, and the user can change both the face and the UI scale in the Control
+Panel (at 150% your hardcoded layout <i>will</i> collide). Measure with <code>TextWidth</code> (exported;
+declare <code>short TextWidth(Ptr, short, short);</code> yourself) or bound with <code>text_at_max</code>.
+Glyphs cover ASCII 32..126; anything else draws as a blank advance. Clipped to the canvas. On return the
+global text state is reset (fore black, back white, mode transparent).</p>
+
+<h3><code>void text_at_max(short x, short y, const char *s, short fg, short maxw)</code></h3>
+<p>As <code>text_at</code> (always transparent), but drops trailing characters until the run fits in
+<code>maxw</code> pixels - a hard cut, no ellipsis. If not even one character fits, nothing is drawn.</p>
+{CODE_SDKC_TEXT}
+
+<h3 id="toolbox">Toolbox shapes: <code>PaintRect FrameRect InvertRect PaintOval FrameOval MoveTo
+LineTo</code></h3>
+<p>The classic QuickDraw slice. All paint with the <b>global fore colour</b> - set it with
+<code>RGBForeColor(&amp;kPalette[C_CYAN])</code> or any <code>RGBColor</code> immediately before
+drawing, because <b>every <code>uno_*</code>/<code>text_at</code>/<code>fill_rgb</code> call resets it
+to black</b>. <code>PenMode</code> supports exactly two behaviours: <code>patXor</code>/<code>srcXor</code>
+invert, everything else copies. <code>PenNormal()</code> resets size and mode (not colour).
+<code>MoveTo</code> positions the pen; <code>LineTo</code> draws from the pen and moves it, so calls
+chain into a polyline.</p>
+{note("<code>PaintOval</code>, <code>FrameOval</code> and <code>MoveTo</code>/<code>LineTo</code> "
+      "bypass the canvas clip: with coordinates outside your window they will happily paint over "
+      "other windows and the taskbar. The rect and text calls are properly clipped; clip your own "
+      "line and oval geometry.", kind="warn", title="Ovals and lines are not clipped")}
+
+<h2 id="geometry">Geometry</h2>
+<div class="tw"><table>
+<thead><tr><th>Call</th><th>Effect</th></tr></thead>
+<tbody>
+<tr><td><code>void SetRect(Rect *r, short l, short t, short rt, short b)</code></td><td>Pure assignment -
+does <b>not</b> normalize; an inverted rect is treated as empty by every drawing call.</td></tr>
+<tr><td><code>void OffsetRect(Rect *r, short dh, short dv)</code></td><td>Translate. 16-bit arithmetic,
+wraps silently past +/-32767.</td></tr>
+<tr><td><code>void InsetRect(Rect *r, short dh, short dv)</code></td><td>Shrink by <code>dh/dv</code> on
+each side (negative values grow). Over-insetting past the centre inverts the rect - no clamp.</td></tr>
+</tbody>
+</table></div>
+<p class="muted"><code>PtInRect</code> is deliberately absent (UnoC cannot pass a <code>Point</code> by
+value in that form) - compare <code>p.h</code>/<code>p.v</code> against the rect yourself.</p>
+
+<h2 id="numbers">Numbers to text</h2>
+<h3><code>void fmt_u(long v, char *out)</code></h3>
+<p>Unsigned decimal, no padding, NUL-terminated. <b><code>v &lt;= 0</code> prints "0"</b> - negatives are
+not rendered; format a sign yourself. <code>out</code> needs 11 bytes.</p>
+<h3><code>void put2(long v, char *out)</code></h3>
+<p>Exactly two zero-padded digits + NUL (<code>out</code> needs 3 bytes): the value modulo 100, so
+<code>123</code> prints <code>"23"</code>. <b>Never pass a negative</b> - the digits come out as
+garbage characters, not numbers.</p>
+{CODE_SDKC_FMT}
+
+<h2 id="windows">Windows and repainting</h2>
+<div class="tw"><table>
+<thead><tr><th>Call</th><th>Effect</th></tr></thead>
+<tbody>
+<tr><td><code>void repaint_all(void)</code></td><td>Mark the screen dirty; the shell repaints every
+window at the end of the current frame. <b>This is the redraw call</b> - cheap, deferred, never
+re-entrant. Animation from <code>tick()</code> must call it or nothing moves.</td></tr>
+<tr><td><code>void draw_window(UnoWin *w)</code></td><td>Identical effect to <code>repaint_all()</code>
+(the argument is ignored). Kept for source compatibility with the other ports.</td></tr>
+<tr><td><code>UnoWin *find_app_window(short proc)</code></td><td>Your own window answers
+<code>find_app_window(APP_NAPPS)</code> - and only after the first paint (before that its bounds are
+zero). The <code>APP_*</code> enum values name the built-in apps; only the five shipped games/tools
+can answer, and only while open. <b>Do not use <code>APP_RUNNER</code></b>: it always returns NULL for
+a user app (older SDK examples got this wrong).</td></tr>
+<tr><td><code>void launch_app(short proc)</code></td><td>A no-op on pc64 - the shell owns
+launching.</td></tr>
+<tr><td><code>short topmost_proc(void)</code> <span class="muted">(via
+<code>gK-&gt;topmost_proc()</code>)</span></td><td>The focused <i>built-in</i> app's proc, or -1 -
+including whenever <b>your</b> window is the focused one. Of little use to a user app.</td></tr>
+</tbody>
+</table></div>
+{CODE_SDKC_REDRAW}
+
+<h2 id="input">Input</h2>
+{CODE_SDKC_KEY}
+{CODE_SDKC_CLICK}
+<h3><code>void GetMouse(Point *p)</code> / <code>Boolean StillDown(void)</code></h3>
+<p><code>GetMouse</code> fills <code>p</code> with the pointer position in <b>screen</b> pixels
+(<code>p.h</code> horizontal, <code>p.v</code> vertical) - subtract your window origin yourself. On pc64
+it also polls the hardware and presents the frame, which is what makes a classic blocking drag loop
+track live - but it is not free, so don't spam it. <code>StillDown()</code> reports whether a button is
+held, <b>as of the last <code>GetMouse</code> call</b> - poll <code>GetMouse</code> in the loop or it
+never changes.</p>
+{CODE_SDKC_MOUSE}
+
+<h2 id="tickcount">Time: <code>long TickCount(void)</code></h2>
+<p>Read this one carefully: on pc64 <b><code>TickCount()</code> is a call counter, not a clock</b>. It
+returns a global counter incremented once per call - by <i>any</i> caller, in any app - and nothing else
+advances it. Called exactly once per <code>tick()</code> it approximates a 60&nbsp;Hz frame counter;
+called twice, your animation runs at half speed; called while another app is also calling it, your
+deltas inflate. The samples therefore pace on <b>their own frame counters</b> (see
+<a href="dev-samples.html#timer">TIMER.C</a>), and so should you. There is no wall clock in the classic
+SDK; a Python app can read <code>unoauto.uptime()</code> (real milliseconds).</p>
+
+<h2 id="random">Randomness: <code>short Random(void)</code></h2>
+<p>A shared linear-congruential generator returning the full signed 16-bit range -32768..32767 (mask
+with <code>&amp; 0x7FFF</code> for non-negative). <b>The seed is a compile-time constant and there is no
+seeding call</b>: the sequence is identical on every boot, shifted only by however many times anything
+else has called it. Mix your own entropy in (LIFE.C stirs the cell coordinates into the seed for
+exactly this reason).</p>
+
+<h2 id="memory">Memory</h2>
+<h3><code>Ptr NewPtr(long byteCount)</code> / <code>void DisposePtr(Ptr p)</code></h3>
+<p><code>NewPtr</code> is malloc: 16-byte aligned, <b>NULL on failure</b> (always check), contents
+<b>not zeroed</b>. A non-positive size allocates one byte. The arena is a single 32&nbsp;MB heap shared
+with the shell and Studio - there is no per-app quota, so leaks degrade the whole machine until the next
+Run (which reloads your module and frees nothing for you: free in <code>closed()</code>).
+<code>DisposePtr</code> is free: NULL-safe and double-free-safe.</p>
+{CODE_SDKC_MEM}
+<p class="muted">The libc slice - <code>memcpy memmove memset memcmp strlen strcpy strncpy strcat strcmp
+strncmp</code> - behaves exactly as C requires; sizes are <code>unsigned long</code> (4 bytes,
+LLP64).</p>
+
+<h2 id="sound">Sound</h2>
+<p>One voice, shared with the shell's own apps: the PC speaker, or the machine's DAC when one exists.
+Durations are in shell frames (~60/s).</p>
+<div class="tw"><table>
+<thead><tr><th>Call</th><th>Effect</th></tr></thead>
+<tbody>
+<tr><td><code>void music_open_chan(void)</code></td><td>No-op on pc64 (the voice is always ready);
+call it once in <code>opened()</code> for portability.</td></tr>
+<tr><td><code>void music_note_on(short midi, short durTicks)</code></td><td>One square-wave note at a
+MIDI pitch (60 = middle C, 69 = A440; practical range ~24..108 - below ~16 nothing sounds).
+<code>durTicks &lt;= 0</code> plays 6 frames. A note interrupts a playing score, which resumes
+after.</td></tr>
+<tr><td><code>void music_quiet(void)</code> / <code>void music_stop(void)</code> /
+<code>void gm_stop(void)</code></td><td>All three do the same thing: stop the score and silence the
+voice. <code>music_start()</code> is a no-op.</td></tr>
+<tr><td><code>void gm_start(const Note *notes, short count, short owner)</code></td><td>Loop a score
+forever. <code>Note</code> is <code>{{midi, dur}}</code> bytes; <code>midi 0</code> is a rest;
+<code>owner</code> is ignored on pc64. <b>The array is borrowed, not copied</b> - make it
+<code>static const</code>. <b>Not stopped when your window closes</b>: call <code>gm_stop()</code> in
+<code>closed()</code>.</td></tr>
+</tbody>
+</table></div>
+{CODE_SDKC_SOUND}
+
+<h2 id="files">Files</h2>
+<p>The classic file slice is a small, session-scoped store - fine for a settings file or a saved game,
+wrong for anything bigger (a Python app's <code>uno.read/write</code> is the fuller API).</p>
+<div class="tw"><table>
+<thead><tr><th>Call</th><th>Contract</th></tr></thead>
+<tbody>
+<tr><td><code>Boolean fat12_mount(void)</code></td><td>Always true on pc64; call once for
+portability.</td></tr>
+<tr><td><code>void fat12_list(void)</code></td><td>Fills the exported arrays with the root directory of
+every volume: <code>gFatCount</code> (capped at 16), <code>gFatNames</code> (12-char names + NUL).
+<b><code>gFatSizes</code> is always 0 on pc64</b> - don't display it.</td></tr>
+<tr><td><code>long fat12_read(const char *name, unsigned char *buf, long max)</code></td><td>Read from
+offset 0, up to <code>max</code> bytes. Returns the byte count or <b>-1</b> for: not found, empty file,
+or no free handle. Names are exact, case-sensitive, up to 31 chars. <b>Reads the session store only</b>:
+a name listed by <code>fat12_list</code> from a real disk is not readable here.</td></tr>
+<tr><td><code>Boolean fat12_write(const char *name, const unsigned char *buf, long len)</code></td>
+<td>Creates the file if absent. <b>Writing an existing name APPENDS</b> - there is no truncate and no
+delete, so save under a versionless single name only if you write it once per session, or build the
+whole content and write once. On success the file is also mirrored to the first writable FAT volume, so
+your save is visible in Files and to Python apps. Returns false only when the store is full (24 files /
+256 KB per file); a failed mirror is not reported.</td></tr>
+</tbody>
+</table></div>
+{CODE_SDKC_FILES}
+{note("Within one session, save + reload round-trips. Across a reboot the classic read path starts "
+      "fresh (your file still exists on disk - Files, Notepad and Python see it - but "
+      "<code>fat12_read</code> does not). A game that must reload yesterday's save should be a "
+      "Python app today.", title="Session-scoped reads")}
+
+<h2 id="display">Display modes</h2>
+<p><code>gK-&gt;display_res_count()</code> / <code>display_res_get(idx, &amp;w, &amp;h, &amp;zoom,
+&amp;active)</code> / <code>display_res_set(idx)</code> enumerate and change the <i>desktop</i> size
+(the output is scaled to the panel; <code>zoom</code> is always 0 on pc64). Call <code>count</code>
+first - it rebuilds the list the other two index. <code>set</code> is immediate, relayouts every window,
+and <b>bypasses the Control Panel's 15-second revert countdown</b> - a wrong mode stays wrong. Almost no
+app should call it.</p>
+
+<h2 id="lang">The language, on one screen</h2>
+<div class="tw"><table>
+<thead><tr><th>You have</th><th>You don't have</th></tr></thead>
+<tbody>
+<tr><td>char/short/int/long/long long + unsigned, pointers, multi-dim arrays, struct/union/enum/typedef,
+function pointers, the full operator set, if/while/do/for/switch, static globals + locals, brace
+initializers with address constants, <code>char s[] = "text"</code>, string-literal concatenation,
+<code>sizeof</code>, recursion</td>
+<td>floating point (not even the keywords), varargs (so no printf), function-like macros, bitfields,
+goto, VLAs, <code>#if</code> arithmetic, <code>&lt;system&gt;</code> includes, more than 8
+parameters/arguments, struct pass-by-value above 8 bytes</td></tr>
+</tbody>
+</table></div>
+<p><b>LLP64:</b> <code>long</code> is 4 bytes, <code>long long</code> and pointers are 8. The ABI is
+MS x64. <code>#include "FILE.H"</code> searches the file's folder, then <code>SDK\\</code>. <code>char</code>
+is signed. Full grammar: <code>DOCS\\LANG.MD</code> on the device.</p>
+
+<h2 id="descriptor">Shipping it: the app descriptor</h2>
+<p>What Studio builds runs in the user slot (one at a time, 512&nbsp;KB). To give your app a Start-menu
+row, a desktop icon and a durable identity, wrap it with an <b>app descriptor</b> on your PC - the full
+walkthrough is in <a href="dev-apps.html#package">Writing apps §8</a>, and the grammar is:</p>
+<div class="tw"><table>
+<thead><tr><th>Key</th><th>Meaning</th><th>Limit</th></tr></thead>
+<tbody>
+<tr><td><code>id:</code></td><td>durable identity - geometry, session restore and <code>launch
+&lt;id&gt;</code> all key on it</td><td>15 chars, <code>[a-z0-9._-]</code></td></tr>
+<tr><td><code>name:</code> / <code>short:</code></td><td>launcher label / desktop-icon label</td>
+<td>31 / 15 chars</td></tr>
+<tr><td><code>icon:</code></td><td>a named emblem, or <code>file:NAME.QOI</code> (32x32 QOI beside the
+module, hard-edged alpha)</td><td>15 chars total - the filename part fits 10</td></tr>
+<tr><td><code>cat:</code> / <code>rank:</code></td><td>Start-menu section (system net tools media games
+other) and sort key</td><td>rank 0-255</td></tr>
+<tr><td><code>flags:</code></td><td><code>singleton hidden game nosession</code></td><td></td></tr>
+<tr><td><code>min:</code></td><td>preferred window size <code>WxH</code></td><td>&lt; 8192</td></tr>
+</tbody>
+</table></div>
+<p class="muted">The whole block is capped at 1024 bytes; unknown keys are ignored forever (the
+extension point), unknown values fail the build. The user's <code>APPS.CFG</code> can rename, re-file
+or hide your app - the module is the authority for what's inside the window, the user for what it's
+called.</p>
+
+<p class="kv">Worked examples: <a href="dev-samples.html">the sample programs</a>. The Python side:
+<a href="dev-sdk-python.html">Python SDK reference</a>. The wider export table (the kernel exports far
+more than UNO.H declares - <code>fb_*</code>, <code>malloc</code>, the filesystem) is discoverable in
+<code>pc64_modload.c</code>'s <code>KX()</code> tables, undocumented and unguaranteed: stay inside
+UNO.H unless you enjoy archaeology.</p>
+""")
+
+CODE_SDKPY_SKELETON = code('''import uno
+
+class MyApp(uno.App):
+
+    def build(self, cv):        # once, when the window opens
+        self.w, self.h = cv.width(), cv.height()
+
+    def draw(self, cv):         # every repaint
+        cv.clear(uno.rgb(16, 18, 34))
+        cv.text(8, 8, "hello", uno.rgb(214, 218, 232))
+
+    def tick(self):             # ~60 times a second
+        return False            # nothing changed - let the shell sleep
+
+    def key(self, uni, scan, ctrl):
+        return False            # not ours - let the shell have it
+
+app = MyApp()                   # the runtime looks for this exact name
+''')
+
+CODE_SDKPY_RGB = code('''RED = uno.rgb(255, 96, 96)      # channels are 0-255, masked & 0xFF
+cv.fill_rect(10, 10, 40, 40, RED)''')
+
+CODE_SDKPY_TICKS = code('''import uno, unoauto
+
+def build(self, cv):
+    self.frames = 0                     # your own frame counter...
+    self.t0 = unoauto.uptime()          # ...and the real clock, in ms
+
+def tick(self):
+    self.frames += 1                    # ~60/s: fine for animation pacing
+    elapsed_s = (unoauto.uptime() - self.t0) // 1000   # honest seconds''')
+
+CODE_SDKPY_KEYSDOWN = code('''held = uno.keys_down()
+if held & 1:  self.y -= 2           # Up is held right now
+if held & 4:  self.x += 2           # Right
+# 0 on the firmware input path (no key-up events there):
+# fall back to timing out your own key() events, like Duum does.''')
+
+CODE_SDKPY_BEEP = code('''uno.beep(69, 30)                    # A440 for half a second
+uno.quiet()                         # cut it short''')
+
+CODE_SDKPY_SFX = code('''try:
+    ok = uno.sfx_load(0, pcm_bytes, 11025)   # slot, 8-bit PCM, rate
+    uno.sfx_play(0, 200, 128)                # slot, volume 0-255, pan 0/128/255
+    uno.mus_play(smf_bytes)                  # standard MIDI file; loop=1 repeats
+except OSError:                              # no DAC on this machine
+    uno.beep(60, 10)                         # the square wave always works''')
+
+CODE_SDKPY_READ = code('''data = uno.read("NOTES.TXT")        # the boot volume; None if missing
+big  = uno.read(1, "DATA.BIN")      # an explicit volume index
+
+# stream a large file instead of loading it whole:
+hdr = uno.read_at(0, "GAME.WAD", 0, 12)     # vol, name, offset, length
+
+n = uno.size("NOTES.TXT")           # -1 if it does not exist''')
+
+CODE_SDKPY_WRITE = code('''ok = uno.write("SCORES.TXT", text.encode())
+if not ok:
+    ...                             # read-only volume - tell the user
+
+uno.mkdir("SAVES")                  # one level; the parent must exist
+uno.write("SAVES/SLOT1.DAT", blob)''')
+
+CODE_SDKPY_LOG = code('''uno.log(6, 6, "level loaded")   # severity, facility, text - both ints
+# severities follow syslog: 3 err, 4 warning, 5 notice, 6 info, 7 debug.
+# facilities: 0 kernel, 1 net, 2 storage, 3 browser, 4 ui, 5 security,
+# 6 app (yours), 7 remote.  Read it back in the System Log viewer.''')
+
+CODE_SDKPY_PREFS = code('''name = uno.pref_get("player") or "YOU"   # None on first run
+uno.pref_set("player", name)             # values are capped at 32 bytes''')
+
+CODE_SDKPY_IDLE = code('''def key(self, uni, scan, ctrl):
+    ...change something...
+    self.dirty = True
+    return True
+
+def tick(self):
+    if self.dirty:
+        self.dirty = False
+        return None                 # repaint this frame
+    return False                    # idle - skip the repaint''')
+
+CODE_SDKPY_UNOAUTO = code('''import uno, unoauto
+
+class Bot(uno.App):
+    def build(self, cv):
+        self.steps = self.script()
+        self.until = 0
+
+    def script(self):
+        unoauto.key(0x17, 0, 1)     # Ctrl+Esc: open the Start menu...
+        yield 30                    # ...which lands on the NEXT frame
+        unoauto.key(0, 13)          # Enter
+        yield 30
+        wins = [r[0] for r in unoauto.probe() if r[1] == 1]
+        unoauto.log("open now: %s" % ", ".join(wins))
+
+    def tick(self):
+        if self.steps is None:
+            return False
+        now = unoauto.uptime()
+        if now >= self.until:
+            try:
+                self.until = now + next(self.steps)
+            except StopIteration:
+                self.steps = None
+
+app = Bot()''')
+
+CODE_SDKPY_UNOSCRIPT = code('''import unoscript as u
+
+u.cap_tier("power")                  # -> 2: needs an explicit grant
+if u.request("power"):               # consent sheet, role, or manifest
+    u.sys.power(0)                   # clean shutdown
+
+u.fs.write("notes/todo.txt", b"buy milk")   # tier 1: USERS/<uid>/notes/...
+print(u.fs.read("notes/todo.txt"))          # b'buy milk'  (4 KB read cap)
+
+for pid, tid, state, name, owner in u.proc.list():   # tier 2
+    print(pid, name, "focused" if state & 1 else "")''')
+
+
+PAGES["dev-sdk-python.html"] = ("Python SDK reference", f"""
+<h1>Python SDK reference</h1>
+<p class="lede">Every call a Python app can make, with parameters, return values, remarks and a working
+snippet for each. The app model itself is on <a href="dev-python.html">Python apps</a>; the machine-readable
+stub ships on the device as <code>SDK\\uno.pyi</code>.</p>
+
+<h2 id="model">The application object</h2>
+<p>A Python app is one <code>.py</code> file that defines a class and a module-global instance named exactly
+<code>app</code>. The runtime (<code>PYRT.UNO</code>) executes your file top to bottom, looks up <code>app</code>,
+and binds whichever of the six callbacks you defined. There is no event loop to write and no <code>main()</code>:
+the desktop calls you.</p>
+{CODE_SDKPY_SKELETON}
+{note("The binding happens once, at load. Adding or swapping a method on the instance afterwards has no "
+      "effect, and if the name <code>app</code> is missing the run fails with "
+      "<i>No `app` object. Define: app = MyApp()</i> in Studio's output pane.", title="Bound at load")}
+
+<h3 id="callbacks">Callbacks</h3>
+<div class="tw"><table>
+<thead><tr><th>Callback</th><th>When it runs</th><th>Return</th></tr></thead>
+<tbody>
+<tr><td><code>build(self, cv)</code></td><td>Once, when the window opens. The canvas is already valid, so
+<code>cv.width()</code>/<code>cv.height()</code> give your drawable size - read them here, never hardcode
+a size (the shell picks your window).</td><td>ignored</td></tr>
+<tr><td><code>draw(self, cv)</code></td><td>Every repaint.</td><td>ignored</td></tr>
+<tr><td><code>tick(self)</code></td><td>~60 times a second while the app is open.</td><td><code>None</code>
+(or nothing) repaints; an explicit falsey value such as <code>False</code> <b>skips the repaint</b> - the
+idle idiom below.</td></tr>
+<tr><td><code>key(self, uni, scan, ctrl)</code></td><td>A key was pressed while your window is focused.
+<code>uni</code> is the character's codepoint (0 if none), <code>scan</code> the special-key code (0 if none),
+<code>ctrl</code> nonzero while Ctrl is held. Exactly one of <code>uni</code>/<code>scan</code> is nonzero
+per event.</td><td>truthy = you consumed it</td></tr>
+<tr><td><code>action(self, id)</code></td><td>A toolkit widget action (only relevant to apps hosted with
+widgets).</td><td>truthy = consumed</td></tr>
+<tr><td><code>opened(self)</code> / <code>closed(self)</code></td><td>The window was shown / is closing.
+Only bound if they exist at load.</td><td>ignored</td></tr>
+</tbody>
+</table></div>
+
+<h3 id="keys">Key codes</h3>
+<div class="tw"><table>
+<thead><tr><th>Key</th><th><code>scan</code></th><th><code>uni</code></th></tr></thead>
+<tbody>
+<tr><td>Up / Down / Right / Left</td><td>1 / 2 / 3 / 4</td><td>0</td></tr>
+<tr><td>Delete (forward)</td><td>8</td><td>0</td></tr>
+<tr><td>F1..F12</td><td>0x0B..0x16</td><td>0</td></tr>
+<tr><td>Esc</td><td>0x17</td><td>0</td></tr>
+<tr><td>Enter / Backspace / Tab / Space</td><td>0</td><td>13 / 8 / 9 / 32</td></tr>
+<tr><td>Letters, digits, symbols</td><td>0</td><td>the ASCII code, shift-aware</td></tr>
+</tbody>
+</table></div>
+<p class="muted">Keys the shell owns never reach you: Ctrl+Esc, Alt+Tab, Ctrl+W, Ctrl+M, Ctrl+Tab, F2,
+Alt+arrows, and Esc while a popup or fullscreen app is up.</p>
+
+<h3 id="idle">The idle idiom</h3>
+<p>An app that returns <code>None</code> from <code>tick()</code> repaints sixty times a second whether anything
+changed or not. A static app should keep a dirty flag instead:</p>
+{CODE_SDKPY_IDLE}
+
+<h2 id="canvas">Canvas</h2>
+<p>The drawing surface handed to <code>build</code> and <code>draw</code>. Coordinates are canvas-relative -
+(0,&nbsp;0) is the top-left of your content area, below the title bar - and draws are clipped to your window.
+All coordinates must be <code>int</code>s: pass <code>int(x)</code> if you animate with floats, or the call
+raises <code>TypeError</code>.</p>
+<div class="tw"><table>
+<thead><tr><th>Method</th><th>Effect</th></tr></thead>
+<tbody>
+<tr><td><code>cv.width()</code> / <code>cv.height()</code></td><td>Drawable size in pixels. Read it every
+draw if you want live resize behaviour.</td></tr>
+<tr><td><code>cv.clear(color)</code></td><td>Fill the whole canvas.</td></tr>
+<tr><td><code>cv.fill_rect(x, y, w, h, color)</code></td><td>Filled rectangle.</td></tr>
+<tr><td><code>cv.rect(x, y, w, h, color)</code></td><td>1-pixel outline.</td></tr>
+<tr><td><code>cv.pixel(x, y, color)</code></td><td>One pixel.</td></tr>
+<tr><td><code>cv.hline(x, y, w, color)</code> / <code>cv.vline(x, y, h, color)</code></td><td>Horizontal /
+vertical line.</td></tr>
+<tr><td><code>cv.text(x, y, s, color)</code></td><td>Draw a string, transparent background.</td></tr>
+</tbody>
+</table></div>
+<p class="muted">The remaining Canvas methods (<code>wall_col</code>, <code>wall_span</code>,
+<code>mask_span</code>, <code>flat_span</code>, <code>duum_frame</code>, <code>seg_cols</code>) are the
+textured-column fast paths built for Duum's renderer; their exact contracts are in
+<code>SDK\\uno.pyi</code>.</p>
+
+<h2 id="colours">uno.rgb</h2>
+<p><b><code>uno.rgb(r, g, b) -&gt; int</code></b> packs three 0-255 channels into the colour value every
+drawing call takes. Build your palette once at module level, not per frame.</p>
+{CODE_SDKPY_RGB}
+
+<h2 id="time">Time and held keys</h2>
+<p><b><code>uno.ticks() -&gt; int</code></b> - the Toolbox tick counter. Honesty first: this is a
+<i>call counter</i> shared with every C app (it advances once per call, from anywhere), so treat it as
+frame pacing only - call it exactly once per <code>tick()</code> and use deltas - or skip it and count
+your own <code>tick()</code> invocations. For real time, use <b><code>unoauto.uptime()</code></b>:
+milliseconds since boot, ungated in every build - the clock the automation samples pace on.</p>
+{CODE_SDKPY_TICKS}
+<p><b><code>uno.keys_down() -&gt; int</code></b> - the navigation/action keys held <i>right now</i>, as a
+bitmask: 1 Up, 2 Down, 4 Right, 8 Left, 16 fire (F or Ctrl), 32 use (Space/E), 64 comma, 128 period.
+For movement, polling this beats buffering <code>key()</code> events.</p>
+{CODE_SDKPY_KEYSDOWN}
+
+<h2 id="sound">Sound</h2>
+<p><b><code>uno.beep(midi, ticks)</code></b> plays a square-wave note at a MIDI pitch (60 = middle C,
+69 = A440) for <code>ticks</code> sixtieths of a second; <b><code>uno.quiet()</code></b> stops it. These two
+always work, on any machine.</p>
+{CODE_SDKPY_BEEP}
+<p>The sampled-audio calls need a DAC (HD&nbsp;Audio or AC'97) and <b>raise <code>OSError</code></b> when the
+machine has none - always wrap them and fall back to <code>beep</code>:</p>
+<div class="tw"><table>
+<thead><tr><th>Call</th><th>Effect</th></tr></thead>
+<tbody>
+<tr><td><code>uno.sfx_load(slot, pcm, rate) -&gt; bool</code></td><td>Load unsigned 8-bit mono PCM into an
+effect slot.</td></tr>
+<tr><td><code>uno.sfx_play(slot, vol, sep) -&gt; bool</code></td><td>Play a loaded slot: volume 0-255, stereo
+position 0 left / 128 centre / 255 right. <code>False</code> means that one play didn't start.</td></tr>
+<tr><td><code>uno.mus_play(smf, loop=0) -&gt; bool</code></td><td>Play a standard MIDI file from bytes.</td></tr>
+<tr><td><code>uno.mus_stop()</code></td><td>Stop music.</td></tr>
+</tbody>
+</table></div>
+{CODE_SDKPY_SFX}
+
+<h2 id="files">Files</h2>
+<p>Volumes are numbered; <b>0 is the boot volume</b> and the one-argument forms default to it. Names are
+8.3 on FAT volumes and case-insensitive. There is no <code>listdir</code> and no file objects - the API is
+whole-file and offset reads, which is what a small app actually needs.</p>
+<div class="tw"><table>
+<thead><tr><th>Call</th><th>Returns</th><th>Remarks</th></tr></thead>
+<tbody>
+<tr><td><code>uno.read(name)</code> / <code>uno.read(vol, name)</code></td><td><code>bytes</code>, or
+<code>None</code> if the file does not exist</td><td>Reads the whole file - fine for documents, wrong for a
+4&nbsp;MB WAD (stream those with <code>read_at</code>).</td></tr>
+<tr><td><code>uno.read_at(vol, name, off, n)</code></td><td><code>bytes</code></td><td>Reads <code>n</code>
+bytes at offset <code>off</code>. <code>vol</code> is required here.</td></tr>
+<tr><td><code>uno.size(name)</code> / <code>uno.size(vol, name)</code></td><td><code>int</code>, -1 if
+missing</td><td>The cheap existence test.</td></tr>
+<tr><td><code>uno.write(name, data)</code> / <code>uno.write(vol, name, data)</code></td><td><code>bool</code></td>
+<td><code>False</code> on a read-only volume - surface that state to the user, don't swallow it.</td></tr>
+<tr><td><code>uno.mkdir(path)</code> / <code>uno.mkdir(vol, path)</code></td><td><code>bool</code></td>
+<td>One level at a time; the parent must exist.</td></tr>
+</tbody>
+</table></div>
+{CODE_SDKPY_READ}
+{CODE_SDKPY_WRITE}
+
+<h2 id="prefs">Preferences and key bindings</h2>
+<p>Small per-app settings without inventing a file format:
+<b><code>uno.pref_get(name) -&gt; str|None</code></b> and <b><code>uno.pref_set(name, value) -&gt; bool</code></b>
+persist strings (values capped at 32 bytes) in the shell's preference store.
+<b><code>uno.bind_name(action)</code></b>, <b><code>uno.bind_set(action, uni, scan)</code></b> and
+<b><code>uno.bind_reset()</code></b> read and remap the shared game-action key bindings.</p>
+{CODE_SDKPY_PREFS}
+
+<h2 id="syslog">The system log</h2>
+<p><b><code>uno.log(sev, fac, text)</code></b> writes a line to the system log (severities follow syslog;
+<code>fac</code> is a numeric facility - apps are 6). The viewer app, the log file sink and the remote link all see it -
+prefer this to inventing your own trace file. The reading half
+(<code>log_read</code>/<code>log_span</code>/<code>log_stat</code>/...) is documented in
+<code>SDK\\uno.pyi</code>.</p>
+{CODE_SDKPY_LOG}
+
+<h2 id="introspection">Hardware introspection</h2>
+<p><b><code>uno.devices() -&gt; str</code></b> and <b><code>uno.pci() -&gt; list</code></b> expose the device
+tree (location, IDs, class, claiming driver) - the same data the <code>devices</code> remote verb reports.
+Read-only.</p>
+
+<h2 id="limits">Language and library limits</h2>
+<p>The runtime is MicroPython at its core feature level, plus the modules above. What that means in
+practice:</p>
+<div class="tw"><table>
+<thead><tr><th>You have</th><th>You don't have</th></tr></thead>
+<tbody>
+<tr><td>classes, generators, comprehensions, <code>set</code>, <code>bytearray</code>, big ints, floats
+(single precision), <code>%</code> and <code>.format()</code> formatting, walrus, <code>async</code>/<code>await</code></td>
+<td>f-strings, <code>frozenset</code>, <code>memoryview</code>, <code>__del__</code>, reverse special
+methods, <code>NotImplemented</code></td></tr>
+<tr><td><code>math</code>, <code>struct</code>, <code>array</code>, <code>collections</code>
+(namedtuple), <code>sys</code>, <code>gc</code>, <code>micropython</code></td>
+<td><code>time</code>, <code>random</code>, <code>json</code>, <code>os</code>, <code>io</code>,
+<code>re</code>, <code>typing</code> - and <code>math.pi</code> (write <code>3.14159265</code>)</td></tr>
+<tr><td>one <code>.py</code> file up to 192&nbsp;KB, a 16&nbsp;MB heap, an 8&nbsp;KB
+<code>print()</code> buffer shown in Studio</td>
+<td>importing a second <code>.py</code> file, threads, and the <code>@micropython.native</code>/<code>viper</code>
+decorators (they fault on real hardware - never use them)</td></tr>
+</tbody>
+</table></div>
+
+<h2 id="unoauto-ref">unoauto: drive the machine</h2>
+<p><code>import unoauto</code> is the automation half of <a href="dev-remote.html">unoautomate</a>, available
+to any Python app <b>in every build</b>: each call checks the caller's privilege and, when the capability is
+absent, returns its inert value (<code>False</code>, <code>[]</code>, <code>None</code>) instead of raising -
+so the same script degrades gracefully on a machine that trusts it less. <code>uptime()</code> and
+<code>deadline_left()</code> are ungated.</p>
+<div class="tw"><table>
+<thead><tr><th>Function</th><th>Needs</th><th>Returns / effect</th></tr></thead>
+<tbody>
+<tr><td><code>available()</code></td><td>observe</td><td><code>True</code> when observation is granted.</td></tr>
+<tr><td><code>log(text)</code></td><td>observe</td><td>Emit on the script log channel (streams to the dev PC).</td></tr>
+<tr><td><code>probe()</code></td><td>observe</td><td>System snapshot: <code>(name, kind, state, v1, v2)</code>
+rows - kind 0 module, 1 window, 2 subsystem.</td></tr>
+<tr><td><code>key(scan, uni, ctrl=0)</code></td><td>drive</td><td>Inject a key. <b>Argument order is
+scan-first</b> - the mirror image of the <code>key()</code> callback. Lands on the <i>next</i> frame.</td></tr>
+<tr><td><code>pointer(x, y, btn)</code></td><td>drive</td><td>Inject a pointer event (btn 1 press, 0 release).</td></tr>
+<tr><td><code>apps()</code> / <code>launch(i)</code> / <code>close_top()</code></td><td>drive</td>
+<td>Count, open, close apps. <b>Never <code>close_top()</code> your own window</b> from an automation
+script.</td></tr>
+<tr><td><code>uptime()</code></td><td>-</td><td>Milliseconds since boot. Pace scripts on this.</td></tr>
+<tr><td><code>deadline_left()</code></td><td>-</td><td>ms left in the current test budget, -1 if none.</td></tr>
+<tr><td><code>poweroff()</code></td><td>system</td><td>Shut down (unattended runs end themselves).</td></tr>
+<tr><td><code>remote_active()</code> / <code>remote_send(s)</code> / <code>remote_recv()</code> /
+<code>remote_stop()</code></td><td>observe/system</td><td>Talk to the dev PC over the URC link.</td></tr>
+</tbody>
+</table></div>
+<p>The load-bearing pattern - actions land on the <b>next</b> shell frame, so run your steps from a generator
+and <code>yield</code> between step and check:</p>
+{CODE_SDKPY_UNOAUTO}
+
+<h2 id="unoscript-ref">unoscript: the permission-gated OS surface</h2>
+<p><code>import unoscript</code> is the production automation surface: UI, apps, files, processes, memory,
+ports and power, each call gated by a capability tier (0 ambient, 1 user, 2 admin, 3 kernel). Denied calls
+raise <code>OSError</code>; <code>request()</code> asks for a grant (consent sheet, role, or signed manifest)
+and answers <code>False</code> rather than raising. The model, the manifest story and the full catalog are on
+<a href="dev-remote.html#unoscript">Remote control &amp; automation</a>.</p>
+<div class="tw"><table>
+<thead><tr><th>Call</th><th>Tier</th><th>Effect</th></tr></thead>
+<tbody>
+<tr><td><code>available()</code> / <code>whoami()</code> / <code>secured()</code></td><td>-</td>
+<td>Presence, acting uid (0xFFFFFFFF when nobody is signed in), whether the real adjudicator is in.</td></tr>
+<tr><td><code>cap_tier(name)</code> / <code>request(name[, scope[, ttl]])</code></td><td>-</td>
+<td>Look up a capability's tier; ask for it.</td></tr>
+<tr><td><code>ui.click(x, y[, btn])</code> / <code>ui.move(x, y)</code> / <code>ui.key(scan[, uni[, mods]])</code></td>
+<td>0</td><td>Synthetic input on the real device path.</td></tr>
+<tr><td><code>ui.screen()</code></td><td>0</td><td>The window tree as text, focused window marked.</td></tr>
+<tr><td><code>ui.clip_get()</code> / <code>ui.clip_set(s)</code></td><td>0 / 1</td><td>Clipboard.</td></tr>
+<tr><td><code>app.count()</code> / <code>app.launch(i)</code> / <code>app.close_top()</code> /
+<code>app.message(i, verb)</code></td><td>0 / 1</td><td>App control; <code>verb</code> is
+<code>"info"</code>, <code>"focus"</code> or <code>"close"</code>.</td></tr>
+<tr><td><code>fs.read(path)</code> / <code>fs.write(path, data)</code></td><td>1 / 2</td>
+<td>A bare relative path is <b>your home</b> (<code>USERS\\&lt;uid&gt;\\...</code>, parents auto-created,
+reads capped at 4&nbsp;KB); an absolute <code>/label/rest</code> names a volume and is tier 2.
+<code>..</code> is rejected.</td></tr>
+<tr><td><code>proc.list()</code></td><td>2</td><td><code>(pid, tid, state, name, owner)</code> rows;
+state bit 0 = focused.</td></tr>
+<tr><td><code>mem.read/write</code>, <code>io.in_/out</code></td><td>2-3</td><td>Raw memory and port I/O;
+always audited.</td></tr>
+<tr><td><code>sys.power(n)</code></td><td>2</td><td>0 shutdown, 1 reboot.</td></tr>
+</tbody>
+</table></div>
+{CODE_SDKPY_UNOSCRIPT}
+
+<p class="kv">Worked examples: <a href="dev-samples.html">the sample programs</a>. The app model:
+<a href="dev-python.html">Python apps</a>. The permission model and unattended grants:
+<a href="dev-remote.html">Remote control &amp; automation</a>.</p>
 """)
 
 PAGES["dev-api.html"] = ("API reference", f"""
@@ -2220,12 +3423,17 @@ directly.</p>
 <code>build</code>/<code>draw</code>. A machine-readable stub ships in <code>SDK\\uno.pyi</code>.</p>
 {CODE_PY_UNO_API}
 <p class="muted">This is the app-authoring module. The separate <code>unoauto</code> module below is the
-system-<em>automation</em> surface (probe, inject input, drive the machine) and exists only in debug builds.</p>
+system-<em>automation</em> surface (probe, inject input, drive the machine), present in every build and
+gated by privilege. The full per-call contract is in the
+<a href="dev-sdk-python.html">Python SDK reference</a>.</p>
 
 <h2 id="unoauto">unoauto: automation (Python, on the device)</h2>
 <p><code>import unoauto</code> from any Python app to observe and drive the system - the automation half of
-<a href="dev-remote.html">unoautomate</a>. This surface exists only in a <strong>debug</strong> OS; in a production
-build every call is an inert stub and <code>available()</code> returns <code>False</code>.</p>
+<a href="dev-remote.html">unoautomate</a>. The surface ships in <strong>every</strong> build; each call
+checks the caller's privilege, and a capability you don't hold makes the call return its inert value
+(<code>False</code>, <code>[]</code>, <code>None</code>) rather than raise - so
+<code>available()</code> answers <code>False</code> on a machine that grants you nothing. In a debug OS
+everything is allowed.</p>
 <div class="tw"><table>
 <thead><tr><th>Function</th><th>Returns / effect</th></tr></thead>
 <tbody>
@@ -2390,9 +3598,30 @@ network, with a simple typed command language or a Python API. This is <strong>u
 the OS's remote-control and automation channel. It is how you drive, observe, and update a machine
 that is sitting on a bench across the room.</p>
 
-{note('unoautomate is compiled into <strong>debug builds only</strong> (<code>UNO_DEBUG=1</code>). A production OS has none of it - the channel, the commands and the on-device Python bindings all compile away. It is meant for a <strong>trusted LAN</strong> and speaks in plaintext, so never expose it to an untrusted network.', kind="warn", title="Debug builds, LAN only")}
+{note('The channel ships in <strong>every</strong> build, and the gate is <strong>privilege, not a compile flag</strong>: a production OS boots with it disarmed, and only a user at the console can arm it (below). A debug OS (<code>UNO_DEBUG=1</code>) arms it from <code>DEBUG.CFG</code> with every verb allowed and no code. Either way it is meant for a <strong>trusted LAN</strong> and speaks in plaintext - the code proves who may drive the box, it does not encrypt the wire - so never expose it to an untrusted network.', kind="warn", title="Armed by a person, LAN only")}
 
-<h2 id="enable">Turning it on</h2>
+<h2 id="arming">Production: arming and the access code</h2>
+<p>On a production boot nothing listens and nothing dials. To hand your PC the keys, open
+<strong>Control Panel &rarr; Remote control&hellip;</strong> and tick what you are willing to grant -
+the three ticks map to the three powers every command is checked against:</p>
+<div class="tw"><table>
+<thead><tr><th>Tick</th><th>Grants</th></tr></thead>
+<tbody>
+<tr><td><b>Watch</b></td><td>see the screen and system state - logs, probe, screenshots</td></tr>
+<tr><td><b>Control</b></td><td>move the mouse, type, open apps</td></tr>
+<tr><td><b>Full access</b></td><td>disks, files, run code, restart</td></tr>
+</tbody>
+</table></div>
+<p>Arming mints a <strong>6-digit code</strong>, shown on screen and never stored. The first thing a
+client sends is <code>auth &lt;code&gt;</code>; until then every verb answers
+<code>err auth-required</code>, and <strong>three wrong codes disarm the channel outright</strong> - the
+operator can re-arm at the console, an attacker on the wire cannot, which is what the code's length
+rests on. A verb outside the granted powers answers <code>err denied</code> naming the missing power.
+The remote path never prompts (nobody is at the machine to answer), and signing out disarms - a code
+can never outlive the login that made it. Grant the least you need: a monitoring script wants Watch and
+nothing else.</p>
+
+<h2 id="enable">Turning it on (debug builds)</h2>
 <p>pc64's network stack makes outbound connections only, so the device <strong>dials your PC</strong> rather
 than the other way round. You tell it where to dial with one line in the stick's <code>DEBUG.CFG</code>
 (the Developer-options file the flasher writes) - your PC's LAN address and a port:</p>
@@ -2505,7 +3734,7 @@ the "browse the network and connect to a box" model - you choose the machine, wi
 either end. (Give a box a friendly name with <code>name=&lt;label&gt;</code> so it is easy to spot in
 the list.)</p>
 {note('The network comes up <strong>at boot</strong> now, not only when an app first needs it: every device brings its NIC up early (skipping any that do not get a lease within a few seconds, so a dead or cableless port cannot hang boot), so a box is reachable - and discoverable - as soon as the desktop appears.', kind="tip", title="Networking is ready at boot")}
-{note('UnoRemote rides the same debug-only, LAN-only URC channel as everything else on this page - it needs a debug build and a trusted network, and it is not present in a production OS.', kind="warn", title="Debug builds, LAN only")}
+{note('UnoRemote rides the same LAN-only URC channel as everything else on this page - it needs the channel armed (the <a href="#arming">Remote control panel</a> on a production OS, <code>DEBUG.CFG</code> on a debug one) and a trusted network.', kind="warn", title="Armed channel, LAN only")}
 
 <h2 id="unoscript">Scripting the OS, with permission (<code>unoscript</code>)</h2>
 <p>The <a href="dev-python.html#uno">
@@ -2580,7 +3809,7 @@ check - so an interrupted transfer never leaves stick B half-written. Add <code>
 the machine boot the other stick automatically on the next restart, without anyone touching the firmware boot
 menu. From the library the same flow is <code>link.push_file(...)</code> then <code>link.reboot()</code>.</p>
 
-{note('<code>put</code> and <code>reboot</code> are an arbitrary file write and a reset. Like the rest of the channel they exist only in debug builds and only over your trusted LAN. A single push is capped at 8&nbsp;MB.', kind="warn", title="What these can do")}
+{note('<code>put</code> and <code>reboot</code> are an arbitrary file write and a reset. In a production OS they sit behind the <a href="#arming">Full access</a> power; grant it only over your trusted LAN. A single push is capped at 8&nbsp;MB.', kind="warn", title="What these can do")}
 
 <h2 id="install">Installing UnoDOS onto a disk over the link</h2>
 <p>The A/B push writes files onto an <em>already-formatted</em> stick. The channel can go further and stand up a

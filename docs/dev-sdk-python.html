@@ -1,0 +1,432 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Python SDK reference · UnoDOS pc64 manual</title>
+<meta name="description" content="User manual for UnoDOS pc64, the x86-64/UEFI world of the UnoDOS operating-system family.">
+<link rel="stylesheet" href="assets/style.css">
+
+<script>
+(function(){
+  var r=document.documentElement, k='unodos-doc-theme';
+  try{var s=localStorage.getItem(k); if(s)r.setAttribute('data-theme',s);}catch(e){}
+  window.__t=function(){
+    var cur=r.getAttribute('data-theme');
+    if(!cur){cur=matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';}
+    var nx=cur==='dark'?'light':'dark';
+    r.setAttribute('data-theme',nx);
+    try{localStorage.setItem(k,nx);}catch(e){}
+  };
+})();
+</script>
+<script>
+/* Lightbox: click (or Enter/Space on) a screenshot to see it full size.
+   Manual shots are scaled into the text column, where fine UI detail - a
+   status line, an icon, a menu entry - is too small to read. Built once at
+   load and reused; Esc or a click anywhere closes it. */
+(function(){
+  var lb,img,cap;
+  function build(){
+    lb=document.createElement('div'); lb.id='lb'; lb.setAttribute('role','dialog');
+    lb.setAttribute('aria-modal','true');
+    img=document.createElement('img');
+    cap=document.createElement('figcaption');
+    var x=document.createElement('button');
+    x.className='x'; x.innerHTML='&times;'; x.setAttribute('aria-label','Close');
+    lb.appendChild(x); lb.appendChild(img); lb.appendChild(cap);
+    document.body.appendChild(lb);
+    lb.addEventListener('click', close);
+  }
+  function open(src, text){
+    if(!lb) build();
+    img.src=src; img.alt=text||''; cap.textContent=text||'';
+    lb.classList.add('on'); document.body.style.overflow='hidden';
+  }
+  function close(){
+    if(!lb) return;
+    lb.classList.remove('on'); img.src=''; document.body.style.overflow='';
+  }
+  document.addEventListener('click', function(e){
+    var b=e.target.closest && e.target.closest('button.zoom');
+    if(!b) return;
+    e.preventDefault();
+    var f=b.parentNode.querySelector('figcaption');
+    open(b.getAttribute('data-full'), f?f.textContent:'');
+  });
+  document.addEventListener('keydown', function(e){
+    if(e.key==='Escape') close();
+  });
+})();
+</script>
+
+</head>
+<body>
+<input type="checkbox" id="mnav">
+<div class="topbar">
+  <label class="menu-btn" for="mnav">☰ Menu</label>
+  <b>UnoDOS pc64</b>
+</div>
+<div class="layout">
+
+<aside class="sidebar">
+  <a class="brand" href="index.html" style="text-decoration:none;color:inherit">
+    <span class="logo"><i></i><i></i><i></i><i></i></span>
+    <span><b>UnoDOS <span style="color:var(--accent-2)">pc64</span></b><span class="sub">User manual</span></span>
+  </a>
+  <ul class="nav"><li><a class="" href="index.html">Overview</a></li><li><a class="" href="try-browser.html">Try it in your browser</a></li><li><a class="" href="getting-started.html">Getting started</a></li><li><a class="" href="desktop.html">The desktop</a></li><li><a class="" href="windows.html">Windows &amp; desktops</a></li><li><a class="" href="appearance.html">Themes &amp; appearance</a></li><li><a class="" href="apps.html">Applications</a></li><li><a class="" href="office.html">UnoOffice</a></li><li><a class="" href="browser.html">Web browser</a></li><li><a class="" href="ssh.html">SSH client</a></li><li><a class="" href="networking.html">Networking</a></li><li><a class="" href="logging.html">System log</a></li><li><a class="" href="appliances.html">Appliances</a></li><li><a class="" href="ports.html">The UnoDOS family</a></li><li class="sec">Developer</li><li><a class="" href="developer.html">Overview &amp; architecture</a></li><li><a class="" href="studio.html">Studio: the built-in IDE</a></li><li><a class="" href="dev-apps.html">Writing apps</a></li><li><a class="" href="dev-python.html">Python apps</a></li><li><a class="" href="dev-samples.html">Sample programs</a></li><li><a class="" href="dev-sdk-c.html">UnoC SDK reference</a></li><li><a class="active" href="dev-sdk-python.html">Python SDK reference</a></li><li><a class="" href="dev-api.html">API reference</a></li><li><a class="" href="dev-build.html">Building &amp; tooling</a></li><li><a class="" href="dev-remote.html">Remote control &amp; automation</a></li></ul>
+  <div class="side-foot">
+    <a href="https://github.com/hmofet/unodos" target="_blank" rel="noopener">GitHub&nbsp;&rsaquo; hmofet/unodos</a><br>
+    <a href="#" onclick="__t();return false">Toggle light / dark</a>
+  </div>
+</aside>
+<main class="main"><div class="wrap">
+
+<h1>Python SDK reference</h1>
+<p class="lede">Every call a Python app can make, with parameters, return values, remarks and a working
+snippet for each. The app model itself is on <a href="dev-python.html">Python apps</a>; the machine-readable
+stub ships on the device as <code>SDK\uno.pyi</code>.</p>
+
+<h2 id="model">The application object</h2>
+<p>A Python app is one <code>.py</code> file that defines a class and a module-global instance named exactly
+<code>app</code>. The runtime (<code>PYRT.UNO</code>) executes your file top to bottom, looks up <code>app</code>,
+and binds whichever of the six callbacks you defined. There is no event loop to write and no <code>main()</code>:
+the desktop calls you.</p>
+<pre><code>import uno
+
+class MyApp(uno.App):
+
+    def build(self, cv):        # once, when the window opens
+        self.w, self.h = cv.width(), cv.height()
+
+    def draw(self, cv):         # every repaint
+        cv.clear(uno.rgb(16, 18, 34))
+        cv.text(8, 8, &quot;hello&quot;, uno.rgb(214, 218, 232))
+
+    def tick(self):             # ~60 times a second
+        return False            # nothing changed - let the shell sleep
+
+    def key(self, uni, scan, ctrl):
+        return False            # not ours - let the shell have it
+
+app = MyApp()                   # the runtime looks for this exact name</code></pre>
+<div class="note"><b>Bound at load</b>The binding happens once, at load. Adding or swapping a method on the instance afterwards has no effect, and if the name <code>app</code> is missing the run fails with <i>No `app` object. Define: app = MyApp()</i> in Studio's output pane.</div>
+
+<h3 id="callbacks">Callbacks</h3>
+<div class="tw"><table>
+<thead><tr><th>Callback</th><th>When it runs</th><th>Return</th></tr></thead>
+<tbody>
+<tr><td><code>build(self, cv)</code></td><td>Once, when the window opens. The canvas is already valid, so
+<code>cv.width()</code>/<code>cv.height()</code> give your drawable size - read them here, never hardcode
+a size (the shell picks your window).</td><td>ignored</td></tr>
+<tr><td><code>draw(self, cv)</code></td><td>Every repaint.</td><td>ignored</td></tr>
+<tr><td><code>tick(self)</code></td><td>~60 times a second while the app is open.</td><td><code>None</code>
+(or nothing) repaints; an explicit falsey value such as <code>False</code> <b>skips the repaint</b> - the
+idle idiom below.</td></tr>
+<tr><td><code>key(self, uni, scan, ctrl)</code></td><td>A key was pressed while your window is focused.
+<code>uni</code> is the character's codepoint (0 if none), <code>scan</code> the special-key code (0 if none),
+<code>ctrl</code> nonzero while Ctrl is held. Exactly one of <code>uni</code>/<code>scan</code> is nonzero
+per event.</td><td>truthy = you consumed it</td></tr>
+<tr><td><code>action(self, id)</code></td><td>A toolkit widget action (only relevant to apps hosted with
+widgets).</td><td>truthy = consumed</td></tr>
+<tr><td><code>opened(self)</code> / <code>closed(self)</code></td><td>The window was shown / is closing.
+Only bound if they exist at load.</td><td>ignored</td></tr>
+</tbody>
+</table></div>
+
+<h3 id="keys">Key codes</h3>
+<div class="tw"><table>
+<thead><tr><th>Key</th><th><code>scan</code></th><th><code>uni</code></th></tr></thead>
+<tbody>
+<tr><td>Up / Down / Right / Left</td><td>1 / 2 / 3 / 4</td><td>0</td></tr>
+<tr><td>Delete (forward)</td><td>8</td><td>0</td></tr>
+<tr><td>F1..F12</td><td>0x0B..0x16</td><td>0</td></tr>
+<tr><td>Esc</td><td>0x17</td><td>0</td></tr>
+<tr><td>Enter / Backspace / Tab / Space</td><td>0</td><td>13 / 8 / 9 / 32</td></tr>
+<tr><td>Letters, digits, symbols</td><td>0</td><td>the ASCII code, shift-aware</td></tr>
+</tbody>
+</table></div>
+<p class="muted">Keys the shell owns never reach you: Ctrl+Esc, Alt+Tab, Ctrl+W, Ctrl+M, Ctrl+Tab, F2,
+Alt+arrows, and Esc while a popup or fullscreen app is up.</p>
+
+<h3 id="idle">The idle idiom</h3>
+<p>An app that returns <code>None</code> from <code>tick()</code> repaints sixty times a second whether anything
+changed or not. A static app should keep a dirty flag instead:</p>
+<pre><code>def key(self, uni, scan, ctrl):
+    ...change something...
+    self.dirty = True
+    return True
+
+def tick(self):
+    if self.dirty:
+        self.dirty = False
+        return None                 # repaint this frame
+    return False                    # idle - skip the repaint</code></pre>
+
+<h2 id="canvas">Canvas</h2>
+<p>The drawing surface handed to <code>build</code> and <code>draw</code>. Coordinates are canvas-relative -
+(0,&nbsp;0) is the top-left of your content area, below the title bar - and draws are clipped to your window.
+All coordinates must be <code>int</code>s: pass <code>int(x)</code> if you animate with floats, or the call
+raises <code>TypeError</code>.</p>
+<div class="tw"><table>
+<thead><tr><th>Method</th><th>Effect</th></tr></thead>
+<tbody>
+<tr><td><code>cv.width()</code> / <code>cv.height()</code></td><td>Drawable size in pixels. Read it every
+draw if you want live resize behaviour.</td></tr>
+<tr><td><code>cv.clear(color)</code></td><td>Fill the whole canvas.</td></tr>
+<tr><td><code>cv.fill_rect(x, y, w, h, color)</code></td><td>Filled rectangle.</td></tr>
+<tr><td><code>cv.rect(x, y, w, h, color)</code></td><td>1-pixel outline.</td></tr>
+<tr><td><code>cv.pixel(x, y, color)</code></td><td>One pixel.</td></tr>
+<tr><td><code>cv.hline(x, y, w, color)</code> / <code>cv.vline(x, y, h, color)</code></td><td>Horizontal /
+vertical line.</td></tr>
+<tr><td><code>cv.text(x, y, s, color)</code></td><td>Draw a string, transparent background.</td></tr>
+</tbody>
+</table></div>
+<p class="muted">The remaining Canvas methods (<code>wall_col</code>, <code>wall_span</code>,
+<code>mask_span</code>, <code>flat_span</code>, <code>duum_frame</code>, <code>seg_cols</code>) are the
+textured-column fast paths built for Duum's renderer; their exact contracts are in
+<code>SDK\uno.pyi</code>.</p>
+
+<h2 id="colours">uno.rgb</h2>
+<p><b><code>uno.rgb(r, g, b) -&gt; int</code></b> packs three 0-255 channels into the colour value every
+drawing call takes. Build your palette once at module level, not per frame.</p>
+<pre><code>RED = uno.rgb(255, 96, 96)      # channels are 0-255, masked &amp; 0xFF
+cv.fill_rect(10, 10, 40, 40, RED)</code></pre>
+
+<h2 id="time">Time and held keys</h2>
+<p><b><code>uno.ticks() -&gt; int</code></b> - the Toolbox tick counter. Honesty first: this is a
+<i>call counter</i> shared with every C app (it advances once per call, from anywhere), so treat it as
+frame pacing only - call it exactly once per <code>tick()</code> and use deltas - or skip it and count
+your own <code>tick()</code> invocations. For real time, use <b><code>unoauto.uptime()</code></b>:
+milliseconds since boot, ungated in every build - the clock the automation samples pace on.</p>
+<pre><code>import uno, unoauto
+
+def build(self, cv):
+    self.frames = 0                     # your own frame counter...
+    self.t0 = unoauto.uptime()          # ...and the real clock, in ms
+
+def tick(self):
+    self.frames += 1                    # ~60/s: fine for animation pacing
+    elapsed_s = (unoauto.uptime() - self.t0) // 1000   # honest seconds</code></pre>
+<p><b><code>uno.keys_down() -&gt; int</code></b> - the navigation/action keys held <i>right now</i>, as a
+bitmask: 1 Up, 2 Down, 4 Right, 8 Left, 16 fire (F or Ctrl), 32 use (Space/E), 64 comma, 128 period.
+For movement, polling this beats buffering <code>key()</code> events.</p>
+<pre><code>held = uno.keys_down()
+if held &amp; 1:  self.y -= 2           # Up is held right now
+if held &amp; 4:  self.x += 2           # Right
+# 0 on the firmware input path (no key-up events there):
+# fall back to timing out your own key() events, like Duum does.</code></pre>
+
+<h2 id="sound">Sound</h2>
+<p><b><code>uno.beep(midi, ticks)</code></b> plays a square-wave note at a MIDI pitch (60 = middle C,
+69 = A440) for <code>ticks</code> sixtieths of a second; <b><code>uno.quiet()</code></b> stops it. These two
+always work, on any machine.</p>
+<pre><code>uno.beep(69, 30)                    # A440 for half a second
+uno.quiet()                         # cut it short</code></pre>
+<p>The sampled-audio calls need a DAC (HD&nbsp;Audio or AC'97) and <b>raise <code>OSError</code></b> when the
+machine has none - always wrap them and fall back to <code>beep</code>:</p>
+<div class="tw"><table>
+<thead><tr><th>Call</th><th>Effect</th></tr></thead>
+<tbody>
+<tr><td><code>uno.sfx_load(slot, pcm, rate) -&gt; bool</code></td><td>Load unsigned 8-bit mono PCM into an
+effect slot.</td></tr>
+<tr><td><code>uno.sfx_play(slot, vol, sep) -&gt; bool</code></td><td>Play a loaded slot: volume 0-255, stereo
+position 0 left / 128 centre / 255 right. <code>False</code> means that one play didn't start.</td></tr>
+<tr><td><code>uno.mus_play(smf, loop=0) -&gt; bool</code></td><td>Play a standard MIDI file from bytes.</td></tr>
+<tr><td><code>uno.mus_stop()</code></td><td>Stop music.</td></tr>
+</tbody>
+</table></div>
+<pre><code>try:
+    ok = uno.sfx_load(0, pcm_bytes, 11025)   # slot, 8-bit PCM, rate
+    uno.sfx_play(0, 200, 128)                # slot, volume 0-255, pan 0/128/255
+    uno.mus_play(smf_bytes)                  # standard MIDI file; loop=1 repeats
+except OSError:                              # no DAC on this machine
+    uno.beep(60, 10)                         # the square wave always works</code></pre>
+
+<h2 id="files">Files</h2>
+<p>Volumes are numbered; <b>0 is the boot volume</b> and the one-argument forms default to it. Names are
+8.3 on FAT volumes and case-insensitive. There is no <code>listdir</code> and no file objects - the API is
+whole-file and offset reads, which is what a small app actually needs.</p>
+<div class="tw"><table>
+<thead><tr><th>Call</th><th>Returns</th><th>Remarks</th></tr></thead>
+<tbody>
+<tr><td><code>uno.read(name)</code> / <code>uno.read(vol, name)</code></td><td><code>bytes</code>, or
+<code>None</code> if the file does not exist</td><td>Reads the whole file - fine for documents, wrong for a
+4&nbsp;MB WAD (stream those with <code>read_at</code>).</td></tr>
+<tr><td><code>uno.read_at(vol, name, off, n)</code></td><td><code>bytes</code></td><td>Reads <code>n</code>
+bytes at offset <code>off</code>. <code>vol</code> is required here.</td></tr>
+<tr><td><code>uno.size(name)</code> / <code>uno.size(vol, name)</code></td><td><code>int</code>, -1 if
+missing</td><td>The cheap existence test.</td></tr>
+<tr><td><code>uno.write(name, data)</code> / <code>uno.write(vol, name, data)</code></td><td><code>bool</code></td>
+<td><code>False</code> on a read-only volume - surface that state to the user, don't swallow it.</td></tr>
+<tr><td><code>uno.mkdir(path)</code> / <code>uno.mkdir(vol, path)</code></td><td><code>bool</code></td>
+<td>One level at a time; the parent must exist.</td></tr>
+</tbody>
+</table></div>
+<pre><code>data = uno.read(&quot;NOTES.TXT&quot;)        # the boot volume; None if missing
+big  = uno.read(1, &quot;DATA.BIN&quot;)      # an explicit volume index
+
+# stream a large file instead of loading it whole:
+hdr = uno.read_at(0, &quot;GAME.WAD&quot;, 0, 12)     # vol, name, offset, length
+
+n = uno.size(&quot;NOTES.TXT&quot;)           # -1 if it does not exist</code></pre>
+<pre><code>ok = uno.write(&quot;SCORES.TXT&quot;, text.encode())
+if not ok:
+    ...                             # read-only volume - tell the user
+
+uno.mkdir(&quot;SAVES&quot;)                  # one level; the parent must exist
+uno.write(&quot;SAVES/SLOT1.DAT&quot;, blob)</code></pre>
+
+<h2 id="prefs">Preferences and key bindings</h2>
+<p>Small per-app settings without inventing a file format:
+<b><code>uno.pref_get(name) -&gt; str|None</code></b> and <b><code>uno.pref_set(name, value) -&gt; bool</code></b>
+persist strings (values capped at 32 bytes) in the shell's preference store.
+<b><code>uno.bind_name(action)</code></b>, <b><code>uno.bind_set(action, uni, scan)</code></b> and
+<b><code>uno.bind_reset()</code></b> read and remap the shared game-action key bindings.</p>
+<pre><code>name = uno.pref_get(&quot;player&quot;) or &quot;YOU&quot;   # None on first run
+uno.pref_set(&quot;player&quot;, name)             # values are capped at 32 bytes</code></pre>
+
+<h2 id="syslog">The system log</h2>
+<p><b><code>uno.log(sev, fac, text)</code></b> writes a line to the system log (severities follow syslog;
+<code>fac</code> is a numeric facility - apps are 6). The viewer app, the log file sink and the remote link all see it -
+prefer this to inventing your own trace file. The reading half
+(<code>log_read</code>/<code>log_span</code>/<code>log_stat</code>/...) is documented in
+<code>SDK\uno.pyi</code>.</p>
+<pre><code>uno.log(6, 6, &quot;level loaded&quot;)   # severity, facility, text - both ints
+# severities follow syslog: 3 err, 4 warning, 5 notice, 6 info, 7 debug.
+# facilities: 0 kernel, 1 net, 2 storage, 3 browser, 4 ui, 5 security,
+# 6 app (yours), 7 remote.  Read it back in the System Log viewer.</code></pre>
+
+<h2 id="introspection">Hardware introspection</h2>
+<p><b><code>uno.devices() -&gt; str</code></b> and <b><code>uno.pci() -&gt; list</code></b> expose the device
+tree (location, IDs, class, claiming driver) - the same data the <code>devices</code> remote verb reports.
+Read-only.</p>
+
+<h2 id="limits">Language and library limits</h2>
+<p>The runtime is MicroPython at its core feature level, plus the modules above. What that means in
+practice:</p>
+<div class="tw"><table>
+<thead><tr><th>You have</th><th>You don't have</th></tr></thead>
+<tbody>
+<tr><td>classes, generators, comprehensions, <code>set</code>, <code>bytearray</code>, big ints, floats
+(single precision), <code>%</code> and <code>.format()</code> formatting, walrus, <code>async</code>/<code>await</code></td>
+<td>f-strings, <code>frozenset</code>, <code>memoryview</code>, <code>__del__</code>, reverse special
+methods, <code>NotImplemented</code></td></tr>
+<tr><td><code>math</code>, <code>struct</code>, <code>array</code>, <code>collections</code>
+(namedtuple), <code>sys</code>, <code>gc</code>, <code>micropython</code></td>
+<td><code>time</code>, <code>random</code>, <code>json</code>, <code>os</code>, <code>io</code>,
+<code>re</code>, <code>typing</code> - and <code>math.pi</code> (write <code>3.14159265</code>)</td></tr>
+<tr><td>one <code>.py</code> file up to 192&nbsp;KB, a 16&nbsp;MB heap, an 8&nbsp;KB
+<code>print()</code> buffer shown in Studio</td>
+<td>importing a second <code>.py</code> file, threads, and the <code>@micropython.native</code>/<code>viper</code>
+decorators (they fault on real hardware - never use them)</td></tr>
+</tbody>
+</table></div>
+
+<h2 id="unoauto-ref">unoauto: drive the machine</h2>
+<p><code>import unoauto</code> is the automation half of <a href="dev-remote.html">unoautomate</a>, available
+to any Python app <b>in every build</b>: each call checks the caller's privilege and, when the capability is
+absent, returns its inert value (<code>False</code>, <code>[]</code>, <code>None</code>) instead of raising -
+so the same script degrades gracefully on a machine that trusts it less. <code>uptime()</code> and
+<code>deadline_left()</code> are ungated.</p>
+<div class="tw"><table>
+<thead><tr><th>Function</th><th>Needs</th><th>Returns / effect</th></tr></thead>
+<tbody>
+<tr><td><code>available()</code></td><td>observe</td><td><code>True</code> when observation is granted.</td></tr>
+<tr><td><code>log(text)</code></td><td>observe</td><td>Emit on the script log channel (streams to the dev PC).</td></tr>
+<tr><td><code>probe()</code></td><td>observe</td><td>System snapshot: <code>(name, kind, state, v1, v2)</code>
+rows - kind 0 module, 1 window, 2 subsystem.</td></tr>
+<tr><td><code>key(scan, uni, ctrl=0)</code></td><td>drive</td><td>Inject a key. <b>Argument order is
+scan-first</b> - the mirror image of the <code>key()</code> callback. Lands on the <i>next</i> frame.</td></tr>
+<tr><td><code>pointer(x, y, btn)</code></td><td>drive</td><td>Inject a pointer event (btn 1 press, 0 release).</td></tr>
+<tr><td><code>apps()</code> / <code>launch(i)</code> / <code>close_top()</code></td><td>drive</td>
+<td>Count, open, close apps. <b>Never <code>close_top()</code> your own window</b> from an automation
+script.</td></tr>
+<tr><td><code>uptime()</code></td><td>-</td><td>Milliseconds since boot. Pace scripts on this.</td></tr>
+<tr><td><code>deadline_left()</code></td><td>-</td><td>ms left in the current test budget, -1 if none.</td></tr>
+<tr><td><code>poweroff()</code></td><td>system</td><td>Shut down (unattended runs end themselves).</td></tr>
+<tr><td><code>remote_active()</code> / <code>remote_send(s)</code> / <code>remote_recv()</code> /
+<code>remote_stop()</code></td><td>observe/system</td><td>Talk to the dev PC over the URC link.</td></tr>
+</tbody>
+</table></div>
+<p>The load-bearing pattern - actions land on the <b>next</b> shell frame, so run your steps from a generator
+and <code>yield</code> between step and check:</p>
+<pre><code>import uno, unoauto
+
+class Bot(uno.App):
+    def build(self, cv):
+        self.steps = self.script()
+        self.until = 0
+
+    def script(self):
+        unoauto.key(0x17, 0, 1)     # Ctrl+Esc: open the Start menu...
+        yield 30                    # ...which lands on the NEXT frame
+        unoauto.key(0, 13)          # Enter
+        yield 30
+        wins = [r[0] for r in unoauto.probe() if r[1] == 1]
+        unoauto.log(&quot;open now: %s&quot; % &quot;, &quot;.join(wins))
+
+    def tick(self):
+        if self.steps is None:
+            return False
+        now = unoauto.uptime()
+        if now &gt;= self.until:
+            try:
+                self.until = now + next(self.steps)
+            except StopIteration:
+                self.steps = None
+
+app = Bot()</code></pre>
+
+<h2 id="unoscript-ref">unoscript: the permission-gated OS surface</h2>
+<p><code>import unoscript</code> is the production automation surface: UI, apps, files, processes, memory,
+ports and power, each call gated by a capability tier (0 ambient, 1 user, 2 admin, 3 kernel). Denied calls
+raise <code>OSError</code>; <code>request()</code> asks for a grant (consent sheet, role, or signed manifest)
+and answers <code>False</code> rather than raising. The model, the manifest story and the full catalog are on
+<a href="dev-remote.html#unoscript">Remote control &amp; automation</a>.</p>
+<div class="tw"><table>
+<thead><tr><th>Call</th><th>Tier</th><th>Effect</th></tr></thead>
+<tbody>
+<tr><td><code>available()</code> / <code>whoami()</code> / <code>secured()</code></td><td>-</td>
+<td>Presence, acting uid (0xFFFFFFFF when nobody is signed in), whether the real adjudicator is in.</td></tr>
+<tr><td><code>cap_tier(name)</code> / <code>request(name[, scope[, ttl]])</code></td><td>-</td>
+<td>Look up a capability's tier; ask for it.</td></tr>
+<tr><td><code>ui.click(x, y[, btn])</code> / <code>ui.move(x, y)</code> / <code>ui.key(scan[, uni[, mods]])</code></td>
+<td>0</td><td>Synthetic input on the real device path.</td></tr>
+<tr><td><code>ui.screen()</code></td><td>0</td><td>The window tree as text, focused window marked.</td></tr>
+<tr><td><code>ui.clip_get()</code> / <code>ui.clip_set(s)</code></td><td>0 / 1</td><td>Clipboard.</td></tr>
+<tr><td><code>app.count()</code> / <code>app.launch(i)</code> / <code>app.close_top()</code> /
+<code>app.message(i, verb)</code></td><td>0 / 1</td><td>App control; <code>verb</code> is
+<code>"info"</code>, <code>"focus"</code> or <code>"close"</code>.</td></tr>
+<tr><td><code>fs.read(path)</code> / <code>fs.write(path, data)</code></td><td>1 / 2</td>
+<td>A bare relative path is <b>your home</b> (<code>USERS\&lt;uid&gt;\...</code>, parents auto-created,
+reads capped at 4&nbsp;KB); an absolute <code>/label/rest</code> names a volume and is tier 2.
+<code>..</code> is rejected.</td></tr>
+<tr><td><code>proc.list()</code></td><td>2</td><td><code>(pid, tid, state, name, owner)</code> rows;
+state bit 0 = focused.</td></tr>
+<tr><td><code>mem.read/write</code>, <code>io.in_/out</code></td><td>2-3</td><td>Raw memory and port I/O;
+always audited.</td></tr>
+<tr><td><code>sys.power(n)</code></td><td>2</td><td>0 shutdown, 1 reboot.</td></tr>
+</tbody>
+</table></div>
+<pre><code>import unoscript as u
+
+u.cap_tier(&quot;power&quot;)                  # -&gt; 2: needs an explicit grant
+if u.request(&quot;power&quot;):               # consent sheet, role, or manifest
+    u.sys.power(0)                   # clean shutdown
+
+u.fs.write(&quot;notes/todo.txt&quot;, b&quot;buy milk&quot;)   # tier 1: USERS/&lt;uid&gt;/notes/...
+print(u.fs.read(&quot;notes/todo.txt&quot;))          # b&#x27;buy milk&#x27;  (4 KB read cap)
+
+for pid, tid, state, name, owner in u.proc.list():   # tier 2
+    print(pid, name, &quot;focused&quot; if state &amp; 1 else &quot;&quot;)</code></pre>
+
+<p class="kv">Worked examples: <a href="dev-samples.html">the sample programs</a>. The app model:
+<a href="dev-python.html">Python apps</a>. The permission model and unattended grants:
+<a href="dev-remote.html">Remote control &amp; automation</a>.</p>
+
+<nav class="pagenav"><a href="dev-sdk-c.html">&lsaquo; UnoC SDK reference</a><a class="nxt" href="dev-api.html">API reference &rsaquo;</a></nav>
+</div></main>
+</div>
+</body>
+</html>

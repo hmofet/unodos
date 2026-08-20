@@ -1,0 +1,482 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>UnoC SDK reference · UnoDOS pc64 manual</title>
+<meta name="description" content="User manual for UnoDOS pc64, the x86-64/UEFI world of the UnoDOS operating-system family.">
+<link rel="stylesheet" href="assets/style.css">
+
+<script>
+(function(){
+  var r=document.documentElement, k='unodos-doc-theme';
+  try{var s=localStorage.getItem(k); if(s)r.setAttribute('data-theme',s);}catch(e){}
+  window.__t=function(){
+    var cur=r.getAttribute('data-theme');
+    if(!cur){cur=matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';}
+    var nx=cur==='dark'?'light':'dark';
+    r.setAttribute('data-theme',nx);
+    try{localStorage.setItem(k,nx);}catch(e){}
+  };
+})();
+</script>
+<script>
+/* Lightbox: click (or Enter/Space on) a screenshot to see it full size.
+   Manual shots are scaled into the text column, where fine UI detail - a
+   status line, an icon, a menu entry - is too small to read. Built once at
+   load and reused; Esc or a click anywhere closes it. */
+(function(){
+  var lb,img,cap;
+  function build(){
+    lb=document.createElement('div'); lb.id='lb'; lb.setAttribute('role','dialog');
+    lb.setAttribute('aria-modal','true');
+    img=document.createElement('img');
+    cap=document.createElement('figcaption');
+    var x=document.createElement('button');
+    x.className='x'; x.innerHTML='&times;'; x.setAttribute('aria-label','Close');
+    lb.appendChild(x); lb.appendChild(img); lb.appendChild(cap);
+    document.body.appendChild(lb);
+    lb.addEventListener('click', close);
+  }
+  function open(src, text){
+    if(!lb) build();
+    img.src=src; img.alt=text||''; cap.textContent=text||'';
+    lb.classList.add('on'); document.body.style.overflow='hidden';
+  }
+  function close(){
+    if(!lb) return;
+    lb.classList.remove('on'); img.src=''; document.body.style.overflow='';
+  }
+  document.addEventListener('click', function(e){
+    var b=e.target.closest && e.target.closest('button.zoom');
+    if(!b) return;
+    e.preventDefault();
+    var f=b.parentNode.querySelector('figcaption');
+    open(b.getAttribute('data-full'), f?f.textContent:'');
+  });
+  document.addEventListener('keydown', function(e){
+    if(e.key==='Escape') close();
+  });
+})();
+</script>
+
+</head>
+<body>
+<input type="checkbox" id="mnav">
+<div class="topbar">
+  <label class="menu-btn" for="mnav">☰ Menu</label>
+  <b>UnoDOS pc64</b>
+</div>
+<div class="layout">
+
+<aside class="sidebar">
+  <a class="brand" href="index.html" style="text-decoration:none;color:inherit">
+    <span class="logo"><i></i><i></i><i></i><i></i></span>
+    <span><b>UnoDOS <span style="color:var(--accent-2)">pc64</span></b><span class="sub">User manual</span></span>
+  </a>
+  <ul class="nav"><li><a class="" href="index.html">Overview</a></li><li><a class="" href="try-browser.html">Try it in your browser</a></li><li><a class="" href="getting-started.html">Getting started</a></li><li><a class="" href="desktop.html">The desktop</a></li><li><a class="" href="windows.html">Windows &amp; desktops</a></li><li><a class="" href="appearance.html">Themes &amp; appearance</a></li><li><a class="" href="apps.html">Applications</a></li><li><a class="" href="office.html">UnoOffice</a></li><li><a class="" href="browser.html">Web browser</a></li><li><a class="" href="ssh.html">SSH client</a></li><li><a class="" href="networking.html">Networking</a></li><li><a class="" href="logging.html">System log</a></li><li><a class="" href="appliances.html">Appliances</a></li><li><a class="" href="ports.html">The UnoDOS family</a></li><li class="sec">Developer</li><li><a class="" href="developer.html">Overview &amp; architecture</a></li><li><a class="" href="studio.html">Studio: the built-in IDE</a></li><li><a class="" href="dev-apps.html">Writing apps</a></li><li><a class="" href="dev-python.html">Python apps</a></li><li><a class="" href="dev-samples.html">Sample programs</a></li><li><a class="active" href="dev-sdk-c.html">UnoC SDK reference</a></li><li><a class="" href="dev-sdk-python.html">Python SDK reference</a></li><li><a class="" href="dev-api.html">API reference</a></li><li><a class="" href="dev-build.html">Building &amp; tooling</a></li><li><a class="" href="dev-remote.html">Remote control &amp; automation</a></li></ul>
+  <div class="side-foot">
+    <a href="https://github.com/hmofet/unodos" target="_blank" rel="noopener">GitHub&nbsp;&rsaquo; hmofet/unodos</a><br>
+    <a href="#" onclick="__t();return false">Toggle light / dark</a>
+  </div>
+</aside>
+<main class="main"><div class="wrap">
+
+<h1>UnoC SDK reference</h1>
+<p class="lede">Every call a UnoC app can make, with parameters, return values, remarks and a working
+snippet for each. <code>SDK\UNO.H</code> is the whole SDK - the one header you include - and Studio's
+compiler checks every call against the kernel's export table at build time, so an unavailable function
+is a compile error with a line number, never a mystery crash. The app model is on
+<a href="dev-apps.html">Writing apps</a>; the language subset is summarised at the end.</p>
+
+<h2 id="entry">The entry point and the vtable</h2>
+<p>An app defines exactly one entry, <code>uno_app_main</code>, stashes the <code>KernelApi</code>
+pointer in <code>gK</code> (the UNO.H prelude macros expand through it), and returns an
+<code>AppInterface</code>:</p>
+<pre><code>#include &quot;UNO.H&quot;
+
+static void my_draw(UnoWin *w) { ... }
+
+static const AppInterface kIface = {
+    my_draw,   /* draw   - required */
+    my_key,    /* key    - or 0     */
+    0,         /* click  - or 0     */
+    my_tick,   /* tick   - or 0     */
+    my_opened, /* opened - or 0     */
+    my_closed, /* closed - or 0     */
+    &quot;My App&quot;,  { 40, 40, 360, 240 } /* title; l,t,r,b (only w x h used) */
+};
+
+const AppInterface *uno_app_main(const KernelApi *k)
+{
+    gK = k;          /* the UNO.H prelude macros expand through this */
+    return &amp;kIface;
+}</code></pre>
+<div class="tw"><table>
+<thead><tr><th>Member</th><th>Contract</th></tr></thead>
+<tbody>
+<tr><td><code>void draw(UnoWin *w)</code></td><td><b>Required</b> - the load is refused without it.
+Called once per repaint of the whole scene, in z-order, even when your window is occluded; not called
+when closed or on another virtual desktop. The canvas is <b>not</b> cleared for you - paint everything
+you own. <code>w-&gt;bounds</code> is in absolute screen pixels; content starts at
+<code>bounds.top + TBAR_H</code> (18&nbsp;px).</td></tr>
+<tr><td><code>Boolean key(char ch, short code, Boolean cmd)</code></td><td>Focused window only. Printable
+ASCII (32..126) arrives in <code>ch</code> with <code>code</code> 0. Exactly six special keys are
+delivered: arrows (<code>ch</code> 0x1C left, 0x1D right, 0x1E up, 0x1F down, with <code>code</code>
+0x7B-0x7E), Enter (0x0D) and Backspace (0x08). Esc, Tab, Delete, Home/End and the function keys never
+reach an app. <code>cmd</code> is the Ctrl flag <i>for those six keys only</i> - printable characters
+always arrive with <code>cmd == false</code>, so Ctrl-letter accelerators are not receivable. Return
+<code>true</code> to consume (which also marks the screen dirty).</td></tr>
+<tr><td><code>void click(UnoWin *w, Point p)</code></td><td>Left-button <b>press only</b> - no release,
+no motion, no right button. <code>p</code> is in <b>screen</b> pixels, not window pixels (see below).
+Only clicks inside your canvas arrive; the title bar belongs to the shell. A delivered click always
+triggers a repaint.</td></tr>
+<tr><td><code>void tick(void)</code></td><td>Once per shell frame while the app is open - focused or
+not - nominally 60/s, slower under load. <b>Does not repaint</b>: call <code>repaint_all()</code>
+yourself when something visible changed.</td></tr>
+<tr><td><code>void opened(void)</code> / <code>void closed(void)</code></td><td><code>opened</code> runs
+once per Run, right after <code>uno_app_main</code>. Closing the window calls <code>closed()</code> but
+keeps the module resident; the next Run replaces it wholesale and re-zeroes all globals, so every
+<code>opened()</code> starts from pristine state. <b>Nothing is cleaned up for you on close</b> - stop
+your music and free your memory in <code>closed()</code>.</td></tr>
+<tr><td><code>const char *win_title</code></td><td>Window title, taskbar chip and launcher label. The
+pointer is borrowed - use a string literal. NULL falls back to "My App".</td></tr>
+<tr><td><code>short win_rect[4]</code></td><td><code>{left, top, right, bottom}</code> - <b>only the
+width and height are used</b>; the shell places the window itself. Height includes the 18&nbsp;px title
+bar you never draw, so the canvas is <code>w x (h-18)</code>. Minimum window 140x100; the window is not
+resizable.</td></tr>
+</tbody>
+</table></div>
+<div class="note warn"><b>You are the kernel</b>There is no memory protection: your app runs at kernel privilege in the kernel's address space. A wild pointer or an out-of-range palette index doesn't crash your app, it crashes <i>the machine</i> (a debug build prints a register dump and writes a crash report first; a production build simply resets). Treat every call here as a kernel call.</div>
+
+<h2 id="coords">Coordinates and the window</h2>
+<pre><code>static void my_draw(UnoWin *w)
+{
+    /* your content area starts below the title bar the shell draws */
+    short x0 = w-&gt;bounds.left;
+    short y0 = w-&gt;bounds.top + TBAR_H;
+    short cw = w-&gt;bounds.right - w-&gt;bounds.left;          /* canvas width  */
+    short ch = w-&gt;bounds.bottom - (w-&gt;bounds.top + TBAR_H); /* canvas height */
+    ...
+}</code></pre>
+<p>All drawing is clipped to your canvas - with two exceptions noted below. Rects are half-open:
+<code>SetRect(&amp;r, 0, 0, 10, 10)</code> covers pixels 0..9. An inverted or empty rect draws
+nothing.</p>
+
+<h2 id="drawing">Drawing</h2>
+<h3><code>void uno_fill(Rect *r, short c)</code> / <code>void uno_box(Rect *r, short c)</code> /
+<code>void uno_invert(Rect *r)</code></h3>
+<div class="tw"><table>
+<thead><tr><th>Parameter</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td><code>r</code></td><td>The rectangle, screen coordinates, half-open.</td></tr>
+<tr><td><code>c</code></td><td>A palette index: <code>C_BLUE</code>(0) <code>C_CYAN</code>(1)
+<code>C_MAG</code>(2) <code>C_WHITE</code>(3). <b>Not bounds-checked</b> - anything else reads past a
+4-entry table.</td></tr>
+</tbody>
+</table></div>
+<p><b>Remarks.</b> <code>uno_fill</code> fills, <code>uno_box</code> draws a 1-pixel outline,
+<code>uno_invert</code> XORs the pixels (colour channels only). All three are clipped to your canvas
+and treat an empty rect as a no-op. The fill and box honour the global pen mode - after
+<code>PenMode(patXor)</code> they invert instead of painting - and both leave the global fore colour
+set to black on return.</p>
+<pre><code>Rect r;
+SetRect(&amp;r, x0, y0, x0 + 100, y0 + 40);   /* half-open: [l,r) x [t,b) */
+uno_fill(&amp;r, C_BLUE);                     /* palette fill              */
+uno_box(&amp;r, C_WHITE);                     /* 1px outline               */
+uno_invert(&amp;r);                           /* XOR the pixels            */</code></pre>
+
+<h3><code>void fill_rgb(Rect *q, const GameRGB *c)</code></h3>
+<p>True-colour fill: <code>GameRGB</code> carries 0-255 <code>r,g,b</code> and a <code>mono</code>
+palette fallback used by the 1-bit ports (ignored on pc64 - set it to the nearest <code>C_*</code> so
+the same source works everywhere). Clipped; empty rect is a no-op; leaves fore colour black.</p>
+<pre><code>static const GameRGB kGold = { 240, 200, 40, C_WHITE };
+/* r, g, b are 0-255; .mono is the palette fallback for 1-bit ports -
+ * unused on pc64, but fill it in for portability */
+Rect q;
+SetRect(&amp;q, x0, y0, x0 + 32, y0 + 32);
+fill_rgb(&amp;q, &amp;kGold);</code></pre>
+
+<h3><code>void text_at(short x, short y, const char *s, short fg, short bg, Boolean opaque)</code></h3>
+<div class="tw"><table>
+<thead><tr><th>Parameter</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td><code>x, y</code></td><td>Screen coordinates. <code>y</code> is neither the cell top nor the
+baseline: with the default font the 16-px text cell occupies roughly <code>[y-7, y+9)</code> and the
+baseline lands at <code>y+5</code>. Space rows at least 16&nbsp;px apart (the samples use 18).</td></tr>
+<tr><td><code>fg, bg</code></td><td>Palette indices 0..3, unchecked. <code>bg</code> is used <b>only</b>
+when <code>opaque</code> is true.</td></tr>
+<tr><td><code>opaque</code></td><td><code>false</code>: only glyph pixels are written.
+<code>true</code>: each character's advance cell is filled with <code>bg</code> first.</td></tr>
+</tbody>
+</table></div>
+<p><b>Remarks.</b> The default face is a proportional Chicago-style TrueType at 15&nbsp;px - <b>there is
+no fixed character width</b>, and the user can change both the face and the UI scale in the Control
+Panel (at 150% your hardcoded layout <i>will</i> collide). Measure with <code>TextWidth</code> (exported;
+declare <code>short TextWidth(Ptr, short, short);</code> yourself) or bound with <code>text_at_max</code>.
+Glyphs cover ASCII 32..126; anything else draws as a blank advance. Clipped to the canvas. On return the
+global text state is reset (fore black, back white, mode transparent).</p>
+
+<h3><code>void text_at_max(short x, short y, const char *s, short fg, short maxw)</code></h3>
+<p>As <code>text_at</code> (always transparent), but drops trailing characters until the run fits in
+<code>maxw</code> pixels - a hard cut, no ellipsis. If not even one character fits, nothing is drawn.</p>
+<pre><code>text_at(x0, y, &quot;Score:&quot;, C_CYAN, C_BLUE, false);   /* transparent  */
+text_at(x0, y, &quot;MENU&quot;,  C_WHITE, C_MAG, true);     /* opaque cell  */
+text_at_max(x0, y, longname, C_WHITE, 120);        /* hard-cut at 120 px */</code></pre>
+
+<h3 id="toolbox">Toolbox shapes: <code>PaintRect FrameRect InvertRect PaintOval FrameOval MoveTo
+LineTo</code></h3>
+<p>The classic QuickDraw slice. All paint with the <b>global fore colour</b> - set it with
+<code>RGBForeColor(&amp;kPalette[C_CYAN])</code> or any <code>RGBColor</code> immediately before
+drawing, because <b>every <code>uno_*</code>/<code>text_at</code>/<code>fill_rgb</code> call resets it
+to black</b>. <code>PenMode</code> supports exactly two behaviours: <code>patXor</code>/<code>srcXor</code>
+invert, everything else copies. <code>PenNormal()</code> resets size and mode (not colour).
+<code>MoveTo</code> positions the pen; <code>LineTo</code> draws from the pen and moves it, so calls
+chain into a polyline.</p>
+<div class="note warn"><b>Ovals and lines are not clipped</b><code>PaintOval</code>, <code>FrameOval</code> and <code>MoveTo</code>/<code>LineTo</code> bypass the canvas clip: with coordinates outside your window they will happily paint over other windows and the taskbar. The rect and text calls are properly clipped; clip your own line and oval geometry.</div>
+
+<h2 id="geometry">Geometry</h2>
+<div class="tw"><table>
+<thead><tr><th>Call</th><th>Effect</th></tr></thead>
+<tbody>
+<tr><td><code>void SetRect(Rect *r, short l, short t, short rt, short b)</code></td><td>Pure assignment -
+does <b>not</b> normalize; an inverted rect is treated as empty by every drawing call.</td></tr>
+<tr><td><code>void OffsetRect(Rect *r, short dh, short dv)</code></td><td>Translate. 16-bit arithmetic,
+wraps silently past +/-32767.</td></tr>
+<tr><td><code>void InsetRect(Rect *r, short dh, short dv)</code></td><td>Shrink by <code>dh/dv</code> on
+each side (negative values grow). Over-insetting past the centre inverts the rect - no clamp.</td></tr>
+</tbody>
+</table></div>
+<p class="muted"><code>PtInRect</code> is deliberately absent (UnoC cannot pass a <code>Point</code> by
+value in that form) - compare <code>p.h</code>/<code>p.v</code> against the rect yourself.</p>
+
+<h2 id="numbers">Numbers to text</h2>
+<h3><code>void fmt_u(long v, char *out)</code></h3>
+<p>Unsigned decimal, no padding, NUL-terminated. <b><code>v &lt;= 0</code> prints "0"</b> - negatives are
+not rendered; format a sign yourself. <code>out</code> needs 11 bytes.</p>
+<h3><code>void put2(long v, char *out)</code></h3>
+<p>Exactly two zero-padded digits + NUL (<code>out</code> needs 3 bytes): the value modulo 100, so
+<code>123</code> prints <code>"23"</code>. <b>Never pass a negative</b> - the digits come out as
+garbage characters, not numbers.</p>
+<pre><code>char num[11];              /* fmt_u: up to 10 digits + NUL   */
+fmt_u(score, num);
+text_at(x0 + 60, y, num, C_WHITE, C_BLUE, false);
+
+char t[8];                 /* put2: &quot;MM:SS&quot; from two calls    */
+put2(secs / 60, t);  t[2] = &#x27;:&#x27;;  put2(secs % 60, t + 3);</code></pre>
+
+<h2 id="windows">Windows and repainting</h2>
+<div class="tw"><table>
+<thead><tr><th>Call</th><th>Effect</th></tr></thead>
+<tbody>
+<tr><td><code>void repaint_all(void)</code></td><td>Mark the screen dirty; the shell repaints every
+window at the end of the current frame. <b>This is the redraw call</b> - cheap, deferred, never
+re-entrant. Animation from <code>tick()</code> must call it or nothing moves.</td></tr>
+<tr><td><code>void draw_window(UnoWin *w)</code></td><td>Identical effect to <code>repaint_all()</code>
+(the argument is ignored). Kept for source compatibility with the other ports.</td></tr>
+<tr><td><code>UnoWin *find_app_window(short proc)</code></td><td>Your own window answers
+<code>find_app_window(APP_NAPPS)</code> - and only after the first paint (before that its bounds are
+zero). The <code>APP_*</code> enum values name the built-in apps; only the five shipped games/tools
+can answer, and only while open. <b>Do not use <code>APP_RUNNER</code></b>: it always returns NULL for
+a user app (older SDK examples got this wrong).</td></tr>
+<tr><td><code>void launch_app(short proc)</code></td><td>A no-op on pc64 - the shell owns
+launching.</td></tr>
+<tr><td><code>short topmost_proc(void)</code> <span class="muted">(via
+<code>gK-&gt;topmost_proc()</code>)</span></td><td>The focused <i>built-in</i> app's proc, or -1 -
+including whenever <b>your</b> window is the focused one. Of little use to a user app.</td></tr>
+</tbody>
+</table></div>
+<pre><code>static long frame;
+
+static void my_tick(void)          /* ~60/s while the app is open */
+{
+    frame++;
+    if (frame % 6) return;         /* pace: ~10 updates a second  */
+    advance_state();
+    repaint_all();                 /* deferred: painted at frame end */
+}</code></pre>
+
+<h2 id="input">Input</h2>
+<pre><code>static Boolean my_key(char ch, short code, Boolean cmd)
+{
+    if (ch == &#x27; &#x27;)    { toggle();     repaint_all(); return true; }
+    if (ch == 0x1E)   { move_up();    repaint_all(); return true; }  /* Up   */
+    if (ch == 0x1F)   { move_down();  repaint_all(); return true; }  /* Down */
+    if (ch == 0x1C)   { move_left();  repaint_all(); return true; }  /* Left */
+    if (ch == 0x1D)   { move_right(); repaint_all(); return true; }  /* Right*/
+    if (ch == 0x0D)   { confirm();    repaint_all(); return true; }  /* Enter*/
+    (void)code; (void)cmd;
+    return false;                  /* not ours */
+}</code></pre>
+<pre><code>static void my_click(UnoWin *w, Point p)
+{
+    /* p is in SCREEN pixels - convert to canvas coordinates yourself */
+    short cx = p.h - w-&gt;bounds.left;
+    short cy = p.v - (w-&gt;bounds.top + TBAR_H);
+    ...
+}</code></pre>
+<h3><code>void GetMouse(Point *p)</code> / <code>Boolean StillDown(void)</code></h3>
+<p><code>GetMouse</code> fills <code>p</code> with the pointer position in <b>screen</b> pixels
+(<code>p.h</code> horizontal, <code>p.v</code> vertical) - subtract your window origin yourself. On pc64
+it also polls the hardware and presents the frame, which is what makes a classic blocking drag loop
+track live - but it is not free, so don't spam it. <code>StillDown()</code> reports whether a button is
+held, <b>as of the last <code>GetMouse</code> call</b> - poll <code>GetMouse</code> in the loop or it
+never changes.</p>
+<pre><code>Point m;
+GetMouse(&amp;m);                      /* screen coords; also refreshes buttons */
+while (StillDown()) {              /* a classic drag loop                    */
+    GetMouse(&amp;m);                  /* GetMouse also presents the frame       */
+    track(m.h - x0, m.v - y0);
+}</code></pre>
+
+<h2 id="tickcount">Time: <code>long TickCount(void)</code></h2>
+<p>Read this one carefully: on pc64 <b><code>TickCount()</code> is a call counter, not a clock</b>. It
+returns a global counter incremented once per call - by <i>any</i> caller, in any app - and nothing else
+advances it. Called exactly once per <code>tick()</code> it approximates a 60&nbsp;Hz frame counter;
+called twice, your animation runs at half speed; called while another app is also calling it, your
+deltas inflate. The samples therefore pace on <b>their own frame counters</b> (see
+<a href="dev-samples.html#timer">TIMER.C</a>), and so should you. There is no wall clock in the classic
+SDK; a Python app can read <code>unoauto.uptime()</code> (real milliseconds).</p>
+
+<h2 id="random">Randomness: <code>short Random(void)</code></h2>
+<p>A shared linear-congruential generator returning the full signed 16-bit range -32768..32767 (mask
+with <code>&amp; 0x7FFF</code> for non-negative). <b>The seed is a compile-time constant and there is no
+seeding call</b>: the sequence is identical on every boot, shifted only by however many times anything
+else has called it. Mix your own entropy in (LIFE.C stirs the cell coordinates into the seed for
+exactly this reason).</p>
+
+<h2 id="memory">Memory</h2>
+<h3><code>Ptr NewPtr(long byteCount)</code> / <code>void DisposePtr(Ptr p)</code></h3>
+<p><code>NewPtr</code> is malloc: 16-byte aligned, <b>NULL on failure</b> (always check), contents
+<b>not zeroed</b>. A non-positive size allocates one byte. The arena is a single 32&nbsp;MB heap shared
+with the shell and Studio - there is no per-app quota, so leaks degrade the whole machine until the next
+Run (which reloads your module and frees nothing for you: free in <code>closed()</code>).
+<code>DisposePtr</code> is free: NULL-safe and double-free-safe.</p>
+<pre><code>Ptr p = NewPtr(4096);
+if (!p) return;                    /* NULL on failure - always check */
+memset(p, 0, 4096);               /* NewPtr does not zero            */
+...
+DisposePtr(p);                     /* NULL-safe */</code></pre>
+<p class="muted">The libc slice - <code>memcpy memmove memset memcmp strlen strcpy strncpy strcat strcmp
+strncmp</code> - behaves exactly as C requires; sizes are <code>unsigned long</code> (4 bytes,
+LLP64).</p>
+
+<h2 id="sound">Sound</h2>
+<p>One voice, shared with the shell's own apps: the PC speaker, or the machine's DAC when one exists.
+Durations are in shell frames (~60/s).</p>
+<div class="tw"><table>
+<thead><tr><th>Call</th><th>Effect</th></tr></thead>
+<tbody>
+<tr><td><code>void music_open_chan(void)</code></td><td>No-op on pc64 (the voice is always ready);
+call it once in <code>opened()</code> for portability.</td></tr>
+<tr><td><code>void music_note_on(short midi, short durTicks)</code></td><td>One square-wave note at a
+MIDI pitch (60 = middle C, 69 = A440; practical range ~24..108 - below ~16 nothing sounds).
+<code>durTicks &lt;= 0</code> plays 6 frames. A note interrupts a playing score, which resumes
+after.</td></tr>
+<tr><td><code>void music_quiet(void)</code> / <code>void music_stop(void)</code> /
+<code>void gm_stop(void)</code></td><td>All three do the same thing: stop the score and silence the
+voice. <code>music_start()</code> is a no-op.</td></tr>
+<tr><td><code>void gm_start(const Note *notes, short count, short owner)</code></td><td>Loop a score
+forever. <code>Note</code> is <code>{midi, dur}</code> bytes; <code>midi 0</code> is a rest;
+<code>owner</code> is ignored on pc64. <b>The array is borrowed, not copied</b> - make it
+<code>static const</code>. <b>Not stopped when your window closes</b>: call <code>gm_stop()</code> in
+<code>closed()</code>.</td></tr>
+</tbody>
+</table></div>
+<pre><code>static const Note kTune[] = { {76,16},{72,16},{69,16},{0,8} };  /* 0 = rest */
+
+music_note_on(84, 12);             /* one beep: MIDI 84, 12 frames  */
+gm_start(kTune, 3, 0);             /* loop a score (owner ignored)  */
+gm_stop();                         /* stop it - also do this in closed() */</code></pre>
+
+<h2 id="files">Files</h2>
+<p>The classic file slice is a small, session-scoped store - fine for a settings file or a saved game,
+wrong for anything bigger (a Python app's <code>uno.read/write</code> is the fuller API).</p>
+<div class="tw"><table>
+<thead><tr><th>Call</th><th>Contract</th></tr></thead>
+<tbody>
+<tr><td><code>Boolean fat12_mount(void)</code></td><td>Always true on pc64; call once for
+portability.</td></tr>
+<tr><td><code>void fat12_list(void)</code></td><td>Fills the exported arrays with the root directory of
+every volume: <code>gFatCount</code> (capped at 16), <code>gFatNames</code> (12-char names + NUL).
+<b><code>gFatSizes</code> is always 0 on pc64</b> - don't display it.</td></tr>
+<tr><td><code>long fat12_read(const char *name, unsigned char *buf, long max)</code></td><td>Read from
+offset 0, up to <code>max</code> bytes. Returns the byte count or <b>-1</b> for: not found, empty file,
+or no free handle. Names are exact, case-sensitive, up to 31 chars. <b>Reads the session store only</b>:
+a name listed by <code>fat12_list</code> from a real disk is not readable here.</td></tr>
+<tr><td><code>Boolean fat12_write(const char *name, const unsigned char *buf, long len)</code></td>
+<td>Creates the file if absent. <b>Writing an existing name APPENDS</b> - there is no truncate and no
+delete, so save under a versionless single name only if you write it once per session, or build the
+whole content and write once. On success the file is also mirrored to the first writable FAT volume, so
+your save is visible in Files and to Python apps. Returns false only when the store is full (24 files /
+256 KB per file); a failed mirror is not reported.</td></tr>
+</tbody>
+</table></div>
+<pre><code>static unsigned char buf[4096];
+long n = fat12_read(&quot;NOTES.TXT&quot;, buf, sizeof buf);
+if (n &lt; 0) { /* missing, empty, or unreadable */ }
+
+/* WARNING: writing an existing name APPENDS (see remarks) */
+fat12_write(&quot;SCORES.TXT&quot;, data, len);</code></pre>
+<div class="note"><b>Session-scoped reads</b>Within one session, save + reload round-trips. Across a reboot the classic read path starts fresh (your file still exists on disk - Files, Notepad and Python see it - but <code>fat12_read</code> does not). A game that must reload yesterday's save should be a Python app today.</div>
+
+<h2 id="display">Display modes</h2>
+<p><code>gK-&gt;display_res_count()</code> / <code>display_res_get(idx, &amp;w, &amp;h, &amp;zoom,
+&amp;active)</code> / <code>display_res_set(idx)</code> enumerate and change the <i>desktop</i> size
+(the output is scaled to the panel; <code>zoom</code> is always 0 on pc64). Call <code>count</code>
+first - it rebuilds the list the other two index. <code>set</code> is immediate, relayouts every window,
+and <b>bypasses the Control Panel's 15-second revert countdown</b> - a wrong mode stays wrong. Almost no
+app should call it.</p>
+
+<h2 id="lang">The language, on one screen</h2>
+<div class="tw"><table>
+<thead><tr><th>You have</th><th>You don't have</th></tr></thead>
+<tbody>
+<tr><td>char/short/int/long/long long + unsigned, pointers, multi-dim arrays, struct/union/enum/typedef,
+function pointers, the full operator set, if/while/do/for/switch, static globals + locals, brace
+initializers with address constants, <code>char s[] = "text"</code>, string-literal concatenation,
+<code>sizeof</code>, recursion</td>
+<td>floating point (not even the keywords), varargs (so no printf), function-like macros, bitfields,
+goto, VLAs, <code>#if</code> arithmetic, <code>&lt;system&gt;</code> includes, more than 8
+parameters/arguments, struct pass-by-value above 8 bytes</td></tr>
+</tbody>
+</table></div>
+<p><b>LLP64:</b> <code>long</code> is 4 bytes, <code>long long</code> and pointers are 8. The ABI is
+MS x64. <code>#include "FILE.H"</code> searches the file's folder, then <code>SDK\</code>. <code>char</code>
+is signed. Full grammar: <code>DOCS\LANG.MD</code> on the device.</p>
+
+<h2 id="descriptor">Shipping it: the app descriptor</h2>
+<p>What Studio builds runs in the user slot (one at a time, 512&nbsp;KB). To give your app a Start-menu
+row, a desktop icon and a durable identity, wrap it with an <b>app descriptor</b> on your PC - the full
+walkthrough is in <a href="dev-apps.html#package">Writing apps §8</a>, and the grammar is:</p>
+<div class="tw"><table>
+<thead><tr><th>Key</th><th>Meaning</th><th>Limit</th></tr></thead>
+<tbody>
+<tr><td><code>id:</code></td><td>durable identity - geometry, session restore and <code>launch
+&lt;id&gt;</code> all key on it</td><td>15 chars, <code>[a-z0-9._-]</code></td></tr>
+<tr><td><code>name:</code> / <code>short:</code></td><td>launcher label / desktop-icon label</td>
+<td>31 / 15 chars</td></tr>
+<tr><td><code>icon:</code></td><td>a named emblem, or <code>file:NAME.QOI</code> (32x32 QOI beside the
+module, hard-edged alpha)</td><td>15 chars total - the filename part fits 10</td></tr>
+<tr><td><code>cat:</code> / <code>rank:</code></td><td>Start-menu section (system net tools media games
+other) and sort key</td><td>rank 0-255</td></tr>
+<tr><td><code>flags:</code></td><td><code>singleton hidden game nosession</code></td><td></td></tr>
+<tr><td><code>min:</code></td><td>preferred window size <code>WxH</code></td><td>&lt; 8192</td></tr>
+</tbody>
+</table></div>
+<p class="muted">The whole block is capped at 1024 bytes; unknown keys are ignored forever (the
+extension point), unknown values fail the build. The user's <code>APPS.CFG</code> can rename, re-file
+or hide your app - the module is the authority for what's inside the window, the user for what it's
+called.</p>
+
+<p class="kv">Worked examples: <a href="dev-samples.html">the sample programs</a>. The Python side:
+<a href="dev-sdk-python.html">Python SDK reference</a>. The wider export table (the kernel exports far
+more than UNO.H declares - <code>fb_*</code>, <code>malloc</code>, the filesystem) is discoverable in
+<code>pc64_modload.c</code>'s <code>KX()</code> tables, undocumented and unguaranteed: stay inside
+UNO.H unless you enjoy archaeology.</p>
+
+<nav class="pagenav"><a href="dev-samples.html">&lsaquo; Sample programs</a><a class="nxt" href="dev-sdk-python.html">Python SDK reference &rsaquo;</a></nav>
+</div></main>
+</div>
+</body>
+</html>

@@ -74,7 +74,7 @@
     <span class="logo"><i></i><i></i><i></i><i></i></span>
     <span><b>UnoDOS <span style="color:var(--accent-2)">pc64</span></b><span class="sub">User manual</span></span>
   </a>
-  <ul class="nav"><li><a class="" href="index.html">Overview</a></li><li><a class="" href="try-browser.html">Try it in your browser</a></li><li><a class="" href="getting-started.html">Getting started</a></li><li><a class="" href="desktop.html">The desktop</a></li><li><a class="" href="windows.html">Windows &amp; desktops</a></li><li><a class="" href="appearance.html">Themes &amp; appearance</a></li><li><a class="" href="apps.html">Applications</a></li><li><a class="" href="office.html">UnoOffice</a></li><li><a class="" href="browser.html">Web browser</a></li><li><a class="" href="ssh.html">SSH client</a></li><li><a class="" href="networking.html">Networking</a></li><li><a class="" href="logging.html">System log</a></li><li><a class="" href="appliances.html">Appliances</a></li><li><a class="" href="ports.html">The UnoDOS family</a></li><li class="sec">Developer</li><li><a class="" href="developer.html">Overview &amp; architecture</a></li><li><a class="" href="studio.html">Studio: the built-in IDE</a></li><li><a class="" href="dev-apps.html">Writing apps</a></li><li><a class="" href="dev-python.html">Python apps</a></li><li><a class="" href="dev-api.html">API reference</a></li><li><a class="" href="dev-build.html">Building &amp; tooling</a></li><li><a class="active" href="dev-remote.html">Remote control &amp; automation</a></li></ul>
+  <ul class="nav"><li><a class="" href="index.html">Overview</a></li><li><a class="" href="try-browser.html">Try it in your browser</a></li><li><a class="" href="getting-started.html">Getting started</a></li><li><a class="" href="desktop.html">The desktop</a></li><li><a class="" href="windows.html">Windows &amp; desktops</a></li><li><a class="" href="appearance.html">Themes &amp; appearance</a></li><li><a class="" href="apps.html">Applications</a></li><li><a class="" href="office.html">UnoOffice</a></li><li><a class="" href="browser.html">Web browser</a></li><li><a class="" href="ssh.html">SSH client</a></li><li><a class="" href="networking.html">Networking</a></li><li><a class="" href="logging.html">System log</a></li><li><a class="" href="appliances.html">Appliances</a></li><li><a class="" href="ports.html">The UnoDOS family</a></li><li class="sec">Developer</li><li><a class="" href="developer.html">Overview &amp; architecture</a></li><li><a class="" href="studio.html">Studio: the built-in IDE</a></li><li><a class="" href="dev-apps.html">Writing apps</a></li><li><a class="" href="dev-python.html">Python apps</a></li><li><a class="" href="dev-samples.html">Sample programs</a></li><li><a class="" href="dev-sdk-c.html">UnoC SDK reference</a></li><li><a class="" href="dev-sdk-python.html">Python SDK reference</a></li><li><a class="" href="dev-api.html">API reference</a></li><li><a class="" href="dev-build.html">Building &amp; tooling</a></li><li><a class="active" href="dev-remote.html">Remote control &amp; automation</a></li></ul>
   <div class="side-foot">
     <a href="https://github.com/hmofet/unodos" target="_blank" rel="noopener">GitHub&nbsp;&rsaquo; hmofet/unodos</a><br>
     <a href="#" onclick="__t();return false">Toggle light / dark</a>
@@ -89,9 +89,30 @@ network, with a simple typed command language or a Python API. This is <strong>u
 the OS's remote-control and automation channel. It is how you drive, observe, and update a machine
 that is sitting on a bench across the room.</p>
 
-<div class="note warn"><b>Debug builds, LAN only</b>unoautomate is compiled into <strong>debug builds only</strong> (<code>UNO_DEBUG=1</code>). A production OS has none of it - the channel, the commands and the on-device Python bindings all compile away. It is meant for a <strong>trusted LAN</strong> and speaks in plaintext, so never expose it to an untrusted network.</div>
+<div class="note warn"><b>Armed by a person, LAN only</b>The channel ships in <strong>every</strong> build, and the gate is <strong>privilege, not a compile flag</strong>: a production OS boots with it disarmed, and only a user at the console can arm it (below). A debug OS (<code>UNO_DEBUG=1</code>) arms it from <code>DEBUG.CFG</code> with every verb allowed and no code. Either way it is meant for a <strong>trusted LAN</strong> and speaks in plaintext - the code proves who may drive the box, it does not encrypt the wire - so never expose it to an untrusted network.</div>
 
-<h2 id="enable">Turning it on</h2>
+<h2 id="arming">Production: arming and the access code</h2>
+<p>On a production boot nothing listens and nothing dials. To hand your PC the keys, open
+<strong>Control Panel &rarr; Remote control&hellip;</strong> and tick what you are willing to grant -
+the three ticks map to the three powers every command is checked against:</p>
+<div class="tw"><table>
+<thead><tr><th>Tick</th><th>Grants</th></tr></thead>
+<tbody>
+<tr><td><b>Watch</b></td><td>see the screen and system state - logs, probe, screenshots</td></tr>
+<tr><td><b>Control</b></td><td>move the mouse, type, open apps</td></tr>
+<tr><td><b>Full access</b></td><td>disks, files, run code, restart</td></tr>
+</tbody>
+</table></div>
+<p>Arming mints a <strong>6-digit code</strong>, shown on screen and never stored. The first thing a
+client sends is <code>auth &lt;code&gt;</code>; until then every verb answers
+<code>err auth-required</code>, and <strong>three wrong codes disarm the channel outright</strong> - the
+operator can re-arm at the console, an attacker on the wire cannot, which is what the code's length
+rests on. A verb outside the granted powers answers <code>err denied</code> naming the missing power.
+The remote path never prompts (nobody is at the machine to answer), and signing out disarms - a code
+can never outlive the login that made it. Grant the least you need: a monitoring script wants Watch and
+nothing else.</p>
+
+<h2 id="enable">Turning it on (debug builds)</h2>
 <p>pc64's network stack makes outbound connections only, so the device <strong>dials your PC</strong> rather
 than the other way round. You tell it where to dial with one line in the stick's <code>DEBUG.CFG</code>
 (the Developer-options file the flasher writes) - your PC's LAN address and a port:</p>
@@ -237,7 +258,7 @@ the "browse the network and connect to a box" model - you choose the machine, wi
 either end. (Give a box a friendly name with <code>name=&lt;label&gt;</code> so it is easy to spot in
 the list.)</p>
 <div class="note tip"><b>Networking is ready at boot</b>The network comes up <strong>at boot</strong> now, not only when an app first needs it: every device brings its NIC up early (skipping any that do not get a lease within a few seconds, so a dead or cableless port cannot hang boot), so a box is reachable - and discoverable - as soon as the desktop appears.</div>
-<div class="note warn"><b>Debug builds, LAN only</b>UnoRemote rides the same debug-only, LAN-only URC channel as everything else on this page - it needs a debug build and a trusted network, and it is not present in a production OS.</div>
+<div class="note warn"><b>Armed channel, LAN only</b>UnoRemote rides the same LAN-only URC channel as everything else on this page - it needs the channel armed (the <a href="#arming">Remote control panel</a> on a production OS, <code>DEBUG.CFG</code> on a debug one) and a trusted network.</div>
 
 <h2 id="unoscript">Scripting the OS, with permission (<code>unoscript</code>)</h2>
 <p>The <a href="dev-python.html#uno">
@@ -317,7 +338,7 @@ check - so an interrupted transfer never leaves stick B half-written. Add <code>
 the machine boot the other stick automatically on the next restart, without anyone touching the firmware boot
 menu. From the library the same flow is <code>link.push_file(...)</code> then <code>link.reboot()</code>.</p>
 
-<div class="note warn"><b>What these can do</b><code>put</code> and <code>reboot</code> are an arbitrary file write and a reset. Like the rest of the channel they exist only in debug builds and only over your trusted LAN. A single push is capped at 8&nbsp;MB.</div>
+<div class="note warn"><b>What these can do</b><code>put</code> and <code>reboot</code> are an arbitrary file write and a reset. In a production OS they sit behind the <a href="#arming">Full access</a> power; grant it only over your trusted LAN. A single push is capped at 8&nbsp;MB.</div>
 
 <h2 id="install">Installing UnoDOS onto a disk over the link</h2>
 <p>The A/B push writes files onto an <em>already-formatted</em> stick. The channel can go further and stand up a
