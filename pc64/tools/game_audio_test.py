@@ -17,8 +17,11 @@ running while the emulated DAC is captured to a wav.  The assertion is about
 the samples the DAC consumed, not about the calls that were made: a gm_start
 that returns cleanly into a dead backend sounds exactly like silence.
 
-  dostris   'n' starts a game -> Korobeiniki loops   (gm_start)
-  outlast   'n' starts a game -> Sunset Drive loops  (gm_start)
+  dostris   'n' starts a game -> Korobeiniki loops       (gm_start)
+  outlast   'n' starts a game -> Sunset Drive loops      (gm_start)
+  pacman    'n' starts a game -> fanfare, then the siren (gm_start), with
+                                 the waka blips borrowing the voice on top
+                                 (music_note_on)
 """
 import os, struct, subprocess, sys, time
 
@@ -30,7 +33,7 @@ from unoauto_remote import UnoAutoLink                      # noqa: E402
 
 BUILD = os.path.join(os.path.dirname(HERE), "build")
 WAV = os.path.join(BUILD, "game_audio.wav")
-GAMES = [("dostris", "n"), ("outlast", "n")]
+GAMES = [("dostris", "n"), ("outlast", "n"), ("pacman", "n")]
 HOLD = 9.0                      # seconds of play captured per game
 fails = []
 
