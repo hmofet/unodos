@@ -126,7 +126,7 @@ static void draw_list(unoui_rect c)
             fb_text(c.x + 78, y, v[0] ? v : "(default)",
                     v[0] ? p->text : p->text_dim, -1);
             if (g_edit == f) {
-                int tw = uno_font_text_w_styled(v, 0, 12, 0);
+                int tw = uno_font_text_w_styled(0, 12, 0, v);
                 fb_fill_rect(c.x + 78 + tw + 1, y, 1, ROW_H - 4, p->text);
             }
             y += ROW_H + 3;
