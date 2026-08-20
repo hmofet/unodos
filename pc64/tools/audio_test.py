@@ -27,7 +27,12 @@ def boot_and_play(mode):
     if os.path.exists(QMP_SOCK):
         os.remove(QMP_SOCK)
     argv = [
-        "qemu-system-x86_64", "-machine", "q35", "-m", "256",
+        # AUDIO_TEST_MEM exists because of the 2026-08-19 finding that this
+        # guest is SILENT with 4 GB of RAM while playing normally at 3: the
+        # gate could not express the case that matters most, since every real
+        # machine has more memory than the 256 MB this defaults to.
+        "qemu-system-x86_64", "-machine", "q35",
+        "-m", os.environ.get("AUDIO_TEST_MEM", "256"),
         "-drive", "if=pflash,format=raw,readonly=on,file=" + OVMF_CODE,
         "-drive", "if=pflash,format=raw,file=build/vars.fd",
         "-drive", "format=vvfat,file=fat:rw:build/esp",

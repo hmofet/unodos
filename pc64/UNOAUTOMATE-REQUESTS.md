@@ -9300,7 +9300,14 @@ here is claimed: it is the first place to put a print.
 
 **What it means for hardware.** The OS boots on machines with 8 and 16 GB.
 If this is what it looks like, their audio has never worked and no gate would
-have said so, because every audio gate in the tree runs QEMU at 512 MB or
-3 GB. `tools/audio_test.py` at `-m 4096` is the one-line reproduction.
+have said so, because every audio gate in the tree runs QEMU at 256 MB.
+
+**The reproduction is NOT `tools/audio_test.py`, and I checked.** It now takes
+`AUDIO_TEST_MEM` so it can express the case at all - but in this tree it dies
+with a broken pipe at 256 MB, 1 GB and 4 GB alike, before any measurement, so
+it currently proves nothing either way and that needs fixing on its own. What
+does reproduce it is a boot of the real disk image with an AC'97 wav sink,
+Duum launched over URC, and a level check on the capture: silent at 4096,
+audible at 3072, twice each.
 
 The demo recorder now boots at `-m 3072` and says why in a comment.
