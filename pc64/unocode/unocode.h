@@ -494,6 +494,7 @@ int  uc_mono_n(int x, int y, const char *s, int n, fb_px fg, int style);
 /* the proportional UI face used for chrome */
 int  uc_ui_text(int x, int y, const char *s, fb_px fg);
 int  uc_ui_text_w(const char *s);
+int  uc_ui_text_fit(int x, int y, const char *s, int maxw, fb_px fg);
 int  uc_ui_h(void);
 
 /* the find widget lives over the editor, so it is part of this view */
@@ -724,6 +725,7 @@ typedef struct {
     UcRect canvas;            /* the whole workbench                        */
     UcRect activity, sidebar, tabs, crumbs, editor, panel, status;
     int    sidebar_w, panel_h;
+    int    sidebar_user;      /* the user dragged the splitter: stop sizing it */
     int    sidebar_visible, panel_visible, minimap;
     int    view;              /* UC_VIEW_*                                  */
     int    panel_tab;         /* UC_PANEL_*                                 */

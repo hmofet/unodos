@@ -465,7 +465,7 @@ static void sidebar_explorer(UcRect r)
             }
             if (mod) c = uc_col(UC_C_GIT_MODIFIED);
             fb_set_clip(r.x, ry, r.w - 4, rh);
-            uc_ui_text(ind + 2, ry + 4, label, c);
+            uc_ui_text_fit(ind + 2, ry + 4, label, r.x + r.w - ind - 10, c);
             fb_reset_clip();
         }
     }
@@ -588,14 +588,23 @@ static void sidebar_ext(UcRect r)
                                           : uc_col(UC_C_BREADCRUMB_FG));
         if (i == g_extsel) fb_fill_rect(r.x, y - 2, r.w, rh * 2 + 2, uc_col(UC_C_LIST_SEL_BG));
         fb_set_clip(r.x, y - 2, r.w - 4, rh * 2 + 2);
-        uc_ui_text(r.x + 10, y, e->name[0] ? e->name : e->id, c);
         {
-            int w = uc_ui_text_w(e->name[0] ? e->name : e->id);
-            uc_ui_text(r.x + 16 + w, y, e->version, uc_col(UC_C_BREADCRUMB_FG));
+            /* the right-hand badge ("25 ms" / "disabled") is laid out first,
+             * so the name and the description are fitted to what is left */
+            int right = r.w - 16;
+            if (e->activated || !e->enabled) right -= 64;
+            uc_ui_text_fit(r.x + 10, y, e->name[0] ? e->name : e->id,
+                           right - 60, c);
+            {
+                int w = uc_ui_text_w(e->name[0] ? e->name : e->id);
+                if (w > right - 60) w = right - 60;
+                uc_ui_text(r.x + 16 + w, y, e->version, uc_col(UC_C_BREADCRUMB_FG));
+            }
+            uc_scpy(line, e->broken ? e->err : e->desc, sizeof line);
+            uc_ui_text_fit(r.x + 10, y + rh - 2, line, r.w - 20,
+                           e->broken ? uc_col(UC_C_ERROR_FG)
+                                     : uc_col(UC_C_BREADCRUMB_FG));
         }
-        uc_scpy(line, e->broken ? e->err : e->desc, sizeof line);
-        uc_ui_text(r.x + 10, y + rh - 2, line,
-                   e->broken ? uc_col(UC_C_ERROR_FG) : uc_col(UC_C_BREADCRUMB_FG));
         if (e->activated) {
             char ms[16];
             uc_itoa(ms, (long)e->act_ms);

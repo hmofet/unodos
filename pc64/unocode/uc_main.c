@@ -154,6 +154,17 @@ void uc_layout(void)
     int body_h = c.h - status;
     int x = c.x;
 
+    /* The side bar is a FRACTION of the window until somebody drags it.  A
+     * fixed 210 px is right on the 640x400 default desktop and mean on a
+     * 1280x800 one, where it clips every extension's description while a third
+     * of the window sits empty. */
+    if (!UC.sidebar_user && c.w > 0) {
+        int want = c.w * 22 / 100;
+        if (want < 180) want = 180;
+        if (want > 320) want = 320;
+        UC.sidebar_w = want;
+        side = UC.sidebar_visible ? want : 0;
+    }
     if (UC.zen) { act = 0; side = 0; tabs = 0; crumbs = 0; panel = 0; }
     if (side > c.w - act - 200) side = c.w - act - 200;
     if (side < 0) side = 0;
@@ -269,6 +280,7 @@ static int handle_mouse(const unoui_event *e)
     }
     if (e->kind == UI_EV_MOUSE_MOVE) {
         if (UC.drag == UC_DRAG_SIDEBAR) {
+            UC.sidebar_user = 1;               /* stop auto-sizing it */
             UC.sidebar_w = e->x - UC.sidebar.x;
             if (UC.sidebar_w < 120) UC.sidebar_w = 120;
             if (UC.sidebar_w > UC.canvas.w - 260) UC.sidebar_w = UC.canvas.w - 260;
