@@ -3356,18 +3356,14 @@ static int       g_saved_n;
 static int       g_saved_loaded;     /* the file has been read this boot       */
 static int       g_saved_vol = -1;   /* where it was found / will be written   */
 
-/* Where remembered networks live.  A native FAT partition first, then any
- * writable volume, and the RAM disk only if the machine has nothing else -
- * the same order the shell's session file and unosecure's store use, and for
- * the same reason: a store on a volume that dies with the power is not a
- * store. */
+/* Where remembered networks live: the same shared answer the shell's session
+ * file and unosecure's store use (uno_fs_pref_vol - the boot volume first,
+ * then the old fallback order).  Preferring the boot volume also keeps saved
+ * networks on the stick the machine actually booted, instead of leaking them
+ * onto whatever internal disk happens to enumerate first. */
 static int saved_vol(void)
 {
-    int n = uno_fs_volumes(), v;
-    for (v = 0; v < n; v++) if (uno_fs_kind(v) == 1 && uno_fs_writable(v)) return v;
-    for (v = 0; v < n; v++) if (uno_fs_kind(v) != 0 && uno_fs_writable(v)) return v;
-    for (v = 0; v < n; v++) if (uno_fs_writable(v)) return v;
-    return -1;
+    return uno_fs_pref_vol();
 }
 
 static void saved_load(void)
