@@ -1,0 +1,34 @@
+{
+    // VS Code snippet files: a map of name -> { prefix, body, description }.
+    // ${1:placeholder} tab stops are flattened to their default text, because
+    // this host has no tab-stop machinery - see UNOCODE.md.
+    "for loop": {
+        "prefix": "for",
+        "body": ["for (int ${1:i} = 0; ${1:i} < ${2:n}; ${1:i}++) {", "    $0", "}"],
+        "description": "A counted for loop"
+    },
+    "if": {
+        "prefix": "if",
+        "body": ["if (${1:cond}) {", "    $0", "}"],
+        "description": "An if statement"
+    },
+    "switch": {
+        "prefix": "switch",
+        "body": ["switch (${1:v}) {", "case ${2:X}: break;", "default: break;", "}"],
+        "description": "A switch statement"
+    },
+    "unodos app": {
+        "prefix": "unoapp",
+        "body": ["#include \"unoui.h\"", "#include \"uno_uuiapp.h\"", "",
+                 "static void build(unoui_window *w) { }", "",
+                 "static const UnoUuiApp kApp = { UNO_UUIAPP_ABI, \"App\", build };",
+                 "const UnoUuiApp *uno_app_main(void *r) { (void)r; return &kApp; }"],
+        "description": "A skeleton unoui-class .UNO module"
+    },
+    "file read": {
+        "prefix": "fsread",
+        "body": ["long n = uno_fs_read(${1:vol}, ${2:name}, buf, sizeof buf);",
+                 "if (n < 0) { /* not found */ }"],
+        "description": "Read a file from a volume"
+    }
+}

@@ -1,0 +1,15 @@
+{
+    // A DECLARATIVE extension: no "main", so no JavaScript is ever run for it.
+    // The theme is in the picker from the moment the manifest is read.
+    "name": "nord",
+    "displayName": "Nord Theme",
+    "description": "An arctic, north-bluish colour theme.",
+    "version": "1.0.0",
+    "publisher": "unodos",
+    "engines": { "unocode": "^1.0.0" },
+    "contributes": {
+        "themes": [
+            { "label": "Nord", "uiTheme": "vs-dark", "path": "THEMES/NORD.JSN" }
+        ]
+    }
+}

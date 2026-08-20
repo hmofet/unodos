@@ -1,0 +1,28 @@
+{
+    // A UnoCode extension manifest.  This is package.json: the keys, the
+    // shapes and the meanings are VS Code's.  Comments and trailing commas
+    // are allowed, because the loader reads JSONC.
+    "name": "hello",
+    "displayName": "Hello UnoCode",
+    "description": "The sample extension: commands, input, completions, events.",
+    "version": "1.0.0",
+    "publisher": "unodos",
+    "engines": { "unocode": "^1.0.0" },
+    "main": "MAIN.JS",
+    "activationEvents": [
+        "onCommand:hello.sayHello",
+        "onCommand:hello.insertBanner",
+        "onCommand:hello.pickColorTheme"
+    ],
+    "contributes": {
+        "commands": [
+            { "command": "hello.sayHello", "title": "Say Hello", "category": "Hello" },
+            { "command": "hello.insertBanner", "title": "Insert Banner Comment", "category": "Hello" },
+            { "command": "hello.pickColorTheme", "title": "Pick a Colour Theme", "category": "Hello" },
+            { "command": "hello.countLines", "title": "Count Lines in This File", "category": "Hello" }
+        ],
+        "keybindings": [
+            { "key": "ctrl+k h", "command": "hello.sayHello" }
+        ]
+    }
+}
