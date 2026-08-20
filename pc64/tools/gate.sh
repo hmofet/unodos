@@ -80,6 +80,14 @@ step "unonet TLS host gates"
 hosttest sh tools/tls_entropy_test.sh
 hosttest sh tools/tls_conc_test.sh
 
+# WiFi security: the SAE exchange, the RSN element we put on the air, and the
+# P-256 arithmetic under both.  Belongs in the gate for the same reason the
+# TLS ones do - SPECTEST's network area is a NULL NIC, so nothing on the QEMU
+# side can reach a supplicant, and the only alternative to a host gate here is
+# carrying a laptop to an access point.
+step "WiFi supplicant host gate (WPA2-PSK + WPA3-SAE)"
+hosttest sh tools/sae_test.sh
+
 if [ "${QUICK:-0}" != "0" ]; then
     printf '\nQUICK=1: skipping the QEMU conformance run\n'
     exit 0
