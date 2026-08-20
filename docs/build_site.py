@@ -31,6 +31,7 @@ NAV = [
     (None,                   "Developer"),          # section header
     ("developer.html",       "Overview &amp; architecture"),
     ("studio.html",          "Studio: the built-in IDE"),
+    ("unocode.html",         "UnoCode: the VS Code-class editor"),
     ("dev-apps.html",        "Writing apps"),
     ("dev-python.html",      "Python apps"),
     ("dev-samples.html",     "Sample programs"),
@@ -758,6 +759,74 @@ subs = {r["name"]: r for r in link.probe() if r["kind"] == 2}
 assert subs["net"]["state"] == 1, "network subsystem did not come up"''')
 
 # --------------------------------------------------------------------------- pages
+# ---- UnoCode snippets (VS Code's own file formats, quoted as they ship) ----
+CODE_UNOCODE_THEME = code('''{
+    "name": "Nord",
+    "type": "dark",
+    "colors": {
+        "editor.background": "#2E3440",
+        "editor.foreground": "#D8DEE9",
+        "activityBar.background": "#3B4252",
+        "statusBar.background": "#3B4252"
+    },
+    "tokenColors": [
+        { "scope": "comment",
+          "settings": { "foreground": "#616E88", "fontStyle": "italic" } },
+        { "scope": ["keyword", "storage"],
+          "settings": { "foreground": "#81A1C1" } }
+    ]
+}''')
+
+CODE_UNOCODE_MANIFEST = code('''{
+    "name": "nord",
+    "displayName": "Nord Theme",
+    "description": "An arctic, north-bluish colour theme.",
+    "version": "1.0.0",
+    "publisher": "you",
+
+    // no "main", so no code ever runs for this extension
+    "contributes": {
+        "themes": [
+            { "label": "Nord", "uiTheme": "vs-dark", "path": "THEMES/NORD.JSN" }
+        ]
+    }
+}''')
+
+CODE_UNOCODE_EXT = code('''var vscode = require('vscode');
+
+function activate(context) {
+    vscode.commands.registerCommand('hello.sayHello', function () {
+        var ed = vscode.window.activeTextEditor;
+        vscode.window.showInformationMessage(
+            'Hello from an extension - ' + (ed ? ed.document.fileName : 'no editor'));
+    });
+
+    // completions, offered only in C files
+    vscode.languages.registerCompletionItemProvider('c', {
+        provideCompletionItems: function (document, position) {
+            return [{ label: 'uno_fs_read', detail: 'UnoDOS',
+                      insertText: 'uno_fs_read(vol, name, buf, max)' }];
+        }
+    });
+
+    vscode.workspace.onDidSaveTextDocument(function (doc) {
+        console.log('saved: ' + doc.fileName);
+    });
+}
+
+exports.activate = activate;''')
+
+CODE_UNOCODE_SETTINGS = code('''// UnoCode settings.  Comments and trailing commas are allowed.
+{
+    "editor.fontSize": 15,
+    "editor.tabSize": 4,
+    "editor.insertSpaces": true,
+    "editor.minimap.enabled": true,
+    "editor.renderWhitespace": "boundary",
+    "workbench.colorTheme": "Nord",
+    "files.trimTrailingWhitespace": true,
+}''')
+
 PAGES = {}
 
 PAGES["index.html"] = ("Overview", f"""
@@ -1370,6 +1439,14 @@ assistant in one window: write an app in <strong>UnoC or Python</strong>, press
 with no PC or toolchain. The full story, including the built-in ChatGPT / Claude / Gemini assistant, is on
 the <a href="studio.html">Studio</a> page.</p>
 {fig("studio.png", "<b>Studio</b>: the built-in IDE - a syntax-highlighting editor, a project list, and a compiler that turns your code into a runnable app right on the machine.")}
+
+<h2 id="unocode">UnoCode: the bigger editor</h2>
+<p>Beside Studio there is <strong>UnoCode</strong>, a full workbench in the shape of Visual Studio Code:
+an activity bar and side bar, tabbed editors with a minimap, a command palette, an integrated terminal,
+and <strong>extensions</strong> - colour themes, languages, syntax grammars and snippets that you drop
+into a folder on the disk. Its themes and settings files are Visual Studio Code's own formats, so a theme
+written for VS Code works here unchanged. See the <a href="unocode.html">UnoCode</a> page.</p>
+{fig("unocode.png", "<b>UnoCode</b>: the workbench on first run - the activity bar down the left, the Explorer, a tabbed editor with a minimap, and a status bar showing the position, indentation, encoding, line ending and language.")}
 
 <h2 id="appliances">Appliances: another operating system in a window</h2>
 <p><strong>Appliances</strong> boots a Linux kernel inside a window on the desktop, with a console you
@@ -2035,6 +2112,144 @@ python3 tools/mkuno.py pyapp MYAPP.PY APPS/MYAPP.UNO MYAPP.DESC
 #   icon: file:MYAPP.QOI
 #   cat: tools
 #   rank: 50''')
+
+PAGES["unocode.html"] = ("UnoCode: the VS Code-class editor", f"""
+<h1>UnoCode: the VS Code-class editor</h1>
+<p class="lede">A full code workbench that runs <strong>on the machine itself</strong>, in the shape of
+Visual Studio Code: an activity bar and side bar, tabbed editors with a minimap, a command palette, an
+integrated terminal - and <strong>extensions</strong>. Colour themes, languages, syntax grammars and
+snippets are the same file formats Visual Studio Code uses, so a theme or a snippet file written for VS
+Code works here unchanged.</p>
+
+{fig("unocode.png", "<b>UnoCode</b> on first run. The activity bar down the left switches the side bar between Explorer, Search, Source Control, Run and Extensions; the editor has a line-number gutter, a change-marked left edge and a minimap; the status bar shows the folder, the problem counts, the cursor position, the indentation, the encoding, the line ending and the language.")}
+
+{note('UnoCode and <a href="studio.html">Studio</a> are both here on purpose. Studio is the small one - an editor, the built-in compiler and an AI assistant, three keys from source to a running app. UnoCode is the big one - more editor, and extensible. Neither replaces the other, and a distro can ship either, both or neither.', title="Two editors, and why")}
+
+<h2 id="start">The five keys worth learning</h2>
+<p>Everything in UnoCode is a <strong>command</strong>, and every command is in one searchable list. If
+you remember nothing else, remember the first line:</p>
+<table>
+  <tr><th>Key</th><th>What it does</th></tr>
+  <tr><td><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd></td><td>The <strong>command palette</strong> - every command, searchable, with its keyboard shortcut beside it</td></tr>
+  <tr><td><kbd>Ctrl</kbd>+<kbd>P</kbd></td><td>Go to a file in the open folder</td></tr>
+  <tr><td><kbd>Ctrl</kbd>+<kbd>B</kbd></td><td>Show or hide the side bar</td></tr>
+  <tr><td><kbd>Ctrl</kbd>+<kbd>`</kbd></td><td>The integrated terminal (type <code>help</code>)</td></tr>
+  <tr><td><kbd>Ctrl</kbd>+<kbd>,</kbd></td><td>Open <code>settings.json</code></td></tr>
+</table>
+{fig("unocode_palette.png", "The command palette, filtered to <code>theme</code>. Each row shows the command's <b>title</b>, its <b>id</b> in grey, and its <b>keyboard shortcut</b> on the right. The second row is <b>contributed by an extension</b> - the palette does not distinguish between a built-in command and one an extension registered, because nothing else in UnoCode does either.")}
+<p>If the palette can find it, a key can be bound to it and an extension can call it. That is the whole
+design: nothing is wired to a key directly, so anything can be rebound.</p>
+
+<h2 id="editing">The editor</h2>
+<p>Open a file from the Explorer, with <kbd>Ctrl</kbd>+<kbd>P</kbd>, or by typing
+<code>open SDK\\SAMPLE.C</code> in the terminal. Each file gets a tab; the breadcrumb bar above the text
+shows where it came from.</p>
+{fig("unocode_editor.png", "A UnoC source file open beside the welcome document. Comments, preprocessor lines, types, numbers and strings are each coloured by the language's grammar; the <b>minimap</b> on the right is the whole file in miniature with the visible region marked; the bar down the left edge of the gutter marks lines changed since the file was opened.")}
+<p>The editing keys are the ones you already know - arrows and
+<kbd>Home</kbd>/<kbd>End</kbd>/<kbd>PgUp</kbd>/<kbd>PgDn</kbd> to move,
+<kbd>Shift</kbd>+movement to select, <kbd>Ctrl</kbd>+<kbd>X</kbd>/<kbd>C</kbd>/<kbd>V</kbd>/<kbd>A</kbd>,
+<kbd>Ctrl</kbd>+<kbd>Z</kbd> to undo - plus the ones that make an editor worth using:</p>
+<div class="grid cols-2">
+  <div class="card"><h4>Multiple cursors</h4><p><kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Down</kbd> adds a cursor on the next line, <kbd>Ctrl</kbd>+<kbd>D</kbd> adds one at the next match of what is selected, and everything you type then happens at all of them at once. <kbd>Esc</kbd> collapses back to one.</p></div>
+  <div class="card"><h4>Find and replace</h4><p><kbd>Ctrl</kbd>+<kbd>F</kbd> finds, <kbd>Ctrl</kbd>+<kbd>H</kbd> replaces, and the three small toggles switch on case sensitivity, whole-word matching and <strong>regular expressions</strong>. The match count is live.</p></div>
+  <div class="card"><h4>Whole lines</h4><p><kbd>Alt</kbd>+<kbd>Up</kbd>/<kbd>Down</kbd> moves the current line, <kbd>Shift</kbd>+<kbd>Alt</kbd>+<kbd>Down</kbd> copies it down, <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>K</kbd> deletes it, and <kbd>Ctrl</kbd>+<kbd>/</kbd> comments or uncomments the selection in the language's own comment syntax.</p></div>
+  <div class="card"><h4>It closes what you open</h4><p>Type <code>(</code> and you get <code>()</code> with the cursor between them; type the closing one and the cursor steps over it rather than doubling it. <kbd>Enter</kbd> keeps the indentation, and opens a block out onto its own lines.</p></div>
+</div>
+{fig("unocode_find.png", "Find, with the live match count (<code>0 of 11</code>) and the case / whole-word / regular-expression toggles. Every match in the file is highlighted as you type, not just the next one.")}
+
+<h2 id="suggest">Suggestions</h2>
+<p><kbd>Ctrl</kbd>+<kbd>Space</kbd> asks for suggestions, and they appear as you type. They come from four
+places at once and are ranked together: the language's keywords, <strong>every distinct word already in
+the file</strong> (which is what makes completion useful in a language nothing knows about), snippets, and
+anything an extension offers.</p>
+{fig("unocode_suggest.png", "The suggestion list in a C file. The rows marked <code>S</code> are <b>snippets</b> contributed by an installed extension - <code>unoapp</code> expands to a skeleton app - and the rows marked <code>k</code> are the language's own keywords. Accept with <kbd>Tab</kbd> or <kbd>Enter</kbd>.")}
+
+<h2 id="terminal">The integrated terminal</h2>
+<p><kbd>Ctrl</kbd>+<kbd>`</kbd> opens a panel at the bottom with <strong>Problems</strong>,
+<strong>Output</strong> and <strong>Terminal</strong> tabs. The terminal is UnoCode's own small shell -
+UnoDOS has no shell process for it to host - so <code>help</code> lists exactly what it has, and a word it
+does not know is an error rather than a silent nothing.</p>
+{fig("unocode_terminal.png", "The terminal, after <code>help</code> and <code>ext</code>. It can list and change directories, read and copy files, search the folder, open and run files, read and write settings, switch the theme, run any UnoCode command by id, and evaluate a JavaScript expression in the same interpreter the extensions run in.")}
+<p>Two of its commands are worth knowing about:</p>
+<ul>
+  <li><code>run <em>file</em></code> runs a <code>.UNO</code> app, or wraps a <code>.PY</code> file for the
+      Python runtime and runs that - the same thing <kbd>F5</kbd> does to the file you are editing.</li>
+  <li><code>js <em>expression</em></code> evaluates JavaScript in the extension host itself, which is how
+      you find out what an extension is actually doing.</li>
+</ul>
+
+<h2 id="themes">Colour themes</h2>
+<p>Six themes are built in - Dark+, Light+, Monokai, Solarized Dark, High Contrast and UnoDOS Blue - and
+more arrive as extensions. <kbd>Ctrl</kbd>+<kbd>K</kbd> then <kbd>Ctrl</kbd>+<kbd>T</kbd>, or
+<strong>Preferences: Color Theme</strong> in the palette, switches between them; your choice is saved.</p>
+{fig("unocode_theme.png", "The same file under <b>Nord</b>, a theme that arrives as an extension containing one JSON file and no code at all. The whole workbench recolours - activity bar, side bar, tabs, editor, status bar - because a theme sets semantic colours rather than painting anything itself.")}
+<p><strong>A theme file is a Visual Studio Code theme file</strong>, unchanged:</p>
+{CODE_UNOCODE_THEME}
+<p>Two rules make writing one by hand reasonable. A colour key UnoCode does not know is <strong>ignored</strong>,
+so a theme written for a newer editor still loads; and a key you leave out is <strong>worked out</strong> from
+the ones you set, so a theme with three colours in it still renders a complete, coherent workbench.</p>
+
+<h2 id="extensions">Extensions</h2>
+<p>An extension is a folder. Copy it onto the disk under <code>EXT</code> and UnoCode finds it at startup -
+on any drive, so an extension on a USB stick needs no installing.</p>
+{fig("unocode_extensions.png", "The Extensions view. Each row shows the name, version and description from the extension's manifest. <b>Nord</b> and <b>UnoDOS Snippets</b> contain no code at all; <b>Hello UnoCode</b> does, and once it has run its row shows how long its activation took. <kbd>Enter</kbd> enables or disables one, <kbd>Ctrl</kbd>+<kbd>R</kbd> reloads them all.")}
+<p>Three of the four kinds of extension need no programming whatever - they are JSON files that describe
+something:</p>
+<div class="grid cols-2">
+  <div class="card"><h4>A theme</h4><p>One colour-theme file and a manifest naming it. No code runs, ever.</p></div>
+  <div class="card"><h4>A language</h4><p>An id, the file extensions it claims and its comment syntax - and UnoCode knows a new language.</p></div>
+  <div class="card"><h4>A grammar</h4><p>A TextMate-style file of patterns that colours that language. Same shape as VS Code's.</p></div>
+  <div class="card"><h4>Snippets</h4><p>A map of short prefixes to the text they expand to, offered in the suggestion list.</p></div>
+</div>
+<p>The manifest is <code>package.json</code>, with VS Code's keys:</p>
+{CODE_UNOCODE_MANIFEST}
+<p>The fourth kind runs <strong>JavaScript</strong>. An extension with a <code>main</code> gets a real
+programming interface - commands, messages, quick picks, the active editor and its text, settings, files,
+and events when a document is opened, changed or saved:</p>
+{CODE_UNOCODE_EXT}
+{fig("unocode_ext_run.png", "That extension's command, run from the palette. It was not loaded until the moment the command was chosen: the manifest declared it, so it was in the palette from startup, and choosing it read the file, ran it and called the handler it registered. The message on the right is the extension talking.")}
+{note("An extension that misbehaves cannot take the machine with it. Every call into an extension runs on a <b>step budget</b>; one that does not finish is stopped, reported and switched off. On a system with no preemption that is not a nicety - it is the reason it is safe to run code somebody else wrote at all.", title="A runaway extension is stopped, not fatal")}
+<p>Two things about the interface are deliberately different from Visual Studio Code, and both are stated
+rather than hidden: calls that would return a promise return an object with <code>.then()</code> instead
+(there is no event loop to build a promise on), and <code>require()</code> resolves <code>'vscode'</code>
+and nothing else (there is no package manager to resolve anything else against).</p>
+
+<h2 id="settings">Settings and keyboard shortcuts</h2>
+<p>Both are files, both are yours to edit, and both are the formats Visual Studio Code uses - including
+its habit of allowing comments and trailing commas in them.</p>
+<table>
+  <tr><th>File</th><th>What it is</th></tr>
+  <tr><td><code>UNOCODE\\SETTINGS.JSN</code></td><td>Settings, as a flat map of dotted keys. <kbd>Ctrl</kbd>+<kbd>,</kbd> opens it.</td></tr>
+  <tr><td><code>UNOCODE\\KEYBIND.JSN</code></td><td>Keyboard shortcuts. <b>Preferences: Open Keyboard Shortcuts (JSON)</b> writes the whole shipped keymap into it the first time, so changing one binding does not start with guessing what a key is called.</td></tr>
+</table>
+{CODE_UNOCODE_SETTINGS}
+<p>A keybinding is <code>{{ "key", "command", "when" }}</code>. <code>when</code> is a real condition -
+<code>editorTextFocus</code>, <code>editorHasSelection</code>, <code>terminalFocus</code> and the rest,
+combined with <code>!</code>, <code>&amp;&amp;</code> and <code>||</code> - so the same key can do
+different things in different places. A command written with a leading <code>-</code> removes a shipped
+binding. Yours win over an extension's, which win over the defaults.</p>
+{note('The file names are short because the disk is FAT, which allows eight characters and a three-letter extension. The CONTENTS are not shortened: <code>SETTINGS.JSN</code> is <code>settings.json</code>, key for key.', title="Why the names look truncated")}
+
+<h2 id="limits">What it does not do</h2>
+<p>Honestly, so you are not looking for them:</p>
+<ul>
+  <li><strong>No word wrap.</strong> Long lines scroll sideways.</li>
+  <li><strong>No hover documentation or go-to-definition</strong>, and extensions cannot add them - the
+      only language feature an extension can contribute is completions.</li>
+  <li><strong>Source Control tracks your unsaved edits</strong> against the file as it was opened, and
+      marks changed lines in the gutter. There is no repository on this machine and it says so rather
+      than pretending.</li>
+  <li><strong>Function keys depend on the keyboard.</strong> PS/2 keyboards deliver them; USB keyboards
+      do not, in this build. Every default shortcut is a <kbd>Ctrl</kbd> chord for that reason, and
+      nothing needs an F-key.</li>
+</ul>
+
+<h2 id="developers">For extension authors</h2>
+<p>The complete file formats - the manifest keys, the theme colour keys, the grammar model and its one
+documented difference from TextMate, the settings table and the whole JavaScript interface - are in
+<code>pc64/unocode/UNOCODE.md</code> in the source tree, beside the three sample extensions the disk
+ships: a theme, a language with a grammar and snippets, and one with code in it.</p>
+""")
 
 PAGES["dev-apps.html"] = ("Writing apps", f"""
 <h1>Writing apps</h1>

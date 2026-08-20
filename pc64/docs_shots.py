@@ -103,7 +103,8 @@ QMAP = {" ": "spc", ".": "dot", ",": "comma", "-": "minus", "/": "slash",
         ":": "shift+semicolon", "_": "shift+minus",
         "=": "equal", "+": "shift+equal", "*": "shift+8",
         "(": "shift+9", ")": "shift+0", "!": "shift+1", "%": "shift+5",
-        ";": "semicolon", "?": "shift+slash", "'": "apostrophe"}
+        ";": "semicolon", "?": "shift+slash", "'": "apostrophe",
+        "\\": "backslash", ">": "shift+dot"}
 
 
 def text(q, s, gap=0.06):
@@ -222,7 +223,7 @@ ROSTER_FILE = "build/apps_roster.txt"
 FALLBACK = ["control", "editor", "files", "system", "clock", "install",
             "music", "unoamp", "dostris", "pacman", "outlast", "tracker",
             "paint", "runner3d", "browser", "studio", "photos", "ssh",
-            "uoword", "uocalc", "uoshow", "logview", "vmgr", "duum"]
+            "uoword", "uocalc", "uoshow", "logview", "vmgr", "unocode", "duum"]
 MENU = []                                    # ids in menu order, filled by main
 
 
@@ -548,6 +549,101 @@ def sc_studio_ai(q):
     key(q, "up", gap=0.5); key(q, "up", gap=0.5)
     time.sleep(1.0); close_all(q)
 
+def uc_run(q, name, settle=0.9):
+    """Run a UnoCode command by NAME through the command palette.
+
+    Every UnoCode scene drives the product this way rather than by key chord,
+    for the same reason the app roster is looked up by id: a chord's meaning
+    depends on where the keyboard focus already is. Ctrl+Shift+E is three-state
+    (show the side bar / focus it / hide it), so one press cannot mean "show
+    it" from an unknown state - and the state carries over between scenes,
+    because closing UnoCode's window does not throw its layout away."""
+    combo(q, "ctrl", "shift", "p"); time.sleep(0.6)
+    text(q, name); time.sleep(0.6)
+    key(q, "ret"); time.sleep(settle)
+
+
+def _unocode(q, settle=3.6):
+    """Open UnoCode with the side bar, the panel and the focus in ONE state.
+
+    `Reset Layout` is idempotent by construction - side bar on and showing the
+    Explorer, panel off, focus in the editor - which is what makes a scene's
+    figure a function of the scene rather than of the scene before it."""
+    close_all(q); launch(q, A("unocode"), settle=settle)
+    uc_run(q, "Reset Layout")
+    return q
+
+
+def _uc_open(q, path):
+    """Open a file by path through the integrated terminal.
+
+    Not through Ctrl+P: Go to File lists the workspace FOLDER, and the SDK
+    samples live a level down from it. The terminal takes a path."""
+    uc_run(q, "Toggle Terminal")
+    text(q, "open " + path); key(q, "ret"); time.sleep(1.8)
+    uc_run(q, "Reset Layout")                            # panel away again
+
+def sc_unocode(q):
+    # The workbench as it opens: activity bar, Explorer, the welcome document.
+    _unocode(q)
+    shot(q, "unocode")
+    combo(q, "ctrl", "shift", "p"); time.sleep(0.6)      # the command palette
+    text(q, "theme"); time.sleep(0.8)
+    shot(q, "unocode_palette")
+    key(q, "esc"); time.sleep(0.4)
+    close_all(q)
+
+def sc_unocode_editor(q):
+    # A real source file: grammar highlighting, minimap, breadcrumbs, gutter.
+    _unocode(q)
+    _uc_open(q, "SDK\\SAMPLE.C")
+    shot(q, "unocode_editor")
+    combo(q, "ctrl", "f"); time.sleep(0.6)               # find, with a count
+    text(q, "static"); time.sleep(1.0)
+    shot(q, "unocode_find")
+    key(q, "esc"); time.sleep(0.4)
+    combo(q, "ctrl", "spc"); time.sleep(1.2)             # IntelliSense
+    shot(q, "unocode_suggest")
+    key(q, "esc"); time.sleep(0.4)
+    close_all(q)
+
+def sc_unocode_ext(q):
+    """The extension story in two figures: what is installed, and one of them
+    actually running. The second is the whole host in one picture - manifest
+    read, activation event fired, MAIN.JS evaluated, registerCommand handler
+    invoked, and the notification it raised on screen."""
+    _unocode(q)
+    uc_run(q, "Show Extensions", settle=1.2)
+    shot(q, "unocode_extensions")
+    uc_run(q, "Say Hello", settle=2.0)                   # activates + runs it
+    shot(q, "unocode_ext_run")
+    close_all(q)
+
+def sc_unocode_theme(q):
+    # Nord, contributed by an extension that ships no JavaScript at all.
+    _unocode(q)
+    _uc_open(q, "SDK\\SAMPLE.C")
+    uc_run(q, "Color Theme", settle=1.0)
+    text(q, "Nord"); time.sleep(0.8)
+    key(q, "ret"); time.sleep(1.8)
+    shot(q, "unocode_theme")
+    # Put the default back. The theme is PERSISTED to settings.json, so a scene
+    # that left it would photograph every later figure - including any rerun of
+    # an unrelated one - in somebody else's colours.
+    uc_run(q, "Color Theme", settle=1.0)
+    text(q, "Dark"); time.sleep(0.8)
+    key(q, "ret"); time.sleep(1.6)
+    close_all(q)
+
+def sc_unocode_terminal(q):
+    _unocode(q)
+    uc_run(q, "Toggle Terminal")
+    text(q, "help"); key(q, "ret"); time.sleep(1.0)
+    text(q, "ext"); key(q, "ret"); time.sleep(1.0)
+    shot(q, "unocode_terminal")
+    close_all(q)
+
+
 def sc_duum(q):
     """Duum, the Python Doom engine. Slow to start by nature: PYRT boots, then
     the WAD is parsed and the textures composed, which is tens of seconds of
@@ -758,6 +854,9 @@ SCENES = {
     "outlast": sc_outlast, "music": sc_music, "tracker": sc_tracker,
     "paint": sc_paint, "runner3d": sc_runner3d,
     "studio": sc_studio, "studio_ai": sc_studio_ai,
+    "unocode": sc_unocode, "unocode_editor": sc_unocode_editor,
+    "unocode_ext": sc_unocode_ext, "unocode_theme": sc_unocode_theme,
+    "unocode_terminal": sc_unocode_terminal,
     "duum": sc_duum, "office_duum": sc_office_duum,
     "browser_disk": sc_browser_disk,
     "browser_docs": sc_browser_docs, "cp_network": sc_cp_network,
