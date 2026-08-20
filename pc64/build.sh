@@ -473,7 +473,7 @@ if [ "$1" != "legacy" ]; then
         "$PY" tools/mkuno.py convert "build/apps/studio.dll" "build/esp/APPS/STUDIO.UNO" 1
         # the SDK + developer docs ride on the ESP for Studio to open
         mkdir -p build/esp/SDK build/esp/DOCS
-        cp sdk/UNO.H sdk/SAMPLE.C sdk/DOSTRIS.C build/esp/SDK/ 2>/dev/null || true
+        cp sdk/UNO.H sdk/SAMPLE.C sdk/DOSTRIS.C sdk/TIMER.C sdk/LIFE.C build/esp/SDK/ 2>/dev/null || true
         # Python SDK: sources (.py/.PY) + type stubs (.pyi).  Copy each match
         # individually so a missing glob never drops a valid sibling, and both
         # letter cases are picked up (the on-disk names are upper-case).
