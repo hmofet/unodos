@@ -574,7 +574,14 @@ static void connect(void)
     if (g_gen==RTW_G88) { rtw88_sec_enable(); rtw88_media_status(0,1); }
     else                { rtw89_join_info(0,0); }
     wpa_pmk_from_psk(g_cfg_ssid,(int)strlen(g_cfg_ssid),g_cfg_psk,pmk);
-    wpa_sm_init(&g_wpa,pmk,g_mac,g_bssid);
+    /* WPA2-PSK only on this driver.  The SAE exchange (wifi_sae.c) needs the
+       pre-association Authentication frames, which this driver's [metal gap]
+       above does not yet send - so it advertises the AKM it can actually
+       complete rather than one it would fail halfway through. */
+    { wpa_rsn_cfg_t rc; u8 ie[64]; int n;
+      memset(&rc,0,sizeof rc); rc.akm = WPA_AKM_PSK; rc.mfp = WPA_MFP_OFF;
+      n = wpa_build_rsn_ie(ie,(int)sizeof ie,&rc);
+      wpa_sm_init(&g_wpa,pmk,g_mac,g_bssid,WPA_AKM_PSK,ie,n>0?n:0); }
     strncpy(g_ssid_str,g_cfg_ssid,sizeof g_ssid_str-1);
     g_ssid_str[sizeof g_ssid_str-1]=0;       /* strncpy leaves it unterminated at the cap */
 }
