@@ -661,6 +661,11 @@ static void test_uno3d(void)
     }
 }
 
+/* the shell's real sequencer backend (uefi_main.c), so the suite can put it
+   back - see the tail of test_unosound_seq() */
+void uno_pc64_snd_note(int midi);
+void uno_pc64_snd_quiet(void);
+
 /* the sequencer's stub backend records note_on/off into a ring the test reads */
 static int g_seq_on[8], g_seq_on_n, g_seq_off_n;
 static void seq_on(int midi)  { if (g_seq_on_n < 8) g_seq_on[g_seq_on_n] = midi; g_seq_on_n++; }
@@ -686,6 +691,16 @@ static void test_unosound_seq(void)
     }
     uno_seq_stop();
     CHECK("S-SND-17", !uno_seq_playing());
+    /* PUT THE REAL VOICE BACK.  uno_seq_backend() sets ONE global pair of
+     * function pointers - there is no stack of backends - so a suite that
+     * installs recording stubs and walks away leaves every later note going
+     * into g_seq_on[] instead of the DAC.  The shell registers its backend
+     * once at startup (pc64_uui.c) and never again, so the damage lasted the
+     * rest of the session: run `test` (or `test system`) on a debug build and
+     * Dostris, OutLast, Music and Tracker were all silent from then on, with
+     * nothing in the log to say why. */
+    uno_seq_backend(uno_pc64_snd_note, uno_pc64_snd_quiet);
+    uno_seq_init();
 }
 
 /* ================================================================== UNOMEDIA */
