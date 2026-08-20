@@ -701,9 +701,20 @@ if [ "$1" != "legacy" ]; then
             pc "$CC" $UWCF -c -o "build/apps/uo_$b.o" "uoffice/$b.c"
             WOBJ="$WOBJ build/apps/uo_$b.o"
         done
-        for b in unodoc ud_cfb ud_doc ud_docw; do
+        # APPENDED: the OOXML half.  ud_zip/ud_xml are the container and
+        # the parser both formats share; ud_docx/ud_docxw are .docx in and
+        # out; ud_ooxz is the package writer.  um_inflate is linked HERE
+        # rather than imported from the kernel deliberately - a module that
+        # called the kernel's um_set_alloc would repoint the allocator the
+        # browser and UnoAmp are using.
+        for b in unodoc ud_cfb ud_doc ud_docw \
+                 ud_zip ud_xml ud_docx ud_ooxz ud_docxw; do
             pc "$CC" $UWCF -c -o "build/apps/ud_$b.o" "../unodoc/$b.c"
             WOBJ="$WOBJ build/apps/ud_$b.o"
+        done
+        for b in unomedia um_inflate; do
+            pc "$CC" $UWCF -I../unomedia -c -o "build/apps/uoword_um_$b.o" "../unomedia/$b.c"
+            WOBJ="$WOBJ build/apps/uoword_um_$b.o"
         done
         pcwait                 # barrier: all UOWORD objects before the nm/link
         "$NM" $WOBJ | awk '$1=="U"&&$2!=""{u[$2]=1}             $1!="U"&&NF>=3{d[$3]=1}             END{for(s in u) if(!(s in d)) print s}'             | sort -u > build/apps/uoword.syms
@@ -737,9 +748,16 @@ if [ "$1" != "legacy" ]; then
             pc "$CC" $UWCF -c -o "build/apps/uo_$b.o" "uoffice/$b.c"
             WOBJ="$WOBJ build/apps/uo_$b.o"
         done
-        for b in unodoc ud_cfb ud_xls ud_xlsw ud_ptg ud_ptgc; do
+        # APPENDED: the OOXML half - see the UOWORD block for why
+        # um_inflate is statically linked into each module.
+        for b in unodoc ud_cfb ud_xls ud_xlsw ud_ptg ud_ptgc \
+                 ud_zip ud_xml ud_xlsx ud_ooxz ud_xlsxw; do
             pc "$CC" $UWCF -c -o "build/apps/ud_$b.o" "../unodoc/$b.c"
             WOBJ="$WOBJ build/apps/ud_$b.o"
+        done
+        for b in unomedia um_inflate; do
+            pc "$CC" $UWCF -I../unomedia -c -o "build/apps/uocalc_um_$b.o" "../unomedia/$b.c"
+            WOBJ="$WOBJ build/apps/uocalc_um_$b.o"
         done
         pcwait                 # barrier: all UOCALC objects before the nm/link
         "$NM" $WOBJ | awk '$1=="U"&&$2!=""{u[$2]=1}             $1!="U"&&NF>=3{d[$3]=1}             END{for(s in u) if(!(s in d)) print s}'             | sort -u > build/apps/uocalc.syms
@@ -773,9 +791,16 @@ if [ "$1" != "legacy" ]; then
             pc "$CC" $UWCF -c -o "build/apps/uo_$b.o" "uoffice/$b.c"
             WOBJ="$WOBJ build/apps/uo_$b.o"
         done
-        for b in unodoc ud_cfb ud_ppt ud_pptw ud_escher; do
+        # APPENDED: the OOXML half - see the UOWORD block for why
+        # um_inflate is statically linked into each module.
+        for b in unodoc ud_cfb ud_ppt ud_pptw ud_escher \
+                 ud_zip ud_xml ud_pptx ud_ooxz ud_pptxw; do
             pc "$CC" $UWCF -c -o "build/apps/ud_$b.o" "../unodoc/$b.c"
             WOBJ="$WOBJ build/apps/ud_$b.o"
+        done
+        for b in unomedia um_inflate; do
+            pc "$CC" $UWCF -I../unomedia -c -o "build/apps/uoshow_um_$b.o" "../unomedia/$b.c"
+            WOBJ="$WOBJ build/apps/uoshow_um_$b.o"
         done
         pcwait                 # barrier: all UOSHOW objects before the nm/link
         "$NM" $WOBJ | awk '$1=="U"&&$2!=""{u[$2]=1}             $1!="U"&&NF>=3{d[$3]=1}             END{for(s in u) if(!(s in d)) print s}'             | sort -u > build/apps/uoshow.syms

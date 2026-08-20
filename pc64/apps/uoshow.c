@@ -31,6 +31,9 @@
 #include "uofile.h"
 #include "uoshow.h"
 #include "unodoc.h"
+/* unomedia, for um_set_alloc alone: unodoc inflates an OOXML part with
+ * um_inflate, which allocates its own working state. */
+#include "unomedia.h"
 #include "pc64_font.h"
 
 /* the shell's services this module imports by name */
@@ -122,7 +125,51 @@ static int fs_begin(int v) { return uno_fs_list_begin(v); }
 static int fs_get(int v, int i, char *n, int c) { return uno_fs_list_get(v, i, n, c); }
 static int fs_isdir(int v, const char *n) { return uno_fs_isdir(v, n); }
 static const uof_fs kFs = { fs_volumes, fs_vname, fs_begin, fs_get, fs_isdir };
-static const char *const kTypes[] = { "Presentation (*.ppt)" };
+static const char *const kTypes[] = {
+    "Presentation (*.ppt)", "Presentation (*.pptx)"
+};
+/* ---- which format a name asks for --------------------------------------------
+ * unodoc reads either container by sniffing the bytes, so OPENING needs no
+ * help from the name.  SAVING does: an empty document has no bytes to sniff,
+ * and the user picked the format when they typed the extension.  Anything that
+ * is not one of the OOXML extensions saves as the 97 binary, which is the
+ * format this suite is a clone of and the right default for a name that says
+ * nothing. */
+static const char *ppt_ext(int type) { return type == 1 ? ".PPTX" : ".PPT"; }
+/* ---- Save As: the name the user actually meant --------------------------------
+ * The format is decided by the extension, and a user who picks a type from the
+ * combo and types a bare name has said which format they want just as clearly
+ * as one who typed the extension.  Office 97 appended the extension in exactly
+ * this case, so this does too: a name with no dot gets the chosen type's
+ * extension, and a name that already has one is left alone - including a name
+ * whose extension disagrees with the combo, because what was typed is more
+ * specific than what was picked. */
+static void ensure_ext(char *name, int cap, int type)
+{
+    int i, n = 0;
+    const char *ext;
+    while (name[n]) n++;
+    for (i = 0; i < n; i++) if (name[i] == '.') return;
+    ext = ppt_ext(type);
+    if (!ext) return;
+    for (i = 0; ext[i] && n < cap - 1; i++) name[n++] = ext[i];
+    name[n] = 0;
+}
+
+static int name_is_ooxml(const char *n, const char *ext)
+{
+    int i, dot = -1;
+    for (i = 0; n[i]; i++) if (n[i] == '.') dot = i;
+    if (dot < 0) return 0;
+    n += dot + 1;
+    for (i = 0; ext[i]; i++) {
+        char a = n[i], b = ext[i];
+        if (a >= 'A' && a <= 'Z') a = (char)(a - 'A' + 'a');
+        if (a != b) return 0;
+    }
+    return n[i] == 0;
+}
+
 
 /* ---- menus ------------------------------------------------------------------ */
 static const uoc_item kFile[] = {
@@ -616,6 +663,7 @@ static void dialog_closed(void)
         break;
     case C_SAVE:
         a_cpy(g_file, uof_name(), (int)sizeof g_file);
+        ensure_ext(g_file, (int)sizeof g_file, uof_type());
         a_cpy(g_name, g_file, (int)sizeof g_name);
         if (!save_pres(uof_volume(), g_file)) {
             uod_msgbox(&DL, "UnoShow", "Could not write the presentation.",
@@ -650,7 +698,7 @@ static void dialog_closed(void)
  * save writes open reads back. Shapes drawn by hand do not survive a
  * round-trip - unodoc's writer is title-and-body only, which the Save path
  * says out loud rather than dropping them quietly. */
-static long io_read(void *ctx, long off, void *dst, long n)
+static long io_read(void *ctx, long off, unsigned char *dst, long n)
 {
     long i;
     unsigned char *d = (unsigned char *)dst;
@@ -681,13 +729,18 @@ static void put_slide_text(int slide, const char *text)
 
 static int load_pres(int vol, const char *name)
 {
-    ud_cfb *c;
-    ud_ppt *p;
+    ud_cfb *c = 0;
+    ud_zip *z = 0;
+    ud_ppt *p = 0;
     ud_src  src;
     long sz;
     int ok = 0;
 
     ud_set_alloc(malloc, free);
+    /* A .pptx part is a DEFLATE stream that unodoc inflates with unomedia's
+     * decompressor, which needs an allocator of its own.  See UNODOC.md: this
+     * is the one extra obligation the OOXML path puts on a caller. */
+    um_set_alloc(malloc, free);
     sz = uno_fs_size(vol, name);
     if (sz <= 0 || sz > UOS_IOCAP) return 0;
     if (!g_io) g_io = (unsigned char *)malloc(UOS_IOCAP);
@@ -696,9 +749,15 @@ static int load_pres(int vol, const char *name)
     if (g_iolen <= 0) return 0;
 
     src.read = io_read; src.size = g_iolen; src.ctx = 0;
-    c = ud_cfb_open(&src);
-    if (!c) return 0;
-    p = ud_ppt_open(c);
+    /* The CONTAINER decides which reader, not the extension.  Both hand back
+     * the same ud_ppt, so everything below is shared. */
+    if (ud_sniff(&src) == UD_C_ZIP) {
+        z = ud_zip_open(&src);
+        p = z ? ud_pptx_open(z) : 0;
+    } else {
+        c = ud_cfb_open(&src);
+        p = c ? ud_ppt_open(c) : 0;
+    }
     if (p) {
         int n = ud_ppt_slides(p), i;
         PR = uos_new();
@@ -718,6 +777,7 @@ static int load_pres(int vol, const char *name)
         ok = 1;
     }
     ud_cfb_close(c);
+    ud_zip_close(z);
     g_cur = 0; g_sel = -1; g_editing = 0;
     return ok;
 }
@@ -749,6 +809,7 @@ static int save_pres(int vol, const char *name)
 
     if (!PR) return 0;
     ud_set_alloc(malloc, free);
+    um_set_alloc(malloc, free);
     w = ud_pptw_new();
     if (!w) return 0;
     n = uos_slides(PR);
@@ -762,7 +823,8 @@ static int save_pres(int vol, const char *name)
             gather(i, UOS_PH_SUBTITLE, buf, (int)sizeof buf);
         if (buf[0]) ud_pptw_body(w, sl, buf);
     }
-    out = ud_pptw_save(w, &len);
+    out = name_is_ooxml(name, "pptx") ? ud_pptxw_save(w, &len)
+                                     : ud_pptw_save(w, &len);
     if (out && len > 0) ok = uno_fs_write(vol, name, out, len) ? 1 : 0;
     ud_free(out);
     ud_pptw_free(w);
@@ -816,7 +878,7 @@ static void do_command(int cmd)
     case C_EXIT: break;
     case C_OPEN:
         uof_set_fs(&kFs);
-        uof_open(&DL, 0, kTypes, 1, pc64_shell_workarea_w(),
+        uof_open(&DL, 0, kTypes, 2, pc64_shell_workarea_w(),
                  pc64_shell_workarea_h());
         g_dlg = C_OPEN;
         return;
@@ -831,7 +893,7 @@ static void do_command(int cmd)
             break;
         }
         uof_set_fs(&kFs);
-        uof_open(&DL, 1, kTypes, 1, pc64_shell_workarea_w(),
+        uof_open(&DL, 1, kTypes, 2, pc64_shell_workarea_w(),
                  pc64_shell_workarea_h());
         g_dlg = C_SAVE;
         return;

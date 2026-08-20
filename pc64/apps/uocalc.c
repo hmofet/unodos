@@ -23,6 +23,9 @@
 #include "uofile.h"
 #include "uocalc.h"
 #include "unodoc.h"
+/* unomedia, for um_set_alloc alone: unodoc inflates an OOXML part with
+ * um_inflate, which allocates its own working state. */
+#include "unomedia.h"
 #include "pc64_font.h"
 
 void  pc64_shell_dirty(void);
@@ -173,7 +176,9 @@ static const uoc_tbitem kFmtBar[] = {
 static const uoc_tbar kBars[] = {
     { "Standard", kStd, 11 }, { "Formatting", kFmtBar, 10 }
 };
-static const char *const kTypes[] = { "Microsoft Excel Workbook (*.xls)" };
+static const char *const kTypes[] = {
+    "Microsoft Excel Workbook (*.xls)", "Excel Workbook (*.xlsx)"
+};
 
 /* ---- the status bar and the AutoCalculate well ------------------------------ */
 static void sync_status(void)
@@ -378,7 +383,7 @@ static int uxl_err_to_xls(int e)
  * array on the way in and recompiles it on the way out), with the cached
  * value carried alongside so a reader that does not calculate still shows
  * the right number. */
-static long io_read(void *ctx, long off, void *dst, long n)
+static long io_read(void *ctx, long off, unsigned char *dst, long n)
 {
     long i;
     unsigned char *d = (unsigned char *)dst;
@@ -391,15 +396,65 @@ static long io_read(void *ctx, long off, void *dst, long n)
 
 #define UOC_IOCAP (4L * 1024 * 1024)
 
+/* ---- which format a name asks for --------------------------------------------
+ * unodoc reads either container by sniffing the bytes, so OPENING needs no
+ * help from the name.  SAVING does: an empty document has no bytes to sniff,
+ * and the user picked the format when they typed the extension.  Anything that
+ * is not one of the OOXML extensions saves as the 97 binary, which is the
+ * format this suite is a clone of and the right default for a name that says
+ * nothing. */
+static const char *xls_ext(int type) { return type == 1 ? ".XLSX" : ".XLS"; }
+/* ---- Save As: the name the user actually meant --------------------------------
+ * The format is decided by the extension, and a user who picks a type from the
+ * combo and types a bare name has said which format they want just as clearly
+ * as one who typed the extension.  Office 97 appended the extension in exactly
+ * this case, so this does too: a name with no dot gets the chosen type's
+ * extension, and a name that already has one is left alone - including a name
+ * whose extension disagrees with the combo, because what was typed is more
+ * specific than what was picked. */
+static void ensure_ext(char *name, int cap, int type)
+{
+    int i, n = 0;
+    const char *ext;
+    while (name[n]) n++;
+    for (i = 0; i < n; i++) if (name[i] == '.') return;
+    ext = xls_ext(type);
+    if (!ext) return;
+    for (i = 0; ext[i] && n < cap - 1; i++) name[n++] = ext[i];
+    name[n] = 0;
+}
+
+static int name_is_ooxml(const char *n, const char *ext)
+{
+    int i, dot = -1;
+    for (i = 0; n[i]; i++) if (n[i] == '.') dot = i;
+    if (dot < 0) return 0;
+    n += dot + 1;
+    for (i = 0; ext[i]; i++) {
+        char a = n[i], b = ext[i];
+        if (a >= 'A' && a <= 'Z') a = (char)(a - 'A' + 'a');
+        if (a != b) return 0;
+    }
+    return n[i] == 0;
+}
+
 static int load_book(int vol, const char *name)
 {
-    ud_cfb *c;
-    ud_xls *x;
+    ud_cfb *c = 0;
+    ud_zip *z = 0;
+    ud_xls *x = 0;
     ud_src  src;
     long sz;
     int ok = 0;
 
     ud_set_alloc(malloc, free);
+    /* A .xlsx part is a DEFLATE stream, and unodoc inflates it with
+     * unomedia's decompressor - which keeps its working state in an
+     * allocation of its own.  Registering both allocators is the one extra
+     * obligation the OOXML path puts on a caller, and forgetting it makes
+     * every .xlsx fail to open with an out-of-memory that is really a
+     * forgotten registration. */
+    um_set_alloc(malloc, free);
     sz = uno_fs_size(vol, name);
     if (sz <= 0 || sz > UOC_IOCAP) return 0;
     if (!g_io) g_io = (unsigned char *)malloc(UOC_IOCAP);
@@ -408,9 +463,16 @@ static int load_book(int vol, const char *name)
     if (g_iolen <= 0) return 0;
 
     src.read = io_read; src.size = g_iolen; src.ctx = 0;
-    c = ud_cfb_open(&src);
-    if (!c) return 0;
-    x = ud_xls_open(c);
+    /* The CONTAINER decides which reader, not the extension: a .xls that is
+     * really a .xlsx opens, and so does the reverse.  Both readers hand back
+     * the same ud_xls, so everything below this point is shared. */
+    if (ud_sniff(&src) == UD_C_ZIP) {
+        z = ud_zip_open(&src);
+        x = z ? ud_xlsx_open(z) : 0;
+    } else {
+        c = ud_cfb_open(&src);
+        x = c ? ud_xls_open(c) : 0;
+    }
     if (x) {
         int ns = ud_xls_sheets(x), si;
         BK = uxl_new();
@@ -439,6 +501,7 @@ static int load_book(int vol, const char *name)
         ok = 1;
     }
     ud_cfb_close(c);
+    ud_zip_close(z);
     g_cur_r = g_cur_c = g_sel_r = g_sel_c = 0;
     g_top_r = g_left_c = 0;
     g_sheet = 0;
@@ -454,6 +517,7 @@ static int save_book(int vol, const char *name)
 
     if (!BK) return 0;
     ud_set_alloc(malloc, free);
+    um_set_alloc(malloc, free);
     w = ud_xlsw_new();
     if (!w) return 0;
     ns = uxl_sheets(BK);
@@ -488,7 +552,8 @@ static int save_book(int vol, const char *name)
             }
         }
     }
-    out = ud_xlsw_save(w, &len);
+    out = name_is_ooxml(name, "xlsx") ? ud_xlsxw_save(w, &len)
+                                     : ud_xlsw_save(w, &len);
     if (out && len > 0) ok = uno_fs_write(vol, name, out, len) ? 1 : 0;
     ud_free(out);
     ud_xlsw_free(w);
@@ -553,7 +618,7 @@ static void do_command(int cmd)
     case C_NEW: BK = uxl_new(); g_cur_r = g_cur_c = 0; g_sel_r = g_sel_c = 0; break;
     case C_OPEN:
         uof_set_fs(&kFs);
-        uof_open(&DL, 0, kTypes, 1, pc64_shell_workarea_w(),
+        uof_open(&DL, 0, kTypes, 2, pc64_shell_workarea_w(),
                  pc64_shell_workarea_h());
         g_dlg = DLG_OPEN;
         break;
@@ -568,7 +633,7 @@ static void do_command(int cmd)
             break;
         }
         uof_set_fs(&kFs);
-        uof_open(&DL, 1, kTypes, 1, pc64_shell_workarea_w(),
+        uof_open(&DL, 1, kTypes, 2, pc64_shell_workarea_w(),
                  pc64_shell_workarea_h());
         g_dlg = DLG_SAVE;
         break;
@@ -658,6 +723,7 @@ static void dialog_closed(void)
         }
     } else if (kind == DLG_SAVE) {
         a_cpy(g_name, uof_name(), (int)sizeof g_name);
+        ensure_ext(g_name, (int)sizeof g_name, uof_type());
         if (!save_book(uof_volume(), g_name)) {
             uod_msgbox(&DL, "UnoCalc", "Could not write the workbook.",
                        UOD_MB_OK, pc64_shell_workarea_w(), pc64_shell_workarea_h());
