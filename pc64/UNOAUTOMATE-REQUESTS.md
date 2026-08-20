@@ -9456,3 +9456,46 @@ Not urgent for the manual: the figures are of the apps running, and the samples'
 documented path is Studio's Run (the user slot), which is a different route. But
 it means a UnoC app anyone installs into `APPS\` is input-dead, and nothing about
 it fails loudly - the window is there and it animates.
+---
+
+## 2026-08-20 - CLAIM: OOXML in unodoc, and the Office apps on top of it
+
+Two lanes, two commits, in this order.
+
+**1. `unodoc`** (`unodoc/*`, per the /AGENTS.md registry row). Adds the OOXML
+half: `ud_zip.c`, `ud_xml.c`, the three readers (`ud_xlsx.c`, `ud_docx.c`,
+`ud_pptx.c`), the package writer `ud_ooxz.c` and the three serialisers
+(`ud_xlsxw.c`, `ud_docxw.c`, `ud_pptxw.c`), plus the internal seams
+`ud_doc_int.h`, `ud_ppt_int.h` and `ud_ooxw_int.h`. Nothing outside
+`unodoc/` is touched. `unodoc/UNODOC.md` gains the phase-6 rows, an OOXML
+chapter and the changelog entry; the "Not OOXML" bullet under *What unodoc is
+NOT* is marked superseded rather than deleted, so the reasoning that ruled it
+out - and the reason that reasoning was wrong - both stay readable.
+
+Two API notes for consumers:
+
+- `ud_sniff()` picks the container from the bytes. **Do not branch on the
+  extension**: a `.xls` that is really a `.xlsx` is ordinary.
+- A caller must now register `um_set_alloc` as well as `ud_set_alloc`. A zip
+  part is a DEFLATE stream and `um_inflate` allocates its own working state;
+  without it every OOXML file fails to open with an out-of-memory that is
+  really a missing registration. UNODOC.md says so where a caller will read it.
+
+**2. `unoffice`** (`pc64/apps/uo*.c`, per the registry row). UnoWord, UnoCalc
+and UnoShow sniff the container on open, pick the serialiser from the typed
+extension on save, and list the OOXML types in the file dialog. One
+shared-seam edit, append-only per AGENTS.md §2:
+
+- `pc64/build.sh`: the three existing office blocks' unodoc file lists gain
+  their OOXML halves, appended to the end of each list, plus a small
+  `unomedia um_inflate` loop per module.
+
+`um_inflate` is linked into each module **statically** rather than exported
+from the kernel, deliberately. The kernel already links it (UnoAmp's skin
+engine and the browser's images use it), but a module calling the kernel's
+`um_set_alloc` would repoint the allocator those two are running on. A private
+copy per module costs a few KB and cannot do that.
+
+No kExports change: the office apps carry their own unodoc, as they already
+did.
+

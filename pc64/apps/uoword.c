@@ -23,6 +23,9 @@
 #include "uofile.h"
 #include "uoword.h"
 #include "unodoc.h"
+/* unomedia, for um_set_alloc alone: unodoc inflates an OOXML part with
+ * um_inflate, which allocates its own working state. */
+#include "unomedia.h"
 #include "pc64_font.h"
 
 /* the shell's services this module imports by name */
@@ -93,7 +96,6 @@ static int        g_have_rect;
 
 enum { DLG_NONE = 0, DLG_OPEN, DLG_SAVE, DLG_FONT, DLG_MSG };
 
-static int a_strlen(const char *s) { int n = 0; while (s && s[n]) n++; return n; }
 static void a_cpy(char *d, const char *s, int cap)
 { int i = 0; while (s && s[i] && i < cap - 1) { d[i] = s[i]; i++; } d[i] = 0; }
 static char *a_num(long v, char *b)
@@ -273,8 +275,54 @@ static const uoc_tbar kBars[] = {
 };
 
 static const char *const kDocTypes[] = {
-    "Word Document (*.doc)", "Text Only (*.txt)"
+    "Word Document (*.doc)", "Word Document (*.docx)", "Text Only (*.txt)"
 };
+/* ---- which format a name asks for --------------------------------------------
+ * unodoc reads either container by sniffing the bytes, so OPENING needs no
+ * help from the name.  SAVING does: an empty document has no bytes to sniff,
+ * and the user picked the format when they typed the extension.  Anything that
+ * is not one of the OOXML extensions saves as the 97 binary, which is the
+ * format this suite is a clone of and the right default for a name that says
+ * nothing. */
+/* Type 2 is "Text Only", which this build cannot write - save_doc
+   always produces a Word document.  It gets no extension rather than a
+   .TXT that would be a .doc wearing the wrong name. */
+static const char *doc_ext(int type)
+{ return type == 1 ? ".DOCX" : (type == 2 ? 0 : ".DOC"); }
+/* ---- Save As: the name the user actually meant --------------------------------
+ * The format is decided by the extension, and a user who picks a type from the
+ * combo and types a bare name has said which format they want just as clearly
+ * as one who typed the extension.  Office 97 appended the extension in exactly
+ * this case, so this does too: a name with no dot gets the chosen type's
+ * extension, and a name that already has one is left alone - including a name
+ * whose extension disagrees with the combo, because what was typed is more
+ * specific than what was picked. */
+static void ensure_ext(char *name, int cap, int type)
+{
+    int i, n = 0;
+    const char *ext;
+    while (name[n]) n++;
+    for (i = 0; i < n; i++) if (name[i] == '.') return;
+    ext = doc_ext(type);
+    if (!ext) return;
+    for (i = 0; ext[i] && n < cap - 1; i++) name[n++] = ext[i];
+    name[n] = 0;
+}
+
+static int name_is_ooxml(const char *n, const char *ext)
+{
+    int i, dot = -1;
+    for (i = 0; n[i]; i++) if (n[i] == '.') dot = i;
+    if (dot < 0) return 0;
+    n += dot + 1;
+    for (i = 0; ext[i]; i++) {
+        char a = n[i], b = ext[i];
+        if (a >= 'A' && a <= 'Z') a = (char)(a - 'A' + 'a');
+        if (a != b) return 0;
+    }
+    return n[i] == 0;
+}
+
 
 /* ---- layout bookkeeping ---------------------------------------------------- */
 /* Word's "Page Width" zoom, applied automatically.
@@ -473,13 +521,18 @@ static void load_doc_formatting(ud_doc *w, long len)
 
 static int load_doc(int vol, const char *name)
 {
-    ud_cfb *c;
-    ud_doc *w;
+    ud_cfb *c = 0;
+    ud_zip *z = 0;
+    ud_doc *w = 0;
     ud_src  src;
     long sz;
     int ok = 0;
 
     ud_set_alloc(malloc, free);
+    /* A .docx part is a DEFLATE stream that unodoc inflates with unomedia's
+     * decompressor, which needs an allocator of its own.  See UNODOC.md: this
+     * is the one extra obligation the OOXML path puts on a caller. */
+    um_set_alloc(malloc, free);
     sz = uno_fs_size(vol, name);
     if (sz <= 0 || sz > 4L * 1024 * 1024) return 0;
     if (!g_io) g_io = (unsigned char *)malloc(4L * 1024 * 1024);
@@ -488,9 +541,15 @@ static int load_doc(int vol, const char *name)
     if (g_iolen <= 0) return 0;
 
     src.read = io_read; src.size = g_iolen; src.ctx = 0;
-    c = ud_cfb_open(&src);
-    if (!c) return 0;
-    w = ud_doc_open(c);
+    /* The CONTAINER decides which reader, not the extension.  Both hand back
+     * the same ud_doc, so everything below is shared. */
+    if (ud_sniff(&src) == UD_C_ZIP) {
+        z = ud_zip_open(&src);
+        w = z ? ud_docx_open(z) : 0;
+    } else {
+        c = ud_cfb_open(&src);
+        w = c ? ud_doc_open(c) : 0;
+    }
     if (w) {
         const char *plain = ud_doc_plain(w);
         DOC = uow_new();
@@ -508,6 +567,7 @@ static int load_doc(int vol, const char *name)
         ok = 1;
     }
     ud_cfb_close(c);
+    ud_zip_close(z);
     g_caret = g_anchor = 0;
     touched();
     return ok;
@@ -521,6 +581,7 @@ static int save_doc(int vol, const char *name)
     int ok = 0;
 
     ud_set_alloc(malloc, free);
+    um_set_alloc(malloc, free);
     w = ud_docw_new();
     if (!w) return 0;
     len = uow_len(DOC);
@@ -537,7 +598,8 @@ static int save_doc(int vol, const char *name)
         ud_docw_para(w, para, c.bold, c.italic, p.align);
         cp = e + 1;
     }
-    out = ud_docw_save(w, &n);
+    out = name_is_ooxml(name, "docx") ? ud_docxw_save(w, &n)
+                                     : ud_docw_save(w, &n);
     ud_docw_free(w);
     if (out) {
         ok = uno_fs_write(vol, name, out, n);
@@ -596,13 +658,13 @@ static void do_command(int cmd)
         break;
     case C_OPEN:
         uof_set_fs(&kFs);
-        uof_open(&DL, 0, kDocTypes, 2, pc64_shell_workarea_w(),
+        uof_open(&DL, 0, kDocTypes, 3, pc64_shell_workarea_w(),
                  pc64_shell_workarea_h());
         g_dlg_kind = DLG_OPEN;
         break;
     case C_SAVEAS:
         uof_set_fs(&kFs);
-        uof_open(&DL, 1, kDocTypes, 2, pc64_shell_workarea_w(),
+        uof_open(&DL, 1, kDocTypes, 3, pc64_shell_workarea_w(),
                  pc64_shell_workarea_h());
         g_dlg_kind = DLG_SAVE;
         break;
@@ -797,6 +859,7 @@ static void dialog_closed(void)
         load_doc(uof_volume(), g_name);
     } else if (res == UOD_ID_OK && kind == DLG_SAVE) {
         a_cpy(g_name, uof_name(), (int)sizeof g_name);
+        ensure_ext(g_name, (int)sizeof g_name, uof_type());
         save_doc(uof_volume(), g_name);
     } else if (res == UOD_ID_OK && kind == DLG_FONT) {
         uow_chp c;
