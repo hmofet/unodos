@@ -95,9 +95,29 @@ image (and, on AX210, a `.pnvm`), then speaks a command protocol to scan, join
 and move frames. The driver ([iwlwifi.c](iwlwifi.c)) implements the PCIe
 transport (reset, APM, the three firmware-load mechanisms, TFD/TFH queues and RB
 rings, all polled, no MSI), the .ucode TLV parser, the MVM command layer, the
-WPA2-PSK 4-way handshake ([wifi_wpa.c](wifi_wpa.c)) with keys installed into the
-card for hardware CCMP, and Ethernet↔802.11 translation. It publishes the same
-`uno_nic_t`, so once joined it is just another link to the stack.
+authentication and 4-way handshake ([wifi_wpa.c](wifi_wpa.c),
+[wifi_sae.c](wifi_sae.c)) with keys installed into the card for hardware CCMP,
+and Ethernet↔802.11 translation. It publishes the same `uno_nic_t`, so once
+joined it is just another link to the stack.
+
+### Which security, and what happens when we cannot speak it
+
+**WPA2-PSK and WPA3-SAE**, both over CCMP; the contract, the negotiation table
+and the open items are in **[WIFI-SECURITY.md](WIFI-SECURITY.md)**. The driver
+now parses each beacon's RSN element and picks per BSS, preferring SAE wherever
+it is offered — including on a WPA2/WPA3 transition AP, since the passphrase is
+the same and the PMK is then not grindable offline from a captured handshake.
+
+An SSID offering nothing we speak (802.1X enterprise, or no CCMP) stops the
+join with a line naming the AKMs it did offer. That used to be the silent
+failure mode: with no beacon parse at all, WPA2-PSK was attempted against every
+network, and a WPA3-only AP answered with a deauthentication that read exactly
+like a wrong password. `iwl sec` prints the whole scan table's security so the
+question can be answered without a capture.
+
+WPA3 also requires management-frame protection, and an AP with MFPR set
+**refuses** an association request that does not claim MFPC — so on those
+networks this is not a downgrade, it is the difference between joining and not.
 
 ### Firmware is NOT in the repo, you supply it
 
