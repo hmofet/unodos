@@ -30,6 +30,7 @@
  * falling back to the .bss copies (fine on <=4GB machines and in QEMU's
  * small-RAM gates). */
 void *uno_pc64_st(void);                 /* uefi_main.c - the EFI system table */
+int   uno_pc64_detached(void);           /* 1 once ExitBootServices has run   */
 typedef EFI_STATUS (*EFI_ALLOC_PAGES)(UINTN Type, UINTN MemType, UINTN Pages,
                                       unsigned long long *Memory);
 
@@ -75,8 +76,11 @@ static void ac97_buf_init(void)
 {
     EFI_SYSTEM_TABLE *ST;
     if (gRing) return;                              /* once per boot           */
-    ST = (EFI_SYSTEM_TABLE *)uno_pc64_st();
-    if (ST) {
+    /* Only while we still own boot services: after ExitBootServices the table
+     * is dead and the deref traps (see iwlwifi's arena_init_lowmem, which lost
+     * an X13 Yoga to exactly that). Detached, we take the .bss fallback. */
+    ST = uno_pc64_detached() ? 0 : (EFI_SYSTEM_TABLE *)uno_pc64_st();
+    if (ST && ST->BootServices) {
         unsigned long long mem = 0x00000000FFFFF000ull;  /* ceiling: below 4GB */
         UINTN bytes = sizeof gBdlS + 128 + sizeof gRingS;
         UINTN pages = (bytes + 4095) / 4096;

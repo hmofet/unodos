@@ -45,6 +45,7 @@
  * and the early ROM's DMA never reaches it -> FH_INT stays 0, fw never starts.
  * AllocateMaxAddress(<4GB) forces the arena into 32-bit-DMA-reachable memory. */
 void *uno_pc64_st(void);                 /* uefi_main.c - the EFI system table */
+int   uno_pc64_detached(void);           /* 1 once ExitBootServices has run   */
 typedef EFI_STATUS (*EFI_ALLOC_PAGES)(UINTN Type, UINTN MemType, UINTN Pages,
                                       unsigned long long *Memory);
 
@@ -736,15 +737,24 @@ static u64 g_arena_phys;                /* base physaddr, for the bring-up trace
  * build. Falls back to the static arena (fine on <=4GB boxes and on QEMU). */
 static void arena_init_lowmem(void)
 {
-    EFI_SYSTEM_TABLE *ST = (EFI_SYSTEM_TABLE *)uno_pc64_st();
     g_arena_used = 0;
     if (g_arena) return;                /* once per boot */
-    if (ST) {
-        unsigned long long mem = 0x00000000FFFFF000ull;   /* ceiling: below 4GB */
-        UINTN pages = (FW_ARENA_MAX + 4095) / 4096;
-        if (((EFI_ALLOC_PAGES)ST->BootServices->AllocatePages)(
-                1 /*AllocateMaxAddress*/, 2 /*EfiLoaderData*/, pages, &mem) == EFI_SUCCESS)
-            g_arena = (u8 *)(uintptr_t)mem;
+    /* The comment above used to assert that WiFi always brings up before
+     * ExitBootServices. It does not: on an X13 Yoga (2026-08-20) bring-up ran
+     * at 24 s with detached=1, `ST->BootServices` was already dead, and the
+     * dereference below was the null-deref UBSan trapped - a #UD at
+     * arena_init_lowmem+0xb5 that reset the box, over and over. Boot services
+     * are only callable while we still own them, and `uno_pc64_detached()` is
+     * how every other driver here asks. */
+    if (!uno_pc64_detached()) {
+        EFI_SYSTEM_TABLE *ST = (EFI_SYSTEM_TABLE *)uno_pc64_st();
+        if (ST && ST->BootServices) {
+            unsigned long long mem = 0x00000000FFFFF000ull;   /* ceiling: <4GB */
+            UINTN pages = (FW_ARENA_MAX + 4095) / 4096;
+            if (((EFI_ALLOC_PAGES)ST->BootServices->AllocatePages)(
+                    1 /*AllocateMaxAddress*/, 2 /*EfiLoaderData*/, pages, &mem) == EFI_SUCCESS)
+                g_arena = (u8 *)(uintptr_t)mem;
+        }
     }
     if (!g_arena) g_arena = g_arena_static;             /* fallback (may be >4GB) */
     g_arena_phys = (u64)(uintptr_t)g_arena;
