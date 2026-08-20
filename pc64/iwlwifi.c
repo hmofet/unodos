@@ -33,6 +33,7 @@
 #include "pc64_fs.h"
 #include "net.h"
 #include "wifi_wpa.h"
+#include "wifi_sae.h"
 #include "uno_debug.h"     /* uno_dbg_net_trace: bring-up trace (no-op in release) */
 #include "uefi.h"          /* below-4GB DMA arena (AllocateMaxAddress) */
 #include <stdint.h>
@@ -1364,6 +1365,7 @@ static int hdrlen_80211(const u8 *frame)
  *    v1 encoding we used (0x420a) decodes as HT garbage.
  */
 static int g_keys_installed;
+static int g_igtk_install;   /* `iwl igtk 1`: hand the BIP key to the fw */
 static int g_key_gtk_idx = -1;   /* GTK index live on the station, -1 = none */
 /* Remaining per-frame TX log lines; see the note at the trace site. Sized to
  * cover a whole join (auth, assoc, the four EAPOL messages, first data out)
@@ -1498,6 +1500,20 @@ static int g_scanning;   /* beacons are only harvested while a scan is active */
 static int g_scan_mpdu_seen, g_scan_beacon_calls, g_scan_rb_total;   /* scan diagnostics */
 static const u8 SNAP[6] = { 0xAA,0xAA,0x03,0x00,0x00,0x00 };
 static u8  g_bssid[6];                                 /* the AP we joined */
+/* The security profile of the BSS we are joining, decided once at select_ap()
+ * from its beacon and then consulted by auth, assoc, the firmware station
+ * config and the supplicant - so those four cannot disagree about what is
+ * being negotiated.  Declared up here with g_bssid because mld_sta_cfg(),
+ * far above the join code, has to know whether PMF is in play. */
+static wpa_ap_sec_t g_ap_sec;
+static int g_join_akm;              /* WPA_AKM_SAE / WPA_AKM_PSK / 0          */
+static int g_join_mfp;              /* WPA_MFP_*                              */
+static u8  g_rsn_ie[64];            /* the EXACT element sent in assoc-req    */
+static int g_rsn_ie_len;
+static const char *akm_name(int akm)
+{
+    return akm == WPA_AKM_SAE ? "WPA3-SAE" : akm == WPA_AKM_PSK ? "WPA2-PSK" : "none";
+}
 static u32 g_rx_data_n, g_rx_data_drop, g_tx_data_n;   /* data-path counters */
 /* ---- post-join diagnosis (see iwl_link) ---------------------------------
  * "Associated, but no DHCP lease" has two candidate explanations and no
@@ -3080,7 +3096,13 @@ static void mld_sta_cfg(const u8 addr[6], int aid, int authorized)
     memcpy(c.peer_link_address, addr, 6);
     c.station_type = 0;                 /* STATION_TYPE_PEER */
     c.assoc_id = (u32)aid;              /* only meaningful once associated */
-    if (fw_has_capa(114) && !authorized) c.mfp = 1;
+    /* MFP stays set for the life of a PMF association.  The reference driver
+     * raises it while unauthorized (capa 114 = STA_EXP_MFP_SUPPORT) and drops
+     * it once the 4-way ends - but that is the NON-PMF case.  When we have
+     * actually negotiated management-frame protection, clearing it after
+     * authorization would tell the firmware to stop protecting the very frames
+     * PMF exists for. */
+    if (fw_has_capa(114) && (!authorized || g_join_mfp >= WPA_MFP_CAPABLE)) c.mfp = 1;
     c.mimo = 0;                         /* 1 spatial stream, matching rxchain */
     uno_dbg_net_trace("wifi: STA_CONFIG sta=%d link=%d aid=%d auth=%d "
                       "peer=%02x:%02x:%02x:%02x:%02x:%02x len=%d",
@@ -3689,6 +3711,24 @@ static void handle_eapol(const u8 *eapol, int len)
             mld_sec_key(g_wpa.ptk + 32, 16, 0, 0);             /* pairwise TK */
             if (g_wpa.gtk_len) { mld_sec_key(g_wpa.gtk, g_wpa.gtk_len, g_wpa.gtk_idx, 1);
                                  g_key_gtk_idx = g_wpa.gtk_idx; }
+            /* The IGTK verifies BROADCAST management frames (BIP).  We hold
+             * it but do not hand it to the firmware by default: the SEC_KEY
+             * shape for a BIP key on this fw is untested here, and a command
+             * this firmware dislikes does not fail - it SYSASSERTs, and only a
+             * reboot recovers.  `iwl igtk 1` turns the install on for the next
+             * join so it can be tried on metal deliberately.
+             *
+             * What we lose meanwhile: an unprotected broadcast deauth is still
+             * acted on, exactly as it is on the WPA2 path today.  That is not
+             * a regression, but it IS the protection PMF is supposed to add,
+             * so it stays listed as open in pc64/WIFI-SECURITY.md. */
+            if (g_wpa.igtk_len) {
+                if (g_igtk_install) mld_sec_key(g_wpa.igtk, g_wpa.igtk_len, g_wpa.igtk_idx, 1);
+                uno_dbg_net_trace("wifi: IGTK received (idx=%d len=%d) - %s",
+                                  g_wpa.igtk_idx, g_wpa.igtk_len,
+                                  g_igtk_install ? "installed" :
+                                  "NOT installed (iwl igtk 1 to try it)");
+            }
             g_keys_installed = 1;
             mld_sta_cfg(g_bssid, g_aid, 1 /*authorized*/);
         } else {
@@ -3761,7 +3801,13 @@ typedef char _sc_umac_sz_check[(sizeof(struct sc_umac) == 1940) ? 1 : -1];
 
 #define SCAN_AP_MAX 24
 static struct scan_ap { u8 bssid[6]; u8 chan; u8 ssid_len; char ssid[33]; int seen;
-                        u16 bi; u8 dtim; signed char rssi; } g_scan_aps[SCAN_AP_MAX];
+                        u16 bi; u8 dtim; signed char rssi;
+                        /* What the beacon says about how this BSS may be
+                         * joined.  We used to record none of it and offer
+                         * WPA2-PSK to everything, so a WPA3 BSS was not
+                         * "rejected" - it was attempted with the wrong AKM
+                         * and read back as a bad password. */
+                        wpa_ap_sec_t sec; } g_scan_aps[SCAN_AP_MAX];
 static int g_scan_ap_n;
 /* Which band scan_pick() may choose from: 0 = 2.4 GHz only (the proven path -
  * mvm_phy_ctxt has only ever been driven on band 2.4 / LMAC 0), 1 = 5 GHz only,
@@ -3778,6 +3824,8 @@ static void scan_record_beacon(const u8 *frame, int fl, int rssi, int dchan)
     u16 fc; int subtype, ielen, i;
     const u8 *bssid, *ie, *ssid = 0; int ssid_len = 0; u8 chan = 0, dtim = 0;
     u16 bi = 0;
+    wpa_ap_sec_t sec;
+    memset(&sec, 0, sizeof sec);
     g_scan_beacon_calls++;
     if (g_scan_beacon_calls <= 4)
         uno_dbg_net_trace("wifi: scan rx#%d fl=%d fc=%04x", g_scan_beacon_calls, fl,
@@ -3796,6 +3844,12 @@ static void scan_record_beacon(const u8 *frame, int fl, int rssi, int dchan)
         if (id == 0 && ln <= 32) { ssid = ie + i + 2; ssid_len = ln; }
         else if (id == 3 && ln >= 1) chan = ie[i + 2];
         else if (id == 5 && ln >= 2) dtim = ie[i + 3];   /* TIM: count, PERIOD, ... */
+        /* Elements are ordered by id, so 0x30 precedes 0xF4 - but the RSNXE
+         * carries the ONE bit that decides which SAE password element we
+         * derive, and wpa_parse_rsn_ie() clears the struct.  Keep the H2E flag
+         * outside the struct so element order cannot lose it. */
+        else if (id == 0x30) { int h = sec.h2e; wpa_parse_rsn_ie(ie + i, ielen - i, &sec); sec.h2e = (u8)h; }
+        else if (id == 0xF4) wpa_parse_rsnxe(ie + i, ielen - i, &sec);
         i += 2 + ln;
     }
     if (dchan) chan = (u8)dchan;                      /* descriptor beats the DS IE */
@@ -3806,11 +3860,12 @@ static void scan_record_beacon(const u8 *frame, int fl, int rssi, int dchan)
             if (bi) g_scan_aps[i].bi = bi;
             if (dtim) g_scan_aps[i].dtim = dtim;
             if (rssi && rssi > g_scan_aps[i].rssi) g_scan_aps[i].rssi = (signed char)rssi;
+            if (sec.has_rsn) g_scan_aps[i].sec = sec;
             return; }
     if (g_scan_ap_n >= SCAN_AP_MAX) return;
     { struct scan_ap *a = &g_scan_aps[g_scan_ap_n++];
       memcpy(a->bssid, bssid, 6); a->chan = chan; a->seen = 1; a->ssid_len = (u8)ssid_len;
-      a->bi = bi; a->dtim = dtim; a->rssi = (signed char)rssi;
+      a->bi = bi; a->dtim = dtim; a->rssi = (signed char)rssi; a->sec = sec;
       if (ssid && ssid_len <= 32) { memcpy(a->ssid, ssid, ssid_len); a->ssid[ssid_len] = 0; }
       else a->ssid[0] = 0; }
 }
@@ -4030,6 +4085,13 @@ static void select_ap(int idx)
     g_join_chan = g_scan_aps[idx].chan ? g_scan_aps[idx].chan : 1;
     g_join_bi   = g_scan_aps[idx].bi ? g_scan_aps[idx].bi : 100;
     g_join_dtim = g_scan_aps[idx].dtim ? g_scan_aps[idx].dtim : 1;
+    g_ap_sec    = g_scan_aps[idx].sec;
+    g_join_akm  = wpa_pick_akm(&g_ap_sec);
+    g_join_mfp  = wpa_pick_mfp(&g_ap_sec, g_join_akm);
+    uno_dbg_net_trace("wifi: security: akm_offered=%02x pairwise=%02x mfpc=%d mfpr=%d "
+                      "h2e=%d -> using %s, mfp=%d",
+                      g_ap_sec.akm, g_ap_sec.pairwise, g_ap_sec.mfpc, g_ap_sec.mfpr,
+                      g_ap_sec.h2e, akm_name(g_join_akm), g_join_mfp);
 }
 
 static int scan_pick(void)
@@ -4047,6 +4109,11 @@ static int scan_pick(void)
 }
 
 
+/* SAE authentication frames, one slot per transaction sequence (1 = commit,
+ * 2 = confirm).  Each holds the auth body from the algorithm field onward. */
+static u8  g_sae_rx[2][512];
+static int g_sae_rx_len[2];
+
 /* Stash a management response addressed to us (auth / assoc-resp / deauth /
  * disassoc) so mvm_auth/mvm_assoc can read it. Called from rx_process_rb when a
  * management frame arrives outside a scan. */
@@ -4055,6 +4122,21 @@ static void mgmt_capture(const u8 *frame, int fl, u16 fc)
     int st = (fc >> 4) & 0xF;
     if (st != 11 && st != 1 && st != 3 && st != 12 && st != 10) return;
     if (fl < 24 || memcmp(frame + 4, g_mac, 6)) return;   /* addr1 must be us */
+    /* SAE needs TWO authentication frames from the AP, and the single-slot
+     * g_mgmt_rx below keeps only the newest.  An AP that sends its commit and
+     * its confirm back to back - which 802.11 permits - would therefore lose
+     * the commit, and the exchange would fail with nothing in the log to say
+     * a frame had been overwritten.  Give each sequence number its own slot. */
+    if (st == 11 && fl >= 30 && (frame[24] | (frame[25] << 8)) == 3 &&
+        !memcmp(frame + 10, g_bssid, 6)) {          /* addr2 = the AP we chose */
+        int seq = frame[26] | (frame[27] << 8);
+        if (seq == 1 || seq == 2) {
+            int n = fl - 24;
+            if (n > (int)sizeof g_sae_rx[0]) n = (int)sizeof g_sae_rx[0];
+            memcpy(g_sae_rx[seq - 1], frame + 24, (size_t)n);
+            g_sae_rx_len[seq - 1] = n;
+        }
+    }
     if (fl > (int)sizeof g_mgmt_rx) fl = (int)sizeof g_mgmt_rx;
     memcpy(g_mgmt_rx, frame, fl);
     g_mgmt_rx_len = fl; g_mgmt_rx_subtype = (u8)st;
@@ -4159,22 +4241,175 @@ static int mvm_auth(void)
     return g_mgmt_rx[24 + 4] | (g_mgmt_rx[24 + 5] << 8);   /* auth resp status */
 }
 
+/* ---- WPA3: SAE authentication (802.11-2020 12.4) ------------------------
+ * Same authentication frames as Open System, algorithm 3 instead of 0, and
+ * two round trips instead of one: commit, then confirm.  It runs entirely
+ * BEFORE association, and its whole product is the PMK in g_sae.pmk, which
+ * then feeds the ordinary 4-way handshake. */
+static sae_t g_sae;
+static int   g_sae_ready;           /* g_sae.pmk is authenticated             */
+
+/* Send one SAE auth frame. `body` is everything after the 6-byte header. */
+static void sae_tx(int seq, int status, const u8 *body, int blen)
+{
+    u8 f[256];
+    int n = 24;
+    if (blen > (int)sizeof f - 30) return;
+    memset(f, 0, sizeof f);
+    f[0] = 0xB0;                                  /* mgmt / auth              */
+    memcpy(f + 4, g_bssid, 6);
+    memcpy(f + 10, g_mac, 6);
+    memcpy(f + 16, g_bssid, 6);
+    f[n++] = 3; f[n++] = 0;                       /* algorithm = SAE          */
+    f[n++] = (u8)seq; f[n++] = (u8)(seq >> 8);
+    f[n++] = (u8)status; f[n++] = (u8)(status >> 8);
+    memcpy(f + n, body, (size_t)blen); n += blen;
+    tx_enqueue(f, n, 1);
+}
+
+/* Pump the RX ring until an SAE frame of transaction `seq` lands. */
+static int sae_wait(int seq, int ms)
+{
+    int t;
+    for (t = 0; t < ms; t++) {
+        rx_pump_once();
+        if (g_sae_rx_len[seq - 1]) return 0;
+        mdelay_(1);
+    }
+    return -1;
+}
+
+/* Run the whole SAE exchange against the selected AP.  0 on success (the PMK
+ * is authenticated), <0 otherwise. */
+/* Derive the password element and draw rand/mask.  SEPARATE from the on-air
+ * exchange, and called BEFORE the airtime window is requested, because this is
+ * the slow half: hunting-and-pecking runs forty modular exponentiations, and
+ * SESSION_PROTECTION_CMD only reserves 900 TU (~922 ms).  Spending any of that
+ * on arithmetic that needs no radio would eat into the window the two SAE
+ * round trips have to fit inside. */
+static int sae_prepare(void)
+{
+    int rc;
+    g_sae_ready = 0;
+    g_sae_rx_len[0] = g_sae_rx_len[1] = 0;
+    /* h2e is the AP's advertised capability, not our preference: derive the
+     * password element the way the AP will, or every subsequent byte differs. */
+    rc = sae_init(&g_sae, g_cfg_ssid, (int)strlen(g_cfg_ssid), g_cfg_psk,
+                  g_mac, g_bssid, g_ap_sec.h2e);
+    if (rc != SAE_OK) {
+        uno_dbg_net_trace("wifi: SAE: init failed (%d)%s", rc,
+                          rc == SAE_ENOENTROPY
+                          ? " - NO USABLE RNG.  SAE is refused rather than run on a"
+                            " guessable secret; a wired NIC or a CPU with RDRAND joins."
+                          : "");
+        return -1;
+    }
+    uno_dbg_net_trace("wifi: SAE: group 19, PWE by %s",
+                      g_ap_sec.h2e ? "hash-to-element" : "hunting-and-pecking");
+    return 0;
+}
+
+/* The on-air half: commit, then confirm.  sae_prepare() must have run. */
+static int mvm_auth_sae(void)
+{
+    u8 body[256];
+    int n, rc, attempt;
+
+    if (g_sae.state != SAE_ST_INIT) {
+        uno_dbg_net_trace("wifi: SAE: no prepared state - sae_prepare() did not run");
+        return -1;
+    }
+
+    /* --- commit.  Two attempts: a busy AP answers the first with status 76
+     * and an anti-clogging token, which we echo back in an otherwise
+     * IDENTICAL commit (a fresh scalar would restart the exchange). */
+    for (attempt = 0; attempt < 2; attempt++) {
+        int status;
+        g_sae_rx_len[0] = 0;
+        n = sae_build_commit(&g_sae, body, sizeof body);
+        if (n < 0) { uno_dbg_net_trace("wifi: SAE: commit build failed"); return -1; }
+        sae_tx(1, sae_commit_status(&g_sae), body, n);
+        if (sae_wait(1, 1200) < 0) {
+            uno_dbg_net_trace("wifi: SAE: no commit from the AP within 1200 ms");
+            return -1;
+        }
+        status = g_sae_rx[0][4] | (g_sae_rx[0][5] << 8);
+        if (status == 76) {                       /* ANTI_CLOGGING_TOKEN_REQUIRED */
+            rc = sae_token_from_reject(&g_sae, g_sae_rx[0] + 6, g_sae_rx_len[0] - 6);
+            uno_dbg_net_trace("wifi: SAE: AP demanded an anti-clogging token (%d bytes, rc=%d)",
+                              g_sae.token_len, rc);
+            if (rc != SAE_OK) return -1;
+            continue;                             /* re-send the SAME commit */
+        }
+        if (status != 0 && status != 126) {
+            uno_dbg_net_trace("wifi: SAE: AP rejected our commit, status=%d%s", status,
+                              status == 77 ? " (unsupported group - we only offer 19)" : "");
+            return -1;
+        }
+        rc = sae_rx_commit(&g_sae, g_sae_rx[0] + 6, g_sae_rx_len[0] - 6);
+        if (rc != SAE_OK) {
+            uno_dbg_net_trace("wifi: SAE: the AP's commit did not verify (%d)", rc);
+            return -1;
+        }
+        break;
+    }
+    if (g_sae.state != SAE_ST_COMMITTED) {
+        uno_dbg_net_trace("wifi: SAE: commit never completed (token loop exhausted)");
+        return -1;
+    }
+
+    /* --- confirm.  Re-arm the airtime window first: the commit round trip can
+     * have consumed most of the 900 TU on its own, and a confirm transmitted
+     * off-channel is simply never heard.  A second SESSION_PROTECTION is
+     * accepted by this firmware (the same property the retry path relies on).
+     *
+     * A wrong passphrase fails HERE, and it fails cleanly: the AP's confirm
+     * will not verify.  That is the one honest error this stack can report, so
+     * say so rather than letting it read as a timeout. */
+    mvm_assoc_window();
+    g_sae_rx_len[1] = 0;
+    n = sae_build_confirm(&g_sae, body, sizeof body);
+    if (n < 0) return -1;
+    sae_tx(2, 0, body, n);
+    if (sae_wait(2, 1200) < 0) {
+        uno_dbg_net_trace("wifi: SAE: no confirm from the AP - it most likely "
+                          "rejected our confirm, which means a WRONG PASSPHRASE");
+        return -1;
+    }
+    { int status = g_sae_rx[1][4] | (g_sae_rx[1][5] << 8);
+      if (status != 0) {
+          uno_dbg_net_trace("wifi: SAE: AP confirm carried status=%d", status);
+          return -1;
+      } }
+    rc = sae_rx_confirm(&g_sae, g_sae_rx[1] + 6, g_sae_rx_len[1] - 6);
+    if (rc != SAE_OK) {
+        uno_dbg_net_trace("wifi: SAE: the AP's confirm did not verify (%d) - "
+                          "WRONG PASSPHRASE, or an active attacker", rc);
+        return -1;
+    }
+    g_sae_ready = 1;
+    uno_dbg_net_trace("wifi: SAE: ACCEPTED - PMK established, PMKID "
+                      "%02x%02x%02x%02x...", g_sae.pmkid[0], g_sae.pmkid[1],
+                      g_sae.pmkid[2], g_sae.pmkid[3]);
+    return 0;
+}
+
 /* Build + TX an Association Request (capability + listen-interval + SSID +
  * supported/extended rates + WPA2 RSN IE) and wait for the Assoc Response.
  * Returns the AID on success, <0 on failure / timeout. */
 static int mvm_assoc(void)
 {
-    u8 f[128]; int n = 24;
+    u8 f[256]; int n = 24;
     static const u8 sr[8]  = { 0x82,0x84,0x8b,0x96,0x0c,0x12,0x18,0x24 }; /* 1..18M */
     static const u8 er[4]  = { 0x30,0x48,0x60,0x6c };                     /* 24..54M */
     /* The RSN IE here MUST be byte-identical to the one the supplicant puts in
      * EAPOL 2/4: the authenticator compares them and deauthenticates on any
      * difference. This used to be a private 20-byte literal (RSNE body 0x12)
-     * while wpa_build_rsn_ie() emits 22 bytes (body 0x14, including the 2-byte
-     * RSN capabilities field) - so every 4-way died right after our 2/4 went
-     * out, with the AP sending deauth (metal, 2026-07-28). Build both from the
-     * one function so they cannot drift again. */
-    u8 rsn[24]; int rsn_len = wpa_build_rsn_ie(rsn);
+     * while wpa_build_rsn_ie() emitted 22 bytes (body 0x14, including the
+     * 2-byte RSN capabilities field) - so every 4-way died right after our 2/4
+     * went out, with the AP sending deauth (metal, 2026-07-28). It is now
+     * built ONCE, in wpa_arm(), and both users copy that array - there is no
+     * second construction site left to drift. */
     int sl = (int)strlen(g_cfg_ssid);
     memset(f, 0, sizeof f);
     f[0] = 0x00;                        /* FC: mgmt(0) / subtype assoc-req(0) */
@@ -4182,13 +4417,18 @@ static int mvm_assoc(void)
     memcpy(f + 10, g_mac, 6);           /* addr2 = SA */
     memcpy(f + 16, g_bssid, 6);         /* addr3 = BSSID */
     /* assoc-req body @24: capability(2), listen interval(2) */
-    f[24] = 0x11; f[25] = 0x00;         /* ESS | Privacy (WPA2) */
+    f[24] = 0x11; f[25] = 0x00;         /* ESS | Privacy (WPA2/WPA3) */
     f[26] = 0x0a; f[27] = 0x00;         /* listen interval = 10 */
     n = 28;
     f[n++] = 0x00; f[n++] = (u8)sl; memcpy(f + n, g_cfg_ssid, sl); n += sl;   /* SSID */
     f[n++] = 0x01; f[n++] = 8; memcpy(f + n, sr, 8); n += 8;                  /* rates */
     f[n++] = 0x32; f[n++] = 4; memcpy(f + n, er, 4); n += 4;                  /* ext rates */
-    memcpy(f + n, rsn, rsn_len); n += rsn_len;                                /* RSN */
+    memcpy(f + n, g_rsn_ie, (size_t)g_rsn_ie_len); n += g_rsn_ie_len;         /* RSN */
+    /* The RSN Extension element tells the AP we derived the password element
+     * by hash-to-element.  Element ids ascend, so it goes after the RSNE.  It
+     * is NOT part of the element the supplicant echoes in 2/4. */
+    n += wpa_build_rsnxe(f + n, (int)sizeof f - n,
+                         g_join_akm == WPA_AKM_SAE && g_ap_sec.h2e);
     g_mgmt_rx_len = 0;
     tx_enqueue(f, n, 1);
     if (wait_mgmt(1, 800) < 0) return -1;
@@ -4258,11 +4498,33 @@ static int assoc_setup(void)
 static void wpa_arm(void)
 {
     u8 pmk[32];
-    wpa_pmk_from_psk(g_cfg_ssid, (int)strlen(g_cfg_ssid), g_cfg_psk, pmk);
-    wpa_sm_init(&g_wpa, pmk, g_mac, g_bssid);
+    wpa_rsn_cfg_t cfg;
+    memset(&cfg, 0, sizeof cfg);
+    cfg.akm = g_join_akm ? g_join_akm : WPA_AKM_PSK;
+    cfg.mfp = g_join_mfp;
+    if (g_join_akm == WPA_AKM_SAE) {
+        /* SAE already ran, pre-association; its PMK is what the 4-way uses,
+         * and the PMKID names the PMKSA the AP just cached for us.  Arming on
+         * an unauthenticated PMK would produce a 4-way that fails on the MIC,
+         * i.e. the WPA2 symptom we are here to stop mistaking for one. */
+        if (!g_sae_ready) {
+            uno_dbg_net_trace("wifi: wpa_arm: SAE has not accepted - refusing to arm");
+            g_wpa_active = 0;
+            return;
+        }
+        memcpy(pmk, g_sae.pmk, 32);
+        cfg.pmkid = g_sae.pmkid;
+    } else {
+        wpa_pmk_from_psk(g_cfg_ssid, (int)strlen(g_cfg_ssid), g_cfg_psk, pmk);
+    }
+    g_rsn_ie_len = wpa_build_rsn_ie(g_rsn_ie, (int)sizeof g_rsn_ie, &cfg);
+    if (g_rsn_ie_len < 0) g_rsn_ie_len = 0;
+    wpa_sm_init(&g_wpa, pmk, g_mac, g_bssid, cfg.akm, g_rsn_ie, g_rsn_ie_len);
+    memset(pmk, 0, sizeof pmk);
     g_wpa_active = 1; g_keys_installed = 0;
     strncpy(g_ssid_str, g_cfg_ssid, sizeof g_ssid_str - 1);
-    uno_dbg_net_trace("wifi: WPA2 supplicant armed for \"%s\" (PMK derived)", g_cfg_ssid);
+    uno_dbg_net_trace("wifi: %s supplicant armed for \"%s\" (mfp=%d, RSNE %d bytes)",
+                      akm_name(cfg.akm), g_cfg_ssid, cfg.mfp, g_rsn_ie_len);
 }
 
 /* Tell the fw we are associated. Deliberately does NOT touch the supplicant. */
@@ -4290,6 +4552,21 @@ static int join_selected(void)
     q = assoc_setup();
     if (q < 0) { uno_dbg_net_trace("wifi: join: no TX queue - cannot auth"); return -1; }
 
+    /* An AP whose beacon offers nothing we speak is a hard stop, and saying so
+     * is the whole point: attempting WPA2-PSK against a WPA3-only BSS produced
+     * a deauthentication that read exactly like a wrong password. */
+    if (!g_join_akm) {
+        uno_dbg_net_trace("wifi: join: \"%s\" offers AKM %02x / pairwise %02x - "
+                          "nothing this supplicant can speak (we do WPA2-PSK and "
+                          "WPA3-SAE over CCMP)", g_cfg_ssid,
+                          g_ap_sec.akm, g_ap_sec.pairwise);
+        return -1;
+    }
+    /* SAE's password element costs tens of milliseconds and needs no radio, so
+     * derive it BEFORE reserving airtime rather than out of it. */
+    prog("Authenticating", 3);
+    if (g_join_akm == WPA_AKM_SAE && sae_prepare() < 0) return -1;
+
     /* Reserve on-channel airtime for the auth exchange. This fw has no
      * TIME_EVENT_CMD (it SYSASSERTs); SESSION_PROTECTION_CMD is the one it
      * speaks, and it now has a real link to reference. */
@@ -4298,11 +4575,19 @@ static int join_selected(void)
         uno_dbg_net_trace("wifi: join: session-prot asserted the fw (iwl fwerr)");
         return -1;
     }
-    prog("Authenticating", 3);
-    r = mvm_auth();
-    uno_dbg_net_trace("wifi: join: auth -> %d (0=ok, >0 AP status, -1 no resp)", r);
-    if (r != 0) return -1;
+    if (g_join_akm == WPA_AKM_SAE) {
+        r = mvm_auth_sae();
+        uno_dbg_net_trace("wifi: join: SAE auth -> %d", r);
+        if (r != 0) return -1;
+    } else {
+        r = mvm_auth();
+        uno_dbg_net_trace("wifi: join: auth -> %d (0=ok, >0 AP status, -1 no resp)", r);
+        if (r != 0) return -1;
+    }
     wpa_arm();                  /* before the request: EAPOL 1/4 lands inside mvm_assoc() */
+    /* Two SAE round trips will have outlived the window the Open-System path
+     * only had to fit one into.  Re-arm before the association request. */
+    if (g_join_akm == WPA_AKM_SAE) mvm_assoc_window();
     prog("Joining the network", 4);
     r = mvm_assoc();
     uno_dbg_net_trace("wifi: join: assoc -> %d (>=0 AID)", r);
@@ -4346,6 +4631,7 @@ static int retarget_ap(int new_chan)
         }
     }
     g_joined = 0; g_wpa_active = 0;                /* leaving the old BSS */
+    sae_clear(&g_sae); g_sae_ready = 0;            /* and its SAE secrets */
     g_link_lost_reason = -1;                       /* a new attempt, not the old failure */
     /* REMOVE the station and ADD a fresh one, rather than re-pointing the live
      * one at the next peer. Re-pointing left the hardware transmitting happily
@@ -4416,15 +4702,25 @@ static int join_retry(void)
         uno_dbg_net_trace("wifi: join: could not re-point the contexts at the next BSS");
         return -1;
     }
+    /* The retry is a join to a DIFFERENT BSS, so it authenticates the way that
+     * BSS asks for - select_ap() has already re-read its beacon into
+     * g_join_akm.  Retrying an SAE network with Open-System auth is the shape
+     * of bug that would have made the whole feature look intermittent. */
+    if (!g_join_akm) {
+        uno_dbg_net_trace("wifi: join: retry BSS offers no AKM we speak");
+        return -1;
+    }
+    if (g_join_akm == WPA_AKM_SAE && sae_prepare() < 0) return -1;
     mvm_assoc_window();
     if (r32(CSR_MSIX_HW_INT_CAUSES_AD)) {
         uno_dbg_net_trace("wifi: join: session-prot asserted the fw on the retry");
         return -1;
     }
-    r = mvm_auth();
-    uno_dbg_net_trace("wifi: join: retry auth -> %d", r);
+    r = (g_join_akm == WPA_AKM_SAE) ? mvm_auth_sae() : mvm_auth();
+    uno_dbg_net_trace("wifi: join: retry %s auth -> %d", akm_name(g_join_akm), r);
     if (r != 0) return -1;
     wpa_arm();
+    if (g_join_akm == WPA_AKM_SAE) mvm_assoc_window();
     r = mvm_assoc();
     uno_dbg_net_trace("wifi: join: retry assoc -> %d (>=0 AID)", r);
     if (r < 0) return -1;
@@ -5373,9 +5669,7 @@ static int mvm_steps(int n, char *out, int cap)
     case 8: mvm_binding(1);
         strcpy(out, "ok mvm8: binding returned"); break;
     case 9: mvm_time_quota(); mvm_assoc_window(); mvm_add_sta(g_bssid, 0, 0);
-        { u8 pmk[32];
-          wpa_pmk_from_psk(g_cfg_ssid, (int)strlen(g_cfg_ssid), g_cfg_psk, pmk);
-          wpa_sm_init(&g_wpa, pmk, g_mac, g_bssid); g_wpa_active = 1; }
+        wpa_arm();
         strcpy(out, "ok mvm9: time_quota+assoc_window+add_sta+wpa returned"); break;
     /* stage-9 split (a..d): stage 9 wedged; walk its four ops. Needs 7 first
      * (g_bssid = broadcast). Suspicion: assoc_window waits on a NOTIFICATION,
@@ -5387,9 +5681,12 @@ static int mvm_steps(int n, char *out, int cap)
         strcpy(out, "ok mvm9b: assoc_window returned"); break;
     case 12: mvm_add_sta(g_bssid, 0, 0);
         strcpy(out, "ok mvm9c: add_sta returned"); break;
-    case 13: { u8 pmk[32];
-          wpa_pmk_from_psk(g_cfg_ssid, (int)strlen(g_cfg_ssid), g_cfg_psk, pmk);
-          wpa_sm_init(&g_wpa, pmk, g_mac, g_bssid); g_wpa_active = 1; }
+    /* wpa_arm() rather than an open-coded PMK: it is the one place that knows
+     * which AKM was negotiated and builds the RSN element the supplicant will
+     * echo.  With no beacon parsed (these scaffold verbs point g_bssid at
+     * broadcast) it falls back to WPA2-PSK, which is what this step always
+     * did. */
+    case 13: wpa_arm();
         strcpy(out, "ok mvm9d: wpa PMK/init returned"); break;
     /* e/f: the two iwl_mvm_up() commands we never sent. Separate steps so metal
      * can tell which (if either) is what SESSION_PROTECTION was missing. Run
@@ -5746,6 +6043,15 @@ int iwl_dbg_cmd(const char *line, char *out, int cap)
         h = r32(CSR_MSIX_HW_INT_CAUSES_AD);
         uno_dbg_net_trace("wifi: auth: after session-prot csr2808=%08x", h);
         if (h) { strcpy(out, "err auth: session-prot asserted fw (iwl fwerr)"); return (int)strlen(out); }
+        /* Authenticate the way the selected BSS asks for.  A step verb that
+         * always spoke Open System would report "no response" on every WPA3
+         * network and send whoever typed it hunting in the wrong place. */
+        if (g_join_akm == WPA_AKM_SAE) {
+            if (sae_prepare() < 0) { strcpy(out, "err auth: SAE prepare failed (see NET log)"); return (int)strlen(out); }
+            r = mvm_auth_sae();
+            strcpy(out, r == 0 ? "ok auth: SAE accepted" : "err auth: SAE failed (see NET log)");
+            return (int)strlen(out);
+        }
         r = mvm_auth();
         uno_dbg_net_trace("wifi: auth -> %d (0=ok, >0 AP status, -1 no resp)", r);
         strcpy(out, r == 0 ? "ok auth: Open-System accepted" : (r < 0 ? "err auth: no response" : "err auth: AP rejected"));
@@ -5852,6 +6158,38 @@ int iwl_dbg_cmd(const char *line, char *out, int cap)
         else if (!strncmp(q, "any", 3)) g_band_pref = 2;
         strcpy(out, g_band_pref == 0 ? "ok band: 2.4 GHz only" :
                     g_band_pref == 1 ? "ok band: 5 GHz only" : "ok band: either");
+        return (int)strlen(out);
+    }
+    /* "iwl sec" - what security each scanned BSS offers, and what we would
+     * negotiate with it.  Answers "why will this network not join" without a
+     * capture: an SSID whose row says "none" is one we cannot speak to. */
+    if (!strncmp(line, "sec", 3)) {
+        int i, n = 0;
+        /* A row is at most 32 (SSID) + ~64 of fixed text.  Stop while a whole
+         * one still fits, and clamp on snprintf's return: it reports what it
+         * WOULD have written, so adding it blind can push n past cap and turn
+         * the next `cap - n` into a huge size_t. */
+        for (i = 0; i < g_scan_ap_n && n < cap - 128; i++) {
+            const wpa_ap_sec_t *s = &g_scan_aps[i].sec;
+            int w = snprintf(out + n, (size_t)(cap - n),
+                             "%s%-20s akm=%02x pair=%02x mfpc=%d mfpr=%d h2e=%d -> %s",
+                             n ? "\n" : "", g_scan_aps[i].ssid,
+                             s->akm, s->pairwise, s->mfpc, s->mfpr, s->h2e,
+                             akm_name(wpa_pick_akm(s)));
+            if (w < 0) break;
+            n += (w > cap - n) ? (cap - n) : w;
+        }
+        if (!n) strcpy(out, "ok sec: no scan results - run iwl scan first");
+        return (int)strlen(out);
+    }
+    /* "iwl igtk <0|1>" - hand the BIP (broadcast management) key to the
+     * firmware on the next PMF join.  Off by default; see the install site. */
+    if (!strncmp(line, "igtk", 4)) {
+        const char *q = line + 4;
+        while (*q == 0x20) q++;
+        if (*q == 0x30 || *q == 0x31) g_igtk_install = (*q == 0x31);
+        strcpy(out, g_igtk_install ? "ok igtk: will be installed on the next join"
+                                   : "ok igtk: held but not installed");
         return (int)strlen(out);
     }
     /* "iwl connect [ssid|psk]" - the whole join in ONE command, the same path
