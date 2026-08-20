@@ -77,15 +77,26 @@ agent -> ssh devbuntu -> urc_bridge.py -> TCP -> the box's own network stack
 
 ## 4. Results
 
-65 recorded results on the ZimaBlade, 16 on the Yoga.
+86 recorded results across the two machines; 57 passed. Published (behind the
+portal's Access gate) at `home.arinbakht.ca/unodos-conformance-results.html`.
 
 **Passed on metal:** 23/23 apps launch; the security store and session file
 land on the boot volume; Duum interactive; the whole office suite; UnoCode
-including its integrated terminal (`js 6*7` -> 42 on the live unojs engine);
-SSH keygen plus `ssh run` to a real host with exit 0; the browser loading a
-real HTTPS site; JPEG/WebP/QOI decoding, and malformed fuzz-corpus images
-rejected *gracefully with a specific reason*; Control Panel across all six
-tabs; two hours of continuous uptime at 60 fps and 96% idle.
+including its integrated terminal (`js 6*7` -> 42 on the live unojs engine)
+and a sample extension that ran and read the active editor; SSH keygen plus
+`ssh run` to a real host with exit 0; the browser loading a real HTTPS site;
+JPEG/WebP/QOI decoding, and malformed fuzz-corpus images rejected *gracefully
+with a specific reason*; Control Panel across all six tabs; a `.wsz` Winamp
+skin decoded and applied; a resolution change that **auto-reverted when left
+unconfirmed**; Runner3D switching the real GOP mode and restoring it on exit;
+two hours of continuous uptime at 60 fps and 96% idle.
+
+**Accounts and the sign-in gate pass end to end** - admin creation through the
+Control Panel (injection reaches the security sheet only because `ui-unlock`
+is set), the gate appearing on the next boot, remote authentication, and
+deletion. The load-bearing part: **the machine still reaches its remote
+channel while gated**, so a headless box is never stranded at a password
+prompt.
 
 **First-ever hardware tests, all three passed their core function:**
 - **Studio AI assistant** - a live round trip to Anthropic over real TLS,
@@ -108,6 +119,41 @@ tabs; two hours of continuous uptime at 60 fps and 96% idle.
    the strength of a comment asserting WiFi always brings up first. See §6.
 4. The same pattern, inherited by copy, in the AC'97 fix written earlier the
    same day - fixed in the same commit rather than left as the next crash.
+
+### Still open at the end of the run (not fixed - operator's call)
+
+- **Start menu > Power > Restart never dispatches.** Established by controlled
+  comparison: the *identical* long-hold click opened Clock from the same menu
+  seconds earlier (confirmed by `probe`), while Restart highlights on hover and
+  then does nothing; Enter on the highlighted item is equally inert; uptime
+  keeps climbing and no re-dial happens. The reset mechanism is fine - the URC
+  `reboot` verb reboots this box normally - so it is the menu action that does
+  not fire, and **a user cannot restart from the interface**. `noshutdown` in
+  DEBUG.CFG is not the cause; it only gates the stress driver's auto-poweroff.
+- **Session restore reopens the wrong window.** `SHELL.CFG` correctly records
+  `restore=1`, `open=files,clock,unoamp` and per-app geometry, and "Restore
+  last session" is ticked - yet after reboot exactly one window returns and it
+  is **Control Panel**, which was not in the list. Reproduced twice. Control is
+  index 0 in the native app table, which is the shape of the bug.
+- **A Python app whose `draw()` raises reports nothing** (§7).
+- **WiFi is WPA2-only** (§8).
+- **The Yoga's network path collapses** (§6).
+
+Minor and deferred: the Audio tab draws its value over its label; the office
+Open dialog ignores typed input entirely; Studio opens binary `.UNO` files in
+the text editor as garbage; `nst` reports failure on a machine whose
+networking demonstrably works; and menu items need a **~1.2 s press hold** to
+activate under injection - 0.35 s registers as hover only, even at 60 fps.
+
+### Not covered, stated plainly
+
+Audible sound and "what is on the frozen screen" both need a person in the
+room. Appliances could not run: the guest kernel is 17 MB against an 8 MiB
+push cap, and the images were on the other machine's stick. Shut Down was not
+exercised (Restart already showed the Power items do not dispatch, and a
+successful power-off needs a human to switch the box back on), and the
+production-image boot is deliberately last because it removes the channel.
+The Yoga matrix is roughly a fifth covered.
 
 ## 5. Traps, in the order they cost time
 
