@@ -841,8 +841,13 @@ CD-ROM <em>and</em> writes to a USB stick with any standard imaging tool.</p>
     <ul>
       <li><strong>Windows</strong>: <a href="https://github.com/hmofet/unodos/releases/latest/download/UnoDosFlasher.exe">UnoDosFlasher.exe</a>.
           No install; it prompts for Administrator (raw disk writes need it).</li>
-      <li><strong>macOS</strong>: <a href="https://github.com/hmofet/unodos/releases/latest/download/UnoDosFlasher-macOS.zip">UnoDosFlasher-macOS.zip</a>.
-          Unzip and open <code>UnoDosFlasher.app</code>; it prompts for your administrator password.</li>
+      <li><strong>macOS</strong>: the Mac flasher app is not published yet.
+          Until it is, write <code>unodos-pc64-hybrid.img.gz</code> from the
+          <a href="https://github.com/hmofet/unodos/releases/latest">release</a>
+          with <a href="https://etcher.balena.io/">balenaEtcher</a> (it reads
+          <code>.gz</code> directly) or <code>dd</code>; the
+          <a href="#iso">download-and-write section above</a> has the exact
+          steps.</li>
     </ul>
   </li>
   <li>Run it and <strong>plug in your USB stick</strong>. The flasher picks the smallest removable disk automatically; check it is the right one.</li>
