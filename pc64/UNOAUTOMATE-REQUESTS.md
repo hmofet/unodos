@@ -9531,3 +9531,23 @@ key that got eaten. It is not the focus fix - the log shows `fwi=0` for that
 first key too - so something between the keyboard drain and `feed()` consumes
 one event after a launch. I did not chase it further: the manual's figure presses
 twice and says so in the scene comment.
+
+## 2026-08-20 - toolkits/sound: the 4GB SILENCE is root-caused and FIXED (ac97)
+
+The 2026-08-19 finding ("guest SILENT at -m 4096, audible at 3072") is the
+AC97 driver, not the mixer: the BDL entries and PO_BDBAR are 32-bit by
+hardware, gRing/gBdl were plain .bss, and with >=4GB of RAM the loader can
+place .bss above the 4GB line - the (uint32_t) casts truncate and the engine
+streams the wrong memory. Fix on master: ac97.c now backs the BDL+ring with
+AllocateMaxAddress(<4GB) pages (iwlwifi arena pattern), .bss fallback for
+<=4GB machines. hdaudio.c already writes SD_BDPU + 64-bit BDL addresses and
+needs nothing.
+
+A/B evidence, conformance stick image on devbuntu (QEMU 10.2 + wav sink,
+KVM): before - 3072 SOUND (peak 6259), 4096 SILENT (peak 0); after the fix
+both play. Note for the audio gate: quill qemu 8.2 (Ubuntu 24.04 package)
+ships NO wav audiodev backend, so tools/audio_test.py dies there with
+"Could not create a backend" + a QMP BrokenPipe at EVERY size - that is the
+"broken pipe at every size" mystery; run it on a host whose qemu lists
+"wav" in -audiodev help. Its Music launch is also still by Start-menu
+INDEX (10), which has drifted; launch by id before trusting a SILENT verdict.
