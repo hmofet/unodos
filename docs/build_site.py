@@ -15,6 +15,7 @@ OUT = _HERE if os.path.basename(_HERE) == "docs" else os.path.join(_HERE, "docs"
 # --------------------------------------------------------------------------- nav
 NAV = [
     ("index.html",           "Overview"),
+    ("try-browser.html",     "Try it in your browser"),
     ("getting-started.html", "Getting started"),
     ("desktop.html",         "The desktop"),
     ("windows.html",         "Windows &amp; desktops"),
@@ -802,11 +803,41 @@ is the real system, recorded off a running machine, in one take per scene.</p>
 <a href="desktop.html">desktop tour</a>.</p>
 """)
 
+PAGES["try-browser.html"] = ("Try it in your browser", f"""
+<h1>Try it in your browser</h1>
+<p class="lede">The quickest look at UnoDOS costs nothing and installs nothing:
+<a href="https://unodos.arinbakht.com/try/">open it in a browser tab</a>. It is the real release
+image running on an emulated PC compiled to WebAssembly, not a video and not a mock-up, and the
+desktop arrives in a few seconds on a current machine.</p>
+<p><a class="btn" href="https://unodos.arinbakht.com/try/"><strong>Boot UnoDOS in your browser</strong></a></p>
+
+<h2 id="what">What you are looking at</h2>
+<ul>
+  <li>The screen is <strong>1600x900</strong>, one desktop pixel to one screen pixel. The
+      <strong>Size</strong> control above it picks the zoom; whole multiples stay pixel-sharp.</li>
+  <li>The disk is a RAM disk. You can write to it, and <strong>nothing survives a reload</strong> -
+      which makes it a good place to try the things this manual warns about.</li>
+  <li>The machine has a working network card and takes an address, but that network
+      <strong>ends inside the tab</strong>. See <a href="networking.html#emulator">Networking</a>.</li>
+  <li><a href="apps.html#duum">Duum</a> is on the disk with its game data, but an emulated PC runs it
+      at well under one frame a second. It is worth seeing rather than playing;
+      <a href="https://unodos.arinbakht.com/duum/">the browser port of Duum</a> plays properly.</li>
+</ul>
+{note('A tab in the background is throttled by the browser, which stops the emulated machine rather than just the picture. The page says <strong>paused</strong> when that happens; bring the tab back to the front and it carries on.', title="Leave the tab in front")}
+
+<h2 id="limits">What the browser cannot show you</h2>
+<p>Every instruction is being emulated, so the machine is far slower than the same OS on real
+hardware, and anything that leans on the CPU shows it. Sound, the hardware drivers and the true
+speed of the desktop are properties of a real PC. When you want those,
+<a href="getting-started.html">Getting started</a> puts UnoDOS on a USB stick in a few minutes.</p>
+""")
+
 PAGES["getting-started.html"] = ("Getting started", f"""
 <h1>Getting started</h1>
 <p class="lede">Download the <strong>ISO</strong>, write it to a spare USB stick with a tool you already
 know (Rufus, balenaEtcher) or boot it straight in a virtual machine &mdash; or use the one-click
-UnoDOS flasher. No building, no command line.</p>
+UnoDOS flasher. No building, no command line. (Just want a look first?
+<a href="try-browser.html">Try it in your browser</a>, nothing to install.)</p>
 
 <h2 id="need">What you need</h2>
 <ul>
@@ -879,24 +910,6 @@ CD-ROM <em>and</em> writes to a USB stick with any standard imaging tool.</p>
 </ol>
 <p>When you are finished with UnoDOS, turn Secure Boot back on the same way to return the PC to normal.</p>
 {note('<b>If the PC runs Windows with BitLocker:</b> changing Secure Boot can make Windows ask for your BitLocker recovery key the next time it starts. This is reversible and does not erase anything. Enter the 48-digit recovery key (find it in your Microsoft account at <b>aka.ms/myrecoverykey</b>, or from your IT department), or simply turn Secure Boot back on to stop the prompt. To avoid it altogether, suspend BitLocker before changing Secure Boot (search Windows for <b>Manage BitLocker</b>, then <b>Suspend protection</b>) and resume it afterwards.', kind="warn", title="BitLocker recovery prompt")}
-
-<h2 id="browser">Try it in your browser first</h2>
-<p>The quickest look costs nothing and installs nothing: <a href="https://unodos.arinbakht.com/try/">open
-UnoDOS in a browser tab</a>. It is the real release image running on an emulated PC compiled to
-WebAssembly, not a video and not a mock-up, and the desktop arrives in a few seconds on a current
-machine.</p>
-<ul>
-  <li>The screen is <strong>1600x900</strong>, one desktop pixel to one screen pixel. The
-      <strong>Size</strong> control above it picks the zoom; whole multiples stay pixel-sharp.</li>
-  <li>The disk is a RAM disk. You can write to it, and <strong>nothing survives a reload</strong> -
-      which makes it a good place to try the things this manual warns about.</li>
-  <li>The machine has a working network card and takes an address, but that network
-      <strong>ends inside the tab</strong>. See <a href="networking.html#emulator">Networking</a>.</li>
-  <li><a href="apps.html#duum">Duum</a> is on the disk with its game data, but an emulated PC runs it
-      at well under one frame a second. It is worth seeing rather than playing;
-      <a href="https://unodos.arinbakht.com/duum/">the browser port of Duum</a> plays properly.</li>
-</ul>
-{note('A tab in the background is throttled by the browser, which stops the emulated machine rather than just the picture. The page says <strong>paused</strong> when that happens; bring the tab back to the front and it carries on.', title="Leave the tab in front")}
 
 <h2 id="vm">Try it in a virtual machine first</h2>
 <p>Prefer not to touch hardware yet? <strong>unodos-pc64.iso</strong> boots in any UEFI-capable

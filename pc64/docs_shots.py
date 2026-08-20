@@ -746,7 +746,18 @@ def main():
         print("qemu up; waiting for boot...", flush=True)
         if "splash" in want:
             want = [w for w in want if w != "splash"]
-            wait_splash(q); time.sleep(0.6); shot(q, "splash")
+            # The return value is the whole point of wait_splash: on timeout the
+            # guest has not lit the GOP yet, and capturing anyway files QEMU's
+            # own "Guest has not initialized the display (yet)." card in the
+            # manual as though it were the UnoDOS splash. That shipped once
+            # (fixed 2026-08-20), and it survived because nothing looked at the
+            # picture afterwards. Fail loudly instead: a missing figure is
+            # noticed, a wrong one is not.
+            if not wait_splash(q):
+                raise RuntimeError(
+                    "splash never appeared within the timeout - the guest had "
+                    "not initialised the display, so no shot was taken")
+            time.sleep(0.6); shot(q, "splash")
             time.sleep(15.0)
         else:
             time.sleep(18)
