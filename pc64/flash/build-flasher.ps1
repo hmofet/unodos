@@ -15,15 +15,24 @@
 #      ... then the ESP trees + image are pulled back to the local pc64/build
 #   3. zip build/esp + csc -> build/UnoDosFlasher.exe   (local, in-box .NET)
 #
-# Usage:  pc64/flash/build-flasher.ps1 [-SizeMiB 512] [-SkipBuild] [-TestTool]
+# Usage:  pc64/flash/build-flasher.ps1 [-SizeMiB 512] [-SkipBuild] [-TestTool] [-Publish]
 #   -SkipBuild : reuse build/esp/ as-is (don't re-run ./build.sh)
 #   -TestTool  : also build build/UnoDiskTest.exe, which runs the same volume
 #                builder into an image FILE so fsck.vfat / sgdisk / QEMU can
 #                check it (see tools/diskboot_test.py)
+#   -Publish   : build a REDISTRIBUTABLE flasher: both embedded ESP trees are
+#                built UNO_NOFW=1 (no Intel firmware) with the remote tree's
+#                fw-blobs/, shareware WAD and skin removed first, Freedoom
+#                fetched as the game data, and the pulled trees are gated
+#                before embedding (any *.UCO/*.PNV/FIRMWARE, or a WAD that is
+#                not Freedoom, fails the build). This is the ONLY build that
+#                may be attached to a GitHub release; the default build embeds
+#                Intel firmware for local sticks and must never be published.
 param(
     [int]$SizeMiB = 512,      # capacity of the release image (documents get room)
     [switch]$SkipBuild,       # reuse the already-built ESP tree
-    [switch]$TestTool         # also build the headless image-builder for tests
+    [switch]$TestTool,        # also build the headless image-builder for tests
+    [switch]$Publish          # redistributable build: no firmware, Freedoom WAD
 )
 $ErrorActionPreference = "Stop"
 $pc64  = Split-Path $PSScriptRoot -Parent
@@ -43,14 +52,25 @@ $build = Join-Path $pc64 "build"
 # build/unodos-uefi.img are reused as-is; nothing is rebuilt or re-packed.
 if (-not $SkipBuild) {
     Push-SourceTree
+    $envPrefix = ""
+    if ($Publish) {
+        # A publishable tree carries no Intel firmware, no id shareware WAD and
+        # no Winamp skin. Removing them remotely is the belt; UNO_NOFW=1 is the
+        # suspenders (it also DELETES firmware a prior build staged); the gate
+        # after the pull is the proof. build.sh falls back to wads/freedoom1.wad
+        # once DOOM1.WAD is gone, and fetch-wad.sh defaults to Freedoom.
+        Write-Host "Publish build: scrubbing the remote tree + fetching Freedoom..." -ForegroundColor Yellow
+        Invoke-Remote "cd $BuildDir/pc64 && rm -rf fw-blobs wads/DOOM1.WAD wads/*.WSZ && ./tools/fetch-wad.sh" "publish-tree scrub / Freedoom fetch failed"
+        $envPrefix = "UNO_NOFW=1 "
+    }
     # build.sh populates build/esp INCREMENTALLY (no wipe), so a stale CRASH /
     # DEBUG.CFG / FIRMWARE from a prior debug build would leak into the
     # production snapshot. Wipe build/esp before each build to keep them clean.
     Write-Host "Building PRODUCTION OS (UNO_DEBUG=0) on $BuildHost..." -ForegroundColor Yellow
-    Invoke-Remote "cd $BuildDir/pc64 && rm -rf build/esp && UNO_DEBUG=0 ./build.sh" "production build failed"
+    Invoke-Remote "cd $BuildDir/pc64 && rm -rf build/esp && ${envPrefix}UNO_DEBUG=0 ./build.sh" "production build failed"
     Invoke-Remote "cd $BuildDir/pc64 && rm -rf build/esp-prod && cp -r build/esp build/esp-prod" "snapshot prod ESP"
     Write-Host "Building DEBUG / stress OS (UNO_DEBUG=1) on $BuildHost..." -ForegroundColor Yellow
-    Invoke-Remote "cd $BuildDir/pc64 && rm -rf build/esp && UNO_DEBUG=1 ./build.sh" "debug build failed"
+    Invoke-Remote "cd $BuildDir/pc64 && rm -rf build/esp && ${envPrefix}UNO_DEBUG=1 ./build.sh" "debug build failed"
     Invoke-Remote "cd $BuildDir/pc64 && rm -rf build/esp-debug && cp -r build/esp build/esp-debug" "snapshot debug ESP"
     # The raw dd/Rufus image is the PRODUCTION build (the default a normal user
     # wants). build/esp is left as PRODUCTION for mkuefi (and for mkiso later).
@@ -74,6 +94,33 @@ foreach ($p in @($espProd, $espDebug)) {
         throw "$p\EFI\BOOT\BOOTX64.EFI missing - run without -SkipBuild"
     }
 }
+# ---- publish gate: refuse to embed anything unredistributable ---------------
+# Mirrors tools/mkrelease.sh's firmware gate, extended to the WAD. Runs on the
+# PULLED trees, so it proves what actually gets embedded, not what was asked.
+if ($Publish) {
+    foreach ($tree in @($espProd, $espDebug)) {
+        $fw = Get-ChildItem -Recurse -Path $tree -Include *.UCO, *.PNV -ErrorAction SilentlyContinue
+        if ($fw) { throw "PUBLISH GATE: $tree still contains Intel firmware: $($fw[0].FullName)" }
+        if (Test-Path (Join-Path $tree "FIRMWARE")) {
+            throw "PUBLISH GATE: $tree still contains a FIRMWARE directory"
+        }
+        $wad = Join-Path $tree "DOOM1.WAD"
+        if (Test-Path $wad) {
+            $len = (Get-Item $wad).Length
+            if ($len -eq 11159840 -or $len -eq 4196020) {
+                throw "PUBLISH GATE: $wad is id Software's shareware WAD ($len bytes), not Freedoom"
+            }
+            $ascii = [Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes($wad))
+            if ($ascii.IndexOf("BSD-3-Clause") -lt 0 -and $ascii.IndexOf("Freedoom") -lt 0) {
+                throw "PUBLISH GATE: $wad does not look like Freedoom (no licence marker found)"
+            }
+        }
+        $wsz = Get-ChildItem -Recurse -Path $tree -Include *.WSZ -ErrorAction SilentlyContinue
+        if ($wsz) { throw "PUBLISH GATE: $tree contains a Winamp skin: $($wsz[0].FullName)" }
+    }
+    Write-Host "Publish gate passed: no firmware, no shareware WAD, no skins in either tree." -ForegroundColor Green
+}
+
 $zipProd  = Join-Path $build "unodos_esp_prod.zip"
 $zipDebug = Join-Path $build "unodos_esp_debug.zip"
 Remove-Item $zipProd, $zipDebug -ErrorAction SilentlyContinue
