@@ -2684,6 +2684,7 @@ UnoC has no varargs, so <code>put2()</code> composes the <code>MM:SS</code> read
 <p>Also in there: one-shot notes with <code>music_open_chan()</code> + <code>music_note_on()</code> for
 the alarm, and a countdown that rounds <i>up</i> (one remaining tick still reads 0:01) while the
 stopwatch rounds down - the small honesty every clock UI owes its user.</p>
+{fig("samples_timer.png", "TIMER.C running: a countdown, the drain bar, and the keys that drive it. The window title is the app's own <code>win_title</code>.")}
 {sdk_source("TIMER.C")}
 
 <h2 id="life">LIFE.C - Conway's Game of Life</h2>
@@ -2695,6 +2696,7 @@ fill; and the board seeds
 <b>defensively</b>, stirring the cell coordinates into <code>Random()</code> so even a weak generator
 yields a live board. Note <code>opened()</code> can run again after a close and reopen - the board seeds
 only once.</p>
+{fig("samples_life.png", "LIFE.C after a minute: 66 generations in, 209 cells alive. Cells that have survived a while cool from green to blue.")}
 {sdk_source("LIFE.C")}
 
 <h2 id="todo">TODO.PY - a to-do list that survives reboots</h2>
@@ -2705,6 +2707,7 @@ app <i>shows</i> that state instead of hiding it. The format is plain text (<cod
 kinds of key - printable characters arrive in <code>uni</code>, special keys in <code>scan</code> - and
 <code>tick()</code> returns <code>False</code> whenever nothing changed, so a static window costs the
 machine nothing.</p>
+{fig("samples_todo.png", "TODO.PY with two tasks typed in and one checked off - and the green line confirming the list reached the disk.")}
 {sdk_source("TODO.PY")}
 
 <h2 id="chart">CHART.PY - a bar chart from a file</h2>
@@ -2716,6 +2719,7 @@ that makes header lines and junk simply vanish. Everything is scaled from
 <code>cv.width()</code>/<code>cv.height()</code> with integer math - never hardcode the canvas size,
 the shell picks your window. With no file it charts built-in demo data and says so, so the first launch
 teaches you what to do next.</p>
+{fig("samples_chart.png", "CHART.PY on a machine with no DATA.CSV: it charts its built-in demo data and says so in the header, rather than showing an empty plot.")}
 {sdk_source("CHART.PY")}
 
 <h2 id="goodnite">GOODNITE.PY - an end-of-day automation app</h2>
@@ -2740,6 +2744,7 @@ between step and check, pacing those yields on <code>unoauto.uptime()</code> - t
 milliseconds, and the only real clock an app can read. For unattended runs, a signed manifest
 (<a href="dev-remote.html#automation">.MFT sidecar</a>) grants the declared capabilities at launch, no
 prompts.</p>
+{fig("samples_goodnite.png", "GOODNITE.PY with nobody signed in: the tier-0 window read works, and the two capabilities it was not granted are reported rather than raised.")}
 {sdk_source("GOODNITE.PY")}
 
 <h2 id="bench">bench_snapshot.py - a genuinely scheduled task</h2>
