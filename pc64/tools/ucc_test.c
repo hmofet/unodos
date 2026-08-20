@@ -893,6 +893,8 @@ int main(void)
     /* ---- SDK acceptance: SAMPLE.C + the Dostris port run as real apps ------- */
     run_app("SAMPLE.C", "Sample");
     run_app("DOSTRIS.C", "Dostris");
+    run_app("TIMER.C", "Timer");
+    run_app("LIFE.C", "Life");
 
     /* ---- negative cases ------------------------------------------------------------ */
     run_err("err-syntax", "long test(long a, long b) { return 1 +; }", 1, 0);
