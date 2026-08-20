@@ -9551,3 +9551,92 @@ ships NO wav audiodev backend, so tools/audio_test.py dies there with
 "broken pipe at every size" mystery; run it on a host whose qemu lists
 "wav" in -audiodev help. Its Music launch is also still by Start-menu
 INDEX (10), which has drifted; launch by id before trusting a SILENT verdict.
+
+## 2026-08-20 - metal conformance run (ZimaBlade + X13 Yoga): defects found
+
+Pre-launch conformance pass on real hardware, debug build
+`debug-local-20260820-1920`, driven over URC from devbuntu. Full results and
+screenshots: `devbuntu:~/conf-zima/`, `~/conf-yoga2/`, forensics in
+`~/yoga-forensics-165500/`.
+
+### FIXED on master during the run
+
+1. **unossh_store / iwlwifi carried copies of the pre-fix `pick_vol()`**
+   (lowest writable native volume). On a machine with a volume that enumerates
+   writable and never completes a write - the ZimaBlade's eMMC - the first SSH
+   key save hangs the box. Both now use `uno_fs_pref_vol()`. Verified on metal:
+   `SSHSTORE.DAT` landed on the boot stick (v2=7116, v1=-1) and keygen survived.
+2. **ac97: the guest was SILENT with 4 GB of RAM.** BDL + ring were plain
+   `.bss`; with >=4GB the loader can place them above the 4GB line and the
+   32-bit `PO_BDBAR`/BDL casts truncate. Now allocated below 4GB. A/B on the
+   conformance image: before 3072=SOUND peak 6259 / 4096=SILENT peak 0; after,
+   both play.
+3. **iwlwifi `arena_init_lowmem()` called boot services AFTER detach** -
+   see the crash-loop section below.
+
+### THE YOGA CRASH LOOP (root-caused from stick telemetry)
+
+The X13 Yoga crash-looped from its FIRST boot of this image. 8 hang/reset pairs
+`HG007..RS022` plus `CR005` on the stick. Two alternating faults:
+
+- **`CR005`: vector 6 #UD, UBSAN TRAP at `arena_init_lowmem+0xb5`**, checkpoint
+  `net:wifi-bringup`, **`detached: 1`**. The function dereferenced
+  `ST->BootServices` on the strength of a comment asserting WiFi always brings
+  up before ExitBootServices. It does not. Fixed: ask `uno_pc64_detached()`
+  first, like blkdev/ahci/nvme/installer/acpi_host do.
+- **`HG007`+: `last_checkpoint: net:dhcp`, main loop silent >20 s**, LAPIC
+  watchdog reset. NETLOG: `ax88179` links at 1000 Mbps then
+  `FAIL DHCP - no lease in 12 s (tx=1 rx=1 arp=1 ip=0)`, "frames arrive but no
+  IP".
+
+**STILL OPEN, and it is the more interesting half.** With the live log channel
+armed (`\LOGS\LOG.CFG`, level 7 -> devbuntu:5514) a later boot came up clean and
+showed the real shape:
+
+```
+eth: ping gw #1 reply in 267 ms
+eth: ping gw #2 reply in 1020 ms
+eth: ping gw #3 reply in 3806 ms
+```
+
+A LAN gateway ping, degrading by ~4x each time. That is the main loop slowing
+progressively, and a 20 s stall is where it ends - so the "DHCP no lease"
+is very likely this same slowness rather than a protocol fault. Suspect the
+native xHCI/ax88179 poll path on this box (detached, native USB). Whoever picks
+this up: the box streams its kernel log live, so this is traceable without a
+physical trip.
+
+### Two more unguarded boot-services sites (NOT mine to fix - filing them)
+
+Same shape as the fixed bug, unproven but worth a look by their owners:
+- `blkdev.c fw_scan()` ~line 116: `BS = ST->BootServices; BS->LocateHandleBuffer(...)`
+  with only a `!ST` check.
+- `installer.c bind()` ~line 214: `iBS = iST->BootServices;` with only a `!iST` check.
+`acpi_host.c` shows the pattern done right: cache `gBS_` at boot, guard every
+USE with `uno_pc64_detached()`.
+
+### Minor, deferred
+
+- **The office Open dialog's "File name" field ignores injected keys entirely**
+  (backspace and characters both no-op; the list rows do respond). Matches the
+  mouse-only note in `tools/uoffice_ooxml_urc.py`. Makes the dialog
+  keyboard-inaccessible, which is an accessibility problem as well as a
+  harness one.
+- **`nst` reports `connA=0 connB=0 accepted=-1`** on a box whose networking
+  demonstrably works (it drove a live TLS session to api.anthropic.com and
+  loaded a real HTTPS page). Reads as a self-test defect.
+- **URC verbs intermittently exceed the bridge's 15 s timeout under load**
+  (`pointer`, `key`, `screen read`); the box is always alive on a debounced
+  re-check. Harnesses should retry, not treat one timeout as death.
+- **Telemetry filenames must be LISTED, never guessed.** A remote probe for
+  `HG001/HG002/CR001/CR002` found nothing on a box that had 9 reports, because
+  this machine's numbering starts at 005. That nearly buried the root cause.
+
+### What PASSED on metal (ZimaBlade), for the record
+
+23/23 apps launch; store + session land on the boot volume; Duum interactive;
+**Studio AI live round-trip over real TLS** (first ever test); **OOXML .xlsx/
+.docx/.pptx open, and .xlsx round-trips through our own writer** (first ever
+test); UnoCode incl. integrated terminal running `js 6*7` -> 42; SSH keygen +
+`ssh run` to devbuntu with exit 0; browser loading a real HTTPS site. 60 fps,
+95-96% idle throughout.
