@@ -120,7 +120,7 @@ static const struct { const char *name; unsigned char id; } kIconNames[] = {
     { "runner",  PCI_RUNNER  }, { "browser", PCI_BROWSER },
     { "studio",  PCI_STUDIO  }, { "photos",  PCI_PHOTOS  },
     { "uoword",  PCI_UOWORD  }, { "uocalc",  PCI_UOCALC  },
-    { "uoshow",  PCI_UOSHOW  }
+    { "uoshow",  PCI_UOSHOW  }, { "unocode", PCI_UNOCODE }
 };
 
 int pc64_icon_by_name(const char *name)
@@ -341,6 +341,24 @@ void pc64_icon_emblem(int icon, unoui_rect box)
         rr(ox + G(16), oy + G(23), G(3), G(2), FB_RGB(240, 180, 60));
         rr(ox + G(27), oy + G(23), G(3), G(2), FB_RGB(240, 180, 60));
         disc(ox + G(23), oy + G(24), G(2), FB_RGB(30, 34, 44));        /* hub */
+        break; }
+    case PCI_UNOCODE: {              /* the workbench: side bar + code + tab */
+        rr(ox + G(2), oy + G(4), G(28), G(24), FB_RGB(30, 30, 30));     /* editor  */
+        frame(ox + G(2), oy + G(4), G(28), G(24), FB_RGB(60, 60, 60));
+        rr(ox + G(2), oy + G(4), G(6), G(24), FB_RGB(51, 51, 51));      /* activity */
+        rr(ox + G(3), oy + G(7),  G(4), G(2), FB_RGB(255, 255, 255));
+        rr(ox + G(3), oy + G(11), G(4), G(2), FB_RGB(130, 130, 130));
+        rr(ox + G(3), oy + G(15), G(4), G(2), FB_RGB(130, 130, 130));
+        rr(ox + G(8), oy + G(4), G(24), G(3), FB_RGB(37, 37, 38));      /* tab bar */
+        rr(ox + G(9), oy + G(4), G(9), G(3), FB_RGB(30, 30, 30));       /* active  */
+        rr(ox + G(9), oy + G(4), G(9), G(1), FB_RGB(0, 122, 204));
+        rr(ox + G(10), oy + G(10), G(6), G(2), FB_RGB(197, 134, 192));  /* keyword */
+        rr(ox + G(17), oy + G(10), G(8), G(2), FB_RGB(220, 220, 220));
+        rr(ox + G(12), oy + G(14), G(9), G(2), FB_RGB(206, 145, 120));  /* string  */
+        rr(ox + G(12), oy + G(18), G(5), G(2), FB_RGB(106, 153, 85));   /* comment */
+        rr(ox + G(10), oy + G(22), G(4), G(2), FB_RGB(78, 201, 176));   /* type    */
+        rr(ox + G(15), oy + G(22), G(7), G(2), FB_RGB(220, 220, 220));
+        rr(ox + G(2), oy + G(26), G(28), G(2), FB_RGB(0, 122, 204));    /* status  */
         break; }
     case PCI_PHOTOS: {                               /* framed landscape     */
         rr(ox + G(3), oy + G(5), G(26), G(22), FB_RGB(250, 250, 248));  /* mat  */
