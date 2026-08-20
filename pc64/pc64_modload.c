@@ -22,6 +22,7 @@
 #include "uno_app.h"        /* AppInterface/KernelApi + mac_compat.h Toolbox */
 #include "uno_uuiapp.h"     /* the unoui-class module ABI (flags bit 0) */
 #include "uno_appdesc.h"    /* what a .UNO says about itself (desc_rva)   */
+#include "../unojs/unojs.h" /* the extension host engine UnoCode embeds   */
 #include "pyhost.h"     /* Python-runtime + Python-app module tiers */
 #include "unoauto.h"    /* mod.load / mod.unload tap points (no-op in prod) */
 #include "unolog.h"
@@ -301,6 +302,33 @@ static const struct { const char *name; void *addr; } kExports[] = {
      * (Duum's Controls screen and its FPS toggle) */
     KX(uno_bind_name), KX(uno_bind_set), KX(uno_bind_reset),
     KX(uno_bind_keyid), KX(uno_pref_get), KX(uno_pref_set),
+    /* ---- UnoCode (APPS\UNOCODE.UNO) surface -----------------------------
+     * Appended at the tail, per AGENTS.md section 2: this table is a shared
+     * choke-point and every entry here is an ADDITION - nothing above moves.
+     *
+     * Two filesystem calls the editor needs and no earlier module did: the
+     * subdirectory listing (the Explorer tree and the EXT\ scan) and the
+     * state-volume pick (where UNOCODE\SETTINGS.JSN belongs - the answer
+     * pc64_fs.c already owns, rather than a fourth private copy of the
+     * heuristic).  Then unojs, the extension host's interpreter. */
+    KX(uno_fs_list_dir), KX(uno_fs_pref_vol),
+    /* unojs: the EMBEDDING surface only (unojs/unojs.h).  No parser, lexer or
+     * VM internals - a module gets the same API pc64/webjs.c uses, which is
+     * what keeps unojs free to change underneath both of them. */
+    KX(ujs_new), KX(ujs_free), KX(ujs_eval), KX(ujs_resume),
+    KX(ujs_exception), KX(ujs_clear_exception), KX(ujs_describe),
+    KX(ujs_scope_open), KX(ujs_scope_close), KX(ujs_root), KX(ujs_unroot),
+    KX(ujs_undefined), KX(ujs_null), KX(ujs_bool), KX(ujs_number),
+    KX(ujs_string), KX(ujs_object_new), KX(ujs_array_new),
+    KX(ujs_typeof), KX(ujs_is_undefined), KX(ujs_is_null), KX(ujs_is_number),
+    KX(ujs_is_string), KX(ujs_is_object), KX(ujs_is_array), KX(ujs_is_function),
+    KX(ujs_to_number), KX(ujs_to_bool), KX(ujs_string_bytes), KX(ujs_to_string),
+    KX(ujs_get), KX(ujs_set), KX(ujs_get_index), KX(ujs_set_index),
+    KX(ujs_has), KX(ujs_delete), KX(ujs_array_length), KX(ujs_array_push),
+    KX(ujs_call), KX(ujs_function_new), KX(ujs_host_new), KX(ujs_host_user),
+    KX(ujs_set_fn), KX(ujs_set_accessor), KX(ujs_global),
+    KX(ujs_throw), KX(ujs_throw_error),
+    KX(ujs_fuel_used), KX(ujs_fuel_reset), KX(ujs_gc), KX(ujs_heap_used),
 };
 #define NEXPORT ((int)(sizeof kExports / sizeof kExports[0]))
 
