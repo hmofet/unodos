@@ -1,0 +1,18 @@
+{
+    "main guard": {
+        "prefix": "main",
+        "body": ["def main():", "    ${1:pass}", "", "if __name__ == '__main__':", "    main()"],
+        "description": "A main() with the usual guard"
+    },
+    "class": {
+        "prefix": "class",
+        "body": ["class ${1:Name}:", "    def __init__(self):", "        ${2:pass}"],
+        "description": "A class with a constructor"
+    },
+    "uno frame loop": {
+        "prefix": "unoloop",
+        "body": ["import uno", "", "while True:", "    uno.clear(0)",
+                 "    uno.present()", "    if uno.key() == 27:", "        break"],
+        "description": "The pc64 Python draw loop"
+    }
+}

@@ -1,0 +1,39 @@
+{
+    "scopeName": "source.unoscript",
+    "patterns": [
+        { "include": "#comment" },
+        { "include": "#string" },
+        { "include": "#verb" },
+        { "include": "#number" },
+        { "match": "\b(if|then|else|end|repeat|until|wait|fail|ok)\b",
+          "name": "keyword.control.unoscript" },
+        { "match": "\$[A-Za-z_][A-Za-z0-9_]*", "name": "variable.other.unoscript" },
+        { "match": "[=<>!]+", "name": "keyword.operator.unoscript" }
+    ],
+    "repository": {
+        "comment": {
+            "patterns": [
+                { "match": "#.*", "name": "comment.line.number-sign.unoscript" }
+            ]
+        },
+        "string": {
+            "patterns": [
+                { "begin": "\"", "end": "\"", "name": "string.quoted.double.unoscript",
+                  "patterns": [
+                      { "match": "\\.", "name": "constant.character.escape.unoscript" }
+                  ] }
+            ]
+        },
+        "verb": {
+            "patterns": [
+                { "match": "^\s*(click|type|key|screen|shot|open|close|launch|read|write|sleep|assert)\b",
+                  "captures": { "1": { "name": "entity.name.function.unoscript" } } }
+            ]
+        },
+        "number": {
+            "patterns": [
+                { "match": "\b[0-9]+\b", "name": "constant.numeric.unoscript" }
+            ]
+        }
+    }
+}

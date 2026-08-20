@@ -1,0 +1,29 @@
+{
+    // Another declarative extension: snippets and a language definition, no
+    // JavaScript.  The URC language below shows the whole contribution set a
+    // new language needs - id, extensions, comment syntax, and a grammar.
+    "name": "snip",
+    "displayName": "UnoDOS Snippets",
+    "description": "Snippets for UnoC and Python, plus the UnoScript language.",
+    "version": "1.0.0",
+    "publisher": "unodos",
+    "engines": { "unocode": "^1.0.0" },
+    "contributes": {
+        "languages": [
+            {
+                "id": "unoscript",
+                "aliases": "UnoScript",
+                "extensions": [".URC", ".USC"],
+                "configuration": { "comments": { "lineComment": "#" } }
+            }
+        ],
+        "grammars": [
+            { "language": "unoscript", "scopeName": "source.unoscript",
+              "path": "SYNTAX/URC.JSN" }
+        ],
+        "snippets": [
+            { "language": "c", "path": "SNIPPET/C.JSN" },
+            { "language": "python", "path": "SNIPPET/PY.JSN" }
+        ]
+    }
+}

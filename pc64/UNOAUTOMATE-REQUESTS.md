@@ -9380,3 +9380,43 @@ Duum launched over URC, and a level check on the capture: silent at 4096,
 audible at 3072, twice each.
 
 The demo recorder now boots at `-m 3072` and says why in a comment.
+
+---
+
+## 2026-08-20 - CLAIM: unocode (the VS Code-class editor)
+
+Taking a new subsystem, `pc64/unocode/` -> `APPS\UNOCODE.UNO`. Its ownership
+row is in `/AGENTS.md` §1 in the same commit and its contract is
+`pc64/unocode/UNOCODE.md`. It CONSUMES unoui, unofs, unojs, unomedia's fonts
+and the app registry, and owns nothing outside its own directory.
+
+Shared-seam edits, all append-only per AGENTS.md §2:
+
+- `pc64/pc64_modload.c` kExports: `uno_fs_list_dir`, `uno_fs_pref_vol`, and
+  the unojs EMBEDDING surface (`ujs_*` from `unojs/unojs.h` only - no lexer,
+  compiler or VM internals, so unojs stays free to change underneath its two
+  consumers).
+- `pc64/build.sh`: one new `[3c2]` block, appended before PYRT's.
+- `pc64/pc64_icons.h` / `.c`: one appended emblem (`PCI_UNOCODE`) and its name.
+- `/AGENTS.md`: one appended registry row.
+
+## 2026-08-20 - REQUEST to the input/usb lane: HID keyboards deliver no F-keys
+
+`pc64/hid_kbd.c`'s `emit_usage()` translates HID usages with `if (u < 0x39)`,
+and the function keys are usages **0x3A..0x45** (F1..F12). They therefore
+produce neither a scan code nor a character, and nothing downstream ever sees
+them: a USB or I2C-HID keyboard on this machine has no F-keys at all. The PS/2
+tracker in `pc64_native.c` DOES map them (set-1 0x3B..0x44 and 0x57/0x58 ->
+EFI scans 0x0B..0x16), which is why QEMU and older laptops look fine and a
+modern USB keyboard does not.
+
+Not urgent for UnoCode - its default keymap is Ctrl chords precisely because
+of this, and it parses and honours F-key bindings wherever the transport
+supplies them. But `Ctrl+F1..F4` (the shell's virtual desktops) and `F10` (the
+platform's GOP mode cycle) are unreachable from a USB keyboard for the same
+reason, and those are the shell's own bindings.
+
+The fix looks like four lines: map 0x3A..0x45 to `K_F1 + (u - 0x3A)` in the
+same switch, using the EFI scan numbering `pc64_native.c` already agrees with.
+Filed rather than done because `hid_kbd.c` is the usb-stack lane's file, and
+"it is only four lines" is how a lane gets widened.
