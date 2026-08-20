@@ -1917,7 +1917,10 @@ no separate computer in the loop:</p>
   <li>Press <kbd>Ctrl</kbd>+<kbd>R</kbd> to <strong>run</strong> it. Your app opens in its own window with
       its own taskbar button.</li>
 </ol>
-{fig("studio_build.png", "After <kbd>Ctrl</kbd>+<kbd>B</kbd>: the build-output pane reports the packed or compiled <code>SAMPLE.UNO</code>, and it joins the project list on the left.")}
+<div class="grid cols-2">
+  {fig("studio_build.png", "After <kbd>Ctrl</kbd>+<kbd>B</kbd>: the build-output pane reports the packed or compiled <code>SAMPLE.UNO</code>, and it joins the project list on the left.")}
+  {fig("studio_run.png", "After <kbd>Ctrl</kbd>+<kbd>R</kbd>: <code>SAMPLE.PY</code> runs in its own window with its own taskbar button, drawing and moving a block, while Studio stays open behind it.")}
+</div>
 <p>If a build fails, the output pane lists each error with its line number; press or click a red error line
 and the caret jumps straight to it.</p>
 

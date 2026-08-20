@@ -197,11 +197,17 @@ def close_all(q):
     time.sleep(0.3)
 
 
-def launch(q, idx, settle=1.6):
-    """Open Start menu and pick app `idx` by keyboard."""
+def launch(q, idx, settle=1.6, gap=0.09):
+    """Open Start menu and pick app `idx` by keyboard.
+
+    `gap` is the pause between Down presses. The default is tuned for a machine
+    with nothing else running; once a scene has a heavy app open (Duum renders
+    every frame in Python) the guest can miss keys, and a missed key opens the
+    app ABOVE the one asked for - silently, under the right name. Pass a wider
+    gap when launching on top of something busy."""
     combo(q, "ctrl", "esc"); time.sleep(0.6)
     for _ in range(idx):
-        key(q, "down", gap=0.09)
+        key(q, "down", gap=gap)
     key(q, "ret"); time.sleep(settle)
 
 
@@ -558,6 +564,51 @@ def sc_duum(q):
     close_all(q)
 
 
+def _uof_open(q, name):
+    """Open a document by NAME in UnoWord/UnoCalc's shared Open dialog.
+
+    Typed into the File-name field rather than picked off the list: arrow keys
+    never reach that list (see tools/demo/scenes.py uof_open_row), so the
+    alternative is clicking a row whose position depends on what else is on
+    the disk. A typed name does not care how many files are in the root."""
+    combo(q, "ctrl", "o"); time.sleep(1.2)
+    click(q, 637, 359)                    # the File name field
+    text(q, name); time.sleep(0.3)
+    click(q, 747, 361); time.sleep(2.5)   # Open
+
+
+def sc_office_duum(q):
+    """The three-window composite: a real Word document, a real spreadsheet,
+    and Duum, all on one desktop at once. Duum goes FIRST and stays behind:
+    it is the slowest to start (PYRT + the WAD parse) and it is the window the
+    other two are meant to sit in front of."""
+    # ORDER MATTERS, and not for looks. Launching anything while Duum renders
+    # loses the first keys of the Start-menu walk - reproducibly, twice, two
+    # rows short, which opens SSH under UnoCalc's name. So the quiet windows
+    # are opened first, on an idle desktop, and Duum goes last. It lands on
+    # top, which is also the composition this shot wants.
+    close_all(q)
+    launch(q, A("uocalc"), settle=3.0)
+    _uof_open(q, "BUDGET.XLS")
+    launch(q, A("uoword"), settle=3.0)
+    _uof_open(q, "RESUME.DOC")
+    # Snap the two documents into the left quarters BEFORE Duum exists, while
+    # the desktop is quiet and Alt-Tab has only two windows to walk. Snapping
+    # is Alt+arrow (see the manual's window chapter); Start > Windows > Tile
+    # would be tidier but it lives in the menu's second column, which the
+    # pointer has to reach, and the pointer is the one input this environment
+    # does not deliver reliably.
+    combo(q, "alt", "left"); time.sleep(0.6)
+    combo(q, "alt", "up"); time.sleep(1.0)          # UnoWord -> top-left
+    combo(q, "alt", "tab"); time.sleep(1.2)         # focus UnoCalc
+    combo(q, "alt", "left"); time.sleep(0.6)
+    combo(q, "alt", "down"); time.sleep(1.0)        # UnoCalc -> bottom-left
+    launch(q, A("duum"), settle=6.0)
+    time.sleep(45.0)                      # PYRT start + WAD parse + first frame
+    combo(q, "alt", "right"); time.sleep(1.5)       # Duum -> right half
+    shot(q, "office_duum")
+
+
 def sc_browser_disk(q):
     close_all(q); launch(q, A("browser"), settle=2.0)
     shot(q, "browser_files")
@@ -707,7 +758,7 @@ SCENES = {
     "outlast": sc_outlast, "music": sc_music, "tracker": sc_tracker,
     "paint": sc_paint, "runner3d": sc_runner3d,
     "studio": sc_studio, "studio_ai": sc_studio_ai,
-    "duum": sc_duum,
+    "duum": sc_duum, "office_duum": sc_office_duum,
     "browser_disk": sc_browser_disk,
     "browser_docs": sc_browser_docs, "cp_network": sc_cp_network,
     "browser_http": sc_browser_http, "browser_https": sc_browser_https,
@@ -741,6 +792,20 @@ def main():
         net = ["-netdev", "user,id=n0", "-device", "e1000,netdev=n0"]
     else:
         net = ["-nic", "none"]
+    # The boot disk. By default QEMU FAKES a filesystem out of build/esp
+    # (vvfat), which is fine for reading but is not a real FAT32: writes are
+    # unreliable, so any scene that WRITES and then reads back - Studio's
+    # build-and-run being the one that matters - can fail here for reasons the
+    # product does not have. UNO_DISK=<raw image> boots the real GPT+FAT32
+    # image from tools/mkuefi.py instead, as usb-storage, the way
+    # tools/diskboot_test.py does.
+    disk_img = os.environ.get("UNO_DISK")
+    if disk_img:
+        print("disk: %s (real FAT32 over usb-storage)" % disk_img, flush=True)
+        disk = ["-drive", "format=raw,if=none,id=stick,file=" + disk_img,
+                "-device", "usb-storage,drive=stick"]
+    else:
+        disk = ["-drive", "format=vvfat,file=fat:rw:build/esp"]
     subprocess.run(["cp", OVMF_VARS, "build/vars.fd"], check=True)
     if os.path.exists(QMP_SOCK):
         os.remove(QMP_SOCK)
@@ -748,7 +813,6 @@ def main():
         "qemu-system-x86_64", "-machine", "q35", "-m", "256",
         "-drive", "if=pflash,format=raw,readonly=on,file=" + OVMF_CODE,
         "-drive", "if=pflash,format=raw,file=build/vars.fd",
-        "-drive", "format=vvfat,file=fat:rw:build/esp",
         "-device", "qemu-xhci", "-device", "usb-tablet",
         # an HD Audio device, so the System window's Audio line shows the real
         # PCM backend (the "none" audiodev just swallows the samples headless)
@@ -757,7 +821,7 @@ def main():
         "-display", "none",
         "-qmp", "unix:%s,server,nowait" % QMP_SOCK,
         "-debugcon", "file:build/ovmf.log", "-global", "isa-debugcon.iobase=0x402",
-    ] + cpu + net)
+    ] + disk + cpu + net)
     try:
         q = Qmp(QMP_SOCK)
         print("qemu up; waiting for boot...", flush=True)

@@ -446,17 +446,35 @@ static int do_build(char *out_uno_name)
 static void do_run(void)
 {
     char uno[16];
+    int rc;
     if (ed_dirty) doc_save();
     if (do_build(uno) != 0) return;
-    if (pc64_shell_run_user(ed_vol, uno) != 0) {
-        if (studio_is_py(ed_name)) {              /* Python: distinguish causes */
+    rc = pc64_shell_run_user(ed_vol, uno);
+    if (rc != 0) {
+        /* Report what actually failed, from the shell's return code, rather
+         * than guessing from whether a traceback happens to be waiting.
+         * pc64_shell_run_python answers -2 no runtime, -1 the container would
+         * not load, -3 the source would not compile (traceback available).
+         * The old code printed "PYRT.UNO missing" for every one of them, so a
+         * container that failed its own CRC check - which is what a truncated
+         * or half-written .UNO looks like - sent the reader off to reinstall a
+         * runtime that was sitting on the disk the whole time. */
+        if (studio_is_py(ed_name)) {
             const char *err = pc64_shell_py_error();
-            if (err && err[0]) {                  /* a compile/exec traceback */
+            if (rc == -2) {
+                out_add("Python runtime not installed (APPS\\PYRT.UNO missing).");
+            } else if (rc == -1) {
+                out_add("Could not read the packed app back:");
+                out_add("  the .UNO was written but will not load (bad header or CRC).");
+                out_add("  A volume that does not hold writes does this - try another disk.");
+            } else if (err && err[0]) {           /* a compile/exec traceback */
                 out_add("Python error:");
                 out_add(err);
             } else {
-                out_add("Python runtime not installed (APPS\\PYRT.UNO missing).");
+                out_add("The Python app would not start, and said nothing about why.");
             }
+        } else if (rc == -1) {
+            out_add("Run failed: the module was built but will not load back.");
         } else {
             out_add("Run failed: the module would not load.");
         }
