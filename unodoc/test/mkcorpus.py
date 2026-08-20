@@ -512,13 +512,19 @@ FORMULA_NAMED = [("theRange", "$Formulas.$B$1:$Formulas.$C$3")]
 # the corpus carries a fixture derived from the SOURCE document, never from
 # unodoc's own output.
 def FIXTURES():
-    return {
+    # The SAME expectation serves both formats: small.xls and small.xlsx are
+    # one spreadsheet saved twice, so two parsers reading to the same table is
+    # the oracle that they agree. A difference is a bug in exactly one of them.
+    fx = {
         "small.xls":    (SMALL_SHEETS, {}, None),
         "large.xls":    (LARGE_SHEETS, {}, None),
         "cells.xls":    (CELLS_SHEETS, CELLS_EXPECT, None),
         "sst.xls":      (sst_sheets(), {}, None),
         "formulas.xls": (formula_sheets(), {}, formula_expect()),
     }
+    for name in list(fx):
+        fx[name[:-4] + ".xlsx"] = fx[name]
+    return fx
 
 SOURCES = [
     # (source filename, builder, target extension)
@@ -537,6 +543,24 @@ SOURCES = [
     ("pic.fodp",   lambda: fodp([("Pictures", ["with a big bitmap"]),
                                  ("Plain", ["no bitmap here"])],
                                 png(900, 700, 11)), "ppt"),
+
+    # ---- the 2007 formats -------------------------------------------------
+    # The same sources again, saved through LibreOffice's OOXML filters. Same
+    # documents, different container and different markup - which is what
+    # makes the pair a real test rather than two tests: every fixture above is
+    # reused verbatim for the .xlsx twin, so the two readers are checked
+    # against each other as well as against the file.
+    ("small.fodt", lambda: fodt(["Hello unodoc.", "Second paragraph."]), "docx"),
+    ("large.fodt", lambda: fodt([("%04d " % i) + LOREM * 3 for i in range(900)]), "docx"),
+    ("fmt.fodt",   fmt_fodt, "docx"),
+    ("small.fods", lambda: fods_sheets(SMALL_SHEETS), "xlsx"),
+    ("large.fods", lambda: fods_sheets(LARGE_SHEETS), "xlsx"),
+    ("cells.fods", lambda: fods_sheets(CELLS_SHEETS), "xlsx"),
+    ("sst.fods",   lambda: fods_sheets(sst_sheets()), "xlsx"),
+    ("formulas.fods", lambda: fods_sheets(formula_sheets(), FORMULA_NAMED), "xlsx"),
+    ("small.fodp", lambda: fodp([("Slide one", ["alpha", "beta"]),
+                                 ("Slide two", ["gamma"]),
+                                 ("Slide three", [])]), "pptx"),
 ]
 
 def main():

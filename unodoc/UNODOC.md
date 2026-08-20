@@ -31,6 +31,11 @@ a request rather than editing it.
 | 5a | `.ppt` read: persist chain + slide text | **landed**, `[EXPERIMENTAL]` |
 | 5b | Escher: shapes, properties, anchors | **landed**, `[EXPERIMENTAL]` |
 | 5c | `.ppt` minimal writer | **landed**, `[EXPERIMENTAL]` |
+| 6a | ZIP container + XML pull parser | **landed**, `[EXPERIMENTAL]` |
+| 6b | `.xlsx` read | **landed**, `[EXPERIMENTAL]` |
+| 6c | `.docx` read | **landed**, `[EXPERIMENTAL]` |
+| 6d | `.pptx` read | **landed**, `[EXPERIMENTAL]` |
+| 6e | `.xlsx` / `.docx` / `.pptx` write (stored zip) | **landed**, `[EXPERIMENTAL]` |
 
 Everything is `[EXPERIMENTAL]` until a consuming app has shipped on it. The
 core surface (`ud_src`, the allocator, the error surface) is the part least
@@ -586,13 +591,101 @@ count and title-above-body geometry), and the `written ppt` stage hands
 the file to LibreOffice, which must find every checked string on exactly
 the pages we wrote.
 
+## OOXML (phases 6a-6e)
+
+`.xlsx`, `.docx` and `.pptx` are a zip of XML parts rather than a compound
+file, and that is the whole of the difference as far as everything above
+unodoc is concerned: **the OOXML readers build the same models the binary
+readers build**, so `ud_xls_cell_at`, `ud_doc_plain` and `ud_ppt_slide_text`
+work on either, and an app that reads `.xls` reads `.xlsx` by opening a
+different container.
+
+```c
+ud_src src;  ud_xls *x;
+ud_src_mem(&src, buf, len);
+switch (ud_sniff(&src)) {
+case UD_C_CFB: { ud_cfb *c = ud_cfb_open(&src); x = ud_xls_open(c);  break; }
+case UD_C_ZIP: { ud_zip *z = ud_zip_open(&src); x = ud_xlsx_open(z); break; }
+}
+```
+
+**Sniff the container, do not trust the extension.** A `.xls` that is really a
+`.xlsx` is common enough that every real reader handles it, and the first four
+bytes settle it for free.
+
+### The one new obligation on a caller
+
+A zip part is a DEFLATE stream, inflated by unomedia's `um_inflate`, which
+keeps its ~44 KB working state in an allocation of its own. So a program that
+opens an OOXML file must register **both** allocators:
+
+```c
+ud_set_alloc(malloc, free);
+um_set_alloc(malloc, free);      /* <- the OOXML path needs this too */
+```
+
+Forgetting the second one makes every OOXML file fail to open with an
+out-of-memory that is really a forgotten registration. This bit the gate's own
+`cfbtest` first, which is why it is written here where a caller will read it.
+
+### Relationships, not file names
+
+A part refers to another part through an `r:id` that the corresponding
+`_rels/*.rels` part resolves. Slide and sheet ORDER comes from that
+indirection, never from sorting `slide1.xml, slide2.xml, ...` - Office keeps a
+slide's part name when the slide is moved, so a deck whose third slide lives
+in `slide7.xml` is entirely ordinary and a reader that sorts by name silently
+shuffles the presentation.
+
+The prefix on an attribute matters in exactly one place and it is this one:
+`<p:sldId id="256" r:id="rId2"/>` carries two attributes whose LOCAL name is
+`id`, so a local-name match returns the slide's own number, no part resolves,
+and a deck reads as N empty slides. `ud_xml_attr_ns()` exists for that.
+
+### Writing: stored entries
+
+`ud_xlsxw_save`, `ud_docxw_save` and `ud_pptxw_save` take the SAME model
+objects the binary writers take - build a workbook once, choose the format at
+the point you save. Parts are written **stored (uncompressed)**, which is
+valid OOXML and is what lets unodoc write these formats without carrying a
+DEFLATE compressor it would then have to maintain. The cost is file size on a
+format whose bulk is repetitive XML, paid by a file the user is about to open
+in Excel rather than by anything long-lived.
+
+Text is transcoded CP-1252 -> UTF-8 on the way out (and back on the way in).
+unodoc's models hold CP-1252 because that is what both binary formats store;
+an XML part is UTF-8 by declaration. Skipping that step writes a file that
+reads back byte-identical through a tolerant parser and mojibake through a
+correct one - which is exactly the bug the `.xlsx` reader had in the other
+direction, caught by dumping the same spreadsheet from its `.xls` and `.xlsx`
+twins and diffing.
+
+A `.pptx` also carries a slide master, a layout and a theme, written verbatim
+from constants in `ud_pptxw.c`. Those are not decoration: they are where a
+slide's inherited text properties come from, and PowerPoint will not open a
+deck without them.
+
+### What the gate proves
+
+`mkcorpus.py` saves every flat-ODF source as BOTH the binary format and its
+OOXML twin, and `run_tests.py` runs the same assertions over both, so a claim
+that holds for one and not the other shows up as a failure rather than as a
+gap. The writers are judged the same way twice: `wxtest` reads our own output
+back with our own reader (they could be consistently wrong together), and the
+`written` stages hand the file to LibreOffice, which has to find the same
+content. `cfbtest fuzz` walks a mutated zip part by part - without that it
+opened OOXML files as compound files, rejected every mutation at the
+signature, and reported a confident "0 opened" while testing nothing.
+
 ## What unodoc is NOT
 
 - **Not a renderer.** It hands back models and bytes; drawing them is
   `unoffice`'s lane (`pc64/uoffice/*`).
-- **Not OOXML.** `.docx/.xlsx/.pptx` are Office 2007 and out of scope for v1
-  (they need a deflate *compressor*; the ZIP reader half exists in
-  `um_inflate` + the hardened central-directory walk in `unoamp_skin.c`).
+- **~~Not OOXML~~ — superseded 2026-08-20.** `.docx/.xlsx/.pptx` are now read
+  and written; see *OOXML* below. The objection this bullet raised was that
+  they need a deflate *compressor*, and the answer turned out to be that they
+  do not: OOXML requires a zip container, not a compressed one, so the writers
+  emit STORED entries and only the *de*compressor (`um_inflate`) is needed.
 - **Not encryption.** Encrypted files ([MS-OFFCRYPTO], BIFF `FILEPASS`) are
   to be detected and **refused with a clear message**, never half-read.
 - **Not third-party code.** Written from scratch against the open specs
@@ -611,6 +704,20 @@ the first Office app lands, and per `/AGENTS.md` §2 a choke-point is touched
 only when it is actually needed, as an append.
 
 ## Changelog
+
+- **2026-08-20 — phases 6a-6e.** OOXML: `.xlsx`, `.docx` and `.pptx`, read and
+  written. `ud_zip.c` (central-directory reader over `ud_src`, stored +
+  deflate via unomedia's `um_inflate`, refusing encryption and ZIP64),
+  `ud_xml.c` (a one-pass, zero-allocation pull parser - a tree was not an
+  option in a module arena), `ud_xlsx.c` / `ud_docx.c` / `ud_pptx.c` building
+  the SAME models as the binary readers through builder seams, and
+  `ud_ooxz.c` + `ud_xlsxw.c` / `ud_docxw.c` / `ud_pptxw.c` writing them back
+  as stored zips. `ud_sniff()` picks the container from the bytes.
+  Three things this cost that were not obvious going in: the parts are UTF-8
+  and unodoc is CP-1252 (a silent mojibake in both directions), `r:id` and
+  `id` are different attributes on the same element (a deck of empty slides),
+  and `um_set_alloc` is now part of a caller's contract (every part failing to
+  inflate with an out-of-memory that was really a missing registration).
 
 - **2026-08-02 — phase 5c.** `ud_pptw.c`: writing a presentation, and with it
   **the .ppt lane is complete in both directions** and every format unodoc

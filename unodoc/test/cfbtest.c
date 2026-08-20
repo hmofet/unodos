@@ -23,6 +23,8 @@
 #include <string.h>
 
 /* ---- allocator + tiny helpers --------------------------------------------- */
+void um_set_alloc(void *(*a)(unsigned long), void (*f)(void *));
+
 static void *t_alloc(unsigned long n) { return malloc(n ? n : 1); }
 
 static int   g_fail;
@@ -509,13 +511,42 @@ static unsigned char *good_image(long *len)
     return img;
 }
 
+/* A zip container walked the same way: every part enumerated, loaded and
+ * inflated.  Without this the fuzz stage opens an OOXML file as a CFB, every
+ * mutation is rejected at the signature, and the run reports a confident
+ * "0 opened" - a stage that exercises nothing while looking green. */
+static int walk_zip(const unsigned char *buf, long len)
+{
+    ud_src src;
+    ud_zip *z;
+    int i, n;
+    ud_src_mem(&src, buf, len);
+    z = ud_zip_open(&src);
+    if (!z) return 0;
+    n = ud_zip_parts(z);
+    for (i = 0; i < n; i++) {
+        long plen = 0;
+        unsigned char *part = ud_zip_load(z, i, &plen);
+        ud_zip_name(z, i);
+        ud_zip_size(z, i);
+        ud_free(part);
+    }
+    ud_zip_kind(z);
+    ud_zip_close(z);
+    return 1;
+}
+
 /* Open and exhaustively walk an image.  Returns 1 if it opened at all.  The
  * point is the walk, not the answer: under ASan/UBSan any out-of-bounds or
  * undefined step inside unodoc aborts the process here. */
 static int walk_all(const unsigned char *buf, long len)
 {
-    char *d = digest_of(buf, len);
-    int opened = d && strncmp(d, "OPEN-FAILED", 11) != 0;
+    char *d;
+    int opened;
+    if (len >= 4 && buf[0] == 'P' && buf[1] == 'K')
+        return walk_zip(buf, len);
+    d = digest_of(buf, len);
+    opened = d && strncmp(d, "OPEN-FAILED", 11) != 0;
     free(d);
     return opened;
 }
@@ -620,6 +651,13 @@ static void selftest(void)
 int main(int argc, char **argv)
 {
     ud_set_alloc(t_alloc, free);
+    /* AND unomedia's, because `zls` inflates every part of a zip and
+     * um_inflate allocates its 44 KB of working state through um_alloc.
+     * Leaving this out is not a crash - it is EVERY part of EVERY OOXML file
+     * failing to inflate with a size mismatch, which reads like a broken zip
+     * reader.  It is the one new obligation the OOXML readers put on a caller
+     * and it caught this very test out. */
+    um_set_alloc(t_alloc, free);
 
     if (argc >= 2 && strcmp(argv[1], "selftest") == 0) {
         selftest();
@@ -633,6 +671,35 @@ int main(int argc, char **argv)
         d = digest_of(b, n);
         fputs(d ? d : "", stdout);
         free(d); free(b);
+        return 0;
+    }
+    /* The ZIP half of the container gate: list an OOXML document's parts the
+     * way `ls` lists a compound file's streams, so run_tests.py can assert
+     * that each format carries the parts it is required to carry. */
+    if (argc >= 3 && strcmp(argv[1], "zls") == 0) {
+        long n = 0;
+        unsigned char *b = slurp(argv[2], &n);
+        ud_src src;
+        ud_zip *z;
+        int i;
+        if (!b) { printf("ERR: cannot read %s\n", argv[2]); return 2; }
+        ud_src_mem(&src, b, n);
+        z = ud_zip_open(&src);
+        if (!z) { printf("OPEN-FAILED: %s\n", ud_error()); free(b); return 1; }
+        printf("kind %d parts %d\n", ud_zip_kind(z), ud_zip_parts(z));
+        for (i = 0; i < ud_zip_parts(z); i++) {
+            long len = 0;
+            unsigned char *part = ud_zip_load(z, i, &len);
+            /* Loading every part is the point: it is the only way the gate
+             * exercises inflate on real data, and a part that inflates to a
+             * different length than the directory promised is a real failure
+             * rather than a slow one. */
+            printf("P %s %ld %s\n", ud_zip_name(z, i), ud_zip_size(z, i),
+                   part ? "ok" : ud_error());
+            ud_free(part);
+        }
+        ud_zip_close(z);
+        free(b);
         return 0;
     }
     if (argc >= 3 && strcmp(argv[1], "rt") == 0) {

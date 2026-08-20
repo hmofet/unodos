@@ -269,6 +269,32 @@ ud_ppt *ud_ppt_open(ud_cfb *c)
     return p;
 }
 
+/* ===========================================================================
+ * The builder seam (ud_ppt_int.h): how ud_pptx.c fills this same deck.
+ * ======================================================================== */
+ud_ppt *ud_ppt_blank(void)
+{
+    ud_ppt *p = (ud_ppt *)ud_alloc(sizeof(ud_ppt));
+    if (!p) { ud_set_error("out of memory (presentation)"); return 0; }
+    memset(p, 0, sizeof *p);
+    return p;
+}
+
+int ud_ppt_b_slide(ud_ppt *p, char *text)
+{
+    if (!p) { ud_free(text); return 0; }
+    if (!add_slide(p, 0)) { ud_free(text); return 0; }
+    /* Always a real string, never NULL: a NULL would send
+     * ud_ppt_slide_text() down the lazy binary path, into a Document stream
+     * this deck does not have.  An empty slide is a slide with no text. */
+    if (!text) {
+        text = (char *)ud_alloc(1);
+        if (text) text[0] = 0;
+    }
+    p->slide[p->nslide - 1].text = text;
+    return 1;
+}
+
 void ud_ppt_close(ud_ppt *p)
 {
     int i;

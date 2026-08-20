@@ -43,16 +43,40 @@ SAN = ["-fsanitize=address,undefined",
        "integer-divide-by-zero,null",
        "-fno-sanitize-recover=all"]
 
-SRCS  = ["unodoc.c", "ud_cfb.c"]
-XSRCS = ["unodoc.c", "ud_cfb.c", "ud_xls.c", "ud_ptg.c", "ud_ptgc.c", "ud_xlsw.c"]
-DSRCS = ["unodoc.c", "ud_cfb.c", "ud_doc.c", "ud_docw.c"]
-PSRCS = ["unodoc.c", "ud_cfb.c", "ud_ppt.c", "ud_escher.c", "ud_pptw.c"]
+SRCS  = ["unodoc.c", "ud_cfb.c", "ud_zip.c", "ud_xml.c",
+         "../unomedia/unomedia.c", "../unomedia/um_inflate.c"]
+# The OOXML reader is built into the SAME test binary: one dump(), one
+# fixture, two parsers. um_inflate comes from unomedia (its header calls
+# itself "a general facility future formats will want" - this is that
+# format), so the media library joins the link line here.
+XSRCS = ["unodoc.c", "ud_cfb.c", "ud_xls.c", "ud_ptg.c", "ud_ptgc.c", "ud_xlsw.c",
+         "ud_zip.c", "ud_xml.c", "ud_xlsx.c", "ud_ooxz.c", "ud_xlsxw.c",
+         "../unomedia/unomedia.c", "../unomedia/um_inflate.c"]
+DSRCS = ["unodoc.c", "ud_cfb.c", "ud_doc.c", "ud_docw.c",
+         "ud_zip.c", "ud_xml.c", "ud_docx.c", "ud_ooxz.c", "ud_docxw.c",
+         "../unomedia/unomedia.c", "../unomedia/um_inflate.c"]
+PSRCS = ["unodoc.c", "ud_cfb.c", "ud_ppt.c", "ud_escher.c", "ud_pptw.c",
+         "ud_zip.c", "ud_xml.c", "ud_pptx.c", "ud_ooxz.c", "ud_pptxw.c",
+         "../unomedia/unomedia.c", "../unomedia/um_inflate.c"]
 
 # what each format is required to carry, as unodoc paths
 REQUIRED = {
     ".doc": [["WordDocument"], ["\x05SummaryInformation"], ["0Table", "1Table"]],
     ".xls": [["Workbook", "Book"], ["\x05SummaryInformation"]],
     ".ppt": [["PowerPoint Document"], ["Current User"]],
+}
+
+# The same assertion for the ZIP container: the parts each OOXML format is
+# required to carry. [Content_Types].xml is in all three - it is what makes a
+# zip an OPC package rather than a zip - so it is listed per format rather
+# than assumed once.
+REQUIRED_ZIP = {
+    ".docx": [["[Content_Types].xml"], ["word/document.xml"],
+              ["word/_rels/document.xml.rels"]],
+    ".xlsx": [["[Content_Types].xml"], ["xl/workbook.xml"],
+              ["xl/_rels/workbook.xml.rels"]],
+    ".pptx": [["[Content_Types].xml"], ["ppt/presentation.xml"],
+              ["ppt/_rels/presentation.xml.rels"]],
 }
 
 fails = []
@@ -93,9 +117,14 @@ SELFTESTS = [
     (lambda: [BIN, "selftest"],  "cfbtest selftest"),
     (lambda: [XBIN, "selftest"], "xlstest selftest"),   # the SST encoding switch
     (lambda: [XBIN, "wtest"],    "xlstest wtest"),      # the writer round-trip
+    # ...and the SAME model round-tripped through the OOXML serialiser, judged
+    # by the SAME assertions.
+    (lambda: [XBIN, "wxtest"],   "xlstest wxtest"),
     (lambda: [DBIN, "selftest"], "doctest selftest"),   # the multi-piece walk
     (lambda: [DBIN, "wtest", os.path.join(GEN, "written.doc")], "doctest wtest"),
+    (lambda: [DBIN, "wxtest", os.path.join(GEN, "written.docx")], "doctest wxtest"),
     (lambda: [PBIN, "wtest"],    "ppttest wtest"),      # the .ppt writer round-trip
+    (lambda: [PBIN, "wxtest"],   "ppttest wxtest"),
 ]
 
 # What LibreOffice must find in the .doc WE wrote.  Our own reader agreeing
@@ -112,24 +141,29 @@ WRITTEN_DOC_MUST_HAVE = [
 ]
 
 def written_doc(have_lo):
-    out = os.path.join(GEN, "written.doc")
-    if not os.path.exists(out):
-        fail("no .doc was written")
-        return
-    print("  wrote %d bytes" % os.path.getsize(out))
-    if not have_lo:
-        print("  (no soffice: the independent half of this stage is SKIPPED)")
-        return
-    flat = soffice_flat(out, os.path.join(GEN, "lo_wdoc"))
-    if flat is None:
-        fail("LibreOffice REFUSED the .doc we wrote")
-        return
-    missing = [why for s, why in WRITTEN_DOC_MUST_HAVE if s not in flat]
-    if missing:
-        fail("LibreOffice opened our .doc but did not find: %s" % ", ".join(missing))
-    else:
-        print("  LibreOffice reads back all %d checked features"
-              % len(WRITTEN_DOC_MUST_HAVE))
+    # Both forms of the same document, judged the same way. The .docx half is
+    # the one that matters most here: OUR reader reading OUR writer proves
+    # nothing about a file Word will ever see.
+    for name, tmp in (("written.doc", "lo_wdoc"), ("written.docx", "lo_wdocx")):
+        out = os.path.join(GEN, name)
+        if not os.path.exists(out):
+            fail("no %s was written" % name)
+            continue
+        print("  %-13s %d bytes" % (name, os.path.getsize(out)))
+        if not have_lo:
+            print("  (no soffice: the independent half of this stage is SKIPPED)")
+            return
+        flat = soffice_flat(out, os.path.join(GEN, tmp))
+        if flat is None:
+            fail("LibreOffice REFUSED the %s we wrote" % name)
+            continue
+        missing = [why for s, why in WRITTEN_DOC_MUST_HAVE if s not in flat]
+        if missing:
+            fail("LibreOffice opened our %s but did not find: %s"
+                 % (name, ", ".join(missing)))
+        else:
+            print("  %-13s LibreOffice reads back all %d checked features"
+                  % (name, len(WRITTEN_DOC_MUST_HAVE)))
 
 def selftest():
     for argv, what in SELFTESTS:
@@ -146,7 +180,8 @@ def corpus_files():
     if not os.path.isdir(CORPUS):
         return []
     return sorted(os.path.join(CORPUS, f) for f in os.listdir(CORPUS)
-                  if os.path.splitext(f)[1] in REQUIRED)
+                  if os.path.splitext(f)[1] in REQUIRED
+                  or os.path.splitext(f)[1] in REQUIRED_ZIP)
 
 def ensure_corpus(force=False):
     args = [sys.executable, os.path.join(HERE, "mkcorpus.py")]
@@ -162,6 +197,9 @@ def ensure_corpus(force=False):
 def read_corpus(files):
     for path in files:
         ext = os.path.splitext(path)[1]
+        if ext in REQUIRED_ZIP:
+            read_zip_corpus(path, ext)
+            continue
         r = run([BIN, "ls", path])
         if r.returncode or "OPEN-FAILED" in r.stdout:
             fail("%s: %s" % (os.path.basename(path),
@@ -184,8 +222,51 @@ def read_corpus(files):
             print("  %-12s %7d bytes, %2d entries"
                   % (os.path.basename(path), os.path.getsize(path), entries))
 
+def read_zip_corpus(path, ext):
+    """The ZIP container gate: every part is listed AND inflated.
+
+    Inflating all of them is the point - it is the only place the gate runs
+    unomedia's deflate over real third-party data, and a part that comes out a
+    different length than the central directory promised is caught here rather
+    than as a reader that mysteriously sees half a document."""
+    base = os.path.basename(path)
+    r = run([BIN, "zls", path])
+    if r.returncode or "OPEN-FAILED" in r.stdout:
+        fail("%s: %s" % (base, (r.stdout + r.stderr).strip()[:200]))
+        return
+    names, bad = set(), []
+    for line in r.stdout.splitlines():
+        f = line.split(" ")
+        if len(f) >= 4 and f[0] == "P":
+            names.add(f[1])
+            if f[3] != "ok":
+                bad.append((f[1], " ".join(f[3:])))
+    if bad:
+        fail("%s: %d part(s) failed to inflate; first: %s" % (base, len(bad), bad[0]))
+        return
+    missing = [alts for alts in REQUIRED_ZIP[ext]
+               if not any(a in names for a in alts)]
+    if missing:
+        fail("%s: missing %s (saw %s)"
+             % (base, " / ".join("|".join(a) for a in missing),
+                ", ".join(sorted(names))))
+    else:
+        print("  %-14s %7d bytes, %2d parts, all inflate"
+              % (base, os.path.getsize(path), len(names)))
+
 # ---- 4. rebuild + the LibreOffice oracle ------------------------------------
+# CFB only. The rebuild stage reads a container through OUR writer and asks
+# LibreOffice to agree; there is no OOXML WRITER in this phase, so an .xlsx has
+# nothing to rebuild and is not silently passed through a stage that would
+# report success without doing anything.
 FLAT = {".doc": "fodt", ".xls": "fods", ".ppt": "fodp"}
+
+# The flat-XML form for the LibreOffice oracle, which DOES apply to both
+# containers: it converts whatever it is given. Kept separate from FLAT
+# because FLAT also decides which files the rebuild stage handles, and that
+# one is CFB-only.
+FLAT_ANY = dict(FLAT)
+FLAT_ANY.update({".docx": "fodt", ".xlsx": "fods", ".pptx": "fodp"})
 
 # Volatile output, nothing to do with the container:
 #   office:meta   carries the conversion timestamp
@@ -218,7 +299,7 @@ def soffice_flat(path, outdir):
     env["SAL_USE_VCLPLUGIN"] = "svp"
     os.makedirs(PROFILE, exist_ok=True)
     os.makedirs(outdir, exist_ok=True)
-    fmt = FLAT[os.path.splitext(path)[1]]
+    fmt = FLAT_ANY[os.path.splitext(path)[1]]
     out = os.path.join(outdir, os.path.splitext(os.path.basename(path))[0]
                        + "." + fmt)
     # Remove the target FIRST.  Without this, a conversion that fails or times
@@ -242,6 +323,13 @@ def rebuild_corpus(files, oracle=True):
     os.makedirs(outdir)
     for path in files:
         base = os.path.basename(path)
+        # CFB ONLY. This stage reads a container through OUR writer and asks
+        # LibreOffice to agree it is still the same document; there is no OOXML
+        # WRITER in this phase, so an .xlsx has nothing to rebuild. Skipping it
+        # explicitly is the point - running it would fail on a signature check
+        # and report a missing feature as a broken one.
+        if os.path.splitext(path)[1] not in FLAT:
+            continue
         # (a) our own gate: the tree and every stream byte survive a rebuild
         r = run([BIN, "rt", path])
         if r.returncode:
@@ -316,11 +404,19 @@ def dump_cp1252(path):
             r.stdout.decode("cp1252", errors="strict"),
             r.stderr.decode("utf-8", errors="replace"))
 
+# The one place the two formats legitimately disagree, and it is a difference
+# in the FILES rather than in the readers: LibreOffice stores the boolean
+# constant as the BIFF token PtgFunc(TRUE) in .xls, which decompiles to "TRUE",
+# and as the literal text "TRUE()" in .xlsx. Both readers report exactly what
+# their file says. Checked by hand against the part before being allowed here.
+XLSX_FORMULA_ALIAS = {"=TRUE": "=TRUE()", "=FALSE": "=FALSE()"}
+
 def workbooks(files):
     for path in files:
-        if not path.endswith(".xls"):
+        if not (path.endswith(".xls") or path.endswith(".xlsx")):
             continue
         base = os.path.basename(path)
+        xlsx = path.endswith(".xlsx")
         fixpath = path + ".expect.tsv"
         try:
             rc, out, err = dump_cp1252(path)
@@ -364,14 +460,16 @@ def workbooks(files):
         if wantf:
             gotf = parse_formulas(out)
             wrong = [(k, wantf[k], gotf.get(k, "<absent>"))
-                     for k in wantf if gotf.get(k) != wantf[k]]
+                     for k in wantf
+                     if gotf.get(k) != wantf[k]
+                     and not (xlsx and gotf.get(k) == XLSX_FORMULA_ALIAS.get(wantf[k]))]
             if wrong:
                 fail("%s: %d of %d formulas differ; first: %s"
                      % (base, len(wrong), len(wantf), wrong[0]))
             else:
                 print("  %-12s %5d formulas decompile exactly"
                       % (base, len(wantf)))
-        if base == "cells.xls":
+        if base in ("cells.xls", "cells.xlsx"):
             # the FORMAT/XF path: the two date cells must resolve to a real
             # number-format code, not General
             fmts = [l.split("	")[-1] for l in out.splitlines()
@@ -418,26 +516,30 @@ WRITTEN_MUST_HAVE = [
 ]
 
 def written(have_lo):
-    out = os.path.join(GEN, "written.xls")
-    r = run([XBIN, "wfile", out], timeout=600)
-    if r.returncode or not os.path.exists(out):
-        fail("could not write a workbook: %s" % (r.stdout + r.stderr).strip()[:300])
-        return
-    print("  wrote %d bytes" % os.path.getsize(out))
-    if not have_lo:
-        print("  (no soffice: the independent half of this stage is SKIPPED)")
-        return
-    flat = soffice_flat(out, os.path.join(GEN, "lo_written"))
-    if flat is None:
-        fail("LibreOffice REFUSED the workbook we wrote")
-        return
-    missing = [why for s, why in WRITTEN_MUST_HAVE if s not in flat]
-    if missing:
-        fail("LibreOffice opened our workbook but did not find: %s"
-             % ", ".join(missing))
-    else:
-        print("  LibreOffice reads back all %d checked features"
-              % len(WRITTEN_MUST_HAVE))
+    for name, argv, tmp in (
+            ("written.xls",  lambda o: [XBIN, "wfile", o],           "lo_written"),
+            ("written.xlsx", lambda o: [XBIN, "wfile", o, "xlsx"],   "lo_writtenx")):
+        out = os.path.join(GEN, name)
+        r = run(argv(out), timeout=600)
+        if r.returncode or not os.path.exists(out):
+            fail("could not write %s: %s"
+                 % (name, (r.stdout + r.stderr).strip()[:300]))
+            continue
+        print("  %-13s %d bytes" % (name, os.path.getsize(out)))
+        if not have_lo:
+            print("  (no soffice: the independent half of this stage is SKIPPED)")
+            return
+        flat = soffice_flat(out, os.path.join(GEN, tmp))
+        if flat is None:
+            fail("LibreOffice REFUSED the %s we wrote" % name)
+            continue
+        missing = [why for s, why in WRITTEN_MUST_HAVE if s not in flat]
+        if missing:
+            fail("LibreOffice opened our %s but did not find: %s"
+                 % (name, ", ".join(missing)))
+        else:
+            print("  %-13s LibreOffice reads back all %d checked features"
+                  % (name, len(WRITTEN_MUST_HAVE)))
 
 # ---- 4c'. the presentation WE write, judged by LibreOffice ------------------
 # ppttest wtest already proves writer and reader agree; this is the
@@ -453,28 +555,33 @@ WRITTEN_PPT_MUST_HAVE = [
 ]
 
 def written_ppt(have_lo):
-    out = os.path.join(GEN, "written.ppt")
-    r = run([PBIN, "wfile", out], timeout=600)
-    if r.returncode or not os.path.exists(out):
-        fail("could not write a presentation: %s" % (r.stdout + r.stderr).strip()[:300])
-        return
-    print("  wrote %d bytes" % os.path.getsize(out))
-    if not have_lo:
-        print("  (no soffice: the independent half of this stage is SKIPPED)")
-        return
-    flat = soffice_flat(out, os.path.join(GEN, "lo_wppt"))
-    if flat is None:
-        fail("LibreOffice REFUSED the presentation we wrote")
-        return
-    missing = [why for s, why in WRITTEN_PPT_MUST_HAVE if s not in flat]
-    pages = flat.count("<draw:page ")
-    if missing:
-        fail("LibreOffice opened our .ppt but did not find: %s" % ", ".join(missing))
-    elif pages != 2:
-        fail("LibreOffice sees %d draw:page elements, wanted 2" % pages)
-    else:
-        print("  LibreOffice reads back all %d checked strings on 2 pages"
-              % len(WRITTEN_PPT_MUST_HAVE))
+    for name, verb, tmp in (("written.ppt",  "wfile",  "lo_wppt"),
+                            ("written.pptx", "wxfile", "lo_wpptx")):
+        out = os.path.join(GEN, name)
+        r = run([PBIN, verb, out], timeout=600)
+        if r.returncode or not os.path.exists(out):
+            fail("could not write %s: %s"
+                 % (name, (r.stdout + r.stderr).strip()[:300]))
+            continue
+        print("  %-13s %d bytes" % (name, os.path.getsize(out)))
+        if not have_lo:
+            print("  (no soffice: the independent half of this stage is SKIPPED)")
+            return
+        flat = soffice_flat(out, os.path.join(GEN, tmp))
+        if flat is None:
+            fail("LibreOffice REFUSED the %s we wrote" % name)
+            continue
+        missing = [why for s, why in WRITTEN_PPT_MUST_HAVE if s not in flat]
+        pages = flat.count("<draw:page ")
+        if missing:
+            fail("LibreOffice opened our %s but did not find: %s"
+                 % (name, ", ".join(missing)))
+        elif pages != 2:
+            fail("LibreOffice sees %d draw:page elements in %s, wanted 2"
+                 % (pages, name))
+        else:
+            print("  %-13s LibreOffice reads back all %d checked strings on "
+                  "2 pages" % (name, len(WRITTEN_PPT_MUST_HAVE)))
 
 # ---- 4d. documents: our text against LibreOffice's -------------------------
 def lo_txt(path, outdir):
@@ -542,7 +649,7 @@ def check_fmt_doc(path):
 
 def documents(files, have_lo):
     for path in files:
-        if not path.endswith(".doc"):
+        if not (path.endswith(".doc") or path.endswith(".docx")):
             continue
         base = os.path.basename(path)
         r = run([DBIN, "info", path])
@@ -582,7 +689,7 @@ TAGS = re.compile(r"<[^>]*>")
 
 def presentations(files, have_lo):
     for path in files:
-        if not path.endswith(".ppt"):
+        if not (path.endswith(".ppt") or path.endswith(".pptx")):
             continue
         base = os.path.basename(path)
         r = run([PBIN, "info", path])
@@ -591,7 +698,11 @@ def presentations(files, have_lo):
             continue
         print("  %-12s %s" % (base, r.stdout.strip().splitlines()[-1]))
         nsh = sum(1 for l in r.stdout.splitlines() if l.startswith("shape"))
-        if nsh < 1:
+        # Escher is the BINARY format's drawing layer. A .pptx stores its
+        # shapes as DrawingML inside each slide part and has no Escher at all,
+        # so demanding shapes there would be demanding a thing that cannot
+        # exist - the check belongs to .ppt.
+        if nsh < 1 and path.endswith(".ppt"):
             fail("%s: no Escher shapes found" % base)
         rr = subprocess.run([PBIN, "text", path], capture_output=True, timeout=600)
         ours = norm_lines(rr.stdout.decode("cp1252", errors="replace"))
@@ -618,7 +729,7 @@ def presentations(files, have_lo):
 
 def ppt_fuzz(files, iters=2000):
     for path in files:
-        if not path.endswith(".ppt"):
+        if not (path.endswith(".ppt") or path.endswith(".pptx")):
             continue
         base = os.path.basename(path)
         t = time.time()
@@ -634,7 +745,7 @@ def ppt_fuzz(files, iters=2000):
 
 def doc_fuzz(files, iters=3000):
     for path in files:
-        if not path.endswith(".doc"):
+        if not (path.endswith(".doc") or path.endswith(".docx")):
             continue
         base = os.path.basename(path)
         t = time.time()
@@ -650,7 +761,7 @@ def doc_fuzz(files, iters=3000):
 
 def xls_fuzz(files, iters=3000):
     for path in files:
-        if not path.endswith(".xls"):
+        if not (path.endswith(".xls") or path.endswith(".xlsx")):
             continue
         base = os.path.basename(path)
         t = time.time()

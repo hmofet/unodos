@@ -102,17 +102,33 @@ static void dump(ud_xls *x)
 static int walk(const unsigned char *buf, long len, int print)
 {
     ud_src src;
-    ud_cfb *c;
+    ud_cfb *c = 0;
+    ud_zip *z = 0;
     ud_xls *x;
     int ok = 0;
 
+    /* WHICH container is decided by ud_sniff, never by the file name, and that
+     * is what makes one test cover both formats: small.xls and small.xlsx are
+     * one spreadsheet saved twice, they run through the same dump(), and they
+     * are diffed against the SAME fixture.  So the OOXML reader is checked
+     * against the BIFF reader as well as against the file, and a disagreement
+     * names the cell it happens in. */
     ud_src_mem(&src, buf, len);
-    c = ud_cfb_open(&src);
-    if (!c) {
-        if (print) printf("ERR: %s\n", ud_error());
-        return 0;
+    if (ud_sniff(&src) == UD_C_ZIP) {
+        z = ud_zip_open(&src);
+        if (!z) {
+            if (print) printf("ERR: %s\n", ud_error());
+            return 0;
+        }
+        x = ud_xlsx_open(z);
+    } else {
+        c = ud_cfb_open(&src);
+        if (!c) {
+            if (print) printf("ERR: %s\n", ud_error());
+            return 0;
+        }
+        x = ud_xls_open(c);
     }
-    x = ud_xls_open(c);
     if (x) {
         ok = 1;
         if (print) dump(x);
@@ -137,6 +153,7 @@ static int walk(const unsigned char *buf, long len, int print)
         printf("ERR: %s\n", ud_error());
     }
     ud_cfb_close(c);
+    ud_zip_close(z);
     return ok;
 }
 
@@ -568,12 +585,88 @@ static int wtest(void)
     return bad;
 }
 
+/* The SAME demo model saved as .xlsx and read back through the OOXML reader,
+ * judged by the SAME checks.  That is the whole point of the accessor seam:
+ * if one model can be serialised two ways, then one set of assertions covers
+ * both, and a claim that only holds for one of them is a bug in that
+ * serialiser rather than a feature of the format. */
+static int wxtest(void)
+{
+    int bad = 0, mode;
+
+    for (mode = 0; mode < 2; mode++) {
+        ud_xlsw *w = ud_xlsw_new();
+        unsigned char *img;
+        long len = 0;
+        ud_src src;
+        ud_zip *z;
+        ud_xls *x;
+
+        if (!w || !build_demo(w, mode)) {
+            printf("FAIL xlsx: could not build the model: %s\n", ud_error());
+            ud_xlsw_free(w);
+            return 1;
+        }
+        img = ud_xlsxw_save(w, &len);
+        ud_xlsw_free(w);
+        if (!img) { printf("FAIL xlsx: save failed: %s\n", ud_error()); return 1; }
+
+        ud_src_mem(&src, img, len);
+        z = ud_zip_open(&src);
+        x = z ? ud_xlsx_open(z) : 0;
+        if (!x) {
+            printf("FAIL xlsx: our own reader will not open it: %s\n", ud_error());
+            bad = 1;
+        } else {
+            bad |= wcheck(x, mode);
+            ud_xls_close(x);
+        }
+        ud_zip_close(z);
+        ud_free(img);
+    }
+    if (!bad)
+        printf("xlstest: xlsx writer OK - the same model, saved as OOXML and "
+               "read back, passes the same %d checks on both date epochs\n",
+               WNUM + WSTRN + 9);
+    return bad;
+}
+
+/* unomedia's allocator, declared here rather than by including unomedia.h:
+ * this test needs exactly one symbol from it.  Registering it is the ONE new
+ * obligation the OOXML readers put on a caller - a zip part is inflated by
+ * um_inflate - and forgetting it makes every .xlsx open fail with an
+ * out-of-memory that is really a forgotten registration.  UNODOC.md says so
+ * where a caller will read it. */
+void um_set_alloc(void *(*a)(unsigned long), void (*f)(void *));
+
 int main(int argc, char **argv)
 {
     ud_set_alloc(t_alloc, free);
+    um_set_alloc(t_alloc, free);
 
     if (argc >= 2 && strcmp(argv[1], "selftest") == 0) return selftest();
     if (argc >= 2 && strcmp(argv[1], "wtest") == 0) return wtest();
+    if (argc >= 2 && strcmp(argv[1], "wxtest") == 0) return wxtest();
+    if (argc >= 4 && strcmp(argv[1], "wfile") == 0) {
+        /* `wfile FILE xlsx` writes the OOXML form of the same demo, so
+           run_tests.py can hand BOTH to LibreOffice. */
+        ud_xlsw *w = ud_xlsw_new();
+        unsigned char *img;
+        long len = 0;
+        FILE *f;
+        if (strcmp(argv[3], "xlsx")) { printf("ERR: unknown format\n"); ud_xlsw_free(w); return 2; }
+        if (!w || !build_demo(w, 0)) { printf("ERR: %s\n", ud_error()); return 1; }
+        img = ud_xlsxw_save(w, &len);
+        ud_xlsw_free(w);
+        if (!img) { printf("ERR: %s\n", ud_error()); return 1; }
+        f = fopen(argv[2], "wb");
+        if (!f) { printf("ERR: cannot write %s\n", argv[2]); ud_free(img); return 2; }
+        fwrite(img, 1, (size_t)len, f);
+        fclose(f);
+        printf("OK wrote %ld bytes\n", len);
+        ud_free(img);
+        return 0;
+    }
     if (argc >= 3 && strcmp(argv[1], "wfile") == 0) {
         ud_xlsw *w = ud_xlsw_new();
         unsigned char *img;

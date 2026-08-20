@@ -13,6 +13,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+void um_set_alloc(void *(*a)(unsigned long), void (*f)(void *));
+
 static void *t_alloc(unsigned long n) { return malloc(n ? n : 1); }
 
 static unsigned char *slurp(const char *path, long *len)
@@ -32,10 +34,21 @@ static unsigned char *slurp(const char *path, long *len)
     return b;
 }
 
+/* The container is chosen by ud_sniff, never by the file name, so ONE test
+ * covers both formats: small.doc and small.docx are one document saved twice
+ * and go through the same checks. */
+static ud_zip *g_zip;                       /* freed beside the ud_cfb       */
+
 static ud_doc *open_doc(const unsigned char *buf, long len, ud_src *src, ud_cfb **cc)
 {
     ud_cfb *c;
     ud_src_mem(src, buf, len);
+    *cc = 0;
+    if (g_zip) { ud_zip_close(g_zip); g_zip = 0; }
+    if (ud_sniff(src) == UD_C_ZIP) {
+        g_zip = ud_zip_open(src);
+        return g_zip ? ud_docx_open(g_zip) : 0;
+    }
     c = ud_cfb_open(src);
     *cc = c;
     return c ? ud_doc_open(c) : 0;
@@ -391,6 +404,7 @@ static int doc_selftest(void)
 int main(int argc, char **argv)
 {
     ud_set_alloc(t_alloc, free);
+    um_set_alloc(t_alloc, free);   /* a zip part is inflated by unomedia */
 
     if (argc >= 2 && strcmp(argv[1], "selftest") == 0) return doc_selftest();
 
@@ -473,7 +487,12 @@ int main(int argc, char **argv)
     }
     /* write a document, read it back with our own reader, and (via
      * run_tests.py) hand it to LibreOffice - the half we cannot judge */
-    if (argc >= 2 && strcmp(argv[1], "wtest") == 0) {
+    /* `wxtest` is the same test through the OOXML serialiser: same model,
+     * same reader entry point, same assertions.  One model, two formats, one
+     * set of claims about what a document is. */
+    if (argc >= 2 && (strcmp(argv[1], "wtest") == 0 ||
+                      strcmp(argv[1], "wxtest") == 0)) {
+        int ooxml = strcmp(argv[1], "wxtest") == 0;
         static const char *P[4] = {
             "Plain first paragraph.",
             "This one is bold.",
@@ -493,7 +512,7 @@ int main(int argc, char **argv)
         ud_docw_para(w, P[1], 1, 0, 0);
         ud_docw_para(w, P[2], 0, 1, 1);
         ud_docw_para(w, P[3], 0, 0, 2);
-        img = ud_docw_save(w, &n);
+        img = ooxml ? ud_docxw_save(w, &n) : ud_docw_save(w, &n);
         ud_docw_free(w);
         if (!img) { printf("FAIL doc write: %s\n", ud_error()); return 1; }
         if (argc >= 3) {                       /* also drop it on disk      */
@@ -538,9 +557,10 @@ int main(int argc, char **argv)
         ud_cfb_close(c);
         ud_free(img);
         if (!bad)
-            printf("doctest: writer OK - 4 paragraphs with bold, italic and "
-                   "alignment survive a save/reload, and 10pt arrives through "
-                   "the Normal style we wrote\n");
+            printf("doctest: %s writer OK - 4 paragraphs with bold, italic "
+                   "and alignment survive a save/reload, and 10pt arrives %s\n",
+                   ooxml ? ".docx" : ".doc",
+                   ooxml ? "on every run" : "through the Normal style we wrote");
         return bad;
     }
     if (argc >= 5 && strcmp(argv[1], "fuzz") == 0) {

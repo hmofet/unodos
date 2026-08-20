@@ -494,6 +494,156 @@ int ud_pptw_body (ud_pptw *w, int slide, const char *text);
 /* The whole .ppt (container included) in one ud_alloc'd buffer. */
 unsigned char *ud_pptw_save(ud_pptw *w, long *len);
 
+/* ===========================================================================
+ * OOXML - .docx / .xlsx / .pptx                            [EXPERIMENTAL]
+ *
+ * The 2007 formats are a ZIP of XML parts where the 97 formats are a CFB of
+ * binary streams.  Everything above this line is unchanged by them: an OOXML
+ * workbook opens into the SAME `ud_xls` handle a BIFF8 workbook does, an
+ * OOXML document into the same `ud_doc`, a presentation into the same
+ * `ud_ppt`.  That is the whole design.  A consumer written against the 97
+ * readers gains the 2007 formats by choosing a different opener, and every
+ * accessor, every cell walk and every piece of app code above it is untouched.
+ *
+ * WHICH OPENER: ask the bytes, never the file name.
+ *
+ *     ud_src src = { my_read, size, ctx };
+ *     switch (ud_sniff(&src)) {
+ *     case UD_C_CFB: { ud_cfb *c = ud_cfb_open(&src);  x = ud_xls_open(c);  break; }
+ *     case UD_C_ZIP: { ud_zip *z = ud_zip_open(&src);  x = ud_xlsx_open(z); break; }
+ *     }
+ *     ... identical from here ...
+ *
+ * ONE NEW OBLIGATION ON CALLERS.  Inflating a ZIP part uses unomedia's
+ * um_inflate (PNG's engine, exported by unomedia.h for exactly this), so a
+ * program that opens OOXML links unomedia and registers BOTH allocators:
+ *
+ *     ud_set_alloc(malloc, free);
+ *     um_set_alloc(malloc, free);
+ *
+ * Forgetting the second one makes every part fail to inflate, and ud_error()
+ * says so.
+ * ======================================================================== */
+
+/* What container a file is, from its first bytes (ud_sniff). */
+enum { UD_C_UNKNOWN = 0, UD_C_CFB, UD_C_ZIP };
+
+/* What KIND of document a ZIP holds, from the parts it carries (ud_zip_kind).
+ * By its parts and never by its extension: the extension is a hint somebody
+ * typed, the parts are what is in the file. */
+enum { UD_K_UNKNOWN = 0, UD_K_DOCX, UD_K_XLSX, UD_K_PPTX };
+
+int ud_sniff(const ud_src *src);
+
+typedef struct ud_zip ud_zip;
+
+/* Open a ZIP container: reads the CENTRAL DIRECTORY, not the local headers,
+ * because a local header may carry zeroed sizes with the truth in a trailing
+ * data descriptor - which is what the streaming writers, Word among them,
+ * produce.  NULL on failure; ud_error() distinguishes "not a zip" from
+ * "encrypted" from "ZIP64, not supported".  The ud_src must outlive it. */
+ud_zip *ud_zip_open(const ud_src *src);
+void    ud_zip_close(ud_zip *z);
+
+int         ud_zip_kind (const ud_zip *z);              /* UD_K_*            */
+int         ud_zip_parts(const ud_zip *z);
+const char *ud_zip_name (const ud_zip *z, int i);       /* "xl/workbook.xml" */
+long        ud_zip_size (const ud_zip *z, int i);       /* uncompressed, -1  */
+
+/* Find a part by name.  A leading '/' is accepted (the CFB half of this
+ * library spells paths that way) and the match falls back to case-insensitive,
+ * because writers disagree about the case of some part names. */
+int ud_zip_find(const ud_zip *z, const char *name);
+
+/* One part, inflated, in one ud_alloc'd buffer with a NUL appended - every
+ * part unodoc reads is XML, and a NUL means the parser never needs a length
+ * it might get wrong.  ud_free it. */
+unsigned char *ud_zip_load(ud_zip *z, int i, long *len);
+
+/* ---- the three readers ------------------------------------------------------
+ * Each returns the SAME handle type its 97 counterpart does, so everything
+ * downstream is shared.  The ud_zip must outlive the handle, exactly as the
+ * ud_cfb must outlive a ud_xls. */
+ud_xls *ud_xlsx_open(ud_zip *z);      /* close with ud_xls_close  */
+ud_doc *ud_docx_open(ud_zip *z);      /* close with ud_doc_close  */
+ud_ppt *ud_pptx_open(ud_zip *z);      /* close with ud_ppt_close  */
+
+/* ---- writing ---------------------------------------------------------------
+ * The writers mirror the 97 writers: build a model, serialise once.  They
+ * take the SAME model objects, so an app that can save .xls can save .xlsx by
+ * calling a different serialiser.
+ *
+ * Parts are written STORED (uncompressed).  A .xlsx with stored parts is a
+ * valid .xlsx - the format requires a zip, not a compressed one - and it means
+ * unodoc needs no deflate COMPRESSOR to write, only unomedia's decompressor to
+ * read.  The cost is file size; a spreadsheet that a user will open in Excel
+ * five seconds later is not the place to care. */
+unsigned char *ud_xlsxw_save(ud_xlsw *w, long *len);
+unsigned char *ud_docxw_save(ud_docw *w, long *len);
+unsigned char *ud_pptxw_save(ud_pptw *w, long *len);
+
+/* ===========================================================================
+ * The XML pull parser [INTERNAL-ish]
+ *
+ * Exposed because the readers above are three files that all need it and
+ * because a consumer occasionally wants to read a part unodoc does not model.
+ * It reports events by pointing INTO the caller's buffer and allocates
+ * nothing; see ud_xml.c for why a tree was not an option here.
+ * ======================================================================== */
+#define UD_XML_ATTRS 24
+
+enum { UD_XML_NONE = 0, UD_XML_START, UD_XML_END, UD_XML_TEXT };
+
+typedef struct {
+    const char *name; long nlen;      /* local name, prefix stripped        */
+    const char *pfx;  long plen;      /* the prefix, "" when there is none  */
+    const char *val;  long vlen;      /* raw, still escaped                 */
+} ud_xattr;
+
+typedef struct {
+    const char *p;    long n, at;
+    int   kind;                       /* UD_XML_*                           */
+    const char *name; long nlen;      /* element local name                 */
+    const char *pfx;  long plen;
+    const char *text; long tlen;      /* UD_XML_TEXT, raw                   */
+    ud_xattr attr[UD_XML_ATTRS];
+    int   nattr;
+    int   depth;                      /* elements currently open            */
+    int   empty;                      /* the start tag was self-closing     */
+    int   cdata;
+} ud_xml;
+
+void ud_xml_init(ud_xml *x, const char *src, long len);
+int  ud_xml_next(ud_xml *x);                       /* 0 at end of document  */
+int  ud_xml_is  (const ud_xml *x, const char *local);
+
+const char *ud_xml_attr    (const ud_xml *x, const char *name, long *len);
+/* Match on PREFIX AND local name.  Needed exactly where an element carries two
+ * attributes with the same local name - `<p:sldId id="256" r:id="rId2"/>` is
+ * the one that matters, and reading the wrong one there makes every slide
+ * resolve to no part.  `pfx` NULL or "" means the unprefixed one. */
+const char *ud_xml_attr_ns (const ud_xml *x, const char *pfx, const char *name,
+                            long *len);
+int         ud_xml_attr_ns_str(const ud_xml *x, const char *pfx,
+                               const char *name, char *out, int cap);
+int         ud_xml_attr_str(const ud_xml *x, const char *name, char *out, int cap);
+long        ud_xml_attr_int(const ud_xml *x, const char *name, long dflt);
+/* An OOXML toggle: absent attribute means TRUE (`<w:b/>` is bold), and
+ * "0"/"false"/"off" mean false. */
+int         ud_xml_attr_bool(const ud_xml *x, const char *name, int dflt);
+
+/* Un-escape into a caller buffer; returns the length written. */
+long ud_xml_unescape(const char *s, long n, char *out, long cap);
+
+/* The text of everything inside the current element, entities resolved and
+ * nested tags followed - how a Word paragraph or a shared string is read,
+ * because the sentence is scattered across runs. */
+long ud_xml_inner_text(ud_xml *x, char *out, long cap);
+
+/* Step past the current element and everything in it.  This is what keeps an
+ * unknown subtree from derailing a walk. */
+void ud_xml_skip(ud_xml *x);
+
 /* ---- name comparison (exposed: the format layers sort names too) ---------- */
 /* CFB directory order: shorter names first, then uppercased code unit by
  * code unit.  <0, 0, >0 like strcmp. */
