@@ -1,0 +1,238 @@
+# Pre-launch conformance on real hardware, 2026-08-20
+
+A record of how UnoDOS pc64 was conformance-tested on metal before launch: the
+method, the instrumentation, what it found, and the things that cost time. It
+is written to be enough, on its own, to reconstruct the exercise later - for a
+repeat run, or for an article about it.
+
+The premise is worth stating plainly because it shapes everything below: **an
+AI agent drove the entire test campaign against an operating system that was
+itself written by AI agents.** Nobody typed on the machines under test except
+to power them on and move a USB stick. Every app launch, click, keystroke,
+screenshot and diagnosis came over a wire.
+
+---
+
+## 1. What was under test
+
+Master at `3bd2b372`, built `UNO_DEBUG=1 UNO_DETACH=1`. Two machines, chosen
+because they fail differently:
+
+| box | hardware | why it is in the fleet |
+|---|---|---|
+| **ZimaBlade** | Apollo Lake Celeron N3350, r8169 wired, eMMC, 960x540 desktop | always-on, headless, no keyboard - everything must work remotely |
+| **X13 Yoga** | i5-10210U, 7.5 GB RAM, AX201 WiFi, NVMe, USB ethernet dongle | a real laptop: battery, trackpad, WiFi, and a Windows disk to not destroy |
+
+Three features had **never been tested on hardware at all**: the Studio AI
+assistant, OOXML in the office suite, and UnoCode. Those were the point of the
+exercise.
+
+## 2. The instrumentation chain
+
+Nothing here is new tooling; the run used what the project already had, which
+is itself a finding - the harness was good enough to diagnose faults it was
+never designed for.
+
+```
+agent -> ssh devbuntu -> urc_bridge.py -> TCP -> the box's own network stack
+                      \-> zgrab.py (screen grab / click / type, via the bridge files)
+                      \-> syslog_recv.py :5514  <- the box's live kernel log
+                      \-> the USB stick, read directly when the box is dead
+```
+
+- **URC** (the unoautomate remote channel) is the spine. The box **dials out**
+  to devbuntu, so nothing listens on the box. Verbs are appended one per line
+  to `~/urc-multi/<box>/cmd.txt`; replies land in `session.log`.
+- **`zgrab.py`** turns that file interface into `shot()`, `click()`,
+  `type_str()`. Screenshots come back as QOI and are written as PNG - and the
+  agent can *read those PNGs directly*, which is what made blind UI driving
+  possible. Every UI verdict in this document was reached by looking at a
+  picture.
+- **`conf_run.py`** (written during the run) is the batch runner: launch every
+  app by id, screenshot each, assert liveness between steps, log to a TSV.
+- **`\LOGS\LOG.CFG`** arms remote syslog **from boot** (`level`,
+  `remote_level`, `remote=host:port`). This matters enormously on a box that
+  dies 90 seconds after boot: arming by hand is a race you lose.
+- **The stick itself** is the last resort and the best one. Pulled into
+  devbuntu it gives the full `CRASH\<MACHINE>\` tree with no transfer cap and
+  no race.
+
+## 3. The method
+
+1. **Gate first, on quill.** Full merge gate (73 golden checks, host tests for
+   csslib/quickjs/unodoc/unocode, TLS gates, SPECTEST in QEMU) before anything
+   was written to a stick. A trip to a box is never spent discovering a build
+   problem.
+2. **Prove the image in QEMU**, including booting the *physical stick* with
+   `snapshot=on` so the stick is byte-identical afterwards.
+3. **Flash by serial, never by device letter**, with the write-blocker dance
+   and a `trap` that restores it on any exit path.
+4. **Identify the box from its own hardware before driving it** (see §5).
+5. **Observation before mutation**: `vols`/`disks`/`devices`, then app
+   launches, then anything that writes, then anything that reboots.
+6. **Anything risky runs behind the box's own watchdog** (`guard <s> reboot`),
+   because a wedge otherwise needs a human.
+7. **Screenshot everything.** A figure you would refuse to publish is a bug
+   report.
+
+## 4. Results
+
+65 recorded results on the ZimaBlade, 16 on the Yoga.
+
+**Passed on metal:** 23/23 apps launch; the security store and session file
+land on the boot volume; Duum interactive; the whole office suite; UnoCode
+including its integrated terminal (`js 6*7` -> 42 on the live unojs engine);
+SSH keygen plus `ssh run` to a real host with exit 0; the browser loading a
+real HTTPS site; JPEG/WebP/QOI decoding, and malformed fuzz-corpus images
+rejected *gracefully with a specific reason*; Control Panel across all six
+tabs; two hours of continuous uptime at 60 fps and 96% idle.
+
+**First-ever hardware tests, all three passed their core function:**
+- **Studio AI assistant** - a live round trip to Anthropic over real TLS,
+  which in one test proves DNS, TLS with certificate validation against the
+  bundled trust store, the HTTPS POST and the JSON reply parse.
+- **OOXML** - `.xlsx`, `.docx` and `.pptx` all open with correct content, and
+  `.xlsx` survives a full round trip back through our own writer.
+- **UnoCode** - file tree, minimap, syntax highlighting, terminal, at 60 fps.
+
+**Four defects found and fixed during the run** (all gated and on master):
+1. `unossh_store.c` and `iwlwifi.c` still carried copies of the pre-fix
+   lowest-index volume picker, so the SSH key store and saved WiFi credentials
+   went to whatever disk enumerated first - on the ZimaBlade, an eMMC that
+   accepts a create and never completes the write, which hangs the machine.
+2. **The guest was silent with >=4 GB of RAM.** The AC'97 BDL and ring lived in
+   `.bss`, which lands above the 4 GB line on a big-memory machine, and the
+   32-bit `PO_BDBAR`/BDL casts truncate. Measured: 3 GB peak 6259, 4 GB peak 0;
+   after the fix both play.
+3. **`arena_init_lowmem()` called boot services after ExitBootServices**, on
+   the strength of a comment asserting WiFi always brings up first. See §6.
+4. The same pattern, inherited by copy, in the AC'97 fix written earlier the
+   same day - fixed in the same commit rather than left as the next crash.
+
+## 5. Traps, in the order they cost time
+
+**Identify the machine from its own hardware, never from a label.** The two
+sticks went into the opposite boxes. The bridge cheerfully labelled the
+ZimaBlade "zima" from a stale IP map while it was running the *Yoga's*
+overlay and dialing the Yoga's lane. `devices`/`disks` settle it in seconds
+(Apollo Lake + r8169 + eMMC is one box; an NVMe is the other), and the USB
+disk's sector count names which stick is in it.
+
+**Never guess telemetry filenames - list the directory.** A remote probe for
+`HG001/HG002/CR001/CR002` returned "not found" for all four, and the honest
+conclusion written at the time was "no telemetry whatsoever". The box had
+**nine** reports; this machine's numbering starts at 005. Pulling the stick
+and running `ls` found them instantly and root-caused a day's mystery.
+
+**Debounce liveness.** URC verbs intermittently exceed the bridge's 15 s
+timeout under load. Every single "the box is dead" scare during this run was
+a slow verb; the box was always alive on a re-check. Break on three
+consecutive failures, never one.
+
+**A comment asserting an invariant is not evidence.** The crash in §6 was
+guarded by a comment saying the code could only run before ExitBootServices.
+
+**An interrupted URC push writes nothing.** `put` stages chunks in an 8 MiB
+`.bss` buffer and only touches the disk at the `done` step. Worth knowing
+before panicking about a truncated kernel, as happened here.
+
+**`nonet` is blunter than it reads.** It is documented as skipping the network
+*test*, but `net_init()` - which binds the stack to a NIC - lives inside that
+test, so setting it leaves the machine with no networking at all and no remote
+channel. The screen says "no link (no NIC bound)".
+
+**A `pkill` pattern matches the shell running it.** Killing the bridge from an
+inline ssh command killed the ssh session first, leaving the bridge dead
+rather than restarted. Put it in a script file.
+
+**The office Open dialog is mouse-only.** Its File name field ignores injected
+keys entirely. Push the fixture to the RAM disk so its row is directly
+clickable - which is exactly what `tools/uoffice_ooxml_urc.py` documents, for
+exactly this reason.
+
+## 6. The Yoga crash loop: a worked example of the method
+
+Symptom: a laptop that died every few minutes, sometimes pinging while
+unreachable, sometimes gone entirely. Diagnosis, in order:
+
+1. **Ask what the screen says.** "Frozen on the desktop" ruled out a modal
+   dialog walling off the channel, and meant the shell loop was dead while
+   something low-level still answered ICMP.
+2. **Pull the stick and read it.** Nine reports: `CR005` plus eight
+   hang/reset pairs. `BOOTS.TXT` proved the loop began at the *first* boot,
+   before any remote contact - which exonerated the `devices` verb that had
+   been blamed.
+3. **Read the crash.** `vector 6 #UD, UBSAN TRAP at arena_init_lowmem+0xb5`,
+   checkpoint `net:wifi-bringup`, **`detached: 1`**. The WiFi driver
+   dereferenced `ST->BootServices` after the firmware was gone. Fixed by
+   asking `uno_pc64_detached()` first, as every other driver already does.
+4. **Read the hangs.** Twelve of the thirteen failures are not that crash:
+   they are `last_checkpoint: net:dhcp` (or `net:dns`), main loop silent past
+   20 s, LAPIC watchdog reset.
+5. **Arm the live log and catch it in the act.** Gateway pings of **267 ms,
+   1020 ms, 3806 ms** on a LAN - degrading roughly fourfold per round. Later a
+   URC transfer measured **1.1 KB/s on a gigabit link**, still decelerating.
+   One bug, not three: the whole network path collapses.
+
+**Still open.** The degradation itself. Note the limitation this exposed:
+**remote syslog cannot see this class of fault**, because the code that ships
+log records stops when the main loop does. Catching it needs instrumentation
+outside the main loop.
+
+## 7. The AI assistant, tested as a user would use it
+
+The assistant was asked, on the machine, to write a complete UnoDOS Python
+app. Its code was taken verbatim, put on the box, and run through Studio's
+normal Ctrl+R path.
+
+It got the *shape* right: subclassing `uno.App`, a module-global `app`,
+correct `fill_rect` and `uno.rgb` signatures. Studio packaged and launched it.
+**It rendered nothing.** Isolated with a three-way A/B:
+
+| version | change | result |
+|---|---|---|
+| the AI's code | `cv.clear(0)`, animation in `draw()` | blank |
+| control 1 | `build()` instead of `__init__` | still blank |
+| control 2 | `uno.rgb(0,0,60)` + animation in `tick()` | **renders** |
+
+So `cv.clear(0)` - a raw int where a colour is required - is fatal. An earlier
+answer also called `self.cv.width()`, a member the runtime never sets.
+
+**The more important finding is ours, not the model's:** when that app's
+`draw()` raised, the system reported *nothing*. Blank window, no error in
+Studio's output pane, no dialog, no log line, while the status bar said
+"Running". A one-character API mistake becomes an unsolvable mystery. This
+affects all Python app development, not only AI-assisted work.
+
+## 8. WiFi: WPA2 only, and what that costs
+
+The standing "associates then never gets a lease" defect is **resolved** - the
+Yoga joined an Eero guest SSID through the Control Panel and got a DHCP lease.
+
+But it **cannot join the main SSID of an Eero Pro 6E**. `wpa_build_rsn_ie()`
+advertises exactly one AKM, `00-0F-AC-02` (PSK), accepts only PSK/PSK-SHA256
+with CCMP, and sets RSN capabilities to `0x0000`: **no SAE, so no WPA3, and no
+PMF/802.11w**. Modern Wi-Fi 6E/7 routers default to WPA3 or WPA2/WPA3
+transition with PMF, and 6 GHz *mandates* WPA3. The guest network worked
+precisely because guest SSIDs are commonly WPA2-only. As shipped, a large and
+growing share of home networks are unjoinable.
+
+## 9. For the article
+
+The threads worth pulling later:
+
+- An AI agent tested an AI-written OS on real hardware and found four real
+  bugs, three of which were *inherited by copy-paste between drivers* - the
+  same volume-picking heuristic and the same boot-services assumption,
+  propagated because each new driver was modelled on an existing one. The
+  fourth was introduced during this very session by the same mechanism, and
+  caught for the same reason.
+- The most valuable diagnostic moves were the least sophisticated: read the
+  screen, list the directory, pull the disk.
+- Screenshots as the agent's primary sense. Every UI verdict here came from
+  looking at a PNG, including catching that a click had silently run the wrong
+  file.
+- The failure modes that are invisible without a human: sound, and a frozen
+  picture. Both needed someone in the room.
+- Honest negative results matter: the assistant wrote confident, well-shaped,
+  non-working code, and the OS gave the user no way to find out why.
