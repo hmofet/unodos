@@ -23,6 +23,12 @@ import argparse, json, os, subprocess, sys
 # reordering pass - its footage, beats and narration still exist if it returns.
 SPINE = [
     ("s01", "Cold boot"),
+    # A breath between the boot and Doom (added 2026-08-20, on the note that
+    # the cut jumped straight into Duum): fifteen seconds of a shipped game.
+    # Pac-Man rather than Runner3D, which takes the display to 320x200 and
+    # would have put a second resolution in the film; scenes.py's s15 says
+    # what else was ruled out and why.
+    ("s15", "A shipped game"),
     ("s08", "Duum"),
     ("s02", "Desktop and window manager"),
     ("s03", "Themes"),
@@ -37,7 +43,11 @@ SPINE = [
     # that keeps up: the footage, its beats and its narration all still exist.
     ("s13", "SSH"),
     ("s10", "Under the hood"),
-    ("s11", "The family"),
+    # s11 was a 51-second montage of every port. It is out (2026-08-20): the
+    # roster is on the website, in the manual, and in the download list, and
+    # the film's last word is better spent telling a viewer what to DO. s11
+    # is now that: two cards, one for the browser and one for a USB stick.
+    ("s11", "Try it"),
 ]
 
 

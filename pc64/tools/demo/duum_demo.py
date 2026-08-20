@@ -316,9 +316,13 @@ def s01_title(d):
 def s02_render(d):
     """The renderer showcase: walk east out of the start room, through the
     computer hall (banked terminals, lit ceiling, a full-height window) and on
-    into the crate corridor.  Straight-line walking on purpose - turning
+    towards the crate corridor.  Straight-line walking on purpose - turning
     mid-route then walking accumulates heading drift at 53 deg per press and
     ends up in a wall.
+
+    Four presses, and the fight in s03 takes it from here: the scenes are ONE
+    continuous session now, so this scene's arrival point is the next one's
+    starting point.
 
     STOP BEFORE THE CORRIDOR. Duum is a game now: its zombies chase, and the
     ten-press version of this route walked straight into two of them and
@@ -329,9 +333,8 @@ def s02_render(d):
     d.beat("walk-in", settle=0.3)
     d.keys("UUUU")
     d.beat("the-hall", settle=1.6)
-    d.keys("UUU")
     d.beat("deeper-in", settle=0.3)
-    d.beat("hold-vista", settle=1.8)
+    d.beat("hold-vista", settle=1.5)
 
 
 def s03_combat(d):
@@ -350,9 +353,11 @@ def s03_combat(d):
     because it assumed the host's arrival point.  Walking straight and firing
     straight down the corridor is correct wherever the walk actually ends,
     and standing still lets the chaser close the gap."""
+    # CONTINUES from s02, which stopped in the hall four presses in. Three
+    # more reach the corridor the zombies walk down; the old eight assumed a
+    # fresh start room and would end up in a wall from here.
     d.beat("advance", settle=0.3)
-    d.keys("UUUU")
-    d.keys("UUUU")
+    d.keys("UUU")
     d.beat("enemies", settle=1.6)           # let the chaser walk into frame
     d.keys("FFFF", settle=0.26)
     d.beat("firefight", settle=0.2)
@@ -412,10 +417,12 @@ def s04_menu(d):
 
 
 def s05_hud(d):
-    """Hold on the start room so the status bar reads clearly: health, ammo,
-    armor, the arms panel and the face. A slow look keeps it live while the
-    closing narration lands.  Single presses: a turn is ~53 deg now that
-    movement is held-key continuous, so the old triples were a full spin."""
+    """Hold where the fight left off so the status bar reads clearly: health,
+    ammo, armor, the arms panel and the face - and by now those numbers have
+    a history, which a hold on an untouched start room did not.  A slow look
+    keeps it live while the closing narration lands.  Single presses: a turn
+    is ~53 deg now that movement is held-key continuous, so the old triples
+    were a full spin."""
     d.beat("hud-hold", settle=3.5)
     d.keys("L", settle=0.5)
     d.beat("ports-line", settle=4.0)
@@ -425,8 +432,8 @@ def s05_hud(d):
     d.beat("hud-settle", settle=2.0)
 
 
-# each scene relaunches Duum fresh, so it starts from the known start room and
-# its verified key route is independent of the others
+# ONE continuous session: each scene picks up where the last one left off.
+# See the note in main(); --relaunch restores per-scene restarts.
 SCENES = [("s01", s01_title), ("s02", s02_render), ("s03", s03_combat),
           ("s04", s04_menu), ("s05", s05_hud)]
 
@@ -460,6 +467,10 @@ def main():
     ap.add_argument("--hero-takes", type=int, default=0,
                     help="record N hero-combat takes (one boot, relaunch each)")
     ap.add_argument("--no-maximize", action="store_true")
+    ap.add_argument("--relaunch", action="store_true",
+                    help="restart Duum before every scene (the old behaviour: "
+                         "every scene opens on the start room, which reads as "
+                         "a loop in the finished cut)")
     args = ap.parse_args()
 
     if args.list:
@@ -496,12 +507,20 @@ def main():
         sel = set((args.scene or "").split(","))
         want = [s for s in SCENES if (args.all or s[0] in sel)]
         for i, (name, fn) in enumerate(want):
-            # relaunch Duum fresh so every scene starts from the same known
-            # state (the start room), off camera - the WAD parse + first frame
-            # happen before the stream starts
-            d.clean_desktop()
-            d.launch_duum()
-            d.park_cursor()
+            # ONE session by default, and this is the difference between a
+            # film and a loop. Relaunching between scenes made every scene
+            # start from the same start room, so the finished cut looked like
+            # the same twenty seconds of play repeated five times - which is
+            # exactly what the first viewer said. Now the scenes CONTINUE:
+            # the walk carries on from the title's view, the fight happens
+            # where the walk arrived, and the menu opens over that.
+            #
+            # --relaunch restores the old behaviour for designing a single
+            # scene against a known start.
+            if args.relaunch or i == 0:
+                d.clean_desktop()
+                d.launch_duum()
+                d.park_cursor()
             d.record(name, fn, STREAM_BASE + i)
     finally:
         d.stop()

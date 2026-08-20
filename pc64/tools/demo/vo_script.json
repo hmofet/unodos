@@ -89,7 +89,7 @@
         },
         {
           "id": "s04b",
-          "at": "unoword-open-fmt-doc",
+          "at": "unoword-open-the-cv",
           "text": "This is an actual Word document, opened from disk. Not an export, not a simplified copy: the fonts, the formatting and the layout all come out of the original file."
         },
         {
@@ -196,6 +196,16 @@
           "id": "s07f",
           "at": "run-the-python",
           "text": "That one runs on the system's own Python runtime, and opens as an ordinary application."
+        }
+      ]
+    },
+    {
+      "id": "s15",
+      "cues": [
+        {
+          "id": "s15a",
+          "at": "the-game-runs",
+          "text": "It ships its own applications, games included."
         }
       ]
     },
@@ -325,31 +335,16 @@
         {
           "id": "s11a",
           "at": 1.0,
-          "text": "And this is only one of them."
+          "text": "You can try this yourself, right now, in a browser."
         },
         {
           "id": "s11b",
-          "at": 5.0,
-          "text": "The same operating system, the same applications, rebuilt for more than twenty different machines, going back to the original IBM PC."
+          "at": 5.2,
+          "text": "Or write it to a USB stick and boot your own PC from it."
         },
         {
           "id": "s11c",
-          "at": 16.0,
-          "text": "Eight bit consoles. Sixteen bit home computers. Handhelds with a few kilobytes of memory."
-        },
-        {
-          "id": "s11d",
-          "at": 26.0,
-          "text": "The same desktop, redrawn for whatever the hardware in front of it can do."
-        },
-        {
-          "id": "s11e",
-          "at": 34.0,
-          "text": "A Dreamcast. A PlayStation 2. A Raspberry Pi. A phone."
-        },
-        {
-          "id": "s11f",
-          "at": 43.0,
+          "at": 9.7,
           "text": "One system, wherever you want it."
         }
       ]
