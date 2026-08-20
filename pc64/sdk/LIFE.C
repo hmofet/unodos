@@ -97,12 +97,14 @@ static void life_draw(UnoWin *w)
                 fill_rgb(&q, g[r][c] > 4 ? &kOld : &kYoung);
             }
 
+    /* Below the field the background is the window's own light chrome, so
+     * these draw in BLUE - C_WHITE is invisible off the dark playfield. */
     text_at(x0, by + 8, "Gen:", C_CYAN, C_BLUE, false);
     fmt_u(gen, num);
-    text_at(x0 + 38, by + 8, num, C_WHITE, C_BLUE, false);
+    text_at(x0 + 38, by + 8, num, C_BLUE, C_BLUE, false);
     text_at(x0 + 100, by + 8, "Pop:", C_CYAN, C_BLUE, false);
     fmt_u(pop, num);
-    text_at(x0 + 138, by + 8, num, C_WHITE, C_BLUE, false);
+    text_at(x0 + 138, by + 8, num, C_BLUE, C_BLUE, false);
     text_at(x0, by + 24,
             running ? "Space: pause   N: reseed   C: clear"
                     : "PAUSED - Space runs, S steps once",
