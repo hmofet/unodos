@@ -88,8 +88,29 @@ S_ESC                          = 0x17
 CORPUS = os.path.join(REPO, "unodoc", "test", "corpus")
 if not os.path.isdir(CORPUS):
     CORPUS = os.path.join(HERE, "corpus")
-OFFICE = [("fmt.doc", "FMT.DOC"), ("pic.doc", "PIC.DOC"),
+# resume.doc is the DEMO's own document (tools/demo/assets, built by
+# mkdemo_doc.py), not part of unodoc's test corpus: the corpus exists to carry
+# one of every formatting property for a parser to check, so its text reads
+# "a BOLDWORD z" and shows a viewer nothing. The scene opens a CV instead,
+# which uses the same formatting and is recognisable at a glance.
+OFFICE = [("resume.doc", "RESUME.DOC"),
+          ("fmt.doc", "FMT.DOC"), ("pic.doc", "PIC.DOC"),
           ("formulas.xls", "FORMULAS.XLS"), ("small.ppt", "SMALL.PPT")]
+
+
+def office_src(name):
+    """Where a demo document actually is.
+
+    Two sources, because they are two different things: unodoc's generated
+    test corpus (fmt.doc and friends, whatever the checkout has) and the
+    demo's OWN assets directory, which carries the documents that exist to be
+    looked at rather than parsed. The corpus wins when both have a name, so a
+    checkout with a full corpus behaves exactly as it did."""
+    for base in (CORPUS, os.path.join(HERE, "assets")):
+        cand = os.path.join(base, name)
+        if os.path.exists(cand):
+            return cand
+    return os.path.join(CORPUS, name)
 
 
 def stage_office():
@@ -104,7 +125,7 @@ def stage_office():
     os.makedirs(dst, exist_ok=True)
     staged = []
     for src, name in OFFICE:
-        p = os.path.join(CORPUS, src)
+        p = office_src(src)
         if os.path.exists(p):
             shutil.copyfile(p, os.path.join(dst, name))
             shutil.copyfile(p, os.path.join(RQ.ESP, name))
@@ -345,7 +366,7 @@ class Demo(object):
         docsb = []
         for src, _ in OFFICE:
             if src in ("pic.doc", "small.ppt"):
-                p = os.path.join(CORPUS, src)
+                p = office_src(src)
                 if os.path.exists(p):
                     docsb.append(p)
         build_disk(docs_for_b=docsb or None)
@@ -1155,13 +1176,13 @@ def s04_pre(d):
     base64 `put` on camera is nothing to look at). ONLY the small two: the
     RAM disk's per-file cap is 256 KB (pc64_io.c FILE_MAX), which refuses
     pic.doc and small.ppt. Push order is list order, and README.TXT is
-    seeded first, so the dialog rows are FMT.DOC 1, FORMULAS.XLS 2."""
+    seeded first, so the dialog rows are RESUME.DOC 1, FORMULAS.XLS 2."""
     if not getattr(d, "office_staged", None):
         print("  s04: SKIP - office corpus not staged")
         return False
     pushed = list(getattr(d, "ram_pushed", []))
-    for name in ["FMT.DOC", "FORMULAS.XLS"]:
-        src = dict((s.upper(), os.path.join(CORPUS, s))
+    for name in ["RESUME.DOC", "FORMULAS.XLS"]:
+        src = dict((s.upper(), office_src(s))
                    for s, _ in OFFICE)[name]
         d.link.push_file(0, name, src)
         pushed.append(name)
@@ -1191,11 +1212,18 @@ def s04_office(d):
     time.sleep(2.0)                                  # FMT.DOC/FORMULAS.XLS
     d.ctrl("w", settle=1.0)
 
-    d.beat("unoword-open-fmt-doc")
+    # A CV, not the parser fixture. fmt.doc's text is literally "a BOLDWORD z"
+    # and "CENTREPARA" - it exists to carry one of every formatting property
+    # for unodoc's tests, and on camera it says nothing to a viewer. The CV
+    # (tools/demo/assets/resume.doc, built by mkdemo_doc.py) uses the same
+    # properties - a name at 22pt bold, right-aligned contact details, small
+    # caps headings, italic dates, justified body - in a shape anyone
+    # recognises at a glance.
+    d.beat("unoword-open-the-cv")
     d.launch("uoword", settle=3.0)
     d.ctrl("o", settle=1.4)
-    uof_open_row(d, 1)                               # FMT.DOC (RAM row 1)
-    time.sleep(3.0)                                  # hold: bold/italic/sizes
+    uof_open_row(d, 1)                               # RESUME.DOC (RAM row 1)
+    time.sleep(3.5)                                  # hold: the whole page
     d.ctrl("w", settle=1.2)
 
     d.beat("unocalc-open-formulas-xls")
@@ -1496,6 +1524,37 @@ def s07_studio(d):
     d.ram_pushed = list(getattr(d, "ram_pushed", [])) + ["SAMPLE.UNO"]
     # No on-camera teardown: the scene ends on the app it just compiled,
     # running. reset() closes both windows after the stream stops.
+
+
+def s15_arcade(d):
+    """Ten seconds of a shipped game, as a breath between the boot and Duum.
+
+    The cut went from the boot screen straight into Doom, which lands the
+    film's biggest thing before a viewer knows what machine it is running on.
+
+    PAC-MAN, and the two rejected alternatives are the interesting part.
+    Runner3D was the first choice - real-time 3D with no graphics chip - and
+    it is unusable here: it takes the display down to 320x200, so the stream
+    reconnects mid-scene and the take arrives as three files at two
+    resolutions. Dostris animates by itself too, but its music OUTLIVES it
+    (a known open bug: the sequencer keeps playing after the window closes),
+    and the very next scene records the guest's audio - it would have filmed
+    Duum with Dostris playing underneath. Pac-Man stays in a desktop window,
+    ticks on its own, and makes no sound at all.
+
+    Launched by ID, never by row number: the app list is this boot's own."""
+    d.beat("open-a-game")
+    d.launch("pacman", settle=3.0)
+    # It opens on a title screen that says "N: new game", so the first take
+    # here was ten seconds of a static title. Press it, then actually play:
+    # standing still would only show the ghosts closing in on a stationary
+    # Pac-Man, which is a death rather than a game.
+    d.key(ord("n"), settle=1.2)
+    d.beat("the-game-runs", settle=0.3)
+    for scan in (S_LEFT, S_LEFT, S_UP, S_RIGHT, S_RIGHT, S_DOWN, S_LEFT):
+        d.key(0, scan, settle=0.85)
+    d.beat("close-the-game", settle=0.3)
+    d.ctrl("w", settle=1.2)
 
 
 def s08_pre(d):
@@ -1996,7 +2055,7 @@ def poster_pre(d):
     # Behind: UnoWord with FMT.DOC, the document whose own text names its
     # formatting. Pushed to RAM first, exactly as s04 does it.
     d.link.push_file(0, "FMT.DOC",
-                     dict((x.upper(), os.path.join(CORPUS, x))
+                     dict((x.upper(), office_src(x))
                           for x, _ in OFFICE)["FMT.DOC"])
     d.launch("uoword", settle=3.0)
     d.ctrl("o", settle=1.4)
@@ -2043,6 +2102,7 @@ SCENES = [
     ("s05", (None, s05_browser)),
     ("s07", (s07_pre, s07_studio)),
     ("s09", (s09_pre, s09_automate)),
+    ("s15", (None, s15_arcade)),
     ("s08", (s08_pre, s08_duum)),
     ("s13", (s13_pre, s13_ssh)),
     ("s10", (None, s10_system_log)),
@@ -2120,7 +2180,7 @@ def main(argv):
         # volume at runtime from ./corpus. The guards below are therefore
         # about what is REACHABLE, re-probed after the box dials in.
         d.office_staged = [n for s, n in OFFICE
-                           if os.path.exists(os.path.join(CORPUS, s))]
+                           if os.path.exists(office_src(s))]
         d.vm_staged = False                  # the appliance is a QEMU-only scene
     results = []
     t0 = time.time()

@@ -176,6 +176,96 @@ def make_endcard(dst, font, w, h, closer=None):
     return dst
 
 
+# ---- the call-to-action cards (the outro since 2026-08-20) -----------------
+# The montage of twenty-two ports is out. Where a viewer can GET this is worth
+# more than another look at machines they have already been shown, and the
+# roster is on the website, in the manual and in the download list anyway.
+#
+# Two cards, both true and both checkable: the browser build is live at the
+# URL below, and the download list on the same site is a raw image you write
+# to a stick and boot. Nothing here is a screenshot, so nothing here can go
+# stale in the way a picture of an old desktop would.
+CTA = [
+    ("Try it in your browser",
+     "The real image, running in a page:",
+     "unodos.arinbakht.com"),
+    ("Or run it on your own PC",
+     "Write the image to a USB stick",
+     "and boot from it."),
+]
+
+
+def make_cta_card(dst, font, w, h, title, line1, line2):
+    """One call-to-action card, laid out on the SAME 400-line reference the
+    end card uses, so the three of them crossfade without anything moving."""
+    sc = h / 400.0
+    vf = (
+        "drawtext=fontfile='%s':text='%s':fontcolor=0xFFFFFF:fontsize=%d:"
+        "x=(w-tw)/2:y=%d,"
+        "drawbox=x=(iw-%d)/2:y=%d:w=%d:h=%d:color=0x3C82F6@1:t=fill,"
+        "drawtext=fontfile='%s':text='%s':fontcolor=0xC7CEDB:fontsize=%d:"
+        "x=(w-tw)/2:y=%d,"
+        "drawtext=fontfile='%s':text='%s':fontcolor=0xFFFFFF:fontsize=%d:"
+        "x=(w-tw)/2:y=%d"
+        % (font, esc(title), int(46 * sc), int(130 * sc),
+           int(160 * sc), int(196 * sc), int(160 * sc), max(2, int(2 * sc)),
+           font, esc(line1), int(21 * sc), int(228 * sc),
+           font, esc(line2), int(26 * sc), int(258 * sc))
+    )
+    r = subprocess.run(["ffmpeg", "-y", "-loglevel", "error",
+                        "-f", "lavfi", "-i", "color=c=0x0B0E14:s=%dx%d" % (w, h),
+                        "-vf", vf, "-frames:v", "1", dst])
+    if r.returncode != 0:
+        raise RuntimeError("cta card build failed")
+    return dst
+
+
+def build_cta(hold, xfade, card_hold, outfile, beats, w, h):
+    """The whole outro: two call-to-action cards, then the end card."""
+    font = font_path()
+    work = os.path.join(OUT, "s11_cards")
+    os.makedirs(work, exist_ok=True)
+    cards = []
+    for i, (title, l1, l2) in enumerate(CTA):
+        cards.append((make_cta_card(os.path.join(work, "cta%d.png" % i),
+                                    font, w, h, title, l1, l2), hold))
+    cards.append((make_endcard(os.path.join(work, "zz_end.png"), font, w, h),
+                  card_hold))
+
+    # One xfade chain, same as the montage: each still becomes a clip of its
+    # own hold, and the clips dissolve into each other.
+    inputs, filt, prev, t = [], [], None, 0.0
+    for i, (png, hold_i) in enumerate(cards):
+        inputs += ["-loop", "1", "-t", "%.3f" % hold_i, "-i", png]
+        lbl = "c%d" % i
+        filt.append("[%d:v]fps=%d,format=yuv420p,setsar=1[%s]" % (i, FPS, lbl))
+        if prev is None:
+            prev, t = lbl, hold_i
+            continue
+        off = t - xfade
+        out = "x%d" % i
+        filt.append("[%s][%s]xfade=transition=fade:duration=%.3f:offset=%.3f[%s]"
+                    % (prev, lbl, xfade, off, out))
+        prev, t = out, t + hold_i - xfade
+
+    # Beats: the name each card is known by, at the moment it is ALONE on
+    # screen (its fade-in done), so a narration cue anchored to it lands on a
+    # readable card rather than on a dissolve.
+    t0 = time.time()
+    at = 0.0
+    for i, name in enumerate(["try-in-browser", "try-on-hardware", "end-card"]):
+        beats.mark(name, t=t0 + at + xfade)
+        at += cards[i][1] - xfade
+
+    r = subprocess.run(["ffmpeg", "-y", "-loglevel", "error"] + inputs +
+                       ["-filter_complex", ";".join(filt), "-map", "[%s]" % prev,
+                        "-c:v", "libx264", "-preset", "medium", "-crf", "18",
+                        "-pix_fmt", "yuv420p", outfile])
+    if r.returncode != 0:
+        raise RuntimeError("cta outro build failed")
+    return outfile
+
+
 def build(hold, xfade, card_hold, card_tail, outfile, beats, w, h):
     font = font_path()
     work = os.path.join(OUT, "s11_cards")
@@ -267,6 +357,13 @@ def main(argv):
     ap.add_argument("--card-tail", type=float, default=3.2,
                     help="seconds the card holds AFTER the closing word "
                          "appears (incl. its crossfade)")
+    ap.add_argument("--cta", action="store_true",
+                    help="build the call-to-action outro (two cards + the end "
+                         "card) INSTEAD of the ports montage - what the cut "
+                         "has used since 2026-08-20")
+    ap.add_argument("--cta-hold", type=float, default=5.0,
+                    help="seconds each call-to-action card holds (incl. its "
+                         "crossfade): long enough to read a URL off it")
     ap.add_argument("--width", type=int, default=DEF_W,
                     help="render width (default %d - the final cut's size)" % DEF_W)
     ap.add_argument("--height", type=int, default=DEF_H)
@@ -292,12 +389,17 @@ def main(argv):
     clean_outputs(base)
     beats = Beats(base + ".beats.jsonl")
     try:
-        build(a.hold, a.xfade, a.card_hold, a.card_tail, base + ".mp4", beats,
-              a.width, a.height)
+        if a.cta:
+            build_cta(a.cta_hold, a.xfade, a.card_hold, base + ".mp4", beats,
+                      a.width, a.height)
+        else:
+            build(a.hold, a.xfade, a.card_hold, a.card_tail, base + ".mp4",
+                  beats, a.width, a.height)
     finally:
         beats.close()
     info = probe(base + ".mp4")
-    st = {"scene": "s11", "platforms": len(PLATFORMS), "hold": a.hold,
+    st = {"scene": "s11", "cta": bool(a.cta),
+          "platforms": 0 if a.cta else len(PLATFORMS), "hold": a.hold,
           "xfade": a.xfade, "card_hold": a.card_hold, "card_tail": a.card_tail,
           "closing_word": CARD_CLOSER,
           "seconds_per_platform": round(a.hold - a.xfade, 2),
