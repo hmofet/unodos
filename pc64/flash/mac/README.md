@@ -37,6 +37,22 @@ pass the flags through: `UNO_EXTRA="-std=gnu17 -Wno-implicit-function-declaratio
 
 Output: `pc64/flash/mac/UnoDosFlasher.app` (universal arm64 + x86_64).
 
+### Publish (redistributable)
+
+`publish-app.sh` builds the artifact the manual links,
+**`UnoDosFlasher-macOS.zip`**. It is the macOS twin of
+`build-flasher.ps1 -Publish`: it scrubs the Intel WiFi firmware
+(`fw-blobs/`), the id shareware WAD and any Winamp skins, fetches Freedoom,
+builds with `UNO_NOFW=1`, then gates the result (both the ESP tree and the
+packed disk image) before zipping the signed app. It refuses an ad-hoc
+signature. The mba build server runs it as project `unodos-flasher`:
+
+```sh
+ssh mba build unodos-flasher --github
+# then, from a machine with gh auth:
+gh release upload <tag> UnoDosFlasher-macOS.zip
+```
+
 ## Files
 | File | Role |
 |------|------|
