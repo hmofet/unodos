@@ -35,6 +35,11 @@ static const unsigned char kPmMaze[PM_ROWS][PM_COLS] = {
 };
 
 enum { PM_TITLE=0, PM_READY, PM_PLAY, PM_DEAD, PM_OVER, PM_LEVELUP };
+/* how long READY and DEAD hold: each is the length of the tune that plays in
+   it (see the score below), so the fanfare and the death run play once each
+   instead of looping or being cut off */
+#define PM_READY_T 96
+#define PM_DEAD_T  72
 enum { GH_HOUSE=0, GH_SCATTER, GH_CHASE, GH_FRIGHT, GH_EATEN };
 enum { D_UP=0, D_LEFT, D_DOWN, D_RIGHT, D_NONE };
 typedef struct { short x,y,dir,state,timer; } PmGhost;
@@ -71,7 +76,7 @@ static void pm_load_maze(void){ short r,c; gPmDots=0;
     for(r=0;r<PM_ROWS;r++) for(c=0;c<PM_COLS;c++){ gPmMaze[r][c]=kPmMaze[r][c];
         if(kPmMaze[r][c]==2||kPmMaze[r][c]==3) gPmDots++; } }
 static void pm_new_game(void){ gPmScore=0; gPmLives=3; gPmLevel=1; gPmMode=0; gPmModeT=0;
-    pm_load_maze(); pm_reset_actors(); gPmState=PM_READY; gPmStateT=TickCount()+66;
+    pm_load_maze(); pm_reset_actors(); gPmState=PM_READY; gPmStateT=TickCount()+PM_READY_T;
     gPmLastStep=TickCount(); gPmSeed=(unsigned long)TickCount()|1; }
 static short pm_mode_state(void){ return (gPmMode&1)?GH_CHASE:GH_SCATTER; }
 static void pm_ghost_steer(short gi){
@@ -102,11 +107,61 @@ static void pm_ghost_steer(short gi){
    one-shot note, i.e. exactly the uno_seq_beep the native version calls. */
 #define PM_SND_WAKA()   music_note_on(72, 2)
 #define PM_SND_PELLET() music_note_on(55, 10)
-#define PM_SND_DEATH()  music_note_on(45, 22)
 
-static void pm_kill_pac(void){ gPmLives--; PM_SND_DEATH();
-    if(gPmLives<=0){ gPmState=PM_OVER; if(gPmScore>gPmHi)gPmHi=gPmScore; gm_stop(); }
-    else { pm_reset_actors(); gPmState=PM_READY; gPmStateT=TickCount()+66; } }
+/* ---- the score -----------------------------------------------------------
+ * Pac-Man had no music at all, and never has: apps/pacman.asm, the 16-bit
+ * original, reaches API_SPEAKER_TONE for three blips and stops there.  Every
+ * other game in the family loops something (Dostris Korobeiniki, OutLast its
+ * own theme), so this was the one that played in silence.
+ *
+ * These are ORIGINAL tunes, not the arcade's.  Namco's are in copyright, and
+ * the precedent the other two set is already the right one: Dostris loops a
+ * public-domain folk tune and OutLast a theme written for it.
+ *
+ * ONE VOICE, shared the way the sequencer is built for.  gm_start loops a
+ * song underneath, and music_note_on borrows the voice for a few ticks and
+ * hands it straight back (unosound_seq.c) - so the waka punches through the
+ * siren and the siren resumes, which is the arcade shape without needing a
+ * second channel.  Durations are 1/60 s ticks.
+ */
+static const Note kPmStart[]  = { {72,6},{76,6},{79,6},{84,10},{0,2},
+                                  {79,6},{84,6},{88,12},{0,4},
+                                  {84,6},{79,6},{76,6},{72,14},{0,6} };
+static const Note kPmSiren[]  = { {40,6},{45,6},{47,6},{45,6},
+                                  {40,6},{45,6},{48,6},{45,6} };
+static const Note kPmFright[] = { {52,3},{55,3},{59,3},{55,3},
+                                  {52,3},{55,3},{60,3},{55,3} };
+static const Note kPmDeath[]  = { {72,4},{69,4},{65,4},{62,4},{58,4},{55,4},
+                                  {51,4},{48,6},{45,8},{41,10},{0,20} };
+#define N_OF(a) (short)(sizeof(a)/sizeof((a)[0]))
+enum { PMT_NONE=0, PMT_START, PMT_SIREN, PMT_FRIGHT, PMT_DEATH };
+static short gPmTune = PMT_NONE;
+
+/* Latched, because gm_start RESTARTS a song: called every frame from the tick
+   below, an unlatched version would retrigger note 0 sixty times a second and
+   the score would be one repeating blip. */
+static void pm_tune(short which)
+{
+    if(which==gPmTune) return;
+    gPmTune=which;
+    switch(which){
+    case PMT_START:  gm_start(kPmStart, N_OF(kPmStart), APP_PACMAN);  break;
+    case PMT_SIREN:  gm_start(kPmSiren, N_OF(kPmSiren), APP_PACMAN);  break;
+    case PMT_FRIGHT: gm_start(kPmFright,N_OF(kPmFright),APP_PACMAN);  break;
+    case PMT_DEATH:  gm_start(kPmDeath, N_OF(kPmDeath), APP_PACMAN);  break;
+    default:         gm_stop();                                       break;
+    }
+}
+
+/* PM_DEAD was in the state enum and in the draw (which hides Pac-Man in it)
+   but nothing ever entered it - a death jumped straight back to READY, so the
+   maze never paused and there was nowhere for a death tune to play.  Losing a
+   life now holds here for the length of the run, and the tick below resolves
+   it into READY or GAME OVER. */
+static void pm_kill_pac(void){
+    gPmLives--;
+    gPmState=PM_DEAD; gPmStateT=TickCount()+PM_DEAD_T;
+}
 static void pm_step(void){
     short i,sub;
     if(gPmFright>0){ gPmFright--; if(!gPmFright) for(i=0;i<3;i++) if(gPmGh[i].state==GH_FRIGHT) gPmGh[i].state=pm_mode_state(); }
@@ -117,7 +172,7 @@ static void pm_step(void){
             if(*t==2){*t=0;gPmScore+=10;gPmDots--; PM_SND_WAKA();}
             else if(*t==3){*t=0;gPmScore+=50;gPmDots--;gPmFright=200;gPmKills=0; PM_SND_PELLET();
                 for(i=0;i<3;i++) if(gPmGh[i].state==GH_SCATTER||gPmGh[i].state==GH_CHASE){gPmGh[i].state=GH_FRIGHT;gPmGh[i].dir^=2;} }
-            if(!gPmDots){ gPmLevel++; pm_load_maze(); pm_reset_actors(); gPmState=PM_READY; gPmStateT=TickCount()+66; return; }
+            if(!gPmDots){ gPmLevel++; pm_load_maze(); pm_reset_actors(); gPmState=PM_READY; gPmStateT=TickCount()+PM_READY_T; return; }
             if(pm_walkable(tx+kPmDX[gPmNextDir],ty+kPmDY[gPmNextDir],0,0)) gPmDir=gPmNextDir;
             if(pm_walkable(tx+kPmDX[gPmDir],ty+kPmDY[gPmDir],0,0)){ gPmX+=kPmDX[gPmDir]; gPmY+=kPmDY[gPmDir]; }
         } else { gPmX+=kPmDX[gPmDir]; gPmY+=kPmDY[gPmDir]; }
@@ -187,14 +242,28 @@ static Boolean pacman_key(char ch, short code, Boolean cmd){
 }
 static void pacman_tick(void){
     UnoWin *w; long now=TickCount();
-    if(gPmState==PM_TITLE||gPmState==PM_OVER) return;
-    if(gPmState==PM_READY){ if(now>=gPmStateT) gPmState=PM_PLAY; else return; }
+    if(gPmState==PM_TITLE||gPmState==PM_OVER){ pm_tune(PMT_NONE); return; }
+    if(gPmState==PM_DEAD){
+        pm_tune(PMT_DEATH);
+        if(now<gPmStateT) return;
+        if(gPmLives<=0){ gPmState=PM_OVER; if(gPmScore>gPmHi)gPmHi=gPmScore; pm_tune(PMT_NONE); }
+        else { pm_reset_actors(); gPmState=PM_READY; gPmStateT=now+PM_READY_T; }
+        w=find_app_window(APP_PACMAN); if(w) draw_window(w);
+        return;
+    }
+    if(gPmState==PM_READY){ pm_tune(PMT_START); if(now>=gPmStateT) gPmState=PM_PLAY; else return; }
+    pm_tune(gPmFright>0?PMT_FRIGHT:PMT_SIREN);
     if(now-gPmLastStep<2) return; gPmLastStep=now; pm_step();
     w=find_app_window(APP_PACMAN); if(w) draw_window(w);
 }
 
+/* The score loops on the ONE global sequencer, so a Pac-Man that goes away
+   without stopping it leaves the siren running over an empty desktop.  This
+   slot was null, exactly as Dostris' was. */
+static void pacman_closed(void){ pm_tune(PMT_NONE); }
+
 static const AppInterface kIface = {
-    pacman_draw, pacman_key, 0, pacman_tick, 0, 0,
+    pacman_draw, pacman_key, 0, pacman_tick, 0, pacman_closed,
     "Pac-Man", { 70, 30, 404, 262 }
 };
 const AppInterface *uno_app_main(const KernelApi *k){ gK = k; return &kIface; }
