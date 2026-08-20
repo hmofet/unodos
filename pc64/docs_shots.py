@@ -549,6 +549,82 @@ def sc_studio_ai(q):
     key(q, "up", gap=0.5); key(q, "up", gap=0.5)
     time.sleep(1.0); close_all(q)
 
+# ---- the SDK sample programs (the manual's dev-samples.html) ---------------
+# The samples are staged onto the shots image as INSTALLED apps - built on the
+# host, dropped in APPS\ with a descriptor - and launched from the Start menu
+# by id, exactly like every other scene here. Stage them before mkuefi.py:
+#
+#   gcc -O1 -Wall -o build/ucc_host tools/ucc_host.c apps/ucc.c apps/ucc_x64.c #       -DUCC_KEXPORTS_H='"../build/apps/ucc_kexports.h"'
+#   ./build/ucc_host sdk/TIMER.C build/esp/APPS/TIMER.UNO --desc sdk/TIMER.DESC
+#   ./build/ucc_host sdk/LIFE.C  build/esp/APPS/LIFE.UNO  --desc sdk/LIFE.DESC
+#   python3 tools/mkuno.py pyapp sdk/TODO.PY build/esp/APPS/TODO.UNO #       sdk/TODO.DESC                      # and CHART.PY, GOODNITE.PY likewise
+#   python3 tools/mkuefi.py && UNO_DISK=build/unodos-uefi.img ...
+#
+# build.sh does NOT install them: the samples ship as SOURCE in SDK\, to be
+# opened and run in Studio. The descriptors exist so this harness can reach
+# them, and they rank into the "other" section at 240+ so the five land at the
+# END of the menu and leave every shipped app's index alone.
+#
+# Why not drive Studio - open the sample, Ctrl-R, photograph what runs? Because
+# **a QMP harness cannot click anything in pc64.** QEMU's usb-tablet delivers no
+# pointer MOTION to this guest, so every injected mouse-down arrives at the
+# framebuffer centre whatever coordinate it was given (pc64/tools/urcui.py
+# exists because three lanes hit this independently). Studio's project pane is
+# reachable ONLY by clicking it - the File menu has New/Save/Save As and no
+# Open, and Tab leaves the pane rather than entering it - so from here there is
+# no way to open a file in Studio at all. The first version of this scene
+# "worked": the clicks landed in the editor, the arrows walked the caret, and
+# Ctrl-R ran the GREETING sample - five figures of SAMPLE.UNO's bouncing ball
+# under five different names, and nothing failed.
+#
+# Files is not the way round either: its panes list NATIVE volumes only, so on
+# this image it shows one RAM disk and never the ESP, and its volume picker is
+# a dropdown - which is to say, a click.
+
+def _sample_run(q, app_id, settle=3.0):
+    """Launch a staged sample from the Start menu, by id like every scene."""
+    close_all(q); launch(q, A(app_id), settle=settle)
+
+def sc_sample_timer(q):
+    # The keypress needs the app to be up AND focused: sent too early it goes
+    # to the launcher, and the figure is a timer sitting at its start value
+    # with "Space: start" still on it - which is what the first run captured.
+    _sample_run(q, "timer", settle=4.5)
+    time.sleep(1.5)
+    key(q, "spc", hold=120); time.sleep(4.0)  # start it; the bar drains
+    shot(q, "samples_timer")
+    close_all(q)
+
+def sc_sample_life(q):
+    _sample_run(q, "life")
+    time.sleep(3.0)                           # a few dozen generations
+    shot(q, "samples_life")
+    close_all(q)
+
+def sc_sample_todo(q):
+    _sample_run(q, "todo", settle=4.5)
+    time.sleep(1.5)
+    text(q, "buy milk", gap=0.12); key(q, "ret", gap=0.4)
+    text(q, "call mom", gap=0.12); key(q, "ret", gap=0.4)
+    key(q, "tab"); time.sleep(0.8)            # check the selected task off
+    shot(q, "samples_todo")
+    close_all(q)
+
+def sc_sample_chart(q):
+    # No DATA.CSV on the boot volume, deliberately: the figure shows the
+    # demo-data first launch, header line and all - the state a reader meets.
+    _sample_run(q, "chart")
+    shot(q, "samples_chart")
+    close_all(q)
+
+def sc_sample_goodnite(q):
+    # Nobody is signed in, so the figure shows the graceful-denial path -
+    # which is the sample's actual point.
+    _sample_run(q, "goodnite", settle=8.0)   # let the script walk its steps
+    shot(q, "samples_goodnite")
+    close_all(q)
+
+
 def uc_run(q, name, settle=0.9):
     """Run a UnoCode command by NAME through the command palette.
 
@@ -854,6 +930,9 @@ SCENES = {
     "outlast": sc_outlast, "music": sc_music, "tracker": sc_tracker,
     "paint": sc_paint, "runner3d": sc_runner3d,
     "studio": sc_studio, "studio_ai": sc_studio_ai,
+    "sample_timer": sc_sample_timer, "sample_life": sc_sample_life,
+    "sample_todo": sc_sample_todo, "sample_chart": sc_sample_chart,
+    "sample_goodnite": sc_sample_goodnite,
     "unocode": sc_unocode, "unocode_editor": sc_unocode_editor,
     "unocode_ext": sc_unocode_ext, "unocode_theme": sc_unocode_theme,
     "unocode_terminal": sc_unocode_terminal,
@@ -899,7 +978,16 @@ def main():
     # image from tools/mkuefi.py instead, as usb-storage, the way
     # tools/diskboot_test.py does.
     disk_img = os.environ.get("UNO_DISK")
-    if disk_img:
+    if disk_img and os.environ.get("UNO_DISK_IF") == "sata":
+        # The same image on the SATA controller instead of USB. It matters for
+        # more than plumbing: over usb-storage the volume is a FIRMWARE one, so
+        # `uno_fs_*` (Studio, the module loader) sees it but FILES does not -
+        # its panes list native volumes only, which is why a keyboard-driven
+        # Files scene finds nothing but the RAM disk. Bound to the native AHCI
+        # driver it is a native volume and Files can open it.
+        print("disk: %s (real FAT32 over AHCI)" % disk_img, flush=True)
+        disk = ["-drive", "format=raw,file=" + disk_img]
+    elif disk_img:
         print("disk: %s (real FAT32 over usb-storage)" % disk_img, flush=True)
         disk = ["-drive", "format=raw,if=none,id=stick,file=" + disk_img,
                 "-device", "usb-storage,drive=stick"]
