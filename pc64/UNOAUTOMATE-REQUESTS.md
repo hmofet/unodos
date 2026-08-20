@@ -9265,3 +9265,42 @@ per run**, with nothing else recording:
 Same answer. The harness for it is small enough to rewrite in a minute:
 override `RQ.DISK/DISK2/FAT/VARS` before `build_disk()`, which is worth doing
 for any measurement on a shared host.
+
+---
+
+## 2026-08-19 - REPORT (toolkits/sound, found while filming): the guest is SILENT with 4 GB of RAM
+
+Every machine this OS wants to run on has more than 4 GB, so this is not a
+harness curiosity.
+
+Filming the OS demo's Duum scene produced a capture that was 121 s of digital
+silence - every sample zero, on a build whose audio had just been verified,
+with the same WAD and the same engine. Bisected by flipping one flag at a
+time, twice each, with private disk paths and nothing else recording:
+
+| memory | audio |
+|---|---|
+| `-m 4096` | **silence** - the whole run, both launch paths |
+| `-m 3072` | the boot chime, then the score, on both launches |
+
+Nothing else about the two runs differs: same tree, same build, same
+`DEBUG.CFG`, same AC'97 device, same KVM, same 4 vCPUs, same WAD. Ruled out
+on the way: the launch path (Start-menu row vs `uno.run_app` - both silent at
+4 GB, both audible at 3 GB), the vCPU count, the VGA arguments, and the WAD.
+
+### Where I would look
+
+`ac97.c` keeps its DMA ring in a **static buffer** (`gRing`), so its address
+is wherever the loader put the image, and the AC'97 descriptor list holds
+**32-bit** physical addresses. A guest with memory above the 4 GB line can
+have that buffer land where a 32-bit descriptor cannot name it, and the
+device then reads whatever the truncated address points at - which is
+silence, not a fault. `hdaudio.c` should be checked the same way. Nothing
+here is claimed: it is the first place to put a print.
+
+**What it means for hardware.** The OS boots on machines with 8 and 16 GB.
+If this is what it looks like, their audio has never worked and no gate would
+have said so, because every audio gate in the tree runs QEMU at 512 MB or
+3 GB. `tools/audio_test.py` at `-m 4096` is the one-line reproduction.
+
+The demo recorder now boots at `-m 3072` and says why in a comment.

@@ -195,8 +195,16 @@ def boot_qemu():
         return RQ.boot_qemu()
     subprocess.run(["cp", RQ.OVMF_VARS, RQ.VARS])
     cmd = [
-        "qemu-system-x86_64", "-machine", "q35", "-m", "4096",
-        "-cpu", "host", "-enable-kvm",
+        # 3 GB, NOT 4. With -m 4096 this guest's audio is SILENT: the sink
+        # records the whole run and every sample is zero, on the same build
+        # and the same WAD that plays music at -m 3072 (measured twice each,
+        # both launch paths). The ring is a static buffer in the loaded image
+        # and AC'97's descriptors are 32-bit, so a machine with memory above
+        # the 4 GB line is the suspect - filed in UNOAUTOMATE-REQUESTS.md,
+        # and it matters far beyond this harness because every real machine
+        # has more than 4 GB. s14's appliance scene sets its own -m.
+        "qemu-system-x86_64", "-machine", "q35", "-m", "3072",
+        "-cpu", "host", "-enable-kvm", "-smp", "4",
         "-drive", "if=pflash,format=raw,readonly=on,file=" + RQ.OVMF_CODE,
         "-drive", "if=pflash,format=raw,file=" + RQ.VARS,
         "-drive", "format=raw,file=" + RQ.DISK,
