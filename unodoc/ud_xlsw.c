@@ -25,6 +25,7 @@
 #include "unodoc.h"
 #include "unodoc_int.h"
 #include "ud_xls_int.h"
+#include "ud_ooxw_int.h"
 #include <string.h>
 
 #define W_MAXREC   8224          /* the BIFF record payload ceiling         */
@@ -115,6 +116,12 @@ typedef struct {
        result above, which is what the kind/num/sst/err fields then mean. */
     unsigned char *ptg;
     long           ptgn;
+    /* The formula's SOURCE TEXT, kept only because .xlsx stores formulas as
+       text while .xls stores the compiled tokens.  Decompiling the ptg array
+       back would work and would be the wrong trade: it costs a round trip
+       through two encoders to recover a string the caller already handed
+       us. */
+    char          *ftext;
 } wcell;
 
 typedef struct {
@@ -271,7 +278,10 @@ void ud_xlsw_free(ud_xlsw *w)
     if (!w) return;
     for (i = 0; i < w->nsh; i++) {
         int k;
-        for (k = 0; k < w->sh[i].ncell; k++) ud_free(w->sh[i].cell[k].ptg);
+        for (k = 0; k < w->sh[i].ncell; k++) {
+            ud_free(w->sh[i].cell[k].ptg);
+            ud_free(w->sh[i].cell[k].ftext);
+        }
         ud_free(w->sh[i].name);
         ud_free(w->sh[i].cell);
         ud_free(w->sh[i].merge);
@@ -460,6 +470,13 @@ int ud_xlsw_formula(ud_xlsw *w, int s, int row, int col, const char *text,
     ud_free(c->ptg);
     c->ptg = ptg;
     c->ptgn = n;
+    {
+        long tn = (long)strlen(text);
+        char *t = (char *)ud_alloc((unsigned long)tn + 1);
+        ud_free(c->ftext);
+        c->ftext = t;
+        if (t) memcpy(t, text, (unsigned long)tn + 1);
+    }
     c->kind = cached ? cached->kind : UD_XV_NUM;
     c->num  = cached ? cached->num : 0;
     c->err  = cached ? cached->err : 0;
@@ -774,4 +791,78 @@ unsigned char *ud_xlsw_save(ud_xlsw *w, long *len)
     }
     ud_free(b.p);
     return img;
+}
+
+/* ===========================================================================
+ * the read-back seam (ud_ooxw_int.h)
+ *
+ * ud_ooxw.c serialises this same model as .xlsx.  It needs to read the model
+ * back, and the struct lives here; see ud_ooxw_int.h for why this is an
+ * accessor seam rather than a shared struct.
+ * ======================================================================== */
+static const char *fmt_code_of(const ud_xlsw *w, int xf)
+{
+    int ifmt, i;
+    if (xf < XF_FIRST || xf - XF_FIRST >= w->nxfmt) return 0;
+    ifmt = w->xfmt[xf - XF_FIRST];
+    if (ifmt == 0) return 0;                       /* General               */
+    for (i = 0; i < NBUILTIN; i++)
+        if (BUILTIN[i].id == ifmt) return BUILTIN[i].code;
+    for (i = 0; i < w->nfmt; i++)
+        if (w->fmtid[i] == ifmt) return w->fmt[i];
+    return 0;
+}
+
+int ud_xlsw_sheets(const ud_xlsw *w) { return w ? w->nsh : 0; }
+
+const char *ud_xlsw_sheet_name(const ud_xlsw *w, int s)
+{
+    if (!w || s < 0 || s >= w->nsh) return 0;
+    return w->sh[s].name;
+}
+
+int ud_xlsw_is1904(const ud_xlsw *w) { return w ? w->date1904 : 0; }
+
+int ud_xlsw_ncells(const ud_xlsw *w, int s)
+{
+    if (!w || s < 0 || s >= w->nsh) return 0;
+    return w->sh[s].ncell;
+}
+
+int ud_xlsw_cell_at(const ud_xlsw *w, int s, int i, ud_wcellview *o)
+{
+    const wcell *c;
+    if (!w || !o || s < 0 || s >= w->nsh) return 0;
+    if (i < 0 || i >= w->sh[s].ncell) return 0;
+    c = &w->sh[s].cell[i];
+    o->row     = (int)(c->key / UD_XLS_MAXCOL);
+    o->col     = (int)(c->key % UD_XLS_MAXCOL);
+    o->kind    = c->kind;
+    o->num     = c->num;
+    o->str     = (c->kind == UD_XV_STR && c->sst >= 0 && c->sst < w->nsst)
+                 ? w->sst[c->sst] : 0;
+    o->err     = c->err;
+    o->fmt     = fmt_code_of(w, c->xf);
+    o->formula = c->ftext;
+    return 1;
+}
+
+int ud_xlsw_nmerges(const ud_xlsw *w, int s)
+{
+    if (!w || s < 0 || s >= w->nsh) return 0;
+    return w->sh[s].nmerge;
+}
+
+int ud_xlsw_merge_at(const ud_xlsw *w, int s, int i,
+                     int *r0, int *c0, int *r1, int *c1)
+{
+    const uint16_t *m;
+    if (!w || s < 0 || s >= w->nsh) return 0;
+    if (i < 0 || i >= w->sh[s].nmerge) return 0;
+    m = w->sh[s].merge + i * 4;
+    if (r0) *r0 = m[0];
+    if (r1) *r1 = m[1];
+    if (c0) *c0 = m[2];
+    if (c1) *c1 = m[3];
+    return 1;
 }

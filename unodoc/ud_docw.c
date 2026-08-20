@@ -20,6 +20,7 @@
  * ======================================================================== */
 #include "unodoc.h"
 #include "unodoc_int.h"
+#include "ud_ooxw_int.h"
 #include <string.h>
 
 #define W_CSW      14
@@ -327,4 +328,18 @@ done:
     ud_free(wd.p);
     ud_free(tb.p);
     return img;
+}
+
+/* ---- the read-back seam (ud_ooxw_int.h) ------------------------------------
+ * ud_ooxw.c serialises this same model as .docx. */
+int ud_docw_nparas(const ud_docw *w) { return w ? w->npara : 0; }
+
+const char *ud_docw_para_at(const ud_docw *w, int i,
+                            int *bold, int *italic, int *align)
+{
+    if (!w || i < 0 || i >= w->npara) return 0;
+    if (bold)   *bold   = w->para[i].bold;
+    if (italic) *italic = w->para[i].italic;
+    if (align)  *align  = w->para[i].align;
+    return w->para[i].text ? w->para[i].text : "";
 }

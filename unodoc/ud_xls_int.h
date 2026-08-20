@@ -48,4 +48,33 @@ typedef struct {
 unsigned char *ud_ptg_compile(const char *text, const ud_ptgc_env *env,
                               int base_row, int base_col, long *len);
 
+/* ---- the builder seam: ud_xlsx.c fills the SAME workbook ------------------
+ * An OOXML workbook and a BIFF8 workbook differ only in how the bytes are
+ * spelled.  Rather than a second cell model with a second set of accessors -
+ * and a second place for a bug to live - ud_xlsx.c constructs `struct ud_xls`
+ * through these, so ud_xls_cell_at(), the merges, the number formats and every
+ * consumer above them work on either without knowing which they have.
+ *
+ * Internal, not part of the contract.  The rule is the same one the BIFF
+ * parser follows: add sheets in order, add cells in any order, call
+ * ud_xls_built() once at the end (it sorts the cells, which every accessor
+ * assumes). */
+ud_xls   *ud_xls_blank(void);
+int       ud_xls_b_sheet(ud_xls *x, const char *name, int visible);
+/* A cell to fill in; NULL if the position is out of range or the sheet is
+ * full.  The pointer is into the sheet's array and is invalidated by the next
+ * ud_xls_b_cell() on that sheet, so write it before adding another. */
+ud_xcell *ud_xls_b_cell(ud_xls *x, int sheet, int row, int col);
+/* Copy `s` into the workbook and return the copy, which lives until close -
+ * how a cell's `str` and `ftext` get storage they do not own. */
+const char *ud_xls_b_str(ud_xls *x, const char *s);
+int       ud_xls_b_merge(ud_xls *x, int sheet, int r0, int c0, int r1, int c1);
+/* Define XF `xf` as using number-format id `ifmt`, and (optionally) give that
+ * id a format code.  The two are separate because a file states them
+ * separately and either may be absent. */
+int       ud_xls_b_xf(ud_xls *x, int xf, int ifmt);
+int       ud_xls_b_fmt(ud_xls *x, int ifmt, const char *code);
+void      ud_xls_b_date1904(ud_xls *x, int on);
+void      ud_xls_built(ud_xls *x);
+
 #endif /* UD_XLS_INT_H */

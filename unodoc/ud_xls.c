@@ -1033,6 +1033,124 @@ ud_xls *ud_xls_open(ud_cfb *c)
     return x;
 }
 
+/* ===========================================================================
+ * The builder seam (ud_xls_int.h): how ud_xlsx.c fills this same workbook.
+ *
+ * These are thin wrappers over the private helpers above, and that is the
+ * point of them - the OOXML reader builds the workbook through the SAME
+ * add_sheet / add_cell / own that the BIFF parser uses, so the cell array
+ * really is one model with two parsers rather than two models that agree
+ * today.  Nothing here parses anything.
+ * ======================================================================== */
+ud_xls *ud_xls_blank(void)
+{
+    ud_xls *x = (ud_xls *)ud_alloc(sizeof(ud_xls));
+    if (!x) { ud_set_error("out of memory (workbook)"); return 0; }
+    memset(x, 0, sizeof *x);
+    x->sid = -1;
+    x->fmt = (char **)ud_alloc(NFMT * sizeof(char *));
+    if (!x->fmt) { ud_free(x); ud_set_error("out of memory (formats)"); return 0; }
+    memset(x->fmt, 0, NFMT * sizeof(char *));
+    x->nfmt = NFMT;
+    return x;
+}
+
+int ud_xls_b_sheet(ud_xls *x, const char *name, int visible)
+{
+    ud_xsheet *s;
+    if (!x) return -1;
+    s = add_sheet(x);
+    if (!s) return -1;
+    s->visible   = visible ? 1 : 0;
+    s->worksheet = 1;
+    s->pos       = 0;
+    s->name      = (char *)ud_xls_b_str(x, name && *name ? name : "Sheet");
+    return x->nsh - 1;
+}
+
+ud_xcell *ud_xls_b_cell(ud_xls *x, int sheet, int row, int col)
+{
+    if (!x || sheet < 0 || sheet >= x->nsh) return 0;
+    return add_cell(&x->sh[sheet], row, col);
+}
+
+const char *ud_xls_b_str(ud_xls *x, const char *s)
+{
+    unsigned long n;
+    char *c;
+    if (!x) return 0;
+    if (!s) s = "";
+    n = strlen(s) + 1;
+    c = (char *)ud_alloc(n);
+    if (!c) return 0;
+    memcpy(c, s, n);
+    return own(x, c);
+}
+
+int ud_xls_b_merge(ud_xls *x, int sheet, int r0, int c0, int r1, int c1)
+{
+    ud_xsheet *s;
+    if (!x || sheet < 0 || sheet >= x->nsh) return 0;
+    s = &x->sh[sheet];
+    if (r0 < 0 || c0 < 0 || r1 < r0 || c1 < c0 ||
+        r1 >= UD_XLS_MAXROW || c1 >= UD_XLS_MAXCOL) return 0;
+    if (s->nmerge == s->mcap) {
+        int nc = s->mcap ? s->mcap * 2 : 16;
+        uint16_t *nm = (uint16_t *)ud_alloc((unsigned long)nc * 4 * sizeof(uint16_t));
+        if (!nm) return 0;
+        if (s->nmerge) memcpy(nm, s->merge,
+                              (unsigned long)s->nmerge * 4 * sizeof(uint16_t));
+        ud_free(s->merge);
+        s->merge = nm; s->mcap = nc;
+    }
+    s->merge[s->nmerge * 4 + 0] = (uint16_t)r0;
+    s->merge[s->nmerge * 4 + 1] = (uint16_t)r1;
+    s->merge[s->nmerge * 4 + 2] = (uint16_t)c0;
+    s->merge[s->nmerge * 4 + 3] = (uint16_t)c1;
+    s->nmerge++;
+    return 1;
+}
+
+int ud_xls_b_xf(ud_xls *x, int xf, int ifmt)
+{
+    if (!x || xf < 0 || xf > 65535) return 0;
+    if (xf >= x->nxf) {
+        int want = xf + 1;
+        if (want > x->xfcap) {
+            int nc = x->xfcap ? x->xfcap : 32;
+            ud_xxf *n;
+            while (nc < want) nc *= 2;
+            n = (ud_xxf *)ud_alloc((unsigned long)nc * sizeof(ud_xxf));
+            if (!n) return 0;
+            memset(n, 0, (unsigned long)nc * sizeof(ud_xxf));
+            if (x->nxf) memcpy(n, x->xf, (unsigned long)x->nxf * sizeof(ud_xxf));
+            ud_free(x->xf);
+            x->xf = n; x->xfcap = nc;
+        }
+        while (x->nxf < want) x->xf[x->nxf++].ifmt = 0;
+    }
+    x->xf[xf].ifmt = (uint16_t)ifmt;
+    return 1;
+}
+
+int ud_xls_b_fmt(ud_xls *x, int ifmt, const char *code)
+{
+    if (!x || !x->fmt || ifmt < 0 || ifmt >= x->nfmt || !code) return 0;
+    x->fmt[ifmt] = (char *)ud_xls_b_str(x, code);
+    return x->fmt[ifmt] != 0;
+}
+
+void ud_xls_b_date1904(ud_xls *x, int on) { if (x) x->date1904 = on ? 1 : 0; }
+
+void ud_xls_built(ud_xls *x)
+{
+    int i;
+    if (!x) return;
+    /* Every accessor binary-searches, so the sort is not an optimisation -
+     * an unsorted sheet answers ud_xls_cell() wrongly rather than slowly. */
+    for (i = 0; i < x->nsh; i++) cells_sort(x->sh[i].cell, x->sh[i].ncell);
+}
+
 void ud_xls_close(ud_xls *x)
 {
     int i;

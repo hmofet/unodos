@@ -36,6 +36,7 @@
  * ======================================================================== */
 #include "unodoc.h"
 #include "unodoc_int.h"
+#include "ud_ooxw_int.h"
 #include <string.h>
 
 /* PPT record types (writer's set) */
@@ -498,4 +499,20 @@ unsigned char *ud_pptw_save(ud_pptw *w, long *len)
     out = ud_cfbw_serialize(cw, len);
     ud_cfbw_free(cw);
     return out;
+}
+
+/* ---- the read-back seam (ud_ooxw_int.h) ------------------------------------
+ * ud_ooxw.c serialises this same model as .pptx. */
+int ud_pptw_nslides(const ud_pptw *w) { return w ? w->nsl : 0; }
+
+const char *ud_pptw_title_at(const ud_pptw *w, int i)
+{
+    if (!w || i < 0 || i >= w->nsl) return 0;
+    return w->sl[i].title;
+}
+
+const char *ud_pptw_body_at(const ud_pptw *w, int i)
+{
+    if (!w || i < 0 || i >= w->nsl) return 0;
+    return w->sl[i].body;
 }

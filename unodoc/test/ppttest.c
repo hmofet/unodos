@@ -17,6 +17,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+void um_set_alloc(void *(*a)(unsigned long), void (*f)(void *));
+
 static void *t_alloc(unsigned long n) { return malloc(n ? n : 1); }
 
 static unsigned char *slurp(const char *path, long *len)
@@ -36,10 +38,20 @@ static unsigned char *slurp(const char *path, long *len)
     return b;
 }
 
+/* Same rule as the other two tests: sniff the container, so small.ppt and
+ * small.pptx - one deck saved twice - run through identical checks. */
+static ud_zip *g_zip;
+
 static ud_ppt *open_ppt(const unsigned char *buf, long len, ud_src *src, ud_cfb **cc)
 {
     ud_cfb *c;
     ud_src_mem(src, buf, len);
+    *cc = 0;
+    if (g_zip) { ud_zip_close(g_zip); g_zip = 0; }
+    if (ud_sniff(src) == UD_C_ZIP) {
+        g_zip = ud_zip_open(src);
+        return g_zip ? ud_pptx_open(g_zip) : 0;
+    }
     c = ud_cfb_open(src);
     *cc = c;
     return c ? ud_ppt_open(c) : 0;
@@ -48,6 +60,7 @@ static ud_ppt *open_ppt(const unsigned char *buf, long len, ud_src *src, ud_cfb 
 int main(int argc, char **argv)
 {
     ud_set_alloc(t_alloc, free);
+    um_set_alloc(t_alloc, free);   /* a zip part is inflated by unomedia */
 
     if (argc >= 3 && (strcmp(argv[1], "text") == 0 || strcmp(argv[1], "info") == 0)) {
         long n = 0;
@@ -80,8 +93,12 @@ int main(int argc, char **argv)
         free(b);
         return 0;
     }
-    if (argc >= 2 && (strcmp(argv[1], "wtest") == 0 ||
-                      strcmp(argv[1], "wfile") == 0)) {
+    /* The `x` verbs are the same deck through the OOXML serialiser. */
+    if (argc >= 2 && (strcmp(argv[1], "wtest")  == 0 ||
+                      strcmp(argv[1], "wxtest") == 0 ||
+                      strcmp(argv[1], "wfile")  == 0 ||
+                      strcmp(argv[1], "wxfile") == 0)) {
+        int ooxml = argv[1][1] == 'x';
         /* The demo deck: two slides, multi-paragraph body, and one string
          * that forces the UTF-16 text atom (the euro sign is CP-1252 0x80,
          * which Latin-1 bytes cannot carry). */
@@ -93,10 +110,10 @@ int main(int argc, char **argv)
         ud_pptw_body (w, s1, "alpha line\nbeta line");
         ud_pptw_title(w, s2, "Slide two title");
         ud_pptw_body (w, s2, "wide caf\xe9 \x80 euro");
-        ppt = ud_pptw_save(w, &n);
+        ppt = ooxml ? ud_pptxw_save(w, &n) : ud_pptw_save(w, &n);
         ud_pptw_free(w);
         if (!ppt) { printf("FAILED: save: %s\n", ud_error()); return 1; }
-        if (strcmp(argv[1], "wfile") == 0) {
+        if (argv[1][ooxml ? 2 : 1] == 'f') {
             FILE *f = argc >= 3 ? fopen(argv[2], "wb") : 0;
             if (!f || fwrite(ppt, 1, (size_t)n, f) != (size_t)n) {
                 printf("FAILED: cannot write %s\n", argc >= 3 ? argv[2] : "?");
@@ -125,7 +142,11 @@ int main(int argc, char **argv)
                 { printf("FAILED: the UTF-16 atom lost its CP-1252 accents\n"); bad = 1; }
             if (!bad && !strstr(ud_ppt_slide_text(p, 1), "\x80"))
                 { printf("FAILED: the euro sign did not survive\n"); bad = 1; }
-            if (!bad) {
+            /* Shapes are an Escher construct.  A .pptx has no drawing
+               records at all - its text lives in the slide part - so the
+               shape assertions apply to the binary form only, and pretending
+               otherwise would be a test written to agree with itself. */
+            if (!bad && !ooxml) {
                 ns = ud_ppt_slide_shapes(p, 0, sh, 16);
                 /* patriarch group + title box + body box */
                 if (ns != 3) { printf("FAILED: slide 1 has %d shapes, wanted 3\n", ns); bad = 1; }
@@ -139,7 +160,11 @@ int main(int argc, char **argv)
             ud_cfb_close(c);
         }
         free(ppt);
-        if (!bad) printf("OK pptw: 2 slides, text, both encodings and 3 shapes survive our own reader\n");
+        if (!bad)
+            printf("OK pptw: %s - 2 slides, text and both encodings%s "
+                   "survive our own reader\n",
+                   ooxml ? ".pptx" : ".ppt",
+                   ooxml ? "" : " and 3 shapes");
         return bad;
     }
     if (argc >= 5 && strcmp(argv[1], "fuzz") == 0) {

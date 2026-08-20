@@ -74,6 +74,11 @@ typedef struct {
 /* One entry of the style sheet.  The grpprl pointers refer into the STSH
  * blob, which the document keeps for its lifetime rather than copying each
  * style out. */
+/* A formatting run on the OOXML path: [cp0,cp1) has this formatting.  Held
+ * sorted (both readers walk forwards) and found by binary search. */
+typedef struct { long cp0, cp1; ud_chp chp; } ud_crun;
+typedef struct { long cp0, cp1; ud_pap pap; } ud_prun;
+
 typedef struct {
     int   stk;                   /* STK_PARA / STK_CHAR                    */
     int   base;                  /* istdBase, ISTD_NONE = based on nothing */
@@ -92,6 +97,11 @@ struct ud_doc {
     ud_bte    chpbte, papbte;
     unsigned char *stsh;         /* the style sheet, kept for its grpprls  */
     ud_style *style; int nstyle;
+    /* The OOXML path (ud_docx.c, ud_doc_int.h): formatting as explicit runs
+     * rather than FKP pages.  NULL for a .doc, and the two accessors below
+     * check for it before doing any of the binary format's lookups. */
+    ud_crun *crun; int ncrun, crcap;
+    ud_prun *prun; int nprun, prcap;
 };
 
 /* ---- the FIB ---------------------------------------------------------------
@@ -539,6 +549,16 @@ int ud_doc_chp_at(ud_doc *d, long cp, ud_chp *out)
     if (!out) return 0;
     memset(out, 0, sizeof *out);
     if (!d) return 0;
+    if (d->crun) {                       /* the OOXML path (ud_doc_int.h) */
+        int lo = 0, hi = d->ncrun - 1;
+        while (lo <= hi) {
+            int mid = (lo + hi) / 2;
+            if (cp < d->crun[mid].cp0) hi = mid - 1;
+            else if (cp >= d->crun[mid].cp1) lo = mid + 1;
+            else { *out = d->crun[mid].chp; return 1; }
+        }
+        return 1;                        /* between runs: the defaults      */
+    }
     fc = cp_to_fc(d, cp, &wide);
     if (fc < 0) return 0;
 
@@ -564,6 +584,16 @@ int ud_doc_pap_at(ud_doc *d, long cp, ud_pap *out)
     if (!out) return 0;
     memset(out, 0, sizeof *out);
     if (!d) return 0;
+    if (d->prun) {                       /* the OOXML path (ud_doc_int.h) */
+        int lo = 0, hi = d->nprun - 1;
+        while (lo <= hi) {
+            int mid = (lo + hi) / 2;
+            if (cp < d->prun[mid].cp0) hi = mid - 1;
+            else if (cp >= d->prun[mid].cp1) lo = mid + 1;
+            else { *out = d->prun[mid].pap; return 1; }
+        }
+        return 1;
+    }
     fc = cp_to_fc(d, cp, &wide);
     if (fc < 0) return 0;
     page = bte_page(&d->papbte, fc);
@@ -665,6 +695,52 @@ ud_doc *ud_doc_open(ud_cfb *c)
     return d;
 }
 
+/* ===========================================================================
+ * The builder seam (ud_doc_int.h): how ud_docx.c fills this same document.
+ * ======================================================================== */
+ud_doc *ud_doc_blank(void)
+{
+    ud_doc *d = (ud_doc *)ud_alloc(sizeof(ud_doc));
+    if (!d) { ud_set_error("out of memory (document)"); return 0; }
+    memset(d, 0, sizeof *d);
+    d->wd = d->tbl = -1;
+    return d;
+}
+
+void ud_doc_b_text(ud_doc *d, char *text, long len)
+{
+    if (!d) return;
+    ud_free(d->text);
+    ud_free(d->plain);
+    d->plain = 0;
+    d->text = text;
+    d->ccp  = len;
+}
+
+#define RUNGROW(arr, n, cap, type)                                                do {                                                                              if ((n) == (cap)) {                                                               int nc_ = (cap) ? (cap) * 2 : 128;                                            type *np_ = (type *)ud_alloc((unsigned long)nc_ * sizeof(type));              if (!np_) return 0;                                                           if (n) memcpy(np_, arr, (unsigned long)(n) * sizeof(type));                   ud_free(arr);                                                                 (arr) = np_; (cap) = nc_;                                                 }                                                                         } while (0)
+
+int ud_doc_b_chp(ud_doc *d, long cp0, long cp1, const ud_chp *chp)
+{
+    if (!d || !chp || cp1 <= cp0) return 0;
+    RUNGROW(d->crun, d->ncrun, d->crcap, ud_crun);
+    d->crun[d->ncrun].cp0 = cp0;
+    d->crun[d->ncrun].cp1 = cp1;
+    d->crun[d->ncrun].chp = *chp;
+    d->ncrun++;
+    return 1;
+}
+
+int ud_doc_b_pap(ud_doc *d, long cp0, long cp1, const ud_pap *pap)
+{
+    if (!d || !pap || cp1 <= cp0) return 0;
+    RUNGROW(d->prun, d->nprun, d->prcap, ud_prun);
+    d->prun[d->nprun].cp0 = cp0;
+    d->prun[d->nprun].cp1 = cp1;
+    d->prun[d->nprun].pap = *pap;
+    d->nprun++;
+    return 1;
+}
+
 void ud_doc_close(ud_doc *d)
 {
     if (!d) return;
@@ -674,6 +750,7 @@ void ud_doc_close(ud_doc *d)
     ud_free(d->chpbte.fc); ud_free(d->chpbte.pn);
     ud_free(d->papbte.fc); ud_free(d->papbte.pn);
     ud_free(d->stsh); ud_free(d->style);
+    ud_free(d->crun); ud_free(d->prun);
     ud_free(d);
 }
 
