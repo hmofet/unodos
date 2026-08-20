@@ -89,7 +89,7 @@ flasher wipes it before each of the two builds. Deploy is unchanged
 
 **Retired:** the former standing rule that *every* pc64 build must be followed by
 `pc64\flash\deploy-to-share.ps1` to publish a fresh USB flasher to
-`\\behemoth\unreplicated\unodos\pc64\`. Now that the OS can be installed and
+`\\behemoth\files\software\unodos\pc64\`. Now that the OS can be installed and
 updated **over the network** (the URC `install <disk>` verb + `unostorage`
 clone-over-link, see `pc64/REMOTE.md`), a running box no longer depends on a
 freshly-staged USB flasher to receive a new build.

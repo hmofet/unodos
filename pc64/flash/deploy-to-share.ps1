@@ -1,21 +1,22 @@
 # Rebuild the UnoDOS/pc64 USB flasher and publish it to the network share so it
 # can be flashed from any computer on the LAN.
 #
-#   \\behemoth\unreplicated\unodos\pc64\
+#   \\behemoth\files\software\unodos\pc64\
 #     UnoDosFlasher.exe            one-click Windows installer (image embedded)
 #     unodos-pc64-uefi.img.gz      raw image for Rufus / balenaEtcher / dd
 #     unodos-pc64.iso              hybrid UEFI ISO: VM CD-ROM boot AND
 #                                  Rufus/Etcher/dd to USB (tools/mkiso.py)
 #
-# STANDING RULE (see pc64/CLAUDE.md): run this after every new pc64 OS build so
-# the shared flasher never goes stale.
+# Publishing is OPT-IN (see the repo CLAUDE.md, 2026-07-23): network install
+# supersedes the old "deploy after every build" rule - run this only when a
+# fresh bootable USB flasher is actually wanted.
 #
 # Usage:  pc64\flash\deploy-to-share.ps1 [-SkipBuild] [-SizeMiB 512] [-Dest <path>]
 #   -SkipBuild : reuse build/UnoDosFlasher.exe + build/unodos-uefi.img as-is
 param(
     [switch]$SkipBuild,
     [int]$SizeMiB = 512,
-    [string]$Dest = '\\behemoth\unreplicated\unodos\pc64'
+    [string]$Dest = '\\behemoth\files\software\unodos\pc64'
 )
 $ErrorActionPreference = "Stop"
 $pc64  = Split-Path $PSScriptRoot -Parent
@@ -31,10 +32,13 @@ if (-not $SkipBuild) {
 if (-not (Test-Path $exe)) { throw "Flasher not built: run without -SkipBuild (or run build-flasher.ps1)" }
 if (-not (Test-Path $img)) { throw "Image not built: $img" }
 
-# 2. make sure the share is reachable, then ensure the pc64/ folder exists
+# 2. make sure the SHARE is reachable, then ensure the folder tree exists.
+# Reachability is tested at \\server\share, not $Dest's parent - intermediate
+# folders (software\unodos\) may not exist yet and New-Item creates them.
 $shareRoot = Split-Path $Dest -Parent
-if (-not (Test-Path $shareRoot)) {
-    throw "Share not reachable: $shareRoot  (is \\behemoth mounted / online?)"
+$share = '\\' + (($Dest -split '\\')[2..3] -join '\')
+if (-not (Test-Path $share)) {
+    throw "Share not reachable: $share  (is behemoth online?)"
 }
 New-Item -ItemType Directory -Force -Path $Dest | Out-Null
 
@@ -46,19 +50,15 @@ $out = [IO.File]::Create($gz)
 $gzs = New-Object IO.Compression.GZipStream($out, [IO.Compression.CompressionLevel]::Optimal)
 $in.CopyTo($gzs); $gzs.Dispose(); $out.Dispose(); $in.Dispose()
 
-# 3b. build the hybrid UEFI ISO from the same build/esp (VM CD + dd-to-USB)
+# 3b. build the hybrid UEFI ISO from the remote build/esp (VM CD + dd-to-USB).
+# The remote tree is the one build-flasher.ps1 shipped and built; its build/esp
+# was left as the PRODUCTION tree, which is what the ISO should carry.
 $iso = Join-Path $build "unodos-pc64.iso"
 if (-not $SkipBuild -or -not (Test-Path $iso)) {
-    Write-Host "Building the hybrid ISO (tools/mkiso.py under WSL)..."
-    $wslPc64 = (& wsl wslpath -a ($pc64 -replace '\\','/')).Trim()
-    # xorriso writes a normal banner to stderr; in Windows PowerShell 5.1 native
-    # stderr is wrapped as a terminating NativeCommandError under
-    # $ErrorActionPreference='Stop', which aborted the deploy before the copy.
-    # Gate on the exit code instead (same pattern as build-flasher.ps1).
-    $prev = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
-    try { & wsl bash -lc "cd '$wslPc64' && python3 tools/mkiso.py" 2>&1 | ForEach-Object { Write-Host $_ } }
-    finally { $ErrorActionPreference = $prev }
-    if ($LASTEXITCODE -ne 0) { throw "mkiso.py failed (needs xorriso + mtools in WSL)" }
+    . (Join-Path $PSScriptRoot "remote-build.ps1")
+    Write-Host "Building the hybrid ISO (tools/mkiso.py on $BuildHost)..."
+    Invoke-Remote "cd $BuildDir/pc64 && python3 tools/mkiso.py" "mkiso.py failed (needs xorriso + mtools on $BuildHost, and the tree build-flasher.ps1 ships there - run without -SkipBuild)"
+    Pull-BuildArtifacts @('unodos-pc64.iso')
 }
 
 # 4. copy the flasher + image + ISO to the share

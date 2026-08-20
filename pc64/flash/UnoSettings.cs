@@ -73,7 +73,7 @@ class UnoSettings
 
     // --- developer extras (kit / zip copy) ---
     public bool   KitEnabled = true;       // copy the testkit (carries wifi.txt creds)
-    public string KitPath   = @"\\behemoth\unreplicated\unodos\pc64\testkit";
+    public string KitPath   = @"\\behemoth\files\software\unodos\pc64\testkit";
     public bool   ZipEnabled;
     public string ZipPath   = "";
     public string ZipDest   = "";          // subfolder on the disk, blank = root

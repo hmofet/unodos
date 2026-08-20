@@ -22,7 +22,7 @@ non-512-byte-sector or too-small disks are listed but refused.
 
 ## Surface Laptop Go 1 (the hardware test case)
 
-1. Flash the current stick from the share (`\\behemoth\unreplicated\unodos\pc64`,
+1. Flash the current stick from the share (`\\behemoth\files\software\unodos\pc64`,
    `UnoDosFlasher.exe`), Secure Boot off (as for Writer's Unlock).
 2. Boot the stick (Vol-down + power → boot from USB).
 3. Open **Install**. Expected list: the Windows ESP as

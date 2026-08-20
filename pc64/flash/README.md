@@ -43,7 +43,7 @@ the matching `\DEBUG.CFG` for you:
 - **Stress passes** (default 3) and **Power off when the run finishes**.
 
 It also still copies extras onto the drive:
-- **The test kit** - defaults to `\\behemoth\unreplicated\unodos\pc64\testkit`.
+- **The test kit** - defaults to `\\behemoth\files\software\unodos\pc64\testkit`.
   It carries **`wifi.txt`** (WiFi creds, `ssid=` / `psk=`); fill in the copy on
   the share once and every debug stick gets it (plaintext on the stick).
 - **A .zip** - any archive, optionally into a subfolder.
@@ -61,7 +61,7 @@ the choice to continue - a stale developer path never blocks a flash.
 ## Self-update
 
 `deploy-to-share.ps1` stages every new flasher on
-`\\behemoth\unreplicated\unodos\pc64\` together with `flasher-version.txt`
+`\\behemoth\files\software\unodos\pc64\` together with `flasher-version.txt`
 (build stamp + sha256 of the exe). A locally-run flasher compares its own
 embedded stamp against that file:
 
@@ -69,7 +69,7 @@ embedded stamp against that file:
   default, stored as `autoupdate=` in `flasher.ini`), and
 - **on demand** via the **Check for updates** button.
 
-The share is tried by name first, then by IP (`\\192.168.2.75\...`) in case DNS
+The share is tried by name first, then by IP (`\\192.168.2.20\...`) in case DNS
 is down; `updatepath=` in `flasher.ini` overrides the folder entirely. This LAN
 share is the interim channel - an internet-based endpoint will join or replace
 it later (`UnoUpdate.Check()` is the only piece that has to learn HTTP).
@@ -94,7 +94,12 @@ lowercase flags instead, which is what `mtools` does when it builds the image.
 ## Build it (developer)
 
 Needs, on this Windows box:
-- **WSL** with the pc64 toolchain: `x86_64-w64-mingw32-gcc`, `sgdisk` (gdisk), `mtools`, `python3`.
+- **SSH (key auth) to a Linux build box** carrying the pc64 toolchain:
+  `x86_64-w64-mingw32-gcc`, `nasm`, `sgdisk` (gdisk), `mtools`, `xorriso`,
+  `python3`. Default is `quill:/work/unodos-flasher`; override with the
+  `UNO_BUILD_HOST` / `UNO_BUILD_DIR` env vars. `remote-build.ps1` ships the
+  checkout there, builds, and pulls the artifacts back (the OS build used to
+  run under WSL, which is permanently broken on amanuensis).
 - In-box **.NET Framework** `csc.exe` (ships with Windows; no SDK needed).
 
 ```powershell
@@ -125,7 +130,8 @@ Regenerate the icon (needs Pillow): `python pc64/flash/make-icon.py`.
 | `UnoVersion.cs` | dev-placeholder build stamp; the real one is generated at build |
 | `UnoDiskTest.cs` | builds a volume into an image FILE so real tools can check it |
 | `app.manifest` | forces the Administrator (UAC) elevation the raw write needs |
-| `build-flasher.ps1` | build.sh -> mkuefi.py -> zip the ESP -> csc, all in one |
+| `build-flasher.ps1` | build.sh -> mkuefi.py (remote) -> zip the ESP -> csc, all in one |
+| `remote-build.ps1` | shared SSH plumbing: ship the tree to the Linux build box, run there, pull artifacts back |
 | `make-icon.py` | generates `unodos.ico` (monitor + boot cursor, no font needed) |
 | `publish-release.ps1` | attaches the exe + gzipped image to a `gh` release |
 

@@ -1,7 +1,7 @@
 /*  UnoUpdate.cs - self-update against the staged flasher on the NAS share.
  *
  *  deploy-to-share.ps1 stages every new flasher build (plus flasher-version.txt
- *  with its build stamp + sha256) on \\behemoth\unreplicated\unodos\pc64.  This
+ *  with its build stamp + sha256) on \\behemoth\files\software\unodos\pc64.  This
  *  checks that folder - by name first, then by IP in case DNS is down - and
  *  swaps the running exe for the staged one when it is newer.
  *
@@ -33,8 +33,11 @@ class UpdateInfo
 
 static class UnoUpdate
 {
-    public const string DefaultBase  = @"\\behemoth\unreplicated\unodos\pc64";
-    public const string FallbackBase = @"\\192.168.2.75\unreplicated\unodos\pc64"; // behemoth by IP, for when DNS is down
+    // The 2026-08 NAS rebuild replaced the old unreplicated share; staged
+    // builds now live on the "files" share. 192.168.2.75 is NOT behemoth any
+    // more (the old box became the leviathan hypervisor) - the NAS is .20.
+    public const string DefaultBase  = @"\\behemoth\files\software\unodos\pc64";
+    public const string FallbackBase = @"\\192.168.2.20\files\software\unodos\pc64"; // behemoth by IP, for when DNS is down
 
     public static string SelfPath
     {

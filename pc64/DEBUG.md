@@ -299,7 +299,7 @@ error - stops the loop immediately rather than re-proving the same hardware
 problem three times, and the NETLOG says so.
 
 
-The NAS keeps a template at `\\behemoth\unreplicated\unodos\pc64\testkit\wifi.txt`
+The NAS keeps a template at `\\behemoth\files\software\unodos\pc64\testkit\wifi.txt`
 - fill it in once and the flasher's **Developer options** folder-copy puts it
 on every stick it flashes. Plaintext on the stick; treat it accordingly.
 (The image deliberately ships NO `WIFI.CFG`: a placeholder there would shadow

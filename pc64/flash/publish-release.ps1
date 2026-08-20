@@ -30,10 +30,10 @@ $in.CopyTo($gzs); $gzs.Dispose(); $out.Dispose(); $in.Dispose()
 # the hybrid UEFI ISO (VM CD-ROM boot + Rufus/Etcher/dd to USB) - build if absent
 $iso = Join-Path $build "unodos-pc64.iso"
 if (-not (Test-Path $iso)) {
-    Write-Host "Building the hybrid ISO (tools/mkiso.py under WSL)..."
-    $wslPc64 = (& wsl wslpath -a ($pc64 -replace '\\','/')).Trim()
-    & wsl bash -lc "cd '$wslPc64' && python3 tools/mkiso.py"
-    if ($LASTEXITCODE -ne 0) { throw "mkiso.py failed (needs xorriso + mtools in WSL)" }
+    . (Join-Path $PSScriptRoot "remote-build.ps1")
+    Write-Host "Building the hybrid ISO (tools/mkiso.py on $BuildHost)..."
+    Invoke-Remote "cd $BuildDir/pc64 && python3 tools/mkiso.py" "mkiso.py failed (needs xorriso + mtools on $BuildHost, and the tree build-flasher.ps1 ships there - run build-flasher.ps1 first)"
+    Pull-BuildArtifacts @('unodos-pc64.iso')
 }
 $assets = @($exe, $gz, $iso)
 

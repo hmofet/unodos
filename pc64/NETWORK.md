@@ -156,7 +156,7 @@ CNVi part), the same machine the trackpad/keyboard work targets.
 Put a `WIFI.CFG` file at the ESP root with your SSID and passphrase
 (**`WIFI.TXT` is accepted under the same rules** - that is the name the
 flasher's developer-options folder copy stages from the NAS creds template at
-`\\behemoth\unreplicated\unodos\pc64\testkit\wifi.txt`):
+`\\behemoth\files\software\unodos\pc64\testkit\wifi.txt`):
 
 ```
 ssid=MyNetwork
