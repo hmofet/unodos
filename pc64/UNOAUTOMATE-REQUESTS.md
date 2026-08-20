@@ -9420,3 +9420,39 @@ The fix looks like four lines: map 0x3A..0x45 to `K_F1 + (u - 0x3A)` in the
 same switch, using the EFI scan numbering `pc64_native.c` already agrees with.
 Filed rather than done because `hid_kbd.c` is the usb-stack lane's file, and
 "it is only four lines" is how a lane gets widened.
+
+## 2026-08-20 - REQUEST to the shell/app-registry lane: an installed CLASSIC app never receives keys
+
+Found while capturing the manual's sample-program figures, which launch each
+sample from the Start menu as a discovered `APPS\` module.
+
+**A classic-tier (KernelApi/`AppInterface`) module installed in `APPS\` with a
+descriptor draws and ticks, but its `key()` is never called.** A `UNO_MODF_PYAPP`
+module on the same path receives keys normally, so it is specific to the classic
+tier's hosting.
+
+Reproduced with two of the SDK samples, both built host-side with the new
+`tools/ucc_host.c` and given descriptors:
+
+- `sdk/LIFE.C` - the board evolves generation after generation, so `draw` and
+  `tick` are both live. Space (pause), N (reseed) and C (clear) do nothing.
+- `sdk/TIMER.C` - opens at 05:00 and stays there. Space (start), M (mode) and
+  N (reset) do nothing; a 200 ms hold and six seconds of settle after launch
+  change nothing.
+
+Both are keyboard-correct against the contract in `docs_esp/APPDEV.MD`: printable
+keys arrive as `ch` and the handler returns `true`. The same sources pass
+`tools/ucc_test.c`'s SDK acceptance, which calls the returned vtable's `key`
+directly, so the modules and their handlers are fine - what is missing is the
+routing to them.
+
+My reading (not verified, and it is your file): the user-slot path wires
+`unoapp_user_input` for `EX_USERAPP` (`pc64_uui.c` ~3060), and a discovered
+classic app is hosted through `unoapp_user_run` but its canvas may be registered
+without the event hook - the same shape as the 2026-08-06 unoui bug where an app
+was registered with `opened/closed/canvas_index` and no `key`.
+
+Not urgent for the manual: the figures are of the apps running, and the samples'
+documented path is Studio's Run (the user slot), which is a different route. But
+it means a UnoC app anyone installs into `APPS\` is input-dead, and nothing about
+it fails loudly - the window is there and it animates.
