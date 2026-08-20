@@ -23,7 +23,9 @@ export UNO_NOFW=1
 echo "[publish] scrubbing unredistributable inputs, fetching Freedoom..."
 rm -rf "$PC64/fw-blobs" "$PC64/wads/DOOM1.WAD"
 find "$PC64/wads" -name '*.WSZ' -delete 2>/dev/null || true
-( cd "$PC64" && ./tools/fetch-wad.sh )
+# `sh`, not ./ - fetch-wad.sh has no exec bit in a fresh checkout (same reason
+# build-app.sh runs `sh build.sh`).
+( cd "$PC64" && sh tools/fetch-wad.sh )
 
 # build.sh populates build/esp INCREMENTALLY, so firmware or a shareware WAD
 # staged by an earlier local build would leak into this image. Start clean.
