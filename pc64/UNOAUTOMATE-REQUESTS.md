@@ -9640,3 +9640,44 @@ USE with `uno_pc64_detached()`.
 test); UnoCode incl. integrated terminal running `js 6*7` -> 42; SSH keygen +
 `ssh run` to devbuntu with exit 0; browser loading a real HTTPS site. 60 fps,
 95-96% idle throughout.
+
+
+## 2026-08-20 — CLAIM: the wifi supplicant becomes a subsystem, and learns WPA3 (branch `wpa3-sae`)
+
+Taking `wifi_wpa.*` plus a new `wifi_sae.*` as a subsystem in its own right,
+with a row in AGENTS.md §1 and a contract at `pc64/WIFI-SECURITY.md`. It was
+previously unowned — the files are shared by three NIC drivers and belong to
+none of them — and this change is too big to sit under any one driver's row.
+
+**Why now.** The 2026-08 conformance run could not join SKYNET (Eero Pro 6E)
+while the WPA2-only guest SSID joined first time. Cause, found without the
+machine: the supplicant advertised one AKM suite, `00-0F-AC-02`, with RSN
+capabilities `0x0000` — no SAE, no PMF. An AP with MFPR set REFUSES an
+association request that does not claim MFPC, and a 6 GHz SSID is WPA3-only by
+regulation, so this is not "older", it is unjoinable. Not a bug; a missing
+feature, and a load-bearing one.
+
+**What landed.** WPA3-SAE over group 19 with both password-element derivations
+(hash-to-element preferred, hunting-and-pecking as the baseline), the
+AKM-selected key descriptor version 0 path (KDF-SHA256 PTK, AES-CMAC MIC),
+per-BSS RSN negotiation from the beacon, PMF/BIP advertisement, and IGTK
+parsing. Details and the open items are in the contract doc.
+
+**Two things touched outside the lane**, both additive:
+
+- `pc64/build.sh` — appended `wifi_sae` to the compile list (`build:` commit).
+- `pc64/tools/gate.sh` — appended one `hosttest sh tools/sae_test.sh` step.
+  SPECTEST's network area is a NULL NIC and can never reach a supplicant, so a
+  host gate is the only place this can be asserted short of carrying a laptop
+  to an access point.
+
+**To the debug-harness owner, if you want it:** the RSN element builder and the
+KDF are pure functions and would make clean on-device SPECTEST cases
+(`S-WIFI-*`), which would catch a codegen or alignment difference between the
+host gate's native build and the mingw one. Not filed as a request because the
+host gate already covers the logic; say the word and I will hand over the
+vectors rather than edit `pc64_spectest.c` from this lane.
+
+**Open, and honest about it:** SAE is verified against an independent Python
+model of the 802.11 text and against itself, and has NOT yet completed a join
+against a real AP. It is `[EXPERIMENTAL]` in the contract until it has.
