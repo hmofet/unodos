@@ -1320,6 +1320,8 @@ keycards, pickups, exploding barrels, the status bar along the bottom, and level
 Move with the arrow keys, turn with left and right, strafe with <kbd>,</kbd> and <kbd>.</kbd>,
 fire with <kbd>F</kbd>, open doors with <kbd>Space</kbd>, and pick a weapon with <kbd>1</kbd> to
 <kbd>6</kbd>. <kbd>Esc</kbd> pauses the game and opens its menu.</p>
+  {fig("duum_start.png", "Duum a moment after it opens: the first room of E1M1, drawn from the game file, with the status bar built from the game's own artwork.")}
+  {fig("duum_play.png", "The same level after walking forward and turning - textured walls, floors and sky, all rendered by Python code running on the operating system's own runtime.")}
 
 <h4>It sounds like the game, too</h4>
 <p>Duum plays the WAD's own audio, with nothing to set up: the effects come out of the same file the
@@ -1917,10 +1919,7 @@ no separate computer in the loop:</p>
   <li>Press <kbd>Ctrl</kbd>+<kbd>R</kbd> to <strong>run</strong> it. Your app opens in its own window with
       its own taskbar button.</li>
 </ol>
-<div class="grid cols-2">
-  {fig("studio_build.png", "After <kbd>Ctrl</kbd>+<kbd>B</kbd>: the build-output pane shows <i>Built SAMPLE.UNO</i> with its code, data and import sizes, and <code>SAMPLE.UNO</code> joins the project list.")}
-  {fig("studio_run.png", "After <kbd>Ctrl</kbd>+<kbd>R</kbd>: the app you just compiled runs in its own window (the yellow ball bounces), while Studio stays open behind it.")}
-</div>
+{fig("studio_build.png", "After <kbd>Ctrl</kbd>+<kbd>B</kbd>: the build-output pane reports the packed or compiled <code>SAMPLE.UNO</code>, and it joins the project list on the left.")}
 <p>If a build fails, the output pane lists each error with its line number; press or click a red error line
 and the caret jumps straight to it.</p>
 

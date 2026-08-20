@@ -216,7 +216,7 @@ ROSTER_FILE = "build/apps_roster.txt"
 FALLBACK = ["control", "editor", "files", "system", "clock", "install",
             "music", "unoamp", "dostris", "pacman", "outlast", "tracker",
             "paint", "runner3d", "browser", "studio", "photos", "ssh",
-            "uoword", "uocalc", "uoshow", "logview", "vmgr"]
+            "uoword", "uocalc", "uoshow", "logview", "vmgr", "duum"]
 MENU = []                                    # ids in menu order, filled by main
 
 
@@ -542,6 +542,22 @@ def sc_studio_ai(q):
     key(q, "up", gap=0.5); key(q, "up", gap=0.5)
     time.sleep(1.0); close_all(q)
 
+def sc_duum(q):
+    """Duum, the Python Doom engine. Slow to start by nature: PYRT boots, then
+    the WAD is parsed and the textures composed, which is tens of seconds of
+    emulated work before the first frame exists. Everything here waits on that
+    rather than assuming it - a short settle photographs a blank canvas and
+    files it as the game."""
+    close_all(q); launch(q, A("duum"), settle=6.0)
+    time.sleep(45.0)                      # PYRT start + WAD parse + first frame
+    shot(q, "duum_start")                 # E1M1 as the game opens
+    key(q, "up", gap=0.25); key(q, "up", gap=0.25)   # walk forward
+    key(q, "right", gap=0.25)                        # turn
+    time.sleep(6.0)
+    shot(q, "duum_play")                  # a different view, so the shot proves motion
+    close_all(q)
+
+
 def sc_browser_disk(q):
     close_all(q); launch(q, A("browser"), settle=2.0)
     shot(q, "browser_files")
@@ -691,6 +707,7 @@ SCENES = {
     "outlast": sc_outlast, "music": sc_music, "tracker": sc_tracker,
     "paint": sc_paint, "runner3d": sc_runner3d,
     "studio": sc_studio, "studio_ai": sc_studio_ai,
+    "duum": sc_duum,
     "browser_disk": sc_browser_disk,
     "browser_docs": sc_browser_docs, "cp_network": sc_cp_network,
     "browser_http": sc_browser_http, "browser_https": sc_browser_https,
