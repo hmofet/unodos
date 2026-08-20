@@ -8,10 +8,12 @@
 # The raw image is still built, because deploy-to-share.ps1 publishes it for
 # Rufus / balenaEtcher / dd users and mkiso.py turns it into the hybrid ISO.
 #
-# Pipeline (all under WSL, which has the mingw cross-compiler + sgdisk + mtools):
+# Pipeline (steps 1+2 on the Linux build box over SSH - see remote-build.ps1;
+# it has the mingw cross-compiler + sgdisk + mtools, and WSL is broken here):
 #   1. ./build.sh          -> build/esp/ + build/esp/EFI/BOOT/BOOTX64.EFI
 #   2. tools/mkuefi.py N   -> build/unodos-uefi.img  (GPT + ESP FAT32, N MiB)
-#   3. zip build/esp + csc -> build/UnoDosFlasher.exe
+#      ... then the ESP trees + image are pulled back to the local pc64/build
+#   3. zip build/esp + csc -> build/UnoDosFlasher.exe   (local, in-box .NET)
 #
 # Usage:  pc64/flash/build-flasher.ps1 [-SizeMiB 512] [-SkipBuild] [-TestTool]
 #   -SkipBuild : reuse build/esp/ as-is (don't re-run ./build.sh)
@@ -27,20 +29,7 @@ $ErrorActionPreference = "Stop"
 $pc64  = Split-Path $PSScriptRoot -Parent
 $build = Join-Path $pc64 "build"
 
-# C:\...\unodos\pc64  ->  /mnt/c/.../unodos/pc64  (no wslpath: arg quoting eats backslashes)
-$wslPc64 = "/mnt/" + $pc64.Substring(0,1).ToLower() + ($pc64.Substring(2) -replace '\\','/')
-
-# Run a native command, letting it write to stderr WITHOUT tripping
-# $ErrorActionPreference='Stop' (in Windows PowerShell 5.1 native stderr is
-# wrapped as a terminating NativeCommandError).  gcc warnings from build.sh go
-# to stderr on a perfectly good build, so we gate on the exit code instead.
-function Invoke-Native([scriptblock]$sb, [string]$what) {
-    $prev = $ErrorActionPreference
-    $ErrorActionPreference = 'Continue'
-    try { & $sb 2>&1 | ForEach-Object { Write-Host $_ } }
-    finally { $ErrorActionPreference = $prev }
-    if ($LASTEXITCODE -ne 0) { throw "$what (exit $LASTEXITCODE)" }
-}
+. (Join-Path $PSScriptRoot "remote-build.ps1")
 
 # ---- 1+2. build BOTH the production and debug OS, pack the release image -----
 # The flasher embeds TWO ESP trees:
@@ -50,25 +39,31 @@ function Invoke-Native([scriptblock]$sb, [string]$what) {
 #     crash reports to \CRASH, the stress driver, and the test harness the
 #     dev-options test toggles arm via \DEBUG.CFG.
 # (This supersedes the old "ship ONE flasher = the debug build" rule.)
+# With -SkipBuild the previously pulled build/esp-prod, build/esp-debug and
+# build/unodos-uefi.img are reused as-is; nothing is rebuilt or re-packed.
 if (-not $SkipBuild) {
+    Push-SourceTree
     # build.sh populates build/esp INCREMENTALLY (no wipe), so a stale CRASH /
     # DEBUG.CFG / FIRMWARE from a prior debug build would leak into the
     # production snapshot. Wipe build/esp before each build to keep them clean.
-    Write-Host "Building PRODUCTION OS (UNO_DEBUG=0) under WSL..." -ForegroundColor Yellow
-    Invoke-Native { & wsl bash -lc "cd '$wslPc64' && rm -rf build/esp && UNO_DEBUG=0 ./build.sh" } "production build failed"
-    Invoke-Native { & wsl bash -lc "cd '$wslPc64' && rm -rf build/esp-prod && cp -r build/esp build/esp-prod" } "snapshot prod ESP"
-    Write-Host "Building DEBUG / stress OS (UNO_DEBUG=1) under WSL..." -ForegroundColor Yellow
-    Invoke-Native { & wsl bash -lc "cd '$wslPc64' && rm -rf build/esp && UNO_DEBUG=1 ./build.sh" } "debug build failed"
-    Invoke-Native { & wsl bash -lc "cd '$wslPc64' && rm -rf build/esp-debug && cp -r build/esp build/esp-debug" } "snapshot debug ESP"
+    Write-Host "Building PRODUCTION OS (UNO_DEBUG=0) on $BuildHost..." -ForegroundColor Yellow
+    Invoke-Remote "cd $BuildDir/pc64 && rm -rf build/esp && UNO_DEBUG=0 ./build.sh" "production build failed"
+    Invoke-Remote "cd $BuildDir/pc64 && rm -rf build/esp-prod && cp -r build/esp build/esp-prod" "snapshot prod ESP"
+    Write-Host "Building DEBUG / stress OS (UNO_DEBUG=1) on $BuildHost..." -ForegroundColor Yellow
+    Invoke-Remote "cd $BuildDir/pc64 && rm -rf build/esp && UNO_DEBUG=1 ./build.sh" "debug build failed"
+    Invoke-Remote "cd $BuildDir/pc64 && rm -rf build/esp-debug && cp -r build/esp build/esp-debug" "snapshot debug ESP"
+    # The raw dd/Rufus image is the PRODUCTION build (the default a normal user
+    # wants). build/esp is left as PRODUCTION for mkuefi (and for mkiso later).
+    Invoke-Remote "cd $BuildDir/pc64 && rm -rf build/esp && cp -r build/esp-prod build/esp" "restore prod ESP for the raw image"
+    Write-Host "Packing UEFI disk image ($SizeMiB MiB, production) on $BuildHost..."
+    Invoke-Remote "cd $BuildDir/pc64 && python3 tools/mkuefi.py $SizeMiB" "mkuefi.py failed (needs sgdisk + mtools on $BuildHost)"
+    # esp is pulled too (a prod copy) so local tools that expect build/esp -
+    # UnoDiskTest, diskboot_test.py - keep working.
+    Pull-BuildArtifacts @('esp-prod', 'esp-debug', 'esp', 'unodos-uefi.img')
 }
-# The raw dd/Rufus image is the PRODUCTION build (the default a normal user
-# wants). build/esp is left as PRODUCTION for mkuefi.
-Invoke-Native { & wsl bash -lc "cd '$wslPc64' && rm -rf build/esp && cp -r build/esp-prod build/esp" } "restore prod ESP for the raw image"
-Write-Host "Packing UEFI disk image ($SizeMiB MiB, production) under WSL..."
-Invoke-Native { & wsl bash -lc "cd '$wslPc64' && python3 tools/mkuefi.py $SizeMiB" } "mkuefi.py failed (needs sgdisk + mtools in WSL)"
 
 $img = Join-Path $build "unodos-uefi.img"
-if (-not (Test-Path $img)) { throw "Missing image: $img" }
+if (-not (Test-Path $img)) { throw "Missing image: $img (run without -SkipBuild)" }
 
 # ---- 3. zip BOTH ESP trees into embeddable resources ------------------------
 Add-Type -AssemblyName System.IO.Compression.FileSystem

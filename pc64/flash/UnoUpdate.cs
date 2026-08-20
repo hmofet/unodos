@@ -1,7 +1,7 @@
 /*  UnoUpdate.cs - self-update against the staged flasher on the NAS share.
  *
  *  deploy-to-share.ps1 stages every new flasher build (plus flasher-version.txt
- *  with its build stamp + sha256) on \\nas\unreplicated\unodos\pc64.  This
+ *  with its build stamp + sha256) on \\nas\files\software\unodos\pc64.  This
  *  checks that folder - by name first, then by IP in case DNS is down - and
  *  swaps the running exe for the staged one when it is newer.
  *
@@ -33,8 +33,11 @@ class UpdateInfo
 
 static class UnoUpdate
 {
-    public const string DefaultBase  = @"\\nas\unreplicated\unodos\pc64";
-    public const string FallbackBase = @"\\192.0.2.75\unreplicated\unodos\pc64"; // nas by IP, for when DNS is down
+    // The 2026-08 NAS rebuild replaced the old unreplicated share; staged
+    // builds now live on the "files" share. 192.0.2.75 is NOT nas any
+    // more (the old box became the hvhost hypervisor) - the NAS is .20.
+    public const string DefaultBase  = @"\\nas\files\software\unodos\pc64";
+    public const string FallbackBase = @"\\192.0.2.20\files\software\unodos\pc64"; // nas by IP, for when DNS is down
 
     public static string SelfPath
     {
