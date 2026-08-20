@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>UnoCode · UnoDOS pc64 manual</title>
+<meta name="description" content="User manual for UnoDOS pc64, the x86-64/UEFI world of the UnoDOS operating-system family.">
+<link rel="stylesheet" href="assets/style.css">
+
+<script>
+(function(){
+  var r=document.documentElement, k='unodos-doc-theme';
+  try{var s=localStorage.getItem(k); if(s)r.setAttribute('data-theme',s);}catch(e){}
+  window.__t=function(){
+    var cur=r.getAttribute('data-theme');
+    if(!cur){cur=matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';}
+    var nx=cur==='dark'?'light':'dark';
+    r.setAttribute('data-theme',nx);
+    try{localStorage.setItem(k,nx);}catch(e){}
+  };
+})();
+</script>
+<script>
+/* Lightbox: click (or Enter/Space on) a screenshot to see it full size.
+   Manual shots are scaled into the text column, where fine UI detail - a
+   status line, an icon, a menu entry - is too small to read. Built once at
+   load and reused; Esc or a click anywhere closes it. */
+(function(){
+  var lb,img,cap;
+  function build(){
+    lb=document.createElement('div'); lb.id='lb'; lb.setAttribute('role','dialog');
+    lb.setAttribute('aria-modal','true');
+    img=document.createElement('img');
+    cap=document.createElement('figcaption');
+    var x=document.createElement('button');
+    x.className='x'; x.innerHTML='&times;'; x.setAttribute('aria-label','Close');
+    lb.appendChild(x); lb.appendChild(img); lb.appendChild(cap);
+    document.body.appendChild(lb);
+    lb.addEventListener('click', close);
+  }
+  function open(src, text){
+    if(!lb) build();
+    img.src=src; img.alt=text||''; cap.textContent=text||'';
+    lb.classList.add('on'); document.body.style.overflow='hidden';
+  }
+  function close(){
+    if(!lb) return;
+    lb.classList.remove('on'); img.src=''; document.body.style.overflow='';
+  }
+  document.addEventListener('click', function(e){
+    var b=e.target.closest && e.target.closest('button.zoom');
+    if(!b) return;
+    e.preventDefault();
+    var f=b.parentNode.querySelector('figcaption');
+    open(b.getAttribute('data-full'), f?f.textContent:'');
+  });
+  document.addEventListener('keydown', function(e){
+    if(e.key==='Escape') close();
+  });
+})();
+</script>
+
+</head>
+<body>
+<input type="checkbox" id="mnav">
+<div class="topbar">
+  <label class="menu-btn" for="mnav">☰ Menu</label>
+  <b>UnoDOS pc64</b>
+</div>
+<div class="layout">
+
+<aside class="sidebar">
+  <a class="brand" href="index.html" style="text-decoration:none;color:inherit">
+    <span class="logo"><i></i><i></i><i></i><i></i></span>
+    <span><b>UnoDOS <span style="color:var(--accent-2)">pc64</span></b><span class="sub">User manual</span></span>
+  </a>
+  <ul class="nav"><li><a class="" href="index.html">Overview</a></li><li><a class="" href="try-browser.html">Try it in your browser</a></li><li><a class="" href="getting-started.html">Getting started</a></li><li><a class="" href="desktop.html">The desktop</a></li><li><a class="" href="windows.html">Windows &amp; desktops</a></li><li><a class="" href="appearance.html">Themes &amp; appearance</a></li><li><a class="" href="apps.html">Applications</a></li><li><a class="" href="office.html">UnoOffice</a></li><li><a class="active" href="code.html">UnoCode</a></li><li><a class="" href="browser.html">Web browser</a></li><li><a class="" href="ssh.html">SSH client</a></li><li><a class="" href="networking.html">Networking</a></li><li><a class="" href="logging.html">System log</a></li><li><a class="" href="appliances.html">Appliances</a></li><li><a class="" href="ports.html">The UnoDOS family</a></li><li class="sec">Developer</li><li><a class="" href="developer.html">Overview &amp; architecture</a></li><li><a class="" href="studio.html">Studio: the built-in IDE</a></li><li><a class="" href="unocode.html">UnoCode: the VS Code-class editor</a></li><li><a class="" href="dev-apps.html">Writing apps</a></li><li><a class="" href="dev-python.html">Python apps</a></li><li><a class="" href="dev-samples.html">Sample programs</a></li><li><a class="" href="dev-sdk-c.html">UnoC SDK reference</a></li><li><a class="" href="dev-sdk-python.html">Python SDK reference</a></li><li><a class="" href="dev-api.html">API reference</a></li><li><a class="" href="dev-build.html">Building &amp; tooling</a></li><li><a class="" href="dev-remote.html">Remote control &amp; automation</a></li></ul>
+  <div class="side-foot">
+    <a href="https://github.com/hmofet/unodos" target="_blank" rel="noopener">GitHub&nbsp;&rsaquo; hmofet/unodos</a><br>
+    <a href="#" onclick="__t();return false">Toggle light / dark</a>
+  </div>
+</aside>
+<main class="main"><div class="wrap">
+
+<h1>UnoCode</h1>
+<p class="lede">A code editor built into UnoDOS, in the shape of Visual Studio Code: files in tabs,
+a folder tree down the side, search across the whole folder, a terminal at the bottom, and
+<strong>extensions</strong> - including colour themes taken straight from VS Code.</p>
+
+<p>You do not need to write software to get something out of UnoCode. It is also simply the best
+text editor on the machine: it opens any text file, colours it according to what it is, finds and
+replaces across a whole folder, and remembers how you like it. If you do write software, everything
+on this page still applies and there is a deeper page for you at the end.</p>
+
+<figure><button type="button" class="zoom" data-full="assets/img/unocode.png" aria-label="Enlarge: UnoCode the first time you open it. The strip of icons down the left is the activity bar; it switches the panel beside it between the folder tree, search, source control, run and extensions. The file itself is in the middle, with line numbers on the left and a shrunken map of the whole file on the right. The bar along the bottom tells you where the cursor is, what the file is and how it is saved."><img src="assets/img/unocode.png" alt="UnoCode the first time you open it. The strip of icons down the left is the activity bar; it switches the panel beside it between the folder tree, search, source control, run and extensions. The file itself is in the middle, with line numbers on the left and a shrunken map of the whole file on the right. The bar along the bottom tells you where the cursor is, what the file is and how it is saved." loading="lazy"></button><figcaption><b>UnoCode</b> the first time you open it. The strip of icons down the left is the <b>activity bar</b>; it switches the panel beside it between the folder tree, search, source control, run and extensions. The file itself is in the middle, with line numbers on the left and a shrunken map of the whole file on the right. The bar along the bottom tells you where the cursor is, what the file is and how it is saved.</figcaption></figure>
+
+<h2 id="open">Opening it</h2>
+<p>UnoCode is in the <strong>Start menu</strong> and has a desktop icon. Open it the way you open
+anything else; the first time takes a moment while the app is read off the disk.</p>
+<p>It opens on a folder rather than a single file. Use the folder tree on the left to move around,
+and <kbd>Enter</kbd> to open what is selected. To jump straight to a file by name, press
+<kbd>Ctrl</kbd>+<kbd>P</kbd> and start typing.</p>
+
+<h2 id="keys">The five keys worth learning</h2>
+<p>Almost everything in UnoCode has a name, and every name is in one searchable list. If you
+remember one line from this page, make it the first one.</p>
+<table>
+  <tr><th>Key</th><th>What it does</th></tr>
+  <tr><td><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd></td><td>The <strong>command palette</strong>: everything UnoCode can do, searchable by name</td></tr>
+  <tr><td><kbd>Ctrl</kbd>+<kbd>P</kbd></td><td>Open a file by typing part of its name</td></tr>
+  <tr><td><kbd>Ctrl</kbd>+<kbd>S</kbd></td><td>Save</td></tr>
+  <tr><td><kbd>Ctrl</kbd>+<kbd>F</kbd></td><td>Find in this file</td></tr>
+  <tr><td><kbd>Ctrl</kbd>+<kbd>B</kbd></td><td>Hide the side panel, to give the text the whole window</td></tr>
+</table>
+<p>The palette is the way out of every "how do I ...?" moment: open it, type roughly what you want,
+and read the answers. Each row shows the command's name and, on the right, the key that runs it - so
+it teaches you the shortcut while you use it.</p>
+
+<figure><button type="button" class="zoom" data-full="assets/img/unocode_palette.png" aria-label="Enlarge: The command palette with theme typed into it. The grey text is the command&#x27;s internal name and the right-hand column is its keyboard shortcut, which is how most people end up learning the shortcuts."><img src="assets/img/unocode_palette.png" alt="The command palette with theme typed into it. The grey text is the command&#x27;s internal name and the right-hand column is its keyboard shortcut, which is how most people end up learning the shortcuts." loading="lazy"></button><figcaption>The command palette with <code>theme</code> typed into it. The grey text is the command's internal name and the right-hand column is its keyboard shortcut, which is how most people end up learning the shortcuts.</figcaption></figure>
+
+<div class="note tip"><b>If a shortcut does nothing</b>Some keyboards do not reach every shortcut. UnoDOS receives no F-keys at all from a USB keyboard - that is a limitation of the machine, not of UnoCode - so UnoCode's own shortcuts are <kbd>Ctrl</kbd> combinations wherever possible. Anything you cannot press, you can still run from the command palette.</div>
+
+<h2 id="editing">Editing</h2>
+<p>Typing works the way you expect. What UnoCode adds is context: it colours the text according to
+what kind of file it is, marks the lines you have changed since you opened it, and keeps a map of
+the whole file down the right-hand edge so you can see where you are in something long.</p>
+
+<figure><button type="button" class="zoom" data-full="assets/img/unocode_editor.png" aria-label="Enlarge: Two files open in tabs. Comments, names, numbers and text are each coloured differently; the narrow strip on the far right is the entire file drawn in miniature, with the part you are looking at marked; the coloured bar just left of the text marks lines you have changed since opening it."><img src="assets/img/unocode_editor.png" alt="Two files open in tabs. Comments, names, numbers and text are each coloured differently; the narrow strip on the far right is the entire file drawn in miniature, with the part you are looking at marked; the coloured bar just left of the text marks lines you have changed since opening it." loading="lazy"></button><figcaption>Two files open in tabs. Comments, names, numbers and text are each coloured differently; the narrow strip on the far right is the entire file drawn in miniature, with the part you are looking at marked; the coloured bar just left of the text marks lines you have changed since opening it.</figcaption></figure>
+
+<p>Useful habits, all of them ordinary editor behaviour done properly:</p>
+<ul>
+  <li><kbd>Ctrl</kbd>+<kbd>Z</kbd> undoes, <kbd>Ctrl</kbd>+<kbd>Y</kbd> redoes. A burst of typing
+      undoes as one piece rather than one character at a time.</li>
+  <li><kbd>Ctrl</kbd>+<kbd>D</kbd> selects the next copy of the word you are on, so you can rename
+      several at once by typing once.</li>
+  <li><kbd>Home</kbd> and <kbd>End</kbd> go to the ends of the line, <kbd>Ctrl</kbd>+<kbd>Home</kbd>
+      and <kbd>Ctrl</kbd>+<kbd>End</kbd> to the ends of the file.</li>
+  <li>The status bar along the bottom shows the line and column, how the file is indented, how it is
+      encoded and which line ending it uses. Click nothing: it is there to tell you, and it is the
+      first place to look when a file behaves oddly on another machine.</li>
+</ul>
+
+<h2 id="find">Finding things</h2>
+<p><kbd>Ctrl</kbd>+<kbd>F</kbd> searches the file you are in and highlights every match at once, with
+a running count. The three small toggles beside the box control whether case matters, whether it
+must match a whole word, and whether what you typed is a <em>pattern</em> rather than plain text.</p>
+
+<figure><button type="button" class="zoom" data-full="assets/img/unocode_find.png" aria-label="Enlarge: Find, showing 0 of 11 matches and the case, whole-word and pattern toggles. Every match in the file is marked as you type, not just the next one."><img src="assets/img/unocode_find.png" alt="Find, showing 0 of 11 matches and the case, whole-word and pattern toggles. Every match in the file is marked as you type, not just the next one." loading="lazy"></button><figcaption>Find, showing <code>0 of 11</code> matches and the case, whole-word and pattern toggles. Every match in the file is marked as you type, not just the next one.</figcaption></figure>
+
+<p>To search the whole folder rather than one file, use the magnifying glass in the activity bar.
+Results are grouped by file; <kbd>Enter</kbd> on one opens the file at that line.</p>
+
+<h2 id="themes">Changing the colours</h2>
+<p>Open the palette and type <code>theme</code>. UnoCode ships with six colour themes, dark and
+light, and switching is instant - the whole window recolours, not just the text.</p>
+
+<figure><button type="button" class="zoom" data-full="assets/img/unocode_theme.png" aria-label="Enlarge: The same file under Nord. The activity bar, side panel, tabs, text and status bar all change together, because a theme describes the whole workbench rather than only the code."><img src="assets/img/unocode_theme.png" alt="The same file under Nord. The activity bar, side panel, tabs, text and status bar all change together, because a theme describes the whole workbench rather than only the code." loading="lazy"></button><figcaption>The same file under <b>Nord</b>. The activity bar, side panel, tabs, text and status bar all change together, because a theme describes the whole workbench rather than only the code.</figcaption></figure>
+
+<p>You are not limited to the six. UnoCode reads <strong>Visual Studio Code's own theme files</strong>,
+so a theme downloaded for VS Code works here unchanged - see the next section for how to put one on
+the machine.</p>
+
+<h2 id="extensions">Extensions</h2>
+<p>An extension adds something to UnoCode: a colour theme, support for another kind of file, a set of
+ready-made snippets, or a new command. The Extensions view - the last icon in the activity bar -
+lists what is installed, what each one does and whether it is switched on.</p>
+
+<figure><button type="button" class="zoom" data-full="assets/img/unocode_extensions.png" aria-label="Enlarge: The Extensions view. Each row is one extension, with its name, version and description. Enter switches one on or off; Ctrl+R re-reads them all from disk."><img src="assets/img/unocode_extensions.png" alt="The Extensions view. Each row is one extension, with its name, version and description. Enter switches one on or off; Ctrl+R re-reads them all from disk." loading="lazy"></button><figcaption>The Extensions view. Each row is one extension, with its name, version and description. <kbd>Enter</kbd> switches one on or off; <kbd>Ctrl</kbd>+<kbd>R</kbd> re-reads them all from disk.</figcaption></figure>
+
+<p><strong>Installing one is copying a folder.</strong> There is no store and nothing to sign in to:
+an extension is a folder containing a <code>package.json</code> file and whatever it adds, and you
+install it by putting that folder in UnoCode's <code>EXT</code> folder and pressing
+<kbd>Ctrl</kbd>+<kbd>R</kbd>. Removing it is deleting the folder. Switching one off in the list is
+enough if you only want it out of the way for now.</p>
+
+<div class="note warn"><b>What an extension can do</b>An extension that contains only a theme, a language definition or snippets is just data - it cannot do anything but describe colours and words. An extension that contains <b>code</b> can run commands, and UnoCode runs that code with a hard ceiling on how long it may take, so a badly written extension slows nothing down for long. It still runs on your machine with access to your files, so install code extensions you have reason to trust - the same judgement you would apply anywhere else.</div>
+
+<h2 id="terminal">The panel at the bottom</h2>
+<p><kbd>Ctrl</kbd>+<kbd>`</kbd> opens a <strong>terminal</strong> underneath the editor. It is not a
+Unix shell - UnoDOS does not have one - but it lists and changes folders, reads files, searches, opens
+and runs things, and reads and writes UnoCode's own settings. <code>help</code> lists what it
+knows.</p>
+
+<figure><button type="button" class="zoom" data-full="assets/img/unocode_terminal.png" aria-label="Enlarge: The terminal after help and ext. It is a quick way to do the things that are fiddly with the mouse, and the fastest way to see which extensions actually loaded."><img src="assets/img/unocode_terminal.png" alt="The terminal after help and ext. It is a quick way to do the things that are fiddly with the mouse, and the fastest way to see which extensions actually loaded." loading="lazy"></button><figcaption>The terminal after <code>help</code> and <code>ext</code>. It is a quick way to do the things that are fiddly with the mouse, and the fastest way to see which extensions actually loaded.</figcaption></figure>
+
+<h2 id="settings">Settings</h2>
+<p>Settings live in a text file, and UnoCode edits it like any other file: open the palette and choose
+<strong>Preferences: Open Settings</strong>. Every setting is a line of the form
+<code>"editor.fontSize": 14</code>, comments are allowed, and anything UnoCode does not recognise is
+ignored rather than rejected - so a settings file copied from Visual Studio Code works, with the parts
+that do not apply here quietly doing nothing.</p>
+<p>Keyboard shortcuts work the same way, in their own file, through
+<strong>Preferences: Open Keyboard Shortcuts</strong>.</p>
+
+<h2 id="studio">UnoCode or Studio?</h2>
+<p>UnoDOS has two editors and keeps both on purpose. <a href="studio.html">Studio</a> is the small
+one: an editor, the built-in compiler and an assistant, three keys from typing something to running
+it. UnoCode is the big one: more editor, more searching, and extensible. If you are writing a small
+program and want it running now, use Studio. If you are working through a folder full of files, use
+UnoCode.</p>
+
+<h2 id="limits">What it does not do</h2>
+<ul>
+  <li><strong>No printing.</strong> Nothing in UnoDOS prints yet.</li>
+  <li><strong>No downloading extensions from inside it.</strong> There is no marketplace; you copy a
+      folder onto the disk.</li>
+  <li><strong>Not every VS Code extension.</strong> Themes, languages, grammars and snippets are the
+      real formats and work as they are. Extensions that contain code are written against UnoCode's
+      own smaller set of commands, so a complex VS Code extension will not simply run.</li>
+  <li><strong>No debugger.</strong> The Run view launches things; it does not step through them.</li>
+</ul>
+
+<p>Writing an extension, or want the file formats and the internals? That is the
+<a href="unocode.html">developer page</a>.</p>
+
+<nav class="pagenav"><a href="office.html">&lsaquo; UnoOffice</a><a class="nxt" href="browser.html">Web browser &rsaquo;</a></nav>
+</div></main>
+</div>
+</body>
+</html>
