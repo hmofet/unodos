@@ -765,7 +765,7 @@ void uc_quick_draw(UcRect wb)
          * the detail is clipped at the keybinding's left edge rather than
          * being drawn over it */
         {
-            int aw = it->aux[0] ? uc_ui_text_w(it->aux) + 18 : 12;
+            int aw = it->aux[0] ? uc_ui_text_w(it->aux) + 30 : 12;
             if (it->detail[0]) {
                 int dx = r.x + 20 + uc_ui_text_w(it->label);
                 int avail = (r.x + r.w - aw) - dx;
@@ -903,6 +903,23 @@ static void c_view_scm(void)       { uc_toggle_sidebar(UC_VIEW_SCM); }
 static void c_view_run(void)       { uc_toggle_sidebar(UC_VIEW_RUN); }
 static void c_view_ext(void)       { uc_toggle_sidebar(UC_VIEW_EXTENSIONS); }
 static void c_toggle_panel(void)   { uc_toggle_panel(-1); }
+/* Idempotent, unlike the three-state toggles beside it: whatever state the
+ * workbench is in, this leaves it in exactly one.  That is what a user who has
+ * hidden the side bar, opened the terminal and lost the editor wants from a
+ * menu entry, and it is the only way a screenshot harness can start a scene
+ * from a known layout without rebooting between every figure. */
+static void c_reset_layout(void)
+{
+    UC.sidebar_visible = 1;
+    UC.view = UC_VIEW_EXPLORER;
+    UC.panel_visible = 0;
+    UC.zen = 0;
+    UC.sidebar_user = 0;
+    uc_focus(UC_F_EDITOR);
+    uc_explorer_refresh();
+    uc_layout();
+    uc_repaint();
+}
 static void c_terminal(void)       { uc_toggle_panel(UC_PANEL_TERMINAL); }
 static void c_problems(void)       { uc_toggle_panel(UC_PANEL_PROBLEMS); }
 static void c_output(void)         { uc_toggle_panel(UC_PANEL_OUTPUT); }
@@ -1049,6 +1066,7 @@ void uc_cmd_init(void)
     reg("workbench.view.debug", "View", "Show Run and Debug", c_view_run);
     reg("workbench.view.extensions", "View", "Show Extensions", c_view_ext);
     reg("workbench.action.togglePanel", "View", "Toggle Panel", c_toggle_panel);
+    reg("workbench.action.resetLayout", "View", "Reset Layout", c_reset_layout);
     reg("workbench.action.terminal.toggleTerminal", "Terminal", "Toggle Terminal", c_terminal);
     reg("workbench.actions.view.problems", "View", "Show Problems", c_problems);
     reg("workbench.action.output.toggleOutput", "View", "Show Output", c_output);

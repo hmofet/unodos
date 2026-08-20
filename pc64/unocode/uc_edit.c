@@ -84,6 +84,34 @@ int uc_ui_text(int x, int y, const char *s, fb_px fg)
 
 int uc_ui_text_w(const char *s) { return fb_text_w(s); }
 
+/* Draw `s`, shortened with an ellipsis if it will not fit in `maxw`.
+ *
+ * Clipping alone cuts the last glyph in half and reads as a rendering fault;
+ * an ellipsis reads as "there is more", which is what is true.  Used by the
+ * lists whose rows are narrower than their content - the Explorer, the
+ * Extensions view - where the alternative is a wall of half-letters. */
+int uc_ui_text_fit(int x, int y, const char *s, int maxw, fb_px fg)
+{
+    char buf[160];
+    int n;
+    if (maxw <= 0) return x;
+    if (uc_ui_text_w(s) <= maxw) return uc_ui_text(x, y, s, fg);
+    uc_scpy(buf, s, sizeof buf);
+    n = (int)strlen(buf);
+    while (n > 1) {
+        buf[n - 1] = 0;
+        buf[n] = 0;
+        /* three ASCII dots, not U+2026: the shipped faces do not all carry the
+         * ellipsis glyph, and a truncation mark that renders as a blank is
+         * indistinguishable from text that simply stopped. */
+        uc_scat(buf, "...", sizeof buf);
+        if (uc_ui_text_w(buf) <= maxw) break;
+        buf[n - 1] = 0;
+        n--;
+    }
+    return uc_ui_text(x, y, buf, fg);
+}
+
 /* ---- scope colour cache ------------------------------------------------------ */
 #define SC_CACHE 256
 static fb_px         sc_col[SC_CACHE];
@@ -1161,11 +1189,17 @@ void uc_suggest_draw(UcRect ed, UcDoc *d)
         if (k >= sug_n) break;
         if (k == sug_sel) fb_fill_rect(x + 1, ry - 1, w - 2, g_uih + 4, uc_col(UC_C_SUGGEST_SEL_BG));
         uc_ui_text(x + 6, ry + 1, kind_mark(sug[k].kind), uc_col(UC_C_LIST_HIGHLIGHT));
-        uc_ui_text(x + 22, ry + 1, sug[k].label,
-                   k == sug_sel ? uc_col(UC_C_LIST_SEL_FG) : uc_col(UC_C_EDITOR_FG));
-        if (sug[k].detail[0]) {
-            int dw = uc_ui_text_w(sug[k].detail);
-            uc_ui_text(x + w - dw - 8, ry + 1, sug[k].detail, uc_col(UC_C_BREADCRUMB_FG));
+        /* the detail is right-aligned and the label runs towards it, so the
+         * LABEL is the one that gets fitted - a completion whose name is cut
+         * short is still readable, one written over its own description is not */
+        {
+            int dw = sug[k].detail[0] ? uc_ui_text_w(sug[k].detail) + 14 : 8;
+            uc_ui_text_fit(x + 22, ry + 1, sug[k].label, w - 30 - dw,
+                           k == sug_sel ? uc_col(UC_C_LIST_SEL_FG)
+                                        : uc_col(UC_C_EDITOR_FG));
+            if (sug[k].detail[0])
+                uc_ui_text(x + w - dw + 6, ry + 1, sug[k].detail,
+                           uc_col(UC_C_BREADCRUMB_FG));
         }
     }
 }
