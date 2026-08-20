@@ -21,7 +21,8 @@ typedef enum {
     PCI_CTRL, PCI_EDIT, PCI_FILES, PCI_SYS, PCI_CLOCK, PCI_SETUP, PCI_MUSIC,
     PCI_DOSTRIS, PCI_PACMAN, PCI_OUTLAST, PCI_TRACKER, PCI_PAINT,
     PCI_NETWORK, PCI_RUNNER, PCI_BROWSER, PCI_STUDIO, PCI_PHOTOS,
-    PCI_UOWORD, PCI_UOCALC, PCI_UOSHOW
+    PCI_UOWORD, PCI_UOCALC, PCI_UOSHOW,
+    PCI_UNOCODE          /* appended - see the note above about numbering */
 } pc64_icon_id;
 
 /* Ids at or above PCI_CUSTOM0 are art an app SHIPPED, decoded from a QOI file
