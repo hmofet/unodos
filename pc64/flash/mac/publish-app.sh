@@ -16,8 +16,10 @@ PC64="$(cd ../.. && pwd)"
 IMG="$PC64/build/unodos-uefi.img"
 ZIP="UnoDosFlasher-macOS.zip"
 
-# GCC 14+ rejects the repo's implicit declarations; older GCC accepts the flags.
-export UNO_EXTRA="${UNO_EXTRA:--std=gnu17 -Wno-implicit-function-declaration}"
+# GCC 14+ turns two long-standing warnings into errors; older GCC accepts the
+# flags. The pointer one is um_set_alloc(malloc, ...): unsigned long vs size_t,
+# identical on quill's mingw (a warning there) and benign at runtime.
+export UNO_EXTRA="${UNO_EXTRA:--std=gnu17 -Wno-implicit-function-declaration -Wno-incompatible-pointer-types}"
 export UNO_NOFW=1
 
 echo "[publish] scrubbing unredistributable inputs, fetching Freedoom..."
