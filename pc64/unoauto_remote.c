@@ -324,20 +324,29 @@ static int b64_encode(const unsigned char *in, int n, char *out, int cap)
 }
 
 /* ---- command dispatch ---------------------------------------------------- */
-static UnoAutoProbeEnt g_pe[64];
+/* 96, not 64: the probe now also emits the per-window draw profile (up to
+ * WPROF_N=24 rows), and put() drops silently past the end - which would have
+ * truncated the module roster instead of reporting anything. ~40 bytes a row,
+ * so this is 1.3 KB of .bss, not the 24 MiB a PUT_MAX rise once cost. */
+static UnoAutoProbeEnt g_pe[96];
 static char            g_report[4096];
 
 static void do_probe(const char *id)
 {
-    int n = unoauto_probe(g_pe, 64), i;
+    int n = unoauto_probe(g_pe, 96), i;
     for (i = 0; i < n; i++) {
         /* fields: kind state v1 v2 name - name LAST so it may contain spaces */
         char f[256]; SB b;
         sb_init(&b, f, sizeof f);
         sb_i(&b, g_pe[i].kind);  sb_c(&b, ' ');
         sb_i(&b, g_pe[i].state); sb_c(&b, ' ');
-        sb_i(&b, (long)g_pe[i].v1); sb_c(&b, ' ');
-        sb_i(&b, (long)g_pe[i].v2); sb_c(&b, ' ');
+        /* sb_ull, NOT sb_i: v1/v2 are u64 and sb_i takes a `long`, which is
+         * 32 BITS on this PE target.  The window rows carry accumulated draw
+         * TSC, which passes 2^32 after about two seconds of drawing at 2 GHz,
+         * so every cycle total reported here used to wrap - silently, and into
+         * a NEGATIVE number once the cast went through signed long. */
+        sb_ull(&b, g_pe[i].v1); sb_c(&b, ' ');
+        sb_ull(&b, g_pe[i].v2); sb_c(&b, ' ');
         sb_s(&b, g_pe[i].name ? g_pe[i].name : "?");
         f[b.len] = 0;
         rsp(id, "ok", f);

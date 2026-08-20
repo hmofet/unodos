@@ -24,6 +24,9 @@ int         pc64_shell_win_focused(int i);
 int  uno_dbg_win_stat(int i, const char **title, unsigned long long *cyc,
                       unsigned long *max_us);
 unsigned long long uno_dbg_uptime_ms(void);
+unsigned long      uno_dbg_frames(void);
+unsigned long      uno_dbg_win_calls(int i);
+unsigned long long uno_dbg_tsc_per_ms(void);
 /* walkable debug heap (pc64_libc.c) */
 void uno_heap_stats(unsigned long *used, unsigned long *free_,
                     unsigned long *largest);
@@ -53,6 +56,9 @@ int unoauto_probe(UnoAutoProbeEnt *out, int max)
       n = put(out, max, n, "fs", 2, vols, (unsigned long long)w, 0); }
     n = put(out, max, n, "shell", 2, pc64_shell_win_count(),
             uno_dbg_uptime_ms(), 0);
+    /* frame count + TSC scale: the two constants that turn the per-window
+     * cycle totals below into ms/frame on the host side. */
+    n = put(out, max, n, "perf", 2, 0, uno_dbg_frames(), uno_dbg_tsc_per_ms());
 
     /* open windows, with their lifetime draw cost from the F11 profiler */
     cnt = pc64_shell_win_count();
@@ -68,6 +74,18 @@ int unoauto_probe(UnoAutoProbeEnt *out, int max)
             if (pt == t) { cyc = pc; mx = pm; break; }   /* titles are literals */
         n = put(out, max, n, t ? t : "(untitled)", 1,
                 pc64_shell_win_focused(i), cyc, mx);
+    }
+
+    /* kind 3: the raw per-window draw profile, one row per profiled title,
+     * whether or not that window is still open - so an arm can be measured
+     * after it has been closed.  state carries the CALL count, v1 the cycles,
+     * v2 the worst single draw.  Emitted before the module roster because the
+     * roster is long and put() silently drops rows past the caller's buffer. */
+    for (i = 0; ; i++) {
+        const char *pt; unsigned long long pc; unsigned long pm;
+        if (!uno_dbg_win_stat(i, &pt, &pc, &pm)) break;
+        n = put(out, max, n, pt ? pt : "(untitled)", 3,
+                (int)uno_dbg_win_calls(i), pc, pm);
     }
 
     /* the .UNO module roster: what is shipped vs actually on a volume */

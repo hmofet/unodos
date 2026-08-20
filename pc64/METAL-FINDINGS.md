@@ -940,3 +940,94 @@ the cause (AP kicking us) or a symptom (our null-data/keepalive or power-save
 handling after assoc) is the next question, and it is a NEW one - everything
 before it is now working. `wifi_wpa.c` post-handshake state and the null-func /
 power-save path are where to start.
+
+---
+
+## 2026-08-18 — ZimaBlade: the pure-Python Duum column loop costs NOTHING on device
+
+Machine: ZimaBlade (192.168.2.118), Celeron N3350, desktop 960x540, boot stick
+`UNODOS` on `usb0`. Kernel `debug-local-20260819-0042` = master `ed08fc8c`
+merged with `6ff23564`, built on quill `UNO_DEBUG=1 UNO_DETACH=1`.
+
+**The question.** Master vendors Duum from its new upstream and the per-column
+rasteriser is Python again. On CPython that was a win (3.04 -> 2.16 ms for the
+geometry pass). The device is MicroPython under `MICROPY_OBJ_REPR_A`, where
+every float intermediate is a GC allocation, so the same change could have gone
+the other way. Nobody had booted it.
+
+**The answer: it did not.** One boot, arms alternating:
+
+| arm | ms per draw, idle spawn view | ms per draw, scripted movement |
+|---|---|---|
+| A — master `ed08fc8c`, pure Python | **15.608** / 15.608 / 15.613 | 11.748 / 11.745 / 11.764 |
+| B — `0c9e0de9` DUUM.PY, `cv.seg_cols` | **15.593** / 15.580 / 15.584 | 11.832 / 11.852 / 11.829 |
+| control — `TRIVIAL.PY`, same session | — | 3.651 / 3.650 / 3.654 |
+
+**0.15% apart on the clean test with B nominally ahead, 0.7% apart on the
+movement test with A ahead.** Two differences that small pointing in opposite
+directions is no effect. Note the arms are not "the same loop, now interpreted":
+the vendored rewrite turns one 18-line `seg_cols` call site into a 213-line
+Python loop, so the algorithm moved too.
+
+**The control is the real story.** `TRIVIAL.PY` — one `clear` and one
+`fill_rect` — delivers FEWER draws per second (15.4) than Duum (21.5) despite a
+3x cheaper draw. Duum's renderer is ~11.7 ms of a ~46 ms frame. The frame is
+still the present path, exactly as `0c9e0de9` already argued; optimising the
+column loop further would be aiming at the wrong half of the frame.
+
+### Method — draw-profiler deltas, with NO stream attached
+
+`ms per draw = dcyc / tsc_per_ms / dcalls`, from two `probe` snapshots around a
+fixed script. Every quantity is read off the guest's own clock, so host timing
+and the bridge's whole-second log stamps do not enter, and **unostream is not
+attached at all** — which structurally removes "the fps is partly the QOI
+encoder" and the keyframe-burst filter that once ranked the slower build at
+130 fps against 48. `uno.ticks()` is likewise not involved.
+
+Needed additive instrumentation in our own C (see UNOAUTOMATE-REQUESTS.md):
+`uno_dbg_frames()`, `uno_dbg_win_calls()`, a `perf` probe row and kind-3
+per-window rows.
+
+**Confound worth knowing:** Duum advances the player from elapsed time, so with
+identical keys the faster arm travels further and the two arms end up looking at
+*almost* the same thing — same room, same items, ammo identical, but ~85% of
+pixels differ. Measure at the **spawn view with no input at all** to remove it;
+that is what the "idle spawn view" column is.
+
+### Playability
+
+Boots and plays: walking, turning and firing all confirmed (ammo 50 -> 48),
+E1M1 rendering textured walls, flats, sky, sprites and the full STBAR.
+**Door operation is UNCONFIRMED**, and not for want of trying — see the wall
+collision finding below, which is what prevents it.
+
+### DUUM HAS NO WALL COLLISION (both engines) — goes upstream
+
+`blocked()` in `pc64/apps/DUUM.PY` contains **no reference to a linedef or a
+vertex**. It tests destination sector, step height (>24), headroom (<56) and
+thing overlap; the 16-unit radius is used only for things. Its one wall-like
+guard, `point_sector(nx,ny) is None`, is **dead code** — `point_sector()` is a
+plain BSP descent (`R_PointOnSide`) with no `None` path, and a BSP partitions
+the whole plane, so it always returns a sector. A wall therefore stops the
+player only when the far sector happens to have an impassable floor or ceiling.
+
+Measured against the map: the first SOLID one-sided wall ahead of the E1M1
+spawn (1056,-3616 facing 90) is **736 units**, and one forward press is exactly
+96 units (`MOVSPD` 320 u/s x the 0.30 s hold), so a player with collision is
+pinned by press 8. Walk 12, settle, grab; walk 8 more, settle, grab:
+
+| engine | 12-press view vs 20-press view |
+|---|---|
+| master `ed08fc8c` | **98.51% of the view differs** |
+| `0c9e0de9` | **98.48%** |
+
+`blocked()` is byte-identical in both, so this is **pre-existing, not a
+regression from the vendoring**. Visible consequence: the camera ends up inside
+solid geometry and the frame goes incoherent, compositing three parts of the
+level side by side — that is an invalid viewpoint, not a renderer bug. It also
+makes doors untestable: `do_use()` looks correct (65-unit ray, `DOOR_USE`
+table) and E1M1 has 8 use-doors (special 1, none walkover), but the player
+cannot be parked in front of one.
+
+**Fix belongs upstream in `hmofet/duum`** and returns via `tools/sync_duum.py`;
+`pc64/apps/DUUM.PY` is vendored and generated. See DUUM-UPSTREAM.md.
