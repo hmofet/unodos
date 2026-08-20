@@ -586,12 +586,17 @@ def _sample_run(q, app_id, settle=3.0):
     close_all(q); launch(q, A(app_id), settle=settle)
 
 def sc_sample_timer(q):
-    # The keypress needs the app to be up AND focused: sent too early it goes
-    # to the launcher, and the figure is a timer sitting at its start value
-    # with "Space: start" still on it - which is what the first run captured.
+    # Space is pressed TWICE on purpose. The FIRST key after a launch from the
+    # Start menu is still swallowed somewhere between the keyboard and the app
+    # (see the 2026-08-20 note in UNOAUTOMATE-REQUESTS.md - the focus-ordering
+    # half of that is fixed, this half is not), so one press leaves the figure
+    # showing a timer that never started. Two presses: the first is eaten, the
+    # second starts it. If a later build fixes the swallow, this scene will
+    # start-then-pause it instead and the figure will need one press again.
     _sample_run(q, "timer", settle=4.5)
     time.sleep(1.5)
-    key(q, "spc", hold=120); time.sleep(4.0)  # start it; the bar drains
+    key(q, "spc", hold=120); time.sleep(1.2)  # eaten
+    key(q, "spc", hold=120); time.sleep(4.0)  # starts it; the bar drains
     shot(q, "samples_timer")
     close_all(q)
 
