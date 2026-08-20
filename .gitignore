@@ -1,5 +1,9 @@
 # Build artifacts (intermediate files)
 build/*.o
+
+# Release staging (mkrelease/publish output: built binaries bound for GitHub
+# releases, never for the tree)
+build/release/
 apps/launcher
 kernel/kernel
 
