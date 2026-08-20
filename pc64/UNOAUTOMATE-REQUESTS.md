@@ -9089,6 +9089,75 @@ number taken with the stream attached is a measurement of the stream.
 
 ---
 
+## 2026-08-18 — LANDED (unoautomate / URC): `probe` truncated every counter to 32 bits, and now reports frames + draw calls
+
+Found while building a renderer A/B on the ZimaBlade (see METAL-FINDINGS.md).
+Both halves are in `pc64/uno_debug.c`, `pc64/unoauto_probe.c` and
+`pc64/unoauto_remote.c`; nothing vendored was touched.
+
+### The bug: `do_probe()` printed u64 counters through a 32-bit formatter
+
+`UnoAutoProbeEnt.v1/v2` are `unsigned long long`, and the window rows carry
+**accumulated draw TSC**. `do_probe()` formatted them with
+
+```c
+sb_i(&b, (long)g_pe[i].v1);
+```
+
+and `sb_i()` takes a **`long`**, which is **32 bits on this PE target** (LLP64).
+So every cycle total wrapped at 2^32 — about **two seconds of accumulated
+drawing at 2 GHz** — and, through the signed cast, came back NEGATIVE. The
+first A/B rehearsal duly reported `-2.727 ms per draw`.
+
+`sb_ull()` was already defined immediately below `sb_i()` for LBAs and sector
+counts. Fixed by using it:
+
+```c
+sb_ull(&b, g_pe[i].v1); sb_c(&b, ' ');
+sb_ull(&b, g_pe[i].v2); sb_c(&b, ' ');
+```
+
+**Any historic `probe` cycle figure is suspect** — a window open for more than
+a couple of seconds has always been reporting a wrapped number.
+
+### The addition: enough to compute ms PER FRAME
+
+`uno_dbg_win_stat()` reported cycles but not calls, and cycles alone cannot
+separate "slower per frame" from "was on screen longer" — which is the entire
+question when comparing two renderers. Added, all additive:
+
+- `uno_dbg_frames()` and `uno_dbg_win_calls(int i)` accessors in `uno_debug.c`.
+- a **`perf`** subsystem row: `v1` = shell frames, `v2` = `tsc_per_ms`.
+- **kind 3** rows, one per profiled window title: `state` = draw calls,
+  `v1` = cycles, `v2` = worst single draw us. Emitted *before* the module
+  roster, because `put()` drops silently past the caller's buffer and the
+  roster is long.
+- `g_pe[64]` -> `g_pe[96]` to hold them. ~1.3 KB of .bss — worth saying
+  explicitly next to the 2026-08-18 `PUT_MAX` incident, which grew .bss by
+  24 MiB and produced an image that would not boot. `.bss` here stayed at
+  `0x09af95f0`, byte-identical to known-good.
+
+A host then computes `ms per draw = dcyc / tsc_per_ms / dcalls` entirely from
+the guest's own clock — no unostream attached, so the number is not partly a
+measurement of the QOI encoder, and no dependence on `uno.ticks()` (which does
+not advance while a `py` eval blocks the shell loop) or on the bridge's
+whole-second log stamps.
+
+### Two things that will bite the next person
+
+**Every PYAPP window shares ONE profiler slot.** `g_wprof` keys on the title
+POINTER — the comment says "titles are literals", which is true for native
+windows — but the shell hands every PYAPP the same reused title buffer, so the
+single slot is simply *renamed* to whichever app is currently open. Deltas stay
+exact while only one app draws, but a client looking a window up by name needs
+a fallback to "whichever non-shell slot actually moved".
+
+**`probe`'s window rows and the profiler disagree about lifetime.** kind-1 rows
+vanish when a window closes; the kind-3 rows persist, which is what lets an arm
+be measured after it has been closed.
+
+---
+
 ## 2026-08-19 - LANDED (toolkits/sound + pc64-python): sampled effects and a game's own score
 
 Taking, and releasing on landing, the sound toolkit (`snd_*`) and the four

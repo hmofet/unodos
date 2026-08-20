@@ -1912,6 +1912,21 @@ unsigned long uno_dbg_cyc_to_us(unsigned long long cyc)
 
 unsigned long long uno_dbg_tsc_per_ms(void) { return g_tsc_per_ms; }
 
+/* A/B instrumentation: the shell's lifetime rendered-frame count.  The probe
+ * exports it beside tsc_per_ms so a host can turn the per-window cycle totals
+ * uno_dbg_win_stat() already reports into milliseconds PER FRAME - which is
+ * the only figure that compares two renderers.  Cycles alone conflate "slower
+ * per frame" with "ran for longer", and a frame rate taken off the video
+ * stream measures the encoder as much as the renderer. */
+unsigned long uno_dbg_frames(void) { return g_frames; }
+
+/* ...and the matching DRAW COUNT for one profiler slot.  uno_dbg_win_stat()
+ * reports cycles but not calls, and cycles alone cannot tell "this renderer is
+ * slower per frame" from "this renderer was on screen longer" - which is the
+ * entire question when two engines are compared. */
+unsigned long uno_dbg_win_calls(int i)
+{ return (i >= 0 && i < g_wprof_n) ? g_wprof[i].calls : 0; }
+
 void uno_dbg_win_profile(const char *title, int begin);
 void uno_dbg_win_profile(const char *title, int begin)
 {
