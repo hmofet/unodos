@@ -18,7 +18,20 @@
 #include "pc64_pci.h"
 #include "uno_devmgr.h"
 #include "ac97.h"
+#include "uefi.h"          /* below-4GB DMA ring (AllocateMaxAddress) */
 #include <stdint.h>
+
+/* The BDL entries and PO_BDBAR are 32-bit by hardware. The ring and BDL used
+ * to be plain .bss, and on a machine with >4GB RAM the loader can place .bss
+ * above the 4GB line - the (uint32_t) casts then truncate and the engine
+ * streams from the wrong memory: the guest is SILENT with 4GB of RAM and
+ * audible with 3 (the 2026-08-19 finding). Same fault and same cure as
+ * iwlwifi's fw arena: AllocateMaxAddress(<4GB) while boot services are up,
+ * falling back to the .bss copies (fine on <=4GB machines and in QEMU's
+ * small-RAM gates). */
+void *uno_pc64_st(void);                 /* uefi_main.c - the EFI system table */
+typedef EFI_STATUS (*EFI_ALLOC_PAGES)(UINTN Type, UINTN MemType, UINTN Pages,
+                                      unsigned long long *Memory);
 
 static inline void outb_(uint16_t p, uint8_t v)  { __asm__ volatile ("outb %0, %1" : : "a"(v), "Nd"(p)); }
 static inline void outw_(uint16_t p, uint16_t v) { __asm__ volatile ("outw %0, %1" : : "a"(v), "Nd"(p)); }
@@ -51,9 +64,34 @@ static inline uint32_t inl_(uint16_t p) { uint32_t v; __asm__ volatile ("inl %1,
 #define ENTRY_FRAMES 512u              /* 32 * 512 = 16384-frame ring (~341ms) */
 #define RING_FRAMES  (NDESC * ENTRY_FRAMES)
 
-static struct { uint32_t addr; uint16_t len, flags; }
-              gBdl[NDESC] __attribute__((aligned(8)));
-static short  gRing[RING_FRAMES * 2] __attribute__((aligned(8)));
+typedef struct { uint32_t addr; uint16_t len, flags; } ac97_bde;
+static ac97_bde gBdlS[NDESC] __attribute__((aligned(8)));
+static short    gRingS[RING_FRAMES * 2] __attribute__((aligned(8)));
+static ac97_bde *gBdl;                 /* what the device is programmed with:  */
+static short    *gRing;                /* below-4GB pages when available, the  */
+                                       /* .bss copies otherwise               */
+
+static void ac97_buf_init(void)
+{
+    EFI_SYSTEM_TABLE *ST;
+    if (gRing) return;                              /* once per boot           */
+    ST = (EFI_SYSTEM_TABLE *)uno_pc64_st();
+    if (ST) {
+        unsigned long long mem = 0x00000000FFFFF000ull;  /* ceiling: below 4GB */
+        UINTN bytes = sizeof gBdlS + 128 + sizeof gRingS;
+        UINTN pages = (bytes + 4095) / 4096;
+        if (((EFI_ALLOC_PAGES)ST->BootServices->AllocatePages)(
+                1 /*AllocateMaxAddress*/, 2 /*EfiLoaderData*/, pages, &mem)
+            == EFI_SUCCESS) {
+            uint8_t *base = (uint8_t *)(uintptr_t)mem;
+            UINTN i;
+            for (i = 0; i < bytes; i++) base[i] = 0;     /* fresh pages: play  */
+            gBdl  = (ac97_bde *)base;                    /* silence, not junk  */
+            gRing = (short *)(base + ((sizeof gBdlS + 127) & ~(UINTN)127));
+        }
+    }
+    if (!gRing) { gBdl = gBdlS; gRing = gRingS; }   /* the old behaviour       */
+}
 
 static uint16_t gNam, gNabm;
 static int gUp;
@@ -75,6 +113,7 @@ int uno_ac97_init(void)
     pci_dev d; unsigned i; uint16_t cmd;
     uint64_t b0, b1;
 
+    ac97_buf_init();
     if (!pci_find_class(0x04, 0x01, &d)) return 0;
     cmd = pci_cfg_read16(&d, 0x04);              /* I/O decode + bus master    */
     pci_cfg_write16(&d, 0x04, cmd | 0x5);
@@ -108,7 +147,8 @@ int uno_ac97_init(void)
     return 1;
 }
 
-short *uno_ac97_ring(unsigned *frames) { *frames = RING_FRAMES; return gRing; }
+short *uno_ac97_ring(unsigned *frames)
+{ if (!gRing) ac97_buf_init(); *frames = RING_FRAMES; return gRing; }
 
 unsigned uno_ac97_pos(void)
 {
