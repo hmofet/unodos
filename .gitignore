@@ -113,3 +113,8 @@ csslib/test/build/
 
 # per-WAD Duum golden baselines are local, like upstream keeps them
 pc64/tools/duum_golden.json
+
+# QEMU audio captures dropped at the repo ROOT by the demo/audio harnesses
+# (-audiodev wav,path=...). Anchored with a leading slash so the real audio
+# assets under <port>/shots/ are untouched.
+/*.wav
