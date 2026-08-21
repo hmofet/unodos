@@ -96,14 +96,31 @@ done
 # browser can be a cached page or an error page misread at a glance; a title
 # fetched by a different program entirely says the guest reached the
 # internet through the bridge, in one line, before Chromium is asked to.
+#
+# TWO SEPARATE CLAIMS, because they fail for different reasons and a single
+# "it did not work" cannot tell them apart: whether packets reach the
+# internet at all (an IP with no name in it), and whether names resolve.
+UNO_SITE=${UNO_SITE:-unodos.arinbakht.com}
 n=0
 while [ $n -lt 20 ]; do
-  T=$(wget -q -T 10 -O - http://example.com 2>/tmp/wget.err \
-      | tr -d '\n' | grep -o '<title>[^<]*' | head -c 48)
-  if [ -n "$T" ]; then echo "uno: fetch OK $T" > /dev/ttyS0; break; fi
+  if wget -q -T 10 -O /dev/null http://1.1.1.1/ 2>/tmp/wget.err; then
+    echo "uno: ip-ok (reached 1.1.1.1 through the bridge)" > /dev/ttyS0
+    break
+  fi
   n=$((n + 1))
-  echo "uno: fetch failed ($n) $(head -c 50 /tmp/wget.err | tr '\n' ' ')" \
-      > /dev/ttyS0
+  echo "uno: ip failed ($n) $(head -c 50 /tmp/wget.err | tr '\n' ' ')" > /dev/ttyS0
+  sleep 3
+done
+n=0
+while [ $n -lt 20 ]; do
+  A=$(nslookup "$UNO_SITE" 2>/dev/null | grep -A2 "^Name:" | grep -o \
+      '[0-9]\+\.[0-9]\+\.[0-9]\+\.[0-9]\+' | head -1)
+  if [ -n "$A" ]; then
+    echo "uno: dns-ok $UNO_SITE -> $A" > /dev/ttyS0
+    break
+  fi
+  n=$((n + 1))
+  echo "uno: dns failed ($n)" > /dev/ttyS0
   sleep 3
 done
 
@@ -120,7 +137,7 @@ done
 # the page somebody asked for - 20,213 frames arrived on the first bridged run
 # and none of them were the website.  Every flag below turns off traffic
 # nobody asked for; none of them touch rendering.
-URL=${UNO_URL:-http://example.com}
+URL=${UNO_URL:-https://$UNO_SITE/}
 while :; do
     xinit /usr/bin/chromium \
         --no-sandbox --disable-gpu --disable-dev-shm-usage \
@@ -159,7 +176,14 @@ case "$1" in
     for r in $router; do
         ip route add default via "$r" dev "$interface" 2>/dev/null && break
     done
+    # A PUBLIC RESOLVER FIRST, then whatever DHCP offered.  The offered one
+    # here is the emulator's own proxy, which forwards to the host's resolver
+    # - and that resolver is somebody else's LAN box, which on this rig
+    # answers for some names and not others (example.com resolved nowhere
+    # while cloudflare.com resolved fine).  A guest that inherits a broken
+    # resolver looks exactly like a guest with no network at all.
     : > /tmp/resolv.conf
+    echo "nameserver 1.1.1.1" >> /tmp/resolv.conf
     for s in $dns; do echo "nameserver $s" >> /tmp/resolv.conf; done
     ;;
 esac
