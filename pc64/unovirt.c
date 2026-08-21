@@ -654,6 +654,10 @@ int uno_vmm_selftest(void)
                      "; linux: %ld KB placed, %s",
                      g_lin.loaded / 1024, placed ? "running" : "REFUSED");
             g_lin_armed = placed;
+            /* On the wire from the moment it is armed.  The link is resolved
+             * lazily inside the bridge, because at THIS point in the boot
+             * there is not one yet - the network comes up later. */
+            if (placed) uno_vnet_bridge_start(0);
             snprintf(g_lin_str, sizeof g_lin_str, "starting");
         }
     }
@@ -732,9 +736,12 @@ void uno_vmm_tick(void)
          * still on a 16 K boundary would otherwise log every frame. */
         if ((g_lin.exits & 0x3FFF) == 0 && g_lin.exits != logged_exits) {
             logged_exits = g_lin.exits;
-            uno_dbg_log("vm linux: %d exits %d pio, sitting on port %x, "
-                        "%d lines", g_lin.exits, g_lin.pio, g_lin.last_port,
-                        g_lin.lines);
+            {   char w[64];
+                uno_vnet_bridge_str(w, (int)sizeof w);
+                uno_dbg_log("vm linux: %d exits %d pio, sitting on port %x, "
+                            "%d lines, %s", g_lin.exits, g_lin.pio,
+                            g_lin.last_port, g_lin.lines, w);
+            }
         }
         if (g_lin.lines != lines || !g_lin_armed) {
             /* `shell` is the claim worth making and the only one that needs
