@@ -203,6 +203,19 @@ const char *uno_vm_path_initrd(void)
 const char *uno_vm_path_disk(void)
 { return (g_run >= 0) ? pick(G[g_run].disk) : ""; }
 
+/* ---- the display (A8) -----------------------------------------------------
+ * Thin wrappers, because the manager surface is what APPLICATIONS consume:
+ * a module links uno_vm_*, and how a framebuffer or a keystroke reaches the
+ * machinery below is this file's business, not the app's. */
+void *uno_vm_fb(int *w, int *h) { return uno_vmm_fb(w, h); }
+void uno_vm_input_char(int ch) { uno_vdev_kbd_char(ch); }
+void uno_vm_input_scan(int efi_scan) { uno_vdev_kbd_scan(efi_scan); }
+void uno_vm_input_mouse(int dx, int dy, unsigned buttons, int wheel)
+{ uno_vdev_mouse(dx, dy, buttons, wheel); }
+int uno_vm_input_str(char *buf, int cap)
+{ return uno_vdev_input_str(buf, cap); }
+const char *uno_vm_progress(void) { return uno_vmm_linux_str(); }
+
 int uno_vm_start(int i)
 {
     unsigned blockers = 0;
