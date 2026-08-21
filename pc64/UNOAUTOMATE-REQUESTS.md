@@ -9681,3 +9681,137 @@ vectors rather than edit `pc64_spectest.c` from this lane.
 **Open, and honest about it:** SAE is verified against an independent Python
 model of the 802.11 text and against itself, and has NOT yet completed a join
 against a real AP. It is `[EXPERIMENTAL]` in the contract until it has.
+
+## 2026-08-21 - conformance defects from the 2026-08-20 metal run: FIXED
+
+Everything the pre-launch metal run left open is fixed and verified in QEMU,
+except the two items explicitly held back: **WPA3/PMF**, which the wifi
+supplicant lane has since landed in its own right (see its 2026-08-20 entry
+above), and the **Yoga's ethernet latency climb**, which is Yoga-specific and
+deferred by the user. Each
+fix below has a before/after screenshot or measurement from the same probe, so
+"fixed" means the defect was reproduced first and then stopped reproducing.
+
+### The two that mattered at launch
+
+1. **Start menu > Power > Restart never dispatched** - and neither did Tile,
+   Cascade, Minimize all or Shut Down. The Start menu's right pane is a SECOND
+   canvas widget and it was declared with a null event function
+   (`{ sysmenu_draw, 0, 0 }`) on the reasoning that "a canvas only gets events
+   while it is the focused widget", so the left canvas could take input for
+   both. That is true of KEYS and false of the POINTER: unoui delivers a press
+   to the widget it LANDS ON (`hit_widget`), so every right-pane click hit the
+   draw-only canvas, was swallowed, and took the focus with it - which is why
+   Enter on the highlighted row was inert afterwards too. The entire right-pane
+   branch of `launcher_event` was unreachable code. Both canvases now carry the
+   handler. Verified: clicking Tile tiles; clicking Restart takes uptime from
+   66,866 ms to 18,851 ms.
+   **This also explains the "menu items need a ~1.2 s press hold" note.** There
+   is no hold threshold. The right pane was dead at every duration, and the
+   0.18 s press `urcui.click` uses activates Restart first time.
+
+2. **A Python app whose `draw()` raises reported nothing.** `call1` caught the
+   exception into `pyrt_out` and then discarded it: `rdbg_out` reaches only the
+   0x402 debug port, only in a `UNO_DBGCON` build, and only on the first frame.
+   PYRT now keeps the traceback, PAINTS it into the app's own canvas, logs the
+   exception line to unolog at `LOG_ERR`/`LF_APP`, and stops calling `draw()`
+   (a raising draw raises 60 times a second). `py_unload` clears the latch, so
+   a re-run starts clean. Before: an empty window and silence. After: the
+   window reads `AttributeError: 'Canvas' object has no attribute ...`.
+
+### Session restore reopening Control Panel
+
+Not reproducible in QEMU - a three-app session restores correctly there - so
+this is environment-specific, and the demonstrable defect underneath it is a
+**save/load disagreement about which volume owns the file**. `session_vol()`
+deliberately binds SHELL.CFG to the boot volume; the reader scanned from
+volume 0 and took the first SHELL.CFG it found. On a machine with more than one
+volume carrying one (the ZimaBlade has three), the shell restores from a file
+it is not the one writing, so a stale copy on a lower-numbered disk wins every
+boot and the file you inspect is not the file that was loaded. The reader now
+asks `session_vol()` first and only then falls back to the scan. A second
+certain bug in the same path: the writer built up to 2048 bytes and the reader
+read at most 1023, so a session with a few apps open had its geometry / snap /
+desktop / parked lines silently truncated. One `SHELL_CFG_MAX` now.
+
+### Fullscreen apps did not give the resolution back (found by the user, not the run)
+
+Runner3D drops the framebuffer to a quarter of the panel in each axis while it
+owns the screen. `uno_pc64_lowres(0)` lived only in the game's CLOSE path,
+while EIGHT places drop a window out of fullscreen: Esc, F12, Alt+D, a
+virtual-desktop switch, moving a window between desktops, minimize, "minimize
+all", and close. Every route but the last left the desktop at ~1/16 the pixels
+with the game still running and painting straight into fb over the top. The
+conformance run recorded this as passing because it closed Runner3D with the
+title-bar close box - the one route that worked.
+
+Fixed by making fullscreen have ONE door in and one out (`shell_full_enter` /
+`shell_full_leave`), which tell the game about the transition both ways
+(`pc64_game_fullscreen`), so no route can miss it. Esc on a native game now
+QUITS it rather than un-fullscreening it: the game's own HUD says "Esc quit",
+it paints into the framebuffer rather than its window rect, and a windowed
+Runner3D scribbles over the desktop. Unparking a native game re-enters
+fullscreen for the same reason. Measured before: `after Esc: (320, 200)` with
+Runner3D still open. After: `(640, 400)`, closed.
+
+### Minor and deferred items, all closed
+
+- **Control Panel > Audio drew the value over its label.** The tab used the
+  panel-wide label column, which is sized to `"Resolution:"` for the Display
+  tab; `"Output device:"` is wider. It now measures its own labels, as every
+  other tab with a long label already did. Before: `Output devicPC speaker
+  (PIT)`. After: `Output device: PC speaker (PIT)`.
+- **The office Open dialog "File name" field ignored typed input.**
+  `uof_sync` copied the selected list row into the field on EVERY sync, and it
+  is called immediately after `uod_handle` for every event - so each character
+  was inserted and overwritten before it could be painted. It now mirrors only
+  when the list has the focus AND the row actually changed. The dialog had no
+  keyboard path at all, so this was an accessibility defect as much as a
+  harness one. Before: typing `ABC` left `README.TXT`. After: `ABC`.
+  The note in `tools/uoffice_ooxml_urc.py` about the field being unusable is
+  updated.
+- **Studio opened binary `.UNO` files in the text editor as garbage.** It now
+  sniffs the first 512 bytes (a NUL is decisive, otherwise >3% control bytes)
+  and refuses, leaving the open document alone and saying why. Worth noting
+  what the old behaviour risked: the editor would happily SAVE the mojibake
+  back, and `ed_buf` is NUL-terminated, so a save truncated the module at its
+  first zero byte.
+- **`nst` reported `connA=0 connB=0 accepted=-1` on a box whose networking
+  worked.** THIS IS A CHANGE IN unoautomate's OWN FILE (`unoauto_remote.c`) -
+  filed here rather than only in the commit, per AGENTS.md section 2/4. The
+  verb dials 10.0.2.2, which is the QEMU SLIRP gateway and nothing at all on
+  real hardware, and its inbound half needs a QEMU hostfwd; so on metal it was
+  reporting "nobody answered" in a shape that reads as "the stack is broken".
+  It now echoes the target it dialled, says what a zero means, and takes an
+  optional third argument `nst <p1> <p2> [a.b.c.d]` so it can be pointed at a
+  real peer. Defaults unchanged, so `tools/netsock_qemu.py` is unaffected (it
+  parses per-line `key=value` and simply gains two lines).
+- **The two unguarded boot-services sites filed on 2026-08-20** (`blkdev.c
+  fw_scan`, `installer.c bind`) now ask `uno_pc64_detached()` before touching
+  `ST->BootServices`, as `acpi_host.c` does. Belt and braces - both are already
+  unreachable post-detach through their callers - but that was exactly the
+  argument that made `arena_init_lowmem` crash-loop a Yoga.
+
+### One more, found while fixing Restart
+
+**`power_down()` never called the firmware ResetSystem on the RESET path.**
+The ordering note above the function states plainly that ResetSystem is the
+LAST resort for a reset ("a hang costs nothing we still needed"), but when it
+was moved out of first place the call ended up inside an `if (off)` block that
+only runs for POWER-OFF. So a machine whose CF9, i8042 pulse and FADT reset
+register are all ignored printed "Restart failed - hold the power button"
+without ever asking the firmware - the one mechanism left that might have
+worked. The reset path now calls `ResetSystem(EfiResetCold)` after the operator
+message, exactly where the comment always said it belonged.
+
+### For whoever repeats the run
+
+The QEMU harness needs one thing the existing helpers do not do:
+`UnoAutoLink._accept_loop` blocks inside `_reader(c)` for the CURRENT
+connection, so after a guest reset the host never returns to `accept()` and the
+box looks like it never came back. Close the old socket (`shutdown` then
+`close`) before waiting, and clear `_connected`. Every "the guest never dialled
+back in" scare in this session was that, not the guest. Also note the guest
+RE-DIALS when its link drops without rebooting, so `_connected` alone cannot
+tell a reconnect from a reboot - compare `uptime`, and idle long enough first
+that the two are unmistakable.
