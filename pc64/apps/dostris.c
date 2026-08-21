@@ -61,7 +61,14 @@ static void dt_clear_lines(void){
             for(rr=r;rr>0;rr--) memcpy(gDtBoard[rr],gDtBoard[rr-1],DT_COLS);
             memset(gDtBoard[0],0,DT_COLS);} }
     if(n){ gDtScore+=kDtLineScore[n]*(gDtLevel+1); gDtLines+=n;
-        gDtLevel=(short)(gDtLines/10)+1; if(gDtLevel>15)gDtLevel=15; }
+        gDtLevel=(short)(gDtLines/10)+1; if(gDtLevel>15)gDtLevel=15;
+        /* The line-clear blip, recovered from the native pc64_games.c copy
+           before that copy was deleted.  music_note_on is the KernelApi's
+           one-shot note - literally the uno_seq_beep the native build fired -
+           so it borrows the single square voice for 5 ticks and Korobeiniki
+           resumes underneath.  Without it the one event worth hearing was
+           silent and only the looping theme played. */
+        music_note_on(88, 5); }
 }
 static void dt_lock(void){
     short i; const signed char *sh=kDtShape[gDtPiece][gDtRot];
