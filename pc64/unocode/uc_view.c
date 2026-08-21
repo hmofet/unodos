@@ -210,6 +210,15 @@ static void icon_ext(int x, int y, int s, fb_px c)
     fb_frame_rect(x + s/8, y + s/8 + q + 2, q, q, c);
     fb_fill_rect(x + s/8 + q + 2, y + s/8 + q + 2, q, q, c);
 }
+static void icon_chat(int x, int y, int s, fb_px c)
+{
+    fb_frame_rect(x + s/8, y + s/8, s*3/4, s/2 + 3, c);   /* the bubble      */
+    fb_vline(x + s/4, y + s/8 + s/2 + 3, s/5, c);         /* the tail        */
+    fb_hline(x + s/4, y + s/8 + s/2 + 2 + s/5, s/8 + 1, c);
+    fb_hline(x + s/4, y + s/4 + 2, s/2 - 3, c);           /* two text lines  */
+    fb_hline(x + s/4, y + s/4 + 6, s/3, c);
+}
+
 static void icon_gear(int x, int y, int s, fb_px c)
 {
     fb_frame_rect(x + s/4, y + s/4, s/2, s/2, c);
@@ -236,6 +245,7 @@ void uc_activity_draw(UcRect r)
         case UC_VIEW_SCM:        icon_scm(ix, iy, 22, c); break;
         case UC_VIEW_RUN:        icon_run(ix, iy, 22, c); break;
         case UC_VIEW_EXTENSIONS: icon_ext(ix, iy, 22, c); break;
+        case UC_VIEW_ASSIST:     icon_chat(ix, iy, 22, c); break;
         default: break;
         }
         /* the Explorer badge counts unsaved editors, the way VS Code's does */
@@ -433,6 +443,7 @@ static const char *view_title(int v)
     case UC_VIEW_SCM:        return "SOURCE CONTROL";
     case UC_VIEW_RUN:        return "RUN AND DEBUG";
     case UC_VIEW_EXTENSIONS: return "EXTENSIONS";
+    case UC_VIEW_ASSIST:     return "CHAT";
     default: return "";
     }
 }
@@ -664,6 +675,7 @@ void uc_sidebar_draw(UcRect r)
     case UC_VIEW_SCM:        sidebar_scm(body); break;
     case UC_VIEW_RUN:        sidebar_run(body); break;
     case UC_VIEW_EXTENSIONS: sidebar_ext(body); break;
+    case UC_VIEW_ASSIST:     uc_ai_draw(body); break;
     default: break;
     }
     fb_reset_clip();
@@ -697,11 +709,13 @@ int uc_sidebar_event(UcRect r, const unoui_event *e)
         } else if (UC.view == UC_VIEW_SEARCH) {
             g_hitscroll += e->wheel * 3;
             if (g_hitscroll < 0) g_hitscroll = 0;
-        }
+        } else if (UC.view == UC_VIEW_ASSIST)
+            return uc_ai_event(r, e);
         return 1;
     }
     if (e->kind != UI_EV_MOUSE_DOWN) return 0;
     uc_focus(UC_F_SIDEBAR);
+    if (UC.view == UC_VIEW_ASSIST) return uc_ai_event(r, e);
     if (UC.view == UC_VIEW_EXPLORER) {
         int k = g_expscroll + (e->y - (r.y + th + rh)) / rh;
         if (e->y < r.y + th + rh) return 1;              /* the folder header */
@@ -736,6 +750,7 @@ int uc_sidebar_event(UcRect r, const unoui_event *e)
 int uc_sidebar_key(int key, int mods, int ch)
 {
     (void)mods;
+    if (UC.view == UC_VIEW_ASSIST) return uc_ai_key(key, mods, ch);
     if (UC.view == UC_VIEW_EXPLORER) {
         if (key == UI_KEY_UP)   { if (g_expsel > 0) g_expsel--; return 1; }
         if (key == UI_KEY_DOWN) { if (g_expsel < g_nexp - 1) g_expsel++; return 1; }

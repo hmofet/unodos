@@ -80,6 +80,8 @@ a parser that rejected that would reject the files people actually write.
     "publisher": "you",
     "main": "MAIN.JS",                    // omit for a declarative extension
     "activationEvents": ["onCommand:hello.sayHello"],
+    "permissions": ["languageModels"],    // only if vscode.lm is used - see 2.4
+
     "contributes": {
         "commands":    [{ "command": "id", "title": "Title", "category": "Cat" }],
         "keybindings": [{ "key": "ctrl+k h", "command": "id", "when": "editorTextFocus" }],
@@ -158,6 +160,11 @@ vscode.workspace.name / .rootPath
 vscode.workspace.getConfiguration(section)   // .get(key, dflt) .update(key, v)
 vscode.workspace.openTextDocument(path)
 vscode.workspace.fs.readFile(path) / .writeFile(path, text)
+vscode.workspace.fs.readDirectory(path)      // -> [[name, type], ...]; 1 file,
+                                             //    2 directory; "" = the root
+vscode.workspace.canRunPrograms              // can this platform launch one?
+vscode.workspace.runUserProgram(path)        // "" = launched; else the reason
+                                             // (on pc64, the Python error)
 vscode.workspace.onDidSaveTextDocument(fn)   // also onDidOpen / onDidChange
 
 vscode.languages.registerCompletionItemProvider(selector, provider)
@@ -168,6 +175,16 @@ vscode.languages.registerCompletionItemProvider(selector, provider)
 context.secrets.store(name, value)           // -> thenable
 context.secrets.get(name)                    // -> thenable of string|undefined
 context.secrets.delete(name)                 // -> thenable
+
+// the model - REQUIRES "languageModels" in PACKAGE.JSN "permissions"
+vscode.lm.selectChatModels()                 // -> thenable of [model]
+model.sendRequest(messages)                  // -> a response object
+    // messages: strings, {role, content} objects, or
+    // vscode.LanguageModelChatMessage.User(s) / .Assistant(s)
+response.onText(fn)                          // fn(delta) per chunk
+response.onDone(fn)                          // fn(fullText) at the end
+response.onError(fn)                         // fn(message) on any failure
+response.cancel()                            // tear the exchange down
 
 vscode.Position(line, character)   vscode.Range(l1, c1, l2, c2)
 console.log / .info / .warn / .error      -> the "Extension Host" output channel
@@ -182,6 +199,18 @@ console.log / .info / .warn / .error      -> the "Extension Host" output channel
 2. **`require` resolves only `'vscode'`.** There is no module resolver and no
    `node_modules`; anything else throws immediately rather than failing later
    and less clearly.
+
+**`vscode.lm`** is the model API in `vscode.lm`'s shape, and it is GATED: an
+extension host that can reach a model can leak a workspace into a prompt, and
+`EXT\` is a folder anyone can drop a file into - so reaching the model is a
+privilege declared in the manifest (`"permissions": ["languageModels"]`), the
+file a user can read before enabling anything. An undeclared caller is refused
+with an Error that names the missing declaration. Deviations from VS Code:
+there is ONE model (the `ai.model` setting; the selector argument is
+ignored), ONE request at a time, and the response streams through
+`onText`/`onDone`/`onError` callbacks rather than an async iterator - there
+is no event loop to build one on. The key is UCD-48's `anthropic.key`; no
+key is an Error at `sendRequest`, worded to say how to set one.
 
 **`context.secrets`** is `SecretStorage`'s shape with its trust model stated
 rather than implied. Names are prefixed with the extension's identity by the
@@ -391,3 +420,12 @@ typed into a *document*.
   platform's own store, the `AI: Set API Key` / `AI: Clear API Key` commands
   with a masked input box, and the store named on screen whenever a key is
   saved. Keys never enter `SETTINGS.JSN`.
+- **1.2** (2026-08-21) The assistant view (UCD-49): a sixth activity-bar view
+  holding a streaming chat, code blocks in the editor's grammars, and edits
+  proposed as a diff before they are applied as one undo step. `vscode.lm`
+  (UCD-50): the model for extensions, behind the `languageModels` manifest
+  permission. The Assistant extension (UCD-51, `EXT\ASSIST`): an agentic
+  loop with read_file / write_file / list_dir - and run where the platform
+  can (`workspace.canRunPrograms`) - every write shown as a diff and applied
+  only on consent. Its tool protocol is documented at the top of its
+  `MAIN.JS`, which is also the worked example of `vscode.lm`.
