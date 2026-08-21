@@ -508,9 +508,13 @@ static void ol_tick(void)
  * auto-fullscreens. uno_pc64_lowres(1) drops the render res for a playable
  * frame-rate on the software rasteriser; open/close manage uno3d + the res. */
 static int gRnInit, gRnL, gRnR;
+/* (Re)build uno3d for the CURRENT framebuffer size.  The mode switch is NOT
+ * done here any more - the shell owns it through pc64_game_fullscreen below,
+ * because entering and leaving fullscreen are the two moments the render size
+ * changes and only the shell knows about both.  This runs lazily from
+ * rn_frame, so it always initialises at whatever size is live by then. */
 static void rn_start(void)
 {
-    uno_pc64_lowres(1);
     u3d_use_backend(&u3d_backend_intel);
     game_init(FB_W, FB_H); u3d_init(FB_W, FB_H);
     gRnInit = 1; gRnL = gRnR = 0;
@@ -549,7 +553,9 @@ static int rn_event(struct unoui_widget *w, const void *ev, void *ctx)
 static void rn_close(void)
 {
     if (gRnInit) { u3d_shutdown(); gRnInit = 0; }
-    uno_pc64_lowres(0);
+    uno_pc64_lowres(0);      /* belt and braces: lowres is idempotent, and a
+                                close that arrives without a fullscreen-leave
+                                must still hand the resolution back */
 }
 
 /* ------------------------------------------------------ registry ----------- */
@@ -573,9 +579,32 @@ void pc64_game_open(int game)
     if (game == GAME_DOSTRIS)      { dtState = 0; dt_new(); }
     else if (game == GAME_PACMAN)  { gPmState = PM_TITLE; }
     else if (game == GAME_OUTLAST) { gOlState = 0; }
-    else if (game == GAME_RUNNER)  { rn_start(); }
+    else if (game == GAME_RUNNER)  { if (gRnInit) { u3d_shutdown(); gRnInit = 0; } }
+                                   /* built lazily, AFTER the shell has taken
+                                      the screen and set the render size */
 }
 void pc64_game_close(int game) { uno_seq_stop(); if (game == GAME_RUNNER) rn_close(); }
+
+/* THE RESOLUTION FOLLOWS FULLSCREEN, not the app's lifetime.
+ *
+ * uno_pc64_lowres(1) used to be called from rn_start and undone only in
+ * rn_close, so the low render mode was tied to Runner3D being OPEN.  But the
+ * shell drops a window out of fullscreen for eight different reasons and only
+ * one of them closes it - Esc, Alt+D, a virtual-desktop switch, minimize,
+ * "minimize all", moving the window to another desktop, F12, and finally
+ * close.  Every route but the last left the desktop at a QUARTER of its
+ * resolution with the game still running.  Tying the mode to fullscreen
+ * instead means there is no route that can miss it.
+ *
+ * The uno3d pipeline is torn down on both edges: it is built for one fixed
+ * framebuffer size, so a mode change under it must be a rebuild, not a resize.
+ * rn_frame does that on the next frame. */
+void pc64_game_fullscreen(int game, int on)
+{
+    if (game != GAME_RUNNER) return;
+    uno_pc64_lowres(on ? 1 : 0);
+    if (gRnInit) { u3d_shutdown(); gRnInit = 0; }
+}
 void pc64_game_tick(int game)
 {
     if (game == GAME_DOSTRIS)      dt_tick();

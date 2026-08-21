@@ -1382,15 +1382,23 @@ static void build_ctrl(unoui_window *w)
         }
         break; }
 
-    case CT_AUDIO:
+    case CT_AUDIO: {
+        /* This tab's own label column, not the panel-wide `lw`.  `lw` is sized
+         * to "Resolution:" for the Display tab, and "Output device:" is wider
+         * than that - so the device name was drawn ON TOP of its own label
+         * (metal conformance, 2026-08-20).  Every other tab that has a label
+         * longer than the Display tab's already measures its own; this one was
+         * the exception.  Measure BOTH labels, so neither row can collide. */
+        int lwa = fb_text_w("Output device:") + 12;
+        if (fb_text_w("Volume:") + 12 > lwa) lwa = fb_text_w("Volume:") + 12;
         unoui_add_label(w, 8, y + lofs, "Volume:");
-        x = unoui_add_slider(w, lw, y, cw - lw - 8, 0, 100, g_pref_vol); x->id = ID_VOL;
+        x = unoui_add_slider(w, lwa, y, cw - lwa - 8, 0, 100, g_pref_vol); x->id = ID_VOL;
         y += row + 4;
         unoui_add_label(w, 8, y + lofs, "Output device:");
-        unoui_add_label(w, lw, y + lofs,
+        unoui_add_label(w, lwa, y + lofs,
                         uno_snd_active() ? uno_snd_name() : "PC speaker (PIT)");
         y += row;
-        break;
+        break; }
 
     case CT_DATETIME: {
         int hh = 0, mi = 0;
@@ -2380,12 +2388,20 @@ static void wm_note_focus(int a)
  * route back to the app must unpark first, which open_app does. */
 static int g_parked[APPS_MAX];
 
+static int  app_game(int a);            /* below */
+static void shell_full_enter(int a);    /* below */
+
 static void wm_unpark(int a)
 {
     if (a < 0 || a >= NAPPS || !g_open[a] || !g_parked[a]) return;
     g_parked[a] = 0;
     unoui_ui_add(&UI, &g_win[a]);
     raise_win(&g_win[a]);
+    /* a native game comes back the way it went: FULLSCREEN. It paints into the
+     * framebuffer rather than into its window rect, so a restored-but-windowed
+     * one draws over the desktop - and the render resolution it wants is the
+     * fullscreen one. Parking dropped both; unparking puts both back. */
+    if (app_game(a) >= 0) shell_full_enter(a);
     g_dirty = 1;
 }
 static void wm_park(int a)
@@ -3067,11 +3083,13 @@ static int userapp_event(struct unoui_widget *w, const void *ev, void *ctx)
     return 0;
 }
 
+static void shell_full_escape(void);      /* the one way out - see below */
+
 static int lcanvas_event(struct unoui_widget *w, const void *ev, void *ctx)
 {
     const unoui_event *e = (const unoui_event *)ev; (void)w;
     if (UI.full && e->kind == UI_EV_KEY && e->key == UI_KEY_ESC) {
-        unoui_fullscreen(&UI, 0); g_dirty = 1; return 1;   /* leave fullscreen */
+        shell_full_escape(); g_dirty = 1; return 1;        /* leave fullscreen */
     }
     if (unoapp_input(*(int *)ctx, e)) { g_dirty = 1; return 1; }
     return 0;
@@ -3086,6 +3104,50 @@ static int app_game(int a)
     int g = (a == EX_RUNNER) ? GAME_RUNNER : -1;
     return (g >= 0 && pc64_game_canvas(g)) ? g : -1;
 }
+
+/* ---- fullscreen: ONE door in, ONE door out --------------------------------
+ * `unoui_fullscreen(&UI, 0)` was called from EIGHT places (Esc, F12, Alt+D,
+ * a virtual-desktop switch, moving a window between desktops, minimize,
+ * "minimize all", and close), which is fine while fullscreen is only a
+ * window-manager state - and wrong the moment it also means a RESOLUTION.
+ *
+ * Runner3D drops the framebuffer to a quarter of the panel in each axis while
+ * it owns the screen so the software rasteriser can hold 60 fps, and only the
+ * CLOSE path put that back. Every other route left the desktop rendering at
+ * ~1/16 the pixels with a game still live and drawing straight into fb over
+ * the top of it. Esc is the one a user actually hits, and the game's own HUD
+ * says "Esc quit", so that was the common way to get a permanently shrunken
+ * desktop. (Not caught by the metal conformance run, which closed Runner3D
+ * with the title-bar close box - the one route that happened to work.)
+ *
+ * So: nothing calls unoui_fullscreen() directly any more. These two do, and
+ * they tell the game about the transition in both directions. */
+static int g_full_app = -1;               /* the app UI.full belongs to, or -1 */
+
+/* which app slot owns this window, or -1 (a module hands us a window, not an
+ * index - see pc64_shell_fullscreen) */
+static int app_of_win(const unoui_window *w)
+{ int a; for (a = 0; a < NAPPS; a++) if (&g_win[a] == w) return a; return -1; }
+
+static void shell_full_enter(int a)
+{
+    if (a < 0 || a >= NAPPS) return;
+    unoui_fullscreen(&UI, &g_win[a]);
+    g_full_app = a;
+    if (app_game(a) >= 0) pc64_game_fullscreen(app_game(a), 1);
+}
+
+static void shell_full_leave(void)
+{
+    int a = g_full_app;
+    if (!UI.full) { g_full_app = -1; return; }
+    unoui_fullscreen(&UI, 0);
+    UI.focus_wi = 0;
+    g_full_app = -1;
+    if (a >= 0 && a < NAPPS && app_game(a) >= 0)
+        pc64_game_fullscreen(app_game(a), 0);    /* hand the resolution back */
+}
+
 /* a mac_compat-bridge app (Music/Tracker/Paint/Network - not a native game/browser) */
 static int app_is_bridge(int a)
 { int li = a - NNATIVE; return a >= NNATIVE && li >= 0 && li < UNOAPP_COUNT && app_game(a) < 0; }
@@ -3296,7 +3358,7 @@ static void open_app(int a)
         { int wi = g_pyapp->canvas_index(); if (wi >= 0) UI.focus_wi = wi; }
     /* native games scale to any rect, so they can fill the screen (Esc returns).
      * Bridge apps + the browser stay windowed (they draw at a fixed size). */
-    if (app_game(a) >= 0) unoui_fullscreen(&UI, &g_win[a]);
+    if (app_game(a) >= 0) shell_full_enter(a);
     wm_note_focus(a);                    /* MRU: this is now the front window */
     g_dirty = 1;
 }
@@ -3692,7 +3754,7 @@ static int g_showdesk;
 static void wm_show_desktop(void)
 {
     int a, n = 0;
-    if (UI.full) { unoui_fullscreen(&UI, 0); UI.focus_wi = 0; }
+    if (UI.full) shell_full_leave();
     if (g_launch_open) { remove_win(&g_launch); g_launch_open = 0; }
     if (g_cal_open)    { remove_win(&g_cal);    g_cal_open = 0;    }
     if (g_showdesk) {
@@ -3785,7 +3847,7 @@ static void wm_desk_switch(int d)
     if (d < 0 || d >= NDESK || d == g_cur_desk) return;
     /* A fullscreen game pins its desktop: leave fullscreen first, or a window
      * that is not on the incoming desktop would still be covering it. */
-    if (UI.full) { unoui_fullscreen(&UI, 0); UI.focus_wi = 0; }
+    if (UI.full) shell_full_leave();
     if (g_launch_open) { remove_win(&g_launch); g_launch_open = 0; }  /* popovers */
     if (g_cal_open)    { remove_win(&g_cal);    g_cal_open = 0;    }  /* close    */
     g_showdesk = 0;                 /* that show-desktop set was the old desktop's */
@@ -3810,7 +3872,7 @@ static void wm_desk_move(int a, int d, int follow)
     int i, j, n;
     if (a < 0 || a >= NAPPS || !g_open[a] || d < 0 || d >= NDESK) return;
     if (g_desk_of[a] == d) { if (follow) wm_desk_switch(d); return; }
-    if (UI.full == &g_win[a]) { unoui_fullscreen(&UI, 0); UI.focus_wi = 0; }
+    if (UI.full == &g_win[a]) shell_full_leave();
     wm_desk_capture(g_cur_desk);              /* the outgoing order, intact */
     g_desk_of[a] = (signed char)d;
     for (i = 0; i < NDESK; i++) {             /* drop it from every saved order */
@@ -3840,7 +3902,7 @@ static void minimize_app(int a)
     for (i = 0; i < n; i++) {
         int b = set[i];
         if (g_parked[b]) continue;
-        if (UI.full == &g_win[b]) { unoui_fullscreen(&UI, 0); UI.focus_wi = 0; }
+        if (UI.full == &g_win[b]) shell_full_leave();
         wm_park(b);
     }
     focus_next_mru();
@@ -3897,7 +3959,7 @@ static void close_app(int a)
                                uno_snd_mus_stop(); uno_snd_sfx_stop_all(); }
     else if (a == EX_USERAPP) unoapp_user_close();
     else if (app_is_bridge(a)) unoapp_close(a - NNATIVE); /* bridge app        */
-    if (UI.full == &g_win[a]) unoui_fullscreen(&UI, 0);  /* fullscreen game    */
+    if (UI.full == &g_win[a]) shell_full_leave();        /* fullscreen game    */
     /* the ghost is taken BEFORE the window goes, and outlives nothing but its
      * own rectangle */
     if (!(g_win[a].flags & UI_WIN_BARE)) ghost_start(g_win[a].r);
@@ -3906,6 +3968,25 @@ static void close_app(int a)
     rebuild_taskbar();
     session_save();                     /* remember the open set for next boot */
     g_dirty = 1;
+}
+
+/* Esc (and F12) while something owns the whole screen.
+ *
+ * For a native GAME this is a QUIT, not "back to a window". Runner3D prints
+ * "Esc quit" on its own HUD, and it paints straight into the framebuffer
+ * rather than into its window rect - so a windowed Runner3D draws over the
+ * desktop and is not a state worth returning to. Closing it also runs the real
+ * teardown (uno3d shutdown, the render resolution handed back), which is what
+ * makes Esc and the title-bar close box finally mean the same thing.
+ *
+ * Anything else that went fullscreen deliberately - UnoShow's slide show is
+ * the case - just leaves fullscreen and keeps its window, as before. */
+static void shell_full_escape(void)
+{
+    int a = g_full_app;
+    if (!UI.full) return;
+    if (a >= 0 && a < NAPPS && g_open[a] && app_game(a) >= 0) { close_app(a); return; }
+    shell_full_leave();
 }
 
 static void close_focused(void)
@@ -4033,7 +4114,7 @@ static void wm_cascade(void)
 static void wm_minimize_all(void)
 {
     int list[APPS_MAX], n = wm_tile_list(list), i;
-    if (UI.full) { unoui_fullscreen(&UI, 0); UI.focus_wi = 0; }
+    if (UI.full) shell_full_leave();
     for (i = 0; i < n; i++) wm_park(list[i]);
     if (n) { g_showdesk = 1; focus_next_mru(); rebuild_taskbar(); session_save(); }
     g_dirty = 1;
@@ -4353,9 +4434,17 @@ static int session_vol(void)
     return (n > 0 && uno_fs_writable(0)) ? 0 : -1;
 }
 
+/* ONE size for the file, because the writer and the reader must agree.
+ * session_save built up to 2048 bytes and session_load read at most 1023, so a
+ * session with a few apps open (geometry + snap + icon positions are a line
+ * each) had its tail silently cut off at restore: the windows came back
+ * without their geometry, or their desktop, or their parked state, depending
+ * on where the 1023rd byte fell. */
+#define SHELL_CFG_MAX 2048
+
 static void session_save(void)
 {
-    unsigned char buf[2048]; char *p = (char *)buf; int a, first = 1, v;
+    unsigned char buf[SHELL_CFG_MAX]; char *p = (char *)buf; int a, first = 1, v;
     if (!g_session_ready) return;       /* don't write during boot restore */
     p = ap_str(p, "restore="); *p++ = g_session_restore ? '1' : '0';
     *p++ = '\r'; *p++ = '\n';
@@ -4536,18 +4625,37 @@ static void session_restore_geom(const char *buf, int a)
  *
  * Both are best-effort: a missing file, a missing key or a value this build no
  * longer understands leaves that setting at its default. */
+/* READ IT BACK FROM THE VOLUME THE WRITER CHOSE.
+ *
+ * session_vol() deliberately does NOT take the lowest-indexed writable volume
+ * (see the note there); it binds to the medium the machine booted from. This
+ * reader used to scan from volume 0 and take the first SHELL.CFG it found,
+ * which is a different rule - so on any machine with more than one volume
+ * carrying one, the shell restored from a file it was not the one writing.
+ * A stale SHELL.CFG on a lower-numbered disk then wins every boot, silently
+ * and forever, while the file the user's settings actually go into is never
+ * read. That is the shape of the metal report "SHELL.CFG says restore=1 with
+ * three apps, and exactly one window comes back" (CONFORMANCE-2026-08.md §4):
+ * the file inspected was not the file loaded.
+ *
+ * Ask session_vol() first, then fall back to the scan so a disk that has moved
+ * between boots (or a v2 file written by an older build) is still found. */
 static int prefs_read(unsigned char *buf, long cap)
 {
     int v, n = uno_fs_volumes(); long got = -1;
-    for (v = 0; v < n && got < 0; v++)
+    int pref = session_vol();
+    if (pref >= 0) got = uno_fs_read(pref, "SHELL.CFG", buf, cap - 1);
+    for (v = 0; v < n && got < 0; v++) {
+        if (v == pref) continue;                 /* already tried, and it won */
         got = uno_fs_read(v, "SHELL.CFG", buf, cap - 1);
+    }
     if (got < 0) return 0;
     buf[got] = 0; return 1;
 }
 
 static void prefs_apply_early(void)
 {
-    unsigned char buf[2048]; const char *p;
+    unsigned char buf[SHELL_CFG_MAX]; const char *p;
     if (!prefs_read(buf, (long)sizeof buf)) return;
     p = cfg_line_val((const char *)buf, "res=");
     if (p) {
@@ -4575,7 +4683,7 @@ static void prefs_apply_early(void)
 
 static void prefs_apply_late(void)
 {
-    unsigned char buf[2048]; const char *p;
+    unsigned char buf[SHELL_CFG_MAX]; const char *p;
     if (!prefs_read(buf, (long)sizeof buf)) return;
     p = cfg_line_val((const char *)buf, "theme=");
     if (p) {
@@ -4618,12 +4726,12 @@ static void prefs_apply_late(void)
 /* Boot: reopen the saved session, or fall back to opening the Control Panel. */
 static void session_load(void)
 {
-    unsigned char buf[1024]; long got = -1; int v, n = uno_fs_volumes();
+    unsigned char buf[SHELL_CFG_MAX];
     const char *rp, *op;
-    for (v = 0; v < n && got < 0; v++)
-        got = uno_fs_read(v, "SHELL.CFG", buf, (long)sizeof buf - 1);
-    if (got < 0) { open_app(APP_CTRL); g_session_ready = 1; session_save(); return; }
-    buf[got] = 0;
+    /* the SAME reader the preferences use, so the session and the settings can
+     * never come from two different disks (see prefs_read) */
+    if (!prefs_read(buf, (long)sizeof buf))
+        { open_app(APP_CTRL); g_session_ready = 1; session_save(); return; }
     rp = cfg_line_val((char *)buf, "restore=");
     if (rp) g_session_restore = (*rp == '0') ? 0 : 1;
     if (!g_session_restore) { open_app(APP_CTRL); g_session_ready = 1; return; }
@@ -4955,11 +5063,29 @@ static int launcher_event(struct unoui_widget *w, const void *ev, void *ctx)
     if (row >= 0 && row < menu_vis()) { menu_activate(g_menu_scroll + row); return 1; }
     return 0;
 }
-/* ONE canvas takes the input for both panes: a canvas only gets events while
- * it is the focused widget, and the focus cannot be in two places. It splits
- * the click by x (above); the right pane's canvas draws only. */
+/* ONE HANDLER for both panes - and BOTH canvases must carry it.
+ *
+ * This used to read "a canvas only gets events while it is the focused widget,
+ * so the left canvas can take the input for both", with the right pane's
+ * canvas left as `{ sysmenu_draw, 0, 0 }` - a painter with no event function.
+ * That is true of KEYS and false of the POINTER: unoui dispatches a press to
+ * the widget the press LANDS ON (hit_widget picks the last widget whose rect
+ * contains the point), not to the focused one. So every click in the right
+ * pane hit the draw-only canvas, found no event function, and was swallowed -
+ * and it took the focus with it, which is why Enter on the highlighted row was
+ * inert afterwards too. The whole right-pane branch of launcher_event was
+ * unreachable code.
+ *
+ * The visible cost was the entire "what you do to the machine" column: Tile,
+ * Cascade, Minimize all, Restart and Shut Down all highlighted on hover and
+ * did nothing. **A user could not restart or shut the machine down from the
+ * interface at all** - found on metal, 2026-08-20 (CONFORMANCE-2026-08.md §4).
+ *
+ * launcher_event already splits the click by x against the same origin, so the
+ * fix is to let the right canvas deliver its own presses to it. Both panes
+ * then behave identically whichever one holds the focus. */
 static unoui_canvas g_menu_cv = { launcher_draw, launcher_event, 0 };
-static unoui_canvas g_sys_cv  = { sysmenu_draw,  0, 0 };
+static unoui_canvas g_sys_cv  = { sysmenu_draw,  launcher_event, 0 };
 
 /* per-frame while the launcher is open: highlight the hovered row, and scroll
  * when the pointer rests on the top/bottom scroll zone. */
@@ -5018,8 +5144,9 @@ static void build_launcher(void)
      * maximize: without this it inherits phase B's boxes and draws controls
      * that correctly do nothing (spec 13.7). Same for the calendar. */
     g_launch.flags |= UI_WIN_NOCTL;
-    /* the LEFT canvas takes the input for both panes (see g_menu_cv), so it is
-     * added first and is the one the shell focuses */
+    /* both canvases carry launcher_event (see g_menu_cv), because a press is
+     * delivered to the canvas it lands on. The left one is added first and is
+     * the one the shell focuses. */
     unoui_add_canvas(&g_launch, 0, 0, g_menu_lw, rows * MROW, &g_menu_cv);
     unoui_add_canvas(&g_launch, g_menu_lw + SYS_GAP, 0,
                      contentw - g_menu_lw - SYS_GAP, rows * MROW, &g_sys_cv);
@@ -5237,8 +5364,13 @@ int  pc64_shell_workarea_h(void) { return FB_H - TASKH; }
  * that ends either way ends the same way. */
 void pc64_shell_fullscreen(unoui_window *w)
 {
-    if (w) { unoui_fullscreen(&UI, w); pc64_shell_focus_window(w); }
-    else   { unoui_fullscreen(&UI, 0); UI.focus_wi = 0; }
+    if (w) {
+        int a = app_of_win(w);
+        if (a >= 0) shell_full_enter(a);
+        else { unoui_fullscreen(&UI, w); g_full_app = -1; }  /* not a shell slot */
+        pc64_shell_focus_window(w);
+    }
+    else   shell_full_leave();
     g_dirty = 1;
 }
 int pc64_shell_is_fullscreen(void) { return UI.full != 0; }
@@ -5880,7 +6012,10 @@ static int pump_input(void)
          * Start > Shut Down.  F10 is taken by the platform (GOP mode cycle). */
         if (scan == 0x16) {
             pc64_stress_stop();
-            if (UI.full) { unoui_fullscreen(&UI, 0); UI.focus_wi = 0; }
+            /* escape_ not leave_: dropping a native game out of fullscreen
+             * without closing it leaves it running and painting over the
+             * desktop, which is not the "usable desktop" this key promises. */
+            if (UI.full) shell_full_escape();
             g_dirty = 1;
             continue;
         }
@@ -5895,7 +6030,7 @@ static int pump_input(void)
             if (uni == 0x0D || uni == 0x0A) { sw_commit(); continue; }
         }
         if (UI.full && scan == 0x17) {          /* Esc leaves a fullscreen game */
-            unoui_fullscreen(&UI, 0); UI.focus_wi = 0; g_dirty = 1; continue;
+            shell_full_escape(); g_dirty = 1; continue;
         }
         if (ctrl && scan == 0x17) { toggle_launcher(); continue; }               /* Ctrl-Esc: Start menu */
         if (ctrl && (uni == 'w' || uni == 'W' || uni == 0x17)) { close_focused(); continue; }  /* Ctrl-W */
