@@ -1,3 +1,12 @@
+> VENDORED FILE - DO NOT EDIT HERE.
+>
+> UnoCode is developed at https://github.com/hmofet/unocode-desktop, in its core/ directory.
+> An edit made here is lost at the next sync, and until then it silently
+> forks the editor away from the tree the desktop builds are cut from.
+>
+> Change it there; bring it back with pc64/tools/sync_unocode.py.
+> See pc64/UNOCODE-UPSTREAM.md.
+
 # UnoCode, subsystem contract
 
 **Owner:** the `unocode` row in [`/AGENTS.md`](../../AGENTS.md) §1.
