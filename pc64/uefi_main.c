@@ -2370,6 +2370,20 @@ static void power_down(int off)
           fb_text(x, H / 2 + 10, l2, FB_RGB(150, 170, 225), -1); }
         uno_pc64_present();
     }
+    /* RESET: the firmware's ResetSystem, last, exactly as the ordering note
+     * above says it should be - and as, until now, it was NOT. Reordering
+     * ResetSystem out of first place moved the call into an `if (off)` block,
+     * so the reset path stopped calling it AT ALL: a machine whose CF9, i8042
+     * pulse and FADT reset register are all ignored printed "hold the power
+     * button" without ever asking the firmware, which is the one mechanism
+     * left that might have worked. The message above is already on screen, so
+     * a call that never returns costs nothing, and one that does falls through
+     * to the halt below exactly as before. */
+    if (!off) {
+        uno_dbg_log("power: native resets ignored - firmware ResetSystem(Cold)");
+        rts()->ResetSystem(EfiResetCold, 0, 0, 0);
+        uno_dbg_log("power: ResetSystem returned - firmware ignored it too");
+    }
 #ifdef UNO_ACPI
     /* POWER-OFF: S5 stays LAST, per the ordering note above. */
     if (off) {
