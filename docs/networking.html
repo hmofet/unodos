@@ -145,6 +145,13 @@ adapter's firmware, scans, <strong>joins a WPA2 network and installs the encrypt
 association, proven on a laptop. What does not yet work is the step after that: the network never hands
 back an address, so nothing can actually be reached. <strong>Use a wired port or a USB Ethernet adapter
 to get online.</strong></p>
+<p>UnoDOS also speaks <strong>WPA3</strong> now, which matters more than it sounds: a modern access
+point with protected management frames required will refuse a machine that cannot offer them, and a
+6 GHz network is WPA3-only by regulation, so a WPA2-only machine is not "older", it is locked out.
+The supplicant reads what the access point is actually offering and negotiates, rather than
+announcing WPA2 and hoping - WPA2-PSK or WPA3-SAE, with management-frame protection when it is asked
+for, and SAE preferred on a network that offers both.</p>
+<div class="note warn"><b>WPA3: not yet proven on hardware</b>The WPA3 path is verified end to end against test vectors on a development machine, but it has <em>not</em> yet completed a join against a real access point. Treat it as written and tested, not as proven on your network.</div>
 <p>The Control Panel's <strong>Network</strong> tab already carries the interface it will use - a scan
 list, a password box and a <strong>Join</strong> button, with a spinner and a running description of each
 step while it works, since a join takes several seconds. Networks you join are remembered, so the machine

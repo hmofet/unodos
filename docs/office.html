@@ -84,7 +84,8 @@
 
 <h1>UnoOffice</h1>
 <p class="lede">A word processor, a spreadsheet and a presentation designer, built into UnoDOS.
-They read and write the real Office 97 file formats, so a document written here opens on a PC.</p>
+They read and write the real Office file formats, old and new, so a document written here opens on
+a PC.</p>
 
 <p>UnoOffice is three apps - <strong>UnoWord</strong>, <strong>UnoCalc</strong> and
 <strong>UnoShow</strong> - sharing one look and one set of habits. If you have used a
@@ -126,12 +127,22 @@ speaker notes, and a full-screen slide show driven from the keyboard.</p>
 <figure><button type="button" class="zoom" data-full="assets/img/uoshow.png" aria-label="Enlarge: UnoShow with a new presentation open."><img src="assets/img/uoshow.png" alt="UnoShow with a new presentation open." loading="lazy"></button><figcaption><b>UnoShow</b> with a new presentation open.</figcaption></figure>
 
 <h2 id="files">Real file formats</h2>
-<p>The suite reads and writes the Office 97 formats themselves - <code>.doc</code>,
-<code>.xls</code> and <code>.ppt</code> - through UnoDOS's own <em>unodoc</em> library. Nothing is
-converted to a private format on the way in or out, so a file written on the machine opens on a PC
-and a file from a PC opens here.</p>
+<p>The suite reads and writes the real Office formats themselves, through UnoDOS's own
+<em>unodoc</em> library. Nothing is converted to a private format on the way in or out, so a file
+written on the machine opens on a PC and a file from a PC opens here.</p>
+<table>
+<tr><th>App</th><th>Office 97</th><th>Modern (OOXML)</th></tr>
+<tr><td><strong>UnoWord</strong></td><td><code>.doc</code></td><td><code>.docx</code></td></tr>
+<tr><td><strong>UnoCalc</strong></td><td><code>.xls</code></td><td><code>.xlsx</code></td></tr>
+<tr><td><strong>UnoShow</strong></td><td><code>.ppt</code></td><td><code>.pptx</code></td></tr>
+</table>
+<p>You do not choose a format when you start a document, only when you save it: type the extension
+you want in the Save dialog, or leave the name bare and let the <strong>Files of type</strong> menu
+supply one. Opening works the other way round - the file is identified by its contents rather than
+its name, so a <code>.xlsx</code> that somebody renamed <code>.xls</code> still opens correctly.</p>
 <p>Save and open through the suite's file dialog onto any writable volume, exactly as the Editor and
-Files do.</p>
+Files do. In the Open dialog you can either click a file in the list or type its name in the
+<strong>File name</strong> box.</p>
 <div class="note warn"><b>No printing</b>Printing does not exist in UnoDOS yet, so every <strong>Print</strong> menu item is present but does nothing. Save the file and print it from another machine.</div>
 
 <nav class="pagenav"><a href="apps.html">&lsaquo; Applications</a><a class="nxt" href="code.html">UnoCode &rsaquo;</a></nav>

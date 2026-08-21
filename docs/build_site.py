@@ -852,13 +852,16 @@ PAGES["index.html"] = ("Overview", f"""
 
 <p>UnoDOS is a family of GUI-first operating systems that runs on more than 20 kinds of hardware.
 <strong>pc64</strong> is the modern-PC version: it runs on essentially any x86-64 PC built since about
-2007, and it has been tested in emulators and on real hardware booting from a USB stick.</p>
+2007, and it has been tested in emulators and on real hardware booting from a USB stick. The most
+recent pass, in August 2026, drove the whole desktop end to end on a ZimaBlade single-board PC and a
+Lenovo ThinkPad X13 Yoga: 86 checks, every application launched, and the defects it turned up fixed
+and re-checked on the same machines.</p>
 
 <h2 id="film">See it running</h2>
 <p>Before you read any further, watch it work. Nothing in this film is a mock-up or an animation: it
 is the real system, recorded off a running machine, in one take per scene.</p>
 
-{film("demo-poster.jpg", 'Eight minutes and forty-two seconds of pc64, recorded from the running system: the <a href="windows.html">window manager</a> snapping and switching windows, the <a href="appearance.html">ten themes</a> changing live, real Word and Excel documents opening in <a href="office.html">UnoOffice</a>, the <a href="browser.html">browser</a> swapping JavaScript engines mid-session and then loading Wikipedia over HTTPS, music and images decoded by the machine itself, a level of Doom played by a renderer written in Python, <a href="studio.html">Studio</a> compiling and running the same app twice - once in UnoC and once in Python - the <a href="ssh.html">SSH client</a> opening a shell on a Linux box across the network, and the <a href="ports.html">rest of the UnoDOS family</a>. The film streams from the UnoDOS website, so playing it needs a connection.')}
+{film("demo-poster.jpg", 'pc64, recorded from the running system in one take per scene: a cold boot, a shipped game, then a level of Doom played by a renderer written in Python. After that the <a href="windows.html">window manager</a> snapping and switching windows, the <a href="appearance.html">ten themes</a> changing live, real Word and Excel documents opening in <a href="office.html">UnoOffice</a>, the <a href="browser.html">browser</a> swapping JavaScript engines mid-session and then loading Wikipedia over HTTPS, music and images decoded by the machine itself, <a href="studio.html">Studio</a> compiling and running the same app twice - once in UnoC and once in Python - and the <a href="ssh.html">SSH client</a> opening a shell on a Linux box across the network. The film streams from the UnoDOS website, so playing it needs a connection.')}
 
 {note('Download <strong>unodos-pc64.iso</strong> and write it to a spare USB stick with Rufus or balenaEtcher (or boot it in a VM) - or use the one-click <strong>USB flasher</strong>. No building required. See <a href="getting-started.html">Getting started</a>.', kind="tip", title="Just want to try it?")}
 
@@ -1303,7 +1306,7 @@ button, a <strong>Set date&hellip;</strong> calendar picker (click a day and it 
 the tray shows a percentage, an icon, or both. <strong>Restore last session at startup</strong> (on by default)
 reopens the windows you had open - the everyday apps and the Browser - the next time you boot. There is also a
 <strong>Lid sleep</strong> switch and a <strong>Pointer speed</strong> slider.</p>
-{note('Only the session-restore choice and the list of open windows are saved across a reboot (in a small <code>SHELL.CFG</code> file). The wallpaper, clock format, battery display, volume, pointer speed and icon layout are remembered for the current session but return to their defaults when you restart.', title="What persists across a reboot")}
+{note('Your choices are saved across a reboot, in a small <code>SHELL.CFG</code> file on the disk you booted from: screen resolution, theme, interface scale, wallpaper, volume, clock format, battery display, pointer speed, lid sleep, the desktop icon options, and the session itself (which windows were open, where they sat, which virtual desktop they were on and which were minimized).', title="What persists across a reboot")}
 """)
 
 PAGES["apps.html"] = ("Applications", f"""
@@ -1379,15 +1382,18 @@ animated <strong>GIF</strong>, <strong>BMP</strong>, <strong>TGA</strong>, <stro
 play. (Progressive JPEG and WebP are recognised but not decoded.)</p>
 
 <h2 id="games">Games</h2>
-<p>The classic games each run in their own window; <strong>Runner3D</strong> takes the whole screen
-(press <kbd>Esc</kbd> to come back to the desktop).</p>
+<p>The classic games each run in their own window; <strong>Runner3D</strong> takes the whole screen.
+<kbd>Esc</kbd> quits it and puts you back on the desktop, at the resolution you were using before -
+it does not leave the game running in a window, because it paints straight to the screen rather than
+into a window.</p>
 <div class="grid cols-2">
-  {fig("dostris.png", "<b>Dostris</b>: the falling-block game, with score, lines and level.")}
-  {fig("pacman.png", "<b>Pac-Man</b>: maze, dots, power pellets and ghosts.")}
-  {fig("outlast.png", "<b>OutLast</b>: an arcade driving game.")}
+  {fig("dostris.png", "<b>Dostris</b>: the falling-block game, with score, lines and level. It plays Korobeiniki underneath and blips when you clear a line.")}
+  {fig("pacman.png", "<b>Pac-Man</b>: maze, dots, power pellets and ghosts, with score, high score, lives and level in the panel beside the maze. A siren loops under the play and speeds up while the ghosts are frightened.")}
+  {fig("outlast.png", "<b>OutLast</b>: an arcade driving game, with its own theme and a thud when you crash.")}
   {fig("runner3d.png", "<b>Runner3D</b>: a real-time 3D game.")}
 </div>
 {note('Runner3D draws real-time 3D graphics entirely in software, so it needs no graphics card.', title="3D graphics")}
+{note("The games make sound through the machine's own sound hardware, so they need a working sound device - the same one the music player uses. On a machine with no sound device at all they play in silence rather than refusing to start.", title="Sound")}
 
 <h3 id="duum">Duum</h3>
 <p><strong>Duum</strong> is a Doom engine, written in Python, running on the machine's own Python
@@ -1500,7 +1506,8 @@ position, so the desktop you arrange is the desktop you get back after a restart
 PAGES["office.html"] = ("UnoOffice", f"""
 <h1>UnoOffice</h1>
 <p class="lede">A word processor, a spreadsheet and a presentation designer, built into UnoDOS.
-They read and write the real Office 97 file formats, so a document written here opens on a PC.</p>
+They read and write the real Office file formats, old and new, so a document written here opens on
+a PC.</p>
 
 <p>UnoOffice is three apps - <strong>UnoWord</strong>, <strong>UnoCalc</strong> and
 <strong>UnoShow</strong> - sharing one look and one set of habits. If you have used a
@@ -1542,12 +1549,22 @@ speaker notes, and a full-screen slide show driven from the keyboard.</p>
 {fig("uoshow.png", "<b>UnoShow</b> with a new presentation open.")}
 
 <h2 id="files">Real file formats</h2>
-<p>The suite reads and writes the Office 97 formats themselves - <code>.doc</code>,
-<code>.xls</code> and <code>.ppt</code> - through UnoDOS's own <em>unodoc</em> library. Nothing is
-converted to a private format on the way in or out, so a file written on the machine opens on a PC
-and a file from a PC opens here.</p>
+<p>The suite reads and writes the real Office formats themselves, through UnoDOS's own
+<em>unodoc</em> library. Nothing is converted to a private format on the way in or out, so a file
+written on the machine opens on a PC and a file from a PC opens here.</p>
+<table>
+<tr><th>App</th><th>Office 97</th><th>Modern (OOXML)</th></tr>
+<tr><td><strong>UnoWord</strong></td><td><code>.doc</code></td><td><code>.docx</code></td></tr>
+<tr><td><strong>UnoCalc</strong></td><td><code>.xls</code></td><td><code>.xlsx</code></td></tr>
+<tr><td><strong>UnoShow</strong></td><td><code>.ppt</code></td><td><code>.pptx</code></td></tr>
+</table>
+<p>You do not choose a format when you start a document, only when you save it: type the extension
+you want in the Save dialog, or leave the name bare and let the <strong>Files of type</strong> menu
+supply one. Opening works the other way round - the file is identified by its contents rather than
+its name, so a <code>.xlsx</code> that somebody renamed <code>.xls</code> still opens correctly.</p>
 <p>Save and open through the suite's file dialog onto any writable volume, exactly as the Editor and
-Files do.</p>
+Files do. In the Open dialog you can either click a file in the list or type its name in the
+<strong>File name</strong> box.</p>
 {note('Printing does not exist in UnoDOS yet, so every <strong>Print</strong> menu item is present but does nothing. Save the file and print it from another machine.', kind="warn", title="No printing")}
 """)
 
@@ -1843,6 +1860,13 @@ adapter's firmware, scans, <strong>joins a WPA2 network and installs the encrypt
 association, proven on a laptop. What does not yet work is the step after that: the network never hands
 back an address, so nothing can actually be reached. <strong>Use a wired port or a USB Ethernet adapter
 to get online.</strong></p>
+<p>UnoDOS also speaks <strong>WPA3</strong> now, which matters more than it sounds: a modern access
+point with protected management frames required will refuse a machine that cannot offer them, and a
+6 GHz network is WPA3-only by regulation, so a WPA2-only machine is not "older", it is locked out.
+The supplicant reads what the access point is actually offering and negotiates, rather than
+announcing WPA2 and hoping - WPA2-PSK or WPA3-SAE, with management-frame protection when it is asked
+for, and SAE preferred on a network that offers both.</p>
+{note('The WPA3 path is verified end to end against test vectors on a development machine, but it has <em>not</em> yet completed a join against a real access point. Treat it as written and tested, not as proven on your network.', kind="warn", title="WPA3: not yet proven on hardware")}
 <p>The Control Panel's <strong>Network</strong> tab already carries the interface it will use - a scan
 list, a password box and a <strong>Join</strong> button, with a spinner and a running description of each
 step while it works, since a join takes several seconds. Networks you join are remembered, so the machine
@@ -2501,6 +2525,15 @@ against the kernel's export table at build time, so a typo'd function is a compi
 mysterious crash.</li>
 <li><b>Python tracebacks</b> (with line numbers) print to the output pane; a raising callback is fenced -
 it never takes the desktop down.</li>
+<li><b>A <code>draw()</code> that raises paints its own traceback</b> into the app's window, so the
+window that would otherwise have been blank tells you what went wrong and which line did it. Drawing
+then stops rather than raising sixty times a second; fix the code and run again (<kbd>Ctrl</kbd>+<kbd>R</kbd>)
+and it starts clean. The exception line also goes to the system log, which is how a machine you are
+not sitting in front of reports it.</li>
+<li><b>Studio will not open a binary file as text.</b> The project pane lists <code>.UNO</code> modules
+on purpose, so you can see what you just built, but picking one now says so in the output pane and
+leaves your open document alone. It used to load the module as mojibake, and saving that back
+truncated the module at its first zero byte and destroyed it.</li>
 <li><b>print() works</b> in Python (an 8&nbsp;KB buffer shown by Studio); UnoC apps put numbers on
 screen with <code>fmt_u</code> or into the system log.</li>
 <li>For anything deeper, the <a href="dev-remote.html">remote link</a> streams logs to your PC and can
