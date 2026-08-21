@@ -71,6 +71,7 @@ void pc64_shell_fullscreen(unoui_window *w);   /* UnoShow's slide show mode */
 int  pc64_shell_is_fullscreen(void);
 const struct unoui_theme *pc64_shell_theme(void);
 int  pc64_shell_run_user(int vol, const char *path);
+int  pc64_shell_can_run(void);
 const char *pc64_shell_py_error(void);
 int  pc64_shell_font_mono(void);
 /* the shell's native file dialog, if it has one; pc64's answers 0 */
@@ -220,7 +221,8 @@ static const struct { const char *name; void *addr; } kExports[] = {
     KX(pc64_shell_focus_window), KX(pc64_shell_dirty),
     KX(pc64_shell_workarea_w), KX(pc64_shell_workarea_h),
     KX(pc64_shell_fullscreen), KX(pc64_shell_is_fullscreen),
-    KX(pc64_shell_theme), KX(pc64_shell_run_user), KX(pc64_shell_font_mono),
+    KX(pc64_shell_theme), KX(pc64_shell_run_user), KX(pc64_shell_can_run),
+    KX(pc64_shell_font_mono),
     KX(pc64_shell_pick),
     KX(pc64_browser_open_path), KX(pc64_shell_py_error),
     /* ---- Python runtime (PYRT.UNO) surface ------------------------------- *

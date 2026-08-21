@@ -5641,6 +5641,12 @@ int pc64_shell_pick(int want_folder, int *vol, char *dir, int dcap,
     return 0;
 }
 
+/* This shell CAN launch a user program - the capability flag UnoCode's
+ * assistant reads to decide whether to offer a run tool at all (UCD-51).
+ * The desktop host answers 0 here until its process work lands, and offers
+ * only what it has; asking beats attempting-and-refusing. */
+int pc64_shell_can_run(void) { return 1; }
+
 int pc64_shell_run_user(int vol, const char *path)
 {
     unsigned short fl = uno_mod_peek_flags(vol, path);
