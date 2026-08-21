@@ -144,6 +144,13 @@ void uno_vmm_tick(void);
 const char *uno_vmm_slice_str(void);
 const char *uno_vmm_linux_str(void);
 
+/* A8: the running guest's framebuffer, as a host pointer the caller may blit
+ * from, with its geometry.  NULL when no guest is armed or this boot placed
+ * no surface.  XRGB8888 (blue low byte), pitch = w*4 - NOT fb.h's 0xAABBGGRR;
+ * the display path swizzles, because screen_info consumers only reliably
+ * recognise XRGB. */
+void *uno_vmm_fb(int *w, int *h);
+
 /* Two lines for the boot env block, the System window and the `vm` verb:
  *   "vmx rev 0x0d ept wb 2m 1g unrestricted vpid preempt apicv=no phys=39"
  *   "eligible: no - firmware disabled virtualization (...)"
