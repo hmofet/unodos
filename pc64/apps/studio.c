@@ -44,6 +44,7 @@ const char *uno_fs_volume_name(int vol);
 int   uno_fs_list_begin(int vol);
 int   uno_fs_list_get(int vol, int idx, char *name, int max);
 long  uno_fs_read(int vol, const char *name, unsigned char *buf, long max);
+long  uno_fs_read_at(int vol, const char *name, long off, unsigned char *buf, long max);
 long  uno_fs_size(int vol, const char *name);
 int   uno_fs_write(int vol, const char *name, const unsigned char *buf, long len);
 int   uno_fs_writable(int vol);
@@ -281,6 +282,7 @@ static void move_updown(int dir, int keep_sel)
 
 /* ---- files ---------------------------------------------------------------- */
 static void status_set(const char *a, const char *b);
+static void out_add(const char *s);
 
 static void refresh_project(void)
 {
@@ -309,9 +311,48 @@ static void refresh_project(void)
     if (proj_sel < 0) proj_sel = 0;
 }
 
+/* IS THIS A TEXT FILE?
+ *
+ * The project pane deliberately lists `.UNO` (you want to see what you just
+ * built), and opening one loaded the module's BINARY straight into the code
+ * editor - a pane of mojibake, with no clue that anything was wrong. Worse,
+ * the editor would then happily Save it back, and ed_buf is NUL-terminated, so
+ * a save truncated the module at its first zero byte and destroyed it.
+ * Reported by the metal conformance run, 2026-08-20.
+ *
+ * Sniff rather than trust the extension: `.DAT`, `.QOI` and a half-written
+ * source file are all the same question. A NUL is decisive on its own (no text
+ * file this editor can represent contains one); otherwise a file is binary if
+ * more than about 3% of its bytes are control codes that are not tab, CR or
+ * LF. Reads a header only, so it costs nothing on a large source file. */
+static int file_is_binary(int vol, const char *name)
+{
+    unsigned char hd[512];
+    long n = uno_fs_read_at(vol, name, 0, hd, (long)sizeof hd);
+    long i, bad = 0;
+    if (n <= 0) return 0;                        /* empty / unreadable: let it through */
+    for (i = 0; i < n; i++) {
+        unsigned char c = hd[i];
+        if (c == 0) return 1;
+        if (c == 9 || c == 10 || c == 13) continue;
+        if (c < 32 || c == 127) bad++;
+    }
+    return bad * 32 > n;
+}
+
 static void doc_load(int vol, const char *name)
 {
-    long n = uno_fs_read(vol, name, (unsigned char *)ed_buf, ED_CAP - 1);
+    long n;
+    if (file_is_binary(vol, name)) {
+        /* NOT loaded: the open document is left exactly as it was, because
+         * replacing it with garbage is the damage this is preventing. */
+        out_n = 0;
+        out_add("That is not a text file - it was not opened.");
+        out_add("  A .UNO is a built module; ^R runs the one you built from this file.");
+        status_set("Binary file", name);
+        return;
+    }
+    n = uno_fs_read(vol, name, (unsigned char *)ed_buf, ED_CAP - 1);
     if (n < 0) n = 0;
     /* normalize CRLF -> LF */
     { int r = 0, w = 0; for (r = 0; r < n; r++) if (ed_buf[r] != '\r') ed_buf[w++] = ed_buf[r]; n = w; }
