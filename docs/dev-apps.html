@@ -229,6 +229,15 @@ against the kernel's export table at build time, so a typo'd function is a compi
 mysterious crash.</li>
 <li><b>Python tracebacks</b> (with line numbers) print to the output pane; a raising callback is fenced -
 it never takes the desktop down.</li>
+<li><b>A <code>draw()</code> that raises paints its own traceback</b> into the app's window, so the
+window that would otherwise have been blank tells you what went wrong and which line did it. Drawing
+then stops rather than raising sixty times a second; fix the code and run again (<kbd>Ctrl</kbd>+<kbd>R</kbd>)
+and it starts clean. The exception line also goes to the system log, which is how a machine you are
+not sitting in front of reports it.</li>
+<li><b>Studio will not open a binary file as text.</b> The project pane lists <code>.UNO</code> modules
+on purpose, so you can see what you just built, but picking one now says so in the output pane and
+leaves your open document alone. It used to load the module as mojibake, and saving that back
+truncated the module at its first zero byte and destroyed it.</li>
 <li><b>print() works</b> in Python (an 8&nbsp;KB buffer shown by Studio); UnoC apps put numbers on
 screen with <code>fmt_u</code> or into the system log.</li>
 <li>For anything deeper, the <a href="dev-remote.html">remote link</a> streams logs to your PC and can

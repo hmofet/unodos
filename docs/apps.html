@@ -154,15 +154,18 @@ animated <strong>GIF</strong>, <strong>BMP</strong>, <strong>TGA</strong>, <stro
 play. (Progressive JPEG and WebP are recognised but not decoded.)</p>
 
 <h2 id="games">Games</h2>
-<p>The classic games each run in their own window; <strong>Runner3D</strong> takes the whole screen
-(press <kbd>Esc</kbd> to come back to the desktop).</p>
+<p>The classic games each run in their own window; <strong>Runner3D</strong> takes the whole screen.
+<kbd>Esc</kbd> quits it and puts you back on the desktop, at the resolution you were using before -
+it does not leave the game running in a window, because it paints straight to the screen rather than
+into a window.</p>
 <div class="grid cols-2">
-  <figure><button type="button" class="zoom" data-full="assets/img/dostris.png" aria-label="Enlarge: Dostris: the falling-block game, with score, lines and level."><img src="assets/img/dostris.png" alt="Dostris: the falling-block game, with score, lines and level." loading="lazy"></button><figcaption><b>Dostris</b>: the falling-block game, with score, lines and level.</figcaption></figure>
-  <figure><button type="button" class="zoom" data-full="assets/img/pacman.png" aria-label="Enlarge: Pac-Man: maze, dots, power pellets and ghosts."><img src="assets/img/pacman.png" alt="Pac-Man: maze, dots, power pellets and ghosts." loading="lazy"></button><figcaption><b>Pac-Man</b>: maze, dots, power pellets and ghosts.</figcaption></figure>
-  <figure><button type="button" class="zoom" data-full="assets/img/outlast.png" aria-label="Enlarge: OutLast: an arcade driving game."><img src="assets/img/outlast.png" alt="OutLast: an arcade driving game." loading="lazy"></button><figcaption><b>OutLast</b>: an arcade driving game.</figcaption></figure>
+  <figure><button type="button" class="zoom" data-full="assets/img/dostris.png" aria-label="Enlarge: Dostris: the falling-block game, with score, lines and level. It plays Korobeiniki underneath and blips when you clear a line."><img src="assets/img/dostris.png" alt="Dostris: the falling-block game, with score, lines and level. It plays Korobeiniki underneath and blips when you clear a line." loading="lazy"></button><figcaption><b>Dostris</b>: the falling-block game, with score, lines and level. It plays Korobeiniki underneath and blips when you clear a line.</figcaption></figure>
+  <figure><button type="button" class="zoom" data-full="assets/img/pacman.png" aria-label="Enlarge: Pac-Man: maze, dots, power pellets and ghosts, with score, high score, lives and level in the panel beside the maze. A siren loops under the play and speeds up while the ghosts are frightened."><img src="assets/img/pacman.png" alt="Pac-Man: maze, dots, power pellets and ghosts, with score, high score, lives and level in the panel beside the maze. A siren loops under the play and speeds up while the ghosts are frightened." loading="lazy"></button><figcaption><b>Pac-Man</b>: maze, dots, power pellets and ghosts, with score, high score, lives and level in the panel beside the maze. A siren loops under the play and speeds up while the ghosts are frightened.</figcaption></figure>
+  <figure><button type="button" class="zoom" data-full="assets/img/outlast.png" aria-label="Enlarge: OutLast: an arcade driving game, with its own theme and a thud when you crash."><img src="assets/img/outlast.png" alt="OutLast: an arcade driving game, with its own theme and a thud when you crash." loading="lazy"></button><figcaption><b>OutLast</b>: an arcade driving game, with its own theme and a thud when you crash.</figcaption></figure>
   <figure><button type="button" class="zoom" data-full="assets/img/runner3d.png" aria-label="Enlarge: Runner3D: a real-time 3D game."><img src="assets/img/runner3d.png" alt="Runner3D: a real-time 3D game." loading="lazy"></button><figcaption><b>Runner3D</b>: a real-time 3D game.</figcaption></figure>
 </div>
 <div class="note"><b>3D graphics</b>Runner3D draws real-time 3D graphics entirely in software, so it needs no graphics card.</div>
+<div class="note"><b>Sound</b>The games make sound through the machine's own sound hardware, so they need a working sound device - the same one the music player uses. On a machine with no sound device at all they play in silence rather than refusing to start.</div>
 
 <h3 id="duum">Duum</h3>
 <p><strong>Duum</strong> is a Doom engine, written in Python, running on the machine's own Python
