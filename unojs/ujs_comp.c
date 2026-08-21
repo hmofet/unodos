@@ -1059,8 +1059,14 @@ static void for_stmt(compiler *c)
                 return;
             }
         }
+        /* Not a for-in/of: rewind to the head's first token.  restore RE-LEXES
+         * the saved token into `tok` (see ujs_lex_restore), so it is current
+         * again and there is nothing to advance past.  The next() that used to
+         * follow skipped that first token: `for (j = 0; ...)` went to the
+         * expression parser starting at `=`, and `for (var i = 0; ...)` lost
+         * its `var` - which "worked", by assigning a global instead of
+         * declaring a local, the kind of pass that is worse than a failure. */
         ujs_lex_restore(&c->lx, &save);
-        next(c);
     }
     /* classic three-clause for */
     if (!check(c, T_SEMI)) {
