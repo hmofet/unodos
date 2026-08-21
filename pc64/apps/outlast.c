@@ -68,6 +68,12 @@ static void ol_vrect(UnoWin *w, short x0, short y0, short x1, short y1, short co
     if (x1 <= x0 || y1 <= y0) return;
     if (x0 < 0) x0 = 0;
     if (x1 > OL_W) x1 = OL_W;
+    /* The vertical half of the clamp, recovered from the native copy before it
+       was deleted.  S-GAME-03 requires the virtual-320x200 mapper to be
+       clamped; this port only ever clamped x, so a y outside the virtual
+       screen mapped straight through to a window-relative Rect. */
+    if (y0 < 0) y0 = 0;
+    if (y1 > OL_H) y1 = OL_H;
     SetRect(&q, w->bounds.left + 4 + OLS(x0), w->bounds.top + TBAR_H + 2 + OLS(y0),
             w->bounds.left + 4 + OLS(x1), w->bounds.top + TBAR_H + 2 + OLS(y1));
     fill_rgb(&q, &kOlRGB[col]);
@@ -245,7 +251,14 @@ static void outlast_tick(void)
                     gOlCrash = 30;
             }
         }
-        if (gOlCrash) gOlSpeed = 0;
+        /* The crash thud, recovered from the native pc64_games.c copy before
+           that copy was deleted.  Reaching here means gOlCrash was 0 at the
+           top of the frame (the other arm of the if), so ==30 is exactly the
+           frame a collision was just detected - one note, not one per frame
+           of the 30-frame spin-out.  music_note_on is the KernelApi's
+           one-shot note, i.e. the uno_seq_beep the native build fired. */
+        if (gOlCrash == 30) { gOlSpeed = 0; music_note_on(43, 14); }
+        else if (gOlCrash)  gOlSpeed = 0;
     }
 
     if (now - gOlLastSec >= 60) {
