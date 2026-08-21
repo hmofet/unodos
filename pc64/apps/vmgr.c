@@ -47,6 +47,7 @@ enum { B_NEW, B_DEL, B_START, B_STOP, B_VIEW, B_DISP, B_N };
 static unoui_rect g_btn[B_N];
 static unoui_rect g_rows_r[UNO_VM_MAX];
 static unoui_rect g_body;           /* the view area, set by vm_draw        */
+static int g_scale = 1 << 12;       /* display scale, 4096 = 1:1            */
 
 static int in_rect(unoui_rect r, int x, int y)
 { return x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h; }
@@ -183,17 +184,28 @@ static void draw_display(unoui_rect c)
                 p->text_dim, -1);
         return;
     }
-    vw = fw < c.w ? fw : c.w;
-    vh = fh < c.h ? fh : c.h;
-    if (vw > (int)(sizeof rowbuf / 4)) vw = (int)(sizeof rowbuf / 4);
-    for (y = 0; y < vh; y++) {
-        const unsigned *src = fb + (unsigned)y * (unsigned)fw;
-        for (x = 0; x < vw; x++) {
-            unsigned v = src[x];
-            rowbuf[x] = 0xFF000000u | (v & 0x0000FF00u)
-                      | ((v & 0xFFu) << 16) | ((v >> 16) & 0xFFu);
+    /* Scale to FIT when the surface is larger than the view, 1:1 when it
+     * fits.  Nearest neighbour, fixed point - a fbcon at 61% is ugly but
+     * legible, and a browser page that is entirely visible beats a razor
+     * sharp corner of one.  The step is the same for both axes so circles
+     * stay circles. */
+    {
+        int num = 1 << 12, t;
+        if (fw > c.w) { t = (c.w << 12) / fw; if (t < num) num = t; }
+        if (fh > c.h) { t = (c.h << 12) / fh; if (t < num) num = t; }
+        g_scale = num;
+        vw = (fw * num) >> 12;
+        vh = (fh * num) >> 12;
+        if (vw > (int)(sizeof rowbuf / 4)) vw = (int)(sizeof rowbuf / 4);
+        for (y = 0; y < vh; y++) {
+            const unsigned *src = fb + (unsigned)((y << 12) / num) * (unsigned)fw;
+            for (x = 0; x < vw; x++) {
+                unsigned v = src[(x << 12) / num];
+                rowbuf[x] = 0xFF000000u | (v & 0x0000FF00u)
+                          | ((v & 0xFFu) << 16) | ((v >> 16) & 0xFFu);
+            }
+            fb_blit(c.x, c.y + y, vw, 1, (const fb_px *)rowbuf, vw);
         }
-        fb_blit(c.x, c.y + y, vw, 1, (const fb_px *)rowbuf, vw);
     }
 }
 
@@ -241,7 +253,12 @@ static int display_mouse(const unoui_event *e)
 {
     int dx = 0, dy = 0;
     if (!in_rect(g_body, e->x, e->y) && g_mx < 0) return 0;
-    if (g_mx >= 0) { dx = e->x - g_mx; dy = e->y - g_my; }
+    if (g_mx >= 0) {
+        /* A scaled view means a scaled pointer: a pixel of host motion is
+         * 1/scale pixels of guest screen. */
+        dx = ((e->x - g_mx) << 12) / g_scale;
+        dy = ((e->y - g_my) << 12) / g_scale;
+    }
     g_mx = e->x; g_my = e->y;
     switch (e->kind) {
     case UI_EV_MOUSE_DOWN: g_mbtns |= 1u << e->button; break;
