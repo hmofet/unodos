@@ -67,19 +67,50 @@ export HOME=/root XDG_RUNTIME_DIR=/run
 export XDG_CACHE_HOME=/tmp/cache XDG_CONFIG_HOME=/tmp/config
 mkdir -p /tmp/cache /tmp/config
 
+# The wire.  /etc is read-only, so /etc/resolv.conf is a symlink into tmpfs
+# (made at build time) and udhcpc's script writes through it.  Backgrounded
+# with a retry: the host bridge only carries frames once the appliance is
+# running, and a lease that is not there yet is not a lease that never comes.
+: > /tmp/resolv.conf
+(
+  n=0
+  while [ $n -lt 30 ]; do
+    ip link set eth0 up 2>/dev/null
+    if udhcpc -i eth0 -t 4 -T 3 -n -q >/tmp/dhcp.log 2>&1; then
+      echo "uno: lease $(ip -4 addr show eth0 | grep -o 'inet [0-9.]*')" \
+          > /dev/ttyS0
+      break
+    fi
+    n=$((n + 1))
+    sleep 2
+  done
+) &
+
 # X plus Chromium, restarted if either dies.  Software rendering: the guest
 # has simpledrm and no GPU, and Chromium's own rasteriser is the fast path.
+#
+# NOT --kiosk: the point of A8's input path is that this is a browser somebody
+# can DRIVE - the address bar, ctrl-L, a link under the pointer.  A kiosk with
+# no chrome proves rendering and nothing else.
+URL=${UNO_URL:-https://example.com}
 while :; do
     xinit /usr/bin/chromium \
         --no-sandbox --disable-gpu --disable-dev-shm-usage \
-        --no-first-run --disable-infobars --kiosk \
-        file:///usr/share/uno/welcome.html \
+        --no-first-run --no-default-browser-check --disable-infobars \
+        --password-store=basic --disable-sync \
+        --window-position=0,0 --window-size=800,600 \
+        --start-maximized "$URL" \
         -- /usr/bin/X :0 vt1 -nolisten tcp -quiet \
         >/tmp/x.log 2>&1
     sleep 2
 done
 EOF
 chmod +x $R/sbin/uno-init
+
+# DNS on a read-only root: udhcpc's script writes /etc/resolv.conf, so that
+# path is a symlink into the tmpfs the appliance mounts over /tmp.  Without
+# it every name lookup fails while the lease itself is perfectly fine.
+ln -sf /tmp/resolv.conf $R/etc/resolv.conf
 
 mkdir -p $R/usr/share/uno
 cat > $R/usr/share/uno/welcome.html <<'EOF'
