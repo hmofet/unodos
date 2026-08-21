@@ -5632,6 +5632,15 @@ int pc64_shell_py_exec(const char *src, char *out, int cap)
  * out of the classic branch as "Could not launch that .UNO."  With no desktop
  * slot and no `uno.run_app`, that made APPS\VMGR.UNO unrunnable by any means on
  * a machine it was installed on.  This is the missing third branch. */
+/* pc64 has no native file dialog: the editor's own quick-open is the picker
+ * here, and answering 0 is what tells it to use that. */
+int pc64_shell_pick(int want_folder, int *vol, char *dir, int dcap,
+                    char *name, int ncap)
+{
+    (void)want_folder; (void)vol; (void)dir; (void)dcap; (void)name; (void)ncap;
+    return 0;
+}
+
 int pc64_shell_run_user(int vol, const char *path)
 {
     unsigned short fl = uno_mod_peek_flags(vol, path);
