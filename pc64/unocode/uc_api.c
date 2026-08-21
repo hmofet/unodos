@@ -38,6 +38,7 @@
  * ======================================================================== */
 #include "unocode.h"
 #include "unojs.h"
+#include "uc_secret.h"
 
 /* ---- state ------------------------------------------------------------------ */
 #define HANDLERS_MAX 128
@@ -226,6 +227,30 @@ static ujs_val thenable_new(ujs_vm *vm, int *id_out)
     ujs_set(vm, t, "__id", ujs_number(id));
     ujs_set_fn(vm, t, "then", js_then, 1);
     *id_out = id;
+    return t;
+}
+
+/* A thenable that is ALREADY answered, resolved on the next uc_api_pump()
+ * rather than here and now.  Calling back into JS from inside a native
+ * function would nest the interpreter mid-eval, which nothing else in this
+ * host does; deferring one frame keeps the one entry point (call_fn from C
+ * context) that the fuel and exception machinery were built around.
+ * context.secrets is the first user (UCD-48). */
+#define PENDING_MAX 8
+static struct { int id; char val[UC_SECRET_MAX]; unsigned char has; }
+    g_pend[PENDING_MAX];
+static int g_npend;
+
+static ujs_val pending_thenable(ujs_vm *vm, const char *val)
+{
+    int id;
+    ujs_val t = thenable_new(vm, &id);
+    if (g_npend < PENDING_MAX) {
+        g_pend[g_npend].id = id;
+        g_pend[g_npend].has = val != 0;
+        uc_scpy(g_pend[g_npend].val, val ? val : "", sizeof g_pend[0].val);
+        g_npend++;
+    }
     return t;
 }
 
@@ -756,6 +781,64 @@ int uc_api_hover(UcDoc *d, int offset, char *out, int cap)
     return 0;              /* no hover UI in this build; see UNOCODE.md */
 }
 
+/* ---- context.secrets (UCD-48) ------------------------------------------------------
+ * VS Code's SecretStorage shape: store / get / delete, each returning a
+ * thenable.  Names are PREFIXED "EXT.<ID>." from the object itself, not from
+ * the caller's say-so, so an extension cannot read another's secrets - or the
+ * assistant's key - by guessing a string.  There is no onDidChange and no
+ * enumeration; both are stated in UNOCODE.md. */
+static int secret_key(ujs_args *a, char *out, int cap)
+{
+    ujs_val pv = ujs_undefined();
+    const char *name = arg_str(a, 0, "");
+    if (!name[0]) return 0;
+    ujs_get(a->vm, a->self, "__pfx", &pv);
+    uc_scpy(out, val_str(a->vm, pv, "EXT.."), cap);
+    uc_scat(out, name, cap);
+    return (int)strlen(out) < cap - 1;
+}
+
+static ujs_val js_secrets_get(ujs_args *a)
+{
+    char key[64], val[UC_SECRET_MAX];
+    if (!secret_key(a, key, sizeof key))
+        return pending_thenable(a->vm, 0);
+    if (!uc_secret_get(key, val, sizeof val))
+        return pending_thenable(a->vm, 0);
+    return pending_thenable(a->vm, val);
+}
+
+static ujs_val js_secrets_store(ujs_args *a)
+{
+    char key[64];
+    const char *val = arg_str(a, 1, 0);
+    if (!secret_key(a, key, sizeof key) || !val || !uc_secret_set(key, val))
+        return ujs_throw_error(a->vm, "Error", "the secret store refused");
+    return pending_thenable(a->vm, 0);
+}
+
+static ujs_val js_secrets_delete(ujs_args *a)
+{
+    char key[64];
+    if (secret_key(a, key, sizeof key)) uc_secret_del(key);
+    return pending_thenable(a->vm, 0);
+}
+
+static ujs_val secrets_new(ujs_vm *vm, int ext)
+{
+    ujs_val o = ujs_object_new(vm);
+    char pfx[28];
+    UcExt *e = uc_ext_at(ext);
+    uc_scpy(pfx, "EXT.", sizeof pfx);
+    uc_scat(pfx, e ? e->id : "ANON", sizeof pfx);
+    uc_scat(pfx, ".", sizeof pfx);
+    ujs_set(vm, o, "__pfx", ujs_string(vm, pfx, -1));
+    ujs_set_fn(vm, o, "get", js_secrets_get, 1);
+    ujs_set_fn(vm, o, "store", js_secrets_store, 2);
+    ujs_set_fn(vm, o, "delete", js_secrets_delete, 1);
+    return o;
+}
+
 /* ---- building the API object -------------------------------------------------------- */
 static ujs_val g_api;              /* the `vscode` namespace, rooted        */
 
@@ -938,6 +1021,7 @@ int uc_api_run_file(int ext, int vol, const char *path, char *err, int cap)
         ctx = ujs_object_new(g_vm);
         ujs_set(g_vm, ctx, "subscriptions", ujs_array_new(g_vm));
         ujs_set(g_vm, ctx, "extensionPath", ujs_string(g_vm, path, -1));
+        ujs_set(g_vm, ctx, "secrets", secrets_new(g_vm, ext));
         ok = call_fn(act, 1, &ctx, &out, "activate");
         if (!ok) uc_scpy(err, "activate() threw", cap);
     } else ok = 1;                       /* a module with no activate is legal */
@@ -946,7 +1030,19 @@ int uc_api_run_file(int ext, int vol, const char *path, char *err, int cap)
     return ok;
 }
 
-void uc_api_pump(void) { }
+void uc_api_pump(void)
+{
+    /* Drain what was pending at entry and no more: a callback that queues a
+     * new resolution appends PAST n and is drained next frame, so the batch
+     * being walked is never the batch being written. */
+    int i, n = g_npend;
+    if (!n) return;
+    for (i = 0; i < n; i++)
+        uc_api_call_str(g_pend[i].id, g_pend[i].has ? g_pend[i].val : "");
+    memmove(g_pend, g_pend + n,
+            (unsigned long)(g_npend - n) * sizeof g_pend[0]);
+    g_npend -= n;
+}
 
 void uc_api_eval_print(const char *expr)
 {

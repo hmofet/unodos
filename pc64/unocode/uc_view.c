@@ -142,10 +142,17 @@ void uc_notif_tick(void)
 
 void uc_notif_draw(UcRect wb)
 {
-    int i, h = uc_ui_h() + 14, w = 300;
+    int i, h = uc_ui_h() + 14;
     for (i = 0; i < g_nnotif; i++) {
-        int y = wb.y + wb.h - (i + 1) * (h + 6) - 30;
-        int x = wb.x + wb.w - w - 16;
+        /* sized to the message, not the message to the box: UCD-48's toasts
+         * NAME the secret store, and a fixed 300px cut the name off - which
+         * un-says the one thing the message existed to say */
+        int w = uc_ui_text_w(g_notif[i].msg) + 24;
+        int y, x;
+        if (w < 300) w = 300;
+        if (w > wb.w - 40) w = wb.w - 40;
+        y = wb.y + wb.h - (i + 1) * (h + 6) - 30;
+        x = wb.x + wb.w - w - 16;
         fb_blend_rect(x + 3, y + 3, w, h, uc_col(UC_C_WIDGET_SHADOW), 70);
         fb_fill_rect(x, y, w, h, uc_col(UC_C_NOTIF_BG));
         fb_frame_rect(x, y, w, h, uc_col(UC_C_NOTIF_BORDER));

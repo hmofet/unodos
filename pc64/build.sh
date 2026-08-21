@@ -519,6 +519,15 @@ if [ "$1" != "legacy" ]; then
               -Iunocode -I../unojs -Ibearssl/inc \
               -c -o "build/apps/uc_net_pc64.o" "unocode/plat/uc_net_pc64.c"
         COBJ="$COBJ build/apps/uc_net_pc64.o"
+        # And its answer to the secret seam (uc_secret.h, UCD-48): a plain
+        # file on FAT that SAYS it is one - uc_secret_plaintext() = 1 - since
+        # FAT has no owners and an "encrypted" file whose key must live on the
+        # same unprotected disk is plaintext with extra steps.  Everything it
+        # imports is already in kExports for the editor's sake.
+        pc "$CC" $UCF -mno-stack-arg-probe -DUNO_APP_SYM=uno_app_main \
+              -Iunocode -I../unojs \
+              -c -o "build/apps/uc_secret_pc64.o" "unocode/plat/uc_secret_pc64.c"
+        COBJ="$COBJ build/apps/uc_secret_pc64.o"
         pcwait
         "$NM" $COBJ | awk '$1=="U"&&$2!=""{u[$2]=1} \
             $1!="U"&&NF>=3{d[$3]=1} \
