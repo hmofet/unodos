@@ -812,7 +812,31 @@ int uc_quick_event(UcRect wb, const unoui_event *e)
 static UcDoc *D(void) { return uc_doc_active(); }
 
 static void c_new(void)      { uc_doc_new(); }
-static void c_open(void)     { uc_quick_open(UC_Q_FILE); }
+/* Ask the shell for its native picker first and fall back to quick-open, so
+ * the same command is a real Open dialog on a desktop and the in-editor list
+ * on pc64, without either platform learning about the other. */
+static void c_open(void)
+{
+    int vol = 0;
+    char dir[UC_PATH_MAX], name[32];
+    if (pc64_shell_pick(0, &vol, dir, sizeof dir, name, sizeof name))
+        uc_doc_open(vol, dir, name);
+    else
+        uc_quick_open(UC_Q_FILE);
+}
+
+/* Open Folder RE-ROOTS the workspace, which only the shell can do - it owns
+ * the volume the folder is mounted on - so this asks and then follows. */
+static void c_open_folder(void)
+{
+    int vol = 0;
+    char dir[UC_PATH_MAX], name[32];
+    if (!pc64_shell_pick(1, &vol, dir, sizeof dir, name, sizeof name)) {
+        uc_status_msg("Open Folder needs a desktop file dialog");
+        return;
+    }
+    uc_open_folder(vol, dir);
+}
 static void c_save(void)     { UcDoc *d = D(); if (d) { if (d->name[0]) uc_doc_save(d); else uc_status_msg("Untitled: use Save As"); } }
 static void c_save_all(void) { int i; for (i = 0; i < uc_doc_count(); i++) { UcDoc *d = uc_doc_at(i); if (d->dirty && d->name[0]) uc_doc_save(d); } }
 static void c_close(void)    { int i = uc_doc_active_index(); if (i >= 0) uc_doc_close(i); }
@@ -1026,6 +1050,7 @@ void uc_cmd_init(void)
 
     reg("workbench.action.files.newUntitledFile", "File", "New File", c_new);
     reg("workbench.action.files.openFile", "File", "Open File...", c_open);
+    reg("workbench.action.files.openFolder", "File", "Open Folder...", c_open_folder);
     reg("workbench.action.files.save", "File", "Save", c_save);
     reg("workbench.action.files.saveAll", "File", "Save All", c_save_all);
     reg("workbench.action.closeActiveEditor", "View", "Close Editor", c_close);
@@ -1092,6 +1117,7 @@ void uc_cmd_init(void)
      * machine; see uc_main.c's key hook for what the transports deliver. */
     bind("ctrl+n", "workbench.action.files.newUntitledFile", 0);
     bind("ctrl+o", "workbench.action.files.openFile", 0);
+    bind("ctrl+k ctrl+o", "workbench.action.files.openFolder", 0);
     bind("ctrl+s", "workbench.action.files.save", 0);
     bind("ctrl+k s", "workbench.action.files.saveAll", 0);
     bind("ctrl+shift+p", "workbench.action.showCommands", 0);

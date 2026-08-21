@@ -510,3 +510,79 @@ static const UnoUuiApp kUnoCode = {
 };
 
 const UnoUuiApp *uno_app_main(void *reserved) { (void)reserved; return &kUnoCode; }
+
+/* ---- host queries ----------------------------------------------------------
+ * See unocode.h.  These exist for a hosted platform - one with an OS window of
+ * its own - and are the alternative to that host duplicating this file's
+ * layout arithmetic and this module's document list, both of which would then
+ * drift the first time either changed. */
+
+/* The DOCUMENT half of the title only.  The folder half is the host's: the
+ * core addresses the workspace as a volume number and has never been told what
+ * the OS calls it, so it would have to put "WORK" there - which is a label
+ * this module invented, not a folder the user recognises. */
+const char *uc_host_title(void)
+{
+    static char buf[48];
+    UcDoc *d = uc_doc_active();
+    buf[0] = 0;
+    if (!d) return buf;
+    uc_scpy(buf, d->name[0] ? d->name : "Untitled", sizeof buf);
+    if (d->dirty) uc_scat(buf, " \xe2\x97\x8f", sizeof buf);   /* U+25CF, the dirty dot */
+    return buf;
+}
+
+int uc_host_dirty_count(void)
+{
+    int i, n = 0;
+    for (i = 0; i < uc_doc_count(); i++) if (uc_doc_at(i)->dirty) n++;
+    return n;
+}
+
+/* Saves what CAN be saved.  An untitled editor has no path to save to, so it
+ * is left alone and counted as unsaved - a host that treated the return as
+ * "everything is safe now" would otherwise discard it. */
+int uc_host_save_all(void)
+{
+    int i, left = 0;
+    for (i = 0; i < uc_doc_count(); i++) {
+        UcDoc *d = uc_doc_at(i);
+        if (!d->dirty) continue;
+        if (d->name[0]) uc_doc_save(d);
+        if (d->dirty) left++;
+    }
+    return left;
+}
+
+int uc_host_cursor_at(int x, int y)
+{
+    UcDoc *d;
+    /* mid-drag the pointer keeps the splitter's shape wherever it has got to */
+    if (UC.drag == UC_DRAG_SIDEBAR) return UC_CUR_WE;
+    if (UC.drag == UC_DRAG_PANEL)   return UC_CUR_NS;
+    /* the same bands uc_canvas_event() grabs on, so what the pointer PROMISES
+     * and what a click DOES cannot disagree */
+    if (UC.sidebar.w &&
+        x >= UC.sidebar.x + UC.sidebar.w - 3 && x <= UC.sidebar.x + UC.sidebar.w + 2 &&
+        y >= UC.sidebar.y && y < UC.sidebar.y + UC.sidebar.h) return UC_CUR_WE;
+    if (UC.panel.h && y >= UC.panel.y - 3 && y <= UC.panel.y + 2 &&
+        x >= UC.panel.x && x < UC.panel.x + UC.panel.w) return UC_CUR_NS;
+    if (UC.panel_visible && UC.panel_tab == UC_PANEL_TERMINAL &&
+        x >= UC.panel.x && x < UC.panel.x + UC.panel.w &&
+        y >= UC.panel.y && y < UC.panel.y + UC.panel.h) return UC_CUR_TEXT;
+    d = uc_doc_active();
+    if (d && uc_edit_over_text(UC.editor, x, y)) return UC_CUR_TEXT;
+    return UC_CUR_ARROW;
+}
+
+int uc_host_tab_count(void) { return uc_doc_count(); }
+
+int uc_host_tab_info(int i, int *vol, char *dir, int dcap, char *name, int ncap)
+{
+    UcDoc *d = uc_doc_at(i);
+    if (!d || !d->name[0]) return 0;          /* untitled: nowhere to reopen */
+    if (vol) *vol = d->vol;
+    if (dir)  uc_scpy(dir, d->dir, dcap);
+    if (name) uc_scpy(name, d->name, ncap);
+    return 1;
+}
