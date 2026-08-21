@@ -661,6 +661,9 @@ int  uc_quick_event(UcRect workbench, const unoui_event *e);
 /* a quick pick / input box driven by an extension (uc_api.c) */
 void uc_quick_pick(char (*items)[64], int n, const char *placeholder, int jscb);
 void uc_quick_input(const char *placeholder, const char *value, int jscb);
+/* an input box that resolves into C and draws masked - for secrets (UCD-48).
+ * `fn` hears the text on Enter and "" on Escape. */
+void uc_quick_input_secret(const char *placeholder, void (*fn)(const char *));
 
 /* fuzzy score used by every list that filters: >= 0 = a match, higher is
  * better; *pos (nullable) receives the matched character indices so the

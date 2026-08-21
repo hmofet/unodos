@@ -164,6 +164,11 @@ vscode.languages.registerCompletionItemProvider(selector, provider)
     // provider.provideCompletionItems(document, position)
     //   -> [{ label, detail, insertText }] or [string]
 
+// on the context handed to activate(context):
+context.secrets.store(name, value)           // -> thenable
+context.secrets.get(name)                    // -> thenable of string|undefined
+context.secrets.delete(name)                 // -> thenable
+
 vscode.Position(line, character)   vscode.Range(l1, c1, l2, c2)
 console.log / .info / .warn / .error      -> the "Extension Host" output channel
 ```
@@ -177,6 +182,17 @@ console.log / .info / .warn / .error      -> the "Extension Host" output channel
 2. **`require` resolves only `'vscode'`.** There is no module resolver and no
    `node_modules`; anything else throws immediately rather than failing later
    and less clearly.
+
+**`context.secrets`** is `SecretStorage`'s shape with its trust model stated
+rather than implied. Names are prefixed with the extension's identity by the
+host, so one extension cannot read another's secrets - or the editor's own API
+key - by guessing a string. What backs it is the PLATFORM'S answer, not ours:
+DPAPI on Windows, the Keychain on macOS, a file only the user can read on
+Linux, and on UnoDOS a plain file on FAT - the last two are honestly named in
+the UI when a key is saved, because FAT protects nothing and saying otherwise
+would be a padlock icon on an open door. Thenables resolve on the next frame,
+not synchronously. `onDidChange` and enumeration do not exist: a list of
+secret NAMES is itself information an extension has no business asking for.
 
 Not implemented (and therefore not pretended): hover providers, definition
 providers, diagnostics from extensions, webviews, tree-view containers, tasks
@@ -371,3 +387,7 @@ typed into a *document*.
 
 - **1.0** (2026-08-20) First landing. Workbench, editor, themes, settings,
   keybindings, grammars, snippets, terminal, tasks, and the extension host.
+- **1.1** (2026-08-21) `context.secrets` (UCD-48): SecretStorage over the
+  platform's own store, the `AI: Set API Key` / `AI: Clear API Key` commands
+  with a masked input box, and the store named on screen whenever a key is
+  saved. Keys never enter `SETTINGS.JSN`.

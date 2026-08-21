@@ -31,6 +31,7 @@
  * condition and none of them knows the others exist.
  * ======================================================================== */
 #include "unocode.h"
+#include "uc_secret.h"
 
 /* F-keys, above the UI_KEY_* range so the two spaces cannot collide.  The
  * shell hands the module an EFI SimpleTextIn scan code, where F1..F12 are
@@ -492,7 +493,9 @@ static int   q_len, q_sel, q_scroll;
 static QItem q_item[QITEM_MAX];
 static int   q_n;
 static int   q_cb;                        /* extension callback slot        */
-static char  q_placeholder[64];
+static void (*q_cfn)(const char *text);   /* built-in callback (UCD-48)     */
+static int   q_mask;                      /* draw bullets, not the text     */
+static char  q_placeholder[96];
 static char  (*q_pick)[64];
 static int   q_pickn;
 
@@ -521,6 +524,8 @@ void uc_quick_close(void)
 {
     q_mode = UC_Q_NONE;
     q_cb = -1;
+    q_cfn = 0;
+    q_mask = 0;
     uc_ctx_set("inQuickOpen", 0);
 }
 
@@ -545,6 +550,17 @@ void uc_quick_input(const char *placeholder, const char *value, int jscb)
     q_mode = UC_Q_INPUT;
     q_n = 0;
     uc_ctx_set("inQuickOpen", 1);
+}
+
+/* An input box that resolves into C rather than JS, drawn MASKED - it exists
+ * to take secrets, and a screen shared or filmed while a key is typed into it
+ * must show bullets, not the key.  Cancelling calls `fn("")`, so one code path
+ * hears every outcome. */
+void uc_quick_input_secret(const char *placeholder, void (*fn)(const char *))
+{
+    uc_quick_input(placeholder, "", -1);
+    q_cfn = fn;
+    q_mask = 1;
 }
 
 static void q_add(const char *label, const char *detail, const char *aux, int ref)
@@ -646,6 +662,11 @@ static void q_accept(void)
 {
     int ref = (q_sel >= 0 && q_sel < q_n) ? q_item[q_sel].ref : -1;
     int mode = q_mode;
+    /* capture BEFORE uc_quick_close(): it resets both callbacks, and reading
+     * q_cb after it is how Enter on an extension's pick silently resolved
+     * nothing while Escape resolved "" */
+    int cb = q_cb;
+    void (*cfn)(const char *) = q_cfn;
     char text[120];
     uc_scpy(text, q_text, sizeof text);
     uc_quick_close();
@@ -681,10 +702,11 @@ static void q_accept(void)
         break;
     }
     case UC_Q_PICK:
-        if (q_cb >= 0) uc_api_call_str(q_cb, ref >= 0 && q_sel < q_n ? q_item[q_sel].label : "");
+        if (cb >= 0) uc_api_call_str(cb, ref >= 0 && q_sel < q_n ? q_item[q_sel].label : "");
         break;
     case UC_Q_INPUT:
-        if (q_cb >= 0) uc_api_call_str(q_cb, text);
+        if (cfn) cfn(text);
+        else if (cb >= 0) uc_api_call_str(cb, text);
         break;
     default: break;
     }
@@ -696,8 +718,10 @@ int uc_quick_key(int key, int mods, int ch)
     if (key == UI_KEY_ESC) {
         if (q_mode == UC_Q_PICK || q_mode == UC_Q_INPUT) {
             int cb = q_cb;
+            void (*cfn)(const char *) = q_cfn;
             uc_quick_close();
-            if (cb >= 0) uc_api_call_str(cb, "");     /* cancelled: undefined  */
+            if (cfn) cfn("");                         /* cancelled             */
+            else if (cb >= 0) uc_api_call_str(cb, ""); /* cancelled: undefined */
         } else uc_quick_close();
         return 1;
     }
@@ -747,13 +771,29 @@ void uc_quick_draw(UcRect wb)
     fb_fill_rect(r.x, r.y, r.w, r.h, uc_col(UC_C_QUICK_BG));
     fb_frame_rect(r.x, r.y, r.w, r.h, uc_col(UC_C_FOCUS_BORDER));
 
-    /* the input line */
+    /* the input line.  Clipped to the field: UCD-48's placeholders carry a
+     * store name and can be longer than the box, and text that walks out of
+     * its widget is worse than text that ends early. */
     fb_fill_rect(r.x + 6, r.y + 6, r.w - 12, ih, uc_col(UC_C_INPUT_BG));
     fb_frame_rect(r.x + 6, r.y + 6, r.w - 12, ih, uc_col(UC_C_INPUT_BORDER));
+    fb_set_clip(r.x + 7, r.y + 6, r.w - 14, ih);
     if (q_len) {
         int tw;
-        uc_ui_text(r.x + 12, r.y + 10, q_text, uc_col(UC_C_INPUT_FG));
-        tw = uc_ui_text_w(q_text);
+        const char *shown = q_text;
+        /* a secret input draws one '*' per CHARACTER - asterisk because it is
+         * in every bundled face, where a bullet would be a .notdef box */
+        char mask[120];
+        if (q_mask) {
+            int i = 0, o = 0, cp;
+            while (i < q_len && o < (int)sizeof mask - 1) {
+                i += uc_u8_get(q_text + i, q_len - i, &cp);
+                mask[o++] = '*';
+            }
+            mask[o] = 0;
+            shown = mask;
+        }
+        uc_ui_text(r.x + 12, r.y + 10, shown, uc_col(UC_C_INPUT_FG));
+        tw = uc_ui_text_w(shown);
         if ((uno_dbg_uptime_ms() / 530) & 1)
             fb_fill_rect(r.x + 12 + tw + 1, r.y + 9, 2, ih - 6, uc_col(UC_C_CURSOR));
     } else {
@@ -761,6 +801,7 @@ void uc_quick_draw(UcRect wb)
         if ((uno_dbg_uptime_ms() / 530) & 1)
             fb_fill_rect(r.x + 12, r.y + 9, 2, ih - 6, uc_col(UC_C_CURSOR));
     }
+    fb_reset_clip();
 
     for (i = 0; i < rows; i++) {
         int k = q_scroll + i;
@@ -1010,6 +1051,53 @@ static void c_escape(void)
     if (d && d->ncur > 1) { uc_clear_extra_cursors(d); return; }
 }
 
+/* ---- the assistant's API key (UCD-48) ---------------------------------------
+ * The key never touches SETTINGS.JSN: it goes through uc_secret.h, and every
+ * message here NAMES the store it went to, because "saved" from a platform
+ * whose store is a plain file is a different promise than "saved" to a
+ * keychain - and the user deserves to know which one they got. */
+static void set_key_done(const char *text)
+{
+    char msg[160];
+    if (!text || !text[0]) return;              /* cancelled, or nothing typed */
+    if (!uc_secret_set("anthropic.key", text)) {
+        uc_notify("The key was NOT saved: the secret store refused it",
+                  UC_SEV_ERROR);
+        return;
+    }
+    uc_scpy(msg, "API key saved to ", sizeof msg);
+    uc_scat(msg, uc_secret_store_name(), sizeof msg);
+    if (uc_secret_plaintext()) {
+        uc_scat(msg, " - this platform cannot encrypt it", sizeof msg);
+        uc_notify(msg, UC_SEV_WARN);
+    } else
+        uc_notify(msg, UC_SEV_INFO);
+}
+static void c_set_key(void)
+{
+    char have[8], ph[96];
+    if (uc_secret_get("anthropic.key", have, sizeof have)) {
+        uc_scpy(ph, "A key is in ", sizeof ph);
+        uc_scat(ph, uc_secret_store_name(), sizeof ph);
+        uc_scat(ph, "; Enter replaces it", sizeof ph);
+    } else {
+        uc_scpy(ph, "Anthropic API key - goes to ", sizeof ph);
+        uc_scat(ph, uc_secret_store_name(), sizeof ph);
+    }
+    uc_quick_input_secret(ph, set_key_done);
+}
+static void c_clear_key(void)
+{
+    char msg[160];
+    if (!uc_secret_del("anthropic.key")) {
+        uc_notify("The key could not be removed", UC_SEV_ERROR);
+        return;
+    }
+    uc_scpy(msg, "API key removed from ", sizeof msg);
+    uc_scat(msg, uc_secret_store_name(), sizeof msg);
+    uc_notify(msg, UC_SEV_INFO);
+}
+
 static void c_welcome(void)
 {
     int i = uc_doc_new();
@@ -1117,6 +1205,9 @@ void uc_cmd_init(void)
     reg("workbench.action.openSettingsJson", "Preferences", "Open Settings (JSON)", c_settings_json);
     reg("workbench.action.openGlobalKeybindings", "Preferences", "Open Keyboard Shortcuts", c_keys_ui);
     reg("workbench.action.openGlobalKeybindingsFile", "Preferences", "Open Keyboard Shortcuts (JSON)", c_keys_json);
+
+    reg("unocode.ai.setApiKey", "AI", "Set API Key", c_set_key);
+    reg("unocode.ai.clearApiKey", "AI", "Clear API Key", c_clear_key);
 
     reg("workbench.action.reloadWindow", "Developer", "Reload Extensions", c_reload_ext);
     reg("workbench.action.tasks.runTask", "Tasks", "Run Task", c_run_task);
