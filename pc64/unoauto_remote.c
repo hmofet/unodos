@@ -1331,19 +1331,52 @@ static void dispatch_cmd(const char *id, char *verb, char *args)
      * by tools/*.py). They have no place in a shipped image, so they compile out
      * entirely in production - and their GATE rows are #ifdef'd out too, so even
      * naming one on a production link is refused as unknown rather than reachable. */
-    /* nst <p1> <p2> - netsock self-test (debug): prove the multi-connection
-     * layer. Open TWO simultaneous outbound TCP connections (to 10.0.2.2:p1 and
-     * :p2), plus a LISTEN socket on 9099 that accepts one inbound connection
-     * (the host dials in via QEMU hostfwd). Reports socket count, both outbound
-     * states, and the accepted child + its peer. Driven by tools/netsock_qemu.py. */
+    /* nst <p1> <p2> [a.b.c.d] - netsock self-test (debug): prove the
+     * multi-connection layer. Open TWO simultaneous outbound TCP connections
+     * (to <host>:p1 and :p2), plus a LISTEN socket on 9099 that accepts one
+     * inbound connection. Reports socket count, both outbound states, and the
+     * accepted child + its peer. Driven by tools/netsock_qemu.py.
+     *
+     * IT NEEDS ITS FIXTURE, AND IT NOW SAYS SO. The default host is 10.0.2.2,
+     * which is the QEMU SLIRP gateway and NOTHING on real hardware, and the
+     * inbound half needs a QEMU hostfwd for the host to dial :9099 at all. So
+     * on metal this answered `connA=0 connB=0 accepted=-1` on a machine whose
+     * networking demonstrably worked - it had just driven a live TLS session
+     * to api.anthropic.com - and the conformance run read that as a networking
+     * defect (CONFORMANCE-2026-08.md §4, "Minor and deferred"). A self-test
+     * that cannot distinguish "the stack is broken" from "nobody was listening
+     * at the address I invented" must report WHICH, so this now echoes the
+     * target it dialled and what a zero means. The optional third argument
+     * points it at a real peer, which is what makes it runnable on metal. */
     if (!strcmp_(verb, "nst")) {
         extern void uno_pc64_delay_ms(int ms);
         int p1 = (int)atol_(tok(&args));
         int p2 = (int)atol_(tok(&args));
+        char *hs_ = tok(&args);
         u8  host[4] = {10, 0, 2, 2};
         int sA = net_socket(SOCK_TCP), sB = net_socket(SOCK_TCP), sL = net_socket(SOCK_TCP);
         int child = -1, i;
-        char t[96]; SB b;
+        char t[160]; SB b;
+        if (hs_) {                                   /* a.b.c.d, else the default */
+            int q = 0; char *c_ = hs_;
+            while (q < 4 && *c_) {
+                int v = 0;
+                while (*c_ >= '0' && *c_ <= '9') { v = v * 10 + (*c_++ - '0'); }
+                host[q++] = (u8)v;
+                if (*c_ == '.') c_++; else break;
+            }
+            if (q != 4) { host[0] = 10; host[1] = 0; host[2] = 2; host[3] = 2; }
+        }
+        sb_init(&b, t, sizeof t); sb_s(&b, "target=");
+        sb_i(&b, host[0]); sb_c(&b,'.'); sb_i(&b, host[1]); sb_c(&b,'.');
+        sb_i(&b, host[2]); sb_c(&b,'.'); sb_i(&b, host[3]);
+        sb_s(&b, " ports="); sb_i(&b, p1); sb_c(&b,'/'); sb_i(&b, p2);
+        sb_s(&b, " listen=9099"); t[b.len]=0; rsp(id,"ok",t);
+        rsp(id, "ok", "note=needs a peer AT that address; 10.0.2.2 is the QEMU "
+                      "slirp gateway and exists only under QEMU, and the inbound "
+                      "half needs a hostfwd. 0/0/-1 means nothing answered, not "
+                      "that the stack is broken - pass a reachable host to test "
+                      "on real hardware.");
         if (p1 > 0) net_connect(sA, host, (u16)p1);
         if (p2 > 0) net_connect(sB, host, (u16)p2);
         net_bind(sL, 9099); net_listen(sL);
