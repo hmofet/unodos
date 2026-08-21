@@ -20,7 +20,7 @@
         {
           "id": "s01b",
           "at": "desktop-first-paint",
-          "text": "It boots on an ordinary PC straight to a desktop. No install, no command line. The whole image is nineteen megabytes, half of it game data."
+          "text": "It boots on an ordinary PC straight to a desktop. No install, no command line. Nineteen megabytes, half of it game data."
         }
       ]
     },
@@ -230,7 +230,7 @@
         {
           "id": "s16f",
           "at": "a-vs-code-theme-repaints-it",
-          "text": "And that one is a Visual Studio Code theme file, dropped in unmodified. Keybindings and snippets load the same way."
+          "text": "That one is a Visual Studio Code theme file, dropped in unmodified. Keybindings and snippets load the same way."
         }
       ]
     },
@@ -265,7 +265,7 @@
         {
           "id": "s08d",
           "at": "look-around",
-          "text": "The game data is a Freedoom WAD - its levels, its sounds and its music, straight off the disk."
+          "text": "A Freedoom WAD: its levels, its sounds and its music, straight off the disk."
         }
       ]
     },
