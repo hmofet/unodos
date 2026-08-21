@@ -67,38 +67,45 @@ export HOME=/root XDG_RUNTIME_DIR=/run
 export XDG_CACHE_HOME=/tmp/cache XDG_CONFIG_HOME=/tmp/config
 mkdir -p /tmp/cache /tmp/config
 
-# The wire.  /etc is read-only, so /etc/resolv.conf is a symlink into tmpfs
-# (made at build time) and udhcpc's script writes through it.  Backgrounded
-# with a retry: the host bridge only carries frames once the appliance is
-# running, and a lease that is not there yet is not a lease that never comes.
+# THE WIRE COMES UP BEFORE THE BROWSER DOES, and that ordering is the whole
+# difference between a browser and a screenshot of an error page: Chromium
+# navigates once at startup and CACHES the failure, so a guest whose lease
+# arrives thirty seconds later sits on "This site can't be reached" forever
+# while its network works perfectly.  That is exactly what the first bridged
+# run produced.  So this loop is in the FOREGROUND.
 : > /tmp/resolv.conf
-(
-  n=0
-  while [ $n -lt 30 ]; do
-    ip link set eth0 up 2>/dev/null
-    if udhcpc -i eth0 -t 4 -T 3 -n -q -s /usr/share/uno/dhcp.script \
-              >/tmp/dhcp.log 2>&1; then
-      echo "uno: lease $(ip -4 addr show eth0 | grep -o 'inet [0-9.]*')" \
-          > /dev/ttyS0
-      echo "uno: route $(ip route | grep -o 'default.*' | head -1)" > /dev/ttyS0
-      echo "uno: dns $(tr '\n' ' ' < /tmp/resolv.conf)" > /dev/ttyS0
-      # THE PROOF LINE.  A screenshot of a browser can be a cached page or an
-      # error page misread at a glance; an HTTP status fetched by a different
-      # program entirely says the guest reached the internet through the
-      # bridge, in one line, before Chromium is even asked to.
-      echo "uno: fetch $(wget -q -T 8 -O - http://example.com 2>/dev/null \
-            | tr -d '\n' | grep -o '<title>.*</title>' | head -c 60)" \
-          > /dev/ttyS0
-      break
-    fi
-    n=$((n + 1))
-    # SAY SO WHEN IT FAILS.  A loop that only reports success is a loop that
-    # reads identically to one that never ran, and the difference decides
-    # whether to look at the guest or at the bridge.
-    echo "uno: no lease yet (try $n)" > /dev/ttyS0
-    sleep 2
-  done
-) &
+n=0
+while [ $n -lt 40 ]; do
+  ip link set eth0 up 2>/dev/null
+  if udhcpc -i eth0 -t 4 -T 3 -n -q -s /usr/share/uno/dhcp.script \
+            >/tmp/dhcp.log 2>&1; then
+    echo "uno: lease $(ip -4 addr show eth0 | grep -o 'inet [0-9.]*')" > /dev/ttyS0
+    echo "uno: route $(ip route | grep -o 'default.*' | head -1)" > /dev/ttyS0
+    echo "uno: dns $(tr '\n' ' ' < /tmp/resolv.conf)" > /dev/ttyS0
+    break
+  fi
+  n=$((n + 1))
+  # SAY SO WHEN IT FAILS.  A loop that only reports success is a loop that
+  # reads identically to one that never ran, and the difference decides
+  # whether to look at the guest or at the bridge.
+  echo "uno: no lease yet (try $n)" > /dev/ttyS0
+  sleep 2
+done
+
+# THE PROOF LINE, and the gate the browser waits on.  A screenshot of a
+# browser can be a cached page or an error page misread at a glance; a title
+# fetched by a different program entirely says the guest reached the
+# internet through the bridge, in one line, before Chromium is asked to.
+n=0
+while [ $n -lt 20 ]; do
+  T=$(wget -q -T 10 -O - http://example.com 2>/tmp/wget.err \
+      | tr -d '\n' | grep -o '<title>[^<]*' | head -c 48)
+  if [ -n "$T" ]; then echo "uno: fetch OK $T" > /dev/ttyS0; break; fi
+  n=$((n + 1))
+  echo "uno: fetch failed ($n) $(head -c 50 /tmp/wget.err | tr '\n' ' ')" \
+      > /dev/ttyS0
+  sleep 3
+done
 
 # X plus Chromium, restarted if either dies.  Software rendering: the guest
 # has simpledrm and no GPU, and Chromium's own rasteriser is the fast path.
@@ -106,12 +113,24 @@ mkdir -p /tmp/cache /tmp/config
 # NOT --kiosk: the point of A8's input path is that this is a browser somebody
 # can DRIVE - the address bar, ctrl-L, a link under the pointer.  A kiosk with
 # no chrome proves rendering and nothing else.
-URL=${UNO_URL:-https://example.com}
+#
+# THE BACKGROUND DOWNLOADS HAVE TO GO.  Chromium's component updater, variation
+# seed and safe-browsing lists are tens of megabytes, and a quarter-core guest
+# behind a bridged link spends its whole first minutes on them instead of on
+# the page somebody asked for - 20,213 frames arrived on the first bridged run
+# and none of them were the website.  Every flag below turns off traffic
+# nobody asked for; none of them touch rendering.
+URL=${UNO_URL:-http://example.com}
 while :; do
     xinit /usr/bin/chromium \
         --no-sandbox --disable-gpu --disable-dev-shm-usage \
         --no-first-run --no-default-browser-check --disable-infobars \
         --password-store=basic --disable-sync \
+        --disable-background-networking --disable-component-update \
+        --disable-domain-reliability --disable-breakpad \
+        --disable-client-side-phishing-detection --no-pings \
+        --safebrowsing-disable-auto-update --metrics-recording-only \
+        --disable-features=OptimizationHints,MediaRouter \
         --window-position=0,0 --window-size=800,600 \
         --start-maximized "$URL" \
         -- /usr/bin/X :0 vt1 -nolisten tcp -quiet \

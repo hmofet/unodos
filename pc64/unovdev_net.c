@@ -236,7 +236,7 @@ int uno_vnet_str(char *buf, int cap)
  * Nothing here rewrites a frame, so nothing here can corrupt one. */
 static struct {
     uno_nic_t *nic;
-    int active, tx, rx, bcast, dropped;
+    int active, tx, rx, bcast, dropped, txfail;
 } B;
 
 /* THE LINK IS RESOLVED LAZILY, and that is not tidiness - it is the whole
@@ -272,7 +272,10 @@ int uno_vnet_bridge_tx(const unsigned char *frame, int len)
     if (!B.active || len < 14) return 0;
     n = bridge_nic();
     if (!n) return 0;                /* no wire yet: the peer answers        */
-    if (n->send(n->ctx, frame, len) < 0) { B.dropped++; return 0; }
+    /* A send that fails is counted SEPARATELY from a receive with no buffer.
+     * Sharing one counter makes "the guest cannot talk" and "the guest is not
+     * listening fast enough" the same number, and they have opposite causes. */
+    if (n->send(n->ctx, frame, len) < 0) { B.txfail++; return 0; }
     B.tx++;
     return 1;
 }
@@ -299,8 +302,10 @@ int uno_vnet_bridge_str(char *buf, int cap)
 {
     int i = 0, k;
     static const char H[] = "0123456789";
-    const int vals[4] = { B.tx, B.rx, B.bcast, B.dropped };
-    const char *names[4] = { "wire tx ", " rx ", " bcast ", " nobuf " };
+    const int vals[5] = { B.tx, B.rx, B.bcast, B.dropped, B.txfail };
+    const char *names[5] = { "wire tx ", " rx ", " bcast ", " nobuf ",
+                             " txfail " };
+    const int NV = 5;
     if (B.active && !bridge_nic()) {
         const char *s = "armed, no link yet";
         while (*s && i + 1 < cap) buf[i++] = *s++;
@@ -313,7 +318,7 @@ int uno_vnet_bridge_str(char *buf, int cap)
         if (i < cap) buf[i] = 0;
         return i;
     }
-    for (k = 0; k < 4 && i + 12 < cap; k++) {
+    for (k = 0; k < NV && i + 12 < cap; k++) {
         const char *s = names[k];
         int v = vals[k], d = 1000000, seen = 0;
         while (*s && i + 1 < cap) buf[i++] = *s++;
