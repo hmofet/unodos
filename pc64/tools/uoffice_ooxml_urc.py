@@ -66,9 +66,12 @@ def check(cond, label, detail=""):
 def open_row(ui, row, tag):
     """File > Open, pick list row `row`, click Open.
 
-    The row is picked rather than typed: uofile.c mirrors the selected LIST
-    row into the name field on every sync, so anything typed there is
-    overwritten on the next frame.
+    The row is picked rather than typed because that is what an Open dialog is
+    FOR - not, as this note used to say, because typing was impossible. It was:
+    uofile.c mirrored the selected LIST row into the name field on every sync,
+    so anything typed was overwritten before it could be painted. Fixed
+    2026-08-21 (it now mirrors only on an actual pick), so the field takes
+    keys and a harness may type into it if it wants to.
     """
     ui.click(FILE_X, MENUBAR_Y)
     time.sleep(0.4)
