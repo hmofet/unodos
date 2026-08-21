@@ -9,10 +9,18 @@
 
 # UnoCode, subsystem contract
 
-**Owner:** the `unocode` row in [`/AGENTS.md`](../../AGENTS.md) §1.
+**Where this file is canonical:** `hmofet/unocode-desktop`, in `core/`. UnoDOS
+vendors it, along with the rest of the editor, into `pc64/unocode/` - see
+[`core/README.md`](README.md) there and `pc64/UNOCODE-UPSTREAM.md` here. The
+copy in an UnoDOS checkout carries a do-not-edit banner; this one does not,
+because this is the one to edit.
+
+**Owner:** UnoCode Desktop's `ROADMAP.md` and `AGENTS.md`. In UnoDOS, the
+`UnoCode` row in `/AGENTS.md` §1 records it as vendored.
 **Public surface:** the ON-DISK FORMATS in this document, plus the unoui-class
 module ABI (`pc64/uno_uuiapp.h`) every app already speaks. `unocode.h` is
-subsystem-internal and nothing outside `pc64/unocode/` may include it.
+subsystem-internal: nothing outside the editor directory may include it -
+`core/` here, `pc64/unocode/` there.
 **Contract version:** 1.0, `[EXPERIMENTAL]` until the second extension written
 by somebody other than its author loads unmodified.
 
@@ -321,11 +329,24 @@ it to PYRT.
 
 ## 8. Testing
 
+The same two files are tested in both trees. `tools/test.sh` finds its own
+layout, so it is vendored verbatim rather than kept as two copies that drift.
+
 ```sh
-cd pc64/unocode && sh tools/test.sh          # host: the JSONC parser + regex
+# UnoCode Desktop, where the editor is canonical
+sh core/tools/test.sh                        # host: the JSONC parser + regex
+./build.sh --gate                            # + the four seam suites + a render
+
+# UnoDOS, where it is vendored - and the only place a kernel break is visible
+sh unocode/tools/test.sh                     # the same file, the same 71 checks
+cd pc64 && sh tools/gate.sh                  # runs the above as a stage
 cd pc64 && UNO_DEBUG=1 ./build.sh && \
     python3 unocode/tools/unocode_urc.py     # QEMU: the merge gate
 ```
+
+**Run the UnoDOS side before calling a change done.** The desktop build
+compiles the editor and its foundations, never the kernel, so a change to
+anything the kernel also compiles is green there and can fail outright here.
 
 `tools/test.sh` builds `uc_json.c` and `uc_rx.c` natively - they have no
 framebuffer, no toolkit and no filesystem in them, and every config file,
