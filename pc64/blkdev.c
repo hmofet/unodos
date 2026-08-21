@@ -112,7 +112,17 @@ static void fw_scan(void)
     EFI_HANDLE *hs = 0; UINTN n = 0, i;
     int fwidx = 0;
 
-    if (!ST) return;
+    /* GUARD THE USE, not just the pointer. ST->BootServices is a live table
+     * only until ExitBootServices; after that the dereference lands in freed
+     * memory and faults (#UD at a stale address). The `!ST` test alone does
+     * not cover that - ST stays non-NULL forever. This function is only
+     * reached from the attached branch of uno_blk_init today, so the check is
+     * belt and braces; it is also exactly the shape of the crash that
+     * loop-reset an X13 Yoga from its first boot (iwlwifi's
+     * arena_init_lowmem, CONFORMANCE-2026-08.md §6), where the same
+     * "it can only run while attached" reasoning was written as a comment
+     * rather than as a test. acpi_host.c is the pattern: guard every USE. */
+    if (!ST || uno_pc64_detached()) return;
     BS = ST->BootServices;
     if (BS->LocateHandleBuffer(2, &gBlkGuid, 0, &n, &hs) != EFI_SUCCESS || !hs)
         return;
