@@ -20,7 +20,7 @@
         {
           "id": "s01b",
           "at": "desktop-first-paint",
-          "text": "It boots on an ordinary PC, in about four megabytes, straight to a desktop. No install, and no command line."
+          "text": "It boots on an ordinary PC straight to a desktop. No install, no command line. The whole image is nineteen megabytes, half of it game data."
         }
       ]
     },
@@ -196,6 +196,41 @@
           "id": "s07f",
           "at": "run-the-python",
           "text": "That one runs on the system's own Python runtime, and opens as an ordinary application."
+        }
+      ]
+    },
+    {
+      "id": "s16",
+      "cues": [
+        {
+          "id": "s16a",
+          "at": "open-unocode",
+          "text": "Alongside Studio there is UnoCode: an editor built in the shape of Visual Studio Code, and running on this machine."
+        },
+        {
+          "id": "s16b",
+          "at": "go-to-a-file-by-name",
+          "text": "Go to File, an explorer, tabs, a minimap, syntax highlighting. All of it drawn by the operating system underneath it."
+        },
+        {
+          "id": "s16c",
+          "at": "the-command-palette",
+          "text": "Every command has a name, and every name is in one searchable list."
+        },
+        {
+          "id": "s16d",
+          "at": "an-extension-runs-javascript",
+          "text": "That command came from an extension, and running it just executed real JavaScript, in the system's own engine."
+        },
+        {
+          "id": "s16e",
+          "at": "the-terminal-evaluates-javascript",
+          "text": "The terminal is the editor's own. Six times seven, evaluated on the machine."
+        },
+        {
+          "id": "s16f",
+          "at": "a-vs-code-theme-repaints-it",
+          "text": "And that one is a Visual Studio Code theme file, dropped in unmodified. Keybindings and snippets load the same way."
         }
       ]
     },
