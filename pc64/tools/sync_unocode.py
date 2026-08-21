@@ -43,10 +43,17 @@ SRCDIR = "core"                       # where the core lives in that repo
 # being compiled.
 TAKE = [
     "uc_*.c",
+    "uc_*.h",
     "unocode.h",
     "UNOCODE.md",
     "tools/test.sh",
     "tools/uc_test.c",
+    # Platform implementations of the core's seams.  They live in a
+    # SUBDIRECTORY upstream because the desktop build globs `core/uc_*.c`, and
+    # a pc64 implementation caught by that glob would be compiled on a host
+    # with none of its symbols.  #ifdef cannot separate them: the desktop
+    # defines UNO_PC64 too.
+    "plat/*.c",
     "ext/*",
     "ext/*/*",
     "ext/*/*/*",

@@ -150,6 +150,15 @@ static const struct { const char *name; void *addr; } kExports[] = {
     /* net bring-up + DNS + CA-validated TLS: a module (Studio's AI assistant)
      * makes its own HTTPS request through these */
     KX(pc64_net_up), KX(net_dns_query), KX(tls_connect_ca), KX(uno_pc64_delay_ms),
+    /* tls.h's HANDLE API, which is the non-blocking one.  Everything above it
+     * is the legacy module-scoped surface, and it BLOCKS - which is why the
+     * one module using it (Studio's assistant) freezes the desk for the length
+     * of a request.  UnoCode's uc_net.h seam is built on these instead, so the
+     * editor can pump a request from its frame loop and keep drawing.
+     * Exported together because a caller needs all of them: open, advance,
+     * both directions, the error, and the way out. */
+    KX(tls_open),  KX(tls_poll),  KX(tls_send),  KX(tls_recv),  KX(tls_free),
+    KX(tls_conn_error), KX(tls_open_error),
     /* Intel WiFi + Realtek USB-ethernet status (Network app readout) */
     KX(iwl_present), KX(iwl_nic),    KX(iwl_mac),   KX(iwl_status_str),
     /* scan + join for the Network app's "pick an SSID, type the password" UI */
