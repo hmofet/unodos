@@ -159,6 +159,10 @@ static const struct { const char *name; void *addr; } kExports[] = {
      * both directions, the error, and the way out. */
     KX(tls_open),  KX(tls_poll),  KX(tls_send),  KX(tls_recv),  KX(tls_free),
     KX(tls_conn_error), KX(tls_open_error),
+    /* and the resolver's non-blocking surface, for the same reason: a
+     * cold-cache net_dns_query() costs up to five seconds of retries, which is
+     * five seconds a module with a frame to draw cannot spend. */
+    KX(net_dns_begin), KX(net_dns_poll), KX(net_dns_abort),
     /* Intel WiFi + Realtek USB-ethernet status (Network app readout) */
     KX(iwl_present), KX(iwl_nic),    KX(iwl_mac),   KX(iwl_status_str),
     /* scan + join for the Network app's "pick an SSID, type the password" UI */

@@ -1141,77 +1141,167 @@ static void dns_cache_put(const char *host, const u8 ip[4], u32 ttl)
     dns_cache[slot].used = 1;
 }
 
+/* ---- the resolver, in two surfaces over one engine ------------------------
+ * net_dns_begin/net_dns_poll are NON-BLOCKING: you start a lookup and advance
+ * it from wherever you already call net_poll(), exactly as tls_open/tls_poll
+ * work.  net_dns_query is those two plus a wait, so there is one
+ * implementation of what a DNS lookup is.
+ *
+ * The blocking one is why this split exists.  UnoCode's assistant builds a
+ * request from its frame loop, and a cold-cache lookup here costs up to five
+ * seconds of retries - which is 300 dropped frames, during which the editor
+ * cannot scroll, type or repaint.  Every other step of an HTTPS request was
+ * already pumped; this was the last one that was not.
+ *
+ * ONE LOOKUP AT A TIME, deliberately.  A handle set would let two requests
+ * resolve at once, and the two things that would use it are a request and its
+ * retry - which are the same lookup.  A second begin() while one is in flight
+ * is refused rather than queued, so the caller decides what to do about it
+ * instead of discovering a hidden queue under load.
+ */
+
+#define DNS_TRY_MS   (DNS_WAIT_N * DNS_QUANTUM)   /* per-try patience, ms */
+#define DNS_BACKOFF  300u                         /* after a negative answer */
+static const u16 DNS_SPORT = 5300;
+
+static struct {
+    int  active;
+    char host[64];
+    u8   q[300];
+    int  qn;
+    int  tries;
+    u32  deadline;        /* when the current try gives up, or a backoff ends */
+} g_dq;
+
+/* Pull an A record out of a response.  1 = got one (out + ttl filled),
+ * 0 = a valid response with no A record in it, -1 = not for us / no answers. */
+static int dns_parse(const u8 *r, int n, u8 out[4], u32 *ttl_out)
+{
+    int i, qd, an;
+    if (n < 12) return -1;
+    g_dns_rx++;
+    /* S-NET-19: match our transaction id, else a stray or forged reply is
+     * accepted as ours. */
+    if (r[0] != 0x51 || r[1] != 0x53) { g_dns_badid++; return -1; }
+    qd = (r[4]<<8)|r[5]; an = (r[6]<<8)|r[7];
+    /* A no-answer response (SERVFAIL/NXDOMAIN/empty) must not hard-fail the
+     * whole query: cold-cache forwarders commonly answer SERVFAIL instantly
+     * while upstream recursion completes, so it is worth another try. (QEMU
+     * never showed this - SLIRP proxies to the host's warm resolver.) */
+    if (an < 1) { g_dns_neg++; return -1; }
+    i = 12;
+    for (; qd > 0; qd--) {                   /* skip questions */
+        while (i < n && r[i]) { if ((r[i]&0xC0)==0xC0){ i++; break; } i += r[i]+1; }
+        i++; i += 4;                         /* null + QTYPE + QCLASS */
+    }
+    for (; an > 0 && i + 12 <= n; an--) {    /* answers */
+        u16 type, rdl; u32 ttl;
+        if ((r[i]&0xC0)==0xC0) i += 2;       /* compressed name */
+        else { while (i < n && r[i]) i += r[i]+1; i++; }
+        if (i + 10 > n) break;               /* name walk ran off the buffer */
+        type = (r[i]<<8)|r[i+1];
+        ttl  = ((u32)r[i+4]<<24)|((u32)r[i+5]<<16)|((u32)r[i+6]<<8)|r[i+7];
+        rdl  = (r[i+8]<<8)|r[i+9];
+        i += 10;
+        if (type == 1 && rdl == 4 && i + 4 <= n) {
+            memcpy(out, r + i, 4);
+            *ttl_out = ttl;
+            return 1;
+        }
+        i += rdl;
+    }
+    return 0;
+}
+
+int net_dns_begin(const char *host, u8 out[4])
+{
+    int ql; unsigned hl = 0;
+
+    if (!host || !*host) return -1;
+    if (dns_cache_get(host, out)) return 1;   /* fresh cache hit: no round trip */
+    if (g_dq.active) return -2;
+
+    while (host[hl]) hl++;
+    if (hl >= sizeof g_dq.host) return -1;    /* too long to remember or cache */
+
+    /* header: id, flags(RD), qd=1 */
+    g_dq.q[0]=0x51; g_dq.q[1]=0x53; g_dq.q[2]=0x01; g_dq.q[3]=0x00;
+    g_dq.q[4]=0; g_dq.q[5]=1; g_dq.q[6]=0; g_dq.q[7]=0;
+    g_dq.q[8]=0; g_dq.q[9]=0; g_dq.q[10]=0; g_dq.q[11]=0;
+    g_dq.qn = 12;
+    ql = dns_name(g_dq.q + g_dq.qn, host);
+    if (ql < 0) return -1;
+    g_dq.qn += ql;
+    g_dq.q[g_dq.qn++]=0; g_dq.q[g_dq.qn++]=1;   /* QTYPE  A  */
+    g_dq.q[g_dq.qn++]=0; g_dq.q[g_dq.qn++]=1;   /* QCLASS IN */
+
+    memcpy(g_dq.host, host, hl + 1);
+    g_dq.tries = 0;
+    g_dq.deadline = net_ms();                   /* due immediately */
+    g_dq.active = 1;
+    g_dns_sent = g_dns_rx = g_dns_badid = g_dns_neg = 0;
+    return 0;
+}
+
+int net_dns_poll(u8 out[4])
+{
+    u8 r[512], src[4]; u16 sp; int n;
+    u32 now, ttl = 0;
+
+    if (!g_dq.active) return -1;
+    now = net_ms();
+
+    /* Time to (re)send?  One field carries both the per-try timeout and the
+     * post-negative backoff, because they are the same question: when may the
+     * next query go out. */
+    if ((int)(now - g_dq.deadline) >= 0) {
+        if (g_dq.tries >= DNS_TRIES) { g_dq.active = 0; return -1; }
+        net_udp_send(DNS, 53, DNS_SPORT, g_dq.q, g_dq.qn);
+        g_dns_sent++;
+        g_dq.tries++;
+        g_dq.deadline = now + DNS_TRY_MS;
+    }
+
+    /* Drain whatever has arrived.  Several datagrams can be waiting - a
+     * retried query gets an answer per send - so take them all rather than one
+     * per call, or a late duplicate holds the queue for another frame. */
+    while ((n = net_udp_recv(DNS_SPORT, r, sizeof r, src, &sp)) >= 12) {
+        int got = dns_parse(r, n, out, &ttl);
+        if (got == 1) {
+            dns_cache_put(g_dq.host, out, ttl);   /* remember it for next time */
+            g_dq.active = 0;
+            return 1;
+        }
+        if (got < 0) {
+            /* Negative or not ours: try again after a beat rather than
+             * spending the remaining patience of this try doing nothing. */
+            g_dq.deadline = now + DNS_BACKOFF;
+        }
+    }
+    return 0;
+}
+
+void net_dns_abort(void) { g_dq.active = 0; }
+
 int net_dns_query(const char *host, u8 out[4])
 {
-    u8 q[300]; int qn = 0, ql, tries;
-    const u16 sport = 5300;
-    if (dns_cache_get(host, out)) return 1;    /* fresh cache hit: no round trip */
-    /* header: id, flags(RD), qd=1 */
-    q[0]=0x51; q[1]=0x53; q[2]=0x01; q[3]=0x00;
-    q[4]=0; q[5]=1; q[6]=0; q[7]=0; q[8]=0; q[9]=0; q[10]=0; q[11]=0;
-    qn = 12;
-    ql = dns_name(q + qn, host); if (ql < 0) return 0; qn += ql;
-    q[qn++]=0; q[qn++]=1;                       /* QTYPE  A  */
-    q[qn++]=0; q[qn++]=1;                       /* QCLASS IN */
-    g_dns_sent = g_dns_rx = g_dns_badid = g_dns_neg = 0;
-    for (tries = 0; tries < DNS_TRIES; tries++) { /* (re)send, then wait */
-        int waited;
+    int rc = net_dns_begin(host, out);
+    if (rc == 1) return 1;                    /* cache */
+    if (rc < 0)  return 0;                    /* unusable, or already busy */
+
+    for (;;) {
         /* Cooperative wall-clock budget (unoauto_deadline_left_ms): the TEST
          * runner cannot preempt a synchronous wait, so a dead resolver used to
          * hold the whole SPECTEST batch past its budget and read as a hang.
          * 0 = out of budget; -1 = none armed, which is every production build
          * (the macro folds to a constant there and this compiles out). */
-        if (unoauto_deadline_left_ms() == 0) return 0;
-        /* back off before a retry: a home-router forwarder that answered the
-         * previous try negatively (cold cache, recursion still running
-         * upstream) needs a beat before it can answer positively. */
-        if (tries) uno_pc64_delay_ms(300);
-        net_udp_send(DNS, 53, sport, q, qn);
-        g_dns_sent++;
-        for (waited = 0; waited < DNS_WAIT_N; waited++) {
-            u8 r[512]; u8 src[4]; u16 sp; int n, i, qd, an;
-            net_poll(); uno_pc64_delay_ms(DNS_QUANTUM);
-            if (unoauto_deadline_left_ms() == 0) return 0;   /* budget, as above */
-            n = net_udp_recv(sport, r, sizeof r, src, &sp);
-            if (n < 12) continue;
-            g_dns_rx++;
-            if (r[0] != 0x51 || r[1] != 0x53) { g_dns_badid++; continue; }
-                                                          /* S-NET-19: match our
-                                                             transaction id, else
-                                                             a stray/forged reply
-                                                             is accepted as ours */
-            qd = (r[4]<<8)|r[5]; an = (r[6]<<8)|r[7];
-            /* a no-answer response (SERVFAIL/NXDOMAIN/empty) used to hard-fail
-             * the WHOLE query here, killing the remaining retries. Cold-cache
-             * forwarders commonly answer SERVFAIL instantly while upstream
-             * recursion completes - break to the next try instead. (QEMU never
-             * showed this: SLIRP proxies to the host's warm resolver.) */
-            if (an < 1) { g_dns_neg++; break; }
-            i = 12;
-            for (; qd > 0; qd--) {               /* skip questions */
-                while (i < n && r[i]) { if ((r[i]&0xC0)==0xC0){ i++; break; } i += r[i]+1; }
-                i++; i += 4;                     /* null + QTYPE + QCLASS */
-            }
-            for (; an > 0 && i + 12 <= n; an--) { /* answers */
-                u16 type, rdl; u32 ttl;
-                if ((r[i]&0xC0)==0xC0) i += 2;   /* compressed name */
-                else { while (i < n && r[i]) i += r[i]+1; i++; }
-                if (i + 10 > n) { an = 0; break; } /* name walk ran off the buffer */
-                type = (r[i]<<8)|r[i+1];
-                ttl  = ((u32)r[i+4]<<24)|((u32)r[i+5]<<16)|((u32)r[i+6]<<8)|r[i+7];
-                rdl  = (r[i+8]<<8)|r[i+9];
-                i += 10;
-                if (type == 1 && rdl == 4 && i + 4 <= n) {
-                    memcpy(out, r + i, 4);
-                    dns_cache_put(host, out, ttl);   /* remember it for next time */
-                    return 1;
-                }
-                i += rdl;
-            }
-            break;                               /* parsed but no A record: retry */
-        }
+        if (unoauto_deadline_left_ms() == 0) { net_dns_abort(); return 0; }
+        rc = net_dns_poll(out);
+        if (rc == 1) return 1;
+        if (rc < 0) return 0;
+        net_poll();
+        uno_pc64_delay_ms(DNS_QUANTUM);
     }
-    return 0;
 }
 
 void net_poll(void)

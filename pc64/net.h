@@ -31,7 +31,22 @@ int  net_dhcp_had_rtr(void);         /* 1 if the ACK carried opt 3 (router) */
 
 /* DNS: resolve an A record. 1 = out[4] set, 0 = failed/timeout. Synchronous
  * (pumps net_poll internally); call after the link + DHCP are up. */
-int  net_dns_query(const char *host, u8 out[4]);
+int  net_dns_query(const char *host, u8 out[4]);   /* BLOCKS - see below */
+
+/* The same lookup, non-blocking, for a caller with a frame to draw.
+ *
+ * net_dns_begin:  1 = answered from the cache, `out` is filled and nothing is
+ *                     in flight;  0 = started, poll it;  -1 = unusable name;
+ *                    -2 = another lookup is already in flight (one at a time).
+ * net_dns_poll:   0 = still going;  1 = resolved into `out`;  -1 = gave up.
+ *                 Does NOT pump the stack - call net_poll() yourself, exactly
+ *                 as with tls_poll, so one loop can drive everything.
+ * net_dns_abort:  drop an in-flight lookup (a cancelled request).
+ *
+ * net_dns_query is these plus a wait, so there is one implementation. */
+int  net_dns_begin(const char *host, u8 out[4]);
+int  net_dns_poll(u8 out[4]);
+void net_dns_abort(void);
 int  net_dns_sent(void);             /* last-query diag: queries transmitted */
 int  net_dns_rx(void);               /* last-query diag: datagrams reaching our port */
 int  net_dns_badid(void);            /* last-query diag: txid rejects */
