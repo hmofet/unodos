@@ -4,10 +4,12 @@ The appliance machinery: can this machine host a guest, and later, the guest
 itself. The programme and its phases are `docs/UNOVIRT-PLAN.md`; this file is
 the API surface, its changelog, and the things a consumer has to know.
 
-**Status: A0 through A6 [implemented on VMX]. A7a [virtio-blk: the guest
-mounts a disk]. A1 [unproved on SVM].** A real Ubuntu kernel boots under
-UnoDOS, reaches userspace, **its shell reads a command and answers**, and it
-**mounts an ext4 filesystem served from a file on a UnoDOS volume**. The
+**Status: A0 through A8 [implemented on VMX]. A1 [unproved on SVM].** A
+real kernel boots under UnoDOS, reaches userspace, **its shell reads a
+command and answers**, it **mounts an ext4 filesystem served from a file on
+a UnoDOS volume**, it pings a synthetic peer over virtio-net, and **its
+framebuffer console lives inside the Appliances window** - typed at through
+the emulated i8042, answered in pixels (A8, 2026-08-21). The
 capability gate runs on every boot. The foothold is real on Intel: on devbuntu
 (bare metal, nested KVM) UnoDOS enters VMX operation, runs a guest, takes it
 through a CPUID intercept, reads its marker back out of guest memory, and then
@@ -813,8 +815,9 @@ than the hypervisor:
 
 ## Changelog
 
-- **2026-08-21, API 1.** A8 (in progress): the guest gets a DISPLAY and
-  INPUT. The boot protocol places a linear XRGB8888 framebuffer at the top
+- **2026-08-21, API 1.** A8 **met**: the guest gets a DISPLAY and INPUT,
+  and a command typed through the Appliances window is answered on the
+  guest's framebuffer (`shots/vmdisp_display_typed.png`). The boot protocol places a linear XRGB8888 framebuffer at the top
   of the carve, reserves it in the e820 map, and describes it in
   `boot_params.screen_info` as VIDEO_TYPE_EFI - which a stock kernel drives
   through sysfb (simpledrm or efifb) with no driver from us.  `uno_vmm_fb()`
