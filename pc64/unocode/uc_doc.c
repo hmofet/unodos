@@ -121,15 +121,38 @@ int uc_line_of(UcDoc *d, int off)
     return lo;
 }
 
-int uc_col_of(UcDoc *d, int off) { return off - uc_line_start(d, uc_line_of(d, off)); }
+/* Columns are CHARACTERS, not bytes.  These two are a matched pair - a column
+ * is read off one line and applied to another for Up/Down, for the goal column
+ * and for a second cursor - so counting bytes would put the caret inside a
+ * UTF-8 sequence the moment the two lines were not both ASCII.  They are also
+ * what the status bar's "Col" and the extension API's Position report, where a
+ * byte count would be a lie about a file the user can see. */
+int uc_col_of(UcDoc *d, int off)
+{
+    int s, i, col = 0;
+    if (off > d->len) off = d->len;
+    if (off < 0) off = 0;
+    s = uc_line_start(d, uc_line_of(d, off));
+    i = s;
+    while (i < off) {
+        int cp, len = uc_u8_get(d->text + i, d->len - i, &cp);
+        if (len <= 0) break;
+        i += len;
+        col++;
+    }
+    return col;
+}
 
 int uc_offset_of(UcDoc *d, int line, int col)
 {
-    int s = uc_line_start(d, line), e = uc_line_end(d, line);
-    int off = s + col;
-    if (off > e) off = e;
-    if (off < s) off = s;
-    return off;
+    int s = uc_line_start(d, line), e = uc_line_end(d, line), i = s;
+    while (col > 0 && i < e) {
+        int cp, len = uc_u8_get(d->text + i, e - i, &cp);
+        if (len <= 0) break;
+        i += len;
+        col--;
+    }
+    return i;
 }
 
 /* ---- per-line tokenizer state ----------------------------------------------
@@ -621,7 +644,20 @@ void uc_move(UcDoc *d, int dx, int dy, int keep_sel, int by_word)
                 int a, b;
                 sel_range(c, &a, &b);
                 c->caret = dx < 0 ? a : b;
-            } else c->caret += dx;
+            } else {
+                /* one CHARACTER, not one byte: stepping a byte at a time
+                 * leaves the caret inside a UTF-8 sequence, where the next
+                 * insert splits it and the line becomes mojibake */
+                int k = dx < 0 ? -dx : dx;
+                while (k--) {
+                    if (dx < 0) c->caret = uc_u8_back(d->text, c->caret);
+                    else if (c->caret < d->len) {
+                        int cp, len = uc_u8_get(d->text + c->caret,
+                                                d->len - c->caret, &cp);
+                        c->caret += len > 0 ? len : 1;
+                    }
+                }
+            }
             if (c->caret < 0) c->caret = 0;
             if (c->caret > d->len) c->caret = d->len;
             c->goal = uc_col_of(d, c->caret);
@@ -709,7 +745,9 @@ void uc_backspace(UcDoc *d)
     many = d->ncur > 1;
     if (many) uc_begin_group(d);
     for (i = d->ncur - 1; i >= 0; i--) {
-        int c = d->cur[i].caret, a = c - 1;
+        /* a whole CHARACTER, not a byte: backspacing one byte out of a
+         * multi-byte sequence leaves the rest of it in the buffer as garbage */
+        int c = d->cur[i].caret, a = uc_u8_back(d->text, c);
         if (c <= 0) continue;
         /* backspacing through an indent removes the whole tab stop */
         if (d->text[c - 1] == ' ') {
@@ -740,8 +778,10 @@ void uc_del_forward(UcDoc *d)
     many = d->ncur > 1;
     if (many) uc_begin_group(d);
     for (i = d->ncur - 1; i >= 0; i--) {
-        int c = d->cur[i].caret;
-        if (c < d->len) uc_replace_range(d, c, c + 1, 0, 0);
+        int c = d->cur[i].caret, cp, len;
+        if (c >= d->len) continue;
+        len = uc_u8_get(d->text + c, d->len - c, &cp);   /* a whole character */
+        uc_replace_range(d, c, c + (len > 0 ? len : 1), 0, 0);
     }
     if (many) uc_end_group(d);
     cur_norm(d);

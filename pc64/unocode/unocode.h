@@ -53,6 +53,8 @@ int   fb_width(void);
 int   fb_height(void);
 int   uno_font_draw_styled(int slot, int px, int style, int x, int y,
                            const char *s, fb_px fg, long bg);
+int   uno_font_draw_mono(int slot, int px, int style, int x, int y,
+                         const char *s, int cellw, fb_px fg);
 int   uno_font_text_w_styled(int slot, int px, int style, const char *s);
 int   uno_font_height_px(int slot, int px);
 int   uno_font_baseline_px(int slot, int px);
@@ -767,5 +769,17 @@ int  uc_ends_icase(const char *s, const char *suffix);
 void uc_upper(char *s);
 int  uc_itoa(char *out, long v);
 int  uc_is_word(int c);
+
+/* ---- UTF-8 (uc_util.c) -----------------------------------------------------
+ * The document is a byte buffer holding UTF-8; these are how the rest of the
+ * editor walks it a character at a time.  uc_u8_get() is strict and never
+ * consumes more than it was handed, so its return is always a safe step. */
+#define UC_CP_BAD 0xFFFD
+int  uc_u8_get(const char *s, int n, int *cp);   /* bytes consumed, 1..4     */
+int  uc_u8_len(int cp);                          /* bytes cp encodes to      */
+int  uc_u8_put(int cp, char *out);               /* encode; bytes written    */
+int  uc_u8_align(const char *s, int i);          /* char start at or before i*/
+int  uc_u8_back(const char *s, int i);           /* char start before i      */
+int  uc_cp_width(int cp);                        /* grid cells: 0, 1 or 2    */
 
 #endif /* UNOCODE_H */
