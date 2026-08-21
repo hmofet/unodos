@@ -9786,6 +9786,19 @@ Runner3D still open. After: `(640, 400)`, closed.
   optional third argument `nst <p1> <p2> [a.b.c.d]` so it can be pointed at a
   real peer. Defaults unchanged, so `tools/netsock_qemu.py` is unaffected (it
   parses per-line `key=value` and simply gains two lines).
+- **"URC verbs intermittently exceed the bridge's timeout under load; harnesses
+  should retry, not treat one timeout as death."** ALSO A CHANGE IN
+  unoautomate's OWN FILES (`tools/unoauto_remote.py`, `tools/urcui.py`), filed
+  here for the same reason as `nst`. Retrying is not the whole answer, because
+  a re-send is a SECOND EXECUTION: the timeout is the HOST's, not the guest's,
+  so a timed-out injection has almost certainly already been applied and
+  re-sending a press or a release is a *different gesture*. So the two halves
+  are separated - `command(..., retries=N)` re-sends after a timeout only and
+  defaults to 0 (only the read-only `probe` and `uptime` opt in), and
+  `alive(tries=3)` makes the run's own rule a function: break on three
+  CONSECUTIVE failures, never on one. `urcui`'s move/click/key swallow a
+  timeout, carry on, and fail only when `alive()` says the box has really gone.
+  No injection is ever re-sent.
 - **The two unguarded boot-services sites filed on 2026-08-20** (`blkdev.c
   fw_scan`, `installer.c bind`) now ask `uno_pc64_detached()` before touching
   `ST->BootServices`, as `acpi_host.c` does. Belt and braces - both are already
