@@ -18,6 +18,8 @@
 #include "py/stackctrl.h"
 #include "py/builtin.h"
 #include "unoui.h"
+#include "fb.h"
+#include "unolog.h"
 #include "../pyhost.h"
 
 /* shell + fb the module imports (resolved against kExports by the loader) */
@@ -27,6 +29,12 @@ void unoui_widget_fill(unoui_widget *w);
 void pc64_shell_dirty(void);
 int  pc64_shell_workarea_w(void);
 int  pc64_shell_workarea_h(void);
+/* the framebuffer text path, for reporting a raising draw() on screen
+ * (unolog itself is declared by unolog.h above, and exported by kExports) */
+void fb_fill_rect(int x, int y, int w, int h, fb_px c);
+int  fb_text(int x, int y, const char *s, fb_px fg, long bg);
+int  fb_text_w(const char *s);
+int  fb_text_h(void);
 
 /* mod_uno.c drawing-rect coupling: the canvas' absolute rect is published so
  * uno.fb.* offset + clip to it (Python draws in canvas-relative coords) */
@@ -134,13 +142,89 @@ static mp_obj_t call3(mp_obj_t fn, mp_obj_t a, mp_obj_t b, mp_obj_t c)
     return MP_OBJ_NULL;
 }
 
-/* ---- the app's canvas: draws by calling the Python draw() ----------------- */
-static int gDrewOnce;
+/* ---- the app's canvas: draws by calling the Python draw() -----------------
+ * WHEN draw() RAISES, SAY SO. ON THE SCREEN.
+ *
+ * This used to catch the exception (call1 does), write the traceback into
+ * pyrt_out, and then throw the whole thing away: rdbg_out only goes to the
+ * 0x402 debug port, only in a UNO_DBGCON build, and only for the first frame.
+ * What a user saw was a BLANK WINDOW - no dialog, no line in Studio's output
+ * pane, no log record, and the status bar still saying "Running".
+ *
+ * The metal conformance run (2026-08-20) spent most of a session on exactly
+ * this: an AI-written sample app called `cv.clear(0)`, passing a raw int where
+ * a colour is required, and the one-character mistake became an unsolvable
+ * mystery because the system reported nothing at all. That is a defect in the
+ * runtime, not in the app, and it affects ALL Python development here.
+ *
+ * Three things now happen, once, on the first raise:
+ *   - the traceback is kept and PAINTED into the app's own canvas, so the
+ *     window that would have been blank carries the reason instead;
+ *   - it goes to unolog at LOG_ERR, so it reaches \LOGS and remote syslog -
+ *     which is how a headless box reports it;
+ *   - draw() is not called again. A raising draw() raises every frame at
+ *     60 Hz; re-entering the VM to re-raise it would bury the log and pin the
+ *     CPU, and the second traceback says nothing the first did not.
+ * py_unload clears the latch, so fixing the code and running it again gets a
+ * clean start. */
+static int  gDrewOnce;
+static int  gDrawFailed;                /* draw() raised; do not call it again */
+static char gDrawErr[640];
+
+static void err_cpy(char *d, const char *s, int cap)
+{ int i = 0; if (cap <= 0) return; while (s && s[i] && i < cap - 1) { d[i] = s[i]; i++; } d[i] = 0; }
+
+/* Paint the traceback where the app's picture would have been. Wraps on '\n'
+ * and on the canvas width, because a MicroPython traceback is several lines
+ * and the useful one ("TypeError: can't convert int to colour") is the LAST. */
+static void draw_error_panel(unoui_rect r, const char *msg)
+{
+    int fh = fb_text_h(), y = r.y + 6, i = 0;
+    char line[96];
+    fb_fill_rect(r.x, r.y, r.w, r.h, FB_RGB(48, 12, 16));
+    fb_text(r.x + 8, y, "This app's draw() raised an exception:",
+            FB_RGB(255, 190, 120), -1);
+    y += fh + 6;
+    while (msg[i] && y + fh < r.y + r.h - fh - 8) {
+        int n = 0;
+        while (msg[i] && msg[i] != '\n' && n < (int)sizeof line - 1) {
+            line[n] = msg[i];
+            line[n + 1] = 0;
+            if (fb_text_w(line) > r.w - 16) { line[n] = 0; break; }
+            n++; i++;
+        }
+        line[n] = 0;
+        if (msg[i] == '\n') i++;
+        else if (!n && msg[i]) i++;             /* never stall on one glyph */
+        fb_text(r.x + 8, y, line, FB_RGB(255, 235, 235), -1);
+        y += fh + 1;
+    }
+    fb_text(r.x + 8, r.y + r.h - fh - 6,
+            "Drawing is stopped. Fix it and run again (Ctrl-R in Studio).",
+            FB_RGB(200, 170, 170), -1);
+}
+
 static void py_canvas_draw(struct unoui_widget *w, unoui_rect r, void *ctx)
 {
     (void)w; (void)ctx;
+    if (gDrawFailed) { draw_error_panel(r, gDrawErr); return; }
     uno_set_draw_rect(r.x, r.y, r.w, r.h);
-    if (gApp.draw) call1(gApp.draw, uno_canvas_obj());
+    if (gApp.draw) {
+        if (call1(gApp.draw, uno_canvas_obj()) == MP_OBJ_NULL) {
+            const char *o = pyrt_out_text();
+            err_cpy(gDrawErr, (o && o[0]) ? o : "(no traceback text)",
+                    (int)sizeof gDrawErr);
+            gDrawFailed = 1;
+            /* the LAST line of a traceback is the exception itself, and it is
+             * the one worth putting on a single-line log record - the frames
+             * above it are already on screen and in pyrt_out */
+            { const char *last = gDrawErr; int k;
+              for (k = 0; gDrawErr[k]; k++)
+                  if (gDrawErr[k] == '\n' && gDrawErr[k + 1]) last = gDrawErr + k + 1;
+              unolog(LOG_ERR, LF_APP, "pyrt: %s draw() raised: %s", gName, last); }
+            draw_error_panel(r, gDrawErr);
+        }
+    }
     if (gDrewOnce == 0) { gDrewOnce = 1; rdbg_out("pyrt: draw exc: "); }
 }
 static int py_canvas_event(struct unoui_widget *w, const void *ev, void *ctx)
@@ -263,6 +347,7 @@ static void py_unload(void)
         gApp.opened = gApp.closed = MP_OBJ_NULL;
     uno_clear_app_roots();          /* release the pinned app so GC can reap it */
     gDrewOnce = 0;
+    gDrawFailed = 0; gDrawErr[0] = 0;   /* a re-run starts with a clean slate */
     if (gInited) { VM_ENTER(); gc_collect(); vm_leave(); }
 }
 
