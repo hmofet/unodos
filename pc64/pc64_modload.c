@@ -205,6 +205,7 @@ static const struct { const char *name; void *addr; } kExports[] = {
     KX(pc64_shell_workarea_w), KX(pc64_shell_workarea_h),
     KX(pc64_shell_fullscreen), KX(pc64_shell_is_fullscreen),
     KX(pc64_shell_theme), KX(pc64_shell_run_user), KX(pc64_shell_font_mono),
+    KX(pc64_shell_pick),
     KX(pc64_browser_open_path), KX(pc64_shell_py_error),
     /* ---- Python runtime (PYRT.UNO) surface ------------------------------- *
      * Appended at the tail so a concurrent kExports edit (Wi-Fi) merges
