@@ -297,3 +297,43 @@ The threads worth pulling later:
   picture. Both needed someone in the room.
 - Honest negative results matter: the assistant wrote confident, well-shaped,
   non-working code, and the OS gave the user no way to find out why.
+
+---
+
+## 10. What happened to the open items (2026-08-21)
+
+Written the day after, as an addendum rather than an edit: §4's "still open"
+list is what the run itself found, and rewriting it would erase the finding.
+Full detail, including the before/after measurements, is in
+`UNOAUTOMATE-REQUESTS.md` under the 2026-08-21 heading.
+
+| §4 item | now |
+|---|---|
+| Start > Power > Restart never dispatches | **fixed** - the right pane's canvas had a null event handler, so Tile/Cascade/Minimize all/Restart/Shut Down were all dead. Restart takes uptime 66,866 ms -> 18,851 ms |
+| A Python app whose `draw()` raises reports nothing | **fixed** - PYRT paints the traceback into the app's own window and logs it at `LOG_ERR` |
+| Session restore reopens the wrong window | **not reproducible in QEMU**; the certain defect underneath it is fixed - the reader took the first `SHELL.CFG` from volume 0 upward while the writer binds to the boot volume, so the file inspected need not be the file loaded |
+| WiFi is WPA2-only | **held** - another lane |
+| The Yoga's network path collapses | **held** - Yoga-specific, deferred |
+| Audio tab draws its value over its label | **fixed** |
+| Office Open dialog ignores typed input | **fixed** - `uof_sync` overwrote the field on every sync |
+| Studio opens binary `.UNO` files as garbage | **fixed** - sniffed and refused |
+| `nst` reports failure on a working machine | **fixed** - it dials the QEMU slirp gateway; it now says so, and takes a real host |
+| Menu items need a ~1.2 s press hold | **not a real threshold** - it was the dead right pane. 0.18 s activates Restart first time |
+
+Two things were found while fixing the above that the run did not catch, both
+worth recording because of *why* it missed them:
+
+- **Leaving a fullscreen app did not restore the resolution.** Runner3D renders
+  at a quarter of the panel in each axis and only its CLOSE path undid that,
+  while eight separate places drop a window out of fullscreen. §4 records
+  "Runner3D switching the real GOP mode and restoring it on exit" as a PASS -
+  and it was, because the run closed it with the title-bar close box, the one
+  route that happened to work. **Esc**, which is what the game's own HUD tells
+  you to press, left the desktop at 320x200 with the game still running.
+  A test that exercises one exit from a state does not test the state.
+- **`power_down()` never asked the firmware to reset.** The comment above it
+  says ResetSystem is the last resort for a reset; the code only called it for
+  power-off. Invisible on any machine where CF9 works, which is all of ours.
+
+The pattern in both is the same as the run's own headline finding: an invariant
+asserted in a comment rather than expressed as a check.
