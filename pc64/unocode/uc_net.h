@@ -59,7 +59,8 @@ enum {
     UC_NET_ENODNS     = -3,   /* the name did not resolve                      */
     UC_NET_ENOENTROPY = -4,   /* no usable RNG - TLS refuses rather than guess */
     UC_NET_ENOMEM     = -5,
-    UC_NET_ETRUST     = -6    /* the certificate did not validate              */
+    UC_NET_ETRUST     = -6,   /* the certificate did not validate              */
+    UC_NET_EBUSY      = -7    /* one lookup at a time, and one is in flight    */
 };
 
 /* ---- the link ------------------------------------------------------------- */
@@ -73,8 +74,31 @@ int uc_net_up(void);
 
 /* Resolve a host name to an IPv4 address.  Returns 1 on success.  Accepts a
  * dotted-quad literal without asking anybody, which is what makes a local test
- * server reachable with no DNS at all. */
+ * server reachable with no DNS at all.
+ *
+ * THIS ONE BLOCKS, and on a cold cache it can block for seconds.  It is here
+ * for callers that have nothing else to do; anything with a frame to draw
+ * wants the pair below. */
 int uc_net_resolve(const char *host, unsigned char ip[4]);
+
+/* The same lookup, non-blocking.
+ *
+ *   1 = answered immediately (a literal, or a cached name); `ip` is filled and
+ *       there is nothing to poll and nothing to end.
+ *   0 = started - poll it, then call uc_net_resolve_end() whatever happens.
+ *  <0 = a UC_NET_* code; nothing was started.
+ *
+ * uc_net_resolve_poll: 0 still going, 1 resolved into `ip`, <0 gave up.
+ * uc_net_resolve_end:  release it.  Safe to call after success, after failure
+ *                      and MID-FLIGHT, which is what cancelling a request
+ *                      does.
+ *
+ * One lookup at a time on both platforms.  A second begin while one is in
+ * flight returns UC_NET_EBUSY rather than queueing, so a caller that needs two
+ * decides what to do about it instead of finding a hidden queue under load. */
+int uc_net_resolve_begin(const char *host, unsigned char ip[4]);
+int uc_net_resolve_poll(unsigned char ip[4]);
+void uc_net_resolve_end(void);
 
 /* Is there a random source good enough to hand to TLS?  0 means uc_tls_open()
  * will refuse with UC_NET_ENOENTROPY, and it means it on a real machine: pc64

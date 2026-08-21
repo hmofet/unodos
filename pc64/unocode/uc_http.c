@@ -45,7 +45,7 @@
 #define READ_CHUNK   2048
 
 enum {
-    S_CONNECT, S_SEND, S_STATUS, S_HEADERS, S_BODY, S_CHUNK_SIZE,
+    S_RESOLVE, S_CONNECT, S_SEND, S_STATUS, S_HEADERS, S_BODY, S_CHUNK_SIZE,
     S_CHUNK_DATA, S_CHUNK_CRLF, S_DONE, S_FAILED
 };
 
@@ -56,6 +56,10 @@ struct uc_http {
 
     char *req;                    /* the whole request, headers and body    */
     int   reqlen, reqsent;
+
+    char  host[256];              /* kept: the SNI, and the name being looked up */
+    unsigned short port;
+    int   resolving;              /* a lookup of OURS is in flight          */
 
     char *body;                   /* the response body, grown as it arrives */
     int   blen, bcap, maxbody;
@@ -135,6 +139,17 @@ static void fail(uc_http *h, int code, const char *why)
     h->msg = why;
 }
 
+static int open_conn(uc_http *h, const unsigned char ip[4]);
+
+/* Release the name lookup, if this handle is the one holding it.  Guarded by
+ * `resolving` because the resolver is a single global slot: a handle that
+ * never started a lookup, or has already finished one, must not end somebody
+ * else's. */
+static void drop_resolve(uc_http *h)
+{
+    if (h->resolving) { uc_net_resolve_end(); h->resolving = 0; }
+}
+
 /* ---- building the request ------------------------------------------------- */
 
 static int build_request(uc_http *h, const uc_http_req *r, int blen)
@@ -200,13 +215,39 @@ uc_http *uc_http_begin(const uc_http_req *r)
 
     if (!build_request(h, r, blen)) { free(h); return 0; }
 
-    if (r->ip) { memcpy(ip, r->ip, 4); }
-    else if (!uc_net_resolve(r->host, ip)) {
-        fail(h, UC_NET_ENODNS, "that host name did not resolve");
-        return h;
+    {   unsigned n = 0;
+        while (r->host[n] && n < sizeof h->host - 1) { h->host[n] = r->host[n]; n++; }
+        h->host[n] = 0;
+    }
+    h->port = r->port ? r->port : 443;
+
+    /* NOTHING BLOCKS FROM HERE.  This used to call uc_net_resolve(), which
+     * blocks - up to five seconds of retries on a cold cache, which is five
+     * seconds the editor cannot scroll, type or repaint.  Every other step was
+     * already pumped; this was the last one that was not. */
+    if (r->ip) {
+        memcpy(ip, r->ip, 4);
+    } else {
+        int rc = uc_net_resolve_begin(h->host, ip);
+        if (rc == 0) { h->resolving = 1; h->state = S_RESOLVE; return h; }
+        if (rc < 0) {
+            fail(h, rc,
+                 rc == UC_NET_EBUSY
+                    ? "another name is being looked up - try again in a moment"
+                    : rc == UC_NET_ENOLINK ? "there is no network link"
+                                           : "that host name did not resolve");
+            return h;
+        }
     }
 
-    h->conn = uc_tls_open(ip, r->port ? r->port : 443, r->host);
+    if (!open_conn(h, ip)) return h;
+    return h;
+}
+
+/* Shared by the immediate path above and the resolved-later path in poll(). */
+static int open_conn(uc_http *h, const unsigned char ip[4])
+{
+    h->conn = uc_tls_open(ip, h->port, h->host);
     if (!h->conn) {
         int e = uc_net_open_error();
         fail(h, e ? e : UC_NET_ERR,
@@ -214,10 +255,10 @@ uc_http *uc_http_begin(const uc_http_req *r)
                 ? "this machine has no usable random source, so TLS is refused"
                 : e == UC_NET_ENOLINK ? "there is no network link"
                                       : "the connection could not be opened");
-        return h;
+        return 0;
     }
     h->state = S_CONNECT;
-    return h;
+    return 1;
 }
 
 void uc_http_on_event(uc_http *h, uc_sse_fn fn, void *user)
@@ -419,6 +460,15 @@ int uc_http_poll(uc_http *h)
     if (h->state == S_FAILED) return h->err;
     if (h->state == S_DONE)   return UC_HTTP_DONE;
 
+    if (h->state == S_RESOLVE) {
+        unsigned char ip[4];
+        int rc = uc_net_resolve_poll(ip);
+        if (rc == 0) return UC_HTTP_PENDING;
+        drop_resolve(h);
+        if (rc < 0) { fail(h, rc, "that host name did not resolve"); return h->err; }
+        if (!open_conn(h, ip)) return h->err;
+    }
+
     r = uc_tls_poll(h->conn);
     if (r < 0) { fail(h, r, uc_net_error(h->conn)); return h->err; }
 
@@ -475,9 +525,15 @@ const char *uc_http_error(uc_http *h)
     return (h && h->msg) ? h->msg : "no error";
 }
 
+/* Freeing a handle IS cancelling it, at any point.  A request abandoned while
+ * resolving orphans the lookup; one abandoned mid-transfer tears the TLS
+ * session down rather than letting it drain into a buffer nobody owns.  There
+ * is no separate cancel() because there is nothing for it to do differently -
+ * and two ways to stop something is how one of them stops being tested. */
 void uc_http_free(uc_http *h)
 {
     if (!h) return;
+    drop_resolve(h);
     if (h->conn) uc_tls_free(h->conn);
     if (h->req)  free(h->req);
     if (h->body) free(h->body);

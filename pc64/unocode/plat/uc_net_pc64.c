@@ -40,6 +40,9 @@ typedef unsigned short u16;
 int  pc64_net_up(void);
 void net_poll(void);
 int  net_dns_query(const char *host, u8 out[4]);
+int  net_dns_begin(const char *host, u8 out[4]);
+int  net_dns_poll(u8 out[4]);
+void net_dns_abort(void);
 
 /* tls.h's handle API.  tls_conn is opaque to us, which is what lets a uc_conn
  * BE one rather than wrap one - no allocation, nothing to keep in step. */
@@ -135,6 +138,35 @@ int uc_net_resolve(const char *host, unsigned char ip[4])
     if (!uc_net_up()) return 0;
     return net_dns_query(host, ip) ? 1 : 0;
 }
+
+/* The non-blocking pair maps almost one-for-one onto the resolver's own,
+ * because that split was made upstream for this caller.  All this layer adds
+ * is the literal-address shortcut and the numeric guard, so a caller gets the
+ * same answers from both forms. */
+int uc_net_resolve_begin(const char *host, unsigned char ip[4])
+{
+    int rc;
+    if (!host || !*host) return UC_NET_ENODNS;
+    if (parse_quad(host, ip)) return 1;
+    if (looks_numeric(host)) return UC_NET_ENODNS;
+    if (!uc_net_up()) return UC_NET_ENOLINK;
+
+    rc = net_dns_begin(host, ip);
+    if (rc == 1)  return 1;                 /* the resolver's own cache        */
+    if (rc == 0)  return 0;
+    if (rc == -2) return UC_NET_EBUSY;
+    return UC_NET_ENODNS;
+}
+
+int uc_net_resolve_poll(unsigned char ip[4])
+{
+    int rc = net_dns_poll(ip);
+    if (rc == 1) return 1;
+    if (rc == 0) return 0;
+    return UC_NET_ENODNS;
+}
+
+void uc_net_resolve_end(void) { net_dns_abort(); }
 
 int uc_net_entropy_ok(void)
 {
