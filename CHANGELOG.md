@@ -5,6 +5,152 @@ All notable changes to UnoDOS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v3.34.0: an editor, the modern Office formats, and a pass over real hardware] - 2026-08-21
+
+Three things landed together and one exercise checked them. pc64 gained a
+VS Code-class editor with a working extension host, UnoOffice learned to read
+and write `.docx` / `.xlsx` / `.pptx`, and the whole desktop was then driven
+end to end on two physical machines rather than in QEMU. The conformance run
+is the reason this release is mostly a list of things that were quietly broken
+on hardware and are not any more.
+
+Method and full results: [pc64/CONFORMANCE-2026-08.md](pc64/CONFORMANCE-2026-08.md).
+
+### UnoCode
+
+`APPS\UNOCODE.UNO`, a new subsystem in `pc64/unocode/`, contract in
+[pc64/unocode/UNOCODE.md](pc64/unocode/UNOCODE.md).
+
+- **The workbench**: activity bar, side bar (Explorer, Search, Source Control,
+  Run, Extensions), tabbed editors with a minimap and a change-marked gutter,
+  breadcrumbs, a panel with Problems / Output / Terminal, status bar, command
+  palette, Go to File, Go to Line, notifications.
+- **The editor**: multiple cursors, undo that coalesces typing into words, find
+  and replace with regex, auto-indent, auto-closing pairs, bracket matching,
+  comment toggling, line moving, and IntelliSense fed from the language's
+  keywords, the document's own words, extension providers and snippets.
+- **The on-disk formats are VS Code's, key for key.** A colour theme, a
+  keybindings file, a snippet file and an extension manifest written for VS
+  Code load here unmodified. An editor nobody can write an extension for is a
+  text editor with ambitions.
+- **The extension host** runs extensions in unojs as CommonJS modules against a
+  subset of the `vscode` API. It is lazy (a manifest declares its commands, so
+  they are in the palette before any JavaScript runs) and **fuel-bounded**:
+  every entry from C into JS grants a fuel slice, resumes a bounded number of
+  times, then stops and disables the extension. On a machine with no preemption
+  and no process boundary, that is the only thing between a bad extension and a
+  dead desktop.
+- Stated rather than stubbed: no hover or definition providers, no
+  extension-supplied diagnostics, no webviews, no word wrap. Source Control
+  tracks local edits against the file as opened, because there is no repository
+  on this machine, and it says so. The integrated terminal is UnoCode's own
+  small shell; `help` lists exactly what exists, and an unknown word is an
+  error rather than a silent no-op that reads like a shell that ran something.
+
+### UnoOffice reads and writes the modern formats
+
+`UNODOC.md` said OOXML was out of scope because the formats "need a deflate
+compressor". They do not: OOXML requires a zip **container**, not a compressed
+one, so the writers emit stored entries and only the decompressor is needed,
+and unomedia already had that.
+
+- **UnoWord, UnoCalc and UnoShow open and save `.docx`, `.xlsx` and `.pptx`**,
+  and `.xlsx` round-trips through our own writer.
+- The OOXML readers build the **same models** the binary readers build, so
+  `ud_xls_cell_at`, `ud_doc_plain` and `ud_ppt_slide_text` work on either and
+  an app chooses the format when it saves, not when it builds.
+- New in `unodoc/`: a central-directory zip reader (which refuses encryption
+  and ZIP64 rather than half-reading them), a one-pass zero-allocation XML pull
+  parser, three readers, three serialisers, and `ud_sniff()` to pick the
+  container from the bytes.
+
+### The SDK, and five sample programs
+
+- Five new sample programs, acceptance-tested and staged onto the ESP:
+  `TIMER.C` (a frame-counted kitchen timer and stopwatch), `LIFE.C` (Conway's
+  Life), `TODO.PY` (a persistent to-do list, the idle idiom), `CHART.PY` (a bar
+  chart from a CSV) and `GOODNITE.PY` (an unoscript end-of-day automation app
+  that degrades gracefully when it is denied).
+- `ucc_host`, the hosted UnoC compiler that `ucc.h` has always named.
+- The manual's Developer section grows a full SDK reference for both languages.
+
+### Sound, and games that use it
+
+- **Sampled audio is a first-class surface**: a game's effects mix into the
+  ring and its score plays from memory, exposed through the seam and bound in
+  the `uno` Python module.
+- **Duum** moved to its own repository (`hmofet/duum`) and is vendored back as
+  a generated file. It gained wall collision, the WAD's own sound and music
+  (including a WAD whose music is already MIDI), a pause menu and an FPS
+  counter, and its per-column rasteriser moved into C.
+- **A machine with no DAC must not raise.** A soundless machine went mute
+  rather than degrading, which is the wrong failure.
+- **Dostris, Pac-Man and OutLast** lost their unroutable native canvases; the
+  Python copies recovered the sounds and the clamp that only the native ones
+  had, Dostris got its CGA look back, and Pac-Man now keeps a score and pauses
+  on death long enough to see it.
+- **ac97 was silent on any machine with 4 GB of RAM or more.** The buffer
+  descriptor list and ring landed in `.bss` above the 4 GB line and the 32-bit
+  `PO_BDBAR` casts truncated. hdaudio already wrote `SD_BDPU` and needed
+  nothing.
+
+### Wi-Fi joins WPA3 networks
+
+- A real supplicant that **negotiates instead of assuming**: WPA2-PSK and
+  WPA3-SAE, the EAPOL 4-way, RSN negotiation and PMF, contract in
+  [pc64/WIFI-SECURITY.md](pc64/WIFI-SECURITY.md).
+- `iwlwifi` joins WPA3 networks; `rtwifi` and `mrvlwifi` follow the
+  supplicant's arming call.
+
+### What driving the real hardware found
+
+Every item below was found on a physical machine, and every one of them was
+re-verified on that machine after the fix.
+
+- **The Start menu's right pane never took a click.** It was a canvas with a
+  null event handler, and unoui delivers a press to the widget the press lands
+  on, not to the focused one, so a draw-only canvas still swallows the click.
+  Tile, Cascade, Minimize all, Restart and Shut Down were all dead. There was
+  no "hold the button for a second" threshold either; the pane was dead at
+  every duration.
+- **The reset path never asked the firmware to reset.** With the menu fixed,
+  Restart still had nothing to call.
+- **Leaving fullscreen never gave the resolution back.** Eight places drop a
+  window out of fullscreen and only the close path undid the mode change.
+- **A zero-byte `SHELL.CFG` is not an empty config.** `prefs_read` stopped on
+  the first read that was not negative, and zero is not negative, so every boot
+  parsed an empty file: session restore looked broken and every Control Panel
+  preference was being discarded. Invisible for months, because a default looks
+  like a choice.
+- **A Python app whose `draw()` raised reported nothing** - blank window, no
+  error in Studio, no dialog, no log line, the status bar still reading
+  "Running". It now says so. This affected all Python app development.
+- **UnoOffice's Open dialog ignored every keystroke** in its File name field.
+- **Studio refuses to open a binary file as text** instead of showing it.
+- **Four sites called firmware boot services after ExitBootServices**
+  (`iwlwifi`, `ac97`, `unofs`'s `fw_scan`, the installer's `bind()`). One of
+  them crash-looped a ThinkPad X13 Yoga from its first boot. A comment
+  asserting an ordering invariant is not evidence.
+- **The SSH key store and saved Wi-Fi credentials went to the wrong volume.**
+  Both still carried a pre-fix copy of `pick_vol()` and wrote to the lowest
+  writable native volume, which on the ZimaBlade is a dead eMMC that hangs the
+  box. Both now use `uno_fs_pref_vol()`, and the security store and session
+  follow the boot volume.
+- **An installed classic-tier app was input-dead from the Start menu.**
+- The harness stopped reading one slow verb as a dead box, and `nst` now says
+  what it is dialling.
+
+### Smaller things
+
+- The BIOS boot path had red and blue reversed.
+- The pointer survives a resolution change, and the preferred VBE mode can be
+  overridden, which is what the browser emulator needs (`UNO_DESKTOP=native`).
+- Key bindings: the five host hooks are implemented, so the device can remap
+  keys.
+- The macOS flasher is published as a gated, signed `UnoDosFlasher-macOS.zip`,
+  and the Windows flasher's `-Publish` build produces the redistributable exe.
+- `vmgr`'s caret width called `uno_font_text_w_styled` with shuffled arguments.
+
 ## [pc64: a `.UNO` in `APPS\` installs itself] - 2026-08-07
 
 Adding an app to pc64 meant about a dozen edits in `pc64_uui.c` - an `EX_`

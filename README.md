@@ -283,7 +283,7 @@ The ports stay small because the heavy machinery is shared:
   storage and boot-chain internals, and the plan and handoff documents behind
   each subsystem.
 - **[CHANGELOG.md](CHANGELOG.md)**: the full history, 425+ builds and
-  counting. Current version: **v3.32.0**.
+  counting. Current version: **v3.34.0**.
 - **[AGENTS.md](AGENTS.md)** and **[CONTRIBUTING.md](CONTRIBUTING.md)**: how
   work lands in this tree.
 
