@@ -79,6 +79,14 @@ void  pc64_shell_dirty(void);
 const struct unoui_theme *pc64_shell_theme(void);
 int   pc64_shell_font_mono(void);
 int   pc64_shell_run_user(int vol, const char *path);
+/* The shell's NATIVE file picker, if it has one.  A hosted build (UnoCode
+ * Desktop) opens the OS dialog here, because users expect their own file
+ * manager's places and bookmarks rather than a list this module invented, and
+ * because only the shell can re-root the workspace volume afterwards.  Answers
+ * 0 when there is no such thing - which is the case on pc64, where the
+ * in-editor quick-open remains the way to open a file. */
+int   pc64_shell_pick(int want_folder, int *vol, char *dir, int dcap,
+                      char *name, int ncap);
 void  pc64_browser_open_path(const char *path);
 const char *pc64_shell_py_error(void);
 int   pc64_shell_workarea_w(void);
@@ -759,6 +767,27 @@ void uc_status_msg(const char *s);
 const char *uc_status_msg_get(void);
 void uc_toggle_panel(int tab);
 void uc_toggle_sidebar(int view);
+
+/* ---- host queries (uc_main.c, uc_edit.c) -----------------------------------
+ * A HOSTED platform - UnoCode Desktop, which owns a real OS window rather than
+ * a pc64 canvas - has to answer three questions the pc64 shell never asked:
+ * what goes in the title bar, whether closing the window would lose work, and
+ * what shape the mouse pointer should be over the thing under it.  None can be
+ * answered from outside the subsystem, because UcDoc and UcWorkbench are
+ * internal to it, so they are answered here.  Nothing in pc64 calls these; they
+ * exist so a host does not have to guess at, or duplicate, the layout. */
+enum { UC_CUR_ARROW = 0, UC_CUR_TEXT, UC_CUR_WE, UC_CUR_NS };
+
+const char *uc_host_title(void);        /* "name - folder"; "" if none open  */
+int  uc_host_dirty_count(void);         /* editors with unsaved changes      */
+int  uc_host_save_all(void);            /* saves every named dirty editor    */
+int  uc_host_cursor_at(int x, int y);   /* UC_CUR_*, in canvas pixels        */
+int  uc_host_tab_count(void);
+/* The i-th open editor's location, for a host restoring a session.  Returns 0
+ * for an untitled editor, which has nowhere to be restored from. */
+int  uc_host_tab_info(int i, int *vol, char *dir, int dcap,
+                      char *name, int ncap);
+int  uc_edit_over_text(UcRect r, int x, int y);   /* the I-beam region */
 
 /* small string helpers every file wants */
 void uc_scpy(char *d, const char *s, int cap);

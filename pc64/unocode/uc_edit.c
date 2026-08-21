@@ -570,6 +570,17 @@ void uc_edit_draw(UcRect r, UcDoc *d, int focused)
 }
 
 /* ---- hit testing --------------------------------------------------------------- */
+/* Is (x,y) over the TEXT, as opposed to the gutter, the minimap or the scroll
+ * bar?  Only the text takes an I-beam, and only this file knows where it is -
+ * ed_layout() is the one place the editor's sub-rects are computed, and a host
+ * re-deriving them would drift the first time they changed. */
+int uc_edit_over_text(UcRect r, int x, int y)
+{
+    EdLayout L = ed_layout(r, uc_doc_active());
+    return x >= L.text.x && x < L.text.x + L.text.w &&
+           y >= L.text.y && y < L.text.y + L.text.h;
+}
+
 static int offset_at(UcRect r, UcDoc *d, int px, int py)
 {
     EdLayout L = ed_layout(r, d);
