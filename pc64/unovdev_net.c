@@ -239,10 +239,25 @@ static struct {
     int active, tx, rx, bcast, dropped;
 } B;
 
+/* THE LINK IS RESOLVED LAZILY, and that is not tidiness - it is the whole
+ * difference between a bridge that works and one that is never switched on.
+ * A guest can be armed at BOOT (the selftest path arms the appliance before
+ * the desktop exists), and the link does not exist yet at that moment: the
+ * URC channel and the browser bring the network up later.  Binding the NIC
+ * at arm time therefore captures NULL and the bridge stays dead for the rest
+ * of the run, with the guest's DHCP quietly going to a synthetic peer that
+ * has no DHCP server in it.  Ask each time instead; it is a pointer read. */
+uno_nic_t *net_nic(void);
+static uno_nic_t *bridge_nic(void)
+{
+    if (!B.nic) B.nic = net_nic();
+    return B.nic;
+}
+
 void uno_vnet_bridge_start(uno_nic_t *nic)
 {
-    B.nic = nic;
-    B.active = nic ? 1 : 0;
+    B.nic = nic;                     /* NULL = resolve it when it exists     */
+    B.active = 1;
     B.tx = B.rx = B.bcast = B.dropped = 0;
 }
 
@@ -253,8 +268,11 @@ int  uno_vnet_bridge_active(void) { return B.active; }
  * synthetic peer, which is what an unbridged appliance still gets. */
 int uno_vnet_bridge_tx(const unsigned char *frame, int len)
 {
-    if (!B.active || !B.nic || len < 14) return 0;
-    if (B.nic->send(B.nic->ctx, frame, len) < 0) { B.dropped++; return 0; }
+    uno_nic_t *n;
+    if (!B.active || len < 14) return 0;
+    n = bridge_nic();
+    if (!n) return 0;                /* no wire yet: the peer answers        */
+    if (n->send(n->ctx, frame, len) < 0) { B.dropped++; return 0; }
     B.tx++;
     return 1;
 }
@@ -283,6 +301,12 @@ int uno_vnet_bridge_str(char *buf, int cap)
     static const char H[] = "0123456789";
     const int vals[4] = { B.tx, B.rx, B.bcast, B.dropped };
     const char *names[4] = { "wire tx ", " rx ", " bcast ", " nobuf " };
+    if (B.active && !bridge_nic()) {
+        const char *s = "armed, no link yet";
+        while (*s && i + 1 < cap) buf[i++] = *s++;
+        if (i < cap) buf[i] = 0;
+        return i;
+    }
     if (!B.active) {
         const char *s = "no wire (synthetic peer)";
         while (*s && i + 1 < cap) buf[i++] = *s++;
