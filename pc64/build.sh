@@ -493,7 +493,7 @@ if [ "$1" != "legacy" ]; then
         echo "[3c2] building UNOCODE.UNO (the editor)..."
         COBJ=""
         for s in uc_main uc_util uc_json uc_rx uc_theme uc_cfg uc_lang uc_doc \
-                 uc_edit uc_view uc_cmd uc_term uc_ext uc_api; do
+                 uc_edit uc_view uc_cmd uc_term uc_ext uc_api uc_http; do
             # -mno-stack-arg-probe: mingw calls ___chkstk_ms for any frame over
             # 4 KB, and a loadable module has nothing to link that against - it
             # surfaces as an unresolvable import at the kExports check, three

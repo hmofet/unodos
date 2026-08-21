@@ -18,10 +18,25 @@ void jz_raw(char *buf, int *pos, int cap, const char *s)
     *pos = p;
 }
 
-void jz_strn(char *buf, int *pos, int cap, const char *s, int n)
+void jz_open(char *buf, int *pos, int cap)
+{
+    int p = *pos;
+    if (p < cap - 1) buf[p++] = '"';
+    buf[p] = 0;
+    *pos = p;
+}
+
+void jz_close(char *buf, int *pos, int cap)
+{
+    int p = *pos;
+    if (p < cap - 1) buf[p++] = '"';
+    buf[p] = 0;
+    *pos = p;
+}
+
+void jz_more(char *buf, int *pos, int cap, const char *s, int n)
 {
     int p = *pos, i;
-    if (p < cap - 1) buf[p++] = '"';
     for (i = 0; i < n && p < cap - 8; i++) {
         unsigned char c = (unsigned char)s[i];
         switch (c) {
@@ -38,13 +53,65 @@ void jz_strn(char *buf, int *pos, int cap, const char *s, int n)
             } else buf[p++] = (char)c;
         }
     }
-    if (p < cap - 1) buf[p++] = '"';
     buf[p] = 0;
     *pos = p;
 }
 
+/* The whole-string forms, in terms of the three above, so there is exactly one
+ * escaper.  jz_more exists because two conversation turns sometimes have to
+ * become ONE JSON string: a failed request leaves a system notice between two
+ * user turns, the notice is local and never sent, and what reaches the API is
+ * then two user messages in a row - which the chat APIs reject. */
+void jz_strn(char *buf, int *pos, int cap, const char *s, int n)
+{
+    jz_open(buf, pos, cap);
+    jz_more(buf, pos, cap, s, n);
+    jz_close(buf, pos, cap);
+}
+
 void jz_str(char *buf, int *pos, int cap, const char *s)
 { jz_strn(buf, pos, cap, s, (int)strlen(s)); }
+
+/* ---- a conversation ------------------------------------------------------- */
+
+void jz_msgs(char *b, int *p, int cap, const jz_turn *t, int n, int gemini)
+{
+    int i, first = 1, open = 0, prev = -1;
+
+    for (i = 0; i < n; i++) {
+        int role = t[i].role;
+        if (role == JZ_SKIP) continue;
+        if (first && role != JZ_USER) continue;   /* must open with a user   */
+
+        if (open && role == prev) {               /* merge into the previous */
+            jz_more(b, p, cap, "\n\n", 2);
+            jz_more(b, p, cap, t[i].text, t[i].len);
+            continue;
+        }
+        if (open) {
+            jz_close(b, p, cap);
+            jz_raw(b, p, cap, gemini ? "}]}" : "}");
+            open = 0;
+        }
+        if (!first) jz_raw(b, p, cap, ",");
+
+        jz_raw(b, p, cap, "{\"role\":");
+        if (gemini) {
+            jz_str(b, p, cap, role == JZ_USER ? "user" : "model");
+            jz_raw(b, p, cap, ",\"parts\":[{\"text\":");
+        } else {
+            jz_str(b, p, cap, role == JZ_USER ? "user" : "assistant");
+            jz_raw(b, p, cap, ",\"content\":");
+        }
+        jz_open(b, p, cap);
+        jz_more(b, p, cap, t[i].text, t[i].len);
+        open = 1; prev = role; first = 0;
+    }
+    if (open) {
+        jz_close(b, p, cap);
+        jz_raw(b, p, cap, gemini ? "}]}" : "}");
+    }
+}
 
 /* ---- extractor ------------------------------------------------------------ */
 static const char *skip_ws(const char *p)

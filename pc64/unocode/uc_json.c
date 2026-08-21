@@ -465,6 +465,30 @@ UcJson *uc_json_path(const UcJson *root, const char *dotted)
         UcJson *m;
         while (*p && *p != '.' && n < (int)sizeof part - 1) part[n++] = *p++;
         part[n] = 0;
+
+        /* An all-digit segment indexes an ARRAY.  Settings files never need
+         * this - it is here because API responses do, constantly:
+         * "content.0.text" and "choices.0.message.content" are the shapes the
+         * assistant reads its reply out of, and walking them by hand at every
+         * call site is how the path strings stop being readable.
+         *
+         * Only when the node actually IS an array, so an object with a member
+         * literally named "0" still resolves by name. */
+        if (node && node->type == UJ_ARR && n > 0) {
+            int i = 0, digits = 1, k;
+            for (k = 0; k < n; k++)
+                if (part[k] < '0' || part[k] > '9') { digits = 0; break; }
+            if (digits) {
+                for (k = 0; k < n; k++) i = i * 10 + (part[k] - '0');
+                m = uc_json_at(node, i);
+                if (!m) return 0;
+                if (*p != '.') return m;
+                p++;
+                node = m;
+                continue;
+            }
+        }
+
         m = uc_json_member(node, part);
         if (!m) return 0;
         if (*p != '.') return m;

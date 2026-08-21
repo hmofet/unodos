@@ -76,6 +76,16 @@ hosttest ./build/webjs_test.exe
 step "unocode host tests"
 hosttest sh unocode/tools/test.sh
 
+# Studio's AI client reads every provider's reply through this extractor and
+# writes every request through this emitter, and it was ungated - a manual
+# test nobody ran. It is one gcc call with no dependencies, so there was never
+# a reason for it not to be here.
+# HOSTCC, not CC: build.sh's CC defaults to the mingw cross-compiler, which
+# targets the freestanding OS and cannot produce something this gate can run.
+step "studio JSON tests"
+"${HOSTCC:-gcc}" -O1 -o build/json_test tools/json_test.c apps/studio_json.c
+hosttest ./build/json_test
+
 step "cookie jar tests"
 hosttest ./build/cookie_test.exe
 hosttest ./build/cache_test.exe

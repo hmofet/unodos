@@ -58,7 +58,7 @@ static const struct {
     { "openai", "api.openai.com", "/v1/chat/completions", "",
       "gpt-4o-mini", "choices.0.message.content" },
     { "anthropic", "api.anthropic.com", "/v1/messages", "",
-      "claude-sonnet-4-5", "content.0.text" },
+      "claude-sonnet-5", "content.0.text" },
     { "gemini", "generativelanguage.googleapis.com",
       "/v1beta/models/", ":generateContent",
       "gemini-2.0-flash", "candidates.0.content.parts.0.text" },
@@ -81,8 +81,13 @@ static int   nmsg;
 static int   ai_scroll;
 
 static char *req_buf, *resp_buf, *reply_buf, *att_file;
-#define REQ_CAP   (96 * 1024)
 #define RESP_CAP  (160 * 1024)
+/* req_buf holds the headers AND the body, and build_request() writes the body
+ * into resp_buf, so this must exceed RESP_CAP or a long request is silently
+ * TRUNCATED - which reaches the user as an unexplained 400 from the API.
+ * It was a flat 96 KB, which was comfortably enough while only the latest
+ * message was sent and is not now that the whole conversation goes. */
+#define REQ_CAP   (RESP_CAP + 4096)
 #define REPLY_CAP (48 * 1024)
 
 static char in_line[256]; static int in_len;
@@ -186,6 +191,46 @@ static const char *SYS_PROMPT =
     "for beginners, UnoC when they want native speed). Keep answers short and "
     "give runnable code. Fence code in triple backticks.";
 
+/* ---- the conversation, as the API wants to see it -------------------------
+ * This used to send ONE message - the latest thing the user typed - while the
+ * pane drew a whole conversation above it.  So the assistant appeared to have
+ * a memory and had none: ask it to "make that blue" and it had never seen the
+ * thing it was meant to make blue.
+ *
+ * Three rules turn the local transcript into a legal API conversation:
+ *
+ *  - ROLE_SYS is NEVER sent.  Those are our own notices ("No API key.",
+ *    "Saved AI.CFG.") and they are addressed to the user, not the model.
+ *  - Consecutive same-role turns are MERGED into one message.  Dropping the
+ *    notices is what creates them: a failed request leaves USER, SYS, USER,
+ *    which becomes two user messages in a row, which the chat APIs reject.
+ *  - The history must START with a user turn, so any leading assistant turn
+ *    is skipped.
+ *
+ * The final user turn's text comes from `usermsg` rather than the buffer,
+ * because that is the copy carrying the attached file.
+ */
+static jz_turn g_turns[MSG_MAX];
+
+static void emit_msgs(char *b, int *p, int cap, const char *usermsg, int gemini)
+{
+    int i;
+    for (i = 0; i < nmsg; i++) {
+        g_turns[i].role = msg[i].role == ROLE_USER ? JZ_USER
+                        : msg[i].role == ROLE_AI   ? JZ_ASSISTANT : JZ_SKIP;
+        /* The last stored turn is the one being sent now, and `usermsg` is
+         * that turn with the attached file folded into it. */
+        if (i == nmsg - 1 && msg[i].role == ROLE_USER && usermsg) {
+            g_turns[i].text = usermsg;
+            g_turns[i].len  = (int)strlen(usermsg);
+        } else {
+            g_turns[i].text = conv + msg[i].off;
+            g_turns[i].len  = msg[i].len;
+        }
+    }
+    jz_msgs(b, p, cap, g_turns, nmsg, gemini);
+}
+
 /* ---- request body --------------------------------------------------------- */
 static void build_request(const char *usermsg, char *body, int cap, int *blen)
 {
@@ -196,23 +241,23 @@ static void build_request(const char *usermsg, char *body, int cap, int *blen)
         jz_str(body, &p, cap, M);
         jz_raw(body, &p, cap, ",\"max_tokens\":1024,\"messages\":[{\"role\":\"system\",\"content\":");
         jz_str(body, &p, cap, SYS_PROMPT);
-        jz_raw(body, &p, cap, "},{\"role\":\"user\",\"content\":");
-        jz_str(body, &p, cap, usermsg);
-        jz_raw(body, &p, cap, "}]}");
+        jz_raw(body, &p, cap, "},");
+        emit_msgs(body, &p, cap, usermsg, 0);
+        jz_raw(body, &p, cap, "]}");
     } else if (cfg_provider == PV_ANTHROPIC) {
         jz_raw(body, &p, cap, "{\"model\":");
         jz_str(body, &p, cap, M);
         jz_raw(body, &p, cap, ",\"max_tokens\":1024,\"system\":");
         jz_str(body, &p, cap, SYS_PROMPT);
-        jz_raw(body, &p, cap, ",\"messages\":[{\"role\":\"user\",\"content\":");
-        jz_str(body, &p, cap, usermsg);
-        jz_raw(body, &p, cap, "}]}");
+        jz_raw(body, &p, cap, ",\"messages\":[");
+        emit_msgs(body, &p, cap, usermsg, 0);
+        jz_raw(body, &p, cap, "]}");
     } else {
         jz_raw(body, &p, cap, "{\"systemInstruction\":{\"parts\":[{\"text\":");
         jz_str(body, &p, cap, SYS_PROMPT);
-        jz_raw(body, &p, cap, "}]},\"contents\":[{\"role\":\"user\",\"parts\":[{\"text\":");
-        jz_str(body, &p, cap, usermsg);
-        jz_raw(body, &p, cap, "}]}]}");
+        jz_raw(body, &p, cap, "}]},\"contents\":[");
+        emit_msgs(body, &p, cap, usermsg, 1);
+        jz_raw(body, &p, cap, "]}");
     }
     *blen = p;
 }
@@ -304,6 +349,16 @@ static int do_request(const char *usermsg)
           { conv_addz(ROLE_SYS, "TLS connect failed (cert not trusted / clock wrong)."); return -1; } }
 
     build_request(usermsg, resp_buf, RESP_CAP, &blen);   /* body -> resp scratch */
+
+    /* The emitters stop at their cap rather than overrun, so a conversation
+     * too long to encode arrives at the API as truncated JSON and comes back
+     * as an unexplained 400.  Say what actually happened instead. */
+    if (blen >= RESP_CAP - 1) {
+        conv_addz(ROLE_SYS, "This conversation is too long to send. "
+                            "Use /clear to start a new one.");
+        tls_close();
+        return -1;
+    }
 
     {
         char clen[16]; int c = blen, ci = 0; char tmp[16]; int tt = 0;
