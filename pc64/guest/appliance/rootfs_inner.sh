@@ -79,9 +79,14 @@ mkdir -p /tmp/cache /tmp/config
     if udhcpc -i eth0 -t 4 -T 3 -n -q >/tmp/dhcp.log 2>&1; then
       echo "uno: lease $(ip -4 addr show eth0 | grep -o 'inet [0-9.]*')" \
           > /dev/ttyS0
+      echo "uno: dns $(cat /tmp/resolv.conf | tr '\n' ' ')" > /dev/ttyS0
       break
     fi
     n=$((n + 1))
+    # SAY SO WHEN IT FAILS.  A loop that only reports success is a loop that
+    # reads identically to one that never ran, and the difference decides
+    # whether to look at the guest or at the bridge.
+    echo "uno: no lease yet (try $n)" > /dev/ttyS0
     sleep 2
   done
 ) &
