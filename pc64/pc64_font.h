@@ -43,6 +43,8 @@ void uno_font_pop(void);
 #define UNO_FS_ITALIC 2
 int  uno_font_draw_styled(int slot, int px, int style, int x, int y,
                           const char *s, fb_px fg, long bg);
+int  uno_font_draw_mono(int slot, int px, int style, int x, int y,
+                        const char *s, int cellw, fb_px fg);
 int  uno_font_text_w_styled(int slot, int px, int style, const char *s);
 int  uno_font_height_px(int slot, int px);
 int  uno_font_baseline_px(int slot, int px);         /* ascent within the cell */

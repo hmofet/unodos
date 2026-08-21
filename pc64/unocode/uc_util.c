@@ -76,5 +76,31 @@ int uc_itoa(char *out, long v)
 int uc_is_word(int c)
 {
     return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-           (c >= '0' && c <= '9') || c == '_';
+           (c >= '0' && c <= '9') || c == '_' || c >= 0x80;
+}
+
+/* ---- UTF-8 -------------------------------------------------------------------
+ * The document stays a BYTE buffer.  UTF-8 is what files hold and what the
+ * clipboard carries, and transcoding on every load and save to store something
+ * wider would buy nothing; what the rest of the editor needs instead is a way
+ * to walk those bytes a CHARACTER at a time, so a caret lands between
+ * characters, Backspace removes one, and a column counts one.
+ *
+ * The decoder itself lives in pc64/uno_utf8.h, not here, because pc64_font.c
+ * needs it too and sits on the other side of a link boundary - it is in the
+ * kernel, this file ships inside UNOCODE.UNO.  These are the editor's names
+ * for it; see that header for why it decodes strictly. */
+#include "uno_utf8.h"
+
+int uc_u8_get(const char *s, int n, int *cp) { return uno_u8_get(s, n, cp); }
+int uc_u8_len(int cp)                        { return uno_u8_len(cp); }
+int uc_u8_put(int cp, char *out)             { return uno_u8_put(cp, out); }
+int uc_u8_align(const char *s, int i)        { return uno_u8_align(s, i); }
+int uc_cp_width(int cp)                      { return uno_cp_width(cp); }
+
+/* The offset of the character before `i`, or 0. */
+int uc_u8_back(const char *s, int i)
+{
+    if (i <= 0) return 0;
+    return uno_u8_align(s, i - 1);
 }

@@ -4,6 +4,7 @@
 #include "pc64_font.h"
 #include "fb.h"
 #include "pc64_fs.h"
+#include "uno_utf8.h"
 #include <string.h>
 #include <math.h>
 
@@ -106,7 +107,12 @@ static int ensure_loaded(int slot)
       f->loaded = 1; return 1; }
 }
 
-/* ---- glyph cache (ASCII) ------------------------------------------------- */
+/* ---- glyph cache --------------------------------------------------------- */
+/* ASCII is a dense array, because every bank uses all of it and an index is
+ * cheaper than a probe.  Everything ABOVE ASCII goes in one shared LRU beside
+ * it (see g_ext below): a document uses few distinct non-ASCII glyphs, and
+ * giving every bank a full Unicode cache would cost megabytes to hold glyphs
+ * that are never asked for. */
 #define GC_FIRST 32
 #define GC_COUNT 95                    /* 32..126 */
 #define GMAXW 40
@@ -195,9 +201,8 @@ static void set_metrics(void)
 /* Render one glyph's coverage into the cache. In subpixel mode `cov` holds a
  * 3x-horizontal strip (cw3 x h) and ox3 is its left edge in 1/3-px units; in
  * grayscale mode `cov` holds a w x h coverage map with bbox (ox,oy). */
-static void render_glyph(int cp)
+static void render_glyph(gcache *gc, int cp)
 {
-    gcache *gc = &g_cache[cp - GC_FIRST];
     fslot *f = &g_fonts[g_active];
     float scale = g_scale;
     int adv, lsb, x0, y0, x1, y1, w, h;
@@ -220,6 +225,50 @@ static void render_glyph(int cp)
         if (w && h) stbtt_MakeCodepointBitmap(&f->info, gc->cov, w, h, w, scale, scale, cp);
     }
     gc->ready = 1;
+}
+
+/* ---- the cache above ASCII ------------------------------------------------
+ * One shared, stamped LRU rather than a per-bank array.  A source file uses a
+ * handful of distinct non-ASCII glyphs even when it is full of them, so a
+ * small pool serves every bank; giving all six banks a Unicode-wide cache
+ * would spend megabytes holding glyphs nothing asks for.  The bank identity is
+ * part of the KEY instead, because a glyph rasterised for one font at one size
+ * is not the same picture as the same codepoint at another. */
+#define GX_COUNT 96
+typedef struct {
+    int cp, slot, px, sub;
+    unsigned stamp;
+    gcache g;
+} gext;
+static gext g_ext[GX_COUNT];
+
+/* The cache entry for `cp`, rasterised if it was not already.  ASCII takes the
+ * dense array; everything else takes the LRU.  Never returns null. */
+static gcache *gc_for(int cp)
+{
+    int px, sub, i, lru = 0;
+    gext *e;
+
+    if (cp >= GC_FIRST && cp < GC_FIRST + GC_COUNT) {
+        gcache *gc = &g_cache[cp - GC_FIRST];
+        if (!gc->ready) render_glyph(gc, cp);
+        return gc;
+    }
+    px = cur_px(); sub = cur_sub();
+    for (i = 0; i < GX_COUNT; i++) {
+        e = &g_ext[i];
+        if (e->g.ready && e->cp == cp && e->slot == g_active &&
+            e->px == px && e->sub == sub) {
+            e->stamp = ++g_stamp;
+            return &e->g;
+        }
+        if (e->stamp < g_ext[lru].stamp) lru = i;
+    }
+    e = &g_ext[lru];
+    e->cp = cp; e->slot = g_active; e->px = px; e->sub = sub;
+    e->stamp = ++g_stamp;
+    render_glyph(&e->g, cp);
+    return &e->g;
 }
 
 /* raw stb kern -> 26.6 px at the active scale (0 for fonts without a table) */
@@ -309,13 +358,12 @@ static int pen_glyph(int pen26, int y, int cp, fb_px fg, long bg, int style)
 {
     gcache *gc;
     int next;
-    if (cp < GC_FIRST || cp >= GC_FIRST + GC_COUNT) {
+    if (cp < GC_FIRST || g_active < 0) {         /* control chars have no glyph */
         next = pen26 + g_space26;
         if (bg >= 0) fb_fill_rect(pen26 >> 6, y, (next >> 6) - (pen26 >> 6), g_cellh, (fb_px)bg);
         return next;
     }
-    gc = &g_cache[cp - GC_FIRST];
-    if (!gc->ready) render_glyph(cp);
+    gc = gc_for(cp);
     next = pen26 + (gc->adv26 > 0 ? gc->adv26 : g_space26);
     if (style & 1) next += 32;                       /* bold: half-px wider */
     if (bg >= 0) fb_fill_rect(pen26 >> 6, y, (next >> 6) - (pen26 >> 6), g_cellh, (fb_px)bg);
@@ -326,14 +374,15 @@ static int pen_glyph(int pen26, int y, int cp, fb_px fg, long bg, int style)
 
 static int adv_of(int cp)
 {
-    if (cp < GC_FIRST || cp >= GC_FIRST + GC_COUNT) return g_space;
-    { gcache *gc = &g_cache[cp - GC_FIRST]; if (!gc->ready) render_glyph(cp); return gc->adv; }
+    if (cp < GC_FIRST || g_active < 0) return g_space;
+    return gc_for(cp)->adv;
 }
 static int adv26_of(int cp)
 {
-    if (cp < GC_FIRST || cp >= GC_FIRST + GC_COUNT) return g_space26;
-    { gcache *gc = &g_cache[cp - GC_FIRST]; if (!gc->ready) render_glyph(cp);
-      return gc->adv26 > 0 ? gc->adv26 : g_space26; }
+    gcache *gc;
+    if (cp < GC_FIRST || g_active < 0) return g_space26;
+    gc = gc_for(cp);
+    return gc->adv26 > 0 ? gc->adv26 : g_space26;
 }
 
 /* string draw/measure with the fractional pen + kerning; these two must stay
@@ -344,8 +393,12 @@ static int text_pen(int x, int y, const char *s, fb_px fg, long bg, int style, i
                                        (F7 - UBSan ud2 on any offscreen-left
                                        draw); multiply is defined and the fb
                                        layer clips the actual painting */
-    for (; *s; s++) {
-        int cp = (unsigned char)*s;
+    /* The string is UTF-8.  Walking it byte by byte, as this did, hands every
+     * continuation byte to the rasteriser as its own codepoint: an accented
+     * letter drew as two wrong glyphs and measured as two cells wide. */
+    while (*s) {
+        int cp, k = uno_u8_get(s, 4, &cp);
+        s += k > 0 ? k : 1;
         if (prev) pen26 += kern26(prev, cp);
         if (draw) pen26 = pen_glyph(pen26, y, cp, fg, bg, style);
         else {
@@ -355,6 +408,30 @@ static int text_pen(int x, int y, const char *s, fb_px fg, long bg, int style, i
         prev = cp;
     }
     return (pen26 + 32) >> 6;
+}
+
+/* Fixed-pitch draw: one CELL per character, not one advance per character.
+ * The editor lays its text out on a grid - the caret, the selection, the
+ * find highlight and the mouse hit test all multiply a column by cellw - and
+ * the pen above only agrees with that grid by the accident of a monospace
+ * face having a uniform advance.  That accident stops holding the moment a
+ * CJK glyph, twice as wide, is on the line: the drawn text slides out from
+ * under the caret.  So place each character at the column arithmetic says,
+ * and let uno_cp_width() decide how many columns it took. */
+static int mono_pen(int x, int y, const char *s, int cellw, fb_px fg, long bg,
+                    int style, int draw)
+{
+    int col = 0;
+    while (*s) {
+        int cp, w, k = uno_u8_get(s, 4, &cp);
+        s += k > 0 ? k : 1;
+        w = uno_cp_width(cp);
+        if (draw && cp != ' ') pen_glyph((x + col * cellw) * 64, y, cp, fg, bg, style);
+        else if (draw && bg >= 0)
+            fb_fill_rect(x + col * cellw, y, cellw * (w ? w : 1), g_cellh, (fb_px)bg);
+        col += w;
+    }
+    return x + col * cellw;
 }
 
 /* ---- fb text provider ---------------------------------------------------- */
@@ -468,6 +545,22 @@ int uno_font_draw_styled(int slot, int px, int style, int x, int y,
     styled_leave(ss, sp);
     return rx;
 }
+/* Draw `s` on a fixed grid of `cellw`-wide cells, one cell per character (two
+ * for a wide one).  This is the entry the EDITOR draws through: its caret,
+ * selection, find highlight and mouse hit test all compute x as column *
+ * cellw, and only a fixed-pitch draw keeps the glyphs under them.  Returns the
+ * x just past the last cell. */
+int uno_font_draw_mono(int slot, int px, int style, int x, int y,
+                       const char *s, int cellw, fb_px fg)
+{
+    int ss, sp, rx;
+    if (cellw <= 0) return x;
+    if (!styled_enter(slot, px, &ss, &sp)) return fb_text(x, y, s, fg, -1);
+    rx = mono_pen(x, y, s, cellw, fg, -1, style, 1);
+    styled_leave(ss, sp);
+    return rx;
+}
+
 int uno_font_text_w_styled(int slot, int px, int style, const char *s)
 {
     int ss, sp, w;

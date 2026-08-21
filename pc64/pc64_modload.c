@@ -183,7 +183,7 @@ static const struct { const char *name; void *addr; } kExports[] = {
     /* framebuffer + fonts */
     KX(fb_fill_rect), KX(fb_hline), KX(fb_vline), KX(fb_blit), KX(fb_text),
     KX(fb_text_w),    KX(fb_text_h), KX(fb_width), KX(fb_height),
-    KX(uno_font_draw_styled), KX(uno_font_text_w_styled),
+    KX(uno_font_draw_styled), KX(uno_font_text_w_styled), KX(uno_font_draw_mono),
     KX(uno_font_height_px),   KX(uno_font_baseline_px), KX(uno_font_active),
     KX(uno_font_push), KX(uno_font_pop),
     KX(uno_font_count), KX(uno_font_name),   /* UnoWord's Font combo */
