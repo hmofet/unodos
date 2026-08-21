@@ -20,7 +20,8 @@ apk add --root $R --initdb --no-cache \
     mesa-dri-gallium \
     chromium \
     font-dejavu \
-    dbus
+    dbus \
+    ca-certificates ca-certificates-bundle
 
 # The appliance's init.  PID 1 after the initramfs switch_root.  The rootfs
 # is mounted read-only off virtio-blk (the layer below can only read), so
@@ -101,27 +102,37 @@ done
 # "it did not work" cannot tell them apart: whether packets reach the
 # internet at all (an IP with no name in it), and whether names resolve.
 UNO_SITE=${UNO_SITE:-unodos.arinbakht.com}
+# 1) AN IP WITH NO NAME AND NO TLS IN IT.  `wget http://1.1.1.1` is the wrong
+# probe and cost a round trip: it redirects to HTTPS, so its failure was a
+# certificate error that read as a dead network while TCP was working
+# perfectly.  A bare TCP connect claims exactly one thing.
 n=0
 while [ $n -lt 20 ]; do
-  if wget -q -T 10 -O /dev/null http://1.1.1.1/ 2>/tmp/wget.err; then
-    echo "uno: ip-ok (reached 1.1.1.1 through the bridge)" > /dev/ttyS0
+  if nc -w 4 1.1.1.1 443 </dev/null >/dev/null 2>&1; then
+    echo "uno: ip-ok (tcp to 1.1.1.1:443 through the bridge)" > /dev/ttyS0
     break
   fi
-  n=$((n + 1))
-  echo "uno: ip failed ($n) $(head -c 50 /tmp/wget.err | tr '\n' ' ')" > /dev/ttyS0
-  sleep 3
+  n=$((n + 1)); echo "uno: ip failed ($n)" > /dev/ttyS0; sleep 3
 done
+# 2) A name.
 n=0
 while [ $n -lt 20 ]; do
   A=$(nslookup "$UNO_SITE" 2>/dev/null | grep -A2 "^Name:" | grep -o \
       '[0-9]\+\.[0-9]\+\.[0-9]\+\.[0-9]\+' | head -1)
-  if [ -n "$A" ]; then
-    echo "uno: dns-ok $UNO_SITE -> $A" > /dev/ttyS0
-    break
-  fi
+  if [ -n "$A" ]; then echo "uno: dns-ok $UNO_SITE -> $A" > /dev/ttyS0; break; fi
+  n=$((n + 1)); echo "uno: dns failed ($n)" > /dev/ttyS0; sleep 3
+done
+# 3) The whole stack, including TLS against real roots - which is the same
+# work Chromium is about to do, done by a different program, so a browser
+# showing a page is confirmed rather than interpreted.
+n=0
+while [ $n -lt 15 ]; do
+  T=$(wget -q -T 15 -O - "https://$UNO_SITE/" 2>/tmp/wget.err \
+      | tr -d '\n' | grep -o '<title>[^<]*' | head -c 48)
+  if [ -n "$T" ]; then echo "uno: https-ok $T" > /dev/ttyS0; break; fi
   n=$((n + 1))
-  echo "uno: dns failed ($n)" > /dev/ttyS0
-  sleep 3
+  echo "uno: https failed ($n) $(head -c 60 /tmp/wget.err | tr '\n' ' ')" > /dev/ttyS0
+  sleep 4
 done
 
 # X plus Chromium, restarted if either dies.  Software rendering: the guest
