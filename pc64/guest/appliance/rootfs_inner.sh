@@ -76,10 +76,19 @@ mkdir -p /tmp/cache /tmp/config
   n=0
   while [ $n -lt 30 ]; do
     ip link set eth0 up 2>/dev/null
-    if udhcpc -i eth0 -t 4 -T 3 -n -q >/tmp/dhcp.log 2>&1; then
+    if udhcpc -i eth0 -t 4 -T 3 -n -q -s /usr/share/uno/dhcp.script \
+              >/tmp/dhcp.log 2>&1; then
       echo "uno: lease $(ip -4 addr show eth0 | grep -o 'inet [0-9.]*')" \
           > /dev/ttyS0
-      echo "uno: dns $(cat /tmp/resolv.conf | tr '\n' ' ')" > /dev/ttyS0
+      echo "uno: route $(ip route | grep -o 'default.*' | head -1)" > /dev/ttyS0
+      echo "uno: dns $(tr '\n' ' ' < /tmp/resolv.conf)" > /dev/ttyS0
+      # THE PROOF LINE.  A screenshot of a browser can be a cached page or an
+      # error page misread at a glance; an HTTP status fetched by a different
+      # program entirely says the guest reached the internet through the
+      # bridge, in one line, before Chromium is even asked to.
+      echo "uno: fetch $(wget -q -T 8 -O - http://example.com 2>/dev/null \
+            | tr -d '\n' | grep -o '<title>.*</title>' | head -c 60)" \
+          > /dev/ttyS0
       break
     fi
     n=$((n + 1))
@@ -112,10 +121,32 @@ done
 EOF
 chmod +x $R/sbin/uno-init
 
-# DNS on a read-only root: udhcpc's script writes /etc/resolv.conf, so that
-# path is a symlink into the tmpfs the appliance mounts over /tmp.  Without
-# it every name lookup fails while the lease itself is perfectly fine.
+# DNS on a read-only root.  /etc/resolv.conf is a symlink into the tmpfs the
+# appliance mounts over /tmp - but that alone is NOT enough, and the first
+# bridged run proved it: the guest took a perfectly good lease (10.0.2.16)
+# and still had no DNS, because the stock Alpine udhcpc script writes its
+# resolv.conf through a TEMP FILE beside the target, and /etc is read-only.
+# So udhcpc gets a script of ours that writes the tmpfs path directly.
 ln -sf /tmp/resolv.conf $R/etc/resolv.conf
+mkdir -p $R/usr/share/uno
+cat > $R/usr/share/uno/dhcp.script <<'DHCPEOF'
+#!/bin/sh
+# busybox udhcpc hands its result in the environment: $ip $mask $router $dns.
+case "$1" in
+  bound|renew)
+    ip addr flush dev "$interface" 2>/dev/null
+    ip addr add "$ip/${mask:-24}" dev "$interface"
+    ip link set "$interface" up
+    for r in $router; do
+        ip route add default via "$r" dev "$interface" 2>/dev/null && break
+    done
+    : > /tmp/resolv.conf
+    for s in $dns; do echo "nameserver $s" >> /tmp/resolv.conf; done
+    ;;
+esac
+exit 0
+DHCPEOF
+chmod +x $R/usr/share/uno/dhcp.script
 
 mkdir -p $R/usr/share/uno
 cat > $R/usr/share/uno/welcome.html <<'EOF'
