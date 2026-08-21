@@ -311,7 +311,7 @@ Full detail, including the before/after measurements, is in
 |---|---|
 | Start > Power > Restart never dispatches | **fixed** - the right pane's canvas had a null event handler, so Tile/Cascade/Minimize all/Restart/Shut Down were all dead. Restart takes uptime 66,866 ms -> 18,851 ms |
 | A Python app whose `draw()` raises reports nothing | **fixed** - PYRT paints the traceback into the app's own window and logs it at `LOG_ERR` |
-| Session restore reopens the wrong window | **not reproducible in QEMU**; the certain defect underneath it is fixed - the reader took the first `SHELL.CFG` from volume 0 upward while the writer binds to the boot volume, so the file inspected need not be the file loaded |
+| Session restore reopens the wrong window | **fixed, root-caused on the box** - the dead eMMC carries a ZERO-BYTE `SHELL.CFG` and the reader stopped on the first read that was not *negative*. See below |
 | WiFi is WPA2-only | **held** - another lane |
 | The Yoga's network path collapses | **held** - Yoga-specific, deferred |
 | Audio tab draws its value over its label | **fixed** |
@@ -337,3 +337,57 @@ worth recording because of *why* it missed them:
 
 The pattern in both is the same as the run's own headline finding: an invariant
 asserted in a comment rather than expressed as a check.
+
+### 10a. Re-verified on the ZimaBlade, 2026-08-21 - and one root cause that only the box could give
+
+The fixed build was pushed to the running ZimaBlade over URC (`push <vol> <path>
+<localfile>` through the bridge: the kernel plus PYRT, STUDIO, UOWORD, UOCALC
+and UOSHOW, 5.7 MB, every transfer byte-verified at ~45-145 KB/s) and the box
+rebooted onto it. Nobody touched the machine.
+
+| item | before | after |
+|---|---|---|
+| Start > Restart | menu stays open, uptime climbs | uptime 267,130 ms -> 50,562 ms |
+| Start > Tile | highlights, does nothing | two windows tiled, menu closed |
+| session restore | one window: Control Panel | all four saved windows return |
+| Runner3D + Esc | 480x270, game still running | 960x540, app closed |
+| Control Panel > Audio | `Output devic` overdrawn | `Output device: HD Audio` |
+| Open dialog typing | `ABC` -> `README.TXT` | `ABC` |
+| Studio opens a `.UNO` | mojibake, saveable back | refused, document untouched |
+| Python `draw()` raises | blank window, silence | traceback on screen AND in unolog |
+| `nst` | `connA=0 connB=0 accepted=-1` | `connA=2 connB=2 accepted=4 peer=192.168.2.100:60364` |
+
+**THE SESSION-RESTORE ROOT CAUSE WAS NOT WHAT §4 GUESSED, AND ONE COMMAND ON THE
+BOX SETTLED IT.** §4 wrote "Control is index 0 in the native app table, which is
+the shape of the bug". It is not an index bug at all:
+
+```
+py uno.size(1,'SHELL.CFG')  ->  0        the dead eMMC
+py uno.size(2,'SHELL.CFG')  ->  178      the boot stick, restore=1 and every pref
+```
+
+`prefs_read` scanned from volume 0 and stopped on the first read that was not
+NEGATIVE. **Zero is not negative.** Every boot parsed an empty buffer, so
+`restore=` and `open=` were both absent and the fallback opened Control Panel.
+The same empty read was discarding every Control Panel PREFERENCE on that
+machine - theme, resolution, scale, volume, wallpaper, pointer speed - every
+boot, for as long as that zero-byte file has existed. Nobody noticed, because a
+default looks like a choice.
+
+The lesson generalises past this bug: **the eMMC's failure mode is not "writes
+fail", it is "writes leave a plausible-looking artefact"**. A create that never
+completes leaves a real directory entry of length zero, and every "is it there?"
+test in the tree answers yes.
+
+**Two harness facts for the next run:**
+
+- The bridge's `push` verb is the whole A/B update path and it works: a headless
+  box took a new kernel over its own link three times in one session with no
+  physical access. `push_file` verifies, and `put` stages in an 8 MiB `.bss`
+  buffer and only touches the disk at `done`, so an interrupted push writes
+  nothing.
+- **There is no delete verb in URC and the Files pane does not scroll**, so a
+  file pushed into `APPS\` cannot be removed remotely. Truncating it to zero
+  with `uno.write(vol, path, b"")` deregisters it (no 48-byte header, so
+  `uno_mod_desc_read` skips it) and is the only remote cleanup available. Worth
+  a `rm` verb if anyone is taking requests.
