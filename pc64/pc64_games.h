@@ -1,12 +1,19 @@
-/* Native unoui games for the pc64 shell (pc64_games.c). Each game is a
+/* The native unoui game for the pc64 shell (pc64_games.c). It is a
  * unoui_canvas that draws directly with fb primitives and SCALES to whatever
  * rect it is given - so it fills a window and, unchanged, a full screen.
- * Replaces the mac_compat canvas bridge for the games. */
+ *
+ * Runner3D is the only entry: it drives uno3d directly and has no module
+ * counterpart. Dostris, Pac-Man and OutLast are .UNO modules (apps/dostris.c,
+ * apps/pacman.c, apps/outlast.c) so ALL apps load from storage - the
+ * decoupling contract. They had native copies here too, unreachable since
+ * app_game() narrowed to EX_RUNNER, and the divergence that hid behind the
+ * duplicate cost Pac-Man its sounds and Dostris its line-clear blip. Add a
+ * game as a module, not as a second copy here. */
 #ifndef PC64_GAMES_H
 #define PC64_GAMES_H
 #include "unoui.h"
 
-enum { GAME_DOSTRIS, GAME_PACMAN, GAME_OUTLAST, GAME_RUNNER, PC64_NGAMES };
+enum { GAME_RUNNER, PC64_NGAMES };
 
 unoui_canvas *pc64_game_canvas(int game);   /* the game's draw/event vtable   */
 void          pc64_game_open(int game);      /* (re)start it                  */
