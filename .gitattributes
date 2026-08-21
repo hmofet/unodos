@@ -14,3 +14,9 @@ unodef/gen/** text eol=lf
 # Windows scripts keep Windows endings
 *.ps1 text eol=crlf
 *.bat text eol=crlf
+
+# The vendored UnoCode tree matches its upstream byte for byte (see
+# pc64/UNOCODE-UPSTREAM.md), and upstream pins these to LF. Without this, a
+# Windows checkout holds CRLF while the committed bytes are LF, and every
+# sync_unocode.py run reports all 26 files as changed when nothing has.
+pc64/unocode/** text eol=lf

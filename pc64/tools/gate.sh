@@ -68,6 +68,14 @@ hosttest ./build/qjs_host_test.exe
 hosttest ./build/qjs_dispatch_test.exe
 hosttest ./build/webjs_test.exe
 
+# UnoCode's own two: the JSONC parser and the regex engine, which every theme,
+# keybinding, snippet, extension manifest and grammar in the editor is read
+# through.  They come across with the vendored core (pc64/UNOCODE-UPSTREAM.md)
+# and run here so that a SYNC is gated by one command - upstream's gate never
+# compiles this kernel, so this is where a bad drop has to be caught.
+step "unocode host tests"
+hosttest sh unocode/tools/test.sh
+
 step "cookie jar tests"
 hosttest ./build/cookie_test.exe
 hosttest ./build/cache_test.exe
