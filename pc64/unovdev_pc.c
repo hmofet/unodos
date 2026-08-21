@@ -105,6 +105,13 @@ static void pit0_irq_taken(void)
         P0.oneshot_done = 1;
 }
 
+/* The CMOS speaks BCD, and status register B above says so. */
+static u8 bcd(int v)
+{
+    if (v < 0) v = 0;
+    return (u8)(((v / 10) % 10) << 4 | (v % 10));
+}
+
 static int pit_io(unsigned port, int is_write, unsigned long long *val)
 {
     switch (port) {
@@ -173,19 +180,30 @@ static int pit_io(unsigned port, int is_write, unsigned long long *val)
          * That is the same failure the PIT had, and the general lesson is
          * that 0xFF is a dangerous default: absent hardware should read as
          * quiet, not as busy. */
+        /* THE REAL DATE, NOT A PLAUSIBLE ONE.  These fields used to be
+         * constants - a fixed 2026-08-06 - which was fine for reaching a
+         * shell and is not fine for anything that verifies a certificate: a
+         * TLS chain is checked against the clock, so a guest fifteen days in
+         * the past rejects every certificate issued since, and the error it
+         * reports is `certificate verify failed`, which reads as a broken
+         * network or a missing CA and is neither.  Cloudflare rotates
+         * certificates weekly, so a hardcoded date does not merely risk this,
+         * it guarantees it. */
         if (!is_write) {
+            int y = 2026, mo = 8, d = 6, h = 12, mi = 0, s = 0;
+            uno_native_rtc_read(&y, &mo, &d, &h, &mi, &s);
             switch (P.cmos) {
-            case 0x00: *val = 0x00; break;       /* seconds, BCD            */
-            case 0x02: *val = 0x00; break;       /* minutes                 */
-            case 0x04: *val = 0x12; break;       /* hours                   */
-            case 0x06: *val = 0x04; break;       /* weekday                 */
-            case 0x07: *val = 0x06; break;       /* day                     */
-            case 0x08: *val = 0x08; break;       /* month                   */
-            case 0x09: *val = 0x26; break;       /* year                    */
+            case 0x00: *val = bcd(s); break;     /* seconds, BCD            */
+            case 0x02: *val = bcd(mi); break;    /* minutes                 */
+            case 0x04: *val = bcd(h); break;     /* hours                   */
+            case 0x06: *val = 0x04; break;       /* weekday, nobody checks  */
+            case 0x07: *val = bcd(d); break;     /* day                     */
+            case 0x08: *val = bcd(mo); break;    /* month                   */
+            case 0x09: *val = bcd(y % 100); break;          /* year         */
             case 0x0A: *val = 0x26; break;       /* status A: UIP CLEAR     */
             case 0x0B: *val = 0x02; break;       /* status B: 24-hour, BCD  */
             case 0x0D: *val = 0x80; break;       /* battery good            */
-            case 0x32: *val = 0x20; break;       /* century                 */
+            case 0x32: *val = bcd(y / 100); break;          /* century      */
             default:   *val = 0x00; break;
             }
         }
