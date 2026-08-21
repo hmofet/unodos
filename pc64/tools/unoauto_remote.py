@@ -246,9 +246,46 @@ class UnoAutoLink:
     def message(self, text):
         self.send("MSG", text)
 
-    def command(self, verb, *args, timeout=5.0):
+    def command(self, verb, *args, timeout=5.0, retries=0):
         """Send `CMD <verb> args`, block for the response, return its ok lines.
-        Raises TimeoutError or RuntimeError(err text)."""
+        Raises TimeoutError or RuntimeError(err text).
+
+        `retries` re-sends after a TIMEOUT only - never after an `err`, which is
+        a real answer. It defaults to 0 because a re-send is a SECOND EXECUTION:
+        that is harmless for a read (probe, uptime, vols) and wrong for anything
+        that mutates (pointer and key would double-inject, launch would open a
+        second window). Use it on reads; use alive() to decide whether a
+        mutating verb's timeout meant anything.
+
+        Why this exists: on the 2026-08-20 metal run, URC verbs intermittently
+        exceeded the bridge's 15 s timeout under load (`pointer`, `key`,
+        `screen read`) and EVERY "the box is dead" scare in that run was a slow
+        verb - the box was alive on a re-check, every time."""
+        last = None
+        for _ in range(max(0, int(retries)) + 1):
+            try:
+                return self._command_once(verb, *args, timeout=timeout)
+            except TimeoutError as e:
+                last = e
+        raise last
+
+    def alive(self, tries=3, timeout=8.0):
+        """Is the box answering? Debounced, because ONE timeout means nothing.
+
+        Returns True as soon as any attempt answers, False only after `tries`
+        CONSECUTIVE failures. The metal run's rule, learned the hard way: break
+        on three consecutive failures, never on one."""
+        for _ in range(max(1, int(tries))):
+            try:
+                self._command_once("uptime", timeout=timeout)
+                return True
+            except TimeoutError:
+                continue
+            except RuntimeError:
+                return True          # it answered, it just disliked the verb
+        return False
+
+    def _command_once(self, verb, *args, timeout=5.0):
         rid = str(next(self._ids))
         rec = {"lines": [], "ev": threading.Event(), "err": False}
         with self._lock:
@@ -267,8 +304,12 @@ class UnoAutoLink:
     # convenience wrappers over the command language
     def probe(self, **k):
         """Return the PROBE snapshot as dicts: kind/state/v1/v2/name.
-        kind 0=module 1=window 2=subsystem (see unoauto.h)."""
+        kind 0=module 1=window 2=subsystem (see unoauto.h).
+
+        Retried by default: probe is read-only, so a re-send costs nothing, and
+        this is the call most often used to ask "is the box still there?" """
         rows = []
+        k.setdefault("retries", 2)
         for l in self.command("probe", **k):
             p = l.split(None, 4)
             if len(p) < 5:
@@ -282,7 +323,9 @@ class UnoAutoLink:
     def apps(self, **k):               return int(self.command("apps", **k)[0])
     def launch(self, n, **k):          return self.command("launch", n, **k)
     def close_top(self, **k):          return self.command("close", **k)
-    def uptime(self, **k):             return int(self.command("uptime", **k)[0])
+    def uptime(self, **k):
+        k.setdefault("retries", 2)     # read-only: a re-send is free
+        return int(self.command("uptime", **k)[0])
     def poweroff(self, **k):           return self.command("poweroff", **k)
     def test(self, suite="", **k):     return self.command("test", suite, timeout=k.pop("timeout", 60.0), **k)
     def eval(self, src, **k):          return self.command("py", src, timeout=k.pop("timeout", 20.0), **k)
