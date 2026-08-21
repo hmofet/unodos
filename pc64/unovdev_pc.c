@@ -14,6 +14,7 @@
 #include "unovdev.h"
 #include "unovirt.h"       /* guest-time, for the channel the guest LISTENS to */
 #include "pc64_native.h"   /* the wall, for the channel the guest READS        */
+#include <stdio.h>         /* snprintf, for the one status line               */
 
 typedef unsigned int       u32;
 typedef unsigned short     u16;
@@ -259,15 +260,23 @@ static void pic_data(uno_pic *p, u8 v)           /* port 0x21 / 0xA1 write  */
 }
 
 static int uart_irq_level(void);                 /* below, needs U          */
+static int i8042_kbd_irq_level(void);            /* below, needs K8         */
+static int i8042_aux_irq_level(void);
 
 /* The IRR follows the wires.  Called before any read or arbitration, so a
- * guest inspecting the IRR sees the same lines the injector does. */
+ * guest inspecting the IRR sees the same lines the injector does.
+ *
+ * THE SLAVE IS WIRED NOW (A8): the aux mouse rides IRQ12, which is slave
+ * line 4, and the slave's deliverable state asserts master line 2 - the
+ * cascade.  Before A8 the slave was programmed by the init sequence and
+ * nothing ever raised it, so the arbitration below never had to look. */
 static void pic_refresh(void)
 {
-    u8 irr = 0;
+    u8 irr = 0, sirr = 0;
     int i;
-    if (pit0_irq_pending())  irr |= 1u << 0;
-    if (uart_irq_level())    irr |= 1u << 4;
+    if (pit0_irq_pending())       irr |= 1u << 0;
+    if (i8042_kbd_irq_level())    irr |= 1u << 1;
+    if (uart_irq_level())         irr |= 1u << 4;
     /* The virtio transports, which live in unovdev.c and are told their line
      * on the guest's own command line (`...@0xd0000000:5`). Their level is a
      * level in the same sense the UART's received-data is: it stays up until
@@ -276,7 +285,34 @@ static void pic_refresh(void)
      * register is for and what a real device does. */
     for (i = 5; i <= 7; i++)
         if (uno_vdev_mmio_irq_level(i)) irr |= (u8)(1u << i);
+    if (i8042_aux_irq_level())    sirr |= 1u << 4;          /* IRQ12        */
+    PICS.irr = sirr;
+    /* The cascade: the slave raises master line 2 while it has something
+     * deliverable - masked lines do not travel, and a request in service on
+     * the slave blocks its own and lower priorities exactly as on the
+     * master. */
+    if (PICS.inited) {
+        u8 sready = PICS.irr & (u8)~PICS.imr;
+        for (i = 0; i < 8; i++) {
+            if (PICS.isr & (1u << i)) break;
+            if (sready & (1u << i)) { irr |= 1u << 2; break; }
+        }
+    }
     PICM.irr = irr;
+}
+
+/* Arbitrate the slave: the line it would put on the cascade, or -1. */
+static int pic_slave_pick(void)
+{
+    u8 sready;
+    int i;
+    if (!PICS.inited) return -1;
+    sready = PICS.irr & (u8)~PICS.imr;
+    for (i = 0; i < 8; i++) {
+        if (PICS.isr & (1u << i)) return -1;
+        if (sready & (1u << i)) return i;
+    }
+    return -1;
 }
 
 static int pic_io(unsigned port, int is_write, unsigned long long *val)
@@ -318,7 +354,13 @@ int uno_vdev_irq_pending(void)
     if (!ready) return 0;
     for (i = 0; i < 8; i++) {
         if (PICM.isr & (1u << i)) return 0;
-        if (ready & (1u << i)) return 1;
+        if (ready & (1u << i)) {
+            /* Line 2 is the cascade: it is only pending if the slave still
+             * has something to put on it at take time. pic_refresh already
+             * required that, but re-ask so pending and take cannot split. */
+            if (i == 2) return pic_slave_pick() >= 0;
+            return 1;
+        }
     }
     return 0;
 }
@@ -333,6 +375,18 @@ int uno_vdev_irq_take(void)
     for (i = 0; i < 8; i++) {
         if (PICM.isr & (1u << i)) return -1;
         if (ready & (1u << i)) {
+            if (i == 2) {
+                /* A slave interrupt is taken on BOTH chips: the master's
+                 * cascade line goes in service, the slave's own line goes in
+                 * service, and the vector is the SLAVE's base - which is why
+                 * the guest EOIs both, and why pic_cmd needs no special case
+                 * for it. */
+                int s = pic_slave_pick();
+                if (s < 0) return -1;
+                PICM.isr |= 1u << 2;
+                PICS.isr |= (u8)(1u << s);
+                return (int)PICS.base + s;
+            }
             PICM.isr |= (u8)(1u << i);
             if (i == 0) pit0_irq_taken();
             return (int)PICM.base + i;
@@ -363,9 +417,32 @@ static struct {
  * that is about to want them.  IER bit 0 going live is the one moment that is
  * both after the last clear-read and before the first blocking read.  Real
  * keystrokes come from the frame loop, which already owns the keyboard. */
-static struct { u8 buf[512]; int head, tail; const char *seed; } RX;
+static struct {
+    u8 buf[512]; int head, tail; const char *seed;
+    int pm, prompt;              /* "~ # " matcher over the TX stream        */
+} RX;
 
 static int rx_empty(void) { return RX.head == RX.tail; }
+
+/* THE SEED WAITS FOR THE PROMPT.  Handing it over when the receive interrupt
+ * arms looked airtight and was not: the 6.12 driver arms IER during its
+ * probe and its open-time drain reads RBR to clear "stale" state, so the
+ * seed's head got eaten and the shell ran the mangled tail ("sh: linkth0:
+ * not found" was `busybox ip link set eth0 up` after the drain).  The one
+ * moment a shell is provably ready to read is when it has just printed its
+ * prompt - so the TX stream is watched for "~ # ", and the seed is held
+ * until it has gone by. */
+static void rx_tx_watch(char c)
+{
+    static const char P[] = "~ # ";
+    if (RX.prompt) return;
+    if (c == P[RX.pm]) {
+        RX.pm++;
+        if (!P[RX.pm]) RX.prompt = 1;
+    } else {
+        RX.pm = (c == P[0]) ? 1 : 0;
+    }
+}
 
 void uno_vdev_serial_push(int c)
 {
@@ -380,7 +457,7 @@ void uno_vdev_serial_seed(const char *s) { RX.seed = s; }
 static void rx_feed_seed(void)
 {
     const char *s = RX.seed;
-    if (!s) return;
+    if (!s || !RX.prompt) return;            /* not until the shell says so  */
     RX.seed = 0;
     while (*s) uno_vdev_serial_push(*s++);
 }
@@ -411,12 +488,304 @@ static int uart_irq_level(void)
     return ((U.ier & 0x02) && U.thre) ? 1 : 0;
 }
 
+/* ---- an i8042, because the guest needs input the kernel already drives ----
+ *
+ * A8's finding forced this: virtio-input CANNOT cross a virtio-mmio v2
+ * transport with a stock kernel - the driver reads its capability bitmaps
+ * with one config access of arbitrary length, and vm_get() BUG()s on any
+ * length that is not 1, 2, 4 or 8.  Every distro also ships virtio_input=m,
+ * so even a correct transport would find no driver in an initramfs.  The
+ * i8042 has neither problem: SERIO_I8042 and KEYBOARD_ATKBD are =y in every
+ * kernel that has ever booted on a PC, and its whole protocol is byte-wide.
+ *
+ * Two queues rather than one buffer, each byte knowing which device it came
+ * from, because that is what the AUX status bit reports and the driver
+ * routes on it.  Controller and keyboard responses read back with AUX clear;
+ * mouse bytes and the aux loopback read back with AUX set.  When both have
+ * something, the keyboard goes first and the mouse's interrupt waits - the
+ * status register and the read must agree on which byte is next, so one rule
+ * decides for both.
+ *
+ * Scancodes go out in SET 1, which is what the driver sees on every real PC:
+ * it asks for translation (CCB bit 6) and translated set 2 IS set 1.  The
+ * host hands us characters and EFI scan codes, not key events, so a
+ * keystroke is synthesised as press+release with the shift/ctrl wrapping the
+ * table demands - unoui has no key-up event to forward (UI_EV_KEY is "a key
+ * went DOWN"), and until it does, held keys cannot cross into the guest. */
+#define K8Q 256
+static struct {
+    u8  ccb;                    /* bit0/1 kbd/aux irq, 4/5 disable, 6 xlate */
+    int inited;
+    int expect;                 /* controller command awaiting its data byte */
+    int kbd_expect, aux_expect; /* device command awaiting its parameter    */
+    u8  kq[K8Q]; int kh, kt;    /* keyboard + controller -> host            */
+    u8  aq[K8Q]; int ah, at;    /* aux (mouse) -> host                      */
+    int aux_stream;             /* 0xF4 seen: movement packets flow         */
+    int aux_id;                 /* 0 = plain PS/2, 3 = IntelliMouse (wheel) */
+    u8  rates[2];               /* the sample-rate knock, two most recent   */
+    int keys, packets, dropped; /* for the status line                      */
+} K8;
+
+static void k8_init(void)
+{
+    if (K8.inited) return;
+    K8.inited = 1;
+    K8.ccb = 0x74;              /* translate on, both devices off, SYS      */
+}
+
+static int kq_n(void) { return (K8.kt - K8.kh + K8Q) % K8Q; }
+static int aq_n(void) { return (K8.at - K8.ah + K8Q) % K8Q; }
+
+static void kq_push(u8 b)
+{
+    int nxt = (K8.kt + 1) % K8Q;
+    if (nxt == K8.kh) { K8.dropped++; return; }
+    K8.kq[K8.kt] = b; K8.kt = nxt;
+}
+static void aq_push(u8 b)
+{
+    int nxt = (K8.at + 1) % K8Q;
+    if (nxt == K8.ah) { K8.dropped++; return; }
+    K8.aq[K8.at] = b; K8.at = nxt;
+}
+
+/* The interrupt lines are levels over the queues, gated the way the real
+ * chip gates them: the CCB enable bits.  The aux line additionally waits for
+ * the keyboard queue to drain, because the status register presents the
+ * keyboard byte first and an IRQ12 whose read returns a keyboard byte sends
+ * the byte to the wrong driver. */
+static int i8042_kbd_irq_level(void)
+{ return (K8.ccb & 0x01) && kq_n() > 0; }
+static int i8042_aux_irq_level(void)
+{ return (K8.ccb & 0x02) && kq_n() == 0 && aq_n() > 0; }
+
+/* The keyboard device's half of a command conversation (bytes written to
+ * 0x60 with no controller command pending). */
+static void k8_kbd_cmd(u8 v)
+{
+    if (K8.kbd_expect) {
+        int was = K8.kbd_expect;
+        K8.kbd_expect = 0;
+        kq_push(0xFA);
+        if (was == 0xF0 && v == 0) kq_push(0x02);   /* current set: 2       */
+        return;
+    }
+    switch (v) {
+    case 0xFF: kq_push(0xFA); kq_push(0xAA); break; /* reset: ACK, BAT OK   */
+    case 0xF2: kq_push(0xFA); kq_push(0xAB); kq_push(0x83); break;  /* ID   */
+    case 0xEE: kq_push(0xEE); break;                /* echo                 */
+    case 0xED: case 0xF3: case 0xF0:                /* LEDs, rate, set      */
+        kq_push(0xFA); K8.kbd_expect = v; break;
+    default:   kq_push(0xFA); break;                /* enable/disable/etc   */
+    }
+}
+
+/* The mouse's half.  The sample-rate knock 200,100,80 is how a driver asks
+ * "are you an IntelliMouse", and answering ID 3 afterwards is what turns the
+ * fourth (wheel) byte on.  psmouse also probes for fancier hardware with 0xE8
+ * resolution sequences; plain ACKs and a generic status read answer those as
+ * "no". */
+static void k8_aux_cmd(u8 v)
+{
+    if (K8.aux_expect) {
+        int was = K8.aux_expect;
+        K8.aux_expect = 0;
+        if (was == 0xF3) {
+            if (K8.rates[0] == 200 && K8.rates[1] == 100 && v == 80)
+                K8.aux_id = 3;
+            K8.rates[0] = K8.rates[1]; K8.rates[1] = v;
+        }
+        aq_push(0xFA);
+        return;
+    }
+    switch (v) {
+    case 0xFF:                                      /* reset                */
+        K8.aux_stream = 0; K8.aux_id = 0;
+        K8.rates[0] = K8.rates[1] = 0;
+        aq_push(0xFA); aq_push(0xAA); aq_push(0x00);
+        break;
+    case 0xF2: aq_push(0xFA); aq_push((u8)K8.aux_id); break;
+    case 0xF4: aq_push(0xFA); K8.aux_stream = 1; break;
+    case 0xF5: aq_push(0xFA); K8.aux_stream = 0; break;
+    case 0xE8: case 0xF3: aq_push(0xFA); K8.aux_expect = v; break;
+    case 0xE9:                                      /* status               */
+        aq_push(0xFA); aq_push(0x00); aq_push(0x02); aq_push(0x64);
+        break;
+    case 0xEB:                                      /* read data: one packet */
+        aq_push(0xFA); aq_push(0x08); aq_push(0x00); aq_push(0x00);
+        if (K8.aux_id == 3) aq_push(0x00);
+        break;
+    default:   aq_push(0xFA); break;                /* scaling and friends  */
+    }
+}
+
+static int i8042_io(unsigned port, int is_write, unsigned long long *val)
+{
+    if (port != 0x60 && port != 0x64) return 0;
+    k8_init();
+
+    if (port == 0x64 && !is_write) {                /* status               */
+        int obf = kq_n() > 0 || aq_n() > 0;
+        int aux = kq_n() == 0 && aq_n() > 0;
+        *val = 0x04u | (obf ? 0x01u : 0u) | (aux ? 0x20u : 0u);
+        return 1;
+    }
+    if (port == 0x60 && !is_write) {                /* pop, keyboard first  */
+        if (kq_n())      { *val = K8.kq[K8.kh]; K8.kh = (K8.kh + 1) % K8Q; }
+        else if (aq_n()) { *val = K8.aq[K8.ah]; K8.ah = (K8.ah + 1) % K8Q; }
+        else               *val = 0;
+        return 1;
+    }
+    if (port == 0x64) {                             /* controller command   */
+        u8 v = (u8)(*val & 0xFF);
+        switch (v) {
+        case 0x20: kq_push(K8.ccb); break;
+        case 0x60: case 0xD1: case 0xD2: case 0xD3: case 0xD4:
+            K8.expect = v; break;
+        case 0xAA:                                  /* self-test            */
+            K8.kh = K8.kt = K8.ah = K8.at = 0;
+            kq_push(0x55);
+            break;
+        case 0xAB: kq_push(0x00); break;            /* kbd interface test   */
+        case 0xA9: kq_push(0x00); break;            /* aux interface test   */
+        case 0xA7: K8.ccb |= 0x20;  break;          /* aux off              */
+        case 0xA8: K8.ccb &= (u8)~0x20; break;      /* aux on               */
+        case 0xAD: K8.ccb |= 0x10;  break;          /* kbd off              */
+        case 0xAE: K8.ccb &= (u8)~0x10; break;      /* kbd on               */
+        case 0xC0: kq_push(0x00); break;            /* input port           */
+        case 0xD0: kq_push(0x03); break;            /* output port: A20 on  */
+        default: break;                             /* pulses and the rest  */
+        }
+        return 1;
+    }
+    /* port 0x60, write: a parameter if one is owed, else the keyboard. */
+    {
+        u8 v = (u8)(*val & 0xFF);
+        switch (K8.expect) {
+        case 0x60: K8.ccb = v;      K8.expect = 0; return 1;
+        case 0xD1:                  K8.expect = 0; return 1;   /* A20 etc  */
+        case 0xD2: kq_push(v);      K8.expect = 0; return 1;
+        case 0xD3: aq_push(v);      K8.expect = 0; return 1;   /* loopback */
+        case 0xD4: k8_aux_cmd(v);   K8.expect = 0; return 1;
+        default:   k8_kbd_cmd(v);                  return 1;
+        }
+    }
+}
+
+/* ---- what the host types and points, translated --------------------------
+ *
+ * The shell hands over what its input layer has: an ASCII character or an
+ * EFI SimpleTextIn scan code, both key-DOWN edges only.  Set-1 make/break
+ * pairs are synthesised around each, with shift or ctrl wrapped where the
+ * character demands it.  The gate is the CCB interrupt-enable bit: bytes
+ * pushed before the guest's driver is listening would sit in front of the
+ * probe conversation and corrupt it. */
+static const struct { u8 code, shift; } K8_ASC[95] = {
+    {0x39,0},{0x02,1},{0x28,1},{0x04,1},{0x05,1},{0x06,1},{0x08,1},{0x28,0},
+    {0x0A,1},{0x0B,1},{0x09,1},{0x0D,1},{0x33,0},{0x0C,0},{0x34,0},{0x35,0},
+    {0x0B,0},{0x02,0},{0x03,0},{0x04,0},{0x05,0},{0x06,0},{0x07,0},{0x08,0},
+    {0x09,0},{0x0A,0},{0x27,1},{0x27,0},{0x33,1},{0x0D,0},{0x34,1},{0x35,1},
+    {0x03,1},{0x1E,1},{0x30,1},{0x2E,1},{0x20,1},{0x12,1},{0x21,1},{0x22,1},
+    {0x23,1},{0x17,1},{0x24,1},{0x25,1},{0x26,1},{0x32,1},{0x31,1},{0x18,1},
+    {0x19,1},{0x10,1},{0x13,1},{0x1F,1},{0x14,1},{0x16,1},{0x2F,1},{0x11,1},
+    {0x2D,1},{0x15,1},{0x2C,1},{0x1A,0},{0x2B,0},{0x1B,0},{0x07,1},{0x0C,1},
+    {0x29,0},{0x1E,0},{0x30,0},{0x2E,0},{0x20,0},{0x12,0},{0x21,0},{0x22,0},
+    {0x23,0},{0x17,0},{0x24,0},{0x25,0},{0x26,0},{0x32,0},{0x31,0},{0x18,0},
+    {0x19,0},{0x10,0},{0x13,0},{0x1F,0},{0x14,0},{0x16,0},{0x2F,0},{0x11,0},
+    {0x2D,0},{0x15,0},{0x2C,0},{0x1A,1},{0x2B,1},{0x1B,1},{0x29,1}
+};
+
+static void k8_tap(u8 code, int shift, int ctrl, int ext)
+{
+    if (!(K8.ccb & 0x01)) return;                   /* nobody is listening  */
+    if (shift) kq_push(0x2A);
+    if (ctrl)  kq_push(0x1D);
+    if (ext)   kq_push(0xE0);
+    kq_push(code);
+    if (ext)   kq_push(0xE0);
+    kq_push((u8)(code | 0x80));
+    if (ctrl)  kq_push(0x1D | 0x80);
+    if (shift) kq_push(0x2A | 0x80);
+    K8.keys++;
+}
+
+void uno_vdev_kbd_char(int ch)
+{
+    k8_init();
+    if (ch == '\r' || ch == '\n') { k8_tap(0x1C, 0, 0, 0); return; }
+    if (ch == '\b' || ch == 127)  { k8_tap(0x0E, 0, 0, 0); return; }
+    if (ch == '\t')               { k8_tap(0x0F, 0, 0, 0); return; }
+    if (ch == 27)                 { k8_tap(0x01, 0, 0, 0); return; }
+    if (ch >= 1 && ch <= 26) {                      /* ^A..^Z               */
+        k8_tap(K8_ASC['a' - 32 + ch - 1].code, 0, 1, 0);
+        return;
+    }
+    if (ch >= 32 && ch < 127)
+        k8_tap(K8_ASC[ch - 32].code, K8_ASC[ch - 32].shift, 0, 0);
+}
+
+void uno_vdev_kbd_scan(int efi_scan)
+{
+    /* EFI SimpleTextIn scan codes, which is the space the shell's key events
+     * already speak (hid_kbd.h). */
+    static const struct { u8 efi, code, ext; } T[] = {
+        {0x01, 0x48, 1}, {0x02, 0x50, 1}, {0x03, 0x4D, 1}, {0x04, 0x4B, 1},
+        {0x05, 0x47, 1}, {0x06, 0x4F, 1}, {0x07, 0x52, 1}, {0x08, 0x53, 1},
+        {0x09, 0x49, 1}, {0x0A, 0x51, 1},
+        {0x0B, 0x3B, 0}, {0x0C, 0x3C, 0}, {0x0D, 0x3D, 0}, {0x0E, 0x3E, 0},
+        {0x0F, 0x3F, 0}, {0x10, 0x40, 0}, {0x11, 0x41, 0}, {0x12, 0x42, 0},
+        {0x13, 0x43, 0}, {0x14, 0x44, 0}, {0x15, 0x57, 0}, {0x16, 0x58, 0},
+        {0x17, 0x01, 0}
+    };
+    unsigned i;
+    k8_init();
+    for (i = 0; i < sizeof T / sizeof T[0]; i++)
+        if ((int)T[i].efi == efi_scan) { k8_tap(T[i].code, 0, 0, T[i].ext); return; }
+}
+
+/* One movement packet.  dx/dy in pixels (screen convention, y down); PS/2 y
+ * is up, so it flips here.  `buttons` is unoui's: bit0 left, bit1 right,
+ * bit2 middle - which happens to be the PS/2 order too. */
+void uno_vdev_mouse(int dx, int dy, unsigned buttons, int wheel)
+{
+    u8 b0;
+    k8_init();
+    if (!K8.aux_stream || !(K8.ccb & 0x02)) return;
+    if (aq_n() > K8Q - 8) { K8.dropped++; return; } /* stay ahead of typing */
+    if (dx < -255) dx = -255;
+    if (dx > 255)  dx = 255;
+    dy = -dy;
+    if (dy < -255) dy = -255;
+    if (dy > 255)  dy = 255;
+    b0 = 0x08 | (u8)(buttons & 7)
+       | (u8)((dx < 0) ? 0x10 : 0) | (u8)((dy < 0) ? 0x20 : 0);
+    aq_push(b0);
+    aq_push((u8)(dx & 0xFF));
+    aq_push((u8)(dy & 0xFF));
+    if (K8.aux_id == 3) {
+        int z = -wheel;                             /* wheel down = z up    */
+        if (z < -8) z = -8; if (z > 7) z = 7;
+        aq_push((u8)(z & 0x0F));
+    }
+    K8.packets++;
+}
+
+int uno_vdev_input_str(char *buf, int cap)
+{
+    k8_init();
+    return snprintf(buf, (unsigned)cap,
+                    "ccb %02x, %d keys %d packets %d dropped, mouse %s id %d",
+                    K8.ccb, K8.keys, K8.packets, K8.dropped,
+                    K8.aux_stream ? "streaming" : "idle", K8.aux_id);
+}
+
 int uno_vdev_pio(unsigned port, int is_write, unsigned size,
                  unsigned long long *val, void (*sink)(const char *))
 {
     (void)size;
     if (pit_io(port, is_write, val)) return 1;
     if (pic_io(port, is_write, val)) return 1;
+    if (i8042_io(port, is_write, val)) return 1;
     if (port < COM1 || port > COM1 + 7) {
         /* Everything else answers as absent hardware: reads all-ones, writes
          * dropped. A kernel probing a port that is not there gets the same
@@ -447,6 +816,7 @@ int uno_vdev_pio(unsigned port, int is_write, unsigned size,
             char c = (char)(*val & 0xFF);
             U.chars++;
             U.thre = 1;                  /* it emptied again, immediately    */
+            rx_tx_watch(c);              /* the seed waits for the prompt    */
             if (c == '\n' || U.n >= (int)sizeof U.line - 1) {
                 U.line[U.n] = 0;
                 if (sink && U.n) sink(U.line);
