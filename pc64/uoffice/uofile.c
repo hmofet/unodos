@@ -21,6 +21,7 @@ static char        g_fname[MAXFILE][NAMELEN];
 static const char *g_fptr[MAXFILE];
 static int         g_nfile;
 static int         g_shown_vol = -1;
+static int         g_last_sel  = -1;    /* the list row the name field mirrors */
 
 static uod_item g_item[10];
 static uod_dlg  g_dlg;
@@ -33,6 +34,15 @@ static void f_cpy(char *d, const char *s, int cap)
   while (s && s[i] && i < cap - 1) { d[i] = s[i]; i++; } d[i] = 0; }
 
 void uof_set_fs(const uof_fs *fs) { g_fs = fs; }
+
+/* 1 while the file LIST is the focused control.  uodlg has no "which control
+ * did the user just act on" report, but it does move s->focus to whatever a
+ * click or Tab landed on, which is the same question asked another way. */
+static int list_focused(const uod_ui *s)
+{
+    if (!s || !s->d || s->focus < 0 || s->focus >= s->d->n) return 0;
+    return s->d->item[s->focus].id == ID_LIST;
+}
 
 static void load_volumes(void)
 {
@@ -158,6 +168,7 @@ void uof_open(uod_ui *s, int save, const char *const *types, int ntypes,
 
     uod_open(s, &g_dlg, sw, sh);
     g_shown_vol = 0;
+    g_last_sel  = uod_value(s, ID_LIST);   /* whatever it opened on is not a pick */
     g_result_vol = 0;
     g_result_type = 0;
 }
@@ -177,14 +188,35 @@ void uof_sync(uod_ui *s)
             }
         uod_set_value(s, ID_LIST, 0);
         g_shown_vol = vol;
+        g_last_sel  = 0;      /* a new folder is not a pick either - changing
+                                 the volume must not wipe a typed name */
     }
-    /* a picked row mirrors into the name field, as Office's did */
+    /* A PICKED row mirrors into the name field, as Office's did - picked, not
+     * merely selected.
+     *
+     * This used to copy the selected row into ID_NAME on EVERY sync, and
+     * uof_sync runs immediately after uod_handle for every event the dialog
+     * takes. So each character typed into "File name" was inserted and then
+     * overwritten by the list's current row before it could ever be painted,
+     * and the field read as completely dead: characters no-op, backspace
+     * no-ops, only the list responds. That is exactly what the metal
+     * conformance run found (2026-08-20), and why tools/uoffice_ooxml_urc.py
+     * documents the dialog as mouse-only. It is an accessibility defect as
+     * much as a harness one - the dialog had no keyboard path at all.
+     *
+     * Two conditions now, and both are needed. The list must have the FOCUS,
+     * so typing into the field (which moves focus to the field) is never
+     * clobbered; and the row must have CHANGED since the last sync, so
+     * holding a selection while typing does not re-assert it. */
     sel = uod_value(s, ID_LIST);
-    if (sel >= 0 && sel < g_nfile) {
-        int L = 0;
-        while (g_fname[sel][L]) L++;
-        if (L && g_fname[sel][L - 1] != '\\')
-            uod_set_text(s, ID_NAME, g_fname[sel]);
+    if (sel != g_last_sel) {
+        g_last_sel = sel;
+        if (list_focused(s) && sel >= 0 && sel < g_nfile) {
+            int L = 0;
+            while (g_fname[sel][L]) L++;
+            if (L && g_fname[sel][L - 1] != '\\')
+                uod_set_text(s, ID_NAME, g_fname[sel]);
+        }
     }
     g_result_vol  = vol;
     g_result_type = uod_value(s, ID_TYPE);
