@@ -247,7 +247,8 @@ key-combo reliance, **every control is reachable by pointer OR keyboard**
   the RAM-disk File Manager), a **Files** list, a **System** panel, a **Clock**
   (analog face + world map with the day/night terminator) and a **Music**
   player (WAV/MIDI from disk), plus the migrated **creative tools** (Paint,
-  Tracker), the native **games** (Dostris, Pacman, Outlast), **Runner3D**, the
+  Tracker), the **games** (Dostris, Pac-Man and OutLast as `.UNO` modules;
+  **Runner3D** as the one native canvas), the
   **Network** self-test, and the **web browser**. Windows are sized to the theme
   metrics so no widget overflows the frame.
 - **Startup**: a **splash screen** with a loading bar paints while the shell and
