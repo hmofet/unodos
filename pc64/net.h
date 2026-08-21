@@ -20,6 +20,11 @@ enum { TCP_CLOSED = 0, TCP_SYN_SENT, TCP_ESTABLISHED, TCP_FIN_WAIT, TCP_DONE,
        TCP_LISTEN, TCP_SYN_RCVD };
 
 void net_init(uno_nic_t *nic, const u8 mac[6]);
+
+/* The link net_init was given, or NULL.  Added for the appliance bridge
+ * (unovirt M3), which puts a guest's frames on the same wire; every other
+ * consumer wants the calls above instead. */
+uno_nic_t *net_nic(void);
 void net_poll(void);                 /* pump once; call often */
 int  net_link(void);
 const u8 *net_ip(void);              /* our current IPv4 (u8[4]) */

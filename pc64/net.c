@@ -1304,6 +1304,20 @@ int net_dns_query(const char *host, u8 out[4])
     }
 }
 
+/* THE APPLIANCE'S TAP ON THE WIRE (unovirt M3), weak so a netstack-only
+ * build - the host-side nettest, which links net.c and nothing else - has
+ * no idea it exists.  `recv()` is destructive, so this is the only place a
+ * second consumer can be: the guest is offered every frame BEFORE unonet
+ * parses it, and answers 1 only for frames addressed to the guest's own MAC.
+ * Broadcast and multicast are copied to the guest and still returned 0, so
+ * ARP and DHCP reach both stacks - see pc64/unovdev_net.c for the rule. */
+__attribute__((weak)) int uno_vnet_bridge_rx(const unsigned char *f, int n)
+{ (void)f; (void)n; return 0; }
+
+/* The link this stack was given, for the appliance bridge to send through.
+ * NULL until net_init. */
+uno_nic_t *net_nic(void) { return g_nic; }
+
 void net_poll(void)
 {
     static u8 rx[FRM];
@@ -1313,6 +1327,7 @@ void net_poll(void)
     while ((n = g_nic->recv(g_nic->ctx, rx, FRM)) > 0) {
         u16 type; long ev = n;
         if (n < 14) continue;
+        if (uno_vnet_bridge_rx(rx, n)) continue;   /* the guest's alone      */
         g_rx_frames++; unoauto_hook_fire("net.rx", &ev);
         type = rd16(rx + 12);
         if (type == 0x0806) { g_rx_arp++; arp_recv(rx + 14, n - 14); }

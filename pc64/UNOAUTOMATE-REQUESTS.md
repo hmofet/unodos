@@ -9879,3 +9879,32 @@ its own, and makes no sound at all." Both halves are now false: `dostris.c` and
 four tunes. The scene still works and the narration still does not claim
 silence, so nothing shipped wrong - but the next person to re-pick that scene
 would be reading a rationale that no longer holds.
+
+### unonet: two additive lines for the appliance bridge (unovirt M3, 2026-08-21)
+
+`net.c` gained exactly two things so a guest can share the host's link, and
+both are additive:
+
+- **`net_nic()`** - returns the `uno_nic_t *` that `net_init` was given, or
+  NULL. The bridge sends the guest's frames through the same link unonet is
+  driving; nothing else needs it.
+- **a weak `uno_vnet_bridge_rx(frame, len)` call at the top of `net_poll`'s
+  receive loop.** `recv()` is destructive, so this is the ONLY place a second
+  consumer of the wire can exist. The hook returns 1 only for frames
+  addressed to the guest's own MAC, which `continue`s past unonet's parse -
+  everything else, broadcast and multicast included, falls through unchanged
+  (the guest gets a copy of those, because ARP and DHCP need both stacks to
+  see them). The weak default returns 0, so the host-side nettest build,
+  which links `net.c` alone, is unaffected and does not know the hook exists.
+
+**Why it is safe as written:** a bridged guest only exists after
+`uno_vm_start` on a machine that is detached and eligible, and
+`uno_vnet_bridge_rx` returns 0 for every frame until then. The rule the
+demux follows is written down in `pc64/unovdev_net.c`'s header and asserted
+as S-HV-53..55.
+
+**The one thing worth a second opinion from this lane:** a TCP segment for
+the guest reaching unonet's single-connection stack would be noise at best
+and a stray reset at worst, which is why the guest's unicast is taken
+exclusively rather than copied. If unonet would rather see everything and
+filter itself, say so and the hook can become advisory.
