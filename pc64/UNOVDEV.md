@@ -9,7 +9,11 @@ sits on the far side of a decoded guest access.
 an Ubuntu kernel needs to reach a shell (A6), **virtio-blk over a disk image
 file (A7a)**, and **virtio-net against a synthetic peer (A7b)** - the guest
 mounts an ext4 filesystem out of `EFI\UNODOS\VM\ROOTFS.IMG`, and it pings.
-Bridging that network to a real wire is the next slice.
+**A8 adds the i8042** - a PS/2 keyboard and an IntelliMouse behind ports
+0x60/0x64, IRQ1 and IRQ12, with the slave PIC finally wired through the
+cascade - so what the host types and points reaches the guest through drivers
+every stock kernel already carries. Bridging the network to a real wire is
+the next slice.
 
 ## The seam, and why it is this narrow
 
@@ -21,6 +25,9 @@ Two functions, and neither knows what a VMCS or a VMCB is:
 | `uno_vdev_pio(port, is_write, size, &val, sink)` | a port-I/O access; `sink` takes each completed console line |
 | `uno_vdev_irq_pending()` / `uno_vdev_irq_take()` | may a vector be injected, and which one |
 | `uno_vdev_serial_push(c)` / `uno_vdev_serial_seed(s)` | put a byte where the guest will read it |
+| `uno_vdev_kbd_char(ch)` / `uno_vdev_kbd_scan(efi)` | a keystroke, as set-1 make/break through the i8042 (A8) |
+| `uno_vdev_mouse(dx, dy, buttons, wheel)` | one PS/2 movement packet; unoui button bits; wheel needs the IntelliMouse knock |
+| `uno_vdev_input_str(buf, cap)` | the i8042's one status line |
 | `uno_vdev_queue` / `uno_vdev_output` / `uno_vdev_cycle_refused` | place a queue, read what came through, and the bounds test |
 | `uno_vdev_pc_state()` / `uno_vdev_pic_state()` | the UART and interrupt state in one word each, for a trace |
 
@@ -144,9 +151,16 @@ a disclosure dressed up as a read.
   filesystem into `mount: read-only`, and a read-only rootfs under a tmpfs
   overlay is the ordinary shape for an appliance anyway. A write-at-offset
   primitive is filed with the unofs lane.
-- **No virtio-net yet.** It is the other half of A7 and crosses into the
-  `uno_nic_t` seam, where one MAC has to carry both the guest's traffic and
-  the host's (UNOVIRT-PLAN R3).
+- **No real wire behind virtio-net.** A7b's peer is synthetic
+  (`unovdev_net.c`); bridging at the `uno_nic_t` seam, where one MAC has to
+  carry both the guest's traffic and the host's, is its own slice
+  (UNOVIRT-PLAN R3).
+- **No virtio-input, and not by oversight (A8).** The driver reads its
+  capability bitmaps with ONE config access of whatever length the bitmap is,
+  and virtio-mmio v2's `vm_get()` BUG()s on any length that is not 1, 2, 4
+  or 8 - so a correct device model still kills a stock kernel.  Every distro
+  also ships `virtio_input=m`, which an appliance initramfs does not carry.
+  The i8042 has neither problem, which is why the guest's input is PS/2.
 - **No interrupt for the transport.** `R_INTR_STATUS` is maintained but the
   guest is never interrupted by the virtio device: its console is the 8250
   today. That changes when virtio-console becomes the real console.

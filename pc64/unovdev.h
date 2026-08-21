@@ -62,6 +62,18 @@ void uno_vdev_serial_push(int c);
 void uno_vdev_serial_seed(const char *s);
 unsigned long long uno_vdev_base(void);
 
+/* The i8042 (A8): what the host types and points, delivered as PS/2 traffic.
+ * `kbd_char` takes ASCII (control characters become Ctrl+letter), `kbd_scan`
+ * takes an EFI SimpleTextIn scan code (arrows, paging, F-keys), `mouse` takes
+ * pixel deltas, unoui button bits (L/R/M = 0/1/2) and wheel notches.  All
+ * are press+release edges - unoui has no key-up to forward.  Silently
+ * dropped until the guest's driver has enabled the matching interrupt, so
+ * early typing cannot corrupt the probe conversation. */
+void uno_vdev_kbd_char(int ch);
+void uno_vdev_kbd_scan(int efi_scan);
+void uno_vdev_mouse(int dx, int dy, unsigned buttons, int wheel);
+int  uno_vdev_input_str(char *buf, int cap);
+
 /* The 8259 pair's answer to "may a vector be injected right now".  `pending`
  * peeks; `take` commits (ISR up, an edge source marks itself delivered) and
  * returns the vector THE GUEST programmed in ICW2, or -1.  The caller checks
