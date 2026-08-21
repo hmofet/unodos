@@ -406,7 +406,7 @@ static ujs_val document_new(ujs_vm *vm, UcDoc *d)
 {
     ujs_val o = ujs_object_new(vm);
     UcLang *L = d ? uc_lang_at(d->lang) : 0;
-    char path[UC_PATH_MAX + 24];
+    char path[UC_FULL_MAX];
     uc_doc_path(d, path, sizeof path);
     ujs_set(vm, o, "fileName", ujs_string(vm, path, -1));
     ujs_set(vm, o, "languageId", ujs_string(vm, L ? L->id : "plaintext", -1));
@@ -742,11 +742,15 @@ static ujs_val js_fs_write(ujs_args *a)
  * tool is the first caller. */
 static ujs_val js_fs_readdir(ujs_args *a)
 {
-    static char names[220][16];
+    char (*names)[UC_NAME_MAX];
     static unsigned char isdir[220];
     const char *p = arg_str(a, 0, "");
-    int n = uc_list_dir(UC.ws_vol, p, names, isdir, 220), i;
-    ujs_val arr = ujs_array_new(a->vm);
+    int n, i;
+    ujs_val arr;
+    names = (char (*)[UC_NAME_MAX])malloc(220UL * UC_NAME_MAX);
+    if (!names) return ujs_throw_error(a->vm, "Error", "out of memory");
+    n = uc_list_dir(UC.ws_vol, p, names, isdir, 220);
+    arr = ujs_array_new(a->vm);
     if (n > 220) n = 220;
     for (i = 0; i < n; i++) {
         ujs_val pair;
@@ -756,6 +760,7 @@ static ujs_val js_fs_readdir(ujs_args *a)
         ujs_array_push(a->vm, pair, ujs_number(isdir[i] ? 2 : 1));
         ujs_array_push(a->vm, arr, pair);
     }
+    free(names);
     return arr;
 }
 

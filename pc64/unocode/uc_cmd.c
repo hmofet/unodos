@@ -606,9 +606,14 @@ static void q_rebuild(void)
         }
         break;
     case UC_Q_FILE: {
-        static char names[220][16];         /* 3.5 KB - not a stack frame */
+        /* heap: at full name width this is 55 KB, and the module arena it
+         * would otherwise sit in permanently never frees */
+        char (*names)[UC_NAME_MAX] =
+            (char (*)[UC_NAME_MAX])malloc(220UL * UC_NAME_MAX);
         static unsigned char isdir[220];
-        int n = uc_list_dir(UC.ws_vol, UC.ws_dir, names, isdir, 220);
+        int n;
+        if (!names) break;
+        n = uc_list_dir(UC.ws_vol, UC.ws_dir, names, isdir, 220);
         if (n > 220) n = 220;
         for (i = 0; i < n; i++) {
             UcLang *L;
@@ -617,10 +622,11 @@ static void q_rebuild(void)
             q_add(names[i], UC.ws_dir[0] ? UC.ws_dir : uno_fs_volume_name(UC.ws_vol),
                   L ? L->name : "", i);
         }
+        free(names);
         /* the open editors come first, as they do in Go to File */
         for (i = 0; i < uc_doc_count(); i++) {
             UcDoc *d = uc_doc_at(i);
-            char t[24];
+            char t[UC_NAME_MAX];
             uc_doc_title(d, t, sizeof t);
             q_add(t, "open editor", "", 1000 + i);
         }

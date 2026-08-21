@@ -73,7 +73,12 @@ int   uno_fs_volumes(void);
 const char *uno_fs_volume_name(int vol);
 int   uno_fs_list_begin(int vol);
 int   uno_fs_list_get(int vol, int idx, char *name, int max);
-int   uno_fs_list_dir(int vol, const char *dir, char (*names)[16], int maxn);
+/* `names` is maxn slots of `stride` bytes; the caller owns the width.  The
+ * stride is a PARAMETER rather than a shared constant because this is a
+ * kernel export resolved by name - see pc64_fs.h.  Returns the total count,
+ * which may exceed maxn. */
+int   uno_fs_list_dir(int vol, const char *dir, char *names, int stride,
+                      int maxn);
 long  uno_fs_read(int vol, const char *name, unsigned char *buf, long max);
 long  uno_fs_size(int vol, const char *name);
 int   uno_fs_write(int vol, const char *name, const unsigned char *buf, long len);
@@ -399,7 +404,19 @@ int       uc_scope_id(const char *name);
 #define UC_DOC_CAP      (256*1024)  /* one document's ceiling               */
 #define UC_CURSORS_MAX  32
 #define UC_UNDO_MAX     120
-#define UC_PATH_MAX     72
+/* One file name, and one directory path relative to a volume (UCD-11).  Both
+ * were 16 and 72, which is 8.3 plus a little - the shape of the FAT volume the
+ * editor grew up on.  Every other filesystem it now runs against allows 255,
+ * and a name the seam cannot carry is a file the editor cannot open, so the
+ * desktop host had to hand out FAT-style aliases (VeryLongCo~1.tsx) to list a
+ * normal project at all.  These widths are what deleted that. */
+#define UC_NAME_MAX     256
+#define UC_PATH_MAX     256
+/* a directory and a name joined, with room for the separator and a NUL.  Every
+ * buffer that holds the result of uc_path_join() wants THIS, not UC_PATH_MAX:
+ * sizing a join to the directory width alone silently truncates, and a
+ * truncated path is a probe of the wrong file that answers plausibly. */
+#define UC_FULL_MAX     (UC_PATH_MAX + UC_NAME_MAX + 2)
 
 typedef struct { int caret, anchor, goal; } UcCursor;
 
@@ -414,11 +431,18 @@ typedef struct {
 typedef struct {
     char  *text;
     int    len, cap;
-    char   name[16];          /* 8.3 file name, "" = untitled               */
+    char   name[UC_NAME_MAX]; /* file name, "" = untitled                   */
     char   dir[UC_PATH_MAX];  /* directory, "" = volume root                */
     int    vol;               /* -1 = untitled                              */
     int    lang;
     int    dirty, readonly, exists;
+    /* What the FILE turned out to be, detected when it was read (UCD-20) and
+     * preserved when it is written.  A tabs file opened in a spaces editor and
+     * saved used to come back rewritten from end to end, which reads as a
+     * catastrophic diff and is nobody's intent.  -1 = nothing detected. */
+    unsigned char eol_crlf;   /* the file arrived with CRLF line endings     */
+    signed char   det_spaces; /* 1 spaces, 0 tabs, -1 undetected             */
+    short         det_tab;    /* detected indent width, 0 = undetected       */
     UcCursor cur[UC_CURSORS_MAX];
     int    ncur;
     int    scroll_line, scroll_col;
@@ -493,6 +517,7 @@ int     uc_indent_of(UcDoc *d, int line, char *pad, int cap);
 void    uc_replace_range(UcDoc *d, int a, int b, const char *s, int n);
 int     uc_doc_tabsize(UcDoc *d);
 int     uc_doc_spaces(UcDoc *d);
+void    uc_doc_detect_indent(UcDoc *d);   /* fills det_spaces / det_tab      */
 
 /* clipboard (module-wide, shared by every editor and the terminal) */
 void        uc_clip_set(const char *s, int n);
@@ -574,14 +599,19 @@ int  uc_panel_event(UcRect r, const unoui_event *e);
 int  uc_panel_key(int key, int mods, int ch);
 void uc_explorer_refresh(void);
 void uc_explorer_reveal(UcDoc *d);
+/* Workspace-wide search (UCD-12).  run() walks the tree and starts a SLICED
+ * scan; tick() advances it a few files per frame from the frame loop; cancel()
+ * abandons it.  Results are grouped by file and addressed as display ROWS. */
 void uc_search_run(const char *needle);
+void uc_search_tick(void);
+void uc_search_cancel(void);
 void uc_notif_draw(UcRect r);
 void uc_notif_tick(void);
 
 /* problems (diagnostics), populated by builds and by extensions */
 enum { UC_SEV_ERROR = 0, UC_SEV_WARN, UC_SEV_INFO };
 typedef struct {
-    char file[16]; char msg[100]; char source[16];
+    char file[UC_NAME_MAX]; char msg[100]; char source[16];
     int  line, col; unsigned char sev; int vol;
 } UcProblem;
 void uc_problems_clear(const char *source);
@@ -807,7 +837,7 @@ int  uc_read_file(int vol, const char *path, char **out, long *len);
 /* List a directory INCLUDING its subdirectories.  See the implementation in
  * uc_main.c for why this exists rather than uno_fs_list_dir() being used
  * directly - it is the difference between a file tree and a file list. */
-int  uc_list_dir(int vol, const char *dir, char (*names)[16],
+int  uc_list_dir(int vol, const char *dir, char (*names)[UC_NAME_MAX],
                  unsigned char *isdir, int maxn);
 void uc_status_msg(const char *s);
 const char *uc_status_msg_get(void);

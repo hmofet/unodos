@@ -706,15 +706,70 @@ void uc_move_end(UcDoc *d, int keep_sel)
 }
 
 /* ---- typing ----------------------------------------------------------------- */
+/* The file's own indentation wins over the language's, which wins over the
+ * setting - unless the user set the setting THEMSELVES, in which case they
+ * have said what they want and detection is not an argument against it. */
 int uc_doc_tabsize(UcDoc *d)
 {
     UcLang *L = d ? uc_lang_at(d->lang) : 0;
     int n = uc_cfg_int("editor.tabSize");
+    if (d && d->det_tab > 0 && uc_cfg_bool("editor.detectIndentation") &&
+        !uc_cfg_is_user("editor.tabSize"))
+        return d->det_tab;
     if (L && L->tabsize > 0 && !uc_cfg_is_user("editor.tabSize")) n = L->tabsize;
     return n > 0 ? n : 4;
 }
 
-int uc_doc_spaces(UcDoc *d) { (void)d; return uc_cfg_bool("editor.insertSpaces"); }
+int uc_doc_spaces(UcDoc *d)
+{
+    if (d && d->det_spaces >= 0 && uc_cfg_bool("editor.detectIndentation") &&
+        !uc_cfg_is_user("editor.insertSpaces"))
+        return d->det_spaces;
+    return uc_cfg_bool("editor.insertSpaces");
+}
+
+/* What this file indents with, from the file itself.
+ *
+ * Tabs versus spaces is a vote of first characters.  The WIDTH is the most
+ * common positive step between one line's indent and the next's, which is the
+ * only signal that survives a file whose deepest nesting is four levels of two
+ * spaces - counting leading spaces alone would answer 8 there and be wrong at
+ * every level. */
+void uc_doc_detect_indent(UcDoc *d)
+{
+    int votes[9], i = 0, tabs = 0, spaces = 0, prev = -1, lines = 0, best = 0, k;
+    if (!d) return;
+    d->det_spaces = -1;
+    d->det_tab = 0;
+    for (k = 0; k < 9; k++) votes[k] = 0;
+    while (i < d->len && lines < 400) {
+        int sp = 0, ch;
+        int start = i;
+        while (i < d->len && (d->text[i] == ' ' || d->text[i] == '\t')) {
+            if (d->text[i] == '\t') { tabs++; sp = -1; break; }
+            sp++;
+            i++;
+        }
+        ch = (i < d->len) ? d->text[i] : '\n';
+        if (sp >= 0 && ch != '\n' && ch != 0) {          /* a real line       */
+            if (sp > 0) spaces++;
+            if (prev >= 0) {
+                int dl = sp - prev;
+                if (dl > 0 && dl <= 8) votes[dl]++;
+            }
+            prev = sp;
+        }
+        (void)start;
+        while (i < d->len && d->text[i] != '\n') i++;
+        if (i < d->len) i++;
+        lines++;
+    }
+    if (!tabs && !spaces) return;                        /* nothing to say    */
+    if (tabs > spaces) { d->det_spaces = 0; return; }
+    d->det_spaces = 1;
+    for (k = 2; k <= 8; k++) if (votes[k] > votes[best]) best = k;
+    d->det_tab = (short)(best >= 2 ? best : 0);
+}
 
 void uc_insert(UcDoc *d, const char *s, int n)
 {
@@ -1107,9 +1162,9 @@ int uc_doc_new(void)
 int uc_doc_open(int vol, const char *dir, const char *name)
 {
     int i;
-    char path[UC_PATH_MAX + 20];
-    char joined[UC_PATH_MAX + 20];
-    char leaf[16];
+    char path[UC_PATH_MAX + UC_NAME_MAX + 2];
+    char joined[UC_PATH_MAX + UC_NAME_MAX + 2];
+    char leaf[UC_NAME_MAX];
     char *src = 0;
     long len = 0;
     UcDoc *d;
@@ -1144,11 +1199,24 @@ int uc_doc_open(int vol, const char *dir, const char *name)
     i = doc_slot();
     if (i < 0) { free(src); return -1; }
     d = &g_doc[i];
-    /* normalise CRLF: everything above this line assumes one byte per break */
+    /* Normalise CRLF - everything above this line assumes one byte per break -
+     * but REMEMBER what was there (UCD-20).  Stripping without recording is
+     * what turned a save into a whole-file rewrite. */
     {
-        int r, w = 0;
+        int r, w = 0, crlf = 0, breaks = 0;
+        /* COUNT FIRST, then compact.  The compaction writes behind the read
+         * cursor, so a counter that looked backwards from w would be reading
+         * bytes it had already moved. */
+        for (r = 0; r < (int)len; r++) {
+            if (src[r] != '\n') continue;
+            breaks++;
+            if (r > 0 && src[r - 1] == '\r') crlf++;
+        }
         for (r = 0; r < (int)len; r++) if (src[r] != '\r') src[w++] = src[r];
         len = w;
+        /* "mostly CRLF" rather than "all CRLF": one stray LF in a Windows file
+         * should not flip the whole file to Unix endings on the next save. */
+        d->eol_crlf = (unsigned char)(breaks > 0 && crlf * 2 >= breaks);
     }
     d->text = src;
     d->len = (int)len;
@@ -1160,6 +1228,7 @@ int uc_doc_open(int vol, const char *dir, const char *name)
     d->exists = 1;
     d->readonly = !uno_fs_writable(vol);
     d->lang = uc_lang_for_file(name);
+    uc_doc_detect_indent(d);
     doc_reset(d);
     base_snapshot(d);
     g_active = i;
@@ -1169,7 +1238,7 @@ int uc_doc_open(int vol, const char *dir, const char *name)
 
 int uc_doc_save(UcDoc *d)
 {
-    char path[UC_PATH_MAX + 20];
+    char path[UC_FULL_MAX];
     int ok, crlf;
     char *out = 0;
     int n;
@@ -1192,7 +1261,11 @@ int uc_doc_save(UcDoc *d)
     if (uc_cfg_bool("files.insertFinalNewline") && d->len && d->text[d->len-1] != '\n')
         uc_replace_range(d, d->len, d->len, "\n", 1);
 
-    crlf = !strcmp(uc_cfg_str("files.eol"), "crlf");
+    /* The FILE's own endings, unless the user has said what they want.  A
+     * setting nobody touched is a default, and a default must not silently
+     * rewrite somebody's file from end to end (UCD-20). */
+    crlf = uc_cfg_is_user("files.eol") ? !strcmp(uc_cfg_str("files.eol"), "crlf")
+                                       : d->eol_crlf;
     uc_path_join(path, sizeof path, d->dir, d->name);
     if (crlf) {
         int i;

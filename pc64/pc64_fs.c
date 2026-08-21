@@ -142,28 +142,44 @@ int uno_fs_list_begin(int vol)
  * over-cap case is made visible rather than hidden.
  *
  * The RAM disk is flat and has no subdirectories: it answers 0. */
-int uno_fs_list_dir(int vol, const char *dir, char (*names)[16], int maxn)
+/* Copy one name into the caller's slot, truncating to what the slot holds
+ * rather than to a width this file invented. */
+static void put_name(char *dst, int cap, const char *src, int srcmax)
+{
+    int j = 0;
+    if (cap <= 0) return;
+    while (j < srcmax && j < cap - 1 && src[j]) { dst[j] = src[j]; j++; }
+    dst[j] = 0;
+}
+
+/* THE CALLER SAYS HOW WIDE ITS SLOTS ARE.  This used to be char (*)[16], and
+ * the width therefore lived in two headers - this one and the module's - that
+ * the loader never compares, because it resolves exports BY NAME.  Two sides
+ * disagreeing about a stride compiles clean on both and writes past the ends
+ * of somebody's array at run time, which is the worst way for this to be
+ * wrong.  With the stride passed in, a mismatch is not expressible.
+ *
+ * It also stops this seam being the thing that shortens a name: the EFI
+ * backend has up to 31 characters to give and was handing over 15 of them. */
+int uno_fs_list_dir(int vol, const char *dir, char *names, int stride, int maxn)
 {
     build_map();
-    if (vol < 0 || vol >= g_nmap || fw_dead(vol) || !dir || !*dir || maxn < 0)
+    if (vol < 0 || vol >= g_nmap || fw_dead(vol) || !dir || !*dir ||
+        maxn < 0 || !names || stride < 2)
         return 0;
     if (g_map[vol].kind == KIND_RAM) return 0;
     if (g_map[vol].kind == KIND_FAT) {
         static char fn[64][13];
         int n = uno_fat_list(g_map[vol].idx, dir, fn, 64), i;
-        for (i = 0; i < n && i < 64 && i < maxn; i++) {
-            int j; for (j = 0; j < 12 && fn[i][j]; j++) names[i][j] = fn[i][j];
-            names[i][j] = 0;
-        }
+        for (i = 0; i < n && i < 64 && i < maxn; i++)
+            put_name(names + (long)i * stride, stride, fn[i], 12);
         return n;
     }
     {
         static char en[64][32];
         int n = uno_efifs_snapshot_dir(g_map[vol].idx, dir, en, 64), i;
-        for (i = 0; i < n && i < 64 && i < maxn; i++) {
-            int j; for (j = 0; j < 15 && en[i][j]; j++) names[i][j] = en[i][j];
-            names[i][j] = 0;
-        }
+        for (i = 0; i < n && i < 64 && i < maxn; i++)
+            put_name(names + (long)i * stride, stride, en[i], 31);
         return n;
     }
 }

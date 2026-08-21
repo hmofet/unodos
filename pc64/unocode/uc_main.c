@@ -115,7 +115,7 @@ int uc_read_file(int vol, const char *path, char **out, long *len)
  * entries fall back to uno_fs_list_dir() and are probed with uno_fs_isdir(),
  * which that backing cannot answer either - there, a directory reads as a file
  * and opening it fails cleanly rather than silently doing nothing. */
-int uc_list_dir(int vol, const char *dir, char (*names)[16],
+int uc_list_dir(int vol, const char *dir, char (*names)[UC_NAME_MAX],
                 unsigned char *isdir, int maxn)
 {
     int fi, n, i;
@@ -130,20 +130,24 @@ int uc_list_dir(int vol, const char *dir, char (*names)[16],
         n = uno_fat_list_ex(fi, dir ? dir : "", ents, cap);
         if (n > cap) n = cap;
         for (i = 0; i < n; i++) {
-            uc_scpy(names[i], ents[i].name, 16);
+            uc_scpy(names[i], ents[i].name, UC_NAME_MAX);
             if (isdir) isdir[i] = (unsigned char)(ents[i].is_dir != 0);
         }
         return n;
     }
-    if (dir && dir[0]) n = uno_fs_list_dir(vol, dir, names, maxn);
+    if (dir && dir[0])
+        n = uno_fs_list_dir(vol, dir, names[0], UC_NAME_MAX, maxn);
     else {
         n = uno_fs_list_begin(vol);
         if (n > maxn) n = maxn;
-        for (i = 0; i < n; i++) uno_fs_list_get(vol, i, names[i], 16);
+        for (i = 0; i < n; i++) uno_fs_list_get(vol, i, names[i], UC_NAME_MAX);
     }
     if (n > maxn) n = maxn;
     for (i = 0; i < n; i++) {
-        char full[UC_PATH_MAX];
+        /* dir AND name are full width now, so the join needs room for both -
+         * a UC_PATH_MAX buffer here would probe a TRUNCATED path and answer
+         * "not a directory" for every deeply nested folder */
+        char full[UC_PATH_MAX + UC_NAME_MAX + 2];
         uc_path_join(full, sizeof full, dir, names[i]);
         if (isdir) isdir[i] = (unsigned char)uno_fs_isdir(vol, full);
     }
@@ -499,6 +503,7 @@ static void uc_frame(void)
     uc_notif_tick();
     uc_api_pump();
     uc_ai_tick();
+    uc_search_tick();
     /* Repaint on the CARET's cadence, not on the frame's: a blinking caret
      * needs two repaints a second, and asking for one every frame would keep
      * the whole desktop compositing for no visible difference. */
