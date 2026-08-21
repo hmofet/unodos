@@ -118,7 +118,7 @@ static int py_pack(const unsigned char *src, int len, unsigned char *out, int ca
 /* ---- running a file --------------------------------------------------------- */
 static int run_file(int vol, const char *dir, const char *name)
 {
-    char path[UC_PATH_MAX + 20];
+    char path[UC_FULL_MAX];
     uc_path_join(path, sizeof path, dir, name);
     if (uc_ends_icase(name, ".UNO")) {
         if (pc64_shell_run_user(vol, path) < 0) {
@@ -131,7 +131,7 @@ static int run_file(int vol, const char *dir, const char *name)
         char *src = 0;
         long len = 0;
         unsigned char *cont;
-        char out[UC_PATH_MAX + 20];
+        char out[UC_FULL_MAX];
         int n, ok = 0, i;
         if (!uc_read_file(vol, path, &src, &len)) { uc_term_writeln("no such file"); return 0; }
         cont = (unsigned char *)malloc((unsigned long)len + PY_HDR + 8);
@@ -144,7 +144,7 @@ static int run_file(int vol, const char *dir, const char *name)
         for (i = (int)strlen(out) - 1; i > 0; i--) if (out[i] == '.') { out[i] = 0; break; }
         uc_scat(out, ".UNO", sizeof out);
         {
-            char full[UC_PATH_MAX + 24];
+            char full[UC_FULL_MAX];
             uc_path_join(full, sizeof full, dir, out);
             if (n > 0 && uno_fs_write(vol, full, cont, n))
                 ok = pc64_shell_run_user(vol, full) >= 0;
@@ -201,17 +201,20 @@ static void cmd_help(void)
 
 static void cmd_ls(const char *arg)
 {
-    static char names[160][16];
+    char (*names)[UC_NAME_MAX];
     static unsigned char isdir[160];
     char dir[UC_PATH_MAX];
     int n, i;
     if (arg && arg[0]) uc_path_join(dir, sizeof dir, g_cwd, arg);
     else uc_scpy(dir, g_cwd, sizeof dir);
+    names = (char (*)[UC_NAME_MAX])malloc(160UL * UC_NAME_MAX);
+    if (!names) { uc_term_writeln("out of memory"); return; }
     n = uc_list_dir(g_cwvol, dir, names, isdir, 160);
-    if (n <= 0) { uc_term_writeln("(empty)"); return; }
+    if (n <= 0) { free(names); uc_term_writeln("(empty)"); return; }
     if (n > 160) n = 160;
     for (i = 0; i < n; i++) {
-        char full[UC_PATH_MAX], row[64], num[16];
+        char full[UC_PATH_MAX + UC_NAME_MAX + 2];
+        char row[UC_NAME_MAX + 24], num[16];
         if (!names[i][0]) continue;
         uc_path_join(full, sizeof full, dir, names[i]);
         uc_scpy(row, names[i], sizeof row);
@@ -223,11 +226,12 @@ static void cmd_ls(const char *arg)
         }
         uc_term_writeln(row);
     }
+    free(names);
 }
 
 static void cmd_cat(const char *arg)
 {
-    char path[UC_PATH_MAX + 20];
+    char path[UC_FULL_MAX];
     char *src = 0;
     long len = 0;
     if (!arg || !arg[0]) { uc_term_writeln("cat: which file?"); return; }
@@ -324,7 +328,7 @@ const char *uc_launch_name(int i) { return (i >= 0 && i < g_nlaunch) ? g_launch[
 
 void uc_tasks_reload(void)
 {
-    char path[UC_PATH_MAX + 20];
+    char path[UC_FULL_MAX];
     char *src = 0;
     long len = 0;
     char err[80];
@@ -427,7 +431,7 @@ static void run_command(char *cmdline)
     if (!strcmp(argv[0], "clear") || !strcmp(argv[0], "cls")) { uc_term_clear(); return; }
     if (!strcmp(argv[0], "ls") || !strcmp(argv[0], "dir")) { cmd_ls(a1); return; }
     if (!strcmp(argv[0], "pwd")) {
-        char row[UC_PATH_MAX + 24];
+        char row[UC_FULL_MAX];
         uc_scpy(row, uno_fs_volume_name(g_cwvol), sizeof row);
         uc_scat(row, "\\", sizeof row);
         uc_scat(row, g_cwd, sizeof row);
@@ -603,7 +607,7 @@ void uc_term_init(void)
 void uc_term_draw(UcRect r, int focused)
 {
     int rh = uc_line_h(), rows = r.h / rh, i, first;
-    char prompt[UC_PATH_MAX + 24];
+    char prompt[UC_FULL_MAX];
     fb_fill_rect(r.x, r.y, r.w, r.h, uc_col(UC_C_TERM_BG));
     prompt_text(prompt, sizeof prompt);
     first = g_nline - (rows - 1) - g_scroll;
@@ -623,7 +627,7 @@ void uc_term_draw(UcRect r, int focused)
 int uc_term_key(int key, int mods, int ch)
 {
     if (key == UI_KEY_ENTER) {
-        char prompt[UC_PATH_MAX + 24];
+        char prompt[UC_FULL_MAX];
         prompt_text(prompt, sizeof prompt);
         uc_term_write(prompt);
         uc_term_writeln(g_input);

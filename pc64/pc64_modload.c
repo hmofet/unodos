@@ -868,7 +868,7 @@ int uno_mod_scan(UnoAppDesc *out, char (*file)[16], signed char *vol,
     for (pass = 0; pass < 2; pass++) {
         const char *dir = pass ? "EFI\\UNODOS\\APPS" : "APPS";
         for (v = pass; v < nv; v++) {
-            int total = uno_fs_list_dir(v, dir, names, 48);
+            int total = uno_fs_list_dir(v, dir, names[0], 16, 48);
             if (total > 48) { if (over) *over = 1; total = 48; }
             for (i = 0; i < total; i++) {
                 char path[64];

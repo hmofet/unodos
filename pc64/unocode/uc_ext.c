@@ -455,7 +455,7 @@ static void read_manifest(int vol, const char *id)
 
 static void scan_volume(int vol)
 {
-    static char names[UC_EXT_MAX * 2][16];
+    static char names[UC_EXT_MAX * 2][UC_NAME_MAX];
     static unsigned char isdir[UC_EXT_MAX * 2];
     int n, i;
     /* No uno_fs_isdir() gate on EXT itself: that call answers only for native

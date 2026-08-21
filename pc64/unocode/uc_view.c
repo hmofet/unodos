@@ -285,7 +285,7 @@ int uc_activity_hit(UcRect r, int x, int y)
 /* ---- explorer ------------------------------------------------------------------ */
 #define EXP_MAX 220
 typedef struct {
-    char name[16];
+    char name[UC_NAME_MAX];
     char dir[UC_PATH_MAX];
     unsigned char isdir, depth, open;
 } ExpRow;
@@ -319,11 +319,11 @@ static void dir_toggle(const char *path)
  * for a file tree. */
 static void exp_walk(const char *dir, int depth)
 {
-    char (*names)[16];
+    char (*names)[UC_NAME_MAX];
     unsigned char *isdir;
     int n, i;
     if (depth > 5 || g_nexp >= EXP_MAX) return;
-    names = (char (*)[16])malloc((unsigned long)EXP_MAX * 16);
+    names = (char (*)[UC_NAME_MAX])malloc((unsigned long)EXP_MAX * UC_NAME_MAX);
     if (!names) return;
     isdir = (unsigned char *)malloc(EXP_MAX);
     if (!isdir) { free(names); return; }
@@ -372,33 +372,164 @@ void uc_explorer_reveal(UcDoc *d)
         }
 }
 
-/* ---- search view ---------------------------------------------------------------- */
-#define SR_MAX 200
-typedef struct { char file[16]; char text[80]; int line; } SearchHit;
+/* ---- search view ----------------------------------------------------------------
+ * Workspace-wide search (UCD-12).  Three things make this more than a loop:
+ *
+ * IT RECURSES, so it searches the project rather than its top directory - and
+ * therefore has to skip the directories that are not the project.  A hit needs
+ * to name a FOLDER as well as a file, which is why hits point at a path in a
+ * pool rather than carrying a bare file name; a name alone could not be opened
+ * from a subdirectory, which is the bug the flat version had.
+ *
+ * IT RUNS IN SLICES, a few files per frame from uc_search_tick(), because a
+ * synchronous walk of a real tree is seconds long and the editor is supposed
+ * to stay live through it.  That also makes Escape a real cancel rather than a
+ * request nobody is listening for.
+ *
+ * IT GROUPS BY FILE, which needs a row model: the list on screen is headers
+ * and hits interleaved, so selection and clicks index ROWS, not hits. */
+#define SR_MAX     200                  /* hits kept                        */
+#define SR_FILES   400                  /* files the walk will queue        */
+#define SR_POOL    24576                /* their relative paths             */
+#define SR_ROWS    (SR_MAX + 64)
+#define SR_SLICE   4                    /* files scanned per frame          */
+
+typedef struct { int f; int line; char text[80]; } SearchHit;
+enum { SROW_FILE = 0, SROW_HIT };
+
 static SearchHit g_hit[SR_MAX];
 static int  g_nhit, g_hitsel, g_hitscroll, g_hitfiles;
 static char g_query[80];
-static int  g_qlen, g_searching;
+static int  g_qlen;
+
+static char g_fpool[SR_POOL];           /* "src\\app\\main.c", NUL-separated */
+static int  g_fpooln;
+static int  g_foff[SR_FILES];
+static int  g_nfiles, g_fileat, g_searching, g_truncated;
+static char g_needle[80];
+
+static struct { unsigned char kind; int ref; } g_row[SR_ROWS];
+static int g_nrow;
+
+static const char *file_path(int f)
+{
+    return (f >= 0 && f < g_nfiles) ? g_fpool + g_foff[f] : "";
+}
+
+/* Directories that are never the project.  Dotted names are already skipped
+ * by the walk, which covers .git and .cache; these are the ones that are not
+ * hidden and are still someone else's bytes.  A search that returns 4000 hits
+ * from node_modules has answered a question nobody asked. */
+static int skip_dir(const char *name)
+{
+    static const char *kSkip[] = {
+        "node_modules", "build", "dist", "out", "obj", "target",
+        "vendor", "__pycache__", "coverage", 0
+    };
+    int i;
+    for (i = 0; kSkip[i]; i++) if (uc_ieq(name, kSkip[i])) return 1;
+    return 0;
+}
+
+/* Queue every file under `dir`, depth-first.  Directories cost a listing;
+ * files cost only their path, so the expensive half (reading and scanning)
+ * stays in the sliced pass. */
+static void search_walk(const char *dir, int depth)
+{
+    char (*names)[UC_NAME_MAX];
+    unsigned char *isdir;
+    int n, i;
+    if (depth > 8 || g_nfiles >= SR_FILES) return;
+    names = (char (*)[UC_NAME_MAX])malloc((unsigned long)EXP_MAX * UC_NAME_MAX);
+    if (!names) return;
+    isdir = (unsigned char *)malloc(EXP_MAX);
+    if (!isdir) { free(names); return; }
+    n = uc_list_dir(UC.ws_vol, dir, names, isdir, EXP_MAX);
+    if (n > EXP_MAX) n = EXP_MAX;
+    for (i = 0; i < n; i++) {
+        char full[UC_FULL_MAX];
+        int len;
+        if (!names[i][0] || names[i][0] == '.') continue;
+        uc_path_join(full, sizeof full, dir, names[i]);
+        if (isdir[i]) {
+            if (!skip_dir(names[i])) search_walk(full, depth + 1);
+            continue;
+        }
+        if (g_nfiles >= SR_FILES) { g_truncated = 1; break; }
+        len = (int)strlen(full);
+        if (g_fpooln + len + 1 > SR_POOL) { g_truncated = 1; break; }
+        g_foff[g_nfiles++] = g_fpooln;
+        memcpy(g_fpool + g_fpooln, full, (unsigned long)len + 1);
+        g_fpooln += len + 1;
+    }
+    free(isdir);
+    free(names);
+}
+
+static void rows_rebuild(void)
+{
+    int i, last = -1;
+    g_nrow = 0;
+    for (i = 0; i < g_nhit && g_nrow < SR_ROWS - 1; i++) {
+        if (g_hit[i].f != last) {
+            g_row[g_nrow].kind = SROW_FILE;
+            g_row[g_nrow].ref = g_hit[i].f;
+            g_nrow++;
+            last = g_hit[i].f;
+        }
+        g_row[g_nrow].kind = SROW_HIT;
+        g_row[g_nrow].ref = i;
+        g_nrow++;
+    }
+}
+
+void uc_search_cancel(void)
+{
+    if (!g_searching) return;
+    g_searching = 0;
+    uc_repaint();
+}
 
 void uc_search_run(const char *needle)
 {
-    static char names[EXP_MAX][16];
-    static unsigned char isdir[EXP_MAX];
-    int n, i, max = uc_cfg_int("search.maxResults");
     g_nhit = 0;
     g_hitfiles = 0;
-    if (!needle || !needle[0]) return;
-    n = uc_list_dir(UC.ws_vol, UC.ws_dir, names, isdir, EXP_MAX);
-    if (n > EXP_MAX) n = EXP_MAX;
-    for (i = 0; i < n && g_nhit < max && g_nhit < SR_MAX; i++) {
-        char full[UC_PATH_MAX];
+    g_nrow = 0;
+    g_hitsel = 0;
+    g_hitscroll = 0;
+    g_nfiles = 0;
+    g_fpooln = 0;
+    g_fileat = 0;
+    g_truncated = 0;
+    g_searching = 0;
+    if (!needle || !needle[0]) { uc_repaint(); return; }
+    uc_scpy(g_needle, needle, sizeof g_needle);
+    /* keep the view's box in step with whoever started this - the terminal's
+     * `find` opens the Search view, and an empty box above its own results
+     * reads as a bug */
+    if (needle != g_query) {
+        uc_scpy(g_query, needle, sizeof g_query);
+        g_qlen = (int)strlen(g_query);
+    }
+    search_walk(UC.ws_dir, 0);
+    g_searching = g_nfiles > 0;
+    uc_repaint();
+}
+
+/* One slice.  Called every frame; does nothing at all unless a search is
+ * running, so the cost when idle is a load and a branch. */
+void uc_search_tick(void)
+{
+    int slice, max = uc_cfg_int("search.maxResults");
+    if (!g_searching) return;
+    for (slice = 0; slice < SR_SLICE && g_fileat < g_nfiles; slice++) {
+        const char *rel = file_path(g_fileat);
         char *src = 0;
         long len = 0;
-        int line = 1, k, found_here = 0;
-        if (!names[i][0] || isdir[i]) continue;
-        uc_path_join(full, sizeof full, UC.ws_dir, names[i]);
-        if (uno_fs_size(UC.ws_vol, full) > 512L * 1024) continue;
-        if (!uc_read_file(UC.ws_vol, full, &src, &len)) continue;
+        int line = 1, k, found_here = 0, nl = (int)strlen(g_needle);
+        g_fileat++;
+        if (uno_fs_size(UC.ws_vol, rel) > 512L * 1024) continue;
+        if (!uc_read_file(UC.ws_vol, rel, &src, &len)) continue;
         /* skip binaries: a NUL in the first kilobyte.  Without this the first
          * hit for any common word is inside a 700 KB TrueType font, which is
          * both useless and the only result anybody sees. */
@@ -410,12 +541,12 @@ void uc_search_run(const char *needle)
         for (k = 0; k < (int)len && g_nhit < max && g_nhit < SR_MAX; k++) {
             int s, e, t;
             if (src[k] == '\n') { line++; continue; }
-            if (src[k] != needle[0]) continue;
-            if (strncmp(src + k, needle, strlen(needle))) continue;
+            if (src[k] != g_needle[0]) continue;
+            if (strncmp(src + k, g_needle, (unsigned long)nl)) continue;
             s = k; e = k;
             while (s > 0 && src[s-1] != '\n') s--;
             while (e < (int)len && src[e] != '\n') e++;
-            uc_scpy(g_hit[g_nhit].file, names[i], sizeof g_hit[0].file);
+            g_hit[g_nhit].f = g_fileat - 1;
             g_hit[g_nhit].line = line;
             for (t = 0; t < (int)sizeof g_hit[0].text - 1 && s + t < e; t++)
                 g_hit[g_nhit].text[t] = src[s + t] == '\t' ? ' ' : src[s + t];
@@ -429,9 +560,43 @@ void uc_search_run(const char *needle)
         }
         if (found_here) g_hitfiles++;
         free(src);
+        if (g_nhit >= max || g_nhit >= SR_MAX) {
+            g_truncated = 1;
+            g_fileat = g_nfiles;               /* the cap ends the search    */
+            break;
+        }
     }
-    g_hitsel = 0;
-    g_hitscroll = 0;
+    if (g_fileat >= g_nfiles) g_searching = 0;
+    rows_rebuild();
+    uc_repaint();
+}
+
+/* Open what row `k` points at: a hit at its line, a file header at its top. */
+static void search_open_row(int k)
+{
+    const char *rel;
+    char dir[UC_PATH_MAX], name[UC_NAME_MAX];
+    int line = 1, cut = -1, i;
+    if (k < 0 || k >= g_nrow) return;
+    rel = file_path(g_row[k].kind == SROW_HIT ? g_hit[g_row[k].ref].f
+                                              : g_row[k].ref);
+    if (g_row[k].kind == SROW_HIT) line = g_hit[g_row[k].ref].line;
+    for (i = 0; rel[i]; i++) if (rel[i] == '\\' || rel[i] == '/') cut = i;
+    if (cut >= 0) {
+        int n = cut < (int)sizeof dir - 1 ? cut : (int)sizeof dir - 1;
+        memcpy(dir, rel, (unsigned long)n);
+        dir[n] = 0;
+        uc_scpy(name, rel + cut + 1, sizeof name);
+    } else {
+        dir[0] = 0;
+        uc_scpy(name, rel, sizeof name);
+    }
+    {
+        int di = uc_doc_open(UC.ws_vol, dir, name);
+        UcDoc *d = uc_doc_at(di);
+        if (d) uc_move_to(d, uc_line_start(d, line - 1), 0);
+        uc_focus(UC_F_EDITOR);
+    }
 }
 
 /* ---- side bar ------------------------------------------------------------------- */
@@ -514,33 +679,48 @@ static void sidebar_search(UcRect r)
     if (g_qlen) uc_ui_text(f.x + 5, f.y + 4, g_query, uc_col(UC_C_INPUT_FG));
     else uc_ui_text(f.x + 5, f.y + 4, "Search", uc_col(UC_C_INPUT_PLACEHOLDER));
     y += f.h + 8;
-    if (g_searching) uc_ui_text(r.x + 10, y, "Searching...", uc_col(UC_C_BREADCRUMB_FG));
-    else if (g_qlen) {
+    if (g_searching) {
+        /* PROGRESS, not a spinner: a tree that takes ten seconds should say
+         * how far in it is, and Escape should visibly be an option */
+        uc_scpy(summary, "searching ", sizeof summary);
+        uc_itoa(num, g_fileat);
+        uc_scat(summary, num, sizeof summary);
+        uc_scat(summary, "/", sizeof summary);
+        uc_itoa(num, g_nfiles);
+        uc_scat(summary, num, sizeof summary);
+        uc_scat(summary, " files - Esc stops", sizeof summary);
+        uc_ui_text(r.x + 10, y, summary, uc_col(UC_C_BREADCRUMB_FG));
+    } else if (g_qlen) {
         uc_itoa(num, g_nhit);
         uc_scpy(summary, num, sizeof summary);
         uc_scat(summary, g_nhit == 1 ? " result in " : " results in ", sizeof summary);
         uc_itoa(num, g_hitfiles);
         uc_scat(summary, num, sizeof summary);
         uc_scat(summary, g_hitfiles == 1 ? " file" : " files", sizeof summary);
+        if (g_truncated) uc_scat(summary, " (capped)", sizeof summary);
         uc_ui_text(r.x + 10, y, summary, uc_col(UC_C_BREADCRUMB_FG));
     }
     y += rh;
     rows = (r.y + r.h - y) / rh;
     if (g_hitsel < g_hitscroll) g_hitscroll = g_hitsel;
     if (g_hitsel >= g_hitscroll + rows) g_hitscroll = g_hitsel - rows + 1;
+    if (g_hitscroll < 0) g_hitscroll = 0;
     for (i = 0; i < rows; i++) {
         int k = g_hitscroll + i, ry = y + i * rh;
-        char loc[28];
-        if (k >= g_nhit) break;
+        if (k >= g_nrow) break;
         if (k == g_hitsel) fb_fill_rect(r.x, ry, r.w, rh, uc_col(UC_C_LIST_SEL_BG));
-        uc_scpy(loc, g_hit[k].file, sizeof loc);
-        uc_scat(loc, ":", sizeof loc);
-        uc_itoa(num, g_hit[k].line);
-        uc_scat(loc, num, sizeof loc);
         fb_set_clip(r.x, ry, r.w - 4, rh);
-        uc_ui_text(r.x + 8, ry + 4, loc, uc_col(UC_C_LIST_HIGHLIGHT));
-        uc_ui_text(r.x + 8 + uc_ui_text_w(loc) + 8, ry + 4, g_hit[k].text,
-                   uc_col(UC_C_SIDEBAR_FG));
+        if (g_row[k].kind == SROW_FILE) {
+            /* the file header: the path, once, above its own hits */
+            uc_ui_text_fit(r.x + 6, ry + 4, file_path(g_row[k].ref),
+                           r.w - 12, uc_col(UC_C_SIDEBAR_TITLE));
+        } else {
+            SearchHit *h = &g_hit[g_row[k].ref];
+            uc_itoa(num, h->line);
+            uc_ui_text(r.x + 14, ry + 4, num, uc_col(UC_C_LIST_HIGHLIGHT));
+            uc_ui_text(r.x + 14 + uc_ui_text_w(num) + 8, ry + 4, h->text,
+                       uc_col(UC_C_SIDEBAR_FG));
+        }
         fb_reset_clip();
     }
 }
@@ -728,14 +908,9 @@ int uc_sidebar_event(UcRect r, const unoui_event *e)
     if (UC.view == UC_VIEW_SEARCH) {
         int y0 = r.y + th + 6 + uc_ui_h() + 8 + 8 + rh;
         int k = g_hitscroll + (e->y - y0) / rh;
-        if (k >= 0 && k < g_nhit) {
+        if (k >= 0 && k < g_nrow) {
             g_hitsel = k;
-            {
-                int di = uc_doc_open(UC.ws_vol, UC.ws_dir, g_hit[k].file);
-                UcDoc *d = uc_doc_at(di);
-                if (d) uc_move_to(d, uc_line_start(d, g_hit[k].line - 1), 0);
-                uc_focus(UC_F_EDITOR);
-            }
+            search_open_row(k);
         }
         return 1;
     }
@@ -759,16 +934,26 @@ int uc_sidebar_key(int key, int mods, int ch)
         return 0;
     }
     if (UC.view == UC_VIEW_SEARCH) {
+        /* Escape stops a running search.  It is only a cancel because the scan
+         * runs in slices - a synchronous walk would not be here to read it. */
+        if (key == UI_KEY_ESC && g_searching) { uc_search_cancel(); return 1; }
         if (key == UI_KEY_BACKSPACE) {
             if (g_qlen > 0) g_query[--g_qlen] = 0;
+            uc_search_run(g_query);
             return 1;
         }
-        if (key == UI_KEY_ENTER) { uc_search_run(g_query); return 1; }
+        /* Enter OPENS the selected result.  It used to re-run the search,
+         * which meant the keyboard could move the selection and never act on
+         * it - the mouse was the only way to reach a hit. */
+        if (key == UI_KEY_ENTER) { search_open_row(g_hitsel); return 1; }
         if (key == UI_KEY_UP)   { if (g_hitsel > 0) g_hitsel--; return 1; }
-        if (key == UI_KEY_DOWN) { if (g_hitsel < g_nhit - 1) g_hitsel++; return 1; }
+        if (key == UI_KEY_DOWN) { if (g_hitsel < g_nrow - 1) g_hitsel++; return 1; }
         if (ch >= 32 && ch < 127 && g_qlen < (int)sizeof g_query - 1) {
             g_query[g_qlen++] = (char)ch;
             g_query[g_qlen] = 0;
+            /* search as you type: each keystroke restarts the sliced scan,
+             * and the previous one is abandoned rather than raced */
+            uc_search_run(g_query);
             return 1;
         }
         return 0;
@@ -869,7 +1054,7 @@ int uc_tabs_event(UcRect r, const unoui_event *e)
 void uc_breadcrumb_draw(UcRect r)
 {
     UcDoc *d = uc_doc_active();
-    char path[UC_PATH_MAX + 20];
+    char path[UC_FULL_MAX];
     fb_fill_rect(r.x, r.y, r.w, r.h, uc_col(UC_C_EDITOR_BG));
     if (!d) return;
     uc_doc_path(d, path, sizeof path);
@@ -1060,7 +1245,13 @@ void uc_status_draw(UcRect r)
         x -= 16;
     }
     {
-        const char *eol = !strcmp(uc_cfg_str("files.eol"), "crlf") ? "CRLF" : "LF";
+        /* THIS FILE's endings, which is what the status bar is for - showing
+         * the global setting there told you what you had configured, not what
+         * you had open (UCD-20) */
+        int crlf = uc_cfg_is_user("files.eol")
+                     ? !strcmp(uc_cfg_str("files.eol"), "crlf")
+                     : (d && d->eol_crlf);
+        const char *eol = crlf ? "CRLF" : "LF";
         x -= uc_ui_text_w(eol);
         uc_ui_text(x, ty, eol, fg);
         x -= 16;

@@ -22,7 +22,11 @@ int  uno_fs_list_get(int vol, int idx, char *name, int max);
  * tell "these are all of them" from "there were more than I asked for", and
  * never presents a truncated list as a complete one.  0 on the RAM disk
  * (flat), on a missing directory, or on a dead firmware volume. */
-int  uno_fs_list_dir(int vol, const char *dir, char (*names)[16], int maxn);
+/* `names` is maxn slots of `stride` bytes each; the caller picks the width and
+ * says so, because this export is resolved by NAME and a width baked into two
+ * headers cannot be checked against itself.  Returns the TOTAL entry count,
+ * which may exceed maxn. */
+int  uno_fs_list_dir(int vol, const char *dir, char *names, int stride, int maxn);
 
 /* read a file from a volume's root; returns bytes read, or -1 */
 long uno_fs_read(int vol, const char *name, unsigned char *buf, long max);
