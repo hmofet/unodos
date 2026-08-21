@@ -4645,11 +4645,27 @@ static int prefs_read(unsigned char *buf, long cap)
     int v, n = uno_fs_volumes(); long got = -1;
     int pref = session_vol();
     if (pref >= 0) got = uno_fs_read(pref, "SHELL.CFG", buf, cap - 1);
-    for (v = 0; v < n && got < 0; v++) {
+    /* An EMPTY file is not a config, it is a volume that failed to write one.
+     *
+     * This is the whole ZimaBlade defect, measured on the box: its internal
+     * eMMC accepts a create and never completes the write, so it carries a
+     * ZERO-BYTE SHELL.CFG at volume 1, while the real 178-byte file sits on the
+     * boot stick at volume 2. The old scan started at volume 0 and stopped on
+     * the first read that was not negative - and 0 is not negative. So every
+     * boot parsed an empty buffer: no `restore=`, no `open=`, and the fallback
+     * opened Control Panel. That is the reported "session restore reopens the
+     * wrong window", and it was silently discarding every Control Panel
+     * PREFERENCE too - theme, resolution, scale, volume, wallpaper - which
+     * nobody had noticed because a default looks like a choice.
+     *
+     * Asking session_vol() first fixes the case at hand; `got > 0` is what
+     * makes the fallback correct as well, for any volume that goes the same
+     * way in future. */
+    for (v = 0; v < n && got <= 0; v++) {
         if (v == pref) continue;                 /* already tried, and it won */
         got = uno_fs_read(v, "SHELL.CFG", buf, cap - 1);
     }
-    if (got < 0) return 0;
+    if (got <= 0) return 0;
     buf[got] = 0; return 1;
 }
 
