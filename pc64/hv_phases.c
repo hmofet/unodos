@@ -1150,6 +1150,23 @@ static void lin_cpuid(void)
         rc &= ~(1u << 26);                   /* XSAVE                         */
         rc &= ~(1u << 27);                   /* OSXSAVE                       */
         rc &= ~(1u << 28);                   /* AVX, which needs both          */
+        rc &= ~(1u << 12);                   /* FMA: VEX-256, same boat       */
+        rc &= ~(1u << 29);                   /* F16C: likewise                */
+    }
+    /* LEAF 7 MUST AGREE WITH LEAF 1'S NO-XSAVE STORY.  Leaving AVX2 (and on
+     * newer silicon the AVX-512 family) advertised while OSXSAVE is off is
+     * an invitation Chromium accepted: libhwy's dispatch read leaf 7, chose
+     * its AVX2 kernels, and took SIGILL on the first VEX-256 instruction -
+     * a renderer that crash-loops with `trap invalid opcode in libhwy`.
+     * BMI1/BMI2 stay: VEX-encoded but GPR-only, no XSAVE state involved. */
+    if (a == 7 && c == 0) {
+        rb &= ~((1u << 5)                    /* AVX2                          */
+              | (1u << 16) | (1u << 17) | (1u << 21) | (1u << 26)
+              | (1u << 27) | (1u << 28) | (1u << 30) | (1u << 31)); /* AVX512 */
+        rc &= ~((1u << 1) | (1u << 6) | (1u << 9) | (1u << 10)
+              | (1u << 11) | (1u << 12) | (1u << 14));  /* VBMI/VAES/VNNI... */
+        rd &= ~((1u << 2) | (1u << 3) | (1u << 8)       /* AVX512 4x, AMX    */
+              | (1u << 22) | (1u << 24) | (1u << 25));
     }
     g_vcpu.gprs.rax = ra; g_vcpu.gprs.rbx = rb;
     g_vcpu.gprs.rcx = rc; g_vcpu.gprs.rdx = rd;
