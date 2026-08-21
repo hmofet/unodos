@@ -74,8 +74,8 @@ and all the drivers; only the UI layer differs.
 - **Default shell (unoui)**: `pc64_uui.c` (desktop/taskbar/programs menu/tray) +
   the cross-platform `../unoui/` toolkit + 10 themes (Aurora Light/Dark +
   `theme_aurora.c`, plus 8 retro looks), with `pc64_uui_apps.c` (the
-  `mac_compat` bridge for the creative tools + Network), `pc64_games.c` (native
-  Dostris/Pacman/Outlast + Runner3D canvases), `pc64_browser.c` + `pc64_fs.c` +
+  `mac_compat` bridge for the creative tools + Network), `pc64_games.c` (the
+  native Runner3D canvas), `pc64_browser.c` + `pc64_fs.c` +
   `js.c` + `pc64_http.c` (the web browser, file system, JS engine and HTTP),
   `pc64_icons.c` (procedural icons) and `../unosound/unosound_seq.c` (audio).
   See "unoui shell" and "Web browser" below.
@@ -310,10 +310,12 @@ key-combo reliance, **every control is reachable by pointer OR keyboard**
 
 The app migration is **complete**: every family app runs in the default shell.
 The creative tools and Network are custom-render canvases (`pc64_uui_apps.c`
-bridges them to a `mac_compat` Toolbox over `fb`); the **games are a native
-rewrite** (`pc64_games.c`), Dostris/Pacman/Outlast draw into whatever rect
-they're handed, so the *same* canvas fills a window or the full screen with no
-letterboxing, and Runner3D drives `uno3d` directly. **All audio is unified on
+bridges them to a `mac_compat` Toolbox over `fb`); Dostris, Pac-Man and OutLast
+are `.UNO` modules (`apps/dostris.c`, `apps/pacman.c`, `apps/outlast.c`) so ALL
+apps load from storage, and **Runner3D is the one native canvas**
+(`pc64_games.c`), drawing into whatever rect it's handed - the *same* canvas
+fills a window or the full screen with no letterboxing - and driving `uno3d`
+directly. **All audio is unified on
 UnoSound** (`unosound_seq.c`, a single-voice PC-speaker sequencer): the games,
 Music and Tracker all emit through `uno_seq_beep/play/stop`, so there is one
 mixer path instead of per-app speaker banging. With the migration done,
@@ -606,7 +608,8 @@ pc64/
 ├── pc64_uui.c          # the unoui shell: desktop, taskbar, programs menu, tray,
 │                       # app windows + UEFI event adapter (links ../unoui/*)
 ├── pc64_uui_apps.c     # mac_compat bridge for creative tools + Network
-├── pc64_games.c        # native games (Dostris/Pacman/Outlast) + Runner3D
+├── pc64_games.c        # Runner3D, the one native game canvas (the classic
+│                       # games are .UNO modules - see apps/)
 ├── pc64_browser.c      # web browser: HTML/Markdown/CSS canvas app
 ├── js.c js.h           # tree-walking JavaScript interpreter (for <script>)
 ├── pc64_http.c .h      # HTTP/1.0 GET for the browser (address bar -> net)

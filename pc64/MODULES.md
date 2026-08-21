@@ -29,8 +29,11 @@ legacy module drew itself with the Mac-Toolbox primitives against a fixed
 four-colour palette, that is where its hardcoded blue background came from,
 and why no theme change ever affected it. See AUDIO.md.) (Runner3D and the Browser are native shell canvases, they drive
 uno3d / the HTML engine directly and have no AppInterface counterpart.
-The classic games' native canvases in `pc64_games.c` are no longer routed;
-the `.UNO` bridge versions run instead, so ALL apps load from storage.)
+The classic games' native canvases in `pc64_games.c` were unroutable dead code
+and have been DELETED; the `.UNO` versions are the only copy, so ALL apps load
+from storage. Two compiling copies of one game hide divergence - that duplicate
+is how Pac-Man lost its sounds and Dostris its line-clear blip - so add a game
+as a module, never as a second native copy.)
 
 ## The app descriptor: what a module says about itself
 
