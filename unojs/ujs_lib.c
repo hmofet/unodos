@@ -275,9 +275,16 @@ static ujs_val a_join(ujs_args *a)
 static ujs_val a_indexOf(ujs_args *a)
 {
     ujs_obj *o = self_arr(a);
-    u32 i;
+    u32 i, from = 0;
     if (!o) return ujs_number(-1);
-    for (i = 0; i < o->nelems; i++)
+    /* fromIndex, for the same reason s_indexOf honours it now: a scanner
+     * that resumes from its last hit must be able to */
+    if (a->argc > 1 && !ujs_is_undefined(arg(a, 1))) {
+        double d = argnum(a, 1);
+        if (d != d || d < 0) d = 0;
+        from = d > (double)o->nelems ? o->nelems : (u32)d;
+    }
+    for (i = from; i < o->nelems; i++)
         if (ujs_strict_eq(o->elems[i], arg(a, 0))) return ujs_number((double)i);
     return ujs_number(-1);
 }
@@ -467,11 +474,20 @@ static ujs_val s_charCodeAt(ujs_args *a)
 static ujs_val s_indexOf(ujs_args *a)
 {
     ujs_str *s = selfstr(a), *n = argstr(a, 0);
-    u32 i;
+    u32 i, from = 0;
     if (!s || !n) return ujs_number(-1);
-    if (!n->len) return ujs_number(0);
+    /* fromIndex.  Dropping it looked harmless and was not: every scanner
+     * written as `i = s.indexOf(x, i) + 1` finds the SAME first hit for
+     * ever, which turns a three-line tokenizer into an infinite loop that
+     * grinds its whole fuel budget before the first frame paints. */
+    if (a->argc > 1 && !ujs_is_undefined(arg(a, 1))) {
+        double d = argnum(a, 1);
+        if (d != d || d < 0) d = 0;
+        from = d > (double)s->len ? s->len : (u32)d;
+    }
+    if (!n->len) return ujs_number((double)from);
     if (n->len > s->len) return ujs_number(-1);
-    for (i = 0; i + n->len <= s->len; i++)
+    for (i = from; i + n->len <= s->len; i++)
         if (!memcmp(s->b + i, n->b, n->len)) return ujs_number((double)i);
     return ujs_number(-1);
 }

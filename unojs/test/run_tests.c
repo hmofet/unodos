@@ -74,6 +74,13 @@ static const tcase cases[] = {
   "print(s.slice(0,5)); print(s.split(' ').join('-')); print('  x '.trim());",
   "11\nHELLO WORLD\n6\nHello\nHello-World\nx\n" },
 { "str-index", "var s='abc'; print(s[0]); print(s[2]); print(s.charAt(1));", "a\nc\nb\n" },
+{ "str-indexof-from",
+  /* the second argument is where a SCANNER lives: i = s.indexOf(x, i) + 1
+   * must advance, or every loop written that way spins for ever */
+  "var s='a.b.c';"
+  "print(s.indexOf('.', 2)); print(s.indexOf('.', 4)); print(s.indexOf('.', 99));"
+  "print(s.indexOf('', 3)); print([7,8,7].indexOf(7, 1));",
+  "3\n-1\n-1\n3\n2\n" },
 { "str-replace", "print('a-b-c'.replace('-','+')); print('xy'.repeat(3));", "a+b-c\nxyxyxy\n" },
 
 /* ---- operators ---------------------------------------------------------- */
@@ -96,6 +103,17 @@ static const tcase cases[] = {
 { "while", "var i=0,s=0; while(i<5){s+=i;i++;} print(s);", "10\n" },
 { "do-while", "var i=0; do{ i++; }while(i<3); print(i);", "3\n" },
 { "for", "var s=''; for(var i=0;i<4;i++) s+=i; print(s);", "0123\n" },
+{ "for-expr-init",
+  /* a PLAIN ASSIGNMENT in the head, no var: the for-in probe's rewind used
+   * to skip the first token, handing the expression parser `= 0` */
+  "var s='', j; for (j = 0; j < 3; j++) s += j; print(s); print(j);",
+  "012\n3\n" },
+{ "for-empty-head", "var n=0; for(;;){ n++; if(n===3) break; } print(n);", "3\n" },
+{ "for-var-is-local",
+  /* the same rewind bug dropped `var`, so a loop variable inside a function
+   * silently assigned a GLOBAL - correct output, wrong scope */
+  "var i='outer'; function f(){ for(var i=0;i<2;i++){} } f(); print(i);",
+  "outer\n" },
 { "break-continue",
   "var s=''; for(var i=0;i<10;i++){ if(i%2==0) continue; if(i>6) break; s+=i; } print(s);",
   "135\n" },
