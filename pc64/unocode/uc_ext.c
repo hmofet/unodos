@@ -420,6 +420,20 @@ static void read_manifest(int vol, const char *id)
             uc_upper(x->main);
         }
     }
+    /* Permissions are OPT-IN, per extension, in the manifest - the file a
+     * user can read before enabling anything.  "languageModels" is the only
+     * one so far (UCD-50): an extension host that can reach a model can leak
+     * a workspace into a prompt, and EXT\ is a folder anyone can drop a file
+     * into, so reaching the model is a declared privilege rather than a
+     * default. */
+    x->perm_lm = 0;
+    {
+        UcJson *perms = uc_json_member(root, "permissions"), *e;
+        if (perms && perms->type == UJ_ARR)
+            for (e = perms->child; e; e = e->next)
+                if (e->type == UJ_STR && !strcmp(e->str, "languageModels"))
+                    x->perm_lm = 1;
+    }
     acts = uc_json_member(root, "activationEvents");
     g_nactev[g_next] = 0;
     if (acts && acts->type == UJ_ARR) {

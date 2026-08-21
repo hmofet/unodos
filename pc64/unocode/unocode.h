@@ -89,6 +89,10 @@ void  pc64_shell_dirty(void);
 const struct unoui_theme *pc64_shell_theme(void);
 int   pc64_shell_font_mono(void);
 int   pc64_shell_run_user(int vol, const char *path);
+/* 1 when pc64_shell_run_user can actually launch something here.  The
+ * desktop answers 0 until UCD-14; an assistant reads this to offer only the
+ * tools the platform has (UCD-51). */
+int   pc64_shell_can_run(void);
 /* The shell's NATIVE file picker, if it has one.  A hosted build (UnoCode
  * Desktop) opens the OS dialog here, because users expect their own file
  * manager's places and bookmarks rather than a list this module invented, and
@@ -550,7 +554,7 @@ enum { UC_CI_TEXT = 0, UC_CI_METHOD, UC_CI_FUNCTION, UC_CI_VARIABLE,
  * uc_view.c - the workbench chrome outside the editor.
  * ======================================================================== */
 enum { UC_VIEW_EXPLORER = 0, UC_VIEW_SEARCH, UC_VIEW_SCM, UC_VIEW_RUN,
-       UC_VIEW_EXTENSIONS, UC_VIEW_N };
+       UC_VIEW_EXTENSIONS, UC_VIEW_ASSIST, UC_VIEW_N };
 enum { UC_PANEL_PROBLEMS = 0, UC_PANEL_OUTPUT, UC_PANEL_TERMINAL,
        UC_PANEL_N };
 
@@ -593,6 +597,31 @@ void uc_output_show(int ch);
 
 /* transient notifications (bottom-right toasts) */
 void uc_notify(const char *msg, int sev);
+
+/* ======================================================================== *
+ * uc_ai.c - the assistant view (UCD-49): a native chat over uc_http.h.
+ * The exchange is pumped from uc_ai_tick() each frame and never blocks;
+ * the key comes from uc_secret.h at send time and is not kept.
+ * ======================================================================== */
+void uc_ai_draw(UcRect r);
+int  uc_ai_event(UcRect r, const unoui_event *e);
+int  uc_ai_key(int key, int mods, int ch);
+void uc_ai_tick(void);               /* pump the in-flight request           */
+void uc_ai_abort(void);              /* cancel it (window close, Esc)        */
+void uc_ai_clear(void);              /* new conversation                     */
+void uc_ai_open(void);               /* show + focus the view                */
+int  uc_ai_busy(void);
+
+/* The LM slot (UCD-50): one streaming exchange for a caller that brings its
+ * own message list - the extension host's vscode.lm rides this.  Deltas and
+ * completion arrive from uc_ai_tick(), so the callbacks run in C frame
+ * context, never inside a JS call. */
+typedef void (*UcLmDeltaFn)(void *user, const char *s, int n);
+typedef void (*UcLmDoneFn)(void *user, int status, const char *err);
+/* 1 = started.  0 = refused, with *why set to a sentence (busy, no key). */
+int  uc_lm_begin(const char *messages_json, UcLmDeltaFn on_delta,
+                 UcLmDoneFn on_done, void *user, const char **why);
+void uc_lm_cancel(void);
 
 /* ======================================================================== *
  * uc_cmd.c - commands, keybindings, the palette and quick open.
@@ -684,6 +713,7 @@ typedef struct {
     char main[16];            /* "MAIN.JS", "" = declarative only           */
     int  vol;
     int  enabled, activated, broken;
+    unsigned char perm_lm;    /* manifest declares "languageModels" (UCD-50) */
     int  ncmd, ntheme, ngram, nsnip;
     char err[80];
     unsigned long act_ms;     /* activation cost, shown in the ext view     */

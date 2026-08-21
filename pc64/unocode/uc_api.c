@@ -39,6 +39,7 @@
 #include "unocode.h"
 #include "unojs.h"
 #include "uc_secret.h"
+#include "uc_http.h"      /* the uc_buf_* appenders, for vscode.lm's request */
 
 /* ---- state ------------------------------------------------------------------ */
 #define HANDLERS_MAX 128
@@ -237,9 +238,15 @@ static ujs_val thenable_new(ujs_vm *vm, int *id_out)
  * context) that the fuel and exception machinery were built around.
  * context.secrets is the first user (UCD-48). */
 #define PENDING_MAX 8
-static struct { int id; char val[UC_SECRET_MAX]; unsigned char has; }
+static struct { int id; char val[UC_SECRET_MAX]; unsigned char has;
+                signed char vslot; }
     g_pend[PENDING_MAX];
 static int g_npend;
+
+/* JS values awaiting resolution live in fixed slots of a rooted array, so a
+ * memmove of g_pend cannot orphan them and the GC cannot collect them. */
+static ujs_val g_pendvals;
+static unsigned char g_vused[PENDING_MAX];
 
 static ujs_val pending_thenable(ujs_vm *vm, const char *val)
 {
@@ -248,7 +255,26 @@ static ujs_val pending_thenable(ujs_vm *vm, const char *val)
     if (g_npend < PENDING_MAX) {
         g_pend[g_npend].id = id;
         g_pend[g_npend].has = val != 0;
+        g_pend[g_npend].vslot = -1;
         uc_scpy(g_pend[g_npend].val, val ? val : "", sizeof g_pend[0].val);
+        g_npend++;
+    }
+    return t;
+}
+
+/* the same, resolving with a VALUE (an object, an array) instead of a string */
+static ujs_val pending_thenable_val(ujs_vm *vm, ujs_val v)
+{
+    int id, s;
+    ujs_val t = thenable_new(vm, &id);
+    for (s = 0; s < PENDING_MAX && g_vused[s]; s++) ;
+    if (g_npend < PENDING_MAX && s < PENDING_MAX) {
+        g_vused[s] = 1;
+        ujs_set_index(vm, g_pendvals, (unsigned)s, v);
+        g_pend[g_npend].id = id;
+        g_pend[g_npend].has = 1;
+        g_pend[g_npend].vslot = (signed char)s;
+        g_pend[g_npend].val[0] = 0;
         g_npend++;
     }
     return t;
@@ -261,17 +287,63 @@ int uc_api_call_str(int thenable_id, const char *value)
 {
     ujs_val fn, arg, out;
     ujs_scope sc;
-    int jsid;
+    int jsid, prev;
     if (!g_vm || thenable_id < 0 || thenable_id >= THENABLES_MAX) return 0;
     jsid = g_then[thenable_id];
     g_then[thenable_id] = -1;
     if (jsid < 0) return 0;
     fn = handler_get(jsid);
     if (!ujs_is_function(g_vm, fn)) return 0;
+    /* the callback runs AS its extension - a permission checked inside it
+     * (vscode.lm) must see who is asking, not -1 */
+    prev = g_cur_ext;
+    g_cur_ext = (jsid < g_nh) ? g_hext[jsid] : -1;
     ujs_scope_open(g_vm, &sc);
     arg = (value && value[0]) ? ujs_string(g_vm, value, -1) : ujs_undefined();
     call_fn(fn, 1, &arg, &out, "thenable");
     ujs_scope_close(g_vm, &sc, ujs_undefined());
+    g_cur_ext = prev;
+    return 1;
+}
+
+/* Resolve a thenable with a JS value already living in a g_pendvals slot. */
+static int api_call_val(int thenable_id, ujs_val v)
+{
+    ujs_val fn, out;
+    ujs_scope sc;
+    int jsid, prev;
+    if (!g_vm || thenable_id < 0 || thenable_id >= THENABLES_MAX) return 0;
+    jsid = g_then[thenable_id];
+    g_then[thenable_id] = -1;
+    if (jsid < 0) return 0;
+    fn = handler_get(jsid);
+    if (!ujs_is_function(g_vm, fn)) return 0;
+    prev = g_cur_ext;
+    g_cur_ext = (jsid < g_nh) ? g_hext[jsid] : -1;
+    ujs_scope_open(g_vm, &sc);
+    call_fn(fn, 1, &v, &out, "thenable");
+    ujs_scope_close(g_vm, &sc, ujs_undefined());
+    g_cur_ext = prev;
+    return 1;
+}
+
+/* Call a stored handler with one string argument - deltas and completions
+ * from the LM slot come through here, always from C frame context. */
+static int call_handler_str(int jsid, const char *s)
+{
+    ujs_val fn, arg, out;
+    ujs_scope sc;
+    int prev;
+    if (!g_vm || jsid < 0) return 0;
+    fn = handler_get(jsid);
+    if (!ujs_is_function(g_vm, fn)) return 0;
+    prev = g_cur_ext;
+    g_cur_ext = (jsid < g_nh) ? g_hext[jsid] : -1;
+    ujs_scope_open(g_vm, &sc);
+    arg = ujs_string(g_vm, s ? s : "", -1);
+    call_fn(fn, 1, &arg, &out, "callback");
+    ujs_scope_close(g_vm, &sc, ujs_undefined());
+    g_cur_ext = prev;
     return 1;
 }
 
@@ -284,8 +356,16 @@ int uc_api_call_num(int jsid, int arg)
 int uc_api_call_cmd(int jsid)
 {
     ujs_val fn = handler_get(jsid), out;
+    int prev, rc;
     if (!g_vm) return 0;
-    return call_fn(fn, 0, 0, &out, "command");
+    /* the handler runs AS its extension: a permission checked inside the
+     * callback (vscode.lm, UCD-50) must see who is really asking, not the -1
+     * of "no extension is loading right now" */
+    prev = g_cur_ext;
+    g_cur_ext = (jsid >= 0 && jsid < g_nh) ? g_hext[jsid] : -1;
+    rc = call_fn(fn, 0, 0, &out, "command");
+    g_cur_ext = prev;
+    return rc;
 }
 
 /* ---- the document object -------------------------------------------------------
@@ -657,6 +737,41 @@ static ujs_val js_fs_write(ujs_args *a)
     return ujs_bool(uno_fs_write(UC.ws_vol, p, (const unsigned char *)body, (long)n));
 }
 
+/* readDirectory: VS Code's [name, FileType] pairs (1 = file, 2 = directory),
+ * over the workspace volume like the rest of workspace.fs.  UCD-51's list_dir
+ * tool is the first caller. */
+static ujs_val js_fs_readdir(ujs_args *a)
+{
+    static char names[220][16];
+    static unsigned char isdir[220];
+    const char *p = arg_str(a, 0, "");
+    int n = uc_list_dir(UC.ws_vol, p, names, isdir, 220), i;
+    ujs_val arr = ujs_array_new(a->vm);
+    if (n > 220) n = 220;
+    for (i = 0; i < n; i++) {
+        ujs_val pair;
+        if (!names[i][0]) continue;
+        pair = ujs_array_new(a->vm);
+        ujs_array_push(a->vm, pair, ujs_string(a->vm, names[i], -1));
+        ujs_array_push(a->vm, pair, ujs_number(isdir[i] ? 2 : 1));
+        ujs_array_push(a->vm, arr, pair);
+    }
+    return arr;
+}
+
+/* Launch a user program (UCD-51's run tool).  Resolves the shell's answer:
+ * "" is a clean launch, anything else is the reason it did not run - on pc64
+ * that is the Python traceback, which is exactly what an assistant needs to
+ * read to fix the program.  The desktop shell refuses (see canRunPrograms);
+ * the refusal text lands here too, so even a caller that ignored the
+ * capability flag gets the truth instead of a hang. */
+static ujs_val js_run_user(ujs_args *a)
+{
+    const char *p = arg_str(a, 0, "");
+    int rc = pc64_shell_run_user(UC.ws_vol, p);
+    return ujs_string(a->vm, rc < 0 ? pc64_shell_py_error() : "", -1);
+}
+
 static ujs_val js_open_document(ujs_args *a)
 {
     const char *p = arg_str(a, 0, "");
@@ -839,6 +954,207 @@ static ujs_val secrets_new(ujs_vm *vm, int ext)
     return o;
 }
 
+/* ---- vscode.lm (UCD-50) ------------------------------------------------------------
+ * The model, offered to extensions in vscode.lm's shape - and GATED: reaching
+ * a model is a declared privilege ("languageModels" in PACKAGE.JSN
+ * "permissions"), because an extension host that can reach the network can
+ * exfiltrate a workspace, and EXT\ is a folder anyone can drop a file into.
+ * The refusal names the missing declaration, so the fix is in the message.
+ *
+ * Deviations from vscode.lm, all documented in UNOCODE.md: one model (the
+ * ai.model setting), one request at a time, and the response streams through
+ * onText/onDone/onError callbacks rather than an async iterator - there is
+ * no event loop to build one on. */
+static struct {
+    int gen;                  /* stale response objects compare against this */
+    int active;
+    int cb_text, cb_done, cb_err;
+    char *full; int flen, fcap;
+} g_lmjs = { 0, 0, -1, -1, -1, 0, 0, 0 };
+
+static int lm_allowed(int ext)
+{
+    UcExt *x = uc_ext_at(ext);
+    return x && x->perm_lm;
+}
+
+static ujs_val lm_refuse(ujs_vm *vm, int ext)
+{
+    char msg[160];
+    UcExt *x = uc_ext_at(ext);
+    uc_scpy(msg, "extension ", sizeof msg);
+    uc_scat(msg, x ? x->id : "?", sizeof msg);
+    uc_scat(msg, " does not declare \"languageModels\" in PACKAGE.JSN "
+                 "\"permissions\", so it cannot reach the model", sizeof msg);
+    return ujs_throw_error(vm, "Error", msg);
+}
+
+static void lm_delta(void *user, const char *s, int n)
+{
+    (void)user;
+    if (g_lmjs.flen + n + 1 > g_lmjs.fcap) {
+        int want = g_lmjs.fcap ? g_lmjs.fcap * 2 : 4096;
+        char *p;
+        while (want < g_lmjs.flen + n + 1) want *= 2;
+        if (want > 256 * 1024) return;              /* capped, not crashed   */
+        p = (char *)realloc(g_lmjs.full, (unsigned long)want);
+        if (!p) return;
+        g_lmjs.full = p;
+        g_lmjs.fcap = want;
+    }
+    memcpy(g_lmjs.full + g_lmjs.flen, s, (unsigned long)n);
+    g_lmjs.flen += n;
+    g_lmjs.full[g_lmjs.flen] = 0;
+    if (g_lmjs.cb_text >= 0) call_handler_str(g_lmjs.cb_text, s);
+}
+
+static void lm_done(void *user, int status, const char *err)
+{
+    (void)user; (void)status;
+    g_lmjs.active = 0;
+    g_lmjs.gen++;                    /* the response object is now stale     */
+    if (err) {
+        if (g_lmjs.cb_err >= 0) call_handler_str(g_lmjs.cb_err, err);
+    } else if (g_lmjs.cb_done >= 0)
+        call_handler_str(g_lmjs.cb_done, g_lmjs.full ? g_lmjs.full : "");
+    free(g_lmjs.full);
+    g_lmjs.full = 0;
+    g_lmjs.flen = g_lmjs.fcap = 0;
+    g_lmjs.cb_text = g_lmjs.cb_done = g_lmjs.cb_err = -1;
+}
+
+/* a response object's generation, or -1 when it is stale */
+static int lm_gen_of(ujs_args *a)
+{
+    ujs_val gv = ujs_undefined();
+    int gen;
+    ujs_get(a->vm, a->self, "__gen", &gv);
+    gen = (int)ujs_to_number(a->vm, gv);
+    return (g_lmjs.active && gen == g_lmjs.gen) ? gen : -1;
+}
+
+static ujs_val js_lm_onText(ujs_args *a)
+{
+    if (lm_gen_of(a) >= 0)
+        g_lmjs.cb_text = handler_add(a->vm, argv_at(a, 0), g_cur_ext);
+    return a->self;
+}
+static ujs_val js_lm_onDone(ujs_args *a)
+{
+    if (lm_gen_of(a) >= 0)
+        g_lmjs.cb_done = handler_add(a->vm, argv_at(a, 0), g_cur_ext);
+    return a->self;
+}
+static ujs_val js_lm_onError(ujs_args *a)
+{
+    if (lm_gen_of(a) >= 0)
+        g_lmjs.cb_err = handler_add(a->vm, argv_at(a, 0), g_cur_ext);
+    return a->self;
+}
+static ujs_val js_lm_cancel(ujs_args *a)
+{
+    if (lm_gen_of(a) >= 0) uc_lm_cancel();
+    return ujs_undefined();
+}
+
+static ujs_val js_lm_sendRequest(ujs_args *a)
+{
+    ujs_val arr = argv_at(a, 0), ev = ujs_undefined(), R;
+    char *b;
+    int cap = 64 * 1024, p = 0, ext;
+    unsigned n, i;
+    const char *why = 0;
+
+    ujs_get(a->vm, a->self, "__ext", &ev);
+    ext = (int)ujs_to_number(a->vm, ev);
+    if (!lm_allowed(ext)) return lm_refuse(a->vm, ext);
+    if (g_lmjs.active)
+        return ujs_throw_error(a->vm, "Error",
+            "one model request at a time - the running one has not finished");
+    if (!ujs_is_array(a->vm, arr))
+        return ujs_throw_error(a->vm, "TypeError",
+                               "sendRequest expects an array of messages");
+
+    b = (char *)malloc((unsigned long)cap);
+    if (!b) return ujs_throw_error(a->vm, "Error", "out of memory");
+    uc_buf_raw(b, &p, cap, "[");
+    n = ujs_array_length(a->vm, arr);
+    for (i = 0; i < n; i++) {
+        ujs_val m = ujs_undefined();
+        const char *role = "user", *content = "";
+        ujs_get_index(a->vm, arr, i, &m);
+        if (ujs_is_string(m))
+            content = val_str(a->vm, m, "");
+        else {
+            ujs_val rv = ujs_undefined(), cv = ujs_undefined();
+            ujs_get(a->vm, m, "role", &rv);
+            ujs_get(a->vm, m, "content", &cv);
+            role = val_str(a->vm, rv, "user");
+            content = val_str(a->vm, cv, "");
+        }
+        if (i) uc_buf_raw(b, &p, cap, ",");
+        uc_buf_raw(b, &p, cap, "{\"role\":");
+        uc_buf_json(b, &p, cap, strcmp(role, "assistant") ? "user" : "assistant");
+        uc_buf_raw(b, &p, cap, ",\"content\":");
+        uc_buf_json(b, &p, cap, content);
+        uc_buf_raw(b, &p, cap, "}");
+    }
+    uc_buf_raw(b, &p, cap, "]");
+    if (p >= cap) {
+        free(b);
+        return ujs_throw_error(a->vm, "Error", "the messages are too large");
+    }
+    b[p] = 0;
+    if (!uc_lm_begin(b, lm_delta, lm_done, 0, &why)) {
+        free(b);
+        return ujs_throw_error(a->vm, "Error", why);
+    }
+    free(b);
+    g_lmjs.gen++;
+    g_lmjs.active = 1;
+    g_lmjs.cb_text = g_lmjs.cb_done = g_lmjs.cb_err = -1;
+    g_lmjs.flen = 0;
+
+    R = ujs_object_new(a->vm);
+    ujs_set(a->vm, R, "__gen", ujs_number(g_lmjs.gen));
+    ujs_set_fn(a->vm, R, "onText", js_lm_onText, 1);
+    ujs_set_fn(a->vm, R, "onDone", js_lm_onDone, 1);
+    ujs_set_fn(a->vm, R, "onError", js_lm_onError, 1);
+    ujs_set_fn(a->vm, R, "cancel", js_lm_cancel, 0);
+    return R;
+}
+
+static ujs_val js_lm_select(ujs_args *a)
+{
+    ujs_val arr, m;
+    if (!lm_allowed(g_cur_ext)) return lm_refuse(a->vm, g_cur_ext);
+    arr = ujs_array_new(a->vm);
+    m = ujs_object_new(a->vm);
+    ujs_set(a->vm, m, "id", ujs_string(a->vm, uc_cfg_str("ai.model"), -1));
+    ujs_set(a->vm, m, "vendor", ujs_string(a->vm, "anthropic", -1));
+    ujs_set(a->vm, m, "family", ujs_string(a->vm, uc_cfg_str("ai.model"), -1));
+    ujs_set(a->vm, m, "name", ujs_string(a->vm, uc_cfg_str("ai.model"), -1));
+    ujs_set(a->vm, m, "__ext", ujs_number(g_cur_ext));
+    ujs_set_fn(a->vm, m, "sendRequest", js_lm_sendRequest, 2);
+    ujs_array_push(a->vm, arr, m);
+    return pending_thenable_val(a->vm, arr);
+}
+
+static ujs_val js_lmmsg_user(ujs_args *a)
+{
+    ujs_val o = ujs_object_new(a->vm);
+    ujs_set(a->vm, o, "role", ujs_string(a->vm, "user", -1));
+    ujs_set(a->vm, o, "content", ujs_string(a->vm, arg_str(a, 0, ""), -1));
+    return o;
+}
+static ujs_val js_lmmsg_assistant(ujs_args *a)
+{
+    ujs_val o = ujs_object_new(a->vm);
+    ujs_set(a->vm, o, "role", ujs_string(a->vm, "assistant", -1));
+    ujs_set(a->vm, o, "content", ujs_string(a->vm, arg_str(a, 0, ""), -1));
+    return o;
+}
+
 /* ---- building the API object -------------------------------------------------------- */
 static ujs_val g_api;              /* the `vscode` namespace, rooted        */
 
@@ -900,12 +1216,26 @@ static void build_api(ujs_vm *vm)
     fs = ujs_object_new(vm);
     ujs_set_fn(vm, fs, "readFile", js_fs_read, 1);
     ujs_set_fn(vm, fs, "writeFile", js_fs_write, 2);
+    ujs_set_fn(vm, fs, "readDirectory", js_fs_readdir, 1);
     ujs_set(vm, ws, "fs", fs);
+    /* whether this platform can launch a user program at all - the shell's
+     * answer, not a guess, so an assistant offers only what exists (UCD-51) */
+    ujs_set(vm, ws, "canRunPrograms", ujs_bool(pc64_shell_can_run()));
+    ujs_set_fn(vm, ws, "runUserProgram", js_run_user, 1);
     ujs_set(vm, g_api, "workspace", ws);
 
     langs = ujs_object_new(vm);
     ujs_set_fn(vm, langs, "registerCompletionItemProvider", js_register_completion, 3);
     ujs_set(vm, g_api, "languages", langs);
+
+    {   /* vscode.lm (UCD-50) - present for everyone, GATED at the call */
+        ujs_val lm = ujs_object_new(vm), lmm = ujs_object_new(vm);
+        ujs_set_fn(vm, lm, "selectChatModels", js_lm_select, 1);
+        ujs_set(vm, g_api, "lm", lm);
+        ujs_set_fn(vm, lmm, "User", js_lmmsg_user, 1);
+        ujs_set_fn(vm, lmm, "Assistant", js_lmmsg_assistant, 1);
+        ujs_set(vm, g_api, "LanguageModelChatMessage", lmm);
+    }
 
     ujs_set_fn(vm, g_api, "Position", js_position_ctor, 2);
     ujs_set_fn(vm, g_api, "Range", js_range_ctor, 4);
@@ -935,6 +1265,9 @@ int uc_api_init(void)
     g_out_ch = uc_output_channel("Extension Host");
     g_handlers = ujs_array_new(g_vm);
     ujs_root(g_vm, g_handlers);
+    g_pendvals = ujs_array_new(g_vm);
+    ujs_root(g_vm, g_pendvals);
+    memset(g_vused, 0, sizeof g_vused);
     g_nh = 0;
     g_nprov = 0;
     g_nlisten = 0;
@@ -1037,8 +1370,17 @@ void uc_api_pump(void)
      * being walked is never the batch being written. */
     int i, n = g_npend;
     if (!n) return;
-    for (i = 0; i < n; i++)
-        uc_api_call_str(g_pend[i].id, g_pend[i].has ? g_pend[i].val : "");
+    for (i = 0; i < n; i++) {
+        if (g_pend[i].vslot >= 0) {
+            ujs_val v = ujs_undefined();
+            ujs_get_index(g_vm, g_pendvals, (unsigned)g_pend[i].vslot, &v);
+            api_call_val(g_pend[i].id, v);
+            ujs_set_index(g_vm, g_pendvals, (unsigned)g_pend[i].vslot,
+                          ujs_undefined());
+            g_vused[g_pend[i].vslot] = 0;
+        } else
+            uc_api_call_str(g_pend[i].id, g_pend[i].has ? g_pend[i].val : "");
+    }
     memmove(g_pend, g_pend + n,
             (unsigned long)(g_npend - n) * sizeof g_pend[0]);
     g_npend -= n;

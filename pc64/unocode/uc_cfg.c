@@ -73,7 +73,9 @@ static const UcSettingDef kDefs[] = {
 { "extensions.autoActivate", UC_T_BOOL, "true", 0, "Activate extensions on their activation events.", 0, 0 },
 { "extensions.fuelPerSlice", UC_T_INT, "400000", 0, "Interpreter steps one extension call may use.", 1000, 20000000 },
 { "extensions.heapMB", UC_T_INT, "4", 0, "Extension-host JavaScript heap, MB.", 1, 32 },
-{ "unocode.buildOnSave", UC_T_BOOL, "false", 0, "Run the default build task after every save.", 0, 0 }
+{ "unocode.buildOnSave", UC_T_BOOL, "false", 0, "Run the default build task after every save.", 0, 0 },
+{ "ai.model", UC_T_STR, "claude-sonnet-5", 0, "The Anthropic model the assistant talks to.", 0, 0 },
+{ "ai.maxTokens", UC_T_INT, "1024", 0, "Longest reply the assistant may generate, tokens.", 64, 32000 }
 };
 #define NDEFS ((int)(sizeof kDefs / sizeof kDefs[0]))
 

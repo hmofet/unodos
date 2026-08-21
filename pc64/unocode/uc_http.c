@@ -309,12 +309,18 @@ static void sse_line(uc_http *h, const char *s, int n)
 /* ---- the body ------------------------------------------------------------- */
 
 /* Body bytes, however they were framed.  With an SSE handler installed they go
- * through the line assembler and are NOT kept; without one they accumulate. */
+ * through the line assembler and are NOT kept; without one they accumulate.
+ *
+ * EXCEPT when the status is not 2xx.  An error reply is a BODY, not a stream:
+ * a 401's JSON is one line matching no SSE field, so feeding it to the line
+ * assembler silently deletes the server's whole explanation - the caller sees
+ * "401" and nothing else, which turns a fixable key problem into a mystery.
+ * The status always precedes the body, so the choice can be made per byte. */
 static int take_body(uc_http *h, const char *p, int n)
 {
     int i;
 
-    if (h->sse) {
+    if (h->sse && h->status / 100 == 2) {
         for (i = 0; i < n; i++) {
             char c = p[i];
             if (c == '\r') continue;                 /* CRLF or LF, both      */
@@ -407,7 +413,11 @@ static int feed(uc_http *h, char c)
 
     case S_BODY:
         if (!take_body(h, &c, 1)) return 0;
-        if (h->content_len >= 0 && h->blen >= h->content_len && !h->sse) {
+        /* the accumulated cases: no handler, or an error reply being kept for
+         * the caller (take_body above).  A streamed 2xx has no meaningful
+         * Content-Length to complete against - the server ends it. */
+        if (h->content_len >= 0 && h->blen >= h->content_len &&
+            (!h->sse || h->status / 100 != 2)) {
             h->state = S_DONE;
             return 0;
         }

@@ -481,7 +481,10 @@ static void uc_opened(void)
 static void uc_closed(void)
 {
     /* the documents stay: closing the window is not closing the workspace, and
-     * a reopened UnoCode with the same editors is what the user expects */
+     * a reopened UnoCode with the same editors is what the user expects.  An
+     * in-flight generation does NOT stay: tearing the connection down here is
+     * what keeps a closed window from leaking a socket (UCD-47's rule). */
+    uc_ai_abort();
     uc_quick_close();
     uc_find_close();
     uc_suggest_close();
@@ -495,6 +498,7 @@ static void uc_frame(void)
     unsigned long phase = uno_dbg_uptime_ms() / 530;
     uc_notif_tick();
     uc_api_pump();
+    uc_ai_tick();
     /* Repaint on the CARET's cadence, not on the frame's: a blinking caret
      * needs two repaints a second, and asking for one every frame would keep
      * the whole desktop compositing for no visible difference. */

@@ -1208,6 +1208,8 @@ void uc_cmd_init(void)
 
     reg("unocode.ai.setApiKey", "AI", "Set API Key", c_set_key);
     reg("unocode.ai.clearApiKey", "AI", "Clear API Key", c_clear_key);
+    reg("unocode.ai.openChat", "AI", "Open Chat", uc_ai_open);
+    reg("unocode.ai.newChat", "AI", "New Chat", uc_ai_clear);
 
     reg("workbench.action.reloadWindow", "Developer", "Reload Extensions", c_reload_ext);
     reg("workbench.action.tasks.runTask", "Tasks", "Run Task", c_run_task);

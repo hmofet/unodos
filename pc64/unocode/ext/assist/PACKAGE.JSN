@@ -1,0 +1,28 @@
+// VENDORED FILE - DO NOT EDIT HERE.
+//
+// UnoCode is developed at https://github.com/hmofet/unocode-desktop, in its core/ directory.
+// An edit made here is lost at the next sync, and until then it silently
+// forks the editor away from the tree the desktop builds are cut from.
+//
+// Change it there; bring it back with pc64/tools/sync_unocode.py.
+// See pc64/UNOCODE-UPSTREAM.md.
+{
+    // The assistant (UCD-51): the extension that turns the model into
+    // something that writes software.  It is an EXTENSION, not a built-in,
+    // on purpose - it uses only what vscode.lm and the manifest permission
+    // grant, so it is also the worked example of both.
+    "name": "assist",
+    "displayName": "Assistant",
+    "description": "Writes and fixes programs in this workspace, with your consent at every file write.",
+    "version": "1.0.0",
+    "publisher": "unodos",
+    "engines": { "unocode": "^1.0.0" },
+    "main": "MAIN.JS",
+    "permissions": ["languageModels"],
+    "activationEvents": ["onCommand:assist.task"],
+    "contributes": {
+        "commands": [
+            { "command": "assist.task", "title": "Do a Task", "category": "Assistant" }
+        ]
+    }
+}
