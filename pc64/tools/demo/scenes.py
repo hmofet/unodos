@@ -1915,6 +1915,98 @@ SSH_SETUP = "exec sh"
 SSH_CMDS = ["hostname", "uname -a", "uptime", "ls /"]
 
 
+def s16_unocode(d):
+    """UnoCode: the workbench, a VS Code theme applied from an extension, an
+    extension's JavaScript running, and the integrated terminal.
+
+    It sits after s07 because the two say different things and the order
+    matters: Studio is "this machine compiles for itself", UnoCode is "and the
+    editor around that is a real one, that real VS Code extensions load into".
+    Leading with UnoCode would make Studio look like the lesser editor, which
+    is backwards - Studio is the thing with the compiler behind it.
+
+    WHAT IS DELIBERATELY NOT FILMED. The extension host's fuel bound is the
+    most interesting thing in the subsystem and it is invisible: what it does
+    is NOT hang the desktop, and a shot of a desktop that has not hung is a
+    shot of nothing. It stays in the narration for the Extensions view, which
+    at least shows an extension's measured activation time on its row.
+
+    KEY ENCODING. UnoCode reads Shift off the CASE of the character (the
+    header of unocode/uc_main.c), so d.ctrl("P") IS Ctrl+Shift+P - the command
+    palette - while d.ctrl("p") is Go to File. Two different commands, one
+    letter apart in case only, and getting it wrong opens the wrong overlay and
+    types the filter text into a document. Both are used below, on purpose.
+
+    THE THEME IS APPLIED FROM THE TERMINAL, not the palette. The palette's
+    theme picker needs an arrow walk through a list whose length depends on how
+    many themes the extensions contributed, and a scene that counts Downs
+    lands on the wrong row the moment anybody adds one - the same trap
+    docs_shots.py's roster check exists for. `theme <name>` names it.
+
+    TWO THINGS THE FIRST TAKE (2026-08-21) GOT WRONG, both invisible in the
+    beat log and both obvious in an extracted frame:
+
+    1. It switched straight to Nord, and UnoCode's DEFAULT theme is already
+       dark. Two dark themes one after the other is a change only a diff can
+       see, and the narration was going to claim the workbench repaints. So it
+       now goes to the built-in LIGHT theme first: dark -> light is
+       unmistakable, and Nord afterwards is then a visible second change AND
+       the one that is actually an extension's file.
+    2. Ctrl+` was pressed a SECOND time for the closing command, and
+       uc_toggle_panel() closes the panel when it is already visible, on the
+       terminal tab, and focused - which it was. The `js 6*7` went nowhere, the
+       beat logged fine, and the frame shows a closed panel. Ctrl+` is now
+       pressed EXACTLY ONCE, while the panel is shut, and every terminal
+       command runs consecutively without anything stealing focus in between.
+
+    Paced for video: every hold below is a viewer reading the screen, not a
+    settle a test would need."""
+    d.beat("open-unocode")
+    d.launch("unocode", settle=6.0)
+    time.sleep(3.5)                                  # the workbench, whole
+
+    # Go to File, which is how anybody actually opens something here.
+    d.beat("go-to-a-file-by-name")
+    d.ctrl("p", settle=1.2)
+    d.text("SAMPLE", settle=0.12)
+    time.sleep(1.4)                                  # the filtered list
+    d.key(13, settle=2.0)
+    time.sleep(2.6)                                  # the file, highlighted
+
+    d.beat("the-command-palette")
+    d.ctrl("P", settle=1.2)                          # Ctrl+Shift+P
+    d.text("theme", settle=0.14)
+    time.sleep(2.0)                                  # the filtered commands
+    d.key(0, scan=S_ESC, settle=1.0)
+
+    d.beat("an-extension-runs-javascript")
+    d.ctrl("P", settle=1.2)
+    d.text("Say Hello", settle=0.14)
+    time.sleep(1.2)
+    d.key(13, settle=1.5)                            # activate + run + notify
+    time.sleep(3.2)                                  # hold on the notification
+
+    # ONE Ctrl+` for the rest of the scene. See note 2 above.
+    d.beat("the-terminal-evaluates-javascript")
+    d.ctrl("`", settle=1.4)                          # the integrated terminal
+    d.text("js 6*7", settle=0.14)
+    d.key(13, settle=1.0)
+    time.sleep(2.8)                                  # 42, on the machine
+
+    d.beat("the-editor-is-themeable")
+    d.text("theme Light+", settle=0.12)              # uc_theme_select is
+    d.key(13, settle=1.0)                            # forgiving about the
+    time.sleep(3.0)                                  # "(default light)" suffix
+
+    # The money shot: a colour theme written for VS Code, unmodified, repaints
+    # the whole workbench - and this one came out of EXT\NORD, not the build.
+    d.beat("a-vs-code-theme-repaints-it")
+    d.text("theme Nord", settle=0.12)
+    d.key(13, settle=1.0)
+    time.sleep(3.4)                                  # hold on the new colours
+    # No teardown on camera: reset() closes the window after the stream stops.
+
+
 def s13_pre(d):
     """Author SSHSTORE.DAT on the host and stage it onto the volume the device
     will look for it on.
@@ -2115,6 +2207,9 @@ SCENES = [
     ("s04", (s04_pre, s04_office)),
     ("s05", (None, s05_browser)),
     ("s07", (s07_pre, s07_studio)),
+    # After s07 in the cut too. No _pre: UnoCode opens the SDK sources that
+    # build.sh already stages on the ESP, so there is nothing to push first.
+    ("s16", (None, s16_unocode)),
     ("s09", (s09_pre, s09_automate)),
     ("s15", (None, s15_arcade)),
     ("s08", (s08_pre, s08_duum)),

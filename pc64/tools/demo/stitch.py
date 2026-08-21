@@ -36,6 +36,10 @@ SPINE = [
     ("s05", "Web browser"),
     ("s06", "Media"),
     ("s07", "Studio IDE"),
+    # Added for v3.34.0, the release UnoCode shipped in. It goes AFTER Studio
+    # deliberately: Studio is the one with the compiler behind it, and leading
+    # with the editor would read as though it were the better of the two.
+    ("s16", "UnoCode"),
     # s12, the games and the tracker, is OUT of the cut (2026-08-17). Dostris,
     # Pac-Man and OutLast are driven by the machine's own sequencer, and under
     # QEMU the guest is too slow to keep the audio clean, so the music sounded
