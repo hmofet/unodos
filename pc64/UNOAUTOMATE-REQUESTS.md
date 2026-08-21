@@ -9837,3 +9837,45 @@ back in" scare in this session was that, not the guest. Also note the guest
 RE-DIALS when its link drops without rebooting, so `_connected` alone cannot
 tell a reconnect from a reboot - compare `uptime`, and idle long enough first
 that the two are unmistakable.
+
+## 2026-08-21 - filming/manual pass for v3.34.0
+
+CLAIM: taking the app-registry lane for one commit (the PYAPP window title
+below). Found while regenerating the manual figures and the demo film, not
+looked for.
+
+### An installed Python app's window was titled by its FILENAME
+
+`harness.py unoapps` refused Duum: it opened the app and got a window titled
+`DUUM.UNO` where the roster's declared name is `Duum`. That is not a harness
+expectation problem, it is the product: the desktop icon and the Start-menu row
+read **Duum**, and the title bar and the taskbar button read **DUUM.UNO**, on
+the same screen at the same time. It is visible in a shipped manual figure
+(`docs/assets/img/duum_start.png`) and in the published demo film's Duum scene,
+which is the biggest scene in it.
+
+Cause: `pc64_shell_run_python()` handed `g_pyrt->load()` the PATH, and PYRT
+titles the window after whatever string it is given (`gName` in `apps/pyrt.c`,
+basename of the argument). The app descriptor - the app's declared identity
+everywhere else in the shell - was never consulted on this one path.
+
+Fixed in the shell rather than in PYRT, so the PyHost ABI does not move: read
+the descriptor and pass `name:` when the module carries one. Deliberately
+requires `uno_mod_desc_read() == 0`, not `>= 0` - a module with NO descriptor
+gets a name filled in from the filename stem, so accepting `1` would have
+quietly retitled every app Studio runs (`SAMPLE.UNO` -> `SAMPLE`) and changed
+the s07 footage as a side effect.
+
+Affects every PYAPP that ships a descriptor, so it would have hit the next one
+too. Shipped in v3.34.0 as-is; the fix lands after the tag.
+
+### Two docstrings in the demo driver are now stale, and one of them mattered
+
+`scenes.py` `s15_arcade` chose Pac-Man over Dostris on the grounds that
+"Dostris' music OUTLIVES it (a known open bug: the sequencer keeps playing
+after the window closes)" and that "Pac-Man stays in a desktop window, ticks on
+its own, and makes no sound at all." Both halves are now false: `dostris.c` and
+`pacman.c` each grew a `closed()` that stops the sequencer, and Pac-Man has
+four tunes. The scene still works and the narration still does not claim
+silence, so nothing shipped wrong - but the next person to re-pick that scene
+would be reading a rationale that no longer holds.
