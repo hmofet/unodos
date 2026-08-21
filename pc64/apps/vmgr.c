@@ -26,8 +26,10 @@ static const struct unoui_theme *TH(void) { return pc64_shell_theme(); }
 
 #define ROW_H 16
 
-enum { V_LIST, V_CONSOLE };
+enum { V_LIST, V_CONSOLE, V_DISPLAY };
 static int  g_view = V_LIST;
+static int  g_mx = -1, g_my;        /* last pointer position in the display */
+static unsigned g_mbtns;            /* buttons currently down               */
 static int  g_sel;                  /* selected appliance                   */
 static int  g_edit = -1;            /* field being edited, -1 = none        */
 static int  g_top;                  /* console scroll                       */
@@ -41,9 +43,10 @@ static uno_vm_def g_buf;
 enum { F_NAME, F_KERNEL, F_INITRD, F_DISK, F_N };
 static const char *kFieldName[F_N] = { "Name", "Kernel", "Initrd", "Disk" };
 
-enum { B_NEW, B_DEL, B_START, B_STOP, B_VIEW, B_N };
+enum { B_NEW, B_DEL, B_START, B_STOP, B_VIEW, B_DISP, B_N };
 static unoui_rect g_btn[B_N];
 static unoui_rect g_rows_r[UNO_VM_MAX];
+static unoui_rect g_body;           /* the view area, set by vm_draw        */
 
 static int in_rect(unoui_rect r, int x, int y)
 { return x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h; }
@@ -162,29 +165,66 @@ static void draw_console(unoui_rect c)
                                       : "no appliance is running", p->text_dim, -1);
 }
 
+/* ---- the display (A8): the guest's framebuffer, live ----------------------
+ * One swizzle per visible row, only while this view is up: the guest writes
+ * XRGB (blue low) because that is the format screen_info consumers actually
+ * match, and fb.h is 0xAABBGGRR (red low).  Clipped top-left rather than
+ * scaled - a scaled fbcon is unreadable, and the window resizes. */
+static void draw_display(unoui_rect c)
+{
+    const unoui_palette *p = &TH()->pal;
+    static unsigned rowbuf[1920];
+    int fw = 0, fh = 0, vw, vh, y, x;
+    const unsigned *fb = (const unsigned *)uno_vm_fb(&fw, &fh);
+
+    fb_fill_rect(c.x, c.y, c.w, c.h, p->field_bg);
+    if (!fb) {
+        fb_text(c.x + 6, c.y + 4, "no guest display - Start an appliance",
+                p->text_dim, -1);
+        return;
+    }
+    vw = fw < c.w ? fw : c.w;
+    vh = fh < c.h ? fh : c.h;
+    if (vw > (int)(sizeof rowbuf / 4)) vw = (int)(sizeof rowbuf / 4);
+    for (y = 0; y < vh; y++) {
+        const unsigned *src = fb + (unsigned)y * (unsigned)fw;
+        for (x = 0; x < vw; x++) {
+            unsigned v = src[x];
+            rowbuf[x] = 0xFF000000u | (v & 0x0000FF00u)
+                      | ((v & 0xFFu) << 16) | ((v >> 16) & 0xFFu);
+        }
+        fb_blit(c.x, c.y + y, vw, 1, (const fb_px *)rowbuf, vw);
+    }
+}
+
 static void vm_draw(unoui_widget *w, unoui_rect c, void *ctx)
 {
     const unoui_palette *p = &TH()->pal;
     unoui_rect body = c;
     int bx = c.x + 6, by, i;
-    static const char *kLabel[B_N] = { "New", "Delete", "Start", "Stop", "Console" };
+    static const char *kLabel[B_N] = { "New", "Delete", "Start", "Stop",
+                                       "Console", "Display" };
     (void)w; (void)ctx;
 
     fb_fill_rect(c.x, c.y, c.w, c.h, p->face);
 
     by = c.y + c.h - 26;
     for (i = 0; i < B_N; i++) {
-        g_btn[i].x = bx; g_btn[i].y = by; g_btn[i].w = 76; g_btn[i].h = 20;
-        bx += 80;
+        g_btn[i].x = bx; g_btn[i].y = by; g_btn[i].w = 66; g_btn[i].h = 20;
+        bx += 70;
     }
     body.h -= 52;
+    g_body = body;
 
-    if (g_view == V_LIST) draw_list(body); else draw_console(body);
+    if (g_view == V_LIST) draw_list(body);
+    else if (g_view == V_CONSOLE) draw_console(body);
+    else draw_display(body);
 
     for (i = 0; i < B_N; i++)
         btn_draw(g_btn[i], i == B_VIEW
                  ? (g_view == V_LIST ? "Console" : "List") : kLabel[i],
-                 i == B_VIEW && g_view == V_CONSOLE);
+                 (i == B_VIEW && g_view == V_CONSOLE)
+                 || (i == B_DISP && g_view == V_DISPLAY));
 
     /* One status line, always: the manager's own last word, then unovirt's.
      * Two sources because they fail differently - "no appliance selected" is
@@ -193,10 +233,36 @@ static void vm_draw(unoui_widget *w, unoui_rect c, void *ctx)
             p->text_dim, -1);
 }
 
+/* Forward one pointer event into the guest as PS/2 deltas.  The guest's
+ * cursor and ours drift apart (a relative mouse has no way to agree on a
+ * position), which is the honest cost of stock guest drivers; the seamless
+ * agent (B1) is what removes it. */
+static int display_mouse(const unoui_event *e)
+{
+    int dx = 0, dy = 0;
+    if (!in_rect(g_body, e->x, e->y) && g_mx < 0) return 0;
+    if (g_mx >= 0) { dx = e->x - g_mx; dy = e->y - g_my; }
+    g_mx = e->x; g_my = e->y;
+    switch (e->kind) {
+    case UI_EV_MOUSE_DOWN: g_mbtns |= 1u << e->button; break;
+    case UI_EV_MOUSE_UP:   g_mbtns &= ~(1u << e->button); break;
+    case UI_EV_WHEEL:
+        uno_vm_input_mouse(0, 0, g_mbtns, e->wheel);
+        return 1;
+    default: break;
+    }
+    uno_vm_input_mouse(dx, dy, g_mbtns, 0);
+    return 1;
+}
+
 static int vm_event(unoui_widget *w, const unoui_event *e, void *ctx)
 {
     int i, n = uno_vm_count();
     (void)w; (void)ctx;
+    if (g_view == V_DISPLAY
+        && (e->kind == UI_EV_MOUSE_MOVE || e->kind == UI_EV_MOUSE_UP
+            || e->kind == UI_EV_WHEEL))
+        return display_mouse(e);
     if (e->kind != UI_EV_MOUSE_DOWN) return 0;
 
     for (i = 0; i < B_N; i++) {
@@ -226,10 +292,17 @@ static int vm_event(unoui_widget *w, const unoui_event *e, void *ctx)
             break;
         case B_STOP: uno_vm_stop(); say(""); break;
         case B_VIEW: g_view = g_view == V_LIST ? V_CONSOLE : V_LIST; break;
+        case B_DISP:
+            g_view = V_DISPLAY; g_mx = -1; g_mbtns = 0;
+            say("keys go to the guest - F12 returns to the list");
+            break;
         }
         pc64_shell_dirty();
         return 1;
     }
+
+    if (g_view == V_DISPLAY && e->kind == UI_EV_MOUSE_DOWN)
+        return display_mouse(e);
 
     if (g_view == V_LIST) {
         for (i = 0; i < n && i < UNO_VM_MAX; i++) {
@@ -280,6 +353,16 @@ static int vm_key(int uni, int scan, int ctrl)
         return 1;
     }
 
+    if (g_view == V_DISPLAY) {
+        /* EVERYTHING goes to the guest except the one key that comes back.
+         * F12 (EFI scan 0x16) leaves; a guest that needs F12 can have it
+         * from the Console view's shell instead. */
+        if (scan == 0x16) { g_view = V_LIST; pc64_shell_dirty(); return 1; }
+        if (scan) uno_vm_input_scan(scan);
+        else if (uni > 0) uno_vm_input_char(uni);
+        return 1;
+    }
+
     if (g_view == V_CONSOLE) {
         switch (scan) {
         case 0x09: g_follow = 0; g_top -= 10; if (g_top < 0) g_top = 0; break;
@@ -302,6 +385,10 @@ static int vm_key(int uni, int scan, int ctrl)
             if (n && uno_vm_start(g_sel)) { g_view = V_CONSOLE; g_follow = 1; }
             else say(uno_vm_status());
         } else if (uni == 'c' || uni == 'C') g_view = V_CONSOLE;
+        else if (uni == 'd' || uni == 'D') {
+            g_view = V_DISPLAY; g_mx = -1; g_mbtns = 0;
+            say("keys go to the guest - F12 returns to the list");
+        }
         else return 0;
     }
     pc64_shell_dirty();
@@ -314,6 +401,14 @@ static int vm_key(int uni, int scan, int ctrl)
 static void vm_frame(void)
 {
     unsigned s;
+    /* The display repaints every frame while a guest is live: the guest gets
+     * a slice per frame and may have drawn, and diffing its whole surface to
+     * find out would cost more than the swizzle.  The shell's present layer
+     * already diffs rows, so a quiet guest still costs no VRAM writes. */
+    if (g_view == V_DISPLAY) {
+        if (uno_vm_fb(0, 0)) pc64_shell_dirty();
+        return;
+    }
     if (g_view != V_CONSOLE || !g_follow) return;
     s = uno_vm_con_seq();
     if (s == g_seen) return;
@@ -326,9 +421,12 @@ static unoui_canvas g_canvas = { vm_draw, vm_event, 0 };
 static void vm_build(unoui_window *win)
 {
     const unoui_metrics *m = &TH()->m;
+    /* Wide enough for the guest's 800px display when the screen allows it;
+     * the display view clips top-left when it does not, and the window
+     * resizes either way. */
     int aw = fb_width() - 150, ah = fb_height() - 140;
-    if (aw > 720) aw = 720; if (aw < 460) aw = 460;
-    if (ah > 460) ah = 460; if (ah < 300) ah = 300;
+    if (aw > 820) aw = 820; if (aw < 460) aw = 460;
+    if (ah > 660) ah = 660; if (ah < 300) ah = 300;
     unoui_window_init(win, "Appliances", 52, 40,
                       aw + 2 * m->frame_w + 2 * m->pad,
                       ah + m->title_h + 2 * m->pad + m->frame_w);

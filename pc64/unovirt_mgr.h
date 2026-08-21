@@ -66,4 +66,21 @@ const char *uno_vm_path_kernel(void);
 const char *uno_vm_path_initrd(void);
 const char *uno_vm_path_disk(void);
 
+/* The display (A8).  `fb` is the guest's surface as a host pointer with its
+ * geometry - XRGB8888, pitch w*4, NULL when nothing is running or the boot
+ * placed no surface; the caller blits (and swizzles - fb.h is 0xAABBGGRR).
+ * The input calls are the Display window's event hooks: characters and EFI
+ * scan codes to the emulated keyboard, pixel deltas and unoui buttons to the
+ * emulated mouse.  All press+release edges; see unovdev.h. */
+void *uno_vm_fb(int *w, int *h);
+void uno_vm_input_char(int ch);
+void uno_vm_input_scan(int efi_scan);
+void uno_vm_input_mouse(int dx, int dy, unsigned buttons, int wheel);
+int  uno_vm_input_str(char *buf, int cap);
+
+/* The guest's one-line progress ("running: 333 lines ... shell ANSWERED"),
+ * whoever armed it - the manager or the selftest.  What uno.vm_status()
+ * (PYRT) answers, so a harness can poll a boot instead of timing it. */
+const char *uno_vm_progress(void);
+
 #endif /* UNO_VIRT_MGR_H */
