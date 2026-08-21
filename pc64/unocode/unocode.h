@@ -152,7 +152,10 @@ const char *uc_json_str (const UcJson *o, const char *key, const char *dflt);
 double      uc_json_num (const UcJson *o, const char *key, double dflt);
 int         uc_json_bool(const UcJson *o, const char *key, int dflt);
 /* "editor.minimap.enabled" walks nested objects AND flat dotted keys, because
- * VS Code's settings.json accepts either spelling for the same setting. */
+ * VS Code's settings.json accepts either spelling for the same setting.
+ * An all-digit segment indexes an ARRAY when the node at that point is one, so
+ * "content.0.text" reaches into an API response; an object member literally
+ * named "0" still resolves by name. */
 UcJson     *uc_json_path(const UcJson *root, const char *dotted);
 
 /* A JSON string escaper for the writers (settings.json, keybindings.json). */
