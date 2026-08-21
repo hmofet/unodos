@@ -9721,8 +9721,17 @@ fix below has a before/after screenshot or measurement from the same probe, so
 
 ### Session restore reopening Control Panel
 
-Not reproducible in QEMU - a three-app session restores correctly there - so
-this is environment-specific, and the demonstrable defect underneath it is a
+**ROOT-CAUSED ON THE BOX, 2026-08-21** - see `CONFORMANCE-2026-08.md` 10a. It
+was never a slot/index bug. The ZimaBlade's dead eMMC carries a **zero-byte**
+SHELL.CFG at volume 1 and `prefs_read` stopped on the first read that was not
+NEGATIVE; zero is not negative. So every boot parsed an empty buffer, and it was
+discarding every Control Panel PREFERENCE on that machine too. Fixed by asking
+`session_vol()` first AND by requiring `got > 0`. Verified on metal: saved
+`open=control,files,clock,unoamp`, rebooted, all four windows returned.
+
+The original QEMU note, kept because it is why the root cause took a real
+machine: not reproducible there - a three-app session restores correctly - so
+this looked environment-specific, and the demonstrable defect underneath it was a
 **save/load disagreement about which volume owns the file**. `session_vol()`
 deliberately binds SHELL.CFG to the boot volume; the reader scanned from
 volume 0 and took the first SHELL.CFG it found. On a machine with more than one
