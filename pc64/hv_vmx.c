@@ -166,6 +166,7 @@ typedef unsigned long long u64;
 #define PROC_IO_EXITING   (1u << 24)
 #define PROC_SECONDARY    (1u << 31)
 #define PROC2_EPT         (1u << 1)
+#define PROC2_RDTSCP      (1u << 3)
 #define PROC2_INVPCID     (1u << 12)
 #define EXIT_HOST_ADDR64  (1u << 9)
 #define ENTRY_IA32E_GUEST (1u << 9)
@@ -464,7 +465,14 @@ static int vmcs_begin(const uno_vm_cfg *cfg)
     if (cfg->features & UNO_VMF_SLAT)    { proc_want |= PROC_SECONDARY;
                                            proc2_want |= PROC2_EPT; }
     if (cfg->features & UNO_VMF_IO_EXIT)  proc_want |= PROC_IO_EXITING;
-    if (cfg->features & UNO_VMF_INVPCID)  proc2_want |= PROC2_INVPCID;
+    /* RDTSCP rides with INVPCID because they share a failure shape (A6b's
+     * lesson, met again at A8's Chromium): the CPU has the instruction,
+     * CPUID says so, and it still #UDs in a guest until the secondary
+     * control asks - which is how a renderer crash-looped with `trap
+     * invalid opcode in libhwy` on the instruction AFTER all the SIMD was
+     * ruled out: rdtscp, in a profiler nobody suspected. */
+    if (cfg->features & UNO_VMF_INVPCID)  proc2_want |= PROC2_INVPCID
+                                                     | PROC2_RDTSCP;
 
     g_proc = adjust(IA32_VMX_TRUE_PROC, IA32_VMX_PROCBASED, proc_want, tr);
     vmwrite(PIN_BASED_CTLS,  adjust(IA32_VMX_TRUE_PIN, IA32_VMX_PINBASED,
