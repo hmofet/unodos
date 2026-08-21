@@ -209,6 +209,13 @@ static int bind(void)
 {
     EFI_LOADED_IMAGE *li = 0;
     if (iST) return 1;
+    /* Detached, the firmware half of the installer does not exist: boot
+     * services are gone, so iST->BootServices is a stale pointer and every
+     * iBS-> call below jumps into freed memory. Both callers already route to
+     * nat_scan/nat_install first, so this is the belt-and-braces test that
+     * makes the invariant a CHECK rather than a comment - which is the lesson
+     * of the Yoga crash loop (CONFORMANCE-2026-08.md §6). */
+    if (uno_pc64_detached()) { err("boot services are gone (detached)"); return 0; }
     iST = (EFI_SYSTEM_TABLE *)uno_pc64_st();
     if (!iST) { err("no system table"); return 0; }
     iBS = iST->BootServices;
