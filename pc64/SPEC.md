@@ -1859,6 +1859,22 @@ faults on the first instruction that assumes it.
   boot-services ranges would overstate a machine sitting on the floor, which
   is exactly the machine the answer matters for.
   site: `unovirt.c ram_mb_uefi` / `ram_mb_bios`.
+- **S-HV-49** [auto] The guest framebuffer (A8) MUST be reserved in the e820
+  map it hands the kernel, and its screen_info masks MUST describe the format
+  the pixels actually are (XRGB8888). Usable RAM under a framebuffer is a
+  desktop the kernel allocates over; masks that describe fb.h's red-low
+  layout fail sysfb's format match and fall to no display at all.
+- **S-HV-50** [auto] `uno_vmm_fb()` MUST return NULL whenever no guest is
+  armed. The surface lives in the carve, and a pointer into a carve nothing
+  runs in blits stale memory as if it were a desktop.
+- **S-HV-51** [auto] Host input pushed at the emulated i8042 MUST be dropped
+  until the guest's driver has enabled the matching CCB interrupt bit. Bytes
+  queued earlier sit in front of the probe conversation, and a probe that
+  reads a scancode where it expected an ACK mis-identifies the controller.
+- **S-HV-52** [auto] A slave-PIC line MUST be delivered through the cascade:
+  master line 2 in service, slave line in service, vector from the SLAVE's
+  ICW2 base. Delivering it as a master vector hands the guest an interrupt
+  its handler table never registered.
 
 ## S-AI, Studio AI assistant (live checks; SKIP without a link)
 

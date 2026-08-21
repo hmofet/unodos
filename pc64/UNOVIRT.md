@@ -813,6 +813,23 @@ than the hypervisor:
 
 ## Changelog
 
+- **2026-08-21, API 1.** A8 (in progress): the guest gets a DISPLAY and
+  INPUT. The boot protocol places a linear XRGB8888 framebuffer at the top
+  of the carve, reserves it in the e820 map, and describes it in
+  `boot_params.screen_info` as VIDEO_TYPE_EFI - which a stock kernel drives
+  through sysfb (simpledrm or efifb) with no driver from us.  `uno_vmm_fb()`
+  hands the surface to a blitter, NULL when nothing is armed (S-HV-49/50).
+  Input is an emulated i8042 in unovdev_pc.c - PS/2 set-1 keyboard plus an
+  IntelliMouse on the aux port, with the slave PIC wired through the cascade
+  for IRQ12 (S-HV-51/52) - because virtio-input cannot cross virtio-mmio v2
+  (bitmap-sized config reads BUG() in the guest's own transport) and every
+  distro ships it =m anyway.  The Appliances app gained a Display view: the
+  surface blitted (and swizzled - fb.h is 0xAABBGGRR) into a UI_CANVAS, keys
+  and pointer forwarded, F12 to leave.  The appliance payload builds under
+  `guest/appliance/` now: a 6.12 kernel with everything =y, an initramfs
+  with a shell on ttyS0 AND tty1, and an Alpine+Xorg+Chromium rootfs for
+  the browser milestone.  `uno.vm_status()` (PYRT) reports the guest's
+  progress line so a harness can poll instead of guessing at wall time.
 - **2026-08-07, API 1.** The backend seam is generic. `uno_hv_t` loses its nine
   per-phase entries and gains `vcpu_create` / `vcpu_run` / `map` / `inject` plus
   a `get`/`set` window on vCPU state; the phase tests move to `hv_phases.c`

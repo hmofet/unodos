@@ -696,6 +696,21 @@ const char *uno_vmm_slice_str(void) { return g_slice_str; }
 
 const char *uno_vmm_linux_str(void) { return g_lin_str; }
 
+/* A8: the running guest's framebuffer as a host pointer, or NULL.  Gated on
+ * the kernel actually being armed: the surface lives in the carve, and a
+ * pointer into a carve nothing is running in is an invitation to blit stale
+ * memory as if it were a desktop. */
+void *uno_vmm_fb(int *w, int *h)
+{
+    unsigned long long gpa;
+    int fw, fh;
+    if (!g_lin_armed) return 0;
+    if (!uno_hvp_fb(&gpa, &fw, &fh)) return 0;
+    if (w) *w = fw;
+    if (h) *h = fh;
+    return uno_vmm_gpa(gpa, (unsigned long long)fw * (unsigned)fh * 4u);
+}
+
 void uno_vmm_tick(void)
 {
     uno_vmexit ex;
