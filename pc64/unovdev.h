@@ -41,6 +41,26 @@ int uno_vnet_respond(const unsigned char *in, int len,
 const unsigned char *uno_vnet_guest_mac(void);
 int uno_vnet_str(char *buf, int cap);
 
+/* THE BRIDGE (M3): the guest on the real wire instead of the synthetic peer.
+ * `start` takes the link unonet is already driving (net_nic()); the guest
+ * keeps its own MAC and DHCPs for its own address, which works because the
+ * NIC drivers run promiscuous.  `rx` is called from net_poll for EVERY
+ * inbound frame and returns 1 only when the frame is the guest's alone -
+ * broadcast and multicast are copied to the guest AND returned 0, because
+ * ARP and DHCP need both stacks to see them. */
+struct uno_nic;
+void uno_vnet_bridge_start(struct uno_nic *nic);
+void uno_vnet_bridge_stop(void);
+int  uno_vnet_bridge_active(void);
+int  uno_vnet_bridge_tx(const unsigned char *frame, int len);
+int  uno_vnet_bridge_rx(const unsigned char *frame, int len);
+int  uno_vnet_bridge_str(char *buf, int cap);
+
+/* Put one frame into a receive buffer the guest has posted.  0 = it had none
+ * and the frame was dropped, which is what a real NIC does to a driver that
+ * has not kept its ring fed. */
+int uno_vdev_net_rx(const unsigned char *frame, int len);
+
 /* The register traffic, one transaction per call: dev<<45 | write<<44 |
  * off<<32 | value, 0 past the end.  A driver reports its conclusion ("device
  * refuses features"); this is what it actually saw. */

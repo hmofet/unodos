@@ -10,6 +10,7 @@
 #include "unovirt.h"
 #include "unovirt_mgr.h"
 #include "unovdev.h"
+#include "net.h"           /* net_nic(): the link the guest shares */
 #include "pc64_fs.h"
 #include <stdio.h>
 #include <string.h>
@@ -238,6 +239,10 @@ int uno_vm_start(int i)
                  G[i].name);
         return 0;
     }
+    /* Put it on the wire if it asked for a network and there is one.  A NULL
+     * link is not an error: the guest falls back to the synthetic peer, which
+     * is exactly what every appliance had before M3. */
+    if (G[i].net) uno_vnet_bridge_start(net_nic());
     uno_vm_con_clear();
     snprintf(g_status, sizeof g_status, "%s is running", G[i].name);
     return 1;
@@ -246,6 +251,7 @@ int uno_vm_start(int i)
 void uno_vm_stop(void)
 {
     if (g_run < 0) return;
+    uno_vnet_bridge_stop();
     uno_vmm_stop_guest();
     snprintf(g_status, sizeof g_status, "%s stopped", G[g_run].name);
     g_run = -1;
