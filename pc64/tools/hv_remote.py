@@ -70,12 +70,20 @@ RUN = r"""# WAIT for the stragglers to go, do not guess.  A fixed `sleep 1` afte
 # and the debugcon log, a killed one takes a moment to release them, and the
 # next run then either starts cleanly or starts against a locked image
 # depending on timing.  Polling for the condition is both faster and certain.
-pkill qemu-system 2>/dev/null
+#
+# THE KILL IS SCOPED TO OUR OWN IMAGE, not to every QEMU on the box.  The
+# harness can now run on a machine that HOSTS things in QEMU (leviathan runs
+# the whole fleet, including the development VM this repo lives on), and a
+# bare `pkill qemu-system` there powers off machines that were never ours.
+# Matching the full command line is safe here and was not in the old inline
+# form: this script arrives as a FILE, so no shell's own command line carries
+# the pattern.
+pkill -f 'qemu-system-x86_64.*unodos-uefi.img' 2>/dev/null
 for i in $(seq 1 40); do
-  pgrep qemu-system >/dev/null 2>&1 || break
+  pgrep -f 'qemu-system-x86_64.*unodos-uefi.img' >/dev/null 2>&1 || break
   sleep 0.25
 done
-pkill -9 qemu-system 2>/dev/null; sleep 1
+pkill -9 -f 'qemu-system-x86_64.*unodos-uefi.img' 2>/dev/null; sleep 1
 cd /tmp && cp /usr/share/OVMF/OVMF_VARS_4M.fd hv_vars.fd &&
 timeout {t} qemu-system-x86_64 -machine q35 -m 4096 -cpu host -enable-kvm \
   -drive if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE_4M.fd \
