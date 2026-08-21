@@ -22,14 +22,22 @@ step() { printf '\n=== %s\n' "$1"; }
 # not hold is worse than no gate.
 fresh() { rm -rf build; }
 
+# `sh ./build.sh`, not `./build.sh`. build.sh is tracked mode 100644, so on any
+# fresh checkout it is NOT executable and `./build.sh` dies with exit 126
+# ("Permission denied") at the very first step - the gate cannot run at all
+# until someone chmods it, and nothing says so. The exec bit is set in the
+# index in the same commit, but invoking through `sh` means the gate no longer
+# DEPENDS on a mode bit, which a checkout on a filesystem that has none (or a
+# copied tree) would lose again.
+
 step "production build"
-fresh; ./build.sh >/dev/null
+fresh; sh ./build.sh >/dev/null
 step "debug build"
-fresh; UNO_DEBUG=1 ./build.sh >/dev/null
+fresh; UNO_DEBUG=1 sh ./build.sh >/dev/null
 step "unoweb-engine build (BROWSER_ENGINE=uw)"
-fresh; BROWSER_ENGINE=uw ./build.sh >/dev/null
+fresh; BROWSER_ENGINE=uw sh ./build.sh >/dev/null
 step "unoweb-engine debug build"
-fresh; BROWSER_ENGINE=uw UNO_DEBUG=1 ./build.sh >/dev/null
+fresh; BROWSER_ENGINE=uw UNO_DEBUG=1 sh ./build.sh >/dev/null
 
 # Run a host test, print only its last line, and FAIL THE GATE if it failed.
 # `test | tail -1` cannot do that: a pipeline's exit status is the LAST
@@ -96,6 +104,6 @@ fi
 # The QEMU suite needs the DEBUG image staged, and the loop above left the
 # uw-debug one in build/esp.
 step "restaging the plain debug image for SPECTEST"
-fresh; UNO_DEBUG=1 ./build.sh >/dev/null
+fresh; UNO_DEBUG=1 sh ./build.sh >/dev/null
 step "SPECTEST in QEMU"
 python3 tools/spectest_qemu.py | tail -3
