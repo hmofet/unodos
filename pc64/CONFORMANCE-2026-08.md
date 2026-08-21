@@ -136,7 +136,7 @@ prompt.
   is **Control Panel**, which was not in the list. Reproduced twice. Control is
   index 0 in the native app table, which is the shape of the bug.
 - **A Python app whose `draw()` raises reports nothing** (§7).
-- **WiFi is WPA2-only** (§8).
+- **WiFi is WPA2-only** (§8) - addressed after the run on branch `wpa3-sae`.
 - **The Yoga's network path collapses** (§6).
 
 Minor and deferred: the Audio tab draws its value over its label; the office
@@ -262,6 +262,21 @@ PMF/802.11w**. Modern Wi-Fi 6E/7 routers default to WPA3 or WPA2/WPA3
 transition with PMF, and 6 GHz *mandates* WPA3. The guest network worked
 precisely because guest SSIDs are commonly WPA2-only. As shipped, a large and
 growing share of home networks are unjoinable.
+
+**Addressed after this run** (branch `wpa3-sae`, see
+[WIFI-SECURITY.md](WIFI-SECURITY.md)): WPA3-SAE over group 19, an AKM-aware
+4-way handshake, and PMF. One correction to the diagnosis above, which had the
+cause right and the mechanism half right: the missing AKM was not the whole
+story. The driver did not parse a beacon's RSN element **at all** -
+`wpa_rsn_ie_ok()` existed and had zero callers - so a WPA3 BSS was not
+declined, it was attempted with the wrong AKM, and the deauthentication that
+came back was indistinguishable from a wrong password. That is why the failure
+carried no diagnostic content. `iwl sec` now prints what each scanned BSS
+offers and what we would negotiate with it.
+
+Verified on the host against an independent model of the 802.11 text; **not yet
+against a real access point**. Re-testing SKYNET on the Yoga's AX201 is the
+open item.
 
 ## 9. For the article
 
