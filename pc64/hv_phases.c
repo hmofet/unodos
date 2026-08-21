@@ -842,6 +842,24 @@ int uno_hvp_virtio(const uno_hv_t *hv, uno_vm_virtio *out)
 #define L_ZEROPG  0x900000ull
 #define L_KERNEL  0x1000000ull           /* 16 MiB, clear of everything      */
 #define L_INITRD  0x20000000ull          /* 512 MiB: past the kernel's reach */
+/* THE GUEST FRAMEBUFFER (A8).  A linear surface at the TOP of the carve,
+ * reserved in the e820 map so the kernel treats it as device memory rather
+ * than RAM, and named in boot_params.screen_info as a VIDEO_TYPE_EFI linear
+ * framebuffer - which is the one kind of display hardware every stock kernel
+ * can drive with no driver from us: sysfb turns it into simple-framebuffer
+ * (simpledrm) or efi-framebuffer (efifb), either of which gives the guest
+ * /dev/fb0 and a console.
+ *
+ * The format is XRGB8888 (blue in the low byte) rather than fb.h's
+ * 0xAABBGGRR, DELIBERATELY: XRGB is the one format every consumer of
+ * screen_info recognises (sysfb's simplefb table matches it by exact masks,
+ * and X/fbdev reads the masks), where red-low would fall back to the slow
+ * paths or fail the match entirely.  The host pays one swizzle in the blit,
+ * only while a display window is actually showing. */
+#define L_FB_W    800
+#define L_FB_H    600
+#define L_FB_RESERVE 0x400000ull         /* the hole in the e820 map         */
+static u64 g_fb_gpa;                     /* 0 = no surface this boot         */
 /* THE COMMAND LINE IS HOW THE GUEST LEARNS ITS DEVICES, and that is the whole
  * reason there is no PCI host bridge here: Linux takes virtio-mmio transports
  * from `virtio_mmio.device=<size>@<base>:<irq>`, so a bus, its config space
@@ -856,9 +874,21 @@ int uno_hvp_virtio(const uno_hv_t *hv, uno_vm_virtio *out)
  * driver posts a ring full of receive buffers and rings the doorbell for each,
  * drowning out every other diagnostic. A device a guest has no use for is a
  * liability, not a spare. */
+/* `rdinit=/init` rather than the old `/bin/sh`: the appliance initramfs
+ * (guest/appliance/build_initrd.sh) carries an /init that puts a shell on
+ * ttyS0 AND tty1, so the serial harness and the Display window each get one.
+ * An initramfs without /init will no longer boot to a shell - the payload is
+ * staged by tools/vm_stage.py from the same build, so the two move together. */
+/* `console=ttyS0` ONLY - deliberately not also tty0.  Listing tty0 makes the
+ * VT console register EARLY (as the dummy console, before fbcon binds), which
+ * disables the earlyprintk bootconsole and silently discards every message
+ * until a real console appears; the whole boot went invisible that way once.
+ * The framebuffer window still shows the guest's tty1 shell, which /init
+ * spawns - it just does not mirror the kernel log. */
 #define L_CMDLINE_TEXT \
-    "earlyprintk=serial,ttyS0,115200 console=ttyS0 nolapic no_timer_check " \
-    "panic=-1 nokaslr lpj=4000000 rdinit=/bin/sh " \
+    "earlyprintk=serial,ttyS0,115200,keep console=ttyS0 " \
+    "nolapic no_timer_check " \
+    "panic=-1 nokaslr lpj=4000000 rdinit=/init " \
     "virtio_mmio.device=0x200@0xd0000200:6 " \
     "virtio_mmio.device=0x200@0xd0000400:7"
 
@@ -962,13 +992,54 @@ static int lin_zeropage(const u8 *setup, u64 carve)
     *(u32 *)(zp + 0x218) = g_initrd_size ? (u32)L_INITRD : 0;
     *(u32 *)(zp + 0x21C) = (u32)g_initrd_size;
 
+    /* The framebuffer: the top L_FB_RESERVE of the carve, reserved below and
+     * described here.  screen_info sits at the very start of the zero page,
+     * and VIDEO_TYPE_EFI (0x70) is what routes it to sysfb/efifb rather than
+     * to the VGA text console code. */
+    g_fb_gpa = 0;
+    if (carve > 0x10000000ull + L_FB_RESERVE) {
+        u64 fb = carve - L_FB_RESERVE;
+        u8 *px = (u8 *)uno_vmm_gpa(fb, (u64)L_FB_W * L_FB_H * 4);
+        u32 k;
+        if (!px) return 0;
+        for (k = 0; k < (u32)(L_FB_W * L_FB_H * 4); k++) px[k] = 0;
+        g_fb_gpa = fb;
+        zp[0x0F] = 0x70;                            /* VIDEO_TYPE_EFI        */
+        *(u16 *)(zp + 0x12) = L_FB_W;               /* lfb_width             */
+        *(u16 *)(zp + 0x14) = L_FB_H;               /* lfb_height            */
+        *(u16 *)(zp + 0x16) = 32;                   /* lfb_depth             */
+        *(u32 *)(zp + 0x18) = (u32)fb;              /* lfb_base              */
+        *(u32 *)(zp + 0x1C) = L_FB_W * L_FB_H * 4;  /* lfb_size              */
+        *(u16 *)(zp + 0x24) = L_FB_W * 4;           /* lfb_linelength        */
+        zp[0x26] = 8; zp[0x27] = 16;                /* red: size, position   */
+        zp[0x28] = 8; zp[0x29] = 8;                 /* green                 */
+        zp[0x2A] = 8; zp[0x2B] = 0;                 /* blue                  */
+        zp[0x2C] = 8; zp[0x2D] = 24;                /* reserved byte         */
+    }
+
     e820_add(zp, &n, 0x00000000, 0x0009FC00, 1);
     e820_add(zp, &n, 0x0009FC00, 0x00000400, 2);
     e820_add(zp, &n, 0x000F0000, 0x00010000, 2);
     e820_add(zp, &n, 0x00100000, 0x00500000, 1);
     e820_add(zp, &n, 0x00600000, 0x00A00000, 2);   /* ours: tables, cmdline */
-    e820_add(zp, &n, 0x01000000, carve - 0x01000000, 1);
+    if (g_fb_gpa) {
+        e820_add(zp, &n, 0x01000000, g_fb_gpa - 0x01000000, 1);
+        e820_add(zp, &n, g_fb_gpa, carve - g_fb_gpa, 2);
+    } else {
+        e820_add(zp, &n, 0x01000000, carve - 0x01000000, 1);
+    }
     zp[0x1E8] = (u8)n;
+    return 1;
+}
+
+/* Where the surface is, for whoever blits it.  Guest-physical, because the
+ * caller goes through uno_vmm_gpa() like every other host access. */
+int uno_hvp_fb(unsigned long long *gpa, int *w, int *h)
+{
+    if (!g_fb_gpa) return 0;
+    if (gpa) *gpa = g_fb_gpa;
+    if (w) *w = L_FB_W;
+    if (h) *h = L_FB_H;
     return 1;
 }
 
@@ -1101,6 +1172,20 @@ static void lin_msr(const uno_hv_t *hv, int write)
 {
     u32 idx = (u32)g_vcpu.gprs.rcx;
     u64 v = ((u64)(u32)g_vcpu.gprs.rdx << 32) | (u32)g_vcpu.gprs.rax;
+    /* A guest re-reading ONE MSR forever is a diagnosis with a name in it,
+     * and nothing else surfaces it: the exit counter climbs, the port
+     * counter stands still, and the console is silent.  Logged once per
+     * million repeats, with the RIP, so the loop names both the register
+     * and the code doing the looping. */
+    {
+        static u32 rep_idx; static unsigned rep_n;
+        if (idx == rep_idx && ++rep_n % 1000000u == 0) {
+            char m[64];
+            snprintf(m, sizeof m, "[msr] LOOPING on %x rip %llx\n", idx,
+                     hv->get(&g_vcpu, UNO_VR_RIP));
+            trace(m);
+        } else if (idx != rep_idx) { rep_idx = idx; rep_n = 0; }
+    }
     switch (idx) {
     case 0xC0000080u:                        /* EFER, a guest-state field    */
         if (write) hv->set(&g_vcpu, UNO_VR_EFER, v);
@@ -1136,6 +1221,22 @@ static void lin_msr(const uno_hv_t *hv, int write)
         /* Zero for everything else. A kernel reading an MSR that answers 0 is
          * in far better shape than one reading a value we invented. */
         if (!write) v = 0;
+        /* ...unless it reads the same unanswered MSR forever, in which case
+         * the index IS the diagnosis.  Logged once per index: a poll loop on
+         * an MSR we zero is invisible in every other counter. */
+        {
+            static u32 seen[16];
+            static int nseen;
+            int k, have = 0;
+            for (k = 0; k < nseen; k++) if (seen[k] == idx) have = 1;
+            if (!have && nseen < 16) {
+                char m[48];
+                seen[nseen++] = idx;
+                snprintf(m, sizeof m, "[msr] %s %x\n",
+                         write ? "wr" : "rd", idx);
+                trace(m);
+            }
+        }
         break;
     }
     if (!write) {
@@ -1303,6 +1404,48 @@ static void lin_wake_shadow(const uno_hv_t *hv)
  * A6a ran it inside a selftest with a three-second bound, which is fine for
  * "did it say anything" and hopeless for "did it reach userspace" - a kernel
  * that needs eight seconds is not slow, it is normal. */
+/* THE QUIET-GUEST DUMP.  A kernel that stops printing while its exit counter
+ * climbs is executing SOMETHING, and the RIP plus the bytes under it name it
+ * where every counter only shrugs.  Dumped once, after ten wall seconds of
+ * console silence.  The address translation leans on `nokaslr`: kernel text
+ * maps at __START_KERNEL_map + phys, the direct map at 0xffff888000000000,
+ * and anything low is identity - which covers every place this guest can be
+ * without walking its page tables. */
+unsigned long long uno_native_rdtsc(void);
+unsigned long long uno_native_tsc_per_us(void);
+static void lin_quiet_dump(const uno_hv_t *hv)
+{
+    static int last_lines = -1, dumped;
+    static u64 t0;
+    u64 now = uno_native_rdtsc(), per_us = uno_native_tsc_per_us();
+    u64 rip, gpa;
+    const u8 *p;
+    char m[200];
+    int n, k;
+
+    if (g_lin_lines != last_lines) {
+        last_lines = g_lin_lines; t0 = now; dumped = 0;
+        return;
+    }
+    if (dumped || !per_us || now - t0 < per_us * 10000000ull) return;
+    dumped = 1;
+    rip = hv->get(&g_vcpu, UNO_VR_RIP);
+    if (rip >= 0xFFFFFFFF80000000ull)      gpa = rip - 0xFFFFFFFF80000000ull;
+    else if (rip >= 0xFFFF888000000000ull) gpa = rip - 0xFFFF888000000000ull;
+    else                                   gpa = rip;
+    n = snprintf(m, sizeof m,
+                 "[quiet] rip %llx rax %llx rcx %llx rdx %llx rsi %llx "
+                 "rdi %llx r8 %llx bytes ",
+                 rip, g_vcpu.gprs.rax, g_vcpu.gprs.rcx, g_vcpu.gprs.rdx,
+                 g_vcpu.gprs.rsi, g_vcpu.gprs.rdi, g_vcpu.gprs.r8);
+    p = (const u8 *)uno_vmm_gpa(gpa, 24);
+    for (k = 0; p && k < 24 && n + 3 < (int)sizeof m; k++)
+        n += snprintf(m + n, sizeof m - (unsigned)n, "%02x", p[k]);
+    if (!p) n += snprintf(m + n, sizeof m - (unsigned)n, "(unmapped)");
+    snprintf(m + n, sizeof m - (unsigned)n, "\n");
+    trace(m);
+}
+
 int uno_hvp_linux_slice(const uno_hv_t *hv, unsigned budget_us,
                         uno_vm_linux *out)
 {
@@ -1310,6 +1453,7 @@ int uno_hvp_linux_slice(const uno_hv_t *hv, unsigned budget_us,
     int n;
 
     if (!g_lin_running) return 0;
+    lin_quiet_dump(hv);
 
     /* Parked on a hlt.  RIP is still AT the hlt, and stays there until a
      * line rises, because delivery order is the fidelity that matters: on
@@ -1319,11 +1463,26 @@ int uno_hvp_linux_slice(const uno_hv_t *hv, unsigned budget_us,
      * never before - waking the guest without a vector would send the idle
      * loop around without the tick it is waiting for. */
     if (g_lin_halted) {
+        /* A PARKED GUEST STILL EXPERIENCES TIME.  The guest-cycle counter
+         * normally advances only while the guest executes, which is what
+         * keeps a wall-driven periodic tick from outrunning a quarter-core
+         * guest (the A6e livelock).  But a NO_HZ kernel arms a ONE-SHOT
+         * timer and halts - and a one-shot measured against a clock that
+         * freezes at the hlt never fires, so the whole machine sleeps
+         * forever the first time the boot thread blocks.  That is exactly
+         * how 6.12 died at serial8250_init while the old kernel's periodic
+         * mode sailed past.  On real silicon a halted core's clock keeps
+         * counting; while parked, so does ours, at wall rate. */
+        static u64 halt_t0;
+        u64 now = uno_native_rdtsc();
+        if (halt_t0) uno_vmm_add_guest_cycles(now - halt_t0);
         if (!uno_vdev_irq_pending()) {
+            halt_t0 = now;
             out->lines = g_lin_lines;
             out->last = g_lin_last;
             return 1;                              /* asleep is not stopped */
         }
+        halt_t0 = 0;
         /* hlt is one byte */
         hv->set(&g_vcpu, UNO_VR_RIP, hv->get(&g_vcpu, UNO_VR_RIP) + 1);
         lin_wake_shadow(hv);

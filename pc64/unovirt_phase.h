@@ -99,4 +99,9 @@ int uno_hvp_linux_boot(const uno_hv_t *hv, uno_vm_linux *out);
 int uno_hvp_linux_slice(const uno_hv_t *hv, unsigned budget_us,
                         uno_vm_linux *out);
 
+/* A8: the guest framebuffer placed by the boot protocol - guest-physical
+ * address and geometry, 0 when this boot has no surface.  XRGB8888, pitch
+ * w*4.  The blit goes through uno_vmm_gpa() like every host access. */
+int uno_hvp_fb(unsigned long long *gpa, int *w, int *h);
+
 #endif /* UNO_VIRT_PHASE_H */
