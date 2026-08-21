@@ -58,17 +58,35 @@ void uc_font_zoom(int delta)
 }
 
 /* ---- text helpers ----------------------------------------------------------- */
+/* Draw n BYTES of s on the editor's grid, one cell per character.
+ *
+ * This used to hand the run to the proportional pen and rely on the mono face
+ * advancing every glyph identically.  That held for ASCII by luck and stopped
+ * holding the moment the run contained anything else: a two-byte character
+ * measured as two cells, so the rest of the line - and the caret, selection
+ * and hit test computed from column * g_cw - slid apart from the glyphs.
+ * uno_font_draw_mono() places each character where the column arithmetic says
+ * it goes, so the two cannot drift.
+ *
+ * Control bytes still become spaces.  A partial character at the end of the
+ * run is dropped rather than drawn as U+FFFD: the run boundary is a colour
+ * change inside a line, not the end of the text, and the next run will draw
+ * those bytes with the rest of their character. */
 int uc_mono_n(int x, int y, const char *s, int n, fb_px fg, int style)
 {
     char buf[260];
-    int i, k = 0;
+    int i = 0, k = 0;
     if (n > (int)sizeof buf - 1) n = (int)sizeof buf - 1;
-    for (i = 0; i < n; i++) {
-        unsigned char c = (unsigned char)s[i];
-        buf[k++] = (c < 32) ? ' ' : (char)c;
+    while (i < n) {
+        int cp, len = uc_u8_get(s + i, n - i, &cp);
+        if (len <= 0) break;
+        if (cp < 32) { buf[k++] = ' '; i += len; continue; }
+        if (k + len >= (int)sizeof buf) break;
+        memcpy(buf + k, s + i, (unsigned long)len);
+        k += len; i += len;
     }
     buf[k] = 0;
-    return uno_font_draw_styled(g_mono, g_px, style & 3, x, y, buf, fg, -1);
+    return uno_font_draw_mono(g_mono, g_px, style & 3, x, y, buf, g_cw, fg);
 }
 
 int uc_mono(int x, int y, const char *s, fb_px fg, int style)
@@ -140,25 +158,57 @@ static fb_px scope_color(int id, int *style)
 }
 
 /* ---- visual columns (tabs) ---------------------------------------------------- */
+/* The visual column of byte offset `byte`.  A CHARACTER is one cell (two for a
+ * wide one, none for a combining mark), not a byte: count bytes here and every
+ * accented letter shifts the caret, the selection and the find highlight one
+ * cell further right than the glyph it is meant to sit on. */
 static int vcol_of(const char *s, int n, int byte, int ts)
 {
-    int i, v = 0;
+    int i = 0, v = 0;
     if (byte > n) byte = n;
-    for (i = 0; i < byte; i++) {
-        if (s[i] == '\t') v += ts - (v % ts);
-        else v++;
+    while (i < byte) {
+        int cp, len;
+        if (s[i] == '\t') { v += ts - (v % ts); i++; continue; }
+        len = uc_u8_get(s + i, n - i, &cp);
+        if (len <= 0) break;
+        v += uc_cp_width(cp);
+        i += len;
     }
     return v;
 }
 
-/* the byte index whose cell contains visual column `want` */
+/* the width in CELLS of n bytes of text, for the paint loop: a run's byte
+ * count and its column count are the same number only in ASCII */
+static int run_cells(const char *s, int n)
+{
+    int i = 0, v = 0;
+    while (i < n) {
+        int cp, len = uc_u8_get(s + i, n - i, &cp);
+        if (len <= 0) break;
+        v += uc_cp_width(cp);
+        i += len;
+    }
+    return v;
+}
+
+/* the byte index whose cell contains visual column `want`; always a character
+ * boundary, so a caret placed from it can never land inside a sequence */
 static int vcol_byte(const char *s, int n, int want, int ts)
 {
-    int i, v = 0;
-    for (i = 0; i < n; i++) {
-        int w = (s[i] == '\t') ? ts - (v % ts) : 1;
-        if (v + w > want) return i;
-        v += w;
+    int i = 0, v = 0;
+    while (i < n) {
+        int cp, len, w;
+        if (s[i] == '\t') {
+            w = ts - (v % ts);
+            if (v + w > want) return i;
+            v += w; i++;
+            continue;
+        }
+        len = uc_u8_get(s + i, n - i, &cp);
+        if (len <= 0) break;
+        w = uc_cp_width(cp);
+        if (w && v + w > want) return i;
+        v += w; i += len;
     }
     return n;
 }
@@ -424,7 +474,7 @@ void uc_edit_draw(UcRect r, UcDoc *d, int focused)
         {
             int hn = n > UC_HL_MAXLINE ? UC_HL_MAXLINE : n;
             int coloured = uc_tokenize(d->lang, d->text + s, hn, state, scopes, &out);
-            int k = 0, v = 0;
+            int k = 0, v = 0, vw;
             if (!coloured) for (k = 0; k < hn; k++) scopes[k] = 0;
             k = 0;
             while (k < n) {
@@ -454,14 +504,21 @@ void uc_edit_draw(UcRect r, UcDoc *d, int focused)
                 }
                 while (k < n && d->text[s + k] != '\t' && d->text[s + k] != ' ' &&
                        ((k < hn) ? scopes[k] : 0) == id) k++;
+                /* The tokenizer scopes BYTES, so a run may end in the middle
+                 * of a character.  Carry the rest of it into this run: split
+                 * it and both halves decode as U+FFFD, drawing two wrong
+                 * glyphs where one right one belongs. */
+                while (k < n && ((unsigned char)d->text[s + k] & 0xC0) == 0x80) k++;
                 col = scope_color(id, &style);
                 x = L.text.x + (v - d->scroll_col) * g_cw;
-                if (x + (k - run) * g_cw >= L.text.x && x < L.text.x + L.text.w) {
+                /* the run's width in CELLS, which is not its length in bytes */
+                vw = run_cells(d->text + s + run, k - run);
+                if (x + vw * g_cw >= L.text.x && x < L.text.x + L.text.w) {
                     uc_mono_n(x, y, d->text + s + run, k - run, col, style);
                     if (style & UC_FS_UNDERLINE)
-                        fb_hline(x, y + g_lh - 2, (k - run) * g_cw, col);
+                        fb_hline(x, y + g_lh - 2, vw * g_cw, col);
                 }
-                v += k - run;
+                v += vw;
                 if (v - d->scroll_col > L.text.w / g_cw + 2) break;
             }
         }
@@ -606,11 +663,22 @@ int uc_edit_event(UcRect r, UcDoc *d, const unoui_event *e)
     return 0;
 }
 
+/* `ch` is a CODEPOINT, not a byte.  Above ASCII it is encoded into the buffer
+ * as UTF-8 and none of the ASCII-shaped behaviour below applies: there is no
+ * bracket to close, no quote to step over, and a suggestion list keyed on
+ * identifier characters has nothing to say about an em dash. */
 int uc_edit_char(UcDoc *d, int ch)
 {
-    char pair[3];
+    char pair[5];
     int close;
-    if (!d || ch < 32 || ch > 126) return 0;
+    if (!d || ch < 32 || ch == 127) return 0;
+    if (ch > 126) {
+        int n = uc_u8_put(ch, pair);
+        if (sug_on) uc_suggest_close();
+        uc_insert(d, pair, n);
+        uc_api_fire_change(d);
+        return 1;
+    }
     if (sug_on && !uc_is_word(ch) && ch != '.') uc_suggest_close();
 
     /* typing the closing half of a pair the editor inserted just steps over it */
