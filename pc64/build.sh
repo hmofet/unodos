@@ -504,6 +504,21 @@ if [ "$1" != "legacy" ]; then
                   -Iunocode -I../unojs -c -o "build/apps/$s.o" "unocode/$s.c"
             COBJ="$COBJ build/apps/$s.o"
         done
+        # This machine's answer to the editor's network seam (uc_net.h).  It is
+        # in unocode/plat/ rather than beside the uc_*.c files because the
+        # DESKTOP build globs core/uc_*.c and would compile a pc64
+        # implementation on a host that has none of these symbols; #ifdef does
+        # not help, because that build defines UNO_PC64 too.
+        #
+        # -Ibearssl/inc is here and nowhere else in this loop: it takes the
+        # BR_ERR_X509_* certificate codes from the real header rather than
+        # copying their values, which got all three wrong when it was tried,
+        # two of them in a way that swapped two error messages.  Header only -
+        # no link surface, since the crypto is already in the kernel.
+        pc "$CC" $UCF -mno-stack-arg-probe -DUNO_APP_SYM=uno_app_main \
+              -Iunocode -I../unojs -Ibearssl/inc \
+              -c -o "build/apps/uc_net_pc64.o" "unocode/plat/uc_net_pc64.c"
+        COBJ="$COBJ build/apps/uc_net_pc64.o"
         pcwait
         "$NM" $COBJ | awk '$1=="U"&&$2!=""{u[$2]=1} \
             $1!="U"&&NF>=3{d[$3]=1} \
