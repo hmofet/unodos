@@ -503,10 +503,27 @@ static void net_notify(vdev *d, int qidx)
     if (len >= (int)sizeof frame) { NET.too_big++; return; }
     NET.tx++;
 
-    /* The peer is on the other side of unovdev_net.c: a frame in, a frame
-     * out, and no idea any of this is virtual. */
+    /* THE WIRE FIRST, when there is one (M3).  A bridged guest's frame goes
+     * out the host's NIC exactly as it is and its answers come back through
+     * net_poll's hook - nothing here invents a reply, because there is a
+     * real peer now.  Unbridged, the synthetic peer on the other side of
+     * unovdev_net.c answers instead: a frame in, a frame out, and no idea
+     * any of this is virtual. */
+    if (uno_vnet_bridge_tx(frame + NET_HDR, len - NET_HDR)) return;
     rl = uno_vnet_respond(frame + NET_HDR, len - NET_HDR, reply, (int)sizeof reply);
     if (rl > 0) net_rx_deliver(d, reply, rl);
+}
+
+/* The bridge's way in: a frame off the real wire, into a buffer the guest
+ * posted.  Device 2 is the NIC (uno_vdev_reset wires it), and a guest that
+ * is not running has no rings ready, which net_rx_deliver reports as a drop
+ * rather than touching anything. */
+int uno_vdev_net_rx(const unsigned char *frame, int len)
+{
+    if (!g_ndev) uno_vdev_reset();
+    if (len <= 0 || len > NET_MTU) return 0;
+    if (!(V[2].status & ST_DRIVER_OK)) return 0;
+    return net_rx_deliver(&V[2], frame, len);
 }
 
 /* The MAC lives in config space, and VIRTIO_NET_F_MAC is what tells the guest

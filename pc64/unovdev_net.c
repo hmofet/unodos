@@ -22,11 +22,27 @@
  * So this slice proves the DEVICE - both directions of the ring, the header,
  * the receive-buffer discipline, the interrupt - against a peer that answers.
  * A guest that ARPs for its gateway and gets a reply, then pings it and gets
- * an echo, has exercised every part of the datapath except the wire.  The
- * bridge is the next slice, and it is a networking problem rather than a
- * virtualization one.  Track B's stub agent is the same trick (§4.5).
+ * an echo, has exercised every part of the datapath except the wire.  Track
+ * B's stub agent is the same trick (§4.5).
+ *
+ * THE BRIDGE IS HERE NOW (2026-08-21, M3), at the bottom of this file, and
+ * both objections above turned out to be answerable rather than permanent:
+ * the harness box gives UnoDOS a real e1000 (the URC link needs one), and
+ * `recv()` being destructive is solved by hooking the ONE place that calls
+ * it - `net_poll` offers each frame to the guest before unonet parses it,
+ * through a weak symbol that is inert in a netstack-only build.
+ *
+ * The one-MAC-two-IP question (R3) is answered the OTHER way than the plan's
+ * first option: the guest keeps its own MAC and DHCPs for its own address,
+ * because the driver below us already runs promiscuous (e1000.c sets
+ * UPE|MPE|BAM so unicast replies survive a stale filter) - so a second MAC
+ * on the wire is delivered to us for free, and no NAT, no IP demux and no
+ * client-id trickery is needed.  A frame is the guest's when it is addressed
+ * to the guest's MAC; broadcast and multicast go to BOTH stacks, which is
+ * what a switch port does and what ARP and DHCP require.
  * ======================================================================== */
 #include "unovdev.h"
+#include "uno_nic.h"
 
 typedef unsigned int       u32;
 typedef unsigned short     u16;
@@ -181,6 +197,98 @@ int uno_vnet_str(char *buf, int cap)
     const int vals[4] = { N.arp, N.icmp, N.other, N.replies };
     const char *names[4] = { "arp ", " icmp ", " other ", " replied " };
     int k;
+    for (k = 0; k < 4 && i + 12 < cap; k++) {
+        const char *s = names[k];
+        int v = vals[k], d = 1000000, seen = 0;
+        while (*s && i + 1 < cap) buf[i++] = *s++;
+        if (!v && i + 1 < cap) buf[i++] = '0';
+        while (d && i + 1 < cap) {
+            int q = (v / d) % 10;
+            if (q || seen) { buf[i++] = H[q]; seen = 1; }
+            d /= 10;
+        }
+    }
+    if (i < cap) buf[i] = 0;
+    return i;
+}
+
+/* ---- the bridge, and the demux rule that is the whole of it ---------------
+ *
+ * Guest frames go out the host's NIC unchanged, source MAC and all: one more
+ * MAC appearing on a switch port is the ordinary thing a switch is for, and
+ * SLIRP (which is what the harness box provides) learns it and leases it its
+ * own address without being asked to.
+ *
+ * Inbound is the half with a decision in it, and there are exactly three
+ * answers rather than two:
+ *
+ *   - addressed to the guest's MAC  -> the guest's ALONE.  Returning 1 stops
+ *     unonet parsing it, which matters: a TCP segment for the guest's
+ *     connection reaching the host's single-connection stack is at best noise
+ *     and at worst a reset sent to a peer we are not talking to.
+ *   - broadcast or multicast        -> BOTH.  ARP is broadcast and so is a
+ *     DHCP offer before the client has an address; giving it to one stack
+ *     would silently break whichever stack lost.  Copy to the guest, return 0
+ *     so the host sees it too - which is what arriving at a switch port
+ *     actually does.
+ *   - anything else                 -> the host's, untouched.
+ *
+ * Nothing here rewrites a frame, so nothing here can corrupt one. */
+static struct {
+    uno_nic_t *nic;
+    int active, tx, rx, bcast, dropped;
+} B;
+
+void uno_vnet_bridge_start(uno_nic_t *nic)
+{
+    B.nic = nic;
+    B.active = nic ? 1 : 0;
+    B.tx = B.rx = B.bcast = B.dropped = 0;
+}
+
+void uno_vnet_bridge_stop(void) { B.active = 0; B.nic = 0; }
+int  uno_vnet_bridge_active(void) { return B.active; }
+
+/* Guest -> wire.  1 = it went out; 0 leaves the caller to fall back to the
+ * synthetic peer, which is what an unbridged appliance still gets. */
+int uno_vnet_bridge_tx(const unsigned char *frame, int len)
+{
+    if (!B.active || !B.nic || len < 14) return 0;
+    if (B.nic->send(B.nic->ctx, frame, len) < 0) { B.dropped++; return 0; }
+    B.tx++;
+    return 1;
+}
+
+/* Wire -> guest.  THE RETURN VALUE IS "the host must not also parse this",
+ * not "delivered": a broadcast is delivered AND returns 0. */
+int uno_vnet_bridge_rx(const unsigned char *frame, int len)
+{
+    int mine, bcast;
+    if (!B.active || len < 14) return 0;
+    mine  = same(frame, GUEST_MAC, 6);
+    bcast = (frame[0] & 1) != 0;          /* broadcast IS multicast, bit 0   */
+    if (!mine && !bcast) return 0;
+    if (uno_vdev_net_rx(frame, len)) {
+        if (mine) B.rx++; else B.bcast++;
+    } else {
+        B.dropped++;                      /* no posted buffer: a real NIC
+                                             drops too, and says so          */
+    }
+    return mine;
+}
+
+int uno_vnet_bridge_str(char *buf, int cap)
+{
+    int i = 0, k;
+    static const char H[] = "0123456789";
+    const int vals[4] = { B.tx, B.rx, B.bcast, B.dropped };
+    const char *names[4] = { "wire tx ", " rx ", " bcast ", " nobuf " };
+    if (!B.active) {
+        const char *s = "no wire (synthetic peer)";
+        while (*s && i + 1 < cap) buf[i++] = *s++;
+        if (i < cap) buf[i] = 0;
+        return i;
+    }
     for (k = 0; k < 4 && i + 12 < cap; k++) {
         const char *s = names[k];
         int v = vals[k], d = 1000000, seen = 0;

@@ -1871,6 +1871,18 @@ faults on the first instruction that assumes it.
   until the guest's driver has enabled the matching CCB interrupt bit. Bytes
   queued earlier sit in front of the probe conversation, and a probe that
   reads a scancode where it expected an ACK mis-identifies the controller.
+- **S-HV-53** [auto] The appliance bridge MUST take a frame addressed to the
+  guest's MAC EXCLUSIVELY (the host stack never parses it). unonet's TCP is
+  single-connection by contract (S-NET-12/13), so a segment belonging to the
+  guest's connection is noise there at best and a reset to a stranger at
+  worst.
+- **S-HV-54** [auto] Broadcast and multicast MUST reach BOTH stacks - copied
+  to the guest AND returned to unonet. ARP and DHCP are broadcast, so giving
+  such a frame to one stack silently breaks whichever lost, and the symptom
+  is a guest (or host) that never gets an address.
+- **S-HV-55** [auto] The bridge MUST NOT rewrite a frame in either
+  direction. The guest owns its own TCP/IP; a bridge that edits headers owns
+  a second stack it did not mean to write.
 - **S-HV-52** [auto] A slave-PIC line MUST be delivered through the cascade:
   master line 2 in service, slave line in service, vector from the SLAVE's
   ICW2 base. Delivering it as a master vector hands the guest an interrupt
