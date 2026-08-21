@@ -5568,9 +5568,24 @@ int pc64_shell_font_mono(void)
 static int pc64_shell_run_python(int vol, const char *path)
 {
     const unsigned char *src; int len;
+    /* PYRT titles the window after whatever string it is handed, and it was
+     * handed the PATH - so an INSTALLED Python app whose descriptor declares
+     * `name: Duum` opened a window, and a taskbar button, reading DUUM.UNO
+     * while its own Start-menu row and desktop icon read Duum.  The descriptor
+     * is the app's declared identity everywhere else in the shell; this is the
+     * one place that ignored it.
+     *
+     * Only a module that actually CARRIES a descriptor is renamed.
+     * uno_mod_desc_read returns 1 for a module with none and fills the name in
+     * from the filename stem, which is a different string from the path and
+     * would silently retitle every app Studio runs (SAMPLE.UNO -> SAMPLE).
+     * Requiring 0 keeps the user slot exactly as it was. */
+    const char *title = path;
+    UnoAppDesc pd;
     pyrt_ensure();
     if (!g_pyrt) return -2;                       /* no PYRT.UNO on this system */
     if (uno_mod_load_pyapp(vol, path, &src, &len) < 0) return -1;
+    if (uno_mod_desc_read(vol, path, &pd) == 0 && pd.name[0]) title = pd.name;
     if (g_open[EX_PYAPP]) {                        /* replace any running app */
         remove_win(&g_win[EX_PYAPP]);
         unoscript_app_caps_end();                 /* drop the replaced app's caps */
@@ -5579,7 +5594,7 @@ static int pc64_shell_run_python(int vol, const char *path)
         g_open[EX_PYAPP] = 0;
     }
     pdbg("pyrt: compiling app\n");
-    g_pyapp = g_pyrt->load(src, len, path);
+    g_pyapp = g_pyrt->load(src, len, title);
     if (!g_pyapp) { pdbg("pyrt: load FAILED\n"); pdbg(g_pyrt->last_error()); return -3; }
     pdbg("pyrt: app loaded, opening window\n");
     g_built[EX_PYAPP] = 0;
