@@ -73,6 +73,9 @@ const struct unoui_theme *pc64_shell_theme(void);
 int  pc64_shell_run_user(int vol, const char *path);
 const char *pc64_shell_py_error(void);
 int  pc64_shell_font_mono(void);
+/* the shell's native file dialog, if it has one; pc64's answers 0 */
+int  pc64_shell_pick(int want_folder, int *vol, char *dir, int dcap,
+                     char *name, int ncap);
 unoui_anim *uno_pc64_anim(void);               /* the clock the shell pumps */
 void pc64_browser_open_path(const char *path);
 int  fb_width(void);
