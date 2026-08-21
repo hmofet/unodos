@@ -106,8 +106,30 @@ class UrcUi(object):
         return self._w, self._h
 
     # ---- input -------------------------------------------------------------
+    # A SLOW VERB IS NOT A DEAD BOX, and an injection must never be re-sent.
+    #
+    # On the 2026-08-20 metal run, `pointer` / `key` / `screen read` all
+    # intermittently blew past the bridge's timeout under load, and the box was
+    # alive on a re-check every single time.  A harness that raises there
+    # aborts a whole run over nothing.  But retrying is worse: the verb has
+    # almost certainly already been applied on the DEVICE (the timeout is the
+    # host's, not the guest's), so a re-send double-injects - which for a press
+    # or a release is a different gesture, not the same one twice.
+    #
+    # So: swallow the timeout, keep going, and only fail when the box is
+    # genuinely gone - which alive() decides with three consecutive failures,
+    # not one.
+    def _inject(self, what, *a, **k):
+        k.setdefault("timeout", 8)
+        try:
+            what(*a, **k)
+        except TimeoutError:
+            if not self.link.alive():
+                raise SystemExit("the box stopped answering (debounced)")
+            print("  (slow verb, box alive - carrying on)")
+
     def move(self, x, y, settle=0.12):
-        self.link.pointer(int(x), int(y), 0, timeout=8)
+        self._inject(self.link.pointer, int(x), int(y), 0)
         time.sleep(settle)
 
     def click(self, x, y, settle=0.45):
@@ -116,11 +138,11 @@ class UrcUi(object):
         Not one: the shell samples pointer state per frame, so a press and a
         release inside a single sample cancel out.  uefi_main.c queues
         injected states one per poll precisely so this sequence survives."""
-        self.link.pointer(int(x), int(y), 0, timeout=8)
+        self._inject(self.link.pointer, int(x), int(y), 0)
         time.sleep(0.12)
-        self.link.pointer(int(x), int(y), 1, timeout=8)
+        self._inject(self.link.pointer, int(x), int(y), 1)
         time.sleep(0.18)
-        self.link.pointer(int(x), int(y), 0, timeout=8)
+        self._inject(self.link.pointer, int(x), int(y), 0)
         time.sleep(settle)
 
     def dblclick(self, x, y):
@@ -128,8 +150,12 @@ class UrcUi(object):
         self.click(x, y, settle=0.5)
 
     def key(self, uni, scan=0, ctrl=0, settle=0.15):
-        self.link.key(int(scan), int(uni), int(ctrl), timeout=8)
+        self._inject(self.link.key, int(scan), int(uni), int(ctrl))
         time.sleep(settle)
+
+    def alive(self, tries=3):
+        """Debounced liveness. See UnoAutoLink.alive."""
+        return self.link.alive(tries=tries)
 
     def text(self, s, settle=0.05):
         for ch in s:
