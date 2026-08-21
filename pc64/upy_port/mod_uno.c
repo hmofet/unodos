@@ -775,6 +775,17 @@ static mp_obj_t m_keys_down(void)
 { return mp_obj_new_int(uno_pc64_keys_held()); }
 static MP_DEFINE_CONST_FUN_OBJ_0(keys_down_obj, m_keys_down);
 
+/* uno.vm_status() -> the appliance's one-line progress string ("running: 333
+ * lines ... shell ANSWERED").  A harness watching a guest boot polls this
+ * instead of guessing at wall time. */
+const char *uno_vm_progress(void);
+static mp_obj_t m_vm_status(void)
+{
+    const char *s = uno_vm_progress();
+    return mp_obj_new_str(s, strlen(s));
+}
+static MP_DEFINE_CONST_FUN_OBJ_0(vm_status_obj, m_vm_status);
+
 /* ---- key bindings and app preferences -------------------------------------
  * The five OPTIONAL calls Duum's pause menu probes for with hasattr.  A port
  * without them still plays the whole game and the menu says the platform
@@ -1098,6 +1109,7 @@ static const mp_rom_map_elem_t uno_globals_table[] = {
     { MP_ROM_QSTR(MP_QSTR_bind_reset),   MP_ROM_PTR(&bind_reset_obj) },
     { MP_ROM_QSTR(MP_QSTR_pref_get),     MP_ROM_PTR(&pref_get_obj) },
     { MP_ROM_QSTR(MP_QSTR_pref_set),     MP_ROM_PTR(&pref_set_obj) },
+    { MP_ROM_QSTR(MP_QSTR_vm_status),    MP_ROM_PTR(&vm_status_obj) },
 };
 static MP_DEFINE_CONST_DICT(uno_globals, uno_globals_table);
 const mp_obj_module_t mp_module_uno = {

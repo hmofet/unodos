@@ -305,6 +305,8 @@ static const struct { const char *name; void *addr; } kExports[] = {
     KX(uno_vm_running), KX(uno_vm_status),
     KX(uno_vm_con_lines), KX(uno_vm_con_line), KX(uno_vm_con_seq),
     KX(uno_vm_con_key), KX(uno_vm_con_clear),
+    KX(uno_vm_fb), KX(uno_vm_input_char), KX(uno_vm_input_scan),
+    KX(uno_vm_input_mouse), KX(uno_vm_input_str), KX(uno_vm_progress),
     KX(unolog), KX(unolog_flush), KX(unolog_format),
     KX(unolog_level), KX(unolog_set_level),
     KX(unolog_remote_level), KX(unolog_set_remote_level),
