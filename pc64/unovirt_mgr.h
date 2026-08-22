@@ -73,6 +73,7 @@ const char *uno_vm_path_disk(void);
  * scan codes to the emulated keyboard, pixel deltas and unoui buttons to the
  * emulated mouse.  All press+release edges; see unovdev.h. */
 void *uno_vm_fb(int *w, int *h);
+void uno_vm_focus_display(int on);   /* the guest's window is on screen */
 void uno_vm_input_char(int ch);
 void uno_vm_input_scan(int efi_scan);
 void uno_vm_input_mouse(int dx, int dy, unsigned buttons, int wheel);
