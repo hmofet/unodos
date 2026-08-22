@@ -182,6 +182,14 @@ export UNO_URL_ENV=${UNO_URL:-https://$UNO_SITE/}
   sleep 25
   echo "uno: xorg: $(grep -c 'Using input driver' /var/log/Xorg.0.log) input devices" \
       > /dev/ttyS0
+  # THE GUEST'S OWN COUNT OF KEYBOARD INTERRUPTS.  Paired with the emulated
+  # controller's count on the host side, this decides in one line which side
+  # of the wire a missing keystroke went missing on.
+  while :; do
+    sleep 60
+    echo "uno: irq1 $(grep -E 'i8042|^ *1:' /proc/interrupts | tr -s ' ' | cut -c1-60 | tr '\n' '/')" \
+        > /dev/ttyS0
+  done
   grep -E "Using input driver|AutoAddDevices|no input driver" /var/log/Xorg.0.log \
       | head -4 > /dev/ttyS0
 ) &
