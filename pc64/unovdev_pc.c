@@ -645,7 +645,13 @@ static int i8042_io(unsigned port, int is_write, unsigned long long *val)
     if (port == 0x64 && !is_write) {                /* status               */
         int obf = kq_n() > 0 || aq_n() > 0;
         int aux = kq_n() == 0 && aq_n() > 0;
-        *val = 0x04u | (obf ? 0x01u : 0u) | (aux ? 0x20u : 0u);
+        /* BIT 4 IS THE INHIBIT SWITCH, AND IT MEANS "UNLOCKED" WHEN SET.
+         * Leaving it clear is how a machine says its keyboard is physically
+         * key-locked, and Linux says so out loud - `i8042: Warning: Keylock
+         * active` in a boot log that was otherwise clean.  Real hardware
+         * then declines to deliver keystrokes at all, so a guest is entitled
+         * to believe it.  Every emulator sets this bit; so do we now. */
+        *val = 0x04u | 0x10u | (obf ? 0x01u : 0u) | (aux ? 0x20u : 0u);
         return 1;
     }
     if (port == 0x60 && !is_write) {                /* pop, keyboard first  */
