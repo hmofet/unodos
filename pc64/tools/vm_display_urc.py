@@ -173,9 +173,16 @@ def main():
         # has ever shipped on.
         nav = sys.argv[4] if len(sys.argv) > 4 else ""
         if nav:
+            # NO MODIFIERS IN THIS SEQUENCE, deliberately.  Ctrl+L is the
+            # habit and it depends on the whole modifier path surviving the
+            # URC verb, the shell's key hook and the emulated keyboard; F6
+            # focuses Chromium's address bar with a bare keypress, and a run
+            # of Backspace empties it without needing Ctrl+A either.  One
+            # less thing between the test and what it is testing.
             print("driving the browser to %s ..." % nav)
-            link.key(0, ord('l'), 1, timeout=10)      # Ctrl+L
-            time.sleep(1.5)
+            key(0, scan=0x10, settle=1.5)             # F6 -> the address bar
+            for _ in range(45):
+                key(ord('\b'), settle=0.06)
             for ch in nav:
                 key(ord(ch), settle=0.12)
             key(ord('\r'), settle=0.3)
