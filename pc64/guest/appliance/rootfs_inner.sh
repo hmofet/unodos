@@ -237,7 +237,11 @@ while :; do
     # session ends, which is the moment it is worth reading.
     xinit /usr/share/uno/session.sh \
       -- /usr/bin/X :0 vt1 -nolisten tcp -quiet > /tmp/x.log 2>&1
-    echo "uno: browser exited: $(grep -iE 'error|fatal|abort' /tmp/x.log | tail -2 | tr '\n' ' ' | cut -c1-140)" > /dev/ttyS0
+    # The WHOLE tail, not a grep of it: Xorg's segfault is followed by a
+    # backtrace naming the module that did it, and a filter tuned for the
+    # word "error" throws that away.
+    echo "uno: session ended ----" > /dev/ttyS0
+    tail -18 /tmp/x.log | sed 's/^/uno| /' > /dev/ttyS0
     sleep 2
 done
 EOF
@@ -276,7 +280,12 @@ exec chromium \
     --disable-domain-reliability --disable-breakpad \
     --disable-client-side-phishing-detection --no-pings \
     --safebrowsing-disable-auto-update --metrics-recording-only \
-    --disable-features=OptimizationHints,MediaRouter \
+    # Chromium's own async resolver (and Secure DNS) ignore the
+    # resolv.conf that nslookup and wget both use happily, and answer
+    # ERR_NAME_NOT_RESOLVED for names the rest of the guest resolves
+    # fine.  Sending it back to getaddrinfo makes the browser agree
+    # with its own operating system.
+    --disable-features=OptimizationHints,MediaRouter,AsyncDns,DnsOverHttps \
     --renderer-process-limit=1 --process-per-site \
     --disable-hang-monitor --disable-session-crashed-bubble \
     --js-flags=--max-old-space-size=192 \
