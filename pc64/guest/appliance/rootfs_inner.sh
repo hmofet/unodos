@@ -164,7 +164,7 @@ while :; do
         --safebrowsing-disable-auto-update --metrics-recording-only \
         --disable-features=OptimizationHints,MediaRouter \
         --renderer-process-limit=1 --process-per-site \
-        --disable-hang-monitor \
+        --disable-hang-monitor --disable-session-crashed-bubble \
         --js-flags=--max-old-space-size=192 \
         --window-position=0,0 --window-size=800,600 \
         --start-maximized "$URL" \
