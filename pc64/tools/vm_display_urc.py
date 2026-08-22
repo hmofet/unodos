@@ -71,7 +71,11 @@ def main():
     link = UnoAutoLink("127.0.0.1", PORT)
     link.listen()
     q = subprocess.Popen([
-        "qemu-system-x86_64", "-machine", "q35", "-m", "4096",
+        # 8 GB, so the carve steps up from 1.5 GB to 2 GB (uno_vmm_carve_mb
+        # steps at 1800/3500/7000 MB of FREE memory).  Chromium in 1.5 GB
+        # renders a page and then dies mid-session with "Aw, Snap! Error
+        # code: 8", which reads as a browser bug and is a memory ceiling.
+        "qemu-system-x86_64", "-machine", "q35", "-m", "8192",
         "-cpu", "host", "-enable-kvm",
         "-drive", "if=pflash,format=raw,readonly=on,file=" + OVMF_CODE,
         "-drive", "if=pflash,format=raw,file=/tmp/vmdisp_vars.fd",
