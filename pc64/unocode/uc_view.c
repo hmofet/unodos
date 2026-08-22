@@ -44,11 +44,78 @@ void uc_problems_clear(const char *source)
     }
 }
 
+/* SHOWING a problem on a document is a looser question than CLEARING one, and
+ * conflating them is a bug that only appears in a tree with two files of the
+ * same name.
+ *
+ * Showing: a build's output names a leaf and nothing more, so its problems
+ * carry no directory and have to light up the open document anyway - an empty
+ * directory on either side matches.
+ *
+ * Clearing: a language server republishes one file's diagnostics and expects
+ * exactly that file's previous set to go.  With the loose rule, republishing
+ * for `main.c` at the workspace root would also wipe `src/main.c`, whose
+ * server has no reason to say anything again until it is edited - so the
+ * squiggles in one file would vanish when you typed in the other. */
+static int same_leaf(const UcProblem *p, int vol, const char *file)
+{
+    return p->vol == vol && !strcmp(p->file, file);
+}
+
+static int same_file(const UcProblem *p, int vol, const char *dir,
+                     const char *file)
+{
+    if (!same_leaf(p, vol, file)) return 0;
+    if (!p->dir[0] || !dir || !dir[0]) return 1;
+    return !strcmp(p->dir, dir);
+}
+
+static int same_file_exact(const UcProblem *p, int vol, const char *dir,
+                           const char *file)
+{
+    if (!same_leaf(p, vol, file)) return 0;
+    return !strcmp(p->dir, dir ? dir : "");
+}
+
+void uc_problems_clear_file(int vol, const char *dir, const char *file,
+                            const char *source)
+{
+    int i = 0;
+    if (!file || !file[0]) return;
+    while (i < g_nprob) {
+        if ((!source || !strcmp(g_prob[i].source, source)) &&
+            same_file_exact(&g_prob[i], vol, dir, file)) {
+            int k;
+            for (k = i; k < g_nprob - 1; k++) g_prob[k] = g_prob[k + 1];
+            g_nprob--;
+        } else i++;
+    }
+}
+
 int uc_problems_add(const UcProblem *p)
 {
     if (g_nprob >= PROB_MAX || !p) return 0;
     g_prob[g_nprob++] = *p;
     return 1;
+}
+
+int uc_problem_in_doc(UcProblem *p, UcDoc *d)
+{
+    if (!p || !d) return 0;
+    return same_file(p, d->vol, d->dir, d->name);
+}
+
+int uc_problems_on_line(UcDoc *d, int line, UcProblem **out, int cap)
+{
+    int i, n = 0;
+    if (!d || !out || cap <= 0) return 0;
+    for (i = 0; i < g_nprob && n < cap; i++) {
+        /* line is 1-based in a UcProblem and 0-based everywhere in a document */
+        if (g_prob[i].line - 1 != line) continue;
+        if (!same_file(&g_prob[i], d->vol, d->dir, d->name)) continue;
+        out[n++] = &g_prob[i];
+    }
+    return n;
 }
 
 int uc_problems_count(int sev)
@@ -1243,6 +1310,10 @@ void uc_breadcrumb_draw(UcRect r)
 
 /* ---- the panel -------------------------------------------------------------------- */
 static int g_probsel, g_probscroll, g_outscroll;
+/* Where the E/W counts were painted, so a click on them can reach the panel
+ * they are about.  Measured rather than assumed: the folder name sits to their
+ * left and its width is whatever the workspace is called. */
+static int g_status_ew_x, g_status_ew_end;
 
 static void panel_problems(UcRect r)
 {
@@ -1362,7 +1433,11 @@ int uc_panel_event(UcRect r, const unoui_event *e)
             UcProblem *p = &g_prob[k];
             int di;
             g_probsel = k;
-            di = uc_doc_open(p->vol, UC.ws_dir, p->file);
+            /* The problem's OWN directory when it has one.  A build prints a
+             * leaf and nothing else, so those still open against the workspace
+             * directory; a language server addresses files by URI and knows
+             * which of two same-named files it meant. */
+            di = uc_doc_open(p->vol, p->dir[0] ? p->dir : UC.ws_dir, p->file);
             if (di >= 0) {
                 UcDoc *d = uc_doc_at(di);
                 uc_move_to(d, uc_offset_of(d, p->line - 1, p->col > 0 ? p->col - 1 : 0), 0);
@@ -1458,14 +1533,28 @@ void uc_status_draw(UcRect r)
     uc_ui_text(x, ty, buf, fg);
     x += uc_ui_text_w(buf) + 16;
 
-    uc_itoa(num, uc_problems_count(UC_SEV_ERROR));
-    uc_scpy(buf, "E ", sizeof buf);
-    uc_scat(buf, num, sizeof buf);
-    uc_itoa(num, uc_problems_count(UC_SEV_WARN));
-    uc_scat(buf, "   W ", sizeof buf);
-    uc_scat(buf, num, sizeof buf);
-    uc_ui_text(x, ty, buf, fg);
-    x += uc_ui_text_w(buf) + 16;
+    /* The counts carry their SEVERITY's colour once they are non-zero (UCD-23).
+     * A red 3 is read without being looked at; a "E 3" in the status bar's own
+     * grey has to be read, and the whole point of putting it there is that
+     * nobody reads the status bar.  At zero they stay grey - a green light
+     * nobody asked for is noise. */
+    {
+        int ne = uc_problems_count(UC_SEV_ERROR);
+        int nw = uc_problems_count(UC_SEV_WARN);
+        g_status_ew_x = x;
+        uc_itoa(num, ne);
+        uc_scpy(buf, "E ", sizeof buf);
+        uc_scat(buf, num, sizeof buf);
+        uc_ui_text(x, ty, buf, ne ? uc_col(UC_C_ERROR_FG) : fg);
+        x += uc_ui_text_w(buf) + 10;
+
+        uc_itoa(num, nw);
+        uc_scpy(buf, "W ", sizeof buf);
+        uc_scat(buf, num, sizeof buf);
+        uc_ui_text(x, ty, buf, nw ? uc_col(UC_C_WARN_FG) : fg);
+        x += uc_ui_text_w(buf) + 16;
+        g_status_ew_end = x;
+    }
 
     if (uc_status_msg_get()[0]) uc_ui_text(x, ty, uc_status_msg_get(), fg);
     fb_reset_clip();
@@ -1477,6 +1566,11 @@ int uc_status_event(UcRect r, const unoui_event *e)
     /* the right-hand items are click targets, exactly as they are in VS Code */
     if (e->x > r.x + r.w - 90) uc_quick_open(UC_Q_LANG);
     else if (e->x > r.x + r.w - 320) uc_quick_open(UC_Q_LINE);
+    /* The counts, BEFORE the folder-name band: they sit inside it, so testing
+     * the band first sent every click on "E 3" to the Explorer - the one place
+     * a user clicking an error count is definitely not trying to go. */
+    else if (e->x >= g_status_ew_x && e->x < g_status_ew_end)
+        uc_toggle_panel(UC_PANEL_PROBLEMS);
     else if (e->x < r.x + 200) uc_toggle_sidebar(UC_VIEW_EXPLORER);
     else uc_toggle_panel(UC_PANEL_PROBLEMS);
     return 1;
@@ -1492,3 +1586,14 @@ void uc_view_init(void)
     uc_output_channel("Log");
     uc_explorer_refresh();
 }
+
+/* Field readers for the headless driver, which may not include unocode.h and
+ * so cannot reach into a UcProblem (UCD-23).  Same opaque-handle convention as
+ * uc_doc_active(): the pointer came from uc_problem_at() and goes straight
+ * back. */
+int uc_problem_line(UcProblem *p)   { return p ? p->line : 0; }
+int uc_problem_col(UcProblem *p)    { return p ? p->col : 0; }
+int uc_problem_endcol(UcProblem *p) { return p ? p->end_col : 0; }
+int uc_problem_sev(UcProblem *p)    { return p ? (int)p->sev : -1; }
+const char *uc_problem_msg(UcProblem *p)  { return p ? p->msg : ""; }
+const char *uc_problem_file(UcProblem *p) { return p ? p->file : ""; }

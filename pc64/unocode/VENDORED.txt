@@ -1,6 +1,6 @@
 UnoCode, vendored from https://github.com/hmofet/unocode-desktop
 
-source: C:\Repos\unocode-desktop @ 3897530af61dd3542aaa0a6388271d24a9b4e976 (DIRTY)
+source: C:\Repos\unocode-desktop @ b98ac1c2c4caad19481ff3cdbe52babd1083b72e (DIRTY)
 files:  39
 
 Written by pc64/tools/sync_unocode.py.  Do not edit this

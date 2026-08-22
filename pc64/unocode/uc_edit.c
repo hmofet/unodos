@@ -321,6 +321,22 @@ static int sel_on_line(UcDoc *d, int line, int *a, int *b)
     return got;
 }
 
+/* A wavy underline, built from the primitives that exist (UCD-23).
+ *
+ * The framebuffer has no wave and no dotted line, so this is the two-pixel saw
+ * every editor draws: a 4-pixel period, one pixel up and one down.  It is not
+ * decoration - it is what distinguishes a diagnostic from the straight
+ * underline a `markup.underline` scope already draws two pixels lower, and a
+ * squiggle drawn straight would read as a link. */
+static void squiggle(int x, int y, int w, fb_px col)   /* like fb_hline */
+{
+    int i;
+    for (i = 0; i < w; i += 4) {
+        fb_fill_rect(x + i,     y,     2, 1, col);
+        fb_fill_rect(x + i + 2, y - 1, 2, 1, col);
+    }
+}
+
 static void draw_minimap(UcRect m, UcDoc *d, int first_row, int rows)
 {
     int nl = uc_line_count(d), i, step, y, shown;
@@ -350,18 +366,80 @@ static void draw_minimap(UcRect m, UcDoc *d, int first_row, int rows)
         if (top < m.y) top = m.y;
         fb_blend_rect(m.x, top, m.w, hgt, uc_col(UC_C_EDITOR_FG), 28);
     }
+
+    /* Problem marks, OVER the slider (UCD-23).
+     *
+     * Under it looks tidier and does not work: the slider is a 28/255 blend,
+     * so it does not hide a mark but it does shift its colour - and in a short
+     * file the slider covers the whole minimap, which is exactly when every
+     * mark is inside it.  Over it, a mark is the colour it claims to be.
+     *
+     * Left edge, 4 px wide.  The minimap's job is to show the SHAPE of the
+     * file; a mark wide enough to cover that shape hides the thing it is
+     * pointing into.
+     */
+    {
+        /* Over the PROBLEMS, not over the lines.  A file has thousands of
+         * lines and at most a hundred problems, and asking every line whether
+         * it has one is that product, every frame. */
+        int i2, np = uc_problems_total();
+        for (i2 = 0; i2 < np; i2++) {
+            UcProblem *p = uc_problem_at(i2);
+            int my;
+            if (!uc_problem_in_doc(p, d)) continue;
+            my = m.y + ((p->line - 1) / step) * 2;
+            if (my < m.y || my >= m.y + m.h) continue;
+            fb_fill_rect(m.x, my, 4, 2,
+                         uc_col(p->sev == UC_SEV_ERROR ? UC_C_ERROR_FG :
+                                p->sev == UC_SEV_WARN  ? UC_C_WARN_FG
+                                                       : UC_C_INFO_FG));
+        }
+    }
+
 }
 
 static void draw_vscroll(UcRect b, UcDoc *d, int first_row, int rows)
 {
-    int nl = uc_line_count(d), th, ty;
+    int nl = uc_line_count(d);
     if (b.w <= 0) return;
     fb_fill_rect(b.x, b.y, b.w, b.h, uc_col(UC_C_EDITOR_BG));
-    if (nl <= rows) return;
-    th = b.h * rows / nl;
-    if (th < 20) th = 20;
-    ty = b.y + (b.h - th) * first_row / (nl - rows);
-    fb_fill_rect(b.x + 2, ty, b.w - 4, th, uc_col(UC_C_SCROLL_SLIDER));
+
+    if (nl > rows) {
+        int th = b.h * rows / nl;
+        int ty;
+        if (th < 20) th = 20;
+        ty = b.y + (b.h - th) * first_row / (nl - rows);
+        fb_fill_rect(b.x + 2, ty, b.w - 4, th, uc_col(UC_C_SCROLL_SLIDER));
+    }
+
+    /* The overview ruler (UCD-23): a mark per problem, over the WHOLE track,
+     * and painted OVER the slider.
+     *
+     * Two deliberate choices.  The mapping is not the slider's: the slider's
+     * track is shortened by its own height so a slider at the bottom stays
+     * fully visible, and a mark placed with that formula sits above the line
+     * it points at by up to a slider's worth - which is exactly the distance
+     * that makes clicking one land somewhere else.  And it is drawn last,
+     * because a two-pixel mark hidden under the slider is a mark that
+     * disappears whenever you scroll to the problem it is pointing at.
+     *
+     * It also runs when the file fits on screen and there is no slider at all:
+     * a short file still has problems worth marking. */
+    {
+        int i, np = uc_problems_total();
+        for (i = 0; i < np && nl > 0; i++) {
+            UcProblem *p = uc_problem_at(i);
+            int y;
+            if (!uc_problem_in_doc(p, d)) continue;
+            y = b.y + b.h * (p->line - 1) / nl;
+            if (y < b.y) y = b.y;
+            if (y > b.y + b.h - 2) y = b.y + b.h - 2;
+            fb_fill_rect(b.x + 1, y, b.w - 2, 2,
+                         uc_col(p->sev == UC_SEV_ERROR ? UC_C_ERROR_FG :
+                                p->sev == UC_SEV_WARN  ? UC_C_WARN_FG
+                                                       : UC_C_INFO_FG));
+        }
+    }
 }
 
 void uc_edit_draw(UcRect r, UcDoc *d, int focused)
@@ -530,6 +608,44 @@ void uc_edit_draw(UcRect r, UcDoc *d, int focused)
                 }
                 v += vw;
                 if (v - d->scroll_col > L.text.w / g_cw + 2) break;
+            }
+        }
+
+        /* Squiggles, after the glyphs and inside the same clip (UCD-23).
+         *
+         * A DIAGNOSTIC WITH NO RANGE STILL HAS TO UNDERLINE SOMETHING.  A build
+         * prints `file:12:5:` and nothing more, so end_col is 0 and there is no
+         * width to draw; underlining a single cell is a mark nobody can see and
+         * underlining the line is a claim the compiler did not make.  The word
+         * at the column is the honest middle - it is what the diagnostic is
+         * almost always about, and it is what VS Code shows for the same input.
+         *
+         * A range that ENDS ON A LATER LINE is clamped to this line's end
+         * rather than wrapped: the run is drawn per line and a multi-line
+         * range is several runs, not one. */
+        {
+            UcProblem *probs[8];
+            int np = uc_problems_on_line(d, line, probs, 8), pi;
+            for (pi = 0; pi < np; pi++) {
+                UcProblem *p = probs[pi];
+                int a = uc_offset_of(d, line, p->col > 0 ? p->col - 1 : 0);
+                int b = (p->end_line - 1 > line) ? e
+                      : (p->end_col > 0) ? uc_offset_of(d, line, p->end_col - 1)
+                      : uc_word_end(d, a);
+                int va, vb, x0, x1;
+                if (b <= a) b = uc_word_end(d, a);
+                if (b <= a) b = (a < e) ? a + 1 : e;
+                if (a < s) a = s;
+                if (b > e) b = e;
+                va = vcol_of(d->text + s, n, a - s, ts);
+                vb = vcol_of(d->text + s, n, b - s, ts);
+                x0 = L.text.x + (va - d->scroll_col) * g_cw;
+                x1 = L.text.x + (vb - d->scroll_col) * g_cw;
+                if (x1 > x0)
+                    squiggle(x0, y + g_lh - 2, x1 - x0,
+                             uc_col(p->sev == UC_SEV_ERROR ? UC_C_ERROR_FG :
+                                    p->sev == UC_SEV_WARN  ? UC_C_WARN_FG
+                                                           : UC_C_INFO_FG));
             }
         }
 

@@ -152,4 +152,16 @@ int         uc_lsp_restarts(UcLsp *s);    /* how many times it has died         
  * builder here needs it and uc_json_esc is the one that exists. */
 int uc_lsp_esc(char *out, int cap, const char *s);
 
+/* Positions -------------------------------------------------------------
+ *
+ * LSP counts a column in UTF-16 CODE UNITS, and UnoCode counts one in bytes,
+ * in code points and in visual cells depending on who is asking.  All four
+ * agree on ASCII and diverge on the first emoji, so a conversion done by hand
+ * anywhere but here will be right in every test and wrong in use.  Use these. */
+int uc_lsp_pos_to_offset(UcDoc *d, int line, int u16_character);
+int uc_lsp_offset_to_u16(UcDoc *d, int off);
+/* `{"line":L,"character":C}` for a document offset, ready to paste into a
+ * request's params. */
+int uc_lsp_pos_json(UcDoc *d, int off, char *out, int cap);
+
 #endif
