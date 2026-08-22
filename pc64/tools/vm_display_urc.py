@@ -186,10 +186,11 @@ def main():
             # Ctrl now survives the trip (the Display view forwards it as
             # ASCII 1..26, which the emulated keyboard turns back into a held
             # Ctrl), so it is worth the retry that earlier runs could not make.
+            # Ctrl+L ALONE.  It is proven to focus the address bar (the guest
+            # drives itself the same way), and the F6 presses that used to
+            # follow it could only move the focus back off again.
             link.key(0, ord('l'), 1, timeout=10)      # Ctrl+L
-            time.sleep(1.5)
-            key(0, scan=0x10, settle=1.0)             # F6, in case it did not
-            key(0, scan=0x10, settle=1.0)
+            time.sleep(2.0)
             for _ in range(45):
                 key(ord('\b'), settle=0.06)
             for ch in nav:
