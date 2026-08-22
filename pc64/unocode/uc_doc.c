@@ -399,6 +399,38 @@ int uc_offset_of(UcDoc *d, int line, int col)
  * free and an edit only costs a rescan from the edited line down to whatever
  * is on screen.  The cache is invalidated wholesale by any edit for the same
  * reason the line index is. */
+/* Throw the cached tokenizer state away.  Not lines_invalidate(): the LINE
+ * index is still correct, only the colouring state is not, and rebuilding the
+ * line offsets of a 6000-line file to change its language would be work for
+ * nothing. */
+void uc_doc_retokenize(UcDoc *d)
+{
+    if (!d) return;
+    d->lstate_lines = 0;
+}
+
+/* The scope id of every character on one line, through the same cached
+ * cross-line state the painter uses.  It exists so the tokenizer can be tested
+ * at all: uc_lang.c has no host test, and the question that matters about it -
+ * "what colour is this character, given the twelve lines above it" - cannot be
+ * asked without the document's state cache in the loop. */
+int uc_line_scopes(UcDoc *d, int line, short *out, int cap)
+{
+    int s, e, n, st, dummy = 0;
+    if (!d || !out || cap <= 0 || line < 0 || line >= uc_line_count(d)) return 0;
+    s = uc_line_start(d, line);
+    e = uc_line_end(d, line);
+    n = e - s;
+    if (n > cap) n = cap;
+    if (n > UC_HL_MAXLINE) n = UC_HL_MAXLINE;
+    st = uc_line_state(d, line);
+    if (!uc_tokenize(d->lang, d->text + s, n, st, out, &dummy)) {
+        int i;
+        for (i = 0; i < n; i++) out[i] = 0;
+    }
+    return n;
+}
+
 int uc_line_state(UcDoc *d, int line)
 {
     int i;

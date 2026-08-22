@@ -784,7 +784,15 @@ static void q_accept(void)
         break;
     case UC_Q_LANG: {
         UcDoc *d = uc_doc_active();
-        if (d && ref >= 0) d->lang = ref;
+        if (d && ref >= 0) {
+            d->lang = ref;
+            /* The cached tokenizer state is GRAMMAR-RELATIVE - it names a
+             * pattern in the old language's pool - so it has to go with the
+             * language.  This was already wrong before UCD-28 made the state
+             * richer; the symptom was a file that kept the previous
+             * language's block-comment colouring until it was edited. */
+            uc_doc_retokenize(d);
+        }
         break;
     }
     case UC_Q_SYMBOL: {

@@ -20,14 +20,13 @@
  * resolves them by longest dotted prefix, so a grammar written for VS Code's
  * default themes is coloured correctly here without being rewritten.
  *
- * THE ONE DOCUMENTED DEVIATION.  Cross-line state is ONE open begin/end rule,
- * not a stack.  Within a line, nesting is arbitrary; across a line break, only
- * the OUTERMOST rule left open is remembered.  That covers block comments and
- * multi-line strings - everything real code leaves open at a newline - and it
- * is what lets the per-line state be a single 16-bit number stored beside the
- * line index, which is what makes scrolling a 6000-line file cost nothing.
- * Anything deeper re-syncs at the next line rather than being coloured wrongly
- * forever, which is the failure mode to prefer.
+ * CROSS-LINE STATE IS A STACK (UCD-28), and still one 16-bit number per line.
+ * It used to be a single open rule, which meant a rule closing on a later line
+ * dropped the editor to the top level rather than back into whatever contained
+ * it.  The stack is INTERNED - each distinct nesting becomes an id in a pool -
+ * so the per-line cost is unchanged and the per-document cost is the number of
+ * nestings that actually occur, which is small even in a large file.  See the
+ * block above hl_state_push().
  *
  * OUTPUT IS PER CHARACTER, not per token run.  The painter wants a colour for
  * every column anyway, and writing scopes into a per-character array makes an
@@ -247,19 +246,61 @@ static UcGrammar *gram_new(const char *scope, int cap)
     return g;
 }
 
-static int gram_take(UcGrammar *g, int n)      /* n contiguous slots, -1 = full */
+/* n contiguous slots.  The pool GROWS (UCD-28): it used to be a fixed 288 and
+ * a published grammar wants thousands - `#name` includes are inlined by COPY,
+ * so a repository entry used in twenty places costs twenty copies.  Running out
+ * was silent, and what it silently did was drop every rule after the one that
+ * hit the cap, which is how a grammar could load, report success and colour
+ * nothing.
+ *
+ * A GROWING POOL MOVES.  Patterns address their children by INDEX (`sub`,
+ * `nsub`), so nothing stored survives a move badly - but a CALLER holding a
+ * `UcPattern *` across a call that can take more slots is holding a dangling
+ * pointer, and both builders did.  They work on a local and write it back at
+ * a freshly computed address; see build_one().  This is the failure that
+ * turned "the pool is too small" into a segfault the moment it stopped
+ * being too small. */
+static int gram_take(UcGrammar *g, int n)      /* -1 = out of memory or too big */
 {
     int at = g->npat;
-    if (at + n > g->pcap) return -1;
+    if (at + n > g->pcap) {
+        int ncap = g->pcap ? g->pcap * 2 : 64;
+        UcPattern *np;
+        while (ncap < at + n) ncap *= 2;
+        /* `sub`/`nsub` are `short`, so the pool cannot exceed what they can
+         * address.  A grammar past that is refused rather than truncated. */
+        if (ncap > 32000) { g->pool_full = 1; return -1; }
+        np = (UcPattern *)malloc((unsigned long)ncap * sizeof(UcPattern));
+        if (!np) { g->pool_full = 1; return -1; }
+        if (g->pat) {
+            memcpy(np, g->pat, (unsigned long)g->npat * sizeof(UcPattern));
+            free(g->pat);
+        }
+        memset(np + g->npat, 0, (unsigned long)(ncap - g->npat) * sizeof(UcPattern));
+        g->pat = np;
+        g->pcap = ncap;
+    }
     g->npat += n;
     return at;
 }
 
+/* The reason the LAST failed compile failed, and how many have.  The error
+ * string was being written into a stack buffer and thrown away at every call
+ * site, so a grammar could lose half its rules without a word (UCD-28). */
+static char g_rx_err[80];
+static int  g_rx_bad;
+
 static UcRx *rx_or_null(const char *pat)
 {
-    char err[64];
+    char err[80];
+    UcRx *rx;
     if (!pat || !pat[0]) return 0;
-    return uc_rx_compile(pat, 0, err, sizeof err);
+    rx = uc_rx_compile(pat, 0, err, sizeof err);
+    if (!rx) {
+        g_rx_bad++;
+        uc_scpy(g_rx_err, err[0] ? err : "regex did not compile", sizeof g_rx_err);
+    }
+    return rx;
 }
 
 static UcGrammar *gram_from_rows(const char *scope, const UcGramRow *rows)
@@ -273,7 +314,11 @@ static UcGrammar *gram_from_rows(const char *scope, const UcGramRow *rows)
     g->top = (short)base;
     g->ntop = (short)n;
     for (i = 0; i < n; i++) {
-        UcPattern *p = &g->pat[base + i];
+        UcPattern tmp;
+        UcPattern *p = &tmp;          /* a LOCAL: gram_take() below may move
+                                       * the pool out from under a pointer
+                                       * into it */
+        memset(&tmp, 0, sizeof tmp);
         uc_scpy(p->name, rows[i].name ? rows[i].name : "", sizeof p->name);
         p->match = rx_or_null(rows[i].match);
         p->begin = rx_or_null(rows[i].begin);
@@ -292,20 +337,86 @@ static UcGrammar *gram_from_rows(const char *scope, const UcGramRow *rows)
                 p->nsub = 1;
             }
         }
+        g->pat[base + i] = tmp;       /* address computed AFTER any growth */
     }
     g->ok = 1;
     return g;
 }
 
 /* ---- grammars from JSON ---------------------------------------------------- */
+/* A repository entry is built ONCE and referred to, not copied (UCD-28).
+ *
+ * `#name` used to be inlined by copy: every include of `#expression` produced
+ * its own copy of that rule set and its own freshly compiled regexes.  For a
+ * hand-written grammar with four repository entries that is merely wasteful.
+ * For a published one it is fatal - TypeScript's entries reference each other
+ * densely, so copying expands combinatorially: the grammar filled the pattern
+ * pool and then recursed until the C stack ran out.  The old fixed 288-slot
+ * pool had been hiding that, which is why simply growing the pool turned a
+ * silent truncation into a segfault.
+ *
+ * Referring instead makes an include an index, makes a cycle finite, and
+ * compiles each rule's regex exactly once. */
+#define UC_REPO_MAX        256
+#define UC_GRAM_BUILD_MAX  32      /* reference-chain depth while building  */
+
 typedef struct {
     UcGrammar *g;
     UcJson    *root;
     UcJson    *repo;
     int        depth;
+    const char *repo_name[UC_REPO_MAX];
+    short       repo_first[UC_REPO_MAX], repo_n[UC_REPO_MAX];
+    int         nrepo;
 } GramBuild;
 
 static void build_list(GramBuild *b, UcJson *arr, int *out_first, int *out_n);
+static int  build_one(GramBuild *b, UcJson *rule, int slot);
+
+/* The slice for `#name`, built the first time it is asked for. */
+static int repo_slice(GramBuild *b, const char *name, int *first, int *n)
+{
+    UcJson *r, *pats;
+    int i, cnt, base;
+    *first = 0; *n = 0;
+    for (i = 0; i < b->nrepo; i++)
+        if (!strcmp(b->repo_name[i], name)) {
+            *first = b->repo_first[i];
+            *n = b->repo_n[i];
+            return *n > 0;
+        }
+    if (!b->repo || b->nrepo >= UC_REPO_MAX) return 0;
+    r = uc_json_member(b->repo, name);
+    if (!r) return 0;
+    pats = uc_json_member(r, "patterns");
+    cnt = (pats && pats->type == UJ_ARR && pats->n > 0) ? pats->n : 1;
+    base = gram_take(b->g, cnt);
+    if (base < 0) return 0;
+
+    /* CACHED BEFORE IT IS BUILT.  An entry that references itself, or a cycle
+     * through several, has to find the slice already reserved and point at it.
+     * Building first and caching after is exactly how a cycle becomes an
+     * infinite expansion. */
+    i = b->nrepo++;
+    b->repo_name[i] = name;
+    b->repo_first[i] = (short)base;
+    b->repo_n[i] = (short)cnt;
+
+    if (pats && pats->type == UJ_ARR && pats->n > 0) {
+        UcJson *e;
+        int k;
+        for (k = 0, e = pats->child; e && k < cnt; e = e->next, k++) {
+            if (build_one(b, e, base + k)) b->g->nbuilt++;
+            else b->g->ndropped++;
+        }
+    } else {
+        if (build_one(b, r, base)) b->g->nbuilt++;
+        else b->g->ndropped++;
+    }
+    *first = base;
+    *n = cnt;
+    return 1;
+}
 
 static void captures_into(UcPattern *p, UcJson *caps)
 {
@@ -325,7 +436,20 @@ static void captures_into(UcPattern *p, UcJson *caps)
 /* Fill one pattern slot from a JSON rule.  Returns 0 if the rule is one we
  * cannot represent, in which case the slot is left inert (it matches nothing)
  * rather than silently becoming a different rule. */
-static int build_one(GramBuild *b, UcJson *rule, UcPattern *p)
+/* Build one rule into a LOCAL, then write it into the pool at an address
+ * computed afterwards.  Anything in here can call gram_take() - an `include`
+ * expands into fresh slots - and gram_take() can move the pool. */
+static int build_one_into(GramBuild *b, UcJson *rule, UcPattern *p);
+
+static int build_one(GramBuild *b, UcJson *rule, int slot)
+{
+    UcPattern tmp;
+    int ok = build_one_into(b, rule, &tmp);
+    b->g->pat[slot] = tmp;
+    return ok;
+}
+
+static int build_one_into(GramBuild *b, UcJson *rule, UcPattern *p)
 {
     const char *inc, *m, *bg, *en, *nm;
     char err[64];
@@ -333,19 +457,10 @@ static int build_one(GramBuild *b, UcJson *rule, UcPattern *p)
     inc = uc_json_str(rule, "include", 0);
     if (inc) {
         if (!strcmp(inc, "$self")) { p->self = 1; return 1; }
-        if (inc[0] == '#' && b->repo && b->depth < UC_GRAM_DEPTH) {
-            UcJson *r = uc_json_member(b->repo, inc + 1);
-            UcJson *pats;
+        if (inc[0] == '#' && b->repo && b->depth < UC_GRAM_BUILD_MAX) {
             int first = 0, n = 0;
-            if (!r) return 0;
-            pats = uc_json_member(r, "patterns");
             b->depth++;
-            if (pats) build_list(b, pats, &first, &n);
-            else {
-                /* a repository entry that is itself a single rule */
-                int slot = gram_take(b->g, 1);
-                if (slot >= 0 && build_one(b, r, &b->g->pat[slot])) { first = slot; n = 1; }
-            }
+            repo_slice(b, inc + 1, &first, &n);
             b->depth--;
             p->sub = (short)first;
             p->nsub = (short)n;
@@ -413,14 +528,20 @@ static void build_list(GramBuild *b, UcJson *arr, int *out_first, int *out_n)
     if (base < 0) return;
     *out_first = base;
     *out_n = n;
-    for (i = 0, e = arr->child; e && i < n; e = e->next, i++)
-        build_one(b, e, &b->g->pat[base + i]);
+    for (i = 0, e = arr->child; e && i < n; e = e->next, i++) {
+        if (build_one(b, e, base + i)) b->g->nbuilt++;
+        else b->g->ndropped++;
+    }
 }
 
 static void gram_free(UcGrammar *g)
 {
     int i;
     if (!g) return;
+    /* Any interned tokenizer state that names this grammar is now a pattern
+     * index into freed memory.  Bumping the generation retires them all
+     * without having to find them (UCD-28). */
+    uc_hl_state_invalidate();
     for (i = 0; i < g->npat; i++) {
         uc_rx_free(g->pat[i].match);
         uc_rx_free(g->pat[i].begin);
@@ -446,13 +567,50 @@ int uc_lang_load_grammar(int lang, int vol, const char *path)
     if (!root) return 0;
     g = gram_new(uc_json_str(root, "scopeName", "source.unknown"), UC_GRAM_PATTERNS * 3);
     if (!g) { uc_json_free(root); return 0; }
-    b.g = g; b.root = root; b.repo = uc_json_member(root, "repository"); b.depth = 0;
+    /* ZEROED, not field-by-field.  It grew a repository cache (UCD-28) and the
+     * old initialisation set four fields by name, so `nrepo` was whatever was
+     * on the stack and the very first lookup walked off the end of the array. */
+    memset(&b, 0, sizeof b);
+    b.g = g; b.root = root; b.repo = uc_json_member(root, "repository");
+    g_rx_bad = 0;
+    g_rx_err[0] = 0;
     build_list(&b, uc_json_member(root, "patterns"), &first, &n);
     uc_json_free(root);
     if (n <= 0) { gram_free(g); return 0; }
     g->top = (short)first;
     g->ntop = (short)n;
+    g->nregex_bad = g_rx_bad;
     g->ok = 1;
+    /* SAY SO.  A grammar that lost rules used to load in silence, and silence
+     * is why nobody knew that the two biggest published grammars in the world
+     * were arriving as a third of themselves. */
+    {
+        int ch = uc_output_channel("Log");
+        char msg[200], num[16];
+        uc_scpy(msg, "grammar ", sizeof msg);
+        uc_scat(msg, g->scope, sizeof msg);
+        uc_scat(msg, ": ", sizeof msg);
+        uc_itoa(num, g->nbuilt);
+        uc_scat(msg, num, sizeof msg);
+        uc_scat(msg, " rules", sizeof msg);
+        if (g->ndropped) {
+            uc_itoa(num, g->ndropped);
+            uc_scat(msg, ", ", sizeof msg);
+            uc_scat(msg, num, sizeof msg);
+            uc_scat(msg, " dropped", sizeof msg);
+        }
+        if (g->nregex_bad) {
+            uc_itoa(num, g->nregex_bad);
+            uc_scat(msg, " (", sizeof msg);
+            uc_scat(msg, num, sizeof msg);
+            uc_scat(msg, " bad regex, last: ", sizeof msg);
+            uc_scat(msg, g_rx_err, sizeof msg);
+            uc_scat(msg, ")", sizeof msg);
+        }
+        if (g->pool_full) uc_scat(msg, " - PATTERN POOL EXHAUSTED", sizeof msg);
+        { char nl[2]; nl[0] = 0x0a; nl[1] = 0; uc_scat(msg, nl, sizeof msg); }
+        uc_output_write(ch, msg);
+    }
     if (g_lang[lang].gram) gram_free(g_lang[lang].gram);
     g_lang[lang].gram = g;
     return 1;
@@ -529,7 +687,157 @@ typedef struct {
     int         len;
     short      *out;
     int         steps;
+    unsigned    gen;            /* which line the match cache belongs to     */
 } HlCtx;
+
+/* ---- the per-line match cache ----------------------------------------------
+ * THE ONE OPTIMISATION THIS TOKENIZER CANNOT DO WITHOUT.
+ *
+ * scan() walks a line position by position and, at each position, asks every
+ * reachable rule where it next matches.  A real grammar has hundreds of rules
+ * and a line has dozens of positions, so that is tens of thousands of regex
+ * executions per line - Microsoft's TypeScript grammar took 32 seconds to
+ * colour a 1300-line file, which is not a slow editor, it is a broken one.
+ *
+ * The observation that fixes it: `uc_rx_exec(rx, s, to, pos)` returns the
+ * LEFTMOST match at or after `pos`.  If a rule was already found to match at
+ * `at`, and `at >= pos`, that is still the answer - the text has not changed.
+ * And if a rule was found not to match from some earlier position, it cannot
+ * match from a later one either.  So each rule runs at most once per line,
+ * plus once more each time the scan passes the position it had matched at.
+ *
+ * The cache is keyed by pattern-pool index and validated by a generation
+ * number, so a new line costs an integer bump rather than a memset of an
+ * array with one entry per rule in the grammar. */
+typedef struct {
+    unsigned gen;
+    int      from;              /* the position the search started from      */
+    int      at;                /* where it matched, or -1 for "nowhere"     */
+    int      end;
+    int      caps[UC_RX_CAPS * 2];
+} HlHit;
+
+static HlHit  *g_hit;
+static int     g_hitcap;
+static unsigned g_hitgen;
+
+/* How many regexes the tokenizer has actually executed.  Exposed because the
+ * cost of this loop is the thing that regresses, and it regresses by ORDERS -
+ * a missing cache took a real grammar from a millisecond a line to twenty-five
+ * - while looking identical in every screenshot and every scope assertion.
+ * Counting executions is a measure of the machine's work that does not depend
+ * on which machine it is. */
+static unsigned long g_rx_calls;
+unsigned long uc_hl_rx_calls(void) { return g_rx_calls; }
+
+static int hit_reserve(int n)
+{
+    HlHit *p;
+    if (n <= g_hitcap) return 1;
+    p = (HlHit *)malloc((unsigned long)n * sizeof(HlHit));
+    if (!p) return 0;
+    memset(p, 0, (unsigned long)n * sizeof(HlHit));
+    if (g_hit) free(g_hit);
+    g_hit = p;
+    g_hitcap = n;
+    g_hitgen++;                 /* every old entry is now stale */
+    return 1;
+}
+
+/* Where rule `idx` next matches at or after `pos`, through the cache. */
+static int rule_match(HlCtx *h, int idx, UcRx *rx, int pos, int to, int *caps)
+{
+    HlHit *c;
+    /* A \G rule is NOT cacheable: it anchors at the position the search was
+     * told to start from, so "matches nowhere" determined from column 0 says
+     * nothing about column 8 - where it may well match.  Everything else is
+     * position-independent in the way the cache needs. */
+    if (idx < 0 || idx >= g_hitcap || uc_rx_ganchored(rx)) {
+        g_rx_calls++;
+        return uc_rx_exec(rx, h->s, to, pos, pos == 0, caps);
+    }
+    c = &g_hit[idx];
+    if (c->gen == h->gen && c->from <= pos) {
+        if (c->at < 0) return 0;                       /* nothing, ever again */
+        if (c->at >= pos) {
+            memcpy(caps, c->caps, sizeof c->caps);
+            return 1;
+        }
+    }
+    if (++h->steps > 40000) return 0;
+    g_rx_calls++;
+    if (!uc_rx_exec(rx, h->s, to, pos, pos == 0, caps)) {
+        c->gen = h->gen; c->from = pos; c->at = -1;
+        return 0;
+    }
+    c->gen = h->gen; c->from = pos; c->at = caps[0]; c->end = caps[1];
+    memcpy(c->caps, caps, sizeof c->caps);
+    return 1;
+}
+
+/* ---- the cross-line state, which is a STACK (UCD-28) -----------------------
+ * A line can begin inside a comment inside a template string inside a function
+ * body.  The state carried from one line to the next used to be ONE pattern
+ * index - the innermost rule left open - so closing that rule dropped the
+ * editor back to the top level rather than back into whatever contained it.
+ * A block comment's closing delimiter, appearing inside a string that was
+ * itself inside something, ended the string and dropped everything after it
+ * to plain text.  Every real grammar nests, so this was not an edge case.
+ *
+ * THE STACK IS INTERNED RATHER THAN STORED.  UcDoc keeps one `unsigned short`
+ * per line and there are tens of thousands of lines; a stack per line would be
+ * a heap allocation per line, invalidated on every keystroke.  Instead each
+ * distinct stack becomes an id in a pool, and a stack is a chain of
+ * (parent, pattern) links - so the per-line cost stays two bytes and the
+ * per-DOCUMENT cost is the number of distinct nestings that actually occur,
+ * which is small even in a large file.
+ *
+ * A state records the grammar it belongs to AND a generation, because ids
+ * outlive grammars: changing a document's language, or an extension reloading
+ * its grammar, leaves old ids in a document's cache and the pattern index
+ * inside them would then address a different rule.  A stale id reads as "no
+ * state", which is exactly the safe answer.
+ * ======================================================================== */
+#define UC_HLSTATE_MAX 4096
+typedef struct {
+    unsigned short parent;      /* 0 = the bottom of the stack               */
+    short          pat;         /* index into the grammar's pattern pool     */
+    const UcGrammar *g;
+    unsigned       gen;
+} HlState;
+
+static HlState g_hlstate[UC_HLSTATE_MAX];
+static int     g_nhlstate = 1;  /* id 0 is "nothing open" and is never stored */
+static unsigned g_gram_gen = 1;
+
+/* Called whenever a grammar is loaded or freed.  Old ids do not have to be
+ * hunted down - they simply stop validating. */
+void uc_hl_state_invalidate(void) { g_gram_gen++; }
+
+static int hl_state_valid(const UcGrammar *g, int id)
+{
+    return id > 0 && id < g_nhlstate &&
+           g_hlstate[id].g == g && g_hlstate[id].gen == g_gram_gen;
+}
+
+static int hl_state_push(const UcGrammar *g, int parent, int pat)
+{
+    int i;
+    if (pat < 0) return parent;
+    for (i = 1; i < g_nhlstate; i++)
+        if (g_hlstate[i].parent == parent && g_hlstate[i].pat == pat &&
+            g_hlstate[i].g == g && g_hlstate[i].gen == g_gram_gen)
+            return i;
+    /* Out of pool.  DEGRADE to the caller's own state rather than fail: the
+     * line still colours, it just forgets one level of nesting - which is what
+     * every line did before this existed. */
+    if (g_nhlstate >= UC_HLSTATE_MAX) return parent;
+    g_hlstate[g_nhlstate].parent = (unsigned short)parent;
+    g_hlstate[g_nhlstate].pat = (short)pat;
+    g_hlstate[g_nhlstate].g = g;
+    g_hlstate[g_nhlstate].gen = g_gram_gen;
+    return g_nhlstate++;
+}
 
 static void paint(HlCtx *h, int a, int b, int scope)
 {
@@ -554,23 +862,84 @@ static void paint_match(HlCtx *h, UcPattern *p, const int *caps, int use_name)
 }
 
 /* Scan [from,to) against the pattern slice [first,first+n), honouring an
- * enclosing begin/end rule when `encl` is non-NULL.  Returns the index of a
- * pattern left OPEN at the end of the line, or -1. */
-static int scan(HlCtx *h, int first, int n, int from, int to, UcPattern *encl,
-                int depth)
+ * enclosing begin/end rule when `encl` is non-NULL.
+ *
+ * Returns the interned STATE open when the line ends - which is `encl_state`
+ * if nothing deeper opened, and something deeper if it did - or the sentinel
+ * -2 to say the enclosing rule CLOSED, in which case *closed_at receives the
+ * position just past its end match.
+ *
+ * Carrying the position back is new (UCD-28) and is not a tidiness: the old
+ * -2 said only "it closed", so both callers re-ran the end regex to find out
+ * where.  That is one wasted regex execution per closed block per line, and
+ * two places that had to agree about a zero-width end match. */
+/* The leftmost match among the rules in [first,first+n), following group and
+ * $self includes TO ANY DEPTH.
+ *
+ * A GROUP IS NOT A RULE.  `{"include": "#expression"}` resolves to a repository
+ * entry that is itself a list of includes, which resolve to more lists.  The
+ * old code expanded exactly one level and skipped anything deeper - fine for a
+ * hand-written grammar, fatal for a published one.  Microsoft's TypeScript
+ * grammar is nothing BUT includes of includes: one level of expansion found no
+ * rules at all, so the file loaded, reported success, and came out entirely
+ * plain.  That is the "or mis-colour" half of this task, and it survived the
+ * whole regex rewrite because the two failures look identical from outside.
+ *
+ * `seen` is a cycle guard, not an optimisation: a repository entry that
+ * includes itself - directly, or through $self - must not be a hang.
+ * Depth-first in declaration order, so the first rule listed still wins a tie,
+ * which is TextMate's rule. */
+#define UC_GRAM_SEEN 24
+static void best_in(HlCtx *h, int first, int n, int pos, int to,
+                    int *best, int *best_at, int *best_end, int *best_caps,
+                    short *seen, int *nseen, int depth)
 {
-    int pos = from, open = -1;
-    if (depth > UC_GRAM_DEPTH) return -1;
+    int i;
+    if (depth > UC_GRAM_DEPTH) return;
+    for (i = 0; i < n; i++) {
+        UcPattern *p = &h->g->pat[first + i];
+        UcRx *rx = p->match ? p->match : p->begin;
+        int caps[UC_RX_CAPS * 2];
+        if (p->self || (!rx && p->nsub > 0)) {
+            int sf = p->self ? h->g->top : p->sub;
+            int sn = p->self ? h->g->ntop : p->nsub;
+            int k, dup = 0;
+            for (k = 0; k < *nseen; k++) if (seen[k] == (short)sf) { dup = 1; break; }
+            if (dup || *nseen >= UC_GRAM_SEEN) continue;
+            seen[(*nseen)++] = (short)sf;
+            best_in(h, sf, sn, pos, to, best, best_at, best_end, best_caps,
+                    seen, nseen, depth + 1);
+            (*nseen)--;
+            continue;
+        }
+        if (!rx) continue;
+        if (h->steps > 40000) return;
+        if (!rule_match(h, first + i, rx, pos, to, caps)) continue;
+        if (caps[0] < *best_at) {
+            *best_at = caps[0];
+            *best = first + i;
+            *best_end = caps[1];
+            memcpy(best_caps, caps, sizeof caps);
+        }
+    }
+}
+
+static int scan(HlCtx *h, int first, int n, int from, int to, UcPattern *encl,
+                int encl_state, int depth, int *closed_at)
+{
+    int pos = from;
+    if (depth > UC_GRAM_DEPTH) return encl_state;
     while (pos < to) {
         int best = -1, best_at = to + 1, best_end = 0;
         int best_caps[UC_RX_CAPS * 2], caps[UC_RX_CAPS * 2];
-        int end_at = -1, end_to = 0, i;
+        int end_at = -1, end_to = 0;
 
         best_caps[0] = -1;
 
         if (++h->steps > 40000) break;      /* a pathological grammar stops here */
 
         /* the enclosing rule's end pattern competes with its children */
+        g_rx_calls += (encl && encl->end) ? 1 : 0;
         if (encl && encl->end &&
             uc_rx_exec(encl->end, h->s, to, pos, pos == 0, caps)) {
             end_at = caps[0];
@@ -578,32 +947,11 @@ static int scan(HlCtx *h, int first, int n, int from, int to, UcPattern *encl,
             if (end_to == end_at) end_to = end_at + 1;   /* never stall */
         }
 
-        for (i = 0; i < n; i++) {
-            UcPattern *p = &h->g->pat[first + i];
-            UcRx *rx = p->match ? p->match : p->begin;
-            if (p->self || (!rx && p->nsub > 0)) {
-                /* a group / $self include: its children compete directly */
-                int sf = p->self ? h->g->top : p->sub;
-                int sn = p->self ? h->g->ntop : p->nsub;
-                int j;
-                for (j = 0; j < sn; j++) {
-                    UcPattern *q = &h->g->pat[sf + j];
-                    UcRx *qrx = q->match ? q->match : q->begin;
-                    if (!qrx) continue;
-                    if (!uc_rx_exec(qrx, h->s, to, pos, pos == 0, caps)) continue;
-                    if (caps[0] < best_at) {
-                        best_at = caps[0]; best = sf + j; best_end = caps[1];
-                        memcpy(best_caps, caps, sizeof caps);
-                    }
-                }
-                continue;
-            }
-            if (!rx) continue;
-            if (!uc_rx_exec(rx, h->s, to, pos, pos == 0, caps)) continue;
-            if (caps[0] < best_at) {
-                best_at = caps[0]; best = first + i; best_end = caps[1];
-                memcpy(best_caps, caps, sizeof caps);
-            }
+        {
+            short seen[UC_GRAM_SEEN];
+            int nseen = 0;
+            best_in(h, first, n, pos, to, &best, &best_at, &best_end,
+                    best_caps, seen, &nseen, 0);
         }
 
         /* the enclosing end wins if it starts no later than the best child */
@@ -611,6 +959,7 @@ static int scan(HlCtx *h, int first, int n, int from, int to, UcPattern *encl,
             if (encl->content[0]) paint(h, pos, end_at, uc_scope_id(encl->content));
             else if (encl->name[0]) paint(h, pos, end_at, uc_scope_id(encl->name));
             if (encl->name[0]) paint(h, end_at, end_to, uc_scope_id(encl->name));
+            if (closed_at) *closed_at = end_to;
             return -2;                          /* the rule closed on this line */
         }
         if (best < 0) break;
@@ -632,20 +981,17 @@ static int scan(HlCtx *h, int first, int n, int from, int to, UcPattern *encl,
             paint_match(h, p, best_caps, 1);
             {
                 int inner_from = best_end > best_at ? best_end : best_at + 1;
+                int child = hl_state_push(h->g, encl_state, best);
+                int cl = to;
                 int r = scan(h, p->nsub ? p->sub : 0, p->nsub, inner_from, to,
-                             p, depth + 1);
-                if (r == -2) {
-                    /* the sub-scan consumed up to and including the end match;
-                     * it does not report where, so re-find it to continue */
-                    int c2[UC_RX_CAPS * 2];
-                    if (uc_rx_exec(p->end, h->s, to, inner_from, 0, c2))
-                        pos = c2[1] > c2[0] ? c2[1] : c2[0] + 1;
-                    else pos = to;
-                    continue;
-                }
-                open = best;
-                pos = to;
-                break;
+                             p, child, depth + 1, &cl);
+                if (r == -2) { pos = cl > pos ? cl : pos + 1; continue; }
+                /* Whatever the CHILD left open, not merely this rule.  The old
+                 * code recorded `best` here and threw `r` away, and that one
+                 * line is the whole of "the state is not a stack": a rule left
+                 * open inside another was forgotten, so the next line resumed
+                 * one level too shallow. */
+                return r;
             }
         }
     }
@@ -654,7 +1000,7 @@ static int scan(HlCtx *h, int first, int n, int from, int to, UcPattern *encl,
                                   : (encl->name[0] ? uc_scope_id(encl->name) : 0);
         paint(h, pos, to, sc);
     }
-    return open;
+    return encl_state;
 }
 
 int uc_tokenize(int lang, const char *line, int len, int state_in,
@@ -662,7 +1008,7 @@ int uc_tokenize(int lang, const char *line, int len, int state_in,
 {
     HlCtx h;
     UcLang *L = uc_lang_at(lang);
-    int i, open;
+    int i, open, pos = 0, st, depth;
     if (state_out) *state_out = 0;
     if (!scope_out || len < 0) return 0;
     for (i = 0; i < len; i++) scope_out[i] = 0;
@@ -670,22 +1016,35 @@ int uc_tokenize(int lang, const char *line, int len, int state_in,
     if (len > UC_HL_MAXLINE) return 0;
 
     h.g = L->gram; h.s = line; h.len = len; h.out = scope_out; h.steps = 0;
+    if (!hit_reserve(h.g->npat)) return 0;
+    h.gen = ++g_hitgen;
 
-    if (state_in > 0 && state_in <= h.g->npat) {
-        /* the line opens inside a begin/end rule that started earlier */
-        UcPattern *p = &h.g->pat[state_in - 1];
-        int r = scan(&h, p->nsub ? p->sub : 0, p->nsub, 0, len, p, 1);
-        if (r == -2) {
-            int c2[UC_RX_CAPS * 2];
-            int pos = 0;
-            if (uc_rx_exec(p->end, line, len, 0, 1, c2)) pos = c2[1] > c2[0] ? c2[1] : c2[0] + 1;
-            open = scan(&h, h.g->top, h.g->ntop, pos, len, 0, 0);
-        } else {
-            open = state_in - 1;                 /* still open at end of line */
-        }
-    } else {
-        open = scan(&h, h.g->top, h.g->ntop, 0, len, 0, 0);
+    /* A state from another grammar - a changed language, a reloaded extension -
+     * reads as "nothing open" rather than as an index into a pool it does not
+     * belong to. */
+    st = hl_state_valid(h.g, state_in) ? state_in : 0;
+
+    /* how deep this line starts, so UC_GRAM_DEPTH still bounds the recursion */
+    depth = 0;
+    { int k = st; while (k > 0 && depth <= UC_GRAM_DEPTH) { depth++; k = g_hlstate[k].parent; } }
+
+    /* UNWIND OUTWARDS.  The line begins inside a stack of open rules; scan the
+     * innermost, and each time one closes carry on in the one that contained
+     * it, from where the close left off.  The old code could only ever resume
+     * one level and, when that level closed, jumped straight to the top - so a
+     * comment ending inside a string put the rest of the string in plain text. */
+    for (;;) {
+        UcPattern *p;
+        int cl = len, r;
+        if (st <= 0) { open = scan(&h, h.g->top, h.g->ntop, pos, len, 0, 0, 0, &cl); break; }
+        p = &h.g->pat[g_hlstate[st].pat];
+        r = scan(&h, p->nsub ? p->sub : 0, p->nsub, pos, len, p, st, depth, &cl);
+        if (r != -2) { open = r; break; }
+        pos = cl > pos ? cl : pos + 1;
+        st = g_hlstate[st].parent;
+        if (depth > 0) depth--;
+        if (pos >= len) { open = st; break; }
     }
-    if (state_out) *state_out = (open >= 0) ? open + 1 : 0;
+    if (state_out) *state_out = open > 0 ? open : 0;
     return 1;
 }

@@ -714,3 +714,7 @@ int uc_host_tab_info(int i, int *vol, char *dir, int dcap, char *name, int ncap)
     if (name) uc_scpy(name, d->name, ncap);
     return 1;
 }
+
+/* The workspace volume, for a host that may not include unocode.h.  The
+ * headless --grammar hand needs it to resolve a path the way the editor does. */
+int uc_ws_vol(void) { return UC.ws_vol; }

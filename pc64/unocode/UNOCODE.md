@@ -283,19 +283,44 @@ patterns, each a one-line `match`, a `begin`/`end` pair with nested
 `captures` / `beginCaptures` assign scopes to capture groups.
 
 The regex engine (`uc_rx.c`) supports literals, `.`, character classes with
-ranges and negation, `\w \W \d \D \s \S \b \B`, anchors, `* + ? {n,m}` greedy
-and lazy, alternation, and capture / non-capture groups. It **rejects**
-backreferences and lookaround at compile time rather than mis-matching them
-silently, and it is an iterative matcher with a step budget - a pathological
-pattern returns "no match", it does not hang the desktop.
+ranges, negation and POSIX names, `\w \W \d \D \s \S \h \b \B \A \z \G`,
+anchors, `* + ? {n,m}` greedy and lazy, alternation, capture and
+non-capture groups, named groups, inline `(?i)` and `(?x)`, backreferences
+`\1`-`\9`, and **lookaround in all four forms**. It is an iterative matcher
+with a step budget: a pathological pattern returns "no match" rather than
+hanging the desktop.
 
-**One documented deviation.** Cross-line state is ONE open `begin`/`end` rule,
-not a stack. Within a line, nesting is arbitrary; across a line break only the
-outermost open rule is remembered. That covers block comments and multi-line
-strings - everything real code leaves open at a newline - and it is what makes
-the per-line state a single 16-bit number, which is what makes scrolling a
-6000-line file free. Anything deeper re-syncs at the next line rather than
-being coloured wrongly for the rest of the file.
+Lookaround is the one place it recurses, bounded by pattern nesting rather than
+by subject length and capped at 8 - see the header of `uc_rx.c` for why that
+distinction is what the no-recursion rule was ever about.
+
+**How much of a real grammar loads.** A rule whose regex will not compile is
+silently dropped, so this number is the one that matters:
+
+| grammar | before UCD-28 | now |
+|---|---|---|
+| Microsoft's TypeScript | 36.7% of patterns | 99.8% |
+| Microsoft's C++ | 32.3% | 100% |
+
+(The one TypeScript pattern still refused references group 3 in a pattern that
+has one group. Oniguruma rejects it too; it is a bug in the grammar.)
+
+`tools/rx_grammar.c` is that measurement. It is deliberately not in the gate:
+it needs a published grammar file, and shipping 200 KB of somebody else's JSON
+to test our regex engine is a licensing question answered for the wrong reason.
+
+**Two deliberate relaxations.** An atomic group `(?>...)` compiles as an
+ordinary non-capturing one, and a possessive quantifier `*+` as a greedy one.
+Both are promises about backtracking cost rather than about what matches, and
+the step budget is what actually bounds this engine. Dropping them can only
+make a pattern match in more places, never in the wrong place - and the
+alternative was what the parser used to do, which was eat the body.
+
+**Cross-line state is a stack** (UCD-28), and still one 16-bit number per line.
+Each distinct nesting is interned to an id, so a document pays for the nestings
+that actually occur rather than for a stack per line. A state that names a
+different grammar - after a language change, or an extension reloading - reads
+as "nothing open", which is the safe answer.
 
 Built-in languages: plaintext, C, Python, JavaScript, JSON, Markdown, HTML,
 CSS.
@@ -530,7 +555,8 @@ layout, so it is vendored verbatim rather than kept as two copies that drift.
 ```sh
 # UnoCode Desktop, where the editor is canonical
 sh core/tools/test.sh                        # host: the JSONC parser + regex
-./build.sh --gate                            # + the four seam suites + a render
+./build.sh --gate                            # + the seam suites and a render
+./build.sh --lsp                             # language servers + grammars
 
 # UnoDOS, where it is vendored - and the only place a kernel break is visible
 sh unocode/tools/test.sh                     # the same file, the same 71 checks
@@ -538,6 +564,18 @@ cd pc64 && sh tools/gate.sh                  # runs the above as a stage
 cd pc64 && UNO_DEBUG=1 ./build.sh && \
     python3 unocode/tools/unocode_urc.py     # QEMU: the merge gate
 ```
+
+`--lsp` drives the running editor headlessly and reads what it printed, because
+what these features have to prove is CONTENT - which completion, at which
+column, in whose order; which scope, given the twelve lines above it - and a
+screenshot answers none of that. The language-server half skips loudly when
+clangd is absent; the grammar half needs nothing and never skips.
+
+One of its checks is a COST, not a behaviour: the editor reports how many
+regexes the tokenizer executed, and the gate bounds executions per line. That
+is the only kind of test that would have caught the missing per-line match
+cache, which took a real grammar from a millisecond a line to twenty-five while
+producing byte-identical output.
 
 **Run the UnoDOS side before calling a change done.** The desktop build
 compiles the editor and its foundations, never the kernel, so a change to
@@ -570,6 +608,11 @@ typed into a *document*.
   platform's own store, the `AI: Set API Key` / `AI: Clear API Key` commands
   with a masked input box, and the store named on screen whenever a key is
   saved. Keys never enter `SETTINGS.JSN`.
+- **1.11** (2026-08-22) TextMate fidelity (UCD-28). The regex engine gained
+  lookaround, backreferences, `(?x)`, POSIX classes, `\G` and named groups, and
+  stopped silently mis-compiling atomic groups and possessive quantifiers;
+  Microsoft's TypeScript grammar goes from 36.7% of its patterns loading to
+  99.8%, and C++ from 32.3% to 100%. Cross-line tokenizer state is a stack.
 - **1.10** (2026-08-22) Rename Symbol and Format Document (UCD-27). F2,
   Shift+Alt+F, and `editor.formatOnSave`, which formats before writing rather
   than after. A server's edits are applied last first, which is the only order
