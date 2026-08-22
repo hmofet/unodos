@@ -101,6 +101,21 @@ void uc_output_write(int ch, const char *s)
     }
 }
 
+/* Reading a channel back.  The Output panel painted it from inside this file
+ * until UCD-22 needed the same lines outside it - a headless run has no panel
+ * to look at, and "the server did talk to us" is only checkable if the traffic
+ * log can be printed. */
+int uc_output_lines(int ch)
+{
+    return (ch >= 0 && ch < g_nout) ? g_out[ch].n : 0;
+}
+
+const char *uc_output_line(int ch, int i)
+{
+    if (ch < 0 || ch >= g_nout || i < 0 || i >= g_out[ch].n) return "";
+    return g_out[ch].line[(g_out[ch].head + i) % OUT_LINES];
+}
+
 void uc_output_show(int ch)
 {
     if (ch >= 0 && ch < g_nout) g_outsel = ch;

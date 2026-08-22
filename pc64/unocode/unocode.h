@@ -458,6 +458,10 @@ typedef struct {
     /* local history: the text as it was when opened or last saved, so the
      * gutter can show what changed without a version-control system. */
     char  *base; int baselen;
+    /* Rises once per text change and never otherwise (UCD-22).  A language
+     * server's document version, and the cheap "has this changed since I last
+     * looked" test for anything else that watches a buffer. */
+    unsigned rev;
 } UcDoc;
 
 int     uc_doc_count(void);
@@ -651,6 +655,8 @@ int  uc_problems_total(void);
 int  uc_output_channel(const char *name);        /* find or create          */
 void uc_output_write(int ch, const char *s);
 void uc_output_show(int ch);
+int  uc_output_lines(int ch);                    /* lines held right now    */
+const char *uc_output_line(int ch, int i);       /* oldest first; never NULL */
 
 /* transient notifications (bottom-right toasts) */
 void uc_notify(const char *msg, int sev);

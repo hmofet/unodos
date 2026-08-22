@@ -484,16 +484,21 @@ if [ "$1" != "legacy" ]; then
     fi
 
     # ---- UNOCODE.UNO: the VS Code-class editor, a unoui-CLASS module -------
-    # Fourteen objects under unocode/ - the workbench, the editor, the JSONC
+    # Seventeen objects under unocode/ - the workbench, the editor, the JSONC
     # parser, the regex engine the grammars run on, and the extension host
-    # over unojs.  Same pipeline as STUDIO.UNO; the only build difference is
+    # over unojs.  THE LIST IS EXPLICIT AND HAS TO BE EDITED: the desktop build
+    # globs core/uc_*.c, so a new file lands there silently and only fails
+    # HERE, at a link, with an undefined symbol that names the caller rather
+    # than the missing file.  Same pipeline as STUDIO.UNO; the only build
+    # difference is
     # -Iunocode (its private header) and -I../unojs (the embedding API, whose
     # entry points are exported from pc64_modload.c's kExports).
     if [ "${UNO_UNOCODE:-1}" != "0" ]; then
         echo "[3c2] building UNOCODE.UNO (the editor)..."
         COBJ=""
         for s in uc_main uc_util uc_json uc_rx uc_theme uc_cfg uc_lang uc_doc \
-                 uc_edit uc_view uc_cmd uc_term uc_ext uc_api uc_http uc_ai; do
+                 uc_edit uc_view uc_cmd uc_term uc_ext uc_api uc_http uc_ai \
+                 uc_lsp; do
             # -mno-stack-arg-probe: mingw calls ___chkstk_ms for any frame over
             # 4 KB, and a loadable module has nothing to link that against - it
             # surfaces as an unresolvable import at the kExports check, three

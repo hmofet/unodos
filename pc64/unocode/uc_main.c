@@ -32,6 +32,7 @@
  * where the modifier mask is real.
  * ======================================================================== */
 #include "unocode.h"
+#include "uc_lsp.h"
 #include "uno_uuiapp.h"
 #include "uno_appdesc.h"
 
@@ -559,6 +560,7 @@ static void uc_opened(void)
         uc_theme_select(uc_cfg_str("workbench.colorTheme"));
         uc_explorer_refresh();
         uc_tasks_reload();
+        uc_lsp_init();
         uc_ext_activate_startup();
         if (!strcmp(uc_cfg_str("workbench.startupEditor"), "welcome"))
             uc_cmd_run("unocode.showWelcome");
@@ -576,6 +578,7 @@ static void uc_closed(void)
      * what keeps a closed window from leaking a socket (UCD-47's rule). */
     uc_ai_abort();
     uc_term_child_stop();      /* a build must not outlive the window */
+    uc_lsp_shutdown_all();     /* nor a compiler holding a gigabyte     */
     uc_quick_close();
     uc_find_close();
     uc_suggest_close();
@@ -592,6 +595,7 @@ static void uc_frame(void)
     uc_ai_tick();
     uc_search_tick();
     uc_term_tick();
+    uc_lsp_tick();
     /* Repaint on the CARET's cadence, not on the frame's: a blinking caret
      * needs two repaints a second, and asking for one every frame would keep
      * the whole desktop compositing for no visible difference. */
