@@ -241,11 +241,31 @@ while :; do
     # backtrace naming the module that did it, and a filter tuned for the
     # word "error" throws that away.
     echo "uno: session ended ----" > /dev/ttyS0
-    tail -18 /tmp/x.log | sed 's/^/uno| /' > /dev/ttyS0
+    tail -8 /tmp/x.log | sed 's/^/uno| /' > /dev/ttyS0
+    grep -E "^\(EE\)|Backtrace|^ *[0-9]+: " /var/log/Xorg.0.log 2>/dev/null | tail -14 | sed 's/^/unoX| /' > /dev/ttyS0
     sleep 2
 done
 EOF
 chmod +x $R/sbin/uno-init
+
+# XORG ON A DUMB FRAMEBUFFER MUST NOT TRY TO ACCELERATE.  UnoDOS gives the
+# guest a plain linear framebuffer through simpledrm - no GPU, no render
+# node, no GL - and modesetting's default glamor acceleration NULL-derefs on
+# exactly that: "(EE) Segmentation fault at address 0x0", minutes into a
+# session that had been rendering perfectly.  It never happened under plain
+# QEMU because a VGA gives a real DRM driver to work with, which is why this
+# took a hypervisor run to see.  ShadowFB keeps the drawing off the slow
+# framebuffer until it has to land there.
+mkdir -p $R/etc/X11/xorg.conf.d
+cat > $R/etc/X11/xorg.conf.d/20-uno-fb.conf <<'XCONFEOF'
+Section "Device"
+    Identifier  "uno-fb"
+    Driver      "modesetting"
+    Option      "AccelMethod"  "none"
+    Option      "ShadowFB"     "true"
+    Option      "AtomicModeSetting" "false"
+EndSection
+XCONFEOF
 
 mkdir -p $R/usr/share/uno
 cat > $R/usr/share/uno/session.sh <<'SESSEOF'
