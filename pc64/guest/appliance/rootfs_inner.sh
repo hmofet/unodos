@@ -85,6 +85,19 @@ echo "uno: input nodes: $(ls /dev/input 2>/dev/null | tr '\n' ' ')" > /dev/ttyS0
 # irq1=85 says nothing about whether a single keystroke arrived.  One
 # blocking read of the evdev node does say it, in one word, for each device.
 # Armed early so they are already waiting when the harness types.
+# THE RAW EVENT STREAM, decoded off-box.  Ctrl+L and Backspace reach the
+# browser and letters do not, with the emulated controller reporting every
+# one of them delivered and none dropped - so the question is whether a
+# letter's scancode becomes a key EVENT at all.  24 bytes per event, printed
+# as hex: type, code and value are all in there.
+( sleep 200
+  for d in /dev/input/event0 /dev/input/event1; do
+      [ -e "$d" ] || continue
+      echo "uno: raw $d" > /dev/ttyS0
+      timeout 300 od -An -tx1 -w24 "$d" 2>/dev/null | head -24 | sed 's/^/unoR| /' > /dev/ttyS0 &
+  done
+) &
+
 ( for d in /dev/input/event0 /dev/input/event1 /dev/input/event2; do
       [ -e "$d" ] || continue
       ( if dd if="$d" bs=24 count=1 >/dev/null 2>&1; then
