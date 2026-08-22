@@ -380,7 +380,82 @@ it to PYRT.
 
 ---
 
-## 8. Testing
+## 8. Language servers
+
+`uc_lsp.h` is a Language Server Protocol client: a server per language, spoken
+to over pipes in JSON-RPC. It is a subsystem, not a platform seam - it sits on
+`uc_proc.h`, and on pc64, where `uc_proc_available()` answers 0, it never starts
+anything and every call costs nothing. The editor keeps the grammar-derived
+heuristics it has.
+
+Which server serves which language is a table with built-in defaults, overridden
+from `SETTINGS.JSN`:
+
+```json
+{
+  "lsp.enabled": true,
+  "lsp.trace": false,
+  "lsp.servers": {
+    "python": "pyright-langserver --stdio",
+    "rust": ""
+  }
+}
+```
+
+An empty command turns one language off; `lsp.enabled: false` turns them all
+off. `lsp.trace` puts the traffic in the **Language Server** Output channel,
+which is the only way to diagnose the failure this protocol produces most
+often - a server that starts and then says nothing.
+
+Four decisions worth knowing before changing anything:
+
+- **Pipes, not a pty.** A pty echoes what you write, translates newlines, and
+  has a line discipline that will rewrite a byte inside a message body. That is
+  right for a human and fatal for a protocol, so `uc_proc_spawn_pipes()` is a
+  separate call rather than a flag on the existing one. stderr is kept separate:
+  merging it corrupts the stream, discarding it loses the only explanation a
+  server gives when it dies before saying anything protocol-shaped.
+- **Full document sync, on a quiet timer.** Incremental sync means client and
+  server each keep a copy of the text and agree on every edit forever; one
+  mis-ranged change and they diverge silently, with the server answering
+  questions about a file that no longer exists. Full sync cannot diverge, and
+  sending it only after 300 ms of no typing is what makes it affordable.
+- **Server-initiated requests are answered, always.** pyright will not finish
+  starting until `workspace/configuration` is answered, and the answer must be
+  an array with one entry per item requested. Anything else the client does not
+  recognise is answered with a null result rather than an error: an unknown
+  request refused politely is survivable, one never answered is not.
+- **Death is ordinary.** A server that exits is restarted after 1s, 2s, 4s and
+  so on to a 32s cap, its documents are re-opened on the replacement, and the
+  backoff resets once it has behaved for a minute.
+
+### 8.1 Columns
+
+There are now **four** ways to count a column in UnoCode, and they agree only on
+tab-free ASCII:
+
+| unit | who uses it | `"    char *s = "🙂🙂"; int y = bad"` |
+|---|---|---|
+| bytes | the buffer, `uc_replace_range` | 34 before `bad` |
+| code points | `uc_col_of` / `uc_offset_of`, `UcProblem.col` | 28 |
+| visual cells | `vcol_of`, the painter and the hit test | 30 |
+| UTF-16 units | **LSP, and nothing else** | 30 |
+
+An emoji is one code point, two UTF-16 units, two cells and four bytes, so a
+conversion done in the wrong unit is correct in every ASCII test and wrong from
+the first non-ASCII character onwards - which reads as "the server's ranges are
+off" rather than as this side's bug. `uc_lsp_pos_to_offset()` and
+`uc_lsp_offset_to_u16()` are the only code that may convert; everything else
+takes a document offset.
+
+`UcProblem` stores **1-based code-point** columns, because that is what
+`uc_offset_of()` consumes and what the Problems panel's click already hands it.
+
+---
+
+---
+
+## 9. Testing
 
 The same two files are tested in both trees. `tools/test.sh` finds its own
 layout, so it is vendored verbatim rather than kept as two copies that drift.
@@ -428,6 +503,16 @@ typed into a *document*.
   platform's own store, the `AI: Set API Key` / `AI: Clear API Key` commands
   with a masked input box, and the store named on screen whenever a key is
   saved. Keys never enter `SETTINGS.JSN`.
+- **1.6** (2026-08-21) Diagnostics from language servers (UCD-23): squiggles
+  under the reported range, marks in the minimap and on a new overview ruler,
+  the Problems panel and the status-bar counts fed from real servers, and the
+  counts coloured by severity. `UcProblem` grew an end position and a
+  directory; see section 8.1 for the four column units and which one it stores.
+- **1.5** (2026-08-21) A Language Server Protocol client (UCD-22): servers
+  spawned on pipes, JSON-RPC framed over stdio, full-text document sync on a
+  quiet timer, and a bounded restart when one dies. No UI yet - section 8
+  describes the settings and the traffic log. Verified live against clangd and
+  pyright; a killed server comes back and re-opens its documents.
 - **1.4** (2026-08-21) Real Promises and `async`/`await` (UCD-21): unojs
   gained a microtask queue and a suspending `await`, so every asynchronous
   call in this API returns a genuine Promise and deviation #1 is gone.

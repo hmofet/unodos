@@ -78,6 +78,14 @@ typedef struct {
     int      version;         /* the LSP document version                    */
     int      opened;          /* didOpen has been sent on THIS server         */
     char     uri[UC_FULL_MAX + 16];
+    /* The document's identity, COPIED rather than read back through `doc`.
+     * A record has to be able to clean up after the document it describes has
+     * already been closed - and by then the pointer is a slot that means some
+     * other file (see sync_reresolve).  Copying three fields is cheaper than
+     * the class of bug that reading them late invites. */
+    int      vol;
+    char     dir[UC_PATH_MAX];
+    char     name[UC_NAME_MAX];
 } UcLspSync;
 
 struct UcLsp {
@@ -111,6 +119,10 @@ static int   g_nlisten;
 static UcJson *g_reply_root;
 static int     g_reply_kept;
 static void reply_retain(void) { g_reply_kept = 1; }
+
+/* defined with the diagnostics, below the sync table it has to read */
+static void diag_publish(UcLsp *s, UcJson *params);
+static void server_source(UcLsp *s, char *out, int cap);
 
 /* ---- logging --------------------------------------------------------------
  * One channel, "Language Server", and a trace setting that decides whether the
@@ -464,6 +476,8 @@ static void dispatch(UcLsp *s, const char *body, int n)
         if (!strcmp(m, "window/logMessage") || !strcmp(m, "window/showMessage")) {
             const char *text = uc_json_str(params, "message", "");
             if (text && text[0] && lsp_tracing()) lsp_log("server: ", text);
+        } else if (!strcmp(m, "textDocument/publishDiagnostics")) {
+            diag_publish(s, params);
         }
         listeners_fire(s, m, params);
     }
@@ -562,6 +576,13 @@ static void server_stop(UcLsp *s, int polite)
         }
     }
     pending_abandon(s);
+    /* This server's diagnostics go with it.  A squiggle from a compiler that
+     * is no longer running is a claim about a file nobody is still checking,
+     * and it stays on screen through every edit that would have fixed it. */
+    {   char source[16];
+        server_source(s, source, (int)sizeof source);
+        uc_problems_clear(source);
+    }
     if (s->proc) { uc_proc_free(s->proc); s->proc = 0; }
     if (s->caps_root) { uc_json_free(s->caps_root); s->caps_root = 0; }
     s->caps = 0;
@@ -654,6 +675,28 @@ static UcLsp *server_for_cmd(const char *cmd)
 }
 
 /* ---- document sync -------------------------------------------------------- */
+
+/* The document is gone - tell the server, take its diagnostics down, and free
+ * the slot.  Both callers used to do this inline, and one of them cannot read
+ * `k->doc` at all by the time it runs, which is why the record carries the
+ * file's identity itself. */
+static void sync_retire(UcLsp *s, UcLspSync *k)
+{
+    char source[16];
+    if (k->opened && s->state == UC_LSP_READY) {
+        char *b = 0; int len = 0, cap = 0;
+        buf_str(&b, &len, &cap, "{\"textDocument\":{\"uri\":\"");
+        buf_str(&b, &len, &cap, k->uri);
+        buf_str(&b, &len, &cap, "\"}}");
+        if (b) { uc_lsp_notify(s, "textDocument/didClose", b); free(b); }
+    }
+    /* A closed file's squiggles have nowhere left to be drawn, but its rows
+     * stay in the Problems panel and its counts stay in the status bar -
+     * claims about a file the editor is no longer looking at. */
+    server_source(s, source, (int)sizeof source);
+    uc_problems_clear_file(k->vol, k->dir, k->name, source);
+    memset(k, 0, sizeof *k);
+}
 
 static UcLspSync *sync_find(UcLsp *s, UcDoc *d)
 {
@@ -757,6 +800,9 @@ UcLsp *uc_lsp_open_doc(UcDoc *d)
     k = sync_slot(s, d);
     if (!k) return 0;
     uc_scpy(k->uri, uri, (int)sizeof k->uri);
+    k->vol = d->vol;
+    uc_scpy(k->dir, d->dir, (int)sizeof k->dir);
+    uc_scpy(k->name, d->name, (int)sizeof k->name);
     if (s->state == UC_LSP_OFF) server_start(s);
     return s;
 }
@@ -785,15 +831,8 @@ void uc_lsp_close_doc(UcDoc *d)
     for (i = 0; i < g_nsrv; i++) {
         UcLsp *s = &g_srv[i];
         UcLspSync *k = sync_find(s, d);
-        char *b = 0; int len = 0, cap = 0;
         if (!k) continue;
-        if (k->opened && s->state == UC_LSP_READY) {
-            buf_str(&b, &len, &cap, "{\"textDocument\":{\"uri\":\"");
-            buf_str(&b, &len, &cap, k->uri);
-            buf_str(&b, &len, &cap, "\"}}");
-            if (b) { uc_lsp_notify(s, "textDocument/didClose", b); free(b); }
-        }
-        memset(k, 0, sizeof *k);
+        sync_retire(s, k);
     }
 }
 
@@ -821,14 +860,7 @@ static void sync_reresolve(UcLsp *s)
             if (!strcmp(uri, k->uri)) found = d;
         }
         if (found) { k->doc = found; continue; }
-        if (k->opened && s->state == UC_LSP_READY) {
-            char *b = 0; int len = 0, cap = 0;
-            buf_str(&b, &len, &cap, "{\"textDocument\":{\"uri\":\"");
-            buf_str(&b, &len, &cap, k->uri);
-            buf_str(&b, &len, &cap, "\"}}");
-            if (b) { uc_lsp_notify(s, "textDocument/didClose", b); free(b); }
-        }
-        memset(k, 0, sizeof *k);
+        sync_retire(s, k);
     }
 }
 
@@ -840,6 +872,172 @@ UcLsp *uc_lsp_for_doc(UcDoc *d)
         if (sync_find(&g_srv[i], d)) return &g_srv[i];
     }
     return 0;
+}
+
+/* ---- positions ------------------------------------------------------------
+ * LSP counts a column in UTF-16 CODE UNITS.  UnoCode already counts columns
+ * three other ways - bytes, code points (uc_col_of) and visual cells (tabs
+ * expanded, wide glyphs two) - and all four agree exactly as long as the text
+ * is ASCII, which is how a bug here survives every test anyone writes by hand.
+ * They diverge on the first emoji: one code point, TWO UTF-16 units, two cells,
+ * four bytes.  A squiggle placed with the wrong unit is not visibly wrong on
+ * the line that produced it; it is wrong on every line after the first
+ * non-ASCII character, which reads as "the server's ranges are off" rather
+ * than as a conversion this side got wrong.
+ *
+ * utf-16 is what the client asked for in its capabilities, so it is what
+ * arrives; if that ever becomes negotiable, this is the only place that knows. */
+static int u16_to_byte(const char *line, int len, int u16)
+{
+    int b = 0, u = 0;
+    while (b < len && u < u16) {
+        int cp = 0, n = uc_u8_get(line + b, len - b, &cp);
+        if (n <= 0) break;
+        b += n;
+        u += (cp >= 0x10000) ? 2 : 1;   /* astral characters are a surrogate
+                                         * PAIR, and cost two units */
+    }
+    return b;
+}
+
+static int byte_to_u16(const char *line, int len, int byte)
+{
+    int b = 0, u = 0;
+    if (byte > len) byte = len;
+    while (b < byte) {
+        int cp = 0, n = uc_u8_get(line + b, len - b, &cp);
+        if (n <= 0) break;
+        b += n;
+        u += (cp >= 0x10000) ? 2 : 1;
+    }
+    return u;
+}
+
+/* An LSP {line, character} to an offset in `d`.  The line number is 0-based in
+ * both, which is the one thing about this that needs no conversion. */
+int uc_lsp_pos_to_offset(UcDoc *d, int line, int u16)
+{
+    int s, e;
+    if (!d) return 0;
+    if (line < 0) line = 0;
+    if (line >= uc_line_count(d)) line = uc_line_count(d) - 1;
+    if (line < 0) return 0;
+    s = uc_line_start(d, line);
+    e = uc_line_end(d, line);
+    return s + u16_to_byte(d->text + s, e - s, u16);
+}
+
+int uc_lsp_offset_to_u16(UcDoc *d, int off)
+{
+    int line, s, e;
+    if (!d) return 0;
+    line = uc_line_of(d, off);
+    s = uc_line_start(d, line);
+    e = uc_line_end(d, line);
+    if (off < s) off = s;
+    if (off > e) off = e;
+    return byte_to_u16(d->text + s, e - s, off - s);
+}
+
+/* `{"line":L,"character":C}` for a document offset - every request from UCD-24
+ * onwards needs one and none of them should build it by hand. */
+int uc_lsp_pos_json(UcDoc *d, int off, char *out, int cap)
+{
+    char num[24];
+    if (!d || cap <= 0) { if (cap > 0) out[0] = 0; return 0; }
+    uc_scpy(out, "{\"line\":", cap);
+    uc_itoa(num, uc_line_of(d, off));
+    uc_scat(out, num, cap);
+    uc_scat(out, ",\"character\":", cap);
+    uc_itoa(num, uc_lsp_offset_to_u16(d, off));
+    uc_scat(out, num, cap);
+    uc_scat(out, "}", cap);
+    return 1;
+}
+
+/* ---- diagnostics (UCD-23) -------------------------------------------------
+ * This lives in the transport's own file rather than beside the Problems model
+ * because it is the only code that needs the private sync table: a
+ * publishDiagnostics names a URI, and the URI is only a document because this
+ * table says which one it is.  Exporting the table to keep files pure would be
+ * a worse trade than the one section. */
+
+/* The server's short name, for UcProblem.source - the first word of its
+ * command line, so a clear-by-source removes what this server said and not
+ * what the build said about the same file. */
+static void server_source(UcLsp *s, char *out, int cap)
+{
+    int i = 0, start = 0, k;
+    for (k = 0; s->cmd[k] && s->cmd[k] != ' '; k++)
+        if (s->cmd[k] == '/' || s->cmd[k] == '\\') start = k + 1;
+    for (i = 0; start + i < k && i < cap - 1; i++) out[i] = s->cmd[start + i];
+    out[i] = 0;
+}
+
+static UcLspSync *sync_by_uri(UcLsp *s, const char *uri)
+{
+    int i;
+    if (!uri) return 0;
+    for (i = 0; i < UC_LSP_SYNC; i++)
+        if (s->sync[i].doc && !strcmp(s->sync[i].uri, uri)) return &s->sync[i];
+    return 0;
+}
+
+static void diag_publish(UcLsp *s, UcJson *params)
+{
+    const char *uri = uc_json_str(params, "uri", "");
+    UcJson *arr = params ? uc_json_member(params, "diagnostics") : 0;
+    UcLspSync *k = sync_by_uri(s, uri);
+    UcJson *it;
+    UcDoc *d;
+    char source[16];
+    int added = 0;
+
+    /* Diagnostics about a file we never opened are DROPPED, not stored under a
+     * guessed path.  clangd publishes for its own `.clangd` config file, and a
+     * problem the user cannot click through to is worse than one not shown. */
+    if (!k || !arr || arr->type != UJ_ARR) return;
+    d = k->doc;
+    server_source(s, source, (int)sizeof source);
+    uc_problems_clear_file(k->vol, k->dir, k->name, source);
+
+    for (it = arr->child; it; it = it->next) {
+        UcProblem p;
+        UcJson *range = uc_json_member(it, "range");
+        UcJson *a = range ? uc_json_member(range, "start") : 0;
+        UcJson *b = range ? uc_json_member(range, "end") : 0;
+        int sev, sl, sc, el, ec;
+        if (!a) continue;
+        /* 64 from one file, so a header that will not parse cannot fill the
+         * whole 128-slot store and hide every other file's problems */
+        if (added >= 64) break;
+
+        sl = (int)uc_json_num(a, "line", 0);
+        sc = (int)uc_json_num(a, "character", 0);
+        el = b ? (int)uc_json_num(b, "line", sl) : sl;
+        ec = b ? (int)uc_json_num(b, "character", sc) : sc;
+
+        memset(&p, 0, sizeof p);
+        sev = (int)uc_json_num(it, "severity", 1);
+        p.sev = (sev == 2) ? UC_SEV_WARN :
+                (sev >= 3) ? UC_SEV_INFO : UC_SEV_ERROR;
+        uc_scpy(p.file, k->name, (int)sizeof p.file);
+        uc_scpy(p.dir, k->dir, (int)sizeof p.dir);
+        p.vol = k->vol;
+        uc_scpy(p.source, source, (int)sizeof p.source);
+        uc_scpy(p.msg, uc_json_str(it, "message", ""), (int)sizeof p.msg);
+
+        /* UTF-16 units in, CHARACTER columns out, because that is what
+         * uc_offset_of() consumes and what the Problems panel's click already
+         * hands it.  Storing UTF-16 here would put the burden on every reader. */
+        p.line = sl + 1;
+        p.col  = uc_col_of(d, uc_lsp_pos_to_offset(d, sl, sc)) + 1;
+        p.end_line = el + 1;
+        p.end_col  = uc_col_of(d, uc_lsp_pos_to_offset(d, el, ec)) + 1;
+        uc_problems_add(&p);
+        added++;
+    }
+    uc_repaint();
 }
 
 /* ---- the tick ------------------------------------------------------------- */

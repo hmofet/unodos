@@ -639,13 +639,48 @@ void uc_search_replace_all(void);
 void uc_notif_draw(UcRect r);
 void uc_notif_tick(void);
 
-/* problems (diagnostics), populated by builds and by extensions */
+/* Problems (diagnostics), from builds (UCD-15), extensions, and language
+ * servers (UCD-23).
+ *
+ * `line` and `col` are ONE-BASED, because every producer of them is: a
+ * compiler prints 1-based and a language server's 0-based positions are
+ * converted on the way in, at the one place that knows they were 0-based.
+ *
+ * `end_line`/`end_col` are the exclusive end of the squiggle, or 0 when the
+ * producer did not say - a build parses `file:12:5:` and has no range, so the
+ * editor underlines the word at the caret instead of guessing a width.
+ *
+ * `dir` is empty for a build, whose output names a leaf and nothing else, and
+ * filled by a language server, which addresses files by URI and can therefore
+ * tell two `main.c`s in different folders apart. */
 enum { UC_SEV_ERROR = 0, UC_SEV_WARN, UC_SEV_INFO };
 typedef struct {
     char file[UC_NAME_MAX]; char msg[100]; char source[16];
-    int  line, col; unsigned char sev; int vol;
+    char dir[UC_PATH_MAX];
+    int  line, col, end_line, end_col; unsigned char sev; int vol;
 } UcProblem;
 void uc_problems_clear(const char *source);
+/* Clear one FILE's problems from one source.  A language server republishes a
+ * whole file's diagnostics at once and expects the previous set for that file
+ * to disappear; clearing by source alone would take every other file's with
+ * it, and clearing nothing would accumulate a stale copy per keystroke. */
+void uc_problems_clear_file(int vol, const char *dir, const char *file,
+                            const char *source);
+/* Every problem on one line of one document, for the squiggle painter.  Fills
+ * `out` with at most `cap` pointers and returns how many. */
+int  uc_problems_on_line(UcDoc *d, int line, UcProblem **out, int cap);
+/* Is this problem about this document?  Ask over the PROBLEM list rather than
+ * over the line list when marking a whole file: a file has thousands of lines
+ * and at most a hundred problems. */
+int  uc_problem_in_doc(UcProblem *p, UcDoc *d);
+/* Field readers, for a host that may not include this header (the headless
+ * --lsp driver).  Same opaque-handle convention as uc_doc_active(). */
+int  uc_problem_line(UcProblem *p);
+int  uc_problem_col(UcProblem *p);
+int  uc_problem_endcol(UcProblem *p);
+int  uc_problem_sev(UcProblem *p);
+const char *uc_problem_msg(UcProblem *p);
+const char *uc_problem_file(UcProblem *p);
 int  uc_problems_add(const UcProblem *p);
 int  uc_problems_count(int sev);   /* sev < 0 = all */
 UcProblem *uc_problem_at(int i);
