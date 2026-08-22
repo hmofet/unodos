@@ -97,6 +97,33 @@ load-bearing.
 | `UJS_YIELD` | the fuel slice ran out mid-run; call `ujs_resume()` |
 | `UJS_OOM` | the heap ceiling was hit and collection could not free enough |
 
+### Jobs, and where an `await` continues (UCD-21)
+
+`ujs_run_jobs(vm)` drains the microtask queue: every Promise reaction and every
+suspended `await` whose value has arrived. `ujs_eval` and `ujs_resume` call it
+before they return, so a script is finished when they are.
+
+**A host that settles promises from C must call it once per frame.** That call
+is where the continuation of every `await` in an embedder actually runs - a
+dialog closing, a request completing, a file arriving. Without it those
+continuations are queued and never run - the promise is settled and the code
+after the `await` simply never runs, which looks like a hang with no error.
+
+It is bounded per call and refuses re-entry: a promise chain that queues itself
+for ever slows down rather than taking the machine with it.
+
+```c
+ujs_val p = ujs_promise(vm);          /* hand this to JS                    */
+...
+ujs_promise_resolve(vm, p, value);    /* later; reactions run on the next   */
+ujs_run_jobs(vm);                     /* ...call to this                    */
+```
+
+`ujs_function_set_data()` binds private state to a C function, arriving as
+`a->data`. A C function has no closure, and `self` is whatever the call site
+passed - which is `undefined` for a plain `f(x)`, and is why the `resolve` and
+`reject` pair handed to a `new Promise` executor needs it.
+
 ### Fuel, why it exists
 
 UnoDOS runs page scripts in ring 0 on a single-threaded OS. A `while(1)` in an
@@ -154,7 +181,18 @@ either work in a documented reduced way or raise a clear error.
    `String.prototype.replace` takes string patterns only. **M1c.**
 3. **Template interpolation.** `` `a${b}` `` lexes as a plain string; the
    `${...}` is not substituted. **M1b.**
-4. **`Promise` / microtasks / `async`.** Absent. **M1c.**
+4. ~~**`Promise` / microtasks / `async`.** Absent.~~ **DONE (UCD-21.)**
+   `Promise` with `.then`/`.catch`/`.finally` and `resolve`/`reject`/`all`, a
+   microtask queue drained by `ujs_run_jobs()`, and `async`/`await` on a real
+   suspension: an `await` lifts its function's frames, stack slice and
+   handlers out of the machine and splices them back when the awaited value
+   settles, so the call returns its promise at the moment it suspends.
+   Two things to know:
+   - **`async` and `await` are KEYWORDS here, not contextual ones**, so a
+     script using either as a variable name will not compile. Real code does
+     not, and a contextual keyword costs a lookahead on every identifier.
+   - `.then`/`.catch`/`.finally` live on `Object.prototype`, because a promise
+     is a plain object in this engine. Nothing else defines those names.
 5. **Named function *expressions*** cannot refer to themselves by name
    (`var g = function f(){ f(); }`). Function *declarations* recurse normally,
    because their name is a binding in the enclosing scope.
@@ -252,6 +290,13 @@ obvious implementation falls into:
 
 ## Changelog
 
+- **0.2** (2026-08-21) Promises, a microtask queue, and `async`/`await`
+  (UCD-21). `await` is a real suspension: the async function's frames, its
+  slice of the value stack and its handlers are lifted out of the VM and
+  spliced back when the awaited value settles. C functions gained bound data
+  (`ujs_function_set_data`), and `ujs_call_value` now unwinds the frames it
+  pushed when an exception escapes - invisible while every caller re-threw,
+  and corrupting the moment one swallowed it, as a Promise executor must.
 - **0.1** (2026-07-27), first cut. Engine core, library, host test suite.
   Replaces `pc64/js.c` (a 577-line tree-walking subset) via a `js_run()`
   compatibility shim. `[EXPERIMENTAL]`: the surface may still move before M1

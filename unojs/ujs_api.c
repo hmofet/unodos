@@ -255,10 +255,24 @@ ujs_val ujs_function_new(ujs_vm *vm, ujs_cfunc fn, const char *name, int nargs)
     if (!o) return ujs_undefined();
     o->u.cfn.fn = fn;
     o->u.cfn.nargs = nargs;
+    o->u.cfn.data = ujs_undefined();
     ujs_obj_put(vm, o, ujs_atom(vm, "name", -1),
                 ujs_string(vm, name ? name : "", -1), P_CONFIG);
     ujs_obj_put(vm, o, ujs_atom(vm, "length", -1), ujs_number(nargs), P_CONFIG);
     return ujs_obj_val(o);
+}
+
+ujs_val ujs_promise(ujs_vm *vm) { return ujs_promise_new(vm); }
+void ujs_promise_resolve(ujs_vm *vm, ujs_val p, ujs_val v)
+{ ujs_promise_settle(vm, p, v, 0); }
+void ujs_promise_reject(ujs_vm *vm, ujs_val p, ujs_val v)
+{ ujs_promise_settle(vm, p, v, 1); }
+
+void ujs_function_set_data(ujs_vm *vm, ujs_val fn, ujs_val data)
+{
+    (void)vm;
+    if (ujs_is_object(fn) && ujs_val_obj(fn)->cls == C_CFUNC)
+        ujs_val_obj(fn)->u.cfn.data = data;
 }
 
 ujs_val ujs_host_new(ujs_vm *vm, void *user, ujs_finalizer fin)
@@ -367,6 +381,7 @@ ujs_vm *ujs_new(const ujs_config *cfg)
     vm->global     = ujs_obj_new(vm, C_PLAIN, vm->obj_proto);
     if (!vm->global) { vm->gc_disabled = 0; ujs_free(vm); return NULL; }
     ujs_lib_init(vm);
+    ujs_promise_init(vm);            /* Promise, then/catch/finally (UCD-21) */
     vm->gc_disabled = 0;
     return vm;
 }
@@ -381,6 +396,15 @@ void ujs_free(ujs_vm *vm)
     vm->bool_proto = NULL; vm->err_proto = NULL;
     vm->nroots = 0; vm->nscope = 0; vm->sp = 0; vm->nframes = 0;
     vm->has_exception = 0; vm->natoms = 0;
+    /* suspended awaits and pending reactions are raw allocations, not GC
+     * objects, so the sweep below will not touch them (UCD-21) */
+    while (vm->coros) ujs_coro_free(vm, vm->coros);
+    while (vm->reactions) {
+        ujs_reaction *r = vm->reactions;
+        vm->reactions = r->next;
+        ujs_free_raw(vm, r, sizeof *r);
+    }
+    vm->njobs = 0;
     for (h = vm->objects; h; h = n) {
         n = h->next;
         if (h->type == H_OBJ) {
@@ -396,6 +420,7 @@ void ujs_free(ujs_vm *vm)
         }
         ujs_free_raw(vm, h, h->size);
     }
+    if (vm->jobs)       ujs_free_raw(vm, vm->jobs, (size_t)vm->jobcap * 2 * sizeof *vm->jobs);
     if (vm->atoms)      ujs_free_raw(vm, vm->atoms, (size_t)vm->atomcap * sizeof *vm->atoms);
     if (vm->atom_hash)  ujs_free_raw(vm, vm->atom_hash, (size_t)vm->atom_hashcap * sizeof *vm->atom_hash);
     if (vm->scope_vals) ujs_free_raw(vm, vm->scope_vals, (size_t)vm->scopecap * sizeof *vm->scope_vals);

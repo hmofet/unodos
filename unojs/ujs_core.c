@@ -101,6 +101,8 @@ static void mark_children(ujs_vm *vm, marklist *m, ujs_hdr *h)
         if (o->cls == C_FUNC) {
             ml_push(vm, m, (ujs_hdr *)o->u.fn.code);
             ml_push(vm, m, (ujs_hdr *)o->u.fn.env);
+        } else if (o->cls == C_CFUNC) {
+            ml_push_val(vm, m, o->u.cfn.data);   /* bound state (UCD-21) */
         }
         break; }
     case H_ENV: {
@@ -138,6 +140,40 @@ void ujs_gc(ujs_vm *vm)
         ml_push(vm, &m, (ujs_hdr *)vm->frames[i].env);
         ml_push(vm, &m, (ujs_hdr *)vm->frames[i].fn);
         ml_push_val(vm, &m, vm->frames[i].self);
+        ml_push_val(vm, &m, vm->frames[i].promise);
+    }
+    /* SUSPENDED awaits (UCD-21).  A coroutine is off the live stack by
+     * definition, so nothing above reaches its frames or its values - and
+     * every one of them is exactly as alive as a running frame's would be.
+     * Missing this collects the locals of a function that is merely waiting. */
+    {   ujs_coro *co;
+        for (co = vm->coros; co; co = co->next) {
+            int k;
+            for (k = 0; k < co->nframes; k++) {
+                ml_push(vm, &m, (ujs_hdr *)co->frames[k].code);
+                ml_push(vm, &m, (ujs_hdr *)co->frames[k].env);
+                ml_push(vm, &m, (ujs_hdr *)co->frames[k].fn);
+                ml_push_val(vm, &m, co->frames[k].self);
+                ml_push_val(vm, &m, co->frames[k].promise);
+            }
+            for (k = 0; k < co->nstack; k++) ml_push_val(vm, &m, co->stack[k]);
+        }
+    }
+    /* pending reactions: the promise they wait on, their callbacks, and the
+     * derived promise they will settle */
+    {   ujs_reaction *r;
+        for (r = vm->reactions; r; r = r->next) {
+            ml_push_val(vm, &m, r->promise);
+            ml_push_val(vm, &m, r->onok);
+            ml_push_val(vm, &m, r->onerr);
+            ml_push_val(vm, &m, r->out);
+        }
+    }
+    /* and the job queue itself */
+    for (i = 0; i < vm->njobs; i++) {
+        int slot = (vm->jobhead + i) % (vm->jobcap ? vm->jobcap : 1);
+        ml_push_val(vm, &m, vm->jobs[slot * 2]);
+        ml_push_val(vm, &m, vm->jobs[slot * 2 + 1]);
     }
     for (i = 0; i < vm->nroots; i++)  ml_push_val(vm, &m, vm->roots[i]);
     for (i = 0; i < vm->nscope; i++)  ml_push_val(vm, &m, vm->scope_vals[i]);

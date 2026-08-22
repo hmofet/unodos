@@ -32,7 +32,7 @@ echo "built build/qjs_host_test.exe"
 
 # the dispatch test: js.c + qjsweb.c + the FULL unojs engine, so the same
 # script runs through js_run() on both engines and the outputs are compared.
-for f in ujs_core ujs_lex ujs_comp ujs_vm ujs_lib ujs_api; do
+for f in ujs_core ujs_lex ujs_comp ujs_vm ujs_lib ujs_promise ujs_api; do
     $CC $FLAGS -c "../unojs/$f.c" -o "build/qjs_t_$f.o"
 done
 $CC $FLAGS -I. -c js.c -o build/qjs_t_js.o
@@ -40,6 +40,7 @@ $CC $FLAGS -I. -c qjsweb.c -o build/qjs_t_qjsweb.o
 $CC $FLAGS -I. -c quickjs/test/qjs_dispatch_test.c -o build/qjs_t_dmain.o
 UJS_OBJS="build/qjs_t_ujsmath.o build/qjs_t_ujs_core.o build/qjs_t_ujs_lex.o \
           build/qjs_t_ujs_comp.o build/qjs_t_ujs_vm.o build/qjs_t_ujs_lib.o \
+          build/qjs_t_ujs_promise.o \
           build/qjs_t_ujs_api.o"
 $CC -o build/qjs_dispatch_test.exe build/qjs_t_dmain.o build/qjs_t_js.o \
     build/qjs_t_qjsweb.o $QJS_OBJS $UJS_OBJS

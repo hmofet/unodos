@@ -348,6 +348,12 @@ static const struct { const char *name; void *addr; } kExports[] = {
     KX(ujs_set_fn), KX(ujs_set_accessor), KX(ujs_global),
     KX(ujs_throw), KX(ujs_throw_error),
     KX(ujs_fuel_used), KX(ujs_fuel_reset), KX(ujs_gc), KX(ujs_heap_used),
+    /* promises and the job queue (UCD-21).  A module that hands JS something
+     * it will answer later needs these, and the editor's extension host is
+     * the first: every asynchronous call in its `vscode` API is a promise the
+     * host settles. */
+    KX(ujs_promise), KX(ujs_promise_resolve), KX(ujs_promise_reject),
+    KX(ujs_run_jobs), KX(ujs_function_set_data),
 };
 #define NEXPORT ((int)(sizeof kExports / sizeof kExports[0]))
 

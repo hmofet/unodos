@@ -94,6 +94,82 @@ static const tcase cases[] = {
   "number\nstring\nundefined\nobject\nobject\nfunction\n" },
 { "ops-ternary", "print(1?'y':'n'); print(0?'y':'n');", "y\nn\n" },
 
+/* ---- promises and async (UCD-21) ---------------------------------------- */
+{ "promise-order",
+  /* THE defining property: a reaction runs after the current script, not
+   * during it.  If this prints 1 second, promises are just callbacks. */
+  "Promise.resolve(7).then(function(v){ print('then ' + v); }); print(1);",
+  "1\nthen 7\n" },
+{ "promise-chain",
+  "Promise.resolve(1).then(function(v){ return v + 1; })"
+  "  .then(function(v){ print(v); });",
+  "2\n" },
+{ "promise-adopt",
+  /* returning a promise from .then adopts it rather than nesting it */
+  "Promise.resolve(1).then(function(){ return Promise.resolve('inner'); })"
+  "  .then(function(v){ print(v); });",
+  "inner\n" },
+{ "promise-catch",
+  "Promise.reject('bad').catch(function(e){ print('caught ' + e); });",
+  "caught bad\n" },
+{ "promise-throw-to-catch",
+  /* a throw inside .then must reach the .catch further down the chain */
+  "Promise.resolve(1).then(function(){ throw 'boom'; })"
+  "  .catch(function(e){ print('got ' + e); });",
+  "got boom\n" },
+{ "promise-executor",
+  "new Promise(function(res){ res(42); }).then(function(v){ print(v); });",
+  "42\n" },
+{ "promise-executor-throw",
+  "new Promise(function(){ throw 'x'; }).catch(function(e){ print('c ' + e); });",
+  "c x\n" },
+{ "promise-all",
+  "Promise.all([1, Promise.resolve(2), 3]).then(function(a){ print(a.join('-')); });",
+  "1-2-3\n" },
+{ "promise-all-reject",
+  "Promise.all([1, Promise.reject('no')]).catch(function(e){ print('e ' + e); });",
+  "e no\n" },
+{ "async-returns-promise",
+  "async function f(){ return 5; } f().then(function(v){ print(v); });",
+  "5\n" },
+{ "async-await-value",
+  /* the suspension is real: `after` prints before the continuation */
+  "async function f(){ var v = await 3; print('got ' + v); }"
+  "f(); print('after');",
+  "after\ngot 3\n" },
+{ "async-await-promise",
+  "async function f(){ var v = await Promise.resolve('p'); print(v); } f();",
+  "p\n" },
+{ "async-await-twice",
+  /* two suspensions in one function: the locals must survive both */
+  "async function f(){ var a = await 1; var b = await 2; print(a + b); } f();",
+  "3\n" },
+{ "async-await-in-loop",
+  /* the loop counter lives on the value stack across a suspension */
+  "async function f(){ var t = 0, i;"
+  "  for (i = 0; i < 4; i++) t += await i;"
+  "  print(t); } f();",
+  "6\n" },
+{ "async-await-throws",
+  "async function f(){ try { await Promise.reject('r'); }"
+  "  catch (e) { print('caught ' + e); } } f();",
+  "caught r\n" },
+{ "async-rejects",
+  /* an exception escaping an async function rejects its promise rather than
+   * propagating to the caller */
+  "async function f(){ throw 'up'; } f().catch(function(e){ print('c ' + e); });",
+  "c up\n" },
+{ "async-awaits-async",
+  "async function inner(){ return 'i'; }"
+  "async function outer(){ print(await inner()); } outer();",
+  "i\n" },
+{ "async-arrow",
+  "var f = async () => { return await 9; }; f().then(function(v){ print(v); });",
+  "9\n" },
+{ "await-outside-async",
+  /* a compile error, not a silent no-op */
+  "await 1;", "!SYNTAX" },
+
 /* ---- variables + control flow ------------------------------------------ */
 { "var-assign", "var a=1; a+=2; a*=3; print(a); var b=10; b-=4; print(b);", "9\n6\n" },
 { "incdec", "var i=0; print(i++); print(i); print(++i); print(i--); print(i);",
@@ -360,6 +436,18 @@ int main(int argc, char **argv)
         if (!vm) { printf("  FAIL %s: no vm\n", cases[i].name); fails++; continue; }
         ujs_set_fn(vm, ujs_global(vm), "print", h_print, 1);
         r = ujs_eval(vm, cases[i].src, -1, &v);
+        /* "!SYNTAX" as the expectation means the case must NOT compile - a
+         * refusal is the behaviour under test, not a failure of it */
+        if (!strcmp(cases[i].want, "!SYNTAX")) {
+            if (r != UJS_SYNTAX) {
+                printf("  FAIL %-16s\n    want: a compile error, got rc=%d\n",
+                       cases[i].name, (int)r);
+                fails++;
+            }
+            ujs_clear_exception(vm);
+            ujs_free(vm);
+            continue;
+        }
         if (r != UJS_OK) {
             char b[192];
             printf("  FAIL %-16s rc=%d exc=%s\n", cases[i].name, (int)r,

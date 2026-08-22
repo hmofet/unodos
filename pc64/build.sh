@@ -186,7 +186,7 @@ if [ "$1" != "legacy" ]; then
     # double-precision math because pc64's is float-only and the number
     # formatter needs double exactness.  The browser reaches it only through
     # the js_run() shim in js.c.
-    for f in ujs_core ujs_math ujs_lex ujs_comp ujs_vm ujs_lib ujs_api; do
+    for f in ujs_core ujs_math ujs_lex ujs_comp ujs_vm ujs_lib ujs_promise ujs_api; do
         pc "$CC" $UCF $DBGSAN -c -o "build/$f.o" "../unojs/$f.c"; OBJS="$OBJS build/$f.o"
     done
     # unoweb: the web core (DOM + HTML parser today; CSS, layout and paint to

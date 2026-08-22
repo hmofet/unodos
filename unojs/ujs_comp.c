@@ -77,6 +77,7 @@ typedef struct fnscope {
     u32       nparams;
     int       is_global;                          /* top level: vars are globals */
     int       is_arrow;
+    int       is_async;                           /* `await` is legal inside  */
     loopctx  *loops;
     u32       name_atom;
 } fnscope;
@@ -97,6 +98,7 @@ typedef struct {
     fnscope   *fn;
     int        haderr;
     int        depth;               /* current recursive-descent nesting */
+    int        pending_async;       /* an `async` awaiting its function      */
     char       err[192];
 } compiler;
 
@@ -341,9 +343,15 @@ static void prescan_body(compiler *c, int stop_at_brace)
             prev = T_SEMI;                  /* back at statement position */
             continue;
         }
-        else if (t == T_FUNCTION) {
+        else if (t == T_ASYNC || t == T_FUNCTION) {
             ujs_lexpos fpos;
-            ujs_lex_save(&c->lx, &fpos);          /* the `function` token itself */
+            /* the `async` token, when there is one: the hoist prologue
+             * recompiles from here and must see the whole declaration */
+            ujs_lex_save(&c->lx, &fpos);
+            if (t == T_ASYNC) {
+                next(c);
+                if (!check(c, T_FUNCTION)) { prev = T_ASYNC; continue; }
+            }
             next(c);
             /* `function f(){}` in STATEMENT position is a declaration and
              * hoists; `var g = function f(){}` is an expression and does not.
@@ -389,7 +397,11 @@ static void emit_hoisted(compiler *c)
     for (i = 0; i < f->nhoists && !c->haderr; i++) {
         u32 name = f->hoists[i].atom;
         ujs_code *code;
-        ujs_lex_restore(&c->lx, &f->hoists[i].pos);   /* tok == `function` */
+        ujs_lex_restore(&c->lx, &f->hoists[i].pos);   /* `async` or `function` */
+        /* `async function f(){}` saved its position at the ASYNC token,
+         * because that is where the declaration starts.  Consume it and set
+         * the flag compile_function collects (UCD-21). */
+        if (check(c, T_ASYNC)) { c->pending_async = 1; next(c); }
         next(c);                                      /* -> the name       */
         if (check(c, T_IDENT)) next(c);               /* -> '('            */
         code = compile_function(c, name, 0, 0, 0);
@@ -510,6 +522,19 @@ static void primary_body(compiler *c)
         ujs_lex_restore(&c->lx, &save);
         next(c);
         emit_load_name(c, a);
+        return; }
+    case T_ASYNC: {
+        /* `async function f(){}`, `async () => {}`, `async x => {}`.  The
+         * keyword sits one production above the function it modifies, so it
+         * is parked on the compiler and collected by compile_function. */
+        next(c);
+        if (check(c, T_FUNCTION) || check(c, T_LPAREN) || check(c, T_IDENT)) {
+            c->pending_async = 1;
+            primary(c);
+            c->pending_async = 0;      /* it did not reach a function        */
+            return;
+        }
+        cerr(c, "expected a function after 'async'", NULL);
         return; }
     case T_FUNCTION: {
         u32 name = 0;
@@ -714,6 +739,19 @@ static void unary_body(compiler *c)
 {
     if (c->haderr) return;
     switch (c->lx.tok) {
+    case T_AWAIT: {
+        /* `await x`.  Only inside an async function - outside one there is
+         * nothing to suspend, and a top-level await that silently did nothing
+         * would be worse than a compile error. */
+        fnscope *f = c->fn;
+        next(c);
+        unary(c);
+        if (!f || !f->is_async) {
+            cerr(c, "'await' is only valid inside an async function", NULL);
+            return;
+        }
+        emit(c, OP_AWAIT);
+        return; }
     case T_BANG:   next(c); unary(c); emit(c, OP_NOT); return;
     case T_TILDE:  next(c); unary(c); emit(c, OP_BITNOT); return;
     case T_MINUS:  next(c); unary(c); emit(c, OP_NEG); return;
@@ -1237,6 +1275,20 @@ static void statement(compiler *c)
         if (!L) { cerr(c, "'continue' outside a loop", NULL); return; }
         pl_add(c, &L->continues, emit_jump(c, OP_JMP));
         return; }
+    case T_ASYNC:
+        /* `async function f(){}` in statement position was hoisted with its
+         * `function`, so consume the pair.  Anything else after `async` is an
+         * expression (an async arrow) and falls through to one. */
+        {   ujs_lexpos apos;
+            ujs_lex_save(&c->lx, &apos);
+            next(c);
+            if (check(c, T_FUNCTION)) { skip_function_decl(c); return; }
+            ujs_lex_restore(&c->lx, &apos);
+        }
+        expression(c);
+        semicolon(c);
+        emit(c, c->fn->is_global ? OP_SETRES : OP_POP);
+        return;
     case T_FUNCTION:
         /* already compiled and bound by emit_hoisted(); just consume it */
         skip_function_decl(c);
@@ -1265,6 +1317,7 @@ static ujs_code *finish(compiler *c, fnscope *f)
     code->nslots = f->nlocals;
     code->name_atom = f->name_atom;
     code->is_arrow = f->is_arrow;
+    code->is_async = f->is_async;
     f->bc = NULL; f->consts = NULL;                /* ownership moved to code  */
     return code;
 }
@@ -1287,6 +1340,10 @@ static ujs_code *compile_function(compiler *c, u32 name_atom, int is_arrow,
     f.parent = saved;
     f.name_atom = name_atom;
     f.is_arrow = is_arrow;
+    /* `async` was consumed one production above and parked on the compiler,
+     * because the keyword is read before the function it belongs to exists */
+    f.is_async = c->pending_async;
+    c->pending_async = 0;
     c->fn = &f;
 
     /* Parameters occupy slots 0..nparams-1; the VM copies arguments straight
