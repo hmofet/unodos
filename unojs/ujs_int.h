@@ -92,7 +92,7 @@ typedef struct ujs_obj {
     u32     nelems, elemcap;
     union {
         struct { struct ujs_code *code; struct ujs_env *env; } fn;
-        struct { ujs_cfunc fn; int nargs; } cfn;
+        struct { ujs_cfunc fn; int nargs; ujs_val data; } cfn;
         struct { void *user; ujs_finalizer fin; } host;
     } u;
 } ujs_obj;
@@ -113,6 +113,7 @@ typedef struct ujs_code {
     u32     nslots;              /* environment slots this body needs */
     u32     name_atom;
     int     is_arrow;            /* arrow: `this` comes from the definition */
+    int     is_async;            /* returns a Promise; may contain `await`  */
     /* line table for diagnostics: parallel to bytecode offsets, sparse */
     u32    *lines; u32 nlines;
 } ujs_code;
@@ -170,6 +171,7 @@ enum {
     OP_ITER,       /*             obj -> iterator state (for-in: keys)       */
     OP_ITER_OF,    /*             obj -> iterator state (for-of: values)      */
     OP_ITER_NEXT,  /* A4 done-target : iter -> iter value, or jump when done */
+    OP_AWAIT,      /*             pop -> suspend until it settles, push result */
     OP_LINE,       /* A4 line   : diagnostics only                           */
     OP__COUNT
 };
@@ -193,14 +195,36 @@ typedef struct {
     int       sp_base;
     int       h_base;          /* handler stack depth when the frame began */
     int       is_ctor;
+    /* An async frame owns the Promise its call already returned (UCD-21):
+     * OP_RET resolves it, an escaping exception rejects it, and OP_AWAIT
+     * hands it to the caller when the body suspends. */
+    ujs_val   promise;
+    int       is_async;
 } ujs_frame;
 
-typedef struct {
+typedef struct ujs_handler_s {
     int frame;
     u32 catch_ip, finally_ip;
     int sp;
     int env_depth;
 } ujs_handler;
+
+/* ---- coroutines (UCD-21) --------------------------------------------------
+ * A suspended `await`.  Everything the VM needs to continue an async function
+ * lives in flat arrays, so suspending one is a matter of LIFTING its slice out
+ * - its frames, its part of the value stack, its exception handlers - and
+ * splicing the slice back when the awaited value settles.
+ *
+ * The frames record ABSOLUTE stack offsets, so a resumed coroutine is rebased:
+ * the stack it comes back onto is not the one it left. */
+typedef struct ujs_coro {
+    struct ujs_coro *next;      /* the VM's live list, for the collector    */
+    ujs_frame   *frames;   int nframes;
+    ujs_val     *stack;    int nstack;
+    struct ujs_handler_s *handlers; int nhandlers;
+    int          base_sp;       /* frames[0].sp_base when it was captured   */
+    int          done;
+} ujs_coro;
 
 typedef struct { u32 atom; ujs_str *s; } ujs_atom_ent;
 
@@ -263,11 +287,57 @@ struct ujs_vm {
     unsigned long fuel, fuel_used;
     unsigned long fuel_slice, fuel_total;
 
+    /* ---- jobs, promises and coroutines (UCD-21) ---------------------------
+     * The MICROTASK QUEUE is what makes a Promise a Promise: a reaction runs
+     * after the current script finishes, not during it.  ujs_run_jobs() drains
+     * it - ujs_eval calls it before returning, so a script that settles a
+     * promise sees its .then run without the host lifting a finger, and the
+     * host calls it once a frame for everything settled from C.
+     *
+     * The queue is FIXED and drops on overflow rather than growing: an
+     * extension queueing jobs from jobs would otherwise take the machine with
+     * it, and bounded work is this engine's whole preemption story. */
+    ujs_val  *jobs;             /* pairs: fn, arg                           */
+    int       njobs, jobcap, jobhead;
+    int       jobs_dropped;
+    int       in_jobs;          /* draining: do not re-enter                */
+
+    /* Promise reactions live in C rather than on the promise object: a
+     * reaction may be a JS callback OR a suspended coroutine, and only one of
+     * those is expressible as a property. */
+    struct ujs_reaction *reactions;
+    ujs_coro *coros;            /* live suspended awaits, traced by the GC  */
+
     /* scratch for ujs_describe and error formatting */
     char msgbuf[256];
 };
 
+/* a pending .then / await, waiting on one promise */
+typedef struct ujs_reaction {
+    struct ujs_reaction *next;
+    ujs_val   promise;          /* what is being waited on                  */
+    ujs_val   onok, onerr;      /* JS callbacks, or undefined               */
+    ujs_val   out;              /* the derived promise, or undefined        */
+    ujs_coro *co;               /* or a coroutine to resume                 */
+} ujs_reaction;
+
 /* ---- internal API -------------------------------------------------------- */
+/* promises, jobs and coroutines (UCD-21).  ujs_lib.c owns the promise objects
+ * and the queue; ujs_vm.c owns the coroutines, because suspending one is
+ * surgery on the frame stack. */
+int      ujs_job_push(ujs_vm *vm, ujs_val fn, ujs_val arg);
+ujs_val  ujs_promise_new(ujs_vm *vm);
+int      ujs_is_promise(ujs_vm *vm, ujs_val v);
+void     ujs_promise_settle(ujs_vm *vm, ujs_val p, ujs_val v, int rejected);
+void     ujs_promise_react(ujs_vm *vm, ujs_val p, ujs_val onok, ujs_val onerr,
+                           ujs_val out);
+void     ujs_promise_await(ujs_vm *vm, ujs_val p, ujs_coro *co);
+void     ujs_promise_init(ujs_vm *vm);     /* installs the global            */
+
+ujs_coro *ujs_coro_capture(ujs_vm *vm, int frame_index);
+void      ujs_coro_resume(ujs_vm *vm, ujs_coro *co, ujs_val v, int rejected);
+void      ujs_coro_free(ujs_vm *vm, ujs_coro *co);
+
 /* memory */
 void *ujs_alloc_raw(ujs_vm *vm, size_t n);
 void  ujs_free_raw(ujs_vm *vm, void *p, size_t n);

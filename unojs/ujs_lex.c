@@ -17,6 +17,11 @@ static const struct { const char *w; int t; } kw[] = {
     {"throw",T_THROW},{"try",T_TRY},{"catch",T_CATCH},{"finally",T_FINALLY},
     {"switch",T_SWITCH},{"case",T_CASE},{"default",T_DEFAULT},{"void",T_VOID},
     {"of",T_OF},
+    /* ES2017 (UCD-21).  These are CONTEXTUAL keywords in the standard and
+     * plain keywords here, which is the one visible cost: a script using
+     * `async` or `await` as a variable name will not compile.  Stated in
+     * UNOJS.md rather than left to be discovered. */
+    {"async",T_ASYNC},{"await",T_AWAIT},
     {NULL,0}
 };
 

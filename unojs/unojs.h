@@ -182,6 +182,12 @@ typedef struct {
     ujs_val  self;
     int      argc;
     const ujs_val *argv;
+    /* Whatever ujs_function_set_data() bound to THIS function object.  A C
+     * function has no closure, so without this the only way to give one
+     * private state is `self` - which is whatever the call site happened to
+     * pass, and is undefined for a plain `f(x)`.  Promise's resolve/reject
+     * pair is exactly that shape (UCD-21). */
+    ujs_val  data;
 } ujs_args;
 
 /* Return the result. To throw, call ujs_throw() and return undefined. */
@@ -196,6 +202,8 @@ void   *ujs_host_user(ujs_vm *vm, ujs_val v);
 
 /* Convenience: define a method / accessor pair on an object. 0 on success. */
 int ujs_set_fn(ujs_vm *vm, ujs_val obj, const char *name, ujs_cfunc fn, int nargs);
+/* Bind private state to a C function; it arrives as `a->data` on every call. */
+void ujs_function_set_data(ujs_vm *vm, ujs_val fn, ujs_val data);
 int ujs_set_accessor(ujs_vm *vm, ujs_val obj, const char *name,
                      ujs_cfunc getter, ujs_cfunc setter);
 
@@ -209,6 +217,26 @@ ujs_val ujs_global(ujs_vm *vm);
 ujs_val ujs_throw(ujs_vm *vm, ujs_val err);
 ujs_val ujs_throw_error(ujs_vm *vm, const char *kind, const char *msg);
 /* kind is one of: "Error" "TypeError" "RangeError" "SyntaxError" "ReferenceError" */
+
+/* ---- jobs (UCD-21) --------------------------------------------------------
+ * Drain the microtask queue: every Promise reaction and every resumed `await`
+ * that is ready.  ujs_eval() and ujs_resume() call it before they return, so a
+ * script is complete when they are; a HOST that settles promises from C - a
+ * request finishing, a file arriving - calls it once per frame, and that call
+ * is where the continuation of every `await` in the extension host actually
+ * runs.  Returns the number of jobs run.
+ *
+ * Bounded per call, and re-entry is refused: a promise chain that queues
+ * itself forever slows down rather than taking the machine with it. */
+int ujs_run_jobs(ujs_vm *vm);
+
+/* A promise the HOST settles.  This is how an embedder hands JS something it
+ * will answer later - a dialog the user has not closed, a request in flight -
+ * and get `await` on the other side of it for free.  Settling runs the
+ * reactions on the next ujs_run_jobs(), never inside the settle call. */
+ujs_val ujs_promise(ujs_vm *vm);
+void    ujs_promise_resolve(ujs_vm *vm, ujs_val p, ujs_val v);
+void    ujs_promise_reject(ujs_vm *vm, ujs_val p, ujs_val v);
 
 /* ---- fuel ---------------------------------------------------------------- */
 /* Steps consumed since the current script started. */

@@ -208,6 +208,17 @@ static int push_frame(ujs_vm *vm, ujs_obj *fn, ujs_val self,
     fr->sp_base = vm->sp;
     fr->h_base = vm->nhandlers;
     fr->is_ctor = is_ctor;
+    /* An async function's call returns a Promise IMMEDIATELY - before the body
+     * has run a byte - so the promise is made here, at entry.  OP_RET resolves
+     * it, an escaping exception rejects it, and OP_AWAIT hands it to the
+     * caller if the body suspends before either (UCD-21). */
+    fr->is_async = code->is_async;
+    fr->promise = code->is_async ? ujs_promise_new(vm) : ujs_undefined();
+    if (code->is_async && ujs_is_undefined(fr->promise)) {
+        vm->nframes--;
+        ujs_throw_error(vm, "Error", "out of memory");
+        return 0;
+    }
     return 1;
 }
 
@@ -225,6 +236,7 @@ ujs_result ujs_call_value(ujs_vm *vm, ujs_val fnv, ujs_val self,
         ujs_args a;
         ujs_val r;
         a.vm = vm; a.self = self; a.argc = argc; a.argv = argv;
+        a.data = fn->u.cfn.data;
         vm->c_depth++;
         r = fn->u.cfn.fn(&a);
         vm->c_depth--;
@@ -237,10 +249,23 @@ ujs_result ujs_call_value(ujs_vm *vm, ujs_val fnv, ujs_val self,
         return UJS_THROW;
     }
     {   int base = vm->nframes;
+        int sp0 = vm->sp;
+        int h0 = vm->nhandlers;
         if (!push_frame(vm, fn, self, argc, argv, is_new)) return UJS_THROW;
         vm->c_depth++;                       /* a nested run cannot yield out */
         {   ujs_result r = run(vm, base, out);
             vm->c_depth--;
+            if (r == UJS_THROW) {
+                /* UNWIND WHAT WE PUSHED.  run() leaves the frames in place
+                 * when an exception escapes, which is invisible while every
+                 * caller re-throws - and corrupts the machine the moment one
+                 * SWALLOWS it, as Promise's executor must (UCD-21): the outer
+                 * interpreter then carried on against a frame that was not
+                 * its own. */
+                vm->nframes = base;
+                vm->sp = sp0;
+                vm->nhandlers = h0;
+            }
             return r;
         }
     }
@@ -256,6 +281,34 @@ ujs_result ujs_call_value(ujs_vm *vm, ujs_val fnv, ujs_val self,
  * should continue (a catch or finally took it), 0 if it escapes this run. */
 static int unwind(ujs_vm *vm, int base)
 {
+    /* An exception leaving an ASYNC function is not an exception the caller
+     * sees - it is a rejected promise (UCD-21).  Checked before the handler
+     * search so that a try/catch INSIDE the async function still wins: those
+     * handlers sit at or above its frame and are found first. */
+    while (vm->nframes > base) {
+        int a = vm->nframes - 1;
+        ujs_frame *af = &vm->frames[a];
+        if (!af->is_async) break;
+        if (vm->nhandlers > 0 && vm->handlers[vm->nhandlers - 1].frame >= a)
+            break;                       /* a handler inside it wants this   */
+        {   ujs_val e = vm->exception;
+            ujs_val p = af->promise;
+            int sp_base = af->sp_base;
+            vm->has_exception = 0;
+            vm->exception = ujs_undefined();
+            vm->nframes = a;
+            vm->sp = sp_base;
+            ujs_promise_settle(vm, p, e, 1);
+            if (vm->nframes <= base) {
+                /* the async call was this run's outermost frame: its caller
+                 * is C, and gets the rejected promise as the return value */
+                if (vm->sp < UJS_STACK_SIZE) vm->stack[vm->sp++] = p;
+                return 0;
+            }
+            if (vm->sp < UJS_STACK_SIZE) vm->stack[vm->sp++] = p;
+            return 1;
+        }
+    }
     while (vm->nhandlers > 0) {
         ujs_handler *h = &vm->handlers[vm->nhandlers - 1];
         if (h->frame < base) break;
@@ -280,6 +333,137 @@ static int unwind(ujs_vm *vm, int base)
         }
     }
     return 0;
+}
+
+/* ---- coroutines: a suspended await (UCD-21) --------------------------------
+ * LIFT the async function's slice of the machine out, so the VM is left as if
+ * the call had returned.  The slice is its frames, the part of the value stack
+ * they own, and any handlers inside them.
+ *
+ * Frames record ABSOLUTE stack offsets, and the stack a coroutine comes back
+ * onto is not the one it left, so everything is stored RELATIVE to the base
+ * and rebased on the way in.  Getting that wrong does not crash - it reads
+ * somebody else's values as your locals - so it happens in one place. */
+ujs_coro *ujs_coro_capture(ujs_vm *vm, int a)
+{
+    ujs_coro *co;
+    int nf = vm->nframes - a, i, nh = 0;
+    int base_sp, ns;
+
+    if (nf <= 0) return 0;
+    base_sp = vm->frames[a].sp_base;
+    ns = vm->sp - base_sp;
+    co = (ujs_coro *)ujs_alloc_raw(vm, sizeof *co);
+    if (!co) return 0;
+    memset(co, 0, sizeof *co);
+    co->frames = (ujs_frame *)ujs_alloc_raw(vm, sizeof(ujs_frame) * (size_t)nf);
+    co->stack = ns > 0 ? (ujs_val *)ujs_alloc_raw(vm, sizeof(ujs_val) * (size_t)ns) : 0;
+    if (!co->frames || (ns > 0 && !co->stack)) {
+        if (co->frames) ujs_free_raw(vm, co->frames, sizeof(ujs_frame) * (size_t)nf);
+        ujs_free_raw(vm, co, sizeof *co);
+        return 0;
+    }
+    for (i = 0; i < nf; i++) {
+        co->frames[i] = vm->frames[a + i];
+        co->frames[i].sp_base -= base_sp;          /* relative from here on  */
+    }
+    co->nframes = nf;
+    for (i = 0; i < ns; i++) co->stack[i] = vm->stack[base_sp + i];
+    co->nstack = ns;
+
+    for (i = vm->nhandlers - 1; i >= 0 && vm->handlers[i].frame >= a; i--) nh++;
+    if (nh) {
+        co->handlers = (ujs_handler *)ujs_alloc_raw(vm,
+                            sizeof(ujs_handler) * (size_t)nh);
+        if (co->handlers) {
+            for (i = 0; i < nh; i++) {
+                co->handlers[i] = vm->handlers[vm->nhandlers - nh + i];
+                co->handlers[i].frame -= a;
+                co->handlers[i].sp -= base_sp;
+            }
+            co->nhandlers = nh;
+        }
+    }
+    co->base_sp = base_sp;
+
+    /* now take the slice OUT of the live machine */
+    vm->nframes = a;
+    vm->sp = base_sp;
+    vm->nhandlers -= nh;
+
+    co->next = vm->coros;                          /* the GC traces this list */
+    vm->coros = co;
+    return co;
+}
+
+void ujs_coro_free(ujs_vm *vm, ujs_coro *co)
+{
+    ujs_coro **pp = &vm->coros;
+    if (!co) return;
+    while (*pp && *pp != co) pp = &(*pp)->next;
+    if (*pp) *pp = co->next;
+    if (co->frames) ujs_free_raw(vm, co->frames, sizeof(ujs_frame) * (size_t)co->nframes);
+    if (co->stack) ujs_free_raw(vm, co->stack, sizeof(ujs_val) * (size_t)co->nstack);
+    if (co->handlers) ujs_free_raw(vm, co->handlers, sizeof(ujs_handler) * (size_t)co->nhandlers);
+    ujs_free_raw(vm, co, sizeof *co);
+}
+
+/* Splice the slice back on and run it to its next suspension or its end.
+ * `v` is what the await evaluates to; `rejected` makes it throw there. */
+void ujs_coro_resume(ujs_vm *vm, ujs_coro *co, ujs_val v, int rejected)
+{
+    int base, delta, i;
+    ujs_val out = ujs_undefined();
+    ujs_val prom;
+
+    if (!co || co->done) return;
+    if (vm->nframes + co->nframes >= UJS_MAX_FRAMES ||
+        vm->sp + co->nstack + 2 >= UJS_STACK_SIZE) {
+        co->done = 1;
+        ujs_coro_free(vm, co);
+        return;
+    }
+    co->done = 1;                    /* one resume per suspension            */
+    base = vm->nframes;
+    delta = vm->sp;
+    prom = co->frames[0].promise;
+
+    for (i = 0; i < co->nstack; i++) vm->stack[delta + i] = co->stack[i];
+    vm->sp = delta + co->nstack;
+    for (i = 0; i < co->nframes; i++) {
+        vm->frames[base + i] = co->frames[i];
+        vm->frames[base + i].sp_base += delta;     /* rebased onto this stack */
+    }
+    vm->nframes = base + co->nframes;
+    for (i = 0; i < co->nhandlers; i++) {
+        if (vm->nhandlers >= vm->handlercap) break;
+        vm->handlers[vm->nhandlers] = co->handlers[i];
+        vm->handlers[vm->nhandlers].frame += base;
+        vm->handlers[vm->nhandlers].sp += delta;
+        vm->nhandlers++;
+    }
+
+    /* the awaited value lands where OP_AWAIT's result was expected */
+    if (rejected) {
+        vm->exception = v;
+        vm->has_exception = 1;
+    } else if (vm->sp < UJS_STACK_SIZE) {
+        vm->stack[vm->sp++] = v;
+    }
+
+    ujs_coro_free(vm, co);           /* it is live again; drop the copy      */
+
+    vm->c_depth++;                   /* a resumed run cannot yield out       */
+    {   ujs_result r = run(vm, base, &out);
+        vm->c_depth--;
+        if (r == UJS_THROW) {
+            /* it escaped the async function entirely: its promise rejects */
+            ujs_val e = vm->exception;
+            vm->has_exception = 0;
+            vm->exception = ujs_undefined();
+            ujs_promise_settle(vm, prom, e, 1);
+        }
+    }
 }
 
 static ujs_result run(ujs_vm *vm, int base, ujs_val *out)
@@ -666,6 +850,7 @@ static ujs_result run(ujs_vm *vm, int base, ujs_val *out)
                     ujs_args a; ujs_val r;
                     a.vm = vm; a.self = selfv; a.argc = argc;
                     a.argv = argc ? &vm->stack[fi+2] : NULL;
+                    a.data = fn->u.cfn.data;
                     vm->c_depth++;
                     r = fn->u.cfn.fn(&a);
                     vm->c_depth--;
@@ -732,6 +917,13 @@ static ujs_result run(ujs_vm *vm, int base, ujs_val *out)
         do_return: {
             ujs_val rv = pop(vm);
             int sp_base = fr->sp_base;
+            /* An async function returns its PROMISE, resolved with whatever
+             * the body returned - the caller has had that promise since the
+             * call, so this is the moment it gets a value (UCD-21). */
+            if (fr->is_async) {
+                ujs_promise_settle(vm, fr->promise, rv, 0);
+                rv = fr->promise;
+            }
             vm->nframes--;
             while (vm->nhandlers > 0 && vm->handlers[vm->nhandlers-1].frame >= vm->nframes)
                 vm->nhandlers--;
@@ -842,6 +1034,50 @@ static ujs_result run(ujs_vm *vm, int base, ujs_val *out)
             if (!push(vm, ujs_arr_get(it, cur + 1))) goto oom;
             break; }
 
+        case OP_AWAIT: {
+            /* SUSPEND, and make the call that is still on the stack return.
+             *
+             * Everything the async function needs to continue - its frames,
+             * its slice of the value stack, its handlers - is lifted out into
+             * a coroutine, and the VM is left looking exactly as it would if
+             * the function had returned its promise normally.  The caller
+             * never learns that anything unusual happened, which is the whole
+             * trick: an async call and a suspended async call return the same
+             * thing at the same moment. */
+            ujs_val awaited = pop(vm);
+            int a = vm->nframes - 1;
+            ujs_coro *co;
+            ujs_val prom;
+
+            while (a >= 0 && !vm->frames[a].is_async) a--;
+            if (a < base) {
+                /* the async frame is below this run's floor: it belongs to an
+                 * outer run and cannot be lifted from here */
+                fr->ip = ip;
+                ujs_throw_error(vm, "Error",
+                    "'await' crossed a host call boundary");
+                continue;
+            }
+            fr->ip = ip;                        /* resume AFTER the await     */
+            prom = vm->frames[a].promise;
+            co = ujs_coro_capture(vm, a);
+            if (!co) { ujs_throw_error(vm, "RangeError", "out of memory"); continue; }
+
+            /* wake it when the awaited value settles.  A non-promise is
+             * wrapped, so `await 1` is a microtask rather than a special case */
+            {   ujs_val p = awaited;
+                if (!ujs_is_promise(vm, awaited)) {
+                    p = ujs_promise_new(vm);
+                    ujs_promise_settle(vm, p, awaited, 0);
+                }
+                ujs_promise_await(vm, p, co);
+            }
+
+            /* and return the promise from the call, exactly as OP_RET would */
+            if (vm->nframes <= base) { if (out) *out = prom; return UJS_OK; }
+            if (!push(vm, prom)) goto oom;
+            continue; }
+
         case OP_ENV_PUSH: { u32 n = RD16(); (void)n; break; }   /* block scope: M1b */
         case OP_ENV_POP:  break;
         case OP_LINE:     { u32 l = RD32(); (void)l; break; }
@@ -890,7 +1126,14 @@ ujs_result ujs_eval(ujs_vm *vm, const char *src, int len, ujs_val *out)
     vm->completion = ujs_undefined();
     vm->ret_pending = 0; vm->finally_rethrow = 0;
     if (!push_frame(vm, fn, ujs_obj_val(vm->global), 0, NULL, 0)) return UJS_THROW;
-    return run(vm, 0, out);
+    {   ujs_result r = run(vm, 0, out);
+        /* Drain the microtasks the script queued before handing control back
+         * (UCD-21).  Without this a script that resolves a promise would
+         * return with its own .then still waiting, and every embedder would
+         * have to know to pump - including the ones that only ever eval. */
+        if (r == UJS_OK) ujs_run_jobs(vm);
+        return r;
+    }
 }
 
 ujs_result ujs_resume(ujs_vm *vm, ujs_val *out)
@@ -900,6 +1143,7 @@ ujs_result ujs_resume(ujs_vm *vm, ujs_val *out)
     vm->fuel = vm->fuel_slice;
     {   ujs_result r = run(vm, 0, out);
         if (r != UJS_YIELD) vm->running = 0;
+        if (r == UJS_OK) ujs_run_jobs(vm);
         return r;
     }
 }

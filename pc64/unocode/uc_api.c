@@ -61,8 +61,7 @@ enum { EV_SAVE = 0, EV_OPEN, EV_CHANGE, EV_N };
 static struct { int ext, jsid, kind; } g_listen[LISTENERS_MAX];
 static int g_nlisten;
 
-static int g_then[THENABLES_MAX];          /* thenable id -> handler slot    */
-static int g_nthen;
+static int g_nthen;                        /* next promise id, wrapping   */
 
 int uc_api_alive(void) { return g_vm != 0; }
 const char *uc_api_engine(void) { return g_vm ? "unojs 0.1" : "not started"; }
@@ -207,125 +206,77 @@ static ujs_val js_console(ujs_args *a)
     return ujs_undefined();
 }
 
-/* ---- thenables ------------------------------------------------------------------ */
-static ujs_val js_then(ujs_args *a)
-{
-    int id;
-    ujs_val idv = ujs_undefined();
-    if (ujs_get(a->vm, a->self, "__id", &idv) != UJS_OK) return a->self;
-    id = (int)ujs_to_number(a->vm, idv);
-    if (id >= 0 && id < THENABLES_MAX)
-        g_then[id] = handler_add(a->vm, argv_at(a, 0), g_cur_ext);
-    return a->self;
-}
+/* ---- promises (UCD-21) -----------------------------------------------------
+ * These used to be THENABLES: an object with a .then that remembered one
+ * callback, because unojs had no microtask queue to build a real Promise on.
+ * It has one now, so every asynchronous call in this API returns an actual
+ * Promise - which means `await vscode.window.showInputBox(...)` works, and
+ * the deviation this file used to document is gone.
+ *
+ * The id indirection stays, because the CALLER of the resolution is a C
+ * function in uc_cmd.c holding an int, not a JS value: uc_quick_input() is
+ * handed an id and hands it back when the box closes.  The id now names a
+ * promise in a rooted array rather than a callback slot. */
+static ujs_val g_proms;                    /* rooted: id -> promise         */
 
-static ujs_val thenable_new(ujs_vm *vm, int *id_out)
+static ujs_val promise_new_id(ujs_vm *vm, int *id_out)
 {
-    ujs_val t = ujs_object_new(vm);
+    ujs_val p = ujs_promise(vm);
     int id = g_nthen % THENABLES_MAX;
     g_nthen++;
-    g_then[id] = -1;
-    ujs_set(vm, t, "__id", ujs_number(id));
-    ujs_set_fn(vm, t, "then", js_then, 1);
+    ujs_set_index(vm, g_proms, (unsigned)id, p);
     *id_out = id;
-    return t;
+    return p;
 }
 
-/* A thenable that is ALREADY answered, resolved on the next uc_api_pump()
- * rather than here and now.  Calling back into JS from inside a native
- * function would nest the interpreter mid-eval, which nothing else in this
- * host does; deferring one frame keeps the one entry point (call_fn from C
- * context) that the fuel and exception machinery were built around.
- * context.secrets is the first user (UCD-48). */
-#define PENDING_MAX 8
-static struct { int id; char val[UC_SECRET_MAX]; unsigned char has;
-                signed char vslot; }
-    g_pend[PENDING_MAX];
-static int g_npend;
-
-/* JS values awaiting resolution live in fixed slots of a rooted array, so a
- * memmove of g_pend cannot orphan them and the GC cannot collect them. */
-static ujs_val g_pendvals;
-static unsigned char g_vused[PENDING_MAX];
-
+/* A promise that is ALREADY answered.  Its reactions still run on the next
+ * pump rather than here: settling never calls back into JS, which is what
+ * keeps the one entry point (call_fn from C context) that the fuel and
+ * exception machinery were built around. */
 static ujs_val pending_thenable(ujs_vm *vm, const char *val)
 {
-    int id;
-    ujs_val t = thenable_new(vm, &id);
-    if (g_npend < PENDING_MAX) {
-        g_pend[g_npend].id = id;
-        g_pend[g_npend].has = val != 0;
-        g_pend[g_npend].vslot = -1;
-        uc_scpy(g_pend[g_npend].val, val ? val : "", sizeof g_pend[0].val);
-        g_npend++;
-    }
-    return t;
+    ujs_val p = ujs_promise(vm);
+    ujs_promise_resolve(vm, p, val ? ujs_string(vm, val, -1) : ujs_undefined());
+    return p;
 }
 
-/* the same, resolving with a VALUE (an object, an array) instead of a string */
 static ujs_val pending_thenable_val(ujs_vm *vm, ujs_val v)
 {
-    int id, s;
-    ujs_val t = thenable_new(vm, &id);
-    for (s = 0; s < PENDING_MAX && g_vused[s]; s++) ;
-    if (g_npend < PENDING_MAX && s < PENDING_MAX) {
-        g_vused[s] = 1;
-        ujs_set_index(vm, g_pendvals, (unsigned)s, v);
-        g_pend[g_npend].id = id;
-        g_pend[g_npend].has = 1;
-        g_pend[g_npend].vslot = (signed char)s;
-        g_pend[g_npend].val[0] = 0;
-        g_npend++;
-    }
-    return t;
+    ujs_val p = ujs_promise(vm);
+    ujs_promise_resolve(vm, p, v);
+    return p;
 }
 
-/* Resolve a thenable.  uc_cmd.c hands the id back when a quick pick or an
- * input box finishes, which is why uc_api_call_str's parameter is a THENABLE
- * id rather than a handler slot. */
+/* Settle the promise an async API handed out.  uc_cmd.c holds the id from
+ * when the quick pick or input box opened, and hands it back when the box
+ * closes - which is why the parameter is an id and not a JS value.
+ *
+ * Settling does NOT run the extension's continuation: that happens on the
+ * next uc_api_pump(), through the microtask queue, like every other promise
+ * reaction (UCD-21). */
+static int settle_id(int id, ujs_val v)
+{
+    ujs_val p = ujs_undefined();
+    if (!g_vm || id < 0 || id >= THENABLES_MAX) return 0;
+    if (ujs_get_index(g_vm, g_proms, (unsigned)id, &p) != UJS_OK) return 0;
+    if (!ujs_is_object(p)) return 0;
+    ujs_set_index(g_vm, g_proms, (unsigned)id, ujs_undefined());
+    ujs_promise_resolve(g_vm, p, v);
+    return 1;
+}
+
 int uc_api_call_str(int thenable_id, const char *value)
 {
-    ujs_val fn, arg, out;
-    ujs_scope sc;
-    int jsid, prev;
-    if (!g_vm || thenable_id < 0 || thenable_id >= THENABLES_MAX) return 0;
-    jsid = g_then[thenable_id];
-    g_then[thenable_id] = -1;
-    if (jsid < 0) return 0;
-    fn = handler_get(jsid);
-    if (!ujs_is_function(g_vm, fn)) return 0;
-    /* the callback runs AS its extension - a permission checked inside it
-     * (vscode.lm) must see who is asking, not -1 */
-    prev = g_cur_ext;
-    g_cur_ext = (jsid < g_nh) ? g_hext[jsid] : -1;
-    ujs_scope_open(g_vm, &sc);
-    arg = (value && value[0]) ? ujs_string(g_vm, value, -1) : ujs_undefined();
-    call_fn(fn, 1, &arg, &out, "thenable");
-    ujs_scope_close(g_vm, &sc, ujs_undefined());
-    g_cur_ext = prev;
-    return 1;
+    return settle_id(thenable_id,
+                     (value && value[0]) ? ujs_string(g_vm, value, -1)
+                                         : ujs_undefined());
 }
 
-/* Resolve a thenable with a JS value already living in a g_pendvals slot. */
-static int api_call_val(int thenable_id, ujs_val v)
-{
-    ujs_val fn, out;
-    ujs_scope sc;
-    int jsid, prev;
-    if (!g_vm || thenable_id < 0 || thenable_id >= THENABLES_MAX) return 0;
-    jsid = g_then[thenable_id];
-    g_then[thenable_id] = -1;
-    if (jsid < 0) return 0;
-    fn = handler_get(jsid);
-    if (!ujs_is_function(g_vm, fn)) return 0;
-    prev = g_cur_ext;
-    g_cur_ext = (jsid < g_nh) ? g_hext[jsid] : -1;
-    ujs_scope_open(g_vm, &sc);
-    call_fn(fn, 1, &v, &out, "thenable");
-    ujs_scope_close(g_vm, &sc, ujs_undefined());
-    g_cur_ext = prev;
-    return 1;
-}
+/* Settle one by id with a JS value.  Nothing calls it today - every value-
+ * returning API resolves its promise at the point it builds it - but it is
+ * the other half of settle_id's contract and the next host promise that
+ * answers with an object will want it. */
+int uc_api_settle_val(int id, ujs_val v) { return settle_id(id, v); }
 
 /* Call a stored handler with one string argument - deltas and completions
  * from the LM slot come through here, always from C frame context. */
@@ -570,7 +521,7 @@ static ujs_val js_quick_pick(ujs_args *a)
         ujs_get_index(a->vm, arr, i, &v);
         uc_scpy(items[i], val_str(a->vm, v, ""), 64);
     }
-    t = thenable_new(a->vm, &id);
+    t = promise_new_id(a->vm, &id);
     uc_quick_pick(items, (int)n, arg_str(a, 1, "Select an item"), id);
     return t;
 }
@@ -578,7 +529,7 @@ static ujs_val js_quick_pick(ujs_args *a)
 static ujs_val js_input_box(ujs_args *a)
 {
     int id;
-    ujs_val t = thenable_new(a->vm, &id);
+    ujs_val t = promise_new_id(a->vm, &id);
     uc_quick_input(arg_str(a, 0, ""), arg_str(a, 1, ""), id);
     return t;
 }
@@ -1270,9 +1221,8 @@ int uc_api_init(void)
     g_out_ch = uc_output_channel("Extension Host");
     g_handlers = ujs_array_new(g_vm);
     ujs_root(g_vm, g_handlers);
-    g_pendvals = ujs_array_new(g_vm);
-    ujs_root(g_vm, g_pendvals);
-    memset(g_vused, 0, sizeof g_vused);
+    g_proms = ujs_array_new(g_vm);
+    ujs_root(g_vm, g_proms);
     g_nh = 0;
     g_nprov = 0;
     g_nlisten = 0;
@@ -1370,25 +1320,11 @@ int uc_api_run_file(int ext, int vol, const char *path, char *err, int cap)
 
 void uc_api_pump(void)
 {
-    /* Drain what was pending at entry and no more: a callback that queues a
-     * new resolution appends PAST n and is drained next frame, so the batch
-     * being walked is never the batch being written. */
-    int i, n = g_npend;
-    if (!n) return;
-    for (i = 0; i < n; i++) {
-        if (g_pend[i].vslot >= 0) {
-            ujs_val v = ujs_undefined();
-            ujs_get_index(g_vm, g_pendvals, (unsigned)g_pend[i].vslot, &v);
-            api_call_val(g_pend[i].id, v);
-            ujs_set_index(g_vm, g_pendvals, (unsigned)g_pend[i].vslot,
-                          ujs_undefined());
-            g_vused[g_pend[i].vslot] = 0;
-        } else
-            uc_api_call_str(g_pend[i].id, g_pend[i].has ? g_pend[i].val : "");
-    }
-    memmove(g_pend, g_pend + n,
-            (unsigned long)(g_npend - n) * sizeof g_pend[0]);
-    g_npend -= n;
+    /* One call, and it is the engine's own queue (UCD-21).  Every .then, every
+     * resumed `await` and every settled host promise runs here - which is why
+     * this is called once per frame rather than only when the host thinks
+     * something is outstanding. */
+    if (g_vm) ujs_run_jobs(g_vm);
 }
 
 void uc_api_eval_print(const char *expr)
