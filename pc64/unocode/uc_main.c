@@ -196,10 +196,25 @@ void uc_layout(void)
     }
     {
         int w = c.w - act - side;
-        UC.tabs   = (UcRect){ x, c.y, w, tabs };
-        UC.crumbs = (UcRect){ x, c.y + tabs, w, crumbs };
-        UC.editor = (UcRect){ x, c.y + tabs + crumbs, w,
-                              body_h - tabs - crumbs - panel };
+        int eh = body_h - tabs - crumbs - panel;
+        /* One group or two, side by side (UCD-18).  A split under ~420 px of
+         * editor width would give each half less than a usable line, so the
+         * layout collapses back to one rather than honouring a split nobody
+         * could read. */
+        int split = (UC.ngroup > 1 && w >= 420);
+        int w1 = split ? w / 2 : w;
+        UC.tabs   = (UcRect){ x, c.y, w1, tabs };
+        UC.crumbs = (UcRect){ x, c.y + tabs, w1, crumbs };
+        UC.editor = (UcRect){ x, c.y + tabs + crumbs, w1, eh };
+        if (split) {
+            int x2 = x + w1, w2 = w - w1;
+            UC.tabs2   = (UcRect){ x2, c.y, w2, tabs };
+            UC.crumbs2 = (UcRect){ x2, c.y + tabs, w2, crumbs };
+            UC.editor2 = (UcRect){ x2, c.y + tabs + crumbs, w2, eh };
+        } else {
+            UC.tabs2 = UC.crumbs2 = UC.editor2 = (UcRect){ 0, 0, 0, 0 };
+            if (UC.ngroup > 1 && w < 420) UC.group = 0;
+        }
         UC.panel  = (UcRect){ x, c.y + body_h - panel, w, panel };
     }
     UC.status = (UcRect){ c.x, c.y + body_h, c.w, status };
@@ -227,6 +242,23 @@ void uc_toggle_sidebar(int view)
     uc_repaint();
 }
 
+/* SHOW, which is not toggle.  Everything that wants the panel in front -
+ * running a task, an extension's output channel, a launch - wants it OPEN,
+ * and said so by calling uc_toggle_panel(); if it was already open on that
+ * tab, that CLOSED it.  Harmless while the panel was only text, and not
+ * harmless now that closing it kills a running child (UCD-14): starting a
+ * task with the terminal already up hid the panel and killed the task in the
+ * same call. */
+void uc_show_panel(int tab)
+{
+    UC.panel_visible = 1;
+    if (tab >= 0) UC.panel_tab = tab;
+    if (UC.panel_tab == UC_PANEL_TERMINAL) uc_term_init();
+    uc_focus(UC_F_PANEL);
+    uc_layout();
+    uc_repaint();
+}
+
 void uc_toggle_panel(int tab)
 {
     if (tab < 0) UC.panel_visible = !UC.panel_visible;
@@ -234,6 +266,10 @@ void uc_toggle_panel(int tab)
         UC.panel_visible = 0;
     else { UC.panel_visible = 1; UC.panel_tab = tab; uc_focus(UC_F_PANEL); }
     if (UC.panel_visible && UC.panel_tab == UC_PANEL_TERMINAL) uc_term_init();
+    /* Closing the panel kills whatever was running in it (UCD-14).  A build
+     * left alive behind a hidden panel keeps a pty, a process and a CPU, and
+     * there is no longer anywhere to see that it is there. */
+    if (!UC.panel_visible) uc_term_child_stop();
     uc_layout();
     uc_repaint();
 }
@@ -256,9 +292,28 @@ static void uc_draw(unoui_widget *w, unoui_rect r, void *ctx)
 
     if (UC.activity.w) uc_activity_draw(UC.activity);
     if (UC.sidebar.w)  uc_sidebar_draw(UC.sidebar);
-    if (UC.tabs.h)     uc_tabs_draw(UC.tabs);
+    if (UC.tabs.h)     uc_tabs_group_draw(UC.tabs, 0);
     if (UC.crumbs.h)   uc_breadcrumb_draw(UC.crumbs);
-    uc_edit_draw(UC.editor, uc_doc_active(), UC.focus == UC_F_EDITOR);
+    /* Each group paints ITS active editor with ITS OWN view.  The painter is
+     * written against a UcDoc and there is one per file, so the unfocused
+     * group's scroll and cursors are borrowed in around the call (UCD-18). */
+    if (UC.editor2.w) {
+        int g;
+        for (g = 0; g < 2; g++) {
+            UcRect r2 = g ? UC.editor2 : UC.editor;
+            int di = uc_group_active(g);
+            UcDoc *gd = uc_doc_at(di);
+            int focused = (UC.focus == UC_F_EDITOR && UC.group == g);
+            if (g != UC.group && gd) uc_group_view_push(g, gd);
+            uc_edit_draw(r2, gd, focused);
+            if (g != UC.group && gd) uc_group_view_pop(gd);
+            /* the group with focus gets a lit edge, or a split is two
+             * identical panes and no way to tell which one types */
+            if (focused) fb_vline(r2.x, r2.y, r2.h, uc_col(UC_C_FOCUS_BORDER));
+        }
+        if (UC.tabs2.h) uc_tabs_group_draw(UC.tabs2, 1);
+    } else
+        uc_edit_draw(UC.editor, uc_doc_active(), UC.focus == UC_F_EDITOR);
     if (UC.panel.h)    uc_panel_draw(UC.panel);
     if (UC.status.h)   uc_status_draw(UC.status);
     uc_notif_draw(UC.canvas);
@@ -320,11 +375,24 @@ static int handle_mouse(const unoui_event *e)
         return 1;
     }
     if (hit(UC.sidebar, e->x, e->y)) return uc_sidebar_event(UC.sidebar, e);
-    if (hit(UC.tabs, e->x, e->y))    return uc_tabs_event(UC.tabs, e);
+    if (hit(UC.tabs, e->x, e->y))    return uc_tabs_group_event(UC.tabs, e, 0);
+    if (hit(UC.tabs2, e->x, e->y))   return uc_tabs_group_event(UC.tabs2, e, 1);
+    if (hit(UC.editor2, e->x, e->y) && !UC.drag) {
+        /* clicking in a group focuses it before the click is delivered, or
+         * the caret lands in the pane you were not looking at (UCD-18) */
+        UcDoc *g2;
+        if (UC.group != 1) uc_group_focus(1);
+        uc_focus(UC_F_EDITOR);
+        g2 = uc_doc_active();
+        return uc_edit_event(UC.editor2, g2, e);
+    }
     if (hit(UC.panel, e->x, e->y))   return uc_panel_event(UC.panel, e);
     if (hit(UC.status, e->x, e->y))  return uc_status_event(UC.status, e);
     if (hit(UC.editor, e->x, e->y) || UC.drag) {
-        if (e->kind == UI_EV_MOUSE_DOWN) uc_focus(UC_F_EDITOR);
+        if (e->kind == UI_EV_MOUSE_DOWN) {
+            if (UC.ngroup > 1 && UC.group != 0) uc_group_focus(0);
+            uc_focus(UC_F_EDITOR);
+        }
         return uc_edit_event(UC.editor, uc_doc_active(), e);
     }
     return 0;
@@ -354,6 +422,15 @@ static int route_key(int key, int mods)
 static int route_char(int ch)
 {
     UcDoc *d = uc_doc_active();
+    /* A CHORD's second key, when it is an unmodified letter.  Ctrl chords ride
+     * the key hook and plain letters ride this road, so "ctrl+k s" - a default
+     * binding, Save All - could never fire: the `s` arrived here as typing and
+     * was inserted into the document instead.  Only while a chord is pending,
+     * so ordinary typing is untouched. */
+    if (uc_chord_pending() && ch > 0 && ch < 128) {
+        int c = (ch >= 'A' && ch <= 'Z') ? ch + 32 : ch;
+        if (uc_keys_dispatch(c, 0)) return 1;
+    }
     if (uc_quick_active()) return uc_quick_key(0, 0, ch);
     if (uc_find_active() && UC.focus == UC_F_EDITOR) return uc_find_key(0, 0, ch);
     if (UC.focus == UC_F_SIDEBAR) return uc_sidebar_key(0, 0, ch);
@@ -411,6 +488,13 @@ static int uc_key_hook(int uni, int scan, int ctrl)
     if (uc_quick_active()) { uc_quick_key(key, mods, 0); uc_repaint(); return 1; }
     if (uc_keys_dispatch(key, mods)) { uc_repaint(); return 1; }
     if (uc_find_active() && key == UI_KEY_ESC) { uc_find_close(); uc_repaint(); return 1; }
+    /* A Ctrl chord the keymap did not claim still belongs to whatever has
+     * FOCUS.  Ctrl chords ride this road and only this one - the host sends
+     * them through APP->key() and never as a canvas key event - so without
+     * this, Ctrl+C in the terminal reached nothing at all and a running child
+     * could not be interrupted (UCD-14). */
+    if (UC.focus == UC_F_PANEL && uc_panel_key(key, mods, 0)) { uc_repaint(); return 1; }
+    if (UC.focus == UC_F_SIDEBAR && uc_sidebar_key(key, mods, 0)) { uc_repaint(); return 1; }
     return 0;
 }
 
@@ -453,6 +537,8 @@ static void uc_opened(void)
         UC.view = UC_VIEW_EXPLORER;
         UC.panel_tab = UC_PANEL_TERMINAL;
         UC.focus = UC_F_EDITOR;
+        UC.ngroup = 1;                       /* one editor group until split */
+        UC.group = 0;
         UC.ws_vol = uno_fs_pref_vol();
         UC.ws_dir[0] = 0;
 
@@ -489,6 +575,7 @@ static void uc_closed(void)
      * in-flight generation does NOT stay: tearing the connection down here is
      * what keeps a closed window from leaking a socket (UCD-47's rule). */
     uc_ai_abort();
+    uc_term_child_stop();      /* a build must not outlive the window */
     uc_quick_close();
     uc_find_close();
     uc_suggest_close();
@@ -504,6 +591,7 @@ static void uc_frame(void)
     uc_api_pump();
     uc_ai_tick();
     uc_search_tick();
+    uc_term_tick();
     /* Repaint on the CARET's cadence, not on the frame's: a blinking caret
      * needs two repaints a second, and asking for one every frame would keep
      * the whole desktop compositing for no visible difference. */

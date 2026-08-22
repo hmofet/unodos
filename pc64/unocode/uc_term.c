@@ -29,6 +29,7 @@
  * cannot, and cannot fail differently.
  * ======================================================================== */
 #include "unocode.h"
+#include "uc_proc.h"
 
 #define TERM_LINES 300
 #define TERM_COLS  160
@@ -158,6 +159,226 @@ static int run_file(int vol, const char *dir, const char *name)
     }
     uc_term_writeln("nothing to run: expected a .PY or a .UNO");
     return 0;
+}
+
+/* ---- a real child process (UCD-14) ------------------------------------------
+ * The terminal's builtins stay: they are what pc64 has, and `open`, `js` and
+ * `cmd` reach the editor in ways no shell can.  What is new is that a word the
+ * builtins do not know is now handed to the platform's shell instead of being
+ * refused - where there IS one.
+ *
+ * OUTPUT IS FILTERED, NOT PRINTED RAW.  A child on a terminal emits escape
+ * sequences, and this buffer draws bytes; without a filter, `ls --color` fills
+ * the panel with "ESC[0m" and a progress bar redraws as a thousand lines.  So:
+ * CSI and OSC sequences are consumed, '\r' returns to the line start so a
+ * progress line overwrites itself the way it means to, '\b' backs up, and
+ * everything else is text.  Colour is DISCARDED rather than rendered - the
+ * panel has one foreground and pretending otherwise is a bigger task than this
+ * one (it is Tier 2's). */
+static uc_proc *g_proc;
+static int g_proc_col;           /* where '\r' returns to on the live line   */
+static int g_proc_task;          /* the child is a task: match its diagnostics */
+
+/* A compiler line, recognised and put in the Problems panel (UCD-15).
+ *
+ * Three shapes cover every toolchain this is likely to meet:
+ *   path:LINE:COL: error: message      gcc, clang, rustc, tsc
+ *   path:LINE: error: message          older gcc, many scripts
+ *   path(LINE,COL): error C1234: msg   MSVC
+ *
+ * Recognising nothing is the safe failure: the line is already in the terminal
+ * where the user can read it, so a missed match costs a click, not a message.
+ * A WRONG match costs a jump to the wrong file, so the parse is strict about
+ * what it will accept. */
+static void task_match_line(const char *s)
+{
+    UcProblem p;
+    int i = 0, cut = -1, k;
+    long line = 0, col = 0;
+    const char *rest = 0;
+    if (!s || !s[0]) return;
+
+    /* The FIRST ':' or '(' followed by a digit ends the file name.  The last
+     * one would cut inside "12:34", and a bare "the last colon" would cut a
+     * Windows drive letter off its own path. */
+    for (i = 0; s[i]; i++) {
+        if ((s[i] == ':' || s[i] == '(') && s[i + 1] >= '0' && s[i + 1] <= '9') {
+            cut = i;
+            break;
+        }
+    }
+    if (cut <= 0) return;
+    i = cut + 1;
+    while (s[i] >= '0' && s[i] <= '9') line = line * 10 + (s[i++] - '0');
+    if (line <= 0) return;
+    if (s[i] == ':' || s[i] == ',') {
+        int j = i + 1;
+        long c = 0;
+        while (s[j] >= '0' && s[j] <= '9') c = c * 10 + (s[j++] - '0');
+        if (c > 0) { col = c; i = j; }
+    }
+    if (s[i] == ')') i++;
+    if (s[i] == ':') i++;
+    while (s[i] == ' ') i++;
+    rest = s + i;
+
+    memset(&p, 0, sizeof p);
+    if (uc_starts(rest, "error")) p.sev = UC_SEV_ERROR;
+    else if (uc_starts(rest, "warning")) p.sev = UC_SEV_WARN;
+    else if (uc_starts(rest, "note")) p.sev = UC_SEV_INFO;
+    else return;                       /* not a diagnostic, just a colon */
+
+    /* the file: the LEAF, because UcProblem addresses a workspace file and a
+     * build prints whatever path it was invoked with */
+    {
+        int start = 0;
+        for (k = 0; k < cut; k++) if (s[k] == '/' || s[k] == '\\') start = k + 1;
+        k = cut - start;
+        if (k <= 0 || k >= (int)sizeof p.file) return;
+        memcpy(p.file, s + start, (unsigned long)k);
+        p.file[k] = 0;
+    }
+    p.line = (int)line;
+    p.col = (int)col;
+    p.vol = UC.ws_vol;
+    uc_scpy(p.source, "tasks", sizeof p.source);
+    uc_scpy(p.msg, rest, sizeof p.msg);
+    uc_problems_add(&p);
+}
+
+static void term_put_filtered(const char *s, int n)
+{
+    static int esc;              /* 0 none, 1 saw ESC, 2 in CSI, 3 in OSC    */
+    int i;
+    for (i = 0; i < n; i++) {
+        char c = s[i];
+        if (esc == 1) {
+            if (c == '[') esc = 2;
+            else if (c == ']') esc = 3;
+            else esc = 0;                       /* a two-byte sequence       */
+            continue;
+        }
+        if (esc == 2) {                          /* CSI: ends at @..~        */
+            if ((c >= '@' && c <= '~')) esc = 0;
+            continue;
+        }
+        if (esc == 3) {                          /* OSC: ends at BEL or ST   */
+            if (c == 7) esc = 0;
+            else if (c == 27) esc = 1;           /* ESC \ - the ESC re-arms  */
+            continue;
+        }
+        if (c == 27) { esc = 1; continue; }
+        if (c == '\r') { g_proc_col = 0; continue; }
+        if (c == '\n') {
+            /* a COMPLETED line is the unit a diagnostic arrives in, so this is
+             * where a task's output gets matched (UCD-15) */
+            if (g_proc_task && g_nline) task_match_line(line_at(g_nline - 1));
+            uc_term_write("\n");
+            g_proc_col = 0;
+            continue;
+        }
+        if (c == '\b') { if (g_proc_col > 0) g_proc_col--; continue; }
+        if (c == '\t') {
+            do { uc_term_write(" "); g_proc_col++; } while (g_proc_col % 8);
+            continue;
+        }
+        if ((unsigned char)c < 32) continue;      /* BEL and friends          */
+        {
+            /* '\r' means the next characters OVERWRITE this line, which is
+             * how every progress bar works.  Writing into the live line at
+             * g_proc_col is what makes one appear as one line. */
+            char *cur;
+            if (!g_nline) term_newline();
+            cur = line_at(g_nline - 1);
+            if (g_proc_col < TERM_COLS - 1) {
+                int had = (int)strlen(cur);
+                int k;
+                for (k = had; k < g_proc_col; k++) cur[k] = ' ';
+                cur[g_proc_col] = c;
+                if (g_proc_col >= had) cur[g_proc_col + 1] = 0;
+                g_proc_col++;
+            }
+        }
+    }
+}
+
+static void term_spawn(const char *cmdline)
+{
+    if (g_proc) {
+        /* a running child owns the input line; this is a keystroke, not a
+         * command */
+        uc_proc_write(g_proc, cmdline, (int)strlen(cmdline));
+        uc_proc_write(g_proc, "\n", 1);
+        return;
+    }
+    {   /* start it where the TERMINAL is, not where the editor was launched:
+         * a build task that ran `gcc main.c` in the editor's own directory
+         * reported a missing file instead of compiling one (UCD-15) */
+        char cwd[UC_FULL_MAX];
+        int have = uc_proc_workdir(g_cwvol, g_cwd, cwd, sizeof cwd);
+        g_proc = uc_proc_spawn(cmdline, have ? cwd : 0);
+    }
+    g_proc_col = 0;
+    if (!g_proc) {
+        uc_term_writeln(uc_proc_error());
+        return;
+    }
+}
+
+/* Drain what the child has said, once per frame.  Bounded per call: a `make`
+ * that produces a megabyte in one burst must not spend the whole frame here,
+ * or the editor stops painting exactly when it is most worth watching. */
+void uc_term_tick(void)
+{
+    char buf[4096];
+    int n, budget = 8;
+    if (!g_proc) return;
+    while (budget-- > 0) {
+        n = uc_proc_read(g_proc, buf, sizeof buf);
+        if (n > 0) { term_put_filtered(buf, n); uc_repaint(); continue; }
+        if (n == 0) return;                       /* nothing waiting          */
+        {   /* ended: report the code the way a shell does */
+            char row[64], num[16];
+            int code = uc_proc_exit_code(g_proc);
+            uc_proc_free(g_proc);
+            g_proc = 0;
+            g_proc_col = 0;
+            if (g_proc_task) {
+                int nerr = uc_problems_count(UC_SEV_ERROR);
+                g_proc_task = 0;
+                if (nerr) {
+                    uc_scpy(row, "", sizeof row);
+                    uc_itoa(num, nerr);
+                    uc_scat(row, num, sizeof row);
+                    uc_scat(row, nerr == 1 ? " error - see Problems"
+                                           : " errors - see Problems", sizeof row);
+                    uc_notify(row, UC_SEV_ERROR);
+                }
+            }
+            if (code != 0) {
+                uc_scpy(row, "[exited with code ", sizeof row);
+                uc_itoa(num, code);
+                uc_scat(row, num, sizeof row);
+                uc_scat(row, "]", sizeof row);
+                uc_term_writeln(row);
+            }
+            uc_repaint();
+            return;
+        }
+    }
+    uc_repaint();
+}
+
+int uc_term_child_running(void) { return g_proc != 0; }
+
+void uc_term_child_stop(void)
+{
+    if (!g_proc) return;
+    uc_proc_free(g_proc);
+    g_proc = 0;
+    g_proc_col = 0;
+    uc_term_writeln("[stopped]");
+    uc_repaint();
 }
 
 /* ---- argument splitting ------------------------------------------------------ */
@@ -389,13 +610,19 @@ void uc_tasks_run(const char *label)
         for (i = 0; i < g_ntask; i++) if (!strcmp(g_task[i].group, "build")) break;
         if (i >= g_ntask) i = 0;
     }
-    uc_toggle_panel(UC_PANEL_TERMINAL);
+    uc_show_panel(UC_PANEL_TERMINAL);
     {
         char cmd[120];
         uc_term_write("> task: ");
         uc_term_writeln(g_task[i].label);
+        /* This run's diagnostics replace the last run's.  Keeping them would
+         * leave errors in the panel that the build just fixed (UCD-15). */
+        uc_problems_clear("tasks");
+        g_proc_task = 1;
         uc_scpy(cmd, g_task[i].command, sizeof cmd);
         run_command(cmd);
+        /* a builtin finished synchronously and started no child */
+        if (!g_proc) g_proc_task = 0;
     }
 }
 
@@ -407,13 +634,13 @@ void uc_launch_run(int i)
         char cmd[120];
         uc_scpy(cmd, "run ", sizeof cmd);
         uc_scat(cmd, g_launch[i].program, sizeof cmd);
-        uc_toggle_panel(UC_PANEL_TERMINAL);
+        uc_show_panel(UC_PANEL_TERMINAL);
         run_command(cmd);
         return;
     }
     if (!d || !d->name[0]) { uc_notify("Nothing to run: save the file first", UC_SEV_WARN); return; }
     if (d->dirty) uc_doc_save(d);
-    uc_toggle_panel(UC_PANEL_TERMINAL);
+    uc_show_panel(UC_PANEL_TERMINAL);
     uc_term_write("> run ");
     uc_term_writeln(d->name);
     run_file(d->vol, d->dir, d->name);
@@ -423,8 +650,17 @@ void uc_launch_run(int i)
 static void run_command(char *cmdline)
 {
     char *argv[12];
-    int argc = split(cmdline, argv, 12);
-    const char *a1 = argc > 1 ? argv[1] : "";
+    /* KEEP THE WHOLE LINE.  split() chops cmdline in place, replacing each
+     * space with a NUL, so after it `cmdline` is only the first word - and
+     * handing THAT to a shell ran `uname` without its arguments and `for`
+     * without its loop, which bash reported as a syntax error in a line it
+     * had never been given. */
+    char whole[TERM_COLS];
+    int argc;
+    const char *a1;
+    uc_scpy(whole, cmdline, sizeof whole);
+    argc = split(cmdline, argv, 12);
+    a1 = argc > 1 ? argv[1] : "";
     if (!argc) return;
 
     if (!strcmp(argv[0], "help") || !strcmp(argv[0], "?")) { cmd_help(); return; }
@@ -570,6 +806,12 @@ static void run_command(char *cmdline)
         uc_term_writeln(uc_api_engine());
         return;
     }
+    /* Not a builtin.  On a platform with processes that is not an error - it
+     * is the point (UCD-14).  On pc64 it still is, and says so. */
+    if (uc_proc_available()) {
+        term_spawn(whole);
+        return;
+    }
     {
         char row[80];
         uc_scpy(row, argv[0], sizeof row);
@@ -626,6 +868,36 @@ void uc_term_draw(UcRect r, int focused)
 
 int uc_term_key(int key, int mods, int ch)
 {
+    /* A RUNNING CHILD OWNS THE KEYBOARD.  While `make` or an interactive shell
+     * is up, keystrokes are its stdin - not a new command line - because that
+     * is what makes an interactive program interactive (UCD-14).  Ctrl+C goes
+     * through as the byte, which the pty turns into a signal for the whole
+     * foreground group. */
+    if (g_proc) {
+        /* Ctrl+C reaches here as a CHARACTER on one transport and as the
+         * control CODE on another (uc_main.c's key hook folds Ctrl+letter both
+         * ways), so both spellings count.  Checking only `ch` meant the
+         * interrupt silently did nothing on the road that delivers `key`. */
+        if (((mods & UI_MOD_CTRL) &&
+             (ch == 'c' || ch == 'C' || key == 'c' || key == 'C')) ||
+            ch == 3 || key == 3) {
+            uc_proc_interrupt(g_proc);
+            return 1;
+        }
+        if (key == UI_KEY_ENTER)     { uc_proc_write(g_proc, "\r", 1); return 1; }
+        if (key == UI_KEY_BACKSPACE) { uc_proc_write(g_proc, "\177", 1); return 1; }
+        if (key == UI_KEY_UP)    { uc_proc_write(g_proc, "\033[A", 3); return 1; }
+        if (key == UI_KEY_DOWN)  { uc_proc_write(g_proc, "\033[B", 3); return 1; }
+        if (key == UI_KEY_RIGHT) { uc_proc_write(g_proc, "\033[C", 3); return 1; }
+        if (key == UI_KEY_LEFT)  { uc_proc_write(g_proc, "\033[D", 3); return 1; }
+        if (key == UI_KEY_ESC)   { uc_proc_write(g_proc, "\033", 1); return 1; }
+        if (ch >= 32 && ch < 127) {
+            char c = (char)ch;
+            uc_proc_write(g_proc, &c, 1);
+            return 1;
+        }
+        return 1;
+    }
     if (key == UI_KEY_ENTER) {
         char prompt[UC_FULL_MAX];
         prompt_text(prompt, sizeof prompt);

@@ -528,6 +528,14 @@ if [ "$1" != "legacy" ]; then
               -Iunocode -I../unojs \
               -c -o "build/apps/uc_secret_pc64.o" "unocode/plat/uc_secret_pc64.c"
         COBJ="$COBJ build/apps/uc_secret_pc64.o"
+        # And its answer to the process seam (uc_proc.h, UCD-14), which is
+        # "there are none": this machine has no process model, so the editor's
+        # terminal keeps its builtins instead of offering a shell it cannot
+        # start.  The file is the refusal, and it is the whole file.
+        pc "$CC" $UCF -mno-stack-arg-probe -DUNO_APP_SYM=uno_app_main \
+              -Iunocode -I../unojs \
+              -c -o "build/apps/uc_proc_pc64.o" "unocode/plat/uc_proc_pc64.c"
+        COBJ="$COBJ build/apps/uc_proc_pc64.o"
         pcwait
         "$NM" $COBJ | awk '$1=="U"&&$2!=""{u[$2]=1} \
             $1!="U"&&NF>=3{d[$3]=1} \

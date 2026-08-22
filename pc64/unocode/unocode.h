@@ -465,6 +465,27 @@ UcDoc  *uc_doc_at(int i);
 UcDoc  *uc_doc_active(void);
 int     uc_doc_active_index(void);
 void    uc_doc_activate(int i);
+
+/* ---- editor groups (UCD-18) ------------------------------------------------
+ * Two groups side by side, each with its OWN set of open editors, its own
+ * active one, and its own scroll and cursors - so the same file open in both
+ * is two independent views of it, which is half the point of splitting.
+ *
+ * A group's view state lives here rather than in UcDoc because a document has
+ * one buffer and two viewers; the drawing code borrows a group's view for the
+ * length of one paint (uc_group_view_push/pop). */
+#define UC_GROUPS 2
+int  uc_group_count(int g);              /* editors open in group g          */
+int  uc_group_doc(int g, int i);         /* the i-th, as a doc index         */
+int  uc_group_active(int g);             /* its active doc index, or -1      */
+void uc_group_show(int g, int doc);      /* add if absent, then activate     */
+void uc_group_close(int g, int doc);     /* remove from this group only      */
+int  uc_group_shows(int doc);            /* is ANY group still showing it?   */
+void uc_group_split(void);               /* active editor into the other one */
+void uc_group_focus(int g);
+/* borrow group g's saved view for a paint of `d`, then give it back */
+void uc_group_view_push(int g, UcDoc *d);
+void uc_group_view_pop(UcDoc *d);
 int     uc_doc_open(int vol, const char *dir, const char *name); /* index    */
 int     uc_doc_new(void);
 int     uc_doc_close(int i);
@@ -499,6 +520,7 @@ void    uc_select_all(UcDoc *d);
 void    uc_select_word(UcDoc *d);
 void    uc_select_line(UcDoc *d);
 void    uc_add_cursor(UcDoc *d, int off);
+void    uc_add_cursor_sel(UcDoc *d, int anchor, int caret);
 void    uc_add_cursor_line(UcDoc *d, int dir);
 void    uc_clear_extra_cursors(UcDoc *d);
 int     uc_has_selection(UcDoc *d);
@@ -591,6 +613,8 @@ int  uc_sidebar_event(UcRect r, const unoui_event *e);
 int  uc_sidebar_key(int key, int mods, int ch);
 void uc_tabs_draw(UcRect r);
 int  uc_tabs_event(UcRect r, const unoui_event *e);
+void uc_tabs_group_draw(UcRect r, int g);
+int  uc_tabs_group_event(UcRect r, const unoui_event *e, int g);
 void uc_breadcrumb_draw(UcRect r);
 void uc_status_draw(UcRect r);
 int  uc_status_event(UcRect r, const unoui_event *e);
@@ -605,6 +629,9 @@ void uc_explorer_reveal(UcDoc *d);
 void uc_search_run(const char *needle);
 void uc_search_tick(void);
 void uc_search_cancel(void);
+/* Replace across every file with a hit (UCD-13).  One undo step per file, and
+ * the files are left open and dirty rather than saved. */
+void uc_search_replace_all(void);
 void uc_notif_draw(UcRect r);
 void uc_notif_tick(void);
 
@@ -794,6 +821,12 @@ int  uc_term_key(int key, int mods, int ch);
 void uc_term_write(const char *s);
 void uc_term_writeln(const char *s);
 void uc_term_run(const char *cmdline);
+/* the child process, where the platform has one (UCD-14).  tick() drains its
+ * output once a frame; child_stop() kills it, which is what closing the panel
+ * and closing the window both do. */
+void uc_term_tick(void);
+int  uc_term_child_running(void);
+void uc_term_child_stop(void);
 void uc_term_clear(void);
 void uc_tasks_run(const char *label);      /* tasks.json                    */
 int  uc_tasks_count(void);
@@ -810,6 +843,10 @@ void uc_launch_run(int i);
 typedef struct {
     UcRect canvas;            /* the whole workbench                        */
     UcRect activity, sidebar, tabs, crumbs, editor, panel, status;
+    /* the second editor group (UCD-18).  ngroup is 1 or 2; group is the one
+     * with focus, and is what uc_doc_active() answers about. */
+    UcRect tabs2, crumbs2, editor2;
+    int    ngroup, group;
     int    sidebar_w, panel_h;
     int    sidebar_user;      /* the user dragged the splitter: stop sizing it */
     int    sidebar_visible, panel_visible, minimap;
@@ -824,7 +861,7 @@ typedef struct {
 
 enum { UC_F_EDITOR = 0, UC_F_SIDEBAR, UC_F_PANEL };
 enum { UC_DRAG_NONE = 0, UC_DRAG_SIDEBAR, UC_DRAG_PANEL, UC_DRAG_TEXT,
-       UC_DRAG_MINIMAP, UC_DRAG_VSCROLL };
+       UC_DRAG_MINIMAP, UC_DRAG_VSCROLL, UC_DRAG_BOX };
 
 extern UcWorkbench UC;
 
@@ -842,6 +879,7 @@ int  uc_list_dir(int vol, const char *dir, char (*names)[UC_NAME_MAX],
 void uc_status_msg(const char *s);
 const char *uc_status_msg_get(void);
 void uc_toggle_panel(int tab);
+void uc_show_panel(int tab);      /* open it; never the closing half        */
 void uc_toggle_sidebar(int view);
 
 /* ---- host queries (uc_main.c, uc_edit.c) -----------------------------------
