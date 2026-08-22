@@ -815,6 +815,25 @@ than the hypervisor:
 
 ## Changelog
 
+- **2026-08-22, API 1. M4 - the appliance is a BROWSER APPLIANCE.** The X
+  server is gone: it segfaulted on this guest's framebuffer (simpledrm, no
+  GPU, no render node) under modesetting, under modesetting with
+  acceleration off, and differently under fbdev, and its fatal backtrace
+  never survives to its own log. In its place a **wlroots kiosk compositor
+  (cage) with the pixman software renderer**, which needs no GPU, reads
+  evdev itself, and gives Chromium the whole screen focused for as long as
+  it lives. With it: the browser is stable for a whole run, renders live
+  pages, and **Ctrl+L and Backspace typed from the HOST reach its address
+  bar** (photographed focused and cleared). **OPEN: plain letters typed from
+  the host do not reach it**, while the same appliance takes typed URLs
+  happily under plain QEMU - the emulated controller reports every keystroke
+  delivered and none dropped, so the loss is above the guest's input layer.
+  Findings on the way, all of them outside virtualization: Chromium's async
+  resolver and Secure DNS ignore resolv.conf; **musl queries every
+  nameserver in PARALLEL and takes the first answer**, so one broken
+  resolver in the list beats a good one; the site's own WebAssembly widget
+  is what killed the renderer with `Aw, Snap! Error code: 8`; and
+  `WLR_BACKENDS=drm` means ONLY drm, which silently removes libinput.
 - **2026-08-21, API 1. M3 - CHROMIUM BROWSES THE INTERNET INSIDE UNODOS.**
   The guest is on the real wire: `unovdev_net.c` gained a bridge, `net_poll`
   a weak hook, and the guest keeps its own MAC and DHCPs for its own lease,
