@@ -230,12 +230,14 @@ export UNO_URL_ENV=${UNO_URL:-https://$UNO_SITE/}
 
 URL=$UNO_URL_ENV
 while :; do
+    # NO PIPELINE HERE.  busybox grep has no --line-buffered: the filter
+    # exited at once, tee took SIGPIPE, and X died with it - which is why a
+    # browser that had been running perfectly vanished and left a bare
+    # console behind.  The log is a file, and its tail is reported when the
+    # session ends, which is the moment it is worth reading.
     xinit /usr/share/uno/session.sh \
-      -- /usr/bin/X :0 vt1 -nolisten tcp -quiet 2>&1 \
-      | tee /tmp/x.log \
-      | grep --line-buffered -iE "error|fatal|check failed|crash|abort|killed|libinput" \
-      > /dev/ttyS0
-    echo "uno: browser exited, restarting" > /dev/ttyS0
+      -- /usr/bin/X :0 vt1 -nolisten tcp -quiet > /tmp/x.log 2>&1
+    echo "uno: browser exited: $(grep -iE 'error|fatal|abort' /tmp/x.log | tail -2 | tr '\n' ' ' | cut -c1-140)" > /dev/ttyS0
     sleep 2
 done
 EOF
