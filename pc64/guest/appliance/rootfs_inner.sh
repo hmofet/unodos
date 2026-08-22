@@ -80,6 +80,20 @@ udevadm settle -t 10 2>/dev/null
 # What the kernel actually created, which is the other half of the question.
 echo "uno: input nodes: $(ls /dev/input 2>/dev/null | tr '\n' ' ')" > /dev/ttyS0
 
+# DOES THE KERNEL'S INPUT LAYER EVER PRODUCE AN EVENT?  Interrupt counts
+# cannot answer this: a driver's own probe generates dozens of them, so
+# irq1=85 says nothing about whether a single keystroke arrived.  One
+# blocking read of the evdev node does say it, in one word, for each device.
+# Armed early so they are already waiting when the harness types.
+( for d in /dev/input/event0 /dev/input/event1 /dev/input/event2; do
+      [ -e "$d" ] || continue
+      ( if dd if="$d" bs=24 count=1 >/dev/null 2>&1; then
+            echo "uno: EVDEV EVENT on $d" > /dev/ttyS0
+        else
+            echo "uno: evdev read failed on $d" > /dev/ttyS0
+        fi ) &
+  done ) &
+
 dbus-daemon --system 2>/dev/null
 
 export HOME=/root XDG_RUNTIME_DIR=/run
@@ -201,7 +215,7 @@ export UNO_URL_ENV=${UNO_URL:-https://$UNO_SITE/}
 # the next change is aimed rather than guessed.
 (
   export DISPLAY=:0
-  sleep 150
+  sleep 60
   W=$(xdotool search --class -- chromium 2>/dev/null | tail -1)
   echo "uno: selftest window=$W" > /dev/ttyS0
   [ -n "$W" ] && xdotool windowactivate --sync "$W" 2>/dev/null
