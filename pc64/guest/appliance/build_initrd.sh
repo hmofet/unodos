@@ -25,7 +25,8 @@ rm -rf "$ROOT"
 mkdir -p "$ROOT"/{bin,sbin,dev,proc,sys,mnt,tmp,etc}
 cp "$BB" "$ROOT/bin/busybox"
 for a in sh ls cat echo mount umount mkdir mknod dmesg uname sleep ps \
-         setsid cttyhack reboot poweroff clear head tail grep vi free df; do
+         setsid cttyhack reboot poweroff clear head tail grep vi free df \
+         switch_root ip ln; do
     ln -s busybox "$ROOT/bin/$a"
 done
 
