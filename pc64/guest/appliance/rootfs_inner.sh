@@ -218,7 +218,7 @@ export UNO_URL_ENV=${UNO_URL:-http://example.org/}
   # renderer that dies inside a browser that lives is never explained.
   while :; do
     sleep 90
-    tail -4 /tmp/x.log 2>/dev/null | sed 's/^/unoB| /' > /dev/ttyS0
+    grep -iE "libinput|device|seat|keyboard|pointer" /tmp/x.log 2>/dev/null | tail -4 | sed 's/^/unoB| /' > /dev/ttyS0
   done
 ) &
 (
@@ -270,7 +270,13 @@ while :; do
         # browser that renders and cannot be typed at, exactly what the
         # first Wayland run produced.
         chvt 1 2>/dev/null
-        cage -- /usr/share/uno/browser.sh < /dev/tty1 > /tmp/x.log 2>&1
+        # -d so the compositor says which input devices libinput gave it.
+        # Keys provably reach this guest's evdev and provably do not reach
+        # the browser, and the only layer left between them is this one.
+        # -D is debug; -d means "no client-side decorations" and cost a run.
+        # -s allows VT switching, which is also what makes libseat treat this
+        # session as one that can OWN the seat rather than share it.
+        cage -D -s -- /usr/share/uno/browser.sh < /dev/tty1 > /tmp/x.log 2>&1
         RC=$?
         echo "uno: wayland session ended rc=$RC ----" > /dev/ttyS0
         tail -10 /tmp/x.log | sed 's/^/uno| /' > /dev/ttyS0
