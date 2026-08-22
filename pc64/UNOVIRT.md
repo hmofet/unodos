@@ -815,6 +815,21 @@ than the hypervisor:
 
 ## Changelog
 
+- **2026-08-21, API 1. M3 - CHROMIUM BROWSES THE INTERNET INSIDE UNODOS.**
+  The guest is on the real wire: `unovdev_net.c` gained a bridge, `net_poll`
+  a weak hook, and the guest keeps its own MAC and DHCPs for its own lease,
+  which works because the NIC drivers already run promiscuous. It reached
+  1.1.1.1 over TCP, resolved a name, fetched a page over HTTPS with real
+  certificate validation, and Chromium rendered `unodos.arinbakht.com` in a
+  native UnoDOS window (`shots/browser_live.png`). Contracts S-HV-53..55.
+  **Five things stood between a working bridge and a working browser, and
+  only the first was virtualization:** the bridge was armed at a point where
+  no link existed yet (resolve it lazily); Chromium started before DHCP
+  finished and cached the failure forever (bring the wire up FIRST); the
+  appliance shipped no CA roots at all; the guest's CMOS answered with a
+  hardcoded date, and **TLS checks the clock**, so every certificate issued
+  in the last fortnight read as invalid; and the harness box's own resolver
+  answers for some names and not others, which a guest inherits.
 - **2026-08-21, API 1.** A8 **met**: the guest gets a DISPLAY and INPUT,
   and a command typed through the Appliances window is answered on the
   guest's framebuffer (`shots/vmdisp_display_typed.png`). The boot protocol places a linear XRGB8888 framebuffer at the top

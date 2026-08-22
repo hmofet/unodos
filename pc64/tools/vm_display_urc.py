@@ -152,6 +152,32 @@ def main():
         shot("display_typed")
 
         print("typed through the window; check display_typed for the echo")
+
+        # An appliance with a rootfs keeps going long past the shell - X and
+        # Chromium take minutes of wall time at a slice per frame - so with
+        # a fourth argument, keep photographing the window as it happens.
+        extra = int(sys.argv[3]) if len(sys.argv) > 3 else 0
+        for i in range(extra):
+            time.sleep(90)
+            shot("display_t%02d" % i)
+
+        # THE BROWSER IS DRIVEN, not merely watched.  A rendered page proves
+        # Blink runs; typing a DIFFERENT address into the address bar and
+        # getting that page proves the whole loop - host keystroke, i8042,
+        # X, Chromium's omnibox, DNS, TLS, layout, and the surface coming
+        # back out.  Ctrl+L focuses the omnibox on every platform Chromium
+        # has ever shipped on.
+        nav = sys.argv[4] if len(sys.argv) > 4 else ""
+        if nav:
+            print("driving the browser to %s ..." % nav)
+            link.key(0, ord('l'), 1, timeout=10)      # Ctrl+L
+            time.sleep(1.5)
+            for ch in nav:
+                key(ord(ch), settle=0.12)
+            key(ord('\r'), settle=0.3)
+            for i in range(4):
+                time.sleep(45)
+                shot("display_nav%02d" % i)
     finally:
         try:
             link.command("poweroff", timeout=2)
