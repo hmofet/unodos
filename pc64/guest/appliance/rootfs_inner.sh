@@ -175,23 +175,43 @@ done
 # keys land.
 export UNO_URL_ENV=${UNO_URL:-https://$UNO_SITE/}
 
-# What X thinks its input devices are, once it has said so.  Xorg logs to its
-# own file, so none of this reaches the pipe below.
+# UNCONDITIONAL, because the last version waited for a file that did not
+# always arrive and then reported nothing at all - a diagnostic that can
+# block is a diagnostic that is silent exactly when it is needed.
+#
+# IRQ1 is the guest's own count of keyboard interrupts.  Paired with the
+# emulated controller's count on the host side, the two together say which
+# side of the wire a missing keystroke went missing on.
 (
-  while [ ! -f /var/log/Xorg.0.log ]; do sleep 2; done
-  sleep 25
-  echo "uno: xorg: $(grep -c 'Using input driver' /var/log/Xorg.0.log) input devices" \
-      > /dev/ttyS0
-  # THE GUEST'S OWN COUNT OF KEYBOARD INTERRUPTS.  Paired with the emulated
-  # controller's count on the host side, this decides in one line which side
-  # of the wire a missing keystroke went missing on.
-  while :; do
-    sleep 60
-    echo "uno: irq1 $(grep -E 'i8042|^ *1:' /proc/interrupts | tr -s ' ' | cut -c1-60 | tr '\n' '/')" \
+  n=0
+  while [ $n -lt 40 ]; do
+    n=$((n + 1))
+    sleep 20
+    echo "uno: irq1=$(awk '/^ *1:/ {print $2}' /proc/interrupts) irq12=$(awk '/^ *12:/ {print $2}' /proc/interrupts) ptr=$(DISPLAY=:0 xdotool getmouselocation 2>/dev/null | tr ' ' ',')" \
         > /dev/ttyS0
   done
-  grep -E "Using input driver|AutoAddDevices|no input driver" /var/log/Xorg.0.log \
-      | head -4 > /dev/ttyS0
+) &
+
+# THE SELF-TEST THAT SPLITS THE REMAINING QUESTION.  Five runs have shown a
+# browser that renders and will not take a keystroke, with the emulated
+# keyboard provably emitting and the guest provably draining it.  So: type
+# the same navigation from INSIDE the guest with xdotool.  If the page
+# changes, X and Chromium are fine and the gap is between libinput and my
+# emulated device; if it does not, the gap is above them both.  Either way
+# the next change is aimed rather than guessed.
+(
+  export DISPLAY=:0
+  sleep 150
+  W=$(xdotool search --class -- chromium 2>/dev/null | tail -1)
+  echo "uno: selftest window=$W" > /dev/ttyS0
+  [ -n "$W" ] && xdotool windowactivate --sync "$W" 2>/dev/null
+  xdotool key --clearmodifiers ctrl+l 2>/dev/null
+  sleep 1
+  # A DIFFERENT SITE from the one the host harness types later, so the two
+  # navigations cannot be mistaken for each other in a screenshot.
+  xdotool type --delay 120 "example.net" 2>/dev/null
+  xdotool key Return 2>/dev/null
+  echo "uno: selftest typed example.net from inside" > /dev/ttyS0
 ) &
 
 URL=$UNO_URL_ENV
