@@ -196,6 +196,10 @@ void  uc_rx_free(UcRx *rx);
  * index `from` is a line start, so `^` behaves. */
 int   uc_rx_exec(UcRx *rx, const char *s, int len, int from, int bol, int *caps);
 int   uc_rx_ngroups(const UcRx *rx);
+/* 1 when the pattern contains \G, whose meaning depends on where the search
+ * was told to start - so a cache of "where does this match" keyed on the
+ * pattern alone is wrong for it. */
+int   uc_rx_ganchored(const UcRx *rx);
 
 /* ======================================================================== *
  * uc_theme.c - colour themes.
@@ -357,6 +361,14 @@ typedef struct UcGrammar {
     int        npat, pcap;
     short      top, ntop;       /* the root pattern list                    */
     int        ok;
+    /* How the load actually went (UCD-28).  There was no diagnostic of any
+     * kind here: a rule whose regex would not compile, or that arrived after
+     * the pattern pool filled, was dropped in silence.  That is how a grammar
+     * could load, report success, and colour nothing at all. */
+    int        nbuilt;          /* rules that produced something usable      */
+    int        ndropped;        /* rules that did not                        */
+    int        nregex_bad;      /* ...of those, because a regex would not    */
+    int        pool_full;       /* the pool could not grow far enough        */
 } UcGrammar;
 
 typedef struct UcLang {
@@ -395,6 +407,16 @@ int       uc_lang_load_grammar(int lang, int vol, const char *path);
  * the file) and *state_out gets the state after it; that is what makes a block
  * comment survive a scroll.  Returns 1 if the line was coloured, 0 if it was
  * left at the default (no grammar, or longer than UC_HL_MAXLINE). */
+/* Retire every interned tokenizer state.  Called when a grammar is replaced,
+ * and by anything that changes a document's language: a state id carries a
+ * pattern index, and an index into a different grammar's pool is a different
+ * rule (UCD-28). */
+void      uc_hl_state_invalidate(void);
+/* How many regexes the tokenizer has executed since start-up.  The cost of
+ * colouring is what regresses silently - a missing match cache took a real
+ * grammar from a millisecond a line to twenty-five - and an execution count is
+ * a measure of that work which does not depend on the machine. */
+unsigned long uc_hl_rx_calls(void);
 int       uc_tokenize(int lang, const char *line, int len, int state_in,
                       short *scope_out, int *state_out);
 const char *uc_scope_name(int scope_id);
@@ -524,7 +546,12 @@ int     uc_line_end(UcDoc *d, int line);
 int     uc_line_of(UcDoc *d, int off);
 int     uc_col_of(UcDoc *d, int off);
 int     uc_offset_of(UcDoc *d, int line, int col);
-int     uc_line_state(UcDoc *d, int line);   /* tokenizer state at line start */
+int     uc_line_state(UcDoc *d, int line);
+void    uc_doc_retokenize(UcDoc *d);     /* after a language change    */
+/* Every character's scope id on one line, through the cached cross-line state.
+ * Returns how many it wrote.  For tests and for anything that wants to reason
+ * about colouring without being the painter. */
+int     uc_line_scopes(UcDoc *d, int line, short *out, int cap);   /* tokenizer state at line start */
 int     uc_line_changed(UcDoc *d, int line); /* 0 same, 1 modified, 2 added   */
 
 /* editing - every one of these is undoable and multi-cursor aware */
@@ -991,6 +1018,7 @@ void uc_toggle_panel(int tab);
 void uc_show_panel(int tab);      /* open it; never the closing half        */
 void uc_toggle_sidebar(int view);
 void uc_show_view(int view);      /* open it; never a toggle (UCD-26) */
+int  uc_ws_vol(void);             /* UC.ws_vol, for the host          */
 
 /* ---- host queries (uc_main.c, uc_edit.c) -----------------------------------
  * A HOSTED platform - UnoCode Desktop, which owns a real OS window rather than
