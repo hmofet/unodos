@@ -16,7 +16,7 @@ apk add --root $R --initdb --no-cache \
     --allow-untrusted \
     alpine-baselayout busybox musl musl-utils \
     eudev udev-init-scripts \
-    xorg-server xf86-input-libinput xinit xrandr xset \
+    xorg-server xf86-input-libinput xf86-video-fbdev xinit xrandr xset \
     mesa-dri-gallium \
     chromium \
     font-dejavu \
@@ -242,7 +242,7 @@ while :; do
     # word "error" throws that away.
     echo "uno: session ended ----" > /dev/ttyS0
     tail -8 /tmp/x.log | sed 's/^/uno| /' > /dev/ttyS0
-    grep -E "^\(EE\)|Backtrace|^ *[0-9]+: " /var/log/Xorg.0.log 2>/dev/null | tail -14 | sed 's/^/unoX| /' > /dev/ttyS0
+    grep -E "\(EE\)|Backtrace|^\[[ 0-9.]+\] *[0-9]+: " /var/log/Xorg.0.log 2>/dev/null | tail -14 | sed 's/^/unoX| /' > /dev/ttyS0
     sleep 2
 done
 EOF
@@ -260,10 +260,9 @@ mkdir -p $R/etc/X11/xorg.conf.d
 cat > $R/etc/X11/xorg.conf.d/20-uno-fb.conf <<'XCONFEOF'
 Section "Device"
     Identifier  "uno-fb"
-    Driver      "modesetting"
+    Driver      "fbdev"
     Option      "AccelMethod"  "none"
     Option      "ShadowFB"     "true"
-    Option      "AtomicModeSetting" "false"
 EndSection
 XCONFEOF
 
