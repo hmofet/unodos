@@ -598,6 +598,71 @@ void uc_search_run(const char *needle)
     uc_repaint();
 }
 
+/* ---- results from somewhere other than a text search (UCD-26) --------------
+ * "Find all references" wants exactly what the Search view already is: hits
+ * grouped by file, with a line of context, that open where they point.  Giving
+ * references their own panel would have meant a second scroll model, a second
+ * click handler and a second set of row arithmetic, all to show the same shape
+ * of answer.  These three calls fill the same model from outside.
+ *
+ * The view stays labelled with whatever `label` says, so it is clear the rows
+ * are not the result of the text in the search box - which is still sitting
+ * there saying something else. */
+void uc_results_begin(const char *label)
+{
+    uc_search_cancel();
+    g_nhit = 0;
+    g_hitfiles = 0;
+    g_nrow = 0;
+    g_hitsel = 0;
+    g_hitscroll = 0;
+    g_nfiles = 0;
+    g_fpooln = 0;
+    g_fileat = 0;
+    g_truncated = 0;
+    g_searching = 0;
+    uc_scpy(g_query, label ? label : "", sizeof g_query);
+    g_qlen = (int)strlen(g_query);
+    g_needle[0] = 0;
+}
+
+int uc_results_add(const char *rel, int line, const char *text)
+{
+    int f = -1, i, len;
+    if (!rel || !rel[0] || g_nhit >= SR_MAX) return 0;
+    for (i = 0; i < g_nfiles; i++)
+        if (!strcmp(file_path(i), rel)) { f = i; break; }
+    if (f < 0) {
+        if (g_nfiles >= SR_FILES) { g_truncated = 1; return 0; }
+        len = (int)strlen(rel);
+        if (g_fpooln + len + 1 > SR_POOL) { g_truncated = 1; return 0; }
+        g_foff[g_nfiles] = g_fpooln;
+        memcpy(g_fpool + g_fpooln, rel, (unsigned long)len + 1);
+        g_fpooln += len + 1;
+        f = g_nfiles++;
+        g_hitfiles++;
+    }
+    g_hit[g_nhit].f = f;
+    g_hit[g_nhit].line = line;
+    uc_scpy(g_hit[g_nhit].text, text ? text : "", sizeof g_hit[0].text);
+    g_nhit++;
+    return 1;
+}
+
+void uc_results_end(void)
+{
+    rows_rebuild();
+    uc_show_view(UC_VIEW_SEARCH);
+    uc_repaint();
+}
+
+int uc_results_count(void) { return g_nhit; }
+const char *uc_results_path(int i)
+{ return (i >= 0 && i < g_nhit) ? file_path(g_hit[i].f) : ""; }
+int uc_results_line(int i) { return (i >= 0 && i < g_nhit) ? g_hit[i].line : 0; }
+const char *uc_results_text(int i)
+{ return (i >= 0 && i < g_nhit) ? g_hit[i].text : ""; }
+
 /* One slice.  Called every frame; does nothing at all unless a search is
  * running, so the cost when idle is a load and a branch. */
 void uc_search_tick(void)
@@ -682,12 +747,10 @@ static void search_open_row(int k)
                                               : g_row[k].ref);
     if (g_row[k].kind == SROW_HIT) line = g_hit[g_row[k].ref].line;
     search_split(rel, dir, sizeof dir, name, sizeof name);
-    {
-        int di = uc_doc_open(UC.ws_vol, dir, name);
-        UcDoc *d = uc_doc_at(di);
-        if (d) uc_move_to(d, uc_line_start(d, line - 1), 0);
-        uc_focus(UC_F_EDITOR);
-    }
+    /* Through the navigation stack, so Alt+Left comes back here (UCD-26).
+     * Opening a result IS a jump, and a jump you cannot return from is the
+     * reason people keep the previous file's tab pinned in their head. */
+    uc_nav_goto(UC.ws_vol, dir, name, line - 1, 0);
 }
 
 /* ---- replace (UCD-13) -------------------------------------------------------
@@ -1438,11 +1501,10 @@ int uc_panel_event(UcRect r, const unoui_event *e)
              * directory; a language server addresses files by URI and knows
              * which of two same-named files it meant. */
             di = uc_doc_open(p->vol, p->dir[0] ? p->dir : UC.ws_dir, p->file);
-            if (di >= 0) {
-                UcDoc *d = uc_doc_at(di);
-                uc_move_to(d, uc_offset_of(d, p->line - 1, p->col > 0 ? p->col - 1 : 0), 0);
-                uc_focus(UC_F_EDITOR);
-            }
+            (void)di;
+            /* also a jump, and also worth coming back from (UCD-26) */
+            uc_nav_goto(p->vol, p->dir[0] ? p->dir : UC.ws_dir, p->file,
+                        p->line - 1, p->col > 0 ? p->col - 1 : 0);
         }
     }
     if (UC.panel_tab == UC_PANEL_OUTPUT && e->y < r.y + th + uc_line_h()) {

@@ -243,6 +243,20 @@ void uc_toggle_sidebar(int view)
     uc_repaint();
 }
 
+/* The same distinction for the SIDE BAR (UCD-26).  Find All References wants
+ * the Search view in front; calling uc_toggle_sidebar() would have CLOSED it
+ * whenever it was already the focused view - so asking twice would hide the
+ * answer the second time, which reads as the search having failed. */
+void uc_show_view(int view)
+{
+    UC.sidebar_visible = 1;
+    UC.view = view;
+    uc_focus(UC_F_SIDEBAR);
+    if (view == UC_VIEW_EXPLORER) uc_explorer_refresh();
+    uc_layout();
+    uc_repaint();
+}
+
 /* SHOW, which is not toggle.  Everything that wants the panel in front -
  * running a task, an extension's output channel, a launch - wants it OPEN,
  * and said so by calling uc_toggle_panel(); if it was already open on that

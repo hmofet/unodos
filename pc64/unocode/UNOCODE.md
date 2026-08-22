@@ -476,7 +476,21 @@ Ranking is the **server's**, not the fuzzy matcher's: it knows which overload
 is in scope and which member is private, and a score derived from how the
 letters line up does not.
 
-### 8.3 Hover
+### 8.3 Navigation
+
+F12 goes to the definition, Shift+F12 finds all references into the Search
+view, and Alt+Left / Alt+Right walk a **browser history** of caret locations -
+not a stack, so a back pressed one time too many is recoverable.
+
+Every jump in the workbench goes through it: Go to Definition, a Search result,
+a row in the Problems panel. A history entry is a `(volume, directory, name,
+line, column)`, never a document pointer, so it survives the tab being closed.
+
+A definition **outside the workspace** - a system header - is reported by name
+rather than silently doing nothing: the editor addresses files by volume and
+cannot open one it was never given.
+
+### 8.4 Hover
 
 `editor.hover.enabled` (default true). The pointer must rest for 450 ms over a
 word; Ctrl+K Ctrl+I asks at the caret instead, which is what a keyboard-driven
@@ -540,6 +554,9 @@ typed into a *document*.
   platform's own store, the `AI: Set API Key` / `AI: Clear API Key` commands
   with a masked input box, and the store named on screen whenever a key is
   saved. Keys never enter `SETTINGS.JSN`.
+- **1.9** (2026-08-22) Go to Definition, Find All References, and a navigation
+  history (UCD-26). F12, Shift+F12, Alt+Left and Alt+Right; references fill the
+  Search view; every jump in the workbench now records where it came from.
 - **1.8** (2026-08-22) Hover (UCD-25): the server's answer about the symbol
   under the pointer, after a dwell, with its markdown stripped to readable
   text. Ctrl+K Ctrl+I asks at the caret. `editor.hover.enabled`.

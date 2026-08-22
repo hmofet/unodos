@@ -1580,6 +1580,224 @@ static int trigger_char_at(UcDoc *d, int caret, char *out)
 }
 
 /* ===========================================================================
+ * Go to definition, and find all references (UCD-26).
+ *
+ * A LOCATION COMES BACK IN THREE SHAPES.  `textDocument/definition` may answer
+ * with a Location, an array of them, or an array of LocationLink - which spells
+ * the URI `targetUri` and the range `targetSelectionRange` instead.  All three
+ * are legal and clangd and pyright do not agree, so all three are read.  A
+ * client that handled only the shape it first saw would work perfectly against
+ * one server and silently do nothing against the next.
+ *
+ * A DEFINITION OUTSIDE THE WORKSPACE IS A REAL ANSWER.  Go to Definition on
+ * `printf` lands in /usr/include, which the editor cannot open because it
+ * addresses files by volume.  Saying so is the point: opening nothing and
+ * explaining nothing is what makes a feature feel broken rather than bounded.
+ * ======================================================================== */
+
+/* The URI and start position out of a Location or a LocationLink. */
+static int loc_read(UcJson *o, const char **uri, int *line, int *ch)
+{
+    UcJson *r;
+    const char *u;
+    if (!o || o->type != UJ_OBJ) return 0;
+    u = uc_json_str(o, "uri", 0);
+    r = uc_json_member(o, "range");
+    if (!u) {                                   /* a LocationLink */
+        u = uc_json_str(o, "targetUri", 0);
+        r = uc_json_member(o, "targetSelectionRange");
+        if (!r) r = uc_json_member(o, "targetRange");
+    }
+    if (!u || !r) return 0;
+    {
+        UcJson *s = uc_json_member(r, "start");
+        if (!s) return 0;
+        *uri = u;
+        *line = (int)uc_json_num(s, "line", 0);
+        *ch = (int)uc_json_num(s, "character", 0);
+    }
+    return 1;
+}
+
+/* The first location in a result that may be one, an array, or null. */
+static int loc_first(UcJson *result, const char **uri, int *line, int *ch)
+{
+    if (!result) return 0;
+    if (result->type == UJ_OBJ) return loc_read(result, uri, line, ch);
+    if (result->type == UJ_ARR) {
+        UcJson *it;
+        for (it = result->child; it; it = it->next)
+            if (loc_read(it, uri, line, ch)) return 1;
+    }
+    return 0;
+}
+
+/* An LSP {line, utf-16 character} in a file we may not have open, as the
+ * character column uc_offset_of() wants.  Opening the document first is what
+ * makes the conversion possible at all - the units differ per line's bytes. */
+static int def_col(UcDoc *d, int line, int u16)
+{
+    if (!d) return 0;
+    return uc_col_of(d, uc_lsp_pos_to_offset(d, line, u16));
+}
+
+static void def_reply(UcJson *result, UcJson *error, void *user)
+{
+    const char *uri = 0;
+    int line = 0, ch = 0, vol = 0;
+    char dir[UC_PATH_MAX], name[UC_NAME_MAX];
+    (void)user;
+    if (error || !loc_first(result, &uri, &line, &ch)) {
+        uc_status_msg("no definition found");
+        return;
+    }
+    if (!uc_lsp_uri_to_path(uri, &vol, dir, sizeof dir, name, sizeof name)) {
+        /* Outside the workspace.  Name it, because "printf is defined in
+         * stdio.h and that is not a file this editor can reach" is a useful
+         * thing to be told and a silent no-op is not. */
+        const char *leaf = uri;
+        const char *p;
+        for (p = uri; *p; p++) if (*p == '/') leaf = p + 1;
+        {
+            char msg[120];
+            uc_scpy(msg, "defined outside the workspace: ", sizeof msg);
+            uc_scat(msg, leaf, sizeof msg);
+            uc_status_msg(msg);
+        }
+        return;
+    }
+    /* Open first, THEN convert the column: UTF-16 units become a character
+     * column only against the actual bytes of that line. */
+    /* MARK BEFORE OPENING.  The column conversion needs the target document's
+     * bytes, so the file has to be open before the landing spot is known - and
+     * opening it makes it the active document, so anything asking "where are
+     * we" after this point answers with the destination. */
+    uc_nav_mark();
+    {
+        int di = uc_doc_open(vol, dir, name);
+        UcDoc *nd = uc_doc_at(di);
+        int col = def_col(nd, line, ch);
+        uc_nav_to(vol, dir, name, line, col);
+    }
+}
+
+void uc_goto_definition(UcDoc *d)
+{
+    if (!d) return;
+    if (!uc_lsp_for_doc(d)) { uc_status_msg("no language server for this file"); return; }
+    uc_lsp_request_at(d, "textDocument/definition",
+                      d->cur[d->ncur - 1].caret, 0, def_reply, 0);
+    uc_status_msg("looking for the definition...");
+}
+
+/* Copy line `line` out of `src`, leading whitespace trimmed, into `out`. */
+static void ref_take_line(const char *src, long len, int line, char *out, int cap)
+{
+    long i = 0;
+    int at = 0, k = 0;
+    out[0] = 0;
+    while (i < len && at < line) if (src[i++] == '\n') at++;
+    if (at != line) return;
+    while (i < len && (src[i] == ' ' || src[i] == '\t')) i++;
+    while (i < len && src[i] != '\n' && src[i] != '\r' && k < cap - 1)
+        out[k++] = src[i++];
+    out[k] = 0;
+}
+
+/* One line of a file, for a reference's preview row.
+ *
+ * From the OPEN DOCUMENT where there is one, so an unsaved edit shows as it
+ * stands rather than as it was last written - and from disk otherwise, because
+ * most references are in files that are not open and a results list of blank
+ * rows is a list nobody can read.
+ *
+ * The one-entry cache is not premature: references cluster, and a definition
+ * used forty times in one file would otherwise read that file forty times. */
+static void ref_line_text(int vol, const char *dir, const char *name, int line,
+                          char *out, int cap)
+{
+    static char  cache_key[UC_FULL_MAX];
+    static char *cache_src;
+    static long  cache_len;
+    static int   cache_vol = -1;
+    char full[UC_FULL_MAX];
+    int i, n = uc_doc_count();
+
+    out[0] = 0;
+    if (line < 0) return;
+    for (i = 0; i < n; i++) {
+        UcDoc *d = uc_doc_at(i);
+        if (!d || d->vol != vol || strcmp(d->name, name) || strcmp(d->dir, dir))
+            continue;
+        if (line >= uc_line_count(d)) return;
+        {
+            int s = uc_line_start(d, line), e = uc_line_end(d, line), k = 0;
+            while (s < e && (d->text[s] == ' ' || d->text[s] == '\t')) s++;
+            while (s < e && k < cap - 1) out[k++] = d->text[s++];
+            out[k] = 0;
+        }
+        return;
+    }
+    uc_path_join(full, sizeof full, dir, name);
+    if (cache_vol != vol || strcmp(cache_key, full) || !cache_src) {
+        if (cache_src) { free(cache_src); cache_src = 0; cache_len = 0; }
+        if (!uc_read_file(vol, full, &cache_src, &cache_len)) {
+            cache_src = 0;
+            cache_vol = -1;
+            cache_key[0] = 0;
+            return;
+        }
+        cache_vol = vol;
+        uc_scpy(cache_key, full, sizeof cache_key);
+    }
+    ref_take_line(cache_src, cache_len, line, out, cap);
+}
+
+static void ref_reply(UcJson *result, UcJson *error, void *user)
+{
+    UcJson *it;
+    int added = 0;
+    (void)user;
+    if (error || !result || result->type != UJ_ARR || result->n <= 0) {
+        uc_status_msg("no references found");
+        return;
+    }
+    uc_results_begin("references");
+    for (it = result->child; it; it = it->next) {
+        const char *uri = 0;
+        int line = 0, ch = 0, vol = 0;
+        char dir[UC_PATH_MAX], name[UC_NAME_MAX];
+        char rel[UC_FULL_MAX], text[80];
+        if (!loc_read(it, &uri, &line, &ch)) continue;
+        if (!uc_lsp_uri_to_path(uri, &vol, dir, sizeof dir, name, sizeof name))
+            continue;                      /* outside the workspace */
+        uc_path_join(rel, sizeof rel, dir, name);
+        ref_line_text(vol, dir, name, line, text, sizeof text);
+        if (uc_results_add(rel, line + 1, text)) added++;
+    }
+    uc_results_end();
+    {
+        char msg[64];
+        char num[16];
+        uc_itoa(num, added);
+        uc_scpy(msg, num, sizeof msg);
+        uc_scat(msg, added == 1 ? " reference" : " references", sizeof msg);
+        uc_status_msg(msg);
+    }
+}
+
+void uc_find_references(UcDoc *d)
+{
+    if (!d) return;
+    if (!uc_lsp_for_doc(d)) { uc_status_msg("no language server for this file"); return; }
+    uc_lsp_request_at(d, "textDocument/references",
+                      d->cur[d->ncur - 1].caret,
+                      ",\"context\":{\"includeDeclaration\":true}",
+                      ref_reply, 0);
+    uc_status_msg("looking for references...");
+}
+
+/* ===========================================================================
  * Hover (UCD-25).
  * ======================================================================== */
 /* The popup.  Painted over the workbench rather than inside the editor's clip,
