@@ -28,6 +28,7 @@
  * through every edit path, and it cannot go subtly wrong.
  * ======================================================================== */
 #include "unocode.h"
+#include "uc_lsp.h"
 
 static UcDoc  g_doc[UC_DOC_MAX];
 static int    g_ndoc, g_active;
@@ -297,7 +298,17 @@ int uc_doc_path(UcDoc *d, char *out, int cap)
 }
 
 /* ---- line index ------------------------------------------------------------ */
-static void lines_invalidate(UcDoc *d) { d->lines_ok = 0; d->lstate_lines = 0; }
+/* Every path that changes the text ends here, which makes this the one honest
+ * place to count revisions from (UCD-22).  A language server needs a version
+ * that rises on every edit and never on anything else; deriving one from the
+ * undo stack gets it wrong, because a coalesced keystroke reuses the previous
+ * entry and an undo moves the counter backwards. */
+static void lines_invalidate(UcDoc *d)
+{
+    d->lines_ok = 0;
+    d->lstate_lines = 0;
+    d->rev++;
+}
 
 static void lines_build(UcDoc *d)
 {
@@ -1547,6 +1558,7 @@ int uc_doc_save(UcDoc *d)
         d->exists = 1;
         base_snapshot(d);
         uc_api_fire_save(d);
+        uc_lsp_did_save(d);
     } else {
         uc_notify("Could not write the file", UC_SEV_ERROR);
     }
@@ -1570,6 +1582,7 @@ int uc_doc_close(int i)
     UcDoc *d = uc_doc_at(i);
     int k;
     if (!d) return 0;
+    uc_lsp_close_doc(d);          /* before the free, and before the shift */
     for (k = 0; k < d->nundo; k++) undo_drop(&d->undo[k]);
     if (d->text) free(d->text);
     if (d->loff) free(d->loff);

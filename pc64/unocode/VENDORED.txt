@@ -1,7 +1,7 @@
 UnoCode, vendored from https://github.com/hmofet/unocode-desktop
 
-source: C:\Repos\unocode-desktop @ 48eb36608d3d91a981ceb5753faf574806c2bb00 (DIRTY)
-files:  37
+source: C:\Repos\unocode-desktop @ 3897530af61dd3542aaa0a6388271d24a9b4e976 (DIRTY)
+files:  39
 
 Written by pc64/tools/sync_unocode.py.  Do not edit this
 directory here - see pc64/UNOCODE-UPSTREAM.md.

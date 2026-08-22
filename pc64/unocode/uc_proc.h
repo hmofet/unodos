@@ -48,6 +48,26 @@ const char *uc_proc_shell_name(void);
  * uc_proc_error().  A NULL or empty cmdline starts an INTERACTIVE shell. */
 uc_proc *uc_proc_spawn(const char *cmdline, const char *cwd);
 
+/* The same, on PIPES rather than a terminal (UCD-22).
+ *
+ * A language server speaks JSON-RPC over stdio, and a pty is the wrong pipe
+ * for that: it echoes what you write back at you, translates newlines, and has
+ * a line discipline that will rewrite a byte in the middle of a message body.
+ * A protocol wants a pipe; a human wants a terminal; they are not the same
+ * request and cannot share an implementation.
+ *
+ * stderr is kept SEPARATE and readable rather than merged or discarded:
+ * merging it corrupts the protocol stream, and discarding it loses the only
+ * explanation a server gives when it dies before saying anything
+ * protocol-shaped.
+ *
+ * A child on pipes has a NON-BLOCKING stdin, so uc_proc_write() may accept less
+ * than it was given and the caller must queue the rest.  A blocking stdin would
+ * be simpler and would let the child stop the editor's frame loop by simply not
+ * reading - which is what a language server does while it indexes. */
+uc_proc *uc_proc_spawn_pipes(const char *cmdline, const char *cwd);
+int uc_proc_read_err(uc_proc *p, char *buf, int cap);
+
 /* Turn a (volume, directory) - which is how the editor addresses everything -
  * into a working directory a child can be started in.  1 if it filled `out`.
  *

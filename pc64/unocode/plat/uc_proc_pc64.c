@@ -46,6 +46,15 @@ uc_proc *uc_proc_spawn(const char *cmdline, const char *cwd)
     return 0;
 }
 
+uc_proc *uc_proc_spawn_pipes(const char *cmdline, const char *cwd)
+{
+    (void)cmdline; (void)cwd;
+    return 0;
+}
+
+int uc_proc_read_err(uc_proc *p, char *buf, int cap)
+{ (void)p; (void)buf; (void)cap; return -1; }
+
 int uc_proc_workdir(int vol, const char *dir, char *out, int cap)
 {
     (void)vol; (void)dir;

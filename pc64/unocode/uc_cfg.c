@@ -69,6 +69,8 @@ static const UcSettingDef kDefs[] = {
 { "breadcrumbs.enabled", UC_T_BOOL, "true", 0, "Show the breadcrumb bar.", 0, 0 },
 { "terminal.integrated.fontSize", UC_T_INT, "13", 0, "Terminal font size.", 8, 32 },
 { "terminal.integrated.scrollback", UC_T_INT, "400", 0, "Terminal scrollback lines.", 50, 2000 },
+{ "lsp.enabled", UC_T_BOOL, "true", 0, "Use language servers where one is configured.", 0, 0 },
+{ "lsp.trace", UC_T_BOOL, "false", 0, "Log language-server traffic to the Output panel.", 0, 0 },
 { "search.maxResults", UC_T_INT, "200", 0, "Maximum search results.", 10, 2000 },
 { "extensions.autoActivate", UC_T_BOOL, "true", 0, "Activate extensions on their activation events.", 0, 0 },
 { "extensions.fuelPerSlice", UC_T_INT, "400000", 0, "Interpreter steps one extension call may use.", 1000, 20000000 },
