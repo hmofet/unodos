@@ -174,26 +174,6 @@ done
 # and udev all provably fine.  openbox takes the window, focuses it, and the
 # keys land.
 export UNO_URL_ENV=${UNO_URL:-https://$UNO_SITE/}
-cat > /usr/share/uno/session.sh <<'SESSEOF'
-#!/bin/sh
-openbox &
-sleep 3
-exec chromium \
-    --no-sandbox --disable-gpu --disable-dev-shm-usage \
-    --no-first-run --no-default-browser-check --disable-infobars \
-    --password-store=basic --disable-sync \
-    --disable-background-networking --disable-component-update \
-    --disable-domain-reliability --disable-breakpad \
-    --disable-client-side-phishing-detection --no-pings \
-    --safebrowsing-disable-auto-update --metrics-recording-only \
-    --disable-features=OptimizationHints,MediaRouter \
-    --renderer-process-limit=1 --process-per-site \
-    --disable-hang-monitor --disable-session-crashed-bubble \
-    --js-flags=--max-old-space-size=192 \
-    --window-position=0,0 --window-size=800,600 \
-    --start-maximized "$UNO_URL_ENV"
-SESSEOF
-chmod +x /usr/share/uno/session.sh
 
 # What X thinks its input devices are, once it has said so.  Xorg logs to its
 # own file, so none of this reaches the pipe below.
@@ -218,6 +198,28 @@ while :; do
 done
 EOF
 chmod +x $R/sbin/uno-init
+
+mkdir -p $R/usr/share/uno
+cat > $R/usr/share/uno/session.sh <<'SESSEOF'
+#!/bin/sh
+openbox &
+sleep 3
+exec chromium \
+    --no-sandbox --disable-gpu --disable-dev-shm-usage \
+    --no-first-run --no-default-browser-check --disable-infobars \
+    --password-store=basic --disable-sync \
+    --disable-background-networking --disable-component-update \
+    --disable-domain-reliability --disable-breakpad \
+    --disable-client-side-phishing-detection --no-pings \
+    --safebrowsing-disable-auto-update --metrics-recording-only \
+    --disable-features=OptimizationHints,MediaRouter \
+    --renderer-process-limit=1 --process-per-site \
+    --disable-hang-monitor --disable-session-crashed-bubble \
+    --js-flags=--max-old-space-size=192 \
+    --window-position=0,0 --window-size=800,600 \
+    --start-maximized "$UNO_URL_ENV"
+SESSEOF
+chmod +x $R/usr/share/uno/session.sh
 
 # DNS on a read-only root.  /etc/resolv.conf is a symlink into the tmpfs the
 # appliance mounts over /tmp - but that alone is NOT enough, and the first
