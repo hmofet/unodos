@@ -575,8 +575,13 @@ void uc_edit_draw(UcRect r, UcDoc *d, int focused)
     draw_minimap(L.minimap, d, d->scroll_line, rows);
     draw_vscroll(L.bar, d, d->scroll_line, rows);
 
-    if (find_on) uc_find_draw(r);
-    if (sug_on)  uc_suggest_draw(r, d);
+    /* The overlays belong to the editor being TYPED IN, not to every editor
+     * on screen.  With two groups (UCD-18) this painted the suggestion list
+     * and the find box into both panes, one of which nobody was typing in. */
+    if (focused) {
+        if (find_on) uc_find_draw(r);
+        if (sug_on)  uc_suggest_draw(r, d);
+    }
 }
 
 /* ---- hit testing --------------------------------------------------------------- */
@@ -609,6 +614,7 @@ static int offset_at(UcRect r, UcDoc *d, int px, int py)
 /* ---- input --------------------------------------------------------------------- */
 static unsigned long last_click_ms;
 static int last_click_off, click_run;
+static int g_box_anchor;               /* where an Alt+Shift column drag began */
 
 int uc_edit_event(UcRect r, UcDoc *d, const unoui_event *e)
 {
@@ -656,6 +662,13 @@ int uc_edit_event(UcRect r, UcDoc *d, const unoui_event *e)
         } else if (click_run == 2) {
             uc_move_to(d, off, 0);
             uc_select_word(d);
+        } else if ((e->mods & UI_MOD_ALT) && (e->mods & UI_MOD_SHIFT)) {
+            /* Alt+Shift starts a COLUMN selection: one cursor per line
+             * between the anchor and the pointer, each selecting the same
+             * column span (UCD-16) */
+            uc_move_to(d, off, 0);
+            g_box_anchor = off;
+            UC.drag = UC_DRAG_BOX;
         } else if (e->mods & UI_MOD_ALT) {
             uc_add_cursor(d, off);
         } else {
@@ -669,6 +682,27 @@ int uc_edit_event(UcRect r, UcDoc *d, const unoui_event *e)
         int off = offset_at(r, d, e->x, e->y);
         d->cur[d->ncur - 1].caret = off;
         uc_edit_reveal(r, d);
+        return 1;
+    }
+    if (e->kind == UI_EV_MOUSE_MOVE && UC.drag == UC_DRAG_BOX) {
+        /* Rebuilt from scratch every motion, rather than grown: dragging back
+         * up has to REMOVE the cursors the way down created, and a box that
+         * only ever added them would leave a trail behind the pointer. */
+        int off = offset_at(r, d, e->x, e->y);
+        int l0 = uc_line_of(d, g_box_anchor), c0 = uc_col_of(d, g_box_anchor);
+        int l1 = uc_line_of(d, off), c1 = uc_col_of(d, off);
+        int step = l1 >= l0 ? 1 : -1, L;
+        uc_clear_extra_cursors(d);
+        d->ncur = 0;
+        for (L = l0; ; L += step) {
+            int a = uc_offset_of(d, L, c0), b = uc_offset_of(d, L, c1);
+            if (d->ncur >= UC_CURSORS_MAX) break;
+            uc_add_cursor_sel(d, a, b);
+            if (L == l1) break;
+        }
+        if (!d->ncur) uc_add_cursor_sel(d, g_box_anchor, off);
+        uc_edit_reveal(r, d);
+        uc_repaint();
         return 1;
     }
     if (e->kind == UI_EV_MOUSE_MOVE && UC.drag == UC_DRAG_VSCROLL) {

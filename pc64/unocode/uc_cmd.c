@@ -516,6 +516,7 @@ void uc_quick_open(int mode)
     else if (mode == UC_Q_THEME) uc_scpy(q_placeholder, "Select a colour theme", sizeof q_placeholder);
     else if (mode == UC_Q_LANG) uc_scpy(q_placeholder, "Select a language mode", sizeof q_placeholder);
     else if (mode == UC_Q_KEYS) uc_scpy(q_placeholder, "Search keybindings", sizeof q_placeholder);
+    else if (mode == UC_Q_SYMBOL) uc_scpy(q_placeholder, "Go to a symbol in this file", sizeof q_placeholder);
     q_rebuild();
     uc_ctx_set("inQuickOpen", 1);
 }
@@ -632,6 +633,73 @@ static void q_rebuild(void)
         }
         break;
     }
+    case UC_Q_SYMBOL: {
+        /* Go to Symbol in File (UCD-17), from the GRAMMAR's scopes - which is
+         * what exists until UCD-22 brings real symbols.
+         *
+         * The catch worth stating: C's entity.name.function pattern is
+         * `ident(`, which matches every CALL as well as every definition, so
+         * scope alone would list the whole file back at you.  A line counts as
+         * a definition when a STORAGE.TYPE scope precedes the name on it -
+         * int, void, static, def, class, function - or the line starts at
+         * column 0 and does not reach the name through a '.' or '->'.
+         *
+         * storage.type specifically, NOT keyword: `return alpha(y);` is a
+         * keyword.control line and listing it put every call site in the
+         * symbol list.  It is a heuristic, it is honest about being one, and
+         * UCD-22 replaces it with real symbols. */
+        UcDoc *d = uc_doc_active();      /* D() is defined further down */
+        static short scopes[UC_HL_MAXLINE];
+        int line, nlines, state = 0;
+        if (!d) break;
+        nlines = uc_line_count(d);
+        if (nlines > 4000) nlines = 4000;
+        for (line = 0; line < nlines; line++) {
+            int s = uc_line_start(d, line), e = uc_line_end(d, line);
+            int n = e - s, k, first = -1, run_end = 0, qualified = 0, kw = 0;
+            char label[72];
+            if (n <= 0 || n >= UC_HL_MAXLINE) {
+                if (n > 0) uc_tokenize(d->lang, d->text + s, n, state, scopes, &state);
+                continue;
+            }
+            if (!uc_tokenize(d->lang, d->text + s, n, state, scopes, &state))
+                continue;
+            for (k = 0; k < n; k++) {
+                const char *sc = scopes[k] ? uc_scope_name(scopes[k]) : 0;
+                if (!sc) continue;
+                if (first < 0 && uc_starts(sc, "entity.name.")) {
+                    first = k;
+                    while (k + 1 < n && scopes[k + 1] == scopes[first]) k++;
+                    run_end = k + 1;
+                    break;
+                }
+                if (uc_starts(sc, "storage.type")) kw = 1;
+            }
+            if (first < 0) continue;
+            if (first > 0) {
+                int p = first - 1;
+                while (p > 0 && d->text[s + p] == ' ') p--;
+                if (d->text[s + p] == '.' ||
+                    (p > 0 && d->text[s + p] == '>' && d->text[s + p - 1] == '-'))
+                    qualified = 1;
+            }
+            /* a leading-indent line with no keyword is a call, not a decl */
+            if (!kw && (d->text[s] == ' ' || d->text[s] == '\t')) continue;
+            if (qualified) continue;
+            {
+                int len = run_end - first;
+                if (len <= 0 || len > (int)sizeof label - 1) continue;
+                memcpy(label, d->text + s + first, (unsigned long)len);
+                label[len] = 0;
+            }
+            {
+                char num[16];
+                uc_itoa(num, line + 1);
+                q_add(label, num, "", line);
+            }
+        }
+        break;
+    }
     case UC_Q_THEME:
         for (i = 0; i < uc_theme_count(); i++) {
             UcTheme *t = uc_theme_at(i);
@@ -707,6 +775,14 @@ static void q_accept(void)
         if (d && ref >= 0) d->lang = ref;
         break;
     }
+    case UC_Q_SYMBOL: {
+        UcDoc *d = uc_doc_active();
+        if (d && ref >= 0) {
+            uc_move_to(d, uc_line_start(d, ref), 0);
+            uc_focus(UC_F_EDITOR);
+        }
+        break;
+    }
     case UC_Q_PICK:
         if (cb >= 0) uc_api_call_str(cb, ref >= 0 && q_sel < q_n ? q_item[q_sel].label : "");
         break;
@@ -751,6 +827,9 @@ int uc_quick_key(int key, int mods, int ch)
         if (q_len == 1 && q_mode == UC_Q_FILE) {
             if (ch == '>') { q_mode = UC_Q_COMMAND; q_len = 0; q_text[0] = 0; }
             else if (ch == ':') { q_mode = UC_Q_LINE; }
+            /* '@' is VS Code's symbol prefix, and the fingers that know '>'
+             * for commands know this one too (UCD-17) */
+            else if (ch == '@') { q_mode = UC_Q_SYMBOL; q_len = 0; q_text[0] = 0; }
         }
         q_rebuild();
         return 1;
@@ -935,7 +1014,39 @@ static void c_paste(void)
     UcDoc *d = D();
     int n = 0;
     const char *s = uc_clip_get(&n);
-    if (d && n) uc_insert(d, s, n);
+    if (!d || !n) return;
+    /* N lines copied from N cursors paste back ONE LINE PER CURSOR, which is
+     * the other half of multi-cursor editing: copy six names, edit them
+     * elsewhere, paste them back where they came from (UCD-16).  Any other
+     * shape - a different line count, a single cursor - inserts the whole
+     * clipboard at each caret, which is what a plain paste means. */
+    if (d->ncur > 1) {
+        int lines = 1, i, at = 0;
+        for (i = 0; i < n; i++) if (s[i] == '\n') lines++;
+        if (n > 0 && s[n - 1] == '\n') lines--;      /* a trailing break */
+        if (lines == d->ncur) {
+            int starts[UC_CURSORS_MAX], ends[UC_CURSORS_MAX], k = 0;
+            for (i = 0; i <= n && k < d->ncur; i++) {
+                if (i == n || s[i] == '\n') {
+                    starts[k] = at;
+                    ends[k] = i;
+                    k++;
+                    at = i + 1;
+                }
+            }
+            if (k == d->ncur) {
+                uc_begin_group(d);
+                for (i = d->ncur - 1; i >= 0; i--) {
+                    int a = d->cur[i].anchor, b = d->cur[i].caret;
+                    if (a > b) { int t = a; a = b; b = t; }
+                    uc_replace_range(d, a, b, s + starts[i], ends[i] - starts[i]);
+                }
+                uc_end_group(d);
+                return;
+            }
+        }
+    }
+    uc_insert(d, s, n);
 }
 static void c_select_all(void) { UcDoc *d = D(); if (d) uc_select_all(d); }
 static void c_find(void)       { uc_find_open(0); }
@@ -961,19 +1072,70 @@ static void c_jump_bracket(void)
     if (m < 0 && d->cur[0].caret > 0) m = uc_bracket_match(d, d->cur[0].caret - 1);
     if (m >= 0) uc_move_to(d, m, 0);
 }
+/* Ctrl+D: ADD a cursor at the next occurrence, keeping the ones already
+ * there.  It used to call uc_find_next(), which MOVES the single selection -
+ * so the binding everyone reaches for to edit six call sites at once quietly
+ * behaved as F3 and edited one (UCD-16). */
 static void c_select_next_match(void)
 {
     UcDoc *d = D();
     char sel[120];
+    int n, last, from, i, a, b;
     if (!d) return;
     if (!uc_has_selection(d)) { uc_select_word(d); return; }
-    uc_selection_text(d, sel, sizeof sel);
-    uc_find_set(sel);
-    uc_find_next(0);
+    /* The LAST cursor's selection, extracted here rather than through
+     * uc_selection_text() - that one CONCATENATES every cursor's selection
+     * with newlines between, so from the second press onwards this searched
+     * for "alpha\nalpha" and silently found nothing. */
+    a = d->cur[d->ncur - 1].anchor;
+    b = d->cur[d->ncur - 1].caret;
+    if (a > b) { int t = a; a = b; b = t; }
+    n = b - a;
+    if (n <= 0 || n > (int)sizeof sel - 1 || d->ncur >= UC_CURSORS_MAX) return;
+    memcpy(sel, d->text + a, (unsigned long)n);
+    sel[n] = 0;
+    last = b;
+    for (i = 0; i < 2; i++) {
+        for (from = i ? 0 : last; from + n <= d->len; from++) {
+            int k, taken = 0;
+            if (strncmp(d->text + from, sel, (unsigned long)n)) continue;
+            /* an occurrence a cursor already covers is not the NEXT one */
+            for (k = 0; k < d->ncur; k++) {
+                int a = d->cur[k].anchor, b = d->cur[k].caret;
+                if (a > b) { int t = a; a = b; b = t; }
+                if (a == from && b == from + n) { taken = 1; break; }
+            }
+            if (taken) continue;
+            uc_add_cursor_sel(d, from, from + n);
+            uc_repaint();
+            return;
+        }
+    }
 }
 static void c_palette(void)    { uc_quick_open(UC_Q_COMMAND); }
 static void c_quickopen(void)  { uc_quick_open(UC_Q_FILE); }
 static void c_gotoline(void)   { uc_quick_open(UC_Q_LINE); }
+static void c_gotosymbol(void) { uc_quick_open(UC_Q_SYMBOL); }
+static void c_split(void)      { uc_group_split(); }
+static void c_focus_group1(void) { uc_group_focus(0); }
+static void c_focus_group2(void) { uc_group_focus(1); }
+static void c_unsplit(void)
+{
+    /* Fold the second group away, keeping its editors open in the first -
+     * closing a PANE should not close the files that were in it.  Each pass
+     * takes the group's first editor, because closing shifts the rest down. */
+    while (uc_group_count(1) > 0) {
+        int di = uc_group_doc(1, 0);
+        if (di < 0) break;
+        uc_group_show(0, di);
+        uc_group_close(1, di);
+    }
+    UC.ngroup = 1;
+    UC.group = 0;
+    uc_layout();
+    uc_focus(UC_F_EDITOR);
+    uc_repaint();
+}
 static void c_theme(void)      { uc_quick_open(UC_Q_THEME); }
 static void c_langmode(void)   { uc_quick_open(UC_Q_LANG); }
 static void c_keys_ui(void)    { uc_quick_open(UC_Q_KEYS); }
@@ -1188,6 +1350,13 @@ void uc_cmd_init(void)
     reg("workbench.action.showCommands", "View", "Show All Commands", c_palette);
     reg("workbench.action.quickOpen", "View", "Go to File...", c_quickopen);
     reg("workbench.action.gotoLine", "View", "Go to Line...", c_gotoline);
+    reg("workbench.action.gotoSymbol", "View", "Go to Symbol in File...", c_gotosymbol);
+    reg("workbench.action.replaceInFiles", "Edit", "Replace All in Files",
+        uc_search_replace_all);
+    reg("workbench.action.splitEditor", "View", "Split Editor", c_split);
+    reg("workbench.action.focusFirstEditorGroup", "View", "Focus First Editor Group", c_focus_group1);
+    reg("workbench.action.focusSecondEditorGroup", "View", "Focus Second Editor Group", c_focus_group2);
+    reg("workbench.action.joinAllGroups", "View", "Join Editor Groups", c_unsplit);
     reg("workbench.action.toggleSidebarVisibility", "View", "Toggle Side Bar", c_toggle_sidebar);
     reg("workbench.view.explorer", "View", "Show Explorer", c_view_explorer);
     reg("workbench.view.search", "View", "Show Search", c_view_search);
@@ -1233,6 +1402,10 @@ void uc_cmd_init(void)
     bind("f1", "workbench.action.showCommands", 0);
     bind("ctrl+p", "workbench.action.quickOpen", 0);
     bind("ctrl+g", "workbench.action.gotoLine", 0);
+    bind("ctrl+shift+o", "workbench.action.gotoSymbol", 0);
+    bind("ctrl+\\", "workbench.action.splitEditor", 0);
+    bind("ctrl+1", "workbench.action.focusFirstEditorGroup", 0);
+    bind("ctrl+2", "workbench.action.focusSecondEditorGroup", 0);
     bind("ctrl+z", "undo", "editorTextFocus");
     bind("ctrl+y", "redo", "editorTextFocus");
     bind("ctrl+shift+z", "redo", "editorTextFocus");
