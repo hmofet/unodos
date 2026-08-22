@@ -249,7 +249,12 @@ URL=$UNO_URL_ENV
 export XDG_RUNTIME_DIR=/run
 export LIBSEAT_BACKEND=seatd
 export WLR_RENDERER=pixman
-export WLR_BACKENDS=drm
+# NO WLR_BACKENDS.  Naming "drm" does not mean "the DRM one as well as the
+# usual" - it means ONLY that one, and wlroots' libinput backend is what
+# reads the keyboard and mouse.  Setting it produced a compositor that drew
+# perfectly and could not be typed at, which is indistinguishable from a
+# broken emulated keyboard and was chased as one.  Autocreate picks DRM plus
+# libinput, which is what a compositor on real hardware wants.
 
 # NO PIPELINE AROUND EITHER SESSION.  busybox grep has no --line-buffered:
 # the filter exited at once, tee took SIGPIPE, and the session died with it -
@@ -258,7 +263,14 @@ export WLR_BACKENDS=drm
 # session ends, which is the moment worth reading them.
 while :; do
     if [ -x /usr/bin/cage ]; then
-        cage -- /usr/share/uno/browser.sh > /tmp/x.log 2>&1
+        # ON A VT, AND HOLDING IT.  Without logind, libseat's seatd backend
+        # ties input to the seat's ACTIVE virtual terminal: a compositor
+        # started from a serial-console shell gets DRM master (so it draws
+        # perfectly) while libinput keeps its devices PAUSED - which is a
+        # browser that renders and cannot be typed at, exactly what the
+        # first Wayland run produced.
+        chvt 1 2>/dev/null
+        cage -- /usr/share/uno/browser.sh < /dev/tty1 > /tmp/x.log 2>&1
         RC=$?
         echo "uno: wayland session ended rc=$RC ----" > /dev/ttyS0
         tail -10 /tmp/x.log | sed 's/^/uno| /' > /dev/ttyS0
@@ -392,9 +404,15 @@ case "$1" in
     # answers for some names and not others (example.com resolved nowhere
     # while cloudflare.com resolved fine).  A guest that inherits a broken
     # resolver looks exactly like a guest with no network at all.
+    # ONE RESOLVER, NOT A LIST WITH A GOOD ONE AT THE TOP.  musl queries
+    # every nameserver in PARALLEL and takes the first reply, so a broken
+    # LAN resolver that answers NXDOMAIN quickly beats a correct public one
+    # that answers properly a few milliseconds later - which is why names
+    # resolved intermittently and differently per run.  Order is not
+    # precedence here; presence is.
     : > /tmp/resolv.conf
     echo "nameserver 1.1.1.1" >> /tmp/resolv.conf
-    for s in $dns; do echo "nameserver $s" >> /tmp/resolv.conf; done
+    echo "nameserver 8.8.8.8" >> /tmp/resolv.conf
     ;;
 esac
 exit 0
