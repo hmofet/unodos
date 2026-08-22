@@ -22,7 +22,7 @@ apk add --root $R --initdb --no-cache \
     font-dejavu \
     dbus \
     ca-certificates ca-certificates-bundle \
-    openbox xdotool
+    openbox xdotool cage seatd wlroots
 
 # The appliance's init.  PID 1 after the initramfs switch_root.  The rootfs
 # is mounted read-only off virtio-blk (the layer below can only read), so
@@ -228,21 +228,46 @@ export UNO_URL_ENV=${UNO_URL:-https://$UNO_SITE/}
   echo "uno: selftest typed example.net from inside" > /dev/ttyS0
 ) &
 
+# seatd hands out the DRM and input devices a compositor needs.  Alpine's
+# libseat is built WITHOUT the builtin backend, so without this daemon cage
+# fails at once with "No backend matched name" and nothing is displayed.
+if [ -x /usr/bin/seatd ] || [ -x /sbin/seatd ]; then
+    (seatd -g video >/tmp/seatd.log 2>&1 &) 
+    sleep 2
+    echo "uno: seatd $([ -S /run/seatd.sock ] && echo up || echo MISSING)" > /dev/ttyS0
+fi
+
 URL=$UNO_URL_ENV
+export XDG_RUNTIME_DIR=/run
+export LIBSEAT_BACKEND=seatd
+export WLR_RENDERER=pixman
+export WLR_BACKENDS=drm
+
+# NO PIPELINE AROUND EITHER SESSION.  busybox grep has no --line-buffered:
+# the filter exited at once, tee took SIGPIPE, and the session died with it -
+# which is why a browser that had been running perfectly vanished and left a
+# bare console behind.  Logs are files; their tails are reported when a
+# session ends, which is the moment worth reading them.
 while :; do
-    # NO PIPELINE HERE.  busybox grep has no --line-buffered: the filter
-    # exited at once, tee took SIGPIPE, and X died with it - which is why a
-    # browser that had been running perfectly vanished and left a bare
-    # console behind.  The log is a file, and its tail is reported when the
-    # session ends, which is the moment it is worth reading.
-    xinit /usr/share/uno/session.sh \
-      -- /usr/bin/X :0 vt1 -nolisten tcp -quiet > /tmp/x.log 2>&1
-    # The WHOLE tail, not a grep of it: Xorg's segfault is followed by a
-    # backtrace naming the module that did it, and a filter tuned for the
-    # word "error" throws that away.
-    echo "uno: session ended ----" > /dev/ttyS0
-    tail -8 /tmp/x.log | sed 's/^/uno| /' > /dev/ttyS0
-    grep -E "\(EE\)|Backtrace|^\[[ 0-9.]+\] *[0-9]+: " /var/log/Xorg.0.log 2>/dev/null | tail -14 | sed 's/^/unoX| /' > /dev/ttyS0
+    if [ -x /usr/bin/cage ]; then
+        cage -- /usr/share/uno/browser.sh > /tmp/x.log 2>&1
+        RC=$?
+        echo "uno: wayland session ended rc=$RC ----" > /dev/ttyS0
+        tail -10 /tmp/x.log | sed 's/^/uno| /' > /dev/ttyS0
+        # If the compositor cannot start at all, fall back to X rather than
+        # spinning: a guest with no display is worse than one with a fragile
+        # display.
+        if [ $RC -ne 0 ] && [ ! -f /tmp/wayland-failed ]; then
+            : > /tmp/wayland-failed
+            echo "uno: falling back to X" > /dev/ttyS0
+        fi
+    fi
+    if [ -f /tmp/wayland-failed ] || [ ! -x /usr/bin/cage ]; then
+        xinit /usr/share/uno/session.sh \
+          -- /usr/bin/X :0 vt1 -nolisten tcp -quiet > /tmp/x.log 2>&1
+        echo "uno: X session ended ----" > /dev/ttyS0
+        tail -10 /tmp/x.log | sed 's/^/uno| /' > /dev/ttyS0
+    fi
     sleep 2
 done
 EOF
@@ -260,7 +285,7 @@ mkdir -p $R/etc/X11/xorg.conf.d
 cat > $R/etc/X11/xorg.conf.d/20-uno-fb.conf <<'XCONFEOF'
 Section "Device"
     Identifier  "uno-fb"
-    Driver      "fbdev"
+    Driver      "modesetting"
     Option      "AccelMethod"  "none"
     Option      "ShadowFB"     "true"
 EndSection
@@ -269,6 +294,17 @@ XCONFEOF
 mkdir -p $R/usr/share/uno
 cat > $R/usr/share/uno/session.sh <<'SESSEOF'
 #!/bin/sh
+# WAYLAND FIRST, X ONLY AS A FALLBACK.  Xorg segfaults on this guest's
+# framebuffer - simpledrm, no GPU, no render node - and did so with
+# modesetting, with acceleration off, and (differently) with fbdev.  A
+# wlroots compositor with the pixman software renderer is what modern
+# systems actually run on a dumb framebuffer, and it needs no X server, no
+# window manager and no libinput-inside-X: cage takes the DRM device
+# directly, reads evdev itself, and gives its single client the whole
+# screen, focused, forever.
+#
+# LIBSEAT_BACKEND=builtin is what lets it take DRM master as root without
+# logind or a seatd daemon.
 openbox &
 sleep 3
 
@@ -312,6 +348,16 @@ exec chromium \
     --start-maximized "$UNO_URL_ENV"
 SESSEOF
 chmod +x $R/usr/share/uno/session.sh
+
+# The Wayland client cage runs: Chromium on Ozone, with the same flags the X
+# session uses.  No window manager and no focus problem - cage gives its one
+# client the whole output, focused, for as long as it lives.
+cat > $R/usr/share/uno/browser.sh <<'BROWSEREOF'
+#!/bin/sh
+rm -rf /tmp/config/chromium /tmp/cache/chromium 2>/dev/null
+exec chromium     --ozone-platform=wayland     --no-sandbox --disable-gpu --disable-dev-shm-usage     --no-first-run --no-default-browser-check --disable-infobars     --password-store=basic --disable-sync     --disable-background-networking --disable-component-update     --disable-domain-reliability --disable-breakpad     --disable-client-side-phishing-detection --no-pings     --safebrowsing-disable-auto-update --metrics-recording-only     --disable-features=OptimizationHints,MediaRouter,AsyncDns,DnsOverHttps     --renderer-process-limit=1 --process-per-site     --disable-hang-monitor --disable-session-crashed-bubble     --js-flags=--max-old-space-size=192     --start-maximized "$UNO_URL_ENV"
+BROWSEREOF
+chmod +x $R/usr/share/uno/browser.sh
 
 # DNS on a read-only root.  /etc/resolv.conf is a symlink into the tmpfs the
 # appliance mounts over /tmp - but that alone is NOT enough, and the first
