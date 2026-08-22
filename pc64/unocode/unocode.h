@@ -468,6 +468,7 @@ int     uc_doc_count(void);
 UcDoc  *uc_doc_at(int i);
 UcDoc  *uc_doc_active(void);
 int     uc_doc_active_index(void);
+int     uc_doc_caret(UcDoc *d);          /* the last cursor's offset      */
 void    uc_doc_activate(int i);
 
 /* ---- editor groups (UCD-18) ------------------------------------------------
@@ -594,6 +595,16 @@ void uc_suggest_close(void);
 int  uc_suggest_active(void);
 int  uc_suggest_key(int key, int mods);
 void uc_suggest_draw(UcRect editor_rect, UcDoc *d);
+
+/* Hover (UCD-25).  A popup with the language server's answer about the symbol
+ * under the pointer; drawn over the whole workbench rather than inside the
+ * editor rect, so one near a split's edge is not cut in half. */
+void uc_hover_draw(UcRect workbench);
+void uc_hover_tick(UcDoc *d);          /* fires the request after a dwell   */
+void uc_hover_at(UcDoc *d, int off, int px, int py);   /* or ask directly   */
+void uc_hover_close(void);
+int  uc_hover_active(void);
+const char *uc_hover_text(void);       /* "" when nothing is showing        */
 void uc_suggest_retrigger(UcDoc *d);
 /* extensions add items while a request is open (uc_api.c calls this) */
 int  uc_suggest_add(const char *label, const char *detail, const char *insert,

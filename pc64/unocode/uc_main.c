@@ -317,6 +317,8 @@ static void uc_draw(unoui_widget *w, unoui_rect r, void *ctx)
         uc_edit_draw(UC.editor, uc_doc_active(), UC.focus == UC_F_EDITOR);
     if (UC.panel.h)    uc_panel_draw(UC.panel);
     if (UC.status.h)   uc_status_draw(UC.status);
+    uc_hover_draw(UC.canvas);   /* over the chrome: a hover near a split's
+                                * edge must not be cut in half (UCD-25) */
     uc_notif_draw(UC.canvas);
     uc_quick_draw(UC.canvas);
 }
@@ -596,6 +598,7 @@ static void uc_frame(void)
     uc_search_tick();
     uc_term_tick();
     uc_lsp_tick();
+    uc_hover_tick(uc_doc_active());
     /* Repaint on the CARET's cadence, not on the frame's: a blinking caret
      * needs two repaints a second, and asking for one every frame would keep
      * the whole desktop compositing for no visible difference. */

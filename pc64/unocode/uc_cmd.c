@@ -1063,6 +1063,22 @@ static void c_cursor_above(void){ UcDoc *d = D(); if (d) uc_add_cursor_line(d, -
 static void c_indent(void)     { UcDoc *d = D(); if (d) uc_indent(d, 0); }
 static void c_outdent(void)    { UcDoc *d = D(); if (d) uc_indent(d, 1); }
 static void c_suggest(void)    { UcDoc *d = D(); if (d) uc_suggest_open(d, 1); }
+/* Show the hover at the CARET rather than the pointer (UCD-25).  The pointer
+ * is where the mouse happens to be, which during a keyboard-driven session is
+ * wherever it was abandoned - usually over some other file entirely. */
+static void c_hover(void)
+{
+    UcDoc *d = D();
+    if (!d) return;
+    {
+        int off = d->cur[d->ncur - 1].caret;
+        int line = uc_line_of(d, off);
+        int col  = uc_col_of(d, off);
+        uc_hover_at(d, off,
+                    UC.editor.x + 60 + col * uc_char_w(),
+                    UC.editor.y + (line - d->scroll_line) * uc_line_h());
+    }
+}
 static void c_jump_bracket(void)
 {
     UcDoc *d = D();
@@ -1215,6 +1231,9 @@ static void c_escape(void)
 {
     UcDoc *d = D();
     if (uc_suggest_active()) { uc_suggest_close(); return; }
+    /* Before the find widget: a hover can be open over one, and Escape should
+     * take down the thing that appeared last (UCD-25). */
+    if (uc_hover_active()) { uc_hover_close(); return; }
     if (uc_find_active()) { uc_find_close(); return; }
     if (d && d->ncur > 1) { uc_clear_extra_cursors(d); return; }
 }
@@ -1344,6 +1363,7 @@ void uc_cmd_init(void)
     reg("editor.action.indentLines", "Edit", "Indent Line", c_indent);
     reg("editor.action.outdentLines", "Edit", "Outdent Line", c_outdent);
     reg("editor.action.triggerSuggest", "Edit", "Trigger Suggest", c_suggest);
+    reg("editor.action.showHover", "Edit", "Show Hover", c_hover);
     reg("editor.action.jumpToBracket", "Edit", "Go to Bracket", c_jump_bracket);
     reg("editor.action.cancelSelectionOrOperation", "Edit", "Cancel", c_escape);
 
@@ -1428,6 +1448,7 @@ void uc_cmd_init(void)
     bind("ctrl+]", "editor.action.indentLines", "editorTextFocus");
     bind("ctrl+[", "editor.action.outdentLines", "editorTextFocus");
     bind("ctrl+space", "editor.action.triggerSuggest", "editorTextFocus");
+    bind("ctrl+k ctrl+i", "editor.action.showHover", "editorTextFocus");
     bind("ctrl+b", "workbench.action.toggleSidebarVisibility", 0);
     bind("ctrl+shift+e", "workbench.view.explorer", 0);
     bind("ctrl+shift+f", "workbench.view.search", 0);
@@ -1451,7 +1472,8 @@ void uc_cmd_init(void)
     bind("ctrl+pagedown", "workbench.action.nextEditor", 0);
     bind("ctrl+pageup", "workbench.action.previousEditor", 0);
     bind("escape", "editor.action.cancelSelectionOrOperation",
-         "suggestWidgetVisible || findWidgetVisible || editorHasMultipleSelections");
+         "suggestWidgetVisible || hoverVisible || findWidgetVisible || "
+         "editorHasMultipleSelections");
 }
 
 /* ---- keybindings.json ------------------------------------------------------- */
