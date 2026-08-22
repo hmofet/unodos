@@ -194,7 +194,12 @@ def main():
             for _ in range(45):
                 key(ord('\b'), settle=0.06)
             for ch in nav:
-                key(ord(ch), settle=0.12)
+                key(ord(ch), settle=0.30)
+            # PHOTOGRAPH THE TYPING BEFORE COMMITTING IT.  A shot taken 45
+            # seconds after Enter cannot distinguish "the letters never
+            # arrived" from "they arrived, navigated, and the page since
+            # changed" - and those want opposite fixes.
+            shot("display_urltyped")
             key(ord('\r'), settle=0.3)
             for i in range(4):
                 time.sleep(45)
