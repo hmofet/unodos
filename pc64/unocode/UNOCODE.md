@@ -476,6 +476,18 @@ Ranking is the **server's**, not the fuzzy matcher's: it knows which overload
 is in scope and which member is private, and a score derived from how the
 letters line up does not.
 
+### 8.3 Hover
+
+`editor.hover.enabled` (default true). The pointer must rest for 450 ms over a
+word; Ctrl+K Ctrl+I asks at the caret instead, which is what a keyboard-driven
+session wants because the pointer is wherever it was abandoned.
+
+The server's answer is markdown and is **stripped, not rendered** - fences and
+their language tag, headings, and emphasis runs. Nothing else is interpreted, so
+an underscore inside an identifier stays an underscore. An empty answer shows
+nothing at all: clangd returns one for whitespace and punctuation, which is most
+of where a pointer comes to rest.
+
 ---
 
 ---
@@ -528,6 +540,9 @@ typed into a *document*.
   platform's own store, the `AI: Set API Key` / `AI: Clear API Key` commands
   with a masked input box, and the store named on screen whenever a key is
   saved. Keys never enter `SETTINGS.JSN`.
+- **1.8** (2026-08-22) Hover (UCD-25): the server's answer about the symbol
+  under the pointer, after a dwell, with its markdown stripped to readable
+  text. Ctrl+K Ctrl+I asks at the caret. `editor.hover.enabled`.
 - **1.7** (2026-08-22) Completions from language servers (UCD-24). Where a
   server answers, its list replaces the scraped words, in its order and with
   its kinds and signatures; where none does - plaintext, or pc64, where there

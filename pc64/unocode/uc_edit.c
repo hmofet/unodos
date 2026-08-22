@@ -286,6 +286,30 @@ static int  sug_from_server;
 /* defined below with the rest of the language-server path (UCD-24) */
 static void sug_ask_server(UcDoc *d, int caret);
 
+/* ---- hover (UCD-25) ------------------------------------------------------------
+ * A popup with the server's answer about the symbol under the pointer.
+ *
+ * IT IS DRIVEN BY A DWELL, NOT BY THE MOVE.  Asking on every mouse-move event
+ * would put a request on the wire for every pixel the pointer crosses, and
+ * would show a box the instant the pointer passed over a name on its way
+ * somewhere else - which is the behaviour that makes people turn hovers off.
+ * The pointer has to stop for UC_HOVER_MS over the same word.
+ *
+ * THE CONTENT ARRIVES AS MARKDOWN.  Servers send `contents` as a MarkupContent,
+ * a MarkedString, or an array of either, and clangd sends fenced code blocks
+ * inside it.  This strips the fences and the emphasis rather than rendering
+ * them: a monospace box showing ```cpp on its own line is worse than plain
+ * text, and a markdown renderer is not what this task is.
+ * ======================================================================== */
+#define UC_HOVER_MS   450
+#define UC_HOVER_MAX  1400
+#define UC_HOVER_ROWS 12
+static int  hov_on, hov_off, hov_x, hov_y, hov_gen, hov_pending;
+static unsigned long hov_dwell_at;
+static int  hov_want_x, hov_want_y;
+static char hov_text[UC_HOVER_MAX];
+static void hov_pointer(UcRect r, UcDoc *d, int px, int py);
+
 /* ---- painting ----------------------------------------------------------------- */
 static void draw_hscroll_clip(UcRect r) { fb_set_clip(r.x, r.y, r.w, r.h); }
 
@@ -842,6 +866,16 @@ int uc_edit_event(UcRect r, UcDoc *d, const unoui_event *e)
         return 1;
     }
     if (e->kind == UI_EV_MOUSE_UP) { UC.drag = UC_DRAG_NONE; return 1; }
+    /* A plain move over the text, no button held: start (or restart) the hover
+     * dwell.  Returns 0 so this is not treated as handling the event - the
+     * pointer moving is not an interaction with the editor, and claiming it
+     * would stop the cursor-shape code below from seeing it. */
+    if (e->kind == UI_EV_MOUSE_MOVE && UC.drag == UC_DRAG_NONE) {
+        if (e->x >= L.text.x && e->x < L.text.x + L.text.w &&
+            e->y >= L.text.y && e->y < L.text.y + L.text.h)
+            hov_pointer(r, d, e->x, e->y);
+        else uc_hover_close();
+    }
     return 0;
 }
 
@@ -1543,6 +1577,191 @@ static int trigger_char_at(UcDoc *d, int caret, char *out)
             return 1;
         }
     return 0;
+}
+
+/* ===========================================================================
+ * Hover (UCD-25).
+ * ======================================================================== */
+/* The popup.  Painted over the workbench rather than inside the editor's clip,
+ * because a hover near the right edge of a split editor otherwise gets cut in
+ * half by a rect it has no reason to respect. */
+void uc_hover_draw(UcRect wb)
+{
+    const char *p = hov_text;
+    int rows = 0, w = 0, i, x, y, h, lh = uc_ui_h() + 2;
+    char line[220];
+    if (!hov_on || !hov_text[0]) return;
+
+    /* measure: the widest line and the number of them, both capped */
+    while (*p && rows < UC_HOVER_ROWS) {
+        int n = 0;
+        while (*p && *p != '\n' && n < (int)sizeof line - 1) line[n++] = *p++;
+        line[n] = 0;
+        if (*p == '\n') p++;
+        if (n) { int tw = uc_ui_text_w(line); if (tw > w) w = tw; }
+        rows++;
+    }
+    if (!rows) return;
+    w += 20;
+    if (w < 160) w = 160;
+    if (w > wb.w - 40) w = wb.w - 40;
+    h = rows * lh + 12;
+
+    /* Above the pointer by preference - a box below it covers the line you are
+     * about to read next, and the pointer is already at the bottom edge of the
+     * thing being asked about. */
+    x = hov_x - 8;
+    y = hov_y - h - 6;
+    if (y < wb.y + 4) y = hov_y + uc_line_h() + 4;
+    if (x + w > wb.x + wb.w - 8) x = wb.x + wb.w - w - 8;
+    if (x < wb.x + 4) x = wb.x + 4;
+    if (y + h > wb.y + wb.h - 4) y = wb.y + wb.h - h - 4;
+
+    fb_blend_rect(x + 3, y + 3, w, h, uc_col(UC_C_WIDGET_SHADOW), 70);
+    fb_fill_rect(x, y, w, h, uc_col(UC_C_WIDGET_BG));
+    fb_frame_rect(x, y, w, h, uc_col(UC_C_WIDGET_BORDER));
+    fb_set_clip(x + 1, y + 1, w - 2, h - 2);
+    p = hov_text;
+    for (i = 0; i < rows; i++) {
+        int n = 0;
+        while (*p && *p != '\n' && n < (int)sizeof line - 1) line[n++] = *p++;
+        line[n] = 0;
+        if (*p == '\n') p++;
+        uc_ui_text_fit(x + 10, y + 6 + i * lh, line, w - 20,
+                       uc_col(UC_C_EDITOR_FG));
+    }
+    fb_reset_clip();
+}
+
+void uc_hover_close(void)
+{
+    if (!hov_on && !hov_pending) return;
+    hov_on = 0;
+    hov_pending = 0;
+    hov_gen++;                     /* drop any reply still on its way */
+    hov_text[0] = 0;
+    uc_ctx_set("hoverVisible", 0);
+    uc_repaint();
+}
+
+int uc_hover_active(void) { return hov_on; }
+const char *uc_hover_text(void) { return hov_text; }
+
+/* Append `s` to the popup text, undoing the markdown a server wraps its answer
+ * in.  Fences and their language tag go entirely; a leading `#` or a run of `*`
+ * is emphasis, not content.  Nothing else is interpreted - a stray underscore
+ * in an identifier is an underscore. */
+static void hov_append_md(const char *s)
+{
+    int n = (int)strlen(hov_text), bol = 1;
+    if (!s) return;
+    if (n && n < UC_HOVER_MAX - 2) hov_text[n++] = '\n';
+    while (*s && n < UC_HOVER_MAX - 2) {
+        if (bol && s[0] == '`' && s[1] == '`' && s[2] == '`') {
+            s += 3;
+            while (*s && *s != '\n') s++;   /* the language tag */
+            if (*s) s++;
+            continue;
+        }
+        if (bol) {
+            while (*s == '#' || (*s == ' ' && s[1] == '#')) s++;
+            while (*s == ' ') s++;
+            bol = 0;
+            if (!*s) break;
+            continue;
+        }
+        if (*s == '*' || *s == '`') { s++; continue; }
+        if (*s == '\n') bol = 1;
+        hov_text[n++] = *s++;
+    }
+    hov_text[n] = 0;
+}
+
+/* `contents` is a MarkupContent, a MarkedString, a plain string, or an array of
+ * any of those.  All four are legal and servers differ, so all four are read. */
+static void hov_read_contents(UcJson *c)
+{
+    UcJson *it;
+    if (!c) return;
+    if (c->type == UJ_STR) { hov_append_md(c->str); return; }
+    if (c->type == UJ_ARR) {
+        for (it = c->child; it; it = it->next) hov_read_contents(it);
+        return;
+    }
+    if (c->type == UJ_OBJ) {
+        const char *v = uc_json_str(c, "value", 0);
+        if (v) hov_append_md(v);
+    }
+}
+
+static void hov_reply(UcJson *result, UcJson *error, void *user)
+{
+    int gen = *(int *)user;
+    if (gen != hov_gen) return;
+    hov_pending = 0;
+    hov_text[0] = 0;
+    if (!result || error || result->type == UJ_NULL) return;
+    hov_read_contents(uc_json_member(result, "contents"));
+    /* Nothing to say is not the same as a box saying nothing.  clangd answers
+     * with an empty hover for whitespace and punctuation, which is most of
+     * where a pointer rests. */
+    if (!hov_text[0]) return;
+    hov_on = 1;
+    uc_ctx_set("hoverVisible", 1);
+    uc_repaint();
+}
+
+static int hov_req[4];
+static int hov_req_at;
+
+/* Ask about `off`, anchoring the popup at (px, py). */
+void uc_hover_at(UcDoc *d, int off, int px, int py)
+{
+    int *slot;
+    if (!d || !uc_lsp_for_doc(d)) return;
+    hov_gen++;
+    hov_on = 0;
+    hov_text[0] = 0;
+    hov_off = off;
+    hov_x = px;
+    hov_y = py;
+    slot = &hov_req[hov_req_at];
+    hov_req_at = (hov_req_at + 1) % 4;
+    *slot = hov_gen;
+    hov_pending = 1;
+    if (!uc_lsp_request_at(d, "textDocument/hover", off, 0, hov_reply, slot))
+        hov_pending = 0;
+}
+
+/* Note where the pointer is.  Called from the editor's mouse-move handler; the
+ * request itself waits for the pointer to stop. */
+static void hov_pointer(UcRect r, UcDoc *d, int px, int py)
+{
+    int off = offset_at(r, d, px, py);
+    if (hov_on && off == hov_off) return;     /* still on the same word */
+    if (hov_on || hov_pending) uc_hover_close();
+    hov_want_x = px;
+    hov_want_y = py;
+    hov_dwell_at = uno_dbg_uptime_ms() + UC_HOVER_MS;
+}
+
+/* Once a frame: fire the request when the pointer has been still long enough. */
+void uc_hover_tick(UcDoc *d)
+{
+    UcRect r;
+    int off;
+    if (!d || !hov_dwell_at || hov_on || hov_pending) return;
+    if (uno_dbg_uptime_ms() < hov_dwell_at) return;
+    hov_dwell_at = 0;
+    if (!uc_cfg_bool("editor.hover.enabled")) return;
+    r = UC.editor;
+    off = offset_at(r, d, hov_want_x, hov_want_y);
+    /* Only over a word.  Hovering the gutter, a blank line or a comma asks a
+     * question with no answer, and a request per resting pointer is a request
+     * per idle second. */
+    if (off < 0 || off >= d->len) return;
+    if (!uc_is_word((unsigned char)d->text[off])) return;
+    uc_hover_at(d, off, hov_want_x, hov_want_y);
 }
 
 /* Fire a completion request for the caret, if a server is serving this file. */

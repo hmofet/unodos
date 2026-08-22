@@ -1599,3 +1599,7 @@ void uc_doc_free_all(void)
 {
     while (g_ndoc > 0) uc_doc_close(g_ndoc - 1);
 }
+
+/* The caret offset, for a host that may not include unocode.h (the headless
+ * --hover driver).  Same opaque-handle convention as uc_doc_active(). */
+int uc_doc_caret(UcDoc *d) { return (d && d->ncur) ? d->cur[d->ncur - 1].caret : 0; }
