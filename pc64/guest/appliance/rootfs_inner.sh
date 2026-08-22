@@ -187,7 +187,7 @@ done
 # which is what a whole run looked like, with the keyboard, the input nodes
 # and udev all provably fine.  openbox takes the window, focuses it, and the
 # keys land.
-export UNO_URL_ENV=${UNO_URL:-https://$UNO_SITE/}
+export UNO_URL_ENV=${UNO_URL:-http://example.org/}
 
 # UNCONDITIONAL, because the last version waited for a file that did not
 # always arrive and then reported nothing at all - a diagnostic that can
@@ -213,6 +213,14 @@ export UNO_URL_ENV=${UNO_URL:-https://$UNO_SITE/}
 # changes, X and Chromium are fine and the gap is between libinput and my
 # emulated device; if it does not, the gap is above them both.  Either way
 # the next change is aimed rather than guessed.
+(
+  # What the browser says WHILE it runs.  Reporting only on exit means a
+  # renderer that dies inside a browser that lives is never explained.
+  while :; do
+    sleep 90
+    tail -4 /tmp/x.log 2>/dev/null | sed 's/^/unoB| /' > /dev/ttyS0
+  done
+) &
 (
   export DISPLAY=:0
   sleep 60
