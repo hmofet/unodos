@@ -72,6 +72,7 @@ static const UcSettingDef kDefs[] = {
 { "lsp.enabled", UC_T_BOOL, "true", 0, "Use language servers where one is configured.", 0, 0 },
 { "lsp.trace", UC_T_BOOL, "false", 0, "Log language-server traffic to the Output panel.", 0, 0 },
 { "editor.hover.enabled", UC_T_BOOL, "true", 0, "Show a hover when the pointer rests on a symbol.", 0, 0 },
+{ "editor.formatOnSave", UC_T_BOOL, "false", 0, "Format the file with its language server when you save it.", 0, 0 },
 { "search.maxResults", UC_T_INT, "200", 0, "Maximum search results.", 10, 2000 },
 { "extensions.autoActivate", UC_T_BOOL, "true", 0, "Activate extensions on their activation events.", 0, 0 },
 { "extensions.fuelPerSlice", UC_T_INT, "400000", 0, "Interpreter steps one extension call may use.", 1000, 20000000 },
@@ -337,6 +338,16 @@ int uc_cfg_set(const char *key, const char *val)
 {
     user_put(key, val);
     return uc_cfg_save();
+}
+
+/* The in-memory half of uc_cfg_set(), without the write.
+ *
+ * A test that had to edit the real SETTINGS.JSN to exercise a setting would be
+ * a test that damages the machine it runs on, and would leave that machine
+ * configured differently afterwards depending on whether it passed. */
+void uc_cfg_override(const char *key, const char *val)
+{
+    if (key && key[0] && val) user_put(key, val);
 }
 
 UcJson *uc_cfg_raw(const char *key)

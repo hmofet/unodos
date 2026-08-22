@@ -318,6 +318,9 @@ int         uc_cfg_bool(const char *key);
 const char *uc_cfg_str (const char *key);
 /* Set + persist.  `val` is the JSON text of the value: "true", "14", "\"x\"". */
 int         uc_cfg_set (const char *key, const char *val);
+/* The same, for THIS SESSION only - no write.  The headless driver's --set
+ * uses it, so a test can exercise a setting without editing the user's file. */
+void        uc_cfg_override(const char *key, const char *val);
 int         uc_cfg_count(void);
 const UcSettingDef *uc_cfg_def(int i);
 const UcSettingDef *uc_cfg_find(const char *key);
@@ -624,6 +627,16 @@ void uc_hover_close(void);
  * Search view frames later. */
 void uc_goto_definition(UcDoc *d);
 void uc_find_references(UcDoc *d);
+
+/* Rename and format (UCD-27).  Both are asynchronous: they send a request and
+ * return, and the server's edits are applied frames later - LAST FIRST, which
+ * is the only order in which a set of ranges stated against the unedited
+ * document all remain valid. */
+void uc_rename_symbol(UcDoc *d);
+void uc_format_document(UcDoc *d);
+/* Ctrl+S under editor.formatOnSave: formats, then saves when the edits land.
+ * Returns 1 when it has taken responsibility for the save. */
+int  uc_save_with_format(UcDoc *d);
 int  uc_hover_active(void);
 const char *uc_hover_text(void);       /* "" when nothing is showing        */
 void uc_suggest_retrigger(UcDoc *d);
@@ -843,6 +856,9 @@ void uc_quick_input(const char *placeholder, const char *value, int jscb);
 /* an input box that resolves into C and draws masked - for secrets (UCD-48).
  * `fn` hears the text on Enter and "" on Escape. */
 void uc_quick_input_secret(const char *placeholder, void (*fn)(const char *));
+/* The same, visible and pre-filled (UCD-27's rename box). */
+void uc_quick_input_c(const char *placeholder, const char *value,
+                      void (*fn)(const char *));
 
 /* fuzzy score used by every list that filters: >= 0 = a match, higher is
  * better; *pos (nullable) receives the matched character indices so the
