@@ -204,6 +204,26 @@ cat > $R/usr/share/uno/session.sh <<'SESSEOF'
 #!/bin/sh
 openbox &
 sleep 3
+
+# A FRESH PROFILE EVERY LAUNCH.  Chromium remembers that it did not shut
+# down cleanly and opens a "Restore pages?" bubble - and that bubble takes
+# the keyboard focus, so the first thing typed at the browser goes into a
+# dialog instead of the address bar.  --disable-session-crashed-bubble did
+# not suppress it in this build; deleting the profile removes the belief
+# that produces it.
+rm -rf /tmp/config/chromium /tmp/cache/chromium 2>/dev/null
+
+# AND THE BROWSER WINDOW KEEPS THE FOCUS.  A popup that appears later still
+# takes it, so this re-asserts it for the first couple of minutes rather
+# than once.
+(
+  for i in $(seq 1 24); do
+    sleep 5
+    W=$(xdotool search --class -- chromium 2>/dev/null | tail -1)
+    [ -n "$W" ] && xdotool windowactivate "$W" 2>/dev/null
+  done
+) &
+
 exec chromium \
     --no-sandbox --disable-gpu --disable-dev-shm-usage \
     --no-first-run --no-default-browser-check --disable-infobars \
