@@ -41,11 +41,15 @@ mount -t tmpfs var  /var  2>/dev/null
 mkdir -p /var/log /var/tmp /var/lib /var/cache /run/dbus /root
 mount -t tmpfs home /root 2>/dev/null
 
-# Swap on zram: Chromium in a small carve wants somewhere to spill.
+# Swap on zram: Chromium in a small carve wants somewhere to spill, and it
+# spills a LOT - a renderer that runs out dies as "Aw, Snap! Error code: 8",
+# which looks like a browser bug and is a memory ceiling.  Sized against the
+# carve rather than fixed.
 if [ -e /sys/class/zram-control ] || [ -e /sys/block/zram0 ]; then
     echo lz4 > /sys/block/zram0/comp_algorithm 2>/dev/null
-    echo 512M > /sys/block/zram0/disksize 2>/dev/null
+    echo 1024M > /sys/block/zram0/disksize 2>/dev/null
     mkswap /dev/zram0 >/dev/null 2>&1 && swapon /dev/zram0 2>/dev/null
+    echo 100 > /proc/sys/vm/swappiness 2>/dev/null
 fi
 
 # A shell on the serial port, always: it is the appliance's back door and
@@ -159,6 +163,8 @@ while :; do
         --disable-client-side-phishing-detection --no-pings \
         --safebrowsing-disable-auto-update --metrics-recording-only \
         --disable-features=OptimizationHints,MediaRouter \
+        --renderer-process-limit=1 --process-per-site \
+        --js-flags=--max-old-space-size=192 \
         --window-position=0,0 --window-size=800,600 \
         --start-maximized "$URL" \
         -- /usr/bin/X :0 vt1 -nolisten tcp -quiet \

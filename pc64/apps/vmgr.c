@@ -349,7 +349,6 @@ static int vm_event(unoui_widget *w, const unoui_event *e, void *ctx)
 static int vm_key(int uni, int scan, int ctrl)
 {
     int n = uno_vm_count();
-    (void)ctrl;
 
     /* EDITING SWALLOWS EVERYTHING, and so does the console: a view where the
      * user is typing must not also treat letters as accelerators, or naming
@@ -376,6 +375,13 @@ static int vm_key(int uni, int scan, int ctrl)
          * from the Console view's shell instead. */
         if (scan == 0x16) { g_view = V_LIST; pc64_shell_dirty(); return 1; }
         if (scan) uno_vm_input_scan(scan);
+        /* CTRL IS A MODIFIER THE GUEST NEEDS, not decoration.  Without this
+         * Ctrl+L reached the guest as a bare 'l' typed into the page, and a
+         * browser you cannot put an address into is not one you can drive.
+         * ASCII 1..26 IS Ctrl+A..Ctrl+Z, which is what the emulated keyboard
+         * turns back into a held Ctrl and a letter. */
+        else if (ctrl && uni >= 'a' && uni <= 'z') uno_vm_input_char(uni - 'a' + 1);
+        else if (ctrl && uni >= 'A' && uni <= 'Z') uno_vm_input_char(uni - 'A' + 1);
         else if (uni > 0) uno_vm_input_char(uni);
         return 1;
     }
