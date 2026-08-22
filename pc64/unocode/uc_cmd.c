@@ -564,6 +564,18 @@ void uc_quick_input_secret(const char *placeholder, void (*fn)(const char *))
     q_mask = 1;
 }
 
+/* The same, VISIBLE and with a starting value (UCD-27).  Rename wants the
+ * symbol already in the box - a rename that starts empty makes you retype a
+ * name you are only changing one letter of - and there is nothing secret about
+ * it.  Cancelling calls `fn("")`, as above. */
+void uc_quick_input_c(const char *placeholder, const char *value,
+                      void (*fn)(const char *))
+{
+    uc_quick_input(placeholder, value, -1);
+    q_cfn = fn;
+    q_mask = 0;
+}
+
 static void q_add(const char *label, const char *detail, const char *aux, int ref)
 {
     int s;
@@ -973,7 +985,21 @@ static void c_open_folder(void)
     }
     uc_open_folder(vol, dir);
 }
-static void c_save(void)     { UcDoc *d = D(); if (d) { if (d->name[0]) uc_doc_save(d); else uc_status_msg("Untitled: use Save As"); } }
+/* Ctrl+S.  uc_save_with_format() answers 1 when it has taken the save over -
+ * it formats first and writes when the server's edits land - and 0 whenever
+ * there is nothing to format with, in which case this saves normally.
+ *
+ * Only the EXPLICIT save formats.  files.autoSave fires on a timer, and a
+ * formatter reflowing the file under the caret a second after you stopped
+ * typing is not a feature anybody asked for. */
+static void c_save(void)
+{
+    UcDoc *d = D();
+    if (!d) return;
+    if (!d->name[0]) { uc_status_msg("Untitled: use Save As"); return; }
+    if (uc_save_with_format(d)) return;
+    uc_doc_save(d);
+}
 static void c_save_all(void) { int i; for (i = 0; i < uc_doc_count(); i++) { UcDoc *d = uc_doc_at(i); if (d->dirty && d->name[0]) uc_doc_save(d); } }
 static void c_close(void)    { int i = uc_doc_active_index(); if (i >= 0) uc_doc_close(i); }
 static void c_undo(void)     { UcDoc *d = D(); if (d) uc_undo(d); }
@@ -1067,6 +1093,8 @@ static void c_suggest(void)    { UcDoc *d = D(); if (d) uc_suggest_open(d, 1); }
  * is where the mouse happens to be, which during a keyboard-driven session is
  * wherever it was abandoned - usually over some other file entirely. */
 static void c_goto_def(void)   { UcDoc *d = D(); if (d) uc_goto_definition(d); }
+static void c_rename(void)     { UcDoc *d = D(); if (d) uc_rename_symbol(d); }
+static void c_format(void)     { UcDoc *d = D(); if (d) uc_format_document(d); }
 static void c_find_refs(void)  { UcDoc *d = D(); if (d) uc_find_references(d); }
 static void c_nav_back(void)   { uc_nav_back(); }
 static void c_nav_fwd(void)    { uc_nav_forward(); }
@@ -1369,6 +1397,8 @@ void uc_cmd_init(void)
     reg("editor.action.triggerSuggest", "Edit", "Trigger Suggest", c_suggest);
     reg("editor.action.showHover", "Edit", "Show Hover", c_hover);
     reg("editor.action.revealDefinition", "Go", "Go to Definition", c_goto_def);
+    reg("editor.action.rename", "Edit", "Rename Symbol", c_rename);
+    reg("editor.action.formatDocument", "Edit", "Format Document", c_format);
     reg("references-view.findReferences", "Go", "Find All References", c_find_refs);
     reg("workbench.action.navigateBack", "Go", "Go Back", c_nav_back);
     reg("workbench.action.navigateForward", "Go", "Go Forward", c_nav_fwd);
@@ -1458,6 +1488,8 @@ void uc_cmd_init(void)
     bind("ctrl+space", "editor.action.triggerSuggest", "editorTextFocus");
     bind("ctrl+k ctrl+i", "editor.action.showHover", "editorTextFocus");
     bind("f12", "editor.action.revealDefinition", "editorTextFocus");
+    bind("f2", "editor.action.rename", "editorTextFocus");
+    bind("shift+alt+f", "editor.action.formatDocument", "editorTextFocus");
     bind("shift+f12", "references-view.findReferences", "editorTextFocus");
     /* Alt+Left and Alt+Right are not editor-only: coming back from a jump is
      * something you want from the Search results and the Problems panel too,

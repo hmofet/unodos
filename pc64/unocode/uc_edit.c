@@ -1798,6 +1798,257 @@ void uc_find_references(UcDoc *d)
 }
 
 /* ===========================================================================
+ * Applying a server's edits: rename and format (UCD-27).
+ *
+ * EDITS ARE APPLIED LAST FIRST, and that is the whole difficulty.  A TextEdit's
+ * range is stated against the document as the server saw it, so applying them
+ * front to back invalidates every range after the first one that changed a
+ * length - and by a different amount each time, so the result is not wrong in
+ * a way anyone would notice on a small file and is catastrophic on a large one.
+ * Sorting descending by start offset means no edit ever moves text that a
+ * later-applied edit still has to address.
+ *
+ * They also arrive UNSORTED.  The protocol requires only that edits in one
+ * array do not overlap, not that they are in order, and clangd's rename returns
+ * them grouped by the index's own order rather than by position.
+ *
+ * ONE UNDO STEP PER FILE.  A rename that took forty presses of Ctrl+Z to
+ * reverse would be a trap rather than a feature - the same rule Replace All
+ * follows (UCD-13).
+ * ======================================================================== */
+typedef struct { int a, b; const char *text; } UcTextEdit;
+
+/* Read one TextEdit into document offsets.  Needs the document open, because
+ * a UTF-16 column is only a byte offset against that line's actual bytes. */
+static int edit_read(UcDoc *d, UcJson *e, UcTextEdit *out)
+{
+    UcJson *r = uc_json_member(e, "range");
+    UcJson *s = r ? uc_json_member(r, "start") : 0;
+    UcJson *t = r ? uc_json_member(r, "end") : 0;
+    if (!s || !t) return 0;
+    out->a = uc_lsp_pos_to_offset(d, (int)uc_json_num(s, "line", 0),
+                                     (int)uc_json_num(s, "character", 0));
+    out->b = uc_lsp_pos_to_offset(d, (int)uc_json_num(t, "line", 0),
+                                     (int)uc_json_num(t, "character", 0));
+    out->text = uc_json_str(e, "newText", "");
+    if (out->b < out->a) return 0;
+    return 1;
+}
+
+static int apply_edits(UcDoc *d, UcJson *edits)
+{
+    UcTextEdit *v;
+    UcJson *it;
+    int n = 0, i, j, cap;
+    if (!d || !edits || edits->type != UJ_ARR || edits->n <= 0) return 0;
+    cap = edits->n;
+    v = (UcTextEdit *)malloc((unsigned long)cap * sizeof *v);
+    if (!v) return 0;
+    for (it = edits->child; it && n < cap; it = it->next)
+        if (edit_read(d, it, &v[n])) n++;
+    /* descending by start: insertion sort, because n is small and a stable
+     * simple sort is easier to be sure of than a clever one */
+    for (i = 1; i < n; i++) {
+        UcTextEdit t = v[i];
+        for (j = i; j > 0 && v[j - 1].a < t.a; j--) v[j] = v[j - 1];
+        v[j] = t;
+    }
+    uc_begin_group(d);
+    for (i = 0; i < n; i++) {
+        const char *s = v[i].text ? v[i].text : "";
+        uc_replace_range(d, v[i].a, v[i].b, s, (int)strlen(s));
+    }
+    uc_end_group(d);
+    free(v);
+    return n;
+}
+
+/* A WorkspaceEdit, in both of the shapes it comes in: `changes`, an object of
+ * URI -> TextEdit[], and `documentChanges`, an array of TextDocumentEdit.
+ * Servers pick one based on what the client said it supports, and this said
+ * nothing, so both have to be read. */
+static int apply_workspace_edit(UcJson *we, int *files)
+{
+    int total = 0, nf = 0;
+    UcJson *ch;
+    if (!we) { if (files) *files = 0; return 0; }
+
+    ch = uc_json_member(we, "changes");
+    if (ch && ch->type == UJ_OBJ) {
+        UcJson *m;
+        for (m = ch->child; m; m = m->next) {
+            int vol = 0, di;
+            char dir[UC_PATH_MAX], name[UC_NAME_MAX];
+            if (!m->key) continue;
+            if (!uc_lsp_uri_to_path(m->key, &vol, dir, sizeof dir, name, sizeof name))
+                continue;               /* outside the workspace: not ours */
+            di = uc_doc_open(vol, dir, name);
+            if (di < 0) continue;
+            total += apply_edits(uc_doc_at(di), m);
+            nf++;
+        }
+    }
+    ch = uc_json_member(we, "documentChanges");
+    if (ch && ch->type == UJ_ARR) {
+        UcJson *it;
+        for (it = ch->child; it; it = it->next) {
+            UcJson *td = uc_json_member(it, "textDocument");
+            const char *uri = td ? uc_json_str(td, "uri", 0) : 0;
+            int vol = 0, di;
+            char dir[UC_PATH_MAX], name[UC_NAME_MAX];
+            if (!uri) continue;
+            if (!uc_lsp_uri_to_path(uri, &vol, dir, sizeof dir, name, sizeof name))
+                continue;
+            di = uc_doc_open(vol, dir, name);
+            if (di < 0) continue;
+            total += apply_edits(uc_doc_at(di), uc_json_member(it, "edits"));
+            nf++;
+        }
+    }
+    if (files) *files = nf;
+    return total;
+}
+
+static void rename_reply(UcJson *result, UcJson *error, void *user)
+{
+    int files = 0, n;
+    (void)user;
+    if (error || !result) { uc_status_msg("rename refused by the server"); return; }
+    n = apply_workspace_edit(result, &files);
+    if (!n) { uc_status_msg("nothing to rename"); return; }
+    {
+        char msg[80], num[16];
+        uc_itoa(num, n);
+        uc_scpy(msg, "renamed ", sizeof msg);
+        uc_scat(msg, num, sizeof msg);
+        uc_scat(msg, n == 1 ? " occurrence in " : " occurrences in ", sizeof msg);
+        uc_itoa(num, files);
+        uc_scat(msg, num, sizeof msg);
+        uc_scat(msg, files == 1 ? " file" : " files", sizeof msg);
+        uc_status_msg(msg);
+    }
+    /* The files are left OPEN AND DIRTY rather than saved, exactly as Replace
+     * All leaves them (UCD-13): a rename you cannot look at before it reaches
+     * the disk is one you cannot undo your way out of. */
+    uc_repaint();
+}
+
+static UcDoc *g_rename_doc;
+static int    g_rename_off;
+
+static void rename_entered(const char *newname)
+{
+    UcDoc *d = g_rename_doc;
+    char esc[128];
+    char extra[192];
+    g_rename_doc = 0;
+    if (!d || !newname || !newname[0]) return;      /* cancelled */
+    uc_lsp_esc(esc, sizeof esc, newname);
+    uc_scpy(extra, ",\"newName\":\"", sizeof extra);
+    uc_scat(extra, esc, sizeof extra);
+    uc_scat(extra, "\"", sizeof extra);
+    if (!uc_lsp_request_at(d, "textDocument/rename", g_rename_off, extra,
+                           rename_reply, 0))
+        uc_status_msg("no language server for this file");
+    else
+        uc_status_msg("renaming...");
+}
+
+void uc_rename_symbol(UcDoc *d)
+{
+    char word[64];
+    int a, b, n;
+    if (!d) return;
+    if (!uc_lsp_for_doc(d)) { uc_status_msg("no language server for this file"); return; }
+    g_rename_doc = d;
+    g_rename_off = d->cur[d->ncur - 1].caret;
+    /* Pre-fill with the symbol as it stands.  A rename box that starts empty
+     * makes you retype a name you are only changing one letter of. */
+    a = uc_word_start(d, g_rename_off);
+    b = uc_word_end(d, g_rename_off);
+    n = b - a;
+    if (n < 0 || n > (int)sizeof word - 1) n = 0;
+    if (n) memcpy(word, d->text + a, (unsigned long)n);
+    word[n] = 0;
+    uc_quick_input_c("New name", word, rename_entered);
+}
+
+static UcDoc *g_format_doc;
+static int    g_format_then_save;
+
+static void format_reply(UcJson *result, UcJson *error, void *user)
+{
+    UcDoc *d = g_format_doc;
+    int n = 0;
+    (void)user;
+    g_format_doc = 0;
+    if (d && !error && result && result->type == UJ_ARR)
+        n = apply_edits(d, result);
+    if (g_format_then_save) {
+        g_format_then_save = 0;
+        /* Save whatever happened, INCLUDING when the server declined: the user
+         * pressed Ctrl+S and a formatter having nothing to say is not a reason
+         * to leave the file unwritten. */
+        if (d) uc_doc_save(d);
+    }
+    if (n) {
+        char msg[48], num[16];
+        uc_itoa(num, n);
+        uc_scpy(msg, "formatted (", sizeof msg);
+        uc_scat(msg, num, sizeof msg);
+        uc_scat(msg, n == 1 ? " edit)" : " edits)", sizeof msg);
+        uc_status_msg(msg);
+    } else if (!g_format_then_save) {
+        uc_status_msg("nothing to format");
+    }
+    uc_repaint();
+}
+
+static int format_request(UcDoc *d)
+{
+    char extra[160], num[16];
+    if (!d || !uc_lsp_for_doc(d)) return 0;
+    g_format_doc = d;
+    /* The EDITOR'S indentation, not the server's default.  A formatter told
+     * nothing reformats the whole file to its own house style on the first
+     * save, which is the diff nobody wanted. */
+    uc_scpy(extra, ",\"options\":{\"tabSize\":", sizeof extra);
+    uc_itoa(num, uc_cfg_int("editor.tabSize"));
+    uc_scat(extra, num, sizeof extra);
+    uc_scat(extra, ",\"insertSpaces\":", sizeof extra);
+    uc_scat(extra, uc_cfg_bool("editor.insertSpaces") ? "true" : "false",
+            sizeof extra);
+    uc_scat(extra, ",\"trimTrailingWhitespace\":true,"
+                   "\"insertFinalNewline\":true}", sizeof extra);
+    /* offset 0: formatting is about the whole document, and
+     * uc_lsp_request_at sends a position because every other method needs one */
+    return uc_lsp_request_at(d, "textDocument/formatting", 0, extra,
+                             format_reply, 0) != 0;
+}
+
+void uc_format_document(UcDoc *d)
+{
+    if (!d) return;
+    g_format_then_save = 0;
+    if (!format_request(d)) uc_status_msg("no language server for this file");
+    else uc_status_msg("formatting...");
+}
+
+/* Ctrl+S with editor.formatOnSave: format FIRST, then save when the edits
+ * land.  Saving first and formatting after would write the file twice and
+ * leave it dirty immediately after a save, which is the one moment a user is
+ * entitled to believe the file on disk is what they are looking at.
+ *
+ * Returns 1 when it took responsibility for the save. */
+int uc_save_with_format(UcDoc *d)
+{
+    if (!d || !uc_cfg_bool("editor.formatOnSave")) return 0;
+    g_format_then_save = 1;
+    if (!format_request(d)) { g_format_then_save = 0; return 0; }
+    return 1;
+}
+
+/* ===========================================================================
  * Hover (UCD-25).
  * ======================================================================== */
 /* The popup.  Painted over the workbench rather than inside the editor's clip,

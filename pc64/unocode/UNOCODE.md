@@ -490,7 +490,23 @@ A definition **outside the workspace** - a system header - is reported by name
 rather than silently doing nothing: the editor addresses files by volume and
 cannot open one it was never given.
 
-### 8.4 Hover
+### 8.4 Rename and format
+
+F2 renames the symbol at the caret across every file the server names; the box
+opens pre-filled, because a rename that starts empty makes you retype a name you
+are changing one letter of. Shift+Alt+F formats. `editor.formatOnSave` (default
+false) formats **before** writing, and only on an explicit Ctrl+S.
+
+A server's edits are always applied **last first**. A `TextEdit`'s range is
+stated against the document as the server saw it, so front-to-back application
+invalidates every range after the first one that changed a length. They arrive
+unsorted - the protocol only forbids overlap - so they are sorted here.
+
+Each file gets **one undo step**, and is left open and dirty rather than saved:
+a rename you cannot look at before it reaches the disk is one you cannot undo
+your way out of.
+
+### 8.5 Hover
 
 `editor.hover.enabled` (default true). The pointer must rest for 450 ms over a
 word; Ctrl+K Ctrl+I asks at the caret instead, which is what a keyboard-driven
@@ -554,6 +570,10 @@ typed into a *document*.
   platform's own store, the `AI: Set API Key` / `AI: Clear API Key` commands
   with a masked input box, and the store named on screen whenever a key is
   saved. Keys never enter `SETTINGS.JSN`.
+- **1.10** (2026-08-22) Rename Symbol and Format Document (UCD-27). F2,
+  Shift+Alt+F, and `editor.formatOnSave`, which formats before writing rather
+  than after. A server's edits are applied last first, which is the only order
+  in which ranges stated against the unedited document all stay valid.
 - **1.9** (2026-08-22) Go to Definition, Find All References, and a navigation
   history (UCD-26). F12, Shift+F12, Alt+Left and Alt+Right; references fill the
   Search view; every jump in the workbench now records where it came from.
