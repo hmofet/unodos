@@ -61,10 +61,23 @@ fi
   done
 ) &
 
-# Input devices need udev (libinput enumerates through it).
-udevd -d 2>/dev/null
+# INPUT DEVICES NEED UDEV, and this used to fail in silence.  Xorg's
+# libinput driver enumerates through udev, so a udevd that is not running
+# means an X server with no keyboard and no mouse - which looks exactly like
+# an emulated i8042 that does not work, and sent a whole run chasing the
+# wrong layer.  `2>/dev/null` on the daemon that matters is how that hid.
+if [ -x /sbin/udevd ]; then UDEVD=/sbin/udevd
+elif [ -x /lib/udev/udevd ]; then UDEVD=/lib/udev/udevd
+else UDEVD=$(command -v udevd 2>/dev/null); fi
+if [ -n "$UDEVD" ] && $UDEVD --daemon; then
+    echo "uno: udevd up ($UDEVD)" > /dev/ttyS0
+else
+    echo "uno: udevd MISSING - X will have no input" > /dev/ttyS0
+fi
 udevadm trigger --action=add 2>/dev/null
 udevadm settle -t 10 2>/dev/null
+# What the kernel actually created, which is the other half of the question.
+echo "uno: input nodes: $(ls /dev/input 2>/dev/null | tr '\n' ' ')" > /dev/ttyS0
 
 dbus-daemon --system 2>/dev/null
 
@@ -170,7 +183,7 @@ while :; do
         --start-maximized "$URL" \
         -- /usr/bin/X :0 vt1 -nolisten tcp -quiet 2>&1 \
       | tee /tmp/x.log \
-      | grep --line-buffered -iE "error|fatal|check failed|crash|abort|killed" \
+      | grep --line-buffered -iE "error|fatal|check failed|crash|abort|killed|input device|libinput|no input" \
       > /dev/ttyS0
     # A CRASHED BROWSER SHOULD SAY WHY ON THE WIRE THE HARNESS IS READING.
     # The renderer died three times with 'Aw, Snap! Error code: 8' and NOTHING
