@@ -755,11 +755,16 @@ void uno_vmm_tick(void)
          * still on a 16 K boundary would otherwise log every frame. */
         if ((g_lin.exits & 0x3FFF) == 0 && g_lin.exits != logged_exits) {
             logged_exits = g_lin.exits;
-            {   char w[64];
+            {   char w[64], k[80];
                 uno_vnet_bridge_str(w, (int)sizeof w);
+                /* The keyboard's own count, because "the guest ignores what
+                 * I type" has two halves and they need separating: whether
+                 * the emulated controller ever emitted the scancodes, and
+                 * whether anything inside consumed them. */
+                uno_vdev_input_str(k, (int)sizeof k);
                 uno_dbg_log("vm linux: %d exits %d pio, sitting on port %x, "
-                            "%d lines, %s", g_lin.exits, g_lin.pio,
-                            g_lin.last_port, g_lin.lines, w);
+                            "%d lines, %s, %s", g_lin.exits, g_lin.pio,
+                            g_lin.last_port, g_lin.lines, w, k);
             }
         }
         if (g_lin.lines != lines || !g_lin_armed) {
