@@ -770,11 +770,26 @@ void uno_vdev_mouse(int dx, int dy, unsigned buttons, int wheel)
     k8_init();
     if (!K8.aux_stream || !(K8.ccb & 0x02)) return;
     if (aq_n() > K8Q - 8) { K8.dropped++; return; } /* stay ahead of typing */
-    if (dx < -255) dx = -255;
-    if (dx > 255)  dx = 255;
-    dy = -dy;
-    if (dy < -255) dy = -255;
-    if (dy > 255)  dy = 255;
+    dy = -dy;                                       /* PS/2 y counts up     */
+    /* A MOVEMENT LARGER THAN ONE PACKET IS SPLIT, not clipped.  A PS/2 packet
+     * carries +-255, and clipping a long drag silently shortens it - which
+     * makes the guest's pointer drift away from the host's by exactly the
+     * amount thrown away, and no amount of aiming can correct a target that
+     * moves when you reach for it. */
+    while (dx > 255 || dx < -255 || dy > 255 || dy < -255) {
+        int sx = dx > 255 ? 255 : (dx < -255 ? -255 : dx);
+        int sy = dy > 255 ? 255 : (dy < -255 ? -255 : dy);
+        u8 h = (u8)(0x08 | (buttons & 7)
+                  | (u8)((sx < 0) ? 0x10 : 0) | (u8)((sy < 0) ? 0x20 : 0));
+        if (aq_n() > K8Q - 8) { K8.dropped++; return; }
+        aq_push(h);
+        aq_push((u8)(sx & 0xFF));
+        aq_push((u8)(sy & 0xFF));
+        if (K8.aux_id == 3) aq_push(0);
+        K8.packets++;
+        dx -= sx;
+        dy -= sy;
+    }
     b0 = 0x08 | (u8)(buttons & 7)
        | (u8)((dx < 0) ? 0x10 : 0) | (u8)((dy < 0) ? 0x20 : 0);
     aq_push(b0);
