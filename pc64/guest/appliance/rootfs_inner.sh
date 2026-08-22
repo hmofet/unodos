@@ -21,7 +21,8 @@ apk add --root $R --initdb --no-cache \
     chromium \
     font-dejavu \
     dbus \
-    ca-certificates ca-certificates-bundle
+    ca-certificates ca-certificates-bundle \
+    openbox xdotool
 
 # The appliance's init.  PID 1 after the initramfs switch_root.  The rootfs
 # is mounted read-only off virtio-blk (the layer below can only read), so
@@ -165,31 +166,53 @@ done
 # the page somebody asked for - 20,213 frames arrived on the first bridged run
 # and none of them were the website.  Every flag below turns off traffic
 # nobody asked for; none of them touch rendering.
-URL=${UNO_URL:-https://$UNO_SITE/}
-while :; do
-    xinit /usr/bin/chromium \
-        --no-sandbox --disable-gpu --disable-dev-shm-usage \
-        --no-first-run --no-default-browser-check --disable-infobars \
-        --password-store=basic --disable-sync \
-        --disable-background-networking --disable-component-update \
-        --disable-domain-reliability --disable-breakpad \
-        --disable-client-side-phishing-detection --no-pings \
-        --safebrowsing-disable-auto-update --metrics-recording-only \
-        --disable-features=OptimizationHints,MediaRouter \
-        --renderer-process-limit=1 --process-per-site \
-        --disable-hang-monitor --disable-session-crashed-bubble \
-        --js-flags=--max-old-space-size=192 \
-        --window-position=0,0 --window-size=800,600 \
-        --start-maximized "$URL" \
-        -- /usr/bin/X :0 vt1 -nolisten tcp -quiet 2>&1 \
-      | tee /tmp/x.log \
-      | grep --line-buffered -iE "error|fatal|check failed|crash|abort|killed|input device|libinput|no input" \
+#
+# A WINDOW MANAGER, because focus is not decoration.  With no WM, X gives the
+# keyboard to whatever the pointer happens to be over (PointerRoot), so a
+# browser can be rendering perfectly and still receive nothing typed at it -
+# which is what a whole run looked like, with the keyboard, the input nodes
+# and udev all provably fine.  openbox takes the window, focuses it, and the
+# keys land.
+export UNO_URL_ENV=${UNO_URL:-https://$UNO_SITE/}
+cat > /usr/share/uno/session.sh <<'SESSEOF'
+#!/bin/sh
+openbox &
+sleep 3
+exec chromium \
+    --no-sandbox --disable-gpu --disable-dev-shm-usage \
+    --no-first-run --no-default-browser-check --disable-infobars \
+    --password-store=basic --disable-sync \
+    --disable-background-networking --disable-component-update \
+    --disable-domain-reliability --disable-breakpad \
+    --disable-client-side-phishing-detection --no-pings \
+    --safebrowsing-disable-auto-update --metrics-recording-only \
+    --disable-features=OptimizationHints,MediaRouter \
+    --renderer-process-limit=1 --process-per-site \
+    --disable-hang-monitor --disable-session-crashed-bubble \
+    --js-flags=--max-old-space-size=192 \
+    --window-position=0,0 --window-size=800,600 \
+    --start-maximized "$UNO_URL_ENV"
+SESSEOF
+chmod +x /usr/share/uno/session.sh
+
+# What X thinks its input devices are, once it has said so.  Xorg logs to its
+# own file, so none of this reaches the pipe below.
+(
+  while [ ! -f /var/log/Xorg.0.log ]; do sleep 2; done
+  sleep 25
+  echo "uno: xorg: $(grep -c 'Using input driver' /var/log/Xorg.0.log) input devices" \
       > /dev/ttyS0
-    # A CRASHED BROWSER SHOULD SAY WHY ON THE WIRE THE HARNESS IS READING.
-    # The renderer died three times with 'Aw, Snap! Error code: 8' and NOTHING
-    # in the kernel log - no fault, no OOM - because the browser killed its
-    # own child; its stderr was the only place that knew, and it was going to
-    # a file inside a guest nobody could read.
+  grep -E "Using input driver|AutoAddDevices|no input driver" /var/log/Xorg.0.log \
+      | head -4 > /dev/ttyS0
+) &
+
+URL=$UNO_URL_ENV
+while :; do
+    xinit /usr/share/uno/session.sh \
+      -- /usr/bin/X :0 vt1 -nolisten tcp -quiet 2>&1 \
+      | tee /tmp/x.log \
+      | grep --line-buffered -iE "error|fatal|check failed|crash|abort|killed|libinput" \
+      > /dev/ttyS0
     echo "uno: browser exited, restarting" > /dev/ttyS0
     sleep 2
 done
