@@ -180,7 +180,16 @@ def main():
             # of Backspace empties it without needing Ctrl+A either.  One
             # less thing between the test and what it is testing.
             print("driving the browser to %s ..." % nav)
-            key(0, scan=0x10, settle=1.5)             # F6 -> the address bar
+            # BOTH WAYS INTO THE ADDRESS BAR, because F6 alone did not do it:
+            # in Chromium F6 cycles between browser panes and where it lands
+            # first depends on what is showing, while Ctrl+L is unambiguous.
+            # Ctrl now survives the trip (the Display view forwards it as
+            # ASCII 1..26, which the emulated keyboard turns back into a held
+            # Ctrl), so it is worth the retry that earlier runs could not make.
+            link.key(0, ord('l'), 1, timeout=10)      # Ctrl+L
+            time.sleep(1.5)
+            key(0, scan=0x10, settle=1.0)             # F6, in case it did not
+            key(0, scan=0x10, settle=1.0)
             for _ in range(45):
                 key(ord('\b'), settle=0.06)
             for ch in nav:
