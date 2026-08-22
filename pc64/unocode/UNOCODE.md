@@ -235,6 +235,10 @@ Not implemented (and therefore not pretended): hover providers, definition
 providers, diagnostics from extensions, webviews, tree-view containers, tasks
 contributed from JavaScript, and the `Uri` class beyond plain paths.
 
+That list is about what an **extension** may contribute, and it is unchanged by
+section 8: the editor gets diagnostics and completions from language servers
+directly, over a client written in C, without going through this API at all.
+
 ---
 
 ## 3. Colour themes
@@ -451,6 +455,27 @@ takes a document offset.
 `UcProblem` stores **1-based code-point** columns, because that is what
 `uc_offset_of()` consumes and what the Problems panel's click already hands it.
 
+### 8.2 Completions
+
+Where a server answers, its list replaces the local one entirely - the word
+scraper's whole point is to be useful in a language nothing understands, and
+mixing its guesses into an answer that does understand the language makes the
+good half harder to find. Where no server answers, nothing changes.
+
+Three things follow from the protocol being asynchronous and the widget not
+being:
+
+- The widget opens on the local list and is **replaced** when the reply lands.
+- Every request carries a **generation**; a reply from a superseded generation
+  is dropped. This is why the widget never shows completions for a prefix you
+  have already finished typing.
+- A reply with no items **closes** the widget, because it may have been opened
+  empty on the strength of a server merely being attached.
+
+Ranking is the **server's**, not the fuzzy matcher's: it knows which overload
+is in scope and which member is private, and a score derived from how the
+letters line up does not.
+
 ---
 
 ---
@@ -503,6 +528,10 @@ typed into a *document*.
   platform's own store, the `AI: Set API Key` / `AI: Clear API Key` commands
   with a masked input box, and the store named on screen whenever a key is
   saved. Keys never enter `SETTINGS.JSN`.
+- **1.7** (2026-08-22) Completions from language servers (UCD-24). Where a
+  server answers, its list replaces the scraped words, in its order and with
+  its kinds and signatures; where none does - plaintext, or pc64, where there
+  are no processes at all - the word scraper is untouched and still the answer.
 - **1.6** (2026-08-21) Diagnostics from language servers (UCD-23): squiggles
   under the reported range, marks in the minimap and on a new overview ruler,
   the Problems panel and the status-bar counts fed from real servers, and the

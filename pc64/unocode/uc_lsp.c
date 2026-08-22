@@ -955,6 +955,36 @@ int uc_lsp_pos_json(UcDoc *d, int off, char *out, int cap)
     return 1;
 }
 
+/* The shape almost every language feature asks in: "this method, about this
+ * position, in this document" (UCD-24 onwards).  completion, hover, definition,
+ * references, prepareRename and rename all take TextDocumentPositionParams, and
+ * a caller that built it itself would be re-deriving the URI and re-doing the
+ * UTF-16 conversion at each of six call sites.
+ *
+ * `extra` is appended inside the object, so it must start with a comma:
+ * ",\"context\":{\"triggerKind\":1}".  NULL for the plain form. */
+int uc_lsp_request_at(UcDoc *d, const char *method, int off, const char *extra,
+                      UcLspReplyFn cb, void *user)
+{
+    UcLsp *s = uc_lsp_for_doc(d);
+    char *b = 0; int len = 0, cap = 0, id;
+    char uri[UC_FULL_MAX + 16], pos[64], esc[UC_FULL_MAX * 3];
+    if (!s || !method) return 0;
+    if (!uc_lsp_doc_uri(d, uri, (int)sizeof uri)) return 0;
+    if (!uc_lsp_pos_json(d, off, pos, (int)sizeof pos)) return 0;
+    uc_lsp_esc(esc, (int)sizeof esc, uri);
+    buf_str(&b, &len, &cap, "{\"textDocument\":{\"uri\":\"");
+    buf_str(&b, &len, &cap, esc);
+    buf_str(&b, &len, &cap, "\"},\"position\":");
+    buf_str(&b, &len, &cap, pos);
+    if (extra && extra[0]) buf_str(&b, &len, &cap, extra);
+    buf_str(&b, &len, &cap, "}");
+    if (!b) return 0;
+    id = uc_lsp_request(s, method, b, cb, user);
+    free(b);
+    return id;
+}
+
 /* ---- diagnostics (UCD-23) -------------------------------------------------
  * This lives in the transport's own file rather than beside the Problems model
  * because it is the only code that needs the private sync table: a

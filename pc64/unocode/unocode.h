@@ -598,6 +598,15 @@ void uc_suggest_retrigger(UcDoc *d);
 /* extensions add items while a request is open (uc_api.c calls this) */
 int  uc_suggest_add(const char *label, const char *detail, const char *insert,
                     int kind);
+/* Reading the list back, for the status bar and the tests.  Whether the
+ * completions came from a language server or from the word scraper is the one
+ * thing a screenshot of the widget cannot say. */
+int  uc_suggest_count(void);
+int  uc_suggest_from_server(void);
+const char *uc_suggest_label(int i);
+const char *uc_suggest_detail(int i);
+const char *uc_suggest_insert(int i);
+int  uc_suggest_kind_at(int i);
 enum { UC_CI_TEXT = 0, UC_CI_METHOD, UC_CI_FUNCTION, UC_CI_VARIABLE,
        UC_CI_CLASS, UC_CI_KEYWORD, UC_CI_SNIPPET, UC_CI_FILE, UC_CI_PROPERTY };
 

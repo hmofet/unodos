@@ -164,4 +164,14 @@ int uc_lsp_offset_to_u16(UcDoc *d, int off);
  * request's params. */
 int uc_lsp_pos_json(UcDoc *d, int off, char *out, int cap);
 
+/* Ask `method` about a position in `d` - the shape completion, hover,
+ * definition, references and rename all take.  Builds the URI and does the
+ * UTF-16 conversion, so no feature has to.  Returns the request id, or 0 when
+ * there is no ready server for this document.
+ *
+ * `extra` is appended inside the params object and must therefore START WITH A
+ * COMMA, e.g. ",\"context\":{\"triggerKind\":1}".  NULL for the plain form. */
+int uc_lsp_request_at(UcDoc *d, const char *method, int off, const char *extra,
+                      UcLspReplyFn cb, void *user);
+
 #endif

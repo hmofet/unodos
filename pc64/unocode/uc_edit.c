@@ -27,6 +27,7 @@
  * that is dropped whenever the theme changes.
  * ======================================================================== */
 #include "unocode.h"
+#include "uc_lsp.h"
 
 /* ---- metrics ---------------------------------------------------------------- */
 static int g_mono = -1, g_px = 14, g_cw = 8, g_lh = 16, g_asc = 12;
@@ -264,9 +265,13 @@ static int   find_rx_bad;
 /* ---- suggestions -------------------------------------------------------------- */
 #define SUG_MAX 64
 typedef struct {
-    char label[48];
-    char detail[40];
-    char insert[80];
+    /* Wider than the word-scraper needed (UCD-24).  A server's label is a
+     * whole overload name and its detail is a full signature - `const
+     * std::vector<T> &` is already most of the old 40 bytes - and a truncated
+     * completion is worse than none, because it inserts. */
+    char label[64];
+    char detail[96];
+    char insert[128];
     int  kind;
     int  score;
 } UcSuggest;
@@ -274,6 +279,12 @@ static UcSuggest sug[SUG_MAX];
 static int  sug_n, sug_sel, sug_on, sug_scroll;
 static int  sug_word_start;
 static char sug_prefix[48];
+/* 1 when the list on screen came from a language server rather than from the
+ * word scraper.  Read by uc_suggest_from_server(), which is how a test can
+ * tell a real completion list from a plausible-looking local one. */
+static int  sug_from_server;
+/* defined below with the rest of the language-server path (UCD-24) */
+static void sug_ask_server(UcDoc *d, int caret);
 
 /* ---- painting ----------------------------------------------------------------- */
 static void draw_hscroll_clip(UcRect r) { fb_set_clip(r.x, r.y, r.w, r.h); }
@@ -1244,7 +1255,31 @@ int uc_find_event(UcRect ed, const unoui_event *e)
  * in a language nothing knows about), and whatever extension providers return.
  * ======================================================================== */
 int uc_suggest_active(void) { return sug_on; }
-void uc_suggest_close(void) { sug_on = 0; sug_n = 0; uc_ctx_set("suggestWidgetVisible", 0); }
+
+/* Reading the list back.  The suggestion widget is the one piece of UI whose
+ * correctness a screenshot cannot show - "did clangd's members arrive, in the
+ * server's order, with the right kinds" is a question about content - so the
+ * list is readable and the headless driver prints it (UCD-24). */
+int uc_suggest_count(void) { return sug_on ? sug_n : 0; }
+int uc_suggest_from_server(void) { return sug_from_server; }
+const char *uc_suggest_label(int i)
+{ return (i >= 0 && i < sug_n) ? sug[i].label : ""; }
+const char *uc_suggest_detail(int i)
+{ return (i >= 0 && i < sug_n) ? sug[i].detail : ""; }
+const char *uc_suggest_insert(int i)
+{ return (i >= 0 && i < sug_n) ? sug[i].insert : ""; }
+int uc_suggest_kind_at(int i)
+{ return (i >= 0 && i < sug_n) ? sug[i].kind : -1; }
+/* The generation bump is what stops a reply that is still in flight from
+ * reopening a widget the user has just dismissed (UCD-24). */
+static int sug_gen;
+void uc_suggest_close(void)
+{
+    sug_on = 0;
+    sug_n = 0;
+    sug_gen++;
+    uc_ctx_set("suggestWidgetVisible", 0);
+}
 
 int uc_suggest_add(const char *label, const char *detail, const char *insert,
                    int kind)
@@ -1317,10 +1352,16 @@ void uc_suggest_open(UcDoc *d, int explicit_req)
         memcpy(sug_prefix, d->text + sug_word_start, (unsigned long)n);
         sug_prefix[n] = 0;
     }
+    /* A new request context, so any reply still in flight is now stale
+     * (UCD-24).  Bumped BEFORE the early return, or closing the widget by
+     * typing a space would leave the previous generation current and let its
+     * reply reopen the widget. */
+    sug_gen++;
     if (!explicit_req && !sug_prefix[0]) { uc_suggest_close(); return; }
     sug_n = 0;
     sug_sel = 0;
     sug_scroll = 0;
+    sug_from_server = 0;
     uc_api_completions(d, c);
     uc_ext_snippets(d, sug_prefix);
     collect_keywords(d);
@@ -1337,11 +1378,200 @@ void uc_suggest_open(UcDoc *d, int explicit_req)
             }
     }
     sug_sort();
-    sug_on = sug_n > 0;
+    /* Ask the server too.  The local list is what is on screen NOW; the
+     * server's answer replaces it when it arrives.  An explicit Ctrl+Space with
+     * a server attached opens the widget even when the local sources found
+     * nothing, because something is about to arrive and a widget that flickered
+     * shut and back open would be worse than one that is briefly empty. */
+    sug_on = sug_n > 0 || uc_lsp_for_doc(d) != 0;
+    sug_ask_server(d, c);
     uc_ctx_set("suggestWidgetVisible", sug_on);
 }
 
 void uc_suggest_retrigger(UcDoc *d) { uc_suggest_open(d, 0); }
+
+/* ---------------------------------------------------------------------------
+ * Completions from a language server (UCD-24).
+ *
+ * THE WIDGET IS SYNCHRONOUS AND THE PROTOCOL IS NOT.  uc_suggest_open() has to
+ * return with something on screen; the server answers frames later.  So the
+ * local sources still run first and the widget opens on them, and the server's
+ * answer REPLACES the list when it lands.  A widget that waited would either
+ * block the frame loop or flash empty for a hundred milliseconds on every
+ * keystroke, and both are worse than a list that improves.
+ *
+ * A REPLY THAT ARRIVES TOO LATE MUST BE THROWN AWAY.  The user keeps typing
+ * while the request is in flight, so by the time it answers the prefix may be
+ * different, the widget closed, or the document changed.  Every request carries
+ * the generation it was sent in; a reply whose generation is no longer current
+ * is dropped.  Comparing "is a request outstanding" instead would accept an old
+ * reply that overtook a newer one, and the symptom - a completion list for a
+ * prefix you have already finished typing - is one nobody would think to blame
+ * on ordering. */
+#define SUG_REQ 8
+static int sug_req[SUG_REQ];           /* the generation each slot was sent in */
+static int sug_req_at;
+
+/* LSP's CompletionItemKind is 1..25 and UnoCode's UC_CI_* is 0..8, and they
+ * are NOT the same numbering even where the names line up - LSP's Text is 1
+ * and ours is 0, so a straight cast is wrong for every single value.  Indexed
+ * by the LSP kind; entry 0 is unused because LSP starts at 1. */
+static const unsigned char kKindMap[26] = {
+    UC_CI_TEXT,                                     /*  0 unused           */
+    UC_CI_TEXT,      UC_CI_METHOD,   UC_CI_FUNCTION, /*  1 Text  2 Method  3 Function */
+    UC_CI_FUNCTION,  UC_CI_PROPERTY, UC_CI_VARIABLE, /*  4 Ctor  5 Field   6 Variable */
+    UC_CI_CLASS,     UC_CI_CLASS,    UC_CI_CLASS,    /*  7 Class 8 Iface   9 Module   */
+    UC_CI_PROPERTY,  UC_CI_TEXT,     UC_CI_VARIABLE, /* 10 Prop 11 Unit   12 Value    */
+    UC_CI_CLASS,     UC_CI_KEYWORD,  UC_CI_SNIPPET,  /* 13 Enum 14 Keyw   15 Snippet  */
+    UC_CI_TEXT,      UC_CI_FILE,     UC_CI_TEXT,     /* 16 Colour 17 File 18 Ref      */
+    UC_CI_FILE,      UC_CI_PROPERTY, UC_CI_VARIABLE, /* 19 Folder 20 EnumMem 21 Const */
+    UC_CI_CLASS,     UC_CI_METHOD,   UC_CI_KEYWORD,  /* 22 Struct 23 Event 24 Operator*/
+    UC_CI_CLASS                                      /* 25 TypeParameter              */
+};
+
+static int lsp_kind(int k)
+{
+    if (k < 1 || k > 25) return UC_CI_TEXT;
+    return kKindMap[k];
+}
+
+/* What to actually insert.  textEdit.newText wins over insertText wins over the
+ * label; the edit's RANGE is deliberately ignored and sug_word_start is used
+ * instead.  For a word completion the two are the same range, and honouring an
+ * edit range computed against the text as it was when the request went out
+ * would apply it to text that has since been typed into. */
+static const char *item_insert(UcJson *it)
+{
+    UcJson *te = uc_json_member(it, "textEdit");
+    const char *s;
+    if (te) {
+        s = uc_json_str(te, "newText", 0);
+        if (s && s[0]) return s;
+    }
+    s = uc_json_str(it, "insertText", 0);
+    if (s && s[0]) return s;
+    return uc_json_str(it, "label", "");
+}
+
+/* The server's own detail line.  clangd puts the return type in `detail` and
+ * the parameter list in `labelDetails.detail`; pyright uses `detail` alone. */
+static void item_detail(UcJson *it, char *out, int cap)
+{
+    UcJson *ld = uc_json_member(it, "labelDetails");
+    const char *d = uc_json_str(it, "detail", "");
+    uc_scpy(out, d ? d : "", cap);
+    if (ld) {
+        const char *sfx = uc_json_str(ld, "detail", "");
+        if (sfx && sfx[0]) {
+            if (out[0]) uc_scat(out, " ", cap);
+            uc_scat(out, sfx, cap);
+        }
+    }
+}
+
+static void sug_lsp_reply(UcJson *result, UcJson *error, void *user)
+{
+    int gen = *(int *)user;
+    UcJson *items, *it;
+    int rank;
+    if (gen != sug_gen || !sug_on) return;   /* the moment has passed */
+
+    /* NOTHING TO OFFER STILL HAS TO BE ANSWERED.  The widget may have been
+     * opened empty on the strength of a server being attached, so a reply with
+     * no items - or an error, or the (0,0) that means the server died with the
+     * request outstanding - has to close it.  Left alone it is an empty box
+     * that never goes away and swallows Tab and Escape. */
+    items = 0;
+    if (result && !error)
+        items = (result->type == UJ_ARR) ? result
+                                         : uc_json_member(result, "items");
+    if (!items || items->type != UJ_ARR || items->n <= 0) {
+        if (!sug_n) { uc_suggest_close(); uc_repaint(); }
+        return;
+    }
+
+    sug_n = 0;
+    sug_sel = 0;
+    sug_scroll = 0;
+    sug_from_server = 1;
+    rank = 0;
+    for (it = items->child; it && sug_n < SUG_MAX; it = it->next) {
+        const char *label = uc_json_str(it, "label", "");
+        char detail[96];
+        int i = sug_n;
+        if (!label || !label[0]) continue;
+        /* clangd pads a label with a leading space to sort it; it is not part
+         * of the name and inserting it would be wrong */
+        while (*label == ' ') label++;
+        item_detail(it, detail, (int)sizeof detail);
+        if (!uc_suggest_add(label, detail, item_insert(it),
+                            lsp_kind((int)uc_json_num(it, "kind", 1))))
+            continue;
+        /* The SERVER'S order, not the fuzzy matcher's.  It knows which
+         * overload is in scope and which member is private; a rank derived
+         * from the prefix knows only how the letters line up, and would put an
+         * unreachable symbol above the obvious one whenever the spelling
+         * happened to suit it better. */
+        sug[i].score = 100000 - rank++;
+    }
+    sug_sort();
+    sug_on = sug_n > 0;
+    uc_ctx_set("suggestWidgetVisible", sug_on);
+    uc_repaint();
+}
+
+/* Is the character just before the caret one the SERVER declared as a trigger?
+ *
+ * Asked of the server's capabilities rather than assumed, because the set is
+ * per-language and not guessable: clangd registers ".", ">", ":" and "\"",
+ * pyright registers "." and "[", and a hard-coded "." would silently mis-report
+ * every other one. */
+static int trigger_char_at(UcDoc *d, int caret, char *out)
+{
+    UcLsp *s = uc_lsp_for_doc(d);
+    UcJson *caps = s ? uc_lsp_caps(s) : 0;
+    UcJson *cp = caps ? uc_json_member(caps, "completionProvider") : 0;
+    UcJson *tc = cp ? uc_json_member(cp, "triggerCharacters") : 0;
+    UcJson *it;
+    char prev;
+    *out = 0;
+    if (!tc || tc->type != UJ_ARR || caret <= 0) return 0;
+    prev = d->text[caret - 1];
+    for (it = tc->child; it; it = it->next)
+        if (it->type == UJ_STR && it->str && it->str[0] == prev && !it->str[1]) {
+            *out = prev;
+            return 1;
+        }
+    return 0;
+}
+
+/* Fire a completion request for the caret, if a server is serving this file. */
+static void sug_ask_server(UcDoc *d, int caret)
+{
+    char extra[64], trig = 0;
+    int *slot;
+    if (!uc_lsp_for_doc(d)) return;
+    slot = &sug_req[sug_req_at];
+    sug_req_at = (sug_req_at + 1) % SUG_REQ;
+    *slot = sug_gen;
+    /* triggerKind 1 = Invoked, 2 = TriggerCharacter.  Servers use it to decide
+     * whether to offer everything in scope or only what may follow the
+     * character - the difference between a member list and a translation unit -
+     * so it is worth reporting truthfully rather than conveniently. */
+    if (trigger_char_at(d, caret, &trig)) {
+        char esc[8];
+        esc[0] = trig; esc[1] = 0;
+        uc_scpy(extra, ",\"context\":{\"triggerKind\":2,\"triggerCharacter\":\"",
+                (int)sizeof extra);
+        if (trig == '"' || trig == '\\') uc_scat(extra, "\\", (int)sizeof extra);
+        uc_scat(extra, esc, (int)sizeof extra);
+        uc_scat(extra, "\"}", (int)sizeof extra);
+    } else {
+        uc_scpy(extra, ",\"context\":{\"triggerKind\":1}", (int)sizeof extra);
+    }
+    uc_lsp_request_at(d, "textDocument/completion", caret, extra,
+                      sug_lsp_reply, slot);
+}
 
 static void sug_accept(UcDoc *d)
 {
@@ -1390,7 +1620,20 @@ void uc_suggest_draw(UcRect ed, UcDoc *d)
 {
     EdLayout L;
     int line, vcol, x, y, i, rows, h, w = 300;
-    if (!sug_on || !d) return;
+    /* sug_on can be set with an empty list: the widget opens on the strength of
+     * a server being attached and fills when the reply lands (UCD-24).  Drawing
+     * an empty box in the meantime would flash a grey rectangle under the caret
+     * on every keystroke. */
+    if (!sug_on || sug_n <= 0 || !d) return;
+    /* A server's labels and signatures are far wider than a scraped word, and
+     * a fixed 300 shows `operator<<` next to a truncated `std::basic_ostream`.
+     * Measure the widest row and grow, still bounded by the editor. */
+    for (i = 0; i < sug_n; i++) {
+        int need = 40 + uc_ui_text_w(sug[i].label);
+        if (sug[i].detail[0]) need += uc_ui_text_w(sug[i].detail) + 20;
+        if (need > w) w = need;
+    }
+    if (w > 720) w = 720;
     L = ed_layout(ed, d);
     caret_col_of(d, d->cur[d->ncur - 1].caret, &line, &vcol);
     x = L.text.x + (vcol - d->scroll_col) * g_cw - 20;
