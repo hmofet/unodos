@@ -481,6 +481,22 @@ static int carve_memtype(void)
 
 /* A3 state, declared here so the selftest can arm it (below). */
 #define SLICE_BUDGET_US 4000u
+/* THE GUEST GETS MORE WHEN THE GUEST IS WHAT YOU ARE LOOKING AT.  4 ms of a
+ * 16 ms frame is a quarter of a core, which is right for an appliance
+ * running in the background and brutal for an interactive one: Chromium's
+ * own hang detector kills a renderer that cannot answer an IPC in time, and
+ * on a quarter core it fires on a browser that is merely slow - a sad tab
+ * with NOTHING in the kernel log, no fault, no OOM, because the browser
+ * killed its own child.
+ *
+ * So a window showing the guest's display raises the budget to 10 ms, which
+ * still leaves the shell its frame (the desktop's own render is ~0.5 ms and
+ * the hitch threshold is 100 ms), and drops back the moment that view is not
+ * on screen.  The shell is cooperative and single-core, so this is a policy
+ * decision made in one place rather than a scheduler. */
+#define SLICE_FOCUS_US 10000u
+static int g_lin_focus;
+void uno_vmm_focus_display(int on) { g_lin_focus = on ? 1 : 0; }
 #define SLICE_TEST_N    120          /* frames, not seconds: QEMU draws slowly */
 
 static const uno_hv_t *g_hv;
@@ -726,7 +742,10 @@ void uno_vmm_tick(void)
     if (g_lin_armed && g_hv) {
         int lines = g_lin.lines;
         static int logged_exits = -1;
-        if (!uno_hvp_linux_slice(g_hv, SLICE_BUDGET_US, &g_lin)) g_lin_armed = 0;
+        if (!uno_hvp_linux_slice(g_hv,
+                                 g_lin_focus ? SLICE_FOCUS_US : SLICE_BUDGET_US,
+                                 &g_lin))
+            g_lin_armed = 0;
         uno_dbg_heartbeat();
         /* A kernel that stops printing has not necessarily stopped: it can
          * be spinning on a port waiting for hardware nobody emulated. The
