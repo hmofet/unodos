@@ -1066,6 +1066,10 @@ static void c_suggest(void)    { UcDoc *d = D(); if (d) uc_suggest_open(d, 1); }
 /* Show the hover at the CARET rather than the pointer (UCD-25).  The pointer
  * is where the mouse happens to be, which during a keyboard-driven session is
  * wherever it was abandoned - usually over some other file entirely. */
+static void c_goto_def(void)   { UcDoc *d = D(); if (d) uc_goto_definition(d); }
+static void c_find_refs(void)  { UcDoc *d = D(); if (d) uc_find_references(d); }
+static void c_nav_back(void)   { uc_nav_back(); }
+static void c_nav_fwd(void)    { uc_nav_forward(); }
 static void c_hover(void)
 {
     UcDoc *d = D();
@@ -1364,6 +1368,10 @@ void uc_cmd_init(void)
     reg("editor.action.outdentLines", "Edit", "Outdent Line", c_outdent);
     reg("editor.action.triggerSuggest", "Edit", "Trigger Suggest", c_suggest);
     reg("editor.action.showHover", "Edit", "Show Hover", c_hover);
+    reg("editor.action.revealDefinition", "Go", "Go to Definition", c_goto_def);
+    reg("references-view.findReferences", "Go", "Find All References", c_find_refs);
+    reg("workbench.action.navigateBack", "Go", "Go Back", c_nav_back);
+    reg("workbench.action.navigateForward", "Go", "Go Forward", c_nav_fwd);
     reg("editor.action.jumpToBracket", "Edit", "Go to Bracket", c_jump_bracket);
     reg("editor.action.cancelSelectionOrOperation", "Edit", "Cancel", c_escape);
 
@@ -1449,6 +1457,13 @@ void uc_cmd_init(void)
     bind("ctrl+[", "editor.action.outdentLines", "editorTextFocus");
     bind("ctrl+space", "editor.action.triggerSuggest", "editorTextFocus");
     bind("ctrl+k ctrl+i", "editor.action.showHover", "editorTextFocus");
+    bind("f12", "editor.action.revealDefinition", "editorTextFocus");
+    bind("shift+f12", "references-view.findReferences", "editorTextFocus");
+    /* Alt+Left and Alt+Right are not editor-only: coming back from a jump is
+     * something you want from the Search results and the Problems panel too,
+     * which is where a jump often started. */
+    bind("alt+left", "workbench.action.navigateBack", 0);
+    bind("alt+right", "workbench.action.navigateForward", 0);
     bind("ctrl+b", "workbench.action.toggleSidebarVisibility", 0);
     bind("ctrl+shift+e", "workbench.view.explorer", 0);
     bind("ctrl+shift+f", "workbench.view.search", 0);

@@ -259,6 +259,70 @@ static int uri_of_path(const char *path, char *out, int cap)
     return 1;
 }
 
+/* The inverse (UCD-26): a `file://` URI back to the editor's own addressing.
+ *
+ * Returns 0 when the URI names something OUTSIDE the workspace - a system
+ * header, a file in another checkout - because the editor addresses files by
+ * volume and has no way to open one it was never given. That is a real answer,
+ * not a failure: "go to definition" on `printf` lands in /usr/include, and
+ * saying so is better than opening nothing and explaining nothing.
+ *
+ * `dir` comes back in the CORE'S dialect, backslash-separated, because that is
+ * what uc_doc_open() takes. */
+int uc_lsp_uri_to_path(const char *uri, int *vol, char *dir, int dcap,
+                       char *name, int ncap)
+{
+    char path[UC_FULL_MAX], root[UC_FULL_MAX];
+    const char *p;
+    int n = 0, rl, i, cut;
+
+    if (dcap > 0) dir[0] = 0;
+    if (ncap > 0) name[0] = 0;
+    if (!uri || strncmp(uri, "file://", 7)) return 0;
+    p = uri + 7;
+    /* percent-decoding, in place into `path` */
+    while (*p && n < (int)sizeof path - 1) {
+        if (p[0] == '%' && p[1] && p[2]) {
+            int hi = -1, lo = -1, k;
+            for (k = 0; k < 2; k++) {
+                char c = p[1 + k];
+                int v = (c >= '0' && c <= '9') ? c - '0'
+                      : (c >= 'a' && c <= 'f') ? c - 'a' + 10
+                      : (c >= 'A' && c <= 'F') ? c - 'A' + 10 : -1;
+                if (k == 0) hi = v; else lo = v;
+            }
+            if (hi >= 0 && lo >= 0) { path[n++] = (char)(hi * 16 + lo); p += 3; continue; }
+        }
+        path[n++] = *p++;
+    }
+    path[n] = 0;
+    /* "/C:/x" came from uri_of_path adding the root slash a drive letter lacks */
+    if (path[0] == '/' && path[1] && path[2] == ':') memmove(path, path + 1,
+                                                             (unsigned long)n);
+
+    *vol = UC.ws_vol;
+    if (!uc_proc_workdir(UC.ws_vol, "", root, (int)sizeof root)) return 0;
+    rl = (int)strlen(root);
+    while (rl > 0 && root[rl - 1] == '/') rl--;
+    if (strncmp(path, root, (unsigned long)rl)) return 0;   /* outside */
+    if (path[rl] != '/') return 0;
+    p = path + rl + 1;
+    if (!*p) return 0;
+
+    cut = -1;
+    for (i = 0; p[i]; i++) if (p[i] == '/' || p[i] == '\\') cut = i;
+    if (cut < 0) {
+        uc_scpy(name, p, ncap);
+    } else {
+        int k;
+        for (k = 0; k < cut && k < dcap - 1; k++)
+            dir[k] = (p[k] == '/') ? '\\' : p[k];   /* the core's dialect */
+        dir[k] = 0;
+        uc_scpy(name, p + cut + 1, ncap);
+    }
+    return name[0] ? 1 : 0;
+}
+
 int uc_lsp_doc_uri(UcDoc *d, char *out, int cap)
 {
     char path[UC_FULL_MAX];

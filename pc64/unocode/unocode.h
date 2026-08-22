@@ -469,6 +469,21 @@ UcDoc  *uc_doc_at(int i);
 UcDoc  *uc_doc_active(void);
 int     uc_doc_active_index(void);
 int     uc_doc_caret(UcDoc *d);          /* the last cursor's offset      */
+
+/* The navigation stack (UCD-26): a browser history of caret locations, so
+ * Alt+Left comes back from a Go to Definition.  A location is a path and a
+ * line, never a UcDoc * - documents live in a shifting array and are closed
+ * while history still refers to them. */
+int  uc_nav_goto(int vol, const char *dir, const char *name, int line, int col);
+/* The two halves, for a caller that must open the destination before it knows
+ * where in it to land - by then "where we are" is the destination. */
+void uc_nav_mark(void);
+int  uc_nav_to(int vol, const char *dir, const char *name, int line, int col);
+int  uc_nav_back(void);
+int  uc_nav_forward(void);
+int  uc_nav_can_back(void);
+int  uc_nav_can_forward(void);
+void uc_nav_clear(void);
 void    uc_doc_activate(int i);
 
 /* ---- editor groups (UCD-18) ------------------------------------------------
@@ -603,6 +618,12 @@ void uc_hover_draw(UcRect workbench);
 void uc_hover_tick(UcDoc *d);          /* fires the request after a dwell   */
 void uc_hover_at(UcDoc *d, int off, int px, int py);   /* or ask directly   */
 void uc_hover_close(void);
+
+/* Go to definition and find all references (UCD-26).  Both are asynchronous:
+ * they send a request and return, and the answer moves the caret or fills the
+ * Search view frames later. */
+void uc_goto_definition(UcDoc *d);
+void uc_find_references(UcDoc *d);
 int  uc_hover_active(void);
 const char *uc_hover_text(void);       /* "" when nothing is showing        */
 void uc_suggest_retrigger(UcDoc *d);
@@ -656,6 +677,17 @@ void uc_search_cancel(void);
 /* Replace across every file with a hit (UCD-13).  One undo step per file, and
  * the files are left open and dirty rather than saved. */
 void uc_search_replace_all(void);
+/* Fill the Search view with results that did not come from a text search
+ * (UCD-26: find all references).  Same model, same grouping, same clicks -
+ * a second panel would have been a second scroll model and a second set of row
+ * arithmetic to show the same shape of answer. */
+void uc_results_begin(const char *label);
+int  uc_results_add(const char *relpath, int line, const char *text);
+void uc_results_end(void);
+int  uc_results_count(void);
+const char *uc_results_path(int i);      /* workspace-relative                */
+int  uc_results_line(int i);             /* 1-based                           */
+const char *uc_results_text(int i);
 void uc_notif_draw(UcRect r);
 void uc_notif_tick(void);
 
@@ -942,6 +974,7 @@ const char *uc_status_msg_get(void);
 void uc_toggle_panel(int tab);
 void uc_show_panel(int tab);      /* open it; never the closing half        */
 void uc_toggle_sidebar(int view);
+void uc_show_view(int view);      /* open it; never a toggle (UCD-26) */
 
 /* ---- host queries (uc_main.c, uc_edit.c) -----------------------------------
  * A HOSTED platform - UnoCode Desktop, which owns a real OS window rather than

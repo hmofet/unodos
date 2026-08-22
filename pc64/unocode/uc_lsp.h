@@ -108,6 +108,13 @@ UcLsp *uc_lsp_for_doc(UcDoc *d);
  * failure (an untitled document has no URI and cannot be sent). */
 int uc_lsp_doc_uri(UcDoc *d, char *out, int cap);
 
+/* And back (UCD-26).  0 when the URI names something outside the workspace - a
+ * system header, another checkout - which is a real answer rather than a
+ * failure: the editor addresses files by volume and cannot open one it was
+ * never given.  `dir` comes back backslash-separated, as uc_doc_open takes. */
+int uc_lsp_uri_to_path(const char *uri, int *vol, char *dir, int dcap,
+                       char *name, int ncap);
+
 /* Talking to a server ---------------------------------------------------- */
 
 /* A reply.  Exactly one of `result` and `error` is non-NULL.  Both are owned by

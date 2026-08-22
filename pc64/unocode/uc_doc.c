@@ -1603,3 +1603,147 @@ void uc_doc_free_all(void)
 /* The caret offset, for a host that may not include unocode.h (the headless
  * --hover driver).  Same opaque-handle convention as uc_doc_active(). */
 int uc_doc_caret(UcDoc *d) { return (d && d->ncur) ? d->cur[d->ncur - 1].caret : 0; }
+
+/* ===========================================================================
+ * The navigation stack (UCD-26).
+ *
+ * Alt+Left and Alt+Right, and it is the half of "go to definition" people
+ * actually feel: jumping into a symbol is only useful if getting back is one
+ * key rather than a hunt through the tab strip for the file you were in and a
+ * scroll to the line you were on.
+ *
+ * IT IS A BROWSER HISTORY, NOT A STACK, and the difference matters.  A stack
+ * would let you go back and never forward again, so a back pressed one time too
+ * many is unrecoverable.  Here the current position is an INDEX into a list:
+ * going back walks it down, going forward walks it up, and only a NEW jump
+ * truncates whatever was ahead.
+ *
+ * A LOCATION IS A PATH, NOT A DOCUMENT POINTER.  Documents live in a shifting
+ * array and are closed while history still refers to them, so an entry that
+ * held a UcDoc * would come to mean a different file (see uc_lsp.c's
+ * sync_reresolve for the same trap).  It holds (volume, directory, name, line,
+ * column) and re-opens by name, which also means history survives closing a
+ * tab - which is exactly when you want it.
+ * ======================================================================== */
+#define UC_NAV_MAX 32
+typedef struct {
+    int  vol, line, col;
+    char dir[UC_PATH_MAX];
+    char name[UC_NAME_MAX];
+} UcNavLoc;
+
+static UcNavLoc g_nav[UC_NAV_MAX];
+static int g_nnav;          /* entries in use                                */
+static int g_navat = -1;    /* where we are in them; -1 = nowhere yet        */
+
+static int nav_here(UcNavLoc *out)
+{
+    UcDoc *d = uc_doc_active();
+    if (!d || d->vol < 0 || !d->name[0]) return 0;
+    memset(out, 0, sizeof *out);
+    out->vol = d->vol;
+    uc_scpy(out->dir, d->dir, sizeof out->dir);
+    uc_scpy(out->name, d->name, sizeof out->name);
+    out->line = uc_line_of(d, d->cur[d->ncur - 1].caret);
+    out->col  = uc_col_of(d, d->cur[d->ncur - 1].caret);
+    return 1;
+}
+
+static int nav_same_place(const UcNavLoc *a, const UcNavLoc *b)
+{
+    /* Same LINE, not same column.  Otherwise moving the caret along a line and
+     * jumping leaves a history entry per column, and Alt+Left walks sideways
+     * through a line nobody wants to revisit. */
+    return a->vol == b->vol && a->line == b->line &&
+           !strcmp(a->dir, b->dir) && !strcmp(a->name, b->name);
+}
+
+static void nav_append(const UcNavLoc *loc)
+{
+    if (g_navat >= 0 && nav_same_place(&g_nav[g_navat], loc)) return;
+    if (g_navat + 1 >= UC_NAV_MAX) {
+        /* full: drop the oldest and slide down, so the most recent history is
+         * what survives - the far end is the part nobody goes back to */
+        int i;
+        for (i = 0; i < UC_NAV_MAX - 1; i++) g_nav[i] = g_nav[i + 1];
+        g_navat--;
+    }
+    g_nav[++g_navat] = *loc;
+    g_nnav = g_navat + 1;          /* anything ahead is discarded */
+}
+
+static int nav_go(const UcNavLoc *loc)
+{
+    int di = uc_doc_open(loc->vol, loc->dir, loc->name);
+    UcDoc *d;
+    if (di < 0) return 0;
+    d = uc_doc_at(di);
+    if (!d) return 0;
+    uc_move_to(d, uc_offset_of(d, loc->line, loc->col), 0);
+    uc_focus(UC_F_EDITOR);
+    uc_repaint();
+    return 1;
+}
+
+/* Record where we are.  SEPARATE from the move, because a caller may have to
+ * open the destination before it can work out where in it to land - Go to
+ * Definition converts a UTF-16 column, which needs the target document's actual
+ * bytes - and by then "where we are" is already the destination.  That bug
+ * looks exactly like history not being recorded at all: the entry is written,
+ * it just describes the wrong place, and then the arrival is skipped as a
+ * duplicate of it. */
+void uc_nav_mark(void)
+{
+    UcNavLoc here;
+    if (nav_here(&here)) nav_append(&here);
+}
+
+/* Go somewhere already-recorded-from, and record the arrival. */
+int uc_nav_to(int vol, const char *dir, const char *name, int line, int col)
+{
+    UcNavLoc there;
+    memset(&there, 0, sizeof there);
+    there.vol = vol;
+    uc_scpy(there.dir, dir ? dir : "", sizeof there.dir);
+    uc_scpy(there.name, name ? name : "", sizeof there.name);
+    there.line = line;
+    there.col = col;
+    if (!nav_go(&there)) return 0;
+    nav_append(&there);
+    return 1;
+}
+
+/* Both halves, for the callers that have not moved yet. */
+int uc_nav_goto(int vol, const char *dir, const char *name, int line, int col)
+{
+    uc_nav_mark();
+    return uc_nav_to(vol, dir, name, line, col);
+}
+
+int uc_nav_can_back(void)    { return g_navat > 0; }
+int uc_nav_can_forward(void) { return g_navat >= 0 && g_navat + 1 < g_nnav; }
+
+int uc_nav_back(void)
+{
+    if (!uc_nav_can_back()) return 0;
+    /* Keep where we are, if the caret has wandered since the last entry - going
+     * back from a place history never recorded would lose it. */
+    {
+        UcNavLoc here;
+        if (nav_here(&here) && !nav_same_place(&g_nav[g_navat], &here) &&
+            g_navat + 1 < UC_NAV_MAX) {
+            g_nav[g_navat] = here;
+        }
+    }
+    g_navat--;
+    return nav_go(&g_nav[g_navat]);
+}
+
+int uc_nav_forward(void)
+{
+    if (!uc_nav_can_forward()) return 0;
+    g_navat++;
+    return nav_go(&g_nav[g_navat]);
+}
+
+void uc_nav_clear(void) { g_nnav = 0; g_navat = -1; }
