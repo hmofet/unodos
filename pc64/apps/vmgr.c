@@ -429,9 +429,11 @@ static void vm_frame(void)
      * find out would cost more than the swizzle.  The shell's present layer
      * already diffs rows, so a quiet guest still costs no VRAM writes. */
     if (g_view == V_DISPLAY) {
+        uno_vm_focus_display(1);          /* it is what the user is watching */
         if (uno_vm_fb(0, 0)) pc64_shell_dirty();
         return;
     }
+    uno_vm_focus_display(0);
     if (g_view != V_CONSOLE || !g_follow) return;
     s = uno_vm_con_seq();
     if (s == g_seen) return;

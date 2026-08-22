@@ -151,6 +151,11 @@ const char *uno_vmm_linux_str(void);
  * recognise XRGB. */
 void *uno_vmm_fb(int *w, int *h);
 
+/* The guest's window is (or is not) the thing on screen.  A displayed guest
+ * gets a bigger slice of each frame, because an interactive one at a quarter
+ * core trips its own software's timeouts. */
+void uno_vmm_focus_display(int on);
+
 /* Two lines for the boot env block, the System window and the `vm` verb:
  *   "vmx rev 0x0d ept wb 2m 1g unrestricted vpid preempt apicv=no phys=39"
  *   "eligible: no - firmware disabled virtualization (...)"

@@ -209,6 +209,7 @@ const char *uno_vm_path_disk(void)
  * a module links uno_vm_*, and how a framebuffer or a keystroke reaches the
  * machinery below is this file's business, not the app's. */
 void *uno_vm_fb(int *w, int *h) { return uno_vmm_fb(w, h); }
+void uno_vm_focus_display(int on) { uno_vmm_focus_display(on); }
 void uno_vm_input_char(int ch) { uno_vdev_kbd_char(ch); }
 void uno_vm_input_scan(int efi_scan) { uno_vdev_kbd_scan(efi_scan); }
 void uno_vm_input_mouse(int dx, int dy, unsigned buttons, int wheel)

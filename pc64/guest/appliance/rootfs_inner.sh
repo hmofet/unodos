@@ -164,11 +164,20 @@ while :; do
         --safebrowsing-disable-auto-update --metrics-recording-only \
         --disable-features=OptimizationHints,MediaRouter \
         --renderer-process-limit=1 --process-per-site \
+        --disable-hang-monitor \
         --js-flags=--max-old-space-size=192 \
         --window-position=0,0 --window-size=800,600 \
         --start-maximized "$URL" \
-        -- /usr/bin/X :0 vt1 -nolisten tcp -quiet \
-        >/tmp/x.log 2>&1
+        -- /usr/bin/X :0 vt1 -nolisten tcp -quiet 2>&1 \
+      | tee /tmp/x.log \
+      | grep --line-buffered -iE "error|fatal|check failed|crash|abort|killed" \
+      > /dev/ttyS0
+    # A CRASHED BROWSER SHOULD SAY WHY ON THE WIRE THE HARNESS IS READING.
+    # The renderer died three times with 'Aw, Snap! Error code: 8' and NOTHING
+    # in the kernel log - no fault, no OOM - because the browser killed its
+    # own child; its stderr was the only place that knew, and it was going to
+    # a file inside a guest nobody could read.
+    echo "uno: browser exited, restarting" > /dev/ttyS0
     sleep 2
 done
 EOF
