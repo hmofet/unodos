@@ -176,6 +176,21 @@ say "uno-gimp: profile $GPROF pluginrc=$([ -f "$GPROF"/*/pluginrc ] && echo yes 
 IMG=${UNO_IMAGE:-/usr/share/uno/canvas.ppm}
 [ -f "$IMG" ] || IMG=""
 
+# THE ONE PROBE THAT SPLITS THE REMAINING QUESTION, run once before the GUI.
+# GIMP dies three seconds into startup under unovirt and never under plain
+# QEMU, and "startup" covers two entirely different stacks: babl and GEGL
+# (pure computation, CPUID-dispatched SIMD, no display) and GTK/XWayland
+# (a display server on a framebuffer with no GPU).  `gimp -i` runs the first
+# and none of the second.
+#
+# If this crashes too, the display has nothing to do with it and the fault is
+# in the CPU the hypervisor presents.  If it survives, the fault is above
+# babl and the display path is where to look.  Either way the next change is
+# aimed rather than guessed - and it costs one line and a few seconds.
+gimp -i -b '(gimp-quit 0)' > /tmp/gimp-console.log 2>&1
+say "uno-gimp: headless probe rc=$? (gimp -i, no display: babl+GEGL only)"
+tail -6 /tmp/gimp-console.log | sed 's/^/uno-gimp[probe]| /' > /dev/ttyS0 2>/dev/null
+
 n=0
 while :; do
     n=$((n + 1))
