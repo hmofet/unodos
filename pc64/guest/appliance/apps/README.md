@@ -63,3 +63,20 @@ compositor.
 |---|---|---|---|
 | `chromium` | Chromium on Ozone/Wayland | `cage` | rendering, network, and a host-typed address navigating a real browser (M5) |
 | `gimp` | GIMP 2.10 (GTK2) under XWayland | `labwc` | several windows, independently placed and focused, driven by a host-side pointer |
+| `android` | Firefox for Android, in a Waydroid container | `cage` | a FOREIGN package running as the appliance: a whole Android under the client, drawing through SwiftShader, taking i8042 keystrokes, and reaching the internet through its own NAT |
+
+### The android appliance needs two things the others do not
+
+**An APK in the build directory.** `apps/android.app` bakes `/out/firefox.apk`
+into the image and **fails the build** if it is not there, because an appliance
+with no app boots to a black screen, which is what every other failure in this
+directory also looks like. `cp firefox-x86_64.apk /work/unodos-guest/firefox.apk`.
+
+**A second virtio-blk carrying ANDROID.IMG** (`build_android.sh`). The client
+probes `/dev/vdb`, `/dev/vdc`, `/dev/vdd` and says which one it found, because
+the slot depends on the host.
+
+Its client is not a program that draws - it is a container manager, and almost
+all of it is environment rather than command line. `docs/ANDROID-APPLIANCE-PLAN.md`
+§4 lists the four faults that stood between "the container boots" and "a person
+can use Firefox"; none of them named the thing that was wrong.

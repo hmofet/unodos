@@ -47,7 +47,7 @@ grep -q "^CONFIG_MODULES=y" "$WORK/kbuild/.config" && {
 # that no longer matches anything merges silently and produces a kernel that
 # boots fine and cannot start a container.  Checking the .config is the only
 # place that distinguishes "asked for" from "got".
-for opt in ANDROID_BINDER_IPC ANDROID_BINDERFS NAMESPACES NET_NS PID_NS            CGROUPS CGROUP_DEVICE CGROUP_FREEZER VETH BRIDGE NF_NAT PSI            SND_VIRTIO; do
+for opt in ANDROID_BINDER_IPC ANDROID_BINDERFS NAMESPACES NET_NS PID_NS            CGROUPS CGROUP_DEVICE CGROUP_FREEZER VETH BRIDGE NF_NAT PSI            SND_VIRTIO BPF_SYSCALL CGROUP_BPF INET_DIAG            IPV6_MULTIPLE_TABLES IPV6_SUBTREES NETFILTER_XT_MATCH_OWNER; do
     grep -q "^CONFIG_$opt=y" "$WORK/kbuild/.config" || {
         echo "MISSING: CONFIG_$opt (android set) did not make it into .config" >&2
         exit 1; }

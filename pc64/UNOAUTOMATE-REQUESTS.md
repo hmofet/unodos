@@ -10382,3 +10382,31 @@ never completes a command hangs the machine silently and unboundedly. Same
 class of bug as the xHCI deadlines fixed on 2026-07-29 (`USB.md` "deadlines
 must be durations"). It is a first-contact-with-new-silicon driver and it
 should not be able to spin forever.
+
+## 2026-08-23 CLAIM + SEAM: the appliance's shared init, from the android lane
+
+**Claim.** The android lane (`docs/ANDROID-APPLIANCE-PLAN.md` P1) took
+`pc64/guest/appliance/apps/android.app`, `android_loop.sh`, `android_shell.sh`,
+and the `# android` blocks in `unodos-guest.config` / `build_kernel.sh`. Those
+are this lane's own files and its agreed append points.
+
+**Seam, and it is not this lane's file: `rootfs_inner.sh`.** The plan said this
+lane would not touch it. It had to, because **the system dbus has never started
+in ANY appliance** and the Android one is the first that needs it:
+
+- `uno-init` ran `dbus-daemon --system` BEFORE writing the machine-id that dbus
+  refuses to start without.
+- The tmpfs mounted over `/var` buries alpine-baselayout's `/var/run -> /run`
+  symlink, so the daemon also had nowhere to bind its socket:
+  `Failed to bind socket "/var/run/dbus/system_bus_socket": No such file or
+  directory`.
+
+Neither existing appliance could see this - Chromium and GIMP both want the
+SESSION bus, which is started after the id exists and therefore works. The fix
+is four moved lines plus two symlinks, in `seam:` commit of its own, and it can
+only make the other two appliances more correct. `apps/android.app` ALSO does
+both defensively, so the appliance survives an older common half; if that
+duplication ever reads as noise, the `.app` half is the half to delete.
+
+Nothing is asked of the unoguest lane here. This entry exists so the change is
+visible to whoever owns `guest/` rather than discovered in a diff.
