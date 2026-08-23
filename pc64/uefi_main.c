@@ -1576,6 +1576,23 @@ void uno_pc64_init(void)
      * accounts + the audit chain; unoscript_boot() brings the scripting runtime
      * up.  Both fail closed - a missing/read-only store degrades to an in-RAM,
      * deny-by-default posture rather than opening anything. */
+    /* A STRANDED MACHINE STOPS HERE, WITH ITS DIAGNOSIS ON THE SCREEN.
+     *
+     * It has no system volume: the shell cannot load a module, the account
+     * store cannot be read or seeded, and nothing below this line can do
+     * anything but fail. Continuing was not harmless - unosec_boot() went
+     * looking for a store on whatever volume was left, which on the Surface
+     * Laptop Go meant another operating system's ESP through a driver that
+     * hangs on it, and the boot wedged there with the real cause four steps
+     * back. The splash already says what happened and what to do; hold that
+     * picture instead of walking into subsystems that cannot succeed. */
+    if (gDetachStranded) {
+        uno_dbg_log("stranded: halting before security bring-up - no system "
+                    "volume, and every subsystem below this point would be "
+                    "reaching for a disk that is not ours");
+        splash_stage(4, "detach failed - power off and remove the USB stick");
+        for (;;) __asm__ volatile ("hlt");
+    }
     splash_stage(4, "security (accounts / RBAC)");
 #ifdef UNO_SECTEST
     /* build-time gate: prove the escalation decision flips deny->allow.  Runs

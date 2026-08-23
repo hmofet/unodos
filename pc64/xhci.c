@@ -1217,6 +1217,85 @@ int uno_usb_intr_in(int h, void *data, int maxlen)
     return n;
 }
 
+/* ---- BIOS -> OS handoff (xHCI 1.2 section 7.1.1) ---------------------------
+ *
+ * NEVER IMPLEMENTED IN THIS DRIVER, and named in METAL-CHECKLIST as the likely
+ * reason for "enumerates in QEMU, never on metal" - QEMU's controller has no
+ * USB Legacy Support capability at all, so nothing here was ever exercised.
+ *
+ * On a real machine the firmware owns the controller and has SMIs armed on it.
+ * Until the OS claims ownership through this capability, the BIOS may keep
+ * servicing the controller from System Management Mode - re-initialising it
+ * behind us, taking port ownership back, or trapping our register writes into
+ * SMM where they do something other than what we wrote. Every one of those
+ * looks like "the controller came up and found nothing".
+ *
+ * Sequence: walk the extended capability list for id 1, set the OS Owned
+ * semaphore, wait for the BIOS to drop its own, then clear every SMI enable
+ * and acknowledge the write-1-to-clear SMI status bits. On timeout, take it
+ * anyway - a firmware that will not let go is not a reason to have no USB, and
+ * this is what Linux does (pci-quirks.c quirk_usb_handoff_xhci).
+ *
+ * Bit map of USBLEGCTLSTS, which is why the masks look arbitrary: 0,4,13,14,15
+ * are SMI enables, 1-3 / 5-12 / 17-19 are reserved and must be preserved,
+ * 29-31 are RW1C status. */
+#define XECP_LEGACY        1
+#define LEG_BIOS_OWNED     (1u << 16)
+#define LEG_OS_OWNED       (1u << 24)
+#define LEG_CTL_KEEP       ((0x7u << 1) | (0xFFu << 5) | (0x7u << 17))
+#define LEG_CTL_SMI_STS    (0x7u << 29)
+static void legacy_handoff(void)
+{
+    u32 hcc = rd32(g_cap, CAP_HCCPARAMS1);
+    u32 off = (hcc >> 16) & 0xFFFFu;        /* xECP: dwords from the cap base */
+    volatile u8 *p;
+    int guard;
+    if (!off || hcc == 0xFFFFFFFFu) {
+        uno_dbg_log("xhci: no extended capability list (xecp=0) - no handoff");
+        return;
+    }
+    p = g_cap + (uintptr_t)off * 4;
+    for (guard = 64; guard-- > 0; ) {
+        u32 cap = *(volatile u32 *)p;
+        u32 id = cap & 0xFFu, next = (cap >> 8) & 0xFFu;
+        if (cap == 0xFFFFFFFFu || id == 0) break;
+        if (id == XECP_LEGACY) {
+            int t;
+            u32 ctl;
+            if (cap & LEG_BIOS_OWNED) {
+                *(volatile u32 *)p = cap | LEG_OS_OWNED;
+                for (t = 0; t < 1000; t++) {           /* one real second */
+                    if (!(*(volatile u32 *)p & LEG_BIOS_OWNED)) break;
+                    uno_pc64_delay_ms(1);
+                }
+                if (*(volatile u32 *)p & LEG_BIOS_OWNED) {
+                    /* A firmware that will not hand over is not a reason to
+                     * have no USB. Clear its bit ourselves and carry on. */
+                    *(volatile u32 *)p =
+                        (*(volatile u32 *)p & ~LEG_BIOS_OWNED) | LEG_OS_OWNED;
+                    uno_dbg_log("xhci: BIOS would not release the controller "
+                                "in 1 s - taking it anyway");
+                } else {
+                    uno_dbg_log("xhci: BIOS released the controller after %d ms", t);
+                }
+            } else {
+                *(volatile u32 *)p = cap | LEG_OS_OWNED;
+                uno_dbg_log("xhci: legacy cap present, BIOS did not own it");
+            }
+            /* Silence the SMIs and ack the pending ones, or the firmware keeps
+             * being invoked for events that are now ours to handle. */
+            ctl = *(volatile u32 *)(p + 4);
+            *(volatile u32 *)(p + 4) = (ctl & LEG_CTL_KEEP) | LEG_CTL_SMI_STS;
+            uno_dbg_log("xhci: legacy handoff done, usblegctlsts %08x -> %08x",
+                        (unsigned)ctl, (unsigned)*(volatile u32 *)(p + 4));
+            return;
+        }
+        if (!next) break;
+        p += (uintptr_t)next * 4;
+    }
+    uno_dbg_log("xhci: no USB Legacy Support capability - nothing to hand off");
+}
+
 /* one bring-up attempt: reset -> rings -> run -> port scan -> enumerate.
  * Returns 1 if the controller ran (whether or not a device enumerated), 0 if
  * reset/run failed. HCE is checked by the caller so it can retry. */
@@ -1276,15 +1355,67 @@ static int xhci_bringup(void)
      * it makes every USBSTS we LOG from here on honest, and a stale EINT is a
      * live trap for the first person to enable interrupts. RW1C. */
     wr32(g_op, OP_USBSTS, STS_EINT);
-    mdelay(50);                        /* let the controller + any firmware activity settle */
+    uno_pc64_delay_ms(100);            /* let the controller + any firmware activity settle */
 
-    /* power + reset every root port, count the connected ones */
+    /* ---- root ports: POWER THEM ALL, THEN WAIT A REAL INTERVAL -------------
+     *
+     * This used to power each port and sample its connect bit a few thousand
+     * spin iterations later, one port at a time. Both halves were wrong on
+     * hardware and invisible in QEMU, where a device is present the instant
+     * the port is powered:
+     *
+     *  - the wait was a SPIN COUNT, so its real duration depended on the
+     *    optimiser. The spec wants Tpwrgood (>=20 ms) after Port Power before
+     *    the port means anything, and a device then needs to be debounced -
+     *    USB2 in tens of milliseconds, USB3 after link training.
+     *  - it was sampled ONCE. A port that had not finished connecting simply
+     *    read as empty, permanently.
+     *
+     * On the Surface Laptop Go that produced `ports=0 devs=0` from a
+     * controller with an internal keyboard, an internal touchpad, a camera,
+     * Bluetooth and a boot stick wired to it: bring-up "succeeded" and found
+     * nothing, because it looked before anything could have appeared.
+     *
+     * So: power every port first, pay ONE real settle, then poll the whole
+     * set until connects stop arriving or the budget runs out. */
+    for (i = 1; i <= g_maxports; i++) {
+        u32 sc = rd32(g_op, OP_PORTSC(i));
+        if (!(sc & PORTSC_PP))
+            wr32(g_op, OP_PORTSC(i), (sc & ~PORTSC_RW1CS) | PORTSC_PP);
+    }
+    uno_pc64_delay_ms(120);            /* Tpwrgood + a margin, once for all ports */
+    {   int waited, seen = 0, prev = -1;
+        for (waited = 0; waited < 600; waited += 50) {
+            seen = 0;
+            for (i = 1; i <= g_maxports; i++)
+                if (rd32(g_op, OP_PORTSC(i)) & PORTSC_CCS) seen++;
+            /* stop as soon as the count stops growing - a stable non-zero
+             * count means every attached device has announced itself */
+            if (seen && seen == prev) break;
+            prev = seen;
+            uno_pc64_delay_ms(50);
+        }
+        uno_dbg_log("xhci: %d port(s) report a connection after %d ms of settling",
+                    seen, waited);
+    }
+    /* EVERY port, not only the connected ones. "ports=0" is the one reading
+     * that cannot be acted on: it does not say whether the ports are powered,
+     * disabled, in the wrong power state, or genuinely empty. One line each,
+     * and the answer is in the bits. */
+#ifdef UNO_DEBUG
+    for (i = 1; i <= g_maxports; i++) {
+        u32 sc = rd32(g_op, OP_PORTSC(i));
+        uno_dbg_log("xhci: port %d portsc=%08x ccs=%d ped=%d pp=%d pls=%d spd=%d",
+                    i, (unsigned)sc, (int)(sc & 1), (int)((sc >> 1) & 1),
+                    (int)((sc >> 9) & 1), (int)((sc >> 5) & 0xF),
+                    (int)PORTSC_SPEED(sc));
+    }
+#endif
+
+    /* reset + enumerate every port that reports a connection */
     g_nports_conn = 0;
     for (i = 1; i <= g_maxports; i++) {
         u32 sc = rd32(g_op, OP_PORTSC(i));
-        if (!(sc & PORTSC_PP)) { wr32(g_op, OP_PORTSC(i), (sc & ~PORTSC_RW1CS) | PORTSC_PP);
-                                 { int t=20000; while(t--) spin(4); } }
-        sc = rd32(g_op, OP_PORTSC(i));
         if (sc & PORTSC_CCS) { reset_port(i);
             { u32 after = rd32(g_op, OP_PORTSC(i));
               /* Per CONNECTED port, before and after the reset. A port that
@@ -1374,6 +1505,9 @@ int uno_xhci_init(void)
     uno_dbg_log("xhci: caplen=%d slots=%d ports=%d csz=%d hcs1=%08x hcc=%08x",
                 g_caplen, g_maxslots, g_maxports, g_csz,
                 (unsigned)hcs1, (unsigned)hcc);
+    /* Claim the controller from the firmware BEFORE touching its registers.
+     * Once only - the retry loop below re-resets, it does not re-negotiate. */
+    legacy_handoff();
 
     /* A fresh HCRST + re-init recovers from an intermittent HC error (the
      * firmware-handoff race), so retry a few times until it comes up clean and
