@@ -137,6 +137,7 @@ static int xhci_at(int dev, int fn)
 /* ---- the verdict ---------------------------------------------------------- */
 static int   g_done, g_is_usb, g_ok, g_nbot, g_matched, g_deep;
 static unsigned short g_vid, g_pid;     /* the boot stick's USB id */
+static int g_hc_dev = -1, g_hc_fn = -1; /* PCI dev/fn of the boot controller */
 static const char *g_why = "not evaluated";
 
 static void evaluate(void)
@@ -155,6 +156,13 @@ static void evaluate(void)
         g_why = "USB boot controller is not xHCI";
         return;
     }
+    /* LATCH WHICH CONTROLLER THAT IS, for xhci.c to open post-detach.
+     *
+     * It has to be latched HERE, on the ordinary pre-EBS path that the detach
+     * gate always walks, and not computed on demand later: a device path can
+     * only be read while the firmware is alive, and by the time xhci.c wants
+     * the answer the firmware is gone. */
+    g_hc_dev = cdev; g_hc_fn = cfn;
 
     /* Which USB interface is the stick?  Prefer the one whose device path the
      * boot path extends - that is the boot device by construction. Some
@@ -251,6 +259,11 @@ static void hid_evaluate(void)
             continue;                                  /* not on an xHCI        */
         if (proto == 1) g_hid_kbd = 1;                 /* boot keyboard         */
         if (proto == 2) g_hid_ptr = 1;                 /* boot mouse            */
+        /* WHICH controller each one is on, not merely that it is on "an"
+         * xHCI. On a machine with two controllers the native stack opens ONE,
+         * so a keyboard on the other is a keyboard we can see and cannot
+         * have - and the summary line below cannot express that. */
+        uno_dbg_log("usbboot: hid iface %d proto=%d on %02x.%d", i, proto, cdev, cfn);
     }
     g_hid_why = g_hid_kbd ? "USB boot keyboard reachable on the xHCI"
               : deep      ? "USB keyboard is too many hubs deep to address"
@@ -306,16 +319,10 @@ void uno_usbboot_status(int *is_usb, int *nbot, int *matched, const char **why)
  * everything else here - after detach the latched values are what remain. */
 int uno_usbboot_hc_loc(int *dev, int *fn)
 {
-    static int done, ok, g_dev = -1, g_fn = -1;
-    if (!done && !uno_pc64_detached()) {
-        const unsigned char *dp = (const unsigned char *)uno_pc64_boot_dp();
-        ok = dp_pci(dp, &g_dev, &g_fn);
-        if (!ok) { g_dev = -1; g_fn = -1; }
-        done = 1;
-    }
-    if (dev) *dev = g_dev;
-    if (fn)  *fn  = g_fn;
-    return ok;
+    ensure();                       /* latched by evaluate(), pre-EBS */
+    if (dev) *dev = g_hc_dev;
+    if (fn)  *fn  = g_hc_fn;
+    return g_hc_dev >= 0;
 }
 
 /* ONE LINE FOR THE SCREEN: what the takeover actually achieved.
