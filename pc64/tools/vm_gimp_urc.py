@@ -297,6 +297,7 @@ def main():
         painted = False
         seen = len(guest_log())
         crashes = 0
+        census = []                 # the appliance's own top-level count
         for i in range(waits):
             time.sleep(90)
             # THE GUEST'S OWN WORDS FIRST, THE PIXELS SECOND.  A black
@@ -308,14 +309,35 @@ def main():
             seen += len(fresh)
             for ln in fresh:
                 print("  guest| %s" % ln)
-                if "exited rc=" in ln:
+                if "exited rc=" in ln and "probe rc=0" not in ln:
                     crashes += 1
+                # "uno-layout: 800x600, toolbox=.. layers=.. canvas=.., N top-levels"
+                if "top-levels" in ln:
+                    try:
+                        census[:] = [int(ln.split("top-levels")[0].split()[-1])]
+                    except (ValueError, IndexError):
+                        pass
             w, h, rgba = shot("02_wait%02d" % i)
             d = dark_fraction(w, h, rgba)
             print("  guest surface %.0f%% dark" % (d * 100))
+            # THE CENSUS DECIDES, AND THE PIXELS ONLY VOTE.  `dark_fraction`
+            # came from the browser appliance, where cage gives its single
+            # client the whole output and a running session really does mean
+            # the black area collapses.  Under a stacking window manager it
+            # does not: labwc's root stays black around the windows, so a
+            # perfectly healthy multi-window session sat at 36% for a whole
+            # run while the test waited for 12% that could never arrive.  A
+            # threshold calibrated on one appliance is not a fact about
+            # appliances.  gimp-layout.sh counts its own top-levels on ttyS0
+            # every launch, which is a number the guest asserts rather than
+            # one the host infers from a photograph.
+            if census and census[0] >= 3:
+                painted = True
+                print("  the appliance reports %d top-levels" % census[0])
+                break
             if d < 0.12:
                 painted = True
-                print("  the guest is showing a session, not a console")
+                print("  the guest surface stopped being a console")
                 break
             # DO NOT WAIT OUT A CRASH LOOP.  The restart loop in gimp.sh is
             # there to survive one bad launch; three in a row is a client that
