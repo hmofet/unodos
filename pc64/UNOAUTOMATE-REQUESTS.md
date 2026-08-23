@@ -10310,3 +10310,26 @@ Two items from those entries stay OPEN and are NOT closed by this landing: the
 harness's pointer aim (the counters say the loss is above the emulated i8042,
 and counting events sent against packets emitted is the next measurement), and
 F12 never reaching an app in a debug build, which is the shell lane's to answer.
+
+### CLAIM + three requests: Surface Laptop Go detach (usb-stack lane, 2026-08-23)
+
+**Claiming the usb stack** (`xhci.*`, `usbio.*`, `usbhid.*`, `usbmsc.*`,
+`usbboot.*`) for the Surface Laptop Go bring-up on branch `surfgo-xhci`.
+Plan: `docs/SURFGO-DETACH-PLAN.md`. The machine detaches today and then hangs
+on "starting desktop" (post-`try_detach`, pre-"security" splash); its keyboard
+and touchpad are ELAN USB HID boot devices on the Ice Lake-LP xHCI, so the
+whole machine rides this lane. Requests to other lanes, all additive:
+
+1. **`uefi_main.c` boot wiring (shared choke-point):** two appended
+   `splash_stage(4, ...)` calls in the post-detach window (one naming each
+   step, one painting the takeover verdict string this lane provides), and a
+   `DETACH.CFG` word `nowrite` read by `cfg_word()` that skips the post-detach
+   telemetry writes for one boot. Plan §2 Phase 0a/0e.
+2. **debug harness:** call `uno_dbg_on_detach()` immediately after
+   `ExitBootServices` succeeds (before `uno_blk_detach()`), so the xHCI /
+   usbmsc / usbhid takeover runs under the IDT and the LAPIC watchdog instead
+   of in the blind window. No change to `uno_debug.c` itself is asked for.
+   Plan §2 Phase 0b.
+3. **detach gate:** none now. `docs/SURFACE-KEYBOARD.md`'s SAM branch is
+   refuted by the firmware's own UsbIo list (`04f3:0c5b` x2, class 03/01);
+   the doc should say so once Phase 2 confirms typing on a detached box.
