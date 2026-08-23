@@ -20,6 +20,7 @@
 #include "pc64_fs.h"
 #include "fat.h"
 #include "pc64_icons.h"     /* pc64_shell_theme */
+#include "pc64_pkg.h"       /* foreign packages install like apps  */
 #include <string.h>
 
 void pc64_shell_dirty(void);
@@ -46,6 +47,13 @@ typedef struct {
 static fm_pane fm_p[2];
 static int fm_two, fm_active;      /* two-pane on/off; which pane is active */
 static int fm_arm_del = -1;        /* Delete pressed once on this pane-sel   */
+/* Enter pressed once on a foreign package.  Same shape as fm_arm_del, and for
+ * the same reason: installing is not undoable by pressing Enter again, so it
+ * takes two deliberate presses with what is about to happen written between
+ * them.  The probe result is kept so the second press does not re-read the
+ * package. */
+static int fm_arm_pkg = -1;
+static uno_pkg_info fm_pkg;
 static char fm_status[96] = "Pick a file; ops need a native FAT volume.";
 static char fm_name[16];           /* the Name: field (rename / new folder)  */
 static unoui_text fm_name_t;
@@ -103,6 +111,7 @@ static void pane_refresh(fm_pane *P)
     if (P->sel < 0 && P->n > 0) P->sel = 0;
     if (P->scroll > P->n - 1) P->scroll = P->n > 0 ? P->n - 1 : 0;
     fm_arm_del = -1;
+    fm_arm_pkg = -1;
 }
 
 static void pane_up(fm_pane *P)
@@ -116,20 +125,109 @@ static void pane_up(fm_pane *P)
     pane_refresh(P);
 }
 
+/* Append to a bounded string.  Files builds its status line by hand rather
+ * than with snprintf because a status line is the one place a truncated
+ * message is better than none. */
+static void fm_app(char *d, int max, const char *s)
+{
+    int i = 0;
+    while (i < max && d[i]) i++;
+    while (s && *s && i < max - 1) d[i++] = *s++;
+    if (i < max) d[i] = 0;
+}
+
+static void fm_appnum(char *d, int max, long v)
+{
+    char t[24]; int n = 0, i = 0; char o[24];
+    if (v < 0) v = 0;
+    do { t[n++] = (char)('0' + (int)(v % 10)); v /= 10; } while (v && n < 23);
+    while (n) o[i++] = t[--n];
+    o[i] = 0;
+    fm_app(d, max, o);
+}
+
+/* Case-insensitive extension test.  Files used to do this inline, once, for
+ * ".UNO"; a second extension is where that stops being reasonable. */
+static int fm_ext_is(const char *name, const char *ext)
+{
+    int L = 0, E = 0, i;
+    while (name[L]) L++;
+    while (ext[E]) E++;
+    if (L < E + 1 || name[L - E - 1] != '.') return 0;
+    for (i = 0; i < E; i++) {
+        char a = name[L - E + i], b = ext[i];
+        if (a >= 'a' && a <= 'z') a = (char)(a - 'a' + 'A');
+        if (b >= 'a' && b <= 'z') b = (char)(b - 'a' + 'A');
+        if (a != b) return 0;
+    }
+    return 1;
+}
+
+/* A foreign package: probe it, say what it is, and install on a second press.
+ *
+ * THE APP THIS PRODUCES IS AN ORDINARY .UNO.  Files does not learn what an
+ * APK is beyond this function, the shell does not learn it at all, and the
+ * icon that appears afterwards goes through exactly the same app registry as
+ * every app built into this tree. */
+static void pane_pkg(fm_pane *P, const char *np)
+{
+    int key = (fm_two ? fm_active : 0) * 1000 + P->sel;
+    char msg[100];
+
+    if (fm_arm_pkg != key) {
+        int r = uno_pkg_probe(P->vol, np, &fm_pkg);
+        if (r < 0) { set_status("That is not a package this build understands."); return; }
+        if (r == 0) {
+            /* Refused, and the reason is the useful part: an ARM-only build
+             * of an app is not a slow app here, it is a crash at its first
+             * call into its own native code. */
+            msg[0] = 0;
+            fm_app(msg, sizeof msg, "That package carries ");
+            fm_app(msg, sizeof msg, fm_pkg.arch[0] ? fm_pkg.arch : "no");
+            fm_app(msg, sizeof msg, " code; this machine needs x86_64.");
+            set_status(msg);
+            return;
+        }
+        fm_arm_pkg = key;
+        msg[0] = 0;
+        fm_app(msg, sizeof msg, "Install ");
+        fm_app(msg, sizeof msg, fm_pkg.name);
+        if (fm_pkg.version[0]) {
+            fm_app(msg, sizeof msg, " ");
+            fm_app(msg, sizeof msg, fm_pkg.version);
+        }
+        fm_app(msg, sizeof msg, " (");
+        fm_appnum(msg, sizeof msg, (fm_pkg.size + 512 * 1024) / (1024 * 1024));
+        fm_app(msg, sizeof msg, " MB)? Press Enter again.");
+        set_status(msg);
+        return;
+    }
+    fm_arm_pkg = -1;
+    if (uno_pkg_install(P->vol, np, &fm_pkg, 0, msg, sizeof msg)) {
+        char done[100];
+        done[0] = 0;
+        fm_app(done, sizeof done, "Installed ");
+        fm_app(done, sizeof done, fm_pkg.name);
+        fm_app(done, sizeof done, " - it is on the desktop now.");
+        set_status(done);
+        pane_refresh(P);
+    } else {
+        set_status(msg[0] ? msg : "Install failed.");
+    }
+}
+
 static void pane_enter(fm_pane *P)
 {
     uno_fat_entry *E;
     if (P->sel < 0 || P->sel >= P->n) return;
     E = &P->e[P->sel];
     if (!E->is_dir) {
-        int L = 0; while (E->name[L]) L++;
-        if (L >= 4 && E->name[L-4] == '.' &&
-            (E->name[L-3] == 'U' || E->name[L-3] == 'u') &&
-            (E->name[L-2] == 'N' || E->name[L-2] == 'n') &&
-            (E->name[L-1] == 'O' || E->name[L-1] == 'o')) {
-            char np[120]; join_path(P, E->name, np, sizeof np);
+        char np[120]; join_path(P, E->name, np, sizeof np);
+        if (fm_ext_is(E->name, "UNO")) {
             if (pc64_shell_run_user(P->vol, np) == 0) set_status("Launched.");
             else set_status("Could not launch that .UNO.");
+        } else if (fm_ext_is(E->name, "APK")) {
+            pane_pkg(P, np);
         } else {
             set_status("That is a file (dirs open with Enter/Open).");
         }
@@ -361,8 +459,12 @@ static int fm_canvas_event(struct unoui_widget *w, const void *evp, void *ctx)
         fm_active = pi;
         row = (e->y - (pr.y + hdr)) / row_h();
         if (e->y >= pr.y + hdr && row >= 0 && P->scroll + row < P->n) {
+            /* The package arm is cleared only when the SELECTION MOVED.
+             * Clearing it unconditionally here would disarm, one line later,
+             * exactly what the re-click just armed - and the install would
+             * need three clicks, or never happen. */
             if (P->sel == P->scroll + row) pane_enter(P);   /* re-click opens */
-            else P->sel = P->scroll + row;
+            else { P->sel = P->scroll + row; fm_arm_pkg = -1; }
             fm_arm_del = -1;
         }
         pc64_shell_dirty();
@@ -395,6 +497,7 @@ static int fm_canvas_event(struct unoui_widget *w, const void *evp, void *ctx)
           if (P->sel < P->scroll) P->scroll = P->sel;
           if (rows > 0 && P->sel >= P->scroll + rows) P->scroll = P->sel - rows + 1; }
         fm_arm_del = -1;
+        fm_arm_pkg = -1;
         pc64_shell_dirty();
         return 1;
     }
