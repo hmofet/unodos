@@ -199,6 +199,52 @@ per format (ar+tar for `.deb`, cpio for `.rpm`) for the dialog; the ESP
 layout, shim and channel are identical. This is why the package half is
 designed first and Android is its first client rather than its shape.
 
+## 3.5 What the appliance's init must provide, measured
+
+**Android boots on the UnoDOS appliance kernel** (2026-08-23, `android_probe.sh`
+under plain QEMU): `Session: RUNNING`, `Container: RUNNING`, LXC PID 192,
+`zygote64`, `zygote`, `surfaceflinger`, `servicemanager`, `hwservicemanager`
+and `vndservicemanager` in the process list, and `waydroid app list` answering
+out of Android's own package manager with Settings and the AOSP keyboard.
+
+**Measured: the container alone is 820 MiB to 1000 MiB across runs** (about 32
+MiB of it kernel memory) with nothing running in it but the framework. Alpine,
+the compositor and a browser sit on top of that, which is what makes the 768 MB
+carve tier impossible and 1536 MB tight rather than comfortable - and the
+variance is itself the point: a figure that moves by 180 MiB between two
+identical boots is not one to size a carve against by taking the smaller
+reading. That number gets re-measured with Firefox actually running, and it is
+what P4 reports back.
+
+Getting there took **seven environment faults, and every one of them would
+have presented through the appliance as a black window.** They are listed
+because `apps/android.app` has to get all seven right and none of them is
+discoverable from Waydroid's documentation:
+
+| What was missing | How it presented |
+|---|---|
+| A writable **mount point** for the runtime image (`/usr/share/waydroid-extra/images`), created at BUILD time - the root is read-only | `mkdir` failed at boot, so the image had nowhere to mount, so Waydroid found no preinstalled images, so it tried to DOWNLOAD 1 GB, and reported a network error. Three layers of wrong answer from one missing directory |
+| **`sse4_2` in `/proc/cpuinfo`** | `x86_64 CPU does not support SSE4.2, falling back to x86...` - an INFO line, after which it looks for x86 images the appliance does not carry. QEMU's default CPU model has no sse4_2; `-cpu host` fixes the probe, and UnoDOS passes CPUID through, but a guest that masked leaf 1 ECX would break this silently |
+| **CA roots** | `CERTIFICATE_VERIFY_FAILED` - the same fault M3 hit and for the same reason: an Alpine rootfs ships no roots unless asked |
+| **DNS**, and `/etc/resolv.conf` on a writable path | `waydroid init` CANNOT tolerate being offline: `helpers/http.py`'s `retrieve()` catches only `ValueError` and `HTTPError`, so the `URLError` a DNS failure raises escapes and kills init - even with the images already preinstalled and it one line from deciding it does not need them |
+| A **system dbus** bus, with `/var/lib/dbus` and a machine-id | the container service never registers |
+| A **session dbus** bus (a different bus) | `Unable to autolaunch a dbus-daemon without a $DISPLAY for X11` - an X11 error message, on a Wayland-only appliance, for a missing environment variable |
+| A **writable `$HOME`** | `[Errno 30] Read-only file system: '//.local'` - a doubled slash that looks like a Waydroid bug and is an unset variable |
+
+Two structural facts worth keeping beside them:
+
+- **`waydroid init` needs binder**, so it cannot be run at build time on an
+  ordinary Linux box - `probeBinderDriver` runs before anything else and fails
+  on a kernel without it. The config is therefore generated on the guest, at
+  first boot, which is why the DNS row above matters. Pre-seeding
+  `waydroid.cfg` into ANDROID.IMG would remove the boot-time network
+  dependency entirely and is the obvious next hardening step.
+- **The container starts on a SESSION, not on `container start`.**
+  `waydroid container start` runs a service; the Android container itself
+  stays `STOPPED` until a session attaches to a Wayland display. A probe with
+  no compositor therefore looks like a total failure while everything under it
+  is working, which is exactly what happened.
+
 ## 4. Phases
 
 Each is one worktree off `origin/master`, lands small, and has an exit
