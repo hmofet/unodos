@@ -9998,3 +9998,53 @@ is already implemented - `win_in` and the WINDOW_ADJUST top-up are right there).
 unoxfer's SCP backend mitigates by reading after every single `ssh_poll` so the
 ring stays shallow, which makes the loss unlikely and not impossible. The fix
 belongs in unossh.
+
+---
+
+## 2026-08-23 — CLAIM: `unopkg`, foreign packages that install as ordinary apps (branch `unopkg`)
+
+**CLAIM (new subsystem):** taking `pc64_pkg.*` and `pc64/apps/foreign_shim.c` —
+the foreign package installer (double-click an `.APK` in Files, get a desktop
+icon) and the shim `.UNO` it generates per installed app. Contract will be
+`pc64/UNOPKG.md`; the `/AGENTS.md` row lands in the same commit as the first
+file. Plan: `docs/ANDROID-APPLIANCE-PLAN.md`.
+
+**CLAIM (appliance payload, shared with the GIMP lane):** taking the NEW files
+`pc64/guest/appliance/build_android.sh`, `android.prop`, `uno-android.sh`, and
+**appending only** to `unodos-guest.config` (an `# android` block, landed) and
+`build_kernel.sh` (its verify list, landed). `rootfs_inner.sh` will get exactly
+one appended `apk add` line and one `cp`, when P1 gets there — the GIMP lane's
+edits to that file are live and uncommitted today, so this lane rebases onto
+them rather than the other way round.
+
+**NOT claimed, and deliberately:** `unoguest` (the B0 channel + L1 window
+plumbing). Plan phases P3/P4 ARE that lane's B0/B1 with Android as their first
+real client. If nobody holds unoguest by the time P2 lands, this lane will claim
+it in a separate entry rather than quietly widening this one. P2 is built
+against a **stub runtime** precisely so it does not need the channel to exist.
+
+### Two requests, both small, neither blocking
+
+**1. To the app-registry lane (`uno_appdesc.h`, `pc64_modload.c`): an inline
+icon.** `icon:` names an emblem in `pc64_icons.h`. A foreign app has its own
+icon (Firefox's, GIMP's), which no emblem name can spell. Request: `icon: @`
+means "a QOI image follows the descriptor block", read by `uno_mod_desc_read`
+into the same per-app icon slot an emblem fills. `pc64_qoi.*` is already in
+that lane and `uno_appdesc.h` §"unknown keys are ignored" already makes this
+forward-compatible. **Stopgap in use meanwhile:** `icon: generic`, which is
+merely wrong-looking, not blocking.
+
+**2. To the unofs lane: write-at-offset** (already on file elsewhere; restating
+the consumer). Until it exists, an installed Android app's `/data` cannot
+persist, so every appliance boot reinstalls from the APK held on the ESP. That
+is P7 and it is designed around, not waited on.
+
+### One finding, recorded before it bites someone else
+
+**The 768 MB carve tier cannot host this and must refuse by name.**
+`uno_vmm_carve_mb()` gives a 2 GiB machine 768 MB; Alpine + cage + an Android
+container + Firefox is ~1 GB resident. The failure mode of not checking is the
+OOM killer inside the guest, which presents as "the app just did not open".
+P2's installer therefore reads `uno_vmm_carve_mb()` before it installs anything
+and says so in the dialog. No code change is asked of the unovirt lane for
+this; it is a consumer reading an existing call.
