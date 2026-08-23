@@ -677,12 +677,27 @@ static void arm_slice_clock(unsigned budget_us)
     vmwrite(VMX_PREEMPT_VALUE, ticks);
 }
 
+/* The guest's 512-byte legacy register file, and somewhere to park the host's
+ * while the guest owns the real one.  File-static because this backend is
+ * single-vCPU by construction (one `g_vmcs`, handed to every vcpu_create); if
+ * that ever stops being true these move into `uno_vcpu` beside the GPRs, for
+ * exactly the reason the GPRs are there. */
+static unsigned char g_guest_fpu[UNO_FPU_AREA] __attribute__((aligned(16)));
+static unsigned char g_host_fpu[UNO_FPU_AREA]  __attribute__((aligned(16)));
+static int g_fpu_ready;
+
 static int vmx_vcpu_run(uno_vcpu *v, unsigned budget_us, uno_vmexit *out)
 {
     int swap = g_guest_xcr0 && host_osxsave();
     u64 t0;
     if (g_preempt_on && budget_us) arm_slice_clock(budget_us);
     if (!v->quiet) tracex("[hv] vmentry rip=", vmread(GUEST_RIP));
+    /* See unovirt_hv.h: neither vendor saves x87/MMX/XMM/MXCSR, so we do.
+     * Outside the XCR0 swap because FXSAVE does not consult XCR0 and the
+     * host's own save should happen under the host's mask. */
+    if (!g_fpu_ready) { uno_fpu_init_area(g_guest_fpu); g_fpu_ready = 1; }
+    uno_fpu_save(g_host_fpu);
+    uno_fpu_load(g_guest_fpu);
     if (swap) xsetbv0(g_guest_xcr0);
     t0 = uno_native_rdtsc();
     vmx_entry(&v->gprs);
@@ -693,6 +708,8 @@ static int vmx_vcpu_run(uno_vcpu *v, unsigned budget_us, uno_vmexit *out)
      * slightly early beats a tick that outruns its handler). */
     uno_vmm_add_guest_cycles(uno_native_rdtsc() - t0);
     if (swap) xsetbv0(g_host_xcr0);
+    uno_fpu_save(g_guest_fpu);
+    uno_fpu_load(g_host_fpu);
     if (!g_entry_failed) g_launched = 1;
     classify(out);
     if (!v->quiet) tracex("[hv] exit reason=", out->raw);
