@@ -41,6 +41,21 @@ done
 grep -q "^CONFIG_MODULES=y" "$WORK/kbuild/.config" && {
     echo "CONFIG_MODULES survived - the fragment failed to disable it" >&2; exit 1; }
 
+# The android set is verified separately because it fails differently: these
+# are options whose NAMES have moved between kernel versions (CONFIG_ANDROID,
+# the menu, was deleted in 5.19; CONFIG_ASHMEM in 5.18), so a fragment line
+# that no longer matches anything merges silently and produces a kernel that
+# boots fine and cannot start a container.  Checking the .config is the only
+# place that distinguishes "asked for" from "got".
+for opt in ANDROID_BINDER_IPC ANDROID_BINDERFS NAMESPACES NET_NS PID_NS            CGROUPS CGROUP_DEVICE CGROUP_FREEZER VETH BRIDGE NF_NAT PSI            SND_VIRTIO; do
+    grep -q "^CONFIG_$opt=y" "$WORK/kbuild/.config" || {
+        echo "MISSING: CONFIG_$opt (android set) did not make it into .config" >&2
+        exit 1; }
+done
+grep -q '^CONFIG_ANDROID_BINDER_DEVICES="binder,hwbinder,vndbinder"'      "$WORK/kbuild/.config" || {
+    echo "MISSING: binder device nodes - the container will find no /dev/binder" >&2
+    exit 1; }
+
 make O="$WORK/kbuild" -j"$(nproc)" bzImage
 cp "$WORK/kbuild/arch/x86/boot/bzImage" "$WORK/bzImage"
 ls -la "$WORK/bzImage"
