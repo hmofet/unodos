@@ -1452,6 +1452,8 @@ void uno_pc64_init(void)
                                               * keep this file's includes as
                                               * they were */
       unossh_register_tests(); }             /* no-op in a production build */
+    { void unoxfer_register_tests(void);     /* unoxfer.h, same reason         */
+      unoxfer_register_tests(); }
 }
 
 /* ===========================================================================
