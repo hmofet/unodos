@@ -1,17 +1,32 @@
 # The appliance payload
 
-The Linux guest the pc64 hypervisor boots: kernel, initramfs, and (for the
-browser appliance) an Alpine + wlroots + Chromium rootfs.  Everything in this
-directory is OURS (build scripts and configs); everything it BUILDS is GPL
-or MIT third-party and therefore never enters the repo - the artefacts are
-staged onto the ESP as files (`EFI\UNODOS\VM\*`), which is mere aggregation
-(UNOVIRT-PLAN §6).
+The Linux guest the pc64 hypervisor boots: kernel, initramfs, and an Alpine +
+wlroots rootfs running ONE application.  Everything in this directory is OURS
+(build scripts and configs); everything it BUILDS is GPL or MIT third-party
+and therefore never enters the repo - the artefacts are staged onto the ESP as
+files (`EFI\UNODOS\VM\*`), which is mere aggregation (UNOVIRT-PLAN §6).
+
+**Which application is a parameter.** `apps/<name>.app` is the whole
+definition of an appliance - packages, compositor, client, self-test - and
+`rootfs_inner.sh` is everything that does not care which. Adding an appliance
+is adding one file; the contract is [`apps/README.md`](apps/README.md).
+
+| Appliance | Runs | Compositor | Proves |
+|---|---|---|---|
+| `chromium` | Chromium on Ozone/Wayland | cage | rendering, network, a host-typed address navigating a real browser (M5) |
+| `gimp` | GIMP 2.10 (GTK2) under XWayland | labwc | several windows, independently placed, focused and decorated |
 
 Build on quill (or any Linux box with kernel build deps + docker):
 
     ./build_kernel.sh   /work/unodos-guest     # -> bzImage   (~15 min)
     ./build_initrd.sh   /work/unodos-guest     # -> initrd.gz (seconds)
-    ./build_rootfs.sh   /work/unodos-guest     # -> rootfs.img (~5 min, docker)
+    ./build_rootfs.sh   /work/unodos-guest     # -> rootfs-chromium.img (~5 min)
+    UNO_APP=gimp ./build_rootfs.sh /work/unodos-guest   # -> rootfs-gimp.img
+
+Each build also copies its image to `rootfs.img`, which is what
+`tools/vm_stage.py` stages, and writes `rootfs-<app>.desc` beside it - the app
+registry's own key names, for the foreign-package shim of
+`docs/ANDROID-APPLIANCE-PLAN.md` §3.2 to read rather than re-derive.
 
 Then stage into a pc64 debug build (the payload paths are what
 `tools/vm_stage.py` looks for):
@@ -63,10 +78,14 @@ What each piece is:
 - **initrd.gz** - static busybox.  With no disk: a shell on ttyS0 (the
   harness) and tty1 (the Display window).  With `/dev/vda` carrying
   `/sbin/uno-init`: switch_root into the appliance.
-- **rootfs.img** - Alpine + a wlroots kiosk (cage, pixman renderer) +
-  Chromium, read-only ext4, every writable path a tmpfs, zram swap.  Its
-  init is `/sbin/uno-init` (written by `rootfs_inner.sh`), which also keeps
-  a shell on ttyS0.  Xorg is a fallback and segfaults on this guest's
-  framebuffer; cage is the real display server.  Chromium is restarted
-  inside the compositor rather than around it, because cage exits when its
-  client does.
+- **rootfs.img** - Alpine + a wlroots compositor on the pixman software
+  renderer + one application, read-only ext4, every writable path a tmpfs,
+  zram swap.  Its init is `/sbin/uno-init` (written by `rootfs_inner.sh`),
+  which also keeps a shell on ttyS0 and reads `/usr/share/uno/app.env` to
+  learn which compositor and client this image carries.  Xorg is a fallback
+  and segfaults on this guest's framebuffer; Wayland is the real display
+  server either way.  How the client is restarted depends on the compositor,
+  and the two are opposites: under **cage** the loop is INSIDE, because cage
+  exits when its client does; under **labwc** the loop is inside too, but for
+  the reverse reason - labwc outlives its clients and would otherwise leave an
+  empty desktop.

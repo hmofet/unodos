@@ -1,16 +1,53 @@
 #!/bin/sh
 # Runs INSIDE an alpine container (see build_rootfs.sh).  Populates /rootfs
-# with Alpine + Xorg + Chromium, writes the appliance's own init, and packs
-# the tree into an ext4 image with mke2fs -d - no loop devices, no host root.
+# with Alpine, a display stack and ONE application, writes the appliance's own
+# init, and packs the tree into an ext4 image with mke2fs -d - no loop devices,
+# no host root.
+#
+# WHICH APPLICATION IS A PARAMETER, and everything in this file is the part
+# that does not care which.  `apps/<name>.app` names the packages, the
+# compositor and the client script; adding an appliance is adding one such
+# file, not editing this one.  The contract is in `apps/README.md`.
 set -e
 
 REL=v3.20
 MIRROR=http://dl-cdn.alpinelinux.org/alpine
 R=/rootfs
 
+APP=${UNO_APP:-chromium}
+APPDEF=/scripts/apps/$APP.app
+[ -f "$APPDEF" ] || { echo "uno-build: no such appliance: $APP ($APPDEF)" >&2; exit 1; }
+
+# Defaults an app file may override.  Declared here so a typo in one of them
+# reads as "the default was used" rather than as an empty command line.
+APP_PKGS=""
+APP_COMPOSITOR=cage
+APP_CLIENT=/usr/share/uno/app.sh
+APP_XCLIENT=""              # the X fallback session, if the app has one
+APP_SELFTEST=""             # optional /usr/share/uno/... run once after boot
+APP_ENV=""                  # one line appended verbatim to app.env
+# The app-registry half.  Not consumed by anything yet - the foreign-package
+# installer and its shim `.UNO` are docs/ANDROID-APPLIANCE-PLAN.md §3, and
+# `unopkg` does not exist.  Declared here anyway, and written to a sidecar
+# descriptor beside the image, because the alternative is that when the shim
+# generator lands, an appliance's name, category and launch target get typed
+# in a SECOND place and drift from the one that built it.
+APP_ID=$APP
+APP_TITLE=""
+APP_CAT=""
+APP_HOST=linux
+APP_LAUNCH=""
+app_write() { :; }
+. "$APPDEF"
+echo "uno-build: appliance '$APP' -> compositor $APP_COMPOSITOR, client $APP_CLIENT"
+
 apk add --no-cache e2fsprogs >/dev/null
 
 mkdir -p $R
+# THE BASE, and only the base: everything every appliance needs whatever it
+# runs.  An app's own packages come from its .app file, so a rootfs never
+# carries a browser because the window manager happened to be listed next to
+# one.
 apk add --root $R --initdb --no-cache \
     -X $MIRROR/$REL/main -X $MIRROR/$REL/community \
     --allow-untrusted \
@@ -18,12 +55,16 @@ apk add --root $R --initdb --no-cache \
     eudev udev-init-scripts \
     xorg-server xf86-input-libinput xf86-video-fbdev xinit xrandr xset \
     mesa-dri-gallium \
-    chromium \
     font-dejavu \
     dbus \
     ca-certificates ca-certificates-bundle \
-    openbox xdotool cage seatd wlroots \
+    openbox xdotool seatd wlroots \
     wtype
+
+# shellcheck disable=SC2086
+[ -n "$APP_PKGS" ] && apk add --root $R --no-cache \
+    -X $MIRROR/$REL/main -X $MIRROR/$REL/community \
+    --allow-untrusted $APP_PKGS
 
 # The input diagnostics.  Separate, and each allowed to be missing, because a
 # name that has moved between Alpine releases must not take the whole rootfs
@@ -217,14 +258,22 @@ done
 # which is what a whole run looked like, with the keyboard, the input nodes
 # and udev all provably fine.  openbox takes the window, focuses it, and the
 # keys land.
-# THE STARTUP PAGE MUST NOT LOOK LIKE THE DESTINATION.  It was
-# example.org, and the host harness types example.net - two pages whose
-# bodies are the SAME four lines of text, so the screenshot that is
-# supposed to prove a host-typed navigation showed a page identical to
-# the one already there, and only the address bar told them apart.  The
-# appliance's own page is unmistakable, needs no network, and so cannot
-# cache a startup failure either (the M3 trap).
-export UNO_URL_ENV=${UNO_URL:-file:///usr/share/uno/welcome.html}
+# WHICH APPLIANCE THIS IS, read rather than compiled in.  app.env is written
+# by the app's own .app file at build time and names the compositor, the
+# client, the X fallback and the self-test.  A missing file is a build fault
+# and is said out loud, because the fallbacks below would otherwise start a
+# session with no client in it and look like a compositor that draws nothing.
+UNO_APP=unknown
+UNO_COMPOSITOR=cage
+UNO_CLIENT=
+UNO_XCLIENT=
+UNO_SELFTEST=
+if [ -f /usr/share/uno/app.env ]; then
+    . /usr/share/uno/app.env
+    echo "uno: appliance $UNO_APP ($UNO_COMPOSITOR -> $UNO_CLIENT)" > /dev/ttyS0
+else
+    echo "uno: NO /usr/share/uno/app.env - the rootfs was built wrong" > /dev/ttyS0
+fi
 
 # UNCONDITIONAL, because the last version waited for a file that did not
 # always arrive and then reported nothing at all - a diagnostic that can
@@ -262,53 +311,33 @@ irqcount() {
 # emulated device; if it does not, the gap is above them both.  Either way
 # the next change is aimed rather than guessed.
 (
-  # What the browser says WHILE it runs.  Reporting only on exit means a
-  # renderer that dies inside a browser that lives is never explained.
+  # What the session says WHILE it runs.  Reporting only on exit means a
+  # renderer that dies inside a client that lives is never explained.
   while :; do
     sleep 90
     grep -iE "libinput|device|seat|keyboard|pointer" /tmp/x.log 2>/dev/null | tail -4 | sed 's/^/unoB| /' > /dev/ttyS0
   done
 ) &
 #
-# ONE TOOL PER DISPLAY SERVER.  xdotool speaks X and nothing else, so on the
-# Wayland session it ran, found no display, failed every command and reported
-# success anyway - a self-test that cannot fail proves nothing and hid the
-# fact that the appliance had moved off X.  wtype is its Wayland counterpart;
-# whichever session is up gets the one that can drive it, and if neither can,
-# this says so out loud instead of typing into nowhere.
-(
-  export DISPLAY=:0 XDG_RUNTIME_DIR=/run WAYLAND_DISPLAY=wayland-0
-  sleep 60
-  # THREE DIFFERENT PAGES, and they have to stay different: the browser opens
-  # on the appliance's own welcome.html, this self-test drives it to
-  # example.com, and the HOST harness types example.net.  For a while the
-  # self-test and the host both used example.net, and before that the startup
-  # page was example.org - whose body is the SAME four lines as example.net's.
-  # Either way the screenshot that is supposed to prove the host drove the
-  # browser proved nothing at all.
-  if [ -S "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY" ] && [ -x /usr/bin/wtype ]; then
-      echo "uno: selftest via wtype (wayland)" > /dev/ttyS0
-      if wtype -M ctrl l -m ctrl 2>/tmp/wtype.err; then
-          sleep 1
-          wtype -d 120 "example.com" 2>>/tmp/wtype.err
-          wtype -k Return 2>>/tmp/wtype.err
-          echo "uno: selftest typed example.com from inside" > /dev/ttyS0
-      else
-          echo "uno: selftest FAILED: $(head -c 120 /tmp/wtype.err | tr '\n' ' ')" > /dev/ttyS0
-      fi
-  elif xdotool getdisplaygeometry >/dev/null 2>&1; then
-      W=$(xdotool search --class -- chromium 2>/dev/null | tail -1)
-      echo "uno: selftest via xdotool (X), window=$W" > /dev/ttyS0
-      [ -n "$W" ] && xdotool windowactivate --sync "$W" 2>/dev/null
-      xdotool key --clearmodifiers ctrl+l 2>/dev/null
-      sleep 1
-      xdotool type --delay 120 "example.com" 2>/dev/null
-      xdotool key Return 2>/dev/null
-      echo "uno: selftest typed example.com from inside" > /dev/ttyS0
-  else
-      echo "uno: selftest SKIPPED - no X display and no wayland socket" > /dev/ttyS0
-  fi
-) &
+# THE APP OWNS ITS OWN SELF-TEST, because the question it answers is
+# app-shaped: for a browser it is "did a keystroke reach the omnibox", for an
+# image editor it is "did a click land on the toolbox".  What is NOT
+# app-shaped, and stays here, is the discipline the browser's version paid
+# for: a self-test that cannot fail proves nothing.  xdotool speaks X and
+# nothing else, so on the Wayland session it ran, found no display, failed
+# every command and reported success anyway - which hid the fact that the
+# appliance had moved off X.  An app's self-test therefore has to CHECK which
+# display server is up (wtype for Wayland, xdotool for X) and say so out loud
+# when neither can drive it, instead of typing into nowhere.
+if [ -n "$UNO_SELFTEST" ] && [ -x "$UNO_SELFTEST" ]; then
+  (
+    export DISPLAY=:0 XDG_RUNTIME_DIR=/run WAYLAND_DISPLAY=wayland-0
+    sleep 60
+    "$UNO_SELFTEST" > /dev/ttyS0 2>&1
+  ) &
+else
+  echo "uno: no selftest for this appliance" > /dev/ttyS0
+fi
 
 # seatd hands out the DRM and input devices a compositor needs.  Alpine's
 # libseat is built WITHOUT the builtin backend, so without this daemon cage
@@ -319,7 +348,6 @@ if [ -x /usr/bin/seatd ] || [ -x /sbin/seatd ]; then
     echo "uno: seatd $([ -S /run/seatd.sock ] && echo up || echo MISSING)" > /dev/ttyS0
 fi
 
-URL=$UNO_URL_ENV
 export XDG_RUNTIME_DIR=/run
 export LIBSEAT_BACKEND=seatd
 export WLR_RENDERER=pixman
@@ -335,34 +363,62 @@ export WLR_RENDERER=pixman
 # which is why a browser that had been running perfectly vanished and left a
 # bare console behind.  Logs are files; their tails are reported when a
 # session ends, which is the moment worth reading them.
-# WHAT THIS CAGE ACCEPTS, ASKED RATHER THAN ASSUMED.  `cage -D` was added as
-# a debug flag and cage 0.1.5 has no such flag: it printed its usage, exited
-# 1, and the appliance fell through to the X fallback on every single boot
-# since - silently, because the fallback works under QEMU.  Every run after
-# that was diagnosed as a Wayland problem while Wayland was never running.
-# So the flags are now checked against the binary's own help before use.
-CAGE_ARGS=""
-if [ -x /usr/bin/cage ]; then
-    CAGE_HELP=$(cage -h 2>&1)
-    # -s: allow VT switching, which is also what makes libseat treat this
-    # session as one that can OWN the seat rather than share it.  Without it
-    # libinput keeps its devices PAUSED and the browser cannot be typed at.
-    case "$CAGE_HELP" in *" -s"*) CAGE_ARGS="-s" ;; esac
-    echo "uno: cage $(cage -v 2>&1 | tr -d '\n') args '$CAGE_ARGS'" > /dev/ttyS0
+# WHAT THIS COMPOSITOR ACCEPTS, ASKED RATHER THAN ASSUMED.  `cage -D` was
+# added as a debug flag and cage 0.1.5 has no such flag: it printed its usage,
+# exited 1, and the appliance fell through to the X fallback on every single
+# boot since - silently, because the fallback works under QEMU.  Every run
+# after that was diagnosed as a Wayland problem while Wayland was never
+# running.  So the flags are checked against the binary's own help before use,
+# and that check is the FIRST thing a new appliance inherits: cage and labwc
+# take their client on completely different command lines, and guessing which
+# is a session that starts with no client in it.
+COMP_BIN=$(command -v "$UNO_COMPOSITOR" 2>/dev/null)
+COMP_ARGS=""
+COMP_MODE=""
+if [ -n "$COMP_BIN" ]; then
+    COMP_HELP=$("$COMP_BIN" -h 2>&1; "$COMP_BIN" --help 2>&1)
+    case "$UNO_COMPOSITOR" in
+    cage)
+        # -s: allow VT switching, which is also what makes libseat treat this
+        # session as one that can OWN the seat rather than share it.  Without
+        # it libinput keeps its devices PAUSED and the client cannot be typed
+        # at.  cage takes its client after `--`.
+        case "$COMP_HELP" in *" -s"*) COMP_ARGS="-s" ;; esac
+        COMP_MODE=dashdash
+        ;;
+    labwc)
+        # labwc is a STACKING window manager, not a kiosk: it outlives its
+        # clients, so the client cannot be its argv tail the way cage's is.
+        # `-s <command>` is its startup command, and `-C <dir>` points the
+        # config at a read-only path - both checked, because a labwc that
+        # rejects one of them exits before drawing anything.
+        case "$COMP_HELP" in *"-s"*|*"--startup"*) COMP_MODE=startup ;; esac
+        case "$COMP_HELP" in *"-C"*|*"--config-dir"*)
+            COMP_ARGS="-C /usr/share/uno/labwc" ;; esac
+        ;;
+    esac
+    echo "uno: $UNO_COMPOSITOR $("$COMP_BIN" -v 2>&1 | tr -d '\n') args '$COMP_ARGS' mode '$COMP_MODE'" > /dev/ttyS0
+    [ -n "$COMP_MODE" ] || echo "uno: $UNO_COMPOSITOR takes NEITHER form of client argument - the session will be empty" > /dev/ttyS0
+else
+    echo "uno: compositor '$UNO_COMPOSITOR' is not installed" > /dev/ttyS0
 fi
 
 WFAIL=0
 while :; do
-    if [ -x /usr/bin/cage ] && [ ! -f /tmp/wayland-failed ]; then
+    if [ -n "$COMP_BIN" ] && [ -n "$COMP_MODE" ] && [ ! -f /tmp/wayland-failed ]; then
         # ON A VT, AND HOLDING IT.  Without logind, libseat's seatd backend
         # ties input to the seat's ACTIVE virtual terminal: a compositor
         # started from a serial-console shell gets DRM master (so it draws
         # perfectly) while libinput keeps its devices PAUSED - which is a
-        # browser that renders and cannot be typed at, exactly what the
+        # client that renders and cannot be typed at, exactly what the
         # first Wayland run produced.
         chvt 1 2>/dev/null
         T0=$(cut -d. -f1 /proc/uptime)
-        cage $CAGE_ARGS -- /usr/share/uno/browser.sh < /dev/tty1 > /tmp/x.log 2>&1
+        if [ "$COMP_MODE" = dashdash ]; then
+            "$COMP_BIN" $COMP_ARGS -- "$UNO_CLIENT" < /dev/tty1 > /tmp/x.log 2>&1
+        else
+            "$COMP_BIN" $COMP_ARGS -s "$UNO_CLIENT" < /dev/tty1 > /tmp/x.log 2>&1
+        fi
         RC=$?
         T1=$(cut -d. -f1 /proc/uptime)
         # GUEST SECONDS, and say so.  /proc/uptime counts the time this guest
@@ -387,17 +443,26 @@ while :; do
             WFAIL=$((WFAIL + 1))
             if [ $WFAIL -ge 3 ]; then
                 : > /tmp/wayland-failed
-                echo "uno: cage failed $WFAIL times running - falling back to X" > /dev/ttyS0
+                echo "uno: $UNO_COMPOSITOR failed $WFAIL times running - falling back to X" > /dev/ttyS0
             fi
         else
             WFAIL=0
         fi
     fi
-    if [ -f /tmp/wayland-failed ] || [ ! -x /usr/bin/cage ]; then
-        xinit /usr/share/uno/session.sh \
-          -- /usr/bin/X :0 vt1 -nolisten tcp -quiet > /tmp/x.log 2>&1
-        echo "uno: X session ended ----" > /dev/ttyS0
-        tail -10 /tmp/x.log | sed 's/^/uno| /' > /dev/ttyS0
+    if [ -f /tmp/wayland-failed ] || [ -z "$COMP_BIN" ] || [ -z "$COMP_MODE" ]; then
+        # THE FALLBACK IS OPTIONAL NOW, and saying so beats spinning.  Xorg
+        # segfaults on this guest's framebuffer, so an appliance whose app has
+        # no X session is better off reporting that than restarting an empty
+        # xinit every two seconds and filling the console with it.
+        if [ -n "$UNO_XCLIENT" ] && [ -x "$UNO_XCLIENT" ]; then
+            xinit "$UNO_XCLIENT" \
+              -- /usr/bin/X :0 vt1 -nolisten tcp -quiet > /tmp/x.log 2>&1
+            echo "uno: X session ended ----" > /dev/ttyS0
+            tail -10 /tmp/x.log | sed 's/^/uno| /' > /dev/ttyS0
+        else
+            echo "uno: no session left to run ($UNO_APP has no X fallback)" > /dev/ttyS0
+            sleep 30
+        fi
     fi
     sleep 2
 done
@@ -421,107 +486,6 @@ Section "Device"
     Option      "ShadowFB"     "true"
 EndSection
 XCONFEOF
-
-mkdir -p $R/usr/share/uno
-cat > $R/usr/share/uno/session.sh <<'SESSEOF'
-#!/bin/sh
-# WAYLAND FIRST, X ONLY AS A FALLBACK.  Xorg segfaults on this guest's
-# framebuffer - simpledrm, no GPU, no render node - and did so with
-# modesetting, with acceleration off, and (differently) with fbdev.  A
-# wlroots compositor with the pixman software renderer is what modern
-# systems actually run on a dumb framebuffer, and it needs no X server, no
-# window manager and no libinput-inside-X: cage takes the DRM device
-# directly, reads evdev itself, and gives its single client the whole
-# screen, focused, forever.
-#
-# LIBSEAT_BACKEND=builtin is what lets it take DRM master as root without
-# logind or a seatd daemon.
-openbox &
-sleep 3
-
-# A COMMENT INSIDE A LINE CONTINUATION ENDS THE COMMAND.  The flag list
-# above used to carry an explanatory comment between two backslashed lines:
-# the backslash joins the lines, the `#` then starts a comment that runs to
-# the real newline, and the command ENDS there.  Every flag after it became
-# its own "not found" line, so this session's Chromium ran without the DNS
-# workaround and without a URL at all - and none of that appears in a
-# screenshot of a browser sitting on its new-tab page.  Comments go above the
-# command now, never inside it.
-#
-# A FRESH PROFILE EVERY LAUNCH.  Chromium remembers that it did not shut
-# down cleanly and opens a "Restore pages?" bubble - and that bubble takes
-# the keyboard focus, so the first thing typed at the browser goes into a
-# dialog instead of the address bar.  --disable-session-crashed-bubble did
-# not suppress it in this build; deleting the profile removes the belief
-# that produces it.
-rm -rf /tmp/config/chromium /tmp/cache/chromium 2>/dev/null
-
-# AND THE BROWSER WINDOW KEEPS THE FOCUS.  A popup that appears later still
-# takes it, so this re-asserts it for the first couple of minutes rather
-# than once.
-(
-  for i in $(seq 1 24); do
-    sleep 5
-    W=$(xdotool search --class -- chromium 2>/dev/null | tail -1)
-    [ -n "$W" ] && xdotool windowactivate "$W" 2>/dev/null
-  done
-) &
-
-# `--disable-features=...AsyncDns,DnsOverHttps` is load-bearing: Chromium's
-# own async resolver and Secure DNS ignore the resolv.conf that nslookup and
-# wget both use happily, and answer ERR_NAME_NOT_RESOLVED for names the rest
-# of the guest resolves fine.  Sending it back to getaddrinfo makes the
-# browser agree with its own operating system.
-exec chromium \
-    --no-sandbox --disable-gpu --disable-dev-shm-usage \
-    --no-first-run --no-default-browser-check --disable-infobars \
-    --password-store=basic --disable-sync \
-    --disable-background-networking --disable-component-update \
-    --disable-domain-reliability --disable-breakpad \
-    --disable-client-side-phishing-detection --no-pings \
-    --safebrowsing-disable-auto-update --metrics-recording-only \
-    --disable-features=OptimizationHints,MediaRouter,AsyncDns,DnsOverHttps \
-    --renderer-process-limit=1 --process-per-site \
-    --disable-hang-monitor --disable-session-crashed-bubble \
-    --js-flags=--max-old-space-size=192 \
-    --window-position=0,0 --window-size=800,600 \
-    --start-maximized "$UNO_URL_ENV"
-SESSEOF
-chmod +x $R/usr/share/uno/session.sh
-
-# The Wayland client cage runs: Chromium on Ozone, with the same flags the X
-# session uses.  No window manager and no focus problem - cage gives its one
-# client the whole output, focused, for as long as it lives.
-cat > $R/usr/share/uno/browser.sh <<'BROWSEREOF'
-#!/bin/sh
-rm -rf /tmp/config/chromium /tmp/cache/chromium 2>/dev/null
-# SAY WHY IT DIED.  Chromium in the carve ends sessions, and without its own
-# log the only trace is crashpad's process reader complaining about
-# `sched_getscheduler` - a warning printed while CAPTURING a dump, not the
-# reason for one.  With logging on, the line under it reads
-# `Assertion failed: v > 0 (double-conversion/fast-dtoa.cc: FastDtoa: 641)`:
-# Alpine builds Chromium against the SYSTEM double-conversion, which keeps its
-# assertions, so a value upstream's bundled copy would format and forget
-# aborts the browser here.
-#
-# RESTARTED INSIDE THE COMPOSITOR, NOT AROUND IT.  cage exits when its client
-# does, so an `exec` here turned one Chromium abort into a whole session
-# restart - seatd, a VT switch, a compositor and a browser cold-start, minutes
-# of wall time on this guest, during which the appliance shows a black screen
-# and anything typed at it is lost.  Looping in here keeps cage's client alive,
-# so the compositor never goes down and only the browser comes back.
-# --metrics-recording-only is gone with it: it turns metrics recording ON
-# (without upload), which is work nobody asked for on a quarter-core guest.
-n=0
-while :; do
-    n=$((n + 1))
-    echo "uno-browser: launch $n" >&2
-    chromium     --enable-logging=stderr --ozone-platform=wayland --no-sandbox --disable-gpu --disable-dev-shm-usage --no-first-run --no-default-browser-check --disable-infobars --password-store=basic --disable-sync --disable-background-networking --disable-component-update --disable-domain-reliability --disable-breakpad --disable-client-side-phishing-detection --no-pings --safebrowsing-disable-auto-update --disable-features=OptimizationHints,MediaRouter,AsyncDns,DnsOverHttps --renderer-process-limit=1 --process-per-site --disable-hang-monitor --disable-session-crashed-bubble --js-flags=--max-old-space-size=192 --start-maximized "$UNO_URL_ENV"
-    echo "uno-browser: chromium exited rc=$? (launch $n)" >&2
-    sleep 2
-done
-BROWSEREOF
-chmod +x $R/usr/share/uno/browser.sh
 
 # THE FAST LOOP'S KEYBOARD, kept with the appliance because it is the thing
 # that made a twenty-five-minute question a two-minute one.  i8042 controller
@@ -573,26 +537,6 @@ exit 0
 INJEOF
 chmod +x $R/usr/share/uno/inject_scancodes.sh
 
-# NO OMNIBOX SUGGESTIONS, BY POLICY.  Every letter typed into the address bar
-# sends a suggest query to Google and repaints a ten-row dropdown over the
-# page - the only thing this browser does that is triggered BY TYPING, and the
-# thing the FastDtoa abort (see browser.sh) lands in run after run, always on
-# the first address typed and never while the browser sits idle.  Chromium's
-# managed-policy directory is the supported way to switch it off; a
-# command-line flag for it does not exist.  The harness types a literal URL,
-# so nothing of value is lost.
-mkdir -p $R/etc/chromium/policies/managed
-cat > $R/etc/chromium/policies/managed/uno-appliance.json <<'POLEOF'
-{
-  "SearchSuggestEnabled": false,
-  "DefaultSearchProviderEnabled": false,
-  "MetricsReportingEnabled": false,
-  "BackgroundModeEnabled": false,
-  "SafeBrowsingProtectionLevel": 0,
-  "PromotionalTabsEnabled": false
-}
-POLEOF
-
 # DNS on a read-only root.  /etc/resolv.conf is a symlink into the tmpfs the
 # appliance mounts over /tmp - but that alone is NOT enough, and the first
 # bridged run proved it: the guest took a perfectly good lease (10.0.2.16)
@@ -633,32 +577,59 @@ exit 0
 DHCPEOF
 chmod +x $R/usr/share/uno/dhcp.script
 
+# ---- the app's own half ----------------------------------------------------
+# Last, so an app file can overwrite anything the common half wrote.
 mkdir -p $R/usr/share/uno
-cat > $R/usr/share/uno/welcome.html <<'EOF'
-<!doctype html>
-<meta charset="utf-8">
-<title>UnoDOS appliance</title>
-<style>
-  /* LIGHT ON PURPOSE.  The harness decides whether the guest is showing a
-     browser or a console by how much of its surface is near-black, and a
-     dark splash page is a console as far as that test is concerned. */
-  body { background:#f4f6fb; color:#1a1a2e; font-family:sans-serif;
-         display:flex; align-items:center; justify-content:center;
-         height:100vh; margin:0; }
-  .card { text-align:center; }
-  h1 { font-size:2.2em; margin-bottom:.2em; }
-  p  { color:#456; }
-</style>
-<div class="card">
-  <h1>Chromium, inside UnoDOS</h1>
-  <p>Blink is rendering this page in a Linux appliance under unovirt.</p>
-  <p id=t></p>
-  <script>
-    document.getElementById('t').textContent =
-      navigator.userAgent + ' - JS is live: 6*7=' + (6*7);
-  </script>
-</div>
-EOF
+app_write
+
+# WHAT uno-init READS AT BOOT.  Written here rather than in the app file so a
+# .app that forgets one of these still produces a bootable appliance with a
+# named fault, and so the file's shape is one thing rather than five.
+cat > $R/usr/share/uno/app.env <<ENVEOF
+UNO_APP=$APP
+UNO_COMPOSITOR=$APP_COMPOSITOR
+UNO_CLIENT=$APP_CLIENT
+UNO_XCLIENT=$APP_XCLIENT
+UNO_SELFTEST=$APP_SELFTEST
+$APP_ENV
+ENVEOF
+
+# CHECKED, because every one of these is a file uno-init will try to EXEC, and
+# a missing one presents as a compositor that starts and shows nothing - which
+# is the most expensive failure in this directory to diagnose.  A build that
+# dies here leaves the last image in place, which beats shipping a rootfs whose
+# session is empty.
+for f in $APP_CLIENT $APP_XCLIENT $APP_SELFTEST; do
+    [ -x "$R$f" ] || { echo "uno-build: $APP names $f but the rootfs has no executable there" >&2; exit 1; }
+done
+# IN THE ROOTFS, NOT IN THE CONTAINER.  The first version of this check ran
+# `command -v $APP_COMPOSITOR` "advisory only" - and under `set -e` a bare
+# command that returns 127 IS the exit status of the script.  The build died
+# at 127 with its last line reading "primed GIMP profile", which is a success
+# message, so the failure looked like it came from the step after the one that
+# actually failed.  There is no advisory statement in a `set -e` script.
+[ -x "$R/usr/bin/$APP_COMPOSITOR" ] || [ -x "$R/usr/sbin/$APP_COMPOSITOR" ] || {
+    echo "uno-build: $APP wants compositor '$APP_COMPOSITOR' and no package installed one" >&2; exit 1; }
+
+# WHAT THE HOST WILL NEED TO MAKE THIS AN ICON.  A sidecar next to the image,
+# in the `.UNO` descriptor's own key names (`uno_appdesc.h`), so the shim
+# generator of ANDROID-APPLIANCE-PLAN §3.2 reads rather than re-derives them.
+# `kind`/`host`/`launch` are the plan's additive keys; today's descriptor
+# reader ignores keys it does not know, which is what makes writing them now
+# free.  `icon:` stays an emblem name until the app-registry lane lands
+# `icon: @` (inline QOI) - a request, not something to invent here.
+cat > /out/rootfs-$APP.desc <<DESCEOF
+id:      $APP_ID
+name:    ${APP_TITLE:-$APP}
+short:   ${APP_TITLE:-$APP}
+icon:    generic
+cat:     ${APP_CAT:-utility}
+kind:    foreign
+host:    $APP_HOST
+launch:  $APP_LAUNCH
+DESCEOF
+cp /out/rootfs-$APP.desc $R/usr/share/uno/app.desc
+echo "uno-build: descriptor -> rootfs-$APP.desc"
 
 # Pack.  Size: tree + 15% headroom, floor 256 MB.
 KB=$(du -sk $R | cut -f1)
@@ -666,4 +637,4 @@ MB=$(( KB / 1024 * 115 / 100 + 64 ))
 [ $MB -lt 256 ] && MB=256
 rm -f /out/rootfs.img
 mke2fs -q -t ext4 -d $R -L unoroot /out/rootfs.img ${MB}M
-echo "rootfs.img: ${MB} MB ($(( KB / 1024 )) MB of files)"
+echo "rootfs.img: $APP, ${MB} MB ($(( KB / 1024 )) MB of files)"
