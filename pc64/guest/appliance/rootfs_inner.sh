@@ -92,6 +92,18 @@ mount -t tmpfs tmp  /tmp  2>/dev/null
 mount -t tmpfs run  /run  2>/dev/null
 mount -t tmpfs var  /var  2>/dev/null
 mkdir -p /var/log /var/tmp /var/lib /var/cache /run/dbus /root
+# /var/run IS A SYMLINK IN ALPINE, and the tmpfs above just buried it.
+# alpine-baselayout ships /var/run -> /run, and everything that opens a
+# socket "in /var/run" is really opening one in /run; mount an empty tmpfs
+# over /var and that link is gone, so those programs get ENOENT on a path
+# whose parent used not to be a directory at all.  dbus is the one that
+# showed it: `Failed to bind socket "/var/run/dbus/system_bus_socket": No
+# such file or directory`, which reads as a permissions or ordering problem
+# and is neither.  Restored as a link rather than as a directory, so the two
+# names stay the same place - a real /var/run/dbus and a real /run/dbus
+# would be two sockets and half the guest would find the wrong one.
+ln -s /run /var/run 2>/dev/null
+ln -s /run/lock /var/lock 2>/dev/null
 mount -t tmpfs home /root 2>/dev/null
 
 # Swap on zram: Chromium in a small carve wants somewhere to spill, and it
@@ -177,7 +189,25 @@ fi
         fi ) &
   done ) &
 
-dbus-daemon --system 2>/dev/null
+# THE MACHINE ID COMES FIRST, and for a year it did not.  dbus refuses to
+# start without one, so `dbus-daemon --system` below was failing on every
+# boot of every appliance - silently, into 2>/dev/null - because the block
+# that writes the id sat AFTER it, where the session bus needed it.  No
+# appliance noticed: Chromium and GIMP both want the session bus, which is
+# started after the id exists and therefore works.  The Android appliance
+# does not have that luxury - its container service registers on the SYSTEM
+# bus - and the symptom it produced named neither dbus nor a machine id:
+# `WayDroid container is not listening`, once every five seconds, forever.
+mkdir -p /var/lib/dbus /run/dbus
+[ -s /var/lib/dbus/machine-id ] || dbus-uuidgen > /var/lib/dbus/machine-id 2>/dev/null
+dbus-daemon --system 2>/tmp/dbus-system.log
+# SAY WHICH BUSES CAME UP.  A bus that is missing is a client that dies
+# minutes later for a reason that looks nothing like a bus.
+if [ -S /run/dbus/system_bus_socket ] || [ -S /var/run/dbus/system_bus_socket ]; then
+    echo "uno: system bus up" > /dev/ttyS0
+else
+    echo "uno: system bus MISSING: $(head -2 /tmp/dbus-system.log 2>/dev/null | tr '\n' ' ')" > /dev/ttyS0
+fi
 
 # A SESSION BUS, WHICH IS THE ONE A DESKTOP APPLICATION ACTUALLY WANTS.  The
 # line above starts the SYSTEM bus, and for the browser appliance that was
@@ -197,11 +227,9 @@ dbus-daemon --system 2>/dev/null
 # `dbus-launch` is in dbus-x11, NOT in dbus - installing "dbus" and expecting
 # the launcher is the whole mistake in one line.
 #
-# A MACHINE ID FIRST, on a read-only root.  dbus refuses to start without one,
-# and /etc cannot be written - so /etc/machine-id is a symlink (made at build
-# time, below) into the tmpfs this fills in now.
-mkdir -p /var/lib/dbus
-[ -s /var/lib/dbus/machine-id ] || dbus-uuidgen > /var/lib/dbus/machine-id 2>/dev/null
+# The machine id is written above, before the system bus, because dbus
+# refuses to start without one and /etc cannot be written - /etc/machine-id
+# is a symlink (made at build time, below) into the tmpfs it lands in.
 if [ -x /usr/bin/dbus-launch ]; then
     eval "$(dbus-launch --sh-syntax 2>/dev/null)" 2>/dev/null
     export DBUS_SESSION_BUS_ADDRESS
