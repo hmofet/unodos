@@ -623,7 +623,55 @@ int uno_pkg_probe(int vol, const char *path, uno_pkg_info *out)
     return out->arch_ok ? 1 : 0;
 }
 
-/* ---- the shim ------------------------------------------------------------ */
+/* ---- the shim ------------------------------------------------------------
+ *
+ * A `.UNO` IS SEALED, and this is the thing that caught the first version of
+ * this file out.  `mod_instantiate` checks a CRC-32 over everything after the
+ * 48-byte header and refuses the image if it disagrees - so rewriting two
+ * fields inside a module and writing it back produces an app that installs
+ * perfectly, registers perfectly, shows the right name and icon, and opens a
+ * window that says "the loader refused the image".  The host gate passed
+ * throughout, because a host gate does not run a loader.
+ *
+ * The header's field offsets below belong to a struct that is PRIVATE to
+ * pc64_modload.c, so they are checked rather than trusted: `shim_seal_ok`
+ * recomputes the CRC of the UNTOUCHED template and requires it to match what
+ * the header already says.  If the layout ever moves, that fails on the
+ * template - loudly, at install time, with a message naming the template -
+ * instead of silently producing modules nothing can load.
+ */
+#define MOD_MAGIC     0x314F4E55u      /* 'UNO1', pc64_modload.c            */
+#define MOD_HDR_SIZE  48
+#define MOD_HDR_CRC   40               /* offset of `crc` within the header */
+
+static unsigned long mod_crc32(const unsigned char *p, long n)
+{
+    unsigned long c = 0xFFFFFFFFul;
+    long i; int k;
+    for (i = 0; i < n; i++) {
+        c ^= p[i];
+        for (k = 0; k < 8; k++)
+            c = (c >> 1) ^ (0xEDB88320ul & (0ul - (c & 1ul)));
+    }
+    return (~c) & 0xFFFFFFFFul;
+}
+
+/* Does this look like a module whose header we understand? */
+static int shim_seal_ok(const unsigned char *img, long n)
+{
+    if (n <= MOD_HDR_SIZE || g32(img) != MOD_MAGIC) return 0;
+    return mod_crc32(img + MOD_HDR_SIZE, n - MOD_HDR_SIZE)
+        == g32(img + MOD_HDR_CRC);
+}
+
+static void shim_reseal(unsigned char *img, long n)
+{
+    unsigned long c = mod_crc32(img + MOD_HDR_SIZE, n - MOD_HDR_SIZE);
+    img[MOD_HDR_CRC + 0] = (unsigned char)(c & 0xff);
+    img[MOD_HDR_CRC + 1] = (unsigned char)((c >> 8) & 0xff);
+    img[MOD_HDR_CRC + 2] = (unsigned char)((c >> 16) & 0xff);
+    img[MOD_HDR_CRC + 3] = (unsigned char)((c >> 24) & 0xff);
+}
 
 /* Rewrite the descriptor block inside a template image.  The block is found
  * by its own magic rather than through the module header, because mkuno.py
@@ -770,6 +818,11 @@ int uno_pkg_install(int vol, const char *path, const uno_pkg_info *info,
         free(img); sput(err, errmax, "Could not read the shim template.");
         return 0;
     }
+    if (!shim_seal_ok(img, n)) {
+        free(img);
+        sput(err, errmax, "The shim template is not a sealed module (rebuild it).");
+        return 0;
+    }
 
     if (!shim_blob(img, n, info)) {
         free(img);
@@ -781,6 +834,8 @@ int uno_pkg_install(int vol, const char *path, const uno_pkg_info *info,
         sput(err, errmax, "The template's descriptor has no room.");
         return 0;
     }
+    /* LAST, after every rewrite: the seal covers what we just changed. */
+    shim_reseal(img, n);
 
     /* The sidecar first: if the shim lands and this does not, there is an app
      * icon with nothing behind it.  In the other order the worst case is an

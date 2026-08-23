@@ -91,6 +91,33 @@ tell which of the installed apps it had been opened as. Carrying the answer
 inside the copy removes the question, and it makes an installed app exactly one
 file, which is what makes uninstall a delete.
 
+### A `.UNO` IS SEALED, and rewriting one without re-sealing it costs a boot
+
+`mod_instantiate` recomputes a **CRC-32 over everything after the 48-byte
+header** and refuses the image if it disagrees. So the first version of this
+installer produced an app that installed perfectly, registered perfectly,
+showed the right name, appeared on the desktop - and opened a window saying
+`This module would not load: FIREFOX.UNO / It is on disk; the loader refused
+the image.`
+
+The host gate passed the whole time, **because a host gate runs no loader**.
+It took a QEMU boot to see it, which is the entire argument for having both
+gates rather than the fast one alone.
+
+Two things came out of it and both are load-bearing:
+
+- `uno_pkg_install` re-seals **last**, after every rewrite, and refuses a
+  template whose seal does not already verify. The header offsets it uses
+  belong to a struct private to `pc64_modload.c`, so they are *checked rather
+  than trusted*: `shim_seal_ok` recomputes the untouched template's CRC and
+  requires it to match what the header says. If that layout ever moves, the
+  install fails loudly on the template instead of quietly emitting modules
+  nothing can load.
+- `tools/pkg_test.c` now checks the same invariant, and **writes the CRC
+  arithmetic out again rather than calling into `pc64_pkg.c`**. A test that
+  reuses the implementation's own arithmetic cannot catch the implementation
+  getting the arithmetic wrong.
+
 **`build.sh` verifies both after linking**, and this is not ceremony. The blob
 is an initialised array whose tail is zero, and a compiler is entitled to place
 such a thing in `.bss` - where it would not be in the file at all. That failure
@@ -176,6 +203,32 @@ because Delete is not reached through `pane_enter`. Clearing the package arm in
 the same place disarms, one line later, exactly what the re-click just armed -
 so an install would need three clicks, or never happen at all. The package arm
 is cleared only where the SELECTION MOVED.
+
+## The two gates, and why neither is redundant
+
+| Gate | Runs | Proves |
+|---|---|---|
+| `tools/pkg_test.sh <app.apk>` | natively, ~1 s | the READERS: zip central directory, AXML string pool and attribute walk, the descriptor and blob rewrite, the re-seal, install/uninstall - against a shipping **138 MB Firefox APK** |
+| `tools/pkg_urc.py <app.apk>` | QEMU, ~4 min | the PATH: Files arms on the first press and installs on the second, the registry finds a file nobody compiled a slot for, the icon reaches the desktop, the window opens with the package's own name, and **it is all still there after a reboot** |
+
+A reader that works behind a shell that never reaches it is exactly the shape
+of a feature that "works" and is unusable; a shell path that reaches a reader
+which mis-parses is the other. The CRC bug above was invisible to the first
+and obvious to the second.
+
+`pkg_urc.py` builds its own boot disk, because remote_qemu's is 96 MiB and a
+real Firefox APK is 138 MB. It also **copies the package in before the OS
+tree**, so it lands on the first row of the listing: Files shows a directory
+in FAT order, and hunting for a row is worse than fragile here, because the
+root holds directories too and an Enter that lands on one navigates into it.
+
+Measured on 2026-08-23, Firefox 154.0 x86_64:
+
+```
+id='firefox'  name='Firefox'  version='154.0'  arch='x86_64'
+target='android:org.mozilla.firefox/org.mozilla.firefox.App'
+28 app slots -> 29;  window "Firefox" opens;  still there after a reboot
+```
 
 ## Changelog
 
