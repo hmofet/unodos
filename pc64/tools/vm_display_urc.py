@@ -42,6 +42,27 @@ def ppm(path, w, h, rgba):
         f.write(bytes(px))
 
 
+def dark_fraction(w, h, rgba):
+    """How much of the desktop is near-black.
+
+    THE ONE THING THAT TELLS A CONSOLE FROM A BROWSER without knowing where
+    the appliance window is.  The guest's surface is a text console - white
+    on black, or cleared to black - until Chromium paints, and then it is
+    overwhelmingly light.  The UnoDOS desktop around it is light either way,
+    so the black area IS the guest, and it collapses the moment the browser
+    arrives.  Sampled coarsely: this runs every ninety seconds, and a
+    percentage point either way decides nothing.
+    """
+    dark = tot = 0
+    for y in range(0, h, 4):
+        row = rgba[y * w * 4:(y + 1) * w * 4]
+        for x in range(0, w * 4, 32):
+            if row[x] + row[x + 1] + row[x + 2] < 90:
+                dark += 1
+            tot += 1
+    return dark / float(tot or 1)
+
+
 def png_convert(ppm_path):
     try:
         import ppm2png
@@ -157,50 +178,110 @@ def main():
 
         print("typed through the window; check display_typed for the echo")
 
-        # An appliance with a rootfs keeps going long past the shell - X and
-        # Chromium take minutes of wall time at a slice per frame - so with
+        # An appliance with a rootfs keeps going long past the shell -
+        # Chromium takes minutes of wall time at a slice per frame - so with
         # a fourth argument, keep photographing the window as it happens.
+        #
+        # AND WAIT FOR THE BROWSER RATHER THAN COUNTING SECONDS AT IT.  This
+        # used to sleep `extra` times ninety seconds and then type, whatever
+        # was on screen.  On the run that first proved the compositor works,
+        # that landed while the guest was still a cleared VT: the keystrokes
+        # went to a console, nothing was typed, and the final shot showed the
+        # browser's STARTUP page - which is indistinguishable in a screenshot
+        # from keystrokes that were delivered and lost, and wants the opposite
+        # fix.  The argument is a floor now, not a schedule; the guest's own
+        # surface says when it is ready.
         extra = int(sys.argv[3]) if len(sys.argv) > 3 else 0
-        for i in range(extra):
-            time.sleep(90)
-            shot("display_t%02d" % i)
+        nav = sys.argv[4] if len(sys.argv) > 4 else ""
+        shots = [0]
+
+        def wait_for_browser(floor, cap_s, tag):
+            """Photograph the window until it stops being a console."""
+            cap_at = time.time() + cap_s
+            while True:
+                time.sleep(90)
+                w, h, rgba = shot("%s%02d" % (tag, shots[0]))
+                shots[0] += 1
+                floor -= 1
+                dark = dark_fraction(w, h, rgba)
+                print("  guest surface %.0f%% dark" % (dark * 100))
+                if dark < 0.12:
+                    print("  the guest is showing a browser, not a console")
+                    return True
+                if floor <= 0 and time.time() > cap_at:
+                    print("  gave up waiting: still a console")
+                    return False
+
+        def type_url(nav, tag):
+            """Ctrl+L, empty the omnibox, type the address.  Returns the shot."""
+            # NO MODIFIERS BUT THIS ONE, deliberately.  Ctrl+L is unambiguous
+            # where F6 cycles between browser panes and lands wherever the
+            # window happens to put it, and Ctrl survives the trip (the
+            # Display view forwards it as ASCII 1..26, which the emulated
+            # keyboard turns back into a held Ctrl).  A run of Backspace then
+            # empties the bar without needing Ctrl+A either.
+            # AND TYPED FAST, because the window is not open long.  This used
+            # to send forty-five Backspaces at 0.06 s and then the address at
+            # 0.30 s a letter - twenty seconds of exposure, during which
+            # Chromium in the carve reliably aborted at least once.  Ctrl+L
+            # SELECTS the whole omnibox, so one Backspace empties it and the
+            # other forty-four were deleting nothing; the settle times were
+            # sized for a guest that could not keep up, and this guest reads
+            # its keyboard queue faster than the harness fills it.  Four
+            # seconds instead of twenty.
+            link.key(0, ord('l'), 1, timeout=10)      # Ctrl+L
+            time.sleep(2.0)
+            for _ in range(4):
+                key(0x08, settle=0.05)          # Backspace
+            for ch in nav:
+                key(ord(ch), settle=0.10)
+            # COMMIT FIRST, PHOTOGRAPH SECOND.  The shot used to come between
+            # the last letter and Enter, to tell "the letters never arrived"
+            # from "they arrived and the page has since changed" - but a
+            # screen grab is a whole 1024x768 frame over the URC link, several
+            # seconds during which the omnibox sits open with its suggestion
+            # list live.  That was the longest part of the exposure window,
+            # and the browser died inside it more than once.  The shot right
+            # after Enter still carries the typed address in the bar, so it
+            # answers the same question without holding the window open.
+            key(0x0D, settle=0.3)               # Enter
+            return shot(tag)
+
+        ready = wait_for_browser(extra, 900, "display_t") if extra else False
 
         # THE BROWSER IS DRIVEN, not merely watched.  A rendered page proves
         # Blink runs; typing a DIFFERENT address into the address bar and
         # getting that page proves the whole loop - host keystroke, i8042,
-        # X, Chromium's omnibox, DNS, TLS, layout, and the surface coming
-        # back out.  Ctrl+L focuses the omnibox on every platform Chromium
-        # has ever shipped on.
-        nav = sys.argv[4] if len(sys.argv) > 4 else ""
-        if nav:
-            # NO MODIFIERS IN THIS SEQUENCE, deliberately.  Ctrl+L is the
-            # habit and it depends on the whole modifier path surviving the
-            # URC verb, the shell's key hook and the emulated keyboard; F6
-            # focuses Chromium's address bar with a bare keypress, and a run
-            # of Backspace empties it without needing Ctrl+A either.  One
-            # less thing between the test and what it is testing.
-            print("driving the browser to %s ..." % nav)
-            # BOTH WAYS INTO THE ADDRESS BAR, because F6 alone did not do it:
-            # in Chromium F6 cycles between browser panes and where it lands
-            # first depends on what is showing, while Ctrl+L is unambiguous.
-            # Ctrl now survives the trip (the Display view forwards it as
-            # ASCII 1..26, which the emulated keyboard turns back into a held
-            # Ctrl), so it is worth the retry that earlier runs could not make.
-            # Ctrl+L ALONE.  It is proven to focus the address bar (the guest
-            # drives itself the same way), and the F6 presses that used to
-            # follow it could only move the focus back off again.
-            link.key(0, ord('l'), 1, timeout=10)      # Ctrl+L
-            time.sleep(2.0)
-            for _ in range(45):
-                key(ord('\b'), settle=0.06)
-            for ch in nav:
-                key(ord(ch), settle=0.30)
-            # PHOTOGRAPH THE TYPING BEFORE COMMITTING IT.  A shot taken 45
-            # seconds after Enter cannot distinguish "the letters never
-            # arrived" from "they arrived, navigated, and the page since
-            # changed" - and those want opposite fixes.
-            shot("display_urltyped")
-            key(ord('\r'), settle=0.3)
+        # the compositor, Chromium's omnibox, DNS, TLS, layout, and the
+        # surface coming back out.
+        #
+        # AND THE BROWSER CAN DIE WHILE YOU TYPE AT IT.  Chromium in the carve
+        # crashes occasionally; the appliance restarts it, which takes minutes
+        # of wall time, and a run that typed into the gap photographed the
+        # STARTUP page and called it a navigation.  So: check the surface is
+        # still a browser after typing, and if it is not, wait for the next
+        # one and type again rather than reporting a result about a window
+        # that was not there.
+        if nav and extra and not ready:
+            ok = False
+            print("FAIL: no browser on the guest's surface - refusing to type "
+                  "at a console and photograph the result as a navigation")
+            nav = ""
+        typed = False
+        for attempt in range(3 if nav else 0):
+            print("driving the browser to %s (attempt %d) ..." % (nav, attempt + 1))
+            w, h, rgba = type_url(nav, "display_urltyped"
+                                  + ("" if not attempt else "_%d" % attempt))
+            if dark_fraction(w, h, rgba) < 0.12:
+                typed = True
+                break
+            print("  the browser went away mid-typing - waiting for the next one")
+            if not wait_for_browser(1, 900, "display_r%d_" % attempt):
+                break
+        if nav and not typed:
+            ok = False
+            print("FAIL: never got a whole address typed into a live browser")
+        if typed:
             for i in range(4):
                 time.sleep(45)
                 shot("display_nav%02d" % i)
