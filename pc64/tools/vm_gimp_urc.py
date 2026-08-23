@@ -438,6 +438,18 @@ def main():
         time.sleep(0.5)
         q.kill()
         link.close()
+    # WHAT THE EMULATED CONTROLLER ACTUALLY EMITTED.  unovirt logs the i8042
+    # counters into the debug console every 16K exits, so the host can read
+    # them without asking the guest anything: "N keys M packets D dropped".
+    # They separate the two halves of "the pointer did not work" - whether
+    # the device emitted the motion at all, and whether anything inside
+    # consumed it - and the first run to look at them killed two theories in
+    # one line (0 dropped, so neither the 255-per-packet split nor the aux
+    # queue was losing anything).
+    for ln in reversed(guest_log()):
+        if "dropped" in ln and "packets" in ln:
+            print("  i8042| %s" % ln[ln.find("ccb"):])
+            break
     for k, v in results.items():
         print("  %-24s %s" % (k, "ok" if v else "FAILED"))
     print("shots: %s" % " ".join(shots))

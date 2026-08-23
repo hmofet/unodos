@@ -10226,3 +10226,41 @@ reach. The SVM backend needs the same; its VMCB does not save these either.
 Not filed as a request because I have not touched it: `hv_vmx.c` is unovirt's,
 and this is its core entry path. Say the word and I will do it as its own
 slice off master rather than smuggle it into an appliance branch.
+
+### 2026-08-23 OPEN (harness, mine): the host-driven pointer arrives but does not aim
+
+GIMP now runs multi-window under unovirt (`>> vm gimp OK`, four top-levels at
+800x600), and the host's pointer demonstrably reaches it: GIMP's status bar
+read `73, 34` with a paint cursor on the canvas and a tool selected from the
+keyboard. Two things did not work, and both are this harness's, not the
+appliance's or the hypervisor's:
+
+- **The aim is off.** Pinned to (0,0) and asked for guest (380,300), the
+  cursor arrived at roughly (260,110). Not a constant ratio, so not a scale
+  error in `find_guest_rect`'s 0.96.
+- **The drag painted nothing**, and the pointer never moved again afterwards -
+  three minutes and eight drag steps later the readout was still `73, 34`.
+
+Two theories died on the same line of evidence, which is why it is worth
+writing down. unovirt logs the emulated i8042's counters to the debug console
+every 16K exits, and after the pointer scene they read:
+
+    1 keys 12 packets 0 dropped, mouse streaming id 3
+
+**0 dropped**, so neither `uno_vdev_mouse`'s 255-per-packet split nor its
+`aq_n() > K8Q - 8` guard lost anything - both of which I had convinced myself
+were the cause after reading the code. And **12 packets** for roughly twenty
+injected pointer events, so the losses are ABOVE the emulated device: either
+in `uno_pc64_inject_pointer`'s ring (`if (n == g_injq_tail) return;` drops
+silently when full), in how the shell turns queued (x,y,btn) states into
+UI events, or in `vmgr`'s `display_mouse`. Counting events sent against
+packets emitted is the next measurement, and it is one run.
+
+The harness now prints that counter line in its summary, so the next person
+starts from the number rather than from the code.
+
+Worth noting for whoever owns `display_mouse`: it forwards MOUSE_MOVE, UP and
+WHEEL from the top of `vm_event`, and MOUSE_DOWN only after the whole
+button-bar hit test. That asymmetry is correct for the buttons but it means a
+press and its motion take different paths, which is exactly the kind of thing
+a drag notices and a click does not.
