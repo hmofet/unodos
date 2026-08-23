@@ -19,6 +19,15 @@
 #include "uno_nic.h"
 
 int  iwl_present(void);                 /* a supported Intel WiFi device on PCI? */
+
+/* Reserve the card's DMA arena while boot services are still alive.
+ *
+ * Must be called BEFORE ExitBootServices on any machine that may detach: the
+ * fallback arena is .bss, and on a firmware that loads the kernel above 4 GB
+ * (the Surface Laptop Go, image_base 0x140000000) the device cannot reach it -
+ * the firmware goes ALIVE and then every scan returns zero receive buffers.
+ * No-op when the card is absent, and idempotent. */
+void uno_iwl_reserve(void);
 uno_nic_t *iwl_nic(void);               /* full bring-up; NULL on any failure    */
 const unsigned char *iwl_mac(void);
 

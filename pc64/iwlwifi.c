@@ -761,6 +761,36 @@ static void arena_init_lowmem(void)
     g_arena_phys = (u64)(uintptr_t)g_arena;
 }
 
+int iwl_present(void);          /* defined below; the reserve is gated on it */
+
+/* Reserve the DMA arena WHILE BOOT SERVICES ARE STILL ALIVE.
+ *
+ * The fallback above is `g_arena_static`, a .bss array - and .bss is wherever
+ * the firmware loaded the kernel image. On the Surface Laptop Go that is
+ * `image_base 0x140000000`, so the static arena lands at 0x1_43add000: five
+ * gigabytes up, and unreachable by a device programmed with the 32-bit
+ * physical addresses the boot ROM and the RX ring use.
+ *
+ * The failure is quiet and looks nothing like a memory problem. The firmware
+ * still goes ALIVE, the MAC still reads out of OTP, and then every scan
+ * returns `rb_total=0 mpdu_seen=0 aps=0` - not one receive buffer ever comes
+ * back, because the device is DMAing to an address it cannot form. Which
+ * reads, from the desk, as "the card works but will not join anything".
+ *
+ * A machine that detaches never gets the good allocation, because by the time
+ * WiFi is brought up there are no boot services to ask. So ask EARLY: this is
+ * the same pattern uno_modload_reserve() and uno_vmm_reserve() already use for
+ * the same reason, and try_detach calls it beside them. Gated on the card
+ * actually being present, so a machine with no Intel WiFi reserves nothing.
+ *
+ * Idempotent - arena_init_lowmem() returns immediately once g_arena is set. */
+void uno_iwl_reserve(void)
+{
+    if (g_arena) return;
+    if (!iwl_present()) return;
+    arena_init_lowmem();
+}
+
 static void *arena_alloc(u32 len)
 {
     u32 off = (g_arena_used + 4095) & ~4095u;
