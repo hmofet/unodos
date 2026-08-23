@@ -396,6 +396,7 @@ static void stage_mark2(int idx, UINT32 bgra)
  * ======================================================================== */
 #define SPLASH_STEPS 4
 static const char *g_splash_msg;
+static const char *g_splash_note;   /* sticky: survives later splash_stage calls */
 static void splash_draw(int done)
 {
     int W = uno_fb_w, H = uno_fb_h, cx = W / 2, i;
@@ -447,6 +448,24 @@ static void splash_draw(int done)
         fb_fill_rect(bx + i * seg + 1, by + 1, seg - 2, bh - 2, segc[i]);
     { const char *s = g_splash_msg ? g_splash_msg : "loading";
       fb_text(cx - fb_text_w(s) / 2, by + bh + 9, s, FB_RGB(120,138,185), -1); }
+    /* A STICKY line, below the stage text, that later steps do NOT overwrite.
+     *
+     * The stage line is replaced by every step, which is right for progress
+     * and wrong for a verdict: the USB takeover reports once, and if the
+     * machine then wedges three steps later the operator is looking at the
+     * step and has lost the report. On a detached machine with no serial, no
+     * usable debug console and possibly no volume to log to, that report is
+     * the entire diagnosis. So it is drawn every frame until something
+     * replaces it deliberately. */
+    if (g_splash_note) {
+        /* BELOW the debug build banner at H/2+92, not between it and the stage
+         * line. by+bh+9 = H/2+69 is the stage text (to ~+85) and the banner
+         * runs to ~+108, so anything in that band overprints - which is the
+         * exact mistake the banner's own comment records from the Yoga run.
+         * by+bh+64 = H/2+124 is clear in both build flavours. */
+        int x = cx - fb_text_w(g_splash_note) / 2; if (x < 0) x = 0;
+        fb_text(x, by + bh + 64, g_splash_note, FB_RGB(150, 200, 255), -1);
+    }
 }
 static void splash_step(int done, const char *msg)
 {
@@ -1479,13 +1498,11 @@ void uno_pc64_init(void)
      * point and stopped, and not one of them could say whether the controller
      * had come up, how many devices it found, or whether the stick was back. */
     if (gDetached) {
-        char tv[128];
+        static char tv[128];         /* static: the splash redraws from it */
         uno_usb_takeover_str(tv, (int)sizeof tv);
-        splash_stage(4, tv);
+        g_splash_note = tv;          /* STICKY - every later step redraws it */
+        splash_stage(4, "usb takeover");
         uno_dbg_log("takeover: %s", tv);
-#ifdef UNO_DEBUG
-        uno_pc64_delay_ms(1500);     /* long enough to read, and to photograph */
-#endif
     }
     splash_stage(4, "starting desktop");
 
