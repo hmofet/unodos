@@ -41,6 +41,7 @@
 #include "usbhid.h"         /* native USB HID kbd/mouse (inert unless -DUNO_XHCI) */
 #include "usbmsc.h"         /* native USB mass storage (F8: USB boot + detach) */
 #include "usbboot.h"        /* ...and whether THIS machine's boot stick survives */
+#include "xhci.h"           /* pre-detach controller inventory (config space only) */
 #include "detachgate.h"     /* ...and whether its keyboard and pointer do too */
 #include "uno_devmgr.h"     /* unodevices: enumerate + bind (phases 2, 4) */
 #include "pc64_mtrr.h"      /* P3 opt-in: WC framebuffer MTRR rebuild */
@@ -245,6 +246,8 @@ static int gDetached;                   /* 1 after ExitBootServices (M3)        
 static const uno_bootinfo *gBI;
 static int gDetachBlocked;              /* held attached to keep the pointer    */
 static int gDetachStranded;             /* detached, but the system volume died */
+static int gDbgArmedEarly;              /* the IDT/watchdog went up inside try_detach */
+static int gNoWrite;                    /* DETACH.CFG: nowrite - skip post-detach telemetry */
 static const char *gDetachWhy = "not evaluated";  /* the deciding gate, in words */
 void *uno_pc64_st(void)           { return gST; }
 /* The loader's block, or NULL on a UEFI boot. Consumers use it as BOTH the
@@ -949,6 +952,13 @@ void *uno_pc64_boot_dp(void)
  *   nousb    detach normally, but never on a USB-booted system (the pre-P4
  *            behaviour - the conservative setting while USB MSC is young)
  *   on       force the default (present so a file can say "yes, deliberately")
+ *   nowrite  detach normally, then SKIP the post-detach telemetry writes.
+ *            Diagnostic: those writes are the first native disk write a
+ *            detached machine makes, and on a USB boot the first WRITE(10)
+ *            the xHCI stack has ever issued - every access before them is a
+ *            read. A machine that hangs without this word and boots with it
+ *            has named the write path, in one boot and with no rebuild. It
+ *            costs that boot's telemetry, which is the trade.
  */
 static int cfg_word(const char *w)
 {
@@ -1023,6 +1033,13 @@ static int try_detach(void)
     if (!uno_native_tsc_ok())     REFUSE("no TSC time base", 0);
     (void)uno_fs_volumes();     /* force the native FAT mount (fw transport) */
     if (cfg_word("off"))          REFUSE("DETACH.CFG says off", 1);
+    /* Latch `nowrite` HERE, while the firmware can still read the file. It
+     * suppresses the post-detach telemetry writes, which on a USB boot are the
+     * FIRST WRITE(10) the native stack ever issues - so a machine that hangs
+     * with it set and completes with it clear has told you the write path is
+     * the problem, in one boot and without a rebuild. Reading it after detach
+     * would depend on the very stack under suspicion. */
+    gNoWrite = cfg_word("nowrite");
     /* F8: "some volume survives" is not enough - the volume we BOOTED from
      * must survive.  A USB boot volume outlives detach only when the native
      * USB mass-storage path can reclaim it: usbmsc.c over xhci.c, and only on
@@ -1086,6 +1103,35 @@ static int try_detach(void)
             gBltFast = 0;                     /* Blt needs boot services       */
             gKeyEx = 0; gNAbs = gNPtr = 0;    /* firmware input died with EBS  */
             if (had_i8042) uno_ps2_init();    /* the i8042 is ours now         */
+#ifdef UNO_DEBUG
+            /* ARM THE FAULT REPORTER AND THE WATCHDOG HERE, NOT AFTER
+             * try_detach() RETURNS.
+             *
+             * Everything below this line - SDHCI/NVMe/AHCI bring-up, the xHCI
+             * takeover, usbmsc's bind, the FAT remount, usbhid's claim - used
+             * to run in a window with NO IDT OF OURS AND NO WATCHDOG. The
+             * firmware's IDT is still loaded and its handlers are in memory we
+             * just took back, so a fault there triple-faults the machine with
+             * no report and no output, and a spin sits forever: exactly the
+             * three silent Surface Laptop Go boots this was written for.
+             *
+             * Nothing here needs boot services. uno_dbg_on_detach() wants the
+             * TSC (calibrated at the top of uno_pc64_init) and the LAPIC, both
+             * already ours. It invalidates the cached crash volume on the way
+             * in, which is correct: the remount below is what re-finds it, and
+             * nothing writes to disk in between - uno_dbg_log goes to the RAM
+             * stash, which is the whole point, because that stash survives a
+             * warm reset and the watchdog's reset IS a warm one.
+             *
+             * The 120 s grace before the watchdog enforces its 20 s stall rule
+             * is longer than any healthy takeover, so a machine that hangs in
+             * here now resets ITSELF and reports on the next boot. */
+            uno_dbg_on_detach();
+            gDbgArmedEarly = 1;
+            uno_dbg_log("detached: IDT + LAPIC watchdog armed BEFORE the "
+                        "storage/USB takeover - anything below this line is "
+                        "now reportable");
+#endif
             /* STORAGE FIRST.  On a USB boot the system volume only exists
              * again once usbmsc has claimed the stick (uno_blk_detach brings
              * it up), and everything downstream - module loads, telemetry,
@@ -1365,6 +1411,13 @@ void uno_pc64_init(void)
      * on the stick). Writing here means every machine leaves its boot log and
      * env block even if the detach that follows loses the volume. */
     uno_dbg_envblock();
+    /* Name every USB host controller while the firmware still owns them all.
+     * Config space only - no BAR touched, nothing disconnected - so it is safe
+     * here, and here is the only place it is USEFUL: on a machine that hangs
+     * after detaching, this copy of the log is the one that reaches the disk.
+     * It also settles which controller find_xhci() will pick, which on an Ice
+     * Lake part with a second (Thunderbolt) xHCI is not obvious. */
+    uno_xhci_inventory_log();
     uno_dbg_log("pre-detach: volumes=%d - writing telemetry now, because a "
                 "detach that strands a USB boot volume would silence it",
                 uno_fs_volumes());
@@ -1389,14 +1442,45 @@ void uno_pc64_init(void)
                                        native stack covers this machine */
     }
 #endif
+    /* THE TAKEOVER, ON THE SCREEN.
+     *
+     * A machine that has just detached from a USB boot may have no volume to
+     * log to and no way to be asked a question. The framebuffer is hardware we
+     * still own and it is the ONLY channel that always works here - the same
+     * argument the stranded path already makes one screen up, applied to the
+     * case where the takeover SUCCEEDED and something after it did not.
+     *
+     * On the Surface Laptop Go three consecutive boots reached this exact
+     * point and stopped, and not one of them could say whether the controller
+     * had come up, how many devices it found, or whether the stick was back. */
+    if (gDetached) {
+        char tv[128];
+        uno_usb_takeover_str(tv, (int)sizeof tv);
+        splash_stage(4, tv);
+        uno_dbg_log("takeover: %s", tv);
+#ifdef UNO_DEBUG
+        uno_pc64_delay_ms(1500);     /* long enough to read, and to photograph */
+#endif
+    }
     splash_stage(4, "starting desktop");
 
 #ifdef UNO_DEBUG
     /* debug build: the environment block wants the FINAL machine state
      * (post-detach), then arm the freeze watchdog - the LAPIC timer once
-     * detached, a firmware timer event otherwise. */
+     * detached, a firmware timer event otherwise.
+     *
+     * EVERY STEP FROM HERE NAMES ITSELF ON THE SPLASH. This window is where
+     * the Surface hangs, and "starting desktop" covered all of it: the env
+     * block, the watchdog, the hypervisor self-test, the first native disk
+     * write and the security bring-up were one indistinguishable line. A
+     * frozen splash should say which of them it froze in. */
+    splash_stage(4, "dbg: env block");
     uno_dbg_envblock();                 /* re-read: detach changes the picture */
-    if (gDetached) uno_dbg_on_detach();
+    splash_stage(4, "dbg: watchdog");
+    /* ...unless try_detach already armed it, which it does on a detached
+     * machine so the takeover itself runs under the reporter. Re-arming would
+     * re-calibrate the LAPIC and restart the heartbeat grace for no gain. */
+    if (gDetached) { if (!gDbgArmedEarly) uno_dbg_on_detach(); }
     else           uno_dbg_watchdog_start();
     /* unovirt A1, and the position is load-bearing in BOTH directions.
      *
@@ -1410,6 +1494,7 @@ void uno_pc64_init(void)
      * catch it: the fault triple-faults the machine with no report and no
      * output, which is exactly how this arrived. Behind the IDT the same
      * fault is a CR report naming the instruction. */
+    splash_stage(4, "dbg: hypervisor self-test");
     uno_vmm_selftest();
     uno_dbg_envblock();                 /* ...and again: the selftest's verdict
                                            is part of the picture, and it does
@@ -1425,8 +1510,18 @@ void uno_pc64_init(void)
         uno_dbg_log("WARNING: detached and no writable volume remains - this "
                     "system has lost its boot device; telemetry after this "
                     "point cannot be persisted");
-    uno_dbg_write_bootenv();
-    uno_dbg_write_bootlog();
+    /* The first native disk WRITE on a detached machine, and on a USB boot the
+     * first WRITE(10) the xHCI stack has ever issued - reads got us this far.
+     * DETACH.CFG `nowrite` skips it so that suspicion can be tested. */
+    if (gNoWrite) {
+        splash_stage(4, "dbg: telemetry SKIPPED (DETACH.CFG nowrite)");
+        uno_dbg_log("nowrite: post-detach telemetry writes skipped by DETACH.CFG");
+    } else {
+        splash_stage(4, "dbg: writing telemetry (first native write)");
+        uno_dbg_write_bootenv();
+        uno_dbg_write_bootlog();
+        splash_stage(4, "dbg: telemetry written");
+    }
     /* opt-in PCH TCO hardware-watchdog self-demo (DEBUG.CFG hw-wdt-selftest):
      * arm the TCO then cli-spin - only separate silicon can reset from there.
      * A no-op without the key / without a usable TCO.  See HWWATCHDOG.md §7. */
