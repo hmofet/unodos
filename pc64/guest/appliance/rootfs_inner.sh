@@ -56,7 +56,7 @@ apk add --root $R --initdb --no-cache \
     xorg-server xf86-input-libinput xf86-video-fbdev xinit xrandr xset \
     mesa-dri-gallium \
     font-dejavu \
-    dbus \
+    dbus dbus-x11 \
     ca-certificates ca-certificates-bundle \
     openbox xdotool seatd wlroots \
     wtype
@@ -166,6 +166,37 @@ fi
   done ) &
 
 dbus-daemon --system 2>/dev/null
+
+# A SESSION BUS, WHICH IS THE ONE A DESKTOP APPLICATION ACTUALLY WANTS.  The
+# line above starts the SYSTEM bus, and for the browser appliance that was
+# enough - so this gap sat here unnoticed until an app came along that uses
+# the session bus for real.  GIMP registers `org.gimp.GIMP.UI` on it for
+# single-instance behaviour; with no bus and no `dbus-launch` on the image it
+# printed
+#
+#     Failed to execute child process "dbus-launch" (No such file or directory)
+#     gui_dbus_name_lost: connection to the bus cannot be established.
+#     gimp: fatal error: Segmentation fault
+#
+# and died on a loop under the hypervisor.  It survived the same missing bus
+# under plain QEMU, which is the worst way for a fault to behave: the fast
+# loop said the appliance was fine.
+#
+# `dbus-launch` is in dbus-x11, NOT in dbus - installing "dbus" and expecting
+# the launcher is the whole mistake in one line.
+#
+# A MACHINE ID FIRST, on a read-only root.  dbus refuses to start without one,
+# and /etc cannot be written - so /etc/machine-id is a symlink (made at build
+# time, below) into the tmpfs this fills in now.
+mkdir -p /var/lib/dbus
+[ -s /var/lib/dbus/machine-id ] || dbus-uuidgen > /var/lib/dbus/machine-id 2>/dev/null
+if [ -x /usr/bin/dbus-launch ]; then
+    eval "$(dbus-launch --sh-syntax 2>/dev/null)" 2>/dev/null
+    export DBUS_SESSION_BUS_ADDRESS
+fi
+# NAMED, NOT ASSUMED.  An empty address here is a client that will die minutes
+# later for a reason that looks nothing like this line.
+echo "uno: session bus ${DBUS_SESSION_BUS_ADDRESS:-MISSING} (machine-id $([ -s /var/lib/dbus/machine-id ] && echo ok || echo MISSING))" > /dev/ttyS0
 
 export HOME=/root XDG_RUNTIME_DIR=/run
 export XDG_CACHE_HOME=/tmp/cache XDG_CONFIG_HOME=/tmp/config
@@ -544,6 +575,14 @@ chmod +x $R/usr/share/uno/inject_scancodes.sh
 # resolv.conf through a TEMP FILE beside the target, and /etc is read-only.
 # So udhcpc gets a script of ours that writes the tmpfs path directly.
 ln -sf /tmp/resolv.conf $R/etc/resolv.conf
+
+# THE MACHINE ID, for the same reason and by the same trick.  dbus will not
+# start a bus without one, it lives at /etc/machine-id, and /etc is read-only -
+# so the file is a symlink into the tmpfs uno-init mounts over /var, and
+# uno-init fills it in with dbus-uuidgen at boot.  A per-boot identity is the
+# honest answer for an appliance whose whole filesystem is thrown away anyway.
+mkdir -p $R/var/lib/dbus
+ln -sf /var/lib/dbus/machine-id $R/etc/machine-id
 mkdir -p $R/usr/share/uno
 cat > $R/usr/share/uno/dhcp.script <<'DHCPEOF'
 #!/bin/sh

@@ -10123,3 +10123,41 @@ Two things in it are worth stealing whatever happens to the file:
   and `pointerSpeed 0` (labwc's rc.xml in `apps/gimp.app`) - with adaptive
   acceleration, distance travelled is a function of how fast deltas arrive,
   which under a slice-per-frame guest is not reproducible.
+
+### 2026-08-23 FINDING against the shell (a bug): F12 never reaches an app in a debug build
+
+`apps/vmgr.c`'s Display view tells the operator, on screen, "keys go to the
+guest - F12 returns to the list", and `vm_key` does handle EFI scan 0x16. It
+never runs. `pc64_uui.c`'s key loop claims F12 first, under `#ifdef UNO_DEBUG`:
+
+    /* F12 = operator escape hatch: stop the stress driver and hand back a
+       usable desktop.  FIRST in the loop ... */
+    if (scan == 0x16) { pc64_stress_stop(); if (UI.full) shell_full_escape();
+                        g_dirty = 1; continue; }
+
+`continue` - so no app sees it. The escape hatch itself is right, and this is
+not an argument for removing it. Two things are worth someone's attention:
+
+1. **It is build-dependent behaviour on a documented key.** F12 works in a
+   production build and silently does not in a debug one, so vmgr's own status
+   line is true exactly where nobody is testing and false where everybody is.
+   At minimum the string should not promise it; better, the Display view needs
+   a way out that the shell does not claim, or the escape hatch should also
+   release a guest-focused view (it is the same "operator is trapped" case the
+   comment describes - arguably the *worst* case of it, since every other key
+   is being forwarded to a foreign OS).
+
+2. **It silently breaks host-side automation of the Display view.** Anything
+   driving a guest has to be able to leave it: `tools/vm_gimp_urc.py` used F12
+   to reach the Console view and type at the appliance's ttyS0 shell, and
+   instead typed the entire command into the GUEST's keyboard, one
+   `KEY_C pressed` at a time, and reported nothing. It also used F12 to
+   re-enter the Display view, which is the only thing that resets vmgr's
+   `g_mx` to -1 - so a harness gets exactly ONE pointer baseline per run,
+   and does not find that out, it just aims from nowhere.
+
+The harness now works around both (the appliance reports its own client's log
+to ttyS0, and the pin is the first pointer event of the run), so nothing is
+blocked. Filing it because the next person to drive a guest will lose the same
+afternoon, and because the on-screen string is the kind of documentation that
+is worse than none.
