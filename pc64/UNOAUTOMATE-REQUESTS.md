@@ -10048,3 +10048,39 @@ OOM killer inside the guest, which presents as "the app just did not open".
 P2's installer therefore reads `uno_vmm_carve_mb()` before it installs anything
 and says so in the dialog. No code change is asked of the unovirt lane for
 this; it is a consumer reading an existing call.
+
+### 2026-08-23 CORRECTION to the same entry: request 1 is WITHDRAWN, and why
+
+**The inline-icon request above is unnecessary and I was wrong to file it.**
+`app_icon_resolve` (`pc64_uui.c:379`) already reads a QOI file that ships
+BESIDE a module: `icon: file:NAME.QOI` resolves against the module's own
+directory and volume, `pc64_icon_custom_load` puts it in a 12-slot 32x32 slab,
+and `mkuno.py` validates the form at build time. VMGR.UNO has used it since the
+app registry landed - the very case I claimed was unsupported.
+
+So the installer needs nothing from the app-registry lane. Writing
+`<NAME>.QOI` beside `<NAME>.UNO` is the whole of it, and the remaining work is
+entirely in this lane: decoding the APK's icon (a PNG, and `um_png` is already
+in the kernel) and encoding a 32x32 QOI. P2 ships `icon: generic` and that is
+the only thing about an installed app that currently looks borrowed.
+
+**The lesson, since it nearly cost another lane a change it did not need:** I
+filed the request from the DESCRIPTOR's documentation, which lists `icon:` as
+"a named emblem", and never read the resolver. The contract's prose was a
+subset of the contract's code.
+
+### 2026-08-23 FINDING for anyone who rewrites a `.UNO` in place
+
+**A `.UNO` is sealed with a CRC-32 over everything after its 48-byte header**
+(`mod_instantiate`, `pc64_modload.c:565`). Rewrite any byte of a module and
+write it back without re-sealing and you get a module that passes every check
+an installer can see - descriptor parses, registry accepts it, name and icon
+right, desktop icon appears - and is refused by the loader with
+"the loader refused the image". Nothing before the loader notices.
+
+`pc64_pkg.c` re-seals, and checks the seal of its input first so that a change
+to the header layout fails on the template rather than silently producing
+unloadable apps. Recorded here because the next in-place module rewriter will
+hit it too, and because the header struct is private to `pc64_modload.c` - a
+public `uno_mod_reseal(unsigned char *img, long n)` there would be a kindness,
+but it is not asked for: the checked-not-trusted version works today.

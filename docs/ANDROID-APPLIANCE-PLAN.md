@@ -1,11 +1,21 @@
 # Foreign packages in UnoDOS: Android first, Firefox first
 
-> **Status: PLAN, 2026-08-23. Nothing here is built or claimed.** Written
-> after M5 (Chromium driven from the host) to widen guest coverage. It sits on
-> Track A (`unovirt`), the appliance payload (`pc64/guest/appliance/`), the app
-> registry (`docs/APP-REGISTRY-PLAN.md`, `uno_appdesc.h`) and Track B
-> (`unoguest`). The GIMP appliance work is in flight on the same payload; §7
-> says how the two stay out of each other's way.
+> **Status: 2026-08-23. P1 part-done, P2 DONE and proven, P3 onward is plan.**
+> Branch `unopkg`. It sits on Track A (`unovirt`), the appliance payload
+> (`pc64/guest/appliance/`), the app registry (`docs/APP-REGISTRY-PLAN.md`,
+> `uno_appdesc.h`) and Track B (`unoguest`). §7 says how this lane and the
+> GIMP lane stay out of each other's way.
+>
+> **What works today.** Double-click a real Firefox 154.0 x86_64 APK in Files,
+> press again, and "Firefox" is on the desktop beside every built-in app; open
+> it and a native UnoDOS window opens carrying its name. It survives a reboot.
+> The runtime behind it is a stub that reports, accurately, why nothing is
+> running yet. Contract and evidence: `pc64/UNOPKG.md`.
+>
+> **Appliance-side, P1:** the guest kernel now carries binder, binderfs, the
+> namespace and cgroup set, veth/bridge/NAT and virtio-snd; built and verified
+> on quill. The Waydroid image build (`build_android.sh`) is the remaining
+> half of P1.
 
 ## 0. What is being asked, and the verdict
 
@@ -137,13 +147,20 @@ host:    android
 launch:  org.mozilla.firefox/.App
 ```
 
-**One additive descriptor change** is needed for a real icon: today `icon:`
-names an emblem in `pc64_icons.h`. A foreign app has its own. Proposal to the
-app-registry lane: `icon: @` means "a QOI image follows the descriptor
-block", read by `uno_mod_desc_read` into the same per-app icon slot the
-emblem would fill. `pc64_qoi.*` already exists in that lane. Until it lands
-the shim uses `icon: generic` and looks slightly wrong, which is fine for
-P1..P3.
+**A real icon needs NO change to the app registry**, contrary to what this
+plan said when it was written. `app_icon_resolve` (`pc64_uui.c:379`) already
+reads a QOI that ships beside a module: `icon: file:NAME.QOI` resolves against
+the module's own directory and volume, into a 12-slot 32x32 custom slab, and
+`mkuno.py` validates the form at build time. VMGR.UNO has used it since the
+registry landed - the very case the first draft claimed was unsupported. The
+request was filed from the descriptor's *prose*, which lists `icon:` as "a
+named emblem", without reading the *resolver*; it is withdrawn in
+`pc64/UNOAUTOMATE-REQUESTS.md`.
+
+So the remaining work is entirely in this lane: decode the APK's icon (a PNG,
+and `um_png` is already in the kernel) and write a 32x32 QOI beside the shim.
+P2 ships `icon: generic`, which is the only part of an installed app that
+still looks borrowed.
 
 The shim's `uno_app_main`: ensure the runtime (start the appliance if
 stopped), send `LAUNCH(pkg/activity)`, and then **own nothing**: the windows
@@ -189,8 +206,8 @@ criterion a screenshot or a log line can show. P1..P3 need no hypervisor.
 
 | # | Phase | Exit criterion | Sessions |
 |---|---|---|---|
-| **P1** | **Android runs in the fast loop.** Kernel config gains binder/binderfs, namespaces, cgroup2, veth/bridge, netfilter + NAT, `CONFIG_SND_VIRTIO`. `build_android.sh` produces ANDROID.IMG (LineageOS 20 x86_64 vanilla, `waydroid_base.prop` with `ro.hardware.gralloc=default`, `ro.hardware.egl=swiftshader`, `persist.waydroid.multi_windows=true`). `uno-init` mounts it from `/dev/vdb` when present and starts the container headless (no launcher shown: `waydroid show-full-ui` is NOT run). Firefox x86_64 APK installed from the ttyS0 shell; `waydroid app launch org.mozilla.firefox` puts a Firefox toplevel on cage. | `shots/android_fastloop_firefox.png`: Firefox, and only Firefox, on the appliance's framebuffer; `waydroid status` RUNNING; peak memory from `/proc/meminfo` recorded | 2 |
-| **P2** | **The package half, host side, with a stub runtime.** `pc64_pkg.c`: APK parse (label, icon, version), the dialog, `APPS\PKG\` layout, shim generation from `foreign_shim.c`, Files association. The runtime behind it is a stub that logs `LAUNCH` and does nothing, so this is testable in the ordinary QEMU gate with no guest. | Double-click an APK in Files in QEMU, see the dialog, install, see "Firefox" on the desktop and in Start with a generic icon; launch logs `LAUNCH android org.mozilla.firefox`; survives a reboot; uninstall from the icon's context menu removes all three files | 2 |
+| **P1** (half done) | **Android runs in the fast loop.** Kernel config gains binder/binderfs, namespaces, cgroup2, veth/bridge, netfilter + NAT, `CONFIG_SND_VIRTIO`. `build_android.sh` produces ANDROID.IMG (LineageOS 20 x86_64 vanilla, `waydroid_base.prop` with `ro.hardware.gralloc=default`, `ro.hardware.egl=swiftshader`, `persist.waydroid.multi_windows=true`). `uno-init` mounts it from `/dev/vdb` when present and starts the container headless (no launcher shown: `waydroid show-full-ui` is NOT run). Firefox x86_64 APK installed from the ttyS0 shell; `waydroid app launch org.mozilla.firefox` puts a Firefox toplevel on cage. | `shots/android_fastloop_firefox.png`: Firefox, and only Firefox, on the appliance's framebuffer; `waydroid status` RUNNING; peak memory from `/proc/meminfo` recorded | 2 |
+| ~~**P2**~~ | **DONE 2026-08-23.** `pc64_pkg.c` (a local zip reader, a binary-XML manifest reader, install/remove, the runtime probe), `apps/foreign_shim.c` -> `PKG\FSHIM.UNO`, the `.APK` branch in Files behind an arm-twice confirm, two `kExports` rows, and two gates. **Nothing in `pc64_uui.c` changed** - an installed foreign app reaches the desktop through the ordinary app registry, which is the first outside proof of what `docs/APP-REGISTRY-PLAN.md` promised. | **MET.** Firefox 154.0 x86_64 installs from Files, appears on the desktop as "Firefox", opens a native window, and is still there after a reboot (`shots/pkg_*.png`). Two findings paid for: **a `.UNO` is CRC-sealed**, so an in-place rewrite must re-seal or the loader refuses an app that looks perfect everywhere else; and the arm-twice flag must be cleared by MOVING, never by the key that arms it. | 2 |
 | **P3** | **B0: the channel and L1 plumbing, with the stub agent.** As `UNOVIRT-PLAN.md` B0, plus the `PKG_*` commands. Three stub foreign windows are real `unoui_window`s; the shim's `LAUNCH` makes the stub emit a `WIN_CREATE` tagged to the shim. | In QEMU/TCG: launching the Firefox shim opens a native window titled "Firefox" (stub content); snap, Alt-Tab, taskbar grouping and close all work; screenshots in the gate. **Either this is the B0 slice of the unoguest lane, or it is claimed here in that lane's name; it is not built twice** | 2..3 |
 | **P4** | **B1 for Android: the real agent.** A headless wlroots compositor in the appliance (cage is replaced, or run with a custom backend: decide in P4a by trying wlroots' headless backend + a damage exporter first) that exports every toplevel's damage into a surface slot and forwards injected input. Waydroid's per-activity surfaces arrive here with their titles. `uno-init` runs the boot-time `PKG_LIST` catch-up. | On devbuntu under unovirt: double-click Firefox's APK, install, launch, and **Firefox is a native UnoDOS window**; type a URL through it and a page renders (`shots/firefox_native_window.png`). Boot-to-usable time and memory recorded | 4..6 |
 | **P5** | **Focus policy and harness.** `uno_vmm_focus_display` becomes "any foreign window has focus"; `tools/vm_pkg_urc.py` scene: install, launch, navigate, screenshot, uninstall. Conformance row. | Scene passes three times in a row; P4's screenshot reproduces from cold | 1..2 |
@@ -253,12 +270,16 @@ everything they build or install is a file on the ESP.**
 - **unoguest** (`unoguest*`, `guest/`): P3/P4 ARE this lane's B0/B1. Claim it
   explicitly before P3, or hand P3/P4 to whoever holds it and build P1/P2
   against the stub meanwhile: P2 needs nothing from the channel.
-- **Appliance payload** (shared with the GIMP lane today): this plan adds new
-  files (`build_android.sh`, `android.prop`, `uno-android.sh`) and touches
-  `rootfs_inner.sh` in one appended place; `unodos-guest.config` gains an
-  appended `# android` block. Rebase daily; both lanes append.
-- **app registry**: one request, the `icon: @` inline-QOI key. The shim
-  needs nothing else.
+- **Appliance payload** (shared with the GIMP lane): **that lane has since
+  generalised it, and it removes this plan's only real collision.** An
+  appliance is now one file, `apps/<name>.app` - packages, compositor, client
+  and self-test - with `rootfs_inner.sh` holding everything that does not care
+  which. So Android becomes `apps/android.app` plus `build_android.sh`, and
+  `rootfs_inner.sh` is not touched at all. `unodos-guest.config` and
+  `build_kernel.sh` already carry this lane's appended `# android` block
+  (landed). Rebase daily; both lanes append.
+- **app registry**: **nothing.** The `icon: @` request is withdrawn -
+  `icon: file:NAME.QOI` already does it (see §3.2).
 - **unovdev**: the third blk slot (P1/P4, probably a table entry) and P6's
   `unovdev_snd.c`, as requests if not owned here.
 - **unovirt**: the focus-policy line (P5), `uno.appliance=` token.
