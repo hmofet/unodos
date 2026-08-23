@@ -92,6 +92,21 @@ unsigned long long ux_u64(const char *s);
  * so.  Every backend needs this loop and none of them should write it again:
  * getting the "pump the NIC while you wait" part wrong is how a transfer
  * stalls forever on a link that is working fine. */
+/* Pump the network once.  Pass idle=1 when the last turn moved NOTHING, and
+ * it yields a couple of milliseconds first: net.c derives part of its notion
+ * of time from net_poll()'s cadence, so a tight spin runs the stack's timers
+ * hundreds of times too fast and leaves a socket wedged in SYN_SENT against a
+ * peer that is plainly reachable.  A loop that IS moving bytes passes 0 and
+ * never sleeps. */
+void ux_pump(int idle);
+
 int  ux_wait(int (*ready)(void *), void *ctx, int ms);
+
+/* Resolve a host to an IPv4 address, accepting a DOTTED-QUAD LITERAL without
+ * asking a resolver - net_dns_query() would send a real query for "10.0.2.2",
+ * which nothing answers, and which is what every harness and half the LAN
+ * targets are named by.  Strict about the shape, because a lenient parse turns
+ * "1.2.3" into the reachable-but-wrong 1.2.0.3.  Returns 1 on success. */
+int  ux_resolve(const char *host, unsigned char ip[4]);
 
 #endif

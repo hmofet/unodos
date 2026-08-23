@@ -1306,7 +1306,18 @@ static void dispatch_cmd(const char *id, char *verb, char *args)
      * dispatcher, stop the box answering, and be hard-reset by the guard. */
     if (!strcmp_(verb, "xfer")) {
         int n = unoxfer_cmd(args ? args : "", g_report, (int)sizeof g_report);
-        rsp(id, n >= 0 ? "ok" : "err", g_report);
+        char *p = g_report;
+        /* Stream the report BY LINE, like `devices`.  rsp() builds one frame
+         * per call and the protocol is newline-delimited, so handing it a
+         * multi-line buffer would put a raw newline inside a frame and
+         * desynchronise the client's parser for the rest of the session. */
+        if (!*p) { rsp(id, n >= 0 ? "ok" : "err", n >= 0 ? "" : "failed"); }
+        while (*p) {
+            char *nl = p; while (*nl && *nl != '\n') nl++;
+            { char save = *nl; *nl = 0; if (*p) rsp(id, n >= 0 ? "ok" : "err", p); *nl = save; }
+            if (!*nl) break;
+            p = nl + 1;
+        }
         rsp(id, "end", 0); return;
     }
     if (!strcmp_(verb, "bootnext")) {

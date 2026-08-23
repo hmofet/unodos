@@ -296,7 +296,11 @@ int unoxfer_cmd(const char *line, char *out, int cap)
 
     /* ---- the transfers ---------------------------------------------------- */
     if (eq(sub, "pull") || eq(sub, "push")) {
-        int push = sub[1] == 'u';
+        /* NOT sub[1]: "pull" and "push" both carry 'u' there, so the obvious
+         * one-character test makes every pull a push - which then fails as
+         * "this protocol cannot upload" and points at the backend.  Compare
+         * the whole word. */
+        int push = eq(sub, "push");
         int vol, recurse = 0, id;
         char flag[8];
         if (!word(&s, a1, (int)sizeof a1)) { o_s(&b, "usage: xfer pull <site|url> <rpath> <vol> <lpath> [-r]"); return -1; }

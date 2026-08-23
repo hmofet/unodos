@@ -85,6 +85,13 @@ static void hx_shut(hxio *io)
 /* Send every byte, pumping while the window is shut.  A partial send that the
  * caller does not notice is a request the server never sees the end of, which
  * presents as a hang and not as an error. */
+/* A NEGATIVE net_send IS NOT A FAILURE.  netsock keeps one segment in flight
+ * at a time and returns -1 while that segment is outstanding, so -1 is ordinary
+ * back-pressure and only means "closed" if the socket actually is.  Treating it
+ * as fatal made large sends fail intermittently - which reads as a flaky
+ * server, and is not.  pc64_http makes exactly this distinction; so does this.
+ * A TLS handle is different: tls_send returns 0 for "not now" and negative
+ * only for a real failure. */
 static int hx_send_all(hxio *io, const void *d, int n, volatile int *cancel)
 {
     const unsigned char *p = (const unsigned char *)d;
@@ -93,11 +100,16 @@ static int hx_send_all(hxio *io, const void *d, int n, volatile int *cancel)
     while (sent < n) {
         int w;
         if (cancel && *cancel) return -2;
-        net_poll();
+        ux_pump(0);
         if (io->tls) tls_poll(io->tls);
         w = hx_send(io, p + sent, n - sent);
-        if (w < 0) return -1;
         if (w > 0) { sent += w; t0 = TickCount(); continue; }
+        if (w < 0) {
+            if (io->tls) return -1;
+            if (net_sock_state(io->sock) != TCP_ESTABLISHED) return -1;
+            /* else: a segment is in flight - wait for it */
+        }
+        ux_pump(1);                       /* nothing moved: yield             */
         if (TickCount() - t0 > 60 * 20) return -1;      /* 20 s of nothing */
     }
     return sent;
@@ -181,7 +193,7 @@ static int hx_connect(unoxfer_client *c, const hxurl *u, hxio *io)
     memset(io, 0, sizeof *io);
     io->sock = -1;
     if (!pc64_net_up()) return ux_fail(c, UNOXFER_EIO, "no network");
-    if (!net_dns_query(u->host, ip))
+    if (!ux_resolve(u->host, ip))
         return ux_failf(c, UNOXFER_EIO, "cannot resolve %s", u->host);
 
     if (u->tls) {
@@ -198,14 +210,22 @@ static int hx_connect(unoxfer_client *c, const hxurl *u, hxio *io)
     t0 = TickCount();
     for (;;) {
         int r;
-        net_poll();
+        ux_pump(1);
         r = hx_up(io);
         if (r == 1) return UNOXFER_OK;
         if (r < 0) { hx_shut(io); return ux_failf(c, UNOXFER_EIO,
                        "connection to %s failed", u->host); }
         if (TickCount() - t0 > 60 * 30) {
+            /* Name the SOCKET STATE, not just "timed out".  SYN_SENT means the
+             * SYN went out and nothing came back (a firewall, or nothing
+             * listening); CLOSED means the stack never got as far as sending
+             * one.  Those are different problems and a bare timeout hides
+             * which - it cost a debugging round here exactly once. */
+            int st = io->tls ? -1 : net_sock_state(io->sock);
             hx_shut(io);
-            return ux_failf(c, UNOXFER_EIO, "timed out connecting to %s", u->host);
+            return ux_failf(c, UNOXFER_EIO,
+                            "timed out connecting to %s:%d (sock state %d)",
+                            u->host, u->port, st);
         }
     }
 }
@@ -223,7 +243,7 @@ static int hx_headers(unoxfer_client *c, hxio *io, hxreq *r,
     r->status = 0; r->length = -1; r->location[0] = 0;
     while (n < (int)sizeof hdr - 1) {
         int got;
-        net_poll();
+        ux_pump(1);
         if (io->tls && tls_poll(io->tls) < 0) break;
         got = hx_recv(io, hdr + n, (int)sizeof hdr - 1 - n);
         if (got < 0) break;
@@ -350,6 +370,17 @@ static int hx_do(unoxfer_client *c, const char *url, hxreq *r, int depth)
     if (r->prog) { r->prog->done = 0;
                    r->prog->total = r->length > 0 ? (unsigned long long)r->length : 0ull; }
 
+    /* A HEAD HAS NO BODY, so the read loop below must not run: it would wait
+     * for Content-Length bytes that will never come, watch the server close,
+     * and then report the answer it was given as a TRUNCATED transfer.  That
+     * turned every plan's byte total into 0 and every progress line into
+     * "23/0", which reads as a server that would not say how big the file is
+     * rather than as a bug on this side. */
+    if (r->method[0] == 'H' && r->method[1] == 'E' && r->method[2] == 'A') {
+        hx_shut(&io);
+        return UNOXFER_OK;
+    }
+
     if (spilln > 0) {
         if (r->sink && r->sink(r->sink_ctx, spill, spilln) < 0) {
             hx_shut(&io); return ux_fail(c, UNOXFER_ENOSPC, "the sink refused the body");
@@ -363,7 +394,7 @@ static int hx_do(unoxfer_client *c, const char *url, hxreq *r, int depth)
         unsigned char buf[4096];
         int up;
         if (cancel && *cancel) { hx_shut(&io); return ux_fail(c, UNOXFER_ECANCEL, "cancelled"); }
-        net_poll();
+        ux_pump(0);
         up = hx_up(&io);
         n = hx_recv(&io, buf, (int)sizeof buf);
         if (n > 0) {
@@ -377,6 +408,7 @@ static int hx_do(unoxfer_client *c, const char *url, hxreq *r, int depth)
         }
         if (n < 0 || up < 0) break;                     /* the peer closed    */
         if (r->length >= 0 && got >= r->length) break;   /* we have it all    */
+        ux_pump(1);                                     /* nothing arrived    */
         if (TickCount() - t0 > 60 * 30) {
             hx_shut(&io);
             return ux_failf(c, UNOXFER_EIO, "stalled after %lld bytes", got);
@@ -437,10 +469,22 @@ static int hb_open(unoxfer_client *c, const unoxfer_site *s)
     hb *b = (hb *)malloc(sizeof *b);
     if (!b) return ux_fail(c, UNOXFER_EIO, "out of memory");
     memset(b, 0, sizeof *b);
-    if (strstr(s->host, "://")) ux_cpy(b->base, (int)sizeof b->base, s->host);
-    else snprintf(b->base, sizeof b->base, "%s://%s",
-                  s->proto == UNOXFER_HTTPS || s->proto == UNOXFER_WEBDAVS
-                      ? "https" : "http", s->host);
+    /* THE PORT HAS TO SURVIVE.  A site built from "webdav://host:8497/" holds
+     * the port in site->port, not in site->host, so a base rebuilt from the
+     * host alone silently dials 80 - and the only symptom is a connect
+     * timeout to an address that is plainly reachable.  Cost an afternoon
+     * exactly once; the explicit ":port" is why it will not again. */
+    if (strstr(s->host, "://")) {
+        ux_cpy(b->base, (int)sizeof b->base, s->host);
+    } else {
+        const char *scheme = (s->proto == UNOXFER_HTTPS ||
+                              s->proto == UNOXFER_WEBDAVS) ? "https" : "http";
+        int dflt = unoxfer_proto_port(s->proto);
+        if (s->port && s->port != dflt)
+            snprintf(b->base, sizeof b->base, "%s://%s:%d", scheme, s->host, s->port);
+        else
+            snprintf(b->base, sizeof b->base, "%s://%s", scheme, s->host);
+    }
     c->impl = b;
     /* Range requests are plumbed and correct, and RESUME is still a lie until
      * unofs lands its append: without it a resumed body is staged on its own

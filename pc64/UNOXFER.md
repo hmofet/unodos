@@ -79,14 +79,22 @@ planning.
 Three properties worth stating because they are the ones that get lost in a
 rewrite:
 
-- **`.part` then rename.** A file lands as `<name>.PART` and is renamed onto
-  its real name (`uno_fat_rename`) only after the last byte verifies. A
-  killed transfer therefore leaves a visibly incomplete file, never a
+- **Partial then rename.** A file lands under a work name and is renamed onto
+  its real name (`uno_fat_rename`) only after the last byte verifies. A killed
+  transfer therefore leaves a visibly incomplete file, never a
   truncated-looking real one. The rename is the commit point.
-- **Resume is from the `.part` size.** Reconnecting to a half-done job asks
-  the backend to start at `size(<name>.PART)`. Backends that cannot seek
-  (`SCP`, `TFTP`) report so through `unoxfer_caps()` and restart the file;
-  they do not silently append to a partial and hand back a corrupt file.
+
+  The work name is `<base>.$$$`, **not** `<name>.PART`, and that is not a style
+  choice: `HTTP1.TXT.PART` is two dots and a four-character extension, which
+  FAT will not accept, so every partial write failed and the error surfaced
+  against the *final* path - which is not where the bad name was. `$$$` is the
+  DOS convention for a work file and is legal 8.3.
+- **Resume is from the partial's size.** Reconnecting to a half-done job asks
+  the backend to start at that size. Backends that cannot seek (`SCP`, `TFTP`)
+  report so through `unoxfer_caps()` and restart the file; they do not silently
+  append to a partial and hand back a corrupt file. HTTP and WebDAV advertise
+  resume only once streaming is live, because without an append a resumed body
+  would be staged alone and committed as the WHOLE file.
 - **Nothing blocks the desktop.** The engine is a step machine:
   `unoxfer_job_step()` does a bounded slice of work and returns. The app calls
   it once a frame; the URC verb calls it from the remote tick. A stalled server
@@ -99,10 +107,17 @@ append to one. There is no `uno_fat_write_at`. So a streamed download has
 nowhere to put byte 16,777,217 except a bigger buffer.
 
 v1 therefore stages one file at a time in a heap buffer sized by
-`unoxfer_stage_cap()` (default 16 MB, settable, and already twice URC `put`'s
-cap), and a **job** - a whole recursive directory - is unbounded, because the
-buffer is reused per file. A four-gigabyte source tree of ordinary files pulls
-fine; a single four-gigabyte ISO does not, yet.
+`unoxfer_stage_cap()` (default 8 MB, settable through `xfer stage`), and a
+**job** - a whole recursive directory - is unbounded, because the buffer is
+reused per file. A four-gigabyte source tree of ordinary files pulls fine; a
+single four-gigabyte ISO does not, yet.
+
+The buffer is allocated on first use, **halved on failure** down to 64 KB
+rather than refusing, and freed when the last holder lets go: the heap is 32 MB
+and shared with Studio's compile arena, the browser and the Python VM, so a box
+under memory pressure should transfer slowly in small pieces rather than take
+the desktop down with it. There is exactly ONE buffer for the whole machine,
+which is also what serialises two concurrent jobs' file writes.
 
 The fix is one call in unofs's lane, requested on 2026-08-22 (see
 `UNOAUTOMATE-REQUESTS.md`). unoxfer already calls it through a **weak symbol**:
@@ -115,7 +130,7 @@ __attribute__((weak)) int uno_fat_append(int vol, const char *path,
 When unofs lands the strong symbol the engine streams in fixed windows and the
 per-file cap disappears with no change here - the `r8169_dbg_cmd` pattern,
 applied to a filesystem call. `unoxfer_streaming()` reports which mode is live
-so the app and the verb can say so rather than surprising someone at 16 MB.
+so the app and the verb can say so rather than surprising someone at 8 MB.
 
 ## The `xfer` URC verb
 
@@ -239,14 +254,51 @@ the loss unlikely rather than impossible - the fix belongs in unossh.
 | `unoterm.h` / `unoterm.c` | the VT emulator |
 | `xferapp_ui.c` | the windowed app: dual pane, queue, terminal tab |
 | `tools/unoterm_test.c` | host build of the emulator + its fixtures |
-| `tools/xfer_qemu.py` | the end-to-end gate |
+| `tools/xfer_qemu.py` | the end-to-end gate, and the WebDAV server it tests against |
 
 ## Verification
 
-- `tools/unoterm_test.c` - host-side, no device: feeds recorded escape streams
-  through the emulator and asserts the resulting cell grid.
-- `tools/xfer_test.c` - host-side: URL parsing, path joining, the SCP wire
-  framing, and the plan phase against a stub backend.
-- `tools/xfer_qemu.py` - end-to-end in QEMU: serves a tree over HTTP from the
-  host, drives `xfer pull … -r` over URC, polls `status` to completion, and
-  asserts every file arrived byte-identical with no `.PART` left behind.
+Three layers, each testing what it can test honestly.
+
+- **`tools/unoterm_test.c`** - host-side, no device. Builds `unoterm.c` itself
+  (it includes nothing, so there is nothing to shim) and asserts the resulting
+  cell grid: CR-overwrite progress bars, scroll regions with the rows outside
+  them untouched, alt-screen enter-and-leave with the primary intact, UTF-8
+  split across two feeds, a stray continuation byte resyncing rather than
+  poisoning the rest, and an undersized init block refused. 42 assertions.
+- **SPECTEST `network` / `xfer:local` + `xfer:url`** - on the device, in a
+  debug build. The capability bits must agree with what the volume can actually
+  do (a read-only volume must not advertise `put`), and a URL carrying a
+  password must be REFUSED - a security property, not a convenience.
+- **`tools/xfer_qemu.py`** - end to end in QEMU, and the only one that proves
+  the claim. The host runs a small WebDAV server; the gate drives
+  `xfer pull … -r` over URC, polls `status` to completion, and checks every
+  file with a **position-weighted** byte sum on the device (the guest has no
+  `hashlib`, and a plain sum would miss a file whose bytes arrived rearranged).
+  It also asserts that no work file survived the commit, that a finished job is
+  still queryable, that a recursive TFTP pull is refused up front with a
+  reason, and that the collection does not appear inside its own listing.
+
+  The WebDAV server is written IN the gate rather than pulled from a library,
+  so the PROPFIND parser is tested against XML the parser's author did not also
+  write: a non-`D` namespace prefix, percent-encoded hrefs, and the self-first
+  ordering a real server sends - the three things a hand-rolled WebDAV client
+  gets wrong.
+
+### Three bugs the gate found that review had not
+
+Worth recording, because each is the kind that compiles and passes a smoke test:
+
+1. **`pull` and `push` both have `'u'` at index 1.** `sub[1] == 'u'` made every
+   pull a push, which then failed as "this protocol cannot upload" and pointed
+   at the backend.
+2. **A tight `net_poll()` loop wedges TCP.** net.c derives part of its notion of
+   time from how often `net_poll()` is called (`g_ticks * 5u`, and the DHCP and
+   retransmit stages are commented "~5 ms"), so spinning on it runs the stack's
+   timers hundreds of times too fast. The symptom was a socket stuck in
+   SYN_SENT against an address that `nst` connected to in two seconds. Every
+   wait loop now pumps through `ux_pump(idle)` and yields when nothing moved.
+3. **A negative `net_send` is back-pressure, not failure.** netsock keeps one
+   segment in flight and returns -1 while it is outstanding. Treating that as
+   fatal made large request bodies fail intermittently, which reads as a flaky
+   server and is not.
