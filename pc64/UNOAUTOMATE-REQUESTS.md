@@ -10161,3 +10161,68 @@ to ttyS0, and the pin is the first pointer event of the run), so nothing is
 blocked. Filing it because the next person to drive a guest will lose the same
 afternoon, and because the on-screen string is the kind of documentation that
 is worse than none.
+
+## 2026-08-23 FINDING against unovirt (a bug): the guest's FPU/SSE register file is never saved
+
+**`vmx_vcpu_run` swaps XCR0 around the entry and nothing saves the registers
+XCR0 describes.** There is no `FXSAVE`/`FXRSTOR` and no `XSAVE`/`XRSTOR`
+anywhere in `hv_vmx.c`; `vmx_entry`'s stub saves the host's `rbx/rbp/rsi/rdi/
+r12-r15` and loads and stores the guest's sixteen GPRs, and that is the whole
+of it. XCR0 is the MASK of which state components are enabled - it is not the
+state. So x87 ST0-7, MMX, **XMM0-15 and MXCSR are shared between UnoDOS and
+its guest with no save or restore in either direction**, at every one of the
+~60 slice boundaries a second.
+
+Both directions are live. UnoDOS is a graphical OS: its blitters, its font
+rendering and every `memcpy` the compiler vectorises use SSE, so the guest
+resumes each slice with the host's XMM contents, and the host resumes with the
+guest's. KVM does an XSAVE around every entry; it is not optional.
+
+**How it was found, and why the chain matters more than the conclusion.** GIMP
+crashes three seconds into startup under unovirt, every launch, and never
+under plain QEMU. Eliminated one at a time, each with a `gimp -i` headless
+probe run from the appliance itself (`apps/gimp.app`) so no display is
+involved:
+
+| guest | flags reported | result |
+|---|---|---|
+| unovirt on leviathan | `sse4_2 bmi2` nproc=1 | **rc=139 SIGSEGV** |
+| QEMU `-cpu qemu64 -smp 2` | (none) | rc=0, four windows |
+| QEMU `-cpu host -smp 1` | `fma sse4_2 xsave avx f16c avx2 bmi2` | rc=0, four windows |
+| QEMU `-cpu host,-xsave -smp 1` | `fma sse4_2 avx f16c avx2 bmi2` | rc=132 SIGILL |
+| QEMU `-cpu host,-xsave,-avx,-avx2,-f16c,-fma -smp 1` | `sse4_2 bmi2` nproc=1 | **rc=0, four windows** |
+
+The last row is the one that matters: it is unovirt's advertised CPU exactly,
+under plain QEMU, and GIMP is fine. So it is not the display, not memory
+(1964M vs 1977M), not the core count, and **not the CPUID flags** - which was
+my hypothesis for most of a day and was wrong. What is left is the one thing
+unovirt does that KVM does not: run the guest in 10 ms slices without
+preserving its SIMD state.
+
+It also fits the symptoms in a way a CPUID story never did. The crash signal
+varies between launches of the same binary on the same image - rc=1, rc=1,
+rc=139, rc=1 - which is what nondeterministic register corruption looks like
+and is not what a missing instruction looks like. And GIMP is simply the first
+thing this appliance has run that keeps live values in XMM for millions of
+consecutive instructions; babl is a pixel-format conversion library and does
+nothing else.
+
+**Worth re-reading in this light:** the browser appliance's unexplained
+`Assertion failed: v > 0 (double-conversion/fast-dtoa.cc)` aborts, currently
+attributed to Alpine building Chromium against a system double-conversion that
+keeps its assertions. That assertion firing at all is a floating-point value
+being wrong, and Chromium's formatter is not usually wrong. I am not claiming
+it is the same bug, only that it is now the first thing I would check.
+
+**The fix** is two 16-byte-aligned buffers and four instructions in
+`vmx_vcpu_run`, around `vmx_entry`: `FXSAVE` the host, `FXRSTOR` the guest,
+run, `FXSAVE` the guest, `FXRSTOR` the host. `XSAVE`/`XRSTOR` with the right
+mask if the guest is ever given XCR0 state beyond SSE - but `hv_phases.c`
+already masks XSAVE and OSXSAVE out of the guest's CPUID deliberately ("Without
+it the guest uses FXSAVE, which every x86-64 CPU has"), so FXSAVE is the
+matching choice today and the 512-byte area covers everything the guest can
+reach. The SVM backend needs the same; its VMCB does not save these either.
+
+Not filed as a request because I have not touched it: `hv_vmx.c` is unovirt's,
+and this is its core entry path. Say the word and I will do it as its own
+slice off master rather than smuggle it into an appliance branch.
