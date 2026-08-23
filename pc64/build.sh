@@ -178,7 +178,7 @@ if [ "$1" != "legacy" ]; then
     # and harnesses say BROWSER_ENGINE=uw to mean "boot with the engine", and
     # because the flow painter remains the default.
     if [ "${BROWSER_ENGINE:-}" = "uw" ]; then UCF="$UCF -DUW_ENGINE"; fi
-    for f in pc64_fetch pc64_cookie pc64_cache webjs fb mac_compat pc64_libc pc64_io pc64_pci uno_devmgr pc64_math pc64_fs blkdev ahci nvme sdhci ide fat unostorage hid_kbd uno_binds i2c_hid xhci usbio usbboot usbmsc usbhid detachgate unovirt hv_svm hv_vmx unovdev unoamp_out unoamp_in unoamp_skin unoamp_vis unoamp_dsp unoamp_enc unoamp_mod unoamp_app unoamp_ui pc64_mtrr ax88179 rtl8152 iwlwifi rtwifi mrvlwifi wifi_wpa wifi_sae uefi_main bios_entry pc64_native pc64_uui pc64_uui_apps pc64_write pc64_files pc64_music pc64_clock pc64_media pc64_modload pc64_games js pc64_http pc64_font pc64_browser pc64_icons pc64_qoi e1000 e1000e igb r8169 net netdisc tls tls_entropy tls_ca acpi_host installer snd_pcm snd_mus hdaudio ac97 unosecure unoscript unoscript_path pc64_accounts unoauto unoauto_compat unoauto_gate unoauto_probe unoauto_remote unoauto_serial unoauto_screen ed25519 unossh_wire unossh unossh_auth unossh_store unossh_cmd sshapp_ui unolog unovdev_pc hv_phases unovdev_net unovirt_mgr unostream unoterm unoxfer unoxfer_local unoxfer_scp unoxfer_http unoxfer_tftp unoxfer_job unoxfer_cmd xferapp_ui; do
+    for f in pc64_fetch pc64_cookie pc64_cache webjs fb mac_compat pc64_libc pc64_io pc64_pci uno_devmgr pc64_math pc64_fs blkdev ahci nvme sdhci ide fat unostorage hid_kbd uno_binds i2c_hid xhci usbio usbboot usbmsc usbhid detachgate unovirt hv_svm hv_vmx unovdev unoamp_out unoamp_in unoamp_skin unoamp_vis unoamp_dsp unoamp_enc unoamp_mod unoamp_app unoamp_ui pc64_mtrr ax88179 rtl8152 iwlwifi rtwifi mrvlwifi wifi_wpa wifi_sae uefi_main bios_entry pc64_native pc64_uui pc64_uui_apps pc64_write pc64_files pc64_music pc64_clock pc64_media pc64_modload pc64_games js pc64_http pc64_font pc64_browser pc64_icons pc64_qoi pc64_pkg e1000 e1000e igb r8169 net netdisc tls tls_entropy tls_ca acpi_host installer snd_pcm snd_mus hdaudio ac97 unosecure unoscript unoscript_path pc64_accounts unoauto unoauto_compat unoauto_gate unoauto_probe unoauto_remote unoauto_serial unoauto_screen ed25519 unossh_wire unossh unossh_auth unossh_store unossh_cmd sshapp_ui unolog unovdev_pc hv_phases unovdev_net unovirt_mgr unostream unoterm unoxfer unoxfer_local unoxfer_scp unoxfer_http unoxfer_tftp unoxfer_job unoxfer_cmd xferapp_ui; do
         pc "$CC" $UCF $DBGSAN -c -o "build/$f.o" "$f.c"; OBJS="$OBJS build/$f.o"
     done
     # unojs: the JavaScript engine, its own subsystem (unojs/UNOJS.md).  Plain
@@ -683,6 +683,42 @@ if [ "$1" != "legacy" ]; then
     # right one to prove that an app from disk can bring its own icon too
     # (`icon: file:VMGR.QOI` in its descriptor; decoded by pc64_qoi.c).
     "$PY" tools/mkicon.py --demo build/esp/APPS/VMGR.QOI
+    # FSHIM.UNO - the foreign-app shim TEMPLATE (pc64/UNOPKG.md).  It is the
+    # one .UNO that is deliberately NOT in APPS\\: a template is not an app,
+    # and a scanner that found it there would give it a desktop icon.
+    # uno_pkg_install copies it, rewrites its descriptor and its target blob,
+    # and drops the result into APPS\ where the ordinary registry finds it.
+    echo "[3d] building FSHIM.UNO (the foreign-app shim template)..."
+    mkdir -p build/esp/PKG
+    pc "$CC" $UCF -DUNO_APP_SYM=uno_app_main -c -o build/apps/foreign_shim.o apps/foreign_shim.c
+    pcwait
+    "$NM" -u build/apps/foreign_shim.o | awk '{print $2}' | sort -u > build/apps/foreign_shim.syms
+    while read -r s; do
+        [ -z "$s" ] && continue
+        grep -qx "$s" build/apps/kexports.txt || {
+            echo "FAIL: FSHIM imports '$s' which pc64_modload.c does not export"; exit 1; }
+    done < build/apps/foreign_shim.syms
+    "$PY" tools/mkuno.py thunks build/apps/foreign_shim.syms build/apps/foreign_shim_thunks.s
+    "$CC" -c -o build/apps/foreign_shim_thunks.o build/apps/foreign_shim_thunks.s
+    "$CC" -shared -nostdlib -e uno_app_main -Wl,--exclude-all-symbols -o build/apps/foreign_shim.dll build/apps/foreign_shim.o build/apps/foreign_shim_thunks.o
+    "$PY" tools/mkuno.py convert build/apps/foreign_shim.dll build/esp/PKG/FSHIM.UNO 1
+    # VERIFY THE TWO THINGS THE INSTALLER PATCHES ARE ACTUALLY IN THE IMAGE.
+    # The target blob is an initialised array whose tail is zero, and a
+    # compiler is entitled to put such a thing in .bss - where it would not be
+    # in the file at all.  That failure is silent and lands far away, as
+    # "the template carries no target slot" at install time on a user's
+    # machine, so it is checked here where it is cheap.
+    "$PY" - build/esp/PKG/FSHIM.UNO <<'EOF' || exit 1
+import sys
+b = open(sys.argv[1], 'rb').read()
+if b.find(b'UNOPKG-TARGET-v1') < 0:
+    sys.exit("FAIL: FSHIM.UNO carries no target marker (blob landed in .bss?)")
+i = b.find(b'UAPP')
+if i < 0 or int.from_bytes(b[i+6:i+8], 'little') < 200:
+    sys.exit("FAIL: FSHIM.UNO reserves too little descriptor room for an install")
+print("      FSHIM.UNO: target slot ok, descriptor room %d bytes"
+      % int.from_bytes(b[i+6:i+8], 'little'))
+EOF
     if [ "${UNO_PHOTOS:-1}" != "0" ]; then
         echo "[3d] building PHOTOS.UNO (the image viewer + unomedia)..."
         POBJ="build/apps/photos.o"
