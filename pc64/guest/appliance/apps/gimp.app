@@ -356,14 +356,27 @@ export DISPLAY=${DISPLAY:-:0}
 # "GNU Image Manipulation Program", so matching on the suffix cannot pick the
 # wrong one.  Waiting for it rather than sleeping a fixed time: GIMP's startup
 # on this guest is measured in minutes and varies with the slice it gets.
+# HALF AN HOUR, NOT FIVE MINUTES.  This waited 60 x 5s, which is generous
+# under the fast loop - the window arrives in five seconds there - and far
+# too short under unovirt, where the guest gets a slice per frame and GIMP
+# took four and a half minutes to map the same window.  The wait expired at
+# almost exactly the moment the window appeared, so the appliance ran GIMP
+# correctly and never laid it out, and said so only on stderr, which is
+# inside the guest.  A timeout copied from the fast loop is a timeout
+# measured on the wrong machine.
 i=0; W=""
-while [ $i -lt 60 ]; do
+while [ $i -lt 180 ]; do
     W=$(xdotool search --onlyvisible --name ' GIMP$' 2>/dev/null | head -1)
     [ -n "$W" ] && break
-    i=$((i + 1)); sleep 5
+    i=$((i + 1)); sleep 10
 done
-[ -n "$W" ] || { echo "uno-layout: no GIMP image window after $((i * 5))s" >&2; exit 1; }
-echo "uno-layout: image window $W after $((i * 5))s" >&2
+if [ -z "$W" ]; then
+    echo "uno-layout: NO GIMP image window after $((i * 10))s - not laying out" > /dev/ttyS0 2>/dev/null
+    echo "uno-layout: no GIMP image window after $((i * 10))s" >&2
+    exit 1
+fi
+echo "uno-layout: image window $W after $((i * 10))s" > /dev/ttyS0 2>/dev/null
+echo "uno-layout: image window $W after $((i * 10))s" >&2
 
 xdotool windowactivate "$W" 2>/dev/null; sleep 2
 xdotool key --window "$W" --clearmodifiers ctrl+b; sleep 6    # Toolbox
