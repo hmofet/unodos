@@ -4,12 +4,14 @@ The appliance machinery: can this machine host a guest, and later, the guest
 itself. The programme and its phases are `docs/UNOVIRT-PLAN.md`; this file is
 the API surface, its changelog, and the things a consumer has to know.
 
-**Status: A0 through A8 [implemented on VMX]. A1 [unproved on SVM].** A
-real kernel boots under UnoDOS, reaches userspace, **its shell reads a
-command and answers**, it **mounts an ext4 filesystem served from a file on
-a UnoDOS volume**, it pings a synthetic peer over virtio-net, and **its
-framebuffer console lives inside the Appliances window** - typed at through
-the emulated i8042, answered in pixels (A8, 2026-08-21). The
+**Status: A0 through A8 plus M3..M5 [implemented on VMX]. A1 [unproved on
+SVM].** A real kernel boots under UnoDOS, reaches userspace, **its shell
+reads a command and answers**, it **mounts an ext4 filesystem served from a
+file on a UnoDOS volume**, it takes its own DHCP lease off the real wire, and
+**its framebuffer console lives inside the Appliances window** - typed at
+through the emulated i8042, answered in pixels (A8, 2026-08-21). On top of
+that the appliance runs a wlroots kiosk with Chromium in it, and **an address
+typed on the HOST navigates that browser** (M5, 2026-08-23). The
 capability gate runs on every boot. The foothold is real on Intel: on devbuntu
 (bare metal, nested KVM) UnoDOS enters VMX operation, runs a guest, takes it
 through a CPUID intercept, reads its marker back out of guest memory, and then
@@ -815,6 +817,84 @@ than the hypervisor:
 
 ## Changelog
 
+- **2026-08-23, API 1. M5 - THE BROWSER IS DRIVEN FROM THE HOST.** `Ctrl+L`
+  and an address typed letter by letter into the Appliances window navigate
+  Chromium inside the guest. Two shots, because one alone could be misread:
+  `shots/browser_host_typed.png` is `example.net` typed in full into the
+  omnibox over the appliance's own page, and `shots/browser_host_nav.png` is
+  the address bar committed at `example.net` with the page under it. **The
+  emulated keyboard was never broken.** M4's open item - "plain letters typed from the
+  host do not reach the browser" - was three separate mistakes stacked, and
+  none of them was in `unovdev_pc.c`:
+
+  - **`cage -D` is not a flag.** cage 0.1.5 takes `-d -h -m -s -v`. The run
+    before M4 added `-D` for debug; cage printed its usage, exited 1, and the
+    appliance fell through to its **X fallback on every boot after that**.
+    Under plain QEMU the fallback works, so nothing ever looked wrong, and
+    every conclusion drawn in that window about "the Wayland session" was
+    drawn about a session that had never started. The flags are checked
+    against the binary's own `-h` output now.
+  - **The screenshot that proved Ctrl+L and Backspace arrive is a FAST-LOOP
+    screenshot.** The file then called `shots/browser_typed_url.png` is
+    byte-for-byte identical to a fresh capture from plain QEMU - 1280x800 std
+    VGA, no UnoDOS desktop around it - showing the page the guest's OWN
+    self-test had navigated to. It was never evidence about the host path at
+    all, and it is `shots/browser_fastloop_typed.png` now so that it cannot be
+    read as one again.
+  - **`irq1=` read `$2` of `/proc/interrupts`, which is CPU0 alone.** The
+    i8042 interrupt lands on CPU1 here, so the guest's own diagnostic printed
+    `irq1=0` through runs in which every keystroke arrived, and accused the
+    layer underneath it. A counter that reads zero while the thing it counts
+    is working is worse than no counter.
+
+  **What settles it, and the two tools that made it cheap.** `libinput
+  debug-events --show-keycodes` on the keyboard node names every key the
+  guest's input stack sees, and under the hypervisor it prints
+  `KEY_E ... KEY_X ... KEY_A ... KEY_M ... KEY_P ... KEY_L ... KEY_E` as the
+  host types. It has to go **straight at `/dev/ttyS0`**: the version before it
+  piped `od` through `sed` and printed nothing, because od block-buffers to a
+  pipe - the pipe was the bug, not the tool. And the fast loop can now
+  reproduce the hypervisor's exact byte stream **without the hypervisor**:
+  **i8042 controller command 0xD2 writes a byte into the keyboard's output
+  buffer**, so `dd` onto `/dev/port` from inside the guest hands atkbd
+  precisely the set-1 make/break pairs `k8_tap` queues, IRQ and all. Ctrl+L,
+  Backspace and `example.net` injected that way land in Chromium's omnibox
+  with make and break back to back - which retired the timing hypothesis in
+  two minutes instead of a twenty-five-minute run.
+
+  **The real remaining fault is Chromium's, and it has a name.** With
+  `--enable-logging=stderr` the session tail reads `Assertion failed: v > 0
+  (double-conversion/fast-dtoa.cc: FastDtoa: 641)`: **Alpine builds Chromium
+  against the SYSTEM double-conversion, which keeps its assertions**, so a
+  value upstream's bundled copy formats and forgets aborts the process here.
+  In the renderer it is the `Aw, Snap! Error code: 8` that M3 recorded as a
+  memory ceiling; in the browser process it takes the whole session down. Two
+  changes make it survivable rather than fatal: **Chromium is restarted INSIDE
+  the compositor** (an `exec` made cage exit with it, turning one abort into a
+  full seatd + VT + compositor + browser cold start, minutes of black screen),
+  and the harness types in four seconds rather than twenty - **Ctrl+L SELECTS
+  the omnibox, so one Backspace empties it and the other forty-four were
+  deleting nothing.**
+
+  Four more things were wrong in ways a screenshot cannot show. **A comment
+  inside a line continuation ends the command**, so the X session's Chromium
+  had been launched with neither its DNS flags nor a URL. **The in-guest
+  self-test used xdotool, which is X-only**: on Wayland it failed every
+  command and reported success anyway, which is a self-test that cannot fail
+  (`wtype` now, and it says so when it can drive nothing). **The self-test and
+  the host harness typed the SAME address**, so the shot meant to prove the
+  host drove the browser proved nothing - three addresses now, one per driver.
+  And the **startup page was example.org while the harness types example.net**,
+  two pages whose bodies are the same four lines, so a successful navigation
+  looked exactly like a failed one; the appliance opens on its own local page
+  now.
+
+  The harness stopped counting seconds at the guest, too. It slept a fixed six
+  minutes and then typed at whatever was on screen - which on the run that
+  first proved the compositor works landed while the guest was still a cleared
+  VT. It watches the guest's own surface instead (a console is black, a
+  browser is not), refuses to type at a console, and retries when the browser
+  dies mid-address.
 - **2026-08-22, API 1. M4 - the appliance is a BROWSER APPLIANCE.** The X
   server is gone: it segfaulted on this guest's framebuffer (simpledrm, no
   GPU, no render node) under modesetting, under modesetting with
@@ -834,6 +914,9 @@ than the hypervisor:
   resolver in the list beats a good one; the site's own WebAssembly widget
   is what killed the renderer with `Aw, Snap! Error code: 8`; and
   `WLR_BACKENDS=drm` means ONLY drm, which silently removes libinput.
+  **Corrected by M5 above: the open item was not real, the wlroots kiosk had
+  not in fact been running since `cage -D` was added, and `Aw, Snap! Error
+  code: 8` is a `double-conversion` assertion rather than a memory ceiling.**
 - **2026-08-21, API 1. M3 - CHROMIUM BROWSES THE INTERNET INSIDE UNODOS.**
   The guest is on the real wire: `unovdev_net.c` gained a bridge, `net_poll`
   a weak hook, and the guest keeps its own MAC and DHCPs for its own lease,
