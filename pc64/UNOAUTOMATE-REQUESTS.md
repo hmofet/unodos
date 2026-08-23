@@ -10333,3 +10333,52 @@ whole machine rides this lane. Requests to other lanes, all additive:
 3. **detach gate:** none now. `docs/SURFACE-KEYBOARD.md`'s SAM branch is
    refuted by the firmware's own UsbIo list (`04f3:0c5b` x2, class 03/01);
    the doc should say so once Phase 2 confirms typing on a detached box.
+
+### REQUEST to unofs: vol_carries_system() accepts ANOTHER OS's ESP (2026-08-23)
+
+**This one cost a machine, so it is filed with the evidence rather than as an
+opinion.**
+
+`vol_carries_system()` (`fat.c`) reads `EFI\UNODOS\BOOTX64.EFI` **or**
+`EFI\BOOT\BOOTX64.EFI` and accepts the volume if the first two bytes are `MZ`.
+The second path is the UEFI removable-media fallback that *every* operating
+system installs to, and every one of them puts a PE there. So the test answers
+"is there a bootable OS on this volume", not "is this OUR system volume",
+and `uno_fat_native_eligible()` inherits that.
+
+On the Surface Laptop Go, 2026-08-23, with detach enabled:
+
+1. `find_xhci()` opened the wrong xHCI (that half is fixed in `bb7615b2`), so
+   the USB boot stick did not come back after EBS.
+2. `uno_blk_detach()` brought up the **internal eMMC** through `sdhci.c`.
+3. That eMMC's **Windows ESP** carries `EFI\BOOT\BOOTX64.EFI`, so
+   `vol_carries_system()` said yes and `uno_fat_native_eligible()` said the
+   system volume was native-reachable.
+4. The machine therefore did NOT take the stranded path, proceeded as healthy,
+   and wrote its telemetry onto that ESP - through an SDHCI driver never run
+   on metal. The write hung. **The laptop now boots neither USB nor its own
+   eMMC.**
+
+The F8 lesson is written directly above this function ("a merely-present
+foreign FAT partition must not count") and the code does not achieve it.
+
+**What would fix it, in rough order of preference:**
+
+- Match the volume IDENTITY, not a filename: compare the BPB volume serial (or
+  the boot device path's partition GUID) against the volume we booted from.
+  `uno_debug.c`'s `crash_vol()` already re-finds by BPB serial, so the
+  primitive exists.
+- Failing that, look for a file only WE put there - `BOOT\UNODOS.SYS`, or
+  `EFI\UNODOS\BOOTX64.EFI` alone without the generic fallback path - and stop
+  treating `EFI\BOOT\BOOTX64.EFI` as evidence of anything.
+
+The USB arm of the same function already does it correctly (`dev->is_boot`),
+which is why the fix in `035a0c88` could be scoped to the USB case; the
+AHCI/NVMe/SDHCI arms have no equivalent.
+
+**Related, to whoever owns `sdhci.c`:** its waits are `SPIN_MAX = 4000000`
+iteration counts, not durations, so a controller that answers registers and
+never completes a command hangs the machine silently and unboundedly. Same
+class of bug as the xHCI deadlines fixed on 2026-07-29 (`USB.md` "deadlines
+must be durations"). It is a first-contact-with-new-silicon driver and it
+should not be able to spin forever.
