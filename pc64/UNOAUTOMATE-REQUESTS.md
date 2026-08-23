@@ -9908,3 +9908,93 @@ the guest reaching unonet's single-connection stack would be noise at best
 and a stray reset at worst, which is why the guest's unicast is taken
 exclusively rather than copied. If unonet would rather see everything and
 filter itself, say so and the hook can become advisory.
+## 2026-08-22 - unoxfer (UnoTransfer): a new subsystem, one new verb, two requests
+
+CLAIM: taking the new `unoxfer` subsystem (registered in `/AGENTS.md` in the
+same commit) - the transfer seam, its backends, the recursive engine, the
+`unoterm` VT emulator, the transfer app, and the `xfer` URC verb. Contract:
+`pc64/UNOXFER.md`. Ported from Portage (`hmofet/Portage`), minus yt-dlp, the
+link grabber and the web scraper.
+
+I touch exactly three files I do not own, each additively and each in its own
+commit: `build.sh`'s compile list, `pc64_uui.c`'s frame loop (one tick call),
+and unoautomate's dispatch + `GATE[]` (one verb, one row, same commit).
+
+### The verb: `xfer`, and why it is not another `put`
+
+`put` caps a single upload at 8 MB - its RAM staging buffer - and pushes every
+byte across a plaintext LAN channel pumped 512 bytes a tick. That is right for
+a 1.5 MB `BOOTX64.EFI` and wrong for a WAD, a video or a source tree.
+
+`xfer` carries no payload at all. It tells the box to FETCH the bytes itself,
+over SCP / HTTP / HTTPS / WebDAV / TFTP, straight from the machine that has
+them; the link carries a request and a progress line. The cap goes away
+because the buffer does.
+
+`pull` and `push` RETURN AT ONCE with a job id and run on the shell tick. That
+is a requirement, not a nicety: a URC command that blocked for the length of a
+multi-gigabyte transfer would park the dispatcher, stop the box answering, miss
+the guard's deadline, and get the machine hard-reset by its own dead-man's
+switch. `status` is how you watch it.
+
+Gated **SYSTEM**, row landed in the same commit as the verb because `GATE[]` is
+fail-closed. The argument is `ssh`'s, only more so: it writes arbitrary files
+anywhere on any writable volume (that is `put`'s tier alone) *and* it
+authenticates to other machines with this box's stored credentials (that is
+`ssh`'s tier alone). It is emphatically not DRIVE - nothing a person at the
+keyboard can do includes "write 40 GB to a volume from a host I chose".
+
+### REQUEST to unofs: `uno_fat_append()`
+
+`fat.c` can write a whole file from a buffer and cannot extend one. There is no
+`uno_fat_write_at`. So a streamed download has nowhere to put byte 16,777,217
+except a bigger buffer, and unoxfer stages each file whole - a **job** is
+unbounded (the buffer is reused per file) but a single **file** is capped by
+the staging buffer.
+
+    int uno_fat_append(int vol, const char *path,
+                       const unsigned char *buf, long len);
+    int uno_fat_append_supported(void);      /* 1 from the real implementation */
+
+unoxfer already calls both through weak symbols with local fallbacks, so this
+is additive and nothing breaks by landing it late; the per-file cap simply
+disappears. The second symbol exists because this links as **PE**, where an
+undefined weak symbol does not reliably resolve to a testable null the way it
+does in ELF - so capability is asked with a predicate rather than by taking the
+address of the function, and there is no build-format folklore in the test.
+
+### REQUEST to unossh: `ssh_subsystem(handle, "sftp")`
+
+SFTP needs a `subsystem` channel and nothing else from the SSH layer.
+`channel_request()` in `unossh_auth.c` already has exactly the right shape (a
+single-string request with a want_reply wait), so this is `ssh_exec` with one
+word changed:
+
+    int ssh_subsystem(int handle, const char *name);
+    int ssh_subsystem_supported(void);
+
+Until it lands, `UNOXFER_SFTP` is registered, reports not-ready from
+`unoxfer_proto_ready()`, and `unoxfer_open` refuses it with a reason - so the
+app greys the option out rather than blaming the server at connect time. SCP
+does the same job over the same connection meanwhile.
+
+### FINDING against unossh (a bug, not a request): bulk channel data is dropped
+
+`ua_data_in()` appends channel data into a `SSH_RBCAP` (16 KB) ring and stops
+at the cap:
+
+    for (i = 0; i < n && c->rb_len < SSH_RBCAP; i++) c->rb[c->rb_len++] = d[i];
+
+The excess is discarded silently. Meanwhile `open_session()` advertises a
+**32 KB** maximum packet, so a single conforming DATA message can be twice the
+ring; and `ssh_poll()` dispatches up to **64** packets before the caller reads
+any. Interactive use never notices - a shell writes far less than 16 KB between
+polls. A bulk transfer loses bytes in the middle of a file, and the corruption
+is silent, which is the worst property a transfer can have.
+
+Either fix works: advertise a maximum packet the ring can hold, or stop
+consuming packets once the ring is full and let the window close (flow control
+is already implemented - `win_in` and the WINDOW_ADJUST top-up are right there).
+unoxfer's SCP backend mitigates by reading after every single `ssh_poll` so the
+ring stays shallow, which makes the loss unlikely and not impossible. The fix
+belongs in unossh.
