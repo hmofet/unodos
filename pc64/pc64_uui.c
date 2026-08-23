@@ -91,7 +91,7 @@ static const char *kThemeNames[NTHEMES];
  * index a-NNATIVE. */
 enum { APP_CTRL, APP_EDIT, APP_FILES, APP_SYS, APP_CLOCK, APP_SETUP,
        APP_MUSIC, APP_UNOAMP, NNATIVE };
-#define NEXTRA 11                         /* extra native apps beyond the bridge */
+#define NEXTRA 12                         /* extra native apps beyond the bridge */
 #define EX_RUNNER  (NNATIVE + UNOAPP_COUNT)       /* Runner3D: shell app index    */
 #define EX_BROWSER (NNATIVE + UNOAPP_COUNT + 1)   /* Browser: shell app index     */
 #define EX_STUDIO  (NNATIVE + UNOAPP_COUNT + 2)   /* Studio IDE (a .UNO module)   */
@@ -103,6 +103,7 @@ enum { APP_CTRL, APP_EDIT, APP_FILES, APP_SYS, APP_CLOCK, APP_SETUP,
 #define EX_UOCALC  (NNATIVE + UNOAPP_COUNT + 8)   /* UnoCalc (a .UNO module)      */
 #define EX_UOSHOW  (NNATIVE + UNOAPP_COUNT + 9)   /* UnoShow (a .UNO module)      */
 #define EX_LOGVIEW (NNATIVE + UNOAPP_COUNT + 10)  /* System Log (a .UNO module)   */
+#define EX_XFER    (NNATIVE + UNOAPP_COUNT + 11)  /* UnoTransfer (native canvas)  */
 #define NBUILTIN (NNATIVE + UNOAPP_COUNT + NEXTRA) /* slots this build compiles in */
 #define APP_TBAR 18                       /* legacy apps' own title-bar height */
 static const char *kAppNames[NNATIVE] =
@@ -470,6 +471,7 @@ static void app_registry_init(void)
     app_reg(EX_RUNNER,  "runner3d", "Runner3D", "Runner",  AK_SHELL, PCI_RUNNER,  UAC_GAMES, 10, -1);
     app_reg(EX_BROWSER, "browser",  "Browser",  "Browser", AK_SHELL, PCI_BROWSER, UAC_NET,   10, -1);
     app_reg(EX_SSH,     "ssh",      "SSH",      "SSH",     AK_SHELL, PCI_NETWORK, UAC_NET,   20, -1);
+    app_reg(EX_XFER,    "xfer",     "UnoTransfer", "Transfer", AK_SHELL, PCI_NETWORK, UAC_NET, 30, -1);
     app_reg(EX_USERAPP, "userapp",  "User app", "User app", AK_HOSTSLOT, PCI_GENERIC, UAC_OTHER, 90, -1);
     app_reg(EX_PYAPP,   "pyapp",    "Python app", "Python app", AK_HOSTSLOT, PCI_GENERIC, UAC_OTHER, 91, -1);
     g_app[EX_USERAPP].flags |= UAF_NOSESSION;
@@ -3153,6 +3155,7 @@ static int app_is_bridge(int a)
 { int li = a - NNATIVE; return a >= NNATIVE && li >= 0 && li < UNOAPP_COUNT && app_game(a) < 0; }
 
 void pc64_sshapp_open(void);
+void pc64_xferapp_open(void);
 static void build_legacy(int a)
 {
     int li = a - NNATIVE, aw, ah, g = app_game(a);
@@ -3173,6 +3176,15 @@ static void build_legacy(int a)
                           aw + 2*m->frame_w + 2*m->pad, ah + m->title_h + 2*m->pad + m->frame_w);
         unoui_widget_fill(unoui_add_canvas(&g_win[a], 0, 0, aw, ah, pc64_sshapp_canvas()));
         g_win[a].flags |= UI_WIN_RESIZE;
+        return;
+    }
+    if (a == EX_XFER) {                /* native windowed UnoTransfer canvas */
+        unoui_canvas *pc64_xferapp_canvas(void);
+        aw = 560; ah = 340;
+        unoui_window_init(&g_win[a], app_name(a), 34, 24,
+                          aw + 2*m->frame_w + 2*m->pad, ah + m->title_h + 2*m->pad + m->frame_w);
+        unoui_widget_fill(unoui_add_canvas(&g_win[a], 0, 0, aw, ah, pc64_xferapp_canvas()));
+        g_win[a].flags |= UI_WIN_RESIZE;   /* the panes and the terminal reflow */
         return;
     }
     if (a == EX_BROWSER) {             /* native windowed browser canvas */
@@ -3322,6 +3334,7 @@ static void open_app(int a)
         if (g >= 0)                 pc64_game_open(g);           /* native game   */
         else if (a == EX_BROWSER)   pc64_browser_open();         /* browser       */
         else if (a == EX_SSH)       pc64_sshapp_open();          /* ssh client    */
+        else if (a == EX_XFER)      pc64_xferapp_open();         /* UnoTransfer   */
         else if (g_app[a].kind == AK_UUIMOD)
             { const UnoUuiApp *m = app_iface(a); if (m && m->opened) m->opened(); }
         else if (a == EX_PYAPP)     { if (g_pyapp && g_pyapp->opened) g_pyapp->opened(); }
@@ -6781,6 +6794,15 @@ int main(void)
         uno_screen_capture_tick();      /* server-side screen record
                                            (armed by `screen record start`)    */
         netdisc_tick();                 /* zero-config LAN discovery           */
+        { void unoxfer_job_tick(void);  /* unoxfer.h, declared locally to keep
+                                         * this file's includes as they were  */
+          unoxfer_job_tick(); }         /* advance every transfer by ONE bounded
+                                           slice.  It lives HERE rather than in
+                                           the app so a job started over URC
+                                           keeps moving on a box with nobody
+                                           looking at it - which is the only
+                                           way `xfer pull` can return an id and
+                                           mean it.                            */
         { void unolog_tick(void); unolog_tick(); }
                                         /* system log: the periodic write-out
                                            and the syslog socket. Everything
