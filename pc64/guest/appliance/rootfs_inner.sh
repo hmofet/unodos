@@ -132,6 +132,18 @@ udevadm settle -t 10 2>/dev/null
 # What the kernel actually created, which is the other half of the question.
 echo "uno: input nodes: $(ls /dev/input 2>/dev/null | tr '\n' ' ')" > /dev/ttyS0
 
+# WHAT MACHINE THE GUEST THINKS IT IS ON.  Two cheap lines, both asked because
+# an appliance that works under plain QEMU and dies under unovirt has only a
+# handful of things that can differ - and the CPU is the one nobody looks at.
+# A hypervisor's CPUID intercept can advertise an instruction set the guest
+# cannot actually use (AVX needs XCR0 enabled, not just a CPUID bit), and a
+# library that dispatches on CPUID - which babl, GEGL and every image codec
+# does - then executes it and dies.  Naming the flags makes that a comparison
+# instead of a theory, and the memory line rules out the other usual suspect
+# in the same breath.
+echo "uno: cpu $(awk '/^flags/{for(i=1;i<=NF;i++) if ($i ~ /^(sse4_2|avx|avx2|avx512f|xsave|osxsave|fma|f16c|bmi2)$/) printf "%s ", $i; exit}' /proc/cpuinfo)nproc=$(nproc)" > /dev/ttyS0
+echo "uno: mem $(awk '/MemTotal|MemAvailable/{printf "%s=%dM ", $1, $2/1024}' /proc/meminfo)" > /dev/ttyS0
+
 # WHAT THE INPUT STACK ACTUALLY SAW, named rather than counted.  Interrupt
 # counts say bytes arrived; this says which KEY each one became, at the layer
 # every Wayland compositor reads from.  It answers the question a missing
