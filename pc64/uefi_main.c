@@ -41,6 +41,7 @@
 #include "usbhid.h"         /* native USB HID kbd/mouse (inert unless -DUNO_XHCI) */
 #include "usbmsc.h"         /* native USB mass storage (F8: USB boot + detach) */
 #include "usbboot.h"        /* ...and whether THIS machine's boot stick survives */
+#include "unolog.h"        /* the power chain must reach the disk (F14) */
 #include "xhci.h"           /* pre-detach controller inventory (config space only) */
 #include "detachgate.h"     /* ...and whether its keyboard and pointer do too */
 #include "uno_devmgr.h"     /* unodevices: enumerate + bind (phases 2, 4) */
@@ -2483,6 +2484,7 @@ static void power_down(int off)
      * positive evidence that ResetSystem RETURNS there, and changing an order
      * on no evidence is the mistake that reopened F14 in the first place. */
     if (!off) {
+        ulog_err(LF_KERNEL, "power: restart requested");
         uno_dbg_log("power: reset - trying CF9");
         uno_native_reset_try();     /* CF9; returns if the board ignored it */
         uno_dbg_log("power: CF9 ignored - trying the i8042 pulse");
@@ -2503,7 +2505,29 @@ static void power_down(int off)
         uno_dbg_log("power: ResetSystem(Shutdown)");
         rts()->ResetSystem(EfiResetShutdown, 0, 0, 0);
         uno_dbg_log("power: ResetSystem returned - firmware ignored it");
+        ulog_err(LF_KERNEL, "power: firmware ResetSystem(Shutdown) returned - "
+                            "it will not power this machine off");
     }
+    /* THE LAST CHANCE TO WRITE ANYTHING DOWN, and the reason F14 has survived
+     * three metal runs without an explanation.
+     *
+     * unolog_shutdown() ran at the TOP of this function, before a single line
+     * of the power chain existed - so every line saying which mechanism was
+     * tried and what it did was appended to a ring that nothing would ever
+     * flush again, and died with the machine. On a box whose shutdown does not
+     * work, that is precisely the evidence you came for.
+     *
+     * Everything below this point is terminal: ACPI S5 drops interrupts and
+     * does not give them back, ResetSystem(Cold) may never return, and the
+     * halt loop certainly does not. So flush HERE, where the attempts that
+     * returned are known and there is still a machine able to write.
+     *
+     * The lines are ERR rather than debug on purpose: they are kept at the
+     * default level, so a production machine that will not switch off leaves
+     * the same account a debug one does. */
+    ulog_err(LF_KERNEL, "power: %s is the last mechanism left",
+             off ? "ACPI S5" : "the firmware's ResetSystem(Cold)");
+    unolog_flush();
     /* SAY SO ON THE SCREEN, and say it BEFORE the last mechanism runs.
      *
      * Two reasons for the order. Leaving whatever frame was last drawn sitting

@@ -14,6 +14,7 @@
  * hmofet/writers-unlock); the porting contract is that repo's
  * docs/ACPI-POWER-INTERFACE.md.  Only built with -DUNO_ACPI (see build.sh).
  */
+#include "unolog.h"   /* S5 failures must reach the disk (F14) */
 #include "uefi.h"
 #include "string.h"
 #include "acpi_host.h"
@@ -491,13 +492,39 @@ int uno_acpi_i2c_hid_enum(uno_acpi_i2chid *out, int max)
  * only on failure (if it succeeds, the machine is off). */
 int uno_acpi_poweroff(void)
 {
-    if (g_status <= 0) return -1;                 /* interpreter not up */
-    if (uacpi_prepare_for_sleep_state(UACPI_SLEEP_STATE_S5) != UACPI_STATUS_OK)
+    /* SAY WHICH OF THE THREE WAYS THIS FAILED.
+     *
+     * They are completely different problems with completely different fixes -
+     * the interpreter never came up, the namespace has no usable \_S5, or the
+     * sleep registers were written and the board stayed on - and until now all
+     * three returned the same bare -1. That is why F14 ("the Surface will not
+     * power off") has been reopened twice without ever being explained.
+     *
+     * ERR severity because unolog flushes those immediately, with a
+     * uno_fat_sync: the caller is about to stop being able to write anything,
+     * and on a machine that will not switch off this is the whole account. */
+    if (g_status <= 0) {
+        ulog_err(LF_KERNEL, "acpi: S5 impossible - the AML interpreter is not "
+                            "up (status %d)", g_status);
         return -1;
+    }
+    if (uacpi_prepare_for_sleep_state(UACPI_SLEEP_STATE_S5) != UACPI_STATUS_OK) {
+        ulog_err(LF_KERNEL, "acpi: S5 prepare FAILED - no usable \\_S5 in the "
+                            "namespace, or the sleep registers are unreadable");
+        return -1;
+    }
+    ulog_err(LF_KERNEL, "acpi: S5 prepared, entering - anything logged after "
+                        "this means the board ignored the sleep registers");
+    unolog_flush();          /* the write below is terminal if it works */
     /* interrupts off: enter_sleep_state expects to run uninterrupted */
     __asm__ volatile ("cli");
     uacpi_enter_sleep_state(UACPI_SLEEP_STATE_S5);
-    return -1;                                     /* still here = it failed */
+    /* Still here. The registers took the write and the machine stayed on,
+     * which on this hardware is the interesting answer, not the boring one. */
+    ulog_err(LF_KERNEL, "acpi: S5 entered and the machine is STILL RUNNING - "
+                        "the sleep registers do not power this board off");
+    unolog_flush();
+    return -1;
 }
 
 /* ACPI reset - the FADT's RESET_REG/RESET_VALUE, which is the standard third
