@@ -1160,10 +1160,35 @@ static int try_detach(void)
              * held it, so the one authoritative check is possible only here,
              * on the far side of the door.  There is no way back - but a
              * machine that says WHY it is broken beats one that just is. */
-            if (!uno_fat_native_eligible()) {
+            /* ON A USB BOOT, ONLY usbmsc CAN ANSWER THIS.
+             *
+             * uno_fat_native_eligible() asks a generic question - is there a
+             * natively-reachable volume carrying \EFI\BOOT\BOOTX64.EFI - and
+             * ANY other operating system's ESP answers yes, because that is
+             * the removable-media fallback path every UEFI OS installs to and
+             * a Windows Boot Manager has an MZ header like everything else.
+             *
+             * On the Surface Laptop Go that is not hypothetical. The native
+             * stack opened the wrong xHCI, the boot stick never came back,
+             * SDHCI brought up the INTERNAL eMMC instead, its Windows ESP
+             * satisfied the test, and the machine sailed past this check and
+             * wrote its telemetry onto another OS's boot partition - through
+             * an SDHCI driver that had never run on real hardware. It hung
+             * mid-write and left that machine unable to boot anything.
+             *
+             * So: if we booted from USB, the system volume is back only if
+             * the BOOT DEVICE is back. Nothing else counts, and being wrong
+             * here costs a disk that was never ours to touch. */
+            if (!uno_fat_native_eligible() ||
+                (uno_usbboot_is_usb() && !uno_usbmsc_boot_bound())) {
                 gDetachStranded = 1;
                 gDetachWhy = uno_usbboot_is_usb() ? uno_usbmsc_why()
                                                   : "system volume did not return";
+                /* AND WRITE NOTHING. A stranded machine has no volume of ours
+                 * to write to; every write from here would land on a stranger's
+                 * disk. The RAM stash still carries the whole account to the
+                 * next boot, which is where it belongs. */
+                gNoWrite = 1;
                 /* SAY SO ON THE SCREEN. A stranded machine has no storage to
                  * log to and, if its input was USB, no way to be asked - it
                  * just sits there looking dead, which is exactly how the

@@ -30,7 +30,7 @@ void uno_pc64_delay_ms(int ms);
 static int g_dev = -1;                 /* xHCI device index                  */
 static int g_ifnum;                    /* interface number (class requests)  */
 static int g_in_ep, g_out_ep;          /* bulk endpoint addresses            */
-static int g_bound;
+static int g_bound, g_boot_bound;
 static const char *g_why = "not attempted";
 static const char *g_boot_why;         /* the targeted boot device's reason  */
 static u64 g_sectors;
@@ -377,8 +377,10 @@ static int try_bind(int i, int want_boot)
     uno_dbg_log("usbmsc: BOT device up, %llu sectors, boot=%d", g_sectors, want_boot);
     g_why = "up";
     g_bound = 1;
+    if (want_boot) g_boot_bound = 1;    /* THE boot device, not merely a device */
     return 1;
 }
 #undef FAIL
 
 const char *uno_usbmsc_why(void) { return g_why; }
+int uno_usbmsc_boot_bound(void) { return g_boot_bound; }
