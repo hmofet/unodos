@@ -805,15 +805,34 @@ than the hypervisor:
 
 ### What is left
 
-- **A real console, not a seeded one.** Input still comes from a string
-  handed over when the driver arms its receive interrupt. Real keystrokes come
-  from the frame loop, which already owns the keyboard, and that is A8's work
-  when the guest gets a window.
+- **The pointer drifts.** The emulated aux port is an IntelliMouse, which is
+  RELATIVE-only, so the guest's pointer and the host's diverge and no amount
+  of aiming corrects a target that moves when you reach for it.
+  `uno_vdev_mouse` already splits a long move across packets rather than
+  clipping it, which removes the worst of it; absolute pointing needs either
+  the seamless agent (Track B) or a vmmouse-style backdoor.
+- **Chromium aborts, and it is not ours.** `Assertion failed: v > 0
+  (double-conversion/fast-dtoa.cc: FastDtoa: 641)` - Alpine links Chromium
+  against the SYSTEM double-conversion, whose assertions are live, so a value
+  upstream's bundled copy would format and forget takes the process down. In
+  a renderer it is `Aw, Snap! Error code: 8`; in the browser process it ends
+  the session. Mitigated (the browser restarts inside the compositor, omnibox
+  suggestions are off by policy, the harness types in four seconds and
+  retries), not fixed. Fixing it means a Chromium built against its own
+  bundled copy, or a different distribution for the appliance.
 - **A LAPIC.** `nolapic` is doing real work here: the guest has one legacy PIC
   and no per-CPU timer, which is fine for one core and is the thing A9 has to
   replace before a guest gets a core of its own.
+- **A clock better than jiffies.** `tsc: Fast TSC calibration failed`, then
+  `Unable to calibrate against PIT`, then `No reference (HPET/PMTIMER)`, and
+  the guest settles on the 10 ms `jiffies` clocksource. CPUID passes through
+  to the host, and the harness box is a Broadwell whose highest basic leaf is
+  below 0x15, so there is no TSC-frequency leaf to read; a synthesised 0x15
+  would give the guest a fine-grained monotonic clock without any timer
+  calibration at all. Not on the path to anything yet, and it is A9's
+  neighbourhood.
 - **virtio-console** as the guest's real console instead of the 8250 standing
-  in for it, and virtio-blk/net (A7).
+  in for it.
 
 ## Changelog
 
