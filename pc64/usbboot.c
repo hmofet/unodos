@@ -344,8 +344,15 @@ int uno_usb_takeover_str(char *buf, int cap)
     uno_xhci_status(&present, &nports, &ndevs, &err);
     uno_usb_hid_status(&nk, &nm);
     why = uno_usbmsc_why();
-    return snprintf(buf, (unsigned)cap,
-                    "xhci up=%d ports=%d devs=%d err=%u | hid k=%d m=%d | msc: %s",
-                    present, nports, ndevs, err, nk, nm,
-                    (why && why[0]) ? why : "not attempted");
+    {   /* Name the CONTROLLER. "devs=0" means one thing on the controller the
+         * boot stick is on and another entirely on a controller with nothing
+         * plugged into it, and a photograph of the screen is often the only
+         * record - it should not need a log to be readable. */
+        int hd = -1, hf = -1;
+        uno_usbboot_hc_loc(&hd, &hf);
+        return snprintf(buf, (unsigned)cap,
+                        "xhci %02x.%d up=%d ports=%d devs=%d err=%u | hid k=%d m=%d | msc: %s",
+                        hd, hf, present, nports, ndevs, err, nk, nm,
+                        (why && why[0]) ? why : "not attempted");
+    }
 }
