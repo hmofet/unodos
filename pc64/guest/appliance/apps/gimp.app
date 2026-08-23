@@ -194,8 +194,25 @@ while :; do
     #   draws its own UI text through GTK.
     # -s / --no-shm is NOT set: XWayland's shm path is how the pixels get
     #   from GIMP to the compositor at all, with no GPU anywhere.
-    gimp --no-splash --no-fonts $IMG
-    say "uno-gimp: gimp exited rc=$? (launch $n)"
+    #
+    # ITS OWN LOG FILE, AND THE TAIL GOES OUT ON ttyS0.  GIMP's stderr would
+    # otherwise land in the compositor's log inside the guest, which is the
+    # one place a host driving this over a URC link cannot open.  The obvious
+    # way in - vmgr's Console view, typing `tail /tmp/x.log` at the appliance's
+    # own shell - does not work in the build that matters: in a UNO_DEBUG
+    # build the shell swallows F12 as its operator escape hatch
+    # (pc64_uui.c, `if (scan == 0x16) { pc64_stress_stop(); ... continue; }`)
+    # before vmgr ever sees it, so the view never leaves Display and the whole
+    # command gets typed into the guest's keyboard instead.  The appliance
+    # reporting its own failure needs no view to be switched and cannot be
+    # intercepted, so that is what it does.
+    gimp --no-splash --no-fonts $IMG > /tmp/gimp.log 2>&1
+    RC=$?
+    say "uno-gimp: gimp exited rc=$RC (launch $n)"
+    # WITHOUT THE PER-KEY NOISE.  libinput debug-events runs from boot and
+    # prints a line per keystroke to this same console; anything reported here
+    # competes with it, so this stays short and says which launch it belongs to.
+    grep -vE "^$" /tmp/gimp.log | tail -14 | sed "s/^/uno-gimp[$n]| /" > /dev/ttyS0 2>/dev/null
     sleep 3
 done
 GIMPEOF

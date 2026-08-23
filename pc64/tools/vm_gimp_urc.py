@@ -27,12 +27,19 @@ deterministic anyway:
     function of how fast the deltas arrive, which under a hypervisor handing the
     guest a slice per frame is not a function of anything reproducible.
 
-  - The host end PINS the cursor before it aims.  Re-entering the Display view
-    resets vmgr's `g_mx` to -1, so the next pointer event produces a delta of
-    zero and establishes a baseline; one sweep to the far corner then sends a
-    delta larger than the guest's whole screen, and the compositor clamps the
-    cursor to (0,0).  From there a move of N host pixels is N guest pixels, and
-    the aim is arithmetic rather than hope.
+  - The host end PINS the cursor before it aims, and it gets exactly ONE
+    chance.  Entering the Display view resets vmgr's `g_mx` to -1, so the
+    first pointer event after that produces a delta of zero and establishes a
+    baseline; one sweep to the far corner then sends a delta larger than the
+    guest's whole screen, and the compositor clamps the cursor to (0,0).  From
+    there a move of N host pixels is N guest pixels.
+
+    Only one chance because there is no way back out of the Display view from
+    the keyboard in the build this can run against: vmgr offers F12, but under
+    `UNO_DEBUG` the shell claims F12 first as its operator escape hatch
+    (`pc64_uui.c`) and never delivers it, and the URC link is itself a debug
+    feature.  So the pin is the first pointer event of the run, before
+    anything else can consume the baseline.
 
 The image must carry `vm-selftest`, `noshutdown` and a `remote=10.0.2.2:<port>`
 line; this checks rather than trusting.
@@ -221,55 +228,26 @@ def main():
         link.key(int(scan), int(uni), int(ctrl), timeout=10)
         time.sleep(settle)
 
-    def enter_display():
-        """F12 out to the list, then the Display accelerator - which is what
-        resets vmgr's pointer baseline (`g_mx = -1`, see `vm_key`) so the next
-        move is a zero delta."""
-        link.key(0x16, 0, 0, timeout=10)          # F12: back to the list
-        time.sleep(1.0)
-        key(ord('d'), settle=1.5)                 # the Display view
-
-    def guest_shell(cmd, settle=12.0):
-        """Run a command in the appliance's ttyS0 shell and read its output.
-
-        THE ONE WAY IN THAT IS NOT A PICTURE.  vmgr's Console view forwards
-        typed characters to the guest's console (`uno_vm_con_key`), the
-        appliance keeps a shell on ttyS0 for exactly this, and whatever that
-        shell prints comes back out through the debug console this script
-        reads.  So a log file INSIDE the guest - which is where the compositor
-        puts its client's stderr, and therefore where every interesting
-        failure lands - is reachable from the host after all.
-
-        Leaves the view where it found it: the caller is usually mid-scene.
-        """
-        before = len(guest_log())
-        link.key(0x16, 0, 0, timeout=10)          # F12: back to the list
-        time.sleep(1.0)
-        key(ord('c'), settle=1.5)                 # the Console view
-        for ch in cmd:
-            link.key(0, ord(ch), 0, timeout=10)
-            time.sleep(0.04)
-        link.key(0, 0x0D, 0, timeout=10)          # Enter
-        time.sleep(settle)
-        enter_display()
-        return guest_log()[before:]
-
-    def diagnose(why):
-        """What a guest that will not paint has to be asked, in one place.
-
-        Each question is separate because they fail separately: a client that
-        died has a reason in its log, a client that could not start has no
-        display or no memory, and a compositor with no DRM device has neither.
-        """
-        print("--- diagnosing: %s" % why)
-        for cmd in (
-            "tail -30 /tmp/x.log > /dev/ttyS0",
-            "free -m | head -3 > /dev/ttyS0",
-            "ls /dev/dri /tmp/.X11-unix 2>&1 | tr '\\n' ' ' > /dev/ttyS0",
-            "dmesg | tail -12 > /dev/ttyS0",
-        ):
-            for ln in guest_shell(cmd):
-                print("   guest| %s" % ln)
+    # THERE IS NO WAY BACK OUT OF THE DISPLAY VIEW FROM THE KEYBOARD IN A
+    # DEBUG BUILD, and that is not vmgr's fault.  `apps/vmgr.c` says "keys go
+    # to the guest - F12 returns to the list", and its `vm_key` does handle
+    # EFI scan 0x16 - but under `UNO_DEBUG` the shell claims F12 first as the
+    # operator escape hatch (`pc64_uui.c`: `if (scan == 0x16) {
+    # pc64_stress_stop(); ... continue; }`) and never delivers it. The harness
+    # can only run debug builds, because the URC link is a debug feature, so
+    # for this script F12 does not exist.
+    #
+    # What that cost: a `guest_shell()` that typed `c` for the Console view
+    # and then a whole shell command straight into the guest's keyboard, one
+    # `KEY_C pressed` at a time, and reported nothing. The appliance now dumps
+    # its client's log to ttyS0 itself (see `gimp.sh`), which needs no view
+    # switch and cannot be intercepted.
+    #
+    # And it is why the pin below happens FIRST, before any other pointer
+    # event: re-entering the Display view is the only thing that resets
+    # vmgr's `g_mx` to -1, and it cannot be re-entered. One baseline is
+    # available per run - the one `key(ord('d'))` already established - so the
+    # pin has to use it rather than ask for another.
 
     ok = True
     results = {}
@@ -350,7 +328,13 @@ def main():
         if not painted:
             ok = False
             print("FAIL: the guest surface never stopped being a console")
-            diagnose("the client never painted")
+            # THE APPLIANCE ALREADY SAID WHY, if it knows: gimp.sh tails its
+            # client's log to ttyS0 after every exit, so the reason is in the
+            # guest lines above rather than in a question this script has to
+            # ask.  Repeated here so the failure and its cause are adjacent.
+            for ln in guest_log():
+                if "uno-gimp[" in ln or "exited rc=" in ln:
+                    print("  cause| %s" % ln)
 
         # ---- 2. what the guest itself says -----------------------------------
         # THE COUNTABLE HALF, and it does not depend on reading a picture.
@@ -380,10 +364,13 @@ def main():
                 time.sleep(settle)
 
             print("pinning the guest cursor at 0,0 ...")
-            enter_display()
-            # Baseline: the first event after re-entering the view produces a
-            # zero delta whatever coordinate it carries - but it must be
-            # INSIDE the body, or vmgr drops it and no baseline is set at all.
+            # THE ONLY BASELINE THIS RUN GETS.  `key(ord('d'))` above left
+            # vmgr with `g_mx = -1`, and nothing since has sent a pointer
+            # event, so this first one produces a zero delta whatever
+            # coordinate it carries.  It must be INSIDE the body, or vmgr
+            # drops it outright and no baseline is set at all.  There is no
+            # second chance: re-entering the view is what resets `g_mx`, and
+            # the key that leaves the view is eaten by the debug shell.
             link.pointer(bx + bw - 4, by + bh - 4, 0, timeout=10)
             time.sleep(0.8)
             # One sweep wider than the guest's whole screen: whatever the
