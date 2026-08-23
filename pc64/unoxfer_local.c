@@ -111,7 +111,8 @@ static int lx_get(unoxfer_client *c, const char *rpath, long long off,
     (void)off;
     if (sz < 0) return ux_failf(c, UNOXFER_ENOENT, "no such file: %s", rpath);
     buf = ux_stage_get(sz, &capn);
-    if (!buf) return ux_fail(c, UNOXFER_EIO, "the staging buffer is busy");
+    if (!buf) return ux_fail(c, UNOXFER_EIO,
+                             "no staging buffer (another transfer holds it, or the heap is full)");
     if (sz > capn) { ux_stage_put(); return ux_failf(c, UNOXFER_ETOOBIG,
         "%s is %ld bytes, over the %ld byte staging cap", rpath, sz, (long)capn); }
 

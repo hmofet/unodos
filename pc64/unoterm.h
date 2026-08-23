@@ -65,8 +65,12 @@ typedef struct {
 typedef struct unoterm unoterm;
 
 struct unoterm {
-    /* geometry */
-    int cols, rows;
+    /* geometry.  `cap_cells` is the RESERVATION made at init and never
+     * changes; cols*rows is the current size.  They are separate because a
+     * resize that clamped against the CURRENT size could shrink but never grow
+     * back - a window made smaller and then larger again would stay small, for
+     * the rest of the session, with nothing to point at. */
+    int cols, rows, cap_cells;
 
     /* Storage carved out of the caller's block.  `row[]` is an INDIRECTION
      * table: scrolling rotates indices instead of moving 132 cells per row,

@@ -254,7 +254,8 @@ the loss unlikely rather than impossible - the fix belongs in unossh.
 | `unoterm.h` / `unoterm.c` | the VT emulator |
 | `xferapp_ui.c` | the windowed app: dual pane, queue, terminal tab |
 | `tools/unoterm_test.c` | host build of the emulator + its fixtures |
-| `tools/xfer_qemu.py` | the end-to-end gate, and the WebDAV server it tests against |
+| `tools/xfer_qemu.py` | the HTTP-family gate, and the WebDAV server it tests against |
+| `tools/xfer_scp_qemu.py` | the SCP gate, and the throwaway sshd it tests against |
 
 ## Verification
 
@@ -270,8 +271,18 @@ Three layers, each testing what it can test honestly.
   debug build. The capability bits must agree with what the volume can actually
   do (a read-only volume must not advertise `put`), and a URL carrying a
   password must be REFUSED - a security property, not a convenience.
-- **`tools/xfer_qemu.py`** - end to end in QEMU, and the only one that proves
-  the claim. The host runs a small WebDAV server; the gate drives
+- **`tools/xfer_scp_qemu.py`** - end to end over SSH, against a **throwaway
+  sshd** started under a scratch directory on a chosen high port with its own
+  host key and its own `authorized_keys`, killed at the end. It touches nothing
+  in `~/.ssh`: a test that edits the developer's own `authorized_keys` to prove
+  a client works has traded a real risk for a convenience. The key is generated
+  ON THE DEVICE (`ssh keygen`) and its public half read back over URC, which
+  exercises the one credential path a headless box actually has. It covers
+  `ls -l` parsing, a recursive pull verified byte for byte, a push read back on
+  the HOST, and - by restarting the server with a fresh host key - that a
+  CHANGED host key is refused.
+- **`tools/xfer_qemu.py`** - end to end over the HTTP family, and the one that
+  proves the headline claim. The host runs a small WebDAV server; the gate drives
   `xfer pull … -r` over URC, polls `status` to completion, and checks every
   file with a **position-weighted** byte sum on the device (the guest has no
   `hashlib`, and a plain sum would miss a file whose bytes arrived rearranged).
@@ -285,9 +296,9 @@ Three layers, each testing what it can test honestly.
   ordering a real server sends - the three things a hand-rolled WebDAV client
   gets wrong.
 
-### Three bugs the gate found that review had not
+### Six bugs the gates found that review had not
 
-Worth recording, because each is the kind that compiles and passes a smoke test:
+Worth recording, because each compiles, and most survive a smoke test:
 
 1. **`pull` and `push` both have `'u'` at index 1.** `sub[1] == 'u'` made every
    pull a push, which then failed as "this protocol cannot upload" and pointed
@@ -302,3 +313,22 @@ Worth recording, because each is the kind that compiles and passes a smoke test:
    segment in flight and returns -1 while it is outstanding. Treating that as
    fatal made large request bodies fail intermittently, which reads as a flaky
    server and is not.
+4. **`ls -l` column off-by-one.** The name is column 7 with `--time-style=+%s`
+   and column 9 without; the walk looked for 8 and 9. The effect is not a wrong
+   size - it is NO ROWS AT ALL, because the name column is never reached and
+   every row is rejected. A working connection, a working exec, and an empty
+   directory. (The epoch form is now *proved* by checking that column 6 is a
+   long run of digits, because otherwise a default listing "parses" with the
+   day of the month as the filename.)
+5. **The staging allocator refused anything below its own floor.** The halving
+   loop stops at 64 KB, so a request *smaller* than that fell out of it having
+   allocated nothing - and the caller was told the buffer was busy. Every small
+   file failed and every large one worked, which is the opposite of the shape
+   you go looking for.
+6. **Trust-on-first-use that never records the first use is just trust.**
+   `ssh_verify_host()` only ASKS the store; it does not write to it. Accepting
+   UNKNOWN and moving on meant the key was never written down, so every later
+   connection was UNKNOWN too and a CHANGED host key could never be detected.
+   Indistinguishable from working until the day it matters. The gate caught it
+   by restarting the server with a fresh host key and watching the box connect
+   happily.

@@ -344,6 +344,13 @@ int unoxfer_streaming(void) { return uno_fat_append_supported(); }
 unsigned char *ux_stage_get(long long want, long long *got)
 {
     long long n = want > 0 && want < g_stage_cap ? want : g_stage_cap;
+    /* FLOOR THE REQUEST.  The halving loop below stops at UX_STAGE_MIN, so a
+     * request SMALLER than that fell out of it having allocated nothing - and
+     * the caller was told the buffer was "busy".  Every small file failed and
+     * every large one worked, which is the opposite of the shape you look for.
+     * A 21-byte file gets the minimum block; there is one buffer and it is
+     * reused, so rounding up costs nothing. */
+    if (n < UX_STAGE_MIN) n = UX_STAGE_MIN;
     if (g_stage_held) { if (got) *got = 0; return 0; }
     if (g_stage && g_stage_len >= n) {
         g_stage_held = 1;

@@ -124,7 +124,8 @@ static int tf_get(unoxfer_client *c, const char *rpath, long long off,
     while (*leaf == '/') leaf++;
 
     buf = ux_stage_get(0, &capn);
-    if (!buf) return ux_fail(c, UNOXFER_EIO, "the staging buffer is busy");
+    if (!buf) return ux_fail(c, UNOXFER_EIO,
+                             "no staging buffer (another transfer holds it, or the heap is full)");
 
     sock = net_socket(SOCK_UDP);
     if (sock < 0 || net_bind(sock, 0) != 0) {
@@ -209,7 +210,8 @@ static int tf_put(unoxfer_client *c, int vol, const char *lpath,
     if (sz < 0) return ux_failf(c, UNOXFER_ENOENT, "no such local file: %s", lpath);
     while (*leaf == '/') leaf++;
     buf = ux_stage_get(sz, &capn);
-    if (!buf) return ux_fail(c, UNOXFER_EIO, "the staging buffer is busy");
+    if (!buf) return ux_fail(c, UNOXFER_EIO,
+                             "no staging buffer (another transfer holds it, or the heap is full)");
     if (sz > capn) { ux_stage_put();
         return ux_failf(c, UNOXFER_ETOOBIG, "%s is over the %lld byte staging cap",
                         lpath, capn); }

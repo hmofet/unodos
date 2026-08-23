@@ -66,14 +66,26 @@ static int sx_login(unoxfer_client *c, sx *x)
         ux_failf(c, UNOXFER_EIO, "handshake: %s", ssh_error(x->h));
         ssh_close(x->h); x->h = -1; return UNOXFER_EIO;
     }
-    /* Trust on first use, stated rather than implied.  A MISMATCH stops; an
-     * UNKNOWN host is recorded and used.  ssh_verify_host does both halves. */
+    /* Trust on first use, and the SECOND half is not optional.
+     *
+     * ssh_verify_host() only ASKS the store; it does not record.  A caller that
+     * accepts UNKNOWN and moves on therefore never writes the key down, so
+     * every subsequent connection is UNKNOWN too and a CHANGED host key can
+     * never be detected.  That is not trust-on-first-use, it is trust - and it
+     * looks identical from the outside until the day it matters.  sshapp_ui.c
+     * gets this right; this did not, until the gate restarted a server with a
+     * fresh host key and the box connected happily.
+     *
+     * A MISMATCH refuses outright: it is the one answer worth stopping a
+     * transfer for, and a background job has nobody to ask. */
     rc = ssh_verify_host(x->h, x->host);
     if (rc == SSH_HOST_MISMATCH) {
         ux_failf(c, UNOXFER_EHOSTKEY,
                  "HOST KEY MISMATCH for %s - refusing (run `ssh hosts`)", x->host);
         ssh_close(x->h); x->h = -1; return UNOXFER_EHOSTKEY;
     }
+    if (rc == SSH_HOST_UNKNOWN)
+        ssh_known_add(x->host, ssh_host_fingerprint(x->h));
 
     /* Key auth only.  unossh's store holds keys, not passwords, and this
      * subsystem deliberately does not open a second secret store to hold the
@@ -223,15 +235,33 @@ static int parse_ls(const char *line, unoxfer_ent *e, int have_epoch)
     memset(e, 0, sizeof *e);
     e->is_dir = (unsigned char)(type == 'd');
 
-    /* walk to the size field (5th), then the name (8th with epoch, else the
-     * rest after three date fields) */
+    /* COUNT THE COLUMNS, once, out loud, because getting this wrong is silent:
+     *
+     *   -rw-rw-r--  1  arin  arin  23  1755912345  readme.txt
+     *      1        2   3     4     5      6           7        (--time-style)
+     *   -rw-rw-r--  1  arin  arin  23  Aug 23 04:19  readme.txt
+     *      1        2   3     4     5   6   7    8       9      (default)
+     *
+     * An off-by-one here does not produce a wrong size; it produces NO ROWS AT
+     * ALL, because the name column is never reached and every row is rejected.
+     * The listing then reads as an empty directory - a working connection, a
+     * working exec, and nothing to show for it. */
     while (*p) {
         while (*p == ' ') p++;
         if (!*p) break;
         field++;
-        if (field == 6) e->size = e->is_dir ? 0ull : ux_u64(p);
-        if (have_epoch && field == 7) e->mtime = (unsigned)ux_u64(p);
-        if (field == (have_epoch ? 8 : 9)) {
+        if (field == 5) e->size = e->is_dir ? 0ull : ux_u64(p);
+        if (have_epoch && field == 6) {
+            /* The epoch form must be PROVED, not assumed: field 6 is a ten-ish
+             * digit number there and a month name ("Aug") in the default form.
+             * Without this check a default listing "parses" with the day of the
+             * month as the filename - rows, plausible-looking, and wrong. */
+            int d = 0;
+            while (p[d] >= '0' && p[d] <= '9') d++;
+            if (d < 8 || (p[d] != ' ' && p[d] != 0)) return 0;
+            e->mtime = (unsigned)ux_u64(p);
+        }
+        if (field == (have_epoch ? 7 : 9)) {
             /* the rest of the line is the name, spaces and all.  A symlink row
              * carries " -> target"; the name is what precedes it. */
             const char *arrow = 0, *q;
@@ -374,7 +404,8 @@ static int sx_get(unoxfer_client *c, const char *rpath, long long off,
              ux_cpy(p->file, (int)sizeof p->file, unoxfer_basename(rpath)); }
 
     buf = ux_stage_get(size, &capn);
-    if (!buf) return ux_fail(c, UNOXFER_EIO, "the staging buffer is busy");
+    if (!buf) return ux_fail(c, UNOXFER_EIO,
+                             "no staging buffer (another transfer holds it, or the heap is full)");
     if (size > capn) {
         ux_stage_put();
         return ux_failf(c, UNOXFER_ETOOBIG,
@@ -419,7 +450,8 @@ static int sx_put(unoxfer_client *c, int vol, const char *lpath,
 
     if (sz < 0) return ux_failf(c, UNOXFER_ENOENT, "no such local file: %s", lpath);
     buf = ux_stage_get(sz, &capn);
-    if (!buf) return ux_fail(c, UNOXFER_EIO, "the staging buffer is busy");
+    if (!buf) return ux_fail(c, UNOXFER_EIO,
+                             "no staging buffer (another transfer holds it, or the heap is full)");
     if (sz > capn) { ux_stage_put();
         return ux_failf(c, UNOXFER_ETOOBIG, "%s is %ld bytes, over the %lld byte "
                         "staging cap", lpath, sz, capn); }
