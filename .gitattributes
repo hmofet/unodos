@@ -7,6 +7,17 @@
 *.py text eol=lf
 *.asm text eol=lf
 
+# The guest appliance's payload, which is read ONLY by Linux.  `apps/*.app`
+# is a shell fragment sourced inside the build container and it writes the
+# appliance's own scripts out of its heredocs, so a CRLF checkout produces a
+# rootfs whose init begins `#!/bin/sh\r` - "not found", from a file that is
+# plainly there.  `unodos-guest.config` is merged by the kernel's own
+# merge_config.sh, which would take the carriage return as part of the
+# symbol name and silently enable nothing.  Neither is covered by *.sh, and
+# neither failure would name its cause.
+pc64/guest/appliance/apps/*.app text eol=lf
+pc64/guest/appliance/*.config text eol=lf
+
 # Generated contract surfaces (unogen emits LF); pin so regeneration on a
 # Windows checkout with autocrlf=true doesn't churn their line endings.
 unodef/gen/** text eol=lf
