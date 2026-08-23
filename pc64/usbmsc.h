@@ -10,4 +10,14 @@ int uno_usbmsc_init(void);        /* post-detach: claim BOT device, register */
  * why - and it has to exist in production, where the debug log does not. */
 const char *uno_usbmsc_why(void);
 
+/* Did the BOOT device itself come back on native drivers?
+ *
+ * Not "is some mass-storage device bound" - the boot one, matched by the USB
+ * id usbboot latched before ExitBootServices. On a USB-booted machine this is
+ * the only trustworthy answer to "is the system volume still ours", because
+ * the generic test (a volume carrying \EFI\BOOT\BOOTX64.EFI on a natively
+ * reachable controller) is satisfied by ANY other operating system's ESP -
+ * a Windows Boot Manager has an MZ header like everything else. */
+int uno_usbmsc_boot_bound(void);
+
 #endif
