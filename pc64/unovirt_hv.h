@@ -210,4 +210,62 @@ typedef struct uno_hv {
 const uno_hv_t *uno_hv_svm(void);         /* hv_svm.c                        */
 const uno_hv_t *uno_hv_vmx(void);         /* hv_vmx.c                        */
 
+/* ---- the FPU/SSE register file, which NEITHER vendor saves ----------------
+ *
+ * A VM exit does not preserve x87, MMX, XMM or MXCSR, and neither does VMRUN:
+ * the VMCS host-state area covers segment registers, the control registers
+ * and RSP/RIP, and the VMCB's save area covers the same kind of thing.  The
+ * 512-byte legacy register file is simply shared, so a hypervisor that does
+ * not swap it hands the guest whatever the host last left in XMM and takes
+ * the guest's back out again.  KVM does an XSAVE around every entry; it is
+ * not an optimisation to skip.
+ *
+ * UnoDOS is a graphical OS - its blitters, its font rendering and every
+ * `memcpy` the compiler vectorises live in XMM - so both directions were
+ * live, sixty times a second, at every slice boundary.
+ *
+ * WHAT IT LOOKED LIKE, because the symptom is worth recognising again: the
+ * GIMP appliance died three seconds into startup under unovirt and never
+ * under plain QEMU, and the SIGNAL VARIED between launches of the same binary
+ * on the same image (rc=1, rc=1, rc=139).  A missing instruction fails the
+ * same way every time; corrupted registers do not.  babl is a pixel-format
+ * conversion library and was the first thing this project ran that keeps live
+ * values in XMM for millions of consecutive instructions.  Everything cheaper
+ * to blame was eliminated first - the display, memory, the core count, and
+ * the guest's CPUID, which plain QEMU reproduces exactly without crashing.
+ *
+ * FXSAVE AND NOT XSAVE, deliberately.  `hv_phases.c` masks XSAVE and OSXSAVE
+ * out of the guest's CPUID ("Without it the guest uses FXSAVE, which every
+ * x86-64 CPU has"), so the guest cannot enable any XCR0 state beyond the
+ * legacy area and 512 bytes covers everything it can reach.  If XSAVE is ever
+ * advertised to a guest, this has to become XSAVE/XRSTOR with the matching
+ * mask and a correspondingly larger area - and that change belongs in the
+ * same commit as the CPUID one, not after it.
+ */
+#define UNO_FPU_AREA 512
+
+static inline void uno_fpu_save(void *p)
+{ __asm__ __volatile__ ("fxsave64 (%0)" :: "r" (p) : "memory"); }
+
+static inline void uno_fpu_load(const void *p)
+{ __asm__ __volatile__ ("fxrstor64 (%0)" :: "r" (p) : "memory"); }
+
+/* The state a vCPU starts with, captured from a freshly initialised unit
+ * rather than written out as bytes.  An all-zero image is NOT a valid one to
+ * restore: MXCSR would be 0, which unmasks every SIMD exception, and FCW
+ * would be 0 rather than 0x037F.  FNINIT plus the default MXCSR and one
+ * FXSAVE gets the reserved fields exactly as this CPU expects to read them
+ * back.  The host's own state is preserved across the capture, because this
+ * runs on the host's FPU. */
+static inline void uno_fpu_init_area(void *guest)
+{
+    unsigned mxcsr = 0x1F80u;                 /* all exceptions masked       */
+    unsigned char keep[UNO_FPU_AREA] __attribute__((aligned(16)));
+    uno_fpu_save(keep);
+    __asm__ __volatile__ ("fninit");
+    __asm__ __volatile__ ("ldmxcsr %0" :: "m" (mxcsr));
+    uno_fpu_save(guest);
+    uno_fpu_load(keep);
+}
+
 #endif /* UNO_VIRT_HV_H */

@@ -408,12 +408,31 @@ static void classify(uno_vmexit *out)
  * rest of A3.  Until then a guest that does not end its own turn is a guest
  * this backend must not be handed - which is what UNO_VMF_PREEMPT being
  * refused by `vcpu_create` (via UNO_VMF_SLAT) already ensures. */
+/* As on the Intel side, and for the same reason: the VMCB's save area does not
+ * cover x87/MMX/XMM/MXCSR either, and VMSAVE/VMLOAD cover the segment and
+ * syscall MSRs rather than the register file.  See unovirt_hv.h.
+ *
+ * WRITTEN BLIND, and saying so.  The AMD backend's first VMRUN has never
+ * returned on the box available (UNOVIRT.md, "The A1 wedge"), so this is the
+ * same fix applied to the same defect rather than a fix that has been watched
+ * to work.  Leaving it out would have been worse: it would leave a known
+ * corruption in the backend that gets attention next, and the person who
+ * brings SVM up would be debugging two things at once. */
+static unsigned char g_guest_fpu[UNO_FPU_AREA] __attribute__((aligned(16)));
+static unsigned char g_host_fpu[UNO_FPU_AREA]  __attribute__((aligned(16)));
+static int g_fpu_ready;
+
 static int svm_vcpu_run(uno_vcpu *v, unsigned budget_us, uno_vmexit *out)
 {
     (void)budget_us;
     put64(g_vmcb + VMCB_SAVE, SS_RAX, v->gprs.rax);
     if (!v->quiet) tracex("[hv] vmrun rip=", get64(g_vmcb + VMCB_SAVE, SS_RIP));
+    if (!g_fpu_ready) { uno_fpu_init_area(g_guest_fpu); g_fpu_ready = 1; }
+    uno_fpu_save(g_host_fpu);
+    uno_fpu_load(g_guest_fpu);
     svm_entry((u64)(unsigned long long)(void *)g_vmcb, &v->gprs);
+    uno_fpu_save(g_guest_fpu);
+    uno_fpu_load(g_host_fpu);
     if (!v->quiet) tracex("[hv] exit  code=", get64(g_vmcb, VMCB_EXITCODE));
     v->gprs.rax = get64(g_vmcb + VMCB_SAVE, SS_RAX);
     classify(out);
