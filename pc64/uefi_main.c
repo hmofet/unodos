@@ -1113,6 +1113,16 @@ static int try_detach(void)
                                    AllocatePages does not exist on the far side
                                    of the door. Inert on a machine that cannot
                                    host an appliance. */
+    { void uno_iwl_reserve(void); uno_iwl_reserve(); }
+                                /* ...and the Intel WiFi DMA arena, for the same
+                                   reason AGAIN - and this one is not about
+                                   running out of memory but about WHERE it is.
+                                   The driver's fallback arena is .bss, and a
+                                   firmware that loads us above 4 GB (the
+                                   Surface: image_base 0x140000000) puts .bss
+                                   somewhere the device cannot address. The card
+                                   then comes up perfectly and receives nothing.
+                                   Inert when there is no Intel WiFi. */
     for (t = 0; t < 2; t++) {   /* per spec: one retry after a fresh map */
         UINTN sz = sizeof gMMap, key = 0, dsz = 0;
         UINT32 ver = 0;
@@ -1160,6 +1170,11 @@ static int try_detach(void)
             uno_blk_detach();                 /* native AHCI/NVMe/SDHCI/MSC    */
             uno_fat_remount();                /* same disks, native transport  */
             uno_fs_remap();
+            /* the volume NUMBERING just changed: unolog caches the volume
+             * holding \LOGS, and a stale index there does not miss - it
+             * addresses a different disk. Same lesson the crash volume
+             * learned on 2026-07-31. */
+            unolog_storage_remapped();
             /* A USB stick is not ready the instant its endpoints are
              * configured - it has just been handed to a different host driver
              * mid-life, and the first READ(10) after that can come back short
