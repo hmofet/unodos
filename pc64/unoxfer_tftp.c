@@ -48,7 +48,7 @@ static int tf_open(unoxfer_client *c, const unoxfer_site *s)
     tf *x;
     unsigned char ip[4];
     if (!pc64_net_up()) return ux_fail(c, UNOXFER_EIO, "no network");
-    if (!net_dns_query(s->host, ip))
+    if (!ux_resolve(s->host, ip))
         return ux_failf(c, UNOXFER_EIO, "cannot resolve %s", s->host);
     x = (tf *)malloc(sizeof *x);
     if (!x) return ux_fail(c, UNOXFER_EIO, "out of memory");
@@ -83,7 +83,7 @@ static int tf_wait(int sock, tf *x, unsigned char *buf, int cap, int ms, int *la
         unsigned char src[4];
         unsigned short sp = 0;
         int n;
-        net_poll();
+        ux_pump(0);
         n = net_recvfrom(sock, buf, cap, src, &sp);
         if (n > 0) {
             if (src[0] != x->ip[0] || src[1] != x->ip[1] ||
@@ -92,6 +92,7 @@ static int tf_wait(int sock, tf *x, unsigned char *buf, int cap, int ms, int *la
             else if (sp != (unsigned short)x->port) continue;
             return n;
         }
+        ux_pump(1);                       /* nothing waiting: yield         */
         if (TickCount() - t0 > limit) return -1;
     }
 }

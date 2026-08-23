@@ -29,7 +29,6 @@ void *memset(void *, int, unsigned long);
 void *memcpy(void *, const void *, unsigned long);
 unsigned long strlen(const char *);
 int   snprintf(char *, unsigned long, const char *, ...);
-int   net_poll(void);
 long  TickCount(void);
 int   uno_fs_read(int vol, const char *name, unsigned char *buf, long max);
 long  uno_fs_size(int vol, const char *name);
@@ -141,7 +140,7 @@ static int sx_read(sx *x, unsigned char *buf, int want, int ms, volatile int *ca
         n = ssh_read(x->h, buf + got, want - got);
         if (n > 0) { got += n; t0 = TickCount(); continue; }
         if (n < 0) return got ? got : -1;              /* real end of stream */
-        net_poll();
+        ux_pump(1);
         ssh_poll(x->h);
         if (TickCount() - t0 > limit) return got ? got : -1;
     }
@@ -461,7 +460,7 @@ static int sx_put(unoxfer_client *c, int vol, const char *lpath,
         w = ssh_write(x->h, buf + sent, want);
         if (w < 0) { ux_stage_put(); sx_drop(x);
                      return ux_fail(c, UNOXFER_EIO, "channel closed mid-file"); }
-        if (w == 0) { net_poll(); ssh_poll(x->h); continue; }  /* window shut */
+        if (w == 0) { ux_pump(1); ssh_poll(x->h); continue; }  /* window shut */
         sent += w;
         if (p) p->done = (unsigned long long)sent;
     }

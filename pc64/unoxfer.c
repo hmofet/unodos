@@ -19,7 +19,9 @@ void *memcpy(void *, const void *, unsigned long);
 unsigned long strlen(const char *);
 int   snprintf(char *, unsigned long, const char *, ...);
 int   vsnprintf(char *, unsigned long, const char *, va_list);
-int   net_poll(void);
+void  net_poll(void);
+int   net_dns_query(const char *host, unsigned char out[4]);
+void  uno_pc64_delay_ms(int ms);
 long  TickCount(void);
 
 /* ---- weak links into two other lanes --------------------------------------
@@ -378,10 +380,30 @@ void ux_stage_put(void)
  * what is wanted here (the file does not move, it is only renamed in place)
  * and exactly the sort of signature that gets called wrong once.
  * ======================================================================== */
+/* THE PARTIAL NAME HAS TO BE A LEGAL 8.3 NAME.
+ *
+ * The obvious spelling - append ".PART" - produces "HTTP1.TXT.PART": two dots
+ * and a four-character extension, which FAT will not accept.  Every write of
+ * every partial then failed, and the error surfaced as "write failed" against
+ * the FINAL path, which is not where the bad name was.  Cost a debugging round;
+ * this comment is the receipt.
+ *
+ * So: keep the directory and the base, replace the extension with "$$$" - the
+ * DOS convention for a work file, and legal.  Two transfers into one directory
+ * whose leaf names share a base would collide, which is survivable because the
+ * engine commits one file at a time and the collision window is one file. */
 int ux_partname(char *dst, int cap, const char *final)
 {
-    if (!ux_cpy(dst, cap, final)) return UNOXFER_EARG;
-    if (!ux_cat(dst, cap, ".PART")) return UNOXFER_EARG;
+    const char *leaf = unoxfer_basename(final);
+    int dirlen = (int)(leaf - final), n = 0, i;
+
+    if (!dst || cap < 16 || !final) return UNOXFER_EARG;
+    if (dirlen >= cap - 12) return UNOXFER_EARG;
+    for (i = 0; i < dirlen; i++) dst[n++] = final[i];
+    for (i = 0; leaf[i] && leaf[i] != '.' && i < 8; i++) dst[n++] = leaf[i];
+    if (n == dirlen) dst[n++] = 'X';          /* a dotfile has no base at all */
+    dst[n++] = '.'; dst[n++] = '$'; dst[n++] = '$'; dst[n++] = '$';
+    dst[n] = 0;
     return UNOXFER_OK;
 }
 
@@ -393,7 +415,7 @@ int ux_append_part(int vol, const char *part, const unsigned char *buf, long len
 
 int ux_commit_file(int vol, const char *final, const unsigned char *buf, long len)
 {
-    char part[UNOXFER_PATHLEN + 8];
+    char part[UNOXFER_PATHLEN + 16];
     const char *leaf;
 
     if (ux_partname(part, (int)sizeof part, final) != UNOXFER_OK)
@@ -562,6 +584,38 @@ int unoxfer_parse_url(const char *url, unoxfer_site *out)
 }
 
 /* ===========================================================================
+ * Address resolution.
+ *
+ * net_dns_query() sends a DNS QUERY, including for "10.0.2.2" - which no
+ * resolver will answer and which every harness, every LAN NAS and every
+ * router-shaped target is named by.  pc64_http's own note says it "accepts an
+ * IP literal", so the check belongs on this side of the call too, once, rather
+ * than in each backend.
+ *
+ * The parse is strict about the shape (four decimal octets, nothing else),
+ * because a lenient one is how "1.2.3" quietly becomes 1.2.0.3 - which is a
+ * REACHABLE address, so the failure is a connection to the wrong machine
+ * rather than an error.
+ * ======================================================================== */
+int ux_resolve(const char *host, unsigned char ip[4])
+{
+    const char *p = host;
+    int part = 0, v, digits;
+
+    if (!host || !ip) return 0;
+    for (part = 0; part < 4; part++) {
+        v = 0; digits = 0;
+        while (*p >= '0' && *p <= '9' && digits < 3) { v = v * 10 + (*p++ - '0'); digits++; }
+        if (!digits || v > 255) break;
+        ip[part] = (unsigned char)v;
+        if (part < 3) { if (*p != '.') break; p++; }
+        else if (*p == 0) return 1;              /* a complete dotted quad    */
+        else break;
+    }
+    return net_dns_query(host, ip);
+}
+
+/* ===========================================================================
  * The site store.
  *
  * A flat, versioned record file.  It goes on uno_fs_pref_vol(), which is the
@@ -668,12 +722,30 @@ int unoxfer_site_delete(const char *name)
  * ring and nobody called net_poll().  So there is one of these, and backends
  * call it rather than writing their own.
  * ======================================================================== */
+/* PACE THE POLL.  net.c derives part of its notion of time from how often
+ * net_poll() is called (`g_ticks * 5u` when there is no TSC base, and the DHCP
+ * and TCP retransmit stages are commented as "net_poll is called at ~5 ms"), so
+ * a TIGHT spin does not merely waste cycles - it runs the stack's timers
+ * hundreds of times too fast and retransmits a SYN into a NIC that cannot drain
+ * it.  The symptom is a socket stuck in SYN_SENT against a peer that is plainly
+ * reachable, which is exactly how this was found: the same address and port
+ * that `nst` connects to in two seconds would not connect here in thirty.
+ *
+ * So: pump, and when NOTHING happened, yield ~2 ms before pumping again.  The
+ * `idle` argument is what keeps a bulk read at full speed - a loop that is
+ * moving bytes never sleeps. */
+void ux_pump(int idle)
+{
+    net_poll();
+    if (idle) uno_pc64_delay_ms(2);
+}
+
 int ux_wait(int (*ready)(void *), void *ctx, int ms)
 {
     long t0 = TickCount(), ticks = (long)ms * 60 / 1000;
     if (ticks < 1) ticks = 1;
     for (;;) {
-        net_poll();
+        ux_pump(1);
         if (ready && ready(ctx)) return 1;
         if (TickCount() - t0 > ticks) return 0;
     }
