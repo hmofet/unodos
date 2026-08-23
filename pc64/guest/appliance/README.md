@@ -15,6 +15,7 @@ is adding one file; the contract is [`apps/README.md`](apps/README.md).
 |---|---|---|---|
 | `chromium` | Chromium on Ozone/Wayland | cage | rendering, network, a host-typed address navigating a real browser (M5) |
 | `gimp` | GIMP 2.10 (GTK2) under XWayland | labwc | several windows, independently placed, focused and decorated |
+| `android` | Firefox for Android, in a Waydroid container | cage | a foreign package as the appliance: display, input and network into a whole Android (P1 of `docs/ANDROID-APPLIANCE-PLAN.md`) |
 
 Build on quill (or any Linux box with kernel build deps + docker):
 
@@ -40,6 +41,33 @@ Verification:
 
     python3 tools/hv_remote.py <kvm-box>  --time=380       # serial: shell answers
     python3 tools/vm_display_urc.py /tmp/unodos-uefi.img 600 4 example.net
+
+## The android appliance's own two loops
+
+The Android appliance takes minutes to reach a window rather than seconds, so
+it has a runner that photographs it on a schedule and a runner that leaves a
+shell on it:
+
+    ./build_android.sh  /work/unodos-android          # ANDROID.IMG, ~10 min
+    cp firefox-x86_64.apk /work/unodos-android/firefox.apk
+    UNO_APP=android ./build_rootfs.sh /work/unodos-android
+
+    ./android_loop.sh  /work/unodos-android [seconds] # boot, shoot, report
+    ./android_shell.sh start                          # boot and stay up
+    ./android_shell.sh run 'waydroid status'          # ...and drive it
+    ./android_shell.sh type unodos.arinbakht.com      # through the i8042
+    ./android_shell.sh shot name
+
+`android_shell.sh` is the one that matters: every fault in this appliance is
+an environment fault, and an environment fault takes seconds to test at a
+prompt and eight minutes to test through a rebuild. Its `type` and `key` go
+through QEMU's emulated keyboard rather than through the guest's own tooling,
+so they exercise the path a person's keystroke actually takes.
+
+`android_probe.sh` is the older, narrower question - "does a Waydroid
+container start on this kernel" - with a headless compositor and no app. Keep
+it: when the appliance shows a black screen it separates the runtime from
+everything above it.
 
 ## The fast loop, and why it exists
 

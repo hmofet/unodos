@@ -1,6 +1,6 @@
 # Foreign packages in UnoDOS: Android first, Firefox first
 
-> **Status: 2026-08-23. P1 part-done, P2 DONE and proven, P3 onward is plan.**
+> **Status: 2026-08-23. P1 and P2 DONE and proven, P3 onward is plan.**
 > Branch `unopkg`. It sits on Track A (`unovirt`), the appliance payload
 > (`pc64/guest/appliance/`), the app registry (`docs/APP-REGISTRY-PLAN.md`,
 > `uno_appdesc.h`) and Track B (`unoguest`). §7 says how this lane and the
@@ -12,10 +12,14 @@
 > The runtime behind it is a stub that reports, accurately, why nothing is
 > running yet. Contract and evidence: `pc64/UNOPKG.md`.
 >
-> **Appliance-side, P1:** the guest kernel now carries binder, binderfs, the
-> namespace and cgroup set, veth/bridge/NAT and virtio-snd; built and verified
-> on quill. The Waydroid image build (`build_android.sh`) is the remaining
-> half of P1.
+> **Appliance-side, P1 is done.** `apps/android.app` boots an Alpine
+> appliance whose cage client is a Waydroid container, installs the APK it
+> carries, launches it and maximises it. From a cold boot, with nothing
+> driving it: Firefox full-screen on the framebuffer with no launcher and no
+> status bar, a default route and a VALIDATED network inside Android, and a
+> URL typed on the emulated i8042 keyboard loading a real page over TLS.
+> Evidence: `pc64/shots/android_fastloop_launch.png`,
+> `pc64/shots/android_fastloop_firefox.png`. What it cost is in section 4.
 
 ## 0. What is being asked, and the verdict
 
@@ -252,7 +256,7 @@ criterion a screenshot or a log line can show. P1..P3 need no hypervisor.
 
 | # | Phase | Exit criterion | Sessions |
 |---|---|---|---|
-| **P1** (half done) | **Android runs in the fast loop.** Kernel config gains binder/binderfs, namespaces, cgroup2, veth/bridge, netfilter + NAT, `CONFIG_SND_VIRTIO`. `build_android.sh` produces ANDROID.IMG (LineageOS 20 x86_64 vanilla, `waydroid_base.prop` with `ro.hardware.gralloc=default`, `ro.hardware.egl=swiftshader`, `persist.waydroid.multi_windows=true`). `uno-init` mounts it from `/dev/vdb` when present and starts the container headless (no launcher shown: `waydroid show-full-ui` is NOT run). Firefox x86_64 APK installed from the ttyS0 shell; `waydroid app launch org.mozilla.firefox` puts a Firefox toplevel on cage. | `shots/android_fastloop_firefox.png`: Firefox, and only Firefox, on the appliance's framebuffer; `waydroid status` RUNNING; peak memory from `/proc/meminfo` recorded | 2 |
+| ~~**P1**~~ | **DONE 2026-08-23. Firefox runs, draws, takes input and reaches the internet.** `apps/android.app` is the appliance (the GIMP lane's one-file contract); `android_loop.sh` boots it and photographs it; `android_shell.sh` leaves a driveable shell on its serial port. The kernel gained eBPF, the netd xtables set and IPv6 policy routing - see "What P1 actually cost" below, because none of the four faults named itself. | **MET, from a cold boot with nothing driving it**: `shots/android_fastloop_launch.png` (Firefox full-screen, no launcher, no status bar) and `shots/android_fastloop_firefox.png` (a real page over TLS, its URL typed through the emulated i8042 keyboard). The appliance's own log says `window: mode=fullscreen`, `android route: default via 192.168.240.1`, `android network: VALIDATED`. | 2 |
 | ~~**P2**~~ | **DONE 2026-08-23.** `pc64_pkg.c` (a local zip reader, a binary-XML manifest reader, install/remove, the runtime probe), `apps/foreign_shim.c` -> `PKG\FSHIM.UNO`, the `.APK` branch in Files behind an arm-twice confirm, two `kExports` rows, and two gates. **Nothing in `pc64_uui.c` changed** - an installed foreign app reaches the desktop through the ordinary app registry, which is the first outside proof of what `docs/APP-REGISTRY-PLAN.md` promised. | **MET.** Firefox 154.0 x86_64 installs from Files, appears on the desktop as "Firefox", opens a native window, and is still there after a reboot (`shots/pkg_*.png`). Two findings paid for: **a `.UNO` is CRC-sealed**, so an in-place rewrite must re-seal or the loader refuses an app that looks perfect everywhere else; and the arm-twice flag must be cleared by MOVING, never by the key that arms it. | 2 |
 | **P3** | **B0: the channel and L1 plumbing, with the stub agent.** As `UNOVIRT-PLAN.md` B0, plus the `PKG_*` commands. Three stub foreign windows are real `unoui_window`s; the shim's `LAUNCH` makes the stub emit a `WIN_CREATE` tagged to the shim. | In QEMU/TCG: launching the Firefox shim opens a native window titled "Firefox" (stub content); snap, Alt-Tab, taskbar grouping and close all work; screenshots in the gate. **Either this is the B0 slice of the unoguest lane, or it is claimed here in that lane's name; it is not built twice** | 2..3 |
 | **P4** | **B1 for Android: the real agent.** A headless wlroots compositor in the appliance (cage is replaced, or run with a custom backend: decide in P4a by trying wlroots' headless backend + a damage exporter first) that exports every toplevel's damage into a surface slot and forwards injected input. Waydroid's per-activity surfaces arrive here with their titles. `uno-init` runs the boot-time `PKG_LIST` catch-up. | On devbuntu under unovirt: double-click Firefox's APK, install, launch, and **Firefox is a native UnoDOS window**; type a URL through it and a page renders (`shots/firefox_native_window.png`). Boot-to-usable time and memory recorded | 4..6 |
@@ -264,6 +268,45 @@ criterion a screenshot or a log line can show. P1..P3 need no hypervisor.
 To Firefox in a native window: P1..P4, **10..13 sessions**, of which 6..9 are
 Track B work that every other foreign app (GIMP included) needs anyway. The
 Android-specific share is about 4.
+
+### What P1 actually cost, and why every fault presented as something else
+
+Four faults stood between "the container boots" (which was already true) and
+"a person can use Firefox". **Not one of them mentioned the thing that was
+wrong**, and three were in the kernel config rather than in anything this
+lane wrote.
+
+| What was missing | What it said | What it looked like |
+|---|---|---|
+| The system dbus never started - `uno-init` ran `dbus-daemon --system` BEFORE writing the machine-id it refuses to start without, and the tmpfs over `/var` had buried alpine-baselayout's `/var/run -> /run` symlink | `WayDroid container is not listening`, every five seconds, forever | A session that would not start. Neither existing appliance could see this: Chromium and GIMP want the SESSION bus, which is started after the id exists |
+| `CONFIG_NFT_COMPAT` - Alpine's iptables is iptables-nft, and waydroid-net.sh runs under `set -e` with a cleanup trap | `Extension udp revision 0 not supported, missing kernel module?` then `Failed to setup waydroid-net` | Android with no address at all. Fixed by INSTALLING `nftables`, so the script takes its native path and asks the kernel only for what it has |
+| `CONFIG_BPF_SYSCALL` - Android 13's resolver tags every socket through a BPF program | `BpfHandler: Failed to get current configuration: Function not implemented` and `resolv: Failed to tag socket` | `resNetworkQuery failed: ENONET`, so every DNS probe failed, so the network never validated |
+| `CONFIG_IPV6_MULTIPLE_TABLES` - netd's RouteController installs its IPv4 and IPv6 rules together at startup and treats either failing as fatal to itself | `Error adding IPv6 rule: Address family not supported by protocol` / `Failed to initialize RouteController` | **The one that mattered.** netd then programs NO routes and registers NO DNS for ANY network - on a guest with no IPv6 at all. `dumpsys connectivity` held a perfect LinkProperties with gateway and resolver in it, `ip route` in table 1003 was empty, and Firefox showed `NS_ERROR_OFFLINE` |
+
+Two more things this phase paid for and the next reader should not re-pay:
+
+- **`waydroid app launch` is the only thing that starts an app here.**
+  `waydroid shell -- am start -n pkg/activity` and `cmd activity
+  start-activity -W` both run, return 0, print NOTHING and start nothing,
+  in a shell where `pm list packages` and `cmd package resolve-activity`
+  answer perfectly. `app launch` goes through waydroid's platform service
+  over gbinder instead of through the activity manager, and it needs
+  `DBUS_SESSION_BUS_ADDRESS` - which the appliance's client has and a serial
+  shell does not.
+- **A launched app is FREEFORM and phone-sized**: 309x549 in the middle of a
+  1280x800 output, with Android's wallpaper round it. `--windowingMode 1` is
+  ignored for a task that already exists and `am task resize` reports success
+  and does nothing; what works is tapping the task's own caption maximise
+  button, computed from its bounds. This is exactly the job L1's `SET_RECT`
+  takes over in P4.
+
+**Memory, measured with Firefox showing a real page** (4 GB guest, plain
+QEMU): `used 1304 MB`, `available 2057 MB` of 3922, with 2.5 GB of that
+reclaimable page cache from the read-only images. lxc-info reports `Memory
+use: 3.42 GiB` for the container and that figure is page cache charged to its
+cgroup, not working set - **do not size a carve against it**. The honest
+number is about 1.3 GB of anonymous memory, which makes **RA1 real: the
+1536 MB tier is too tight and 2048 MB is the floor to ask for by name.**
 
 ### What A9 (SMP) changes
 
