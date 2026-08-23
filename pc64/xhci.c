@@ -22,6 +22,7 @@ void uno_xhci_diag2(unsigned *sts, unsigned *ev0, int *disc) { if (sts)*sts=0; i
 /* the last hub scan's per-port status words, for the debug env block. There is
  * no g_hubport_sts[] in the stub build, so this just zero-fills. */
 void uno_xhci_hub_ports(unsigned *out, int max) { int i; for (i=0;i<max;i++) out[i]=0; }
+void uno_xhci_inventory_log(void) { }
 int uno_usb_control(int dev, unsigned char rt, unsigned char req, unsigned short val,
                     unsigned short idx, void *data, int len)
 { (void)dev;(void)rt;(void)req;(void)val;(void)idx;(void)data;(void)len; return -1; }
@@ -38,7 +39,14 @@ int uno_usb_bulk_in_poll(int dev) { (void)dev; return -1; }
 #else  /* ===================== UNO_XHCI enabled ========================= */
 
 #include "pc64_pci.h"
+#include "usbboot.h"      /* which PCI function the boot path names */
+#include "uno_debug.h"    /* uno_dbg_log: rides the RAM stash, survives a warm
+                           * reset, and compiles away in production. The xd()
+                           * family below is 0x402 debugcon - QEMU only, and
+                           * SMM-trapped on Lenovo/Surface-class firmware, so
+                           * every metal-relevant line goes through BOTH. */
 #include <stdint.h>
+#include <stdio.h>        /* snprintf, for the one-line takeover verdict */
 
 /* detach the firmware's USB driver from this controller first (uefi_main) */
 int uno_pc64_pci_disconnect(int bus, int dev, int fn);
@@ -74,6 +82,7 @@ typedef unsigned long long u64;
 #define CMD_HCRST (1u<<1)
 #define CMD_INTE  (1u<<2)
 #define STS_HCH   (1u<<0)
+#define STS_EINT  (1u<<3)    /* event interrupt pending (RW1C) */
 #define STS_CNR   (1u<<11)
 #define STS_HCE   (1u<<12)   /* host controller error (fatal) */
 
@@ -233,6 +242,69 @@ static int find_xhci(pci_dev *out)
         }
     }
     return 0;
+}
+
+/* ---- pre-detach inventory --------------------------------------------------
+ * Every USB host controller on the machine, named, in the state the firmware
+ * left it in.
+ *
+ * Callable while ATTACHED, because it reads CONFIG SPACE ONLY: no BAR is
+ * dereferenced, no controller register is touched, nothing is disconnected.
+ * That matters on a machine that hangs AFTER detaching, where the pre-detach
+ * copy of the telemetry is the copy that reaches the disk.
+ *
+ * It answers three questions a metal boot cannot otherwise answer:
+ *
+ *  - IS THERE MORE THAN ONE xHCI? find_xhci() takes the first in bus/dev/fn
+ *    order. An Ice Lake-U part can carry a CPU-side Thunderbolt xHCI at
+ *    00:0d.0 that enumerates BEFORE the PCH controller at 00:14.0, and the
+ *    stick is on the PCH one. Taking the wrong controller looks exactly like
+ *    a controller that will not enumerate.
+ *  - DOES BAR0 DECODE, and is it above 4 GB? (this machine's LPSS BARs are,
+ *    and truncating one is a bug this tree has already had once - i2c_hid.c)
+ *  - WHAT POWER STATE is it in? A function left in D3hot answers 0xFFFFFFFF
+ *    to every register read, which the bring-up loop cannot tell apart from
+ *    a controller that is merely slow: STS_CNR and CMD_HCRST both read as
+ *    permanently set, and each wait burns its whole budget in silence.
+ */
+void uno_xhci_inventory_log(void)
+{
+#ifdef UNO_DEBUG
+    int bus, dev, fn, bdev = -1, bfn = -1, n = 0;
+    uno_usbboot_hc_loc(&bdev, &bfn);
+    for (bus = 0; bus < 256; bus++) for (dev = 0; dev < 32; dev++) for (fn = 0; fn < 8; fn++) {
+        pci_dev d; u32 id, cls, cmd; u64 bar; int dstate = -1, cap, guard;
+        d.bus=bus; d.dev=dev; d.fn=fn;
+        id = pci_cfg_read32(&d, 0x00);
+        if ((id & 0xFFFF) == 0xFFFF) continue;
+        cls = pci_cfg_read32(&d, 0x08);
+        if (((cls>>24)&0xFF) != 0x0C || ((cls>>16)&0xFF) != 0x03) continue;
+        d.vendor = (u16)(id & 0xFFFF); d.device = (u16)(id >> 16);
+        cmd = pci_cfg_read32(&d, 0x04);
+        bar = pci_bar(&d, 0);
+        /* walk the capability list for PCI Power Management (id 0x01); its
+         * PMCSR is at cap+4 and the power state is its low two bits */
+        if (cmd & (1u << 20)) {                       /* status: caps list present */
+            cap = (int)(pci_cfg_read32(&d, 0x34) & 0xFC);
+            for (guard = 48; cap >= 0x40 && guard--; ) {
+                u32 h = pci_cfg_read32(&d, cap);
+                if ((h & 0xFF) == 0x01) { dstate = (int)(pci_cfg_read32(&d, cap+4) & 3); break; }
+                cap = (int)((h >> 8) & 0xFC);
+            }
+        }
+        uno_dbg_log("xhci inv: %02x:%02x.%d %04x:%04x progif=%02x bar0=%llx "
+                    "cmd=%04x D%d%s%s",
+                    bus, dev, fn, d.vendor, d.device, (unsigned)((cls>>8)&0xFF),
+                    (unsigned long long)bar, (unsigned)(cmd & 0xFFFF),
+                    dstate < 0 ? 0 : dstate,
+                    dstate < 0 ? " (no PM cap)" : "",
+                    (dev == bdev && fn == bfn) ? "  <- THE BOOT PATH'S" : "");
+        n++;
+    }
+    if (!n) uno_dbg_log("xhci inv: no USB host controller of any kind on this machine");
+#endif  /* UNO_DEBUG - uno_dbg_log is the only consumer, and a full 256-bus
+         * config sweep with nowhere to report it is pure cost on every
+         * production boot. */
 }
 
 /* poll the event ring for the next event whose cycle matches our consumer
@@ -508,7 +580,12 @@ static int enumerate_dev(int root_port, u32 route, int tier, int speed,
     g_dbg_slot = (cc == CC_SUCCESS) ? slot : -(int)cc;
     g_dbg_sts  = rd32(g_op, OP_USBSTS);
     g_dbg_ev0  = g_evt[0].control;
-    if (cc != CC_SUCCESS || slot == 0 || slot > g_maxslots) return -1;
+    if (cc != CC_SUCCESS || slot == 0 || slot > g_maxslots) {
+        uno_dbg_log("xhci: ENABLE_SLOT failed on root port %d tier %d: cc=%d "
+                    "slot=%d usbsts=%08x", root_port, tier, cc, slot,
+                    (unsigned)g_dbg_sts);
+        return -1;
+    }
 
     for (i = 0; i < EP0_RING_SZ; i++) { g_ep0[di][i].param=0; g_ep0[di][i].status=0; g_ep0[di][i].control=0; }
     g_ep0_i[di] = 0; g_ep0_cyc[di] = 1;
@@ -585,6 +662,18 @@ static int enumerate_dev(int root_port, u32 route, int tier, int speed,
     xd(" bDescType="); xd_i(g_dbg_desc);
     xd(" vid="); xd_h((unsigned)(g_descbuf[8]|(g_descbuf[9]<<8)));
     xd(" pid="); xd_h((unsigned)(g_descbuf[10]|(g_descbuf[11]<<8))); xd("\n");
+    /* The same line, on the channel a metal run can actually read back. One
+     * per device, and the vid:pid is what turns "4 devices" into "the
+     * keyboard, the touchpad, the camera and the stick". */
+    uno_dbg_log("xhci: dev%d %04x:%04x class=%02x/%02x/%02x rport=%d tier=%d "
+                "slot=%d spd=%d mps0=%d desc_cc=%d%s",
+                di,
+                (unsigned)(g_descbuf[8]|(g_descbuf[9]<<8)),
+                (unsigned)(g_descbuf[10]|(g_descbuf[11]<<8)),
+                (unsigned)g_descbuf[4], (unsigned)g_descbuf[5],
+                (unsigned)g_descbuf[6],
+                root_port, tier, slot, speed, mps, g_dbg_cc,
+                g_dbg_desc == 1 ? "" : "  <- NO DEVICE DESCRIPTOR, dropping");
     if (g_dbg_desc != 1) return enum_fail(slot);                /* must be a device descriptor */
     g_devs[di].vendor  = (u16)(g_descbuf[8]  | (g_descbuf[9]  << 8));
     g_devs[di].product = (u16)(g_descbuf[10] | (g_descbuf[11] << 8));
@@ -776,6 +865,8 @@ static void hub_scan(int hub_di)
         if (enumerate_dev(g_dev_rport[hub_di], route, tier, spd, tts, ttp) < 0) {
             xd("[xhci] hub port "); xd_i(i); xd(" enumerate failed spd=");
             xd_i(spd); xd(" tt="); xd_i(tts); xd(":"); xd_i(ttp); xd_c(10);
+            uno_dbg_log("xhci: hub port %d CONNECTED BUT NOT ENUMERATED "
+                        "(spd=%d tt=%d:%d tier=%d)", i, spd, tts, ttp, tier);
             g_hubport_sts[i & 15] |= (1u << 31);   /* mark: seen but not claimed */
         }
         /* keep going regardless: one uncooperative device must not cost us the
@@ -1146,6 +1237,11 @@ static int xhci_bringup(void)
     if (rd32(g_op, OP_USBSTS) & STS_HCH) return 0;
 
     g_present = 1; g_err = 0;
+    /* Ack the event interrupt. Nothing here uses interrupts (IMAN.IE is set
+     * but USBCMD.INTE never is), so a latched EINT changes no behaviour - but
+     * it makes every USBSTS we LOG from here on honest, and a stale EINT is a
+     * live trap for the first person to enable interrupts. RW1C. */
+    wr32(g_op, OP_USBSTS, STS_EINT);
     mdelay(50);                        /* let the controller + any firmware activity settle */
 
     /* power + reset every root port, count the connected ones */
@@ -1156,10 +1252,20 @@ static int xhci_bringup(void)
                                  { int t=20000; while(t--) spin(4); } }
         sc = rd32(g_op, OP_PORTSC(i));
         if (sc & PORTSC_CCS) { reset_port(i);
-            if (rd32(g_op, OP_PORTSC(i)) & (PORTSC_CCS|PORTSC_PED)) {
+            { u32 after = rd32(g_op, OP_PORTSC(i));
+              /* Per CONNECTED port, before and after the reset. A port that
+               * is connected and will not enable is the difference between
+               * "nothing is plugged in" and "the reset did not take", and
+               * those two have looked identical in every metal round so far. */
+              uno_dbg_log("xhci: root port %d connected: portsc %08x -> %08x "
+                          "(ccs=%d ped=%d spd=%d)", i, (unsigned)sc,
+                          (unsigned)after, (int)((after >> 0) & 1),
+                          (int)((after >> 1) & 1), (int)PORTSC_SPEED(after));
+              if (after & (PORTSC_CCS|PORTSC_PED)) {
                 g_nports_conn++;
                 enumerate_port(i);           /* Enable Slot -> Address Device -> descriptor */
-            } }
+              } }
+        }
     }
     return 1;
 }
@@ -1194,11 +1300,24 @@ int uno_xhci_init(void)
     if (!uno_pc64_detached()) return 0;
 #endif
     g_err = 1;
-    if (!find_xhci(&d)) return 0;
+    if (!find_xhci(&d)) {
+        uno_dbg_log("xhci: NO controller (class 0C/03 prog-if 30) on any bus");
+        return 0;
+    }
     g_dbg_disc = uno_pc64_pci_disconnect(d.bus, d.dev, d.fn);   /* take it from the firmware first */
     pci_enable_bus_master(&d);
     bar = pci_bar(&d, 0);
-    if (!bar) return 0;
+    /* The FIRST line of the takeover, and the one that says which silicon we
+     * are actually driving. Everything after this is meaningless without it:
+     * a bring-up failure on the wrong controller reads identically to one on
+     * the right controller. */
+    uno_dbg_log("xhci: taking %02x:%02x.%d %04x:%04x bar0=%llx disc=%d",
+                d.bus, d.dev, d.fn, d.vendor, d.device,
+                (unsigned long long)bar, g_dbg_disc);
+    if (!bar) {
+        uno_dbg_log("xhci: BAR0 does not decode - nothing to drive");
+        return 0;
+    }
     g_cap = (volatile u8 *)(uintptr_t)bar;
 
     g_caplen   = rd32(g_cap, CAP_CAPLENGTH) & 0xFF;
@@ -1211,17 +1330,41 @@ int uno_xhci_init(void)
     g_rt = g_cap + (rd32(g_cap, CAP_RTSOFF) & ~0x1Fu);
     g_db = g_cap + (rd32(g_cap, CAP_DBOFF)  & ~0x3u);
     if (g_maxslots > MAX_SLOTS_SUP) g_maxslots = MAX_SLOTS_SUP;
+    /* A capability block of all-ones is a controller that is not answering -
+     * left in D3, or a BAR the firmware did not actually program. Say so
+     * HERE, because the five bring-up attempts below cannot tell that apart
+     * from a slow reset and will spend millions of spins finding out. */
+    if (g_caplen == 0xFF || hcs1 == 0xFFFFFFFFu)
+        uno_dbg_log("xhci: capability regs read all-ones - controller is not "
+                    "responding (D3? BAR unmapped?); bring-up will fail");
+    uno_dbg_log("xhci: caplen=%d slots=%d ports=%d csz=%d hcs1=%08x hcc=%08x",
+                g_caplen, g_maxslots, g_maxports, g_csz,
+                (unsigned)hcs1, (unsigned)hcc);
 
     /* A fresh HCRST + re-init recovers from an intermittent HC error (the
      * firmware-handoff race), so retry a few times until it comes up clean and
      * enumerates any connected device. */
     for (attempt = 0; attempt < 5; attempt++) {
         g_present = 0; g_ndevs = 0; g_nports_conn = 0;
-        if (!xhci_bringup()) { mdelay(20); continue; }
+        if (!xhci_bringup()) {
+            uno_dbg_log("xhci: bring-up attempt %d failed at stage %u, usbsts=%08x",
+                        attempt, g_err, (unsigned)rd32(g_op, OP_USBSTS));
+            mdelay(20); continue;
+        }
         if (!(rd32(g_op, OP_USBSTS) & STS_HCE) &&
-            (g_nports_conn == 0 || g_ndevs > 0)) return 1;   /* clean + enumerated */
+            (g_nports_conn == 0 || g_ndevs > 0)) {
+            uno_dbg_log("xhci: UP - %d connected port(s), %d device(s), usbsts=%08x",
+                        g_nports_conn, g_ndevs, (unsigned)rd32(g_op, OP_USBSTS));
+            return 1;                                        /* clean + enumerated */
+        }
+        uno_dbg_log("xhci: attempt %d ran but %s (ports=%d devs=%d usbsts=%08x)",
+                    attempt,
+                    (rd32(g_op, OP_USBSTS) & STS_HCE) ? "HCE is set"
+                                                      : "enumerated nothing",
+                    g_nports_conn, g_ndevs, (unsigned)rd32(g_op, OP_USBSTS));
         mdelay(20);                                          /* HCE or nothing found: retry */
     }
+    uno_dbg_log("xhci: gave up after 5 attempts, present=%d", g_present);
     return g_present;
 }
 

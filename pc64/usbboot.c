@@ -2,8 +2,11 @@
 #include "usbboot.h"
 #include "usbio.h"
 #include "xhci.h"
+#include "usbhid.h"       /* takeover verdict: how many HID endpoints landed */
+#include "usbmsc.h"       /* ...and whether the boot stick came home */
 #include "pc64_pci.h"
 #include "uno_debug.h"
+#include <stdio.h>
 
 void *uno_pc64_boot_dp(void);       /* boot partition's device path (uefi_main) */
 int   uno_pc64_detached(void);
@@ -287,4 +290,55 @@ void uno_usbboot_status(int *is_usb, int *nbot, int *matched, const char **why)
     if (nbot)    *nbot    = g_nbot;
     if (matched) *matched = g_matched;
     if (why)     *why     = g_why;
+}
+
+/* ---- where the boot controller is, and how the takeover went --------------
+ *
+ * Two answers this file is the natural home for, because it is already the
+ * one that reasons about "the controller the running system is standing on".
+ */
+
+/* The PCI dev/fn the boot device path names. A device path carries no bus
+ * number (dp_pci reads only dev + fn), so that is what callers get; xhci_at()
+ * has always resolved the bus by scanning, and so does the inventory.
+ *
+ * Returns 1 when the boot path has a PCI node at all. Attached-only, like
+ * everything else here - after detach the latched values are what remain. */
+int uno_usbboot_hc_loc(int *dev, int *fn)
+{
+    static int done, ok, g_dev = -1, g_fn = -1;
+    if (!done && !uno_pc64_detached()) {
+        const unsigned char *dp = (const unsigned char *)uno_pc64_boot_dp();
+        ok = dp_pci(dp, &g_dev, &g_fn);
+        if (!ok) { g_dev = -1; g_fn = -1; }
+        done = 1;
+    }
+    if (dev) *dev = g_dev;
+    if (fn)  *fn  = g_fn;
+    return ok;
+}
+
+/* ONE LINE FOR THE SCREEN: what the takeover actually achieved.
+ *
+ * This machine has no serial port, its WiFi has never come up, and its debug
+ * console is SMM-trapped, so the FRAMEBUFFER is the diagnostic channel - and
+ * it is the only one that still works when the boot volume did not come back
+ * and there is nowhere to write a log. Short enough to sit under the splash
+ * bar; every number in it is one a failure needs.
+ *
+ * Written for the Surface Laptop Go, where the machine detaches and then
+ * stops, and three boots produced no account of the takeover at all. */
+int uno_usb_takeover_str(char *buf, int cap)
+{
+    int present = 0, nports = 0, ndevs = 0, nk = 0, nm = 0;
+    unsigned err = 0;
+    const char *why;
+    if (cap <= 0) return 0;
+    uno_xhci_status(&present, &nports, &ndevs, &err);
+    uno_usb_hid_status(&nk, &nm);
+    why = uno_usbmsc_why();
+    return snprintf(buf, (unsigned)cap,
+                    "xhci up=%d ports=%d devs=%d err=%u | hid k=%d m=%d | msc: %s",
+                    present, nports, ndevs, err, nk, nm,
+                    (why && why[0]) ? why : "not attempted");
 }

@@ -157,10 +157,19 @@ static int scsi_ready(void)
     u8 cb[6] = { 0x00, 0, 0, 0, 0, 0 };            /* TEST UNIT READY */
     int t;
     for (t = 0; t < 20; t++) {
-        if (bot_cmd(cb, 6, 0, 0, 1) == 0) return 0;
+        if (bot_cmd(cb, 6, 0, 0, 1) == 0) {
+            /* How many rounds it took is the difference between a stick that
+             * was ready and one that needed nursing - and each round can cost
+             * multi-second bulk timeouts, which is the shape of a machine
+             * that looks bricked while it is in fact still working. */
+            if (t) uno_dbg_log("usbmsc: unit ready after %d retr%s",
+                               t, t == 1 ? "y" : "ies");
+            return 0;
+        }
         scsi_request_sense();                       /* clear + spin-up wait */
         uno_pc64_delay_ms(50);
     }
+    uno_dbg_log("usbmsc: unit NEVER became ready (20 rounds of TEST UNIT READY)");
     return -1;
 }
 
@@ -184,6 +193,23 @@ static int scsi_read_capacity(u64 *sectors)
 static int msc_rw(u64 lba, u32 n, void *buf, int write)
 {
     u8 *p = (u8 *)buf;
+    /* THE FIRST WRITE IS THE ONE THAT MATTERS.
+     *
+     * Everything before it - enumeration, SET_CONFIGURATION, spin-up, READ
+     * CAPACITY, the LBA-0 proof read - is a read path. On the Surface Laptop
+     * Go the takeover gets all of that right and the machine then stops
+     * somewhere in the window whose first disk access is the telemetry
+     * WRITE(10). If the log ends on this line, the write never came back and
+     * the bulk-out/CSW path is the suspect; if the "ok" line follows, it is
+     * not. One boot, one bit of information, and the line costs nothing
+     * afterwards because it announces only once. */
+    static int announced;
+    int first = 0;
+    if (write && !announced) {
+        announced = 1; first = 1;
+        uno_dbg_log("usbmsc: FIRST WRITE(10) lba=%llu n=%u - if the log ends "
+                    "here, it never returned", (unsigned long long)lba, n);
+    }
     while (n) {
         u32 c = n > MSC_CHUNK ? MSC_CHUNK : n;
         u8 cb[10];
@@ -198,10 +224,14 @@ static int msc_rw(u64 lba, u32 n, void *buf, int write)
         if (r != 0) {
             scsi_request_sense();
             r = bot_cmd(cb, 10, p, (int)(c * 512), !write);   /* one retry */
-            if (r != 0) return 0;
+            if (r != 0) {
+                if (first) uno_dbg_log("usbmsc: FIRST WRITE(10) FAILED (bot rc=%d)", r);
+                return 0;
+            }
         }
         lba += c; p += c * 512; n -= c;
     }
+    if (first) uno_dbg_log("usbmsc: first WRITE(10) ok - the write path works");
     return 1;
 }
 
@@ -278,6 +308,9 @@ int uno_usbmsc_init(void)
     if (!uno_xhci_init()) { g_why = "xHCI controller did not come up"; return 0; }
     targeted = uno_usbboot_target(&want_vid, &want_pid);
     n = uno_xhci_dev_count();
+    uno_dbg_log("usbmsc: binding, %d enumerated device(s), target %s %04x:%04x",
+                n, targeted ? "=" : "(none - unrestricted scan)",
+                want_vid, want_pid);
     if (!n) { g_why = "xHCI enumerated no devices"; return 0; }
     g_why = "no mass-storage device among the enumerated ones";
     for (pass = targeted ? 0 : 1; pass < 2; pass++) {
