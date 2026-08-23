@@ -227,18 +227,52 @@ static void wr64(volatile u8 *b, u32 o, u64 v) { *(volatile u64 *)(b+o)=v; }
 static void spin(volatile int n){ while(n-->0) __asm__ volatile(""); }
 static void mdelay(int ms);
 
-/* find the xHCI controller: PCI class 0x0C, subclass 0x03, prog-if 0x30 */
+/* Find the xHCI controller: PCI class 0x0C, subclass 0x03, prog-if 0x30.
+ *
+ * A MACHINE CAN HAVE MORE THAN ONE, AND THE FIRST ONE IS NOT ALWAYS OURS.
+ * This scanned in bus/dev/fn order and took whatever it hit first, which is
+ * right on every box in the fleet with a single controller and wrong on the
+ * Surface Laptop Go, whose Ice Lake-LP silicon carries two:
+ *
+ *   00:0d.0  8086:8a13   the CPU-side Thunderbolt/USB4 controller
+ *   00:14.0  8086:34ed   the PCH controller - the internal keyboard, the
+ *                        touchpad, and the USB-A port the stick is in
+ *
+ * 0d.0 sorts first, so the native stack brought up an empty controller and
+ * every device the detached machine needs stayed on the one nobody opened.
+ * The failure does not announce itself: bring-up SUCCEEDS, the controller
+ * runs, it enumerates nothing, and the machine looks like it has no USB.
+ *
+ * The boot path knows the answer, so ask it. usbboot latches the PCI dev/fn
+ * out of the boot device path while the firmware is still alive - which is
+ * the only time it is readable - and that is by construction the controller
+ * carrying the volume we are standing on. Fall back to scan order when there
+ * is no answer (a non-USB boot, or a machine whose path has no PCI node),
+ * which is exactly the previous behaviour.
+ *
+ * A device path carries no bus number, so the dev/fn is matched across every
+ * bus, the same way usbboot's own xhci_at() resolves it. */
 static int find_xhci(pci_dev *out)
 {
-    int bus, dev, fn;
-    for (bus = 0; bus < 256; bus++) for (dev = 0; dev < 32; dev++) for (fn = 0; fn < 8; fn++) {
-        pci_dev d; u32 id, cls;
-        d.bus=bus; d.dev=dev; d.fn=fn;
-        id = pci_cfg_read32(&d, 0x00);
-        if ((id & 0xFFFF) == 0xFFFF) continue;
-        cls = pci_cfg_read32(&d, 0x08);
-        if (((cls>>24)&0xFF)==0x0C && ((cls>>16)&0xFF)==0x03 && ((cls>>8)&0xFF)==0x30) {
-            d.vendor=id&0xFFFF; d.device=id>>16; *out=d; return 1;
+    int bus, dev, fn, pass, wdev = -1, wfn = -1;
+    int want = uno_usbboot_hc_loc(&wdev, &wfn);
+    for (pass = want ? 0 : 1; pass < 2; pass++) {
+        for (bus = 0; bus < 256; bus++) for (dev = 0; dev < 32; dev++) for (fn = 0; fn < 8; fn++) {
+            pci_dev d; u32 id, cls;
+            if (pass == 0 && (dev != wdev || fn != wfn)) continue;
+            d.bus=bus; d.dev=dev; d.fn=fn;
+            id = pci_cfg_read32(&d, 0x00);
+            if ((id & 0xFFFF) == 0xFFFF) continue;
+            cls = pci_cfg_read32(&d, 0x08);
+            if (((cls>>24)&0xFF)==0x0C && ((cls>>16)&0xFF)==0x03 && ((cls>>8)&0xFF)==0x30) {
+                d.vendor=id&0xFFFF; d.device=id>>16; *out=d;
+                uno_dbg_log("xhci: chose %02x:%02x.%d by %s", bus, dev, fn,
+                            pass == 0 ? "the boot path"
+                                      : (want ? "scan order (boot path's "
+                                                "controller not found!)"
+                                              : "scan order (no boot path hint)"));
+                return 1;
+            }
         }
     }
     return 0;
