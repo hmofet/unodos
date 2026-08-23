@@ -47,6 +47,15 @@ PORT = 5399
 OVMF_CODE = "/usr/share/OVMF/OVMF_CODE_4M.fd"
 OVMF_VARS = "/usr/share/OVMF/OVMF_VARS_4M.fd"
 
+# WHERE THE GUEST'S OWN VOICE COMES OUT.  UnoDOS echoes the appliance's ttyS0
+# into its debug console, and QEMU writes that to a file on the box this
+# script runs on - so the harness can READ the guest, not only photograph it.
+# Without this a hypervisor-only failure is twenty-five minutes of watching a
+# black rectangle: the first run of this script could not tell "GIMP is
+# starting slowly" from "GIMP is not running at all", and they want opposite
+# responses.
+DBGCON = "/tmp/vmgimp.log"
+
 # The guest's framebuffer, and the layout gimp-layout.sh builds on it.  Kept
 # here as the harness's model of the appliance: if the appliance changes its
 # layout, this is the one place the aim has to follow.
@@ -82,6 +91,31 @@ def dark_fraction(w, h, rgba):
                 dark += 1
             tot += 1
     return dark / float(tot or 1)
+
+
+def guest_log():
+    """Every line the appliance has said on its ttyS0, in order.
+
+    ON THE CHANNEL TAG, not on what the line says.  UnoDOS marks the Linux
+    guest's console with `[lin]`, so this reads anything the guest printed -
+    which matters because the useful lines are the ones NOBODY planned for:
+    a GIMP backtrace and a `dmesg` tail do not begin with `uno`, and an
+    earlier version of this filter would have dropped exactly the output it
+    was added to collect.
+    """
+    try:
+        with open(DBGCON, "rb") as f:
+            raw = f.read().replace(b"\r", b"\n").decode("utf-8", "replace")
+    except IOError:
+        return []
+    out = []
+    for ln in raw.split("\n"):
+        i = ln.find("[lin]")
+        if i >= 0:
+            t = ln[i + 5:].strip()
+            if t:
+                out.append(t)
+    return out
 
 
 def find_guest_rect(w, h, rgba):
@@ -188,11 +222,54 @@ def main():
         time.sleep(settle)
 
     def enter_display():
-        """F12 out to the list, then the Display button - which is what resets
-        vmgr's pointer baseline (`g_mx = -1`) so the next move is a zero delta."""
+        """F12 out to the list, then the Display accelerator - which is what
+        resets vmgr's pointer baseline (`g_mx = -1`, see `vm_key`) so the next
+        move is a zero delta."""
         link.key(0x16, 0, 0, timeout=10)          # F12: back to the list
         time.sleep(1.0)
         key(ord('d'), settle=1.5)                 # the Display view
+
+    def guest_shell(cmd, settle=12.0):
+        """Run a command in the appliance's ttyS0 shell and read its output.
+
+        THE ONE WAY IN THAT IS NOT A PICTURE.  vmgr's Console view forwards
+        typed characters to the guest's console (`uno_vm_con_key`), the
+        appliance keeps a shell on ttyS0 for exactly this, and whatever that
+        shell prints comes back out through the debug console this script
+        reads.  So a log file INSIDE the guest - which is where the compositor
+        puts its client's stderr, and therefore where every interesting
+        failure lands - is reachable from the host after all.
+
+        Leaves the view where it found it: the caller is usually mid-scene.
+        """
+        before = len(guest_log())
+        link.key(0x16, 0, 0, timeout=10)          # F12: back to the list
+        time.sleep(1.0)
+        key(ord('c'), settle=1.5)                 # the Console view
+        for ch in cmd:
+            link.key(0, ord(ch), 0, timeout=10)
+            time.sleep(0.04)
+        link.key(0, 0x0D, 0, timeout=10)          # Enter
+        time.sleep(settle)
+        enter_display()
+        return guest_log()[before:]
+
+    def diagnose(why):
+        """What a guest that will not paint has to be asked, in one place.
+
+        Each question is separate because they fail separately: a client that
+        died has a reason in its log, a client that could not start has no
+        display or no memory, and a compositor with no DRM device has neither.
+        """
+        print("--- diagnosing: %s" % why)
+        for cmd in (
+            "tail -30 /tmp/x.log > /dev/ttyS0",
+            "free -m | head -3 > /dev/ttyS0",
+            "ls /dev/dri /tmp/.X11-unix 2>&1 | tr '\\n' ' ' > /dev/ttyS0",
+            "dmesg | tail -12 > /dev/ttyS0",
+        ):
+            for ln in guest_shell(cmd):
+                print("   guest| %s" % ln)
 
     ok = True
     results = {}
@@ -240,8 +317,21 @@ def main():
         # failure once already in this directory's history.
         print("waiting for the appliance to paint (up to %d x 90s)..." % waits)
         painted = False
+        seen = len(guest_log())
+        crashes = 0
         for i in range(waits):
             time.sleep(90)
+            # THE GUEST'S OWN WORDS FIRST, THE PIXELS SECOND.  A black
+            # rectangle is the same picture whether the client is starting
+            # slowly or dying on a loop, and the two want opposite responses -
+            # wait longer, or stop and find out why.  The appliance says which
+            # it is on every launch; this reads it.
+            fresh = guest_log()[seen:]
+            seen += len(fresh)
+            for ln in fresh:
+                print("  guest| %s" % ln)
+                if "exited rc=" in ln:
+                    crashes += 1
             w, h, rgba = shot("02_wait%02d" % i)
             d = dark_fraction(w, h, rgba)
             print("  guest surface %.0f%% dark" % (d * 100))
@@ -249,17 +339,29 @@ def main():
                 painted = True
                 print("  the guest is showing a session, not a console")
                 break
+            # DO NOT WAIT OUT A CRASH LOOP.  The restart loop in gimp.sh is
+            # there to survive one bad launch; three in a row is a client that
+            # cannot start on this machine, and every further 90 seconds spent
+            # photographing it is 90 seconds not spent reading its log.
+            if crashes >= 3:
+                print("  the client has died %d times - it is not coming up" % crashes)
+                break
         results["appliance painted"] = painted
         if not painted:
             ok = False
             print("FAIL: the guest surface never stopped being a console")
+            diagnose("the client never painted")
 
         # ---- 2. what the guest itself says -----------------------------------
         # THE COUNTABLE HALF, and it does not depend on reading a picture.
-        # gimp-layout.sh prints its window census to ttyS0 every launch; the
-        # console view is where the host can read it back.
-        print("the appliance's own window census is on its ttyS0 "
-              "(uno-layout: ... N top-levels) - see the console view")
+        # gimp-layout.sh prints its window census to ttyS0 every launch, so by
+        # here it is already in the guest log above - three top-levels is the
+        # claim this appliance exists to make, and it is a number, not a
+        # judgement about a screenshot.
+        if painted:
+            for ln in guest_log():
+                if "uno-layout:" in ln or "top-levels" in ln:
+                    print("  census| %s" % ln)
 
         # ---- 3. the pointer -------------------------------------------------
         if painted and body:
