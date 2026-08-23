@@ -115,6 +115,13 @@ ENVEOF
 # ---- the client -------------------------------------------------------------
 cat > $R/usr/share/uno/gimp.sh <<'GIMPEOF'
 #!/bin/sh
+# EVERYTHING WORTH READING GOES TO THE SERIAL PORT AS WELL.  This script's
+# stderr is the compositor's log INSIDE the guest, and that is precisely where
+# a host driving this over a URC link cannot look.  Under the fast loop the
+# distinction is invisible - the serial log carries the lot - and under the
+# hypervisor it is the difference between watching GIMP start and watching a
+# black rectangle for twelve minutes with no idea whether anything is running.
+say() { echo "$*" >&2; echo "$*" > /dev/ttyS0 2>/dev/null; }
 # labwc's startup command.  Unlike cage, labwc does NOT exit when this exits,
 # so the restart loop here is about GIMP alone and the compositor is never
 # torn down - which is the same conclusion browser.sh reached for the opposite
@@ -136,7 +143,7 @@ while [ $i -lt 60 ]; do
     i=$((i + 1)); sleep 1
 done
 export DISPLAY=${DISPLAY:-:0}
-echo "uno-gimp: DISPLAY=$DISPLAY after ${i}s" >&2
+say "uno-gimp: DISPLAY=$DISPLAY after ${i}s"
 
 export HOME=/root
 export XDG_CACHE_HOME=/tmp/cache XDG_CONFIG_HOME=/tmp/config
@@ -164,7 +171,7 @@ fi
 # SAID OUT LOUD, because the failure above was invisible.  This is the line
 # that distinguishes "the primed profile is in use" from "GIMP is about to
 # spend ten minutes rediscovering its own plug-ins".
-echo "uno-gimp: profile $GPROF pluginrc=$([ -f "$GPROF"/*/pluginrc ] && echo yes || echo NO) single-window=$(grep -ho 'single-window-mode [a-z]*' "$GPROF"/*/sessionrc 2>/dev/null | tail -1)" >&2
+say "uno-gimp: profile $GPROF pluginrc=$([ -f "$GPROF"/*/pluginrc ] && echo yes || echo NO) single-window=$(grep -ho 'single-window-mode [a-z]*' "$GPROF"/*/sessionrc 2>/dev/null | tail -1)"
 
 IMG=${UNO_IMAGE:-/usr/share/uno/canvas.ppm}
 [ -f "$IMG" ] || IMG=""
@@ -172,7 +179,7 @@ IMG=${UNO_IMAGE:-/usr/share/uno/canvas.ppm}
 n=0
 while :; do
     n=$((n + 1))
-    echo "uno-gimp: launch $n ($IMG)" >&2
+    say "uno-gimp: launch $n ($IMG)"
     # THE LAYOUT IS COMPOSED PER LAUNCH, not once per boot: GIMP's toolbox and
     # docks die with the process that owned them, so a restart that did not
     # redo this would come back as a single image window and quietly undo the
@@ -188,7 +195,7 @@ while :; do
     # -s / --no-shm is NOT set: XWayland's shm path is how the pixels get
     #   from GIMP to the compositor at all, with no GPU anywhere.
     gimp --no-splash --no-fonts $IMG
-    echo "uno-gimp: gimp exited rc=$? (launch $n)" >&2
+    say "uno-gimp: gimp exited rc=$? (launch $n)"
     sleep 3
 done
 GIMPEOF
@@ -362,11 +369,21 @@ xdotool windowmove "$W" $((TW + 8)) $TB
 xdotool windowsize "$W" $CW $CH
 sleep 3
 
-# THE COUNT, ON THE CONSOLE, EVERY BOOT.  Not a diagnostic for a bad day - it
-# is the appliance's own statement of the thing it exists to show, and it
-# lands in the log before anybody looks at a picture.
+# THE COUNT, ON THE SERIAL PORT, EVERY BOOT.  Not a diagnostic for a bad day -
+# it is the appliance's own statement of the thing it exists to show, and it
+# has to land somewhere the HOST can read.
+#
+# ttyS0 AS WELL AS stderr, and that distinction cost a hypervisor run's worth
+# of blindness.  stderr here is the compositor's log INSIDE the guest, which
+# is exactly the place a host driving this over a URC link cannot reach: under
+# the fast loop the two look identical because the serial log carries
+# everything, and under unovirt only ttyS0 comes back.  A line that reports
+# the headline result to a file nobody outside the guest can open is a line
+# that does not report it.
 N=$(xdotool search --onlyvisible --class -- gimp 2>/dev/null | grep -c '[0-9]')
-echo "uno-layout: ${SW}x${SH}, toolbox=${T:-MISSING} layers=${L:-MISSING} canvas=$W, $N top-levels" >&2
+MSG="uno-layout: ${SW}x${SH}, toolbox=${T:-MISSING} layers=${L:-MISSING} canvas=$W, $N top-levels"
+echo "$MSG" >&2
+echo "$MSG" > /dev/ttyS0 2>/dev/null
 LAYEOF
 chmod +x $R/usr/share/uno/gimp-layout.sh
 
