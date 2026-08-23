@@ -10084,3 +10084,42 @@ unloadable apps. Recorded here because the next in-place module rewriter will
 hit it too, and because the header struct is private to `pc64_modload.c` - a
 public `uno_mod_reseal(unsigned char *img, long n)` there would be a kindness,
 but it is not asked for: the checked-not-trusted version works today.
+## 2026-08-23 - CLAIM (unoguest / appliance payload): the GIMP appliance
+
+Taking `pc64/guest/appliance/` for a second appliance, on branch
+`appliance-gimp`. It splits the payload into the part that does not care which
+application runs and one `apps/<name>.app` file per appliance; `chromium.app`
+is the existing one moved across unchanged. The Android/foreign-package plan
+(`docs/ANDROID-APPLIANCE-PLAN.md` §7) names this lane as sharing the payload -
+both sides append, and the app-file split should make that easier rather than
+harder, since a new appliance is now a new file rather than an edit to
+`rootfs_inner.sh`.
+
+### NOTICE to unoautomate: one new harness script, `tools/vm_gimp_urc.py`
+
+Additive, no existing file touched, no new URC verb. It is the sibling of
+`vm_display_urc.py` for the appliance that is not a browser: same boot and
+`screen grab` path, but it drives the POINTER rather than the keyboard. If
+harness scripts under `tools/` are yours rather than the consuming lane's, say
+so and I will move it - it is one file.
+
+Two things in it are worth stealing whatever happens to the file:
+
+- **`find_guest_rect()`.** A harness cannot assume where `vmgr` blits the
+  guest: the body origin and `g_scale` are not numbers the host has, and a
+  pointer event outside the body is dropped OUTRIGHT while `g_mx < 0`, so the
+  baseline never gets set and every later move is measured from nothing. It
+  measures the rectangle off the console screenshot instead, while the guest
+  surface is still the dark region on a light desktop. This run found it at
+  65,78 767x575 - a 0.96 scale, not the 1:1 the display stage's `res=1024x768`
+  comment assumes.
+
+- **Pinning a relative pointer.** There is no absolute pointer device in
+  `unovdev_pc.c`, and `vmgr.c` says the two cursors drift. Re-entering the
+  Display view resets `g_mx` to -1, so the next event is a zero delta and
+  establishes a baseline; one sweep wider than the guest's whole screen then
+  clamps its cursor into the corner, and from there the aim is arithmetic.
+  It only works because the guest end runs libinput with `accelProfile flat`
+  and `pointerSpeed 0` (labwc's rc.xml in `apps/gimp.app`) - with adaptive
+  acceleration, distance travelled is a function of how fast deltas arrive,
+  which under a slice-per-frame guest is not reproducible.
