@@ -10162,7 +10162,7 @@ blocked. Filing it because the next person to drive a guest will lose the same
 afternoon, and because the on-screen string is the kind of documentation that
 is worse than none.
 
-## 2026-08-23 FINDING against unovirt (a bug): the guest's FPU/SSE register file is never saved
+## 2026-08-23 FINDING against unovirt (a bug): the guest's FPU/SSE register file is never saved - FIXED
 
 **`vmx_vcpu_run` swaps XCR0 around the entry and nothing saves the registers
 XCR0 describes.** There is no `FXSAVE`/`FXRSTOR` and no `XSAVE`/`XRSTOR`
@@ -10227,6 +10227,32 @@ Not filed as a request because I have not touched it: `hv_vmx.c` is unovirt's,
 and this is its core entry path. Say the word and I will do it as its own
 slice off master rather than smuggle it into an appliance branch.
 
+**DONE 2026-08-23, `14c9f5d7`, on `master`.** The word was said, and it landed as
+its own slice off master rather than inside the appliance branch, as offered.
+`uno_fpu_save` / `uno_fpu_load` / `uno_fpu_init_area` in `unovirt_hv.h`, called
+from both backends around the entry.
+
+Three things about the shape of it, since the next person to touch that path
+should not have to re-derive them:
+
+- **FXSAVE and not XSAVE, deliberately.** `hv_phases.c` masks XSAVE and OSXSAVE
+  out of the guest's CPUID on purpose, so the guest cannot enable any XCR0 state
+  beyond the legacy area and 512 bytes covers everything it can reach. The
+  header says, in the same words, that reversing that CPUID decision must turn
+  this into XSAVE/XRSTOR in the same commit.
+- **The SVM backend got the same fix, written blind.** Its first VMRUN has never
+  returned on the hardware available (`UNOVIRT.md`, "The A1 wedge"). Leaving it
+  out would have left a known corruption in the backend that gets attention
+  next, and whoever brings SVM up would be debugging two faults at once.
+- **The initial area is captured from FNINIT plus MXCSR `0x1F80`, never
+  memset.** An all-zero image is not a valid thing to FXRSTOR: MXCSR 0 unmasks
+  every SIMD exception and FCW 0 is not `0x037F`.
+
+Unchanged by the fix, and still the open half of this entry: whether it also
+explains the browser appliance's `Assertion failed: v > 0
+(double-conversion/fast-dtoa.cc)` aborts. It is now the first thing to check
+there. That is a place to look, not a claim.
+
 ### 2026-08-23 OPEN (harness, mine): the host-driven pointer arrives but does not aim
 
 GIMP now runs multi-window under unovirt (`>> vm gimp OK`, four top-levels at
@@ -10264,3 +10290,23 @@ WHEEL from the top of `vm_event`, and MOUSE_DOWN only after the whole
 button-bar hit test. That asymmetry is correct for the buttons but it means a
 press and its motion take different paths, which is exactly the kind of thing
 a drag notices and a click does not.
+
+## 2026-08-23 LANDED: both appliance/hypervisor slices are on `master`
+
+Recorded here because this file is where the two lanes talked to each other and
+because two entries above it were waiting on the answer.
+
+- **`unovirt-fpu-state` (`14c9f5d7`)** - one commit, off master, the FXSAVE /
+  FXRSTOR pair. Marked DONE in place on its own entry.
+- **`appliance-gimp` (`3f339d50`..`b534ad2b`)** - ten commits, rebased on top of
+  the fix and fast-forwarded, so `master` never held the GIMP appliance without
+  the thing that makes it survive three seconds. `pc64/guest/appliance/` is now
+  split into the application-agnostic payload plus one `apps/<name>.app` per
+  appliance, with `chromium.app` moved across unchanged.
+
+Both branches are deleted, here and on the remote, per AGENTS.md section 3.
+
+Two items from those entries stay OPEN and are NOT closed by this landing: the
+harness's pointer aim (the counters say the loss is above the emulated i8042,
+and counting events sent against packets emitted is the next measurement), and
+F12 never reaching an app in a debug build, which is the shell lane's to answer.
