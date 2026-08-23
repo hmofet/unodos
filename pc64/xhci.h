@@ -74,4 +74,12 @@ void uno_xhci_diag2(unsigned *usbsts, unsigned *ev0, int *disc);
  * "connected and reset cleanly, but the device would not enumerate". */
 void uno_xhci_hub_ports(unsigned *out, int max); /* USBSTS, 1st event, disconnect count */
 
+/* Log every USB host controller on the machine (bdf, ids, prog-if, BAR0, PCI
+ * command, power state) and mark the one the boot path names.
+ *
+ * CONFIG SPACE ONLY, so it is safe while the firmware still owns everything -
+ * which is the point: on a machine that hangs after detaching, the pre-detach
+ * telemetry is the copy that survives. Call it before try_detach(). */
+void uno_xhci_inventory_log(void);
+
 #endif

@@ -48,4 +48,14 @@ int uno_usbboot_hid_kbd(void);
 int uno_usbboot_hid_ptr(void);
 void uno_usbboot_hid_status(int *kbd, int *ptr, const char **why);
 
+/* The PCI dev/fn the boot device path names (a device path carries no bus
+ * number). Returns 1 when the boot path has a PCI node. Attached-only. */
+int uno_usbboot_hc_loc(int *dev, int *fn);
+
+/* One line naming what the post-detach USB takeover achieved: controller up,
+ * ports, devices, HID endpoints, and how the boot stick's bind went. For the
+ * SCREEN - on a machine with no serial and no volume to log to, that is the
+ * only channel left. Returns the length snprintf would have written. */
+int uno_usb_takeover_str(char *buf, int cap);
+
 #endif
