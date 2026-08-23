@@ -853,6 +853,27 @@ __attribute__((weak)) int ssh_dbg_cmd(const char *line, char *out, int cap)
     return -1;
 }
 
+/* xfer verb pass-through target. unoxfer (unoxfer_cmd.c) lands the real
+ * unoxfer_cmd() - save a site, list a directory, and START a transfer that the
+ * box performs ITSELF over SCP/HTTP/WebDAV/TFTP. Same shape and same reason as
+ * the four above: declared locally and weak-stubbed HERE, so this file links
+ * with or without unoxfer in the build.
+ *
+ * It is the answer to `put`'s 8 MB cap, and it answers it by not carrying the
+ * payload at all - the bytes never touch this channel. See pc64/UNOXFER.md. */
+int unoxfer_cmd(const char *line, char *out, int cap);
+__attribute__((weak)) int unoxfer_cmd(const char *line, char *out, int cap)
+{
+    static const char msg[] = "unoxfer not built";
+    int i = 0;
+    (void)line;
+    if (out && cap > 0) {
+        for (; msg[i] && i < cap - 1; i++) out[i] = msg[i];
+        out[i] = 0;
+    }
+    return -1;
+}
+
 /* session token echoed at `guard` arm; `safe` must present it (a stale disarm
  * from a prior session must not stand a fresh guard down). Cheap, not secret. */
 static unsigned g_guard_token;
@@ -1268,6 +1289,24 @@ static void dispatch_cmd(const char *id, char *verb, char *args)
     if (!strcmp_(verb, "ssh")) {
         int n = ssh_dbg_cmd(args ? args : "", g_report, (int)sizeof g_report);
         rsp(id, n >= 0 ? "ok" : "err", n >= 0 ? g_report : "bad-cmd (try: ssh help)");
+        rsp(id, "end", 0); return;
+    }
+    /* xfer [site|sites|siterm|caps|vols|ls|pull|push|jobs|status|cancel|reap|
+     * log|stage] - UnoTransfer's own sub-verb grammar, verbatim; the output
+     * format is unoxfer's and does not come back here.
+     *
+     * SYSTEM, and by a wider margin than `ssh`: it writes arbitrary files
+     * anywhere on any writable volume (that is `put`'s tier on its own) AND it
+     * authenticates to other machines with this box's stored credentials (that
+     * is `ssh`'s tier on its own). Either alone puts it here. Same-commit
+     * GATE[] row - the table is fail-closed.
+     *
+     * `pull`/`push` return AT ONCE with a job id and run on the shell tick.
+     * A verb that blocked for a multi-gigabyte transfer would park this
+     * dispatcher, stop the box answering, and be hard-reset by the guard. */
+    if (!strcmp_(verb, "xfer")) {
+        int n = unoxfer_cmd(args ? args : "", g_report, (int)sizeof g_report);
+        rsp(id, n >= 0 ? "ok" : "err", g_report);
         rsp(id, "end", 0); return;
     }
     if (!strcmp_(verb, "bootnext")) {

@@ -154,6 +154,13 @@ static const GateRow GATE[] = {
      * verbs, not DRIVE with `launch`. Same-commit row: the table is
      * fail-closed, so the verb would be refused without it. */
     { "ssh",      UNOAUTO_P_SYSTEM },
+    /* xfer: writes arbitrary files anywhere on any writable volume (that is
+     * `put`'s blast radius on its own) AND logs in to other machines with this
+     * box's stored credentials (that is `ssh`'s on its own). Either one alone
+     * lands it here; it is emphatically not DRIVE, since nothing a person at
+     * the keyboard can do includes "write 40 GB to a volume from a host I
+     * chose". Same-commit row: the table is fail-closed. */
+    { "xfer",     UNOAUTO_P_SYSTEM },
 #ifdef UNO_DEBUG
     { "nst",      UNOAUTO_P_SYSTEM },    /* netsock self-test: debug builds only */
 #endif

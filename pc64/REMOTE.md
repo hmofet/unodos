@@ -293,6 +293,7 @@ FAIL when someone installs an app; it silently drives a different one.
 | `ssh run <sess\|user@host> <cmd…>` | log in and run one command; the output is **captured, not returned** - a remote command's output is unbounded and this channel's TX buffer is 8 KB | `ok id=<n> len=<n> exit=<n>` |
 | `ssh get <id> <off>` | one bounded slice (≤1 KB) of a captured output; loop until `off >= len`. Same idiom as `readsec` / `screen read` | the slice, then `ok` |
 | `ssh close` | drop the current connection (idempotent) | `ok`/`err` |
+| `xfer <subcmd…>` | **UnoTransfer** (pc64/UNOXFER.md): the box fetches files ITSELF over SCP / HTTP / HTTPS / WebDAV / TFTP, so the payload never crosses this channel and `put`'s 8 MB cap does not apply. `site`/`sites`/`siterm` (saved connections, no secret - an SSH site names an unossh key), `caps`/`vols`, `ls`, `pull`/`push` (with `-r` for a whole directory tree), `jobs`/`status`/`cancel`/`reap`/`log`, `stage`. Pass-through to `unoxfer_cmd`; the grammar and the report format are unoxfer's | the report, then `ok`/`err` |
 | `hwwdt <subcmd…>` | PCH TCO hardware watchdog (unodevices' `uno_hw_wdt_cmd`), the guard's IRQs-off backstop. `status` (present/gen/TCOBASE + raw `GEN_PMCON_A` `fw=0x..` dump); `arm <s>`/`pet`/`disarm` drive the TCO directly (**safe**: an armed-but-unpetted TCO resets in ~`<s>`, and if NO_REBOOT wasn't truly cleared it simply doesn't, never a hard hang); `selftest <s>`/`wedge` cli-spin to trigger the IRQs-off wedge (never returns; only the TCO recovers) | the report, then `ok`/`err` |
 
 > **Durability.** The native FAT cache is write-back, and post-detach nothing
@@ -441,6 +442,51 @@ returns `True` when verified; then `link.bootnext(n)` / `link.reboot()`.
 > separately, and the one an admin's role never covers by itself. The channel is
 > still **plaintext, LAN-only**: never expose the listener to an untrusted
 > network. `put` caps a single upload at 8 MB (the staging buffer).
+
+## Moving real data: `xfer`, and why `put` is not it
+
+`put` stages a whole upload in an 8 MB RAM buffer and pushes every byte across
+this channel, which is plaintext, LAN-only, and pumped 512 bytes per tick. That
+is exactly right for a 1.5 MB `BOOTX64.EFI` and wrong for everything larger: a
+WAD, a video, a source tree, a disk image.
+
+**`xfer` carries no payload at all.** It tells the box to FETCH the bytes
+itself, over a real transfer protocol, straight from the machine that has them;
+this link carries a request and a progress line. The cap goes away because the
+buffer does.
+
+```
+> xfer site nas scp nas.lan 22 arin boxkey /srv
+ok saved nas
+> xfer pull nas /srv/media/s04 1 \MEDIA -r
+ok id=0 recursive - planning; poll `xfer status 0`
+> xfer status 0
+ok id=0 state=running files=4/12 bytes=139460608/418334720 33% cur=ep04.wav
+> xfer status 0
+ok id=0 state=done files=12/12 bytes=418334720/418334720 100%
+```
+
+**`pull` and `push` return immediately.** They plan, hand back a job id, and run
+on the shell tick. This is a requirement rather than a nicety: a command that
+blocked for the length of a multi-gigabyte transfer would park this dispatcher,
+stop the box answering, miss the **guard's** deadline, and get the machine
+hard-reset by its own dead-man's switch. `status` is how you watch it, and
+`log <id>` gives the per-file result list in bounded slices, the same idiom as
+`readsec` and `screen read`.
+
+**Gated `automate.system`,** and the argument is `ssh`'s only more so: it writes
+arbitrary files anywhere on any writable volume (that is `put`'s tier alone) and
+it authenticates to other machines with this box's stored credentials (that is
+`ssh`'s tier alone). Sites hold **no secret** - an SSH site names a key in
+unossh's encrypted store, and `xfer site` refuses a URL that carries a password
+rather than writing one to disk.
+
+Two limits are worth knowing before you rely on it, both stated in
+`pc64/UNOXFER.md`: a single **file** is bounded by the staging buffer until
+unofs lands `uno_fat_append()` (a **job** is not - the buffer is reused per
+file), and SCP and TFTP cannot resume, so an interrupted file restarts rather
+than appending to a partial. Files land as `<name>.PART` and are renamed onto
+the real name only once the last byte verifies.
 
 `probe` row kinds: `0` module (`.UNO` file), `1` window (title), `2` subsystem
 (`heap`/`net`/`fs`/`shell`) - see `unoauto.h` for the `v1`/`v2` meanings.
