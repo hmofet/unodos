@@ -198,7 +198,7 @@ static void pane_pkg(fm_pane *P, const char *np)
         }
         fm_app(msg, sizeof msg, " (");
         fm_appnum(msg, sizeof msg, (fm_pkg.size + 512 * 1024) / (1024 * 1024));
-        fm_app(msg, sizeof msg, " MB)? Press Enter again.");
+        fm_app(msg, sizeof msg, " MB)? Press Enter or click again.");
         set_status(msg);
         return;
     }
@@ -486,18 +486,23 @@ static int fm_canvas_event(struct unoui_widget *w, const void *evp, void *ctx)
     case UI_EV_KEY: {
         fm_pane *P = pact();
         switch (e->key) {
-        case UI_KEY_UP:   if (P->sel > 0) P->sel--; break;
-        case UI_KEY_DOWN: if (P->sel < P->n - 1) P->sel++; break;
+        /* The package arm is cleared by MOVING, never by Enter - Enter is what
+         * arms it, and clearing below the switch would disarm it one line
+         * later, which is the same trap the mouse handler carries a comment
+         * about.  There it cost a re-click; here it would have made the
+         * keyboard path unable to install at all, which is how the harness
+         * drives it. */
+        case UI_KEY_UP:   if (P->sel > 0) P->sel--; fm_arm_pkg = -1; break;
+        case UI_KEY_DOWN: if (P->sel < P->n - 1) P->sel++; fm_arm_pkg = -1; break;
         case UI_KEY_ENTER: pane_enter(P); break;
-        case UI_KEY_BACKSPACE: pane_up(P); break;
-        case UI_KEY_TAB: if (fm_two) fm_active = !fm_active; break;
+        case UI_KEY_BACKSPACE: pane_up(P); break;   /* pane_refresh disarms */
+        case UI_KEY_TAB: if (fm_two) fm_active = !fm_active; fm_arm_pkg = -1; break;
         default: return 0;
         }
         { int fh = fb_text_h(), rows = (fm_last_r.h - (fh+6) - (fh+6)) / row_h();
           if (P->sel < P->scroll) P->scroll = P->sel;
           if (rows > 0 && P->sel >= P->scroll + rows) P->scroll = P->sel - rows + 1; }
         fm_arm_del = -1;
-        fm_arm_pkg = -1;
         pc64_shell_dirty();
         return 1;
     }
