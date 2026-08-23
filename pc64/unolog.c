@@ -5,6 +5,7 @@
 #include "pc64_native.h"     /* rdtsc + tsc_per_us (the only production clock)
                               * and uno_native_rtc_read for wall time         */
 #include "fat.h"
+#include "pc64_fs.h"        /* uno_fs_pref_vol + the fs->fat index mapping */
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
@@ -192,10 +193,48 @@ static void file_append(const unolog_rec *r)
 
 /* Find (or make) a volume that will hold \LOGS. Cached; -1 until one exists,
  * which is the normal state for the first moments of boot. */
+/* Forget the cached volume, because the volume SET just changed underneath us.
+ *
+ * A detach remounts every disk on native drivers and renumbers them: on the
+ * Surface Laptop Go the boot stick is volume 1 before ExitBootServices and
+ * volume 2 after it, with the internal eMMC taking the index it left. A cached
+ * index is therefore not merely stale, it points at a DIFFERENT DISK - and the
+ * file sink went on writing to it in silence, which is why a machine that
+ * detached produced no \LOGS\SYSTEM.LOG at all and the account of a failed
+ * shutdown was lost with it.
+ *
+ * The debug harness learned this on 2026-07-31 (uno_dbg_storage_remapped) and
+ * unolog never got the same call. It does now; uefi_main invokes it from the
+ * remap itself, so there is one place that knows the numbering moved. */
+void unolog_storage_remapped(void)
+{
+    g_vol = -1;
+}
+
 static int log_vol(void)
 {
     int v, nv;
     if (g_vol >= 0) return g_vol;
+    /* Ask for the system volume BY IDENTITY first - the boot volume, then any
+     * writable fixed disk - instead of taking whichever volume happens to
+     * accept a LOGS directory. On a machine carrying another operating system
+     * the blind scan below can pick THAT system's ESP, which is how a
+     * telemetry write ended up on a Windows boot partition on 2026-08-23.
+     *
+     * NOTE THE INDEX SPACES ARE NOT THE SAME. uno_fs_* numbering includes the
+     * RAM disk and is mapped onto fat.c's by uno_fs_fat_index(); handing a
+     * uno_fs index straight to uno_fat_* addresses a different disk, which is
+     * precisely the class of bug this function is being fixed for. */
+    {   int pv = uno_fs_pref_vol();
+        int fv = (pv >= 0) ? uno_fs_fat_index(pv) : -1;
+        if (fv >= 0) {
+            uno_fat_entry e[64];
+            int i, n = uno_fat_list_ex(fv, "", e, 64), have = 0;
+            for (i = 0; i < n; i++)
+                if (e[i].is_dir && !strcmp(e[i].name, "LOGS")) { have = 1; break; }
+            if (have || uno_fat_mkdir(fv, "LOGS")) { g_vol = fv; return fv; }
+        }
+    }
     nv = uno_fat_volumes();
     for (v = 0; v < nv; v++) {
         uno_fat_entry e[64];
@@ -473,6 +512,10 @@ void unolog_init(void)
     if (g_inited) return;
     g_inited = 1;
     cfg_load();                 /* a no-op if storage is not up yet; retried in tick */
+    /* SAY WHICH VOLUME THE LOG IS ON. There is more than one writable FAT on a
+     * dual-boot laptop, this used to take whichever one answered first, and a
+     * log written to somebody else's ESP is both useless and rude. */
+    ulog_notice(LF_KERNEL, "unolog file sink: fat volume %d", log_vol());
     ulog_notice(LF_KERNEL, "unolog started: level=%s remote_level=%s",
                 unolog_sev_name(g_level), unolog_sev_name(g_remote_level));
 }

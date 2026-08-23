@@ -86,6 +86,12 @@ void unolog_shutdown(void);
  * ERR and worse already force this, so callers rarely need it. */
 int  unolog_flush(void);
 
+/* The volume set was renumbered (a detach remounts every disk on native
+ * drivers). Drop the cached file-sink volume so the next write re-resolves it
+ * by identity - a stale index does not merely miss, it addresses a DIFFERENT
+ * DISK. Cheap and idempotent; call it from the remap. */
+void unolog_storage_remapped(void);
+
 /* ---- what is kept, and what is sent --------------------------------------
  * Two thresholds because "what do I record" and "what do I ship over the
  * network" are different questions with different costs. */
