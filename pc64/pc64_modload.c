@@ -27,6 +27,7 @@
 #include "unoauto.h"    /* mod.load / mod.unload tap points (no-op in prod) */
 #include "unolog.h"
 #include "unovirt_mgr.h"     /* appliances: the manager surface VMGR.UNO uses */
+#include "pc64_pkg.h"        /* unopkg: the two calls a foreign-app shim makes */
 #include "pc64_fs.h"
 #include "uno_binds.h"    /* uno.bind_* / uno.pref_* exports */
 #include "fat.h"
@@ -357,6 +358,13 @@ static const struct { const char *name; void *addr; } kExports[] = {
      * host settles. */
     KX(ujs_promise), KX(ujs_promise_resolve), KX(ujs_promise_reject),
     KX(ujs_run_jobs), KX(ujs_function_set_data),
+    /* unopkg (pc64/UNOPKG.md).  Exactly two entries, and deliberately: the
+     * foreign-app shim asks to run its target and asks what the runtime's
+     * state is, and has no business doing anything else - it must not be able
+     * to install, remove or enumerate packages, because it is a file the
+     * INSTALLER wrote and any widening here would be a widening of what an
+     * installed foreign app can reach. */
+    KX(uno_pkg_launch), KX(uno_pkg_runtime_str),
 };
 #define NEXPORT ((int)(sizeof kExports / sizeof kExports[0]))
 
