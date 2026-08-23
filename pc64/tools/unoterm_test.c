@@ -190,6 +190,26 @@ int main(void)
         } else printf("ok   bracketed paste is wrapped\n");
     }
 
+    /* ---- a resize must be able to GROW BACK -----------------------------
+     * Clamping against the CURRENT size instead of the reservation lets a
+     * terminal shrink and never recover: a window made smaller and then larger
+     * again stays small for the rest of the session, with nothing to point at.
+     * This is the assertion that catches it. */
+    unoterm_init(&T, mem, sizeof mem, 100, 32, 8);
+    unoterm_resize(&T, 40, 10);
+    expect_int(T.cols, 40, "resize shrinks");
+    unoterm_resize(&T, 100, 32);
+    expect_int(T.cols, 100, "resize grows back to the reservation");
+    expect_int(T.rows, 32, "resize grows back to the reservation");
+    unoterm_resize(&T, 200, 64);
+    if (T.cols * T.rows > 100 * 32) {
+        printf("FAIL resize grew PAST the reservation (%dx%d)\n", T.cols, T.rows);
+        g_fail++;
+    } else {
+        printf("ok   resize refuses to grow past the reservation  %dx%d\n",
+               T.cols, T.rows);
+    }
+
     /* ---- init must REFUSE a block that is too small, not scribble past it */
     {
         static unsigned char tiny[64];

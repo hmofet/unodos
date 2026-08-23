@@ -101,6 +101,7 @@ int unoterm_init(unoterm *t, void *mem, unsigned long memlen,
 
     t_memset(t, 0, sizeof *t);
     t->cols = cols; t->rows = rows; t->sb_rows = sb;
+    t->cap_cells = cols * rows;             /* the reservation, fixed for life */
 
     /* Carve in descending alignment order so no member needs padding between
      * it and the next: cells (8-aligned) first, the two short tables last. */
@@ -122,7 +123,7 @@ void unoterm_resize(unoterm *t, int cols, int rows)
      * past the reservation is the honest behaviour: the alternative is writing
      * past the caller's buffer, which is a memory-safety bug wearing a
      * convenience feature's clothes. */
-    int maxcells = t->cols * t->rows, y;
+    int maxcells = t->cap_cells, y;
     cols = t_max(1, cols); rows = t_max(1, rows);
     if (cols * rows > maxcells) {
         rows = maxcells / cols;

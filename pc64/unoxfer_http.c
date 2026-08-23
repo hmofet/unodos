@@ -531,7 +531,8 @@ static int hb_get(unoxfer_client *c, const char *rpath, long long off,
         return ux_fail(c, UNOXFER_EARG, "URL too long");
 
     st.p = ux_stage_get(0, &capn);
-    if (!st.p) return ux_fail(c, UNOXFER_EIO, "the staging buffer is busy");
+    if (!st.p) return ux_fail(c, UNOXFER_EIO,
+                              "no staging buffer (another transfer holds it, or the heap is full)");
     st.cap = capn; st.len = 0;
 
     memset(&r, 0, sizeof r);
@@ -733,7 +734,8 @@ static int dav_put(unoxfer_client *c, int vol, const char *lpath,
     if (!hb_url(c, url, (int)sizeof url, rpath))
         return ux_fail(c, UNOXFER_EARG, "URL too long");
     buf = ux_stage_get(sz, &capn);
-    if (!buf) return ux_fail(c, UNOXFER_EIO, "the staging buffer is busy");
+    if (!buf) return ux_fail(c, UNOXFER_EIO,
+                             "no staging buffer (another transfer holds it, or the heap is full)");
     if (sz > capn) { ux_stage_put();
         return ux_failf(c, UNOXFER_ETOOBIG, "%s is over the %lld byte staging cap",
                         lpath, capn); }
