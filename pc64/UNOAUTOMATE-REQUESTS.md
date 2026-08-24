@@ -10410,3 +10410,72 @@ duplication ever reads as noise, the `.app` half is the half to delete.
 
 Nothing is asked of the unoguest lane here. This entry exists so the change is
 visible to whoever owns `guest/` rather than discovered in a diff.
+
+## 2026-08-23 LANDED (nic-promisc-bridge): the M3 bridge only ever worked on Intel NICs
+
+Found on the ZimaBlade, whose appliance guest sat at `uno: no lease yet (try N)`
+for forty tries and then started Chromium with no network at all.
+
+**The bridge assumed a promiscuous link and never said so.** `unovdev_net.c`
+answers the one-MAC-two-IP question (UNOVIRT-PLAN R3) by giving the guest its
+OWN MAC, and its comment explains why that is free: "the driver below us
+already runs promiscuous (e1000.c sets UPE|MPE)". True of e1000, and of e1000e
+and igb. Not true of anything else. r8169 writes `0x0E` to RxConfig's accept
+nibble - broadcast, multicast, my-MAC, and AAP clear - so a frame addressed to
+the guest is dropped by the NIC before any of our code sees it. rtl8152
+(`APM|AB|AM`) and ax88179 (`AP|AB|AM`) are the same. **No non-Intel NIC could
+ever have carried a guest**, and the bridge was proved on devbuntu's e1000, so
+nothing said so.
+
+The host half is the proof the wire was never at fault: same NIC, same cable,
+`net-boot: wired[5] leased (rx=23 tx=2)` for the host, because APM matches its
+own address, and nothing whatsoever for the guest.
+
+**What landed**, three commits, one per lane:
+
+- `net:` promiscuous became a REQUEST rather than an assumption -
+  `net_set_promisc_fn()` for a driver to publish a setter (the shape
+  `net_set_link_speed_mbps` already uses) and `net_set_promisc()` for the
+  bridge to ask.
+- `r8169:` a setter that flips AAP, registered once the NIC is up.
+- `unovdev:` `uno_vnet_bridge_start`/`stop` ask for it and give it back.
+
+**Two things worth not re-deriving.**
+
+*It must not be left on.* The first cut set AAP unconditionally in
+`hw_start()`. That shipped to the ZimaBlade and the next boot log read
+`wired[5] leased (rx=163 tx=2)` against `rx=23` before it - 7x the received
+frames, on every boot, guest or no guest. `net_poll`'s drain loop is unbounded,
+so on a 1.1 GHz Celeron that is desktop frame time being spent on other
+machines' traffic. Scoped to the bridge's lifetime instead.
+
+*A promiscuous link breaks an assumption in `ip_recv` that predates all of
+this, and this half is NOT ZimaBlade-specific.* `ip_recv` deliberately accepts
+a packet addressed anywhere while DHCP is in flight, because there is no IP of
+ours to match against yet - safe only for as long as the NIC had already
+dropped everyone else's traffic. On a promiscuous link it means another
+machine's DHCP reply is one our own client can consume. **e1000, e1000e and
+igb have always been promiscuous, so this has been live on every Intel box,
+the harness included.** `net_poll` now drops a frame whose destination MAC is
+neither ours nor broadcast/multicast, before the stack parses it. The bridge
+still gets first refusal, so guest frames are untouched.
+
+**Deliberately not fixed, for the NIC-driver lane to pick up when there is a
+box to prove it on:** rtl8152 and ax88179 need the same setter (`RCR_AAP`,
+`AX_RX_CTL_PROMISC`) registered the same way. Both carry a comment naming the
+bit and pointing at r8169's shape. They were written blind in the first cut of
+this work and backed out again: the always-on version is now known to cost
+something, and a driver written blind against hardware nobody has is exactly
+how the first version of this got it wrong.
+
+**Still open on the ZimaBlade, and not this lane's** (recorded because the
+metal run that found the above could not be finished without it): the GOP
+framebuffer is UC, `fb bench: vram 30709 KB/s` against 3.8 GB/s to RAM, so a
+full-screen present is ~270 ms and the desktop tops out near 4 fps whenever
+the whole screen dirties - which the Appliances Display view does every frame.
+`mtrr-wc` does not help, and its refusal actively misleads: it looks for a UC
+*variable* MTRR to tile around, finds none, and reports "fb may already be
+WB/WC (nothing to do)". This box is UC by DEFAULT TYPE (`mtrr: none covers fb
+base - default type 0`), which is a shape F3 did not anticipate and the easy
+case - nothing else covers the range, so one WC variable MTRR over the fb
+window would do it, with no tiling.
