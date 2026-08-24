@@ -1561,7 +1561,7 @@ static u32 g_deauth_ours;      /* deauth/disassoc FROM the AP we joined       */
 static u32 g_deauth_other;     /* ...from any other BSSID (steering, usually) */
 static int g_deauth_reason = -1;             /* the most recent reason code   */
 static unsigned long long g_join_ms;         /* when the 4-way completed      */
-static int g_postjoin_diag_done;
+static int g_postjoin_diag_n;                /* how many rounds have printed  */
 /* ---- who the frame is from, and what the firmware did with it -------------
  * Two facts the counters above could not tell apart, and both of them decide
  * what "69 frames dropped" means:
@@ -1577,6 +1577,30 @@ static u32 g_rx_foreign;       /* data frames from a BSS we are not joined to */
 static u32 g_rx_prot;          /* protected data frames FROM OUR AP           */
 static u32 g_rx_prot_dec;      /* ...of those, ones that arrived decrypted    */
 static u32 g_rx_st_undec;      /* the rx descriptor status of the last one that did not */
+/* ---- what `from_ap` was hiding, and the one split that decides §2 ---------
+ * `from_ap` counts every frame our AP transmits, and the overwhelming majority
+ * of those are BEACONS. On the Surface it read 62 in two seconds and the
+ * verdict drawn from it was "traffic flows BOTH ways" - from beacons alone,
+ * with not one data frame in the whole window. Counting them separately is the
+ * difference between a link that is carrying traffic and one that is merely
+ * audible.
+ *
+ * The unicast/group split below is the measurement the GTK hypothesis in
+ * docs/SURFGO-OPEN-ITEMS.md turns on. A DHCP OFFER, an ARP request, an mDNS
+ * announcement: broadcast is decrypted with the GROUP key, unicast with the
+ * pairwise one. `uni>0 grp==0` is a group key that is installed and wrong (or
+ * a DTIM the firmware never wakes for) and nothing else looks like it;
+ * `uni==0 grp==0` means the AP is not forwarding to us at all and the group
+ * key is irrelevant. Those are different weeks of work. */
+static u32 g_rx_bcn_ap;        /* beacons from our AP                          */
+static u32 g_rx_uni_ap;        /* data frames from our AP addressed TO US      */
+static u32 g_rx_grp_ap;        /* data frames from our AP addressed to a GROUP */
+static u32 g_rb_postjoin;      /* RBs processed since the keys went in - a ring
+                                * that has dried up reads as silence otherwise */
+static u32 g_rx_mpdu_pj;       /* ...and how many of those carried a FRAME, of
+                                * any type, from anyone. The step between the
+                                * two says whether the radio went deaf or the
+                                * channel did. */
 static int g_rx_data_log;      /* log the next N received data frames (debug) */
 static int g_rx_mic = -1;      /* does the fw leave the CCMP MIC on? -1 = not learned yet */
 static int g_last_rssi;        /* strongest energy seen on a frame from our AP */
@@ -1586,6 +1610,7 @@ static void rx_process_rb(const u8 *rb, int cap,
                           int want_group, int want_cmd, const u8 **found, int *found_len)
 {
     int off = 0;
+    if (g_keys_installed) g_rb_postjoin++;
     while (off + 8 <= cap) {
         const struct rx_packet *pkt = (const struct rx_packet *)(rb + off);
         int plen = pkt->len_n_flags & FRAME_SIZE_MSK;
@@ -1639,6 +1664,7 @@ static void rx_process_rb(const u8 *rb, int cap,
             int rssi = 0, dchan = 0;
             u32 st = 0;                  /* iwl_rx_mpdu_desc.status, mq path only */
             if (g_scanning) g_scan_mpdu_seen++;
+            if (g_keys_installed) g_rx_mpdu_pj++;
             if (g_mq_rx) {
                 /* iwl_rx_mpdu_desc: mpdu_len@0, mac_flags2@3 (PAD 0x20,
                    HDR_LEN in *2 words). Size = IWL_RX_DESC_SIZE_V1 =
@@ -1711,6 +1737,14 @@ static void rx_process_rb(const u8 *rb, int cap,
                 int from_ap = !memcmp(frame + 10, g_bssid, 6);
                 if (from_ap) {
                     g_rx_from_ap++;             /* the AP we joined is talking */
+                    if (((fc >> 2) & 3) == 0 && ((fc >> 4) & 0xF) == 8) g_rx_bcn_ap++;
+                    else if (((fc >> 2) & 3) == 2) {
+                        /* addr1 is the DA on a downlink; bit 0 of its first
+                         * octet is the group bit. Counted BEFORE the SNAP
+                         * probe below, so a frame we could not parse still
+                         * shows up as having arrived. */
+                        if (frame[4] & 1) g_rx_grp_ap++; else g_rx_uni_ap++;
+                    }
                     if (rssi) g_last_rssi = rssi;
                 }
                 {
@@ -3798,10 +3832,12 @@ static void handle_eapol(const u8 *eapol, int len)
         /* Baseline the post-join counters here, so the diagnosis in iwl_link()
          * describes THIS association and not the noise of getting to it. */
         g_join_ms = uno_dbg_uptime_ms();
-        g_postjoin_diag_done = 0;
+        g_postjoin_diag_n = 0;
         g_txr_total = g_txr_ackfail = g_rx_from_ap = 0;
         g_rx_data_n = g_rx_data_drop = g_tx_data_n = 0;
         g_rx_foreign = g_rx_prot = g_rx_prot_dec = 0; g_rx_st_undec = 0;
+        g_rx_bcn_ap = g_rx_uni_ap = g_rx_grp_ap = 0;
+        g_rb_postjoin = g_rx_mpdu_pj = 0;
         /* ARM THE RX DESCRIPTION FOR THE FIRST FEW FRAMES OF THIS ASSOCIATION.
          *
          * g_rx_data_log gates the two RXDATA traces that say what a received
@@ -5046,9 +5082,9 @@ static int iwl_recv(void *ctx, void *pkt, int cap)
      *
      * recv is polled on every single pass of that loop, so putting it here
      * means the diagnostic reports whenever DHCP is actually running, which is
-     * the only time anybody wants it. It is idempotent and one-shot
-     * (g_postjoin_diag_done), so the extra call site costs a predictable
-     * branch and cannot double-report. */
+     * the only time anybody wants it. Each round is armed by elapsed time and
+     * disarmed the moment it prints (g_postjoin_diag_n), so the extra call site
+     * costs a predictable branch and cannot double-report a round. */
     postjoin_diag();
     if (g_dq_tail != g_dq_head) {
         int n = g_dataq[g_dq_tail].len;
@@ -5064,8 +5100,8 @@ static int iwl_recv(void *ctx, void *pkt, int cap)
  * the caller that waits for link (ip_suite, net_dhcp_after_link) does NOT poll
  * recv while it waits - so pump here, or a handshake still in flight can never
  * finish and the link never comes up. */
-/* ONE line, once, six seconds after a successful join, that says which of the
- * two "associated but no DHCP lease" explanations this machine is actually
+/* A timed series of readings across the DHCP window, saying which of the
+ * "associated but no DHCP lease" explanations this machine is actually
  * suffering from.
  *
  * The two have been indistinguishable from the outside all week:
@@ -5085,18 +5121,33 @@ static int iwl_recv(void *ctx, void *pkt, int cap)
  * iwl_link() is the hook because the IP stack polls it throughout the DHCP
  * wait, so this needs no timer, no tick registration and no URC - and it lands
  * in the NET log, which is the only channel this machine reliably has. */
+/* When the rounds fire, in ms since the keys went in. */
+static const unsigned DIAG_AT_MS[] = { 2500, 9000, 20000, 40000 };
+#define DIAG_ROUNDS ((int)(sizeof DIAG_AT_MS / sizeof DIAG_AT_MS[0]))
+
 static void postjoin_diag(void)
 {
     unsigned long long now = uno_dbg_uptime_ms();
     const char *reading;
-    if (g_postjoin_diag_done || !g_joined || !g_join_ms) return;
-    /* 2.5 s, not 6. DHCP DISCOVER retries at roughly 1.5 s intervals, so by
-     * here two or three have gone out and the counters have said what they are
-     * going to say - and the FIRST attempt at this waited 6 s and never fired,
-     * because the captured log ended 3.2 s after the join. A diagnostic that
-     * outlives its own capture window measures nothing. */
-    if (now - g_join_ms < 2500) return;
-    g_postjoin_diag_done = 1;
+    if (g_postjoin_diag_n >= DIAG_ROUNDS || !g_joined || !g_join_ms) return;
+    /* FOUR ROUNDS, NOT ONE, AND THE VALUE IS IN THE DELTAS.
+     *
+     * The first version fired once at 2.5 s and stopped. 2.5 s is right for the
+     * first reading - two or three DISCOVERs have gone out by then - but the
+     * DHCP window is the next THIRTY SECONDS, and everything that could have
+     * arrived to answer the question arrives during it. On the Surface,
+     * 2026-08-24, the single line read `rx=0 from_ap=62 drop=0 prot=0` and
+     * concluded "the link is fine and DHCP itself is the problem" - a verdict
+     * about a data path, drawn 2.5 s in, from a counter that was almost
+     * certainly all beacons. The next 100 seconds went unmeasured.
+     *
+     * One line is a snapshot; four are a slope. `from_ap` climbing while
+     * `mpdu` stands still means the ring stopped. Both climbing with `grp` at
+     * zero is the group key. Everything at zero after 40 s is a radio that
+     * went deaf when the keys went in, and no amount of DHCP work would ever
+     * have found it. */
+    if (now - g_join_ms < DIAG_AT_MS[g_postjoin_diag_n]) return;
+    g_postjoin_diag_n++;
 
     if (g_tx_data_n && !g_txr_total)
         /* THE CASE THIS DID NOT HAVE A WORD FOR, AND IT IS THE ONE ON THE
@@ -5115,9 +5166,34 @@ static void postjoin_diag(void)
                   "at all - the TX path is not completing, this is not the AP";
     else if (g_txr_total && g_txr_ackfail * 2 >= g_txr_total)
         reading = "the AP is NOT ACKing us - radio-level: wrong BSS, steering, or too weak";
-    else if (!g_rx_from_ap)
-        reading = "our frames are ACKed but the AP sends us NOTHING - it hears us "
-                  "and will not answer (association identity)";
+    else if (!g_rx_mpdu_pj)
+        /* NOT ONE FRAME OF ANY KIND, from anybody, since the keys went in -
+         * not a beacon, not a neighbour's broadcast, nothing. A 2.4 GHz mesh
+         * channel is never that quiet, so this is not the air and not the AP:
+         * it is our own receive path stopping at the moment CCMP came up.
+         * Read `rb` on the counts line to tell the two ways that happens
+         * apart - RBs still arriving means the firmware is filtering, RBs
+         * standing still means the ring was never refilled. */
+        reading = "the receive path has delivered NO frames at all since the keys "
+                  "went in - this is ours, not the AP's (see rb vs mpdu)";
+    else if (!(g_rx_uni_ap + g_rx_grp_ap))
+        /* Tested on DATA, not on `from_ap`: from_ap counts beacons, and an AP
+         * that beacons at us while forwarding nothing is exactly the fault
+         * this branch names. Testing the old counter hid it behind "traffic
+         * flows both ways". */
+        reading = "our frames are ACKed and the AP BEACONS at us but sends us no "
+                  "DATA - it hears us and will not answer (association identity)";
+    else if (g_rx_uni_ap && !g_rx_grp_ap)
+        /* The GTK reading, and the one docs/SURFGO-OPEN-ITEMS.md §2 predicts.
+         * Unicast rides the pairwise key and works; every group-addressed
+         * frame rides the GTK. A DHCP OFFER, an ARP, an mDNS announcement -
+         * all of them are group-addressed on most networks, and none of them
+         * arrive. A wrong group key and a DTIM the firmware never wakes for
+         * are still both alive here; `prot` below separates them, because a
+         * key that is wrong still counts the frame and a DTIM that never
+         * fires never sees one. */
+        reading = "unicast from the AP arrives and GROUP-ADDRESSED traffic never "
+                  "does - the group key or the DTIM wake, not DHCP";
     else if (g_rx_prot && !g_rx_prot_dec)
         /* The AP is talking to us and the hardware is handing its frames up
          * still encrypted. Which of the two that is - a key the fw never armed,
@@ -5130,8 +5206,8 @@ static void postjoin_diag(void)
     else
         reading = "traffic flows BOTH ways - the link is fine and DHCP itself is the problem";
 
-    uno_dbg_net_trace("wifi: post-join diag +%ds: bssid %02x:%02x:%02x:%02x:%02x:%02x aid %d rssi %d",
-                      (int)((now - g_join_ms) / 1000),
+    uno_dbg_net_trace("wifi: post-join diag +%ds (round %d/%d): bssid %02x:%02x:%02x:%02x:%02x:%02x aid %d rssi %d",
+                      (int)((now - g_join_ms) / 1000), g_postjoin_diag_n, DIAG_ROUNDS,
                       g_bssid[0],g_bssid[1],g_bssid[2],g_bssid[3],g_bssid[4],g_bssid[5],
                       (int)g_aid, g_last_rssi);
     uno_dbg_net_trace("wifi: post-join diag: tx=%u txresp=%u ack_fail=%u | rx=%u from_ap=%u drop=%u "
@@ -5139,6 +5215,20 @@ static void postjoin_diag(void)
                       (unsigned)g_tx_data_n, (unsigned)g_txr_total, (unsigned)g_txr_ackfail,
                       (unsigned)g_rx_data_n, (unsigned)g_rx_from_ap, (unsigned)g_rx_data_drop,
                       (unsigned)g_deauth_ours, (unsigned)g_deauth_other, g_deauth_reason);
+    /* THE RECEIVE FUNNEL, WIDEST FIRST, ALL OF IT SINCE THE KEYS WENT IN.
+     * rb   RBs the ring handed us          (0 = the ring itself stopped)
+     * mpdu ...that carried a frame         (0 with rb>0 = the fw is filtering)
+     * bcn  ...beacons from OUR AP          (what `from_ap` was mostly counting)
+     * uni  ...data frames addressed to US  (the pairwise key works)
+     * grp  ...data frames to a GROUP       (the group key works)
+     * Each step that holds at zero while the one above it climbs names a
+     * different subsystem, which is the whole reason they are printed
+     * together rather than summed. */
+    uno_dbg_net_trace("wifi: post-join diag: rb=%u mpdu=%u | from_ap=%u bcn=%u "
+                      "uni=%u grp=%u",
+                      (unsigned)g_rb_postjoin, (unsigned)g_rx_mpdu_pj,
+                      (unsigned)g_rx_from_ap, (unsigned)g_rx_bcn_ap,
+                      (unsigned)g_rx_uni_ap, (unsigned)g_rx_grp_ap);
     /* `drop` above now counts only frames from the AP we joined; `foreign` is
      * everything else on the channel, which on a mesh is most of it and used to
      * be indistinguishable. `prot` is how many protected frames our AP sent us
@@ -5179,7 +5269,7 @@ static int iwl_link(void *ctx)
     (void)ctx;
     if (!g_bound) return 0;
     if (!g_joined && g_wpa_active) rx_pump_ms(50, 1);
-    postjoin_diag();               /* one line, once, 2.5 s after joining */
+    postjoin_diag();               /* the timed rounds; see DIAG_AT_MS */
     return g_joined;
 }
 
