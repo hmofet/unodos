@@ -1539,6 +1539,7 @@ static wpa_ap_sec_t g_ap_sec;
 static int g_join_akm;              /* WPA_AKM_SAE / WPA_AKM_PSK / 0          */
 static int g_akm_force;             /* second-pass override; 0 = pick freely   */
 static int g_sae_silent;            /* last SAE got no commit back at all      */
+static int g_auth_ok;               /* the AP authenticated us this attempt   */
 static int g_join_mfp;              /* WPA_MFP_*                              */
 static u8  g_rsn_ie[64];            /* the EXACT element sent in assoc-req    */
 static int g_rsn_ie_len;
@@ -4636,10 +4637,12 @@ static int join_selected(void)
     }
     if (g_join_akm == WPA_AKM_SAE) {
         r = mvm_auth_sae();
+        g_auth_ok = (r == 0);
         uno_dbg_net_trace("wifi: join: SAE auth -> %d", r);
         if (r != 0) return -1;
     } else {
         r = mvm_auth();
+        g_auth_ok = (r == 0);
         uno_dbg_net_trace("wifi: join: auth -> %d (0=ok, >0 AP status, -1 no resp)", r);
         if (r != 0) return -1;
     }
@@ -4776,6 +4779,7 @@ static int join_retry(void)
         return -1;
     }
     r = (g_join_akm == WPA_AKM_SAE) ? mvm_auth_sae() : mvm_auth();
+    g_auth_ok = (r == 0);
     uno_dbg_net_trace("wifi: join: retry %s auth -> %d", akm_name(g_join_akm), r);
     if (r != 0) return -1;
     wpa_arm();
@@ -4854,6 +4858,7 @@ static int find_and_join(void)
          * all three BSSs failed identically. */
         g_akm_force = psk_turn ? WPA_AKM_PSK : 0;
         g_sae_silent = 0;
+        g_auth_ok = 0;
         select_ap(idx);
         uno_dbg_net_trace("wifi: join: try %d/%d \"%s\" bssid %02x:%02x:%02x:%02x:%02x:%02x "
                           "chan %d rssi %d bi %d dtim %d (link-api=%d)",
@@ -4884,8 +4889,20 @@ static int find_and_join(void)
          * nothing left when its association needed a second go. Fall back on
          * a BSS that TALKED and refused; skip to the next one when it did
          * not talk. */
+        /* ...and only when SAE failed AT AUTHENTICATION. If the AP
+         * authenticated us and the join died later - association, the 4-way,
+         * or a deauthentication afterwards - then the AKM demonstrably works
+         * and the BSS is the problem, so the next BSS is the useful move.
+         *
+         * NimmuNet again, 2026-08-24: SAE authenticated, association returned
+         * AID 1, the 4-way completed with keys installed, and the AP then sent
+         * reason 7 - from e8:d3:eb:47:4e:cf, the BSS this file already
+         * describes two screens up as the loudest on the air and the one that
+         * "deauths after the assoc request - every time". Retrying it under a
+         * different AKM spent the attempt that the BSS rotation needed, and
+         * the rotation is the entire reason the retry loop exists. */
         if (!psk_turn && g_join_akm == WPA_AKM_SAE && !g_sae_silent &&
-            (g_ap_sec.akm & WPA_AKM_PSK)) {
+            !g_auth_ok && (g_ap_sec.akm & WPA_AKM_PSK)) {
             psk_turn = 1;
             uno_dbg_net_trace("wifi: join: SAE did not complete and this AP also "
                               "offers WPA2-PSK - same BSS, the other AKM");
