@@ -10521,3 +10521,45 @@ never sets `IWL_SEC_KEY_FLAG_MFP` (0x20) on the pairwise key. Real iwlwifi sets
 it for an MFP station (`iwl_mvm_get_sec_flags`). It is not this bug - the
 association that reached DHCP negotiated `mfp=0` - but it will be one the first
 time a PMF-required AP is joined, and it belongs to whoever takes item 1.
+
+## 2026-08-24 - STAGED (iwlwifi / surfgo-dhcp): the stick is written and the next reading needs one power-on
+
+Branch `surfgo-dhcp`, five commits on `iwlwifi.c` plus a dated note on
+`docs/SURFGO-OPEN-ITEMS.md`. Full `tools/gate.sh` green on exactly this tree:
+four builds, every host gate, **SPECTEST 87 PASS 0 FAIL 7 SKIP**.
+
+On the stick now (Verbatim STORE N GO, serial `FC090CB174377695`, in devbuntu
+as `/dev/sdb1`), updated in place so `FIRMWARE\` and the appliance payload
+survived:
+
+- `BUILD.TXT` id `debug-local-20260824-1955`, loader md5
+  `a10969c98638cf2214571c13820b9dbf` - **verified against a 101-file manifest
+  of the staged ESP, 0 missing, 0 differing** bar DEBUG.CFG, which the update
+  script rewrites on purpose.
+- `DEBUG.CFG`: `nostress` / `noshutdown` / `bssid=30:29:2b:70:4f:cf`.
+- `WIFINETS.CFG` (ssid NimmuNet) preserved, which is what makes this a
+  hands-off run: the driver rejoins the last network at boot and the boot net
+  test drives DHCP without anybody touching the machine.
+
+**`tar` exits NONZERO extracting onto FAT** - no owners, no timestamps to
+restore - having extracted everything correctly. Reading its exit status is a
+way to reject a good stick; reading `BUILD.TXT` alone is a way to accept a bad
+one, because **a production build leaves no BUILD.TXT at all** and the stale
+debug one from the previous update sits there looking right. Verify the
+content. `devbuntu:~/update-surfgo.sh <esp.tgz> <manifest>` now does.
+
+The previous run's telemetry is salvaged at
+`devbuntu:~/surfgo-run-20260824-155712/` before it was cleared.
+
+**What the next log answers.** Four diagnosis rounds at 2.5/6/10/25 s - three
+of them inside `pc64_nettest.c`'s 12 s DHCP budget - each printing the receive
+funnel whole:
+
+```
+wifi: post-join diag: rb=.. mpdu=.. | from_ap=.. bcn=.. uni=.. grp=..
+```
+
+`rb` climbing with `mpdu` flat is the firmware filtering; `rb` flat is a ring
+we never refilled; `bcn` alone is an AP that beacons and forwards nothing;
+`uni` without `grp` is the group key or the DTIM wake. Read `CRASH\SURFGO\
+NETLOG.TXT` first - the boot net test writes it - then `BOOTLOG.TXT`.
