@@ -113,8 +113,21 @@ void uc_buf_json(char *buf, int *pos, int cap, const char *s)
 {
     int n;
     if (*pos >= cap - 1) return;
+    /* THE QUOTES ARE THIS FUNCTION'S JOB, and for four days they were nobody's
+     * (UCD-57).  uc_json_esc escapes the CONTENTS and returns them bare - it
+     * has no opinion about delimiters - and every caller here writes the key
+     * and the colon with uc_buf_raw and then hands the value straight over.
+     * So the body went out as {"model":claude-sonnet-5,...} and the API
+     * answered "not valid JSON ... line 1 column 10 (char 9)", char 9 being
+     * exactly the first character after {"model":.
+     *
+     * Nothing caught it because uc_http.c was not in core/tools/test.sh's
+     * compile list at all: the appenders are pure logic and were the one part
+     * of the HTTP client with no coverage.  They have it now. */
+    if (*pos < cap - 1) buf[(*pos)++] = '"';
     n = uc_json_esc(buf + *pos, cap - *pos, s ? s : "");
     if (n > 0) *pos += n;
+    if (*pos < cap - 1) buf[(*pos)++] = '"';
     if (*pos < cap) buf[*pos] = 0;
 }
 
