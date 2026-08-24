@@ -10479,3 +10479,45 @@ WB/WC (nothing to do)". This box is UC by DEFAULT TYPE (`mtrr: none covers fb
 base - default type 0`), which is a shape F3 did not anticipate and the easy
 case - nothing else covers the range, so one WC variable MTRR over the fb
 window would do it, with no tiling.
+
+## 2026-08-24 - CLAIM (NIC drivers / iwlwifi): no DHCP lease after a successful join (branch `surfgo-dhcp`)
+
+**Claiming `iwlwifi.*`** for open item 2 of `docs/SURFGO-OPEN-ITEMS.md` - the
+Surface Laptop Go joins WPA2-PSK, installs CCMP keys, is authorized, and never
+gets a lease. No other lane is touched: no `net.*`, no `wifi_wpa.*`, no
+`apps/network.c`, no shared choke-point.
+
+**Not claimed, deliberately:** the wifi supplicant (`wifi_sae.*` / `wifi_wpa.*`),
+so SAE's wrong PMK - open item 1 - is free for whoever wants it. The two look
+adjacent and are not: item 1 is a key DERIVATION fault above the driver seam,
+and everything here is below it.
+
+**What the last metal log already settles**, so the next agent does not re-derive
+it from `CRASH/SURFGO`, boot of 2026-08-24 14:40:
+
+- DHCP DISCOVERs **do** leave the NIC: `TX q=1 flen=309` every ~1.5 s for 32 s,
+  which is exactly the DISCOVER this build builds (24 hdr + 8 SNAP + 277 IP).
+  "whether DISCOVER frames leave the NIC at all" is answered: they do.
+- Nothing whatsoever comes back: `rx=0 from_ap=62 drop=0 prot=0 foreign=0`.
+- The retarget onto the PSK retry was CLEAN - `STA_REMOVE` then a fresh
+  `STA_CONFIG`, not a re-point - so the stale-station fault described two
+  screens above `mld_sec_key()` is not what this is.
+- `mfp=0` on the association that succeeded, so nothing here is PMF.
+- **The `bssid=` pin did not work.** The log says it pins to
+  `30:29:2b:70:4f:cf` and then joins `e8:d3:eb:47:4e:cf` - the loud BSS the
+  pin exists to avoid. `join_pick_nth()` falls back to strongest-first without
+  a word when the scan never saw the pinned BSSID. Fixing that first, because
+  every experiment below it is chosen by it.
+
+**Why the next commit is instrumentation and not a fix.** The diagnosis fires
+**once, 2.5 s after the join**, and the whole DHCP window is the next 30 s. The
+one reading we have was taken before the evidence could exist, and its verdict
+("the link is fine and DHCP itself is the problem") is drawn from BEACONS -
+`from_ap` counts them. The GTK hypothesis in `SURFGO-OPEN-ITEMS.md` §2 and its
+opposite are both still standing because nothing measured them.
+
+**Request to nobody - a note for the wifi supplicant lane.** `mld_sec_key()`
+never sets `IWL_SEC_KEY_FLAG_MFP` (0x20) on the pairwise key. Real iwlwifi sets
+it for an MFP station (`iwl_mvm_get_sec_flags`). It is not this bug - the
+association that reached DHCP negotiated `mfp=0` - but it will be one the first
+time a PMF-required AP is joined, and it belongs to whoever takes item 1.
