@@ -1538,6 +1538,7 @@ static u8  g_bssid[6];                                 /* the AP we joined */
 static wpa_ap_sec_t g_ap_sec;
 static int g_join_akm;              /* WPA_AKM_SAE / WPA_AKM_PSK / 0          */
 static int g_akm_force;             /* second-pass override; 0 = pick freely   */
+static int g_sae_silent;            /* last SAE got no commit back at all      */
 static int g_join_mfp;              /* WPA_MFP_*                              */
 static u8  g_rsn_ie[64];            /* the EXACT element sent in assoc-req    */
 static int g_rsn_ie_len;
@@ -4365,6 +4366,7 @@ static int mvm_auth_sae(void)
         sae_tx(1, sae_commit_status(&g_sae), body, n);
         if (sae_wait(1, 1200) < 0) {
             uno_dbg_net_trace("wifi: SAE: no commit from the AP within 1200 ms");
+            g_sae_silent = 1;   /* the BSS never answered at all */
             return -1;
         }
         status = g_sae_rx[0][4] | (g_sae_rx[0][5] << 8);
@@ -4828,6 +4830,7 @@ static int find_and_join(void)
          * a property of the AKM, not of the BSS, and the evidence agreed -
          * all three BSSs failed identically. */
         g_akm_force = psk_turn ? WPA_AKM_PSK : 0;
+        g_sae_silent = 0;
         select_ap(idx);
         uno_dbg_net_trace("wifi: join: try %d/%d \"%s\" bssid %02x:%02x:%02x:%02x:%02x:%02x "
                           "chan %d rssi %d bi %d dtim %d (link-api=%d)",
@@ -4841,7 +4844,17 @@ static int find_and_join(void)
                           g_bssid[0],g_bssid[1],g_bssid[2],g_bssid[3],g_bssid[4],g_bssid[5]);
         /* What varies next: the AKM on this BSS if the other one is on offer
          * and we have not spent it yet, otherwise the BSS. */
-        if (!psk_turn && g_join_akm == WPA_AKM_SAE &&
+        /* ...but NOT when the BSS never answered. "No commit within 1200 ms"
+         * says this radio is not talking to us at all, and asking it the same
+         * question in a different dialect wastes the one thing that is scarce
+         * here: attempts. NimmuNet has such a BSS - e8:d3:eb:.. ACKs the auth
+         * frame at the MAC layer and never answers it, which METAL-FINDINGS
+         * recorded long before this - and burning attempt 2 on it meant the
+         * BSS that DOES complete SAE was only reached on the last try, with
+         * nothing left when its association needed a second go. Fall back on
+         * a BSS that TALKED and refused; skip to the next one when it did
+         * not talk. */
+        if (!psk_turn && g_join_akm == WPA_AKM_SAE && !g_sae_silent &&
             (g_ap_sec.akm & WPA_AKM_PSK)) {
             psk_turn = 1;
             uno_dbg_net_trace("wifi: join: SAE did not complete and this AP also "
