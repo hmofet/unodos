@@ -189,9 +189,25 @@ static void log_raw(const char *s, int n)
  * and a link without unolog - the host harnesses - gets this no-op. The
  * severity is unolog.h's LOG_DEBUG; it is spelled out rather than included so
  * this file keeps consuming nothing from that lane but the one symbol. */
-void unolog_tap(int sev, const char *line);
-__attribute__((weak)) void unolog_tap(int sev, const char *line)
-{ (void)sev; (void)line; }
+/* THE TAP IS REGISTERED AT RUNTIME, NOT RESOLVED BY THE LINKER.
+ *
+ * This used to be a weak definition here that unolog.c overrode, per AGENTS.md
+ * section 2's weak-symbol seam. On ELF that works. On THIS target it does not
+ * reliably: the mingw PE/COFF toolchain emits a weak external as a real local
+ * symbol plus a default resolution -
+ *
+ *     build/uno_debug.o:  T .weak.unolog_tap.dbg_vec0
+ *     build/uno_debug.o:  w unolog_tap
+ *     build/unolog.o:     T unolog_tap
+ *
+ * - and which one a call site ends up bound to depends on link order. The
+ * result was a system log that captured every kernel line in one build and
+ * none at all in the next, from source changes that touched neither file. Two
+ * Surface runs were spent before the symbol table gave it away.
+ *
+ * A pointer somebody sets is not clever, and it cannot silently rebind. */
+static void (*g_log_tap)(int sev, const char *line);
+void uno_dbg_set_log_tap(void (*fn)(int sev, const char *line)) { g_log_tap = fn; }
 #define UNO_DBGLOG_TAP_SEV 7            /* == LOG_DEBUG in unolog.h */
 
 void uno_dbg_log(const char *fmt, ...)
@@ -225,7 +241,7 @@ void uno_dbg_log(const char *fmt, ...)
         if (*body == '[') { while (*body && *body != ']') body++; if (*body) body++; }
         while (*body == ' ') body++;
         line[n - 1] = 0;                       /* n >= 1: we just wrote '\n' */
-        unolog_tap(UNO_DBGLOG_TAP_SEV, body);
+        if (g_log_tap) g_log_tap(UNO_DBGLOG_TAP_SEV, body);
         line[n - 1] = '\n';
     }
 }

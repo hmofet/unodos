@@ -35,6 +35,11 @@ void uno_dbg_on_detach(void);           /* own IDT + LAPIC watchdog (detached)  
 
 /* ---- kernel log ring (also mirrored into the RAM stash) ----------------- */
 void uno_dbg_log(const char *fmt, ...);
+/* Where uno_dbg_log's lines are ALSO sent, once somebody claims the seam.
+ * unolog registers itself from unolog_init(). Registration rather than a weak
+ * symbol because weak externals do not resolve predictably on PE/COFF - see
+ * the note in uno_debug.c. */
+void uno_dbg_set_log_tap(void (*fn)(int sev, const char *line));
 void uno_dbg_check(const char *tag);    /* checkpoint: named marker + TSC; the
                                            watchdog/hang report shows the last
                                            one, so bracket risky waits with it */
@@ -154,6 +159,7 @@ void uno_pc64_inject_pointer(int x, int y, int btn);
 #define uno_dbg_watchdog_start()     ((void)0)
 #define uno_dbg_on_detach()          ((void)0)
 #define uno_dbg_log(...)             ((void)0)
+#define uno_dbg_set_log_tap(fn)      ((void)0)
 #define uno_dbg_check(tag)           ((void)0)
 #define uno_dbg_heartbeat()          ((void)0)
 #define uno_dbg_guard_arm(t)         ((void)0)
