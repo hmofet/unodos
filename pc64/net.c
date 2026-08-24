@@ -1074,6 +1074,27 @@ int net_link(void) { return g_nic ? g_nic->link(g_nic->ctx) : 0; }
  * PHY, 0 until then. Consumed by the shell's LAN-chip tooltip. */
 int  net_link_speed_mbps(void)      { return g_link_mbps; }
 void net_set_link_speed_mbps(int m) { g_link_mbps = m; }
+
+/* PROMISCUOUS, ASKED FOR RATHER THAN ASSUMED.  The appliance bridge puts a
+ * SECOND MAC on the wire (unovdev_net.c), and a NIC only delivers frames for
+ * a MAC that is not its own if its filter accepts everything.  That is a
+ * request the bridge makes, for as long as a guest is running, and NOT a
+ * state to leave a link in: the drain loop in net_poll is unbounded, so on a
+ * busy LAN "every frame on the wire" is real frame time on a slow part - it
+ * was measured at 7x the frames during one boot on a 1.1 GHz Celeron.
+ * A driver that can do it publishes its own setter here, exactly like the
+ * link speed above; a driver that cannot simply never registers, and the
+ * bridge then works only for a guest whose traffic the NIC already accepts. */
+static void (*g_promisc_fn)(int on);
+static int g_promisc;
+void net_set_promisc_fn(void (*fn)(int on)) { g_promisc_fn = fn; }
+int  net_promisc(void) { return g_promisc; }
+void net_set_promisc(int on)
+{
+    if (g_promisc == !!on) return;
+    g_promisc = !!on;
+    if (g_promisc_fn) g_promisc_fn(g_promisc);
+}
 const u8 *net_ip(void) { return MYIP; }
 const u8 *net_gw(void) { return GW; }
 const u8 *net_dns(void) { return DNS; }
@@ -1318,6 +1339,25 @@ __attribute__((weak)) int uno_vnet_bridge_rx(const unsigned char *f, int n)
  * NULL until net_init. */
 uno_nic_t *net_nic(void) { return g_nic; }
 
+/* Is this frame the HOST stack's business?  Until the bridge existed the NIC
+ * answered that in hardware and the question never arose here.  It does now:
+ * a promiscuous link delivers other machines' traffic too, and ip_recv
+ * DELIBERATELY accepts anything addressed anywhere while DHCP is in flight
+ * (there is no IP of ours to match yet) - so without this line another
+ * machine's DHCP reply is one our own client can consume, and the lease we
+ * end up with is not ours.  Broadcast and multicast (bit 0 of the first
+ * octet) belong to both stacks, which is what a switch port does.  An unset
+ * g_mac means we have no identity yet, so nothing can be judged foreign. */
+static int frame_for_us(const u8 *f)
+{
+    int i, have = 0;
+    if (f[0] & 1) return 1;                       /* broadcast + multicast  */
+    for (i = 0; i < 6; i++) have |= g_mac[i];
+    if (!have) return 1;                          /* no MAC yet - accept    */
+    for (i = 0; i < 6; i++) if (f[i] != g_mac[i]) return 0;
+    return 1;
+}
+
 void net_poll(void)
 {
     static u8 rx[FRM];
@@ -1328,6 +1368,7 @@ void net_poll(void)
         u16 type; long ev = n;
         if (n < 14) continue;
         if (uno_vnet_bridge_rx(rx, n)) continue;   /* the guest's alone      */
+        if (!frame_for_us(rx)) continue;           /* somebody else's        */
         g_rx_frames++; unoauto_hook_fire("net.rx", &ev);
         type = rd16(rx + 12);
         if (type == 0x0806) { g_rx_arp++; arp_recv(rx + 14, n - 14); }

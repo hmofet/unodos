@@ -105,4 +105,14 @@ u32  net_rx_ip(void);
 int  net_link_speed_mbps(void);
 void net_set_link_speed_mbps(int mbps);
 
+/* Promiscuous reception, for the appliance bridge only (unovdev_net.c): the
+ * guest keeps its own MAC, so the link has to accept a frame that is not
+ * addressed to us. On while a guest runs, off the rest of the time - it is
+ * not free on a slow machine. A NIC driver that can do it registers its own
+ * setter; one that cannot never calls net_set_promisc_fn and net_set_promisc
+ * is then a no-op. */
+void net_set_promisc_fn(void (*fn)(int on));
+void net_set_promisc(int on);
+int  net_promisc(void);
+
 #endif
