@@ -4919,9 +4919,16 @@ static int find_and_join(void)
     int attempt, idx, bss = 0, psk_turn = 0;
     g_akm_force = 0;
     prog("Looking for the network", 2);
+    /* BEFORE the scan, not after. The scan table protects the pinned BSSID
+     * from eviction, and it can only do that if it knows what the pin IS by
+     * the time the beacons start arriving. Read after the scan, `bssid=` was
+     * loaded into a table that had already decided what to keep - which is
+     * precisely how the pinned BSS came to be missing from a scan that was
+     * asked to prefer it. Nothing here needs the radio; it reads config files
+     * off mounted volumes. */
+    read_bssid_override();
     mvm_scan_cfg();
     mvm_scan_passive(5000);
-    read_bssid_override();
     /* Say whether the pin is IN EFFECT, not merely that one was asked for.
      * This line used to announce the pin before anything had checked that the
      * scan could honour it, and join_pick_nth() then fell back to
