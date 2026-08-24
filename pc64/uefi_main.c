@@ -2527,13 +2527,6 @@ static void power_down(int off)
      * first. uno_acpi_poweroff() restores interrupts before returning now, so
      * it is no longer terminal by construction and no longer has to be last,
      * which was the entire argument for the old order. */
-#ifdef UNO_ACPI
-    if (off) {
-        uno_dbg_log("power: shutdown - trying ACPI S5");
-        uno_acpi_poweroff();        /* returns only if the board ignored it */
-        uno_dbg_log("power: S5 did not take - the firmware is next");
-    }
-#endif
     /* THE LAST CHANCE TO WRITE ANYTHING DOWN, and the reason F14 has survived
      * three metal runs without an explanation.
      *
@@ -2576,6 +2569,20 @@ static void power_down(int off)
           fb_text(x, H / 2 + 10, l2, FB_RGB(150, 170, 225), -1); }
         uno_pc64_present();
     }
+    /* The message is on the screen BEFORE the first terminal mechanism, not
+     * after it. S5 is supposed to RETURN when the board ignores it - and on
+     * the Surface Laptop Go it does not: uacpi_enter_sleep_state() prepared
+     * the state, entered it, and never came back, so a message drawn after
+     * it would never be drawn at all. Costs a sub-second flash on hardware
+     * where the shutdown works, which is the trade this file already made
+     * for the reset path. */
+#ifdef UNO_ACPI
+    if (off) {
+        uno_dbg_log("power: shutdown - trying ACPI S5");
+        uno_acpi_poweroff();        /* returns only if the board ignored it */
+        uno_dbg_log("power: S5 did not take - the firmware is next");
+    }
+#endif
     /* RESET: the firmware's ResetSystem, last, exactly as the ordering note
      * above says it should be - and as, until now, it was NOT. Reordering
      * ResetSystem out of first place moved the call into an `if (off)` block,
