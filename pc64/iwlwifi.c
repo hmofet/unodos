@@ -5134,8 +5134,12 @@ static int iwl_recv(void *ctx, void *pkt, int cap)
  * iwl_link() is the hook because the IP stack polls it throughout the DHCP
  * wait, so this needs no timer, no tick registration and no URC - and it lands
  * in the NET log, which is the only channel this machine reliably has. */
-/* When the rounds fire, in ms since the keys went in. */
-static const unsigned DIAG_AT_MS[] = { 2500, 9000, 20000, 40000 };
+/* When the rounds fire, in ms since the keys went in. THREE OF THEM FIT INSIDE
+ * THE BOOT NET TEST, which is the reading that arrives without anybody driving
+ * the machine: pc64_nettest.c gives DHCP a 12-second budget, so rounds past
+ * that only ever fire on the Control Panel's longer renew loop. The last one is
+ * there for that path. */
+static const unsigned DIAG_AT_MS[] = { 2500, 6000, 10000, 25000 };
 #define DIAG_ROUNDS ((int)(sizeof DIAG_AT_MS / sizeof DIAG_AT_MS[0]))
 
 static void postjoin_diag(void)
