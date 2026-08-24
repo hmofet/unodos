@@ -4762,13 +4762,40 @@ static int join_selected(void)
  * re-sending updates it) and a second SESSION_PROTECTION is accepted too. The
  * one thing that does not survive is the TX queue, hence the free + realloc.
  * Returns 0 when the station is ready to auth again. */
+/* RETARGET FAILS FROM FIVE PLACES AND FOUR OF THEM USED TO BE THE SAME LINE.
+ *
+ * `join: could not re-point the contexts at the next BSS` is all the log ever
+ * said, and `docs/SURFGO-OPEN-ITEMS.md` item 3 is open precisely because
+ * nobody could tell which of the five it was. On the Surface, 2026-08-24
+ * 19:51, the answer was decidable from what was MISSING - the trace after
+ * mvm_txq_alloc() never printed, so the abort was the silent
+ * `if (r32(...)) return -1` above it - and reading a log by the absence of a
+ * line is not a diagnostic, it is archaeology.
+ *
+ * Every exit now names itself and prints the register it judged on. That
+ * register matters more than it looks: the driver treats ANY set bit in
+ * CSR_MSIX_HW_INT_CAUSES_AD as "the firmware asserted", but bit 25 is SW_ERR
+ * and bit 0 is ALIVE and roughly thirty others are ordinary causes
+ * (RF_KILL, CT_KILL, WAKEUP, ...). radio_restart() says as much in its own
+ * comment. So "asserted" here may well be a latched cause that wanted acking,
+ * not a dead firmware - and one line of hex settles which, where a narrowed
+ * test written from a guess would only move the mystery. */
+static int retarget_fail(const char *where)
+{
+    uno_dbg_net_trace("wifi: retarget: FAILED at %s (csr2808=%08x sw_err=%d alive=%d)",
+                      where, r32(CSR_MSIX_HW_INT_CAUSES_AD),
+                      (int)((r32(CSR_MSIX_HW_INT_CAUSES_AD) >> 25) & 1),
+                      (int)(r32(CSR_MSIX_HW_INT_CAUSES_AD) & 1));
+    return -1;
+}
+
 static int retarget_ap(int new_chan)
 {
     int q;
-    if (!fw_has_mld_api()) return -1;              /* legacy path has no equivalent */
+    if (!fw_has_mld_api()) return retarget_fail("no MLD api (legacy path)");
     if (new_chan && new_chan != g_phy_chan) {
         mvm_phy_ctxt(new_chan, 2 /*MODIFY*/);
-        if (r32(CSR_MSIX_HW_INT_CAUSES_AD)) return -1;
+        if (r32(CSR_MSIX_HW_INT_CAUSES_AD)) return retarget_fail("PHY_CONTEXT modify");
     }
     /* The old association's keys are still on this station - drop them BEFORE
      * re-pointing it, or the hw decrypts the new AP's frames with the wrong key
@@ -4777,10 +4804,7 @@ static int retarget_ap(int new_chan)
         mld_sec_key_remove(0, 0);                  /* pairwise */
         if (g_key_gtk_idx >= 0) mld_sec_key_remove(g_key_gtk_idx, 1);
         g_keys_installed = 0; g_key_gtk_idx = -1;
-        if (r32(CSR_MSIX_HW_INT_CAUSES_AD)) {
-            uno_dbg_net_trace("wifi: retarget: SEC_KEY remove asserted the fw");
-            return -1;
-        }
+        if (r32(CSR_MSIX_HW_INT_CAUSES_AD)) return retarget_fail("SEC_KEY remove");
     }
     g_joined = 0; g_wpa_active = 0;                /* leaving the old BSS */
     sae_clear(&g_sae); g_sae_ready = 0;            /* and its SAE secrets */
@@ -4796,16 +4820,14 @@ static int retarget_ap(int new_chan)
      * then is the station dropped. */
     mvm_txq_free(AP_STA_ID, 15);
     mld_sta_remove();
-    if (r32(CSR_MSIX_HW_INT_CAUSES_AD)) {
-        uno_dbg_net_trace("wifi: retarget: STA_REMOVE asserted the fw - only a reboot recovers");
-        return -1;
-    }
+    if (r32(CSR_MSIX_HW_INT_CAUSES_AD)) return retarget_fail("STA_REMOVE");
     mld_sta_cfg(g_bssid, 0, 0);                    /* a NEW station for the new peer */
-    if (r32(CSR_MSIX_HW_INT_CAUSES_AD)) return -1;
+    if (r32(CSR_MSIX_HW_INT_CAUSES_AD)) return retarget_fail("STA_CONFIG (the fresh station)");
     q = mvm_txq_alloc(AP_STA_ID, 15, TXQ_N);
     uno_dbg_net_trace("wifi: retarget: fresh TX queue -> qid=%d csr2808=%08x",
                       q, r32(CSR_MSIX_HW_INT_CAUSES_AD));
-    if (q < 0 || r32(CSR_MSIX_HW_INT_CAUSES_AD)) return -1;
+    if (q < 0) return retarget_fail("txq_alloc gave no queue");
+    if (r32(CSR_MSIX_HW_INT_CAUSES_AD)) return retarget_fail("txq_alloc");
     return 0;
 }
 
