@@ -3715,6 +3715,29 @@ static void handle_eapol(const u8 *eapol, int len)
     u8 reply[600];
     int r;
     if (len <= 0) return;
+    /* AN UNARMED SUPPLICANT HAS NO BUSINESS PROCESSING EAPOL, and until now
+     * it did, which froze the machine.
+     *
+     * On the Surface Laptop Go, 2026-08-24: the 4-way completes, the AP then
+     * deauthenticates with reason 2, and the deauth handler correctly clears
+     * g_wpa_active - but the supplicant object keeps its state, which is
+     * WPA_ST_DONE. The AP restarts the handshake; message 1/4 arrives; a DONE
+     * supplicant answers it with NOTHING ("state 2, reply 0"), so the AP never
+     * receives 2/4, gives up, deauthenticates again - and we meanwhile accept
+     * the retried 3/4, reinstall the keys and announce "4-way handshake DONE"
+     * once more. Twenty-one times in the log, every 200 ms, forever. The join
+     * runs on the shell thread, so the whole desktop sits frozen on
+     * "exchanging keys" while this spins.
+     *
+     * The association is gone the moment the AP says so, and a handshake
+     * without one is meaningless: the join path re-arms when it genuinely
+     * re-associates. Ignore it here, and say so once rather than per frame. */
+    if (!g_wpa_active) {
+        static int moaned;
+        if (!moaned++) uno_dbg_net_trace("wifi: EAPOL after the link went down "
+                                         "- ignored (the supplicant is not armed)");
+        return;
+    }
     r = wpa_sm_rx_eapol(&g_wpa, eapol, len, reply, sizeof reply);
     /* key_info (big-endian, at EAPOL offset 5) says which message this is:
      * bit 3 PAIRWISE, bit 6 INSTALL, bit 7 ACK, bit 8 MIC, bit 12 ENCRYPTED.
@@ -4842,6 +4865,13 @@ static int find_and_join(void)
         else               { if (join_retry() == 0 && g_joined) { g_akm_force = 0; return 0; } }
         uno_dbg_net_trace("wifi: join: %02x:%02x:%02x:%02x:%02x:%02x did not complete",
                           g_bssid[0],g_bssid[1],g_bssid[2],g_bssid[3],g_bssid[4],g_bssid[5]);
+        /* Get this attempt onto the disk NOW. unolog flushes from the shell
+         * main loop, and the join IS the shell main loop for as long as it
+         * runs - so nothing is written for the whole join, and a machine that
+         * wedges mid-join takes every record with it. That is exactly what
+         * happened on 2026-08-24: the log ended at the scan and the 21-round
+         * handshake loop that froze the box left no trace of itself. */
+        { int unolog_flush(void); (void)unolog_flush(); }
         /* What varies next: the AKM on this BSS if the other one is on offer
          * and we have not spent it yet, otherwise the BSS. */
         /* ...but NOT when the BSS never answered. "No commit within 1200 ms"
