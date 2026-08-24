@@ -3928,6 +3928,11 @@ static int g_band_pref;
  * table full of candidates is not a table that needs pruning. And a foreign
  * newcomer must actually BEAT the weakest foreigner to displace it, or a
  * crowded channel just churns the same slot. */
+/* An unrecorded RSSI is 0, and 0 dBm sorts as the STRONGEST signal there is -
+ * which would make the gen1 path's every entry un-evictable. Unknown means
+ * weakest here, because "we never measured it" is not a reason to keep it over
+ * something we did. */
+static int ev_rssi(int r) { return r ? r : -128; }
 static int scan_evict_slot(const u8 *bssid, const u8 *ssid, int ssid_len, int rssi)
 {
     int i, victim = -1, sl = (int)strlen(g_cfg_ssid);
@@ -3937,10 +3942,11 @@ static int scan_evict_slot(const u8 *bssid, const u8 *ssid, int ssid_len, int rs
         if (g_pin_on && !memcmp(g_scan_aps[i].bssid, g_pin_bssid, 6)) continue;
         if (sl > 0 && g_scan_aps[i].ssid_len == sl &&
             !memcmp(g_scan_aps[i].ssid, g_cfg_ssid, sl)) continue;
-        if (victim < 0 || g_scan_aps[i].rssi < g_scan_aps[victim].rssi) victim = i;
+        if (victim < 0 || ev_rssi(g_scan_aps[i].rssi) < ev_rssi(g_scan_aps[victim].rssi))
+            victim = i;
     }
     if (victim < 0) return -1;
-    if (!wanted && rssi <= g_scan_aps[victim].rssi) return -1;
+    if (!wanted && ev_rssi(rssi) <= ev_rssi(g_scan_aps[victim].rssi)) return -1;
     return victim;
 }
 
