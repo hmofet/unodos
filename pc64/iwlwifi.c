@@ -3911,6 +3911,12 @@ static int g_scan_ap_n;
  * 2 = either. `iwl band <24|5|any>` flips it live. */
 static int g_band_pref;
 
+/* An unrecorded RSSI is 0, and 0 dBm sorts as the STRONGEST signal there is -
+ * which would make the gen1 path's every entry un-evictable. Unknown means
+ * weakest here, because "we never measured it" is not a reason to keep it over
+ * something we did. */
+static int ev_rssi(int r) { return r ? r : -128; }
+
 /* Which slot a new BSSID may take when the table is already full, or -1 for
  * "keep what we have".
  *
@@ -3928,11 +3934,6 @@ static int g_band_pref;
  * table full of candidates is not a table that needs pruning. And a foreign
  * newcomer must actually BEAT the weakest foreigner to displace it, or a
  * crowded channel just churns the same slot. */
-/* An unrecorded RSSI is 0, and 0 dBm sorts as the STRONGEST signal there is -
- * which would make the gen1 path's every entry un-evictable. Unknown means
- * weakest here, because "we never measured it" is not a reason to keep it over
- * something we did. */
-static int ev_rssi(int r) { return r ? r : -128; }
 static int scan_evict_slot(const u8 *bssid, const u8 *ssid, int ssid_len, int rssi)
 {
     int i, victim = -1, sl = (int)strlen(g_cfg_ssid);
