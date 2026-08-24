@@ -3856,7 +3856,11 @@ struct sc_reqp  { struct sc_gen gen; struct sc_chanp chan; struct sc_per per; st
 struct sc_umac  { u32 uid; u32 ooc; struct sc_reqp p; } __attribute__((packed));
 typedef char _sc_umac_sz_check[(sizeof(struct sc_umac) == 1940) ? 1 : -1];
 
-#define SCAN_AP_MAX 24
+/* 32, because scan_pick_nth()'s `taken` mask is one unsigned bit per entry and
+ * that is the ceiling. It was 24, and on 2026-08-24 the Surface's scan reported
+ * `aps=24` - the table was FULL, and a full table used to drop every further
+ * BSSID on the floor. See scan_evict_slot(). */
+#define SCAN_AP_MAX 32
 static struct scan_ap { u8 bssid[6]; u8 chan; u8 ssid_len; char ssid[33]; int seen;
                         u16 bi; u8 dtim; signed char rssi;
                         /* What the beacon says about how this BSS may be
@@ -3870,6 +3874,39 @@ static int g_scan_ap_n;
  * mvm_phy_ctxt has only ever been driven on band 2.4 / LMAC 0), 1 = 5 GHz only,
  * 2 = either. `iwl band <24|5|any>` flips it live. */
 static int g_band_pref;
+
+/* Which slot a new BSSID may take when the table is already full, or -1 for
+ * "keep what we have".
+ *
+ * A FULL TABLE USED TO MEAN THE SCAN STOPPED LISTENING, and that is a worse
+ * failure than it sounds because the entries it kept were simply the ones that
+ * beaconed first. On the Surface Laptop Go, 2026-08-24: `scan: aps=24` against
+ * a 24-entry table, `bssid=30:29:2b:70:4f:cf` in DEBUG.CFG, and the join went
+ * to a different BSS entirely - the pinned one had been dropped on the floor,
+ * unrecorded, because two dozen neighbours got there first. The pin looked
+ * broken; the scan table was.
+ *
+ * So evict, but only ever something we would not have chosen anyway: a BSS
+ * that is neither the SSID we are joining nor the pinned BSSID, weakest first.
+ * If every slot is one of ours, keep them all and refuse the newcomer - a
+ * table full of candidates is not a table that needs pruning. And a foreign
+ * newcomer must actually BEAT the weakest foreigner to displace it, or a
+ * crowded channel just churns the same slot. */
+static int scan_evict_slot(const u8 *bssid, const u8 *ssid, int ssid_len, int rssi)
+{
+    int i, victim = -1, sl = (int)strlen(g_cfg_ssid);
+    int wanted = (g_pin_on && !memcmp(bssid, g_pin_bssid, 6)) ||
+                 (sl > 0 && ssid_len == sl && ssid && !memcmp(ssid, g_cfg_ssid, sl));
+    for (i = 0; i < g_scan_ap_n; i++) {
+        if (g_pin_on && !memcmp(g_scan_aps[i].bssid, g_pin_bssid, 6)) continue;
+        if (sl > 0 && g_scan_aps[i].ssid_len == sl &&
+            !memcmp(g_scan_aps[i].ssid, g_cfg_ssid, sl)) continue;
+        if (victim < 0 || g_scan_aps[i].rssi < g_scan_aps[victim].rssi) victim = i;
+    }
+    if (victim < 0) return -1;
+    if (!wanted && rssi <= g_scan_aps[victim].rssi) return -1;
+    return victim;
+}
 
 /* Record one beacon / probe response. `rssi` and `dchan` come from the RX
  * descriptor: dchan is the channel the scanner was PARKED ON, which is ground
@@ -3919,12 +3956,15 @@ static void scan_record_beacon(const u8 *frame, int fl, int rssi, int dchan)
             if (rssi && rssi > g_scan_aps[i].rssi) g_scan_aps[i].rssi = (signed char)rssi;
             if (sec.has_rsn) g_scan_aps[i].sec = sec;
             return; }
-    if (g_scan_ap_n >= SCAN_AP_MAX) return;
-    { struct scan_ap *a = &g_scan_aps[g_scan_ap_n++];
+    { int slot = g_scan_ap_n;
+      if (slot >= SCAN_AP_MAX) { slot = scan_evict_slot(bssid, ssid, ssid_len, rssi);
+                                 if (slot < 0) return; }
+      else g_scan_ap_n++;
+    { struct scan_ap *a = &g_scan_aps[slot];
       memcpy(a->bssid, bssid, 6); a->chan = chan; a->seen = 1; a->ssid_len = (u8)ssid_len;
       a->bi = bi; a->dtim = dtim; a->rssi = (signed char)rssi; a->sec = sec;
       if (ssid && ssid_len <= 32) { memcpy(a->ssid, ssid, ssid_len); a->ssid[ssid_len] = 0; }
-      else a->ssid[0] = 0; }
+      else a->ssid[0] = 0; } }
 }
 
 static const u8 g_scan_tmpl[1940] = {
@@ -4094,7 +4134,7 @@ static int band_ok(int chan)
  * every time). */
 static int scan_pick_nth(int n)
 {
-    unsigned taken = 0;                 /* SCAN_AP_MAX <= 24, one bit each */
+    unsigned taken = 0;                 /* one bit each - this caps SCAN_AP_MAX at 32 */
     int i, chosen = -1, sl = (int)strlen(g_cfg_ssid), pass, k;
     for (k = 0; k <= n; k++) {
         int best = -1;
@@ -4119,12 +4159,17 @@ static int scan_pick_nth(int n)
 /* Candidate order for the join: a pinned BSSID first if the scan saw it, then
  * everything else strongest-first. With no pin this is exactly scan_pick_nth,
  * so the stock behaviour is unchanged. */
+static int pin_scan_idx(void)
+{
+    int i;
+    if (!g_pin_on) return -1;
+    for (i = 0; i < g_scan_ap_n; i++)
+        if (!memcmp(g_scan_aps[i].bssid, g_pin_bssid, 6)) return i;
+    return -1;
+}
 static int join_pick_nth(int n)
 {
-    int p = -1, i, idx, want, k;
-    if (g_pin_on)
-        for (i = 0; i < g_scan_ap_n; i++)
-            if (!memcmp(g_scan_aps[i].bssid, g_pin_bssid, 6)) { p = i; break; }
+    int p = pin_scan_idx(), idx, want, k;
     if (p < 0) return scan_pick_nth(n);
     if (n == 0) return p;
     for (want = n - 1, k = 0; ; k++) {
@@ -4835,11 +4880,28 @@ static int find_and_join(void)
     mvm_scan_cfg();
     mvm_scan_passive(5000);
     read_bssid_override();
-    if (g_pin_on)
-        uno_dbg_net_trace("wifi: join: bssid= pins the first attempt to "
-                          "%02x:%02x:%02x:%02x:%02x:%02x",
-                          g_pin_bssid[0],g_pin_bssid[1],g_pin_bssid[2],
-                          g_pin_bssid[3],g_pin_bssid[4],g_pin_bssid[5]);
+    /* Say whether the pin is IN EFFECT, not merely that one was asked for.
+     * This line used to announce the pin before anything had checked that the
+     * scan could honour it, and join_pick_nth() then fell back to
+     * strongest-first without a word. On the Surface that read as "pinned to
+     * 30:29:2b:70:4f:cf" followed immediately by "try 1 ... e8:d3:eb:47:4e:cf"
+     * - the exact BSS the pin existed to avoid - and cost a metal run before
+     * anyone noticed the two lines disagreed. */
+    if (g_pin_on) {
+        int p = pin_scan_idx();
+        if (p >= 0)
+            uno_dbg_net_trace("wifi: join: bssid= pins the first attempt to "
+                              "%02x:%02x:%02x:%02x:%02x:%02x (chan %d rssi %d)",
+                              g_pin_bssid[0],g_pin_bssid[1],g_pin_bssid[2],
+                              g_pin_bssid[3],g_pin_bssid[4],g_pin_bssid[5],
+                              g_scan_aps[p].chan, g_scan_aps[p].rssi);
+        else
+            uno_dbg_net_trace("wifi: join: bssid=%02x:%02x:%02x:%02x:%02x:%02x is NOT in "
+                              "this scan's %d APs - the pin is NOT in effect and the join "
+                              "falls back to strongest-first ('iwl scan' lists what was seen)",
+                              g_pin_bssid[0],g_pin_bssid[1],g_pin_bssid[2],
+                              g_pin_bssid[3],g_pin_bssid[4],g_pin_bssid[5], g_scan_ap_n);
+    }
     for (attempt = 0; attempt < JOIN_TRIES; attempt++) {
         idx = join_pick_nth(bss);
         if (idx < 0) {
