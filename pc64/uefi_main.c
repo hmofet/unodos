@@ -2511,18 +2511,29 @@ static void power_down(int off)
 #endif
     }
 
-    /* ResetSystem is a RUNTIME service, so this is legal on both sides of
-       ExitBootServices while we stay in physical addressing. For POWER-OFF it
-       is still first (see above); for RESET it is now the last resort, and it
-       may simply never return - which is why the operator message below is
-       drawn BEFORE it rather than after. */
+    /* POWER-OFF: ACPI S5 FIRST, the firmware LAST - the same order the reset
+     * path above uses, and now for the same proven reason.
+     *
+     * This used to call ResetSystem(EfiResetShutdown) first, on the recorded
+     * evidence that it RETURNS on the machine that could not power off, so
+     * everything after it would still run. That evidence came from an ATTACHED
+     * Surface Laptop Go. On 2026-08-23 the same laptop, DETACHED, showed the
+     * opposite: SYSTEM.LOG ends at "unolog stopping", which is the FIRST line
+     * power_down() writes, and nothing downstream ever executed. The firmware
+     * call does not ignore the request and return here - it never comes back,
+     * exactly as ResetSystem(EfiResetCold) already does on this hardware.
+     *
+     * So the ACPI S5 write, which is ours and always returns on failure, goes
+     * first. uno_acpi_poweroff() restores interrupts before returning now, so
+     * it is no longer terminal by construction and no longer has to be last,
+     * which was the entire argument for the old order. */
+#ifdef UNO_ACPI
     if (off) {
-        uno_dbg_log("power: ResetSystem(Shutdown)");
-        rts()->ResetSystem(EfiResetShutdown, 0, 0, 0);
-        uno_dbg_log("power: ResetSystem returned - firmware ignored it");
-        ulog_err(LF_KERNEL, "power: firmware ResetSystem(Shutdown) returned - "
-                            "it will not power this machine off");
+        uno_dbg_log("power: shutdown - trying ACPI S5");
+        uno_acpi_poweroff();        /* returns only if the board ignored it */
+        uno_dbg_log("power: S5 did not take - the firmware is next");
     }
+#endif
     /* THE LAST CHANCE TO WRITE ANYTHING DOWN, and the reason F14 has survived
      * three metal runs without an explanation.
      *
@@ -2541,7 +2552,7 @@ static void power_down(int off)
      * default level, so a production machine that will not switch off leaves
      * the same account a debug one does. */
     ulog_err(LF_KERNEL, "power: %s is the last mechanism left",
-             off ? "ACPI S5" : "the firmware's ResetSystem(Cold)");
+             "the firmware's ResetSystem - which on some hardware never returns");
     unolog_flush();
     /* SAY SO ON THE SCREEN, and say it BEFORE the last mechanism runs.
      *
@@ -2579,13 +2590,16 @@ static void power_down(int off)
         rts()->ResetSystem(EfiResetCold, 0, 0, 0);
         uno_dbg_log("power: ResetSystem returned - firmware ignored it too");
     }
-#ifdef UNO_ACPI
-    /* POWER-OFF: S5 stays LAST, per the ordering note above. */
+    /* POWER-OFF: the firmware's ResetSystem, LAST - see the ordering note
+     * above. It may never return on this hardware, which is exactly why the
+     * operator message is already on screen and S5 has already had its turn. */
     if (off) {
-        uno_dbg_log("power: trying ACPI S5");
-        uno_acpi_poweroff();
+        uno_dbg_log("power: ResetSystem(Shutdown), the last mechanism left");
+        rts()->ResetSystem(EfiResetShutdown, 0, 0, 0);
+        ulog_err(LF_KERNEL, "power: firmware ResetSystem(Shutdown) returned - "
+                            "nothing left to try");
+        unolog_flush();
     }
-#endif
     for (;;) __asm__ volatile ("hlt");
 }
 
