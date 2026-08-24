@@ -79,6 +79,36 @@ dropped. `iwl netres` reports `[tx=.. rx=.. arp=.. ip=..]`; on the X1 Carbon a
 working lease reads `dhcp=LEASE ip=... ping=3/3` (`pc64/WIFI-F12-HANDOFF.md`
 round 25).
 
+### 2026-08-24, branch `surfgo-dhcp`: half of that is now known, and it moves the suspect
+
+Read out of `CRASH/SURFGO` and `LOGS/SYSTEM.LOG` from the 14:40 boot, before
+touching any code.
+
+- **DISCOVER frames do leave the NIC.** `TX q=1 flen=309` every ~1.5 s for 32
+  seconds, and 309 is exactly what this build assembles (24 header + 8 SNAP +
+  277 of IP/UDP/BOOTP). Every one of them is ACKed - `ack_fail=0`. That half of
+  the open question is closed.
+- **Nothing whatsoever comes back.** Not a DHCP OFFER, not an ARP, not a
+  neighbour's broadcast, not one data frame from any BSS on the channel, for
+  the ~100 seconds between the keys going in and the shutdown. The per-frame
+  `RXDATA` trace is armed to 16 frames at key install, spent 2 of them on the
+  AP's re-sent EAPOL 1/4 and 3/4, and **printed nothing for the remaining 14
+  slots**. On a 2.4 GHz mesh channel that is not a quiet minute.
+- So the GTK is not yet the leading suspect, because **a wrong group key still
+  receives frames**. `prot` would climb with `dec` at zero; it read `prot=0`.
+  What this looks like instead is a receive path that goes deaf when CCMP comes
+  up - or an AP that associates us and forwards nothing.
+- **The one reading we had was taken 2.5 s in, and its verdict came from
+  beacons.** `from_ap` counts every frame the AP transmits, beacons included,
+  so "traffic flows BOTH ways - the link is fine and DHCP itself is the
+  problem" was drawn from an AP announcing itself. The diagnosis now runs four
+  rounds (2.5/9/20/40 s) and prints the receive funnel whole - `rb`, `mpdu`,
+  `from_ap`, `bcn`, `uni`, `grp` - because which step stops naming a different
+  subsystem is the entire point.
+- **The retarget on the run that reached DHCP was clean** (`STA_REMOVE` then a
+  fresh `STA_CONFIG`, not a re-point), and the association that succeeded
+  negotiated `mfp=0`. Neither the stale-station fault nor PMF is in this.
+
 ## 3. `retarget_ap()` cannot re-point after a successful association
 
 **Symptom.** `join: could not re-point the contexts at the next BSS`, on the
@@ -96,6 +126,30 @@ the air and deauthenticates every completed handshake with reason 7. It is
 already described in `iwlwifi.c` two screens above the join loop. `bssid=` in
 **DEBUG.CFG** pins the join past it - no rebuild and no credentials needed,
 which makes it the cheapest way to take the mesh out of an experiment.
+
+### 2026-08-24, branch `surfgo-dhcp`: the pin was not working, and had not been
+
+The cheapest lever in this document was broken, which is worth knowing before
+anyone plans an experiment around it. On the 14:40 boot, two consecutive lines:
+
+```
+wifi: join: bssid= pins the first attempt to 30:29:2b:70:4f:cf
+wifi: join: try 1/3 "NimmuNet" bssid e8:d3:eb:47:4e:cf chan 1 ...
+```
+
+It joined the exact BSS the pin exists to route around. Three faults, all fixed
+on `surfgo-dhcp`:
+
+- **`scan: aps=24` against a 24-entry table** is a table that was FULL, and a
+  full table used to drop every further BSSID unrecorded, first come first
+  served. The pinned BSS was simply never in the results. It now evicts -
+  never a BSS carrying our SSID, never the pinned one - and `SCAN_AP_MAX` is 32,
+  the real ceiling (`scan_pick_nth`'s `taken` is one bit per entry).
+- **`read_bssid_override()` ran AFTER the scan**, so throughout it `g_pin_on`
+  was 0 and nothing knew which BSSID to protect. It reads config files off
+  mounted volumes and needs nothing from the radio; it is now first.
+- **The log announced a pin nobody had checked was honourable.** It now says
+  whether the pin is in effect, and names the scan's AP count when it is not.
 
 ## 4. F14: this machine cannot power itself off
 
