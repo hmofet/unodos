@@ -254,14 +254,26 @@ static uno_nic_t *bridge_nic(void)
     return B.nic;
 }
 
+/* The wire's own frame filter (net.c).  A NIC accepts frames for ITS mac; the
+ * guest has a different one, so for as long as a guest is on the wire the link
+ * has to accept everything.  It is switched back off when the guest stops,
+ * because an always-promiscuous link makes every frame on the LAN into work
+ * for net_poll - which on a slow machine is paid in desktop frame time. */
+void net_set_promisc(int on);
+
 void uno_vnet_bridge_start(uno_nic_t *nic)
 {
     B.nic = nic;                     /* NULL = resolve it when it exists     */
     B.active = 1;
     B.tx = B.rx = B.bcast = B.dropped = 0;
+    net_set_promisc(1);
 }
 
-void uno_vnet_bridge_stop(void) { B.active = 0; B.nic = 0; }
+void uno_vnet_bridge_stop(void)
+{
+    net_set_promisc(0);
+    B.active = 0; B.nic = 0;
+}
 int  uno_vnet_bridge_active(void) { return B.active; }
 
 /* Guest -> wire.  1 = it went out; 0 leaves the caller to fall back to the
