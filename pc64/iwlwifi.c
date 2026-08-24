@@ -4777,7 +4777,6 @@ static int join_retry(void)
  * MAC layer, never answers it, and deauths after the assoc request - every
  * time. Picking on RSSI alone made a stock join a coin flip. */
 #define JOIN_TRIES 3
-static int join_pass(void);
 
 /* Try the network the way it prefers, and if that cannot be made to work, try
  * it the other way it offered.
@@ -4798,27 +4797,8 @@ static int join_pass(void);
  * nothing to fall back TO and the second pass is skipped. */
 static int find_and_join(void)
 {
-    int r;
+    int attempt, idx, bss = 0, psk_turn = 0;
     g_akm_force = 0;
-    r = join_pass();
-    if (r == 0) return 0;
-    if (!(g_ap_sec.akm & WPA_AKM_SAE) || !(g_ap_sec.akm & WPA_AKM_PSK))
-        return r;                       /* nothing else was on offer */
-    if (r32(CSR_MSIX_HW_INT_CAUSES_AD)) {
-        uno_dbg_net_trace("wifi: join: fw asserted - cannot try WPA2 without a reboot");
-        return r;
-    }
-    uno_dbg_net_trace("wifi: join: SAE did not complete and this AP also offers "
-                      "WPA2-PSK - trying that");
-    g_akm_force = WPA_AKM_PSK;
-    r = join_pass();
-    g_akm_force = 0;
-    return r;
-}
-
-static int join_pass(void)
-{
-    int attempt, idx;
     prog("Looking for the network", 2);
     mvm_scan_cfg();
     mvm_scan_passive(5000);
@@ -4829,13 +4809,25 @@ static int join_pass(void)
                           g_pin_bssid[0],g_pin_bssid[1],g_pin_bssid[2],
                           g_pin_bssid[3],g_pin_bssid[4],g_pin_bssid[5]);
     for (attempt = 0; attempt < JOIN_TRIES; attempt++) {
-        idx = join_pick_nth(attempt);
+        idx = join_pick_nth(bss);
         if (idx < 0) {
-            uno_dbg_net_trace(attempt ? "wifi: join: no further \"%s\" candidate after %d tries"
-                                      : "wifi: join: SSID \"%s\" not found in %d scanned APs",
-                              g_cfg_ssid, attempt ? attempt : g_scan_ap_n);
+            uno_dbg_net_trace(bss ? "wifi: join: no further \"%s\" candidate after %d BSS"
+                                  : "wifi: join: SSID \"%s\" not found in %d scanned APs",
+                              g_cfg_ssid, bss ? bss : g_scan_ap_n);
             return -1;
         }
+        /* SAE first on a BSS, then - if the AP also offered PSK - the SAME
+         * BSS with PSK, before moving to the next one. Varying the AKM
+         * before the BSS matters because of what the firmware does under
+         * repeated attempts: on 2026-08-23 three SAE tries against three
+         * BSSs of one network ended with "session-prot asserted the fw", and
+         * after a firmware assert every scan returns rb_total=0 and the
+         * radio is dead until reboot. A fallback that waits for all the BSSs
+         * to fail therefore never runs at all. It is also the better
+         * ordering on its own merits: "the AP never answered our commit" is
+         * a property of the AKM, not of the BSS, and the evidence agreed -
+         * all three BSSs failed identically. */
+        g_akm_force = psk_turn ? WPA_AKM_PSK : 0;
         select_ap(idx);
         uno_dbg_net_trace("wifi: join: try %d/%d \"%s\" bssid %02x:%02x:%02x:%02x:%02x:%02x "
                           "chan %d rssi %d bi %d dtim %d (link-api=%d)",
@@ -4843,10 +4835,21 @@ static int join_pass(void)
                           g_bssid[0],g_bssid[1],g_bssid[2],g_bssid[3],g_bssid[4],g_bssid[5],
                           g_join_chan, g_scan_aps[idx].rssi, g_join_bi, g_join_dtim,
                           fw_has_mld_api());
-        if (attempt == 0) { if (join_selected() == 0 && g_joined) return 0; }
-        else               { if (join_retry() == 0 && g_joined) return 0; }
+        if (attempt == 0) { if (join_selected() == 0 && g_joined) { g_akm_force = 0; return 0; } }
+        else               { if (join_retry() == 0 && g_joined) { g_akm_force = 0; return 0; } }
         uno_dbg_net_trace("wifi: join: %02x:%02x:%02x:%02x:%02x:%02x did not complete",
                           g_bssid[0],g_bssid[1],g_bssid[2],g_bssid[3],g_bssid[4],g_bssid[5]);
+        /* What varies next: the AKM on this BSS if the other one is on offer
+         * and we have not spent it yet, otherwise the BSS. */
+        if (!psk_turn && g_join_akm == WPA_AKM_SAE &&
+            (g_ap_sec.akm & WPA_AKM_PSK)) {
+            psk_turn = 1;
+            uno_dbg_net_trace("wifi: join: SAE did not complete and this AP also "
+                              "offers WPA2-PSK - same BSS, the other AKM");
+        } else {
+            psk_turn = 0;
+            bss++;
+        }
         if (attempt + 1 >= JOIN_TRIES) break;
         if (r32(CSR_MSIX_HW_INT_CAUSES_AD)) {
             /* the fw died somewhere in that attempt; re-pointing cannot work and
