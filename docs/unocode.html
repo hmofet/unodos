@@ -74,7 +74,7 @@
     <span class="logo"><i></i><i></i><i></i><i></i></span>
     <span><b>UnoDOS <span style="color:var(--accent-2)">pc64</span></b><span class="sub">User manual</span></span>
   </a>
-  <ul class="nav"><li><a class="" href="index.html">Overview</a></li><li><a class="" href="try-browser.html">Try it in your browser</a></li><li><a class="" href="getting-started.html">Getting started</a></li><li><a class="" href="desktop.html">The desktop</a></li><li><a class="" href="windows.html">Windows &amp; desktops</a></li><li><a class="" href="appearance.html">Themes &amp; appearance</a></li><li><a class="" href="apps.html">Applications</a></li><li><a class="" href="office.html">UnoOffice</a></li><li><a class="" href="code.html">UnoCode</a></li><li><a class="" href="browser.html">Web browser</a></li><li><a class="" href="ssh.html">SSH client</a></li><li><a class="" href="networking.html">Networking</a></li><li><a class="" href="logging.html">System log</a></li><li><a class="" href="appliances.html">Appliances</a></li><li><a class="" href="ports.html">The UnoDOS family</a></li><li class="sec">Developer</li><li><a class="" href="developer.html">Overview &amp; architecture</a></li><li><a class="" href="studio.html">Studio: the built-in IDE</a></li><li><a class="active" href="unocode.html">UnoCode: the VS Code-class editor</a></li><li><a class="" href="dev-apps.html">Writing apps</a></li><li><a class="" href="dev-python.html">Python apps</a></li><li><a class="" href="dev-samples.html">Sample programs</a></li><li><a class="" href="dev-sdk-c.html">UnoC SDK reference</a></li><li><a class="" href="dev-sdk-python.html">Python SDK reference</a></li><li><a class="" href="dev-api.html">API reference</a></li><li><a class="" href="dev-build.html">Building &amp; tooling</a></li><li><a class="" href="dev-remote.html">Remote control &amp; automation</a></li></ul>
+  <ul class="nav"><li><a class="" href="index.html">Overview</a></li><li><a class="" href="try-browser.html">Try it in your browser</a></li><li><a class="" href="getting-started.html">Getting started</a></li><li><a class="" href="desktop.html">The desktop</a></li><li><a class="" href="windows.html">Windows &amp; desktops</a></li><li><a class="" href="appearance.html">Themes &amp; appearance</a></li><li><a class="" href="apps.html">Applications</a></li><li><a class="" href="office.html">UnoOffice</a></li><li><a class="" href="code.html">UnoCode</a></li><li><a class="" href="browser.html">Web browser</a></li><li><a class="" href="ssh.html">SSH client</a></li><li><a class="" href="transfer.html">UnoTransfer</a></li><li><a class="" href="networking.html">Networking</a></li><li><a class="" href="logging.html">System log</a></li><li><a class="" href="appliances.html">Appliances</a></li><li><a class="" href="ports.html">The UnoDOS family</a></li><li class="sec">Developer</li><li><a class="" href="developer.html">Overview &amp; architecture</a></li><li><a class="" href="studio.html">Studio: the built-in IDE</a></li><li><a class="active" href="unocode.html">UnoCode: the VS Code-class editor</a></li><li><a class="" href="dev-apps.html">Writing apps</a></li><li><a class="" href="dev-python.html">Python apps</a></li><li><a class="" href="dev-samples.html">Sample programs</a></li><li><a class="" href="dev-sdk-c.html">UnoC SDK reference</a></li><li><a class="" href="dev-sdk-python.html">Python SDK reference</a></li><li><a class="" href="dev-api.html">API reference</a></li><li><a class="" href="dev-build.html">Building &amp; tooling</a></li><li><a class="" href="dev-remote.html">Remote control &amp; automation</a></li></ul>
   <div class="side-foot">
     <a href="https://github.com/hmofet/unodos" target="_blank" rel="noopener">GitHub&nbsp;&rsaquo; hmofet/unodos</a><br>
     <a href="#" onclick="__t();return false">Toggle light / dark</a>
@@ -229,10 +229,23 @@ function activate(context) {
 exports.activate = activate;</code></pre>
 <figure><button type="button" class="zoom" data-full="assets/img/unocode_ext_run.png" aria-label="Enlarge: That extension&#x27;s command, run from the palette. It was not loaded until the moment the command was chosen: the manifest declared it, so it was in the palette from startup, and choosing it read the file, ran it and called the handler it registered. The message on the right is the extension talking."><img src="assets/img/unocode_ext_run.png" alt="That extension&#x27;s command, run from the palette. It was not loaded until the moment the command was chosen: the manifest declared it, so it was in the palette from startup, and choosing it read the file, ran it and called the handler it registered. The message on the right is the extension talking." loading="lazy"></button><figcaption>That extension's command, run from the palette. It was not loaded until the moment the command was chosen: the manifest declared it, so it was in the palette from startup, and choosing it read the file, ran it and called the handler it registered. The message on the right is the extension talking.</figcaption></figure>
 <div class="note"><b>A runaway extension is stopped, not fatal</b>An extension that misbehaves cannot take the machine with it. Every call into an extension runs on a <b>step budget</b>; one that does not finish is stopped, reported and switched off. On a system with no preemption that is not a nicety - it is the reason it is safe to run code somebody else wrote at all.</div>
-<p>Two things about the interface are deliberately different from Visual Studio Code, and both are stated
-rather than hidden: calls that would return a promise return an object with <code>.then()</code> instead
-(there is no event loop to build a promise on), and <code>require()</code> resolves <code>'vscode'</code>
-and nothing else (there is no package manager to resolve anything else against).</p>
+<p>One thing about the interface is deliberately different from Visual Studio Code, and it is stated
+rather than hidden: <code>require()</code> resolves <code>'vscode'</code> and nothing else, because there
+is no package manager to resolve anything else against.</p>
+<div class="note tip"><b>Promises are real now</b>The asynchronous calls in this API return <b>real Promises</b>, and <code>async</code>/<code>await</code> work. That was not true at first - the interpreter had no microtask queue, so the calls returned an object with a <code>.then()</code> on it and the manual said so. It has one now, and <code>await</code> genuinely suspends, so an extension written the way a VS Code extension is written behaves the way it expects.</div>
+
+<h2 id="lsp">Language servers</h2>
+<p>UnoCode contains a <strong>Language Server Protocol client</strong>: a server per language, spoken to
+in JSON-RPC over pipes, feeding diagnostics, completions, hover, go-to-definition, find-references,
+rename and format back into the editor. It is configured from settings, one command line per language,
+and an empty command switches one off.</p>
+<div class="note warn"><b>Not on pc64, and why</b><b>None of that runs on pc64.</b> A language server is a separate program and pc64 has no processes to start one in, so the client asks the platform, is told there is nothing, and never starts anything - at no cost, and with the editor's own grammar-derived completions untouched. This section describes a capability that is real in the shared UnoCode codebase and inert on this platform. It becomes live here if and when UnoDOS grows a way to run a child program.</div>
+<p>Two decisions in the client are worth knowing if you are reading the source. It syncs the
+<strong>whole document</strong> after a pause in typing rather than sending incremental edits, because
+incremental sync means client and server each keep a copy and one mis-ranged edit makes them diverge
+silently. And a server that dies is <strong>restarted</strong> with a widening delay and has its
+documents re-opened on the replacement, because a language server exiting is ordinary rather than
+exceptional.</p>
 
 <h2 id="settings">Settings and keyboard shortcuts</h2>
 <p>Both are files, both are yours to edit, and both are the formats Visual Studio Code uses - including
@@ -263,8 +276,11 @@ binding. Yours win over an extension's, which win over the defaults.</p>
 <p>Honestly, so you are not looking for them:</p>
 <ul>
   <li><strong>No word wrap.</strong> Long lines scroll sideways.</li>
-  <li><strong>No hover documentation or go-to-definition</strong>, and extensions cannot add them - the
-      only language feature an extension can contribute is completions.</li>
+  <li><strong>No language server runs on this machine</strong>, so there is no hover documentation, no
+      go-to-definition and no rename-across-a-project here. UnoCode <em>has</em> a language-server client -
+      see <a href="#lsp">Language servers</a> below - but a server is a separate program, and pc64 has no
+      way to start one. Completions come from the language's keywords, the words already in the file and
+      any snippets, which is what you get.</li>
   <li><strong>Source Control tracks your unsaved edits</strong> against the file as it was opened, and
       marks changed lines in the gutter. There is no repository on this machine and it says so rather
       than pretending.</li>

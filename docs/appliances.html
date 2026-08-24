@@ -74,7 +74,7 @@
     <span class="logo"><i></i><i></i><i></i><i></i></span>
     <span><b>UnoDOS <span style="color:var(--accent-2)">pc64</span></b><span class="sub">User manual</span></span>
   </a>
-  <ul class="nav"><li><a class="" href="index.html">Overview</a></li><li><a class="" href="try-browser.html">Try it in your browser</a></li><li><a class="" href="getting-started.html">Getting started</a></li><li><a class="" href="desktop.html">The desktop</a></li><li><a class="" href="windows.html">Windows &amp; desktops</a></li><li><a class="" href="appearance.html">Themes &amp; appearance</a></li><li><a class="" href="apps.html">Applications</a></li><li><a class="" href="office.html">UnoOffice</a></li><li><a class="" href="code.html">UnoCode</a></li><li><a class="" href="browser.html">Web browser</a></li><li><a class="" href="ssh.html">SSH client</a></li><li><a class="" href="networking.html">Networking</a></li><li><a class="" href="logging.html">System log</a></li><li><a class="active" href="appliances.html">Appliances</a></li><li><a class="" href="ports.html">The UnoDOS family</a></li><li class="sec">Developer</li><li><a class="" href="developer.html">Overview &amp; architecture</a></li><li><a class="" href="studio.html">Studio: the built-in IDE</a></li><li><a class="" href="unocode.html">UnoCode: the VS Code-class editor</a></li><li><a class="" href="dev-apps.html">Writing apps</a></li><li><a class="" href="dev-python.html">Python apps</a></li><li><a class="" href="dev-samples.html">Sample programs</a></li><li><a class="" href="dev-sdk-c.html">UnoC SDK reference</a></li><li><a class="" href="dev-sdk-python.html">Python SDK reference</a></li><li><a class="" href="dev-api.html">API reference</a></li><li><a class="" href="dev-build.html">Building &amp; tooling</a></li><li><a class="" href="dev-remote.html">Remote control &amp; automation</a></li></ul>
+  <ul class="nav"><li><a class="" href="index.html">Overview</a></li><li><a class="" href="try-browser.html">Try it in your browser</a></li><li><a class="" href="getting-started.html">Getting started</a></li><li><a class="" href="desktop.html">The desktop</a></li><li><a class="" href="windows.html">Windows &amp; desktops</a></li><li><a class="" href="appearance.html">Themes &amp; appearance</a></li><li><a class="" href="apps.html">Applications</a></li><li><a class="" href="office.html">UnoOffice</a></li><li><a class="" href="code.html">UnoCode</a></li><li><a class="" href="browser.html">Web browser</a></li><li><a class="" href="ssh.html">SSH client</a></li><li><a class="" href="transfer.html">UnoTransfer</a></li><li><a class="" href="networking.html">Networking</a></li><li><a class="" href="logging.html">System log</a></li><li><a class="active" href="appliances.html">Appliances</a></li><li><a class="" href="ports.html">The UnoDOS family</a></li><li class="sec">Developer</li><li><a class="" href="developer.html">Overview &amp; architecture</a></li><li><a class="" href="studio.html">Studio: the built-in IDE</a></li><li><a class="" href="unocode.html">UnoCode: the VS Code-class editor</a></li><li><a class="" href="dev-apps.html">Writing apps</a></li><li><a class="" href="dev-python.html">Python apps</a></li><li><a class="" href="dev-samples.html">Sample programs</a></li><li><a class="" href="dev-sdk-c.html">UnoC SDK reference</a></li><li><a class="" href="dev-sdk-python.html">Python SDK reference</a></li><li><a class="" href="dev-api.html">API reference</a></li><li><a class="" href="dev-build.html">Building &amp; tooling</a></li><li><a class="" href="dev-remote.html">Remote control &amp; automation</a></li></ul>
   <div class="side-foot">
     <a href="https://github.com/hmofet/unodos" target="_blank" rel="noopener">GitHub&nbsp;&rsaquo; hmofet/unodos</a><br>
     <a href="#" onclick="__t();return false">Toggle light / dark</a>
@@ -84,22 +84,36 @@
 
 <h1>Appliances</h1>
 <p class="lede">UnoDOS can run another operating system inside a window on the desktop. An
-<strong>appliance</strong> is a Linux kernel that UnoDOS boots itself, on the same machine, at the same
-time, with a console you can type into.</p>
+<strong>appliance</strong> is a Linux system that UnoDOS boots itself, on the same machine, at the same
+time - with a screen you can see, a keyboard it answers, and a connection of its own on your real
+network. Chromium runs in one.</p>
 
-<div class="note warn"><b>A preview, honestly labelled</b>This is the newest thing in UnoDOS and the least finished. It works, and what it does it does for real - but it asks you to supply the kernel, it runs one appliance at a time, and it has only been proven on Intel machines. Read <a href="#limits">What it cannot do yet</a> before you plan anything around it.</div>
+<div class="note warn"><b>A preview, honestly labelled</b>This is the newest part of UnoDOS and the least finished. Everything described here works and none of it is simulated - but it runs one appliance at a time, it has only been proven on Intel machines, and the browser appliance is built on a Chromium with a known crash in it. Read <a href="#limits">What it cannot do yet</a> before you plan anything around it.</div>
 
 <h2 id="what">What it actually does</h2>
-<p>Open <strong>Appliances</strong> from the Start menu or its desktop icon. It has two views, and
-<kbd>Tab</kbd> switches between them: a <strong>list</strong> of the appliances this machine has, and
-the <strong>console</strong> of the one that is running.</p>
+<p>Open <strong>Appliances</strong> from the Start menu or its desktop icon. It has three views, and
+<kbd>Tab</kbd> moves between them: a <strong>list</strong> of the appliances this machine has, the
+<strong>console</strong> of the one that is running, and its <strong>display</strong>.</p>
 <figure><button type="button" class="zoom" data-full="assets/img/appliances.png" aria-label="Enlarge: Appliances on a machine that has none yet: New makes one, and the line above the buttons is the status - here no appliance running, and on a machine that cannot host a guest at all, the reason why."><img src="assets/img/appliances.png" alt="Appliances on a machine that has none yet: New makes one, and the line above the buttons is the status - here no appliance running, and on a machine that cannot host a guest at all, the reason why." loading="lazy"></button><figcaption><b>Appliances</b> on a machine that has none yet: <b>New</b> makes one, and the line above the buttons is the status - here <i>no appliance running</i>, and on a machine that cannot host a guest at all, the reason why.</figcaption></figure>
-<p>The console is the part that matters. What you type goes into the guest's serial port at exactly
-the place a real keystroke would arrive, so the guest's own driver wakes up and its own shell reads the
-byte. Nothing is being simulated at the top: a Linux shell reads your command and answers it.</p>
-<p>On the way there UnoDOS also gives the guest a clock and an interrupt controller of its own, memory
-it cannot see out of, a disk (an ordinary file on a UnoDOS volume, which the guest mounts as a real
-filesystem) and a network interface it can bring up and ping over.</p>
+<p>The console is the guest's serial port. What you type goes in at exactly the place a real keystroke
+would arrive, so the guest's own driver wakes up and its own shell reads the byte. Nothing is being
+simulated at the top: a Linux shell reads your command and answers it.</p>
+<figure><button type="button" class="zoom" data-full="assets/img/appliance_display.png" aria-label="Enlarge: The Display view. Everything inside the black border is the guest drawing on its own screen: UnoDOS hands it a linear framebuffer and describes it in the boot parameters the way firmware would, so a stock Linux kernel drives it with no driver from us. The keyboard is an emulated PS/2 controller, which is why the guest&#x27;s own input stack sees ordinary key events."><img src="assets/img/appliance_display.png" alt="The Display view. Everything inside the black border is the guest drawing on its own screen: UnoDOS hands it a linear framebuffer and describes it in the boot parameters the way firmware would, so a stock Linux kernel drives it with no driver from us. The keyboard is an emulated PS/2 controller, which is why the guest&#x27;s own input stack sees ordinary key events." loading="lazy"></button><figcaption>The <b>Display</b> view. Everything inside the black border is the guest drawing on its own screen: UnoDOS hands it a linear framebuffer and describes it in the boot parameters the way firmware would, so a stock Linux kernel drives it with no driver from us. The keyboard is an emulated PS/2 controller, which is why the guest's own input stack sees ordinary key events.</figcaption></figure>
+<p><kbd>F12</kbd> leaves the display and gives the keyboard back to the desktop.</p>
+
+<h2 id="browser">The browser appliance</h2>
+<p>The appliance that makes the point is a small Alpine system running <strong>Chromium</strong> in a
+kiosk compositor. It takes its own address from your router, resolves names, validates certificates and
+renders live pages - inside a window on the UnoDOS desktop.</p>
+<p>You can drive it from the host. <kbd>Ctrl</kbd>+<kbd>L</kbd> focuses the address bar, and what you
+type goes to the guest's browser letter by letter through the emulated keyboard.</p>
+<figure><button type="button" class="zoom" data-full="assets/img/appliance_browser.png" aria-label="Enlarge: An address typed on the host - in UnoDOS, not in the guest - committed in Chromium&#x27;s address bar, with the page fetched and rendered under it. The keystrokes crossed into the guest through an emulated PS/2 controller and arrived as ordinary key events; the page came off the internet over the guest&#x27;s own network connection."><img src="assets/img/appliance_browser.png" alt="An address typed on the host - in UnoDOS, not in the guest - committed in Chromium&#x27;s address bar, with the page fetched and rendered under it. The keystrokes crossed into the guest through an emulated PS/2 controller and arrived as ordinary key events; the page came off the internet over the guest&#x27;s own network connection." loading="lazy"></button><figcaption>An address typed on the <b>host</b> - in UnoDOS, not in the guest - committed in Chromium's address bar, with the page fetched and rendered under it. The keystrokes crossed into the guest through an emulated PS/2 controller and arrived as ordinary key events; the page came off the internet over the guest's own network connection.</figcaption></figure>
+<div class="note warn"><b>Chromium restarts sometimes, and why</b>The browser appliance is built on Alpine's Chromium, which links against a system copy of a formatting library whose internal checks are left switched on. A value that ordinary Chromium would format and forget can therefore abort the process. It is restarted automatically inside the compositor, so what you see is a browser that occasionally restarts rather than one that dies - but it is a real fault, it is upstream of UnoDOS, and it is not fixed.</div>
+
+<h2 id="apps">One appliance, different applications</h2>
+<p>Which application the appliance runs is a small description file rather than a different build, so the
+same kernel and the same machinery run something else by naming it. <strong>GIMP</strong> is the second
+one, and it needed nothing from the hypervisor that the browser had not already needed.</p>
 
 <h2 id="requires">What your machine needs</h2>
 <p>Hardware virtualisation, which most PCs made since about 2010 have but many ship with turned off. The
@@ -107,9 +121,8 @@ status line above the buttons tells you which it is, in one sentence, when you t
 appliance. If it is off, turn on <strong>Intel VT-x</strong> or <strong>AMD-V</strong> (sometimes
 <em>SVM Mode</em>) in the firmware setup and start again.</p>
 <p>Memory is the other requirement. UnoDOS sets aside a block of it for guests while it is starting up,
-and how much it can spare depends on the machine; a new appliance asks for 512&nbsp;MB and gets no more
-than that block. On a machine with too little to set aside there is no guest at all, and the status
-line says so.</p>
+and how much it can spare depends on the machine. On a machine with too little to set aside there is no
+guest at all, and the status line says so.</p>
 
 <h2 id="making">Making an appliance</h2>
 <p><strong>New</strong> adds a row, and each row is four things you can edit:</p>
@@ -128,25 +141,36 @@ already staged in <code>EFI\UNODOS\VM</code>, so it starts rather than failing a
 is deliberately a file you can read and fix in the Editor rather than something only the app
 understands, and it holds up to eight appliances.</p>
 
+<h2 id="foreign">Foreign apps, and what works today</h2>
+<p>The same machinery is meant to end somewhere specific: you double-click an Android <code>.APK</code>
+in Files, an icon appears on the desktop, and opening it opens a window. No launcher, and nothing on
+screen that says "Android".</p>
+<div class="note warn"><b>Installing works, running does not</b><b>Half of that works today.</b> Installing is real: UnoDOS reads the package, registers it, and the icon appears without a reboot. <b>Opening it does not run anything yet</b> - the channel between the app and the Android runtime is the next piece of work, so the app tells you the runtime is not connected. The Android runtime itself does boot on the appliance kernel. Treat this section as a description of where it is going, not as a feature to use.</div>
+<p>One consequence is worth knowing even at this stage: the package file is <strong>not copied</strong>
+onto the UnoDOS disk, because the filesystem underneath writes whole files only and a large package would
+have to be held in memory all at once. The installed app remembers where you put the package, so deleting
+or unplugging it leaves an app that reports its package is missing.</p>
+
 <h2 id="limits">What it cannot do yet</h2>
 <ul>
 <li><strong>One appliance at a time.</strong> Start refuses while another is running rather than
 quietly replacing it. This is a real limit of how the guest is set up, not an oversight.</li>
 <li><strong>Guest disks are read-only.</strong> The guest can mount a disk image and read it; it cannot
 write to it. Writing needs a change further down in the filesystem code.</li>
-<li><strong>The guest's network does not reach yours.</strong> It has a working network interface and
-can send and receive over it, but the other end is inside UnoDOS rather than on your wire. Bridging a
-guest onto the real network is the next piece of work, not a setting.</li>
+<li><strong>The pointer drifts.</strong> The emulated mouse reports movement rather than position, so
+the guest's pointer and yours gradually disagree and a target moves as you reach for it. The keyboard
+does not have this problem.</li>
 <li><strong>No kernel is included.</strong> UnoDOS does not ship a Linux to run, so a fresh appliance
 has nothing to boot until you put a kernel on the disk.</li>
 <li><strong>Proven on Intel.</strong> Everything above has been demonstrated on Intel VT-x. The AMD
 side is written and builds, but has not yet been seen to run a guest, so on an AMD machine treat this
 as untested rather than supported.</li>
 <li><strong>The guest gets a slice, not a core.</strong> It runs a short budget of time each frame
-alongside the desktop, so it is unhurried by design. It is for a shell and a service, not for
-work you are timing.</li>
+alongside the desktop, so it is unhurried by design. It is for a shell, a browser and a service, not
+for work you are timing.</li>
+<li><strong>The guest has a coarse clock.</strong> It settles on a 10&nbsp;ms timer rather than anything
+finer, which is fine for everything above and wrong for anything that measures itself.</li>
 </ul>
-<div class="note"><b>Text, not pixels</b>No graphics: a guest has a serial console, not a screen. What you get is a terminal in a window, which is what a small Linux appliance usually wants anyway.</div>
 
 <nav class="pagenav"><a href="logging.html">&lsaquo; System log</a><a class="nxt" href="ports.html">The UnoDOS family &rsaquo;</a></nav>
 </div></main>
