@@ -1537,6 +1537,7 @@ static u8  g_bssid[6];                                 /* the AP we joined */
  * far above the join code, has to know whether PMF is in play. */
 static wpa_ap_sec_t g_ap_sec;
 static int g_join_akm;              /* WPA_AKM_SAE / WPA_AKM_PSK / 0          */
+static int g_akm_force;             /* second-pass override; 0 = pick freely   */
 static int g_join_mfp;              /* WPA_MFP_*                              */
 static u8  g_rsn_ie[64];            /* the EXACT element sent in assoc-req    */
 static int g_rsn_ie_len;
@@ -4117,6 +4118,9 @@ static void select_ap(int idx)
     g_join_dtim = g_scan_aps[idx].dtim ? g_scan_aps[idx].dtim : 1;
     g_ap_sec    = g_scan_aps[idx].sec;
     g_join_akm  = wpa_pick_akm(&g_ap_sec);
+    /* A transition-mode AP offers both, we prefer SAE, and when SAE will not
+     * complete this is how the second pass asks for the other one. */
+    if (g_akm_force && (g_ap_sec.akm & g_akm_force)) g_join_akm = g_akm_force;
     g_join_mfp  = wpa_pick_mfp(&g_ap_sec, g_join_akm);
     uno_dbg_net_trace("wifi: security: akm_offered=%02x pairwise=%02x mfpc=%d mfpr=%d "
                       "h2e=%d -> using %s, mfp=%d",
@@ -4773,7 +4777,46 @@ static int join_retry(void)
  * MAC layer, never answers it, and deauths after the assoc request - every
  * time. Picking on RSSI alone made a stock join a coin flip. */
 #define JOIN_TRIES 3
+static int join_pass(void);
+
+/* Try the network the way it prefers, and if that cannot be made to work, try
+ * it the other way it offered.
+ *
+ * wpa_pick_akm() takes SAE whenever an AP offers it, transition mode included,
+ * and the reason is good: the passphrase is the same and the PMK is not
+ * grindable offline from a captured handshake. But "prefer" is not "only". On
+ * the Surface Laptop Go, against an AP advertising akm=PSK|SAE with MFP
+ * capable and NOT required - textbook WPA2/WPA3 transition - the SAE commit
+ * goes out, the hardware reports it transmitted with no failures, and the AP
+ * never answers. Three BSSs, same result, so the network is simply not
+ * completing SAE with us.
+ *
+ * Refusing to fall back turns "our SAE has a bug against this AP" into "this
+ * machine has no network", which is the worse outcome when the AP is still
+ * advertising the WPA2 it would accept. So: SAE first, always. PSK second, and
+ * only when the AP offered it. An SAE-only network is unaffected - there is
+ * nothing to fall back TO and the second pass is skipped. */
 static int find_and_join(void)
+{
+    int r;
+    g_akm_force = 0;
+    r = join_pass();
+    if (r == 0) return 0;
+    if (!(g_ap_sec.akm & WPA_AKM_SAE) || !(g_ap_sec.akm & WPA_AKM_PSK))
+        return r;                       /* nothing else was on offer */
+    if (r32(CSR_MSIX_HW_INT_CAUSES_AD)) {
+        uno_dbg_net_trace("wifi: join: fw asserted - cannot try WPA2 without a reboot");
+        return r;
+    }
+    uno_dbg_net_trace("wifi: join: SAE did not complete and this AP also offers "
+                      "WPA2-PSK - trying that");
+    g_akm_force = WPA_AKM_PSK;
+    r = join_pass();
+    g_akm_force = 0;
+    return r;
+}
+
+static int join_pass(void)
 {
     int attempt, idx;
     prog("Looking for the network", 2);
