@@ -519,8 +519,18 @@ int uno_acpi_poweroff(void)
     /* interrupts off: enter_sleep_state expects to run uninterrupted */
     __asm__ volatile ("cli");
     uacpi_enter_sleep_state(UACPI_SLEEP_STATE_S5);
-    /* Still here. The registers took the write and the machine stayed on,
-     * which on this hardware is the interesting answer, not the boring one. */
+    /* STILL HERE, SO GIVE THE MACHINE ITS INTERRUPTS BACK.
+     *
+     * This function used to return with them off, and that made it terminal by
+     * construction: whatever ran next - a runtime-service call, a halt loop -
+     * ran on a machine that could no longer be interrupted, so a failed S5
+     * turned into a hang. power_down() then had to keep S5 LAST to stay
+     * correct, which on hardware whose firmware ResetSystem never returns
+     * meant S5 was never reached at all.
+     *
+     * A failed sleep is an ordinary failure and should look like one. Restore
+     * the flag and return, so the caller can try something else. */
+    __asm__ volatile ("sti");
     ulog_err(LF_KERNEL, "acpi: S5 entered and the machine is STILL RUNNING - "
                         "the sleep registers do not power this board off");
     unolog_flush();
