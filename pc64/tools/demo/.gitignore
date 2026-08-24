@@ -2,3 +2,7 @@ out/
 # a REAL private key: its public half is in devbuntu's authorized_keys. s13
 # needs it (or UNO_DEMO_SSH_KEY pointing elsewhere); it is never committed.
 assets/ssh_demo_key
+# A LIVE Anthropic API key for s19 (the assistant scene). Same reason
+# assets/ssh_demo_key is here: a real credential must never be
+# committable by an absent-minded `git add -A`.
+assets/anthropic_demo_key

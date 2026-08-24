@@ -194,8 +194,23 @@ def stage_vm():
     rfs = os.path.join(PC64, "build", "rootfs.img")
     if os.path.exists(rfs):
         shutil.copyfile(rfs, os.path.join(vmdir, "ROOTFS.IMG"))
+    # name|kernel|initrd|disk|mem_mb|net (unovirt_mgr.c). Empty path fields
+    # mean "the staged default payload".
+    #
+    # 512 MB IS ONLY ENOUGH FOR A SHELL. s14 films a serial console and 512
+    # is fine for that, but an appliance that has to run a compositor and
+    # Chromium off an 864 MB rootfs WEDGES in it: the guest emitted 192
+    # console lines and then stopped dead, with uno.vm_status() reporting
+    # byte-identical counters (26436 exits, "shell silent") minutes apart.
+    # It looks exactly like a hypervisor fault and is a memory ceiling.
+    #
+    # The guest is capped by the CARVE either way, and the carve steps at
+    # 1800 / 3500 / 7000 MB of FREE HOST memory - so raising this without
+    # also raising QEMU's -m (UNO_DEMO_VM_MB) buys nothing at all.
+    guest_mb = os.environ.get("UNO_DEMO_GUEST_MB", "512")
     with open(os.path.join(vmdir, "VMS.CFG"), "w", newline="\r\n") as f:
-        f.write("linux||||512|1\n")
+        f.write("linux||||%s|1\n" % guest_mb)
+    print("  vm: VMS.CFG guest = %s MB" % guest_mb)
     return True
 
 
@@ -223,8 +238,19 @@ def boot_qemu():
         # and AC'97's descriptors are 32-bit, so a machine with memory above
         # the 4 GB line is the suspect - filed in UNOAUTOMATE-REQUESTS.md,
         # and it matters far beyond this harness because every real machine
-        # has more than 4 GB. s14's appliance scene sets its own -m.
-        "qemu-system-x86_64", "-machine", "q35", "-m", "3072",
+        # has more than 4 GB.
+        #
+        # UNO_DEMO_VM_MB OVERRIDES IT, and an appliance scene needs that. This
+        # comment used to end "s14's appliance scene sets its own -m" and NO
+        # CODE ANYWHERE DID: every scene got 3072, which gives unovirt a
+        # 1536 MB carve, and Chromium in a 1.5 GB carve renders a page and then
+        # dies mid-session ("Aw, Snap!"). vm_display_urc.py raises it for
+        # exactly this reason. The carve steps at 1800 / 3500 / 7000 MB of FREE
+        # memory, so anything in the 3500..7000 band buys the 2 GB carve; 6144
+        # is that, and unlike the 8192 the standalone harness uses it also fits
+        # on a 16 GB build box beside the host.
+        "qemu-system-x86_64", "-machine", "q35",
+        "-m", os.environ.get("UNO_DEMO_VM_MB", "3072"),
         "-cpu", "host", "-enable-kvm", "-smp", "4",
         "-drive", "if=pflash,format=raw,readonly=on,file=" + RQ.OVMF_CODE,
         "-drive", "if=pflash,format=raw,file=" + RQ.VARS,
@@ -1959,6 +1985,13 @@ def s16_unocode(d):
        pressed EXACTLY ONCE, while the panel is shut, and every terminal
        command runs consecutively without anything stealing focus in between.
 
+    EXTENDED FOR THE FULL RECUT (2026-08-23) with the three Tier 1 additions
+    that are real on this platform: Go to Symbol, a split editor and a
+    folder-wide search. What is deliberately absent is anything a LANGUAGE
+    SERVER would answer - hover, go-to-definition, rename - because pc64 has
+    no processes to run a server in and the client knows it. Filming them
+    would need the desktop build, which is not what this film is about.
+
     Paced for video: every hold below is a viewer reading the screen, not a
     settle a test would need."""
     d.beat("open-unocode")
@@ -1973,11 +2006,41 @@ def s16_unocode(d):
     d.key(13, settle=2.0)
     time.sleep(2.6)                                  # the file, highlighted
 
-    d.beat("the-command-palette")
+    # ---- what Tier 1 added, and it is all real ON PC64 -------------------
+    # Nothing here asks for hover, go-to-definition or rename: those come from
+    # a LANGUAGE SERVER, a language server is a separate program, and pc64 has
+    # no processes to run one in (uc_proc_available() answers 0, so the client
+    # never starts anything). Go to Symbol below is the GRAMMAR's scopes, not
+    # a server's symbols - which is why it works here and why the narration
+    # must not call it go-to-definition.
+    d.beat("go-to-a-symbol-in-the-file")
+    d.ctrl("O", settle=1.2)                          # Ctrl+Shift+O: CASE is
+    time.sleep(2.2)                                  # the Shift (uc_main.c)
+    d.key(13, settle=1.6)
+    time.sleep(1.8)                                  # jumped, and highlighted
+
+    # The palette, EARNING its beat. This used to open, filter to `theme` and
+    # press Escape - a beat whose whole content was an overlay appearing and
+    # going away again. It now does the same thing and then RUNS something, so
+    # the palette is still shown doing its job and the scene gains a split.
+    d.beat("the-command-palette-splits-the-editor")
     d.ctrl("P", settle=1.2)                          # Ctrl+Shift+P
-    d.text("theme", settle=0.14)
-    time.sleep(2.0)                                  # the filtered commands
-    d.key(0, scan=S_ESC, settle=1.0)
+    d.text("Split Editor", settle=0.13)
+    time.sleep(1.6)                                  # the filtered commands
+    d.key(13, settle=1.8)
+    time.sleep(2.8)                                  # two groups, side by side
+
+    d.beat("search-the-whole-folder")
+    d.ctrl("F", settle=1.2)                          # Ctrl+Shift+F
+    d.text("uno_", settle=0.13)
+    # SEVEN SECONDS, MEASURED, NOT GUESSED. The first take held 3.4 s and the
+    # frame at the end of it still read "searching 4/118 files": the results
+    # ("200 results in 7 files") did not land until ~2 s AFTER the next beat
+    # had already fired, so a cue anchored here would have talked about
+    # results over a screen that was still scanning. The search is sliced
+    # deliberately - that is the point of it - so the hold has to cover the
+    # slicing, not just the keystroke.
+    time.sleep(7.0)                                  # results, grouped by file
 
     d.beat("an-extension-runs-javascript")
     d.ctrl("P", settle=1.2)
@@ -2201,6 +2264,416 @@ def poster_shot(d):
     time.sleep(1.0)
 
 
+# ---------------------------------------------------------------------------
+# s17 - UnoTransfer: two panes, a real remote, a queue, and a terminal
+# ---------------------------------------------------------------------------
+# The whole key map, read off xferapp_ui.c's xfer_event() rather than guessed:
+#
+#   1 2 3 4   the Sites / Transfer / Queue / Terminal tabs
+#   c         connect the selected site - and, ON the Terminal tab, open a shell
+#   Tab       swap the focused pane    Enter  open    Backspace  up
+#   Space     copy the selection       r      copy it recursively
+#   v         cycle the LOCAL pane through the machine's volumes
+#
+# CONNECTING ALREADY SWITCHES TABS. connect_selected_site() sets g_tab=T_XFER
+# and focuses the remote pane itself, so pressing `2` afterwards is a beat that
+# changes nothing on screen - the exact failure this file keeps warning about
+# (a beat that silently no-ops is a failed take). The scene lets the connect do
+# it and holds on the result instead.
+#
+# `c`, NOT Enter. Enter on the Sites tab opens nothing; connect is bound to the
+# character. Getting this wrong records a scene that sits on a site list.
+XFER_SITE = "devbuntu"
+
+# WHERE THE REMOTE PANE OPENS, and why this exact path. Three things had to be
+# true at once and almost nothing satisfies all three:
+#
+#   - the first entry must be a FILE. The first take pressed Down three times
+#     on `/` and landed on `[etc]`, so Space answered "That is a directory -
+#     press R to copy it recursively", NOTHING was transferred, and the Queue
+#     beat filmed an empty queue. Both beats logged green. That is the silent
+#     no-op this file keeps warning about, caught only by pulling a frame.
+#   - the listing must be under 128 entries, or the app says "Listing
+#     truncated - this pane shows the first 128 entries" across the shot
+#     (/etc has 282; /var/log has 89 and would also do).
+#   - it must fit the pane without scrolling, so the whole directory is on
+#     screen at once.
+#
+# /usr/share/doc/bash is 13 entries, every one of them a file. The row is
+# still DERIVED below rather than assumed, because "the first entry is a file"
+# is a property of a machine that can change, not of this code.
+XFER_ROOT = "/usr/share/doc/bash"
+
+# The maximize box, derived from the window's own geometry rather than read off
+# a screenshot. pc64_uui.c opens EX_XFER at origin (34, 24) with a 560x340
+# canvas and it is not resizable by the user before we get there, so the box
+# sits the same distance in from the canvas's right edge as EX_SSH's does:
+# SSH is origin (40, 30) canvas 470 wide with its box at (507, 43), i.e.
+# x = origin_x + canvas_w - 3, y = origin_y + 13. The same arithmetic here.
+# This is the one class of baked coordinate SCENES.md allows: a window the
+# shell lays out at a fixed origin and size.
+XFER_MAX_XY = (34 + 560 - 3, 24 + 13)
+
+
+def s17_pre(d):
+    """Stage what UnoTransfer needs to reach a real machine, then save the site.
+
+    Two pieces. The SCP backend rides unossh, so it reads the same key and
+    session store s13 authors - hence s13_pre() outright rather than a copy of
+    it. And the app's site list cannot be authored from inside the app in this
+    build; the Sites tab says so on screen ("Use `xfer site` over URC, or press
+    N"), so the site is pushed over URC exactly the way s13's store is.
+
+    That is staging, not faking: the app reads the site back through its own
+    code, opens its own SSH connection with its own key, and lists a real
+    directory on a real machine on camera."""
+    if not s13_pre(d):
+        print("  s17: SKIP - the SSH store did not stage (see s13's reason)")
+        return False
+    try:
+        out = d.link.command("xfer", "site", XFER_SITE, "scp", SSH_HOST,
+                             str(SSH_PORT), SSH_USER, SSH_KEYNAME, XFER_ROOT,
+                             timeout=20)
+    except Exception as e:                                       # noqa: BLE001
+        print("  s17: SKIP - `xfer site` did not take: %s" % e)
+        return False
+    print("  s17: site %r -> scp %s@%s:%d, key %r, root %s  (%s)"
+          % (XFER_SITE, SSH_USER, SSH_HOST, SSH_PORT, SSH_KEYNAME,
+             XFER_ROOT, out))
+
+    # DERIVE the row the scene will copy, through the SAME call the app's pane
+    # uses (`xfer ls` and pane_refresh both land in unoxfer_list, so the order
+    # is the order). `d ` prefixes a directory and `- ` a file. If this
+    # directory ever stops leading with a file the scene SKIPS instead of
+    # filming Space bouncing off a directory again.
+    try:
+        rows = d.link.command("xfer", "ls", XFER_SITE, XFER_ROOT, timeout=30)
+    except Exception as e:                                       # noqa: BLE001
+        print("  s17: SKIP - `xfer ls` failed: %s" % e)
+        return False
+    first_file = None
+    for i, line in enumerate(rows):
+        if line.startswith("- "):
+            first_file = (i, line.split(None, 2)[-1])
+            break
+    if first_file is None:
+        print("  s17: SKIP - no FILE in %s (%d entries), and Space on a "
+              "directory only prints a hint" % (XFER_ROOT, len(rows)))
+        return False
+    d.s17_row, d.s17_name = first_file
+    print("  s17: %d entries, first file is row %d (%s)"
+          % (len(rows), d.s17_row, d.s17_name))
+    return True
+
+
+def s17_transfer(d):
+    """UnoTransfer moving a real file off a real machine.
+
+    Paced so each tab is legible before the next one: the queue in particular
+    is the one view a viewer has to READ, because the whole claim of the scene
+    is that the transfer is a job with progress rather than a frozen window."""
+    d.beat("open-unotransfer")
+    d.launch("xfer", settle=4.0)
+    time.sleep(3.0)                                  # the Sites tab, one site
+
+    d.beat("connect-to-another-machine")
+    d.text("c", settle=1.0)
+    time.sleep(7.0)                                  # TCP, SSH, first listing
+
+    # The window is 560x340 and the two directory listings ARE the scene, so
+    # give it the desktop. Maximize AFTER connecting, for the same reason s13
+    # does: the title bar does not move, but there is no reason to risk it.
+    d.beat("give-it-the-screen")
+    d.click(*XFER_MAX_XY, settle=1.5)
+    time.sleep(1.5)
+
+    # The connect already put us on the two-pane view with the REMOTE focused.
+    d.beat("the-remote-directory")
+    time.sleep(3.0)                                  # hold: a real listing
+
+    # Walk to the row _pre MEASURED, not to a row anybody guessed.
+    row = getattr(d, "s17_row", 0)
+    if row:
+        d.beat("walk-the-remote-side")
+        for _ in range(row):
+            d.key(0, scan=S_DOWN, settle=0.55)
+        time.sleep(1.4)
+
+    d.beat("copy-it-across")
+    d.text(" ", settle=1.0)                          # Space: start the transfer
+    time.sleep(2.6)                                  # the status line answers
+
+    d.beat("the-queue-has-progress")
+    d.text("3", settle=1.0)                          # the Queue tab
+    time.sleep(4.5)                                  # hold: read the row
+
+    # An SCP connection IS an SSH connection, so the same window gives a real
+    # terminal on the far machine. `c` opens it while the Terminal tab is up.
+    d.beat("and-a-real-terminal-on-the-same-connection")
+    d.text("4", settle=1.2)
+    d.text("c", settle=1.2)
+    time.sleep(4.0)                                  # the shell comes up
+    d.text("uname -a", settle=0.13)
+    d.key(13, settle=0.5)
+    time.sleep(3.4)                                  # the other machine answers
+    # No teardown on camera: reset() closes the window after the stream stops.
+
+
+# ---------------------------------------------------------------------------
+# s18 - the hypervisor: Chromium, inside UnoDOS, driven from the host
+# ---------------------------------------------------------------------------
+# This is s14 grown up. s14 films a guest's SERIAL CONSOLE; this films the
+# guest's SCREEN, with a browser on it, and then types an address into that
+# browser from the UnoDOS side.
+#
+# THREE THINGS IT NEEDS, and it refuses rather than recording a failure:
+#   UNO_DEMO_KVM=1     TCG can never host a guest (it drops +vmx)
+#   a UNO_DETACH=1 build   eligibility is gated on having left the firmware
+#   build/rootfs.img being the CHROMIUM rootfs, not the GIMP one
+#
+# WAIT FOR THE BROWSER, DO NOT COUNT SECONDS AT IT. The guest gets a slice of
+# each frame, so "minutes" is not a number anyone can predict; and a run that
+# types while the guest is still a cleared VT photographs the browser's own
+# startup page, which is indistinguishable from keystrokes that were delivered
+# and lost. The guest's own surface is the signal: a console is nearly all
+# black, a rendered page is not. Same test vm_display_urc.py settled on.
+S18_NAV = "example.net"
+
+
+def _dark_fraction(w, h, rgba):
+    """How much of the frame is near-black, sampled coarsely. A guest console
+    is mostly black; a browser is mostly not."""
+    dark = total = 0
+    for y in range(h // 4, h - 80, 4):
+        row = y * w * 4
+        for x in range(0, w * 4, 64):
+            v = rgba[row + x] + rgba[row + x + 1] + rgba[row + x + 2]
+            total += 1
+            if v < 90:
+                dark += 1
+    return (dark / float(total)) if total else 0.0
+
+
+def s18_pre(d):
+    """s18's UNRECORDED half: start the appliance, get to the DISPLAY view, and
+    wait until the guest is showing a browser. Minutes of dead air, off camera.
+
+    HOW TO REACH THE DISPLAY VIEW, because getting this wrong is silent and
+    cost a whole take. `apps/vmgr.c`:
+
+        V_LIST     Enter starts the selected appliance AND SWITCHES TO CONSOLE
+                   'd' -> V_DISPLAY, 'c' -> V_CONSOLE
+        V_CONSOLE  Esc -> V_LIST. EVERY OTHER PRINTABLE CHARACTER IS FORWARDED
+                   TO THE GUEST (uno_vm_con_key), so 'd' here is a letter typed
+                   at the guest's serial port, not a view switch.
+
+    The first take pressed Enter then 'd' and filmed the CONSOLE - the guest's
+    boot log, still at [0.000000] - with a 'd' typed into it. So: Enter, then
+    ESC back to the list, THEN 'd'.
+
+    AND THE READINESS TEST IS TWO-STAGE, for the same reason. A console in the
+    Display view is nearly black, so "not dark = a browser" looks like a fine
+    test - but an UNARMED surface, and the console view's white app-drawn log,
+    are both ~0% dark too, and the first take's very first poll therefore
+    declared a browser 45 seconds in. So: wait for the surface to go DARK
+    first (that is the guest's own framebuffer being blitted, which is proof
+    the Display view is live), and only then for it to stop being dark (that
+    is a page). Neither half alone means anything.
+
+    Returns True to record, False to skip the scene entirely."""
+    if not getattr(d, "vm_staged", None):
+        print("  s18: SKIP - no bzImage/initrd.gz under pc64/build")
+        return False
+    if not DEMO_KVM:
+        print("  s18: SKIP - the hypervisor is ineligible under TCG; set "
+              "UNO_DEMO_KVM=1 on a build made with UNO_DEBUG=1 UNO_DETACH=1")
+        return False
+    d.launch("vmgr", settle=3.0)
+    d.key(13, settle=2.0)                    # Enter: start row 0 -> V_CONSOLE
+    # ESC AS A CHARACTER (uni 27), NOT AS A SCAN CODE. vmgr's console branch
+    # switches on `scan` and only handles 0x09 / 0x0A / 0x06 there; everything
+    # else falls to `default`, which tests `uni == 27`. A key with scan=0x17
+    # and uni=0 therefore matches nothing and returns 0 - the view does not
+    # change, no error is raised, and the next keystroke goes on into the
+    # guest. That is exactly how the second take filmed the console again.
+    d.key(27, settle=1.5)                    # Esc: V_CONSOLE -> V_LIST
+    d.text("d", settle=2.0)                  # 'd' FROM THE LIST -> V_DISPLAY
+
+    print("  s18: asked for the Display view; waiting for the guest's "
+          "framebuffer (a surface that never goes dark means the view did "
+          "not switch, not that the browser is early)...")
+    deadline = time.time() + 2400            # 40 min ceiling, not a schedule
+    saw_console = False
+    while time.time() < deadline:
+        time.sleep(30.0)
+        try:
+            _, w, h, rgba = d.shot("s18_wait")
+        except Exception:                                        # noqa: BLE001
+            continue
+        dark = _dark_fraction(w, h, rgba)
+        try:
+            st = d.link.eval("import uno; print(uno.vm_status())", timeout=10)
+            st = st[0] if st else ""
+        except Exception:                                        # noqa: BLE001
+            st = ""
+        print("    surface %3.0f%% dark   vm: %s" % (dark * 100, st))
+        if not saw_console:
+            # STAGE ONE: the guest's own console, black, really being blitted.
+            if dark > 0.55:
+                saw_console = True
+                print("  s18: the guest's framebuffer is live (a console)")
+            continue
+        # STAGE TWO: it stopped being a console, which is the browser.
+        if dark < 0.15:
+            print("  s18: the guest is showing a browser, not a console")
+            time.sleep(5.0)
+            return True
+    if not saw_console:
+        print("  s18: SKIP - the Display view never showed the guest's "
+              "framebuffer at all (is the appliance running?)")
+    else:
+        print("  s18: SKIP - the guest stayed a console; the browser never came up")
+    return False
+
+
+def s18_hypervisor(d):
+    """s18's RECORDED half. The stream starts between the two halves, so the
+    scene opens on a browser that is already up rather than on a boot log.
+
+    THE CHROMIUM IN THIS APPLIANCE ABORTS OCCASIONALLY - Alpine links it
+    against a system double-conversion whose assertions are live, so a value
+    upstream would format and forget takes the process down. The appliance
+    restarts it inside the compositor. That is why the address is typed FAST
+    (Ctrl+L SELECTS the omnibox, so ONE Backspace empties it; the other
+    forty-four in an earlier harness were deleting nothing and holding the
+    window open for twenty seconds) and why the shot is taken AFTER Enter
+    rather than between the last letter and it."""
+    d.beat("a-guest-with-a-screen")
+    time.sleep(3.5)                                  # hold: Chromium, in a window
+
+    d.beat("type-an-address-from-the-host")
+    d.ctrl("l", settle=2.0)                          # focuses AND selects
+    d.key(0x08, settle=0.20)                         # one Backspace empties it
+    d.text(S18_NAV, settle=0.10)
+    time.sleep(0.8)
+
+    d.beat("the-guest-browser-navigates")
+    d.key(13, settle=0.5)
+    time.sleep(11.0)                                 # DNS, TLS, layout, blit
+
+    # NO F12 BEAT, AND DO NOT ADD ONE. vmgr's Display view prints "keys go to
+    # the guest - F12 returns to the list", and that is FALSE in a debug build:
+    # pc64_uui.c's key loop claims EFI scan 0x16 first, under #ifdef UNO_DEBUG,
+    # and continues - so no app ever sees it. A harness only exists in a debug
+    # build (URC is debug-only), so the key can never work here. Pressing it
+    # would log a beat, change nothing, and end the scene on a stale frame.
+    # The scene ends on the loaded page instead, which is its payoff anyway;
+    # reset() tears the window down after the stream has stopped.
+
+
+# ---------------------------------------------------------------------------
+# s19 - UnoCode's assistant, answering on the machine itself
+# ---------------------------------------------------------------------------
+# Its own scene rather than more of s16: s16 is already 77 s, and this needs
+# room to sit still while a reply streams in.
+#
+# THE KEY IS STAGED, NEVER TYPED. UnoCode's own route is "AI: Set API Key",
+# which opens a masked input box - but a masked box still means a live API key
+# crossing the URC link keystroke by keystroke and sitting in the beat log. The
+# store is UNOCODE\SECRETS.TXT, `name SP lowercase-hex NL`
+# (unocode/plat/uc_secret_pc64.c), so it is authored here and pushed exactly
+# the way s13 pushes SSHSTORE.DAT. The machine then reads it back through its
+# own code. Nothing secret is ever on camera.
+#
+# THE REPLY IS LIVE MODEL OUTPUT AND IS NOT SCRIPTED. Every other scene in this
+# film is deterministic; this one cannot be. The narration therefore says what
+# the SYSTEM did - it asked, it answered, the edit needs consent - and never
+# what the answer said. Do not write a cue that quotes it.
+#
+# ai.model defaults to claude-sonnet-5 (unocode/uc_cfg.c), which is a current
+# model id. A retired one fails live, on camera, with a 404 - which is exactly
+# what `studio: send the whole conversation, to a model that still exists` was
+# about. Re-check it before any reshoot.
+AI_KEY_FILE = os.environ.get(
+    "UNO_DEMO_AI_KEY", os.path.join(ASSETS, "anthropic_demo_key"))
+AI_QUESTION = "In one sentence, what does this program do?"
+
+
+def stage_secret():
+    """UNOCODE\\SECRETS.TXT into the ESP, before the disk is built.
+
+    NOT a URC push, and the difference is not cosmetic. `put` writes a file, it
+    does not create the directory above it, and UNOCODE\\ does not exist on a
+    fresh volume - uc_secret_pc64.c's vol_ready() mkdirs it, but only the first
+    time UnoCode itself saves a secret, which is exactly the thing we are
+    trying to avoid doing on camera. Pushing straight at UNOCODE\\SECRETS.TXT
+    therefore comes back "write-failed (vol read-only or full?)", which names
+    two causes and not the real one.
+
+    Staging it into build/esp puts the directory AND the file on the image the
+    same way EXT\\ gets there, and the boot volume is uno_fs_pref_vol().
+
+    Returns True iff a key was found and staged."""
+    if not os.path.exists(AI_KEY_FILE):
+        return False
+    with open(AI_KEY_FILE) as f:
+        key = f.read().strip()
+    if not key:
+        return False
+    d = os.path.join(RQ.ESP, "UNOCODE")
+    os.makedirs(d, exist_ok=True)
+    line = "anthropic.key " + "".join("%02x" % b for b in key.encode()) + "\n"
+    with open(os.path.join(d, "SECRETS.TXT"), "w", newline="") as f:
+        f.write(line)
+    return True
+
+
+def s19_pre(d):
+    """The key is staged into the ESP by stage_secret() before the disk is
+    built; this only refuses the scene when there was no key to stage."""
+    if not getattr(d, "ai_staged", None):
+        print("  s19: SKIP - no API key at %s (set UNO_DEMO_AI_KEY). One line, "
+              "the key, nothing else." % AI_KEY_FILE)
+        return False
+    return True
+
+
+def s19_assistant(d):
+    """Ask the assistant about the file that is open, and hold while it answers.
+
+    Paced long at the end on purpose: the reply STREAMS, so the interesting
+    part is text arriving a piece at a time, and cutting away from that is
+    cutting away from the whole point of the scene."""
+    d.beat("open-unocode")
+    d.launch("unocode", settle=6.0)
+    time.sleep(3.0)
+
+    d.beat("open-a-source-file")
+    d.ctrl("p", settle=1.2)                          # Go to File (lower case)
+    d.text("SAMPLE", settle=0.12)
+    time.sleep(1.2)
+    d.key(13, settle=2.0)
+    time.sleep(2.2)
+
+    # Ctrl+Shift+P - CASE is the Shift, see s16's note.
+    d.beat("open-the-assistant")
+    d.ctrl("P", settle=1.2)
+    d.text("Open Chat", settle=0.13)
+    time.sleep(1.4)
+    d.key(13, settle=1.8)
+    time.sleep(2.4)                                  # the sixth view, empty
+
+    d.beat("ask-it-about-the-file")
+    d.text(AI_QUESTION, settle=0.09)
+    time.sleep(1.0)
+    d.key(13, settle=0.5)
+
+    # DNS, TLS, the POST, and then a streamed reply. The whole request rides
+    # the machine's own TCP stack and its own TLS, over the same slirp link
+    # s05 fetches Wikipedia through.
+    d.beat("the-answer-streams-back")
+    time.sleep(16.0)
+
 SCENES = [
     ("s02", (None, s02_wm)),
     ("s03", (None, s03_themes)),
@@ -2210,16 +2683,22 @@ SCENES = [
     # After s07 in the cut too. No _pre: UnoCode opens the SDK sources that
     # build.sh already stages on the ESP, so there is nothing to push first.
     ("s16", (None, s16_unocode)),
+    ("s19", (s19_pre, s19_assistant)),
     ("s09", (s09_pre, s09_automate)),
     ("s15", (None, s15_arcade)),
     ("s08", (s08_pre, s08_duum)),
     ("s13", (s13_pre, s13_ssh)),
+    ("s17", (s17_pre, s17_transfer)),
     ("s10", (None, s10_system_log)),
     # s14 (appliances) is LAST and out of the cut's spine: it is the only
     # scene that needs UNO_DEMO_KVM=1 plus a UNO_DETACH=1 build, so it skips
     # itself on every ordinary run. It kept the number it was recorded under
     # until 2026-08-08, when s09 became the automation scene.
     ("s14", (s14_pre, s14_console)),
+    # s18 is s14 grown up: the guest's SCREEN with a browser on
+    # it, driven from the host. Same three preconditions, plus the
+    # rootfs being the Chromium one.
+    ("s18", (s18_pre, s18_hypervisor)),
     # Not in the cut: this one exists to produce the website's poster frame.
     # Run it on its own - `scenes.py --scene poster` - and take the PNG out of
     # out/<dir>/probe/poster.png.
@@ -2281,8 +2760,10 @@ def main(argv):
         d.wad_staged = stage_wad()
         d.sdk_staged = stage_sdk()
         d.vm_staged = stage_vm()
-        print("staged: office=%s wad=%s sdk=%s vm=%s" %
-              (d.office_staged, d.wad_staged, d.sdk_staged, d.vm_staged))
+        d.ai_staged = stage_secret()
+        print("staged: office=%s wad=%s sdk=%s vm=%s ai-key=%s" %
+              (d.office_staged, d.wad_staged, d.sdk_staged, d.vm_staged,
+               d.ai_staged))
     else:
         # Nothing is staged on metal: the stick already carries DOOM1.WAD,
         # DOCS\ and the rest, and the office documents are pushed to the RAM

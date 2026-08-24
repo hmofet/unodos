@@ -46,6 +46,24 @@ SPINE = [
     # worse than it is. Put it back when the scene can be recorded somewhere
     # that keeps up: the footage, its beats and its narration all still exist.
     ("s13", "SSH"),
+    # Added for the past-pin recut (2026-08-23). It goes straight after SSH
+    # because it IS the SSH story continued - UnoTransfer's SCP backend rides
+    # unossh and reuses the same saved session and key - and because the two
+    # together are the whole "this machine talks to other machines" block.
+    ("s17", "UnoTransfer"),
+    # s18, the hypervisor: Chromium inside a UnoDOS window, with the
+    # address typed from the HOST. It lands here, last before the
+    # closing summary, because it is the strongest thing in the release
+    # and it reads best once the machine has already proved it does
+    # ordinary work well.
+    #
+    # IT CANNOT BE RECORDED ON A NESTED HOST. On quill (itself a VM) the
+    # guest wedges: byte-identical counters, "shell silent", 192 console
+    # lines, forever. It needs KVM at L0 - devbuntu or leviathan - and a
+    # disk big enough for the rootfs (UNO_DISK_MB; the default 96 MB
+    # silently drops an 864 MB ROOTFS.IMG and the guest then sits in its
+    # initrd shell looking exactly like a hypervisor fault).
+    ("s18", "The hypervisor"),
     ("s10", "Under the hood"),
     # s11 was a 51-second montage of every port. It is out (2026-08-20): the
     # roster is on the website, in the manual, and in the download list, and
