@@ -357,7 +357,13 @@ static void set_speed_autoneg(void)
 /* ---- enable / disable (link transitions) -------------------------------- */
 static void set_rx_mode(void)
 {
-    /* accept my-MAC + broadcast + multicast; all-ones multicast hash */
+    /* accept my-MAC + broadcast + multicast; all-ones multicast hash.
+     * NOT promiscuous: an appliance guest on this NIC would need RCR_AAP for
+     * the unicast half of its own DHCP (unovdev_net.c, M3), and the way to do
+     * that is r8169.c's - register a setter with net_set_promisc_fn() so the
+     * bridge can switch it on for as long as a guest runs. Not done here
+     * because no box with this chip has run a guest, and an always-on
+     * promiscuous link costs a slow machine real frame time. */
     u8 mar[8]; memset(mar, 0xff, 8);
     set_regs(PLA_MAR, MCU_TYPE_PLA|BYTE_EN_DWORD, 8, mar);
     ocp_wr_dword(MCU_TYPE_PLA, PLA_RCR,

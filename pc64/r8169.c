@@ -143,6 +143,20 @@ static void read_mac(void)
 }
 /* net.c consumes the negotiated PHY speed for the shell's LAN tooltip. */
 void net_set_link_speed_mbps(int mbps);
+/* ...and calls back into here when the appliance bridge needs the wire to
+ * accept a second MAC.  AAP is bit 0 of RxConfig's accept nibble; every other
+ * accept bit is left exactly as hw_start() set it. */
+void net_set_promisc_fn(void (*fn)(int on));
+static void r8169_promisc(int on)
+{
+    u32 rc;
+    if (!g_up) return;
+    rc = r32(RxConfig);
+    w32(RxConfig, on ? (rc | 0x01u) : (rc & ~0x01u));
+    uno_dbg_net_trace("r8169: promiscuous %s (RxConfig %08x -> %08x)",
+                      on ? "ON - a guest is on the wire" : "off",
+                      rc, r32(RxConfig));
+}
 static int link_up(void){
     int ps = r8(PHYstatus);
     net_set_link_speed_mbps((ps & LinkStatus)
@@ -202,7 +216,14 @@ static int hw_start(void)
     w32(RxConfig, g_is8125 ? 0x40000F00u : 0x0000CF00u);
     /* TxConfig: DMA burst 7, IFG 3, AUTO_FIFO */
     w32(TxConfig, (7u<<8) | (3u<<24) | (1u<<7));
-    /* accept broadcast + my-mac + multicast; all-ones multicast hash */
+    /* accept broadcast + my-mac + multicast; all-ones multicast hash.  AAP
+     * (bit 0, promiscuous) is deliberately NOT set here: it is what the
+     * appliance bridge needs and only while a guest is running, so it is
+     * switched by r8169_promisc() below rather than left on.  The Intel
+     * drivers this bridge was first proved against DO run promiscuous
+     * always (e1000/e1000e/igb set UPE|MPE), which is why nobody noticed
+     * that a guest on this NIC could never see the unicast half of its own
+     * DHCP exchange. */
     w32(MAR0, 0xFFFFFFFFu); w32(MAR0+4, 0xFFFFFFFFu);
     w32(RxConfig, (r32(RxConfig) & ~0x0Fu) | 0x0E);
     /* poll instead of interrupt */
@@ -368,6 +389,7 @@ uno_nic_t *r8169_nic(void)
     if (hw_start() < 0) return 0;
     g_nic.ctx=0; g_nic.send=r8169_send; g_nic.recv=r8169_recv; g_nic.link=r8169_link;
     g_up = 1;
+    net_set_promisc_fn(r8169_promisc);   /* the bridge can ask, now that we can answer */
     r8169_phy_poll();       /* debug: watch link for ~4s (compiled out in prod) */
     return &g_nic;
 }

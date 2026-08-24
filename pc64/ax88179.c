@@ -145,7 +145,13 @@ static void ax_reset(void)
     ax_wr16(AX_MEDIUM_STATUS_MODE,
             AX_MEDIUM_RECEIVE_EN | AX_MEDIUM_TXFLOW_CTRLEN | AX_MEDIUM_RXFLOW_CTRLEN |
             AX_MEDIUM_FULL_DUPLEX | AX_MEDIUM_GIGAMODE);
-    /* RX control: start, accept our MAC + broadcast + multicast, IP-align, drop bad CRC */
+    /* RX control: start, accept our MAC + broadcast + multicast, IP-align,
+     * drop bad CRC.  NOT promiscuous: an appliance guest on this NIC would
+     * need AX_RX_CTL_PROMISC for the unicast half of its own DHCP
+     * (unovdev_net.c, M3), and the way to do that is r8169.c's - register a
+     * setter with net_set_promisc_fn() so the bridge switches it on only
+     * while a guest runs.  Not done here because no box with this chip has
+     * run a guest, and an always-on promiscuous link is not free. */
     ax_wr16(AX_RX_CTL, AX_RX_CTL_START | AX_RX_CTL_AP | AX_RX_CTL_AB | AX_RX_CTL_AM |
                        AX_RX_CTL_IPE | AX_RX_CTL_DROPCRCERR);
 }
