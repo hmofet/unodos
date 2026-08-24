@@ -25,6 +25,7 @@ NAV = [
     ("code.html",            "UnoCode"),
     ("browser.html",         "Web browser"),
     ("ssh.html",             "SSH client"),
+    ("transfer.html",        "UnoTransfer"),
     ("networking.html",      "Networking"),
     ("logging.html",         "System log"),
     ("appliances.html",      "Appliances"),
@@ -1224,6 +1225,66 @@ UnoDOS machine can log in to others and run commands there. See
 </ul>
 """)
 
+PAGES["transfer.html"] = ("UnoTransfer", f"""
+<h1>UnoTransfer</h1>
+<p class="lede">Move files between this machine and another one. Two panes side by side - a UnoDOS
+volume on the left, a remote server on the right - and a queue that carries whole folders across
+without you watching it.</p>
+
+<p>UnoTransfer is in the Start menu under <strong>Transfer</strong>. It speaks several transfer
+protocols through one interface, so copying a folder off a web server and copying it off a Linux box
+over SSH are the same three actions with a different address typed in.</p>
+
+<h2 id="panes">The two panes</h2>
+<p>The left pane is always a volume on this machine. The right pane is wherever you connected to.
+<kbd>Tab</kbd> moves between them, the arrow keys move within one, and <kbd>Enter</kbd> opens a folder.
+Choosing a file or a folder and pressing the copy key puts a <strong>job</strong> on the queue that
+copies it to the other side, recursively, creating folders as it goes.</p>
+<p>The queue is the third part of the window. Each job shows what it is copying, how far along it is
+and what went wrong if anything did. Jobs run one file at a time and keep going while you use the
+rest of the window.</p>
+
+<h2 id="protocols">What it can connect to</h2>
+<table>
+  <tr><th>Protocol</th><th>What it is for</th><th>Notes</th></tr>
+  <tr><td><b>Local</b></td><td>Copying between two UnoDOS volumes</td><td>Both panes can be local</td></tr>
+  <tr><td><b>SCP</b></td><td>Any machine you can reach over SSH</td><td>Uses the same saved sessions and keys as the <a href="ssh.html">SSH client</a></td></tr>
+  <tr><td><b>HTTP / HTTPS</b></td><td>Fetching a file by its URL</td><td>Download only, and no folder listing - a web server does not offer one</td></tr>
+  <tr><td><b>WebDAV / WebDAVS</b></td><td>A file server that speaks WebDAV</td><td>Lists, uploads, downloads and creates folders</td></tr>
+  <tr><td><b>TFTP</b></td><td>Small transfers on a local network, usually to equipment</td><td>No listing and no delete: the protocol has neither</td></tr>
+</table>
+{note('A protocol that cannot do something says so before you start rather than failing halfway. TFTP has no listing, HTTP has no listing, and SCP cannot resume an interrupted transfer - so those options are simply not offered on those connections instead of being offered and then breaking.', kind="tip", title="Unsupported means unavailable, not broken")}
+
+<h2 id="terminal">The terminal tab</h2>
+<p>An SCP connection is an SSH connection, so UnoTransfer also gives you a <strong>terminal</strong> on
+the machine you connected to. It is a real VT100/xterm emulator rather than a log window, so a
+full-screen program that draws its own interface works in it.</p>
+
+<h2 id="remote">Transferring without touching the machine</h2>
+<p>UnoTransfer is also reachable through UnoDOS's remote-control channel as the <code>xfer</code>
+command, which is how a script on another computer tells this one to fetch something. The important
+part is that the file does <strong>not</strong> travel over the control channel: UnoDOS is told where
+the file is and goes and gets it itself, straight from the machine that has it. See
+<a href="dev-remote.html">Remote control &amp; automation</a>.</p>
+
+<h2 id="limits">What it does not do yet</h2>
+<ul>
+  <li><strong>SFTP is not available.</strong> The connection type exists but the layer underneath it
+      does not offer it yet, so UnoTransfer offers SCP instead - the same job, over the same SSH
+      connection, to the same machine.</li>
+  <li><strong>One very large file may not fit.</strong> A file is staged in memory as it arrives,
+      because the filesystem underneath can only write a file whole. The staging area is about
+      8&nbsp;MB by default and adjustable, and a folder of ordinary files of any total size copies
+      fine - it is a single file bigger than the staging area that fails. Streaming is waiting on one
+      change further down in the filesystem code, and the app reports which mode it is in.</li>
+  <li><strong>No resuming.</strong> An interrupted transfer starts that file again.</li>
+  <li><strong>No pasting a web page's address and picking a quality.</strong> UnoTransfer fetches a URL
+      that is already a file. It is not a media downloader.</li>
+  <li><strong>One window.</strong> Like the browser and the SSH client, it is a single window with a
+      single connection rather than tabs.</li>
+</ul>
+""")
+
 PAGES["appearance.html"] = ("Themes & appearance", f"""
 <h1>Themes &amp; appearance</h1>
 <p class="lede">Ten live themes, a Dark-mode toggle, procedural wallpapers, TrueType fonts, and real resolution
@@ -1625,6 +1686,10 @@ the whole file down the right-hand edge so you can see where you are in somethin
   <li>The status bar along the bottom shows the line and column, how the file is indented, how it is
       encoded and which line ending it uses. Click nothing: it is there to tell you, and it is the
       first place to look when a file behaves oddly on another machine.</li>
+  <li><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>O</kbd> lists the things <em>in</em> the file - functions,
+      types, headings - and jumps to the one you pick. It is the fastest way around a long file.</li>
+  <li>You can <strong>split the editor</strong> and put two files side by side, or the same file twice
+      at two different places. Each side scrolls on its own. <b>View: Split Editor</b> in the palette.</li>
 </ul>
 
 <h2 id="find">Finding things</h2>
@@ -1634,8 +1699,12 @@ must match a whole word, and whether what you typed is a <em>pattern</em> rather
 
 {fig("unocode_find.png", "Find, showing <code>0 of 11</code> matches and the case, whole-word and pattern toggles. Every match in the file is marked as you type, not just the next one.")}
 
-<p>To search the whole folder rather than one file, use the magnifying glass in the activity bar.
-Results are grouped by file; <kbd>Enter</kbd> on one opens the file at that line.</p>
+<p>To search the whole folder rather than one file, use the magnifying glass in the activity bar. It
+searches into subfolders, a slice at a time so the window stays responsive on a big tree. Results are
+grouped by file; <kbd>Enter</kbd> on one opens the file at that line.</p>
+<p>You can <strong>replace across every file at once</strong> from the same view. Each file that changes
+is one step of undo, so a replacement that went wrong in one file is undone in that file without
+disturbing the rest.</p>
 
 <h2 id="themes">Changing the colours</h2>
 <p>Open the palette and type <code>theme</code>. UnoCode ships with six colour themes, dark and
@@ -1669,6 +1738,17 @@ and runs things, and reads and writes UnoCode's own settings. <code>help</code> 
 knows.</p>
 
 {fig("unocode_terminal.png", "The terminal after <code>help</code> and <code>ext</code>. It is a quick way to do the things that are fiddly with the mouse, and the fastest way to see which extensions actually loaded.")}
+
+<h2 id="assistant">The assistant</h2>
+<p>The last view in the activity bar is an <strong>assistant</strong>: a chat panel beside your code that
+can read the files in the folder and propose changes to them. It is an extension like any other, written
+against an interface UnoCode offers to all of them, so it is not privileged and you can switch it off.</p>
+<p>Two things about it are deliberate. Every edit it proposes is shown to you as a <strong>diff first</strong>
+and applied only when you accept it, as a single step of undo. And it needs a key for whichever model
+service you use, which is stored in the machine's own secret store rather than in your settings file -
+<b>AI: Set API Key</b> in the palette, typed into a masked box, and the store it went into is named on
+screen when it is saved.</p>
+{note('The assistant talks to a service over the internet, which means the text it sends leaves this machine. It sends what you ask it and the parts of the files it needs to answer. If that is not appropriate for what you are working on, do not switch it on - there is nothing to configure to make a network request private.', kind="warn", title="It sends your code somewhere")}
 
 <h2 id="settings">Settings</h2>
 <p>Settings live in a text file, and UnoCode edits it like any other file: open the palette and choose
@@ -1950,22 +2030,36 @@ tagged with the sender's address. One UnoDOS machine can be the place you read t
 PAGES["appliances.html"] = ("Appliances", f"""
 <h1>Appliances</h1>
 <p class="lede">UnoDOS can run another operating system inside a window on the desktop. An
-<strong>appliance</strong> is a Linux kernel that UnoDOS boots itself, on the same machine, at the same
-time, with a console you can type into.</p>
+<strong>appliance</strong> is a Linux system that UnoDOS boots itself, on the same machine, at the same
+time - with a screen you can see, a keyboard it answers, and a connection of its own on your real
+network. Chromium runs in one.</p>
 
-{note('This is the newest thing in UnoDOS and the least finished. It works, and what it does it does for real - but it asks you to supply the kernel, it runs one appliance at a time, and it has only been proven on Intel machines. Read <a href="#limits">What it cannot do yet</a> before you plan anything around it.', kind="warn", title="A preview, honestly labelled")}
+{note('This is the newest part of UnoDOS and the least finished. Everything described here works and none of it is simulated - but it runs one appliance at a time, it has only been proven on Intel machines, and the browser appliance is built on a Chromium with a known crash in it. Read <a href="#limits">What it cannot do yet</a> before you plan anything around it.', kind="warn", title="A preview, honestly labelled")}
 
 <h2 id="what">What it actually does</h2>
-<p>Open <strong>Appliances</strong> from the Start menu or its desktop icon. It has two views, and
-<kbd>Tab</kbd> switches between them: a <strong>list</strong> of the appliances this machine has, and
-the <strong>console</strong> of the one that is running.</p>
+<p>Open <strong>Appliances</strong> from the Start menu or its desktop icon. It has three views, and
+<kbd>Tab</kbd> moves between them: a <strong>list</strong> of the appliances this machine has, the
+<strong>console</strong> of the one that is running, and its <strong>display</strong>.</p>
 {fig("appliances.png", "<b>Appliances</b> on a machine that has none yet: <b>New</b> makes one, and the line above the buttons is the status - here <i>no appliance running</i>, and on a machine that cannot host a guest at all, the reason why.")}
-<p>The console is the part that matters. What you type goes into the guest's serial port at exactly
-the place a real keystroke would arrive, so the guest's own driver wakes up and its own shell reads the
-byte. Nothing is being simulated at the top: a Linux shell reads your command and answers it.</p>
-<p>On the way there UnoDOS also gives the guest a clock and an interrupt controller of its own, memory
-it cannot see out of, a disk (an ordinary file on a UnoDOS volume, which the guest mounts as a real
-filesystem) and a network interface it can bring up and ping over.</p>
+<p>The console is the guest's serial port. What you type goes in at exactly the place a real keystroke
+would arrive, so the guest's own driver wakes up and its own shell reads the byte. Nothing is being
+simulated at the top: a Linux shell reads your command and answers it.</p>
+{fig("appliance_display.png", "The <b>Display</b> view. Everything inside the black border is the guest drawing on its own screen: UnoDOS hands it a linear framebuffer and describes it in the boot parameters the way firmware would, so a stock Linux kernel drives it with no driver from us. The keyboard is an emulated PS/2 controller, which is why the guest's own input stack sees ordinary key events.")}
+<p><kbd>F12</kbd> leaves the display and gives the keyboard back to the desktop.</p>
+
+<h2 id="browser">The browser appliance</h2>
+<p>The appliance that makes the point is a small Alpine system running <strong>Chromium</strong> in a
+kiosk compositor. It takes its own address from your router, resolves names, validates certificates and
+renders live pages - inside a window on the UnoDOS desktop.</p>
+<p>You can drive it from the host. <kbd>Ctrl</kbd>+<kbd>L</kbd> focuses the address bar, and what you
+type goes to the guest's browser letter by letter through the emulated keyboard.</p>
+{fig("appliance_browser.png", "An address typed on the <b>host</b> - in UnoDOS, not in the guest - committed in Chromium's address bar, with the page fetched and rendered under it. The keystrokes crossed into the guest through an emulated PS/2 controller and arrived as ordinary key events; the page came off the internet over the guest's own network connection.")}
+{note("The browser appliance is built on Alpine's Chromium, which links against a system copy of a formatting library whose internal checks are left switched on. A value that ordinary Chromium would format and forget can therefore abort the process. It is restarted automatically inside the compositor, so what you see is a browser that occasionally restarts rather than one that dies - but it is a real fault, it is upstream of UnoDOS, and it is not fixed.", kind="warn", title="Chromium restarts sometimes, and why")}
+
+<h2 id="apps">One appliance, different applications</h2>
+<p>Which application the appliance runs is a small description file rather than a different build, so the
+same kernel and the same machinery run something else by naming it. <strong>GIMP</strong> is the second
+one, and it needed nothing from the hypervisor that the browser had not already needed.</p>
 
 <h2 id="requires">What your machine needs</h2>
 <p>Hardware virtualisation, which most PCs made since about 2010 have but many ship with turned off. The
@@ -1973,9 +2067,8 @@ status line above the buttons tells you which it is, in one sentence, when you t
 appliance. If it is off, turn on <strong>Intel VT-x</strong> or <strong>AMD-V</strong> (sometimes
 <em>SVM Mode</em>) in the firmware setup and start again.</p>
 <p>Memory is the other requirement. UnoDOS sets aside a block of it for guests while it is starting up,
-and how much it can spare depends on the machine; a new appliance asks for 512&nbsp;MB and gets no more
-than that block. On a machine with too little to set aside there is no guest at all, and the status
-line says so.</p>
+and how much it can spare depends on the machine. On a machine with too little to set aside there is no
+guest at all, and the status line says so.</p>
 
 <h2 id="making">Making an appliance</h2>
 <p><strong>New</strong> adds a row, and each row is four things you can edit:</p>
@@ -1994,25 +2087,36 @@ already staged in <code>EFI\\UNODOS\\VM</code>, so it starts rather than failing
 is deliberately a file you can read and fix in the Editor rather than something only the app
 understands, and it holds up to eight appliances.</p>
 
+<h2 id="foreign">Foreign apps, and what works today</h2>
+<p>The same machinery is meant to end somewhere specific: you double-click an Android <code>.APK</code>
+in Files, an icon appears on the desktop, and opening it opens a window. No launcher, and nothing on
+screen that says "Android".</p>
+{note('<b>Half of that works today.</b> Installing is real: UnoDOS reads the package, registers it, and the icon appears without a reboot. <b>Opening it does not run anything yet</b> - the channel between the app and the Android runtime is the next piece of work, so the app tells you the runtime is not connected. The Android runtime itself does boot on the appliance kernel. Treat this section as a description of where it is going, not as a feature to use.', kind="warn", title="Installing works, running does not")}
+<p>One consequence is worth knowing even at this stage: the package file is <strong>not copied</strong>
+onto the UnoDOS disk, because the filesystem underneath writes whole files only and a large package would
+have to be held in memory all at once. The installed app remembers where you put the package, so deleting
+or unplugging it leaves an app that reports its package is missing.</p>
+
 <h2 id="limits">What it cannot do yet</h2>
 <ul>
 <li><strong>One appliance at a time.</strong> Start refuses while another is running rather than
 quietly replacing it. This is a real limit of how the guest is set up, not an oversight.</li>
 <li><strong>Guest disks are read-only.</strong> The guest can mount a disk image and read it; it cannot
 write to it. Writing needs a change further down in the filesystem code.</li>
-<li><strong>The guest's network does not reach yours.</strong> It has a working network interface and
-can send and receive over it, but the other end is inside UnoDOS rather than on your wire. Bridging a
-guest onto the real network is the next piece of work, not a setting.</li>
+<li><strong>The pointer drifts.</strong> The emulated mouse reports movement rather than position, so
+the guest's pointer and yours gradually disagree and a target moves as you reach for it. The keyboard
+does not have this problem.</li>
 <li><strong>No kernel is included.</strong> UnoDOS does not ship a Linux to run, so a fresh appliance
 has nothing to boot until you put a kernel on the disk.</li>
 <li><strong>Proven on Intel.</strong> Everything above has been demonstrated on Intel VT-x. The AMD
 side is written and builds, but has not yet been seen to run a guest, so on an AMD machine treat this
 as untested rather than supported.</li>
 <li><strong>The guest gets a slice, not a core.</strong> It runs a short budget of time each frame
-alongside the desktop, so it is unhurried by design. It is for a shell and a service, not for
-work you are timing.</li>
+alongside the desktop, so it is unhurried by design. It is for a shell, a browser and a service, not
+for work you are timing.</li>
+<li><strong>The guest has a coarse clock.</strong> It settles on a 10&nbsp;ms timer rather than anything
+finer, which is fine for everything above and wrong for anything that measures itself.</li>
 </ul>
-{note('No graphics: a guest has a serial console, not a screen. What you get is a terminal in a window, which is what a small Linux appliance usually wants anyway.', title="Text, not pixels")}
 """)
 
 PAGES["ports.html"] = ("The UnoDOS family", f"""
@@ -2369,10 +2473,23 @@ and events when a document is opened, changed or saved:</p>
 {CODE_UNOCODE_EXT}
 {fig("unocode_ext_run.png", "That extension's command, run from the palette. It was not loaded until the moment the command was chosen: the manifest declared it, so it was in the palette from startup, and choosing it read the file, ran it and called the handler it registered. The message on the right is the extension talking.")}
 {note("An extension that misbehaves cannot take the machine with it. Every call into an extension runs on a <b>step budget</b>; one that does not finish is stopped, reported and switched off. On a system with no preemption that is not a nicety - it is the reason it is safe to run code somebody else wrote at all.", title="A runaway extension is stopped, not fatal")}
-<p>Two things about the interface are deliberately different from Visual Studio Code, and both are stated
-rather than hidden: calls that would return a promise return an object with <code>.then()</code> instead
-(there is no event loop to build a promise on), and <code>require()</code> resolves <code>'vscode'</code>
-and nothing else (there is no package manager to resolve anything else against).</p>
+<p>One thing about the interface is deliberately different from Visual Studio Code, and it is stated
+rather than hidden: <code>require()</code> resolves <code>'vscode'</code> and nothing else, because there
+is no package manager to resolve anything else against.</p>
+{note("The asynchronous calls in this API return <b>real Promises</b>, and <code>async</code>/<code>await</code> work. That was not true at first - the interpreter had no microtask queue, so the calls returned an object with a <code>.then()</code> on it and the manual said so. It has one now, and <code>await</code> genuinely suspends, so an extension written the way a VS Code extension is written behaves the way it expects.", kind="tip", title="Promises are real now")}
+
+<h2 id="lsp">Language servers</h2>
+<p>UnoCode contains a <strong>Language Server Protocol client</strong>: a server per language, spoken to
+in JSON-RPC over pipes, feeding diagnostics, completions, hover, go-to-definition, find-references,
+rename and format back into the editor. It is configured from settings, one command line per language,
+and an empty command switches one off.</p>
+{note("<b>None of that runs on pc64.</b> A language server is a separate program and pc64 has no processes to start one in, so the client asks the platform, is told there is nothing, and never starts anything - at no cost, and with the editor's own grammar-derived completions untouched. This section describes a capability that is real in the shared UnoCode codebase and inert on this platform. It becomes live here if and when UnoDOS grows a way to run a child program.", kind="warn", title="Not on pc64, and why")}
+<p>Two decisions in the client are worth knowing if you are reading the source. It syncs the
+<strong>whole document</strong> after a pause in typing rather than sending incremental edits, because
+incremental sync means client and server each keep a copy and one mis-ranged edit makes them diverge
+silently. And a server that dies is <strong>restarted</strong> with a widening delay and has its
+documents re-opened on the replacement, because a language server exiting is ordinary rather than
+exceptional.</p>
 
 <h2 id="settings">Settings and keyboard shortcuts</h2>
 <p>Both are files, both are yours to edit, and both are the formats Visual Studio Code uses - including
@@ -2394,8 +2511,11 @@ binding. Yours win over an extension's, which win over the defaults.</p>
 <p>Honestly, so you are not looking for them:</p>
 <ul>
   <li><strong>No word wrap.</strong> Long lines scroll sideways.</li>
-  <li><strong>No hover documentation or go-to-definition</strong>, and extensions cannot add them - the
-      only language feature an extension can contribute is completions.</li>
+  <li><strong>No language server runs on this machine</strong>, so there is no hover documentation, no
+      go-to-definition and no rename-across-a-project here. UnoCode <em>has</em> a language-server client -
+      see <a href="#lsp">Language servers</a> below - but a server is a separate program, and pc64 has no
+      way to start one. Completions come from the language's keywords, the words already in the file and
+      any snippets, which is what you get.</li>
   <li><strong>Source Control tracks your unsaved edits</strong> against the file as it was opened, and
       marks changed lines in the gutter. There is no repository on this machine and it says so rather
       than pretending.</li>

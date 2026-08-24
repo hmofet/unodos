@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>UnoTransfer · UnoDOS pc64 manual</title>
+<meta name="description" content="User manual for UnoDOS pc64, the x86-64/UEFI world of the UnoDOS operating-system family.">
+<link rel="stylesheet" href="assets/style.css">
+
+<script>
+(function(){
+  var r=document.documentElement, k='unodos-doc-theme';
+  try{var s=localStorage.getItem(k); if(s)r.setAttribute('data-theme',s);}catch(e){}
+  window.__t=function(){
+    var cur=r.getAttribute('data-theme');
+    if(!cur){cur=matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';}
+    var nx=cur==='dark'?'light':'dark';
+    r.setAttribute('data-theme',nx);
+    try{localStorage.setItem(k,nx);}catch(e){}
+  };
+})();
+</script>
+<script>
+/* Lightbox: click (or Enter/Space on) a screenshot to see it full size.
+   Manual shots are scaled into the text column, where fine UI detail - a
+   status line, an icon, a menu entry - is too small to read. Built once at
+   load and reused; Esc or a click anywhere closes it. */
+(function(){
+  var lb,img,cap;
+  function build(){
+    lb=document.createElement('div'); lb.id='lb'; lb.setAttribute('role','dialog');
+    lb.setAttribute('aria-modal','true');
+    img=document.createElement('img');
+    cap=document.createElement('figcaption');
+    var x=document.createElement('button');
+    x.className='x'; x.innerHTML='&times;'; x.setAttribute('aria-label','Close');
+    lb.appendChild(x); lb.appendChild(img); lb.appendChild(cap);
+    document.body.appendChild(lb);
+    lb.addEventListener('click', close);
+  }
+  function open(src, text){
+    if(!lb) build();
+    img.src=src; img.alt=text||''; cap.textContent=text||'';
+    lb.classList.add('on'); document.body.style.overflow='hidden';
+  }
+  function close(){
+    if(!lb) return;
+    lb.classList.remove('on'); img.src=''; document.body.style.overflow='';
+  }
+  document.addEventListener('click', function(e){
+    var b=e.target.closest && e.target.closest('button.zoom');
+    if(!b) return;
+    e.preventDefault();
+    var f=b.parentNode.querySelector('figcaption');
+    open(b.getAttribute('data-full'), f?f.textContent:'');
+  });
+  document.addEventListener('keydown', function(e){
+    if(e.key==='Escape') close();
+  });
+})();
+</script>
+
+</head>
+<body>
+<input type="checkbox" id="mnav">
+<div class="topbar">
+  <label class="menu-btn" for="mnav">☰ Menu</label>
+  <b>UnoDOS pc64</b>
+</div>
+<div class="layout">
+
+<aside class="sidebar">
+  <a class="brand" href="index.html" style="text-decoration:none;color:inherit">
+    <span class="logo"><i></i><i></i><i></i><i></i></span>
+    <span><b>UnoDOS <span style="color:var(--accent-2)">pc64</span></b><span class="sub">User manual</span></span>
+  </a>
+  <ul class="nav"><li><a class="" href="index.html">Overview</a></li><li><a class="" href="try-browser.html">Try it in your browser</a></li><li><a class="" href="getting-started.html">Getting started</a></li><li><a class="" href="desktop.html">The desktop</a></li><li><a class="" href="windows.html">Windows &amp; desktops</a></li><li><a class="" href="appearance.html">Themes &amp; appearance</a></li><li><a class="" href="apps.html">Applications</a></li><li><a class="" href="office.html">UnoOffice</a></li><li><a class="" href="code.html">UnoCode</a></li><li><a class="" href="browser.html">Web browser</a></li><li><a class="" href="ssh.html">SSH client</a></li><li><a class="active" href="transfer.html">UnoTransfer</a></li><li><a class="" href="networking.html">Networking</a></li><li><a class="" href="logging.html">System log</a></li><li><a class="" href="appliances.html">Appliances</a></li><li><a class="" href="ports.html">The UnoDOS family</a></li><li class="sec">Developer</li><li><a class="" href="developer.html">Overview &amp; architecture</a></li><li><a class="" href="studio.html">Studio: the built-in IDE</a></li><li><a class="" href="unocode.html">UnoCode: the VS Code-class editor</a></li><li><a class="" href="dev-apps.html">Writing apps</a></li><li><a class="" href="dev-python.html">Python apps</a></li><li><a class="" href="dev-samples.html">Sample programs</a></li><li><a class="" href="dev-sdk-c.html">UnoC SDK reference</a></li><li><a class="" href="dev-sdk-python.html">Python SDK reference</a></li><li><a class="" href="dev-api.html">API reference</a></li><li><a class="" href="dev-build.html">Building &amp; tooling</a></li><li><a class="" href="dev-remote.html">Remote control &amp; automation</a></li></ul>
+  <div class="side-foot">
+    <a href="https://github.com/hmofet/unodos" target="_blank" rel="noopener">GitHub&nbsp;&rsaquo; hmofet/unodos</a><br>
+    <a href="#" onclick="__t();return false">Toggle light / dark</a>
+  </div>
+</aside>
+<main class="main"><div class="wrap">
+
+<h1>UnoTransfer</h1>
+<p class="lede">Move files between this machine and another one. Two panes side by side - a UnoDOS
+volume on the left, a remote server on the right - and a queue that carries whole folders across
+without you watching it.</p>
+
+<p>UnoTransfer is in the Start menu under <strong>Transfer</strong>. It speaks several transfer
+protocols through one interface, so copying a folder off a web server and copying it off a Linux box
+over SSH are the same three actions with a different address typed in.</p>
+
+<h2 id="panes">The two panes</h2>
+<p>The left pane is always a volume on this machine. The right pane is wherever you connected to.
+<kbd>Tab</kbd> moves between them, the arrow keys move within one, and <kbd>Enter</kbd> opens a folder.
+Choosing a file or a folder and pressing the copy key puts a <strong>job</strong> on the queue that
+copies it to the other side, recursively, creating folders as it goes.</p>
+<p>The queue is the third part of the window. Each job shows what it is copying, how far along it is
+and what went wrong if anything did. Jobs run one file at a time and keep going while you use the
+rest of the window.</p>
+
+<h2 id="protocols">What it can connect to</h2>
+<table>
+  <tr><th>Protocol</th><th>What it is for</th><th>Notes</th></tr>
+  <tr><td><b>Local</b></td><td>Copying between two UnoDOS volumes</td><td>Both panes can be local</td></tr>
+  <tr><td><b>SCP</b></td><td>Any machine you can reach over SSH</td><td>Uses the same saved sessions and keys as the <a href="ssh.html">SSH client</a></td></tr>
+  <tr><td><b>HTTP / HTTPS</b></td><td>Fetching a file by its URL</td><td>Download only, and no folder listing - a web server does not offer one</td></tr>
+  <tr><td><b>WebDAV / WebDAVS</b></td><td>A file server that speaks WebDAV</td><td>Lists, uploads, downloads and creates folders</td></tr>
+  <tr><td><b>TFTP</b></td><td>Small transfers on a local network, usually to equipment</td><td>No listing and no delete: the protocol has neither</td></tr>
+</table>
+<div class="note tip"><b>Unsupported means unavailable, not broken</b>A protocol that cannot do something says so before you start rather than failing halfway. TFTP has no listing, HTTP has no listing, and SCP cannot resume an interrupted transfer - so those options are simply not offered on those connections instead of being offered and then breaking.</div>
+
+<h2 id="terminal">The terminal tab</h2>
+<p>An SCP connection is an SSH connection, so UnoTransfer also gives you a <strong>terminal</strong> on
+the machine you connected to. It is a real VT100/xterm emulator rather than a log window, so a
+full-screen program that draws its own interface works in it.</p>
+
+<h2 id="remote">Transferring without touching the machine</h2>
+<p>UnoTransfer is also reachable through UnoDOS's remote-control channel as the <code>xfer</code>
+command, which is how a script on another computer tells this one to fetch something. The important
+part is that the file does <strong>not</strong> travel over the control channel: UnoDOS is told where
+the file is and goes and gets it itself, straight from the machine that has it. See
+<a href="dev-remote.html">Remote control &amp; automation</a>.</p>
+
+<h2 id="limits">What it does not do yet</h2>
+<ul>
+  <li><strong>SFTP is not available.</strong> The connection type exists but the layer underneath it
+      does not offer it yet, so UnoTransfer offers SCP instead - the same job, over the same SSH
+      connection, to the same machine.</li>
+  <li><strong>One very large file may not fit.</strong> A file is staged in memory as it arrives,
+      because the filesystem underneath can only write a file whole. The staging area is about
+      8&nbsp;MB by default and adjustable, and a folder of ordinary files of any total size copies
+      fine - it is a single file bigger than the staging area that fails. Streaming is waiting on one
+      change further down in the filesystem code, and the app reports which mode it is in.</li>
+  <li><strong>No resuming.</strong> An interrupted transfer starts that file again.</li>
+  <li><strong>No pasting a web page's address and picking a quality.</strong> UnoTransfer fetches a URL
+      that is already a file. It is not a media downloader.</li>
+  <li><strong>One window.</strong> Like the browser and the SSH client, it is a single window with a
+      single connection rather than tabs.</li>
+</ul>
+
+<nav class="pagenav"><a href="ssh.html">&lsaquo; SSH client</a><a class="nxt" href="networking.html">Networking &rsaquo;</a></nav>
+</div></main>
+</div>
+</body>
+</html>
