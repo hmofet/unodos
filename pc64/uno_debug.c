@@ -1828,6 +1828,22 @@ void uno_dbg_write_bootlog(void)
     g_in_disk = 1;
     ok = uno_fat_write(vol, path, (const unsigned char *)g_report,
                        (long)g_rlen);
+    /* ...AND A ROOT COPY, exactly as the env block has always had.
+     *
+     * The machine directory is created with a mkdir whose return value cannot
+     * distinguish "already there" from "failed", so when it is absent every
+     * write under it fails and this function loses the whole kernel log - the
+     * tail, the driver traces, the reason the run was made. The env block
+     * survives that because it also writes to the root; the boot log, which is
+     * the more valuable of the two, did not. On 2026-08-23 a Surface run came
+     * back with BOOTENV.TXT and no BOOTLOG.TXT for precisely that reason, and
+     * the WiFi trace it was carrying was simply gone. */
+    { int rok = uno_fat_write(vol, "BOOTLOG.TXT",
+                              (const unsigned char *)g_report, (long)g_rlen);
+      if (!ok && rok)
+          uno_dbg_log("bootlog: machine dir unwritable (%s) - root copy only",
+                      path);
+      ok = ok || rok; }
     uno_fat_sync();
     g_in_disk = 0;
     if (!ok) uno_dbg_log("bootlog: WRITE FAILED vol=%d (%s)", vol, path);
