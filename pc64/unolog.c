@@ -5,7 +5,8 @@
 #include "pc64_native.h"     /* rdtsc + tsc_per_us (the only production clock)
                               * and uno_native_rtc_read for wall time         */
 #include "fat.h"
-#include "pc64_fs.h"        /* uno_fs_pref_vol + the fs->fat index mapping */
+#include "pc64_fs.h"
+#include "uno_debug.h"      /* register our tap; compiles away in production */        /* uno_fs_pref_vol + the fs->fat index mapping */
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
@@ -515,6 +516,8 @@ void unolog_init(void)
     /* SAY WHICH VOLUME THE LOG IS ON. There is more than one writable FAT on a
      * dual-boot laptop, this used to take whichever one answered first, and a
      * log written to somebody else's ESP is both useless and rude. */
+    /* Claim the kernel-log tap. Explicit, so it cannot depend on link order. */
+    uno_dbg_set_log_tap(unolog_tap);
     ulog_notice(LF_KERNEL, "unolog file sink: fat volume %d", log_vol());
     ulog_notice(LF_KERNEL, "unolog started: level=%s remote_level=%s",
                 unolog_sev_name(g_level), unolog_sev_name(g_remote_level));
