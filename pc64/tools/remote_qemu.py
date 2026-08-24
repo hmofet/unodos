@@ -20,9 +20,15 @@ sys.path.insert(0, HERE)
 from unoauto_remote import UnoAutoLink
 
 ESP  = os.path.join(HERE, "..", "build", "esp")
-DISK  = "/tmp/remote_disk.img"
-DISK2 = "/tmp/remote_disk2.img"     # a SECOND blank disk for the partition/format e2e
-FAT   = "/tmp/remote_fat.img"
+# WHERE THE SCRATCH IMAGES LIVE. /tmp is right on most boxes and WRONG on a
+# box where /tmp is a tmpfs: devbuntu's is 3.6 GB of RAM, so an appliance-sized
+# disk plus its FAT staging copy fills it and build_disk dies with ENOSPC
+# halfway through a write - after the run has already booted and staged, which
+# is the expensive part. UNO_QEMU_TMP moves all three onto real disk.
+_TMP  = os.environ.get("UNO_QEMU_TMP", "/tmp")
+DISK  = os.path.join(_TMP, "remote_disk.img")
+DISK2 = os.path.join(_TMP, "remote_disk2.img")   # a SECOND blank disk for the partition/format e2e
+FAT   = os.path.join(_TMP, "remote_fat.img")
 OVMF_CODE = "/usr/share/OVMF/OVMF_CODE_4M.fd"
 OVMF_VARS = "/usr/share/OVMF/OVMF_VARS_4M.fd"
 VARS = "/tmp/remote_vars.fd"
@@ -40,7 +46,19 @@ def build_disk():
     # stays up for us to drive.
     with open(cfg, "w", newline="\r\n") as f:
         f.write("remote=10.0.2.2:%d\nnonet\n" % PORT)
-    disk_sectors = 96 * 2048
+    # 96 MB IS NOT ALWAYS ENOUGH, AND THE OVERFLOW IS SILENT. The ESP is
+    # mcopy'd into a FAT image sized from this number, so a payload larger
+    # than the disk simply does not arrive: the guest boots, finds the file
+    # it needed absent, and carries on doing something plausible. The
+    # appliance lane hit exactly that - an 864 MB ROOTFS.IMG against a
+    # 96 MB disk - and it presented as a Linux guest that reached its
+    # initrd shell and then sat there forever, which reads as a hypervisor
+    # fault and is a disk that was too small.
+    #
+    # UNO_DISK_MB overrides it. Default unchanged at 96 so every existing
+    # gate builds the same image it always did.
+    disk_mb = int(os.environ.get("UNO_DISK_MB", "96"))
+    disk_sectors = disk_mb * 2048
     with open(DISK, "wb") as f: f.truncate(disk_sectors * SECTOR)
     # DISK B BELONGS HERE, NOT IN main().
     #
