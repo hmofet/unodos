@@ -10982,3 +10982,41 @@ item 3 has ever had.
 Instrumented, not guessed: `mvm_step()` reads csr2808 after each init command
 and names the first one that finds it set. Four register reads decide between
 four candidates, and this lane's whole history says pick that over reasoning.
+
+## 2026-08-25 - REQUEST to unonet (from NIC drivers / iwlwifi): the pre-lease IP is QEMU's, and it reads as an answer
+
+`net.c:9` starts life as
+
+```c
+static u8 MYIP[4] = {10, 0, 2, 15};
+```
+
+which is QEMU slirp's guest address. On metal, before DHCP completes,
+`net_ip()` therefore returns a perfectly plausible-looking 10.0.2.15. From the
+Surface Laptop Go, 2026-08-25 19:40, two lines four seconds apart in one join:
+
+```
+post-join diag: dhcp=none ip=10.0.2.15
+post-join diag: dhcp=LEASE ip=192.168.2.52
+```
+
+The second is real. The first is a default that has never been anywhere near
+this network, printed beside `dhcp=none` which is the only reason it is
+readable as "no address yet" at all.
+
+**Why this is worth a change and not a shrug.** This lane spent eight metal runs
+on "no DHCP lease" partly because the diagnosis never printed whether there was
+a lease, and the fix was to print `net_dhcp_done()` and `net_ip()` together. A
+default that looks like a genuine address undoes half of that: any log line,
+verb or UI that prints `net_ip()` without also printing `net_dhcp_done()` says
+the machine has 10.0.2.15. On a QEMU run that is even the RIGHT answer, so it
+cannot be caught by testing where most testing happens.
+
+**Suggested:** 0.0.0.0 until a lease or a static configuration sets it - an
+address that is obviously not one. If the slirp default is load-bearing for a
+QEMU path that never runs DHCP, a named constant applied by that path rather
+than by the initialiser would keep it without the ambiguity.
+
+Not touched here: `net.*` is unonet's. The `iwl netres` / post-join diagnosis
+prints `dhcp=` beside `ip=` already, so nothing in this lane is currently
+misled.
