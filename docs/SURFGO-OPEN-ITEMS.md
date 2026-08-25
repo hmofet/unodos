@@ -25,6 +25,12 @@ Two bugs stood in the way, both landed:
 WiFi went from dead to **joined**: the AX201 loads firmware, goes ALIVE, scans
 (24 APs), authenticates, associates, completes the 4-way and installs keys.
 
+**2026-08-25: and now to NETWORKED.** `dhcp=LEASE ip=...` on metal, over
+WPA2-PSK, on this machine. Item 2 below is closed; the receive ring was
+starving after exactly one lap. Item 1 (SAE) and item 3 (retarget) are still
+open, and item 4 is still a sizing decision rather than a bug. So this document
+is now three things, not four.
+
 ## 1. SAE's PMK is wrong  ·  the one with the most evidence
 
 **Symptom.** WPA3-SAE authenticates and the 4-way then dies:
@@ -57,7 +63,7 @@ exchange itself.
 scanning, authentication, association, the supplicant state machine, and the
 4-way message flow. Do not re-derive those.
 
-## 2. No DHCP lease after a successful join
+## 2. No DHCP lease after a successful join  ·  **CLOSED 2026-08-25**
 
 **Symptom.** The join completes (PSK), keys are installed, the station is
 authorized - and `apps/network.c` polls `net_dhcp_done()` for ~9 s
@@ -108,6 +114,67 @@ touching any code.
 - **The retarget on the run that reached DHCP was clean** (`STA_REMOVE` then a
   fresh `STA_CONFIG`, not a re-point), and the association that succeeded
   negotiated `mfp=0`. Neither the stale-station fault nor PMF is in this.
+
+### 2026-08-25: CLOSED. The receive ring survived exactly one lap.
+
+**`wifi: post-join diag: dhcp=LEASE ip=...`, on metal, on the Surface Laptop
+Go.** It was not the GTK, not the DTIM wake and not DHCP.
+
+The run that answered it (2026-08-24 23:57, WPA2-PSK on `30:29:2b:70:4f:cf`)
+came after seven that could not, because the diagnosis fired **once, 2.5 s in**,
+and the whole question lives in the thirty seconds after that. Four rounds, and
+the numbers stood still:
+
+```
++2s   rb=2047 mpdu=371 | from_ap=7 bcn=2 uni=2 grp=0
++6s   rb=2047 mpdu=371 | from_ap=7 bcn=2 uni=2 grp=0
++10s  rb=2047 mpdu=371 | from_ap=7 bcn=2 uni=2 grp=0
++25s  rb=2047 mpdu=371 | from_ap=7 bcn=2 uni=2 grp=0
+```
+
+Not one number moved in twenty-three seconds while `tx` climbed 2 → 16 and every
+DISCOVER was ACKed. The receive path did not lose broadcast and did not
+mis-decrypt anything: it **stopped, whole**. And 2047 is `RXQ_N - 1` - one lap of
+the ring, exactly.
+
+`rx_restock()` rewrote nothing. Its comment said why: the free list is a static
+identity mapping, slot i → rb i → vid i+1, so re-advertising an index was
+believed to be the same as refilling it. `iwl_pcie_rxmq_restock()` writes
+`bd[write] = page_dma | vid` on every restock instead, and this is the reason -
+**the hardware CONSUMES a free descriptor**, so re-advertising a slot it has
+already eaten hands it back whatever the eat left behind. One lap is exactly how
+long a static free list can survive that.
+
+With the descriptors rewritten, the same machine: `closed` advancing, `read`
+tracking it, `zeros=0/2048`, and DISCOVER → OFFER → REQUEST → **lease**.
+
+**Why nobody saw it for seven runs, which is the transferable part.** Every
+earlier failure killed the link before 2048 RBs had gone by, so the ring never
+reached its lap. It took a join that LIVED - `akm=psk` to keep WPA3-SAE (item 1)
+out of the path, an SSID-aware `bssid=` pin, and a filter for the abandoned
+attempt's EAPOL - before the bug underneath could even be reached. **Three
+separate faults each had to be fixed before the real one became visible, and
+each of them looked like the answer while it was the last one standing.**
+
+Two lessons worth more than the bug:
+
+- **A snapshot cannot see a stall.** Every rung of the verdict ladder reasoned
+  about the SHAPE of one reading - which frames arrived and which did not - and
+  on a frozen counter the shape is just the last instant before the stop,
+  preserved. It read two unicast frames that arrived *before* the freeze and
+  announced "unicast arrives and group-addressed traffic never does". The
+  ladder now tests for movement between rounds first.
+- **The diagnosis never printed its own question.** Eight runs about "no DHCP
+  lease" and not one line said whether there was a lease; the first success had
+  to be argued from `tx` having stopped climbing. `net_dhcp_done()` and
+  `net_ip()` are public in `net.h` and it prints them now.
+
+**Still open, and it is the original suspicion after all:** `grp=0`. Not one
+group-addressed frame in 113 from the AP over ten seconds, with `drop=0` - so
+they are not arriving at all rather than failing to decrypt. The lease landed
+because this server unicast its OFFER; ARP and every broadcast protocol will
+not be so lucky. That is the next thing in this lane and the GTK / `ACCEPT_GRP`
+path is where to start.
 
 ## 3. `retarget_ap()` cannot re-point after a successful association
 

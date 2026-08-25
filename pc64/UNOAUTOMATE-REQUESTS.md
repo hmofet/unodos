@@ -10660,3 +10660,50 @@ asked on its own.
   earlier, and `SAE auth -> -1` on a BSS that had authenticated ten minutes
   earlier. Give the APs a few minutes between runs, or the next run measures
   the last one's punishment.
+
+## 2026-08-25 - LANDED (iwlwifi / surfgo-dhcp): the Surface Laptop Go has a DHCP lease
+
+`wifi: post-join diag: dhcp=LEASE ip=...` on metal. `docs/SURFGO-OPEN-ITEMS.md`
+item 2 is CLOSED and that document is now three things rather than four.
+
+**The bug:** `rx_restock()` advanced the free-list write index and rewrote no
+descriptors, on the reasoning that the list is a static identity mapping (slot
+i -> rb i, vid i+1) so re-advertising an index is the same as refilling it. The
+hardware CONSUMES a free descriptor, so re-advertising a slot it has eaten hands
+it back whatever the eat left behind. The ring therefore delivered **exactly one
+lap** - `rb=2047` against `RXQ_N` 2048 - and then stopped, permanently, with the
+association still up and every transmit still ACKed.
+
+**What that cost, and it is the transferable part.** Seven metal runs never
+reached the bug, because three other faults each killed the link first and each
+looked like the answer while it was the last one standing:
+
+- a scan table full at 24 and silently dropping every further BSSID
+- `bssid=` announced-but-not-honoured, then honoured-but-not-SSID-checked, so a
+  NimmuNet BSSID aimed a SKYNET join at the wrong radio
+- the ABANDONED attempt's EAPOL tearing down the association that replaced it
+  (key descriptor version 0 against a WPA2-PSK handshake)
+
+Plus `akm=` in DEBUG.CFG to keep WPA3-SAE out of the path entirely, without
+which every experiment ran downstream of item 1.
+
+**Two lessons above the bug:**
+
+- **A snapshot cannot see a stall.** The verdict ladder reasoned about the shape
+  of one reading, and on a frozen counter the shape is the last instant before
+  the stop, preserved. It read two unicast frames that arrived BEFORE the freeze
+  and announced "unicast arrives and group-addressed traffic never does". Test
+  for movement between rounds before interpreting any shape.
+- **The diagnosis never printed its own question.** Eight runs about "no DHCP
+  lease" and no line said whether there was a lease; the first success had to be
+  argued from `tx` having stopped climbing. It prints `dhcp=LEASE ip=...` now.
+
+**Still open in this lane and it is the ORIGINAL suspicion after all:**
+`grp=0` - not one group-addressed frame in 113 from the AP over ten seconds,
+with `drop=0`, so they never arrive rather than failing to decrypt. The lease
+landed only because that server unicast its OFFER. ARP and every broadcast
+protocol will not be so lucky. The GTK / `ACCEPT_GRP` path is where to start,
+and the funnel line (`bcn`/`uni`/`grp`) is already there to measure it.
+
+**Releasing the claim on `iwlwifi.*`.** Items 1 (SAE PMK, supplicant lane) and 3
+(retarget) are unclaimed and their evidence is in this file and the doc.
