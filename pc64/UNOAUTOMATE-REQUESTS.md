@@ -10771,3 +10771,81 @@ BSSes rejected the association outright with status 1 (`assoc -> -4097`, which
 is `-(0x1000|status)` and correct). Worth a run with `akm=` unset so SAE is in
 the path, and a SKYNET BSSID pinned - the pin is SSID-aware now, so one stick
 covers both networks safely.
+
+## 2026-08-25 - RESULT (NIC drivers / iwlwifi, branch `surfgo-grp`): the DTIM hypothesis is refuted by its own fix
+
+The post-association link tune **works**, the firmware **accepts** it, and
+`grp=0` is completely unchanged. Metal, 2026-08-25 13:24, Surface Laptop Go,
+NimmuNet on `e8:d3:eb:47:4e:cf`, WPA2-PSK, lease at 192.168.10.20:
+
+```
+post-assoc link tune accepted - dtim_interval=200 (bi 100 x dtim 2)
++2s   rb=2128 mpdu=188 | from_ap=38  bcn=29  uni=4 grp=0 fgrp=0
++25s  rb=2781 mpdu=407 | from_ap=257 bcn=248 uni=4 grp=0 fgrp=0
+prot=2 dec=2 foreign=0 drop=0 st=00000000   ring closed=936 read=936 zeros=0/2048
+```
+
+**The counters moved**, which is the first thing this lane checks now: `from_ap`
+38 -> 257 and `rb` 2128 -> 2781 across four rounds, `closed` tracking `read`,
+`zeros=0/2048`. This is a live ring being read, not a stalled one whose shape is
+the last instant before the stop preserved. So the reading is real: a firmware
+told exactly when group-addressed traffic is released still hands up 248 beacons
+and **zero group-addressed data frames** in twenty-five seconds.
+
+**`MAC_CFG_FILTER_ACCEPT_GRP` is not it either**, and this was checked against
+upstream `fw/api/mac-cfg.h` rather than recalled: it is `BIT(2)` in the new MAC
+config API exactly as the comment in `iwlwifi.c` claims, with `ACCEPT_BEACON` at
+`BIT(3)`. Both were already being sent, on both the MLD and the legacy path.
+
+**`fgrp` could not settle it and could never have.** It counts group-addressed
+data from other BSSes, and `foreign=0` for the whole run: once associated the
+firmware filters every other BSS's DATA, so `fgrp` is pinned to 0 whichever
+answer is true. The control was degenerate on arrival - a second measurement
+that reads the same for both hypotheses. That is now written on the counter
+itself rather than left for the next person to trust.
+
+**What the run does narrow.** Foreign *management* arrives in bulk (`mpdu` 407
+against `from_ap` 257 - roughly 150 frames from BSSes that are not ours), while
+foreign *data* is zero and our own group-addressed data is zero, with `drop=0`
+and no descriptor ever reporting a decryption it could not do. Broadcast
+management from everywhere, unicast data from our AP, and no group-addressed
+data from anyone.
+
+**Next, and it settles it either way:** `rxpromisc` in DEBUG.CFG -
+`MAC_CFG_FILTER_PROMISC`, "accept all data frames" - no rebuild and no
+credentials, the same shape as `bssid=` and `akm=`. Group data appearing (ours,
+a neighbour's, any) proves the frames are on the air and reaching the radio, and
+moves the fault into the normal data filter or the group key. Nothing appearing,
+with foreign unicast now arriving to prove promisc took effect, proves no
+group-addressed data is handed up under any filter, and the AP or the wake
+schedule is next. Under promisc `fgrp` finally discriminates.
+
+**Two corrections to instruments, both paid for by this same log:**
+
+- `post_assoc_link_tune()` read `csr2808` only AFTER the tune, so on the third
+  SKYNET attempt it announced "the tune ASSERTED the fw (sw_err=1)" on a boot
+  where two earlier attempts had each spent a session-protection request -
+  which is precisely the trigger `docs/SURFGO-OPEN-ITEMS.md` item 3 names for
+  the third-attempt assert. It reads before and after now and only convicts
+  itself on a 0 -> set transition. **A test that cannot tell "I broke it" from
+  "it was already broken" convicts whichever code happens to look next.**
+- `MAC_CONFIG` now traces `filter_flags`. Eight runs about which classes of
+  frame the firmware hands up, and no line ever said what we asked it for.
+
+**For whoever holds item 1 (SAE PMK), from the same boot - and it moves that
+lane.** SKYNET was joined with `akm=psk`, so SAE was not in the path at all,
+and it still failed on all three BSSes:
+
+- `e8:d3:eb:47:4e:c6`: `auth -> 17`. Not the previously recorded "associates
+  cleanly, then no EAPOL" - status 17 is the AP refusing at authentication.
+- `e8:d3:eb:51:4d:66`: auth 0, **assoc -> 2 (AID 2)**, tune accepted, and then
+  the AP sent EAPOL **1/4 seven times in four seconds** (`ki=008a`, a normal
+  WPA2 message 1/4), replying 121 bytes to each, and the 4-way never completed.
+  An AP that keeps re-sending 1/4 never accepted our 2/4.
+- `30:29:2b:70:4f:c6`: auth 0, assoc -> 5, 4-way did not complete.
+
+A WPA2-PSK 4-way that dies exactly this way, on three BSSes, with SAE excluded
+by config, is most simply a **wrong PSK for SKYNET** (`psk_len=20`) rather than
+a supplicant fault - and if that is right then the "SKYNET does not connect"
+note filed against item 1 is not evidence about SAE at all. Worth confirming the
+credential before spending a metal run on the supplicant.
