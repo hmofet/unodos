@@ -4338,12 +4338,44 @@ static const u8 g_scan_tmpl[1940] = {
  * bytes removes every field-decode risk - same card, same MAC in the probe
  * template (18:26:49:71:91:57), so it is valid as-is.  38 channels (2.4+5GHz),
  * active wildcard scan, uid 0. */
+/* DID THE FIRMWARE TAKE THE SCAN REQUEST AT ALL?
+ *
+ * The SECOND and every later join of a boot scans and finds nothing: metal,
+ * 2026-08-25 14:44, three consecutive `complete=no(timeout) mpdu_seen=0 aps=0`
+ * with `rb_total=0` and rx_closed frozen, on a radio that had just been
+ * restarted, come up ALIVE with no assert, and answered every MVM init command.
+ * The first scan of the same boot read `rb_total=52 aps=32`.
+ *
+ * Two completely different faults look like that and no log line separates
+ * them: a COMMAND PATH that is not reaching the firmware after the restart, or
+ * a firmware that takes the request and hears nothing. SCAN_REQ_UMAC produces
+ * its own response packet - the working scan's `pkt#1 grp=1 cmd=0d len=4` - so
+ * whether the closed index moves at all in the first few ms is exactly that
+ * question, and it is one register read.
+ *
+ * NON-DESTRUCTIVE on purpose: this reads the closed index and never advances
+ * g_rx_read or processes an RB, so the response it detects is still sitting
+ * there for the wait_notif() that follows. An instrument that consumed the
+ * thing it measures would break the scan it is trying to explain. */
+static void scan_req_probe(u16 before)
+{
+    int t; u16 after = before;
+    for (t = 0; t < 60 && after == before; t++) { mdelay_(1); after = rx_closed() & (RXQ_N - 1); }
+    uno_dbg_net_trace("wifi: scan: the request %s - closed %d -> %d after %d ms, csr2808=%08x",
+                      after != before ? "was ACKNOWLEDGED" : "produced NO response at all",
+                      (int)before, (int)after, t,
+                      (unsigned)r32(CSR_MSIX_HW_INT_CAUSES_AD));
+}
+
 static int mvm_scan_passive(int dwell_ms)
 {
     const u8 *comp;
+    u16 pre;
     g_scan_ap_n = 0; g_scanning = 1; g_scan_mpdu_seen = 0; g_scan_beacon_calls = 0; g_scan_rb_total = 0;
-    uno_dbg_net_trace("wifi: scan: pre  rx_closed=%d rx_read=%d", rx_closed() & (RXQ_N-1), g_rx_read);
+    pre = rx_closed() & (RXQ_N - 1);
+    uno_dbg_net_trace("wifi: scan: pre  rx_closed=%d rx_read=%d", (int)pre, g_rx_read);
     send_cmd(GRP_LONG, 0x0d /*SCAN_REQ_UMAC*/, 0, g_scan_tmpl, (int)sizeof g_scan_tmpl);
+    scan_req_probe(pre);
     /* pump RX so beacons get recorded during the scan; SCAN_COMPLETE_UMAC comes
      * back in the LEGACY group as 0x0f, else we just poll for dwell_ms. */
     comp = wait_notif(GRP_LEGACY, 0x0f, 0, dwell_ms);
@@ -6199,13 +6231,15 @@ static int g_uiscan_left;       /* milliseconds of dwell still owed */
 
 int iwl_scan_begin(void)
 {
+    u16 pre;
     if (radio_up() < 0) return -1;
     mvm_scan_cfg();
     g_scan_ap_n = 0; g_scanning = 1;
     g_scan_mpdu_seen = 0; g_scan_beacon_calls = 0; g_scan_rb_total = 0;
-    uno_dbg_net_trace("wifi: scan: pre  rx_closed=%d rx_read=%d",
-                      rx_closed() & (RXQ_N-1), g_rx_read);
+    pre = rx_closed() & (RXQ_N - 1);
+    uno_dbg_net_trace("wifi: scan: pre  rx_closed=%d rx_read=%d", (int)pre, g_rx_read);
     send_cmd(GRP_LONG, 0x0d /*SCAN_REQ_UMAC*/, 0, g_scan_tmpl, (int)sizeof g_scan_tmpl);
+    scan_req_probe(pre);
     g_uiscan = 1; g_uiscan_left = UI_SCAN_DWELL_MS;
     return 0;
 }
