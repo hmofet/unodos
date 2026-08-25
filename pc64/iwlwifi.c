@@ -3774,6 +3774,47 @@ static void handle_eapol(const u8 *eapol, int len)
                                          "- ignored (the supplicant is not armed)");
         return;
     }
+    /* AND NEITHER HAS THE ABANDONED ATTEMPT'S EAPOL, WHICH IS STILL IN THE AIR.
+     *
+     * Surface Laptop Go, 2026-08-24 20:58:10, the whole thing inside one
+     * second: SAE fails on this BSS, we fall back to WPA2-PSK on the SAME BSS,
+     * the PSK 4-way COMPLETES, CCMP keys install, the station is authorized -
+     * and then three more message 1/4s arrive with the RETRY bit set
+     * (fc=0a08), 121 bytes, `ki=0088`. They are the SAE attempt's, still being
+     * retransmitted by an AP that never got an answer it liked. The supplicant
+     * took them, went from DONE back to state 1, answered with a PSK 2/4, and
+     * the AP - which is talking about a different handshake - deauthenticated
+     * with reason 2. A completed association, torn down by frames belonging to
+     * the one before it.
+     *
+     * Key Descriptor Version (key_info & 7) is what tells them apart and it
+     * costs nothing to read: WPA2-PSK negotiates version 2, and an AKM of
+     * 00-0F-AC:8 or above - SAE - negotiates 0. So a version-0 EAPOL-Key while
+     * armed for PSK is not ours, and neither is a version-2 one while armed
+     * for SAE.
+     *
+     * Rejecting ONLY those two positive mismatches, rather than allow-listing
+     * what each AKM may send: version 3 exists, APs are inventive, and a
+     * stricter test would fail closed on a working path to fix one that is
+     * already broken. This is the driver holding a frame back from the
+     * supplicant on knowledge only the driver has (which AKM this ATTEMPT
+     * armed for) - the real fix is the supplicant checking the version against
+     * its own AKM and refusing to tear down a live PTK on an unauthenticated
+     * message 1, and that is filed to its lane, not done here. */
+    if (len > 6) {
+        int kdv = ((eapol[5] << 8) | eapol[6]) & 0x07;
+        int wrong = (g_join_akm == WPA_AKM_SAE && kdv == 2) ||
+                    (g_join_akm == WPA_AKM_PSK && kdv == 0);
+        if (wrong) {
+            static int moaned2;
+            if (moaned2++ < 4)
+                uno_dbg_net_trace("wifi: EAPOL key-descriptor version %d does not match the "
+                                  "%s this attempt armed for - a frame from the association "
+                                  "we abandoned, dropped", kdv,
+                                  g_join_akm == WPA_AKM_SAE ? "WPA3-SAE" : "WPA2-PSK");
+            return;
+        }
+    }
     r = wpa_sm_rx_eapol(&g_wpa, eapol, len, reply, sizeof reply);
     /* key_info (big-endian, at EAPOL offset 5) says which message this is:
      * bit 3 PAIRWISE, bit 6 INSTALL, bit 7 ACK, bit 8 MIC, bit 12 ENCRYPTED.
@@ -5069,7 +5110,14 @@ static int find_and_join(void)
         if (r32(CSR_MSIX_HW_INT_CAUSES_AD)) {
             /* the fw died somewhere in that attempt; re-pointing cannot work and
              * a restart comes up asserted too, so stop rather than pretend */
-            uno_dbg_net_trace("wifi: join: fw asserted - only a reboot recovers; giving up");
+            /* Same register, same over-broad test, same missing evidence as
+             * retarget_fail(): ANY set bit reads as an assert here, and bit 25
+             * is the only one that means one. Print it, so "the firmware died"
+             * and "a cause wanted acking" stop being the same sentence. */
+            { u32 h = r32(CSR_MSIX_HW_INT_CAUSES_AD);
+              uno_dbg_net_trace("wifi: join: fw asserted - only a reboot recovers; giving up "
+                                "(csr2808=%08x sw_err=%d alive=%d)",
+                                h, (int)((h >> 25) & 1), (int)(h & 1)); }
             return -1;
         }
         /* select_ap() for the next candidate happens at the top of the loop;
