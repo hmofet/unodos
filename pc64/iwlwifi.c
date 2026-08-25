@@ -2818,11 +2818,49 @@ static void mvm_dqa_enable(void){ u32 c=0; send_cmd(GRP_DATAPATH,0x0,0,&c,4); wa
 
 /* INIT_EXTENDED_CFG (SYSTEM 0x3) + NVM_ACCESS_COMPLETE (REGNVM 0x0) — unified */
 static void read_mac_addr(void);
+static void mvm_step(const char *what);        /* fwd - names the asserting cmd */
+
+/* NVM_GET_INFO IS A ONCE-PER-BOOT COMMAND AND WE WERE SENDING IT EVERY TIME.
+ *
+ * The second bring-up of a boot asserts this firmware, and it is this function
+ * it asserts in: metal, 2026-08-25 19:40, on a boot whose FIRST join succeeded
+ * cleanly on the first attempt with `MVM init ... csr2808=00000000` -
+ *
+ *     firmware ALIVE
+ *     MVM init: the fw ASSERTED at "nvm/unified" (csr2808=02000000 sw_err=1)
+ *
+ * - so it is not a hangover from item 3's three-attempt assert. A freshly
+ * loaded, clean firmware asserts on the second run of this sequence.
+ *
+ * Upstream says which command, in a comment, in iwl_run_unified_mvm_ucode():
+ *
+ *     /-* Read the NVM only at driver load time, no need to do this twice *-/
+ *     if (!mvm->nvm_data) { mvm->nvm_data = iwl_get_nvm(...); }
+ *
+ * iwl_get_nvm() is what issues NVM_GET_INFO, and Linux guards it so it goes out
+ * ONCE PER DRIVER LOAD however many times the firmware is started. Every other
+ * command in this sequence - INIT_EXTENDED_CFG, NVM_ACCESS_COMPLETE - upstream
+ * re-sends on every start, and so do we. NVM_GET_INFO is the only one we send
+ * that it does not.
+ *
+ * Checked against the upstream source rather than recalled: recalling the
+ * MAC_CFG filter bits earlier in this same lane produced a confident wrong
+ * answer that a thirty-second fetch corrected.
+ *
+ * Its result was already being thrown away here (`(void)r; (void)len;`) and the
+ * MAC address comes from the CSR straps, not from this, so skipping it on a
+ * re-init costs nothing even if it turns out not to be the culprit - and
+ * mvm_step() now names each command individually, so the next log says whether
+ * it was. */
+static int g_nvm_info_done;
+
 static void mvm_init_unified(void)
 {
     u32 init_flags = (1u<<1);                  /* BIT(IWL_INIT_NVM) */
     send_cmd(GRP_SYSTEM, 0x3, 0, &init_flags, 4); wait_cmd_done(100);
+    mvm_step("INIT_EXTENDED_CFG");
     { u32 z = 0; send_cmd(GRP_REGNVM, 0x0, 0, &z, 4); wait_cmd_done(100); }
+    mvm_step("NVM_ACCESS_COMPLETE");
     /* NO PHY_CONFIGURATION_CMD here.  For unified-ucode devices (family >=
      * 22000, which is every gen2 that reaches this path), Linux's
      * iwl_send_phy_cfg_cmd returns early and sends nothing - only the legacy
@@ -2831,11 +2869,22 @@ static void mvm_init_unified(void)
      * Sending 0x6a here made the UMAC ADVANCED_SYSASSERT (error 0x201002fd,
      * last-cmd 0x016a) - proven live with the iwl fwerr verb 2026-07-25. */
     wait_notif(GRP_LEGACY, 0x4 /*INIT_COMPLETE_NOTIF*/, 0, 500);
+    mvm_step("INIT_COMPLETE wait");
     /* NVM_GET_INFO (kept for the sku/phy info it returns; the MAC address does
-     * NOT come from here - Linux reads it from the CSR straps/OTP). */
-    { u32 z = 0; int len=0; const u8 *r; send_cmd(GRP_REGNVM, 0x2, 0, &z, 4);
-      r = wait_notif(GRP_REGNVM, 0x2, &len, 200); (void)r; (void)len; }
+     * NOT come from here - Linux reads it from the CSR straps/OTP).
+     * ONCE PER BOOT - see g_nvm_info_done above. */
+    if (!g_nvm_info_done) {
+        u32 z = 0; int len = 0; const u8 *r;
+        send_cmd(GRP_REGNVM, 0x2, 0, &z, 4);
+        r = wait_notif(GRP_REGNVM, 0x2, &len, 200); (void)r; (void)len;
+        g_nvm_info_done = 1;
+        mvm_step("NVM_GET_INFO");
+    } else {
+        uno_dbg_net_trace("wifi: MVM init: NVM_GET_INFO skipped - already read this "
+                          "boot, and upstream sends it once per driver load");
+    }
     read_mac_addr();
+    mvm_step("read_mac_addr");
 }
 
 /* The whole post-ALIVE init, idempotent, so the boot path, the GUI scan path
