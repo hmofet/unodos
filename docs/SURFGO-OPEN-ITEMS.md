@@ -169,12 +169,48 @@ Two lessons worth more than the bug:
   to be argued from `tx` having stopped climbing. `net_dhcp_done()` and
   `net_ip()` are public in `net.h` and it prints them now.
 
-**Still open, and it is the original suspicion after all:** `grp=0`. Not one
-group-addressed frame in 113 from the AP over ten seconds, with `drop=0` - so
-they are not arriving at all rather than failing to decrypt. The lease landed
-because this server unicast its OFFER; ARP and every broadcast protocol will
-not be so lucky. That is the next thing in this lane and the GTK / `ACCEPT_GRP`
-path is where to start.
+### `grp=0`, which this close left standing - **ALSO CLOSED, 2026-08-25**
+
+It read: *"Not one group-addressed frame in 113 from the AP over ten seconds,
+with `drop=0` - so they are not arriving at all rather than failing to decrypt.
+ARP and every broadcast protocol will not be so lucky."* True, and not a fault.
+
+**NimmuNet is the guest network and has CLIENT ISOLATION ON.** Client isolation
+is exactly a refusal to forward traffic between clients, group-addressed traffic
+included. Every `grp=0` in this lane was measured on a NimmuNet BSS, and the
+first time the same measurement ran against SKYNET it was non-zero:
+
+```
+SKYNET e8:d3:eb:47:4e:c6, filter=04 (ACCEPT_GRP, no promisc)
++2s  from_ap=43 bcn=28 uni=6 grp=6 fgrp=0  foreign=0
++6s  from_ap=78 bcn=62 uni=6 grp=7 fgrp=0  foreign=0
+```
+
+`foreign=0` proves promisc was off, so `ACCEPT_GRP` alone is delivering
+group-addressed data. `grp` moving 6 -> 7 proves it is a live reading and not a
+frozen one.
+
+**What it cost, and the transferable part.** A whole branch went into this - a
+DTIM hypothesis, a post-association `LINK_CONFIG` tune, a `fgrp` control that
+turned out unable to discriminate, and two firmware theories - because every
+measurement was taken against ONE SSID and nobody varied it. The `bssid=` pin
+existed the whole time and made that control a config-file edit with no rebuild
+and no credentials. **When a reading is identical every time, vary the thing you
+have been holding fixed before theorising about the thing you have been
+changing.**
+
+Worth keeping rather than rounding off: promisc delivered noticeably MORE of the
+same AP's group traffic than `ACCEPT_GRP` did in the same window - 18 by +2 s
+against 6. So the normal filter may still narrow WHICH group frames reach the
+host. That is a far smaller question than this one was, and nothing is blocked
+on it.
+
+Landed on the way, all on `surfgo-grp`: the post-association link tune (the fw
+ACCEPTS it - `dtim_interval=200`, no assert - it simply was not the problem),
+`rxpromisc` as a DEBUG.CFG switch, an EAPOL length fix (this fw leaves four
+bytes on under promisc and the supplicant was handed all of them, which killed
+every 4-way in that mode), and honest before/after assert attribution in the
+tune.
 
 ## 3. `retarget_ap()` cannot re-point after a successful association
 
