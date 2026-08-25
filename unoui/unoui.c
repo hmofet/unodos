@@ -707,8 +707,24 @@ void ui_text_reveal(unoui_rect in, unoui_text *t)
     idx_linecol(t, t->caret, &line, &col);
     line_span(t, line, &s, &e);
     cpx = 3 + t_seg_w(t, s, s + col);
-    if (cpx - t->scroll_x < 0)         t->scroll_x = cpx;
+    /* SCROLL BACK TO THE PAD, NOT TO THE CARET.
+     *
+     * This was `if (cpx - scroll_x < 0) scroll_x = cpx`, which parks the caret
+     * on the field's left BORDER - no padding, and every character to its left
+     * hidden even when the whole string would fit. Moving left or backspacing
+     * therefore snapped the view by the full caret offset each time instead of
+     * scrolling by what was needed, and a field typed full and then cleared was
+     * left permanently scrolled by the 3 px pad. Reported from the Surface
+     * Laptop Go as the cursor "jumping around to different points" while
+     * entering a password, which is what this looks like when the glyphs are
+     * all '*' and you cannot read your way back to where you were. */
+    if (cpx - t->scroll_x < 3)         t->scroll_x = cpx - 3;
     if (cpx - t->scroll_x > vis_w)     t->scroll_x = cpx - vis_w;
+    /* and never scrolled further than the line needs: when it fits, the view
+     * belongs at 0, whatever it was before the text got shorter. */
+    { int full = 3 + t_seg_w(t, s, e) - vis_w;
+      if (full < 0) full = 0;
+      if (t->scroll_x > full) t->scroll_x = full; }
     if (t->scroll_x < 0) t->scroll_x = 0;
     if (t->multiline) {
         int top = 2 + line * UI_LINE_H;
@@ -738,12 +754,30 @@ unoui_rect ui_edit_eye_rect(unoui_rect in, const unoui_text *t)
     unoui_rect z; int side;
     z.x = z.y = z.w = z.h = 0;
     if (!t || !t->secret) return z;
+    /* THE TARGET IS THE FIELD'S FULL HEIGHT, NOT THE GLYPH'S.
+     *
+     * This was `fb_text_h() + 2` square, centred vertically - a 10 px box
+     * floating in the middle of a field two or three times that tall once the
+     * desktop scales (the Surface Laptop Go runs 768x512 scaled to 1536x1024).
+     * Reported as "the hide/show button has a really tiny hit box, right in
+     * the dead centre", which is exactly what a small square centred in a tall
+     * field feels like to aim at.
+     *
+     * The rect stays the single source both the painter and the hit test read,
+     * so the guarantee that a click cannot land off the drawn eye still holds -
+     * draw_eye() now insets its lens within this rect instead of filling it.
+     * Growing the TARGET and not the drawing is the whole point: the eye looks
+     * the same and is three times easier to hit. */
     side = fb_text_h() + 2;
     if (side < 9) side = 9;
-    if (in.w < side + 40) return z;            /* no room: no eye */
-    z.w = side; z.h = side;
-    z.x = in.x + in.w - side - 2;
-    z.y = in.y + (in.h - side) / 2;
+    /* Full HEIGHT, and a little wider than the lens - not a square, because a
+     * square as tall as the field would eat that much width from the text for
+     * no gain. Height is where the miss was. */
+    z.w = side + 6;
+    z.h = in.h > side ? in.h : side;
+    if (in.w < z.w + 40) { z.w = z.h = 0; return z; }   /* no room: no eye */
+    z.x = in.x + in.w - z.w - 2;
+    z.y = in.y + (in.h - z.h) / 2;
     return z;
 }
 
@@ -764,10 +798,19 @@ unoui_rect ui_edit_text_rect(unoui_rect in, const unoui_text *t)
  * colours on every port. */
 static void draw_eye(unoui_rect e, const unoui_theme *th, int showing)
 {
-    int cx = e.x + e.w / 2, cy = e.y + e.h / 2;
-    int rx = e.w / 2 - 1, ry = e.h / 4;
+    int cx, cy, rx, ry, glyph;
     fb_px c = showing ? th->pal.accent : th->pal.text_dim;
     int x;
+    /* THE TARGET IS THE FIELD'S HEIGHT; THE LENS IS GLYPH-SIZED INSIDE IT.
+     * ui_edit_eye_rect() grew so the eye is reachable with a finger or a
+     * shaky mouse, and this insets the drawing back to the size it always
+     * was, centred - so the fix is a bigger target and not a bigger eye. */
+    glyph = fb_text_h() + 2;
+    if (glyph < 9) glyph = 9;
+    if (e.w > glyph) { e.x += (e.w - glyph) / 2; e.w = glyph; }
+    if (e.h > glyph) { e.y += (e.h - glyph) / 2; e.h = glyph; }
+    cx = e.x + e.w / 2; cy = e.y + e.h / 2;
+    rx = e.w / 2 - 1;   ry = e.h / 4;
     if (rx < 2 || ry < 1) return;
     /* the lens: two arcs meeting at the corners, as y = +-ry*(1-(x/rx)^2) */
     for (x = -rx; x <= rx; x++) {

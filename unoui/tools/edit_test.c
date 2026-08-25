@@ -309,7 +309,91 @@ int main(void)
       pt.revealed = 1;
       ui.focus_wi = -1;
       unoui_render_ui(&ui);
-      CHECK("eye: reveal does not survive losing focus", pt.revealed == 0); }
+      CHECK("eye: reveal does not survive losing focus", pt.revealed == 0);
+
+      /* THE TARGET IS THE FIELD'S FULL HEIGHT.
+       *
+       * It was a glyph-sized square centred vertically, which on a scaled
+       * desktop is a ~10 px box floating in a field two or three times that
+       * tall - reported from the Surface Laptop Go as "a really tiny hit box,
+       * right in the dead centre". Every check above still passed while that
+       * was true, because they all aimed at the exact middle. These aim at
+       * the edges, which is where a real finger lands. */
+      CHECK("eye: the target is as tall as the field",
+            eye.h == inner.h);
+      ui.focus_wi = 0;
+      { int yy;
+        for (yy = 0; yy < 2; yy++) {
+            int wasrev = pt.revealed;
+            memset(&e, 0, sizeof e); e.kind = UI_EV_MOUSE_DOWN;
+            e.x = eye.x + eye.w / 2;
+            e.y = yy ? eye.y + eye.h - 1 : eye.y;      /* top edge, bottom edge */
+            unoui_handle(&ui, &e);
+            CHECK("eye: a click at its top/bottom edge toggles too",
+                  pt.revealed != wasrev);
+        } }
+      /* and it still must not steal the text's room on a normal field */
+      CHECK("eye: the text area is still most of the field",
+            ui_edit_text_rect(inner, &pt).w > inner.w / 2); }
+
+    /* ---- 6b. a masked field NARROW enough to scroll ---------------------- *
+     * Every secret check above uses a field wide enough to hold the whole
+     * string, so none of them ever exercised scroll_x with a mask up. That is
+     * the gap the Surface Laptop Go report ("entering the password makes the
+     * cursor jump around to different points") points at, and it has to be
+     * either closed or ruled out rather than guessed about.
+     *
+     * Type a long passphrase one event at a time into a field far too small
+     * for it and assert, after EVERY character, that the caret is where the
+     * model says it is and still drawn inside the field. A caret that jumps is
+     * one that leaves the text rect or stops tracking t->caret. */
+    fb_set_font(&g_prop);
+    { static unoui_ui ui2; static unoui_window w2;
+      static char nb[64] = "";
+      static unoui_text nt;
+      unoui_widget *fld;
+      unoui_event e;
+      const char *phrase = "correct-horse-battery-staple-42";
+      int k, bad_x = 0, bad_caret = 0, bad_back = 0;
+      unoui_rect r2, inner2, txt2;
+      unoui_text_init(&nt, nb, sizeof nb, 0);
+      unoui_text_secret(&nt, '*');
+      unoui_ui_init(&ui2, &theme_unodos, 640, 480);
+      unoui_window_init(&w2, "N", 10, 10, 200, 80);
+      fld = unoui_add_edit(&w2, 8, 8, 90, &nt);     /* deliberately too narrow */
+      unoui_ui_add(&ui2, &w2);
+      ui2.focus_win = 0; ui2.focus_wi = 0;
+      r2 = unoui_widget_rect(ui2.theme, &w2, fld);
+      inner2 = ui_edit_inner(r2, ui2.theme);
+      txt2 = ui_edit_text_rect(inner2, &nt);
+      for (k = 0; phrase[k]; k++) {
+          int cx, cy;
+          memset(&e, 0, sizeof e);
+          e.kind = UI_EV_CHAR; e.ch = phrase[k];
+          unoui_handle(&ui2, &e);
+          if (nt.caret != k + 1) bad_caret++;
+          ui_text_caret_xy(txt2, &nt, nt.caret, &cx, &cy);
+          if (cx < txt2.x || cx > txt2.x + txt2.w) bad_x++;
+      }
+      CHECK("secret+scroll: the caret counts every character typed",
+            bad_caret == 0 && nt.len == (int)strlen(phrase));
+      CHECK("secret+scroll: the buffer is the real passphrase",
+            !strcmp(nb, phrase));
+      CHECK("secret+scroll: the caret stays inside the field the whole way",
+            bad_x == 0);
+      /* and backspacing all the way out keeps it inside too - the scroll has
+       * to unwind as well as wind */
+      for (k = (int)strlen(phrase); k > 0; k--) {
+          int cx, cy;
+          memset(&e, 0, sizeof e);
+          e.kind = UI_EV_KEY; e.key = UI_KEY_BACKSPACE;
+          unoui_handle(&ui2, &e);
+          ui_text_caret_xy(txt2, &nt, nt.caret, &cx, &cy);
+          if (cx < txt2.x || cx > txt2.x + txt2.w) bad_back++;
+      }
+      CHECK("secret+scroll: and stays inside it backspacing out again",
+            bad_back == 0 && nt.len == 0 && nt.scroll_x == 0); }
+    fb_set_font(0);
 
     /* ---- 7. the busy indicator ------------------------------------------ */
     fb_set_font(0);
