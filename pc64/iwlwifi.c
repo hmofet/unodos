@@ -652,33 +652,59 @@ static int hexnib(int c)
     return -1;
 }
 
+/* An AKM the join must use, to the exclusion of the one it would pick:
+ * `akm=psk` or `akm=sae`, same files, same reason as `bssid=` above.
+ *
+ * WHY THIS EXISTS, AND IT IS THE SAME REASON. On a transition-mode AP the join
+ * tries SAE first and falls back to WPA2-PSK, so every experiment about
+ * ANYTHING ELSE runs downstream of a failing SAE: an association the AP is
+ * still tearing down, its EAPOL still in the air, an attempt spent, and the
+ * firmware two retries closer to the assert that ends the boot. Four metal runs
+ * on the Surface Laptop Go, 2026-08-24, never once measured the thing they were
+ * for, because the DHCP question needs a link that lives and the SAE bug kept
+ * killing it first.
+ *
+ * `akm=psk` takes the whole of docs/SURFGO-OPEN-ITEMS.md item 1 out of the
+ * path: one attempt, the AKM that has actually completed on this hardware, and
+ * whatever fails after it is genuinely the next thing. Like `bssid=` it carries
+ * no credentials and needs no rebuild. */
+static int g_akm_pin;               /* WPA_AKM_PSK / WPA_AKM_SAE, or 0         */
+
 static void read_bssid_override(void)
 {
     static const char *cand[3] = { "WIFI.CFG", "WIFI.TXT", "DEBUG.CFG" };
     static u8 b[512];
     int nv = uno_fs_volumes(), v, j;
-    g_pin_on = 0;
+    g_pin_on = 0; g_akm_pin = 0;
     for (v = 0; v < nv; v++)
         for (j = 0; j < 3; j++) {
             long n = uno_fs_read(v, cand[j], b, (long)sizeof b - 1), i;
             if (n <= 0) continue;
-            for (i = 0; i + 6 <= n; i++) {
-                long q; int k, got = 0;
-                if (memcmp(b + i, "bssid=", 6)) continue;
+            for (i = 0; i < n; i++) {
                 /* start of a line only, so a psk containing "bssid=" is not one */
                 if (i > 0 && b[i-1] != '\n' && b[i-1] != '\r') continue;
-                q = i + 6;
-                for (k = 0; k < 6; k++) {
-                    int hi, lo;
-                    if (q + 1 >= n) break;
-                    hi = hexnib(b[q]); lo = hexnib(b[q+1]);
-                    if (hi < 0 || lo < 0) break;
-                    g_pin_bssid[k] = (u8)((hi << 4) | lo);
-                    q += 2; got++;
-                    if (k < 5 && q < n && (b[q] == ':' || b[q] == '-')) q++;
+                if (!g_pin_on && i + 6 <= n && !memcmp(b + i, "bssid=", 6)) {
+                    long q = i + 6; int k, got = 0;
+                    for (k = 0; k < 6; k++) {
+                        int hi, lo;
+                        if (q + 1 >= n) break;
+                        hi = hexnib(b[q]); lo = hexnib(b[q+1]);
+                        if (hi < 0 || lo < 0) break;
+                        g_pin_bssid[k] = (u8)((hi << 4) | lo);
+                        q += 2; got++;
+                        if (k < 5 && q < n && (b[q] == ':' || b[q] == '-')) q++;
+                    }
+                    if (got == 6) g_pin_on = 1;
                 }
-                if (got == 6) { g_pin_on = 1; return; }
+                /* No early return once bssid= is found - `akm=` may be the line
+                 * AFTER it in the same file, and the version of this that
+                 * returned on the first hit would never have seen it. */
+                if (!g_akm_pin && i + 7 <= n && !memcmp(b + i, "akm=", 4)) {
+                    if (i + 7 <= n && !memcmp(b + i + 4, "psk", 3)) g_akm_pin = WPA_AKM_PSK;
+                    else if (i + 7 <= n && !memcmp(b + i + 4, "sae", 3)) g_akm_pin = WPA_AKM_SAE;
+                }
             }
+            if (g_pin_on && g_akm_pin) return;
         }
 }
 
@@ -5015,6 +5041,10 @@ static int find_and_join(void)
                               g_pin_bssid[0],g_pin_bssid[1],g_pin_bssid[2],
                               g_pin_bssid[3],g_pin_bssid[4],g_pin_bssid[5], g_scan_ap_n);
     }
+    if (g_akm_pin)
+        uno_dbg_net_trace("wifi: join: akm= pins EVERY attempt to %s - the other one "
+                          "is not tried and there is no fallback",
+                          g_akm_pin == WPA_AKM_SAE ? "WPA3-SAE" : "WPA2-PSK");
     for (attempt = 0; attempt < JOIN_TRIES; attempt++) {
         idx = join_pick_nth(bss);
         if (idx < 0) {
@@ -5034,7 +5064,9 @@ static int find_and_join(void)
          * ordering on its own merits: "the AP never answered our commit" is
          * a property of the AKM, not of the BSS, and the evidence agreed -
          * all three BSSs failed identically. */
-        g_akm_force = psk_turn ? WPA_AKM_PSK : 0;
+        /* A pinned AKM outranks the SAE-then-PSK dance entirely: there is no
+         * "then" to have, which is the point of pinning one. */
+        g_akm_force = g_akm_pin ? g_akm_pin : (psk_turn ? WPA_AKM_PSK : 0);
         g_sae_silent = 0;
         g_auth_ok = 0;
         g_assoc_ok = 0;
@@ -5097,7 +5129,7 @@ static int find_and_join(void)
          * installed keys. So the PSK-derived PMK is right and the SAE-derived
          * one is not, and falling back is both the way onto the network and
          * the experiment that says so. */
-        if (!psk_turn && g_join_akm == WPA_AKM_SAE && !g_sae_silent &&
+        if (!g_akm_pin && !psk_turn && g_join_akm == WPA_AKM_SAE && !g_sae_silent &&
             (!g_auth_ok || g_assoc_ok) && (g_ap_sec.akm & WPA_AKM_PSK)) {
             psk_turn = 1;
             uno_dbg_net_trace("wifi: join: SAE did not complete and this AP also "
