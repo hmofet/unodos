@@ -10617,3 +10617,46 @@ Every one of these runs reaches the PSK fallback only because SAE fails, and
 the fallback lands on the same BSS while the SAE handshake is still in flight.
 Fix the PMK and this never arises on this network - but it will on the next
 transition-mode AP that makes us fall back for any other reason.
+
+## 2026-08-24 - STATE (iwlwifi / surfgo-dhcp): six metal runs, no lease yet, and what each one bought
+
+Recorded because the runs cost real time and the findings are worth more than
+the outcome. Build `debug-local-20260825-0228` is on the stick; the branch is
+`surfgo-dhcp`, gate green (87 PASS 0 FAIL 7 SKIP).
+
+**Landed and PROVEN on metal:**
+
+- The scan table was FULL at 24 and dropping every further BSSID unrecorded.
+  It evicts now, `SCAN_AP_MAX` is 32, and the first run after the fix recorded
+  `aps=32` and found a BSS on channel 6 no previous scan had ever seen.
+- `bssid=` was announced and then not honoured. It is honoured, and it says
+  when it is not.
+- `bssid=` then aimed one network's join at another network's radio - a
+  NimmuNet BSSID pinned a **SKYNET** join, twice, burning 2 of 3 attempts. A
+  pin only applies to a BSS carrying the SSID being joined.
+- **The abandoned attempt's EAPOL was killing the association that replaced
+  it.** SAE fails, PSK completes on the same BSS, and the AP's still-in-flight
+  SAE message 1/4 (key descriptor version 0, retry bit set) took the supplicant
+  from DONE back to state 1. Now dropped on the version/AKM mismatch, and the
+  log says so. Filed properly to the supplicant lane.
+- **The firmware assert is REAL.** `csr2808=02000000 sw_err=1 alive=0`. The
+  "any set bit means asserted" test was over-broad on paper and correct in
+  fact; do not narrow it on reasoning alone, which is what the new logging was
+  added to settle. It settled it.
+
+**Not yet measured, and why.** Item 2 needs a link that LIVES, and every run so
+far died first. `akm=psk` exists now for exactly that: it pins the AKM, removes
+the fallback, and takes item 1 out of the path so the DHCP question can be
+asked on its own.
+
+**Two environmental facts worth more than they look:**
+
+- **RSSI is not a constant.** The one run that held association for 100 s was
+  at **-25 dBm**; every run since has been -57 to -66 on the same BSSID. This
+  BSS is documented as deauthenticating completed handshakes, and it does so
+  far more readily from across the house.
+- **A run of failed handshakes gets the client shunned.** `retry assoc ->
+  -4097` on a BSS that had accepted PSK and completed a 4-way twenty minutes
+  earlier, and `SAE auth -> -1` on a BSS that had authenticated ten minutes
+  earlier. Give the APs a few minutes between runs, or the next run measures
+  the last one's punishment.
