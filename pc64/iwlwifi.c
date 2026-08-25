@@ -1875,7 +1875,15 @@ static void rx_process_rb(const u8 *rb, int cap,
                       if (pet == 0x0800 && avail >= 20)
                           want = (frame[poff+10] << 8) | frame[poff+11];
                       else if (pet == 0x0806 && avail >= 28) want = 28;
-                      if (want > 0 && want <= avail) g_rx_mic = (avail - 8 >= want);
+                      /* FROM OUR AP ONLY. This learns a property of our link
+                       * from a payload's own declared length, and a foreign
+                       * BSS's frame is ciphertext under a key we do not have -
+                       * its "IP total_length" is two random bytes. Harmless
+                       * while the fw filtered foreign data for us; under
+                       * `rxpromisc` it no longer does, and one neighbour's
+                       * frame arriving first would teach this the wrong answer
+                       * for the rest of the boot. */
+                      if (from_ap && want > 0 && want <= avail) g_rx_mic = (avail - 8 >= want);
                       if (g_rx_mic == 1 && dlen > poff + 16) dlen -= 8; }
                 }
                 /* A data frame from a BSS we are not associated with is not
@@ -1917,7 +1925,41 @@ static void rx_process_rb(const u8 *rb, int cap,
                      * instantly ("EAPOL frame in (131 bytes) -> sm state 0,
                      * reply 0" on metal), so the AP got no 2/4 and deauthed us.
                      * Skip the MAC header, any CCMP header, and the LLC/SNAP. */
-                    if (et == 0x888E) handle_eapol(frame + poff + 8, dlen - poff - 8);
+                    if (et == 0x888E) {
+                        /* EAPOL DECLARES ITS OWN LENGTH, AND IT OUTRANKS OURS.
+                         *
+                         * Under `rxpromisc` this firmware hands every frame up
+                         * FOUR BYTES LONGER - metal, 2026-08-25 13:58: every
+                         * 1/4 arrived as 103 bytes against 99 in the 13:24 run
+                         * and every 3/4 as 167 against 163, same APs, same
+                         * build but for the filter bit, across both networks
+                         * and five BSSes. The trailer looks like the FCS the fw
+                         * normally strips, but WHICH four bytes they are does
+                         * not matter here: what mattered is that the supplicant
+                         * was handed a length four too long, failed 3/4, and
+                         * every join in that run died at "state 3, reply -1"
+                         * with the AP re-sending 3/4 until it gave up.
+                         *
+                         * The EAPOL header carries the body length in bytes
+                         * 2..3, so the frame says how long it is and there is
+                         * nothing to guess. Trust it over mpdu_len whenever it
+                         * is shorter, which also covers any other trailer this
+                         * or another fw decides to leave on. */
+                        int el = dlen - poff - 8;
+                        if (el >= 4) {
+                            int decl = 4 + (int)((frame[poff+10] << 8) | frame[poff+11]);
+                            if (decl >= 4 && decl < el) {
+                                static int trailed;
+                                if (!trailed++)
+                                    uno_dbg_net_trace("wifi: EAPOL carried %d byte(s) past its "
+                                                      "declared length (mpdu gives %d, EAPOL "
+                                                      "declares %d) - trimming to what the frame "
+                                                      "says", el - decl, el, decl);
+                                el = decl;
+                            }
+                        }
+                        handle_eapol(frame + poff + 8, el);
+                    }
                     else              handle_data_frame(frame, dlen, poff);
                 } else if (is_data && fl > hl) {
                     g_rx_data_drop++;
