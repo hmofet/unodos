@@ -1091,6 +1091,21 @@ static void cp_wifi_join(void)
     int i;
     if (g_cp_ap_n <= 0) { cp_wifi_note("Scan first."); return; }
     g_cp_psk[g_cp_psk_t.len] = 0;
+    /* AN EMPTY BOX ON A REMEMBERED NETWORK MEANS "USE THE ONE YOU HAVE".
+     *
+     * The panel's own note promises it - "a network marked \"saved\" needs no
+     * password" - and it was kept only by pre-filling the field, which the end
+     * of this very function then wipes on purpose ("do not keep it"). So the
+     * FIRST join of a network worked and every later one sent an empty
+     * passphrase: metal, 2026-08-25, `join request for "SKYNET" (psk_len=0)`
+     * on a machine that had joined SKYNET two minutes earlier with the right
+     * one. Ask the store directly rather than trusting a field that is
+     * deliberately cleared behind us. */
+    if (!g_cp_psk[0]) {
+        const char *ssid = cp_wifi_sel_ssid();
+        if (ssid && iwl_saved_psk(ssid, g_cp_psk, (int)sizeof g_cp_psk))
+            g_cp_psk_t.len = g_cp_psk_t.caret = g_cp_psk_t.sel = (int)strlen(g_cp_psk);
+    }
     cp_wifi_busy_begin();
     { char msg[120]; char *p = ap_str(msg, "Joining \"");
       p = ap_str(p, g_cp_aps[g_cp_ap_sel].ssid); p = ap_str(p, "\"...");
