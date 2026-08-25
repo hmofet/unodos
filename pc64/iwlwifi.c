@@ -1653,6 +1653,11 @@ static u32 g_rx_st_undec;      /* the rx descriptor status of the last one that 
  * a DTIM the firmware never wakes for) and nothing else looks like it;
  * `uni==0 grp==0` means the AP is not forwarding to us at all and the group
  * key is irrelevant. Those are different weeks of work. */
+static u32 g_rx_foreign_grp;   /* group-addressed data from ANY OTHER BSS - the
+                                * control for grp=0: if nobody's broadcast
+                                * arrives the fw is not collecting group
+                                * traffic, if only ours is missing it is our
+                                * key or our filter                          */
 static u32 g_rx_bcn_ap;        /* beacons from our AP                          */
 static u32 g_rx_uni_ap;        /* data frames from our AP addressed TO US      */
 static u32 g_rx_grp_ap;        /* data frames from our AP addressed to a GROUP */
@@ -1848,6 +1853,15 @@ static void rx_process_rb(const u8 *rb, int cap,
                 int is_data = ((fc >> 2) & 3) == 2;
                 int prot = (fc & 0x4000) != 0;
                 if (is_data && !from_ap) {
+                    /* Split the FOREIGN traffic the same way as ours, because
+                     * it is the control for `grp=0`. If no BSS on this channel
+                     * ever hands us a group-addressed data frame, the firmware
+                     * is not collecting group traffic at all and our key is
+                     * beside the point; if other BSSes' broadcast arrives and
+                     * only ours does not, it is the key or the filter for OUR
+                     * BSS. Nothing else separates those, and they are different
+                     * subsystems. */
+                    if (frame[4] & 1) g_rx_foreign_grp++;
                     if (!g_rx_foreign++ && g_rx_data_log > 0)
                         uno_dbg_net_trace("wifi: RXDATA foreign BSS fc=%04x len=%d "
                                           "ta=%02x:%02x:%02x:%02x:%02x:%02x - ignored "
@@ -3938,7 +3952,7 @@ static void handle_eapol(const u8 *eapol, int len)
         g_txr_total = g_txr_ackfail = g_rx_from_ap = 0;
         g_rx_data_n = g_rx_data_drop = g_tx_data_n = 0;
         g_rx_foreign = g_rx_prot = g_rx_prot_dec = 0; g_rx_st_undec = 0;
-        g_rx_bcn_ap = g_rx_uni_ap = g_rx_grp_ap = 0;
+        g_rx_bcn_ap = g_rx_uni_ap = g_rx_grp_ap = g_rx_foreign_grp = 0;
         g_diag_prev_rb = g_diag_prev_mpdu = 0;
         g_rb_postjoin = g_rx_mpdu_pj = 0;
         /* ARM THE RX DESCRIPTION FOR THE FIRST FEW FRAMES OF THIS ASSOCIATION.
@@ -4820,6 +4834,8 @@ static void assoc_mark_associated(int aid)
  * The 4-way is pumped HERE, not left to the caller: every caller that waits for
  * link (ip_suite, net_dhcp_after_link, the Network app) polls link() and not
  * recv(), so a handshake left in flight would never be driven to completion. */
+static void post_assoc_link_tune(void);   /* fwd; defined with the retry path */
+
 static int join_selected(void)
 {
     int q, r;
@@ -4870,6 +4886,7 @@ static int join_selected(void)
     uno_dbg_net_trace("wifi: join: assoc -> %d (>=0 AID)", r);
     if (r < 0) return -1;
     assoc_mark_associated(r);
+    post_assoc_link_tune();
     uno_dbg_net_trace("wifi: join: associated with \"%s\" aid=%d - pumping RX for the 4-way",
                       g_cfg_ssid, r);
     prog("Exchanging keys", 5);
@@ -4877,6 +4894,51 @@ static int join_selected(void)
       uno_dbg_net_trace("wifi: join: 4-way %s after %d ms (keys=%d)",
                         g_joined ? "COMPLETE" : "did NOT complete", ms, g_keys_installed); }
     return 0;
+}
+
+/* THE POST-ASSOCIATION LINK TUNE, WHICH THE REAL JOIN PATH HAS NEVER SENT.
+ *
+ * `dtim_int=0` appears in every join log this machine has ever produced,
+ * because the only caller that passes LINK_MOD_BEACON_TIMING is the hand-typed
+ * debug verb `iwl mld a`. Its comment says it was kept out of the main path on
+ * purpose - the fw asserted when these field groups were folded into the
+ * PRE-association activation MODIFY - and invites someone to run it after
+ * `iwl mld 9` to find out whether the fw accepts them once associated.
+ *
+ * Nobody ever did, and on this machine nobody could: the verb arrives over URC,
+ * URC needs a network, and the network is what is broken. That is the second
+ * time in this lane a diagnostic was unreachable by construction on the only
+ * machine that needed it.
+ *
+ * Why it is worth the risk. An AP BUFFERS group-addressed traffic and releases
+ * it after the DTIM beacon. A firmware never told the DTIM period has no reason
+ * to go and collect it - and the Surface, holding a lease, reads `grp=0` with
+ * `drop=0` and `bcn=101`: group-addressed data does not arrive AT ALL, it is
+ * not arriving and failing to decrypt, and ordinary beacons are unaffected.
+ * Three observations, one explanation.
+ *
+ * GUARDED, because the pre-assoc version of this asserted the firmware. If it
+ * asserts here the join is already up and a link without broadcast beats no
+ * link, so this says so and returns rather than failing the join. `dtim_int` is
+ * in the LINK_CONFIG trace either way, which is how the next log will say
+ * whether the fw took it. */
+static void post_assoc_link_tune(void)
+{
+    u32 h;
+    if (!fw_has_mld_api()) return;
+    mld_link_cfg(2 /*MODIFY*/, 1 /*active*/, 1 /*phy*/,
+                 LINK_MOD_RATES_INFO | LINK_MOD_QOS_PARAMS | LINK_MOD_BEACON_TIMING);
+    h = r32(CSR_MSIX_HW_INT_CAUSES_AD);
+    if (h)
+        uno_dbg_net_trace("wifi: post-assoc link tune ASSERTED the fw "
+                          "(csr2808=%08x sw_err=%d) - the association stands, but this "
+                          "fw will not take beacon timing once associated either",
+                          h, (int)((h >> 25) & 1));
+    else
+        uno_dbg_net_trace("wifi: post-assoc link tune accepted - dtim_interval=%d "
+                          "(bi %d x dtim %d); the fw now knows when group traffic is "
+                          "released", (int)g_join_bi * (g_join_dtim ? g_join_dtim : 1),
+                          (int)g_join_bi, (int)g_join_dtim);
 }
 
 /* Re-point the live contexts at a different BSS, without restarting the radio.
@@ -5026,6 +5088,8 @@ static int join_retry(void)
     uno_dbg_net_trace("wifi: join: retry assoc -> %d (>=0 AID)", r);
     if (r < 0) return -1;
     assoc_mark_associated(r);
+    post_assoc_link_tune();     /* the retry path associates too, and the join
+                                 * that actually reaches DHCP is usually this one */
     { int ms = rx_pump_ms(4000, 1);
       uno_dbg_net_trace("wifi: join: retry 4-way %s after %d ms (keys=%d)",
                         g_joined ? "COMPLETE" : "did NOT complete", ms, g_keys_installed); }
@@ -5436,10 +5500,11 @@ static void postjoin_diag(void)
      * different subsystem, which is the whole reason they are printed
      * together rather than summed. */
     uno_dbg_net_trace("wifi: post-join diag: rb=%u mpdu=%u | from_ap=%u bcn=%u "
-                      "uni=%u grp=%u",
+                      "uni=%u grp=%u fgrp=%u",
                       (unsigned)g_rb_postjoin, (unsigned)g_rx_mpdu_pj,
                       (unsigned)g_rx_from_ap, (unsigned)g_rx_bcn_ap,
-                      (unsigned)g_rx_uni_ap, (unsigned)g_rx_grp_ap);
+                      (unsigned)g_rx_uni_ap, (unsigned)g_rx_grp_ap,
+                      (unsigned)g_rx_foreign_grp);
     /* THE RING ITSELF, because "no frames arrived" has two completely different
      * causes and they are one register apart.
      *
