@@ -4277,9 +4277,31 @@ static int pin_scan_idx(void)
         if (!memcmp(g_scan_aps[i].bssid, g_pin_bssid, 6)) return i;
     return -1;
 }
+/* A PINNED BSSID IS ONLY A CANDIDATE FOR THE NETWORK IT ACTUALLY CARRIES.
+ *
+ * `bssid=` pins a BSSID and nothing checked that the BSS was even on the SSID
+ * being joined. That was harmless while the pin never worked; the moment it
+ * did, it aimed one network's join at another network's radio. Surface Laptop
+ * Go, 2026-08-24 22:10:38, with a NimmuNet BSSID in DEBUG.CFG:
+ *
+ *   join request for "SKYNET"
+ *   join: bssid= pins the first attempt to e8:d3:eb:47:4e:cf
+ *   join: try 1/3 "SKYNET" bssid e8:d3:eb:47:4e:cf     <- a NimmuNet BSS
+ *
+ * Two of the three attempts went to the wrong network before the loop reached
+ * a real SKYNET BSS, and there are only three. A pin is a preference between
+ * candidates, so a BSS that is not a candidate cannot be preferred. */
+static int pin_usable(void)
+{
+    int p = pin_scan_idx(), sl = (int)strlen(g_cfg_ssid);
+    if (p < 0) return -1;
+    if (sl > 0 && (g_scan_aps[p].ssid_len != sl ||
+                   memcmp(g_scan_aps[p].ssid, g_cfg_ssid, sl))) return -1;
+    return p;
+}
 static int join_pick_nth(int n)
 {
-    int p = pin_scan_idx(), idx, want, k;
+    int p = pin_usable(), idx, want, k;
     if (p < 0) return scan_pick_nth(n);
     if (n == 0) return p;
     for (want = n - 1, k = 0; ; k++) {
@@ -5027,13 +5049,21 @@ static int find_and_join(void)
      * - the exact BSS the pin existed to avoid - and cost a metal run before
      * anyone noticed the two lines disagreed. */
     if (g_pin_on) {
-        int p = pin_scan_idx();
+        int seen = pin_scan_idx(), p = pin_usable();
         if (p >= 0)
             uno_dbg_net_trace("wifi: join: bssid= pins the first attempt to "
                               "%02x:%02x:%02x:%02x:%02x:%02x (chan %d rssi %d)",
                               g_pin_bssid[0],g_pin_bssid[1],g_pin_bssid[2],
                               g_pin_bssid[3],g_pin_bssid[4],g_pin_bssid[5],
                               g_scan_aps[p].chan, g_scan_aps[p].rssi);
+        else if (seen >= 0)
+            uno_dbg_net_trace("wifi: join: bssid=%02x:%02x:%02x:%02x:%02x:%02x carries "
+                              "\"%s\", not the \"%s\" being joined - the pin is NOT in "
+                              "effect (it is a pin BETWEEN candidates, and that BSS is "
+                              "not one)",
+                              g_pin_bssid[0],g_pin_bssid[1],g_pin_bssid[2],
+                              g_pin_bssid[3],g_pin_bssid[4],g_pin_bssid[5],
+                              g_scan_aps[seen].ssid, g_cfg_ssid);
         else
             uno_dbg_net_trace("wifi: join: bssid=%02x:%02x:%02x:%02x:%02x:%02x is NOT in "
                               "this scan's %d APs - the pin is NOT in effect and the join "
