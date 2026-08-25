@@ -10849,3 +10849,83 @@ by config, is most simply a **wrong PSK for SKYNET** (`psk_len=20`) rather than
 a supplicant fault - and if that is right then the "SKYNET does not connect"
 note filed against item 1 is not evidence about SAE at all. Worth confirming the
 credential before spending a metal run on the supplicant.
+
+## 2026-08-25 - RESULT (NIC drivers / iwlwifi, branch `surfgo-grp`): group-addressed traffic arrives, and `grp=0` was the AP
+
+Two runs, same BSS, one variable. `ACCEPT_GRP` works.
+
+**With `rxpromisc`** (14:19, SKYNET `e8:d3:eb:47:4e:c6`, `filter=05`):
+
+```
++2s   rb=2359 mpdu=446  | from_ap=51  bcn=21 uni=6 grp=18 fgrp=35   foreign=52
++10s  rb=3293 mpdu=1301 | from_ap=136 bcn=72 uni=6 grp=48 fgrp=80   foreign=134
+```
+
+**Without it** (14:44, the SAME BSS, `filter=04`, everything else identical):
+
+```
++2s   rb=2130 mpdu=142 | from_ap=43 bcn=28 uni=6 grp=6 fgrp=0   foreign=0
++6s   rb=2222 mpdu=177 | from_ap=78 bcn=62 uni=6 grp=7 fgrp=0   foreign=0
+```
+
+`foreign=0` and `fgrp=0` confirm promisc really was off, so the control is
+valid; `grp` moving 6 -> 7 confirms it is a live reading and not a frozen one.
+
+**So `grp=0` is not a driver fault and not a firmware one.** Group-addressed
+data from our own AP arrives with `ACCEPT_GRP` alone. Every earlier zero in this
+lane - the run that motivated the branch, the DTIM work, all of it - was taken
+on **NimmuNet** BSSes. The moment the same measurement was taken on SKYNET it
+was non-zero, promiscuous or not.
+
+What is left for item 1 is therefore a question about the ACCESS POINT rather
+than about us: whether NimmuNet forwards group-addressed traffic to its clients
+at all (client isolation, or multicast forwarding off, on a guest SSID). That is
+not something more driver work can answer, and it should be checked before any
+more of it is done.
+
+**One nuance not to round off.** Promisc delivered noticeably MORE of our own
+AP's group traffic than `ACCEPT_GRP` did in the same window - 18 by +2 s against
+6, 33 by +6 s against 7. Same AP, same room, minutes apart. So the normal filter
+may still be narrowing WHICH group-addressed frames reach the host even though
+it plainly passes some. That is a much smaller question than the one this branch
+started with, and it is not the one item 1 asks.
+
+**Instruments corrected along the way,** each because it said something it could
+not know:
+
+- `fgrp` was proposed as the control that separates "the fw collects no group
+  traffic" from "our key or our filter". It cannot, alone: once associated the
+  fw filters every other BSS's data, so `foreign=0` pins `fgrp` to 0 whichever
+  answer is true. It discriminates only under `rxpromisc`. Written on the
+  counter now.
+- `post_assoc_link_tune()` read `csr2808` only after the tune and so blamed
+  itself for an assert that was already standing - on a boot where two earlier
+  attempts had each spent a session-protection request, item 3's exact trigger.
+  It reads before and after now. **A test that cannot tell "I broke it" from
+  "it was already broken" convicts whichever code looks next.**
+- The verdict ladder still recited "the group key or the DTIM wake" after the
+  firmware had accepted the DTIM and nothing changed. It does not any more.
+
+**And a NEW bug, which is what "rejoining does not work" is.** The second and
+every later join of a boot cannot scan:
+
+```
+scan: pre  rx_closed=27 rx_read=27
+scan: post rx_closed=27 rx_read=27 rb_total=0
+scan: complete=no(timeout) mpdu_seen=0 beacon_calls=0 aps=0
+```
+
+Three in a row, after `join: fw contexts from an earlier join are live -
+restarting the radio`, on a firmware that comes up ALIVE with `csr2808=00000000`
+and answers every MVM init command. The first scan of the same boot read
+`rb_total=52 aps=32`.
+
+This **corrects item 3**, which records the permanent `rb_total=0` state as a
+consequence of the session-protection assert. There is no assert here.
+
+Not fixed, instrumented: `scan_req_probe()` reports whether SCAN_REQ_UMAC
+produced its own response packet, which separates "the command never reached
+the firmware" from "the firmware took it and heard nothing" - two faults that
+are identical in the log above. This lane has now twice spent metal runs fixing
+the wrong one of two indistinguishable causes, and both times the counter that
+would have told them apart cost nothing once someone asked for it.
