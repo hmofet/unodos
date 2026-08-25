@@ -10563,3 +10563,57 @@ wifi: post-join diag: rb=.. mpdu=.. | from_ap=.. bcn=.. uni=.. grp=..
 we never refilled; `bcn` alone is an AP that beacons and forwards nothing;
 `uni` without `grp` is the group key or the DTIM wake. Read `CRASH\SURFGO\
 NETLOG.TXT` first - the boot net test writes it - then `BOOTLOG.TXT`.
+
+## 2026-08-24 - REQUEST to the wifi supplicant lane: a completed 4-way is torn down by the PREVIOUS attempt's EAPOL
+
+Found on the Surface Laptop Go chasing the DHCP item; it is not that item, and
+it is not mine to fix properly. `wifi_wpa.*` is yours. Filed with the evidence.
+
+**What happens**, all of it inside one second (20:58:10, build
+`debug-local-20260824-1955`):
+
+```
+EAPOL in (99 bytes, ki=008a 1/4)  -> state 1, reply 121
+EAPOL in (163 bytes, ki=13ca 3/4) -> state 2, reply 99
+SEC_KEY idx=0 mcast=0 / idx=1 mcast=1
+4-way handshake DONE - CCMP keys installed, station authorized
+RXDATA fc=0a08 ... et=888e            <- 0a08: FromDS + RETRY
+EAPOL in (121 bytes, ki=0088 1/4) -> state 1, reply 121
+EAPOL in (121 bytes, ki=0088 1/4) -> state 1, reply 0
+EAPOL in (121 bytes, ki=0088 1/4) -> state 1, reply 121
+DEAUTH from e8:d3:eb:47:4e:cf reason=2 (our AP)
+link DOWN - deauthenticated by the AP (reason 2)
+```
+
+The association completed and was then killed by frames from the association
+BEFORE it. This AP offers PSK|SAE; SAE failed, the join fell back to WPA2-PSK
+on the same BSS, and the AP was still retransmitting the SAE attempt's message
+1/4 - `ki=0088` is Key Descriptor Version **0** (an AKM of 00-0F-AC:8 or above),
+against `ki=008a`/`13ca` version **2** for the PSK handshake that had just
+succeeded. Retry bit set on every one of them.
+
+**Two things the supplicant does here that look wrong from outside it:**
+
+1. **It accepts a key descriptor version it did not negotiate.** A version-0
+   EAPOL-Key is not part of a WPA2-PSK handshake. Nothing checks.
+2. **A message 1/4 takes a DONE supplicant back to state 1 and it answers.**
+   Message 1 carries no MIC - it is unauthenticated by construction - so any
+   frame on the channel can restart a completed handshake and, as here, get
+   the live PTK replaced by one the AP will not accept. A legitimate PTK rekey
+   does start with a 1/4, so ignoring them outright is not the answer; refusing
+   to DISCARD the installed keys until a valid 3/4 arrives probably is.
+
+**What I did meanwhile, and it is a stopgap, not a fix.** `handle_eapol()` in
+`iwlwifi.c` now drops an EAPOL-Key whose version positively contradicts the AKM
+*this attempt* armed for - version 0 while armed for PSK, version 2 while armed
+for SAE - and passes everything else through untouched. It is in the driver
+because the driver is the thing that knows which AKM the current ATTEMPT chose;
+the supplicant only knows what it was armed with. Delete it the moment the
+supplicant checks the version itself; it will then be dead weight.
+
+**Adjacent, and yours if you want it:** this is the second consequence of the
+SAE PMK bug (`docs/SURFGO-OPEN-ITEMS.md` item 1) rather than a separate fault.
+Every one of these runs reaches the PSK fallback only because SAE fails, and
+the fallback lands on the same BSS while the SAE handshake is still in flight.
+Fix the PMK and this never arises on this network - but it will on the next
+transition-mode AP that makes us fall back for any other reason.
