@@ -10877,11 +10877,16 @@ lane - the run that motivated the branch, the DTIM work, all of it - was taken
 on **NimmuNet** BSSes. The moment the same measurement was taken on SKYNET it
 was non-zero, promiscuous or not.
 
-What is left for item 1 is therefore a question about the ACCESS POINT rather
-than about us: whether NimmuNet forwards group-addressed traffic to its clients
-at all (client isolation, or multicast forwarding off, on a guest SSID). That is
-not something more driver work can answer, and it should be checked before any
-more of it is done.
+What was left was therefore a question about the ACCESS POINT rather than about
+us, and it is now answered: **NimmuNet is the guest network and has CLIENT
+ISOLATION ON** (confirmed by the network's owner, 2026-08-25). Client isolation
+is precisely a refusal to forward traffic between clients, group-addressed
+traffic included. Every `grp=0` this lane ever measured was an AP doing exactly
+what it was configured to do.
+
+(Numbering, because the entry above got it wrong: `grp=0` is the residue item
+2's CLOSE left standing, not item 1. Item 1 is SAE's PMK and is untouched by any
+of this.)
 
 **One nuance not to round off.** Promisc delivered noticeably MORE of our own
 AP's group traffic than `ACCEPT_GRP` did in the same window - 18 by +2 s against
