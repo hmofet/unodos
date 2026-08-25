@@ -5406,6 +5406,18 @@ static void postjoin_diag(void)
     else
         reading = "traffic flows BOTH ways - the link is fine and DHCP itself is the problem";
 
+    /* THE ANSWER TO THE QUESTION THIS WHOLE DIAGNOSIS EXISTS FOR, WHICH IT HAS
+     * NEVER ONCE PRINTED. Every counter here describes frames; whether a LEASE
+     * landed lives in unonet and was only ever shown on screen, so the
+     * 2026-08-24 23:57 run had to be argued from the fact that `tx` STOPPED
+     * climbing - dhcp_tick() retransmits in states 1 and 2 and not in state 3,
+     * so a frozen tx means bound. That is a correct inference and it is a
+     * ridiculous way to read a lease off a log. net_dhcp_done() and net_ip()
+     * are public in net.h; this consumes them and says so in one line. */
+    { const u8 *ip = net_ip();
+      uno_dbg_net_trace("wifi: post-join diag: dhcp=%s ip=%d.%d.%d.%d",
+                        net_dhcp_done() ? "LEASE" : "none",
+                        ip[0], ip[1], ip[2], ip[3]); }
     uno_dbg_net_trace("wifi: post-join diag +%ds (round %d/%d): bssid %02x:%02x:%02x:%02x:%02x:%02x aid %d rssi %d",
                       (int)((now - g_join_ms) / 1000), g_postjoin_diag_n, DIAG_ROUNDS,
                       g_bssid[0],g_bssid[1],g_bssid[2],g_bssid[3],g_bssid[4],g_bssid[5],
