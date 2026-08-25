@@ -2842,16 +2842,42 @@ static void mvm_init_unified(void)
  * and `iwl connect` all enter the join from the same fw state. */
 static int g_mvm_done;
 static int g_no_join;      /* radio_up(): bring the fw up but do not join */
+/* NAME THE COMMAND THAT ASSERTS, NOT THE ONE THAT NOTICES.
+ *
+ * On the SECOND bring-up of a boot the firmware comes up clean - `ALIVE cause
+ * seen after 0 ms (HW causes 00000001)`, bit 25 clear - and by the time the
+ * first scan is sent csr2808 reads 02000000 and SCAN_REQ_UMAC produces no
+ * response at all. Between those two points there is only this function.
+ *
+ * The RB count says the same thing: MVM init closed 8 RBs on the first
+ * bring-up of that boot and exactly 1 on the second, so the very first command
+ * of the sequence is already going unanswered. Which one asserts is a question
+ * four register reads answer and no amount of reasoning does. */
+static u32 g_mvm_assert_at;
+static void mvm_step(const char *what)
+{
+    u32 h = r32(CSR_MSIX_HW_INT_CAUSES_AD);
+    if (h && !g_mvm_assert_at) {
+        g_mvm_assert_at = h;
+        uno_dbg_net_trace("wifi: MVM init: the fw ASSERTED at \"%s\" "
+                          "(csr2808=%08x sw_err=%d) - everything after this is "
+                          "talking to a dead firmware", what, h, (int)((h >> 25) & 1));
+    }
+}
+
 static void mvm_init_all(void)
 {
     if (g_mvm_done) return;
+    g_mvm_assert_at = 0;
+    mvm_step("before init");        /* was it already asserted on arrival? */
     if (!g_gen2) tx_start_gen1();
-    mvm_init_unified();
-    mvm_tx_ant(fw_valid_tx_ant());
-    if (fw_has_capa(12)) mvm_dqa_enable();
-    mvm_power_table();
+    mvm_init_unified();      mvm_step("nvm/unified");
+    mvm_tx_ant(fw_valid_tx_ant());  mvm_step("tx-ant");
+    if (fw_has_capa(12)) { mvm_dqa_enable(); mvm_step("dqa"); }
+    mvm_power_table();       mvm_step("power-table");
     g_mvm_done = 1;
-    uno_dbg_net_trace("wifi: MVM init sequence queued (nvm/phy/tx-ant/power)");
+    uno_dbg_net_trace("wifi: MVM init sequence queued (nvm/phy/tx-ant/power) csr2808=%08x",
+                      (unsigned)r32(CSR_MSIX_HW_INT_CAUSES_AD));
 }
 
 /* Read our own MAC address out of the card, mirroring
