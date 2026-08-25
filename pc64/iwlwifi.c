@@ -670,12 +670,34 @@ static int hexnib(int c)
  * no credentials and needs no rebuild. */
 static int g_akm_pin;               /* WPA_AKM_PSK / WPA_AKM_SAE, or 0         */
 
+/* `rxpromisc` — MAC_CFG_FILTER_PROMISC, "accept all data frames", for one run.
+ *
+ * WHY THIS EXISTS. `grp=0` says no group-addressed DATA frame from our AP ever
+ * reaches the driver, with `drop=0`, so they are not arriving and failing to
+ * decrypt. `fgrp` was added to split that into "the fw collects no group
+ * traffic at all" versus "our key or our filter" - and it CANNOT, because the
+ * fw filters every other BSS's data too, so `foreign=0` forces `fgrp=0` no
+ * matter which answer is true. Under PROMISC that filter is off and the counter
+ * means what it was supposed to mean.
+ *
+ * It is one bit and it settles the question either way. Group data appearing -
+ * ours, a neighbour's, any - proves the frames are on the air and reaching the
+ * radio, and moves the fault into the normal data filter or the group key.
+ * NOTHING appearing, with foreign unicast now arriving to prove promisc took
+ * effect, proves the opposite: no group-addressed data is being handed up under
+ * any filter, and the AP or the wake schedule is the next place to look.
+ *
+ * A switch rather than a default, because promisc on a mesh channel drags every
+ * neighbour's traffic through a 2048-entry ring for no benefit once the answer
+ * is known. Like `bssid=` and `akm=` it needs no rebuild and no credentials. */
+static int g_rx_promisc;            /* DEBUG.CFG `rxpromisc`                   */
+
 static void read_bssid_override(void)
 {
     static const char *cand[3] = { "WIFI.CFG", "WIFI.TXT", "DEBUG.CFG" };
     static u8 b[512];
     int nv = uno_fs_volumes(), v, j;
-    g_pin_on = 0; g_akm_pin = 0;
+    g_pin_on = 0; g_akm_pin = 0; g_rx_promisc = 0;
     for (v = 0; v < nv; v++)
         for (j = 0; j < 3; j++) {
             long n = uno_fs_read(v, cand[j], b, (long)sizeof b - 1), i;
@@ -703,8 +725,13 @@ static void read_bssid_override(void)
                     if (i + 7 <= n && !memcmp(b + i + 4, "psk", 3)) g_akm_pin = WPA_AKM_PSK;
                     else if (i + 7 <= n && !memcmp(b + i + 4, "sae", 3)) g_akm_pin = WPA_AKM_SAE;
                 }
+                if (!g_rx_promisc && i + 9 <= n && !memcmp(b + i, "rxpromisc", 9))
+                    g_rx_promisc = 1;
             }
-            if (g_pin_on && g_akm_pin) return;
+            /* All three, not two: the old condition returned as soon as bssid=
+             * and akm= were both in hand, so a switch living in a LATER file
+             * than those two would never be read. */
+            if (g_pin_on && g_akm_pin && g_rx_promisc) return;
         }
 }
 
@@ -1653,11 +1680,18 @@ static u32 g_rx_st_undec;      /* the rx descriptor status of the last one that 
  * a DTIM the firmware never wakes for) and nothing else looks like it;
  * `uni==0 grp==0` means the AP is not forwarding to us at all and the group
  * key is irrelevant. Those are different weeks of work. */
-static u32 g_rx_foreign_grp;   /* group-addressed data from ANY OTHER BSS - the
-                                * control for grp=0: if nobody's broadcast
-                                * arrives the fw is not collecting group
-                                * traffic, if only ours is missing it is our
-                                * key or our filter                          */
+static u32 g_rx_foreign_grp;   /* group-addressed data from ANY OTHER BSS.
+                                * INTENDED as the control for grp=0 - nobody's
+                                * broadcast arriving means the fw collects no
+                                * group traffic, only ours missing means our key
+                                * or our filter. IT DOES NOT WORK ON ITS OWN, and
+                                * the 13:24 metal run is why: `foreign=0` over 25
+                                * seconds, so the fw filters every other BSS's
+                                * DATA once we are associated, and fgrp is then
+                                * forced to 0 whichever answer is true. It only
+                                * discriminates under `rxpromisc`, where that
+                                * filter is off - read the two together or not at
+                                * all.                                        */
 static u32 g_rx_bcn_ap;        /* beacons from our AP                          */
 static u32 g_rx_uni_ap;        /* data frames from our AP addressed TO US      */
 static u32 g_rx_grp_ap;        /* data frames from our AP addressed to a GROUP */
@@ -1853,14 +1887,12 @@ static void rx_process_rb(const u8 *rb, int cap,
                 int is_data = ((fc >> 2) & 3) == 2;
                 int prot = (fc & 0x4000) != 0;
                 if (is_data && !from_ap) {
-                    /* Split the FOREIGN traffic the same way as ours, because
-                     * it is the control for `grp=0`. If no BSS on this channel
-                     * ever hands us a group-addressed data frame, the firmware
-                     * is not collecting group traffic at all and our key is
-                     * beside the point; if other BSSes' broadcast arrives and
-                     * only ours does not, it is the key or the filter for OUR
-                     * BSS. Nothing else separates those, and they are different
-                     * subsystems. */
+                    /* Split the FOREIGN traffic the same way as ours, as the
+                     * control for `grp=0` - but read g_rx_foreign_grp's own
+                     * comment before believing it: once associated the fw drops
+                     * every other BSS's data, so `foreign` is 0 and this is
+                     * pinned to 0 with it. It discriminates only under
+                     * `rxpromisc`. */
                     if (frame[4] & 1) g_rx_foreign_grp++;
                     if (!g_rx_foreign++ && g_rx_data_log > 0)
                         uno_dbg_net_trace("wifi: RXDATA foreign BSS fc=%04x len=%d "
@@ -2907,6 +2939,7 @@ static void mvm_mac_ctxt(const u8 bssid[6], int assoc, int aid, int action)
     /* cck_short_preamble@44, short_slot@48 = 0 */
     { u32 filt = (1u<<2);              /* ACCEPT_GRP */
       if (!assoc) filt |= (1u<<6);      /* IN_BEACON while connecting */
+      if (g_rx_promisc) filt |= (1u<<0); /* IN_PROMISC - see g_rx_promisc */
       *(u32*)(p+52) = filt; }           /* filter_flags */
     *(u32*)(p+56) = 1;                  /* qos_flags = MAC_QOS_FLG_UPDATE_EDCA */
     /* ac[5], each iwl_ac_qos = { le16 cw_min, le16 cw_max, u8 aifsn,
@@ -3145,14 +3178,18 @@ static void mld_mac_cfg(int action, int assoc, int aid)
      * ACCEPT_BEACON BIT(3) here, where the legacy cmd used IN_BEACON BIT(6). */
     c.filter_flags = (1u<<2);                       /* ACCEPT_GRP */
     if (!assoc) c.filter_flags |= (1u<<3);          /* ACCEPT_BEACON while connecting */
+    if (g_rx_promisc) c.filter_flags |= (1u<<0);    /* PROMISC - see g_rx_promisc */
     /* he_support/eht_support stay 0: we associate as a plain HT-less STA.
      * nic_not_ack_enabled = !iwl_mvm_is_nic_ack_enabled(); this part reports
      * HE MAC CAP2 ACK_EN, so the working driver sends 0. */
     c.nic_not_ack_enabled = 0;
     c.is_assoc = assoc ? 1 : 0;
     c.assoc_id = (u16)aid;
-    uno_dbg_net_trace("wifi: MAC_CONFIG action=%d assoc=%d aid=%d len=%d",
-                      action, assoc, aid, (int)sizeof c);
+    /* filter= is in the trace because the whole `grp=0` question is about which
+     * classes of frame the fw was told to hand up, and no log line has ever
+     * said what we actually asked for. */
+    uno_dbg_net_trace("wifi: MAC_CONFIG action=%d assoc=%d aid=%d filter=%02x len=%d",
+                      action, assoc, aid, (unsigned)c.filter_flags, (int)sizeof c);
     send_cmd(GRP_MACCONF, MC_MAC_CONFIG, 0, &c, (int)sizeof c);
     wait_cmd_done(100);
 }
@@ -4924,14 +4961,27 @@ static int join_selected(void)
  * whether the fw took it. */
 static void post_assoc_link_tune(void)
 {
-    u32 h;
+    u32 h, before;
     if (!fw_has_mld_api()) return;
+    /* READ IT FIRST. The version of this that only read AFTER blamed the tune
+     * for an assert that was already standing: on the 13:24 metal run the third
+     * SKYNET attempt printed "the tune ASSERTED the fw" on a boot where two
+     * earlier attempts had each spent a session-protection request - which is
+     * the exact trigger docs/SURFGO-OPEN-ITEMS.md item 3 names for the
+     * third-attempt assert. A test that cannot tell "I broke it" from "it was
+     * already broken" convicts whichever code happens to look next. */
+    before = r32(CSR_MSIX_HW_INT_CAUSES_AD);
     mld_link_cfg(2 /*MODIFY*/, 1 /*active*/, 1 /*phy*/,
                  LINK_MOD_RATES_INFO | LINK_MOD_QOS_PARAMS | LINK_MOD_BEACON_TIMING);
     h = r32(CSR_MSIX_HW_INT_CAUSES_AD);
-    if (h)
+    if (before)
+        uno_dbg_net_trace("wifi: post-assoc link tune: the fw was ALREADY asserted "
+                          "before it was sent (csr2808=%08x before, %08x after) - this "
+                          "says nothing about beacon timing, and item 3's retry assert "
+                          "is what to read it as", before, h);
+    else if (h)
         uno_dbg_net_trace("wifi: post-assoc link tune ASSERTED the fw "
-                          "(csr2808=%08x sw_err=%d) - the association stands, but this "
+                          "(csr2808 0 -> %08x sw_err=%d) - the association stands, but this "
                           "fw will not take beacon timing once associated either",
                           h, (int)((h >> 25) & 1));
     else
@@ -5452,12 +5502,21 @@ static void postjoin_diag(void)
          * Unicast rides the pairwise key and works; every group-addressed
          * frame rides the GTK. A DHCP OFFER, an ARP, an mDNS announcement -
          * all of them are group-addressed on most networks, and none of them
-         * arrive. A wrong group key and a DTIM the firmware never wakes for
-         * are still both alive here; `prot` below separates them, because a
-         * key that is wrong still counts the frame and a DTIM that never
-         * fires never sees one. */
+         * arrive.
+         *
+         * THE DTIM HALF OF THIS IS DEAD, on metal, 2026-08-25 13:24. The fw
+         * ACCEPTED the post-association beacon timing (dtim_interval=200, no
+         * assert) and over 25 seconds - counters moving the whole way, from_ap
+         * 38 -> 257, so this is not a stalled ring being read as a shape - grp
+         * stayed 0. A firmware told exactly when group traffic is released
+         * still hands up none of it.
+         *
+         * And a wrong key is not it either: `drop=0` with `prot`/`dec` equal
+         * means nothing arrived to fail. What is left is that the frames are
+         * not being handed up at all, which `rxpromisc` is there to settle. */
         reading = "unicast from the AP arrives and GROUP-ADDRESSED traffic never "
-                  "does - the group key or the DTIM wake, not DHCP";
+                  "does - not DHCP, not the DTIM wake (the fw took the timing and "
+                  "nothing changed); try `rxpromisc`";
     else if (g_rx_prot && !g_rx_prot_dec)
         /* The AP is talking to us and the hardware is handing its frames up
          * still encrypted. Which of the two that is - a key the fw never armed,
