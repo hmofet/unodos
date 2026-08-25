@@ -10707,3 +10707,67 @@ and the funnel line (`bcn`/`uni`/`grp`) is already there to measure it.
 
 **Releasing the claim on `iwlwifi.*`.** Items 1 (SAE PMK, supplicant lane) and 3
 (retarget) are unclaimed and their evidence is in this file and the doc.
+
+## 2026-08-25 - CLAIM (NIC drivers / iwlwifi): group-addressed traffic never arrives (branch `surfgo-grp`)
+
+**Claiming `iwlwifi.*`** again, for what `docs/SURFGO-OPEN-ITEMS.md` item 2's
+close left standing: `grp=0`. The Surface has a DHCP lease now and still cannot
+receive a single group-addressed data frame. ARP, mDNS, and any DHCP server
+that broadcasts its OFFER rather than unicasting it are all downstream of this.
+
+**The measurement, from the run that got the lease** (2026-08-24 23:57, ten
+seconds, WPA2-PSK on `30:29:2b:70:4f:cf`):
+
+```
+rb=2338 mpdu=248 | from_ap=113 bcn=101 uni=4 grp=0
+prot=2 dec=2 foreign=0 drop=0
+```
+
+113 frames from our AP. 101 of them beacons. Four unicast data frames, both
+protected ones decrypted correctly. **Zero group-addressed data frames, and
+`drop=0`** - so they are not arriving and failing to decrypt, they are not
+arriving at all. That rules the GTK out as a DECRYPTION fault and leaves "the
+firmware never hands them up".
+
+**The lead, and a previous session already found it and parked it.**
+`LINK_MOD_BEACON_TIMING` is implemented in `mld_link_cfg()` and reachable from
+exactly one caller: the hand-typed debug verb `iwl mld a`. Its own comment:
+
+> *the post-association link tune Linux sends on BSS_CHANGED_QOS (EDCA params,
+> plus the beacon timing the STA path normally never sets). Kept OUT of the main
+> path on purpose - the fw validates exactly the field groups the modify_mask
+> selects, and these two groups are what asserted when they were folded into the
+> activation MODIFY. Run it after 'iwl mld 9' to see whether this fw accepts them
+> once associated.*
+
+**Nobody ever ran it**, and on this machine nobody could: the verb arrives over
+URC, URC needs a network, and the network is what is broken. That is the second
+time in this lane a diagnostic was unreachable by construction on the only
+machine that needed it - `g_rx_data_log` was the first.
+
+So every real join sends `dtim_int=0`. An AP BUFFERS group-addressed traffic and
+releases it after the DTIM beacon; a firmware that was never told the DTIM
+period has no reason to collect it. That fits all three observations at once:
+`grp=0`, `drop=0`, and `bcn=101` (ordinary beacons still arrive).
+
+**Plan.** Send the post-association `LINK_CONFIG` MODIFY once associated,
+carrying the real `bi * dtim` from the scan - **guarded**, because this firmware
+asserted when those field groups went out PRE-association. If it asserts
+post-assoc, say so and leave the join standing: a link without broadcast beats
+no link. Plus one counter that settles the alternative in the same run - split
+`foreign` by the group bit, so the log says whether ANY group-addressed data
+reaches the host or only ours is missing. `foreign_grp > 0` with `grp == 0`
+means the key or the filter for OUR BSS; both zero means the firmware is not
+collecting group traffic at all.
+
+**Not claimed:** the supplicant (item 1, SAE's PMK) and `retarget_ap()` (item 3)
+remain free, with their evidence in this file and the doc.
+
+**Adjacent finding, for whoever takes item 1.** SKYNET does not connect, and it
+is not this. On `e8:d3:eb:47:4e:c6` it authenticates (Open System, r=0),
+associates cleanly (status 0, AID 1) and the AP then sends **no EAPOL of any
+kind for four seconds** - it never starts the 4-way at all. The two other SKYNET
+BSSes rejected the association outright with status 1 (`assoc -> -4097`, which
+is `-(0x1000|status)` and correct). Worth a run with `akm=` unset so SAE is in
+the path, and a SKYNET BSSID pinned - the pin is SSID-aware now, so one stick
+covers both networks safely.
