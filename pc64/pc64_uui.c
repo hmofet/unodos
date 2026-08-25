@@ -958,8 +958,25 @@ static const char *cp_wifi_sel_ssid(void)
 static void cp_wifi_fill_psk(void)
 {
     const char *ssid = cp_wifi_sel_ssid();
+    int i;
     if (!ssid) return;
-    if (!iwl_saved_psk(ssid, g_cp_psk, (int)sizeof g_cp_psk)) return;
+    /* NOT REMEMBERED MEANS EMPTY, WHICH IS WHY THIS CLEARS FIRST.
+     *
+     * Both `return`s here used to leave the field holding whatever the LAST
+     * network put in it, so selecting a network nobody has a password for
+     * showed the previous one's - and Join then sent it. Reported as "the
+     * password seems to be saved once and then applied to any other network,
+     * it doesn't save one per network". The store was innocent: WIFINETS.CFG
+     * had SKYNET and NimmuNet with their own passphrases the whole time. It
+     * was this field never being emptied.
+     *
+     * A password field showing a password that does not belong to the thing it
+     * is pointed at is worse than an empty one in every case, so clear before
+     * asking. */
+    for (i = 0; i < (int)sizeof g_cp_psk; i++) g_cp_psk[i] = 0;
+    g_cp_psk_t.len = g_cp_psk_t.caret = g_cp_psk_t.sel = 0;
+    g_cp_psk_t.scroll_x = 0;
+    if (!iwl_saved_psk(ssid, g_cp_psk, (int)sizeof g_cp_psk)) { g_cp_psk[0] = 0; return; }
     g_cp_psk_t.len = (int)strlen(g_cp_psk);
     g_cp_psk_t.caret = g_cp_psk_t.sel = g_cp_psk_t.len;
     g_cp_psk_t.scroll_x = 0;
@@ -982,12 +999,15 @@ static void cp_wifi_forget(void)
     rebuild_ctrl_window();
 }
 
-static void cp_wifi_scan(void)
+static int g_cp_scanning;            /* a stepped scan is running for this panel */
+
+/* The tail every scan shares, whether it ran to completion or never started:
+ * label the rows, pick one, and say what happened. */
+static void cp_wifi_scan_done(int n)
 {
     int i;
-    cp_wifi_busy_begin();
-    cp_wifi_note("Scanning for networks...");
-    g_cp_ap_n = iwl_scan_aps(g_cp_aps, CP_WIFI_MAX);
+    g_cp_ap_n = n;
+    g_cp_scanning = 0;
     cp_wifi_busy_end();
     for (i = 0; i < g_cp_ap_n; i++) {
         char *p = g_cp_ap_lbl[i];
@@ -1021,6 +1041,35 @@ static void cp_wifi_scan(void)
         cp_wifi_note(msg);
     }
     rebuild_ctrl_window();
+}
+
+/* SCAN WITHOUT FREEZING THE DESKTOP.
+ *
+ * This used to be `g_cp_ap_n = iwl_scan_aps(...)`, a five-second blocking
+ * dwell on the shell's only thread. The spinner kept turning the whole time,
+ * because the driver reports progress into it - so the machine looked alive
+ * while it ignored every click, which is the worst of both. Reported from the
+ * Surface Laptop Go as "clicking to scan freezes the UI for a while".
+ *
+ * The driver's stepped API does the same scan in slices; the frame loop drives
+ * it through cp_wifi_scan_tick() below, so the desktop keeps painting AND
+ * keeps taking input while the radio listens. */
+static void cp_wifi_scan(void)
+{
+    if (g_cp_scanning) return;                    /* one at a time */
+    cp_wifi_busy_begin();
+    cp_wifi_note("Scanning for networks...");
+    if (iwl_scan_begin() < 0) { cp_wifi_scan_done(0); return; }
+    g_cp_scanning = 1;
+}
+
+/* One slice per frame. Short enough that a frame still lands on time, long
+ * enough that the five-second dwell is not stretched by the frame rate. */
+static void cp_wifi_scan_tick(void)
+{
+    if (!g_cp_scanning) return;
+    if (iwl_scan_step(40)) cp_wifi_scan_done(iwl_scan_results(g_cp_aps, CP_WIFI_MAX));
+    else                   cp_wifi_spin();
 }
 
 /* "<what> ... (N s)" - the join blocks the shell for seconds at a time, so
@@ -5866,8 +5915,16 @@ static void on_action(const unoui_action *a)
                            cp_wifi_fill_psk();      /* remembered? type it for them */
                        } break;
     case ID_WIFISCAN:  cp_wifi_scan(); break;
-    case ID_WIFIJOIN:  cp_wifi_join(); break;
-    case ID_WIFIFORGET: cp_wifi_forget(); break;
+    /* The panel takes input DURING a scan now, which it never could before, so
+     * these two have to say no to what used to be unreachable: a join or a
+     * forget on top of a scan in flight would drive the radio from two places
+     * at once. */
+    case ID_WIFIJOIN:
+        if (g_cp_scanning) { cp_wifi_note("Still scanning - one moment."); break; }
+        cp_wifi_join(); break;
+    case ID_WIFIFORGET:
+        if (g_cp_scanning) { cp_wifi_note("Still scanning - one moment."); break; }
+        cp_wifi_forget(); break;
     case ID_WIFIPSK:   break;                               /* typing; nothing to do */
     case ID_SESSION: g_session_restore = a->value ? 1 : 0; session_save(); break;
     case ID_PSPEED: uno_pc64_pointer_speed(a->value); session_save(); break;
@@ -6823,6 +6880,9 @@ int main(void)
          * did. That is why a joined WiFi link could sit with no IP address
          * forever. No-op with no NIC bound (S-NET-02). */
         { int np; for (np = 0; np < 4; np++) net_poll(); }
+        /* one slice of a stepped WiFi scan, so "Scan" no longer freezes the
+         * desktop for the five-second dwell (no-op when nothing is scanning) */
+        cp_wifi_scan_tick();
         /* a lease that lands out here still has to reach the screen: refresh
          * the Control Panel's network pane on the transition */
         { static int last_lease = -1;
