@@ -1302,19 +1302,51 @@ static void rx_hw_init(void)
     else if (!g_gen2) w32(RFH_Q0_FRBDCB_WIDX_TRG, g_rx_write);
 }
 
-/* Hand consumed RBs back to the firmware. The free list is a static identity
- * mapping (slot i -> rb i, vid i+1) that we never rewrite, so restock is just
- * advancing the write index to one-behind the read index (rounded to 8, as
- * Linux does). Without this the fw exhausts the initial 256 RBDs and RX goes
- * silent - invisible pre-ALIVE, guaranteed once real traffic flows. On gen2
- * the fw programs the RFH from the context info at boot, so the register must
- * not be touched before ALIVE (Linux restocks in fw_alive). */
+/* Hand consumed RBs back to the firmware: REWRITE the descriptor, then advance
+ * the write index. On gen2 the fw programs the RFH from the context info at
+ * boot, so the register must not be touched before ALIVE (Linux restocks in
+ * fw_alive).
+ *
+ * THIS USED TO REWRITE NOTHING, on the reasoning that the free list is a static
+ * identity mapping - slot i holds rb i with vid i+1, forever - so re-advertising
+ * an index was the same as refilling it. Surface Laptop Go, 2026-08-24 23:10:37,
+ * says otherwise. The 4-way completed, the station was authorized, the link then
+ * stood up for twenty-five seconds, and the four diagnosis rounds read:
+ *
+ *   +2s   rb=2047 mpdu=371 | from_ap=7 bcn=2 uni=2 grp=0
+ *   +6s   rb=2047 mpdu=371 | from_ap=7 bcn=2 uni=2 grp=0
+ *   +10s  rb=2047 mpdu=371 | from_ap=7 bcn=2 uni=2 grp=0
+ *   +25s  rb=2047 mpdu=371 | from_ap=7 bcn=2 uni=2 grp=0
+ *
+ * Not one number moved in twenty-three seconds, while `tx` climbed 2 -> 16 as
+ * the DHCP DISCOVERs went out. The receive path did not lose broadcast, and it
+ * did not decrypt anything wrongly: it STOPPED, whole, and 2047 is RXQ_N-1 -
+ * one lap of the ring exactly.
+ *
+ * `iwl_pcie_rxmq_restock()` writes `bd[write] = page_dma | vid` on every single
+ * restock rather than re-pointing at what is already there, and the reason is
+ * this: the hardware CONSUMES a free descriptor. Re-advertising a slot it has
+ * already eaten hands it back whatever the eat left behind. One lap is exactly
+ * how long a static free list can survive that, which is exactly how long this
+ * one survived.
+ *
+ * Cheap and safe either way - writing the canonical value into a slot that
+ * still holds it is a no-op, and into a slot the hardware cleared it is the
+ * fix. The ring-state line in postjoin_diag() says which it was. */
 static int g_alive;
 static void rx_restock(void)
 {
     int tgt = ((g_rx_read - 1) & (RXQ_N - 1)) & ~7;
     if (tgt == g_rx_write) return;
     if (g_gen2 && !g_alive) return;
+    if (g_mq_rx) {
+        volatile u64 *fr = (volatile u64 *)g_rbd_free_le64;
+        int i = g_rx_write, guard = RXQ_N;
+        while (i != tgt && guard-- > 0) {
+            i = (i + 1) & (RXQ_N - 1);
+            fr[i] = phys(g_rb[i]) | (u64)(i + 1);   /* slot i -> rb i, vid i+1 */
+        }
+    }
     g_rx_write = tgt;
     if (!g_mq_rx) w32(FH_RSCSR_RBDCB_WPTR, g_rx_write);
     else          w32(RFH_Q0_FRBDCB_WIDX_TRG, g_rx_write);
@@ -1588,6 +1620,9 @@ static u32 g_deauth_other;     /* ...from any other BSSID (steering, usually) */
 static int g_deauth_reason = -1;             /* the most recent reason code   */
 static unsigned long long g_join_ms;         /* when the 4-way completed      */
 static int g_postjoin_diag_n;                /* how many rounds have printed  */
+static u32 g_diag_prev_rb, g_diag_prev_mpdu; /* the previous round's, for the
+                                              * only question a single round
+                                              * cannot answer: did it MOVE?  */
 /* ---- who the frame is from, and what the firmware did with it -------------
  * Two facts the counters above could not tell apart, and both of them decide
  * what "69 frames dropped" means:
@@ -3904,6 +3939,7 @@ static void handle_eapol(const u8 *eapol, int len)
         g_rx_data_n = g_rx_data_drop = g_tx_data_n = 0;
         g_rx_foreign = g_rx_prot = g_rx_prot_dec = 0; g_rx_st_undec = 0;
         g_rx_bcn_ap = g_rx_uni_ap = g_rx_grp_ap = 0;
+        g_diag_prev_rb = g_diag_prev_mpdu = 0;
         g_rb_postjoin = g_rx_mpdu_pj = 0;
         /* ARM THE RX DESCRIPTION FOR THE FIRST FEW FRAMES OF THIS ASSOCIATION.
          *
@@ -5316,6 +5352,20 @@ static void postjoin_diag(void)
                   "at all - the TX path is not completing, this is not the AP";
     else if (g_txr_total && g_txr_ackfail * 2 >= g_txr_total)
         reading = "the AP is NOT ACKing us - radio-level: wrong BSS, steering, or too weak";
+    else if (g_postjoin_diag_n > 1 && g_rb_postjoin == g_diag_prev_rb &&
+             g_rx_mpdu_pj == g_diag_prev_mpdu && g_rb_postjoin)
+        /* THE ONE THE FIRST VERSION OF THIS LADDER GOT WRONG. Every rung below
+         * reads a snapshot and reasons about the SHAPE of it - which frames
+         * arrived and which did not. When the counters have not moved at all
+         * since the previous round, the shape is not evidence: it is the last
+         * instant before the receive path stopped, preserved. On the Surface,
+         * 2026-08-24, four rounds twenty-three seconds apart read identically
+         * and this ladder confidently reported "unicast arrives and
+         * group-addressed never does", from two unicast frames that had arrived
+         * before anything stopped. A frozen counter is a fact about the ring,
+         * not about the air. */
+        reading = "NOTHING has changed since the previous round - the receive path "
+                  "is FROZEN, not selective; read the ring line, not the frame counts";
     else if (!g_rx_mpdu_pj)
         /* NOT ONE FRAME OF ANY KIND, from anybody, since the keys went in -
          * not a beacon, not a neighbour's broadcast, nothing. A 2.4 GHz mesh
@@ -5379,6 +5429,24 @@ static void postjoin_diag(void)
                       (unsigned)g_rb_postjoin, (unsigned)g_rx_mpdu_pj,
                       (unsigned)g_rx_from_ap, (unsigned)g_rx_bcn_ap,
                       (unsigned)g_rx_uni_ap, (unsigned)g_rx_grp_ap);
+    /* THE RING ITSELF, because "no frames arrived" has two completely different
+     * causes and they are one register apart.
+     *
+     * closed advancing while read trails it   we are not consuming - our maths
+     * closed frozen, free list INTACT         the rb_status DMA stopped, and
+     *                                         this card's is documented unreliable
+     * closed frozen, free list gone to ZEROS  the hardware ate the descriptors
+     *                                         and a static free list never
+     *                                         refilled them
+     * `zeros` counts free-list slots the hardware has emptied. On a healthy
+     * ring it is 0. */
+    { int z = 0, i; volatile u64 *fr = (volatile u64 *)g_rbd_free_le64;
+      u64 w = fr[g_rx_write & (RXQ_N - 1)];
+      for (i = 0; i < RXQ_N; i++) if (!fr[i]) z++;
+      uno_dbg_net_trace("wifi: post-join diag: ring closed=%u read=%d write=%d "
+                        "free[w]=%08x:%08x zeros=%d/%d",
+                        (unsigned)(rx_closed() & (RXQ_N - 1)), g_rx_read, g_rx_write,
+                        (unsigned)(u32)(w >> 32), (unsigned)(u32)w, z, RXQ_N); }
     /* `drop` above now counts only frames from the AP we joined; `foreign` is
      * everything else on the channel, which on a mesh is most of it and used to
      * be indistinguishable. `prot` is how many protected frames our AP sent us
@@ -5392,6 +5460,7 @@ static void postjoin_diag(void)
                       (int)((g_rx_st_undec >> 8) & 7), (int)((g_rx_st_undec >> 6) & 1),
                       (int)((g_rx_st_undec >> 11) & 1), (int)((g_rx_st_undec >> 24) & 0x1f));
     uno_dbg_net_trace("wifi: post-join diag: -> %s", reading);
+    g_diag_prev_rb = g_rb_postjoin; g_diag_prev_mpdu = g_rx_mpdu_pj;
 
     /* PERSIST IT NOW, rather than hoping the boot log gets written later.
      *
