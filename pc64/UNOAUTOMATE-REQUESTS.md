@@ -10934,3 +10934,51 @@ the firmware" from "the firmware took it and heard nothing" - two faults that
 are identical in the log above. This lane has now twice spent metal runs fixing
 the wrong one of two indistinguishable causes, and both times the counter that
 would have told them apart cost nothing once someone asked for it.
+
+## 2026-08-25 - CORRECTION (NIC drivers / iwlwifi, branch `surfgo-grp`): the dead scan IS the assert, and item 3 was right
+
+The entry above says of the scan that finds nothing after a rejoin:
+
+> *"on a firmware that comes up ALIVE with `csr2808=00000000` and answers every
+> MVM init command ... **This corrects item 3** ... There is no assert here."*
+
+**That is wrong.** The probe added in the same breath, on its first metal run
+(19:26), answers it:
+
+```
+scan: the request produced NO response at all - closed 1 -> 1 after 60 ms, csr2808=02000000
+```
+
+`02000000` is bit 25. The firmware **is** asserted, item 3's account is right,
+and my correction to it was not. Nothing about item 3 needs changing.
+
+**How the wrong claim was reached, which is the part worth keeping.** No csr2808
+reading existed at the scan. There was one at the ALIVE a few lines earlier -
+`ALIVE cause seen after 0 ms (HW causes 00000001)`, bit 25 clear - and "no
+assert" was inferred from THAT. This is the same error this lane has now made
+three times and written up twice: **a reading taken at one moment was used to
+describe a different one.** It cost a wrong entry in this file rather than a
+metal run only because the instrument that disproved it was already being built
+for another reason.
+
+**What the run actually establishes**, all of it new:
+
+- The assert happens on the THIRD join attempt, before anything else touches
+  the radio. The before/after attribution added earlier proves it and clears
+  the link tune outright: `post-assoc link tune: the fw was ALREADY asserted
+  before it was sent (csr2808=02000000 before, 02000000 after)`. That test was
+  added on suspicion and has now earned itself.
+- The radio restart **does** reload the firmware and it **does** come up clean:
+  `HW causes 00000001` at ALIVE, bit 25 clear. So the assert does not survive
+  the reload.
+- It is re-asserted **during MVM init, before the scan** - `scan: pre
+  rx_closed=1` against `rx_closed=8` for the same init on the first bring-up of
+  that boot. The first command of the sequence is already going unanswered.
+
+So the shape is not "an assert nothing clears". It is "the second MVM init of a
+boot asserts a freshly loaded firmware", and that is a much smaller target than
+item 3 has ever had.
+
+Instrumented, not guessed: `mvm_step()` reads csr2808 after each init command
+and names the first one that finds it set. Four register reads decide between
+four candidates, and this lane's whole history says pick that over reasoning.
