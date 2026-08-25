@@ -6131,13 +6131,14 @@ static int radio_up(void)
 
 
 /* Scan and report one entry per BSS, strongest first. Returns the count. */
-int iwl_scan_aps(iwl_ap_t *out, int max)
+#define UI_SCAN_DWELL_MS 5000
+
+/* Fold the raw BSS table into the caller's per-SSID array. Split out of
+ * iwl_scan_aps() so the stepped scan below can share it verbatim. */
+int iwl_scan_results(iwl_ap_t *out, int max)
 {
     int i, j, n = 0;
     if (!out || max <= 0) return 0;
-    if (radio_up() < 0) return 0;
-    mvm_scan_cfg();
-    mvm_scan_passive(5000);
     for (i = 0; i < g_scan_ap_n && n < max; i++) {
         if (!g_scan_aps[i].ssid[0]) continue;             /* hidden BSS */
         /* fold the mesh: one row per SSID, keeping the strongest */
@@ -6164,6 +6165,70 @@ int iwl_scan_aps(iwl_ap_t *out, int max)
     uno_dbg_net_trace("wifi: scan for the UI: %d BSS -> %d networks", g_scan_ap_n, n);
     return n;
 }
+
+int iwl_scan_aps(iwl_ap_t *out, int max)
+{
+    if (!out || max <= 0) return 0;
+    if (radio_up() < 0) return 0;
+    mvm_scan_cfg();
+    mvm_scan_passive(UI_SCAN_DWELL_MS);
+    return iwl_scan_results(out, max);
+}
+
+/* ---- the STEPPED scan, for a caller that has to keep taking input ---------
+ *
+ * The scan is a five-second passive dwell and the shell is single-threaded, so
+ * "Scan" in the Control Panel froze the whole desktop for five seconds every
+ * time it was pressed. The progress callback kept the spinner turning
+ * throughout, which is worse than it sounds: the machine LOOKED alive while it
+ * ignored every click, so the natural response was to click again.
+ *
+ * Same scan, cut into slices a frame loop can drive. begin() sends the
+ * request, step() pumps the RX ring for a few milliseconds and says whether
+ * the scan has finished, and iwl_scan_results() folds the table exactly as the
+ * blocking path does. iwl_scan_aps() is unchanged in behaviour - it is these
+ * pieces in a row - so every other caller (the boot join, the Network app)
+ * keeps the semantics it was written against.
+ *
+ * begin() can still block once, inside radio_up(), if the firmware has not
+ * been loaded yet. That is a different wait with a different fix and it does
+ * not happen on the path this exists for: the Control Panel has already
+ * brought the radio up to know there is a card to scan with. */
+static int g_uiscan;            /* a stepped scan is in flight */
+static int g_uiscan_left;       /* milliseconds of dwell still owed */
+
+int iwl_scan_begin(void)
+{
+    if (radio_up() < 0) return -1;
+    mvm_scan_cfg();
+    g_scan_ap_n = 0; g_scanning = 1;
+    g_scan_mpdu_seen = 0; g_scan_beacon_calls = 0; g_scan_rb_total = 0;
+    uno_dbg_net_trace("wifi: scan: pre  rx_closed=%d rx_read=%d",
+                      rx_closed() & (RXQ_N-1), g_rx_read);
+    send_cmd(GRP_LONG, 0x0d /*SCAN_REQ_UMAC*/, 0, g_scan_tmpl, (int)sizeof g_scan_tmpl);
+    g_uiscan = 1; g_uiscan_left = UI_SCAN_DWELL_MS;
+    return 0;
+}
+
+int iwl_scan_step(int slice_ms)
+{
+    const u8 *comp;
+    if (!g_uiscan) return 1;
+    if (slice_ms < 1) slice_ms = 1;
+    if (slice_ms > g_uiscan_left) slice_ms = g_uiscan_left;
+    comp = wait_notif(GRP_LEGACY, 0x0f /*SCAN_COMPLETE_UMAC*/, 0, slice_ms);
+    g_uiscan_left -= slice_ms;
+    if (!comp && g_uiscan_left > 0) return 0;
+    g_scanning = 0; g_uiscan = 0;
+    uno_dbg_net_trace("wifi: scan: post rx_closed=%d rx_read=%d rb_total=%d",
+                      rx_closed() & (RXQ_N-1), g_rx_read, g_scan_rb_total);
+    uno_dbg_net_trace("wifi: scan: complete=%s mpdu_seen=%d beacon_calls=%d aps=%d (stepped)",
+                      comp ? "yes" : "no(timeout)", g_scan_mpdu_seen,
+                      g_scan_beacon_calls, g_scan_ap_n);
+    return 1;
+}
+
+int iwl_scan_busy(void) { return g_uiscan; }
 
 /* Join `ssid` with `psk` (WPA2-PSK; empty psk = open, untested). Runs the same
  * scan -> pick -> auth -> assoc -> 4-way path as the boot join, then publishes

@@ -48,6 +48,16 @@ typedef struct {
 /* Scan and fill up to `max` entries, strongest first, one row per SSID.
  * Brings the card up first if needed; does NOT join. Returns the count. */
 int iwl_scan_aps(iwl_ap_t *out, int max);
+/* The same scan in slices, for a single-threaded UI that must keep taking
+ * input while it runs (iwl_scan_aps() blocks for a five-second dwell).
+ *   iwl_scan_begin()      0, or <0 if the radio will not come up
+ *   iwl_scan_step(ms)     pump for up to ms; 1 = finished, 0 = still scanning
+ *   iwl_scan_results()    fold the BSS table, exactly as iwl_scan_aps() does
+ *   iwl_scan_busy()       is a stepped scan in flight */
+int iwl_scan_begin(void);
+int iwl_scan_step(int slice_ms);
+int iwl_scan_results(iwl_ap_t *out, int max);
+int iwl_scan_busy(void);
 
 /* Join an SSID with a WPA2-PSK passphrase (overriding WIFI.CFG for this boot).
  * Blocks for the scan + association + 4-way handshake (~10 s). 0 = joined.
