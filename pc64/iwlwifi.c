@@ -6208,6 +6208,27 @@ uno_nic_t *iwl_nic(void)
             uno_dbg_net_trace("wifi: no stored credentials - radio-only bring-up "
                               "(scan / GUI join)");
         }
+        /* AND ARM THE JOIN, OR THE LINE ABOVE IS A PROMISE THE BOOT DOES NOT KEEP.
+         *
+         * The MVM gate below stops a bring-up at ALIVE unless something armed
+         * it, and only radio_up() ever did - so the boot path announced
+         * "rejoining the last network" and then stopped one step short of
+         * trying, every boot. Metal, SURFGO 2026-08-26 14:08: two boot
+         * bring-ups, both ending
+         *
+         *     ALIVE reached in the NORMAL path - MVM/join sequence gated off
+         *     == net test done: WIFI FAIL (bring-up stopped) ==
+         *
+         * and the machine sat on the desktop with a radio that was up, a
+         * remembered network in range, and no join - until the Network app was
+         * opened by hand, which arms the gate and joined on the first try.
+         *
+         * The gate is from the F12 era, when everything past ALIVE had never
+         * run on this driver and running it inline wedged the rig. That has not
+         * been true for a month: this is the same sequence the GUI takes. So a
+         * bring-up that HAS a network to join arms it; one that does not still
+         * stops at ALIVE, and `iwl mvm` still drives it by hand. */
+        if (have_cfg && !g_no_join) g_mvm_arm = 1;
     }
 
     /* map BAR0 + bus master, and read the silicon identity, BEFORE choosing a
@@ -6415,7 +6436,14 @@ uno_nic_t *iwl_nic(void)
      * Running it inline wedged the rig (and the wedge ate the logs), so it is
      * gated OFF: a plain bring-up now stops here, reports ALIVE, and stays
      * recoverable.  Arm it deliberately with "iwl mvm" then "iwl rerun" to work
-     * that sequence step by step, the same way the ALIVE handshake was built. */
+     * that sequence step by step, the same way the ALIVE handshake was built.
+     *
+     * THAT WAS TRUE IN JULY AND IS NOT TRUE NOW: everything below has run on
+     * metal on four machines, and it is what the Network app takes on every
+     * join. What survives is the gate's other use - a bring-up with nothing to
+     * join, and the hand-driven bisect. A bring-up that HAS credentials arms
+     * itself in the block above, because a boot join that stops here is not a
+     * boot join at all (SURFGO 2026-08-26: two boots, both stopped here). */
     if (!g_mvm_arm) {
         st_set("WiFi: fw ALIVE (F12 solved) - MVM bring-up gated; 'iwl mvm' to continue");
         uno_dbg_net_trace("wifi: ALIVE reached in the NORMAL path - MVM/join sequence gated off "
