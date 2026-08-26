@@ -6555,7 +6555,23 @@ int iwl_join_ssid(const char *ssid, const char *psk)
     }
     /* a fresh join must not inherit the previous one's keys or supplicant */
     g_joined = 0; g_keys_installed = 0; g_key_gtk_idx = -1; g_wpa_active = 0;
-    g_data_qid = -1; g_dq_head = g_dq_tail = 0;
+    g_dq_head = g_dq_tail = 0;
+    /* BUT THE RE-POINT PATH STILL OWNS THE FIRMWARE'S TX QUEUE.
+     *
+     * `g_data_qid = -1` was unconditional, which was harmless when the next
+     * thing to happen was a firmware reload - the queue died with the image.
+     * On the re-point path the queue is still allocated in a live firmware and
+     * this is the only record of its id, so clearing it made retarget_ap()'s
+     * teardown ask the fw to remove a queue that does not exist:
+     *
+     *     SCD_QUEUE remove sta=0 tid=15 (qid was -1) len=36
+     *
+     * on both re-points of the 2026-08-26 11:52 boot. A malformed command is
+     * exactly the shape this firmware ADVANCED_SYSASSERTs on, and one of those
+     * two re-points did assert two commands later. Not proof - the other one
+     * survived the same line - but asking to remove queue -1 is wrong whether
+     * or not it is what fires, and it can only be wrong on this path. */
+    if (!reused) g_data_qid = -1;
     if (radio_up() < 0) return -1;
     strncpy(g_cfg_ssid, ssid, sizeof g_cfg_ssid - 1);
     g_cfg_ssid[sizeof g_cfg_ssid - 1] = 0;
