@@ -5178,6 +5178,9 @@ static int join_selected(void)
     mvm_assoc_window();
     if (r32(CSR_MSIX_HW_INT_CAUSES_AD)) {
         uno_dbg_net_trace("wifi: join: session-prot asserted the fw (iwl fwerr)");
+#ifdef UNO_DEBUG
+        fwerr_dump();          /* the tables, not an instruction to type a verb */
+#endif
         return -1;
     }
     if (g_join_akm == WPA_AKM_SAE) {
@@ -5403,6 +5406,26 @@ static int join_retry(void)
     mvm_assoc_window();
     if (r32(CSR_MSIX_HW_INT_CAUSES_AD)) {
         uno_dbg_net_trace("wifi: join: session-prot asserted the fw on the retry");
+        /* ASK THE FIRMWARE, DO NOT GUESS AGAIN.
+         *
+         * Four plausible mechanisms have died here in one session - stacked
+         * session-protection requests (the guard never fired and it asserted
+         * anyway), a channel change (both BSSes were on channel 1 and no
+         * PHY_CONTEXT modify was sent), a malformed SCD_QUEUE remove (fixed,
+         * and it still asserts), and a stale link BSSID (mld_link_cfg never
+         * writes ref_bssid_addr at all). What IS regular is that re-pointing to
+         * the SAME BSSID completes and re-pointing to a DIFFERENT one asserts,
+         * four for four across two boots - but a regularity is not a mechanism.
+         *
+         * The equivalent assert during MVM init was solved in ONE run by
+         * dumping the fw's own error tables, after three builds of reasoning
+         * got nowhere. This line has said "(iwl fwerr)" since July - telling a
+         * human to type a verb that arrives over URC, on a machine whose
+         * network is what just died. Third instance of that shape in this lane.
+         * So dump them here too, while the tables are fresh. */
+#ifdef UNO_DEBUG
+        fwerr_dump();
+#endif
         return -1;
     }
     r = (g_join_akm == WPA_AKM_SAE) ? mvm_auth_sae() : mvm_auth();
