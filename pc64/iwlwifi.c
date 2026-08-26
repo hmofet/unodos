@@ -1033,8 +1033,63 @@ static int force_power_gating(void)
  * (all writes land, no error bits, LOAD_STATUS never moves). */
 static int g_fw_loaded;   /* a fw image was kicked; the device may be live+DMAing */
 static int g_mvm_arm;     /* opt-in: run the post-ALIVE MVM/join sequence (new frontier) */
+/* THE FIRMWARE RESET HANDSHAKE, WHICH WE NEVER DID.
+ *
+ * The SECOND bring-up of a boot asserts this firmware while it runs the
+ * calibrations that NVM_ACCESS_COMPLETE kicks off. Metal, 2026-08-25 23:08, on
+ * a boot whose first join succeeded on the first attempt:
+ *
+ *     MVM init: the fw ASSERTED at "INIT_COMPLETE wait" (csr2808=02000000 sw_err=1)
+ *
+ * INIT_EXTENDED_CFG and NVM_ACCESS_COMPLETE both returned with csr2808 clear,
+ * so nothing the host SENDS is rejected - the firmware dies during the work the
+ * last of them starts. (NVM_GET_INFO, the previous suspect, is now sent once
+ * per boot as upstream does, and the assert happens before it either way.)
+ *
+ * Upstream shuts a STARTED firmware down before pulling it out from under
+ * itself, and we never have: _iwl_trans_pcie_gen2_stop_device() begins
+ *
+ *     if (trans->state >= IWL_TRANS_FW_STARTED && trans->conf.fw_reset_handshake)
+ *             _iwl_trans_pcie_fw_reset_handshake(trans, true);
+ *
+ * which for a device below the AX210 family (this AX201 is family 22000) writes
+ * UREG_NIC_SET_NMI_DRIVER_RESET_HANDSHAKE and waits up to 200 ms for the
+ * RESET_DONE cause. Our device_stop() went straight to STOP_MASTER and a SW
+ * reset, so the first image was always killed mid-flight - and `g_fw_loaded`,
+ * whose comment already says "a fw image was kicked; the device may be live+
+ * DMAing", is exactly upstream's FW_STARTED condition.
+ *
+ * Every register value here was read out of upstream (iwl-prph.h, iwl-csr.h)
+ * rather than recalled. In this lane, twice now, recalled constants have been
+ * confidently wrong and a thirty-second fetch has been right.
+ *
+ * ACK THE CAUSE AFTERWARDS. RESET_DONE sets a bit in the same register the
+ * assert test reads, and that test deliberately treats ANY set bit as asserted
+ * - it was tested and the over-broad version was the correct one. So this
+ * clears its own cause rather than teaching the test about exceptions. */
+#define UREG_NIC_SET_NMI_DRIVER            0x00a05c10
+#define UREG_NIC_SET_NMI_RESET_HANDSHAKE   ((1u<<24) | (1u<<25))
+#define MSIX_HW_RESET_DONE                 (1u<<2)
+
+static void fw_reset_handshake(void)
+{
+    int t; u32 hw = 0;
+    if (!g_fw_loaded) return;            /* nothing started - nothing to shake hands with */
+    prph_w(UREG_NIC_SET_NMI_DRIVER, UREG_NIC_SET_NMI_RESET_HANDSHAKE);
+    for (t = 0; t < 200; t++) {
+        hw = r32(CSR_MSIX_HW_INT_CAUSES_AD);
+        if (hw & MSIX_HW_RESET_DONE) break;
+        mdelay_(1);
+    }
+    uno_dbg_net_trace("wifi: fw reset handshake %s after %d ms (csr2808=%08x)",
+                      (hw & MSIX_HW_RESET_DONE) ? "ACKED" :
+                      "TIMED OUT - stopping the device anyway", t, (unsigned)hw);
+    if (hw) w32(CSR_MSIX_HW_INT_CAUSES_AD, hw);   /* write-1-to-clear */
+}
+
 static void device_stop(void)
 {
+    fw_reset_handshake();            /* tell a live fw to stop before yanking it */
     g_fw_loaded = 0;
     w32(CSR_INT_MASK, 0);
     w32(CSR_INT, 0xFFFFFFFFu);
