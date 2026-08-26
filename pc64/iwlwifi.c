@@ -691,13 +691,18 @@ static int g_akm_pin;               /* WPA_AKM_PSK / WPA_AKM_SAE, or 0         *
  * neighbour's traffic through a 2048-entry ring for no benefit once the answer
  * is known. Like `bssid=` and `akm=` it needs no rebuild and no credentials. */
 static int g_rx_promisc;            /* DEBUG.CFG `rxpromisc`                   */
+/* DEBUG.CFG `fwreload` - a rejoin RELOADS the firmware instead of re-pointing
+ * the live contexts. The second load of a boot is the thing under test and the
+ * re-point path is deliberately the thing that avoids it, so without this the
+ * experiment can only be run by first making the re-point fail. */
+static int g_force_reload;
 
 static void read_bssid_override(void)
 {
     static const char *cand[3] = { "WIFI.CFG", "WIFI.TXT", "DEBUG.CFG" };
     static u8 b[512];
     int nv = uno_fs_volumes(), v, j;
-    g_pin_on = 0; g_akm_pin = 0; g_rx_promisc = 0;
+    g_pin_on = 0; g_akm_pin = 0; g_rx_promisc = 0; g_force_reload = 0;
     for (v = 0; v < nv; v++)
         for (j = 0; j < 3; j++) {
             long n = uno_fs_read(v, cand[j], b, (long)sizeof b - 1), i;
@@ -727,11 +732,13 @@ static void read_bssid_override(void)
                 }
                 if (!g_rx_promisc && i + 9 <= n && !memcmp(b + i, "rxpromisc", 9))
                     g_rx_promisc = 1;
+                if (!g_force_reload && i + 8 <= n && !memcmp(b + i, "fwreload", 8))
+                    g_force_reload = 1;
             }
             /* All three, not two: the old condition returned as soon as bssid=
              * and akm= were both in hand, so a switch living in a LATER file
              * than those two would never be read. */
-            if (g_pin_on && g_akm_pin && g_rx_promisc) return;
+            if (g_pin_on && g_akm_pin && g_rx_promisc && g_force_reload) return;
         }
 }
 
@@ -6646,7 +6653,23 @@ int iwl_join_ssid(const char *ssid, const char *psk)
      *
      * THE RELOAD SURVIVES AS A FALLBACK, below, so the worst case is exactly
      * today's behaviour rather than a new way to fail. */
-    if (g_ctx_built) {
+    /* The DEBUG.CFG levers are read by find_and_join(), which is AFTER the
+     * decision immediately below has been taken. `fwreload` is a decision about
+     * this function, so read them here as well - it is file reads off mounted
+     * volumes, it is idempotent, and nothing here depends on the timing. */
+    read_bssid_override();
+    if (g_ctx_built && g_force_reload) {
+        /* FORCE THE SECOND FIRMWARE LOAD, which is the thing under test.
+         * Re-pointing exists precisely to avoid it, so without this lever the
+         * experiment can only be reached by first arranging for a re-point to
+         * fail - and then the reload is running downstream of a failure rather
+         * than on its own. Same teardown as the fallback at the bottom. */
+        uno_dbg_net_trace("wifi: join: DEBUG.CFG fwreload - reloading the firmware "
+                          "rather than re-pointing (this IS the second-load test)");
+        if (g_bar && g_fw_loaded) device_stop();
+        g_bound = 0; g_alive = 0; g_mvm_done = 0; g_ctx_built = 0;
+        g_sprot_until_ms = 0; g_link_active = 0;
+    } else if (g_ctx_built) {
         reused = 1;
         uno_dbg_net_trace("wifi: join: fw contexts from an earlier join are live - "
                           "re-pointing them rather than reloading the firmware");
