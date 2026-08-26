@@ -5053,10 +5053,11 @@ static int mvm_assoc(void)
  *  - legacy: PHY_CONTEXT -> MAC_CONTEXT -> BINDING -> ADD_STA.
  * TIME_QUOTA is legacy-only; the link carries the fw's scheduling now. */
 static int g_ctx_built;     /* fw mac/link/phy contexts exist (re-ADD asserts) */
+static int g_link_active;   /* the LINK is up; leave_bss() drops it so a scan can hear */
 static int assoc_setup(void)
 {
     u32 h; int q;
-    g_ctx_built = 1;
+    g_ctx_built = 1; g_link_active = 1;
 #define TRACE_CSR(what) do { h = r32(CSR_MSIX_HW_INT_CAUSES_AD); \
         uno_dbg_net_trace("wifi: join: after " what " csr2808=%08x", h); } while (0)
     if (fw_has_mld_api()) {
@@ -5315,6 +5316,15 @@ static int retarget_ap(int new_chan)
         mvm_phy_ctxt(new_chan, 2 /*MODIFY*/);
         if (r32(CSR_MSIX_HW_INT_CAUSES_AD)) return retarget_fail("PHY_CONTEXT modify");
     }
+    /* Bring the link back up if leave_bss() put it down for the scan. The PHY
+     * context is now on the right channel, which is the order assoc_setup()
+     * builds a link in: phy first, activate second. */
+    if (!g_link_active) {
+        mld_link_cfg(2 /*MODIFY*/, 1 /*active*/, 1 /*phy valid*/,
+                     LINK_MOD_RATES_INFO | LINK_MOD_QOS_PARAMS);
+        if (r32(CSR_MSIX_HW_INT_CAUSES_AD)) return retarget_fail("LINK_CONFIG re-activate");
+        g_link_active = 1;
+    }
     /* The old association's keys are still on this station - drop them BEFORE
      * re-pointing it, or the hw decrypts the new AP's frames with the wrong key
      * and every one of them arrives as garbage. */
@@ -5366,7 +5376,7 @@ static int radio_restart(void)
         w32(CSR_MSIX_FH_INT_CAUSES_AD, 0xFFFFFFFFu);
         w32(CSR_INT, 0xFFFFFFFFu);
     }
-    g_bound = 0; g_joined = 0; g_alive = 0; g_mvm_done = 0; g_ctx_built = 0; g_sprot_until_ms = 0;
+    g_bound = 0; g_joined = 0; g_alive = 0; g_mvm_done = 0; g_ctx_built = 0; g_sprot_until_ms = 0; g_link_active = 0;
     g_keys_installed = 0; g_key_gtk_idx = -1; g_wpa_active = 0; g_data_qid = -1;
     g_mvm_arm = 1; g_no_join = 1;
     iwl_nic();
@@ -6539,9 +6549,33 @@ static void leave_bss(void)
 {
     if (!fw_has_mld_api()) return;
     mld_mac_cfg(2 /*MODIFY*/, 0 /*not assoc*/, 0);
-    uno_dbg_net_trace("wifi: join: left the old BSS (MAC_CONFIG assoc=0) csr2808=%08x",
-                      (unsigned)r32(CSR_MSIX_HW_INT_CAUSES_AD));
+    /* AND DEACTIVATE THE LINK, OR THE SCAN THAT FOLLOWS IS DEAF.
+     *
+     * Un-associating the MAC context is not leaving: the LINK stays ACTIVE and
+     * pinned to the old BSS's channel, and a scan underneath it cannot dwell
+     * anywhere else. Metal, 2026-08-26 12:14, the re-point scan against every
+     * healthy scan of the same boot:
+     *
+     *     scan: complete=yes mpdu_seen=23 beacon_calls=20 aps=3      <- re-point
+     *     scan: complete=yes mpdu_seen=57 beacon_calls=57 aps=32     <- normal
+     *     join: SSID "NimmuNet" not found in 3 scanned APs
+     *
+     * THIS IS ALSO THE MECHANISM behind "same BSSID re-points, a different one
+     * asserts", which held four for four and had no explanation: a same-BSSID
+     * rejoin is on the same channel, so even a deaf scan finds its target. A
+     * different network usually is not, so the join either cannot see it at all
+     * (this run) or proceeds on a poor candidate and asserts (the runs before).
+     * Four mechanisms were guessed at that regularity and all four were wrong;
+     * this one came off the counter that was in front of us the whole time.
+     *
+     * retarget_ap() brings the link back up once the PHY context is pointed at
+     * the new channel - deactivate here, reactivate there, which is the order
+     * assoc_setup() already uses to build one. */
+    mld_link_cfg(2 /*MODIFY*/, 0 /*inactive*/, 1 /*keep the phy binding*/, 0);
+    uno_dbg_net_trace("wifi: join: left the old BSS (MAC_CONFIG assoc=0, link inactive) "
+                      "csr2808=%08x", (unsigned)r32(CSR_MSIX_HW_INT_CAUSES_AD));
     g_joined = 0; g_wpa_active = 0;
+    g_link_active = 0;
 }
 
 int iwl_join_ssid(const char *ssid, const char *psk)
@@ -6611,7 +6645,7 @@ int iwl_join_ssid(const char *ssid, const char *psk)
         uno_dbg_net_trace("wifi: join: re-pointing the live contexts did not join - "
                           "falling back to the firmware reload");
         if (g_bar && g_fw_loaded) device_stop();
-        g_bound = 0; g_alive = 0; g_mvm_done = 0; g_ctx_built = 0; g_sprot_until_ms = 0;
+        g_bound = 0; g_alive = 0; g_mvm_done = 0; g_ctx_built = 0; g_sprot_until_ms = 0; g_link_active = 0;
         g_joined = 0; g_keys_installed = 0; g_key_gtk_idx = -1; g_wpa_active = 0;
         g_data_qid = -1; g_dq_head = g_dq_tail = 0;
         if (radio_up() < 0) { st_set("WiFi: join failed"); return -1; }
@@ -7123,7 +7157,7 @@ int iwl_dbg_cmd(const char *line, char *out, int cap)
             device_stop();
         }
         g_bound = 0; g_joined = 0; g_alive = 0; g_mvm_done = 0;   /* force a full retry */
-        g_keys_installed = 0; g_key_gtk_idx = -1; g_wpa_active = 0; g_data_qid = -1; g_ctx_built = 0; g_sprot_until_ms = 0;
+        g_keys_installed = 0; g_key_gtk_idx = -1; g_wpa_active = 0; g_data_qid = -1; g_ctx_built = 0; g_sprot_until_ms = 0; g_link_active = 0;
         iwl_nic();
         iwl_status_str(out, cap);
         return (int)strlen(out);
