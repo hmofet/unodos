@@ -5493,8 +5493,20 @@ static int find_and_join(void)
                           g_bssid[0],g_bssid[1],g_bssid[2],g_bssid[3],g_bssid[4],g_bssid[5],
                           g_join_chan, g_scan_aps[idx].rssi, g_join_bi, g_join_dtim,
                           fw_has_mld_api());
-        if (attempt == 0) { if (join_selected() == 0 && g_joined) { g_akm_force = 0; return 0; } }
-        else               { if (join_retry() == 0 && g_joined) { g_akm_force = 0; return 0; } }
+        /* ATTEMPT 0 BUILDS THE CONTEXTS ONLY IF THERE ARE NONE.
+         *
+         * join_selected() calls assoc_setup(), which ADDs the MAC, LINK and PHY
+         * contexts - and re-ADDing a live context asserts this firmware, which
+         * is the whole reason iwl_join_ssid() used to reload the firmware for a
+         * rejoin. When the contexts already exist, the first attempt is exactly
+         * what the retry path does: re-point them. Same two functions as
+         * before, chosen by what the firmware actually has rather than by which
+         * attempt number this is. */
+        if (attempt == 0 && !g_ctx_built) {
+            if (join_selected() == 0 && g_joined) { g_akm_force = 0; return 0; }
+        } else {
+            if (join_retry() == 0 && g_joined) { g_akm_force = 0; return 0; }
+        }
         uno_dbg_net_trace("wifi: join: %02x:%02x:%02x:%02x:%02x:%02x did not complete",
                           g_bssid[0],g_bssid[1],g_bssid[2],g_bssid[3],g_bssid[4],g_bssid[5]);
         /* Get this attempt onto the disk NOW. unolog flushes from the shell
@@ -6429,17 +6441,53 @@ int iwl_scan_busy(void) { return g_uiscan; }
 /* Join `ssid` with `psk` (WPA2-PSK; empty psk = open, untested). Runs the same
  * scan -> pick -> auth -> assoc -> 4-way path as the boot join, then publishes
  * the nic. 0 = joined, <0 = failed (iwl_status_str says how far it got). */
+/* LEAVE THE CURRENT BSS WITHOUT TAKING THE FIRMWARE DOWN WITH IT.
+ *
+ * The station, its queue and its keys are torn down and rebuilt by
+ * retarget_ap() on the way into the next attempt - that code exists, and it
+ * works. The one thing it does not do is un-associate the MAC context, which a
+ * successful join left with assoc=1 and an AID belonging to an AP we are about
+ * to walk away from. */
+static void leave_bss(void)
+{
+    if (!fw_has_mld_api()) return;
+    mld_mac_cfg(2 /*MODIFY*/, 0 /*not assoc*/, 0);
+    uno_dbg_net_trace("wifi: join: left the old BSS (MAC_CONFIG assoc=0) csr2808=%08x",
+                      (unsigned)r32(CSR_MSIX_HW_INT_CAUSES_AD));
+    g_joined = 0; g_wpa_active = 0;
+}
+
 int iwl_join_ssid(const char *ssid, const char *psk)
 {
+    int reused = 0;
     if (!ssid || !ssid[0]) return -1;
-    /* A second join cannot reuse the first one's fw contexts: PHY_CONTEXT ADD on
-     * a live context, or a phy-bind on an active link, asserts the LMAC (round
-     * 24). Restart the radio instead - a few seconds, and always recoverable. */
+    /* DO NOT RELOAD THE FIRMWARE TO CHANGE NETWORKS.
+     *
+     * This used to device_stop() and load the image again, on the reasoning
+     * that a second join cannot reuse the first one's contexts because
+     * re-ADDing one asserts the LMAC. The first half is true - assoc_setup()
+     * must not run twice - but the conclusion was too strong: the retry path
+     * inside a single join already RE-POINTS those contexts at a different BSS
+     * and has done so successfully on this machine many times.
+     *
+     * And the reload does not work. Metal, 2026-08-26: the second firmware load
+     * of a boot comes up ALIVE and then the UMAC ADVANCED_SYSASSERTs
+     * (error_id=201010a3) processing NVM_ACCESS_COMPLETE - cmd_header 00190c00,
+     * group 0x0c cmd 0x00, read out of the firmware's own error table. After
+     * that every scan reads csr2808=02000000 and returns nothing, which is why
+     * a failed rejoin took the whole radio down until a reboot.
+     *
+     * Linux never reloads firmware to change networks either. So: leave the old
+     * BSS, keep the contexts, and let find_and_join() take the re-point path it
+     * already has.
+     *
+     * THE RELOAD SURVIVES AS A FALLBACK, below, so the worst case is exactly
+     * today's behaviour rather than a new way to fail. */
     if (g_ctx_built) {
+        reused = 1;
         uno_dbg_net_trace("wifi: join: fw contexts from an earlier join are live - "
-                          "restarting the radio before re-joining");
-        if (g_bar && g_fw_loaded) device_stop();
-        g_bound = 0; g_alive = 0; g_mvm_done = 0; g_ctx_built = 0;
+                          "re-pointing them rather than reloading the firmware");
+        leave_bss();
     }
     /* a fresh join must not inherit the previous one's keys or supplicant */
     g_joined = 0; g_keys_installed = 0; g_key_gtk_idx = -1; g_wpa_active = 0;
@@ -6451,7 +6499,21 @@ int iwl_join_ssid(const char *ssid, const char *psk)
     g_cfg_psk[sizeof g_cfg_psk - 1] = 0;
     uno_dbg_net_trace("wifi: join request for \"%s\" (psk_len=%d)",
                       g_cfg_ssid, (int)strlen(g_cfg_psk));
-    if (find_and_join() < 0) { st_set("WiFi: join failed"); return -1; }
+    if (find_and_join() < 0) {
+        if (!reused) { st_set("WiFi: join failed"); return -1; }
+        /* The re-point did not get there. Fall back to what this function did
+         * before - reload the firmware and try once - so a machine that could
+         * rejoin the old way still can. If the reload asserts, it asserts
+         * exactly where it always did and the log says so. */
+        uno_dbg_net_trace("wifi: join: re-pointing the live contexts did not join - "
+                          "falling back to the firmware reload");
+        if (g_bar && g_fw_loaded) device_stop();
+        g_bound = 0; g_alive = 0; g_mvm_done = 0; g_ctx_built = 0;
+        g_joined = 0; g_keys_installed = 0; g_key_gtk_idx = -1; g_wpa_active = 0;
+        g_data_qid = -1; g_dq_head = g_dq_tail = 0;
+        if (radio_up() < 0) { st_set("WiFi: join failed"); return -1; }
+        if (find_and_join() < 0) { st_set("WiFi: join failed"); return -1; }
+    }
     nic_publish();
     /* A network the user picked and typed a password for is remembered, so the
      * next boot rejoins it without them typing it again.  Only on SUCCESS - a
