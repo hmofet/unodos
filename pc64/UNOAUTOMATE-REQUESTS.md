@@ -11093,3 +11093,50 @@ path would make rejoin work whether or not this firmware bug is ever understood,
 and would take the whole second-load path out of normal operation. It overlaps
 `retarget_ap()` (item 3), which is the unclaimed lane for exactly that
 teardown/rebuild, so it is a sizing decision rather than a fix to slip in here.
+
+## 2026-08-26 - HANDOFF (NIC drivers / iwlwifi, branch `surfgo-grp`): releasing the claim
+
+Full write-up in `docs/SURFGO-OPEN-ITEMS.md` under **HANDOFF, 2026-08-26**. The
+short version, and the last run's numbers.
+
+**Deactivating the link before the re-point scan works.** `leave_bss()` now
+sends `LINK_CONFIG MODIFY active=0` as well as `MAC_CONFIG assoc=0`, and
+`retarget_ap()` re-activates once the PHY context is on the new channel:
+
+```
+left the old BSS (MAC_CONFIG assoc=0, link inactive) csr2808=00000000
+scan: complete=yes mpdu_seen=34 beacon_calls=34 aps=25
+join: retry assoc -> 4 (>=0 AID)
+```
+
+25 APs against the 3 that same scan read before the change, and `csr2808=0` on
+the deactivate, so it is clean. That specific deafness is fixed.
+
+**It is still not reliable**, and the 12:39 boot shows both remaining modes: one
+re-point scan returned `complete=no(timeout) aps=0` outright, and a later
+re-point associated (`retry assoc -> 4`) and then failed its 4-way. Each falls
+back to the firmware reload, which then hits the second-load UMAC assert and
+takes the radio down until a reboot.
+
+**Claim released on `iwlwifi.*`.** Nothing is half-edited: the branch builds
+both configurations, the fallback means the worst case is the pre-session
+behaviour, and `unoui/tools/edit_test.sh` is green at 69.
+
+**For whoever takes it next, in the order I would take them:**
+
+1. The second-load assert (A in the doc). The asymmetry is the lead: reloading
+   an ALREADY-ASSERTED firmware works, reloading a HEALTHY one does not. That
+   points at what stopping a running firmware leaves behind, not at the reload.
+2. The re-point scan timing out at `aps=0`. Different from the deafness just
+   fixed - that read 3 APs, this reads none and times out.
+3. The 4-way failing after a successful re-point association.
+
+Items 1 (SAE PMK, `wifi_wpa.*`/`wifi_sae.*`) and 4 (F14, Surface Aggregator
+UART) were not touched and are not claimed. Item 3's stated trigger is
+disproved - see the dated note under it - and its retarget half now demonstrably
+works after a successful association, so that item wants re-reading before it is
+worked.
+
+**One request to unonet stands unanswered** from this session: `net.c:9` starts
+`MYIP` at QEMU slirp's `10.0.2.15`, so `net_ip()` returns a plausible-looking
+address on metal before any lease exists.
