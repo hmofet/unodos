@@ -31,6 +31,108 @@ starving after exactly one lap. Item 1 (SAE) and item 3 (retarget) are still
 open, and item 4 is still a sizing decision rather than a bug. So this document
 is now three things, not four.
 
+## HANDOFF, 2026-08-26 (branch `surfgo-grp`, NOT landed)
+
+A long session on `iwlwifi`. Read this before re-deriving anything; several
+plausible theories are already dead and the runs that killed them are named.
+
+### Landed and proven on metal
+
+- **`grp=0` is CLOSED** - see the section under item 2. NimmuNet is the guest
+  SSID with client isolation on. `ACCEPT_GRP` works.
+- **Rejoin no longer reloads the firmware.** `iwl_join_ssid()` re-points the
+  live contexts (`leave_bss()` + the retry path) instead of `device_stop()` +
+  reload. **The firmware reload is retained as a fallback**, so the worst case
+  is the old behaviour, never worse.
+- **A rejoin has completed end to end with no reload** (2026-08-26 11:08 and
+  again 12:39): `retry assoc -> N`, `retry 4-way COMPLETE`, lease, no
+  `MVM init` line at all.
+- **`retarget_ap()` re-points after a SUCCESSFUL association**, which item 3
+  says cannot happen. `leave_bss()`'s `MAC_CONFIG assoc=0` is the likely reason.
+  Item 3 is not closed - this wants its own verification.
+- Four UI faults fixed (Control Panel + unoui): per-network passwords, the
+  reveal eye's hit box, a scan that froze the desktop for five seconds, and a
+  text view that never scrolled back. `unoui/tools/edit_test.sh` is green at 69
+  assertions, including cases that would have failed before.
+
+### Still broken, with the exact evidence
+
+**A. The second firmware load of a boot asserts the UMAC.** Fully characterised
+and reproducible byte for byte:
+
+```
+MVM init: the fw ASSERTED at "INIT_COMPLETE wait" / "INIT_EXTENDED_CFG"
+UMAC error_id=201010a3 (ADVANCED_SYSASSERT) cmd=001c0c00 data1=3 data2=1 data3=deadbeef
+LMAC error_id=00000071 (NMI_INTERRUPT_UMAC_FATAL)
+```
+
+`cmd_header` is `{u8 cmd; u8 group_id; __le16 seq}`, so `001c0c00` = group
+`0x0c` cmd `0x00` = **NVM_ACCESS_COMPLETE** (`GRP_REGNVM` is `0xc` in
+`iwlwifi.h`). Everything after is a dead radio - which is what "after a failed
+join even scanning fails" is.
+
+**The one asymmetry worth starting from:** reloading a firmware that has ALREADY
+asserted works fine; reloading a HEALTHY one asserts. So whatever poisons the
+second load is left behind by stopping a *running* firmware. Ruled out already:
+NVM_GET_INFO sent twice (now once per boot, as upstream), a firmware killed
+mid-flight (the upstream fw reset handshake is implemented and ACKs in 2 ms),
+the command sequence (`IWL_INIT_NVM` is enum position 1, order matches
+`iwl_run_unified_mvm_ucode()`), the command path (the fw's own `cmd_header`
+proves it received the command), a partial DRAM map, and the APM stop.
+
+**B. The re-point path is not yet reliable.** Two remaining failure modes, both
+from the 12:39 boot:
+
+- the re-point scan sometimes returns `complete=no(timeout) aps=0` outright
+- a re-point that associates can fail its 4-way (`retry assoc -> 4` then
+  `retry 4-way did NOT complete after 4000 ms`)
+
+Both fall back to the reload, which then hits (A). Deafness itself IS fixed:
+that scan read `aps=3` against a healthy 32 before `leave_bss()` deactivated the
+link, and `aps=25` after.
+
+### Theories that are DEAD - do not re-derive them
+
+Each fitted the evidence and each was disproved by a run, not by argument:
+
+1. **DTIM / beacon timing** for `grp=0`. The fw ACCEPTS the post-association
+   link tune (`dtim_interval=200`, no assert) and `grp` did not move.
+2. **`ACCEPT_GRP` being the wrong bit.** It is `BIT(2)` in the new MAC config
+   API, checked against upstream `fw/api/mac-cfg.h`; it was always being sent.
+3. **Repeated session-protection requests** (item 3's stated trigger). A guard
+   that declines the second request never fired ONCE and the fw asserted anyway,
+   on the first request of its join.
+4. **A channel change under a live link.** Both BSSes were on channel 1 and no
+   `PHY_CONTEXT` modify was issued.
+5. **A malformed `SCD_QUEUE remove`** (`qid was -1`). Real, fixed - and it still
+   asserted afterwards.
+6. **A stale BSSID in the link context.** `mld_link_cfg()` never writes
+   `ref_bssid_addr` at all, on any join, including every successful one.
+
+### What actually worked, twice, when reasoning did not
+
+**Ask the hardware.** The second-load assert survived three builds of
+upstream-derived fixes and was named in ONE run by dumping the fw's own error
+tables at the moment of the assert. The re-point failure survived four theories
+and was explained by an AP count that had been in the log for hours.
+
+Both diagnostics were unreachable by construction before this session - `iwl
+fwerr` arrives over URC, and URC needs the network that just died. That is the
+third instance of that shape here, after `g_rx_data_log` and `iwl mld a`. **If a
+diagnostic can only be reached by typing a verb, it does not exist on the
+machine that needs it.** Both now fire automatically.
+
+### Practical notes
+
+- `WIFINETS.CFG` is rewritten most-recent-first by `saved_remember()` on every
+  successful join, and it is NOT in the ESP tarball, so it survives updates.
+  Whichever network was joined last becomes the next boot's target - set it
+  deliberately before a run or the experiment changes under you.
+- Salvaged run logs are on devbuntu in `~/surfgo-run-*`; the last is
+  `~/surfgo-run-125304-linkdown`.
+- The branch builds clean both `UNO_DEBUG=0` and `UNO_DEBUG=1`. It has NOT been
+  rebased onto a moved `master` or landed.
+
 ## 1. SAE's PMK is wrong  ·  the one with the most evidence
 
 **Symptom.** WPA3-SAE authenticates and the 4-way then dies:
