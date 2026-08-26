@@ -11171,3 +11171,26 @@ without an ADVANCED_SYSASSERT.
 **Still open and unclaimed:** the re-point scan that times out at `aps=0`, the
 4-way that fails after a successful re-point association, item 1 (SAE PMK) and
 item 4 (F14 / Surface Aggregator UART).
+
+## 2026-08-26 - RESULT (NIC drivers / iwlwifi, branch `surfgo-fwreload`): the second-load assert is CLOSED on metal
+
+Four forced reloads in one boot on `debug-local-20260826-1753`, inherited
+command-ring indices **24, 21, 29, 21** - every one non-zero, which is the
+predicted cause reading back off the machine. Every one of them: ALIVE,
+`INIT_COMPLETE arrived`, a completed 4-way and a DHCP lease, alternating SKYNET
+and NimmuNet. `csr2808=00000000` throughout, and the string "assert" does not
+occur anywhere in the run's logs. Before this, the FIRST reload took the radio
+down until a reboot.
+
+**And one thing the run showed that no log line had ever said: there has never
+been a boot auto-join.** `g_mvm_arm` gates everything past ALIVE and only
+`radio_up()` set it, so the boot path printed "rejoining the last network
+SKYNET" and stopped at the gate - twice in that boot - while the machine sat on
+the desktop with the radio up and the network in range. Opening the Network app
+joined on the first try, because that path arms the gate. A bring-up with
+credentials now arms it; one without still stops at ALIVE, and `iwl mvm` still
+drives it by hand. **Not yet proven on metal.**
+
+Still unclaimed: the re-point scan that times out at `aps=0`, the 4-way that
+fails after a successful re-point association, item 1 (SAE PMK) and item 4
+(F14 / Surface Aggregator UART).

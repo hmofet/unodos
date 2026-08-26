@@ -80,7 +80,30 @@ the command sequence (`IWL_INIT_NVM` is enum position 1, order matches
 `iwl_run_unified_mvm_ucode()`), the command path (the fw's own `cmd_header`
 proves it received the command), a partial DRAM map, and the APM stop.
 
-### A, DIAGNOSED 2026-08-26 (branch `surfgo-fwreload`, fix built, not yet on metal)
+### A, CLOSED ON METAL 2026-08-26 14:08 (branch `surfgo-fwreload`)
+
+Four forced firmware reloads in one boot, under `fwreload`, on
+`debug-local-20260826-1753`:
+
+```
+14:08:46  fwreload - reloading the firmware rather than re-pointing
+14:08:46  cmd ring reset: host index was 24, a fresh fw's is 0
+14:08:47  firmware ALIVE / MVM init: INIT_COMPLETE arrived
+14:08:50  associated with "NimmuNet" - 4-way COMPLETE after 18 ms
+14:08:53  post-join diag: dhcp=LEASE ip=192.168.10.21
+```
+
+and again at 14:08:54 (index **21**), 14:09:04 (**29**) and 14:09:12 (**21**),
+each ALIVE, INIT_COMPLETE, 4-way complete and leased, alternating between
+SKYNET (192.168.2.52) and NimmuNet (192.168.10.21). **`csr2808=00000000`
+throughout and the string "assert" does not appear anywhere in the run's logs.**
+
+The inherited index was non-zero on all four - 24, 21, 29, 21 - which is the
+predicted cause reading back off the machine, and the reason a fifth-and-later
+join used to be impossible: before this, the first reload took the radio down
+until reboot.
+
+### The diagnosis, kept for the reasoning
 
 **It is the command ring, and the proof was already in the two error tables
 above.** `cmd_header` is `{u8 cmd; u8 group; __le16 seq}`, so `001c0c00` and
@@ -127,6 +150,31 @@ the FIRST one's ALIVE out of RB 0. This was the same bug in the other ring: the
 instance was fixed and the class was never swept for. Third time in this lane,
 after "deadlines are durations, not spin counts" outliving its own fix by a
 month in the port path.
+
+### The boot join never armed the MVM sequence, so there has never been an auto-join
+
+Found in the same run, from the operator's side: the box booted, the radio came
+up, a remembered network was in range - and nothing joined until the Network app
+was opened by hand, which joined on the first try.
+
+The boot path announces its intent and then stops one step short of it. Twice in
+that boot:
+
+```
+14:08:12  rejoining the last network "SKYNET" (psk_len=24)
+14:08:17  ALIVE reached in the NORMAL path - MVM/join sequence gated off
+14:08:17  == net test done: WIFI FAIL (bring-up stopped, see the FAIL line above) ==
+```
+
+`g_mvm_arm` gates everything past ALIVE and **only `radio_up()` ever set it**, so
+a join that came from the boot could not happen at all. The gate is from the F12
+era, when nothing past ALIVE had ever run and running it inline wedged the rig;
+it has been the GUI's ordinary path for a month. A bring-up that HAS credentials
+now arms it, one that does not still stops at ALIVE, and `iwl mvm` still drives
+the sequence by hand.
+
+**Not yet proven on metal** - it wants one boot with a remembered network in
+range, showing `join request for "<ssid>"` without anyone touching the UI.
 
 **B. The re-point path is not yet reliable.** Two remaining failure modes, both
 from the 12:39 boot:
