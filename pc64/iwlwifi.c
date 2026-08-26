@@ -1309,6 +1309,47 @@ static void rx_alloc_lists(void)
     g_rx_read = 0; g_rx_write = RXQ_N - 1;
 }
 
+/* THE OTHER RING, WHICH WAS NEVER RESET AT ALL.
+ *
+ * The receive side above wipes its buffers because a second bring-up read the
+ * FIRST one's ALIVE out of RB 0. The command ring has exactly that shape and
+ * nothing ever reset it: `g_cmd_wr` only increments, and a firmware that has
+ * just been loaded starts reading the command queue at slot 0 - upstream
+ * re-zeroes both pointers in `iwl_txq_init()` on every `start_fw`, which is
+ * why it never sees this.
+ *
+ * So the second firmware load of a boot resumes writing at whatever slot the
+ * first one left off at, and the doorbell then tells a firmware whose read
+ * pointer is 0 that every slot from 0 up to that one is a command to run. The
+ * ring is 32 slots and a join spends far more than 32 commands, so what those
+ * slots hold is the LAST 32 commands of the previous session - MAC_CONFIG,
+ * LINK_CONFIG, SEC_KEY, SCD_QUEUE - replayed into a firmware that booted four
+ * milliseconds ago and has no contexts. That is the second-load
+ * ADVANCED_SYSASSERT, and it accounts for its one asymmetry: reloading an
+ * ALREADY-ASSERTED firmware works because that session stopped early, so the
+ * slots being replayed are the early init commands the fresh firmware is
+ * expecting anyway.
+ *
+ * Wipe the payload buffers as well as the descriptors, for the reason
+ * rx_alloc_lists() gives: a descriptor nobody re-points still addresses
+ * whatever the last session left in it. */
+static void tx_queues_reset(void)
+{
+    uno_dbg_net_trace("wifi: cmd ring reset: host index was %d, a fresh fw's is 0",
+                      g_cmd_wr & (CMDQ_N - 1));
+    memset(g_cmd_ring, 0, sizeof g_cmd_ring);
+    memset(g_cmd_buf, 0, sizeof g_cmd_buf);
+    memset(g_cmd_firsttb, 0, sizeof g_cmd_firsttb);
+    memset(g_cmd_bc, 0, sizeof g_cmd_bc);
+    memset(g_tx_ring, 0, sizeof g_tx_ring);
+    memset(g_tx_buf, 0, sizeof g_tx_buf);
+    memset(g_tx_firsttb, 0, sizeof g_tx_firsttb);
+    memset(g_tx_bc, 0, sizeof g_tx_bc);
+    g_cmd_wr = 0;
+    g_tx_wr  = 0;
+    g_data_qid = -1;      /* the fw assigns this at join; the old one died with it */
+}
+
 /* FH (gen1) rx register block */
 #define FH_MEM 0x1000
 #define FH_RSCSR (FH_MEM + 0xBC0)
@@ -6068,6 +6109,7 @@ static int bringup_to_alive(void)
     else if (g_mq_rx) prph_w(uprph(UREG_CHICK), UREG_CHICK_MSI);
     nic_config_radio();              /* Linux order: apm -> nic_config -> rx init */
     rx_hw_init();
+    tx_queues_reset();               /* the command ring is host state, and it outlived its fw */
     if (g_gen2) w32(CSR_MAC_SHADOW_REG_CTRL, 0x802FFFFFu);   /* working trace value */
 
     /* Force the fw/context-info DMA arena below 4GB before we build it: the boot
