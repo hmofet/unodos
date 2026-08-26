@@ -224,6 +224,32 @@ firmware** (`session-prot asserted the fw on the retry`), after which every
 scan returns `rb_total=0` and only a reboot recovers. Repeated
 session-protection requests are the trigger.
 
+### 2026-08-26: the stated trigger is WRONG, and this matters before anyone plans around it
+
+"Repeated session-protection requests are the trigger" does not survive a test.
+A guard was added that declines to send a second SESSION_PROTECTION_CMD while a
+live one still has time in it - which is exactly what upstream's
+`iwl_mvm_schedule_session_protection()` does - and on metal it **never fired
+once**: every request in the boot was more than 300 ms after the one before. The
+firmware still asserted, on a session-prot that was the FIRST of its join:
+
+```
+retarget: fresh TX queue -> qid=1 csr2808=00000000
+session-prot: MAC_CONF 0x5 len=24 capa54=1 id=0 mld=1
+join: session-prot asserted the fw on the retry
+```
+
+So the assert is about the COMMAND or the state it is sent in, not about how
+many of them have gone out. The guard stays on the branch, because declining to
+send what upstream declines to send is right on its own terms, but it is not a
+fix for this and is not recorded as one.
+
+Also from that run, and still open: after a rejoin that FULLY SUCCEEDED on the
+re-point path, the firmware asserted again with nothing in the log between - the
+next rejoin opens with `left the old BSS (MAC_CONFIG assoc=0) csr2808=02000000`,
+already dead. That happened during ordinary post-join life, not during a join,
+and no instrument watches there yet.
+
 **Context you will want.** NimmuNet's `e8:d3:eb:47:4e:cf` is the loudest BSS on
 the air and deauthenticates every completed handshake with reason 7. It is
 already described in `iwlwifi.c` two screens above the join loop. `bssid=` in
