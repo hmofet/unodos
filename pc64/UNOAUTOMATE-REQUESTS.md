@@ -11194,3 +11194,45 @@ drives it by hand. **Not yet proven on metal.**
 Still unclaimed: the re-point scan that times out at `aps=0`, the 4-way that
 fails after a successful re-point association, item 1 (SAE PMK) and item 4
 (F14 / Surface Aggregator UART).
+
+## 2026-08-26 - CLAIM (shell/Control Panel Wi-Fi UI + `apps/network.c`): the networking UI, from a report off the machine
+
+Extending the iwlwifi claim above into `pc64_uui.c`'s network pane and the
+Network app. Reported from metal, in these words: it freezes when you click
+Join, you cannot disconnect, the tray chip will not say which network you are
+on, and there is too much debug information on screen. All four were true and
+all four were the same pane.
+
+What landed (three commits, branch `surfgo-fwreload`):
+
+- **The freeze.** The join blocked the desktop for a five-second scan the driver
+  did not need (the UI had just scanned), then for the association, then for a
+  TWENTY-SECOND inline DHCP loop calling `net_poll()` and a 5 ms delay - which
+  is what the shell's frame loop already does, with a pane rebuild on the lease
+  transition. Both inline loops are gone, here and in Renew IP.
+- **Disconnect**, which required `iwl_disconnect()` in the driver: leave the
+  BSS, keep the radio, so the list stays scannable and a rejoin is the re-point
+  path.
+- **The tray chip** names its medium (it said "LAN" on a machine with no cable),
+  and the tooltip leads with the network and its signal instead of an IP and a
+  link speed.
+- **The pane** leads with "Connected to X", then the networks, then the
+  controls, and keeps the addresses behind a Details disclosure. The list is
+  app-drawn on the toolkit's own list geometry, so a row can carry a padlock, a
+  four-bar meter and a Connected/Saved marker; the password field appears only
+  when the highlighted network is locked and unknown.
+- **`apps/network.c`** stops being a second Wi-Fi UI and stops running a
+  five-step test suite (with QEMU-only peers) on open - which also stopped it
+  rebinding the IP stack to a wired NIC on a machine that had joined Wi-Fi.
+
+**New DEBUG.CFG keys, documented in `pc64/DEBUG.md`:** `wifi-demo` (draw the
+pane, with rows, on a machine with no card - the pane had never been drawn under
+QEMU, so no gate or screenshot had ever seen it) and `fwreload` (a rejoin
+reloads the firmware instead of re-pointing, which is how the second-load assert
+was measured).
+
+Verified: both builds clean, `unoui/tools/edit_test.sh` green, and the pane
+screenshotted under QEMU in three states (`tools/wifiui_shot.py`).
+
+**Not verified on metal.** What a Surface run has to show: a boot auto-join, a
+Join that leaves the desktop usable, Disconnect, and the chip naming SKYNET.
