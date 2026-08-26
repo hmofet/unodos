@@ -80,6 +80,41 @@ the command sequence (`IWL_INIT_NVM` is enum position 1, order matches
 `iwl_run_unified_mvm_ucode()`), the command path (the fw's own `cmd_header`
 proves it received the command), a partial DRAM map, and the APM stop.
 
+### A, DIAGNOSED 2026-08-26 (branch `surfgo-fwreload`, fix built, not yet on metal)
+
+**It is the command ring, and the proof was already in the two error tables
+above.** `cmd_header` is `{u8 cmd; u8 group; __le16 seq}`, so `001c0c00` and
+`00190c00` are the same command - NVM_ACCESS_COMPLETE - with **sequence numbers
+28 and 25**. `send_cmd()` sets seq to the ring slot, and on a firmware that has
+just loaded, NVM_ACCESS_COMPLETE is the SECOND command `mvm_init_unified()`
+sends: slot 1, every time. A deterministic command cannot be at slot 25 in one
+run and slot 28 in another unless the index was inherited from the session
+before it - and `g_cmd_wr` only ever increments. Nothing reset it across a load.
+
+A freshly loaded firmware reads the command queue from slot 0 (upstream
+re-zeroes both pointers in `iwl_txq_init()` on every `start_fw`). So the first
+command after a reload is written at slot 25 and the doorbell tells a firmware
+whose read pointer is 0 that slots 0..25 are commands to run. The ring is 32
+slots and a join spends far more than 32 commands, so those slots hold **the
+last 32 commands of the previous session** - MAC_CONFIG, LINK_CONFIG, SEC_KEY,
+SCD_QUEUE - replayed into a firmware with no contexts.
+
+**The asymmetry falls out of it.** Reloading an already-asserted firmware works
+because that session stopped early, so the replayed slots are the early init
+commands the fresh firmware expects anyway.
+
+`tx_queues_reset()` (in `bringup_to_alive()`, beside `rx_hw_init()`) zeroes both
+host indices and wipes the descriptors and the payload buffers. It traces the
+index it reset from, so the next Surface run says outright whether a second load
+inherited one - **that trace line is what a metal run has to confirm**, together
+with a rejoin whose reload no longer asserts.
+
+The receive side has wiped itself per bring-up ever since a second bring-up read
+the FIRST one's ALIVE out of RB 0. This was the same bug in the other ring: the
+instance was fixed and the class was never swept for. Third time in this lane,
+after "deadlines are durations, not spin counts" outliving its own fix by a
+month in the port path.
+
 **B. The re-point path is not yet reliable.** Two remaining failure modes, both
 from the 12:39 boot:
 

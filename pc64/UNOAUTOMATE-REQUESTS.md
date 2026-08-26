@@ -11140,3 +11140,34 @@ worked.
 **One request to unonet stands unanswered** from this session: `net.c:9` starts
 `MYIP` at QEMU slirp's `10.0.2.15`, so `net_ip()` returns a plausible-looking
 address on metal before any lease exists.
+
+## 2026-08-26 - CLAIM (NIC drivers / iwlwifi, branch `surfgo-fwreload`): the second-load assert is the command ring
+
+Taking the lane the handoff above released, at the item it put first. **The
+second firmware load of a boot asserts because the host command-ring index was
+never reset across a load** - full account in `docs/SURFGO-OPEN-ITEMS.md` under
+"A, DIAGNOSED 2026-08-26".
+
+It was decided by the two error tables that were already in this file. The
+`cmd_header` is `{u8 cmd; u8 group; __le16 seq}`, so `001c0c00` and `00190c00`
+are one command, NVM_ACCESS_COMPLETE, at **sequence 28 and 25**. `send_cmd()`
+sets seq to the ring slot, and that command is the second one
+`mvm_init_unified()` sends into a fresh firmware - slot 1. The same command
+cannot be at slot 25 in one run and 28 in another unless the index carried over
+from the previous session, and `g_cmd_wr` only increments. A firmware that has
+just loaded reads the queue from slot 0, so the doorbell then hands it slots
+0..25: the last 32 commands of the session before it, with no contexts to run
+them against.
+
+Fixed by `tx_queues_reset()` in `bringup_to_alive()`, beside `rx_hw_init()`,
+which is where the receive side has done exactly this since a second bring-up
+read the first one's ALIVE out of RB 0.
+
+**Not proven on metal yet.** Both configurations build clean. What the next
+Surface run has to show: the `cmd ring reset: host index was N` line reading
+non-zero on a second load, and a rejoin that falls back to the reload coming up
+without an ADVANCED_SYSASSERT.
+
+**Still open and unclaimed:** the re-point scan that times out at `aps=0`, the
+4-way that fails after a successful re-point association, item 1 (SAE PMK) and
+item 4 (F14 / Surface Aggregator UART).
