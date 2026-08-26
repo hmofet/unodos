@@ -2923,7 +2923,13 @@ static void mvm_init_unified(void)
      * The fw runs its default calibrations off NVM_ACCESS_COMPLETE instead.
      * Sending 0x6a here made the UMAC ADVANCED_SYSASSERT (error 0x201002fd,
      * last-cmd 0x016a) - proven live with the iwl fwerr verb 2026-07-25. */
-    wait_notif(GRP_LEGACY, 0x4 /*INIT_COMPLETE_NOTIF*/, 0, 500);
+    /* Say whether init ever completed. The assert lands inside this wait, and
+     * "the fw finished init and died after" is a different fault from "it died
+     * before finishing" - one line, and nothing else in the log distinguishes
+     * them. */
+    { const u8 *ic = wait_notif(GRP_LEGACY, 0x4 /*INIT_COMPLETE_NOTIF*/, 0, 500);
+      uno_dbg_net_trace("wifi: MVM init: INIT_COMPLETE %s",
+                        ic ? "arrived" : "NEVER ARRIVED (500 ms)"); }
     mvm_step("INIT_COMPLETE wait");
     /* NVM_GET_INFO (kept for the sku/phy info it returns; the MAC address does
      * NOT come from here - Linux reads it from the CSR straps/OTP).
@@ -2958,6 +2964,10 @@ static int g_no_join;      /* radio_up(): bring the fw up but do not join */
  * of the sequence is already going unanswered. Which one asserts is a question
  * four register reads answer and no amount of reasoning does. */
 static u32 g_mvm_assert_at;
+#ifdef UNO_DEBUG
+static void fwerr_dump(void);      /* fwd - the firmware's own error tables */
+#endif
+
 static void mvm_step(const char *what)
 {
     u32 h = r32(CSR_MSIX_HW_INT_CAUSES_AD);
@@ -2966,6 +2976,28 @@ static void mvm_step(const char *what)
         uno_dbg_net_trace("wifi: MVM init: the fw ASSERTED at \"%s\" "
                           "(csr2808=%08x sw_err=%d) - everything after this is "
                           "talking to a dead firmware", what, h, (int)((h >> 25) & 1));
+        /* ASK THE FIRMWARE WHAT IT ASSERTED ON, rather than deducing it.
+         *
+         * `iwl fwerr` has read the LMAC/UMAC error tables since 2026-07-25 and
+         * this file's comments are full of what it found - "ADVANCED_SYSASSERT
+         * (error 0x201002fd, last-cmd 0x016a)", "cmd=0x0128", "data2=0x94=148
+         * expected". Every one of those was somebody typing the verb by hand
+         * afterwards. It cannot be typed here: the verb arrives over URC, URC
+         * needs a network, and a firmware that asserted during init is why
+         * there is no network. That is the THIRD time in this lane a
+         * diagnostic has been unreachable by construction on the only machine
+         * that needed it, after `g_rx_data_log` and `iwl mld a`.
+         *
+         * So dump it automatically at the moment of the assert, when the
+         * tables are fresh and the pointers from ALIVE are still good. The
+         * error id, the PC and the last host command the fw processed say in
+         * one line what three builds of narrowing have been circling.
+         *
+         * Debug builds only - fwerr_dump() lives inside UNO_DEBUG, and a
+         * production build has no error-table reader to call. */
+#ifdef UNO_DEBUG
+        fwerr_dump();
+#endif
     }
 }
 
