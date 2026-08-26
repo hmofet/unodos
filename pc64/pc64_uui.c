@@ -693,6 +693,7 @@ enum { ID_THEME = 1, ID_RES, ID_DARK, ID_WRAP, ID_VOL, ID_SCALE, ID_ABOUT,
        ID_CPTAB, ID_NETREFRESH, ID_NETRENEW, ID_SESSION, ID_APPSCAN, ID_MSECT,
        ID_RESAPPLY, ID_RESKEEP, ID_RESREVERT,
        ID_WIFISCAN, ID_WIFILIST, ID_WIFIPSK, ID_WIFIJOIN, ID_WIFIFORGET,
+       ID_WIFIDISC, ID_NETDETAILS,
        ID_START = 90, ID_SHUTDOWN = 91, ID_RESTART = 92,
        ID_LAUNCH0 = 100,                  /* desktop icons + launcher: +app     */
        ID_TASK0   = 200 };                /* taskbar window buttons: +app       */
@@ -825,7 +826,7 @@ static int g_session_restore = 1;   /* reopen last session's windows at boot */
 static int g_session_ready;         /* 1 once boot restore is done (gate saves) */
 static void session_save(void);
 /* Network-tab status lines (labels store the pointer, so these must persist). */
-static char g_cp_net[5][52];
+static char g_cp_net[6][64];
 static char *ap_str(char *p, const char *s);   /* fwd (defined below) */
 static char *ap_int(char *p, int v);
 static void clamp_to_workarea(unoui_window *w);
@@ -844,20 +845,52 @@ static iwl_ap_t    g_cp_aps[CP_WIFI_MAX];
  * " ch 11" and the "saved" marker is 56 characters, so a long SSID wrote past
  * the end of its row into the next one.  Sized for the worst case now, and the
  * builder below is bounded regardless. */
-static char        g_cp_ap_lbl[CP_WIFI_MAX][72];
-static const char *g_cp_ap_ptr[CP_WIFI_MAX];
 static int         g_cp_ap_n, g_cp_ap_sel;
-/* The network list SCROLLS (unoui_add_list + wheel / scrollbar / arrow keys),
- * so every SSID a scan found is reachable. It used to be paged by hand here -
- * a "More" button that advanced a window of CP_WIFI_ROWS - because unoui lists
- * could not scroll at all (metal, X1 Carbon: "the list of found SSIDs doesn't
- * scroll, so I can't choose my network"). The toolkit does it now. */
+/* The network list SCROLLS (wheel / thumb / arrow keys), so every SSID a scan
+ * found is reachable. It used to be paged by hand here - a "More" button that
+ * advanced a window of CP_WIFI_ROWS - because unoui lists could not scroll at
+ * all (metal, X1 Carbon: "the list of found SSIDs doesn't scroll, so I can't
+ * choose my network"). The rows are drawn by this file now (a network is not a
+ * string), on the toolkit's own list geometry, so scrolling still is. */
 static char        g_cp_psk[72];
 static unoui_text  g_cp_psk_t;
 static char        g_cp_wifi_msg[220] = "Press Scan to look for networks.";
-static char        g_cp_wifi_more[48];
 static char        g_cp_wifi_pwlbl[56];
-static char        g_cp_wifi_stat[196];
+/* The addresses are a disclosure, shut by default. A 640x400 desktop leaves
+ * 330 px of Control Panel: with the networks, the password row, the buttons and
+ * the status line above them, five more rows of IP/router/MAC pushed the pane's
+ * own buttons under the frame - and the address a person actually wants is
+ * already in the line under the headline. Windows and macOS both keep these
+ * behind a properties/details disclosure, for the same reason. */
+static int         g_cp_net_details;
+static iwl_link_t  g_cp_link;         /* the live link, refreshed with the pane */
+static int         g_cp_wifi_top;     /* first visible row of the network list  */
+static unoui_rect  g_cp_wifi_r;       /* its rect, cached by the draw           */
+
+#ifdef UNO_DEBUG
+static int g_cp_wifi_demo;   /* DEBUG.CFG wifi-demo - see cp_wifi_demo() */
+#endif
+
+/* One place reads the link, so the demo flag has one place to lie in. */
+static void cp_link_refresh(void)
+{
+    iwl_link_info(&g_cp_link);
+#ifdef UNO_DEBUG
+    if (g_cp_wifi_demo && (g_cp_link.state == IWL_LINK_NOCARD ||
+                           g_cp_link.state == IWL_LINK_OFF)) {
+        char *p = ap_str(g_cp_link.ssid, "SKYNET");
+        *p = 0;
+        g_cp_link.state = IWL_LINK_ON;
+        g_cp_link.rssi = -47; g_cp_link.bars = 4;
+    }
+#endif
+}
+
+static int cp_wifi_is_connected(const char *ssid)
+{
+    return g_cp_link.state >= IWL_LINK_NOKEY && ssid && ssid[0] &&
+           !strcmp(g_cp_link.ssid, ssid);
+}
 
 /* "Network:  <ssid>" - the join target. Written into a persistent buffer the
  * label widget points at, so moving the selection updates the text in place. */
@@ -1009,25 +1042,26 @@ static void cp_wifi_scan_done(int n)
     g_cp_ap_n = n;
     g_cp_scanning = 0;
     cp_wifi_busy_end();
-    for (i = 0; i < g_cp_ap_n; i++) {
-        char *p = g_cp_ap_lbl[i];
-        const char *s = g_cp_aps[i].ssid;
-        int k = 0;
-        while (*s && k < 33) { *p++ = *s++; k++; }     /* the SSID, hard-bounded */
-        p = ap_str(p, "   ");
-        if (g_cp_aps[i].rssi) { p = ap_int(p, g_cp_aps[i].rssi); p = ap_str(p, " dBm"); }
-        p = ap_str(p, "   ch "); p = ap_int(p, g_cp_aps[i].chan);
-        /* mark the ones this machine already knows the password for, so it is
-         * obvious which rows are one click from being connected */
-        if (cp_wifi_known(g_cp_aps[i].ssid)) p = ap_str(p, "   saved");
-        *p = 0;
-        g_cp_ap_ptr[i] = g_cp_ap_lbl[i];
-    }
+    /* THE NETWORK YOU ARE ON GOES FIRST.
+     *
+     * The scan sorts by signal, which is the right order for everything except
+     * the one row the user is looking for. Every desktop pins the current
+     * network to the top; without it, joining a distant AP and then opening the
+     * panel showed a list whose first row was something else entirely. */
+    cp_link_refresh();
+    for (i = 0; i < g_cp_ap_n; i++)
+        if (cp_wifi_is_connected(g_cp_aps[i].ssid)) {
+            while (i > 0) { iwl_ap_t t = g_cp_aps[i-1]; g_cp_aps[i-1] = g_cp_aps[i];
+                            g_cp_aps[i] = t; i--; }
+            break;
+        }
     g_cp_ap_sel = 0;
+    g_cp_wifi_top = 0;
     if (g_cp_ap_n) {
         cp_wifi_fill_psk();                  /* remembered? the field is filled */
-        cp_wifi_note("Pick a network, type its password, then Join. "
-                     "A network marked \"saved\" needs no password.");
+        cp_wifi_note(cp_wifi_is_connected(g_cp_aps[0].ssid)
+                     ? "Pick another network to switch to it."
+                     : "Pick a network, then Connect.");
     } else {
         /* An empty scan almost never means "the air is empty" - it means the
          * radio never came up, and the driver already knows why. Guessing
@@ -1072,18 +1106,6 @@ static void cp_wifi_scan_tick(void)
     else                   cp_wifi_spin();
 }
 
-/* "<what> ... (N s)" - the join blocks the shell for seconds at a time, so
- * every phase says what it is doing AND keeps a running clock, otherwise a
- * working join is indistinguishable from a hung machine (metal: "it looks like
- * it's frozen"). */
-static void cp_wifi_phase(const char *what, int secs)
-{
-    char msg[120];
-    char *p = ap_str(msg, what);
-    if (secs >= 0) { p = ap_str(p, "  ("); p = ap_int(p, secs); p = ap_str(p, " s)"); }
-    *p = 0;
-    cp_wifi_note(msg);
-}
 
 static void cp_wifi_join(void)
 {
@@ -1132,34 +1154,201 @@ static void cp_wifi_join(void)
           *p = 0; cp_wifi_note(msg); }
         g_cp_join_failed = 1;      /* the field shakes on the rebuild below */
     } else {
-        cp_wifi_phase("Joined. Asking the network for an address (DHCP)", 0);
+        /* THE ADDRESS IS NOT WORTH A FROZEN DESKTOP.
+         *
+         * This sat in a twenty-second loop calling net_poll() and a 5 ms delay,
+         * which is exactly what the shell's frame loop does anyway - four
+         * net_poll()s per frame, every frame, and a rebuild of this pane the
+         * moment net_dhcp_done() flips. So the loop bought nothing but the
+         * spinner, and it cost every one of those seconds in input the machine
+         * could not take. Ask, say so, and let the frame loop finish it: the
+         * headline turns into "Connected to X" with an address under it when
+         * the lease lands, wherever the user happens to be by then. */
         nic = iwl_nic();
         if (nic) {
             net_init(nic, iwl_mac());       /* the stack binds one nic: WiFi now */
             net_dhcp_start();
-            /* 20 s, not 9: a DHCP server behind a fresh WPA2 association often
-             * needs more than one DISCOVER, and the retransmit timer only
-             * advances while net_poll() runs. Repaint twice a second so the
-             * screen is visibly alive the whole time. */
-            for (i = 0; i < 4000 && !net_dhcp_done(); i++) {
-                net_poll(); uno_pc64_delay_ms(5);
-                /* ~8 Hz for the spinner, once a half-second for the clock:
-                 * the indicator has to move faster than the words change or it
-                 * stops reading as motion */
-                if (i && (i % 25) == 0)  cp_wifi_spin();
-                if (i && (i % 100) == 0)
-                    cp_wifi_phase("Asking the network for an address (DHCP)", i / 200);
-            }
         }
-        cp_wifi_note(net_dhcp_done()
-            ? "Connected."
-            : "Joined, but no address yet - still asking in the background.");
+        cp_wifi_note(net_dhcp_done() ? "Connected."
+                                     : "Connected. Asking the network for an address...");
     }
     cp_wifi_busy_end();
     for (i = 0; i < (int)sizeof g_cp_psk; i++) g_cp_psk[i] = 0;   /* do not keep it */
     g_cp_psk_t.len = g_cp_psk_t.caret = g_cp_psk_t.sel = 0;
     rebuild_ctrl_window();
 }
+
+
+/* ---- the Wi-Fi network list ----------------------------------------------
+ * Drawn by the app rather than by UI_LIST, because a network is not a string.
+ * Every desktop shows the same three things at a glance - is it locked, how
+ * strong is it, and which one am I on - and a row of text can only spell them
+ * out: this pane used to read "NimmuNet    -54dBm ch11", which is a scan
+ * result, not a network someone is choosing between.
+ *
+ * The GEOMETRY is still the toolkit's (unoui_list_rows / _index_at / _reveal /
+ * _bar), so the wheel, the keyboard, the scroll clamping and the bar behave
+ * exactly like every other list in the OS - only the row painter is ours. */
+/* -50 is next to the router, -70 is the edge of usable: the thresholds every
+ * desktop draws. An unmeasured RSSI is no bars, not four. */
+static int cp_wifi_bars_of(int rssi)
+{
+    return !rssi ? 0 : rssi >= -50 ? 4 : rssi >= -60 ? 3 : rssi >= -70 ? 2 : 1;
+}
+
+#define CP_BARS_W (4 * 3 + 3 * 2)
+static void cp_wifi_bars(int x, int y, int h, int bars, fb_px on, fb_px off)
+{
+    int i;
+    for (i = 0; i < 4; i++) {
+        int bh = h * (i + 2) / 5, bx = x + i * 5;
+        if (bh < 2) bh = 2;
+        fb_fill_rect(bx, y + h - bh, 3, bh, i < bars ? on : off);
+    }
+}
+
+/* a padlock, in the width of a couple of characters */
+static void cp_wifi_lock(int x, int y, int h, fb_px c)
+{
+    int bh = h / 2 + 1, by = y + h - bh, sh = h - bh;
+    if (sh < 2) sh = 2;
+    fb_fill_rect(x, by, 7, bh, c);                 /* body    */
+    fb_fill_rect(x + 1, by - sh, 1, sh, c);        /* shackle */
+    fb_fill_rect(x + 5, by - sh, 1, sh, c);
+    fb_fill_rect(x + 1, by - sh, 5, 1, c);
+}
+
+static void cp_wifi_list_draw(struct unoui_widget *wd, unoui_rect r, void *ctx)
+{
+    const unoui_theme *t = UI.theme;
+    int rh = ui_row_h(), fh = fb_text_h(), gh = fh - 2;
+    int rows = unoui_list_rows(r), i, y = r.y + 3;
+    unoui_rect bar = unoui_list_bar(r, g_cp_ap_n);
+    int right = (bar.w ? bar.x : r.x + r.w) - 6;
+    (void)wd; (void)ctx;
+    g_cp_wifi_r = r;
+    fb_fill_rect(r.x, r.y, r.w, r.h, t->pal.field_bg);
+    fb_frame_rect(r.x, r.y, r.w, r.h, t->pal.dark);
+    if (gh < 5) gh = 5;
+    for (i = 0; i < rows && g_cp_wifi_top + i < g_cp_ap_n; i++, y += rh) {
+        const iwl_ap_t *a = &g_cp_aps[g_cp_wifi_top + i];
+        int sel   = (g_cp_wifi_top + i) == g_cp_ap_sel;
+        int conn  = cp_wifi_is_connected(a->ssid);
+        int saved = cp_wifi_known(a->ssid);
+        const char *tag = conn ? "Connected" : saved ? "Saved" : 0;
+        fb_px fg  = sel ? t->pal.accent_text : t->pal.field_text;
+        fb_px dim = sel ? t->pal.accent_text : t->pal.text_dim;
+        int nx = r.x + 8, nr = right - CP_BARS_W - 8;
+        if (sel) fb_fill_rect(r.x + 1, y - 1, r.w - 2 - (bar.w ? bar.w : 0), rh,
+                              t->pal.accent);
+        cp_wifi_bars(right - CP_BARS_W, y + 1, gh, cp_wifi_bars_of(a->rssi), fg, dim);
+        if (tag) { int tw = fb_text_w(tag);
+                   nr -= tw + 10;
+                   fb_text(right - CP_BARS_W - 8 - tw, y, tag, conn ? fg : dim, -1); }
+        if (a->secured) { cp_wifi_lock(nx, y + 1, gh, dim); nx += 13; }
+        /* the name is what gets cut when the row is narrow, never the state */
+        if (nr > nx) {
+            fb_set_clip(nx, y, nr - nx, rh);
+            fb_text(nx, y, a->ssid, fg, -1);
+            fb_set_clip(r.x, r.y, r.w, r.h);
+        }
+    }
+    /* a slim thumb rather than a full scrollbar: the strip is 12 px and the
+     * list is the only thing in the pane that scrolls */
+    if (bar.w && g_cp_ap_n > rows) {
+        int th = bar.h * rows / g_cp_ap_n, mt = g_cp_ap_n - rows;
+        int ty = bar.y + (bar.h - (th < 12 ? 12 : th)) *
+                 (g_cp_wifi_top > mt ? mt : g_cp_wifi_top) / (mt < 1 ? 1 : mt);
+        if (th < 12) th = 12;
+        fb_fill_rect(bar.x, bar.y, bar.w, bar.h, t->pal.field_bg);
+        fb_fill_rect(bar.x + 4, ty, bar.w - 8, th, t->pal.text_dim);
+    }
+}
+
+static void cp_wifi_select(int i)
+{
+    if (i < 0 || i >= g_cp_ap_n) return;
+    g_cp_ap_sel = i;
+    g_cp_wifi_top = unoui_list_reveal(g_cp_wifi_r, g_cp_ap_n, i, g_cp_wifi_top);
+    cp_wifi_target_label();
+    cp_wifi_fill_psk();          /* remembered? the field is filled for them */
+    rebuild_ctrl_window();       /* the password row and the buttons follow the row */
+}
+
+static int cp_wifi_list_event(struct unoui_widget *wd, const void *evp, void *ctx)
+{
+    const unoui_event *e = (const unoui_event *)evp;
+    int rows, mt;
+    (void)wd; (void)ctx;
+    if (g_cp_ap_n <= 0) return 0;
+    rows = unoui_list_rows(g_cp_wifi_r);
+    mt   = g_cp_ap_n - rows; if (mt < 0) mt = 0;
+    switch (e->kind) {
+    case UI_EV_MOUSE_DOWN: {
+        int i = unoui_list_index_at(g_cp_wifi_r, g_cp_ap_n, g_cp_wifi_top, e->y);
+        /* a click on the row that is already highlighted connects - the same
+         * re-click-opens idiom the file manager uses */
+        if (i == g_cp_ap_sel && !cp_wifi_is_connected(g_cp_aps[i].ssid)) cp_wifi_join();
+        else cp_wifi_select(i);
+        return 1; }
+    case UI_EV_WHEEL:
+        g_cp_wifi_top += e->wheel * 3;
+        if (g_cp_wifi_top > mt) g_cp_wifi_top = mt;
+        if (g_cp_wifi_top < 0)  g_cp_wifi_top = 0;
+        g_dirty = 1;
+        return 1;
+    case UI_EV_KEY:
+        if (e->key == UI_KEY_DOWN)      cp_wifi_select(g_cp_ap_sel + 1);
+        else if (e->key == UI_KEY_UP)   cp_wifi_select(g_cp_ap_sel - 1);
+        else if (e->key == UI_KEY_HOME) cp_wifi_select(0);
+        else if (e->key == UI_KEY_END)  cp_wifi_select(g_cp_ap_n - 1);
+        else if (e->key == UI_KEY_ENTER) {
+            if (!cp_wifi_is_connected(g_cp_aps[g_cp_ap_sel].ssid)) cp_wifi_join();
+        } else return 0;
+        return 1;
+    default: return 0;
+    }
+}
+static unoui_canvas g_cp_wifi_cv = { cp_wifi_list_draw, cp_wifi_list_event, 0 };
+
+#ifdef UNO_DEBUG
+/* DEBUG.CFG `wifi-demo`: show this pane, with rows in it, on a machine that has
+ * no Wi-Fi card.
+ *
+ * A UI you cannot open is a UI nobody reviews. The whole Wi-Fi pane exists only
+ * when iwl_present(), so under QEMU - which is where every screenshot, every
+ * layout audit and every UI gate in this repo runs - it has never been drawn at
+ * all, and the only way to look at a change to it was to walk a USB stick over
+ * to a laptop. The layout audit already forces the pane on for exactly this
+ * reason (g_cp_wifi_force); this adds the rows, so the list, the signal meters,
+ * the lock, the Connected marker and the button row can be seen too.
+ *
+ * Debug builds only, opt-in by a config line, and it says so on screen. */
+static void cp_wifi_demo(void)
+{
+    static const struct { const char *ssid; int rssi, sec, wpa3; } demo[] = {
+        { "SKYNET",      -47, 1, 0 }, { "NimmuNet",    -58, 1, 1 },
+        { "BELL9142",    -66, 1, 0 }, { "Guest",       -71, 0, 0 },
+        { "TELUS4A21",   -78, 1, 0 },
+    };
+    int i;
+    g_cp_wifi_force = 1;
+    g_cp_wifi_demo  = 1;
+    for (i = 0; i < (int)(sizeof demo / sizeof demo[0]) && i < CP_WIFI_MAX; i++) {
+        int k = 0;
+        while (demo[i].ssid[k] && k < 32) { g_cp_aps[i].ssid[k] = demo[i].ssid[k]; k++; }
+        g_cp_aps[i].ssid[k] = 0;
+        g_cp_aps[i].rssi    = (signed char)demo[i].rssi;
+        g_cp_aps[i].chan    = (unsigned char)(1 + i);
+        g_cp_aps[i].secured = (unsigned char)demo[i].sec;
+        g_cp_aps[i].wpa3    = (unsigned char)demo[i].wpa3;
+        g_cp_ap_n = i + 1;
+    }
+    g_cp_ap_sel = 0; g_cp_wifi_top = 0;
+    g_ctrl_tab = CT_NETWORK;      /* the pane this flag exists to look at */
+    cp_wifi_note("DEBUG.CFG wifi-demo: these networks are not real.");
+}
+#endif
 
 static void build_ctrl(unoui_window *w)
 {
@@ -1283,158 +1472,140 @@ static void build_ctrl(unoui_window *w)
         break;
 
     case CT_NETWORK: {
-        /* live status, formatted into persistent buffers (labels keep the ptr) */
-        char *p; int up = net_link(), mbps = net_link_speed_mbps();
-        p = ap_str(g_cp_net[0], "Status:  ");
-        p = ap_str(p, up ? (net_dhcp_done() ? "connected" : "link up, no DHCP lease")
-                         : "no link (no NIC bound)"); *p = 0;
-        p = ap_str(g_cp_net[1], "IP address:  ");
-        if (up && net_dhcp_done()) { const unsigned char *ip = net_ip();
-            p = ap_int(p, ip[0]); *p++='.'; p = ap_int(p, ip[1]); *p++='.';
-            p = ap_int(p, ip[2]); *p++='.'; p = ap_int(p, ip[3]); }
-        else { p = ap_str(p, "-"); }
-        *p = 0;
-        p = ap_str(g_cp_net[2], "Gateway:  ");
-        if (up && net_dhcp_done()) { const unsigned char *gw = net_gw();
-            p = ap_int(p, gw[0]); *p++='.'; p = ap_int(p, gw[1]); *p++='.';
-            p = ap_int(p, gw[2]); *p++='.'; p = ap_int(p, gw[3]); }
-        else { p = ap_str(p, "-"); }
-        *p = 0;
-        p = ap_str(g_cp_net[3], "Link speed:  ");
-        if (mbps >= 1000) { p = ap_int(p, mbps/1000); p = ap_str(p, " Gbps"); }
-        else if (mbps > 0){ p = ap_int(p, mbps);      p = ap_str(p, " Mbps"); }
-        else              { p = ap_str(p, up ? "negotiating / not reported" : "-"); }
-        *p = 0;
-        p = ap_str(g_cp_net[4], "Frames:  tx ");
-        p = ap_int(p, (int)net_tx_frames()); p = ap_str(p, "   rx ");
-        p = ap_int(p, (int)net_rx_frames());
-        *p = 0;
-        /* Five plain labels, at LABEL pitch. They were stepping by `row` - the
-         * height of a control - which spent 50 px of a 333 px panel on white
-         * space and was enough on its own to push the WiFi status line off the
-         * bottom of the tab on a 640x400 desktop at the default font. */
-        for (i = 0; i < 5; i++) { unoui_add_label(w, 8, y, g_cp_net[i]); y += fh + 6; }
-        y += 6;
-        /* sized to their labels and flowed - two fixed 110 px slots with the
-         * hint pinned at 248 cut all three at a larger UI scale */
-        { int br = fb_text_w("Refresh")  + 26;
-          int bn = fb_text_w("Renew IP") + 26;
-          /* THE HINT MUST NOT SEND YOU AT A BUTTON THAT CANNOT WORK.
-           *
-           * This tested `up && net_dhcp_done()` and said "No lease? Try Renew
-           * IP." for everything else - including no link at all, which is the
-           * state this machine is in whenever no network has been joined,
-           * because the boot-path WiFi bring-up deliberately stops at firmware
-           * ALIVE (the F12 boundary in iwlwifi.c) and only a join from the
-           * pane below goes further. So the panel advised a 20-second DHCP
-           * that had nothing to send on, and then reported that the network
-           * did not answer. Reported from metal in those words. */
-          const char *hint = !up            ? "No link yet - join a network below."
-                           : net_dhcp_done() ? "DHCP is automatic."
-                                             : "No lease? Try Renew IP.";
-          int hx = 8 + br + 8 + bn + 12;
-          x = unoui_add_button(w, 8, y, br, "Refresh", 0); x->id = ID_NETREFRESH;
-          x = unoui_add_button(w, 8 + br + 8, y, bn, "Renew IP", 0);
-          x->id = ID_NETRENEW;
-          if (hx + fb_text_w(hint) <= cw - 8)
-              unoui_add_label(w, hx, y + lofs, hint); }
-        y += bh + 8;
-        /* ---- WiFi: scan, pick, type the password, join ---- */
-        if (WIFI_PANE_ON()) {
-            int pw;
-            unoui_add_sep(w, 8, y, cw - 16); y += 8;
-            iwl_status_str(g_cp_wifi_stat, sizeof g_cp_wifi_stat);
-            unoui_add_label(w, 8, y + lofs, "WiFi:");
-            unoui_add_label(w, 8 + fb_text_w("WiFi:") + 8, y + lofs,
-                            g_cp_wifi_stat[0] ? g_cp_wifi_stat : "Intel WiFi card present.");
-            y += fh + 8;
+        /* THE TAB LEADS WITH THE ANSWER, THEN THE CONTROLS, THEN THE DETAIL.
+         *
+         * It used to open with five rows of readout - status, IP, gateway, link
+         * speed and a tx/rx FRAME COUNTER - and then the driver's own
+         * diagnostic string, which on a joined machine reads out the BSSID, the
+         * channel, the AID, the key state and the frame counts. That is a
+         * packet capture's worth of facts for a question that is nearly always
+         * "am I on, and can I get on". Every desktop worth copying answers that
+         * in one line at the top, puts the networks and their controls under
+         * it, and keeps the addresses last for the times you do want them. */
+        char *p;
+        int up = net_link(), lease = net_dhcp_done(), mbps = net_link_speed_mbps();
+        int wifi = WIFI_PANE_ON();
+        int conn_sel;
+        static const char *kSig[5] = { "no signal", "weak signal", "fair signal",
+                                       "good signal", "excellent signal" };
+        cp_link_refresh();
+        conn_sel = wifi && g_cp_ap_n > 0 &&
+                   cp_wifi_is_connected(g_cp_aps[g_cp_ap_sel].ssid);
+
+        if (wifi) {
+            int hx = 8 + fb_text_w("Wi-Fi") + 14;
+            p = g_cp_net[0];
+            if (g_cp_link.state >= IWL_LINK_NOKEY) {
+                p = ap_str(p, "Connected to ");
+                p = ap_str(p, g_cp_link.ssid);
+            }
+            else if (g_cp_link.state == IWL_LINK_JOINING) p = ap_str(p, "Connecting...");
+            else if (g_cp_link.lost_reason >= 0)          p = ap_str(p, "Disconnected by the network");
+            else if (g_cp_link.state == IWL_LINK_NOCARD)  p = ap_str(p, "No Wi-Fi hardware");
+            else                                          p = ap_str(p, "Not connected");
+            *p = 0;
+            /* the sub-line: signal, generation, address - in the order they
+             * stop mattering in */
+            p = g_cp_net[1];
+            if (g_cp_link.state >= IWL_LINK_NOKEY) {
+                p = ap_str(p, kSig[g_cp_link.bars]);
+                p = ap_str(p, g_cp_link.wpa3 ? "  -  WPA3" : "  -  WPA2");
+                if (g_cp_link.state == IWL_LINK_NOKEY)
+                    p = ap_str(p, "  -  finishing the handshake");
+                else if (lease) {
+                    const unsigned char *ip = net_ip();
+                    p = ap_str(p, "  -  ");
+                    p = ap_int(p, ip[0]); *p++='.'; p = ap_int(p, ip[1]); *p++='.';
+                    p = ap_int(p, ip[2]); *p++='.'; p = ap_int(p, ip[3]);
+                } else p = ap_str(p, "  -  waiting for an address");
+            } else if (g_cp_link.state != IWL_LINK_NOCARD)
+                p = ap_str(p, g_cp_ap_n > 0 ? "Pick a network below."
+                                            : "Press Scan to look for networks.");
+            *p = 0;
+            unoui_add_label(w, 8, y + lofs, "Wi-Fi");
+            unoui_add_label(w, hx, y + lofs, g_cp_net[0]);
+            y += fh + 4;
+            if (g_cp_net[1][0]) { unoui_add_label(w, hx, y, g_cp_net[1]); y += fh + 8; }
+            else y += 4;
+
+            /* ---- the networks ---- */
             if (g_cp_ap_n > 0) {
-                /* The scan list takes what the rows BELOW it leave, not a fixed
-                 * six rows. Six pushed the status line - the one that carries
-                 * "Join failed: ..." - off the bottom of the panel on a 640x400
-                 * desktop at the DEFAULT font. The layout audit could not see
-                 * it, because this whole pane only exists when a WiFi card
-                 * does and QEMU has none; g_cp_wifi_force is why it can now. */
-                int below = (fh + 6)            /* the target-network label     */
-                          + (ch + 8)            /* the password row             */
-                          + (bh + 6)            /* Scan / Join / Forget         */
-                          + (fh + 8) + 8;       /* the status line + a margin   */
+                /* the list takes what the rows BELOW it leave, so the status
+                 * line - the one that carries "Join failed: ..." - cannot be
+                 * pushed off the bottom of a 640x400 desktop */
+                int below = (ch + 8)            /* the password row            */
+                          + (bh + 6)            /* the buttons                 */
+                          + (fh + 8)            /* the status line             */
+                          + (fh + 10)           /* the Ethernet line           */
+                          + (bh + 16)           /* the Details disclosure      */
+                          + (g_cp_net_details ? (fh + 6) * 4 + bh : 0);
                 int have  = (FB_H - TASKH) - win_h_for(y) - below;
-                int rows  = have / (fh + 4);
+                int rows  = have / ui_row_h();
                 int lh;
                 if (rows > CP_WIFI_ROWS) rows = CP_WIFI_ROWS;
                 if (rows > g_cp_ap_n)    rows = g_cp_ap_n;
-                if (rows < 2)            rows = 2;   /* a list of one is not a list */
-                lh = rows * (fh + 4) + 6;
-                /* the whole scan goes into ONE scrolling list: wheel, the
-                 * inline scrollbar and the arrow keys reach the rest */
-                x = unoui_add_list(w, 8, y, cw - 16, lh,
-                                   g_cp_ap_ptr, g_cp_ap_n, g_cp_ap_sel);
+                /* a list of one is not a list; but with the addresses open
+                 * there is no room to insist on three, and the panel's own
+                 * buttons matter more than a fourth visible network */
+                if (rows < (g_cp_net_details ? 2 : 3))
+                    rows = g_cp_net_details ? 2 : 3;
+                lh = rows * ui_row_h() + 6;
+                x = unoui_add_canvas(w, 8, y, cw - 16, lh, &g_cp_wifi_cv);
                 x->id = ID_WIFILIST;
-                unoui_list_set_sel(x, g_cp_ap_sel);   /* keep it in view */
-                y += lh + 6;
-                if (g_cp_ap_n > rows) {
-                    char *p = ap_int(g_cp_wifi_more, g_cp_ap_n);
-                    p = ap_str(p, " networks - scroll for the rest"); *p = 0;
-                    unoui_add_label(w, 8, y + lofs, g_cp_wifi_more);
-                    y += fh + 6;
+                y += lh + 8;
+            }
+            /* ---- the password, only when this network needs one ----
+             * A saved network does not ask again and an open one never asks,
+             * so a permanent field was a permanent demand for something the
+             * panel already had - and it is the field that made rejoining a
+             * remembered network look like it needed the passphrase retyped. */
+            if (g_cp_ap_n > 0 && !conn_sel && g_cp_aps[g_cp_ap_sel].secured &&
+                !cp_wifi_known(g_cp_aps[g_cp_ap_sel].ssid)) {
+                int pw = fb_text_w("Password:") + 10;
+                unoui_add_label(w, 8, y + lofs, "Password:");
+                unoui_text_init(&g_cp_psk_t, g_cp_psk, sizeof g_cp_psk, 0);
+                unoui_text_secret(&g_cp_psk_t, '*');
+                x = unoui_add_edit(w, 8 + pw, y, cw - pw - 16, &g_cp_psk_t);
+                x->id = ID_WIFIPSK;
+                /* the house "no": the field shakes and keeps the focus, so the
+                 * retry is one keystroke */
+                if (g_cp_join_failed) {
+                    g_cp_join_failed = 0;
+                    unoui_reject_widget(&UI, w, x);
+                    { int fi;
+                      for (fi = 0; fi < UI.nwin; fi++)
+                          if (UI.win[fi] == w) { UI.focus_win = fi; break; } }
+                    UI.focus_wi = w->nw - 1;
                 }
+                y += row;
             }
-            /* name the target on its OWN line: the highlighted row can be
-             * scrolled out of sight, and the label is rewritten in place when
-             * the selection moves (no window rebuild, so the list keeps its
-             * scroll position), which a "Password for X:" prefix could not do
-             * without re-laying the field out. */
-            cp_wifi_target_label();
-            unoui_add_label(w, 8, y + lofs, g_cp_wifi_pwlbl);
-            y += fh + 6;
-            pw = fb_text_w("Password:") + 10;
-            unoui_add_label(w, 8, y + lofs, "Password:");
-            /* Re-binding the same buffer keeps the caret - unoui_text_init's
-             * own contract now, rather than this builder saving and restoring
-             * it by hand. That hand-rolled version fixed exactly one field;
-             * every other one in the OS still jumped. */
-            unoui_text_init(&g_cp_psk_t, g_cp_psk, sizeof g_cp_psk, 0);
-            /* MASKED. It was in the clear until now - a WPA2 passphrase, on a
-             * Control Panel that anybody walking past can read, on a machine
-             * whose whole point is that other people use it. The field's own
-             * eye shows it back when you need to check it, and hides it again
-             * as soon as the field loses focus. */
-            unoui_text_secret(&g_cp_psk_t, '*');
-            x = unoui_add_edit(w, 8 + pw, y, cw - pw - 16, &g_cp_psk_t); x->id = ID_WIFIPSK;
-            /* The house "no": the field shakes and keeps the focus, so the
-             * retry is one keystroke.  Fired from the BUILD because the widget
-             * has to exist before anything can animate it, and consumed here so
-             * one failure is one shake however many rebuilds follow. */
-            if (g_cp_join_failed) {
-                g_cp_join_failed = 0;
-                unoui_reject_widget(&UI, w, x);
-                { int fi;
-                  for (fi = 0; fi < UI.nwin; fi++)
-                      if (UI.win[fi] == w) { UI.focus_win = fi; break; } }
-                UI.focus_wi = w->nw - 1;
-            }
-            y += row;
-            /* buttons sized to their labels and flowed left to right (the house
-             * idiom), not pinned at 8/126/244 - three fixed 110 px slots ran
-             * past the panel the moment the UI scale went up */
-            { int bs = fb_text_w("Scan")   + 34;
-              int bj = fb_text_w("Join")   + 34;
-              int bf = fb_text_w("Forget") + 34;
+            /* ---- the controls, and only the ones that can do anything ---- */
+            { int bc = fb_text_w("Connect")    + 34;
+              int bd = fb_text_w("Disconnect") + 34;
+              int bf = fb_text_w("Forget")     + 34;
+              int bs = fb_text_w("Rescan")     + 34;
               int bx = 8;
-              x = unoui_add_button(w, bx, y, bs, "Scan", 0); x->id = ID_WIFISCAN;
-              bx += bs + 8;
-              x = unoui_add_button(w, bx, y, bj, "Join", UI_F_DEFAULT); x->id = ID_WIFIJOIN;
-              bx += bj + 8;
-              /* Forget only exists once something is remembered, and it acts on
-               * the highlighted row - the only way to correct a stored
-               * passphrase the AP has since changed. */
-              if (iwl_saved_count() > 0 && bx + bf + 8 <= cw) {
-                  x = unoui_add_button(w, bx, y, bf, "Forget", 0); x->id = ID_WIFIFORGET;
+              if (g_cp_ap_n > 0 && !conn_sel) {
+                  x = unoui_add_button(w, bx, y, bc, "Connect", UI_F_DEFAULT);
+                  x->id = ID_WIFIJOIN; bx += bc + 8;
+              }
+              if (g_cp_link.state >= IWL_LINK_NOKEY) {
+                  x = unoui_add_button(w, bx, y, bd, "Disconnect", 0);
+                  x->id = ID_WIFIDISC; bx += bd + 8;
+              }
+              if (g_cp_ap_n > 0 && cp_wifi_known(g_cp_aps[g_cp_ap_sel].ssid) &&
+                  bx + bf + 8 <= cw) {
+                  x = unoui_add_button(w, bx, y, bf, "Forget", 0);
+                  x->id = ID_WIFIFORGET; bx += bf + 8;
+              }
+              if (bx + bs + 8 <= cw) {
+                  x = unoui_add_button(w, bx, y, bs, g_cp_ap_n ? "Rescan" : "Scan", 0);
+                  x->id = ID_WIFISCAN;
               } }
             y += bh + 6;
             /* the spinner leads the status line while something is running;
-             * when nothing is, there is no widget and the text starts at 8 */
+             * when nothing is running and there is nothing to say, the line is
+             * not there at all */
             if (g_cp_working) {
                 int sz = fh + 4;
                 g_cp_busy = unoui_add_busy(w, 8, y, sz);
@@ -1442,10 +1613,73 @@ static void build_ctrl(unoui_window *w)
                 y += (sz > fh ? sz : fh) + 8;
             } else {
                 g_cp_busy = 0;
-                unoui_add_label(w, 8, y + lofs, g_cp_wifi_msg);
-                y += fh + 8;
+                if (g_cp_wifi_msg[0]) {
+                    unoui_add_label(w, 8, y + lofs, g_cp_wifi_msg);
+                    y += fh + 8;
+                }
             }
+            unoui_add_sep(w, 8, y, cw - 16); y += 10;
         }
+
+        /* ---- the wired link, one line rather than a test report ---- */
+        p = ap_str(g_cp_net[2], "Ethernet");
+        p = ap_str(p, ":  ");
+        if (!up && !wifi)            p = ap_str(p, "no adapter bound");
+        else if (up && g_cp_link.state < IWL_LINK_NOKEY)
+                                     p = ap_str(p, lease ? "connected" : "cable in, no address");
+        else                         p = ap_str(p, "not in use");
+        if (mbps >= 1000)  { p = ap_str(p, "  -  "); p = ap_int(p, mbps / 1000); p = ap_str(p, " Gbps"); }
+        else if (mbps > 0) { p = ap_str(p, "  -  "); p = ap_int(p, mbps); p = ap_str(p, " Mbps"); }
+        *p = 0;
+        unoui_add_label(w, 8, y + lofs, g_cp_net[2]);
+        y += fh + 10;
+
+        /* ---- the addresses, last, and shut until they are asked for ---- */
+        { int dl = fb_text_w("Wi-Fi address") + 16;
+          int bd = fb_text_w("Hide details") + 26;
+          x = unoui_add_button(w, 8, y, bd,
+                               g_cp_net_details ? "Hide details" : "Details", 0);
+          x->id = ID_NETDETAILS;
+          y += bh + 8;
+          if (!g_cp_net_details) break;      /* the switch: nothing below to lay out */
+          p = g_cp_net[3];
+          if (lease) { const unsigned char *ip = net_ip();
+              p = ap_int(p, ip[0]); *p++='.'; p = ap_int(p, ip[1]); *p++='.';
+              p = ap_int(p, ip[2]); *p++='.'; p = ap_int(p, ip[3]); }
+          else p = ap_str(p, up ? "waiting for an address" : "-");
+          *p = 0;
+          unoui_add_label(w, 16, y + lofs, "IP address");
+          unoui_add_label(w, 16 + dl, y + lofs, g_cp_net[3]);
+          y += fh + 4;
+          p = g_cp_net[4];
+          if (lease) { const unsigned char *gw = net_gw();
+              p = ap_int(p, gw[0]); *p++='.'; p = ap_int(p, gw[1]); *p++='.';
+              p = ap_int(p, gw[2]); *p++='.'; p = ap_int(p, gw[3]); }
+          else p = ap_str(p, "-");
+          *p = 0;
+          unoui_add_label(w, 16, y + lofs, "Router");
+          unoui_add_label(w, 16 + dl, y + lofs, g_cp_net[4]);
+          y += fh + 4;
+          if (wifi && iwl_present()) {
+              const unsigned char *m = iwl_mac();
+              static const char *hx = "0123456789abcdef";
+              int k; p = g_cp_net[5];
+              for (k = 0; k < 6; k++) {
+                  *p++ = hx[(m[k] >> 4) & 15]; *p++ = hx[m[k] & 15];
+                  if (k < 5) *p++ = ':';
+              }
+              *p = 0;
+              unoui_add_label(w, 16, y + lofs, "Wi-Fi address");
+              unoui_add_label(w, 16 + dl, y + lofs, g_cp_net[5]);
+              y += fh + 4;
+          }
+          y += 6;
+          { int br = fb_text_w("Refresh")  + 26;
+            int bn = fb_text_w("Renew IP") + 26;
+            x = unoui_add_button(w, 8, y, br, "Refresh", 0);  x->id = ID_NETREFRESH;
+            x = unoui_add_button(w, 8 + br + 8, y, bn, "Renew IP", 0);
+            x->id = ID_NETRENEW; }
+          y += bh + 8; }
         break; }
 
     case CT_AUDIO: {
@@ -1706,11 +1940,23 @@ static void build_usbstat(void)
  * on that - "link up, NO lease" is exactly the state that looks connected but
  * cannot actually reach the LAN (what the Yoga hit). */
 static char g_netline[48];   /* System app: "Network: link up, IP a.b.c.d" */
+static int  g_net_wifi;      /* the bound link is the WiFi one (chip + tooltip) */
 static void fmt_net(void)
 {
     char *p;
     int up = net_link();
+    /* THE CHIP SAID "LAN" ON A MACHINE WITH NO CABLE IN IT.
+     *
+     * One label for both media, and the tooltip under it named an IP and a
+     * link speed - so the one thing a wireless machine's status chip exists to
+     * tell you, WHICH NETWORK, was the one thing it could not. Name the medium
+     * here and the network in the tooltip. */
+    cp_link_refresh();
+    g_net_wifi = (g_cp_link.state >= IWL_LINK_NOKEY);
     if (!up)                  g_net[0] = 0;          /* no NIC / link down: hide */
+    else if (g_net_wifi)      { p = ap_str(g_net, "Wi-Fi");
+                                if (!net_dhcp_done()) p = ap_str(p, "?");
+                                *p = 0; }
     else if (net_dhcp_done()) { g_net[0]='L'; g_net[1]='A'; g_net[2]='N'; g_net[3]=0; }
     else                      { g_net[0]='L'; g_net[1]='A'; g_net[2]='N'; g_net[3]='?'; g_net[4]=0; }
 
@@ -2801,9 +3047,20 @@ static int tb_chip_app_at(int px)
 static void draw_net_tooltip(int chip_x, int bar_y)
 {
     const unoui_theme *t = UI.theme;
-    char ipline[40], spline[32];
+    char name[44], ipline[40], spline[32];
+    const char *lines[3];
+    int nl = 0, i;
     char *p; int mbps = net_link_speed_mbps();
     int fh = fb_text_h(), pad = 6, lh = fh + 3;
+
+    /* the network, first, because that is the question. On WiFi that is the
+     * SSID and how good it is; on a cable there is only one thing it can be. */
+    if (g_net_wifi && g_cp_link.ssid[0]) {
+        static const char *kbars[5] = { "no signal", "weak", "fair", "good", "excellent" };
+        p = ap_str(name, g_cp_link.ssid);
+        p = ap_str(p, "  -  "); p = ap_str(p, kbars[g_cp_link.bars]);
+        *p = 0;
+    } else { p = ap_str(name, "Wired Ethernet"); *p = 0; }
 
     p = ap_str(ipline, "IP: ");
     if (net_dhcp_done()) {
@@ -2819,9 +3076,14 @@ static void draw_net_tooltip(int chip_x, int bar_y)
     else                   p = ap_str(p, "up (speed n/a)");
     *p = 0;
 
-    { int tw1 = fb_text_w(ipline), tw2 = fb_text_w(spline);
-      int bw = (tw1 > tw2 ? tw1 : tw2) + pad * 2;
-      int bhh = lh * 2 + pad * 2 - 3;
+    lines[nl++] = name;
+    lines[nl++] = ipline;
+    if (!g_net_wifi || mbps > 0) lines[nl++] = spline;   /* a rate WiFi does not report */
+
+    { int bw = 0, bhh;
+      for (i = 0; i < nl; i++) { int tw = fb_text_w(lines[i]); if (tw > bw) bw = tw; }
+      bw += pad * 2;
+      bhh = lh * nl + pad * 2 - 3;
       int bx = chip_x, byy = bar_y - bhh - 4;
       if (bx + bw > FB_W) bx = FB_W - bw;      /* keep it on-screen */
       if (bx < 0) bx = 0;
@@ -2830,8 +3092,9 @@ static void draw_net_tooltip(int chip_x, int bar_y)
          above it. draw_one restores the window clip after this callback. */
       fb_set_clip(0, 0, FB_W, FB_H);
       fb_round_rect_a(bx, byy, bw, bhh, 6, t->pal.win_bg, 250, FB_CORNER_ALL);
-      fb_text(bx + pad, byy + pad,      ipline, t->pal.text, -1);
-      fb_text(bx + pad, byy + pad + lh, spline, t->pal.text, -1);
+      for (i = 0; i < nl; i++)
+          fb_text(bx + pad, byy + pad + lh * i, lines[i],
+                  i ? t->pal.text_dim : t->pal.text, -1);
     }
 }
 
@@ -5900,8 +6163,9 @@ static void on_action(const unoui_action *a)
                        g_win[APP_CTRL].scroll_y = 0;   /* a new tab starts at its top */
                        rebuild_ctrl_window(); } break;
     case ID_NETREFRESH: rebuild_ctrl_window(); break;        /* re-read live net status */
+    case ID_NETDETAILS: g_cp_net_details = !g_cp_net_details;
+                        rebuild_ctrl_window(); break;
     case ID_NETRENEW: {                                     /* ask for a lease again */
-        int i;
         /* NO LINK MEANS NO ANSWER, AND SAYING "the network did not answer" IS
          * BLAMING THE WRONG END. DHCP broadcasts a DISCOVER and waits; with
          * nothing associated it goes nowhere, so twenty seconds later the
@@ -5912,23 +6176,22 @@ static void on_action(const unoui_action *a)
             rebuild_ctrl_window();
             break;
         }
-        cp_wifi_phase("Asking the network for an address (DHCP)", 0);
+        /* NO INLINE WAIT. This blocked the whole desktop for up to twenty
+         * seconds watching a timer that the shell's own frame loop already
+         * advances - net_poll() runs every frame and this pane is rebuilt on
+         * the lease transition. Asking and returning is the same DHCP with a
+         * machine you can still use while it happens. */
         net_dhcp_start();
-        for (i = 0; i < 4000 && !net_dhcp_done(); i++) {
-            net_poll(); uno_pc64_delay_ms(5);
-            if (i && (i % 100) == 0)
-                cp_wifi_phase("Asking the network for an address (DHCP)", i / 200);
-        }
-        cp_wifi_note(net_dhcp_done() ? "Connected."
-                                     : "Still no address - the network did not answer.");
+        cp_wifi_note("Asking the network for an address...");
         rebuild_ctrl_window();
         break; }
-    case ID_WIFILIST:  if (a->value >= 0 && a->value < g_cp_ap_n) {
-                           g_cp_ap_sel = a->value;
-                           cp_wifi_target_label();  /* in place: no rebuild, so
-                                                       the list keeps its view */
-                           cp_wifi_fill_psk();      /* remembered? type it for them */
-                       } break;
+    case ID_WIFILIST:  break;      /* an app-drawn list: it handles its own clicks */
+    case ID_WIFIDISC:
+        if (g_cp_scanning) { cp_wifi_note("Still scanning - one moment."); break; }
+        if (iwl_disconnect() == 0) cp_wifi_note("Disconnected.");
+        else                       cp_wifi_note("Not connected to anything.");
+        rebuild_ctrl_window();
+        break;
     case ID_WIFISCAN:  cp_wifi_scan(); break;
     /* The panel takes input DURING a scan now, which it never could before, so
      * these two have to say no to what used to be unreachable: a join or a
@@ -6746,6 +7009,9 @@ int main(void)
      * machine with accounts still reports. */
     { int pc64_stress_cfg_flag(const char *key);          /* pc64_stress.c */
       if (pc64_stress_cfg_flag("layout-audit") > 0) layout_audit_run();
+      /* DEBUG.CFG `wifi-demo`: draw the Wi-Fi pane with example rows on a
+         machine that has no card - see cp_wifi_demo(). */
+      if (pc64_stress_cfg_flag("wifi-demo") > 0) cp_wifi_demo();
       /* DEBUG.CFG `nohud`: turn the red perf HUD (and the stress status line
        * drawn under it) OFF for this boot.  A debug build is the only one that
        * dials out on its own and honours `ui-unlock`, so it is the only build
