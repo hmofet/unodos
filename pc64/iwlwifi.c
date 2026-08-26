@@ -3215,6 +3215,39 @@ static void mvm_te_assoc(void)
     wait_notif(GRP_LEGACY, 0x2a, 0, 500);
 }
 
+/* When the session protection we last asked for runs out (uptime ms, 0 = none).
+ *
+ * DO NOT ASK FOR A SECOND ONE WHILE THE FIRST IS STILL RUNNING.
+ *
+ * `docs/SURFGO-OPEN-ITEMS.md` item 3 records that "repeated session-protection
+ * requests are the trigger" for the assert that ends a boot, and metal keeps
+ * agreeing - 2026-08-26 11:08, on the second join of a boot:
+ *
+ *     join: session-prot asserted the fw on the retry
+ *     join: fw asserted - only a reboot recovers
+ *
+ * Upstream simply does not send the second one. iwl_mvm_schedule_session_
+ * protection() opens with
+ *
+ *     if (te_data->running && time_after(te_data->end_jiffies,
+ *                                        TU_TO_EXP_TIME(min_duration))) {
+ *             IWL_DEBUG_TE(mvm, "We have enough time in the current TE");
+ *             return;
+ *     }
+ *
+ * - no command at all while the live protection still has time in it. We sent
+ * an unconditional FW_CTXT_ACTION_ADD on every attempt, so a retry always
+ * stacked a second request on a running first.
+ *
+ * The 900 TU duration is this driver's own (TU is 1024 us, so ~921 ms). The
+ * 300 ms margin below is OURS, not an upstream constant - upstream's callers
+ * pass a min_duration and ours has no equivalent - chosen so a fresh request
+ * goes out when there is not enough window left to finish an auth/assoc
+ * exchange in. Named as a guess rather than dressed up as a citation. */
+static unsigned long long g_sprot_until_ms;
+#define SPROT_TU_MS      921          /* 900 TU x 1024 us */
+#define SPROT_MIN_LEFT_MS 300         /* ours - see above */
+
 static void mvm_assoc_window(void)
 {
     if (fw_has_capa(54)) {
@@ -3232,6 +3265,15 @@ static void mvm_assoc_window(void)
          * fine, the LINK it implies simply did not exist because the join used the
          * legacy MAC_CONTEXT path. mld_link_cfg() now creates it. */
         struct { u32 id_color, action, conf_id, duration_tu, repetition_count, interval; } c;
+        unsigned long long now = uno_dbg_uptime_ms();
+        /* the live-protection guard - see g_sprot_until_ms above */
+        if (g_sprot_until_ms > now + SPROT_MIN_LEFT_MS) {
+            uno_dbg_net_trace("wifi: session-prot: %d ms still left on the live one - "
+                              "not asking again (upstream sends nothing here either)",
+                              (int)(g_sprot_until_ms - now));
+            return;
+        }
+        g_sprot_until_ms = now + SPROT_TU_MS;
         memset(&c,0,sizeof c);
         c.id_color = fw_has_mld_api() ? MLD_LINK_ID : MLD_MAC_ID;
         c.action = 1;                   /* FW_CTXT_ACTION_ADD */
@@ -5321,7 +5363,7 @@ static int radio_restart(void)
         w32(CSR_MSIX_FH_INT_CAUSES_AD, 0xFFFFFFFFu);
         w32(CSR_INT, 0xFFFFFFFFu);
     }
-    g_bound = 0; g_joined = 0; g_alive = 0; g_mvm_done = 0; g_ctx_built = 0;
+    g_bound = 0; g_joined = 0; g_alive = 0; g_mvm_done = 0; g_ctx_built = 0; g_sprot_until_ms = 0;
     g_keys_installed = 0; g_key_gtk_idx = -1; g_wpa_active = 0; g_data_qid = -1;
     g_mvm_arm = 1; g_no_join = 1;
     iwl_nic();
@@ -6530,7 +6572,7 @@ int iwl_join_ssid(const char *ssid, const char *psk)
         uno_dbg_net_trace("wifi: join: re-pointing the live contexts did not join - "
                           "falling back to the firmware reload");
         if (g_bar && g_fw_loaded) device_stop();
-        g_bound = 0; g_alive = 0; g_mvm_done = 0; g_ctx_built = 0;
+        g_bound = 0; g_alive = 0; g_mvm_done = 0; g_ctx_built = 0; g_sprot_until_ms = 0;
         g_joined = 0; g_keys_installed = 0; g_key_gtk_idx = -1; g_wpa_active = 0;
         g_data_qid = -1; g_dq_head = g_dq_tail = 0;
         if (radio_up() < 0) { st_set("WiFi: join failed"); return -1; }
@@ -7042,7 +7084,7 @@ int iwl_dbg_cmd(const char *line, char *out, int cap)
             device_stop();
         }
         g_bound = 0; g_joined = 0; g_alive = 0; g_mvm_done = 0;   /* force a full retry */
-        g_keys_installed = 0; g_key_gtk_idx = -1; g_wpa_active = 0; g_data_qid = -1; g_ctx_built = 0;
+        g_keys_installed = 0; g_key_gtk_idx = -1; g_wpa_active = 0; g_data_qid = -1; g_ctx_built = 0; g_sprot_until_ms = 0;
         iwl_nic();
         iwl_status_str(out, cap);
         return (int)strlen(out);
