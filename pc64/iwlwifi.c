@@ -5374,8 +5374,30 @@ static int join_retry(void)
     uno_dbg_net_trace("wifi: join: retry assoc -> %d (>=0 AID)", r);
     if (r < 0) return -1;
     assoc_mark_associated(r);
-    post_assoc_link_tune();     /* the retry path associates too, and the join
-                                 * that actually reaches DHCP is usually this one */
+    /* NO LINK TUNE ON A RE-POINTED LINK. IT ASSERTS THE FIRMWARE.
+     *
+     * Metal, 2026-08-26 10:50, on the first rejoin that ever got this far -
+     * contexts re-pointed rather than reloaded, station rebuilt, `retry assoc
+     * -> 1` with an AID granted:
+     *
+     *     post-assoc link tune ASSERTED the fw (csr2808 0 -> 02000000 sw_err=1)
+     *     join: retry 4-way did NOT complete after 4000 ms (keys=0)
+     *
+     * `0 -> 02000000` is the whole point of reading csr2808 before AND after:
+     * this time the tune really did it, and the earlier version of this test -
+     * which read only afterwards - would have said the same thing on a run
+     * where it was innocent. It convicted itself honestly.
+     *
+     * Kept on the fresh-link path, where it has been ACCEPTED on every metal
+     * run, because that is the only place it has ever been safe and the grp
+     * numbers this branch measured were all taken with it in. Dropping it
+     * everywhere would change a reading nobody has re-taken without it.
+     *
+     * And it is no longer load-bearing: it was added for `grp=0`, which is
+     * CLOSED - NimmuNet is the guest SSID with client isolation on, and
+     * ACCEPT_GRP delivers group traffic perfectly well on a network that
+     * forwards it. So this costs a firmware on the one path that needs to
+     * survive, and buys nothing that is still an open question. */
     { int ms = rx_pump_ms(4000, 1);
       uno_dbg_net_trace("wifi: join: retry 4-way %s after %d ms (keys=%d)",
                         g_joined ? "COMPLETE" : "did NOT complete", ms, g_keys_installed); }
