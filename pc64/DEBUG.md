@@ -170,6 +170,40 @@ finding F1, which armed `allow-force` on every "safe" stick):
   `spec` run - an unattended batch stick must not sit at a prompt. Each prompt
   is bounded (~25 s) and records SKIP on a timeout, so it can never hang.
 
+### `wifi-demo` - draw the Wi-Fi pane on a machine that has no Wi-Fi
+
+`DEBUG.CFG` key **`wifi-demo`**. The Control Panel's Wi-Fi pane only exists when
+`iwl_present()`, so on QEMU - where every gate, every screenshot and the layout
+audit above all run - it has never been drawn at all, and the only way to review
+a change to it was to carry a stick to a laptop. This forces the pane on, seeds
+five example networks (one open, one WPA3, varying signal), pretends to be
+connected to the first, and opens the Control Panel on the Network tab.
+
+It is debug-only, opt-in, and the pane says on screen that the networks are not
+real. A machine that HAS a card ignores the seeding: it scans.
+
+```
+UNO_DEBUG=1 ./build.sh
+python3 tools/wifiui_shot.py out.ppm            # the pane
+python3 tools/wifiui_shot.py out.ppm details    # with the addresses open
+python3 tools/wifiui_shot.py out.ppm tip        # the tray chip's tooltip
+```
+
+### `fwreload` - make a rejoin reload the firmware instead of re-pointing
+
+`DEBUG.CFG` key **`fwreload`**. A rejoin re-points the live firmware contexts
+rather than loading the image again, which is the fix for the second-load UMAC
+assert being unreachable in normal use. That is the right behaviour and it makes
+the reload path untestable: the only way to reach it was to arrange for a
+re-point to FAIL, which puts the reload downstream of a failure. This takes the
+reload on every rejoin, so the second load of a boot can be measured on its own.
+The boot join is unaffected - it has no contexts to re-point.
+
+The other no-rebuild Wi-Fi levers, in the same file: **`bssid=`** pins the join
+to one BSS (only when that BSS carries the SSID being joined), **`akm=psk`** /
+**`akm=sae`** pin the AKM with no fallback, and **`rxpromisc`** asks the
+firmware for promiscuous receive.
+
 ### The four test suites (the flasher's Developer options)
 
 The flasher's **Developer options** dialog groups the DEBUG.CFG keys into the
