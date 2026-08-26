@@ -109,6 +109,19 @@ index it reset from, so the next Surface run says outright whether a second load
 inherited one - **that trace line is what a metal run has to confirm**, together
 with a rejoin whose reload no longer asserts.
 
+**How to run it.** `fwreload` in DEBUG.CFG makes every rejoin take the reload
+path rather than re-pointing, because re-pointing is precisely what exists to
+avoid a second load - without the lever the experiment can only be reached by
+first arranging for a re-point to fail, which puts the reload downstream of a
+failure. Boot (the boot join has no contexts to re-point, so it is unaffected),
+then Join anything from the Network panel. The three lines that decide it:
+
+```
+join: DEBUG.CFG fwreload - reloading the firmware rather than re-pointing
+cmd ring reset: host index was N, a fresh fw's is 0      <- N must be NON-ZERO
+MVM init: INIT_COMPLETE arrived                          <- and no fwerr dump
+```
+
 The receive side has wiped itself per bring-up ever since a second bring-up read
 the FIRST one's ALIVE out of RB 0. This was the same bug in the other ring: the
 instance was fixed and the class was never swept for. Third time in this lane,
