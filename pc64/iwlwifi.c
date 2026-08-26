@@ -392,6 +392,59 @@ static void fwc_add(const char *name)
  * the session. Empty until one does. */
 static char g_fw_known_good[FW_NAME_MAX];
 
+/* ...AND ACROSS BOOTS, BECAUSE A DEAD CANDIDATE COSTS FIVE SECONDS OF EVERY ONE.
+ *
+ * The decode picks the ORDER and the hardware picks the answer, which is the
+ * right design and has one cost: when the decode is wrong for a machine, every
+ * boot re-learns it the expensive way. A candidate that will not ALIVE takes a
+ * 2 s wait plus the 2 s timeout autopsy before the next one is tried. Metal,
+ * SURFGO 2026-08-26: `mac_type=33 step=0` orders IWLAX20B first, this card
+ * wants IWLAX20C, and the boot spent 14:08:12 -> 14:08:17 finding that out -
+ * again - having found it out on every previous boot too.
+ *
+ * So write the answer down beside the remembered networks. It is a hint, not a
+ * decision: the file only PROMOTES an image the decode already listed, so a
+ * stale one (a stick moved to another laptop) costs one wrong first try and
+ * then the normal walk, exactly as today. `fw=` in DEBUG.CFG still overrides
+ * both, and still means forced-with-no-fallback. */
+#define FWGOOD_FILE "WIFIFW.CFG"
+static void fwgood_load(void)
+{
+    static int done;
+    u8 b[80];
+    long n;
+    int v, i, j;
+    if (done || g_fw_known_good[0]) return;
+    done = 1;
+    v = uno_fs_pref_vol();
+    if (v < 0) return;
+    n = uno_fs_read(v, FWGOOD_FILE, b, (long)sizeof b - 1);
+    if (n <= 0) return;
+    b[n] = 0;
+    for (i = 0; i < n && b[i] != '\r' && b[i] != '\n'; i++) ;
+    b[i] = 0;
+    if (i <= 0 || i + 9 + 1 > FW_NAME_MAX) return;
+    strcpy(g_fw_known_good, "FIRMWARE\\");
+    for (j = 0; j < i; j++) g_fw_known_good[9 + j] = (char)b[j];
+    g_fw_known_good[9 + i] = 0;
+    uno_dbg_net_trace("wifi: %s says %s worked here last time - trying it first",
+                      FWGOOD_FILE, g_fw_known_good);
+}
+static void fwgood_save(const char *file)
+{
+    u8 b[80];
+    int v = uno_fs_pref_vol(), i = 0;
+    const char *base = file;
+    if (v < 0 || !file || !file[0]) return;
+    while (*base) base++;                       /* the 8.3 name, without FIRMWARE\ */
+    while (base > file && base[-1] != '\\') base--;
+    while (base[i] && i < (int)sizeof b - 3) { b[i] = (u8)base[i]; i++; }
+    b[i++] = '\r'; b[i++] = '\n';
+    if (!uno_fs_write(v, FWGOOD_FILE, b, i))
+        uno_dbg_net_trace("wifi: could not write %s on vol %d - the next boot will "
+                          "walk the candidate list again", FWGOOD_FILE, v);
+}
+
 /* Move the known-good image to the front of the candidate list.
  *
  * Without this, EVERY bring-up restarts at candidate 1 and re-runs an image
@@ -571,6 +624,7 @@ static void choose_firmware(void)
         fwc_add("FIRMWARE\\IWLBE211.UCO");
         strcpy(g_pnvmfile, "FIRMWARE\\IWLBE211.PNV"); break;
     }
+    fwgood_load();                     /* what worked here on a PREVIOUS boot */
     fwc_promote_known_good();          /* start with what already worked here */
     if (g_fwcand_n) strcpy(g_fwfile, g_fwcand[0]);
 }
@@ -4354,6 +4408,10 @@ static struct scan_ap { u8 bssid[6]; u8 chan; u8 ssid_len; char ssid[33]; int se
                          * and read back as a bad password. */
                         wpa_ap_sec_t sec; } g_scan_aps[SCAN_AP_MAX];
 static int g_scan_ap_n;
+/* When that table was filled. A UI scan is five seconds and the join used to
+ * spend five more repeating it, with the answer already on screen. */
+static unsigned long long g_scan_ms;
+#define SCAN_FRESH_MS 30000      /* how long a scan still describes the room */
 /* Which band scan_pick() may choose from: 0 = 2.4 GHz only (the proven path -
  * mvm_phy_ctxt has only ever been driven on band 2.4 / LMAC 0), 1 = 5 GHz only,
  * 2 = either. `iwl band <24|5|any>` flips it live. */
@@ -4636,6 +4694,7 @@ static int mvm_scan_passive(int dwell_ms)
                       rx_closed() & (RXQ_N-1), g_rx_read, g_scan_rb_total);
     uno_dbg_net_trace("wifi: scan: complete=%s mpdu_seen=%d beacon_calls=%d aps=%d",
                       comp ? "yes" : "no(timeout)", g_scan_mpdu_seen, g_scan_beacon_calls, g_scan_ap_n);
+    g_scan_ms = uno_dbg_uptime_ms();
     return g_scan_ap_n;
 }
 
@@ -5570,8 +5629,30 @@ static int find_and_join(void)
      * asked to prefer it. Nothing here needs the radio; it reads config files
      * off mounted volumes. */
     read_bssid_override();
-    mvm_scan_cfg();
-    mvm_scan_passive(5000);
+    /* DO NOT RE-SCAN WHAT IS ALREADY ON THE SCREEN.
+     *
+     * Every join opened with its own five-second dwell, including the join the
+     * user starts by clicking a network in a list that a scan filled seconds
+     * earlier. That dwell is half of the "it freezes when I press Join" this
+     * has always had: the driver blocks its caller throughout, so those five
+     * seconds are five seconds of dead desktop, spent re-learning something
+     * nobody had had time to change.
+     *
+     * Freshness is CONSUMED, not merely tested: the table is aged out here, so
+     * a retry - or the reload fallback in iwl_join_ssid() - scans properly
+     * rather than looping on a candidate list that did not work. And the skip
+     * only applies when this SSID is actually in the table; a join to anything
+     * else scans as before. */
+    if (g_scan_ap_n > 0 && g_scan_ms &&
+        uno_dbg_uptime_ms() - g_scan_ms < SCAN_FRESH_MS && join_pick_nth(0) >= 0) {
+        uno_dbg_net_trace("wifi: join: the scan from %d ms ago already has \"%s\" in "
+                          "its %d BSS - joining on that instead of dwelling again",
+                          (int)(uno_dbg_uptime_ms() - g_scan_ms), g_cfg_ssid, g_scan_ap_n);
+        g_scan_ms = 0;                    /* one join only; a retry re-scans */
+    } else {
+        mvm_scan_cfg();
+        mvm_scan_passive(5000);
+    }
     /* Say whether the pin is IN EFFECT, not merely that one was asked for.
      * This line used to announce the pin before anything had checked that the
      * scan could honour it, and join_pick_nth() then fell back to
@@ -6386,6 +6467,7 @@ uno_nic_t *iwl_nic(void)
                     strcpy(g_fw_known_good, g_fwfile);
                     uno_dbg_net_trace("wifi: %s is the working image on this card - "
                                       "later bring-ups will try it first", g_fwfile);
+                    fwgood_save(g_fwfile);     /* and the next boot, too */
                 }
                 break;
             }
@@ -6529,6 +6611,8 @@ int iwl_scan_results(iwl_ap_t *out, int max)
                 memcpy(out[j].bssid, g_scan_aps[i].bssid, 6);
                 out[j].chan = g_scan_aps[i].chan;
                 out[j].rssi = g_scan_aps[i].rssi;
+                out[j].secured = (unsigned char)(g_scan_aps[i].sec.akm != 0);
+                out[j].wpa3    = (unsigned char)((g_scan_aps[i].sec.akm & WPA_AKM_SAE) != 0);
             }
             continue;
         }
@@ -6537,6 +6621,13 @@ int iwl_scan_results(iwl_ap_t *out, int max)
         memcpy(out[n].bssid, g_scan_aps[i].bssid, 6);
         out[n].chan = g_scan_aps[i].chan;
         out[n].rssi = g_scan_aps[i].rssi;
+        /* The beacon already said whether this network is locked and which
+         * generation it speaks - the scan has parsed the RSN element into
+         * `sec` since the join needed it. A list that shows neither makes the
+         * user find out by typing a password at an open network, or by not
+         * typing one at a locked one. */
+        out[n].secured = (unsigned char)(g_scan_aps[i].sec.akm != 0);
+        out[n].wpa3    = (unsigned char)((g_scan_aps[i].sec.akm & WPA_AKM_SAE) != 0);
         n++;
     }
     for (i = 0; i < n; i++)                                /* strongest first */
@@ -6607,6 +6698,7 @@ int iwl_scan_step(int slice_ms)
     uno_dbg_net_trace("wifi: scan: complete=%s mpdu_seen=%d beacon_calls=%d aps=%d (stepped)",
                       comp ? "yes" : "no(timeout)", g_scan_mpdu_seen,
                       g_scan_beacon_calls, g_scan_ap_n);
+    g_scan_ms = uno_dbg_uptime_ms();
     return 1;
 }
 
@@ -7640,6 +7732,64 @@ static void ss_mac(char *b, int cap, int *i, const u8 *m)
  * where a bring-up FAILURE (or the pre-MVM gate) is recorded, and returning it
  * unconditionally is why a fully joined card still reported "MVM bring-up
  * gated; 'iwl mvm' to continue" on metal (round 24). */
+/* THE SAME FACTS, FOR SOMEBODY WHO IS NOT DEBUGGING THE DRIVER.
+ *
+ * iwl_status_str() names the BSSID, the channel, the AID, the key state and the
+ * frame counters. That is the right answer for NETLOG and it is what the
+ * Control Panel put in front of users, who do not have an AID. This is what a
+ * settings panel and a tray tooltip actually need. */
+void iwl_link_info(iwl_link_t *out)
+{
+    int r;
+    if (!out) return;
+    memset(out, 0, sizeof *out);
+    out->lost_reason = -1;
+    if (!iwl_present())  { out->state = IWL_LINK_NOCARD; return; }
+    if (!g_alive)        { out->state = IWL_LINK_OFF;    return; }
+    out->state = IWL_LINK_IDLE;
+    if (g_joined || g_wpa_active) {
+        const char *s = g_ssid_str[0] ? g_ssid_str : g_cfg_ssid;
+        strncpy(out->ssid, s, sizeof out->ssid - 1);
+        memcpy(out->bssid, g_bssid, 6);
+        out->chan = g_join_chan;
+        out->rssi = (signed char)g_last_rssi;
+        out->wpa3 = (unsigned char)(g_join_akm == WPA_AKM_SAE);
+        out->state = g_joined && g_keys_installed ? IWL_LINK_ON :
+                     g_joined                     ? IWL_LINK_NOKEY : IWL_LINK_JOINING;
+    } else if (g_link_lost_reason >= 0) {
+        out->lost_reason = g_link_lost_reason;
+    }
+    /* Four bars, from the thresholds every desktop uses: -50 is next to the
+     * router, -70 is the edge of usable. An unmeasured RSSI reads as no bars
+     * rather than as full ones - the weakest reading, which is the same
+     * convention the join's own eviction uses. */
+    r = out->rssi;
+    out->bars = !r      ? 0 : r >= -50 ? 4 : r >= -60 ? 3 : r >= -70 ? 2 : 1;
+}
+
+/* Leave the network, keep the radio. There was no way to do this at all: a
+ * machine that had joined stayed joined until it was rebooted or until a
+ * different network was picked, which meant "get me off this network" was not
+ * a thing the OS could be asked. The contexts survive, so a rejoin is the
+ * re-point path rather than a firmware reload. */
+int iwl_disconnect(void)
+{
+    if (!g_joined && !g_wpa_active) return -1;
+    uno_dbg_net_trace("wifi: disconnect: leaving \"%s\" at the user's request",
+                      g_ssid_str[0] ? g_ssid_str : g_cfg_ssid);
+    if (g_keys_installed && fw_has_mld_api()) {
+        mld_sec_key_remove(0, 0);                      /* pairwise */
+        if (g_key_gtk_idx >= 0) mld_sec_key_remove(g_key_gtk_idx, 1);
+    }
+    g_keys_installed = 0; g_key_gtk_idx = -1;
+    leave_bss();                       /* MAC_CONFIG assoc=0, link inactive */
+    g_ssid_str[0] = 0;
+    g_link_lost_reason = -1;           /* we left; nobody threw us off */
+    g_dq_head = g_dq_tail = 0;         /* the old link's frames are not ours now */
+    st_set("WiFi: disconnected");
+    return 0;
+}
+
 void iwl_status_str(char *buf, int cap)
 {
     int i = 0;
