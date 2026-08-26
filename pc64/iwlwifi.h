@@ -43,7 +43,39 @@ typedef struct {
     unsigned char bssid[6];
     unsigned char chan;
     signed char   rssi;
+    unsigned char secured;   /* 1 = needs a passphrase (WPA2-PSK or WPA3-SAE)   */
+    unsigned char wpa3;      /* 1 = the AP offers SAE                            */
 } iwl_ap_t;
+
+/* ---- link state, for a UI rather than for a log ---------------------------
+ * iwl_status_str() is a diagnostic: it names the BSSID, the channel, the AID,
+ * the key state and the frame counters, which is the right answer for NETLOG
+ * and the wrong one for a settings panel. This is the same facts a person
+ * asks for - am I on, what am I on, how good is it. */
+enum {
+    IWL_LINK_NOCARD = 0,     /* no supported card on the bus                    */
+    IWL_LINK_OFF,            /* card present, radio not brought up yet          */
+    IWL_LINK_IDLE,           /* radio up, not on a network                      */
+    IWL_LINK_JOINING,        /* a join is in flight                             */
+    IWL_LINK_NOKEY,          /* associated, the 4-way has not finished          */
+    IWL_LINK_ON              /* joined, keys installed                          */
+};
+typedef struct {
+    int           state;           /* IWL_LINK_*                               */
+    char          ssid[33];        /* the network, when there is one           */
+    unsigned char bssid[6];
+    unsigned char chan;
+    signed char   rssi;            /* dBm, 0 = not measured                    */
+    unsigned char bars;            /* 0-4, derived from rssi for an indicator  */
+    unsigned char wpa3;            /* the AKM actually in use is SAE           */
+    int           lost_reason;     /* last deauth reason, -1 = none            */
+} iwl_link_t;
+void iwl_link_info(iwl_link_t *out);
+
+/* Leave the current network without taking the radio down, so the list stays
+ * scannable and a rejoin costs no firmware reload. 0 = disconnected, <0 = there
+ * was nothing to disconnect from. */
+int iwl_disconnect(void);
 
 /* Scan and fill up to `max` entries, strongest first, one row per SSID.
  * Brings the card up first if needed; does NOT join. Returns the count. */

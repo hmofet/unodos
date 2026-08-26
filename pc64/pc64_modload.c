@@ -168,7 +168,7 @@ static const struct { const char *name; void *addr; } kExports[] = {
     /* Intel WiFi + Realtek USB-ethernet status (Network app readout) */
     KX(iwl_present), KX(iwl_nic),    KX(iwl_mac),   KX(iwl_status_str),
     /* scan + join for the Network app's "pick an SSID, type the password" UI */
-    KX(iwl_scan_aps), KX(iwl_join_ssid),
+    KX(iwl_scan_aps), KX(iwl_join_ssid), KX(iwl_link_info), KX(iwl_disconnect),
     KX(rtl8152_nic), KX(rtl8152_mac), KX(rtl8152_status),
     /* Realtek + Marvell PCIe WiFi status */
     KX(rtwifi_present),   KX(rtwifi_nic),   KX(rtwifi_mac),   KX(rtwifi_status_str),
