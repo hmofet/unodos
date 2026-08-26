@@ -11020,3 +11020,76 @@ than by the initialiser would keep it without the ambiguity.
 Not touched here: `net.*` is unonet's. The `iwl netres` / post-join diagnosis
 prints `dhcp=` beside `ip=` already, so nothing in this lane is currently
 misled.
+
+## 2026-08-26 - RESULT (NIC drivers / iwlwifi, branch `surfgo-grp`): the firmware names it - UMAC ADVANCED_SYSASSERT on NVM_ACCESS_COMPLETE, second load only
+
+The auto-dump paid for itself on its first run. Metal, 2026-08-26 09:59, on the
+second bring-up of a boot whose first join succeeded on the first attempt:
+
+```
+MVM init: INIT_COMPLETE arrived                      <- first bring-up
+...
+fw reset handshake ACKED after 2 ms (csr2808=00000004)
+MVM init: INIT_COMPLETE NEVER ARRIVED (500 ms)       <- second
+MVM init: the fw ASSERTED at "INIT_COMPLETE wait" (csr2808=02000000 sw_err=1)
+FWERR lmac_ptr=004affe0 umac_ptr=00880128
+LMAC valid=00000006 error_id=00000071 (NMI_INTERRUPT_UMAC_FATAL) pc=004c0a3c hcmd=0000001c
+UMAC valid=00000007 error_id=201010a3 (ADVANCED_SYSASSERT) frame=00042543 stack=c0886c44 cmd=00190c00
+UMAC blink2=804561ea ilink1=0105e000 data1=00000003 data2=00000001 data3=deadbeef
+```
+
+**The UMAC is what dies.** `NMI_INTERRUPT_UMAC_FATAL` on the LMAC side is the
+LMAC reporting that the UMAC died, not a second fault.
+
+**And `cmd_header` names the command.** `cmd=00190c00` is an
+`iwl_cmd_header`: `{ u8 cmd; u8 group_id; __le16 sequence; }`, so little-endian
+that is **cmd 0x00, group 0x0c, sequence 0x0019**. `GRP_REGNVM` is `0xc` in this
+driver's own header and cmd 0 is what `mvm_init_unified()` sends as
+`send_cmd(GRP_REGNVM, 0x0, ...)` - **NVM_ACCESS_COMPLETE**. Decoded from our own
+constant, not from a remembered Linux group table.
+
+So: the UMAC ADVANCED_SYSASSERTs processing NVM_ACCESS_COMPLETE, but only on the
+SECOND firmware load of a boot. INIT_COMPLETE_NOTIF never arrives because the
+firmware that owed it is dead.
+
+**This also explains the user-visible symptom exactly** - "after a failed join,
+even scanning for networks fails". Every scan afterwards reads
+`csr2808=02000000` and `the request produced NO response at all`. There is
+nothing wrong with scanning; it is talking to a dead firmware, and only a reboot
+clears it.
+
+**What has been ruled OUT, each by a run rather than an argument:**
+
+- Item 3's session-protection assert. The boot join succeeded on attempt 1 and
+  the first MVM init read `csr2808=00000000`; this needs no prior assert.
+- `NVM_GET_INFO` sent twice. Now sent once per boot as upstream does
+  (`/* Read the NVM only at driver load time */`), and the assert lands before
+  it is reached.
+- A firmware killed mid-flight. The reset handshake upstream does and we never
+  did is implemented and WORKS - `ACKED after 2 ms` at every stop - and the
+  assert survives it. Landed anyway: it was a real divergence.
+- The command sequence being wrong. `IWL_INIT_NVM` is enum position 1 in
+  `fw/api/alive.h`, so `init_flags = (1u<<1)` is right, and the order
+  INIT_EXTENDED_CFG -> NVM_ACCESS_COMPLETE -> wait INIT_COMPLETE matches
+  `iwl_run_unified_mvm_ucode()`.
+- The command path being broken after the restart. The firmware's own
+  `cmd_header` proves it RECEIVED and processed NVM_ACCESS_COMPLETE.
+- A partial DRAM map. `place_fw_dram()` returns early WITHOUT printing if any
+  allocation fails, and `fw dram map: lmac=14 umac=15 paging=20 sections` prints
+  on the second load.
+- The APM stop. Upstream's `iwl_pcie_gen2_apm_stop()` on the normal path is
+  stop-master, sw-reset, clear INIT_DONE - which `device_stop()` already does.
+
+**What is left** is why a freshly loaded UMAC refuses NVM_ACCESS_COMPLETE when
+an earlier firmware ran on the same device this boot. Whatever it is survives
+STOP_MASTER, a SW reset, INIT_DONE being cleared and a clean fw reset handshake.
+`data1=3 data2=1` are the assert's own operands and are the next thread.
+
+**The strategic alternative, and it may be the better one.** Linux does not
+reload firmware to change networks - it tears the contexts down and builds new
+ones. `iwl_join_ssid()` reloads only because `g_ctx_built` says the previous
+join's PHY/LINK/STA contexts are live. Removing the second load from the rejoin
+path would make rejoin work whether or not this firmware bug is ever understood,
+and would take the whole second-load path out of normal operation. It overlaps
+`retarget_ap()` (item 3), which is the unclaimed lane for exactly that
+teardown/rebuild, so it is a sizing decision rather than a fix to slip in here.
