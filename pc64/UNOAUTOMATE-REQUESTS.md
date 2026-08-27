@@ -11236,3 +11236,41 @@ screenshotted under QEMU in three states (`tools/wifiui_shot.py`).
 
 **Not verified on metal.** What a Surface run has to show: a boot auto-join, a
 Join that leaves the desktop usable, Disconnect, and the chip naming SKYNET.
+
+## 2026-08-26 - RELEASING the iwlwifi + Wi-Fi UI claims (landed on master)
+
+Both claims above are released. Everything described in them is on `master`;
+`surfgo-fwreload` is gone with its worktree, per AGENTS.md section 3.
+
+**Proven on metal (SURFGO, 2026-08-26 14:08).** The second-load UMAC assert is
+closed: four forced reloads in one boot, inherited command-ring indices 24, 21,
+29 and 21, every one of them ALIVE / INIT_COMPLETE / 4-way / lease, and the word
+"assert" does not appear in the run's logs.
+
+**NOT proven on metal, and this is the list for whoever picks it up:**
+
+1. the **boot auto-join** (`g_mvm_arm` was never armed off the boot path, so
+   this OS has never auto-joined anything) - one boot with a remembered network
+   in range answers it: `join request for "<ssid>"` with nobody touching the UI
+2. the **`WIFIFW.CFG` firmware hint** - the second boot should skip the dead
+   candidate and reach ALIVE about five seconds sooner
+3. the **redesigned Network pane** end to end: Join without a frozen desktop,
+   Disconnect, the password row appearing only when it should, and the tray chip
+   naming the network
+4. the **join without a re-scan** - the driver now trusts a scan under 30 s old
+   that carries the SSID, which is half of the old Join freeze
+
+The stick is staged for exactly that run (`debug-local-20260826-1910`, DEBUG.CFG
+`nostress / noshutdown / bssid=e8:d3:eb:47:4e:c6 / akm=psk`, `CRASH\SURFGO` and
+`LOGS\` cleared) and sits in devbuntu as `/dev/sdb1`.
+
+**Still open, unclaimed, and untouched by this session:** item 1 (SAE's PMK -
+`wifi_wpa.*` / `wifi_sae.*`), item 4 (F14, the Surface Aggregator UART), the
+re-point scan that times out at `aps=0`, and the 4-way that fails after a
+successful re-point association. `docs/SURFGO-OPEN-ITEMS.md` is the entry point.
+
+**One residual freeze, named rather than fixed:** the association itself is
+still synchronous - about three or four seconds of blocked desktop on Join. The
+two inline DHCP loops and the redundant scan are gone; making the association
+non-blocking is a state-machine refactor of `find_and_join()`, which is a slice
+of its own and not one to slip in.
