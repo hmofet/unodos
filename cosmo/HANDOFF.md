@@ -172,6 +172,74 @@ held. All fifteen combinations are green, and the tree carries a decoy
 skip nodes, or that prefix-matches names, fails in the harness rather than on the
 device.
 
+## Measured on the device (2026-08-27, over SSH from Gemian)
+
+The device is reachable as `ssh cosmo` (`cosmo@192.168.2.56`, root key installed too;
+hostname `cosmocom`, vendor kernel 4.4.146 aarch64). That let the biggest first-light
+unknowns be answered **without flashing anything**.
+
+### LK does pass a framebuffer, and there are TWO answers that disagree
+
+`/proc/device-tree/chosen` carries **both** handoff forms:
+
+| property | fb_base | vramSize | lcmname |
+|---|---|---|---|
+| `atag,videolfb` (blob, native LE) | **0x7DF70000** | **0x1F90000** | `aeon_nt36672_fhd_dsi_vdo_x800_datong` |
+| `atag,videolfb-fb_base_l` (+`-vramSize`, BE) | 0x5E605000 | 0x17BB000 | `nt35595_fhd_dsi_cmd_truly_nt50358_drv` |
+
+**The blob is the right one**, on three independent grounds: its `vramSize` is exactly
+the `0x1F90000` the 1080×2160 arithmetic predicts; `base + vram = 0x7FF00000`, i.e. hard
+against `mblock_reserve_ext`'s `0x80000000` cap exactly as the reservation model says;
+and it names the panel this unit actually has. The split trio is **stale preloader
+data** naming a different panel entirely — mt6771 builds with
+`CFG_DTB_EARLY_LOADER_SUPPORT=yes`, so the preloader pre-populates the tree and LK
+later adds the blob without clearing the old properties. (The preloader also leaves
+`-fps`, `-islcmfound`, `-islcm_inited` and `-lcmname` behind, which is the tell: those
+are not written by `mt_disp_config_frame_buffer` at all.)
+
+**This corrected a real bug.** `fb_dtb_scan` originally preferred the split properties,
+following COSMO-BRINGUP.md. On this device that would have pointed the framebuffer at
+`0x5E605000` with a wrong size and drawn into nothing, and the symptom (a blank screen)
+looks identical to a dozen other faults. The blob now wins; the split trio is the
+fallback for an FPGA-style LK that emits no blob. `--fdt=both` in the harness models the
+device exactly, stale values and all, so this cannot regress.
+
+Also confirmed: the panel is the `x800_datong` variant, not the `x600_xinli` in the
+archived LK tree. Its LCM driver is not in that tree, but `vramSize 0x1F90000` only
+arises from a 1080×2160 panel, so `PANEL_W`/`PANEL_H`/`COSMO_PITCH` are unaffected.
+
+### The boot image recipe is confirmed against a known-good image
+
+`dd` of Gemian's own `p41` and dissecting it: gzip stream at `0x800`, DTB appended near
+the end (`totalsize` 147,482), `kernel_addr 0x40080000`, `tags_addr 0x54000000`,
+`page_size 2048`. Exactly the shape `mkbootimg.py` now emits, and exactly what the LK
+source predicted. (Gemian uses header v0, stock v23 and we use v1; LK accepts both.)
+
+Both stock and Gemian leave a 512-byte tail after the DTB. We leave none, deliberately:
+`kernel_sz` of exactly 522,240 puts LK's scan offset at 0, so its 512 KB window covers
+precisely our image and no leftover partition bytes can land in range.
+
+### Partition state
+
+`p42` is `EMPTY_NORMAL_BOOT_4`, 32 MiB at 5024 MiB, and is **still named that** — the
+`parted /dev/mmcblk0 name 42 UNODOS` step has not been done yet.
+
+### The keyboard cannot type half of ASCII
+
+Planet's `aw9523_key.c` has a single 56-entry `key_map[]`, and the only symbol keycodes
+in it are `KEY_APOSTROPHE`, `KEY_COMMA`, `KEY_DOT`. There is no `KEY_SLASH`,
+`KEY_MINUS`, `KEY_EQUAL`, `KEY_SEMICOLON`, `KEY_LEFTBRACE`, `KEY_RIGHTBRACE`,
+`KEY_BACKSLASH`, `KEY_GRAVE`, `KEY_YEN` or `KEY_RO` anywhere in the driver. `Fn` is
+reported to userspace as plain `KEY_FN` (`input_set_capability(..., EV_KEY, KEY_FN)`),
+so **the entire Fn layer printed on the chassis is a userspace concern** — Android does
+it in Planet's IME, and Gemian's XKB does it incompletely, which is why `/` and `-` are
+untypeable there today. No keyboard-layout change can fix it, because the scancode is
+never generated.
+
+**Phase 5 inherits this exactly.** Our own AW9523 driver will receive `Fn` as just
+another matrix position, so the port must implement its own Fn layer or UnoDOS will have
+no way to type a slash either.
+
 ## The next task — first hardware boot
 
 This needs the phone. Nothing else in the port is blocked on it.

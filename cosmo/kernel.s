@@ -708,9 +708,9 @@ fp_col:
 //     mt_disp_config_frame_buffer (platform/mt6771/mt_disp_drv.c:743). That #define
 //     comes only from DEVELOP_STAGE=FPGA (platform/mt6771/rules.mk:45).
 //
-// COSMO-BRINGUP.md documents the second form; the first is what a production LK
-// actually emits, so we accept BOTH and let the split properties win if a tree
-// somehow carries both. We scan the whole struct block linearly and ignore node
+// A real device carries BOTH, and they disagree -- the split trio is stale
+// preloader data naming a different panel. The blob is authoritative; see the
+// measured values at fb_scan_done. We scan the whole struct block linearly and ignore node
 // nesting — "atag,videolfb*" appears nowhere but /chosen, and a flat scan cannot
 // get lost in a tree we did not build.
 .equ FDT_MAGIC,      0xD00DFEED
@@ -833,20 +833,37 @@ fb_scan_p3:
     rev   w8, w8
     b     fb_scan_tok
 fb_scan_done:
-    // the split properties win when present; otherwise the production blob
-    cbz   w16, fb_scan_useblob
-    mov   x0, x7
+    // THE BLOB WINS. Both forms are present on the real device and they DISAGREE
+    // (measured over SSH from Gemian's /proc/device-tree/chosen, 2026-08-27):
+    //
+    //   atag,videolfb            fb_base 0x7DF70000  vram 0x1F90000
+    //                            lcmname aeon_nt36672_fhd_dsi_vdo_x800_datong
+    //   atag,videolfb-fb_base_l  fb_base 0x5E605000  vram 0x17BB000
+    //                            lcmname nt35595_fhd_dsi_cmd_truly_nt50358_drv
+    //
+    // The blob is LK's runtime answer and is the one the Linux mtkfb driver uses:
+    // its vramSize is exactly the 0x1F90000 the 1080x2160 panel arithmetic predicts,
+    // and base+vram = 0x7FF00000, i.e. hard against mblock_reserve_ext's 0x80000000
+    // cap. The split properties are stale PRELOADER values naming a different panel
+    // entirely (the preloader pre-populates the tree -- mt6771 builds with
+    // CFG_DTB_EARLY_LOADER_SUPPORT=yes -- and LK then adds the blob). An earlier
+    // revision of this code preferred the split properties, which on this device
+    // would have pointed the framebuffer at 0x5E605000 and drawn into nothing.
+    cbnz  x5, fb_scan_useblob
+    cbz   w16, fb_scan_none
+    mov   x0, x7                          // no blob: fall back to the split trio
     mov   w1, w8
     mov   w2, #FB_SRC_PROPS
     cbnz  x0, fb_scan_ret
+fb_scan_none:
+    mov   x0, xzr
+    mov   w1, wzr
+    mov   w2, wzr
+    b     fb_scan_ret
 fb_scan_useblob:
     mov   x0, x5
     mov   w1, w6
     mov   w2, #FB_SRC_BLOB
-    cbnz  x0, fb_scan_ret
-    mov   x0, xzr
-    mov   w1, wzr
-    mov   w2, wzr
 fb_scan_ret:
     ldp   x29, x30, [sp], #16
     ret

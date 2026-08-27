@@ -26,8 +26,9 @@ Usage: python cosmo/harness.py <unodos.bin> <out.png> [instr_millions] [options]
   --fdt=props   /chosen carries the big-endian "atag,videolfb-fb_base_h/_l/-vramSize"
                 triple instead — the MACH_FPGA_NO_DISPLAY shape documented in
                 COSMO-BRINGUP.md (mt_disp_config_frame_buffer).
-  --fdt=both    both forms, with the blob pointing somewhere else: proves the split
-                properties win.
+  --fdt=both    BOTH forms, as the real device actually presents them: the blob
+                carries LK's runtime answer and the split trio carries stale
+                PRELOADER values pointing somewhere else. Proves the blob wins.
   --fdt=empty   a valid tree with no videolfb at all: proves we fall back.
   --fdt=none    x0 points at plain DRAM, no FDT magic: the pre-seed-only path.
   --no-preseed  leave FBINFO zeroed, so only the device tree can supply a base.
@@ -60,7 +61,8 @@ FDT_AT  = 0x40350000                  # where this harness parks the device tree
 COSMO_FB    = 0x7E070000              # kernel.s's last-resort guess (0x80000000-vram)
 PANEL_FB    = 0x41000000              # stand-in FB used by the FBINFO pre-seed path
 DTB_FB      = 0x42000000              # stand-in FB advertised through the device tree
-DECOY_FB    = 0x43000000              # what --fdt=both puts in the losing blob
+STALE_FB    = 0x43000000              # what --fdt=both puts in the losing split trio
+STALE_VRAM  = 0x017BB000              # the stale vramSize the device's preloader leaves
 WDT_PAGE = 0x10007000                 # TOPRGU watchdog (payload writes the disable key)
 
 # FB_SRC_* in kernel.s — where fb_init says it got the base.
@@ -152,20 +154,24 @@ def build_fdt(mode):
     f.begin("chosen")
     f.prop("bootargs", b"console=ttyMT0,921600n1\0")
     if mode in ("blob", "both"):
-        f.prop("atag,videolfb",
-               videolfb_blob(DECOY_FB if mode == "both" else DTB_FB, VRAM_SIZE))
+        f.prop("atag,videolfb", videolfb_blob(DTB_FB, VRAM_SIZE))
     if mode in ("props", "both"):
+        # In "both" the split trio is the STALE PRELOADER copy, exactly as measured on
+        # the device: a different base, a different vramSize and a different panel
+        # name. Only "props" (an FPGA-style LK, no blob) makes it authoritative.
+        stale = mode == "both"
         f.prop_be32("atag,videolfb-fb_base_h", 0)
-        f.prop_be32("atag,videolfb-fb_base_l", DTB_FB)
-        f.prop_be32("atag,videolfb-vramSize", VRAM_SIZE)
+        f.prop_be32("atag,videolfb-fb_base_l", STALE_FB if stale else DTB_FB)
+        f.prop_be32("atag,videolfb-vramSize", STALE_VRAM if stale else VRAM_SIZE)
+        f.prop("atag,videolfb-lcmname", b"nt35595_fhd_dsi_cmd_truly_nt50358_drv\0")
     f.end()
     f.end()
     blob = f.build()
     if mode == "empty":
         return blob, None, None, 0
-    if mode == "blob":
-        return blob, 1, DTB_FB, VRAM_SIZE
-    return blob, 2, DTB_FB, VRAM_SIZE      # props, both
+    if mode in ("blob", "both"):
+        return blob, 1, DTB_FB, VRAM_SIZE  # the blob is authoritative
+    return blob, 2, DTB_FB, VRAM_SIZE      # props: no blob, so the trio is all we have
 
 
 def write_png(path, w, h, rgb):
