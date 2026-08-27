@@ -40,6 +40,51 @@
 .equ WDT_MODE,        0x10007000          // TOPRGU base + 0x00
 .equ WDT_MODE_KEYDIS, 0x22000000          // key + enable-bit-clear = disable
 
+// ---- 1-bit debug beacon (no UART on this device) ---------------------------
+// A blank screen on first boot cannot tell "the payload never ran / the watchdog
+// rebooted us" apart from "the payload ran and the framebuffer address is wrong".
+// Two channels answer that, both cheap:
+//
+//  a) bcn_mark — ALWAYS on. Stamps the stage number + BCN_MAGIC into FBINFO. Costs
+//     two stores. Read it back afterwards from Gemian with a /dev/mem peek at
+//     0x40320000+44 (DRAM contents in our own window survive a warm reboot often
+//     enough to be worth a look, and the harness asserts on it every run).
+//  b) fb_init also paints one white 32-px bar per stage at the TOP-LEFT of the RAW
+//     framebuffer base, before the UI is centred. If those bars appear but the UI
+//     does not, the base is right and the geometry/centring is wrong.
+//  c) BEACON build (--defsym BEACON=1): pulse the vibrator bcn_stage times through
+//     the PMIC. This is the only channel that works with the framebuffer address
+//     completely wrong, so it is the tie-breaker for first light. OFF by default
+//     because the register facts below are read from LK source and have never been
+//     executed on this device — an unverified PMIC write does not belong in the
+//     default image.
+//
+// PMIC wrapper (PWRAP) facts, all [LK-SRC] for mt6771:
+//   PWRAP_BASE 0x1000D000 (mt_reg_base.h); WACS2_CMD +0xC20, WACS2_RDATA +0xC24,
+//   WACS2_VLDCLR +0xC28 (reg_PMIC_WRAP.h). FSM = (RDATA >> 16) & 7, IDLE = 0
+//   (reg_PMIC_WRAP_mac.h GET_WACS2_FSM). A write is: spin until FSM == IDLE, then
+//   store (1 << 31) | ((addr >> 1) << 16) | data16 to WACS2_CMD
+//   (mt_pmic_wrap_init.c _pwrap_wacs2_nochk). LK has already run pwrap_init, so the
+//   wrapper is live when we inherit it.
+//   PMIC is the MT6358: LDO_VIBR_CON0 = 0x1D08, RG_LDO_VIBR_EN = bit 0 (upmu_hw.h).
+//   => enable  cmd = (1<<31) | ((0x1D08>>1)<<16) | 1 = 0x8E840001
+//      disable cmd =                                 0x8E840000
+// The idle spin is BOUNDED (PWRAP_SPIN tries) so a wedged wrapper can never hang the
+// payload — it just drops the pulse.
+.equ PWRAP_WACS2_CMD,   0x1000DC20
+.equ PWRAP_WACS2_RDATA, 0x1000DC24
+.equ PWRAP_SPIN,        0x40000           // bounded idle wait (~ms, then give up)
+.equ VIBR_ON_CMD,       0x8E840001        // MT6358 LDO_VIBR_CON0 <- 1
+.equ VIBR_OFF_CMD,      0x8E840000        // MT6358 LDO_VIBR_CON0 <- 0
+.equ BCN_MAGIC,         0x554E4F31        // "UNO1" beside bcn_stage
+.equ BCN_TICKS,         2600000           // ~200 ms at the ~13 MHz generic timer
+
+// Beacon stages, in the order they are reached.
+.equ BCN_ENTRY,   1                       // core 0 alive, watchdog disabled
+.equ BCN_FBFALL,  2                       // fb_init ran, NO framebuffer from the DTB
+.equ BCN_FBDTB,   3                       // fb_init ran, framebuffer came from the DTB
+.equ BCN_MAIN,    4                       // launcher drawn, main loop entered
+
 // No mailbox, no MMIO frame timer, no PWM/UART/USB on the MT6771 bring-up path:
 //  - the framebuffer is LK's, adopted at run time (fb_init), not negotiated;
 //  - frame pacing reads the ARM architectural generic timer (cntpct_el0, no MMIO);
@@ -124,17 +169,47 @@
 .equ fb_base,   FBINFO+0                  // 8 bytes (draw origin into LK's FB)
 .equ fb_pitch,  FBINFO+8                  // 4 bytes (bytes per row = LK panel pitch)
 .equ dtb_ptr,   FBINFO+16                 // 8 bytes: DTB pointer LK passed in x0
-// Adopt LK's live framebuffer. LK lights the NT36672 panel (rotated 270 -> landscape
-// PANEL_W x PANEL_H) and hands its base+size to the kernel via the DTB properties
-// atag,videolfb-fb_base_l / -vramSize. Our SCRW x SCRH (640x480) UI is centred in it.
-// fb_init reads the base from FBINFO (harness pre-seeds it; the DTB videolfb walk is
-// the Phase 2 task) and falls back to COSMO_FB. See research/COSMO-BRINGUP.md: the FB
-// base is NOT static (LK reserves it top-down under 0x80000000, g_fb_size 0x1F90000),
-// so COSMO_FB is only a last resort; the real value must come from the DTB at run time.
-.equ PANEL_W,   2160                      // LK landscape panel width
-.equ PANEL_H,   1080                      // LK landscape panel height
-.equ COSMO_FB,  0x7E070000                // fallback FB base (0x80000000 - g_fb_size)
-.equ COSMO_PITCH, (PANEL_W*4)             // 2160 * 4 = 8640 bytes/row
+.equ fb_vram,   FBINFO+24                 // 4 bytes: vramSize from the DTB (0 = unknown)
+.equ fb_raw,    FBINFO+32                 // 8 bytes: FB base BEFORE centring (debug)
+.equ fb_src,    FBINFO+40                 // 4 bytes: FB_SRC_* — where the base came from
+.equ bcn_stage, FBINFO+44                 // 4 bytes: last beacon stage reached
+.equ bcn_magic, FBINFO+48                 // 4 bytes: BCN_MAGIC once a stage is marked
+.equ fb_seed,   FBINFO+52                 // 4 bytes: FB_SEED_MAGIC = fb_base/fb_pitch
+                                          //          below were deliberately seeded
+// FBINFO is NOT cleared at boot, and on real hardware it is whatever DRAM happened to
+// hold. A pre-seeded fb_base is therefore only believable if something announced it:
+// the harness writes FB_SEED_MAGIC beside it, LK never would. Without the magic
+// fb_init ignores fb_base/fb_pitch entirely rather than jumping to a garbage address.
+.equ FB_SEED_MAGIC, 0x53454544            // "SEED"
+
+// Where fb_init got the framebuffer base (readable post-mortem at fb_src).
+.equ FB_SRC_FALLBACK, 0                   // nothing usable — COSMO_FB guess
+.equ FB_SRC_BLOB,     1                   // DTB /chosen "atag,videolfb" blob (hardware)
+.equ FB_SRC_PROPS,    2                   // DTB "atag,videolfb-fb_base_l" (FPGA-style LK)
+.equ FB_SRC_SEED,     3                   // FBINFO pre-seeded (harness plays LK)
+
+// Adopt LK's live framebuffer. LK lights the NT36672 panel and leaves a framebuffer
+// scanning out of DRAM; we draw into THAT buffer and never touch DISP/DSI.
+//
+// GEOMETRY [LK-SRC]: LK's buffer is the panel's NATIVE PORTRAIT orientation. The blit
+// it configures is src_pitch = ALIGN_TO(CFG_DISPLAY_WIDTH, MTK_FB_ALIGNMENT) * 4
+// (mt_disp_drv.c:489) with CFG_DISPLAY_WIDTH = DISP_GetScreenWidth() = the LCM's
+// params->width = 1080 (aeon_nt36672 FRAME_WIDTH 1080, FRAME_HEIGHT 2160). So the FB
+// is 1080 x 2160 with a 1088*4 = 4352-byte stride, NOT the 2160x1080 landscape the
+// Android kernel later presents (MTK_LCM_PHYSICAL_ROTATION=270 is a kernel-side
+// rotation, applied after LK). Cross-check: ALIGN(1080,32)*ALIGN(2160,32)*4*3 +
+// (1080*2160*2+4096), aligned to 64 KB, is exactly the 0x1F90000 vramSize LK reports.
+// => on the open clamshell our UI will appear rotated 90 degrees until a rotated blit
+//    lands; that is a first-photograph question, not a guess to bake in now.
+//
+// BASE: fb_init walks the DTB at dtb_ptr for it (fb_dtb_scan). LK allocates the base
+// dynamically (mblock_reserve_ext, top-down under 0x80000000), so COSMO_FB is a last
+// resort only — see research/COSMO-BRINGUP.md.
+.equ PANEL_W,   1080                      // LK framebuffer width  (panel native)
+.equ PANEL_H,   2160                      // LK framebuffer height (panel native)
+.equ COSMO_PITCH, 4352                    // ALIGN_TO(1080,32)*4 = 1088*4 [LK-SRC]
+.equ COSMO_VRAM,  0x1F90000               // DISP_GetVRamSize() — sanity check only
+.equ COSMO_FB,  0x7E070000                // fallback FB base (0x80000000 - vramSize)
 
 // Harmless DRAM sink for peripherals not yet ported to the MT6771. The app cores
 // (music, RNG seed) were written for the Pi's PWM tone path and 1 MHz system timer;
@@ -311,9 +386,15 @@ mclr:
     b.ne  mclr
     ldr   x0, =dtb_ptr                    // stash the DTB pointer for fb_init
     str   x19, [x0]
+    ldr   x0, =bcn_magic                  // FBINFO survives the clear; start clean so
+    str   wzr, [x0]                       // a stale mark cannot be read as this boot
+    mov   w0, #BCN_ENTRY
+    bl    bcn_mark                        // "core 0 is alive and the watchdog is off"
     bl    fb_init                         // adopt LK's live framebuffer
     bl    fs_init                         // load/format the USV1 disk
     bl    draw_launcher                   // show the desktop
+    mov   w0, #BCN_MAIN
+    bl    bcn_mark                        // "the launcher drew; we are in the loop"
 mainloop:
     bl    wait_vblank
     bl    render_partials
@@ -329,39 +410,114 @@ mainloop:
 // ============================================================================
 // framebuffer bring-up — ADOPT LK's live framebuffer (no display bring-up)
 // ============================================================================
-// LK lit the NT36672 panel (rotated 270 -> landscape PANEL_W x PANEL_H) and left a
-// framebuffer scanning out of DRAM. We draw into THAT buffer; we never program the
-// display engine. The panel FB base comes from FBINFO (the harness pre-seeds
-// fb_base/fb_pitch; on hardware the Phase 2 DTB videolfb walk of dtb_ptr fills them),
-// else COSMO_FB. Then centre our SCRW x SCRH UI: the draw origin becomes
-// fb_base + top*pitch + left*4, with fb_pitch kept at the panel stride. Leaf.
+// LK lit the NT36672 panel and left a PANEL_W x PANEL_H framebuffer scanning out of
+// DRAM. We draw into THAT buffer; we never program the display engine. Its base is
+// allocated at boot (mblock_reserve_ext) and handed to us in the device tree, so
+// fb_init WALKS THE DTB for it (fb_dtb_scan), in this order of preference:
 //
-// TODO (Phase 2): walk the FDT at dtb_ptr for the properties atag,videolfb-fb_base_l
-// and atag,videolfb-vramSize and use those instead of the COSMO_FB fallback — the FB
-// base is allocated dynamically by LK (mblock_reserve_ext), so it is NOT a fixed
-// address and must be read from the DTB on real hardware. See research/COSMO-BRINGUP.md.
+//   1. the DTB at dtb_ptr             -> FB_SRC_BLOB or FB_SRC_PROPS
+//   2. a pre-seeded FBINFO fb_base    -> FB_SRC_SEED     (the harness playing LK)
+//   3. COSMO_FB                       -> FB_SRC_FALLBACK (a guess; last resort)
+//
+// Then centre our SCRW x SCRH UI: the draw origin becomes
+// fb_base + top*pitch + left*4, with fb_pitch kept at the panel stride.
+// Calls fb_dtb_scan and bcn_mark, so it is not a leaf.
 fb_init:
+    stp   x20, x30, [sp, #-16]!           // x20 holds the beacon stage across bcn_mark
+    // Distrust FBINFO unless it was deliberately seeded (see FB_SEED_MAGIC above).
+    ldr   x0, =fb_seed
+    ldr   w1, [x0]
+    ldr   w2, =FB_SEED_MAGIC
+    cmp   w1, w2
+    b.eq  fb_seed_ok
     ldr   x0, =fb_base
-    ldr   x3, [x0]                        // panel FB base (0 if not pre-seeded)
-    cbnz  x3, fb_have_base
-    ldr   x3, =COSMO_FB                   // fallback (dynamic on HW — see above)
-fb_have_base:
+    str   xzr, [x0]
     ldr   x0, =fb_pitch
-    ldr   w4, [x0]                        // panel pitch (0 if not pre-seeded)
+    str   wzr, [x0]
+fb_seed_ok:
+    ldr   x0, =dtb_ptr
+    ldr   x0, [x0]
+    bl    fb_dtb_scan                     // x0 = FB base (0 = none), w1 = vramSize,
+                                          // w2 = FB_SRC_BLOB/_PROPS (0 if none)
+    mov   x3, x0
+    mov   w9, w1                          // vramSize (0 = unknown)
+    mov   w10, w2                         // FB_SRC_*
+    cbnz  x3, fb_have_base
+    // no DTB framebuffer: fall back to a pre-seeded FBINFO, then to the guess.
+    mov   w9, wzr
+    ldr   x0, =fb_base
+    ldr   x3, [x0]
+    mov   w10, #FB_SRC_SEED
+    cbnz  x3, fb_have_base
+    ldr   x3, =COSMO_FB
+    mov   w10, #FB_SRC_FALLBACK
+fb_have_base:
+    ldr   x0, =fb_src
+    str   w10, [x0]
+    ldr   x0, =fb_vram
+    str   w9, [x0]
+    ldr   x0, =fb_raw
+    str   x3, [x0]                        // pre-centring base, for post-mortem reads
+    // stage: did the framebuffer come from the device tree, or from a guess?
+    cmp   w10, #FB_SRC_FALLBACK
+    mov   w0, #BCN_FBDTB
+    mov   w1, #BCN_FBFALL
+    csel  w0, w1, w0, eq
+    mov   w20, w0                         // remember the stage for the bar beacon
+    bl    bcn_mark
+    // pitch: a pre-seeded FBINFO stride wins (the harness may model a different
+    // panel); otherwise the LK-derived COSMO_PITCH.
+    ldr   x0, =fb_pitch
+    ldr   w4, [x0]
     cbnz  w4, fb_have_pitch
     mov   w4, #COSMO_PITCH
 fb_have_pitch:
-    // clear the whole panel to black (wipes LK's boot logo), then centre our UI
-    mov   x7, x3                          // FB base
+    // Clear the panel to black (wipes LK's boot logo). Clamp the clear to vramSize
+    // when the DTB told us one: overrunning the framebuffer would land in whatever
+    // LK reserved above it (TEE, modem, AVB), and that is not ours to scribble on.
+    ldr   x0, =fb_raw
+    ldr   x7, [x0]
     mov   w8, #PANEL_H
-    umull x8, w8, w4                      // total bytes = PANEL_H * pitch
+    umull x8, w8, w4                      // PANEL_H * pitch
+    cbz   w9, fb_clrsize
+    mov   w0, w9
+    cmp   x0, x8
+    csel  x8, x0, x8, lo                  // clear min(panel bytes, vramSize)
+fb_clrsize:
     add   x8, x7, x8                      // end address
 fb_clrpanel:
     str   wzr, [x7], #4
     cmp   x7, x8
     b.lo  fb_clrpanel
     dsb   sy
+    // Bar beacon: w20 white 32x32 blocks along the top-left of the RAW framebuffer,
+    // outside the centred UI. Bars but no UI => the base is right, the geometry is
+    // not. No bars at all => we are painting into the wrong address entirely.
+    ldr   x0, =fb_raw
+    ldr   x7, [x0]
+    mov   w12, #32                        // rows
+    mov   w14, w20
+    lsl   w14, w14, #6                    // stage * 64 pixels (32 on, 32 off)
+fb_bar_row:
+    mov   x13, x7
+    mov   w15, wzr
+fb_bar_px:
+    cmp   w15, w14
+    b.hs  fb_bar_next
+    tst   w15, #32                        // second half of each 64-px block = gap
+    mov   w16, #-1                        // white
+    csel  w16, wzr, w16, ne
+    str   w16, [x13], #4
+    add   w15, w15, #1
+    b     fb_bar_px
+fb_bar_next:
+    add   x7, x7, x4                      // next row (x4 = pitch, zero-extended w4)
+    subs  w12, w12, #1
+    b.ne  fb_bar_row
+    dsb   sy
     // centre: top = (PANEL_H - SCRH)/2 rows, left = (PANEL_W - SCRW)/2 pixels
+    ldr   x0, =fb_raw
+    ldr   x3, [x0]
     mov   w5, #((PANEL_H-SCRH)/2)
     umull x6, w5, w4                      // top rows * pitch
     add   x3, x3, x6
@@ -371,7 +527,259 @@ fb_clrpanel:
     str   x3, [x0]                        // draw origin (centred in the panel)
     ldr   x0, =fb_pitch
     str   w4, [x0]                        // stride = panel pitch
+    ldp   x20, x30, [sp], #16
     ret
+
+// ----------------------------------------------------------------------------
+// fb_dtb_scan — find LK's framebuffer in the flattened device tree
+// ----------------------------------------------------------------------------
+// in : x0 = DTB pointer (LK passed it in x0 per the arm64 boot protocol)
+// out: x0 = framebuffer base (0 if the DTB has none), w1 = vramSize (0 = unknown),
+//      w2 = FB_SRC_BLOB / FB_SRC_PROPS (0 when x0 is 0)
+// Calls fdt_streq; clobbers x0-x17.
+//
+// LK writes the framebuffer handoff into /chosen, and WHICH property it uses depends
+// on how LK was built [LK-SRC, app/mt_boot/mt_boot.c:1122 vs :1139]:
+//
+//   * production (what the Cosmo runs): one packed blob property "atag,videolfb" —
+//       +0  u64 fb_addr_pa_k   +8  u32 islcmfound   +12 u32 fps
+//       +16 u32 vramSize       +20 char lcmname[]
+//     written by target_atag_videolfb (platform/mt6771/atags.c:413) with plain
+//     stores, so those fields are NATIVE little-endian, not FDT big-endian.
+//   * MACH_FPGA_NO_DISPLAY builds: three separate big-endian u32 properties
+//     "atag,videolfb-fb_base_h" / "-fb_base_l" / "-vramSize", written by
+//     mt_disp_config_frame_buffer (platform/mt6771/mt_disp_drv.c:743). That #define
+//     comes only from DEVELOP_STAGE=FPGA (platform/mt6771/rules.mk:45).
+//
+// COSMO-BRINGUP.md documents the second form; the first is what a production LK
+// actually emits, so we accept BOTH and let the split properties win if a tree
+// somehow carries both. We scan the whole struct block linearly and ignore node
+// nesting — "atag,videolfb*" appears nowhere but /chosen, and a flat scan cannot
+// get lost in a tree we did not build.
+.equ FDT_MAGIC,      0xD00DFEED
+.equ FDT_BEGIN_NODE, 1
+.equ FDT_END_NODE,   2
+.equ FDT_PROP,       3
+.equ FDT_NOP,        4
+.equ FDT_MAXTOK,     0x20000              // bounded walk; a corrupt DTB cannot spin
+fb_dtb_scan:
+    stp   x29, x30, [sp, #-16]!
+    mov   x17, x0                         // x17 = DTB
+    mov   x5, xzr                         // blob base
+    mov   w6, wzr                         // blob vramSize
+    mov   x7, xzr                         // split fb_base (h:l)
+    mov   w8, wzr                         // split vramSize
+    mov   w16, wzr                        // saw fb_base_l?
+    cbz   x17, fb_scan_done
+    tst   x17, #3                         // a DTB LK passed is at least 4-byte aligned
+    b.ne  fb_scan_done
+    ldr   w0, [x17]
+    rev   w0, w0
+    ldr   w1, =FDT_MAGIC
+    cmp   w0, w1
+    b.ne  fb_scan_done
+    ldr   w0, [x17, #8]
+    rev   w0, w0
+    add   x9, x17, x0                     // x9 = p = struct block
+    ldr   w0, [x17, #12]
+    rev   w0, w0
+    add   x10, x17, x0                    // x10 = strings block
+    ldr   w0, [x17, #36]
+    rev   w0, w0
+    add   x11, x9, x0                     // x11 = end of struct block
+    // size_dt_struct only exists from FDT v17. Clamp the end to the tree's own
+    // totalsize so a v16 (or corrupt) header cannot send the walk off into DRAM.
+    ldr   w0, [x17, #4]
+    rev   w0, w0
+    add   x0, x17, x0                     // dtb + totalsize
+    cmp   x11, x0
+    csel  x11, x0, x11, hi
+    cmp   x9, x11
+    b.hs  fb_scan_done                    // struct block starts past the end: bogus
+    ldr   w15, =FDT_MAXTOK                // token budget
+fb_scan_tok:
+    subs  w15, w15, #1
+    b.eq  fb_scan_done
+    cmp   x9, x11
+    b.hs  fb_scan_done
+    ldr   w0, [x9], #4
+    rev   w0, w0
+    cmp   w0, #FDT_PROP
+    b.eq  fb_scan_prop
+    cmp   w0, #FDT_BEGIN_NODE
+    b.eq  fb_scan_node
+    cmp   w0, #FDT_END_NODE
+    b.eq  fb_scan_tok
+    cmp   w0, #FDT_NOP
+    b.eq  fb_scan_tok
+    b     fb_scan_done                    // FDT_END, or a token we cannot trust
+fb_scan_node:
+    // skip the NUL-terminated node name, then re-align to 4
+    ldrb  w0, [x9], #1
+    cbnz  w0, fb_scan_node
+    add   x9, x9, #3
+    and   x9, x9, #0xFFFFFFFFFFFFFFFC
+    b     fb_scan_tok
+fb_scan_prop:
+    ldr   w12, [x9], #4
+    rev   w12, w12                        // property length
+    ldr   w0, [x9], #4
+    rev   w0, w0                          // name offset into the strings block
+    mov   x13, x9                         // x13 = property data
+    add   x9, x9, x12
+    add   x9, x9, #3
+    and   x9, x9, #0xFFFFFFFFFFFFFFFC     // next token, 4-byte aligned
+    add   x14, x10, x0                    // x14 = property name
+    // "atag,videolfb" (the production blob)
+    mov   x0, x14
+    adr   x1, fb_s_blob
+    bl    fdt_streq
+    cbz   w0, fb_scan_p1
+    cmp   w12, #20
+    b.lo  fb_scan_tok
+    ldr   w0, [x13]                       // native-endian u64 base, read as two words
+    ldr   w1, [x13, #4]
+    orr   x5, x0, x1, lsl #32
+    ldr   w6, [x13, #16]                  // native-endian vramSize
+    b     fb_scan_tok
+fb_scan_p1:
+    mov   x0, x14
+    adr   x1, fb_s_basel
+    bl    fdt_streq
+    cbz   w0, fb_scan_p2
+    cmp   w12, #4
+    b.ne  fb_scan_tok
+    ldr   w0, [x13]
+    rev   w0, w0                          // FDT properties ARE big-endian
+    bfxil x7, x0, #0, #32
+    mov   w16, #1
+    b     fb_scan_tok
+fb_scan_p2:
+    mov   x0, x14
+    adr   x1, fb_s_baseh
+    bl    fdt_streq
+    cbz   w0, fb_scan_p3
+    cmp   w12, #4
+    b.ne  fb_scan_tok
+    ldr   w0, [x13]
+    rev   w0, w0
+    bfi   x7, x0, #32, #32
+    b     fb_scan_tok
+fb_scan_p3:
+    mov   x0, x14
+    adr   x1, fb_s_vram
+    bl    fdt_streq
+    cbz   w0, fb_scan_tok
+    cmp   w12, #4
+    b.ne  fb_scan_tok
+    ldr   w8, [x13]
+    rev   w8, w8
+    b     fb_scan_tok
+fb_scan_done:
+    // the split properties win when present; otherwise the production blob
+    cbz   w16, fb_scan_useblob
+    mov   x0, x7
+    mov   w1, w8
+    mov   w2, #FB_SRC_PROPS
+    cbnz  x0, fb_scan_ret
+fb_scan_useblob:
+    mov   x0, x5
+    mov   w1, w6
+    mov   w2, #FB_SRC_BLOB
+    cbnz  x0, fb_scan_ret
+    mov   x0, xzr
+    mov   w1, wzr
+    mov   w2, wzr
+fb_scan_ret:
+    ldp   x29, x30, [sp], #16
+    ret
+
+// fdt_streq: NUL-terminated string compare. x0, x1 = strings; w0 = 1 if equal.
+// Compares through the terminator, so "atag,videolfb" does NOT match the longer
+// "atag,videolfb-fb_base_l". Clobbers x0-x4. Leaf.
+fdt_streq:
+    mov   x2, x0
+    mov   x3, x1
+fdt_streq_l:
+    ldrb  w0, [x2], #1
+    ldrb  w4, [x3], #1
+    cmp   w0, w4
+    b.ne  fdt_streq_no
+    cbnz  w0, fdt_streq_l
+    mov   w0, #1
+    ret
+fdt_streq_no:
+    mov   w0, wzr
+    ret
+
+fb_s_blob:  .asciz "atag,videolfb"
+fb_s_basel: .asciz "atag,videolfb-fb_base_l"
+fb_s_baseh: .asciz "atag,videolfb-fb_base_h"
+fb_s_vram:  .asciz "atag,videolfb-vramSize"
+    .align 2
+
+// ----------------------------------------------------------------------------
+// the 1-bit debug beacon (see the constants block for why this exists)
+// ----------------------------------------------------------------------------
+// bcn_mark: record stage w0 at bcn_stage (+ BCN_MAGIC, so a post-mortem /dev/mem
+// peek can tell a real mark from uninitialised DRAM). Under a BEACON build it then
+// pulses the vibrator w0 times. Clobbers x0-x2 (and x21 under BEACON).
+bcn_mark:
+    stp   x21, x30, [sp, #-16]!           // x21 = pulses left (BEACON builds)
+    ldr   x1, =bcn_stage
+    str   w0, [x1]
+    ldr   x1, =bcn_magic
+    ldr   w2, =BCN_MAGIC
+    str   w2, [x1]
+    dsb   sy
+.ifdef BEACON
+    mov   w21, w0
+bcn_pulse:
+    cbz   w21, bcn_done
+    ldr   w0, =VIBR_ON_CMD
+    bl    pmic_write
+    bl    bcn_delay
+    ldr   w0, =VIBR_OFF_CMD
+    bl    pmic_write
+    bl    bcn_delay
+    sub   w21, w21, #1
+    b     bcn_pulse
+bcn_done:
+.endif
+    ldp   x21, x30, [sp], #16
+    ret
+
+.ifdef BEACON
+// pmic_write: issue one PWRAP WACS2 write (w0 = the pre-built command word). Waits
+// for the wrapper FSM to reach IDLE, but only for PWRAP_SPIN tries — LK left the
+// wrapper running, and if it is wedged we drop the pulse rather than hang the boot.
+// Clobbers x1-x4. Leaf.
+pmic_write:
+    ldr   x1, =PWRAP_WACS2_RDATA
+    ldr   w4, =PWRAP_SPIN
+pmic_wait:
+    subs  w4, w4, #1
+    b.eq  pmic_give_up
+    ldr   w2, [x1]
+    ubfx  w2, w2, #16, #3                 // GET_WACS2_FSM
+    cbnz  w2, pmic_wait                   // 0 = WACS_FSM_IDLE
+    ldr   x1, =PWRAP_WACS2_CMD
+    str   w0, [x1]
+    dsb   sy
+pmic_give_up:
+    ret
+
+// bcn_delay: ~BCN_TICKS of the generic timer (~200 ms). Clobbers x1-x2. Leaf.
+bcn_delay:
+    mrs   x1, cntpct_el0
+    ldr   x2, =BCN_TICKS
+    add   x2, x1, x2
+bcn_delay_l:
+    mrs   x1, cntpct_el0
+    cmp   x1, x2
+    b.lo  bcn_delay_l
+    ret
+.endif
 
 // wait_vblank: pace one frame off the ARM architectural generic timer (~60 Hz).
 // cntpct_el0 is a no-MMIO monotonic counter (MT6771 ~13 MHz); the Unicorn harness

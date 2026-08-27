@@ -35,6 +35,14 @@ case "$1" in
   fs)      DEFS="--defsym AUTOTEST=1 --defsym AT_FS=1";      OUT=build/unodos_fs.bin ;;
 esac
 
+# BEACON=1 ./build.sh  -> blink the stage count on the vibrator through the PMIC.
+# Off by default: the PWRAP/MT6358 register facts are read from LK source and have
+# never been executed on this device (see the beacon comment in kernel.s).
+if [ -n "$BEACON" ]; then
+  DEFS="$DEFS --defsym BEACON=1"
+  echo "    (BEACON build: vibrator stage pulses enabled)"
+fi
+
 echo "[2/4] cross-assembling (AArch64) on quill..."
 # stage this worktree's cosmo/ + generated contract onto quill, build there.
 ssh "$QUILL" "mkdir -p $QDIR/cosmo/build $QDIR/unodef/gen/cosmo"
