@@ -19,8 +19,9 @@ Planet's LK loads this payload (wrapped in an Android `boot.img`) from multiboot
 4. **adopts LK's live framebuffer** rather than bringing up the display — LK already
    lit the NT36672 panel and left it scanning a surface out of DRAM. `fb_init` finds
    that surface by **walking the DTB in `x0`** for LK's `videolfb` handoff in
-   `/chosen` (its base is allocated at boot, so it is not a fixed address), then
-   centres our 640×480 UI in it.
+   `/chosen` (its base is allocated at boot, so it is not a fixed address);
+5. points every drawing primitive at an upright 640×480 **shadow surface**, and
+   `fb_present` rotates that onto the panel once per frame, centred.
 
 There is no display bring-up, no DSI, no CCU programming — the whole PinePhone panel
 wall is bypassed because LK always runs before us. Frame pacing is the ARM generic
@@ -41,9 +42,29 @@ was built** (`app/mt_boot/mt_boot.c`):
 device — that is the sanity check that the walk found the real thing.
 
 **Geometry:** LK's buffer is the panel's *native portrait* 1080×2160 with a
-`ALIGN(1080,32)*4 = 4352`-byte stride; the 270° rotation to landscape is applied later
-by the Android kernel, not by LK. So the first photograph is expected to show the UI
-rotated 90°, and a rotated blit is the fix if it does.
+`ALIGN(1080,32)*4 = 4352`-byte stride — the panel is physically mounted rotated, which
+is why the Cosmo's LK project sets `MTK_LCM_PHYSICAL_ROTATION = 270`
+(`project/k71v1_64_bsp.mk:16`).
+
+So we rotate. Drawing goes to a plain upright 640×480 **shadow surface** — `pchar`,
+`pstr`, `frect` and `picon` need no rotation awareness at all — and `fb_present`
+rotates the whole surface onto the panel once per frame. The handedness is not a
+guess: LK's own console blit for this device (`dev/video/mtk_cfb.c`, the branch
+commented *"THIS IS THE DEFAULT ROTATION FOR COSMO"*) steps `+PIXEL_SIZE` per glyph
+row and puts the glyph's leftmost pixel at the highest multiple of `VDO_COLS`, i.e.
+**down the upright image is `+1` in framebuffer x, and right is `-1` in framebuffer
+y**. That is `FB_ROT 270`, the default.
+
+`fb_present` walks the *destination* as an ascending raster and lets the source carry
+the rotation, so the framebuffer writes stay contiguous (four pixels per `stp`) — with
+the D-cache off that is the difference between merged bursts and 307k scattered word
+writes. It costs roughly 1M instructions per frame; its real cost on hardware is
+memory-bound, so measure before optimising it further.
+
+The shadow lives in **page 1 of LK's own VRAM** (`fb_base + PANEL_H*pitch`) whenever the
+DTB's `vramSize` proves there is room: LK reserved 33 MB and has finished with all of
+it, so that memory is free and cannot collide with an SSPM/SCP/consys carveout the way
+a guessed low-DRAM address could. `COSMO_SHADOW` is the fallback.
 
 ## Build
 
@@ -54,6 +75,8 @@ data generator and boot-image wrapper run locally.
 ./build.sh              # -> build/unodos.bin + build/unodos-boot.img (launcher)
 ./build.sh dostris      # AUTOTEST build the harness drives (also: nav app clock theme
                         #   paint pacman outlast tracker fs)
+ROT=90 ./build.sh       # override the panel rotation (default 270); BEACON=1 adds the
+                        #   vibrator stage pulses
 ```
 
 `build/unodos-boot.img` is a header-v1 Android boot image sized well under the 32 MiB
@@ -80,12 +103,24 @@ a **real flattened device tree**, hands it to the payload in `x0`, and checks th
 `fb_init` took the framebuffer from where the run intended (exit 1 if not). It then
 renders the centred 640×480 UI to a PNG. See `shots/` for milestone captures.
 
+The PNG is **what the eye sees**: the harness reads the panel back through the physical
+mounting and checks the result is the shadow surface, pixel for pixel. That mounting is
+fixed at 270 in the harness because it is a property of the hardware, so only a payload
+whose blit matches it reads back upright — a `ROT=90` build fails the check, which is
+what makes it a test rather than a self-consistency loop.
+
 `--fdt=` selects the tree: `blob` (default, the production LK shape), `props` (the
 FPGA shape), `both` (the split properties must win), `empty` (a valid tree with no
 framebuffer), `none` (no FDT at all). `--no-preseed` empties `FBINFO` so only the tree
 can supply a base; `--junk-fbinfo` fills it with plausible garbage instead, because the
 device hands us uninitialised DRAM there and `fb_init` must ignore anything not marked
-with `FB_SEED_MAGIC`. All fifteen combinations are green.
+with `FB_SEED_MAGIC`. `--rot=N` says the payload was built with `FB_ROT=N`, which
+relaxes the upright check for a deliberate diagnostic build. All fifteen combinations
+are green.
+
+**Budget:** the per-frame present is ~1M instructions, so AUTOTEST scenes need a much
+larger instruction budget than they used to — Dostris wants ~400M (about 40 s) to play
+out. A static shot like the launcher is still fine at 20M.
 
 ```sh
 for m in blob props both empty none; do

@@ -181,6 +181,11 @@
 // the harness writes FB_SEED_MAGIC beside it, LK never would. Without the magic
 // fb_init ignores fb_base/fb_pitch entirely rather than jumping to a garbage address.
 .equ FB_SEED_MAGIC, 0x53454544            // "SEED"
+.equ fb_panel,  FBINFO+56                 // 8 bytes: LK's raw panel base (alias of
+                                          //          fb_raw, kept for readability)
+.equ fb_ppitch, FBINFO+64                 // 4 bytes: LK's panel stride
+.equ fb_dorigin,FBINFO+72                 // 8 bytes: top-left of the rotated UI rect
+.equ fb_shadow, FBINFO+80                 // 8 bytes: the upright SCRWxSCRH surface
 
 // Where fb_init got the framebuffer base (readable post-mortem at fb_src).
 .equ FB_SRC_FALLBACK, 0                   // nothing usable — COSMO_FB guess
@@ -210,6 +215,78 @@
 .equ COSMO_PITCH, 4352                    // ALIGN_TO(1080,32)*4 = 1088*4 [LK-SRC]
 .equ COSMO_VRAM,  0x1F90000               // DISP_GetVRamSize() — sanity check only
 .equ COSMO_FB,  0x7E070000                // fallback FB base (0x80000000 - vramSize)
+
+// ---- panel rotation: we draw upright, the panel is mounted sideways ----------
+// The Cosmo's LK project sets MTK_LCM_PHYSICAL_ROTATION = 270
+// [LK-SRC project/k71v1_64_bsp.mk:16, alongside CUSTOM_LK_LCM = the Cosmo's two
+// panels], so content must be rotated before it is written into the portrait
+// framebuffer or it appears sideways on the open clamshell.
+//
+// The exact handedness is not a guess: LK's own console blit for this device
+// (dev/video/mtk_cfb.c, CFB_X888RGB_32BIT, annotated "USED BY COSMO LCD" and
+// "THIS IS THE DEFAULT ROTATION FOR COSMO" in the 270 branch) walks a glyph with
+// `tdest += PIXEL_SIZE` per glyph ROW and writes the glyph's LEFTMOST pixel at the
+// HIGHEST multiple of VDO_COLS. In other words, on this panel:
+//
+//     moving DOWN  the upright image  =>  +1 in framebuffer x
+//     moving RIGHT the upright image  =>  -1 in framebuffer y
+//
+// which is exactly FB_ROT 270 below. (The 90 branch is the mirror of that, which
+// is the self-consistency check that the reading is the right way round.)
+//
+// FB_ROT is overridable at build time (`ROT=90 ./build.sh`) so that if the first
+// photograph disagrees, any of the four outcomes -- upright, sideways either way,
+// upside-down -- is one rebuild away rather than a rewrite.
+.ifndef FB_ROT
+.equ FB_ROT, 270
+.endif
+
+// Drawing goes to a SHADOW buffer that is a plain upright SCRW x SCRH surface, so
+// pchar/frect/picon need no rotation awareness at all; fb_present then rotates the
+// whole surface into LK's framebuffer once per frame. This is also the arrangement
+// that keeps the expensive side cheap: with the D-cache off, the framebuffer writes
+// stay sequential (fb_present walks the DESTINATION in raster order and takes the
+// stride on the shadow reads instead), and it removes tearing for free.
+.equ SHADOW_PITCH, (SCRW*4)
+.equ SHADOW_BYTES, (SCRW*SCRH*4)
+// Fallback shadow address, used only when the DTB gave no vramSize to prove there
+// is room inside LK's own VRAM. Low DRAM, above FSBASE (0x40340000 + 4 KB) and far
+// below LK's framebuffer (which lives under 0x80000000).
+.equ COSMO_SHADOW, 0x40500000
+
+// Per-rotation blit parameters. fb_present always walks the DESTINATION as a plain
+// ascending raster (DST_W x DST_H, so the framebuffer writes are contiguous and can
+// merge) and lets the SOURCE absorb the rotation as a start offset plus two signed
+// steps. Derivation, with (dx,dy) the destination pixel and (ux,uy) the UI pixel:
+//   0  : dx=ux,        dy=uy          270: dx=uy,        dy=SCRW-1-ux
+//   90 : dx=SCRH-1-uy, dy=ux          180: dx=SCRW-1-ux,  dy=SCRH-1-uy
+.if FB_ROT == 0
+.equ DST_W, SCRW
+.equ DST_H, SCRH
+.equ SRC_START, 0
+.equ SRC_IN, 4
+.equ SRC_OUT, SHADOW_PITCH
+.elseif FB_ROT == 90
+.equ DST_W, SCRH
+.equ DST_H, SCRW
+.equ SRC_START, (SCRH-1)*SHADOW_PITCH
+.equ SRC_IN, -SHADOW_PITCH
+.equ SRC_OUT, 4
+.elseif FB_ROT == 180
+.equ DST_W, SCRW
+.equ DST_H, SCRH
+.equ SRC_START, (SCRH-1)*SHADOW_PITCH+(SCRW-1)*4
+.equ SRC_IN, -4
+.equ SRC_OUT, -SHADOW_PITCH
+.else
+.equ DST_W, SCRH
+.equ DST_H, SCRW
+.equ SRC_START, (SCRW-1)*4
+.equ SRC_IN, SHADOW_PITCH
+.equ SRC_OUT, -4
+.endif
+.equ DST_X0, ((PANEL_W-DST_W)/2)          // centre the rotated rect in the panel
+.equ DST_Y0, ((PANEL_H-DST_H)/2)
 
 // Harmless DRAM sink for peripherals not yet ported to the MT6771. The app cores
 // (music, RNG seed) were written for the Pi's PWM tone path and 1 MHz system timer;
@@ -392,7 +469,8 @@ mclr:
     bl    bcn_mark                        // "core 0 is alive and the watchdog is off"
     bl    fb_init                         // adopt LK's live framebuffer
     bl    fs_init                         // load/format the USV1 disk
-    bl    draw_launcher                   // show the desktop
+    bl    draw_launcher                   // show the desktop (into the shadow)
+    bl    fb_present                      // ...and rotate it onto the panel
     mov   w0, #BCN_MAIN
     bl    bcn_mark                        // "the launcher drew; we are in the loop"
 mainloop:
@@ -403,9 +481,11 @@ mainloop:
     bl    update
     ldr   x0, =v_dirty
     ldr   w1, [x0]
-    cbz   w1, mainloop
+    cbz   w1, mp_present
     bl    full_redraw
-    b     mainloop
+mp_present:
+    bl    fb_present                      // one rotated blit per frame, always:
+    b     mainloop                        // render_partials draws even when !dirty
 
 // ============================================================================
 // framebuffer bring-up — ADOPT LK's live framebuffer (no display bring-up)
@@ -515,19 +595,96 @@ fb_bar_next:
     subs  w12, w12, #1
     b.ne  fb_bar_row
     dsb   sy
-    // centre: top = (PANEL_H - SCRH)/2 rows, left = (PANEL_W - SCRW)/2 pixels
+    // --- publish the panel geometry, then pick the shadow buffer -------------
+    ldr   x0, =fb_ppitch
+    str   w4, [x0]                        // LK's panel stride
+    mov   w5, #PANEL_H
+    umull x5, w5, w4                      // x5 = bytes in the visible page
+    // Prefer page 1 of LK's OWN vram for the shadow: LK reserved vramSize bytes
+    // (0x1F90000, triple-buffered + the DAL layer) and has finished with all of it
+    // by the time we run, so that memory is both free and guaranteed not to collide
+    // with a carveout -- unlike any address we might pick in low DRAM, where SSPM /
+    // SCP / consys shares live. Only if the DTB gave us no vramSize to prove there
+    // is room do we fall back to a fixed address.
+    ldr   x0, =fb_vram
+    ldr   w9, [x0]
+    cbz   w9, fb_shadow_fixed
+    mov   w0, w9                          // vramSize, zero-extended
+    ldr   x1, =SHADOW_BYTES
+    add   x1, x5, x1                      // visible page + shadow
+    cmp   x0, x1
+    b.lo  fb_shadow_fixed
+    ldr   x0, =fb_raw
+    ldr   x6, [x0]
+    add   x6, x6, x5                      // shadow = panel + one page
+    b     fb_shadow_set
+fb_shadow_fixed:
+    ldr   x6, =COSMO_SHADOW
+fb_shadow_set:
+    ldr   x0, =fb_shadow
+    str   x6, [x0]
+    ldr   x0, =fb_base
+    str   x6, [x0]                        // ALL drawing goes to the shadow...
+    ldr   x0, =fb_pitch
+    mov   w1, #SHADOW_PITCH
+    str   w1, [x0]                        // ...as a plain upright SCRW x SCRH surface
+    // --- destination origin: the rotated rect, centred in the panel ----------
     ldr   x0, =fb_raw
     ldr   x3, [x0]
-    mov   w5, #((PANEL_H-SCRH)/2)
-    umull x6, w5, w4                      // top rows * pitch
+    mov   w5, #DST_Y0
+    umull x6, w5, w4                      // top rows * panel pitch
     add   x3, x3, x6
-    mov   w5, #(((PANEL_W-SCRW)/2)*4)     // left pixels * 4 bytes
-    add   x3, x3, x5
-    ldr   x0, =fb_base
-    str   x3, [x0]                        // draw origin (centred in the panel)
-    ldr   x0, =fb_pitch
-    str   w4, [x0]                        // stride = panel pitch
+    add   x3, x3, #(DST_X0*4)             // left pixels * 4 bytes
+    ldr   x0, =fb_dorigin
+    str   x3, [x0]
     ldp   x20, x30, [sp], #16
+    ret
+
+// ----------------------------------------------------------------------------
+// fb_present — rotate the shadow surface into LK's framebuffer
+// ----------------------------------------------------------------------------
+// One frame, whole surface. The DESTINATION is walked as a plain ascending raster
+// (DST_W x DST_H at fb_dorigin, stepping fb_ppitch per row), so every framebuffer
+// write is contiguous and four pixels go out per stp -- with the D-cache off that
+// is the difference between merged bursts and 307k scattered word writes. The
+// SOURCE carries the rotation as SRC_START + two signed steps (see the FB_ROT
+// block). DST_W is 640 or 480, both multiples of 4, so the x4 unroll is exact.
+// Leaf; clobbers x0-x15.
+fb_present:
+    ldr   x0, =fb_dorigin
+    ldr   x1, [x0]                        // x1 = destination row base
+    ldr   x0, =fb_ppitch
+    ldr   w2, [x0]                        // w2 = panel stride
+    ldr   x0, =fb_shadow
+    ldr   x3, [x0]
+    ldr   x0, =SRC_START
+    add   x3, x3, x0                      // x3 = source row base
+    ldr   x9, =SRC_IN                     // signed: source step within a dest row
+    ldr   x10, =SRC_OUT                   // signed: source step between dest rows
+    mov   w11, #DST_H
+fp_row:
+    mov   x5, x1                          // dest cursor
+    mov   x6, x3                          // source cursor
+    mov   w7, #(DST_W/4)
+fp_col:
+    ldr   w12, [x6]
+    add   x6, x6, x9
+    ldr   w13, [x6]
+    add   x6, x6, x9
+    ldr   w14, [x6]
+    add   x6, x6, x9
+    ldr   w15, [x6]
+    add   x6, x6, x9
+    orr   x12, x12, x13, lsl #32          // pack two pixels per 64-bit half of the
+    orr   x14, x14, x15, lsl #32          // stp, little-endian order
+    stp   x12, x14, [x5], #16
+    subs  w7, w7, #1
+    b.ne  fp_col
+    add   x1, x1, x2                      // next destination row
+    add   x3, x3, x10                     // next source row
+    subs  w11, w11, #1
+    b.ne  fp_row
+    dsb   sy                              // the display engine DMAs this out of DRAM
     ret
 
 // ----------------------------------------------------------------------------

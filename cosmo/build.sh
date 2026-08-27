@@ -35,6 +35,15 @@ case "$1" in
   fs)      DEFS="--defsym AUTOTEST=1 --defsym AT_FS=1";      OUT=build/unodos_fs.bin ;;
 esac
 
+# ROT=90|180|270|0 ./build.sh  -> override the panel rotation fb_present applies.
+# Default 270, derived from the Cosmo's own LK (MTK_LCM_PHYSICAL_ROTATION in
+# project/k71v1_64_bsp.mk, and the 270 branch of LK's console blit). If the first
+# photograph comes out sideways or upside-down, the fix is one rebuild.
+if [ -n "$ROT" ]; then
+  DEFS="$DEFS --defsym FB_ROT=$ROT"
+  echo "    (panel rotation overridden: FB_ROT=$ROT)"
+fi
+
 # BEACON=1 ./build.sh  -> blink the stage count on the vibrator through the PMIC.
 # Off by default: the PWRAP/MT6358 register facts are read from LK source and have
 # never been executed on this device (see the beacon comment in kernel.s).

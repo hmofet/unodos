@@ -33,6 +33,9 @@ Usage: python cosmo/harness.py <unodos.bin> <out.png> [instr_millions] [options]
   --no-preseed  leave FBINFO zeroed, so only the device tree can supply a base.
   --junk-fbinfo fill FBINFO with plausible-looking garbage instead of seeding it: the
                 device hands us uninitialised DRAM there, and fb_init must ignore it.
+  --rot=N       the FB_ROT the payload was built with (default 270). The MODELLED
+                panel mounting never changes -- only 270 reads back upright, which is
+                the point; pass this to check a deliberately-rotated diagnostic build.
 """
 import sys, struct, zlib, os
 from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, UC_PROT_ALL, UC_HOOK_MEM_UNMAPPED
@@ -48,13 +51,16 @@ PANEL_PITCH = 4352
 VRAM_SIZE = 0x1F90000                 # DISP_GetVRamSize() for this panel (~31.6 MB)
 LOAD    = 0x40080000
 DRAM    = 0x40000000
-DRAM_SZ = 0x02000000                  # 32 MB: payload + stack + vars + panel FBs
+DRAM_SZ = 0x04000000                  # 64 MB: payload + stack + vars + panel FBs.
+                                      # The stand-in panels sit well above the port's
+                                      # low-DRAM COSMO_SHADOW (0x40500000) so the
+                                      # fallback shadow can never land inside one.
 FBINFO  = 0x40320000                  # fb_base(8) fb_pitch(4) .. fb_src(40) stage(44)
 FDT_AT  = 0x40350000                  # where this harness parks the device tree
 COSMO_FB    = 0x7E070000              # kernel.s's last-resort guess (0x80000000-vram)
-PANEL_FB    = 0x40400000              # stand-in FB used by the FBINFO pre-seed path
-DTB_FB      = 0x40E00000              # stand-in FB advertised through the device tree
-DECOY_FB    = 0x41400000              # what --fdt=both puts in the losing blob
+PANEL_FB    = 0x41000000              # stand-in FB used by the FBINFO pre-seed path
+DTB_FB      = 0x42000000              # stand-in FB advertised through the device tree
+DECOY_FB    = 0x43000000              # what --fdt=both puts in the losing blob
 WDT_PAGE = 0x10007000                 # TOPRGU watchdog (payload writes the disable key)
 
 # FB_SRC_* in kernel.s — where fb_init says it got the base.
@@ -187,6 +193,10 @@ def main():
     for o in opts:
         if o.startswith("--fdt="):
             mode = o.split("=", 1)[1]
+    rot = 270
+    for o in opts:
+        if o.startswith("--rot="):
+            rot = int(o.split("=", 1)[1])
     preseed = "--no-preseed" not in opts
     junk = "--junk-fbinfo" in opts
     if junk:
@@ -245,29 +255,78 @@ def main():
         pc = uc.reg_read(UC_ARM64_REG_PC)
         ran += CHUNK
 
-    # fb_init wrote the centred draw origin + panel stride back into FBINFO, along
-    # with the raw base, the vramSize it read and which source it believed.
+    # fb_init published the panel geometry, the shadow surface and the destination
+    # origin of the rotated rect. fb_base/fb_pitch now describe the SHADOW (the plain
+    # upright surface every drawing primitive writes to), not the panel.
     fb_base, fb_pitch = struct.unpack("<QI", bytes(uc.mem_read(FBINFO, 12)))
     vram, = struct.unpack("<I", bytes(uc.mem_read(FBINFO + 24, 4)))
     raw, = struct.unpack("<Q", bytes(uc.mem_read(FBINFO + 32, 8)))
     src, stage, magic = struct.unpack("<III", bytes(uc.mem_read(FBINFO + 40, 12)))
+    ppitch, = struct.unpack("<I", bytes(uc.mem_read(FBINFO + 64, 4)))
+    dorigin, = struct.unpack("<Q", bytes(uc.mem_read(FBINFO + 72, 8)))
+    shadow, = struct.unpack("<Q", bytes(uc.mem_read(FBINFO + 80, 8)))
+
+    # --- what the eye actually sees --------------------------------------------
+    # The panel is mounted rotated; LK's own console blit for this device says how
+    # (dev/video/mtk_cfb.c, the branch annotated "THIS IS THE DEFAULT ROTATION FOR
+    # COSMO"): moving DOWN the upright image is +1 in framebuffer x, moving RIGHT is
+    # -1 in framebuffer y. That is a property of the hardware, so it is fixed here
+    # regardless of what FB_ROT the payload was built with -- which is exactly what
+    # makes this a test: only a payload whose blit matches the mounting reads back
+    # as the upright UI.
+    dst_w, dst_h = (H, W) if rot in (90, 270) else (W, H)
+    x0 = (PANEL_W - dst_w) // 2
+    y0 = (PANEL_H - dst_h) // 2
+    want_dorigin = raw + y0 * ppitch + x0 * 4
+    # eye[] is the upright SCRW x SCRH image, laid out exactly like the shadow so the
+    # two can be compared byte for byte.
+    eye = bytearray(W * H * 4)
+    for sx in range(W):
+        fy = y0 + dst_h - 1 - sx
+        row = bytes(uc.mem_read(raw + fy * ppitch + x0 * 4, dst_w * 4))
+        for sy in range(H):
+            o = (sy * W + sx) * 4
+            eye[o:o + 4] = row[sy * 4:sy * 4 + 4]
 
     rgb = bytearray(W * H * 3)
     for y in range(H):
-        rowpx = uc.mem_read(fb_base + y * fb_pitch, W * 4)
         for x in range(W):
-            w = rowpx[x*4] | (rowpx[x*4+1] << 8) | (rowpx[x*4+2] << 16)
+            i = (y * W + x) * 4
             o = (y * W + x) * 3
-            rgb[o]   = (w >> 16) & 0xFF
-            rgb[o+1] = (w >> 8) & 0xFF
-            rgb[o+2] = w & 0xFF
+            rgb[o]     = eye[i + 2]        # stored little-endian 0xFFRRGGBB
+            rgb[o + 1] = eye[i + 1]
+            rgb[o + 2] = eye[i]
     write_png(out_path, W, H, rgb)
-    print("wrote %s (%dx%d) after ~%dM instrs" % (out_path, W, H, ran // 1_000_000))
-    print("  fdt=%-5s preseed=%-5s -> fb %s = 0x%X, vramSize 0x%X, draw origin 0x%X"
-          " pitch %d" % (mode, preseed, FB_SRC.get(src, "?%d" % src), raw, vram,
-                         fb_base, fb_pitch))
+
+    shadow_img = bytes(uc.mem_read(shadow, W * H * 4)) if fb_pitch == W * 4 else None
+    print("wrote %s (%dx%d, as the eye sees it) after ~%dM instrs"
+          % (out_path, W, H, ran // 1_000_000))
+    print("  fdt=%-5s preseed=%-5s -> fb %s = 0x%X, vramSize 0x%X, pitch %d"
+          % (mode, preseed, FB_SRC.get(src, "?%d" % src), raw, vram, ppitch))
+    print("  rot=%-3d shadow 0x%X (pitch %d), rotated rect %dx%d at 0x%X"
+          % (rot, shadow, fb_pitch, dst_w, dst_h, dorigin))
 
     fails = []
+    if dorigin != want_dorigin:
+        fails.append("rotated rect origin: got 0x%X, wanted 0x%X (%dx%d centred in "
+                     "%dx%d)" % (dorigin, want_dorigin, dst_w, dst_h, PANEL_W, PANEL_H))
+    if shadow_img is None:
+        fails.append("shadow pitch: got %d, wanted %d (drawing is not going to a plain "
+                     "upright surface)" % (fb_pitch, W * 4))
+    elif rot == 270:
+        # The whole point: reconstructing the panel through the physical mounting must
+        # reproduce the shadow EXACTLY -- same pixels, same place, nothing dropped at
+        # an edge and no off-by-one in the rotation.
+        if bytes(eye) != shadow_img:
+            bad = sum(1 for i in range(0, len(shadow_img), 4)
+                      if eye[i:i+4] != shadow_img[i:i+4])
+            fails.append("rotated blit: %d of %d pixels differ from the shadow"
+                         % (bad, W * H))
+        elif not any(shadow_img):
+            fails.append("rotated blit: shadow and panel agree, but both are blank")
+    else:
+        print("  (rot=%d is a diagnostic build: the panel is mounted for 270, so the "
+              "image above is deliberately not upright)" % rot)
     if src != want_src:
         fails.append("framebuffer source: got %s, wanted %s"
                      % (FB_SRC.get(src, src), FB_SRC.get(want_src, want_src)))
