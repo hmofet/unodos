@@ -79,8 +79,30 @@ ROT=90 ./build.sh       # override the panel rotation (default 270); BEACON=1 ad
                         #   vibrator stage pulses
 ```
 
-`build/unodos-boot.img` is a header-v1 Android boot image sized well under the 32 MiB
-`p42` slot ceiling (payload ≈ 22 KB).
+### The boot image is not just "the payload in a header"
+
+LK's 64-bit path is picky, and a raw payload fails it three ways. All three are read out
+of the archived LK source and confirmed against the stock v23 `boot.img`:
+
+1. **The payload must be gzipped.** `mt_boot.c:712` calls `decompress_kernel()`
+   unconditionally on the 64-bit path; there is no "is it compressed?" test. A raw arm64
+   `Image` gets `decompress kernel image fail!!!` and LK spins in `while(1)`.
+2. **A device tree must be appended.** `fdt_op.c:373-395` reads the last `DTB_MAX_SIZE`
+   bytes of the kernel region and scans **backwards** for `d00dfeed`; no hit means
+   `can't find dtb`. LK then fixes that tree up — this is where `atag,videolfb` lands —
+   and hands it to us in `x0`, so the tree we append is the tree `fb_dtb_scan` walks.
+3. **The kernel region must be at least `DTB_MAX_SIZE - page_size` = 522,240 bytes.**
+   That scan computes `offset = page_sz + kernel_sz - 512K` and reads from it; for a
+   23 KB payload it goes negative. `mkbootimg.py` pads to exactly the floor, which puts
+   LK's scan window exactly over our image.
+
+Result: `[2048-byte header][gzip(payload)][zero pad][device tree]`, 524,288 bytes total,
+well under the 32 MiB `p42` ceiling.
+
+**The device tree is a vendor blob and is not in this repo.** Point `--dtb` or
+`$COSMO_DTB` at `analysis/v23/cosmo-boot.dtb` in the research repo; `mkbootimg.py` looks
+in `C:/Repos/cosmo/...` by default and fails with an explicit message if it cannot find
+one.
 
 ## Install / iterate (on the device)
 

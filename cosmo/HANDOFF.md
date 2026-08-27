@@ -176,6 +176,11 @@ device.
 
 This needs the phone. Nothing else in the port is blocked on it.
 
+0. **The boot image needs the stock DTB.** `mkbootimg.py` gzips the payload, appends
+   `analysis/v23/cosmo-boot.dtb` from the research repo and pads to LK's 522,240-byte
+   floor — LK's 64-bit path refuses anything else (see "The boot image" below). It looks
+   for the tree at `C:/Repos/cosmo/analysis/v23/cosmo-boot.dtb`, or `$COSMO_DTB`, or
+   `--dtb PATH`, and fails loudly rather than emitting an image that cannot boot.
 1. `./build.sh` (add `BEACON=1` if you want the vibrator pulses).
 2. Boot Gemian, copy `build/unodos-boot.img` over, then in its root shell:
    ```sh
@@ -211,6 +216,41 @@ D-cache off; `cntpct` pacing rate (read `CNTFRQ_EL0` and compare against `FRAME_
 
 Then: Phase 5 keyboard (AW9523 I2C matrix — addr `0x58`, map in the research repo),
 Phase 7 storage (eMMC `msdc@11230000` → Android `p44`/userdata), Phase 9 stretch.
+
+## The boot image
+
+Found while preparing the first flash: **a raw payload in an AOSP header does not boot.**
+LK's 64-bit path (`app/mt_boot/mt_boot.c:679-733`, `app/mt_boot/fdt_op.c:373-405`)
+requires all three of:
+
+1. **gzip.** `decompress_kernel()` is called unconditionally at `mt_boot.c:712` — there
+   is no compression test. A raw arm64 `Image` produces `decompress kernel image fail!!!`
+   and LK spins in `while(1)`, which from outside looks like a dead device.
+2. **An appended device tree.** `bldr_load_dtb` reads the last `DTB_MAX_SIZE` bytes of
+   the kernel region and scans **backwards** for `d00dfeed`; with no hit it gives up
+   with `can't find dtb`. LK fixes that tree up (this is where `atag,videolfb` is
+   written) and passes it to us in `x0` — so the tree we append is the tree
+   `fb_dtb_scan` reads back.
+3. **`kernel_sz >= DTB_MAX_SIZE - page_size` = 522,240.** The scan computes
+   `offset = page_sz + kernel_sz - 512K` (`mt_boot.h:39`) and reads from it; a 23 KB
+   payload makes that negative.
+
+`mkbootimg.py` now emits `[2048 header][gzip(payload)][zero pad][stock DTB]` = 524,288
+bytes, which puts LK's scan window exactly over our image. Verified by parsing the
+result the way LK does: the gzip member round-trips to the exact payload, the backward
+scan finds the tree at window+377001 with `totalsize` 147,287, and the arm64 `Image`
+magic and `text_offset` survive. The stock v23 image has the same shape, including
+non-gzip bytes inside the range LK feeds the decompressor, so trailing data after the
+stream is demonstrably fine.
+
+The stock tree is a **vendor blob and is deliberately not committed here** (same
+treatment as `fw-blobs/` elsewhere in the project). It lives at
+`analysis/v23/cosmo-boot.dtb` in the research repo.
+
+Still unverified on hardware. The cheapest confirmation is to dissect Gemian's own
+boot partition, which is a known-good LK-accepted image on this exact unit:
+`sudo dd if=/dev/mmcblk0p41 of=/tmp/gemian-boot.img bs=1M`, then
+`python analysis/dissect_boot.py gemian-boot.img`.
 
 ## Where everything is
 
