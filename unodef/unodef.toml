@@ -1498,6 +1498,18 @@ h = 640
 depth = 32
 role = "PRIMARY"
 
+# Cosmo Communicator — MT6771 AArch64, LK-adopted framebuffer, landscape clamshell.
+[port.cosmo]
+profile = "minimal"
+capabilities = ["DIRNAV"]
+ram_bytes = 1048576
+[[port.cosmo.surface]]
+id = "primary"
+w = 640
+h = 480
+depth = 32
+role = "PRIMARY"
+
 # PowerPC Mac — FIRST PowerPC world. Open Firmware boot, OF linear framebuffer.
 [port.ppcmac]
 profile = "minimal"
@@ -2050,6 +2062,29 @@ sym = "SCRCOLS"
 val = 80
 note = "text columns (640px / 8)"
 [[world.rpi.equate]]
+sym = "SCRROWS"
+val = 60
+note = "text rows (480px / 8)"
+
+# --- Cosmo Communicator (AArch64, MediaTek MT6771) ---------------------------
+[world.cosmo]
+description = "Planet Computers Cosmo Communicator (MediaTek MT6771 / Helio P70, AArch64) bare-metal; GNU as (aarch64-linux-gnu); MINIMAL profile, 640x480x32 landscape UI adopted into LK's framebuffer"
+cpu = "aarch64"
+emit = "cosmo/sys_gen.inc"
+note = "third AArch64 world after rpi + pinephone; reuses the rpi 640x480 landscape core (the clamshell is landscape). Boots from Planet LK as an Android boot.img kernel; adopts LK's live framebuffer (LK lights the NT36672 panel) rather than bringing up the display. Would be the first non-Linux OS on any MediaTek phone SoC. Geometry is the Contract overlap; the 640x480 UI is centred in LK's 2160x1080 landscape panel."
+[[world.cosmo.equate]]
+sym = "SCRW"
+val = 640
+note = "UI framebuffer width (px, landscape)"
+[[world.cosmo.equate]]
+sym = "SCRH"
+val = 480
+note = "UI framebuffer height (px, landscape)"
+[[world.cosmo.equate]]
+sym = "SCRCOLS"
+val = 80
+note = "text columns (640px / 8)"
+[[world.cosmo.equate]]
 sym = "SCRROWS"
 val = 60
 note = "text rows (480px / 8)"
