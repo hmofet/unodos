@@ -21,6 +21,10 @@ RESEARCH and the multi-GB firmware/source ASSETS live in a separate repo, `hmofe
   depends on a hardcoded framebuffer address. A stage beacon is wired in. **The image
   is ready for a first hardware boot** — that is the next thing to do, and it needs
   the phone in hand.
+- **Panel rotation: DONE + harness-verified.** Drawing goes to an upright 640×480
+  shadow surface and `fb_present` rotates it onto the portrait panel each frame, so
+  the first photograph should be **upright**, not sideways. Direction derived from LK,
+  not guessed; `ROT=90 ./build.sh` if the photo disagrees.
 
 The scaffold: `_start` saves the DTB (`x0`), disables the TOPRGU watchdog
 (`0x10007000 ← 0x22000000`), runs cache-off/MMU-on, then `fb_init` **adopts LK's
@@ -63,15 +67,50 @@ Two things the LK source says that the earlier research did not:
    `src_pitch = ALIGN_TO(CFG_DISPLAY_WIDTH, MTK_FB_ALIGNMENT) * 4`
    (`mt_disp_drv.c:489`) where `CFG_DISPLAY_WIDTH = DISP_GetScreenWidth()` = the LCM's
    `params->width` = **1080** (`aeon_nt36672…` `FRAME_WIDTH 1080`, `FRAME_HEIGHT 2160`).
-   `MTK_LCM_PHYSICAL_ROTATION=270` is a kernel-side rotation applied *after* LK.
    Cross-check: `ALIGN(1080,32)*ALIGN(2160,32)*4*3 + (1080*2160*2+4096)`, aligned to
    64 KB, is exactly the `0x1F90000` vramSize the research doc derived. `PANEL_W`,
    `PANEL_H` and `COSMO_PITCH` in `kernel.s` were corrected to match.
 
-   **Consequence to expect in the first photograph:** the UI will be a correctly
-   shaped 640×480 rectangle *rotated 90°* on the open clamshell. That is the panel
-   doing its job, not a bug in the walk; the fix is a rotated blit, and it is worth
-   confirming from a photo before writing one.
+   The panel is physically mounted rotated, which is what
+   `MTK_LCM_PHYSICAL_ROTATION = 270` in the Cosmo's own LK project
+   (`project/k71v1_64_bsp.mk:16`, next to `CUSTOM_LK_LCM` naming this device's two
+   panels) records. **That is now handled — see the next section.**
+
+## The rotated blit
+
+Drawing goes to a plain upright SCRW×SCRH **shadow surface**; `fb_present` rotates the
+whole surface onto the panel once per frame. `pchar`, `pstr`, `frect` and `picon` are
+the only four primitives that touch the framebuffer and **none of them changed** —
+`fb_base`/`fb_pitch` simply point at the shadow now.
+
+**The direction is derived, not guessed.** LK's own console blit for this device
+(`dev/video/mtk_cfb.c`, `CFB_X888RGB_32BIT`, annotated `// USED BY COSMO LCD`, with the
+270 branch commented `// THIS IS THE DEFAULT ROTATION FOR COSMO`) advances `tdest` by
+`PIXEL_SIZE` per glyph **row** and writes the glyph's **leftmost** pixel at the
+**highest** multiple of `VDO_COLS`. So on this panel:
+
+- moving **down** the upright image ⇒ **+1 in framebuffer x**
+- moving **right** the upright image ⇒ **−1 in framebuffer y**
+
+which is `FB_ROT 270`. The `90` branch is the exact mirror of that, which is the
+self-consistency check that the reading is the right way round.
+
+Design notes worth keeping:
+
+- `fb_present` walks the **destination** as an ascending raster and lets the source
+  carry the rotation (a start offset plus two signed steps). That keeps framebuffer
+  writes contiguous — four pixels per `stp` — which matters a lot with the D-cache
+  off. The strided side is the shadow reads, which are the cheaper side to stride.
+- The shadow lives in **page 1 of LK's own VRAM** (`fb_raw + PANEL_H*ppitch`) whenever
+  `vramSize` proves there is room. LK reserved 33 MB (triple buffer + DAL layer) and is
+  finished with all of it, so that memory is free *and* cannot collide with the
+  SSPM/SCP/consys carveouts that make any guessed low-DRAM address risky.
+  `COSMO_SHADOW` (0x40500000) is the fallback for when the DTB gave no `vramSize`.
+- Cost is ~1M instructions per frame. On hardware the real cost is memory-bound
+  (307k uncached strided reads), so **measure before optimising**; a 4×4 block
+  transpose, or enabling the D-cache with explicit maintenance, are the obvious levers.
+- `ROT=90|180|0 ./build.sh` overrides it, so any of the four possible first-photo
+  outcomes is one rebuild away rather than a rewrite.
 
 ### The debug beacon (there is no UART)
 
@@ -100,12 +139,25 @@ Three channels, so a blank screen still says something:
 which source `fb_init` believed, the base, the vramSize, the bar beacon and the stage
 reached. It exits non-zero on a mismatch, so it is a gate, not just a screenshot tool.
 
+It also renders **what the eye sees**: it reads the panel back through the physical
+mounting and requires the result to equal the shadow surface pixel for pixel. The
+modelled mounting is fixed at 270 because that is a property of the hardware, so a
+`ROT=90` build **fails** the check (verified: 24,552 of 307,200 pixels differ) — that
+is what makes it a test of the blit rather than a self-consistency loop. `--rot=N`
+declares a deliberate diagnostic build and relaxes the upright requirement.
+
+**Instruction budgets went up.** The per-frame present is ~1M instructions, so AUTOTEST
+scenes need roughly 7× what they used to: Dostris wants ~400M (about 40 s) to play out
+to the same frame. A static shot like the launcher is still fine at 20M.
+
 ```sh
 for m in blob props both empty none; do
   for x in "" --no-preseed --junk-fbinfo; do
     python cosmo/harness.py cosmo/build/unodos.bin /tmp/$m.png 20 --fdt=$m $x || exit 1
   done
 done
+# and an AUTOTEST scene, which now needs a much larger budget (see below)
+./cosmo/build.sh dostris && python cosmo/harness.py cosmo/build/unodos_dt.bin /tmp/dt.png 400
 ```
 
 `blob` = the production LK shape (default), `props` = the FPGA shape, `both` = the split
@@ -131,7 +183,11 @@ This needs the phone. Nothing else in the port is blocked on it.
    sudo parted /dev/mmcblk0 name 42 UNODOS      # once
    sudo reboot                                  # then pick UNODOS from LK's menu
    ```
-3. **Photograph whatever appears** and read it against the beacon table above.
+3. **Photograph whatever appears** and read it against the beacon table above. The UI
+   should be **upright and centred**. If it is sideways or upside-down, the rotation
+   direction is the only thing wrong: rebuild with `ROT=90`, `ROT=180` or `ROT=0` and
+   re-flash. Everything else about the image (position, size, colours) is unaffected
+   by that choice.
 4. If the screen is blank, boot back into Gemian and peek at the beacon before
    anything overwrites it — `FBINFO` is at physical `0x40320000`, and the interesting
    words are `+40` `fb_src`, `+44` stage, `+48` `BCN_MAGIC` (`0x554E4F31`):
@@ -146,10 +202,12 @@ This needs the phone. Nothing else in the port is blocked on it.
    refutes.
 
 Hardware-only unknowns to expect (a few iteration cycles, like rpi/pinephone bring-up):
-whether LK populates the `videolfb` property for a `p42` payload at all; **rotation**
-(see correction 2 — the UI appearing sideways is the predicted first result); pixel byte
-order (BGRA vs RGBA — mis-colours, does not black out); FB-write cache coherency;
-`cntpct` pacing rate (read `CNTFRQ_EL0` and compare against `FRAME_TICKS`).
+whether LK populates the `videolfb` property for a `p42` payload at all; **rotation
+direction** (derived from LK, so upright is the predicted result — but one photo settles
+it, and `ROT=` is the fix either way); pixel byte order (BGRA vs RGBA — mis-colours, does
+not black out; LK picks this at run time via `redoffset_32bit`, so it genuinely cannot be
+settled offline); FB-write cache coherency; how fast `fb_present` actually is with the
+D-cache off; `cntpct` pacing rate (read `CNTFRQ_EL0` and compare against `FRAME_TICKS`).
 
 Then: Phase 5 keyboard (AW9523 I2C matrix — addr `0x58`, map in the research repo),
 Phase 7 storage (eMMC `msdc@11230000` → Android `p44`/userdata), Phase 9 stretch.
