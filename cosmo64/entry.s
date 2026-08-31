@@ -28,7 +28,9 @@ park:
     b     park
 boot_core:
     ldr   x1, =0x402F0000               // stack: below VARS/FBINFO (0x4030xxxx),
-    mov   sp, x1                        // well above the image (ends ~0x40100000)
+    mov   sp, x1                        // above the image (flatten.py asserts)
+    bl    cpu_early_init                // vectors + CPACR BEFORE any C runs --
+                                        // the compiler may emit FP anywhere
     bl    c_main                        // x0 still holds LK's DTB pointer
 halt:
     wfe

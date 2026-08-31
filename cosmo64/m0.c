@@ -205,9 +205,16 @@ static u32 fdt_scan(const void *dtb, u64 *base, u32 *vram)
     return 0;
 }
 
-/* ---- drawing into the upright shadow ------------------------------------ */
+void mmu_init(void);
 
-static u32 *g_sh;                                /* the shadow surface */
+/* ---- drawing into the upright shadow ------------------------------------ */
+/* The shadow lives in OUR OWN .bss, not in LK's vram. The asm port parks it in
+ * vram page 1, and the first-light photographs showed that page scanned out as
+ * a garbage band beside the UI -- a leftover display layer still composites
+ * it. Image memory is ours by definition, and with the MMU on it is cacheable,
+ * which also makes the present()'s reads fast. */
+static u32 shadow_buf[SCRW * SCRH] __attribute__((aligned(64)));
+static u32 *g_sh;                                /* = shadow_buf */
 
 static void frect(int x, int y, int w, int h, u32 c)
 {
@@ -262,6 +269,13 @@ static void draw_card(void)
         0xFF00FF00u, 0xFFFF00FFu, 0xFFFF0000u, 0xFF0000FFu, 0xFF000000u };
     for (int i = 0; i < 8; i++)
         frect(40 + i * 70, 320, 70, 100, bars[i]);
+    /* an FP-computed gradient: visible proof CPACR is set and the FPU works
+     * (M1 retired -mgeneral-regs-only; this line would trap without it) */
+    for (int x = 0; x < SCRW - 80; x++) {
+        float t = (float)x / (float)(SCRW - 80);
+        u32 g = (u32)(t * 255.0f);
+        frect(40 + x, 440, 1, 24, 0xFF000000u | (g << 16) | (g << 8) | g);
+    }
 }
 
 /* ---- the rotated + scaled present (fb_present, in C) -------------------- */
@@ -295,6 +309,11 @@ static void bcn(u32 stage)
 
 void c_main(void *dtb)
 {
+    /* M1: vectors are live (entry.s), now translation and caches -- everything
+     * after this line runs on a cached, MMU-on CPU with the framebuffer region
+     * mapped non-cacheable so the display DMA stays coherent */
+    mmu_init();
+
     /* distrust FBINFO unless deliberately seeded -- on hardware it is
      * whatever DRAM woke up as */
     u64 seed_base = 0;
@@ -342,10 +361,9 @@ void c_main(void *dtb)
             row[c] = 0xFFFFFFFFu;
     }
 
-    /* the shadow: page 1 of LK's own vram when it proves there is room */
-    u64 shadow = (vram && vram >= page + SHADOW_BYTES) ? base + page
-                                                       : COSMO_SHADOW;
-    g_sh = (u32 *)shadow;
+    /* the shadow: our own .bss (see shadow_buf above for why not vram page 1) */
+    u64 shadow = (u64)shadow_buf;
+    g_sh = shadow_buf;
     FB->fb_shadow = shadow;
     FB->fb_base = shadow;
     FB->fb_pitch = SHADOW_PITCH;

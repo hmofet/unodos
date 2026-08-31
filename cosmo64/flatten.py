@@ -67,8 +67,20 @@ def main():
 
     if entry < 4 or entry >= size_image or entry & 3:
         sys.exit("flatten: entry RVA 0x%X out of range" % entry)
-    # offset 0 (the headers' spot): b <entry>
-    struct.pack_into("<I", img, 0, 0x14000000 | (entry >> 2))
+    if LOAD + size_image > 0x402E0000:
+        sys.exit("flatten: image ends at 0x%X -- collides with the stack/VARS "
+                 "region at 0x402E0000+" % (LOAD + size_image))
+    # The headers' spot doubles as an ARM64 Image header (the pinephone port's
+    # p-boot trick): LK just executes offset 0, where code0 = `b <entry>`, while
+    # QEMU's -kernel loader reads text_offset 0x80000 and lands the image at
+    # RAM base + 0x80000 = exactly the link address, DTB pointer in x0 -- the
+    # same contract LK provides. One binary, both loaders.
+    struct.pack_into("<I", img, 0, 0x14000000 | (entry >> 2))   # code0: b entry
+    struct.pack_into("<I", img, 4, 0xD503201F)                  # code1: nop
+    struct.pack_into("<Q", img, 8, 0x80000)                     # text_offset
+    struct.pack_into("<Q", img, 16, size_image)                 # image_size
+    struct.pack_into("<Q", img, 24, 0)                          # flags: LE, 4K
+    struct.pack_into("<I", img, 56, 0x644D5241)                 # magic "ARM\x64"
 
     open(sys.argv[2], "wb").write(img)
     print("flatten: %s (%d bytes, entry RVA 0x%X, base 0x%X)"
