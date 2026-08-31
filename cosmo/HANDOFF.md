@@ -153,7 +153,7 @@ to the same frame. A static shot like the launcher is still fine at 20M.
 ```sh
 for m in blob props both empty none; do
   for x in "" --no-preseed --junk-fbinfo; do
-    python cosmo/harness.py cosmo/build/unodos.bin /tmp/$m.png 20 --fdt=$m $x || exit 1
+    python cosmo/harness.py cosmo/build/unodos.bin /tmp/$m.png 30 --fdt=$m $x || exit 1
   done
 done
 # and an AUTOTEST scene, which now needs a much larger budget (see below)
@@ -221,8 +221,11 @@ precisely our image and no leftover partition bytes can land in range.
 
 ### Partition state
 
-`p42` is `EMPTY_NORMAL_BOOT_4`, 32 MiB at 5024 MiB, and is **still named that** — the
-`parted /dev/mmcblk0 name 42 UNODOS` step has not been done yet.
+**Slot map since 2026-08-28: `p38` = `UNODOS` (ours), `p41` = `DEBIAN12`, `p42` =
+`TRIXIE`.** Earlier notes in this file saying "dd to p42" predate that -- p42 now
+holds the daily-driver Debian 13 boot image; our slot is `p38` (a RECOVERY_BOOT2
+slot: LK skips the SPM/SCP/ccci/vpu coprocessor loads there, which bare-metal
+UnoDOS does not use -- proven fine at first light, 2026-08-31).
 
 ### The keyboard cannot type half of ASCII
 
@@ -252,9 +255,8 @@ This needs the phone. Nothing else in the port is blocked on it.
 1. `./build.sh` (add `BEACON=1` if you want the vibrator pulses).
 2. Boot Gemian, copy `build/unodos-boot.img` over, then in its root shell:
    ```sh
-   sudo dd if=unodos-boot.img of=/dev/mmcblk0p42 bs=1M
-   sudo parted /dev/mmcblk0 name 42 UNODOS      # once
-   sudo reboot                                  # then pick UNODOS from LK's menu
+   dd if=unodos-boot.img of=/dev/mmcblk0p38 bs=1M conv=fsync   # as root
+   reboot                                       # then pick UNODOS from LK's menu
    ```
 3. **Photograph whatever appears** and read it against the beacon table above. The UI
    should be **upright and centred**. If it is sideways or upside-down, the rotation
@@ -349,5 +351,5 @@ boot partition, which is a known-good LK-accepted image on this exact unit:
     only, never copy into UnoDOS (flagged in `COSMO-BRINGUP.md`).
 
 ### Device
-Configured, `p42` empty, recovery guaranteed. Iterate via Gemian's root shell (`dd` to
-`p42`); a bad image cannot brick. **Never write `lk`/`lk2`/`preloader`.**
+Configured, recovery guaranteed. Iterate via Gemian's root shell (`dd` to `p38`);
+a bad image cannot brick. **Never write `lk`/`lk2`/`preloader`.**

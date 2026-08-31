@@ -271,6 +271,9 @@ def main():
     ppitch, = struct.unpack("<I", bytes(uc.mem_read(FBINFO + 64, 4)))
     dorigin, = struct.unpack("<Q", bytes(uc.mem_read(FBINFO + 72, 8)))
     shadow, = struct.unpack("<Q", bytes(uc.mem_read(FBINFO + 80, 8)))
+    scale, = struct.unpack("<I", bytes(uc.mem_read(FBINFO + 88, 4)))
+    if not 1 <= scale <= 4:
+        scale = 1                          # a pre-FB_SCALE payload left it zero
 
     # --- what the eye actually sees --------------------------------------------
     # The panel is mounted rotated; LK's own console blit for this device says how
@@ -281,18 +284,28 @@ def main():
     # makes this a test: only a payload whose blit matches the mounting reads back
     # as the upright UI.
     dst_w, dst_h = (H, W) if rot in (90, 270) else (W, H)
+    dst_w, dst_h = dst_w * scale, dst_h * scale
     x0 = (PANEL_W - dst_w) // 2
     y0 = (PANEL_H - dst_h) // 2
     want_dorigin = raw + y0 * ppitch + x0 * 4
     # eye[] is the upright SCRW x SCRH image, laid out exactly like the shadow so the
-    # two can be compared byte for byte.
-    eye = bytearray(W * H * 4)
-    for sx in range(W):
-        fy = y0 + dst_h - 1 - sx
-        row = bytes(uc.mem_read(raw + fy * ppitch + x0 * 4, dst_w * 4))
-        for sy in range(H):
-            o = (sy * W + sx) * 4
-            eye[o:o + 4] = row[sy * 4:sy * 4 + 4]
+    # two can be compared byte for byte. At scale > 1 each UI pixel covers a
+    # scale x scale block on the panel; one eye[] is reconstructed per sub-position
+    # of that block, and every one of them must equal the shadow -- that checks the
+    # whole block is filled, not just its top-left sample.
+    eyes = []
+    for a in range(scale):
+        for b in range(scale):
+            eye = bytearray(W * H * 4)
+            for sx in range(W):
+                fy = y0 + dst_h - 1 - (sx * scale + a)
+                row = bytes(uc.mem_read(raw + fy * ppitch + x0 * 4, dst_w * 4))
+                for sy in range(H):
+                    o = (sy * W + sx) * 4
+                    s = (sy * scale + b) * 4
+                    eye[o:o + 4] = row[s:s + 4]
+            eyes.append(eye)
+    eye = eyes[0]
 
     rgb = bytearray(W * H * 3)
     for y in range(H):
@@ -309,8 +322,8 @@ def main():
           % (out_path, W, H, ran // 1_000_000))
     print("  fdt=%-5s preseed=%-5s -> fb %s = 0x%X, vramSize 0x%X, pitch %d"
           % (mode, preseed, FB_SRC.get(src, "?%d" % src), raw, vram, ppitch))
-    print("  rot=%-3d shadow 0x%X (pitch %d), rotated rect %dx%d at 0x%X"
-          % (rot, shadow, fb_pitch, dst_w, dst_h, dorigin))
+    print("  rot=%-3d scale=%d shadow 0x%X (pitch %d), rotated rect %dx%d at 0x%X"
+          % (rot, scale, shadow, fb_pitch, dst_w, dst_h, dorigin))
 
     fails = []
     if dorigin != want_dorigin:
@@ -322,14 +335,19 @@ def main():
     elif rot == 270:
         # The whole point: reconstructing the panel through the physical mounting must
         # reproduce the shadow EXACTLY -- same pixels, same place, nothing dropped at
-        # an edge and no off-by-one in the rotation.
-        if bytes(eye) != shadow_img:
-            bad = sum(1 for i in range(0, len(shadow_img), 4)
-                      if eye[i:i+4] != shadow_img[i:i+4])
-            fails.append("rotated blit: %d of %d pixels differ from the shadow"
-                         % (bad, W * H))
-        elif not any(shadow_img):
-            fails.append("rotated blit: shadow and panel agree, but both are blank")
+        # an edge and no off-by-one in the rotation. Every sub-position of the
+        # scale x scale block gets the same check.
+        for n, e in enumerate(eyes):
+            if bytes(e) != shadow_img:
+                bad = sum(1 for i in range(0, len(shadow_img), 4)
+                          if e[i:i+4] != shadow_img[i:i+4])
+                fails.append("rotated blit: %d of %d pixels differ from the shadow "
+                             "(block sub-position %d/%d)"
+                             % (bad, W * H, n, len(eyes)))
+                break
+        else:
+            if not any(shadow_img):
+                fails.append("rotated blit: shadow and panel agree, but both are blank")
     else:
         print("  (rot=%d is a diagnostic build: the panel is mounted for 270, so the "
               "image above is deliberately not upright)" % rot)

@@ -7,7 +7,7 @@
 // non-Linux OS ever booted on any MediaTek phone SoC. MINIMAL (CONTRACT-ARCH §9):
 // one full-screen app at a time, directional nav.
 //
-// Boot: Planet's LK loads this payload (wrapped in an Android boot.img, slot p42)
+// Boot: Planet's LK loads this payload (wrapped in an Android boot.img, slot p38)
 // as the "kernel" per the arm64 protocol — DTB in x0, entry at 0x40080000. We
 // DISABLE the TOPRGU watchdog first (LK armed it), then ADOPT LK's live framebuffer
 // rather than bringing up the display: LK already lit the NT36672 panel and left it
@@ -186,6 +186,7 @@
 .equ fb_ppitch, FBINFO+64                 // 4 bytes: LK's panel stride
 .equ fb_dorigin,FBINFO+72                 // 8 bytes: top-left of the rotated UI rect
 .equ fb_shadow, FBINFO+80                 // 8 bytes: the upright SCRWxSCRH surface
+.equ fb_scale,  FBINFO+88                 // 4 bytes: FB_SCALE this build presents at
 
 // Where fb_init got the framebuffer base (readable post-mortem at fb_src).
 .equ FB_SRC_FALLBACK, 0                   // nothing usable — COSMO_FB guess
@@ -241,6 +242,18 @@
 .equ FB_ROT, 270
 .endif
 
+// FB_SCALE: integer scale fb_present applies while rotating the shadow onto the
+// panel. The UI surface is SCRW x SCRH (640x480); at 1:1 that is a small centred
+// window on the 1080x2160 panel (first-light photograph, 2026-08-31), so the default
+// is 2 -- a 960x1280 rotated rect, the largest integer scale that fits the panel's
+// 1080 short side. `SCALE=1 ./build.sh` restores 1:1; build.sh defaults AUTOTEST
+// builds to 1 because the scaled present costs ~3x more emulated instructions per
+// frame and the game budgets are calibrated for 1:1 (the scaling itself is gated by
+// the default-build eye check across all fifteen FDT combos).
+.ifndef FB_SCALE
+.equ FB_SCALE, 2
+.endif
+
 // Drawing goes to a SHADOW buffer that is a plain upright SCRW x SCRH surface, so
 // pchar/frect/picon need no rotation awareness at all; fb_present then rotates the
 // whole surface into LK's framebuffer once per frame. This is also the arrangement
@@ -257,34 +270,38 @@
 // Per-rotation blit parameters. fb_present always walks the DESTINATION as a plain
 // ascending raster (DST_W x DST_H, so the framebuffer writes are contiguous and can
 // merge) and lets the SOURCE absorb the rotation as a start offset plus two signed
-// steps. Derivation, with (dx,dy) the destination pixel and (ux,uy) the UI pixel:
+// steps -- SRC_IN per SOURCE pixel along a dest row, SRC_OUT per SOURCE row (each
+// source pixel/row covers FB_SCALE dest pixels/rows). Derivation, with (dx,dy) the
+// destination pixel and (ux,uy) the UI pixel, at scale 1:
 //   0  : dx=ux,        dy=uy          270: dx=uy,        dy=SCRW-1-ux
 //   90 : dx=SCRH-1-uy, dy=ux          180: dx=SCRW-1-ux,  dy=SCRH-1-uy
 .if FB_ROT == 0
-.equ DST_W, SCRW
-.equ DST_H, SCRH
+.equ RECT_W, SCRW
+.equ RECT_H, SCRH
 .equ SRC_START, 0
 .equ SRC_IN, 4
 .equ SRC_OUT, SHADOW_PITCH
 .elseif FB_ROT == 90
-.equ DST_W, SCRH
-.equ DST_H, SCRW
+.equ RECT_W, SCRH
+.equ RECT_H, SCRW
 .equ SRC_START, (SCRH-1)*SHADOW_PITCH
 .equ SRC_IN, -SHADOW_PITCH
 .equ SRC_OUT, 4
 .elseif FB_ROT == 180
-.equ DST_W, SCRW
-.equ DST_H, SCRH
+.equ RECT_W, SCRW
+.equ RECT_H, SCRH
 .equ SRC_START, (SCRH-1)*SHADOW_PITCH+(SCRW-1)*4
 .equ SRC_IN, -4
 .equ SRC_OUT, -SHADOW_PITCH
 .else
-.equ DST_W, SCRH
-.equ DST_H, SCRW
+.equ RECT_W, SCRH
+.equ RECT_H, SCRW
 .equ SRC_START, (SCRW-1)*4
 .equ SRC_IN, SHADOW_PITCH
 .equ SRC_OUT, -4
 .endif
+.equ DST_W, (RECT_W*FB_SCALE)
+.equ DST_H, (RECT_H*FB_SCALE)
 .equ DST_X0, ((PANEL_W-DST_W)/2)          // centre the rotated rect in the panel
 .equ DST_Y0, ((PANEL_H-DST_H)/2)
 
@@ -552,21 +569,27 @@ fb_have_base:
     cbnz  w4, fb_have_pitch
     mov   w4, #COSMO_PITCH
 fb_have_pitch:
-    // Clear the panel to black (wipes LK's boot logo). Clamp the clear to vramSize
-    // when the DTB told us one: overrunning the framebuffer would land in whatever
+    // Clear LK's vram to black. When the DTB proved a vramSize, clear ALL of it,
+    // not just the visible page: LK's reservation also holds its spare buffer pages
+    // and the DAL text layer, and in the p38 RECOVERY_BOOT2 slot LK leaves recovery
+    // console text in there that scans out as a garbage band beside our UI (seen in
+    // the first-light photograph, 2026-08-31). Without a vramSize, one visible page
+    // is all we can prove exists: overrunning the framebuffer would land in whatever
     // LK reserved above it (TEE, modem, AVB), and that is not ours to scribble on.
+    // (The shadow surface lives inside this range when vramSize is known -- fine,
+    // it is cleared here BEFORE anything draws into it.)
     ldr   x0, =fb_raw
     ldr   x7, [x0]
     mov   w8, #PANEL_H
-    umull x8, w8, w4                      // PANEL_H * pitch
+    umull x8, w8, w4                      // PANEL_H * pitch: the provable minimum
     cbz   w9, fb_clrsize
-    mov   w0, w9
-    cmp   x0, x8
-    csel  x8, x0, x8, lo                  // clear min(panel bytes, vramSize)
+    mov   w8, w9                          // vramSize known: clear the whole thing
 fb_clrsize:
-    add   x8, x7, x8                      // end address
+    add   x8, x7, x8                      // end address (base and both sizes are
+                                          // 16-aligned: mblock aligns the base 64K,
+                                          // vramSize/page bytes end in 000)
 fb_clrpanel:
-    str   wzr, [x7], #4
+    stp   xzr, xzr, [x7], #16
     cmp   x7, x8
     b.lo  fb_clrpanel
     dsb   sy
@@ -637,6 +660,9 @@ fb_shadow_set:
     add   x3, x3, #(DST_X0*4)             // left pixels * 4 bytes
     ldr   x0, =fb_dorigin
     str   x3, [x0]
+    ldr   x0, =fb_scale
+    mov   w1, #FB_SCALE
+    str   w1, [x0]                        // let the harness reconstruct the eye view
     ldp   x20, x30, [sp], #16
     ret
 
@@ -648,8 +674,9 @@ fb_shadow_set:
 // write is contiguous and four pixels go out per stp -- with the D-cache off that
 // is the difference between merged bursts and 307k scattered word writes. The
 // SOURCE carries the rotation as SRC_START + two signed steps (see the FB_ROT
-// block). DST_W is 640 or 480, both multiples of 4, so the x4 unroll is exact.
-// Leaf; clobbers x0-x15.
+// block). At FB_SCALE=2 each source pixel is written twice per row and each source
+// row is emitted twice; DST_W stays a multiple of 4 either way, so the 4-dest-pixel
+// unroll is exact. Leaf; clobbers x0-x15.
 fb_present:
     ldr   x0, =fb_dorigin
     ldr   x1, [x0]                        // x1 = destination row base
@@ -659,9 +686,10 @@ fb_present:
     ldr   x3, [x0]
     ldr   x0, =SRC_START
     add   x3, x3, x0                      // x3 = source row base
-    ldr   x9, =SRC_IN                     // signed: source step within a dest row
-    ldr   x10, =SRC_OUT                   // signed: source step between dest rows
-    mov   w11, #DST_H
+    ldr   x9, =SRC_IN                     // signed: source step per source pixel
+    ldr   x10, =SRC_OUT                   // signed: source step between source rows
+    mov   w11, #(DST_H/FB_SCALE)          // source rows
+.if FB_SCALE == 1
 fp_row:
     mov   x5, x1                          // dest cursor
     mov   x6, x3                          // source cursor
@@ -684,6 +712,32 @@ fp_col:
     add   x3, x3, x10                     // next source row
     subs  w11, w11, #1
     b.ne  fp_row
+.elseif FB_SCALE == 2
+fp_row:
+    mov   w8, #2                          // each source row makes two dest rows
+fp_rep:
+    mov   x5, x1                          // dest cursor
+    mov   x6, x3                          // source cursor (rewound for the repeat)
+    mov   w7, #(DST_W/4)                  // 4 dest pixels = 2 source pixels per turn
+fp_col:
+    ldr   w12, [x6]
+    add   x6, x6, x9
+    ldr   w13, [x6]
+    add   x6, x6, x9
+    orr   x12, x12, x12, lsl #32          // each source pixel doubled side by side
+    orr   x14, x13, x13, lsl #32
+    stp   x12, x14, [x5], #16
+    subs  w7, w7, #1
+    b.ne  fp_col
+    add   x1, x1, x2                      // next destination row
+    subs  w8, w8, #1
+    b.ne  fp_rep
+    add   x3, x3, x10                     // next source row
+    subs  w11, w11, #1
+    b.ne  fp_row
+.else
+.error "fb_present supports FB_SCALE 1 or 2"
+.endif
     dsb   sy                              // the display engine DMAs this out of DRAM
     ret
 

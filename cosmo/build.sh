@@ -1,7 +1,8 @@
 #!/bin/sh
 # UnoDOS / Cosmo Communicator (MediaTek MT6771, AArch64) build.
 # Emits build/unodos.bin (flat payload) and build/unodos-boot.img (LK-loadable
-# Android boot image for slot p42). WSL is dead on amanuensis, so the AArch64
+# Android boot image for slot p38, the UNODOS slot -- p42 is TRIXIE's since
+# 2026-08-28, do NOT dd there). WSL is dead on amanuensis, so the AArch64
 # toolchain runs on quill over SSH (see the machine notes); mkdata + mkbootimg
 # run locally in Git Bash.
 #   ./build.sh              -> interactive build (launcher, first light)
@@ -34,6 +35,20 @@ case "$1" in
   tracker) DEFS="--defsym AUTOTEST=1 --defsym AT_TRACKER=1"; OUT=build/unodos_tk.bin ;;
   fs)      DEFS="--defsym AUTOTEST=1 --defsym AT_FS=1";      OUT=build/unodos_fs.bin ;;
 esac
+
+# SCALE=1|2 ./build.sh  -> integer scale-up of the UI on the panel. The interactive
+# build defaults to 2 (960x1280 rect on the 1080x2160 panel; 1:1 was a small centred
+# window, first-light photo 2026-08-31). AUTOTEST builds default to 1: their
+# instruction budgets are calibrated for the 1:1 present (~3x cheaper), and the
+# scaled blit is gated by the default build's eye check.
+case "$1" in
+  "") ;;
+  *)  SCALE="${SCALE:-1}" ;;
+esac
+if [ -n "$SCALE" ]; then
+  DEFS="$DEFS --defsym FB_SCALE=$SCALE"
+  echo "    (UI scale: FB_SCALE=$SCALE)"
+fi
 
 # ROT=90|180|270|0 ./build.sh  -> override the panel rotation fb_present applies.
 # Default 270, derived from the Cosmo's own LK (MTK_LCM_PHYSICAL_ROTATION in
@@ -74,4 +89,4 @@ IMG="${OUT%.bin}-boot.img"
 
 echo "[4/4] done."
 echo "    -> cosmo/$IMG"
-echo "    install:  scp $IMG the-cosmo:  then in Gemian:  sudo dd if=$(basename "$IMG") of=/dev/mmcblk0p42 bs=1M"
+echo "    install:  scp $IMG the-cosmo:  then in Gemian (as root):  dd if=$(basename "$IMG") of=/dev/mmcblk0p38 bs=1M conv=fsync"
