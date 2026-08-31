@@ -68,6 +68,7 @@ re-home"). Ownership is of the CODE; the whole OS is a shared goal.
 | unopkg (foreign packages that install as ordinary apps: the installer, the shim template it patches, the `PKG\` directory beside `APPS\`) | `pc64/UNOPKG.md`, `docs/ANDROID-APPLIANCE-PLAN.md` | `pc64_pkg.*`, `pc64/apps/foreign_shim.c`; the `.APK` branch in `pane_enter` (`pc64_files.c`) and the two `kExports` rows ARE ours |
 | per-port ports | `AUDIT-<port>.md` | `amiga/`, `c64/`, `nes/`, `snes/`, ... |
 | unostream (guest screen streamer for demo video + host receiver/gate) | `pc64/UNOSTREAM.md` | `pc64/unostream.*`, `pc64/tools/demo/` |
+| cosmo64 (pc64-on-ARM64 platform layer: LK boot path, ARM CPU glue, MT6771 drivers, the aarch64 toolchain + flattener) | `cosmo64/README.md`; plan: `research/pc64-arm-port-plan.md` in hmofet/cosmo | `cosmo64/*` |
 | Duum (the Python Doom engine) - **UPSTREAM, NOT OURS**: developed at github.com/hmofet/duum, vendored here as a generated file | `pc64/DUUM-UPSTREAM.md` | `pc64/apps/DUUM.PY` (generated - do not edit), `pc64/tools/sync_duum.py`; the C canvas it draws through (`upy_port/mod_uno.c`) and the host mirror + gates (`pc64/tools/duum_*.py`) ARE ours |
 
 Whoever is actively working a subsystem this session **claims it in the requests
