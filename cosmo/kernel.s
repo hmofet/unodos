@@ -593,6 +593,53 @@ fb_clrpanel:
     cmp   x7, x8
     b.lo  fb_clrpanel
     dsb   sy
+.ifdef BANDDBG
+    // Band diagnostic (BANDDBG=1 ./build.sh): identify WHICH memory the stale band
+    // beside the UI is scanned from. The band survived the full-vram clear above
+    // (first seen 2026-08-31), so paint every region of LK's reservation a distinct
+    // solid colour and hold ~12 s before booting on: page 0 RED, page 1 (the shadow
+    // page) GREEN, page 2 BLUE, the tail (DAL area) MAGENTA. A band showing one of
+    // those colours lives in that region and something repaints it later; a band
+    // STILL showing noise is scanned from OUTSIDE videolfb vram -- a second OVL
+    // layer with its own buffer (LK's recovery-menu UI), which is a register fix,
+    // not a memory fix. Preserves w4 (pitch) and x20 (beacon stage); w9 is reloaded
+    // from fb_vram by the shadow-picking code below.
+    ldr   x0, =fb_raw
+    ldr   x7, [x0]
+    mov   w8, #PANEL_H
+    umull x8, w8, w4                      // x8 = one page, bytes
+    ldr   x0, =fb_vram
+    ldr   w9, [x0]
+    ldr   x1, =0xFFFF0000FFFF0000         // RED: the visible page
+    mov   x2, x7
+    add   x3, x7, x8
+    bl    bdbg_fill
+    cbz   w9, bdbg_hold                   // no vramSize: page 0 is all we can prove
+    ldr   x1, =0xFF00FF00FF00FF00         // GREEN: page 1, where the shadow lives
+    add   x2, x7, x8
+    add   x3, x2, x8
+    bl    bdbg_fill
+    ldr   x1, =0xFF0000FFFF0000FF         // BLUE: page 2
+    add   x2, x7, x8, lsl #1
+    add   x3, x2, x8
+    bl    bdbg_fill
+    ldr   x1, =0xFFFF00FFFFFF00FF         // MAGENTA: the tail up to vramSize
+    add   x2, x7, x8
+    add   x2, x2, x8, lsl #1
+    add   x3, x7, x9
+    cmp   x2, x3
+    b.hs  bdbg_hold
+    bl    bdbg_fill
+bdbg_hold:
+    dsb   sy
+    mrs   x0, cntpct_el0
+    ldr   x1, =156000000                  // ~12 s at the MT6771's 13 MHz
+    add   x1, x0, x1
+bdbg_spin:
+    mrs   x0, cntpct_el0
+    cmp   x0, x1
+    b.lo  bdbg_spin
+.endif
     // Bar beacon: w20 white 32x32 blocks along the top-left of the RAW framebuffer,
     // outside the centred UI. Bars but no UI => the base is right, the geometry is
     // not. No bars at all => we are painting into the wrong address entirely.
@@ -665,6 +712,17 @@ fb_shadow_set:
     str   w1, [x0]                        // let the harness reconstruct the eye view
     ldp   x20, x30, [sp], #16
     ret
+
+.ifdef BANDDBG
+// bdbg_fill: fill [x2, x3) with the colour pair in x1. Leaf; clobbers x2.
+bdbg_fill:
+    cmp   x2, x3
+    b.hs  bdbg_fr
+    stp   x1, x1, [x2], #16
+    b     bdbg_fill
+bdbg_fr:
+    ret
+.endif
 
 // ----------------------------------------------------------------------------
 // fb_present — rotate the shadow surface into LK's framebuffer
