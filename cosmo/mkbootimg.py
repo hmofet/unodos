@@ -141,7 +141,7 @@ def main():
         print("WARNING: LK's dtb scan offset is negative; it will not find the tree",
               file=sys.stderr)
     if total > 32 * 1024 * 1024:
-        print("WARNING: image exceeds the 32 MiB p42 slot ceiling!", file=sys.stderr)
+        print("WARNING: image exceeds the 32 MiB boot-slot ceiling!", file=sys.stderr)
 
 
 if __name__ == "__main__":

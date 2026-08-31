@@ -9,7 +9,8 @@ bring-up facts and the device layout live in the companion research repo
 ## How it boots
 
 Planet's LK loads this payload (wrapped in an Android `boot.img`) from multiboot slot
-**`p42`** as the "kernel", per the arm64 boot protocol: DTB in `x0`, entry at
+**`p38`** (`UNODOS`; slot map since 2026-08-28: p38 = UNODOS, p41 = DEBIAN12, p42 =
+TRIXIE -- do NOT dd to p42) as the "kernel", per the arm64 boot protocol: DTB in `x0`, entry at
 `0x40080000`, MMU off. `_start`:
 
 1. saves the DTB pointer, parks secondary cores;
@@ -58,8 +59,10 @@ y**. That is `FB_ROT 270`, the default.
 `fb_present` walks the *destination* as an ascending raster and lets the source carry
 the rotation, so the framebuffer writes stay contiguous (four pixels per `stp`) — with
 the D-cache off that is the difference between merged bursts and 307k scattered word
-writes. It costs roughly 1M instructions per frame; its real cost on hardware is
-memory-bound, so measure before optimising it further.
+writes. It costs roughly 1M instructions per frame at
+1:1, ~3M at the default `FB_SCALE=2` (each UI pixel becomes a 2×2 block, the largest
+integer scale the 1080-px short side fits); its real cost on hardware is memory-bound,
+so measure before optimising it further. `SCALE=1 ./build.sh` restores 1:1.
 
 The shadow lives in **page 1 of LK's own VRAM** (`fb_base + PANEL_H*pitch`) whenever the
 DTB's `vramSize` proves there is room: LK reserved 33 MB and has finished with all of
@@ -97,7 +100,7 @@ of the archived LK source and confirmed against the stock v23 `boot.img`:
    LK's scan window exactly over our image.
 
 Result: `[2048-byte header][gzip(payload)][zero pad][device tree]`, 524,288 bytes total,
-well under the 32 MiB `p42` ceiling.
+well under the 32 MiB slot ceiling.
 
 **The device tree is a vendor blob and is not in this repo.** Point `--dtb` or
 `$COSMO_DTB` at `analysis/v23/cosmo-boot.dtb` in the research repo; `mkbootimg.py` looks
@@ -109,9 +112,8 @@ one.
 Boot into Gemian (root shell `gemian`/`gemian`), copy the image over, and:
 
 ```sh
-sudo dd if=unodos-boot.img of=/dev/mmcblk0p42 bs=1M
-sudo parted /dev/mmcblk0 name 42 UNODOS      # once
-sudo reboot                                   # then pick UNODOS from LK's menu
+dd if=unodos-boot.img of=/dev/mmcblk0p38 bs=1M conv=fsync   # as root; p38 = UNODOS
+reboot                                        # then pick UNODOS from LK's menu
 ```
 
 A bad image cannot brick the device — LK still offers Android and Gemian. **Never write
@@ -132,7 +134,7 @@ whose blit matches it reads back upright — a `ROT=90` build fails the check, w
 what makes it a test rather than a self-consistency loop.
 
 `--fdt=` selects the tree: `blob` (default, the production LK shape), `props` (the
-FPGA shape), `both` (the split properties must win), `empty` (a valid tree with no
+FPGA shape), `both` (both forms present and disagreeing, as the real device does — the blob must win), `empty` (a valid tree with no
 framebuffer), `none` (no FDT at all). `--no-preseed` empties `FBINFO` so only the tree
 can supply a base; `--junk-fbinfo` fills it with plausible garbage instead, because the
 device hands us uninitialised DRAM there and `fb_init` must ignore anything not marked
@@ -140,14 +142,18 @@ with `FB_SEED_MAGIC`. `--rot=N` says the payload was built with `FB_ROT=N`, whic
 relaxes the upright check for a deliberate diagnostic build. All fifteen combinations
 are green.
 
-**Budget:** the per-frame present is ~1M instructions, so AUTOTEST scenes need a much
-larger instruction budget than they used to — Dostris wants ~400M (about 40 s) to play
-out. A static shot like the launcher is still fine at 20M.
+**Budget:** the per-frame present is ~1M instructions at 1:1, ~3M at the default
+`FB_SCALE=2`, so AUTOTEST scenes need a much larger instruction budget than they used
+to — Dostris wants ~400M (about 40 s) to play out, which is why build.sh keeps
+AUTOTEST builds at scale 1. A static shot like the launcher is fine at 30M (the
+full-vram clear at boot costs ~8M of that). The harness reads the build's scale back
+from `FBINFO+88` and checks every sub-position of each scaled block against the
+shadow, so no flag is needed to test a `SCALE=1` build.
 
 ```sh
 for m in blob props both empty none; do
   for x in "" --no-preseed --junk-fbinfo; do
-    python cosmo/harness.py cosmo/build/unodos.bin /tmp/$m.png 20 --fdt=$m $x || exit 1
+    python cosmo/harness.py cosmo/build/unodos.bin /tmp/$m.png 30 --fdt=$m $x || exit 1
   done
 done
 ```
