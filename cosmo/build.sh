@@ -67,6 +67,15 @@ if [ -n "$BEACON" ]; then
   echo "    (BEACON build: vibrator stage pulses enabled)"
 fi
 
+# BANDDBG=1 ./build.sh -> paint LK's vram regions distinct colours at boot and hold
+# ~12 s (page0 RED / page1 GREEN / page2 BLUE / tail MAGENTA), then boot normally.
+# Diagnoses which memory a stale on-panel artefact is scanned from; a region still
+# showing noise over the colours is outside videolfb vram (a second OVL layer).
+if [ -n "$BANDDBG" ]; then
+  DEFS="$DEFS --defsym BANDDBG=1"
+  echo "    (BANDDBG build: vram colour-map + 12 s hold at boot)"
+fi
+
 echo "[2/4] cross-assembling (AArch64) on quill..."
 # stage this worktree's cosmo/ + generated contract onto quill, build there.
 ssh "$QUILL" "mkdir -p $QDIR/cosmo/build $QDIR/unodef/gen/cosmo"
