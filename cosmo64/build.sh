@@ -22,21 +22,25 @@ LMBIN="/opt/llvm-mingw-20260826-ucrt-ubuntu-22.04-x86_64/bin"
 CC="$LMBIN/aarch64-w64-mingw32-clang"
 
 # The load-bearing flags (see the header of m0.c):
-#   -mstrict-align       MMU off => Device memory => no unaligned accesses
-#   -mgeneral-regs-only  FP/SIMD traps until CPACR is programmed (M1)
-#   -fno-builtin         our memset must not become a call to itself
+#   -mstrict-align  code runs BEFORE the MMU is on too (mmu.c's table builder,
+#                   the FDT walk) and there all memory is Device: no unaligned
+#                   accesses anywhere. After mmu_on, merely a minor cost.
+#   -fno-builtin    our memset must not become a call to itself
+# -mgeneral-regs-only was retired in M1: entry.s programs CPACR before any C.
 CFLAGS="-O2 -Wall -Wextra -ffreestanding -fno-stack-protector -fno-stack-check \
-        -nostdinc -fno-builtin -mstrict-align -mgeneral-regs-only"
+        -nostdinc -fno-builtin -mstrict-align"
 LINK="-nostdlib -Wl,--image-base,0x40080000 -e _start"
 
 mkdir -p build
 echo "[1/3] cross-compiling (aarch64-w64-mingw32) on quill..."
 ssh "$QUILL" "mkdir -p $QDIR/build"
-scp -q entry.s m0.c "$QUILL:$QDIR/"
+scp -q entry.s cpu.s m0.c mmu.c "$QUILL:$QDIR/"
 ssh "$QUILL" "cd $QDIR && \
   $CC $CFLAGS -c m0.c -o build/m0.o && \
+  $CC $CFLAGS -c mmu.c -o build/mmu.o && \
   $CC -c entry.s -o build/entry.o && \
-  $CC $LINK -o build/m0.exe build/entry.o build/m0.o"
+  $CC -c cpu.s -o build/cpu.o && \
+  $CC $LINK -o build/m0.exe build/entry.o build/cpu.o build/m0.o build/mmu.o"
 scp -q "$QUILL:$QDIR/build/m0.exe" build/
 
 echo "[2/3] flattening PE -> LK payload..."

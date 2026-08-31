@@ -49,12 +49,40 @@ pick UNODOS. p38 is a RECOVERY_BOOT2 slot (no SPM/SCP/ccci firmware — fine for
 bare metal, proven at the asm port's first light). Never write
 `lk`/`lk2`/`preloader`.
 
-## Next: M1 — the shell on the panel
+## M1 part 1 DONE (2026-08-31): CPU glue + the QEMU gate
 
-- EL detection + vectors, GIC, ARM generic timer wired to pc64's timer seam
-- MMU + caches ON (framebuffer pages Device/non-cacheable first; this is where
-  `-mgeneral-regs-only` gets retired and CPACR turns the FPU on)
-- fence the x86-only pc64 sources out of the target and get the C core —
-  unoui, the shell, the module loader — compiling for aarch64
-- the FBINFO/videolfb code here graduates from `m0.c` into the real platform
-  layer as `cosmo64/display.c`
+- `cpu.s`: 16-slot vector table that leaves a **crash record at 0x40321000**
+  (magic/vec/ESR/ELR/FAR/EL — there is no UART, so faults must leave forensics
+  in DRAM) and paints a red block at the panel origin; whole-D-cache
+  set/way invalidate; `mmu_on`. `entry.s` programs CPACR before any C runs, so
+  `-mgeneral-regs-only` is retired and the compiler may emit FP anywhere.
+- `mmu.c`: identity map, 4 KB granule, 39-bit VA — MMIO Device below 1 GB,
+  DRAM Normal WB, and **0x7C000000+ Normal non-cacheable** (LK reserves the
+  framebuffer top-down under 2 GB, so display DMA stays coherent with zero
+  per-frame cache maintenance).
+- The shadow moved into the payload's **own .bss**: the first-light photos
+  showed LK's vram page 1 scanned out as a garbage band by a leftover display
+  layer. Image memory is ours by definition (and cacheable = faster reads).
+- **The gate moved to real QEMU (`qharness.py`, runs on quill).** Unicorn
+  stops cold at the first fetch through an enabled EL1 MMU (minimal repro
+  verified) and can never do the GIC; `-M virt` has DRAM at 0x40000000 like
+  the Cosmo, so the payload runs UNMODIFIED at the real device framebuffer
+  address. `flatten.py` stamps an **ARM64 Image header** into the flat
+  image's spare header page — LK still just executes offset 0 (`code0` is the
+  branch), and QEMU's `-kernel` loader lands the image at RAM+0x80000 = the
+  link address with the DTB in x0, the same contract. `-dtb` injects the
+  videolfb tree; readback is QMP `pmemsave`; a payload fault is reported from
+  the crash record instead of a mute failure.
+
+## Next: M1 part 2 — the shell
+
+Per the dependency survey (agent report, 2026-08-31): compile the 23-file
+Tier-1 list (unoui + themes + fb/libc/math/font/icons/qoi/uui_apps/
+mac_compat + pc64_uui.c), write `cosmo64/{display,time,input,platform}.c`
+against the ~40-function seam in `pc64/uefi_main.c`/`pc64_native.h`, and a
+~250-line `stubs.c` for the subsystems the `#ifdef`s do NOT actually gate
+(only UNO_ACPI/UNO_BG_CACHE/UNO_DEBUG/UNO_DBGCON are honest). Known hazards:
+`___chkstk_ms` in pc64_libc.c is x86 (clang emits `__chkstk` on aarch64),
+`pc64_modload_static.c` is a trap (declares 14 undefined app symbols — write
+a fresh stub), `pc64_games.c:62` names `u3d_backend_intel` directly, and the
+shell carries ~69 MB of .bss (heap 32 MB + four full-screen buffers).
