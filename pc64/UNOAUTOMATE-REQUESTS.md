@@ -11274,3 +11274,15 @@ still synchronous - about three or four seconds of blocked desktop on Join. The
 two inline DHCP loops and the redundant scan are gone; making the association
 non-blocking is a state-machine refactor of `find_and_join()`, which is a slice
 of its own and not one to slip in.
+
+---
+
+## 2026-08-31 — claim: cosmo64 (pc64-on-ARM64 platform layer)
+
+New lane, registered in AGENTS.md's ownership table in the same commit:
+`cosmo64/*` — the LK boot path, ARM CPU glue, MT6771 drivers and the aarch64
+toolchain that will carry the C pc64 system on the Cosmo Communicator. Plan:
+`research/pc64-arm-port-plan.md` in hmofet/cosmo. This session lands M0 (the
+toolchain proven end to end, gated by the asm port's harness). No other lane's
+files are touched; the asm cosmo port (`cosmo/`, branch `cosmo-port`) is a
+separate lane and stays.
