@@ -96,5 +96,26 @@ desktops, Control Panel, the tray uptime ticking off CNTPCT -- renders under
   `-Wno-error=implicit-function-declaration` (pc64_uui.c's
   declared-later-in-file pattern), `-fno-builtin`.
 
-Still M1 on hardware: boot the shell image on the device (pending -- the
-device is busy). Then M2: AW9523 keyboard + Novatek touch into input.c's ring.
+## M1 COMPLETE ON HARDWARE (2026-09-01): the desktop on the phone
+
+The Aurora desktop boots on the Cosmo from the p38 slot. Getting there took a
+six-cycle visual bisect (stage beacons painted over LK's splash; a fault
+handler that draws ESR/ELR/FAR as bit-cells -- no UART, no /dev/mem, and
+expdb only keeps the last two boots), which established two platform laws:
+
+1. **Ship no .bss** -- LK's decompress caps at 28 MB (mt_boot.c budgets the
+   kernel window); flatten.py trims to the last real byte and entry.s
+   re-zeroes from the header's res2/res3 range.
+2. **EVERYTHING compiles `-mstrict-align`** -- unaligned access wedges this
+   guest silently at a level EL1 vectors never see (consistent with
+   GenieZone's stage-2 imposing Device-type attributes). Every build with any
+   non-strict-align code died at its first merged wide load; the fully
+   strict-align image runs clean. This applies to all future cosmo64 code
+   and any pc64 file added to the target.
+
+Corollary rule: **mutable state lives in the image's own .bss** (stack, debug
+page) -- the one DRAM the boot proves writable -- with the debug page's
+address published at image offset 0x30 for the harness.
+
+Next -- M2: AW9523 keyboard (bus 4, addr 0x5b) + Novatek touch into input.c's
+ring, over a polled MTK I2C driver. Then M3 storage (MSDC, p44).
