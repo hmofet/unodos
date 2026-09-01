@@ -27,6 +27,10 @@ void c_main(void *dtb)
     c64_logf("fb raw=%016x ppitch=%d src=%d vram=%x\n", raw, (int)ppitch,
              (int)FBDBG->fb_src, FBDBG->fb_vram);
     uno_native_tsc_set(c64_cnt_freq() / 1000000ull);
+    /* Storage before the shell: session_load() runs inside uno_main. On QEMU
+     * there is no MSDC at 0x11230000, so this costs one bounded command
+     * timeout and logs that the eMMC is absent. */
+    c64_blk_init();
     c64_log("entering uno_main\n");
     uno_main();                                   /* never returns */
     for (;;)
