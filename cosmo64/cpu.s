@@ -2,7 +2,7 @@
 // crash record, whole-D-cache invalidate, and the MMU/cache enable sequence.
 //
 // There is no UART on this device, so a fault must leave its forensics where a
-// later boot (or the harness) can read them: the CRASH RECORD at 0x53F01000 --
+// later boot (or the harness) can read them: the CRASH RECORD at c64_dbg_page+0x1000 (in-image .bss) --
 // magic 'HSRC' ("CRSH" little-endian), then vec index, ESR, ELR, FAR, CurrentEL.
 // The handler also paints a red 64x64 block at the raw framebuffer origin when
 // fb_init has published one (FBINFO+32), then parks. Sixteen 0x80-byte vectors,
@@ -21,7 +21,7 @@ vector_table:
     .endr
 
 fault_record:
-    ldr   x0, =0x53F01000
+    ldr   x0, =c64_dbg_page + 0x1000
     ldr   w1, =0x43525348               // 'CRSH' read back as bytes C R S H
     str   w1, [x0]
     str   w18, [x0, #4]
@@ -39,7 +39,7 @@ fault_record:
     // the adopted framebuffer when fb_init published one; before that, the
     // MEASURED panel base/pitch for this unit (0x7DF70000/4352,
     // mblock-7-framebuffer, device-verified) -- diagnostic-only hardcode.
-    ldr   x0, =0x53F00000               // FBINFO
+    ldr   x0, =c64_dbg_page             // FBINFO
     ldr   x1, [x0, #32]                 // fb_raw
     ldr   w2, [x0, #64]                 // fb_ppitch
     cbnz  x1, 1f

@@ -15,14 +15,21 @@ typedef unsigned long long c64_u64;
 #define FB_ROT 270
 #define FB_SCALE 2
 
-/* Memory layout. The shell image carries ~60 MB of .bss (heap + screen
- * buffers), so the debug block and stack live ABOVE the image, just below
- * LK's DTB at 0x54000000 (ram_console at 0x54400000 stays untouched for
- * forensics). flatten.py asserts the image ends below C64_IMAGE_CEIL. */
+/* Memory layout. EVERYTHING mutable lives in the image's own .bss -- stack,
+ * FBINFO debug block, crash record -- because that is the one stretch of DRAM
+ * the boot proves writable (the entry zero loop covers all of it) before
+ * anything depends on it. The green+cyan+magenta+yellow boot of 2026-09-01
+ * killed the off-image variants one by one: the 0x53E00000 stack and then the
+ * 0x53F00000 FBINFO block were the only unproven atoms left in their failure
+ * windows. The debug block's address is published into the flat image's own
+ * header (offset 0x30, the ARM64 res4 word) at boot so the harness can find
+ * it. flatten.py asserts the image ends below C64_IMAGE_CEIL (LK's DTB is at
+ * 0x54000000; ram_console at 0x54400000 stays untouched for forensics). */
 #define C64_IMAGE_CEIL 0x53000000ull
-#define C64_STACK_TOP  0x53E00000ull
-#define C64_FBINFO     0x53F00000ull
-#define C64_CRASH      0x53F01000ull
+#define C64_DBG_PTR_SLOT 0x40080030ull   /* u64: &c64_dbg_page, entry.s writes */
+
+/* one page of fbdbg + the crash record at +0x1000 */
+extern c64_u8 c64_dbg_page[0x1100];
 
 enum { FB_SRC_FALLBACK = 0, FB_SRC_BLOB = 1, FB_SRC_PROPS = 2, FB_SRC_SEED = 3 };
 enum { BCN_FBFALL = 2, BCN_FBDTB = 3, BCN_MAIN = 4 };
@@ -59,7 +66,7 @@ _Static_assert(__builtin_offsetof(struct fbdbg, fb_raw) == 32, "fbdbg layout");
 _Static_assert(__builtin_offsetof(struct fbdbg, fb_panel) == 56, "fbdbg layout");
 _Static_assert(__builtin_offsetof(struct fbdbg, fb_scale) == 88, "fbdbg layout");
 
-#define FBDBG ((volatile struct fbdbg *)C64_FBINFO)
+#define FBDBG ((volatile struct fbdbg *)c64_dbg_page)
 
 /* cpu.s / mmu.c */
 void cpu_early_init(void);

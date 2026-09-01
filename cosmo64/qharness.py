@@ -19,7 +19,7 @@ What it does:
     the monitor with pmemsave;
   * checks the same FBINFO contract cosmo/harness.py checks -- source, base,
     vram, beacon, white bar, dorigin, shadow pitch -- plus the CRASH RECORD
-    at 0x40321000 (a payload fault parks in the vectors and leaves ESR/ELR/
+    (in-image, found via the header pointer; a fault parks in the vectors and leaves ESR/ELR/
     FAR there, which this prints instead of a mute failure);
   * reconstructs the eye view through the panel mounting at every sub-position
     of the scale block and requires it to equal the shadow, pixel for pixel;
@@ -31,8 +31,6 @@ import os, struct, subprocess, sys, tempfile, time, zlib
 
 LOAD = 0x40080000
 FDT_AT = 0x48000000
-FBINFO = 0x53F00000
-CRASH = 0x53F01000
 PANEL_FB = 0x7DF70000
 VRAM = 0x1F90000
 PANEL_W, PANEL_H, PITCH = 1080, 2160, 4352
@@ -132,9 +130,18 @@ def main():
             time.sleep(0.25)
         sys.exit("qharness: dump %s never completed" % path)
 
+    # the payload publishes its in-image debug page's address in its own
+    # header (offset 0x30, the ARM64 res4 word) -- discover it, then dump it
+    f_hdr = os.path.join(tmp, "hdr.bin")
+    qmp("pmemsave", val=LOAD, size=0x40, filename=f_hdr)
+    hdr = dumped(f_hdr, 0x40)
+    dbg_at, = struct.unpack_from("<Q", hdr, 0x30)
+    if not LOAD < dbg_at < 0x54000000:
+        sys.exit("qharness: bad debug-page pointer 0x%X in the image header "
+                 "(entry.s never ran?)" % dbg_at)
     f_fbi = os.path.join(tmp, "fbinfo.bin")
-    qmp("pmemsave", val=FBINFO, size=0x2000, filename=f_fbi)
-    fbi = dumped(f_fbi, 0x2000)
+    qmp("pmemsave", val=dbg_at, size=0x1100, filename=f_fbi)
+    fbi = dumped(f_fbi, 0x1100)
     fb_base, fb_pitch = struct.unpack_from("<QI", fbi, 0)
     vram, = struct.unpack_from("<I", fbi, 24)
     raw, = struct.unpack_from("<Q", fbi, 32)
@@ -146,9 +153,9 @@ def main():
     if not 1 <= scale <= 4:
         scale = 1
 
-    cmagic, vec = struct.unpack_from("<II", fbi, CRASH - FBINFO)
+    cmagic, vec = struct.unpack_from("<II", fbi, 0x1000)
     if cmagic == 0x43525348:
-        esr, elr, far, el = struct.unpack_from("<QQQQ", fbi, CRASH - FBINFO + 8)
+        esr, elr, far, el = struct.unpack_from("<QQQQ", fbi, 0x1000 + 8)
         qmp("quit")
         sys.exit("CRASH RECORD: vec=%d ESR=0x%X (EC=0x%X) ELR=0x%X (image+0x%X) "
                  "FAR=0x%X EL=0x%X" % (vec, esr, esr >> 26, elr, elr - LOAD, far, el))
