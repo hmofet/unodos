@@ -110,9 +110,9 @@ shell )
 esac
 
 echo "[boot image] wrapping..."
-# mkbootimg.py lives in the asm port's lane (cosmo/, branch cosmo-port, not yet
-# on master) -- consume it from that worktree until the branches meet.
-MKBOOTIMG="${MKBOOTIMG:-../../unodos-cosmo/cosmo/mkbootimg.py}"
+# mkbootimg.py is the asm port's (cosmo/ lane, in-tree since the 2026-09-01
+# merge) -- consumed, not edited.
+MKBOOTIMG="${MKBOOTIMG:-../cosmo/mkbootimg.py}"
 [ -f "$MKBOOTIMG" ] || { echo "mkbootimg.py not found at $MKBOOTIMG -- set MKBOOTIMG" >&2; exit 1; }
 "$PY" "$MKBOOTIMG" "$OUT" build/pc64arm-boot.img
 echo "    -> cosmo64/build/pc64arm-boot.img  (from $OUT)"
