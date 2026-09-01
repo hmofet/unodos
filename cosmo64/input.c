@@ -48,6 +48,12 @@ int uno_pc64_next_key(int *scan, int *uni, int *ctrl)
     return 1;
 }
 
+void c64_input_set_level(int mods, int held)
+{
+    g_mods = mods;
+    g_held = held;
+}
+
 int uno_pc64_mods(void)
 {
     return g_mods;
