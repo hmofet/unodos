@@ -93,12 +93,13 @@ void uno_pc64_init(void)
 
 void uno_pc64_poll(void)
 {
-    /* keyboard/pointer polling arrives with the AW9523 + touch drivers (M2) */
     static int first = 1;
     if (first) {
         first = 0;
         c64_beacon(496, 0xFF008000u);   /* DARK GREEN: the main loop reached */
+        c64_kbd_init();
     }
+    c64_kbd_poll();
 }
 
 /* Reset via the TOPRGU watchdog: re-enable it and let it fire. LK armed it

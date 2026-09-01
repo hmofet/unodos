@@ -102,6 +102,20 @@ static inline void c64_beacon(int x, c64_u32 color)
 #define C64_BOOT_STACK_BYTES 0x80000
 extern c64_u8 c64_boot_stack[C64_BOOT_STACK_BYTES];
 
+/* i2c.c: polled MTK I2C (bus 4, the AW9523's). Returns <0 on error/NAK. */
+int c64_i2c_init(void);
+int c64_i2c_write_reg(c64_u8 dev, c64_u8 reg, c64_u8 val);
+int c64_i2c_read_reg(c64_u8 dev, c64_u8 reg);
+
+/* kbd.c: the AW9523 matrix keyboard -> the input ring */
+void c64_kbd_init(void);
+void c64_kbd_poll(void);
+int c64_kbd_present(void);
+
+/* input.c: producers push edges and publish level state */
+void c64_key_push(int scan, int uni, int mods);
+void c64_input_set_level(int mods, int held);
+
 static inline c64_u64 c64_cnt_now(void)
 {
     c64_u64 v;

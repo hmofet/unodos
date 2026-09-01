@@ -78,7 +78,7 @@ shell )
           theme_amiga theme_c64 theme_apple2 theme_next"
   PCORE="fb pc64_libc pc64_math pc64_font pc64_icons pc64_qoi pc64_uui_apps \
          mac_compat pc64_io pc64_uui"
-  C64="videolfb display platform input stubs"
+  C64="videolfb display platform input stubs i2c kbd"
 
   # -Wno-error=implicit-function-declaration: mingw-gcc merely warns on the
   # declared-later-in-the-same-file pattern pc64_uui.c uses; clang 16+ errors.
