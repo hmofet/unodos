@@ -141,15 +141,32 @@ is at `0x54410000 + (0xE0000 - 0x40000 - 0x1000 - 0x10000)` = **0x5449F000,
 0x40000 bytes**, and the four zones then end at 0x544F0000, which is the
 reservation's own end: the arithmetic checks itself.
 
-`log.c` writes there in ramoops' own `persistent_ram_buffer` format. That turns
-a DRAM buffer that is merely lucky to survive into one the kernel **reserves**
-(nothing else may allocate it), deliberately preserves across reset, and reads
-back at its next boot on its own initiative:
+`log.c` writes there in ramoops' own `persistent_ram_buffer` format, so the
+kernel would find it, save it and expose it with no eMMC driver involved.
+
+**That does not work on this device, and the test said so.** UnoDOS ran, was
+reset into trixie, and `/sys/fs/pstore` was empty. The cause is not the zone
+address: MTK's own `ram_console` at 0x54400000, a **separate** reservation,
+came up equally empty (`/proc/last_kmsg` held 74 bytes of freshly generated
+header and no prior log). Two independent reservations losing their contents
+at once is DRAM being wiped, not a layout mistake -- the preloader
+re-initialises DRAM on this reset path, and ram_console/pstore only ever
+worked for the abnormal resets MTK carries mrdump for.
+
+So **the log's durable home is the eMMC** (see M3 below): `msdc.c` writes it
+into the unused tail of p38, UnoDOS's own boot partition.
 
 ```sh
 # boot UNODOS from the LK menu, do the thing, reboot into trixie, then:
-./readlog.sh          # -a for every saved log, -c to clear
+./readlog.sh          # -r also tries the DRAM/pstore path
 ```
+
+The DRAM log stays, because it is free, it reaches the QEMU gate (where
+`qharness.py` reads the zone directly), and it is the **only** log that exists
+before storage comes up -- which is exactly when storage is being debugged.
+`c64_log_survey()` now counts surviving ramoops signatures at every boot and
+records the verdict in the log, so the DRAM question re-answers itself instead
+of being assumed.
 
 - **`mmu.c` maps 0x54400000 Normal-NC, and that is load-bearing.** A warm reset
   does not flush the D-cache, so a write-back mapping would strand the last
@@ -162,11 +179,10 @@ back at its next boot on its own initiative:
   puts DRAM at 0x40000000 like the Cosmo), prints it on every run, and fails
   the build if it is missing -- *before* the crash-record exit, so a payload
   that died still hands over everything it managed to say.
-- Each UnoDOS run is readable exactly once, from the first trixie boot after
-  it: the kernel zaps the zone after saving and then writes its own console
-  there. Read it before rebooting again. `systemd-pstore.service` also moves
-  the files out to `/var/lib/systemd/pstore/` the moment the directory is
-  non-empty; `readlog.sh` looks in both places.
+- The eMMC sink is flushed from the poll loop about twice a second (a no-op
+  when nothing new was logged), after `c64_blk_init()` so the boot story lands
+  even if the shell never comes up, and **from the fault handler**, which is
+  the case that matters: the log of a boot that died is the one worth having.
 
 `touch.c` and `kbd.c` stopped failing silently at the same time: every bail
 says which one it was, and each touch-DOWN logs raw, panel and UI coordinates
@@ -191,8 +207,17 @@ adopted state worth having. PIO rather than DMA: these transfers are a GPT
 header and, later, session files, and PIO cannot scribble on DRAM if a
 register field is wrong, which matters where a wild write is a brick.
 
+**The log lives here.** `c64_log_flush()` writes the ring into a 128 KiB window
+2 MiB into p38 -- UnoDOS's own 32 MiB boot partition, of which the boot image
+uses 512 KiB, so the tail is ours by a wide margin and nothing else on the
+device touches it. Block 0 of the window is a header (`(UNOLOG)`, byte count,
+and the offset the text starts at, so a truncated log is distinguishable from a
+whole one). `readlog.sh` `dd`s it straight back out of `/dev/mmcblk0p38`. The
+window's LBA is **derived from the GPT**, never a hardcoded absolute block.
+
 **Writes are fenced at the bottom of the driver.** `c64_blk_write()` refuses
-any LBA outside the UnoDOS data partition found by the GPT walk. Everything
+any LBA outside two windows: the UnoDOS data partition, and that log window.
+Both are found by the GPT walk. Everything
 else on this eMMC belongs to Android, to Gemian, to the GPT, or to the
 preloader, and the preloader does not come back. There is no unfenced path for
 a caller to route around. The GPT walk prefers a partition named `UNODATA` and

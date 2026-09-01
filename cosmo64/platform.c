@@ -16,8 +16,10 @@ void c_main(void *dtb)
     /* Before the MMU, so that a translation fault has somewhere to say so:
      * with the MMU off every access is Device-nGnRnE and lands in DRAM
      * directly, which is exactly what the log wants anyway. */
+    c64_log_survey();               /* before init() overwrites a signature */
     c64_log_init();
     c64_logf("dtb=%p cntfrq=%d\n", dtb, (int)c64_cnt_freq());
+    c64_log_survey_report();
     mmu_init();
     c64_beacon(272, 0xFFFFFF00u);   /* YELLOW: translation + caches survived */
     c64_log("mmu on\n");
@@ -32,6 +34,8 @@ void c_main(void *dtb)
      * timeout and logs that the eMMC is absent. */
     c64_blk_init();
     c64_log("entering uno_main\n");
+    c64_log_flush();                /* the boot story reaches the eMMC even if
+                                     * the shell never comes up */
     uno_main();                                   /* never returns */
     for (;;)
         __asm__ volatile("wfe");
@@ -152,6 +156,12 @@ void uno_pc64_poll(void)
     kbdtest_tick(frames);
 #endif
     frames++;
+    /* Push the log to the eMMC about twice a second. c64_log_flush() returns
+     * immediately when nothing has been logged since the last one, so an idle
+     * desktop costs nothing; a session that says something gets it on disk
+     * before whatever happens next. */
+    if ((frames % 30u) == 0u)
+        c64_log_flush();
 }
 
 /* Reset via the TOPRGU watchdog: re-enable it and let it fire. LK armed it

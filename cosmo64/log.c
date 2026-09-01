@@ -36,10 +36,24 @@
  * that -- so that is what a fresh log looks like here too. ECC is off (0/0),
  * so there is no parity region to maintain.
  *
- * The zone is mapped Normal non-cacheable (mmu.c), which is what makes this
- * survive at all: a warm reset does not flush the D-cache, so a write-back
- * mapping would drop the last words of the log -- exactly the ones naming
- * whatever went wrong.
+ * The zone is mapped Normal non-cacheable (mmu.c), so a warm reset cannot
+ * strand the tail of the log in the D-cache.
+ *
+ * *** AND IT DOES NOT WORK ON THIS DEVICE. Tested 2026-09-01: UnoDOS ran, was
+ * reset into trixie, and /sys/fs/pstore was EMPTY. The cause is not the zone
+ * address -- MTK's own ram_console at 0x54400000, a SEPARATE reservation, came
+ * up equally empty (/proc/last_kmsg held 74 bytes of freshly generated header
+ * and no prior log). Two independent reservations losing their contents at
+ * once is DRAM being wiped, not a layout mistake: the preloader re-initialises
+ * DRAM on this reset path, and ram_console/pstore only ever worked for the
+ * abnormal resets MTK carries mrdump for.
+ *
+ * So the log's durable home is the eMMC (msdc.c writes it into p38's unused
+ * tail, and readlog.sh dd's it back). This code stays because it is free, it
+ * is the ONLY log available before storage comes up -- which is exactly when
+ * storage is being debugged -- and it still reaches the QEMU gate, where
+ * qharness.py reads the zone directly. c64_log_survey() re-tests the DRAM
+ * question on every boot and says so in the log.
  */
 
 #include "cosmo64.h"
@@ -93,6 +107,59 @@ void c64_log(const char *s)
     while (s[n])
         n++;
     c64_log_write(s, n);
+}
+
+/* ---- reading the ring back out ------------------------------------------ */
+/* Logical order, exactly the reconstruction persistent_ram_save_old() does:
+ * data[start..size) first, then data[0..start). For a ring that has not
+ * wrapped, start == size and that degenerates to data[0..size). */
+
+unsigned c64_log_bytes(void)
+{
+    return g_live ? PB->size : 0;
+}
+
+void c64_log_read(unsigned off, c64_u8 *dst, unsigned n)
+{
+    c64_u32 start = PB->start, size = PB->size;
+    unsigned tail = size - start;              /* 0 unless the ring wrapped */
+    for (unsigned i = 0; i < n; i++) {
+        unsigned k = off + i;
+        if (!g_live || k >= size) {
+            dst[i] = 0;
+            continue;
+        }
+        dst[i] = PB->data[k < tail ? start + k : k - tail];
+    }
+}
+
+/* ---- did this DRAM survive the last reset? ------------------------------- */
+/* The kernel stamps PERSISTENT_RAM_SIG at the base of every ramoops zone, so
+ * the reservation should be full of them when UnoDOS takes over from a Linux
+ * boot. Counting them is a free, direct answer to the question the missing
+ * pstore log raised: 0 means the preloader wiped DRAM on the way in, and no
+ * DRAM-based log can ever survive this reset path. Run BEFORE c64_log_init,
+ * which overwrites the console zone's own signature. */
+static unsigned g_sigs_found;
+
+unsigned c64_log_survey(void)
+{
+    unsigned n = 0;
+    for (c64_u64 a = 0x54410000ull; a < 0x544F0000ull; a += 0x1000ull)
+        if (*(volatile c64_u32 *)a == PRAM_SIG)
+            n++;
+    g_sigs_found = n;
+    return n;
+}
+
+void c64_log_survey_report(void)
+{
+    if (g_sigs_found)
+        c64_logf("dram: %d ramoops signatures survived the reset -- DRAM is "
+                 "preserved across it\n", (int)g_sigs_found);
+    else
+        c64_log("dram: NO ramoops signatures in the reservation -- the "
+                "preloader wipes DRAM, so the eMMC log is the only one\n");
 }
 
 /* ---- the formatter ------------------------------------------------------- */
@@ -221,4 +288,10 @@ void c64_log_crash(c64_u64 vec, c64_u64 esr, c64_u64 elr, c64_u64 far,
     c64_logf("\n*** FAULT vec=%d ESR=%08x EC=%x ELR=%016x (image+%x)\n"
              "           FAR=%016x CurrentEL=%x\n",
              (int)vec, esr, esr >> 26, elr, elr - 0x40080000ull, far, el);
+    /* And get it off DRAM, which this device's reset path wipes. This is the
+     * whole point of the eMMC sink: the log of a boot that died is the one
+     * worth having. The block driver polls with bounded timeouts, so a dead
+     * controller costs seconds, not a hang -- and the crash record and the
+     * painted bit-cells are already down regardless. */
+    c64_log_flush();
 }

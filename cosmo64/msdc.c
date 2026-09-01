@@ -101,6 +101,20 @@ static int g_ready;
 static c64_u64 g_data_lba, g_data_sectors;
 static c64_u8 g_scratch[BLKSZ];
 
+/* The log window inside our OWN boot partition. p38 (UNODOS) is 32 MiB and the
+ * boot image is 512 KiB, so everything past it is ours and nothing else on the
+ * device touches it. Sit 2 MiB in, four times clear of the image, and take
+ * 128 KiB. Both numbers are offsets from the partition's GPT-discovered first
+ * LBA -- never a hardcoded absolute block. */
+#define LOG_OFF_SECTORS 4096u            /* 2 MiB into p38                  */
+#define LOG_SECTORS     256u             /* 128 KiB, header block included  */
+#define LOG_MAGIC0 0x4F4E5528u           /* "(UNO" -- byte order irrelevant */
+#define LOG_MAGIC1 0x29474F4Cu           /* "LOG)"                          */
+
+static c64_u64 g_boot_lba, g_boot_sectors;   /* p38, from the GPT walk */
+static c64_u64 g_log_lba;
+static unsigned g_flushed;
+
 int c64_blk_ready(void)
 {
     return g_ready;
@@ -291,13 +305,19 @@ int c64_blk_write(c64_u64 lba, const void *buf, unsigned nblk)
         return -1;
     /* THE FENCE. Everything else on this eMMC belongs to Android, to Gemian,
      * to the GPT, or to the preloader, and the preloader does not come back.
-     * A write outside our own partition is a bug in the caller, and it is
-     * refused here rather than trusted anywhere above. */
-    if (!g_data_sectors || lba < g_data_lba
-        || lba + nblk > g_data_lba + g_data_sectors) {
-        c64_logf("msdc: REFUSED write of %d blocks at LBA %d -- outside the "
-                 "UnoDOS partition (%d..%d)\n", (int)nblk, (int)lba,
-                 (int)g_data_lba, (int)(g_data_lba + g_data_sectors));
+     * A write outside our own partitions is a bug in the caller, and it is
+     * refused here rather than trusted anywhere above. Two windows are legal:
+     * the data partition, and the log window inside our own boot slot. */
+    int in_data = g_data_sectors && lba >= g_data_lba
+                  && lba + nblk <= g_data_lba + g_data_sectors;
+    int in_log = g_log_lba && lba >= g_log_lba
+                 && lba + nblk <= g_log_lba + LOG_SECTORS;
+    if (!in_data && !in_log) {
+        c64_logf("msdc: REFUSED write of %d blocks at LBA %d -- outside both "
+                 "the data partition (%d..%d) and the log window (%d..%d)\n",
+                 (int)nblk, (int)lba, (int)g_data_lba,
+                 (int)(g_data_lba + g_data_sectors), (int)g_log_lba,
+                 (int)(g_log_lba + LOG_SECTORS));
         return -1;
     }
     const c64_u8 *p = (const c64_u8 *)buf;
@@ -365,7 +385,8 @@ static int find_data_partition(void)
      * ships it as Android's "userdata" (p44, 27.7 GiB), which is what the plan
      * says to take over. Prefer the renamed one, accept the original, and say
      * which. */
-    c64_u64 fallback_lba = 0, fallback_sectors = 0;
+    c64_u64 uno_lba = 0, uno_sectors = 0;        /* UNODATA, if renamed  */
+    c64_u64 fallback_lba = 0, fallback_sectors = 0;   /* Android userdata */
     unsigned per_blk = BLKSZ / ent_sz;
     for (c64_u32 i = 0; i < n_ent; i += per_blk) {
         if (read_block(ent_lba + i / per_blk, g_scratch) < 0)
@@ -377,18 +398,36 @@ static int find_data_partition(void)
                 continue;                        /* unused entry */
             const c64_u8 *nm = e + 56;
             if (name_is(nm, "UNODATA")) {
-                g_data_lba = first;
-                g_data_sectors = last - first + 1;
-                c64_logf("msdc: UNODATA at LBA %d, %d sectors (%d MiB)\n",
-                         (int)first, (int)g_data_sectors,
-                         (int)(g_data_sectors / 2048));
-                return 0;
-            }
-            if (name_is(nm, "userdata")) {
+                uno_lba = first;
+                uno_sectors = last - first + 1;
+            } else if (name_is(nm, "userdata")) {
                 fallback_lba = first;
                 fallback_sectors = last - first + 1;
+            } else if (name_is(nm, "UNODOS")) {
+                g_boot_lba = first;              /* our own boot slot */
+                g_boot_sectors = last - first + 1;
             }
         }
+    }
+
+    /* The log window lives in our own boot partition, which is why it is
+     * derived from the GPT rather than written down: p38 is 32 MiB and the
+     * image is 512 KiB, so 2 MiB in is ours by a wide margin. */
+    if (g_boot_sectors > LOG_OFF_SECTORS + LOG_SECTORS) {
+        g_log_lba = g_boot_lba + LOG_OFF_SECTORS;
+        c64_logf("msdc: UNODOS boot slot at LBA %d (%d sectors); log window "
+                 "LBA %d, %d sectors\n", (int)g_boot_lba, (int)g_boot_sectors,
+                 (int)g_log_lba, LOG_SECTORS);
+    } else {
+        c64_log("msdc: no UNODOS partition found -- no eMMC log\n");
+    }
+
+    if (uno_sectors) {
+        g_data_lba = uno_lba;
+        g_data_sectors = uno_sectors;
+        c64_logf("msdc: UNODATA at LBA %d, %d sectors (%d MiB)\n",
+                 (int)uno_lba, (int)uno_sectors, (int)(uno_sectors / 2048));
+        return 0;
     }
     if (fallback_sectors) {
         g_data_lba = fallback_lba;
@@ -398,8 +437,71 @@ static int find_data_partition(void)
                  (int)fallback_sectors, (int)(fallback_sectors / 2048));
         return 0;
     }
-    c64_log("msdc: found no UnoDOS partition -- writes will stay refused\n");
+    c64_log("msdc: found no UnoDOS data partition -- data writes stay "
+            "refused\n");
     return -1;
+}
+
+/* ---- the eMMC log sink --------------------------------------------------- */
+/* The reason this exists: the ramoops channel in log.c does not survive this
+ * device's reset path (the preloader wipes DRAM -- see log.c's header). The
+ * eMMC does survive it, and p38's unused tail is ours. Block 0 of the window
+ * is a header; the text follows. readlog.sh dd's it straight back out.
+ *
+ * Called from the poll loop when the log has grown, and from the fault
+ * handler, which is the case that matters: a payload that dies still leaves
+ * its whole log somewhere a later Linux boot can read. */
+
+void c64_log_flush(void)
+{
+    if (!g_ready || !g_log_lba)
+        return;
+    unsigned total = c64_log_bytes();
+    if (total == g_flushed)
+        return;                                  /* nothing new to say */
+
+    unsigned cap = (LOG_SECTORS - 1u) * BLKSZ;
+    unsigned from = 0, len = total;
+    if (len > cap) {                             /* keep the TAIL, not the head */
+        from = len - cap;
+        len = cap;
+    }
+
+    /* header block: magic, byte count, and the offset the text starts at, so a
+     * reader can tell a truncated log from a whole one */
+    for (unsigned i = 0; i < BLKSZ; i++)
+        g_scratch[i] = 0;
+    g_scratch[0] = (c64_u8)LOG_MAGIC0;
+    g_scratch[1] = (c64_u8)(LOG_MAGIC0 >> 8);
+    g_scratch[2] = (c64_u8)(LOG_MAGIC0 >> 16);
+    g_scratch[3] = (c64_u8)(LOG_MAGIC0 >> 24);
+    g_scratch[4] = (c64_u8)LOG_MAGIC1;
+    g_scratch[5] = (c64_u8)(LOG_MAGIC1 >> 8);
+    g_scratch[6] = (c64_u8)(LOG_MAGIC1 >> 16);
+    g_scratch[7] = (c64_u8)(LOG_MAGIC1 >> 24);
+    g_scratch[8] = (c64_u8)len;
+    g_scratch[9] = (c64_u8)(len >> 8);
+    g_scratch[10] = (c64_u8)(len >> 16);
+    g_scratch[11] = (c64_u8)(len >> 24);
+    g_scratch[12] = (c64_u8)from;
+    g_scratch[13] = (c64_u8)(from >> 8);
+    g_scratch[14] = (c64_u8)(from >> 16);
+    g_scratch[15] = (c64_u8)(from >> 24);
+    if (c64_blk_write(g_log_lba, g_scratch, 1) < 0)
+        return;
+
+    unsigned blocks = (len + BLKSZ - 1u) / BLKSZ;
+    for (unsigned b = 0; b < blocks; b++) {
+        for (unsigned i = 0; i < BLKSZ; i++)
+            g_scratch[i] = 0;
+        unsigned n = len - b * BLKSZ;
+        if (n > BLKSZ)
+            n = BLKSZ;
+        c64_log_read(from + b * BLKSZ, g_scratch, n);
+        if (c64_blk_write(g_log_lba + 1 + b, g_scratch, 1) < 0)
+            return;
+    }
+    g_flushed = total;
 }
 
 /* ---- bring-up ------------------------------------------------------------ */
