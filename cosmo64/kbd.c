@@ -115,7 +115,7 @@ static void kbd_spin_ms(int ms)
 
 void c64_kbd_init(void)
 {
-    if (c64_i2c_init() < 0)
+    if (c64_i2c_init(C64_I2C_KBD) < 0)
         return;
     /* the chip boots held in shutdown (GPIO175 low by dws default); give it
      * the vendor driver's reset pulse: low, 20 ms, high, settle */
@@ -123,17 +123,17 @@ void c64_kbd_init(void)
     kbd_spin_ms(20);
     c64_kbd_power(1);
     kbd_spin_ms(20);
-    int id = c64_i2c_read_reg(AW_ADDR, R_ID);
+    int id = c64_i2c_read_reg(C64_I2C_KBD, AW_ADDR, R_ID);
     if (id != AW_ID)
         return;                             /* absent (or QEMU): stay silent */
-    c64_i2c_write_reg(AW_ADDR, R_SW_RSTN, 0x00);
-    c64_i2c_write_reg(AW_ADDR, R_P0_LEDMODE, 0xFF);   /* GPIO, not LED mode */
-    c64_i2c_write_reg(AW_ADDR, R_P1_LEDMODE, 0xFF);
-    c64_i2c_write_reg(AW_ADDR, R_P0_CFG, 0xFF);       /* P0: inputs (rows)  */
-    c64_i2c_write_reg(AW_ADDR, R_P1_CFG, 0x00);       /* P1: outputs (cols) */
-    c64_i2c_write_reg(AW_ADDR, R_P1_OUT, 0x00);       /* all columns low    */
-    c64_i2c_write_reg(AW_ADDR, R_P0_INT, 0xFF);       /* polled: no irqs    */
-    c64_i2c_write_reg(AW_ADDR, R_P1_INT, 0xFF);
+    c64_i2c_write_reg(C64_I2C_KBD, AW_ADDR, R_SW_RSTN, 0x00);
+    c64_i2c_write_reg(C64_I2C_KBD, AW_ADDR, R_P0_LEDMODE, 0xFF);   /* GPIO, not LED mode */
+    c64_i2c_write_reg(C64_I2C_KBD, AW_ADDR, R_P1_LEDMODE, 0xFF);
+    c64_i2c_write_reg(C64_I2C_KBD, AW_ADDR, R_P0_CFG, 0xFF);       /* P0: inputs (rows)  */
+    c64_i2c_write_reg(C64_I2C_KBD, AW_ADDR, R_P1_CFG, 0x00);       /* P1: outputs (cols) */
+    c64_i2c_write_reg(C64_I2C_KBD, AW_ADDR, R_P1_OUT, 0x00);       /* all columns low    */
+    c64_i2c_write_reg(C64_I2C_KBD, AW_ADDR, R_P0_INT, 0xFF);       /* polled: no irqs    */
+    c64_i2c_write_reg(C64_I2C_KBD, AW_ADDR, R_P1_INT, 0xFF);
     g_present = 1;
 }
 
@@ -189,9 +189,9 @@ void c64_kbd_poll(void)
     if (!g_present)
         return;
     /* idle fast path: every column low at once, one read */
-    c64_i2c_write_reg(AW_ADDR, R_P1_CFG, 0x00);
-    c64_i2c_write_reg(AW_ADDR, R_P1_OUT, 0x00);
-    int all = c64_i2c_read_reg(AW_ADDR, R_P0_IN);
+    c64_i2c_write_reg(C64_I2C_KBD, AW_ADDR, R_P1_CFG, 0x00);
+    c64_i2c_write_reg(C64_I2C_KBD, AW_ADDR, R_P1_OUT, 0x00);
+    int all = c64_i2c_read_reg(C64_I2C_KBD, AW_ADDR, R_P0_IN);
     if (all < 0)
         return;
     int any_now = ((all & 0xFF) != 0xFF);
@@ -204,14 +204,14 @@ void c64_kbd_poll(void)
     /* full sweep: one column at a time */
     c64_u8 newstate[NCOL];
     for (int c = 0; c < NCOL; c++) {
-        c64_i2c_write_reg(AW_ADDR, R_P1_CFG, (c64_u8)(COLMASK & ~(1u << c)));
-        c64_i2c_write_reg(AW_ADDR, R_P1_OUT, (c64_u8)(COLMASK & ~(1u << c)));
-        int v = c64_i2c_read_reg(AW_ADDR, R_P0_IN);
+        c64_i2c_write_reg(C64_I2C_KBD, AW_ADDR, R_P1_CFG, (c64_u8)(COLMASK & ~(1u << c)));
+        c64_i2c_write_reg(C64_I2C_KBD, AW_ADDR, R_P1_OUT, (c64_u8)(COLMASK & ~(1u << c)));
+        int v = c64_i2c_read_reg(C64_I2C_KBD, AW_ADDR, R_P0_IN);
         newstate[c] = (v < 0) ? 0 : (c64_u8)(~v & 0xFF);
     }
     /* park: all columns output low again (the idle/fast-path state) */
-    c64_i2c_write_reg(AW_ADDR, R_P1_CFG, 0x00);
-    c64_i2c_write_reg(AW_ADDR, R_P1_OUT, 0x00);
+    c64_i2c_write_reg(C64_I2C_KBD, AW_ADDR, R_P1_CFG, 0x00);
+    c64_i2c_write_reg(C64_I2C_KBD, AW_ADDR, R_P1_OUT, 0x00);
 
     /* level first (so a chord's modifier is live before its key's edge) */
     c64_u8 old[NCOL];
