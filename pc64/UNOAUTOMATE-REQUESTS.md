@@ -11286,3 +11286,11 @@ toolchain that will carry the C pc64 system on the Cosmo Communicator. Plan:
 toolchain proven end to end, gated by the asm port's harness). No other lane's
 files are touched; the asm cosmo port (`cosmo/`, branch `cosmo-port`) is a
 separate lane and stays.
+
+## 2026-09-01 — cross-lane note: pc64_libc.c ___chkstk_ms guarded x86-only
+
+The file-scope `__asm__` block defining `___chkstk_ms` is x86 mnemonics + an
+x86-mangled name, and does not assemble for aarch64-w64-mingw32 (the cosmo64
+lane's target; clang there emits `__chkstk`, which cosmo64/cpu.s provides).
+Wrapped it in `#if defined(__x86_64__)` — zero change to the x86 build. Filed
+by the cosmo64 lane; libc has no listed owner, so flagging here.
