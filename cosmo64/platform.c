@@ -29,6 +29,22 @@ void c_main(void *dtb)
     c64_logf("fb raw=%016x ppitch=%d src=%d vram=%x\n", raw, (int)ppitch,
              (int)FBDBG->fb_src, FBDBG->fb_vram);
     uno_native_tsc_set(c64_cnt_freq() / 1000000ull);
+    /* How fast is this core actually running? LK hands over at whatever boot
+     * frequency it chose and nothing here raises it -- Linux's cpufreq does
+     * that, and bare metal has no cpufreq. The boot core is a little one
+     * (this SoC is 4x A53 + 4x A73, 793 MHz at the bottom of both tables), so
+     * a software renderer's ceiling may simply be low. Time a fixed loop
+     * against the 13 MHz generic timer and put the number in the log rather
+     * than reasoning about it. */
+    {
+        volatile int sink = 0;
+        c64_u64 t0 = c64_cnt_now();
+        for (int i = 0; i < 1000000; i++)
+            sink = sink + i;
+        c64_u64 us = (c64_cnt_now() - t0) * 1000000ull / c64_cnt_freq();
+        c64_logf("cpu: 1e6 volatile add iterations in %d us (%d k-iter/s)\n",
+                 (int)us, us ? (int)(1000000000ull / us) : 0);
+    }
     /* Storage before the shell: session_load() runs inside uno_main. On QEMU
      * there is no MSDC at 0x11230000, so this costs one bounded command
      * timeout and logs that the eMMC is absent. */
@@ -150,8 +166,14 @@ void uno_pc64_poll(void)
                  c64_kbd_present() ? "present" : "ABSENT",
                  c64_touch_present() ? "present" : "ABSENT");
     }
+    /* Time the input drivers separately: they are polled I2C, and the AW9523
+     * has no interrupt line, so a full matrix sweep is a real per-iteration
+     * cost rather than a rounding error. */
+    c64_u64 t0 = c64_cnt_now();
     c64_kbd_poll();
     c64_touch_poll();
+    c64_perf_add_poll(c64_cnt_now() - t0);
+    c64_perf_loop();
 #ifdef C64_KBDTEST
     kbdtest_tick(frames);
 #endif

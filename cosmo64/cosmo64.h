@@ -148,6 +148,11 @@ int c64_blk_write(c64_u64 lba, const void *buf, unsigned nblk);
 c64_u64 c64_blk_data_lba(void);
 c64_u64 c64_blk_data_sectors(void);
 
+/* display.c: where the frame time goes. c64_perf_loop() is called once per
+ * shell loop iteration and reports a breakdown to the log every 2 seconds. */
+void c64_perf_add_poll(c64_u64 cyc);
+void c64_perf_loop(void);
+
 /* touch.c: the NT36672 panel as the shell's pointer */
 void c64_touch_init(void);
 void c64_touch_poll(void);

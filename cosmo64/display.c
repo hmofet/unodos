@@ -101,6 +101,7 @@ static void draw_cursor(void)
  * moving pointer would smear. */
 static fb_px g_shadow[C64_SCRW * C64_SCRH];
 static int g_shadow_valid;
+static int g_conly;          /* set by uno_pc64_present_cursor() */
 static int g_pcx = -1, g_pcy;                /* cursor rect last composited */
 static c64_u32 g_line[C64_SCRH * FB_SCALE];  /* one output row, built once */
 
@@ -109,28 +110,62 @@ void uno_pc64_dirty_all(void)
     g_shadow_valid = 0;
 }
 
-/* Present timing, reported every 300 frames. The last round of this work was
- * slowed down by a diagnosis reached from the armchair, so the panel now
- * reports what it actually costs. */
-static c64_u64 g_t_acc, g_box_acc;
-static unsigned g_frames, g_skipped;
+/* ---- where the time actually goes ---------------------------------------- */
+/* The first cut of this reported every 300 presents and printed NOTHING on a
+ * real session, which was itself the finding: the shell only presents when
+ * something changed, so present is not the hot path. The breakdown is now
+ * driven from the poll loop (which runs every iteration) on a WALL-CLOCK
+ * cadence, and splits the frame into the three things this port can see:
+ * present, the input drivers' I2C, and everything else -- which is the
+ * shell's own unoui_render_ui() software repaint. */
+static c64_u64 g_t_present, g_t_poll, g_box_acc, g_t_report;
+static unsigned g_presents, g_skipped, g_loops;
 
 static void present_done(c64_u64 t0, c64_u64 area)
 {
-    g_t_acc += c64_cnt_now() - t0;
+    g_t_present += c64_cnt_now() - t0;
     g_box_acc += area;
+    g_presents++;
     if (!area)
         g_skipped++;
-    if (++g_frames < 300)
-        return;
+}
+
+void c64_perf_add_poll(c64_u64 cyc)
+{
+    g_t_poll += cyc;
+}
+
+void c64_perf_loop(void)
+{
     c64_u64 hz = c64_cnt_freq();
     if (!hz)
         hz = 13000000ull;
-    c64_logf("present: %d frames, avg %d us, avg box %d px, %d skipped\n",
-             (int)g_frames, (int)(g_t_acc * 1000000ull / hz / g_frames),
-             (int)(g_box_acc / g_frames), (int)g_skipped);
-    g_t_acc = g_box_acc = 0;
-    g_frames = g_skipped = 0;
+    c64_u64 now = c64_cnt_now();
+    g_loops++;
+    if (!g_t_report) {
+        g_t_report = now;
+        return;
+    }
+    c64_u64 span = now - g_t_report;
+    if (span < hz * 2ull)                        /* report every 2 seconds */
+        return;
+#define US(c) ((int)((c) * 1000000ull / hz))
+    c64_u64 other = span > (g_t_present + g_t_poll)
+                  ? span - g_t_present - g_t_poll : 0;
+    c64_logf("perf: %d loops, %d presents (%d skipped) | present %d ms, "
+             "input %d ms, other %d ms of %d ms\n",
+             (int)g_loops, (int)g_presents, (int)g_skipped,
+             US(g_t_present) / 1000, US(g_t_poll) / 1000,
+             US(other) / 1000, US(span) / 1000);
+    if (g_presents)
+        c64_logf("perf: per present %d us, avg box %d px; per loop input "
+                 "%d us\n", US(g_t_present) / (int)g_presents,
+                 (int)(g_box_acc / g_presents),
+                 g_loops ? US(g_t_poll) / (int)g_loops : 0);
+#undef US
+    g_t_present = g_t_poll = g_box_acc = 0;
+    g_presents = g_skipped = g_loops = 0;
+    g_t_report = now;
 }
 
 void uno_pc64_present(void)
@@ -145,7 +180,13 @@ void uno_pc64_present(void)
     c64_u32 ppitch = FBDBG->fb_ppitch;
 
     int x0 = C64_SCRW, x1 = -1, y0 = C64_SCRH, y1 = -1;
-    if (!g_shadow_valid) {
+    if (g_conly && g_shadow_valid) {
+        /* The shell promises fb[] is unchanged and only the pointer moved
+         * (its cursor_only path), so the compare is pure waste -- 307k pixels
+         * of it. x86 bounds the same pass to the cursor band for the same
+         * reason. The cursor union below supplies the whole box. */
+        g_conly = 0;
+    } else if (!g_shadow_valid) {
         for (int i = 0; i < C64_SCRW * C64_SCRH; i++)
             g_shadow[i] = fb[i];
         g_shadow_valid = 1;
@@ -237,6 +278,7 @@ void uno_pc64_present(void)
 
 void uno_pc64_present_cursor(void)
 {
+    g_conly = 1;
     uno_pc64_present();
 }
 
