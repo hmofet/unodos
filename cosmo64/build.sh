@@ -93,7 +93,7 @@ shell )
     for f in $UNOUI; do $CC $SHCF -c ../unoui/\$f.c -o build/u_\$f.o; done && \
     for f in $THEMES; do $CC $SHCF -c ../unoui/themes/\$f.c -o build/t_\$f.o; done && \
     for f in $PCORE; do $CC $SHCF -c ../pc64/\$f.c -o build/p_\$f.o; done && \
-    for f in $C64; do $CC $SHCF -c \$f.c -o build/c_\$f.o; done && \
+    for f in $C64; do $CC $SHCF -mstrict-align -c \$f.c -o build/c_\$f.o; done && \
     $CC $SHCF -mstrict-align -c mmu.c -o build/mmu_sa.o && \
     $CC -c entry.s -o build/entry.o && \
     $CC -c cpu.s -o build/cpu.o && \

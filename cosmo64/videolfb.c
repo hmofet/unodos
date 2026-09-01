@@ -139,10 +139,12 @@ c64_u64 c64_fb_adopt(void *dtb, c64_u32 *ppitch_out)
         seed_pitch = FBDBG->fb_pitch;
     }
     FBDBG->dtb_ptr = (c64_u64)dtb;
+    c64_beacon(352, 0xFFFF8080u);   /* PINK: FBINFO seed read/write done */
 
     c64_u64 base = 0;
     c64_u32 vram = 0;
     c64_u32 src = c64_fdt_scan(dtb, &base, &vram);
+    c64_beacon(400, 0xFFFF8000u);   /* ORANGE: the DTB walk returned */
     if (!src) {
         vram = 0;
         if (seed_base) {
