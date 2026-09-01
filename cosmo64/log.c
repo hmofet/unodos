@@ -39,21 +39,29 @@
  * The zone is mapped Normal non-cacheable (mmu.c), so a warm reset cannot
  * strand the tail of the log in the D-cache.
  *
- * *** AND IT DOES NOT WORK ON THIS DEVICE. Tested 2026-09-01: UnoDOS ran, was
- * reset into trixie, and /sys/fs/pstore was EMPTY. The cause is not the zone
- * address -- MTK's own ram_console at 0x54400000, a SEPARATE reservation, came
- * up equally empty (/proc/last_kmsg held 74 bytes of freshly generated header
- * and no prior log). Two independent reservations losing their contents at
- * once is DRAM being wiped, not a layout mistake: the preloader re-initialises
- * DRAM on this reset path, and ram_console/pstore only ever worked for the
- * abnormal resets MTK carries mrdump for.
+ * *** AND IT DOES NOT REACH pstore ON THIS DEVICE, CAUSE STILL OPEN. Tested
+ * 2026-09-01: UnoDOS ran, was reset into trixie, /sys/fs/pstore was EMPTY.
  *
- * So the log's durable home is the eMMC (msdc.c writes it into p38's unused
- * tail, and readlog.sh dd's it back). This code stays because it is free, it
- * is the ONLY log available before storage comes up -- which is exactly when
- * storage is being debugged -- and it still reaches the QEMU gate, where
- * qharness.py reads the zone directly. c64_log_survey() re-tests the DRAM
- * question on every boot and says so in the log.
+ * The first diagnosis was wrong and this file said so for one commit: MTK's
+ * ram_console at 0x54400000 came up empty too, and two reservations losing
+ * their contents at once looked like the preloader wiping DRAM. The survey
+ * below then measured it directly and disproved that -- 82 signatures were
+ * still standing in the reservation when UnoDOS took over. DRAM IS preserved
+ * across this reset.
+ *
+ * So the buffer survives and the kernel does not read it, which points at the
+ * ZONE ADDRESS after all: MTK patches fs/pstore/ram.c, and if their zone order
+ * differs from mainline's dump->console->ftrace->pmsg then 0x5449F000 is one
+ * of the dump zones rather than the console, and a dump record whose header
+ * does not parse as ramoops' "%lld.%lu-%c" is quietly dropped. The survey now
+ * records where each RUN of signatures starts, which is the zone layout, so
+ * the next boot settles it instead of another guess.
+ *
+ * Either way the log's durable home is the eMMC (msdc.c writes it into p38's
+ * unused tail, readlog.sh dd's it back), which is proven working on hardware.
+ * This code stays because it is free, it is the ONLY log available before
+ * storage comes up -- exactly when storage is being debugged -- and it still
+ * reaches the QEMU gate, where qharness.py reads the zone directly.
  */
 
 #include "cosmo64.h"
@@ -141,25 +149,47 @@ void c64_log_read(unsigned off, c64_u8 *dst, unsigned n)
  * DRAM-based log can ever survive this reset path. Run BEFORE c64_log_init,
  * which overwrites the console zone's own signature. */
 static unsigned g_sigs_found;
+static c64_u64 g_run_start[8];
+static unsigned g_runs;
 
 unsigned c64_log_survey(void)
 {
-    unsigned n = 0;
-    for (c64_u64 a = 0x54410000ull; a < 0x544F0000ull; a += 0x1000ull)
-        if (*(volatile c64_u32 *)a == PRAM_SIG)
+    /* Record where each RUN of signatures begins, not just how many there are.
+     * The kernel stamps one at the base of every zone, and the dump zones are
+     * a solid 4 KiB-spaced block, so the run boundaries ARE the zone layout.
+     * That is the outstanding question: DRAM demonstrably survives (82
+     * signatures, 2026-09-01), yet pstore showed nothing after a UnoDOS run,
+     * which points at this build writing to the wrong zone -- i.e. MTK
+     * ordering ram.c's zones differently from mainline. This answers it
+     * without guessing. Must run BEFORE c64_log_init overwrites one. */
+    unsigned n = 0, prev = 0;
+    g_runs = 0;
+    for (c64_u64 a = 0x54410000ull; a < 0x544F0000ull; a += 0x1000ull) {
+        unsigned here = (*(volatile c64_u32 *)a == PRAM_SIG);
+        if (here) {
             n++;
+            if (!prev && g_runs < 8)
+                g_run_start[g_runs++] = a;
+        }
+        prev = here;
+    }
     g_sigs_found = n;
     return n;
 }
 
 void c64_log_survey_report(void)
 {
-    if (g_sigs_found)
-        c64_logf("dram: %d ramoops signatures survived the reset -- DRAM is "
-                 "preserved across it\n", (int)g_sigs_found);
-    else
-        c64_log("dram: NO ramoops signatures in the reservation -- the "
-                "preloader wipes DRAM, so the eMMC log is the only one\n");
+    if (!g_sigs_found) {
+        c64_log("dram: NO ramoops signatures in the reservation -- DRAM did "
+                "NOT survive this reset\n");
+        return;
+    }
+    c64_logf("dram: %d ramoops signatures survived the reset -- DRAM IS "
+             "preserved across it\n", (int)g_sigs_found);
+    for (unsigned i = 0; i < g_runs; i++)
+        c64_logf("dram: signature run %d starts at %016x%s\n", (int)i,
+                 g_run_start[i],
+                 g_run_start[i] == C64_LOG_ZONE ? "  <- where we log" : "");
 }
 
 /* ---- the formatter ------------------------------------------------------- */

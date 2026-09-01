@@ -144,17 +144,27 @@ reservation's own end: the arithmetic checks itself.
 `log.c` writes there in ramoops' own `persistent_ram_buffer` format, so the
 kernel would find it, save it and expose it with no eMMC driver involved.
 
-**That does not work on this device, and the test said so.** UnoDOS ran, was
-reset into trixie, and `/sys/fs/pstore` was empty. The cause is not the zone
-address: MTK's own `ram_console` at 0x54400000, a **separate** reservation,
-came up equally empty (`/proc/last_kmsg` held 74 bytes of freshly generated
-header and no prior log). Two independent reservations losing their contents
-at once is DRAM being wiped, not a layout mistake -- the preloader
-re-initialises DRAM on this reset path, and ram_console/pstore only ever
-worked for the abnormal resets MTK carries mrdump for.
+**That does not reach pstore on this device, and the cause is still open.**
+UnoDOS ran, was reset into trixie, and `/sys/fs/pstore` was empty.
 
-So **the log's durable home is the eMMC** (see M3 below): `msdc.c` writes it
-into the unused tail of p38, UnoDOS's own boot partition.
+The first diagnosis was wrong, and this README said so for one commit. MTK's
+`ram_console` at 0x54400000 came up empty too, and two reservations losing
+their contents at once looked like the preloader wiping DRAM. Then
+`c64_log_survey()` measured it directly on the next boot and disproved it:
+**82 signatures were still standing** in the reservation when UnoDOS took
+over. DRAM *is* preserved across this reset.
+
+So the buffer survives and the kernel does not read it, which points back at
+the zone address: MTK patches `fs/pstore/ram.c`, and if their zone order
+differs from mainline's dump/console/ftrace/pmsg then 0x5449F000 is a *dump*
+zone, and a dump record whose header does not parse as ramoops'
+`"%lld.%lu-%c"` is quietly dropped. The survey now records where each **run**
+of signatures starts, which is the zone layout, so the next boot settles it
+instead of producing another guess.
+
+Either way **the log's durable home is the eMMC** (see M3 below): `msdc.c`
+writes it into the unused tail of p38, UnoDOS's own boot partition, and that
+is proven working on hardware.
 
 ```sh
 # boot UNODOS from the LK menu, do the thing, reboot into trixie, then:
@@ -188,7 +198,29 @@ of being assumed.
 says which one it was, and each touch-DOWN logs raw, panel and UI coordinates
 -- the whole `TOUCHDBG` bit-cell diagnostic, in text.
 
-## M3 STARTED (2026-09-01): the eMMC as a block device
+## M3a COMPLETE ON HARDWARE (2026-09-01): the eMMC as a block device
+
+Confirmed on silicon, first try, and it brought M2's hardware test with it.
+The log the device wrote to its own eMMC and handed back through `readlog.sh`:
+
+```
+msdc: adopting LK's controller: CFG=02200199 SDC_CFG=09020000 STS=00000000 ver=20170314
+msdc: LBA 0 read OK, MBR signature 55aa (want 55aa)
+msdc: GPT at LBA 2, 128 entries of 128 bytes
+msdc: UNODOS boot slot at LBA 10158080 (65536 sectors); log window LBA 10162176, 256 sectors
+msdc: no UNODATA partition; taking Android's userdata at LBA 186136576, 58027968 sectors (28333 MiB)
+kbd: AW9523 up, matrix scanning
+touch: NT36xxx ver=0b, reported maxima 1080x2160
+input: keyboard present, touch present
+```
+
+Every LBA matches `parted` exactly. Reads work, the GPT walk works, and the
+write path works too -- the log itself is the proof, since it got there
+through `c64_blk_write()` and the fence. **The adoption bet paid: LK's
+controller state (`CFG=02200199`, MSDC version 0x20170314) was still live and
+usable with no re-initialisation at all.** And with the same boot,
+`kbd:`/`touch:` confirm M2 on hardware: the AW9523 matrix answers, the
+NT36672 reports 1080x2160, and real keypresses arrive as Unicode.
 
 `msdc.c`. **Not an eMMC bring-up.** LK already did that part: it brought MSDC0
 (0x11230000) up, ran the SK hynix 128 GB card through its init sequence, tuned
@@ -235,8 +267,9 @@ MSDC programming interface. The code is this project's; nothing is copied from
 MediaTek's LK sources, which are proprietary and license-incompatible with
 UnoDOS.
 
-Next -- confirm the read on hardware from the log, then M3b: wire `uno_fs_*` /
-`uno_blk_*` in `stubs.c` to the real driver so `.UNO` apps and session
-persistence work (which also stops the Control Panel opening at every boot).
-M2's hardware test (does the pointer land where you touch? does the keyboard
-type?) is still outstanding and is now a log read rather than a photograph.
+Next -- **M3b**: wire `uno_fs_*` / `uno_blk_*` in `stubs.c` to the real driver
+so `.UNO` apps and session persistence work (which also stops the Control
+Panel opening at every boot). Open alongside it: whether the touch mapping is
+*accurate* (the log proves contacts arrive and shows raw/panel/UI for each
+one, but only a human can say whether the pointer landed under the finger),
+and the ramoops zone-order question the survey will answer on the next boot.
