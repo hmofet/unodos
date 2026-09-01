@@ -10,6 +10,9 @@
 /* the boot stack (see cosmo64.h): entry.s points SP at the top of this */
 c64_u8 c64_boot_stack[C64_BOOT_STACK_BYTES] __attribute__((aligned(16)));
 
+/* the debug page: fbdbg contract + the crash record at +0x1000 (cosmo64.h) */
+c64_u8 c64_dbg_page[0x1100] __attribute__((aligned(4096)));
+
 static int streq(const char *a, const char *b)
 {
     while (*a && *a == *b) {
@@ -158,6 +161,8 @@ c64_u64 c64_fb_adopt(void *dtb, c64_u32 *ppitch_out)
 
     c64_u32 ppitch = seed_pitch ? seed_pitch : COSMO_PITCH;
     FBDBG->fb_ppitch = ppitch;
+
+    c64_beacon(320, 0xFFFFFFFFu);   /* WHITE: FDT walk + FBINFO writes done */
 
     c64_u64 page = (c64_u64)PANEL_H * ppitch;
     c64_u64 clr = vram ? vram : page;

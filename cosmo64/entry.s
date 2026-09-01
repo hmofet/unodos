@@ -34,6 +34,12 @@ boot_core:
     // wedge (a fault while pushing the frame can't reach a handler usefully).
     ldr   x1, =c64_boot_stack + 0x80000
     mov   sp, x1
+    // publish the debug page's address into our own header (offset 0x30, the
+    // ARM64 res4 word) so the harness can find the FBINFO/crash block without
+    // a fixed off-image address
+    ldr   x1, =c64_dbg_page
+    ldr   x2, =0x40080030
+    str   x1, [x2]
     bl    cpu_early_init                // vectors FIRST: anything after this
                                         // faults into the crash record + the
                                         // painted ESR, never a silent wedge
