@@ -50,10 +50,11 @@ case "$1" in
     $CC $BASECF -mstrict-align -c m0.c -o build/m0.o && \
     $CC $BASECF -mstrict-align -c videolfb.c -o build/videolfb.o && \
     $CC $BASECF -mstrict-align -c mmu.c -o build/mmu.o && \
+    $CC $BASECF -mstrict-align -c log.c -o build/log.o && \
     $CC -c entry.s -o build/entry.o && \
     $CC -c cpu.s -o build/cpu.o && \
     $CC $LINK -o build/m0.exe build/entry.o build/cpu.o build/m0.o \
-        build/videolfb.o build/mmu.o"
+        build/videolfb.o build/mmu.o build/log.o"
   scp -q "$QUILL:$QDIR/cosmo64/build/m0.exe" build/
   "$PY" flatten.py build/m0.exe build/m0.bin
   OUT=build/m0.bin
@@ -78,7 +79,7 @@ shell )
           theme_amiga theme_c64 theme_apple2 theme_next"
   PCORE="fb pc64_libc pc64_math pc64_font pc64_icons pc64_qoi pc64_uui_apps \
          mac_compat pc64_io pc64_write pc64_clock pc64_files pc64_uui"
-  C64="videolfb display platform input stubs i2c kbd touch"
+  C64="videolfb display platform input stubs i2c kbd touch log"
 
   # KBDTEST=1: compile the scripted key pad (QEMU gate proof, never shipped)
   [ -n "$KBDTEST" ] && BASECF="$BASECF -DC64_KBDTEST"

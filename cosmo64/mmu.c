@@ -4,6 +4,9 @@
  * D-cache). Map:
  *   0x00000000 - 0x40000000  Device-nGnRnE, XN   (all MT6771 MMIO, incl TOPRGU)
  *   0x40000000 - 0x7C000000  Normal WB cacheable (DRAM: image, stack, heap, DTB)
+ *                            except 0x54400000 - 0x54600000, Normal-NC: the
+ *                            kernel's persistent-RAM reservations, where the
+ *                            debug log lives (log.c)
  *   0x7C000000 - 0x80000000  Normal non-cacheable (LK reserves the framebuffer
  *                            top-down under 2 GB -- NC keeps the display DMA
  *                            coherent with no per-frame cache cleans, and still
@@ -51,7 +54,12 @@ void mmu_init(void)
     l1[1] = (u64)l2 | TABLE_VALID;
     for (u32 i = 0; i < 512; i++) {
         u64 pa = 0x40000000ull + (u64)i * 0x200000;
-        if (pa >= 0x7C000000ull)
+        /* 0x54400000: the kernel's persistent-RAM reservations, which hold the
+         * debug log (log.c). Non-cacheable for the same reason as the
+         * framebuffer, but the other way round: a warm reset does not flush
+         * the D-cache, so a write-back mapping would leave the last lines of
+         * the log -- the ones naming whatever went wrong -- stranded in it. */
+        if (pa >= 0x7C000000ull || pa == 0x54400000ull)
             l2[i] = pa | BLOCK_VALID | AF | ATTRIDX(AI_NC) | UXN | PXN;
         else
             l2[i] = pa | BLOCK_VALID | AF | ATTRIDX(AI_WB) | SH_INNER;

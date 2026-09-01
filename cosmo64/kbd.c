@@ -117,8 +117,10 @@ static void kbd_spin_ms(int ms)
 
 void c64_kbd_init(void)
 {
-    if (c64_i2c_init(C64_I2C_KBD) < 0)
+    if (c64_i2c_init(C64_I2C_KBD) < 0) {
+        c64_log("kbd: i2c bus 4 would not init\n");
         return;
+    }
     /* the chip boots held in shutdown (GPIO175 low by dws default); give it
      * the vendor driver's reset pulse: low, 20 ms, high, settle */
     c64_kbd_power(0);
@@ -126,8 +128,10 @@ void c64_kbd_init(void)
     c64_kbd_power(1);
     kbd_spin_ms(20);
     int id = c64_i2c_read_reg(C64_I2C_KBD, AW_ADDR, R_ID);
-    if (id != AW_ID)
+    if (id != AW_ID) {
+        c64_logf("kbd: AW9523 ID read %d (0x%x), wanted 0x%x\n", id, id, AW_ID);
         return;                             /* absent (or QEMU): stay silent */
+    }
     c64_i2c_write_reg(C64_I2C_KBD, AW_ADDR, R_SW_RSTN, 0x00);
     c64_i2c_write_reg(C64_I2C_KBD, AW_ADDR, R_P0_LEDMODE, 0xFF);   /* GPIO, not LED mode */
     c64_i2c_write_reg(C64_I2C_KBD, AW_ADDR, R_P1_LEDMODE, 0xFF);
@@ -137,6 +141,7 @@ void c64_kbd_init(void)
     c64_i2c_write_reg(C64_I2C_KBD, AW_ADDR, R_P0_INT, 0xFF);       /* polled: no irqs    */
     c64_i2c_write_reg(C64_I2C_KBD, AW_ADDR, R_P1_INT, 0xFF);
     g_present = 1;
+    c64_log("kbd: AW9523 up, matrix scanning\n");
 }
 
 static void emit(const struct keydef *k, int shift, int fn)
@@ -151,6 +156,8 @@ static void emit(const struct keydef *k, int shift, int fn)
         scan = v & 0xFF;
     else
         uni = v;
+    c64_logf("kbd: scan=%02x uni=%04x%s mods=%x\n", scan, uni,
+             (uni >= 0x20 && uni < 0x7F) ? "" : " (non-printing)", g_mods);
     c64_key_push(scan, uni, g_mods);
 }
 

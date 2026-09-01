@@ -24,9 +24,25 @@ typedef unsigned long long c64_u64;
  * windows. The debug block's address is published into the flat image's own
  * header (offset 0x30, the ARM64 res4 word) at boot so the harness can find
  * it. flatten.py asserts the image ends below C64_IMAGE_CEIL (LK's DTB is at
- * 0x54000000; ram_console at 0x54400000 stays untouched for forensics). */
+ * 0x54000000; the kernel's persistent-RAM reservations at 0x54400000 are the
+ * log's, see below). */
 #define C64_IMAGE_CEIL 0x53000000ull
 #define C64_DBG_PTR_SLOT 0x40080030ull   /* u64: &c64_dbg_page, entry.s writes */
+
+/* log.c: the persistent debug log. This is the ramoops CONSOLE zone of the
+ * Gemian kernel's pstore reservation -- derived in full in log.c's header
+ * comment, and reserved, preserved across reset and read back at the next
+ * Linux boot by the kernel itself. Mapped Normal-NC (mmu.c) so a warm reset
+ * cannot strand the tail of the log in the D-cache. */
+#define C64_LOG_ZONE 0x5449F000ull       /* pstore 0x54410000 + dump 0x8F000  */
+#define C64_LOG_SIZE 0x40000u            /* ramoops console_size              */
+#define C64_LOG_NC_BLOCK 0x54400000ull   /* the 2 MB block that contains it   */
+
+void c64_log_init(void);
+void c64_log(const char *s);
+void c64_log_write(const char *s, unsigned n);
+void c64_logf(const char *fmt, ...);
+extern c64_u8 c64_fault_stack[0x2000];
 
 /* one page of fbdbg + the crash record at +0x1000 */
 extern c64_u8 c64_dbg_page[0x1100];

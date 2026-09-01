@@ -23,6 +23,9 @@ What it does:
     FAR there, which this prints instead of a mute failure);
   * reconstructs the eye view through the panel mounting at every sub-position
     of the scale block and requires it to equal the shadow, pixel for pixel;
+  * reads the persistent debug log (log.c) out of the ramoops console zone
+    and prints it -- including when the payload crashed, which is when it
+    matters most;
   * writes the upright UI as a PNG.
 
 Usage: qharness.py <payload.bin> <out.png> [seconds]
@@ -37,6 +40,14 @@ PANEL_W, PANEL_H, PITCH = 1080, 2160, 4352
 W, H = 640, 480
 BCN_MAGIC = 0x554E4F31
 ROT = 270
+# The persistent debug log (log.c): the Gemian kernel's ramoops CONSOLE
+# zone. QEMU's virt board puts DRAM at 0x40000000 like the Cosmo, so the
+# same absolute address is real memory here and the gate reads the log the
+# device will later hand to pstore, byte for byte.
+LOG_ZONE = 0x5449F000
+LOG_SIZE = 0x40000
+PRAM_SIG = 0x43474244          # 'DBGC', PERSISTENT_RAM_SIG
+LOG_BANNER = '=== UnoDOS cosmo64 ==='
 
 
 def fdt_blob():
@@ -153,6 +164,29 @@ def main():
     if not 1 <= scale <= 4:
         scale = 1
 
+    # ---- the persistent log (log.c) ------------------------------------
+    f_log = os.path.join(tmp, "log.bin")
+    qmp("pmemsave", val=LOG_ZONE, size=LOG_SIZE, filename=f_log)
+    logbuf = dumped(f_log, LOG_SIZE)
+    lsig, lstart, lsize = struct.unpack_from("<III", logbuf, 0)
+    log_text = None
+    log_fail = None
+    if lsig != PRAM_SIG:
+        log_fail = ("debug log: signature 0x%08X, wanted 0x%08X "
+                    "(c64_log_init never ran?)" % (lsig, PRAM_SIG))
+    elif not 0 < lsize <= LOG_SIZE - 12 or lstart > lsize:
+        log_fail = "debug log: invalid ring (start=%d size=%d)" % (lstart, lsize)
+    else:
+        # exactly persistent_ram_save_old()'s reconstruction
+        data = logbuf[12:]
+        log_text = (data[lstart:lsize] + data[:lstart]).decode("utf-8", "replace")
+        print("---- debug log (%d bytes @ 0x%X) ----" % (lsize, LOG_ZONE))
+        for line in log_text.strip("\n").split("\n"):
+            print("  | " + line)
+        print("---- end debug log ----")
+        if LOG_BANNER not in log_text:
+            log_fail = "debug log: banner %r missing" % LOG_BANNER
+
     cmagic, vec = struct.unpack_from("<II", fbi, 0x1000)
     if cmagic == 0x43525348:
         esr, elr, far, el = struct.unpack_from("<QQQQ", fbi, 0x1000 + 8)
@@ -161,6 +195,8 @@ def main():
                  "FAR=0x%X EL=0x%X" % (vec, esr, esr >> 26, elr, elr - LOAD, far, el))
 
     fails = []
+    if log_fail:
+        fails.append(log_fail)
     if src != 1:
         fails.append("framebuffer source: got %d, wanted 1 (videolfb blob)" % src)
     if raw != PANEL_FB:
@@ -284,7 +320,7 @@ def main():
         for f in fails:
             print("  FAIL: %s" % f)
         sys.exit(1)
-    print("  OK: videolfb walk, MMU-on adoption, beacon and rotated blit all good")
+    print("  OK: videolfb walk, MMU-on adoption, beacon, rotated blit and\n      persistent log all good")
 
 
 if __name__ == "__main__":

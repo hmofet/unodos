@@ -5,8 +5,9 @@
 // later boot (or the harness) can read them: the CRASH RECORD at c64_dbg_page+0x1000 (in-image .bss) --
 // magic 'HSRC' ("CRSH" little-endian), then vec index, ESR, ELR, FAR, CurrentEL.
 // The handler also paints a red 64x64 block at the raw framebuffer origin when
-// fb_init has published one (FBINFO+32), then parks. Sixteen 0x80-byte vectors,
-// VBAR-aligned to 2 KB.
+// fb_init has published one (FBINFO+32), writes a formatted report to the
+// persistent log (log.c, which survives into Linux's pstore), then parks.
+// Sixteen 0x80-byte vectors, VBAR-aligned to 2 KB.
 
     .text
 
@@ -73,6 +74,21 @@ fault_record:
     mov   x3, x18
     mov   w4, #152
     bl    paint_bits
+    dsb   sy
+    // LAST: the persistent log (log.c), which a later Linux boot reads out of
+    // pstore -- a whole formatted fault report instead of four photographed
+    // words. It runs on a stack of its own because the fault may well BE a
+    // wrecked stack, and it runs last because everything above is already
+    // safely down: if this re-faults it costs nothing that was not already
+    // recorded. (c64_log_write no-ops until c64_log_init has run.)
+    ldr   x0, =c64_fault_stack + 0x2000
+    mov   sp, x0
+    mov   x0, x18                       // vec
+    mrs   x1, esr_el1
+    mrs   x2, elr_el1
+    mrs   x3, far_el1
+    mrs   x4, CurrentEL
+    bl    c64_log_crash
     dsb   sy
 5:  wfe
     b     5b

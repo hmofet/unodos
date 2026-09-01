@@ -126,10 +126,15 @@ static void present(void)
 void c_main(void *dtb)
 {
     c64_beacon(224, 0xFFFF00FFu);   /* MAGENTA: C reached, the stack works   */
+    c64_log_init();
+    c64_logf("m0 payload: dtb=%p\n", dtb);
     mmu_init();
     c64_beacon(272, 0xFFFFFF00u);   /* YELLOW: translation + caches survived */
+    c64_log("mmu on\n");
     c64_u32 ppitch;
     c64_fb_adopt(dtb, &ppitch);
+    c64_logf("fb raw=%016x ppitch=%d src=%d\n", FBDBG->fb_raw, (int)ppitch,
+             (int)FBDBG->fb_src);
     FBDBG->fb_shadow = (c64_u64)shadow_buf;
     FBDBG->fb_base = (c64_u64)shadow_buf;
     FBDBG->fb_pitch = SCRW * 4;
