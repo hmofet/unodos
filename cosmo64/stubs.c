@@ -129,22 +129,11 @@ V0(unoamp_close)
 V0(unoamp_tick)
 
 /* ---- built-in apps not yet carried --------------------------------------- */
-V0(pc64_write_build)
-V0(pc64_write_action)
-I0(pc64_write_key)
-V0(pc64_write_frame)
-I0(pc64_write_canvas_index)
-V0(pc64_files_build)
-V0(pc64_files_action)
-I0(pc64_files_canvas_index)
 V0(pc64_music_build)
 V0(pc64_music_action)
 I0(pc64_music_key)
 V0(pc64_music_tick)
 V0(pc64_music_closed)
-V0(pc64_clock_build)
-V0(pc64_clock_action)
-V0(pc64_clock_tick)
 V0(pc64_browser_open)
 V0(pc64_browser_open_path)
 I0(pc64_browser_key)
@@ -154,6 +143,18 @@ V0(pc64_game_close)
 V0(pc64_game_tick)
 I0(pc64_game_canvas)
 I0(pc64_game_fullscreen)
+
+/* ---- storage calls the real Files app makes (dies at M3) ----------------- */
+int uno_fat_read(void) { return -1; }
+int uno_fat_write(void) { return -1; }
+int uno_fat_delete(void) { return -1; }
+int uno_fat_mkdir(void) { return -1; }
+int uno_fat_rename(void) { return -1; }
+int uno_fat_list_ex(void) { return -1; }
+I0(uno_fs_fat_index)
+P0(uno_fs_volume_name)
+I0(uno_pkg_probe)
+I0(uno_pkg_install)
 
 /* ---- second link wave (the shell's full unresolved set) ------------------ */
 V0(iwl_saved_forget)
