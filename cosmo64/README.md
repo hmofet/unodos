@@ -74,15 +74,27 @@ bare metal, proven at the asm port's first light). Never write
   videolfb tree; readback is QMP `pmemsave`; a payload fault is reported from
   the crash record instead of a mute failure.
 
-## Next: M1 part 2 — the shell
+## M1 part 2 DONE on QEMU (2026-09-01): the pc64 shell runs on ARM64
 
-Per the dependency survey (agent report, 2026-08-31): compile the 23-file
-Tier-1 list (unoui + themes + fb/libc/math/font/icons/qoi/uui_apps/
-mac_compat + pc64_uui.c), write `cosmo64/{display,time,input,platform}.c`
-against the ~40-function seam in `pc64/uefi_main.c`/`pc64_native.h`, and a
-~250-line `stubs.c` for the subsystems the `#ifdef`s do NOT actually gate
-(only UNO_ACPI/UNO_BG_CACHE/UNO_DEBUG/UNO_DBGCON are honest). Known hazards:
-`___chkstk_ms` in pc64_libc.c is x86 (clang emits `__chkstk` on aarch64),
-`pc64_modload_static.c` is a trap (declares 14 undefined app symbols — write
-a fresh stub), `pc64_games.c:62` names `u3d_backend_intel` directly, and the
-shell carries ~69 MB of .bss (heap 32 MB + four full-screen buffers).
+The full desktop -- Aurora theme, icons, taskbar, Start menu, virtual
+desktops, Control Panel, the tray uptime ticking off CNTPCT -- renders under
+`qharness.py` and passes the pixel-exact blit gate. What it took:
+
+- the 23-file Tier-1 core (+ `pc64_io.c`, the portable Toolbox FS layer)
+  compiled UNCHANGED except one guard: `pc64_libc.c`'s `___chkstk_ms` asm is
+  x86-only (clang emits `__chkstk` here; `cpu.s` provides it as `ret`);
+- `display.c` / `platform.c` / `input.c` implement the ~40-function seam
+  (fb[] presented rotated 270 + 2x + R<->B swizzle -- fb.h is 0xAABBGGRR, the
+  panel wants 0xAARRGGBB; time = the pc64_native.h contract on CNTPCT/CNTFRQ,
+  no calibration dance);
+- `stubs.c` (~120 symbols) covers storage/net/USB/audio/apps until their
+  milestones land; `videolfb.c` is the adopt path shared with the m0 payload;
+- the image carries ~67 MB of .bss (pc64's 32 MB static-arena heap + screen
+  buffers), so the stack + FBINFO/crash block moved above it (0x53Exxxxx,
+  below LK's DTB at 0x54000000); flatten.py asserts the ceiling;
+- clang-vs-gcc deltas: `-fsigned-char` (limits.h hardcodes it),
+  `-Wno-error=implicit-function-declaration` (pc64_uui.c's
+  declared-later-in-file pattern), `-fno-builtin`.
+
+Still M1 on hardware: boot the shell image on the device (pending -- the
+device is busy). Then M2: AW9523 keyboard + Novatek touch into input.c's ring.

@@ -67,9 +67,10 @@ def main():
 
     if entry < 4 or entry >= size_image or entry & 3:
         sys.exit("flatten: entry RVA 0x%X out of range" % entry)
-    if LOAD + size_image > 0x402E0000:
-        sys.exit("flatten: image ends at 0x%X -- collides with the stack/VARS "
-                 "region at 0x402E0000+" % (LOAD + size_image))
+    if LOAD + size_image > 0x53000000:
+        sys.exit("flatten: image ends at 0x%X -- collides with the stack/FBINFO "
+                 "block at 0x53Exxxxx / LK's DTB at 0x54000000"
+                 % (LOAD + size_image))
     # The headers' spot doubles as an ARM64 Image header (the pinephone port's
     # p-boot trick): LK just executes offset 0, where code0 = `b <entry>`, while
     # QEMU's -kernel loader reads text_offset 0x80000 and lands the image at

@@ -2,7 +2,7 @@
 // crash record, whole-D-cache invalidate, and the MMU/cache enable sequence.
 //
 // There is no UART on this device, so a fault must leave its forensics where a
-// later boot (or the harness) can read them: the CRASH RECORD at 0x40321000 --
+// later boot (or the harness) can read them: the CRASH RECORD at 0x53F01000 --
 // magic 'HSRC' ("CRSH" little-endian), then vec index, ESR, ELR, FAR, CurrentEL.
 // The handler also paints a red 64x64 block at the raw framebuffer origin when
 // fb_init has published one (FBINFO+32), then parks. Sixteen 0x80-byte vectors,
@@ -21,7 +21,7 @@ vector_table:
     .endr
 
 fault_record:
-    ldr   x0, =0x40321000
+    ldr   x0, =0x53F01000
     ldr   w1, =0x43525348               // 'CRSH' read back as bytes C R S H
     str   w1, [x0]
     str   w18, [x0, #4]
@@ -35,7 +35,7 @@ fault_record:
     str   x1, [x0, #32]
     dsb   sy
     // paint a red block at the raw panel origin, if fb_init got that far
-    ldr   x0, =0x40320000               // FBINFO
+    ldr   x0, =0x53F00000               // FBINFO
     ldr   x1, [x0, #32]                 // fb_raw
     cbz   x1, 1f
     ldr   w2, [x0, #64]                 // fb_ppitch
@@ -123,4 +123,12 @@ mmu_on:
     bic   x3, x3, #(1 << 1)             // A: no alignment checking on Normal
     msr   sctlr_el1, x3
     isb
+    ret
+
+// ---- __chkstk: the aarch64-w64-mingw32 stack probe --------------------------
+// clang emits a call for any frame over 4 KB (size/16 arrives in x15). Probing
+// exists to commit guard pages on Windows; our stack is plain, fully-mapped
+// DRAM reserved by entry.s, so the probe has nothing to do.
+    .globl __chkstk
+__chkstk:
     ret

@@ -30,10 +30,9 @@ Usage: qharness.py <payload.bin> <out.png> [seconds]
 import os, struct, subprocess, sys, tempfile, time, zlib
 
 LOAD = 0x40080000
-STUB = 0x402D0000     # clear of the board's own DTB (0x40000000+1M) and the image
 FDT_AT = 0x48000000
-FBINFO = 0x40320000
-CRASH = 0x40321000
+FBINFO = 0x53F00000
+CRASH = 0x53F01000
 PANEL_FB = 0x7DF70000
 VRAM = 0x1F90000
 PANEL_W, PANEL_H, PITCH = 1080, 2160, 4352
@@ -98,8 +97,10 @@ def main():
             "-m", "2048", "-display", "none", "-serial", "none",
             "-qmp", "stdio", "-no-reboot",
             "-kernel", payload, "-dtb", fdt]
+    err_path = os.path.join(tmp, "qemu-stderr.txt")
+    err_f = open(err_path, "w")
     p = subprocess.Popen(qemu, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                         stderr=subprocess.STDOUT, text=True)
+                         stderr=err_f, text=True)
     import json
 
     def qmp(cmd, **args):
@@ -111,7 +112,9 @@ def main():
         while True:                       # skip the greeting and async events
             line = p.stdout.readline()
             if not line:
-                sys.exit("qharness: qemu closed the QMP stream on %r" % cmd)
+                err_f.flush()
+                sys.exit("qharness: qemu closed the QMP stream on %r -- stderr:\n%s"
+                         % (cmd, open(err_path).read()[-1500:]))
             msg = json.loads(line)
             if "return" in msg or "error" in msg:
                 if "error" in msg:
@@ -188,7 +191,15 @@ def main():
         fails.append("bar beacon: framebuffer starts 0x%08X, wanted white"
                      % struct.unpack_from("<I", fb, 0)[0])
 
-    # the eye view through the 270-degree mounting, every block sub-position
+    # The eye view through the 270-degree mounting, every block sub-position.
+    # The m0 payload presents its shadow verbatim (0xAARRGGBB source); the
+    # shell presents pc64's fb[] (0xAABBGGRR) with an R<->B swizzle -- accept
+    # whichever channel order matches, but the SAME one for every sub-position.
+    sh_swiz = bytearray(sh)
+    for i in range(0, len(sh_swiz), 4):
+        sh_swiz[i], sh_swiz[i + 2] = sh_swiz[i + 2], sh_swiz[i]
+    sh_swiz = bytes(sh_swiz)
+    accept = None
     eye0 = None
     for a in range(scale):
         for b in range(scale):
@@ -202,8 +213,19 @@ def main():
                     eye[o:o + 4] = row[s:s + 4]
             if eye0 is None:
                 eye0 = eye
-            if bytes(eye) != sh:
-                bad = sum(1 for i in range(0, len(sh), 4) if eye[i:i+4] != sh[i:i+4])
+            if accept is None:
+                accept = sh if bytes(eye) == sh else (
+                    sh_swiz if bytes(eye) == sh_swiz else None)
+                if accept is None:
+                    bad = sum(1 for i in range(0, len(sh), 4)
+                              if eye[i:i+4] != sh[i:i+4])
+                    fails.append("rotated blit: %d of %d pixels differ from the "
+                                 "source in either channel order (sub-pos %d,%d)"
+                                 % (bad, W * H, a, b))
+                    break
+            elif bytes(eye) != accept:
+                bad = sum(1 for i in range(0, len(accept), 4)
+                          if eye[i:i+4] != accept[i:i+4])
                 fails.append("rotated blit: %d of %d pixels differ (sub-pos %d,%d)"
                              % (bad, W * H, a, b))
                 break

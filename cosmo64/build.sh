@@ -1,57 +1,120 @@
 #!/bin/sh
-# UnoDOS pc64-on-ARM (Cosmo Communicator, MT6771) build -- milestone M0.
+# UnoDOS pc64-on-ARM (Cosmo Communicator, MT6771) build.
 #
 # Toolchain: llvm-mingw's aarch64-w64-mingw32-clang on quill -- PE/COFF and
 # LLP64, the same object format and data model as the x86 pc64, per the
-# toolchain decision in research/pc64-arm-port-plan.md (hmofet/cosmo). The
-# image links at LK's load address so the flat payload needs no relocation;
-# flatten.py lays the PE out and cosmo/mkbootimg.py wraps it for the p38 slot.
+# toolchain decision in research/pc64-arm-port-plan.md (hmofet/cosmo). Images
+# link at LK's load address so the flat payload needs no relocation;
+# flatten.py lays the PE out (and stamps an ARM64 Image header, so the same
+# binary boots under `qemu -kernel`) and the asm port's mkbootimg.py wraps it
+# for the p38 slot.
 #
-#   ./build.sh          -> build/m0.bin + build/pc64arm-boot.img
+#   ./build.sh          -> the m0/m1 TEST payload  (build/m0.bin + boot img)
+#   ./build.sh shell    -> the pc64 SHELL          (build/shell.bin + boot img)
 #
-# Verify with the asm port's harness (the M0 payload honours the same FBINFO
-# contract, so all fifteen FDT combinations gate it unchanged):
-#   python ../cosmo/harness.py build/m0.bin /tmp/m0.png 40
+# Verify on quill (real QEMU; see qharness.py):
+#   scp qharness.py build/<x>.bin quill:/work/unodos-cosmo64/ &&
+#   ssh quill 'cd /work/unodos-cosmo64 && python3 qharness.py <x>.bin /tmp/x.png 3'
 set -e
 cd "$(dirname "$0")"
 
 PY="${PY:-python3}"
 QUILL="${QUILL:-arin@192.168.2.114}"
-QDIR="/work/unodos-cosmo64"
+QDIR="/work/unodos-pc64arm"
 LMBIN="/opt/llvm-mingw-20260826-ucrt-ubuntu-22.04-x86_64/bin"
 CC="$LMBIN/aarch64-w64-mingw32-clang"
 
-# The load-bearing flags (see the header of m0.c):
-#   -mstrict-align  code runs BEFORE the MMU is on too (mmu.c's table builder,
-#                   the FDT walk) and there all memory is Device: no unaligned
-#                   accesses anywhere. After mmu_on, merely a minor cost.
-#   -fno-builtin    our memset must not become a call to itself
-# -mgeneral-regs-only was retired in M1: entry.s programs CPACR before any C.
-CFLAGS="-O2 -Wall -Wextra -ffreestanding -fno-stack-protector -fno-stack-check \
-        -nostdinc -fno-builtin -mstrict-align"
+# Baseline flags (see m0.c / README for the history):
+#   -fsigned-char   pc64/include/limits.h hardcodes signed char
+#   -fno-builtin    pc64_libc.c defines memset/memcpy; the idiom recognizer
+#                   must not rewrite their own loops into calls to themselves
+# -mstrict-align is applied ONLY to code that can run before the MMU is on
+# (mmu.c, and everything in the m0 payload); the shell's fb blits run MMU-on.
+BASECF="-O2 -Wall -Wextra -ffreestanding -fno-stack-protector -fno-stack-check \
+        -nostdinc -fno-builtin -fsigned-char"
 LINK="-nostdlib -Wl,--image-base,0x40080000 -e _start"
 
+stage_quill() {
+  ssh "$QUILL" "mkdir -p $QDIR/cosmo64/build $QDIR/pc64/build $QDIR/unoui/themes $QDIR/uno3d"
+  scp -q ./*.s ./*.c ./*.h ./*.py "$QUILL:$QDIR/cosmo64/"
+}
+
 mkdir -p build
-echo "[1/3] cross-compiling (aarch64-w64-mingw32) on quill..."
-ssh "$QUILL" "mkdir -p $QDIR/build"
-scp -q entry.s cpu.s m0.c mmu.c "$QUILL:$QDIR/"
-ssh "$QUILL" "cd $QDIR && \
-  $CC $CFLAGS -c m0.c -o build/m0.o && \
-  $CC $CFLAGS -c mmu.c -o build/mmu.o && \
-  $CC -c entry.s -o build/entry.o && \
-  $CC -c cpu.s -o build/cpu.o && \
-  $CC $LINK -o build/m0.exe build/entry.o build/cpu.o build/m0.o build/mmu.o"
-scp -q "$QUILL:$QDIR/build/m0.exe" build/
 
-echo "[2/3] flattening PE -> LK payload..."
-"$PY" flatten.py build/m0.exe build/m0.bin
+case "$1" in
+# ---------------------------------------------------------------------------
+"" )
+  echo "[m0] cross-compiling the test payload on quill..."
+  stage_quill
+  ssh "$QUILL" "cd $QDIR/cosmo64 && \
+    $CC $BASECF -mstrict-align -c m0.c -o build/m0.o && \
+    $CC $BASECF -mstrict-align -c videolfb.c -o build/videolfb.o && \
+    $CC $BASECF -mstrict-align -c mmu.c -o build/mmu.o && \
+    $CC -c entry.s -o build/entry.o && \
+    $CC -c cpu.s -o build/cpu.o && \
+    $CC $LINK -o build/m0.exe build/entry.o build/cpu.o build/m0.o \
+        build/videolfb.o build/mmu.o"
+  scp -q "$QUILL:$QDIR/cosmo64/build/m0.exe" build/
+  "$PY" flatten.py build/m0.exe build/m0.bin
+  OUT=build/m0.bin
+  ;;
+# ---------------------------------------------------------------------------
+shell )
+  echo "[shell] staging sources on quill (pc64 core + unoui + cosmo64)..."
+  stage_quill
+  # the pc64 tree minus the big vendored stacks a shell-only build never sees
+  # (tar over ssh: Git Bash has no rsync)
+  (cd .. && tar czf - \
+      --exclude=pc64/upy --exclude=pc64/unocode --exclude=pc64/quickjs \
+      --exclude=pc64/shots --exclude=pc64/flash --exclude=pc64/remote \
+      --exclude=pc64/build --exclude=pc64/tools \
+      pc64 unoui uno3d unosound unomedia unoacpi) | ssh "$QUILL" "tar xzf - -C $QDIR"
+  scp -q ../pc64/build/font_data.h "$QUILL:$QDIR/pc64/build/"
 
-echo "[3/3] wrapping in an LK boot image..."
+  # The Tier-1 portable core (dependency survey 2026-08-31; the nine themes
+  # are all named by kThemes[] in pc64_uui.c, so all nine link).
+  UNOUI="unoui unoui_input unoui_anim unoui_wmanim"
+  THEMES="theme_aurora theme_unodos theme_macos7 theme_macplus theme_win31 \
+          theme_amiga theme_c64 theme_apple2 theme_next"
+  PCORE="fb pc64_libc pc64_math pc64_font pc64_icons pc64_qoi pc64_uui_apps \
+         mac_compat pc64_io pc64_uui"
+  C64="videolfb display platform input stubs"
+
+  # -Wno-error=implicit-function-declaration: mingw-gcc merely warns on the
+  # declared-later-in-the-same-file pattern pc64_uui.c uses; clang 16+ errors.
+  # The linker still catches genuinely missing functions.
+  SHCF="$BASECF -Wno-error=implicit-function-declaration \
+        -DUNO_COLOR=1 -DUNO_PC64 -DUNO_UUI -Dmain=uno_main \
+        -I$QDIR/pc64/include -I$QDIR/pc64 -I$QDIR/unoui -I$QDIR/uno3d \
+        -I$QDIR/pc64/bearssl/inc -I$QDIR/unosound -I$QDIR/unomedia \
+        -I$QDIR/unoacpi -I$QDIR/unoacpi/uacpi/include -I$QDIR/cosmo64"
+
+  ssh "$QUILL" "set -e; cd $QDIR/cosmo64 && \
+    for f in $UNOUI; do $CC $SHCF -c ../unoui/\$f.c -o build/u_\$f.o; done && \
+    for f in $THEMES; do $CC $SHCF -c ../unoui/themes/\$f.c -o build/t_\$f.o; done && \
+    for f in $PCORE; do $CC $SHCF -c ../pc64/\$f.c -o build/p_\$f.o; done && \
+    for f in $C64; do $CC $SHCF -c \$f.c -o build/c_\$f.o; done && \
+    $CC $SHCF -mstrict-align -c mmu.c -o build/mmu_sa.o && \
+    $CC -c entry.s -o build/entry.o && \
+    $CC -c cpu.s -o build/cpu.o && \
+    $CC $LINK -o build/shell.exe build/entry.o build/cpu.o build/mmu_sa.o \
+        build/u_*.o build/t_*.o build/p_*.o build/c_*.o"
+  scp -q "$QUILL:$QDIR/cosmo64/build/shell.exe" build/
+  "$PY" flatten.py build/shell.exe build/shell.bin
+  OUT=build/shell.bin
+  ;;
+* )
+  echo "usage: ./build.sh [shell]" >&2
+  exit 1
+  ;;
+esac
+
+echo "[boot image] wrapping..."
 # mkbootimg.py lives in the asm port's lane (cosmo/, branch cosmo-port, not yet
 # on master) -- consume it from that worktree until the branches meet.
 MKBOOTIMG="${MKBOOTIMG:-../../unodos-cosmo/cosmo/mkbootimg.py}"
 [ -f "$MKBOOTIMG" ] || { echo "mkbootimg.py not found at $MKBOOTIMG -- set MKBOOTIMG" >&2; exit 1; }
-"$PY" "$MKBOOTIMG" build/m0.bin build/pc64arm-boot.img
-echo "    -> cosmo64/build/pc64arm-boot.img"
+"$PY" "$MKBOOTIMG" "$OUT" build/pc64arm-boot.img
+echo "    -> cosmo64/build/pc64arm-boot.img  (from $OUT)"
 echo "    install:  scp build/pc64arm-boot.img the-cosmo:  then as root:"
 echo "              dd if=pc64arm-boot.img of=/dev/mmcblk0p38 bs=1M conv=fsync"
