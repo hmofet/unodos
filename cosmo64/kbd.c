@@ -106,10 +106,23 @@ int c64_kbd_present(void)
     return g_present;
 }
 
+static void kbd_spin_ms(int ms)
+{
+    c64_u64 until = c64_cnt_now() + (c64_u64)ms * 13000;   /* 13 MHz */
+    while (c64_cnt_now() < until)
+        ;
+}
+
 void c64_kbd_init(void)
 {
     if (c64_i2c_init() < 0)
         return;
+    /* the chip boots held in shutdown (GPIO175 low by dws default); give it
+     * the vendor driver's reset pulse: low, 20 ms, high, settle */
+    c64_kbd_power(0);
+    kbd_spin_ms(20);
+    c64_kbd_power(1);
+    kbd_spin_ms(20);
     int id = c64_i2c_read_reg(AW_ADDR, R_ID);
     if (id != AW_ID)
         return;                             /* absent (or QEMU): stay silent */

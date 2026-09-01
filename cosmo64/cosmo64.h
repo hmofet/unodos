@@ -106,6 +106,7 @@ extern c64_u8 c64_boot_stack[C64_BOOT_STACK_BYTES];
 int c64_i2c_init(void);
 int c64_i2c_write_reg(c64_u8 dev, c64_u8 reg, c64_u8 val);
 int c64_i2c_read_reg(c64_u8 dev, c64_u8 reg);
+void c64_kbd_power(int on);          /* AW9523 SHDN/HWEN, GPIO175 */
 
 /* kbd.c: the AW9523 matrix keyboard -> the input ring */
 void c64_kbd_init(void);
