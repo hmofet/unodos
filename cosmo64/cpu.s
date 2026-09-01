@@ -34,25 +34,82 @@ fault_record:
     mrs   x1, CurrentEL
     str   x1, [x0, #32]
     dsb   sy
-    // paint a red block at the raw panel origin, if fb_init got that far
+    // Paint the crash VISIBLY: there is no UART and no /dev/mem afterwards, so
+    // the panel is the only forensics channel that reaches a photograph. Use
+    // the adopted framebuffer when fb_init published one; before that, the
+    // MEASURED panel base/pitch for this unit (0x7DF70000/4352,
+    // mblock-7-framebuffer, device-verified) -- diagnostic-only hardcode.
     ldr   x0, =0x53F00000               // FBINFO
     ldr   x1, [x0, #32]                 // fb_raw
-    cbz   x1, 1f
     ldr   w2, [x0, #64]                 // fb_ppitch
-    cbz   w2, 1f
-    mov   w3, #64                       // rows
-2:  mov   x4, x1
-    mov   w5, #64                       // columns
-    ldr   w6, =0xFFFF0000
-3:  str   w6, [x4], #4
-    subs  w5, w5, #1
-    b.ne  3b
-    add   x1, x1, x2
+    cbnz  x1, 1f
+    ldr   x1, =0x7DF70000
+1:  cbnz  w2, 2f
+    mov   w2, #4352
+2:  // red 64x64 block at the origin = "an exception was taken"
+    mov   x4, x1
+    mov   w3, #64
+3:  mov   x5, x4
+    mov   w6, #64
+4:  ldr   w7, =0xFFFF0000
+    str   w7, [x5], #4
+    subs  w6, w6, #1
+    b.ne  4b
+    add   x4, x4, w2, uxtw
     subs  w3, w3, #1
-    b.ne  2b
+    b.ne  3b
+    // then the registers, one 32-bit word per row of bit-cells (white = 1,
+    // dark = 0, bit 31 leftmost): ESR @ y=80, ELR low half @ y=104,
+    // FAR low half @ y=128, vec index @ y=152. A photo decodes the fault.
+    mrs   x3, esr_el1
+    mov   w4, #80
+    bl    paint_bits
+    mrs   x3, elr_el1
+    mov   w4, #104
+    bl    paint_bits
+    mrs   x3, far_el1
+    mov   w4, #128
+    bl    paint_bits
+    mov   x3, x18
+    mov   w4, #152
+    bl    paint_bits
     dsb   sy
-1:  wfe
-    b     1b
+5:  wfe
+    b     5b
+
+// paint_bits: 32 bit-cells (12 px wide, 16 tall, 16 apart) of w3 at panel
+// y-offset w4. x1 = panel base, w2 = pitch. Clobbers x5-x13, x30 is dead
+// anyway (the handler parks). Cell 0 (leftmost) = bit 31.
+paint_bits:
+    umull x5, w4, w2
+    add   x5, x1, x5
+    mov   w6, #0
+pb_cell:
+    mov   w7, #31
+    sub   w7, w7, w6
+    lsr   w8, w3, w7
+    tst   w8, #1
+    ldr   w9, =0xFFFFFFFF
+    b.ne  pb_go
+    ldr   w9, =0xFF400040               // dark violet = bit clear
+pb_go:
+    lsl   w10, w6, #4                   // cell x = cell * 16
+    add   x10, x5, w10, uxtw #2
+    mov   w11, #16
+pb_row:
+    mov   x12, x10
+    mov   w13, #12
+pb_px:
+    str   w9, [x12], #4
+    subs  w13, w13, #1
+    b.ne  pb_px
+    add   x10, x10, w2, uxtw
+    subs  w11, w11, #1
+    b.ne  pb_row
+    add   w6, w6, #1
+    cmp   w6, #32
+    b.lo  pb_cell
+    ret
 
 // ---- cpu_early_init: vectors + FPU, called before any C -------------------
     .globl cpu_early_init

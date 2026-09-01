@@ -14,7 +14,7 @@ runtime bss clear, and cosmo/mkbootimg.py gzips it, so the zeros cost nothing.
 
 Usage: flatten.py <in.exe> <out.bin>
 """
-import struct, sys
+import os, struct, sys
 
 LOAD = 0x40080000
 
@@ -95,6 +95,12 @@ def main():
     zend = (size_image + 15) & ~15
     struct.pack_into("<Q", img, 32, LOAD + zstart)     # res2
     struct.pack_into("<Q", img, 40, LOAD + zend)       # res3
+    # FLATTEN_IMGSZ=shipped: report only the shipped bytes as image_size, so
+    # the header a bootloader inspects looks exactly like a small kernel's --
+    # the true runtime footprint is what res2/res3 carry. (QEMU places the DTB
+    # at the base of RAM on virt, so this changes nothing there.)
+    if os.environ.get("FLATTEN_IMGSZ") == "shipped":
+        struct.pack_into("<Q", img, 16, zstart)
 
     open(sys.argv[2], "wb").write(img[:zstart])
     print("flatten: %s (%d bytes shipped of %d; runtime-zero 0x%X..0x%X, "

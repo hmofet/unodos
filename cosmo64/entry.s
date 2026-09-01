@@ -32,8 +32,19 @@ boot_core:
                                         // ends below 0x53000000), below the
                                         // FBINFO/crash block at 0x53F00000 and
                                         // LK's DTB at 0x54000000
+    bl    cpu_early_init                // vectors FIRST: anything after this
+                                        // faults into the crash record + the
+                                        // painted ESR, never a silent wedge
+    // Stage beacons, painted straight over LK's splash at the MEASURED panel
+    // base (0x7DF70000, pitch 4352 -- mblock-7-framebuffer, device-verified).
+    // Diagnostic-only hardcode: the adopt path still reads the real base from
+    // the DTB, and the first thing it does is clear the panel, wiping these.
+    // GREEN block = LK jumped to us and the vectors are live.
+    ldr   w1, =0xFF00FF00
+    mov   w2, #128
+    bl    beacon_block
     // Zero the .bss: flatten.py ships the image truncated after its last real
-    // byte (a 67 MB decompress hung LK at the splash) and records the absolute
+    // byte (a 67 MB decompress trips LK's 28 MB cap) and records the absolute
     // zero-range in the Image header's res2/res3 words at image offsets 32/40.
     ldr   x1, =0x40080020
     ldp   x2, x3, [x1]                  // x2 = start, x3 = end (16-aligned)
@@ -44,9 +55,30 @@ bss_zero:
     cmp   x2, x3
     b.lo  bss_zero
 bss_done:
-    bl    cpu_early_init                // vectors + CPACR BEFORE any C runs --
-                                        // the compiler may emit FP anywhere
+    // CYAN block = the .bss zero completed
+    ldr   w1, =0xFF00FFFF
+    mov   w2, #176
+    bl    beacon_block
     bl    c_main                        // x0 still holds LK's DTB pointer
 halt:
     wfe
     b     halt
+
+// beacon_block: paint a 32x32 block of colour w1 at panel x = w2, y = 0,
+// using the measured panel base/pitch. Preserves x0 (the DTB pointer).
+// Clobbers x1-x6.
+beacon_block:
+    ldr   x3, =0x7DF70000
+    add   x3, x3, w2, uxtw #2           // + x * 4
+    mov   w4, #32                       // rows
+    mov   w5, #4352                     // panel pitch (too big for an add imm)
+1:  mov   x6, x3
+    mov   w7, #32                       // columns
+2:  str   w1, [x6], #4
+    subs  w7, w7, #1
+    b.ne  2b
+    add   x3, x3, w5, uxtw
+    subs  w4, w4, #1
+    b.ne  1b
+    dsb   sy
+    ret

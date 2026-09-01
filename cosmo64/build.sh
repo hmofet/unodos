@@ -100,7 +100,7 @@ shell )
     $CC $LINK -o build/shell.exe build/entry.o build/cpu.o build/mmu_sa.o \
         build/u_*.o build/t_*.o build/p_*.o build/c_*.o"
   scp -q "$QUILL:$QDIR/cosmo64/build/shell.exe" build/
-  "$PY" flatten.py build/shell.exe build/shell.bin
+  FLATTEN_IMGSZ=shipped "$PY" flatten.py build/shell.exe build/shell.bin
   OUT=build/shell.bin
   ;;
 * )
