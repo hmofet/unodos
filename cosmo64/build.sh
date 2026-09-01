@@ -78,7 +78,7 @@ shell )
           theme_amiga theme_c64 theme_apple2 theme_next"
   PCORE="fb pc64_libc pc64_math pc64_font pc64_icons pc64_qoi pc64_uui_apps \
          mac_compat pc64_io pc64_write pc64_clock pc64_files pc64_uui"
-  C64="videolfb display platform input stubs i2c kbd"
+  C64="videolfb display platform input stubs i2c kbd touch"
 
   # KBDTEST=1: compile the scripted key pad (QEMU gate proof, never shipped)
   [ -n "$KBDTEST" ] && BASECF="$BASECF -DC64_KBDTEST"

@@ -1,33 +1,27 @@
-/* cosmo64/i2c.c -- polled MTK I2C for bus 4 (the AW9523 keyboard's), MT6771.
+/* cosmo64/i2c.c -- polled MTK I2C for the MT6771, buses 4 (AW9523 keyboard)
+ * and 0 (NT36672 touch panel).
  *
  * Facts extracted from the vendor kernel (i2c-mtk.c/.h v2, clk-mt6771.c,
- * pinctrl-mtk-mt6771.h, k71v1_64_bsp.dws/.dts -- see the 2026-09-01 fact
- * sheet in the git log). The essentials:
+ * pinctrl-mtk-mt6771.h, the DWS/DTS) -- see the git log. The essentials:
  *
- *  - Controller at 0x11008000; this is an ARBITRATED bus, so every transfer
- *    register lives in the +0x100 channel bank; the +0 shadow bank is used
- *    only by init/recovery. 16-bit registers.
- *  - PIO/FIFO transfers up to 8 bytes need no DMA. A register write is one
- *    2-byte transaction; a register read is WRRD (CONTROL.DIR_CHANGE|RS +
- *    TRANSAC_LEN=2): write the reg address, repeated-start, read N.
- *  - Clock gates (write BIT to the CLR address to ungate): I2C1 bit12 @
- *    0x10001084, AP_DMA bit18 @ 0x1000108C, I2C1_ARBITER bit21 @ 0x100010A8.
- *  - Bus speed: 100 kHz (no clock-frequency in the DT; hs_only is inert at
- *    that speed). Timing depends on the i2c_sel mux at 0x100000C0[1:0],
- *    inherited from the preloader -- read it and pick the matching pair.
- *  - Pads: SCL4/SDA4 = GPIO105/106 mode 1 (RMW 0x100053D0), internal pulls
- *    on by boot default. AW9523 SHDN/HWEN = GPIO175, boot-default output-LOW
- *    (chip held in shutdown until raised).
+ *  - v2 register file, 16-bit registers. Bus 4 is ARBITRATED, so its transfer
+ *    registers live in a +0x100 channel bank (the +0 shadow bank is used only
+ *    by init/recovery) and its FIFO clear takes the MCH bit; bus 0 has no
+ *    channel offset and uses the plain forms. That per-bus difference is the
+ *    whole reason this file is table-driven.
+ *  - PIO/FIFO only: the FIFO is 8 bytes, and the vendor driver switches to
+ *    DMA past that, so every transfer here stays <= 8 bytes each way. (The
+ *    touch driver reads one finger, not all ten, precisely to stay inside it.)
+ *  - A register read is WRRD: CONTROL.DIR_CHANGE|RS with TRANSAC_LEN=2 --
+ *    write the offset, repeated-start, read N.
+ *  - Bus speed 100 kHz; timing depends on the i2c_sel mux the preloader left
+ *    at 0x100000C0[1:0], so it is read at runtime rather than assumed.
  */
 
 #include "cosmo64.h"
 
 #define R16(a) (*(volatile unsigned short *)(c64_u64)(a))
 #define R32(a) (*(volatile c64_u32 *)(c64_u64)(a))
-
-#define I2C_BASE 0x11008000u
-#define CH 0x100u                        /* the arbitrated channel bank */
-#define APDMA 0x11000100u
 
 /* v2 register offsets */
 #define O_DATA 0x00
@@ -52,15 +46,29 @@
 #define O_SOFTRESET 0x50
 
 #define ST_COMP 0x0001
-#define ST_ACKERR 0x0002
-#define ST_HS_NACK 0x0004
-#define ST_ARB_LOST 0x0008
-#define ST_TIMEOUT 0x0020
-#define ST_MAS_ERR 0x0100
-#define ST_ERRS (ST_ACKERR | ST_HS_NACK | ST_ARB_LOST | ST_TIMEOUT | ST_MAS_ERR)
+#define ST_ERRS 0x012E                   /* ACKERR|HS_NACK|ARB_LOST|TIMEOUT|MAS_ERR */
+
+struct bus {
+    c64_u32 base, ch, apdma;
+    c64_u32 gate_reg, gate_bit;          /* infracfg CLR register + bit */
+    c64_u32 arb_reg, arb_bit;            /* the arbiter gate, 0 if none */
+    c64_u32 mux_reg, mux_clr, mux_set;   /* pinmux RMW for SCL/SDA */
+    int ready;
+};
+
+static struct bus g_bus[2] = {
+    /* C64_I2C_KBD: bus 4 @ 0x11008000, arbitrated (+0x100), SCL4/SDA4 =
+     * GPIO105/106 mode 1; gates I2C1 bit12 + I2C1_ARBITER bit21 */
+    { 0x11008000, 0x100, 0x11000100, 0x10001084, 12, 0x100010A8, 21,
+      0x100053D0, (7u << 4) | (7u << 8), (1u << 4) | (1u << 8), 0 },
+    /* C64_I2C_TP: bus 0 @ 0x11007000, no channel offset, SDA0/SCL0 =
+     * GPIO82/83 mode 1; gate I2C0 bit11, no arbiter */
+    { 0x11007000, 0x000, 0x11000080, 0x10001084, 11, 0, 0,
+      0x100053A0, (7u << 8) | (7u << 12), (1u << 8) | (1u << 12), 0 },
+};
 
 static unsigned short g_timing = 0x0217, g_ltiming = 0x0096;  /* 68.25 MHz src */
-static int g_ready;
+static int g_timing_done;
 
 static void spin_us(c64_u32 us)
 {
@@ -80,57 +88,61 @@ void c64_kbd_power(int on)
     __asm__ volatile("dsb sy" ::: "memory");
 }
 
-static void init_hw(void)
+static void init_hw(struct bus *b)
 {
-    /* the shadow bank (+0), per mt_i2c_init_hw */
-    R16(I2C_BASE + O_INTR_MASK) = 0;
-    R16(I2C_BASE + O_INTR_STAT) = R16(I2C_BASE + O_INTR_STAT);
-    R16(I2C_BASE + O_SOFTRESET) = 1;
-    R16(I2C_BASE + O_IO_CONFIG) = 0x0003;        /* open-drain */
-    R16(I2C_BASE + O_TIMING) = g_timing;
-    R16(I2C_BASE + O_LTIMING) = g_ltiming;
-    R16(I2C_BASE + O_HS) = 0;
-    /* APDMA warm reset (the driver does this even for PIO) */
-    R32(APDMA + 0x0C) = 1;
+    c64_u32 B = b->base;                 /* the shadow bank, per init_hw */
+    R16(B + O_INTR_MASK) = 0;
+    R16(B + O_INTR_STAT) = R16(B + O_INTR_STAT);
+    R16(B + O_SOFTRESET) = 1;
+    R16(B + O_IO_CONFIG) = 0x0003;       /* open-drain */
+    R16(B + O_TIMING) = g_timing;
+    R16(B + O_LTIMING) = g_ltiming;
+    R16(B + O_HS) = 0;
+    R32(b->apdma + 0x0C) = 1;            /* APDMA warm reset */
     spin_us(10);
 }
 
-int c64_i2c_init(void)
+int c64_i2c_init(int bus)
 {
-    if (g_ready)
+    if (bus < 0 || bus > 1)
+        return -1;
+    struct bus *b = &g_bus[bus];
+    if (b->ready)
         return 0;
 
-    /* ungate main + dma + arbiter (CLR registers) */
-    R32(0x10001084) = 1u << 12;
-    R32(0x1000108C) = 1u << 18;
-    R32(0x100010A8) = 1u << 21;
+    R32(b->gate_reg) = 1u << b->gate_bit;        /* ungate main */
+    R32(0x1000108C) = 1u << 18;                  /* ungate AP_DMA */
+    if (b->arb_reg)
+        R32(b->arb_reg) = 1u << b->arb_bit;      /* ungate arbiter */
     __asm__ volatile("dsb sy" ::: "memory");
 
-    /* pads: SCL4/SDA4 = GPIO105/106 mode 1; make sure the pulls are up */
-    c64_u32 m = R32(0x100053D0);
-    m = (m & ~((7u << 4) | (7u << 8))) | (1u << 4) | (1u << 8);
-    R32(0x100053D0) = m;
-    R32(0x11D20060) |= (1u << 30) | (1u << 31);  /* PULLEN */
-    R32(0x11D20080) |= (1u << 30) | (1u << 31);  /* PULLSEL = up */
+    c64_u32 m = R32(b->mux_reg);
+    R32(b->mux_reg) = (m & ~b->mux_clr) | b->mux_set;
 
-    /* timing by the inherited i2c_sel mux (0=26M, 1=68.25M, 2=124.8M source,
-     * then /5 by CLOCK_DIV) -- values from the vendor speed math @ 100 kHz */
-    switch (R32(0x100000C0) & 3) {
-    case 0: g_timing = 0x0019 | 1; g_ltiming = 0x0019; break;
-    case 2: g_timing = 0x0419 | 1; g_ltiming = 0x0118; break;
-    default: g_timing = 0x0217; g_ltiming = 0x0096; break;
+    if (!g_timing_done) {
+        /* i2c_sel mux (0=26M, 1=68.25M, 2=124.8M), then /5 by CLOCK_DIV */
+        switch (R32(0x100000C0) & 3) {
+        case 0: g_timing = 0x0019 | 1; g_ltiming = 0x0019; break;
+        case 2: g_timing = 0x0419 | 1; g_ltiming = 0x0118; break;
+        default: g_timing = 0x0217; g_ltiming = 0x0096; break;
+        }
+        g_timing_done = 1;
     }
 
-    init_hw();
-    g_ready = 1;
+    init_hw(b);
+    b->ready = 1;
     return 0;
 }
 
-/* one PIO transaction on the channel bank. wr: bytes to send (starts with the
- * register address); rd: NULL for a plain write, else nrd bytes via WRRD. */
-static int xfer(c64_u8 dev, const c64_u8 *wr, int nwr, c64_u8 *rd, int nrd)
+/* One PIO transaction. wr: bytes to send (<= 8, starts with the register
+ * offset); rd: NULL for a plain write, else nrd (<= 8) bytes read via WRRD. */
+int c64_i2c_xfer(int bus, c64_u8 dev, const c64_u8 *wr, int nwr,
+                 c64_u8 *rd, int nrd)
 {
-    c64_u32 B = I2C_BASE + CH;
+    if (bus < 0 || bus > 1 || !g_bus[bus].ready || nwr > 8 || nrd > 8)
+        return -1;
+    struct bus *b = &g_bus[bus];
+    c64_u32 B = b->base + b->ch;
     R16(B + O_CLOCK_DIV) = 0x0404;
     R16(B + O_CONTROL) = rd ? 0x003A : 0x0028;   /* ACKERR_DET|CLK_EXT
                                                     (+DIR_CHANGE|RS for WRRD) */
@@ -144,14 +156,13 @@ static int xfer(c64_u8 dev, const c64_u8 *wr, int nwr, c64_u8 *rd, int nrd)
     R16(B + O_HW_TIMEOUT) = 0x018C;
     R16(B + O_SLAVE) = (unsigned short)(dev << 1);
     R16(B + O_INTR_STAT) = 0x01FF;
-    R16(B + O_FIFO_ADDR_CLR) = 0x0005;           /* MCH variant: ch_offset!=0 */
-    R16(B + O_INTR_MASK) = 0;                    /* polled: no irq line */
+    R16(B + O_FIFO_ADDR_CLR) = b->ch ? 0x0005 : 0x0001;   /* MCH form if ch */
+    R16(B + O_INTR_MASK) = 0;
+    R16(B + O_XFER_LEN) = (unsigned short)nwr;
     if (rd) {
-        R16(B + O_XFER_LEN) = (unsigned short)nwr;
         R16(B + O_XFER_LEN_AUX) = (unsigned short)nrd;
         R16(B + O_TRANSAC_LEN) = 2;
     } else {
-        R16(B + O_XFER_LEN) = (unsigned short)nwr;
         R16(B + O_TRANSAC_LEN) = 1;
     }
     for (int i = 0; i < nwr; i++)
@@ -173,9 +184,10 @@ static int xfer(c64_u8 dev, const c64_u8 *wr, int nwr, c64_u8 *rd, int nrd)
     }
     R16(B + O_INTR_STAT) = st;                   /* write-1-clear */
     if (!(st & ST_COMP) || (st & ST_ERRS)) {
-        R16(B + O_FIFO_ADDR_CLR) = 0x0005;
-        init_hw();
-        R16(I2C_BASE + O_START) = 0x0002;        /* shadow: resume arbitration */
+        R16(B + O_FIFO_ADDR_CLR) = b->ch ? 0x0005 : 0x0001;
+        init_hw(b);
+        if (b->ch)
+            R16(b->base + O_START) = 0x0002;     /* resume arbitration */
         return -1;
     }
     for (int i = 0; i < nrd; i++)
@@ -183,16 +195,16 @@ static int xfer(c64_u8 dev, const c64_u8 *wr, int nwr, c64_u8 *rd, int nrd)
     return 0;
 }
 
-int c64_i2c_write_reg(c64_u8 dev, c64_u8 reg, c64_u8 val)
+int c64_i2c_write_reg(int bus, c64_u8 dev, c64_u8 reg, c64_u8 val)
 {
     c64_u8 wr[2] = { reg, val };
-    return xfer(dev, wr, 2, 0, 0);
+    return c64_i2c_xfer(bus, dev, wr, 2, 0, 0);
 }
 
-int c64_i2c_read_reg(c64_u8 dev, c64_u8 reg)
+int c64_i2c_read_reg(int bus, c64_u8 dev, c64_u8 reg)
 {
     c64_u8 rd = 0;
-    if (xfer(dev, &reg, 1, &rd, 1) < 0)
+    if (c64_i2c_xfer(bus, dev, &reg, 1, &rd, 1) < 0)
         return -1;
     return rd;
 }

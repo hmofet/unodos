@@ -126,8 +126,10 @@ void uno_pc64_poll(void)
         first = 0;
         c64_beacon(496, 0xFF008000u);   /* DARK GREEN: the main loop reached */
         c64_kbd_init();
+        c64_touch_init();
     }
     c64_kbd_poll();
+    c64_touch_poll();
 #ifdef C64_KBDTEST
     kbdtest_tick(frames);
 #endif

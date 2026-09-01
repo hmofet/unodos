@@ -102,11 +102,21 @@ static inline void c64_beacon(int x, c64_u32 color)
 #define C64_BOOT_STACK_BYTES 0x80000
 extern c64_u8 c64_boot_stack[C64_BOOT_STACK_BYTES];
 
-/* i2c.c: polled MTK I2C (bus 4, the AW9523's). Returns <0 on error/NAK. */
-int c64_i2c_init(void);
-int c64_i2c_write_reg(c64_u8 dev, c64_u8 reg, c64_u8 val);
-int c64_i2c_read_reg(c64_u8 dev, c64_u8 reg);
+/* i2c.c: polled MTK I2C. Returns <0 on error/NAK. Transfers are PIO, so
+ * each direction is capped at the 8-byte FIFO. */
+#define C64_I2C_KBD 0                /* bus 4 @ 0x11008000, arbitrated */
+#define C64_I2C_TP  1                /* bus 0 @ 0x11007000, plain      */
+int c64_i2c_init(int bus);
+int c64_i2c_xfer(int bus, c64_u8 dev, const c64_u8 *wr, int nwr,
+                 c64_u8 *rd, int nrd);
+int c64_i2c_write_reg(int bus, c64_u8 dev, c64_u8 reg, c64_u8 val);
+int c64_i2c_read_reg(int bus, c64_u8 dev, c64_u8 reg);
 void c64_kbd_power(int on);          /* AW9523 SHDN/HWEN, GPIO175 */
+
+/* touch.c: the NT36672 panel as the shell's pointer */
+void c64_touch_init(void);
+void c64_touch_poll(void);
+int c64_touch_present(void);
 
 /* kbd.c: the AW9523 matrix keyboard -> the input ring */
 void c64_kbd_init(void);
@@ -116,6 +126,7 @@ int c64_kbd_present(void);
 /* input.c: producers push edges and publish level state */
 void c64_key_push(int scan, int uni, int mods);
 void c64_input_set_level(int mods, int held);
+void c64_input_set_pointer(int x, int y, int btn);
 
 static inline c64_u64 c64_cnt_now(void)
 {

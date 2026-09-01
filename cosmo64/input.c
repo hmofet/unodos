@@ -48,6 +48,13 @@ int uno_pc64_next_key(int *scan, int *uni, int *ctrl)
     return 1;
 }
 
+void c64_input_set_pointer(int x, int y, int btn)
+{
+    g_cx = x;
+    g_cy = y;
+    g_btn = btn;
+}
+
 void c64_input_set_level(int mods, int held)
 {
     g_mods = mods;
