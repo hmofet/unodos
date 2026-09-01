@@ -82,6 +82,8 @@ shell )
 
   # KBDTEST=1: compile the scripted key pad (QEMU gate proof, never shipped)
   [ -n "$KBDTEST" ] && BASECF="$BASECF -DC64_KBDTEST"
+  # TOUCHDBG=1: paint the raw touch report on the panel edge (bring-up aid)
+  [ -n "$TOUCHDBG" ] && BASECF="$BASECF -DC64_TOUCHDBG"
   # -Wno-error=implicit-function-declaration: mingw-gcc merely warns on the
   # declared-later-in-the-same-file pattern pc64_uui.c uses; clang 16+ errors.
   # The linker still catches genuinely missing functions.

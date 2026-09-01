@@ -10,8 +10,9 @@
  * four-plane keymap (base / Shift / Fn / Shift+Fn). The chassis-printed Fn
  * legends are honoured where known (/ on Y, = on I, ; on L, \ on 3, [ ] on
  * 7 8, - on Shift+comma); the rest are our assignments. The physical Esc key
- * is the PMIC power button (NOT in the matrix), so the "~" position -- the
- * matrix's top-left -- is Esc here, with ` and ~ on its Fn plane.
+ * is the PMIC power button (NOT in the matrix), so the "~" key (right of 0)
+ * is Esc here, with ` and ~ on its Fn plane -- and Fn+1 is a second Esc, for
+ * when the chassis-printed Esc is the key a hand reaches for first.
  *
  * Emission contract = hid_kbd.c's: printables as uni (Shift applied HERE),
  * specials as EFI scan codes, mods = UI_MOD_* mask at press time, plus the
@@ -59,7 +60,8 @@ struct keydef { unsigned short p[4]; };
 /* [col][row], rows P0_0..P0_7 -- the vendor key_map, re-planed. */
 static const struct keydef map[NCOL][NROW] = {
 /* col 0 */ {
-    {{'1', '!', 0, 0}}, {{'u', 'U', '_', '_'}}, {{'s', 'S', 0, 0}},
+    {{'1', '!', K_ESC_, K_ESC_}},                /* Fn+1 = Esc, the alias  */
+    {{'u', 'U', '_', '_'}}, {{'s', 'S', 0, 0}},
     {{'z', 'Z', 0, 0}}, {{',', '-', '<', '_'}},
     {{K_ESC_, K_ESC_, '`', '~'}},                /* chassis "~": Esc here   */
     {{'8', '(', ']', '}'}}, {{'j', 'J', 0, 0}} },
