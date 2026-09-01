@@ -25,7 +25,29 @@
 #   DEV=root@1.2.3.4 ./readlog.sh    another address for the device
 set -e
 
-DEV="${DEV:-root@192.168.2.56}"
+# The Cosmo's address is a DHCP lease and it moves (it has been .56 and .121).
+# Probe the ones it has held rather than making the caller notice, and confirm
+# it really is the Cosmo before doing anything with it -- .121 has also been
+# galaxy's wired address, and this script's siblings write to /dev/mmcblk0.
+find_dev() {
+    for a in 192.168.2.121 192.168.2.56; do
+        h=$(ssh -o BatchMode=yes -o ConnectTimeout=4 "root@$a" hostname 2>/dev/null)
+        if [ "$h" = cosmocom ]; then
+            echo "root@$a"
+            return 0
+        fi
+    done
+    return 1
+}
+
+if [ -z "$DEV" ]; then
+    DEV=$(find_dev) || {
+        echo "readlog: no Cosmo found at 192.168.2.121 or .56." >&2
+        echo "  It is offline while sitting in UnoDOS. Set DEV=root@<ip> to override." >&2
+        exit 3
+    }
+    echo "readlog: using $DEV" >&2
+fi
 ALSO_RAM=
 for a in "$@"; do
     case "$a" in
