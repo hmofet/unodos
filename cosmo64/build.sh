@@ -11,6 +11,7 @@
 #
 #   ./build.sh          -> the m0/m1 TEST payload  (build/m0.bin + boot img)
 #   ./build.sh shell    -> the pc64 SHELL          (build/shell.bin + boot img)
+#   ./build.sh calib    -> the TOUCH CALIBRATION payload (build/calib.bin)
 #
 # Verify on quill (real QEMU; see qharness.py):
 #   scp qharness.py build/<x>.bin quill:/work/unodos-cosmo64/ &&
@@ -113,8 +114,27 @@ shell )
   FLATTEN_IMGSZ=shipped "$PY" flatten.py build/shell.exe build/shell.bin
   OUT=build/shell.bin
   ;;
+# ---------------------------------------------------------------------------
+calib )
+  # The touch calibration payload: draws targets in RAW PANEL PIXELS and logs
+  # the controller's RAW report, so the calibration path carries none of the
+  # transform it exists to measure. Every cosmo64 driver it needs is
+  # self-contained (cosmo64.h only), so this builds with the plain flags -- no
+  # pc64 tree, no unoui, no 67 MB of .bss.
+  echo "[calib] cross-compiling the calibration payload on quill..."
+  stage_quill
+  CAL="calib videolfb mmu log msdc i2c kbd touch"
+  ssh "$QUILL" "set -e; cd $QDIR/cosmo64 && \
+    for f in $CAL; do $CC $BASECF -mstrict-align -c \$f.c -o build/k_\$f.o; done && \
+    $CC -c entry.s -o build/entry.o && \
+    $CC -c cpu.s -o build/cpu.o && \
+    $CC $LINK -o build/calib.exe build/entry.o build/cpu.o build/k_*.o"
+  scp -q "$QUILL:$QDIR/cosmo64/build/calib.exe" build/
+  "$PY" flatten.py build/calib.exe build/calib.bin
+  OUT=build/calib.bin
+  ;;
 * )
-  echo "usage: ./build.sh [shell]" >&2
+  echo "usage: ./build.sh [shell|calib]" >&2
   exit 1
   ;;
 esac

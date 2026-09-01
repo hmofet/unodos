@@ -34,6 +34,25 @@ static int g_present;
 static int g_x = C64_SCRW / 2, g_y = C64_SCRH / 2, g_btn;
 static c64_u32 g_maxx = 1080, g_maxy = 2160;
 
+/* The last report as the controller gave it, before any mapping. calib.c
+ * works entirely in these numbers, which is the point: the calibration path
+ * must not contain the transform it is trying to measure. */
+static c64_u32 g_raw_x, g_raw_y;
+static int g_raw_down;
+
+int c64_touch_raw(int *x, int *y)
+{
+    *x = (int)g_raw_x;
+    *y = (int)g_raw_y;
+    return g_raw_down;
+}
+
+void c64_touch_maxima(int *mx, int *my)
+{
+    *mx = (int)g_maxx;
+    *my = (int)g_maxy;
+}
+
 int c64_touch_present(void)
 {
     return g_present;
@@ -113,12 +132,16 @@ void c64_touch_poll(void)
     if (status != 1 && status != 2) {
         g_btn = 0;                       /* everything else = not down */
         was_down = 0;
+        g_raw_down = 0;
         c64_input_set_pointer(g_x, g_y, 0);
         return;
     }
     c64_u32 tx = ((c64_u32)b[1] << 4) | (b[3] >> 4);      /* 12-bit */
     c64_u32 ty = ((c64_u32)b[2] << 4) | (b[3] & 0x0F);
     c64_u32 rawx = tx, rawy = ty;
+    g_raw_x = rawx;
+    g_raw_y = rawy;
+    g_raw_down = 1;
     if (tx > g_maxx || ty > g_maxy) {
         if (!was_down)
             c64_logf("touch: report out of range: %d,%d vs max %d,%d\n",
