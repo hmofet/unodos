@@ -117,5 +117,101 @@ Corollary rule: **mutable state lives in the image's own .bss** (stack, debug
 page) -- the one DRAM the boot proves writable -- with the debug page's
 address published at image offset 0x30 for the harness.
 
-Next -- M2: AW9523 keyboard (bus 4, addr 0x5b) + Novatek touch into input.c's
-ring, over a polled MTK I2C driver. Then M3 storage (MSDC, p44).
+## The debug log (2026-09-01): forensics without a photograph
+
+Every bring-up above was debugged through the panel: stage beacons, and fault
+registers painted as 32 bit-cells to be photographed and decoded by hand. That
+was not stubbornness. There is no exposed UART on this device, and the Gemian
+4.4 kernel trixie runs is built `# CONFIG_DEVMEM is not set`, so a plain DRAM
+buffer cannot be read back after the fact either.
+
+But that kernel reserves a ramoops region and mounts pstore, and it announces
+its own layout at boot:
+
+```
+ramoops: pstore:address is 0x54410000, size is 0xe0000,
+         console_size is 0x40000, pmsg_size is 0x10000
+ramoops: attached 0xe0000@0x54410000, ecc: 0/0
+```
+
+with `record_size` 0x1000 and `ftrace_size` 0x1000 (all readable from
+`/sys/module/ramoops/parameters/`). `fs/pstore/ram.c` lays the zones down in
+one fixed order -- dump records, console, ftrace, pmsg -- so the console zone
+is at `0x54410000 + (0xE0000 - 0x40000 - 0x1000 - 0x10000)` = **0x5449F000,
+0x40000 bytes**, and the four zones then end at 0x544F0000, which is the
+reservation's own end: the arithmetic checks itself.
+
+`log.c` writes there in ramoops' own `persistent_ram_buffer` format. That turns
+a DRAM buffer that is merely lucky to survive into one the kernel **reserves**
+(nothing else may allocate it), deliberately preserves across reset, and reads
+back at its next boot on its own initiative:
+
+```sh
+# boot UNODOS from the LK menu, do the thing, reboot into trixie, then:
+./readlog.sh          # -a for every saved log, -c to clear
+```
+
+- **`mmu.c` maps 0x54400000 Normal-NC, and that is load-bearing.** A warm reset
+  does not flush the D-cache, so a write-back mapping would strand the last
+  lines of the log -- which are the ones naming whatever went wrong.
+- **`cpu.s` writes a formatted fault report** (vec/ESR/EC/ELR/FAR/EL) as the
+  *last* thing the handler does, on a stack of its own: the fault may well be a
+  wrecked stack, and the crash record and painted bit-cells are already safely
+  down by then, so a re-fault in the logger costs nothing.
+- **`qharness.py` reads the same zone at the same address** (QEMU's virt board
+  puts DRAM at 0x40000000 like the Cosmo), prints it on every run, and fails
+  the build if it is missing -- *before* the crash-record exit, so a payload
+  that died still hands over everything it managed to say.
+- Each UnoDOS run is readable exactly once, from the first trixie boot after
+  it: the kernel zaps the zone after saving and then writes its own console
+  there. Read it before rebooting again. `systemd-pstore.service` also moves
+  the files out to `/var/lib/systemd/pstore/` the moment the directory is
+  non-empty; `readlog.sh` looks in both places.
+
+`touch.c` and `kbd.c` stopped failing silently at the same time: every bail
+says which one it was, and each touch-DOWN logs raw, panel and UI coordinates
+-- the whole `TOUCHDBG` bit-cell diagnostic, in text.
+
+## M3 STARTED (2026-09-01): the eMMC as a block device
+
+`msdc.c`. **Not an eMMC bring-up.** LK already did that part: it brought MSDC0
+(0x11230000) up, ran the SK hynix 128 GB card through its init sequence, tuned
+the pads and then read this very boot image off p38 with it. And it leaves all
+of it running -- LK's `platform_uninit()` (`mt6771/platform.c`) does
+`leds_deinit()`, `platform_clear_all_on_mux()` and
+`platform_deinit_interrupts()`, and **nothing else**: no `msdc_deinit()`, no
+clock gating, no deselect. The controller is live and the card is in the
+transfer state at the instant LK branches to us, exactly the way the
+framebuffer is adopted rather than reprogrammed.
+
+So what is left is a command issuer. No clock tree, no pinmux, no voltage
+negotiation, no CMD0/1/2/3/9/7, no tuning -- and deliberately **no controller
+reset** (`MSDC_CFG_RST`), which would throw away the tuning that makes the
+adopted state worth having. PIO rather than DMA: these transfers are a GPT
+header and, later, session files, and PIO cannot scribble on DRAM if a
+register field is wrong, which matters where a wild write is a brick.
+
+**Writes are fenced at the bottom of the driver.** `c64_blk_write()` refuses
+any LBA outside the UnoDOS data partition found by the GPT walk. Everything
+else on this eMMC belongs to Android, to Gemian, to the GPT, or to the
+preloader, and the preloader does not come back. There is no unfenced path for
+a caller to route around. The GPT walk prefers a partition named `UNODATA` and
+falls back to Android's `userdata` (p44, LBA 186136576..244164543, 27.7 GiB),
+which is the partition the port plan says to take over, and logs which one it
+took.
+
+QEMU's virt board has no MSDC, **so there is no gate for this: the log is the
+gate.** Under QEMU the driver reads all-ones off unassigned MMIO, times out
+once at a bounded 500 ms, reports `eMMC NOT available` and lets the boot
+continue, which is what a missing controller should do.
+
+The register map (offsets, bit positions, response-type encoding) is the MT6771
+MSDC programming interface. The code is this project's; nothing is copied from
+MediaTek's LK sources, which are proprietary and license-incompatible with
+UnoDOS.
+
+Next -- confirm the read on hardware from the log, then M3b: wire `uno_fs_*` /
+`uno_blk_*` in `stubs.c` to the real driver so `.UNO` apps and session
+persistence work (which also stops the Control Panel opening at every boot).
+M2's hardware test (does the pointer land where you touch? does the keyboard
+type?) is still outstanding and is now a log read rather than a photograph.
