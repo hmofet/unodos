@@ -48,11 +48,23 @@ int uno_pc64_next_key(int *scan, int *uni, int *ctrl)
     return 1;
 }
 
+/* Set once a real pointer has reported, so display.c knows whether to draw a
+ * cursor at all -- the same idea as x86's g_have_pointer. On a machine with no
+ * pointer (QEMU, where the touch panel is absent) it stays 0 and nothing is
+ * composited, which keeps the harness's pixel-exact eye check honest. */
+static int g_have_ptr;
+
+int c64_input_have_pointer(void)
+{
+    return g_have_ptr;
+}
+
 void c64_input_set_pointer(int x, int y, int btn)
 {
     g_cx = x;
     g_cy = y;
     g_btn = btn;
+    g_have_ptr = 1;
 }
 
 void c64_input_set_level(int mods, int held)
@@ -125,11 +137,15 @@ void uno_pc64_inject_pointer(int x, int y, int btn)
     g_cx = x;
     g_cy = y;
     g_btn = btn;
+    g_have_ptr = 1;
 }
 
 void uno_pc64_ptr_status(int *nsimple, int *nabs, int *blocked)
 {
+    /* The touch panel is an ABSOLUTE pointer, so report it as one rather than
+     * leaving the Control Panel claiming this machine has no pointer while the
+     * cursor is visibly tracking a finger. */
     *nsimple = 0;
-    *nabs = 0;
+    *nabs = c64_touch_present() ? 1 : 0;
     *blocked = 0;
 }
