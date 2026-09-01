@@ -39,6 +39,27 @@ int c64_touch_present(void)
     return g_present;
 }
 
+#ifdef C64_TOUCHDBG
+/* Paint a 32-bit value as bit-cells straight onto the panel, in the black
+ * band ABOVE the UI rect (panel y < C64_DST_Y0) so the shell's present never
+ * covers it -- in the landscape view that band is the strip along one edge.
+ * White = 1, dark = 0, bit 31 leftmost. A photograph decodes the raw touch
+ * report, which is the only channel this device has. */
+static void dbg_word(int py, c64_u32 v)
+{
+    for (int i = 0; i < 32; i++) {
+        c64_u32 col = (v & (1u << (31 - i))) ? 0xFFFFFFFFu : 0xFF303030u;
+        for (int r = 0; r < 24; r++) {
+            volatile c64_u32 *p = (volatile c64_u32 *)
+                (0x7DF70000ull + (c64_u64)(py + r) * 4352 + (280 + i * 16) * 4);
+            for (int c = 0; c < 12; c++)
+                p[c] = col;
+        }
+    }
+    __asm__ volatile("dsb sy" ::: "memory");
+}
+#endif
+
 static int set_page(c64_u32 addr)
 {
     c64_u8 w[3] = { 0xFF, (c64_u8)(addr >> 16), (c64_u8)(addr >> 8) };
@@ -86,6 +107,17 @@ void c64_touch_poll(void)
     c64_u32 ty = ((c64_u32)b[2] << 4) | (b[3] & 0x0F);
     if (tx > g_maxx || ty > g_maxy)
         return;
+#ifdef C64_TOUCHDBG
+    dbg_word(100, (tx << 16) | ty);
+    dbg_word(140, (g_maxx << 16) | g_maxy);
+#endif
+    /* SCALE into panel pixels. The controller's range is whatever its
+     * firmware reports, which is NOT guaranteed to be the panel's pixel
+     * count -- the vendor's own fallback is 1080x1920 against a 1080x2160
+     * panel, and the DTBO's stale tpd-resolution says the same. Treating raw
+     * counts as pixels is what put the pointer in the wrong place. */
+    tx = tx * PANEL_W / (g_maxx ? g_maxx : PANEL_W);
+    ty = ty * PANEL_H / (g_maxy ? g_maxy : PANEL_H);
 
     /* Inverse of display.c's present: the UI rect is C64_DST_W x C64_DST_H at
      * (C64_DST_X0, C64_DST_Y0), each UI pixel an FB_SCALE block, rotated 270
