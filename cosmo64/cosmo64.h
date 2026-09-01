@@ -152,6 +152,11 @@ c64_u64 c64_blk_data_sectors(void);
 void c64_touch_init(void);
 void c64_touch_poll(void);
 int c64_touch_present(void);
+/* the controller's report before any mapping, and the maxima it claims --
+ * calib.c measures in these, so the calibration path carries none of the
+ * transform it exists to measure */
+int c64_touch_raw(int *x, int *y);
+void c64_touch_maxima(int *mx, int *my);
 
 /* kbd.c: the AW9523 matrix keyboard -> the input ring */
 void c64_kbd_init(void);
