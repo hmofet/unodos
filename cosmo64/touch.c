@@ -68,18 +68,27 @@ static int set_page(c64_u32 addr)
 
 void c64_touch_init(void)
 {
-    if (c64_i2c_init(C64_I2C_TP) < 0)
+    if (c64_i2c_init(C64_I2C_TP) < 0) {
+        c64_log("touch: i2c bus 0 would not init\n");
         return;
-    if (set_page(EVENT_BUF) < 0)
+    }
+    if (set_page(EVENT_BUF) < 0) {
+        c64_log("touch: xdata page select NAKed\n");
         return;
+    }
     /* the FW info block: ver, ~ver, then x_num/y_num and the maxima. This is
      * a read-only presence test -- unlike the vendor's chip-ID trim check,
      * which bootloader-resets the part and halts its MCU. */
     c64_u8 off = OFF_FWINFO, info[8];
-    if (c64_i2c_xfer(C64_I2C_TP, TP_ADDR, &off, 1, info, 8) < 0)
+    if (c64_i2c_xfer(C64_I2C_TP, TP_ADDR, &off, 1, info, 8) < 0) {
+        c64_log("touch: FW-info read failed\n");
         return;
-    if (((info[0] + info[1]) & 0xFF) != 0xFF)
+    }
+    if (((info[0] + info[1]) & 0xFF) != 0xFF) {
+        c64_logf("touch: no NT36xxx answering (ver=%02x ~ver=%02x)\n",
+                 info[0], info[1]);
         return;                          /* not an answering NT36xxx */
+    }
     c64_u32 mx = ((c64_u32)info[4] << 8) | info[5];
     c64_u32 my = ((c64_u32)info[6] << 8) | info[7];
     if (mx > 100 && my > 100) {          /* trust it only if plausible */
@@ -87,6 +96,8 @@ void c64_touch_init(void)
         g_maxy = my;
     }
     g_present = 1;
+    c64_logf("touch: NT36xxx ver=%02x, reported maxima %dx%d\n",
+             info[0], (int)g_maxx, (int)g_maxy);
 }
 
 void c64_touch_poll(void)
@@ -97,16 +108,24 @@ void c64_touch_poll(void)
     if (c64_i2c_xfer(C64_I2C_TP, TP_ADDR, &off, 1, b, 8) < 0)
         return;
 
+    static int was_down;
     int status = b[0] & 0x07;            /* 1 = enter, 2 = moving */
     if (status != 1 && status != 2) {
         g_btn = 0;                       /* everything else = not down */
+        was_down = 0;
         c64_input_set_pointer(g_x, g_y, 0);
         return;
     }
     c64_u32 tx = ((c64_u32)b[1] << 4) | (b[3] >> 4);      /* 12-bit */
     c64_u32 ty = ((c64_u32)b[2] << 4) | (b[3] & 0x0F);
-    if (tx > g_maxx || ty > g_maxy)
+    c64_u32 rawx = tx, rawy = ty;
+    if (tx > g_maxx || ty > g_maxy) {
+        if (!was_down)
+            c64_logf("touch: report out of range: %d,%d vs max %d,%d\n",
+                     (int)tx, (int)ty, (int)g_maxx, (int)g_maxy);
+        was_down = 1;
         return;
+    }
 #ifdef C64_TOUCHDBG
     dbg_word(100, (tx << 16) | ty);
     dbg_word(140, (g_maxx << 16) | g_maxy);
@@ -134,6 +153,15 @@ void c64_touch_poll(void)
     if (ux >= C64_SCRW) ux = C64_SCRW - 1;
     if (uy < 0) uy = 0;
     if (uy >= C64_SCRH) uy = C64_SCRH - 1;
+
+    /* One line per contact, not per frame: this is the whole "does the
+     * pointer land where you touch?" question, answered in text instead of
+     * bit-cells decoded from a photograph. */
+    if (!was_down)
+        c64_logf("touch: down raw=%d,%d (max %d,%d) -> panel %d,%d -> ui %d,%d\n",
+                 (int)rawx, (int)rawy, (int)g_maxx, (int)g_maxy,
+                 (int)tx, (int)ty, ux, uy);
+    was_down = 1;
 
     g_x = ux;
     g_y = uy;

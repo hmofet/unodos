@@ -13,11 +13,21 @@ int uno_main(void);
 void c_main(void *dtb)
 {
     c64_beacon(224, 0xFFFF00FFu);   /* MAGENTA: C reached, the stack works   */
+    /* Before the MMU, so that a translation fault has somewhere to say so:
+     * with the MMU off every access is Device-nGnRnE and lands in DRAM
+     * directly, which is exactly what the log wants anyway. */
+    c64_log_init();
+    c64_logf("dtb=%p cntfrq=%d\n", dtb, (int)c64_cnt_freq());
     mmu_init();
     c64_beacon(272, 0xFFFFFF00u);   /* YELLOW: translation + caches survived */
+    c64_log("mmu on\n");
     c64_u32 ppitch;
-    c64_fb_adopt(dtb, &ppitch);     /* (its vram clear wipes the beacons)    */
+    c64_u64 raw = c64_fb_adopt(dtb, &ppitch);  /* (its vram clear wipes the
+                                                * beacons) */
+    c64_logf("fb raw=%016x ppitch=%d src=%d vram=%x\n", raw, (int)ppitch,
+             (int)FBDBG->fb_src, FBDBG->fb_vram);
     uno_native_tsc_set(c64_cnt_freq() / 1000000ull);
+    c64_log("entering uno_main\n");
     uno_main();                                   /* never returns */
     for (;;)
         __asm__ volatile("wfe");
@@ -125,8 +135,12 @@ void uno_pc64_poll(void)
     if (first) {
         first = 0;
         c64_beacon(496, 0xFF008000u);   /* DARK GREEN: the main loop reached */
+        c64_log("main loop\n");
         c64_kbd_init();
         c64_touch_init();
+        c64_logf("input: keyboard %s, touch %s\n",
+                 c64_kbd_present() ? "present" : "ABSENT",
+                 c64_touch_present() ? "present" : "ABSENT");
     }
     c64_kbd_poll();
     c64_touch_poll();
