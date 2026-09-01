@@ -42,6 +42,15 @@ void c64_log_init(void);
 void c64_log(const char *s);
 void c64_log_write(const char *s, unsigned n);
 void c64_logf(const char *fmt, ...);
+unsigned c64_log_bytes(void);
+void c64_log_read(unsigned off, c64_u8 *dst, unsigned n);
+/* survey() counts surviving ramoops signatures and MUST run before init()
+ * overwrites one of them; report() says what it found, once the log exists. */
+unsigned c64_log_survey(void);
+void c64_log_survey_report(void);
+/* msdc.c: push the log to its durable home in p38's tail. The DRAM copy does
+ * not survive this device's reset path; this one does. */
+void c64_log_flush(void);
 extern c64_u8 c64_fault_stack[0x2000];
 
 /* one page of fbdbg + the crash record at +0x1000 */

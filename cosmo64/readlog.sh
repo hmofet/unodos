@@ -2,74 +2,75 @@
 # cosmo64/readlog.sh -- read the UnoDOS debug log back off the Cosmo.
 #
 # The loop:
-#   1. boot UnoDOS from the LK menu (p38) and do whatever you are debugging;
+#   1. boot UNODOS from the LK menu (p38) and do whatever you are debugging;
 #   2. reboot and let it come up in trixie (the default);
 #   3. ./readlog.sh
 #
-# UnoDOS writes its log (log.c) into the ramoops CONSOLE zone at 0x5449F000, in
-# ramoops' own format. So on the next boot the kernel finds it exactly as it
-# would find its own pre-panic console, saves it, and exposes it under
-# /sys/fs/pstore -- which is why this needs no /dev/mem (that kernel has none),
-# no kernel module and no photographs of the panel.
+# THE LOG LIVES ON THE eMMC. UnoDOS writes it into the unused tail of its own
+# boot partition -- p38 is 32 MiB, the boot image is 512 KiB, so the window
+# sits 2 MiB in and is 128 KiB long. Block 0 of the window is a header
+# ("(UNOLOG)", byte count, and the offset the text starts at, so a truncated
+# log is distinguishable from a whole one); the text follows.
 #
-# One catch: systemd-pstore.service fires the moment /sys/fs/pstore is
-# non-empty and MOVES the files into /var/lib/systemd/pstore/<id>/. Whichever
-# won the race, the log is in one of the two places, so look in both -- newest
-# first.
+# It used to live in DRAM, in the kernel's ramoops console zone, which would
+# have needed no eMMC driver at all. That does not work on this device:
+# tested 2026-09-01, UnoDOS ran, was reset into trixie, and /sys/fs/pstore was
+# empty -- as was MTK's own ram_console at 0x54400000, a separate reservation.
+# Two reservations losing their contents at once is the preloader wiping DRAM,
+# not a bad address. The ramoops path is still tried below, because it costs
+# one `cat` and it is the only log that exists before storage comes up.
 #
-# The zone survives the reset but not a Linux boot: the kernel zaps it after
-# saving, and then writes its own console there. So each UnoDOS run is readable
-# exactly once, from the first trixie boot after it. Read it before rebooting
-# again.
-#
-#   ./readlog.sh            print the newest saved log
-#   ./readlog.sh -a         print every saved log, oldest first
-#   ./readlog.sh -c         print it, then delete it (frees the pstore slot)
+#   ./readlog.sh            print the log
+#   ./readlog.sh -r         also try the DRAM/pstore path
 #   DEV=root@1.2.3.4 ./readlog.sh    another address for the device
 set -e
 
 DEV="${DEV:-root@192.168.2.56}"
-MODE=one
-CLEAR=
+ALSO_RAM=
 for a in "$@"; do
     case "$a" in
-    -a) MODE=all ;;
-    -c) CLEAR=1 ;;
-    *)  echo "usage: readlog.sh [-a] [-c]" >&2; exit 1 ;;
+    -r) ALSO_RAM=1 ;;
+    *)  echo "usage: readlog.sh [-r]" >&2; exit 1 ;;
     esac
 done
 
-ssh "$DEV" "MODE=$MODE CLEAR=$CLEAR sh -s" <<'REMOTE'
+ssh "$DEV" "ALSO_RAM=$ALSO_RAM sh -s" <<'REMOTE'
 set -e
-live=$(ls -1 /sys/fs/pstore/console-ramoops-* 2>/dev/null || true)
-saved=$(ls -1 /var/lib/systemd/pstore/*/console-ramoops-* 2>/dev/null || true)
-all=$(printf '%s\n%s\n' "$live" "$saved" | grep -v '^$' || true)
 
-if [ -z "$all" ]; then
-    echo "readlog: nothing in pstore." >&2
-    echo "  Either UnoDOS has not run since the last trixie boot, or this IS" >&2
-    echo "  the second boot since and the log was already consumed." >&2
-    exit 2
+# The window is at a fixed offset inside p38, and p38 has its own device node,
+# so no GPT lookup is needed here: skip=4096 blocks is LOG_OFF_SECTORS.
+WIN=4096
+
+HDRBLK=$(dd if=/dev/mmcblk0p38 bs=512 skip=$WIN count=1 2>/dev/null | od -An -tx1 -N16 | tr -d ' \n')
+MAGIC=$(printf '%s' "$HDRBLK" | cut -c1-16)
+
+# "(UNOLOG)" as it lands on disk: 28 55 4e 4f 4c 4f 47 29
+if [ "$MAGIC" = "28554e4f4c4f4729" ]; then
+    LEN=$(dd if=/dev/mmcblk0p38 bs=512 skip=$WIN count=1 2>/dev/null | od -An -tu4 -j8 -N4 | tr -d ' \n')
+    FROM=$(dd if=/dev/mmcblk0p38 bs=512 skip=$WIN count=1 2>/dev/null | od -An -tu4 -j12 -N4 | tr -d ' \n')
+    note=
+    [ "$FROM" -gt 0 ] && note=" (truncated: first $FROM bytes dropped)"
+    echo "########## eMMC log: p38 + 2 MiB, $LEN bytes$note"
+    dd if=/dev/mmcblk0p38 bs=512 skip=$((WIN + 1)) count=255 2>/dev/null \
+        | head -c "$LEN" | tr -d '\000'
+    echo
+else
+    echo "readlog: no UnoDOS log in p38's window (header reads $MAGIC)." >&2
+    echo "  Either UnoDOS has not run since this slot was last written, or it" >&2
+    echo "  died before the eMMC driver came up -- check the panel for a red" >&2
+    echo "  block (a fault) or a stalled beacon colour." >&2
 fi
 
-# newest last, so "tail -1" is the newest and "-a" reads oldest first
-ordered=$(ls -1tr $all 2>/dev/null)
-[ "$MODE" = all ] || ordered=$(echo "$ordered" | tail -1)
-
-for f in $ordered; do
-    echo "########## $f"
-    if head -c 4096 "$f" | grep -q '=== UnoDOS cosmo64 ==='; then
-        :
-    else
-        echo "## note: no UnoDOS banner in this one -- it is a KERNEL console" >&2
-        echo "##       log, not a UnoDOS one." >&2
-    fi
-    cat "$f"
+if [ -n "$ALSO_RAM" ]; then
     echo
-done
-
-if [ -n "$CLEAR" ]; then
-    for f in $ordered; do rm -f "$f"; done
-    echo "## cleared"
+    echo "########## DRAM/pstore path (expected to be empty on this device)"
+    f=$(ls -1tr /sys/fs/pstore/console-ramoops-* \
+                /var/lib/systemd/pstore/*/console-ramoops-* 2>/dev/null | tail -1)
+    if [ -n "$f" ]; then
+        echo "## $f"
+        cat "$f"
+    else
+        echo "## nothing in /sys/fs/pstore or /var/lib/systemd/pstore"
+    fi
 fi
 REMOTE
