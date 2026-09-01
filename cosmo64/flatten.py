@@ -83,9 +83,24 @@ def main():
     struct.pack_into("<Q", img, 24, 0)                          # flags: LE, 4K
     struct.pack_into("<I", img, 56, 0x644D5241)                 # magic "ARM\x64"
 
-    open(sys.argv[2], "wb").write(img)
-    print("flatten: %s (%d bytes, entry RVA 0x%X, base 0x%X)"
-          % (sys.argv[2], len(img), entry, image_base))
+    # Do not SHIP the .bss: a 67 MB decompress hung LK at the splash (stock
+    # kernels are ~25 MB decompressed; ours must stay in that territory). Trim
+    # the trailing zeros and record the range to re-zero in the Image header's
+    # reserved words (res2 = absolute start, res3 = absolute end) -- entry.s
+    # zeroes it before any C runs, which covers LK and `qemu -kernel` alike.
+    file_end = len(img)
+    while file_end > 64 and img[file_end - 1] == 0:
+        file_end -= 1
+    zstart = (file_end + 15) & ~15                     # 16-aligned for stp
+    zend = (size_image + 15) & ~15
+    struct.pack_into("<Q", img, 32, LOAD + zstart)     # res2
+    struct.pack_into("<Q", img, 40, LOAD + zend)       # res3
+
+    open(sys.argv[2], "wb").write(img[:zstart])
+    print("flatten: %s (%d bytes shipped of %d; runtime-zero 0x%X..0x%X, "
+          "entry RVA 0x%X, base 0x%X)"
+          % (sys.argv[2], zstart, size_image, LOAD + zstart, LOAD + zend,
+             entry, image_base))
 
 
 if __name__ == "__main__":

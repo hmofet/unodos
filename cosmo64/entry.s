@@ -32,6 +32,18 @@ boot_core:
                                         // ends below 0x53000000), below the
                                         // FBINFO/crash block at 0x53F00000 and
                                         // LK's DTB at 0x54000000
+    // Zero the .bss: flatten.py ships the image truncated after its last real
+    // byte (a 67 MB decompress hung LK at the splash) and records the absolute
+    // zero-range in the Image header's res2/res3 words at image offsets 32/40.
+    ldr   x1, =0x40080020
+    ldp   x2, x3, [x1]                  // x2 = start, x3 = end (16-aligned)
+    cmp   x2, x3
+    b.hs  bss_done
+bss_zero:
+    stp   xzr, xzr, [x2], #16
+    cmp   x2, x3
+    b.lo  bss_zero
+bss_done:
     bl    cpu_early_init                // vectors + CPACR BEFORE any C runs --
                                         // the compiler may emit FP anywhere
     bl    c_main                        // x0 still holds LK's DTB pointer
