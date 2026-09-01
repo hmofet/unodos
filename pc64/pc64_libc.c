@@ -258,12 +258,17 @@ void *calloc(size_t nm, size_t sz)
 
 /* gcc emits a stack probe call for frames > 4KB on windows targets; the UEFI
    stack (128KB, fully committed by the firmware) needs no guard-page touch,
-   so a plain ret - which clobbers nothing - satisfies the reference. */
+   so a plain ret - which clobbers nothing - satisfies the reference. The
+   symbol (and the mnemonic) are x86-only: clang on aarch64-w64-mingw32 emits
+   calls to __chkstk instead, which the ARM platform layer provides
+   (cosmo64/cpu.s), so this block must not assemble there. */
+#if defined(__x86_64__)
 __asm__(
     ".globl ___chkstk_ms\n"
     "___chkstk_ms:\n"
     "    ret\n"
 );
+#endif
 
 /* ===========================================================================
  * Extended libc for the MicroPython port (PYRT.UNO): number parsers, a few
