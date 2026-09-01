@@ -262,10 +262,20 @@
 // stride on the shadow reads instead), and it removes tearing for free.
 .equ SHADOW_PITCH, (SCRW*4)
 .equ SHADOW_BYTES, (SCRW*SCRH*4)
-// Fallback shadow address, used only when the DTB gave no vramSize to prove there
-// is room inside LK's own VRAM. Low DRAM, above FSBASE (0x40340000 + 4 KB) and far
-// below LK's framebuffer (which lives under 0x80000000).
-.equ COSMO_SHADOW, 0x40500000
+// The shadow is the image's OWN memory: a bss reservation linked after .text
+// (NOBITS, so the flat .bin stays ~24 KB; link.ld asserts the end clears the
+// stack, which grows down from STACK_TOP). It used to live in page 1 of LK's
+// vram, on the argument that LK had finished with its whole reservation --
+// hardware photographs (2026-08-31) disproved that: in the p38 RECOVERY_BOOT2
+// boot mode a leftover display-engine layer still scans page 1 out as a garbage
+// band beside the UI, so the "spare" page put our own shadow on the panel
+// sideways. Image-owned memory is scanned out by nothing, needs no vramSize to
+// prove it exists (so the fixed low-DRAM COSMO_SHADOW fallback is gone too), and
+// the cosmo64 C port made the same move and the band vanished on hardware.
+.section .bss
+.balign 16
+shadow_buf: .skip SHADOW_BYTES
+.section .text
 
 // Per-rotation blit parameters. fb_present always walks the DESTINATION as a plain
 // ascending raster (DST_W x DST_H, so the framebuffer writes are contiguous and can
@@ -576,8 +586,9 @@ fb_have_pitch:
     // the first-light photograph, 2026-08-31). Without a vramSize, one visible page
     // is all we can prove exists: overrunning the framebuffer would land in whatever
     // LK reserved above it (TEE, modem, AVB), and that is not ours to scribble on.
-    // (The shadow surface lives inside this range when vramSize is known -- fine,
-    // it is cleared here BEFORE anything draws into it.)
+    // (The shadow does NOT live in this range any more -- it moved to the image's
+    // own bss after the 2026-08-31 hardware finding; see the shadow_buf comment.
+    // This clear is what blanks the pages the leftover recovery layer scans.)
     ldr   x0, =fb_raw
     ldr   x7, [x0]
     mov   w8, #PANEL_H
@@ -597,13 +608,14 @@ fb_clrpanel:
     // Band diagnostic (BANDDBG=1 ./build.sh): identify WHICH memory the stale band
     // beside the UI is scanned from. The band survived the full-vram clear above
     // (first seen 2026-08-31), so paint every region of LK's reservation a distinct
-    // solid colour and hold ~12 s before booting on: page 0 RED, page 1 (the shadow
-    // page) GREEN, page 2 BLUE, the tail (DAL area) MAGENTA. A band showing one of
-    // those colours lives in that region and something repaints it later; a band
-    // STILL showing noise is scanned from OUTSIDE videolfb vram -- a second OVL
-    // layer with its own buffer (LK's recovery-menu UI), which is a register fix,
-    // not a memory fix. Preserves w4 (pitch) and x20 (beacon stage); w9 is reloaded
-    // from fb_vram by the shadow-picking code below.
+    // solid colour and hold ~12 s before booting on: page 0 RED, page 1 GREEN
+    // (where the shadow used to live -- the 2026-08-31 photographs caught a
+    // leftover RECOVERY_BOOT2 layer scanning it out, which is why the shadow is
+    // now image-owned bss), page 2 BLUE, the tail (DAL area) MAGENTA. A band
+    // showing one of those colours lives in that region and something repaints it
+    // later; a band STILL showing noise is scanned from OUTSIDE videolfb vram --
+    // a second OVL layer with its own buffer (LK's recovery-menu UI), which is a
+    // register fix, not a memory fix. Preserves w4 (pitch) and x20 (beacon stage).
     ldr   x0, =fb_raw
     ldr   x7, [x0]
     mov   w8, #PANEL_H
@@ -665,32 +677,23 @@ fb_bar_next:
     subs  w12, w12, #1
     b.ne  fb_bar_row
     dsb   sy
-    // --- publish the panel geometry, then pick the shadow buffer -------------
+    // --- publish the panel geometry and the shadow surface -------------------
     ldr   x0, =fb_ppitch
     str   w4, [x0]                        // LK's panel stride
-    mov   w5, #PANEL_H
-    umull x5, w5, w4                      // x5 = bytes in the visible page
-    // Prefer page 1 of LK's OWN vram for the shadow: LK reserved vramSize bytes
-    // (0x1F90000, triple-buffered + the DAL layer) and has finished with all of it
-    // by the time we run, so that memory is both free and guaranteed not to collide
-    // with a carveout -- unlike any address we might pick in low DRAM, where SSPM /
-    // SCP / consys shares live. Only if the DTB gave us no vramSize to prove there
-    // is room do we fall back to a fixed address.
-    ldr   x0, =fb_vram
-    ldr   w9, [x0]
-    cbz   w9, fb_shadow_fixed
-    mov   w0, w9                          // vramSize, zero-extended
+    // The shadow is shadow_buf, the image's own bss -- unconditionally. Page 1 of
+    // LK's vram is NOT usable: hardware photographs (2026-08-31) showed a leftover
+    // RECOVERY_BOOT2 display-engine layer still scanning it out, so a shadow there
+    // appears as a garbage band beside the UI (see the shadow_buf comment). Clear
+    // it before use: bss is NOBITS (never loaded), DRAM is garbage at boot, and
+    // the vram clear above no longer covers the shadow.
+    ldr   x6, =shadow_buf
+    mov   x0, x6
     ldr   x1, =SHADOW_BYTES
-    add   x1, x5, x1                      // visible page + shadow
+    add   x1, x6, x1
+fb_shclr:
+    stp   xzr, xzr, [x0], #16
     cmp   x0, x1
-    b.lo  fb_shadow_fixed
-    ldr   x0, =fb_raw
-    ldr   x6, [x0]
-    add   x6, x6, x5                      // shadow = panel + one page
-    b     fb_shadow_set
-fb_shadow_fixed:
-    ldr   x6, =COSMO_SHADOW
-fb_shadow_set:
+    b.lo  fb_shclr
     ldr   x0, =fb_shadow
     str   x6, [x0]
     ldr   x0, =fb_base

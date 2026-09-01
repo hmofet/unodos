@@ -64,10 +64,14 @@ writes. It costs roughly 1M instructions per frame at
 integer scale the 1080-px short side fits); its real cost on hardware is memory-bound,
 so measure before optimising it further. `SCALE=1 ./build.sh` restores 1:1.
 
-The shadow lives in **page 1 of LK's own VRAM** (`fb_base + PANEL_H*pitch`) whenever the
-DTB's `vramSize` proves there is room: LK reserved 33 MB and has finished with all of
-it, so that memory is free and cannot collide with an SSPM/SCP/consys carveout the way
-a guessed low-DRAM address could. `COSMO_SHADOW` is the fallback.
+The shadow lives in the **image's own bss** (`shadow_buf`, ~1.2 MB of NOBITS after
+`.text`, so the flat `.bin` stays ~24 KB). It used to live in page 1 of LK's own VRAM
+on the argument that LK had finished with its reservation — hardware photographs
+(2026-08-31) disproved that: in the p38 `RECOVERY_BOOT2` boot mode a leftover
+display-engine layer still scans page 1 out, so the shadow itself appeared as a
+garbage band beside the UI. Image-owned memory is scanned out by nothing, needs no
+`vramSize` to prove it exists, and the cosmo64 C port made the same move and the band
+vanished on hardware.
 
 ## Build
 

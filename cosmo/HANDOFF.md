@@ -101,11 +101,14 @@ Design notes worth keeping:
   carry the rotation (a start offset plus two signed steps). That keeps framebuffer
   writes contiguous — four pixels per `stp` — which matters a lot with the D-cache
   off. The strided side is the shadow reads, which are the cheaper side to stride.
-- The shadow lives in **page 1 of LK's own VRAM** (`fb_raw + PANEL_H*ppitch`) whenever
-  `vramSize` proves there is room. LK reserved 33 MB (triple buffer + DAL layer) and is
-  finished with all of it, so that memory is free *and* cannot collide with the
-  SSPM/SCP/consys carveouts that make any guessed low-DRAM address risky.
-  `COSMO_SHADOW` (0x40500000) is the fallback for when the DTB gave no `vramSize`.
+- The shadow lives in the **image's own bss** (`shadow_buf`, ~1.2 MB of NOBITS after
+  `.text`; `fb_init` zeroes it). It used to be page 1 of LK's VRAM
+  (`fb_raw + PANEL_H*ppitch`), on the argument that LK was finished with its whole
+  reservation — hardware photographs (2026-08-31) disproved that: in the p38
+  `RECOVERY_BOOT2` boot mode a leftover display-engine layer still scans page 1 out,
+  so the shadow itself showed as a garbage band beside the UI. The cosmo64 C port
+  made the same move and the band vanished on hardware. The `COSMO_SHADOW` low-DRAM
+  fallback is gone with it.
 - Cost is ~1M instructions per frame. On hardware the real cost is memory-bound
   (307k uncached strided reads), so **measure before optimising**; a 4×4 block
   transpose, or enabling the D-cache with explicit maintenance, are the obvious levers.

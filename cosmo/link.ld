@@ -14,5 +14,19 @@ SECTIONS {
     *(.rodata*)
     . = ALIGN(8);
   }
+  /* The shadow surface lives here (shadow_buf, ~1.2 MB): image-OWNED memory,
+     because page 1 of LK's vram is still scanned out by a leftover display
+     layer in the p38 RECOVERY_BOOT2 boot mode (hardware, 2026-08-31). NOBITS,
+     so objcopy -O binary does not grow the payload; fb_init zeroes it. */
+  .bss (NOLOAD) : {
+    . = ALIGN(16);
+    *(.bss*)
+    *(COMMON)
+    . = ALIGN(16);
+    __image_end = .;
+  }
   /DISCARD/ : { *(.comment) *(.ARM.attributes) *(.note*) }
 }
+/* The stack grows down from STACK_TOP 0x40200000 (kernel.s); keep 128 KB for it. */
+ASSERT(__image_end <= 0x401E0000,
+       "image + shadow bss overruns the stack region below 0x40200000")

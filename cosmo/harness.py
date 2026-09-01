@@ -53,9 +53,9 @@ VRAM_SIZE = 0x1F90000                 # DISP_GetVRamSize() for this panel (~31.6
 LOAD    = 0x40080000
 DRAM    = 0x40000000
 DRAM_SZ = 0x04000000                  # 64 MB: payload + stack + vars + panel FBs.
-                                      # The stand-in panels sit well above the port's
-                                      # low-DRAM COSMO_SHADOW (0x40500000) so the
-                                      # fallback shadow can never land inside one.
+                                      # The shadow is the image's own bss (~1.2 MB
+                                      # after the ~24 KB .text at LOAD), so the
+                                      # stand-in panels at 0x41000000+ are clear of it.
 FBINFO  = 0x40320000                  # fb_base(8) fb_pitch(4) .. fb_src(40) stage(44)
 FDT_AT  = 0x40350000                  # where this harness parks the device tree
 COSMO_FB    = 0x7E070000              # kernel.s's last-resort guess (0x80000000-vram)
