@@ -153,6 +153,26 @@ void c64_touch_poll(void)
     dbg_word(100, (tx << 16) | ty);
     dbg_word(140, (g_maxx << 16) | g_maxy);
 #endif
+    /* INVERT BOTH AXES: the controller's origin is the opposite corner from
+     * the panel's. Measured, not guessed -- calib.c (./build.sh calib) drew
+     * five crosshairs in raw panel pixels, a finger was put on each, and the
+     * controller's reports came back mirrored in both axes:
+     *
+     *   target(panel)   raw report    1080-x, 2160-y    residual
+     *      216, 432      829,1750       251, 410         +35,-22
+     *      864, 432      220,1733       860, 427          -4, -5
+     *      540,1080      487,1118       593,1042         +53,-38
+     *      216,1728      809, 443       271,1717         +55,-11
+     *      864,1728      264, 455       816,1705         -48,-23
+     *
+     * which takes the error from as much as 1318 px down to 55, the rest
+     * being where a fingertip actually lands versus where it is aimed (one
+     * capture moved 28 px between the last poll and the keypress). No scale
+     * or offset is fitted on top: five hand-placed points cannot tell a real
+     * gain error from the aiming bias of the hand that placed them. */
+    tx = tx < g_maxx ? g_maxx - tx : 0;
+    ty = ty < g_maxy ? g_maxy - ty : 0;
+
     /* SCALE into panel pixels. The controller's range is whatever its
      * firmware reports, which is NOT guaranteed to be the panel's pixel
      * count -- the vendor's own fallback is 1080x1920 against a 1080x2160
