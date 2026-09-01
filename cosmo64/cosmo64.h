@@ -129,6 +129,16 @@ int c64_i2c_write_reg(int bus, c64_u8 dev, c64_u8 reg, c64_u8 val);
 int c64_i2c_read_reg(int bus, c64_u8 dev, c64_u8 reg);
 void c64_kbd_power(int on);          /* AW9523 SHDN/HWEN, GPIO175 */
 
+/* msdc.c: the eMMC as a block device. LK leaves MSDC0 clocked and the card in
+ * the transfer state, so this issues commands rather than bringing anything
+ * up. c64_blk_write() refuses any LBA outside the UnoDOS data partition. */
+void c64_blk_init(void);
+int c64_blk_ready(void);
+int c64_blk_read(c64_u64 lba, void *buf, unsigned nblk);
+int c64_blk_write(c64_u64 lba, const void *buf, unsigned nblk);
+c64_u64 c64_blk_data_lba(void);
+c64_u64 c64_blk_data_sectors(void);
+
 /* touch.c: the NT36672 panel as the shell's pointer */
 void c64_touch_init(void);
 void c64_touch_poll(void);
