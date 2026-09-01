@@ -69,7 +69,7 @@ shell )
       --exclude=pc64/shots --exclude=pc64/flash --exclude=pc64/remote \
       --exclude=pc64/build --exclude=pc64/tools \
       pc64 unoui uno3d unosound unomedia unoacpi) | ssh "$QUILL" "tar xzf - -C $QDIR"
-  scp -q ../pc64/build/font_data.h "$QUILL:$QDIR/pc64/build/"
+  scp -q ../pc64/build/font_data.h ../pc64/build/world_map.h "$QUILL:$QDIR/pc64/build/"
 
   # The Tier-1 portable core (dependency survey 2026-08-31; the nine themes
   # are all named by kThemes[] in pc64_uui.c, so all nine link).
@@ -77,9 +77,11 @@ shell )
   THEMES="theme_aurora theme_unodos theme_macos7 theme_macplus theme_win31 \
           theme_amiga theme_c64 theme_apple2 theme_next"
   PCORE="fb pc64_libc pc64_math pc64_font pc64_icons pc64_qoi pc64_uui_apps \
-         mac_compat pc64_io pc64_uui"
+         mac_compat pc64_io pc64_write pc64_clock pc64_files pc64_uui"
   C64="videolfb display platform input stubs i2c kbd"
 
+  # KBDTEST=1: compile the scripted key pad (QEMU gate proof, never shipped)
+  [ -n "$KBDTEST" ] && BASECF="$BASECF -DC64_KBDTEST"
   # -Wno-error=implicit-function-declaration: mingw-gcc merely warns on the
   # declared-later-in-the-same-file pattern pc64_uui.c uses; clang 16+ errors.
   # The linker still catches genuinely missing functions.

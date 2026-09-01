@@ -91,15 +91,47 @@ void uno_pc64_init(void)
     c64_beacon(448, 0xFF00C0FFu);   /* LIGHT BLUE: the shell's init entered */
 }
 
+#ifdef C64_KBDTEST
+/* KBDTEST=1 ./build.sh shell -- a scripted pad, like the asm port's AUTOTEST:
+ * walk the launcher to the Editor, open it, and type. It drives the SAME ring
+ * the AW9523 driver feeds, so the QEMU gate proves the whole typing path
+ * (ring -> shell -> app -> glyphs on the panel) without hardware. */
+void uno_pc64_inject_key(int scan, int uni, int ctrl);
+
+static void kbdtest_tick(unsigned f)
+{
+    /* session_load() opens the Control Panel when there is no session file
+     * (there is no storage yet), and it holds focus -- so close it first. */
+    static const struct { unsigned at; int scan; int uni; int ctrl; } script[] = {
+        { 40, 0, 'w', 1 },                    /* Ctrl-W:   close Control Panel */
+        { 60, 0x17, 0, 1 },                   /* Ctrl-Esc: Start menu          */
+        { 75, 0x02, 0, 0 },                   /* Down                          */
+        { 90, 0, '\r', 0 },                   /* open it                       */
+        { 130, 0, 'H', 0 }, { 140, 0, 'e', 0 }, { 150, 0, 'l', 0 },
+        { 160, 0, 'l', 0 }, { 170, 0, 'o', 0 }, { 180, 0, ' ', 0 },
+        { 190, 0, 'C', 0 }, { 200, 0, 'o', 0 }, { 210, 0, 's', 0 },
+        { 220, 0, 'm', 0 }, { 230, 0, 'o', 0 }, { 240, 0, '!', 0 },
+    };
+    for (unsigned i = 0; i < sizeof script / sizeof script[0]; i++)
+        if (script[i].at == f)
+            uno_pc64_inject_key(script[i].scan, script[i].uni, script[i].ctrl);
+}
+#endif
+
 void uno_pc64_poll(void)
 {
     static int first = 1;
+    static unsigned frames;
     if (first) {
         first = 0;
         c64_beacon(496, 0xFF008000u);   /* DARK GREEN: the main loop reached */
         c64_kbd_init();
     }
     c64_kbd_poll();
+#ifdef C64_KBDTEST
+    kbdtest_tick(frames);
+#endif
+    frames++;
 }
 
 /* Reset via the TOPRGU watchdog: re-enable it and let it fire. LK armed it
