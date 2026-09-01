@@ -27,8 +27,11 @@ park:
     wfe
     b     park
 boot_core:
-    ldr   x1, =0x402F0000               // stack: below VARS/FBINFO (0x4030xxxx),
-    mov   sp, x1                        // above the image (flatten.py asserts)
+    ldr   x1, =0x53E00000               // stack: above the image (which can carry
+    mov   sp, x1                        // ~60 MB of .bss; flatten.py asserts it
+                                        // ends below 0x53000000), below the
+                                        // FBINFO/crash block at 0x53F00000 and
+                                        // LK's DTB at 0x54000000
     bl    cpu_early_init                // vectors + CPACR BEFORE any C runs --
                                         // the compiler may emit FP anywhere
     bl    c_main                        // x0 still holds LK's DTB pointer
