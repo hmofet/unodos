@@ -125,7 +125,9 @@ static void present(void)
 
 void c_main(void *dtb)
 {
+    c64_beacon(224, 0xFFFF00FFu);   /* MAGENTA: C reached, the stack works   */
     mmu_init();
+    c64_beacon(272, 0xFFFFFF00u);   /* YELLOW: translation + caches survived */
     c64_u32 ppitch;
     c64_fb_adopt(dtb, &ppitch);
     FBDBG->fb_shadow = (c64_u64)shadow_buf;

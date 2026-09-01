@@ -12,9 +12,11 @@ int uno_main(void);
 /* ---- boot: entry.s -> c_main -> the shell ------------------------------- */
 void c_main(void *dtb)
 {
+    c64_beacon(224, 0xFFFF00FFu);   /* MAGENTA: C reached, the stack works   */
     mmu_init();
+    c64_beacon(272, 0xFFFFFF00u);   /* YELLOW: translation + caches survived */
     c64_u32 ppitch;
-    c64_fb_adopt(dtb, &ppitch);
+    c64_fb_adopt(dtb, &ppitch);     /* (its vram clear wipes the beacons)    */
     uno_native_tsc_set(c64_cnt_freq() / 1000000ull);
     uno_main();                                   /* never returns */
     for (;;)

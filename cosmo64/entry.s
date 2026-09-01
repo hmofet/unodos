@@ -27,11 +27,13 @@ park:
     wfe
     b     park
 boot_core:
-    ldr   x1, =0x53E00000               // stack: above the image (which can carry
-    mov   sp, x1                        // ~60 MB of .bss; flatten.py asserts it
-                                        // ends below 0x53000000), below the
-                                        // FBINFO/crash block at 0x53F00000 and
-                                        // LK's DTB at 0x54000000
+    // Stack: inside the image's own .bss (c64_boot_stack in videolfb.c). The
+    // zero loop below writes every byte of it before anything pushes a frame,
+    // so its DRAM is proven writable before it is trusted -- an off-image
+    // stack at 0x53E00000 was on the suspect list for a silent pre-vector
+    // wedge (a fault while pushing the frame can't reach a handler usefully).
+    ldr   x1, =c64_boot_stack + 0x80000
+    mov   sp, x1
     bl    cpu_early_init                // vectors FIRST: anything after this
                                         // faults into the crash record + the
                                         // painted ESR, never a silent wedge

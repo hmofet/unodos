@@ -175,12 +175,71 @@ def main():
         fails.append("dorigin: got 0x%X, wanted 0x%X"
                      % (dorigin, raw + y0 * ppitch + x0 * 4))
 
-    f_fb = os.path.join(tmp, "fb.bin")
-    f_sh = os.path.join(tmp, "shadow.bin")
-    qmp("pmemsave", val=raw, size=PANEL_H * ppitch, filename=f_fb)
-    fb = dumped(f_fb, PANEL_H * ppitch)
-    qmp("pmemsave", val=shadow, size=W * H * 4, filename=f_sh)
-    sh = dumped(f_sh, W * H * 4)
+    # The shell renders into fb[] and THEN presents, so a stop can catch the
+    # source one frame ahead of the panel (the m0 payload is static and never
+    # races). Retry until a quiescent stop: between tray-clock ticks the shell
+    # is idle and source and panel agree exactly.
+    #
+    # The eye view goes through the 270-degree mounting at every block
+    # sub-position. m0 presents its shadow verbatim (0xAARRGGBB source); the
+    # shell presents pc64's fb[] (0xAABBGGRR) with an R<->B swizzle -- accept
+    # whichever channel order matches, but the SAME one for every sub-position.
+    eye0 = None
+    fb = sh = None
+    blit_fail = None
+    for attempt in range(6):
+        f_fb = os.path.join(tmp, "fb%d.bin" % attempt)
+        f_sh = os.path.join(tmp, "shadow%d.bin" % attempt)
+        qmp("pmemsave", val=raw, size=PANEL_H * ppitch, filename=f_fb)
+        fb = dumped(f_fb, PANEL_H * ppitch)
+        qmp("pmemsave", val=shadow, size=W * H * 4, filename=f_sh)
+        sh = dumped(f_sh, W * H * 4)
+
+        sh_swiz = bytearray(sh)
+        for i in range(0, len(sh_swiz), 4):
+            sh_swiz[i], sh_swiz[i + 2] = sh_swiz[i + 2], sh_swiz[i]
+        sh_swiz = bytes(sh_swiz)
+        accept = None
+        blit_fail = None
+        eye0 = None
+        for a in range(scale):
+            for b in range(scale):
+                eye = bytearray(W * H * 4)
+                for sx in range(W):
+                    fy = y0 + dst_h - 1 - (sx * scale + a)
+                    row = fb[fy * ppitch + x0 * 4: fy * ppitch + x0 * 4 + dst_w * 4]
+                    for sy in range(H):
+                        o = (sy * W + sx) * 4
+                        s = (sy * scale + b) * 4
+                        eye[o:o + 4] = row[s:s + 4]
+                if eye0 is None:
+                    eye0 = eye
+                if accept is None:
+                    accept = sh if bytes(eye) == sh else (
+                        sh_swiz if bytes(eye) == sh_swiz else None)
+                    if accept is None:
+                        bad = sum(1 for i in range(0, len(sh_swiz), 4)
+                                  if eye[i:i+4] != sh_swiz[i:i+4])
+                        blit_fail = ("rotated blit: %d of %d pixels differ from "
+                                     "the swizzled source (sub-pos %d,%d, "
+                                     "attempt %d)" % (bad, W * H, a, b, attempt))
+                        break
+                elif bytes(eye) != accept:
+                    bad = sum(1 for i in range(0, len(accept), 4)
+                              if eye[i:i+4] != accept[i:i+4])
+                    blit_fail = ("rotated blit: %d of %d pixels differ (sub-pos "
+                                 "%d,%d, attempt %d)" % (bad, W * H, a, b, attempt))
+                    break
+            else:
+                continue
+            break
+        if blit_fail is None:
+            break
+        qmp("cont")
+        time.sleep(0.7)
+        qmp("stop")
+    if blit_fail is not None:
+        fails.append(blit_fail)
     qmp("quit")
     try:
         p.wait(timeout=5)
@@ -190,48 +249,6 @@ def main():
     if struct.unpack_from("<I", fb, 0)[0] != 0xFFFFFFFF:
         fails.append("bar beacon: framebuffer starts 0x%08X, wanted white"
                      % struct.unpack_from("<I", fb, 0)[0])
-
-    # The eye view through the 270-degree mounting, every block sub-position.
-    # The m0 payload presents its shadow verbatim (0xAARRGGBB source); the
-    # shell presents pc64's fb[] (0xAABBGGRR) with an R<->B swizzle -- accept
-    # whichever channel order matches, but the SAME one for every sub-position.
-    sh_swiz = bytearray(sh)
-    for i in range(0, len(sh_swiz), 4):
-        sh_swiz[i], sh_swiz[i + 2] = sh_swiz[i + 2], sh_swiz[i]
-    sh_swiz = bytes(sh_swiz)
-    accept = None
-    eye0 = None
-    for a in range(scale):
-        for b in range(scale):
-            eye = bytearray(W * H * 4)
-            for sx in range(W):
-                fy = y0 + dst_h - 1 - (sx * scale + a)
-                row = fb[fy * ppitch + x0 * 4: fy * ppitch + x0 * 4 + dst_w * 4]
-                for sy in range(H):
-                    o = (sy * W + sx) * 4
-                    s = (sy * scale + b) * 4
-                    eye[o:o + 4] = row[s:s + 4]
-            if eye0 is None:
-                eye0 = eye
-            if accept is None:
-                accept = sh if bytes(eye) == sh else (
-                    sh_swiz if bytes(eye) == sh_swiz else None)
-                if accept is None:
-                    bad = sum(1 for i in range(0, len(sh), 4)
-                              if eye[i:i+4] != sh[i:i+4])
-                    fails.append("rotated blit: %d of %d pixels differ from the "
-                                 "source in either channel order (sub-pos %d,%d)"
-                                 % (bad, W * H, a, b))
-                    break
-            elif bytes(eye) != accept:
-                bad = sum(1 for i in range(0, len(accept), 4)
-                          if eye[i:i+4] != accept[i:i+4])
-                fails.append("rotated blit: %d of %d pixels differ (sub-pos %d,%d)"
-                             % (bad, W * H, a, b))
-                break
-        else:
-            continue
-        break
     if eye0 is not None and not any(sh):
         fails.append("blit agrees but the shadow is blank")
 
