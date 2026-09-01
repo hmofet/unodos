@@ -7,6 +7,9 @@
 
 #include "cosmo64.h"
 
+/* the boot stack (see cosmo64.h): entry.s points SP at the top of this */
+c64_u8 c64_boot_stack[C64_BOOT_STACK_BYTES] __attribute__((aligned(16)));
+
 static int streq(const char *a, const char *b)
 {
     while (*a && *a == *b) {

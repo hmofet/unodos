@@ -75,6 +75,26 @@ c64_u32 c64_fdt_scan(const void *dtb, c64_u64 *base, c64_u32 *vram);
 c64_u64 c64_fb_adopt(void *dtb, c64_u32 *ppitch);
 void c64_bcn(c64_u32 stage);
 
+/* Stage beacon painted straight onto the panel at the MEASURED base/pitch
+ * (0x7DF70000/4352, mblock-7-framebuffer, device-verified). Works with the
+ * MMU off (Device memory) and on (the region is mapped Normal-NC). The adopt
+ * path's vram clear wipes them. Diagnostic bring-up aid; remove at polish. */
+static inline void c64_beacon(int x, c64_u32 color)
+{
+    volatile c64_u32 *p = (volatile c64_u32 *)(0x7DF70000ull + (c64_u64)x * 4);
+    for (int r = 0; r < 32; r++) {
+        for (int c = 0; c < 32; c++)
+            p[c] = color;
+        p += 4352 / 4;
+    }
+    __asm__ volatile("dsb sy" ::: "memory");
+}
+
+/* the boot stack lives in the image's own .bss (videolfb.c) -- the one DRAM
+ * the zero loop proves writable before anything depends on it */
+#define C64_BOOT_STACK_BYTES 0x80000
+extern c64_u8 c64_boot_stack[C64_BOOT_STACK_BYTES];
+
 static inline c64_u64 c64_cnt_now(void)
 {
     c64_u64 v;
