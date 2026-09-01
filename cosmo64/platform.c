@@ -9,6 +9,68 @@
 
 int uno_main(void);
 
+/* ---- is this core actually cached? -------------------------------------- */
+/* The first measurement said 1e6 volatile adds take 315,615 us: 315 ns for
+ * what should be an L1 hit, which is a full bus transaction per access. That
+ * is the signature of DEVICE-typed memory, and it agrees with the standing
+ * rule that every file must build -mstrict-align or the machine wedges --
+ * Device memory faults on unaligned access, Normal memory does not.
+ *
+ * Which raises the question M1 never actually tested: mmu_on() writes
+ * SCTLR_EL1/TTBR0_EL1/TCR_EL1, and if LK enters this payload at EL2 those
+ * writes are INERT -- translation there is governed by the EL2 registers --
+ * and we have been running MMU-off, all memory Device, the whole time. An
+ * identity map makes that indistinguishable by address: every pointer works
+ * either way. M1 concluded "MMU on" from the vram band disappearing, and that
+ * band was later re-explained as the shadow moving out of LK's page 1, so the
+ * conclusion was never independently checked.
+ *
+ * So check it, and check the consequence directly: same number of accesses
+ * over a 4 KB working set (L1-resident if there is an L1) and over a 1 MB one
+ * (DRAM either way). Caches working means a large ratio; Device memory means
+ * about 1. */
+static volatile c64_u32 g_small[1024];
+static volatile c64_u32 g_big[256 * 1024];
+
+static void probe_cpu(void)
+{
+    c64_u64 el, s1 = 0, s2 = 0;
+    __asm__ volatile("mrs %0, CurrentEL" : "=r"(el));
+    el = (el >> 2) & 3;
+    __asm__ volatile("mrs %0, sctlr_el1" : "=r"(s1));
+    c64_logf("cpu: CurrentEL=%d SCTLR_EL1=%08x (M=%d C=%d I=%d)\n",
+             (int)el, s1, (int)(s1 & 1), (int)((s1 >> 2) & 1),
+             (int)((s1 >> 12) & 1));
+    if (el == 2) {
+        __asm__ volatile("mrs %0, sctlr_el2" : "=r"(s2));
+        c64_logf("cpu: *** RUNNING AT EL2 *** SCTLR_EL2=%08x (M=%d C=%d I=%d)"
+                 " -- the EL1 registers mmu.c programs are INERT here\n",
+                 s2, (int)(s2 & 1), (int)((s2 >> 2) & 1), (int)((s2 >> 12) & 1));
+    }
+
+    c64_u64 hz = c64_cnt_freq();
+    c64_u64 t0 = c64_cnt_now();
+    for (int i = 0; i < 200000; i++)
+        g_small[i & 1023] = g_small[i & 1023] + 1;
+    c64_u64 ts = c64_cnt_now() - t0;
+    t0 = c64_cnt_now();
+    for (int i = 0; i < 200000; i++)
+        g_big[(i * 16) & (256 * 1024 - 1)] = g_big[(i * 16) & (256 * 1024 - 1)] + 1;
+    c64_u64 tb = c64_cnt_now() - t0;
+    c64_logf("cpu: 200k accesses -- 4KB set %d us, 1MB set %d us, ratio %d/10"
+             " (about 10/10 means NO cache: every access is a bus cycle)\n",
+             (int)(ts * 1000000ull / hz), (int)(tb * 1000000ull / hz),
+             ts ? (int)(tb * 10ull / ts) : 0);
+
+    volatile int sink = 0;
+    t0 = c64_cnt_now();
+    for (int i = 0; i < 1000000; i++)
+        sink = sink + i;
+    c64_u64 us = (c64_cnt_now() - t0) * 1000000ull / hz;
+    c64_logf("cpu: 1e6 volatile add iterations in %d us (%d k-iter/s)\n",
+             (int)us, us ? (int)(1000000000ull / us) : 0);
+}
+
 /* ---- boot: entry.s -> c_main -> the shell ------------------------------- */
 void c_main(void *dtb)
 {
@@ -36,15 +98,7 @@ void c_main(void *dtb)
      * a software renderer's ceiling may simply be low. Time a fixed loop
      * against the 13 MHz generic timer and put the number in the log rather
      * than reasoning about it. */
-    {
-        volatile int sink = 0;
-        c64_u64 t0 = c64_cnt_now();
-        for (int i = 0; i < 1000000; i++)
-            sink = sink + i;
-        c64_u64 us = (c64_cnt_now() - t0) * 1000000ull / c64_cnt_freq();
-        c64_logf("cpu: 1e6 volatile add iterations in %d us (%d k-iter/s)\n",
-                 (int)us, us ? (int)(1000000000ull / us) : 0);
-    }
+    probe_cpu();
     /* Storage before the shell: session_load() runs inside uno_main. On QEMU
      * there is no MSDC at 0x11230000, so this costs one bounded command
      * timeout and logs that the eMMC is absent. */
