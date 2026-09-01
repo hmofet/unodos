@@ -83,7 +83,12 @@ shell )
   # -Wno-error=implicit-function-declaration: mingw-gcc merely warns on the
   # declared-later-in-the-same-file pattern pc64_uui.c uses; clang 16+ errors.
   # The linker still catches genuinely missing functions.
-  SHCF="$BASECF -Wno-error=implicit-function-declaration \
+  # -mstrict-align FOR EVERYTHING on this device: the hardware bisect of
+  # 2026-09-01 showed unaligned accesses wedge the core silently (no EL1
+  # fault -- consistent with GenieZone's stage-2 imposing Device-type memory),
+  # and each build compiled without it died at its first merged wide load
+  # while the fully strict-align m0 runs the same path clean.
+  SHCF="$BASECF -mstrict-align -Wno-error=implicit-function-declaration \
         -DUNO_COLOR=1 -DUNO_PC64 -DUNO_UUI -Dmain=uno_main \
         -I$QDIR/pc64/include -I$QDIR/pc64 -I$QDIR/unoui -I$QDIR/uno3d \
         -I$QDIR/pc64/bearssl/inc -I$QDIR/unosound -I$QDIR/unomedia \

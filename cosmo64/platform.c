@@ -88,11 +88,17 @@ void uno_pc64_init(void)
 {
     /* the heavy lifting (MMU, framebuffer, clock rate) already happened in
      * c_main before uno_main ran; nothing firmware-shaped left to do */
+    c64_beacon(448, 0xFF00C0FFu);   /* LIGHT BLUE: the shell's init entered */
 }
 
 void uno_pc64_poll(void)
 {
     /* keyboard/pointer polling arrives with the AW9523 + touch drivers (M2) */
+    static int first = 1;
+    if (first) {
+        first = 0;
+        c64_beacon(496, 0xFF008000u);   /* DARK GREEN: the main loop reached */
+    }
 }
 
 /* Reset via the TOPRGU watchdog: re-enable it and let it fire. LK armed it
