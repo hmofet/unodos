@@ -139,6 +139,29 @@ int c64_usb_bulk_out(int dev, void *data, int len)
     return uno_usb_bulk_out(dev, g_bbounce, len);
 }
 
+/* BULK IN IS ASYNC HERE, and that is the whole difference between a usable
+ * desktop and a frozen one.
+ *
+ * ax88179.c's ax_recv() calls uno_usb_bulk_in() synchronously, and a bulk IN
+ * on an idle NIC never completes -- so it costs poll_xfer's FULL 5-second
+ * timeout, every call. net_poll() drains with `while (recv() > 0)`, and the
+ * shell's main loop calls net_poll() four times a frame, so a bound adapter
+ * with nothing arriving made every frame take about twenty seconds. On the
+ * first hardware boot of M5 that read as "the mouse stopped working": the
+ * desktop was painted and the machine was alive, just spending all of its
+ * time waiting for a packet that had not been sent yet.
+ *
+ * xhci.h already carries the answer -- uno_usb_bulk_in_arm() / _poll(), added
+ * "for the NIC recv path", one outstanding transfer per device, poll returning
+ * 0 while it is still in flight. ax88179.c does not use it. It does not have
+ * to: this lane already renames its bulk calls onto this file, so the seam
+ * that exists for the bounce is also where the sync-to-async adaptation goes,
+ * and the driver stays untouched.
+ *
+ * The contract ax_recv wants is exactly what falls out: "n < 8" means nothing
+ * arrived, which is what a still-outstanding transfer returns. */
+static int g_bin_armed = -1;                 /* device with a TRB posted, or -1 */
+
 int c64_usb_bulk_in(int dev, void *data, int len)
 {
     int n, i;
@@ -146,7 +169,21 @@ int c64_usb_bulk_in(int dev, void *data, int len)
         return -1;
     if (len > (int)sizeof g_bbounce)
         len = (int)sizeof g_bbounce;
-    n = uno_usb_bulk_in(dev, g_bbounce, len);
+
+    if (g_bin_armed != dev) {
+        if (g_bin_armed >= 0)
+            return 0;                        /* another device owns the slot */
+        if (uno_usb_bulk_in_arm(dev, g_bbounce, len) < 0)
+            return -1;
+        g_bin_armed = dev;
+        return 0;                            /* nothing yet, by construction */
+    }
+    n = uno_usb_bulk_in_poll(dev);
+    if (n == 0)
+        return 0;                            /* still in flight */
+    g_bin_armed = -1;                        /* landed or failed: re-arm next call */
+    if (n < 0)
+        return -1;
     for (i = 0; i < n && i < len; i++)
         ((unsigned char *)data)[i] = g_bbounce[i];
     return n;
