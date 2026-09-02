@@ -11310,3 +11310,20 @@ unreliable on PE/COFF here (surfgo detach). Also noted for the owner:
 spec bounds to 3..18 for a full-speed interrupt endpoint -- tolerated by every
 controller met so far, corrected by the hook on this one. Claimed and landed
 by the cosmo64 lane; `xhci.*` ownership is unchanged.
+
+## 2026-09-02 — request to the usb lane: the polled interrupt-endpoint cost (filed by cosmo64)
+
+Measured on the MT6771 (a Cortex-A53 at its boot clock): each idle HID
+interrupt endpoint costs ~5 ms per `uno_usb_intr_in()` call, because
+`intr_poll()` sweeps the event ring through `poll_event(&ev, 1000)` -- a
+thousand iterations of a `spin(200)` each -- before concluding nothing has
+arrived. With one keyboard and one mouse that is ~12 ms per shell loop
+(`perf: per loop input` went 2 ms -> 12 ms), which caps the loop near 60 Hz
+and makes a 500 Hz mouse feel jumpy: one report lands per loop. cosmo64 gates
+its drain on IMAN.IP so an idle ring is skipped, but every loop with a report
+still pays the full sweep. Two things would fix it at the source, both the
+usb lane's call: a much smaller budget for the non-blocking intr poll (the
+event, if any, is at the dequeue pointer; a sweep of a few entries is
+enough), and more than one TRB outstanding per interrupt endpoint so several
+reports can land between polls. Not urgent for cosmo64; noted so the number
+has an owner.
