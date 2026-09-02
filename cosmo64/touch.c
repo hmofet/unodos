@@ -131,9 +131,16 @@ void c64_touch_poll(void)
     int status = b[0] & 0x07;            /* 1 = enter, 2 = moving */
     if (status != 1 && status != 2) {
         g_btn = 0;                       /* everything else = not down */
-        was_down = 0;
         g_raw_down = 0;
-        c64_input_set_pointer(g_x, g_y, 0);
+        /* Report the release ONCE, on the edge. This used to publish the
+         * panel's idle position every poll, which is fine with one pointer
+         * and wrong with two: a USB mouse moved the cursor and the very next
+         * poll snapped it back to wherever the last finger had been -- the
+         * centre, on a boot with no touch at all. An absolute pointer speaks
+         * when it has a contact to report, and stays silent otherwise. */
+        if (was_down)
+            c64_input_set_pointer(g_x, g_y, 0);
+        was_down = 0;
         return;
     }
     c64_u32 tx = ((c64_u32)b[1] << 4) | (b[3] >> 4);      /* 12-bit */

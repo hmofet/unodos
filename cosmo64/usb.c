@@ -233,10 +233,47 @@ int c64_usb_mice(void)
     return g_up ? g_nmouse : 0;
 }
 
+/* xhci.c is polled with no idea whether anything happened: each interrupt
+ * endpoint's poll sweeps the event ring on a thousand-iteration spin budget
+ * when it is empty, and with a keyboard and a mouse that measured ~10 ms per
+ * shell loop on this core (perf: "per loop input" 2 ms -> 13 ms). The
+ * controller already knows the answer: interrupter 0's IMAN.IP is set when an
+ * event has been posted since it was last cleared. xhci.c sets IE and never
+ * touches IP (it wants no interrupts, only the ring), so this file owns the
+ * bit: clear it (write-1-to-clear, IE preserved) and THEN drain, so an event
+ * posted during the drain sets it again for next time, and an idle ring costs
+ * one MMIO read. A fallback drain every eighth loop covers a controller that
+ * does not raise IP the way the spec describes -- and the first few loops log
+ * what IP did, so the eMMC log says which world this is rather than leaving
+ * a laggy mouse to imply it. */
+static int usb_events_pending(void)
+{
+    volatile unsigned int *iman;
+    unsigned int rtsoff = *(volatile unsigned int *)0x11200018ull & ~0x1Fu;
+    unsigned int v;
+    static unsigned loops, seen_ip, logged;
+    iman = (volatile unsigned int *)(0x11200000ull + rtsoff + 0x20);
+    v = *iman;
+    loops++;
+    if (v & 1u) {
+        *iman = v;                         /* RW1C: clears IP, keeps IE */
+        seen_ip++;
+    }
+    if (loops == 600 && !logged) {         /* ~10 s in: the verdict, once */
+        logged = 1;
+        c64_logf("usb: IMAN.IP was set on %u of the first %u loops (%s)\n",
+                 seen_ip, loops, seen_ip ? "gating works" :
+                 "NEVER -- falling back to the periodic drain only");
+    }
+    return (v & 1u) || (loops & 7u) == 0u;
+}
+
 void c64_usb_poll(void)
 {
     int dx = 0, dy = 0, btn = 0, w;
     if (!g_up)
+        return;
+    if (!usb_events_pending())
         return;
     if (g_nmouse && uno_usb_hid_mouse_poll(&dx, &dy, &btn))
         c64_input_move_pointer(dx, dy, btn);
