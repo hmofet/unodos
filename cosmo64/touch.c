@@ -31,7 +31,7 @@
 #define OFF_FWINFO 0x78
 
 static int g_present;
-static int g_x = C64_SCRW / 2, g_y = C64_SCRH / 2, g_btn;
+static int g_x = C64_SCRW / 2, g_y = C64_SCRH / 2, g_btn;  /* starting size */
 static c64_u32 g_maxx = 1080, g_maxy = 2160;
 
 /* The last report as the controller gave it, before any mapping. calib.c
@@ -60,7 +60,7 @@ int c64_touch_present(void)
 
 #ifdef C64_TOUCHDBG
 /* Paint a 32-bit value as bit-cells straight onto the panel, in the black
- * band ABOVE the UI rect (panel y < C64_DST_Y0) so the shell's present never
+ * band ABOVE the UI rect (panel y < c64_dst_y0) so the shell's present never
  * covers it -- in the landscape view that band is the strip along one edge.
  * White = 1, dark = 0, bit 31 leftmost. A photograph decodes the raw touch
  * report, which is the only channel this device has. */
@@ -188,21 +188,24 @@ void c64_touch_poll(void)
     tx = tx * PANEL_W / (g_maxx ? g_maxx : PANEL_W);
     ty = ty * PANEL_H / (g_maxy ? g_maxy : PANEL_H);
 
-    /* Inverse of display.c's present: the UI rect is C64_DST_W x C64_DST_H at
-     * (C64_DST_X0, C64_DST_Y0), each UI pixel an FB_SCALE block, rotated 270
-     * (down the upright image is +x on the panel, right is -y). */
-    int px = (int)tx - C64_DST_X0;
-    int py = (int)ty - C64_DST_Y0;
+    /* Inverse of display.c's present: the UI rect is c64_dst_w x c64_dst_h at
+     * (c64_dst_x0, c64_dst_y0), each UI pixel a c64_scale block, rotated 270
+     * (down the upright image is +x on the panel, right is -y). Runtime, not
+     * the C64_DST_* macros: Control Panel > Display changes the desktop size
+     * while this driver is running, and a mapping compiled against the
+     * starting size would put the pointer somewhere else entirely. */
+    int px = (int)tx - c64_dst_x0;
+    int py = (int)ty - c64_dst_y0;
     if (px < 0) px = 0;
     if (py < 0) py = 0;
-    if (px >= C64_DST_W) px = C64_DST_W - 1;
-    if (py >= C64_DST_H) py = C64_DST_H - 1;
-    int ux = (C64_SCRW - 1) - py / FB_SCALE;
-    int uy = px / FB_SCALE;
+    if (px >= c64_dst_w) px = c64_dst_w - 1;
+    if (py >= c64_dst_h) py = c64_dst_h - 1;
+    int ux = (c64_scrw - 1) - py / c64_scale;
+    int uy = px / c64_scale;
     if (ux < 0) ux = 0;
-    if (ux >= C64_SCRW) ux = C64_SCRW - 1;
+    if (ux >= c64_scrw) ux = c64_scrw - 1;
     if (uy < 0) uy = 0;
-    if (uy >= C64_SCRH) uy = C64_SCRH - 1;
+    if (uy >= c64_scrh) uy = c64_scrh - 1;
 
     /* One line per contact, not per frame: this is the whole "does the
      * pointer land where you touch?" question, answered in text instead of

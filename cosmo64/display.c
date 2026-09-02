@@ -1,18 +1,26 @@
 /* cosmo64/display.c -- the pc64 shell's display platform layer on the Cosmo.
  *
  * The shell draws into pc64's software framebuffer fb[] (fb.h, 0xAABBGGRR,
- * FB_W x FB_H = 640x480 here) and calls uno_pc64_present() each frame; this
- * rotates it 270 degrees, scales it 2x, swizzles R<->B (the panel wants
- * 0xAARRGGBB) and writes it centred into LK's adopted framebuffer -- the same
- * present the m0 payload proved on hardware, plus the channel swap the x86
- * build did with gSwapRB. Boot-time adoption itself lives in videolfb.c.
+ * FB_W x FB_H = the desktop size) and calls uno_pc64_present() each frame;
+ * this rotates it 270 degrees, scales it by an integer zoom, swizzles R<->B
+ * (the panel wants 0xAARRGGBB) and writes it centred into LK's adopted
+ * framebuffer -- the same present the m0 payload proved on hardware, plus the
+ * channel swap the x86 build did with gSwapRB. Boot-time adoption itself
+ * lives in videolfb.c, and so does the geometry (c64_geom_set), because
+ * touch.c has to invert this transform without linking this file.
+ *
+ * The desktop starts at the panel's NATIVE 2160x1080, zoom 1. It used to be
+ * 640x480 at zoom 2 -- the rpi port's size, carried in when this lane was
+ * forked from it -- which drew a 960x1280 window on a 1080x2160 panel and left
+ * the rest black. Control Panel > Display now lists the sizes below and every
+ * one of them is a whole-pixel zoom, so text stays sharp at all of them.
  */
 
 #include "cosmo64.h"
 #include "fb.h"
 #include "mac_compat.h"
 
-int uno_fb_w = 640, uno_fb_h = 480;
+int uno_fb_w = C64_SCRW, uno_fb_h = C64_SCRH;
 
 /* ---- the pointer -------------------------------------------------------- */
 /* The shell never draws its own cursor: on x86 uefi_main.c composites it into
@@ -39,6 +47,7 @@ static const char *const kCursor[] = {
  * no cursor is drawn there and qharness.py's pixel-exact eye check still
  * compares the panel against fb[] with nothing extra composited on top. */
 int c64_input_have_pointer(void);
+void uno_screen_changed(void);   /* core hook: desktop size changed (unodos.c) */
 
 static void draw_cursor(void)
 {
@@ -51,23 +60,23 @@ static void draw_cursor(void)
 
     for (int r = 0; r < 15 && kCursor[r]; r++) {
         int y = cy + r;                            /* source row  */
-        if (y < 0 || y >= C64_SCRH)
+        if (y < 0 || y >= c64_scrh)
             continue;
         const char *row = kCursor[r];
         for (int c = 0; row[c]; c++) {
             int x = cx + c;                        /* source column */
-            if (x < 0 || x >= C64_SCRW || row[c] == ' ')
+            if (x < 0 || x >= c64_scrw || row[c] == ' ')
                 continue;
             /* the same rotation the blit above uses: source column x lands on
-             * panel row (C64_SCRW-1-x), source row y on panel column y, each
-             * an FB_SCALE block */
+             * panel row (c64_scrw-1-x), source row y on panel column y, each
+             * a c64_scale block */
             c64_u32 out = (row[c] == 'B') ? 0xFF000000u : 0xFFFFFFFFu;
-            int sr = (C64_SCRW - 1) - x;
-            c64_u8 *p = origin + (c64_u64)sr * FB_SCALE * ppitch
-                      + (c64_u64)y * FB_SCALE * 4;
-            for (int rep = 0; rep < FB_SCALE; rep++) {
+            int sr = (c64_scrw - 1) - x;
+            c64_u8 *p = origin + (c64_u64)sr * c64_scale * ppitch
+                      + (c64_u64)y * c64_scale * 4;
+            for (int rep = 0; rep < c64_scale; rep++) {
                 c64_u32 *d = (c64_u32 *)p;
-                for (int k = 0; k < FB_SCALE; k++)
+                for (int k = 0; k < c64_scale; k++)
                     d[k] = out;
                 p += ppitch;
             }
@@ -99,11 +108,13 @@ static void draw_cursor(void)
  * The cursor is composited onto the panel, not into fb[], so the compare pass
  * cannot see it. Its old and new rects are unioned into the box by hand, or a
  * moving pointer would smear. */
-static fb_px g_shadow[C64_SCRW * C64_SCRH];
+static fb_px g_shadow[C64_UI_MAX_W * C64_UI_MAX_H];
 static int g_shadow_valid;
 static int g_conly;          /* set by uno_pc64_present_cursor() */
 static int g_pcx = -1, g_pcy;                /* cursor rect last composited */
-static c64_u32 g_line[C64_SCRH * FB_SCALE];  /* one output row, built once */
+/* One output row = c64_scrh * c64_scale pixels, which every zoom clamps to
+ * the panel's width, so the panel's width is the ceiling for all of them. */
+static c64_u32 g_line[PANEL_W];              /* one output row, built once */
 
 void uno_pc64_dirty_all(void)
 {
@@ -175,11 +186,12 @@ void uno_pc64_present(void)
      * harness detects the R<->B swizzle by trying both channel orders) */
     FBDBG->fb_shadow = (c64_u64)fb;
     FBDBG->fb_base = (c64_u64)fb;
-    FBDBG->fb_pitch = C64_SCRW * 4;
+    FBDBG->fb_pitch = (c64_u32)c64_scrw * 4;
     c64_u8 *origin = (c64_u8 *)FBDBG->fb_dorigin;
     c64_u32 ppitch = FBDBG->fb_ppitch;
+    const int scrw = c64_scrw, scrh = c64_scrh, zoom = c64_scale;
 
-    int x0 = C64_SCRW, x1 = -1, y0 = C64_SCRH, y1 = -1;
+    int x0 = scrw, x1 = -1, y0 = scrh, y1 = -1;
     if (g_conly && g_shadow_valid) {
         /* The shell promises fb[] is unchanged and only the pointer moved
          * (its cursor_only path), so the compare is pure waste -- 307k pixels
@@ -187,16 +199,16 @@ void uno_pc64_present(void)
          * reason. The cursor union below supplies the whole box. */
         g_conly = 0;
     } else if (!g_shadow_valid) {
-        for (int i = 0; i < C64_SCRW * C64_SCRH; i++)
+        for (int i = 0; i < scrw * scrh; i++)
             g_shadow[i] = fb[i];
         g_shadow_valid = 1;
-        x0 = 0; x1 = C64_SCRW - 1; y0 = 0; y1 = C64_SCRH - 1;
+        x0 = 0; x1 = scrw - 1; y0 = 0; y1 = scrh - 1;
     } else {
-        for (int y = 0; y < C64_SCRH; y++) {
-            const fb_px *s = fb + (unsigned)y * C64_SCRW;
-            fb_px *sh = g_shadow + (unsigned)y * C64_SCRW;
+        for (int y = 0; y < scrh; y++) {
+            const fb_px *s = fb + (unsigned)y * scrw;
+            fb_px *sh = g_shadow + (unsigned)y * scrw;
             int rx0 = -1, rx1 = -1;
-            for (int x = 0; x < C64_SCRW; x++)
+            for (int x = 0; x < scrw; x++)
                 if (s[x] != sh[x]) {
                     sh[x] = s[x];
                     if (rx0 < 0)
@@ -227,8 +239,8 @@ void uno_pc64_present(void)
         int ax0 = px_, ax1 = px_ + 8, ay0 = py_, ay1 = py_ + 14;
         if (ax0 < 0) ax0 = 0;
         if (ay0 < 0) ay0 = 0;
-        if (ax1 > C64_SCRW - 1) ax1 = C64_SCRW - 1;
-        if (ay1 > C64_SCRH - 1) ay1 = C64_SCRH - 1;
+        if (ax1 > scrw - 1) ax1 = scrw - 1;
+        if (ay1 > scrh - 1) ay1 = scrh - 1;
         if (ax1 < ax0 || ay1 < ay0)
             continue;
         if (ax0 < x0) x0 = ax0;
@@ -246,24 +258,24 @@ void uno_pc64_present(void)
     }
 
     /* One output row per source column, built once into g_line and then
-     * written FB_SCALE times: the strided source read is the expensive half,
+     * written `zoom` times: the strided source read is the expensive half,
      * so it happens once rather than per repeat, and both writes are
      * sequential, which is what non-cacheable memory wants. */
     for (int x = x1; x >= x0; x--) {
-        const fb_px *s = fb + (unsigned)y0 * C64_SCRW + x;
+        const fb_px *s = fb + (unsigned)y0 * scrw + x;
         int n = 0;
         for (int y = y0; y <= y1; y++) {
             fb_px px = *s;
             c64_u32 out = 0xFF000000u | ((px & 0xFFu) << 16)
                         | (px & 0xFF00u) | ((px >> 16) & 0xFFu);
-            for (int k = 0; k < FB_SCALE; k++)
+            for (int k = 0; k < zoom; k++)
                 g_line[n++] = out;
-            s += C64_SCRW;                        /* one source row down */
+            s += scrw;                            /* one source row down */
         }
-        int sr = (C64_SCRW - 1) - x;
-        c64_u8 *drow = origin + (c64_u64)sr * FB_SCALE * ppitch
-                     + (c64_u64)y0 * FB_SCALE * 4;
-        for (int rep = 0; rep < FB_SCALE; rep++) {
+        int sr = (scrw - 1) - x;
+        c64_u8 *drow = origin + (c64_u64)sr * zoom * ppitch
+                     + (c64_u64)y0 * zoom * 4;
+        for (int rep = 0; rep < zoom; rep++) {
             c64_u32 *dst = (c64_u32 *)drow;
             for (int i = 0; i < n; i++)
                 dst[i] = g_line[i];
@@ -282,42 +294,126 @@ void uno_pc64_present_cursor(void)
     uno_pc64_present();
 }
 
-static fb_px g_scene[C64_SCRW * C64_SCRH];
+static fb_px g_scene[C64_UI_MAX_W * C64_UI_MAX_H];
 
 void uno_pc64_scene_save(void)
 {
-    for (int i = 0; i < C64_SCRW * C64_SCRH; i++)
+    for (int i = 0; i < c64_scrw * c64_scrh; i++)
         g_scene[i] = fb[i];
 }
 
 void uno_pc64_scene_restore(void)
 {
-    for (int i = 0; i < C64_SCRW * C64_SCRH; i++)
+    for (int i = 0; i < c64_scrw * c64_scrh; i++)
         fb[i] = g_scene[i];
     /* the whole surface just changed underneath the shadow */
     uno_pc64_dirty_all();
 }
 
+/* ---- the desktop size ---------------------------------------------------
+ * The panel is fixed, so unlike x86 there are no video modes to enumerate --
+ * but there is still a choice, because the desktop is presented at an integer
+ * zoom and a smaller desktop simply means a bigger zoom over the same panel.
+ * The list is therefore "how big do you want the UI", exactly the sense the
+ * x86 port's list ended up having too.
+ *
+ * NATIVE IS FIRST AND IS THE DEFAULT (see cosmo64.h). The four entries whose
+ * zoom divides the panel exactly -- 2160x1080, 1080x540, 720x360, 540x270 --
+ * fill it edge to edge; the familiar PC sizes in between are centred with a
+ * black surround, which is what a fixed panel can honestly do with them.
+ * On a 5.99" 403 DPI panel the native desktop is very fine indeed; 1080x540
+ * is the one to reach for if it is too small to read. */
+typedef struct { short w, h; } C64Res;
+static const C64Res kRes[] = {
+    {2160, 1080},        /* native, zoom 1 -- fills the panel exactly */
+    {1920, 1080},        /* zoom 1, centred */
+    {1440,  720},        /* zoom 1, centred */
+    {1280,  720},        /* zoom 1, centred */
+    {1080,  540},        /* zoom 2 -- fills the panel exactly */
+    { 960,  540},        /* zoom 2, centred */
+    { 800,  600},        /* zoom 1, centred */
+    { 720,  360},        /* zoom 3 -- fills the panel exactly */
+    { 640,  480},        /* zoom 2 -- what this port started at */
+    { 540,  270}         /* zoom 4 -- fills the panel exactly */
+};
+#define NRES ((int)(sizeof kRes / sizeof kRes[0]))
+
+/* Commit a desktop size: geometry, then the surface. The panel is cleared
+ * because a SHRINKING rect leaves the old desktop standing in the margin --
+ * nothing will ever draw over those pixels again -- and the shadow is dropped
+ * because fb[]'s row stride is FB_W, so every row of it has just moved. */
+static void apply_desktop(int w, int h)
+{
+    int ow = c64_scrw, oh = c64_scrh;
+    c64_geom_set(w, h);
+    uno_fb_w = c64_scrw;
+    uno_fb_h = c64_scrh;
+    if (ow != c64_scrw || oh != c64_scrh) {
+        /* Carry the pointer by its POSITION ON THE PANEL, not its coordinate:
+         * every size covers the same glass, so the same coordinate is a
+         * different physical place either side of the change. (x86 learned
+         * this as a pointer that appeared to vanish into the right edge.) */
+        c64_input_rescale_pointer(ow, oh, c64_scrw, c64_scrh);
+        c64_logf("display: desktop %dx%d zoom %d, rect %dx%d at %d,%d\n",
+                 c64_scrw, c64_scrh, c64_scale, c64_dst_w, c64_dst_h,
+                 c64_dst_x0, c64_dst_y0);
+    }
+    c64_fb_clear_panel();
+    g_pcx = -1;                                   /* no stale cursor rect */
+    uno_pc64_dirty_all();
+}
+
+/* Runner3D and any other full-screen 3D renders far fewer pixels at a small
+ * desktop, and here the zoom that brings it back up to the panel is free --
+ * the present writes the same number of panel bytes either way. */
+static int gLowres, gSavedW, gSavedH;
+
 void uno_pc64_lowres(int on)
 {
-    (void)on;                                     /* one mode on this panel */
+    if (on && !gLowres) {
+        gSavedW = c64_scrw;
+        gSavedH = c64_scrh;
+        gLowres = 1;
+        apply_desktop(540, 270);                  /* zoom 4: 1/16 the pixels */
+        uno_screen_changed();
+    } else if (!on && gLowres) {
+        gLowres = 0;
+        apply_desktop(gSavedW, gSavedH);
+        uno_screen_changed();
+    }
 }
 
 int uno_pc64_res_count(void)
 {
-    return 1;
+    return NRES;
 }
 
 void uno_pc64_res_get(int idx, short *w, short *h, short *zoom, Boolean *active)
 {
-    (void)idx;
-    *w = C64_SCRW;
-    *h = C64_SCRH;
-    *zoom = FB_SCALE;
-    *active = 1;
+    if (idx < 0 || idx >= NRES) {
+        *w = *h = *zoom = 0;
+        *active = 0;
+        return;
+    }
+    *w = kRes[idx].w;
+    *h = kRes[idx].h;
+    /* The zoom this entry WOULD be presented at, computed the one way it is
+     * computed anywhere -- reporting a stored number here is how a list ends
+     * up disagreeing with the screen. */
+    {
+        int zx = PANEL_W / kRes[idx].h, zy = PANEL_H / kRes[idx].w;
+        int z = zx < zy ? zx : zy;
+        *zoom = (short)(z < 1 ? 1 : z);
+    }
+    *active = (Boolean)(c64_scrw == *w && c64_scrh == *h);
 }
 
 void uno_pc64_res_set(int idx)
 {
-    (void)idx;
+    if (idx < 0 || idx >= NRES)
+        return;
+    if (c64_scrw == kRes[idx].w && c64_scrh == kRes[idx].h)
+        return;                                   /* already active */
+    apply_desktop(kRes[idx].w, kRes[idx].h);
+    uno_screen_changed();            /* core: new gScreen + a full repaint */
 }

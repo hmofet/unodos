@@ -18,7 +18,7 @@ static int g_rd, g_wr;
  * loop does across its devices ("a click on ANY device's ANY button"). */
 static int g_mods, g_held;              /* the matrix keyboard   */
 static int g_mods_usb, g_held_usb;      /* a USB keyboard        */
-static int g_cx = 320, g_cy = 240, g_wheel;
+static int g_cx = C64_SCRW / 2, g_cy = C64_SCRH / 2, g_wheel;
 static int g_btn;                       /* the touch panel (absolute) */
 static int g_btn_usb;                   /* a USB mouse (relative)     */
 static int g_lock;
@@ -87,10 +87,25 @@ void c64_input_move_pointer(int dx, int dy, int btn)
     g_cy += dy;
     if (g_cx < 0) g_cx = 0;
     if (g_cy < 0) g_cy = 0;
-    if (g_cx > C64_SCRW - 1) g_cx = C64_SCRW - 1;
-    if (g_cy > C64_SCRH - 1) g_cy = C64_SCRH - 1;
+    if (g_cx > c64_scrw - 1) g_cx = c64_scrw - 1;
+    if (g_cy > c64_scrh - 1) g_cy = c64_scrh - 1;
     g_btn_usb = btn;
     g_have_ptr = 1;
+}
+
+/* The desktop size changed under the pointer: keep it under the same spot on
+ * the glass rather than clamping it, which throws it at an edge when the
+ * desktop shrinks. display.c's apply_desktop calls this. */
+void c64_input_rescale_pointer(int ow, int oh, int nw, int nh)
+{
+    if (ow > 0 && oh > 0) {
+        g_cx = (int)(((long long)g_cx * nw) / ow);
+        g_cy = (int)(((long long)g_cy * nh) / oh);
+    }
+    if (g_cx < 0) g_cx = 0;
+    if (g_cy < 0) g_cy = 0;
+    if (g_cx > nw - 1) g_cx = nw - 1;
+    if (g_cy > nh - 1) g_cy = nh - 1;
 }
 
 void c64_input_add_wheel(int notches)
