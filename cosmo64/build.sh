@@ -12,6 +12,7 @@
 #   ./build.sh          -> the m0/m1 TEST payload  (build/m0.bin + boot img)
 #   ./build.sh shell    -> the pc64 SHELL          (build/shell.bin + boot img)
 #   ./build.sh calib    -> the TOUCH CALIBRATION payload (build/calib.bin)
+#   ./build.sh usb      -> the USB HOST PROBE      (build/usbprobe.bin)
 #
 # Verify on quill (real QEMU; see qharness.py):
 #   scp qharness.py build/<x>.bin quill:/work/unodos-cosmo64/ &&
@@ -139,8 +140,26 @@ calib )
   "$PY" flatten.py build/calib.exe build/calib.bin
   OUT=build/calib.bin
   ;;
+usb )
+  # The USB host probe: reports what state LK leaves the SSUSB controller in,
+  # which is what decides whether M4 is an adoption (like the eMMC) or a full
+  # bring-up (like the SD card). Self-contained -- cosmo64.h only, no pc64
+  # tree, no unoui -- and it needs no input drivers, so it links even less
+  # than calib.
+  echo "[usb] cross-compiling the USB host probe on quill..."
+  stage_quill
+  USBP="usbprobe videolfb mmu log msdc"
+  ssh "$QUILL" "set -e; cd $QDIR/cosmo64 && \
+    for f in $USBP; do $CC $BASECF -mstrict-align -c \$f.c -o build/b_\$f.o; done && \
+    $CC -c entry.s -o build/entry.o && \
+    $CC -c cpu.s -o build/cpu.o && \
+    $CC $LINK -o build/usbprobe.exe build/entry.o build/cpu.o build/b_*.o"
+  scp -q "$QUILL:$QDIR/cosmo64/build/usbprobe.exe" build/
+  "$PY" flatten.py build/usbprobe.exe build/usbprobe.bin
+  OUT=build/usbprobe.bin
+  ;;
 * )
-  echo "usage: ./build.sh [shell|calib]" >&2
+  echo "usage: ./build.sh [shell|calib|usb]" >&2
   exit 1
   ;;
 esac
