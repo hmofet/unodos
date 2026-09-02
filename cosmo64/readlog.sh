@@ -13,12 +13,15 @@
 # log is distinguishable from a whole one); the text follows.
 #
 # It used to live in DRAM, in the kernel's ramoops console zone, which would
-# have needed no eMMC driver at all. That does not work on this device:
-# tested 2026-09-01, UnoDOS ran, was reset into trixie, and /sys/fs/pstore was
-# empty -- as was MTK's own ram_console at 0x54400000, a separate reservation.
-# Two reservations losing their contents at once is the preloader wiping DRAM,
-# not a bad address. The ramoops path is still tried below, because it costs
-# one `cat` and it is the only log that exists before storage comes up.
+# have needed no eMMC driver at all. That never reached pstore on this device
+# (tested 2026-09-01), and the cause is still open. The first explanation --
+# the preloader wiping DRAM -- was DISPROVEN by the survey in log.c: 82 ramoops
+# signatures were still standing when UnoDOS took over, and the zone map came
+# back as mainline's exact layout, so both the memory and the address were
+# right. The likeliest remaining explanation is the way out: leaving UnoDOS by
+# holding the power button is a cold power-off, while the LK-menu route in is a
+# warm reboot. Untested. The ramoops path is still tried below (-r), because it
+# costs one `cat` and it is the only log that exists before storage comes up.
 #
 #   ./readlog.sh            print the log
 #   ./readlog.sh -r         also try the DRAM/pstore path
