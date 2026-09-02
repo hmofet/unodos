@@ -37,11 +37,12 @@ FDT_AT = 0x48000000
 PANEL_FB = 0x7DF70000
 VRAM = 0x1F90000
 PANEL_W, PANEL_H, PITCH = 1080, 2160, 4352
-# The desktop a payload starts in: the panel's native landscape size at zoom 1
-# (cosmo64.h C64_SCRW/C64_SCRH/FB_SCALE). The payload publishes what it chose
-# and the gate checks it against these, so changing one without the other
-# fails here rather than on the device.
-W, H = 2160, 1080
+# The desktop a payload starts in: half the panel's native landscape size at
+# zoom 2, so it covers the panel exactly (cosmo64.h C64_SCRW/C64_SCRH/
+# FB_SCALE). The payload publishes what it chose and the gate checks it against
+# these, so changing one without the other fails here rather than on the
+# device.
+W, H = 1080, 540
 BCN_MAGIC = 0x554E4F31
 ROT = 270
 # The persistent debug log (log.c): the Gemian kernel's ramoops CONSOLE

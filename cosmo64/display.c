@@ -9,11 +9,13 @@
  * lives in videolfb.c, and so does the geometry (c64_geom_set), because
  * touch.c has to invert this transform without linking this file.
  *
- * The desktop starts at the panel's NATIVE 2160x1080, zoom 1. It used to be
- * 640x480 at zoom 2 -- the rpi port's size, carried in when this lane was
- * forked from it -- which drew a 960x1280 window on a 1080x2160 panel and left
- * the rest black. Control Panel > Display now lists the sizes below and every
- * one of them is a whole-pixel zoom, so text stays sharp at all of them.
+ * The desktop starts at 1080x540 zoom 2 -- covering the panel exactly, at the
+ * 2x device pixel ratio a 403 DPI phone panel wants. It used to be 640x480 at
+ * zoom 2 -- the rpi port's size, carried in when this lane was forked from it
+ * -- which drew a 960x1280 window on a 1080x2160 panel and left the rest
+ * black. Control Panel > Display lists the sizes below, the true native
+ * 2160x1080 among them, and every one of them is a whole-pixel zoom, so text
+ * stays sharp at all of them.
  */
 
 #include "cosmo64.h"
@@ -96,7 +98,7 @@ static void draw_cursor(void)
  * did not have it. Same shape of omission as the missing cursor.
  *
  * The rotation decides what shape the tracking has to take. Source column x
- * becomes panel ROW (639-x), and source row y becomes panel COLUMN y, so a
+ * becomes panel ROW (scrw-1-x), and source row y becomes panel COLUMN y, so a
  * changed source COLUMN is a contiguous run of panel memory while a changed
  * source row is a stride. A bounding box in source space therefore maps to one
  * contiguous rectangle of panel rows, which is what gets pushed. A box is
@@ -317,12 +319,16 @@ void uno_pc64_scene_restore(void)
  * The list is therefore "how big do you want the UI", exactly the sense the
  * x86 port's list ended up having too.
  *
- * NATIVE IS FIRST AND IS THE DEFAULT (see cosmo64.h). The four entries whose
- * zoom divides the panel exactly -- 2160x1080, 1080x540, 720x360, 540x270 --
- * fill it edge to edge; the familiar PC sizes in between are centred with a
- * black surround, which is what a fixed panel can honestly do with them.
- * On a 5.99" 403 DPI panel the native desktop is very fine indeed; 1080x540
- * is the one to reach for if it is too small to read. */
+ * The four entries whose zoom divides the panel exactly -- 2160x1080,
+ * 1080x540, 720x360, 540x270 -- fill it edge to edge; the familiar PC sizes
+ * in between are centred with a black surround, which is what a fixed panel
+ * can honestly do with them.
+ *
+ * 1080x540 AT ZOOM 2 IS THE DEFAULT (see cosmo64.h), not the native 2160x1080
+ * above it: on a 5.99" 403 DPI panel a native desktop is beautiful and too
+ * fine to read, and the shell's own "UI scale" preference cannot help because
+ * it only scales a loaded TTF face and this device mounts no volume to load
+ * one from. The zoom is the knob that works here. */
 typedef struct { short w, h; } C64Res;
 static const C64Res kRes[] = {
     {2160, 1080},        /* native, zoom 1 -- fills the panel exactly */

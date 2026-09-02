@@ -14,16 +14,28 @@ typedef unsigned long long c64_u64;
 #define BCN_MAGIC 0x554E4F31u          /* "UNO1" */
 #define FB_ROT 270
 
-/* The panel is FIXED -- 1080x2160 portrait, mounted landscape -- so the
- * desktop's native size is 2160x1080 and it is what the shell starts in.
+/* The panel is FIXED -- 1080x2160 portrait, mounted landscape -- so its native
+ * size is 2160x1080, and the desktop is presented at a whole-pixel zoom of it.
  * (It started 640x480 at 2x, the size inherited from the rpi port this lane
  * began as; that left a 960x1280 window on a 1080x2160 panel.)
  *
- * FB_SCALE is the integer zoom of the STARTING size, kept as a macro because
- * the m0 and calib payloads are static and compile their geometry in. The
- * shell's is runtime -- c64_scale, below -- because Control Panel > Display
- * can change it. */
-#define FB_SCALE 1
+ * THE DEFAULT IS ZOOM 2: a 1080x540 desktop covering the whole 2160x1080
+ * panel. That is the phone convention -- a 2x device pixel ratio, logical
+ * points at half the physical pixels -- and at 403 DPI it is the difference
+ * between a readable UI and a beautiful unreadable one. The true 2160x1080
+ * desktop is one click away in Control Panel > Display.
+ *
+ * Do NOT reach for the shell's "UI scale" preference to get this effect here.
+ * uno_font_set_ui_scale() is a no-op unless a TTF face is loaded (pc64_font.c
+ * gates it on g_active >= 0), the faces are read off a FAT volume, and this
+ * device has none -- so the shell runs on the built-in 8x8 and that dropdown
+ * does nothing at all. The zoom is the knob that works.
+ *
+ * FB_SCALE is the zoom of the STARTING size, kept as a macro because the m0
+ * and calib payloads are static and compile their geometry in. The shell's is
+ * runtime -- c64_scale, below -- because Control Panel > Display can change
+ * it. */
+#define FB_SCALE 2
 
 /* Memory layout. EVERYTHING mutable lives in the image's own .bss -- stack,
  * FBINFO debug block, crash record -- because that is the one stretch of DRAM
@@ -78,11 +90,12 @@ extern c64_u8 c64_dbg_page[0x1100];
 enum { FB_SRC_FALLBACK = 0, FB_SRC_BLOB = 1, FB_SRC_PROPS = 2, FB_SRC_SEED = 3 };
 enum { BCN_FBFALL = 2, BCN_FBDTB = 3, BCN_MAIN = 4 };
 
-/* The STARTING UI surface -- the panel's native landscape size -- and the
- * rotated (270) rect it lands in. The static payloads (m0, calib) use these
- * directly; the shell uses the runtime geometry below, which starts here. */
-#define C64_SCRW 2160
-#define C64_SCRH 1080
+/* The STARTING UI surface -- half the panel's native landscape size, so that
+ * at FB_SCALE 2 it covers the panel exactly -- and the rotated (270) rect it
+ * lands in. The static payloads (m0, calib) use these directly; the shell uses
+ * the runtime geometry below, which starts here. */
+#define C64_SCRW 1080
+#define C64_SCRH 540
 #define C64_DST_W (C64_SCRH * FB_SCALE)
 #define C64_DST_H (C64_SCRW * FB_SCALE)
 #define C64_DST_X0 ((PANEL_W - C64_DST_W) / 2)
