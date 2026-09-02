@@ -64,6 +64,16 @@ int  uno_usb_bulk_in_poll(int dev);
 int  uno_usb_setup_intr_in(int dev, int in_ep_addr, int mps);
 int  uno_usb_intr_in(int handle, void *data, int maxlen);
 
+/* Platform hook on every endpoint context, called after the spec-defined words
+ * are filled and before Configure Endpoint. `epctx` points at the endpoint
+ * context in the input context (DW0 at +0); `eptype` is the xHCI endpoint
+ * type field (7 = Interrupt IN, etc.), `speed` the device's PORTSC speed id,
+ * `has_tt` 1 when the device is reached through a hub. For controllers that
+ * need vendor words in the context (MediaTek's scheduler fields). No hook by
+ * default. Register before uno_xhci_init(). */
+void uno_xhci_set_ep_quirk(void (*fn)(unsigned char *epctx, int eptype,
+                                      int speed, int has_tt));
+
 /* Diagnostics for the System app. */
 void uno_xhci_status(int *present, int *nports, int *ndevs, unsigned *err);
 /* enumeration debug: slot id (or -completion_code), Address Device completion,
