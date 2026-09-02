@@ -102,7 +102,13 @@ def main():
     fdt = os.path.join(tmp, "virt-videolfb.dtb")
     open(fdt, "wb").write(fdt_blob())
 
-    qemu = ["qemu-system-aarch64", "-M", "virt", "-cpu", "cortex-a72",
+    # QHARNESS_EL2=1 boots the payload at EL2, which is where the Cosmo's LK
+    # actually leaves it (measured 2026-09-01: CurrentEL=2). Without this the
+    # gate only ever exercises the EL1 register path, which is how the port
+    # ran MMU-off and cache-off from M1 to 2026-09-01 without the gate
+    # noticing anything at all.
+    mach = "virt,virtualization=on" if os.environ.get("QHARNESS_EL2") else "virt"
+    qemu = ["qemu-system-aarch64", "-M", mach, "-cpu", "cortex-a72",
             "-m", "2048", "-display", "none", "-serial", "none",
             "-qmp", "stdio", "-no-reboot",
             "-kernel", payload, "-dtb", fdt]

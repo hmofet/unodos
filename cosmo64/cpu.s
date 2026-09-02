@@ -26,12 +26,25 @@ fault_record:
     ldr   w1, =0x43525348               // 'CRSH' read back as bytes C R S H
     str   w1, [x0]
     str   w18, [x0, #4]
-    mrs   x1, esr_el1
-    str   x1, [x0, #8]
-    mrs   x1, elr_el1
-    str   x1, [x0, #16]
-    mrs   x1, far_el1
-    str   x1, [x0, #24]
+    // Syndrome registers belong to the level the exception was taken TO, and
+    // this payload runs at EL2 (measured 2026-09-01), where esr_el1 and
+    // friends hold nothing to do with the fault.
+    mrs   x2, CurrentEL
+    lsr   x2, x2, #2
+    cmp   x2, #2
+    b.eq  fr_el2
+    mrs   x19, esr_el1
+    mrs   x20, elr_el1
+    mrs   x21, far_el1
+    b     fr_store
+fr_el2:
+    mrs   x19, esr_el2
+    mrs   x20, elr_el2
+    mrs   x21, far_el2
+fr_store:
+    str   x19, [x0, #8]
+    str   x20, [x0, #16]
+    str   x21, [x0, #24]
     mrs   x1, CurrentEL
     str   x1, [x0, #32]
     dsb   sy
@@ -62,13 +75,13 @@ fault_record:
     // then the registers, one 32-bit word per row of bit-cells (white = 1,
     // dark = 0, bit 31 leftmost): ESR @ y=80, ELR low half @ y=104,
     // FAR low half @ y=128, vec index @ y=152. A photo decodes the fault.
-    mrs   x3, esr_el1
+    mov   x3, x19                       // ESR, captured above at the right EL
     mov   w4, #80
     bl    paint_bits
-    mrs   x3, elr_el1
+    mov   x3, x20                       // ELR
     mov   w4, #104
     bl    paint_bits
-    mrs   x3, far_el1
+    mov   x3, x21                       // FAR
     mov   w4, #128
     bl    paint_bits
     mov   x3, x18
@@ -84,9 +97,9 @@ fault_record:
     ldr   x0, =c64_fault_stack + 0x2000
     mov   sp, x0
     mov   x0, x18                       // vec
-    mrs   x1, esr_el1
-    mrs   x2, elr_el1
-    mrs   x3, far_el1
+    mov   x1, x19                       // ESR, at whichever EL we run at
+    mov   x2, x20                       // ELR
+    mov   x3, x21                       // FAR
     mrs   x4, CurrentEL
     bl    c64_log_crash
     dsb   sy
@@ -129,12 +142,24 @@ pb_px:
 
 // ---- cpu_early_init: vectors + FPU, called before any C -------------------
     .globl cpu_early_init
+// Vectors go to the VBAR of the level we RUN at. Installing them in VBAR_EL1
+// while executing at EL2 is why every fault so far has been a silent wedge
+// rather than a red block and a crash record: the handler was never reachable.
 cpu_early_init:
     ldr   x1, =vector_table
+    mrs   x2, CurrentEL
+    lsr   x2, x2, #2
+    cmp   x2, #2
+    b.eq  1f
     msr   vbar_el1, x1
     mov   x1, #(3 << 20)                // CPACR_EL1.FPEN: no FP/SIMD traps
     msr   cpacr_el1, x1
-    isb
+    b     2f
+1:  msr   vbar_el2, x1
+    mrs   x3, cptr_el2                  // clear TFP only: the rest is RES1 and
+    bic   x3, x3, #(1 << 10)            // guessing at it traps FP outright
+    msr   cptr_el2, x3
+2:  isb
     ret
 
 // ---- dcache_inv_all: invalidate the entire D-cache by set/way -------------
@@ -182,7 +207,15 @@ dcache_inv_all:
 
 // ---- mmu_on(ttbr0, mair, tcr): translation + caches live ------------------
     .globl mmu_on
+// LK leaves this payload at EL2 (measured: CurrentEL=2, SCTLR_EL2 M=0 C=0 I=0),
+// so writing the EL1 copies of these registers does nothing at all -- which is
+// what every build before 2026-09-01 did, running MMU-off and cache-off with
+// all memory Device. Pick the registers for the level we are actually at.
 mmu_on:
+    mrs   x3, CurrentEL
+    lsr   x3, x3, #2
+    cmp   x3, #2
+    b.eq  mmu_on_el2
     msr   ttbr0_el1, x0
     msr   mair_el1, x1
     msr   tcr_el1, x2
@@ -195,6 +228,22 @@ mmu_on:
     orr   x3, x3, #(1 << 12)            // I: I-cache
     bic   x3, x3, #(1 << 1)             // A: no alignment checking on Normal
     msr   sctlr_el1, x3
+    isb
+    ret
+
+mmu_on_el2:
+    msr   ttbr0_el2, x0
+    msr   mair_el2, x1
+    msr   tcr_el2, x2
+    tlbi  alle2                         // NOT vmalle1: that is the EL1 regime
+    dsb   ish
+    isb
+    mrs   x3, sctlr_el2
+    orr   x3, x3, #(1 << 0)             // M: MMU
+    orr   x3, x3, #(1 << 2)             // C: D-cache
+    orr   x3, x3, #(1 << 12)            // I: I-cache
+    bic   x3, x3, #(1 << 1)             // A: no alignment checking on Normal
+    msr   sctlr_el2, x3
     isb
     ret
 
