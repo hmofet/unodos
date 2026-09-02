@@ -103,6 +103,10 @@ void c_main(void *dtb)
      * there is no MSDC at 0x11230000, so this costs one bounded command
      * timeout and logs that the eMMC is absent. */
     c64_blk_init();
+    /* Mount before the shell rather than inside it: session_load() runs from
+     * uno_main and asks for SHELL.CFG immediately, so a report printed after
+     * that would only be a report of what the shell had already decided. */
+    c64_storage_report();
     c64_log("entering uno_main\n");
     c64_log_flush();                /* the boot story reaches the eMMC even if
                                      * the shell never comes up */

@@ -508,6 +508,16 @@ void c64_log_flush(void)
 
 void c64_blk_init(void)
 {
+    /* Idempotent: c_main() brings storage up before the shell, and the block
+     * registry (blk.c) asks again on its way to mounting, so that neither has
+     * to assume it runs first. A second GPT walk would be harmless but is not
+     * free, and a second bring-up after a FAILED one would re-run the probe
+     * that already timed out. */
+    static int g_inited;
+    if (g_inited)
+        return;
+    g_inited = 1;
+
     c64_logf("msdc: adopting LK's controller: CFG=%08x SDC_CFG=%08x STS=%08x "
              "ver=%08x\n", R32(MSDC_CFG), R32(SDC_CFG), R32(SDC_STS),
              R32(MSDC_VERSION));

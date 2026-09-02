@@ -28,18 +28,34 @@ V0(uno_modload_reserve)
 I0(uno_mod_count)
 P0(uno_mod_file)
 
-/* ---- filesystems / storage / installer (dies at M3) ---------------------- */
-I0(uno_fs_volumes)
-int uno_fs_read(void) { return -1; }
-int uno_fs_write(void) { return -1; }
-I0(uno_fs_kind)
-I0(uno_fs_writable)
-I0(uno_fs_is_boot)
-I0(uno_fat_volumes)
-P0(uno_fat_label)
-I0(uno_fat_native_status)
-I0(uno_blk_count)
-P0(uno_blk_get)
+/* ---- storage: what M3b did NOT bring in ----------------------------------
+ * The block registry (blk.c), fat.c and pc64_fs.c are real as of M3b, so the
+ * uno_fs_* / uno_fat_* / uno_blk_* stubs that used to sit here are gone. What
+ * is left of that lane:
+ *
+ *  - the EFI Simple-File-System backend, which pc64_fs.c calls for volumes the
+ *    firmware mounted. There is no firmware here and uno_pc64_detached() is 1,
+ *    so build_map() never enumerates one and every call below is unreachable;
+ *    they exist because pc64_fs.c is compiled unchanged, and they answer
+ *    "nothing there" rather than 0-as-success in case that ever stops being
+ *    true.
+ *  - the installer, which is EFI-shaped end to end (boot entries, device
+ *    paths, firmware volumes) and belongs to a later milestone.
+ *  - fat.c's two outside questions: which PCI storage controller the system
+ *    sits on, and whether a USB boot volume survives a detach. Neither exists
+ *    on this SoC, and both only feed the detach gate, which an LK payload has
+ *    already passed by being born detached. */
+long uno_efifs_read(void)     { return -1; }
+long uno_efifs_read_at(void)  { return -1; }
+long uno_efifs_write(void)    { return 0; }
+long uno_efifs_size(void)     { return -1; }
+I0(uno_efifs_volumes)
+I0(uno_efifs_snapshot)
+I0(uno_efifs_snapshot_dir)
+I0(uno_efifs_serial)
+I0(pci_find_class)
+I0(uno_usbboot_native_ok)
+I0(uno_usbboot_is_usb)
 I0(uno_inst_scan)
 P0(uno_inst_desc)
 I0(uno_inst_kind)
@@ -144,15 +160,7 @@ V0(pc64_game_tick)
 I0(pc64_game_canvas)
 I0(pc64_game_fullscreen)
 
-/* ---- storage calls the real Files app makes (dies at M3) ----------------- */
-int uno_fat_read(void) { return -1; }
-int uno_fat_write(void) { return -1; }
-int uno_fat_delete(void) { return -1; }
-int uno_fat_mkdir(void) { return -1; }
-int uno_fat_rename(void) { return -1; }
-int uno_fat_list_ex(void) { return -1; }
-I0(uno_fs_fat_index)
-P0(uno_fs_volume_name)
+/* ---- packaging (still needs the module loader, so still stubbed) --------- */
 I0(uno_pkg_probe)
 I0(uno_pkg_install)
 
@@ -163,8 +171,6 @@ I0(iwl_scan_begin)
 I0(iwl_scan_results)
 I0(iwl_scan_step)
 V0(pc64_remote_open)
-I0(uno_fs_list_begin)
-I0(uno_fs_list_get)
 I0(uno_load_module)
 I0(uno_mod_load_user)
 V0(uno_mod_unload_user)

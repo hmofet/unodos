@@ -79,13 +79,19 @@ shell )
   THEMES="theme_aurora theme_unodos theme_macos7 theme_macplus theme_win31 \
           theme_amiga theme_c64 theme_apple2 theme_next"
   PCORE="fb pc64_libc pc64_math pc64_font pc64_icons pc64_qoi pc64_uui_apps \
-         mac_compat pc64_io pc64_write pc64_clock pc64_files pc64_uui"
-  C64="videolfb display platform input stubs i2c kbd touch log msdc"
+         mac_compat pc64_io pc64_write pc64_clock pc64_files pc64_uui \
+         fat pc64_fs"
+  C64="videolfb display platform input stubs i2c kbd touch log msdc blk"
 
   # KBDTEST=1: compile the scripted key pad (QEMU gate proof, never shipped)
   [ -n "$KBDTEST" ] && BASECF="$BASECF -DC64_KBDTEST"
   # TOUCHDBG=1: paint the raw touch report on the panel edge (bring-up aid)
   [ -n "$TOUCHDBG" ] && BASECF="$BASECF -DC64_TOUCHDBG"
+  # BLKTEST=1: put fat.c + pc64_fs.c through a format/write/read/delete round
+  # trip over a RAM transport, so the QEMU gate covers the storage stack the
+  # virt board's missing MSDC otherwise leaves untested (36 MiB of .bss --
+  # never ship a BLKTEST image)
+  [ -n "$BLKTEST" ] && BASECF="$BASECF -DC64_BLKTEST"
   # -Wno-error=implicit-function-declaration: mingw-gcc merely warns on the
   # declared-later-in-the-same-file pattern pc64_uui.c uses; clang 16+ errors.
   # The linker still catches genuinely missing functions.
