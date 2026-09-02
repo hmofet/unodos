@@ -30,19 +30,39 @@ set -e
 # it really is the Cosmo before doing anything with it -- .121 has also been
 # galaxy's wired address, and this script's siblings write to /dev/mmcblk0.
 find_dev() {
-    for a in 192.168.2.121 192.168.2.56; do
-        h=$(ssh -o BatchMode=yes -o ConnectTimeout=4 "root@$a" hostname 2>/dev/null)
-        if [ "$h" = cosmocom ]; then
+    # addresses it has actually held, newest first
+    for a in 192.168.2.65 192.168.2.121 192.168.2.56; do
+        if [ "$(ssh -o BatchMode=yes -o ConnectTimeout=4 "root@$a" hostname \
+                2>/dev/null)" = cosmocom ]; then
             echo "root@$a"
             return 0
         fi
     done
-    return 1
+    # it has moved again: sweep the LAN and ask every live host its name. The
+    # lease follows whichever machine currently holds the shared USB adapter,
+    # so the address is not worth remembering -- the hostname is.
+    echo "readlog: not at a known address, sweeping the LAN..." >&2
+    for i in $(seq 1 254); do
+        ping -n 1 -w 300 "192.168.2.$i" >/dev/null 2>&1 &
+    done
+    wait 2>/dev/null
+    found=
+    for ip in $(arp -a | grep -oE "192\.168\.2\.[0-9]+" | sort -u); do
+        [ "$ip" = 192.168.2.255 ] && continue
+        if [ "$(ssh -o BatchMode=yes -o ConnectTimeout=3 \
+                -o StrictHostKeyChecking=no "root@$ip" hostname \
+                2>/dev/null)" = cosmocom ]; then
+            found="root@$ip"
+            break
+        fi
+    done
+    [ -n "$found" ] || return 1
+    echo "$found"
 }
 
 if [ -z "$DEV" ]; then
     DEV=$(find_dev) || {
-        echo "readlog: no Cosmo found at 192.168.2.121 or .56." >&2
+        echo "readlog: no Cosmo found (tried .65/.121/.56 and a LAN sweep)." >&2
         echo "  It is offline while sitting in UnoDOS. Set DEV=root@<ip> to override." >&2
         exit 3
     }
