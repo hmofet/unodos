@@ -11327,3 +11327,13 @@ event, if any, is at the dequeue pointer; a sweep of a few entries is
 enough), and more than one TRB outstanding per interrupt endpoint so several
 reports can land between polls. Not urgent for cosmo64; noted so the number
 has an owner.
+
+## 2026-09-02 — cross-lane note: fb.h's FB_MAX_W/H are now overridable (filed by cosmo64)
+
+`FB_MAX_W`/`FB_MAX_H` size `fb[]` and unoui's `g_bg`, and hardcoded a PC
+monitor's 1920x1200. The Cosmo's panel is fixed at 2160x1080 landscape —
+*wider and shorter* than that — so neither raising nor swapping the two
+numbers would have covered it. Both are `#ifndef`-guarded now and the cosmo64
+build passes `-DFB_MAX_W=2160 -DFB_MAX_H=1080`; the x86 build is unchanged,
+byte for byte, because nothing else defines them. `fb.h` has no listed owner,
+so flagging here.

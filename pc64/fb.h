@@ -29,8 +29,16 @@
    of the GOP mode; uefi_main.c owns the variables). Everything that indexes
    fb[] uses FB_W as the row stride, so drawing code is unchanged - only the
    backing array is sized for the ceiling. */
+/* The ceiling only sizes the backing array, so a port whose panel is not a PC
+   monitor overrides it from its build. The Cosmo's desktop is 2160x1080: WIDER
+   than 1920 and SHORTER than 1200, so neither raising nor swapping these two
+   numbers would have covered it. */
+#ifndef FB_MAX_W
 #define FB_MAX_W 1920
+#endif
+#ifndef FB_MAX_H
 #define FB_MAX_H 1200
+#endif
 extern int uno_fb_w, uno_fb_h;          /* current desktop size */
 #define FB_W uno_fb_w
 #define FB_H uno_fb_h
