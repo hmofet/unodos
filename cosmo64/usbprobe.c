@@ -1,53 +1,69 @@
-/* cosmo64/usbprobe.c -- what state does LK leave the USB host controller in?
+/* cosmo64/usbprobe.c -- bring the USB host controller far enough up to say
+ * whether a device is plugged into it.
  *
  *   ./build.sh usb   ->  build/pc64arm-boot.img
  *
- * M3a cost a day because the answer to that question was "fully live, adopt
- * it". M3b's SD-card sibling will cost a week because for MSDC1 the answer is
- * "untouched, bring it up yourself". The difference between those two worlds
- * is a handful of register reads, and this payload is those reads: it makes no
- * claims, it reports.
+ * WHAT v1 ANSWERED (hardware, 2026-09-01). The whole point was to find out
+ * which of M3a's two worlds this is: "LK left it live, adopt it" or "LK never
+ * touched it, bring it up". The answer is neither, and it is better than the
+ * second one:
  *
- * THE QUESTION, precisely. A USB mouse needs four things to be true, and each
- * one is a different amount of work:
+ *   infra_usb (STA2 bit1) = 0 -> the SSUSB clock is running
+ *   HW_ID=20160812                     <- the IP answers
+ *   PW_CTRL0=10411021 (SW_RST 1)       <- but it is held in reset
+ *   CTRL1=00000001 (HOST_PDN 1)        <- and the host is powered down
+ *   MAC_CAP=00000101 XHCI_CAP=00000100 <- 1 u2 port, 0 u3 ports
+ *   CAPLENGTH=00                       <- zeros, exactly as reset implies
  *
- *   1. the SSUSB clock is ungated                  (one infracfg write)
- *   2. the IP is out of power-down and the ports   (a dozen IPPC writes)
- *      are enabled in HOST role
- *   3. the T-PHY is initialised                    (unknown; possibly large)
- *   4. the Type-C port is in DFP role with VBUS    (I2C to the FUSB301 and
- *      where the device needs it                    the MT6370 charger)
+ * So the clock tree is already ours for free (every INFRA_PDN_STA register
+ * read 0: LK gates nothing), the IP is present and answering, and what stands
+ * between us and a working port is a reset it is being held in. v1 deliberately
+ * did not deassert that reset, because the first job of a probe is to record
+ * the state it was handed. It has been recorded; v2 deasserts it.
  *
- * Point 4 is normally the expensive one on a phone, and there is reason to
- * hope it is already free here: the hub currently plugged into this device
- * reports itself SELF-POWERED (bmAttributes 0xe0, bMaxPower 0) under Linux, so
- * nothing downstream is asking the Cosmo for 5 V. And the decisive evidence
- * for the whole of point 4 is not an I2C register at all -- it is PORTSC. If
- * the controller reports a connection, then role, VBUS and cabling are all
- * already right and none of that work exists. That is why this probe carries
- * no I2C driver: it asks the question that can retire the most work first, and
- * the I2C bus (bus 3 at 0x1100f000, the FUSB301 at 0x25) only gets written if
- * this comes back saying the port sees nothing.
+ * WHAT v2 DOES. The smallest bring-up that can make PORTSC mean something,
+ * in the order the hardware requires:
  *
- * WHAT IT WRITES. Phases 1-4 are reads, and reads of a gated block can hang a
- * bus with no fault, so the gate is checked and ungated FIRST and the log is
- * flushed before each phase -- if it wedges, the last line in the log names
- * the exact register that did it. Phase 5 then attempts the SMALLEST bring-up
- * that could make PORTSC meaningful (clear the host power-down and the per-
- * port PDN/DIS, select host role, wait for the clock-stable bits) and
- * re-reads. It deliberately does NOT assert IP_SW_RST: the same instinct that
- * says never MSDC_CFG_RST says do not reset a block before you have recorded
- * the state you were handed. If phase 5 turns out to be insufficient, the
- * reset is the first thing the next iteration adds.
+ *   1. pulse IP_SW_RST (assert, 1 us, deassert) and keep the device IP
+ *      powered down, which is what lets the host side own the port;
+ *   2. clear IP_HOST_PDN, then per port clear PDN and DIS and select HOST
+ *      role, re-reading XHCI_CAP after the reset rather than trusting the
+ *      count read while the IP was still held;
+ *   3. wait for the STS1 clock-stable bits;
+ *   4. initialise the U2 T-PHY for host: stop forcing suspend, enable the OTG
+ *      VBUS comparator, and tell it VBUS is valid and we are the A-device
+ *      (DTM1: set RG_VBUSVALID and RG_AVALID, clear RG_SESSEND). That last
+ *      write is the whole of "be a host" as far as the PHY is concerned;
+ *   5. power the root port (PORTSC.PP) if it did not come up powered, and
+ *      read PORTSC before and after a debounce delay.
+ *
+ * ONLY THE USB2 PATH. XHCI_CAP reports one u2 port and zero u3 ports, and the
+ * hub on this device is a USB 2.0 hub, so there is nothing a SuperSpeed
+ * bring-up would reach. The U3 PHY is left alone.
+ *
+ * IT STILL CARRIES NO I2C. The expensive part of USB on a phone is the Type-C
+ * role and VBUS, and the evidence that retires all of it is PORTSC: if the
+ * controller reports a connection then role, VBUS and cabling are already good
+ * enough to enumerate, and the FUSB301 on bus 3 (0x1100f000, address 0x25)
+ * never needs to be written. The hub plugged in here reports itself
+ * SELF-POWERED under Linux (bmAttributes 0xe0, bMaxPower 0), so nothing
+ * downstream is asking the Cosmo for 5 V either. Ask the cheap question first.
+ *
+ * SAFETY. Reads of a gated block hang with no fault, so the gate is read (and
+ * cleared if needed) before anything else, and the log is flushed before each
+ * phase with the register named in advance: a wedge leaves its own cause as
+ * the last durable line. Every wait is bounded.
  *
  * FACT SOURCES (facts only -- register offsets and bit positions, no code):
- *   - LK's mt6771 mt_ssusb_sifslv_ippc.h for the IPPC map and IPPC base
- *     (USB3_BASE + 0x3E00), which is proprietary to MediaTek;
- *   - the Gemian 4.4 kernel's xhci-mtk.c/.h for the IPPC struct layout, the
- *     per-port control bits and the STS1 stability mask, and clk-mt6771.c for
- *     the infra gate (infra_usb = INFRA2 bit 1), which is GPL;
- *   - this device's own DTB for the three base addresses:
- *     ssusb_base 0x11200000, ssusb_ippc 0x11203e00, ssusb_sif2 0x11f40000;
+ *   - LK's mt6771 mt_ssusb_sifslv_ippc.h for the IPPC map and its base
+ *     (USB3_BASE + 0x3E00), and mt_usb.h for the PHY block bases inside sif2;
+ *     both proprietary to MediaTek;
+ *   - the Gemian 4.4 kernel for the IPPC struct layout, the per-port control
+ *     bits and the STS1 stability mask (xhci-mtk), the U2 T-PHY register map
+ *     and its host-mode sequence (phy-mt65xx-usb3.c), and the infra gate
+ *     (clk-mt6771.c: infra_usb = INFRA2 bit 1); GPL;
+ *   - this device's own DTB for the three bases: ssusb_base 0x11200000,
+ *     ssusb_ippc 0x11203e00, ssusb_sif2 0x11f40000;
  *   - the xHCI specification for everything at ssusb_base (CAPLENGTH,
  *     HCSPARAMS1, USBCMD/USBSTS, PORTSC), which is public and vendor-neutral.
  * Neither of the first two may be copied into UnoDOS. The code below is this
@@ -55,11 +71,12 @@
  *
  * ON SCREEN, so a wedge is visible without a reboot. Each phase paints a
  * 32x32 block left to right as it COMPLETES:
- *   blue 320   gates read        cyan 368   clock ungated
- *   yellow 416 IPPC read         orange 464 xHCI read
- *   white 512  host enabled      green 560  finished, log is complete
+ *   blue 320   gates read         cyan 368   clock ungated / already running
+ *   yellow 416 IPPC read          orange 464 xHCI read as handed over
+ *   white 512  reset released + host and ports enabled
+ *   purple 560 T-PHY put in host mode
+ *   green 608  finished, log is complete
  * A red block with hex rows is the fault handler: the probe took an exception.
- * The screen otherwise stays as LK left it.
  *
  * Then: hold power, boot trixie, ./readlog.sh.
  */
@@ -72,7 +89,6 @@
 
 /* ---- infracfg: the clock gate (clk-mt6771.c) ------------------------------ */
 #define INFRACFG      0x10001000u
-#define INFRA_CLR0    (INFRACFG + 0x84)
 #define INFRA_STA0    (INFRACFG + 0x90)
 #define INFRA_STA1    (INFRACFG + 0x94)
 #define INFRA_CLR2    (INFRACFG + 0xA8)
@@ -100,7 +116,9 @@
 #define IPPC_HW_ID     0xA0
 #define IPPC_HW_SUB_ID 0xA4
 
+#define CTRL0_IP_SW_RST (1u << 0)
 #define CTRL1_HOST_PDN  (1u << 0)
+#define CTRL2_DEV_PDN   (1u << 0)
 #define PORT_DIS        (1u << 0)
 #define PORT_PDN        (1u << 1)
 #define PORT_HOST_SEL   (1u << 2)
@@ -113,13 +131,51 @@
 #define STS1_READY (STS1_SYSPLL_STABLE | STS1_REF_RST | STS1_SYS125_RST | \
                     STS1_XHCI_RST)
 
+/* ---- the U2 T-PHY (phy-mt65xx-usb3.c; COM block at sif2 + 0x300) ---------- */
+#define U2COM          (SSUSB_SIF2 + 0x300)
+#define PHY_ACR5       (U2COM + 0x14)
+#define PHY_ACR6       (U2COM + 0x18)
+#define PHY_DTM0       (U2COM + 0x68)
+#define PHY_DTM1       (U2COM + 0x6C)
+
+#define PA5_HSTX_SRCTRL     (7u << 12)
+#define PA5_HSTX_SRCTRL_4   (4u << 12)
+#define PA6_OTG_VBUSCMP_EN  (1u << 20)
+
+#define P2C_FORCE_DATAIN       (1u << 23)
+#define P2C_FORCE_DM_PULLDOWN  (1u << 21)
+#define P2C_FORCE_DP_PULLDOWN  (1u << 20)
+#define P2C_FORCE_XCVRSEL      (1u << 19)
+#define P2C_FORCE_SUSPENDM     (1u << 18)
+#define P2C_FORCE_TERMSEL      (1u << 17)
+#define P2C_RG_DATAIN          (0xFu << 10)
+#define P2C_RG_DMPULLDOWN      (1u << 7)
+#define P2C_RG_DPPULLDOWN      (1u << 6)
+#define P2C_RG_XCVRSEL         (3u << 4)
+#define P2C_RG_TERMSEL         (1u << 2)
+#define P2C_DTM0_PART_MASK (P2C_FORCE_DATAIN | P2C_FORCE_DM_PULLDOWN | \
+                            P2C_FORCE_DP_PULLDOWN | P2C_FORCE_XCVRSEL | \
+                            P2C_FORCE_TERMSEL | P2C_RG_DMPULLDOWN | \
+                            P2C_RG_DPPULLDOWN | P2C_RG_TERMSEL)
+
+#define P2C_RG_VBUSVALID (1u << 5)
+#define P2C_RG_SESSEND   (1u << 4)
+#define P2C_RG_AVALID    (1u << 2)
+
+/* ---- PORTSC (xHCI spec) --------------------------------------------------- */
+#define PORTSC_CCS  (1u << 0)
+#define PORTSC_PED  (1u << 1)          /* write-1-to-DISABLE: never write 1 */
+#define PORTSC_PP   (1u << 9)
+#define PORTSC_RW1C 0x00FE0000u        /* the change bits, all write-1-clear */
+
 /* ---- beacons -------------------------------------------------------------- */
 #define BCN_GATES  320
 #define BCN_UNGATE 368
 #define BCN_IPPC   416
 #define BCN_XHCI   464
 #define BCN_HOST   512
-#define BCN_DONE   560
+#define BCN_PHY    560
+#define BCN_DONE   608
 
 static void spin_us(c64_u32 us)
 {
@@ -159,12 +215,11 @@ static int gates_read(void)
     return usb_gated;
 }
 
-/* ---- phase 3: the IP port controller -------------------------------------- */
-static void ippc_read(void)
+/* ---- the IP port controller ----------------------------------------------- */
+static void ippc_read(const char *when)
 {
     c64_u32 id, sub, c0, c1, c2, c3, s1, s2, mac, xcap;
 
-    announce("the IPPC block at 0x11203e00");
     id  = R32(SSUSB_IPPC + IPPC_HW_ID);
     sub = R32(SSUSB_IPPC + IPPC_HW_SUB_ID);
     c0  = R32(SSUSB_IPPC + IPPC_PW_CTRL0);
@@ -176,33 +231,31 @@ static void ippc_read(void)
     mac = R32(SSUSB_IPPC + IPPC_MAC_CAP);
     xcap = R32(SSUSB_IPPC + IPPC_XHCI_CAP);
 
-    c64_logf("usbprobe: HW_ID=%08x HW_SUB_ID=%08x\n", id, sub);
-    c64_logf("usbprobe: PW_CTRL0=%08x (SW_RST %d) CTRL1=%08x (HOST_PDN %d)\n",
-             c0, (int)(c0 & 1), c1, (int)(c1 & 1));
-    c64_logf("usbprobe: PW_CTRL2=%08x (DEV_PDN %d) CTRL3=%08x\n",
-             c2, (int)(c2 & 1), c3);
-    c64_logf("usbprobe: PW_STS1=%08x PW_STS2=%08x (STS1 ready mask %s)\n",
-             s1, s2, (s1 & STS1_READY) == STS1_READY ? "MET" : "not met");
-    c64_logf("usbprobe: MAC_CAP=%08x XHCI_CAP=%08x -> %d u3 port(s), "
-             "%d u2 port(s)\n", mac, xcap, (int)(xcap & 0xFF),
+    c64_logf("usbprobe [%s]: HW_ID=%08x HW_SUB_ID=%08x\n", when, id, sub);
+    c64_logf("usbprobe [%s]: PW_CTRL0=%08x (SW_RST %d) CTRL1=%08x "
+             "(HOST_PDN %d)\n", when, c0, (int)(c0 & 1), c1, (int)(c1 & 1));
+    c64_logf("usbprobe [%s]: PW_CTRL2=%08x (DEV_PDN %d) CTRL3=%08x\n",
+             when, c2, (int)(c2 & 1), c3);
+    c64_logf("usbprobe [%s]: PW_STS1=%08x PW_STS2=%08x (STS1 ready mask %s)\n",
+             when, s1, s2, (s1 & STS1_READY) == STS1_READY ? "MET" : "not met");
+    c64_logf("usbprobe [%s]: MAC_CAP=%08x XHCI_CAP=%08x -> %d u3 port(s), "
+             "%d u2 port(s)\n", when, mac, xcap, (int)(xcap & 0xFF),
              (int)((xcap >> 8) & 0xFF));
 
-    /* An all-ones read is what unassigned or unclocked MMIO looks like, and
-     * it is worth saying out loud rather than leaving somebody to notice. */
     if (id == 0xFFFFFFFFu)
         c64_log("usbprobe: HW_ID reads all-ones -- nothing is answering at "
                 "this address\n");
 }
 
-/* ---- phases 4 and 6: the xHCI itself (public spec) ------------------------ */
+/* ---- the xHCI itself (public spec) ---------------------------------------- */
 /* CAPLENGTH is the byte offset from ssusb_base to the operational registers;
- * the port registers are a 0x10-byte block each starting at op+0x400. */
-static void xhci_read(const char *when)
+ * the port registers are a 0x10-byte block each starting at op+0x400. Returns
+ * the operational base, or 0 if the controller is not answering. */
+static c64_u32 xhci_read(const char *when)
 {
     c64_u32 caplen, hciver, hcs1, hcc1, op, cmd, sts;
-    int ports, i;
+    int ports, i, connected = 0;
 
-    announce("the xHCI capability registers at 0x11200000");
     caplen = R8(SSUSB_BASE + 0x00);
     hciver = R16(SSUSB_BASE + 0x02);
     hcs1   = R32(SSUSB_BASE + 0x04);
@@ -214,13 +267,13 @@ static void xhci_read(const char *when)
         c64_logf("usbprobe [%s]: CAPLENGTH %02x is not plausible -- the "
                  "controller is not answering; skipping the operational "
                  "registers\n", when, caplen);
-        return;
+        return 0;
     }
     op = SSUSB_BASE + caplen;
     cmd = R32(op + 0x00);
     sts = R32(op + 0x04);
     c64_logf("usbprobe [%s]: USBCMD=%08x (RUN %d) USBSTS=%08x (HCHalted %d, "
-             "CNR %d)\n", when, cmd, (int)(cmd & 1), sts, (int)((sts >> 0) & 1),
+             "CNR %d)\n", when, cmd, (int)(cmd & 1), sts, (int)(sts & 1),
              (int)((sts >> 11) & 1));
 
     ports = (int)((hcs1 >> 24) & 0xFF);
@@ -232,35 +285,62 @@ static void xhci_read(const char *when)
         c64_logf("  port %d: PORTSC=%08x CCS=%d PED=%d PP=%d speed=%d\n",
                  i + 1, psc, (int)(psc & 1), (int)((psc >> 1) & 1),
                  (int)((psc >> 9) & 1), (int)((psc >> 10) & 0xF));
+        if (psc & PORTSC_CCS)
+            connected = i + 1;
     }
     /* THE LINE THAT DECIDES THE MILESTONE. A connected port means the Type-C
      * role, VBUS and the PHY are all already good enough to see a device, and
-     * the whole of point 4 in this file's header is work that does not exist. */
-    for (i = 0; i < ports; i++)
-        if (R32(op + 0x400 + 0x10u * (c64_u32)i) & 1) {
-            c64_logf("usbprobe [%s]: *** A DEVICE IS CONNECTED on port %d ***"
-                     " -- role, VBUS and PHY are already good enough to "
-                     "enumerate\n", when, i + 1);
-            return;
-        }
-    c64_logf("usbprobe [%s]: no port reports a connection\n", when);
+     * the whole Type-C lane is work that does not exist. */
+    if (connected)
+        c64_logf("usbprobe [%s]: *** A DEVICE IS CONNECTED on port %d *** -- "
+                 "role, VBUS and PHY are good enough to enumerate\n",
+                 when, connected);
+    else
+        c64_logf("usbprobe [%s]: no port reports a connection\n", when);
+    return op;
 }
 
-/* ---- phase 5: the smallest bring-up that makes PORTSC mean anything ------- */
+/* ---- release the reset and power the host up ------------------------------ */
 static void host_enable(void)
 {
     c64_u32 xcap, v, s1;
     int u3, u2, i;
 
-    c64_log("usbprobe: enabling the host IP (no IP_SW_RST -- see the header)\n");
+    c64_log("usbprobe: pulsing IP_SW_RST, then powering the host up\n");
     c64_log_flush();
 
+    /* The IP arrives held in reset (v1's finding). Pulse rather than merely
+     * release, so the block starts from a defined state whichever way it was
+     * left: assert, settle, deassert. */
+    v = R32(SSUSB_IPPC + IPPC_PW_CTRL0);
+    R32(SSUSB_IPPC + IPPC_PW_CTRL0) = v | CTRL0_IP_SW_RST;
+    __asm__ volatile("dsb sy" ::: "memory");
+    spin_us(10);
+    v = R32(SSUSB_IPPC + IPPC_PW_CTRL0);
+    R32(SSUSB_IPPC + IPPC_PW_CTRL0) = v & ~CTRL0_IP_SW_RST;
+    __asm__ volatile("dsb sy" ::: "memory");
+    spin_us(10);
+    c64_logf("usbprobe: PW_CTRL0 now %08x (SW_RST %d)\n",
+             R32(SSUSB_IPPC + IPPC_PW_CTRL0),
+             (int)(R32(SSUSB_IPPC + IPPC_PW_CTRL0) & 1));
+
+    /* Keep the device IP powered down. It powers on by default, and leaving
+     * it on is what stops the host side owning the port. */
+    v = R32(SSUSB_IPPC + IPPC_PW_CTRL2);
+    R32(SSUSB_IPPC + IPPC_PW_CTRL2) = v | CTRL2_DEV_PDN;
+
+    /* power on the host IP */
     v = R32(SSUSB_IPPC + IPPC_PW_CTRL1);
     R32(SSUSB_IPPC + IPPC_PW_CTRL1) = v & ~CTRL1_HOST_PDN;
 
+    /* Re-read the port counts AFTER the reset: the ones v1 logged were read
+     * while the IP was still held, and a capability register read in that
+     * state is not evidence of anything. */
     xcap = R32(SSUSB_IPPC + IPPC_XHCI_CAP);
     u3 = (int)(xcap & 0xFF);
     u2 = (int)((xcap >> 8) & 0xFF);
+    c64_logf("usbprobe: XHCI_CAP after reset = %08x -> %d u3, %d u2\n",
+             xcap, u3, u2);
     if (u3 > 4) u3 = 4;                     /* the IPPC has 4 u3 slots */
     if (u2 > 5) u2 = 5;                     /* ...and 5 u2 slots       */
 
@@ -292,31 +372,77 @@ static void host_enable(void)
              R32(SSUSB_IPPC + IPPC_PW_CTRL1),
              R32(SSUSB_IPPC + IPPC_U3_CTRL(0)),
              R32(SSUSB_IPPC + IPPC_U2_CTRL(0)));
-
-    /* A port takes time to see a device even when everything is right: the
-     * hub has to be detected and debounced. Give it a beat before re-reading
-     * rather than concluding "nothing connected" from an instant sample. */
-    spin_us(300000);
 }
 
-/* ---- phase 7: the T-PHY, last because it is the least certain ------------- */
-static void tphy_read(void)
+/* ---- put the U2 PHY into host mode ---------------------------------------- */
+/* The four writes that matter, in the vendor driver's order. The last one is
+ * the whole of "be a host" as far as the analogue side is concerned: with
+ * SESSEND clear and VBUSVALID and AVALID set, the PHY believes it is the
+ * A-device on a powered bus, which is what makes it drive the pull-downs and
+ * see a device's pull-up. */
+static void phy_host_init(void)
 {
-    announce("the T-PHY at 0x11f40000 (U2 COM block at +0x300)");
-    c64_logf("usbprobe: sif2+0x300 %08x %08x %08x %08x\n",
-             R32(SSUSB_SIF2 + 0x300), R32(SSUSB_SIF2 + 0x304),
-             R32(SSUSB_SIF2 + 0x308), R32(SSUSB_SIF2 + 0x30C));
-    c64_logf("usbprobe: sif2+0x700 (SPLLC) %08x  sif2+0x900 (U3PHYD) %08x\n",
-             R32(SSUSB_SIF2 + 0x700), R32(SSUSB_SIF2 + 0x900));
+    c64_u32 v;
+
+    announce("the U2 T-PHY COM block at 0x11f40300");
+    c64_logf("usbprobe: PHY before: ACR5=%08x ACR6=%08x DTM0=%08x DTM1=%08x\n",
+             R32(PHY_ACR5), R32(PHY_ACR6), R32(PHY_DTM0), R32(PHY_DTM1));
+
+    /* stop forcing suspend, and stop forcing the transceiver's pull-downs:
+     * let the port's own state machine drive them */
+    v = R32(PHY_DTM0);
+    v &= ~(P2C_FORCE_SUSPENDM | P2C_RG_XCVRSEL);
+    v &= ~(P2C_RG_DATAIN | P2C_DTM0_PART_MASK);
+    R32(PHY_DTM0) = v;
+
+    /* OTG VBUS comparator on */
+    v = R32(PHY_ACR6);
+    R32(PHY_ACR6) = v | PA6_OTG_VBUSCMP_EN;
+
+    /* the host declaration */
+    v = R32(PHY_DTM1);
+    v |= P2C_RG_VBUSVALID | P2C_RG_AVALID;
+    v &= ~P2C_RG_SESSEND;
+    R32(PHY_DTM1) = v;
+
+    /* USB 2.0 slew-rate calibration, the vendor's default step */
+    v = R32(PHY_ACR5);
+    R32(PHY_ACR5) = (v & ~PA5_HSTX_SRCTRL) | PA5_HSTX_SRCTRL_4;
+    __asm__ volatile("dsb sy" ::: "memory");
+
+    c64_logf("usbprobe: PHY after:  ACR5=%08x ACR6=%08x DTM0=%08x DTM1=%08x\n",
+             R32(PHY_ACR5), R32(PHY_ACR6), R32(PHY_DTM0), R32(PHY_DTM1));
+}
+
+/* ---- make sure the root port is powered ----------------------------------- */
+/* PORTSC is full of write-1-to-clear change bits, and PED is write-1-to-
+ * DISABLE, so a naive read-modify-write of this register disables the port it
+ * was meant to power. Mask both off before writing anything back. */
+static void port_power(c64_u32 op, int ports)
+{
+    int i;
+    for (i = 0; i < ports; i++) {
+        c64_u32 a = op + 0x400 + 0x10u * (c64_u32)i;
+        c64_u32 psc = R32(a);
+        if (psc & PORTSC_PP)
+            continue;
+        c64_logf("usbprobe: port %d came up unpowered (PORTSC=%08x); "
+                 "setting PP\n", i + 1, psc);
+        R32(a) = (psc & ~(PORTSC_RW1C | PORTSC_PED)) | PORTSC_PP;
+        __asm__ volatile("dsb sy" ::: "memory");
+    }
 }
 
 /* ---- boot ---------------------------------------------------------------- */
 void c_main(void *dtb)
 {
+    c64_u32 op;
+
     c64_beacon(224, 0xFFFF00FFu);          /* MAGENTA: C reached */
     c64_log_survey();
     c64_log_init();
-    c64_log("usbprobe payload: what did LK leave the USB host in?\n");
+    c64_log("usbprobe payload: bring the USB host up far enough to see a "
+            "device\n");
     mmu_init();
     c64_log_survey_report();
 
@@ -340,32 +466,48 @@ void c_main(void *dtb)
         R32(INFRA_CLR2) = 1u << GATE_USB_BIT;
         __asm__ volatile("dsb sy" ::: "memory");
         spin_us(100);
-        c64_logf("usbprobe: INFRA_PDN_STA2 now %08x -- infra_usb %s\n",
-                 R32(INFRA_STA2),
-                 ((R32(INFRA_STA2) >> GATE_USB_BIT) & 1) ? "STILL GATED"
-                                                         : "running");
+        c64_logf("usbprobe: INFRA_PDN_STA2 now %08x\n", R32(INFRA_STA2));
     } else {
         c64_log("usbprobe: the SSUSB clock was already running at handover -- "
-                "LK left something of the USB block alive\n");
+                "LK gates nothing\n");
     }
     c64_beacon(BCN_UNGATE, 0xFF00FFFFu);           /* CYAN */
     c64_log_flush();
 
-    ippc_read();
+    announce("the IPPC block at 0x11203e00");
+    ippc_read("as handed over");
     c64_beacon(BCN_IPPC, 0xFFFFFF00u);             /* YELLOW */
     c64_log_flush();
 
+    announce("the xHCI capability registers at 0x11200000");
     xhci_read("as handed over");
     c64_beacon(BCN_XHCI, 0xFFFF8000u);             /* ORANGE */
     c64_log_flush();
 
     host_enable();
     c64_beacon(BCN_HOST, 0xFFFFFFFFu);             /* WHITE */
+    ippc_read("after host enable");
     c64_log_flush();
 
-    ippc_read();
-    xhci_read("after host enable");
-    tphy_read();
+    phy_host_init();
+    c64_beacon(BCN_PHY, 0xFF8000FFu);              /* PURPLE */
+    c64_log_flush();
+
+    op = xhci_read("after reset + PHY");
+    if (op) {
+        c64_u32 hcs1 = R32(SSUSB_BASE + 0x04);
+        int ports = (int)((hcs1 >> 24) & 0xFF);
+        if (ports > 16)
+            ports = 16;
+        port_power(op, ports);
+        /* A port takes time to see a device even when everything else is
+         * right: the hub has to be detected and debounced. Give it a beat
+         * rather than concluding "nothing connected" from an instant sample. */
+        c64_log("usbprobe: waiting 500 ms for connect debounce...\n");
+        c64_log_flush();
+        spin_us(500000);
+        xhci_read("after debounce");
+    }
 
     c64_log("usbprobe: done. Hold power, boot trixie, ./readlog.sh\n");
     c64_log_flush();
