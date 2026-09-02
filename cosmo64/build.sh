@@ -134,7 +134,9 @@ shell )
     for f in $PCORE; do $CC $SHCF -c ../pc64/\$f.c -o build/p_\$f.o; done && \
     $CC $USBCF -DC64_XDMA -c ../pc64/xhci.c -o build/p_xhci.o && \
     $CC $USBCF -Duno_usb_get_config=c64_usb_get_config \
-        -Duno_usb_control=c64_usb_control -c ../pc64/usbhid.c -o build/p_usbhid.o && \
+        -Duno_usb_control=c64_usb_control \
+        -Duno_usb_setup_intr_in=c64_usb_setup_intr_in \
+        -c ../pc64/usbhid.c -o build/p_usbhid.o && \
     if $OBJDUMP -h build/p_xhci.o | grep -Eq '\.bss +0*[1-9a-f]'; then \
         echo 'BUILD TRIPWIRE: xhci.o still has a .bss -- DMA memory would be cached' >&2; exit 1; fi && \
     $OBJDUMP -h build/p_xhci.o | grep -q '\.xdma' || { echo 'BUILD TRIPWIRE: no .xdma section in xhci.o' >&2; exit 1; } && \

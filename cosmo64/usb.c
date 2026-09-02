@@ -45,6 +45,32 @@ int c64_usb_get_config(int dev, void *buf, int len)
     n = uno_usb_get_config(dev, g_bounce, len);
     for (i = 0; i < n && i < len; i++)
         ((unsigned char *)buf)[i] = g_bounce[i];
+    /* say what came back: the interfaces and endpoints usbhid.c is about to
+     * walk, so a claim that finds nothing can be read against the descriptor
+     * it was shown */
+    if (n < 9) {
+        c64_logf("usb: get_config dev %d -> %d bytes (no descriptor)\n", dev, n);
+        return n;
+    }
+    {
+        int total = g_bounce[2] | (g_bounce[3] << 8), at = 0;
+        if (total > n) total = n;
+        c64_logf("usb: get_config dev %d -> %d bytes, wTotalLength %d, "
+                 "config %d\n", dev, n, total, g_bounce[5]);
+        while (at + 2 <= total && g_bounce[at] >= 2) {
+            int bl = g_bounce[at], bt = g_bounce[at + 1];
+            if (at + bl > total) break;
+            if (bt == 0x04 && bl >= 9)
+                c64_logf("    iface %d: class %02x/%02x/%02x\n", g_bounce[at + 2],
+                         g_bounce[at + 5], g_bounce[at + 6], g_bounce[at + 7]);
+            else if (bt == 0x05 && bl >= 7)
+                c64_logf("      ep %02x attr %02x mps %d interval %d\n",
+                         g_bounce[at + 2], g_bounce[at + 3],
+                         g_bounce[at + 4] | (g_bounce[at + 5] << 8),
+                         g_bounce[at + 6]);
+            at += bl;
+        }
+    }
     return n;
 }
 
@@ -62,6 +88,60 @@ int c64_usb_control(int dev, unsigned char rt, unsigned char req,
         for (i = 0; i < n && i < len; i++)
             ((unsigned char *)data)[i] = g_bounce[i];
     return n;
+}
+
+/* Interposed the same way, for visibility only: usbhid.c claims an endpoint
+ * through uno_usb_setup_intr_in() and says nothing when that fails, and the
+ * first hardware boot of M4 enumerated four devices and claimed zero
+ * endpoints without a word about why. */
+int c64_usb_setup_intr_in(int dev, int in_addr, int mps)
+{
+    int h = uno_usb_setup_intr_in(dev, in_addr, mps);
+    c64_logf("usb: setup_intr_in dev %d ep %02x mps %d -> %s%d\n", dev,
+             in_addr, mps, h < 0 ? "FAILED " : "handle ", h);
+    return h;
+}
+
+/* ---- the MediaTek endpoint-context words -----------------------------------
+ * Called by xhci.c on every endpoint context it builds, before Configure
+ * Endpoint (uno_xhci_set_ep_quirk). MediaTek's SSUSB host keeps a bandwidth
+ * schedule of its own and reads it from the endpoint context's reserved
+ * words: DW5 = BPKTS[5:0] | BCSCOUNT[10:8] | BBM[11], DW6 = BOFFSET[13:0] |
+ * BREPEAT[30:16]. Without them a periodic endpoint is never serviced. The
+ * values are the vendor driver's for a full/low-speed periodic endpoint
+ * behind a transaction translator (both receivers on this hub): one packet
+ * per microframe, up to three complete-splits, no burst, offset 0, no
+ * repeat; and BPKTS=1 alone for one on a root port. Bulk and control
+ * endpoints need nothing.
+ *
+ * The same pass writes the INTERVAL field (DW0[23:16]), which setup_ep()
+ * leaves at 0. That is "every microframe", outside the 3..18 the spec allows
+ * a full-speed interrupt endpoint, and a value a strict controller rejects
+ * at Configure Endpoint -- and one the vendor scheduler cannot fit its five-
+ * microframe budget into. 3 (= 8 microframes = 1 ms) is the fastest legal
+ * full-speed interval; 7 (16 ms) for low speed, which cannot poll faster.
+ * (Fact sources: the Gemian kernel's xhci-mtk-sch.c; the xHCI spec 6.2.3.) */
+static void mtk_ep_quirk(unsigned char *epctx, int eptype, int speed, int has_tt)
+{
+    volatile unsigned int *dw = (volatile unsigned int *)epctx;
+    int periodic = (eptype == 7 || eptype == 3 ||       /* interrupt in/out */
+                    eptype == 5 || eptype == 1);        /* isoch in/out     */
+    if (!periodic)
+        return;
+    if (speed == 1 || speed == 2) {                     /* FS, LS */
+        dw[0] = (dw[0] & ~(0xFFu << 16)) | ((speed == 2 ? 7u : 3u) << 16);
+        if (has_tt) {
+            dw[5] |= 1u | (3u << 8);                    /* BPKTS 1, BCSCOUNT 3 */
+            dw[6] |= 0;                                 /* BOFFSET 0, BREPEAT 0 */
+        } else {
+            dw[5] |= 1u;                                /* BPKTS 1 */
+        }
+    } else {                                            /* HS, SS */
+        if (!((dw[0] >> 16) & 0xFF))
+            dw[0] |= 3u << 16;                          /* 1 ms, if unset */
+        dw[5] |= 1u;                                    /* BPKTS 1, no burst */
+    }
+    __asm__ volatile("dsb sy" ::: "memory");
 }
 
 /* usbhid's keyboard callback: (scan, uni, ctrl, mods) in the same space the
@@ -85,6 +165,7 @@ void c64_usb_init(void)
     if (!c64_ssusb_host_up())
         return;
     c64_pci_expose_xhci(1);            /* now there is a function to find */
+    uno_xhci_set_ep_quirk(mtk_ep_quirk);
     /* A 64-bit register access, before xhci.c makes hundreds of them: it
      * writes DCBAAP, CRCR, ERSTBA and ERDP as 64-bit stores. If this bus
      * splits or rejects them the fault handler says so here, next to a line
