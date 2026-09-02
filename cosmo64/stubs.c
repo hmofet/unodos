@@ -87,7 +87,6 @@ I0(uno_usbio_control)
 I0(uno_usbio_bulk_eps)
 I0(uno_usbio_bulk_in)
 I0(uno_usbio_bulk_out)
-V0(uno_dbg_net_trace)
 /* -1, NOT 0: unoauto.h's contract is "0 = the budget is spent, bail out" and
  * "-1 = no deadline armed, run free". net.c polls this inside net_dns_query's
  * wait loop, so the obvious I0() stub would have aborted every DNS lookup on

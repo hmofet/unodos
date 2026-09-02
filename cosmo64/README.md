@@ -632,3 +632,50 @@ Needs the USB-C hub with the AX88179B (`0b95:1790`, the one M4 enumerated)
 and a cable in it. Read the result with `cosmo64/readlog.sh`: the `net:` lines
 distinguish no adapter / no link / no lease / leased, because those are four
 different bugs and a hardware boot gets one log to tell them apart.
+
+### M5 boot 1: "the mouse stopped working" was a twenty-second frame
+
+The desktop came up, the AW9523 keyboard reported a key, and then the machine
+stopped answering. No crash record, no fault -- and the log simply ended, one
+line after the keypress, with neither the `net:` line nor the two-second
+`perf:` report that should have followed. Three facts read together give the
+whole thing:
+
+- `pc64_net_boot()` fires at frame 35, about 1.2 s in -- *before* the first
+  `perf:` report, which is why there is no `perf:` line to bound it with;
+- the log's push to the eMMC rides the poll loop, so whatever wedges the frame
+  loop also stops the log reaching storage. **The log ends where the wedge
+  begins, and everything logged after it died in DRAM.**
+- `ax88179.c`'s `ax_recv()` calls `uno_usb_bulk_in()` **synchronously**, and a
+  bulk IN on an idle NIC never completes -- so it costs `poll_xfer`'s full
+  **5-second** timeout. `net_poll()` drains with `while (recv() > 0)`, and the
+  shell calls `net_poll()` **four times a frame**.
+
+So a bound adapter with nothing arriving cost about twenty seconds per frame,
+for the rest of the session. The machine was never hung; it was alive and
+spending all of its time waiting for a packet nobody had sent. From the front
+that is indistinguishable from a dead mouse.
+
+Three fixes, and the second and third are the general lessons:
+
+1. **Bulk IN is asynchronous here.** `xhci.h` already carries
+   `uno_usb_bulk_in_arm()` / `_poll()`, added "for the NIC recv path", one
+   outstanding transfer per device, poll returning 0 while it is in flight.
+   `ax88179.c` does not use them and does not have to: this lane already
+   renames its bulk calls onto `usb.c` for the bounce, so the same seam is
+   where the sync-to-async adaptation goes. "Still in flight" returns 0, which
+   is exactly the "nothing arrived" `ax_recv` already handles.
+2. **A budget measured in iterations is not a budget.** The first cut copied
+   x86's `for (i = 0; i < 600; i++) { ...; budget -= 5; }`, which assumes each
+   pass costs the 5 ms it sleeps. One call that pays a 5-second USB timeout
+   turns that "8 second" bound into hours. Every wait in `netup.c` is bounded
+   by CNTPCT now, so the worst case is the deadline plus one in-flight call.
+3. **Do not bind the stack until the link is up.** `net_init()` ran before the
+   link wait, so a bring-up that failed still left the adapter bound and the
+   shell draining it every frame forever. Failure now leaves the stack
+   unbound, and `net_poll()` returns at its first line.
+
+Also restored: `uno_dbg_net_trace()` goes to the log instead of a silent stub,
+and every stage in `netup.c` logs **and flushes before** the call that could
+block -- because a breadcrumb written after the step is a breadcrumb that
+never reaches the disk.
