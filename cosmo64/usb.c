@@ -33,6 +33,15 @@
  * and a second .xdma placed elsewhere is a buffer the MMU map would miss. */
 #pragma clang section bss = ".xdma"
 static unsigned char g_bounce[512] __attribute__((aligned(64)));
+/* The NIC's data path (M5). ax88179.c hands uno_usb_bulk_in/out its own
+ * static tx[2048] / g_rx[4096], and uno_usb_bulk_* put the caller's pointer
+ * straight into the TRB, so those buffers would have to be uncached. Moving
+ * the DRIVER's statics into .xdma with the same pragma would do it in one
+ * line -- and would then make it parse every received frame out of Device
+ * memory a byte at a time, which is the wrong half to make slow. Bouncing
+ * instead keeps the staging area uncached and the parse cached. 4 KiB is
+ * ax88179.c's g_rx; the +8 covers its TX header. */
+static unsigned char g_bbounce[4096 + 64] __attribute__((aligned(64)));
 #pragma clang section bss = ""
 
 static int g_up, g_nkbd, g_nmouse;
@@ -117,6 +126,29 @@ int c64_usb_control(int dev, unsigned char rt, unsigned char req,
     if (data && len && (rt & 0x80))                  /* IN: copy the answer out */
         for (i = 0; i < n && i < len; i++)
             ((unsigned char *)data)[i] = g_bounce[i];
+    return n;
+}
+
+int c64_usb_bulk_out(int dev, void *data, int len)
+{
+    int i;
+    if (len < 0 || len > (int)sizeof g_bbounce)
+        return -1;
+    for (i = 0; i < len; i++)
+        g_bbounce[i] = ((const unsigned char *)data)[i];
+    return uno_usb_bulk_out(dev, g_bbounce, len);
+}
+
+int c64_usb_bulk_in(int dev, void *data, int len)
+{
+    int n, i;
+    if (len < 0)
+        return -1;
+    if (len > (int)sizeof g_bbounce)
+        len = (int)sizeof g_bbounce;
+    n = uno_usb_bulk_in(dev, g_bbounce, len);
+    for (i = 0; i < n && i < len; i++)
+        ((unsigned char *)data)[i] = g_bbounce[i];
     return n;
 }
 

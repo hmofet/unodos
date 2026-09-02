@@ -575,3 +575,60 @@ under `qharness.py`, pixel-exact, with the Control Panel reporting
 `2160x1080`. (`./build.sh` also links `msdc.o` now — the m0 target had been
 unbuildable since `log.c`'s crash path started calling `c64_log_flush()`,
 which lives there.)
+
+## M5 (2026-09-02): the network stack, wired to the one NIC this box can have
+
+`net_*` was stubbed to zero, so the honest answer to "does networking work"
+was no -- nothing was linked. It is linked now: `net.c` (the TCP/IP stack)
+and `ax88179.c` (the ASIX USB Gigabit driver) compile unchanged, and
+`netup.c` provides the one function the shell actually calls.
+
+**Why a new file and not `pc64_http.c`.** The shell's bring-up entry point is
+`pc64_net_boot()`, which lives in `pc64_http.c` -- 1273 lines that walk a
+table of eight NIC families (six of them PCIe parts that cannot exist on this
+SoC) and pull in TLS, the cookie jar, the HTTP cache and unolog behind them.
+Nothing else in the linked set references any of it. `netup.c` is that seam,
+Cosmo-shaped: one adapter, the same 8-second budget, the same
+link-before-DHCP ordering -- which is not tidiness, because `ax88179.c`
+programs the MAC medium from the PHY's negotiated speed inside `nic->link()`
+and a mismatched medium silently kills RX (the `tx>0 rx=0` signature the x86
+lane hit on a 100M port). Fourth thing now re-implemented from a file this
+port replaces, after the cursor, the dirty-row present and the desktop size.
+
+**WiFi is not on the list and will not be.** The radio is MediaTek CONNSYS,
+entangled with the consys/CCCI platform devices; there is no route to it from
+bare metal. Wired USB Ethernet is the network on this machine.
+
+**The bulk bounce.** `uno_usb_bulk_in/out` put the CALLER's pointer straight
+into the TRB, and `ax88179.c`'s `tx[2048]` / `g_rx[4096]` are ordinary cached
+`.bss` -- the same non-coherence that made usbhid's stack buffer come back as
+whatever the cache held. The xhci pragma would fix it in one line by moving
+the driver's statics into `.xdma`, and would then make it parse every received
+frame out of Device memory a byte at a time. `usb.c` bounces instead
+(`c64_usb_bulk_in/out`, renamed in at compile time like the control path), so
+the staging area is uncached and the parse is not.
+
+**A stub that would have lied.** `unoauto_deadline_left_ms()` returns `-1` for
+"no deadline armed", not `0` -- `0` means "the budget is spent". `net.c` polls
+it inside `net_dns_query`'s wait loop, so the reflex `I0()` stub would have
+aborted every DNS lookup on its first iteration: an absent subsystem answering
+as though it had already run out of time. Likewise `unoauto_hooks_live` is a
+**variable**, not a function; stubbed as a function, `if (unoauto_hooks_live)`
+reads its address, which is never zero, so every tap point would have called
+through instead of being skipped -- and `net.c` fires one on every frame in
+both directions.
+
+**State: written and gated, NOT yet proven on hardware.** The QEMU virt board
+has no USB, so the gate can only show the path running and reporting honestly
+(`net: no adapter -- ax88179 found=0 bound=0 link=0`). What the device has to
+answer: whether a multi-max-packet bulk transfer works on this controller.
+The M4 finding that a 256-byte control IN "completes" in 0 ms with the buffer
+untouched is still root-caused only as a suspicion -- a TRB length of several
+max packets on EP0 -- and a 4096-byte bulk IN is eight max packets at high
+speed. If bulk IN comes back empty the same way, that suspicion is confirmed
+and the fix is the same shape: ask for less per TRB.
+
+Needs the USB-C hub with the AX88179B (`0b95:1790`, the one M4 enumerated)
+and a cable in it. Read the result with `cosmo64/readlog.sh`: the `net:` lines
+distinguish no adapter / no link / no lease / leased, because those are four
+different bugs and a hardware boot gets one log to tell them apart.
