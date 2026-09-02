@@ -347,12 +347,64 @@ SD slot (`init_storage()` calls `mmc_legacy_init(1)` = id 0 = eMMC only; the
 sole SD-card init in the tree is inside `#if 0`). PMIC VMCH/VMC over PWRAP,
 clock, pinmux, then the public SD init sequence. Queued behind USB.
 
-## M4 (2026-09-01): USB host -- pc64's xhci.c and usbhid.c, unchanged
+## M4 COMPLETE ON HARDWARE (2026-09-02): a USB mouse and keyboard
 
-The USB lane's two files compile here UNCHANGED, on top of three seams that
-all live in this lane. Hardware boot pending as of this writing; both QEMU
-paths are green (there is no xHCI on the virt board, and the log says so in
-one line).
+**The mouse moves the cursor and the cursor stays where it is left** (fifth
+hardware boot). The USB lane's two files, `xhci.c` and `usbhid.c`, compile
+here unchanged apart from one registered hook, on top of three seams that all
+live in this lane. Both QEMU paths are green (there is no xHCI on the virt
+board, and the log says so in one line). Five boots to get there; what each
+one taught is below, because each was a different bug and none of them was
+in the design.
+
+**Boot 1** -- the controller came up on the first try: the Device-mapped DMA
+arena, the rings, Address Device and the hub walk all worked, and the four
+devices behind the hub enumerated (0bda:5411 hub, 0b95:1790 AX88179B,
+046d:c548 Logi Bolt, 046d:c52b Unifying). usbhid then claimed ZERO endpoints,
+silently. **Boot 2** -- with the claim path interposed for logging (compile-
+time renames of `uno_usb_get_config`, `uno_usb_control` and
+`uno_usb_setup_intr_in` onto this lane's wrappers), the failure moved one
+step earlier than expected: every config-descriptor fetch failed, while the
+device-descriptor fetches during enumeration had all succeeded. **Boot 3**
+-- an experiment, the same request at 256, 64, 25 and 9 bytes, timed, with
+USBSTS and ERDP around each: on this controller **a 256-byte control IN on
+the hub "completes" in 0 ms with the buffer untouched**, while 64, 25 and 9
+return the real descriptor. 64 is a short packet too, so it is the 256 itself
+(root cause still open; suspect a TRB length of several max-packets on EP0 --
+the AX88179's bulk transfers will need to know). usbhid asks with 256, got
+zeros, and issued **`SET_CONFIGURATION(0)` on the HUB**, which unconfigures
+it and drops every device behind it -- which is why the receivers, enumerated
+fine a moment earlier, timed out on everything afterwards, on every boot.
+Fix: the bounce fetches the 9-byte header, then exactly `wTotalLength`, the
+way the USB core does, and refuses a header that does not parse. **Boot 4**
+-- both HID interfaces of the Bolt receiver claimed and **the mouse moved**,
+through the MediaTek endpoint-context words (below); but the cursor snapped
+back to the centre, because `touch.c` published its idle position every
+poll. **Boot 5** -- the touch panel reports on the contact edge only, and
+the cursor stays put.
+
+**The MediaTek endpoint-context words** (`usb.c` `mtk_ep_quirk`, through the
+`uno_xhci_set_ep_quirk()` hook added to `xhci.c` as a `seam:` commit with a
+note in `pc64/UNOAUTOMATE-REQUESTS.md`). MediaTek's SSUSB host keeps a
+bandwidth schedule of its own and reads it from the endpoint context's
+reserved DWords (DW5 = BPKTS|BCSCOUNT|BBM, DW6 = BOFFSET|BREPEAT); without
+them a periodic endpoint is never serviced. Both receivers are full-speed
+behind the high-speed hub's transaction translator, the vendor driver's
+scheduled case: one packet per microframe, three complete-splits, no burst,
+offset 0, no repeat. The same pass writes the Interval field, which
+`setup_ep()` leaves at 0 -- outside the 3..18 the spec allows a full-speed
+interrupt endpoint, tolerated by every controller met before this one.
+
+**Open, and filed with the usb lane:** `xhci.c`'s interrupt poll sweeps the
+event ring on a thousand-iteration spin per endpoint, ~5 ms each on this
+core, so a keyboard and a mouse cost ~12 ms per shell loop while active
+(`perf: per loop input` 2 ms -> 12 ms). That caps the loop near 60 Hz and is
+why the mouse feels a little jumpy: one report per loop where the device
+offers one every 2 ms. `usb.c` gates its drain on IMAN.IP so an idle ring is
+skipped (the log prints an `IMAN.IP was set on N of 600 loops` verdict ten
+seconds in; the fifth boot was rebooted before it fired), but a moving mouse
+pays the sweep every loop. The fix is in the poll budget and the ring depth,
+both the usb lane's.
 
 **What the probe found first** (`./build.sh usb`, `usbprobe.c`, two hardware
 boots). LK gates nothing: every `INFRA_PDN_STA` register reads 0, so the
