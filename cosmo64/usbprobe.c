@@ -70,13 +70,23 @@
  * project's; see the same note at the head of msdc.c.
  *
  * ON SCREEN, so a wedge is visible without a reboot. Each phase paints a
- * 32x32 block left to right as it COMPLETES:
- *   blue 320   gates read         cyan 368   clock ungated / already running
- *   yellow 416 IPPC read          orange 464 xHCI read as handed over
- *   white 512  reset released + host and ports enabled
- *   purple 560 T-PHY put in host mode
- *   green 608  finished, log is complete
+ * 32x32 block as it COMPLETES, in this order:
+ *   blue   gates read         cyan   clock ungated / already running
+ *   yellow IPPC read          orange xHCI read as handed over
+ *   white  reset released + host and ports enabled
+ *   purple T-PHY put in host mode
+ *   green  finished, log is complete
  * A red block with hex rows is the fault handler: the probe took an exception.
+ *
+ * THEY RUN TOP TO BOTTOM DOWN THE RIGHT-HAND EDGE, not left to right. The
+ * beacons are painted in the panel's OWN portrait frame (1080x2160 at the
+ * measured base), deliberately: they have to work before the framebuffer is
+ * adopted and before anything is rotated, which is the whole point of having
+ * them. The shell's 270-degree rotation is what makes the desktop land in
+ * landscape, and a run along the panel's top edge lands along one vertical
+ * edge of that view. Nothing is wrong when they appear vertical; it is the
+ * absence of the rotation, not a bug in it. (Observed on hardware
+ * 2026-09-01.)
  *
  * Then: hold power, boot trixie, ./readlog.sh.
  */
