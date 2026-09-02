@@ -90,9 +90,9 @@ shell )
           theme_amiga theme_c64 theme_apple2 theme_next"
   PCORE="fb pc64_libc pc64_math pc64_font pc64_icons pc64_qoi pc64_uui_apps \
          mac_compat pc64_io pc64_write pc64_clock pc64_files pc64_uui \
-         fat pc64_fs hid_kbd"
+         fat pc64_fs hid_kbd net"
   C64="videolfb display platform input stubs i2c kbd touch log msdc blk \
-       ssusb pci usb"
+       ssusb pci usb netup"
 
   # KBDTEST=1: compile the scripted key pad (QEMU gate proof, never shipped)
   [ -n "$KBDTEST" ] && BASECF="$BASECF -DC64_KBDTEST"
@@ -122,6 +122,14 @@ shell )
         -I$QDIR/pc64/bearssl/inc -I$QDIR/unosound -I$QDIR/unomedia \
         -I$QDIR/unoacpi -I$QDIR/unoacpi/uacpi/include -I$QDIR/cosmo64"
 
+  # M5: ax88179.c joins them on the same terms. Its bulk calls are renamed as
+  # well as its control ones, because uno_usb_bulk_in/out put the CALLER's
+  # pointer straight into the TRB and the driver's tx[]/g_rx[] are ordinary
+  # cached .bss. Moving the driver's own statics into .xdma with the xhci
+  # pragma would also work and would then make it parse every received frame
+  # out of Device memory a byte at a time; usb.c bounces instead, so the
+  # staging area is uncached and the parse is not.
+  #
   # M4: the USB lane's xhci.c and usbhid.c, compiled UNCHANGED for this
   # platform. -DUNO_XHCI turns the real driver on (it is inert stubs without
   # it); -include c64_usbglue.h moves every DMA buffer in xhci.c into the
@@ -143,6 +151,11 @@ shell )
         -Duno_usb_control=c64_usb_control \
         -Duno_usb_setup_intr_in=c64_usb_setup_intr_in \
         -c ../pc64/usbhid.c -o build/p_usbhid.o && \
+    $CC $USBCF -Duno_usb_get_config=c64_usb_get_config \
+        -Duno_usb_control=c64_usb_control \
+        -Duno_usb_bulk_in=c64_usb_bulk_in \
+        -Duno_usb_bulk_out=c64_usb_bulk_out \
+        -c ../pc64/ax88179.c -o build/p_ax88179.o && \
     if $OBJDUMP -h build/p_xhci.o | grep -Eq '\.bss +0*[1-9a-f]'; then \
         echo 'BUILD TRIPWIRE: xhci.o still has a .bss -- DMA memory would be cached' >&2; exit 1; fi && \
     $OBJDUMP -h build/p_xhci.o | grep -q '\.xdma' || { echo 'BUILD TRIPWIRE: no .xdma section in xhci.o' >&2; exit 1; } && \

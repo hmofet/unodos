@@ -62,21 +62,38 @@ I0(uno_inst_usable)
 I0(uno_inst_install)
 P0(uno_inst_error)
 
-/* ---- network (dies at M4) ------------------------------------------------ */
-V0(net_init)
-V0(net_poll)
-I0(net_link)
-I0(net_ip)
-I0(net_gw)
-V0(net_dhcp_start)
-I0(net_dhcp_done)
-I0(net_tx_frames)
-I0(net_rx_frames)
-I0(net_link_speed_mbps)
+/* ---- network -------------------------------------------------------------
+ * DIED AT M5: net.c, ax88179.c and netup.c are real, so net_init/net_poll/
+ * the DHCP and counter entry points, ax88179_* and pc64_net_boot are gone
+ * from here. What is left is everything the net stack and the shell's
+ * Network UI reach for that this machine cannot have:
+ *
+ *  - the OTHER NIC families. pc64_http.c's device table names eight; seven
+ *    are PCIe parts or WiFi that cannot exist on this SoC. netup.c replaces
+ *    that table with the one adapter a USB host can carry, but the shell's
+ *    Control Panel still asks each family whether it is present, and the
+ *    honest answer is no.
+ *  - unoauto's tap points, which net.c fires on every frame. The subsystem
+ *    itself is a later milestone (it is what URC rides on); until then the
+ *    taps fire into nothing and the deadline is "no deadline".
+ *  - EFI_USB_IO, ax88179.c's OTHER transport: while firmware-attached on x86
+ *    it drives the adapter through the firmware's USB stack. There is no
+ *    firmware here, so uno_usbio_count() answering 0 is what selects the
+ *    native uno_usb_* path. */
 V0(netdisc_tick)
-I0(pc64_net_boot)
-P0(ax88179_nic)
-I0(ax88179_status)
+I0(uno_usbio_count)
+I0(uno_usbio_info)
+I0(uno_usbio_control)
+I0(uno_usbio_bulk_eps)
+I0(uno_usbio_bulk_in)
+I0(uno_usbio_bulk_out)
+V0(uno_dbg_net_trace)
+/* -1, NOT 0: unoauto.h's contract is "0 = the budget is spent, bail out" and
+ * "-1 = no deadline armed, run free". net.c polls this inside net_dns_query's
+ * wait loop, so the obvious I0() stub would have aborted every DNS lookup on
+ * its first iteration -- a subsystem that is absent answering as though it
+ * had already run out of time. */
+long unoauto_deadline_left_ms(void) { return -1; }
 P0(rtl8152_nic)
 P0(iwl_nic)
 I0(iwl_present)
@@ -191,7 +208,13 @@ V0(uno_seq_beep)
 V0(uno_seq_play)
 V0(unoamp_ui_close)
 V0(unoauto_hook_fire_)
-I0(unoauto_hooks_live)
+/* A VARIABLE, not a function (unoauto.h: `extern int unoauto_hooks_live`).
+ * The hook macro reads it as `if (unoauto_hooks_live)`, and against a
+ * function definition of the same name that reads the function's address --
+ * always non-zero -- so every tap point would call through to the no-op
+ * instead of being skipped. net.c fires one on EVERY frame, tx and rx, so
+ * this is now on the network's hot path. */
+int unoauto_hooks_live;
 
 /* ---- detach: an LK payload is born detached ------------------------------ */
 int uno_pc64_detached(void) { return 1; }
