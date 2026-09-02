@@ -43,6 +43,36 @@ void mmu_on(u64 ttbr0, u64 mair, u64 tcr);
 #define TCR_VAL (25ull | (1ull << 8) | (1ull << 10) | (3ull << 12) \
                  | (1ull << 23) | (2ull << 32))
 
+/* THE SAME MAP, FOR EL2 -- because that is where LK actually leaves us.
+ * Measured 2026-09-01: CurrentEL=2, SCTLR_EL2 = 0x30c50830, i.e. M=0 C=0 I=0.
+ * Every SCTLR_EL1/TTBR0_EL1/TCR_EL1 write this file has made since M1 went
+ * into registers that govern a level this payload never runs at, so the MMU
+ * and both caches have been OFF since first light and all memory has been
+ * Device-nGnRnE. That is why a volatile add loop costs 315 ns an iteration,
+ * why everything must build -mstrict-align (Device memory faults on unaligned
+ * access), and why faults "wedge silently at a level EL1 vectors never see".
+ *
+ * TCR_EL2 is NOT TCR_EL1 with a different name when HCR_EL2.E2H is 0: the
+ * physical-address size lives in PS[18:16] rather than IPS[34:32], there is no
+ * TTBR1 half to disable, and bits 23 and 31 are RES1. Getting that wrong is a
+ * hang, so the two layouts are spelled out separately rather than shared. */
+#define TCR_EL2_VAL (25ull | (1ull << 8) | (1ull << 10) | (3ull << 12) \
+                     | (2ull << 16) | (1ull << 23) | (1ull << 31))
+
+static unsigned cur_el(void)
+{
+    u64 v;
+    __asm__ volatile("mrs %0, CurrentEL" : "=r"(v));
+    return (unsigned)((v >> 2) & 3);
+}
+
+static int e2h_set(void)
+{
+    u64 v;
+    __asm__ volatile("mrs %0, hcr_el2" : "=r"(v));
+    return (v >> 34) & 1;                   /* E2H: EL2 uses the EL1 layout */
+}
+
 static u64 l1[512] __attribute__((aligned(4096)));
 static u64 l2[512] __attribute__((aligned(4096)));
 
@@ -67,5 +97,9 @@ void mmu_init(void)
     __asm__ volatile("dsb sy" ::: "memory");
 
     dcache_inv_all();
-    mmu_on((u64)l1, MAIR_VAL, TCR_VAL);
+    /* At EL2 with E2H clear the register layout differs; with E2H set, EL2
+     * borrows the EL1 layout and the ordinary value is right. mmu_on() picks
+     * the matching registers from CurrentEL for itself. */
+    u64 tcr = (cur_el() == 2 && !e2h_set()) ? TCR_EL2_VAL : TCR_VAL;
+    mmu_on((u64)l1, MAIR_VAL, tcr);
 }
