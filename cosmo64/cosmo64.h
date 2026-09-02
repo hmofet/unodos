@@ -148,6 +148,12 @@ int c64_blk_write(c64_u64 lba, const void *buf, unsigned nblk);
 c64_u64 c64_blk_data_lba(void);
 c64_u64 c64_blk_data_sectors(void);
 
+/* blk.c: the same partition presented to pc64's storage stack as a block
+ * device (LBA 0 = the partition's first sector), and the boot-time report of
+ * what mounted -- the log is the only gate storage has, since the QEMU virt
+ * board has no MSDC. */
+void c64_storage_report(void);
+
 /* display.c: where the frame time goes. c64_perf_loop() is called once per
  * shell loop iteration and reports a breakdown to the log every 2 seconds. */
 void c64_perf_add_poll(c64_u64 cyc);

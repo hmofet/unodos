@@ -267,9 +267,81 @@ MSDC programming interface. The code is this project's; nothing is copied from
 MediaTek's LK sources, which are proprietary and license-incompatible with
 UnoDOS.
 
-Next -- **M3b**: wire `uno_fs_*` / `uno_blk_*` in `stubs.c` to the real driver
-so `.UNO` apps and session persistence work (which also stops the Control
-Panel opening at every boot). Open alongside it: whether the touch mapping is
-*accurate* (the log proves contacts arrive and shows raw/panel/UI for each
-one, but only a human can say whether the pointer landed under the finger),
-and the ramoops zone-order question the survey will answer on the next boot.
+## M3b (2026-09-01): the storage stack above the driver
+
+`blk.c`, plus `fat.c` and `pc64_fs.c` compiled in unchanged. pc64's storage is
+three layers -- a registry of 512-byte-sector devices, a native FAT16/32 driver
+that mounts volumes off whatever is in the registry, and a filesystem layer that
+presents those volumes (plus the RAM disk) to the shell. Only the bottom layer
+is machine-specific, so `blkdev.c` (written around EFI Block IO) is the one file
+of the three this port replaces; the twenty-odd `uno_fs_*` / `uno_fat_*` /
+`uno_blk_*` stubs are gone from `stubs.c`.
+
+**The registered device is a PARTITION, not the disk.** The obvious shape is to
+register the whole eMMC and let `fat.c` walk the GPT, which is what the x86
+backend does. It is the wrong shape here. Everything on this eMMC except two
+partitions belongs to somebody else, and a whole-disk device hands `fat.c` an
+address space in which our partition is a small window and every brick is one
+arithmetic slip away. So LBA 0 of `emmc0` **is** the first sector of the data
+partition and its length is that partition: an address outside it is not
+expressible, which makes the containment a property of the address space rather
+than of a check somebody has to remember. `c64_blk_write()`'s fence still
+stands underneath. `fat.c` probes a table-less device as a superfloppy (a BPB
+at LBA 0), which is exactly what a partition-as-device presents, so nothing
+above had to cooperate.
+
+`is_boot` is set, and that flag is load-bearing: `session_vol()` and
+`uno_fs_pref_vol()` both put persistent state on the volume the machine came up
+on rather than on whichever disk enumerated first (the ZimaBlade lesson, written
+up in `pc64_fs.h`). Here there is one medium and we did boot from it, so saying
+so is what makes `SHELL.CFG` land on the eMMC instead of the RAM disk.
+
+**`BLKTEST=1 ./build.sh shell` is the gate this layer could not otherwise
+have.** The virt board has no MSDC, so without it the first thing ever to run
+`fat.c` on aarch64 would be the device itself, at a flash-boot-reboot-read per
+attempt -- and everything above the transport is portable code meeting a new
+compiler, a new word size and `-mstrict-align` for the first time. So the
+transport is injectable, the same idea as the Genesis port's `AUTOTEST_BRAM`: a
+36 MiB RAM disk is registered in the absent eMMC's place, formatted with the
+real `uno_fat_mkfs`, and put through a write / read / verify / delete round trip
+through the real `uno_fs_*` calls the shell uses. Green on both QEMU paths:
+
+```
+blktest: formatted a 36 MiB RAM disk as FAT32
+storage: 1 block device(s), 2 volume(s)
+  vol 0: ram "RAM" rw
+  vol 1: fat "BLKTEST    " rw boot
+storage: persisting to vol 1 (BLKTEST    )
+blktest: PASS -- mkfs, mount, write 57 bytes, read back, verify, delete
+```
+
+That proves the whole chain minus the eMMC. It is compiled only under
+`-DC64_BLKTEST` -- the RAM disk is 36 MiB of `.bss`, fine on QEMU and never in
+a shipped image.
+
+`c64_storage_report()` runs before the shell, because `session_load()` asks for
+`SHELL.CFG` the moment `uno_main` starts and a report printed after that is a
+report of what the shell already decided. It names every device and volume, says
+where persistent state will go (and says so loudly when the answer is the RAM
+disk), and runs `uno_fat_selftest()`, which is inert unless a `WRTEST.REQ` file
+has been left on a writable volume -- drop one there from Linux and a boot
+proves read, write and delete on metal in one pass.
+
+**What is still needed on the device: a filesystem.** The data partition is
+p44, which ships as Android's encrypted `userdata` and holds no FAT, so nothing
+mounts and the shell falls back to the RAM disk. `mkfs.vfat -F 32
+/dev/mmcblk0p44` from Gemian is the one step between here and persistence.
+Nothing on the running system uses that partition: Gemian does not mount it, and
+its Android container binds `/data` from the Debian rootfs (`lxc.mount.entry =
+/data data bind bind`).
+
+`.UNO` apps do NOT arrive with this: the module loader is still stubbed, and it
+needs an aarch64 module ABI of its own. Storage was the prerequisite, not the
+whole job.
+
+Next: format the data partition and prove persistence on hardware (the Control
+Panel should open on the FIRST boot after that and never again). Open
+alongside: whether the touch mapping is *accurate* (the log proves contacts
+arrive and shows raw/panel/UI for each one, but only a human can say whether
+the pointer landed under the finger), and the ramoops zone-order question the
+survey will answer on the next boot.
