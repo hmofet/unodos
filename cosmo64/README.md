@@ -339,9 +339,112 @@ its Android container binds `/data` from the Debian rootfs (`lxc.mount.entry =
 needs an aarch64 module ABI of its own. Storage was the prerequisite, not the
 whole job.
 
-Next: format the data partition and prove persistence on hardware (the Control
-Panel should open on the FIRST boot after that and never again). Open
-alongside: whether the touch mapping is *accurate* (the log proves contacts
-arrive and shows raw/panel/UI for each one, but only a human can say whether
-the pointer landed under the finger), and the ramoops zone-order question the
-survey will answer on the next boot.
+Storage target, decided 2026-09-01: **the SD card, not p44.** p44 is left
+alone. There is a 29 GiB card in the slot whose first partition is already
+vfat, so persistence needs no destructive step at all -- what it needs is an
+MSDC1 driver, and unlike MSDC0 that is a real bring-up: LK never touches the
+SD slot (`init_storage()` calls `mmc_legacy_init(1)` = id 0 = eMMC only; the
+sole SD-card init in the tree is inside `#if 0`). PMIC VMCH/VMC over PWRAP,
+clock, pinmux, then the public SD init sequence. Queued behind USB.
+
+## M4 (2026-09-01): USB host -- pc64's xhci.c and usbhid.c, unchanged
+
+The USB lane's two files compile here UNCHANGED, on top of three seams that
+all live in this lane. Hardware boot pending as of this writing; both QEMU
+paths are green (there is no xHCI on the virt board, and the log says so in
+one line).
+
+**What the probe found first** (`./build.sh usb`, `usbprobe.c`, two hardware
+boots). LK gates nothing: every `INFRA_PDN_STA` register reads 0, so the
+SSUSB clock is already running. The IP answers (`HW_ID=20160812`) but arrives
+**held in software reset with the host powered down** (`PW_CTRL0=10411021`
+bit 0, `CTRL1=00000001`), which is why every xHCI register reads zero -- zeros,
+not all-ones: present but reset. Release it, power the host and port in host
+role, put the U2 T-PHY in host mode, set `PORTSC.PP` (the root port comes up
+unpowered), and the controller identifies as xHCI 1.10 with **one USB2 port and
+no SuperSpeed port**, and reports the attached hub:
+
+```
+PW_STS1=00000d0f -- clocks STABLE
+CAPLENGTH=20 HCIVERSION=0110 HCSPARAMS1=0100010f HCCPARAMS1=01400f99
+port 1: PORTSC=000202e1 CCS=1 PED=0 PP=1
+*** A DEVICE IS CONNECTED on port 1 ***
+```
+
+That last line retires the whole Type-C lane: role, VBUS and cabling are
+already right at handover. The FUSB301 (I2C bus 3, 0x25) never has to be
+touched and no MT6370 boost is needed -- the hub in use is self-powered
+(`bmAttributes 0xe0, bMaxPower 0`).
+
+**`ssusb.c`** is that sequence made reusable: reset release, host + port
+enable, STS1 wait, PHY host mode. Everything from `CAPLENGTH` on is the xHCI
+specification, and that is `xhci.c`.
+
+**`pci.c`** answers `pc64_pci.h` on a SoC with no PCI. `xhci.c` discovers its
+controller by walking config space for class 0C/03/30 and reading BAR0, and
+`xhci.*` belongs to the USB lane (AGENTS.md ownership registry) -- so rather
+than edit it, this platform implements the API it already consumes: one
+function at 00:00.0, MediaTek's vendor id and the SoC's part number, BAR0
+`0x11200000`, **exposed only once ssusb.c has powered the block**. Before that
+(and forever on the QEMU gate) the bus is empty, so the scan finds nothing in
+one line instead of spending five timed-out attempts on a controller that reads
+all-ones. The shell calls `uno_xhci_init()` on its own account, not only
+through usb.c, which is why that gate lives in the shim and not in the caller.
+
+**DMA memory is the crux on ARM, and it is solved in the build.** The xHCI is
+a bus master that is not coherent with the CPU caches on this SoC, and
+`xhci.c` keeps every ring, context, scratchpad and transfer buffer in static
+`.bss` with no allocator seam -- x86 never needed one. `c64_usbglue.h` is
+force-included (`-include`) into `xhci.c` and carries
+`#pragma clang section bss=".xdma"`, which moves **every** zero-initialised
+static in the translation unit into one section, function-local ones
+included (`hub_scan.hd`, `ss_burst.cfg` -- both DMA targets). `flatten.py`
+records where the linker put it (image header + 0x40/0x48) and `mmu.c` splits
+the 2 MB block it falls in into 4 KB pages, mapping exactly those as
+**Device-nGnRnE**. Device rather than merely non-cacheable, because the driver
+has no barriers between writing a TRB and ringing the doorbell, and Device
+ordering supplies that for free. The driver's ordinary state rides along into
+the same section; a bus cycle per access on a driver polled a few times a
+frame is nothing.
+
+`control_xfer()` DMAs straight into whatever buffer its caller passes, and
+`usbhid.c` passes one on its STACK for the config descriptor. `build.sh`
+compiles `usbhid.c` with its two calls renamed
+(`-Duno_usb_get_config=c64_usb_get_config`, likewise `uno_usb_control`) onto
+`usb.c`'s bounce buffer in the same section. A build tripwire fails if
+`xhci.o` still owns a `.bss`: DMA memory left write-back does not fail, it
+corrupts.
+
+The same header pre-empts `uno_debug.h`, so `xhci.c`'s `uno_dbg_log`
+narration (26 lines of bring-up diagnosis) reaches the eMMC log as `pc64:`
+lines instead of compiling to nothing.
+
+**Two traps found on the way, both now tripwired.** (1) The `UNO_DRIVER`
+registration tables `xhci.c` and `usbhid.c` emit are 16 initialised bytes in a
+`.unodrv` section, which lld placed AFTER `.data`'s 72 MB virtual extent -- so
+`flatten.py`'s trailing-zero trim stopped there and the shipped image went
+from 0.5 MB to 76 MB, the size that hung LK's decompressor at the splash in
+M1. The table is merged into `.data` at link time
+(`-Xlink=/merge:.unodrv=.data`; nothing reads it here) and `flatten.py` now
+refuses to ship more than 16 MB. (2) A zero-initialised array given a section
+ATTRIBUTE comes out as initialised DATA, which the linker keeps apart from the
+BSS `.xdma` -- a second arena at a different address the MMU map would have
+missed. The bounce buffer uses the pragma instead, and `flatten.py` takes the
+union of every `.xdma` it finds regardless.
+
+**Input.** `input.c` keeps per-source state -- touch panel and USB mouse
+buttons, matrix and USB keyboard modifiers -- and the shell sees the OR,
+which is what x86's poll loop does across its devices. `usb.c` feeds usbhid's
+deltas (applied raw, as x86 applies a HID mouse's), latched buttons, wheel
+notches and keys into it; `platform.c` brings USB up before the shell and
+polls it inside the timed input section, so the `perf:` lines will say what a
+polled xHCI costs per frame.
+
+Also unlocked by the same controller, not wired yet: `ax88179.c` (the
+AX88179B on that hub = networking) and `usbmsc.c` (a USB stick = a second
+route to persistent storage).
+
+Open alongside: whether the touch mapping is *accurate* (the log proves
+contacts arrive and shows raw/panel/UI for each one, but only a human can say
+whether the pointer landed under the finger), and the ramoops zone-order
+question the survey will answer on the next boot.
