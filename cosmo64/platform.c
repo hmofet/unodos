@@ -107,6 +107,10 @@ void c_main(void *dtb)
      * uno_main and asks for SHELL.CFG immediately, so a report printed after
      * that would only be a report of what the shell had already decided. */
     c64_storage_report();
+    /* USB before the shell too: enumeration takes a moment (port power,
+     * debounce, the hub walk) and the desktop should come up with its mouse
+     * rather than acquire one a second later. */
+    c64_usb_init();
     c64_log("entering uno_main\n");
     c64_log_flush();                /* the boot story reaches the eMMC even if
                                      * the shell never comes up */
@@ -230,6 +234,8 @@ void uno_pc64_poll(void)
     c64_u64 t0 = c64_cnt_now();
     c64_kbd_poll();
     c64_touch_poll();
+    c64_usb_poll();                 /* polled xHCI too: a ring sweep per HID
+                                     * endpoint, so it is timed with the rest */
     c64_perf_add_poll(c64_cnt_now() - t0);
     c64_perf_loop();
 #ifdef C64_KBDTEST

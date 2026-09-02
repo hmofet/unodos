@@ -12,8 +12,15 @@
 #define RAWK 32
 static struct { int scan, uni, mods; } g_ring[RAWK];
 static int g_rd, g_wr;
-static int g_mods, g_held;
-static int g_cx = 320, g_cy = 240, g_btn, g_wheel;
+/* Two keyboards and two pointers can be live at once -- the AW9523 matrix
+ * and a USB keyboard, the touch panel and a USB mouse -- so each source keeps
+ * its own level state and the shell sees the OR, which is what x86's poll
+ * loop does across its devices ("a click on ANY device's ANY button"). */
+static int g_mods, g_held;              /* the matrix keyboard   */
+static int g_mods_usb, g_held_usb;      /* a USB keyboard        */
+static int g_cx = 320, g_cy = 240, g_wheel;
+static int g_btn;                       /* the touch panel (absolute) */
+static int g_btn_usb;                   /* a USB mouse (relative)     */
 static int g_lock;
 static int g_speed = 100;
 
@@ -67,27 +74,57 @@ void c64_input_set_pointer(int x, int y, int btn)
     g_have_ptr = 1;
 }
 
+/* A USB mouse reports deltas, and a boot mouse reports only on change, so the
+ * button mask arriving here is the LATCHED level usbhid.c holds for it --
+ * store it as such. Deltas are applied raw, the way x86 applies a USB HID
+ * mouse's (the pointer-speed preference scales the firmware pointer's
+ * normalised motion, not a mouse's counts). */
+void c64_input_move_pointer(int dx, int dy, int btn)
+{
+    if (g_lock)
+        return;
+    g_cx += dx;
+    g_cy += dy;
+    if (g_cx < 0) g_cx = 0;
+    if (g_cy < 0) g_cy = 0;
+    if (g_cx > C64_SCRW - 1) g_cx = C64_SCRW - 1;
+    if (g_cy > C64_SCRH - 1) g_cy = C64_SCRH - 1;
+    g_btn_usb = btn;
+    g_have_ptr = 1;
+}
+
+void c64_input_add_wheel(int notches)
+{
+    g_wheel += notches;
+}
+
 void c64_input_set_level(int mods, int held)
 {
     g_mods = mods;
     g_held = held;
 }
 
+void c64_input_set_level_usb(int mods, int held)
+{
+    g_mods_usb = mods;
+    g_held_usb = held;
+}
+
 int uno_pc64_mods(void)
 {
-    return g_mods;
+    return g_mods | g_mods_usb;
 }
 
 int uno_pc64_keys_held(void)
 {
-    return g_held;
+    return g_held | g_held_usb;
 }
 
 void uno_pc64_mouse(int *x, int *y, int *btn)
 {
     *x = g_cx;
     *y = g_cy;
-    *btn = g_btn;
+    *btn = g_btn | g_btn_usb;
 }
 
 int uno_pc64_wheel(void)
@@ -101,7 +138,7 @@ int uno_pc64_mac_mouse(short *h, short *v)
 {
     *h = (short)g_cx;
     *v = (short)g_cy;
-    return g_btn;
+    return g_btn | g_btn_usb;
 }
 
 void uno_pc64_pointer_speed(int pct)
@@ -145,7 +182,7 @@ void uno_pc64_ptr_status(int *nsimple, int *nabs, int *blocked)
     /* The touch panel is an ABSOLUTE pointer, so report it as one rather than
      * leaving the Control Panel claiming this machine has no pointer while the
      * cursor is visibly tracking a finger. */
-    *nsimple = 0;
+    *nsimple = c64_usb_mice();          /* USB mice are relative pointers */
     *nabs = c64_touch_present() ? 1 : 0;
     *blocked = 0;
 }

@@ -46,11 +46,20 @@ def main():
         return struct.unpack_from("<II", d, opt + 112 + 8 * i) if i < nddir else (0, 0)
 
     img = bytearray(size_image)
+    xdma = None
     for i in range(nsect):
-        _, vsz, va, rsz, roff = struct.unpack_from("<8sIIII", d, opt + opt_sz + 40 * i)
+        name, vsz, va, rsz, roff = struct.unpack_from("<8sIIII", d, opt + opt_sz + 40 * i)
         n = min(vsz, rsz)
         if n:
             img[va:va + n] = d[roff:roff + n]
+        # M4: the USB DMA arena (c64_usbglue.h). Record where the linker put
+        # it so mmu.c can map exactly those pages as Device memory. The union
+        # of every section of that name, in case the linker keeps two (a DATA
+        # and a BSS flavour) -- a piece of the arena left out of the range is
+        # a buffer the controller and the cache would disagree about.
+        if name.rstrip(b"\0") == b".xdma":
+            lo, hi = va, (va + vsz + 0xFFF) & ~0xFFF
+            xdma = (lo, hi) if xdma is None else (min(xdma[0], lo), max(xdma[1], hi))
 
     # real PE imports mean a symbol resolved against a DLL nothing will load
     irva, isz = ddir(1)
@@ -82,6 +91,13 @@ def main():
     struct.pack_into("<Q", img, 16, size_image)                 # image_size
     struct.pack_into("<Q", img, 24, 0)                          # flags: LE, 4K
     struct.pack_into("<I", img, 56, 0x644D5241)                 # magic "ARM\x64"
+    # M4: the .xdma range, as two absolute u64s just past the 64-byte header
+    # (C64_XDMA_SLOT in cosmo64.h). Zero when there is no such section, which
+    # mmu.c reads as "nothing to map".
+    if xdma:
+        struct.pack_into("<QQ", img, 0x40, LOAD + xdma[0], LOAD + xdma[1])
+        print("flatten: .xdma (USB DMA arena) at 0x%X..0x%X, Device-mapped"
+              % (LOAD + xdma[0], LOAD + xdma[1]))
 
     # Do not SHIP the .bss: a 67 MB decompress hung LK at the splash (stock
     # kernels are ~25 MB decompressed; ours must stay in that territory). Trim
@@ -93,6 +109,15 @@ def main():
         file_end -= 1
     zstart = (file_end + 15) & ~15                     # 16-aligned for stp
     zend = (size_image + 15) & ~15
+    # THE TRIPWIRE. A 67 MB shipped image hung LK's decompressor at the splash
+    # (M1); the shell ships ~0.5 MB. Anything in between means some small
+    # non-zero section landed after the .bss and dragged the trim point with
+    # it (the .unodrv table did exactly that in M4). Name it rather than let
+    # the next hardware boot discover it.
+    if zstart > 16 * 1024 * 1024:
+        sys.exit("flatten: shipped image would be %d MB -- something non-zero "
+                 "sits after the .bss (llvm-objdump -h the .exe); LK cannot "
+                 "decompress an image this size" % (zstart >> 20))
     struct.pack_into("<Q", img, 32, LOAD + zstart)     # res2
     struct.pack_into("<Q", img, 40, LOAD + zend)       # res3
     # FLATTEN_IMGSZ=shipped: report only the shipped bytes as image_size, so
