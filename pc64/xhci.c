@@ -35,6 +35,7 @@ int uno_usb_setup_intr_in(int dev, int a, int m) { (void)dev;(void)a;(void)m; re
 int uno_usb_intr_in(int dev, void *d, int l) { (void)dev;(void)d;(void)l; return -1; }
 int uno_usb_bulk_in_arm(int dev, void *d, int l) { (void)dev;(void)d;(void)l; return -1; }
 int uno_usb_bulk_in_poll(int dev) { (void)dev; return -1; }
+void uno_xhci_set_ep_quirk(void (*fn)(unsigned char *, int, int, int)) { (void)fn; }
 
 #else  /* ===================== UNO_XHCI enabled ========================= */
 
@@ -919,6 +920,23 @@ static void enumerate_port(int port)
  * CErr 2:1. MaxBurstSize left at 0 is correct for Full/High Speed bulk and
  * WRONG for SuperSpeed, where the device may burst up to bMaxBurst+1 packets
  * per service opportunity - see ss_burst() below. */
+/* Platform hook on the endpoint context, called after setup_ep() has filled
+ * the spec-defined words and before Configure Endpoint is issued.
+ *
+ * Some controllers want more in an endpoint context than the specification
+ * defines. MediaTek's SSUSB xHCI (the cosmo64 lane's MT6771) requires its own
+ * bandwidth-scheduling words in the context's reserved DWords for every
+ * periodic endpoint, and will not service one without them; a platform that
+ * knows this registers a function here and writes them. The default is no
+ * hook, so every existing build is unchanged. A registered function pointer
+ * rather than a weak symbol, because weak symbols have been unreliable on
+ * PE/COFF in this tree (surfgo detach). `has_tt` is "reached through a hub",
+ * which on a root port that only speaks high speed means "behind a
+ * transaction translator" for a full/low-speed device. */
+static void (*g_ep_quirk)(unsigned char *epctx, int eptype, int speed, int has_tt);
+void uno_xhci_set_ep_quirk(void (*fn)(unsigned char *, int, int, int))
+{ g_ep_quirk = fn; }
+
 static void setup_ep(int di, int dci, int eptype, int mps, int burst, trb_t *ring)
 {
     int st = g_csz ? 64 : 32, off = (dci + 1) * st;
@@ -930,6 +948,8 @@ static void setup_ep(int di, int dci, int eptype, int mps, int burst, trb_t *rin
     ctx_wr(g_inctx[di], off+8,  (u32)tr);
     ctx_wr(g_inctx[di], off+12, (u32)(tr>>32));
     ctx_wr(g_inctx[di], off+16, 1024);                     /* average TRB length */
+    if (g_ep_quirk)
+        g_ep_quirk(g_inctx[di] + off, eptype, g_devs[di].speed, g_dev_tier[di] > 0);
 }
 
 /* ---- endpoint error recovery (xHCI 4.6.8) --------------------------------

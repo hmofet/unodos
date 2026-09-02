@@ -11294,3 +11294,19 @@ x86-mangled name, and does not assemble for aarch64-w64-mingw32 (the cosmo64
 lane's target; clang there emits `__chkstk`, which cosmo64/cpu.s provides).
 Wrapped it in `#if defined(__x86_64__)` — zero change to the x86 build. Filed
 by the cosmo64 lane; libc has no listed owner, so flagging here.
+
+## 2026-09-02 — cross-lane seam: xhci.c endpoint-context hook (filed by cosmo64)
+
+`uno_xhci_set_ep_quirk(fn)`: a registered function pointer xhci.c calls on
+every endpoint context after `setup_ep()` fills the spec-defined words and
+before Configure Endpoint. MediaTek's SSUSB xHCI (cosmo64's MT6771) keeps a
+bandwidth schedule of its own and reads it from the context's reserved DWords
+for every periodic endpoint; without those words it never services the
+endpoint, and the first M4 hardware boot enumerated four devices and claimed
+zero HID endpoints. No hook by default, so every existing build is unchanged;
+a function pointer rather than a weak symbol because weak symbols have been
+unreliable on PE/COFF here (surfgo detach). Also noted for the owner:
+`setup_ep()` never writes the endpoint Interval field (DW0[23:16]), which the
+spec bounds to 3..18 for a full-speed interrupt endpoint -- tolerated by every
+controller met so far, corrected by the hook on this one. Claimed and landed
+by the cosmo64 lane; `xhci.*` ownership is unchanged.
