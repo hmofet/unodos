@@ -135,16 +135,20 @@ static void spin_ms(int ms)
 }
 
 /* ---- the report ---------------------------------------------------------- */
-/* The shell's present maps a panel point to the UI like this (display.c and
- * touch.c, FB_SCALE=2, 270 degrees): ux = 639 - (py - 440)/2, uy = (px - 60)/2.
- * Printing what that WOULD have produced next to the target the finger was
- * actually on turns the log into the answer rather than raw material. */
+/* The shell's present maps a panel point to the UI by the 270-degree inverse
+ * in touch.c: ux = (scrw-1) - (py - dst_y0)/zoom, uy = (px - dst_x0)/zoom.
+ * Read from the SAME runtime geometry the shell uses (c64_geom_set), not from
+ * constants, so this report cannot quietly describe a different desktop size
+ * than the one running. Printing what that WOULD have produced next to the
+ * target the finger was actually on turns the log into the answer rather than
+ * raw material. */
 static void report(void)
 {
     int mx, my;
     c64_touch_maxima(&mx, &my);
-    c64_logf("\ncalib: controller maxima %dx%d, panel %dx%d\n",
-             mx, my, PANEL_W, PANEL_H);
+    c64_logf("\ncalib: controller maxima %dx%d, panel %dx%d, desktop %dx%d "
+             "zoom %d\n", mx, my, PANEL_W, PANEL_H, c64_scrw, c64_scrh,
+             c64_scale);
     c64_log("calib:  target(panel)      raw report      delta      "
             "current-transform UI\n");
     for (int i = 0; i < NTARGETS; i++) {
@@ -156,11 +160,11 @@ static void report(void)
         int dx = cap_x[i] - kTargets[i].x;
         int dy = cap_y[i] - kTargets[i].y;
         /* what the shell would have computed from this raw report */
-        int ux = (C64_SCRW - 1) - (cap_y[i] - C64_DST_Y0) / FB_SCALE;
-        int uy = (cap_x[i] - C64_DST_X0) / FB_SCALE;
+        int ux = (c64_scrw - 1) - (cap_y[i] - c64_dst_y0) / c64_scale;
+        int uy = (cap_x[i] - c64_dst_x0) / c64_scale;
         /* and where the target actually is in UI space */
-        int tux = (C64_SCRW - 1) - (kTargets[i].y - C64_DST_Y0) / FB_SCALE;
-        int tuy = (kTargets[i].x - C64_DST_X0) / FB_SCALE;
+        int tux = (c64_scrw - 1) - (kTargets[i].y - c64_dst_y0) / c64_scale;
+        int tuy = (kTargets[i].x - c64_dst_x0) / c64_scale;
         c64_logf("calib:  %4d,%4d      %4d,%4d    %4d,%4d    ui %3d,%3d "
                  "(target ui %3d,%3d)\n",
                  kTargets[i].x, kTargets[i].y, cap_x[i], cap_y[i], dx, dy,

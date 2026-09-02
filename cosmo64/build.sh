@@ -61,10 +61,11 @@ case "$1" in
     $CC $BASECF -mstrict-align -c videolfb.c -o build/videolfb.o && \
     $CC $BASECF -mstrict-align -c mmu.c -o build/mmu.o && \
     $CC $BASECF -mstrict-align -c log.c -o build/log.o && \
+    $CC $BASECF -mstrict-align -c msdc.c -o build/msdc.o && \
     $CC -c entry.s -o build/entry.o && \
     $CC -c cpu.s -o build/cpu.o && \
     $CC $LINK -o build/m0.exe build/entry.o build/cpu.o build/m0.o \
-        build/videolfb.o build/mmu.o build/log.o"
+        build/videolfb.o build/mmu.o build/log.o build/msdc.o"
   scp -q "$QUILL:$QDIR/cosmo64/build/m0.exe" build/
   "$PY" flatten.py build/m0.exe build/m0.bin
   OUT=build/m0.bin
@@ -110,7 +111,12 @@ shell )
   # fault -- consistent with GenieZone's stage-2 imposing Device-type memory),
   # and each build compiled without it died at its first merged wide load
   # while the fully strict-align m0 runs the same path clean.
+  # -DFB_MAX_W/-DFB_MAX_H: fb.h's ceiling sizes fb[] and unoui's cached
+  # desktop background, and it defaults to a PC monitor's 1920x1200. This
+  # panel's native desktop is 2160x1080 -- wider AND shorter -- so the default
+  # would have clipped the desktop this port now starts in.
   SHCF="$BASECF -mstrict-align -Wno-error=implicit-function-declaration \
+        -DFB_MAX_W=2160 -DFB_MAX_H=1080 \
         -DUNO_COLOR=1 -DUNO_PC64 -DUNO_UUI -Dmain=uno_main \
         -I$QDIR/pc64/include -I$QDIR/pc64 -I$QDIR/unoui -I$QDIR/uno3d \
         -I$QDIR/pc64/bearssl/inc -I$QDIR/unosound -I$QDIR/unomedia \

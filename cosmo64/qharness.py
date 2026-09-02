@@ -37,7 +37,11 @@ FDT_AT = 0x48000000
 PANEL_FB = 0x7DF70000
 VRAM = 0x1F90000
 PANEL_W, PANEL_H, PITCH = 1080, 2160, 4352
-W, H = 640, 480
+# The desktop a payload starts in: the panel's native landscape size at zoom 1
+# (cosmo64.h C64_SCRW/C64_SCRH/FB_SCALE). The payload publishes what it chose
+# and the gate checks it against these, so changing one without the other
+# fails here rather than on the device.
+W, H = 2160, 1080
 BCN_MAGIC = 0x554E4F31
 ROT = 270
 # The persistent debug log (log.c): the Gemian kernel's ramoops CONSOLE
@@ -166,7 +170,7 @@ def main():
     ppitch, = struct.unpack_from("<I", fbi, 64)
     dorigin, = struct.unpack_from("<Q", fbi, 72)
     shadow, = struct.unpack_from("<Q", fbi, 80)
-    scale, = struct.unpack_from("<I", fbi, 88)
+    scale, scrw, scrh = struct.unpack_from("<III", fbi, 88)
     if not 1 <= scale <= 4:
         scale = 1
 
@@ -215,6 +219,9 @@ def main():
         fails.append("beacon stage: reached %d, wanted 4 (main loop)" % stage)
     if fb_pitch != W * 4:
         fails.append("shadow pitch: got %d, wanted %d" % (fb_pitch, W * 4))
+    if (scrw, scrh) != (W, H):
+        fails.append("desktop size: payload reports %dx%d, wanted %dx%d"
+                     % (scrw, scrh, W, H))
 
     dst_w, dst_h = (H, W) if ROT in (90, 270) else (W, H)
     dst_w, dst_h = dst_w * scale, dst_h * scale
@@ -308,9 +315,16 @@ def main():
     except subprocess.TimeoutExpired:
         p.kill()
 
-    if struct.unpack_from("<I", fb, 0)[0] != 0xFFFFFFFF:
-        fails.append("bar beacon: framebuffer starts 0x%08X, wanted white"
-                     % struct.unpack_from("<I", fb, 0)[0])
+    # The adopt path paints a white 32x32 bar at the panel origin: "bars but no
+    # UI" means the right base and the wrong geometry. It can only still be
+    # there if the desktop rect does not reach the origin -- at the native size
+    # the desktop IS the panel and paints over it, and then the blit check
+    # below is the stronger statement of the same thing.
+    if x0 >= 32 or y0 >= 32:
+        first = struct.unpack_from("<I", fb, 0)[0]
+        if first != 0xFFFFFFFF:
+            fails.append("bar beacon: framebuffer starts 0x%08X, wanted white"
+                         % first)
     if eye0 is not None and not any(sh):
         fails.append("blit agrees but the shadow is blank")
 

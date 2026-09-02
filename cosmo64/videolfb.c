@@ -125,6 +125,52 @@ void c64_bcn(c64_u32 stage)
     FBDBG->bcn_magic = BCN_MAGIC;
 }
 
+/* ---- the desktop geometry ------------------------------------------------
+ * Lives here rather than in display.c because touch.c has to invert the same
+ * transform and the calib payload links touch.c without linking the shell.
+ * One definition, and every payload that adopts the framebuffer gets it. */
+int c64_scrw = C64_SCRW, c64_scrh = C64_SCRH, c64_scale = FB_SCALE;
+int c64_dst_x0 = C64_DST_X0, c64_dst_y0 = C64_DST_Y0;
+int c64_dst_w = C64_DST_W, c64_dst_h = C64_DST_H;
+
+void c64_geom_set(int w, int h)
+{
+    if (w < 64) w = 64;
+    if (h < 48) h = 48;
+    if (w > C64_UI_MAX_W) w = C64_UI_MAX_W;
+    if (h > C64_UI_MAX_H) h = C64_UI_MAX_H;
+    /* Rotated 270, so the desktop's HEIGHT spans the panel's width and its
+     * WIDTH spans the panel's height -- the axes are swapped here, and that
+     * is the whole reason a "1920x1080 fits a 1080x2160 panel" question has a
+     * different answer than it looks like it should. */
+    int zx = PANEL_W / h, zy = PANEL_H / w;
+    int z = zx < zy ? zx : zy;
+    if (z < 1)
+        z = 1;                       /* clamped above: this cannot letterbox */
+    c64_scrw = w;
+    c64_scrh = h;
+    c64_scale = z;
+    c64_dst_w = h * z;
+    c64_dst_h = w * z;
+    c64_dst_x0 = (PANEL_W - c64_dst_w) / 2;
+    c64_dst_y0 = (PANEL_H - c64_dst_h) / 2;
+    FBDBG->fb_dorigin = FBDBG->fb_raw + (c64_u64)c64_dst_y0 * FBDBG->fb_ppitch
+                      + (c64_u64)c64_dst_x0 * 4;
+    FBDBG->fb_scale = (c64_u32)z;
+    FBDBG->fb_scrw = (c64_u32)w;
+    FBDBG->fb_scrh = (c64_u32)h;
+}
+
+void c64_fb_clear_panel(void)
+{
+    c64_u64 clr = FBDBG->fb_vram ? FBDBG->fb_vram
+                                 : (c64_u64)PANEL_H * FBDBG->fb_ppitch;
+    c64_u64 *z = (c64_u64 *)FBDBG->fb_raw;
+    for (c64_u64 i = 0; i < clr / 8; i++)
+        z[i] = 0;
+    __asm__ volatile("dsb sy" ::: "memory");
+}
+
 /* Adopt LK's framebuffer: resolve the base (DTB blob > props > seeded FBINFO >
  * the guess), clear ALL of LK's vram when a size is proven (spare pages and
  * the DAL layer hold recovery-console leftovers that scan out otherwise --
@@ -178,8 +224,7 @@ c64_u64 c64_fb_adopt(void *dtb, c64_u32 *ppitch_out)
             row[c] = 0xFFFFFFFFu;
     }
 
-    FBDBG->fb_dorigin = base + (c64_u64)C64_DST_Y0 * ppitch + C64_DST_X0 * 4;
-    FBDBG->fb_scale = FB_SCALE;
+    c64_geom_set(C64_SCRW, C64_SCRH);   /* publishes dorigin/scale/scrw/scrh */
     *ppitch_out = ppitch;
     return base;
 }

@@ -13,7 +13,17 @@ typedef unsigned long long c64_u64;
 #define FB_SEED_MAGIC 0x53454544u      /* "SEED": FBINFO was deliberately set  */
 #define BCN_MAGIC 0x554E4F31u          /* "UNO1" */
 #define FB_ROT 270
-#define FB_SCALE 2
+
+/* The panel is FIXED -- 1080x2160 portrait, mounted landscape -- so the
+ * desktop's native size is 2160x1080 and it is what the shell starts in.
+ * (It started 640x480 at 2x, the size inherited from the rpi port this lane
+ * began as; that left a 960x1280 window on a 1080x2160 panel.)
+ *
+ * FB_SCALE is the integer zoom of the STARTING size, kept as a macro because
+ * the m0 and calib payloads are static and compile their geometry in. The
+ * shell's is runtime -- c64_scale, below -- because Control Panel > Display
+ * can change it. */
+#define FB_SCALE 1
 
 /* Memory layout. EVERYTHING mutable lives in the image's own .bss -- stack,
  * FBINFO debug block, crash record -- because that is the one stretch of DRAM
@@ -68,13 +78,35 @@ extern c64_u8 c64_dbg_page[0x1100];
 enum { FB_SRC_FALLBACK = 0, FB_SRC_BLOB = 1, FB_SRC_PROPS = 2, FB_SRC_SEED = 3 };
 enum { BCN_FBFALL = 2, BCN_FBDTB = 3, BCN_MAIN = 4 };
 
-/* The UI surface is 640x480; the rotated (270) 2x rect it lands in: */
-#define C64_SCRW 640
-#define C64_SCRH 480
+/* The STARTING UI surface -- the panel's native landscape size -- and the
+ * rotated (270) rect it lands in. The static payloads (m0, calib) use these
+ * directly; the shell uses the runtime geometry below, which starts here. */
+#define C64_SCRW 2160
+#define C64_SCRH 1080
 #define C64_DST_W (C64_SCRH * FB_SCALE)
 #define C64_DST_H (C64_SCRW * FB_SCALE)
 #define C64_DST_X0 ((PANEL_W - C64_DST_W) / 2)
 #define C64_DST_Y0 ((PANEL_H - C64_DST_H) / 2)
+
+/* The ceiling every desktop-sized buffer is allocated at. A smaller desktop
+ * is presented at a bigger integer zoom, so the rect is always the panel or
+ * less, and these are exactly the panel's two axes swapped. */
+#define C64_UI_MAX_W PANEL_H
+#define C64_UI_MAX_H PANEL_W
+
+/* Runtime desktop geometry (videolfb.c owns it; display.c changes it).
+ * c64_scale is the biggest integer zoom at which c64_scrw x c64_scrh still
+ * fits the panel rotated, and dst_* is the resulting centred rect in panel
+ * pixels. Whole-pixel zoom only: a fractional nearest-neighbour upscale
+ * duplicates some source columns and not others, which mangles glyph stems --
+ * the x86 port learned that one and floors its scale for the same reason. */
+extern int c64_scrw, c64_scrh, c64_scale;
+extern int c64_dst_x0, c64_dst_y0, c64_dst_w, c64_dst_h;
+void c64_geom_set(int w, int h);
+/* Wipe every byte of LK's vram. Needed when the UI rect SHRINKS: the pixels
+ * the old rect owned are outside the new one, so nothing will ever overwrite
+ * them and the previous desktop stays on screen as a frame around this one. */
+void c64_fb_clear_panel(void);
 
 /* The FBINFO debug contract -- field for field what qharness.py reads back. */
 struct fbdbg {
@@ -94,11 +126,14 @@ struct fbdbg {
     c64_u32 pad2;
     c64_u64 fb_dorigin;     /* +72 top-left of the rotated UI rect           */
     c64_u64 fb_shadow;      /* +80 the upright source surface                */
-    c64_u32 fb_scale;      /* +88 FB_SCALE this build presents at           */
+    c64_u32 fb_scale;       /* +88 the integer zoom being presented at       */
+    c64_u32 fb_scrw;        /* +92 the desktop size behind it                */
+    c64_u32 fb_scrh;        /* +96                                           */
 };
 _Static_assert(__builtin_offsetof(struct fbdbg, fb_raw) == 32, "fbdbg layout");
 _Static_assert(__builtin_offsetof(struct fbdbg, fb_panel) == 56, "fbdbg layout");
 _Static_assert(__builtin_offsetof(struct fbdbg, fb_scale) == 88, "fbdbg layout");
+_Static_assert(__builtin_offsetof(struct fbdbg, fb_scrh) == 96, "fbdbg layout");
 
 #define FBDBG ((volatile struct fbdbg *)c64_dbg_page)
 
@@ -191,6 +226,7 @@ void c64_input_set_level(int mods, int held);          /* the AW9523 matrix */
 void c64_input_set_level_usb(int mods, int held);      /* a USB keyboard    */
 void c64_input_set_pointer(int x, int y, int btn);
 void c64_input_move_pointer(int dx, int dy, int btn);
+void c64_input_rescale_pointer(int ow, int oh, int nw, int nh);
 void c64_input_add_wheel(int notches);
 
 /* ssusb.c: MediaTek's host block, brought to where a standard xHCI driver can

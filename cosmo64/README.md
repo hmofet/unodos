@@ -500,3 +500,78 @@ Open alongside: whether the touch mapping is *accurate* (the log proves
 contacts arrive and shows raw/panel/UI for each one, but only a human can say
 whether the pointer landed under the finger), and the ramoops zone-order
 question the survey will answer on the next boot.
+
+## The desktop is the panel (2026-09-02): native 2160x1080
+
+Until now the desktop was **640x480 presented at 2x** — a 960x1280 rect on a
+1080x2160 panel, with the rest black. That size was never a decision about
+this device: it is the rpi port's, inherited when the asm lane forked from it
+and carried into cosmo64 because `display.c` was written against the m0
+payload's constants. The panel here is *fixed*, so it has exactly one right
+answer, and it is the panel: **2160x1080 landscape, zoom 1, filling the glass
+edge to edge.** That is what the shell now starts in.
+
+What had to move for it:
+
+- **The geometry became runtime.** `c64_scrw` / `c64_scrh` / `c64_scale` and
+  the derived rect live in `videolfb.c` (`c64_geom_set`) — not `display.c`,
+  because `touch.c` inverts the same transform and the calib payload links
+  `touch.c` without the shell. `display.c`, `touch.c`, `input.c` and
+  `calib.c` all read them; only the static payloads (m0, calib's crosshairs)
+  still compile geometry in, from the same `C64_SCRW`/`C64_SCRH`/`FB_SCALE`
+  that seed the runtime values.
+- **`fb.h`'s ceiling had to be overridable.** `FB_MAX_W`/`FB_MAX_H` size
+  `fb[]` and unoui's cached desktop background, and they default to a PC
+  monitor's 1920x1200. 2160x1080 is *wider and shorter* than that, so neither
+  raising nor swapping the two numbers covers it; they are `#ifndef`-guarded
+  now and the shell build passes `-DFB_MAX_W=2160 -DFB_MAX_H=1080`
+  (`seam:` commit, and a cross-lane note in `pc64/UNOAUTOMATE-REQUESTS.md`).
+  Cost: `fb[]`, unoui's `g_bg`, and `display.c`'s shadow and scene buffers are
+  each 9.3 MB instead of 1.2 MB, so the image's runtime-zero range went from
+  ~67 MB to ~88 MB. Nothing is *shipped* (`flatten.py` trims at the last real
+  byte — the boot image is unchanged at 512 KiB), but `entry.s` zeroes that
+  range MMU-off, on Device memory, so the extra ~21 MB is real boot time.
+- **Control Panel > Display now has a list.** It used to report one fixed
+  entry. There are no video modes to enumerate on a fixed panel, but there is
+  still a choice, because a smaller desktop is simply presented at a bigger
+  integer zoom over the same glass — which is the sense the x86 port's list
+  ended up having too. `2160x1080`, `1080x540`, `720x360` and `540x270` divide
+  the panel exactly and fill it; the familiar PC sizes between them are
+  centred with a black surround, which is what a fixed panel can honestly do
+  with them. Whole-pixel zoom only: a fractional nearest-neighbour upscale
+  duplicates some source columns and not others and mangles glyph stems (x86
+  floors its scale for the same reason). `uno_pc64_lowres()` is real now too —
+  540x270 at zoom 4, 1/16 the pixels, still full-screen.
+- **A size change clears the whole panel.** A *shrinking* rect leaves the old
+  desktop standing in the margin: nothing will ever draw over those pixels
+  again. Same class of bug as the stale band at first light.
+- **The pointer is carried by its position on the glass**, not its
+  coordinate (`c64_input_rescale_pointer`). Every size covers the same panel,
+  so the same coordinate is a different physical place either side of a
+  change, and clamping alone throws the pointer at an edge.
+
+Two things the gate learned with it. `qharness.py` now takes the desktop size
+from the payload's own FBINFO report (`fb_scrw`/`fb_scrh`, +92/+96) and checks
+it against what it expects, so changing one without the other fails on quill
+rather than on the device. And the white bar beacon at the panel origin can
+only survive if the desktop rect does not reach the origin — at native size
+the desktop *is* the panel and paints over it, so that check is now scoped to
+the case where it can still mean something. The pixel-exact blit check is the
+stronger statement of the same fact anyway.
+
+**What this costs on hardware, and the knob for it.** A full repaint now reads
+9.3 MB and writes 9.3 MB of non-cacheable panel memory, against 1.2 MB read /
+4.9 MB written at 640x480@2x; the shell's own `unoui_render_ui()` covers 7.6x
+the pixels. The dirty-box tracking added for exactly this reason still bounds
+the steady state to what actually changed, but a full repaint is heavier and
+the software render behind it is much heavier. If it reads as slow on the
+device, **Control Panel > Display > 1080x540** fills the same panel with a
+quarter of the pixels. And at 403 DPI the native desktop is *very* fine — the
+`UI scale` dropdown beside the resolution one (100/125/150/200%) is the right
+answer for readability before dropping resolution is.
+
+Both gates green at the new size: `./build.sh` (m0) and `./build.sh shell`
+under `qharness.py`, pixel-exact, with the Control Panel reporting
+`2160x1080`. (`./build.sh` also links `msdc.o` now — the m0 target had been
+unbuildable since `log.c`'s crash path started calling `c64_log_flush()`,
+which lives there.)
