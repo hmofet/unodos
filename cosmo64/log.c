@@ -213,12 +213,14 @@ static unsigned emit_num(char *out, c64_u64 v, unsigned base, int upper)
     return n;
 }
 
-void c64_logf(const char *fmt, ...)
+/* The core takes a va_list so that pc64's own diagnostics can be routed here:
+ * xhci.c speaks uno_dbg_log(fmt, ...), which is a no-op macro in a production
+ * build, and c64_dbg_log() below is what the force-included c64_usbglue.h
+ * points that macro at instead. */
+void c64_logv(const char *fmt, __builtin_va_list ap)
 {
     char out[256];
     unsigned o = 0;
-    __builtin_va_list ap;
-    __builtin_va_start(ap, fmt);
 
     for (const char *f = fmt; *f && o < sizeof out - 24; f++) {
         if (*f != '%') {
@@ -302,8 +304,28 @@ void c64_logf(const char *fmt, ...)
         for (unsigned i = 0; i < n && o < sizeof out - 1; i++)
             out[o++] = num[i];
     }
-    __builtin_va_end(ap);
     c64_log_write(out, o);
+}
+
+void c64_logf(const char *fmt, ...)
+{
+    __builtin_va_list ap;
+    __builtin_va_start(ap, fmt);
+    c64_logv(fmt, ap);
+    __builtin_va_end(ap);
+}
+
+/* uno_dbg_log's contract: one line per call, no trailing newline in the
+ * format. Prefixed so a reader can tell pc64's driver talking from this
+ * layer's own lines. */
+void c64_dbg_log(const char *fmt, ...)
+{
+    __builtin_va_list ap;
+    c64_log("pc64: ");
+    __builtin_va_start(ap, fmt);
+    c64_logv(fmt, ap);
+    __builtin_va_end(ap);
+    c64_log("\n");
 }
 
 /* ---- the fault handler's tail (cpu.s) ------------------------------------ */

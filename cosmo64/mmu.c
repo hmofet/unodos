@@ -20,6 +20,8 @@
 typedef unsigned int u32;
 typedef unsigned long long u64;
 
+#include "cosmo64.h"           /* C64_XDMA_SLOT */
+
 void cpu_early_init(void);
 void dcache_inv_all(void);
 void mmu_on(u64 ttbr0, u64 mair, u64 tcr);
@@ -76,6 +78,42 @@ static int e2h_set(void)
 static u64 l1[512] __attribute__((aligned(4096)));
 static u64 l2[512] __attribute__((aligned(4096)));
 
+/* M4: the USB DMA arena. pc64's xhci.c keeps its rings, contexts and transfer
+ * buffers in static memory and the xHCI is not coherent with the caches on
+ * this SoC, so those pages must not be write-back -- and they must not be
+ * merely non-cacheable either, because the driver has no barriers between
+ * writing a TRB and ringing the doorbell and Device-nGnRnE is what keeps
+ * those in order. The build collects every such variable into one section
+ * (".xdma", see c64_usbglue.h) and flatten.py leaves its range at
+ * C64_XDMA_SLOT. The 2 MB blocks it falls in are split into 4 KB pages so
+ * that only those pages pay: the rest of each block, which is the image and
+ * its ordinary .bss, stays write-back. Four tables cover an arena of up to
+ * 8 MB; the arena is under half a megabyte. */
+#define PAGE_VALID 0x3ull
+#define XDMA_TABLES 4
+static u64 l3[XDMA_TABLES][512] __attribute__((aligned(4096)));
+
+static void map_xdma(void)
+{
+    u64 xs = *(volatile u64 *)C64_XDMA_SLOT;
+    u64 xe = *(volatile u64 *)(C64_XDMA_SLOT + 8);
+    u32 nt = 0;
+    if (!xs || xe <= xs || xs < 0x40000000ull || xe > 0x80000000ull)
+        return;
+    for (u64 blk = xs & ~0x1FFFFFull; blk < xe && nt < XDMA_TABLES;
+         blk += 0x200000, nt++) {
+        u32 i = (u32)((blk - 0x40000000ull) >> 21);
+        for (u32 p = 0; p < 512; p++) {
+            u64 pa = blk + (u64)p * 4096;
+            if (pa >= xs && pa < xe)
+                l3[nt][p] = pa | PAGE_VALID | AF | ATTRIDX(AI_DEVICE) | UXN | PXN;
+            else
+                l3[nt][p] = pa | PAGE_VALID | AF | ATTRIDX(AI_WB) | SH_INNER;
+        }
+        l2[i] = (u64)l3[nt] | TABLE_VALID;
+    }
+}
+
 void mmu_init(void)
 {
     cpu_early_init();  /* idempotent; entry.s already ran it before c_main */
@@ -94,6 +132,7 @@ void mmu_init(void)
         else
             l2[i] = pa | BLOCK_VALID | AF | ATTRIDX(AI_WB) | SH_INNER;
     }
+    map_xdma();
     __asm__ volatile("dsb sy" ::: "memory");
 
     dcache_inv_all();

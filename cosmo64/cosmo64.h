@@ -38,10 +38,19 @@ typedef unsigned long long c64_u64;
 #define C64_LOG_SIZE 0x40000u            /* ramoops console_size              */
 #define C64_LOG_NC_BLOCK 0x54400000ull   /* the 2 MB block that contains it   */
 
+/* M4: where the linker put xhci.c's DMA memory (the ".xdma" section; see
+ * c64_usbglue.h). flatten.py writes the absolute start and end as two u64s at
+ * image offsets 0x40 and 0x48 -- just past the 64-byte ARM64 Image header,
+ * inside the page nothing else uses -- and mmu.c maps the range as Device
+ * memory. Both zero when the image carries no such section. */
+#define C64_XDMA_SLOT 0x40080040ull
+
 void c64_log_init(void);
 void c64_log(const char *s);
 void c64_log_write(const char *s, unsigned n);
 void c64_logf(const char *fmt, ...);
+void c64_logv(const char *fmt, __builtin_va_list ap);
+void c64_dbg_log(const char *fmt, ...);      /* pc64's uno_dbg_log, routed */
 unsigned c64_log_bytes(void);
 void c64_log_read(unsigned off, c64_u8 *dst, unsigned n);
 /* survey() counts surviving ramoops signatures and MUST run before init()
@@ -174,10 +183,24 @@ void c64_kbd_init(void);
 void c64_kbd_poll(void);
 int c64_kbd_present(void);
 
-/* input.c: producers push edges and publish level state */
+/* input.c: producers push edges and publish level state. The touch panel is
+ * an absolute pointer (set_pointer); a USB mouse is relative (move_pointer);
+ * each keeps its own button state and the shell sees the OR, as on x86. */
 void c64_key_push(int scan, int uni, int mods);
-void c64_input_set_level(int mods, int held);
+void c64_input_set_level(int mods, int held);          /* the AW9523 matrix */
+void c64_input_set_level_usb(int mods, int held);      /* a USB keyboard    */
 void c64_input_set_pointer(int x, int y, int btn);
+void c64_input_move_pointer(int dx, int dy, int btn);
+void c64_input_add_wheel(int notches);
+
+/* ssusb.c: MediaTek's host block, brought to where a standard xHCI driver can
+ * take over. usb.c: pc64's xhci.c + usbhid.c on top of it, feeding input.c. */
+int  c64_ssusb_present(void);
+int  c64_ssusb_host_up(void);
+void c64_usb_init(void);
+void c64_usb_poll(void);
+int  c64_usb_mice(void);
+void c64_pci_expose_xhci(int on);    /* pci.c: put the controller on the bus */
 
 static inline c64_u64 c64_cnt_now(void)
 {

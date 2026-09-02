@@ -34,7 +34,15 @@ CC="$LMBIN/aarch64-w64-mingw32-clang"
 # (mmu.c, and everything in the m0 payload); the shell's fb blits run MMU-on.
 BASECF="-O2 -Wall -Wextra -ffreestanding -fno-stack-protector -fno-stack-check \
         -nostdinc -fno-builtin -fsigned-char"
-LINK="-nostdlib -Wl,--image-base,0x40080000 -e _start"
+# /merge:.unodrv=.data: the UNO_DRIVER registration tables xhci.c and usbhid.c
+# emit are 16 initialised bytes in a section of their own, and lld places an
+# unknown section AFTER .data -- whose virtual extent is the shell's 72 MB of
+# .bss. flatten.py ships everything up to the last non-zero byte, so those 16
+# bytes made the payload 76 MB, which is the size that hung LK's decompressor
+# at the splash in M1. Nothing here reads the table (no device manager), so
+# it goes inside .data's initialised part where it costs nothing. flatten.py
+# trips on any shipped image over 16 MB so this cannot recur silently.
+LINK="-nostdlib -Wl,--image-base,0x40080000 -e _start -Wl,-Xlink=/merge:.unodrv=.data"
 
 stage_quill() {
   ssh "$QUILL" "mkdir -p $QDIR/cosmo64/build $QDIR/pc64/build $QDIR/unoui/themes $QDIR/uno3d"
@@ -81,8 +89,9 @@ shell )
           theme_amiga theme_c64 theme_apple2 theme_next"
   PCORE="fb pc64_libc pc64_math pc64_font pc64_icons pc64_qoi pc64_uui_apps \
          mac_compat pc64_io pc64_write pc64_clock pc64_files pc64_uui \
-         fat pc64_fs"
-  C64="videolfb display platform input stubs i2c kbd touch log msdc blk"
+         fat pc64_fs hid_kbd"
+  C64="videolfb display platform input stubs i2c kbd touch log msdc blk \
+       ssusb pci usb"
 
   # KBDTEST=1: compile the scripted key pad (QEMU gate proof, never shipped)
   [ -n "$KBDTEST" ] && BASECF="$BASECF -DC64_KBDTEST"
@@ -107,16 +116,35 @@ shell )
         -I$QDIR/pc64/bearssl/inc -I$QDIR/unosound -I$QDIR/unomedia \
         -I$QDIR/unoacpi -I$QDIR/unoacpi/uacpi/include -I$QDIR/cosmo64"
 
+  # M4: the USB lane's xhci.c and usbhid.c, compiled UNCHANGED for this
+  # platform. -DUNO_XHCI turns the real driver on (it is inert stubs without
+  # it); -include c64_usbglue.h moves every DMA buffer in xhci.c into the
+  # ".xdma" section mmu.c maps uncached (C64_XDMA) and routes uno_dbg_log to
+  # the eMMC log; the two -D renames send usbhid.c's control transfers
+  # through usb.c's bounce buffer, because it passes a STACK buffer and the
+  # controller cannot see through the cache to it. The tripwire after the
+  # link fails the build if xhci.o still owns a .bss: a DMA structure left in
+  # write-back memory does not fail, it corrupts.
+  USBCF="$SHCF -DUNO_XHCI -include c64_usbglue.h"
+  OBJDUMP="$LMBIN/llvm-objdump"
+
   ssh "$QUILL" "set -e; cd $QDIR/cosmo64 && \
     for f in $UNOUI; do $CC $SHCF -c ../unoui/\$f.c -o build/u_\$f.o; done && \
     for f in $THEMES; do $CC $SHCF -c ../unoui/themes/\$f.c -o build/t_\$f.o; done && \
     for f in $PCORE; do $CC $SHCF -c ../pc64/\$f.c -o build/p_\$f.o; done && \
+    $CC $USBCF -DC64_XDMA -c ../pc64/xhci.c -o build/p_xhci.o && \
+    $CC $USBCF -Duno_usb_get_config=c64_usb_get_config \
+        -Duno_usb_control=c64_usb_control -c ../pc64/usbhid.c -o build/p_usbhid.o && \
+    if $OBJDUMP -h build/p_xhci.o | grep -Eq '\.bss +0*[1-9a-f]'; then \
+        echo 'BUILD TRIPWIRE: xhci.o still has a .bss -- DMA memory would be cached' >&2; exit 1; fi && \
+    $OBJDUMP -h build/p_xhci.o | grep -q '\.xdma' || { echo 'BUILD TRIPWIRE: no .xdma section in xhci.o' >&2; exit 1; } && \
     for f in $C64; do $CC $SHCF -mstrict-align -c \$f.c -o build/c_\$f.o; done && \
     $CC $SHCF -mstrict-align -c mmu.c -o build/mmu_sa.o && \
     $CC -c entry.s -o build/entry.o && \
     $CC -c cpu.s -o build/cpu.o && \
     $CC $LINK -o build/shell.exe build/entry.o build/cpu.o build/mmu_sa.o \
-        build/u_*.o build/t_*.o build/p_*.o build/c_*.o"
+        build/u_*.o build/t_*.o build/p_*.o build/c_*.o && \
+    $OBJDUMP -h build/shell.exe | grep -E 'xdma|\.data|\.text'"
   scp -q "$QUILL:$QDIR/cosmo64/build/shell.exe" build/
   FLATTEN_IMGSZ=shipped "$PY" flatten.py build/shell.exe build/shell.bin
   OUT=build/shell.bin

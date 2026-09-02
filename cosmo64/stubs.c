@@ -53,7 +53,6 @@ I0(uno_efifs_volumes)
 I0(uno_efifs_snapshot)
 I0(uno_efifs_snapshot_dir)
 I0(uno_efifs_serial)
-I0(pci_find_class)
 I0(uno_usbboot_native_ok)
 I0(uno_usbboot_is_usb)
 I0(uno_inst_scan)
@@ -93,12 +92,19 @@ I0(iwl_saved_count)
 P0(iwl_saved_get)
 V0(iwl_progress_set)
 
-/* ---- usb / hid ----------------------------------------------------------- */
-V0(uno_xhci_init)
-I0(uno_xhci_status)
-I0(uno_xhci_diag)
-I0(uno_xhci_diag2)
-P0(uno_xhci_dev)
+/* ---- usb / hid ----------------------------------------------------------- *
+ * xhci.c and usbhid.c are real as of M4 (usb.c, pci.c, ssusb.c). What they
+ * still reach for and this build does not carry: the unodevices tree
+ * (uno_devmgr.c), which uno_xhci_publish_tree() populates -- it returns
+ * before touching anything when devmgr_find_class() answers 0 -- and the I2C
+ * HID / detach-gate pieces of uefi_main.c. */
+P0(devmgr_find_class)
+I0(devmgr_count)
+P0(devmgr_get)
+I0(devmgr_drop_usb_children)
+I0(devmgr_add_usb_dev)
+I0(devmgr_add_usb_if)
+I0(devmgr_bind_all)
 I0(uno_i2c_hid_status)
 I0(uno_i2c_hid_diag)
 I0(uno_i2c_hid_timing)
