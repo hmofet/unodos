@@ -37,12 +37,42 @@ static unsigned char g_bounce[512] __attribute__((aligned(64)));
 
 static int g_up, g_nkbd, g_nmouse;
 
+/* TWO FETCHES, HEADER THEN EXACT LENGTH -- what the USB core does, and on
+ * this controller not optional. usbhid.c asks for the config descriptor with
+ * a 256-byte request, and on the MediaTek xHCI a 256-byte control IN on the
+ * hub "completes" in 0 ms with the buffer untouched (third M4 boot, measured
+ * at 256/64/25/9 bytes: the three shorter requests all return the real
+ * descriptor, 64 being a short packet too, so it is the 256 itself). An
+ * all-zero descriptor then made usbhid issue SET_CONFIGURATION(0) on the
+ * HUB, which unconfigures it and drops every device behind it -- which is why
+ * the receivers, enumerated fine a moment earlier, timed out on everything
+ * afterwards. So: 9 bytes for the header, then exactly wTotalLength, and a
+ * header that does not parse is a failure here, never a zero handed up. */
 int c64_usb_get_config(int dev, void *buf, int len)
 {
-    int n, i;
+    int n, i, total;
     if (len > (int)sizeof g_bounce)
         len = (int)sizeof g_bounce;
-    n = uno_usb_get_config(dev, g_bounce, len);
+    n = uno_usb_get_config(dev, g_bounce, 9);
+    if (n < 9 || g_bounce[0] != 9 || g_bounce[1] != 0x02) {
+        c64_logf("usb: get_config dev %d header -> %d bytes (%02x %02x), "
+                 "refusing\n", dev, n, g_bounce[0], g_bounce[1]);
+        return -1;
+    }
+    total = g_bounce[2] | (g_bounce[3] << 8);
+    if (total < 9)
+        return -1;
+    if (total > len)
+        total = len;
+    if (total > 9) {
+        n = uno_usb_get_config(dev, g_bounce, total);
+        if (n < total) {
+            c64_logf("usb: get_config dev %d body (%d bytes) -> %d, refusing\n",
+                     dev, total, n);
+            return -1;
+        }
+    }
+    n = total;
     for (i = 0; i < n && i < len; i++)
         ((unsigned char *)buf)[i] = g_bounce[i];
     /* say what came back: the interfaces and endpoints usbhid.c is about to
