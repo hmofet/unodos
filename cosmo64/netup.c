@@ -67,6 +67,7 @@ int c64_usb_control(int dev, unsigned char rt, unsigned char req,
                     unsigned short val, unsigned short idx, void *data, int len);
 int c64_usb_bulk_probe(int dev, int len);   /* usb.c: a synchronous bulk IN */
 void c64_usb_bulk_reset(int dev);           /* usb.c: Stop EP + Set TR Deq   */
+void c64_usb_bulk_stall_hook(void (*fn)(int dev));   /* usb.c: RX watchdog   */
 int uno_xhci_dev_count(void);
 const uno_usb_dev *uno_xhci_dev(int i);
 
@@ -166,6 +167,33 @@ static void asix_match_aggregation(void)
     c64_log("asix: bulk-in aggregation set to 4 KB (size=02) to match the "
             "driver's 4 KB receive buffer\n");
     c64_log_flush();
+}
+
+/* THE REPAIR, registered with usb.c's receive watchdog.
+ *
+ * Boot 10 established that the bring-up ritual is not durable in every
+ * ordering: a cheap endpoint reset made RECEIVE_EN stick (the medium read back
+ * 01b3 where it used to revert) and reception still stopped after two frames,
+ * endpoint state 1 Running. The five-second prime does produce sustained flow,
+ * so something about a real in-flight transfer differs from the two commands
+ * -- but chasing that difference costs one boot per hypothesis, and four of
+ * those have already been spent on this milestone.
+ *
+ * So stop treating it as a bring-up ritual and treat it as what it is: a part
+ * that stops sending and has to be restarted. usb.c notices (armed, silent for
+ * two seconds, frames have flowed before) and calls this; this does the
+ * ASIX-specific half and says what the registers looked like at the moment it
+ * happened, which is the measurement no amount of boot-time dumping could get.
+ * If the log shows RECEIVE_EN cleared again at each stall, the chip is
+ * disabling its own receiver and the reason is in its FIFO handling; if it
+ * shows 01b3 still set, the stall is on the USB side. */
+static void asix_rx_repair(int dev)
+{
+    asix_dump("at stall");
+    c64_usb_bulk_reset(dev);
+    asix_rewrite_medium();
+    asix_match_aggregation();
+    asix_dump("after repair");
 }
 
 /* ---- a real deadline ----------------------------------------------------- */
@@ -309,6 +337,7 @@ int pc64_net_boot(void)
     asix_rewrite_medium();
     asix_match_aggregation();
     asix_dump("after endpoint reset + medium rewrite");
+    c64_usb_bulk_stall_hook(asix_rx_repair);   /* keep it running from here */
 
     stage("DHCP");
     deadline_in(5000);
