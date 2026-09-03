@@ -27,8 +27,12 @@
  * decided by measurement rather than guessed. UART1's signals can be brought
  * out on three different pin pairs on this SoC (110/112 in function 7,
  * 46/47 in function 2, 19/20 in function 5); 41/42 is a fourth on paper and
- * is ruled out on this board, because those pins are the SD card's data
- * lines. MediaTek's own MT6771 reference design -- which Planet built this
+ * is NOT probed: those two pins carry USB IDDIG and DRVVBUS in their function
+ * 1, which is what a device with a USB-C OTG port uses them for, and muxing
+ * the live USB host's ID and VBUS lines away on the chance that a UART is
+ * behind them is a bad trade for a guess. If all three candidates come up
+ * empty, that pair is the next thing to try -- with the USB stack quiet.
+ * MediaTek's own MT6771 reference design -- which Planet built this
  * device from, and whose DWS is in the vendor kernel -- routes UART1 to
  * 110/112, so that pair is tried first. Each candidate gets the pinmux, a
  * version query and a short wait; the pair the CoDi answers on is the pair,
