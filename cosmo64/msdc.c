@@ -381,12 +381,16 @@ static int find_data_partition(void)
     if (ent_sz < 128 || ent_sz > BLKSZ || n_ent > 256)
         return -1;
 
-    /* "UNODATA" is the name the port plan gives our partition; the unit still
-     * ships it as Android's "userdata" (p44, 27.7 GiB), which is what the plan
-     * says to take over. Prefer the renamed one, accept the original, and say
-     * which. */
-    c64_u64 uno_lba = 0, uno_sectors = 0;        /* UNODATA, if renamed  */
-    c64_u64 fallback_lba = 0, fallback_sectors = 0;   /* Android userdata */
+    /* "UNODATA" is the name the port plan gives our partition, and it is the
+     * ONLY name this walk will hand out as writable. Android's "userdata"
+     * (p44, 27.7 GiB) used to be accepted as a fallback while the plan was to
+     * take it over; that plan was reversed on 2026-09-01 (p44 stays Android's,
+     * persistence goes to the SD card), and a fallback that outlives the
+     * decision is a formatted p44 the first time anything upstream asks for a
+     * writable disk -- URC's mkfs/prepdisk verbs will, over the LAN. So p44 is
+     * noticed and logged, and never offered. */
+    c64_u64 uno_lba = 0, uno_sectors = 0;        /* UNODATA, if present  */
+    c64_u64 ud_lba = 0, ud_sectors = 0;          /* Android userdata: log only */
     unsigned per_blk = BLKSZ / ent_sz;
     for (c64_u32 i = 0; i < n_ent; i += per_blk) {
         if (read_block(ent_lba + i / per_blk, g_scratch) < 0)
@@ -401,8 +405,8 @@ static int find_data_partition(void)
                 uno_lba = first;
                 uno_sectors = last - first + 1;
             } else if (name_is(nm, "userdata")) {
-                fallback_lba = first;
-                fallback_sectors = last - first + 1;
+                ud_lba = first;
+                ud_sectors = last - first + 1;
             } else if (name_is(nm, "UNODOS")) {
                 g_boot_lba = first;              /* our own boot slot */
                 g_boot_sectors = last - first + 1;
@@ -429,24 +433,21 @@ static int find_data_partition(void)
                  (int)uno_lba, (int)uno_sectors, (int)(uno_sectors / 2048));
         return 0;
     }
-    if (fallback_sectors) {
-        g_data_lba = fallback_lba;
-        g_data_sectors = fallback_sectors;
-        c64_logf("msdc: no UNODATA partition; taking Android's userdata at "
-                 "LBA %d, %d sectors (%d MiB)\n", (int)fallback_lba,
-                 (int)fallback_sectors, (int)(fallback_sectors / 2048));
-        return 0;
-    }
-    c64_log("msdc: found no UnoDOS data partition -- data writes stay "
-            "refused\n");
+    if (ud_sectors)
+        c64_logf("msdc: Android userdata at LBA %d, %d sectors (%d MiB) -- "
+                 "LEFT ALONE (not a UnoDOS partition; persistence is the SD "
+                 "card's job)\n", (int)ud_lba, (int)ud_sectors,
+                 (int)(ud_sectors / 2048));
+    c64_log("msdc: no UNODATA partition -- data writes stay refused\n");
     return -1;
 }
 
 /* ---- the eMMC log sink --------------------------------------------------- */
-/* The reason this exists: the ramoops channel in log.c does not survive this
- * device's reset path (the preloader wipes DRAM -- see log.c's header). The
- * eMMC does survive it, and p38's unused tail is ours. Block 0 of the window
- * is a header; the text follows. readlog.sh dd's it straight back out.
+/* The reason this exists: the ramoops channel in log.c never reaches pstore on
+ * this device (cause still open -- DRAM itself demonstrably survives the
+ * reset, see log.c's header), and the eMMC is readable from any later Linux
+ * boot. p38's unused tail is ours. Block 0 of the window is a header; the
+ * text follows. readlog.sh dd's it straight back out.
  *
  * Called from the poll loop when the log has grown, and from the fault
  * handler, which is the case that matters: a payload that dies still leaves

@@ -79,8 +79,9 @@ void c64_log_read(unsigned off, c64_u8 *dst, unsigned n);
  * overwrites one of them; report() says what it found, once the log exists. */
 unsigned c64_log_survey(void);
 void c64_log_survey_report(void);
-/* msdc.c: push the log to its durable home in p38's tail. The DRAM copy does
- * not survive this device's reset path; this one does. */
+/* msdc.c: push the log to its durable home in p38's tail. The DRAM copy
+ * survives the reset but never reaches pstore (cause open); this one is read
+ * back by readlog.sh from any Linux boot. */
 void c64_log_flush(void);
 extern c64_u8 c64_fault_stack[0x2000];
 
