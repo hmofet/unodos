@@ -92,8 +92,18 @@ void c64_touch_init(void)
         return;
     }
     if (set_page(EVENT_BUF) < 0) {
-        c64_log("touch: xdata page select NAKed\n");
-        return;
+        /* Bus 0 now runs at 400 kHz, which this controller supports. If the
+         * page select does not take there, fall back to Standard mode and try
+         * once more -- a pointer that degrades beats one that vanishes. */
+        if (c64_i2c_khz(C64_I2C_TP) > 100) {
+            c64_logf("touch: no answer at %d kHz; retrying in Standard mode\n",
+                     c64_i2c_khz(C64_I2C_TP));
+            c64_i2c_set_khz(C64_I2C_TP, 100);
+        }
+        if (set_page(EVENT_BUF) < 0) {
+            c64_log("touch: xdata page select NAKed\n");
+            return;
+        }
     }
     /* the FW info block: ver, ~ver, then x_num/y_num and the maxima. This is
      * a read-only presence test -- unlike the vendor's chip-ID trim check,
@@ -115,8 +125,8 @@ void c64_touch_init(void)
         g_maxy = my;
     }
     g_present = 1;
-    c64_logf("touch: NT36xxx ver=%02x, reported maxima %dx%d\n",
-             info[0], (int)g_maxx, (int)g_maxy);
+    c64_logf("touch: NT36xxx ver=%02x, reported maxima %dx%d, bus %d kHz\n",
+             info[0], (int)g_maxx, (int)g_maxy, c64_i2c_khz(C64_I2C_TP));
 }
 
 void c64_touch_poll(void)

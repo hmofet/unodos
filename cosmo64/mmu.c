@@ -75,8 +75,8 @@ static int e2h_set(void)
     return (v >> 34) & 1;                   /* E2H: EL2 uses the EL1 layout */
 }
 
-static u64 l1[512] __attribute__((aligned(4096)));
-static u64 l2[512] __attribute__((aligned(4096)));
+static u64 l1[512] __attribute__((aligned(4096))) C64_EARLY;
+static u64 l2[512] __attribute__((aligned(4096))) C64_EARLY;
 
 /* M4: the USB DMA arena. pc64's xhci.c keeps its rings, contexts and transfer
  * buffers in static memory and the xHCI is not coherent with the caches on
@@ -91,7 +91,7 @@ static u64 l2[512] __attribute__((aligned(4096)));
  * 8 MB; the arena is under half a megabyte. */
 #define PAGE_VALID 0x3ull
 #define XDMA_TABLES 4
-static u64 l3[XDMA_TABLES][512] __attribute__((aligned(4096)));
+static u64 l3[XDMA_TABLES][512] __attribute__((aligned(4096))) C64_EARLY;
 
 static void map_xdma(void)
 {
@@ -112,6 +112,51 @@ static void map_xdma(void)
         }
         l2[i] = (u64)l3[nt] | TABLE_VALID;
     }
+}
+
+/* ---- the other half of the .bss zero ------------------------------------ *
+ * entry.s zeroes the ".bssearly" section and nothing else (its header comment
+ * explains why); this clears the rest, and it runs at the END of mmu_init()
+ * so that every payload gets it -- the shell, the m0 test image, the touch
+ * calibrator and the USB probe all reach the MMU through this one function,
+ * and a payload that quietly skipped the second half would be a payload whose
+ * statics are whatever the previous boot left in DRAM.
+ *
+ * Nothing may run between mmu_on() and this, and nothing does: mmu_on()
+ * returns straight here.
+ *
+ * Eight stores per iteration, which is where the loop stops being bookkeeping
+ * and starts being memory bandwidth. `dc zva` would beat it again -- 64 bytes
+ * an instruction -- but it needs DCZID_EL0 checked, a block-alignment dance
+ * and a fallback for when the block size is not what you assumed, and this
+ * already turns a second of boot into a handful of milliseconds. */
+void c64_bss_zero_rest(void)
+{
+    u64 zs = *(volatile u64 *)C64_BSS_SLOT;
+    u64 ze = *(volatile u64 *)(C64_BSS_SLOT + 8);
+    u64 es = *(volatile u64 *)C64_EARLY_SLOT;
+    u64 ee = *(volatile u64 *)(C64_EARLY_SLOT + 8);
+    int half;
+
+    if (!es || ee <= es)
+        return;                     /* no early section: entry.s did the lot */
+
+    for (half = 0; half < 2; half++) {
+        u64 a = half ? ee : zs;
+        u64 b = half ? ze : es;
+        if (b <= a)
+            continue;
+        volatile u64 *p = (volatile u64 *)a;
+        volatile u64 *end = (volatile u64 *)b;
+        while (p + 8 <= end) {
+            p[0] = 0; p[1] = 0; p[2] = 0; p[3] = 0;
+            p[4] = 0; p[5] = 0; p[6] = 0; p[7] = 0;
+            p += 8;
+        }
+        while (p < end)
+            *p++ = 0;
+    }
+    __asm__ volatile("dsb sy" ::: "memory");
 }
 
 void mmu_init(void)
@@ -141,4 +186,7 @@ void mmu_init(void)
      * the matching registers from CurrentEL for itself. */
     u64 tcr = (cur_el() == 2 && !e2h_set()) ? TCR_EL2_VAL : TCR_VAL;
     mmu_on((u64)l1, MAIR_VAL, tcr);
+    /* Caches are on now, so the ~100 MB entry.s deliberately skipped costs
+     * milliseconds rather than a second. */
+    c64_bss_zero_rest();
 }
