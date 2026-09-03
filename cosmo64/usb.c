@@ -224,14 +224,14 @@ static int g_bin_armed = -1;                 /* device with a TRB posted, or -1 
  * them, and net.c's own counters cannot -- they only see frames that already
  * passed the destination-MAC filter. */
 static unsigned g_bi_arm, g_bi_armfail, g_bi_poll, g_bi_land, g_bi_err;
-static unsigned g_bi_bytes, g_bi_shown;
+static unsigned g_bi_bytes, g_bi_shown, g_bi_busy;
 
 static void bulk_stats(void)
 {
-    c64_logf("usb-bulk: in arm=%u armfail=%u poll=%u land=%u err=%u bytes=%u | "
-             "out call=%u ok=%u err=%u bytes=%u\n",
-             g_bi_arm, g_bi_armfail, g_bi_poll, g_bi_land, g_bi_err, g_bi_bytes,
-             g_bo_call, g_bo_ok, g_bo_err, g_bo_bytes);
+    c64_logf("usb-bulk: in arm=%u busy=%u armfail=%u poll=%u land=%u err=%u "
+             "bytes=%u | out call=%u ok=%u err=%u bytes=%u\n",
+             g_bi_arm, g_bi_busy, g_bi_armfail, g_bi_poll, g_bi_land, g_bi_err,
+             g_bi_bytes, g_bo_call, g_bo_ok, g_bo_err, g_bo_bytes);
     c64_log_flush();
 }
 
@@ -244,11 +244,27 @@ int c64_usb_bulk_in(int dev, void *data, int len)
         len = (int)sizeof g_bbounce;
 
     if (g_bin_armed != dev) {
+        int rc;
         if (g_bin_armed >= 0)
             return 0;                        /* another device owns the slot */
-        if (uno_usb_bulk_in_arm(dev, g_bbounce, len) < 0) {
+        rc = uno_usb_bulk_in_arm(dev, g_bbounce, len);
+        if (rc < 0) {
             g_bi_armfail++;
             return -1;
+        }
+        /* THREE RETURN VALUES, NOT TWO. uno_usb_bulk_in_arm() answers 1 for
+         * "TRB posted", -1 for "cannot", and **0 for "busy -- nothing was
+         * posted"**, and this treated every non-negative answer as armed. A
+         * busy return then latched g_bin_armed and the poll below waited
+         * forever on a transfer that had never been queued: boot 7 received
+         * exactly one frame and then sat at arm=2 land=1 for the rest of the
+         * session, with the prime afterwards unable to rescue it because the
+         * deadlock was here and not in the controller. Leave it unlatched and
+         * try again on the next call, which is a no-op until the stale slot
+         * clears. */
+        if (rc == 0) {
+            g_bi_busy++;
+            return 0;
         }
         g_bi_arm++;
         g_bin_armed = dev;
