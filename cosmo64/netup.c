@@ -65,6 +65,7 @@ void uno_dbg_net_trace(const char *fmt, ...)
  * driver. */
 int c64_usb_control(int dev, unsigned char rt, unsigned char req,
                     unsigned short val, unsigned short idx, void *data, int len);
+int c64_usb_bulk_probe(int dev, int len);   /* usb.c: a synchronous bulk IN */
 int uno_xhci_dev_count(void);
 const uno_usb_dev *uno_xhci_dev(int i);
 
@@ -241,8 +242,52 @@ int pc64_net_boot(void)
     }
     report("link up");
     asix_dump("after link");
-    asix_match_aggregation();
-    asix_dump("after override");
+
+    /* ---- THREE MEASUREMENTS, then stop guessing -------------------------
+     * Boot 4 killed the aggregation-size theory: the write landed (the size
+     * field read back as 01, half of the 02 written, exactly the 2 KB-unit
+     * behaviour) and the receive path still reported arm=1 land=0 err=0.
+     * Boot 3 had already killed the USB-speed theory. Both were inferences
+     * from a register dump, and neither asked the controller anything.
+     *
+     * These do. Each is a SYNCHRONOUS bulk IN, whose failure path in xhci.c
+     * prints the completion code and the endpoint's state word -- the two
+     * facts that separate "the endpoint is not running" from "the endpoint is
+     * running and the device is silent", which is the fork every theory so far
+     * has had to guess at. They cost a 5-second timeout each when they fail,
+     * so they run once, here, before the stack is bound.
+     *
+     *   A: 4 KB with the chip's DEFAULT aggregation (size 0x12 => the device
+     *      wants to burst 20 KB). This is what ax_recv() does today.
+     *   B: 4 KB with aggregation matched to 4 KB (size 0x02). If A fails and B
+     *      works, the size theory was right and something in the async path is
+     *      the remaining problem.
+     *   C: 20 KB with the DEFAULT aggregation restored -- the burst the chip
+     *      actually asked for. If C works where A fails, the driver's 4 KB
+     *      receive buffer is simply too small and the fix is its size, not the
+     *      chip's.
+     *
+     * If all three fail with the same completion code, the ASIX is not the
+     * problem at all and the bulk-IN endpoint is not being serviced -- which
+     * would make this the first bulk IN ever attempted on this controller
+     * (control IN, interrupt IN and bulk OUT are all proven; bulk IN is the
+     * one direction M4 never exercised). */
+    {
+        unsigned char dflt[5] = { 0x07, 0x4F, 0x00, 0x12, 0xFF };  /* 20 KB */
+        int d = asix_find();
+        c64_usb_bulk_probe(d, 4096);                       /* A */
+
+        asix_match_aggregation();
+        asix_dump("after 4 KB aggregation");
+        c64_usb_bulk_probe(d, 4096);                       /* B */
+
+        ax_wr(AX_RX_BULKIN_QCTRL, 5, dflt);
+        asix_dump("after default aggregation");
+        c64_usb_bulk_probe(d, 20480);                      /* C */
+
+        /* Leave the chip matched to what ax_recv() will actually submit. */
+        asix_match_aggregation();
+    }
 
     /* A fresh window for DHCP: the link wait has already spent part of the
      * first one, and how long autoneg took says nothing about how long the
