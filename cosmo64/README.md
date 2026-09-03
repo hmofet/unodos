@@ -35,25 +35,18 @@ log window writable, and the shell holds a DHCP lease and serves URC on
 boot. `.UNO` apps do not load (no aarch64 module ABI). No audio, no WiFi
 (CONNSYS has no bare-metal route), no cellular.
 
-**Where we left off.** p38 carries `2254aec6…ec75` (readback verified), which
-is this tree plus the live log stream. It has **not been booted yet** — that is
-the next thing to do, and all it needs is the LK menu and the hub:
+**Where we left off.** p38 carries `2254aec6…ec75`, and it is **booted and
+verified**: the live log streams, and the boot it streamed is the one that
+proved the M6 receive fix (below). Nothing is pending. The loop is:
 
 ```sh
-./build.sh shell && ./flashp38.sh   # the loop, when there is something new to try
+./build.sh shell && ./flashp38.sh   # when there is something new to try
 ./urctail.py                        # watch the log live, from the dev PC
 ./readlog.sh                        # or read it afterwards, from Trixie
 ```
 
-What that boot has to show is one line, `urc: streaming the platform log from
-N bytes back`, followed by the boot story replayed onto the dev PC. Everything
-else about M6 is already hardware-proven (below).
-
-**The last hardware session, for the record.** Boot 2 ran for over an hour and
-the receive counters ended at `arm=10204 land=10202 err=0 bytes=955160` — 955
-KB in, not one failed transfer, so the never-landed watchdog fix holds. The
-`RX NEVER LANDED … repairing` line that proves it *fired* is gone, though,
-which is the finding in the next list.
+Pick up at the open list. Item 1 (the SD card) is the one that unblocks
+others.
 
 **Open, in the order worth doing:**
 
@@ -923,8 +916,24 @@ that matters most: a receiver deaf from its very first frame. It is gone --
 a link that is up and armed with nothing landing for two seconds is a stall
 too, with a back-off to one repair per half minute so an empty network is
 not a log flood. Boot 11 of M5 leased only after the watchdog's first
-repair, so this is the same path made reachable from the start. Reflashed;
-the next boot answers it. Two other things that boot taught: "the mouse is
+repair, so this is the same path made reachable from the start.
+
+**Boot 3 answered it, and the live log caught the whole thing.** Streamed to
+the dev PC as it happened, no reboot, no `readlog.sh`:
+
+```
+net: DHCP
+usb-bulk: RX NEVER LANDED -- armed, link up, nothing received; endpoint state 1; repairing (try #1)
+asix[at stall]:     usb-speed=3 RX_CTL=02b8 MEDIUM=00b3      <- RECEIVE_EN gone, before ANY frame
+asix: medium rewritten with RECEIVE_EN set (01b3)
+asix[after repair]: usb-speed=3 RX_CTL=02b8 MEDIUM=01b3
+net: LEASED 192.168.2.254 gw 192.168.2.1, tx=3 rx=6
+```
+
+So the chip had cleared its own `RECEIVE_EN` again — and this time before a
+single frame had landed, which is exactly the case the old guard skipped. The
+new path caught it on the first try and the lease followed immediately. That
+is the proof boot 2's wrapped log could not give. Two other things that boot taught: "the mouse is
 dead for the first twenty seconds" is the synchronous net bring-up on the
 frame loop (8 s link wait plus two DHCP windows), and `per loop input` is
 still ~11 ms of polled I2C and xHCI -- the next perf lead.
