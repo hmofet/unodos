@@ -74,6 +74,7 @@ void c64_logf(const char *fmt, ...);
 void c64_logv(const char *fmt, __builtin_va_list ap);
 void c64_dbg_log(const char *fmt, ...);      /* pc64's uno_dbg_log, routed */
 unsigned c64_log_bytes(void);
+unsigned c64_log_total(void);                /* bytes ever written, monotonic */
 void c64_log_read(unsigned off, c64_u8 *dst, unsigned n);
 /* survey() counts surviving ramoops signatures and MUST run before init()
  * overwrites one of them; report() says what it found, once the log exists. */

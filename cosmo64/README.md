@@ -850,6 +850,21 @@ came back on the LOG stream, and `pointer` injects that walked the cursor
 round the four corners of the panel. UnoDOS on the Cosmo is now remotely
 driven. Still unverified: the `reboot` verb's SWRST path.
 
+**The platform log is live on the dev PC (2026-09-03).** Until now every
+`msdc:` / `usb-bulk:` / `net:` / `perf:` / `pc64:` line went to the DRAM
+ring and the eMMC only, so reading any of it meant a reboot into Linux. The
+ring is now streamed over the link on unoauto's KERNEL channel (`urc.c`
+`stream_log`): on every connect a replay of the last 32 KB -- the boot story
+-- then each line as it is logged, paced eight lines a frame so a burst of
+driver chatter can neither overflow the link's transmit queue nor stall the
+shell. `c64_log_total()` gives the ring an absolute byte count so a reader
+can follow it across wraps. The mirror runs one way: lines that came from
+the ring are not written back by unoauto's kernel-ring sink (`g_streaming`),
+so the eMMC log carries each line once. `urctail.py` is the one-command
+version -- finds the box, replays, tails, optionally runs a verb or grabs
+the screen first. The URC gate checks both halves: the replay must contain
+`entering uno_main`, and a line logged during the session must come back.
+
 **The gate is now immune to where the stop lands.** Twice a run failed
 with a fifth of the screen differing, and the shadow PNG the harness now
 writes on a failure showed why: fb[] held only the desktop background at
