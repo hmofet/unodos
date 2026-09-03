@@ -148,6 +148,36 @@ static const struct pinpair k_pins[3] = {
 #define DRAIN_MS 8
 #define REARM_MS 5000
 
+/* THE AXIS TRANSFORM, and why it is a knob rather than a constant. The Linux
+ * daemon's SWAP_XY=1 INVERT_X=1 INVERT_Y=1 maps the FT panel into X11's frame
+ * on Gemian; this port's pointer lives in the shell's own 1080x540 landscape,
+ * which display.c then rotates 270 onto the panel. Those two frames agree
+ * only if Gemian and display.c rotate the same way, and that is a fact about
+ * two rotations nobody has put side by side. So it is a build-time knob with
+ * the daemon's values as the starting point, and CODI_RAWLOG below prints the
+ * raw deltas of a real swipe so the right values are read off the wire rather
+ * than argued about. */
+#ifndef CODI_SWAP_XY
+#define CODI_SWAP_XY 1
+#endif
+#ifndef CODI_INVERT_X
+#define CODI_INVERT_X 1
+#endif
+#ifndef CODI_INVERT_Y
+#define CODI_INVERT_Y 1
+#endif
+
+/* A gesture with no frames for this long is over, whatever the last frame
+ * said. See the abandon path in the poll. */
+#define TOUCH_TIMEOUT_MS 250
+
+/* How many raw reports to print at the start of each touch. One deliberate
+ * left-to-right swipe then settles the transform above. Zero it once the
+ * axes are right -- this is a bring-up aid, not a log line to live with. */
+#ifndef CODI_RAWLOG
+#define CODI_RAWLOG 6
+#endif
+
 static int g_present;                    /* a CoDi answered on some pin pair */
 static int g_ourcodi;                    /* ...and it forwards touch         */
 static int g_pin;                        /* which pair won                   */
@@ -167,6 +197,17 @@ static c64_u8 g_rx[512];
 static unsigned g_rxn;
 
 static int g_said_hello;
+
+/* What the link is actually doing, because the shell polls this UART about
+ * 36 times a second and the panel can put ~58 bytes into a 16-byte FIFO
+ * between two of those polls. Frames WILL be lost; the question is how many,
+ * and the only honest answer is a count. */
+static unsigned g_frames;                /* MouseInfo frames parsed          */
+static unsigned g_resync;                /* bytes skipped hunting for magic  */
+static unsigned g_abandoned;             /* gestures ended by the timeout    */
+static c64_u64 g_last_frame;             /* ms of the last frame of any kind */
+static c64_u64 g_next_stat;
+static int g_rawleft;                    /* raw reports still to print       */
 
 /* ---- small helpers -------------------------------------------------------- */
 
@@ -315,6 +356,7 @@ static int rx_parse(void (*on_frame)(c64_u32 cmd, const c64_u8 *p, unsigned n))
         if (!(g_rx[i] == CODI_MAGIC0 && g_rx[i + 1] == CODI_MAGIC1
               && g_rx[i + 2] == CODI_MAGIC0 && g_rx[i + 3] == CODI_MAGIC1)) {
             i++;
+            g_resync++;               /* a byte the FIFO lost us the frame of */
             continue;
         }
         c64_u32 total = be32(g_rx + i + 4);
@@ -374,10 +416,16 @@ static void on_move(int dx, int dy)
         return;                           /* no wander during a two-finger gesture */
 
     /* The cover's long axis is the machine's horizontal, and it faces the
-     * other way: swap, then invert both. */
+     * other way: swap, then invert. Each step is a knob (see the header). */
+#if CODI_SWAP_XY
     { int t = dx; dx = dy; dy = t; }
+#endif
+#if CODI_INVERT_X
     dx = -dx;
+#endif
+#if CODI_INVERT_Y
     dy = -dy;
+#endif
 
     adx = dx < 0 ? -dx : dx;
     ady = dy < 0 ? -dy : dy;
@@ -395,6 +443,13 @@ static void on_move(int dx, int dy)
         factor = 1000;
     }
     mult = GAIN_MILLI * factor / 1000;    /* milli-pixels per panel unit */
+    /* The transformed delta, beside the raw one on_frame already printed, so
+     * ONE deliberate swipe in a known direction settles the whole 2x2x2
+     * transform space from the log instead of from three reflashes. Positive
+     * dx is right on the desktop, positive dy is down. */
+    if (g_rawleft > 0)
+        c64_logf("codi:  -> mapped dx=%d dy=%d (swap=%d invx=%d invy=%d)\n",
+                 dx, dy, CODI_SWAP_XY, CODI_INVERT_X, CODI_INVERT_Y);
     g_pend_x += dx * mult;
     g_pend_y += dy * mult;
     /* The pool is a glide, not a queue: a finger that outruns the drain by
@@ -477,6 +532,27 @@ static void on_release(c64_u64 now)
     }
 }
 
+/* A touch whose RELEASE never arrived. This is not a hypothetical: the shell
+ * polls this UART about 36 times a second and OurCodi can put ~58 bytes into
+ * a 16-byte FIFO between two of those polls, so frames are lost during a
+ * brisk swipe -- and the frame most likely to be lost is the LAST one, which
+ * is the release. The Linux daemon has no such recovery because it never
+ * loses bytes; here, one lost release used to leave g_dragging set and the
+ * left button held down for the rest of the session, which is what "the
+ * touchpad stopped responding" actually was. Anything held is let go, the
+ * pending glide is dropped, and the gesture is simply over. */
+static void abandon_gesture(void)
+{
+    g_abandoned++;
+    g_down = 0;
+    g_dragging = 0;
+    g_drag_open = 0;
+    g_pend_x = g_pend_y = 0;
+    g_fingers = g_max_fingers = 1;
+    if (g_btn)
+        click(0);
+}
+
 static void check_timers(c64_u64 now)
 {
     if (g_drag_open && now >= g_drag_until) {
@@ -512,12 +588,18 @@ static void on_frame(c64_u32 cmd, const c64_u8 *p, unsigned n)
 
     c64_u64 now = ms_now();
     int dx = be16s(p + 1), dy = be16s(p + 3);
+    g_frames++;
+    g_last_frame = now;
+    if (g_rawleft > 0) {
+        g_rawleft--;
+        c64_logf("codi: raw mode=%d dx=%d dy=%d\n", (int)p[0], dx, dy);
+    }
     if (!g_said_hello) {
         g_said_hello = 1;
         c64_log("codi: the rear panel is reporting touch\n");
     }
     switch (p[0]) {
-    case MOUSE_PRESS:    on_press(now); break;
+    case MOUSE_PRESS:    g_rawleft = CODI_RAWLOG; on_press(now); break;
     case MOUSE_MOVE_REL: on_move(dx, dy); break;
     case MOUSE_RELEASE:  on_release(now); break;
     case MOUSE_FINGERS:
@@ -640,17 +722,45 @@ void c64_codi_poll(void)
         return;
     now = ms_now();
 
+    /* Drain first, so everything below decides on the freshest state the
+     * wire has given us rather than on the previous frame's. */
+    rx_fill();
+    rx_parse(on_frame);
+
+    /* A gesture nothing has spoken about for a quarter of a second is over.
+     * The finger cannot still be down and silent -- OurCodi reports at 100 Hz
+     * while there is contact -- so this is a lost RELEASE, and the button it
+     * would have let go is let go here. */
+    if (g_down && now - g_last_frame >= TOUCH_TIMEOUT_MS)
+        abandon_gesture();
+
     /* Periodic re-arm, because a CoDi that rebooted (it is on its own
      * always-on rail and can be reflashed underneath us) forgets SetMouse.
-     * NEVER mid-gesture: the firmware resets its contact tracking on
-     * SetMouse, and doing that under a moving finger is a visible hitch. */
-    if (!g_down && now >= g_next_rearm) {
+     * Not mid-gesture, because the firmware resets its contact tracking on
+     * SetMouse and doing that under a moving finger is a visible hitch --
+     * but "mid-gesture" now means frames are actually arriving, not merely
+     * that g_down is set. The old test was `!g_down` alone, and a single lost
+     * release wedged g_down high and stopped the re-arm for the rest of the
+     * session: the one path whose whole job is recovering from a confused
+     * MCU was disabled by a confused MCU. */
+    if (now >= g_next_rearm
+        && (!g_down || now - g_last_frame >= TOUCH_TIMEOUT_MS)) {
         g_next_rearm = now + REARM_MS;
         set_mouse(1);
     }
 
-    rx_fill();
-    rx_parse(on_frame);
     check_timers(now);
     drain_motion(now);
+
+    /* What the link is doing, once a minute and only when it has done
+     * something. The resync count is the real number here: it is bytes the
+     * FIFO overran, and it is the measurement that says whether this UART
+     * needs its DMA path or just a steadier poll. */
+    if (now >= g_next_stat) {
+        g_next_stat = now + 60000;
+        if (g_frames || g_resync || g_abandoned)
+            c64_logf("codi: %d frames, %d bytes resynced past, %d gesture(s) "
+                     "abandoned on timeout\n", (int)g_frames, (int)g_resync,
+                     (int)g_abandoned);
+    }
 }

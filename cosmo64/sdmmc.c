@@ -100,6 +100,7 @@
  * masks below use. */
 #define GPIO_MODE4 0x10005330ull
 #define GPIO_MODE5 0x10005340ull
+#define GPIO_MODE0 0x10005300ull        /* pins 0-7, so GPIO 3 at bits 12-15 */
 #define GPIO_DIN0  0x10005200ull        /* card detect is GPIO 3 */
 #define GP32(a) (*(volatile c64_u32 *)(c64_u64)(a))
 
@@ -144,8 +145,13 @@
 #define CFG_HS400_MASK  (1u << 22)
 #define CFG_STARTBIT    (3u << 23)
 
-/* MSDC_PS */
+/* MSDC_PS. The DAT and CMD fields are the LIVE PIN LEVELS, which makes this
+ * register the one measurement that tells three failure modes apart -- see
+ * report_lines(). */
 #define PS_DAT0_HIGH    (1u << 16)      /* R1b busy is DAT0 held low */
+#define PS_DAT_SHIFT    16
+#define PS_DAT_MASK     (0xFFu << 16)
+#define PS_CMD          (1u << 24)
 
 /* MSDC_FIFOCS */
 #define FIFOCS_RXCNT    0xFFu
@@ -333,6 +339,54 @@ static void pins_up(void)
     IOP32(PAD_TDSEL1) &= ~0x0000000Fu;
     IOP32(PAD_RDSEL0) &= ~0x3FFFF000u;
     __asm__ volatile("dsb sy" ::: "memory");
+}
+
+/* ---- the one measurement that separates the failure modes ---------------- *
+ * When identification fails there are three candidates and they look
+ * identical from the protocol side: no card in the slot, the VMCH/VMC rails
+ * not actually on (the one thing this driver takes on the vendor's word), or
+ * a pinmux that did not take. MSDC_PS reports the live level of CMD and
+ * DAT0-3, and pins_up() has just put 50K pull-ups on all five, so:
+ *
+ *   CMD=1 DAT=1111  the pads are muxed, the rail is up, and something is
+ *                   holding the bus idle-high: a card is there and the
+ *                   problem is the protocol or the timing.
+ *   CMD=0 DAT=0000  nothing is pulling those lines up. Either the mux write
+ *                   did not take (the MODE readback below says which) or the
+ *                   pads have no supply -- i.e. VMC is off and the PMIC path
+ *                   this driver deliberately skipped is needed after all.
+ *   mixed           a card is present and driving, or a line is stuck.
+ *
+ * An empty slot with the rail up still reads all-high, because the pull-ups
+ * are the host's own -- so this does not prove a card, it proves the pads.
+ * The card-detect GPIO answers the other half. */
+static void report_lines(const char *when)
+{
+    c64_u32 ps = R32(MSDC_PS);
+    c64_logf("sd: pins %s -- MSDC_PS=%08x CMD=%d DAT3..0=%d%d%d%d; "
+             "MODE4=%08x MODE5=%08x (want ?111xxxxx / xxxxx111), "
+             "IES=%08x PUPD=%08x\n", when, ps, (int)((ps & PS_CMD) ? 1 : 0),
+             (int)((ps >> (PS_DAT_SHIFT + 3)) & 1),
+             (int)((ps >> (PS_DAT_SHIFT + 2)) & 1),
+             (int)((ps >> (PS_DAT_SHIFT + 1)) & 1),
+             (int)((ps >> PS_DAT_SHIFT) & 1),
+             GP32(GPIO_MODE4), GP32(GPIO_MODE5),
+             IOP32(PAD_IES), IOP32(PAD_PUPD0));
+}
+
+/* Card detect, read properly. GPIO 3's mode has to be 0 (plain GPIO) before
+ * its input register means anything, and nothing in the boot path guarantees
+ * that -- so put it there, then read. The device tree says cd_level 1, i.e.
+ * a card reads HIGH on this board. Reported, not believed: a card that
+ * answers wins over a pin that says the slot is empty. */
+static int card_detect(void)
+{
+    c64_u32 m = GP32(GPIO_MODE0);
+    c64_logf("sd: card-detect GPIO 3 mode was %d\n", (int)((m >> 12) & 0xF));
+    GP32(GPIO_MODE0) = m & ~(0xFu << 12);       /* function 0 = GPIO      */
+    GP32(0x10005010ull) &= ~(1u << 3);          /* DIR: input             */
+    __asm__ volatile("dsb sy" ::: "memory");
+    return (int)((GP32(GPIO_DIN0) >> 3) & 1u);
 }
 
 /* Set the card clock. CKMOD 0 divides: a divisor of zero means source/2,
@@ -850,13 +904,17 @@ void c64_sd_init(void)
     clock_up();
 
     /* Card detect is a plain GPIO on this board, not the controller's own
-     * CDSTS, and whether it is even in GPIO mode depends on a pinmux nobody
-     * here has set. So it is REPORTED and not believed: if it says empty and
-     * a card answers anyway, the card wins. */
-    c64_logf("sd: card-detect GPIO 3 reads %d\n",
-             (int)((GP32(GPIO_DIN0) >> 3) & 1u));
+     * CDSTS. It is REPORTED and not believed: if it says empty and a card
+     * answers anyway, the card wins. */
+    c64_logf("sd: card-detect GPIO 3 reads %d (cd_level 1 = card present)\n",
+             card_detect());
 
+    /* The pads, before and after. Between these two lines is the entire
+     * question of whether the mux write took, and what the bus looks like
+     * once it has -- see report_lines(). */
+    report_lines("before pins_up");
     pins_up();
+    report_lines("after pins_up ");
 
     c64_logf("sd: MSDC1 before reset: CFG=%08x SDC_CFG=%08x STS=%08x ver=%08x\n",
              R32(MSDC_CFG), R32(SDC_CFG), R32(SDC_STS), R32(MSDC_VERSION));
@@ -918,6 +976,7 @@ void c64_sd_init(void)
     spin_us(2000);
 
     __asm__ volatile("dsb sy" ::: "memory");
+    report_lines("at CMD0     ");
     g_ready = 1;                                 /* the issuer needs it set */
     if (card_identify() < 0) {
         g_ready = 0;

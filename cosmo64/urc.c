@@ -286,7 +286,14 @@ int uart_read(unsigned char *buf, int cap)
  * The cursor is an ABSOLUTE byte position (c64_log_total counts bytes ever
  * written); the ring's oldest surviving byte is total - size, so a cursor
  * that fell behind a wrap is simply moved up and the gap is reported. */
-#define STREAM_BACK   (32u * 1024u)          /* how much history a connect gets */
+/* How much history a connect gets. 32 KB was the M6 value and it cost a real
+ * debugging session on 2026-09-03: the M7 boot story had scrolled out of the
+ * replay window by the time anyone dialled in, so the SD and CoDi bring-up
+ * lines -- the whole reason for the boot -- were unreadable while still
+ * sitting in the device's own 256 KB ring. The ring is the constraint, not
+ * this; take a third of it. The replay is paced at STREAM_LINES a frame, so a
+ * bigger window costs seconds of catch-up on connect, not a stalled shell. */
+#define STREAM_BACK   (96u * 1024u)
 #define STREAM_LINES  8                      /* per frame                       */
 static unsigned g_cursor;                    /* absolute byte position          */
 static int g_was_active;
