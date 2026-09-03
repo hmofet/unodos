@@ -11337,3 +11337,17 @@ numbers would have covered it. Both are `#ifndef`-guarded now and the cosmo64
 build passes `-DFB_MAX_W=2160 -DFB_MAX_H=1080`; the x86 build is unchanged,
 byte for byte, because nothing else defines them. `fb.h` has no listed owner,
 so flagging here.
+
+## 2026-09-03 — cross-lane seam: xhci.c's bulk-IN failure line now also goes to uno_dbg_log (filed by cosmo64)
+
+`uno_usb_bulk_in()`'s failure path reported the completion code, the posted
+length and the endpoint's state word through `xd()` only. `xd()` is 0x402
+debugcon — x86 QEMU only, and SMM-trapped on some firmware — so on a
+bare-metal ARM port that line reached nobody. This file's own header says
+"every metal-relevant line goes through BOTH", and this is the single most
+diagnostic line in the bulk path: three cosmo64 hardware boots of the ASIX NIC
+bring-up got `-1` back with no way to tell whether the transfer had timed out
+(endpoint not serviced / device silent) or completed with a real error code.
+Added one `uno_dbg_log()` beside the existing `xd()` calls — no behaviour
+change, and it compiles away outside a debug build exactly as before. Filed by
+the cosmo64 lane; `xhci.*` ownership is unchanged.

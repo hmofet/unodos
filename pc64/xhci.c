@@ -1118,7 +1118,18 @@ int uno_usb_bulk_in(int dev, void *data, int len)
     xd("[xhci] bulk-in failed cc="); xd_i(cc); xd(" len="); xd_i(len);
     { int st2 = g_csz ? 64 : 32;
       u32 e0 = *(volatile u32 *)(g_devctx[dev] + (g_bin_dci[dev] + 1) * st2);
-      xd(" epstate="); xd_i((int)(e0 & 7)); }
+      xd(" epstate="); xd_i((int)(e0 & 7));
+      /* ALSO through uno_dbg_log. xd() is 0x402 debugcon: x86 QEMU only, and
+       * this file's own header promises "every metal-relevant line goes
+       * through BOTH". This one did not, so on a bare-metal ARM port the
+       * single most diagnostic line in the bulk path reached nobody -- three
+       * hardware boots of the cosmo64 NIC bring-up returned -1 with no way to
+       * tell WHY. cc == -1 means the transfer never completed at all (the
+       * endpoint is not being serviced, or the device is silent); any other
+       * value is a real completion code. epstate: 1 Running, 2 Halted,
+       * 3 Stopped. Compiles away with uno_dbg_log outside a debug build. */
+      uno_dbg_log("xhci: bulk-in failed cc=%d len=%d epstate=%d",
+                  cc, len, (int)(e0 & 7)); }
     xd_c(10);
     ep_recover(dev, g_bin_dci[dev], g_bin[dev], &g_bin_i[dev], &g_bin_cyc[dev],
                cc < 0);
