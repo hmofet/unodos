@@ -37,6 +37,7 @@
 
 #include "cosmo64.h"
 #include "net.h"
+#include "xhci.h"          /* uno_usb_dev: the ASIX's index and USB speed */
 #include "ax88179.h"
 
 void uno_pc64_delay_ms(int ms);
@@ -54,6 +55,103 @@ void uno_dbg_net_trace(const char *fmt, ...)
     c64_logv(fmt, ap);
     __builtin_va_end(ap);
     c64_log("\n");
+}
+
+/* ---- looking at the adapter directly ------------------------------------- *
+ * ax88179.c exposes found/bound/link and nothing else, and "tx=4 rx=0" from
+ * the net stack cannot say whether the MAC's receiver is even enabled. These
+ * read the chip's own registers over the same AX_ACCESS_MAC vendor control
+ * transfer the driver uses, through usb.c's bounce, without touching the
+ * driver. */
+int c64_usb_control(int dev, unsigned char rt, unsigned char req,
+                    unsigned short val, unsigned short idx, void *data, int len);
+int uno_xhci_dev_count(void);
+const uno_usb_dev *uno_xhci_dev(int i);
+
+#define AX_ACCESS_MAC          0x01
+#define AX_RX_CTL              0x0B
+#define AX_MEDIUM_STATUS_MODE  0x22
+#define AX_RX_BULKIN_QCTRL     0x2E
+
+static int g_ax = -1;                        /* xHCI device index, or -1 */
+static int g_ax_speed;
+
+static int asix_find(void)
+{
+    int i, n;
+    if (g_ax >= 0)
+        return g_ax;
+    n = uno_xhci_dev_count();
+    for (i = 0; i < n; i++) {
+        const uno_usb_dev *d = uno_xhci_dev(i);
+        if (d && d->vendor == 0x0b95) {
+            g_ax = i;
+            g_ax_speed = d->speed;
+            return g_ax;
+        }
+    }
+    return -1;
+}
+
+static int ax_rd(int reg, int size, void *buf)
+{
+    int d = asix_find();
+    if (d < 0)
+        return -1;
+    return c64_usb_control(d, 0xC0, AX_ACCESS_MAC, (unsigned short)reg,
+                           (unsigned short)size, buf, size);
+}
+
+static int ax_wr(int reg, int size, void *buf)
+{
+    int d = asix_find();
+    if (d < 0)
+        return -1;
+    return c64_usb_control(d, 0x40, AX_ACCESS_MAC, (unsigned short)reg,
+                           (unsigned short)size, buf, size);
+}
+
+static void asix_dump(const char *when)
+{
+    unsigned char rxctl[2] = {0, 0}, med[2] = {0, 0}, q[5] = {0, 0, 0, 0, 0};
+    ax_rd(AX_RX_CTL, 2, rxctl);
+    ax_rd(AX_MEDIUM_STATUS_MODE, 2, med);
+    ax_rd(AX_RX_BULKIN_QCTRL, 5, q);
+    c64_logf("asix[%s]: usb-speed=%d RX_CTL=%02x%02x MEDIUM=%02x%02x "
+             "BULKIN_QCTRL=%02x %02x %02x %02x %02x\n", when, g_ax_speed,
+             rxctl[1], rxctl[0], med[1], med[0], q[0], q[1], q[2], q[3], q[4]);
+    c64_log_flush();
+}
+
+/* THE EXPERIMENT (M5 boot 2). ax88179.c chooses its bulk-in aggregation
+ * parameters from the ETHERNET link speed -- gigabit gets Linux's
+ * AX88179_BULKIN_SIZE[0], slower links get [3]. Linux makes that choice by the
+ * USB speed as well: a host that is not SuperSpeed gets the [3] set whatever
+ * the wire is doing. Every x86 box this driver has run on had a USB 3.0 port,
+ * so a gigabit link on a HIGH-SPEED host has never happened before -- and the
+ * Cosmo's SSUSB reports one U2 port and no U3 port, so it is what we have.
+ *
+ * With the gigabit parameters the chip aggregates until a burst a high-speed
+ * bulk endpoint cannot sustain, which would deliver exactly what boot 2 saw:
+ * a negotiated gigabit link, frames going out, and nothing ever coming back.
+ *
+ * Applied from HERE rather than in the driver, deliberately: this is a
+ * hypothesis under test in this lane, not yet a claim about the x86 build. If
+ * it is what fixes RX, it goes to the pc64 lane as a request with the
+ * measurement attached. ax_apply_medium() only rewrites on a mode CHANGE, so
+ * once the link is stable this write stands. */
+static void asix_force_usb2_aggregation(void)
+{
+    unsigned char q[5] = { 0x07, 0xCC, 0x4C, 0x18, 0x08 };  /* Linux [3] */
+    if (g_ax_speed >= 4)                     /* SuperSpeed: leave it alone */
+        return;
+    if (ax_wr(AX_RX_BULKIN_QCTRL, 5, q) < 0) {
+        c64_log("asix: could not reprogram the bulk-in queue\n");
+        return;
+    }
+    c64_log("asix: bulk-in queue forced to the non-SuperSpeed set "
+            "(07 cc 4c 18 08) -- host is not SuperSpeed\n");
+    c64_log_flush();
 }
 
 /* ---- a real deadline ----------------------------------------------------- */
@@ -126,7 +224,14 @@ int pc64_net_boot(void)
         }
     }
     report("link up");
+    asix_dump("after link");
+    asix_force_usb2_aggregation();
+    asix_dump("after override");
 
+    /* A fresh window for DHCP: the link wait has already spent part of the
+     * first one, and how long autoneg took says nothing about how long the
+     * server will take. */
+    deadline_in(6000);
     stage("DHCP");
     net_init(nic, ax88179_mac());
     /* net_dhcp_start sends one DISCOVER; net_poll's dhcp_tick retransmits it
