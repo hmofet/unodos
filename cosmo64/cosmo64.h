@@ -164,6 +164,16 @@ void mmu_init(void);
 c64_u32 c64_fdt_scan(const void *dtb, c64_u64 *base, c64_u32 *vram);
 c64_u64 c64_fb_adopt(void *dtb, c64_u32 *ppitch);
 void c64_bcn(c64_u32 stage);
+/* 1 if the root node's `compatible` names `needle` ("linux,dummy-virt" = the
+ * QEMU gate). urc.c picks the URC transport off this. */
+int c64_fdt_root_compat_has(const void *dtb, const char *needle);
+
+/* netup.c: has pc64_net_boot() had its one attempt yet? urc.c waits for it,
+ * because the listen transport needs an address to bind. */
+int c64_net_boot_ran(void);
+
+/* urc.c (M6): bring the unoautomate remote channel up, once, after that. */
+void c64_urc_tick(void);
 
 /* Stage beacon painted straight onto the panel at the MEASURED base/pitch
  * (0x7DF70000/4352, mblock-7-framebuffer, device-verified). Works with the

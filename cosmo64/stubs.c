@@ -73,29 +73,24 @@ P0(uno_inst_error)
  *    that table with the one adapter a USB host can carry, but the shell's
  *    Control Panel still asks each family whether it is present, and the
  *    honest answer is no.
- *  - unoauto's tap points, which net.c fires on every frame. The subsystem
- *    itself is a later milestone (it is what URC rides on); until then the
- *    taps fire into nothing and the deadline is "no deadline".
  *  - EFI_USB_IO, ax88179.c's OTHER transport: while firmware-attached on x86
  *    it drives the adapter through the firmware's USB stack. There is no
  *    firmware here, so uno_usbio_count() answering 0 is what selects the
- *    native uno_usb_* path. */
-V0(netdisc_tick)
+ *    native uno_usb_* path.
+ * unoauto itself (the tap points, the deadline, netdisc) DIED AT M6: the real
+ * files compile in, and urc.c carries what they reach for. */
 I0(uno_usbio_count)
 I0(uno_usbio_info)
 I0(uno_usbio_control)
 I0(uno_usbio_bulk_eps)
 I0(uno_usbio_bulk_in)
 I0(uno_usbio_bulk_out)
-/* -1, NOT 0: unoauto.h's contract is "0 = the budget is spent, bail out" and
- * "-1 = no deadline armed, run free". net.c polls this inside net_dns_query's
- * wait loop, so the obvious I0() stub would have aborted every DNS lookup on
- * its first iteration -- a subsystem that is absent answering as though it
- * had already run out of time. */
-long unoauto_deadline_left_ms(void) { return -1; }
 P0(rtl8152_nic)
 P0(iwl_nic)
 I0(iwl_present)
+/* the `iwl` URC verb's F12 debug hook: -1 = "NIC not mapped", its own
+ * contract for a machine with no Intel radio (this one has no radio at all) */
+int iwl_dbg_cmd(void) { return -1; }
 P0(iwl_mac)
 P0(iwl_status_str)
 I0(iwl_link_info)
@@ -133,13 +128,28 @@ V0(pc64_consent_register)
 V0(pc64_accounts_open)
 V0(unoscript_app_caps_begin)
 V0(unoscript_app_caps_end)
+/* The unosecure calls the URC gate makes (M6). unosecure.c itself compiles
+ * here, but it is a store on a FAT volume and there is none, so every
+ * session-shaped answer is "no session" -- which is exactly what keeps the
+ * gate's production arming path fail-CLOSED (unoauto_gate_arm refuses with
+ * no session) while the debug/urc-auth arm, which has no session by design,
+ * is untouched: unoauto_gate_tick only consults unosec_session_valid when a
+ * console session was recorded, and that arm records none. The `py` verb
+ * enters the link session only if one exists (0 = none). */
+I0(unosec_session_valid)
+I0(unosec_current_user)
+V0(unosec_audit)
+I0(unosec_request)
+I0(unosec_session_open)
+const char *unosec_account_name(void) { return ""; }
+V0(unosec_drop)
+V0(unosec_logout)
+I0(unosec_enter_session)
+V0(unosec_leave)
+I0(unosec_current_session)
+V0(pc64_remote_open)
 
-/* ---- automation / logging / transfer / virt ------------------------------ */
-V0(unoauto_gate_tick)
-V0(unoauto_remote_tick)
-V0(unoauto_remote_boot)
-V0(uno_screen_capture_tick)
-V0(unoauto_hook_fire)
+/* ---- logging / transfer / virt (unoauto + URC are real as of M6) --------- */
 void unolog(void) { }
 V0(unolog_tick)
 V0(unostream_tick)
@@ -192,7 +202,6 @@ P0(iwl_saved_psk)
 I0(iwl_scan_begin)
 I0(iwl_scan_results)
 I0(iwl_scan_step)
-V0(pc64_remote_open)
 I0(uno_load_module)
 I0(uno_mod_load_user)
 V0(uno_mod_unload_user)
@@ -206,14 +215,8 @@ void uno_ps2_status(int *kbd, int *aux, int *auxport, int *auxid)
 V0(uno_seq_beep)
 V0(uno_seq_play)
 V0(unoamp_ui_close)
-V0(unoauto_hook_fire_)
-/* A VARIABLE, not a function (unoauto.h: `extern int unoauto_hooks_live`).
- * The hook macro reads it as `if (unoauto_hooks_live)`, and against a
- * function definition of the same name that reads the function's address --
- * always non-zero -- so every tap point would call through to the no-op
- * instead of being skipped. net.c fires one on EVERY frame, tx and rx, so
- * this is now on the network's hot path. */
-int unoauto_hooks_live;
+/* the PROBE's module roster asks whether APPS\<file> exists; no loader yet */
+I0(uno_mod_present)
 
 /* ---- detach: an LK payload is born detached ------------------------------ */
 int uno_pc64_detached(void) { return 1; }
