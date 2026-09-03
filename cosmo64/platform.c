@@ -234,10 +234,15 @@ void uno_pc64_poll(void)
          * each, so it is the slow one, and it is the one the desktop can do
          * without. */
         c64_codi_init();
-        c64_logf("input: keyboard %s, touch %s, rear touchpad %s\n",
+        /* The rear panel is deliberately NOT in this line. Its probe is a
+         * state machine the poll drives, so at this instant it has only armed
+         * its first candidate and would always report ABSENT -- which it did,
+         * on the first hardware boot, three lines above the log saying the
+         * touchpad was armed and reporting touch. codi.c announces itself when
+         * it actually knows. */
+        c64_logf("input: keyboard %s, touch %s\n",
                  c64_kbd_present() ? "present" : "ABSENT",
-                 c64_touch_present() ? "present" : "ABSENT",
-                 c64_codi_present() ? "present" : "ABSENT");
+                 c64_touch_present() ? "present" : "ABSENT");
     }
     /* Time the input drivers separately: they are polled I2C, and the AW9523
      * has no interrupt line, so a full matrix sweep is a real per-iteration
