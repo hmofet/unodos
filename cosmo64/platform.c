@@ -238,6 +238,8 @@ void uno_pc64_poll(void)
                                      * endpoint, so it is timed with the rest */
     c64_perf_add_poll(c64_cnt_now() - t0);
     c64_perf_loop();
+    c64_urc_tick();                 /* M6: bring the remote channel up once
+                                     * the network bring-up has had its turn */
 #ifdef C64_KBDTEST
     kbdtest_tick(frames);
 #endif
@@ -263,6 +265,29 @@ void uno_pc64_restart(void)
 void uno_pc64_shutdown(void)
 {
     uno_pc64_restart();                          /* no PMIC power-off yet */
+}
+
+/* The URC `reboot` verb's reset (pc64_native.h: never returns). The TOPRGU
+ * has an immediate software reset beside the timeout the restart above waits
+ * out: MODE (+0x00, key 0x22000000) with EXTEN (bit 2, drive the external
+ * reset line too) set and IRQ/DUAL modes clear, then SWRST (+0x14) with its
+ * key 0x1209 -- register facts from the vendor mtk_wdt.h (wdt_v2), no code
+ * copied. If the SoC has not gone within 100 ms, fall back to the watchdog. */
+void uno_native_reset(void)
+{
+    volatile c64_u32 *mode = (volatile c64_u32 *)0x10007000ull;
+    volatile c64_u32 *swrst = (volatile c64_u32 *)0x10007014ull;
+    c64_log("reset: TOPRGU SWRST\n");
+    c64_log_flush();
+    c64_u32 m = *mode;
+    m &= ~(0x8u | 0x40u);                        /* IRQ, DUAL modes off  */
+    m |= 0x22000000u | 0x4u;                     /* key | EXTEN           */
+    *mode = m;
+    __asm__ volatile("dsb sy" ::: "memory");
+    *swrst = 0x1209u;
+    __asm__ volatile("dsb sy" ::: "memory");
+    uno_native_delay_us(100000);
+    uno_pc64_restart();                          /* never returns either  */
 }
 
 /* ---- sound: silent until the MTK AFE (M5, maybe never) ------------------ */

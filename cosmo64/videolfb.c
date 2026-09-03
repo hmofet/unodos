@@ -119,6 +119,60 @@ c64_u32 c64_fdt_scan(const void *dtb, c64_u64 *base, c64_u32 *vram)
     return 0;
 }
 
+/* Does the root node's `compatible` list name `needle`? QEMU's virt board says
+ * "linux,dummy-virt"; the device says MediaTek's. urc.c picks the transport
+ * off this. Root properties precede the first child node in an FDT, so the
+ * walk stops there. */
+int c64_fdt_root_compat_has(const void *dtb, const char *needle)
+{
+    const c64_u8 *d = dtb;
+    if (!d || be32(d) != 0xd00dfeedu)
+        return 0;
+    c64_u32 total = be32(d + 4);
+    if (total < 40 || total > 0x200000)
+        return 0;
+    const c64_u8 *p = d + be32(d + 8);
+    const c64_u8 *strs = d + be32(d + 12);
+    const c64_u8 *end = d + total;
+    int depth = 0;
+    while (p + 4 <= end) {
+        c64_u32 tok = be32(p);
+        p += 4;
+        if (tok == 4)
+            continue;
+        if (tok == 1) {
+            if (++depth > 1)
+                return 0;                        /* past the root's own props */
+            while (p < end && *p)
+                p++;
+            p = (const c64_u8 *)(((c64_u64)p + 4) & ~3ull);
+        } else if (tok == 3) {
+            if (p + 8 > end)
+                return 0;
+            c64_u32 len = be32(p), nameoff = be32(p + 4);
+            p += 8;
+            const c64_u8 *prop = p;
+            p += (len + 3) & ~3u;
+            if (p > end)
+                return 0;
+            if (depth == 1 && streq((const char *)strs + nameoff, "compatible")) {
+                const c64_u8 *s = prop;             /* a NUL-separated list */
+                while (s < prop + len) {
+                    if (streq((const char *)s, needle))
+                        return 1;
+                    while (s < prop + len && *s)
+                        s++;
+                    s++;
+                }
+                return 0;
+            }
+        } else {
+            return 0;                            /* END_NODE / END / junk */
+        }
+    }
+    return 0;
+}
+
 void c64_bcn(c64_u32 stage)
 {
     FBDBG->bcn_stage = stage;

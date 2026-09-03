@@ -43,6 +43,19 @@
 void uno_pc64_delay_ms(int ms);
 
 static int g_inited;
+/* ONE attempt per boot. pc64_net_up() is the lazy variant every consumer
+ * calls on first use -- and M6's listen transport calls it on every connect
+ * retry (unoauto_remote.c lst_medium_up). Before this flag, a boot whose
+ * bring-up did not lease re-ran the WHOLE thing on each of those calls: the
+ * 8-second link wait, a fresh net_init, another DHCP window -- with the
+ * shell's own net_poll draining the stack in between. Now the bring-up runs
+ * once, at frame 35, and every later call answers with the lease state. */
+static int g_attempted;
+
+int c64_net_boot_ran(void)
+{
+    return g_attempted;
+}
 
 /* ax88179.c narrates its bring-up through uno_dbg_net_trace(), which
  * uno_debug.h compiles to ((void)0) outside a debug build. Those lines are
@@ -237,8 +250,12 @@ int pc64_net_boot(void)
 
     if (g_inited || net_dhcp_done()) {
         g_inited = 1;
+        g_attempted = 1;
         return 1;
     }
+    if (g_attempted)
+        return 0;                            /* had its turn; not leased (yet) */
+    g_attempted = 1;
 
     deadline_in(8000);
     stage("probing for a USB Ethernet adapter");

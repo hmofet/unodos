@@ -736,6 +736,106 @@ If the prime turns out to be load-bearing, the fix is a public "reset this
 endpoint" entry point from the usb lane, so it costs a command rather than a
 deliberate timeout.
 
+## M6 (2026-09-02): the unoautomate remote channel (URC)
+
+pc64's whole URC subsystem -- `unoauto.c`, `unoauto_probe.c`,
+`unoauto_gate.c`, `unoauto_remote.c` (the line protocol and its verbs),
+`unoauto_screen.c` (QOI screen grabs), `netdisc.c`, `unostorage.c` --
+**compiles for this platform unchanged** (a probe of every file first, then
+the build). What it needed from the platform is in `urc.c`, and it is small:
+a DEBUG.CFG reader that answers from what the platform knows about itself,
+the production fallbacks `unoauto_compat.c` would have supplied (with a real
+clock and a log that reaches the eMMC, which that file does not have), a
+handful of "this machine cannot have that" answers (UEFI boot entries,
+RDRAND, the Intel WiFi hook), and a serial transport. The nine symbols the
+link was missing are all of it; the ten `unosec_*` calls the gate makes are
+answered "no session" in `stubs.c`, which keeps its production arming path
+fail-closed.
+
+**Which gate, and why not the production one.** In production the channel
+stays disarmed until a console user arms it, and arming needs a bound
+unosecure session, which needs an account, which needs a persistent store
+on a FAT volume. This device mounts none yet (the SD card is the next
+storage milestone), so the production arming path is unreachable here
+today. `unoauto_gate.c` and `unoauto_remote.c` are therefore compiled
+`-DUNO_DEBUG` -- per file, the same trick as the usb renames; none of the
+headers they share with the rest of the build changes a layout under it --
+so the channel comes up on its own, as it does on a debug stick. With no
+PIN, **every verb is open to anyone who can reach :5099**; that is a dev
+device on a home LAN. `URC_PIN=123456 ./build.sh shell` closes it: the gate
+then runs the production auth rules with that token (the `urc-auth` hook),
+grants OBSERVE and DRIVE only, refuses every SYSTEM verb (`put`, `mkfs`,
+`reboot`, `py`, ...), and three bad tokens stand the channel down for the
+boot. The PIN travels in a generated, git-ignored `urc_pin.h`.
+
+**Who brings it up.** On x86 `unoauto_remote_boot()` is called from the
+debug net test, from the arming panel, or from the shell only when accounts
+exist; none of those exist here. `c64_urc_tick()` (pumped from
+`uno_pc64_poll`) calls it once, the frame after `netup.c`'s bring-up has
+had its turn -- the listen transport needs an address to bind. Related fix:
+`pc64_net_up()` used to re-run the entire bring-up (8 s link wait, a fresh
+`net_init`, another DHCP window) on every call that found no lease, and the
+listen transport calls it on every connect retry; it now runs once per boot
+and answers with the lease state afterwards.
+
+**On the device**: the box is a URC *server* on `:5099`, the shape a box
+with a moving DHCP lease wants. The CLI in `pc64/tools/unoauto_remote.py`
+only listens or opens a serial port; dial IN from Python with the library
+it exports (the WinForms client's Connect button does the same):
+
+```python
+import socket, sys; sys.path.insert(0, "pc64/tools")
+from unoauto_remote import UnoAutoLink
+link = UnoAutoLink().attach_stream(socket.create_connection((ip, 5099)))
+link.wait_hello(15); print(link.probe())
+```
+
+Two operational traps from the x86 listen-mode work apply here too:
+the box serves one connection at a time and reclaims the slot only after a
+silent-link timeout, so never probe the port with a bare `connect()`; and
+the `reboot` verb goes through `uno_native_reset`, which is the TOPRGU's
+immediate software reset (`SWRST` +0x14, key 0x1209, from the vendor
+`mtk_wdt.h`) with the slow re-armed-watchdog restart as the fallback --
+**unverified on hardware** as of this writing.
+
+**The QEMU gate drives the whole dispatcher without hardware.** The virt
+board has no USB and so no NIC, but the channel's serial transport is three
+functions (`uart_init/write/read`, `unoauto_serial.h`), and `urc.c` puts
+them on the virt board's PL011 at 0x09000000. `urc.c` tells the two boards
+apart by the DTB's root `compatible` (`linux,dummy-virt`; `qharness.py`'s
+FDT now carries it), so **one image boots both**: `listen` on the Cosmo,
+`remote-serial` on the gate. `QHARNESS_URC=1 python3 qharness.py ...` runs
+QEMU with the UART as a TCP server, attaches the real client library
+(`pc64/tools/unoauto_remote.py`, staged beside the harness by `build.sh`)
+to that socket exactly as it attaches to a serial port, and exercises one
+verb from each family on the same image the device boots:
+
+```
+urc: HELLO received (serial transport, PL011)
+urc: uptime 2314 ms and advancing
+urc: probe: 6 rows, subsystems heap net fs shell perf
+urc: apps: 25 registered
+urc: pointer injected
+urc: screen grab 270x135 (scale 4), 145800 bytes decoded
+```
+
+Green on the EL1 path, the EL2 path and the URC session (2026-09-02).
+Inbound serial throughput is bounded by the PL011's 16-byte FIFO times the
+frame rate plus a short top-up -- plenty for verbs, not for `put`.
+`QHARNESS_URC_SKIP=pointer,screen` leaves a family out, to bisect.
+
+**Hardware: image flashed to p38, boot pending.** Boot UNODOS with the hub
+and the AX88179 cabled, wait for the lease, then dial in from the LAN. The
+log (`./readlog.sh`) should carry `urc: bringing the remote channel up
+(listen :5099)` followed by `ua: remote: armed, listening on :5099` or the
+`listen` variant, and `remote: client accepted <ip>:<port>` on the first
+dial-in.
+
+Cost: `unoauto_remote.o` carries a 10.5 MB `.bss` (the `put` staging
+buffer) and `unoauto_screen.o` 4.2 MB, so the runtime-zero range grew from
+~88 MB to ~103 MB; the shipped image is 662 KB. That zeroing happens MMU-off
+on Device memory in `entry.s`, which is the next boot-time lead.
+
 ### M5 root cause (2026-09-03, boot 11): the ASIX disables its own receiver
 
 The watchdog caught it in the act, which is what nine boots of register dumps

@@ -59,10 +59,15 @@ def fdt_blob():
     """A minimal valid FDT: /chosen { atag,videolfb = <the packed LE blob> },
     plus the root #address-cells/#size-cells QEMU needs to graft /memory in."""
     prop = struct.pack("<QIII", PANEL_FB, 1, 60, VRAM) + b"qemu_virt_panel\0"
-    strings = b"#address-cells\0#size-cells\0atag,videolfb\0"
-    off_ac, off_sc, off_lfb = 0, 15, 27
+    strings = b"#address-cells\0#size-cells\0atag,videolfb\0compatible\0"
+    off_ac, off_sc, off_lfb, off_compat = 0, 15, 27, 41
+    # the virt board's own root compatible, which is how the payload knows it
+    # is on the gate rather than the device (urc.c picks the URC transport
+    # off it: the PL011 here, a TCP listener on the Cosmo)
+    compat = b"linux,dummy-virt\0"
     st = b""
     st += struct.pack(">I", 1) + b"\0\0\0\0"                    # BEGIN_NODE ""
+    st += struct.pack(">III", 3, len(compat), off_compat) + compat + b"\0" * (-len(compat) % 4)
     st += struct.pack(">IIII", 3, 4, off_ac, 2)                 # #address-cells = 2
     st += struct.pack(">IIII", 3, 4, off_sc, 2)                 # #size-cells = 2
     st += struct.pack(">I", 1) + b"chosen\0\0"                  # BEGIN_NODE chosen
@@ -85,6 +90,93 @@ def fdt_blob():
 # link address) and passes the DTB in x0 -- the exact LK contract. -dtb swaps
 # in our videolfb tree; QEMU rewrites /memory and /chosen extras around it,
 # which the payload's FDT walker skips over like any other property.
+
+
+def urc_session(port, run_for):
+    """Drive the guest over URC for about `run_for` seconds and return
+    (fails, notes). Connects to QEMU's serial TCP server, attaches the real
+    client library, and exercises one verb from each family: HELLO (the link),
+    uptime (a clock that moves), probe (PROBE rows), apps + pointer (DRIVE),
+    and a QOI screen grab (OBSERVE, through the staged-read path)."""
+    import socket
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    try:
+        from unoauto_remote import UnoAutoLink
+    except ImportError:
+        return ["urc: unoauto_remote.py is not beside qharness.py "
+                "(build.sh stages it)"], []
+    fails, notes = [], []
+    t_end = time.time() + run_for
+    sock = None
+    while time.time() < t_end:
+        try:
+            sock = socket.create_connection(("127.0.0.1", port), timeout=2)
+            break
+        except OSError:
+            time.sleep(0.3)
+    if sock is None:
+        return ["urc: could not connect to QEMU's serial server on :%d" % port], []
+    link = UnoAutoLink().attach_stream(sock)
+    # the guest re-emits HELLO every ~2 s over serial until it hears us; the
+    # channel comes up a frame after the net bring-up at frame 35 (~1.2 s)
+    if not link.wait_hello(max(5.0, t_end - time.time())):
+        link.close()
+        return ["urc: no HELLO from the guest within the run"], []
+    notes.append("HELLO received (serial transport, PL011)")
+    # QHARNESS_URC_SKIP=pointer,screen,... leaves a family out, to bisect a
+    # gate failure to the verb that provokes it
+    skip = set((os.environ.get("QHARNESS_URC_SKIP") or "").split(","))
+    try:
+        up1 = link.uptime()
+        time.sleep(0.3)
+        up2 = link.uptime()
+        if not (up2 > up1 >= 0):
+            fails.append("urc: uptime does not advance (%r -> %r)" % (up1, up2))
+        else:
+            notes.append("uptime %d ms and advancing" % up2)
+    except Exception as e:
+        fails.append("urc: uptime failed: %s" % e)
+    try:
+        rows = link.probe()
+        subs = [r["name"] for r in rows if r["kind"] == 2]
+        if not rows or "shell" not in subs:
+            fails.append("urc: probe returned %d rows, no 'shell' subsystem" % len(rows))
+        else:
+            notes.append("probe: %d rows, subsystems %s" % (len(rows), " ".join(subs)))
+    except Exception as e:
+        fails.append("urc: probe failed: %s" % e)
+    try:
+        n = link.apps()
+        if n <= 0:
+            fails.append("urc: apps reports %d" % n)
+        else:
+            notes.append("apps: %d registered" % n)
+        if "pointer" not in skip:
+            link.pointer(64, 64, 0)
+            notes.append("pointer injected")
+    except Exception as e:
+        fails.append("urc: DRIVE verb failed: %s" % e)
+    try:
+        if "screen" in skip:
+            raise StopIteration
+        w, h, rgba = link.screen_grab(scale=4, timeout=30.0)
+        if w <= 0 or h <= 0 or len(rgba) != w * h * 4 or not any(rgba):
+            fails.append("urc: screen grab came back empty (%dx%d, %d bytes)"
+                         % (w, h, len(rgba)))
+        else:
+            notes.append("screen grab %dx%d (scale 4), %d bytes decoded" % (w, h, len(rgba)))
+    except StopIteration:
+        notes.append("screen grab skipped")
+    except Exception as e:
+        fails.append("urc: screen grab failed: %s" % e)
+    try:
+        link.close()
+    except Exception:
+        pass
+    left = t_end - time.time()
+    if left > 0:
+        time.sleep(left)
+    return fails, notes
 
 
 def write_png(path, w, h, rgb):
@@ -113,8 +205,23 @@ def main():
     # ran MMU-off and cache-off from M1 to 2026-09-01 without the gate
     # noticing anything at all.
     mach = "virt,virtualization=on" if os.environ.get("QHARNESS_EL2") else "virt"
+    # QHARNESS_URC=1: the URC gate. The virt board has no USB and so no NIC,
+    # but the remote channel's serial transport (unoauto_serial.h) is three
+    # functions, and urc.c puts them on the board's PL011. QEMU exposes that
+    # UART as a TCP server; the host side is the real client library
+    # (pc64/tools/unoauto_remote.py, staged beside this script by build.sh),
+    # attached to the socket exactly as it attaches to a real serial port. So
+    # what runs here is the whole dispatcher -- HELLO, probe, DRIVE injection,
+    # a QOI screen grab -- on the same image the device boots.
+    urc = bool(os.environ.get("QHARNESS_URC"))
+    urc_port = 0
+    if urc:
+        import socket as _s
+        _pick = _s.socket(); _pick.bind(("127.0.0.1", 0))
+        urc_port = _pick.getsockname()[1]; _pick.close()
+    serial = ("tcp:127.0.0.1:%d,server,nowait" % urc_port) if urc else "none"
     qemu = ["qemu-system-aarch64", "-M", mach, "-cpu", "cortex-a72",
-            "-m", "2048", "-display", "none", "-serial", "none",
+            "-m", "2048", "-display", "none", "-serial", serial,
             "-qmp", "stdio", "-no-reboot",
             "-kernel", payload, "-dtb", fdt]
     err_path = os.path.join(tmp, "qemu-stderr.txt")
@@ -142,7 +249,12 @@ def main():
                 return msg["return"]
 
     qmp("qmp_capabilities")
-    time.sleep(run_for)
+    urc_fails = []
+    urc_notes = []
+    if urc:
+        urc_fails, urc_notes = urc_session(urc_port, run_for)
+    else:
+        time.sleep(run_for)
     qmp("stop")
 
     def dumped(path, size):
@@ -208,6 +320,11 @@ def main():
     fails = []
     if log_fail:
         fails.append(log_fail)
+    for n in urc_notes:
+        print("  urc: " + n)
+    fails += urc_fails
+    if urc and log_text is not None and "remote: link up" not in log_text:
+        fails.append("urc: the debug log never says 'remote: link up'")
     if src != 1:
         fails.append("framebuffer source: got %d, wanted 1 (videolfb blob)" % src)
     if raw != PANEL_FB:
@@ -241,10 +358,19 @@ def main():
     # sub-position. m0 presents its shadow verbatim (0xAARRGGBB source); the
     # shell presents pc64's fb[] (0xAABBGGRR) with an R<->B swizzle -- accept
     # whichever channel order matches, but the SAME one for every sub-position.
+    # Two things the retry has to ride out. A stop can land inside
+    # unoui_render_ui(), after the desktop has been repainted over a window
+    # and before the window is redrawn: fb[] then differs from the panel by
+    # the whole window (~20% of the screen, seen once on 2026-09-02 with three
+    # QEMUs sharing quill), and a FIXED retry cadence can keep landing at the
+    # same phase of the half-second idle tick, so the waits below vary. And a
+    # composited cursor (a URC `pointer` inject makes one appear) is ~82
+    # source pixels that are on the panel and never in fb[] -- inside the
+    # in-flight tolerance, by design.
     eye0 = None
     fb = sh = None
     blit_fail = None
-    for attempt in range(6):
+    for attempt in range(10):
         f_fb = os.path.join(tmp, "fb%d.bin" % attempt)
         f_sh = os.path.join(tmp, "shadow%d.bin" % attempt)
         qmp("pmemsave", val=raw, size=PANEL_H * ppitch, filename=f_fb)
@@ -293,7 +419,7 @@ def main():
         if blit_fail is None:
             break
         qmp("cont")
-        time.sleep(0.7)
+        time.sleep(0.33 + 0.17 * attempt)      # 0.33 .. 1.86 s: never the same phase
         qmp("stop")
     # A handful of differing pixels after every retry means a frame was in
     # flight at the stop (the shell had written fb[] but not yet presented --
@@ -335,6 +461,14 @@ def main():
             rgb[i*3+0], rgb[i*3+1], rgb[i*3+2] = eye0[i*4+2], eye0[i*4+1], eye0[i*4]
         write_png(out_png, W, H, rgb)
         print("wrote %s (%dx%d, as the eye sees it)" % (out_png, W, H))
+    if blit_fail is not None and sh is not None:
+        # the SOURCE the panel was supposed to show, so a mismatch can be
+        # looked at rather than reasoned about (fb.h is 0xAABBGGRR)
+        rgb = bytearray(W * H * 3)
+        for i in range(W * H):
+            rgb[i*3+0], rgb[i*3+1], rgb[i*3+2] = sh[i*4], sh[i*4+1], sh[i*4+2]
+        write_png(out_png + ".shadow.png", W, H, rgb)
+        print("wrote %s.shadow.png (fb[] at the stop)" % out_png)
     print("  fb=0x%X vram=0x%X ppitch=%d scale=%d shadow=0x%X dorigin=0x%X stage=%d"
           % (raw, vram, ppitch, scale, shadow, dorigin, stage))
     if fails:

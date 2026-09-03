@@ -82,6 +82,9 @@ shell )
       --exclude=pc64/build --exclude=pc64/tools \
       pc64 unoui uno3d unosound unomedia unoacpi) | ssh "$QUILL" "tar xzf - -C $QDIR"
   scp -q ../pc64/build/font_data.h ../pc64/build/world_map.h "$QUILL:$QDIR/pc64/build/"
+  # the URC host client, for qharness.py's QHARNESS_URC gate (pc64/tools is
+  # otherwise excluded above)
+  scp -q ../pc64/tools/unoauto_remote.py "$QUILL:$QDIR/cosmo64/"
 
   # The Tier-1 portable core (dependency survey 2026-08-31; the nine themes
   # are all named by kThemes[] in pc64_uui.c, so all nine link).
@@ -91,8 +94,29 @@ shell )
   PCORE="fb pc64_libc pc64_math pc64_font pc64_icons pc64_qoi pc64_uui_apps \
          mac_compat pc64_io pc64_write pc64_clock pc64_files pc64_uui \
          fat pc64_fs hid_kbd net"
+  # M6: unoautomate + the URC remote channel, compiled UNCHANGED. The two
+  # files that carry the privilege gate are built -DUNO_DEBUG (per file, like
+  # the usb renames -- no shared header changes layout under it) because the
+  # production arming path needs an account on a FAT volume this device does
+  # not mount yet; urc.c explains, and URC_PIN=<6 digits> ./build.sh shell
+  # keeps the production auth rules with a token from the build instead.
+  # unoauto_compat.c is deliberately absent: urc.c supplies its symbols with
+  # a real clock and a log that reaches the eMMC.
+  URC="unoauto unoauto_probe unoauto_screen netdisc unostorage"
+  URCDBG="unoauto_gate unoauto_remote"
   C64="videolfb display platform input stubs i2c kbd touch log msdc blk \
-       ssusb pci usb netup"
+       ssusb pci usb netup urc"
+  if [ -n "$URC_PIN" ]; then
+    printf '#define C64_URC_PIN "%s"\n' "$URC_PIN" > urc_pin.h
+    echo "[shell] URC gate: production auth with the build-time PIN"
+  else
+    rm -f urc_pin.h
+    echo "[shell] URC gate: open (no PIN) -- set URC_PIN=<6 digits> to close it"
+  fi
+  # stage_quill ran before the header was decided: re-stage it, or remove a
+  # stale one so a PIN never lingers on quill from an earlier build
+  if [ -f urc_pin.h ]; then scp -q urc_pin.h "$QUILL:$QDIR/cosmo64/";
+  else ssh "$QUILL" "rm -f $QDIR/cosmo64/urc_pin.h"; fi
 
   # KBDTEST=1: compile the scripted key pad (QEMU gate proof, never shipped)
   [ -n "$KBDTEST" ] && BASECF="$BASECF -DC64_KBDTEST"
@@ -146,6 +170,8 @@ shell )
     for f in $UNOUI; do $CC $SHCF -c ../unoui/\$f.c -o build/u_\$f.o; done && \
     for f in $THEMES; do $CC $SHCF -c ../unoui/themes/\$f.c -o build/t_\$f.o; done && \
     for f in $PCORE; do $CC $SHCF -c ../pc64/\$f.c -o build/p_\$f.o; done && \
+    for f in $URC; do $CC $SHCF -c ../pc64/\$f.c -o build/p_\$f.o; done && \
+    for f in $URCDBG; do $CC $SHCF -DUNO_DEBUG -c ../pc64/\$f.c -o build/p_\$f.o; done && \
     $CC $USBCF -DC64_XDMA -c ../pc64/xhci.c -o build/p_xhci.o && \
     $CC $USBCF -Duno_usb_get_config=c64_usb_get_config \
         -Duno_usb_control=c64_usb_control \
