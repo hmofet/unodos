@@ -78,11 +78,11 @@ struct pram_buf {
 #define PB ((volatile struct pram_buf *)C64_LOG_ZONE)
 #define CAP (C64_LOG_SIZE - 12u)
 
-static int g_live;
+static int g_live C64_EARLY;
 /* bytes EVER written, monotonic: a reader that wants to follow the ring
  * (urc.c streams it to the dev PC) keeps an absolute position, and
  * total - size is the absolute position of the oldest byte still there */
-static unsigned g_total;
+static unsigned g_total C64_EARLY;
 
 unsigned c64_log_total(void)
 {
@@ -158,9 +158,9 @@ void c64_log_read(unsigned off, c64_u8 *dst, unsigned n)
  * pstore log raised: 0 means the preloader wiped DRAM on the way in, and no
  * DRAM-based log can ever survive this reset path. Run BEFORE c64_log_init,
  * which overwrites the console zone's own signature. */
-static unsigned g_sigs_found;
-static c64_u64 g_run_start[8];
-static unsigned g_runs;
+static unsigned g_sigs_found C64_EARLY;
+static c64_u64 g_run_start[8] C64_EARLY;
+static unsigned g_runs C64_EARLY;
 
 unsigned c64_log_survey(void)
 {
@@ -342,7 +342,9 @@ void c64_dbg_log(const char *fmt, ...)
 /* Called LAST, after the crash record and the painted bit-cells are already
  * down, and on its own stack -- a fault that ate the stack must not cost us
  * the forensics that asm already secured. */
-c64_u8 c64_fault_stack[0x2000];
+/* The vectors' own stack: live from cpu_early_init(), which entry.s calls
+ * before anything else, so it MUST be in the early range. */
+c64_u8 c64_fault_stack[0x2000] C64_EARLY;
 
 void c64_log_crash(c64_u64 vec, c64_u64 esr, c64_u64 elr, c64_u64 far,
                    c64_u64 el)

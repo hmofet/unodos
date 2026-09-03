@@ -47,6 +47,7 @@ def main():
 
     img = bytearray(size_image)
     xdma = None
+    early = None
     for i in range(nsect):
         name, vsz, va, rsz, roff = struct.unpack_from("<8sIIII", d, opt + opt_sz + 40 * i)
         n = min(vsz, rsz)
@@ -60,6 +61,16 @@ def main():
         if name.rstrip(b"\0") == b".xdma":
             lo, hi = va, (va + vsz + 0xFFF) & ~0xFFF
             xdma = (lo, hi) if xdma is None else (min(xdma[0], lo), max(xdma[1], hi))
+        # M7: the EARLY .bss (C64_EARLY in cosmo64.h) -- the stack, the debug
+        # page, the fault stack, the page tables and log.c's bookkeeping, i.e.
+        # everything the boot touches before mmu_init() returns. entry.s
+        # zeroes only this, MMU-off; c64_bss_zero_rest() does the other ~100 MB
+        # afterwards with the caches on. 16-aligned so entry.s can stp its way
+        # through it.
+        if name.rstrip(b"\0") == b".early":
+            lo, hi = va & ~0xF, (va + vsz + 0xF) & ~0xF
+            early = (lo, hi) if early is None else (min(early[0], lo),
+                                                    max(early[1], hi))
 
     # real PE imports mean a symbol resolved against a DLL nothing will load
     irva, isz = ddir(1)
@@ -120,6 +131,24 @@ def main():
                  "decompress an image this size" % (zstart >> 20))
     struct.pack_into("<Q", img, 32, LOAD + zstart)     # res2
     struct.pack_into("<Q", img, 40, LOAD + zend)       # res3
+    # The early range (C64_EARLY_SLOT). It has to live INSIDE the zero range,
+    # or entry.s would be zeroing bytes that are already in the shipped image
+    # and c64_bss_zero_rest() would be told to skip a hole that is not there.
+    # A section that lands outside is a linker layout this split has not been
+    # thought through for, so it is refused rather than half-honoured.
+    if early:
+        if early[0] < zstart or early[1] > zend:
+            sys.exit("flatten: .early at 0x%X..0x%X is outside the zero "
+                     "range 0x%X..0x%X -- the split-zero contract does not "
+                     "hold for this layout"
+                     % (LOAD + early[0], LOAD + early[1],
+                        LOAD + zstart, LOAD + zend))
+        struct.pack_into("<QQ", img, 0x50, LOAD + early[0], LOAD + early[1])
+        print("flatten: .early at 0x%X..0x%X (%d KB zeroed MMU-off; "
+              "%d MB deferred to c64_bss_zero_rest)"
+              % (LOAD + early[0], LOAD + early[1],
+                 (early[1] - early[0]) >> 10,
+                 (zend - zstart - (early[1] - early[0])) >> 20))
     # FLATTEN_IMGSZ=shipped: report only the shipped bytes as image_size, so
     # the header a bootloader inspects looks exactly like a small kernel's --
     # the true runtime footprint is what res2/res3 carry. (QEMU places the DTB

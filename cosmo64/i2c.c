@@ -14,8 +14,16 @@
  *    touch driver reads one finger, not all ten, precisely to stay inside it.)
  *  - A register read is WRRD: CONTROL.DIR_CHANGE|RS with TRANSAC_LEN=2 --
  *    write the offset, repeated-start, read N.
- *  - Bus speed 100 kHz; timing depends on the i2c_sel mux the preloader left
- *    at 0x100000C0[1:0], so it is read at runtime rather than assumed.
+ *  - Bus speed: 400 kHz (Fast mode), computed at runtime from the i2c_sel mux
+ *    the preloader left at 0x100000C0[1:0] rather than assumed. It used to be
+ *    100 kHz, which is the vendor driver's default for a client that asks for
+ *    nothing -- but BOTH parts on this machine are Fast-mode devices (the
+ *    AW9523 expander and the NT36672 touch controller), and the shell polls
+ *    them every frame with no interrupt to lean on, so the bus rate is
+ *    straightforwardly a quarter of the per-loop input cost. A driver whose
+ *    probe finds nothing at 400 kHz calls c64_i2c_set_khz(bus, 100) and tries
+ *    again before declaring its part absent, so a part that turns out not to
+ *    like Fast mode degrades to the old behaviour instead of disappearing.
  */
 
 #include "cosmo64.h"
@@ -54,27 +62,74 @@ struct bus {
     c64_u32 arb_reg, arb_bit;            /* the arbiter gate, 0 if none */
     c64_u32 mux_reg, mux_clr, mux_set;   /* pinmux RMW for SCL/SDA */
     int ready;
+    int khz;                             /* 0 until set; the programmed rate */
+    unsigned short timing, ltiming;
 };
 
 static struct bus g_bus[2] = {
     /* C64_I2C_KBD: bus 4 @ 0x11008000, arbitrated (+0x100), SCL4/SDA4 =
      * GPIO105/106 mode 1; gates I2C1 bit12 + I2C1_ARBITER bit21 */
     { 0x11008000, 0x100, 0x11000100, 0x10001084, 12, 0x100010A8, 21,
-      0x100053D0, (7u << 4) | (7u << 8), (1u << 4) | (1u << 8), 0 },
+      0x100053D0, (7u << 4) | (7u << 8), (1u << 4) | (1u << 8), 0, 0, 0, 0 },
     /* C64_I2C_TP: bus 0 @ 0x11007000, no channel offset, SDA0/SCL0 =
      * GPIO82/83 mode 1; gate I2C0 bit11, no arbiter */
     { 0x11007000, 0x000, 0x11000080, 0x10001084, 11, 0, 0,
-      0x100053A0, (7u << 8) | (7u << 12), (1u << 8) | (1u << 12), 0 },
+      0x100053A0, (7u << 8) | (7u << 12), (1u << 8) | (1u << 12), 0, 0, 0, 0 },
 };
 
-static unsigned short g_timing = 0x0217, g_ltiming = 0x0096;  /* 68.25 MHz src */
-static int g_timing_done;
+/* The bus clock, as the mux leaves it: the selected source divided by the /5
+ * in CLOCK_DIV. Read once, because both buses share the mux. */
+static c64_u32 g_bus_clk = 13650000u;            /* 68.25 MHz / 5 */
+static int g_clk_done;
+
+static void init_hw(struct bus *b);
 
 static void spin_us(c64_u32 us)
 {
     c64_u64 until = c64_cnt_now() + (c64_u64)us * 13 + 13;    /* 13 MHz */
     while (c64_cnt_now() < until)
         ;
+}
+
+/* THE TIMING RECIPE, which is the vendor driver's and not a guess. The bus
+ * runs at clk / (2 * sample_cnt * step_cnt); the register carries each count
+ * MINUS ONE, with sample in bits 8..10 of TIMING (bits 6..8 of LTIMING) and
+ * step in the low six bits of both. Walk sample_cnt upward and take the first
+ * step_cnt that fits its six-bit field -- which for every rate this machine
+ * uses lands on sample_cnt 1, the shortest and most accurate arrangement.
+ *
+ * The result is always AT OR BELOW the rate asked for, because step_cnt is
+ * rounded up: overshooting an I2C bus is how a part that works becomes a part
+ * that intermittently NAKs. */
+int c64_i2c_set_khz(int bus, int khz)
+{
+    if (bus < 0 || bus > 1 || khz <= 0)
+        return -1;
+    struct bus *b = &g_bus[bus];
+    c64_u32 target = (c64_u32)khz * 1000u;
+    c64_u32 opt = (g_bus_clk / 2u + target - 1u) / target;   /* sample*step */
+    c64_u32 sample, step = 0;
+
+    for (sample = 1; sample <= 8; sample++) {
+        step = (opt + sample - 1u) / sample;
+        if (step <= 64u)
+            break;
+    }
+    if (sample > 8) {                    /* slower than the divider can go */
+        sample = 8;
+        step = 64;
+    }
+    b->timing = (unsigned short)(((sample - 1u) << 8) | (step - 1u));
+    b->ltiming = (unsigned short)(((sample - 1u) << 6) | (step - 1u));
+    b->khz = (int)(g_bus_clk / (2u * sample * step) / 1000u);
+    if (b->ready)
+        init_hw(b);                      /* take effect on the live bus */
+    return 0;
+}
+
+int c64_i2c_khz(int bus)
+{
+    return (bus < 0 || bus > 1) ? 0 : g_bus[bus].khz;
 }
 
 void c64_kbd_power(int on)
@@ -95,8 +150,8 @@ static void init_hw(struct bus *b)
     R16(B + O_INTR_STAT) = R16(B + O_INTR_STAT);
     R16(B + O_SOFTRESET) = 1;
     R16(B + O_IO_CONFIG) = 0x0003;       /* open-drain */
-    R16(B + O_TIMING) = g_timing;
-    R16(B + O_LTIMING) = g_ltiming;
+    R16(B + O_TIMING) = b->timing;
+    R16(B + O_LTIMING) = b->ltiming;
     R16(B + O_HS) = 0;
     R32(b->apdma + 0x0C) = 1;            /* APDMA warm reset */
     spin_us(10);
@@ -119,15 +174,17 @@ int c64_i2c_init(int bus)
     c64_u32 m = R32(b->mux_reg);
     R32(b->mux_reg) = (m & ~b->mux_clr) | b->mux_set;
 
-    if (!g_timing_done) {
+    if (!g_clk_done) {
         /* i2c_sel mux (0=26M, 1=68.25M, 2=124.8M), then /5 by CLOCK_DIV */
         switch (R32(0x100000C0) & 3) {
-        case 0: g_timing = 0x0019 | 1; g_ltiming = 0x0019; break;
-        case 2: g_timing = 0x0419 | 1; g_ltiming = 0x0118; break;
-        default: g_timing = 0x0217; g_ltiming = 0x0096; break;
+        case 0: g_bus_clk = 26000000u / 5u; break;
+        case 2: g_bus_clk = 124800000u / 5u; break;
+        default: g_bus_clk = 68250000u / 5u; break;
         }
-        g_timing_done = 1;
+        g_clk_done = 1;
     }
+    if (!b->khz)
+        c64_i2c_set_khz(bus, 400);
 
     init_hw(b);
     b->ready = 1;
@@ -150,8 +207,8 @@ int c64_i2c_xfer(int bus, c64_u8 dev, const c64_u8 *wr, int nwr,
     if (!rd)
         R16(B + O_DELAY_LEN) = 0x0002;
     R16(B + O_IO_CONFIG) = 0x0003;
-    R16(B + O_TIMING) = g_timing;
-    R16(B + O_LTIMING) = g_ltiming;
+    R16(B + O_TIMING) = b->timing;
+    R16(B + O_LTIMING) = b->ltiming;
     R16(B + O_HS) = 0;
     R16(B + O_HW_TIMEOUT) = 0x018C;
     R16(B + O_SLAVE) = (unsigned short)(dev << 1);

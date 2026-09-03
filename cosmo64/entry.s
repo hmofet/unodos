@@ -54,8 +54,30 @@ boot_core:
     // Zero the .bss: flatten.py ships the image truncated after its last real
     // byte (a 67 MB decompress trips LK's 28 MB cap) and records the absolute
     // zero-range in the Image header's res2/res3 words at image offsets 32/40.
+    //
+    // ONLY THE EARLY PART, if there is one. The shell carries ~100 MB of .bss
+    // and the MMU is off here, so every store below is its own Device-memory
+    // bus transaction: zeroing the lot cost about a second of every boot. The
+    // build collects everything the boot touches before mmu_init() returns
+    // (stack, fault stack, debug page, page tables, log bookkeeping) into a
+    // ".early" section, and flatten.py leaves its absolute range at image
+    // offset 0x50. c64_bss_zero_rest() clears the remainder the instant
+    // mmu_init() returns, with the caches on, where it costs milliseconds.
+    // The guarantee that made the original loop worth having is unchanged:
+    // no byte of DRAM is trusted before something has written it.
+    //
+    // Zero at 0x50 means no such section -- an older flatten.py, or a payload
+    // built without it -- and the fall-back is the whole range, as before.
     ldr   x1, =0x40080020
     ldp   x2, x3, [x1]                  // x2 = start, x3 = end (16-aligned)
+    ldr   x1, =0x40080050
+    ldp   x4, x5, [x1]                  // x4 = early start, x5 = early end
+    cbz   x4, bss_range
+    cmp   x5, x4
+    b.ls  bss_range
+    mov   x2, x4
+    mov   x3, x5
+bss_range:
     cmp   x2, x3
     b.hs  bss_done
 bss_zero:

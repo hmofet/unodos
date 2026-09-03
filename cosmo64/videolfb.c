@@ -8,10 +8,10 @@
 #include "cosmo64.h"
 
 /* the boot stack (see cosmo64.h): entry.s points SP at the top of this */
-c64_u8 c64_boot_stack[C64_BOOT_STACK_BYTES] __attribute__((aligned(16)));
+c64_u8 c64_boot_stack[C64_BOOT_STACK_BYTES] __attribute__((aligned(16))) C64_EARLY;
 
 /* the debug page: fbdbg contract + the crash record at +0x1000 (cosmo64.h) */
-c64_u8 c64_dbg_page[0x1100] __attribute__((aligned(4096)));
+c64_u8 c64_dbg_page[0x1100] __attribute__((aligned(4096))) C64_EARLY;
 
 static int streq(const char *a, const char *b)
 {

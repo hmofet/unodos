@@ -67,6 +67,33 @@ typedef unsigned long long c64_u64;
  * memory. Both zero when the image carries no such section. */
 #define C64_XDMA_SLOT 0x40080040ull
 
+/* The EARLY .bss range, as two absolute u64s at image offsets 0x50/0x58.
+ * flatten.py fills them from the ".early" section; entry.s zeroes ONLY that
+ * range with the MMU off, and c64_bss_zero_rest() -- called the instant
+ * mmu_init() returns -- zeroes everything else with the caches on. The point
+ * is arithmetic: the shell carries ~100 MB of .bss, and with the MMU off every
+ * store is a separate Device-memory bus transaction, so the old zero-it-all
+ * loop in entry.s spent about a second of every boot. Both halves keep the
+ * original guarantee that made that loop worth having -- no byte of DRAM is
+ * trusted before it has been written -- because each half is zeroed before
+ * anything that lives in it runs. Zero at both slots means "no early section",
+ * and entry.s falls back to zeroing the lot, exactly as it used to. */
+#define C64_EARLY_SLOT 0x40080050ull
+/* the whole zero range, res2/res3 at image offsets 0x20/0x28 -- the pair
+ * entry.s has always read */
+#define C64_BSS_SLOT 0x40080020ull
+
+/* Everything the boot touches BEFORE mmu_init() returns has to sit in the
+ * early range: the stack, the vectors' fault stack, the debug/crash page, the
+ * page tables themselves, and log.c's bookkeeping. Anything else may go
+ * wherever the linker likes. */
+#define C64_EARLY __attribute__((section(".early")))
+
+/* mmu.c: zero the .bss that entry.s deliberately left alone. mmu_init() calls
+ * it as the last thing it does -- so every payload gets it, and nothing runs
+ * between the MMU coming on and the memory becoming trustworthy. */
+void c64_bss_zero_rest(void);
+
 void c64_log_init(void);
 void c64_log(const char *s);
 void c64_log_write(const char *s, unsigned n);
@@ -208,6 +235,12 @@ extern c64_u8 c64_boot_stack[C64_BOOT_STACK_BYTES];
 #define C64_I2C_KBD 0                /* bus 4 @ 0x11008000, arbitrated */
 #define C64_I2C_TP  1                /* bus 0 @ 0x11007000, plain      */
 int c64_i2c_init(int bus);
+/* Re-time a bus. The default is 400 kHz (Fast mode), which both parts on this
+ * machine support and which halves the shell's per-loop input cost; a driver
+ * whose probe comes back empty calls this with 100 to retry in Standard mode
+ * before concluding its part is absent. */
+int c64_i2c_set_khz(int bus, int khz);
+int c64_i2c_khz(int bus);
 int c64_i2c_xfer(int bus, c64_u8 dev, const c64_u8 *wr, int nwr,
                  c64_u8 *rd, int nrd);
 int c64_i2c_write_reg(int bus, c64_u8 dev, c64_u8 reg, c64_u8 val);
@@ -223,6 +256,23 @@ int c64_blk_read(c64_u64 lba, void *buf, unsigned nblk);
 int c64_blk_write(c64_u64 lba, const void *buf, unsigned nblk);
 c64_u64 c64_blk_data_lba(void);
 c64_u64 c64_blk_data_sectors(void);
+
+/* sdmmc.c: the microSD slot (MSDC1) as a block device. Unlike the eMMC this
+ * is a real bring-up -- LK never touches the slot -- so init() does clock,
+ * pinmux, pads, a controller reset and the public SD card init sequence.
+ * c64_sd_write() refuses any LBA outside the partition it found. */
+void c64_sd_init(void);
+int c64_sd_ready(void);
+int c64_sd_read(c64_u64 lba, void *buf, unsigned nblk);
+int c64_sd_write(c64_u64 lba, const void *buf, unsigned nblk);
+c64_u64 c64_sd_part_lba(void);
+c64_u64 c64_sd_part_sectors(void);
+
+/* codi.c: the rear cover panel as a touchpad, over UART1 at 0x11003000.
+ * Needs OurCodi firmware on the cover MCU; stock never forwards touch. */
+void c64_codi_init(void);
+void c64_codi_poll(void);
+int  c64_codi_present(void);
 
 /* blk.c: the same partition presented to pc64's storage stack as a block
  * device (LBA 0 = the partition's first sector), and the boot-time report of
@@ -258,6 +308,7 @@ void c64_input_set_level(int mods, int held);          /* the AW9523 matrix */
 void c64_input_set_level_usb(int mods, int held);      /* a USB keyboard    */
 void c64_input_set_pointer(int x, int y, int btn);
 void c64_input_move_pointer(int dx, int dy, int btn);
+void c64_input_move_pointer_codi(int dx, int dy, int btn);
 void c64_input_rescale_pointer(int ow, int oh, int nw, int nh);
 void c64_input_add_wheel(int notches);
 

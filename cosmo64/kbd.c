@@ -18,6 +18,14 @@
  * specials as EFI scan codes, mods = UI_MOD_* mask at press time, plus the
  * UNO_KH_* live-held bits for games. Idle fast path: all columns driven low
  * at once, one P0 read -- 0xFF means nothing is down and the sweep is skipped.
+ *
+ * THE IDLE PATH IS ONE TRANSACTION, not three. It used to re-write P1_CFG and
+ * P1_OUT before every read, which is two thirds of the traffic on an idle
+ * desktop -- and both writes were setting registers to the values the previous
+ * poll had already parked them at. The park state is tracked instead
+ * (`g_parked`), and the writes happen only when something has actually moved
+ * the columns: after a full sweep, or after a failed transfer, when what the
+ * chip holds is no longer known.
  */
 
 #include "cosmo64.h"
@@ -102,6 +110,9 @@ static const struct keydef map[NCOL][NROW] = {
 static int g_present;
 static c64_u8 g_state[NCOL];       /* 1 bits = pressed (inverted P0 reads) */
 static int g_mods, g_fn;
+/* 1 when P1_CFG and P1_OUT are known to be 0 -- every column an output held
+ * low, which is both the idle read's setup and where a sweep leaves them. */
+static int g_parked;
 
 int c64_kbd_present(void)
 {
@@ -128,6 +139,16 @@ void c64_kbd_init(void)
     c64_kbd_power(1);
     kbd_spin_ms(20);
     int id = c64_i2c_read_reg(C64_I2C_KBD, AW_ADDR, R_ID);
+    if (id != AW_ID && c64_i2c_khz(C64_I2C_KBD) > 100) {
+        /* The bus now runs at 400 kHz, which this part's datasheet allows. If
+         * it does not answer there, drop to Standard mode and ask once more
+         * before calling it absent -- a keyboard that has become a timing
+         * casualty should degrade, not vanish. */
+        c64_logf("kbd: no answer at %d kHz; retrying in Standard mode\n",
+                 c64_i2c_khz(C64_I2C_KBD));
+        c64_i2c_set_khz(C64_I2C_KBD, 100);
+        id = c64_i2c_read_reg(C64_I2C_KBD, AW_ADDR, R_ID);
+    }
     if (id != AW_ID) {
         c64_logf("kbd: AW9523 ID read %d (0x%x), wanted 0x%x\n", id, id, AW_ID);
         return;                             /* absent (or QEMU): stay silent */
@@ -140,8 +161,10 @@ void c64_kbd_init(void)
     c64_i2c_write_reg(C64_I2C_KBD, AW_ADDR, R_P1_OUT, 0x00);       /* all columns low    */
     c64_i2c_write_reg(C64_I2C_KBD, AW_ADDR, R_P0_INT, 0xFF);       /* polled: no irqs    */
     c64_i2c_write_reg(C64_I2C_KBD, AW_ADDR, R_P1_INT, 0xFF);
+    g_parked = 1;                           /* P1_CFG/P1_OUT are both 0 above */
     g_present = 1;
-    c64_log("kbd: AW9523 up, matrix scanning\n");
+    c64_logf("kbd: AW9523 up, matrix scanning at %d kHz\n",
+             c64_i2c_khz(C64_I2C_KBD));
 }
 
 static void emit(const struct keydef *k, int shift, int fn)
@@ -197,12 +220,20 @@ void c64_kbd_poll(void)
 {
     if (!g_present)
         return;
-    /* idle fast path: every column low at once, one read */
-    c64_i2c_write_reg(C64_I2C_KBD, AW_ADDR, R_P1_CFG, 0x00);
-    c64_i2c_write_reg(C64_I2C_KBD, AW_ADDR, R_P1_OUT, 0x00);
+    /* idle fast path: every column low at once, one read -- and the two
+     * writes that arrange that are skipped when the chip is already there */
+    if (!g_parked) {
+        if (c64_i2c_write_reg(C64_I2C_KBD, AW_ADDR, R_P1_CFG, 0x00) < 0
+            || c64_i2c_write_reg(C64_I2C_KBD, AW_ADDR, R_P1_OUT, 0x00) < 0)
+            return;
+        g_parked = 1;
+    }
     int all = c64_i2c_read_reg(C64_I2C_KBD, AW_ADDR, R_P0_IN);
-    if (all < 0)
+    if (all < 0) {
+        g_parked = 0;                       /* a failed transfer resets the
+                                             * bus; assume nothing */
         return;
+    }
     int any_now = ((all & 0xFF) != 0xFF);
     int any_before = 0;
     for (int c = 0; c < NCOL; c++)
@@ -212,6 +243,7 @@ void c64_kbd_poll(void)
 
     /* full sweep: one column at a time */
     c64_u8 newstate[NCOL];
+    g_parked = 0;
     for (int c = 0; c < NCOL; c++) {
         c64_i2c_write_reg(C64_I2C_KBD, AW_ADDR, R_P1_CFG, (c64_u8)(COLMASK & ~(1u << c)));
         c64_i2c_write_reg(C64_I2C_KBD, AW_ADDR, R_P1_OUT, (c64_u8)(COLMASK & ~(1u << c)));
@@ -219,8 +251,9 @@ void c64_kbd_poll(void)
         newstate[c] = (v < 0) ? 0 : (c64_u8)(~v & 0xFF);
     }
     /* park: all columns output low again (the idle/fast-path state) */
-    c64_i2c_write_reg(C64_I2C_KBD, AW_ADDR, R_P1_CFG, 0x00);
-    c64_i2c_write_reg(C64_I2C_KBD, AW_ADDR, R_P1_OUT, 0x00);
+    if (c64_i2c_write_reg(C64_I2C_KBD, AW_ADDR, R_P1_CFG, 0x00) == 0
+        && c64_i2c_write_reg(C64_I2C_KBD, AW_ADDR, R_P1_OUT, 0x00) == 0)
+        g_parked = 1;
 
     /* level first (so a chord's modifier is live before its key's edge) */
     c64_u8 old[NCOL];
