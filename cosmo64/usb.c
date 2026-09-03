@@ -40,8 +40,10 @@ static unsigned char g_bounce[512] __attribute__((aligned(64)));
  * line -- and would then make it parse every received frame out of Device
  * memory a byte at a time, which is the wrong half to make slow. Bouncing
  * instead keeps the staging area uncached and the parse cached. 4 KiB is
- * ax88179.c's g_rx; the +8 covers its TX header. */
-static unsigned char g_bbounce[4096 + 64] __attribute__((aligned(64)));
+ * ax88179.c's g_rx; the rest is headroom for the 20 KB diagnostic probe
+ * below, which asks for the burst the chip's DEFAULT aggregation setting
+ * wants (1024 * (0x12 + 2)). */
+static unsigned char g_bbounce[20480 + 64] __attribute__((aligned(64)));
 #pragma clang section bss = ""
 
 static int g_up, g_nkbd, g_nmouse;
@@ -155,6 +157,41 @@ int c64_usb_bulk_out(int dev, void *data, int len)
         c64_logf("usb-bulk: OUT %d bytes -> %d\n", len, n);
         c64_log_flush();
     }
+    return n;
+}
+
+/* A SYNCHRONOUS bulk-IN, used once at bring-up as a diagnostic.
+ *
+ * The async path reports "armed, nothing landed, no error" and cannot say
+ * more, because a TRB that is never completed produces no completion code to
+ * report. xhci.c's SYNCHRONOUS path already prints exactly what is needed on
+ * failure -- the completion code, the posted length, and the endpoint's own
+ * state word out of the device context -- and nothing on this platform has
+ * ever called it, because ax_recv() is the only bulk-IN consumer and this lane
+ * renames it onto the async wrapper above.
+ *
+ * So: call it directly, once, with the length the caller chooses, and let the
+ * controller say what it thinks is wrong. Costs one 5-second timeout per probe
+ * when it fails, which is why this runs before the stack is bound and not in
+ * any loop. `uno_usb_bulk_in` here is the REAL one: the -D renames in build.sh
+ * apply to ax88179.c and usbhid.c, not to this file. */
+int c64_usb_bulk_probe(int dev, int len)
+{
+    int n;
+    if (len < 0 || len > (int)sizeof g_bbounce)
+        len = (int)sizeof g_bbounce;
+    c64_logf("usb-bulk: SYNC probe dev %d, %d bytes ...\n", dev, len);
+    c64_log_flush();
+    n = uno_usb_bulk_in(dev, g_bbounce, len);
+    if (n > 0)
+        c64_logf("usb-bulk: SYNC probe -> %d bytes: %02x %02x %02x %02x %02x "
+                 "%02x %02x %02x\n", n, g_bbounce[0], g_bbounce[1],
+                 g_bbounce[2], g_bbounce[3], g_bbounce[4], g_bbounce[5],
+                 g_bbounce[6], g_bbounce[7]);
+    else
+        c64_logf("usb-bulk: SYNC probe -> %d (see the [xhci] line above for "
+                 "the completion code and endpoint state)\n", n);
+    c64_log_flush();
     return n;
 }
 
