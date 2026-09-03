@@ -51,6 +51,19 @@
 
 #include "cosmo64.h"
 
+/* THE WRITE GATE, and it is off. Everything below can read the PMIC; nothing
+ * ships able to write it. A PMIC write is the one class of mistake on this
+ * device that does not come back -- every rail is behind these registers, and
+ * a wrong address is not a corrupted partition but silicon at a voltage it
+ * was not built for -- so the capability is compiled out until the read-only
+ * pass has confirmed the address map on the actual hardware.
+ *
+ * Turn it on with PMIC_WRITE=1 ./build.sh shell, and only once the boot log
+ * says MAP CONFIRMED. */
+#ifndef C64_PMIC_WRITE
+#define C64_PMIC_WRITE 0
+#endif
+
 /* ---- the wrapper --------------------------------------------------------- */
 
 #define PWRAP 0x1000D000ull
@@ -75,6 +88,20 @@
 #define MT6358_VMCH_ANA_CON0 0x1E48u     /* bits 10:8 = voltage selector     */
 #define MT6358_VMC_ANA_CON0  0x1E4Cu     /* bits 11:8 = voltage selector     */
 
+/* VEMC is the eMMC's rail, and it is read here for ONE reason: it is the
+ * control. The eMMC demonstrably works under this payload -- msdc.c reads the
+ * GPT off it on every boot, and the log two screens up proves it -- so VEMC
+ * MUST read enabled. If it does, and it reports a legal voltage, then these
+ * addresses land where this file thinks they do, and the same map's reading
+ * of VMCH and VMC can be believed. If VEMC reads disabled, the map is wrong,
+ * and the correct response is to write nothing at all.
+ *
+ * A wrong address does not usually announce itself. This is how it is made
+ * to: an experiment with a known answer, run beside the one whose answer we
+ * do not know. */
+#define MT6358_LDO_VEMC_CON0 0x1B1Cu
+#define MT6358_VEMC_ANA_CON0 0x1E38u
+
 /* Voltage selectors, from the MT6358's own tables. Not a linear encoding --
  * these are the only legal values and the gaps between them are not voltages.
  *
@@ -91,6 +118,7 @@
 #define VMC_SEL_3V0  11u
 #define VMC_SEL_3V3  13u
 
+#if C64_PMIC_WRITE
 /* THE WHITELIST. The index is the API; the address is private. Adding a row
  * is a deliberate act with a reason written beside it, which is the point --
  * see the header on why this is a table and not an address parameter. */
@@ -105,6 +133,7 @@ static const struct { c64_u32 addr; const char *name; } k_wr[] = {
 #define WR_VMC_EN   2
 #define WR_VMC_ANA  3
 #define WR_COUNT    (int)(sizeof k_wr / sizeof k_wr[0])
+#endif  /* C64_PMIC_WRITE */
 
 static int g_ready;
 
@@ -118,6 +147,7 @@ static c64_u64 deadline_ms(unsigned ms)
     return c64_cnt_now() + (f / 1000ull) * ms;
 }
 
+#if C64_PMIC_WRITE
 static void spin_us(c64_u32 us)
 {
     c64_u64 f = c64_cnt_freq();
@@ -127,6 +157,7 @@ static void spin_us(c64_u32 us)
     while (c64_cnt_now() < until)
         ;
 }
+#endif
 
 static int wait_fsm(c64_u32 want, c64_u32 *last)
 {
@@ -188,9 +219,14 @@ int c64_pmic_read(c64_u32 addr, c64_u32 *val)
     return wacs2(0, addr, 0, val);
 }
 
-/* The only way to write. `idx` indexes the whitelist above; there is no
- * address parameter, so there is no way to reach a rail this port has not
- * thought about. */
+#if C64_PMIC_WRITE
+/* The only way to write, and in a read-only build it is not compiled at all
+ * -- neither is the wrapper call it would make. That is deliberate and it is
+ * the difference between a build that declines to write and a build that
+ * cannot: there is no runtime state, no flag and no mistake that turns this
+ * one into the other. `idx` indexes the whitelist above; there is no address
+ * parameter, so there is no way to reach a rail this port has not thought
+ * about. */
 static int pmic_write(int idx, c64_u32 val)
 {
     if (idx < 0 || idx >= WR_COUNT)
@@ -221,6 +257,7 @@ static int pmic_rmw(int idx, c64_u32 mask, c64_u32 val)
     }
     return 0;
 }
+#endif  /* C64_PMIC_WRITE */
 
 /* ---- bring-up ------------------------------------------------------------ */
 
@@ -265,26 +302,76 @@ int c64_pmic_present(void)
 
 /* ---- the SD card's two rails --------------------------------------------- */
 
+/* Selector -> millivolts, or 0 for a value that is not a legal selector at
+ * all. The "not legal" answer is the useful one: these fields have three or
+ * four permitted codes out of eight or sixteen, so a field read from the
+ * WRONG address is much more likely to decode as nonsense than as a valid
+ * voltage. It is a weak checksum on the address map, and it is free. */
+static int vmch_mv(c64_u32 sel)
+{
+    return sel == 2u ? 2900 : sel == 3u ? 3000 : sel == 5u ? 3300 : 0;
+}
+
+static int vmc_mv(c64_u32 sel)
+{
+    return sel == 4u ? 1800 : sel == 10u ? 2900
+         : sel == 11u ? 3000 : sel == 13u ? 3300 : 0;
+}
+
 void c64_pmic_sd_rails_on(void)
 {
-    c64_u32 a = 0, b = 0, c = 0, d = 0;
+    c64_u32 ec = 0, ea = 0, hc = 0, ha = 0, cc = 0, ca = 0;
+    int emv, hmv, cmv, map_ok;
 
     if (!g_ready) {
         c64_log("sd: no PMIC -- the card's rails cannot be switched on\n");
         return;
     }
 
-    /* What the preloader left, before anything here changes it. This is the
-     * line that settles whether LK's "default on" was ever true on this
-     * board; on 2026-09-03 the pads said it was not. */
-    c64_pmic_read(MT6358_LDO_VMCH_CON0, &a);
-    c64_pmic_read(MT6358_VMCH_ANA_CON0, &b);
-    c64_pmic_read(MT6358_LDO_VMC_CON0, &c);
-    c64_pmic_read(MT6358_VMC_ANA_CON0, &d);
-    c64_logf("sd: rails as found -- VMCH en=%d sel=%d, VMC en=%d sel=%d\n",
-             (int)(a & 1u), (int)((b >> 8) & 7u),
-             (int)(c & 1u), (int)((d >> 8) & 0xFu));
+    if (c64_pmic_read(MT6358_LDO_VEMC_CON0, &ec) < 0
+        || c64_pmic_read(MT6358_VEMC_ANA_CON0, &ea) < 0
+        || c64_pmic_read(MT6358_LDO_VMCH_CON0, &hc) < 0
+        || c64_pmic_read(MT6358_VMCH_ANA_CON0, &ha) < 0
+        || c64_pmic_read(MT6358_LDO_VMC_CON0, &cc) < 0
+        || c64_pmic_read(MT6358_VMC_ANA_CON0, &ca) < 0) {
+        c64_log("sd: could not read the rail registers -- writing nothing\n");
+        return;
+    }
 
+    emv = vmch_mv((ea >> 8) & 7u);       /* VEMC shares VMCH's selector table */
+    hmv = vmch_mv((ha >> 8) & 7u);
+    cmv = vmc_mv((ca >> 8) & 0xFu);
+
+    c64_logf("sd: VEMC en=%d sel=%d (%d mV) CON0=%04x ANA=%04x <- the eMMC's rail\n",
+             (int)(ec & 1u), (int)((ea >> 8) & 7u), emv, ec, ea);
+    c64_logf("sd: VMCH en=%d sel=%d (%d mV) CON0=%04x ANA=%04x <- the card's supply\n",
+             (int)(hc & 1u), (int)((ha >> 8) & 7u), hmv, hc, ha);
+    c64_logf("sd: VMC  en=%d sel=%d (%d mV) CON0=%04x ANA=%04x <- the card's I/O\n",
+             (int)(cc & 1u), (int)((ca >> 8) & 0xFu), cmv, cc, ca);
+
+    /* THE CONTROL. The eMMC is working -- msdc.c has already read the GPT off
+     * it this boot -- so its rail cannot be off, and it cannot be sitting at
+     * an illegal voltage. If the map says otherwise, the map is wrong, and
+     * the only safe thing to do with a wrong PMIC address map is nothing. */
+    map_ok = (ec & 1u) && emv;
+    if (!map_ok) {
+        c64_logf("sd: MAP NOT CONFIRMED -- VEMC reads %s at %d mV, but the "
+                 "eMMC is demonstrably working, so these addresses are not "
+                 "where this driver thinks they are. WRITING NOTHING.\n",
+                 (ec & 1u) ? "enabled" : "DISABLED", emv);
+        return;
+    }
+    c64_logf("sd: MAP CONFIRMED -- VEMC, the rail the working eMMC runs on, "
+             "reads enabled at %d mV, so the same map's VMCH and VMC readings "
+             "above are believable.\n", emv);
+
+#if !C64_PMIC_WRITE
+    c64_logf("sd: read-only build -- would now set VMCH sel %d (3000 mV) and "
+             "VMC sel %d (3300 mV) and enable both. Rebuild with "
+             "PMIC_WRITE=1 to arm it.\n", VMCH_SEL_3V0, VMC_SEL_3V3);
+    (void)hmv; (void)cmv;
+    return;
+#else
     /* Voltage BEFORE enable, both times: a rail switched on at whatever
      * selector was left behind is a rail at the wrong voltage for however
      * long the second write takes. */
@@ -298,11 +385,11 @@ void c64_pmic_sd_rails_on(void)
         c64_log("sd: could not bring VMC (the card's I/O rail) up\n");
         return;
     }
-
-    /* The device tree asks for 60 us of ramp on both of these. Give it two
-     * orders of magnitude more and call it free: this happens once, at boot,
-     * and the SD specification wants a millisecond of settled supply before
-     * the first command anyway. */
+    /* The device tree asks for 60 us of ramp on both. Give it two orders of
+     * magnitude more and call it free: this happens once, at boot, and the SD
+     * specification wants a settled supply before the first command anyway. */
     spin_us(10000);
-    c64_log("sd: VMCH 3.0 V and VMC 3.3 V are on\n");
+    c64_logf("sd: VMCH 3.0 V and VMC 3.3 V are on (was VMCH %d mV, VMC %d mV)\n",
+             hmv, cmv);
+#endif
 }

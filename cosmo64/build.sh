@@ -127,6 +127,15 @@ shell )
   # virt board's missing MSDC otherwise leaves untested (36 MiB of .bss --
   # never ship a BLKTEST image)
   [ -n "$BLKTEST" ] && BASECF="$BASECF -DC64_BLKTEST"
+  # PMIC_WRITE=1: compile the PMIC WRITE path in. It is off by default and
+  # that default is load-bearing -- pmic.c can read the MT6358 in every build,
+  # and in a default build the code that could write it does not exist at all
+  # (the whitelist, the read-modify-write helper and the wrapper's write call
+  # are all inside the #if). Every rail on this board is behind those
+  # registers, so "declines to write" and "cannot write" are worth the
+  # distinction. Arm this only once a boot log has said MAP CONFIRMED.
+  [ -n "$PMIC_WRITE" ] && BASECF="$BASECF -DC64_PMIC_WRITE=1" \
+      && echo "[shell] PMIC WRITES ARE ARMED -- this build can change rails"
   # -Wno-error=implicit-function-declaration: mingw-gcc merely warns on the
   # declared-later-in-the-same-file pattern pc64_uui.c uses; clang 16+ errors.
   # The linker still catches genuinely missing functions.
