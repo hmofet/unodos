@@ -308,11 +308,22 @@ static void pins_up(void)
     c64_u32 v;
 
     /* Function 1 (MSDC1) on all six pins. Four bits each: MODE4 bits 20..31
-     * are GPIO 29/30/31, MODE5 bits 0..11 are GPIO 32/33/34. */
+     * are GPIO 29/30/31, MODE5 bits 0..11 are GPIO 32/33/34.
+     *
+     * ONLY THE LOW THREE BITS OF EACH NIBBLE. The function is a 3-bit field;
+     * the fourth bit is the per-field write-enable that this SoC's masked-write
+     * alias of these registers uses, and it reads back set. The first version
+     * of this wrote a flat 0x111 and cleared it. That turned out to be
+     * harmless AND uninformative, because the 2026-09-03 readback showed these
+     * pins already sitting at 0x999 -- function 1 with that bit set, i.e. the
+     * preloader had ALREADY muxed MSDC1 and this whole write is a no-op. It
+     * stays because nothing guarantees that on the next unit; it preserves the
+     * bit because clearing a bit whose meaning you have not established is
+     * how a no-op becomes a bug. */
     v = GP32(GPIO_MODE4);
-    GP32(GPIO_MODE4) = (v & ~0xFFF00000u) | 0x11100000u;
+    GP32(GPIO_MODE4) = (v & ~0x77700000u) | 0x11100000u;
     v = GP32(GPIO_MODE5);
-    GP32(GPIO_MODE5) = (v & ~0x00000FFFu) | 0x00000111u;
+    GP32(GPIO_MODE5) = (v & ~0x00000777u) | 0x00000111u;
 
     /* Input enable and Schmitt trigger on CLK/DAT/CMD (pad bits 6, 7, 8). */
     IOP32(PAD_IES) |= 7u << 6;
