@@ -35,6 +35,7 @@ int uno_usb_setup_intr_in(int dev, int a, int m) { (void)dev;(void)a;(void)m; re
 int uno_usb_intr_in(int dev, void *d, int l) { (void)dev;(void)d;(void)l; return -1; }
 int uno_usb_bulk_in_arm(int dev, void *d, int l) { (void)dev;(void)d;(void)l; return -1; }
 int uno_usb_bulk_in_poll(int dev) { (void)dev; return -1; }
+int uno_usb_bulk_in_epstate(int dev) { (void)dev; return -1; }
 void uno_xhci_set_ep_quirk(void (*fn)(unsigned char *, int, int, int)) { (void)fn; }
 
 #else  /* ===================== UNO_XHCI enabled ========================= */
@@ -984,6 +985,19 @@ static void ep_recover(int di, int dci, trb_t *ring, int *enq, int *cyc, int tim
     for (i = 0; i < BULK_RING_SZ; i++) { ring[i].param = 0; ring[i].status = 0;
                                          ring[i].control = 0; }
     *enq = 0; *cyc = 1;
+    /* Clearing the ring ABANDONS whatever was on it, including a TRB an async
+     * transfer owns -- and both async entry points key off that TRB's ADDRESS.
+     * Leaving the registration behind makes uno_usb_bulk_in_poll() answer
+     * "still outstanding" forever and uno_usb_bulk_in_arm() answer "busy"
+     * forever, for a transfer whose TRB has just been zeroed. A recovery could
+     * then never rescue a stalled async receive, which is the one thing it
+     * exists to do (cosmo64's NIC, boot 8: the endpoint delivered one frame
+     * and stopped, and the recovery that should have restarted it instead
+     * wedged the slot permanently). */
+    if (dci == g_bin_dci[di]) {
+        g_async_trb[di][ASY_BIN] = 0;
+        g_async_sts[di][ASY_BIN] = 0;
+    }
     deq = (u64)(uintptr_t)ring | 1u;                        /* new cursor + DCS */
     run_command(deq, TRB_TYPE(TR_SET_TR_DEQ) | ((u32)dci<<16) | ((u32)slot<<24), 0);
 
@@ -1151,6 +1165,18 @@ int uno_usb_bulk_in_arm(int dev, void *data, int len)
     wr32(g_db, g_devs[dev].slot*4, g_bin_dci[dev]);
     g_abin_len[dev] = len;
     return 1;
+}
+
+/* The bulk-IN endpoint's state, straight out of the device context:
+ * 1 Running, 2 Halted, 3 Stopped, 4 Error (-1 = no such endpoint). The async
+ * pair cannot express this -- a TRB that is never completed returns "still
+ * outstanding" whether the endpoint is running and the device is silent or the
+ * endpoint has stopped dead, and those need entirely different fixes. */
+int uno_usb_bulk_in_epstate(int dev)
+{
+    int st2 = g_csz ? 64 : 32;
+    if (dev < 0 || dev >= g_ndevs || !g_bin_dci[dev]) return -1;
+    return (int)(*(volatile u32 *)(g_devctx[dev] + (g_bin_dci[dev] + 1) * st2) & 7);
 }
 
 int uno_usb_bulk_in_poll(int dev)

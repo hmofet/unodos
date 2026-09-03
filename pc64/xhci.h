@@ -53,6 +53,8 @@ int  uno_usb_bulk_in(int dev, void *data, int len);        /* returns bytes rece
  * The buffer passed to arm must stay valid until poll returns nonzero. */
 int  uno_usb_bulk_in_arm(int dev, void *data, int len);
 int  uno_usb_bulk_in_poll(int dev);
+/* endpoint state: 1 Running, 2 Halted, 3 Stopped, 4 Error, -1 none */
+int  uno_usb_bulk_in_epstate(int dev);
 
 /* HID interrupt-IN endpoints. setup claims one, posts the first transfer and
  * returns a HANDLE (>=0) or -1; intr_in polls THAT endpoint, non-blocking,
