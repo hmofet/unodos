@@ -21,6 +21,7 @@ static int g_mods_usb, g_held_usb;      /* a USB keyboard        */
 static int g_cx = C64_SCRW / 2, g_cy = C64_SCRH / 2, g_wheel;
 static int g_btn;                       /* the touch panel (absolute) */
 static int g_btn_usb;                   /* a USB mouse (relative)     */
+static int g_btn_codi;                  /* the rear cover panel (relative) */
 static int g_lock;
 static int g_speed = 100;
 
@@ -79,17 +80,37 @@ void c64_input_set_pointer(int x, int y, int btn)
  * store it as such. Deltas are applied raw, the way x86 applies a USB HID
  * mouse's (the pointer-speed preference scales the firmware pointer's
  * normalised motion, not a mouse's counts). */
-void c64_input_move_pointer(int dx, int dy, int btn)
+static void move_rel(int dx, int dy)
 {
-    if (g_lock)
-        return;
     g_cx += dx;
     g_cy += dy;
     if (g_cx < 0) g_cx = 0;
     if (g_cy < 0) g_cy = 0;
     if (g_cx > c64_scrw - 1) g_cx = c64_scrw - 1;
     if (g_cy > c64_scrh - 1) g_cy = c64_scrh - 1;
+}
+
+void c64_input_move_pointer(int dx, int dy, int btn)
+{
+    if (g_lock)
+        return;
+    move_rel(dx, dy);
     g_btn_usb = btn;
+    g_have_ptr = 1;
+}
+
+/* The CoDi rear panel is the third pointer on this machine and it needs its
+ * own button latch for the reason the header gives: the shell sees the OR of
+ * every source's level, and a source that shared a latch with the USB mouse
+ * would release the mouse's held button every time a finger lifted off the
+ * cover. Its deltas are already smoothed and gain-shaped by codi.c, so like a
+ * USB mouse's they are applied raw. */
+void c64_input_move_pointer_codi(int dx, int dy, int btn)
+{
+    if (g_lock)
+        return;
+    move_rel(dx, dy);
+    g_btn_codi = btn;
     g_have_ptr = 1;
 }
 
@@ -139,7 +160,7 @@ void uno_pc64_mouse(int *x, int *y, int *btn)
 {
     *x = g_cx;
     *y = g_cy;
-    *btn = g_btn | g_btn_usb;
+    *btn = g_btn | g_btn_usb | g_btn_codi;
 }
 
 int uno_pc64_wheel(void)
@@ -153,7 +174,7 @@ int uno_pc64_mac_mouse(short *h, short *v)
 {
     *h = (short)g_cx;
     *v = (short)g_cy;
-    return g_btn | g_btn_usb;
+    return g_btn | g_btn_usb | g_btn_codi;
 }
 
 void uno_pc64_pointer_speed(int pct)
@@ -197,7 +218,7 @@ void uno_pc64_ptr_status(int *nsimple, int *nabs, int *blocked)
     /* The touch panel is an ABSOLUTE pointer, so report it as one rather than
      * leaving the Control Panel claiming this machine has no pointer while the
      * cursor is visibly tracking a finger. */
-    *nsimple = c64_usb_mice();          /* USB mice are relative pointers */
+    *nsimple = c64_usb_mice() + (c64_codi_present() ? 1 : 0);
     *nabs = c64_touch_present() ? 1 : 0;
     *blocked = 0;
 }

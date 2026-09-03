@@ -85,6 +85,24 @@ static int part_write(uno_bdev *d, unsigned long long lba, unsigned int n,
     return c64_blk_write(p->base + lba, buf, n) == 0;
 }
 
+/* The SD card's transport, same shape and same reasoning: LBA 0 of `sd0` is
+ * the first sector of the card's FAT partition, so fat.c cannot express an
+ * address outside it, and sdmmc.c's own fence stands underneath. */
+static int sd_read(uno_bdev *d, unsigned long long lba, unsigned int n, void *buf)
+{
+    const c64_part *p = (const c64_part *)d->ctx;
+    if (!p || !n || lba + n > d->sectors || lba + n < lba) return 0;
+    return c64_sd_read(p->base + lba, buf, n) == 0;
+}
+
+static int sd_write(uno_bdev *d, unsigned long long lba, unsigned int n,
+                    const void *buf)
+{
+    const c64_part *p = (const c64_part *)d->ctx;
+    if (!p || !n || lba + n > d->sectors || lba + n < lba) return 0;
+    return c64_sd_write(p->base + lba, buf, n) == 0;
+}
+
 /* ---- BLKTEST=1: the same stack over a RAM transport ----------------------- *
  * There is no gate for storage on QEMU, because the virt board has no MSDC --
  * so without this the first thing that ever runs fat.c on aarch64 is the
@@ -187,13 +205,60 @@ static void blktest_roundtrip(void)
 #endif /* C64_BLKTEST */
 
 /* ---- registration --------------------------------------------------------- */
-void uno_blk_init(void)
+/* THE SD CARD GOES FIRST, and it is the boot disk. The 2026-09-01 decision
+ * put persistence on the card rather than the eMMC -- every partition on the
+ * eMMC belongs to Android, to Gemian, to the GPT or to the preloader -- so
+ * `sd0` is what SHELL.CFG, sessions and installed apps should land on.
+ * `is_boot` is the flag that makes that happen: session_vol() and
+ * uno_fs_pref_vol() both prefer the volume the machine came up on over
+ * whichever disk enumerated first. Registering the card first also means it
+ * keeps index 0 whether or not the eMMC ever grows a UNODATA partition. */
+static int register_sd(void)
 {
     uno_bdev d;
     c64_u64 base, sectors;
 
+    c64_sd_init();
+    if (!c64_sd_ready()) {
+        c64_log("blk: no SD card\n");
+        return 0;
+    }
+    base = c64_sd_part_lba();
+    sectors = c64_sd_part_sectors();
+    if (!sectors) {
+        c64_log("blk: the SD card reads, but carries no FAT partition\n");
+        return 0;
+    }
+    memset(&d, 0, sizeof d);
+    d.native  = 1;
+    d.sectors = sectors;
+    d.name[0] = 's'; d.name[1] = 'd'; d.name[2] = '0'; d.name[3] = 0;
+    d.pci_dev = -1; d.pci_fn = -1;
+    d.is_boot = 1;
+    g_part[g_ndev].base = base;
+    d.ctx     = &g_part[g_ndev];
+    d.read    = sd_read;
+    d.write   = sd_write;
+    if (!uno_blk_register(&d)) {
+        c64_log("blk: registry full\n");
+        return 0;
+    }
+    c64_logf("blk: sd0 = the card's FAT partition at LBA %d, %d sectors "
+             "(%d MiB), addressed partition-relative\n",
+             (int)base, (int)sectors, (int)(sectors / 2048));
+    return 1;
+}
+
+void uno_blk_init(void)
+{
+    uno_bdev d;
+    c64_u64 base, sectors;
+    int have_sd;
+
     if (g_done) return;
     g_done = 1;
+
+    have_sd = register_sd();
 
     /* c_main() brings the eMMC up before the shell starts, and c64_blk_init()
      * is idempotent, so calling it again here costs nothing and removes the
@@ -223,10 +288,12 @@ void uno_blk_init(void)
     /* THE BOOT DISK, and this flag is load-bearing. session_vol() and
      * uno_fs_pref_vol() both put persistent state on the volume the machine
      * came up on in preference to whichever disk enumerated first -- the
-     * ZimaBlade lesson written up in pc64_fs.h. Here there is exactly one
-     * medium and we did boot from it: p38 and the data partition are the same
-     * eMMC. Saying so is what makes SHELL.CFG land on it. */
-    d.is_boot = 1;
+     * ZimaBlade lesson written up in pc64_fs.h. p38 and the data partition
+     * are the same eMMC, so this is literally true of it -- but if an SD card
+     * mounted, the card is where persistence belongs (see register_sd), and
+     * two volumes both claiming to be the boot disk is exactly the ambiguity
+     * the flag exists to remove. */
+    d.is_boot = !have_sd;
     g_part[g_ndev].base = base;
     d.ctx     = &g_part[g_ndev];
     d.read    = part_read;
