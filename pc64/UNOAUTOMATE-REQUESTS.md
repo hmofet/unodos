@@ -11435,3 +11435,43 @@ because the gate's own documentation frames the diskless case as a
 walk-to-the-machine inconvenience, and it is actually a structural gap.
 `unoauto_gate.h`'s "Two known limitations, both deliberate" section is the
 right place to record it if the answer is "won't fix".
+
+---
+
+## 2026-09-03 — cosmo64 → unoautomate: a generic platform debug pass-through
+
+**Request.** One more weak-symbol pass-through verb, on the exact pattern of
+`iwl`, `eth` and `hwwdt`, but not bound to a named driver:
+
+```
+plat <subcmd...>   ->  int plat_dbg_cmd(const char *line, char *out, int cap);
+```
+
+weak-stubbed in `unoauto_remote.c` like `r8169_dbg_cmd`, and `{ "plat",
+UNOAUTO_P_SYSTEM }` in the `GATE[]` table in the same commit.
+
+**Why.** A port's platform layer accumulates exactly the sort of knob the
+existing three verbs exist for, and today each one is either a new verb (a
+request, and a dispatch edit in someone else's lane) or a reflash.
+
+The concrete case, today: cosmo64's rear-panel touchpad landed on hardware
+with its axis transform possibly mirrored. The transform is three booleans.
+Finding the right eight-way combination costs a reflash *each*, and a reflash
+on this device is two reboots plus a bootloader menu somebody has to stand in
+front of, because LK's menu times out to NORMAL boot and cannot be told to
+pick our slot. A `plat swap 0` over the live link would have settled it in
+seconds. The same applies to the SD bring-up next to it, where the open
+question is which of three rails or muxes is wrong and every answer costs a
+flash.
+
+**Why generic rather than a `codi` verb.** A `codi` verb would be dead weight
+the moment the axes are right. `plat` is one row in the table for every
+platform lane, forever, and the weak stub means it costs nothing on builds
+that do not implement it — exactly what `r8169_dbg_cmd` does today for boxes
+with no Realtek NIC.
+
+**Not blocked on this.** cosmo64 measures the axes from the log instead (the
+driver prints raw and mapped deltas for the first reports of each touch), which
+works and needed one flash rather than three. Filed because the cost is
+structural, not specific to this driver, and because the pattern to copy
+already exists three times over.
