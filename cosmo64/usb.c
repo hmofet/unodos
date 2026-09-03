@@ -129,14 +129,33 @@ int c64_usb_control(int dev, unsigned char rt, unsigned char req,
     return n;
 }
 
+/* The transmit half of the counters below, declared here because the stack
+ * counts a frame as sent the moment ax_send() returns -- so net.c's "tx=4"
+ * says four frames were HANDED OVER, not that four reached the wire. */
+static unsigned g_bo_call, g_bo_ok, g_bo_err, g_bo_bytes;
+
 int c64_usb_bulk_out(int dev, void *data, int len)
 {
-    int i;
+    int i, n;
     if (len < 0 || len > (int)sizeof g_bbounce)
         return -1;
     for (i = 0; i < len; i++)
         g_bbounce[i] = ((const unsigned char *)data)[i];
-    return uno_usb_bulk_out(dev, g_bbounce, len);
+    n = uno_usb_bulk_out(dev, g_bbounce, len);
+    g_bo_call++;
+    if (n > 0) {
+        g_bo_ok++;
+        g_bo_bytes += (unsigned)n;
+    } else {
+        g_bo_err++;
+    }
+    /* The stack counts a frame as sent when ax_send returns, so net.c's tx=4
+     * does NOT mean four frames reached the wire. This does. */
+    if (g_bo_call <= 4) {
+        c64_logf("usb-bulk: OUT %d bytes -> %d\n", len, n);
+        c64_log_flush();
+    }
+    return n;
 }
 
 /* BULK IN IS ASYNC HERE, and that is the whole difference between a usable
@@ -162,6 +181,23 @@ int c64_usb_bulk_out(int dev, void *data, int len)
  * arrived, which is what a still-outstanding transfer returns. */
 static int g_bin_armed = -1;                 /* device with a TRB posted, or -1 */
 
+/* Counters, because "rx=0" from the net stack cannot say WHICH of three things
+ * happened: the transfer was never armed, it is armed and nothing ever lands,
+ * or it lands and the bytes are wrong. One line every few seconds separates
+ * them, and net.c's own counters cannot -- they only see frames that already
+ * passed the destination-MAC filter. */
+static unsigned g_bi_arm, g_bi_armfail, g_bi_poll, g_bi_land, g_bi_err;
+static unsigned g_bi_bytes, g_bi_shown;
+
+static void bulk_stats(void)
+{
+    c64_logf("usb-bulk: in arm=%u armfail=%u poll=%u land=%u err=%u bytes=%u | "
+             "out call=%u ok=%u err=%u bytes=%u\n",
+             g_bi_arm, g_bi_armfail, g_bi_poll, g_bi_land, g_bi_err, g_bi_bytes,
+             g_bo_call, g_bo_ok, g_bo_err, g_bo_bytes);
+    c64_log_flush();
+}
+
 int c64_usb_bulk_in(int dev, void *data, int len)
 {
     int n, i;
@@ -173,17 +209,39 @@ int c64_usb_bulk_in(int dev, void *data, int len)
     if (g_bin_armed != dev) {
         if (g_bin_armed >= 0)
             return 0;                        /* another device owns the slot */
-        if (uno_usb_bulk_in_arm(dev, g_bbounce, len) < 0)
+        if (uno_usb_bulk_in_arm(dev, g_bbounce, len) < 0) {
+            g_bi_armfail++;
             return -1;
+        }
+        g_bi_arm++;
         g_bin_armed = dev;
         return 0;                            /* nothing yet, by construction */
     }
+    g_bi_poll++;
+    if ((g_bi_poll & 0xFF) == 0)             /* ~ every 2 s at 4 polls/frame */
+        bulk_stats();
     n = uno_usb_bulk_in_poll(dev);
     if (n == 0)
         return 0;                            /* still in flight */
     g_bin_armed = -1;                        /* landed or failed: re-arm next call */
-    if (n < 0)
+    if (n < 0) {
+        g_bi_err++;
         return -1;
+    }
+    g_bi_land++;
+    g_bi_bytes += (unsigned)n;
+    /* The first few transfers in full: an aggregation trailer that does not
+     * parse and a transfer that never arrives look identical from net.c. */
+    if (g_bi_shown < 3) {
+        g_bi_shown++;
+        c64_logf("usb-bulk: IN landed %d bytes: %02x %02x %02x %02x %02x %02x "
+                 "%02x %02x ... tail %02x %02x %02x %02x\n", n,
+                 g_bbounce[0], g_bbounce[1], g_bbounce[2], g_bbounce[3],
+                 g_bbounce[4], g_bbounce[5], g_bbounce[6], g_bbounce[7],
+                 g_bbounce[n - 4], g_bbounce[n - 3], g_bbounce[n - 2],
+                 g_bbounce[n - 1]);
+        c64_log_flush();
+    }
     for (i = 0; i < n && i < len; i++)
         ((unsigned char *)data)[i] = g_bbounce[i];
     return n;
