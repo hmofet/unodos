@@ -841,6 +841,15 @@ dead for the first twenty seconds" is the synchronous net bring-up on the
 frame loop (8 s link wait plus two DHCP windows), and `per loop input` is
 still ~11 ms of polled I2C and xHCI -- the next perf lead.
 
+**Hardware boot 2 (2026-09-03): M6 WORKS.** The repair fired, the box
+leased 192.168.2.254, and a dial-in from the dev PC over the LAN ran the
+whole surface: HELLO, `uptime`, `probe` (the net row reporting link+lease
+and 7884 received frames), `apps` 25, `caps` (0/0/0: the debug-open gate),
+`vols`, `screen info` 1080x540, a QOI `screen grab`, a `log` line that
+came back on the LOG stream, and `pointer` injects that walked the cursor
+round the four corners of the panel. UnoDOS on the Cosmo is now remotely
+driven. Still unverified: the `reboot` verb's SWRST path.
+
 **The gate is now immune to where the stop lands.** Twice a run failed
 with a fifth of the screen differing, and the shadow PNG the harness now
 writes on a failure showed why: fb[] held only the desktop background at
