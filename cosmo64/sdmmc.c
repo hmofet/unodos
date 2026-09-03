@@ -91,8 +91,13 @@
 #define PAD_PUPD0 0xC0
 #define IOP32(off) (*(volatile c64_u32 *)(IOCFG1 + (off)))
 
-/* GPIO pinmux. MSDC1 is six pins in function 1: MODE4[31:20] covers GPIO
- * 37/38/39 and MODE5[11:0] covers GPIO 40/41/42 (four bits per pin). */
+/* GPIO pinmux. MSDC1 is six pins in function 1, and they are GPIO 29-34: the
+ * MODE registers hold eight pins of four bits each, so GPIO_BASE+0x330 covers
+ * 24..31 (its top twelve bits are 29/30/31) and GPIO_BASE+0x340 covers 32..39
+ * (its bottom twelve are 32/33/34). Cross-checked against the SoC's per-pin
+ * pad tables, which put exactly those six in IOCFG_1 with CLK on IES bit 6,
+ * the four data lines on bit 7 and CMD on bit 8 -- the same grouping the
+ * masks below use. */
 #define GPIO_MODE4 0x10005330ull
 #define GPIO_MODE5 0x10005340ull
 #define GPIO_DIN0  0x10005200ull        /* card detect is GPIO 3 */
@@ -297,7 +302,7 @@ static void pins_up(void)
     c64_u32 v;
 
     /* Function 1 (MSDC1) on all six pins. Four bits each: MODE4 bits 20..31
-     * are GPIO 37/38/39, MODE5 bits 0..11 are GPIO 40/41/42. */
+     * are GPIO 29/30/31, MODE5 bits 0..11 are GPIO 32/33/34. */
     v = GP32(GPIO_MODE4);
     GP32(GPIO_MODE4) = (v & ~0xFFF00000u) | 0x11100000u;
     v = GP32(GPIO_MODE5);

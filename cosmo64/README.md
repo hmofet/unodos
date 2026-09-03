@@ -1172,7 +1172,11 @@ a floating-point response curve would buy nothing a divide does not.
 **Which pins.** This is the one fact the spec could not pin down, so it is
 measured rather than guessed. UART1 can come out on three pin pairs (110/112
 function 7, 46/47 function 2, 19/20 function 5); 41/42 is a fourth on paper
-and is ruled out here because those are the SD card's data lines. MediaTek's
+and is deliberately NOT probed, because those two carry USB IDDIG and DRVVBUS
+in their function 1 and muxing the live USB host's ID and VBUS lines away on
+the chance that a UART is behind them is a bad trade for a guess. (If all
+three candidates come up empty, that pair is the next thing to try, with the
+USB stack quiet.) MediaTek's
 MT6771 reference DWS -- which Planet built this device from, and which is in
 the vendor kernel -- routes UART1 to 110/112, so that pair is tried first.
 Each candidate gets the pinmux, a version query and a 300 ms window; the pair
