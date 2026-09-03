@@ -82,7 +82,7 @@ void c_main(void *dtb)
     c64_log_init();
     c64_logf("dtb=%p cntfrq=%d\n", dtb, (int)c64_cnt_freq());
     c64_log_survey_report();
-    mmu_init();
+    mmu_init();          /* ...which finishes the .bss zero on its way out */
     c64_beacon(272, 0xFFFFFF00u);   /* YELLOW: translation + caches survived */
     c64_log("mmu on\n");
     c64_u32 ppitch;
@@ -103,6 +103,11 @@ void c_main(void *dtb)
      * there is no MSDC at 0x11230000, so this costs one bounded command
      * timeout and logs that the eMMC is absent. */
     c64_blk_init();
+    /* The SD card is a real bring-up rather than an adoption, so it happens
+     * here beside the eMMC and before anything asks for a volume; uno_blk_init
+     * calls it again on its way to mounting and it is idempotent. On QEMU
+     * there is no MSDC1 either, and it says so and moves on. */
+    c64_sd_init();
     /* Mount before the shell rather than inside it: session_load() runs from
      * uno_main and asks for SHELL.CFG immediately, so a report printed after
      * that would only be a report of what the shell had already decided. */
@@ -224,9 +229,15 @@ void uno_pc64_poll(void)
         c64_log("main loop\n");
         c64_kbd_init();
         c64_touch_init();
-        c64_logf("input: keyboard %s, touch %s\n",
+        /* The rear cover panel, last of the three local input devices: its
+         * bring-up walks three candidate pin pairs with a version query on
+         * each, so it is the slow one, and it is the one the desktop can do
+         * without. */
+        c64_codi_init();
+        c64_logf("input: keyboard %s, touch %s, rear touchpad %s\n",
                  c64_kbd_present() ? "present" : "ABSENT",
-                 c64_touch_present() ? "present" : "ABSENT");
+                 c64_touch_present() ? "present" : "ABSENT",
+                 c64_codi_present() ? "present" : "ABSENT");
     }
     /* Time the input drivers separately: they are polled I2C, and the AW9523
      * has no interrupt line, so a full matrix sweep is a real per-iteration
@@ -234,6 +245,8 @@ void uno_pc64_poll(void)
     c64_u64 t0 = c64_cnt_now();
     c64_kbd_poll();
     c64_touch_poll();
+    c64_codi_poll();                /* the rear panel's UART, drained and its
+                                     * glide ticked, in the same budget */
     c64_usb_poll();                 /* polled xHCI too: a ring sweep per HID
                                      * endpoint, so it is timed with the rest */
     c64_perf_add_poll(c64_cnt_now() - t0);

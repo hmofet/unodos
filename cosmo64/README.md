@@ -12,9 +12,10 @@ research repo: `research/pc64-arm-port-plan.md` in `hmofet/cosmo`. It stops at
 M5; M6 (the URC remote channel) was added after it was written and is
 documented here.
 
-## State: M0–M6 COMPLETE, all hardware-proven (2026-09-03)
+## State: M0-M7 written, M0-M6 hardware-proven (2026-09-03)
 
-Everything below has run on the phone, not just under the gate:
+Everything through M6 has run on the phone, not just under the gate; M7 is
+written and gated but is waiting for a device that is in Trixie to be flashed.
 
 | | |
 |---|---|
@@ -25,19 +26,32 @@ Everything below has run on the phone, not just under the gate:
 | M4 | USB host: xHCI on MediaTek's SSUSB, a mouse and a keyboard |
 | M5 | networking: a DHCP lease over the AX88179 USB Ethernet |
 | M6 | URC: the box is remotely driven from the dev PC, with a live log |
+| M7 | **the SD card, the rear-panel touchpad, and three measured perf wins** -- gated, NOT yet on hardware |
 
 **What runs the machine today.** The desktop is the panel's native landscape
 at a 2x zoom, the keyboard and touch panel are the local input, a USB mouse
 and keyboard work through a plain USB 2.0 hub, the eMMC is readable and its
 log window writable, and the shell holds a DHCP lease and serves URC on
-`:5099`. There is **no persistent volume**: the shell runs on the RAM disk, so
-`SHELL.CFG` does not survive a reboot and the Control Panel opens at every
-boot. `.UNO` apps do not load (no aarch64 module ABI). No audio, no WiFi
+`:5099`. `.UNO` apps do not load (no aarch64 module ABI). No audio, no WiFi
 (CONNSYS has no bare-metal route), no cellular.
 
-**Where we left off.** p38 carries `2254aec6…ec75`, and it is **booted and
-verified**: the live log streams, and the boot it streamed is the one that
-proved the M6 receive fix (below). Nothing is pending. The loop is:
+**What M7 adds, and what is still unproven about it.** Persistence now has a
+home: `sdmmc.c` brings MSDC1 and the microSD card up from nothing and `blk.c`
+registers the card's FAT partition as the boot disk, so `SHELL.CFG` should
+survive a reboot and the Control Panel should stop opening at every boot.
+`codi.c` turns the rear cover panel into a touchpad over UART1. And three
+measured costs are gone: both I2C buses run at 400 kHz instead of 100, the
+keyboard's idle poll is one transaction instead of three, and entry.s no
+longer zeroes 100 MB of `.bss` with the MMU off.
+
+None of that has met the hardware. The QEMU gate proves the code paths exist,
+compile, and fail cleanly on a board that has neither an SD slot nor a cover
+MCU -- which is exactly what the virt board is. The device is the gate for
+the rest, and the log is how it reports (see "What the log should say" below).
+
+**Where we left off.** p38 carries the M6 image, `2254aec6...ec75`, booted and
+verified. The M7 image is built and gated but NOT flashed: flashing needs the
+device in Trixie, and it is in UnoDOS. The loop is:
 
 ```sh
 ./build.sh shell && ./flashp38.sh   # when there is something new to try
@@ -45,38 +59,72 @@ proved the M6 receive fix (below). Nothing is pending. The loop is:
 ./readlog.sh                        # or read it afterwards, from Trixie
 ```
 
-Pick up at the open list. Item 1 (the SD card) is the one that unblocks
-others.
+### What the log should say, first M7 boot
+
+Read these in order; each one is the gate for the line under it.
+
+```
+sd: clocks before -- CG1_STA=... (msdc1 GATED, src GATED), CLK_CFG=... (mux=N pdn=1)
+sd: clocks after  -- ...; source NN MHz (selector N)
+sd: MSDC1 before reset: CFG=... ver=...        <- NOT ffffffff: the clock arrived
+sd: identification clock 3xx kHz
+sd: CMD8 echoed 0x1AA -- v2 (SDHC/SDXC capable)
+sd: OCR=... -- block (SDHC/SDXC) addressing
+sd: CID ... / sd: RCA ..., N sectors
+sd: bus width 4 / sd: card clock 12500 kHz
+sd: MBR entry 0: type 0c, LBA 2048, ...
+sd: ready -- ...
+blk: sd0 = the card's FAT partition at LBA 2048, ...
+storage: persisting to vol 0 (<the card's label>)
+codi: UART1 is on GPIO110/112 f7
+codi: firmware "OurCodi-0.1"
+codi: rear touchpad armed
+kbd: AW9523 up, matrix scanning at 3xx kHz
+touch: NT36xxx ..., bus 3xx kHz
+perf: ... per loop input <well under 11000> us
+```
+
+Where each can stop, and what it means:
+
+- **`MSDC1 reads as dead silicon`** -- the clock ungate did not take. The
+  selector and the CG bits are in the two lines above it.
+- **`no card answered ACMD41 within 2 s`** -- either the slot is empty, or the
+  VMCH/VMC "default on" assumption is wrong for this unit, which is the one
+  thing in `sdmmc.c` taken on the vendor's word rather than measured. That is
+  where a PMIC-over-PWRAP path would have to go.
+- **`data CRC` or `RX stalled`** -- timing. The card clock is deliberately
+  modest (source/4, so 13 MHz off the 26 MHz source and never above 25 MHz),
+  so the next thing to try is the pad delay registers `pins_up()` leaves at
+  zero, not a slower bus.
+- **`no cover MCU answered on any of the three UART1 pin pairs`** -- either
+  the pin pair is a fourth one nobody has found, or the MCU is off-frequency
+  (this unit's oscillators have run 3-8% fast since a deep battery pull, see
+  `docs/codi-driver-spec.md` section 7). A baud sweep is the next step and is
+  not implemented.
+- **`firmware "CODI:V1.1.1.14..."`** -- stock firmware. It never forwards
+  touch; the panel needs OurCodi. Not a bug.
 
 **Open, in the order worth doing:**
 
-1. **The SD card (MSDC1)** — the one thing between here and persistence, and
-   it unblocks the module loader, session state and a real filesystem for URC
-   `put`. Unlike MSDC0 this is a genuine bring-up: LK never touches the slot,
-   so it needs PMIC VMCH/VMC over PWRAP, a clock ungate, pinmux and the public
-   SD init sequence. The card in the slot is already vfat, so no destructive
-   step is involved.
-2. **Two measured perf leads.** `per loop input` is ~11 ms of polled I2C and
-   xHCI: both buses run at 100 kHz where the parts do 400 kHz (the vendor
-   recipe gives `TIMING 0x0011` against today's `0x0217`), and `kbd.c`'s idle
-   path re-writes two registers that are already parked. Separately, `entry.s`
-   zeroes ~103 MB of `.bss` MMU-off on Device memory before any C runs; zeroing
-   only the page tables and debug page there and the rest after `mmu_on` should
-   be worth about a second of boot.
-3. **The eMMC log window loses the boot story on a long session.** It is 128
+1. **Flash M7 and read the log.** Everything above is a prediction.
+2. **The eMMC log window loses the boot story on a long session.** It is 128
    KiB and `c64_log_flush()` keeps the TAIL, which was right when a session was
-   a minute of bring-up. Boot 2 wrote 262 KB in an hour — 684 `perf:` lines and
-   757 `usb-bulk:` lines, a pair of each every two seconds — so the part worth
+   a minute of bring-up. Boot 2 wrote 262 KB in an hour -- 684 `perf:` lines and
+   757 `usb-bulk:` lines, a pair of each every two seconds -- so the part worth
    reading was the first thing overwritten, and the `RX NEVER LANDED` line that
    proves the M6 fix fired is not in the log that proves it worked. Both halves
    want fixing: throttle the periodic chatter once it stops changing, and keep
    the first few KiB of a boot as a preamble the wrap cannot reach. The live
    stream only half-covers this, since a late dial-in also gets the tail.
-4. **The `reboot` verb is untested by choice** — its TOPRGU `SWRST` path is
+3. **The rear touchpad has no lid sensor.** The Linux daemon suppresses touch
+   while the lid is closed, by asking UPower; bare metal has no such oracle, so
+   a pocket touch moves the pointer. `codi.c` says so in its header.
+4. **The `reboot` verb is untested by choice** -- its TOPRGU `SWRST` path is
    written but never fired, because coming back needs someone at the LK menu.
 5. Smaller: `net_link_speed_mbps()` reports 0; the 256-byte control-IN anomaly
    from M4 is still root-caused only as a suspicion; `usb.c`'s config-descriptor
-   bounce truncates rather than refuses a descriptor over 512 bytes.
+   bounce truncates rather than refuses a descriptor over 512 bytes; SD writes
+   are one block per command where reads stream up to 64.
 
 ## Build
 
@@ -1022,3 +1070,180 @@ building on its silence**. Second, nothing could distinguish "the endpoint
 stopped" from "the endpoint is running and the device is silent"; both read as
 `land=0`. `uno_usb_bulk_in_epstate()` answers that in one line and should have
 been the first thing added, not the ninth.
+
+## M7 (2026-09-03): the SD card, the rear touchpad, and three perf wins
+
+Three things the M6 handoff named as the next work, done together because the
+first unblocks the others and the third is what makes the machine feel like a
+machine.
+
+### The SD card (MSDC1) -- `sdmmc.c`
+
+The eMMC driver next door is a command issuer and says so at length: LK
+brought MSDC0 up, tuned it, and read our own boot image with it, so `msdc.c`
+only has to point a live controller at a block. **Nothing has ever touched
+MSDC1.** The preloader does not use it, LK does not use it, and LK's
+`platform_uninit()` never mentions it. So this is the real thing: clock,
+pinmux, pad config, controller reset, and the public SD initialisation
+sequence from CMD0 to a card in the transfer state.
+
+Why it matters more than a second disk: without a writable volume the shell
+runs on the RAM disk, `SHELL.CFG` does not survive a reboot, the Control Panel
+opens at every boot, `.UNO` apps have nowhere to live and URC's `put` has
+nowhere to put anything. The eMMC cannot supply that -- every partition on it
+belongs to Android, to Gemian, to the GPT or to the preloader -- and the
+2026-09-01 decision was that it stays that way. The card is ours, it is
+already vfat, and nothing else is competing for it.
+
+**The fact that made it a day's work rather than a week's.** LK's own
+`msdc_io.c` carries the comment *"Preload and LK need not touch power since it
+is default on"*, and `msdc_init`'s *"since VEMC/VMC/VMCH are default on"*.
+VMCH (the card's 3.0 V supply) and VMC (its 3.3 V I/O rail) come up with the
+PMIC and are never gated -- so there is no PMIC-wrapper code here and there
+does not need to be. If a unit disagrees, the symptom is an ACMD41 that never
+answers, and the log says exactly that.
+
+What is deliberately modest:
+
+- **The clock mux is read, decoded, logged, and never written.** The same
+  topckgen word carries MSDC0's selector, and MSDC0 is where the debug log
+  lives; a slip there takes away the only channel that could report it. Only
+  the mux's power-down bit is touched, and only if it is set. A selector
+  outside the known table is treated as the fastest possible source, which
+  makes every divider conservative rather than the card overclocked.
+- **SD default speed, no more.** From a 26 MHz source that is 13 MHz on four
+  lines. No CMD6 high-speed switch, no UHS, no voltage switch, no tuning. A
+  4-bit bus at 13 MHz is ~6 MB/s of card, far more than a PIO loop will draw.
+- **PIO, not DMA**, for `msdc.c`'s reason: a wild DMA write on this device is
+  a brick, and PIO cannot make one.
+- **Writes are fenced** to the partition the driver found. The card's own MBR
+  is somebody else's data -- it is what keeps the card readable in a PC.
+
+Reads stream: CMD18 runs up to 64 sectors on one command instead of one
+command per sector, which is what fat.c wants for a multi-sector cluster.
+Writes stay one block per command, because a write is rarer and the failure
+mode is worse.
+
+`blk.c` registers the card's FAT partition as `sd0`, partition-relative like
+`emmc0`, and marks it the boot disk -- so `uno_fs_pref_vol()` puts session
+state on the card. `emmc0`'s own boot flag becomes conditional: two volumes
+both claiming to be the boot disk is exactly the ambiguity that flag exists to
+remove.
+
+Both an MBR and a "superfloppy" (a BPB right at LBA 0, which is what a camera
+leaves) are handled, because the alternative is telling somebody their card is
+broken when it is not.
+
+### The rear cover panel as a touchpad -- `codi.c`
+
+The cover panel is not a peripheral this SoC can touch: it is an STM32L4R9 on
+the always-on VBAT rail with its own display and its own FocalTech FT3x67, and
+the AP reaches it through one UART. So the driver is a UART, a message codec
+and a small state machine. The protocol and the electrical facts are
+`docs/codi-driver-spec.md` in hmofet/cosmo; the *feel* is a port of
+`scripts/cosmo-rear-touchpad`, the Linux daemon that has driven this panel
+since 2026-08-31, with its user-validated tuning carried across unchanged --
+those numbers were chosen with a finger on the glass, and re-deriving them by
+feel on a device we can only observe through a log would be worse than
+useless.
+
+What that buys: pointer motion through a response curve (sub-unity gain below
+speed 8 for precision, capped +30% acceleration above 25), coarse-report
+smoothing that turns one 50-unit report into a short glide rather than a
+teleport, tap to left-click, tap-then-touch to drag, and two-finger tap to
+right-click via OurCodi's mode-4 finger-count extension. All in thousandths,
+because the inputs are integer panel units and the output is integer pixels;
+a floating-point response curve would buy nothing a divide does not.
+
+**Which pins.** This is the one fact the spec could not pin down, so it is
+measured rather than guessed. UART1 can come out on three pin pairs (110/112
+function 7, 46/47 function 2, 19/20 function 5); 41/42 is a fourth on paper
+and is ruled out here because those are the SD card's data lines. MediaTek's
+MT6771 reference DWS -- which Planet built this device from, and which is in
+the vendor kernel -- routes UART1 to 110/112, so that pair is tried first.
+Each candidate gets the pinmux, a version query and a 300 ms window; the pair
+the CoDi answers on wins and the losers are put back exactly as they were
+found.
+
+**And the probe never blocks.** The first shape of it did the three windows
+inline in the shell's first frame. It worked, and it was still wrong: a driver
+that cannot find its device must not be able to stall the machine for a second
+while it fails to. The QEMU gate caught it as a lost URC handshake -- 900 ms
+of spin in frame zero was enough -- and on the device the same second is one
+where the desktop is up and frozen. The probe is now a state machine the poll
+drives: `init()` arms the first candidate and returns, and each poll gives the
+current one a look. Same 900 ms of wall clock, and the shell renders through
+all of it.
+
+The three AP control GPIOs (reset 77, download-select 80, wake 157) are
+deliberately not touched. The MCU is always powered and never needs a reset to
+talk, and a stray reset with download-select high leaves it in its flashing
+stub with the panel dark -- a service call rather than a bug.
+
+Stock Planet firmware defines the mouse messages and never sends one (measured
+exhaustively, `docs/codi-third-party.md`), so on a stock CoDi this driver
+reports the version and goes quiet. That is the right outcome, and the log
+names it.
+
+### Three measured perf wins
+
+The M6 handoff named the first two off its own `perf:` lines.
+
+1. **Both I2C buses now run at 400 kHz, not 100.** That was never a decision:
+   100 kHz is the vendor driver's default for a client that asks for nothing,
+   and both parts here -- the AW9523 expander and the NT36672 controller --
+   are Fast-mode devices. The shell polls them every frame with no interrupt
+   to lean on, so the bus rate is straightforwardly a quarter of the per-loop
+   input cost. The timing register is computed from the source mux at runtime
+   by the vendor's own recipe (`clk / (2 * sample * step)`, each count stored
+   minus one) rather than picked from a table, and it always lands at or below
+   the rate asked for -- overshooting an I2C bus is how a part that works
+   becomes a part that intermittently NAKs. Both drivers retry once at 100 kHz
+   if their probe comes back empty, so a part that turns out not to like Fast
+   mode degrades instead of vanishing.
+
+2. **The keyboard's idle poll is one I2C transaction, not three.** It used to
+   re-write `P1_CFG` and `P1_OUT` before every read -- two thirds of the
+   traffic on an idle desktop, and both writes were setting registers to the
+   values the previous poll had already parked them at. The park state is
+   tracked now; the writes happen only when something has actually moved the
+   columns.
+
+3. **`entry.s` no longer zeroes 100 MB of `.bss` with the MMU off.** Every
+   store there is its own Device-memory bus transaction, so the old
+   zero-it-all loop spent about a second of every boot. The build now collects
+   everything the boot touches before `mmu_init()` returns -- stack, fault
+   stack, debug page, page tables, log bookkeeping -- into a `.early` section
+   via the `C64_EARLY` attribute; `flatten.py` records its range at image
+   offset 0x50; `entry.s` zeroes only that (552 KB); and `c64_bss_zero_rest()`
+   clears the remaining ~102 MB as the last thing `mmu_init()` does, with the
+   caches on, where it costs milliseconds.
+
+   The guarantee that made the original loop worth having is unchanged: no
+   byte of DRAM is trusted before something has written it. Each half is
+   zeroed before anything that lives in it runs. Zero at offset 0x50 means "no
+   early section" and `entry.s` falls back to zeroing the lot, so an older
+   payload or a build without the attribute still boots.
+
+   Two things to know if you touch it. The section name has to fit COFF's
+   eight bytes -- the first attempt was `.bssearly`, lld silently dropped it,
+   and `flatten.py` printed no `.early` line, which is the tell. And the
+   zero-the-rest half lives in `mmu.c` rather than `platform.c` so that
+   *every* payload gets it: the m0 image, the touch calibrator and the USB
+   probe all reach the MMU through `mmu_init()`, and a payload that quietly
+   skipped the second half would be one whose statics are whatever the last
+   boot left in DRAM.
+
+### Gating
+
+All three QEMU gates green (plain, `QHARNESS_EL2=1`, and the URC session), and
+`BLKTEST=1` still passes its mkfs / mount / write / read / verify / delete
+round trip. The virt board has neither an SD slot nor a cover MCU, so what the
+gate proves about M7 is that both drivers come up, find nothing, say so, and
+get out of the way -- which is the failure mode that has to be right before
+the hardware failure modes are worth reading.
+
+(The BLKTEST image's framebuffer checks fail, as they did before M7: its extra
+36 MiB of `.bss` swallows the address QEMU puts the DTB at, so the DTB is gone
+before `c64_fb_adopt` looks for it. The storage round trip -- the reason
+BLKTEST exists -- passes. Never ship a BLKTEST image.)
