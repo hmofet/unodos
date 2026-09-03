@@ -6,11 +6,19 @@
  * THIS IS NOT msdc.c. The eMMC driver next door is a command issuer and says
  * so at length: LK brought MSDC0 up, ran the card through its init sequence,
  * tuned the pads and then read our own boot image with it, so all that file
- * has to do is point a live controller at a block. NOTHING has touched MSDC1.
- * The preloader does not use it, LK does not use it, and LK's platform_uninit
- * never mentions it -- so this file is the real thing: clock, pinmux, pad
- * config, controller reset, and then the public SD card initialisation
- * sequence from CMD0 to a card sitting in the transfer state.
+ * has to do is point a live controller at a block. Nothing ever runs a CARD
+ * through its init sequence on MSDC1, so this file is the real thing: the
+ * public SD initialisation from CMD0 to a card in the transfer state.
+ *
+ * What the boot DOES leave behind here was more than expected, and the 2026-09-03
+ * readbacks are why this paragraph is measured rather than assumed. The
+ * preloader had already ungated MSDC1's clock (CG1_STA showed both gates
+ * clear), already chosen its source (mux 4, MSDCPLL/2 at 192 MHz), and
+ * already muxed the six pads to function 1. So clock_up() and pins_up() are
+ * both, on this unit, elaborate no-ops -- and they stay, because none of that
+ * is promised, and a driver that only works when somebody else did its
+ * groundwork is a driver that fails on the next boot path. What the boot does
+ * NOT do is switch on the card's rails; see THE RAILS below.
  *
  * WHY IT IS WORTH IT. Without a writable volume the shell runs on the RAM
  * disk: SHELL.CFG does not survive a reboot, the Control Panel opens at every
@@ -22,14 +30,18 @@
  * is ours, it is already vfat, and nothing else on this device is competing
  * for it.
  *
- * WHAT WAS ADOPTED RATHER THAN BUILT, and the fact that made it possible:
- * LK's own msdc_io.c carries the comment "Preload and LK need not touch power
- * since it is default on", and msdc_init's "since VEMC/VMC/VMCH are default
- * on". VMCH (the card's 3.0 V supply) and VMC (its 3.3 V I/O rail) come up
- * with the PMIC and are never gated, which is what lets this file skip the
- * PMIC wrapper entirely. There is no PWRAP code here, and there does not need
- * to be. If a future unit disagrees, the symptom is a CMD0/ACMD41 that never
- * answers, and the log says exactly that.
+ * THE RAILS, and the assumption that was wrong. This file first shipped with
+ * no PMIC code at all, on LK's own word: msdc_io.c says "Preload and LK need
+ * not touch power since it is default on", and msdc_init's "since
+ * VEMC/VMC/VMCH are default on". On 2026-09-03 the hardware disagreed, and
+ * the line-level diagnostic below said so exactly -- pads muxed, pull-ups on,
+ * CMD and all four data lines still reading zero, which happens when a pad
+ * has no supply. Trixie on the same machine enumerates the card at 200 MHz
+ * and reports both rails as software-controlled LDOs it switches on itself.
+ * So VMCH and VMC are NOT default on here, and pmic.c switches them on: 3.0 V
+ * for the card, 3.3 V for its I/O. That last number is deliberately not
+ * Linux's, which sits at 1.8 V because Linux negotiated UHS signalling and
+ * this driver runs default speed.
  *
  * The register map (offsets, bit positions, the divider arithmetic and the
  * "golden" MSDC_PATCH_BIT values) is the MT6771 MSDC programming interface,
@@ -926,6 +938,15 @@ void c64_sd_init(void)
     report_lines("before pins_up");
     pins_up();
     report_lines("after pins_up ");
+
+    /* THE RAILS. This is what the 2026-09-03 boot proved missing: the pads
+     * were muxed and pulled up and still read zero, because VMCH and VMC were
+     * off. pmic.c switches them on; the line below is the proof, and it comes
+     * before a single command is sent. CMD=1 DAT3..0=1111 here means the bus
+     * is alive and anything that fails afterwards is protocol or timing. */
+    c64_pmic_init();
+    c64_pmic_sd_rails_on();
+    report_lines("after rails  ");
 
     c64_logf("sd: MSDC1 before reset: CFG=%08x SDC_CFG=%08x STS=%08x ver=%08x\n",
              R32(MSDC_CFG), R32(SDC_CFG), R32(SDC_STS), R32(MSDC_VERSION));

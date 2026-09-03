@@ -257,6 +257,16 @@ int c64_blk_write(c64_u64 lba, const void *buf, unsigned nblk);
 c64_u64 c64_blk_data_lba(void);
 c64_u64 c64_blk_data_sectors(void);
 
+/* pmic.c: the MT6358 over MediaTek's PMIC wrapper. An adoption, not a
+ * bring-up -- the preloader leaves the wrapper live and WACS2 enabled, so
+ * this issues commands. Reads take an address; WRITES DO NOT, because a wild
+ * PMIC write is silicon at a voltage it was not built for: the write path is
+ * a whitelist of the four registers this port has a reason to touch. */
+void c64_pmic_init(void);
+int c64_pmic_present(void);
+int c64_pmic_read(c64_u32 addr, c64_u32 *val);
+void c64_pmic_sd_rails_on(void);
+
 /* sdmmc.c: the microSD slot (MSDC1) as a block device. Unlike the eMMC this
  * is a real bring-up -- LK never touches the slot -- so init() does clock,
  * pinmux, pads, a controller reset and the public SD card init sequence.

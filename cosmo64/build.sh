@@ -105,7 +105,7 @@ shell )
   URC="unoauto unoauto_probe unoauto_screen netdisc unostorage"
   URCDBG="unoauto_gate unoauto_remote"
   C64="videolfb display platform input stubs i2c kbd touch codi log msdc \
-       sdmmc blk ssusb pci usb netup urc"
+       pmic sdmmc blk ssusb pci usb netup urc"
   if [ -n "$URC_PIN" ]; then
     printf '#define C64_URC_PIN "%s"\n' "$URC_PIN" > urc_pin.h
     echo "[shell] URC gate: production auth with the build-time PIN"
