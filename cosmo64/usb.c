@@ -245,7 +245,47 @@ int c64_usb_bulk_probe(int dev, int len)
  * them, and net.c's own counters cannot -- they only see frames that already
  * passed the destination-MAC filter. */
 static unsigned g_bi_arm, g_bi_armfail, g_bi_poll, g_bi_land, g_bi_err;
-static unsigned g_bi_bytes, g_bi_shown, g_bi_busy;
+static unsigned g_bi_bytes, g_bi_shown, g_bi_busy, g_bi_stalls;
+
+/* ---- the receive watchdog ------------------------------------------------
+ * The bring-up ritual gets frames flowing, but boot 10 showed it is not
+ * durable in every ordering: a cheap endpoint reset made RECEIVE_EN stick and
+ * still delivered only two frames before going quiet, endpoint state 1
+ * Running throughout. Rather than keep hunting the exact silicon reason with
+ * one log per reboot, notice the stall and repair it -- which is what a NIC
+ * driver on a quirky part has to do anyway, and which turns "no network" into
+ * "a two-second gap" even if the cause is never fully understood.
+ *
+ * A stall is: the link is up, a TRB is armed, frames have landed before, and
+ * nothing has landed for two seconds. The hook is registered by netup.c, which
+ * owns the ASIX-specific repair (dump the registers, reset the endpoint,
+ * re-assert the medium); usb.c only knows how to spot it. */
+static void (*g_bi_stall_hook)(int dev);
+static c64_u64 g_bi_last_land;
+
+void c64_usb_bulk_stall_hook(void (*fn)(int dev))
+{
+    g_bi_stall_hook = fn;
+    g_bi_last_land = c64_cnt_now();
+}
+
+static void bulk_stall_check(int dev)
+{
+    c64_u64 hz = c64_cnt_freq();
+    if (!g_bi_stall_hook || !g_bi_land)      /* nothing has ever worked yet */
+        return;
+    if (!hz)
+        hz = 13000000ull;
+    if (c64_cnt_now() - g_bi_last_land < hz * 2ull)
+        return;
+    g_bi_stalls++;
+    c64_logf("usb-bulk: RX STALLED -- %u landings then nothing for 2 s, "
+             "endpoint state %d; repairing (stall #%u)\n",
+             g_bi_land, uno_usb_bulk_in_epstate(dev), g_bi_stalls);
+    c64_log_flush();
+    g_bi_last_land = c64_cnt_now();          /* before the hook, not after */
+    g_bi_stall_hook(dev);
+}
 
 static void bulk_stats(void)
 {
@@ -301,8 +341,10 @@ int c64_usb_bulk_in(int dev, void *data, int len)
     if ((g_bi_poll & 0xFF) == 0)             /* ~ every 2 s at 4 polls/frame */
         bulk_stats();
     n = uno_usb_bulk_in_poll(dev);
-    if (n == 0)
+    if (n == 0) {
+        bulk_stall_check(dev);               /* armed and silent for too long? */
         return 0;                            /* still in flight */
+    }
     g_bin_armed = -1;                        /* landed or failed: re-arm next call */
     if (n < 0) {
         g_bi_err++;
@@ -310,6 +352,7 @@ int c64_usb_bulk_in(int dev, void *data, int len)
     }
     g_bi_land++;
     g_bi_bytes += (unsigned)n;
+    g_bi_last_land = c64_cnt_now();
     /* The first few transfers in full: an aggregation trailer that does not
      * parse and a transfer that never arrives look identical from net.c. */
     if (g_bi_shown < 3) {
