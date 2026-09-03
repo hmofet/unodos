@@ -252,10 +252,13 @@ any LBA outside two windows: the UnoDOS data partition, and that log window.
 Both are found by the GPT walk. Everything
 else on this eMMC belongs to Android, to Gemian, to the GPT, or to the
 preloader, and the preloader does not come back. There is no unfenced path for
-a caller to route around. The GPT walk prefers a partition named `UNODATA` and
-falls back to Android's `userdata` (p44, LBA 186136576..244164543, 27.7 GiB),
-which is the partition the port plan says to take over, and logs which one it
-took.
+a caller to route around. The GPT walk hands out exactly one partition as
+writable, the one named `UNODATA`. Android's `userdata` (p44, LBA
+186136576..244164543, 27.7 GiB) used to be accepted as a fallback while the
+plan was to take it over; that was reversed on 2026-09-01 (p44 stays
+Android's, persistence goes to the SD card) and the fallback was removed on
+2026-09-02, because a URC `mkfs`/`prepdisk` verb over the LAN would otherwise
+have formatted it. p44 is logged as seen and left alone.
 
 QEMU's virt board has no MSDC, **so there is no gate for this: the log is the
 gate.** Under QEMU the driver reads all-ones off unassigned MMIO, times out
@@ -327,13 +330,9 @@ disk), and runs `uno_fat_selftest()`, which is inert unless a `WRTEST.REQ` file
 has been left on a writable volume -- drop one there from Linux and a boot
 proves read, write and delete on metal in one pass.
 
-**What is still needed on the device: a filesystem.** The data partition is
-p44, which ships as Android's encrypted `userdata` and holds no FAT, so nothing
-mounts and the shell falls back to the RAM disk. `mkfs.vfat -F 32
-/dev/mmcblk0p44` from Gemian is the one step between here and persistence.
-Nothing on the running system uses that partition: Gemian does not mount it, and
-its Android container binds `/data` from the Debian rootfs (`lxc.mount.entry =
-/data data bind bind`).
+**What is still needed on the device: a volume.** There is no `UNODATA`
+partition on the eMMC, so nothing mounts and the shell runs on the RAM disk.
+The volume will be the SD card (next paragraph), not p44.
 
 `.UNO` apps do NOT arrive with this: the module loader is still stubbed, and it
 needs an aarch64 module ABI of its own. Storage was the prerequisite, not the

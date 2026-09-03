@@ -265,65 +265,14 @@ int pc64_net_boot(void)
     report("link up");
     asix_dump("after link");
 
-    /* ---- THREE MEASUREMENTS, then stop guessing -------------------------
-     * Boot 4 killed the aggregation-size theory: the write landed (the size
-     * field read back as 01, half of the 02 written, exactly the 2 KB-unit
-     * behaviour) and the receive path still reported arm=1 land=0 err=0.
-     * Boot 3 had already killed the USB-speed theory. Both were inferences
-     * from a register dump, and neither asked the controller anything.
-     *
-     * These do. Each is a SYNCHRONOUS bulk IN, whose failure path in xhci.c
-     * prints the completion code and the endpoint's state word -- the two
-     * facts that separate "the endpoint is not running" from "the endpoint is
-     * running and the device is silent", which is the fork every theory so far
-     * has had to guess at. They cost a 5-second timeout each when they fail,
-     * so they run once, here, before the stack is bound.
-     *
-     *   A: 4 KB with the chip's DEFAULT aggregation (size 0x12 => the device
-     *      wants to burst 20 KB). This is what ax_recv() does today.
-     *   B: 4 KB with aggregation matched to 4 KB (size 0x02). If A fails and B
-     *      works, the size theory was right and something in the async path is
-     *      the remaining problem.
-     *   C: 20 KB with the DEFAULT aggregation restored -- the burst the chip
-     *      actually asked for. If C works where A fails, the driver's 4 KB
-     *      receive buffer is simply too small and the fix is its size, not the
-     *      chip's.
-     *
-     * If all three fail with the same completion code, the ASIX is not the
-     * problem at all and the bulk-IN endpoint is not being serviced -- which
-     * would make this the first bulk IN ever attempted on this controller
-     * (control IN, interrupt IN and bulk OUT are all proven; bulk IN is the
-     * one direction M4 never exercised). */
-    /* ---- WHAT MADE THE RECEIVER WORK, AND WHICH HALF OF IT ----------------
-     * Boot 6 leased. It changed TWO things at once against boot 4's control,
-     * and the honest position is that we do not yet know which one mattered:
-     *
-     *   boot 4: no probe, MEDIUM 01b3, 4 KB aggregation      -> land=0
-     *   boot 5: three probes, MEDIUM left 00b3               -> land=0
-     *   boot 6: one probe, MEDIUM rewritten to 01b3          -> LEASED, 300 KB
-     *
-     * Candidate 1: the extra MEDIUM write. ax_apply_medium() writes it once
-     * when the link comes up and then caches the value, so the chip's receive
-     * engine may simply need the enable poked after the link is settled.
-     * Candidate 2: the failed probe. Its ep_recover() issues Stop Endpoint,
-     * clears the ring and issues Set TR Dequeue -- and this controller may not
-     * service a bulk IN endpoint until it has been through that, which would
-     * make this the first bulk IN ever attempted on it (control IN, interrupt
-     * IN and bulk OUT are all proven; M4 never exercised bulk IN). setup_ep
-     * sets DCS=1 against a ring whose cycle starts at 1, so it is NOT a
-     * dequeue-cycle mismatch.
-     *
-     * Rather than A/B this across two more boots and risk one of them having
-     * no network at all, the bring-up tries the CHEAP candidate first and
-     * escalates only if it does not lease. The log then names the one that
-     * worked, and if the medium rewrite is enough the five-second prime never
-     * runs at all. */
     /* Reset the endpoint, then enable the receiver, then let the watchdog keep
      * it enabled. The endpoint reads state 1 Running throughout all of this --
      * there was never an endpoint fault, which is why several boots spent
      * looking for one found nothing. What there is: a chip that clears its own
-     * RECEIVE_EN, and a driver above it whose cached medium write can never
-     * put it back.
+     * RECEIVE_EN (measured at the moment it happened, boot 11), and a driver
+     * above it whose cached medium write can never put it back. The eleven
+     * boots of theories that preceded that measurement are in the README's
+     * M5 section; nothing of them survives in this path.
      *
      * The reset used to cost five seconds, because the only way to reach
      * xhci.c's ep_recover() from outside was to arm a transfer and let it time
@@ -348,15 +297,6 @@ int pc64_net_boot(void)
     }
 
     if (!net_dhcp_done()) {
-        /* Escalate: prime the endpoint the only way this lane currently can,
-         * by letting one synchronous bulk IN time out so xhci.c runs
-         * ep_recover() on it. Five seconds, once, and only when the cheap path
-         * has already failed. A public "reset this endpoint" entry point would
-         * make it a command instead of a timeout -- filed with the usb lane.
-         *
-         * The prime also CLEARS the chip's receiver (boot 5: MEDIUM 01b3 ->
-         * 00b3, and ax88179.c cannot notice because ax_apply_medium() caches
-         * the last mode it wrote), so the medium goes back afterwards. */
         /* One more window. The watchdog repairs a stalled receiver about two
          * seconds after it happens, and on boot 11 the very first stall landed
          * inside the DHCP window and was repaired there -- so the usual reason

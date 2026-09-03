@@ -340,10 +340,11 @@ void c64_log_crash(c64_u64 vec, c64_u64 esr, c64_u64 elr, c64_u64 far,
     c64_logf("\n*** FAULT vec=%d ESR=%08x EC=%x ELR=%016x (image+%x)\n"
              "           FAR=%016x CurrentEL=%x\n",
              (int)vec, esr, esr >> 26, elr, elr - 0x40080000ull, far, el);
-    /* And get it off DRAM, which this device's reset path wipes. This is the
-     * whole point of the eMMC sink: the log of a boot that died is the one
-     * worth having. The block driver polls with bounded timeouts, so a dead
-     * controller costs seconds, not a hang -- and the crash record and the
-     * painted bit-cells are already down regardless. */
+    /* And get it onto the eMMC, the one channel a later Linux boot can read
+     * (the DRAM copy survives the reset but never reaches pstore -- see the
+     * header). This is the whole point of the eMMC sink: the log of a boot
+     * that died is the one worth having. The block driver polls with bounded
+     * timeouts, so a dead controller costs seconds, not a hang -- and the
+     * crash record and the painted bit-cells are already down regardless. */
     c64_log_flush();
 }
