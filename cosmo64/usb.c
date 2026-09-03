@@ -135,6 +135,10 @@ int c64_usb_control(int dev, unsigned char rt, unsigned char req,
  * counts a frame as sent the moment ax_send() returns -- so net.c's "tx=4"
  * says four frames were HANDED OVER, not that four reached the wire. */
 static unsigned g_bo_call, g_bo_ok, g_bo_err, g_bo_bytes;
+/* Which device owns the one outstanding async bulk-IN, or -1. Declared here
+ * because the synchronous probe below shares the same endpoint and has to drop
+ * the latch when its failure path recovers the ring underneath it. */
+static int g_bin_armed = -1;
 
 int c64_usb_bulk_out(int dev, void *data, int len)
 {
@@ -183,6 +187,12 @@ int c64_usb_bulk_probe(int dev, int len)
     c64_logf("usb-bulk: SYNC probe dev %d, %d bytes ...\n", dev, len);
     c64_log_flush();
     n = uno_usb_bulk_in(dev, g_bbounce, len);
+    /* The probe shares the endpoint and the ring with the async path, and its
+     * failure runs ep_recover(), which clears both. Drop our own latch to
+     * match, or the next c64_usb_bulk_in() polls a slot the recovery has just
+     * emptied. (ep_recover now clears the async registration too -- the seam
+     * commit alongside this one; without that, this latch was unrecoverable.) */
+    g_bin_armed = -1;
     if (n > 0)
         c64_logf("usb-bulk: SYNC probe -> %d bytes: %02x %02x %02x %02x %02x "
                  "%02x %02x %02x\n", n, g_bbounce[0], g_bbounce[1],
@@ -216,7 +226,6 @@ int c64_usb_bulk_probe(int dev, int len)
  *
  * The contract ax_recv wants is exactly what falls out: "n < 8" means nothing
  * arrived, which is what a still-outstanding transfer returns. */
-static int g_bin_armed = -1;                 /* device with a TRB posted, or -1 */
 
 /* Counters, because "rx=0" from the net stack cannot say WHICH of three things
  * happened: the transfer was never armed, it is armed and nothing ever lands,
@@ -232,6 +241,12 @@ static void bulk_stats(void)
              "bytes=%u | out call=%u ok=%u err=%u bytes=%u\n",
              g_bi_arm, g_bi_busy, g_bi_armfail, g_bi_poll, g_bi_land, g_bi_err,
              g_bi_bytes, g_bo_call, g_bo_ok, g_bo_err, g_bo_bytes);
+    /* 1 Running, 2 Halted, 3 Stopped, 4 Error. This is the fact that separates
+     * "the endpoint stopped" from "the endpoint is running and the device is
+     * silent", and the async pair cannot express it: both look like land=0. */
+    if (g_bin_armed >= 0)
+        c64_logf("usb-bulk: bulk-IN endpoint state = %d (1 Running, 2 Halted, "
+                 "3 Stopped, 4 Error)\n", uno_usb_bulk_in_epstate(g_bin_armed));
     c64_log_flush();
 }
 
