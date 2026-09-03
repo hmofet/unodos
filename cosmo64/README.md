@@ -7,47 +7,135 @@ first light on 2026-08-31. The two ports coexist deliberately: `cosmo/` is the
 instant-boot minimal UnoDOS and the hardware bring-up crib; `cosmo64/` is the
 pocket workstation.
 
-**The plan** — buckets, milestones M0–M5, toolchain decision, risks — lives in
-the research repo: `research/pc64-arm-port-plan.md` in `hmofet/cosmo`.
+**The plan** — buckets, milestones, toolchain decision, risks — lives in the
+research repo: `research/pc64-arm-port-plan.md` in `hmofet/cosmo`. It stops at
+M5; M6 (the URC remote channel) was added after it was written and is
+documented here.
 
-## State: M0 COMPLETE (2026-08-31)
+## State: M0–M6 COMPLETE, all hardware-proven (2026-09-03)
 
-The toolchain is proven end to end. `m0.c` is the asm port's
-`fb_init`/`fb_present` contract reimplemented in freestanding C — the videolfb
-FDT walk, full-vram clear, shadow pick, and the rotated+scaled present — built
-with llvm-mingw for `aarch64-w64-mingw32` (PE/COFF + LLP64, the same object
-format and data model as x86 pc64), linked `-nostdlib` at LK's load address,
-flattened by `flatten.py`, wrapped by the asm port's `mkbootimg.py`. Because it
-honours the same FBINFO debug contract, **the existing `cosmo/harness.py` gates
-it unchanged: all fifteen FDT combinations green**, including the pixel-exact
-eye check.
+Everything below has run on the phone, not just under the gate:
+
+| | |
+|---|---|
+| M0 | the llvm-mingw toolchain and the flat LK payload |
+| M1 | CPU glue, MMU and caches at EL2, the pc64 Aurora desktop |
+| M2 | the AW9523 matrix keyboard and the NT36672 touch panel |
+| M3 | the eMMC as a block device, and pc64's FAT stack on top |
+| M4 | USB host: xHCI on MediaTek's SSUSB, a mouse and a keyboard |
+| M5 | networking: a DHCP lease over the AX88179 USB Ethernet |
+| M6 | URC: the box is remotely driven from the dev PC, with a live log |
+
+**What runs the machine today.** The desktop is the panel's native landscape
+at a 2x zoom, the keyboard and touch panel are the local input, a USB mouse
+and keyboard work through a plain USB 2.0 hub, the eMMC is readable and its
+log window writable, and the shell holds a DHCP lease and serves URC on
+`:5099`. There is **no persistent volume**: the shell runs on the RAM disk, so
+`SHELL.CFG` does not survive a reboot and the Control Panel opens at every
+boot. `.UNO` apps do not load (no aarch64 module ABI). No audio, no WiFi
+(CONNSYS has no bare-metal route), no cellular.
+
+**Where we left off.** p38 carries `2254aec6…ec75` (readback verified), which
+is this tree plus the live log stream. It has **not been booted yet** — that is
+the next thing to do, and all it needs is the LK menu and the hub:
+
+```sh
+./build.sh shell && ./flashp38.sh   # the loop, when there is something new to try
+./urctail.py                        # watch the log live, from the dev PC
+./readlog.sh                        # or read it afterwards, from Trixie
+```
+
+What that boot has to show is one line, `urc: streaming the platform log from
+N bytes back`, followed by the boot story replayed onto the dev PC. Everything
+else about M6 is already hardware-proven (below).
+
+**The last hardware session, for the record.** Boot 2 ran for over an hour and
+the receive counters ended at `arm=10204 land=10202 err=0 bytes=955160` — 955
+KB in, not one failed transfer, so the never-landed watchdog fix holds. The
+`RX NEVER LANDED … repairing` line that proves it *fired* is gone, though,
+which is the finding in the next list.
+
+**Open, in the order worth doing:**
+
+1. **The SD card (MSDC1)** — the one thing between here and persistence, and
+   it unblocks the module loader, session state and a real filesystem for URC
+   `put`. Unlike MSDC0 this is a genuine bring-up: LK never touches the slot,
+   so it needs PMIC VMCH/VMC over PWRAP, a clock ungate, pinmux and the public
+   SD init sequence. The card in the slot is already vfat, so no destructive
+   step is involved.
+2. **Two measured perf leads.** `per loop input` is ~11 ms of polled I2C and
+   xHCI: both buses run at 100 kHz where the parts do 400 kHz (the vendor
+   recipe gives `TIMING 0x0011` against today's `0x0217`), and `kbd.c`'s idle
+   path re-writes two registers that are already parked. Separately, `entry.s`
+   zeroes ~103 MB of `.bss` MMU-off on Device memory before any C runs; zeroing
+   only the page tables and debug page there and the rest after `mmu_on` should
+   be worth about a second of boot.
+3. **The eMMC log window loses the boot story on a long session.** It is 128
+   KiB and `c64_log_flush()` keeps the TAIL, which was right when a session was
+   a minute of bring-up. Boot 2 wrote 262 KB in an hour — 684 `perf:` lines and
+   757 `usb-bulk:` lines, a pair of each every two seconds — so the part worth
+   reading was the first thing overwritten, and the `RX NEVER LANDED` line that
+   proves the M6 fix fired is not in the log that proves it worked. Both halves
+   want fixing: throttle the periodic chatter once it stops changing, and keep
+   the first few KiB of a boot as a preamble the wrap cannot reach. The live
+   stream only half-covers this, since a late dial-in also gets the tail.
+4. **The `reboot` verb is untested by choice** — its TOPRGU `SWRST` path is
+   written but never fired, because coming back needs someone at the LK menu.
+5. Smaller: `net_link_speed_mbps()` reports 0; the 256-byte control-IN anomaly
+   from M4 is still root-caused only as a suspicion; `usb.c`'s config-descriptor
+   bounce truncates rather than refuses a descriptor over 512 bytes.
 
 ## Build
 
 ```sh
-./build.sh      # -> build/m0.bin + build/pc64arm-boot.img
+./build.sh            # the m0/m1 test payload
+./build.sh shell      # THE SHELL — what you normally want
+./build.sh calib      # the touch-calibration payload
+./build.sh usb        # the USB host probe
 ```
 
-Cross-compiles on quill (`/opt/llvm-mingw-20260826-…/bin`). Verify from the
-`cosmo-port` worktree (the harness and `mkbootimg.py` live in the `cosmo/`
-lane there until the branches meet — `MKBOOTIMG=` overrides the path):
+Cross-compiles on quill (`/opt/llvm-mingw-20260826-…/bin`); `mkbootimg.py`
+comes from the asm port's in-tree `cosmo/` lane. `URC_PIN=<6 digits>` closes
+the remote-control gate (see M6). A fresh worktree needs the two generated
+headers the shell build consumes, which are not in git — copy them from quill
+or another checkout:
 
 ```sh
-python cosmo/harness.py ../unodos-pc64arm/cosmo64/build/m0.bin /tmp/m0.png 40
+mkdir -p ../pc64/build && scp quill:/work/unodos-pc64arm/pc64/build/{font_data.h,world_map.h} ../pc64/build/
+```
+
+Gate it on quill, and **run all three** — the EL2 path is where the device
+actually runs, and the URC path is the only cover the remote channel has:
+
+```sh
+python3 qharness.py build/shell.bin /tmp/a.png 8
+QHARNESS_EL2=1 python3 qharness.py build/shell.bin /tmp/b.png 8
+QHARNESS_URC=1 QHARNESS_EL2=1 python3 qharness.py build/shell.bin /tmp/c.png 25
 ```
 
 Load-bearing compile flags, explained at the top of `m0.c`: `-mstrict-align`
-(MMU off ⇒ Device memory), `-mgeneral-regs-only` (no CPACR yet),
-`-fno-builtin`. The linker recipe: `-nostdlib -Wl,--image-base,0x40080000
--e _start`; `flatten.py` refuses real PE imports and puts a `b _start` at
-image offset 0, where the PE headers would have been.
+(**everything**, see M1's platform laws), `-fsigned-char`, `-fno-builtin`. The
+linker recipe: `-nostdlib -Wl,--image-base,0x40080000 -e _start`;
+`flatten.py` refuses real PE imports and puts a `b _start` at image offset 0,
+where the PE headers would have been.
 
 ## Install (same slot and loop as the asm port)
 
-`dd` `build/pc64arm-boot.img` to `/dev/mmcblk0p38` from Gemian as root, reboot,
-pick UNODOS. p38 is a RECOVERY_BOOT2 slot (no SPM/SCP/ccci firmware — fine for
-bare metal, proven at the asm port's first light). Never write
-`lk`/`lk2`/`preloader`.
+```sh
+./flashp38.sh          # after ./build.sh shell
+```
+
+That writes `build/pc64arm-boot.img` to `/dev/mmcblk0p38` over ssh and
+verifies the readback. It **confirms the target by hostname and by the
+bootloader's serial number before writing anything**, because the device's
+address is a DHCP lease that moves, one of the addresses it has held is also
+`galaxy`'s, and a `dd` to `/dev/mmcblk0` aimed at the wrong host does not come
+back. The device has to be in Trixie for this, not UnoDOS. Then reboot and
+pick UNODOS from the LK menu.
+
+p38 is a RECOVERY_BOOT2 slot (no SPM/SCP/ccci firmware — fine for bare metal,
+proven at the asm port's first light). Never write `lk`/`lk2`/`preloader`:
+they are the only partitions here with no recovery path.
 
 ## M1 part 1 DONE (2026-08-31): CPU glue + the QEMU gate
 

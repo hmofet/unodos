@@ -11388,3 +11388,50 @@ holds and frames flow. The endpoint reads state 1 (Running) throughout, so
 this is a device quirk needing that command sequence, not an endpoint fault.
 Until now the only route to `ep_recover()` from outside was a deliberate
 five-second transfer timeout on the boot path. Additive; nothing else calls it.
+
+## 2026-09-03 — note for the unoauto lane: production arming needs a filesystem, so a diskless box cannot use it (filed by cosmo64)
+
+**No files changed. This is a report on the gate's contract, not a request for
+a specific API** — the fix is a security decision and belongs to the owner.
+
+`unoauto_gate_arm()` fails closed without a bound session
+(`unosec_current_session()`), by design and rightly. But a session comes from
+an account, an account lives in the unosecure store, and the store is a file
+on a FAT volume. **So on a machine that mounts no writable volume, the
+production channel can never be armed at all** — not "an operator must walk to
+it once" (the limitation already recorded in `unoauto_gate.h` and
+UNODOS-URC-PRODUCTION-GATE notes), but *no path exists*, because the console
+user cannot create an account to sign in as.
+
+That is not hypothetical: cosmo64 (pc64 on the Cosmo Communicator) is exactly
+that machine today. Its eMMC data partition is deliberately not taken over
+(the only candidate is Android's `userdata`, left alone), the SD-card driver is
+a later milestone, and until then the shell runs on the RAM disk. So M6 ships
+the URC channel with `unoauto_gate.c` and `unoauto_remote.c` compiled
+`-DUNO_DEBUG` **per file** and drives the production auth rules through the
+`urc-auth=<token>` hook instead, with the token baked in at build time. That
+works — three-strike lockout, per-verb powers, OBSERVE|DRIVE and no SYSTEM —
+and it is a build-time credential standing in for a runtime one, which is the
+shape the hook was explicitly created for (`unoauto_gate_boot`'s comment).
+
+Two things the owner may want to consider, in increasing order of commitment:
+
+1. **A diskless arming path.** Arming currently proves "a signed-in console
+   user asked for this". On a box with no store there is no way to sign in, but
+   there is still a person at the console — the panel is on the screen and only
+   a local key/touch can reach it (synthetic input is already locked out while
+   a security dialog is modal). An arm whose authority is "physically present,
+   no identity available", granting OBSERVE|DRIVE and never SYSTEM, would be
+   strictly stronger than what a diskless box can do today (which is either
+   nothing, or a debug build).
+2. **The RAM-disk store question.** `unosec` could be allowed to keep its store
+   on a volatile volume, which would make accounts work for one boot. That is
+   probably worse than option 1 — an account that evaporates invites treating
+   the store as durable when it is not — but it is the smaller change, so it is
+   worth saying explicitly that it was considered and why option 1 is preferred.
+
+Nothing is blocked on this: cosmo64 has a working channel either way. Filed
+because the gate's own documentation frames the diskless case as a
+walk-to-the-machine inconvenience, and it is actually a structural gap.
+`unoauto_gate.h`'s "Two known limitations, both deliberate" section is the
+right place to record it if the answer is "won't fix".
