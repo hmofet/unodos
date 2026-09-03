@@ -273,20 +273,29 @@ int pc64_net_boot(void)
      * (control IN, interrupt IN and bulk OUT are all proven; bulk IN is the
      * one direction M4 never exercised). */
     {
-        unsigned char dflt[5] = { 0x07, 0x4F, 0x00, 0x12, 0xFF };  /* 20 KB */
-        int d = asix_find();
-        c64_usb_bulk_probe(d, 4096);                       /* A */
+        /* ONE probe, not the three boot 5 ran. All three failed identically
+         * and the 24 seconds of frozen desktop they cost is what the hardware
+         * test reported as "the mouse stopped working" -- three theories'
+         * worth of blocking measurement for an answer one probe gives, now
+         * that xhci.c's failure line reaches this log (the seam commit
+         * alongside this one: it only ever went to 0x402 debugcon, which does
+         * not exist here, which is why boot 5 returned -1 three times and said
+         * nothing about why). */
+        c64_usb_bulk_probe(asix_find(), 4096);
 
+        /* THE FAILED TRANSFER CLEARS THE CHIP'S RECEIVER. Measured on boot 5:
+         * MEDIUM read 01b3 after link and 00b3 after the first failed bulk IN
+         * -- AX_MEDIUM_RECEIVE_EN (0x0100) gone, and it stayed gone for the
+         * rest of the session. ax88179.c cannot notice: ax_apply_medium()
+         * caches the last mode it WROTE and only rewrites on a change, so from
+         * its point of view the medium is still correct. Put it back, or every
+         * probe leaves the adapter deafer than it found it. */
+        {
+            unsigned char med[2] = { 0xB3, 0x01 };   /* LE: 0x01b3 */
+            ax_wr(AX_MEDIUM_STATUS_MODE, 2, med);
+        }
         asix_match_aggregation();
-        asix_dump("after 4 KB aggregation");
-        c64_usb_bulk_probe(d, 4096);                       /* B */
-
-        ax_wr(AX_RX_BULKIN_QCTRL, 5, dflt);
-        asix_dump("after default aggregation");
-        c64_usb_bulk_probe(d, 20480);                      /* C */
-
-        /* Leave the chip matched to what ax_recv() will actually submit. */
-        asix_match_aggregation();
+        asix_dump("after probe + receiver restored");
     }
 
     /* A fresh window for DHCP: the link wait has already spent part of the
