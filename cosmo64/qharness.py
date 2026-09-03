@@ -284,6 +284,7 @@ def main():
     dorigin, = struct.unpack_from("<Q", fbi, 72)
     shadow, = struct.unpack_from("<Q", fbi, 80)
     scale, scrw, scrh = struct.unpack_from("<III", fbi, 88)
+    presented, = struct.unpack_from("<Q", fbi, 104)     # 0 in m0/calib
     if not 1 <= scale <= 4:
         scale = 1
 
@@ -367,23 +368,15 @@ def main():
     # composited cursor (a URC `pointer` inject makes one appear) is ~82
     # source pixels that are on the panel and never in fb[] -- inside the
     # in-flight tolerance, by design.
-    eye0 = None
-    fb = sh = None
-    blit_fail = None
-    for attempt in range(10):
-        f_fb = os.path.join(tmp, "fb%d.bin" % attempt)
-        f_sh = os.path.join(tmp, "shadow%d.bin" % attempt)
-        qmp("pmemsave", val=raw, size=PANEL_H * ppitch, filename=f_fb)
-        fb = dumped(f_fb, PANEL_H * ppitch)
-        qmp("pmemsave", val=shadow, size=W * H * 4, filename=f_sh)
-        sh = dumped(f_sh, W * H * 4)
-
-        sh_swiz = bytearray(sh)
-        for i in range(0, len(sh_swiz), 4):
-            sh_swiz[i], sh_swiz[i + 2] = sh_swiz[i + 2], sh_swiz[i]
-        sh_swiz = bytes(sh_swiz)
+    def eye_check(fb, src, attempt, what):
+        """Reconstruct the eye view of `fb` at every block sub-position and
+        require it to equal `src` (either channel order, the same one
+        throughout). Returns (fail_text_or_None, eye0)."""
+        swiz = bytearray(src)
+        for i in range(0, len(swiz), 4):
+            swiz[i], swiz[i + 2] = swiz[i + 2], swiz[i]
+        swiz = bytes(swiz)
         accept = None
-        blit_fail = None
         eye0 = None
         for a in range(scale):
             for b in range(scale):
@@ -398,44 +391,77 @@ def main():
                 if eye0 is None:
                     eye0 = eye
                 if accept is None:
-                    accept = sh if bytes(eye) == sh else (
-                        sh_swiz if bytes(eye) == sh_swiz else None)
+                    accept = src if bytes(eye) == src else (
+                        swiz if bytes(eye) == swiz else None)
                     if accept is None:
-                        bad = sum(1 for i in range(0, len(sh_swiz), 4)
-                                  if eye[i:i+4] != sh_swiz[i:i+4])
-                        blit_fail = ("rotated blit: %d of %d pixels differ from "
-                                     "the swizzled source (sub-pos %d,%d, "
-                                     "attempt %d)" % (bad, W * H, a, b, attempt))
-                        break
+                        bad = sum(1 for i in range(0, len(swiz), 4)
+                                  if eye[i:i+4] != swiz[i:i+4])
+                        return ("rotated blit: %d of %d pixels differ from the "
+                                "swizzled %s (sub-pos %d,%d, attempt %d)"
+                                % (bad, W * H, what, a, b, attempt)), eye0
                 elif bytes(eye) != accept:
                     bad = sum(1 for i in range(0, len(accept), 4)
                               if eye[i:i+4] != accept[i:i+4])
-                    blit_fail = ("rotated blit: %d of %d pixels differ (sub-pos "
-                                 "%d,%d, attempt %d)" % (bad, W * H, a, b, attempt))
-                    break
-            else:
-                continue
-            break
+                    return ("rotated blit: %d of %d pixels differ (%s, sub-pos "
+                            "%d,%d, attempt %d)" % (bad, W * H, what, a, b, attempt)), eye0
+        return None, eye0
+
+    eye0 = None
+    fb = sh = None
+    blit_fail = None
+    presented_note = None
+    for attempt in range(10):
+        f_fb = os.path.join(tmp, "fb%d.bin" % attempt)
+        f_sh = os.path.join(tmp, "shadow%d.bin" % attempt)
+        qmp("pmemsave", val=raw, size=PANEL_H * ppitch, filename=f_fb)
+        fb = dumped(f_fb, PANEL_H * ppitch)
+        qmp("pmemsave", val=shadow, size=W * H * 4, filename=f_sh)
+        sh = dumped(f_sh, W * H * 4)
+        blit_fail, eye0 = eye_check(fb, sh, attempt, "source")
         if blit_fail is None:
             break
-        qmp("cont")
-        time.sleep(0.33 + 0.17 * attempt)      # 0.33 .. 1.86 s: never the same phase
-        qmp("stop")
-    # A handful of differing pixels after every retry means a frame was in
-    # flight at the stop (the shell had written fb[] but not yet presented --
-    # the tray clock ticking is the usual culprit), not a broken blit: that
-    # shows up as ~every pixel differing. Distinguish the two by magnitude.
-    if blit_fail is not None:
-        n_bad = 0
+        # A handful of pixels = a frame in flight (the tray clock ticked into
+        # fb[] and the present had not caught up): exact enough, say so.
+        n_bad = W * H
         try:
             n_bad = int(blit_fail.split()[2])
         except (IndexError, ValueError):
-            n_bad = W * H
+            pass
         if n_bad <= (W * H) // 200:
             print("  note: %d pixels differ -- a frame was in flight at the "
                   "stop, blit otherwise exact" % n_bad)
-        else:
-            fails.append(blit_fail)
+            blit_fail = None
+            break
+        # fb[] can be half a frame at the stop (see above). The shell's
+        # display layer publishes the copy of what it LAST PRESENTED, which
+        # is by construction what the panel must hold; a panel that matches
+        # that exactly is a correct blit and correct dirty tracking caught
+        # between a render and its present -- pass, and say so.
+        if presented and LOAD < presented < 0x54000000:
+            f_pr = os.path.join(tmp, "presented%d.bin" % attempt)
+            qmp("pmemsave", val=presented, size=W * H * 4, filename=f_pr)
+            pr = dumped(f_pr, W * H * 4)
+            pfail, _ = eye_check(fb, pr, attempt, "last-presented copy")
+            n_bad = W * H
+            if pfail is not None:
+                try:
+                    n_bad = int(pfail.split()[2])
+                except (IndexError, ValueError):
+                    pass
+            if pfail is None or n_bad <= (W * H) // 200:
+                presented_note = ("fb[] was mid-render at the stop (attempt %d); "
+                                  "the panel equals the last presented frame%s"
+                                  % (attempt, "" if pfail is None else
+                                     " (%d px in flight or composited cursor)" % n_bad))
+                blit_fail = None
+                break
+        qmp("cont")
+        time.sleep(0.33 + 0.17 * attempt)      # 0.33 .. 1.86 s: never the same phase
+        qmp("stop")
+    if presented_note:
+        print("  note: " + presented_note)
+    if blit_fail is not None:
+        fails.append(blit_fail)
     qmp("quit")
     try:
         p.wait(timeout=5)

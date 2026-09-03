@@ -824,12 +824,32 @@ Inbound serial throughput is bounded by the PL011's 16-byte FIFO times the
 frame rate plus a short top-up -- plenty for verbs, not for `put`.
 `QHARNESS_URC_SKIP=pointer,screen` leaves a family out, to bisect.
 
-**Hardware: image flashed to p38, boot pending.** Boot UNODOS with the hub
-and the AX88179 cabled, wait for the lease, then dial in from the LAN. The
-log (`./readlog.sh`) should carry `urc: bringing the remote channel up
-(listen :5099)` followed by `ua: remote: armed, listening on :5099` or the
-`listen` variant, and `remote: client accepted <ip>:<port>` on the first
-dial-in.
+**Hardware boot 1 (2026-09-03): the listener came up, the lease never
+did.** The log has `urc: bringing the remote channel up (listen :5099)` and
+`ua: remote: listening for a dev-PC dial-in on :5099` -- and `usb-bulk: in
+arm=1 land=0` for the whole session: fifteen DISCOVERs went out (a capture
+on quill saw one every 2.1 s), nothing ever came back, and the M5 receive
+watchdog never fired, because it refused to act until at least one frame
+had landed ("nothing has ever worked yet"). That guard hid exactly the case
+that matters most: a receiver deaf from its very first frame. It is gone --
+a link that is up and armed with nothing landing for two seconds is a stall
+too, with a back-off to one repair per half minute so an empty network is
+not a log flood. Boot 11 of M5 leased only after the watchdog's first
+repair, so this is the same path made reachable from the start. Reflashed;
+the next boot answers it. Two other things that boot taught: "the mouse is
+dead for the first twenty seconds" is the synchronous net bring-up on the
+frame loop (8 s link wait plus two DHCP windows), and `per loop input` is
+still ~11 ms of polled I2C and xHCI -- the next perf lead.
+
+**The gate is now immune to where the stop lands.** Twice a run failed
+with a fifth of the screen differing, and the shadow PNG the harness now
+writes on a failure showed why: fb[] held only the desktop background at
+every stop -- QEMU had frozen the guest inside `unoui_render_ui()`, and
+with two gates sharing quill the render fills most of the idle tick. So
+`display.c` publishes its dirty-compare shadow (`fb_presented`, FBINFO
++104), which is by construction what the panel holds, and the harness
+compares against that when fb[] is caught mid-frame. The pixel-exact check
+is unchanged when the stop lands between frames.
 
 Cost: `unoauto_remote.o` carries a 10.5 MB `.bss` (the `put` staging
 buffer) and `unoauto_screen.o` 4.2 MB, so the runtime-zero range grew from
