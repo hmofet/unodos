@@ -189,6 +189,12 @@ void uno_pc64_present(void)
     FBDBG->fb_shadow = (c64_u64)fb;
     FBDBG->fb_base = (c64_u64)fb;
     FBDBG->fb_pitch = (c64_u32)c64_scrw * 4;
+    /* g_shadow is, by construction, exactly what the panel holds (minus the
+     * composited cursor): the compare below copies every changed pixel into
+     * it and the box it pushes covers all of them. Publishing it lets the
+     * gate keep its pixel-exact check even when a stop lands inside the
+     * shell's render, when fb[] is half a frame. */
+    FBDBG->fb_presented = (c64_u64)g_shadow;
     c64_u8 *origin = (c64_u8 *)FBDBG->fb_dorigin;
     c64_u32 ppitch = FBDBG->fb_ppitch;
     const int scrw = c64_scrw, scrh = c64_scrh, zoom = c64_scale;

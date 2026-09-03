@@ -229,18 +229,35 @@ void c64_usb_bulk_stall_hook(void (*fn)(int dev))
 static void bulk_stall_check(int dev)
 {
     c64_u64 hz = c64_cnt_freq();
-    if (!g_bi_stall_hook || !g_bi_land)      /* nothing has ever worked yet */
+    if (!g_bi_stall_hook)
         return;
     if (!hz)
         hz = 13000000ull;
-    if (c64_cnt_now() - g_bi_last_land < hz * 2ull)
+    c64_u64 now = c64_cnt_now();
+    if (now - g_bi_last_land < hz * 2ull)
+        return;
+    /* This used to bail when NOTHING had landed yet ("nothing has ever worked
+     * yet"), and that guard hid the one case that matters most: a receiver
+     * deaf from its very first frame. The M6 hardware boot (2026-09-03) sent
+     * a DHCP DISCOVER every 2 s for minutes and never leased -- the wire saw
+     * every one, no OFFER ever landed, and with land=0 the watchdog never
+     * ran. So a link that is up and armed with no landing for 2 s is a stall
+     * too. An EMPTY network looks the same from here, so after a few tries
+     * the never-landed case backs off to one repair per half minute rather
+     * than a log line every two seconds. */
+    if (!g_bi_land && g_bi_stalls >= 5 && now - g_bi_last_land < hz * 30ull)
         return;
     g_bi_stalls++;
-    c64_logf("usb-bulk: RX STALLED -- %u landings then nothing for 2 s, "
-             "endpoint state %d; repairing (stall #%u)\n",
-             g_bi_land, uno_usb_bulk_in_epstate(dev), g_bi_stalls);
+    if (g_bi_land)
+        c64_logf("usb-bulk: RX STALLED -- %u landings then nothing for 2 s, "
+                 "endpoint state %d; repairing (stall #%u)\n",
+                 g_bi_land, uno_usb_bulk_in_epstate(dev), g_bi_stalls);
+    else
+        c64_logf("usb-bulk: RX NEVER LANDED -- armed, link up, nothing "
+                 "received; endpoint state %d; repairing (try #%u)\n",
+                 uno_usb_bulk_in_epstate(dev), g_bi_stalls);
     c64_log_flush();
-    g_bi_last_land = c64_cnt_now();          /* before the hook, not after */
+    g_bi_last_land = now;                    /* before the hook, not after */
     g_bi_stall_hook(dev);
 }
 

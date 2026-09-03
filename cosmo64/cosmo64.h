@@ -143,11 +143,18 @@ struct fbdbg {
     c64_u32 fb_scale;       /* +88 the integer zoom being presented at       */
     c64_u32 fb_scrw;        /* +92 the desktop size behind it                */
     c64_u32 fb_scrh;        /* +96                                           */
+    c64_u32 pad3;
+    c64_u64 fb_presented;   /* +104 display.c's copy of the LAST PRESENTED
+                             *      frame (its dirty-compare shadow), 0 in
+                             *      the static payloads. The gate compares
+                             *      the panel against this when it caught
+                             *      fb[] mid-render -- see qharness.py      */
 };
 _Static_assert(__builtin_offsetof(struct fbdbg, fb_raw) == 32, "fbdbg layout");
 _Static_assert(__builtin_offsetof(struct fbdbg, fb_panel) == 56, "fbdbg layout");
 _Static_assert(__builtin_offsetof(struct fbdbg, fb_scale) == 88, "fbdbg layout");
 _Static_assert(__builtin_offsetof(struct fbdbg, fb_scrh) == 96, "fbdbg layout");
+_Static_assert(__builtin_offsetof(struct fbdbg, fb_presented) == 104, "fbdbg layout");
 
 #define FBDBG ((volatile struct fbdbg *)c64_dbg_page)
 
