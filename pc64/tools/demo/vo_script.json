@@ -1,453 +1,483 @@
 {
- "_comment": "Narration for the 2026-08-23 past-pin recut (out/recut, 597.2s). Each cue names the BEAT it lands on, from that scene's .beats.jsonl, so the voice tracks the picture; audit_cues.py fails the build if a cue names a beat that is not there, because mux_vo would otherwise drop it silently to the top of the scene. Budgeted at Brian's MEASURED 2.9 words/sec. Claims checked against source: Go to Symbol is the GRAMMAR's, not a language server's - pc64 has no processes, so no server ever runs; no count is quoted for the folder search because its own result line says 'capped'; the appliance's Chromium crash is documented in the manual and deliberately not narrated.",
- "voice_id": "nPczCjzI2devNBz1zQrb",
- "_voice": "Brian - Deep, Resonant and Comforting (chosen by arin 2026-08-07)",
- "model": "eleven_multilingual_v2",
- "voice_settings": {
-  "stability": 0.5,
-  "similarity_boost": 0.75,
-  "style": 0.0
- },
- "scenes": [
-  {
-   "id": "s01",
-   "cues": [
-    {
-     "id": "s01a",
-     "at": "firmware-logo",
-     "text": "This is UnoDOS. A complete graphical operating system, written from scratch."
-    },
-    {
-     "id": "s01b",
-     "at": "desktop-first-paint",
-     "text": "It boots on an ordinary PC straight to a desktop. No install, no command line. Nineteen megabytes."
-    }
-   ]
+  "_comment": "Narration for the 2026-08-24 past-pin recut (out/recut, 650.8s, 16 scenes). Each cue names the BEAT it lands on, from that scene's .beats.jsonl, so the voice tracks the picture; audit_cues.py fails the build if a cue names a beat that is not there, because mux_vo would otherwise drop it silently to the top of the scene. Budgeted at Brian's MEASURED 2.9 words/sec. Claims checked against source: Go to Symbol is the GRAMMAR's, not a language server's - pc64 has no processes, so no server ever runs; no count is quoted for the folder search because its own result line says 'capped'; s19 says the assistant is BUILT INTO the editor, because it is (uc_ai.c is a native side-bar view, not an extension - extensions reach a model through uc_lm_begin instead), and it says 'network stack' and not 'its own TLS', because the TLS is vendored BearSSL; s19 never quotes the model's answer, which is live and different every take.",
+  "voice_id": "nPczCjzI2devNBz1zQrb",
+  "_voice": "Brian - Deep, Resonant and Comforting (chosen by arin 2026-08-07)",
+  "model": "eleven_multilingual_v2",
+  "voice_settings": {
+    "stability": 0.5,
+    "similarity_boost": 0.75,
+    "style": 0.0
   },
-  {
-   "id": "s15",
-   "cues": [
+  "scenes": [
     {
-     "id": "s15a",
-     "at": "the-game-runs",
-     "text": "It ships its own applications, games included."
+      "id": "s01",
+      "cues": [
+        {
+          "id": "s01a",
+          "at": "firmware-logo",
+          "text": "This is UnoDOS. A complete graphical operating system, written from scratch."
+        },
+        {
+          "id": "s01b",
+          "at": "desktop-first-paint",
+          "text": "It boots on an ordinary PC straight to a desktop. No install, no command line. Nineteen megabytes."
+        }
+      ]
+    },
+    {
+      "id": "s15",
+      "cues": [
+        {
+          "id": "s15a",
+          "at": "the-game-runs",
+          "text": "It ships its own applications, games included."
+        }
+      ]
+    },
+    {
+      "id": "s08",
+      "cues": [
+        {
+          "id": "s08a",
+          "at": "duum-running",
+          "text": "And this is Doom."
+        },
+        {
+          "id": "s08b",
+          "at": "walk-into-the-room",
+          "text": "Not the original C, but a renderer written in Python, reading a real Doom game file, on the system's own Python runtime."
+        },
+        {
+          "id": "s08c",
+          "at": "turn-back-left",
+          "text": "It walks real Doom level geometry, textured and perspective correct, on an operating system that also has to be a desktop."
+        },
+        {
+          "id": "s08d",
+          "at": "look-around",
+          "text": "A Freedoom WAD: its levels, its sounds and its music, straight off the disk."
+        }
+      ]
+    },
+    {
+      "id": "s02",
+      "cues": [
+        {
+          "id": "s02a",
+          "at": "start-menu-rises",
+          "text": "Everything here was built for this system: the window manager, the toolkit, the icons, the fonts. None of it is borrowed from another operating system."
+        },
+        {
+          "id": "s02b",
+          "at": "drag-editor-to-right-edge-snap",
+          "text": "Windows do not jump to their positions, they move. Drag one to an edge and it snaps there."
+        },
+        {
+          "id": "s02c",
+          "at": "switcher-f2",
+          "text": "Hold the switcher key and the highlight slides between windows."
+        },
+        {
+          "id": "s02d",
+          "at": "to-desktop-2",
+          "text": "There are four virtual desktops, and any window can be sent to another one."
+        },
+        {
+          "id": "s02e",
+          "at": "switch-to-desktop-2",
+          "text": "Every control here works from the keyboard as well as the pointer."
+        }
+      ]
+    },
+    {
+      "id": "s03",
+      "cues": [
+        {
+          "id": "s03a",
+          "at": "open-control-panel",
+          "text": "The whole interface can be re-dressed while it runs."
+        },
+        {
+          "id": "s03b",
+          "at": "theme-aurora-dark",
+          "text": "Ten themes ship with it, including careful takes on Mac OS 7, Windows 3.1, and the Commodore 64."
+        },
+        {
+          "id": "s03c",
+          "at": "theme-aurora-light",
+          "text": "Fonts, interface scale and screen resolution all change the same way."
+        },
+        {
+          "id": "s03d",
+          "at": "wallpaper-on",
+          "text": "The wallpapers are drawn by the system rather than shipped as pictures. Nothing here needed a restart."
+        }
+      ]
+    },
+    {
+      "id": "s04",
+      "cues": [
+        {
+          "id": "s04a",
+          "at": "files-sees-the-documents",
+          "text": "UnoDOS ships its own office suite: a faithful recreation of Office 97."
+        },
+        {
+          "id": "s04b",
+          "at": "unoword-open-the-cv",
+          "text": "This is an actual Word document, opened from disk. Not an export, not a simplified copy: the fonts, the formatting and the layout all come out of the original file."
+        },
+        {
+          "id": "s04c",
+          "at": "unocalc-open-the-budget",
+          "text": "And this is a real Excel workbook. The whole suite was rebuilt from nothing, and checked against a live copy of Office 97."
+        },
+        {
+          "id": "s04d",
+          "at": "click-a-formula-cell",
+          "text": "Its formulas are intact and recalculating. A document written here opens on a normal PC, and one written there opens here."
+        }
+      ]
+    },
+    {
+      "id": "s05",
+      "cues": [
+        {
+          "id": "s05a",
+          "at": "launch-browser",
+          "text": "There is a web browser, and it runs JavaScript."
+        },
+        {
+          "id": "s05b",
+          "at": "uno-script-js-page",
+          "text": "This page is being laid out and scripted by the system's own engine, written for this project."
+        },
+        {
+          "id": "s05c",
+          "at": "uno-engine-page",
+          "text": "What is unusual is that the engine is switchable while the browser is running."
+        },
+        {
+          "id": "s05d",
+          "at": "uno-script-on-quickjs",
+          "text": "Same page, same browser, now running on QuickJS instead. Two independent implementations, chosen at runtime."
+        },
+        {
+          "id": "s05e",
+          "at": "load-wikipedia",
+          "text": "And this is the real web. Wikipedia, over a secure connection, fetched and parsed and laid out by this machine."
+        },
+        {
+          "id": "s05f",
+          "at": "scroll-to-the-article",
+          "text": "The whole article is here, navigation sidebar and all, on an operating system somebody wrote from nothing."
+        }
+      ]
+    },
+    {
+      "id": "s06",
+      "cues": [
+        {
+          "id": "s06a",
+          "at": "unoamp-skinned",
+          "text": "The player is modelled on Winamp."
+        },
+        {
+          "id": "s06b",
+          "at": "play-flyhigh-mp3",
+          "text": "This music is being decoded on the machine itself, by decoders written for this project. MP3, AAC, MIDI and WAV."
+        },
+        {
+          "id": "s06c",
+          "at": "open-the-10-band-eq",
+          "text": "And it wears real Winamp skins. That is an original, unmodified skin file, with its ten band equaliser underneath."
+        },
+        {
+          "id": "s06d",
+          "at": "animated-gif",
+          "text": "The image viewer reads the formats you would expect, animated GIFs included."
+        }
+      ]
+    },
+    {
+      "id": "s07",
+      "cues": [
+        {
+          "id": "s07a",
+          "at": "launch-studio",
+          "text": "This is where it gets unusual. UnoDOS carries its own development environment, and both C and Python are first class citizens in it."
+        },
+        {
+          "id": "s07b",
+          "at": "pick-sample-c-in-the-project",
+          "text": "This is a real C program, open on the machine that is about to compile it."
+        },
+        {
+          "id": "s07c",
+          "at": "build-the-c",
+          "text": "Control B compiles it, with a real sixty-four bit backend."
+        },
+        {
+          "id": "s07d",
+          "at": "run-the-c",
+          "text": "Control R runs it, and the application opens beside the editor. No second computer, no cross compiler, no toolchain anywhere else."
+        },
+        {
+          "id": "s07e",
+          "at": "pick-sample-py-in-the-project",
+          "text": "And the same editor, with the same two keystrokes, will take Python instead. Either language is a first class way to write software for this machine."
+        },
+        {
+          "id": "s07f",
+          "at": "run-the-python",
+          "text": "That one runs on the system's own Python runtime, and opens as an ordinary application."
+        }
+      ]
+    },
+    {
+      "id": "s16",
+      "cues": [
+        {
+          "id": "s16a",
+          "at": "open-unocode",
+          "text": "Alongside Studio there is UnoCode: an editor built in the shape of Visual Studio Code, and running on this machine."
+        },
+        {
+          "id": "s16b",
+          "at": "go-to-a-file-by-name",
+          "text": "Go to File, an explorer, tabs, a minimap, syntax highlighting. All of it drawn by the operating system underneath it."
+        },
+        {
+          "id": "s16c",
+          "at": "go-to-a-symbol-in-the-file",
+          "text": "It reads the structure of the file, so you can jump straight to a function by name."
+        },
+        {
+          "id": "s16d",
+          "at": "the-command-palette-splits-the-editor",
+          "text": "Every command has a name, and every name is in one searchable list. That one splits the editor in two."
+        },
+        {
+          "id": "s16e",
+          "at": "search-the-whole-folder",
+          "text": "Search runs across the whole folder, a slice at a time, so the window never stops responding."
+        },
+        {
+          "id": "s16f",
+          "at": "an-extension-runs-javascript",
+          "text": "That command came from an extension, and running it just executed real JavaScript, in the system's own engine."
+        },
+        {
+          "id": "s16g",
+          "at": "the-terminal-evaluates-javascript",
+          "text": "The terminal is the editor's own. Six times seven, evaluated on the machine."
+        },
+        {
+          "id": "s16h",
+          "at": "a-vs-code-theme-repaints-it",
+          "text": "That is a Visual Studio Code theme file, dropped in unmodified. Snippets load the same way."
+        }
+      ]
+    },
+    {
+      "id": "s19",
+      "cues": [
+        {
+          "id": "s19a",
+          "at": "open-unocode",
+          "text": "UnoCode has one more view, and it needs a file open to be useful."
+        },
+        {
+          "id": "s19b",
+          "at": "open-a-source-file",
+          "text": "This is the sample app that ships with the SDK. Eighty-three lines of C."
+        },
+        {
+          "id": "s19c",
+          "at": "open-the-assistant",
+          "text": "An assistant, built into the editor. The model it will ask is named at the top."
+        },
+        {
+          "id": "s19d",
+          "at": "ask-it-about-the-file",
+          "text": "The question goes out over this machine's own network stack, and the open file goes with it."
+        },
+        {
+          "id": "s19e",
+          "at": "the-answer-streams-back",
+          "text": "The editor names the file it sent. Nothing freezes while it waits, and Escape stops it. The reply arrives a piece at a time, live and unscripted."
+        }
+      ]
+    },
+    {
+      "id": "s13",
+      "cues": [
+        {
+          "id": "s13a",
+          "at": "open-the-ssh-client",
+          "text": "There is an SSH client, and it talks to the same servers the rest of the world does."
+        },
+        {
+          "id": "s13b",
+          "at": "connect",
+          "text": "Modern elliptic curve key exchange, a modern host key, and AES on the wire. The client was written for this project, and it is tested against OpenSSH."
+        },
+        {
+          "id": "s13c",
+          "at": "a-shell-on-another-machine",
+          "text": "That is a real shell, on a real Linux machine, across the network."
+        },
+        {
+          "id": "s13d",
+          "at": "run-uname",
+          "text": "The answers are coming from that machine, not from this one."
+        }
+      ]
+    },
+    {
+      "id": "s17",
+      "cues": [
+        {
+          "id": "s17a",
+          "at": "open-unotransfer",
+          "text": "Moving files off this machine, or onto it, is its own application."
+        },
+        {
+          "id": "s17b",
+          "at": "connect-to-another-machine",
+          "text": "Secure copy, the web, WebDAV and TFTP, all through one interface, so a Linux box and a web server are the same three actions."
+        },
+        {
+          "id": "s17c",
+          "at": "give-it-the-screen",
+          "text": "On the left, this machine. On the right, a real directory on a real machine across the network."
+        },
+        {
+          "id": "s17d",
+          "at": "copy-it-across",
+          "text": "Copying is one keystroke, and it becomes a job."
+        },
+        {
+          "id": "s17e",
+          "at": "the-queue-has-progress",
+          "text": "The queue carries whole folders across while you get on with something else."
+        },
+        {
+          "id": "s17f",
+          "at": "and-a-real-terminal-on-the-same-connection",
+          "text": "And because the connection is SSH, the same window also gives you a terminal on the far machine. That answer is coming from Ubuntu, not from UnoDOS."
+        }
+      ]
+    },
+    {
+      "id": "s18",
+      "cues": [
+        {
+          "id": "s18a",
+          "at": "a-guest-with-a-screen",
+          "text": "This is another operating system, running in a window, on this machine."
+        },
+        {
+          "id": "s18b",
+          "at": "type-an-address-from-the-host",
+          "text": "That is Chromium, inside the guest. The address is being typed from UnoDOS."
+        },
+        {
+          "id": "s18c",
+          "at": "the-guest-browser-navigates",
+          "text": "The keystrokes cross into the guest through an emulated keyboard controller. UnoDOS is the hypervisor here, not the other way round."
+        }
+      ]
+    },
+    {
+      "id": "s10",
+      "cues": [
+        {
+          "id": "s10a",
+          "at": "open-system",
+          "text": "The system window names the drivers it is actually using: storage, input, network, power. This machine is running on UnoDOS's own drivers, not the firmware's."
+        },
+        {
+          "id": "s10b",
+          "at": "generate-log-lines-in-browser",
+          "text": "Networking is its own TCP/IP stack, written for the project."
+        },
+        {
+          "id": "s10c",
+          "at": "close-browser-watch-the-tail",
+          "text": "The system log is live, and can be shipped to a logging server like any other machine on the network."
+        }
+      ]
+    },
+    {
+      "id": "s11",
+      "cues": [
+        {
+          "id": "s11a",
+          "at": 1.0,
+          "text": "You can try this yourself, right now, in a browser."
+        },
+        {
+          "id": "s11b",
+          "at": 5.2,
+          "text": "Or write it to a USB stick and boot your own PC from it."
+        },
+        {
+          "id": "s11c",
+          "at": 9.7,
+          "text": "One system, wherever you want it."
+        }
+      ]
+    },
+    {
+      "id": "s09",
+      "cues": [
+        {
+          "id": "s09a",
+          "at": "open-the-automation-script",
+          "text": "The machine can also be automated, and Python is how you do it."
+        },
+        {
+          "id": "s09b",
+          "at": "read-the-script",
+          "text": "This script asks the system about itself: how much memory is free, which volumes are mounted, what the network card has sent, which windows are open."
+        },
+        {
+          "id": "s09c",
+          "at": "run-it",
+          "text": "Then it starts driving."
+        },
+        {
+          "id": "s09d",
+          "at": "the-machine-drives-itself",
+          "text": "Those keystrokes are coming from the script. It opens the menu, walks down it, launches an application, and then asks the system what changed. The machine is operating itself."
+        }
+      ]
+    },
+    {
+      "id": "s12",
+      "cues": [
+        {
+          "id": "s12a",
+          "at": "dostris-play",
+          "text": "There are games, and they are the project's own. This is Dostris, with its music coming out of the machine's own sequencer."
+        },
+        {
+          "id": "s12b",
+          "at": "pacman-play",
+          "text": "Pac-Man, with ghosts that actually hunt you. This one runs silent: its sound was never written."
+        },
+        {
+          "id": "s12c",
+          "at": "outlast-play",
+          "text": "And OutLast, keeping score while the road comes at you."
+        },
+        {
+          "id": "s12d",
+          "at": "tracker-play",
+          "text": "The music is the machine's too. This is the built-in tracker, four channels, playing a pattern live."
+        }
+      ]
     }
-   ]
-  },
-  {
-   "id": "s08",
-   "cues": [
-    {
-     "id": "s08a",
-     "at": "duum-running",
-     "text": "And this is Doom."
-    },
-    {
-     "id": "s08b",
-     "at": "walk-into-the-room",
-     "text": "Not the original C, but a renderer written in Python, reading a real Doom game file, on the system's own Python runtime."
-    },
-    {
-     "id": "s08c",
-     "at": "turn-back-left",
-     "text": "It walks real Doom level geometry, textured and perspective correct, on an operating system that also has to be a desktop."
-    },
-    {
-     "id": "s08d",
-     "at": "look-around",
-     "text": "A Freedoom WAD: its levels, its sounds and its music, straight off the disk."
-    }
-   ]
-  },
-  {
-   "id": "s02",
-   "cues": [
-    {
-     "id": "s02a",
-     "at": "start-menu-rises",
-     "text": "Everything here was built for this system: the window manager, the toolkit, the icons, the fonts. None of it is borrowed from another operating system."
-    },
-    {
-     "id": "s02b",
-     "at": "drag-editor-to-right-edge-snap",
-     "text": "Windows do not jump to their positions, they move. Drag one to an edge and it snaps there."
-    },
-    {
-     "id": "s02c",
-     "at": "switcher-f2",
-     "text": "Hold the switcher key and the highlight slides between windows."
-    },
-    {
-     "id": "s02d",
-     "at": "to-desktop-2",
-     "text": "There are four virtual desktops, and any window can be sent to another one."
-    },
-    {
-     "id": "s02e",
-     "at": "switch-to-desktop-2",
-     "text": "Every control here works from the keyboard as well as the pointer."
-    }
-   ]
-  },
-  {
-   "id": "s03",
-   "cues": [
-    {
-     "id": "s03a",
-     "at": "open-control-panel",
-     "text": "The whole interface can be re-dressed while it runs."
-    },
-    {
-     "id": "s03b",
-     "at": "theme-aurora-dark",
-     "text": "Ten themes ship with it, including careful takes on Mac OS 7, Windows 3.1, and the Commodore 64."
-    },
-    {
-     "id": "s03c",
-     "at": "theme-aurora-light",
-     "text": "Fonts, interface scale and screen resolution all change the same way."
-    },
-    {
-     "id": "s03d",
-     "at": "wallpaper-on",
-     "text": "The wallpapers are drawn by the system rather than shipped as pictures. Nothing here needed a restart."
-    }
-   ]
-  },
-  {
-   "id": "s04",
-   "cues": [
-    {
-     "id": "s04a",
-     "at": "files-sees-the-documents",
-     "text": "UnoDOS ships its own office suite: a faithful recreation of Office 97."
-    },
-    {
-     "id": "s04b",
-     "at": "unoword-open-the-cv",
-     "text": "This is an actual Word document, opened from disk. Not an export, not a simplified copy: the fonts, the formatting and the layout all come out of the original file."
-    },
-    {
-     "id": "s04c",
-     "at": "unocalc-open-the-budget",
-     "text": "And this is a real Excel workbook. The whole suite was rebuilt from nothing, and checked against a live copy of Office 97."
-    },
-    {
-     "id": "s04d",
-     "at": "click-a-formula-cell",
-     "text": "Its formulas are intact and recalculating. A document written here opens on a normal PC, and one written there opens here."
-    }
-   ]
-  },
-  {
-   "id": "s05",
-   "cues": [
-    {
-     "id": "s05a",
-     "at": "launch-browser",
-     "text": "There is a web browser, and it runs JavaScript."
-    },
-    {
-     "id": "s05b",
-     "at": "uno-script-js-page",
-     "text": "This page is being laid out and scripted by the system's own engine, written for this project."
-    },
-    {
-     "id": "s05c",
-     "at": "uno-engine-page",
-     "text": "What is unusual is that the engine is switchable while the browser is running."
-    },
-    {
-     "id": "s05d",
-     "at": "uno-script-on-quickjs",
-     "text": "Same page, same browser, now running on QuickJS instead. Two independent implementations, chosen at runtime."
-    },
-    {
-     "id": "s05e",
-     "at": "load-wikipedia",
-     "text": "And this is the real web. Wikipedia, over a secure connection, fetched and parsed and laid out by this machine."
-    },
-    {
-     "id": "s05f",
-     "at": "scroll-to-the-article",
-     "text": "The whole article is here, navigation sidebar and all, on an operating system somebody wrote from nothing."
-    }
-   ]
-  },
-  {
-   "id": "s06",
-   "cues": [
-    {
-     "id": "s06a",
-     "at": "unoamp-skinned",
-     "text": "The player is modelled on Winamp."
-    },
-    {
-     "id": "s06b",
-     "at": "play-flyhigh-mp3",
-     "text": "This music is being decoded on the machine itself, by decoders written for this project. MP3, AAC, MIDI and WAV."
-    },
-    {
-     "id": "s06c",
-     "at": "open-the-10-band-eq",
-     "text": "And it wears real Winamp skins. That is an original, unmodified skin file, with its ten band equaliser underneath."
-    },
-    {
-     "id": "s06d",
-     "at": "animated-gif",
-     "text": "The image viewer reads the formats you would expect, animated GIFs included."
-    }
-   ]
-  },
-  {
-   "id": "s07",
-   "cues": [
-    {
-     "id": "s07a",
-     "at": "launch-studio",
-     "text": "This is where it gets unusual. UnoDOS carries its own development environment, and both C and Python are first class citizens in it."
-    },
-    {
-     "id": "s07b",
-     "at": "pick-sample-c-in-the-project",
-     "text": "This is a real C program, open on the machine that is about to compile it."
-    },
-    {
-     "id": "s07c",
-     "at": "build-the-c",
-     "text": "Control B compiles it, with a real sixty-four bit backend."
-    },
-    {
-     "id": "s07d",
-     "at": "run-the-c",
-     "text": "Control R runs it, and the application opens beside the editor. No second computer, no cross compiler, no toolchain anywhere else."
-    },
-    {
-     "id": "s07e",
-     "at": "pick-sample-py-in-the-project",
-     "text": "And the same editor, with the same two keystrokes, will take Python instead. Either language is a first class way to write software for this machine."
-    },
-    {
-     "id": "s07f",
-     "at": "run-the-python",
-     "text": "That one runs on the system's own Python runtime, and opens as an ordinary application."
-    }
-   ]
-  },
-  {
-   "id": "s16",
-   "cues": [
-    {
-     "id": "s16a",
-     "at": "open-unocode",
-     "text": "Alongside Studio there is UnoCode: an editor built in the shape of Visual Studio Code, and running on this machine."
-    },
-    {
-     "id": "s16b",
-     "at": "go-to-a-file-by-name",
-     "text": "Go to File, an explorer, tabs, a minimap, syntax highlighting. All of it drawn by the operating system underneath it."
-    },
-    {
-     "id": "s16c",
-     "at": "go-to-a-symbol-in-the-file",
-     "text": "It reads the structure of the file, so you can jump straight to a function by name."
-    },
-    {
-     "id": "s16d",
-     "at": "the-command-palette-splits-the-editor",
-     "text": "Every command has a name, and every name is in one searchable list. That one splits the editor in two."
-    },
-    {
-     "id": "s16e",
-     "at": "search-the-whole-folder",
-     "text": "Search runs across the whole folder, a slice at a time, so the window never stops responding."
-    },
-    {
-     "id": "s16f",
-     "at": "an-extension-runs-javascript",
-     "text": "That command came from an extension, and running it just executed real JavaScript, in the system's own engine."
-    },
-    {
-     "id": "s16g",
-     "at": "the-terminal-evaluates-javascript",
-     "text": "The terminal is the editor's own. Six times seven, evaluated on the machine."
-    },
-    {
-     "id": "s16h",
-     "at": "a-vs-code-theme-repaints-it",
-     "text": "That is a Visual Studio Code theme file, dropped in unmodified. Snippets load the same way."
-    }
-   ]
-  },
-  {
-   "id": "s13",
-   "cues": [
-    {
-     "id": "s13a",
-     "at": "open-the-ssh-client",
-     "text": "There is an SSH client, and it is the same SSH the rest of the world uses."
-    },
-    {
-     "id": "s13b",
-     "at": "connect",
-     "text": "Curve twenty five five one nine key exchange, an Ed25519 key, AES encryption. All of it written for this project, and tested against OpenSSH."
-    },
-    {
-     "id": "s13c",
-     "at": "a-shell-on-another-machine",
-     "text": "That is a real shell on a real Linux box across the network."
-    },
-    {
-     "id": "s13d",
-     "at": "run-uname",
-     "text": "The answers are coming from that machine, not this one."
-    }
-   ]
-  },
-  {
-   "id": "s17",
-   "cues": [
-    {
-     "id": "s17a",
-     "at": "open-unotransfer",
-     "text": "Moving files off this machine, or onto it, is its own application."
-    },
-    {
-     "id": "s17b",
-     "at": "connect-to-another-machine",
-     "text": "It speaks SCP, HTTP, WebDAV and TFTP through one interface, so a Linux box and a web server are the same three actions."
-    },
-    {
-     "id": "s17c",
-     "at": "give-it-the-screen",
-     "text": "On the left, this machine. On the right, a real directory on a real machine across the network."
-    },
-    {
-     "id": "s17d",
-     "at": "copy-it-across",
-     "text": "Copying is one keystroke, and it becomes a job."
-    },
-    {
-     "id": "s17e",
-     "at": "the-queue-has-progress",
-     "text": "The queue carries whole folders across while you get on with something else."
-    },
-    {
-     "id": "s17f",
-     "at": "and-a-real-terminal-on-the-same-connection",
-     "text": "And because that connection is SSH, the same window gives you a terminal on the far machine. That answer is coming from Ubuntu, not from UnoDOS."
-    }
-   ]
-  },
-  {
-   "id": "s18",
-   "cues": [
-    {
-     "id": "s18a",
-     "at": "a-guest-with-a-screen",
-     "text": "This is another operating system, running in a window, on this machine."
-    },
-    {
-     "id": "s18b",
-     "at": "type-an-address-from-the-host",
-     "text": "That is Chromium, inside the guest. The address is being typed from UnoDOS."
-    },
-    {
-     "id": "s18c",
-     "at": "the-guest-browser-navigates",
-     "text": "The keystrokes cross into the guest through an emulated keyboard controller. UnoDOS is the hypervisor here, not the other way round."
-    }
-   ]
-  },
-  {
-   "id": "s10",
-   "cues": [
-    {
-     "id": "s10a",
-     "at": "open-system",
-     "text": "The system window names the drivers it is actually using: storage, input, network, power. This machine is running on UnoDOS's own drivers, not the firmware's."
-    },
-    {
-     "id": "s10b",
-     "at": "generate-log-lines-in-browser",
-     "text": "Networking is its own TCP/IP stack, written for the project."
-    },
-    {
-     "id": "s10c",
-     "at": "close-browser-watch-the-tail",
-     "text": "The system log is live, and can be shipped to a logging server like any other machine on the network."
-    }
-   ]
-  },
-  {
-   "id": "s11",
-   "cues": [
-    {
-     "id": "s11a",
-     "at": 1.0,
-     "text": "You can try this yourself, right now, in a browser."
-    },
-    {
-     "id": "s11b",
-     "at": 5.2,
-     "text": "Or write it to a USB stick and boot your own PC from it."
-    },
-    {
-     "id": "s11c",
-     "at": 9.7,
-     "text": "One system, wherever you want it."
-    }
-   ]
-  },
-  {
-   "id": "s09",
-   "cues": [
-    {
-     "id": "s09a",
-     "at": "open-the-automation-script",
-     "text": "The machine can also be automated, and Python is how you do it."
-    },
-    {
-     "id": "s09b",
-     "at": "read-the-script",
-     "text": "This script asks the system about itself: how much memory is free, which volumes are mounted, what the network card has sent, which windows are open."
-    },
-    {
-     "id": "s09c",
-     "at": "run-it",
-     "text": "Then it starts driving."
-    },
-    {
-     "id": "s09d",
-     "at": "the-machine-drives-itself",
-     "text": "Those keystrokes are coming from the script. It opens the menu, walks down it, launches an application, and then asks the system what changed. The machine is operating itself."
-    }
-   ]
-  },
-  {
-   "id": "s12",
-   "cues": [
-    {
-     "id": "s12a",
-     "at": "dostris-play",
-     "text": "There are games, and they are the project's own. This is Dostris, with its music coming out of the machine's own sequencer."
-    },
-    {
-     "id": "s12b",
-     "at": "pacman-play",
-     "text": "Pac-Man, with ghosts that actually hunt you. This one runs silent: its sound was never written."
-    },
-    {
-     "id": "s12c",
-     "at": "outlast-play",
-     "text": "And OutLast, keeping score while the road comes at you."
-    },
-    {
-     "id": "s12d",
-     "at": "tracker-play",
-     "text": "The music is the machine's too. This is the built-in tracker, four channels, playing a pattern live."
-    }
-   ]
-  }
- ]
+  ]
 }
