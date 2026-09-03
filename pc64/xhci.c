@@ -36,6 +36,7 @@ int uno_usb_intr_in(int dev, void *d, int l) { (void)dev;(void)d;(void)l; return
 int uno_usb_bulk_in_arm(int dev, void *d, int l) { (void)dev;(void)d;(void)l; return -1; }
 int uno_usb_bulk_in_poll(int dev) { (void)dev; return -1; }
 int uno_usb_bulk_in_epstate(int dev) { (void)dev; return -1; }
+void uno_usb_bulk_in_reset(int dev) { (void)dev; }
 void uno_xhci_set_ep_quirk(void (*fn)(unsigned char *, int, int, int)) { (void)fn; }
 
 #else  /* ===================== UNO_XHCI enabled ========================= */
@@ -1165,6 +1166,24 @@ int uno_usb_bulk_in_arm(int dev, void *data, int len)
     wr32(g_db, g_devs[dev].slot*4, g_bin_dci[dev]);
     g_abin_len[dev] = len;
     return 1;
+}
+
+/* Put the bulk-IN endpoint through the same recovery a timed-out transfer
+ * triggers -- Stop Endpoint, clear the ring, Set TR Dequeue -- without having
+ * to spend a transfer's timeout to get there.
+ *
+ * cosmo64 needs this at bring-up and found it the expensive way: on the
+ * MediaTek SSUSB the ASIX AX88179's RECEIVE_EN bit does not STICK until its
+ * bulk-IN endpoint has been recovered once. Written before, the chip reverts
+ * it within milliseconds; written after, it holds and frames flow. The only
+ * way to reach ep_recover() from outside was to arm a transfer and let it time
+ * out, which cost five seconds of a blocked boot for what is two commands.
+ * The endpoint is Running throughout, so this is not fixing a fault -- it is a
+ * device quirk that happens to need the same sequence. */
+void uno_usb_bulk_in_reset(int dev)
+{
+    if (dev < 0 || dev >= g_ndevs || !g_bin_dci[dev]) return;
+    ep_recover(dev, g_bin_dci[dev], g_bin[dev], &g_bin_i[dev], &g_bin_cyc[dev], 1);
 }
 
 /* The bulk-IN endpoint's state, straight out of the device context:

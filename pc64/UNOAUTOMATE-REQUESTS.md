@@ -11376,3 +11376,15 @@ Also noted for the owner, not fixed here: `uno_usb_bulk_in_arm()` has THREE
 return values (1 posted, 0 busy, -1 cannot) and the 0 is easy to miss —
 consumers that test only for negative will latch a transfer that was never
 queued. Worth a comment at the declaration in `xhci.h`.
+
+## 2026-09-03 — cross-lane seam: uno_usb_bulk_in_reset() (filed by cosmo64)
+
+Recovers a bulk-IN endpoint (Stop Endpoint, clear ring, Set TR Dequeue)
+without arming a transfer and waiting out its timeout to get there. cosmo64
+needs it at NIC bring-up: on the MediaTek SSUSB the ASIX AX88179's RECEIVE_EN
+bit does not STICK until its bulk-IN endpoint has been recovered once —
+written before, the chip reverts it within milliseconds; written after, it
+holds and frames flow. The endpoint reads state 1 (Running) throughout, so
+this is a device quirk needing that command sequence, not an endpoint fault.
+Until now the only route to `ep_recover()` from outside was a deliberate
+five-second transfer timeout on the boot path. Additive; nothing else calls it.

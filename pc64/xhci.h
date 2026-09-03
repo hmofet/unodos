@@ -55,6 +55,10 @@ int  uno_usb_bulk_in_arm(int dev, void *data, int len);
 int  uno_usb_bulk_in_poll(int dev);
 /* endpoint state: 1 Running, 2 Halted, 3 Stopped, 4 Error, -1 none */
 int  uno_usb_bulk_in_epstate(int dev);
+/* Stop Endpoint + clear ring + Set TR Dequeue, with no transfer to time out
+ * first. Some devices need their bulk-IN endpoint recovered once before they
+ * will start sending (see the note in xhci.c). */
+void uno_usb_bulk_in_reset(int dev);
 
 /* HID interrupt-IN endpoints. setup claims one, posts the first transfer and
  * returns a HANDLE (>=0) or -1; intr_in polls THAT endpoint, non-blocking,
