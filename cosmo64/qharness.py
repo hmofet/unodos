@@ -116,7 +116,12 @@ def urc_session(port, run_for):
             time.sleep(0.3)
     if sock is None:
         return ["urc: could not connect to QEMU's serial server on :%d" % port], []
-    link = UnoAutoLink().attach_stream(sock)
+    link = UnoAutoLink()
+    # the platform log streams over the link on the KERNEL channel: a replay
+    # of the boot story on connect, then live. Count what arrives.
+    got_log = []
+    link.on_log(lambda ch, text: got_log.append((ch, text)))
+    link.attach_stream(sock)
     # the guest re-emits HELLO every ~2 s over serial until it hears us; the
     # channel comes up a frame after the net bring-up at frame 35 (~1.2 s)
     if not link.wait_hello(max(5.0, t_end - time.time())):
@@ -169,6 +174,24 @@ def urc_session(port, run_for):
         notes.append("screen grab skipped")
     except Exception as e:
         fails.append("urc: screen grab failed: %s" % e)
+    # the replayed boot log must have reached us (it is paced 8 lines a
+    # frame, so give it a moment), and a line logged NOW must follow live
+    time.sleep(1.5)
+    kern = [t for ch, t in got_log if ch == "KERNEL"]
+    if not any("entering uno_main" in t for t in kern):
+        fails.append("urc: the platform log replay never delivered the boot "
+                     "story (%d KERNEL lines arrived)" % len(kern))
+    else:
+        notes.append("platform log replayed: %d KERNEL lines, boot story present" % len(kern))
+    try:
+        link.logline("harness: live log probe")      # SCRIPT -> ua: -> ring -> KERNEL stream
+        time.sleep(1.0)
+        if not any("harness: live log probe" in t for ch, t in got_log if ch == "KERNEL"):
+            fails.append("urc: a line logged during the session did not stream live")
+        else:
+            notes.append("live log: a line logged during the session streamed back")
+    except Exception as e:
+        fails.append("urc: log verb failed: %s" % e)
     try:
         link.close()
     except Exception:

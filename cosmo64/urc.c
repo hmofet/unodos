@@ -125,10 +125,16 @@ int pc64_stress_cfg_value(const char *key, char *buf, int cap)
 /* The kernel-ring sink: unoauto mirrors EVERY channel through uno_dbg_log,
  * so this is where the URC's own narration ("remote: link up", the verb
  * audit lines, LOG frames) lands in the eMMC log -- prefixed so a reader can
- * tell unoauto's lines from this layer's. */
+ * tell unoauto's lines from this layer's. Except for lines that CAME from
+ * this log (the stream below hands them to unoauto to reach the dev PC):
+ * those are already here, and mirroring them back would double every line. */
+static int g_streaming;
+
 void uno_dbg_log(const char *fmt, ...)
 {
     __builtin_va_list ap;
+    if (g_streaming)
+        return;
     c64_log("ua: ");
     __builtin_va_start(ap, fmt);
     c64_logv(fmt, ap);
@@ -266,13 +272,104 @@ int uart_read(unsigned char *buf, int cap)
     return n;
 }
 
+/* ---- the platform log, live, on the dev PC ------------------------------- */
+/* Everything this layer says -- msdc:, usb-bulk:, net:, perf:, the drivers'
+ * pc64: lines -- goes to the DRAM ring and the eMMC, which until now meant a
+ * reboot into Linux to read any of it. unoauto's LOG channels already stream
+ * to a connected dev PC (remote_sink in unoauto_remote.c), so the ring is
+ * handed to unoauto a line at a time: on every connect, a replay of the
+ * recent past (the last STREAM_BACK bytes, so a fresh dial-in gets the boot
+ * story), then whatever is logged from then on, as it is logged. Paced at a
+ * few lines per frame so the link's 8 KB transmit queue never overflows and
+ * a burst of driver chatter cannot stall the shell.
+ *
+ * The cursor is an ABSOLUTE byte position (c64_log_total counts bytes ever
+ * written); the ring's oldest surviving byte is total - size, so a cursor
+ * that fell behind a wrap is simply moved up and the gap is reported. */
+#define STREAM_BACK   (32u * 1024u)          /* how much history a connect gets */
+#define STREAM_LINES  8                      /* per frame                       */
+static unsigned g_cursor;                    /* absolute byte position          */
+static int g_was_active;
+static char g_line[256];
+static unsigned g_linelen;
+
+void unoauto_log(int ch, const char *fmt, ...);
+int unoauto_remote_active(void);
+
+static void stream_log(void)
+{
+    int active = unoauto_remote_active();
+    if (!active) {
+        g_was_active = 0;
+        return;
+    }
+    unsigned total = c64_log_total(), size = c64_log_bytes();
+    unsigned oldest = total - size;
+    if (!g_was_active) {                     /* a new link: start from the past */
+        g_was_active = 1;
+        g_cursor = total > STREAM_BACK ? total - STREAM_BACK : 0;
+        if (g_cursor < oldest)
+            g_cursor = oldest;
+        g_linelen = 0;
+        /* skip to the next line start so the first line is whole */
+        c64_u8 c;
+        while (g_cursor < total) {
+            c64_log_read(g_cursor - oldest, &c, 1);
+            g_cursor++;
+            if (c == '\n')
+                break;
+        }
+        g_streaming = 1;
+        unoauto_log(0, "urc: streaming the platform log from %u bytes back "
+                       "(%u logged so far)", total - g_cursor, total);
+        g_streaming = 0;
+    }
+    if (g_cursor < oldest) {                 /* fell behind a ring wrap */
+        g_streaming = 1;
+        unoauto_log(0, "urc: log stream fell behind, %u bytes skipped",
+                    oldest - g_cursor);
+        g_streaming = 0;
+        g_cursor = oldest;
+        g_linelen = 0;
+    }
+    int lines = 0;
+    while (g_cursor < total && lines < STREAM_LINES) {
+        c64_u8 buf[128];
+        unsigned n = total - g_cursor;
+        if (n > sizeof buf)
+            n = sizeof buf;
+        c64_log_read(g_cursor - oldest, buf, n);
+        unsigned i;
+        for (i = 0; i < n && lines < STREAM_LINES; i++) {
+            char c = (char)buf[i];
+            if (c == '\n') {
+                g_line[g_linelen] = 0;
+                if (g_linelen) {
+                    g_streaming = 1;
+                    unoauto_log(0, "%s", g_line);   /* UA_CH_KERNEL */
+                    g_streaming = 0;
+                    lines++;
+                }
+                g_linelen = 0;
+            } else if (g_linelen < sizeof g_line - 1) {
+                g_line[g_linelen++] = c;
+            }
+        }
+        g_cursor += i;
+    }
+}
+
 /* ---- bring-up ------------------------------------------------------------ */
 void unoauto_remote_boot(void);
 
 void c64_urc_tick(void)
 {
     static int booted;
-    if (booted || !c64_net_boot_ran())
+    if (booted) {
+        stream_log();
+        return;
+    }
+    if (!c64_net_boot_ran())
         return;
     booted = 1;
     c64_logf("urc: bringing the remote channel up (%s)\n",

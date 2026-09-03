@@ -79,6 +79,15 @@ struct pram_buf {
 #define CAP (C64_LOG_SIZE - 12u)
 
 static int g_live;
+/* bytes EVER written, monotonic: a reader that wants to follow the ring
+ * (urc.c streams it to the dev PC) keeps an absolute position, and
+ * total - size is the absolute position of the oldest byte still there */
+static unsigned g_total;
+
+unsigned c64_log_total(void)
+{
+    return g_total;
+}
 
 void c64_log_init(void)
 {
@@ -106,6 +115,7 @@ void c64_log_write(const char *s, unsigned n)
     }
     PB->start = start;
     PB->size = size;
+    g_total += n;
     __asm__ volatile("dsb sy" ::: "memory");
 }
 
