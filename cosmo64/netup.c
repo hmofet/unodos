@@ -158,6 +158,24 @@ static void asix_dump(const char *when)
  * table is the pc64 lane's call. If this is what fixes RX it goes to them as a
  * request with the numbers attached. ax_apply_medium() only rewrites on a mode
  * CHANGE, so once the link is stable this write stands. */
+/* Re-assert the medium with RECEIVE_EN set. Two jobs: it may be what starts
+ * the chip's receive engine once the link has settled (candidate 1 below), and
+ * it undoes the clearing that a failed bulk IN causes. The value is the one
+ * ax_apply_medium() computes for a gigabit full-duplex link -- RECEIVE_EN |
+ * EN_125MHZ | TXFLOW | RXFLOW | FULL_DUPLEX | GIGAMODE -- and it is written
+ * unconditionally, because ax88179.c's own write is cached behind a
+ * change check and will not repeat itself. */
+static void asix_rewrite_medium(void)
+{
+    unsigned char med[2] = { 0xB3, 0x01 };           /* little-endian 0x01b3 */
+    if (ax_wr(AX_MEDIUM_STATUS_MODE, 2, med) < 0) {
+        c64_log("asix: could not rewrite the medium\n");
+        return;
+    }
+    c64_log("asix: medium rewritten with RECEIVE_EN set (01b3)\n");
+    c64_log_flush();
+}
+
 static void asix_match_aggregation(void)
 {
     /* ctrl, timer_lo, timer_hi, size, ifg -- size 0x02 => a 4 KB burst */
@@ -272,37 +290,36 @@ int pc64_net_boot(void)
      * would make this the first bulk IN ever attempted on this controller
      * (control IN, interrupt IN and bulk OUT are all proven; bulk IN is the
      * one direction M4 never exercised). */
-    {
-        /* ONE probe, not the three boot 5 ran. All three failed identically
-         * and the 24 seconds of frozen desktop they cost is what the hardware
-         * test reported as "the mouse stopped working" -- three theories'
-         * worth of blocking measurement for an answer one probe gives, now
-         * that xhci.c's failure line reaches this log (the seam commit
-         * alongside this one: it only ever went to 0x402 debugcon, which does
-         * not exist here, which is why boot 5 returned -1 three times and said
-         * nothing about why). */
-        c64_usb_bulk_probe(asix_find(), 4096);
+    /* ---- WHAT MADE THE RECEIVER WORK, AND WHICH HALF OF IT ----------------
+     * Boot 6 leased. It changed TWO things at once against boot 4's control,
+     * and the honest position is that we do not yet know which one mattered:
+     *
+     *   boot 4: no probe, MEDIUM 01b3, 4 KB aggregation      -> land=0
+     *   boot 5: three probes, MEDIUM left 00b3               -> land=0
+     *   boot 6: one probe, MEDIUM rewritten to 01b3          -> LEASED, 300 KB
+     *
+     * Candidate 1: the extra MEDIUM write. ax_apply_medium() writes it once
+     * when the link comes up and then caches the value, so the chip's receive
+     * engine may simply need the enable poked after the link is settled.
+     * Candidate 2: the failed probe. Its ep_recover() issues Stop Endpoint,
+     * clears the ring and issues Set TR Dequeue -- and this controller may not
+     * service a bulk IN endpoint until it has been through that, which would
+     * make this the first bulk IN ever attempted on it (control IN, interrupt
+     * IN and bulk OUT are all proven; M4 never exercised bulk IN). setup_ep
+     * sets DCS=1 against a ring whose cycle starts at 1, so it is NOT a
+     * dequeue-cycle mismatch.
+     *
+     * Rather than A/B this across two more boots and risk one of them having
+     * no network at all, the bring-up tries the CHEAP candidate first and
+     * escalates only if it does not lease. The log then names the one that
+     * worked, and if the medium rewrite is enough the five-second prime never
+     * runs at all. */
+    asix_rewrite_medium();
+    asix_match_aggregation();
+    asix_dump("after medium rewrite");
 
-        /* THE FAILED TRANSFER CLEARS THE CHIP'S RECEIVER. Measured on boot 5:
-         * MEDIUM read 01b3 after link and 00b3 after the first failed bulk IN
-         * -- AX_MEDIUM_RECEIVE_EN (0x0100) gone, and it stayed gone for the
-         * rest of the session. ax88179.c cannot notice: ax_apply_medium()
-         * caches the last mode it WROTE and only rewrites on a change, so from
-         * its point of view the medium is still correct. Put it back, or every
-         * probe leaves the adapter deafer than it found it. */
-        {
-            unsigned char med[2] = { 0xB3, 0x01 };   /* LE: 0x01b3 */
-            ax_wr(AX_MEDIUM_STATUS_MODE, 2, med);
-        }
-        asix_match_aggregation();
-        asix_dump("after probe + receiver restored");
-    }
-
-    /* A fresh window for DHCP: the link wait has already spent part of the
-     * first one, and how long autoneg took says nothing about how long the
-     * server will take. */
-    deadline_in(6000);
-    stage("DHCP");
+    stage("DHCP (medium rewrite only)");
+    deadline_in(4000);
     net_init(nic, ax88179_mac());
     /* net_dhcp_start sends one DISCOVER; net_poll's dhcp_tick retransmits it
      * (and the REQUEST) about every 1.5 s, so a lost OFFER or ACK recovers
@@ -312,6 +329,37 @@ int pc64_net_boot(void)
         net_poll();
         uno_pc64_delay_ms(5);
     }
+
+    if (!net_dhcp_done()) {
+        /* Escalate: prime the endpoint the only way this lane currently can,
+         * by letting one synchronous bulk IN time out so xhci.c runs
+         * ep_recover() on it. Five seconds, once, and only when the cheap path
+         * has already failed. A public "reset this endpoint" entry point would
+         * make it a command instead of a timeout -- filed with the usb lane.
+         *
+         * The prime also CLEARS the chip's receiver (boot 5: MEDIUM 01b3 ->
+         * 00b3, and ax88179.c cannot notice because ax_apply_medium() caches
+         * the last mode it wrote), so the medium goes back afterwards. */
+        stage("no lease -- priming the bulk-IN endpoint and retrying");
+        c64_usb_bulk_probe(asix_find(), 4096);
+        asix_rewrite_medium();
+        asix_match_aggregation();
+        asix_dump("after prime + receiver restored");
+
+        deadline_in(6000);
+        net_dhcp_start();
+        while (!expired() && !net_dhcp_done()) {
+            net_poll();
+            uno_pc64_delay_ms(5);
+        }
+        if (net_dhcp_done())
+            c64_log("net: VERDICT -- the endpoint PRIME was needed; the "
+                    "medium rewrite alone did not do it\n");
+    } else {
+        c64_log("net: VERDICT -- the MEDIUM REWRITE alone was enough; no "
+                "endpoint prime needed\n");
+    }
+    c64_log_flush();
 
     if (!net_dhcp_done()) {
         /* Leave the adapter bound: the link IS up, net_poll's receive path is

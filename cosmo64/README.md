@@ -679,3 +679,60 @@ Also restored: `uno_dbg_net_trace()` goes to the log instead of a silent stub,
 and every stage in `netup.c` logs **and flushes before** the call that could
 block -- because a breadcrumb written after the step is a breadcrumb that
 never reaches the disk.
+
+## M5 WORKS ON HARDWARE (2026-09-03): a DHCP lease over USB Ethernet
+
+```
+xhci: bulk-in failed cc=-1 len=4096 epstate=1
+net: LEASED 192.168.2.254 gw 192.168.2.1, tx=2 rx=16
+usb-bulk: in arm=3577 armfail=0 poll=25088 land=3576 err=0 bytes=300880
+```
+
+300 KB received, a lease from the LAN's real server, and the desktop
+responsive throughout (106 presents per 2 s). Six boots; what each one settled
+is worth keeping, because five of them were spent on theories rather than
+measurements and the sixth was the first to ask the hardware a question.
+
+**Boot 1** froze -- `ax_recv()` calls `uno_usb_bulk_in()` synchronously and a
+bulk IN on an idle NIC never completes, so it cost `poll_xfer`'s full 5-second
+timeout, four times a frame. Fixed by adapting `uno_usb_bulk_in_arm()` /
+`_poll()` in this lane's rename seam. **Boot 2** gave `tx=4 rx=0`: frames out,
+nothing back. **Boot 3** tested "the aggregation parameters are chosen by
+ethernet speed where Linux chooses by USB speed" -- wrong. **Boot 4** tested
+"the aggregation size (20 KB) exceeds the driver's 4 KB buffer" -- also wrong,
+and the write demonstrably landed. Both were inferences off a register dump.
+**Boot 5** finally asked the controller, and got nothing back, because
+`xhci.c`'s failure line went only to `xd()` (0x402 debugcon, x86 QEMU) -- fixed
+as a `seam:` commit. Its three probes also cost 24 s of frozen desktop, which
+is what the hardware test reported as "the mouse stopped working" for the
+second time.
+
+**Boot 6** leased. What the log finally said:
+
+- `cc=-1 epstate=1` -- the transfer TIMED OUT with the endpoint **Running**.
+  Not halted, not stalled, not misconfigured: posted and never serviced.
+- The transmit side was never in question. A LAN capture on quill caught 282
+  DHCP DISCOVERs from this MAC, and Linux on the *same adapter* holds a lease
+  from the same server, so the wire and the server were both proven early.
+
+**A FAILED BULK IN CLEARS THE CHIP'S RECEIVER.** `MEDIUM` read `01b3` after
+link and `00b3` after the first failed transfer -- `AX_MEDIUM_RECEIVE_EN` gone,
+and gone for the rest of the session. `ax88179.c` cannot notice:
+`ax_apply_medium()` caches the last mode it *wrote* and only rewrites on a
+change, so the driver believes the medium is still correct while the adapter
+has gone deaf. That is why boot 5 failed where boot 6 succeeded.
+
+**What is still open: WHICH half of boot 6 mattered.** It changed two things
+against boot 4's control -- the extra `MEDIUM` write, and the failed probe
+whose `ep_recover()` issues Stop Endpoint + Set TR Dequeue. Either could be
+the cause; `setup_ep` sets DCS=1 against a ring whose cycle starts at 1, so it
+is *not* a dequeue-cycle mismatch. Rather than A/B it across two more boots
+with a chance of one having no network, `netup.c` now tries the cheap
+candidate first and escalates: medium rewrite, 4 s of DHCP, and only if that
+does not lease does it spend five seconds priming the endpoint and retry. The
+log prints a `net: VERDICT` line naming the one that worked, and if the medium
+rewrite is enough the prime never runs.
+
+If the prime turns out to be load-bearing, the fix is a public "reset this
+endpoint" entry point from the usb lane, so it costs a command rather than a
+deliberate timeout.
