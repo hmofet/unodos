@@ -105,11 +105,17 @@
 /* Voltage selectors, from the MT6358's own tables. Not a linear encoding --
  * these are the only legal values and the gaps between them are not voltages.
  *
- * VMCH is the card's supply and VMC its I/O rail. The board runs VMCH at
- * 3.0 V (both LK and Linux choose it), so this does too. VMC is the one where
- * copying Linux would have been WRONG: Linux leaves it at 1.8 V because it
- * negotiated UHS SDR104 signalling, and this driver deliberately runs SD
- * default speed, whose signalling level is 3.3 V. */
+ * VMCH is the card's supply and VMC its I/O rail, and the read-only pass of
+ * 2026-09-03 settled what to do with both: the preloader leaves them switched
+ * OFF but already selected at 3.0 V, which is squarely inside default speed's
+ * 2.7-3.6 V window and is what VMCH runs at anyway. So this driver changes no
+ * voltage at all. It sets two enable bits and nothing else, which is the
+ * smallest intervention that can work on a chip where the cost of a wrong
+ * write is the whole device.
+ *
+ * Copying the live Linux values would have been WRONG twice over: Linux keeps
+ * VMC at 1.8 V because it negotiated UHS SDR104 signalling, and this driver
+ * runs default speed. Reading the hardware beat both guessing and copying. */
 #define VMCH_SEL_2V9 2u
 #define VMCH_SEL_3V0 3u
 #define VMCH_SEL_3V3 5u
@@ -365,31 +371,48 @@ void c64_pmic_sd_rails_on(void)
              "reads enabled at %d mV, so the same map's VMCH and VMC readings "
              "above are believable.\n", emv);
 
+    /* A SECOND GATE, on the voltages rather than the addresses. Enabling a
+     * rail is only safe if the selector it is already carrying is one this
+     * driver would have chosen. The measured state is 3.0 V on both, which is
+     * inside default speed's 2.7-3.6 V window -- but a preloader that left
+     * VMC at 1.8 V (Linux's UHS value) would make the card's I/O rail a volt
+     * below its supply, and switching that on is not a thing to do because a
+     * loop happened to reach it. */
+    if (hmv < 2900 || cmv < 2900) {
+        c64_logf("sd: rails are selected at VMCH %d mV / VMC %d mV, and this "
+                 "driver only enables them at 2.9 V or above -- REFUSING. "
+                 "Setting a selector is a separate decision from setting an "
+                 "enable bit, and it has not been made.\n", hmv, cmv);
+        return;
+    }
+
 #if !C64_PMIC_WRITE
-    c64_logf("sd: read-only build -- would now set VMCH sel %d (3000 mV) and "
-             "VMC sel %d (3300 mV) and enable both. Rebuild with "
-             "PMIC_WRITE=1 to arm it.\n", VMCH_SEL_3V0, VMC_SEL_3V3);
-    (void)hmv; (void)cmv;
+    c64_logf("sd: read-only build -- would now set VMCH_CON0 and VMC_CON0 bit "
+             "0, two single-bit writes, leaving both voltages at the %d/%d mV "
+             "the boot already selected. Rebuild with PMIC_WRITE=1 to arm.\n",
+             hmv, cmv);
     return;
 #else
-    /* Voltage BEFORE enable, both times: a rail switched on at whatever
-     * selector was left behind is a rail at the wrong voltage for however
-     * long the second write takes. */
-    if (pmic_rmw(WR_VMCH_ANA, 0x0700u, VMCH_SEL_3V0 << 8) < 0
-        || pmic_rmw(WR_VMCH_EN, 0x0001u, 1) < 0) {
+    /* Two bits. No voltage is touched: the selectors were read above and both
+     * are already where this driver wants them, so pmic_rmw finds nothing to
+     * change and issues no write for them at all.
+     *
+     * Supply before I/O. A card whose I/O rail comes up while its VDD is
+     * still dark has its signal pins driven through their protection diodes,
+     * which is a way to power a chip that no datasheet endorses. */
+    if (pmic_rmw(WR_VMCH_EN, 0x0001u, 1) < 0) {
         c64_log("sd: could not bring VMCH (the card's supply) up\n");
         return;
     }
-    if (pmic_rmw(WR_VMC_ANA, 0x0F00u, VMC_SEL_3V3 << 8) < 0
-        || pmic_rmw(WR_VMC_EN, 0x0001u, 1) < 0) {
+    spin_us(1000);
+    if (pmic_rmw(WR_VMC_EN, 0x0001u, 1) < 0) {
         c64_log("sd: could not bring VMC (the card's I/O rail) up\n");
         return;
     }
-    /* The device tree asks for 60 us of ramp on both. Give it two orders of
-     * magnitude more and call it free: this happens once, at boot, and the SD
+    /* The device tree asks for 60 us of ramp. Give it two orders of magnitude
+     * more and call it free: this happens once, at boot, and the SD
      * specification wants a settled supply before the first command anyway. */
     spin_us(10000);
-    c64_logf("sd: VMCH 3.0 V and VMC 3.3 V are on (was VMCH %d mV, VMC %d mV)\n",
-             hmv, cmv);
+    c64_logf("sd: VMCH and VMC are on at %d and %d mV\n", hmv, cmv);
 #endif
 }
