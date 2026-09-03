@@ -11351,3 +11351,28 @@ bring-up got `-1` back with no way to tell whether the transfer had timed out
 Added one `uno_dbg_log()` beside the existing `xd()` calls — no behaviour
 change, and it compiles away outside a debug build exactly as before. Filed by
 the cosmo64 lane; `xhci.*` ownership is unchanged.
+
+## 2026-09-03 — cross-lane seam: ep_recover() left async registrations dangling; plus uno_usb_bulk_in_epstate() (filed by cosmo64)
+
+Two additive changes to `xhci.c`, both found driving the async bulk-IN path on
+the cosmo64 NIC.
+
+1. **`ep_recover()` abandons TRBs an async transfer owns, without clearing the
+   registration.** It zeroes the whole ring and re-points the dequeue cursor,
+   but `g_async_trb[dev][ASY_BIN]` still holds the address of a TRB that has
+   just been erased. `uno_usb_bulk_in_poll()` then answers "still outstanding"
+   forever and `uno_usb_bulk_in_arm()` answers "busy" forever, so a recovery
+   can never rescue a stalled async receive — the one thing it exists for.
+   Cleared for the bulk-IN slot when the recovered `dci` is that endpoint's.
+2. **`uno_usb_bulk_in_epstate(dev)`** returns the endpoint's state word from
+   the device context (1 Running, 2 Halted, 3 Stopped, 4 Error, -1 none). The
+   async pair cannot express this: a TRB that is never completed reads as
+   "still outstanding" whether the endpoint is running and the device is
+   silent, or the endpoint has stopped dead — and those need entirely
+   different fixes. Four cosmo64 hardware boots were spent unable to tell them
+   apart.
+
+Also noted for the owner, not fixed here: `uno_usb_bulk_in_arm()` has THREE
+return values (1 posted, 0 busy, -1 cannot) and the 0 is easy to miss —
+consumers that test only for negative will latch a transfer that was never
+queued. Worth a comment at the declaration in `xhci.h`.
