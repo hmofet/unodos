@@ -65,7 +65,6 @@ void uno_dbg_net_trace(const char *fmt, ...)
  * driver. */
 int c64_usb_control(int dev, unsigned char rt, unsigned char req,
                     unsigned short val, unsigned short idx, void *data, int len);
-int c64_usb_bulk_probe(int dev, int len);   /* usb.c: a synchronous bulk IN */
 void c64_usb_bulk_reset(int dev);           /* usb.c: Stop EP + Set TR Deq   */
 void c64_usb_bulk_stall_hook(void (*fn)(int dev));   /* usb.c: RX watchdog   */
 int uno_xhci_dev_count(void);
@@ -126,16 +125,21 @@ static void asix_dump(const char *when)
     c64_log_flush();
 }
 
-/* Re-assert the medium with RECEIVE_EN set. THIS IS THE FIX, and its ordering
- * against the endpoint reset is the whole of it -- see the note at the call
- * site. ax88179.c cannot do it itself: ax_apply_medium() caches the last mode
- * it WROTE and only rewrites on a change, so once the chip has silently
- * dropped RECEIVE_EN the driver believes the medium is still correct while the
- * adapter has gone deaf. The value is the one ax_apply_medium() computes for a
- * gigabit full-duplex link -- RECEIVE_EN |
- * EN_125MHZ | TXFLOW | RXFLOW | FULL_DUPLEX | GIGAMODE -- and it is written
- * unconditionally, because ax88179.c's own write is cached behind a
- * change check and will not repeat itself. */
+/* Re-assert the medium with RECEIVE_EN set. THIS IS THE FIX.
+ *
+ * THE ASIX DISABLES ITS OWN RECEIVER. Measured at the moment it happened
+ * (boot 11's watchdog): four frames landed, then nothing for two seconds, and
+ * the register read back MEDIUM=00b3 -- AX_MEDIUM_RECEIVE_EN gone -- with the
+ * bulk-IN endpoint still in state 1 Running. Nothing on the host cleared it.
+ * Writing 01b3 back restarts reception, and after one such repair the session
+ * ran to 757 landings and 69 KB with no further stall.
+ *
+ * ax88179.c cannot do this itself, and that is the second half of the bug:
+ * ax_apply_medium() caches the last mode it WROTE and only rewrites on a
+ * change, so once the chip has dropped RECEIVE_EN the driver believes the
+ * medium is still correct while the adapter is deaf. The value here is the one
+ * it computes for a gigabit full-duplex link -- RECEIVE_EN | EN_125MHZ |
+ * TXFLOW | RXFLOW | FULL_DUPLEX | GIGAMODE -- written unconditionally. */
 static void asix_rewrite_medium(void)
 {
     unsigned char med[2] = { 0xB3, 0x01 };           /* little-endian 0x01b3 */
@@ -171,22 +175,15 @@ static void asix_match_aggregation(void)
 
 /* THE REPAIR, registered with usb.c's receive watchdog.
  *
- * Boot 10 established that the bring-up ritual is not durable in every
- * ordering: a cheap endpoint reset made RECEIVE_EN stick (the medium read back
- * 01b3 where it used to revert) and reception still stopped after two frames,
- * endpoint state 1 Running. The five-second prime does produce sustained flow,
- * so something about a real in-flight transfer differs from the two commands
- * -- but chasing that difference costs one boot per hypothesis, and four of
- * those have already been spent on this milestone.
+ * usb.c notices the stall (link up, TRB armed, frames have flowed before,
+ * nothing for two seconds) and calls this; this does the ASIX-specific half
+ * and dumps the registers either side, which is how the cause was finally
+ * measured rather than guessed: at the stall the chip had cleared its own
+ * RECEIVE_EN, and re-asserting it brought reception straight back.
  *
- * So stop treating it as a bring-up ritual and treat it as what it is: a part
- * that stops sending and has to be restarted. usb.c notices (armed, silent for
- * two seconds, frames have flowed before) and calls this; this does the
- * ASIX-specific half and says what the registers looked like at the moment it
- * happened, which is the measurement no amount of boot-time dumping could get.
- * If the log shows RECEIVE_EN cleared again at each stall, the chip is
- * disabling its own receiver and the reason is in its FIFO handling; if it
- * shows 01b3 still set, the stall is on the USB side. */
+ * Kept as a watchdog rather than folded into bring-up, because the chip can do
+ * this at any time and the driver above it cannot tell. One stall, repaired
+ * two seconds later, is the whole cost. */
 static void asix_rx_repair(int dev)
 {
     asix_dump("at stall");
@@ -321,18 +318,17 @@ int pc64_net_boot(void)
      * escalates only if it does not lease. The log then names the one that
      * worked, and if the medium rewrite is enough the five-second prime never
      * runs at all. */
-    /* RESET THE ENDPOINT FIRST, THEN ENABLE THE RECEIVER. Boot 9 measured the
-     * ordering and it is not negotiable: written before the reset, RECEIVE_EN
-     * is reverted by the chip within milliseconds (log line 81 wrote 01b3,
-     * line 83 read back 00b3); written after, it holds and frames flow. The
-     * endpoint reads state 1 Running throughout, so this is a device quirk,
-     * not an endpoint fault -- which is why four boots spent looking for a
-     * fault found nothing.
+    /* Reset the endpoint, then enable the receiver, then let the watchdog keep
+     * it enabled. The endpoint reads state 1 Running throughout all of this --
+     * there was never an endpoint fault, which is why several boots spent
+     * looking for one found nothing. What there is: a chip that clears its own
+     * RECEIVE_EN, and a driver above it whose cached medium write can never
+     * put it back.
      *
      * The reset used to cost five seconds, because the only way to reach
      * xhci.c's ep_recover() from outside was to arm a transfer and let it time
-     * out. uno_usb_bulk_in_reset() (the seam commit alongside this one) does
-     * the same Stop Endpoint + Set TR Dequeue as two commands. */
+     * out. uno_usb_bulk_in_reset() does the same Stop Endpoint + Set TR
+     * Dequeue as two commands. */
     c64_usb_bulk_reset(asix_find());
     asix_rewrite_medium();
     asix_match_aggregation();
@@ -361,24 +357,17 @@ int pc64_net_boot(void)
          * The prime also CLEARS the chip's receiver (boot 5: MEDIUM 01b3 ->
          * 00b3, and ax88179.c cannot notice because ax_apply_medium() caches
          * the last mode it wrote), so the medium goes back afterwards. */
-        stage("no lease -- falling back to the slow prime and retrying");
-        c64_usb_bulk_probe(asix_find(), 4096);
-        asix_rewrite_medium();
-        asix_match_aggregation();
-        asix_dump("after prime + receiver restored");
-
+        /* One more window. The watchdog repairs a stalled receiver about two
+         * seconds after it happens, and on boot 11 the very first stall landed
+         * inside the DHCP window and was repaired there -- so the usual reason
+         * to be here is simply that the first window expired mid-repair. */
+        stage("no lease yet -- one more window after the watchdog's repair");
         deadline_in(6000);
         net_dhcp_start();
         while (!expired() && !net_dhcp_done()) {
             net_poll();
             uno_pc64_delay_ms(5);
         }
-        if (net_dhcp_done())
-            c64_log("net: VERDICT -- the fast reset was NOT equivalent; the "
-                    "five-second prime was still needed\n");
-    } else {
-        c64_log("net: VERDICT -- the fast endpoint reset was enough; no "
-                "five-second prime needed\n");
     }
     c64_log_flush();
 

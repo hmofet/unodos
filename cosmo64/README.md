@@ -736,3 +736,49 @@ rewrite is enough the prime never runs.
 If the prime turns out to be load-bearing, the fix is a public "reset this
 endpoint" entry point from the usb lane, so it costs a command rather than a
 deliberate timeout.
+
+### M5 root cause (2026-09-03, boot 11): the ASIX disables its own receiver
+
+The watchdog caught it in the act, which is what nine boots of register dumps
+either side of bring-up could not:
+
+```
+usb-bulk: RX STALLED -- 4 landings then nothing for 2 s, endpoint state 1
+asix[at stall]:     RX_CTL=02b8 MEDIUM=00b3      <- RECEIVE_EN gone
+asix[after repair]: RX_CTL=02b8 MEDIUM=01b3      <- put back
+net: LEASED 192.168.2.254, tx=3 rx=22
+usb-bulk: in arm=759 land=757 bytes=68992        <- one stall, all session
+```
+
+**The chip clears `AX_MEDIUM_RECEIVE_EN` by itself**, with the bulk-IN endpoint
+still in state 1 Running and nothing on the host touching it. Writing `01b3`
+back restarts reception, and after that one repair the session ran to 757
+landings and 69 KB with no further stall.
+
+The second half of the bug is why nothing above notices: `ax_apply_medium()`
+caches the last mode it *wrote* and only rewrites on a change, so once the chip
+has dropped `RECEIVE_EN` the driver believes the medium is still correct while
+the adapter is deaf. Every symptom of this milestone -- `tx=4 rx=0`, "one frame
+then silence", the bring-up orderings that worked and the ones that did not --
+is that one fact seen from different distances.
+
+**What survives, and what was scaffolding.** The watchdog stays: the chip can
+do this at any time and the driver above it cannot tell, so a two-second gap
+is the right cost. The five-second prime is **gone** -- the fast
+`uno_usb_bulk_in_reset()` plus the watchdog covers it, and boot 11's verdict
+line said so. The 20 KB diagnostic probe is **gone** with it, and the bounce is
+back to 4 KB. The aggregation match stays but is documented as what it is: a
+real mismatch (the chip asks for a 20 KB burst against `ax_recv`'s 4 KB buffer)
+that was **not** what stopped reception.
+
+**What this milestone cost, and why.** Eleven boots, of which about five went
+to theories built on register dumps instead of measurements: aggregation
+parameters chosen by ethernet speed rather than USB speed; the 20 KB/4 KB
+mismatch; the arm contract. Two things would have collapsed it early. First,
+`xhci.c`'s bulk-IN failure line went only to `xd()` (0x402 debugcon, x86 QEMU),
+so for three boots the most diagnostic line in the stack was reaching nobody --
+**check that an existing diagnostic actually reaches this platform before
+building on its silence**. Second, nothing could distinguish "the endpoint
+stopped" from "the endpoint is running and the device is silent"; both read as
+`land=0`. `uno_usb_bulk_in_epstate()` answers that in one line and should have
+been the first thing added, not the ninth.
