@@ -81,8 +81,22 @@ codi: firmware "OurCodi-0.1"
 codi: rear touchpad armed
 kbd: AW9523 up, matrix scanning at 3xx kHz
 touch: NT36xxx ..., bus 3xx kHz
-perf: ... per loop input <well under 11000> us
+perf: ... per loop input <well under 11224> us
 ```
+
+**The "before" number, measured off the running M6 image on 2026-09-03** (dial
+in with `./urctail.py 192.168.2.254`, which is where the lease was that day):
+
+```
+perf: 56 loops, 2 presents (0 skipped) | present 52 ms, input 635 ms, other 1318 ms of 2006 ms
+perf: per present 26479 us, avg box 436991 px; per loop input 11344 us
+```
+
+So the shell runs at ~28 loops a second and spends **11.2-11.3 ms of every
+one of them in polled input**, which is a third of the whole frame. That is
+the number the 400 kHz buses and the one-transaction idle poll exist to move,
+and it is what the first M7 boot should be compared against -- not against a
+feeling that it got faster.
 
 Where each can stop, and what it means:
 
