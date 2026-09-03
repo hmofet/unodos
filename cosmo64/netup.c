@@ -123,34 +123,50 @@ static void asix_dump(const char *when)
     c64_log_flush();
 }
 
-/* THE EXPERIMENT (M5 boot 2). ax88179.c chooses its bulk-in aggregation
- * parameters from the ETHERNET link speed -- gigabit gets Linux's
- * AX88179_BULKIN_SIZE[0], slower links get [3]. Linux makes that choice by the
- * USB speed as well: a host that is not SuperSpeed gets the [3] set whatever
- * the wire is doing. Every x86 box this driver has run on had a USB 3.0 port,
- * so a gigabit link on a HIGH-SPEED host has never happened before -- and the
- * Cosmo's SSUSB reports one U2 port and no U3 port, so it is what we have.
+/* THE AGGREGATION SIZE MUST MATCH THE BUFFER THE DRIVER SUBMITS.
  *
- * With the gigabit parameters the chip aggregates until a burst a high-speed
- * bulk endpoint cannot sustain, which would deliver exactly what boot 2 saw:
- * a negotiated gigabit link, frames going out, and nothing ever coming back.
+ * Boot 3 measured it. Transmit is provably on the wire (a LAN capture caught
+ * every DHCP DISCOVER), the DHCP server provably serves this MAC (Linux on
+ * this same adapter holds a lease from it), and the receive side reported
+ * `arm=1 poll=6400 land=0 err=0`: one TRB posted, never completed, never
+ * failed. Not a scheduling problem either -- the bulk OUT endpoint on the same
+ * device completed 22 of 22 transfers, so this controller does service bulk.
+ * The chip is simply never sending.
  *
- * Applied from HERE rather than in the driver, deliberately: this is a
- * hypothesis under test in this lane, not yet a claim about the x86 build. If
- * it is what fixes RX, it goes to the pc64 lane as a request with the
- * measurement attached. ax_apply_medium() only rewrites on a mode CHANGE, so
- * once the link is stable this write stands. */
-static void asix_force_usb2_aggregation(void)
+ * AX_RX_BULKIN_QCTRL's fourth byte is why. It reads back at exactly HALF what
+ * is written (0x12 -> 0x09, 0x18 -> 0x0c, measured both times), so the chip
+ * holds that field in 2 KB units -- and in the Linux driver it sets the
+ * receive URB size as `1024 * (size + 2)`. ax88179.c writes 0x12, which asks
+ * the device to aggregate into a TWENTY KILOBYTE burst. ax_recv() submits
+ * `sizeof g_rx` = FOUR kilobytes. The device will not hand over a burst the
+ * host has no room for, so it hands over nothing at all, forever, without an
+ * error -- which is exactly the signature above.
+ *
+ * Every x86 box this driver has run on submits the same 4 KB and would have
+ * the same mismatch, so this is not Cosmo-specific and not about USB speed
+ * (boot 3's guess). It has simply never been noticed, presumably because
+ * nothing on the fleet has needed the ASIX to receive.
+ *
+ * So: ask for size 0x02 -> 1024 * (2 + 2) = 4 KB, matching g_rx exactly. The
+ * timer and IFG bytes come from Linux's non-SuperSpeed entry, which is what a
+ * high-speed host should be using anyway (the Cosmo's SSUSB reports one U2
+ * port and no U3 port, and the adapter enumerates at high speed).
+ *
+ * Applied from HERE rather than in the driver on purpose: it is a measurement
+ * this lane can make and the x86 lane cannot, and changing ax88179.c's own
+ * table is the pc64 lane's call. If this is what fixes RX it goes to them as a
+ * request with the numbers attached. ax_apply_medium() only rewrites on a mode
+ * CHANGE, so once the link is stable this write stands. */
+static void asix_match_aggregation(void)
 {
-    unsigned char q[5] = { 0x07, 0xCC, 0x4C, 0x18, 0x08 };  /* Linux [3] */
-    if (g_ax_speed >= 4)                     /* SuperSpeed: leave it alone */
-        return;
+    /* ctrl, timer_lo, timer_hi, size, ifg -- size 0x02 => a 4 KB burst */
+    unsigned char q[5] = { 0x07, 0xCC, 0x4C, 0x02, 0x08 };
     if (ax_wr(AX_RX_BULKIN_QCTRL, 5, q) < 0) {
         c64_log("asix: could not reprogram the bulk-in queue\n");
         return;
     }
-    c64_log("asix: bulk-in queue forced to the non-SuperSpeed set "
-            "(07 cc 4c 18 08) -- host is not SuperSpeed\n");
+    c64_log("asix: bulk-in aggregation set to 4 KB (size=02) to match the "
+            "driver's 4 KB receive buffer\n");
     c64_log_flush();
 }
 
@@ -225,7 +241,7 @@ int pc64_net_boot(void)
     }
     report("link up");
     asix_dump("after link");
-    asix_force_usb2_aggregation();
+    asix_match_aggregation();
     asix_dump("after override");
 
     /* A fresh window for DHCP: the link wait has already spent part of the
