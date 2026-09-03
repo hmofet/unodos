@@ -164,6 +164,18 @@ int c64_usb_bulk_out(int dev, void *data, int len)
     return n;
 }
 
+/* Recover the bulk-IN endpoint without spending a transfer timeout to do it.
+ * The ASIX will not hold RECEIVE_EN until this has run once (netup.c), and the
+ * five-second synchronous probe below used to be the only way to trigger it. */
+void c64_usb_bulk_reset(int dev)
+{
+    uno_usb_bulk_in_reset(dev);
+    g_bin_armed = -1;                    /* the ring under our latch is gone */
+    c64_logf("usb-bulk: bulk-IN endpoint reset (dev %d), state now %d\n",
+             dev, uno_usb_bulk_in_epstate(dev));
+    c64_log_flush();
+}
+
 /* A SYNCHRONOUS bulk-IN, used once at bring-up as a diagnostic.
  *
  * The async path reports "armed, nothing landed, no error" and cannot say

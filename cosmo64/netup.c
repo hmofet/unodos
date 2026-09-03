@@ -66,6 +66,7 @@ void uno_dbg_net_trace(const char *fmt, ...)
 int c64_usb_control(int dev, unsigned char rt, unsigned char req,
                     unsigned short val, unsigned short idx, void *data, int len);
 int c64_usb_bulk_probe(int dev, int len);   /* usb.c: a synchronous bulk IN */
+void c64_usb_bulk_reset(int dev);           /* usb.c: Stop EP + Set TR Deq   */
 int uno_xhci_dev_count(void);
 const uno_usb_dev *uno_xhci_dev(int i);
 
@@ -124,44 +125,13 @@ static void asix_dump(const char *when)
     c64_log_flush();
 }
 
-/* THE AGGREGATION SIZE MUST MATCH THE BUFFER THE DRIVER SUBMITS.
- *
- * Boot 3 measured it. Transmit is provably on the wire (a LAN capture caught
- * every DHCP DISCOVER), the DHCP server provably serves this MAC (Linux on
- * this same adapter holds a lease from it), and the receive side reported
- * `arm=1 poll=6400 land=0 err=0`: one TRB posted, never completed, never
- * failed. Not a scheduling problem either -- the bulk OUT endpoint on the same
- * device completed 22 of 22 transfers, so this controller does service bulk.
- * The chip is simply never sending.
- *
- * AX_RX_BULKIN_QCTRL's fourth byte is why. It reads back at exactly HALF what
- * is written (0x12 -> 0x09, 0x18 -> 0x0c, measured both times), so the chip
- * holds that field in 2 KB units -- and in the Linux driver it sets the
- * receive URB size as `1024 * (size + 2)`. ax88179.c writes 0x12, which asks
- * the device to aggregate into a TWENTY KILOBYTE burst. ax_recv() submits
- * `sizeof g_rx` = FOUR kilobytes. The device will not hand over a burst the
- * host has no room for, so it hands over nothing at all, forever, without an
- * error -- which is exactly the signature above.
- *
- * Every x86 box this driver has run on submits the same 4 KB and would have
- * the same mismatch, so this is not Cosmo-specific and not about USB speed
- * (boot 3's guess). It has simply never been noticed, presumably because
- * nothing on the fleet has needed the ASIX to receive.
- *
- * So: ask for size 0x02 -> 1024 * (2 + 2) = 4 KB, matching g_rx exactly. The
- * timer and IFG bytes come from Linux's non-SuperSpeed entry, which is what a
- * high-speed host should be using anyway (the Cosmo's SSUSB reports one U2
- * port and no U3 port, and the adapter enumerates at high speed).
- *
- * Applied from HERE rather than in the driver on purpose: it is a measurement
- * this lane can make and the x86 lane cannot, and changing ax88179.c's own
- * table is the pc64 lane's call. If this is what fixes RX it goes to them as a
- * request with the numbers attached. ax_apply_medium() only rewrites on a mode
- * CHANGE, so once the link is stable this write stands. */
-/* Re-assert the medium with RECEIVE_EN set. Two jobs: it may be what starts
- * the chip's receive engine once the link has settled (candidate 1 below), and
- * it undoes the clearing that a failed bulk IN causes. The value is the one
- * ax_apply_medium() computes for a gigabit full-duplex link -- RECEIVE_EN |
+/* Re-assert the medium with RECEIVE_EN set. THIS IS THE FIX, and its ordering
+ * against the endpoint reset is the whole of it -- see the note at the call
+ * site. ax88179.c cannot do it itself: ax_apply_medium() caches the last mode
+ * it WROTE and only rewrites on a change, so once the chip has silently
+ * dropped RECEIVE_EN the driver believes the medium is still correct while the
+ * adapter has gone deaf. The value is the one ax_apply_medium() computes for a
+ * gigabit full-duplex link -- RECEIVE_EN |
  * EN_125MHZ | TXFLOW | RXFLOW | FULL_DUPLEX | GIGAMODE -- and it is written
  * unconditionally, because ax88179.c's own write is cached behind a
  * change check and will not repeat itself. */
@@ -176,6 +146,15 @@ static void asix_rewrite_medium(void)
     c64_log_flush();
 }
 
+/* Match the chip's receive aggregation to the 4 KB buffer ax_recv() submits.
+ *
+ * NOT the fix -- boot 4 tested that theory and it failed -- but keep it: the
+ * fourth byte reads back at exactly half what is written (0x12 -> 0x09,
+ * measured twice), so the chip holds it in 2 KB units, and in Linux the same
+ * field sets the receive URB size as 1024 * (size + 2). ax88179.c writes 0x12,
+ * asking for a 20 KB burst against a 4 KB buffer. That mismatch is real even
+ * though it was not what stopped reception, and 0x02 -> 1024 * (2 + 2) = 4 KB
+ * makes the two agree. */
 static void asix_match_aggregation(void)
 {
     /* ctrl, timer_lo, timer_hi, size, ifg -- size 0x02 => a 4 KB burst */
@@ -314,12 +293,25 @@ int pc64_net_boot(void)
      * escalates only if it does not lease. The log then names the one that
      * worked, and if the medium rewrite is enough the five-second prime never
      * runs at all. */
+    /* RESET THE ENDPOINT FIRST, THEN ENABLE THE RECEIVER. Boot 9 measured the
+     * ordering and it is not negotiable: written before the reset, RECEIVE_EN
+     * is reverted by the chip within milliseconds (log line 81 wrote 01b3,
+     * line 83 read back 00b3); written after, it holds and frames flow. The
+     * endpoint reads state 1 Running throughout, so this is a device quirk,
+     * not an endpoint fault -- which is why four boots spent looking for a
+     * fault found nothing.
+     *
+     * The reset used to cost five seconds, because the only way to reach
+     * xhci.c's ep_recover() from outside was to arm a transfer and let it time
+     * out. uno_usb_bulk_in_reset() (the seam commit alongside this one) does
+     * the same Stop Endpoint + Set TR Dequeue as two commands. */
+    c64_usb_bulk_reset(asix_find());
     asix_rewrite_medium();
     asix_match_aggregation();
-    asix_dump("after medium rewrite");
+    asix_dump("after endpoint reset + medium rewrite");
 
-    stage("DHCP (medium rewrite only)");
-    deadline_in(4000);
+    stage("DHCP");
+    deadline_in(5000);
     net_init(nic, ax88179_mac());
     /* net_dhcp_start sends one DISCOVER; net_poll's dhcp_tick retransmits it
      * (and the REQUEST) about every 1.5 s, so a lost OFFER or ACK recovers
@@ -340,7 +332,7 @@ int pc64_net_boot(void)
          * The prime also CLEARS the chip's receiver (boot 5: MEDIUM 01b3 ->
          * 00b3, and ax88179.c cannot notice because ax_apply_medium() caches
          * the last mode it wrote), so the medium goes back afterwards. */
-        stage("no lease -- priming the bulk-IN endpoint and retrying");
+        stage("no lease -- falling back to the slow prime and retrying");
         c64_usb_bulk_probe(asix_find(), 4096);
         asix_rewrite_medium();
         asix_match_aggregation();
@@ -353,11 +345,11 @@ int pc64_net_boot(void)
             uno_pc64_delay_ms(5);
         }
         if (net_dhcp_done())
-            c64_log("net: VERDICT -- the endpoint PRIME was needed; the "
-                    "medium rewrite alone did not do it\n");
+            c64_log("net: VERDICT -- the fast reset was NOT equivalent; the "
+                    "five-second prime was still needed\n");
     } else {
-        c64_log("net: VERDICT -- the MEDIUM REWRITE alone was enough; no "
-                "endpoint prime needed\n");
+        c64_log("net: VERDICT -- the fast endpoint reset was enough; no "
+                "five-second prime needed\n");
     }
     c64_log_flush();
 
