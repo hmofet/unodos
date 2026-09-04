@@ -174,6 +174,49 @@ def urc_session(port, run_for):
         notes.append("screen grab skipped")
     except Exception as e:
         fails.append("urc: screen grab failed: %s" % e)
+    # QHARNESS_UNO=<a.UNO>[,<b.UNO>...]: the module gate (M8). Each file is
+    # pushed onto the RAM disk -- volume 0, whose namespace is flat but takes
+    # "APPS\X.UNO" as a 16-character name, so the loader's search path finds
+    # it exactly as it would on the SD card -- the launcher rescans, and the
+    # app is launched by its id (the file stem, or the id `apps list` shows
+    # for it). The proof is the loader's own line on the KERNEL channel:
+    # "modload: ok" for a load, or its stated reason for a refusal, which
+    # this prints so a bad thunk reads as "unresolved import X" rather than a
+    # hung guest. A guest that still answers `uptime` afterwards is the
+    # second half: the entry was called and came back. The screen after each
+    # launch is saved beside the run's PNG for eyes.
+    unos = [p for p in (os.environ.get("QHARNESS_UNO") or "").split(",") if p]
+    for path in unos:
+        fname = os.path.basename(path).upper()
+        stem = fname[:-4].lower() if fname.endswith(".UNO") else fname.lower()
+        before = len(got_log)
+        try:
+            if not link.push_file(0, "APPS\\" + fname, path):
+                fails.append("uno: %s did not verify on the RAM disk" % fname)
+                continue
+            link.command("rescan")
+            ids = [r.split()[0] for r in link.command("apps", "list") if r.strip()]
+            app = stem if stem in ids else next((i for i in ids if stem in i), stem)
+            r = link.launch(app, timeout=20.0)
+            time.sleep(1.5)
+            up = link.uptime(retries=2)
+            lines = [t for ch, t in got_log[before:] if ch == "KERNEL" and "modload" in t]
+            if any("modload: ok" in t for t in lines):
+                notes.append("uno: %s loaded and launched as '%s' (%s; uptime %d)"
+                             % (fname, app, " ".join(r) if r else "-", up))
+            else:
+                fails.append("uno: %s did not load: %s"
+                             % (fname, " | ".join(lines) if lines else "no modload line at all"))
+            try:
+                w, h, rgba = link.screen_grab(scale=2, timeout=30.0)
+                shot = os.environ.get("QHARNESS_UNO_PNG_DIR") or "."
+                write_png(os.path.join(shot, "uno-%s.png" % stem), w, h,
+                          bytes(b for i, b in enumerate(rgba) if i % 4 != 3))
+                notes.append("uno: %s screen saved as uno-%s.png" % (fname, stem))
+            except Exception as e:
+                notes.append("uno: %s screen grab skipped (%s)" % (fname, e))
+        except Exception as e:
+            fails.append("uno: %s failed: %s" % (fname, e))
     # the replayed boot log must have reached us (it is paced 8 lines a
     # frame, so give it a moment), and a line logged NOW must follow live
     time.sleep(1.5)

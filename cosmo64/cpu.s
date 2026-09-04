@@ -254,3 +254,42 @@ mmu_on_el2:
     .globl __chkstk
 __chkstk:
     ret
+
+// ---- uno_pc64_code_sync(p, n): make freshly written code visible to fetch ----
+// The module loader (pc64/pc64_modload.c) copies a .UNO image into the arena
+// with ordinary stores, patches its relocation cells and import slots, then
+// jumps to it. On AArch64 the instruction side is not coherent with those
+// stores: the I-cache may still hold the arena slot's previous occupant (the
+// Studio build-run loop reuses one slot), or the zeros mmu.c's .bss clear
+// left. So: clean every D-cache line of the range to the point of unification
+// (where the I-side fetches from), invalidate the I-cache for the same lines,
+// and order both against the branch that follows. Line sizes come from
+// CTR_EL0 rather than being assumed -- the A53 and A73 halves of this SoC
+// agree on 64 bytes today, and this stays right if a later part does not.
+// x0 = start, x1 = length. Clobbers x2-x5 only. Nothing to do for n == 0.
+    .globl uno_pc64_code_sync
+uno_pc64_code_sync:
+    cbz   x1, 9f
+    mrs   x3, ctr_el0
+    ubfx  x4, x3, #16, #4               // DminLine: log2(words) of the D line
+    mov   x2, #4
+    lsl   x4, x2, x4                    // D-cache line bytes
+    and   x5, x3, #0xf                  // IminLine: log2(words) of the I line
+    lsl   x5, x2, x5                    // I-cache line bytes
+    add   x1, x0, x1                    // x1 = end
+    sub   x2, x4, #1
+    bic   x3, x0, x2                    // first D line
+1:  dc    cvau, x3                      // clean to PoU
+    add   x3, x3, x4
+    cmp   x3, x1
+    b.lo  1b
+    dsb   ish                           // the cleans complete before...
+    sub   x2, x5, #1
+    bic   x3, x0, x2                    // first I line
+2:  ic    ivau, x3                      // ...the I-side lines are dropped
+    add   x3, x3, x5
+    cmp   x3, x1
+    b.lo  2b
+    dsb   ish
+    isb
+9:  ret

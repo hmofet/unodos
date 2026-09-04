@@ -6,8 +6,40 @@
 #include "cosmo64.h"
 #include "mac_compat.h"
 #include "pc64_native.h"
+#include "bootinfo.h"      /* uno_bios_find_ram: the loader's no-firmware seam */
 
 int uno_main(void);
+void uno_modload_reserve(void);    /* pc64_modload.c: carve the module arena */
+
+/* ---- the module arena (M8) ----------------------------------------------
+ * pc64_modload.c instantiates a .UNO into pages it gets from one of three
+ * places: EFI AllocatePages while firmware is live, the E820 map on a BIOS
+ * boot, or nothing. This payload has no firmware of either kind, and the
+ * loader's "no system table" branch is the E820 one: uno_modload_reserve()
+ * asks uno_bios_find_ram() for the arena once, at boot, and mod_alloc() bumps
+ * through it from then on. So that seam is answered here with a static
+ * carve-out instead of a map walk -- LK handed over all of DRAM already, and
+ * mmu.c maps .bss as Normal write-back with no execute-never bit, which is
+ * what code that will be jumped into needs. 4.5 MB: the loader's own
+ * MOD_ARENA_PAGES + USER_SLOT_PAGES (a roster of ~40 KB modules twice over,
+ * plus the fixed slot Studio's build-run loop reloads into), and the request
+ * is checked against the size rather than trusted, so a loader that grows
+ * its ask fails visibly here instead of overrunning whatever follows. */
+#define MOD_ARENA_BYTES (1152u << 12)
+static unsigned char g_mod_arena[MOD_ARENA_BYTES] __attribute__((aligned(4096)));
+
+unsigned long long uno_bios_find_ram(const uno_bootinfo *bi,
+                                     unsigned long long bytes)
+{
+    (void)bi;                       /* NULL here: there is no E820 block */
+    if (bytes > MOD_ARENA_BYTES) {
+        c64_logf("modload: arena asks %d KB, have %d KB -- no modules\n",
+                 (int)(bytes >> 10), (int)(MOD_ARENA_BYTES >> 10));
+        return 0;
+    }
+    c64_logf("modload: arena %d KB at %p\n", (int)(bytes >> 10), g_mod_arena);
+    return (unsigned long long)(c64_u64)g_mod_arena;
+}
 
 /* ---- is this core actually cached? -------------------------------------- */
 /* The first measurement said 1e6 volatile adds take 315,615 us: 315 ns for
@@ -112,6 +144,11 @@ void c_main(void *dtb)
      * uno_main and asks for SHELL.CFG immediately, so a report printed after
      * that would only be a report of what the shell had already decided. */
     c64_storage_report();
+    /* The module arena, before the shell: the first launch of a .UNO calls
+     * mod_alloc(), and with nothing reserved every module "fails to load"
+     * while the desktop draws fine -- the exact failure the loader's own
+     * comment warns is easy to call working. */
+    uno_modload_reserve();
     /* USB before the shell too: enumeration takes a moment (port power,
      * debounce, the hub walk) and the desktop should come up with its mouse
      * rather than acquire one a second later. */
