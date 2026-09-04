@@ -26,7 +26,7 @@ Everything below has run on the phone, not just under the gate:
 | M5 | networking: a DHCP lease over the AX88179 USB Ethernet |
 | M6 | URC: the box is remotely driven from the dev PC, with a live log |
 | M7 | the SD card as a persistent volume, the rear panel as a touchpad, three perf wins |
-| M8 | **`.UNO` modules: the aarch64 module ABI (gated on QEMU; hardware pending, see M8)** |
+| M8 | **`.UNO` modules: the aarch64 module ABI -- seven apps load from the SD card** |
 
 **What runs the machine today.** The desktop is the panel's native landscape at
 a 2x zoom. Local input is the matrix keyboard, the touch panel, and the rear
@@ -36,14 +36,11 @@ card is mounted read-write as the boot volume, so the session persists.** The
 shell holds a DHCP lease and serves URC on `:5099`.
 
 Still missing: no audio, no WiFi (CONNSYS has no bare-metal route), no
-cellular, and no RTC. `.UNO` apps load as of M8 -- on the QEMU gate; the
-device has the modules on its SD card and is waiting for the M8 image.
+cellular, and no RTC. `.UNO` apps load as of M8: the seven the launcher
+rosters live under `APPS\` on the SD card and open from the desktop.
 
-**Where we left off.** p38 carries the M7 image. The M8 image is built
-(`build/pc64arm-boot.img`) and the seven aarch64 modules are already under
-`APPS\` on the SD card (pushed over URC on 2026-09-04); what is left is the
-flash, which needs the device in Trixie and a person at the LK menu. The loop
-is:
+**Where we left off.** p38 carries the M8 image and it is booted and
+verified: every module in `APPS\` loaded and drew over URC. The loop is:
 
 ```sh
 ./build.sh shell && ./flashp38.sh   # when there is something new to try
@@ -104,14 +101,12 @@ Input is 3.1x cheaper and the shell runs 28% more frames -- and the M7 number
 
 **Open, in the order worth doing:**
 
-1. **M8 on hardware.** The module ABI is proven on the gate (seven apps load
-   and draw under EL2), not yet on the phone. The first hardware boot answers
-   the one thing QEMU cannot: whether `uno_pc64_code_sync` is sufficient on
-   the A53/A73 pair, where the I-side really is a separate cache. Then the
-   three portable providers the export stubs name as candidates --
-   `uno_binds.c` (prefs, now that SHELL.CFG has a volume), `unolog.c`
-   (what LOGVIEW.UNO exists to show) and `uno3d.c` + `uno3d_soft.c` -- can
-   compile in for real. See M8 below.
+1. **Fill in behind the modules.** M8 proved the ABI; what the apps find
+   behind 191 of their possible imports is a stub. Three of those groups are
+   portable code that should compile in now: `uno_binds.c` (prefs, now that
+   SHELL.CFG has a volume), `unolog.c` (what LOGVIEW.UNO exists to show) and
+   `uno3d.c` + `uno3d_soft.c` (Runner3D). Then the Office modules, which
+   need `unodoc/` staged. See M8 below.
 2. **The eMMC log window loses the boot story on a long session.** It is 128
    KiB and `c64_log_flush()` keeps the TAIL, which was right when a session was
    a minute of bring-up. A boot writes 100 KB in an hour of `perf:` and
@@ -1304,7 +1299,7 @@ right before the hardware failure modes are worth reading.
 before `c64_fb_adopt` looks for it. The storage round trip -- the reason
 BLKTEST exists -- passes. Never ship a BLKTEST image.)
 
-## M8 (2026-09-04): `.UNO` modules on aarch64 -- gated, not yet on hardware
+## M8 COMPLETE ON HARDWARE (2026-09-04): `.UNO` modules on aarch64
 
 M7 gave apps somewhere to live; M8 gives them a way in. The loader is the
 real `pc64/pc64_modload.c` now -- compiled unchanged but for two seams -- and
@@ -1451,14 +1446,28 @@ palette and colour bar, Tracker's pattern grid, Photos's file pane, LogView's
 status line -- through 4 to 33 thunked imports each. The plain and EL2 gates
 stay green. `BLKTEST=1` was not re-run: nothing in the storage stack changed.
 
-### Hardware status
+### On the hardware
 
-The Cosmo was found running the M7 image at .254 (uptime 16.9 h), the SD
-card mounted read-write as volume 1, and the modules were pushed to
-`APPS\` over URC and verified. The M8 boot image is built at
-`build/pc64arm-boot.img`. The flash needs the device in Trixie
-(`./flashp38.sh`) and a person at the LK menu afterwards; the first M8 boot
-should show `modload: arena 4608 KB` in the boot story, and the first launch
-of Dostris from the desktop is the I-cache test. Note that the M7 image's
-URC does not answer `apps list` or `mkdir` (both newer than it); the puts
-still verified, so `APPS\` already existed on the card.
+The modules reached the card before the image did: the Cosmo was found
+running the M7 image at .254, the SD card mounted read-write as volume 1,
+and `put 1 APPS\X.UNO` over URC landed and verified all of them (that
+image's URC predates `apps list` and `mkdir`, which time out; `put` is
+older and works). Then `./flashp38.sh` from Trixie, a person at the LK
+menu, and over URC from the dev PC:
+
+```
+launch dostris -> launched     ua: modload: DOSTRIS.UNO / ua: modload: ok
+launch pacman  -> launched     ua: modload: PACMAN.UNO  / ua: modload: ok
+launch outlast, tracker, paint                         ... modload: ok
+launch photos  -> launched     ua: modload(uui): PHOTOS.UNO / modload: ok
+launch logview -> launched     ua: modload(uui): LOGVIEW.UNO / modload: ok
+```
+
+Seven for seven, each followed by an `uptime` that still answered and a
+screen grab showing the app drawn -- Photos listing the SD card's root
+(`FILES`, `SHELL.CFG`, `APPS`), Paint's palette, Dostris's board. That is
+the I-cache question answered: `uno_pc64_code_sync` is sufficient on the
+A53/A73 pair for a module that was just written into `.bss`. One thing the
+session did not show: the boot story. After two hours of `perf:` lines the
+96 KB URC replay window no longer reached back to `modload: arena`, which is
+open item 2 above doing exactly what it says.
