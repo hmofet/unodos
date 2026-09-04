@@ -854,9 +854,9 @@ PAGES["index.html"] = ("Overview", f"""
 <p>UnoDOS is a family of GUI-first operating systems that runs on more than 20 kinds of hardware.
 <strong>pc64</strong> is the modern-PC version: it runs on essentially any x86-64 PC built since about
 2007, and it has been tested in emulators and on real hardware booting from a USB stick. The most
-recent pass, in August 2026, drove the whole desktop end to end on a ZimaBlade single-board PC and a
-Lenovo ThinkPad X13 Yoga: 86 checks, every application launched, and the defects it turned up fixed
-and re-checked on the same machines.</p>
+recent pass, in August 2026, drove the whole desktop end to end on a fanless single-board PC and a
+recent laptop: 86 checks, every application launched, and the defects it turned up fixed and re-checked
+on the same machines.</p>
 
 <h2 id="film">See it running</h2>
 <p>Before you read any further, watch it work. Nothing in this film is a mock-up or an animation: it
@@ -1909,8 +1909,8 @@ laptops with an Ethernet socket:</p>
   <li><strong>Intel I210 / I211 / I350</strong> and the 8257x server parts (the <em>igb</em> family)</li>
 </ul>
 <p><strong>Realtek</strong> wired chips (RTL8168 / 8111 / 8125) are supported too - the port built into most
-desktop boards and small-form-factor PCs. This one is <strong>verified on real hardware</strong>: a ZimaBlade
-with an onboard RTL8168 links at gigabit, takes a DHCP address and browses, with no adapter plugged in.</p>
+desktop boards and small-form-factor PCs. This one is <strong>verified on real hardware</strong>: a small fanless PC
+with an RTL8168 on its board links at gigabit, takes a DHCP address and browses, with no adapter plugged in.</p>
 {note('The Intel drivers are verified in the emulator against the QEMU e1000 / e1000e / igb models, and the Realtek driver on a real machine. Most test <em>laptops</em> have no wired port, so the built-in NIC on any given laptop may not have been exercised end to end - if a built-in port does not come up, a supported USB Ethernet adapter (below) is the reliable path.', title="How this is verified")}
 
 <h2 id="status">Checking the connection</h2>
@@ -1943,15 +1943,15 @@ Two chip families are supported - check a listing's chipset line before you buy:
       products: <strong>Plugable USB3-E1000</strong>, <strong>StarTech USB31000S</strong>,
       <strong>TRENDnet TU3-ETG</strong>, <strong>j5create JUE130</strong>.</li>
   <li><strong>Realtek RTL8152 / 8153 / 8155 / 8156</strong> (up to 2.5&nbsp;Gigabit), including the chips
-      built into many <strong>Lenovo, Microsoft Surface, Dell and TP-Link</strong> USB-C docks - for example
+      built into many laptop-maker and third-party USB-C docks - for example
       the <strong>TP-Link UE300</strong>. The faster RTL8157 / 8159 (5G/10G) parts are recognised but
       declined.</li>
 </ul>
-{note('An ASIX AX88179A adapter has been taken all the way to a DHCP lease and a gateway ping on a real laptop (a ThinkPad X13 Yoga). The older ASIX AX88772 / AX88178A chips are <em>not</em> supported.', kind="tip", title="Tested on metal")}
+{note('An ASIX AX88179A adapter has been taken all the way to a DHCP lease and a gateway ping on a real laptop. The older ASIX AX88772 / AX88178A chips are <em>not</em> supported.', kind="tip", title="Tested on metal")}
 
 <h2 id="wifi">Wi-Fi</h2>
 <p><strong>Wi-Fi works on Intel hardware, on one machine so far.</strong> UnoDOS ships drivers for
-Intel (AX201 / AX210), Realtek and Marvell wireless chips. On a Surface Laptop Go with an Intel AX201 the
+Intel (AX201 / AX210), Realtek and Marvell wireless chips. On a laptop with an Intel AX201 the
 driver loads the adapter's firmware, scans, <strong>joins a WPA2 network and takes an address</strong> - a
 real association followed by a real DHCP lease, on the laptop rather than in the emulator. The Realtek and
 Marvell drivers still stop after loading firmware: they do not associate yet. <strong>On anything else, a
@@ -3935,7 +3935,7 @@ falls back to the portable default, so the same widgets render on 1-bit through 
 <tr><td><code>pc64_http</code> / <code>pc64_browser</code> / <code>js</code></td><td>HTTP/1.0 GET with DNS, the immediate-mode HTML/Markdown/CSS renderer, and the JavaScript interpreter.</td></tr>
 <tr><td><code>tls</code> / <code>bearssl</code></td><td>Freestanding BearSSL, TLS 1.2, with pinned-key and CA-validated (14 roots) modes; clock from the UEFI RTC.</td></tr>
 <tr><td><code>xhci</code> / <code>ax88179</code> / <code>rtl8152</code> / <code>usbmsc</code></td><td>Opt-in (<code>-DUNO_XHCI</code>) polled xHCI host, ASIX and Realtek USB-gigabit drivers (each publishing a <code>uno_nic_t</code>), and USB mass storage (Bulk-Only Transport).</td></tr>
-<tr><td><code>iwlwifi</code> / <code>rtwifi</code> / <code>mrvlwifi</code></td><td>Intel (AX201/AX210), Realtek and Marvell Wi-Fi drivers. The Intel driver loads firmware, scans, joins a WPA2 network and holds a DHCP lease on real hardware (a Surface Laptop Go); WPA3 authenticates but its handshake does not complete yet. Realtek and Marvell map the device and load its firmware, but do not associate yet.</td></tr>
+<tr><td><code>iwlwifi</code> / <code>rtwifi</code> / <code>mrvlwifi</code></td><td>Intel (AX201/AX210), Realtek and Marvell Wi-Fi drivers. The Intel driver loads firmware, scans, joins a WPA2 network and holds a DHCP lease on real hardware (one laptop so far); WPA3 authenticates but its handshake does not complete yet. Realtek and Marvell map the device and load its firmware, but do not associate yet.</td></tr>
 <tr><td><code>pc64_font</code></td><td>Optional TrueType engine; registers as the fb text provider with subpixel smoothing, falling back to the built-in bitmap font.</td></tr>
 <tr><td><code>unovirt</code> / <code>hv_vmx</code> / <code>hv_svm</code> / <code>unovdev</code></td><td>The hypervisor behind <a href="appliances.html">Appliances</a>: a capability gate that says whether this machine can host a guest and why not, a backend seam with Intel VMX and AMD SVM implementations, second-stage paging into a memory carve taken at detach, a budgeted slice run from the shell's frame loop, and virtio-mmio device models (console, block, net) plus the 8250 and 8259 a Linux kernel expects. Proven on VMX; the SVM side builds but has not yet run a guest. See <a href="https://github.com/hmofet/unodos/blob/master/pc64/UNOVIRT.md" target="_blank" rel="noopener"><code>UNOVIRT.md</code></a>.</td></tr>
 </tbody>
