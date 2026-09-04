@@ -193,14 +193,19 @@ knows.</p>
 
 <h2 id="assistant">The assistant</h2>
 <p>The last view in the activity bar is an <strong>assistant</strong>: a chat panel beside your code that
-can read the files in the folder and propose changes to them. It is an extension like any other, written
-against an interface UnoCode offers to all of them, so it is not privileged and you can switch it off.</p>
-<p>Two things about it are deliberate. Every edit it proposes is shown to you as a <strong>diff first</strong>
-and applied only when you accept it, as a single step of undo. And it needs a key for whichever model
-service you use, which is stored in the machine's own secret store rather than in your settings file -
-<b>AI: Set API Key</b> in the palette, typed into a masked box, and the store it went into is named on
-screen when it is saved.</p>
-<div class="note warn"><b>It sends your code somewhere</b>The assistant talks to a service over the internet, which means the text it sends leaves this machine. It sends what you ask it and the parts of the files it needs to answer. If that is not appropriate for what you are working on, do not switch it on - there is nothing to configure to make a network request private.</div>
+reads the file you have open and can propose changes to it. It is <strong>built into the editor</strong>
+rather than being an extension, though extensions can reach a model themselves through an interface
+UnoCode offers them.</p>
+<p><strong>It sends the file you are looking at.</strong> Every question carries the whole of the active
+file with it, rebuilt each time you ask, so an answer is about the file as it stands and not as it was
+when the conversation started. It is not the folder: the other files are not read, and nothing is sent
+that you do not have open. A file too large to fit is cut, and the assistant says it was cut.</p>
+<p>Two more things about it are deliberate. Every edit it proposes is shown to you as a
+<strong>diff first</strong> and applied only when you accept it, as a single step of undo. And it needs
+a key for whichever model service you use, which is stored in the machine's own secret store rather
+than in your settings file - <b>AI: Set API Key</b> in the palette, typed into a masked box, and the
+store it went into is named on screen when it is saved.</p>
+<div class="note warn"><b>It sends the open file, every time</b>The assistant talks to a service over the internet, which means the text it sends leaves this machine: your question, and the entire contents of the file you have open. The panel names that file every time it sends one, so you can see what went. If that is not appropriate for what you are working on, do not use it - there is nothing to configure to make a network request private.</div>
 
 <h2 id="settings">Settings</h2>
 <p>Settings live in a text file, and UnoCode edits it like any other file: open the palette and choose
