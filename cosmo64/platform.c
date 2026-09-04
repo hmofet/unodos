@@ -10,6 +10,7 @@
 
 int uno_main(void);
 void uno_modload_reserve(void);    /* pc64_modload.c: carve the module arena */
+void unolog_init(void);            /* unolog.c: the system log's ring + config */
 
 /* ---- the module arena (M8) ----------------------------------------------
  * pc64_modload.c instantiates a .UNO into pages it gets from one of three
@@ -149,6 +150,11 @@ void c_main(void *dtb)
      * while the desktop draws fine -- the exact failure the loader's own
      * comment warns is easy to call working. */
     uno_modload_reserve();
+    /* The system log, after the storage report for the reason uefi_main.c
+     * gives: records buffer until a volume appears, but starting it once the
+     * card is mounted means LOGS\ and the config are read before anything
+     * has been filtered by the default level. */
+    unolog_init();
     /* USB before the shell too: enumeration takes a moment (port power,
      * debounce, the hub walk) and the desktop should come up with its mouse
      * rather than acquire one a second later. */

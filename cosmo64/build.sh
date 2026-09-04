@@ -101,7 +101,16 @@ shell )
           theme_amiga theme_c64 theme_apple2 theme_next"
   PCORE="fb pc64_libc pc64_math pc64_font pc64_icons pc64_qoi pc64_uui_apps \
          mac_compat pc64_io pc64_write pc64_clock pc64_files pc64_uui \
-         fat pc64_fs hid_kbd net"
+         fat pc64_fs hid_kbd net uno_binds unolog"
+  # The providers slice (after M8): three portable subsystems that were
+  # export stubs, compiled for real now that modules can reach them.
+  # uno_binds (key bindings + app prefs, persisted beside SHELL.CFG) and
+  # unolog (the system log LOGVIEW.UNO shows) are plain pc64 files above;
+  # uno3d is the software rasteriser plus Runner3D, whose kernel side
+  # (pc64_games.c) names the Intel backend by default and takes the soft one
+  # here by the UNO_U3D_BACKEND seam -- no PCI GPU exists on this SoC.
+  U3D="uno3d uno3d_soft uno3d_game"
+  GAMES="-DUNO_U3D_BACKEND=u3d_backend_soft"
   # M8: the .UNO module loader, compiled unchanged but for two seams it
   # carries for this platform. -DUNO_MODLOAD_LOG routes its diagnostics
   # ("modload: bad crc", "unresolved import X") to uno_dbg_log and so to the
@@ -196,6 +205,8 @@ shell )
     for f in $THEMES; do $CC $SHCF -c ../unoui/themes/\$f.c -o build/t_\$f.o; done && \
     for f in $PCORE; do $CC $SHCF -c ../pc64/\$f.c -o build/p_\$f.o; done && \
     $CC $SHCF $MODLOAD -c ../pc64/pc64_modload.c -o build/p_pc64_modload.o && \
+    $CC $SHCF $GAMES -c ../pc64/pc64_games.c -o build/p_pc64_games.o && \
+    for f in $U3D; do $CC $SHCF -c ../uno3d/\$f.c -o build/p_\$f.o; done && \
     for f in $URC; do $CC $SHCF -c ../pc64/\$f.c -o build/p_\$f.o; done && \
     for f in $URCDBG; do $CC $SHCF -DUNO_DEBUG -c ../pc64/\$f.c -o build/p_\$f.o; done && \
     $CC $USBCF -DC64_XDMA -c ../pc64/xhci.c -o build/p_xhci.o && \
