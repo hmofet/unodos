@@ -110,7 +110,8 @@ def build_disk():
 def boot_qemu():
     sh(["cp", OVMF_VARS, VARS])
     cmd = [
-        "qemu-system-x86_64", "-machine", "q35", "-m", "512", "-cpu", "max",
+        "qemu-system-x86_64", "-machine", "q35",
+        "-m", os.environ.get("URC_MEM_MB", "512"), "-cpu", "max",
         "-drive", "if=pflash,format=raw,readonly=on,file=" + OVMF_CODE,
         "-drive", "if=pflash,format=raw,file=" + VARS,
         "-drive", "format=raw,file=" + DISK,
