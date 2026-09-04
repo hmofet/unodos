@@ -127,15 +127,16 @@ shell )
   # virt board's missing MSDC otherwise leaves untested (36 MiB of .bss --
   # never ship a BLKTEST image)
   [ -n "$BLKTEST" ] && BASECF="$BASECF -DC64_BLKTEST"
-  # PMIC_WRITE=1: compile the PMIC WRITE path in. It is off by default and
-  # that default is load-bearing -- pmic.c can read the MT6358 in every build,
-  # and in a default build the code that could write it does not exist at all
-  # (the whitelist, the read-modify-write helper and the wrapper's write call
-  # are all inside the #if). Every rail on this board is behind those
-  # registers, so "declines to write" and "cannot write" are worth the
-  # distinction. Arm this only once a boot log has said MAP CONFIRMED.
-  [ -n "$PMIC_WRITE" ] && BASECF="$BASECF -DC64_PMIC_WRITE=1" \
-      && echo "[shell] PMIC WRITES ARE ARMED -- this build can change rails"
+  # PMIC_WRITE=0 builds an image that PHYSICALLY CANNOT write the PMIC: the
+  # whitelist, the read-modify-write helper and the wrapper's write call all
+  # live inside pmic.c's #if, so no instruction that sets the command word's
+  # write bit is emitted at all. That was the default while the MT6358 address
+  # map was unverified; it is 1 now, because the map was confirmed on hardware
+  # on 2026-09-03 and a build that cannot switch the two SD rails on is a
+  # build with no SD card. Reach for 0 on a NEW unit, or after touching any
+  # address in pmic.c's table. pmic.c's own header carries the full argument.
+  [ -n "$PMIC_WRITE" ] && BASECF="$BASECF -DC64_PMIC_WRITE=$PMIC_WRITE" \
+      && echo "[shell] PMIC writes: $PMIC_WRITE"
   # -Wno-error=implicit-function-declaration: mingw-gcc merely warns on the
   # declared-later-in-the-same-file pattern pc64_uui.c uses; clang 16+ errors.
   # The linker still catches genuinely missing functions.
