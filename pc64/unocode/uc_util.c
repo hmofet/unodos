@@ -89,6 +89,64 @@ int uc_is_word(int c)
            (c >= '0' && c <= '9') || c == '_' || c >= 0x80;
 }
 
+/* ---- the assistant's file context (UCD-58) ---------------------------------
+ * Without this the model is asked about code it cannot see, and it says so:
+ * "I don't see a program in your message. Could you please paste the code"
+ * was the live answer to "in one sentence, what does this program do?" with
+ * the file open on the other half of the screen.
+ *
+ * TRUNCATION IS SAID IN THE TEXT, not just returned in the flag.  A model
+ * handed the first 24 KB of a 40 KB file and told nothing will answer about
+ * the whole file with complete confidence, and the part it never saw is
+ * exactly the part the reader cannot check.
+ */
+static void ctx_put(char *out, int *p, int cap, const char *s)
+{
+    if (!s) return;
+    while (*s && *p < cap - 1) out[(*p)++] = *s++;
+    out[*p] = 0;
+}
+
+int uc_ctx_file(char *out, int cap, const char *name, const char *text,
+                int len, int *truncated)
+{
+    int p = 0, room, n, i;
+    char num[24];
+
+    if (truncated) *truncated = 0;
+    if (cap <= 0) return 0;
+    out[0] = 0;
+    if (!text || len <= 0) return 0;
+    if (!name || !name[0]) name = "an untitled file";
+
+    ctx_put(out, &p, cap, "The user is editing a file called ");
+    ctx_put(out, &p, cap, name);
+    ctx_put(out, &p, cap, " in UnoCode. Its contents follow.\n\n----8<---- ");
+    ctx_put(out, &p, cap, name);
+    ctx_put(out, &p, cap, " ----8<----\n");
+
+    /* Reserve the footer's room BEFORE copying, so the sentence that says the
+     * file was cut can never itself be the thing that gets cut. */
+    room = cap - 1 - p - 96;
+    if (room < 0) room = 0;
+    n = len > room ? room : len;
+    for (i = 0; i < n; i++) out[p + i] = text[i];
+    p += n;
+    out[p] = 0;
+
+    if (n < len) {
+        if (truncated) *truncated = 1;
+        ctx_put(out, &p, cap, "\n----8<---- truncated: the first ");
+        uc_itoa(num, n);
+        ctx_put(out, &p, cap, num);
+        ctx_put(out, &p, cap, " bytes of ");
+        uc_itoa(num, len);
+        ctx_put(out, &p, cap, num);
+        ctx_put(out, &p, cap, " ----8<----\n");
+    }
+    return p;
+}
+
 /* ---- UTF-8 -------------------------------------------------------------------
  * The document stays a BYTE buffer.  UTF-8 is what files hold and what the
  * clipboard carries, and transcoding on every load and save to store something

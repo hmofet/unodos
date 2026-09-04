@@ -1051,6 +1051,13 @@ void uc_upper(char *s);
 int  uc_itoa(char *out, long v);
 int  uc_is_word(int c);
 
+/* Format one open file as the assistant's system-context block (UCD-58).
+ * Returns the length written; *truncated (may be 0) is set when the file did
+ * not fit.  Pure string work, and it lives here rather than in uc_ai.c so the
+ * host test can reach it - the same reason the rest of this file exists. */
+int  uc_ctx_file(char *out, int cap, const char *name, const char *text,
+                 int len, int *truncated);
+
 /* ---- UTF-8 (uc_util.c) -----------------------------------------------------
  * The document is a byte buffer holding UTF-8; these are how the rest of the
  * editor walks it a character at a time.  uc_u8_get() is strict and never

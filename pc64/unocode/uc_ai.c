@@ -46,6 +46,7 @@
 #define AI_BLOCKS    32              /* code blocks the transcript can hold  */
 #define AI_HITS      40              /* clickable regions from the last draw */
 #define AI_PROP_CAP  4096            /* the "lines leaving" side of an edit  */
+#define AI_CTX_CAP   (24 * 1024)     /* the open file, sent as system context */
 
 enum { AI_USER = 0, AI_ASSIST = 1, AI_NOTE = 2 };
 
@@ -177,7 +178,8 @@ static void ai_sse(void *user, const char *event, const char *data, int len)
  * JSON text of the "messages" array.  Both slots come through here, so there
  * is one place that knows the endpoint, the headers and where the key comes
  * from.  Returns the handle, or 0 with `why` set to a sentence. */
-static uc_http *ai_begin_anthropic(const char *msgs, int msgs_len, void *user,
+static uc_http *ai_begin_anthropic(const char *msgs, int msgs_len,
+                                   const char *sys, int sys_len, void *user,
                                    const char **why)
 {
     char key[UC_SECRET_MAX];
@@ -192,13 +194,21 @@ static uc_http *ai_begin_anthropic(const char *msgs, int msgs_len, void *user,
                "palette (Ctrl+Shift+P).";
         return 0;
     }
-    cap = msgs_len + 512;
+    /* x6 on the context, not x2: an escaped control byte becomes \u00XX, and
+     * source files carry tabs. The p >= cap guard below still catches it. */
+    cap = msgs_len + sys_len * 6 + 512;
     b = (char *)malloc((unsigned long)cap);
     if (!b) { *why = "out of memory building the request"; return 0; }
     uc_buf_raw(b, &p, cap, "{\"model\":");
     uc_buf_json(b, &p, cap, uc_cfg_str("ai.model"));
     uc_buf_raw(b, &p, cap, ",\"max_tokens\":");
     uc_buf_int(b, &p, cap, uc_cfg_int("ai.maxTokens"));
+    /* The open file rides `system` rather than the transcript, so the
+     * conversation the user can read back is the one they actually wrote. */
+    if (sys && sys_len > 0) {
+        uc_buf_raw(b, &p, cap, ",\"system\":");
+        uc_buf_json(b, &p, cap, sys);
+    }
     uc_buf_raw(b, &p, cap, ",\"stream\":true,\"messages\":");
     uc_buf_n(b, &p, cap, msgs, msgs_len);
     uc_buf_raw(b, &p, cap, "}");
@@ -261,8 +271,11 @@ int uc_lm_begin(const char *messages_json, UcLmDeltaFn on_delta,
     if (g_lmreq) { *why = "one model request at a time - the running one has "
                           "not finished"; return 0; }
     g_lm_apierr[0] = 0;
+    /* No file context here on purpose: an extension supplies its own messages
+     * and its own framing, and quietly appending the user's open buffer to a
+     * third-party extension's request would be exfiltration, not a feature. */
     g_lmreq = ai_begin_anthropic(messages_json, (int)strlen(messages_json),
-                                 &g_lmreq, why);
+                                 0, 0, &g_lmreq, why);
     if (!g_lmreq) return 0;
     g_lm_delta = on_delta;
     g_lm_done = on_done;
@@ -283,6 +296,8 @@ static void ai_send(void)
     char *b;
     int cap, p = 0, i, first = 1;
     const char *why = 0;
+    static char ctx[AI_CTX_CAP];       /* 24 KB - not a stack frame        */
+    int ctx_len;
 
     if (g_req || !g_inlen) return;
     /* the key is checked BEFORE the turn is added, so a keyless send leaves
@@ -298,6 +313,38 @@ static void ai_send(void)
     ai_turn(AI_USER, g_input, g_inlen);
     g_inlen = 0;
     g_input[0] = 0;
+
+    /* THE OPEN FILE GOES WITH THE QUESTION (UCD-58), and it is ANNOUNCED.
+     *
+     * Announced because a copy of the buffer leaving the machine is the one
+     * thing here a user would want to know about, and until now the only
+     * place it was written down was a warning box in the manual. A note names
+     * the file on every send; notes are local, so the note itself is never
+     * part of what is sent.
+     *
+     * Rebuilt per send rather than once per conversation: the file is being
+     * EDITED, and answering turn three against the buffer as it stood at turn
+     * one is a subtler wrong answer than refusing outright. */
+    ctx_len = 0;
+    ctx[0] = 0;
+    {
+        UcDoc *d = uc_doc_active();
+        if (d && d->text && d->len > 0) {
+            int trunc = 0;
+            char note[UC_NAME_MAX + 64], num[24];
+            const char *nm = d->name[0] ? d->name : "an untitled file";
+            ctx_len = uc_ctx_file(ctx, (int)sizeof ctx, nm, d->text, d->len,
+                                  &trunc);
+            uc_scpy(note, "Sent with ", sizeof note);
+            uc_scat(note, nm, sizeof note);
+            uc_scat(note, " - ", sizeof note);
+            uc_itoa(num, uc_line_count(d));
+            uc_scat(note, num, sizeof note);
+            uc_scat(note, trunc ? " lines, truncated to fit." : " lines.",
+                    sizeof note);
+            ai_note(note);
+        }
+    }
 
     /* the messages array: every user and assistant turn, in order, with
      * adjacent same-role turns MERGED - notes are dropped, and a dropped
@@ -339,7 +386,7 @@ static void ai_send(void)
         return;
     }
     b[p] = 0;
-    g_req = ai_begin_anthropic(b, p, 0, &why);
+    g_req = ai_begin_anthropic(b, p, ctx_len ? ctx : 0, ctx_len, 0, &why);
     free(b);
     if (!g_req) { ai_note(why); return; }
     ai_turn(AI_ASSIST, "", 0);      /* the deltas stream into this turn      */
