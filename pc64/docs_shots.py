@@ -395,7 +395,15 @@ def sc_fonts(q):
     key(q, "tab", "tab"); time.sleep(0.3)            # strip -> Resolution -> Font
     key(q, "down"); time.sleep(0.5)                  # 1st TTF (Sans)
     shot(q, "font_ttf")
-    key(q, "up"); time.sleep(0.4)                    # restore the default face
+    # Restore the default face by walking to the control AGAIN. Changing the
+    # font rebuilds the Control Panel in the new metrics and focus does not
+    # survive the rebuild, so a bare `up` here went nowhere: every figure after
+    # this one was in Sans, the preference persisted into a vvfat-rw build/esp,
+    # and the whole August set shipped in a face the manual says is not the
+    # default (found 2026-09-04).
+    cp_open_tab(q, 0)
+    key(q, "tab", "tab"); time.sleep(0.3)            # strip -> Resolution -> Font
+    key(q, "up"); time.sleep(0.8)                    # back to Chicago
 
 def sc_resolution(q):
     # Display tab -> Resolution dropdown (1st control after the strip).
@@ -534,20 +542,35 @@ def sc_studio(q):
     shot(q, "studio_run")
 
 def sc_studio_ai(q):
-    # The AI column needs a wide desktop, so bump the resolution first
-    # (Control Panel -> Resolution dropdown -> a bigger mode), then open Studio.
+    """Studio with the assistant column, which needs a wide desktop.
+
+    A mode change is Apply and then Keep within the countdown, and Keep is a
+    click: Enter after Apply does nothing (probed 2026-09-04), and the panel
+    rebuilds under the new metrics so a Tab walk is not worth trusting. Five
+    steps down the list is 1280x800 on QEMU's GOP (640x480, 800x600,
+    1024x768, 1280x720, 1280x800), the one mode that fills the screendump
+    edge to edge instead of sitting letterboxed inside it. Positions are read
+    off the probe shots for the two modes involved."""
     close_all(q); launch(q, A("control"))
     key(q, "tab", "tab"); time.sleep(0.3)            # focus Resolution dropdown
-    key(q, "down", gap=0.5); key(q, "down", gap=0.5) # up two modes; shell reflows
-    time.sleep(1.4)
+    for _ in range(5):
+        key(q, "down", gap=0.4)                      # -> 1280x800
+    key(q, "tab"); time.sleep(0.3)                   # -> Apply
+    key(q, "ret"); time.sleep(2.5)                   # mode switch + reflow
+    click(q, 172, 168); time.sleep(1.0)              # Keep (1280x800 layout)
     close_all(q)
-    launch(q, A("studio"), settle=2.8)                        # Studio, now wide -> AI column shows
+    launch(q, A("studio"), settle=2.8)               # Studio, now wide -> AI column shows
     shot(q, "studio_ai")
-    # back to the default resolution so later scenes match
+    # back to the default mode so later scenes match; Keep again, this time
+    # where the 640x400 layout (pixel-doubled in the screendump) puts it
     close_all(q); launch(q, A("control"))
     key(q, "tab", "tab"); time.sleep(0.3)
-    key(q, "up", gap=0.5); key(q, "up", gap=0.5)
-    time.sleep(1.0); close_all(q)
+    for _ in range(5):
+        key(q, "up", gap=0.4)
+    key(q, "tab"); time.sleep(0.3)
+    key(q, "ret"); time.sleep(2.5)
+    click(q, 354, 337); time.sleep(1.0)
+    close_all(q)
 
 # ---- the SDK sample programs (the manual's dev-samples.html) ---------------
 # The samples are staged onto the shots image as INSTALLED apps - built on the
@@ -786,15 +809,37 @@ def sc_office_duum(q):
     shot(q, "office_duum")
 
 
-def sc_browser_disk(q):
+def _browser_home(q):
+    """Launch the browser ON THE START PAGE, whatever it was showing before.
+
+    The browser keeps its tabs when its window is closed and reopened within
+    one boot, so a scene that closed it on uno:engine (the log-viewer scene
+    walks it through uno:sample, uno:script and uno:engine to make log lines)
+    hands the next scene a browser that opens on Engines. Every browser figure
+    of the 2026-09-04 re-shoot was that page until this went in. The address
+    bar has no select-all: End, then enough Backspaces, then the location."""
     close_all(q); launch(q, A("browser"), settle=2.0)
+    combo(q, "ctrl", "l"); time.sleep(0.3)
+    key(q, "end"); time.sleep(0.2)
+    for _ in range(40):
+        key(q, "backspace", gap=0.03)
+    text(q, "uno:start"); key(q, "ret"); time.sleep(1.2)
+
+def sc_browser_disk(q):
+    _browser_home(q)
     shot(q, "browser_files")
 
 def _browser_open(q, row, tag, settle=1.6):
     # Fresh browser each time. Entering the list from the address bar lands on
     # row 1 (Sample.html); Up from row 0 jumps BACK to the address bar, so we
     # navigate RELATIVE to row 1 and never go above row 0.
-    close_all(q); launch(q, A("browser"), settle=2.0)
+    _browser_home(q)
+    # The list remembers its selection across scenes (the tab persists), and
+    # entering it from the address bar lands on the row AFTER the remembered
+    # one - so Script.html photographed as README.TXT. Walk up past row 0,
+    # which parks the selection at 0 and the focus in the address bar.
+    for _ in range(12):
+        key(q, "up", gap=0.08)
     key(q, "down"); time.sleep(0.3)                  # address bar -> list row 1
     delta = row - 1
     for _ in range(abs(delta)):
@@ -955,7 +1000,40 @@ SCENES = {
     "browser_docs": sc_browser_docs, "cp_network": sc_cp_network,
     "browser_http": sc_browser_http, "browser_https": sc_browser_https,
 }
-CORE = list(SCENES.keys())
+CORE = [k for k in SCENES if not k.startswith("probe_")]   # probes run by name only
+
+def sc_probe_resolution(q):
+    """Not a manual figure. Photographs the Display tab after picking a larger
+    mode, pressing Apply, and then Tab+Enter - to learn where Keep sits."""
+    close_all(q); launch(q, A("control"))
+    key(q, "tab", "tab"); time.sleep(0.3)            # strip -> Resolution
+    key(q, "down", gap=0.5); key(q, "down", gap=0.5) # two modes up
+    key(q, "tab"); time.sleep(0.3)                   # -> Apply
+    key(q, "ret"); time.sleep(2.5)                   # mode switch + reflow
+    shot(q, "probe_res_applied")
+    key(q, "tab"); time.sleep(0.3)
+    key(q, "ret"); time.sleep(1.5)
+    shot(q, "probe_res_after_tab_enter")
+SCENES["probe_resolution"] = sc_probe_resolution
+
+def sc_probe_modes(q):
+    """Not a manual figure. For n in 3..5: pick the mode n steps down the
+    Resolution list, Apply, photograph, and let the countdown revert it.
+    The last step also presses Enter after Apply to see whether that is Keep."""
+    for n in (3, 4, 5):
+        close_all(q); launch(q, A("control"))
+        key(q, "tab", "tab"); time.sleep(0.3)
+        for _ in range(n):
+            key(q, "down", gap=0.4)
+        key(q, "tab"); time.sleep(0.3)
+        key(q, "ret"); time.sleep(2.5)
+        shot(q, "probe_mode_%d" % n)
+        if n == 5:
+            key(q, "ret"); time.sleep(3.0)
+            shot(q, "probe_mode_5_enter")
+        time.sleep(17.0)                             # the countdown reverts it
+        close_all(q)
+SCENES["probe_modes"] = sc_probe_modes
 
 # Scenes that leave something on screen, and therefore go LAST whatever order
 # they were asked for. `close_all` is Ctrl-W, which the shell refuses on a
@@ -966,7 +1044,12 @@ CORE = list(SCENES.keys())
 # taskbar chip on every figure after it, in a run that reported no failures.
 # Filed to the toolkits lane; deferring the scene is the fix that is available
 # here, and it is a real one - nothing else in the set leaves a window.
-DEFERRED = ["unoamp"]
+# uiscale joins it: at 150% the Control Panel's tab strip overflows into a
+# ">>" chevron that takes a Tab stop, so the walk back to the UI-scale control
+# misses and the desktop stays at 150%. The next Start-menu walk then lands on
+# Restart and the guest reboots (2026-09-04, 27 scenes lost). Last is safe:
+# nothing follows it to be scaled wrong.
+DEFERRED = ["studio_ai", "uiscale", "unoamp"]   # studio_ai changes the mode
 
 
 def main():
