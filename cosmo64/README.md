@@ -102,10 +102,9 @@ Input is 3.1x cheaper and the shell runs 28% more frames -- and the M7 number
 **Open, in the order worth doing:**
 
 1. **Fill in behind the modules.** M8 proved the ABI; what the apps find
-   behind 191 of their possible imports is a stub. Three of those groups are
-   portable code that should compile in now: `uno_binds.c` (prefs, now that
-   SHELL.CFG has a volume), `unolog.c` (what LOGVIEW.UNO exists to show) and
-   `uno3d.c` + `uno3d_soft.c` (Runner3D). Then the Office modules, which
+   behind their possible imports is often a stub. The first three portable
+   groups are now real (see "The providers" below): `uno_binds.c`,
+   `unolog.c`, and `uno3d.c` + `uno3d_soft.c`. Next the Office modules, which
    need `unodoc/` staged. See M8 below.
 2. **The eMMC log window loses the boot story on a long session.** It is 128
    KiB and `c64_log_flush()` keeps the TAIL, which was right when a session was
@@ -1471,3 +1470,75 @@ A53/A73 pair for a module that was just written into `.bss`. One thing the
 session did not show: the boot story. After two hours of `perf:` lines the
 96 KB URC replay window no longer reached back to `modload: arena`, which is
 open item 2 above doing exactly what it says.
+
+## The providers (2026-09-04): three stubbed subsystems made real
+
+M8 left 191 of the kernel's exports as `stubs.c` placeholders, so a module
+that imported one loaded and then found the feature absent. Three of those
+groups were never absent by necessity -- they are portable pc64 code that only
+needed a volume to exist and a compiler to reach them. Now that M8's SD card
+gives the first and M8's ABI the second, they compile into the shell for real:
+
+- **`uno_binds.c`** -- key bindings and per-app preferences. They persist
+  beside `SHELL.CFG` on the SD card through `uno_fs_pref_vol`, so a rebind or
+  an app's remembered setting survives a reboot. Every dependency
+  (`uno_fs_read/write/pref_vol`, the libc it uses) the shell already defined.
+- **`unolog.c`** -- the system log. `platform.c` calls `unolog_init()` after
+  the storage report, exactly where `uefi_main.c` calls it, so `LOGS\` is
+  reachable on the first record. This is the subsystem `LOGVIEW.UNO` exists to
+  show, and the URC gate now proves the loop end to end: the module loads and
+  draws real records (`union file sink: fat volume 1`, `union started:
+  level=notice`), not the empty ring the stub returned.
+- **`uno3d.c` + `uno3d_soft.c`** -- the 3D library and its software
+  rasteriser, plus `uno3d_game.c` and `pc64_games.c` for Runner3D on top. The
+  kernel side names the Intel backend by default (`pc64_games.c`, unchanged on
+  x86); this build defines `UNO_U3D_BACKEND=u3d_backend_soft` at compile time
+  through a new `#ifndef` seam, because the MT6771 has no PCI GPU for
+  `uno3d_intel.c` to bind and no reason to drag that file in. One export
+  (`u3d_backend_intel`) leaves the roster and one file (`uno3d_intel.c`) is
+  never compiled; nothing else about uno3d changes.
+
+Every dependency these five files reach for was already defined by the shell
+(checked against the M7 symbol table), so this is purely a matter of moving
+them out of `stubs.c` and into `build.sh`'s `PCORE`/`U3D` lists. Cost: about
+9 MB more `.bss`, almost all of it `uno3d_soft.c`'s full-panel z-buffer, all
+runtime-zeroed and none shipped.
+
+### Proving Runner3D: `rncap.py`, because URC cannot
+
+A fullscreen native game defeats the URC command channel, and the reason is
+structural, not a bug. Runner3D drops the desktop to 540x270 and redraws every
+frame, so the guest emits `perf:` lines continuously; those share the one URC
+tx queue with command replies, and the queue stays backed up with log spam, so
+`uptime`, `screen grab` and `close` all time out. The link is up the whole
+time -- the log keeps streaming, which is how you can see the guest is
+healthy -- but nothing can be *asked* of it. `qharness.py`'s end-of-run panel
+check has the same problem from the other side: it reconstructs the panel at
+the default 1080x540 and a fullscreen game legitimately changed that size.
+
+So a fullscreen native app is captured the way CLAUDE.md's screenshot rule
+says to when a control channel exists -- straight off the panel, no command
+reply needed. `rncap.py` boots the payload on the same QEMU virt board,
+launches the app over URC (the `launch` verb answers *before* the game takes
+the desktop), then reads the framebuffer with QMP `pmemsave` and reconstructs
+the eye view from the payload's own published geometry:
+
+```sh
+python3 rncap.py build/shell.bin /tmp/runner3d.png runner3d
+# -> geometry 540x270 scale 4 ...; 145800 of 145800 px non-background
+```
+
+The result shows the textured corridor, the score, the control hint, and
+`soft` -- `u3d_backend_name()`, i.e. the software rasteriser reporting itself,
+which is the whole point of the `UNO_U3D_BACKEND` seam working. `rncap.py` is
+not part of the merge gate (`qharness.py` is, unchanged); it is how a change to
+uno3d or any native game is eyeballed without a flash.
+
+### Gate
+
+Plain, EL2 and URC gates green. The URC gate additionally loads `LOGVIEW.UNO`
+(real records) and `PAINT.UNO`. `rncap.py` captures Runner3D. `BLKTEST=1` was
+not re-run: nothing in the storage stack changed. On x86, `pc64_games.c`'s new
+seam defaults to the Intel backend, so the shared file is byte-for-byte
+behaviour-identical there; the pc64 prod + debug builds and `tools/gate.sh`
+confirm it.

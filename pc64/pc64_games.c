@@ -57,9 +57,16 @@ static int gRnInit, gRnL, gRnR;
  * because entering and leaving fullscreen are the two moments the render size
  * changes and only the shell knows about both.  This runs lazily from
  * rn_frame, so it always initialises at whatever size is live by then. */
+/* The rasteriser Runner3D draws with.  pc64 on a PC takes the Intel backend
+ * (which falls back to software itself when no iGPU is mapped); a platform
+ * with no PCI GPU at all names the software one at compile time, so this
+ * file compiles unchanged there without dragging uno3d_intel.c along. */
+#ifndef UNO_U3D_BACKEND
+#define UNO_U3D_BACKEND u3d_backend_intel
+#endif
 static void rn_start(void)
 {
-    u3d_use_backend(&u3d_backend_intel);
+    u3d_use_backend(&UNO_U3D_BACKEND);
     game_init(FB_W, FB_H); u3d_init(FB_W, FB_H);
     gRnInit = 1; gRnL = gRnR = 0;
 }

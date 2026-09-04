@@ -79,12 +79,8 @@ int  tls_recv(void)       { return -1; }
 V0(tls_free)
 int  tls_conn_error(void) { return -1; }
 
-/* uno3d: the software rasteriser is portable and a candidate to compile in;
- * until it is, every call is a no-op and the triangle count is 0 */
-V0(u3d_init) V0(u3d_shutdown) V0(u3d_begin) V0(u3d_end) V0(u3d_present)
-V0(u3d_perspective) V0(u3d_load_identity) V0(u3d_translate) V0(u3d_scale)
-V0(u3d_rotate_x) V0(u3d_rotate_y) V0(u3d_rotate_z) V0(u3d_triangles)
-I0(u3d_last_tris)
+/* uno3d: REAL as of the providers slice (uno3d.c + uno3d_soft.c, and
+ * pc64_games.c + uno3d_game.c for Runner3D on top of them) */
 
 /* unojs: no engine. ujs_new() answers NULL and every other entry point needs
  * the vm it would have returned, so the rest are unreachable in practice;
@@ -112,13 +108,8 @@ su64 ujs_heap_used(void) { return 0; }
 I0(ujs_promise) V0(ujs_promise_resolve) V0(ujs_promise_reject)
 I0(ujs_run_jobs) V0(ujs_function_set_data)
 
-/* key bindings + app preferences (uno_binds.c): portable, and a candidate to
- * compile in now that SHELL.CFG has a volume to live on; until then a pref
- * reads as unset and a binding as its default */
-int  uno_bind_name(int action, char *buf, int cap) { (void)action; empty_str(buf, cap); return 0; }
-I0(uno_bind_keyid) V0(uno_bind_reset) I0(uno_bind_set)
-int  uno_pref_get(const char *name, char *buf, int cap) { (void)name; empty_str(buf, cap); return 0; }
-I0(uno_pref_set)
+/* key bindings + app preferences: REAL (uno_binds.c) as of the providers
+ * slice -- BINDS/prefs persist on the SD card beside SHELL.CFG */
 
 /* unopkg: the two entries a foreign-app shim may import */
 I0(uno_pkg_launch)
@@ -142,17 +133,8 @@ V0(uno_vm_con_key) V0(uno_vm_con_clear)
 P0(uno_vm_fb) V0(uno_vm_input_char) V0(uno_vm_input_scan) V0(uno_vm_input_mouse)
 I0(uno_vm_input_str) V0(uno_vm_focus_display)
 
-/* unolog: the system log's full surface (unolog itself is stubbed above).
- * unolog.c is portable and the third candidate to compile in -- it is what
- * LOGVIEW.UNO exists to show. Until then the ring is empty: first == next. */
-I0(unolog_flush) I0(unolog_format) I0(unolog_level) V0(unolog_set_level)
-I0(unolog_remote_level) V0(unolog_set_remote_level) I0(unolog_set_remote)
-S0(unolog_remote_host) I0(unolog_remote_port)
-I0(unolog_set_listen) I0(unolog_listening) I0(unolog_save_cfg)
-I0(unolog_first) I0(unolog_next) I0(unolog_get)
-I0(unolog_dropped) I0(unolog_sent) I0(unolog_received)
-const char *unolog_sev_name(void) { return "?"; }
-const char *unolog_fac_name(void) { return "?"; }
+/* unolog: REAL (unolog.c) as of the providers slice; platform.c calls
+ * unolog_init() after the storage report, as uefi_main.c does */
 
 /* unoscript: the production scripting surface. unoscript.c is adjudicated by
  * unosecure, which has no store here (see the accounts block below), so the
@@ -291,8 +273,6 @@ I0(unosec_current_session)
 V0(pc64_remote_open)
 
 /* ---- logging / transfer / virt (unoauto + URC are real as of M6) --------- */
-void unolog(void) { }
-V0(unolog_tick)
 V0(unostream_tick)
 V0(unoxfer_job_tick)
 V0(uno_vmm_tick)
@@ -327,11 +307,7 @@ V0(pc64_browser_open)
 V0(pc64_browser_open_path)
 I0(pc64_browser_key)
 I0(pc64_browser_canvas)
-V0(pc64_game_open)
-V0(pc64_game_close)
-V0(pc64_game_tick)
-I0(pc64_game_canvas)
-I0(pc64_game_fullscreen)
+/* (pc64_games.c is real now: Runner3D on the soft rasteriser) */
 
 /* ---- packaging (pc64_pkg.c: the installer side, not carried) ------------- */
 I0(uno_pkg_probe)
