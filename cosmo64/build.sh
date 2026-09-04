@@ -13,6 +13,7 @@
 #   ./build.sh shell    -> the pc64 SHELL          (build/shell.bin + boot img)
 #   ./build.sh calib    -> the TOUCH CALIBRATION payload (build/calib.bin)
 #   ./build.sh usb      -> the USB HOST PROBE      (build/usbprobe.bin)
+#   ./build.sh apps     -> the .UNO APP MODULES    (build/apps/*.UNO, M8)
 #
 # Verify on quill (real QEMU; see qharness.py):
 #   scp qharness.py build/<x>.bin quill:/work/unodos-cosmo64/ &&
@@ -45,8 +46,27 @@ BASECF="-O2 -Wall -Wextra -ffreestanding -fno-stack-protector -fno-stack-check \
 LINK="-nostdlib -Wl,--image-base,0x40080000 -e _start -Wl,-Xlink=/merge:.unodrv=.data"
 
 stage_quill() {
-  ssh "$QUILL" "mkdir -p $QDIR/cosmo64/build $QDIR/pc64/build $QDIR/unoui/themes $QDIR/uno3d"
-  scp -q ./*.s ./*.c ./*.h ./*.py "$QUILL:$QDIR/cosmo64/"
+  ssh "$QUILL" "mkdir -p $QDIR/cosmo64/build $QDIR/pc64/build $QDIR/pc64/tools $QDIR/unoui/themes $QDIR/uno3d"
+  scp -q ./*.s ./*.c ./*.h ./*.py mkapps.sh "$QUILL:$QDIR/cosmo64/"
+}
+
+# The pc64 tree the shell and the .UNO modules are both built from, minus the
+# big vendored stacks a shell-only build never sees (tar over ssh: Git Bash
+# has no rsync). unojs is staged for its HEADERS: pc64_modload.c exports the
+# engine's embedding surface by name and includes unojs.h to do it.
+stage_tree() {
+  echo "[stage] pc64 core + unoui + cosmo64 -> quill"
+  stage_quill
+  (cd .. && tar czf - \
+      --exclude=pc64/upy --exclude=pc64/unocode --exclude=pc64/quickjs \
+      --exclude=pc64/shots --exclude=pc64/flash --exclude=pc64/remote \
+      --exclude=pc64/build --exclude=pc64/tools \
+      pc64 unoui uno3d unosound unomedia unoacpi unojs) | ssh "$QUILL" "tar xzf - -C $QDIR"
+  scp -q ../pc64/build/font_data.h ../pc64/build/world_map.h "$QUILL:$QDIR/pc64/build/"
+  # two files from the excluded pc64/tools: the URC host client, for
+  # qharness.py's QHARNESS_URC gate, and the module packer, for `apps`
+  scp -q ../pc64/tools/unoauto_remote.py "$QUILL:$QDIR/cosmo64/"
+  scp -q ../pc64/tools/mkuno.py "$QUILL:$QDIR/pc64/tools/"
 }
 
 mkdir -p build
@@ -72,19 +92,7 @@ case "$1" in
   ;;
 # ---------------------------------------------------------------------------
 shell )
-  echo "[shell] staging sources on quill (pc64 core + unoui + cosmo64)..."
-  stage_quill
-  # the pc64 tree minus the big vendored stacks a shell-only build never sees
-  # (tar over ssh: Git Bash has no rsync)
-  (cd .. && tar czf - \
-      --exclude=pc64/upy --exclude=pc64/unocode --exclude=pc64/quickjs \
-      --exclude=pc64/shots --exclude=pc64/flash --exclude=pc64/remote \
-      --exclude=pc64/build --exclude=pc64/tools \
-      pc64 unoui uno3d unosound unomedia unoacpi) | ssh "$QUILL" "tar xzf - -C $QDIR"
-  scp -q ../pc64/build/font_data.h ../pc64/build/world_map.h "$QUILL:$QDIR/pc64/build/"
-  # the URC host client, for qharness.py's QHARNESS_URC gate (pc64/tools is
-  # otherwise excluded above)
-  scp -q ../pc64/tools/unoauto_remote.py "$QUILL:$QDIR/cosmo64/"
+  stage_tree
 
   # The Tier-1 portable core (dependency survey 2026-08-31; the nine themes
   # are all named by kThemes[] in pc64_uui.c, so all nine link).
@@ -94,6 +102,13 @@ shell )
   PCORE="fb pc64_libc pc64_math pc64_font pc64_icons pc64_qoi pc64_uui_apps \
          mac_compat pc64_io pc64_write pc64_clock pc64_files pc64_uui \
          fat pc64_fs hid_kbd net"
+  # M8: the .UNO module loader, compiled unchanged but for two seams it
+  # carries for this platform. -DUNO_MODLOAD_LOG routes its diagnostics
+  # ("modload: bad crc", "unresolved import X") to uno_dbg_log and so to the
+  # eMMC log, where a load that fails on the device can be read afterwards;
+  # its aarch64 branch calls uno_pc64_code_sync (cpu.s) after writing a
+  # module's code. The arena it allocates from is platform.c's.
+  MODLOAD="-DUNO_MODLOAD_LOG"
   # M6: unoautomate + the URC remote channel, compiled UNCHANGED. The two
   # files that carry the privilege gate are built -DUNO_DEBUG (per file, like
   # the usb renames -- no shared header changes layout under it) because the
@@ -180,6 +195,7 @@ shell )
     for f in $UNOUI; do $CC $SHCF -c ../unoui/\$f.c -o build/u_\$f.o; done && \
     for f in $THEMES; do $CC $SHCF -c ../unoui/themes/\$f.c -o build/t_\$f.o; done && \
     for f in $PCORE; do $CC $SHCF -c ../pc64/\$f.c -o build/p_\$f.o; done && \
+    $CC $SHCF $MODLOAD -c ../pc64/pc64_modload.c -o build/p_pc64_modload.o && \
     for f in $URC; do $CC $SHCF -c ../pc64/\$f.c -o build/p_\$f.o; done && \
     for f in $URCDBG; do $CC $SHCF -DUNO_DEBUG -c ../pc64/\$f.c -o build/p_\$f.o; done && \
     $CC $USBCF -DC64_XDMA -c ../pc64/xhci.c -o build/p_xhci.o && \
@@ -205,6 +221,29 @@ shell )
   scp -q "$QUILL:$QDIR/cosmo64/build/shell.exe" build/
   FLATTEN_IMGSZ=shipped "$PY" flatten.py build/shell.exe build/shell.bin
   OUT=build/shell.bin
+  ;;
+# ---------------------------------------------------------------------------
+apps )
+  # M8: the .UNO app modules, cross-built for aarch64 (build/apps/*.UNO).
+  # Same pipeline as pc64/build.sh's [3b]/[3d] steps -- compile, list the
+  # undefined symbols, refuse any the kernel does not export, thunk, link as a
+  # DLL, flatten -- run by mkapps.sh ON quill with the shell's own flags, so a
+  # module meets the same -mstrict-align, LLP64 and freestanding rules as the
+  # kernel it will be loaded into. The modules are not part of the boot image:
+  # they go to APPS\ on the SD card (URC `put 1 APPS\X.UNO`, or from Trixie),
+  # or onto the RAM disk for the QEMU gate (QHARNESS_UNO=build/apps/X.UNO).
+  echo "[apps] cross-compiling the .UNO modules on quill..."
+  stage_tree
+  APPCF="$BASECF -mstrict-align -Wno-error=implicit-function-declaration \
+        -DFB_MAX_W=2160 -DFB_MAX_H=1080 \
+        -DUNO_COLOR=1 -DUNO_PC64 -DUNO_UUI \
+        -I$QDIR/pc64/include -I$QDIR/pc64 -I$QDIR/unoui -I$QDIR/uno3d \
+        -I$QDIR/unosound -I$QDIR/unomedia -I$QDIR/cosmo64"
+  ssh "$QUILL" "cd $QDIR/cosmo64 && LMBIN=$LMBIN APPCF='$APPCF' sh mkapps.sh"
+  mkdir -p build/apps
+  scp -q "$QUILL:$QDIR/cosmo64/build/apps/*.UNO" build/apps/
+  ls -l build/apps/*.UNO
+  exit 0
   ;;
 # ---------------------------------------------------------------------------
 calib )
@@ -244,7 +283,7 @@ usb )
   OUT=build/usbprobe.bin
   ;;
 * )
-  echo "usage: ./build.sh [shell|calib|usb]" >&2
+  echo "usage: ./build.sh [shell|calib|usb|apps]" >&2
   exit 1
   ;;
 esac

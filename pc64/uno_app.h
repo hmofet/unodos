@@ -106,6 +106,16 @@ typedef struct AppInterface {
 typedef const AppInterface *(*UnoAppEntry)(const KernelApi *k);
 
 #define UNO_APP_ENTRY_NAME "uno_app_main"
+/* The ABI word a module carries and a loader checks.  Its high byte names the
+ * MACHINE (0x00 = x86-64, which is what every module built before 2026-09-04
+ * says; 0xA6 = aarch64, the cosmo64 port), so a .UNO built for one
+ * architecture is refused by the other's loader at the check it already had,
+ * instead of being jumped into.  tools/mkuno.py writes the same word from the
+ * PE machine type; keep the two in step. */
+#if defined(__aarch64__)
+#define UNO_ABI_VERSION    0xA601
+#else
 #define UNO_ABI_VERSION    1
+#endif
 
 #endif /* UNO_APP_H */

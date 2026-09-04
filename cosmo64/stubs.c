@@ -16,17 +16,158 @@ typedef unsigned long long su64;
 #define V0(name) void name(void) { }
 #define P0(name) void *name(void) { return 0; }
 
-/* ---- module loader (fresh stub; pc64_modload_static.c is a decoy) -------- */
-I0(uno_mod_scan)
-P0(uno_mod_find)
-I0(uno_mod_load_uui)
-I0(uno_mod_load_pyrt)
-I0(uno_mod_load_pyapp)
-I0(uno_mod_peek_flags)
-I0(uno_mod_desc_read)
-V0(uno_modload_reserve)
-I0(uno_mod_count)
-P0(uno_mod_file)
+/* ---- module loader: REAL as of M8 (pc64_modload.c, compiled with two seams
+ * -- a log that reaches the eMMC and an I-cache sync; platform.c answers its
+ * arena request). What it still reaches for that this payload has no answer
+ * to is the EFI system table, and NULL is the answer that routes every one
+ * of its allocation paths to the arena. */
+P0(uno_pc64_st)
+
+/* ---- the export table's other side ---------------------------------------
+ * kExports[] in pc64_modload.c takes the ADDRESS of every function a .UNO may
+ * import, so each one has to link even where the subsystem behind it does not
+ * exist on this SoC. The stubs below answer "absent" in the shape the header
+ * promises -- NULL for a handle, 0 or -1 for a status by that header's own
+ * convention, "" for a name, an emptied buffer for an out-string -- so a
+ * module that asks gets a refusal, never a 0 that reads as success. A module
+ * whose import resolves to one of these loads fine and finds the feature
+ * missing at run time, which is the right order: Network says "no adapter",
+ * it does not fail to open. Each group dies as its subsystem is ported. */
+#define S0(name) const char *name(void) { return ""; }
+static void empty_str(char *buf, int cap) { if (buf && cap > 0) buf[0] = 0; }
+
+/* unodevices: no device tree yet (devmgr_find_class above answers none) */
+S0(devmgr_driver_name)
+I0(devmgr_info)
+
+/* the NIC families a USB host cannot carry (PCIe parts and radios); the one
+ * adapter this box can have is the AX88179, and net.c reaches it through
+ * netup.c's own table rather than these entry points */
+P0(e1000_nic)  P0(e1000_mac)  P0(e1000e_nic) P0(e1000e_mac)
+P0(igb_nic)    P0(igb_mac)    P0(r8169_nic)  P0(r8169_mac)
+P0(rtl8152_mac)
+void rtl8152_status(int *found, int *bound, int *link,
+                    unsigned short *vid, unsigned short *pid, int *version)
+{
+    if (found) *found = 0;   if (bound) *bound = 0;   if (link) *link = 0;
+    if (vid) *vid = 0;       if (pid) *pid = 0;       if (version) *version = 0;
+}
+I0(iwl_scan_aps)
+I0(rtwifi_present)   P0(rtwifi_nic)   P0(rtwifi_mac)
+I0(mrvlwifi_present) P0(mrvlwifi_nic) P0(mrvlwifi_mac)
+void rtwifi_status_str(char *buf, int cap)   { empty_str(buf, cap); }
+void mrvlwifi_status_str(char *buf, int cap) { empty_str(buf, cap); }
+
+/* TLS: BearSSL is not compiled here (M5's note: it comes with the HTTP
+ * stack). tls.h's convention is 0 = ok for a connect and a BR_ERR_* for the
+ * error readouts, so the refusals are -1 and NULL, never 0. */
+int  tls_connect(void)    { return -1; }
+int  tls_connect_ca(void) { return -1; }
+int  tls_read(void)       { return -1; }
+int  tls_write(void)      { return -1; }
+V0(tls_close)
+I0(tls_cipher) I0(tls_version)
+int  tls_last_error(void) { return -1; }
+I0(tls_have_rdrand)
+I0(tls_entropy_source)                       /* TLS_ENT_NONE */
+const char *tls_entropy_name(void) { return "none"; }
+P0(tls_open)
+int  tls_open_error(void) { return -1; }
+int  tls_poll(void)       { return -1; }
+int  tls_send(void)       { return -1; }
+int  tls_recv(void)       { return -1; }
+V0(tls_free)
+int  tls_conn_error(void) { return -1; }
+
+/* uno3d: the software rasteriser is portable and a candidate to compile in;
+ * until it is, every call is a no-op and the triangle count is 0 */
+V0(u3d_init) V0(u3d_shutdown) V0(u3d_begin) V0(u3d_end) V0(u3d_present)
+V0(u3d_perspective) V0(u3d_load_identity) V0(u3d_translate) V0(u3d_scale)
+V0(u3d_rotate_x) V0(u3d_rotate_y) V0(u3d_rotate_z) V0(u3d_triangles)
+I0(u3d_last_tris)
+
+/* unojs: no engine. ujs_new() answers NULL and every other entry point needs
+ * the vm it would have returned, so the rest are unreachable in practice;
+ * they are shaped by their headers regardless (ujs_val is one word, so a 0
+ * return is a well-formed value). */
+P0(ujs_new) V0(ujs_free)
+I0(ujs_eval) I0(ujs_resume) I0(ujs_exception) V0(ujs_clear_exception)
+const char *ujs_describe(void) { return ""; }
+V0(ujs_scope_open) I0(ujs_scope_close) I0(ujs_root) V0(ujs_unroot)
+I0(ujs_undefined) I0(ujs_null) I0(ujs_bool) I0(ujs_number) I0(ujs_string)
+I0(ujs_object_new) I0(ujs_array_new) I0(ujs_typeof)
+I0(ujs_is_undefined) I0(ujs_is_null) I0(ujs_is_number) I0(ujs_is_string)
+I0(ujs_is_object) I0(ujs_is_array) I0(ujs_is_function)
+double ujs_to_number(void) { return 0; }
+I0(ujs_to_bool)
+const char *ujs_string_bytes(void *vm, su64 v, su64 *len)
+{ (void)vm; (void)v; if (len) *len = 0; return ""; }
+I0(ujs_to_string) I0(ujs_get) I0(ujs_set) I0(ujs_get_index) I0(ujs_set_index)
+I0(ujs_has) I0(ujs_delete) I0(ujs_array_length) I0(ujs_array_push)
+I0(ujs_call) I0(ujs_function_new) I0(ujs_host_new) P0(ujs_host_user)
+I0(ujs_set_fn) I0(ujs_set_accessor) I0(ujs_global)
+I0(ujs_throw) I0(ujs_throw_error)
+I0(ujs_fuel_used) V0(ujs_fuel_reset) V0(ujs_gc)
+su64 ujs_heap_used(void) { return 0; }
+I0(ujs_promise) V0(ujs_promise_resolve) V0(ujs_promise_reject)
+I0(ujs_run_jobs) V0(ujs_function_set_data)
+
+/* key bindings + app preferences (uno_binds.c): portable, and a candidate to
+ * compile in now that SHELL.CFG has a volume to live on; until then a pref
+ * reads as unset and a binding as its default */
+int  uno_bind_name(int action, char *buf, int cap) { (void)action; empty_str(buf, cap); return 0; }
+I0(uno_bind_keyid) V0(uno_bind_reset) I0(uno_bind_set)
+int  uno_pref_get(const char *name, char *buf, int cap) { (void)name; empty_str(buf, cap); return 0; }
+I0(uno_pref_set)
+
+/* unopkg: the two entries a foreign-app shim may import */
+I0(uno_pkg_launch)
+void uno_pkg_runtime_str(const char *target, char *buf, int max) { (void)target; empty_str(buf, max); }
+
+/* sampled audio + the sequencer's readout: no audio path on this SoC yet */
+I0(uno_seq_playing)
+I0(uno_snd_sfx_load) I0(uno_snd_sfx_play) I0(uno_snd_sfx_playing)
+I0(uno_snd_mus_play) I0(uno_snd_mus_playing)
+
+/* unovirt: no hypervisor (GenieZone holds EL2's virtualisation; the payload
+ * runs there but cannot start guests). The manager surface reports an empty
+ * roster and refuses to add to it. */
+I0(uno_vm_count) P0(uno_vm_get)
+int  uno_vm_add(void) { return -1; }
+I0(uno_vm_set) I0(uno_vm_del) I0(uno_vm_save) I0(uno_vm_start) V0(uno_vm_stop)
+int  uno_vm_running(void) { return -1; }
+S0(uno_vm_status) S0(uno_vm_progress)
+I0(uno_vm_con_lines) S0(uno_vm_con_line) I0(uno_vm_con_seq)
+V0(uno_vm_con_key) V0(uno_vm_con_clear)
+P0(uno_vm_fb) V0(uno_vm_input_char) V0(uno_vm_input_scan) V0(uno_vm_input_mouse)
+I0(uno_vm_input_str) V0(uno_vm_focus_display)
+
+/* unolog: the system log's full surface (unolog itself is stubbed above).
+ * unolog.c is portable and the third candidate to compile in -- it is what
+ * LOGVIEW.UNO exists to show. Until then the ring is empty: first == next. */
+I0(unolog_flush) I0(unolog_format) I0(unolog_level) V0(unolog_set_level)
+I0(unolog_remote_level) V0(unolog_set_remote_level) I0(unolog_set_remote)
+S0(unolog_remote_host) I0(unolog_remote_port)
+I0(unolog_set_listen) I0(unolog_listening) I0(unolog_save_cfg)
+I0(unolog_first) I0(unolog_next) I0(unolog_get)
+I0(unolog_dropped) I0(unolog_sent) I0(unolog_received)
+const char *unolog_sev_name(void) { return "?"; }
+const char *unolog_fac_name(void) { return "?"; }
+
+/* unoscript: the production scripting surface. unoscript.c is adjudicated by
+ * unosecure, which has no store here (see the accounts block below), so the
+ * runtime reports itself absent and every capability check refuses. */
+I0(unoscript_available) S0(unoscript_cap_name) I0(unoscript_cap_tier)
+I0(unosec_present) I0(unosec_require)
+I0(usc_ui_pointer) I0(usc_ui_key)
+int  usc_ui_screen_text(char *out, int cap)   { empty_str(out, cap); return 0; }
+int  usc_ui_clipboard_get(char *out, int cap) { empty_str(out, cap); return 0; }
+I0(usc_ui_clipboard_set)
+I0(usc_app_count) I0(usc_app_launch) I0(usc_app_close_top) I0(usc_app_message)
+I0(usc_fs_read) I0(usc_fs_write)
+I0(usc_proc_list) I0(usc_mem_read) I0(usc_mem_write)
+I0(usc_io_in) I0(usc_io_out) I0(usc_power)
+I0(usc_hook_add) V0(usc_hook_remove)
 
 /* ---- storage: what M3b did NOT bring in ----------------------------------
  * The block registry (blk.c), fat.c and pc64_fs.c are real as of M3b, so the
@@ -192,7 +333,7 @@ V0(pc64_game_tick)
 I0(pc64_game_canvas)
 I0(pc64_game_fullscreen)
 
-/* ---- packaging (still needs the module loader, so still stubbed) --------- */
+/* ---- packaging (pc64_pkg.c: the installer side, not carried) ------------- */
 I0(uno_pkg_probe)
 I0(uno_pkg_install)
 
@@ -202,9 +343,6 @@ P0(iwl_saved_psk)
 I0(iwl_scan_begin)
 I0(iwl_scan_results)
 I0(iwl_scan_step)
-I0(uno_load_module)
-I0(uno_mod_load_user)
-V0(uno_mod_unload_user)
 void uno_ps2_status(int *kbd, int *aux, int *auxport, int *auxid)
 {
     if (kbd) *kbd = 0;
@@ -215,8 +353,6 @@ void uno_ps2_status(int *kbd, int *aux, int *auxport, int *auxid)
 V0(uno_seq_beep)
 V0(uno_seq_play)
 V0(unoamp_ui_close)
-/* the PROBE's module roster asks whether APPS\<file> exists; no loader yet */
-I0(uno_mod_present)
 
 /* ---- detach: an LK payload is born detached ------------------------------ */
 int uno_pc64_detached(void) { return 1; }

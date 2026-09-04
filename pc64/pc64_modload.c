@@ -90,8 +90,37 @@ void *uno_pc64_st(void);    /* uefi_main.c - the EFI system table */
 static inline void mod_outb(unsigned short port, unsigned char v)
 { __asm__ volatile ("outb %0, %1" : : "a"(v), "Nd"(port)); }
 static void mdbg(const char *s) { while (*s) mod_outb(0x402, (unsigned char)*s++); }
+#elif defined(UNO_MODLOAD_LOG)
+/* A platform with a persistent log and no debugcon (cosmo64: the eMMC log
+ * window) gets the same lines through uno_dbg_log().  The calls above arrive
+ * in pieces ("modload: ", the file, "\n"), so they are gathered into one line
+ * and handed over at the newline - a load that fails on the device is
+ * otherwise silent, and silent is the failure mode that costs a flash cycle. */
+void uno_dbg_log(const char *fmt, ...);
+static void mdbg(const char *s)
+{
+    static char line[96];
+    static int  at;
+    for (; *s; s++) {
+        if (*s == '\n') { line[at] = 0; uno_dbg_log("%s", line); at = 0; continue; }
+        if (at < (int)sizeof line - 1) line[at++] = *s;
+    }
+}
 #else
 static void mdbg(const char *s) { (void)s; }
+#endif
+
+/* ---- instruction-cache coherence ------------------------------------------
+ * The loader writes code with ordinary stores and then jumps to it.  x86 keeps
+ * its instruction fetches coherent with data writes; AArch64 does not, and a
+ * module whose pages were last seen by the I-cache as zeros (or as the previous
+ * occupant of the arena slot) executes stale bytes.  The platform cleans the
+ * D-cache to the point of unification and invalidates the I-cache for the
+ * range; on x86 there is nothing to do. */
+#if defined(__aarch64__)
+void uno_pc64_code_sync(const void *p, unsigned long n);        /* cosmo64/cpu.s */
+#else
+static void uno_pc64_code_sync(const void *p, unsigned long n) { (void)p; (void)n; }
 #endif
 
 /* ---- the kernel export table ----------------------------------------------
@@ -600,6 +629,9 @@ static void *mod_instantiate(long n, unsigned short *flags_out,
         }
         *(unsigned long long *)(rec + 24) = (unsigned long long)fn;
     }
+
+    /* every byte the module will execute is in place: make the I-side see it */
+    uno_pc64_code_sync(base, np << 12);
 
     if (flags_out) *flags_out = h->flags;
     if (base_out)  *base_out = base;
