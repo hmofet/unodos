@@ -25,7 +25,8 @@ Everything below has run on the phone, not just under the gate:
 | M4 | USB host: xHCI on MediaTek's SSUSB, a mouse and a keyboard |
 | M5 | networking: a DHCP lease over the AX88179 USB Ethernet |
 | M6 | URC: the box is remotely driven from the dev PC, with a live log |
-| M7 | **the SD card as a persistent volume, the rear panel as a touchpad, three perf wins** |
+| M7 | the SD card as a persistent volume, the rear panel as a touchpad, three perf wins |
+| M8 | **`.UNO` modules: the aarch64 module ABI (gated on QEMU; hardware pending, see M8)** |
 
 **What runs the machine today.** The desktop is the panel's native landscape at
 a 2x zoom. Local input is the matrix keyboard, the touch panel, and the rear
@@ -34,14 +35,19 @@ cover panel as a touchpad; a USB mouse and keyboard work through a plain USB
 card is mounted read-write as the boot volume, so the session persists.** The
 shell holds a DHCP lease and serves URC on `:5099`.
 
-Still missing: `.UNO` apps do not load (no aarch64 module ABI), no audio, no
-WiFi (CONNSYS has no bare-metal route), no cellular, and no RTC.
+Still missing: no audio, no WiFi (CONNSYS has no bare-metal route), no
+cellular, and no RTC. `.UNO` apps load as of M8 -- on the QEMU gate; the
+device has the modules on its SD card and is waiting for the M8 image.
 
-**Where we left off.** p38 carries the M7 image and it is booted and verified.
-The loop is:
+**Where we left off.** p38 carries the M7 image. The M8 image is built
+(`build/pc64arm-boot.img`) and the seven aarch64 modules are already under
+`APPS\` on the SD card (pushed over URC on 2026-09-04); what is left is the
+flash, which needs the device in Trixie and a person at the LK menu. The loop
+is:
 
 ```sh
 ./build.sh shell && ./flashp38.sh   # when there is something new to try
+./build.sh apps                     # the .UNO modules -> build/apps/*.UNO
 ./urctail.py                        # watch the log live, from the dev PC
 ./readlog.sh                        # or read it afterwards, from Trixie
 ```
@@ -98,8 +104,14 @@ Input is 3.1x cheaper and the shell runs 28% more frames -- and the M7 number
 
 **Open, in the order worth doing:**
 
-1. **`.UNO` apps do not load** -- no aarch64 module ABI. This is the biggest
-   remaining gap now that there is somewhere to put them.
+1. **M8 on hardware.** The module ABI is proven on the gate (seven apps load
+   and draw under EL2), not yet on the phone. The first hardware boot answers
+   the one thing QEMU cannot: whether `uno_pc64_code_sync` is sufficient on
+   the A53/A73 pair, where the I-side really is a separate cache. Then the
+   three portable providers the export stubs name as candidates --
+   `uno_binds.c` (prefs, now that SHELL.CFG has a volume), `unolog.c`
+   (what LOGVIEW.UNO exists to show) and `uno3d.c` + `uno3d_soft.c` -- can
+   compile in for real. See M8 below.
 2. **The eMMC log window loses the boot story on a long session.** It is 128
    KiB and `c64_log_flush()` keeps the TAIL, which was right when a session was
    a minute of bring-up. A boot writes 100 KB in an hour of `perf:` and
@@ -1291,3 +1303,162 @@ right before the hardware failure modes are worth reading.
 36 MiB of `.bss` swallows the address QEMU puts the DTB at, so the DTB is gone
 before `c64_fb_adopt` looks for it. The storage round trip -- the reason
 BLKTEST exists -- passes. Never ship a BLKTEST image.)
+
+## M8 (2026-09-04): `.UNO` modules on aarch64 -- gated, not yet on hardware
+
+M7 gave apps somewhere to live; M8 gives them a way in. The loader is the
+real `pc64/pc64_modload.c` now -- compiled unchanged but for two seams -- and
+a `.UNO` built for this machine is the same container as an x86 one: the
+loader's job (copy the image, add the base to a list of u64 cells, write a
+kernel address into each named slot) has nothing architecture-specific in
+it, and llvm-mingw's aarch64 target emits the same `DIR64` base relocations
+for absolute pointers that x86 does (ADRP/ADD pairs are PC-relative and need
+none). What differs is small and all of it is listed here.
+
+### What is different, and why each piece exists
+
+**The ABI word names the machine.** `UnoModHdr.abi` was always `1`; it is
+now `machine << 8 | 1`, with `0x00` for x86-64 (so every module built before
+this date still reads as `1`) and `0xA6` for aarch64. `uno_app.h` keys
+`UNO_ABI_VERSION` on `__aarch64__`, and `mkuno.py convert` reads the machine
+off the PE header and stamps the matching word. The point is the check the
+loader already had: `h->abi != UNO_ABI_VERSION` now refuses a module built
+for the other architecture, and `uno_mod_desc_read` refuses it too, so an
+x86 `.UNO` on this SD card does not even appear in the launcher. The
+alternative was jumping into foreign code. (A PYAPP container carries `1`
+and is refused here as a consequence; PYRT is not ported, so nothing is
+lost yet -- when it is, the source tier wants a machine-neutral word.)
+
+**The thunk is three instructions through x16.** An import on x86 is
+`jmp *slot(%rip)`. Here `mkuno.py thunks <syms> <out.s> aarch64` emits
+
+```
+    adrp x16, slot
+    ldr  x16, [x16, :lo12:slot]
+    br   x16
+```
+
+x16 is the AAPCS64 intra-procedure-call register, which a veneer may clobber
+without the caller noticing -- so the thunk is transparent to the callee's
+argument registers, which is the property that lets a module call `snprintf`
+through it. ADRP's reach is +/-4 GB page-relative, so the slot may sit
+anywhere in the image; `.p2align 3` on the slot section keeps every `.quad`
+8-aligned for the LDR under `-mstrict-align` (the records are 32 bytes, so
+the padding is always zero, but the fault would be silent).
+
+**The I-side is not coherent with the stores that wrote the code.** x86
+keeps instruction fetch coherent with data writes; AArch64 does not, and a
+module whose pages were last seen by the I-cache as zeros (the `.bss` clear)
+or as the previous occupant of the arena slot (Studio's build-run loop
+reuses one) executes stale bytes. So `pc64_modload.c` calls
+`uno_pc64_code_sync(base, pages)` after the last slot is written, declared
+under `__aarch64__` and a static no-op otherwise, and `cpu.s` implements it
+as `dc cvau` over every D line of the range, `dsb ish`, `ic ivau` over every
+I line, `dsb ish`, `isb` -- line sizes read from `CTR_EL0` rather than
+assumed, because the A53 and A73 halves of this SoC agree on 64 bytes today
+and this stays right if a later part does not. This is the one piece the
+gate cannot fully vouch for: QEMU's TCG has no separate I-cache to be stale.
+
+**The arena is the loader's no-firmware seam.** `mod_alloc()` takes pages
+from EFI `AllocatePages` while firmware is live, or, when `uno_pc64_st()`
+answers NULL, from the arena `uno_modload_reserve()` carved at boot -- and
+that reservation, on the no-system-table path, asks `uno_bios_find_ram()`,
+the E820 walk a BIOS boot uses. `platform.c` answers that call with a
+static 4.5 MB page-aligned array in `.bss` (`MOD_ARENA_PAGES` +
+`USER_SLOT_PAGES`, checked against the request rather than trusted).
+`.bss` is Normal write-back with no execute-never bit in `mmu.c`'s map,
+which is what code that will be jumped into needs. `c_main` calls
+`uno_modload_reserve()` before the shell, because the loader's own comment
+is right: with nothing reserved every module "fails to load" while the
+desktop draws fine, which is the easiest failure to call working.
+
+**The loader now talks.** `-DUNO_MODLOAD_LOG` (build.sh, this file only)
+routes `mdbg()` -- "modload: bad crc", "modload: unresolved import X",
+"modload: ok" -- through `uno_dbg_log` and so onto the eMMC log and the URC
+KERNEL channel, gathered into whole lines from the pieces the loader emits.
+A load that fails on the device is otherwise silent, and silent is the
+failure mode that costs a flash cycle.
+
+**The other side of the export table.** `kExports[]` takes the ADDRESS of
+every function a module may import, so each one must link even where the
+subsystem behind it does not exist on this SoC: 191 of the 457 did not
+(TLS, unojs, unovirt, unolog's surface, unoscript, the PCIe NIC families,
+uno3d, sampled audio, bindings/prefs, unopkg). `stubs.c` carries them,
+each answering "absent" in its header's own shape -- NULL for a handle,
+`-1` where the header says 0 is success (`tls_connect`), `""` for a name,
+an emptied buffer for an out-string. A module whose import resolves to one
+of these loads fine and finds the feature missing at run time, which is the
+right order: Network says "no adapter", it does not fail to open. Three of
+those groups are portable code that could compile in instead, and should,
+once the ABI is hardware-proven: `uno_binds.c` (prefs, now that SHELL.CFG
+has a volume), `unolog.c` (what LOGVIEW.UNO exists to show) and
+`uno3d.c` + `uno3d_soft.c`.
+
+**Cost:** 2 MB (`gModBuf`, the read buffer) + 4.5 MB (the arena) of `.bss`,
+all runtime-zeroed, none shipped. The payload is unchanged at 715 KB.
+
+### Building the modules
+
+`./build.sh apps` stages the tree and runs `mkapps.sh` ON quill: it is
+`pc64/build.sh`'s [3b]/[3d] pipeline with the target changed and nothing
+else -- compile each app with the shell's own flags (so a module obeys
+`-mstrict-align`, LLP64 and freestanding exactly as the kernel does), list
+the symbols the objects leave undefined, refuse any that `pc64_modload.c`
+does not export, thunk, link a DLL with no libraries and no exports but
+the entry, flatten. Seven modules, all with only `DIR64` relocations:
+DOSTRIS, PACMAN, OUTLAST, TRACKER, PAINT (classic tier, 24-29 KB each),
+LOGVIEW and PHOTOS (unoui-class, 34 and 169 KB; Photos carries the image
+half of unomedia inside it, as on x86). MUSIC and NETWORK are not built:
+x86 packs them, but neither has had a launcher slot since its pane went
+native, and a file nothing can open is not worth shipping. aarch64 clang
+emits no `__chkstk` probe even for an 8 KB frame, so the
+`-mno-stack-arg-probe` dance the x86 Office modules need does not arise.
+
+The modules are not part of the boot image. They go to `APPS\` on the SD
+card -- over URC (`put 1 APPS\X.UNO`, which is how the current set got
+there), or from Trixie -- or onto the RAM disk for the gate.
+
+### Gating
+
+`QHARNESS_UNO=<a.UNO>[,<b.UNO>...]` extends the URC gate: each file is
+pushed onto the RAM disk (volume 0), the launcher rescans, the app is
+launched by id, and the run requires the loader's own `modload: ok` on the
+KERNEL channel plus a guest that still answers `uptime` afterwards -- the
+entry was called and came back. The screen after each launch is saved as
+`uno-<stem>.png`. The RAM disk made this possible without a new transport:
+its namespace is flat, but a name is up to 31 characters and `APPS\X.UNO`
+is 16, so `mod_read`'s search path finds the file exactly as it would on
+the card.
+
+```sh
+U=$(ls build/apps/*.UNO | tr '\n' ',' | sed 's/,$//')
+QHARNESS_UNO="$U" QHARNESS_URC=1 QHARNESS_EL2=1 python3 qharness.py build/shell.bin /tmp/c.png 120
+```
+
+Result on 2026-09-04, under EL2:
+
+```
+modload: arena 4608 KB at 0x467fd000
+ua: modload: DOSTRIS.UNO
+ua: modload: ok
+urc: uno: DOSTRIS.UNO loaded and launched as 'dostris' (launched; uptime 5570)
+urc: uno: LOGVIEW.UNO loaded and launched as 'logview' ...
+urc: uno: OUTLAST.UNO ... PACMAN.UNO ... PAINT.UNO ... PHOTOS.UNO ... TRACKER.UNO
+```
+
+All seven load and draw -- Dostris's board and side panel, Paint's tool
+palette and colour bar, Tracker's pattern grid, Photos's file pane, LogView's
+status line -- through 4 to 33 thunked imports each. The plain and EL2 gates
+stay green. `BLKTEST=1` was not re-run: nothing in the storage stack changed.
+
+### Hardware status
+
+The Cosmo was found running the M7 image at .254 (uptime 16.9 h), the SD
+card mounted read-write as volume 1, and the modules were pushed to
+`APPS\` over URC and verified. The M8 boot image is built at
+`build/pc64arm-boot.img`. The flash needs the device in Trixie
+(`./flashp38.sh`) and a person at the LK menu afterwards; the first M8 boot
+should show `modload: arena 4608 KB` in the boot story, and the first launch
+of Dostris from the desktop is the I-cache test. Note that the M7 image's
+URC does not answer `apps list` or `mkdir` (both newer than it); the puts
+still verified, so `APPS\` already existed on the card.
