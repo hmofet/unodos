@@ -83,17 +83,19 @@
 <main class="main"><div class="wrap">
 
 <h1>Networking</h1>
-<p class="lede">UnoDOS can get online by itself: it connects over Ethernet, gets an address automatically,
-and browses the web, including secure sites.</p>
+<p class="lede">UnoDOS can get online by itself: it connects over Ethernet, and over Wi-Fi on Intel adapters,
+gets an address automatically, and browses the web, including secure sites.</p>
 
 <h2 id="online">Getting online</h2>
-<p>UnoDOS has its own built-in networking. On a PC with a supported wired network adapter, it gets an
-address automatically (DHCP), resolves names (DNS), finds the gateway and other machines, and browses the
-web over HTTP and HTTPS. Nothing else needs to be installed.</p>
+<p>UnoDOS has its own built-in networking. On a PC with a supported wired network adapter, or a supported
+Intel Wi-Fi adapter, it gets an address automatically (DHCP), resolves names (DNS), finds the gateway and
+other machines, and browses the web over HTTP and HTTPS. Nothing else needs to be installed.</p>
 <p>A small <strong>network chip</strong> sits in the taskbar tray so you can see the state at a
-glance: <strong>LAN</strong> when it has an address, <strong>LAN?</strong> when the cable is live but no
+glance: it names the medium - <strong>LAN</strong> over a cable, <strong>Wi-Fi</strong> over the air -
+with a question mark after it (<strong>LAN?</strong>, <strong>Wi-Fi?</strong>) while the link is up but no
 address has arrived yet, and nothing when the link is down. A dot beside it blinks on traffic - amber while
-sending, green while receiving - and hovering the chip shows a tooltip with the current address and link speed.
+sending, green while receiving. Hovering the chip shows a tooltip: on Wi-Fi it leads with the network's name
+and signal, on a cable with the address and link speed.
 The <a href="apps.html#native">System</a> app spells it out in full, for example
 <code>Network: link up, IP 192.168.2.157</code>.</p>
 
@@ -112,11 +114,20 @@ with an onboard RTL8168 links at gigabit, takes a DHCP address and browses, with
 <div class="note"><b>How this is verified</b>The Intel drivers are verified in the emulator against the QEMU e1000 / e1000e / igb models, and the Realtek driver on a real machine. Most test <em>laptops</em> have no wired port, so the built-in NIC on any given laptop may not have been exercised end to end - if a built-in port does not come up, a supported USB Ethernet adapter (below) is the reliable path.</div>
 
 <h2 id="status">Checking the connection</h2>
-<p>The <strong>Network</strong> tab in the <a href="appearance.html#control">Control Panel</a> shows the live
-connection in full: the status, the address and gateway from DHCP, the link speed, and a running count of the
-frames sent and received. A <strong>Refresh</strong> button re-reads it on demand.</p>
-<figure><button type="button" class="zoom" data-full="assets/img/cp_network.png" aria-label="Enlarge: The Control Panel&#x27;s Network tab: connected, with a DHCP address and gateway and the frame counters ticking. The green LAN chip in the tray corner mirrors the same state."><img src="assets/img/cp_network.png" alt="The Control Panel&#x27;s Network tab: connected, with a DHCP address and gateway and the frame counters ticking. The green LAN chip in the tray corner mirrors the same state." loading="lazy"></button><figcaption>The Control Panel's Network tab: connected, with a DHCP address and gateway and the frame counters ticking. The green <b>LAN</b> chip in the tray corner mirrors the same state.</figcaption></figure>
-<div class="note"><b>Where the old self-test went</b>A standalone "Network" app used to run a scripted link/DHCP/ping/TLS self-test. That app was retired - its live status moved here to the Control Panel, and the automated self-test now runs at boot on debug builds (armed from <code>DEBUG.CFG</code>) and logs to <code>CRASH\\NETLOG.TXT</code>.</div>
+<p>The <strong>Network</strong> tab in the <a href="appearance.html#control">Control Panel</a> answers the
+question first and keeps the detail for later. On a wired machine it is one line - <em>Ethernet: connected -
+1 Gbps</em>, or <em>cable in, no address</em> while DHCP is still at work - and a <strong>Details</strong>
+button that opens the addresses underneath: the IP address, the router, and on a machine with Wi-Fi the
+adapter's own address, with <strong>Refresh</strong> and <strong>Renew IP</strong> under them.</p>
+<figure><button type="button" class="zoom" data-full="assets/img/cp_network.png" aria-label="Enlarge: The Control Panel&#x27;s Network tab on a wired machine, with Details open: the Ethernet line, then the addresses. The green LAN chip in the tray corner mirrors the same state."><img src="assets/img/cp_network.png" alt="The Control Panel&#x27;s Network tab on a wired machine, with Details open: the Ethernet line, then the addresses. The green LAN chip in the tray corner mirrors the same state." loading="lazy"></button><figcaption>The Control Panel's Network tab on a wired machine, with Details open: the Ethernet line, then the addresses. The green <b>LAN</b> chip in the tray corner mirrors the same state.</figcaption></figure>
+<p>On a machine with a Wi-Fi adapter the tab grows. It leads with <em>Connected to</em> and the network's
+name, with the signal, WPA2 or WPA3, and the address on the line under it. Then the networks in range, each
+with a padlock if it is secured, a four-bar signal meter, and a <em>Connected</em> or <em>Saved</em> marker.
+A password box appears only when the highlighted network is locked and new to this machine, and the buttons
+are only the ones that can do something at that moment: <strong>Connect</strong>, <strong>Disconnect</strong>,
+<strong>Forget</strong>, <strong>Rescan</strong>. The wired line and Details follow underneath.</p>
+<figure><button type="button" class="zoom" data-full="assets/img/cp_wifi.png" aria-label="Enlarge: The same tab on a machine with Wi-Fi: the answer, the networks, the controls, then the wired line and Details. Captured in the emulator, which has no Wi-Fi card, with a debug switch that draws the pane and seeds example networks - the pane says so on screen. On a laptop the list is what the radio hears."><img src="assets/img/cp_wifi.png" alt="The same tab on a machine with Wi-Fi: the answer, the networks, the controls, then the wired line and Details. Captured in the emulator, which has no Wi-Fi card, with a debug switch that draws the pane and seeds example networks - the pane says so on screen. On a laptop the list is what the radio hears." loading="lazy"></button><figcaption>The same tab on a machine with Wi-Fi: the answer, the networks, the controls, then the wired line and Details. Captured in the emulator, which has no Wi-Fi card, with a debug switch that draws the pane and seeds example networks - the pane says so on screen. On a laptop the list is what the radio hears.</figcaption></figure>
+<div class="note"><b>The Network app</b>The <strong>Network</strong> app in the Start menu shows the same summary in the same words, and keeps the network self-test - DHCP, a ping, a small file fetch, a TCP echo and a TLS handshake - behind a <strong>Run tests</strong> button rather than running it every time the window opens. The echo and TLS steps only have a peer under QEMU, so on a real machine those two time out rather than pass; the rest are real.</div>
 
 <h2 id="tls">Secure sites</h2>
 <p>Secure (<code>https://</code>) pages load over an encrypted TLS connection, and UnoDOS checks the site's
@@ -139,23 +150,25 @@ Two chip families are supported - check a listing's chipset line before you buy:
 <div class="note tip"><b>Tested on metal</b>An ASIX AX88179A adapter has been taken all the way to a DHCP lease and a gateway ping on a real laptop (a ThinkPad X13 Yoga). The older ASIX AX88772 / AX88178A chips are <em>not</em> supported.</div>
 
 <h2 id="wifi">Wi-Fi</h2>
-<p><strong>Wi-Fi is not usable yet</strong>, though it is closer than it was. UnoDOS ships drivers for
-Intel (AX201 / AX210), Realtek and Marvell wireless chips. On Intel hardware the driver now loads the
-adapter's firmware, scans, <strong>joins a WPA2 network and installs the encryption keys</strong> - a real
-association, proven on a laptop. What does not yet work is the step after that: the network never hands
-back an address, so nothing can actually be reached. <strong>Use a wired port or a USB Ethernet adapter
-to get online.</strong></p>
+<p><strong>Wi-Fi works on Intel hardware, on one machine so far.</strong> UnoDOS ships drivers for
+Intel (AX201 / AX210), Realtek and Marvell wireless chips. On a Surface Laptop Go with an Intel AX201 the
+driver loads the adapter's firmware, scans, <strong>joins a WPA2 network and takes an address</strong> - a
+real association followed by a real DHCP lease, on the laptop rather than in the emulator. The Realtek and
+Marvell drivers still stop after loading firmware: they do not associate yet. <strong>On anything else, a
+wired port or a USB Ethernet adapter is still the sure way to get online.</strong></p>
+<p>Joining is done from the Control Panel's <strong>Network</strong> tab, described <a href="#status">above</a>:
+pick a network, type its password if it is locked and new to this machine, and press <strong>Connect</strong>.
+The password is kept, so the network shows as <em>Saved</em> and the next join asks for nothing;
+<strong>Forget</strong> discards it, and <strong>Disconnect</strong> leaves the network while keeping the
+radio on, so the list stays live. A machine that boots with a saved network in range is meant to rejoin it
+by itself; that boot-time join has been fixed but not yet watched on hardware.</p>
 <p>UnoDOS also speaks <strong>WPA3</strong> now, which matters more than it sounds: a modern access
 point with protected management frames required will refuse a machine that cannot offer them, and a
 6 GHz network is WPA3-only by regulation, so a WPA2-only machine is not "older", it is locked out.
 The supplicant reads what the access point is actually offering and negotiates, rather than
 announcing WPA2 and hoping - WPA2-PSK or WPA3-SAE, with management-frame protection when it is asked
 for, and SAE preferred on a network that offers both.</p>
-<div class="note warn"><b>WPA3: not yet proven on hardware</b>The WPA3 path is verified end to end against test vectors on a development machine, but it has <em>not</em> yet completed a join against a real access point. Treat it as written and tested, not as proven on your network.</div>
-<p>The Control Panel's <strong>Network</strong> tab already carries the interface it will use - a scan
-list, a password box and a <strong>Join</strong> button, with a spinner and a running description of each
-step while it works, since a join takes several seconds. Networks you join are remembered, so the machine
-can rejoin the last one by itself at the next boot.</p>
+<div class="note warn"><b>What does not work yet</b>The WPA3 exchange authenticates against a real access point, but the handshake after it does not complete yet, so on a network that offers both WPA3 and WPA2 UnoDOS falls back to WPA2 and joins. A WPA3-only network cannot be joined today. Two more limits are worth knowing: changing to a different network after a successful join does not work reliably yet, and a reboot is the sure way to do it; and the join itself holds the desktop for the few seconds the association takes, with a spinner and a running description of each step.</div>
 
 <h2 id="emulator">Networking in the browser</h2>
 <p>UnoDOS <a href="https://unodos.arinbakht.com/try/">running in a browser tab</a> has a working network

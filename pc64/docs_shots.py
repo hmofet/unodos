@@ -813,10 +813,19 @@ def sc_cp_network(q):
     # Browser first, then read the live status in the tab (Refresh to update it).
     close_all(q); launch(q, A("browser"), settle=2.0)          # Browser
     text(q, "http://%s/" % DOCS_HOST); time.sleep(0.3)
-    key(q, "ret"); time.sleep(6.0)                   # DHCP+DNS+GET brings the link up
+    key(q, "ret"); time.sleep(10.0)                  # DHCP+DNS+GET brings the link up
     cp_open_tab(q, 2)                                # Display -> ... -> Network
-    key(q, "tab"); time.sleep(0.2)                   # strip -> Refresh button
-    key(q, "ret"); time.sleep(1.0)                   # click Refresh -> fresh status
+    # The pane leads with one line and keeps the addresses behind Details
+    # (2026-08-26). On a wired machine Details is the first button, and the
+    # pane rebuilds when it opens, so focus is walked from the strip again:
+    # Details, then Refresh, which re-reads the status with Details still open.
+    key(q, "tab"); time.sleep(0.2)                   # strip -> Details button
+    key(q, "ret"); time.sleep(1.0)                   # open the addresses
+    # Focus stays on the button just pressed (now "Hide details"), so ONE Tab
+    # reaches Refresh. Two reached Renew IP, which dropped the lease and
+    # photographed "waiting for an address" under a green LAN chip.
+    key(q, "tab"); time.sleep(0.2)                   # -> Refresh
+    key(q, "ret"); time.sleep(1.5)                   # fresh status
     shot(q, "cp_network")
 
 # The two live-network figures fetch example.com, the canonical illustrative

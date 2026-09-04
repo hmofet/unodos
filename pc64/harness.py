@@ -2975,7 +2975,9 @@ def unoapps():
         if not roster:
             print("unoapps: `apps list` named nothing - is this the DEBUG build?")
             return 1
-        for app_id, name in roster:
+        def run_one(ui, app_id, name):
+            """Launch one app by id and prove its window appeared.
+            Returns "ok", "skip" or "fail"; appends to skipped/fails/sticky."""
             # The assertion is on the window this launch ADDED, not on the whole
             # screen: anything left over from an app that would not close is
             # still there, and matching against it would let one app vouch for
@@ -2992,20 +2994,48 @@ def unoapps():
                 # Studio or PYRT last built, and there is nothing there yet.
                 skipped.append(app_id)
                 print("  %-9s skip - %s" % (app_id, str(e).strip() or "refused"))
-                continue
+                return "skip"
             new = opened(before, ui.windows())
+            # A window that is late is not a window that failed to open. Duum
+            # reads a 28 MB WAD through the Python runtime before it has
+            # anything to show; keep asking for up to 30 s before calling it.
+            deadline = time.time() + 30.0
+            while (not any(t.startswith(name) for t in new)
+                   and time.time() < deadline):
+                time.sleep(1.0)
+                new = opened(before, ui.windows())
             if not any(t.startswith(name) for t in new):
                 print("  %-9s FAIL - wanted %r, opened %s"
                       % (app_id, name, new or "no window"))
-                fails.append(app_id)
-                continue
+                return "fail"
             ui.shot("uno_" + app_id)
             shot_ids.append(app_id)
-            menu.append((app_id, name))
             print("  %-9s ok   %s%s" % (app_id, name,
                                         "   (behind: %s)" % ", ".join(before)
                                         if before else ""))
+            return "ok"
+
+        for app_id, name in roster:
+            if run_one(ui, app_id, name) == "fail":
+                fails.append(app_id)
         close_open(ui)
+
+    # A FAILURE AT THE END OF THE PASS IS NOT THE APP'S VERDICT. Duum opened
+    # no window as the 28th launch of a boot and opened one in a second on a
+    # fresh guest (2026-09-04): whatever twenty-seven launch-and-close cycles
+    # leave behind - the guest heap is fixed at 32 MB whatever QEMU is given -
+    # is not evidence about the app. So retry every failure on a fresh boot,
+    # once, and only then call it. The roster stays in registry order.
+    if fails:
+        retry, fails = list(fails), []
+        print("unoapps: retrying %s on a fresh guest" % ", ".join(retry))
+        names = dict(roster)
+        with UrcUi() as ui:
+            for app_id in retry:
+                if run_one(ui, app_id, names[app_id]) == "fail":
+                    fails.append(app_id)
+            close_open(ui)
+    menu = [(app_id, name) for app_id, name in roster if app_id in shot_ids]
 
     print("unoapps: %d shot, %d skipped, %d FAILED"
           % (len(shot_ids), len(skipped), len(fails)))

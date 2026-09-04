@@ -1298,7 +1298,7 @@ the Start menu, and its settings are grouped into <strong>six tabs</strong>:</p>
 <tbody>
 <tr><td><strong>Display</strong></td><td>Resolution, system-wide Font, UI scale (100&ndash;200%), and an "Aurora lite" switch that turns off live compositing on slower machines.</td></tr>
 <tr><td><strong>Personalization</strong></td><td>Theme, Dark mode, Wallpaper, and how the desktop icons arrange themselves.</td></tr>
-<tr><td><strong>Network</strong></td><td>Live connection status - address, gateway, link speed - with a Refresh button. See <a href="networking.html#status">Networking</a>.</td></tr>
+<tr><td><strong>Network</strong></td><td>The connection summary in the Control Panel's words, and the network self-test behind a Run tests button. See <a href="networking.html#status">Networking</a>.</td></tr>
 <tr><td><strong>Audio</strong></td><td>The Volume slider (it adjusts the output live, even mid-note, on HD&nbsp;Audio or AC'97 hardware) and the active output device.</td></tr>
 <tr><td><strong>Date &amp; Time</strong></td><td>Set the time and date, and choose a 24-hour or 12-hour clock.</td></tr>
 <tr><td><strong>System</strong></td><td>Battery display, session restore, lid-sleep, pointer speed, and buttons for accounts, licences and About.</td></tr>
@@ -1883,17 +1883,19 @@ running.</p>
 
 PAGES["networking.html"] = ("Networking", f"""
 <h1>Networking</h1>
-<p class="lede">UnoDOS can get online by itself: it connects over Ethernet, gets an address automatically,
-and browses the web, including secure sites.</p>
+<p class="lede">UnoDOS can get online by itself: it connects over Ethernet, and over Wi-Fi on Intel adapters,
+gets an address automatically, and browses the web, including secure sites.</p>
 
 <h2 id="online">Getting online</h2>
-<p>UnoDOS has its own built-in networking. On a PC with a supported wired network adapter, it gets an
-address automatically (DHCP), resolves names (DNS), finds the gateway and other machines, and browses the
-web over HTTP and HTTPS. Nothing else needs to be installed.</p>
+<p>UnoDOS has its own built-in networking. On a PC with a supported wired network adapter, or a supported
+Intel Wi-Fi adapter, it gets an address automatically (DHCP), resolves names (DNS), finds the gateway and
+other machines, and browses the web over HTTP and HTTPS. Nothing else needs to be installed.</p>
 <p>A small <strong>network chip</strong> sits in the taskbar tray so you can see the state at a
-glance: <strong>LAN</strong> when it has an address, <strong>LAN?</strong> when the cable is live but no
+glance: it names the medium - <strong>LAN</strong> over a cable, <strong>Wi-Fi</strong> over the air -
+with a question mark after it (<strong>LAN?</strong>, <strong>Wi-Fi?</strong>) while the link is up but no
 address has arrived yet, and nothing when the link is down. A dot beside it blinks on traffic - amber while
-sending, green while receiving - and hovering the chip shows a tooltip with the current address and link speed.
+sending, green while receiving. Hovering the chip shows a tooltip: on Wi-Fi it leads with the network's name
+and signal, on a cable with the address and link speed.
 The <a href="apps.html#native">System</a> app spells it out in full, for example
 <code>Network: link up, IP 192.168.2.157</code>.</p>
 
@@ -1912,11 +1914,20 @@ with an onboard RTL8168 links at gigabit, takes a DHCP address and browses, with
 {note('The Intel drivers are verified in the emulator against the QEMU e1000 / e1000e / igb models, and the Realtek driver on a real machine. Most test <em>laptops</em> have no wired port, so the built-in NIC on any given laptop may not have been exercised end to end - if a built-in port does not come up, a supported USB Ethernet adapter (below) is the reliable path.', title="How this is verified")}
 
 <h2 id="status">Checking the connection</h2>
-<p>The <strong>Network</strong> tab in the <a href="appearance.html#control">Control Panel</a> shows the live
-connection in full: the status, the address and gateway from DHCP, the link speed, and a running count of the
-frames sent and received. A <strong>Refresh</strong> button re-reads it on demand.</p>
-{fig("cp_network.png", "The Control Panel's Network tab: connected, with a DHCP address and gateway and the frame counters ticking. The green <b>LAN</b> chip in the tray corner mirrors the same state.")}
-{note('A standalone "Network" app used to run a scripted link/DHCP/ping/TLS self-test. That app was retired - its live status moved here to the Control Panel, and the automated self-test now runs at boot on debug builds (armed from <code>DEBUG.CFG</code>) and logs to <code>CRASH\\\\NETLOG.TXT</code>.', title="Where the old self-test went")}
+<p>The <strong>Network</strong> tab in the <a href="appearance.html#control">Control Panel</a> answers the
+question first and keeps the detail for later. On a wired machine it is one line - <em>Ethernet: connected -
+1 Gbps</em>, or <em>cable in, no address</em> while DHCP is still at work - and a <strong>Details</strong>
+button that opens the addresses underneath: the IP address, the router, and on a machine with Wi-Fi the
+adapter's own address, with <strong>Refresh</strong> and <strong>Renew IP</strong> under them.</p>
+{fig("cp_network.png", "The Control Panel's Network tab on a wired machine, with Details open: the Ethernet line, then the addresses. The green <b>LAN</b> chip in the tray corner mirrors the same state.")}
+<p>On a machine with a Wi-Fi adapter the tab grows. It leads with <em>Connected to</em> and the network's
+name, with the signal, WPA2 or WPA3, and the address on the line under it. Then the networks in range, each
+with a padlock if it is secured, a four-bar signal meter, and a <em>Connected</em> or <em>Saved</em> marker.
+A password box appears only when the highlighted network is locked and new to this machine, and the buttons
+are only the ones that can do something at that moment: <strong>Connect</strong>, <strong>Disconnect</strong>,
+<strong>Forget</strong>, <strong>Rescan</strong>. The wired line and Details follow underneath.</p>
+{fig("cp_wifi.png", "The same tab on a machine with Wi-Fi: the answer, the networks, the controls, then the wired line and Details. Captured in the emulator, which has no Wi-Fi card, with a debug switch that draws the pane and seeds example networks - the pane says so on screen. On a laptop the list is what the radio hears.")}
+{note('The <strong>Network</strong> app in the Start menu shows the same summary in the same words, and keeps the network self-test - DHCP, a ping, a small file fetch, a TCP echo and a TLS handshake - behind a <strong>Run tests</strong> button rather than running it every time the window opens. The echo and TLS steps only have a peer under QEMU, so on a real machine those two time out rather than pass; the rest are real.', title="The Network app")}
 
 <h2 id="tls">Secure sites</h2>
 <p>Secure (<code>https://</code>) pages load over an encrypted TLS connection, and UnoDOS checks the site's
@@ -1939,23 +1950,25 @@ Two chip families are supported - check a listing's chipset line before you buy:
 {note('An ASIX AX88179A adapter has been taken all the way to a DHCP lease and a gateway ping on a real laptop (a ThinkPad X13 Yoga). The older ASIX AX88772 / AX88178A chips are <em>not</em> supported.', kind="tip", title="Tested on metal")}
 
 <h2 id="wifi">Wi-Fi</h2>
-<p><strong>Wi-Fi is not usable yet</strong>, though it is closer than it was. UnoDOS ships drivers for
-Intel (AX201 / AX210), Realtek and Marvell wireless chips. On Intel hardware the driver now loads the
-adapter's firmware, scans, <strong>joins a WPA2 network and installs the encryption keys</strong> - a real
-association, proven on a laptop. What does not yet work is the step after that: the network never hands
-back an address, so nothing can actually be reached. <strong>Use a wired port or a USB Ethernet adapter
-to get online.</strong></p>
+<p><strong>Wi-Fi works on Intel hardware, on one machine so far.</strong> UnoDOS ships drivers for
+Intel (AX201 / AX210), Realtek and Marvell wireless chips. On a Surface Laptop Go with an Intel AX201 the
+driver loads the adapter's firmware, scans, <strong>joins a WPA2 network and takes an address</strong> - a
+real association followed by a real DHCP lease, on the laptop rather than in the emulator. The Realtek and
+Marvell drivers still stop after loading firmware: they do not associate yet. <strong>On anything else, a
+wired port or a USB Ethernet adapter is still the sure way to get online.</strong></p>
+<p>Joining is done from the Control Panel's <strong>Network</strong> tab, described <a href="#status">above</a>:
+pick a network, type its password if it is locked and new to this machine, and press <strong>Connect</strong>.
+The password is kept, so the network shows as <em>Saved</em> and the next join asks for nothing;
+<strong>Forget</strong> discards it, and <strong>Disconnect</strong> leaves the network while keeping the
+radio on, so the list stays live. A machine that boots with a saved network in range is meant to rejoin it
+by itself; that boot-time join has been fixed but not yet watched on hardware.</p>
 <p>UnoDOS also speaks <strong>WPA3</strong> now, which matters more than it sounds: a modern access
 point with protected management frames required will refuse a machine that cannot offer them, and a
 6 GHz network is WPA3-only by regulation, so a WPA2-only machine is not "older", it is locked out.
 The supplicant reads what the access point is actually offering and negotiates, rather than
 announcing WPA2 and hoping - WPA2-PSK or WPA3-SAE, with management-frame protection when it is asked
 for, and SAE preferred on a network that offers both.</p>
-{note('The WPA3 path is verified end to end against test vectors on a development machine, but it has <em>not</em> yet completed a join against a real access point. Treat it as written and tested, not as proven on your network.', kind="warn", title="WPA3: not yet proven on hardware")}
-<p>The Control Panel's <strong>Network</strong> tab already carries the interface it will use - a scan
-list, a password box and a <strong>Join</strong> button, with a spinner and a running description of each
-step while it works, since a join takes several seconds. Networks you join are remembered, so the machine
-can rejoin the last one by itself at the next boot.</p>
+{note('The WPA3 exchange authenticates against a real access point, but the handshake after it does not complete yet, so on a network that offers both WPA3 and WPA2 UnoDOS falls back to WPA2 and joins. A WPA3-only network cannot be joined today. Two more limits are worth knowing: changing to a different network after a successful join does not work reliably yet, and a reboot is the sure way to do it; and the join itself holds the desktop for the few seconds the association takes, with a spinner and a running description of each step.', kind="warn", title="What does not work yet")}
 
 <h2 id="emulator">Networking in the browser</h2>
 <p>UnoDOS <a href="https://unodos.arinbakht.com/try/">running in a browser tab</a> has a working network
@@ -2096,7 +2109,9 @@ understands, and it holds up to eight appliances.</p>
 <p>The same machinery is meant to end somewhere specific: you double-click an Android <code>.APK</code>
 in Files, an icon appears on the desktop, and opening it opens a window. No launcher, and nothing on
 screen that says "Android".</p>
-{note('<b>Half of that works today.</b> Installing is real: UnoDOS reads the package, registers it, and the icon appears without a reboot. <b>Opening it does not run anything yet</b> - the channel between the app and the Android runtime is the next piece of work, so the app tells you the runtime is not connected. The Android runtime itself does boot on the appliance kernel. Treat this section as a description of where it is going, not as a feature to use.', kind="warn", title="Installing works, running does not")}
+{note('<b>Installing works, and the runtime runs; the two are not joined yet.</b> Installing is real: UnoDOS reads the package, registers it, the icon appears without a reboot, and it is still there after a restart. The Android runtime is real too: the appliance boots, starts the Android container, installs the app it carries and puts it on screen full-size and on the network, from a cold boot with nobody driving it - the two figures below are that boot. What is missing is the channel between the desktop icon and that runtime, so <b>opening an installed foreign app today tells you the runtime is not connected</b>. Treat this section as a description of where it is going, not as a feature to use.', kind="warn", title="Installing works, the runtime runs, opening does not yet")}
+{fig("android_launch.png", "The Android appliance, booted with nobody driving it: Firefox full-screen, with no launcher and no status bar in sight.")}
+{fig("android_firefox.png", "The same appliance a moment later: a real page over TLS, its address typed on the keyboard UnoDOS presents to the guest.")}
 <p>One consequence is worth knowing even at this stage: the package file is <strong>not copied</strong>
 onto the UnoDOS disk, because the filesystem underneath writes whole files only and a large package would
 have to be held in memory all at once. The installed app remembers where you put the package, so deleting
@@ -2214,7 +2229,7 @@ no host C library, no underlying OS. It ships two interchangeable desktops, sele
 <tr><td><strong>Toolkit (unoui)</strong></td><td>The portable widget core: windows, widgets, events, and a swappable theme (ten themes ship).</td></tr>
 <tr><td><strong>Framebuffer (fb)</strong></td><td>A 32-bit software framebuffer: clipping, alpha blend, gradients, anti-aliased rounded rects, fractional fill-scaling, and dirty-row present-on-change.</td></tr>
 <tr><td><strong>Platform (UEFI)</strong></td><td>A hand-rolled UEFI surface: the GOP framebuffer, keyboard, pointer, and Boot Services. No gnu-efi or EDK2.</td></tr>
-<tr><td><strong>Drivers (tail)</strong></td><td>Intel e1000 / e1000e / igb NICs (plus a Realtek RTL816x driver) and the TCP/IP + TLS stack, xHCI USB with ASIX and Realtek USB Ethernet, native AHCI / NVMe / SDHCI and USB mass storage, HD&nbsp;Audio and AC'97 PCM audio, early Intel/Realtek/Marvell Wi-Fi (firmware loads, not yet connecting), uno3d 3D, UnoSound, and the TrueType engine.</td></tr>
+<tr><td><strong>Drivers (tail)</strong></td><td>Intel e1000 / e1000e / igb NICs (plus a Realtek RTL816x driver) and the TCP/IP + TLS stack, xHCI USB with ASIX and Realtek USB Ethernet, native AHCI / NVMe / SDHCI and USB mass storage, HD&nbsp;Audio and AC'97 PCM audio, Intel Wi-Fi (AX201 / AX210: joins a WPA2 network and takes an address, on one laptop so far) and early Realtek / Marvell Wi-Fi (firmware loads, not yet connecting), uno3d 3D, UnoSound, and the TrueType engine.</td></tr>
 <tr><td><strong>Device manager (unodevices)</strong></td><td>Enumerates the PCI tree into a registry that reports every device and which driver, if any, claimed it - surfaced on-device through the <code>devices</code> remote verb and <code>uno.devices()</code>/<code>uno.pci()</code>. Read-only introspection today; driver auto-binding is a planned phase. A <a href="dev-remote.html#hwwdt">hardware-watchdog</a> primitive (the PCH TCO) lives alongside it as the remote guard's last-resort backstop.</td></tr>
 </tbody>
 </table></div>
@@ -3920,7 +3935,7 @@ falls back to the portable default, so the same widgets render on 1-bit through 
 <tr><td><code>pc64_http</code> / <code>pc64_browser</code> / <code>js</code></td><td>HTTP/1.0 GET with DNS, the immediate-mode HTML/Markdown/CSS renderer, and the JavaScript interpreter.</td></tr>
 <tr><td><code>tls</code> / <code>bearssl</code></td><td>Freestanding BearSSL, TLS 1.2, with pinned-key and CA-validated (14 roots) modes; clock from the UEFI RTC.</td></tr>
 <tr><td><code>xhci</code> / <code>ax88179</code> / <code>rtl8152</code> / <code>usbmsc</code></td><td>Opt-in (<code>-DUNO_XHCI</code>) polled xHCI host, ASIX and Realtek USB-gigabit drivers (each publishing a <code>uno_nic_t</code>), and USB mass storage (Bulk-Only Transport).</td></tr>
-<tr><td><code>iwlwifi</code> / <code>rtwifi</code> / <code>mrvlwifi</code></td><td>Early Intel (AX201/AX210), Realtek and Marvell Wi-Fi drivers. They map the device and load its firmware, but association is not yet working on any hardware.</td></tr>
+<tr><td><code>iwlwifi</code> / <code>rtwifi</code> / <code>mrvlwifi</code></td><td>Intel (AX201/AX210), Realtek and Marvell Wi-Fi drivers. The Intel driver loads firmware, scans, joins a WPA2 network and holds a DHCP lease on real hardware (a Surface Laptop Go); WPA3 authenticates but its handshake does not complete yet. Realtek and Marvell map the device and load its firmware, but do not associate yet.</td></tr>
 <tr><td><code>pc64_font</code></td><td>Optional TrueType engine; registers as the fb text provider with subpixel smoothing, falling back to the built-in bitmap font.</td></tr>
 <tr><td><code>unovirt</code> / <code>hv_vmx</code> / <code>hv_svm</code> / <code>unovdev</code></td><td>The hypervisor behind <a href="appliances.html">Appliances</a>: a capability gate that says whether this machine can host a guest and why not, a backend seam with Intel VMX and AMD SVM implementations, second-stage paging into a memory carve taken at detach, a budgeted slice run from the shell's frame loop, and virtio-mmio device models (console, block, net) plus the 8250 and 8259 a Linux kernel expects. Proven on VMX; the SVM side builds but has not yet run a guest. See <a href="https://github.com/hmofet/unodos/blob/master/pc64/UNOVIRT.md" target="_blank" rel="noopener"><code>UNOVIRT.md</code></a>.</td></tr>
 </tbody>
