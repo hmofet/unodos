@@ -12,10 +12,9 @@ research repo: `research/pc64-arm-port-plan.md` in `hmofet/cosmo`. It stops at
 M5; M6 (the URC remote channel) was added after it was written and is
 documented here.
 
-## State: M0-M7 written, M0-M6 hardware-proven (2026-09-03)
+## State: M0-M7 COMPLETE, all hardware-proven (2026-09-03)
 
-Everything through M6 has run on the phone, not just under the gate; M7 is
-written and gated but is waiting for a device that is in Trixie to be flashed.
+Everything below has run on the phone, not just under the gate:
 
 | | |
 |---|---|
@@ -26,32 +25,20 @@ written and gated but is waiting for a device that is in Trixie to be flashed.
 | M4 | USB host: xHCI on MediaTek's SSUSB, a mouse and a keyboard |
 | M5 | networking: a DHCP lease over the AX88179 USB Ethernet |
 | M6 | URC: the box is remotely driven from the dev PC, with a live log |
-| M7 | **the SD card, the rear-panel touchpad, and three measured perf wins** -- gated, NOT yet on hardware |
+| M7 | **the SD card as a persistent volume, the rear panel as a touchpad, three perf wins** |
 
-**What runs the machine today.** The desktop is the panel's native landscape
-at a 2x zoom, the keyboard and touch panel are the local input, a USB mouse
-and keyboard work through a plain USB 2.0 hub, the eMMC is readable and its
-log window writable, and the shell holds a DHCP lease and serves URC on
-`:5099`. `.UNO` apps do not load (no aarch64 module ABI). No audio, no WiFi
-(CONNSYS has no bare-metal route), no cellular.
+**What runs the machine today.** The desktop is the panel's native landscape at
+a 2x zoom. Local input is the matrix keyboard, the touch panel, and the rear
+cover panel as a touchpad; a USB mouse and keyboard work through a plain USB
+2.0 hub. The eMMC is readable and its log window writable. **A 29 GB microSD
+card is mounted read-write as the boot volume, so the session persists.** The
+shell holds a DHCP lease and serves URC on `:5099`.
 
-**What M7 adds, and what is still unproven about it.** Persistence now has a
-home: `sdmmc.c` brings MSDC1 and the microSD card up from nothing and `blk.c`
-registers the card's FAT partition as the boot disk, so `SHELL.CFG` should
-survive a reboot and the Control Panel should stop opening at every boot.
-`codi.c` turns the rear cover panel into a touchpad over UART1. And three
-measured costs are gone: both I2C buses run at 400 kHz instead of 100, the
-keyboard's idle poll is one transaction instead of three, and entry.s no
-longer zeroes 100 MB of `.bss` with the MMU off.
+Still missing: `.UNO` apps do not load (no aarch64 module ABI), no audio, no
+WiFi (CONNSYS has no bare-metal route), no cellular, and no RTC.
 
-None of that has met the hardware. The QEMU gate proves the code paths exist,
-compile, and fail cleanly on a board that has neither an SD slot nor a cover
-MCU -- which is exactly what the virt board is. The device is the gate for
-the rest, and the log is how it reports (see "What the log should say" below).
-
-**Where we left off.** p38 carries the M6 image, `2254aec6...ec75`, booted and
-verified. The M7 image is built and gated but NOT flashed: flashing needs the
-device in Trixie, and it is in UnoDOS. The loop is:
+**Where we left off.** p38 carries the M7 image and it is booted and verified.
+The loop is:
 
 ```sh
 ./build.sh shell && ./flashp38.sh   # when there is something new to try
@@ -59,86 +46,87 @@ device in Trixie, and it is in UnoDOS. The loop is:
 ./readlog.sh                        # or read it afterwards, from Trixie
 ```
 
-### What the log should say, first M7 boot
+### What M7's first good boot said
 
-Read these in order; each one is the gate for the line under it.
-
-```
-sd: clocks before -- CG1_STA=... (msdc1 GATED, src GATED), CLK_CFG=... (mux=N pdn=1)
-sd: clocks after  -- ...; source NN MHz (selector N)
-sd: MSDC1 before reset: CFG=... ver=...        <- NOT ffffffff: the clock arrived
-sd: identification clock 3xx kHz
-sd: CMD8 echoed 0x1AA -- v2 (SDHC/SDXC capable)
-sd: OCR=... -- block (SDHC/SDXC) addressing
-sd: CID ... / sd: RCA ..., N sectors
-sd: bus width 4 / sd: card clock 12500 kHz
-sd: MBR entry 0: type 0c, LBA 2048, ...
-sd: ready -- ...
-blk: sd0 = the card's FAT partition at LBA 2048, ...
-storage: persisting to vol 0 (<the card's label>)
-codi: UART1 is on GPIO110/112 f7
-codi: firmware "OurCodi-0.1"
-codi: rear touchpad armed
-kbd: AW9523 up, matrix scanning at 3xx kHz
-touch: NT36xxx ..., bus 3xx kHz
-perf: ... per loop input <well under 11224> us
-```
-
-**The "before" number, measured off the running M6 image on 2026-09-03** (dial
-in with `./urctail.py 192.168.2.254`, which is where the lease was that day):
+The whole chain, in the order the log prints it:
 
 ```
-perf: 56 loops, 2 presents (0 skipped) | present 52 ms, input 635 ms, other 1318 ms of 2006 ms
-perf: per present 26479 us, avg box 436991 px; per loop input 11344 us
+pmic: MT6358 answering over the wrapper (SWCID=5820, WACS2_EN=00000001)
+sd: VEMC en=1 sel=3  (3000 mV)   <- the eMMC's rail: the control, and it passed
+sd: VMCH en=0 sel=3  (3000 mV)   <- the card's supply, OFF
+sd: VMC  en=0 sel=11 (3000 mV)   <- the card's I/O, OFF
+sd: MAP CONFIRMED
+sd: VMCH and VMC are on at 3000 and 3000 mV
+sd: pins after rails -- MSDC_PS=010f0002 CMD=1 DAT3..0=1111
+sd: CMD8 echoed 0x1AA -- v2 (SDHC/SDXC capable) card
+sd: OCR=c0ff8000 -- block (SDHC/SDXC) addressing
+sd: RCA 0001, 61067264 sectors (29818 MiB)
+sd: bus width 4 / sd: card clock 24000 kHz
+sd: MBR entry 0: type 0c, LBA 8192, 61059072 sectors
+blk: sd0 = the card's FAT partition at LBA 8192, ... addressed partition-relative
+storage: 1 block device(s), 2 volume(s)
+  vol 0: ram "RAM" rw
+  vol 1: fat "NO NAME    " rw boot
+storage: persisting to vol 1 (NO NAME    )
+codi: firmware "OurCodi-0.1" / UART1 is on GPIO110/112 f7 / rear touchpad armed
+kbd: AW9523 up, matrix scanning at 390 kHz
+touch: NT36xxx ver=0b, reported maxima 1080x2160, bus 390 kHz
+perf: ... per loop input ~3600 us
 ```
 
-So the shell runs at ~28 loops a second and spends **11.2-11.3 ms of every
-one of them in polled input**, which is a third of the whole frame. That is
-the number the 400 kHz buses and the one-transaction idle poll exist to move,
-and it is what the first M7 boot should be compared against -- not against a
-feeling that it got faster.
+`CMD=1 DAT3..0=1111` on the line before CMD8 is the one that matters: it is the
+bus coming alive the instant the rails do, and it is why everything after it
+worked first try.
 
-Where each can stop, and what it means:
+Writes were proven separately, over URC rather than by inference:
 
-- **`MSDC1 reads as dead silicon`** -- the clock ungate did not take. The
-  selector and the CG bits are in the two lines above it.
-- **`no card answered ACMD41 within 2 s`** -- either the slot is empty, or the
-  VMCH/VMC "default on" assumption is wrong for this unit, which is the one
-  thing in `sdmmc.c` taken on the vendor's word rather than measured. That is
-  where a PMIC-over-PWRAP path would have to go.
-- **`data CRC` or `RX stalled`** -- timing. The card clock is deliberately
-  modest (source/4, so 13 MHz off the 26 MHz source and never above 25 MHz),
-  so the next thing to try is the pad delay registers `pins_up()` leaves at
-  zero, not a slower bus.
-- **`no cover MCU answered on any of the three UART1 pin pairs`** -- either
-  the pin pair is a fourth one nobody has found, or the MCU is off-frequency
-  (this unit's oscillators have run 3-8% fast since a deep battery pull, see
-  `docs/codi-driver-spec.md` section 7). A baud sweep is the next step and is
-  not implemented.
-- **`firmware "CODI:V1.1.1.14..."`** -- stock firmware. It never forwards
-  touch; the panel needs OurCodi. Not a bug.
+```
+put 1 \SDTEST.TXT 0 <base64>   -> ok 42
+put 1 \SDTEST.TXT done 2a      -> ok verified 42
+```
+
+### The perf result, measured against a measured baseline
+
+| | M6 | M7 |
+|---|---|---|
+| `per loop input` | 11344 us | **~3600 us** |
+| input's share of the frame | 32% | 13% |
+| loop rate | 56 loops / 2 s (28 Hz) | **~72 loops / 2 s (36 Hz)** |
+
+Input is 3.1x cheaper and the shell runs 28% more frames -- and the M7 number
+*includes* the CoDi UART poll, which did not exist in the baseline.
 
 **Open, in the order worth doing:**
 
-1. **Flash M7 and read the log.** Everything above is a prediction.
+1. **`.UNO` apps do not load** -- no aarch64 module ABI. This is the biggest
+   remaining gap now that there is somewhere to put them.
 2. **The eMMC log window loses the boot story on a long session.** It is 128
    KiB and `c64_log_flush()` keeps the TAIL, which was right when a session was
-   a minute of bring-up. Boot 2 wrote 262 KB in an hour -- 684 `perf:` lines and
-   757 `usb-bulk:` lines, a pair of each every two seconds -- so the part worth
-   reading was the first thing overwritten, and the `RX NEVER LANDED` line that
-   proves the M6 fix fired is not in the log that proves it worked. Both halves
-   want fixing: throttle the periodic chatter once it stops changing, and keep
-   the first few KiB of a boot as a preamble the wrap cannot reach. The live
-   stream only half-covers this, since a late dial-in also gets the tail.
-3. **The rear touchpad has no lid sensor.** The Linux daemon suppresses touch
-   while the lid is closed, by asking UPower; bare metal has no such oracle, so
-   a pocket touch moves the pointer. `codi.c` says so in its header.
-4. **The `reboot` verb is untested by choice** -- its TOPRGU `SWRST` path is
+   a minute of bring-up. A boot writes 100 KB in an hour of `perf:` and
+   `usb-bulk:` lines, so the part worth reading is the first thing overwritten.
+   Throttle the periodic chatter once it stops changing, and keep the first few
+   KiB of a boot as a preamble the wrap cannot reach. (The URC replay window
+   was widened from 32 KB to 96 KB on 2026-09-03 for the same reason, after it
+   cost a debugging session; that is a mitigation, not the fix.)
+3. **The CoDi link drops frames.** The shell polls that UART about 36 times a
+   second and OurCodi reports at 100 Hz during contact, which is ~58 bytes into
+   a 16-byte FIFO between two polls. `codi.c` recovers (a gesture with no
+   frames for 250 ms is abandoned, and anything held is let go), but the real
+   fix is the UART's DMA path. The `codi:` stats line counts the bytes resynced
+   past, which is the measurement that says how badly it is needed.
+4. **The rear touchpad has no lid sensor.** The Linux daemon suppresses touch
+   while the lid is closed by asking UPower; bare metal has no such oracle, so
+   a pocket touch moves the pointer.
+5. **The `reboot` verb is untested by choice** -- its TOPRGU `SWRST` path is
    written but never fired, because coming back needs someone at the LK menu.
-5. Smaller: `net_link_speed_mbps()` reports 0; the 256-byte control-IN anomaly
+   That menu times out to NORMAL boot and cannot be told to pick our slot, which
+   is also why a live build push over URC needs a person at the keyboard; see
+   the request filed in `pc64/UNOAUTOMATE-REQUESTS.md`.
+6. Smaller: `net_link_speed_mbps()` reports 0; the 256-byte control-IN anomaly
    from M4 is still root-caused only as a suspicion; `usb.c`'s config-descriptor
    bounce truncates rather than refuses a descriptor over 512 bytes; SD writes
-   are one block per command where reads stream up to 64.
+   are one block per command where reads stream up to 64; there is no RTC, so
+   the clock starts at zero every boot.
 
 ## Build
 
@@ -1085,7 +1073,7 @@ stopped" from "the endpoint is running and the device is silent"; both read as
 `land=0`. `uno_usb_bulk_in_epstate()` answers that in one line and should have
 been the first thing added, not the ninth.
 
-## M7 (2026-09-03): the SD card, the rear touchpad, and three perf wins
+## M7 COMPLETE ON HARDWARE (2026-09-03): the SD card, the rear touchpad, three perf wins
 
 Three things the M6 handoff named as the next work, done together because the
 first unblocks the others and the third is what makes the machine feel like a
@@ -1252,14 +1240,52 @@ The M6 handoff named the first two off its own `perf:` lines.
    skipped the second half would be one whose statics are whatever the last
    boot left in DRAM.
 
+### The rails, which is where the SD card actually was
+
+The first hardware boot failed, and the way it failed is the useful part. The
+pads were muxed (the preloader had already done it), the pull-ups were on, and
+`MSDC_PS` still read `CMD=0 DAT3..0=0000`. A pad with a pull-up enabled reads
+zero only if something drives it low or it has no supply, and nothing drives an
+idle bus -- so the pads had no supply, and LK's "since VEMC/VMC/VMCH are
+default on", the one thing this port had taken on the vendor's word, was false
+on this board. Trixie on the same machine enumerated the card at 200 MHz and
+reported both rails as LDOs it switches on itself.
+
+So `pmic.c`: the MT6358 over MediaTek's PMIC wrapper, an adoption rather than a
+bring-up because the preloader leaves the wrapper live and WACS2 enabled.
+
+It shipped unable to write, and that was worth a flash cycle. A PMIC write is
+the one class of mistake on this device that does not come back -- every rail
+is behind those registers -- so the write path was compiled out entirely, and
+a read-only build went first to confirm the address map. It confirmed it three
+ways: **VEMC, the rail the working eMMC runs on, read enabled at 3.0 V** (an
+experiment with a known answer, run beside the one whose answer we did not
+have); every selector decoded to one of the three or four legal codes its field
+allows; and VEMC and VMCH both matched, to the millivolt, what the running
+kernel reports through its own sysfs.
+
+The read pass also shrank the change. Both rails were already *selected* at
+3.0 V and merely switched off, and 3.0 V is inside default speed's 2.7-3.6 V
+window -- so the driver writes no voltage at all. It sets two enable bits.
+Copying Linux's live values would have been wrong twice over: Linux keeps VMC
+at 1.8 V because it negotiated UHS SDR104, and this driver runs default speed.
+
+What guards it now that the writes are armed: a whitelist with no address
+parameter (there is no way to name a register this port has not thought
+about), `MAP CONFIRMED` gating every write, a voltage sanity gate that refuses
+to enable a rail selected below 2.9 V, and a read-back verify on each write.
+`PMIC_WRITE=0 ./build.sh shell` still produces an image that physically cannot
+write the PMIC -- reach for it on a new unit, or after touching any address in
+that table.
+
 ### Gating
 
 All three QEMU gates green (plain, `QHARNESS_EL2=1`, and the URC session), and
 `BLKTEST=1` still passes its mkfs / mount / write / read / verify / delete
-round trip. The virt board has neither an SD slot nor a cover MCU, so what the
-gate proves about M7 is that both drivers come up, find nothing, say so, and
-get out of the way -- which is the failure mode that has to be right before
-the hardware failure modes are worth reading.
+round trip. The virt board has neither an SD slot, a cover MCU nor a PMIC, so
+what the gate proves about M7 is that all three drivers come up, find nothing,
+say so, and get out of the way -- which is the failure mode that has to be
+right before the hardware failure modes are worth reading.
 
 (The BLKTEST image's framebuffer checks fail, as they did before M7: its extra
 36 MiB of `.bss` swallows the address QEMU puts the DTB at, so the DTB is gone

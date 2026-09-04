@@ -51,17 +51,33 @@
 
 #include "cosmo64.h"
 
-/* THE WRITE GATE, and it is off. Everything below can read the PMIC; nothing
- * ships able to write it. A PMIC write is the one class of mistake on this
- * device that does not come back -- every rail is behind these registers, and
- * a wrong address is not a corrupted partition but silicon at a voltage it
- * was not built for -- so the capability is compiled out until the read-only
- * pass has confirmed the address map on the actual hardware.
+/* THE WRITE GATE. It shipped OFF, and the reason it is now on is worth
+ * keeping: a PMIC write is the one class of mistake on this device that does
+ * not come back -- every rail is behind these registers, and a wrong address
+ * is not a corrupted partition but silicon at a voltage it was not built for.
+ * So the capability was compiled out entirely until a read-only build had
+ * confirmed the address map on the actual hardware.
  *
- * Turn it on with PMIC_WRITE=1 ./build.sh shell, and only once the boot log
- * says MAP CONFIRMED. */
+ * It did, on 2026-09-03, three independent ways: the VEMC control read
+ * enabled at 3.0 V as a working eMMC's rail must; every selector decoded to
+ * one of the three or four legal codes its field allows; and VEMC and VMCH
+ * both matched, to the millivolt, what the running Linux kernel reports for
+ * the same two rails through its own decoded sysfs. The next boot with the
+ * writes armed brought the card up first try.
+ *
+ * So the default is 1: a build that cannot switch these two rails on is a
+ * build with no SD card, and that is no longer a trade worth making. What
+ * protects the device now is not the absence of the code but the checks
+ * around it -- the whitelist with no address parameter, MAP CONFIRMED gating
+ * every write, the voltage sanity gate, and the read-back verify. Those are
+ * the durable protections; this switch was a one-time precaution for an
+ * unverified map.
+ *
+ * PMIC_WRITE=0 ./build.sh shell still builds an image that physically cannot
+ * write the PMIC, which is the thing to reach for on a NEW unit, or after
+ * touching any address in the table above. */
 #ifndef C64_PMIC_WRITE
-#define C64_PMIC_WRITE 0
+#define C64_PMIC_WRITE 1
 #endif
 
 /* ---- the wrapper --------------------------------------------------------- */
