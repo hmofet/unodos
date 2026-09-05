@@ -133,6 +133,7 @@ void uno_pc64_dirty_all(void)
  * shell's own unoui_render_ui() software repaint. */
 static c64_u64 g_t_present, g_t_poll, g_box_acc, g_t_report;
 static unsigned g_presents, g_skipped, g_loops;
+static unsigned g_perf_windows;
 
 static void present_done(c64_u64 t0, c64_u64 area)
 {
@@ -160,21 +161,31 @@ void c64_perf_loop(void)
         return;
     }
     c64_u64 span = now - g_t_report;
-    if (span < hz * 2ull)                        /* report every 2 seconds */
+    if (span < hz * 2ull)                        /* measure every 2 seconds */
         return;
+    /* Throttle the steady-state chatter so it does not bury the boot story:
+     * the first 15 windows (~30 s) are logged verbatim -- that is bring-up and
+     * the stretch worth watching live -- then one window in 15 (~every 30 s),
+     * which still shows the frame rate drifting without filling the ring. A
+     * boot's perf output drops from ~250 KB/hour to ~17 KB. The measurement
+     * itself keeps running every window; only the logging is rationed. */
+    g_perf_windows++;
+    int say = g_perf_windows <= 15 || (g_perf_windows % 15) == 0;
 #define US(c) ((int)((c) * 1000000ull / hz))
-    c64_u64 other = span > (g_t_present + g_t_poll)
-                  ? span - g_t_present - g_t_poll : 0;
-    c64_logf("perf: %d loops, %d presents (%d skipped) | present %d ms, "
-             "input %d ms, other %d ms of %d ms\n",
-             (int)g_loops, (int)g_presents, (int)g_skipped,
-             US(g_t_present) / 1000, US(g_t_poll) / 1000,
-             US(other) / 1000, US(span) / 1000);
-    if (g_presents)
-        c64_logf("perf: per present %d us, avg box %d px; per loop input "
-                 "%d us\n", US(g_t_present) / (int)g_presents,
-                 (int)(g_box_acc / g_presents),
-                 g_loops ? US(g_t_poll) / (int)g_loops : 0);
+    if (say) {
+        c64_u64 other = span > (g_t_present + g_t_poll)
+                      ? span - g_t_present - g_t_poll : 0;
+        c64_logf("perf: %d loops, %d presents (%d skipped) | present %d ms, "
+                 "input %d ms, other %d ms of %d ms\n",
+                 (int)g_loops, (int)g_presents, (int)g_skipped,
+                 US(g_t_present) / 1000, US(g_t_poll) / 1000,
+                 US(other) / 1000, US(span) / 1000);
+        if (g_presents)
+            c64_logf("perf: per present %d us, avg box %d px; per loop input "
+                     "%d us\n", US(g_t_present) / (int)g_presents,
+                     (int)(g_box_acc / g_presents),
+                     g_loops ? US(g_t_poll) / (int)g_loops : 0);
+    }
 #undef US
     g_t_present = g_t_poll = g_box_acc = 0;
     g_presents = g_skipped = g_loops = 0;

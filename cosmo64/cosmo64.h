@@ -103,6 +103,15 @@ void c64_dbg_log(const char *fmt, ...);      /* pc64's uno_dbg_log, routed */
 unsigned c64_log_bytes(void);
 unsigned c64_log_total(void);                /* bytes ever written, monotonic */
 void c64_log_read(unsigned off, c64_u8 *dst, unsigned n);
+unsigned c64_log_preamble_len(void);         /* frozen boot story, wrap-proof  */
+void c64_log_preamble_read(unsigned off, c64_u8 *dst, unsigned n);
+/* the durable-window model (log.c): the shape the eMMC slot should hold for an
+ * arbitrarily long log. c64_log_window returns the total window byte count and
+ * fills the layout; c64_log_window_byte yields one assembled byte. */
+unsigned c64_log_window(unsigned cap, unsigned *pre, unsigned *gap,
+                        unsigned *tailfrom, unsigned *taillen);
+c64_u8 c64_log_window_byte(unsigned g, unsigned pre, unsigned gap,
+                           unsigned tailfrom);
 /* survey() counts surviving ramoops signatures and MUST run before init()
  * overwrites one of them; report() says what it found, once the log exists. */
 unsigned c64_log_survey(void);

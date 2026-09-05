@@ -106,29 +106,21 @@ Input is 3.1x cheaper and the shell runs 28% more frames -- and the M7 number
    groups are now real (see "The providers" below): `uno_binds.c`,
    `unolog.c`, and `uno3d.c` + `uno3d_soft.c`. Next the Office modules, which
    need `unodoc/` staged. See M8 below.
-2. **The eMMC log window loses the boot story on a long session.** It is 128
-   KiB and `c64_log_flush()` keeps the TAIL, which was right when a session was
-   a minute of bring-up. A boot writes 100 KB in an hour of `perf:` and
-   `usb-bulk:` lines, so the part worth reading is the first thing overwritten.
-   Throttle the periodic chatter once it stops changing, and keep the first few
-   KiB of a boot as a preamble the wrap cannot reach. (The URC replay window
-   was widened from 32 KB to 96 KB on 2026-09-03 for the same reason, after it
-   cost a debugging session; that is a mitigation, not the fix.)
-3. **The CoDi link drops frames.** The shell polls that UART about 36 times a
+2. **The CoDi link drops frames.** The shell polls that UART about 36 times a
    second and OurCodi reports at 100 Hz during contact, which is ~58 bytes into
    a 16-byte FIFO between two polls. `codi.c` recovers (a gesture with no
    frames for 250 ms is abandoned, and anything held is let go), but the real
    fix is the UART's DMA path. The `codi:` stats line counts the bytes resynced
    past, which is the measurement that says how badly it is needed.
-4. **The rear touchpad has no lid sensor.** The Linux daemon suppresses touch
+3. **The rear touchpad has no lid sensor.** The Linux daemon suppresses touch
    while the lid is closed by asking UPower; bare metal has no such oracle, so
    a pocket touch moves the pointer.
-5. **The `reboot` verb is untested by choice** -- its TOPRGU `SWRST` path is
+4. **The `reboot` verb is untested by choice** -- its TOPRGU `SWRST` path is
    written but never fired, because coming back needs someone at the LK menu.
    That menu times out to NORMAL boot and cannot be told to pick our slot, which
    is also why a live build push over URC needs a person at the keyboard; see
    the request filed in `pc64/UNOAUTOMATE-REQUESTS.md`.
-6. Smaller: `net_link_speed_mbps()` reports 0; the 256-byte control-IN anomaly
+5. Smaller: `net_link_speed_mbps()` reports 0; the 256-byte control-IN anomaly
    from M4 is still root-caused only as a suspicion; `usb.c`'s config-descriptor
    bounce truncates rather than refuses a descriptor over 512 bytes; SD writes
    are one block per command where reads stream up to 64; there is no RTC, so
@@ -1601,3 +1593,40 @@ its ruler, toolbar and document; UnoCalc with the cell grid, formula bar and
 Sheet1/2/3 tabs; UnoShow with its slide placeholders and the Slide Show menu.
 The imports told the truth -- all 33-39 resolve to core exports (`fb_*`,
 `uno_fs_*`, `unoui_*`, `uno_font_*`, `pc64_shell_*`) the image carries.
+
+## The debug log keeps the boot story (2026-09-04)
+
+The eMMC log window is 128 KiB and used to keep only the tail, so an hour of
+`perf:` lines pushed the boot story -- the bring-up every hard bug starts
+from -- out of the durable log. Two changes fix it, at the source so every
+reader benefits (the eMMC slot, the URC replay, a future pstore):
+
+- **A frozen boot preamble.** `log.c` copies the first 16 KiB it ever logs into
+  a buffer the ring's wrap can never reach (`C64_EARLY`, so it survives being
+  written MMU-off before `.bss` is zeroed). That is the whole boot story with
+  room to spare: the DRAM survey, MMU, framebuffer, PMIC/SD, storage, the
+  module arena, USB, and `entering uno_main`.
+- **A two-shape window.** `c64_log_window()` returns the whole ring verbatim
+  while a session is short enough to fit, and `[boot preamble][marker][recent
+  tail]` once it has wrapped -- the preamble puts the boot story back at the
+  front, the tail fills the rest with the newest lines. `c64_log_flush()`
+  (msdc.c) now lays that out on the eMMC and gates on the MONOTONIC total, not
+  the ring's live size: a size-based check froze the eMMC log the moment the
+  ring filled, which was a second way to lose a long session.
+
+The perf chatter is also throttled: the first 15 windows (~30 s) log verbatim,
+then one window in 15, cutting a boot's perf output from ~250 KB/hour to
+~17 KB so the ring churns far more slowly.
+
+The window model is pure log arithmetic with no block I/O, which is why it
+lives in `log.c` and not in the SD driver: the QEMU virt board has no MSDC, so
+the gate cannot exercise the eMMC path, but `test/logwin_test.c` compiles the
+real `log.c` on the host and checks both shapes byte-for-byte -- a short
+session verbatim, and a 420 KB session wrapping to
+`[16 KiB preamble][marker][114 KiB newest tail]` that opens on the boot banner
+and ends on the newest byte. Build and run it on quill (there is no `cc` on
+amanuensis):
+
+```sh
+cc -o /tmp/logwin_test cosmo64/test/logwin_test.c && /tmp/logwin_test
+```

@@ -78,6 +78,27 @@ struct pram_buf {
 #define PB ((volatile struct pram_buf *)C64_LOG_ZONE)
 #define CAP (C64_LOG_SIZE - 12u)
 
+/* the full barrier that orders a log write reaching the ramoops zone (Normal
+ * non-cacheable) before the reset that a later reader will follow. A named
+ * macro so the host window test (cosmo64/test/logwin_test.c) can compile this
+ * file on x86 by defining it away -- the barrier is aarch64 asm and irrelevant
+ * to the byte arithmetic the test exercises. */
+#ifndef C64_DSB
+#define C64_DSB() __asm__ volatile("dsb sy" ::: "memory")
+#endif
+
+/* The boot story is the first thing written and the first thing a wrapping ring
+ * drops. Capture the opening PRE bytes into a frozen buffer the wrap can never
+ * reach, so the durable eMMC log (msdc.c) can carry it ahead of the recent
+ * tail no matter how long the session runs. 16 KiB covers bring-up through the
+ * first frames -- the DRAM survey, MMU, framebuffer, PMIC/SD, storage, the
+ * module arena, USB and "entering uno_main" all fit with room to spare. It is
+ * C64_EARLY because the earliest log lines are written MMU-off, before
+ * mmu_init zeroes the ordinary .bss. */
+#define PRE (16u * 1024u)
+static c64_u8 g_pre[PRE] C64_EARLY;
+static unsigned g_pre_len C64_EARLY;
+
 static int g_live C64_EARLY;
 /* bytes EVER written, monotonic: a reader that wants to follow the ring
  * (urc.c streams it to the dev PC) keeps an absolute position, and
@@ -94,7 +115,7 @@ void c64_log_init(void)
     PB->sig = PRAM_SIG;
     PB->start = 0;
     PB->size = 0;
-    __asm__ volatile("dsb sy" ::: "memory");
+    C64_DSB();
     g_live = 1;
     /* Banner: the zone holds the PREVIOUS Linux boot's console until this
      * runs, so a reader must be able to tell whose log it is reading. */
@@ -105,6 +126,16 @@ void c64_log_write(const char *s, unsigned n)
 {
     if (!g_live)
         return;
+    /* Freeze the opening PRE bytes as the boot preamble before they enter the
+     * ring, so the ring's wrap can never take them. */
+    if (g_pre_len < PRE) {
+        unsigned c = n;
+        if (c > PRE - g_pre_len)
+            c = PRE - g_pre_len;
+        for (unsigned i = 0; i < c; i++)
+            g_pre[g_pre_len + i] = (c64_u8)s[i];
+        g_pre_len += c;
+    }
     c64_u32 start = PB->start, size = PB->size;
     for (unsigned i = 0; i < n; i++) {
         PB->data[start] = (c64_u8)s[i];
@@ -116,7 +147,7 @@ void c64_log_write(const char *s, unsigned n)
     PB->start = start;
     PB->size = size;
     g_total += n;
-    __asm__ volatile("dsb sy" ::: "memory");
+    C64_DSB();
 }
 
 void c64_log(const char *s)
@@ -149,6 +180,74 @@ void c64_log_read(unsigned off, c64_u8 *dst, unsigned n)
         }
         dst[i] = PB->data[k < tail ? start + k : k - tail];
     }
+}
+
+/* ---- the frozen boot preamble -------------------------------------------- */
+/* The first PRE bytes ever logged, which the ring's wrap cannot reach. The
+ * window model below writes these ahead of the recent tail so the durable eMMC
+ * log always carries the boot story; a reader offset past what was captured
+ * gets zero-filled. */
+unsigned c64_log_preamble_len(void)
+{
+    return g_pre_len;
+}
+
+void c64_log_preamble_read(unsigned off, c64_u8 *dst, unsigned n)
+{
+    for (unsigned i = 0; i < n; i++) {
+        unsigned k = off + i;
+        dst[i] = k < g_pre_len ? g_pre[k] : 0;
+    }
+}
+
+/* ---- the durable-window model -------------------------------------------- *
+ * A fixed-size window (the eMMC slot, msdc.c) has to hold the most useful view
+ * of an arbitrarily long log. Two shapes: a short session's whole ring fits and
+ * is shown verbatim (its head IS the boot story); a long session's ring has
+ * wrapped the head out, so the window becomes [boot preamble][gap][recent tail]
+ * -- the frozen preamble puts the boot story back at the front and the tail
+ * fills the rest with the newest lines. Either way the boot story is present.
+ *
+ * This lives here, not in msdc.c, because it is pure log arithmetic with no
+ * block I/O in it, which is what makes it testable off the device (host_logtest
+ * drives exactly these two functions). msdc.c calls c64_log_window() for the
+ * layout, then c64_log_window_byte() to fill each 512-byte block. */
+const char c64_log_gap[] = "\n--- [older log wrapped away] ---\n";
+
+unsigned c64_log_window(unsigned cap, unsigned *pre_out, unsigned *gap_out,
+                        unsigned *tailfrom_out, unsigned *taillen_out)
+{
+    unsigned size = c64_log_bytes();             /* live in the ring (<= CAP) */
+    unsigned total = c64_log_total();            /* ever written, monotonic   */
+    unsigned pre = 0, gap = 0, taillen, tailfrom;
+    if (total <= cap) {
+        taillen = size;                          /* whole ring; head present  */
+        tailfrom = 0;
+    } else {
+        pre = g_pre_len;
+        gap = (unsigned)(sizeof c64_log_gap - 1u);
+        taillen = cap - pre - gap;               /* the rest is the newest    */
+        tailfrom = size - taillen;               /* last `taillen` ring bytes */
+    }
+    if (pre_out)      *pre_out = pre;
+    if (gap_out)      *gap_out = gap;
+    if (tailfrom_out) *tailfrom_out = tailfrom;
+    if (taillen_out)  *taillen_out = taillen;
+    return pre + gap + taillen;                  /* total window bytes         */
+}
+
+c64_u8 c64_log_window_byte(unsigned g, unsigned pre, unsigned gap,
+                           unsigned tailfrom)
+{
+    c64_u8 b;
+    if (g < pre) {
+        c64_log_preamble_read(g, &b, 1);
+        return b;
+    }
+    if (g < pre + gap)
+        return (c64_u8)c64_log_gap[g - pre];
+    c64_log_read(tailfrom + (g - pre - gap), &b, 1);
+    return b;
 }
 
 /* ---- did this DRAM survive the last reset? ------------------------------- */
