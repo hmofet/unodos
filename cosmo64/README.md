@@ -28,7 +28,7 @@ Everything below has run on the phone, not just under the gate:
 | M7 | the SD card as a persistent volume, the rear panel as a touchpad, three perf wins |
 | M8 | `.UNO` modules: the aarch64 module ABI -- seven apps load from the SD card |
 | M9 | the browser: unoweb, unojs and the browser lane -- it fetches, renders and runs scripts on the phone |
-| M10 | **HTTPS: BearSSL, a defensible entropy source, and this machine's first clock** |
+| M10 | **HTTPS: BearSSL, a defensible entropy source, and this machine's first clock -- public sites load on the phone** |
 
 **What runs the machine today.** The desktop is the panel's native landscape at
 a 2x zoom. Local input is the matrix keyboard, the touch panel, and the rear
@@ -47,9 +47,10 @@ that has to pass a health test before TLS will open a connection at all, and
 the machine has a clock for the first time -- a software one, because
 certificate validity needs a date and there is still no RTC driver.
 
-**Where we left off.** p38 carries the M9 image and it is booted and
-verified: the browser fetches a page over the wire, renders it and runs its
-script (see "On the hardware" at the end of this file). The loop is:
+**Where we left off.** p38 carries the M10 image and it is booted and
+verified: the browser loads **public HTTPS sites** -- CA-validated, on a
+conditioned-jitter seed, against a build-stamped clock (see the two "On the
+hardware" sections at the end of this file). The loop is:
 
 ```sh
 ./build.sh shell && ./flashp38.sh   # when there is something new to try
@@ -1951,3 +1952,50 @@ runs on quill. **HTTPS itself cannot be gated under QEMU**: the virt board has
 no USB and therefore no NIC, exactly as with the browser's HTTP fetch, so the
 handshake is a hardware proof -- as is the entropy health test at this SoC's
 own counter frequency.
+
+### On the hardware (2026-09-05): the handshake, and the clock in the taskbar
+
+p38 reflashed and booted from the LK menu. **The entropy question is settled on
+the device**, which is the line the section above says to read:
+
+```
+vol 1: fat "NO NAME    " rw boot
+storage: persisting to vol 1 (NO NAME    )
+clock: seeded 2026-09-05 05:16 UTC from the build stamp
+entropy: source=jitter selftest=1
+```
+
+`selftest=1` at this SoC's own 13 MHz CNTPCT, not QEMU's 62.5 MHz. The
+conditioned-jitter source passes its health test on a Cortex-A73, so TLS opens
+connections here rather than refusing them.
+
+**Two public HTTPS sites, fetched and rendered:**
+
+| site | status line | what it proves |
+|---|---|---|
+| `https://unodos.arinbakht.com/` | `HTTP/1.1 200 OK` | the OS fetching its own website over its own TLS stack, on its own hardware |
+| `https://letsencrypt.org/` | `HTTP/1.0 200 OK` | validation against ISRG Root X1, `tls_ca.c`'s TA0 |
+
+Both went the whole way: DNS, TCP over the AX88179, a TLS 1.2 handshake seeded
+from CPU jitter, a certificate chain validated against the bundled roots with
+SNI, and a body parsed and painted by unoweb. Neither is a server we control.
+
+**And the taskbar reads `05:19:16`.** `fmt_clock()` prints an uptime when the
+RTC read fails and the time when it succeeds, so that field going from
+`up 41s` to a clock is the whole of clock.c working, visible without a log.
+
+**One failure that was not ours, and one that was mine.**
+
+`https://example.com/` came back "DNS lookup failed -- no address for that
+name (asked 192.168.2.1, 5 queries, 4 answered)". That reads like a client
+bug and is not: this LAN's resolver genuinely returns NXDOMAIN for
+`example.com` (`nslookup example.com 192.168.2.1` says so from another
+machine), while `letsencrypt.org` resolves fine from the same resolver. The
+net stack asked correctly and was told no. Do not chase it here.
+
+The first attempt typed `dhttps://example.com/` -- a stray `d` ahead of the
+URL, which then failed DNS for an entirely uninteresting reason. The harness
+types the location straight into the window and the first keystroke after a
+launch can land while the window is still settling. It did not recur on the
+next run, but if a stop ever fails oddly, READ THE ADDRESS BAR IN THE
+SCREENSHOT before believing the error next to it.
