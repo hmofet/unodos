@@ -1865,21 +1865,42 @@ block, its address is not in this tree and claiming a generator we have not
 proven is the one lie that file cannot survive.
 
 That leaves conditioned CPU timing jitter as the only path, and it counts only
-if it passes a startup health test -- which was a genuine open question here,
-because the health test wants the low five bits of the deltas to move and
-CNTPCT on this SoC ticks at 13 MHz, i.e. 77 ns, against a workload that lasts
-about a microsecond. That is a measurement, not an opinion, so the boot story
-makes it:
+if it passes a startup health test -- which is a genuine open question here,
+because the test wants the low five bits of the deltas to move and CNTPCT on
+this SoC ticks at 13 MHz, i.e. 77 ns, against a workload that lasts about a
+microsecond. That is a measurement, not an opinion, so the boot story makes it:
 
 ```
 entropy: source=jitter selftest=1
 ```
 
-It passes. The PMU cycle counter (PMCCNTR_EL0, ~1.5 GHz) was the fallback and
-was deliberately not reached for: enabling it means writing PMCR_EL0 from EL2,
-and if a higher level has set MDCR_EL3.TPM that write traps out of our world
-rather than returning an error. Do not take that risk for a counter you have
-not shown you need.
+**READ THAT LINE ON THE DEVICE, NOT IN THE GATE.** The QEMU virt board's
+CNTPCT does NOT tick at 13 MHz -- the gate's own boot line reads
+`cntfrq=62500000`, i.e. 16 ns, nearly five times finer than the phone. So the
+gate reporting `selftest=1` is not evidence about this SoC at all, and it
+would be easy to mistake it for the answer.
+
+What CAN be checked without a flash is the resolution question on its own, and
+`test/entcoarse_test.c` does it: it compiles the real `tls_entropy.c` and feeds
+it the host's own monotonic clock QUANTISED to a chosen frequency, so the
+jitter is genuine and granularity is the only variable. On quill:
+
+```
+    13000000 Hz (  76.9 ns/tick): source=jitter selftest= 1 draws-differ=1  usable
+    26000000 Hz (  38.5 ns/tick): source=jitter selftest= 1 draws-differ=1  usable
+    62500000 Hz (  16.0 ns/tick): source=jitter selftest= 1 draws-differ=1  usable
+  1000000000 Hz (   1.0 ns/tick): source=jitter selftest= 1 draws-differ=1  usable
+```
+
+77 ns is not the problem. That is evidence and not proof -- an x86 build host's
+jitter distribution is not a Cortex-A73's -- but it says the design is not
+obviously hopeless, and the device prints the real answer on every boot.
+
+The PMU cycle counter (PMCCNTR_EL0, ~1.5 GHz) was the fallback and was
+deliberately not reached for: enabling it means writing PMCR_EL0 from EL2, and
+if a higher level has set MDCR_EL3.TPM that write traps out of our world rather
+than returning an error. Do not take that risk for a counter you have not shown
+you need.
 
 A second thing came free: `urc.c` used to stub `tls_entropy_get()` to 0, so the
 URC gate refused to mint a token rather than mint a weak one. That stub is
@@ -1925,6 +1946,8 @@ instead. That is the cheapest possible visual check that this landed.
 ### Gate
 
 Plain, EL2 and URC gates green, the URC gate still launching the browser. The
-boot story carries the two new lines above. **HTTPS itself cannot be gated
-under QEMU**: the virt board has no USB and therefore no NIC, exactly as with
-the browser's HTTP fetch, so the handshake is a hardware proof.
+boot story carries the two new lines above, and the host resolution experiment
+runs on quill. **HTTPS itself cannot be gated under QEMU**: the virt board has
+no USB and therefore no NIC, exactly as with the browser's HTTP fetch, so the
+handshake is a hardware proof -- as is the entropy health test at this SoC's
+own counter frequency.
