@@ -1577,7 +1577,7 @@ Two build facts worth keeping:
   link both, as x86 does; linking only `um_inflate.c` leaves `um_alloc`/
   `um_free`/`um_set_alloc` undefined.
 
-### Gate status: built and import-clean; hardware launch pending
+### On the hardware
 
 These cannot go through the QEMU module gate the way the small modules do:
 `QHARNESS_UNO` pushes onto the RAM disk (volume 0), whose per-file ceiling is
@@ -1586,9 +1586,18 @@ to ~800 KB. That is a gate limitation, not a defect -- on the device these live
 on the SD card (FAT, no such cap), which is where they belong. So the QEMU
 module gate covers modules up to 256 KB; larger ones are gated on hardware.
 
-The imports are the tell that they will load: all 33-39 resolve to core
-exports (`fb_*`, `uno_fs_*`, `unoui_*`, `uno_font_*`, `pc64_shell_*`) that both
-the M8 image and this one carry -- none of the providers, none of the stubs.
-Launching them needs the Cosmo powered and on URC; it was off at the end of
-this session, so the launch is the one step left, the same human-in-the-loop
-step every cosmo64 milestone ends on.
+And they are. Staged onto the SD card's `APPS\` over ssh from Trixie (an ssh
+copy, not a URC `put` -- more reliable for ~2 MB of files), then over URC
+against the providers image (whose boot story shows `modload: arena 4608 KB`):
+
+```
+launch uoword -> launched  ua: modload(uui): UOWORD.UNO / ua: modload: ok
+launch uocalc -> launched  ua: modload(uui): UOCALC.UNO / ua: modload: ok
+launch uoshow -> launched  ua: modload(uui): UOSHOW.UNO / ua: modload: ok
+```
+
+Each loaded, drew, and left a guest that still answered `uptime`: UnoWord with
+its ruler, toolbar and document; UnoCalc with the cell grid, formula bar and
+Sheet1/2/3 tabs; UnoShow with its slide placeholders and the Slide Show menu.
+The imports told the truth -- all 33-39 resolve to core exports (`fb_*`,
+`uno_fs_*`, `unoui_*`, `uno_font_*`, `pc64_shell_*`) the image carries.
