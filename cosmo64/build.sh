@@ -210,16 +210,20 @@ shell )
   if [ -f urc_pin.h ]; then scp -q urc_pin.h "$QUILL:$QDIR/cosmo64/";
   else ssh "$QUILL" "rm -f $QDIR/cosmo64/urc_pin.h"; fi
 
-  # AUDIO=1: compile the audio first-light probe (afe.c) and, with it, the
-  # PMIC's audio write table. Both are OFF by default and the table is gated on
-  # C64_PMIC_WRITE as well, so a shipped image carries no instruction that can
-  # write a codec register. This is a bring-up switch, not a feature flag: it
-  # boots the machine, applies twenty-three measured PMIC writes and turns a
-  # tone on. Read cosmo64/AUDIO-SURVEY.md before using it.
+  # AUDIO=1: compile the audio path -- afe.c (the AUDIO power domain, the DAC
+  # path, the DL1 ring: pc64's PCM backend on this SoC) with pmic.c's audio
+  # write table, plus the real pc64/snd_pcm.c over it (UNO_SND_BACKEND_AFE)
+  # and the real unosound sequencer, in place of stubs.c's answers. OFF by
+  # default and the PMIC table is gated on C64_PMIC_WRITE as well, so a
+  # shipped image carries no instruction that can write a codec register
+  # until this is proven on hardware and the default flips. Read
+  # cosmo64/AUDIO-SURVEY.md before using it.
+  SND=""
   if [ -n "$AUDIO" ]; then
-    BASECF="$BASECF -DC64_AUDIO=1"
+    BASECF="$BASECF -DC64_AUDIO=1 -DUNO_SND_BACKEND_AFE"
     C64="$C64 afe"
-    echo "[shell] AUDIO=1: the audio probe is compiled in (it writes the PMIC)"
+    SND="snd_pcm"
+    echo "[shell] AUDIO=1: the audio path is compiled in (it writes the PMIC)"
   fi
   # KBDTEST=1: compile the scripted key pad (QEMU gate proof, never shipped)
   [ -n "$KBDTEST" ] && BASECF="$BASECF -DC64_KBDTEST"
@@ -337,6 +341,8 @@ shell )
         b=\$(basename \$c .c); \
         $CC $BSSLCF -c \$c -o build/bs_\$b.o; \
     done && \
+    for f in $SND; do $CC $SHCF -c ../pc64/\$f.c -o build/p_\$f.o; done && \
+    if [ -n \"$SND\" ]; then $CC $SHCF -c ../unosound/unosound_seq.c -o build/p_unosound_seq.o; else rm -f build/p_unosound_seq.o build/p_snd_pcm.o build/c_afe.o; fi && \
     for f in $URC; do $CC $SHCF -c ../pc64/\$f.c -o build/p_\$f.o; done && \
     for f in $URCDBG; do $CC $SHCF -DUNO_DEBUG -c ../pc64/\$f.c -o build/p_\$f.o; done && \
     $CC $USBCF -DC64_XDMA -c ../pc64/xhci.c -o build/p_xhci.o && \
@@ -381,7 +387,9 @@ apps )
         -DUNO_COLOR=1 -DUNO_PC64 -DUNO_UUI \
         -I$QDIR/pc64/include -I$QDIR/pc64 -I$QDIR/unoui -I$QDIR/uno3d \
         -I$QDIR/unosound -I$QDIR/unomedia -I$QDIR/cosmo64"
-  ssh "$QUILL" "cd $QDIR/cosmo64 && LMBIN=$LMBIN APPCF='$APPCF' sh mkapps.sh"
+  # ONLY=<name> ./build.sh apps: one module (see mkapps.sh), for iterating a
+  # diagnostic against the live phone without rebuilding the Office suite.
+  ssh "$QUILL" "cd $QDIR/cosmo64 && LMBIN=$LMBIN APPCF='$APPCF' ONLY='$ONLY' sh mkapps.sh"
   mkdir -p build/apps
   scp -q "$QUILL:$QDIR/cosmo64/build/apps/*.UNO" build/apps/
   ls -l build/apps/*.UNO

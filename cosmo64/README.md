@@ -38,7 +38,8 @@ cover panel as a touchpad; a USB mouse and keyboard work through a plain USB
 card is mounted read-write as the boot volume, so the session persists.** The
 shell holds a DHCP lease and serves URC on `:5099`.
 
-Still missing: no audio, no WiFi (CONNSYS has no bare-metal route), and no
+Still missing: audio is built and digitally proven but not yet heard (open
+item 1 below), no WiFi (CONNSYS has no bare-metal route), and no
 cellular. **The RTC is real as of M11** -- the MT6358's battery-backed clock,
 read over PWRAP, so the time survives a power-off. `.UNO` apps load as of M8: the seven the launcher
 rosters live under `APPS\` on the SD card and open from the desktop. **The
@@ -113,20 +114,29 @@ Input is 3.1x cheaper and the shell runs 28% more frames -- and the M7 number
 
 **Open, in the order worth doing:**
 
-1. **Audio.** The oldest gap and now the biggest: no sound path of any kind,
-   and `stubs.c` still answers every `uno_snd_*` and `uno_seq_*` the shell
-   names. It is a real bring-up rather than a compile-it-in slice -- but it is
-   no longer archaeology: **`AUDIO-SURVEY.md` has the measured map** (the AFE
-   at `0x11220000`, `AFE_DAC_CON0`'s two enable bits, the DL1 ring registers,
-   the DMA cursor proven to advance and wrap, and the 27 codec registers with
-   their off/on values). What that survey does NOT have is the ORDER of the
-   codec writes, and it says why both attempts to recover it failed. Suggested
-   first light was the AFE's own sine generator (`0x1f0`), and it has now
-   RUN on the device: the AFE is mapped, the codec applies 23 of 23 rows
-   over PWRAP -- and `AFE_ON` does not stick, so the block is mapped but
-   not clocked. **The blocker is the audio clock gates and the power
-   domain, not the codec.** That is a different subsystem (topckgen,
-   INFRACFG, SCPSYS) and a smaller, better-understood one.
+1. **Audio.** The oldest gap, and as of 2026-09-05 the digital half is
+   PROVEN ON THE PHONE and the whole path is built, pending one flash. The
+   story, in order: `AUDIO-SURVEY.md` measured the AFE and the codec from
+   Linux; the first two `AUDIO=1` boots applied the codec (23 of 23 rows over
+   PWRAP) and found `AFE_ON` would not stick; then **`AFEPROBE.UNO`
+   (`afeprobe.c`, a module pushed over URC with NO reflash) poked the clock
+   tree on the live machine and found the one missing thing: the AUDIO
+   power domain (SPM MTCMOS, `0x10006314`) is OFF at LK handover.** The
+   infracfg gate and the topckgen muxes were already open. With the domain
+   on, `AFE_ON` sticks, the vendor's DAC path (`afe_regs.h`, transcribed
+   from mt6771-sound.c and mtk-soc-afe-control.c) takes every enable bit,
+   and DL1 streams a ring at 192 KB/s -- 48 kHz stereo s16 to the byte. The
+   probe played a 441 Hz sine through DL1 for three seconds; whether the
+   speaker sounded depends on the codec set, which a module cannot apply.
+   **What is built and NOT yet booted:** `afe.c` is now pc64's PCM backend
+   (`uno_afe_init/ring/pos`, the ring in the Device-mapped `.xdma` section),
+   `pc64/snd_pcm.c` reaches it through a `UNO_SND_BACKEND_AFE` seam, the
+   real `unosound_seq.c` replaces the `uno_seq_*` stubs, and
+   `uno_pc64_snd_note` drives the square voice -- so the chime, Music,
+   Tracker and Dostris should all sound. `AUDIO=1 ./build.sh shell` builds
+   it; still off by default until that boot is heard. `ONLY=afeprobe
+   ./build.sh apps` rebuilds the probe alone for the next live experiment.
+   Still stubbed: `uno_snd_mus_*` (needs unomedia's audio decoders).
 1b. **Fill in behind the modules** (the rest of it). M8 proved the ABI; what
    the apps find behind their imports is often still a stub. Real now:
    `uno_binds.c`, `unolog.c`, `uno3d.c` + `uno3d_soft.c` (the providers), the

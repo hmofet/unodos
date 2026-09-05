@@ -50,6 +50,19 @@ mod() {
     $PY $MKUNO convert "$OUT/$name.dll" "$OUT/$UP.UNO" "$flags"
 }
 
+# ONLY=<name>: build one module and stop. The Office suite below is the slow
+# part of this script, and a diagnostic module being iterated against the live
+# phone (afeprobe) does not need it rebuilt every time.
+if [ -n "$ONLY" ]; then
+    case "$ONLY" in
+        afeprobe) cc "$OUT/afeprobe.o" afeprobe.c; mod afeprobe 1 "$OUT/afeprobe.o" ;;
+        logview)  cc "$OUT/logview.o" ../pc64/apps/logview.c; mod logview 1 "$OUT/logview.o" ;;
+        *)        cc "$OUT/$ONLY.o" "../pc64/apps/$ONLY.c"; mod "$ONLY" 0 "$OUT/$ONLY.o" ;;
+    esac
+    echo "[mkapps] done (ONLY=$ONLY):"; ls -l "$OUT"/*.UNO
+    exit 0
+fi
+
 # ---- the classic tier: a 4-colour Toolbox canvas each (flags 0) ------------
 # The five the launcher rosters (pc64_uui_apps.c's kProc). x86 also packs
 # MUSIC and NETWORK, but neither has had a launcher slot since their panes
@@ -118,5 +131,12 @@ office uocalc uochrome uoicons uodlg uobars uofile uxl_sheet uxl_calc uxl_numfmt
        -- unodoc ud_cfb ud_xls ud_xlsw ud_ptg ud_ptgc ud_zip ud_xml ud_xlsx ud_ooxz ud_xlsxw
 office uoshow uochrome uoicons uodlg uobars uofile uos_geom uos_model uos_render \
        -- unodoc ud_cfb ud_ppt ud_pptw ud_escher ud_zip ud_xml ud_pptx ud_ooxz ud_pptxw
+
+# ---- diagnostics (flags 1): not for the card by default ---------------------
+# AFEPROBE.UNO pokes the audio clock tree on the live phone (afeprobe.c). It
+# is built here so it meets the same import check as everything else, and it
+# is pushed by hand when wanted, never staged onto the SD card.
+cc "$OUT/afeprobe.o" afeprobe.c
+mod afeprobe 1 "$OUT/afeprobe.o"
 
 echo "[mkapps] done:"; ls -l "$OUT"/*.UNO
