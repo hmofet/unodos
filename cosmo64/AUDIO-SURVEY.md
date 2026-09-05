@@ -1,6 +1,8 @@
 # The MT6771 AFE and MT6358 codec, surveyed from the running Linux
 
-**Status: SURVEY ONLY. This machine does not make a sound yet.** What follows
+**Status: NO SOUND YET, but the blocker is now located -- see "What the
+hardware said" below: the AFE is mapped and the codec applies, and the
+audio functional clock is what is missing.** What follows
 is measured, not guessed, and it exists so the bring-up that follows is
 transcription rather than archaeology. Every address here came off the device
 on 2026-09-05 by the same technique that produced the RTC map (`rtc.c`): make
@@ -120,7 +122,60 @@ this is exactly the sort of reasoning the whitelist exists to not depend on.
 Build with `PMIC_WRITE=0` first, as that file's own header instructs after any
 change to its table.
 
-## The suggested first target: the sine generator, not DMA
+## WHAT THE HARDWARE SAID (2026-09-05): it is the clock, not the codec
+
+The sine-generator attempt ran on the device, and it moved the blocker. Two
+boots, in order:
+
+```
+afe: as found: DAC_CON0=00000000 DAC_CON1=00000000 SGEN=00000000
+pmic: AUD 22ac (22ac) wanted 0008, reads 0000
+pmic: audio set applied -- 22 of 23 rows took
+```
+
+then, after teaching the table which rows are status rather than control:
+
+```
+pmic: audio set applied -- 23 of 23 rows took
+afe: AFE_ON -> DAC_CON0=00000000 (wanted bit 0 set)
+afe: AFE_ON did not stick -- the block is mapped but not clocked.
+```
+
+Three things are now settled, and none of them were before:
+
+1. **The AFE is MAPPED and does not fault.** Reads return zeros, not
+   all-ones, and writes are accepted without taking the bus down. Whatever is
+   wrong, it is not that the address is wrong.
+2. **The codec is not the blocker.** All 23 PWRAP rows apply and read back.
+   The MT6358's audio registers can be driven from bare metal, which was the
+   risk worth being careful about and is now measured rather than hoped.
+3. **`AFE_ON` does not stick, and that is the whole problem.** A register that
+   accepts a write and reads back zero is the classic signature of a block
+   whose bus is alive but whose functional clock is not running. The next work
+   is therefore the audio CLOCK GATES and the AUDIO power domain -- topckgen's
+   muxes (`audio_sel`, `aud_intbus_sel`, `aud_1_sel`), the INFRACFG module
+   gate that Linux calls `infra_audio`, and whatever MTCMOS/SCPSYS state sits
+   under them -- and NOT the codec, which is finished.
+
+`0x22ac` also stopped being a mystery: a diff cannot tell a register we drive
+from one we merely watched change, and a write it refuses was never a control
+bit. Its `0 -> 8` under Linux was a consequence of the codec coming up.
+
+### How to get the clock registers, given /dev/mem is absent
+
+The obstacle is the same one that blocked the ordering: no raw MMIO from
+Linux. Two things worth trying before anything else, in this order:
+
+- **`mknod /dev/mem c 1 1`** and read from it. The node is missing, which is
+  not the same as the kernel lacking `CONFIG_DEVMEM`; if the driver is there,
+  the node is one command and the whole clock tree becomes readable.
+- **`/sys/kernel/debug/clk/clk_summary`** already shows the audio tree with
+  enable counts and rates (`infra_audio` enabled at 156 MHz, `aud_intbus_sel`,
+  `aud_2_sel` at 196.608 MHz). That names the clocks even if it does not give
+  their registers, and the MTK clock driver's gate registers are a much
+  smaller and better-documented surface than the AFE's.
+
+## The original first target: the sine generator, not DMA
 
 `AFE_SGEN_CON0` (`0x1f0`) makes the AFE emit a tone with **no DMA ring at
 all** -- clocks, codec, one enable. It is a much smaller first light than a
