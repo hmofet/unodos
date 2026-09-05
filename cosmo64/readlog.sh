@@ -9,8 +9,10 @@
 # THE LOG LIVES ON THE eMMC. UnoDOS writes it into the unused tail of its own
 # boot partition -- p38 is 32 MiB, the boot image is 512 KiB, so the window
 # sits 2 MiB in and is 128 KiB long. Block 0 of the window is a header
-# ("(UNOLOG)", byte count, and the offset the text starts at, so a truncated
-# log is distinguishable from a whole one); the text follows.
+# ("(UNOLOG)", byte count, the tail's ring offset, and the boot-preamble
+# length); the text follows. On a long session that text is the frozen boot
+# preamble, a "[older log wrapped away]" marker, then the recent tail, so the
+# boot story is always there no matter how long UnoDOS ran.
 #
 # It used to live in DRAM, in the kernel's ramoops console zone, which would
 # have needed no eMMC driver at all. That never reached pstore on this device
@@ -92,9 +94,12 @@ MAGIC=$(printf '%s' "$HDRBLK" | cut -c1-16)
 # "(UNOLOG)" as it lands on disk: 28 55 4e 4f 4c 4f 47 29
 if [ "$MAGIC" = "28554e4f4c4f4729" ]; then
     LEN=$(dd if=/dev/mmcblk0p38 bs=512 skip=$WIN count=1 2>/dev/null | od -An -tu4 -j8 -N4 | tr -d ' \n')
-    FROM=$(dd if=/dev/mmcblk0p38 bs=512 skip=$WIN count=1 2>/dev/null | od -An -tu4 -j12 -N4 | tr -d ' \n')
+    PRE=$(dd if=/dev/mmcblk0p38 bs=512 skip=$WIN count=1 2>/dev/null | od -An -tu4 -j16 -N4 | tr -d ' \n')
     note=
-    [ "$FROM" -gt 0 ] && note=" (truncated: first $FROM bytes dropped)"
+    # PRE > 0 means the session outran the window: what follows is the boot
+    # preamble, then a "[older log wrapped away]" marker, then the recent tail.
+    # The boot story is present either way -- that is the point of the preamble.
+    [ "${PRE:-0}" -gt 0 ] && note=" (wrapped: boot preamble + recent tail, middle dropped)"
     echo "########## eMMC log: p38 + 2 MiB, $LEN bytes$note"
     dd if=/dev/mmcblk0p38 bs=512 skip=$((WIN + 1)) count=255 2>/dev/null \
         | head -c "$LEN" | tr -d '\000'

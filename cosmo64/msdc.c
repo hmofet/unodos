@@ -457,19 +457,24 @@ void c64_log_flush(void)
 {
     if (!g_ready || !g_log_lba)
         return;
-    unsigned total = c64_log_bytes();
+    /* Track the MONOTONIC byte count, not the ring's live size: once the ring
+     * fills, its size stops rising, and a size-based check would then declare
+     * "nothing new" and freeze the eMMC log for the rest of the session -- the
+     * exact stretch this window exists to capture. */
+    unsigned total = c64_log_total();
     if (total == g_flushed)
         return;                                  /* nothing new to say */
 
-    unsigned cap = (LOG_SECTORS - 1u) * BLKSZ;
-    unsigned from = 0, len = total;
-    if (len > cap) {                             /* keep the TAIL, not the head */
-        from = len - cap;
-        len = cap;
-    }
+    /* the window's layout: whole ring, or [preamble][gap][tail] once wrapped.
+     * log.c owns the model (and the host test covers it); this file only lays
+     * the bytes down on the eMMC. */
+    unsigned cap = (LOG_SECTORS - 1u) * BLKSZ;   /* text bytes the window holds */
+    unsigned pre, gaplen, tailfrom, taillen;
+    unsigned len = c64_log_window(cap, &pre, &gaplen, &tailfrom, &taillen);
 
-    /* header block: magic, byte count, and the offset the text starts at, so a
-     * reader can tell a truncated log from a whole one */
+    /* header block: magic, byte count, the tail's ring offset, and the preamble
+     * length, so a reader can tell a whole log from a wrapped one and see where
+     * the split is */
     for (unsigned i = 0; i < BLKSZ; i++)
         g_scratch[i] = 0;
     g_scratch[0] = (c64_u8)LOG_MAGIC0;
@@ -484,21 +489,26 @@ void c64_log_flush(void)
     g_scratch[9] = (c64_u8)(len >> 8);
     g_scratch[10] = (c64_u8)(len >> 16);
     g_scratch[11] = (c64_u8)(len >> 24);
-    g_scratch[12] = (c64_u8)from;
-    g_scratch[13] = (c64_u8)(from >> 8);
-    g_scratch[14] = (c64_u8)(from >> 16);
-    g_scratch[15] = (c64_u8)(from >> 24);
+    g_scratch[12] = (c64_u8)tailfrom;
+    g_scratch[13] = (c64_u8)(tailfrom >> 8);
+    g_scratch[14] = (c64_u8)(tailfrom >> 16);
+    g_scratch[15] = (c64_u8)(tailfrom >> 24);
+    g_scratch[16] = (c64_u8)pre;
+    g_scratch[17] = (c64_u8)(pre >> 8);
+    g_scratch[18] = (c64_u8)(pre >> 16);
+    g_scratch[19] = (c64_u8)(pre >> 24);
     if (c64_blk_write(g_log_lba, g_scratch, 1) < 0)
         return;
 
     unsigned blocks = (len + BLKSZ - 1u) / BLKSZ;
     for (unsigned b = 0; b < blocks; b++) {
-        for (unsigned i = 0; i < BLKSZ; i++)
-            g_scratch[i] = 0;
-        unsigned n = len - b * BLKSZ;
+        unsigned base = b * BLKSZ;
+        unsigned n = len - base;
         if (n > BLKSZ)
             n = BLKSZ;
-        c64_log_read(from + b * BLKSZ, g_scratch, n);
+        for (unsigned i = 0; i < BLKSZ; i++)
+            g_scratch[i] = i < n
+                ? c64_log_window_byte(base + i, pre, gaplen, tailfrom) : 0;
         if (c64_blk_write(g_log_lba + 1 + b, g_scratch, 1) < 0)
             return;
     }
