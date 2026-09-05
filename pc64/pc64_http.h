@@ -18,6 +18,11 @@ int pc64_net_up(void);
  * the network is otherwise brought up lazily by pc64_net_up() on first use. */
 int pc64_net_boot(void);
 
+/* BOTH OF THE ABOVE MAY COME FROM THE PLATFORM. A build that defines
+ * UNO_NET_BRINGUP_EXTERNAL compiles pc64_http.c without either definition and
+ * links its own pair; the declarations and every caller are unchanged. See the
+ * note at the top of pc64_http.c. */
+
 /* GET `url` (http://host[:port]/path, or bare host/path). On success returns
  * the body length (>=0) copied into `body` (NUL-terminated, capped at
  * bodymax-1); `status` gets a short human-readable status/result line. On

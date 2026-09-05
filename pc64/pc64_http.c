@@ -23,6 +23,18 @@
 
 void uno_pc64_delay_ms(int ms);          /* firmware Stall (uefi_main) */
 
+
+/* A PLATFORM MAY SUPPLY ITS OWN BRING-UP. The two functions below walk a table
+ * of eight NIC families, half of them PCIe parts, on timing rules that assume a
+ * PC's buses: each wait is counted in iterations of a 5 ms sleep. A port whose
+ * only possible adapter hangs off a USB host breaks both assumptions -- an
+ * unanswered USB transfer costs its full multi-second timeout, so an "8 second"
+ * budget is really hours -- so it defines pc64_net_up() and pc64_net_boot()
+ * itself and compiles this file with -DUNO_NET_BRINGUP_EXTERNAL. Nothing else
+ * moves: the HTTP client still calls pc64_net_up() on first use and links to
+ * whichever definition the image carries. x86 defines nothing and keeps both.
+ * (First consumer: cosmo64/netup.c, the Cosmo Communicator's AX88179.) */
+#ifndef UNO_NET_BRINGUP_EXTERNAL
 /* ---- shared network bring-up (idempotent) -------------------------------- */
 static int g_net_inited;
 
@@ -194,6 +206,7 @@ int pc64_net_boot(void)
     NETBOOT_LOG("net-boot: no device leased (budget %d ms left)", budget);
     return 0;                                     /* on-demand pc64_net_up may retry later */
 }
+#endif /* UNO_NET_BRINGUP_EXTERNAL: the platform supplies the two above */
 
 /* ---- tiny helpers -------------------------------------------------------- */
 static void sput_n(char *dst, int cap, const char *src)

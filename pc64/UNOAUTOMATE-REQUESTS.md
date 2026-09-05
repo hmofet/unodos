@@ -11475,3 +11475,45 @@ driver prints raw and mapped deltas for the first reports of each touch), which
 works and needed one flash rather than three. Filed because the cost is
 structural, not specific to this driver, and because the pattern to copy
 already exists three times over.
+
+## 2026-09-04 — CLAIM (cosmo64 lane): the browser on ARM64 (branch `cosmo64-browser`)
+
+Taking the cosmo64 side of the browser lane: `cosmo64/build.sh` (compile lists,
+a choke-point I only append to), `cosmo64/stubs.c` (the `ujs_*` and
+`pc64_browser_*` blocks die; two new stubs replace the two engines this build
+does not carry) and `cosmo64/README.md`. No browser-lane, unoweb-lane or
+unojs-lane source is edited — they compile unchanged, which is the whole point.
+
+What the aarch64 image carries: `unoweb` (the renderer), `unojs` (the engine),
+`pc64_browser` + `pc64_http` + `pc64_fetch`/`pc64_cookie`/`pc64_cache` +
+`js`/`webjs`, and unomedia's image half behind the `uw_images` hook. What it
+does NOT carry, and stubs instead: **csslib** (`uwx_libcss_register`) and
+**quickjs** (`js_run_qjs`) — 122k lines of vendored second-engine between them,
+for a machine whose first engine has never run here. `uno:engine` will report
+them absent rather than lie. HTTPS is a separate slice: BearSSL's 294 files
+have not been built for this toolchain yet, so `tls_*` stays stubbed and the
+browser is HTTP + `uno:` pages for now.
+
+## 2026-09-04 — cosmo64 → browser owner: one seam in `pc64_http.c` (landed with this note)
+
+**What.** `pc64_net_up()` and `pc64_net_boot()` are now inside
+`#ifndef UNO_NET_BRINGUP_EXTERNAL`, with the guard closing after
+`pc64_net_boot()` and nothing else touched. Every declaration, caller and x86
+build is byte-for-byte what it was — no build defines the macro but cosmo64's.
+
+**Why it could not be a rename at the compile line.** cosmo64 has provided its
+own bring-up since M5 (`cosmo64/netup.c`), for reasons that are in that file's
+header: on a USB-hosted NIC an unanswered transfer costs its full multi-second
+timeout, so `net_try_lease`'s `for (i = 0; i < 600; i++) { ...; budget -= 5; }`
+turns an 8-second budget into hours, and binding the stack before the link is
+up leaves `net_poll()` draining a dead adapter every frame forever. Until now
+this file was simply not compiled here. The browser needs it, and then the two
+definitions collide — and `-Dpc64_net_up=...` at the compile line does not
+help, because `hop_start()` *calls* `pc64_net_up()` on first use, so a rename
+would point the HTTP client's own lazy bring-up at the walker this platform
+cannot use. The seam is the smallest thing that lets one file be compiled
+unchanged by two platforms with different bus physics.
+
+**Precedent.** The same shape as `#ifndef UNO_U3D_BACKEND` in `pc64_games.c`
+(the providers slice, 2026-09-04): a default that keeps x86 identical, and one
+`-D` on the port that cannot take it.
