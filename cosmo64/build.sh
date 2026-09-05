@@ -61,7 +61,7 @@ stage_tree() {
       --exclude=pc64/upy --exclude=pc64/unocode --exclude=pc64/quickjs \
       --exclude=pc64/shots --exclude=pc64/flash --exclude=pc64/remote \
       --exclude=pc64/build --exclude=pc64/tools \
-      pc64 unoui uno3d unosound unomedia unoacpi unojs) | ssh "$QUILL" "tar xzf - -C $QDIR"
+      pc64 unoui uno3d unosound unomedia unoacpi unojs unodoc) | ssh "$QUILL" "tar xzf - -C $QDIR"
   scp -q ../pc64/build/font_data.h ../pc64/build/world_map.h "$QUILL:$QDIR/pc64/build/"
   # two files from the excluded pc64/tools: the URC host client, for
   # qharness.py's QHARNESS_URC gate, and the module packer, for `apps`

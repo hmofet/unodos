@@ -74,4 +74,49 @@ for b in unomedia um_image um_inflate um_png um_jpg um_gif um_bmp \
 done
 mod photos 1 $POBJ
 
+# ---- the Office suite: three unoui-class modules, the PHOTOS pattern -------
+# Each carries the uoffice chrome lane plus ONLY its own format half of unodoc
+# (Word / Excel / PowerPoint), statically linked, so no module pays for
+# another's format and the kernel gains no document code. um_inflate is linked
+# in rather than imported: a module that called the kernel's um_set_alloc would
+# repoint the allocator the browser and UnoAmp use. Same as pc64/build.sh's
+# [3d2]/[3d3]/[3d4], with the -I paths adjusted for the cosmo64 tree layout.
+#
+# -mno-stack-arg-probe stops the compiler emitting a __chkstk stack probe for
+# unodoc's large on-stack frames (the .doc FIB and the OOXML buffers). x86
+# mingw calls ___chkstk_ms and the aarch64 mingw target calls __chkstk; both
+# probe Windows guard pages, a mechanism this OS does not have, and a
+# freestanding module has nothing to resolve the call against (it is not a
+# kernel export, and cpu.s's __chkstk lives in the shell image, not in a
+# module). The flag drops the probe on both machines.
+OFFCF="$APPCF -mno-stack-arg-probe -I../unoui -I../pc64/uoffice -I../unodoc -I../unomedia"
+office() {          # <name> <uoffice-objs...> -- <unodoc-objs...>
+    name=$1; shift
+    uo=""; while [ "$1" != "--" ]; do uo="$uo $1"; shift; done; shift
+    objs="$OUT/$name.o"
+    $CC $OFFCF -DUNO_APP_SYM=uno_app_main -c -o "$OUT/$name.o" "../pc64/apps/$name.c"
+    for b in $uo; do
+        $CC $OFFCF -c -o "$OUT/${name}_$b.o" "../pc64/uoffice/$b.c"
+        objs="$objs $OUT/${name}_$b.o"
+    done
+    for b in "$@"; do
+        $CC $OFFCF -c -o "$OUT/${name}_$b.o" "../unodoc/$b.c"
+        objs="$objs $OUT/${name}_$b.o"
+    done
+    # unomedia.c defines um_alloc/um_free/um_set_alloc that um_inflate.c uses;
+    # both are linked into the module (as on x86), never imported, so the
+    # module's own allocator is not the kernel's.
+    for b in unomedia um_inflate; do
+        $CC $OFFCF -c -o "$OUT/${name}_um_$b.o" "../unomedia/$b.c"
+        objs="$objs $OUT/${name}_um_$b.o"
+    done
+    mod "$name" 1 $objs
+}
+office uoword uochrome uoicons uodlg uobars uofile uow_doc uow_layout \
+       -- unodoc ud_cfb ud_doc ud_docw ud_zip ud_xml ud_docx ud_ooxz ud_docxw
+office uocalc uochrome uoicons uodlg uobars uofile uxl_sheet uxl_calc uxl_numfmt \
+       -- unodoc ud_cfb ud_xls ud_xlsw ud_ptg ud_ptgc ud_zip ud_xml ud_xlsx ud_ooxz ud_xlsxw
+office uoshow uochrome uoicons uodlg uobars uofile uos_geom uos_model uos_render \
+       -- unodoc ud_cfb ud_ppt ud_pptw ud_escher ud_zip ud_xml ud_pptx ud_ooxz ud_pptxw
+
 echo "[mkapps] done:"; ls -l "$OUT"/*.UNO
