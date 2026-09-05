@@ -34,7 +34,17 @@ def _wait_conn(port, secs=20):
     end = time.time() + secs
     while time.time() < end:
         try:
-            return socket.create_connection(("127.0.0.1", port), timeout=2)
+            # settimeout(None) IS LOAD-BEARING. create_connection's timeout
+            # stays ON the returned socket, and UnoAutoLink's reader thread
+            # treats any OSError from recv() as the link closing -- and
+            # socket.timeout IS an OSError. So a 2-second lull in a guest that
+            # logs every 2 seconds silently kills the reader: no replies are
+            # ever seen again, every verb times out, and the guest looks dead
+            # while it is looping happily. Found 2026-09-04 driving the
+            # browser; it had been luck, not health, up to then.
+            s = socket.create_connection(("127.0.0.1", port), timeout=2)
+            s.settimeout(None)
+            return s
         except OSError:
             time.sleep(0.3)
     sys.exit("rncap: nothing listening on 127.0.0.1:%d" % port)
