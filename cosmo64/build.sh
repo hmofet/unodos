@@ -158,6 +158,27 @@ shell )
   # timeout, so netup.c has owned bring-up since M5 and this drops the pair
   # (the seam is #ifndef UNO_NET_BRINGUP_EXTERNAL, upstream in pc64_http.c).
   HTTPCF="-DUNO_NET_BRINGUP_EXTERNAL"
+  # HTTPS. tls.c is BearSSL's glue, tls_ca.c the bundled roots, and
+  # tls_entropy.c the fail-closed source behind both -- the last of which is
+  # x86 asm (cpuid/rdrand/rdtsc) below its own primitive seam, so it is
+  # compiled -DTLS_ENT_PLATFORM and cosmo64/entropy.c supplies the three
+  # calls. The jitter engine, its health test and every refusal are the SAME
+  # portable code x86 runs; the security argument is not forked per
+  # architecture, which is the point of the seam.
+  #
+  # THE CLOCK IS PART OF THIS. br_x509_minimal_set_time decides whether a
+  # certificate's window contains now, and this machine has no RTC -- against
+  # tls.c's 1970 fallback every certificate on the internet is not yet valid.
+  # cosmo64/clock.c is the answer (a monotonic software clock over CNTPCT,
+  # seeded from the stamp below or from CLOCK.CFG on the card).
+  TLS="tls tls_ca"                 # tls_entropy.c is compiled below, with $ENTCF
+  ENTCF="-DTLS_ENT_PLATFORM"
+  # The build stamp: seconds since the epoch, at build time. It is a lower
+  # bound on "now" that costs nothing and is right within days for a fresh
+  # image; clock.c takes the later of it and the saved time, so the clock can
+  # never be dragged backwards by either.
+  BUILD_EPOCH=$(date +%s)
+  echo "[shell] clock seed: build stamp $BUILD_EPOCH ($(date -u -d @$BUILD_EPOCH '+%Y-%m-%d %H:%M UTC' 2>/dev/null || date -u))"
   # M8: the .UNO module loader, compiled unchanged but for two seams it
   # carries for this platform. -DUNO_MODLOAD_LOG routes its diagnostics
   # ("modload: bad crc", "unresolved import X") to uno_dbg_log and so to the
@@ -176,7 +197,7 @@ shell )
   URC="unoauto unoauto_probe unoauto_screen netdisc unostorage"
   URCDBG="unoauto_gate unoauto_remote"
   C64="videolfb display platform input stubs i2c kbd touch codi log msdc \
-       pmic sdmmc blk ssusb pci usb netup urc"
+       pmic sdmmc blk ssusb pci usb netup urc clock entropy"
   if [ -n "$URC_PIN" ]; then
     printf '#define C64_URC_PIN "%s"\n' "$URC_PIN" > urc_pin.h
     echo "[shell] URC gate: production auth with the build-time PIN"
@@ -228,7 +249,8 @@ shell )
   # desktop background, and it defaults to a PC monitor's 1920x1200. This
   # panel's native desktop is 2160x1080 -- wider AND shorter -- so the default
   # would have clipped the desktop this port now starts in.
-  SHCF="$BASECF -mstrict-align -Wno-error=implicit-function-declaration \
+  SHCF="$BASECF -mstrict-align -DC64_BUILD_EPOCH=${BUILD_EPOCH}ll \
+        -Wno-error=implicit-function-declaration \
         -Wno-error=incompatible-function-pointer-types \
         -DFB_MAX_W=2160 -DFB_MAX_H=1080 \
         -DUNO_COLOR=1 -DUNO_PC64 -DUNO_UUI -Dmain=uno_main \
@@ -254,7 +276,37 @@ shell )
   # link fails the build if xhci.o still owns a .bss: a DMA structure left in
   # write-back memory does not fail, it corrupts.
   USBCF="$SHCF -DUNO_XHCI -include c64_usbglue.h"
+  # BearSSL: vendored third-party portable C, so -w like uACPI and csslib --
+  # its own warnings are not this port's to fix and they would drown the
+  # kernel's. -mstrict-align comes along with $BASECF for the reason every
+  # other file gets it (an unaligned access wedges this core silently), and
+  # -Ibearssl/src is needed on top of inc/ because the implementation files
+  # include their private headers by bare name.
+  #
+  # The SKIP LIST IS ARCHITECTURAL, not a preference: these are the x86
+  # accelerated implementations (AES-NI, PCLMUL, SSE2 ChaCha20) plus sysrng,
+  # which wants an OS. Every one has a portable equivalent in the same
+  # directory that builds and is what this image uses. x86 skips exactly the
+  # same set for the same reason (pc64/build.sh BSSL_SKIP) -- there are no
+  # aarch64-accelerated files in this vendored tree to add back.
+  BSSL_SKIP=" ghash_pclmul sysrng aes_x86ni aes_x86ni_cbcdec aes_x86ni_cbcenc \
+              aes_x86ni_ctr aes_x86ni_ctrcbc chacha20_sse2 "
+  # Objects are bs_*.o, NOT b_*.o: the `usb` payload case below already
+  # writes build/b_<file>.o, so a stale usbprobe/mmu/log/msdc left there by
+  # an earlier `./build.sh usb` was swept straight into the shell link by a
+  # b_*.o glob -- which reads as two dozen duplicate-symbol errors naming
+  # files that have nothing to do with what you just changed.
+  BSSLCF="$BASECF -mstrict-align -w -DUNO_PC64 \
+          -I$QDIR/pc64/include -I$QDIR/pc64/bearssl/inc -I$QDIR/pc64/bearssl/src"
   OBJDUMP="$LMBIN/llvm-objdump"
+
+  # The list is computed ON quill (the tree is there, and Git Bash's find
+  # would hand back Windows paths the cross-compiler cannot open).
+  BSSL=$(ssh "$QUILL" "cd $QDIR/pc64 && find bearssl/src -name '*.c' | sort | \
+      while read c; do b=\$(basename \$c .c); \
+          case \"$BSSL_SKIP\" in *\" \$b \"*) continue;; esac; \
+          echo ../pc64/\$c; done | tr '\n' ' '")
+  echo "[shell] BearSSL: $(echo $BSSL | wc -w) files"
 
   ssh "$QUILL" "set -e; cd $QDIR/cosmo64 && \
     for f in $UNOUI; do $CC $SHCF -c ../unoui/\$f.c -o build/u_\$f.o; done && \
@@ -268,6 +320,12 @@ shell )
     for f in $UMI; do $CC $SHCF -c ../unomedia/\$f.c -o build/p_\$f.o; done && \
     for f in $BROWSER; do $CC $SHCF -c ../pc64/\$f.c -o build/p_\$f.o; done && \
     $CC $SHCF $HTTPCF -c ../pc64/pc64_http.c -o build/p_pc64_http.o && \
+    for f in $TLS; do $CC $SHCF -c ../pc64/\$f.c -o build/p_\$f.o; done && \
+    $CC $SHCF $ENTCF -c ../pc64/tls_entropy.c -o build/p_tls_entropy.o && \
+    for c in $BSSL; do \
+        b=\$(basename \$c .c); \
+        $CC $BSSLCF -c \$c -o build/bs_\$b.o; \
+    done && \
     for f in $URC; do $CC $SHCF -c ../pc64/\$f.c -o build/p_\$f.o; done && \
     for f in $URCDBG; do $CC $SHCF -DUNO_DEBUG -c ../pc64/\$f.c -o build/p_\$f.o; done && \
     $CC $USBCF -DC64_XDMA -c ../pc64/xhci.c -o build/p_xhci.o && \
@@ -288,7 +346,7 @@ shell )
     $CC -c entry.s -o build/entry.o && \
     $CC -c cpu.s -o build/cpu.o && \
     $CC $LINK -o build/shell.exe build/entry.o build/cpu.o build/mmu_sa.o \
-        build/u_*.o build/t_*.o build/p_*.o build/c_*.o \
+        build/u_*.o build/t_*.o build/p_*.o build/c_*.o build/bs_*.o \
         \$($CC -rtlib=compiler-rt -print-libgcc-file-name) && \
     $OBJDUMP -h build/shell.exe | grep -E 'xdma|\.data|\.text'"
   scp -q "$QUILL:$QDIR/cosmo64/build/shell.exe" build/

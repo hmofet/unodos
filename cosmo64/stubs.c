@@ -58,26 +58,12 @@ I0(mrvlwifi_present) P0(mrvlwifi_nic) P0(mrvlwifi_mac)
 void rtwifi_status_str(char *buf, int cap)   { empty_str(buf, cap); }
 void mrvlwifi_status_str(char *buf, int cap) { empty_str(buf, cap); }
 
-/* TLS: BearSSL is not compiled here (M5's note: it comes with the HTTP
- * stack). tls.h's convention is 0 = ok for a connect and a BR_ERR_* for the
- * error readouts, so the refusals are -1 and NULL, never 0. */
-int  tls_connect(void)    { return -1; }
-int  tls_connect_ca(void) { return -1; }
-int  tls_read(void)       { return -1; }
-int  tls_write(void)      { return -1; }
-V0(tls_close)
-I0(tls_cipher) I0(tls_version)
-int  tls_last_error(void) { return -1; }
-I0(tls_have_rdrand)
-I0(tls_entropy_source)                       /* TLS_ENT_NONE */
-const char *tls_entropy_name(void) { return "none"; }
-P0(tls_open)
-int  tls_open_error(void) { return -1; }
-int  tls_poll(void)       { return -1; }
-int  tls_send(void)       { return -1; }
-int  tls_recv(void)       { return -1; }
-V0(tls_free)
-int  tls_conn_error(void) { return -1; }
+/* TLS: REAL as of the HTTPS slice -- BearSSL's portable C compiles in
+ * (build.sh's BSSL list, everything but the x86-accelerated files), with
+ * tls.c, tls_ca.c's roots, and tls_entropy.c built -DTLS_ENT_PLATFORM over
+ * cosmo64/entropy.c's three primitives. The date those roots are checked
+ * against comes from cosmo64/clock.c, because this machine has no RTC and
+ * 1970 makes every certificate on the internet not-yet-valid. */
 
 /* uno3d: REAL as of the providers slice (uno3d.c + uno3d_soft.c, and
  * pc64_games.c + uno3d_game.c for Runner3D on top of them) */
