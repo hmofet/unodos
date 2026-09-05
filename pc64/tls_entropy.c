@@ -24,6 +24,27 @@ int  tls_ent_test_has_rdrand(void);
 #define ENT_TSC()        tls_ent_test_tsc()
 #define ENT_RDRAND(p)    tls_ent_test_rdrand(p)
 #define ENT_CPU_RDRAND() tls_ent_test_has_rdrand()
+#elif defined(TLS_ENT_PLATFORM)
+/* THE PLATFORM SUPPLIES THE THREE PRIMITIVES. Everything below this seam --
+ * the jitter workload, the health test, the conditioning, the probe order and
+ * every refusal -- is portable C and stays IDENTICAL, which is the whole
+ * reason this is a seam and not a second file: the security argument for this
+ * source is the health test, and it must not be forked per architecture.
+ *
+ * What a port owes: a monotonic tick counter with resolution FINE ENOUGH that
+ * a ~1 us workload spans many counts (the health test wants the low five bits
+ * to move, so a coarse counter reads as a dead one and TLS correctly refuses),
+ * and an honest answer about whether it has a hardware DRNG. Answering "no"
+ * costs only the jitter path; answering "yes" for a generator that is not
+ * really there is the one lie this file cannot survive.
+ * First consumer: cosmo64/entropy.c (aarch64, MT6771 -- ARMv8.0, so there is
+ * no RNDR and the answer is no). */
+unsigned long long tls_ent_plat_ticks(void);
+int  tls_ent_plat_rng(unsigned long long *out);   /* 0 = no hardware DRNG    */
+int  tls_ent_plat_has_rng(void);
+#define ENT_TSC()        tls_ent_plat_ticks()
+#define ENT_RDRAND(p)    tls_ent_plat_rng(p)
+#define ENT_CPU_RDRAND() tls_ent_plat_has_rng()
 #else
 static unsigned cpuid_ecx1(void)
 {

@@ -11542,3 +11542,51 @@ above the rule was produced by the script" is misleading under that renderer.
 Still stubbed here and worth knowing if you touch `uno:engine`: this port
 carries neither second engine (csslib, quickjs), so that page lists two
 choices it cannot honour. Selecting quickjs reports why at the point of use.
+
+## 2026-09-05 — CLAIM (cosmo64 lane): HTTPS on ARM64 (branch `cosmo64-tls`)
+
+Taking the cosmo64 side of TLS: `cosmo64/build.sh`, `cosmo64/stubs.c` (the
+`tls_*` block dies), two new cosmo64 files (`entropy.c`, `clock.c`),
+`cosmo64/platform.c` and `cosmo64/urc.c`. One seam upstream, below.
+
+## 2026-09-05 — cosmo64 → unonet owner: a platform seam in `tls_entropy.c` (landed with this note)
+
+**What.** A third branch on the primitive seam this file already has for its
+host test: `#elif defined(TLS_ENT_PLATFORM)`, declaring `tls_ent_plat_ticks`,
+`tls_ent_plat_rng` and `tls_ent_plat_has_rng` and defining the same three
+`ENT_*` macros the other two branches define. Nothing else is touched, and no
+build but cosmo64's defines the macro, so x86 is byte-for-byte what it was.
+
+**Why it has to be a seam and not a copy.** Everything below those macros --
+the jitter workload, the SP800-90B-flavoured health test, the conditioning,
+the probe order, the refusals -- is portable C, and it is also *the entire
+security argument for this source*. A port that copied the file to change
+three asm statements would fork that argument, and the copy would be the one
+nobody re-reads when the health test's thresholds are next revisited. The
+seam already existed for `TLS_ENT_HOSTTEST`; this is the same idea for a
+target rather than a test.
+
+**What cosmo64 answers with.** `tls_ent_plat_ticks` is CNTPCT_EL0. There is no
+hardware DRNG: RNDR is ARMv8.5 and the MT6771 is ARMv8.0, and while the SoC
+very likely has a TRNG block its address is not in this tree, so `has_rng`
+returns 0 rather than claim one. The jitter path is therefore the only path,
+and it counts only if the health test passes -- which is a MEASUREMENT, so
+`platform.c` prints the result in the boot story: `entropy: source=jitter
+selftest=1` under the QEMU gate.
+
+**One observation for this lane, not a request.** `tls_entropy_name()` returns
+the literal `"rdrand"` for `TLS_ENT_RDRAND`. On a platform whose hardware DRNG
+is not RDRAND that string would be wrong -- it cannot be reached today (this
+port answers `has_rng()` = 0) and it will be the day someone wires a TRNG.
+Worth a rename to something like "hardware" whenever that lane is next open.
+
+**A second observation, about the clock rather than the entropy.** `tls.c`'s
+`tls_now()` initialises to 1970-01-01 and calls `uno_pc64_time()` **as `void`**,
+so a machine whose RTC read fails validates certificates against the epoch and
+every certificate on the internet is not-yet-valid. That is deterministic and
+safe rather than dangerous, but it is indistinguishable at the call site from a
+working clock, and the resulting handshake failure names the certificate rather
+than the clock. cosmo64 no longer trips it (it has a software clock now, see
+`cosmo64/clock.c`), so this is filed rather than fixed -- but an x86 box with a
+dead CMOS battery hits exactly the same wall, and a distinct refusal, in the
+spirit of `TLS_ENOENTROPY`, would say so out loud.
