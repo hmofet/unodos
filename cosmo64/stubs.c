@@ -104,9 +104,14 @@ const char *uwx_libcss_status(void) { return "csslib is not in this build"; }
 I0(uno_pkg_launch)
 void uno_pkg_runtime_str(const char *target, char *buf, int max) { (void)target; empty_str(buf, max); }
 
-/* sampled audio + the sequencer's readout: no audio path on this SoC yet */
+/* sampled audio + the sequencer's readout. AUDIO=1 compiles the real
+ * snd_pcm.c over the AFE (afe.c) and the real sequencer, so those stubs go;
+ * the Music player's half (snd_mus.c) needs unomedia's audio decoders, which
+ * this image does not carry, so uno_snd_mus_* stay stubbed either way. */
+#if !C64_AUDIO
 I0(uno_seq_playing)
 I0(uno_snd_sfx_load) I0(uno_snd_sfx_play) I0(uno_snd_sfx_playing)
+#endif
 I0(uno_snd_mus_play) I0(uno_snd_mus_playing)
 
 /* unovirt: no hypervisor (GenieZone holds EL2's virtualisation; the payload
@@ -271,6 +276,7 @@ V0(pc64_xferapp_open)
 I0(pc64_xferapp_canvas)
 
 /* ---- audio --------------------------------------------------------------- */
+#if !C64_AUDIO
 V0(uno_seq_init)
 P0(uno_seq_backend)
 V0(uno_seq_tick)
@@ -279,9 +285,10 @@ I0(uno_snd_active)
 P0(uno_snd_name)
 I0(uno_snd_volume)
 V0(uno_snd_sfx_stop_all)
+V0(uno_snd_poll)
+#endif
 V0(uno_snd_mus_tick)
 V0(uno_snd_mus_stop)
-V0(uno_snd_poll)
 V0(unoamp_ui_build)
 V0(unoamp_close)
 V0(unoamp_tick)
@@ -313,8 +320,10 @@ void uno_ps2_status(int *kbd, int *aux, int *auxport, int *auxid)
     if (auxport) *auxport = 0;
     if (auxid) *auxid = -1;
 }
+#if !C64_AUDIO
 V0(uno_seq_beep)
 V0(uno_seq_play)
+#endif
 V0(unoamp_ui_close)
 
 /* ---- detach: an LK payload is born detached ------------------------------ */

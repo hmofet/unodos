@@ -1,168 +1,154 @@
-/* cosmo64/afe.c -- first light for audio: the MT6771 AFE's own sine generator.
+/* cosmo64/afe.c -- the MT6771 AFE as pc64's PCM backend: the AUDIO power
+ * domain, the codec over PWRAP, the DAC path, and a DL1 ring that snd_pcm.c
+ * writes and the AFE reads forever.
  *
- * WHY A SINE GENERATOR AND NOT A DMA RING. The AFE can emit a tone with no
- * buffer, no descriptors and no memory traffic at all -- one register. That
- * makes it the smallest thing that still proves everything underneath: that
- * the audio power domain is on at LK handover, that the block is clocked, that
- * the MT6358's analog chain can be brought up from bare metal, and that the
- * speaker is wired where we think it is. A DMA ring proves none of those and
- * adds its own failure modes on top. Get a tone, then add DL1.
+ * THE SHAPE. pc64/snd_pcm.c asks a backend for three things -- init(),
+ * ring(&frames), pos() -- and does everything else itself: the square voice
+ * the Sound Manager drives, the sample stream, the effects mixer, the
+ * resampler, and the looping-ring design that makes underruns benign. So this
+ * file is those three functions (uno_afe_*) and the bring-up under them; the
+ * UNO_SND_BACKEND_AFE seam in snd_pcm.c picks them over HD Audio / AC'97.
  *
- * WHERE EVERY NUMBER HERE CAME FROM: cosmo64/AUDIO-SURVEY.md. Nothing in this
- * file is guessed from a datasheet -- the AFE offsets were confirmed against
- * two landmarks on the running device, and the codec values are what Linux
- * itself writes, captured by diffing the PMIC across an idle -> sine
- * transition TWICE and keeping only what changed identically both times. The
- * registers that moved on one run and not the other are noise (ADC readings,
- * counters) and are deliberately NOT written here; two of them, 0x248a and
- * 0x2492, were in an earlier single-run diff and would have been written if
- * that diff had been trusted.
+ * THE SEQUENCE, AND WHERE IT WAS PROVEN. afe_regs.h holds the register map
+ * and the sequences; AFEPROBE.UNO (afeprobe.c) ran exactly those on the live
+ * phone on 2026-09-05 with no reflash, and that is where the blocker of the
+ * first two AUDIO=1 boots turned out to be: not the codec (23 of 23 rows
+ * took), not the clock gates or muxes (all open at LK handover), but the
+ * AUDIO MTCMOS in SPM, which the recovery slot's LK never turns on. With the
+ * domain on, AFE_ON sticks, the DAC path's enable bits hold, and DL1 streams
+ * at 192 KB/s = 48 kHz stereo s16. What the probe could NOT do is the codec:
+ * PWRAP is deliberately reachable only through pmic.c's whitelist, so the
+ * analog half is applied here, from the kernel, and this file is the first
+ * place the whole chain runs together.
  *
- * WHAT THE FIRST TWO RUNS ESTABLISHED (2026-09-05): the AFE is mapped and
- * does not fault (it reads zeros, not all-ones), the codec set applies 23 of
- * 23 rows over PWRAP, and AFE_ON DOES NOT STICK -- DAC_CON0 accepts a write
- * and reads back zero, which is a block whose bus is alive and whose
- * functional clock is not. So the blocker is the audio clock gates and the
- * power domain, not this file's codec sequence, and the ordering question
- * below is not what is standing between here and a tone.
+ * ORDER, top to bottom, and why:
+ *   1. the power domain -- everything below reads as zeros until it is on;
+ *   2. the codec (pmic.c's measured 23-row set) -- the part that can hurt,
+ *      done while the log is short and before anything is streaming into it;
+ *   3. the DAC path, in the vendor's order (SetI2SDacOut, SetI2SDacEnable);
+ *   4. the ring, silent, and DL1 on. From here snd_pcm.c owns the samples.
  *
- * WHAT IS STILL UNKNOWN BENEATH THAT, and it is the ORDER. A diff gives a set of registers
- * and their target values; codec bring-up is order-sensitive and the order
- * could not be recovered (the survey says why: no /dev/mem, and regmap
- * tracing cannot see a PWRAP device). The order used below is the one that
- * makes physical sense -- supply and clock, then the codec's digital half,
- * then its analog half, then the AFE, then the tone last so nothing is
- * enabled into an unfinished path -- and it is a hypothesis, not a fact.
+ * THE RING IS DEVICE MEMORY. The AFE reads DRAM behind the CPU's back and is
+ * not coherent with the caches, exactly like the xHCI (c64_usbglue.h). The
+ * ring therefore lives in the ".xdma" section that flatten.py records and
+ * mmu.c maps Device-nGnRnE, so a sample snd_pcm.c stores is in DRAM when the
+ * store completes and no per-frame cache clean is needed. snd_pcm.c's "drain
+ * before DMA reads" is a dsb on this architecture (its own seam).
  *
  * EVERY STEP LOGS AND FLUSHES BEFORE IT ACTS. If this wedges the machine, the
- * eMMC log names the last thing attempted, which is the whole difference
- * between a bug and a mystery. That is not caution for its own sake: these are
- * PMIC writes on a phone.
+ * eMMC log names the last thing attempted. These are PMIC writes on a phone.
  */
 
 #include "cosmo64.h"
-
-/* log.c keeps this as a local macro (so its host test can define it away);
- * there is no shared header for it, so this file carries its own. */
-#ifndef C64_DSB
-#define C64_DSB() __asm__ volatile("dsb sy" ::: "memory")
-#endif
-
-#define AFE_BASE       0x11220000ull
-#define A32(off)       (*(volatile c64_u32 *)(AFE_BASE + (off)))
-
-#define AFE_DAC_CON0   0x010u          /* bit 0 = AFE on, bit 1 = DL1 on   */
-#define AFE_DAC_CON1   0x014u
-#define AFE_DL1_BASE   0x040u
-#define AFE_DL1_CUR    0x044u
-#define AFE_DL1_END    0x048u
-#define AFE_SGEN_CON0  0x1f0u
-
-/* Measured on the device while Linux had the sine generator running. */
-#define SGEN_ON        0x00580580u
-#define DAC_CON1_VAL   0x00000aaau
+#include "afe_regs.h"
 
 int  c64_pmic_present(void);
-int  c64_pmic_read(c64_u32 addr, c64_u32 *val);
 int  c64_pmic_audio_apply(void);        /* pmic.c, behind C64_AUDIO */
 void c64_log_flush(void);
 
+/* 16384 frames = 64 KB = 341 ms at 48 kHz: comfortably past snd_pcm.c's
+ * 200 ms lead, and a size the DL1 END register takes without complaint (Linux
+ * runs a 48 KB ring through the same registers). */
+#define RING_FRAMES 16384u
+static short g_ring[RING_FRAMES * 2] __attribute__((section(".xdma"), aligned(64)));
+static int   g_up;
+
 static void afe_dump(const char *when)
 {
-    c64_logf("afe: %s DAC_CON0=%08x DAC_CON1=%08x SGEN=%08x "
-             "DL1 base=%08x cur=%08x end=%08x\n",
-             when, A32(AFE_DAC_CON0), A32(AFE_DAC_CON1), A32(AFE_SGEN_CON0),
-             A32(AFE_DL1_BASE), A32(AFE_DL1_CUR), A32(AFE_DL1_END));
+    c64_logf("afe: %s dac0=%08x dac1=%08x i2s1=%08x conn3=%08x conn4=%08x "
+             "uldl=%08x src2=%08x padtop=%08x dl1 %08x..%08x cur %08x\n",
+             when, AFE_R32(AFE_DAC_CON0), AFE_R32(AFE_DAC_CON1),
+             AFE_R32(AFE_I2S_CON1), AFE_R32(AFE_CONN3), AFE_R32(AFE_CONN4),
+             AFE_R32(AFE_ADDA_UL_DL_CON0), AFE_R32(AFE_ADDA_DL_SRC2_CON0),
+             AFE_R32(AFE_AUD_PAD_TOP_CFG), AFE_R32(AFE_DL1_BASE),
+             AFE_R32(AFE_DL1_END), AFE_R32(AFE_DL1_CUR));
 }
 
-/* Is the block there at all? An unpowered or unclocked peripheral on this SoC
- * reads back all-ones (or takes the bus down, which is why this is the first
- * thing done and why the log is flushed before the first read). All-ones
- * across every register is the signature to stop on: it means the audio power
- * domain is off at handover and the next piece of work is SPM, not this file. */
-static int afe_alive(void)
+/* ---- the backend --------------------------------------------------------- */
+int uno_afe_init(void)
 {
-    c64_u32 a = A32(AFE_DAC_CON0), b = A32(AFE_DAC_CON1), c = A32(AFE_SGEN_CON0);
-    if (a == 0xFFFFFFFFu && b == 0xFFFFFFFFu && c == 0xFFFFFFFFu)
+    c64afe_u32 steps = 0, v;
+
+    /* The QEMU gate boots this image too (urc.c makes the same test): the
+     * virt board has no SPM at 0x10006000 and the first read would abort. */
+    if (c64_fdt_root_compat_has((const void *)FBDBG->dtb_ptr, "linux,dummy-virt")) {
+        c64_log("afe: QEMU virt board -- no AFE, no audio\n");
         return 0;
-    return 1;
-}
-
-void c64_afe_sine(void)
-{
-    c64_u32 v;
-
-    c64_log("afe: probing the audio front-end at 0x11220000 -- if this is the "
-            "last line in the log, the read itself took the machine down\n");
+    }
+    c64_log("afe: bringing the audio path up -- if this is the last line in "
+            "the log, the SPM write took the machine down\n");
     c64_log_flush();
 
-    if (!afe_alive()) {
-        c64_log("afe: every register reads all-ones -- the audio power domain "
-                "is OFF at handover. Nothing here can work until SPM turns it "
-                "on; stopping before any write.\n");
+    /* 1. the power domain */
+    if (!c64afe_domain_on(&steps)) {
+        c64_logf("afe: the AUDIO domain never acked (sta=%08x con=%08x); "
+                 "no audio this boot\n",
+                 AFE_R32(SPM_PWR_STATUS), AFE_R32(SPM_AUDIO_PWR_CON));
         c64_log_flush();
-        return;
+        return 0;
     }
+    c64_logf("afe: AUDIO domain %s%s%s (sta=%08x con=%08x); infra sta1=%08x "
+             "topck cfg5=%08x\n",
+             (steps & 2) ? "turned ON" : "already on",
+             (steps & 1) ? ", project code written" : "",
+             (steps & 4) ? ", an SRAM ack timed out" : "",
+             AFE_R32(SPM_PWR_STATUS), AFE_R32(SPM_AUDIO_PWR_CON),
+             AFE_R32(INFRA_PDN_STA1), AFE_R32(TOPCK_CLK_CFG_5));
     afe_dump("as found:");
     c64_log_flush();
 
-    /* 1. The codec, over PWRAP. This is the part that can hurt, so it goes
-     *    first while the log is still short and everything after it is
-     *    conditional on it having returned at all. */
+    /* 2. the codec, over PWRAP */
     if (!c64_pmic_present()) {
-        c64_log("afe: no PMIC -- the analog path cannot be brought up, so a "
-                "tone would be inaudible even if the AFE ran. Stopping.\n");
+        c64_log("afe: no PMIC -- the analog path cannot be brought up; the "
+                "digital path is left off too\n");
         c64_log_flush();
-        return;
+        return 0;
     }
     c64_log("afe: applying the codec set (23 registers, AUDIO-SURVEY.md)\n");
     c64_log_flush();
     if (c64_pmic_audio_apply() < 0) {
         c64_log("afe: the codec set did not apply cleanly -- see the readback "
-                "lines above; not enabling the generator into a half-built "
-                "path\n");
+                "lines above; not streaming into a half-built path\n");
         c64_log_flush();
-        return;
+        return 0;
     }
 
-    /* 2. The AFE itself: rate config, then AFE_ON. DL1 is deliberately left
-     *    off -- there is no ring, and the generator does not need one. */
-    A32(AFE_DAC_CON1) = DAC_CON1_VAL;
-    C64_DSB();
-    v = A32(AFE_DAC_CON0);
-    A32(AFE_DAC_CON0) = v | 1u;
-    C64_DSB();
-    v = A32(AFE_DAC_CON0);
-    c64_logf("afe: AFE_ON -> DAC_CON0=%08x (wanted bit 0 set)\n", v);
+    /* 3. the DAC path */
+    c64afe_dac_on();
+    v = AFE_R32(AFE_DAC_CON0);
     if (!(v & 1u)) {
-        c64_log("afe: AFE_ON did not stick -- the block is mapped but not "
-                "clocked. SPM/clock work comes before anything else here.\n");
+        c64_logf("afe: AFE_ON did not stick (dac0=%08x) with the domain on -- "
+                 "a state the probe never saw; no audio this boot\n", v);
         c64_log_flush();
-        return;
+        return 0;
     }
 
-    /* 3. The tone, last. */
-    A32(AFE_SGEN_CON0) = SGEN_ON;
-    C64_DSB();
-    v = A32(AFE_SGEN_CON0);
-    c64_logf("afe: sine generator -> SGEN=%08x (wanted %08x)\n", v, SGEN_ON);
-    afe_dump("after:   ");
-    c64_log(v == SGEN_ON
-            ? "afe: the generator is programmed. IF THE SPEAKER IS SILENT the "
-              "digital side is running and the analog side is not -- which is "
-              "the codec set's ORDER, the one thing the survey could not "
-              "measure.\n"
-            : "afe: the generator register did not take its value\n");
+    /* 4. the ring, and DL1 reading it. Device memory: plain stores land. */
+    for (unsigned i = 0; i < RING_FRAMES * 2; i++)
+        g_ring[i] = 0;
+    AFE_DSB();
+    c64afe_dl1_start((c64afe_u32)(c64afe_u64)g_ring, RING_FRAMES * 4u);
+    afe_dump("streaming:");
+    g_up = 1;
+    c64_log("afe: DL1 is streaming a 64 KB silent ring; snd_pcm.c owns it now\n");
     c64_log_flush();
+    return 1;
 }
 
-/* Turn it off again. The tone is continuous, and an OS that boots into an
- * unstoppable noise is not a good demonstration of anything. */
-void c64_afe_sine_off(void)
+short *uno_afe_ring(unsigned *frames)
 {
-    if (!afe_alive())
-        return;
-    A32(AFE_SGEN_CON0) = 0;
-    C64_DSB();
-    c64_log("afe: sine generator off\n");
+    *frames = RING_FRAMES;
+    return g_ring;
 }
+
+/* The DMA read cursor, in frames. Proven the right register on the device
+ * (AUDIO-SURVEY.md: five reads 300 ms apart advance and wrap at END). */
+unsigned uno_afe_pos(void)
+{
+    c64afe_u32 cur = c64afe_dl1_cur();
+    c64afe_u32 base = (c64afe_u32)(c64afe_u64)g_ring;
+    if (!g_up || cur < base) return 0;
+    return ((cur - base) / 4u) % RING_FRAMES;
+}
+
+int uno_afe_active(void) { return g_up; }

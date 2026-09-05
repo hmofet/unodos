@@ -14,7 +14,11 @@ void unolog_init(void);            /* unolog.c: the system log's ring + config *
 void c64_clock_init(void);         /* clock.c: the wall clock, for TLS        */
 void c64_entropy_report(void);     /* entropy.c: which source TLS settled on  */
 #if C64_AUDIO
-void c64_afe_sine(void);           /* afe.c: the audio front-end's tone       */
+void uno_snd_init(void);           /* pc64/snd_pcm.c over afe.c: the PCM ring */
+void uno_snd_poll(void);
+void uno_snd_note(int midi);
+void uno_snd_quiet(void);
+int  uno_snd_active(void);
 #endif
 
 /* ---- the module arena (M8) ----------------------------------------------
@@ -170,11 +174,12 @@ void c_main(void *dtb)
      * rather than in a handshake failure an hour later. */
     c64_entropy_report();
 #if C64_AUDIO
-    /* AUDIO=1 only. First light for the audio path, and it is a PROBE: it
-     * reads the AFE before it writes anything, refuses to go on if the block
-     * reads as unpowered, and logs and flushes at every step so a machine
-     * that wedges says where. See afe.c and AUDIO-SURVEY.md. */
-    c64_afe_sine();
+    /* AUDIO=1 only. pc64's PCM layer over the MT6771 AFE: afe.c powers the
+     * AUDIO domain, applies the codec set over PWRAP, brings the DAC path up
+     * and starts DL1 on a silent ring; snd_pcm.c then writes the ring every
+     * frame (uno_snd_poll, below). It logs and flushes at every step so a
+     * machine that wedges says where. See afe.c and AUDIO-SURVEY.md. */
+    uno_snd_init();
 #endif
     /* USB before the shell too: enumeration takes a moment (port power,
      * debounce, the hub walk) and the desktop should come up with its mouse
@@ -313,6 +318,11 @@ void uno_pc64_poll(void)
     c64_perf_loop();
     c64_urc_tick();                 /* M6: bring the remote channel up once
                                      * the network bring-up has had its turn */
+#if C64_AUDIO
+    uno_snd_poll();                 /* keep the DL1 ring ahead of the AFE's
+                                     * read cursor (uefi_main.c does the same
+                                     * from its loop on x86) */
+#endif
 #ifdef C64_KBDTEST
     kbdtest_tick(frames);
 #endif
@@ -363,14 +373,25 @@ void uno_native_reset(void)
     uno_pc64_restart();                          /* never returns either  */
 }
 
-/* ---- sound: silent until the MTK AFE (M5, maybe never) ------------------ */
+/* ---- sound: the Sound Manager voice --------------------------------------
+ * The sequencer (unosound_seq.c) is hooked to these two by pc64_uui.c; on
+ * x86 they drive the PC speaker unless a DAC is streaming. There is no PC
+ * speaker here, so they are the DAC or nothing: snd_pcm.c's square voice
+ * over the AFE ring under AUDIO=1, silence otherwise. */
 void uno_pc64_snd_note(int midi)
 {
+#if C64_AUDIO
+    if (uno_snd_active()) uno_snd_note(midi);
+#else
     (void)midi;
+#endif
 }
 
 void uno_pc64_snd_quiet(void)
 {
+#if C64_AUDIO
+    if (uno_snd_active()) uno_snd_quiet();
+#endif
 }
 
 void uno_pc64_chime(void)

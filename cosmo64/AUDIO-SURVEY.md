@@ -1,8 +1,10 @@
 # The MT6771 AFE and MT6358 codec, surveyed from the running Linux
 
-**Status: NO SOUND YET, but the blocker is now located -- see "What the
-hardware said" below: the AFE is mapped and the codec applies, and the
-audio functional clock is what is missing.** What follows
+**Status (2026-09-05, later the same day): THE BLOCKER IS FOUND AND THE
+DIGITAL PATH IS PROVEN -- see "What the probe said" at the end. It was the
+AUDIO power domain in SPM, off at LK handover; nothing else was missing. The
+full path (`afe.c` as pc64's PCM backend over `afe_regs.h`) is built behind
+`AUDIO=1` and awaits one flash to be heard.** What follows
 is measured, not guessed, and it exists so the bring-up that follows is
 transcription rather than archaeology. Every address here came off the device
 on 2026-09-05 by the same technique that produced the RTC map (`rtc.c`): make
@@ -199,3 +201,79 @@ aplay -D hw:0,0 -f S16_LE -r 48000 -c 2 \
 `speaker-test`'s defaults are rejected by this driver (it picks
 `period_size=12000` against a 12288-frame buffer, which does not divide);
 pass `-b 256000 -p 64000` or use `aplay` with the explicit sizes above.
+
+## WHAT THE PROBE SAID (2026-09-05, later): the power domain, and nothing else
+
+The clock question was answered without a reflash. `afeprobe.c` builds to
+`AFEPROBE.UNO`, a unoui-class module pushed to the SD card over URC (`put`,
+`rescan`, `launch afeprobe`) while the phone sat in UnoDOS; a module runs in
+the kernel's address space and mmu.c identity-maps the first gigabyte as
+Device memory, so it reads and writes SPM, INFRACFG, topckgen and the AFE
+directly and narrates on the SCRIPT log channel. Two runs, in order:
+
+```
+spm:   cfg=00000003 sta=0000634c sta2=0000634c aud_pwr=0000ff12   <- bit 24 CLEAR
+infra: sta1=00000000 (audio bit25=0)  sta2=00000000 (26m bit4=0)  <- open
+topck: cfg5=01000100  (audio_sel=0 pdn=0, intbus_sel=1 pdn=0)     <- open
+afe:   top0=00000000 dac0=00000000 ...                            <- reads zeros
+AFE_ON after nothing: dac0=00000000 -> no
+spm: AUDIO domain is OFF -- turning it on
+spm: AUDIO on: sta=0100634c sta2=0100634c con=0000000d
+AFE_ON after MTCMOS: dac0=00000001 -> STICKS
+sgen: wrote 00580580 reads 00580580 -> TAKES
+dl1: dac0=00000003 cur 4729f980 472a0940 472a1840 472a2740 -> ADVANCES
+```
+
+Three facts, each measured:
+
+1. **The AUDIO MTCMOS was off.** `PWR_STATUS` bit 24 clear, `AUDIO_PWR_CON`
+   = `0xff12` (SRAM powered down, isolated, clock disabled). The recovery
+   slot's LK never turns it on. `spm_mtcmos_ctrl_audio()`'s on-sequence from
+   `clk-mt6771-pg.c` -- `PWR_ON`, `PWR_ON_2ND`, wait for both status bits,
+   clear `CLK_DIS`, clear `ISO`, set `RST_B`, release the four SRAM PDN bits
+   one at a time -- brought it up first try, every ack arriving.
+2. **Nothing else was missing.** `infra_audio` (INFRA_PDN_STA1 bit 25) and
+   the 26 MHz bclk gate read open; `audio_sel` sits on clk26m ungated and
+   `aud_intbus_sel` on syspll_d2_d4 ungated -- exactly what `AudDrv_Clk_On`
+   would have set. `AUDIO_TOP_CON0` came up as `0xa0fd4038`, whose AFE, DAC
+   and DAC_PREDIS power-down bits are already clear.
+3. **The AFE runs at the rate it should.** The DL1 cursor moved 0xfc0 bytes
+   per 20 ms = 192 KB/s = 48000 x 2 x 2. That is the clock, measured.
+
+`POWERON_CONFIG_EN` (the SPM unlock) read `3` at handover and reads `1`
+after the project-code write -- the code field is write-only, so the test is
+"bit 0 set", not "code present".
+
+The second run did the whole DAC path from the vendor driver
+(`c64afe_dac_on()` in `afe_regs.h`: pad-top FIFO 0x31, MTKAIF protocol 1,
+predistortion cleared, `AFE_ADDA_DL_SRC2_CON0` = `0x83001802` from
+`SetDLSrc2(48000)`, the -0.3 dB gain word, SDM level 0x1d, `AFE_I2S_CON1` =
+`0xa0a` from `SetI2SDacOut`, the DL1 -> DAC interconnect) and then DL1 on a
+ring holding a 441 Hz sine for three seconds. Every enable bit held:
+
+```
+dac path: dac0=00000001 uldl=00006001 src2=83001803 i2s1=00000a0b conn3=00000020 conn4=00000040
+dl1: PLAYING a 441 Hz sine for 3000 ms ... dl1: stopped (timer) after 3023 ms
+```
+
+Two corrections to the tables above, learned from the vendor source:
+
+- The rows called "IRQ counters" (`0x02c` = `0x20`, `0x030` = `0x40`) are
+  **`AFE_CONN3` and `AFE_CONN4`, the interconnect**: bit 5 = I05 (DL1 left)
+  into O03 (DAC left), bit 6 = I06 into O04. The survey measured the right
+  registers and misnamed them.
+- `0x034` = `0xa0b` is **`AFE_I2S_CON1`**, the DAC-out configuration, which
+  is `SetI2SDacOut(48000)` to the bit (rate 0xa<<8, I2S format, 32-bit word,
+  enable). `0x04c` is `AFE_I2S_CON3`, an I2S output this path does not use.
+
+And one correction to the method: the tone Linux played for the survey was
+the sine generator riding on a DAC path Linux had ALREADY configured, so
+`0x1f0` really was the only AFE register that changed. On a bare AFE the
+generator has nothing to feed; the path above is what was missing between
+"SGEN takes its value" and a sound. It comes from the vendor driver's code,
+not from a diff, because the diff could not see what was already on.
+
+**What a module cannot do is the codec.** PWRAP is not a module export, on
+purpose. So the probe's proof stops at the DAC's digital input, and the
+kernel (`afe.c`, `AUDIO=1`) is where the domain, the codec set and this DAC
+path first run together. That build exists; it has not been booted.
