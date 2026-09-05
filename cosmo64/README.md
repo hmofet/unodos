@@ -26,7 +26,8 @@ Everything below has run on the phone, not just under the gate:
 | M5 | networking: a DHCP lease over the AX88179 USB Ethernet |
 | M6 | URC: the box is remotely driven from the dev PC, with a live log |
 | M7 | the SD card as a persistent volume, the rear panel as a touchpad, three perf wins |
-| M8 | **`.UNO` modules: the aarch64 module ABI -- seven apps load from the SD card** |
+| M8 | `.UNO` modules: the aarch64 module ABI -- seven apps load from the SD card |
+| M9 | **the browser: unoweb, unojs and the browser lane -- pages render, scripts run** |
 
 **What runs the machine today.** The desktop is the panel's native landscape at
 a 2x zoom. Local input is the matrix keyboard, the touch panel, and the rear
@@ -37,7 +38,11 @@ shell holds a DHCP lease and serves URC on `:5099`.
 
 Still missing: no audio, no WiFi (CONNSYS has no bare-metal route), no
 cellular, and no RTC. `.UNO` apps load as of M8: the seven the launcher
-rosters live under `APPS\` on the SD card and open from the desktop.
+rosters live under `APPS\` on the SD card and open from the desktop. **The
+browser is carried as of M9** -- unoweb, unojs and the browser lane compile
+for aarch64, both renderers paint and `<script>` blocks run. HTTPS does not
+work yet: BearSSL is a slice of its own, so `tls_*` is still stubbed and the
+browser is HTTP plus its own `uno:` pages.
 
 **Where we left off.** p38 carries the M8 image and it is booted and
 verified: every module in `APPS\` loaded and drew over URC. The loop is:
@@ -101,11 +106,20 @@ Input is 3.1x cheaper and the shell runs 28% more frames -- and the M7 number
 
 **Open, in the order worth doing:**
 
-1. **Fill in behind the modules.** M8 proved the ABI; what the apps find
-   behind their possible imports is often a stub. The first three portable
-   groups are now real (see "The providers" below): `uno_binds.c`,
-   `unolog.c`, and `uno3d.c` + `uno3d_soft.c`. Next the Office modules, which
-   need `unodoc/` staged. See M8 below.
+1. **HTTPS.** The browser is here and it can only speak HTTP, which in
+   practice means it can reach this LAN and very little else. BearSSL is 294
+   portable C files plus `tls.c`/`tls_ca.c`/`tls_entropy.c`; the entropy
+   source is the open question, because `tls_have_rdrand` is an x86 answer and
+   this SoC's is either the MT6771's TRNG or the jitter of its own timers.
+   Everything else about that slice looks like the browser's: compile the
+   files, delete the stubs.
+1b. **Fill in behind the modules** (the rest of it). M8 proved the ABI; what
+   the apps find behind their imports is often still a stub. Real now:
+   `uno_binds.c`, `unolog.c`, `uno3d.c` + `uno3d_soft.c` (the providers), the
+   Office modules, and the whole browser lane. Still stubbed and portable:
+   `unoscript` (it needs `unosecure`, which needs an account store -- and
+   there IS a FAT volume now, which the stub comments predate), `unopkg`, and
+   `uno_devmgr.c` behind the device tree.
 2. **The CoDi link drops frames.** The shell polls that UART about 36 times a
    second and OurCodi reports at 100 Hz during contact, which is ~58 bytes into
    a 16-byte FIFO between two polls. `codi.c` recovers (a gesture with no
@@ -1630,3 +1644,141 @@ amanuensis):
 ```sh
 cc -o /tmp/logwin_test cosmo64/test/logwin_test.c && /tmp/logwin_test
 ```
+
+## The browser (2026-09-04): unoweb, unojs and the browser lane on ARM64
+
+The largest thing `stubs.c` still answered was the browser, and behind it the
+whole `ujs_*` block. Both are portable C that only ever needed a compiler to
+reach them, so this slice is the same shape as the providers: files move out
+of `stubs.c` and into `build.sh`'s lists, and nothing in anyone else's lane is
+edited to make it work.
+
+**What compiles in.** `unoweb` (the renderer: DOM, HTML, CSS, layout, paint),
+`unojs` (the engine, eight files), the browser lane itself (`pc64_browser`,
+`pc64_http`, `pc64_fetch`, `pc64_cookie`, `pc64_cache`, `js`, `webjs`), and
+unomedia's IMAGE half behind unoweb's `uw_images` hook so `<img>` decodes --
+the same twelve decoders PHOTOS.UNO already carries, which is why they were
+known to build for this target before this slice started.
+
+**What deliberately does not.** Both of the browser's second engines:
+
+| not carried | size | what answers instead |
+|---|---|---|
+| csslib (the libcss cascade) | 57k lines, 323 files | `uwx_libcss_register` and friends in `stubs.c`; the built-in cascade computes every style |
+| quickjs (the other script backend) | 64k lines | `js_run_qjs` in `stubs.c`, returning js.h's "runtime error" with the reason in the log |
+
+Both are reachable only from the `uno:engine` page, and that page still lists
+them, because it is the browser lane's file and this port does not edit it.
+Selecting quickjs and running a script says "quickjs is not in this build
+(unojs is the only engine)" where js.h says an error message goes, which is
+the honest answer at the point of use. `pc64_browser.c` includes csslib's
+three-function embedder header, so that ONE header is staged; the 57k lines
+behind it are not.
+
+### The three things that had to change, and why each one is not a hack
+
+1. **`pc64_http.c` needed a seam** (`#ifndef UNO_NET_BRINGUP_EXTERNAL`, landed
+   upstream with a request in `pc64/UNOAUTOMATE-REQUESTS.md`). Its
+   `pc64_net_up`/`pc64_net_boot` walk eight NIC families counting each wait in
+   iterations of a 5 ms sleep, which on this machine turns an 8-second budget
+   into hours -- an unanswered USB transfer costs its full multi-second
+   timeout. `netup.c` has owned bring-up since M5 for exactly that reason, and
+   until now this file simply was not compiled. A `-D` rename at the compile
+   line does NOT work: `hop_start()` *calls* `pc64_net_up()` on first use, so a
+   rename would point the HTTP client's own lazy bring-up at the walker this
+   platform cannot use.
+2. **The image links a compiler-runtime archive**, for the first time. unojs
+   converts decimal to double through `__int128` (64 bits cannot keep adjacent
+   doubles distinct), which lowers to `__udivti3` and `__floatuntidf`. x86
+   answers this with `-lgcc`; here the link line asks the compiler for the
+   path (`$(CC -rtlib=compiler-rt -print-libgcc-file-name)`) rather than naming
+   a version directory that a toolchain bump would silently invalidate. It is
+   a static archive -- only the two helpers land.
+3. **`/merge:.pdata=.rdata`**, because one function in that archive carries
+   unwind data, and EIGHT BYTES of `.pdata` after `.data` did precisely what
+   the `.unodrv` table did in M4: dragged flatten.py's trim point past the
+   shell's ~100 MB of `.bss` and produced a 119 MB shipped image. Nothing here
+   unwinds, so the eight bytes go where the other read-only words are.
+
+One compile flag also changed: `-Wno-error=incompatible-function-pointer-types`,
+the same clang-is-stricter-than-mingw-gcc story as the implicit-declaration
+flag beside it. `pc64_browser.c` hands `malloc` to unomedia's allocator hook,
+which is typed `void *(*)(unsigned long)` while pc64's `malloc` is
+`void *(size_t)` -- 32 bits and 64 on LLP64. The call is benign for images
+under 4 GB and x86 has shipped it since the browser learned to decode `<img>`.
+Downgraded, not silenced.
+
+Cost: the shipped image goes from about 0.5 MB to **1,149,776 bytes**.
+
+### The bug this slice actually found was in the harness
+
+Driving the browser over URC failed in a way that looked like the guest dying:
+`screen grab`, `uptime` and every keystroke timed out, and `alive()` went
+false. The post-mortem said otherwise -- no crash record, and the log ring
+showed the shell still turning 123 loops every 2 seconds. The guest was fine.
+
+`qharness.py` and `rncap.py` take their URC socket from
+`socket.create_connection(..., timeout=2)`, **and that timeout stays on the
+socket**. `UnoAutoLink`'s reader thread treats any `OSError` from `recv()` as
+the link closing, and `socket.timeout` is an `OSError`. So the first two-second
+lull in a guest that logs every two seconds killed the reader, and every reply
+after that went unread. The URC gates have been passing on luck since M6.
+One line each: `settimeout(None)` after connect.
+
+Two harness additions came out of the same session:
+
+- **`QHARNESS_LAUNCH=<id>[,<id>...]`** -- the built-in-app gate, what
+  `QHARNESS_UNO` is for modules. It requires the launch verb to answer, the
+  guest to still answer `uptime`, AND the screen to differ from the one before
+  the launch; the third is the point, because a stub app satisfies the first
+  two.
+- **`browsercap.py`** -- walks the browser through its own pages and saves a
+  full-resolution grab of each, because the failures that matter here are
+  visual: a layout that computes and paints nothing, a script that runs into a
+  document nobody draws, a font metric that is right on x86 and wrong under
+  `-mstrict-align`. It types the location STRAIGHT INTO the window rather than
+  opening the address bar first the way x86's `browser_engine_urc.py` does:
+  a printable character arriving while the bar is unfocused focuses it and
+  clears it, so a stop costs 12 verbs instead of 45 -- and under QEMU, with
+  every verb answered on a frame boundary, 45 was more than the run could
+  afford.
+
+### What the gate saw
+
+Plain, EL2 and URC gates green, and the URC gate now also launches the
+browser: `app: browser launched and drew (launched; 270x135; uptime 5109)`.
+
+`browsercap.py` walks seven stops, each one visibly different from the last
+(the harness counts changed pixels precisely so "it navigated and painted the
+same thing" cannot pass):
+
+```
+uno:start                  581854 px content, first
+uno:sample                 581854 px content, 92148 changed
+uno:script                 581854 px content, 13902 changed
+uno:engine                 581854 px content, 14344 changed
+uno:engine/render/unoweb   581854 px content, 12251 changed
+uno:sample                 581854 px content, 18613 changed   <- the OTHER renderer
+uno:script                 581854 px content, 22949 changed
+```
+
+The two that matter most:
+
+- **`uno:script` on the flow painter** draws the Fibonacci table its
+  `<script>` block generates through `document.write`, and prints
+  `sqrt(2) = 1.4142135623730951`. That is seventeen significant figures out of
+  unojs's decimal conversion -- i.e. the `__int128` path and the compiler-rt
+  helpers above, doing their job.
+- **`uno:sample` on the unoweb engine** paints headings, emphasis, code spans,
+  a link, a bulleted list, a rule and a `<pre>` block with its spacing and
+  shaded background intact: the full pipeline (cascade, block layout, display
+  list, paint), not the direct tree walk.
+
+**One thing to check against x86 rather than assume:** under the unoweb
+renderer, `uno:script` renders the prose and the rule but NOT the script's
+generated table, where the flow painter renders it. The two renderers reach
+scripts by different routes (`js_expand` into the source vs `run_page_scripts`
+against the tree), and `document.write` may simply have no meaning on the DOM
+route -- js.c's own note says the DOM binding stays on unojs for every page.
+Recorded as an observation, not a regression: it has not been compared against
+an x86 build.

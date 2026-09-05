@@ -43,7 +43,22 @@ BASECF="-O2 -Wall -Wextra -ffreestanding -fno-stack-protector -fno-stack-check \
 # at the splash in M1. Nothing here reads the table (no device manager), so
 # it goes inside .data's initialised part where it costs nothing. flatten.py
 # trips on any shipped image over 16 MB so this cannot recur silently.
-LINK="-nostdlib -Wl,--image-base,0x40080000 -e _start -Wl,-Xlink=/merge:.unodrv=.data"
+# /merge:.pdata=.rdata: the compiler-runtime archive below brings ONE function
+# with unwind data, and eight bytes of .pdata is enough to do what the .unodrv
+# table did in M4 -- land after .data, whose virtual extent is the shell's
+# ~100 MB of .bss, and drag flatten.py's trim point to a 119 MB shipped image.
+# Nothing here unwinds (there is no SEH and no OS to run it), so the eight
+# bytes go where every other read-only word goes and cost nothing.
+LINK="-nostdlib -Wl,--image-base,0x40080000 -e _start \
+      -Wl,-Xlink=/merge:.unodrv=.data -Wl,-Xlink=/merge:.pdata=.rdata"
+# THE ONE LIBRARY THIS IMAGE LINKS, and only since the browser: unojs converts
+# decimal to double through __int128 (64 bits cannot keep adjacent doubles
+# distinct), which lowers to __udivti3 and __floatuntidf -- compiler-runtime
+# helpers, not libc. x86 answers this with -lgcc; llvm-mingw ships the same
+# helpers as compiler-rt, and the archive is asked for BY THE COMPILER
+# (-print-libgcc-file-name) rather than named by path, so a toolchain bump
+# cannot silently point at a stale version directory. It is a static archive:
+# only the two helpers actually referenced land in the image.
 
 stage_quill() {
   ssh "$QUILL" "mkdir -p $QDIR/cosmo64/build $QDIR/pc64/build $QDIR/pc64/tools $QDIR/unoui/themes $QDIR/uno3d"
@@ -52,8 +67,9 @@ stage_quill() {
 
 # The pc64 tree the shell and the .UNO modules are both built from, minus the
 # big vendored stacks a shell-only build never sees (tar over ssh: Git Bash
-# has no rsync). unojs is staged for its HEADERS: pc64_modload.c exports the
-# engine's embedding surface by name and includes unojs.h to do it.
+# has no rsync). unojs used to be staged for its HEADERS alone (pc64_modload.c
+# exports the engine's embedding surface by name); as of the browser it is
+# COMPILED, and unoweb -- the renderer -- comes with it.
 stage_tree() {
   echo "[stage] pc64 core + unoui + cosmo64 -> quill"
   stage_quill
@@ -61,7 +77,12 @@ stage_tree() {
       --exclude=pc64/upy --exclude=pc64/unocode --exclude=pc64/quickjs \
       --exclude=pc64/shots --exclude=pc64/flash --exclude=pc64/remote \
       --exclude=pc64/build --exclude=pc64/tools \
-      pc64 unoui uno3d unosound unomedia unoacpi unojs unodoc) | ssh "$QUILL" "tar xzf - -C $QDIR"
+      pc64 unoui uno3d unosound unomedia unoacpi unojs unoweb unodoc) | ssh "$QUILL" "tar xzf - -C $QDIR"
+  # csslib is NOT staged: 57k lines of vendored CSS for a second cascade this
+  # image does not carry. But pc64_browser.c includes its embedder header, so
+  # that ONE file goes over on its own and stubs.c answers its three functions.
+  ssh "$QUILL" "mkdir -p $QDIR/csslib"
+  scp -q ../csslib/uwx.h "$QUILL:$QDIR/csslib/"
   scp -q ../pc64/build/font_data.h ../pc64/build/world_map.h "$QUILL:$QDIR/pc64/build/"
   # two files from the excluded pc64/tools: the URC host client, for
   # qharness.py's QHARNESS_URC gate, and the module packer, for `apps`
@@ -111,6 +132,32 @@ shell )
   # here by the UNO_U3D_BACKEND seam -- no PCI GPU exists on this SoC.
   U3D="uno3d uno3d_soft uno3d_game"
   GAMES="-DUNO_U3D_BACKEND=u3d_backend_soft"
+  # M9: the browser. Four subsystems, none of them edited for this machine:
+  # unoweb is the renderer (DOM / HTML / CSS / layout / paint), unojs the
+  # script engine behind js.c's shim, the browser lane is the chrome plus the
+  # HTTP client and the fetch/cookie/cache trio, and unomedia's IMAGE half
+  # rides behind unoweb's uw_images hook so <img> decodes. unojs needs the
+  # compiler runtime for __int128 (its decimal<->double conversion), which the
+  # link line supplies -- see LINKRT below.
+  #
+  # TWO THINGS THIS IMAGE DELIBERATELY DOES NOT CARRY, both second engines
+  # whose first engine has never run here: csslib (57k lines: the libcss
+  # cascade, reached only from the uno:engine page) and quickjs (64k: the
+  # other script backend). stubs.c answers uwx_libcss_* and js_run_qjs, so
+  # the switches report them absent instead of lying about what they did.
+  # BearSSL is a slice of its own, so tls_* stays stubbed: HTTP and uno:
+  # pages now, HTTPS when the 294 files have been built for this toolchain.
+  UJS="ujs_core ujs_math ujs_lex ujs_comp ujs_vm ujs_lib ujs_promise ujs_api"
+  UWEB="uw_dom uw_html uw_css uw_style uw_layout"
+  BROWSER="pc64_fetch pc64_cookie pc64_cache js webjs pc64_browser"
+  UMI="unomedia um_image um_inflate um_png um_jpg um_gif um_bmp um_ico \
+       um_tga um_pnm um_qoi um_webp um_vp8 um_stub"
+  # pc64_http.c is the one file in the lane that needs a flag. Its
+  # pc64_net_up/pc64_net_boot walk eight NIC families on PC bus timings; on
+  # this machine an unanswered USB transfer costs its full multi-second
+  # timeout, so netup.c has owned bring-up since M5 and this drops the pair
+  # (the seam is #ifndef UNO_NET_BRINGUP_EXTERNAL, upstream in pc64_http.c).
+  HTTPCF="-DUNO_NET_BRINGUP_EXTERNAL"
   # M8: the .UNO module loader, compiled unchanged but for two seams it
   # carries for this platform. -DUNO_MODLOAD_LOG routes its diagnostics
   # ("modload: bad crc", "unresolved import X") to uno_dbg_log and so to the
@@ -164,6 +211,14 @@ shell )
   # -Wno-error=implicit-function-declaration: mingw-gcc merely warns on the
   # declared-later-in-the-same-file pattern pc64_uui.c uses; clang 16+ errors.
   # The linker still catches genuinely missing functions.
+  # -Wno-error=incompatible-function-pointer-types: the same shape of
+  # difference, one file down. unomedia.h types its allocator hook as
+  # void *(*)(unsigned long) and the browser hands it malloc, which pc64's
+  # stdlib.h types as void *(size_t) -- and on LLP64 those are 32 and 64 bits
+  # wide. The call is benign (a size_t narrowed to 32 bits, for an image
+  # smaller than 4 GB) and x86 has shipped it since the browser learned to
+  # decode <img>; clang 16+ just makes it an error where gcc warns. Downgraded
+  # rather than silenced: it still prints, so a REAL mismatch stays visible.
   # -mstrict-align FOR EVERYTHING on this device: the hardware bisect of
   # 2026-09-01 showed unaligned accesses wedge the core silently (no EL1
   # fault -- consistent with GenieZone's stage-2 imposing Device-type memory),
@@ -174,6 +229,7 @@ shell )
   # panel's native desktop is 2160x1080 -- wider AND shorter -- so the default
   # would have clipped the desktop this port now starts in.
   SHCF="$BASECF -mstrict-align -Wno-error=implicit-function-declaration \
+        -Wno-error=incompatible-function-pointer-types \
         -DFB_MAX_W=2160 -DFB_MAX_H=1080 \
         -DUNO_COLOR=1 -DUNO_PC64 -DUNO_UUI -Dmain=uno_main \
         -I$QDIR/pc64/include -I$QDIR/pc64 -I$QDIR/unoui -I$QDIR/uno3d \
@@ -207,6 +263,11 @@ shell )
     $CC $SHCF $MODLOAD -c ../pc64/pc64_modload.c -o build/p_pc64_modload.o && \
     $CC $SHCF $GAMES -c ../pc64/pc64_games.c -o build/p_pc64_games.o && \
     for f in $U3D; do $CC $SHCF -c ../uno3d/\$f.c -o build/p_\$f.o; done && \
+    for f in $UJS; do $CC $SHCF -c ../unojs/\$f.c -o build/p_\$f.o; done && \
+    for f in $UWEB; do $CC $SHCF -c ../unoweb/\$f.c -o build/p_\$f.o; done && \
+    for f in $UMI; do $CC $SHCF -c ../unomedia/\$f.c -o build/p_\$f.o; done && \
+    for f in $BROWSER; do $CC $SHCF -c ../pc64/\$f.c -o build/p_\$f.o; done && \
+    $CC $SHCF $HTTPCF -c ../pc64/pc64_http.c -o build/p_pc64_http.o && \
     for f in $URC; do $CC $SHCF -c ../pc64/\$f.c -o build/p_\$f.o; done && \
     for f in $URCDBG; do $CC $SHCF -DUNO_DEBUG -c ../pc64/\$f.c -o build/p_\$f.o; done && \
     $CC $USBCF -DC64_XDMA -c ../pc64/xhci.c -o build/p_xhci.o && \
@@ -221,13 +282,14 @@ shell )
         -c ../pc64/ax88179.c -o build/p_ax88179.o && \
     if $OBJDUMP -h build/p_xhci.o | grep -Eq '\.bss +0*[1-9a-f]'; then \
         echo 'BUILD TRIPWIRE: xhci.o still has a .bss -- DMA memory would be cached' >&2; exit 1; fi && \
-    $OBJDUMP -h build/p_xhci.o | grep -q '\.xdma' || { echo 'BUILD TRIPWIRE: no .xdma section in xhci.o' >&2; exit 1; } && \
+    { $OBJDUMP -h build/p_xhci.o | grep -q '\.xdma' || { echo 'BUILD TRIPWIRE: no .xdma section in xhci.o' >&2; exit 1; }; } && \
     for f in $C64; do $CC $SHCF -mstrict-align -c \$f.c -o build/c_\$f.o; done && \
     $CC $SHCF -mstrict-align -c mmu.c -o build/mmu_sa.o && \
     $CC -c entry.s -o build/entry.o && \
     $CC -c cpu.s -o build/cpu.o && \
     $CC $LINK -o build/shell.exe build/entry.o build/cpu.o build/mmu_sa.o \
-        build/u_*.o build/t_*.o build/p_*.o build/c_*.o && \
+        build/u_*.o build/t_*.o build/p_*.o build/c_*.o \
+        \$($CC -rtlib=compiler-rt -print-libgcc-file-name) && \
     $OBJDUMP -h build/shell.exe | grep -E 'xdma|\.data|\.text'"
   scp -q "$QUILL:$QDIR/cosmo64/build/shell.exe" build/
   FLATTEN_IMGSZ=shipped "$PY" flatten.py build/shell.exe build/shell.bin

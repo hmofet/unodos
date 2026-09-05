@@ -82,31 +82,34 @@ int  tls_conn_error(void) { return -1; }
 /* uno3d: REAL as of the providers slice (uno3d.c + uno3d_soft.c, and
  * pc64_games.c + uno3d_game.c for Runner3D on top of them) */
 
-/* unojs: no engine. ujs_new() answers NULL and every other entry point needs
- * the vm it would have returned, so the rest are unreachable in practice;
- * they are shaped by their headers regardless (ujs_val is one word, so a 0
- * return is a well-formed value). */
-P0(ujs_new) V0(ujs_free)
-I0(ujs_eval) I0(ujs_resume) I0(ujs_exception) V0(ujs_clear_exception)
-const char *ujs_describe(void) { return ""; }
-V0(ujs_scope_open) I0(ujs_scope_close) I0(ujs_root) V0(ujs_unroot)
-I0(ujs_undefined) I0(ujs_null) I0(ujs_bool) I0(ujs_number) I0(ujs_string)
-I0(ujs_object_new) I0(ujs_array_new) I0(ujs_typeof)
-I0(ujs_is_undefined) I0(ujs_is_null) I0(ujs_is_number) I0(ujs_is_string)
-I0(ujs_is_object) I0(ujs_is_array) I0(ujs_is_function)
-double ujs_to_number(void) { return 0; }
-I0(ujs_to_bool)
-const char *ujs_string_bytes(void *vm, su64 v, su64 *len)
-{ (void)vm; (void)v; if (len) *len = 0; return ""; }
-I0(ujs_to_string) I0(ujs_get) I0(ujs_set) I0(ujs_get_index) I0(ujs_set_index)
-I0(ujs_has) I0(ujs_delete) I0(ujs_array_length) I0(ujs_array_push)
-I0(ujs_call) I0(ujs_function_new) I0(ujs_host_new) P0(ujs_host_user)
-I0(ujs_set_fn) I0(ujs_set_accessor) I0(ujs_global)
-I0(ujs_throw) I0(ujs_throw_error)
-I0(ujs_fuel_used) V0(ujs_fuel_reset) V0(ujs_gc)
-su64 ujs_heap_used(void) { return 0; }
-I0(ujs_promise) V0(ujs_promise_resolve) V0(ujs_promise_reject)
-I0(ujs_run_jobs) V0(ujs_function_set_data)
+/* unojs: REAL as of the browser slice -- ../unojs's eight files compile in,
+ * js.c is the shim over them and webjs.c projects the DOM in as host
+ * functions. What is left here is the OTHER side of both of the browser's
+ * runtime switches, because this image carries one engine of each pair and
+ * the switch has to link either way.
+ *
+ * quickjs (pc64/quickjs, 64k lines): the second script backend. js.c's engine
+ * table takes the ADDRESS of js_run_qjs, so it has to exist; 2 is js.h's
+ * "runtime error" and the message goes where js.h says an error leaves one,
+ * so selecting it on uno:engine reports the truth instead of running silently
+ * nowhere. */
+int js_run_qjs(const char *src, char *out, int outmax, char *log, int logmax)
+{
+    const char *m = "quickjs is not in this build (unojs is the only engine)";
+    int i = 0;
+    (void)src; (void)out; (void)outmax;
+    if (log && logmax > 0) { while (m[i] && i < logmax - 1) { log[i] = m[i]; i++; } log[i] = 0; }
+    return 2;
+}
+
+/* csslib (../csslib, 57k lines of vendored libcss): the second CASCADE,
+ * reached only from the uno:engine page. Registering does nothing, so the
+ * built-in cascade stays the one that computes styles -- and the status line
+ * is a readout somebody acts on, so it says why rather than answering ""
+ * (which in that contract means "healthy, no fallback was taken"). */
+V0(uwx_libcss_register)
+V0(uwx_libcss_unregister)
+const char *uwx_libcss_status(void) { return "csslib is not in this build"; }
 
 /* key bindings + app preferences: REAL (uno_binds.c) as of the providers
  * slice -- BINDS/prefs persist on the SD card beside SHELL.CFG */
@@ -303,11 +306,9 @@ V0(pc64_music_action)
 I0(pc64_music_key)
 V0(pc64_music_tick)
 V0(pc64_music_closed)
-V0(pc64_browser_open)
-V0(pc64_browser_open_path)
-I0(pc64_browser_key)
-I0(pc64_browser_canvas)
-/* (pc64_games.c is real now: Runner3D on the soft rasteriser) */
+/* (pc64_games.c is real now: Runner3D on the soft rasteriser, and
+ * pc64_browser.c is real as of the browser slice -- with unoweb under it,
+ * unojs behind js.c, and unomedia's image half behind uw_images) */
 
 /* ---- packaging (pc64_pkg.c: the installer side, not carried) ------------- */
 I0(uno_pkg_probe)
