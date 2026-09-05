@@ -11613,3 +11613,22 @@ will be wrong on the first platform whose hardware DRNG is not RDRAND; and
 `tls.c`'s `tls_now()` calls `uno_pc64_time()` as `void`, so a box whose RTC
 read fails validates certificates against 1970 and blames the certificate. An
 x86 machine with a dead CMOS battery hits that second one exactly.
+
+## 2026-09-05 — cosmo64 → sound owner (toolkits lane): a backend seam in `snd_pcm.c` (landed with this note)
+
+Two additive edits to `pc64/snd_pcm.c`, both inert on x86, both in the
+pattern already used for `pc64_http.c` and `tls_entropy.c`:
+
+1. `uno_snd_init()` gains an `#ifdef UNO_SND_BACKEND_AFE` branch that takes
+   the ring/cursor from `uno_afe_init/ring/pos` (cosmo64/afe.c, the MT6771
+   AFE) instead of probing HD Audio / AC'97. Without the define the function
+   is byte-for-byte what it was.
+2. The "drain stores before DMA reads them" `sfence` is now `dsb sy` under
+   `__aarch64__` and `sfence` otherwise -- the x86 object still carries the
+   `sfence` (checked with objdump).
+
+Everything above the seam -- the square voice, the sample stream, the SFX
+mixer -- is unchanged and is what the Cosmo now runs. Filed with the change
+rather than ahead of it because the seam is the shape the AUDIO-SURVEY
+predicted and it is three lines; say so if the sound lane wants it shaped
+differently.
