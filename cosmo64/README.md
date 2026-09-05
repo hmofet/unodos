@@ -27,7 +27,7 @@ Everything below has run on the phone, not just under the gate:
 | M6 | URC: the box is remotely driven from the dev PC, with a live log |
 | M7 | the SD card as a persistent volume, the rear panel as a touchpad, three perf wins |
 | M8 | `.UNO` modules: the aarch64 module ABI -- seven apps load from the SD card |
-| M9 | **the browser: unoweb, unojs and the browser lane -- pages render, scripts run** |
+| M9 | **the browser: unoweb, unojs and the browser lane -- it fetches, renders and runs scripts on the phone** |
 
 **What runs the machine today.** The desktop is the panel's native landscape at
 a 2x zoom. Local input is the matrix keyboard, the touch panel, and the rear
@@ -44,8 +44,9 @@ for aarch64, both renderers paint and `<script>` blocks run. HTTPS does not
 work yet: BearSSL is a slice of its own, so `tls_*` is still stubbed and the
 browser is HTTP plus its own `uno:` pages.
 
-**Where we left off.** p38 carries the M8 image and it is booted and
-verified: every module in `APPS\` loaded and drew over URC. The loop is:
+**Where we left off.** p38 carries the M9 image and it is booted and
+verified: the browser fetches a page over the wire, renders it and runs its
+script (see "On the hardware" at the end of this file). The loop is:
 
 ```sh
 ./build.sh shell && ./flashp38.sh   # when there is something new to try
@@ -1782,3 +1783,47 @@ against the tree), and `document.write` may simply have no meaning on the DOM
 route -- js.c's own note says the DOM binding stays on unojs for every page.
 Recorded as an observation, not a regression: it has not been compared against
 an x86 build.
+
+### On the hardware (2026-09-05)
+
+p38 reflashed (`./flashp38.sh`, readback verified), booted from the LK menu,
+and driven over URC from the dev PC. **The browser opened, fetched a page off
+a socket, rendered it, and ran its script** -- the last of which QEMU cannot
+test at all, because the virt board has no USB and therefore no NIC.
+
+The page was served by `python3 -m http.server` on quill and asked for by
+typing the URL into the browser's address bar over the URC `key` verb:
+
+```
+launch browser -> launched
+-> http://192.168.2.114:8099/     15899 px changed, 12s
+-> uno:sample                     16160 px changed, 10s
+slow key verbs: 0
+uptime 294057 ms; alive=True
+```
+
+What the panel showed: the `<h1>` and `<h2>`, the prose, the bulleted list, the
+rule, the `<code>` span -- and, below them,
+
+```
+1 + 2 + ... + 100 = 5050 , and Math.sqrt(2) = 1.4142135623730951
+```
+
+which the page's `<script>` computed **on the MT6771**: unojs running on
+aarch64, and its `__int128` decimal-to-double conversion giving all seventeen
+significant figures. The status line reads `HTTP/1.0 200 OK` and the tray
+reads `LAN`. Zero key verbs timed out -- on the device the frame loop is fast
+enough that the QEMU pacing problem browsercap.py works around does not exist.
+
+**A trap worth keeping, met in this run.** The first fetch was aimed at
+`:8080` on quill, where `python3 -m http.server` had silently FAILED to bind
+("Address already in use") behind an existing service on that port. The
+browser dutifully rendered that service's page instead, and the run looked
+like a success at a glance -- `HTTP/1.0 200 OK`, right window, plausible
+content. A fetch test proves nothing unless the page says something only YOUR
+server would say; check the bind, and make the page self-identifying.
+
+Still true after the hardware run: no HTTPS (BearSSL is not built for this
+toolchain, so `tls_*` is stubbed and an `https://` URL refuses rather than
+misbehaves), and the `uno:engine` page still lists quickjs and libcss as
+choices because that page is the browser lane's file, not this port's.
