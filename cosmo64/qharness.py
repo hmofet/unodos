@@ -110,7 +110,16 @@ def urc_session(port, run_for):
     sock = None
     while time.time() < t_end:
         try:
+            # settimeout(None) IS LOAD-BEARING. create_connection's timeout
+            # stays ON the returned socket, and UnoAutoLink's reader thread
+            # treats any OSError from recv() as the link closing -- and
+            # socket.timeout IS an OSError. So a 2-second lull in a guest that
+            # logs every 2 seconds silently kills the reader: no replies are
+            # ever seen again, every verb times out, and the guest looks dead
+            # while it is looping happily. Found 2026-09-04 driving the
+            # browser; it had been luck, not health, up to then.
             sock = socket.create_connection(("127.0.0.1", port), timeout=2)
+            sock.settimeout(None)
             break
         except OSError:
             time.sleep(0.3)
@@ -217,6 +226,49 @@ def urc_session(port, run_for):
                 notes.append("uno: %s screen grab skipped (%s)" % (fname, e))
         except Exception as e:
             fails.append("uno: %s failed: %s" % (fname, e))
+    # QHARNESS_LAUNCH=<id>[,<id>...]: the BUILT-IN app gate. The module gate
+    # above proves a .UNO reaches the loader; this proves an app the KERNEL
+    # carries opens, draws, and hands the guest back. Nothing is pushed and no
+    # modload line is expected, so the proof has to come from three places at
+    # once: the launch verb answers, the guest still answers `uptime` after
+    # it, and THE SCREEN IS DIFFERENT from the one before the launch. The last
+    # one is the point -- an app that is a stub, or whose window never paints,
+    # answers the first two perfectly well. Each screen is saved as
+    # app-<id>.png beside the run's PNG.
+    for app in [a for a in (os.environ.get("QHARNESS_LAUNCH") or "").split(",") if a]:
+        try:
+            try:
+                bw, bh, before = link.screen_grab(scale=4, timeout=30.0)
+            except Exception:
+                bw, bh, before = 0, 0, b""
+            r = link.launch(app, timeout=20.0)
+            time.sleep(2.0)
+            up = link.uptime(retries=2)
+            if not up > 0:
+                fails.append("app: %s left the guest unable to answer uptime" % app)
+                continue
+            w, h, rgba = link.screen_grab(scale=4, timeout=30.0)
+            if not any(rgba):
+                fails.append("app: %s drew a blank screen (%dx%d)" % (app, w, h))
+                continue
+            if before and (w, h) == (bw, bh) and bytes(rgba) == bytes(before):
+                fails.append("app: %s launched but the screen never changed" % app)
+                continue
+            notes.append("app: %s launched and drew (%s; %dx%d; uptime %d)"
+                         % (app, " ".join(r) if r else "-", w, h, up))
+            shot = os.environ.get("QHARNESS_UNO_PNG_DIR") or "."
+            write_png(os.path.join(shot, "app-%s.png" % app), w, h,
+                      bytes(b for i, b in enumerate(rgba) if i % 4 != 3))
+            notes.append("app: %s screen saved as app-%s.png" % (app, app))
+            # leave the desktop as we found it, so a second id in the list
+            # starts from the same place this one did
+            try:
+                link.close_top()
+                time.sleep(0.8)
+            except Exception as e:
+                notes.append("app: %s would not close (%s)" % (app, e))
+        except Exception as e:
+            fails.append("app: %s failed: %s" % (app, e))
     # the replayed boot log must have reached us (it is paced 8 lines a
     # frame, so give it a moment), and a line logged NOW must follow live
     time.sleep(1.5)
