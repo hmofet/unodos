@@ -1542,3 +1542,53 @@ not re-run: nothing in the storage stack changed. On x86, `pc64_games.c`'s new
 seam defaults to the Intel backend, so the shared file is byte-for-byte
 behaviour-identical there; the pc64 prod + debug builds and `tools/gate.sh`
 confirm it.
+
+## The Office suite (2026-09-04): UnoWord, UnoCalc, UnoShow built for aarch64
+
+The three unoui-class Office modules now build for this machine, on the same
+PHOTOS pattern the other big modules use: each statically links the uoffice
+chrome lane (command bars, dialogs, the file dialog, the document model and
+layout) and ONLY its own half of `unodoc` (Word / Excel / PowerPoint), plus
+`unomedia`'s `unomedia.c` + `um_inflate.c` for the OOXML deflate. So no module
+pays for another's format and the kernel gains no document code at all.
+
+`build.sh apps` builds them through `mkapps.sh`'s `office()` helper, which is
+`pc64/build.sh`'s [3d2]/[3d3]/[3d4] recipes with the `-I` paths adjusted for
+the cosmo64 tree layout. `build.sh`'s staged tar now includes `unodoc` (the one
+tree the shell build never needed). Sizes and import counts, all resolved
+against the kernel export table:
+
+| module | .UNO size | imports |
+|---|---|---|
+| UOWORD | 776 KB | 39 |
+| UOCALC | 799 KB | 33 |
+| UOSHOW | 436 KB | 38 |
+
+Two build facts worth keeping:
+
+- **`-mno-stack-arg-probe` is needed here too.** unodoc's `.doc` reader keeps a
+  4 KB FIB on the stack and the OOXML path has large frames, and the aarch64
+  mingw target -- unlike the 8 KB case M8 tested -- emits a `__chkstk` call for
+  them. That probe walks Windows guard pages this OS does not have, and a
+  freestanding module has nothing to resolve it against (`cpu.s`'s `__chkstk` is
+  in the shell image, not in a module). The flag drops the probe, exactly as on
+  x86.
+- **`um_alloc` comes from `unomedia.c`, not `um_inflate.c`.** The office modules
+  link both, as x86 does; linking only `um_inflate.c` leaves `um_alloc`/
+  `um_free`/`um_set_alloc` undefined.
+
+### Gate status: built and import-clean; hardware launch pending
+
+These cannot go through the QEMU module gate the way the small modules do:
+`QHARNESS_UNO` pushes onto the RAM disk (volume 0), whose per-file ceiling is
+256 KB (`pc64_io.c`, sized for Paint images), and every Office module is ~450 KB
+to ~800 KB. That is a gate limitation, not a defect -- on the device these live
+on the SD card (FAT, no such cap), which is where they belong. So the QEMU
+module gate covers modules up to 256 KB; larger ones are gated on hardware.
+
+The imports are the tell that they will load: all 33-39 resolve to core
+exports (`fb_*`, `uno_fs_*`, `unoui_*`, `uno_font_*`, `pc64_shell_*`) that both
+the M8 image and this one carry -- none of the providers, none of the stubs.
+Launching them needs the Cosmo powered and on URC; it was off at the end of
+this session, so the launch is the one step left, the same human-in-the-loop
+step every cosmo64 milestone ends on.
