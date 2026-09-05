@@ -83,8 +83,26 @@ static int midi_hz(int midi)
     return hz;
 }
 
+/* A platform with no PCI audio controller supplies the same three functions
+ * under another name and defines UNO_SND_BACKEND_AFE (cosmo64/afe.c, the
+ * MT6771's AFE). Everything above this seam is unchanged: the ring is the
+ * ring, the cursor is the cursor. */
+#ifdef UNO_SND_BACKEND_AFE
+int       uno_afe_init(void);
+short    *uno_afe_ring(unsigned *frames);
+unsigned  uno_afe_pos(void);
+#endif
+
 void uno_snd_init(void)
 {
+#ifdef UNO_SND_BACKEND_AFE
+    if (uno_afe_init()) {
+        g_ring = uno_afe_ring(&g_frames);
+        g_pos  = uno_afe_pos;  g_kick = 0;
+        g_name = "MT6771 AFE";
+    } else
+        return;
+#else
     if (uno_hda_init()) {
         g_ring = uno_hda_ring(&g_frames);
         g_pos  = uno_hda_pos;  g_kick = 0;
@@ -95,6 +113,7 @@ void uno_snd_init(void)
         g_name = "AC'97";
     } else
         return;
+#endif
     g_w = LEAD_FRAMES;                 /* ring starts as .bss silence          */
 }
 
@@ -443,7 +462,12 @@ void uno_snd_poll(void)
             g_w = (g_w + 1) % g_frames;
         }
     }
-    if (n)                             /* drain stores before DMA reads them   */
+    if (n) {                           /* drain stores before DMA reads them   */
+#if defined(__aarch64__)
+        __asm__ volatile ("dsb sy" ::: "memory");
+#else
         __asm__ volatile ("sfence" ::: "memory");
+#endif
+    }
     if (g_kick) g_kick();
 }
