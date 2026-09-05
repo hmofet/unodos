@@ -11590,3 +11590,26 @@ than the clock. cosmo64 no longer trips it (it has a software clock now, see
 `cosmo64/clock.c`), so this is filed rather than fixed -- but an x86 box with a
 dead CMOS battery hits exactly the same wall, and a distinct refusal, in the
 spirit of `TLS_ENOENTROPY`, would say so out loud.
+
+## 2026-09-05 — RELEASED (cosmo64 lane): HTTPS on ARM64
+
+Landed to `master` as `8e404cba`; branch `cosmo64-tls` deleted local and
+origin. The claim above is released.
+
+The one shared change is the `tls_entropy.c` seam requested below it. x86 is
+byte-for-byte unchanged (no build but cosmo64's defines `TLS_ENT_PLATFORM`),
+and the gate that covers that file specifically -- `tools/tls_entropy_test.sh`,
+run from `gate.sh` -- is in the green run: prod + debug builds and
+**87 PASS, 0 FAIL, 7 SKIP**.
+
+Proven on hardware: `entropy: source=jitter selftest=1` at this SoC's 13 MHz
+CNTPCT (the QEMU gate runs at 62.5 MHz and proves nothing about it), and two
+public HTTPS sites fetched and rendered -- `unodos.arinbakht.com` and
+`letsencrypt.org`, the latter validating against `tls_ca.c`'s TA0, ISRG Root X1.
+
+The two observations filed with the request stand and neither is blocking:
+`tls_entropy_name()` returns the literal `"rdrand"` for `TLS_ENT_RDRAND`, which
+will be wrong on the first platform whose hardware DRNG is not RDRAND; and
+`tls.c`'s `tls_now()` calls `uno_pc64_time()` as `void`, so a box whose RTC
+read fails validates certificates against 1970 and blames the certificate. An
+x86 machine with a dead CMOS battery hits that second one exactly.
