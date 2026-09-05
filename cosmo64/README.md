@@ -28,7 +28,8 @@ Everything below has run on the phone, not just under the gate:
 | M7 | the SD card as a persistent volume, the rear panel as a touchpad, three perf wins |
 | M8 | `.UNO` modules: the aarch64 module ABI -- seven apps load from the SD card |
 | M9 | the browser: unoweb, unojs and the browser lane -- it fetches, renders and runs scripts on the phone |
-| M10 | **HTTPS: BearSSL, a defensible entropy source, and this machine's first clock -- public sites load on the phone** |
+| M10 | HTTPS: BearSSL, a defensible entropy source, and this machine's first clock -- public sites load on the phone |
+| M11 | **the MT6358's real RTC: a battery-backed clock, read-only, its map derived on the device** |
 
 **What runs the machine today.** The desktop is the panel's native landscape at
 a 2x zoom. Local input is the matrix keyboard, the touch panel, and the rear
@@ -37,8 +38,9 @@ cover panel as a touchpad; a USB mouse and keyboard work through a plain USB
 card is mounted read-write as the boot volume, so the session persists.** The
 shell holds a DHCP lease and serves URC on `:5099`.
 
-Still missing: no audio, no WiFi (CONNSYS has no bare-metal route), no
-cellular, and no RTC. `.UNO` apps load as of M8: the seven the launcher
+Still missing: no audio, no WiFi (CONNSYS has no bare-metal route), and no
+cellular. **The RTC is real as of M11** -- the MT6358's battery-backed clock,
+read over PWRAP, so the time survives a power-off. `.UNO` apps load as of M8: the seven the launcher
 rosters live under `APPS\` on the SD card and open from the desktop. **The
 browser is carried as of M9** -- unoweb, unojs and the browser lane compile
 for aarch64, both renderers paint and `<script>` blocks run. **HTTPS works as
@@ -111,17 +113,10 @@ Input is 3.1x cheaper and the shell runs 28% more frames -- and the M7 number
 
 **Open, in the order worth doing:**
 
-1. **The PMIC's real RTC.** M10 gave this machine a clock, and it is a
-   software one: a monotonic count over CNTPCT seeded from the image's build
-   stamp or from `CLOCK.CFG` on the card. It is enough for certificate
-   validity and it is not a clock -- after a long power-off it is behind by
-   exactly that long, and a certificate ISSUED after the image was built reads
-   as not-yet-valid until somebody sets the time. The MT6358 has a
-   battery-backed RTC and `pmic.c` already speaks to that chip over PWRAP, so
-   the transport is solved; what is missing is the register map, and the way
-   to get it is to read the block from Trixie (where the kernel's mt6397
-   driver knows it) and compare against a known time. `clock.c` is shaped so
-   that swap costs two functions.
+1. **Audio.** The oldest gap and now the biggest: no sound path of any kind.
+   That is a real bring-up (the MT6771's AFE plus the MT6358's codec half),
+   not a slice like the last three, and `stubs.c` still answers every
+   `uno_snd_*` and `uno_seq_*` the shell names.
 1b. **Fill in behind the modules** (the rest of it). M8 proved the ABI; what
    the apps find behind their imports is often still a stub. Real now:
    `uno_binds.c`, `unolog.c`, `uno3d.c` + `uno3d_soft.c` (the providers), the
@@ -1999,3 +1994,79 @@ types the location straight into the window and the first keystroke after a
 launch can land while the window is still settling. It did not recur on the
 next run, but if a stop ever fails oddly, READ THE ADDRESS BAR IN THE
 SCREENSHOT before believing the error next to it.
+
+## The RTC (2026-09-05): the map was derived, not guessed
+
+M10's clock was a software one -- CNTPCT from a build stamp -- and it said so
+in its own header: enough for certificate validity, not a clock. The MT6358
+has a battery-backed RTC, `pmic.c` has spoken to that chip since M7, and the
+only thing missing was the register map, which is not in this tree.
+
+**It was derived on the device, in about five minutes, and the technique is
+the reusable part.** Trixie runs on the same machine, and MediaTek's kernel
+exposes the entire PMIC register space read-only at
+`/sys/kernel/debug/mtk_pmic/dump_pmic_reg` -- roughly 4,700 registers in
+two-byte steps. Dump it twice, five seconds apart, and diff:
+
+```
+0x592 0x1b 0x21          <- 27 -> 33 across a 5 s gap
+0xd14 0xed16 0x1ab9      <- ADC noise
+0x1088 0xe8b6 0xe8c4     <- ...
+```
+
+Exactly one register moved by about five. From there the neighbours read
+straight off against the wall clock (2026-09-05 08:15:54): `0x0594` = 15,
+`0x0596` = 8, `0x0598` = 5, `0x059C` = 9. Plain binary, not BCD.
+
+**Three cross-checks, because one coincidence is not a map:**
+
+1. `0x0592` tracked the wall second across a MINUTE ROLL -- at 08:16:58 it read
+   sec=58 min=16, and at 08:17:01 sec=1 min=17. A register that merely
+   counts would not have carried.
+2. `0x0590` reads `0x10`, and the kernel's own boot log prints
+   `mtk_rtc_hal: 2nd RTC_AL_MASK = 0x10`. That pins the block's base at
+   `0x0588` with MediaTek's classic offsets (BBPU +0, IRQ_STA +2, IRQ_EN +4,
+   CII_EN +6, AL_MASK +8, TC_SEC +0x0A ...), and every other address here is
+   derived from that base rather than found by eye.
+3. `0x059E` reads 58 and the year is 2026, so the epoch is **1968** -- which is
+   MediaTek's documented `RTC_MIN_YEAR`. One observation cannot separate 1968
+   from 1970 or 2000 on its own; those give 2028 and 2058, and the device is
+   in neither.
+
+### Two decisions worth defending
+
+**It is READ-ONLY, and that is not laziness.** `pmic.c` fences writes behind a
+whitelist with no address parameter, for the reason its header gives at length:
+every rail on this board is behind those registers, and a wrong address is not
+a corrupted partition but silicon at a voltage it was not built for. Setting
+the RTC would mean growing that whitelist for a convenience. So `rtc.c` calls
+`c64_pmic_read()` and nothing else, and setting the time is handled a layer up:
+`CLOCK.CFG` holds an **offset** (`off <signed seconds>`) that is added to the
+RTC on every read. On a phone whose RTC Linux keeps correct that offset is zero
+and the file is never written.
+
+**No BBPU reload, because none is needed.** MediaTek's driver writes BBPU with
+a key and a RELOAD bit before reading, to latch the 32 kHz domain into the TC
+registers. Measured here, those registers advance on their own between two
+independent dumps with nothing writing BBPU in between -- which is fortunate,
+since a reload is a write and this file has no way to make one. What can still
+happen is a TORN read, where the second rolls between two of the seven reads;
+that is handled the way clocks always have, by reading the seconds twice and
+retrying when they differ.
+
+### The fallback did not go away
+
+`clock.c` now has two modes and prints which one it is in. The software clock
+of M10 is still there and still correct, because the QEMU gate has no PMIC at
+all:
+
+```
+pmic: the wrapper is enabled but would not answer a read
+clock: no PMIC RTC; seeded 2026-09-05 08:19 UTC from the build stamp
+```
+
+That is the gate, not a defect. A dead coin cell, or an RTC whose fields are
+not a date, lands in exactly the same place -- `rtc.c` refuses a value it
+cannot believe rather than handing the TLS stack a confident wrong answer. And
+if the RTC answers at boot and stops later, the clock says so once and falls
+back rather than quietly reporting a seed it took minutes ago.
