@@ -27,7 +27,8 @@ Everything below has run on the phone, not just under the gate:
 | M6 | URC: the box is remotely driven from the dev PC, with a live log |
 | M7 | the SD card as a persistent volume, the rear panel as a touchpad, three perf wins |
 | M8 | `.UNO` modules: the aarch64 module ABI -- seven apps load from the SD card |
-| M9 | **the browser: unoweb, unojs and the browser lane -- it fetches, renders and runs scripts on the phone** |
+| M9 | the browser: unoweb, unojs and the browser lane -- it fetches, renders and runs scripts on the phone |
+| M10 | **HTTPS: BearSSL, a defensible entropy source, and this machine's first clock** |
 
 **What runs the machine today.** The desktop is the panel's native landscape at
 a 2x zoom. Local input is the matrix keyboard, the touch panel, and the rear
@@ -40,9 +41,11 @@ Still missing: no audio, no WiFi (CONNSYS has no bare-metal route), no
 cellular, and no RTC. `.UNO` apps load as of M8: the seven the launcher
 rosters live under `APPS\` on the SD card and open from the desktop. **The
 browser is carried as of M9** -- unoweb, unojs and the browser lane compile
-for aarch64, both renderers paint and `<script>` blocks run. HTTPS does not
-work yet: BearSSL is a slice of its own, so `tls_*` is still stubbed and the
-browser is HTTP plus its own `uno:` pages.
+for aarch64, both renderers paint and `<script>` blocks run. **HTTPS works as
+of M10**: BearSSL is compiled in, the entropy source is conditioned CPU jitter
+that has to pass a health test before TLS will open a connection at all, and
+the machine has a clock for the first time -- a software one, because
+certificate validity needs a date and there is still no RTC driver.
 
 **Where we left off.** p38 carries the M9 image and it is booted and
 verified: the browser fetches a page over the wire, renders it and runs its
@@ -107,13 +110,17 @@ Input is 3.1x cheaper and the shell runs 28% more frames -- and the M7 number
 
 **Open, in the order worth doing:**
 
-1. **HTTPS.** The browser is here and it can only speak HTTP, which in
-   practice means it can reach this LAN and very little else. BearSSL is 294
-   portable C files plus `tls.c`/`tls_ca.c`/`tls_entropy.c`; the entropy
-   source is the open question, because `tls_have_rdrand` is an x86 answer and
-   this SoC's is either the MT6771's TRNG or the jitter of its own timers.
-   Everything else about that slice looks like the browser's: compile the
-   files, delete the stubs.
+1. **The PMIC's real RTC.** M10 gave this machine a clock, and it is a
+   software one: a monotonic count over CNTPCT seeded from the image's build
+   stamp or from `CLOCK.CFG` on the card. It is enough for certificate
+   validity and it is not a clock -- after a long power-off it is behind by
+   exactly that long, and a certificate ISSUED after the image was built reads
+   as not-yet-valid until somebody sets the time. The MT6358 has a
+   battery-backed RTC and `pmic.c` already speaks to that chip over PWRAP, so
+   the transport is solved; what is missing is the register map, and the way
+   to get it is to read the block from Trixie (where the kernel's mt6397
+   driver knows it) and compare against a known time. `clock.c` is shaped so
+   that swap costs two functions.
 1b. **Fill in behind the modules** (the rest of it). M8 proved the ABI; what
    the apps find behind their imports is often still a stub. Real now:
    `uno_binds.c`, `unolog.c`, `uno3d.c` + `uno3d_soft.c` (the providers), the
@@ -1827,3 +1834,97 @@ Still true after the hardware run: no HTTPS (BearSSL is not built for this
 toolchain, so `tls_*` is stubbed and an `https://` URL refuses rather than
 misbehaves), and the `uno:engine` page still lists quickjs and libcss as
 choices because that page is the browser lane's file, not this port's.
+
+## HTTPS (2026-09-05): BearSSL, entropy, and this machine's first clock
+
+The browser could speak HTTP, which on the 2026 internet means it could reach
+this LAN and almost nothing else. Making it speak HTTPS turned out to be three
+problems, and only the first was the one that was expected.
+
+**1. BearSSL compiles, and that is all it needs.** 286 of the vendored tree's
+294 files, plus `tls.c` (the glue), `tls_ca.c` (the bundled roots) and
+`tls_entropy.c`. The eight skipped are the x86-accelerated implementations
+(AES-NI, PCLMUL, SSE2 ChaCha20) and `sysrng`, which wants an OS -- every one
+has a portable equivalent in the same directory, and x86 skips exactly the
+same set. There are no aarch64-accelerated files in this vendored tree to add
+back. Objects are `bs_*.o`, and the reason is worth knowing: the `usb` payload
+case already writes `build/b_<file>.o`, so a `b_*.o` glob in the shell link
+swept up a stale `usbprobe`/`mmu`/`log`/`msdc` from an old `./build.sh usb`
+and produced two dozen duplicate-symbol errors naming files that had nothing
+to do with the change in hand.
+
+**2. Entropy, which fails closed and therefore had to actually work.**
+`tls_entropy.c` refuses to open a connection at all when it has no source it
+can defend -- deliberately, because it used to seed from a TSC-LCG the code
+itself called "NOT cryptographically strong". Below its primitive seam it is
+x86 asm (`cpuid`, `rdrand`, `rdtsc`), so it could not compile here. The seam
+now has a platform branch (landed upstream) and `cosmo64/entropy.c` answers
+it: CNTPCT_EL0 for ticks, and an honest **no hardware DRNG** -- RNDR is
+ARMv8.5 and the MT6771 is ARMv8.0, and while the SoC very likely has a TRNG
+block, its address is not in this tree and claiming a generator we have not
+proven is the one lie that file cannot survive.
+
+That leaves conditioned CPU timing jitter as the only path, and it counts only
+if it passes a startup health test -- which was a genuine open question here,
+because the health test wants the low five bits of the deltas to move and
+CNTPCT on this SoC ticks at 13 MHz, i.e. 77 ns, against a workload that lasts
+about a microsecond. That is a measurement, not an opinion, so the boot story
+makes it:
+
+```
+entropy: source=jitter selftest=1
+```
+
+It passes. The PMU cycle counter (PMCCNTR_EL0, ~1.5 GHz) was the fallback and
+was deliberately not reached for: enabling it means writing PMCR_EL0 from EL2,
+and if a higher level has set MDCR_EL3.TPM that write traps out of our world
+rather than returning an error. Do not take that risk for a counter you have
+not shown you need.
+
+A second thing came free: `urc.c` used to stub `tls_entropy_get()` to 0, so the
+URC gate refused to mint a token rather than mint a weak one. That stub is
+gone -- token minting now draws on the same source the handshake does, and
+still gets a 0 on any boot where the health test fails, so the fail-closed
+property is unchanged.
+
+**3. The clock, which is the part nobody asks about until nothing validates.**
+`br_x509_minimal_set_time()` decides whether a certificate's validity window
+contains *now*, and this machine has no RTC. pc64's `tls_now()` initialises to
+1970-01-01 and calls `uno_pc64_time()` as `void`, so with no clock every
+certificate on the internet is **not yet valid** -- HTTPS does not fail
+obscurely, it fails completely, on every host, forever.
+
+`cosmo64/clock.c` is the answer, and it is honest about what it is: a
+monotonic software clock over CNTPCT, seeded from the later of
+
+- the **build stamp** (`C64_BUILD_EPOCH`, from `build.sh`) -- an image knows
+  when it was made, and that is a lower bound on "now" that costs nothing, and
+- the **last saved time** (`CLOCK.CFG` on the preference volume, i.e. the SD
+  card since M7), written when the clock is set and re-written as it runs.
+
+Taking the later of the two means a reboot cannot move the clock backwards and
+a stale file cannot drag a newer image back. Setting the time from the shell's
+Date & Time pane goes through `uno_native_rtc_write()` and is saved at once, so
+a person's answer beats both. The save is done from the READ path on purpose:
+the shell asks for the time once a second to draw the taskbar, so that is a
+tick that already exists.
+
+```
+clock: seeded 2026-09-05 05:16 UTC from the build stamp
+```
+
+What it is not, is accurate. After a long power-off it is behind by exactly
+that long, and a certificate issued after the image was built reads as
+not-yet-valid until someone sets the time. The real fix is the MT6358's
+battery-backed RTC -- see the open list at the top of this file.
+
+**A side effect worth watching for.** With a clock, `fmt_clock()` in
+`pc64_uui.c` stops printing `up 41s` in the taskbar and prints the time
+instead. That is the cheapest possible visual check that this landed.
+
+### Gate
+
+Plain, EL2 and URC gates green, the URC gate still launching the browser. The
+boot story carries the two new lines above. **HTTPS itself cannot be gated
+under QEMU**: the virt board has no USB and therefore no NIC, exactly as with
+the browser's HTTP fetch, so the handshake is a hardware proof.

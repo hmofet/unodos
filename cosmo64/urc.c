@@ -23,8 +23,12 @@
  *     every unoauto LOG line reaches the eMMC log, and uptime is CNTPCT.
  *
  *  3. THE SYMBOLS THE VERBS NAME THAT THIS MACHINE CANNOT HAVE: UEFI boot
- *     entries, the iwlwifi debug hook, RDRAND entropy. Each answers "absent"
- *     in the way its caller reports, never 0-as-success.
+ *     entries and the iwlwifi debug hook. Each answers "absent" in the way its
+ *     caller reports, never 0-as-success. ENTROPY USED TO BE ON THIS LIST and
+ *     is not any more: the HTTPS slice compiles the real tls_entropy.c over
+ *     cosmo64/entropy.c, so token minting draws on the same conditioned-jitter
+ *     source the TLS handshake does, and still gets a 0 -- fail-closed, as
+ *     before -- on any boot where the health test does not pass.
  *
  *  4. THE SERIAL TRANSPORT (uart_init/write/read, unoauto_serial.h) on the
  *     PL011 at 0x09000000 that QEMU's virt board carries. unoauto_serial.c
@@ -181,14 +185,14 @@ unsigned long long uno_dbg_tsc_per_ms(void) { return 0; }
 void pc64_netlog_sink_ensure(void) { }
 
 /* ---- 3. what this machine cannot have ------------------------------------ */
-/* Token minting wants defensible entropy and there is no RDRAND on this core;
- * 0 = "none available", on which the gate refuses to arm rather than mint a
- * weak token. The urc-auth path takes its token from the build instead. */
-int tls_entropy_get(unsigned char *out, int n)
-{
-    (void)out; (void)n;
-    return 0;
-}
+/* tls_entropy_get() USED TO BE STUBBED HERE, returning 0 so the gate refused
+ * to mint a token rather than mint a weak one. That was right while this core
+ * had no defensible source. It has one now: the HTTPS slice compiles pc64's
+ * tls_entropy.c over cosmo64/entropy.c, so the real conditioned-jitter source
+ * -- health test and all -- answers, and token minting gets the same entropy
+ * the TLS handshake does. If the health test ever fails on a given boot the
+ * real function returns 0 anyway, which is exactly the old behaviour, so the
+ * gate's fail-closed property is unchanged. */
 
 /* UEFI boot-order authoring (`bootnext`, `makeboot`): no firmware variables
  * on an LK payload. 0 = refused, which is how the verbs report it. */

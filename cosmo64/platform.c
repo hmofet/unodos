@@ -11,6 +11,8 @@
 int uno_main(void);
 void uno_modload_reserve(void);    /* pc64_modload.c: carve the module arena */
 void unolog_init(void);            /* unolog.c: the system log's ring + config */
+void c64_clock_init(void);         /* clock.c: the wall clock, for TLS        */
+void c64_entropy_report(void);     /* entropy.c: which source TLS settled on  */
 
 /* ---- the module arena (M8) ----------------------------------------------
  * pc64_modload.c instantiates a .UNO into pages it gets from one of three
@@ -155,6 +157,15 @@ void c_main(void *dtb)
      * card is mounted means LOGS\ and the config are read before anything
      * has been filtered by the default level. */
     unolog_init();
+    /* The wall clock, also after the storage report: its seed may come from
+     * CLOCK.CFG on the preference volume, and a clock that reads the card
+     * before the card is mounted would silently fall back to the build stamp
+     * every boot. Certificate validity is the only consumer that cares, and it
+     * cares a great deal -- see clock.c. */
+    c64_clock_init();
+    /* One line saying which entropy source TLS will use, in the boot story
+     * rather than in a handshake failure an hour later. */
+    c64_entropy_report();
     /* USB before the shell too: enumeration takes a moment (port power,
      * debounce, the hub walk) and the desktop should come up with its mouse
      * rather than acquire one a second later. */
@@ -203,19 +214,10 @@ void uno_pc64_delay_ms(int ms)
         uno_native_delay_us((unsigned long)ms * 1000ul);
 }
 
-/* No RTC access yet (the MT6358 PMIC RTC is an M5 job). Per pc64_native.h:
- * rtc_read returns 1 on SUCCESS, 0 only for a dead/absent clock -- so 0. */
-int uno_native_rtc_read(int *y, int *mo, int *d, int *h, int *mi, int *s)
-{
-    (void)y; (void)mo; (void)d; (void)h; (void)mi; (void)s;
-    return 0;
-}
-
-int uno_native_rtc_write(int y, int mo, int d, int h, int mi, int s)
-{
-    (void)y; (void)mo; (void)d; (void)h; (void)mi; (void)s;
-    return 0;
-}
+/* uno_native_rtc_read/write live in clock.c now: this machine has no RTC, so
+ * the "clock" is a monotonic software one over CNTPCT seeded from the build
+ * stamp or the last saved time. It exists because CA-validated TLS needs a
+ * date -- against 1970 every certificate on the internet is not yet valid. */
 
 int uno_pc64_time(int *y, int *mo, int *d, int *h, int *mi, int *s)
 {
