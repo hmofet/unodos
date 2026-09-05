@@ -210,6 +210,17 @@ shell )
   if [ -f urc_pin.h ]; then scp -q urc_pin.h "$QUILL:$QDIR/cosmo64/";
   else ssh "$QUILL" "rm -f $QDIR/cosmo64/urc_pin.h"; fi
 
+  # AUDIO=1: compile the audio first-light probe (afe.c) and, with it, the
+  # PMIC's audio write table. Both are OFF by default and the table is gated on
+  # C64_PMIC_WRITE as well, so a shipped image carries no instruction that can
+  # write a codec register. This is a bring-up switch, not a feature flag: it
+  # boots the machine, applies twenty-three measured PMIC writes and turns a
+  # tone on. Read cosmo64/AUDIO-SURVEY.md before using it.
+  if [ -n "$AUDIO" ]; then
+    BASECF="$BASECF -DC64_AUDIO=1"
+    C64="$C64 afe"
+    echo "[shell] AUDIO=1: the audio probe is compiled in (it writes the PMIC)"
+  fi
   # KBDTEST=1: compile the scripted key pad (QEMU gate proof, never shipped)
   [ -n "$KBDTEST" ] && BASECF="$BASECF -DC64_KBDTEST"
   # TOUCHDBG=1: paint the raw touch report on the panel edge (bring-up aid)

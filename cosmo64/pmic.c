@@ -80,6 +80,16 @@
 #define C64_PMIC_WRITE 1
 #endif
 
+/* AUDIO IS OFF BY DEFAULT and gated on C64_PMIC_WRITE as well, below.
+ * The codec set is twenty-three addresses this port had never written
+ * before; a shipped image has no reason to carry the instructions that
+ * write them, and PMIC_WRITE=0 must keep meaning what its own header
+ * says it means -- an image that CANNOT write the PMIC, not one that
+ * declines to. */
+#ifndef C64_AUDIO
+#define C64_AUDIO 0
+#endif
+
 /* ---- the wrapper --------------------------------------------------------- */
 
 #define PWRAP 0x1000D000ull
@@ -156,6 +166,76 @@ static const struct { c64_u32 addr; const char *name; } k_wr[] = {
 #define WR_VMC_ANA  3
 #define WR_COUNT    (int)(sizeof k_wr / sizeof k_wr[0])
 #endif  /* C64_PMIC_WRITE */
+
+/* ---- the audio codec set (C64_AUDIO) -------------------------------------
+ * A SECOND TABLE, BEHIND A SECOND FLAG, and both of those are the point. The
+ * whitelist above exists because a wrong PMIC address is silicon at a voltage
+ * it was not built for; audio needs twenty-three more addresses, which is a
+ * large fraction again of everything this port has ever written to this chip.
+ * Keeping them in their own table under their own #if means the shipped image
+ * cannot write one of them, and that `AUDIO=1` is a deliberate act rather
+ * than a default.
+ *
+ * WHAT MAKES THESE DEFENSIBLE, given there is no datasheet here. They are not
+ * derived, they are OBSERVED: every one is a register that changed when Linux
+ * on this same device turned its sine generator on, captured by diffing the
+ * whole PMIC across the transition TWICE and keeping only registers that
+ * changed to the SAME value both times. That filter matters -- a single-run
+ * diff also contained 0x248a and 0x2492, which did not reproduce and are
+ * therefore an ADC reading or a counter, not configuration. Writing those
+ * would have been writing noise into a PMIC.
+ *
+ * The three outside the 0x22xx-0x24xx audio band (0xd8, 0x7ac, 0x1822) are
+ * the least certain rows here: they are almost certainly the clock buffer and
+ * an audio LDO, but "almost certainly" is doing real work in that sentence.
+ * They are included because the analog half cannot come up without its supply,
+ * and they are listed last so the log says plainly if one of them is what
+ * wedges the machine. Registers in bands that were demonstrably noisy
+ * elsewhere (0x10d8, 0x434) are EXCLUDED even though they passed the
+ * two-run filter, because their neighbours all vary run to run and a
+ * coincidence at that rate is likelier than a configuration bit.
+ *
+ * Full derivation, including what could not be measured (the ORDER): see
+ * cosmo64/AUDIO-SURVEY.md. */
+#if C64_AUDIO && C64_PMIC_WRITE
+/* `must` distinguishes a register we are DRIVING from one we merely observed
+ * change. A diff cannot tell the two apart -- it sees 0 -> 8 either way -- and
+ * the first hardware run made the difference concrete: every row took except
+ * 0x22ac, which read back 0 after being written 8. A control bit that refuses
+ * a write is a broken bring-up; a STATUS bit that refuses one was never a
+ * control bit at all, and its value under Linux was a consequence of the codec
+ * coming up rather than a cause of it. Rows marked must=0 are still written
+ * (harmless if they turn out to be control after all) but do not fail the set. */
+static const struct { c64_u32 addr; c64_u32 val; int must; const char *name; } k_aud[] = {
+    /* the codec's digital half */
+    { 0x220Cu, 0x0000u, 1, "AUD 220c" },
+    { 0x2240u, 0x0000u, 1, "AUD 2240" },
+    { 0x2288u, 0x0001u, 1, "AUD 2288" },
+    { 0x228Au, 0x0001u, 1, "AUD 228a" },
+    { 0x2292u, 0x002Au, 1, "AUD 2292" },
+    { 0x2296u, 0xCBA1u, 1, "AUD 2296" },
+    { 0x229Au, 0x000Bu, 1, "AUD 229a" },
+    { 0x22ACu, 0x0008u, 0, "AUD 22ac" },
+    { 0x22D6u, 0x002Au, 1, "AUD 22d6" },
+    { 0x2394u, 0x0061u, 1, "AUD 2394" },
+    /* the analog half: DAC, PGA, the amps */
+    { 0x2408u, 0x3AFFu, 1, "AUD 2408" },
+    { 0x240Au, 0x3F03u, 1, "AUD 240a" },
+    { 0x240Cu, 0xC033u, 1, "AUD 240c" },
+    { 0x2410u, 0x0040u, 1, "AUD 2410" },
+    { 0x241Au, 0xF201u, 1, "AUD 241a" },
+    { 0x2420u, 0x0055u, 1, "AUD 2420" },
+    { 0x2422u, 0x0001u, 1, "AUD 2422" },
+    { 0x2424u, 0x1055u, 1, "AUD 2424" },
+    { 0x2426u, 0x0001u, 1, "AUD 2426" },
+    { 0x248Cu, 0x050Au, 1, "AUD 248c" },
+    /* supply and clock: the least certain rows, hence last */
+    { 0x00D8u, 0x0249u, 1, "AUD clkbuf 00d8" },
+    { 0x07ACu, 0xA2B5u, 1, "AUD supply 07ac" },
+    { 0x1822u, 0x0006u, 1, "AUD 1822" },
+};
+#define AUD_COUNT (int)(sizeof k_aud / sizeof k_aud[0])
+#endif  /* C64_AUDIO && C64_PMIC_WRITE */
 
 static int g_ready;
 
@@ -280,6 +360,50 @@ static int pmic_rmw(int idx, c64_u32 mask, c64_u32 val)
     return 0;
 }
 #endif  /* C64_PMIC_WRITE */
+
+#if C64_AUDIO && C64_PMIC_WRITE
+/* Apply the audio set in table order, reading each row back. The read-back is
+ * not ceremony for the same reason it is not ceremony in pmic_rmw(): this is a
+ * serial bus to another chip, and a write returning success only means the
+ * wrapper accepted the command.
+ *
+ * A row that does not read back is logged and the whole thing FAILS rather
+ * than pressing on: half a codec is not a quieter codec, it is an unknown
+ * analog state, and the caller's next act would be to enable a tone into it.
+ * Returns 0 if every row took, -1 otherwise. */
+int c64_pmic_audio_apply(void)
+{
+    int i, bad = 0;
+
+    if (!g_ready) {
+        c64_log("pmic: audio set skipped -- the wrapper never came up\n");
+        return -1;
+    }
+    for (i = 0; i < AUD_COUNT; i++) {
+        c64_u32 back = 0;
+        if (wacs2(1, k_aud[i].addr, k_aud[i].val, 0) < 0) {
+            c64_logf("pmic: %s (%04x) write FAILED\n", k_aud[i].name, k_aud[i].addr);
+            bad++;
+            continue;
+        }
+        if (c64_pmic_read(k_aud[i].addr, &back) < 0) {
+            c64_logf("pmic: %s (%04x) read-back FAILED\n", k_aud[i].name, k_aud[i].addr);
+            bad++;
+            continue;
+        }
+        if (back != k_aud[i].val) {
+            c64_logf("pmic: %s (%04x) wanted %04x, reads %04x%s\n",
+                     k_aud[i].name, k_aud[i].addr, k_aud[i].val, back,
+                     k_aud[i].must ? "" : "  (status, not a control bit)");
+            if (k_aud[i].must)
+                bad++;
+        }
+    }
+    c64_logf("pmic: audio set applied -- %d of %d rows took\n",
+             AUD_COUNT - bad, AUD_COUNT);
+    return bad ? -1 : 0;
+}
+#endif  /* C64_AUDIO && C64_PMIC_WRITE */
 
 /* ---- bring-up ------------------------------------------------------------ */
 

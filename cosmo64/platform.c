@@ -13,6 +13,9 @@ void uno_modload_reserve(void);    /* pc64_modload.c: carve the module arena */
 void unolog_init(void);            /* unolog.c: the system log's ring + config */
 void c64_clock_init(void);         /* clock.c: the wall clock, for TLS        */
 void c64_entropy_report(void);     /* entropy.c: which source TLS settled on  */
+#if C64_AUDIO
+void c64_afe_sine(void);           /* afe.c: the audio front-end's tone       */
+#endif
 
 /* ---- the module arena (M8) ----------------------------------------------
  * pc64_modload.c instantiates a .UNO into pages it gets from one of three
@@ -166,6 +169,13 @@ void c_main(void *dtb)
     /* One line saying which entropy source TLS will use, in the boot story
      * rather than in a handshake failure an hour later. */
     c64_entropy_report();
+#if C64_AUDIO
+    /* AUDIO=1 only. First light for the audio path, and it is a PROBE: it
+     * reads the AFE before it writes anything, refuses to go on if the block
+     * reads as unpowered, and logs and flushes at every step so a machine
+     * that wedges says where. See afe.c and AUDIO-SURVEY.md. */
+    c64_afe_sine();
+#endif
     /* USB before the shell too: enumeration takes a moment (port power,
      * debounce, the hub walk) and the desktop should come up with its mouse
      * rather than acquire one a second later. */
