@@ -113,10 +113,16 @@ Input is 3.1x cheaper and the shell runs 28% more frames -- and the M7 number
 
 **Open, in the order worth doing:**
 
-1. **Audio.** The oldest gap and now the biggest: no sound path of any kind.
-   That is a real bring-up (the MT6771's AFE plus the MT6358's codec half),
-   not a slice like the last three, and `stubs.c` still answers every
-   `uno_snd_*` and `uno_seq_*` the shell names.
+1. **Audio.** The oldest gap and now the biggest: no sound path of any kind,
+   and `stubs.c` still answers every `uno_snd_*` and `uno_seq_*` the shell
+   names. It is a real bring-up rather than a compile-it-in slice -- but it is
+   no longer archaeology: **`AUDIO-SURVEY.md` has the measured map** (the AFE
+   at `0x11220000`, `AFE_DAC_CON0`'s two enable bits, the DL1 ring registers,
+   the DMA cursor proven to advance and wrap, and the 27 codec registers with
+   their off/on values). What that survey does NOT have is the ORDER of the
+   codec writes, and it says why both attempts to recover it failed. Suggested
+   first light is the AFE's own sine generator (`0x1f0`): no DMA ring, and it
+   still proves the power domain, the clocks and the analog chain.
 1b. **Fill in behind the modules** (the rest of it). M8 proved the ABI; what
    the apps find behind their imports is often still a stub. Real now:
    `uno_binds.c`, `unolog.c`, `uno3d.c` + `uno3d_soft.c` (the providers), the
