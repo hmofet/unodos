@@ -1989,11 +1989,12 @@ machine), while `letsencrypt.org` resolves fine from the same resolver. The
 net stack asked correctly and was told no. Do not chase it here.
 
 The first attempt typed `dhttps://example.com/` -- a stray `d` ahead of the
-URL, which then failed DNS for an entirely uninteresting reason. The harness
-types the location straight into the window and the first keystroke after a
-launch can land while the window is still settling. It did not recur on the
-next run, but if a stop ever fails oddly, READ THE ADDRESS BAR IN THE
-SCREENSHOT before believing the error next to it.
+URL, which then failed DNS for an entirely uninteresting reason. This was
+first written up here as a keystroke landing "while the window was still
+settling", which was a guess and was wrong; the real cause turned up during
+the RTC run and is in the RTC section below. Either way the lesson stands: if
+a stop fails oddly, READ THE ADDRESS BAR IN THE SCREENSHOT before believing
+the error next to it.
 
 ## The RTC (2026-09-05): the map was derived, not guessed
 
@@ -2070,3 +2071,40 @@ not a date, lands in exactly the same place -- `rtc.c` refuses a value it
 cannot believe rather than handing the TLS stack a confident wrong answer. And
 if the RTC answers at boot and stops later, the clock says so once and falls
 back rather than quietly reporting a seed it took minutes ago.
+
+### On the hardware (2026-09-05): the RTC reads, and a harness bug it exposed
+
+p38 reflashed, booted, driven over URC. The boot story:
+
+```
+pmic: MT6358 answering over the wrapper (SWCID=5820, WACS2_EN=00000001)
+clock: MT6358 RTC reads 2026-09-05 08:25 UTC
+entropy: source=jitter selftest=1
+```
+
+**That line is the proof, and the build stamp is what makes it one.** The image
+was built at 08:19 UTC and the fallback would have reported 08:19 plus uptime.
+The device booted at 08:25:26 by the host's clock, and it says 08:25 -- so it
+is reading the RTC, not the stamp. The taskbar then tracked the host to the
+second (`08:25:51` against a host grab at `08:25:58`, a few frames earlier),
+and HTTPS still validates: `letsencrypt.org` returned `HTTP/1.0 200 OK` with
+the hardware clock supplying the date.
+
+`CLOCK.CFG` is still on the card from the software-clock era, holding an
+absolute time, and it is correctly IGNORED -- a bare number is only meaningful
+to the software clock, and hardware mode reads offsets only.
+
+**The harness bug, which had been misdiagnosed.** Typing a URL sometimes
+produced `dhttps://...`, and the HTTPS section above blamed a keystroke landing
+while the window settled. That was a guess and it was wrong. The real cause is
+visible in the desktop grab: the shell had RESTORED ITS SESSION from the SD
+card with the browser open and the caret already in the address bar, holding a
+stray `d`. `pc64_browser.c` clears the address bar on a printable character
+only when the bar is NOT already focused -- so the typed location APPENDED
+instead of replacing, and the resulting DNS failure read like a network fault.
+
+The fix is one keystroke: send **ESC** (UEFI scan `0x17`) before typing, which
+unfocuses the bar so the next character starts from empty. `browsercap.py`
+does that now. The general shape of this is worth keeping: session
+persistence, which M7 added, means a harness cannot assume it starts from a
+fresh desktop.

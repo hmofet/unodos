@@ -182,6 +182,14 @@ def main():
         prev = None
         for i, loc in enumerate(stops):
             t0 = time.time()
+            # ESC FIRST, and it is not decoration. A printable character
+            # focuses and CLEARS the address bar only when the bar is not
+            # already focused -- and a restored session can come back with the
+            # caret sitting in it (seen on the device: the bar held a stray
+            # "d", so a typed location APPENDED and became dhttps://...,
+            # which then failed DNS and read like a network fault). ESC
+            # unfocuses, so the next character starts from empty.
+            key(0, scan=0x17, settle=0.15)     # ESC (UEFI scan code)
             for ch in loc:                     # first char focuses AND clears
                 key(ord(ch), settle=0.15)
             key(13)                            # Enter: navigate
