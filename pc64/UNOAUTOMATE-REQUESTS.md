@@ -11517,3 +11517,28 @@ unchanged by two platforms with different bus physics.
 **Precedent.** The same shape as `#ifndef UNO_U3D_BACKEND` in `pc64_games.c`
 (the providers slice, 2026-09-04): a default that keeps x86 identical, and one
 `-D` on the port that cannot take it.
+
+## 2026-09-05 — RELEASED (cosmo64 lane): the browser on ARM64
+
+Landed to `master` as `6e2d9b31`; branch `cosmo64-browser` deleted local and
+origin. The claim above is released.
+
+Delivered exactly as claimed -- no browser-lane, unoweb-lane or unojs-lane
+source edited; the one shared change is the `pc64_http.c` seam requested
+below it, whose x86 behaviour is byte-for-byte unchanged (prod + debug builds
+and `pc64/tools/gate.sh`: **87 PASS, 0 FAIL, 7 SKIP**). Hardware-proven on the
+Cosmo: the browser fetched a page over the AX88179, rendered it, and ran its
+`<script>` on unojs.
+
+One FINDING for the browser lane, recorded rather than fixed because it is
+that lane's file and it has NOT been compared against an x86 build: under the
+**unoweb** renderer, `uno:script` paints the prose and the rule but not the
+table the script generates through `document.write`, where the flow painter
+paints it. The two renderers reach scripts by different routes (`js_expand`
+into the source vs `run_page_scripts` against the tree), so this may well be
+correct-by-design on the DOM route. If it is, the page saying "everything
+above the rule was produced by the script" is misleading under that renderer.
+
+Still stubbed here and worth knowing if you touch `uno:engine`: this port
+carries neither second engine (csslib, quickjs), so that page lists two
+choices it cannot honour. Selecting quickjs reports why at the point of use.
