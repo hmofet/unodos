@@ -121,8 +121,12 @@ Input is 3.1x cheaper and the shell runs 28% more frames -- and the M7 number
    the DMA cursor proven to advance and wrap, and the 27 codec registers with
    their off/on values). What that survey does NOT have is the ORDER of the
    codec writes, and it says why both attempts to recover it failed. Suggested
-   first light is the AFE's own sine generator (`0x1f0`): no DMA ring, and it
-   still proves the power domain, the clocks and the analog chain.
+   first light was the AFE's own sine generator (`0x1f0`), and it has now
+   RUN on the device: the AFE is mapped, the codec applies 23 of 23 rows
+   over PWRAP -- and `AFE_ON` does not stick, so the block is mapped but
+   not clocked. **The blocker is the audio clock gates and the power
+   domain, not the codec.** That is a different subsystem (topckgen,
+   INFRACFG, SCPSYS) and a smaller, better-understood one.
 1b. **Fill in behind the modules** (the rest of it). M8 proved the ABI; what
    the apps find behind their imports is often still a stub. Real now:
    `uno_binds.c`, `unolog.c`, `uno3d.c` + `uno3d_soft.c` (the providers), the

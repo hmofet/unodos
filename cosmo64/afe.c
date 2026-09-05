@@ -18,7 +18,15 @@
  * 0x2492, were in an earlier single-run diff and would have been written if
  * that diff had been trusted.
  *
- * WHAT IS STILL UNKNOWN, and it is the ORDER. A diff gives a set of registers
+ * WHAT THE FIRST TWO RUNS ESTABLISHED (2026-09-05): the AFE is mapped and
+ * does not fault (it reads zeros, not all-ones), the codec set applies 23 of
+ * 23 rows over PWRAP, and AFE_ON DOES NOT STICK -- DAC_CON0 accepts a write
+ * and reads back zero, which is a block whose bus is alive and whose
+ * functional clock is not. So the blocker is the audio clock gates and the
+ * power domain, not this file's codec sequence, and the ordering question
+ * below is not what is standing between here and a tone.
+ *
+ * WHAT IS STILL UNKNOWN BENEATH THAT, and it is the ORDER. A diff gives a set of registers
  * and their target values; codec bring-up is order-sensitive and the order
  * could not be recovered (the survey says why: no /dev/mem, and regmap
  * tracing cannot see a PWRAP device). The order used below is the one that
