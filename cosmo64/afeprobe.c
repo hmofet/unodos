@@ -134,7 +134,16 @@ static void kernel_mode(void)
 {
     c64afe_u32 base = AFE_R32(AFE_DL1_BASE), end = AFE_R32(AFE_DL1_END);
     say("KERNEL MODE: DL1 is already streaming the kernel's ring %08x..%08x and "
-        "snd_pcm is active -- not touching the AFE", base, end);
+        "snd_pcm is active", base, end);
+    say("sdm monitors before: fifo=%08x lch=%08x", AFE_R32(AFE_ADDA_DL_SDM_FIFO_MON),
+        AFE_R32(AFE_ADDA_DL_SRC_LCH_MON));
+    /* the second DAC connection Linux makes (O28/O29) and the memif normal mode */
+    AFE_R32(AFE_CONN28) = AFE_R32(AFE_CONN28) | (1u << 5);
+    AFE_R32(AFE_CONN29) = AFE_R32(AFE_CONN29) | (1u << 6);
+    AFE_R32(AFE_MEMIF_HDALIGN) = AFE_R32(AFE_MEMIF_HDALIGN) | (0x7fffu << 16);
+    AFE_DSB();
+    say("conn28=%08x conn29=%08x hdalign=%08x (DL1 -> DAC_2 added)",
+        AFE_R32(AFE_CONN28), AFE_R32(AFE_CONN29), AFE_R32(AFE_MEMIF_HDALIGN));
     say("extamp: before hp_en=%d amp=%d amp2=%d", c64afe_gpio_get_out(GPIO_HP_EN),
         c64afe_gpio_get_out(GPIO_EXTAMP), c64afe_gpio_get_out(GPIO_EXTAMP2));
     c64afe_extamp_on();
@@ -174,6 +183,8 @@ static void kernel_frame(void)
         g_cur0, c64afe_dl1_cur(), g_peak);
     say("chime: peak 0 means snd_pcm never wrote the ring; ~8400 is the square voice at volume 70");
     say("extamp: left ON so the shell's sounds can be heard");
+    say("sdm monitors after: fifo=%08x lch=%08x", AFE_R32(AFE_ADDA_DL_SDM_FIFO_MON),
+        AFE_R32(AFE_ADDA_DL_SRC_LCH_MON));
     dump("at the end");
 }
 

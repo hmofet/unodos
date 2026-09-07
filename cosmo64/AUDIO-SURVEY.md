@@ -1,10 +1,12 @@
 # The MT6771 AFE and MT6358 codec, surveyed from the running Linux
 
-**Status (2026-09-05, later the same day): THE BLOCKER IS FOUND AND THE
-DIGITAL PATH IS PROVEN -- see "What the probe said" at the end. It was the
-AUDIO power domain in SPM, off at LK handover; nothing else was missing. The
-full path (`afe.c` as pc64's PCM backend over `afe_regs.h`) is built behind
-`AUDIO=1` and awaits one flash to be heard.** What follows
+**Status (2026-09-07): three things stood between the codec set and a sound,
+and all three are now in `afe_regs.h` -- the AUDIO power domain in SPM (off at
+LK handover), the two GPIO-pulsed external speaker amplifiers, and the second
+DL1 -> DAC interconnect (`AFE_CONN28/29`, without which the DAC's SRC monitor
+reads 0). See the two sections at the end. The full path (`afe.c` as pc64's PCM
+backend) is built behind `AUDIO=1`; the DL SDM monitors show audio flowing.**
+What follows
 is measured, not guessed, and it exists so the bring-up that follows is
 transcription rather than archaeology. Every address here came off the device
 on 2026-09-05 by the same technique that produced the RTC map (`rtc.c`): make
@@ -277,3 +279,43 @@ not from a diff, because the diff could not see what was already on.
 purpose. So the probe's proof stops at the DAC's digital input, and the
 kernel (`afe.c`, `AUDIO=1`) is where the domain, the codec set and this DAC
 path first run together. That build exists; it has not been booted.
+
+## WHAT THE FIRST AUDIO=1 BOOT SAID (2026-09-07): silent, for two reasons that were never the codec
+
+The kernel path came up exactly as the probe had -- domain on, 23 of 23 codec
+rows, DAC path enabled, DL1 streaming -- and nothing was heard. Two causes,
+both outside anything a PMIC diff could show:
+
+1. **The speakers sit behind two external class-D amplifiers.**
+   `k71v1_64_bsp.dts` (the Cosmo's board): `extamp` = GPIO153, `extamp2` =
+   GPIO111, each switched by a pulse count (`AudDrv_GPIO_EXTAMP_Select`: mode
+   3 = three low/high pulses 2 us apart), with `headphone_en` = GPIO108 held
+   low first and 25 ms of warm-up (`Ext_Speaker_Amp_Change`). The codec set
+   the survey captured is the HEADPHONE output path (`Audio_Amp_Change`:
+   AUDDEC_ANA_CON0 0x3aff, CON1 0x3f03, CON2 0xc033, CON9, CON12-15, the HP
+   gain in ZCD_CON2); on this board headphone-enable low routes it to the
+   amplifiers. `c64afe_extamp_on()` in `afe_regs.h`; the GPIO block is
+   `0x10005000` with DIR at 0x000, DOUT at 0x100, MODE at 0x300, SET/CLR at
+   +4/+8.
+2. **DL1 has to be connected to O28/O29 as well as O03/O04.** Measured on
+   Trixie with `aplay` to hw:0,0, idle -> playing, the AFE regmap changed
+   `0x02c/0x030` (CONN3/4) AND `0x4bc/0x4c0` (**AFE_CONN28/29**, the
+   `I2S1_DAC_2` pair `mtk_pcm_dl1_start` connects with a second
+   `SetIntfConnection`). With only CONN3/4 set, the DL SDM's left-channel
+   monitor (`0xc64`) read 0 while the ring carried a full-scale chime; with
+   CONN28/29 added it read `0x001ffb5b` at once. **The DAC's sample-rate
+   converter is fed from O28/O29 on this SoC; O03/O04 alone deliver nothing.**
+   Also matched from that diff: `AFE_MEMIF_HDALIGN` bits 16-30 set
+   (`set_sram_mode(normal)`).
+
+Two diagnostics worth keeping: `AFE_ADDA_DL_SDM_FIFO_MON` (`0xc60`) and
+`AFE_ADDA_DL_SRC_LCH_MON` (`0xc64`) are read-only monitors that are nonzero
+only when samples are actually reaching the DAC path -- they separate "the
+enable bits are set" from "audio is flowing" without a speaker. And the boot
+chime (`uno_pc64_chime`, C E G C) now runs right after `uno_snd_init`, so a
+flashed image announces itself.
+
+The Trixie measurement also showed the PMIC audio band does NOT change
+between idle and playing while PulseAudio holds the sink, so a "cold idle"
+diff needs PulseAudio stopped first (`systemctl --user stop pulseaudio` or
+kill it) -- the 2026-09-05 survey diff evidently had it stopped.

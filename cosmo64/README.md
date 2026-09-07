@@ -137,6 +137,12 @@ Input is 3.1x cheaper and the shell runs 28% more frames -- and the M7 number
    it; still off by default until that boot is heard. `ONLY=afeprobe
    ./build.sh apps` rebuilds the probe alone for the next live experiment.
    Still stubbed: `uno_snd_mus_*` (needs unomedia's audio decoders).
+   **2026-09-07:** that image booted silent, and the survey's last section
+   says why: the speakers are behind two GPIO-pulsed external amplifiers
+   (GPIO153/GPIO111, headphone-enable GPIO108 low), and DL1 must also be
+   connected to O28/O29 (`AFE_CONN28/29`) -- the DL SDM monitor reads 0
+   until it is. Both are in `afe_regs.h` now, `afe.c` pulses the amps, and
+   the boot plays the C E G C chime through the DAC.
 1b. **Fill in behind the modules** (the rest of it). M8 proved the ABI; what
    the apps find behind their imports is often still a stub. Real now:
    `uno_binds.c`, `unolog.c`, `uno3d.c` + `uno3d_soft.c` (the providers), the
