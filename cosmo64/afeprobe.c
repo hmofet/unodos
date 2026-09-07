@@ -54,6 +54,8 @@
 
 void pc64_shell_dirty(void);
 const struct unoui_theme *pc64_shell_theme(void);
+int  uno_snd_active(void);              /* snd_pcm.c, when AUDIO=1 built it in */
+void uno_seq_beep(int midi, int ticks); /* the kernel's own voice, via the sequencer */
 
 /* ---- output: a line buffer for the window, mirrored to the URC log -------- */
 #define NLINES 64
@@ -83,9 +85,18 @@ static void say(const char *fmt, ...)
 static short g_ring[RING_FRAMES * 2] __attribute__((aligned(64)));
 
 #define TONE_MS 3000
-static int        g_state;              /* 0 idle, 1 playing, 2 done         */
+static int        g_state;              /* 0 idle, 1 playing, 2 done, 3 kernel chime */
 static c64afe_u64 g_t0;
 static c64afe_u32 g_cur0;
+/* kernel mode: the chime through uno_seq_beep, one note per NOTE_MS, and the
+ * loudest sample seen in the KERNEL's ring while it plays */
+#define NOTE_MS 350
+static const int  g_notes[] = { 60, 64, 67, 72 };
+static int        g_note;
+static c64afe_u64 g_note_t0;
+static int        g_peak;
+static volatile short *g_kring;
+static unsigned   g_kframes;
 
 static void fill_tone(void)
 {
@@ -119,10 +130,61 @@ static void dump(const char *when)
         AFE_R32(AFE_MEMIF_HD_MODE), AFE_R32(AFE_MEMIF_MSB), AFE_R32(AFE_SGEN_CON0));
 }
 
+static void kernel_mode(void)
+{
+    c64afe_u32 base = AFE_R32(AFE_DL1_BASE), end = AFE_R32(AFE_DL1_END);
+    say("KERNEL MODE: DL1 is already streaming the kernel's ring %08x..%08x and "
+        "snd_pcm is active -- not touching the AFE", base, end);
+    say("extamp: before hp_en=%d amp=%d amp2=%d", c64afe_gpio_get_out(GPIO_HP_EN),
+        c64afe_gpio_get_out(GPIO_EXTAMP), c64afe_gpio_get_out(GPIO_EXTAMP2));
+    c64afe_extamp_on();
+    say("extamp: ON (GPIO153 + GPIO111 pulsed x3, hp_en GPIO108 low): now hp_en=%d amp=%d amp2=%d",
+        c64afe_gpio_get_out(GPIO_HP_EN), c64afe_gpio_get_out(GPIO_EXTAMP),
+        c64afe_gpio_get_out(GPIO_EXTAMP2));
+    g_kring = (volatile short *)(c64afe_u64)base;
+    g_kframes = (end + 1u - base) / 4u;
+    g_peak = 0;
+    g_note = 0;
+    g_note_t0 = c64afe_cnt();
+    g_t0 = g_note_t0;
+    g_cur0 = c64afe_dl1_cur();
+    uno_seq_beep(g_notes[0], 60);
+    g_state = 3;
+    say("chime: C E G C through uno_seq_beep -> snd_pcm's square voice -> the kernel ring");
+}
+
+static void kernel_frame(void)
+{
+    c64afe_u64 now = c64afe_cnt();
+    unsigned i, rd = (c64afe_dl1_cur() - (c64afe_u32)(c64afe_u64)g_kring) / 4u;
+    /* peek at the 256 frames just behind the read cursor: what the DAC heard */
+    for (i = 0; i < 256 && g_kframes; i++) {
+        unsigned f = (rd + g_kframes - 1u - i) % g_kframes;
+        int v = g_kring[f * 2];
+        if (v < 0) v = -v;
+        if (v > g_peak) g_peak = v;
+    }
+    if ((now - g_note_t0) * 1000ull / c64afe_freq() < NOTE_MS) return;
+    g_note++;
+    g_note_t0 = now;
+    if (g_note < 4) { uno_seq_beep(g_notes[g_note], 60); return; }
+    g_state = 2;
+    say("chime: done after %llu ms; cur %08x -> %08x; peak |sample| = %d",
+        (unsigned long long)((now - g_t0) * 1000ull / c64afe_freq()),
+        g_cur0, c64afe_dl1_cur(), g_peak);
+    say("chime: peak 0 means snd_pcm never wrote the ring; ~8400 is the square voice at volume 70");
+    say("extamp: left ON so the shell's sounds can be heard");
+    dump("at the end");
+}
+
 static void start(void)
 {
     c64afe_u32 steps = 0, v;
     dump("as found");
+    if ((AFE_R32(AFE_DAC_CON0) & 3u) == 3u && uno_snd_active()) {
+        kernel_mode();
+        return;
+    }
     if (!c64afe_domain_on(&steps)) {
         say("spm: the AUDIO domain never acked (sta=%08x con=%08x) -- stopping",
             AFE_R32(SPM_PWR_STATUS), AFE_R32(SPM_AUDIO_PWR_CON));
@@ -143,6 +205,8 @@ static void start(void)
         (v & 1u) ? "AFE ON" : "AFE_ON DID NOT STICK");
     if (!(v & 1u)) { g_state = 2; return; }
 
+    c64afe_extamp_on();
+    say("extamp: ON (GPIO153 + GPIO111 pulsed x3, hp_en GPIO108 low)");
     fill_tone();
     c64afe_dl1_start((c64afe_u32)(c64afe_u64)g_ring, RING_BYTES);
     g_cur0 = c64afe_dl1_cur();
@@ -200,6 +264,7 @@ static void opened(void)
 
 static void frame(void)
 {
+    if (g_state == 3) { kernel_frame(); return; }
     if (g_state != 1) return;
     if ((c64afe_cnt() - g_t0) * 1000ull / c64afe_freq() >= TONE_MS)
         stop("timer");
