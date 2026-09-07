@@ -123,6 +123,15 @@ int uno_afe_init(void)
         return 0;
     }
 
+    /* 3b. the speakers' own amplifiers, which are not the codec's: two
+     *     external class-D parts behind GPIO153 / GPIO111 with a pulse-count
+     *     gain mode, and the headphone-enable pin low (afe_regs.h). The first
+     *     AUDIO=1 boot with a perfect codec set was silent for exactly this. */
+    c64afe_extamp_on();
+    c64_logf("afe: external speaker amps on (GPIO153=%d GPIO111=%d hp_en GPIO108=%d)\n",
+             c64afe_gpio_get_out(GPIO_EXTAMP), c64afe_gpio_get_out(GPIO_EXTAMP2),
+             c64afe_gpio_get_out(GPIO_HP_EN));
+
     /* 4. the ring, and DL1 reading it. Device memory: plain stores land. */
     for (unsigned i = 0; i < RING_FRAMES * 2; i++)
         g_ring[i] = 0;

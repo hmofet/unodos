@@ -234,4 +234,70 @@ static inline void c64afe_clean(const void *p, unsigned long n)
     AFE_DSB();
 }
 
+/* ---- the external speaker amplifiers ------------------------------------- *
+ * The Cosmo's speakers are NOT driven by the MT6358: they sit behind two
+ * external class-D amplifiers, each switched by one GPIO with a pulse-count
+ * gain mode (k71v1_64_bsp.dts: extamp = GPIO153, extamp2 = GPIO111;
+ * mtk-auddrv-gpio.c AudDrv_GPIO_EXTAMP_Select: mode 3 = three low/high
+ * pulses 2 us apart; mtk-soc-codec-6358.c Ext_Speaker_Amp_Change: headphone
+ * enable (GPIO108) low first, both amps low, settle, pulse both, 25 ms warm
+ * up). A PMIC register diff can never see this, which is why the first AUDIO=1
+ * image with a perfect codec set stayed silent.
+ *
+ * GPIO block at 0x10005000: DIR at 0x000, DOUT at 0x100, MODE at 0x300 (eight
+ * pins of four bits per word), 32 pins per DIR/DOUT word with a 0x10 stride;
+ * every DIR/DOUT word has SET at +4 and CLR at +8. sdmmc.c uses the same map
+ * for the card pins. */
+#define C64_GPIO             0x10005000u
+#define GPIO_EXTAMP          153
+#define GPIO_EXTAMP2         111
+#define GPIO_HP_EN           108
+
+static inline void c64afe_gpio_out(unsigned pin)
+{
+    c64afe_u32 mode = C64_GPIO + 0x300u + (pin / 8u) * 0x10u;
+    c64afe_u32 sh = (pin % 8u) * 4u;
+    AFE_R32(mode) = AFE_R32(mode) & ~(0xfu << sh);            /* function 0 = GPIO */
+    AFE_R32(C64_GPIO + 0x000u + (pin / 32u) * 0x10u + 4u) = 1u << (pin % 32u); /* DIR set */
+    AFE_DSB();
+}
+static inline void c64afe_gpio_set(unsigned pin, int hi)
+{
+    AFE_R32(C64_GPIO + 0x100u + (pin / 32u) * 0x10u + (hi ? 4u : 8u)) = 1u << (pin % 32u);
+    AFE_DSB();
+}
+static inline int c64afe_gpio_get_out(unsigned pin)
+{
+    return (AFE_R32(C64_GPIO + 0x100u + (pin / 32u) * 0x10u) >> (pin % 32u)) & 1u;
+}
+
+/* Ext_Speaker_Amp_Change(true), mode 3 on both amps. */
+static inline void c64afe_extamp_on(void)
+{
+    int i;
+    c64afe_gpio_out(GPIO_HP_EN);
+    c64afe_gpio_out(GPIO_EXTAMP);
+    c64afe_gpio_out(GPIO_EXTAMP2);
+    c64afe_gpio_set(GPIO_HP_EN, 0);
+    c64afe_gpio_set(GPIO_EXTAMP, 0);
+    c64afe_gpio_set(GPIO_EXTAMP2, 0);
+    c64afe_spin_us(2000);
+    for (i = 0; i < 3; i++) {
+        c64afe_gpio_set(GPIO_EXTAMP, 0);  c64afe_spin_us(2);
+        c64afe_gpio_set(GPIO_EXTAMP, 1);  c64afe_spin_us(2);
+    }
+    for (i = 0; i < 3; i++) {
+        c64afe_gpio_set(GPIO_EXTAMP2, 0); c64afe_spin_us(2);
+        c64afe_gpio_set(GPIO_EXTAMP2, 1); c64afe_spin_us(2);
+    }
+    c64afe_spin_us(25000);
+}
+
+static inline void c64afe_extamp_off(void)
+{
+    c64afe_gpio_set(GPIO_EXTAMP, 0);
+    c64afe_gpio_set(GPIO_EXTAMP2, 0);
+    c64afe_spin_us(500);
+}
+
 #endif /* C64_AFE_REGS_H */

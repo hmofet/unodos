@@ -19,6 +19,7 @@ void uno_snd_poll(void);
 void uno_snd_note(int midi);
 void uno_snd_quiet(void);
 int  uno_snd_active(void);
+void uno_pc64_chime(void);         /* below: the boot chime, through the DAC */
 #endif
 
 /* ---- the module arena (M8) ----------------------------------------------
@@ -180,6 +181,7 @@ void c_main(void *dtb)
      * frame (uno_snd_poll, below). It logs and flushes at every step so a
      * machine that wedges says where. See afe.c and AUDIO-SURVEY.md. */
     uno_snd_init();
+    uno_pc64_chime();               /* C E G C: the boot's own audio test */
 #endif
     /* USB before the shell too: enumeration takes a moment (port power,
      * debounce, the hub walk) and the desktop should come up with its mouse
@@ -394,6 +396,22 @@ void uno_pc64_snd_quiet(void)
 #endif
 }
 
+/* The startup chime uefi_main.c plays on x86 (C E G C, ~110 ms a note),
+ * through the same voice. A no-op without AUDIO=1, and without a DAC: the
+ * note calls fall through and the delays are the only cost. Called from
+ * c_main after uno_snd_init, so a flashed AUDIO=1 image announces whether
+ * the speakers work before anyone has to open an app. */
 void uno_pc64_chime(void)
 {
+#if C64_AUDIO
+    static const int notes[] = { 60, 64, 67, 72 };
+    int i, j;
+    if (!uno_snd_active()) return;
+    for (i = 0; i < 4; i++) {
+        uno_snd_note(notes[i]);
+        for (j = 0; j < 10; j++) { uno_pc64_delay_ms(11); uno_snd_poll(); }
+    }
+    uno_snd_quiet();
+    for (j = 0; j < 4; j++) { uno_pc64_delay_ms(11); uno_snd_poll(); }
+#endif
 }
