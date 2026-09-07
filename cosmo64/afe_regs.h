@@ -70,6 +70,10 @@ typedef unsigned long long c64afe_u64;
 #define AFE_DAC_CON1         (C64_AFE + 0x014)    /* [3:0] DL1 rate, bit 21 DL1 mono */
 #define AFE_CONN3            (C64_AFE + 0x02c)    /* -> O03 (DAC L): bit 5 = I05 */
 #define AFE_CONN4            (C64_AFE + 0x030)    /* -> O04 (DAC R): bit 6 = I06 */
+#define AFE_CONN28           (C64_AFE + 0x4bc)    /* -> O28 (DAC_2 L): bit 5 = I05 */
+#define AFE_CONN29           (C64_AFE + 0x4c0)    /* -> O29 (DAC_2 R): bit 6 = I06 */
+#define AFE_ADDA_DL_SDM_FIFO_MON (C64_AFE + 0xc60) /* monitors: nonzero = the SDM  */
+#define AFE_ADDA_DL_SRC_LCH_MON  (C64_AFE + 0xc64) /* is producing output          */
 #define AFE_I2S_CON1         (C64_AFE + 0x034)    /* the DAC out: SetI2SDacOut   */
 #define AFE_DL1_BASE         (C64_AFE + 0x040)
 #define AFE_DL1_CUR          (C64_AFE + 0x044)    /* the DMA read cursor         */
@@ -178,6 +182,10 @@ static inline void c64afe_dac_on(void)
     AFE_R32(AFE_I2S_CON1) = AFE_I2S_CON1_DAC_48K;
     AFE_R32(AFE_CONN3) = AFE_R32(AFE_CONN3) | (1u << 5);   /* DL1 L -> DAC L       */
     AFE_R32(AFE_CONN4) = AFE_R32(AFE_CONN4) | (1u << 6);   /* DL1 R -> DAC R       */
+    /* mtk_pcm_dl1_start connects DL1 to I2S1_DAC AND I2S1_DAC_2 (O28/O29);
+     * measured on Trixie 2026-09-07: 0x4bc=0x20, 0x4c0=0x40 while playing. */
+    AFE_R32(AFE_CONN28) = AFE_R32(AFE_CONN28) | (1u << 5);
+    AFE_R32(AFE_CONN29) = AFE_R32(AFE_CONN29) | (1u << 6);
     AFE_DSB();
     /* SetI2SDacEnable(true) */
     AFE_R32(AFE_DAC_CON0) = AFE_R32(AFE_DAC_CON0) | 1u;             AFE_DSB();
@@ -203,7 +211,7 @@ static inline void c64afe_dl1_start(c64afe_u32 base, c64afe_u32 bytes)
 {
     AFE_R32(AFE_MEMIF_MSB) = AFE_R32(AFE_MEMIF_MSB) & ~(1u << 28);   /* CPU 8_24 fmt bit, as Linux */
     AFE_R32(AFE_MEMIF_HD_MODE) = AFE_R32(AFE_MEMIF_HD_MODE) & ~3u;   /* 16-bit                     */
-    AFE_R32(AFE_MEMIF_HDALIGN) = AFE_R32(AFE_MEMIF_HDALIGN) & ~1u;
+    AFE_R32(AFE_MEMIF_HDALIGN) = (AFE_R32(AFE_MEMIF_HDALIGN) & ~1u) | (0x7fffu << 16); /* set_sram_mode(normal), as Linux at play */
     AFE_R32(AFE_DAC_CON1) = AFE_DAC_CON1_48K_STEREO;
     AFE_R32(AFE_DL1_BASE) = base;
     AFE_R32(AFE_DL1_END)  = base + bytes - 1u;
