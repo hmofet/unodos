@@ -12,7 +12,7 @@ research repo: `research/pc64-arm-port-plan.md` in `hmofet/cosmo`. It stops at
 M5; M6 (the URC remote channel) was added after it was written and is
 documented here.
 
-## State: M0-M7 COMPLETE, all hardware-proven (2026-09-03)
+## State: M0-M12 COMPLETE, all hardware-proven (2026-09-08)
 
 Everything below has run on the phone, not just under the gate:
 
@@ -29,7 +29,8 @@ Everything below has run on the phone, not just under the gate:
 | M8 | `.UNO` modules: the aarch64 module ABI -- seven apps load from the SD card |
 | M9 | the browser: unoweb, unojs and the browser lane -- it fetches, renders and runs scripts on the phone |
 | M10 | HTTPS: BearSSL, a defensible entropy source, and this machine's first clock -- public sites load on the phone |
-| M11 | **the MT6358's real RTC: a battery-backed clock, read-only, its map derived on the device** |
+| M11 | the MT6358's real RTC: a battery-backed clock, read-only, its map derived on the device |
+| M12 | **audio: the MT6771 AFE as pc64's PCM backend -- the boot chime plays from the speakers** |
 
 **What runs the machine today.** The desktop is the panel's native landscape at
 a 2x zoom. Local input is the matrix keyboard, the touch panel, and the rear
@@ -38,9 +39,11 @@ cover panel as a touchpad; a USB mouse and keyboard work through a plain USB
 card is mounted read-write as the boot volume, so the session persists.** The
 shell holds a DHCP lease and serves URC on `:5099`.
 
-**Audio works as of 2026-09-08** -- the boot chime plays from the speakers
-(open item 1 below tells the whole story). Still missing: no WiFi (CONNSYS
-has no bare-metal route), and no cellular. **The RTC is real as of M11** -- the MT6358's battery-backed clock,
+**Audio works as of M12** -- the boot chime plays from the speakers, and
+the Sound Manager voice, the sample stream and the SFX mixer all run over the
+AFE ring (the "Audio" section at the end of this file). Still missing: no
+WiFi (CONNSYS has no bare-metal route), and no cellular. **The RTC is real
+as of M11** -- the MT6358's battery-backed clock,
 read over PWRAP, so the time survives a power-off. `.UNO` apps load as of M8: the seven the launcher
 rosters live under `APPS\` on the SD card and open from the desktop. **The
 browser is carried as of M9** -- unoweb, unojs and the browser lane compile
@@ -50,10 +53,10 @@ that has to pass a health test before TLS will open a connection at all, and
 the machine has a clock for the first time -- a software one, because
 certificate validity needs a date and there is still no RTC driver.
 
-**Where we left off.** p38 carries the M10 image and it is booted and
-verified: the browser loads **public HTTPS sites** -- CA-validated, on a
-conditioned-jitter seed, against a build-stamped clock (see the two "On the
-hardware" sections at the end of this file). The loop is:
+**Where we left off.** p38 carries the M12 image and it is booted and
+verified: it chimes at boot, and the browser loads **public HTTPS sites** --
+CA-validated, on a conditioned-jitter seed, against the hardware clock (see
+the "On the hardware" sections at the end of this file). The loop is:
 
 ```sh
 ./build.sh shell && ./flashp38.sh   # when there is something new to try
@@ -114,43 +117,13 @@ Input is 3.1x cheaper and the shell runs 28% more frames -- and the M7 number
 
 **Open, in the order worth doing:**
 
-1. **Audio.** The oldest gap, and as of 2026-09-05 the digital half is
-   PROVEN ON THE PHONE and the whole path is built, pending one flash. The
-   story, in order: `AUDIO-SURVEY.md` measured the AFE and the codec from
-   Linux; the first two `AUDIO=1` boots applied the codec (23 of 23 rows over
-   PWRAP) and found `AFE_ON` would not stick; then **`AFEPROBE.UNO`
-   (`afeprobe.c`, a module pushed over URC with NO reflash) poked the clock
-   tree on the live machine and found the one missing thing: the AUDIO
-   power domain (SPM MTCMOS, `0x10006314`) is OFF at LK handover.** The
-   infracfg gate and the topckgen muxes were already open. With the domain
-   on, `AFE_ON` sticks, the vendor's DAC path (`afe_regs.h`, transcribed
-   from mt6771-sound.c and mtk-soc-afe-control.c) takes every enable bit,
-   and DL1 streams a ring at 192 KB/s -- 48 kHz stereo s16 to the byte. The
-   probe played a 441 Hz sine through DL1 for three seconds; whether the
-   speaker sounded depends on the codec set, which a module cannot apply.
-   **What is built and NOT yet booted:** `afe.c` is now pc64's PCM backend
-   (`uno_afe_init/ring/pos`, the ring in the Device-mapped `.xdma` section),
-   `pc64/snd_pcm.c` reaches it through a `UNO_SND_BACKEND_AFE` seam, the
-   real `unosound_seq.c` replaces the `uno_seq_*` stubs, and
-   `uno_pc64_snd_note` drives the square voice -- so the chime, Music,
-   Tracker and Dostris should all sound. `AUDIO=1 ./build.sh shell` builds
-   it; still off by default until that boot is heard. `ONLY=afeprobe
-   ./build.sh apps` rebuilds the probe alone for the next live experiment.
-   Still stubbed: `uno_snd_mus_*` (needs unomedia's audio decoders).
-   **2026-09-07:** that image booted silent, and the survey's last section
-   says why: the speakers are behind two GPIO-pulsed external amplifiers
-   (GPIO153/GPIO111, headphone-enable GPIO108 low), and DL1 must also be
-   connected to O28/O29 (`AFE_CONN28/29`) -- the DL SDM monitor reads 0
-   until it is. Both are in `afe_regs.h` now, `afe.c` pulses the amps, and
-   the boot plays the C E G C chime through the DAC. Still silent after
-   that; the same route sounds under Linux, and the values matched, so
-   `pmic.c` now runs the vendor's codec bring-up in its ORDER with its ramps
-   and delays (survey, last section) -- and `0x1822`, a CPU-rail register
-   the diff had let through, is out of the table. **That was it: on
-   2026-09-08 the boot chimed from the speakers.** Audio is on by default
-   now (`AUDIO=0 ./build.sh shell` leaves it out); the square voice, the
-   sample stream and the SFX mixer all run over the AFE ring. Still
-   stubbed: `uno_snd_mus_*` (needs unomedia's audio decoders).
+1. **Audio -- DONE (M12, 2026-09-08).** The oldest gap is closed: the boot
+   chimes from the speakers and `stubs.c` no longer answers the sound calls.
+   The whole account is the "Audio" section at the end of this file and
+   `AUDIO-SURVEY.md`. What remains of it is small: `uno_snd_mus_*` (the
+   Music player's decoders, which need unomedia's audio half) is still a
+   stub, and headphone-jack detection is not wired (the codec output is
+   steered to the speaker amplifiers unconditionally).
 1b. **Fill in behind the modules** (the rest of it). M8 proved the ABI; what
    the apps find behind their imports is often still a stub. Real now:
    `uno_binds.c`, `unolog.c`, `uno3d.c` + `uno3d_soft.c` (the providers), the
@@ -2142,3 +2115,156 @@ unfocuses the bar so the next character starts from empty. `browsercap.py`
 does that now. The general shape of this is worth keeping: session
 persistence, which M7 added, means a harness cannot assume it starts from a
 fresh desktop.
+
+## Audio (2026-09-08): four things between a measured register set and a sound
+
+M12 is the oldest gap in this port closed: `afe.c` is pc64's PCM backend on
+the MT6771's audio front-end, and on the first boot of the finished sequence
+the machine played its C E G C chime from the speakers. It took four days and
+four separate findings, none of which the survey that started it could have
+shown, and the account of how each was found is worth more than the register
+values, so it is written down here.
+
+### The shape: one backend, no new audio code above it
+
+`pc64/snd_pcm.c` asks a backend for three functions -- `init()`,
+`ring(&frames)`, `pos()` -- and everything above that seam (the square voice
+the Sound Manager drives, the sample stream, the effects mixer, the
+resampler, the looping-ring design that makes underruns benign) is portable
+and already built for aarch64. So the whole job was one backend of that shape
+(`uno_afe_init/ring/pos` in `afe.c`), an additive `UNO_SND_BACKEND_AFE` seam
+in `snd_pcm.c` (its `sfence` is a `dsb sy` here), the real `unosound_seq.c`
+in place of the `uno_seq_*` stubs, and `uno_pc64_snd_note` routed to the DAC
+instead of the PC speaker this machine does not have. The ring is 64 KB of
+Device memory in the `.xdma` section (the AFE reads DRAM behind the caches,
+exactly like the xHCI), and DL1 loops it forever; `uno_snd_poll` writes ahead
+of the DMA cursor every frame, as on x86.
+
+### Finding one: the AUDIO power domain (2026-09-05)
+
+`AUDIO-SURVEY.md` had measured the AFE and the MT6358 codec from Trixie, and
+the first two `AUDIO=1` boots applied the codec set (23 of 23 rows over
+PWRAP) and found `AFE_ON` would not stick: the block was mapped, and its
+functional clock was not running. Finding which of four clock blocks was at
+fault through afe.c would have cost a Trixie reboot, a flash and a person at
+the LK menu per attempt. **`AFEPROBE.UNO` (`afeprobe.c`) is the answer to
+that, and it is the reusable tool of this milestone**: a unoui-class module
+pushed to the SD card over URC (`put`, `rescan`, `launch afeprobe`) while
+the phone sits in UnoDOS. A module runs in the kernel's address space and
+mmu.c maps the first gigabyte as Device memory, so it reads and writes SPM,
+INFRACFG, topckgen and the AFE directly and narrates on the SCRIPT log
+channel. `ONLY=afeprobe ./build.sh apps` rebuilds it alone.
+
+Its first run answered the question in one pass: the infracfg gate and the
+topckgen muxes were already open at LK handover, and the AUDIO MTCMOS in SPM
+(`AUDIO_PWR_CON` at `0x10006314`) was off -- `PWR_STATUS` bit 24 clear, the
+control word `0xff12`. The recovery slot's LK never turns it on. After
+`spm_mtcmos_ctrl_audio`'s on-sequence, transcribed from the vendor clock
+driver, `AFE_ON` stuck, the generator register held its value, and the DL1
+cursor advanced 0xfc0 bytes per 20 ms: 192 KB/s, which is 48 kHz stereo s16
+to the byte. That is the clock, measured.
+
+### Finding two: the speakers are behind external amplifiers (2026-09-07)
+
+The kernel path then came up exactly as the probe had -- domain on, codec
+23 of 23, DAC path enabled, DL1 streaming -- and the boot was silent. Two
+reasons, neither the codec. The boot chime was an empty stub on this
+platform, so silence proved nothing; and the Cosmo's speakers are driven by
+two external class-D amplifiers switched by GPIO pulses (`k71v1_64_bsp.dts`:
+`extamp` = GPIO153, `extamp2` = GPIO111, mode 3 = three low/high pulses
+2 us apart, with headphone-enable GPIO108 held low first and 25 ms of warm
+up -- the vendor's `Ext_Speaker_Amp_Change`). No PMIC register diff can see
+a GPIO. `c64afe_extamp_on()` in `afe_regs.h` does it; `afe.c` calls it after
+the DAC path; `uno_pc64_chime` is now the x86 chime through the DAC, called
+right after `uno_snd_init`, so a flashed image announces itself.
+
+### Finding three: DL1 must feed O28/O29 as well (2026-09-07)
+
+Still silent. The probe grew a KERNEL MODE -- when DL1 is already streaming
+the kernel's ring it leaves the AFE alone, pulses the amps, plays the chime
+through `uno_seq_beep` and reads the kernel ring behind the DMA cursor -- and
+it measured a peak sample of 8400 in the ring while the chime played, which
+is the square voice at volume 70 to the unit. So samples were reaching DL1.
+The AFE regmap diffed on Trixie while `aplay` played showed what the survey
+had missed: Linux connects DL1 to O03/O04 (`AFE_CONN3/4`) AND to O28/O29
+(`AFE_CONN28/29` at `0x4bc/0x4c0`, the `I2S1_DAC_2` pair of
+`mtk_pcm_dl1_start`'s second `SetIntfConnection`). With only CONN3/4 set the
+DL SDM's left-channel monitor (`0xc64`) read 0 during a full-scale chime;
+with CONN28/29 added it read `0x1ffb5b` at once. **The DAC's sample-rate
+converter is fed from O28/O29 on this SoC, and the monitors at `0xc60` and
+`0xc64` are the diagnostic that separates "enable bits set" from "audio
+flowing" without a speaker.** Two survey rows were renamed on the way: its
+"IRQ counters" `0x02c/0x030` are `AFE_CONN3/4`, and `0x034` is
+`AFE_I2S_CON1`, the DAC-out register, which is `SetI2SDacOut(48000)` to the
+bit.
+
+### Finding four: the order (2026-09-07, night)
+
+Monitors live, amplifiers on, and no sound. On Trixie the same route --
+`Audio_Amp_L/R_Switch` and `Ext_Speaker_Amp_Switch` on, then a tone -- made
+the speakers sound, and its PMIC on/off diff was our 23-row table field for
+field. What was left was exactly what the survey said it could not measure:
+the order and timing of the codec bring-up. It did not need measuring; the
+vendor driver is source. `pmic.c`'s audio table is now the sequence from
+`mtk-soc-codec-6358.c` -- `TurnOnDacPower` then `Audio_Amp_Change(true)` --
+as fifty-odd ordered steps with its 250 us and 100 us settles and its three
+ramps (the HP main output stage 0..7, the aux feedback loop 0..15, the HPL/R
+pull-down 0..6 and back, 600 us a step), followed by a field-by-field read
+back of the on-state and the two monitors Linux shows when its path is live.
+A headphone driver whose stages arrive all at once sits in a state its
+register values do not reveal. That was the last piece: the next boot
+chimed.
+
+Naming every address in the vendor PMIC header on the way found the table's
+one real mistake: `0x1822`, listed as "an audio LDO" and written on three
+boots, is `MT6358_VPROC_ANA_CON11`, an analog control of the CPU core buck.
+It flickers with frequency scaling and passed the survey's two-run filter by
+coincidence. It is out, and the lesson is written into `pmic.c`'s header:
+name the register before writing it. `0x22ac` and `0x22d6` turned out to be
+monitors and are read rather than written; `0x00d8` is the PMIC's own
+`GPIO_MODE2`, which puts its MTKAIF link pins into audio mode, and `0x07ac`
+is `DCXO_CW14`, whose bit 13 is the 26 MHz to the audio block.
+
+### What the Trixie side taught about measuring
+
+Three traps, each of which cost a round trip: PulseAudio keeps the codec path
+open, so a "cold idle" needs it killed -- and once killed, `aplay hw:0,0`
+plays into a powered-down codec unless the amp switches are set by hand;
+`amixer cset` can hang the shell, so mixer scripts run detached with a
+`timeout` on every call; and the URC link drops verb replies while its 96 KB
+connect-replay is draining, so a host script waits for the log to go quiet
+before it pushes. The kernel config's `CONFIG_SND_SOC_RT5509=y` was a false
+lead: no smart amplifier answers on any I2C bus and its pin states are absent
+from the DTS, so the speakers are analog -- codec headphone output, through
+the GPIO108 switch, into the pulse-mode amps -- which is the path this port
+drives.
+
+### Gate
+
+Audio is on by default (`AUDIO=0 ./build.sh shell` leaves it out); the codec
+sequence stays behind `C64_PMIC_WRITE`, so a `PMIC_WRITE=0` image still
+cannot write it. `uno_afe_init` refuses the QEMU virt board by its DTB (as
+urc.c does), so the default image is green under `qharness.py` at EL1, EL2
+and EL2 with URC, with the probe module in the URC gate's `APPS\`. The one
+shared-file change, the `snd_pcm.c` seam, went through the x86 prod and debug
+builds and `tools/gate.sh` (87 pass, 0 fail) and is filed in
+`pc64/UNOAUTOMATE-REQUESTS.md`.
+
+### On the hardware (2026-09-08)
+
+p38 reflashed with the ordered sequence, booted from the LK menu, and the
+speakers played C E G C about two seconds after audio init. The boot story
+that precedes it:
+
+```
+afe: AUDIO domain turned ON (sta=0100634c con=0000000d); infra sta1=00000000 topck cfg5=01000100
+afe: applying the codec set (the vendor sequence, pmic.c)
+afe: external speaker amps on (GPIO153=1 GPIO111=1 hp_en GPIO108=0)
+afe: streaming: dac0=00000003 dac1=00000aaa i2s1=00000a0b conn3=00000020 conn4=00000040 uldl=00006001 src2=83001803 padtop=00000031 dl1 478cd000..478dcfff cur 478cd090
+afe: DL1 is streaming a 64 KB silent ring; snd_pcm.c owns it now
+```
+
+Still open under this milestone: `uno_snd_mus_*` (the Music player needs
+unomedia's audio decoders in the image), and headphone-jack detection --
+the output is steered to the speaker amplifiers unconditionally, which is
+right for a phone on a desk and wrong for one with a jack in use.
