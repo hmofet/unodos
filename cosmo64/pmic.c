@@ -170,69 +170,138 @@ static const struct { c64_u32 addr; const char *name; } k_wr[] = {
 /* ---- the audio codec set (C64_AUDIO) -------------------------------------
  * A SECOND TABLE, BEHIND A SECOND FLAG, and both of those are the point. The
  * whitelist above exists because a wrong PMIC address is silicon at a voltage
- * it was not built for; audio needs twenty-three more addresses, which is a
+ * it was not built for; audio needs another thirty-odd addresses, which is a
  * large fraction again of everything this port has ever written to this chip.
  * Keeping them in their own table under their own #if means the shipped image
  * cannot write one of them, and that `AUDIO=1` is a deliberate act rather
  * than a default.
  *
- * WHAT MAKES THESE DEFENSIBLE, given there is no datasheet here. They are not
- * derived, they are OBSERVED: every one is a register that changed when Linux
- * on this same device turned its sine generator on, captured by diffing the
- * whole PMIC across the transition TWICE and keeping only registers that
- * changed to the SAME value both times. That filter matters -- a single-run
- * diff also contained 0x248a and 0x2492, which did not reproduce and are
- * therefore an ADC reading or a counter, not configuration. Writing those
- * would have been writing noise into a PMIC.
+ * WHAT THIS IS NOW (2026-09-07): THE VENDOR DRIVER'S OWN SEQUENCE, in its
+ * order, with its delays and its ramps. The first version of this table was
+ * the SET of registers that changed when Linux turned its sine generator on
+ * -- observed, twice-filtered, and applied in address order in one burst. It
+ * applied 23 of 23 rows on hardware and made no sound, and the reason was the
+ * thing a diff cannot carry: the headphone driver comes up through ramps
+ * (main output stage 0..7 and the aux feedback loop 0..15, 600 us a step) and
+ * settling delays, and a driver whose stages arrive all at once sits in a
+ * state its register values do not reveal. The order below is transcribed
+ * from mtk-soc-codec-6358.c on quill (/work/cosmo-kbuild/src): TurnOnDacPower
+ * then Audio_Amp_Change(true), the headphone path -- which on this board is
+ * the SPEAKER path, because headphone-enable (GPIO108) low steers it into the
+ * two external amplifiers (afe_regs.h). Every register it names is one the
+ * earlier diff saw change, except the four the diff could not see because
+ * they were already at their value: the negative-charge-pump dividers
+ * (AUDNCP_CLKDIV_CON0/1/2/4) and the bias/stage registers AUDDEC_ANA_CON6, 7,
+ * 10 and 11.
  *
- * The three outside the 0x22xx-0x24xx audio band (0xd8, 0x7ac, 0x1822) are
- * the least certain rows here: they are almost certainly the clock buffer and
- * an audio LDO, but "almost certainly" is doing real work in that sentence.
- * They are included because the analog half cannot come up without its supply,
- * and they are listed last so the log says plainly if one of them is what
- * wedges the machine. Registers in bands that were demonstrably noisy
- * elsewhere (0x10d8, 0x434) are EXCLUDED even though they passed the
- * two-run filter, because their neighbours all vary run to run and a
- * coincidence at that rate is likelier than a configuration bit.
+ * WHAT CAME OUT. 0x1822 -- listed as "an audio LDO" and written on three
+ * boots -- is MT6358_VPROC_ANA_CON11, an analog control of the CPU core
+ * buck. It flickers with DVFS, passed the two-run filter by coincidence, and
+ * is exactly what this whitelist exists to keep out; it is gone. 0x22ac and
+ * 0x22d6 are monitors (AFE_ADDA_MTKAIF_MON0, AFE_CG_EN_MON) that follow the
+ * codec rather than drive it; they are read at the end and not written.
  *
- * Full derivation, including what could not be measured (the ORDER): see
- * cosmo64/AUDIO-SURVEY.md. */
+ * The two rows outside the 0x22xx-0x24xx band are named now: 0x00d8 is the
+ * PMIC's GPIO_MODE2, which puts its MTKAIF link pins into audio mode
+ * (set_playback_gpio), and 0x07ac is DCXO_CW14, whose bit 13 is
+ * XO_AUDIO_EN_M, the 26 MHz to the audio block (audckbufEnable).
+ *
+ * Full derivation: cosmo64/AUDIO-SURVEY.md. */
 #if C64_AUDIO && C64_PMIC_WRITE
-/* `must` distinguishes a register we are DRIVING from one we merely observed
- * change. A diff cannot tell the two apart -- it sees 0 -> 8 either way -- and
- * the first hardware run made the difference concrete: every row took except
- * 0x22ac, which read back 0 after being written 8. A control bit that refuses
- * a write is a broken bring-up; a STATUS bit that refuses one was never a
- * control bit at all, and its value under Linux was a consequence of the codec
- * coming up rather than a cause of it. Rows marked must=0 are still written
- * (harmless if they turn out to be control after all) but do not fail the set. */
-static const struct { c64_u32 addr; c64_u32 val; int must; const char *name; } k_aud[] = {
-    /* the codec's digital half */
-    { 0x220Cu, 0x0000u, 1, "AUD 220c" },
-    { 0x2240u, 0x0000u, 1, "AUD 2240" },
-    { 0x2288u, 0x0001u, 1, "AUD 2288" },
-    { 0x228Au, 0x0001u, 1, "AUD 228a" },
-    { 0x2292u, 0x002Au, 1, "AUD 2292" },
-    { 0x2296u, 0xCBA1u, 1, "AUD 2296" },
-    { 0x229Au, 0x000Bu, 1, "AUD 229a" },
-    { 0x22ACu, 0x0008u, 0, "AUD 22ac" },
-    { 0x22D6u, 0x002Au, 1, "AUD 22d6" },
-    { 0x2394u, 0x0061u, 1, "AUD 2394" },
-    /* the analog half: DAC, PGA, the amps */
-    { 0x2408u, 0x3AFFu, 1, "AUD 2408" },
-    { 0x240Au, 0x3F03u, 1, "AUD 240a" },
-    { 0x240Cu, 0xC033u, 1, "AUD 240c" },
-    { 0x2410u, 0x0040u, 1, "AUD 2410" },
-    { 0x241Au, 0xF201u, 1, "AUD 241a" },
-    { 0x2420u, 0x0055u, 1, "AUD 2420" },
-    { 0x2422u, 0x0001u, 1, "AUD 2422" },
-    { 0x2424u, 0x1055u, 1, "AUD 2424" },
-    { 0x2426u, 0x0001u, 1, "AUD 2426" },
-    { 0x248Cu, 0x050Au, 1, "AUD 248c" },
-    /* supply and clock: the least certain rows, hence last */
-    { 0x00D8u, 0x0249u, 1, "AUD clkbuf 00d8" },
-    { 0x07ACu, 0xA2B5u, 1, "AUD supply 07ac" },
-    { 0x1822u, 0x0006u, 1, "AUD 1822" },
+enum { S_W, S_RMW, S_US, S_RAMP_HP, S_RAMP_AUX, S_PD_ON, S_PD_OFF };
+/* op, addr, val, mask -- addr is one of a fixed set, like every write here */
+static const struct { unsigned char op; c64_u32 addr; c64_u32 val; c64_u32 mask; } k_seq[] = {
+    /* ---- TurnOnDacPower ------------------------------------------------ */
+    { S_W,   0x00D8u, 0x0249u, 0xffffu },   /* GPIO_MODE2: MTKAIF pins to audio   */
+    { S_RMW, 0x2422u, 0x0000u, 0x0010u },   /* AUDDEC_ANA_CON13: NV regulator on  */
+    { S_PD_ON, 0, 0, 0 },                   /* pull HPL/R down to AVSS28 (0..6)   */
+    { S_RMW, 0x2410u, 0x0040u, 0x0040u },   /* AUDDEC_ANA_CON4: HP CMFB gate rstb */
+    { S_RMW, 0x07ACu, 0x2000u, 0x2000u },   /* DCXO_CW14: XO_AUDIO_EN_M           */
+    { S_RMW, 0x2394u, 0x0001u, 0x0003u },   /* AUDENC_ANA_CON6: CLKSQ from DCXO   */
+    { S_RMW, 0x220Cu, 0x0000u, 0x0066u },   /* AUD_TOP_CKPDN_CON0: NCP + 26M on   */
+    { S_US,  0, 250, 0 },
+    { S_RMW, 0x2292u, 0x0000u, 0x00C5u },   /* PMIC_AUDIO_TOP_CON0: digital clocks */
+    { S_US,  0, 250, 0 },
+    { S_W,   0x229Au, 0x0006u, 0xffffu },   /* AFUNC_AUD_CON2: sdm fifo clock     */
+    { S_W,   0x2296u, 0xCBA1u, 0xffffu },   /* AFUNC_AUD_CON0: scrambler clock    */
+    { S_W,   0x229Au, 0x0003u, 0xffffu },   /* sdm power on                        */
+    { S_W,   0x229Au, 0x000Bu, 0xffffu },   /* sdm fifo enable                     */
+    { S_RMW, 0x2288u, 0x0001u, 0x4001u },   /* AFE_UL_DL_CON0: afe on, no lr swap  */
+    { S_W,   0x228Au, 0x0001u, 0xffffu },   /* AFE_DL_SRC2_CON0_L: DL src on       */
+    { S_W,   0x2290u, 0x0000u, 0xffffu },   /* PMIC_AFE_TOP_CON0: DL normal path   */
+    /* ---- Audio_Amp_Change(true): the headphone (= speaker) driver ------- */
+    { S_W,   0x2408u, 0x3000u, 0xffffu },   /* CON0: HP short-circuit protection off */
+    { S_W,   0x240Cu, 0xC000u, 0xffffu },   /* CON2: reduce ESD resistance of AU_REFN */
+    { S_W,   0x248Cu, 0x050Au, 0xffffu },   /* ZCD_CON2: HPR/HPL gain -10 dB       */
+    { S_W,   0x223Cu, 0x0001u, 0xffffu },   /* AUDNCP_CLKDIV_CON1: DA_600K_NCP_VA18 */
+    { S_W,   0x223Eu, 0x002Cu, 0xffffu },   /* CON2: NCP clock 26M/43 = 604 kHz   */
+    { S_W,   0x223Au, 0x0001u, 0xffffu },   /* CON0: toggle RG_DIVCKS_CHG          */
+    { S_W,   0x2242u, 0x0002u, 0xffffu },   /* CON4: NCP soft start 150 us         */
+    { S_W,   0x2240u, 0x0000u, 0xffffu },   /* CON3: NCP on                        */
+    { S_US,  0, 250, 0 },
+    { S_RMW, 0x2424u, 0x1055u, 0x1055u },   /* CON14: cap-less LDOs (1.5 V)       */
+    { S_W,   0x2426u, 0x0001u, 0xffffu },   /* CON15: NV regulator (-1.2 V)        */
+    { S_US,  0, 100, 0 },
+    { S_W,   0x2420u, 0x0055u, 0xffffu },   /* CON12: IBIST                        */
+    { S_W,   0x241Eu, 0x4900u, 0xffffu },   /* CON11: HP DR bias 6 uA              */
+    { S_W,   0x2420u, 0x0055u, 0xffffu },   /* CON12: HP/ZCD bias                  */
+    { S_W,   0x240Cu, 0xC033u, 0xffffu },   /* CON2: HPP/N STB enhance             */
+    { S_W,   0x240Au, 0x000Cu, 0xffffu },   /* CON1: HP aux output stage           */
+    { S_W,   0x240Au, 0x003Cu, 0xffffu },   /* CON1: HP aux feedback loop          */
+    { S_W,   0x241Au, 0x0C00u, 0xffffu },   /* CON9: HP aux CMFB loop              */
+    { S_W,   0x2408u, 0x30C0u, 0xffffu },   /* CON0: HP driver bias circuits       */
+    { S_W,   0x2408u, 0x30F0u, 0xffffu },   /* CON0: HP driver core circuits       */
+    { S_RMW, 0x240Au, 0x00FCu, 0x00FFu },   /* CON1: short HP main to aux stage    */
+    { S_W,   0x241Au, 0x0E00u, 0xffffu },   /* CON9: HP main CMFB loop             */
+    { S_W,   0x241Au, 0x0200u, 0xffffu },   /* CON9: aux CMFB loop off             */
+    { S_W,   0x241Cu, 0x0000u, 0xffffu },   /* CON10: HS/LO cap size default       */
+    { S_W,   0x2414u, 0x0010u, 0xffffu },   /* CON6: HS driver bias, no output     */
+    { S_W,   0x2416u, 0x0010u, 0xffffu },   /* CON7: LO driver bias, no output     */
+    { S_RMW, 0x240Au, 0x00FFu, 0x00FFu },   /* CON1: HP main output stage          */
+    { S_RAMP_HP,  0, 0, 0 },                /* CON1[13:8]: stages 0..7, 600 us each */
+    { S_RAMP_AUX, 0, 0, 0 },                /* CON9[15:12]: 0..15, 600 us each     */
+    { S_W,   0x240Au, 0x3FCFu, 0xffffu },   /* CON1: aux feedback loop off         */
+    { S_W,   0x240Au, 0x3FC3u, 0xffffu },   /* CON1: aux output stage off          */
+    { S_W,   0x240Au, 0x3F03u, 0xffffu },   /* CON1: unshort main from aux         */
+    { S_US,  0, 100, 0 },
+    { S_RMW, 0x2422u, 0x0001u, 0x0001u },   /* CON13: AUD_CLK                      */
+    { S_RMW, 0x2408u, 0x000Fu, 0x000Fu },   /* CON0: audio DAC on                  */
+    { S_RMW, 0x241Au, 0x0001u, 0x0001u },   /* CON9: DAC low-noise mode            */
+    { S_US,  0, 100, 0 },
+    { S_RMW, 0x2408u, 0x0200u, 0x0F00u },   /* CON0: HPL mux -> DAC                */
+    { S_RMW, 0x2408u, 0x0A00u, 0x0F00u },   /* CON0: HPR mux -> DAC                */
+    { S_PD_OFF, 0, 0, 0 },                  /* release the HPL/R pull-down (6..0)  */
+};
+#define SEQ_COUNT (int)(sizeof k_seq / sizeof k_seq[0])
+
+/* What the codec must read afterwards: the on-state Linux holds (measured
+ * 2026-09-05 and again 2026-09-07 against its off-state), field by field. */
+static const struct { c64_u32 addr; c64_u32 val; c64_u32 mask; const char *name; } k_aud[] = {
+    { 0x00D8u, 0x0249u, 0xffffu, "GPIO_MODE2" },
+    { 0x07ACu, 0x2000u, 0x2000u, "DCXO_CW14.XO_AUDIO_EN_M" },
+    { 0x220Cu, 0x0000u, 0x0066u, "AUD_TOP_CKPDN_CON0" },
+    { 0x2240u, 0x0000u, 0xffffu, "AUDNCP_CLKDIV_CON3" },
+    { 0x2288u, 0x0001u, 0x4001u, "AFE_UL_DL_CON0" },
+    { 0x228Au, 0x0001u, 0xffffu, "AFE_DL_SRC2_CON0_L" },
+    { 0x2290u, 0x0000u, 0xffffu, "PMIC_AFE_TOP_CON0" },
+    { 0x2292u, 0x0000u, 0x00C5u, "PMIC_AUDIO_TOP_CON0" },
+    { 0x2296u, 0xCBA1u, 0xffffu, "AFUNC_AUD_CON0" },
+    { 0x229Au, 0x000Bu, 0xffffu, "AFUNC_AUD_CON2" },
+    { 0x2394u, 0x0001u, 0x0003u, "AUDENC_ANA_CON6.CLKSQ" },
+    { 0x2408u, 0x3AFFu, 0xffffu, "AUDDEC_ANA_CON0" },
+    { 0x240Au, 0x3F03u, 0xffffu, "AUDDEC_ANA_CON1" },
+    { 0x240Cu, 0xC033u, 0xffffu, "AUDDEC_ANA_CON2" },
+    { 0x2410u, 0x0040u, 0x0047u, "AUDDEC_ANA_CON4" },
+    { 0x2414u, 0x0010u, 0xffffu, "AUDDEC_ANA_CON6" },
+    { 0x2416u, 0x0010u, 0xffffu, "AUDDEC_ANA_CON7" },
+    { 0x241Au, 0xF201u, 0xffffu, "AUDDEC_ANA_CON9" },
+    { 0x241Cu, 0x0000u, 0xffffu, "AUDDEC_ANA_CON10" },
+    { 0x241Eu, 0x4900u, 0xffffu, "AUDDEC_ANA_CON11" },
+    { 0x2420u, 0x0055u, 0xffffu, "AUDDEC_ANA_CON12" },
+    { 0x2422u, 0x0001u, 0x0011u, "AUDDEC_ANA_CON13" },
+    { 0x2424u, 0x1055u, 0x1055u, "AUDDEC_ANA_CON14" },
+    { 0x2426u, 0x0001u, 0xffffu, "AUDDEC_ANA_CON15" },
+    { 0x248Cu, 0x050Au, 0xffffu, "ZCD_CON2" },
 };
 #define AUD_COUNT (int)(sizeof k_aud / sizeof k_aud[0])
 #endif  /* C64_AUDIO && C64_PMIC_WRITE */
@@ -362,45 +431,93 @@ static int pmic_rmw(int idx, c64_u32 mask, c64_u32 val)
 #endif  /* C64_PMIC_WRITE */
 
 #if C64_AUDIO && C64_PMIC_WRITE
-/* Apply the audio set in table order, reading each row back. The read-back is
- * not ceremony for the same reason it is not ceremony in pmic_rmw(): this is a
- * serial bus to another chip, and a write returning success only means the
- * wrapper accepted the command.
- *
- * A row that does not read back is logged and the whole thing FAILS rather
- * than pressing on: half a codec is not a quieter codec, it is an unknown
- * analog state, and the caller's next act would be to enable a tone into it.
- * Returns 0 if every row took, -1 otherwise. */
+static int aud_w(c64_u32 addr, c64_u32 val)
+{
+    if (wacs2(1, addr, val, 0) < 0) {
+        c64_logf("pmic: audio write %04x=%04x FAILED\n", addr, val);
+        return -1;
+    }
+    return 0;
+}
+
+static int aud_rmw(c64_u32 addr, c64_u32 val, c64_u32 mask)
+{
+    c64_u32 cur = 0;
+    if (mask == 0xffffu)
+        return aud_w(addr, val);
+    if (c64_pmic_read(addr, &cur) < 0) {
+        c64_logf("pmic: audio read %04x FAILED\n", addr);
+        return -1;
+    }
+    return aud_w(addr, (cur & ~mask) | (val & mask));
+}
+
+/* Run the vendor sequence, then read the on-state back field by field. A
+ * step that fails to write stops the sequence: half a codec is not a quieter
+ * codec, it is an unknown analog state, and the caller's next act would be
+ * to stream into it. Returns 0 when every step wrote and every on-state row
+ * reads back, -1 otherwise. The read-back is not ceremony: this is a serial
+ * bus to another chip, and "the write returned success" only means the
+ * wrapper accepted the command. */
 int c64_pmic_audio_apply(void)
 {
-    int i, bad = 0;
+    int i, j, bad = 0;
 
     if (!g_ready) {
         c64_log("pmic: audio set skipped -- the wrapper never came up\n");
         return -1;
     }
+    for (i = 0; i < SEQ_COUNT; i++) {
+        int r = 0;
+        switch (k_seq[i].op) {
+        case S_W:   r = aud_w(k_seq[i].addr, k_seq[i].val); break;
+        case S_RMW: r = aud_rmw(k_seq[i].addr, k_seq[i].val, k_seq[i].mask); break;
+        case S_US:  spin_us(k_seq[i].val); break;
+        case S_RAMP_HP:                     /* hp_main_output_ramp(true)      */
+            for (j = 0; j <= 7 && !r; j++) {
+                r = aud_rmw(0x240Au, ((c64_u32)j << 8) | ((c64_u32)j << 11), 0x3F00u);
+                spin_us(600);
+            }
+            break;
+        case S_RAMP_AUX:                    /* hp_aux_feedback_loop_gain_ramp */
+            for (j = 0; j <= 15 && !r; j++) {
+                r = aud_rmw(0x241Au, (c64_u32)j << 12, 0xF000u);
+                spin_us(600);
+            }
+            break;
+        case S_PD_ON:                       /* hp_pull_down(true)             */
+            for (j = 0; j <= 6 && !r; j++) { r = aud_rmw(0x2410u, (c64_u32)j, 7u); spin_us(600); }
+            break;
+        case S_PD_OFF:                      /* hp_pull_down(false)            */
+            for (j = 6; j >= 0 && !r; j--) { r = aud_rmw(0x2410u, (c64_u32)j, 7u); spin_us(600); }
+            break;
+        }
+        if (r < 0) {
+            c64_logf("pmic: audio sequence stopped at step %d of %d\n", i, SEQ_COUNT);
+            return -1;
+        }
+    }
     for (i = 0; i < AUD_COUNT; i++) {
         c64_u32 back = 0;
-        if (wacs2(1, k_aud[i].addr, k_aud[i].val, 0) < 0) {
-            c64_logf("pmic: %s (%04x) write FAILED\n", k_aud[i].name, k_aud[i].addr);
-            bad++;
-            continue;
-        }
         if (c64_pmic_read(k_aud[i].addr, &back) < 0) {
             c64_logf("pmic: %s (%04x) read-back FAILED\n", k_aud[i].name, k_aud[i].addr);
             bad++;
             continue;
         }
-        if (back != k_aud[i].val) {
-            c64_logf("pmic: %s (%04x) wanted %04x, reads %04x%s\n",
-                     k_aud[i].name, k_aud[i].addr, k_aud[i].val, back,
-                     k_aud[i].must ? "" : "  (status, not a control bit)");
-            if (k_aud[i].must)
-                bad++;
+        if ((back & k_aud[i].mask) != (k_aud[i].val & k_aud[i].mask)) {
+            c64_logf("pmic: %s (%04x) wanted %04x in mask %04x, reads %04x\n",
+                     k_aud[i].name, k_aud[i].addr, k_aud[i].val, k_aud[i].mask, back);
+            bad++;
         }
     }
-    c64_logf("pmic: audio set applied -- %d of %d rows took\n",
-             AUD_COUNT - bad, AUD_COUNT);
+    {
+        c64_u32 m0 = 0, m1 = 0;
+        c64_pmic_read(0x22ACu, &m0);        /* AFE_ADDA_MTKAIF_MON0: Linux on = 0x42c */
+        c64_pmic_read(0x22D6u, &m1);        /* AFE_CG_EN_MON:        Linux on = 0x2a  */
+        c64_logf("pmic: audio sequence done -- %d steps, %d of %d on-state rows read "
+                 "back; monitors mtkaif=%04x cg_en=%04x (Linux: 042c 002a)\n",
+                 SEQ_COUNT, AUD_COUNT - bad, AUD_COUNT, m0, m1);
+    }
     return bad ? -1 : 0;
 }
 #endif  /* C64_AUDIO && C64_PMIC_WRITE */

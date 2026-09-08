@@ -319,3 +319,43 @@ The Trixie measurement also showed the PMIC audio band does NOT change
 between idle and playing while PulseAudio holds the sink, so a "cold idle"
 diff needs PulseAudio stopped first (`systemctl --user stop pulseaudio` or
 kill it) -- the 2026-09-05 survey diff evidently had it stopped.
+
+## THE ORDER, TRANSCRIBED (2026-09-07, evening)
+
+With the amplifiers on and DL1 feeding O28/O29, the DAC's monitors showed
+samples arriving and the speakers stayed silent -- while the same route
+under Linux (`Audio_Amp_L/R_Switch` + `Ext_Speaker_Amp_Switch` on, then
+`aplay hw:0,0`) made a sound. The register VALUES matched Linux's on-state
+field for field, so what was left was exactly what this file said could not
+be measured: the ORDER. It did not need measuring; the vendor driver is
+source. `pmic.c` now runs `TurnOnDacPower` followed by
+`Audio_Amp_Change(true)` from `mtk-soc-codec-6358.c` step for step -- the
+MTKAIF pins to audio mode, the NV regulator, the HP pull-down ramp, the CMFB
+gate, the 26 MHz buffer, CLKSQ, the top clocks, two 250 us settles, the SDM
+and scrambler, the DL source; then short-circuit protection off, ESD, the
+-10 dB gain, the negative charge pump, the cap-less LDOs, bias, the aux
+stage, the HP driver, the CMFB loops, and the two RAMPS the diff could never
+show (main output stage 0..7 and aux feedback loop 0..15, 600 us a step),
+the DAC, the muxes, and the pull-down released. Fifty-odd steps and about
+25 ms.
+
+Two corrections to the codec table, both found by naming every address in
+the vendor PMIC header:
+
+- **`0x1822` is `MT6358_VPROC_ANA_CON11`, an analog control of the CPU core
+  buck.** It flickers with DVFS, passed the two-run filter by coincidence,
+  and was written on three boots. It is out of the table. This is the case
+  the whitelist exists for, and it got through on the strength of "almost
+  certainly an audio LDO" -- name the register before writing it.
+- `0x22ac` (`AFE_ADDA_MTKAIF_MON0`) and `0x22d6` (`AFE_CG_EN_MON`) are
+  monitors. They are read at the end of the sequence and compared with
+  Linux's on-state (`0x42c`, `0x2a`) rather than written.
+
+The named supply rows: `0x00d8` = `GPIO_MODE2`, the PMIC's own pin mux that
+puts the MTKAIF link pins into audio mode (`set_playback_gpio`); `0x07ac` =
+`DCXO_CW14`, bit 13 = `XO_AUDIO_EN_M`. `0xc4` (`GPIO_PI0`) and `0x18aa`
+(`VS1_ANA_CON4`) also move in the diffs and are noise.
+
+Method note for Trixie: PulseAudio keeps the codec path open, so a codec
+on/off diff needs it killed first; and once it is killed, `aplay hw:0,0`
+plays into a powered-down codec unless the two amp switches are set by hand.
