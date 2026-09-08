@@ -85,6 +85,74 @@
 #define INFRA_CG0_CLR 0x10001084ull
 #define CG0_UART1 (1u << 23)
 
+/* ---- the receive DMA: APDMA's virtual FIFO ------------------------------- *
+ * The 16-byte receive FIFO is the whole frame-drop story. OurCodi reports at
+ * 100 Hz while a finger is down, each report a 20-odd-byte frame, and the
+ * shell visits this UART about 36 times a second: ~58 bytes land between two
+ * visits and 16 of them survive. `codi.c` recovered (the parser resyncs on
+ * the next magic and a gesture with no frames for 250 ms is abandoned), and
+ * the `resynced past` count in the stats line has been measuring how much
+ * was lost ever since M7.
+ *
+ * MediaTek's answer is the same one Linux uses on this UART: AP_DMA's
+ * "virtual FIFO". Each UART has a pair of APDMA channels (uart1: tx = 2, rx
+ * = 3, per the vendor DTS `dmas = <&apdma 2 &apdma 3>`); the RX channel is
+ * given a ring in DRAM (VFF_ADDR/VFF_LEN), the UART's DMA_EN register hands
+ * the receive FIFO to it, and from then on the hardware drains the FIFO into
+ * the ring on its own -- with TO_CNT_AUTORST, on a timeout as well as on the
+ * trigger level, so a frame's tail is not held back. Software reads
+ * VFF_WPT, consumes up to it and writes what it consumed into VFF_RPT; both
+ * pointers carry a wrap flag in bit 16 above a 16-bit offset. No interrupt
+ * is needed: the poll loop asks the pointers. The sequence, the register
+ * offsets and the pointer arithmetic are the vendor's 8250_mtk.c and
+ * 8250_mtk_dma.c, transcribed; the ring lives in the ".xdma" section
+ * mmu.c maps as Device memory, so what the engine writes is what the CPU
+ * reads, with no cache maintenance (the xHCI and the AFE ring do the same).
+ *
+ * Only RECEIVE goes through DMA. Transmit is a handful of bytes per frame
+ * and the polled THRE path has never lost one. The DMA is armed only once a
+ * CoDi has answered (adopt()), so the probe stays the plain PIO it was, and
+ * on the QEMU gate -- where no MCU answers -- none of this runs. */
+#define APDMA_UART1_RX 0x11000900ull     /* dma-controller@11000780, channel 3 */
+#define V32(off) (*(volatile c64_u32 *)(APDMA_UART1_RX + (off)))
+#define VFF_INT_FLAG     0x00
+#define VFF_INT_EN       0x04
+#define VFF_EN           0x08
+#define VFF_RST          0x0C
+#define VFF_STOP         0x10
+#define VFF_FLUSH        0x14
+#define VFF_ADDR         0x1C
+#define VFF_LEN          0x24
+#define VFF_THRE         0x28
+#define VFF_WPT          0x2C
+#define VFF_RPT          0x30
+#define VFF_VALID_SIZE   0x3C
+#define VFF_LEFT_SIZE    0x40
+#define VFF_DEBUG_STATUS 0x50
+#define VFF_4G_SUPPORT   0x54
+#define VFF_RING_MASK    0xFFFFu
+#define VFF_RING_WRAP    0x10000u
+#define VFF_RX_INT_CLR   0x3u            /* both RX flags, write-1-to-clear    */
+
+#define INFRA_CG1_CLR  0x1000108Cull     /* infracfg_ao module gate 1: AP_DMA is bit 18 */
+#define INFRA_PDN_STA1 0x10001094ull
+#define CG1_APDMA (1u << 18)
+
+#define U_DMA_EN 0x4C                    /* MTK: bit0 RX DMA, bit1 TX DMA, bit2 TO_CNT_AUTORST */
+#define U_EFR    0x08                    /* in LCR configuration mode B         */
+#define DMA_EN_RX 0x5                    /* RX + auto-reset on timeout (8250_mtk MTK_UART_DMA_EN_RX) */
+#define LCR_CONF_MODE_B 0xBF
+#define EFR_ECB 0x10                     /* enhancement features, as the vendor sets it for DMA */
+
+/* 8 KB, as the vendor's UART driver sizes it: 2.8 s of the panel's full rate,
+ * against a poll that comes every 28 ms. */
+#define VFF_SIZE 8192u
+static c64_u8 g_vff[VFF_SIZE] __attribute__((section(".xdma"), aligned(64)));
+static int g_dma;                        /* 1 = the ring is live, PIO is off  */
+static unsigned g_dma_bytes;             /* bytes taken from the ring          */
+static unsigned g_burst_max;             /* the most one poll found waiting    */
+static unsigned g_overrun;               /* LSR overrun errors seen on the PIO path */
+
 /* The three pin pairs UART1 can appear on, most likely first. `mode_reg` and
  * `shift` locate the pin's four-bit function field in the GPIO block;
  * `ies_reg`/`ies_bit` its pad input enable, without which the receive pin is
@@ -251,7 +319,10 @@ static void uart_put(c64_u8 b)
 
 static int uart_get(void)
 {
-    if (!(U32(U_LSR) & LSR_DR))
+    c64_u32 lsr = U32(U_LSR);
+    if (lsr & 0x02u)                     /* OE: the 16-byte FIFO overflowed  */
+        g_overrun++;                     /* (reading LSR cleared it)         */
+    if (!(lsr & LSR_DR))
         return -1;
     return (int)(U32(U_RBR) & 0xFFu);
 }
@@ -259,9 +330,112 @@ static int uart_get(void)
 static void uart_flush_rx(void)
 {
     int n = 0;
+    if (g_dma) {
+        V32(VFF_RPT) = V32(VFF_WPT);     /* consume everything the ring holds */
+        __asm__ volatile("dsb sy" ::: "memory");
+        g_rxn = 0;
+        return;
+    }
     while (uart_get() >= 0 && n < 4096)
         n++;
     g_rxn = 0;
+}
+
+/* Hand the receive side to APDMA channel 3 (see the block comment above the
+ * registers). Logs each step, because the first time this runs on the
+ * device is the measurement; if VFF_EN will not stick the UART is put back
+ * to PIO and the driver carries on as it did through M7-M13. */
+static void vff_arm(void)
+{
+    c64_u32 sta = *(volatile c64_u32 *)INFRA_PDN_STA1, lcr;
+    int gated = (sta & CG1_APDMA) != 0, i;
+
+    if (gated) {
+        *(volatile c64_u32 *)INFRA_CG1_CLR = CG1_APDMA;
+        __asm__ volatile("dsb sy" ::: "memory");
+    }
+    /* the vendor's channel reset: pointers cleared, warm reset, wait for EN */
+    V32(VFF_ADDR) = 0; V32(VFF_THRE) = 0; V32(VFF_LEN) = 0;
+    V32(VFF_RST) = 1;
+    for (i = 0; i < 10000 && V32(VFF_EN); i++) { }
+    if (V32(VFF_EN)) {
+        c64_logf("codi: APDMA ch3 would not reset (EN=%08x DEBUG=%08x, apdma gate %s) "
+                 "-- receive stays polled\n", V32(VFF_EN), V32(VFF_DEBUG_STATUS),
+                 gated ? "was closed, opened" : "was open");
+        return;
+    }
+    V32(VFF_RPT) = 0;
+    V32(VFF_4G_SUPPORT) = 0;             /* the ring is below 4 GB           */
+
+    /* the UART side, in 8250_mtk.c's order: FIFO reset, hand RX to DMA
+     * (with the timeout auto-reset so a frame's tail is not held back),
+     * enhancement features on */
+    U32(U_FCR) = FCR_ENABLE_CLEAR;
+    U32(U_DMA_EN) = DMA_EN_RX;
+    lcr = U32(U_LCR);
+    U32(U_LCR) = LCR_CONF_MODE_B;
+    U32(U_EFR) = EFR_ECB;
+    U32(U_LCR) = lcr;
+
+    /* the ring: address, length, threshold (for an interrupt nothing takes),
+     * flags clear, enable */
+    for (i = 0; i < (int)VFF_SIZE; i++)
+        g_vff[i] = 0;
+    V32(VFF_ADDR) = (c64_u32)(c64_u64)g_vff;
+    V32(VFF_LEN)  = VFF_SIZE;
+    V32(VFF_THRE) = VFF_SIZE * 3u / 4u;
+    V32(VFF_INT_EN) = 0;
+    V32(VFF_INT_FLAG) = VFF_RX_INT_CLR;
+    V32(VFF_EN) = 1;
+    __asm__ volatile("dsb sy" ::: "memory");
+    if (V32(VFF_EN) != 1u) {
+        U32(U_DMA_EN) = 0;
+        U32(U_FCR) = FCR_ENABLE_CLEAR;
+        c64_logf("codi: APDMA ch3 did not enable (EN=%08x DEBUG=%08x) -- "
+                 "receive stays polled\n", V32(VFF_EN), V32(VFF_DEBUG_STATUS));
+        return;
+    }
+    g_dma = 1;
+    g_rxn = 0;
+    c64_logf("codi: UART1 receive is on APDMA channel 3 -- %u-byte ring at %08x, "
+             "apdma gate %s, DMA_EN=%08x WPT=%08x RPT=%08x LEFT=%u\n",
+             VFF_SIZE, (c64_u32)(c64_u64)g_vff,
+             gated ? "was closed, opened" : "was open",
+             U32(U_DMA_EN), V32(VFF_WPT), V32(VFF_RPT), V32(VFF_LEFT_SIZE));
+}
+
+/* Move what the engine has written since the last visit into the resync
+ * buffer: the vendor's mtk_dma_get_rx_size, with the copy done here. What
+ * does not fit stays in the ring for the next poll -- the ring is 2.8 s
+ * deep at the panel's full rate, so nothing is lost to a slow frame. */
+static void vff_fill(void)
+{
+    c64_u32 wr = V32(VFF_WPT), rd = V32(VFF_RPT);
+    unsigned wp = wr & VFF_RING_MASK, rp = rd & VFF_RING_MASK;
+    unsigned wrap = rd & VFF_RING_WRAP;
+    unsigned count = ((wr ^ rd) & VFF_RING_WRAP) ? (wp + VFF_SIZE - rp) : (wp - rp);
+    unsigned space, take, i;
+
+    if (!count)
+        return;
+    if (count > g_burst_max)
+        g_burst_max = count;
+    if (g_rxn >= sizeof g_rx) {
+        /* the parser has made nothing of half a kilobyte: keep the tail,
+         * as the PIO path does */
+        for (unsigned k = 0; k < sizeof g_rx / 2; k++)
+            g_rx[k] = g_rx[k + sizeof g_rx / 2];
+        g_rxn = sizeof g_rx / 2;
+    }
+    space = (unsigned)sizeof g_rx - g_rxn;
+    take = count < space ? count : space;
+    for (i = 0; i < take; i++) {
+        g_rx[g_rxn++] = g_vff[rp];
+        if (++rp == VFF_SIZE) { rp = 0; wrap ^= VFF_RING_WRAP; }
+    }
+    V32(VFF_RPT) = rp | wrap;
+    __asm__ volatile("dsb sy" ::: "memory");
+    g_dma_bytes += take;
 }
 
 /* ---- pins ----------------------------------------------------------------- */
@@ -328,6 +502,10 @@ static int be16s(const c64_u8 *p)
  * back -- so the buffer is a byte stream and the parser scans it. */
 static void rx_fill(void)
 {
+    if (g_dma) {
+        vff_fill();
+        return;
+    }
     for (int i = 0; i < 512; i++) {
         int c = uart_get();
         if (c < 0)
@@ -577,7 +755,18 @@ static void on_frame(c64_u32 cmd, const c64_u8 *p, unsigned n)
         buf[i] = 0;
         g_present = 1;
         /* OurCodi identifies itself as "OurCodi-..."; stock as "CODI:V...".
-         * Only the former ever sends a MouseInfo. */
+         * Only the former ever sends a MouseInfo. A version reply with NO
+         * text is neither: measured 2026-09-08 on the polled-FIFO path, one
+         * arrived after a minute of touch (185 reports in), the driver took
+         * it for stock firmware and switched the touchpad off for the rest
+         * of the session. Whether it was a resync artefact or a stray
+         * announcement, an empty string cannot outvote frames already
+         * flowing, so it is logged and changes nothing. */
+        if (!buf[0] && g_ourcodi) {
+            c64_log("codi: an empty version reply arrived mid-session -- ignored "
+                    "(a resync artefact, or a stray announcement); the panel stays armed\n");
+            return;
+        }
         g_ourcodi = (buf[0] == 'O' && buf[1] == 'u' && buf[2] == 'r');
         c64_logf("codi: firmware \"%s\"%s\n", buf,
                  g_ourcodi ? "" : " -- stock, which never forwards touch");
@@ -656,6 +845,11 @@ static void adopt(void)
     g_pin = g_cand;
     g_state = PR_LIVE;
     c64_logf("codi: UART1 is on %s\n", k_pins[g_pin].name);
+
+    /* Now that the pins are known, take the receive side off the 16-byte
+     * FIFO and onto APDMA's ring, before anything is asked to talk. The
+     * version reply the probe just parsed is the last thing PIO reads. */
+    vff_arm();
 
     /* The cover display: on at the brightness the Linux side settled on. It
      * is fire-and-forget and stock firmware ignores the command, so it costs
@@ -760,7 +954,9 @@ void c64_codi_poll(void)
         g_next_stat = now + 60000;
         if (g_frames || g_resync || g_abandoned)
             c64_logf("codi: %d frames, %d bytes resynced past, %d gesture(s) "
-                     "abandoned on timeout\n", (int)g_frames, (int)g_resync,
-                     (int)g_abandoned);
+                     "abandoned on timeout; rx %s, %u bytes, largest poll %u, "
+                     "%u FIFO overruns\n", (int)g_frames, (int)g_resync,
+                     (int)g_abandoned, g_dma ? "via APDMA ring" : "polled FIFO",
+                     g_dma_bytes, g_burst_max, g_overrun);
     }
 }

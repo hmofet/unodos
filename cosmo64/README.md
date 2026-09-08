@@ -141,12 +141,14 @@ Input is 3.1x cheaper and the shell runs 28% more frames -- and the M7 number
    `unoscript` (it needs `unosecure`, which needs an account store -- and
    there IS a FAT volume now, which the stub comments predate), `unopkg`, and
    `uno_devmgr.c` behind the device tree.
-2. **The CoDi link drops frames.** The shell polls that UART about 36 times a
-   second and OurCodi reports at 100 Hz during contact, which is ~58 bytes into
-   a 16-byte FIFO between two polls. `codi.c` recovers (a gesture with no
-   frames for 250 ms is abandoned, and anything held is let go), but the real
-   fix is the UART's DMA path. The `codi:` stats line counts the bytes resynced
-   past, which is the measurement that says how badly it is needed.
+2. **The CoDi link drops frames -- DONE (2026-09-08).** UART1's receive
+   side now runs through APDMA channel 3 into an 8 KB ring; measured on the
+   phone: 1041 frames, 0 bytes resynced past, largest poll 1496 bytes (the
+   old path had a 16-byte FIFO). See "The CoDi link over DMA" at the end of
+   this file. Left over from the same session: 3 gestures were still
+   abandoned on the 250 ms timeout with zero loss, which points at a still
+   finger (the firmware reports while there is motion) rather than the
+   link, and is worth a look before the timeout is tuned.
 3. **The rear touchpad has no lid sensor.** The Linux daemon suppresses touch
    while the lid is closed by asking UPower; bare metal has no such oracle, so
    a pocket touch moves the pointer.
@@ -2447,3 +2449,64 @@ it waits for the running shell to go away, dials the moment :5099 answers
 again, and saves the whole replay with the storage story printed -- or read
 the eMMC preamble from Trixie with `readlog.sh`. (`bootlog.py` is what
 caught the second boot's clean `sd:` sequence above.)
+
+## The CoDi link over DMA (2026-09-08): zero bytes lost
+
+Open item 2 since M7: the shell polls UART1 about 36 times a second, OurCodi
+reports at 100 Hz during contact, and ~58 bytes landed in a 16-byte FIFO
+between two visits. `codi.c` recovered by resyncing on the next magic and
+abandoning a gesture that went quiet for 250 ms, and the `resynced past`
+count measured the loss. The fix is the one Linux uses on this UART:
+MediaTek's AP_DMA "virtual FIFO".
+
+**What it is.** Each UART owns a pair of APDMA channels (uart1: tx 2, rx 3
+-- the vendor DTS `dmas = <&apdma 2 &apdma 3>`; the controller is
+`dma-controller@11000780` with 0x80 bytes per channel, so channel 3 is at
+`0x11000900`). The RX channel is given a ring in DRAM (`VFF_ADDR`,
+`VFF_LEN`), the UART's `DMA_EN` register (0x4c) hands the receive FIFO to it
+-- `0x5` = RX DMA plus `TO_CNT_AUTORST`, so a frame's tail moves on the
+timeout as well as on the trigger level -- and from then on the engine
+drains the FIFO into the ring by itself. Software reads `VFF_WPT`, consumes
+up to it and writes what it consumed into `VFF_RPT`; both carry a wrap flag
+in bit 16 above a 16-bit offset. No interrupt: the poll loop asks the
+pointers. The sequence and the pointer arithmetic are `8250_mtk.c` and
+`8250_mtk_dma.c` from the vendor tree, transcribed; the clock is infracfg_ao
+gate 1 bit 18 (`infra_apdma`), which LK leaves open. The ring lives in
+`.xdma` (Device memory, like the xHCI's and the AFE's), so no cache
+maintenance is needed. Only receive uses it: transmit is a handful of bytes
+per frame and the polled THRE path has never lost one. It is armed in
+`adopt()`, once a CoDi has answered, so the probe stays PIO and the QEMU
+gate -- where no MCU answers -- never runs it. The stats line now also
+says which path is live, how many bytes it took, the largest amount one
+poll found waiting, and (on the PIO path) how many LSR overruns it saw.
+
+**Measured, same panel, same afternoon.** The polled image first, as a
+baseline: a minute of swiping produced 185 raw reports and then a version
+reply with an EMPTY string, which the driver read as stock firmware and
+switched the touchpad off for the rest of the session -- so no stats line
+ever fired, and the baseline is that outcome rather than a number. (The
+empty-reply rule is fixed alongside: a version reply with no text cannot
+demote a panel that is already sending touch; it is logged and ignored.)
+Then the DMA image:
+
+```
+codi: UART1 receive is on APDMA channel 3 -- 8192-byte ring at 47e7e000, apdma gate was open, DMA_EN=00000005 WPT=00000000 RPT=00000000 LEFT=8192
+codi: rear touchpad armed
+codi: the rear panel is reporting touch
+codi: 1041 frames, 0 bytes resynced past, 3 gesture(s) abandoned on timeout; rx via APDMA ring, 21861 bytes, largest poll 1496, 0 FIFO overruns
+```
+
+1041 frames, nothing resynced, and the largest single poll found 1496 bytes
+waiting -- 93 FIFOs' worth, absorbed by a ring that holds 2.8 s at the
+panel's full rate. That burst is a poll gap of about half a second
+somewhere in the shell (a screen grab over URC, or the log flush), and it
+is exactly the case the FIFO could never survive. The three abandoned
+gestures with zero loss are the one thing left to look at: the abandon
+fires when a finger is down and nothing has been heard for 250 ms, and the
+firmware reports while there is motion, so a finger held still reads as a
+lost release. That is a tuning question about the timeout or the firmware's
+idle behaviour, not the link, and it is filed above.
+
+Gate: plain EL1 and EL2 green (the probe finds no MCU on the virt board, as
+before). Image `c7be4ead`, flashed from Trixie; captured with `bootlog.py`
+armed before the reboot.
