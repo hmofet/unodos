@@ -1,11 +1,11 @@
 # The MT6771 AFE and MT6358 codec, surveyed from the running Linux
 
-**Status (2026-09-07): three things stood between the codec set and a sound,
-and all three are now in `afe_regs.h` -- the AUDIO power domain in SPM (off at
-LK handover), the two GPIO-pulsed external speaker amplifiers, and the second
-DL1 -> DAC interconnect (`AFE_CONN28/29`, without which the DAC's SRC monitor
-reads 0). See the two sections at the end. The full path (`afe.c` as pc64's PCM
-backend) is built behind `AUDIO=1`; the DL SDM monitors show audio flowing.**
+**Status (2026-09-08): IT PLAYS. The boot chime came out of the speakers on the first boot of the ordered codec sequence. Four things stood between the codec set and a sound,
+and all four are in the tree -- the AUDIO power domain in SPM (off at LK
+handover), the two GPIO-pulsed external speaker amplifiers, the second DL1 ->
+DAC interconnect (`AFE_CONN28/29`), and the ORDER of the codec bring-up with
+its ramps and delays (`pmic.c`, transcribed from the vendor driver). See the
+sections at the end. `afe.c` is pc64's PCM backend, on by default.**
 What follows
 is measured, not guessed, and it exists so the bring-up that follows is
 transcription rather than archaeology. Every address here came off the device

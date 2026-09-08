@@ -210,20 +210,21 @@ shell )
   if [ -f urc_pin.h ]; then scp -q urc_pin.h "$QUILL:$QDIR/cosmo64/";
   else ssh "$QUILL" "rm -f $QDIR/cosmo64/urc_pin.h"; fi
 
-  # AUDIO=1: compile the audio path -- afe.c (the AUDIO power domain, the DAC
-  # path, the DL1 ring: pc64's PCM backend on this SoC) with pmic.c's audio
-  # write table, plus the real pc64/snd_pcm.c over it (UNO_SND_BACKEND_AFE)
-  # and the real unosound sequencer, in place of stubs.c's answers. OFF by
-  # default and the PMIC table is gated on C64_PMIC_WRITE as well, so a
-  # shipped image carries no instruction that can write a codec register
-  # until this is proven on hardware and the default flips. Read
-  # cosmo64/AUDIO-SURVEY.md before using it.
+  # AUDIO (default 1, AUDIO=0 to leave it out): the audio path -- afe.c (the
+  # AUDIO power domain, the DAC path, the external amplifiers, the DL1 ring:
+  # pc64's PCM backend on this SoC) with pmic.c's codec bring-up sequence,
+  # plus the real pc64/snd_pcm.c over it (UNO_SND_BACKEND_AFE) and the real
+  # unosound sequencer, in place of stubs.c's answers. ON by default since
+  # 2026-09-08, when the boot chime was heard from the speakers; the codec
+  # sequence stays behind C64_PMIC_WRITE as well, so PMIC_WRITE=0 still
+  # builds an image that cannot write it. Read cosmo64/AUDIO-SURVEY.md.
   SND=""
-  if [ -n "$AUDIO" ]; then
+  AUDIO="${AUDIO-1}"
+  if [ -n "$AUDIO" ] && [ "$AUDIO" != 0 ]; then
     BASECF="$BASECF -DC64_AUDIO=1 -DUNO_SND_BACKEND_AFE"
     C64="$C64 afe"
     SND="snd_pcm"
-    echo "[shell] AUDIO=1: the audio path is compiled in (it writes the PMIC)"
+    echo "[shell] audio: compiled in (AUDIO=0 leaves it out)"
   fi
   # KBDTEST=1: compile the scripted key pad (QEMU gate proof, never shipped)
   [ -n "$KBDTEST" ] && BASECF="$BASECF -DC64_KBDTEST"

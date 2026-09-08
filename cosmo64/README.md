@@ -38,9 +38,9 @@ cover panel as a touchpad; a USB mouse and keyboard work through a plain USB
 card is mounted read-write as the boot volume, so the session persists.** The
 shell holds a DHCP lease and serves URC on `:5099`.
 
-Still missing: audio is built and digitally proven but not yet heard (open
-item 1 below), no WiFi (CONNSYS has no bare-metal route), and no
-cellular. **The RTC is real as of M11** -- the MT6358's battery-backed clock,
+**Audio works as of 2026-09-08** -- the boot chime plays from the speakers
+(open item 1 below tells the whole story). Still missing: no WiFi (CONNSYS
+has no bare-metal route), and no cellular. **The RTC is real as of M11** -- the MT6358's battery-backed clock,
 read over PWRAP, so the time survives a power-off. `.UNO` apps load as of M8: the seven the launcher
 rosters live under `APPS\` on the SD card and open from the desktop. **The
 browser is carried as of M9** -- unoweb, unojs and the browser lane compile
@@ -146,7 +146,11 @@ Input is 3.1x cheaper and the shell runs 28% more frames -- and the M7 number
    that; the same route sounds under Linux, and the values matched, so
    `pmic.c` now runs the vendor's codec bring-up in its ORDER with its ramps
    and delays (survey, last section) -- and `0x1822`, a CPU-rail register
-   the diff had let through, is out of the table.
+   the diff had let through, is out of the table. **That was it: on
+   2026-09-08 the boot chimed from the speakers.** Audio is on by default
+   now (`AUDIO=0 ./build.sh shell` leaves it out); the square voice, the
+   sample stream and the SFX mixer all run over the AFE ring. Still
+   stubbed: `uno_snd_mus_*` (needs unomedia's audio decoders).
 1b. **Fill in behind the modules** (the rest of it). M8 proved the ABI; what
    the apps find behind their imports is often still a stub. Real now:
    `uno_binds.c`, `unolog.c`, `uno3d.c` + `uno3d_soft.c` (the providers), the
