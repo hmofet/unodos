@@ -52,6 +52,11 @@ void c64_log_flush(void);
 #define RING_FRAMES 16384u
 static short g_ring[RING_FRAMES * 2] __attribute__((section(".xdma"), aligned(64)));
 static int   g_up;
+/* The QEMU stand-in (below): no AFE reads the ring, so the read cursor is
+ * computed from the generic timer instead -- 48 kHz from the moment DL1
+ * "started". snd_pcm.c cannot tell the difference, which is the point. */
+static int         g_sim;
+static c64afe_u64  g_sim_t0;
 
 static void afe_dump(const char *when)
 {
@@ -70,10 +75,26 @@ int uno_afe_init(void)
     c64afe_u32 steps = 0, v;
 
     /* The QEMU gate boots this image too (urc.c makes the same test): the
-     * virt board has no SPM at 0x10006000 and the first read would abort. */
+     * virt board has no SPM at 0x10006000 and the first read would abort.
+     * There is no sound to be had there -- but everything ABOVE this seam is
+     * portable C the gate would otherwise never run: snd_pcm.c's voice, mixer
+     * and resampler, the sequencer, and (since the Music slice) unomedia's
+     * decoders behind the Music app, UnoAmp and the score player. So on the
+     * virt board DL1 is stood in for: the same ring, and a read cursor that
+     * the generic timer advances at exactly the hardware's 48 kHz. snd_pcm.c
+     * writes ahead of a cursor that moves as the AFE's does, every consumer
+     * runs to completion, and nothing is heard. The log says so in as many
+     * words, because uno_snd_name() will still answer "MT6771 AFE". */
     if (c64_fdt_root_compat_has((const void *)FBDBG->dtb_ptr, "linux,dummy-virt")) {
-        c64_log("afe: QEMU virt board -- no AFE, no audio\n");
-        return 0;
+        for (unsigned i = 0; i < RING_FRAMES * 2; i++)
+            g_ring[i] = 0;
+        g_sim_t0 = c64afe_cnt();
+        g_sim = 1;
+        g_up = 1;
+        c64_log("afe: QEMU virt board -- no AFE; DL1 stands in as a RAM ring "
+                "paced by the generic timer at 48 kHz (the PCM stack runs, "
+                "nothing sounds)\n");
+        return 1;
     }
     c64_log("afe: bringing the audio path up -- if this is the last line in "
             "the log, the SPM write took the machine down\n");
@@ -154,8 +175,12 @@ short *uno_afe_ring(unsigned *frames)
  * (AUDIO-SURVEY.md: five reads 300 ms apart advance and wrap at END). */
 unsigned uno_afe_pos(void)
 {
-    c64afe_u32 cur = c64afe_dl1_cur();
-    c64afe_u32 base = (c64afe_u32)(c64afe_u64)g_ring;
+    c64afe_u32 cur, base;
+    if (g_sim)
+        return (unsigned)(((c64afe_cnt() - g_sim_t0) * 48000ull / c64afe_freq())
+                          % RING_FRAMES);
+    cur  = c64afe_dl1_cur();
+    base = (c64afe_u32)(c64afe_u64)g_ring;
     if (!g_up || cur < base) return 0;
     return ((cur - base) / 4u) % RING_FRAMES;
 }

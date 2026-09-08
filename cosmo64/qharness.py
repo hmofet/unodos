@@ -194,6 +194,23 @@ def urc_session(port, run_for):
     # hung guest. A guest that still answers `uptime` afterwards is the
     # second half: the entry was called and came back. The screen after each
     # launch is saved beside the run's PNG for eyes.
+    # QHARNESS_MEDIA=<file>[,<file>...]: data files for a module to find --
+    # pushed to the RAM disk's ROOT under their own (upper-cased) names,
+    # BEFORE any module is launched, so MUSPROBE.UNO's scan sees them. The
+    # Music app lists the same root, so a person at the gate's desktop can
+    # play them too. Nothing is asserted here beyond "it verified on the
+    # disk"; what a module makes of the files is its own report (below).
+    media = [p for p in (os.environ.get("QHARNESS_MEDIA") or "").split(",") if p]
+    for path in media:
+        fname = os.path.basename(path).upper()
+        try:
+            if link.push_file(0, fname, path):
+                notes.append("media: %s on the RAM disk (%d bytes)"
+                             % (fname, os.path.getsize(path)))
+            else:
+                fails.append("media: %s did not verify on the RAM disk" % fname)
+        except Exception as e:
+            fails.append("media: %s failed: %s" % (fname, e))
     unos = [p for p in (os.environ.get("QHARNESS_UNO") or "").split(",") if p]
     for path in unos:
         fname = os.path.basename(path).upper()
@@ -206,7 +223,15 @@ def urc_session(port, run_for):
             link.command("rescan")
             ids = [r.split()[0] for r in link.command("apps", "list") if r.strip()]
             app = stem if stem in ids else next((i for i in ids if stem in i), stem)
-            r = link.launch(app, timeout=20.0)
+            try:
+                r = link.launch(app, timeout=20.0)
+            except Exception as e:
+                # "no-app" here means the rescan never rostered the file: say
+                # what it DID roster, so the failure reads as a scan problem
+                # (a descriptor, a listing) and not as a dead guest
+                fails.append("uno: %s launch as '%s' failed (%s); the roster after "
+                             "rescan was: %s" % (fname, app, e, " ".join(ids) or "(empty)"))
+                continue
             time.sleep(1.5)
             up = link.uptime(retries=2)
             lines = [t for ch, t in got_log[before:] if ch == "KERNEL" and "modload" in t]
@@ -226,6 +251,47 @@ def urc_session(port, run_for):
                 notes.append("uno: %s screen grab skipped (%s)" % (fname, e))
         except Exception as e:
             fails.append("uno: %s failed: %s" % (fname, e))
+    # QHARNESS_EXPECT=<substring>[,<substring>...]: lines the guest must log
+    # -- a module's own verdict, reached the way the module reaches it
+    # (unoauto_log -> the streamed log). Waits up to QHARNESS_EXPECT_S seconds
+    # (default 60) for ALL of them, so a probe that plays four three-second
+    # files has time to. Each expected line found is a note; each missing one
+    # is a fail; and any line the same source logged that begins with FAIL is
+    # a fail too, so a probe's own refusals count without a second variable
+    # naming them. It sits HERE, before the built-in-app gate, on purpose:
+    # opening UnoAmp takes the sample stream, which displaces the score player
+    # MUSPROBE plays through, and a file cut short by the harness's own next
+    # step looked exactly like a decoder that stopped early (2026-09-08:
+    # GATE.MP3 "played 1875 ms" of 3030).
+    expects = [s for s in (os.environ.get("QHARNESS_EXPECT") or "").split(",") if s]
+    if expects:
+        deadline = time.time() + float(os.environ.get("QHARNESS_EXPECT_S") or "60")
+        pending = list(expects)
+        while pending and time.time() < deadline:
+            pending = [s for s in pending if not any(s in t for ch, t in got_log)]
+            if pending:
+                time.sleep(0.5)
+        for s in expects:
+            hits = [t for ch, t in got_log if s in t]
+            if hits:
+                notes.append("expect: %r -> %s" % (s, hits[0].strip()))
+            else:
+                fails.append("expect: %r never logged within %ss"
+                             % (s, os.environ.get("QHARNESS_EXPECT_S") or "60"))
+        srcs = set(s.split(":")[0] + ": " for s in expects if ":" in s)
+        seen = set()          # a line reaches us on two channels (SCRIPT + the
+        for ch, t in got_log: # mirrored KERNEL stream): report it once
+            src = next((s for s in srcs if s in t), None)
+            if src is None:
+                continue
+            body = t[t.index(src) + len(src):].strip()
+            if body in seen:
+                continue
+            seen.add(body)
+            if body.startswith("FAIL"):
+                fails.append("expect: %s%s" % (src, body))
+            elif body.startswith("PASS") or body.startswith("playing"):
+                notes.append("expect: %s%s" % (src, body))
     # QHARNESS_LAUNCH=<id>[,<id>...]: the BUILT-IN app gate. The module gate
     # above proves a .UNO reaches the loader; this proves an app the KERNEL
     # carries opens, draws, and hands the guest back. Nothing is pushed and no

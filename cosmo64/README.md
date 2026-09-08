@@ -12,9 +12,10 @@ research repo: `research/pc64-arm-port-plan.md` in `hmofet/cosmo`. It stops at
 M5; M6 (the URC remote channel) was added after it was written and is
 documented here.
 
-## State: M0-M12 COMPLETE, all hardware-proven (2026-09-08)
+## State: M0-M12 COMPLETE, all hardware-proven; M13 built and gated, not yet booted (2026-09-08)
 
-Everything below has run on the phone, not just under the gate:
+Everything below has run on the phone, not just under the gate (M13 is the
+exception: its image is built and green under QEMU, and p38 still holds M12):
 
 | | |
 |---|---|
@@ -30,7 +31,8 @@ Everything below has run on the phone, not just under the gate:
 | M9 | the browser: unoweb, unojs and the browser lane -- it fetches, renders and runs scripts on the phone |
 | M10 | HTTPS: BearSSL, a defensible entropy source, and this machine's first clock -- public sites load on the phone |
 | M11 | the MT6358's real RTC: a battery-backed clock, read-only, its map derived on the device |
-| M12 | **audio: the MT6771 AFE as pc64's PCM backend -- the boot chime plays from the speakers** |
+| M12 | audio: the MT6771 AFE as pc64's PCM backend -- the boot chime plays from the speakers |
+| M13 | **the Music app, UnoAmp and the WAV/MIDI/MP3/AAC decoders -- gated under QEMU, awaiting the boot** |
 
 **What runs the machine today.** The desktop is the panel's native landscape at
 a 2x zoom. Local input is the matrix keyboard, the touch panel, and the rear
@@ -41,7 +43,10 @@ shell holds a DHCP lease and serves URC on `:5099`.
 
 **Audio works as of M12** -- the boot chime plays from the speakers, and
 the Sound Manager voice, the sample stream and the SFX mixer all run over the
-AFE ring (the "Audio" section at the end of this file). Still missing: no
+AFE ring (the "Audio" section at the end of this file). **M13 puts the Music
+app, UnoAmp and the WAV/MIDI/MP3/AAC decoders into the image** -- gated
+under QEMU with a probe module that plays every file it finds, not yet heard
+on the phone (the last section of this file). Still missing: no
 WiFi (CONNSYS has no bare-metal route), and no cellular. **The RTC is real
 as of M11** -- the MT6358's battery-backed clock,
 read over PWRAP, so the time survives a power-off. `.UNO` apps load as of M8: the seven the launcher
@@ -53,7 +58,10 @@ that has to pass a health test before TLS will open a connection at all, and
 the machine has a clock for the first time -- a software one, because
 certificate validity needs a date and there is still no RTC driver.
 
-**Where we left off.** p38 carries the M12 image and it is booted and
+**Where we left off.** p38 carries the M12 image; the M13 image
+(`build/pc64arm-boot.img`, the Music app + UnoAmp + decoders) is built and
+QEMU-gated and waits for a flash and a listen -- see "What the boot has to
+show" at the end. M12 on the phone is booted and
 verified: it chimes at boot, and the browser loads **public HTTPS sites** --
 CA-validated, on a conditioned-jitter seed, against the hardware clock (see
 the "On the hardware" sections at the end of this file). The loop is:
@@ -117,13 +125,14 @@ Input is 3.1x cheaper and the shell runs 28% more frames -- and the M7 number
 
 **Open, in the order worth doing:**
 
-1. **Audio -- DONE (M12, 2026-09-08).** The oldest gap is closed: the boot
-   chimes from the speakers and `stubs.c` no longer answers the sound calls.
-   The whole account is the "Audio" section at the end of this file and
-   `AUDIO-SURVEY.md`. What remains of it is small: `uno_snd_mus_*` (the
-   Music player's decoders, which need unomedia's audio half) is still a
-   stub, and headphone-jack detection is not wired (the codec output is
-   steered to the speaker amplifiers unconditionally).
+1. **Audio -- DONE (M12, 2026-09-08); the Music app, UnoAmp and the
+   decoders BUILT AND GATED (M13, same day), not yet booted.** The boot
+   chimes from the speakers and `stubs.c` no longer answers any sound call
+   in the default image. The whole account is the "Audio" section and the
+   M13 section at the end of this file, and `AUDIO-SURVEY.md`. What remains:
+   flash the M13 image and listen (a person at the LK menu), and
+   headphone-jack detection is not wired (the codec output is steered to
+   the speaker amplifiers unconditionally).
 1b. **Fill in behind the modules** (the rest of it). M8 proved the ABI; what
    the apps find behind their imports is often still a stub. Real now:
    `uno_binds.c`, `unolog.c`, `uno3d.c` + `uno3d_soft.c` (the providers), the
@@ -2264,7 +2273,140 @@ afe: streaming: dac0=00000003 dac1=00000aaa i2s1=00000a0b conn3=00000020 conn4=0
 afe: DL1 is streaming a 64 KB silent ring; snd_pcm.c owns it now
 ```
 
-Still open under this milestone: `uno_snd_mus_*` (the Music player needs
-unomedia's audio decoders in the image), and headphone-jack detection --
-the output is steered to the speaker amplifiers unconditionally, which is
-right for a phone on a desk and wrong for one with a jack in use.
+Still open under this milestone: headphone-jack detection -- the output is
+steered to the speaker amplifiers unconditionally, which is right for a
+phone on a desk and wrong for one with a jack in use. (`uno_snd_mus_*` was
+the other item; the next section closes it.)
+
+## M13 (2026-09-08): the Music app, UnoAmp and the decoders -- gated, awaiting the boot
+
+M12 left the Sound Manager voice, the sequencer and the sample stream real
+and everything that PLAYS A FILE stubbed: the Music app, UnoAmp, the score
+player (`snd_mus.c`) and unomedia's audio half beneath all three. This slice
+links them -- `pc64_music.c`, `pc64_media.c`, the nine `unoamp_*.c`,
+`snd_mus.c`, and `um_audio.c` with the WAV, MIDI, MP3 and AAC decoders --
+every file compiled unchanged, the same set x86 has linked since the Music
+app went native. They ride the `AUDIO` switch (`build.sh`), because a Music
+app over no DAC is a transport that runs into a ring that does not exist;
+`AUDIO=0` still builds and links (1.49 MB against 1.68 MB), with `stubs.c`
+answering the same entry points it always did. `platform.c` gains the six
+UnoAmp registry calls after `uno_snd_init`, in `uefi_main.c`'s order and for
+its reason: the Music app asks `unoamp_caps()` before it will start a
+transport, and without the output probe it says "no audio hardware found"
+over a DAC that is streaming. The image is built, QEMU-gated three ways, and
+**not yet flashed** -- p38 still holds the M12 image.
+
+### What the gate can now prove, and how
+
+The decoders are portable C, but this is their first build for aarch64,
+under `-mstrict-align`, LLP64 and clang -- three things x86's gate never
+asked of them -- and the only way to run them was a person clicking a list.
+Two additions make them a gate:
+
+- **`afe.c` stands DL1 in on the virt board.** QEMU has no AFE, and until
+  now `uno_afe_init` said so and returned 0, which left everything above
+  the seam -- `snd_pcm.c`'s voice, mixer and resampler, the sequencer, and
+  now the decoders -- unexecuted under the gate. Now, on `linux,dummy-virt`,
+  it hands `snd_pcm.c` the same 64 KB ring and a read cursor the generic
+  timer advances at exactly the hardware's 48 kHz. `snd_pcm.c` writes ahead
+  of a cursor that moves as the AFE's does, every consumer runs to
+  completion, and nothing is heard. The log line says so in as many words
+  (`uno_snd_name()` still answers "MT6771 AFE"). One consequence worth
+  knowing: the boot chime now runs under QEMU too, so a gate boot is about
+  0.6 s longer than it was.
+- **`MUSPROBE.UNO`** (`musprobe.c`, built by `mkapps.sh` like AFEPROBE) is
+  the no-hands listener. It finds every audio file on the volume roots and
+  plays each through the kernel's score player -- `uno_snd_mus_play`, which
+  is `snd_mus.c` over the SAME unomedia instance the Music app uses -- and
+  logs, per file, `PASS NAME played N ms` when the decoder ran to its end
+  on its own, `FAIL NAME refused` when nothing claimed it (or there was no
+  DAC, or the ring was busy), and `FAIL ... stopped in N ms` for an open
+  that decodes nothing; then `done P pass F fail`. `snd_mus.c` opens every
+  buffer as `score.mid`, so the MIDI decoder claims each file first by
+  extension and fails on the bytes; unomedia's roster then falls through to
+  the decoder whose magic matches (`um_audio.c`), which is the documented
+  order and why a probe needs no per-format plumbing.
+
+`qharness.py` grew the two knobs to drive that: **`QHARNESS_MEDIA=<files>`**
+pushes data files to the RAM disk root before any module is launched, and
+**`QHARNESS_EXPECT=<substrings>`** waits (up to `QHARNESS_EXPECT_S`, default
+60 s) for the guest to log each of them, failing on any line from the same
+source that begins with `FAIL`. The gate media is generated on quill by
+`mkgatemedia.sh` from ffmpeg's own tone generator -- three seconds each of
+22.05 kHz mono WAV, 128 kbps LAME MP3 with an ID3v2 tag, and AAC-LC in an
+M4A with the moov first -- plus the 197-byte `SCALE.MID` from `pc64/media`.
+Three seconds because the proof is the same at three as at thirteen, and the
+files go over the serial URC link.
+
+### The bug the gate found was in the RAM disk, not the decoders
+
+The first run pushed the module and got `no-app` from `launch musprobe`.
+`uno_fs_list_dir()` returned 0 for the RAM disk, unconditionally: the M8 gate
+had launched only modules with a built-in launcher row (`app_reg_module`
+names the file; `mod_read` opens `APPS\X.UNO` by its full flat name), so a
+module that had to be DISCOVERED by `uno_mod_scan` on the RAM disk had never
+worked, and nothing had noticed. `pc64_fs.c` now lists the RAM disk by
+prefix -- every name under `dir\` with no further separator, reported without
+the prefix, case-insensitively as FAT would -- which is one additive branch
+in a shared file, compiled clean for x86 prod and debug (`mingw-gcc 13,
+-Wall -Wextra`). `qharness.py` also reports the roster it saw when a launch
+fails, so the next such failure reads as a scan problem and not a dead guest.
+
+### The second thing it found was in the harness
+
+With the roster fixed, the run was green with one odd number: `GATE.MP3
+played 1875 ms` of a 3030 ms file, while WAV, M4A and MIDI played their full
+lengths. The host build of the same decoder (`unomedia/test/audtest.c`,
+gcc on quill) decodes the file to 133,632 frames = 3030 ms, so the decoder
+was fine; the harness had launched UnoAmp at the moment the MP3 was 1.9 s
+in, and opening UnoAmp's transport takes the sample stream, which displaces
+the score player (that is `snd_mus.c`'s documented contract, not a bug).
+The EXPECT wait now runs BEFORE the built-in-app gate. A probe that measures
+wall time is measuring everything else the harness does in that window.
+
+### Gate
+
+Plain EL1 and EL2 green on the final image, and EL2 with URC:
+
+```
+QHARNESS_EL2=1 QHARNESS_URC=1 QHARNESS_LAUNCH=music,unoamp \
+QHARNESS_UNO=build/apps/MUSPROBE.UNO QHARNESS_MEDIA="$(ls build/gatemedia/* | tr '\n' ',')" \
+QHARNESS_EXPECT="musprobe: done" QHARNESS_EXPECT_S=90 \
+python3 qharness.py build/shell.bin /tmp/gate-urc.png 40
+```
+
+```
+media: GATE.M4A / GATE.MP3 / GATE.WAV / SCALE.MID on the RAM disk
+uno: MUSPROBE.UNO loaded and launched as 'musprobe'
+musprobe: PASS GATE.M4A  played 3009 ms      (host audtest: 3041 ms)
+musprobe: PASS GATE.MP3  played 3001 ms      (host: 3030 ms)
+musprobe: PASS GATE.WAV  played 3024 ms      (host: 3000 ms)
+musprobe: PASS SCALE.MID  played 7623 ms     (host: 7500 ms)
+musprobe: done 4 pass 0 fail
+app: music launched and drew; app: unoamp launched and drew
+```
+
+The Music app's list shows the four pushed files on the RAM disk volume,
+which is the same listing a person would use. `AUDIO=0 ./build.sh shell`
+links. The per-file x86 compile of `pc64_fs.c` passed prod and debug; the
+full x86 ESP build still cannot run from this checkout (the pre-existing
+`sysinfo.bin` staging gap noted at M5).
+
+### What the boot has to show
+
+1. `./flashp38.sh` from Trixie, then UnoDOS from the LK menu; the chime
+   says audio is up as before.
+2. Put media on the SD card: `pc64/media/*` (the CC0 demo set, 2.2 MB) to
+   `MEDIA\` on volume 1, over URC `put` from the running box or from Trixie
+   beforehand; `MUSPROBE.UNO` to `APPS\` the same way.
+3. `launch musprobe` from `urctail.py`'s link, or open "Decoder probe" from
+   the launcher: it plays every file on the volume ROOTS (not `MEDIA\`), so
+   for the audible run put one file of each kind at the root, or open the
+   Music app, navigate into `MEDIA\` and play -- that is the real test, and
+   UnoAmp beside it. What the ear has to confirm that the gate cannot: the
+   MP3 and AAC decoders' output through the real DAC at 44.1 kHz resampled
+   to 48 (the gate proves the frames flow and the timing is right, not that
+   they sound right), and that the phone keeps up in real time (TCG under
+   QEMU did, at roughly the pace the Cortex-A73 should beat easily).
+4. UnoAmp's skin engine looks for `.wsz` files on volume roots; without one
+   it draws in the desktop's own widgets, which is the expected first sight.

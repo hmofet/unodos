@@ -182,6 +182,18 @@ void c_main(void *dtb)
      * machine that wedges says where. See afe.c and AUDIO-SURVEY.md. */
     uno_snd_init();
     uno_pc64_chime();               /* C E G C: the boot's own audio test */
+    /* UnoAmp's plugin registries, in uefi_main.c's order and for the same
+     * reason: the output probe has to run AFTER uno_snd_init so the PCM sink
+     * claims the ring it can now see, and the Music app asks unoamp_caps()
+     * before it will start a transport at all. Without these six calls the
+     * Music app on this machine says "no audio hardware found" over a DAC
+     * that is streaming. */
+    { void unoamp_out_init(void); unoamp_out_init(); }
+    { void unoamp_in_init(void);  unoamp_in_init();  }
+    { void unoamp_mod_init(void); unoamp_mod_init(); }
+    { void unoamp_vis_init(void); unoamp_vis_init(); }
+    { void unoamp_dsp_init(void); unoamp_dsp_init(); }
+    { void unoamp_enc_init(void); unoamp_enc_init(); }
 #endif
     /* USB before the shell too: enumeration takes a moment (port power,
      * debounce, the hub walk) and the desktop should come up with its mouse
