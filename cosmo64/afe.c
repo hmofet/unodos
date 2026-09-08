@@ -104,7 +104,7 @@ int uno_afe_init(void)
         c64_log_flush();
         return 0;
     }
-    c64_log("afe: applying the codec set (23 registers, AUDIO-SURVEY.md)\n");
+    c64_log("afe: applying the codec set (the vendor sequence, pmic.c)\n");
     c64_log_flush();
     if (c64_pmic_audio_apply() < 0) {
         c64_log("afe: the codec set did not apply cleanly -- see the readback "

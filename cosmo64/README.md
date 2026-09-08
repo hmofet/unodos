@@ -142,7 +142,11 @@ Input is 3.1x cheaper and the shell runs 28% more frames -- and the M7 number
    (GPIO153/GPIO111, headphone-enable GPIO108 low), and DL1 must also be
    connected to O28/O29 (`AFE_CONN28/29`) -- the DL SDM monitor reads 0
    until it is. Both are in `afe_regs.h` now, `afe.c` pulses the amps, and
-   the boot plays the C E G C chime through the DAC.
+   the boot plays the C E G C chime through the DAC. Still silent after
+   that; the same route sounds under Linux, and the values matched, so
+   `pmic.c` now runs the vendor's codec bring-up in its ORDER with its ramps
+   and delays (survey, last section) -- and `0x1822`, a CPU-rail register
+   the diff had let through, is out of the table.
 1b. **Fill in behind the modules** (the rest of it). M8 proved the ABI; what
    the apps find behind their imports is often still a stub. Real now:
    `uno_binds.c`, `unolog.c`, `uno3d.c` + `uno3d_soft.c` (the providers), the
