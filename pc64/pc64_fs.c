@@ -167,7 +167,40 @@ int uno_fs_list_dir(int vol, const char *dir, char *names, int stride, int maxn)
     if (vol < 0 || vol >= g_nmap || fw_dead(vol) || !dir || !*dir ||
         maxn < 0 || !names || stride < 2)
         return 0;
-    if (g_map[vol].kind == KIND_RAM) return 0;
+    if (g_map[vol].kind == KIND_RAM) {
+        /* The RAM disk's namespace is flat, but a name may carry a path --
+         * "APPS\X.UNO" is exactly how a module pushed over URC lands, and
+         * mod_read opens it by that full name. So a directory listing here
+         * is a prefix match: every name under dir\ with no further separator,
+         * reported without the prefix, case-insensitively as FAT would.
+         * Before this the RAM disk answered every caller with 0, which made
+         * a pushed module loadable by name and invisible to the app scan:
+         * a launcher row for it could never exist, and `launch <id>` said
+         * "no-app" for a file that was there. Additive: the other volume
+         * kinds are untouched, and a RAM disk with no such names still
+         * lists nothing. */
+        int n = uno_ramfs_count(), i, k = 0, dl = 0;
+        while (dir[dl]) dl++;
+        for (i = 0; i < n; i++) {
+            char nm[32]; int j;
+            if (!uno_ramfs_name(i, nm, (int)sizeof nm)) continue;
+            for (j = 0; j < dl; j++) {
+                char a = nm[j], b = dir[j];
+                if (a >= 'a' && a <= 'z') a = (char)(a - 32);
+                if (b >= 'a' && b <= 'z') b = (char)(b - 32);
+                if (a == '/') a = '\\';
+                if (b == '/') b = '\\';
+                if (a != b) break;
+            }
+            if (j < dl || (nm[dl] != '\\' && nm[dl] != '/') || !nm[dl + 1]) continue;
+            for (j = dl + 1; nm[j]; j++)
+                if (nm[j] == '\\' || nm[j] == '/') break;
+            if (nm[j]) continue;                 /* deeper than one level */
+            if (k < maxn) put_name(names + (long)k * stride, stride, nm + dl + 1, 31);
+            k++;
+        }
+        return k;
+    }
     if (g_map[vol].kind == KIND_FAT) {
         static char fn[64][13];
         int n = uno_fat_list(g_map[vol].idx, dir, fn, 64), i;
