@@ -218,13 +218,27 @@ shell )
   # 2026-09-08, when the boot chime was heard from the speakers; the codec
   # sequence stays behind C64_PMIC_WRITE as well, so PMIC_WRITE=0 still
   # builds an image that cannot write it. Read cosmo64/AUDIO-SURVEY.md.
+  #
+  # The Music slice rides on the same switch: the Music app (pc64_music.c
+  # over pc64_media.c's windowed file source), UnoAmp (the nine unoamp_*.c
+  # files: sinks, inputs, the .wsz skin engine, visualisers, DSP, encoders,
+  # the MOD tracker, the app and its window), the score player (snd_mus.c)
+  # and unomedia's AUDIO half under all three -- the WAV, MIDI, MP3 and AAC
+  # decoders, one kernel instance beside the IMAGE half the browser already
+  # links (PHOTOS.UNO carries its own private copy, as on x86). Every file is
+  # compiled unchanged; x86 links the identical set (pc64/build.sh). With
+  # AUDIO=0 they stay out and stubs.c answers for them, because a Music app
+  # over no DAC is a transport that runs into a ring that does not exist.
   SND=""
+  SNDPC="snd_pcm snd_mus pc64_media pc64_music unoamp_out unoamp_in unoamp_skin \
+         unoamp_vis unoamp_dsp unoamp_enc unoamp_mod unoamp_app unoamp_ui"
+  UMA="um_audio um_wav um_midi um_mp3 um_aac"
   AUDIO="${AUDIO-1}"
   if [ -n "$AUDIO" ] && [ "$AUDIO" != 0 ]; then
     BASECF="$BASECF -DC64_AUDIO=1 -DUNO_SND_BACKEND_AFE"
     C64="$C64 afe"
-    SND="snd_pcm"
-    echo "[shell] audio: compiled in (AUDIO=0 leaves it out)"
+    SND=1
+    echo "[shell] audio: compiled in, with the Music app, UnoAmp and the WAV/MIDI/MP3/AAC decoders (AUDIO=0 leaves it all out)"
   fi
   # KBDTEST=1: compile the scripted key pad (QEMU gate proof, never shipped)
   [ -n "$KBDTEST" ] && BASECF="$BASECF -DC64_KBDTEST"
@@ -342,8 +356,13 @@ shell )
         b=\$(basename \$c .c); \
         $CC $BSSLCF -c \$c -o build/bs_\$b.o; \
     done && \
-    for f in $SND; do $CC $SHCF -c ../pc64/\$f.c -o build/p_\$f.o; done && \
-    if [ -n \"$SND\" ]; then $CC $SHCF -c ../unosound/unosound_seq.c -o build/p_unosound_seq.o; else rm -f build/p_unosound_seq.o build/p_snd_pcm.o build/c_afe.o; fi && \
+    if [ -n \"$SND\" ]; then \
+        for f in $SNDPC; do $CC $SHCF -c ../pc64/\$f.c -o build/p_\$f.o || exit 1; done; \
+        for f in $UMA; do $CC $SHCF -c ../unomedia/\$f.c -o build/p_\$f.o || exit 1; done; \
+        $CC $SHCF -c ../unosound/unosound_seq.c -o build/p_unosound_seq.o || exit 1; \
+    else \
+        for f in $SNDPC $UMA unosound_seq; do rm -f build/p_\$f.o; done; rm -f build/c_afe.o; \
+    fi && \
     for f in $URC; do $CC $SHCF -c ../pc64/\$f.c -o build/p_\$f.o; done && \
     for f in $URCDBG; do $CC $SHCF -DUNO_DEBUG -c ../pc64/\$f.c -o build/p_\$f.o; done && \
     $CC $USBCF -DC64_XDMA -c ../pc64/xhci.c -o build/p_xhci.o && \

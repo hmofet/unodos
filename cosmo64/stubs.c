@@ -104,15 +104,15 @@ const char *uwx_libcss_status(void) { return "csslib is not in this build"; }
 I0(uno_pkg_launch)
 void uno_pkg_runtime_str(const char *target, char *buf, int max) { (void)target; empty_str(buf, max); }
 
-/* sampled audio + the sequencer's readout. AUDIO=1 compiles the real
- * snd_pcm.c over the AFE (afe.c) and the real sequencer, so those stubs go;
- * the Music player's half (snd_mus.c) needs unomedia's audio decoders, which
- * this image does not carry, so uno_snd_mus_* stay stubbed either way. */
+/* sampled audio + the sequencer's readout. AUDIO=1 (the default) compiles
+ * the real snd_pcm.c over the AFE (afe.c), the real sequencer, and -- since
+ * the Music slice -- snd_mus.c over unomedia's audio decoders, so all of
+ * these go with it; AUDIO=0 keeps them as the "no sound" answers. */
 #if !C64_AUDIO
 I0(uno_seq_playing)
 I0(uno_snd_sfx_load) I0(uno_snd_sfx_play) I0(uno_snd_sfx_playing)
-#endif
 I0(uno_snd_mus_play) I0(uno_snd_mus_playing)
+#endif
 
 /* unovirt: no hypervisor (GenieZone holds EL2's virtualisation; the payload
  * runs there but cannot start guests). The manager surface reports an empty
@@ -286,19 +286,22 @@ P0(uno_snd_name)
 I0(uno_snd_volume)
 V0(uno_snd_sfx_stop_all)
 V0(uno_snd_poll)
-#endif
 V0(uno_snd_mus_tick)
 V0(uno_snd_mus_stop)
+/* the Music app, UnoAmp and the score player ride with the audio build:
+ * real (pc64_music.c, unoamp_*.c, snd_mus.c over unomedia's WAV / MIDI /
+ * MP3 / AAC decoders) whenever AUDIO=1, which is the default */
 V0(unoamp_ui_build)
+V0(unoamp_ui_close)
 V0(unoamp_close)
 V0(unoamp_tick)
-
-/* ---- built-in apps not yet carried --------------------------------------- */
 V0(pc64_music_build)
 V0(pc64_music_action)
 I0(pc64_music_key)
 V0(pc64_music_tick)
 V0(pc64_music_closed)
+#endif
+
 /* (pc64_games.c is real now: Runner3D on the soft rasteriser, and
  * pc64_browser.c is real as of the browser slice -- with unoweb under it,
  * unojs behind js.c, and unomedia's image half behind uw_images) */
@@ -324,7 +327,6 @@ void uno_ps2_status(int *kbd, int *aux, int *auxport, int *auxid)
 V0(uno_seq_beep)
 V0(uno_seq_play)
 #endif
-V0(unoamp_ui_close)
 
 /* ---- detach: an LK payload is born detached ------------------------------ */
 int uno_pc64_detached(void) { return 1; }

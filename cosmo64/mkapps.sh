@@ -56,6 +56,7 @@ mod() {
 if [ -n "$ONLY" ]; then
     case "$ONLY" in
         afeprobe) cc "$OUT/afeprobe.o" afeprobe.c; mod afeprobe 1 "$OUT/afeprobe.o" ;;
+        musprobe) cc "$OUT/musprobe.o" musprobe.c; mod musprobe 1 "$OUT/musprobe.o" ;;
         logview)  cc "$OUT/logview.o" ../pc64/apps/logview.c; mod logview 1 "$OUT/logview.o" ;;
         *)        cc "$OUT/$ONLY.o" "../pc64/apps/$ONLY.c"; mod "$ONLY" 0 "$OUT/$ONLY.o" ;;
     esac
@@ -138,5 +139,11 @@ office uoshow uochrome uoicons uodlg uobars uofile uos_geom uos_model uos_render
 # is pushed by hand when wanted, never staged onto the SD card.
 cc "$OUT/afeprobe.o" afeprobe.c
 mod afeprobe 1 "$OUT/afeprobe.o"
+# MUSPROBE.UNO plays every audio file on the volume roots through the
+# kernel's score player and reports PASS/FAIL per file (musprobe.c). The QEMU
+# gate pushes it with QHARNESS_UNO and the gate media with QHARNESS_MEDIA;
+# on the phone it is the no-hands check that the decoders survived aarch64.
+cc "$OUT/musprobe.o" musprobe.c
+mod musprobe 1 "$OUT/musprobe.o"
 
 echo "[mkapps] done:"; ls -l "$OUT"/*.UNO
