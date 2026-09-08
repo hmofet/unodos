@@ -12,10 +12,9 @@ research repo: `research/pc64-arm-port-plan.md` in `hmofet/cosmo`. It stops at
 M5; M6 (the URC remote channel) was added after it was written and is
 documented here.
 
-## State: M0-M12 COMPLETE, all hardware-proven; M13 built and gated, not yet booted (2026-09-08)
+## State: M0-M13 COMPLETE, all hardware-proven (2026-09-08)
 
-Everything below has run on the phone, not just under the gate (M13 is the
-exception: its image is built and green under QEMU, and p38 still holds M12):
+Everything below has run on the phone, not just under the gate:
 
 | | |
 |---|---|
@@ -32,7 +31,7 @@ exception: its image is built and green under QEMU, and p38 still holds M12):
 | M10 | HTTPS: BearSSL, a defensible entropy source, and this machine's first clock -- public sites load on the phone |
 | M11 | the MT6358's real RTC: a battery-backed clock, read-only, its map derived on the device |
 | M12 | audio: the MT6771 AFE as pc64's PCM backend -- the boot chime plays from the speakers |
-| M13 | **the Music app, UnoAmp and the WAV/MIDI/MP3/AAC decoders -- gated under QEMU, awaiting the boot** |
+| M13 | **the Music app, UnoAmp and the WAV/MIDI/MP3/AAC decoders -- MIDI, MP3 and AAC heard from the speakers** |
 
 **What runs the machine today.** The desktop is the panel's native landscape at
 a 2x zoom. Local input is the matrix keyboard, the touch panel, and the rear
@@ -45,8 +44,8 @@ shell holds a DHCP lease and serves URC on `:5099`.
 the Sound Manager voice, the sample stream and the SFX mixer all run over the
 AFE ring (the "Audio" section at the end of this file). **M13 puts the Music
 app, UnoAmp and the WAV/MIDI/MP3/AAC decoders into the image** -- gated
-under QEMU with a probe module that plays every file it finds, not yet heard
-on the phone (the last section of this file). Still missing: no
+under QEMU with a probe module that plays every file it finds, and heard
+from the speakers on 2026-09-08 (the last section of this file). Still missing: no
 WiFi (CONNSYS has no bare-metal route), and no cellular. **The RTC is real
 as of M11** -- the MT6358's battery-backed clock,
 read over PWRAP, so the time survives a power-off. `.UNO` apps load as of M8: the seven the launcher
@@ -58,11 +57,11 @@ that has to pass a health test before TLS will open a connection at all, and
 the machine has a clock for the first time -- a software one, because
 certificate validity needs a date and there is still no RTC driver.
 
-**Where we left off.** p38 carries the M12 image; the M13 image
-(`build/pc64arm-boot.img`, the Music app + UnoAmp + decoders) is built and
-QEMU-gated and waits for a flash and a listen -- see "What the boot has to
-show" at the end. M12 on the phone is booted and
-verified: it chimes at boot, and the browser loads **public HTTPS sites** --
+**Where we left off.** p38 carries the M13 image (the Music app + UnoAmp +
+decoders, sha256 `5d5937c8...`), booted and heard: `MUSPROBE.UNO` played a
+MIDI, an MP3 and an M4A from the SD card through the speakers, at their
+files' real durations. The demo media is on the card under `MEDIA\`. It
+chimes at boot, and the browser loads **public HTTPS sites** --
 CA-validated, on a conditioned-jitter seed, against the hardware clock (see
 the "On the hardware" sections at the end of this file). The loop is:
 
@@ -125,14 +124,16 @@ Input is 3.1x cheaper and the shell runs 28% more frames -- and the M7 number
 
 **Open, in the order worth doing:**
 
-1. **Audio -- DONE (M12, 2026-09-08); the Music app, UnoAmp and the
-   decoders BUILT AND GATED (M13, same day), not yet booted.** The boot
-   chimes from the speakers and `stubs.c` no longer answers any sound call
-   in the default image. The whole account is the "Audio" section and the
-   M13 section at the end of this file, and `AUDIO-SURVEY.md`. What remains:
-   flash the M13 image and listen (a person at the LK menu), and
-   headphone-jack detection is not wired (the codec output is steered to
-   the speaker amplifiers unconditionally).
+1. **Audio -- DONE (M12 and M13, 2026-09-08).** The boot chimes from the
+   speakers, MIDI, MP3 and AAC files play from the SD card, and `stubs.c`
+   no longer answers any sound call in the default image. The whole account
+   is the "Audio" section and the M13 section at the end of this file, and
+   `AUDIO-SURVEY.md`. What remains: the Music app and UnoAmp driven by hand
+   on the phone (the probe proved the decoders and the ring, not their
+   transports); headphone-jack detection is not wired (the codec output is
+   steered to the speaker amplifiers unconditionally); and one boot of the
+   M13 image saw no SD card, once, with its log lost -- see the end of the
+   M13 section.
 1b. **Fill in behind the modules** (the rest of it). M8 proved the ABI; what
    the apps find behind their imports is often still a stub. Real now:
    `uno_binds.c`, `unolog.c`, `uno3d.c` + `uno3d_soft.c` (the providers), the
@@ -2278,7 +2279,7 @@ steered to the speaker amplifiers unconditionally, which is right for a
 phone on a desk and wrong for one with a jack in use. (`uno_snd_mus_*` was
 the other item; the next section closes it.)
 
-## M13 (2026-09-08): the Music app, UnoAmp and the decoders -- gated, awaiting the boot
+## M13 COMPLETE ON HARDWARE (2026-09-08): the Music app, UnoAmp and the decoders
 
 M12 left the Sound Manager voice, the sequencer and the sample stream real
 and everything that PLAYS A FILE stubbed: the Music app, UnoAmp, the score
@@ -2410,3 +2411,39 @@ full x86 ESP build still cannot run from this checkout (the pre-existing
    QEMU did, at roughly the pace the Cortex-A73 should beat easily).
 4. UnoAmp's skin engine looks for `.wsz` files on volume roots; without one
    it draws in the desktop's own widgets, which is the expected first sight.
+
+### On the hardware (2026-09-08): heard
+
+p38 flashed from Trixie (`flashp38.sh`, readback verified), the demo media
+and `MUSPROBE.UNO` staged on the SD card from Trixie (`mount
+/dev/mmcblk1p1`), three files copied to the card's root for the probe.
+Second UnoDOS boot, `launch musprobe` over URC from the dev PC:
+
+```
+musprobe: 3 audio files on the volume roots
+musprobe: PASS SCALE.MID     played 7626 ms
+musprobe: PASS FURELISE.MP3  played 12958 ms    (207769 B at 128 kbps = 12.98 s)
+musprobe: PASS ODEJOY.M4A    played 16299 ms
+musprobe: done 3 pass 0 fail
+```
+
+arin, at the phone: "audio plays, I can hear it." The durations match the
+files' lengths, which is the real-time statement: the MP3 and AAC decoders
+keep ahead of a 48 kHz DAC on the Cortex-A73 with the shell running. **M13
+is hardware-proven.** What has not been done yet: the Music app and UnoAmp
+driven by hand on the phone (the probe went through the same decoders and
+the same ring, but not their transports), and a `.wsz` skin.
+
+**One thing to keep an eye on: the FIRST boot of this image saw no SD
+card.** `vols` answered RAM only, the launcher rostered nothing from `APPS\`,
+and by the time that was noticed the boot story had scrolled out of the
+URC replay window (it streams the last 98 KB, and the USB bulk statistics
+fill that in a few minutes). A reboot fixed it, and the second boot's log
+shows the whole `sd:` sequence clean (rails, CMD8, 24 MHz, 4-bit, volume
+mounted, persisting to vol 1). The first boot's log is lost, so this is an
+observation and not a diagnosis; the earlier `sd:` bring-up has been
+deterministic since M7. If it recurs, run `bootlog.py` BEFORE the reboot:
+it waits for the running shell to go away, dials the moment :5099 answers
+again, and saves the whole replay with the storage story printed -- or read
+the eMMC preamble from Trixie with `readlog.sh`. (`bootlog.py` is what
+caught the second boot's clean `sd:` sequence above.)
