@@ -25,7 +25,7 @@ first launch needs one extra click. On Windows, SmartScreen: *More info >
 Run anyway*. On macOS: right-click the app > *Open*, or *System Settings >
 Privacy & Security > Open Anyway*.
 
-Releases are published by pushing a tag `v<version>` that matches
+Releases are published by pushing a tag `uoffice-v<version>` that matches
 `project(VERSION)` in `CMakeLists.txt`. The `uoffice-release` workflow builds
 every package, installs each one on its own OS, launches the installed apps,
 and only then attaches the packages to a GitHub release.

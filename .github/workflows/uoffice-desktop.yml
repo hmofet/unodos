@@ -9,7 +9,7 @@
 #   macOS    DMG (universal: arm64 + x86_64)
 #   Linux    .deb (installed on Ubuntu) + .rpm (installed on Fedora) + .tar.gz
 #
-# A tag v* runs this through uoffice-release.yml, which also publishes a
+# A tag uoffice-v* runs this through uoffice-release.yml, which also publishes a
 # GitHub release (the release job below only runs for a tag ref).
 name: uoffice-desktop
 
@@ -36,7 +36,7 @@ on:
       - 'unomedia/**'
       - '.github/workflows/uoffice-desktop.yml'
   workflow_dispatch:
-  workflow_call:          # uoffice-release.yml, on a v* tag
+  workflow_call:          # uoffice-release.yml, on a uoffice-v* tag
 
 jobs:
   # ---------------------------------------------------------------- Linux ----
@@ -232,12 +232,18 @@ jobs:
 
   # -------------------------------------------------------------- release ----
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/uoffice-v')
     needs: [linux, rpm-install, windows, macos]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
+      - name: the tag must match project(VERSION)
+        run: |
+          want=$(sed -n 's/^project(UnoOffice VERSION \([0-9.]*\).*/\1/p' pc64/uoffice/desktop/CMakeLists.txt)
+          got=${GITHUB_REF_NAME#uoffice-v}
+          [ "$want" = "$got" ] || { echo "::error::tag says $got, CMakeLists.txt says $want"; exit 1; }
       - uses: actions/download-artifact@v4
         with:
           path: dist
@@ -247,5 +253,21 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           ls -la dist
+          ver=${GITHUB_REF_NAME#uoffice-v}
+          cat > notes.md <<NOTES
+          UnoWord, UnoCalc and UnoShow as native desktop apps, version $ver.
+
+          | OS | download |
+          |---|---|
+          | Windows 10/11 x64 | \`UnoOffice-$ver-windows-x64.exe\` (installer) or \`.zip\` (portable) |
+          | macOS 11+ (Apple silicon + Intel) | \`UnoOffice-$ver-macos-universal.dmg\` |
+          | Debian / Ubuntu 22.04+ | \`unooffice_${ver}_amd64.deb\` |
+          | Fedora / RHEL / openSUSE | \`unooffice-$ver-1.x86_64.rpm\` |
+          | other Linux | \`UnoOffice-$ver-linux-x86_64.tar.gz\` |
+
+          The builds are not code-signed: on Windows choose *More info > Run anyway*,
+          on macOS right-click the app > *Open* the first time.
+          See [the README](https://github.com/${GITHUB_REPOSITORY}/blob/${GITHUB_REF_NAME}/pc64/uoffice/desktop/README.md).
+          NOTES
           gh release create "$GITHUB_REF_NAME" dist/* -R "$GITHUB_REPOSITORY" \
-             --title "UnoOffice ${GITHUB_REF_NAME#v}" --generate-notes
+             --title "UnoOffice $ver" --notes-file notes.md
