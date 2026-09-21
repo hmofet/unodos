@@ -69,6 +69,10 @@ typedef struct {
     int         ntab;
     int         w, h;               /* the dialog's size                     */
     int         help;               /* draw the "?" title-bar button         */
+    /* 0: the geometry is at 100% and scales with the UI (uoc_scale) - every
+     * app's table.  1: it was measured from the live metrics, so it is in
+     * pixels already (the message box). */
+    unsigned char px;
 } uod_dlg;
 
 /* ---- the live dialog ------------------------------------------------------- */
@@ -92,6 +96,8 @@ typedef struct {
     int caret;
     int result;                     /* the id that closed it, 0 while up     */
     int open;
+    int sc;                         /* the scale its table is drawn at, %    */
+    int w, h;                       /* its size on screen, scaled            */
 } uod_ui;
 
 /* The ids a message box reports.  Apps may use any other positive id. */

@@ -51,6 +51,22 @@ static int           g_kick;             /* a native dialog just closed      */
 static char          g_title[256];       /* what the OS title bar last got   */
 static int           g_show_full;        /* the slide show has the monitor   */
 static int           g_running = 1;
+static int           g_force_scale;      /* --scale / UNOOFFICE_SCALE, 0 = the OS's */
+
+/* THE UI SCALE.  The backend renders in the display's own pixels
+ * (uodesk_plat.h), so on a 150% or Retina display everything would come out
+ * small; this sizes the UI to match.  Text scales in the font engine and the
+ * Office chrome and dialogs follow it (uoc_set_scale) - the same pair of
+ * calls pc64's Settings > UI scale makes, so the apps need nothing new. */
+static void apply_scale(void)
+{
+    int s = g_force_scale ? g_force_scale : plat_scale();
+    if (s < 100) s = 100;
+    if (s > 200) s = 200;               /* the font engine's own ceiling */
+    uno_font_set_ui_scale(s);
+    uoc_set_scale(s);
+    g_dirty = 1;
+}
 
 /* ---- the shell services a module imports by name ------------------------ */
 void pc64_shell_dirty(void)       { g_dirty = 1; }
@@ -162,6 +178,13 @@ static void deliver_key(int uni, int scan, int ctrl, int mods)
     g_key_mods = mods;
     if (g_app->key && g_app->key(uni, scan, ctrl)) { g_key_mods = 0; g_dirty = 1; return; }
     g_key_mods = 0;
+    /* F10: the menu bar takes the keyboard, as in Windows (uochrome) */
+    if (scan == 0x14) {
+        memset(&ev, 0, sizeof ev);
+        ev.kind = UI_EV_KEY; ev.key = UOC_KEY_F10; ev.mods = mods;
+        feed(&ev);
+        return;
+    }
     switch (scan) {
     case 0x01: vk = UI_KEY_UP; break;    case 0x02: vk = UI_KEY_DOWN; break;
     case 0x03: vk = UI_KEY_RIGHT; break; case 0x04: vk = UI_KEY_LEFT; break;
@@ -218,6 +241,16 @@ static void text_event(const plat_event *e)
      * UEFI's SimpleTextIn delivers it.  Each app maps the character into its
      * document's CP-1252 (uoapp.h), so an e-acute or a euro sign is typed
      * as itself - this used to drop everything outside ASCII here. */
+    /* Alt+letter is the menu bar's (File is Alt+F), never text - and not
+     * the app's key hook's, which would type the letter.  Ctrl+Alt is AltGr,
+     * which does type. */
+    if ((e->mods & PM_ALT) && !(e->mods & PM_CTRL)) {
+        unoui_event ev;
+        memset(&ev, 0, sizeof ev);
+        ev.kind = UI_EV_CHAR; ev.ch = (unsigned char)s[0]; ev.mods = e->mods;
+        if (ev.ch >= 32 && ev.ch < 127) feed(&ev);
+        return;
+    }
     while (n > 0) {
         int cp, k = uoa_u8_get(s, n, &cp);
         if (k <= 0) break;
@@ -262,6 +295,7 @@ static void dispatch(const plat_event *e, int *running)
      * settled, so nothing here ends the program. */
     case PE_QUIT: if (uoa_host_close()) *running = 0; break;
     case PE_RESIZE: resize(e->w, e->h); break;
+    case PE_SCALE:  apply_scale(); break;
     case PE_EXPOSE: g_dirty = 1; break;
     case PE_MOUSE_MOVE:
         g_mx = e->x; g_my = e->y;
@@ -485,7 +519,9 @@ static void usage(const char *argv0)
         "  FILE     a document to open\n"
         "  --shot   render one frame to a PPM and exit (headless check)\n"
         "  --script replay input from FILE, then exit (see uodesk.c)\n"
-        "  --size   initial window size (default 1024x720)\n"
+        "  --size   initial window size in points (default 1024x720)\n"
+        "  --scale  UI scale in percent, 100-200 (default: the display's;\n"
+        "           also UNOOFFICE_SCALE)\n"
         "  --dir    a folder to show in the drawn Open/Save dialog\n"
         "           (repeatable; default: Documents, Desktop and home)\n", argv0);
 }
@@ -503,6 +539,7 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--script") && i + 1 < argc) {
             if (!(g_script = fopen(argv[++i], "r"))) { perror(argv[i]); return 2; }
         }
+        else if (!strcmp(argv[i], "--scale") && i + 1 < argc) g_force_scale = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--size") && i + 1 < argc) {
             if (sscanf(argv[++i], "%dx%d", &w0, &h0) != 2) { usage(argv[0]); return 2; }
         }
@@ -518,7 +555,9 @@ int main(int argc, char **argv)
     }
 
     g_app = uno_app_main(0);
+    if (!g_force_scale && getenv("UNOOFFICE_SCALE")) g_force_scale = atoi(getenv("UNOOFFICE_SCALE"));
     if (!plat_init(g_app->name, w0, h0, shot || g_script)) return 1;
+    plat_size(&w0, &h0);          /* from here on, everything is in pixels */
     uodesk_fs_init(plat_base_path());
     uof_set_native(g_script ? script_picker : native_picker);
     uoa_set_host(&kHost);
@@ -527,6 +566,7 @@ int main(int argc, char **argv)
      * out, because every metric the chrome computes comes from it */
     uno_font_set_subpixel(0);   /* LCD AA assumes RGB stripes the OS may not */
     uno_font_use(0);
+    apply_scale();
     unoui_ui_init(&UI, &theme_aurora_light, w0, h0);
     resize(w0, h0);
 

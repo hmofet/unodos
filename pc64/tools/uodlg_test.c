@@ -115,7 +115,7 @@ static const uod_item kFontItems[] = {
     BTN(UOD_ID_CANCEL, "Cancel", 230, 210, 70, 0, 0)
 };
 static const uod_dlg kFontDlg = {
-    "Font", kFontItems, 21, kTabs, 3, 320, 250, 1
+    "Font", kFontItems, 21, kTabs, 3, 320, 250, 1, 0
 };
 
 /* ---- storyboard ------------------------------------------------------------ */

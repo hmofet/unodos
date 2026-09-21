@@ -96,8 +96,10 @@ add_library(uodesk_platform STATIC
     ${UODESK_PLAT_SRC})
 add_dependencies(uodesk_platform uodesk_font)
 
-# the framebuffer ceiling sizes a static array; a desktop can be a 4K monitor
-set(UODESK_DEFS UNO_PC64 UNO_UUI UNO_COLOR=1 FB_MAX_W=3840 FB_MAX_H=2400)
+# the framebuffer ceiling sizes a static array (fb.c).  With HiDPI the frame
+# is in device pixels, so it must hold a 5K or 6K Retina display full screen
+# ...and 200% text needs a bigger glyph cell than pc64's 40 px (pc64_font.c)
+set(UODESK_DEFS UNO_PC64 UNO_UUI UNO_COLOR=1 FB_MAX_W=6144 FB_MAX_H=3456 UNO_FONT_MAXPX=96)
 set(UODESK_INC
     ${CMAKE_CURRENT_SOURCE_DIR}/compat   # ahead of pc64/: see compat/
     ${CMAKE_CURRENT_SOURCE_DIR}
