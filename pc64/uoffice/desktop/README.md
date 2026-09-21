@@ -68,7 +68,7 @@ tests/smoke.sh <build dir> [.exe]      # under xvfb-run on Linux
 The smoke test drives each app through its real event pump: typing, saving,
 reopening, a formula, and the slide show in and out. It then checks that
 UnoWord and UnoCalc actually wrote compound-file documents. CI runs it on all
-three OSes. On Linux it runs under ASan+UBSan.
+three OSes; on Linux and macOS it also runs under ASan+UBSan.
 
 ## Known limits
 
