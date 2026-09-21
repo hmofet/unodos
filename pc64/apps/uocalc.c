@@ -22,6 +22,7 @@
 #include "uobars.h"
 #include "uofile.h"
 #include "uocalc.h"
+#include "uoapp.h"
 #include "unodoc.h"
 /* unomedia, for um_set_alloc alone: unodoc inflates an OOXML part with
  * um_inflate, which allocates its own working state. */
@@ -66,9 +67,14 @@ static int  g_top_r, g_left_c;              /* the scroll origin            */
 static int  g_editing;
 static char g_edit[128];
 static int  g_dlg;                          /* DLG_* while one is up        */
-enum { DLG_NONE = 0, DLG_OPEN, DLG_SAVE, DLG_MSG };
+enum { DLG_NONE = 0, DLG_OPEN, DLG_SAVE, DLG_MSG, DLG_GUARD };
 static char g_name[256];                    /* "" until saved or opened     */
 static int  g_vol;                          /* ...and the volume it lives on */
+/* Unsaved changes.  The workbook model has no revision counter, so the app
+ * marks the edits it makes - each one goes through commit_edit, set_fmt_all,
+ * a command or a paste, and every one of those sets this. */
+static int  g_changed;
+static char g_title[300] = "UnoCalc - Book1";
 static unsigned char *g_io;                 /* the file buffer              */
 static long g_iolen;
 static char g_statl[64], g_statr[64];
@@ -503,9 +509,12 @@ static int load_book(int vol, const char *name)
     }
     ud_cfb_close(c);
     ud_zip_close(z);
-    g_cur_r = g_cur_c = g_sel_r = g_sel_c = 0;
-    g_top_r = g_left_c = 0;
-    g_sheet = 0;
+    if (ok) {
+        g_cur_r = g_cur_c = g_sel_r = g_sel_c = 0;
+        g_top_r = g_left_c = 0;
+        g_sheet = 0;
+        g_editing = 0; g_edit[0] = 0;
+    }
     return ok;
 }
 
@@ -558,8 +567,97 @@ static int save_book(int vol, const char *name)
     if (out && len > 0) ok = uno_fs_write(vol, name, out, len) ? 1 : 0;
     ud_free(out);
     ud_xlsw_free(w);
+    if (ok) g_changed = 0;
     return ok;
 }
+
+/* ---- the workbook's name, in the title bar ---------------------------------- */
+static void set_title(void)
+{
+    const char *pre = "UnoCalc - ", *nm = g_name[0] ? g_name : "Book1";
+    int k = 0;
+    while (*pre) g_title[k++] = *pre++;
+    while (*nm && k < (int)sizeof g_title - 1) g_title[k++] = *nm++;
+    g_title[k] = 0;
+    if (g_win) g_win->title = g_title;
+}
+
+static void msg(const char *text)
+{
+    uod_msgbox(&DL, "UnoCalc", text, UOD_MB_OK, pc64_shell_workarea_w(),
+               pc64_shell_workarea_h());
+    g_dlg = DLG_MSG;
+}
+
+static void open_dialog(int save)
+{
+    uof_set_fs(&kFs);
+    uof_open(&DL, save, kTypes, 2, pc64_shell_workarea_w(),
+             pc64_shell_workarea_h());
+    g_dlg = save ? DLG_SAVE : DLG_OPEN;
+}
+
+/* Open (vol, name), or say why not.  load_book replaces the workbook only
+ * with one that parsed, so a failure leaves what was open, open. */
+static void open_file(int vol, const char *name)
+{
+    char m[320];
+    int k = 0;
+    const char *t;
+    if (load_book(vol, name)) {
+        a_cpy(g_name, name, (int)sizeof g_name);
+        g_vol = vol;
+        g_changed = 0;
+        set_title();
+        return;
+    }
+    for (t = name; *t && k < 250; t++) m[k++] = *t;
+    for (t = " is not a workbook UnoCalc can open."; *t; t++) m[k++] = *t;
+    m[k] = 0;
+    msg(m);
+}
+
+static void new_book(void)
+{
+    BK = uxl_new();
+    g_cur_r = g_cur_c = 0; g_sel_r = g_sel_c = 0;
+    g_top_r = g_left_c = 0; g_sheet = 0;
+    g_editing = 0; g_edit[0] = 0;
+    /* a new workbook has no file yet: without clearing the name, the next
+     * Save silently overwrote whatever was open before */
+    g_name[0] = 0; g_vol = 0;
+    g_changed = 0;
+    set_title();
+}
+
+/* ---- the unsaved-changes guard's hooks (uoapp.h) ------------------------------ */
+static void commit_edit(void);
+static int calc_dirty(void) { return g_changed || g_editing; }
+static const char *calc_doc_name(void) { return g_name[0] ? g_name : "Book1"; }
+static int calc_save(void)
+{
+    commit_edit();
+    if (!g_name[0]) { open_dialog(1); return 2; }
+    if (save_book(g_vol, g_name)) return 1;
+    msg("Could not write the workbook.");
+    return 0;
+}
+static void calc_proceed(int action)
+{
+    switch (action) {
+    case UOA_NEW:       new_book(); break;
+    case UOA_OPEN_DLG:  open_dialog(0); break;
+    case UOA_OPEN_FILE: open_file(uoa_open_vol(), uoa_open_name()); break;
+    default: break;
+    }
+}
+static int calc_frame_w(void) { return pc64_shell_workarea_w(); }
+static int calc_frame_h(void) { return pc64_shell_workarea_h(); }
+static void calc_prompted(void) { g_dlg = DLG_GUARD; pc64_shell_dirty(); }
+static const uoa_app kGuard = {
+    "UnoCalc", calc_dirty, calc_doc_name, calc_save, calc_proceed,
+    &DL, calc_frame_w, calc_frame_h, calc_prompted
+};
 
 /* ---- commands ---------------------------------------------------------------- */
 /* Is the formula being typed at a point where a reference may follow?  Excel
@@ -577,28 +675,221 @@ static int point_ready(const char *e)
            c == '<' || c == '>' || c == '%' || c == ' ';
 }
 
-static void commit_edit(void)
+/* What typing `t` into a cell means - the one rule, shared by leaving an
+ * edited cell and by a paste. */
+static void set_from_text(int r, int c, const char *t)
 {
-    if (!g_editing) return;
-    g_editing = 0;
-    if (!g_edit[0]) { uxl_clear(BK, g_sheet, g_cur_r, g_cur_c); }
-    else if (g_edit[0] == '=') {
-        if (!uxl_set_formula(BK, g_sheet, g_cur_r, g_cur_c, g_edit))
-            uxl_set_str(BK, g_sheet, g_cur_r, g_cur_c, g_edit);
+    if (!t[0]) { uxl_clear(BK, g_sheet, r, c); }
+    else if (t[0] == '=') {
+        if (!uxl_set_formula(BK, g_sheet, r, c, t))
+            uxl_set_str(BK, g_sheet, r, c, t);
     } else {
         /* a bare number is a number; anything else is text - the same test
          * Excel applies as you leave the cell */
-        const char *p = g_edit;
+        const char *p = t;
         double v = 0, frac = 0.1;
         int neg = 0, digits = 0;
         if (*p == '-') { neg = 1; p++; }
         while (*p >= '0' && *p <= '9') { v = v * 10 + (*p - '0'); p++; digits++; }
         if (*p == '.') { p++;
             while (*p >= '0' && *p <= '9') { v += (*p - '0') * frac; frac /= 10; p++; digits++; } }
-        if (digits && !*p) uxl_set_num(BK, g_sheet, g_cur_r, g_cur_c, neg ? -v : v);
-        else uxl_set_str(BK, g_sheet, g_cur_r, g_cur_c, g_edit);
+        if (digits && !*p) uxl_set_num(BK, g_sheet, r, c, neg ? -v : v);
+        else uxl_set_str(BK, g_sheet, r, c, t);
     }
+}
+
+static void commit_edit(void)
+{
+    if (!g_editing) return;
+    g_editing = 0;
+    g_changed = 1;
+    set_from_text(g_cur_r, g_cur_c, g_edit);
     g_edit[0] = 0;
+    uxl_recalc(BK);
+}
+
+/* ---- the clipboard ------------------------------------------------------------
+ * A range goes out as tab-separated rows of what the cells SHOW, which is
+ * what Excel puts on the clipboard for another program and what a pasted
+ * table in any word processor or text editor expects.
+ *
+ * Between UnoCalc windows - or back into this one - that would turn every
+ * formula into its value.  So the copy also keeps each cell's SOURCE (its
+ * formula, or its typed value), and a paste whose clipboard text is still
+ * exactly the text this copy produced uses the sources instead, with every
+ * relative reference moved by the distance pasted, as Excel does: =A1*2
+ * copied down a row becomes =A2*2, and $A$1 stays put. */
+static char *g_cb_text;             /* what we put on the clipboard (UTF-8)  */
+static char *g_cb_src;              /* the sources: '\t' / '\n' separated   */
+static int   g_cb_r, g_cb_c;        /* the top-left cell they came from      */
+
+static void sel_box(int *r0, int *c0, int *r1, int *c1)
+{
+    *r0 = g_sel_r < g_cur_r ? g_sel_r : g_cur_r;
+    *r1 = g_sel_r > g_cur_r ? g_sel_r : g_cur_r;
+    *c0 = g_sel_c < g_cur_c ? g_sel_c : g_cur_c;
+    *c1 = g_sel_c > g_cur_c ? g_sel_c : g_cur_c;
+}
+
+/* a cell's source: its formula, else what typing it back would take */
+static int cell_source(int r, int c, char *out, int cap)
+{
+    uxl_val v;
+    const char *f = uxl_formula(BK, g_sheet, r, c);
+    out[0] = 0;
+    if (f && *f) { a_cpy(out, f, cap); return a_len(out); }
+    if (!uxl_get(BK, g_sheet, r, c, &v)) return 0;
+    switch (v.kind) {
+    case UXL_NUM:  return uxl_general(v.num, out, cap);
+    case UXL_STR:  a_cpy(out, uxl_pool(BK, v.str), cap); return a_len(out);
+    default:       return uxl_text(BK, g_sheet, r, c, out, cap);
+    }
+}
+
+/* Move every relative A1 reference in formula `f` by (dr, dc).  A token is a
+ * reference when it parses as one (uxl_a1_parse) and is not a function name
+ * (followed by '(') or part of a longer name; text inside "quotes" is left
+ * alone.  A reference moved off the sheet becomes #REF!, as in Excel. */
+static void shift_refs(const char *f, int dr, int dc, char *out, int cap)
+{
+    int i = 0, k = 0, instr = 0;
+    while (f[i] && k < cap - 1) {
+        char ch = f[i];
+        int start = !instr && (ch == '$' || (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z')) &&
+                    !(i > 0 && ((f[i-1] >= 'A' && f[i-1] <= 'Z') || (f[i-1] >= 'a' && f[i-1] <= 'z') ||
+                                (f[i-1] >= '0' && f[i-1] <= '9') || f[i-1] == '_' || f[i-1] == '.'));
+        if (ch == '"') instr = !instr;
+        if (start) {
+            char tok[16];
+            int j = i, n = 0, row, col, ar, ac;
+            while (n < 15 && (f[j] == '$' || (f[j] >= 'A' && f[j] <= 'Z') ||
+                   (f[j] >= 'a' && f[j] <= 'z') || (f[j] >= '0' && f[j] <= '9') || f[j] == '_'))
+                tok[n++] = f[j++];
+            tok[n] = 0;
+            if (f[j] != '(' && f[j] != '!' && uxl_a1_parse(tok, &row, &col, &ar, &ac)) {
+                char w[16];
+                int nr = ar ? row : row + dr, nc = ac ? col : col + dc, m;
+                if (nr < 0 || nr >= UXL_ROWS || nc < 0 || nc >= UXL_COLS) a_cpy(w, "#REF!", 16);
+                else uxl_a1_write(nr, nc, ar, ac, w, 16);
+                for (m = 0; w[m] && k < cap - 1; m++) out[k++] = w[m];
+            } else {
+                int m;
+                for (m = 0; m < n && k < cap - 1; m++) out[k++] = tok[m];
+            }
+            i = j;
+            continue;
+        }
+        out[k++] = ch;
+        i++;
+    }
+    out[k] = 0;
+}
+
+/* One pass over the range: `t`/`s` NULL just measures.  Returns the larger
+ * of the two lengths, so one measuring pass sizes both buffers. */
+static long emit_range(int r0, int c0, int r1, int c1, char *t, char *s)
+{
+    int r, c;
+    long k = 0, ks = 0;
+    char cell[256], u8[768];
+    for (r = r0; r <= r1; r++) {
+        for (c = c0; c <= c1; c++) {
+            int n, m;
+            if (c > c0) { if (t) t[k] = '\t'; if (s) s[ks] = '\t'; k++; ks++; }
+            if (uxl_text(BK, g_sheet, r, c, cell, (int)sizeof cell) <= 0) cell[0] = 0;
+            n = uoa_to_utf8(cell, -1, u8, (int)sizeof u8);
+            for (m = 0; m < n; m++, k++) if (t) t[k] = u8[m];
+            cell_source(r, c, cell, (int)sizeof cell);
+            for (m = 0; cell[m]; m++, ks++) if (s) s[ks] = cell[m];
+        }
+        if (t) t[k] = '\n'; if (s) s[ks] = '\n';
+        k++; ks++;
+    }
+    if (t) t[k] = 0;
+    if (s) s[ks] = 0;
+    return k > ks ? k : ks;
+}
+
+static int copy_range(void)
+{
+    int r0, c0, r1, c1;
+    long cap;
+    char *t, *s;
+    commit_edit();
+    sel_box(&r0, &c0, &r1, &c1);
+    if ((long)(r1 - r0 + 1) * (c1 - c0 + 1) > 1000000L) {
+        msg("That range is too large to copy.");
+        return 0;
+    }
+    cap = emit_range(r0, c0, r1, c1, 0, 0) + 1;
+    t = (char *)malloc((unsigned long)cap);
+    s = (char *)malloc((unsigned long)cap);
+    if (!t || !s) { if (t) free(t); if (s) free(s); return 0; }
+    emit_range(r0, c0, r1, c1, t, s);
+    if (g_cb_text) free(g_cb_text);
+    if (g_cb_src) free(g_cb_src);
+    g_cb_text = t; g_cb_src = s; g_cb_r = r0; g_cb_c = c0;
+    return uoa_clip_set(t);
+}
+
+static void clear_range(void)
+{
+    int r0, c0, r1, c1, r, c;
+    sel_box(&r0, &c0, &r1, &c1);
+    for (r = r0; r <= r1; r++)
+        for (c = c0; c <= c1; c++) uxl_clear(BK, g_sheet, r, c);
+    g_changed = 1;
+    uxl_recalc(BK);
+}
+
+/* Paste at the cursor: rows by '\n', cells by '\t'. */
+static void paste_range(void)
+{
+    char *u = uoa_clip_get(), *src, *line;
+    int ours, r, c, dr, dc, last_r, last_c;
+    long n = 0, i;
+    if (!u) return;
+    commit_edit();
+    ours = g_cb_text && g_cb_src;
+    for (i = 0; ours && (u[i] || g_cb_text[i]); i++)
+        if (u[i] != g_cb_text[i]) ours = 0;           /* still our copy?     */
+    while (u[n]) n++;
+    if (ours) src = g_cb_src;
+    else {
+        src = (char *)malloc((unsigned long)n + 1);
+        if (!src) { free(u); return; }
+        uoa_from_utf8(u, src, n + 1);               /* CP-1252 is never longer */
+    }
+    dr = g_cur_r - g_cb_r; dc = g_cur_c - g_cb_c;
+    r = g_cur_r; c = g_cur_c; last_r = r; last_c = c;
+    line = src;
+    for (i = 0;; i++) {
+        char ch = src[i];
+        if (ch == '\t' || ch == '\n' || ch == 0) {
+            char cell[256], fx[512];
+            long len = &src[i] - line;
+            if (len > (long)sizeof cell - 1) len = (long)sizeof cell - 1;
+            { long q; for (q = 0; q < len; q++) cell[q] = line[q]; }
+            cell[len] = 0;
+            /* a trailing line end is not one more empty row */
+            if (!(ch == 0 && len == 0 && c == g_cur_c) && r < UXL_ROWS && c < UXL_COLS) {
+                if (ours && cell[0] == '=') { shift_refs(cell, dr, dc, fx, (int)sizeof fx);
+                                              set_from_text(r, c, fx); }
+                else set_from_text(r, c, cell);
+                last_r = r; last_c = c;
+            }
+            if (ch == 0) break;
+            line = &src[i + 1];
+            if (ch == '\t') c++;
+            else { r++; c = g_cur_c; }
+        }
+    }
+    if (!ours) free(src);
+    free(u);
+    /* the pasted block ends up selected, as in Excel */
+    g_sel_r = g_cur_r; g_sel_c = g_cur_c;
+    g_cur_r = last_r; g_cur_c = last_c;
+    g_changed = 1;
     uxl_recalc(BK);
 }
 
@@ -611,36 +902,22 @@ static void set_fmt_all(int fmt)
     int c1 = g_sel_c > g_cur_c ? g_sel_c : g_cur_c;
     for (r = r0; r <= r1; r++)
         for (c = c0; c <= c1; c++) uxl_set_fmt(BK, g_sheet, r, c, fmt);
+    g_changed = 1;
 }
 
 static void do_command(int cmd)
 {
     switch (cmd) {
-    /* a new workbook has no file yet: without clearing the name, the next
-     * Save silently overwrote whatever was open before */
-    case C_NEW: BK = uxl_new(); g_cur_r = g_cur_c = 0; g_sel_r = g_sel_c = 0;
-                g_name[0] = 0; g_vol = 0; break;
-    case C_OPEN:
-        uof_set_fs(&kFs);
-        uof_open(&DL, 0, kTypes, 2, pc64_shell_workarea_w(),
-                 pc64_shell_workarea_h());
-        g_dlg = DLG_OPEN;
-        break;
-    case C_SAVE:
-        if (g_name[0]) {
-            if (!save_book(g_vol, g_name)) {    /* back where it came from */
-                uod_msgbox(&DL, "UnoCalc", "Could not write the workbook.",
-                           UOD_MB_OK, pc64_shell_workarea_w(),
-                           pc64_shell_workarea_h());
-                g_dlg = DLG_MSG;
-            }
-            break;
-        }
-        uof_set_fs(&kFs);
-        uof_open(&DL, 1, kTypes, 2, pc64_shell_workarea_w(),
-                 pc64_shell_workarea_h());
-        g_dlg = DLG_SAVE;
-        break;
+    /* New, Open and Exit drop the workbook: the guard asks first */
+    case C_NEW:  uoa_request(UOA_NEW); break;
+    case C_OPEN: uoa_request(UOA_OPEN_DLG); break;
+    case C_EXIT: uoa_exit(); break;
+    case C_SAVE: calc_save(); break;            /* back where it came from */
+    case C_COPY:     copy_range(); break;
+    /* Cut takes the cells away now; Excel's marquee-then-move is a later
+     * refinement, and what is on the clipboard is the same either way */
+    case C_CUT:      if (copy_range()) clear_range(); break;
+    case C_PASTE:    paste_range(); break;
     case C_CURRENCY: set_fmt_all(UXL_FMT_CURRENCY); break;
     case C_PERCENT:  set_fmt_all(UXL_FMT_PCT); break;
     case C_COMMA:    set_fmt_all(UXL_FMT_THOUS2); break;
@@ -668,6 +945,7 @@ static void do_command(int cmd)
         f[n++] = ')'; f[n] = 0;
         uxl_set_formula(BK, g_sheet, g_cur_r, g_cur_c, f);
         uxl_recalc(BK);
+        g_changed = 1;
         break;
     }
     case C_FUNCS: {
@@ -716,26 +994,25 @@ static void dialog_closed(void)
 {
     int res = uod_result(&DL), kind = g_dlg;
     g_dlg = DLG_NONE;
-    if (res != UOD_ID_OK) return;
-    if (kind == DLG_OPEN) {
-        a_cpy(g_name, uof_name(), (int)sizeof g_name);
-        g_vol = uof_volume();
-        if (!load_book(g_vol, g_name)) {
-            g_name[0] = 0;
-            uod_msgbox(&DL, "UnoCalc", "That is not a workbook this build reads.",
-                       UOD_MB_OK, pc64_shell_workarea_w(), pc64_shell_workarea_h());
-            g_dlg = DLG_MSG;
+    if (kind == DLG_GUARD) { uoa_prompt_closed(); return; }
+    if (kind == DLG_SAVE) {
+        int ok = 0;
+        if (res == UOD_ID_OK) {
+            char nm[256];
+            a_cpy(nm, uof_name(), (int)sizeof nm);
+            ensure_ext(nm, (int)sizeof nm, uof_type());
+            ok = save_book(uof_volume(), nm);
+            if (ok) {
+                a_cpy(g_name, nm, (int)sizeof g_name);
+                g_vol = uof_volume();
+                set_title();
+            } else msg("Could not write the workbook.");
         }
-    } else if (kind == DLG_SAVE) {
-        a_cpy(g_name, uof_name(), (int)sizeof g_name);
-        ensure_ext(g_name, (int)sizeof g_name, uof_type());
-        g_vol = uof_volume();
-        if (!save_book(g_vol, g_name)) {
-            uod_msgbox(&DL, "UnoCalc", "Could not write the workbook.",
-                       UOD_MB_OK, pc64_shell_workarea_w(), pc64_shell_workarea_h());
-            g_dlg = DLG_MSG;
-        }
+        uoa_save_as_done(ok);               /* the guard's Save As, if it was */
+        return;
     }
+    if (res != UOD_ID_OK) return;
+    if (kind == DLG_OPEN) open_file(uof_volume(), uof_name());
 }
 
 static int app_event(struct unoui_widget *w, const void *evp, void *ctx)
@@ -816,7 +1093,7 @@ static void uw_build(unoui_window *win)
     int w = pc64_shell_workarea_w() - 40, h = pc64_shell_workarea_h() - 60;
     if (w < 380) w = 380;
     if (h < 260) h = 260;
-    unoui_window_init(win, "UnoCalc - Book1", 24, 20, w, h);
+    unoui_window_init(win, g_title, 24, 20, w, h);
     g_canvas.draw = app_draw;
     g_canvas.event = app_event;
     g_canvas.ctx = 0;
@@ -890,6 +1167,9 @@ static int uw_key(int uni, int scan, int ctrl)
         int c = uni;
         if (c >= 1 && c <= 26) c += 'a' - 1;
         if (c == 's') { do_command(C_SAVE); return 1; }
+        if (c == 'c') { do_command(C_COPY); return 1; }
+        if (c == 'x') { do_command(C_CUT); return 1; }
+        if (c == 'v') { do_command(C_PASTE); return 1; }
         if (c == 'o') { do_command(C_OPEN); return 1; }
         if (c == 'n') { do_command(C_NEW); return 1; }
         return 0;
@@ -903,7 +1183,7 @@ static int uw_key(int uni, int scan, int ctrl)
         if (g_editing) {
             int n = a_len(g_edit);
             if (n) g_edit[n - 1] = 0;
-        } else uxl_clear(BK, g_sheet, g_cur_r, g_cur_c);
+        } else { uxl_clear(BK, g_sheet, g_cur_r, g_cur_c); g_changed = 1; }
         pc64_shell_dirty();
         return 1;
     }
@@ -927,6 +1207,7 @@ static void uw_opened(void)
     ST.page = "A1";
     ST.pos  = "Sum=0";
     a_cpy(g_edit, "", (int)sizeof g_edit);
+    uoa_register(&kGuard);
 }
 static void uw_closed(void) { }
 static int  uw_canvas_index(void) { return g_cidx; }

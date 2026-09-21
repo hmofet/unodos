@@ -46,7 +46,13 @@ static int      g_iw, g_ih;
 static XIM      g_xim;
 static XIC      g_xic;
 static Atom     A_WM_DELETE, A_NET_WM_STATE, A_NET_WM_STATE_FULLSCREEN,
-                A_NET_WM_NAME, A_UTF8_STRING;
+                A_NET_WM_NAME, A_UTF8_STRING,
+                A_CLIPBOARD, A_TARGETS, A_TEXT, A_INCR, A_UOSEL;
+/* X has no clipboard STORE: whoever owns the CLIPBOARD selection answers
+ * every paste itself, from this copy, for as long as it runs. */
+static char    *g_clip;
+static long     g_clip_n;
+static void     clip_serve(XSelectionRequestEvent *r);
 static int      g_full;
 static int      g_w, g_h;
 static int      g_rs, g_gs, g_bs;     /* the visual's channel shifts          */
@@ -135,6 +141,11 @@ int plat_init(const char *title, int w, int h, int hidden)
     A_NET_WM_STATE_FULLSCREEN = XInternAtom(g_dpy, "_NET_WM_STATE_FULLSCREEN", False);
     A_NET_WM_NAME = XInternAtom(g_dpy, "_NET_WM_NAME", False);
     A_UTF8_STRING = XInternAtom(g_dpy, "UTF8_STRING", False);
+    A_CLIPBOARD = XInternAtom(g_dpy, "CLIPBOARD", False);
+    A_TARGETS = XInternAtom(g_dpy, "TARGETS", False);
+    A_TEXT = XInternAtom(g_dpy, "TEXT", False);
+    A_INCR = XInternAtom(g_dpy, "INCR", False);
+    A_UOSEL = XInternAtom(g_dpy, "UODESK_CLIPBOARD", False);
     XSetWMProtocols(g_dpy, g_win, &A_WM_DELETE, 1);
 
     /* WM_CLASS "unoword", "UnoWord": matches StartupWMClass in our .desktop */
@@ -194,6 +205,12 @@ static void handle(XEvent *x)
         break;
     case FocusIn:  if (g_xic) XSetICFocus(g_xic);   break;
     case FocusOut: if (g_xic) XUnsetICFocus(g_xic); break;
+    case SelectionRequest: clip_serve(&x->xselectionrequest); break;
+    case SelectionClear:                    /* someone else copied: not ours */
+        if (x->xselectionclear.selection == A_CLIPBOARD) {
+            free(g_clip); g_clip = 0; g_clip_n = 0;
+        }
+        break;
     case KeyPress: {
         KeySym ks = XLookupKeysym(&x->xkey, 0);
         int k = keysym_to_key(ks), m = mods_of(x->xkey.state);
@@ -607,3 +624,111 @@ int plat_file_dialog(int save, const char *const *types, int ntypes,
     if (r > 0 && type) *type = plat_type_of_path(path, types, ntypes);
     return r;
 }
+
+void plat_args(int *argc, char ***argv) { (void)argc; (void)argv; }   /* UTF-8 already */
+
+/* ---- the clipboard: the CLIPBOARD selection, as UTF8_STRING ---------------------
+ * Serving: answer TARGETS and the text types from g_clip.  Pasting: our own
+ * copy when we own it, otherwise XConvertSelection and wait (bounded) for
+ * the owner's SelectionNotify, handling every other event meanwhile so
+ * nothing is lost.  INCR (a paste of more than ~256 KB) is not implemented:
+ * such a paste comes back empty rather than truncated. */
+static void clip_serve(XSelectionRequestEvent *r)
+{
+    XEvent reply;
+    Atom prop = r->property ? r->property : r->target;   /* obsolete clients */
+    memset(&reply, 0, sizeof reply);
+    reply.xselection.type = SelectionNotify;
+    reply.xselection.requestor = r->requestor;
+    reply.xselection.selection = r->selection;
+    reply.xselection.target = r->target;
+    reply.xselection.time = r->time;
+    reply.xselection.property = None;                   /* refused, unless... */
+    if (r->selection == A_CLIPBOARD && g_clip) {
+        if (r->target == A_TARGETS) {
+            Atom t[4];
+            t[0] = A_TARGETS; t[1] = A_UTF8_STRING; t[2] = XA_STRING; t[3] = A_TEXT;
+            XChangeProperty(g_dpy, r->requestor, prop, XA_ATOM, 32, PropModeReplace,
+                            (const unsigned char *)t, 4);
+            reply.xselection.property = prop;
+        } else if (r->target == A_UTF8_STRING || r->target == XA_STRING ||
+                   r->target == A_TEXT) {
+            XChangeProperty(g_dpy, r->requestor, prop,
+                            r->target == A_TEXT ? A_UTF8_STRING : r->target, 8,
+                            PropModeReplace, (const unsigned char *)g_clip, (int)g_clip_n);
+            reply.xselection.property = prop;
+        }
+    }
+    XSendEvent(g_dpy, r->requestor, False, 0, &reply);
+    XFlush(g_dpy);
+}
+
+int plat_clip_set(const char *utf8)
+{
+    long n = (long)strlen(utf8 ? utf8 : "");
+    char *c = (char *)malloc((size_t)n + 1);
+    if (!c) return 0;
+    memcpy(c, utf8 ? utf8 : "", (size_t)n + 1);
+    free(g_clip);
+    g_clip = c; g_clip_n = n;
+    XSetSelectionOwner(g_dpy, A_CLIPBOARD, g_win, CurrentTime);
+    XFlush(g_dpy);
+    return XGetSelectionOwner(g_dpy, A_CLIPBOARD) == g_win;
+}
+
+static long copy_out(const char *s, long n, char *buf, long cap)
+{
+    if (cap > 0) {
+        long m = n < cap - 1 ? n : cap - 1;
+        memcpy(buf, s, (size_t)m);
+        buf[m] = 0;
+    }
+    return n;
+}
+
+long plat_clip_get(char *buf, long cap)
+{
+    unsigned start;
+    int got = 0;
+    long n = 0;
+    Window owner;
+    if (cap > 0) buf[0] = 0;
+    owner = XGetSelectionOwner(g_dpy, A_CLIPBOARD);
+    if (owner == None) return 0;
+    if (owner == g_win) return g_clip ? copy_out(g_clip, g_clip_n, buf, cap) : 0;
+
+    XDeleteProperty(g_dpy, g_win, A_UOSEL);
+    XConvertSelection(g_dpy, A_CLIPBOARD, A_UTF8_STRING, A_UOSEL, g_win, CurrentTime);
+    XFlush(g_dpy);
+    start = plat_ticks();
+    while (!got && plat_ticks() - start < 1000) {
+        XEvent x;
+        if (!XPending(g_dpy)) {
+            fd_set fds;
+            struct timeval tv = { 0, 20000 };
+            int fd = ConnectionNumber(g_dpy);
+            FD_ZERO(&fds); FD_SET(fd, &fds);
+            select(fd + 1, &fds, 0, 0, &tv);
+            continue;
+        }
+        XNextEvent(g_dpy, &x);
+        if (x.type == SelectionNotify && x.xselection.requestor == g_win &&
+            x.xselection.selection == A_CLIPBOARD) {
+            got = 1;
+            if (x.xselection.property != None) {
+                Atom type;
+                int fmt;
+                unsigned long items, left;
+                unsigned char *data = 0;
+                if (XGetWindowProperty(g_dpy, g_win, A_UOSEL, 0, 0x7FFFFFF, True,
+                                       AnyPropertyType, &type, &fmt, &items, &left,
+                                       &data) == Success && data) {
+                    if (type != A_INCR && fmt == 8) n = copy_out((const char *)data, (long)items, buf, cap);
+                    XFree(data);
+                }
+            }
+        } else if (!XFilterEvent(&x, None)) handle(&x);   /* keep everything else */
+    }
+    return n;
+}
+void plat_set_modified(int on) { (void)on; }

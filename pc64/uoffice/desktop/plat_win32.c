@@ -20,6 +20,7 @@
 #include <windows.h>
 #include <windowsx.h>
 #include <commdlg.h>
+#include <shellapi.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -270,6 +271,99 @@ void plat_present(const fb_px *px, int w, int h)
 }
 
 unsigned plat_ticks(void) { return (unsigned)GetTickCount64(); }
+
+/* main()'s argv is in the ANSI code page, where a file called "Resume.doc"
+ * with an accent, or anything in Cyrillic, arrives as question marks.  The
+ * UTF-16 command line is the real one, so argv is rebuilt from it, as UTF-8,
+ * which is what every path in the shell is. */
+void plat_args(int *argc, char ***argv)
+{
+    int n = 0, i;
+    LPWSTR *w = CommandLineToArgvW(GetCommandLineW(), &n);
+    char **out;
+    if (!w || n <= 0) return;
+    out = (char **)calloc((size_t)n + 1, sizeof *out);
+    if (!out) { LocalFree(w); return; }
+    for (i = 0; i < n; i++) {
+        int len = WideCharToMultiByte(CP_UTF8, 0, w[i], -1, 0, 0, 0, 0);
+        out[i] = (char *)malloc(len > 0 ? (size_t)len : 1);
+        if (!out[i]) { LocalFree(w); return; }
+        if (len <= 0) out[i][0] = 0;
+        else WideCharToMultiByte(CP_UTF8, 0, w[i], -1, out[i], len, 0, 0);
+    }
+    LocalFree(w);
+    *argc = n;
+    *argv = out;
+}
+
+void plat_set_modified(int on) { (void)on; }
+
+/* ---- the clipboard: CF_UNICODETEXT, with Windows' CR LF line ends ---------- */
+int plat_clip_set(const char *utf8)
+{
+    int n = MultiByteToWideChar(CP_UTF8, 0, utf8, -1, 0, 0), i, k = 0, nl = 0;
+    WCHAR *w, *d;
+    HGLOBAL h;
+    if (n <= 0) return 0;
+    w = (WCHAR *)malloc((size_t)n * sizeof(WCHAR));
+    if (!w) return 0;
+    MultiByteToWideChar(CP_UTF8, 0, utf8, -1, w, n);
+    for (i = 0; w[i]; i++) if (w[i] == L'\n') nl++;
+    h = GlobalAlloc(GMEM_MOVEABLE, (size_t)(n + nl) * sizeof(WCHAR));
+    if (!h) { free(w); return 0; }
+    d = (WCHAR *)GlobalLock(h);
+    for (i = 0; w[i]; i++) {
+        if (w[i] == L'\n' && (i == 0 || w[i - 1] != L'\r')) d[k++] = L'\r';
+        d[k++] = w[i];
+    }
+    d[k] = 0;
+    GlobalUnlock(h);
+    free(w);
+    if (!OpenClipboard(g_hwnd)) { GlobalFree(h); return 0; }
+    EmptyClipboard();
+    if (!SetClipboardData(CF_UNICODETEXT, h)) { CloseClipboard(); GlobalFree(h); return 0; }
+    CloseClipboard();                       /* the clipboard owns h now */
+    return 1;
+}
+
+long plat_clip_get(char *buf, long cap)
+{
+    HANDLE h;
+    const WCHAR *w;
+    WCHAR *lf;
+    long n = 0;
+    int i, k = 0;
+    if (cap > 0) buf[0] = 0;
+    if (!IsClipboardFormatAvailable(CF_UNICODETEXT) || !OpenClipboard(g_hwnd)) return 0;
+    h = GetClipboardData(CF_UNICODETEXT);
+    w = h ? (const WCHAR *)GlobalLock(h) : 0;
+    if (w) {
+        for (i = 0; w[i]; i++) ;
+        lf = (WCHAR *)malloc(((size_t)i + 1) * sizeof(WCHAR));
+        if (lf) {
+            for (i = 0; w[i]; i++)                   /* CR LF -> LF */
+                if (!(w[i] == L'\r' && w[i + 1] == L'\n')) lf[k++] = w[i];
+            lf[k] = 0;
+            n = WideCharToMultiByte(CP_UTF8, 0, lf, -1, 0, 0, 0, 0) - 1;
+            if (n > 0 && cap > 0) {
+                if (n < cap) WideCharToMultiByte(CP_UTF8, 0, lf, -1, buf, (int)cap, 0, 0);
+                else {                               /* too small: a prefix */
+                    char *all = (char *)malloc((size_t)n + 1);
+                    if (all) {
+                        WideCharToMultiByte(CP_UTF8, 0, lf, -1, all, (int)n + 1, 0, 0);
+                        memcpy(buf, all, (size_t)cap - 1);
+                        buf[cap - 1] = 0;
+                        free(all);
+                    }
+                }
+            }
+            free(lf);
+        }
+        GlobalUnlock(h);
+    }
+    CloseClipboard();
+    return n > 0 ? n : 0;
+}
 
 const char *plat_base_path(void)
 {

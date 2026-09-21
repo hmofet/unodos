@@ -33,6 +33,7 @@
 #include "fb.h"
 #include "pc64_font.h"
 #include "uofile.h"
+#include "uoapp.h"
 #include "uodesk.h"
 #include "uodesk_plat.h"
 
@@ -49,6 +50,7 @@ static int           g_mx, g_my;         /* the pointer, for the wheel       */
 static int           g_kick;             /* a native dialog just closed      */
 static char          g_title[256];       /* what the OS title bar last got   */
 static int           g_show_full;        /* the slide show has the monitor   */
+static int           g_running = 1;
 
 /* ---- the shell services a module imports by name ------------------------ */
 void pc64_shell_dirty(void)       { g_dirty = 1; }
@@ -83,6 +85,31 @@ static int native_picker(int save, const char *const *types, int ntypes,
     *vol = uodesk_fs_volume_of(path, name, cap);
     g_kick = 1;
     return *vol >= 0 ? 1 : 0;
+}
+
+/* ---- what the app asks of the host (uoapp.h) ---------------------------------
+ * Quit is the guard's to call, once the document is saved or the user said
+ * not to; the close box itself only ASKS (dispatch, PE_QUIT). */
+static void host_quit(void) { g_running = 0; }
+static void host_modified(int on) { plat_set_modified(on); }
+static int  g_key_mods;           /* the modifiers of the key being delivered */
+static int  host_mods(void) { return g_key_mods; }
+static const uoa_host kHost = { host_quit, plat_clip_set, plat_clip_get, host_modified,
+                                host_mods };
+
+/* A file the OS handed us - an argument, a double click, "Open With" - made a
+ * (volume, name) the app can load, exactly as a picked file is. */
+static void open_path(const char *path)
+{
+    char abs[1024], name[256];
+    int vol;
+    if (!uodesk_fs_abs(path, abs, (int)sizeof abs)) {
+        fprintf(stderr, "%s: no such file\n", path);
+        return;
+    }
+    vol = uodesk_fs_volume_of(abs, name, (int)sizeof name);
+    if (vol < 0) { fprintf(stderr, "%s: cannot open that folder\n", abs); return; }
+    uoa_host_open(vol, name);
 }
 
 /* ---- keyboard: plat events -> the (uni, scan, ctrl) the modules take ----- *
@@ -132,7 +159,9 @@ static void deliver_key(int uni, int scan, int ctrl, int mods)
 {
     unoui_event ev;
     int vk = 0;
-    if (g_app->key && g_app->key(uni, scan, ctrl)) { g_dirty = 1; return; }
+    g_key_mods = mods;
+    if (g_app->key && g_app->key(uni, scan, ctrl)) { g_key_mods = 0; g_dirty = 1; return; }
+    g_key_mods = 0;
     switch (scan) {
     case 0x01: vk = UI_KEY_UP; break;    case 0x02: vk = UI_KEY_DOWN; break;
     case 0x03: vk = UI_KEY_RIGHT; break; case 0x04: vk = UI_KEY_LEFT; break;
@@ -223,7 +252,10 @@ static void dispatch(const plat_event *e, int *running)
     unoui_event ev;
     memset(&ev, 0, sizeof ev);
     switch (e->type) {
-    case PE_QUIT: *running = 0; break;
+    /* The close box asks; the app answers.  With unsaved changes it puts up
+     * "Do you want to save...?" and quits through host_quit once that is
+     * settled, so nothing here ends the program. */
+    case PE_QUIT: if (uoa_host_close()) *running = 0; break;
     case PE_RESIZE: resize(e->w, e->h); break;
     case PE_EXPOSE: g_dirty = 1; break;
     case PE_MOUSE_MOVE:
@@ -260,16 +292,26 @@ static void dispatch(const plat_event *e, int *running)
  *
  *   text Hello world      typed text
  *   key F5 | key s ctrl   a key by name, optional ctrl/shift/alt/gui
- *   click 120 40          left press + release at x, y
+ *   click 120 40 [shift]  left press + release at x, y
  *   shot out.ppm          render, write the frame
  *   frames 30             let 30 ticks pass (caret, transitions)
+ *   sleep 500             let 500 ms of real time pass (an OS event)
  *   pick /path/file.doc   what the next File > Open / Save As dialog
  *                         "chooses" (the OS picker cannot be scripted)
+ *   open /path/file.doc   the OS handing us a file (a double click)
+ *   quit                  the window's close box
+ *   expect title TEXT     the window title must read TEXT
+ *   expect dirty 0|1      whether the app reports unsaved changes
+ *   clip TEXT             put TEXT on the OS clipboard, as another program
+ *                         would ("\t" and "\n" spell a tab and a line end)
+ *   expect clip TEXT      the OS clipboard must hold TEXT (same spelling)
  *   # ...                 a comment
  *
  * The script ends the program when it runs out. */
 static FILE *g_script;
+static int   g_script_fail;          /* an `expect` did not hold: exit 1 */
 static int   g_wait_frames, g_pending_shot;
+static unsigned g_sleep_until;       /* `sleep`: real time, for OS events */
 static char  g_shot_path[512];
 static char  g_pick[1024];
 static plat_event g_q[128];
@@ -319,11 +361,11 @@ static void push_key(const char *name, const char *mods)
     q_push(&e);
 }
 
-static void push_click(int x, int y)
+static void push_click(int x, int y, int mods)
 {
     plat_event e;
     memset(&e, 0, sizeof e);
-    e.x = x; e.y = y;
+    e.x = x; e.y = y; e.mods = mods;
     e.type = PE_MOUSE_MOVE; q_push(&e);
     e.type = PE_MOUSE_DOWN; q_push(&e);
     e.type = PE_MOUSE_UP;   q_push(&e);
@@ -342,12 +384,26 @@ static int script_picker(int save, const char *const *types, int ntypes,
     return *vol >= 0;
 }
 
+/* "a\tb\n" in a script line -> a real tab and line end */
+static void unescape(const char *s, char *out, int cap)
+{
+    int k = 0;
+    for (; *s && k < cap - 1; s++) {
+        if (s[0] == '\\' && s[1] == 't') { out[k++] = '\t'; s++; }
+        else if (s[0] == '\\' && s[1] == 'n') { out[k++] = '\n'; s++; }
+        else out[k++] = *s;
+    }
+    out[k] = 0;
+}
+
 /* 0 = the script is finished */
 static int script_step(void)
 {
     char line[1024], a[256], b[64];
     int x, y, n;
     if (g_wait_frames > 0) { g_wait_frames--; return 1; }
+    if (g_sleep_until && (int)(plat_ticks() - g_sleep_until) < 0) return 1;
+    g_sleep_until = 0;
     if (!fgets(line, sizeof line, g_script)) return 0;
     n = (int)strlen(line);
     while (n && (line[n - 1] == '\n' || line[n - 1] == '\r')) line[--n] = 0;
@@ -361,10 +417,46 @@ static int script_step(void)
             q_push(&e);
         }
     } else if (!strncmp(line, "pick ", 5)) snprintf(g_pick, sizeof g_pick, "%s", line + 5);
+    /* "open PATH": the OS handing us a file (a double click); "quit": the
+     * window's close box.  The two things a script cannot otherwise do. */
+    else if (!strncmp(line, "open ", 5)) plat_post_open(line + 5);
+    else if (!strncmp(line, "expect title ", 13)) {
+        const char *t = g_win.title ? g_win.title : "";
+        if (strcmp(t, line + 13)) {
+            fprintf(stderr, "script: FAIL: title is '%s', expected '%s'\n", t, line + 13);
+            g_script_fail = 1;
+        }
+    } else if (sscanf(line, "expect dirty %d", &x) == 1) {
+        if (!!uoa_host_dirty() != !!x) {
+            fprintf(stderr, "script: FAIL: dirty is %d, expected %d\n", uoa_host_dirty(), x);
+            g_script_fail = 1;
+        }
+    }
+    else if (!strncmp(line, "clip ", 5)) {
+        char t[1024];
+        unescape(line + 5, t, (int)sizeof t);
+        plat_clip_set(t);
+    } else if (!strncmp(line, "expect clip ", 12)) {
+        char want[1024], got[1024];
+        unescape(line + 12, want, (int)sizeof want);
+        plat_clip_get(got, (long)sizeof got);
+        if (strcmp(got, want)) {
+            fprintf(stderr, "script: FAIL: clipboard is '%s', expected '%s'\n", got, want);
+            g_script_fail = 1;
+        }
+    }
+    else if (!strcmp(line, "quit")) {
+        plat_event e;
+        memset(&e, 0, sizeof e);
+        e.type = PE_QUIT;
+        q_push(&e);
+    }
     else if (sscanf(line, "key %255s %63s", a, b) == 2) push_key(a, b);
     else if (sscanf(line, "key %255s", a) == 1) push_key(a, 0);
-    else if (sscanf(line, "click %d %d", &x, &y) == 2) push_click(x, y);
+    else if (sscanf(line, "click %d %d", &x, &y) == 2)
+        push_click(x, y, strstr(line, "shift") ? PM_SHIFT : 0);
     else if (sscanf(line, "frames %d", &x) == 1) g_wait_frames = x;
+    else if (sscanf(line, "sleep %d", &x) == 1) g_sleep_until = plat_ticks() + (unsigned)x;
     else if (sscanf(line, "shot %511s", g_shot_path) == 1) { g_pending_shot = 1; g_dirty = 1; }
     else fprintf(stderr, "script: cannot parse '%s'\n", line);
     return 1;
@@ -373,7 +465,8 @@ static int script_step(void)
 static void usage(const char *argv0)
 {
     fprintf(stderr,
-        "usage: %s [--shot out.ppm] [--script FILE] [--size WxH] [--dir PATH]...\n"
+        "usage: %s [options] [FILE]\n"
+        "  FILE     a document to open\n"
         "  --shot   render one frame to a PPM and exit (headless check)\n"
         "  --script replay input from FILE, then exit (see uodesk.c)\n"
         "  --size   initial window size (default 1024x720)\n"
@@ -383,11 +476,12 @@ static void usage(const char *argv0)
 
 int main(int argc, char **argv)
 {
-    int running = 1, i;
+    int i;
     const char *shot = 0;
     int w0 = 1024, h0 = 720;
     unsigned last_tick = 0;
 
+    plat_args(&argc, &argv);
     for (i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--shot") && i + 1 < argc) shot = argv[++i];
         else if (!strcmp(argv[i], "--script") && i + 1 < argc) {
@@ -400,13 +494,18 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h")) { usage(argv[0]); return 0; }
         /* macOS passes -psn_* to apps launched from Finder on old systems */
         else if (!strncmp(argv[i], "-psn_", 5)) continue;
-        else { usage(argv[0]); return 2; }
+        else if (argv[i][0] == '-' && argv[i][1]) { usage(argv[0]); return 2; }
+        /* a document: Explorer's "%1", the .desktop entry's %F.  One window
+         * holds one document, so the first is opened and the rest queue
+         * behind it, which is what a Finder multi-select also does. */
+        else plat_post_open(argv[i]);
     }
 
     g_app = uno_app_main(0);
     if (!plat_init(g_app->name, w0, h0, shot || g_script)) return 1;
     uodesk_fs_init(plat_base_path());
     uof_set_native(g_script ? script_picker : native_picker);
+    uoa_set_host(&kHost);
 
     /* the pc64 shell's boot order (pc64_uui.c): font BEFORE anything is laid
      * out, because every metric the chrome computes comes from it */
@@ -425,16 +524,28 @@ int main(int argc, char **argv)
         if (wi >= 0) { UI.focus_win = 0; UI.focus_wi = wi; }
     }
 
-    while (running) {
+    while (g_running) {
         plat_event e;
         unsigned now;
+        char path[1024];
 
         if (g_qh != g_qt) {                         /* scripted input first */
             e = g_q[g_qh]; g_qh = (g_qh + 1) % 128;
-            dispatch(&e, &running);
+            dispatch(&e, &g_running);
         }
-        while (plat_wait(&e, (shot || g_script || g_qh != g_qt) ? 0 : 16))
-            dispatch(&e, &running);
+        while (plat_wait(&e, ((shot || g_script) && !g_sleep_until) || g_qh != g_qt ? 0 : 16))
+            dispatch(&e, &g_running);
+        /* a file the OS handed over; one per turn, so each open (and any
+         * "save changes?" it raises) has settled before the next */
+        if (plat_take_open(path, (int)sizeof path)) {
+            unoui_event k;
+            open_path(path);
+            memset(&k, 0, sizeof k);
+            k.kind = UI_EV_MOUSE_MOVE; k.x = g_mx; k.y = g_my;
+            g_kick = 0;
+            feed(&k);
+        }
+        uoa_host_tick();
 
         /* caret blink + the module's per-frame hook, at the pc64 cadence */
         now = plat_ticks();
@@ -448,7 +559,7 @@ int main(int argc, char **argv)
             if ((UI.ticks & 15) == 0) g_dirty = 1;
         }
 
-        if (g_script && g_qh == g_qt && !g_pending_shot && !script_step()) running = 0;
+        if (g_script && g_qh == g_qt && !g_pending_shot && !script_step()) g_running = 0;
 
         if (!g_dirty && !shot) continue;
         g_dirty = 0;
@@ -472,5 +583,5 @@ int main(int argc, char **argv)
 
     if (g_app->closed) g_app->closed();
     plat_shutdown();
-    return 0;
+    return g_script_fail ? 1 : 0;
 }

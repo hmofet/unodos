@@ -130,7 +130,7 @@ if(NOT WIN32)
     target_link_libraries(uodesk_platform PUBLIC m)
 endif()
 
-set(CHROME uochrome uoicons uodlg uobars uofile)
+set(CHROME uochrome uoicons uodlg uobars uofile uoapp)
 file(GLOB FONTS ${PC64}/fonts/*.ttf)
 
 # add_uoapp(<target> <display name> <app .c> <what it is> <uoffice files> <unodoc files>)
