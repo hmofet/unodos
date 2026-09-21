@@ -85,8 +85,9 @@ static int  g_editing;
 static char g_edit[512];
 static unsigned char g_lvl[24];        /* levels survive a text_set rewrite  */
 static int  g_nlvl;
-static char g_name[64] = "Presentation1";
-static char g_file[64];                     /* "" until saved or opened     */
+static char g_name[256] = "Presentation1";
+static char g_file[256];                    /* "" until saved or opened     */
+static int  g_vol;                          /* ...and the volume it lives on */
 static unsigned char *g_io;
 static long g_iolen;
 static char g_statl[48], g_statr[48];
@@ -652,7 +653,8 @@ static void dialog_closed(void)
     case C_OPEN:
         a_cpy(g_file, uof_name(), (int)sizeof g_file);
         a_cpy(g_name, g_file, (int)sizeof g_name);
-        if (!load_pres(uof_volume(), g_file)) {
+        g_vol = uof_volume();
+        if (!load_pres(g_vol, g_file)) {
             g_file[0] = 0;
             uod_msgbox(&DL, "UnoShow",
                        "That is not a presentation this build reads.",
@@ -665,7 +667,8 @@ static void dialog_closed(void)
         a_cpy(g_file, uof_name(), (int)sizeof g_file);
         ensure_ext(g_file, (int)sizeof g_file, uof_type());
         a_cpy(g_name, g_file, (int)sizeof g_name);
-        if (!save_pres(uof_volume(), g_file)) {
+        g_vol = uof_volume();
+        if (!save_pres(g_vol, g_file)) {
             uod_msgbox(&DL, "UnoShow", "Could not write the presentation.",
                        UOD_MB_OK, pc64_shell_workarea_w(),
                        pc64_shell_workarea_h());
@@ -873,7 +876,7 @@ static void do_command(int cmd)
 {
     switch (cmd) {
     case C_NEW: PR = uos_new(); g_cur = 0; g_sel = -1; g_editing = 0;
-                g_file[0] = 0;
+                g_file[0] = 0; g_vol = 0;
                 a_cpy(g_name, "Presentation1", (int)sizeof g_name); break;
     case C_EXIT: break;
     case C_OPEN:
@@ -884,7 +887,7 @@ static void do_command(int cmd)
         return;
     case C_SAVE:
         if (g_file[0]) {
-            if (!save_pres(0, g_file)) {
+            if (!save_pres(g_vol, g_file)) {    /* back where it came from */
                 uod_msgbox(&DL, "UnoShow", "Could not write the presentation.",
                            UOD_MB_OK, pc64_shell_workarea_w(),
                            pc64_shell_workarea_h());

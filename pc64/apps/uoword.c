@@ -73,7 +73,8 @@ static int  g_scroll;
 static int  g_zoom = 100;
 static int  g_dirty_layout = 1;
 static int  g_dlg_kind;              /* which dialog is up: 0 none           */
-static char g_name[40] = "Document1";
+static char g_name[256] = "Document1";
+static int  g_vol;            /* the volume g_name lives on: a plain Save goes BACK there */
 static char g_status_l[64], g_status_r[64];
 static int  g_showruler = 1;
 
@@ -654,6 +655,7 @@ static void do_command(int cmd)
         DOC = uow_new();
         g_caret = g_anchor = 0;
         a_cpy(g_name, "Document1", (int)sizeof g_name);
+        g_vol = 0;
         touched();
         break;
     case C_OPEN:
@@ -669,7 +671,9 @@ static void do_command(int cmd)
         g_dlg_kind = DLG_SAVE;
         break;
     case C_SAVE:
-        if (!save_doc(0, g_name))
+        /* back where it came from: this was volume 0 unconditionally, so a
+         * document opened off a USB stick saved to the RAM disk instead */
+        if (!save_doc(g_vol, g_name))
             uod_msgbox(&DL, "UnoWord", "The document could not be saved.",
                        UOD_MB_OK, pc64_shell_workarea_w(),
                        pc64_shell_workarea_h());
@@ -856,11 +860,13 @@ static void dialog_closed(void)
     g_dlg_kind = DLG_NONE;
     if (res == UOD_ID_OK && kind == DLG_OPEN) {
         a_cpy(g_name, uof_name(), (int)sizeof g_name);
-        load_doc(uof_volume(), g_name);
+        g_vol = uof_volume();
+        load_doc(g_vol, g_name);
     } else if (res == UOD_ID_OK && kind == DLG_SAVE) {
         a_cpy(g_name, uof_name(), (int)sizeof g_name);
         ensure_ext(g_name, (int)sizeof g_name, uof_type());
-        save_doc(uof_volume(), g_name);
+        g_vol = uof_volume();
+        save_doc(g_vol, g_name);
     } else if (res == UOD_ID_OK && kind == DLG_FONT) {
         uow_chp c;
         long a = g_anchor < g_caret ? g_anchor : g_caret;
