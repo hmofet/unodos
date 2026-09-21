@@ -15,6 +15,9 @@ name: uoffice-desktop
 
 on:
   push:
+    # branches only: a tag push goes through uoffice-release.yml, and a
+    # second run here would race it to publish the same release
+    branches: ['**']
     paths:
       - 'pc64/uoffice/**'
       - 'pc64/apps/uo*.c'
