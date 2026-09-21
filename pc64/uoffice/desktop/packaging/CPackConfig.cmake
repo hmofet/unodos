@@ -36,7 +36,9 @@ set(CPACK_PACKAGE_FILE_NAME "UnoOffice-${PROJECT_VERSION}-${UODESK_PLAT}")
 
 # ---- Windows: NSIS ------------------------------------------------------------
 set(CPACK_NSIS_DISPLAY_NAME "UnoOffice")
-set(CPACK_NSIS_PACKAGE_NAME "UnoOffice ${PROJECT_VERSION}")
+# also the Start-menu folder name, so no version in it (Add/Remove Programs
+# shows the version in its own column)
+set(CPACK_NSIS_PACKAGE_NAME "UnoOffice")
 set(CPACK_NSIS_INSTALL_ROOT "$PROGRAMFILES64")
 set(CPACK_NSIS_MUI_ICON   "${PKG}/icons/unoword.ico")
 set(CPACK_NSIS_MUI_UNIICON "${PKG}/icons/unoword.ico")
