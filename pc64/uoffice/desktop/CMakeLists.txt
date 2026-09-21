@@ -15,8 +15,27 @@ set(UO   ${PC64}/uoffice)
 
 option(UODESK_STATIC_SDL "link SDL2 statically (self-contained binaries)" OFF)
 option(UODESK_SANITIZE  "build with ASan + UBSan (development)" OFF)
+option(UODESK_FETCH_SDL "build SDL2 from source, statically (no system SDL needed)" OFF)
 
-find_package(SDL2 CONFIG QUIET)
+# Homebrew's "sdl2" is sdl2-compat now - SDL2's API as a shim over a dynamic
+# SDL3 - so it can be neither linked statically into a portable .app nor
+# trusted to behave like SDL2 (it faults pushing a text event).  The Mac
+# build therefore compiles the real SDL2 from a pinned release tag.
+if(UODESK_FETCH_SDL)
+    include(FetchContent)
+    set(SDL_SHARED OFF CACHE BOOL "" FORCE)
+    set(SDL_STATIC ON  CACHE BOOL "" FORCE)
+    set(SDL_TEST   OFF CACHE BOOL "" FORCE)
+    FetchContent_Declare(SDL2
+        GIT_REPOSITORY https://github.com/libsdl-org/SDL.git
+        GIT_TAG        release-2.30.9
+        GIT_SHALLOW    TRUE)
+    FetchContent_MakeAvailable(SDL2)
+    set(SDL2_FOUND TRUE)
+    set(UODESK_STATIC_SDL ON)
+else()
+    find_package(SDL2 CONFIG QUIET)
+endif()
 if(NOT SDL2_FOUND)
     find_package(PkgConfig REQUIRED)
     pkg_check_modules(SDL2 REQUIRED IMPORTED_TARGET sdl2)
