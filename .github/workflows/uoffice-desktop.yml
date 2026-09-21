@@ -1,0 +1,115 @@
+# UnoWord / UnoCalc / UnoShow as native desktop apps (pc64/uoffice/desktop).
+# Builds on Windows, macOS and Linux, replays the smoke test on each, and
+# uploads the packaged apps as artifacts.
+name: uoffice-desktop
+
+on:
+  push:
+    paths:
+      - 'pc64/uoffice/**'
+      - 'pc64/apps/uo*.c'
+      - 'pc64/fb.c'
+      - 'pc64/fb.h'
+      - 'pc64/pc64_font.*'
+      - 'pc64/fonts/**'
+      - 'unoui/**'
+      - 'unodoc/**'
+      - 'unomedia/**'
+      - '.github/workflows/uoffice-desktop.yml'
+  pull_request:
+    paths:
+      - 'pc64/uoffice/**'
+      - 'pc64/apps/uo*.c'
+      - 'unoui/**'
+      - 'unodoc/**'
+      - 'unomedia/**'
+      - '.github/workflows/uoffice-desktop.yml'
+  workflow_dispatch:
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y libsdl2-dev xvfb
+      - name: build (ASan + UBSan)
+        working-directory: pc64/uoffice/desktop
+        run: |
+          cmake -S . -B build-asan -DCMAKE_BUILD_TYPE=Debug -DUODESK_SANITIZE=ON
+          cmake --build build-asan -j
+      - name: smoke (sanitized)
+        working-directory: pc64/uoffice/desktop
+        env:
+          ASAN_OPTIONS: detect_leaks=0
+        run: xvfb-run -a tests/smoke.sh "$PWD/build-asan"
+      - name: build (release)
+        working-directory: pc64/uoffice/desktop
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build -j
+          mkdir -p dist/UnoOffice && cp build/unoword build/unocalc build/unoshow dist/UnoOffice/
+          cp -r build/fonts dist/UnoOffice/ && cp README.md dist/UnoOffice/
+          tar -C dist -czf UnoOffice-linux-x86_64.tar.gz UnoOffice
+      - uses: actions/upload-artifact@v4
+        with:
+          name: UnoOffice-linux-x86_64
+          path: pc64/uoffice/desktop/UnoOffice-linux-x86_64.tar.gz
+
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          install: >-
+            mingw-w64-x86_64-gcc mingw-w64-x86_64-cmake mingw-w64-x86_64-ninja
+            mingw-w64-x86_64-SDL2 mingw-w64-x86_64-python
+      - name: build (static)
+        working-directory: pc64/uoffice/desktop
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+                -DUODESK_STATIC_SDL=ON -DCMAKE_EXE_LINKER_FLAGS="-static -static-libgcc"
+          cmake --build build
+          objdump -p build/UnoWord.exe | grep "DLL Name"
+      - name: smoke
+        working-directory: pc64/uoffice/desktop
+        run: tests/smoke.sh "$PWD/build" .exe
+      - name: package
+        working-directory: pc64/uoffice/desktop
+        run: |
+          mkdir -p dist/UnoOffice
+          cp build/*.exe dist/UnoOffice/ && cp -r build/fonts dist/UnoOffice/ && cp README.md dist/UnoOffice/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: UnoOffice-windows-x64
+          path: pc64/uoffice/desktop/dist
+
+  macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - run: brew install sdl2
+      - name: build (SDL static, so the .app is self-contained)
+        working-directory: pc64/uoffice/desktop
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DUODESK_STATIC_SDL=ON
+          cmake --build build -j
+          otool -L build/UnoWord.app/Contents/MacOS/UnoWord
+      - name: smoke
+        working-directory: pc64/uoffice/desktop
+        run: tests/smoke.sh "$PWD/build"
+      - name: package
+        working-directory: pc64/uoffice/desktop
+        run: |
+          mkdir -p dist
+          cp -R build/UnoWord.app build/UnoCalc.app build/UnoShow.app dist/
+          cp README.md dist/
+          ditto -c -k --keepParent dist UnoOffice-macos-arm64.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: UnoOffice-macos-arm64
+          path: pc64/uoffice/desktop/UnoOffice-macos-arm64.zip

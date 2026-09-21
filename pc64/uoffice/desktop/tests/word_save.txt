@@ -1,0 +1,14 @@
+# UnoWord: type two lines, save as Document1, show the File menu
+text Hello from the desktop port.
+key Return
+text Second line.
+frames 2
+shot word_typed.ppm
+key s ctrl
+frames 5
+shot word_saved.ppm
+key Escape
+click 20 12
+frames 2
+shot word_menu.ppm
+key Escape
