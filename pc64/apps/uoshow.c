@@ -292,29 +292,36 @@ static int font_slot(void)
 
 /* The deck's text is CP-1252 (uoapp.h) - its bullet is 0x95 - and the font
  * engine draws UTF-8, so every string is converted on its way in. */
+/* The renderer asks for text in SCREEN pixels (the slide is scaled to the
+ * view); the font engine multiplies whatever it is given by the UI scale.
+ * So divide first, or at 200% every word on a slide is twice too big. */
+static int ui_scale(void) { int s = uno_font_ui_scale(); return s > 0 ? s : 100; }
+static int unscale(int px) { int p = px * 100 / ui_scale(); return p > 0 ? p : 1; }
+
 static int mx_w(const char *s, int n, const uos_chp *c, int px, void *ctx)
 {
     char b[768];
     (void)ctx;
     uoa_to_utf8(s, n < 255 ? n : 255, b, (int)sizeof b);
-    return uno_font_text_w_styled(font_slot(), px, style_of(c), b);
+    return uno_font_text_w_styled(font_slot(), unscale(px), style_of(c), b);
 }
 static int mx_h(const uos_chp *c, int px, void *ctx)
-{ (void)c; (void)ctx; return uno_font_height_px(font_slot(), px) + 1; }
+{ (void)c; (void)ctx; return uno_font_height_px(font_slot(), unscale(px)) + 1; }
 static void mx_draw(int x, int y, const char *s, int n, const uos_chp *c,
                     int px, fb_px col, void *ctx)
 {
     char b[768];
     (void)ctx;
     uoa_to_utf8(s, n < 255 ? n : 255, b, (int)sizeof b);
-    uno_font_draw_styled(font_slot(), px, style_of(c),
-                         x, y + uno_font_baseline_px(font_slot(), px),
+    uno_font_draw_styled(font_slot(), unscale(px), style_of(c),
+                         x, y + uno_font_baseline_px(font_slot(), unscale(px)),
                          b, col, -1);
 }
 static uos_metrics MET;
 
 /* ---- geometry of the editor ---------------------------------------------------- */
-static int sorter_cols(int w) { int c = w / 150; return c < 1 ? 1 : (c > 6 ? 6 : c); }
+static int sorter_cols(int w)
+{ int c = w / (150 * ui_scale() / 100); return c < 1 ? 1 : (c > 6 ? 6 : c); }
 
 static void sync_status(void)
 {
@@ -406,7 +413,7 @@ static void draw_notes(int x, int y, int w, int h)
 /* selection handles, the eight little squares PowerPoint puts round a shape */
 static void draw_handles(const uos_shape *sh)
 {
-    int i, x0, y0, x1, y1, mx, my;
+    int i, x0, y0, x1, y1, mx, my, hs = 3 * ui_scale() / 100;
     uos_to_screen(&g_map, sh->x, sh->y, &x0, &y0);
     uos_to_screen(&g_map, sh->x + sh->w, sh->y + sh->h, &x1, &y1);
     mx = (x0 + x1) / 2; my = (y0 + y1) / 2;
@@ -415,8 +422,8 @@ static void draw_handles(const uos_shape *sh)
         static const signed char ky[8] = { 0, 0, 0, 1, 1, 2, 2, 2 };
         int hx = kx[i] == 0 ? x0 : (kx[i] == 1 ? mx : x1);
         int hy = ky[i] == 0 ? y0 : (ky[i] == 1 ? my : y1);
-        fb_fill_rect(hx - 3, hy - 3, 6, 6, FB_RGB(0xFF, 0xFF, 0xFF));
-        fb_frame_rect(hx - 3, hy - 3, 6, 6, FB_RGB(0, 0, 0));
+        fb_fill_rect(hx - hs, hy - hs, hs * 2, hs * 2, FB_RGB(0xFF, 0xFF, 0xFF));
+        fb_frame_rect(hx - hs, hy - hs, hs * 2, hs * 2, FB_RGB(0, 0, 0));
     }
 }
 
@@ -547,6 +554,7 @@ static void app_draw(struct unoui_widget *w, unoui_rect r, void *ctx)
     g_rect = r;
     g_have_rect = 1;
 
+    uoc_set_scale(ui_scale());           /* the chrome follows the UI scale */
     if (g_show) { show_paint(r.x, r.y, r.w, r.h); return; }
 
     sync_status();
@@ -1253,6 +1261,8 @@ static int uw_key(int uni, int scan, int ctrl)
         pc64_shell_dirty();
         return 1;
     }
+    /* the menu bar has the keyboard (F10, Alt+letter): its keys go to it */
+    if (uoc_menu_active(&CH)) return 0;
     if (scan == 0x0F) { do_command(C_SHOW); return 1; }     /* F5 */
     /* Ctrl+letter can arrive as its control code (Ctrl+C = 3), the way
      * UnoWord and UnoCalc already allow for */

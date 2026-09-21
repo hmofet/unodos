@@ -1,0 +1,23 @@
+# UnoWord at a UI scale (smoke.sh passes --scale): the page, the chrome, a
+# menu and a dialog must all have grown together.  Also the keyboard way
+# into the menus: Alt+F opens File, Esc leaves; F10 then Down opens it too.
+text Scaled text, at the size of the chrome.
+shot scale_word.ppm
+key f alt
+frames 2
+shot scale_word_menu.ppm
+key Escape
+key Escape
+key F10
+key Down
+key Escape
+key Escape
+key a ctrl
+key c ctrl
+expect clip Scaled text, at the size of the chrome.
+key o alt
+frames 1
+text f
+frames 2
+shot scale_word_font.ppm
+key Escape

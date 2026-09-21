@@ -177,8 +177,10 @@ static int px_of(const uow_chp *c)
 {
     int px = (c->size ? c->size : 20) / 2;      /* half-points -> points     */
     px = px * g_zoom / 100;
+    /* the font engine multiplies by the UI scale and clamps to its largest
+     * glyph cell, so this is in points and only needs to be sane */
     if (px < 8) px = 8;
-    if (px > 40) px = 40;                       /* uno_font's own clamp      */
+    if (px > 72) px = 72;
     return px;
 }
 static int style_of(const uow_chp *c)
@@ -352,6 +354,14 @@ static int name_is_ooxml(const char *n, const char *ext)
  * gate's numbers were right - the page simply did not fit.)  So the app opens
  * at whatever zoom makes the page fit its viewport, never magnifying past
  * 1:1, which is what Word's Page Width does and what every reader expects. */
+/* THE UI SCALE AND THE PAGE.  Text is scaled by the font engine (a run's px
+ * is in points; uno_font multiplies by uno_font_ui_scale), but the page's
+ * geometry is ours: at 200% the sheet must be twice as many pixels wide as
+ * well, or the text wraps at half the width it should.  So the layout runs
+ * at the zoom TIMES the scale, while g_zoom stays Word's own percentage. */
+static int ui_scale(void) { int s = uno_font_ui_scale(); return s > 0 ? s : 100; }
+static int layout_zoom(void) { return g_zoom * ui_scale() / 100; }
+
 static void fit_page_width(int viewport_w)
 {
     const uow_sect *sc;
@@ -359,7 +369,7 @@ static void fit_page_width(int viewport_w)
     if (!DOC || viewport_w < 64) return;
     sc = uow_section(DOC);
     if (!sc || sc->page_w <= 0) return;
-    want = (int)(((long)(viewport_w - 24) * 15 * 100) / sc->page_w);
+    want = (int)(((long)(viewport_w - 24) * 15 * 100) / sc->page_w) * 100 / ui_scale();
     if (want > 100) want = 100;
     if (want < 25)  want = 25;
     if (want != g_zoom) { g_zoom = want; g_dirty_layout = 1; }
@@ -368,7 +378,7 @@ static void fit_page_width(int viewport_w)
 static void relayout(void)
 {
     if (!LAY || !DOC) return;
-    uow_layout_run(LAY, DOC, &MET, g_zoom);
+    uow_layout_run(LAY, DOC, &MET, layout_zoom());
     g_dirty_layout = 0;
 }
 static void touched(void) { g_dirty_layout = 1; pc64_shell_dirty(); }
@@ -736,7 +746,7 @@ static const uod_item kFontItems[] = {
     { UOD_BUTTON, UOD_ID_OK,     "OK",     40, 148, 60, 20, -1, UOD_DEFAULT, 0, 0, 0, 0, 0 },
     { UOD_BUTTON, UOD_ID_CANCEL, "Cancel", 110, 148, 60, 20, -1, 0, 0, 0, 0, 0, 0 }
 };
-static const uod_dlg kFontDlg = { "Font", kFontItems, 9, 0, 0, 210, 200, 1 };
+static const uod_dlg kFontDlg = { "Font", kFontItems, 9, 0, 0, 210, 200, 1, 0 };
 
 /* ---- commands -------------------------------------------------------------- */
 /* The formatting typing would get right now: the pending choice if there is
@@ -1177,6 +1187,11 @@ static void app_draw(struct unoui_widget *w, unoui_rect r, void *ctx)
 {
     int cx, cy, cw, chh, top;
     (void)w; (void)ctx;
+    {   /* the chrome follows the UI scale; a change relays the page out */
+        static int seen;
+        uoc_set_scale(ui_scale());
+        if (seen != ui_scale()) { seen = ui_scale(); g_dirty_layout = 1; }
+    }
     fit_page_width(r.w);
     g_rect = r;
     g_have_rect = 1;
@@ -1354,6 +1369,9 @@ static int uw_key(int uni, int scan, int ctrl)
         pc64_shell_dirty();
         return 1;
     }
+    /* the menu bar has the keyboard (F10, Alt+letter): the arrows, Enter
+     * and Esc are its, and reach it through the canvas */
+    if (uoc_menu_active(&CH)) return 0;
     /* The caret keys.  They arrive as scan codes with uni 0, and the first
      * cut of this function never looked at scan at all - the arrows, Home,
      * End and the page keys fell through to unoui, which had nothing to move,

@@ -11,12 +11,13 @@ rm -rf "$OUT"; mkdir -p "$OUT/docs"
 name() {   # the binary's file name on this platform
     case "$EXT" in .exe) echo "$1";; *) if [ -x "$BIN/$1" ]; then echo "$1"; else echo "$1" | tr 'A-Z' 'a-z'; fi;; esac
 }
-run() {       # run APP SCRIPT [DOCUMENT]
-    exe="$BIN/$(name "$1")$EXT"
-    [ -d "$BIN/$1.app" ] && exe="$BIN/$1.app/Contents/MacOS/$1"
-    ( cd "$OUT" && "$exe" --size 1000x680 --dir "$OUT/docs" --script "$HERE/$2" $3 ) ||
-        { echo "FAIL: $1 $2 (exit $?)"; exit 1; }
-    echo "ok: $1 $2"
+run() {       # run APP SCRIPT [ARGS...] - a document to open, --scale ...
+    app=$1; script=$2; shift 2
+    exe="$BIN/$(name "$app")$EXT"
+    [ -d "$BIN/$app.app" ] && exe="$BIN/$app.app/Contents/MacOS/$app"
+    ( cd "$OUT" && "$exe" --size 1000x680 --dir "$OUT/docs" --script "$HERE/$script" "$@" ) ||
+        { echo "FAIL: $app $script (exit $?)"; exit 1; }
+    echo "ok: $app $script $*"
 }
 magic() { od -An -tx1 -N4 "$1" | tr -d ' \n'; }
 run UnoWord word_save.txt
@@ -61,6 +62,10 @@ run UnoCalc calc_guard.txt
 n0=$(ls "$OUT/docs" | wc -l)
 run UnoShow show_guard.txt
 [ "$(ls "$OUT/docs" | wc -l)" = "$n0" ] || { echo "FAIL: No wrote a file anyway"; exit 1; }
+# HiDPI: the UI at 200% and 150%, menus and a dialog open
+run UnoWord scale_word.txt --scale 200
+run UnoCalc scale_calc.txt --scale 150
+run UnoShow scale_show.txt --scale 200
 n=$(ls "$OUT"/*.ppm | wc -l)
 [ "$n" -ge 9 ] || { echo "FAIL: only $n frames written"; exit 1; }
 echo "smoke: PASS ($n frames in $OUT)"

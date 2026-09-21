@@ -30,7 +30,9 @@ enum {                      /* plat_event.type                               */
     PE_MOUSE_MOVE,          /* .x .y                                         */
     PE_MOUSE_DOWN,          /* .x .y .button (0 left, 1 right, 2 middle)     */
     PE_MOUSE_UP,
-    PE_WHEEL                /* .wheel: notches, + = towards the user (down)  */
+    PE_WHEEL,               /* .wheel: notches, + = towards the user (down)  */
+    PE_SCALE                /* the window reached a display of another scale:
+                               plat_scale() has changed (a PE_RESIZE follows) */
 };
 
 enum {                      /* plat_event.key                                */
@@ -54,9 +56,19 @@ typedef struct {
     char text[16];
 } plat_event;
 
-/* Create the window (`hidden`: never shown - the headless checks).  0 on
+/* PIXELS, NOT POINTS.  Every coordinate and size in a plat_event, and the
+ * frame plat_present shows, is in the display's own pixels, so on a 150% or
+ * Retina display the shell renders at full resolution and the text is drawn
+ * sharp instead of being stretched.  plat_scale() says what the display's
+ * scale is (100 = 96 dpi, a non-Retina Mac), and the shell sizes its UI to
+ * match.  A hidden window (the headless checks) is always 100, so a script's
+ * coordinates mean the same on every machine.
+ *
+ * Create the window, w x h in POINTS (the backend scales them).  0 on
  * failure, after printing why. */
 int  plat_init(const char *title, int w, int h, int hidden);
+int  plat_scale(void);                      /* percent                       */
+void plat_size(int *w, int *h);             /* the client area, in pixels    */
 void plat_shutdown(void);
 
 /* Next event, waiting up to `ms` for one; 0 = none arrived. */

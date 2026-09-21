@@ -64,6 +64,13 @@ typedef struct {
 
 const uoc_look *uoc_look_97(void);
 
+/* The UI scale, percent (100 = the 97 metrics).  The look's icon cell and
+ * padding grow with it and the icon art is resampled; dialogs scale their
+ * tables by it (uodlg).  Text scales in the font engine, so pass it the same
+ * number: uoc_set_scale(uno_font_ui_scale()). */
+void uoc_set_scale(int pct);
+int  uoc_scale(void);
+
 /* ---- menus -----------------------------------------------------------------
  * Menus are static data: an app declares its whole menu tree as const tables
  * and hands them over.  '&' marks the mnemonic (always underlined - Windows
@@ -238,6 +245,10 @@ void uoc_render_bars(const uoc_ui *u);
 void uoc_render_popups(const uoc_ui *u);
 
 int  uoc_menu_open(const uoc_ui *u);
+/* a menu is open OR the bar has the keyboard (F10 / Alt pressed): an app's
+ * key hook must then pass keys on, so the arrows walk the menus rather than
+ * moving its caret */
+int  uoc_menu_active(const uoc_ui *u);
 void uoc_dismiss(uoc_ui *u);
 
 /* ---- the icon atlas (installed by uoicons.h) ------------------------------

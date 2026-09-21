@@ -359,6 +359,7 @@ static void draw_tabs(void)
 static void app_draw(struct unoui_widget *w, unoui_rect r, void *ctx)
 {
     (void)w; (void)ctx;
+    uoc_set_scale(uno_font_ui_scale());  /* the chrome follows the UI scale */
     g_rect = r;
     g_have_rect = 1;
     sync_status();
@@ -1167,6 +1168,9 @@ static int uw_key(int uni, int scan, int ctrl)
         pc64_shell_dirty();
         return 1;
     }
+    /* the menu bar has the keyboard (F10, Alt+letter): the arrows, Enter
+     * and Esc are its, and reach it through the canvas */
+    if (uoc_menu_active(&CH)) return 0;
     /* Navigation, from the firmware SCAN code - these arrive with uni == 0, so
      * everything below (which reads uni) never saw them and the selection could
      * only ever move down, one Enter at a time. Ctrl+Home/End jump to the far

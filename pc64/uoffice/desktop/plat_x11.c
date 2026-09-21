@@ -56,6 +56,7 @@ static void     clip_serve(XSelectionRequestEvent *r);
 static int      g_full;
 static int      g_w, g_h;
 static int      g_rs, g_gs, g_bs;     /* the visual's channel shifts          */
+static int      g_scale = 100;        /* the desktop's scale, percent         */
 static char     g_base[4096];
 
 static plat_event g_q[256];
@@ -103,6 +104,31 @@ static int keysym_to_key(KeySym k)
     return PK_NONE;
 }
 
+/* X11 has no per-window scale.  The desktop publishes its choice as
+ * GDK_SCALE (an integer, GNOME's) or as Xft.dpi in the resource database
+ * (what GNOME's fractional scaling, KDE and xrandr --dpi set); 96 dpi is
+ * 100%.  Rounded to a quarter, which is the steps the UI is drawn at. */
+static int desktop_scale(void)
+{
+    const char *g = getenv("GDK_SCALE"), *rm;
+    int pct = 100;
+    if (g && atoi(g) >= 1) pct = atoi(g) * 100;
+    else if ((rm = XResourceManagerString(g_dpy)) != 0) {
+        const char *p = strstr(rm, "Xft.dpi:");
+        if (p) {
+            double dpi = atof(p + 8);
+            if (dpi > 0) pct = (int)(dpi * 100.0 / 96.0 + 0.5);
+        }
+    }
+    pct = (pct + 12) / 25 * 25;
+    if (pct < 100) pct = 100;
+    if (pct > 300) pct = 300;
+    return pct;
+}
+
+int  plat_scale(void) { return g_scale; }
+void plat_size(int *w, int *h) { *w = g_w; *h = g_h; }
+
 int plat_init(const char *title, int w, int h, int hidden)
 {
     XSetWindowAttributes wa;
@@ -121,6 +147,9 @@ int plat_init(const char *title, int w, int h, int hidden)
     if (g_vis->class != TrueColor || g_depth < 24) {
         fprintf(stderr, "need a 24-bit TrueColor X visual\n"); return 0;
     }
+    /* w x h are points: the window is made in pixels */
+    g_scale = hidden ? 100 : desktop_scale();
+    w = w * g_scale / 100; h = h * g_scale / 100;
     g_rs = shift_of(g_vis->red_mask);
     g_gs = shift_of(g_vis->green_mask);
     g_bs = shift_of(g_vis->blue_mask);

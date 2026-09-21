@@ -27,6 +27,10 @@
 
 #include "uodesk_plat.h"
 
+#ifndef WM_DPICHANGED
+#define WM_DPICHANGED 0x02E0         /* Windows 8.1+; older headers lack it */
+#endif
+
 static HWND       g_hwnd;
 static plat_event g_q[256];
 static int        g_qh, g_qt;
@@ -39,6 +43,8 @@ static WINDOWPLACEMENT g_place = { sizeof(WINDOWPLACEMENT) };
 static DWORD      g_style;
 static WCHAR      g_hi;               /* a UTF-16 high surrogate awaiting its pair */
 static char       g_base[MAX_PATH * 3];
+static int        g_dpi = 96;         /* the window's monitor, per-monitor aware */
+static int        g_hidden;
 
 static void push(const plat_event *e)
 {
@@ -103,6 +109,16 @@ static LRESULT CALLBACK wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
     case WM_CLOSE:
         e.type = PE_QUIT; push(&e);
         return 0;                              /* the shell decides; not DefWindowProc */
+    case WM_DPICHANGED: {
+        /* dragged onto a monitor of another scale: take the size Windows
+         * suggests for it (the same physical size there), then re-render */
+        const RECT *r = (const RECT *)lp;
+        g_dpi = LOWORD(wp);
+        SetWindowPos(h, 0, r->left, r->top, r->right - r->left, r->bottom - r->top,
+                     SWP_NOZORDER | SWP_NOACTIVATE);
+        e.type = PE_SCALE; push(&e);
+        return 0;
+    }
     case WM_SIZE:
         if (wp != SIZE_MINIMIZED) {
             e.type = PE_RESIZE; e.w = LOWORD(lp); e.h = HIWORD(lp); push(&e);
@@ -140,7 +156,13 @@ static LRESULT CALLBACK wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         WCHAR wc = (WCHAR)wp;
         WCHAR pair[2];
         int n = 1, len;
-        if (msg == WM_SYSCHAR) break;          /* Alt+letter: menu territory */
+        /* Alt+letter: OUR menu bar's (the shell routes it there), so it is
+         * passed on rather than left to beep through DefWindowProc */
+        if (msg == WM_SYSCHAR) {
+            if (wc < 32 || wc >= 127) break;
+            e.type = PE_TEXT; e.text[0] = (char)wc; e.mods = mods_now(); push(&e);
+            return 0;
+        }
         if (wc >= 0xD800 && wc <= 0xDBFF) { g_hi = wc; return 0; }
         if (wc >= 0xDC00 && wc <= 0xDFFF) {
             if (!g_hi) return 0;
@@ -199,12 +221,62 @@ static WCHAR *wide(const char *s)
     return w;
 }
 
+/* HIGH DPI.  Unaware, Windows renders us at 96 dpi and stretches the bitmap
+ * to the monitor's scale - legible, and blurry at 125-175%.  Per-monitor
+ * aware (v2), our client area is in the monitor's real pixels and we draw
+ * them ourselves: sharp text, and the common dialogs scale properly too.
+ * Resolved at run time: SetProcessDpiAwarenessContext is Windows 10 1703+,
+ * GetDpiForWindow 1607+, and the older fallback is system-DPI awareness. */
+typedef BOOL (WINAPI *set_ctx_fn)(HANDLE);
+typedef UINT (WINAPI *dpi_win_fn)(HWND);
+typedef BOOL (WINAPI *aware_fn)(void);
+
+static void dpi_aware(void)
+{
+    HMODULE u = GetModuleHandleW(L"user32.dll");
+    set_ctx_fn set_ctx = u ? (set_ctx_fn)(void *)GetProcAddress(u, "SetProcessDpiAwarenessContext") : 0;
+    if (set_ctx && set_ctx((HANDLE)(LONG_PTR)-4)) return;   /* PER_MONITOR_AWARE_V2 */
+    {
+        aware_fn old = u ? (aware_fn)(void *)GetProcAddress(u, "SetProcessDPIAware") : 0;
+        if (old) old();
+    }
+}
+
+static int dpi_of(HWND hw)
+{
+    HMODULE u = GetModuleHandleW(L"user32.dll");
+    dpi_win_fn f = u ? (dpi_win_fn)(void *)GetProcAddress(u, "GetDpiForWindow") : 0;
+    int d = 0;
+    if (f && hw) d = (int)f(hw);
+    if (d <= 0) {                                       /* the system DPI */
+        HDC dc = GetDC(0);
+        d = dc ? GetDeviceCaps(dc, LOGPIXELSX) : 96;
+        if (dc) ReleaseDC(0, dc);
+    }
+    return d > 0 ? d : 96;
+}
+
+int  plat_scale(void) { return g_hidden ? 100 : g_dpi * 100 / 96; }
+void plat_size(int *w, int *h)
+{
+    RECT r;
+    GetClientRect(g_hwnd, &r);
+    *w = r.right - r.left; *h = r.bottom - r.top;
+}
+
 int plat_init(const char *title, int w, int h, int hidden)
 {
     WNDCLASSW wc;
     HINSTANCE inst = GetModuleHandleW(0);
-    RECT r = { 0, 0, w, h };
+    RECT r;
     WCHAR *wt;
+
+    g_hidden = hidden;
+    dpi_aware();
+    g_dpi = hidden ? 96 : dpi_of(0);
+    /* w x h are points; the window is created in pixels */
+    r.left = 0; r.top = 0;
+    r.right = w * plat_scale() / 100; r.bottom = h * plat_scale() / 100;
 
     memset(&wc, 0, sizeof wc);
     wc.style = CS_HREDRAW | CS_VREDRAW;
@@ -223,6 +295,17 @@ int plat_init(const char *title, int w, int h, int hidden)
                              r.right - r.left, r.bottom - r.top, 0, 0, inst, 0);
     free(wt);
     if (!g_hwnd) { fprintf(stderr, "CreateWindow failed\n"); return 0; }
+    if (!hidden) {
+        /* it may have opened on a monitor other than the primary one */
+        int d = dpi_of(g_hwnd);
+        if (d != g_dpi) {
+            RECT c = { 0, 0, w * d / 96, h * d / 96 };
+            g_dpi = d;
+            AdjustWindowRect(&c, g_style, FALSE);
+            SetWindowPos(g_hwnd, 0, 0, 0, c.right - c.left, c.bottom - c.top,
+                         SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+        }
+    }
     if (!hidden) { ShowWindow(g_hwnd, SW_SHOWNORMAL); UpdateWindow(g_hwnd); }
     return 1;
 }
