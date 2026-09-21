@@ -1,0 +1,34 @@
+// generated from packaging/app.rc.in: the icon Explorer shows and the
+// version block its Properties > Details tab reads
+#include <winver.h>
+
+1 ICON "@UO_ICON@"
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION     @UO_VERCOMMA@
+PRODUCTVERSION  @UO_VERCOMMA@
+FILEFLAGSMASK   VS_FFI_FILEFLAGSMASK
+FILEFLAGS       0
+FILEOS          VOS_NT_WINDOWS32
+FILETYPE        VFT_APP
+FILESUBTYPE     VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "CompanyName",      "UnoDOS project"
+            VALUE "FileDescription",  "@UO_DISPLAY@ - @UO_WHAT@"
+            VALUE "FileVersion",      "@PROJECT_VERSION@"
+            VALUE "InternalName",     "@UO_DISPLAY@"
+            VALUE "LegalCopyright",   "UnoDOS project, MPL-2.0"
+            VALUE "OriginalFilename", "@UO_DISPLAY@.exe"
+            VALUE "ProductName",      "UnoOffice"
+            VALUE "ProductVersion",   "@PROJECT_VERSION@"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END

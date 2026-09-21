@@ -1,0 +1,15 @@
+# Push a tag v<version> (matching project(VERSION) in
+# pc64/uoffice/desktop/CMakeLists.txt) to build, install-test and publish
+# every UnoOffice installer as a GitHub release.
+name: uoffice-release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    uses: ./.github/workflows/uoffice-desktop.yml

@@ -16,7 +16,8 @@
  *
  * One more name is served by every volume: the bundled fonts.  pc64_font.c
  * looks its faces up on the volumes (the ESP, on pc64); here they live in a
- * fonts/ folder beside the executable (Contents/Resources on a Mac), and a
+ * fonts/ folder beside the executable (Contents/Resources on a Mac,
+ * share/unooffice/fonts in the Linux packages - see uodesk_fs_init), and a
  * user's own SANS.TTF in Documents should not replace the UI font.
  * ======================================================================== */
 #include <stdio.h>
@@ -126,7 +127,16 @@ static void add_known(const char *home, const char *sub, const char *label)
 void uodesk_fs_init(const char *base)
 {
     int explicit_dirs = g_nvol > 0;
-    if (base) join(g_fontdir, PATHCAP, base, "fonts");
+    /* fonts/ beside the executable (Windows, a Mac bundle's Resources, the
+     * build tree, the portable archives), else the FHS layout the Linux
+     * packages install: <prefix>/bin/unoword + <prefix>/share/unooffice/fonts */
+    if (base) {
+        char p[PATHCAP];
+        join(g_fontdir, PATHCAP, base, "fonts");
+        if (!is_dir_path(g_fontdir) &&
+            join(p, PATHCAP, base, "../share/unooffice/fonts") && is_dir_path(p))
+            s_cpy(g_fontdir, p, PATHCAP);
+    }
     if (explicit_dirs) return;
 #ifdef _WIN32
     {

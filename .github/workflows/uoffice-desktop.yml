@@ -1,6 +1,16 @@
 # UnoWord / UnoCalc / UnoShow as native desktop apps (pc64/uoffice/desktop).
-# Builds on Windows, macOS and Linux, replays the smoke test on each, and
-# uploads the packaged apps as artifacts.
+#
+# Every platform: build, replay the smoke test (sanitized where the toolchain
+# has it), build the installers, then INSTALL each installer on a clean-ish
+# system and launch the installed app - a package that builds but does not
+# install is the failure this exists to catch.
+#
+#   Windows  NSIS installer + portable ZIP
+#   macOS    DMG (universal: arm64 + x86_64)
+#   Linux    .deb (installed on Ubuntu) + .rpm (installed on Fedora) + .tar.gz
+#
+# A tag v* runs this through uoffice-release.yml, which also publishes a
+# GitHub release (the release job below only runs for a tag ref).
 name: uoffice-desktop
 
 on:
@@ -11,6 +21,7 @@ on:
       - 'pc64/fb.c'
       - 'pc64/fb.h'
       - 'pc64/pc64_font.*'
+      - 'pc64/pc64_icons.*'
       - 'pc64/fonts/**'
       - 'unoui/**'
       - 'unodoc/**'
@@ -25,14 +36,23 @@ on:
       - 'unomedia/**'
       - '.github/workflows/uoffice-desktop.yml'
   workflow_dispatch:
+  workflow_call:          # uoffice-release.yml, on a v* tag
 
 jobs:
+  # ---------------------------------------------------------------- Linux ----
   linux:
-    runs-on: ubuntu-24.04
+    # the oldest supported LTS, so the packages' glibc floor is 2.35
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
-      - run: sudo apt-get update && sudo apt-get install -y libsdl2-dev xvfb
-      - name: build (ASan + UBSan)
+      - name: toolchain + SDL's display back-ends + rpmbuild
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsdl2-dev xvfb rpm \
+            libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev \
+            libxss-dev libxkbcommon-dev libwayland-dev wayland-protocols \
+            libegl-dev libgl-dev libdecor-0-dev libdbus-1-dev desktop-file-utils
+      - name: build (ASan + UBSan, system SDL)
         working-directory: pc64/uoffice/desktop
         run: |
           cmake -S . -B build-asan -DCMAKE_BUILD_TYPE=Debug -DUODESK_SANITIZE=ON
@@ -42,19 +62,57 @@ jobs:
         env:
           ASAN_OPTIONS: detect_leaks=0
         run: xvfb-run -a tests/smoke.sh "$PWD/build-asan"
-      - name: build (release)
+      - name: build (release, SDL linked in)
         working-directory: pc64/uoffice/desktop
         run: |
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DUODESK_FETCH_SDL=ON
           cmake --build build -j
-          mkdir -p dist/UnoOffice && cp build/unoword build/unocalc build/unoshow dist/UnoOffice/
-          cp -r build/fonts dist/UnoOffice/ && cp README.md dist/UnoOffice/
-          tar -C dist -czf UnoOffice-linux-x86_64.tar.gz UnoOffice
+      - name: smoke (release)
+        working-directory: pc64/uoffice/desktop
+        run: xvfb-run -a tests/smoke.sh "$PWD/build"
+      - name: package
+        working-directory: pc64/uoffice/desktop/build
+        run: |
+          cpack
+          dpkg-deb -I unooffice_*.deb
+          rpm -qip unooffice-*.rpm
+      - name: install the .deb and launch it
+        working-directory: pc64/uoffice/desktop/build
+        run: |
+          sudo apt-get install -y ./unooffice_*.deb
+          for a in unoword unocalc unoshow; do
+            xvfb-run -a /usr/bin/$a --shot /tmp/$a.ppm
+            test -s /tmp/$a.ppm
+          done
+          desktop-file-validate /usr/share/applications/org.unodos.*.desktop
+          sudo apt-get remove -y unooffice
       - uses: actions/upload-artifact@v4
         with:
-          name: UnoOffice-linux-x86_64
-          path: pc64/uoffice/desktop/UnoOffice-linux-x86_64.tar.gz
+          name: UnoOffice-linux
+          path: |
+            pc64/uoffice/desktop/build/unooffice_*.deb
+            pc64/uoffice/desktop/build/unooffice-*.rpm
+            pc64/uoffice/desktop/build/UnoOffice-*.tar.gz
 
+  rpm-install:
+    needs: linux
+    runs-on: ubuntu-latest
+    container: fedora:latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: UnoOffice-linux
+      - name: install the .rpm on Fedora and launch it
+        run: |
+          dnf install -y ./unooffice-*.rpm xorg-x11-server-Xvfb
+          Xvfb :9 & sleep 2
+          for a in unoword unocalc unoshow; do
+            DISPLAY=:9 /usr/bin/$a --shot /tmp/$a.ppm
+            test -s /tmp/$a.ppm
+          done
+          rpm -e unooffice
+
+  # -------------------------------------------------------------- Windows ----
   windows:
     runs-on: windows-latest
     defaults:
@@ -67,33 +125,63 @@ jobs:
           msystem: MINGW64
           install: >-
             mingw-w64-x86_64-gcc mingw-w64-x86_64-cmake mingw-w64-x86_64-ninja
-            mingw-w64-x86_64-SDL2 mingw-w64-x86_64-python
-      - name: build (static)
+            mingw-w64-x86_64-SDL2 mingw-w64-x86_64-python git
+      - name: NSIS
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "${env:ProgramFiles(x86)}\NSIS\makensis.exe")) { choco install nsis -y --no-progress }
+      - name: build (release, SDL linked in, static runtime)
         working-directory: pc64/uoffice/desktop
         run: |
-          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
-                -DUODESK_STATIC_SDL=ON -DCMAKE_EXE_LINKER_FLAGS="-static -static-libgcc"
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DUODESK_FETCH_SDL=ON \
+                -DCMAKE_EXE_LINKER_FLAGS="-static -static-libgcc"
           cmake --build build
           objdump -p build/UnoWord.exe | grep "DLL Name"
+          ! objdump -p build/UnoWord.exe | grep -iE "SDL2|libgcc|libwinpthread"
       - name: smoke
         working-directory: pc64/uoffice/desktop
         run: tests/smoke.sh "$PWD/build" .exe
       - name: package
-        working-directory: pc64/uoffice/desktop
+        working-directory: pc64/uoffice/desktop/build
         run: |
-          mkdir -p dist/UnoOffice
-          cp build/*.exe dist/UnoOffice/ && cp -r build/fonts dist/UnoOffice/ && cp README.md dist/UnoOffice/
+          export PATH="$PATH:/c/Program Files (x86)/NSIS"
+          cpack -G "NSIS;ZIP"
+          ls -la UnoOffice-*
+      - name: install silently, launch, uninstall
+        shell: pwsh
+        working-directory: pc64/uoffice/desktop/build
+        run: |
+          $inst = Get-ChildItem UnoOffice-*-windows-x64.exe | Select-Object -First 1
+          Start-Process $inst.FullName -ArgumentList '/S' -Wait
+          $dir = "$env:ProgramFiles\UnoOffice"
+          foreach ($a in 'UnoWord','UnoCalc','UnoShow') {
+            if (-not (Test-Path "$dir\$a.exe")) { throw "$a.exe not installed" }
+            $p = Start-Process "$dir\$a.exe" -ArgumentList "--shot","$env:TEMP\$a.ppm" -Wait -PassThru
+            if ($p.ExitCode -ne 0 -or -not (Test-Path "$env:TEMP\$a.ppm")) { throw "$a did not run" }
+          }
+          # all-users or per-user, depending on how NSIS ran
+          $lnk = Get-ChildItem "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\UnoOffice",
+                               "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\UnoOffice" `
+                               -Filter *.lnk -ErrorAction SilentlyContinue
+          $lnk | ForEach-Object { $_.Name }
+          if ($lnk.Count -lt 3) { throw "Start menu entries missing" }
+          Start-Process "$dir\Uninstall.exe" -ArgumentList '/S' -Wait
+          Start-Sleep 5
+          if (Test-Path "$dir\UnoWord.exe") { throw "uninstall left files" }
       - uses: actions/upload-artifact@v4
         with:
-          name: UnoOffice-windows-x64
-          path: pc64/uoffice/desktop/dist
+          name: UnoOffice-windows
+          path: |
+            pc64/uoffice/desktop/build/UnoOffice-*-windows-x64.exe
+            pc64/uoffice/desktop/build/UnoOffice-*-windows-x64.zip
 
+  # ---------------------------------------------------------------- macOS ----
   macos:
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
-      # real SDL2 built from source (UODESK_FETCH_SDL): Homebrew's sdl2 is
-      # the sdl2-compat shim over a dynamic SDL3 - see CMakeLists.txt
+      # real SDL2 from source (UODESK_FETCH_SDL): Homebrew's sdl2 is the
+      # sdl2-compat shim over a dynamic SDL3 - see CMakeLists.txt
       - name: build (ASan + UBSan)
         working-directory: pc64/uoffice/desktop
         run: |
@@ -105,24 +193,54 @@ jobs:
           ASAN_OPTIONS: detect_leaks=0
           UBSAN_OPTIONS: print_stacktrace=1
         run: tests/smoke.sh "$PWD/build-asan"
-      - name: build (SDL static, so the .app is self-contained)
+      - name: build (release, universal)
         working-directory: pc64/uoffice/desktop
         run: |
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DUODESK_FETCH_SDL=ON
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DUODESK_FETCH_SDL=ON \
+                -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
           cmake --build build -j
+          lipo -info build/UnoWord.app/Contents/MacOS/UnoWord
           otool -L build/UnoWord.app/Contents/MacOS/UnoWord
           ! otool -L build/UnoWord.app/Contents/MacOS/UnoWord | grep -qE "homebrew|libSDL"
-      - name: smoke
+      - name: smoke (release)
         working-directory: pc64/uoffice/desktop
         run: tests/smoke.sh "$PWD/build"
       - name: package
-        working-directory: pc64/uoffice/desktop
+        working-directory: pc64/uoffice/desktop/build
+        run: cpack -G DragNDrop
+      - name: mount the DMG and launch from it
+        working-directory: pc64/uoffice/desktop/build
         run: |
-          mkdir -p dist
-          cp -R build/UnoWord.app build/UnoCalc.app build/UnoShow.app dist/
-          cp README.md dist/
-          ditto -c -k --keepParent dist UnoOffice-macos-arm64.zip
+          mnt=$(hdiutil attach -nobrowse -readonly UnoOffice-*.dmg | tail -1 | cut -f3-)
+          ls -la "$mnt"
+          test -L "$mnt/Applications"
+          for a in UnoWord UnoCalc UnoShow; do
+            codesign --verify --deep --strict "$mnt/$a.app"
+            "$mnt/$a.app/Contents/MacOS/$a" --shot "/tmp/$a.ppm"
+            test -s "/tmp/$a.ppm"
+          done
+          hdiutil detach "$mnt"
       - uses: actions/upload-artifact@v4
         with:
-          name: UnoOffice-macos-arm64
-          path: pc64/uoffice/desktop/UnoOffice-macos-arm64.zip
+          name: UnoOffice-macos
+          path: pc64/uoffice/desktop/build/UnoOffice-*.dmg
+
+  # -------------------------------------------------------------- release ----
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [linux, rpm-install, windows, macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ls -la dist
+          gh release create "$GITHUB_REF_NAME" dist/* -R "$GITHUB_REPOSITORY" \
+             --title "UnoOffice ${GITHUB_REF_NAME#v}" --generate-notes
