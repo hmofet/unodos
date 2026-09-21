@@ -185,10 +185,13 @@ jobs:
           Write-Host "open command: $cmd"
           $doc = Resolve-Path ..\smoke-out\docs\Document1.doc
           $exe = ($cmd -split '"')[1]
-          New-Item -ItemType Directory -Force C:\tmp | Out-Null
-          Remove-Item C:\tmp\uoffice_assoc_ok -ErrorAction SilentlyContinue
+          # the script writes /tmp/uoffice_assoc_ok, which is \tmp on the
+          # CURRENT drive - D: on a hosted runner, not C:
+          New-Item -ItemType Directory -Force \tmp | Out-Null
+          Remove-Item \tmp\uoffice_assoc_ok -ErrorAction SilentlyContinue
           $p = Start-Process $exe -ArgumentList "--script",(Resolve-Path ..\tests\assoc_word.txt),"`"$doc`"" -Wait -PassThru
-          if ($p.ExitCode -ne 0 -or -not (Test-Path C:\tmp\uoffice_assoc_ok)) {
+          Write-Host "exit code: $($p.ExitCode)"
+          if ($p.ExitCode -ne 0 -or -not (Test-Path \tmp\uoffice_assoc_ok)) {
             throw "the registered open command did not open the document"
           }
           # all-users or per-user, depending on how NSIS ran
