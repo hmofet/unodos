@@ -212,6 +212,10 @@ static void resize(int w, int h)
  *   size 800x600          resize the window
  *   # ...                 a comment
  *
+ * Every pushed event carries the window's ID: sdl2-compat (what Homebrew
+ * now ships as "sdl2": SDL2's API over SDL3) looks the window up while
+ * pushing a text event and faults on ID 0.
+ *
  * The script ends the program when it runs out.  The events are pushed into
  * SDL's own queue rather than called in directly, so what is tested is the
  * path a real keyboard takes, not a shortcut beside it. */
@@ -233,6 +237,7 @@ static void push_key(const char *name, const char *mods)
     e.type = SDL_KEYDOWN; e.key.state = SDL_PRESSED;
     e.key.keysym.sym = k; e.key.keysym.scancode = SDL_GetScancodeFromKey(k);
     e.key.keysym.mod = m;
+    e.key.windowID = SDL_GetWindowID(g_sdlwin);
     SDL_PushEvent(&e);
     e.type = SDL_KEYUP; e.key.state = SDL_RELEASED;
     SDL_PushEvent(&e);
@@ -243,10 +248,12 @@ static void push_click(int x, int y)
     SDL_Event e;
     memset(&e, 0, sizeof e);
     e.type = SDL_MOUSEMOTION; e.motion.x = x; e.motion.y = y;
+    e.motion.windowID = SDL_GetWindowID(g_sdlwin);
     SDL_PushEvent(&e);
     memset(&e, 0, sizeof e);
     e.type = SDL_MOUSEBUTTONDOWN; e.button.button = SDL_BUTTON_LEFT;
     e.button.state = SDL_PRESSED; e.button.clicks = 1; e.button.x = x; e.button.y = y;
+    e.button.windowID = SDL_GetWindowID(g_sdlwin);
     SDL_PushEvent(&e);
     e.type = SDL_MOUSEBUTTONUP; e.button.state = SDL_RELEASED;
     SDL_PushEvent(&e);
@@ -268,6 +275,7 @@ static int script_step(void)
             SDL_Event e;
             memset(&e, 0, sizeof e);
             e.type = SDL_TEXTINPUT; e.text.text[0] = *s;
+            e.text.windowID = SDL_GetWindowID(g_sdlwin);
             SDL_PushEvent(&e);
         }
     } else if (sscanf(line, "key %255s %63s", a, b) == 2) push_key(a, b);
