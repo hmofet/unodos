@@ -34,8 +34,10 @@ cmake --build build
 ```
 
 - **Linux:** `apt install libsdl2-dev`. Produces `unoword`, `unocalc`, `unoshow`.
-- **macOS:** `brew install sdl2`. Add `-DUODESK_STATIC_SDL=ON` to get
-  self-contained `UnoWord.app` / `UnoCalc.app` / `UnoShow.app`.
+- **macOS:** `-DUODESK_FETCH_SDL=ON` builds SDL2 2.30.9 from source and links
+  it statically, giving self-contained `UnoWord.app` / `UnoCalc.app` /
+  `UnoShow.app`. Avoid Homebrew's `sdl2`: it is now the sdl2-compat shim
+  over a dynamic SDL3, which can't be bundled and misbehaves.
 - **Windows:** MSYS2 MINGW64 with `mingw-w64-x86_64-SDL2`, plus
   `-DUODESK_STATIC_SDL=ON -DCMAKE_EXE_LINKER_FLAGS="-static -static-libgcc"`.
   That gives `UnoWord.exe` etc., each importing only system DLLs.

@@ -92,11 +92,12 @@ jobs:
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
-      - run: brew install sdl2
+      # real SDL2 built from source (UODESK_FETCH_SDL): Homebrew's sdl2 is
+      # the sdl2-compat shim over a dynamic SDL3 - see CMakeLists.txt
       - name: build (ASan + UBSan)
         working-directory: pc64/uoffice/desktop
         run: |
-          cmake -S . -B build-asan -DCMAKE_BUILD_TYPE=Debug -DUODESK_SANITIZE=ON
+          cmake -S . -B build-asan -DCMAKE_BUILD_TYPE=Debug -DUODESK_SANITIZE=ON -DUODESK_FETCH_SDL=ON
           cmake --build build-asan -j
       - name: smoke (sanitized)
         working-directory: pc64/uoffice/desktop
@@ -107,9 +108,10 @@ jobs:
       - name: build (SDL static, so the .app is self-contained)
         working-directory: pc64/uoffice/desktop
         run: |
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DUODESK_STATIC_SDL=ON
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DUODESK_FETCH_SDL=ON
           cmake --build build -j
           otool -L build/UnoWord.app/Contents/MacOS/UnoWord
+          ! otool -L build/UnoWord.app/Contents/MacOS/UnoWord | grep -qE "homebrew|libSDL"
       - name: smoke
         working-directory: pc64/uoffice/desktop
         run: tests/smoke.sh "$PWD/build"
