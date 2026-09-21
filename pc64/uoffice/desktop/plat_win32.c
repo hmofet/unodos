@@ -20,11 +20,16 @@
 #include <windows.h>
 #include <windowsx.h>
 #include <commdlg.h>
+#include <shellapi.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "uodesk_plat.h"
+
+#ifndef WM_DPICHANGED
+#define WM_DPICHANGED 0x02E0         /* Windows 8.1+; older headers lack it */
+#endif
 
 static HWND       g_hwnd;
 static plat_event g_q[256];
@@ -38,6 +43,8 @@ static WINDOWPLACEMENT g_place = { sizeof(WINDOWPLACEMENT) };
 static DWORD      g_style;
 static WCHAR      g_hi;               /* a UTF-16 high surrogate awaiting its pair */
 static char       g_base[MAX_PATH * 3];
+static int        g_dpi = 96;         /* the window's monitor, per-monitor aware */
+static int        g_hidden;
 
 static void push(const plat_event *e)
 {
@@ -102,6 +109,16 @@ static LRESULT CALLBACK wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
     case WM_CLOSE:
         e.type = PE_QUIT; push(&e);
         return 0;                              /* the shell decides; not DefWindowProc */
+    case WM_DPICHANGED: {
+        /* dragged onto a monitor of another scale: take the size Windows
+         * suggests for it (the same physical size there), then re-render */
+        const RECT *r = (const RECT *)lp;
+        g_dpi = LOWORD(wp);
+        SetWindowPos(h, 0, r->left, r->top, r->right - r->left, r->bottom - r->top,
+                     SWP_NOZORDER | SWP_NOACTIVATE);
+        e.type = PE_SCALE; push(&e);
+        return 0;
+    }
     case WM_SIZE:
         if (wp != SIZE_MINIMIZED) {
             e.type = PE_RESIZE; e.w = LOWORD(lp); e.h = HIWORD(lp); push(&e);
@@ -139,7 +156,13 @@ static LRESULT CALLBACK wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         WCHAR wc = (WCHAR)wp;
         WCHAR pair[2];
         int n = 1, len;
-        if (msg == WM_SYSCHAR) break;          /* Alt+letter: menu territory */
+        /* Alt+letter: OUR menu bar's (the shell routes it there), so it is
+         * passed on rather than left to beep through DefWindowProc */
+        if (msg == WM_SYSCHAR) {
+            if (wc < 32 || wc >= 127) break;
+            e.type = PE_TEXT; e.text[0] = (char)wc; e.mods = mods_now(); push(&e);
+            return 0;
+        }
         if (wc >= 0xD800 && wc <= 0xDBFF) { g_hi = wc; return 0; }
         if (wc >= 0xDC00 && wc <= 0xDFFF) {
             if (!g_hi) return 0;
@@ -198,12 +221,62 @@ static WCHAR *wide(const char *s)
     return w;
 }
 
+/* HIGH DPI.  Unaware, Windows renders us at 96 dpi and stretches the bitmap
+ * to the monitor's scale - legible, and blurry at 125-175%.  Per-monitor
+ * aware (v2), our client area is in the monitor's real pixels and we draw
+ * them ourselves: sharp text, and the common dialogs scale properly too.
+ * Resolved at run time: SetProcessDpiAwarenessContext is Windows 10 1703+,
+ * GetDpiForWindow 1607+, and the older fallback is system-DPI awareness. */
+typedef BOOL (WINAPI *set_ctx_fn)(HANDLE);
+typedef UINT (WINAPI *dpi_win_fn)(HWND);
+typedef BOOL (WINAPI *aware_fn)(void);
+
+static void dpi_aware(void)
+{
+    HMODULE u = GetModuleHandleW(L"user32.dll");
+    set_ctx_fn set_ctx = u ? (set_ctx_fn)(void *)GetProcAddress(u, "SetProcessDpiAwarenessContext") : 0;
+    if (set_ctx && set_ctx((HANDLE)(LONG_PTR)-4)) return;   /* PER_MONITOR_AWARE_V2 */
+    {
+        aware_fn old = u ? (aware_fn)(void *)GetProcAddress(u, "SetProcessDPIAware") : 0;
+        if (old) old();
+    }
+}
+
+static int dpi_of(HWND hw)
+{
+    HMODULE u = GetModuleHandleW(L"user32.dll");
+    dpi_win_fn f = u ? (dpi_win_fn)(void *)GetProcAddress(u, "GetDpiForWindow") : 0;
+    int d = 0;
+    if (f && hw) d = (int)f(hw);
+    if (d <= 0) {                                       /* the system DPI */
+        HDC dc = GetDC(0);
+        d = dc ? GetDeviceCaps(dc, LOGPIXELSX) : 96;
+        if (dc) ReleaseDC(0, dc);
+    }
+    return d > 0 ? d : 96;
+}
+
+int  plat_scale(void) { return g_hidden ? 100 : g_dpi * 100 / 96; }
+void plat_size(int *w, int *h)
+{
+    RECT r;
+    GetClientRect(g_hwnd, &r);
+    *w = r.right - r.left; *h = r.bottom - r.top;
+}
+
 int plat_init(const char *title, int w, int h, int hidden)
 {
     WNDCLASSW wc;
     HINSTANCE inst = GetModuleHandleW(0);
-    RECT r = { 0, 0, w, h };
+    RECT r;
     WCHAR *wt;
+
+    g_hidden = hidden;
+    dpi_aware();
+    g_dpi = hidden ? 96 : dpi_of(0);
+    /* w x h are points; the window is created in pixels */
+    r.left = 0; r.top = 0;
+    r.right = w * plat_scale() / 100; r.bottom = h * plat_scale() / 100;
 
     memset(&wc, 0, sizeof wc);
     wc.style = CS_HREDRAW | CS_VREDRAW;
@@ -222,6 +295,17 @@ int plat_init(const char *title, int w, int h, int hidden)
                              r.right - r.left, r.bottom - r.top, 0, 0, inst, 0);
     free(wt);
     if (!g_hwnd) { fprintf(stderr, "CreateWindow failed\n"); return 0; }
+    if (!hidden) {
+        /* it may have opened on a monitor other than the primary one */
+        int d = dpi_of(g_hwnd);
+        if (d != g_dpi) {
+            RECT c = { 0, 0, w * d / 96, h * d / 96 };
+            g_dpi = d;
+            AdjustWindowRect(&c, g_style, FALSE);
+            SetWindowPos(g_hwnd, 0, 0, 0, c.right - c.left, c.bottom - c.top,
+                         SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+        }
+    }
     if (!hidden) { ShowWindow(g_hwnd, SW_SHOWNORMAL); UpdateWindow(g_hwnd); }
     return 1;
 }
@@ -270,6 +354,99 @@ void plat_present(const fb_px *px, int w, int h)
 }
 
 unsigned plat_ticks(void) { return (unsigned)GetTickCount64(); }
+
+/* main()'s argv is in the ANSI code page, where a file called "Resume.doc"
+ * with an accent, or anything in Cyrillic, arrives as question marks.  The
+ * UTF-16 command line is the real one, so argv is rebuilt from it, as UTF-8,
+ * which is what every path in the shell is. */
+void plat_args(int *argc, char ***argv)
+{
+    int n = 0, i;
+    LPWSTR *w = CommandLineToArgvW(GetCommandLineW(), &n);
+    char **out;
+    if (!w || n <= 0) return;
+    out = (char **)calloc((size_t)n + 1, sizeof *out);
+    if (!out) { LocalFree(w); return; }
+    for (i = 0; i < n; i++) {
+        int len = WideCharToMultiByte(CP_UTF8, 0, w[i], -1, 0, 0, 0, 0);
+        out[i] = (char *)malloc(len > 0 ? (size_t)len : 1);
+        if (!out[i]) { LocalFree(w); return; }
+        if (len <= 0) out[i][0] = 0;
+        else WideCharToMultiByte(CP_UTF8, 0, w[i], -1, out[i], len, 0, 0);
+    }
+    LocalFree(w);
+    *argc = n;
+    *argv = out;
+}
+
+void plat_set_modified(int on) { (void)on; }
+
+/* ---- the clipboard: CF_UNICODETEXT, with Windows' CR LF line ends ---------- */
+int plat_clip_set(const char *utf8)
+{
+    int n = MultiByteToWideChar(CP_UTF8, 0, utf8, -1, 0, 0), i, k = 0, nl = 0;
+    WCHAR *w, *d;
+    HGLOBAL h;
+    if (n <= 0) return 0;
+    w = (WCHAR *)malloc((size_t)n * sizeof(WCHAR));
+    if (!w) return 0;
+    MultiByteToWideChar(CP_UTF8, 0, utf8, -1, w, n);
+    for (i = 0; w[i]; i++) if (w[i] == L'\n') nl++;
+    h = GlobalAlloc(GMEM_MOVEABLE, (size_t)(n + nl) * sizeof(WCHAR));
+    if (!h) { free(w); return 0; }
+    d = (WCHAR *)GlobalLock(h);
+    for (i = 0; w[i]; i++) {
+        if (w[i] == L'\n' && (i == 0 || w[i - 1] != L'\r')) d[k++] = L'\r';
+        d[k++] = w[i];
+    }
+    d[k] = 0;
+    GlobalUnlock(h);
+    free(w);
+    if (!OpenClipboard(g_hwnd)) { GlobalFree(h); return 0; }
+    EmptyClipboard();
+    if (!SetClipboardData(CF_UNICODETEXT, h)) { CloseClipboard(); GlobalFree(h); return 0; }
+    CloseClipboard();                       /* the clipboard owns h now */
+    return 1;
+}
+
+long plat_clip_get(char *buf, long cap)
+{
+    HANDLE h;
+    const WCHAR *w;
+    WCHAR *lf;
+    long n = 0;
+    int i, k = 0;
+    if (cap > 0) buf[0] = 0;
+    if (!IsClipboardFormatAvailable(CF_UNICODETEXT) || !OpenClipboard(g_hwnd)) return 0;
+    h = GetClipboardData(CF_UNICODETEXT);
+    w = h ? (const WCHAR *)GlobalLock(h) : 0;
+    if (w) {
+        for (i = 0; w[i]; i++) ;
+        lf = (WCHAR *)malloc(((size_t)i + 1) * sizeof(WCHAR));
+        if (lf) {
+            for (i = 0; w[i]; i++)                   /* CR LF -> LF */
+                if (!(w[i] == L'\r' && w[i + 1] == L'\n')) lf[k++] = w[i];
+            lf[k] = 0;
+            n = WideCharToMultiByte(CP_UTF8, 0, lf, -1, 0, 0, 0, 0) - 1;
+            if (n > 0 && cap > 0) {
+                if (n < cap) WideCharToMultiByte(CP_UTF8, 0, lf, -1, buf, (int)cap, 0, 0);
+                else {                               /* too small: a prefix */
+                    char *all = (char *)malloc((size_t)n + 1);
+                    if (all) {
+                        WideCharToMultiByte(CP_UTF8, 0, lf, -1, all, (int)n + 1, 0, 0);
+                        memcpy(buf, all, (size_t)cap - 1);
+                        buf[cap - 1] = 0;
+                        free(all);
+                    }
+                }
+            }
+            free(lf);
+        }
+        GlobalUnlock(h);
+    }
+    CloseClipboard();
+    return n > 0 ? n : 0;
+}
 
 const char *plat_base_path(void)
 {

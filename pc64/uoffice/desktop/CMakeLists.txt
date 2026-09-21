@@ -9,7 +9,7 @@
 # them sits one small backend per OS (uodesk_plat.h) on that OS's own API:
 # nothing third-party is linked at all.
 cmake_minimum_required(VERSION 3.16)
-project(UnoOffice VERSION 0.2.0 LANGUAGES C
+project(UnoOffice VERSION 0.3.0 LANGUAGES C
         DESCRIPTION "UnoWord, UnoCalc and UnoShow - an Office 97-style suite"
         HOMEPAGE_URL "https://github.com/hmofet/unooffice")
 if(WIN32)
@@ -96,8 +96,10 @@ add_library(uodesk_platform STATIC
     ${UODESK_PLAT_SRC})
 add_dependencies(uodesk_platform uodesk_font)
 
-# the framebuffer ceiling sizes a static array; a desktop can be a 4K monitor
-set(UODESK_DEFS UNO_PC64 UNO_UUI UNO_COLOR=1 FB_MAX_W=3840 FB_MAX_H=2400)
+# the framebuffer ceiling sizes a static array (fb.c).  With HiDPI the frame
+# is in device pixels, so it must hold a 5K or 6K Retina display full screen
+# ...and 200% text needs a bigger glyph cell than pc64's 40 px (pc64_font.c)
+set(UODESK_DEFS UNO_PC64 UNO_UUI UNO_COLOR=1 FB_MAX_W=6144 FB_MAX_H=3456 UNO_FONT_MAXPX=96)
 set(UODESK_INC
     ${CMAKE_CURRENT_SOURCE_DIR}/compat   # ahead of pc64/: see compat/
     ${CMAKE_CURRENT_SOURCE_DIR}
@@ -130,8 +132,14 @@ if(NOT WIN32)
     target_link_libraries(uodesk_platform PUBLIC m)
 endif()
 
-set(CHROME uochrome uoicons uodlg uobars uofile)
+set(CHROME uochrome uoicons uodlg uobars uofile uoapp)
 file(GLOB FONTS ${PC64}/fonts/*.ttf)
+if(NOT APPLE)
+    add_custom_target(uodesk_fonts
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_BINARY_DIR}/fonts
+        COMMAND ${CMAKE_COMMAND} -E copy ${FONTS} ${CMAKE_CURRENT_BINARY_DIR}/fonts
+        COMMENT "copying the fonts beside the apps")
+endif()
 
 # add_uoapp(<target> <display name> <app .c> <what it is> <uoffice files> <unodoc files>)
 # The per-app file lists mirror pc64/build.sh's [3d2]..[3d4] steps.
@@ -146,8 +154,20 @@ function(add_uoapp tgt display app what lane doc)
         list(APPEND src ${ROOT}/unodoc/${b}.c)
     endforeach()
 
+    # the documents this app opens: MIME types (Linux), UTIs (macOS)
+    set(UO_MIME "${UO_MIME_${tgt}}")
+    list(GET UO_DOCS_${tgt} 0 UO_DOC_97)
+    list(GET UO_DOCS_${tgt} 1 UO_UTI_97)
+    list(GET UO_DOCS_${tgt} 2 UO_EXT_97)
+    list(GET UO_DOCS_${tgt} 3 UO_DOC_X)
+    list(GET UO_DOCS_${tgt} 4 UO_UTI_X)
+    list(GET UO_DOCS_${tgt} 5 UO_EXT_X)
+
     if(APPLE)
         set(icns ${PKG}/icons/${lower}.icns)
+        # Info.plist: CMake's fields plus CFBundleDocumentTypes.  @ONLY
+        # leaves the ${MACOSX_BUNDLE_*} for CMake to fill at generate time.
+        configure_file(${PKG}/Info.plist.in ${CMAKE_CURRENT_BINARY_DIR}/${tgt}.Info.plist.in @ONLY)
         set_source_files_properties(${icns} PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
         add_executable(${tgt} MACOSX_BUNDLE ${src} ${icns})
         set_target_properties(${tgt} PROPERTIES
@@ -158,7 +178,8 @@ function(add_uoapp tgt display app what lane doc)
             MACOSX_BUNDLE_INFO_STRING "${display} ${PROJECT_VERSION}"
             MACOSX_BUNDLE_COPYRIGHT "UnoDOS project, MPL-2.0"
             MACOSX_BUNDLE_BUNDLE_VERSION ${PROJECT_VERSION}
-            MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION})
+            MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION}
+            MACOSX_BUNDLE_INFO_PLIST ${CMAKE_CURRENT_BINARY_DIR}/${tgt}.Info.plist.in)
     elseif(WIN32)
         # the icon and the version resource Explorer shows in Properties
         set(UO_ICON ${PKG}/icons/${lower}.ico)
@@ -180,15 +201,17 @@ function(add_uoapp tgt display app what lane doc)
     endif()
 
     # the fonts ride beside the binary in the build tree (inside the bundle
-    # on a Mac), so a build runs without being installed
+    # on a Mac), so a build runs without being installed.  Elsewhere the three
+    # apps share one fonts/ folder, filled ONCE by uodesk_fonts: three
+    # post-build copies into it raced under a parallel build, and one lost.
     if(APPLE)
         set(fontdir $<TARGET_FILE_DIR:${tgt}>/../Resources/fonts)
+        add_custom_command(TARGET ${tgt} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E make_directory ${fontdir}
+            COMMAND ${CMAKE_COMMAND} -E copy ${FONTS} ${fontdir})
     else()
-        set(fontdir $<TARGET_FILE_DIR:${tgt}>/fonts)
+        add_dependencies(${tgt} uodesk_fonts)
     endif()
-    add_custom_command(TARGET ${tgt} POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E make_directory ${fontdir}
-        COMMAND ${CMAKE_COMMAND} -E copy ${FONTS} ${fontdir})
 
     install(TARGETS ${tgt} BUNDLE DESTINATION ${UODESK_BIN} RUNTIME DESTINATION ${UODESK_BIN})
     if(APPLE)
@@ -212,6 +235,16 @@ function(add_uoapp tgt display app what lane doc)
         endforeach()
     endif()
 endfunction()
+
+# What each app opens, for the file associations.  Linux: MIME types for the
+# .desktop entry.  macOS: name;UTI;extension for the 97 binary, then OOXML.
+# (Windows' list is packaging/assoc.nsh.)
+set(UO_MIME_uoword "application/msword;application/vnd.openxmlformats-officedocument.wordprocessingml.document;")
+set(UO_MIME_uocalc "application/vnd.ms-excel;application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;")
+set(UO_MIME_uoshow "application/vnd.ms-powerpoint;application/vnd.openxmlformats-officedocument.presentationml.presentation;")
+set(UO_DOCS_uoword "Word 97 Document;com.microsoft.word.doc;doc;Word Document;org.openxmlformats.wordprocessingml.document;docx")
+set(UO_DOCS_uocalc "Excel 97 Workbook;com.microsoft.excel.xls;xls;Excel Workbook;org.openxmlformats.spreadsheetml.sheet;xlsx")
+set(UO_DOCS_uoshow "PowerPoint 97 Presentation;com.microsoft.powerpoint.ppt;ppt;PowerPoint Presentation;org.openxmlformats.presentationml.presentation;pptx")
 
 add_uoapp(uoword UnoWord uoword "Word processor" "uow_doc;uow_layout"
     "unodoc;ud_cfb;ud_doc;ud_docw;ud_zip;ud_xml;ud_docx;ud_ooxz;ud_docxw")

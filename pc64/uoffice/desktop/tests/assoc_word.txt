@@ -1,0 +1,7 @@
+# Launched BY THE OS to open Document1.doc - the registered "open" command
+# on Windows, an Apple event on macOS (CI runs this after installing).
+# The event can arrive a little after launch, hence the wait.
+sleep 1500
+expect title UnoWord - Document1.doc
+expect dirty 0
+passed /tmp/uoffice_assoc_ok

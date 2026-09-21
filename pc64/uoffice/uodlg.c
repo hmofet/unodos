@@ -84,10 +84,13 @@ static void uod_item_rect(const uod_ui *s, int i, int *x, int *y, int *w, int *h
     const uod_item *it = &s->d->item[i];
     int oy = s->y + D_BORDER + d_title_h(s->look);
     if (s->d->tab && s->d->ntab > 0) oy += d_tab_h(s->look);
-    *x = s->x + D_BORDER + it->x;
-    *y = oy + it->y;
-    *w = it->w;
-    *h = it->h > 0 ? it->h : d_row(s->look);
+    /* An app's table is written at 100%; s->sc scales it to the UI scale
+     * the chrome and the text are drawn at (uoc_scale), so a control grows
+     * with its label instead of the label overflowing it. */
+    *x = s->x + D_BORDER + it->x * s->sc / 100;
+    *y = oy + it->y * s->sc / 100;
+    *w = it->w * s->sc / 100;
+    *h = it->h > 0 ? it->h * s->sc / 100 : d_row(s->look);
 }
 static int tab_rect(const uod_ui *s, int t, int *x, int *y, int *w, int *h)
 {
@@ -141,8 +144,13 @@ void uod_open(uod_ui *s, const uod_dlg *d, int sw, int sh)
     for (i = 0; i < (int)sizeof *s; i++) ((char *)s)[i] = 0;
     s->d = d;
     s->look = uoc_look_97();
-    s->x = (sw - d->w) / 2;
-    s->y = (sh - d->h) / 3;          /* a third down, as Windows centred them */
+    /* a table built from the live metrics (a message box) is in pixels
+     * already; every other one is written at 100% and scales */
+    s->sc = d->px ? 100 : uoc_scale();
+    s->w = d->w * s->sc / 100;
+    s->h = d->h * s->sc / 100;
+    s->x = (sw - s->w) / 2;
+    s->y = (sh - s->h) / 3;          /* a third down, as Windows centred them */
     if (s->x < 0) s->x = 0;
     if (s->y < 0) s->y = 0;
     s->focus = s->hot = s->down = -1;
@@ -357,15 +365,15 @@ void uod_render(const uod_ui *s)
     th = d_title_h(k);
 
     /* the frame */
-    fb_fill_rect(s->x, s->y, s->d->w, s->d->h, k->face);
-    uoc_raised(k, s->x, s->y, s->d->w, s->d->h);
+    fb_fill_rect(s->x, s->y, s->w, s->h, k->face);
+    uoc_raised(k, s->x, s->y, s->w, s->h);
 
     /* the title bar, with the "?" and close buttons Office dialogs carried */
     fb_fill_rect(s->x + D_BORDER, s->y + D_BORDER,
-                 s->d->w - 2 * D_BORDER, th - 2, k->sel);
+                 s->w - 2 * D_BORDER, th - 2, k->sel);
     fb_text(s->x + D_BORDER + 4, s->y + D_BORDER + 1, s->d->title, k->sel_text, -1);
     {
-        int bs = fb_text_h(), bx = s->x + s->d->w - D_BORDER - bs - 2;
+        int bs = fb_text_h(), bx = s->x + s->w - D_BORDER - bs - 2;
         int by = s->y + D_BORDER;
         fb_fill_rect(bx, by, bs, bs, k->face);
         uoc_raised(k, bx, by, bs, bs);
@@ -383,10 +391,10 @@ void uod_render(const uod_ui *s)
     if (s->d->tab && s->d->ntab > 0) {
         int ty = s->y + D_BORDER + th, page_y = ty + d_tab_h(k) - 2;
         fb_fill_rect(s->x + D_BORDER, page_y,
-                     s->d->w - 2 * D_BORDER,
-                     s->d->h - (page_y - s->y) - D_BORDER, k->face);
-        uoc_bevel(s->x + D_BORDER, page_y, s->d->w - 2 * D_BORDER,
-                  s->d->h - (page_y - s->y) - D_BORDER,
+                     s->w - 2 * D_BORDER,
+                     s->h - (page_y - s->y) - D_BORDER, k->face);
+        uoc_bevel(s->x + D_BORDER, page_y, s->w - 2 * D_BORDER,
+                  s->h - (page_y - s->y) - D_BORDER,
                   k->hilight, k->shadow, 1);
         for (i = 0; i < s->d->ntab; i++) {
             int on = (i == s->page);
@@ -616,7 +624,7 @@ int uod_handle(uod_ui *s, const unoui_event *e)
     /* the title bar drags; the close and help buttons in it do their thing */
     {
         int th = d_title_h(k), bs = fb_text_h();
-        int bx = s->x + s->d->w - D_BORDER - bs - 2, by = s->y + D_BORDER;
+        int bx = s->x + s->w - D_BORDER - bs - 2, by = s->y + D_BORDER;
         if (e->y >= by && e->y < by + bs) {
             if (e->x >= bx && e->x < bx + bs) {
                 s->result = UOD_ID_CANCEL; uod_close(s); return 1;
@@ -625,7 +633,7 @@ int uod_handle(uod_ui *s, const unoui_event *e)
                 s->result = UOD_ID_HELP; uod_close(s); return 1;
             }
         }
-        if (e->x >= s->x && e->x < s->x + s->d->w &&
+        if (e->x >= s->x && e->x < s->x + s->w &&
             e->y >= s->y + D_BORDER && e->y < s->y + D_BORDER + th) {
             s->drag = 1;
             s->drag_dx = e->x - s->x; s->drag_dy = e->y - s->y;
@@ -752,5 +760,6 @@ void uod_msgbox(uod_ui *s, const char *title, const char *text,
     g_mb.tab = 0; g_mb.ntab = 0;
     g_mb.w = dw + D_BORDER * 2;
     g_mb.help = 0;
+    g_mb.px = 1;                     /* measured from the metrics: pixels */
     uod_open(s, &g_mb, sw, sh);
 }

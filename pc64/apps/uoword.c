@@ -22,6 +22,7 @@
 #include "uobars.h"
 #include "uofile.h"
 #include "uoword.h"
+#include "uoapp.h"
 #include "unodoc.h"
 /* unomedia, for um_set_alloc alone: unodoc inflates an OOXML part with
  * um_inflate, which allocates its own working state. */
@@ -75,8 +76,24 @@ static int  g_dirty_layout = 1;
 static int  g_dlg_kind;              /* which dialog is up: 0 none           */
 static char g_name[256] = "Document1";
 static int  g_vol;            /* the volume g_name lives on: a plain Save goes BACK there */
+static int  g_have_file;      /* g_name is a file on g_vol, not just "Document1" */
+static unsigned g_saved_rev;  /* uow_revision() when the document last matched its file */
+static char g_title[300] = "UnoWord - Document1";
 static char g_status_l[64], g_status_r[64];
 static int  g_showruler = 1;
+/* Up and Down keep the column they started from across short lines, as
+ * every editor does; any other move forgets it. */
+static int  g_goal_x = -1;
+/* FORMATTING WITH NOTHING SELECTED.  Bold, Italic, a font or a size chosen
+ * with only a caret applies to what is typed NEXT, which is Word's
+ * behaviour and the only one that makes Ctrl+B-then-type work.  It is held
+ * here, not in the document (there is no character to hang it on yet), and
+ * dropped as soon as the caret moves somewhere else. */
+static int     g_pend_on;
+static uow_chp g_pend;
+static int     g_view_h;           /* the page area's height, from the painter */
+static int     g_want_visible;     /* scroll the caret into view on next paint */
+static void    caret_chp(uow_chp *c);
 
 /* THE CANVAS RECT, TAKEN FROM THE PAINTER.
  *
@@ -95,7 +112,7 @@ static int  g_showruler = 1;
 static unoui_rect g_rect;
 static int        g_have_rect;
 
-enum { DLG_NONE = 0, DLG_OPEN, DLG_SAVE, DLG_FONT, DLG_MSG };
+enum { DLG_NONE = 0, DLG_OPEN, DLG_SAVE, DLG_FONT, DLG_MSG, DLG_GUARD };
 
 static void a_cpy(char *d, const char *s, int cap)
 { int i = 0; while (s && s[i] && i < cap - 1) { d[i] = s[i]; i++; } d[i] = 0; }
@@ -160,20 +177,23 @@ static int px_of(const uow_chp *c)
 {
     int px = (c->size ? c->size : 20) / 2;      /* half-points -> points     */
     px = px * g_zoom / 100;
+    /* the font engine multiplies by the UI scale and clamps to its largest
+     * glyph cell, so this is in points and only needs to be sane */
     if (px < 8) px = 8;
-    if (px > 40) px = 40;                       /* uno_font's own clamp      */
+    if (px > 72) px = 72;
     return px;
 }
 static int style_of(const uow_chp *c)
 { return (c->bold ? UNO_FS_BOLD : 0) | (c->italic ? UNO_FS_ITALIC : 0); }
 
+/* The document is CP-1252 (uoapp.h); the font engine measures and draws
+ * UTF-8.  Handing it the raw bytes, as this did, drew every accented letter
+ * of an opened document as a broken glyph and measured it wrongly. */
 static int m_text_w(const char *s, long n, const uow_chp *c, void *ctx)
 {
-    char b[256];
-    long i;
+    char b[768];
     (void)ctx;
-    for (i = 0; i < n && i < 255; i++) b[i] = s[i];
-    b[i] = 0;
+    uoa_to_utf8(s, n < 255 ? n : 255, b, (int)sizeof b);
     return uno_font_text_w_styled(slot_of(c), px_of(c), style_of(c), b);
 }
 static int m_height(const uow_chp *c, void *ctx)
@@ -334,6 +354,14 @@ static int name_is_ooxml(const char *n, const char *ext)
  * gate's numbers were right - the page simply did not fit.)  So the app opens
  * at whatever zoom makes the page fit its viewport, never magnifying past
  * 1:1, which is what Word's Page Width does and what every reader expects. */
+/* THE UI SCALE AND THE PAGE.  Text is scaled by the font engine (a run's px
+ * is in points; uno_font multiplies by uno_font_ui_scale), but the page's
+ * geometry is ours: at 200% the sheet must be twice as many pixels wide as
+ * well, or the text wraps at half the width it should.  So the layout runs
+ * at the zoom TIMES the scale, while g_zoom stays Word's own percentage. */
+static int ui_scale(void) { int s = uno_font_ui_scale(); return s > 0 ? s : 100; }
+static int layout_zoom(void) { return g_zoom * ui_scale() / 100; }
+
 static void fit_page_width(int viewport_w)
 {
     const uow_sect *sc;
@@ -341,7 +369,7 @@ static void fit_page_width(int viewport_w)
     if (!DOC || viewport_w < 64) return;
     sc = uow_section(DOC);
     if (!sc || sc->page_w <= 0) return;
-    want = (int)(((long)(viewport_w - 24) * 15 * 100) / sc->page_w);
+    want = (int)(((long)(viewport_w - 24) * 15 * 100) / sc->page_w) * 100 / ui_scale();
     if (want > 100) want = 100;
     if (want < 25)  want = 25;
     if (want != g_zoom) { g_zoom = want; g_dirty_layout = 1; }
@@ -350,7 +378,7 @@ static void fit_page_width(int viewport_w)
 static void relayout(void)
 {
     if (!LAY || !DOC) return;
-    uow_layout_run(LAY, DOC, &MET, g_zoom);
+    uow_layout_run(LAY, DOC, &MET, layout_zoom());
     g_dirty_layout = 0;
 }
 static void touched(void) { g_dirty_layout = 1; pc64_shell_dirty(); }
@@ -363,7 +391,7 @@ static void sync_toggles(void)
     uow_pap p;
     char b[16];
     if (!DOC) return;
-    uow_chp_at(DOC, g_caret > 0 ? g_caret - 1 : 0, &c);
+    caret_chp(&c);
     uow_pap_at(DOC, g_caret, &p);
     uoc_toggle_set(&CH, C_BOLD,   c.bold);
     uoc_toggle_set(&CH, C_ITALIC, c.italic);
@@ -553,6 +581,9 @@ static int load_doc(int vol, const char *name)
     }
     if (w) {
         const char *plain = ud_doc_plain(w);
+        /* the document being replaced goes only once its successor exists:
+         * a file that fails to parse leaves what was open, open */
+        if (DOC) uow_free(DOC);
         DOC = uow_new();
         if (plain && *plain) {
             /* .doc's paragraph mark is '\r'; ud_doc_plain hands back '\n' */
@@ -566,10 +597,13 @@ static int load_doc(int vol, const char *name)
         }
         ud_doc_close(w);
         ok = 1;
+        g_caret = g_anchor = 0;
+        g_scroll = 0;
+        /* what was just loaded IS the file: loading it is not an edit */
+        g_saved_rev = uow_revision(DOC);
     }
     ud_cfb_close(c);
     ud_zip_close(z);
-    g_caret = g_anchor = 0;
     touched();
     return ok;
 }
@@ -606,8 +640,98 @@ static int save_doc(int vol, const char *name)
         ok = uno_fs_write(vol, name, out, n);
         ud_free(out);
     }
+    if (ok) g_saved_rev = uow_revision(DOC);
     return ok;
 }
+
+/* ---- the document's name, in the title bar -------------------------------------
+ * pc64 draws the window title; the desktop shell copies it to the OS's title
+ * bar.  Both used to say "Document1" whatever was open. */
+static void set_title(void)
+{
+    const char *pre = "UnoWord - ";
+    int k = 0, i = 0;
+    while (*pre) g_title[k++] = *pre++;
+    while (g_name[i] && k < (int)sizeof g_title - 1) g_title[k++] = g_name[i++];
+    g_title[k] = 0;
+    if (g_win) g_win->title = g_title;
+}
+
+static int word_frame_w(void) { return pc64_shell_workarea_w(); }
+static int word_frame_h(void) { return pc64_shell_workarea_h(); }
+
+static void msg(const char *text)
+{
+    uod_msgbox(&DL, "UnoWord", text, UOD_MB_OK, pc64_shell_workarea_w(),
+               pc64_shell_workarea_h());
+    g_dlg_kind = DLG_MSG;
+}
+
+/* Open (vol, name) as the document, or say why not and keep what is open. */
+static void open_file(int vol, const char *name)
+{
+    char m[320];
+    int k = 0;
+    const char *t;
+    if (load_doc(vol, name)) {
+        a_cpy(g_name, name, (int)sizeof g_name);
+        g_vol = vol;
+        g_have_file = 1;
+        set_title();
+        return;
+    }
+    for (t = name; *t && k < 250; t++) m[k++] = *t;
+    for (t = " is not a document UnoWord can open."; *t; t++) m[k++] = *t;
+    m[k] = 0;
+    msg(m);
+}
+
+static void new_doc(void)
+{
+    if (DOC) uow_free(DOC);
+    DOC = uow_new();
+    g_caret = g_anchor = 0;
+    g_scroll = 0;
+    a_cpy(g_name, "Document1", (int)sizeof g_name);
+    g_vol = 0;
+    g_have_file = 0;
+    g_saved_rev = uow_revision(DOC);
+    set_title();
+    touched();
+}
+
+static void open_dialog(int save)
+{
+    uof_set_fs(&kFs);
+    uof_open(&DL, save, kDocTypes, 3, pc64_shell_workarea_w(),
+             pc64_shell_workarea_h());
+    g_dlg_kind = save ? DLG_SAVE : DLG_OPEN;
+}
+
+/* ---- the unsaved-changes guard's hooks (uoapp.h) ------------------------------ */
+static int word_dirty(void) { return DOC && uow_revision(DOC) != g_saved_rev; }
+static const char *word_doc_name(void) { return g_name; }
+static int word_save(void)
+{
+    if (!g_have_file) { open_dialog(1); return 2; }
+    if (save_doc(g_vol, g_name)) return 1;
+    msg("The document could not be saved.");
+    return 0;
+}
+static void word_proceed(int action)
+{
+    switch (action) {
+    case UOA_NEW:       new_doc(); break;
+    case UOA_OPEN_DLG:  open_dialog(0); break;
+    case UOA_OPEN_FILE: open_file(uoa_open_vol(), uoa_open_name()); break;
+    default: break;
+    }
+}
+static void word_prompted(void) { g_dlg_kind = DLG_GUARD; pc64_shell_dirty(); }
+static const uoa_app kGuard = {
+    "UnoWord", word_dirty, word_doc_name, word_save, word_proceed,
+    &DL, word_frame_w, word_frame_h, word_prompted
+};
 
 /* ---- the Font dialog, as a data table ------------------------------------- */
 enum { FD_SIZE = 300, FD_BOLD, FD_ITALIC, FD_UNDER, FD_PREVIEW };
@@ -622,21 +746,44 @@ static const uod_item kFontItems[] = {
     { UOD_BUTTON, UOD_ID_OK,     "OK",     40, 148, 60, 20, -1, UOD_DEFAULT, 0, 0, 0, 0, 0 },
     { UOD_BUTTON, UOD_ID_CANCEL, "Cancel", 110, 148, 60, 20, -1, 0, 0, 0, 0, 0, 0 }
 };
-static const uod_dlg kFontDlg = { "Font", kFontItems, 9, 0, 0, 210, 200, 1 };
+static const uod_dlg kFontDlg = { "Font", kFontItems, 9, 0, 0, 210, 200, 1, 0 };
 
 /* ---- commands -------------------------------------------------------------- */
-static void apply_chp_bit(int which, int on)
+/* The formatting typing would get right now: the pending choice if there is
+ * one, else the character before the caret's (which uow_insert inherits). */
+static void caret_chp(uow_chp *c)
+{
+    if (g_pend_on) { *c = g_pend; return; }
+    uow_chp_at(DOC, g_caret > 0 ? g_caret - 1 : 0, c);
+}
+
+/* Change the selection's character formatting through `set`, or, with no
+ * selection, the formatting the next typed text gets. */
+static void apply_chp(void (*set)(uow_chp *c, int v), int v)
 {
     uow_chp c;
     long a = g_anchor < g_caret ? g_anchor : g_caret;
     long b = g_anchor < g_caret ? g_caret : g_anchor;
-    if (a == b) return;                       /* nothing selected: no-op     */
+    if (a == b) {
+        caret_chp(&g_pend);
+        set(&g_pend, v);
+        g_pend_on = 1;
+        return;
+    }
     uow_chp_at(DOC, a, &c);
-    if (which == C_BOLD)   c.bold = (unsigned char)on;
-    if (which == C_ITALIC) c.italic = (unsigned char)on;
-    if (which == C_UNDER)  c.underline = (unsigned char)on;
+    set(&c, v);
     uow_format(DOC, a, b - a, &c);
     touched();
+}
+static void set_bold(uow_chp *c, int v)   { c->bold = (unsigned char)v; }
+static void set_italic(uow_chp *c, int v) { c->italic = (unsigned char)v; }
+static void set_under(uow_chp *c, int v)  { c->underline = (unsigned char)v; }
+static void set_face(uow_chp *c, int v)   { c->face = (unsigned short)v; }
+static void set_size(uow_chp *c, int v)   { c->size = (unsigned short)v; }
+
+static void apply_chp_bit(int which, int on)
+{
+    apply_chp(which == C_BOLD ? set_bold : which == C_ITALIC ? set_italic : set_under, on);
 }
 static void apply_align(int align)
 {
@@ -648,45 +795,99 @@ static void apply_align(int align)
     touched();
 }
 
+/* ---- the selection and the clipboard ------------------------------------------ */
+static long sel_lo(void) { return g_anchor < g_caret ? g_anchor : g_caret; }
+static long sel_hi(void) { return g_anchor < g_caret ? g_caret : g_anchor; }
+
+/* Delete what is selected, leaving the caret where it began: what typing,
+ * Backspace, Delete, Cut and Paste all do to a selection first. */
+static int delete_sel(void)
+{
+    long a = sel_lo(), b = sel_hi();
+    if (b <= a) return 0;
+    uow_delete(DOC, a, b - a);
+    g_caret = g_anchor = a;
+    touched();
+    return 1;
+}
+
+/* The selection onto the clipboard as UTF-8 text.  The document is CP-1252
+ * with '\r' ending a paragraph; everything else in the world wants UTF-8
+ * and '\n' (the host turns that into its own line end). */
+static int copy_sel(void)
+{
+    long a = sel_lo(), b = sel_hi(), n = b - a, i;
+    char *cp, *u;
+    int ok = 0;
+    if (n <= 0) return 0;
+    cp = (char *)malloc((unsigned long)n + 1);
+    u  = (char *)malloc((unsigned long)n * 3 + 1);
+    if (cp && u) {
+        n = uow_read(DOC, a, n, cp);
+        for (i = 0; i < n; i++) if (cp[i] == '\r') cp[i] = '\n';
+        uoa_to_utf8(cp, n, u, (int)(n * 3 + 1));
+        ok = uoa_clip_set(u);
+    }
+    if (cp) free(cp);
+    if (u) free(u);
+    return ok;
+}
+
+/* The clipboard's text in place of the selection.  A character CP-1252 has
+ * no byte for arrives as '?' (the model's limit, uoapp.h), and control
+ * characters other than Tab and the line ends are dropped. */
+static void paste(void)
+{
+    char *u = uoa_clip_get(), *c;
+    long n = 0, m, i, k = 0;
+    if (!u) return;
+    while (u[n]) n++;
+    c = (char *)malloc((unsigned long)n + 1);
+    if (c) {
+        m = uoa_from_utf8(u, c, n + 1);
+        for (i = 0; i < m; i++) {
+            char ch = c[i] == '\n' ? '\r' : c[i];
+            if ((unsigned char)ch < 32 && ch != '\r' && ch != '\t') continue;
+            c[k++] = ch;
+        }
+        if (k > 0) {
+            delete_sel();
+            if (uow_insert(DOC, g_caret, c, k)) { g_caret += k; g_anchor = g_caret; }
+            else msg("The clipboard holds more text than the document has room for.");
+            touched();
+        }
+        free(c);
+    }
+    free(u);
+}
+
 static void do_command(int cmd)
 {
     switch (cmd) {
+    /* New, Open, Close and Exit all drop the document, so each goes through
+     * the guard: "Do you want to save the changes...?" first, when there are
+     * any.  Close is Word's "close the document", which in a one-document
+     * app leaves a blank one. */
     case C_NEW:
-        DOC = uow_new();
-        g_caret = g_anchor = 0;
-        a_cpy(g_name, "Document1", (int)sizeof g_name);
-        g_vol = 0;
-        touched();
-        break;
-    case C_OPEN:
-        uof_set_fs(&kFs);
-        uof_open(&DL, 0, kDocTypes, 3, pc64_shell_workarea_w(),
-                 pc64_shell_workarea_h());
-        g_dlg_kind = DLG_OPEN;
-        break;
-    case C_SAVEAS:
-        uof_set_fs(&kFs);
-        uof_open(&DL, 1, kDocTypes, 3, pc64_shell_workarea_w(),
-                 pc64_shell_workarea_h());
-        g_dlg_kind = DLG_SAVE;
-        break;
+    case C_CLOSE:  uoa_request(UOA_NEW); break;
+    case C_OPEN:   uoa_request(UOA_OPEN_DLG); break;
+    case C_EXIT:   uoa_exit(); break;
+    case C_SAVEAS: open_dialog(1); break;
     case C_SAVE:
         /* back where it came from: this was volume 0 unconditionally, so a
-         * document opened off a USB stick saved to the RAM disk instead */
-        if (!save_doc(g_vol, g_name))
-            uod_msgbox(&DL, "UnoWord", "The document could not be saved.",
-                       UOD_MB_OK, pc64_shell_workarea_w(),
-                       pc64_shell_workarea_h());
-        else
-            uod_msgbox(&DL, "UnoWord", "Saved.", UOD_MB_OK,
-                       pc64_shell_workarea_w(), pc64_shell_workarea_h());
-        g_dlg_kind = DLG_MSG;
+         * document opened off a USB stick saved to the RAM disk instead.  A
+         * document with no file yet asks for one, as Word does, rather than
+         * writing "Document1" with no extension into the first folder. */
+        word_save();
         break;
     case C_UNDO: uow_undo(DOC); if (g_caret > uow_len(DOC)) g_caret = uow_len(DOC);
                  g_anchor = g_caret; touched(); break;
     case C_REDO: uow_redo(DOC); if (g_caret > uow_len(DOC)) g_caret = uow_len(DOC);
                  g_anchor = g_caret; touched(); break;
     case C_SELALL: g_anchor = 0; g_caret = uow_len(DOC) - 1; touched(); break;
+    case C_COPY:   copy_sel(); break;
+    case C_CUT:    if (copy_sel()) delete_sel(); break;
+    case C_PASTE:  paste(); break;
     case C_BOLD:   apply_chp_bit(C_BOLD,   uoc_toggle(&CH, C_BOLD));   break;
     case C_ITALIC: apply_chp_bit(C_ITALIC, uoc_toggle(&CH, C_ITALIC)); break;
     case C_UNDER:  apply_chp_bit(C_UNDER,  uoc_toggle(&CH, C_UNDER));  break;
@@ -694,14 +895,13 @@ static void do_command(int cmd)
     case C_CENTER:  apply_align(UOW_AL_CENTER);  break;
     case C_RIGHT:   apply_align(UOW_AL_RIGHT);   break;
     case C_JUSTIFY: apply_align(UOW_AL_JUSTIFY); break;
-    case C_FONTNAME: {
-        int f = uoc_combo(&CH, C_FONTNAME);
-        long a = g_anchor < g_caret ? g_anchor : g_caret;
-        long b = g_anchor < g_caret ? g_caret : g_anchor;
-        uow_chp c;
-        uow_chp_at(DOC, a, &c);
-        c.face = (unsigned short)f;
-        if (b > a) uow_format(DOC, a, b - a, &c);
+    case C_FONTNAME: apply_chp(set_face, uoc_combo(&CH, C_FONTNAME)); touched(); break;
+    case C_FONTSIZE: {
+        /* the combo lists points; the model holds half-points */
+        const char *s = kSizeList[uoc_combo(&CH, C_FONTSIZE)];
+        int pt = 0;
+        while (*s >= '0' && *s <= '9') pt = pt * 10 + (*s++ - '0');
+        if (pt > 0) apply_chp(set_size, pt * 2);
         touched();
         break;
     }
@@ -717,7 +917,7 @@ static void do_command(int cmd)
         uod_open(&DL, &kFontDlg, pc64_shell_workarea_w(),
                  pc64_shell_workarea_h());
         {   uow_chp c;
-            uow_chp_at(DOC, g_caret > 0 ? g_caret - 1 : 0, &c);
+            caret_chp(&c);
             uod_set_value(&DL, FD_BOLD, c.bold);
             uod_set_value(&DL, FD_ITALIC, c.italic);
             uod_set_value(&DL, FD_UNDER, c.underline);
@@ -758,6 +958,171 @@ static void do_command(int cmd)
     sync_toggles();
 }
 
+/* ---- where the caret is, measured -----------------------------------------------
+ * uow_caret_x interpolates across a run in proportion to its characters,
+ * which is right only for a monospace face: in proportional text the caret
+ * drew between the wrong letters and a click landed a character or two off.
+ * These measure the run's prefix with the same metrics the layout used.
+ * Both take the LINE explicitly, because a position at a wrapped line's end
+ * is also the next line's start and uow_line_of picks the latter. */
+static int x_in_line(int li, long cp)
+{
+    const uow_line *ln = &LAY->line[li];
+    int k;
+    for (k = 0; k < ln->nrun; k++) {
+        const uow_lrun *r = &LAY->run[ln->run0 + k];
+        if (cp >= r->cp && cp <= r->cp + r->n) {
+            char b[256];
+            long n = cp - r->cp;
+            int w;
+            if (n <= 0) return ln->x + r->x;
+            if (n > 255) n = 255;
+            n = uow_read(DOC, r->cp, n, b);
+            w = m_text_w(b, n, &r->chp, 0);
+            if (w > r->w) w = r->w;
+            return ln->x + r->x + w;
+        }
+    }
+    return ln->x + (cp <= ln->cp ? 0 : ln->w);
+}
+
+static int caret_x(long cp)
+{
+    int li = uow_line_of(LAY, cp);
+    return li < 0 ? 0 : x_in_line(li, cp);
+}
+
+/* the last position the caret may take on line li: before a wrapped line's
+ * trailing space, or at the paragraph mark of the paragraph's last line */
+static long line_end(int li)
+{
+    const uow_line *ln = &LAY->line[li];
+    if (ln->last_of_para || ln->n == 0) return ln->cp + ln->n;
+    return ln->cp + ln->n - 1;
+}
+
+/* the position on line li nearest to document x */
+static long cp_in_line(int li, int x)
+{
+    const uow_line *ln = &LAY->line[li];
+    long cp, best = ln->cp, end = line_end(li);
+    int bd = 1 << 30;
+    for (cp = ln->cp; cp <= end; cp++) {
+        int d = x_in_line(li, cp) - x;
+        if (d < 0) d = -d;
+        if (d < bd) { bd = d; best = cp; }
+        else if (d > bd) break;              /* x only grows along a line */
+    }
+    return best;
+}
+
+/* the position a click at document (x, y) means */
+static long cp_at(int x, int y)
+{
+    int i, li = LAY->nline - 1;
+    if (LAY->nline <= 0) return 0;
+    for (i = 0; i < LAY->nline; i++) {
+        const uow_line *ln = &LAY->line[i];
+        if (y < ln->y + ln->h) { li = i; break; }
+    }
+    return cp_in_line(li, x);
+}
+
+static long doc_last(void) { long n = uow_len(DOC) - 1; return n < 0 ? 0 : n; }
+
+static int is_word(int c) { return c > ' ' && c != '\r'; }
+
+/* Move the caret to `cp`; Shift extends the selection, anything else
+ * collapses it.  `keep_goal` is for Up/Down, which remember their column. */
+static void move_to(long cp, int keep_goal)
+{
+    if (cp < 0) cp = 0;
+    if (cp > doc_last()) cp = doc_last();
+    g_caret = cp;
+    if (!(uoa_key_mods() & UI_MOD_SHIFT)) g_anchor = g_caret;
+    if (!keep_goal) g_goal_x = -1;
+    g_pend_on = 0;
+    g_want_visible = 1;
+    touched();
+}
+
+/* The navigation keys, by UEFI scan code: Up 1, Down 2, Right 3, Left 4,
+ * Home 5, End 6, PgUp 9, PgDn 10.  Ctrl moves by word, or to the ends of the
+ * document.  1 = the key was one of them. */
+static int nav_key(int scan, int ctrl)
+{
+    long cp = g_caret, lo = sel_lo(), hi = sel_hi();
+    int li, shift = (uoa_key_mods() & UI_MOD_SHIFT) != 0;
+    if (g_dirty_layout) relayout();         /* the lines must be the current ones */
+    li = uow_line_of(LAY, g_caret);
+    switch (scan) {
+    case 0x03:                                                      /* Right */
+        if (hi > lo && !shift) { move_to(hi, 0); return 1; }
+        if (ctrl) {
+            while (cp < doc_last() && is_word(uow_char_at(DOC, cp))) cp++;
+            while (cp < doc_last() && !is_word(uow_char_at(DOC, cp))) cp++;
+        } else cp++;
+        move_to(cp, 0); return 1;
+    case 0x04:                                                      /* Left */
+        if (hi > lo && !shift) { move_to(lo, 0); return 1; }
+        if (ctrl) {
+            while (cp > 0 && !is_word(uow_char_at(DOC, cp - 1))) cp--;
+            while (cp > 0 && is_word(uow_char_at(DOC, cp - 1))) cp--;
+        } else cp--;
+        move_to(cp, 0); return 1;
+    case 0x01: case 0x02: case 0x09: case 0x0A: {                  /* Up, Down, PgUp, PgDn */
+        int x, target = li, page = scan == 0x09 || scan == 0x0A;
+        if (li < 0) return 1;
+        if (g_goal_x < 0) g_goal_x = caret_x(g_caret);
+        x = g_goal_x;
+        if (!page) target = li + (scan == 0x02 ? 1 : -1);
+        else {
+            int y = LAY->line[li].y + (scan == 0x0A ? 1 : -1) *
+                    (g_view_h > 64 ? g_view_h - 32 : 200);
+            for (target = 0; target < LAY->nline - 1; target++)
+                if (LAY->line[target].y + LAY->line[target].h > y) break;
+        }
+        if (target < 0) { move_to(0, 0); return 1; }        /* above the first */
+        if (target >= LAY->nline) { move_to(doc_last(), 0); return 1; }
+        move_to(cp_in_line(target, x), 1);
+        return 1;
+    }
+    case 0x05:                                                      /* Home */
+        move_to(ctrl || li < 0 ? 0 : LAY->line[li].cp, 0); return 1;
+    case 0x06:                                                      /* End */
+        move_to(ctrl || li < 0 ? doc_last() : line_end(li), 0); return 1;
+    default: return 0;
+    }
+}
+
+/* Keep the caret's line on screen: called by the painter after a relayout,
+ * because only then are the line positions the ones being drawn. */
+static void scroll_to_caret(void)
+{
+    int li = uow_line_of(LAY, g_caret), y, h;
+    if (li < 0 || g_view_h <= 0) return;
+    y = LAY->line[li].y; h = LAY->line[li].h;
+    if (y < g_scroll) g_scroll = y > 8 ? y - 8 : 0;
+    else if (y + h > g_scroll + g_view_h) g_scroll = y + h - g_view_h + 8;
+}
+
+/* Put `s` (n CP-1252 bytes) in place of the selection, at the caret, in the
+ * formatting typing gets: what every typed character goes through. */
+static void type_text(const char *s, long n)
+{
+    long at;
+    delete_sel();
+    at = g_caret;
+    if (!uow_insert(DOC, at, s, n)) return;
+    if (g_pend_on) uow_format(DOC, at, n, &g_pend);   /* then later text inherits */
+    g_pend_on = 0;
+    g_caret = at + n;
+    g_anchor = g_caret;
+    g_goal_x = -1;
+    g_want_visible = 1;
+    touched();
+}
+
 /* ---- painting -------------------------------------------------------------- */
 static void draw_doc(int cx, int cy, int cw, int ch)
 {
@@ -780,10 +1145,10 @@ static void draw_doc(int cx, int cy, int cw, int ch)
         if (y > cy + ch || y + ln->h < cy) continue;
         for (k = 0; k < ln->nrun; k++) {
             const uow_lrun *r = &LAY->run[ln->run0 + k];
-            char buf[256];
-            long got = uow_read(DOC, r->cp, r->n < 255 ? r->n : 255, buf);
+            char raw[256], buf[768];
+            long got = uow_read(DOC, r->cp, r->n < 255 ? r->n : 255, raw);
             fb_px col = r->chp.color ? r->chp.color : FB_RGB(0,0,0);
-            buf[got] = 0;
+            uoa_to_utf8(raw, got, buf, (int)sizeof buf);
             if (selB > selA && r->cp < selB && r->cp + r->n > selA)
                 fb_fill_rect(cx + ln->x + r->x, y, r->w, ln->h,
                              FB_RGB(0x00,0x00,0x80));
@@ -810,7 +1175,7 @@ static void draw_doc(int cx, int cy, int cw, int ch)
     {
         int ln = uow_line_of(LAY, g_caret);
         if (ln >= 0 && ln < LAY->nline) {
-            int x = uow_caret_x(LAY, &MET, g_caret);
+            int x = caret_x(g_caret);
             int y = cy + LAY->line[ln].y - g_scroll;
             if (y >= cy && y + LAY->line[ln].h <= cy + ch)
                 fb_vline(cx + x, y, LAY->line[ln].h, FB_RGB(0,0,0));
@@ -822,10 +1187,16 @@ static void app_draw(struct unoui_widget *w, unoui_rect r, void *ctx)
 {
     int cx, cy, cw, chh, top;
     (void)w; (void)ctx;
+    {   /* the chrome follows the UI scale; a change relays the page out */
+        static int seen;
+        uoc_set_scale(ui_scale());
+        if (seen != ui_scale()) { seen = ui_scale(); g_dirty_layout = 1; }
+    }
     fit_page_width(r.w);
     g_rect = r;
     g_have_rect = 1;
     if (g_dirty_layout) relayout();
+    if (g_want_visible) { scroll_to_caret(); g_want_visible = 0; }
     sync_toggles();
 
     CH.x = r.x; CH.y = r.y; CH.w = r.w; CH.h = r.h;
@@ -838,6 +1209,7 @@ static void app_draw(struct unoui_widget *w, unoui_rect r, void *ctx)
     cx = r.x; cy = top; cw = r.w;
     chh = r.h - (top - r.y) - uob_status_h();
     if (chh < 16) chh = 16;
+    g_view_h = chh;
     draw_doc(cx, cy, cw, chh);
     uob_status_render(&ST, r.x, r.y + r.h - uob_status_h(), r.w);
     uoc_render_popups(&CH);          /* an open menu goes OVER the page */
@@ -858,25 +1230,37 @@ static void dialog_closed(void)
 {
     int res = uod_result(&DL), kind = g_dlg_kind;
     g_dlg_kind = DLG_NONE;
-    if (res == UOD_ID_OK && kind == DLG_OPEN) {
-        a_cpy(g_name, uof_name(), (int)sizeof g_name);
-        g_vol = uof_volume();
-        load_doc(g_vol, g_name);
-    } else if (res == UOD_ID_OK && kind == DLG_SAVE) {
-        a_cpy(g_name, uof_name(), (int)sizeof g_name);
-        ensure_ext(g_name, (int)sizeof g_name, uof_type());
-        g_vol = uof_volume();
-        save_doc(g_vol, g_name);
+    if (kind == DLG_GUARD) {
+        uoa_prompt_closed();                /* may open Save As, or proceed */
+    } else if (res == UOD_ID_OK && kind == DLG_OPEN) {
+        open_file(uof_volume(), uof_name());
+    } else if (kind == DLG_SAVE) {
+        int ok = 0;
+        if (res == UOD_ID_OK) {
+            char nm[256];
+            a_cpy(nm, uof_name(), (int)sizeof nm);
+            ensure_ext(nm, (int)sizeof nm, uof_type());
+            ok = save_doc(uof_volume(), nm);
+            if (ok) {
+                a_cpy(g_name, nm, (int)sizeof g_name);
+                g_vol = uof_volume();
+                g_have_file = 1;
+                set_title();
+            } else msg("The document could not be saved.");
+        }
+        uoa_save_as_done(ok);               /* the guard's Save As, if it was */
     } else if (res == UOD_ID_OK && kind == DLG_FONT) {
         uow_chp c;
         long a = g_anchor < g_caret ? g_anchor : g_caret;
         long b = g_anchor < g_caret ? g_caret : g_anchor;
-        uow_chp_at(DOC, a, &c);
+        if (b > a) uow_chp_at(DOC, a, &c);
+        else caret_chp(&c);
         c.bold      = (unsigned char)uod_value(&DL, FD_BOLD);
         c.italic    = (unsigned char)uod_value(&DL, FD_ITALIC);
         c.underline = (unsigned char)uod_value(&DL, FD_UNDER);
         c.size      = (unsigned short)(uod_value(&DL, FD_SIZE) * 2);
         if (b > a) uow_format(DOC, a, b - a, &c);
+        else { g_pend = c; g_pend_on = 1; }       /* for what is typed next */
     }
     touched();
 }
@@ -930,9 +1314,12 @@ static int app_event(struct unoui_widget *w, const void *evp, void *ctx)
         int top = doc_top(r);
         if (e->kind == UI_EV_MOUSE_MOVE && !g_dragging) return 0;
         if (e->y >= top && LAY) {
-            long cp = uow_cp_at(LAY, &MET, e->x - r.x, e->y - top + g_scroll);
+            long cp = cp_at(e->x - r.x, e->y - top + g_scroll);
+            g_goal_x = -1;
+            g_pend_on = 0;
             if (e->kind == UI_EV_MOUSE_DOWN) {
-                g_caret = g_anchor = cp;
+                g_caret = cp;
+                if (!(e->mods & UI_MOD_SHIFT)) g_anchor = cp;   /* shift-click extends */
                 g_dragging = 1;
             } else {
                 g_caret = cp;                   /* dragging: extend           */
@@ -951,7 +1338,7 @@ static void uw_build(unoui_window *win)
     int w = pc64_shell_workarea_w() - 40, h = pc64_shell_workarea_h() - 60;
     if (w < 380) w = 380;
     if (h < 260) h = 260;
-    unoui_window_init(win, "UnoWord - Document1", 20, 16, w, h);
+    unoui_window_init(win, g_title, 20, 16, w, h);
     g_canvas.draw = app_draw;
     g_canvas.event = app_event;
     g_canvas.ctx = 0;
@@ -982,6 +1369,25 @@ static int uw_key(int uni, int scan, int ctrl)
         pc64_shell_dirty();
         return 1;
     }
+    /* the menu bar has the keyboard (F10, Alt+letter): the arrows, Enter
+     * and Esc are its, and reach it through the canvas */
+    if (uoc_menu_active(&CH)) return 0;
+    /* The caret keys.  They arrive as scan codes with uni 0, and the first
+     * cut of this function never looked at scan at all - the arrows, Home,
+     * End and the page keys fell through to unoui, which had nothing to move,
+     * so the caret could be placed only with the mouse.  Before the Ctrl
+     * letters: Ctrl+Left and Ctrl+End are navigation too. */
+    if (!uni && nav_key(scan, ctrl)) return 1;
+    if (scan == 0x16 && !uni) { do_command(C_SAVEAS); return 1; }   /* F12, as in Word */
+    if (scan == 0x08 && !uni) {                     /* Delete                 */
+        if (!delete_sel() && g_caret < doc_last()) {
+            uow_delete(DOC, g_caret, 1);
+            touched();
+        }
+        g_pend_on = 0;
+        g_want_visible = 1;
+        return 1;
+    }
     if (ctrl) {
         int c = uni;
         if (c >= 1 && c <= 26) c += 'a' - 1;       /* control codes to letters */
@@ -995,6 +1401,9 @@ static int uw_key(int uni, int scan, int ctrl)
         case 'z': do_command(C_UNDO); return 1;
         case 'y': do_command(C_REDO); return 1;
         case 'a': do_command(C_SELALL); return 1;
+        case 'c': do_command(C_COPY); return 1;
+        case 'x': do_command(C_CUT); return 1;
+        case 'v': do_command(C_PASTE); return 1;
         case 's': do_command(C_SAVE); return 1;
         case 'o': do_command(C_OPEN); return 1;
         case 'n': do_command(C_NEW); return 1;
@@ -1002,25 +1411,25 @@ static int uw_key(int uni, int scan, int ctrl)
         }
     }
     if (uni == 8) {                                 /* backspace              */
-        if (g_caret > 0) { uow_delete(DOC, g_caret - 1, 1); g_caret--; }
-        g_anchor = g_caret;
-        touched();
+        if (!delete_sel() && g_caret > 0) {
+            uow_delete(DOC, g_caret - 1, 1);
+            g_caret--;
+            g_anchor = g_caret;
+            touched();
+        }
+        g_pend_on = 0;
+        g_goal_x = -1;
+        g_want_visible = 1;
         return 1;
     }
-    if (uni == '\r' || uni == '\n') {
-        char nl = '\r';
-        uow_insert(DOC, g_caret, &nl, 1);
-        g_caret++;
-        g_anchor = g_caret;
-        touched();
-        return 1;
-    }
+    if (uni == '\r' || uni == '\n') { type_text("\r", 1); return 1; }
+    if (uni == '\t')                { type_text("\t", 1); return 1; }
     if (uni >= ' ') {
-        char ch = (char)uni;
-        uow_insert(DOC, g_caret, &ch, 1);
-        g_caret++;
-        g_anchor = g_caret;
-        touched();
+        /* typed Unicode -> the document's CP-1252: e-acute, the euro sign and
+         * curly quotes are all one byte there; what it cannot hold is '?' */
+        int b = uoa_uc_to_1252(uni);
+        char ch = (char)(b < 0 ? '?' : b);
+        type_text(&ch, 1);
         return 1;
     }
     return 0;
@@ -1049,6 +1458,8 @@ static void uw_opened(void)
     MET.text_w = m_text_w; MET.height = m_height;
     MET.baseline = m_baseline; MET.space_w = m_space; MET.ctx = 0;
     g_dirty_layout = 1;
+    g_saved_rev = uow_revision(DOC);        /* a new document is not a change */
+    uoa_register(&kGuard);
 }
 static void uw_closed(void) { }
 static int  uw_canvas_index(void) { return g_cidx; }

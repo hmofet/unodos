@@ -1,0 +1,16 @@
+# UnoCalc: a new workbook with an edit, closed: Yes has no file to save to,
+# so Save As runs first, and only then does the program end.
+text 5
+key Return
+expect dirty 1
+quit
+frames 2
+key Escape
+frames 2
+expect dirty 1
+pick docs/Guard.xls
+quit
+frames 2
+text y
+frames 5
+expect title unreachable

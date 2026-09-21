@@ -1,0 +1,16 @@
+# UnoWord and the OS clipboard: copy out, cut, paste back twice, and paste
+# text another program put there (with a line end in it).
+text Alpha Beta
+key a ctrl
+key c ctrl
+expect clip Alpha Beta
+key x ctrl
+expect dirty 1
+key v ctrl
+key v ctrl
+clip one\ntwo
+key v ctrl
+key a ctrl
+key c ctrl
+expect clip Alpha BetaAlpha Betaone\ntwo
+shot word_clip.ppm

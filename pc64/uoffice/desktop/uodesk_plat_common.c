@@ -54,3 +54,27 @@ void plat_rgba_to_bgrx(unsigned char *dst, const fb_px *src, int npix)
         dst += 4;
     }
 }
+
+/* ---- files the OS hands us while we run ----------------------------------------
+ * A handful at most (a multi-select in Finder); the shell opens one per turn. */
+#define OPENQ 8
+static char g_openq[OPENQ][1024];
+static int  g_oh, g_ot;
+
+void plat_post_open(const char *utf8_path)
+{
+    int n = (g_ot + 1) % OPENQ;
+    if (!utf8_path || !*utf8_path || n == g_oh) return;
+    strncpy(g_openq[g_ot], utf8_path, sizeof g_openq[0] - 1);
+    g_openq[g_ot][sizeof g_openq[0] - 1] = 0;
+    g_ot = n;
+}
+
+int plat_take_open(char *path, int cap)
+{
+    if (g_oh == g_ot || cap <= 0) return 0;
+    strncpy(path, g_openq[g_oh], (size_t)cap - 1);
+    path[cap - 1] = 0;
+    g_oh = (g_oh + 1) % OPENQ;
+    return 1;
+}

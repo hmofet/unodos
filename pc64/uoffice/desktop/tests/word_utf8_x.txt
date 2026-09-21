@@ -1,0 +1,4 @@
+# Intl.docx read back
+key a ctrl
+key c ctrl
+expect clip Café – “naïve” €5 ?mega

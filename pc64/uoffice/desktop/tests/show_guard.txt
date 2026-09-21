@@ -1,0 +1,13 @@
+# UnoShow: a new slide makes the deck dirty; closing and answering No
+# ends the program without writing anything.
+key m ctrl
+frames 2
+key Return
+frames 2
+expect dirty 1
+quit
+frames 2
+shot show_prompt.ppm
+text n
+frames 5
+expect title unreachable

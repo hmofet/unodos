@@ -27,6 +27,16 @@ static int        g_full;
 static unsigned char *g_px;          /* the last frame, RGBA               */
 static int        g_pw, g_ph, g_pcap;
 static char       g_base[4096];
+/* Retina: the view's bounds are POINTS and the frame is PIXELS, backing
+ * scale x the bounds, so every glyph lands on a device pixel.  A hidden
+ * window (the headless checks) stays at 1. */
+static CGFloat    g_bs = 1.0;
+static int        g_hidden;
+static CGFloat backing(void)
+{
+    CGFloat s = g_hidden || !g_win ? 1.0 : g_win.backingScaleFactor;
+    return s > 0 ? s : 1.0;
+}
 
 static void push(const plat_event *e)
 {
@@ -88,10 +98,11 @@ static int keycode_to_key(unsigned short k)
               bitsPerSample:8 samplesPerPixel:4 hasAlpha:YES isPlanar:NO
               colorSpaceName:NSDeviceRGBColorSpace bitmapFormat:0
               bytesPerRow:g_pw * 4 bitsPerPixel:32];
-    /* one framebuffer pixel = one point; a Retina display doubles it,
-     * nearest-neighbour, so the chrome stays crisp rather than smeared */
+    /* the frame is in pixels, the rect in points: at backing scale 2 each
+     * framebuffer pixel is one device pixel (a frame left over from before
+     * a scale change is stretched, nearest, until the next one arrives) */
     [NSGraphicsContext currentContext].imageInterpolation = NSImageInterpolationNone;
-    [rep drawInRect:NSMakeRect(0, 0, g_pw, g_ph)
+    [rep drawInRect:NSMakeRect(0, 0, g_pw / g_bs, g_ph / g_bs)
            fromRect:NSZeroRect operation:NSCompositingOperationCopy
            fraction:1.0 respectFlipped:YES hints:nil];
 }
@@ -101,7 +112,7 @@ static void mouse(NSView *v, NSEvent *ev, int type, int button)
     NSPoint p = [v convertPoint:ev.locationInWindow fromView:nil];
     plat_event e;
     memset(&e, 0, sizeof e);
-    e.type = type; e.x = (int)p.x; e.y = (int)p.y; e.button = button;
+    e.type = type; e.x = (int)(p.x * g_bs); e.y = (int)(p.y * g_bs); e.button = button;
     e.mods = mods_of(ev.modifierFlags);
     push(&e);
 }
@@ -187,7 +198,21 @@ static void mouse(NSView *v, NSEvent *ev, int type, int button)
     NSSize s = g_win.contentView.bounds.size;
     (void)n;
     memset(&e, 0, sizeof e);
-    e.type = PE_RESIZE; e.w = (int)s.width; e.h = (int)s.height;
+    e.type = PE_RESIZE; e.w = (int)(s.width * g_bs); e.h = (int)(s.height * g_bs);
+    push(&e);
+}
+/* moved between a Retina and a standard display */
+- (void)windowDidChangeBackingProperties:(NSNotification *)n
+{
+    plat_event e;
+    NSSize s = g_win.contentView.bounds.size;
+    CGFloat b = backing();
+    (void)n;
+    if (b == g_bs) return;
+    g_bs = b;
+    memset(&e, 0, sizeof e);
+    e.type = PE_SCALE; push(&e);
+    e.type = PE_RESIZE; e.w = (int)(s.width * g_bs); e.h = (int)(s.height * g_bs);
     push(&e);
 }
 - (void)windowDidEnterFullScreen:(NSNotification *)n { (void)n; g_full = 1; }
@@ -196,7 +221,7 @@ static void mouse(NSView *v, NSEvent *ev, int type, int button)
 
 static UDDelegate *g_delegate;
 
-@interface UDApp : NSObject
+@interface UDApp : NSObject <NSApplicationDelegate>
 @end
 @implementation UDApp
 - (void)quit:(id)sender
@@ -204,6 +229,24 @@ static UDDelegate *g_delegate;
     plat_event e;
     (void)sender;
     memset(&e, 0, sizeof e); e.type = PE_QUIT; push(&e);
+}
+/* A document double-clicked in Finder, dropped on the Dock icon or opened
+ * with "Open With" arrives HERE, as an Apple event - never in argv, whether
+ * we were already running or were launched to open it. */
+- (void)application:(NSApplication *)app openURLs:(NSArray<NSURL *> *)urls
+{
+    (void)app;
+    for (NSURL *u in urls)
+        if (u.fileURL) plat_post_open(u.fileSystemRepresentation);
+}
+/* Logging out, or Quit from the Dock: the same question the close box asks.
+ * The shell quits by itself once the document is safe. */
+- (NSApplicationTerminateReply)applicationShouldTerminate:(NSApplication *)s
+{
+    plat_event e;
+    (void)s;
+    memset(&e, 0, sizeof e); e.type = PE_QUIT; push(&e);
+    return NSTerminateCancel;
 }
 @end
 static UDApp *g_app;
@@ -230,14 +273,23 @@ static void build_menu(NSString *name)
     NSApp.mainMenu = bar;
 }
 
+int  plat_scale(void) { return (int)(g_bs * 100 + 0.5); }
+void plat_size(int *w, int *h)
+{
+    NSSize s = g_win.contentView.bounds.size;
+    *w = (int)(s.width * g_bs); *h = (int)(s.height * g_bs);
+}
+
 int plat_init(const char *title, int w, int h, int hidden)
 {
+    g_hidden = hidden;
     @autoreleasepool {
         NSString *t = [NSString stringWithUTF8String:title];
         UDView *v;
         [NSApplication sharedApplication];
         [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
         g_app = [UDApp new];
+        NSApp.delegate = g_app;          /* before launch: the open-file event */
         build_menu(t);
         [NSApp finishLaunching];
 
@@ -257,6 +309,7 @@ int plat_init(const char *title, int w, int h, int hidden)
         g_win.contentView = v;
         [g_win makeFirstResponder:v];
         [g_win center];
+        g_bs = backing();
         if (!hidden) {
             [g_win makeKeyAndOrderFront:nil];
             [NSApp activateIgnoringOtherApps:YES];
@@ -332,6 +385,45 @@ void plat_set_title(const char *utf8)
 void plat_set_fullscreen(int on)
 {
     if (!!on != g_full) [g_win toggleFullScreen:nil];
+}
+
+/* the dot in the close button: unsaved changes */
+void plat_set_modified(int on) { g_win.documentEdited = on ? YES : NO; }
+
+void plat_args(int *argc, char ***argv) { (void)argc; (void)argv; }   /* UTF-8 already */
+
+/* ---- the clipboard: the general pasteboard, as plain text ------------------ */
+int plat_clip_set(const char *utf8)
+{
+    @autoreleasepool {
+        NSPasteboard *pb = [NSPasteboard generalPasteboard];
+        NSString *s = [NSString stringWithUTF8String:utf8 ? utf8 : ""];
+        if (!s) return 0;
+        [pb clearContents];
+        return [pb setString:s forType:NSPasteboardTypeString] ? 1 : 0;
+    }
+}
+
+long plat_clip_get(char *buf, long cap)
+{
+    @autoreleasepool {
+        NSString *s = [[NSPasteboard generalPasteboard] stringForType:NSPasteboardTypeString];
+        const char *u;
+        long n;
+        if (cap > 0) buf[0] = 0;
+        if (!s) return 0;
+        /* a Mac line end is LF already; CR LF from a Windows app is not */
+        s = [s stringByReplacingOccurrencesOfString:@"\r\n" withString:@"\n"];
+        u = s.UTF8String;
+        if (!u) return 0;
+        n = (long)strlen(u);
+        if (cap > 0) {
+            long m = n < cap - 1 ? n : cap - 1;
+            memcpy(buf, u, (size_t)m);
+            buf[m] = 0;
+        }
+        return n;
+    }
 }
 int plat_is_fullscreen(void) { return g_full; }
 

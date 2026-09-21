@@ -1,0 +1,9 @@
+# Intl.doc read back: the same characters, not mojibake.  Then Save As
+# .docx (F12), whose XML is UTF-8, for word_utf8_x.txt to read back.
+key a ctrl
+key c ctrl
+expect clip Café – “naïve” €5 ?mega
+pick docs/Intl.docx
+key F12
+frames 3
+expect title UnoWord - Intl.docx

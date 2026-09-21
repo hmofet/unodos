@@ -1,0 +1,4 @@
+# UnoCalc launched with a workbook on its command line
+expect title UnoCalc - Book1.xls
+expect dirty 0
+shot calc_arg.ppm

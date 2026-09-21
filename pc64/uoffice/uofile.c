@@ -95,7 +95,9 @@ void uof_open(uod_ui *s, int save, const char *const *types, int ntypes,
               int sw, int sh)
 {
     const uoc_look *k = uoc_look_97();
-    int n = 0, W = 300, row = fb_text_h() + k->pad;
+    /* the table is written at 100% and uodlg scales it; the one measured
+     * value (a button's height, from the text) is taken back to 100% first */
+    int n = 0, W = 300, row = (fb_text_h() + k->pad) * 100 / uoc_scale();
 
     load_volumes();
     g_shown_vol = -1;
@@ -170,7 +172,7 @@ void uof_open(uod_ui *s, int save, const char *const *types, int ntypes,
     g_dlg.n = n;
     g_dlg.tab = 0; g_dlg.ntab = 0;
     g_dlg.w = W;
-    g_dlg.h = 200 + fb_text_h() + 12;
+    g_dlg.h = 200 + fb_text_h() * 100 / uoc_scale() + 12;
     g_dlg.help = 1;
 
     uod_open(s, &g_dlg, sw, sh);
