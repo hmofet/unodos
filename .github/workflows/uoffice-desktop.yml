@@ -160,11 +160,16 @@ jobs:
             if ($p.ExitCode -ne 0 -or -not (Test-Path "$env:TEMP\$a.ppm")) { throw "$a did not run" }
           }
           # all-users or per-user, depending on how NSIS ran
-          $lnk = Get-ChildItem "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\UnoOffice",
-                               "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\UnoOffice" `
-                               -Filter *.lnk -ErrorAction SilentlyContinue
-          $lnk | ForEach-Object { $_.Name }
-          if ($lnk.Count -lt 3) { throw "Start menu entries missing" }
+          $lnk = Get-ChildItem "$env:ProgramData\Microsoft\Windows\Start Menu\Programs",
+                               "$env:APPDATA\Microsoft\Windows\Start Menu\Programs" `
+                               -Recurse -Include UnoWord.lnk,UnoCalc.lnk,UnoShow.lnk -ErrorAction SilentlyContinue
+          $lnk | ForEach-Object { $_.FullName }
+          if ($lnk.Count -lt 3) {
+            Get-ChildItem "$env:ProgramData\Microsoft\Windows\Start Menu","$env:APPDATA\Microsoft\Windows\Start Menu" `
+              -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.LastWriteTime -gt (Get-Date).AddMinutes(-15) } |
+              ForEach-Object { $_.FullName }
+            throw "Start menu entries missing"
+          }
           Start-Process "$dir\Uninstall.exe" -ArgumentList '/S' -Wait
           Start-Sleep 5
           if (Test-Path "$dir\UnoWord.exe") { throw "uninstall left files" }
