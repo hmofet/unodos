@@ -50,6 +50,13 @@ set(CPACK_NSIS_EXECUTABLES_DIRECTORY ".")
 # Start menu: UnoOffice\UnoWord, UnoCalc, UnoShow (exe name;label pairs)
 set(CPACK_PACKAGE_EXECUTABLES "UnoWord;UnoWord;UnoCalc;UnoCalc;UnoShow;UnoShow")
 set(CPACK_NSIS_MENU_LINKS "README.txt;Read me")
+# .doc/.xls/.ppt and their OOXML twins: "Open with" and Default apps (see
+# assoc.nsh for why an installer can offer but not take the default)
+# (NSIS's single quotes: CPack turns an escaped double quote into a ';')
+set(CPACK_NSIS_EXTRA_INSTALL_COMMANDS
+    "!include '${PKG}/assoc.nsh'\n!insertmacro UO_ASSOC_ALL")
+set(CPACK_NSIS_EXTRA_UNINSTALL_COMMANDS
+    "!include '${PKG}/assoc.nsh'\n!insertmacro UO_UNASSOC_ALL")
 
 # ---- macOS: DMG -------------------------------------------------------------
 set(CPACK_DMG_VOLUME_NAME "UnoOffice")
