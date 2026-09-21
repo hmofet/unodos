@@ -53,9 +53,14 @@ set(CPACK_NSIS_MENU_LINKS "README.txt;Read me")
 # .doc/.xls/.ppt and their OOXML twins: "Open with" and Default apps (see
 # assoc.nsh for why an installer can offer but not take the default)
 # NSIS's single quotes, because CPack turns an escaped double quote into a
-# ';'; and a native path, because makensis on Windows cannot find an
-# !include spelled with forward slashes (makensis on Linux can).
-file(TO_NATIVE_PATH "${PKG}/assoc.nsh" UO_ASSOC_NSH)
+# ';'; and on Windows a backslashed path, because makensis there cannot find
+# an !include spelled with forward slashes (makensis on Linux can).  CPack
+# writes the value into CPackConfig.cmake without escaping it, so each
+# backslash is doubled here to survive that file being read back.
+set(UO_ASSOC_NSH "${PKG}/assoc.nsh")
+if(CMAKE_HOST_WIN32)
+    string(REPLACE "/" "\\\\" UO_ASSOC_NSH "${UO_ASSOC_NSH}")
+endif()
 set(CPACK_NSIS_EXTRA_INSTALL_COMMANDS
     "!include '${UO_ASSOC_NSH}'\n!insertmacro UO_ASSOC_ALL")
 set(CPACK_NSIS_EXTRA_UNINSTALL_COMMANDS
