@@ -9,7 +9,7 @@
 # them sits one small backend per OS (uodesk_plat.h) on that OS's own API:
 # nothing third-party is linked at all.
 cmake_minimum_required(VERSION 3.16)
-project(UnoOffice VERSION 0.2.0 LANGUAGES C
+project(UnoOffice VERSION 0.3.0 LANGUAGES C
         DESCRIPTION "UnoWord, UnoCalc and UnoShow - an Office 97-style suite"
         HOMEPAGE_URL "https://github.com/hmofet/unooffice")
 if(WIN32)
