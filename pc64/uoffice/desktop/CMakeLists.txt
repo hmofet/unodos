@@ -132,6 +132,12 @@ endif()
 
 set(CHROME uochrome uoicons uodlg uobars uofile uoapp)
 file(GLOB FONTS ${PC64}/fonts/*.ttf)
+if(NOT APPLE)
+    add_custom_target(uodesk_fonts
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_BINARY_DIR}/fonts
+        COMMAND ${CMAKE_COMMAND} -E copy ${FONTS} ${CMAKE_CURRENT_BINARY_DIR}/fonts
+        COMMENT "copying the fonts beside the apps")
+endif()
 
 # add_uoapp(<target> <display name> <app .c> <what it is> <uoffice files> <unodoc files>)
 # The per-app file lists mirror pc64/build.sh's [3d2]..[3d4] steps.
@@ -193,15 +199,17 @@ function(add_uoapp tgt display app what lane doc)
     endif()
 
     # the fonts ride beside the binary in the build tree (inside the bundle
-    # on a Mac), so a build runs without being installed
+    # on a Mac), so a build runs without being installed.  Elsewhere the three
+    # apps share one fonts/ folder, filled ONCE by uodesk_fonts: three
+    # post-build copies into it raced under a parallel build, and one lost.
     if(APPLE)
         set(fontdir $<TARGET_FILE_DIR:${tgt}>/../Resources/fonts)
+        add_custom_command(TARGET ${tgt} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E make_directory ${fontdir}
+            COMMAND ${CMAKE_COMMAND} -E copy ${FONTS} ${fontdir})
     else()
-        set(fontdir $<TARGET_FILE_DIR:${tgt}>/fonts)
+        add_dependencies(${tgt} uodesk_fonts)
     endif()
-    add_custom_command(TARGET ${tgt} POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E make_directory ${fontdir}
-        COMMAND ${CMAKE_COMMAND} -E copy ${FONTS} ${fontdir})
 
     install(TARGETS ${tgt} BUNDLE DESTINATION ${UODESK_BIN} RUNTIME DESTINATION ${UODESK_BIN})
     if(APPLE)
