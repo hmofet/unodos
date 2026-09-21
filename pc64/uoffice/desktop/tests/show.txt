@@ -1,0 +1,8 @@
+# UnoShow: into the slide show and back out
+shot show_edit.ppm
+key F5
+frames 10
+shot show_running.ppm
+key Escape
+frames 5
+shot show_back.ppm

@@ -1,0 +1,11 @@
+# UnoWord: reopen the Document1 word_save.txt wrote
+# (the file-name field is not focused when the dialog opens: click it,
+# or the letters are taken as dialog mnemonics)
+key o ctrl
+frames 2
+shot word_opendlg.ppm
+click 497 328
+text Document1
+key Return
+frames 5
+shot word_reopened.ppm
