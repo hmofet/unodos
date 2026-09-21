@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=@UO_DISPLAY@
+GenericName=@UO_WHAT@
+Comment=@UO_WHAT@ from UnoOffice, an Office 97-style suite
+Exec=@UO_EXEC@
+Icon=org.unodos.@UO_DISPLAY@
+Terminal=false
+Categories=Office;
+StartupWMClass=@UO_DISPLAY@

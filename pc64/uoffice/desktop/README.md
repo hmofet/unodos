@@ -5,6 +5,31 @@ from **the same source files** pc64 links into `APPS\UO*.UNO`. Nothing under
 `pc64/apps/` or `pc64/uoffice/` is forked or `#ifdef`'d for the desktop.
 `[EXPERIMENTAL]`, part of the unoffice lane (see [`../UOFFICE.md`](../UOFFICE.md)).
 
+They're **standalone**. Each app is a single native program with its UnoDOS
+host built in. There's no UnoDOS, emulator or VM involved, and nothing else to
+install besides the app.
+
+## Install
+
+| OS | package | what you get |
+|---|---|---|
+| Windows 10/11 x64 | `UnoOffice-<ver>-windows-x64.exe` | an installer: Program Files, Start-menu entries, uninstaller in *Installed apps* |
+| | `UnoOffice-<ver>-windows-x64.zip` | the same, portable: unzip anywhere and run |
+| macOS 11+ (Apple silicon and Intel) | `UnoOffice-<ver>-macos-universal.dmg` | drag the three apps to Applications |
+| Debian / Ubuntu 22.04+ | `unooffice_<ver>_amd64.deb` | `sudo apt install ./unooffice_*.deb` |
+| Fedora / RHEL / openSUSE | `unooffice-<ver>-1.x86_64.rpm` | `sudo dnf install ./unooffice-*.rpm` |
+| other Linux | `UnoOffice-<ver>-linux-x86_64.tar.gz` | unpack; `bin/unoword` etc. |
+
+The builds aren't code-signed (the Mac ones are ad-hoc signed), so the
+first launch needs one extra click. On Windows, SmartScreen: *More info >
+Run anyway*. On macOS: right-click the app > *Open*, or *System Settings >
+Privacy & Security > Open Anyway*.
+
+Releases are published by pushing a tag `v<version>` that matches
+`project(VERSION)` in `CMakeLists.txt`. The `uoffice-release` workflow builds
+every package, installs each one on its own OS, launches the installed apps,
+and only then attaches the packages to a GitHub release.
+
 ## How it works
 
 `uodesk.c` is a **shell**, a small stand-in for `pc64_uui.c`. It gives a module
@@ -44,9 +69,24 @@ cmake --build build
   To cross-compile from Linux, use `-DCMAKE_TOOLCHAIN_FILE=cmake/mingw-w64.cmake
   -DCMAKE_PREFIX_PATH=<SDL2 mingw devel>/x86_64-w64-mingw32`.
 
-To ship a build, copy the executable(s) along with the `fonts/` folder next to
-them. The CI workflow (`.github/workflows/uoffice-desktop.yml`) builds and
-smoke-tests all three platforms and uploads packaged artifacts.
+Release builds use `-DUODESK_FETCH_SDL=ON` on every OS, so SDL is linked in
+and no system SDL is needed at run time. Then, in the build directory:
+
+```bash
+cpack                  # Windows: NSIS + ZIP (NSIS must be installed)
+                       # macOS:   DMG
+                       # Linux:   DEB + RPM (needs rpmbuild) + TGZ
+```
+
+None of this needs virtualization: a Windows installer builds on Windows
+(MSYS2 + NSIS), a DMG needs a Mac, and the Linux packages build on any Linux.
+CI (`.github/workflows/uoffice-desktop.yml`) does all three and
+install-tests them.
+
+The app icons in `packaging/icons/` are rendered from the UnoDOS shell's own
+emblems (`pc64/pc64_icons.c`) by `packaging/mkicons.c`. Regenerate them with
+`cmake --build build --target uodesk_mkicons && build/uodesk_mkicons packaging/icons`
+(needs zlib).
 
 ## Options
 
@@ -87,8 +127,11 @@ desktop shell doesn't cause them, and it shouldn't hide them either.
   selection, not to text typed afterwards. The pc64 build behaves the same.
 - **No unsaved-changes prompt** on close: the apps don't report whether a
   document is dirty.
-- **Unsigned binaries.** macOS Gatekeeper needs right-click > Open the first
-  time, and Windows SmartScreen will warn.
+- **Unsigned binaries** (see *Install*). Proper signing needs an Apple
+  Developer ID ($99/yr, plus notarization) and a Windows code-signing
+  certificate.
+- **No file associations** yet: the apps can't open a file passed on the
+  command line, so double-clicking a `.doc` won't launch UnoWord.
 - **No HiDPI.** A pixel on a Retina screen is scaled by the OS, because
   the chrome's 16x16 icons and metrics are drawn at 1x.
 - On Win64, the apps declare `malloc(unsigned long)`, which is 32-bit there.
