@@ -1,11 +1,15 @@
-# Push a tag v<version> (matching project(VERSION) in
+# Push a tag uoffice-v<version> (matching project(VERSION) in
 # pc64/uoffice/desktop/CMakeLists.txt) to build, install-test and publish
 # every UnoOffice installer as a GitHub release.
+#
+# Prefixed, not a bare v*: in hmofet/unodos the v* tags are UnoDOS's own
+# releases (v3.34.0 ...), and components there already tag with a prefix
+# (pc64-v1.1, flasher-v1.0.0).
 name: uoffice-release
 
 on:
   push:
-    tags: ['v*']
+    tags: ['uoffice-v*']
 
 permissions:
   contents: write
