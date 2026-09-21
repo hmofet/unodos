@@ -212,13 +212,18 @@ static void key_event(const plat_event *e)
 
 static void text_event(const plat_event *e)
 {
-    const unsigned char *s = (const unsigned char *)e->text;
-    /* The documents are byte strings in a single-byte model (unodoc), so
-     * only ASCII goes in; a multi-byte UTF-8 sequence would be inserted as
-     * its raw bytes.  Latin-1 and beyond is a model question for uoword.h,
-     * not something the shell can paper over. */
-    for (; *s; s++)
-        if (*s >= 32 && *s < 127) deliver_key(*s, 0, 0, e->mods);
+    const char *s = e->text;
+    int n = (int)strlen(s);
+    /* Typed text is UTF-8; a module takes one Unicode character per key, as
+     * UEFI's SimpleTextIn delivers it.  Each app maps the character into its
+     * document's CP-1252 (uoapp.h), so an e-acute or a euro sign is typed
+     * as itself - this used to drop everything outside ASCII here. */
+    while (n > 0) {
+        int cp, k = uoa_u8_get(s, n, &cp);
+        if (k <= 0) break;
+        if (cp >= 32 && cp != 127 && cp != 0xFFFD) deliver_key(cp, 0, 0, e->mods);
+        s += k; n -= k;
+    }
 }
 
 /* ---- the frame ------------------------------------------------------------ */
@@ -411,11 +416,16 @@ static int script_step(void)
     if (!n || line[0] == '#') return 1;
     if (!strncmp(line, "text ", 5)) {
         const char *s = line + 5;
-        for (; *s; s++) {
+        /* one event per CHARACTER, as a keyboard delivers them: a multi-byte
+         * UTF-8 sequence stays whole */
+        while (*s) {
             plat_event e;
+            int cp, k = uoa_u8_get(s, (int)strlen(s), &cp);
             memset(&e, 0, sizeof e);
-            e.type = PE_TEXT; e.text[0] = *s;
+            e.type = PE_TEXT;
+            memcpy(e.text, s, (size_t)k);
             q_push(&e);
+            s += k;
         }
     } else if (!strncmp(line, "pick ", 5)) snprintf(g_pick, sizeof g_pick, "%s", line + 5);
     /* "open PATH": the OS handing us a file (a double click); "quit": the

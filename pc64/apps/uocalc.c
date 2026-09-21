@@ -96,6 +96,22 @@ static char *a_num(long v, char *b)
  * Column widths and row heights are uniform in v1; the headers and the cells
  * derive from the SAME two functions, so a click lands on the cell it looks
  * like it lands on. */
+/* The workbook's text is CP-1252 (unodoc's, and Excel 97's); the font
+ * engine draws UTF-8.  Every string that came out of a cell or a sheet name
+ * goes through these two, or an accented letter draws as a broken glyph. */
+static void dtext(int x, int y, const char *s, fb_px c)
+{
+    char u[768];
+    uoa_to_utf8(s, -1, u, (int)sizeof u);
+    fb_text(x, y, u, c, -1);
+}
+static int dtext_w(const char *s)
+{
+    char u[768];
+    uoa_to_utf8(s, -1, u, (int)sizeof u);
+    return fb_text_w(u);
+}
+
 static int cell_h(void) { return fb_text_h() + 4; }
 static int cell_w(void) { return fb_text_w("0") * 9 + 6; }
 static int head_w(void) { return fb_text_w("0") * 4 + 6; }
@@ -242,9 +258,9 @@ static void draw_formula_bar(void)
             else if (v.kind == UXL_NUM) { uxl_general(v.num, buf, (int)sizeof buf); t = buf; }
             else t = "";
         }
-        fb_text(g_rect.x + nb + 11, y + 3, t, k->text, -1);
+        dtext(g_rect.x + nb + 11, y + 3, t, k->text);
         if (g_editing)
-            fb_vline(g_rect.x + nb + 11 + fb_text_w(g_edit), y + 3,
+            fb_vline(g_rect.x + nb + 11 + dtext_w(g_edit), y + 3,
                      fb_text_h(), k->text);
     }
 }
@@ -300,12 +316,12 @@ static void draw_grid(void)
             fb_vline(x + cw - 1, y, chh, k->light);
             if (uxl_text(BK, g_sheet, row, col, buf, (int)sizeof buf) > 0) {
                 uxl_val v;
-                int w = fb_text_w(buf);
+                int w = dtext_w(buf);
                 /* numbers right-align, text left - Excel's default and the
                  * fastest way to see that a "number" arrived as text */
                 uxl_get(BK, g_sheet, row, col, &v);
-                fb_text(x + ((v.kind == UXL_NUM || v.kind == UXL_ERR)
-                             ? cw - 3 - w : 3), y + 2, buf, k->text, -1);
+                dtext(x + ((v.kind == UXL_NUM || v.kind == UXL_ERR)
+                           ? cw - 3 - w : 3), y + 2, buf, k->text);
             }
         }
     }
@@ -329,13 +345,13 @@ static void draw_tabs(void)
     fb_fill_rect(g_rect.x, y, g_rect.w, tabs_h(), k->face);
     for (i = 0; i < uxl_sheets(BK); i++) {
         const char *nm = uxl_sheet_name(BK, i);
-        int w = fb_text_w(nm) + 12;
+        int w = dtext_w(nm) + 12;
         int on = (i == g_sheet);
         fb_fill_rect(x, y + (on ? 0 : 2), w, tabs_h() - (on ? 0 : 2),
                      on ? k->hilight : k->face);
         uoc_bevel(x, y + (on ? 0 : 2), w, tabs_h() - (on ? 0 : 2),
                   k->hilight, k->shadow, 1);
-        fb_text(x + 6, y + 3, nm, k->text, -1);
+        dtext(x + 6, y + 3, nm, k->text);
         x += w + 2;
     }
 }
@@ -1049,7 +1065,7 @@ static int app_event(struct unoui_widget *w, const void *evp, void *ctx)
             e->y <  g_rect.y + g_rect.h - uob_status_h()) {
             int i, x = g_rect.x + 4;
             for (i = 0; i < uxl_sheets(BK); i++) {
-                int tw = fb_text_w(uxl_sheet_name(BK, i)) + 12;
+                int tw = dtext_w(uxl_sheet_name(BK, i)) + 12;
                 if (e->x >= x && e->x < x + tw) {
                     commit_edit();
                     g_sheet = i;
@@ -1192,10 +1208,12 @@ static int uw_key(int uni, int scan, int ctrl)
         return 1;
     }
     if (uni >= ' ') {
-        int n;
+        /* typed Unicode -> the workbook's CP-1252; what it cannot hold is '?' */
+        int n, b = uoa_uc_to_1252(uni);
+        if (b < 0) b = '?';
         if (!g_editing) { g_editing = 1; g_edit[0] = 0; }
         n = a_len(g_edit);
-        if (n < (int)sizeof g_edit - 1) { g_edit[n] = (char)uni; g_edit[n + 1] = 0; }
+        if (n < (int)sizeof g_edit - 1) { g_edit[n] = (char)b; g_edit[n + 1] = 0; }
         pc64_shell_dirty();
         return 1;
     }
