@@ -205,8 +205,11 @@ jobs:
           cmake --build build -j
           lipo -info build/UnoWord.app/Contents/MacOS/UnoWord
           otool -L build/UnoWord.app/Contents/MacOS/UnoWord
-          # nothing but the system's own frameworks and libraries
-          ! otool -L build/UnoWord.app/Contents/MacOS/UnoWord | tail -n +2 | grep -vE "/System/Library/|/usr/lib/"
+          # nothing but the system's own frameworks and libraries (dependency
+          # lines are the indented ones; a universal binary adds a header
+          # line per architecture)
+          ! otool -L build/UnoWord.app/Contents/MacOS/UnoWord | grep -E "^[[:space:]]" |
+              grep -vE "/System/Library/|/usr/lib/"
       - name: smoke (release)
         working-directory: pc64/uoffice/desktop
         run: tests/smoke.sh "$PWD/build"
