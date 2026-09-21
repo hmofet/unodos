@@ -1,0 +1,55 @@
+# UnoWord's caret keys, and formatting chosen before typing.  The text is
+# checked through the clipboard (Select All, Copy), the bold in the file.
+text abc def
+key Home
+key Right
+key Right
+text X
+key End
+text !
+key a ctrl
+key c ctrl
+expect clip abXc def!
+# Shift+Left selects; typing replaces the selection
+key End
+key Left shift
+key Left shift
+text ?
+key a ctrl
+key c ctrl
+expect clip abXc de?
+# Up and Down move between lines and keep their column
+key End
+key Return
+text second
+key Up
+key End
+text <
+key Down
+key Home
+text >
+key a ctrl
+key c ctrl
+expect clip abXc de?<\n>second
+# Delete, Backspace and Ctrl+Left
+key Home
+key Delete
+key End
+key Backspace
+key Left ctrl
+text _
+key a ctrl
+key c ctrl
+expect clip abXc de?<\n_secon
+# Ctrl+B with nothing selected: what is typed next is bold
+key End ctrl
+key Return
+key b ctrl
+text Bold
+key b ctrl
+text  plain
+pick docs/Keys.docx
+key s ctrl
+frames 3
+expect title UnoWord - Keys.docx
+shot word_keys.ppm
