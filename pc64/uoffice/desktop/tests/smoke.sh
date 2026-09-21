@@ -22,6 +22,10 @@ magic() { od -An -tx1 -N4 "$1" | tr -d ' \n'; }
 run UnoWord word_save.txt
 run UnoWord word_clip.txt
 run UnoWord word_keys.txt
+# beyond ASCII: typed, copied, and through .doc and .docx and back
+run UnoWord word_utf8.txt
+run UnoWord word_utf8_open.txt docs/Intl.doc
+run UnoWord word_utf8_x.txt docs/Intl.docx
 # Ctrl+B before typing: the new paragraph was saved bold
 if command -v unzip >/dev/null 2>&1; then
     unzip -p "$OUT/docs/Keys.docx" word/document.xml | grep -q "<w:b/>" ||
@@ -47,6 +51,8 @@ cmp -s "$OUT/doc1.before" "$OUT/docs/Document1.doc" &&
     { echo "FAIL: Yes on close did not save Document1.doc"; exit 1; }
 run UnoCalc calc.txt
 run UnoCalc calc_clip.txt
+run UnoCalc calc_utf8.txt
+run UnoCalc calc_utf8_open.txt docs/Intl.xls
 run UnoShow show.txt
 [ "$(magic "$OUT/docs/Book1.xls")" = "d0cf11e0" ] || { echo "FAIL: UnoCalc did not save a .xls"; ls "$OUT/docs"; exit 1; }
 run UnoCalc calc_arg.txt docs/Book1.xls

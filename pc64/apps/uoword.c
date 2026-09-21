@@ -184,13 +184,14 @@ static int px_of(const uow_chp *c)
 static int style_of(const uow_chp *c)
 { return (c->bold ? UNO_FS_BOLD : 0) | (c->italic ? UNO_FS_ITALIC : 0); }
 
+/* The document is CP-1252 (uoapp.h); the font engine measures and draws
+ * UTF-8.  Handing it the raw bytes, as this did, drew every accented letter
+ * of an opened document as a broken glyph and measured it wrongly. */
 static int m_text_w(const char *s, long n, const uow_chp *c, void *ctx)
 {
-    char b[256];
-    long i;
+    char b[768];
     (void)ctx;
-    for (i = 0; i < n && i < 255; i++) b[i] = s[i];
-    b[i] = 0;
+    uoa_to_utf8(s, n < 255 ? n : 255, b, (int)sizeof b);
     return uno_font_text_w_styled(slot_of(c), px_of(c), style_of(c), b);
 }
 static int m_height(const uow_chp *c, void *ctx)
@@ -1134,10 +1135,10 @@ static void draw_doc(int cx, int cy, int cw, int ch)
         if (y > cy + ch || y + ln->h < cy) continue;
         for (k = 0; k < ln->nrun; k++) {
             const uow_lrun *r = &LAY->run[ln->run0 + k];
-            char buf[256];
-            long got = uow_read(DOC, r->cp, r->n < 255 ? r->n : 255, buf);
+            char raw[256], buf[768];
+            long got = uow_read(DOC, r->cp, r->n < 255 ? r->n : 255, raw);
             fb_px col = r->chp.color ? r->chp.color : FB_RGB(0,0,0);
-            buf[got] = 0;
+            uoa_to_utf8(raw, got, buf, (int)sizeof buf);
             if (selB > selA && r->cp < selB && r->cp + r->n > selA)
                 fb_fill_rect(cx + ln->x + r->x, y, r->w, ln->h,
                              FB_RGB(0x00,0x00,0x80));
@@ -1359,6 +1360,7 @@ static int uw_key(int uni, int scan, int ctrl)
      * so the caret could be placed only with the mouse.  Before the Ctrl
      * letters: Ctrl+Left and Ctrl+End are navigation too. */
     if (!uni && nav_key(scan, ctrl)) return 1;
+    if (scan == 0x16 && !uni) { do_command(C_SAVEAS); return 1; }   /* F12, as in Word */
     if (scan == 0x08 && !uni) {                     /* Delete                 */
         if (!delete_sel() && g_caret < doc_last()) {
             uow_delete(DOC, g_caret, 1);
@@ -1404,8 +1406,11 @@ static int uw_key(int uni, int scan, int ctrl)
     }
     if (uni == '\r' || uni == '\n') { type_text("\r", 1); return 1; }
     if (uni == '\t')                { type_text("\t", 1); return 1; }
-    if (uni >= ' ' && uni < 127) {
-        char ch = (char)uni;
+    if (uni >= ' ') {
+        /* typed Unicode -> the document's CP-1252: e-acute, the euro sign and
+         * curly quotes are all one byte there; what it cannot hold is '?' */
+        int b = uoa_uc_to_1252(uni);
+        char ch = (char)(b < 0 ? '?' : b);
         type_text(&ch, 1);
         return 1;
     }

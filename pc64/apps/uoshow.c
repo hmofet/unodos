@@ -290,13 +290,13 @@ static int font_slot(void)
     return -1;
 }
 
+/* The deck's text is CP-1252 (uoapp.h) - its bullet is 0x95 - and the font
+ * engine draws UTF-8, so every string is converted on its way in. */
 static int mx_w(const char *s, int n, const uos_chp *c, int px, void *ctx)
 {
-    char b[256];
-    int i;
+    char b[768];
     (void)ctx;
-    for (i = 0; i < n && i < 255; i++) b[i] = s[i];
-    b[i] = 0;
+    uoa_to_utf8(s, n < 255 ? n : 255, b, (int)sizeof b);
     return uno_font_text_w_styled(font_slot(), px, style_of(c), b);
 }
 static int mx_h(const uos_chp *c, int px, void *ctx)
@@ -304,11 +304,9 @@ static int mx_h(const uos_chp *c, int px, void *ctx)
 static void mx_draw(int x, int y, const char *s, int n, const uos_chp *c,
                     int px, fb_px col, void *ctx)
 {
-    char b[256];
-    int i;
+    char b[768];
     (void)ctx;
-    for (i = 0; i < n && i < 255; i++) b[i] = s[i];
-    b[i] = 0;
+    uoa_to_utf8(s, n < 255 ? n : 255, b, (int)sizeof b);
     uno_font_draw_styled(font_slot(), px, style_of(c),
                          x, y + uno_font_baseline_px(font_slot(), px),
                          b, col, -1);
@@ -350,10 +348,8 @@ static void draw_outline(int x, int y, int w, int h)
         if (t >= 0 && uos_text_paras(PR, i, t) > 0) {
             int len = 0;
             const char *s = uos_para_text(PR, i, t, 0, &len);
-            char buf[128];
-            int k;
-            for (k = 0; k < len && k < 127; k++) buf[k] = s[k];
-            buf[k] = 0;
+            char buf[384];
+            uoa_to_utf8(s, len < 127 ? len : 127, buf, (int)sizeof buf);
             fb_text(x + 26, ly, buf, FB_RGB(0, 0, 0), -1);
         }
         ly += fb_text_h() + 3;
@@ -364,11 +360,9 @@ static void draw_outline(int x, int y, int w, int h)
             const uos_para *pa = uos_para_at(PR, i, b, j);
             int len = 0;
             const char *s = uos_para_text(PR, i, b, j, &len);
-            char buf[128];
-            int k;
-            for (k = 0; k < len && k < 127; k++) buf[k] = s[k];
-            buf[k] = 0;
-            fb_text(x + 40 + pa->level * 16, ly, "\x95", FB_RGB(0x40,0x40,0x40), -1);
+            char buf[384];
+            uoa_to_utf8(s, len < 127 ? len : 127, buf, (int)sizeof buf);
+            fb_text(x + 40 + pa->level * 16, ly, "\xE2\x80\xA2", FB_RGB(0x40,0x40,0x40), -1);
             fb_text(x + 52 + pa->level * 16, ly, buf, FB_RGB(0x20, 0x20, 0x20), -1);
             ly += fb_text_h() + 2;
         }
@@ -1303,7 +1297,8 @@ static int uw_key(int uni, int scan, int ctrl)
             return 1;
         }
         if (uni >= ' ' && n < (int)sizeof g_edit - 2) {
-            g_edit[n] = (char)uni; g_edit[n + 1] = 0;
+            int b = uoa_uc_to_1252(uni);        /* '?' where CP-1252 has none */
+            g_edit[n] = (char)(b < 0 ? '?' : b); g_edit[n + 1] = 0;
             if (!g_nlvl) { g_lvl[0] = 0; g_nlvl = 1; }
             edit_flush();
             return 1;
