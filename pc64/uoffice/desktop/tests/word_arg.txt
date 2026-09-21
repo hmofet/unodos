@@ -1,0 +1,7 @@
+# UnoWord launched with a document on its command line (Explorer's "%1",
+# the .desktop entry's %F): it opens, and the title bar names it.
+expect title UnoWord - Letter.doc
+expect dirty 0
+shot word_arg.ppm
+text X
+expect dirty 1

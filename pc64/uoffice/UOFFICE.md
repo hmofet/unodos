@@ -488,6 +488,28 @@ three are appends, which is how those choke-points are meant to grow.
 
 ## Changelog
 
+- **2026-09-21 - the host seam, and what the desktop builds were missing.**
+  `uoapp.{h,c}`: a seam between an app and whatever hosts it, beside the
+  UnoUuiApp vtable rather than widening it. Through it the desktop shell asks
+  an app to open a file and to close, and the app answers with an
+  unsaved-changes prompt (Yes / No / Cancel, Save As first when there is no
+  file) that New, Open, Close and Exit use as well. Cut / Copy / Paste in all
+  three apps: UTF-8 text on the OS clipboard, UnoCalc's ranges as
+  tab-separated values whose formulas shift on paste, UnoShow's shapes. The
+  apps name their document in the window title. UnoWord's caret keys work
+  (they never reached it: `uw_key` ignored the scan code), Shift extends a
+  selection, typing replaces one, formatting chosen with no selection applies
+  to what is typed next, and the caret is placed by measuring rather than
+  interpolating. Text is CP-1252 in the models and UTF-8 at every edge
+  (drawing, typing, the clipboard), which also fixed opened documents'
+  accented letters drawing as broken glyphs. The UI scales: `uoc_set_scale`
+  sizes the chrome's look and resamples the icons, `uodlg` scales every app's
+  dialog table, and the apps follow `uno_font_ui_scale()` (now a kernel
+  export), so pc64's Settings > UI scale and a HiDPI desktop get the same
+  result. pc64 installs no host, so there Exit stays a no-op and the
+  clipboard is the app's own, as before. Gates: the six host harnesses, the
+  pc64 production and debug builds, and the desktop smoke test on all three
+  OSes (`desktop/tests/`).
 - **2026-08-03 - file I/O.** UnoCalc reads and writes `.xls` (values, number
   formats and formulas as text, through unodoc's ptg compiler and
   decompiler); UnoShow reads and writes `.ppt`. Before this, UnoCalc's Save

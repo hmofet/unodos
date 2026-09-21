@@ -20,6 +20,13 @@ toolkit, and nothing else to install besides the app.
 | Fedora / RHEL / openSUSE | `unooffice-<ver>-1.x86_64.rpm` | `sudo dnf install ./unooffice-*.rpm` |
 | other Linux | `UnoOffice-<ver>-linux-x86_64.tar.gz` | unpack; `bin/unoword` etc. |
 
+Every installer registers the apps for their documents: `.doc`/`.docx`
+open in UnoWord, `.xls`/`.xlsx` in UnoCalc, `.ppt`/`.pptx` in UnoShow.
+Windows 10 and 11 let only the user choose a default, so there the apps
+appear under *Open with* and in *Settings > Default apps* without taking
+the files away from whatever already opens them. macOS and Linux desktops
+offer them the same way (*Open With*, the file manager's application list).
+
 The builds aren't code-signed (the Mac ones are ad-hoc signed), so the
 first launch needs one extra click. On Windows, SmartScreen: *More info >
 Run anyway*. On macOS: right-click the app > *Open*, or *System Settings >
@@ -50,6 +57,9 @@ The seam is [`uodesk_plat.h`](uodesk_plat.h), with one backend per OS:
 | mouse | `WM_*BUTTON*`, `WM_MOUSEWHEEL` | `mouseDown:` ..., `scrollWheel:` | `ButtonPress`, `MotionNotify` |
 | title / fullscreen | `SetWindowTextW` / borderless monitor-sized window | `title` / `toggleFullScreen:` (its own Space) | `_NET_WM_NAME` / `_NET_WM_STATE_FULLSCREEN` |
 | Open / Save As | `GetOpenFileNameW` / `GetSaveFileNameW` | `NSOpenPanel` / `NSSavePanel` | the XDG desktop portal over D-Bus (GNOME's or KDE's own dialog), else zenity / kdialog |
+| clipboard | `CF_UNICODETEXT` | the general pasteboard | the `CLIPBOARD` selection, served by the app |
+| a document to open | `"%1"` on the command line (UTF-16, via `CommandLineToArgvW`) | the open-document Apple event (`application:openURLs:`) | `%F` on the command line |
+| HiDPI | per-monitor DPI aware (v2), `WM_DPICHANGED` | the backing scale (Retina), `windowDidChangeBackingProperties:` | `GDK_SCALE`, else `Xft.dpi` |
 | links against | user32, gdi32, comdlg32, shell32 | Cocoa | libX11, libdbus-1 |
 
 `uodesk.c` is a **shell**, a small stand-in for `pc64_uui.c`. It gives a module
@@ -64,6 +74,8 @@ what pc64 gives it:
 | the Office 97 Open / Save As dialog | the OS dialog, through `uof_set_native()` (see `../uofile.h`). The chosen file's folder becomes a volume, so the app still addresses it as (volume, name), and a plain Save goes back to that folder. If the OS has no picker, the Office 97 dialog is drawn as before |
 | `uno_fs_*` over FAT volumes | `uodesk_fs.c`: each **folder** is a volume (Documents, Desktop and home by default, or `--dir`, plus every folder the picker opens) |
 | TTF faces on the ESP | `fonts/` beside the executable (`Contents/Resources/fonts` in a Mac bundle, `share/unooffice/fonts` in the Linux packages) |
+| Settings > UI scale | the display's scale: the frame is in device pixels, and the UI is drawn at the matching scale (`uno_font_set_ui_scale` + `uoc_set_scale`, the same two calls pc64's setting makes), so text is sharp at 150% and on Retina |
+| (nothing: pc64's shell cannot ask a module these) | the host seam in [`../uoapp.h`](../uoapp.h): the close box asks the app, which puts up "Do you want to save the changes...?" when there are any; a file the OS hands over is opened through the same prompt; and the app's Cut/Copy/Paste go to the OS clipboard |
 
 The text engine (`pc64_font.c` + stb_truetype), unoui, unodoc and um_inflate
 are all linked unchanged, so the documents you save are the same `.doc` / `.xls`
@@ -111,13 +123,20 @@ emblems (`pc64/pc64_icons.c`) by `packaging/mkicons.c`. Regenerate them with
 ## Options
 
 ```
+unoword [options] [FILE]
+
+FILE             a document to open (what a double click passes)
 --dir PATH       a folder for the drawn Open/Save dialog (repeatable)
---size WxH       initial window size
+--size WxH       initial window size, in points
+--scale PCT      the UI scale, 100-200 (default: the display's; also
+                 the UNOOFFICE_SCALE environment variable)
 --shot out.ppm   render one frame and exit
---script FILE    replay input (text / key / click / shot / frames / pick), then exit
+--script FILE    replay input, then exit; see uodesk.c for the commands
+                 (text, key, click, shot, frames, sleep, pick, open, quit,
+                 clip, expect title/dirty/clip, passed)
 ```
 
-F11 or Alt+Enter toggles fullscreen.
+F11 or Alt+Enter toggles fullscreen. F10 or Alt+letter opens the menus.
 
 ## Test
 
@@ -128,32 +147,42 @@ tests/smoke.sh <build dir> [.exe]      # under xvfb-run on Linux
 The smoke test drives each app through the shell's real dispatch path:
 typing, saving, a formula, and the slide show in and out. It opens a document
 from a *second* folder, edits it and plain-saves it, and checks the save went
-back to that folder. It then checks that UnoWord and UnoCalc wrote
-compound-file documents. The OS file dialog can't be scripted, so `pick`
-supplies its answer; everything after the dialog is the real code. CI runs the
-test on all three OSes, and under ASan+UBSan on Linux and macOS.
+back to that folder, and opens one from the command line. It drives the
+unsaved-changes prompt down all four paths (Cancel, No, Yes in place, Yes
+through Save As), the clipboard in both directions, UnoWord's caret keys,
+text beyond ASCII through `.doc`, `.docx` and `.xls` and back, and the UI at
+150% and 200%. The OS file dialog can't be scripted, so `pick` supplies its
+answer; everything after the dialog is the real code. CI runs the test on all
+three OSes, and under ASan+UBSan on Linux and macOS, then installs each
+package and checks that the OS opens a document with it.
 
 ## Known limits
 
 These come from the apps or the pc64 contract they're written to. The
 desktop shell doesn't cause them, and it shouldn't hide them either.
 
-- **ASCII text only.** The document model is single-byte, so non-ASCII typed
-  characters are dropped instead of being inserted as raw UTF-8.
-- **No clipboard.** The apps' Cut/Copy/Paste aren't implemented yet, so there's
-  nothing to connect to the OS clipboard.
-- **UnoWord:** the arrow keys don't move the caret, and Bold/Italic apply to a
-  selection, not to text typed afterwards. The pc64 build behaves the same.
-- **No unsaved-changes prompt** on close: the apps don't report whether a
-  document is dirty.
+- **Western European text only.** The documents are CP-1252, the encoding
+  unodoc reads and writes for all six formats, so accents, the euro sign and
+  curly quotes work everywhere, and a character CP-1252 has no byte for
+  (Greek, Cyrillic, CJK) is typed and pasted as `?`. Lifting that is a wider
+  internal encoding in unodoc, not something the apps can do alone.
+- **UnoWord saves character formatting per paragraph.** unodoc's Word writer
+  takes bold, italic and alignment for a whole paragraph (`ud_docw_para`), so
+  a bold word inside a plain paragraph is written with the paragraph's first
+  character's formatting. The editor itself keeps it per character.
+- **UnoCalc's Cut** clears the cells straight away rather than moving them on
+  Paste, and a paste from another program types the values in (formulas are
+  shifted only when the copy came from UnoCalc).
+- **UnoShow's clipboard is text and whole shapes**; there is no selection
+  inside a text box.
+- **The UI scale stops at 200%**, the font engine's ceiling. A 250% or 300%
+  display draws the UI at 200%, which is small but sharp.
 - **Unsigned binaries** (see *Install*). Proper signing needs an Apple
   Developer ID ($99/yr, plus notarization) and a Windows code-signing
   certificate.
-- **No file associations** yet: the apps can't open a file passed on the
-  command line, so double-clicking a `.doc` won't launch UnoWord.
-- **No HiDPI.** The chrome's 16x16 icons and metrics are drawn at 1x, so a
-  framebuffer pixel is one point: macOS doubles it crisply on Retina
-  (nearest-neighbour), while Windows at 150-200% scales it with some softness.
+- **One document per window.** Opening a file while one is open replaces it
+  (after the save prompt); on Windows and Linux a second double click starts
+  a second window, on macOS it comes to the running one.
 - On Win64, the apps declare `malloc(unsigned long)`, which is 32-bit there.
   That's harmless for the allocation sizes involved, and pc64's own mingw
   build does the same.

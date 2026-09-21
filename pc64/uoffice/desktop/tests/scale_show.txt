@@ -1,0 +1,6 @@
+# UnoShow at a UI scale: the slide text must not be scaled twice
+shot scale_show.ppm
+key m ctrl
+frames 2
+shot scale_show_dlg.ppm
+key Escape

@@ -115,8 +115,15 @@ static int ensure_loaded(int slot)
  * that are never asked for. */
 #define GC_FIRST 32
 #define GC_COUNT 95                    /* 32..126 */
-#define GMAXW 40
-#define GMAXH 40
+/* The largest glyph cell, in pixels - and so the largest text.  The caches
+ * are static (six banks of 95 glyphs, plus the non-ASCII LRU), so pc64 keeps
+ * 40, about 3 MB.  A build that draws 200% UI text or full-screen slide
+ * titles raises it: the UnoOffice desktop apps set 96 (about 18 MB). */
+#ifndef UNO_FONT_MAXPX
+#define UNO_FONT_MAXPX 40
+#endif
+#define GMAXW UNO_FONT_MAXPX
+#define GMAXH UNO_FONT_MAXPX
 typedef struct {
     int ready, w, h, ox, oy, adv;      /* grayscale bbox + integer advance (px) */
     int adv26;                         /* exact advance, 26.6 fixed point */
@@ -158,7 +165,7 @@ static int cur_px(void)
     int p = g_active >= 0 ? g_fonts[g_active].px : 0;
     int base = p > 0 ? p : g_px;
     int eff = base * g_uiscale / 100;
-    if (eff < 8) eff = 8; if (eff > 40) eff = 40;
+    if (eff < 8) eff = 8; if (eff > UNO_FONT_MAXPX) eff = UNO_FONT_MAXPX;
     return eff;
 }
 static int cur_sub(void)
@@ -526,7 +533,7 @@ int uno_font_height_with(int slot)
 static int styled_enter(int slot, int px, int *sav_slot, int *sav_px)
 {
     *sav_slot = g_active; *sav_px = g_px;
-    if (px < 8) px = 8; if (px > 40) px = 40;
+    if (px < 8) px = 8; if (px > UNO_FONT_MAXPX) px = UNO_FONT_MAXPX;
     if (slot < 0 || !ensure_loaded(slot)) return 0;
     g_active = slot; g_px = px; set_metrics();
     return 1;

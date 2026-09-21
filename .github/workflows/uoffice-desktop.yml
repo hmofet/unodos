@@ -85,6 +85,15 @@ jobs:
             test -s /tmp/$a.ppm
           done
           desktop-file-validate /usr/share/applications/org.unodos.*.desktop
+          # the file associations: dpkg's trigger has indexed our MIME types
+          grep -E "^application/msword=.*org\.unodos\.UnoWord\.desktop" /usr/share/applications/mimeinfo.cache
+          grep -E "^application/vnd\.ms-excel=.*org\.unodos\.UnoCalc\.desktop" /usr/share/applications/mimeinfo.cache
+          grep -E "^application/vnd\.ms-powerpoint=.*org\.unodos\.UnoShow\.desktop" /usr/share/applications/mimeinfo.cache
+          # and the entry's Exec line opens the file it is handed
+          cp ../smoke-out/docs/Document1.doc /tmp/Document1.doc
+          rm -f /tmp/uoffice_assoc_ok
+          xvfb-run -a /usr/bin/unoword --script "$PWD/../tests/assoc_word.txt" /tmp/Document1.doc
+          test -f /tmp/uoffice_assoc_ok
           sudo apt-get remove -y unooffice
       - uses: actions/upload-artifact@v4
         with:
@@ -146,7 +155,7 @@ jobs:
         working-directory: pc64/uoffice/desktop/build
         run: |
           export PATH="$PATH:/c/Program Files (x86)/NSIS"
-          cpack -G "NSIS;ZIP"
+          cpack -G "NSIS;ZIP" || { tail -40 _CPack_Packages/win64/NSIS/NSISOutput.log; exit 1; }
           ls -la UnoOffice-*
       - name: install silently, launch, uninstall
         shell: pwsh
@@ -159,6 +168,31 @@ jobs:
             if (-not (Test-Path "$dir\$a.exe")) { throw "$a.exe not installed" }
             $p = Start-Process "$dir\$a.exe" -ArgumentList "--shot","$env:TEMP\$a.ppm" -Wait -PassThru
             if ($p.ExitCode -ne 0 -or -not (Test-Path "$env:TEMP\$a.ppm")) { throw "$a did not run" }
+          }
+          # The file associations (packaging/assoc.nsh): the ProgID's open
+          # command is registered, .doc lists it under Open With, and that
+          # command - run the way Explorer runs it - opens the document.
+          $root = 'HKLM:\Software\Classes'
+          if (-not (Test-Path "$root\UnoOffice.UnoWord.Document")) { $root = 'HKCU:\Software\Classes' }
+          foreach ($p in 'UnoWord.Document','UnoCalc.Document','UnoShow.Document') {
+            if (-not (Test-Path "$root\UnoOffice.$p\shell\open\command")) { throw "ProgID UnoOffice.$p missing" }
+          }
+          foreach ($x in @{e='.doc';a='UnoWord'},@{e='.xlsx';a='UnoCalc'},@{e='.pptx';a='UnoShow'}) {
+            $v = Get-ItemProperty "$root\$($x.e)\OpenWithProgids" -Name "UnoOffice.$($x.a).Document" -ErrorAction SilentlyContinue
+            if (-not $v) { throw "$($x.e) does not offer $($x.a)" }
+          }
+          $cmd = (Get-ItemProperty "$root\UnoOffice.UnoWord.Document\shell\open\command").'(default)'
+          Write-Host "open command: $cmd"
+          $doc = Resolve-Path ..\smoke-out\docs\Document1.doc
+          $exe = ($cmd -split '"')[1]
+          # the script writes /tmp/uoffice_assoc_ok, which is \tmp on the
+          # CURRENT drive - D: on a hosted runner, not C:
+          New-Item -ItemType Directory -Force \tmp | Out-Null
+          Remove-Item \tmp\uoffice_assoc_ok -ErrorAction SilentlyContinue
+          $p = Start-Process $exe -ArgumentList "--script",(Resolve-Path ..\tests\assoc_word.txt),"`"$doc`"" -Wait -PassThru
+          Write-Host "exit code: $($p.ExitCode)"
+          if ($p.ExitCode -ne 0 -or -not (Test-Path \tmp\uoffice_assoc_ok)) {
+            throw "the registered open command did not open the document"
           }
           # all-users or per-user, depending on how NSIS ran
           $lnk = Get-ChildItem "$env:ProgramData\Microsoft\Windows\Start Menu\Programs",
@@ -174,6 +208,9 @@ jobs:
           Start-Process "$dir\Uninstall.exe" -ArgumentList '/S' -Wait
           Start-Sleep 5
           if (Test-Path "$dir\UnoWord.exe") { throw "uninstall left files" }
+          if (Test-Path "$root\UnoOffice.UnoWord.Document") { throw "uninstall left the ProgID" }
+          $v = Get-ItemProperty "$root\.doc\OpenWithProgids" -Name "UnoOffice.UnoWord.Document" -ErrorAction SilentlyContinue
+          if ($v) { throw "uninstall left .doc's Open With entry" }
       - uses: actions/upload-artifact@v4
         with:
           name: UnoOffice-windows
@@ -226,7 +263,20 @@ jobs:
             codesign --verify --deep --strict "$mnt/$a.app"
             "$mnt/$a.app/Contents/MacOS/$a" --shot "/tmp/$a.ppm"
             test -s "/tmp/$a.ppm"
+            plutil -lint "$mnt/$a.app/Contents/Info.plist"
           done
+          # the document types Finder's Open With and a double click read
+          test "$(plutil -extract CFBundleDocumentTypes.0.LSItemContentTypes.0 raw "$mnt/UnoWord.app/Contents/Info.plist")" = com.microsoft.word.doc
+          test "$(plutil -extract CFBundleDocumentTypes.1.LSItemContentTypes.0 raw "$mnt/UnoCalc.app/Contents/Info.plist")" = org.openxmlformats.spreadsheetml.sheet
+          # a document handed over the way Finder does it - an Apple event,
+          # not argv - is opened (the script fails the run if not)
+          cp ../smoke-out/docs/Document1.doc /tmp/Document1.doc
+          rm -f /tmp/uoffice_assoc_ok
+          open -W --stderr /tmp/assoc.log -a "$mnt/UnoWord.app" /tmp/Document1.doc \
+               --args --script "$PWD/../tests/assoc_word.txt"
+          cat /tmp/assoc.log
+          ! grep -q FAIL /tmp/assoc.log
+          test -f /tmp/uoffice_assoc_ok      # the script ran to its end, every expect held
           hdiutil detach "$mnt"
       - uses: actions/upload-artifact@v4
         with:

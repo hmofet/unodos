@@ -1,0 +1,4 @@
+# Intl.xls read back
+click 76 123
+key c ctrl
+expect clip Zürich €\n

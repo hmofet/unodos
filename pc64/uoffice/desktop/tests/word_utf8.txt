@@ -1,0 +1,12 @@
+# Text beyond ASCII.  Everything here but the Omega is in CP-1252, the
+# document's encoding (uoapp.h), so it types, copies and saves as itself;
+# the Omega has no CP-1252 byte and becomes '?'.
+text Café – “naïve” €5 Ωmega
+key a ctrl
+key c ctrl
+expect clip Café – “naïve” €5 ?mega
+pick docs/Intl.doc
+key s ctrl
+frames 3
+expect title UnoWord - Intl.doc
+shot word_utf8.ppm

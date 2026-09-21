@@ -21,7 +21,7 @@
 #include "uochrome.h"
 
 /* ---- the look ------------------------------------------------------------- */
-static const uoc_look k97 = {
+static uoc_look k97 = {        /* not const: uoc_set_scale sizes it */
     FB_RGB(0xC0,0xC0,0xC0),   /* face      */
     FB_RGB(0xFF,0xFF,0xFF),   /* hilight   */
     FB_RGB(0xDF,0xDF,0xDF),   /* light     */
@@ -36,6 +36,25 @@ static const uoc_look k97 = {
     4                         /* pad       */
 };
 const uoc_look *uoc_look_97(void) { return &k97; }
+
+/* ---- the UI scale -----------------------------------------------------------
+ * Text is scaled by the font engine (uno_font_set_ui_scale); the chrome's
+ * own dimensions - the icon cell and the padding every metric below is built
+ * from - follow here, and the icons are resampled to the new cell.  An app
+ * passes the font engine's scale each frame (uno_font_ui_scale), which is
+ * what keeps the two in step on pc64 (Settings > UI scale) and on a HiDPI
+ * desktop alike. */
+static int g_scale = 100;
+void uoc_set_scale(int pct)
+{
+    if (pct < 100) pct = 100;
+    if (pct > 300) pct = 300;
+    if (pct == g_scale) return;
+    g_scale = pct;
+    k97.icon_px = 16 * pct / 100;
+    k97.pad     = 4 * pct / 100;
+}
+int uoc_scale(void) { return g_scale; }
 
 /* ---- metrics, all derived ------------------------------------------------- */
 static int m_bar_h  (const uoc_look *k) { return fb_text_h() + 2 * k->pad + 2; }
@@ -187,10 +206,13 @@ void uoc_draw_icon(const uoc_look *k, int x, int y, int idx, int disabled)
     int p = k->icon_px;
     if (idx < 0) return;
     if (g_atlas && g_cell > 0 && g_cols > 0 && idx < g_count) {
+        /* resampled to the cell, nearest-neighbour: the artwork is pixel art,
+         * and at 200% that is an exact doubling */
         int sx = (idx % g_cols) * g_cell, sy = (idx / g_cols) * g_cell, r, c;
-        for (r = 0; r < g_cell && r < p; r++)
-            for (c = 0; c < g_cell && c < p; c++) {
-                fb_px v = g_atlas[(long)(sy + r) * g_cols * g_cell + sx + c];
+        for (r = 0; r < p; r++)
+            for (c = 0; c < p; c++) {
+                int ar = r * g_cell / p, ac = c * g_cell / p;
+                fb_px v = g_atlas[(long)(sy + ar) * g_cols * g_cell + sx + ac];
                 if (v >> 24) fb_pixel(x + c, y + r, disabled ? k->gray_text : v);
             }
         return;
@@ -359,7 +381,7 @@ static int tb_item_len(const uoc_look *k, const uoc_tbitem *b, int vert)
 {
     if (b->kind == UOC_TB_SEP)   return k->pad + 2;
     if (vert)                    return m_tb_btn(k);
-    if (b->w > 0)                return b->w;
+    if (b->w > 0)                return b->w * g_scale / 100;   /* a 100% width */
     if (b->kind == UOC_TB_COMBO) return k->icon_px * 5;
     if (b->kind == UOC_TB_SPLIT) return m_tb_btn(k) + k->pad + 7;
     return m_tb_btn(k);
@@ -627,6 +649,7 @@ void uoc_init(uoc_ui *u, const uoc_menu *menu, int nmenu,
 }
 
 int uoc_menu_open(const uoc_ui *u) { return u && u->open >= 0; }
+int uoc_menu_active(const uoc_ui *u) { return u && (u->open >= 0 || u->keyed); }
 int uoc_pick(const uoc_ui *u) { return u ? u->pop_pick : -1; }
 
 void uoc_dismiss(uoc_ui *u)

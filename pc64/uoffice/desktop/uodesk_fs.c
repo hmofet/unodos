@@ -32,6 +32,7 @@
 #include <shlobj.h>
 #else
 #include <dirent.h>
+#include <limits.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #endif
@@ -223,11 +224,36 @@ int uodesk_fs_volume_of(const char *path, char *name, int cap)
     if (i == g_nvol) {
         /* full: the newest picked folder replaces the previous picked one */
         if (g_nvol >= MAXVOL) g_nvol = MAXVOL - 1;
+        i = g_nvol;                               /* where it is about to land */
         uodesk_fs_add_dir(dir, 0);
         if (g_nvol == i) return -1;               /* not a folder after all */
     }
     s_cpy(name, base, cap);
     return i;
+}
+
+/* A path from the command line or the OS, made absolute: "letter.doc" typed
+ * in a terminal means the one in the current folder, and a bare name has no
+ * folder for uodesk_fs_volume_of to make a volume of.  0 if no such file. */
+int uodesk_fs_abs(const char *path, char *out, int cap)
+{
+#ifdef _WIN32
+    wchar_t w[PATHCAP], full[PATHCAP];
+    DWORD n, a;
+    if (!widen(path, w, PATHCAP)) return 0;
+    n = GetFullPathNameW(w, PATHCAP, full, 0);
+    if (!n || n >= PATHCAP) return 0;
+    a = GetFileAttributesW(full);
+    if (a == INVALID_FILE_ATTRIBUTES || (a & FILE_ATTRIBUTE_DIRECTORY)) return 0;
+    return WideCharToMultiByte(CP_UTF8, 0, full, -1, out, cap, 0, 0) > 0;
+#else
+    char buf[PATH_MAX];
+    struct stat st;
+    if (!realpath(path, buf) || stat(buf, &st) != 0 || S_ISDIR(st.st_mode)) return 0;
+    if ((int)strlen(buf) >= cap) return 0;
+    s_cpy(out, buf, cap);
+    return 1;
+#endif
 }
 
 /* ---- listing ---------------------------------------------------------------- */

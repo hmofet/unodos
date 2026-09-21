@@ -1,0 +1,11 @@
+# UnoCalc: a cell with text beyond ASCII, saved as .xls
+text Zürich €
+key Return
+click 76 123
+key c ctrl
+expect clip Zürich €\n
+pick docs/Intl.xls
+key s ctrl
+frames 3
+expect title UnoCalc - Intl.xls
+shot calc_utf8.ppm

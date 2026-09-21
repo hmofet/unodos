@@ -12,6 +12,8 @@ void uodesk_fs_add_dir(const char *path, const char *label);
 /* a full path the OS picker returned -> its folder's volume (added if new)
  * and the file's name in it; -1 if it cannot be one */
 int  uodesk_fs_volume_of(const char *path, char *name, int cap);
+/* a path as given (relative, say) -> absolute, UTF-8; 0 = no such file */
+int  uodesk_fs_abs(const char *path, char *out, int cap);
 
 int  uodesk_write_ppm(const char *path, const fb_px *px, int w, int h);
 

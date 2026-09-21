@@ -1,0 +1,4 @@
+# UnoCalc at a UI scale: the grid, the formula bar and a message box
+text 42
+key Return
+shot scale_calc.ppm
