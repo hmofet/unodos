@@ -26,7 +26,7 @@ Owner: the unoffice lane (workers B, C, D).
 | 10 | UnoCalc the app (`pc64/apps/uocalc.c` -> `APPS\UOCALC.UNO`) | **landed**, `[EXPERIMENTAL]` |
 | 11 | UnoShow: presentation model, autoshape geometry, slide renderer (`uoshow.h`, `uos_*.c`) | **landed**, `[EXPERIMENTAL]` |
 | 12 | UnoShow the app (`pc64/apps/uoshow.c` -> `APPS\UOSHOW.UNO`) | **landed**, `[EXPERIMENTAL]` |
-| D | the suite as native Windows / macOS / Linux apps: an SDL2 shell over the unmodified app sources ([`desktop/README.md`](desktop/README.md)) | **landed**, `[EXPERIMENTAL]` |
+| D | the suite as native Windows / macOS / Linux apps: a shell over the unmodified app sources, on each OS's own API (Win32 / AppKit / Xlib), with the OS file picker via `uof_set_native` ([`desktop/README.md`](desktop/README.md)) | **landed**, `[EXPERIMENTAL]` |
 
 ## Why the chrome is ours and not unoui
 

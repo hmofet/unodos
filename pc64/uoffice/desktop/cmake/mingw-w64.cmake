@@ -1,7 +1,6 @@
 # Cross-compile the Windows build from Linux with mingw-w64:
 #   cmake -S . -B build-win -DCMAKE_TOOLCHAIN_FILE=cmake/mingw-w64.cmake \
-#         -DCMAKE_PREFIX_PATH=/path/to/SDL2-2.x/x86_64-w64-mingw32 \
-#         -DUODESK_STATIC_SDL=ON
+#         -DCMAKE_EXE_LINKER_FLAGS="-static -static-libgcc"
 set(CMAKE_SYSTEM_NAME Windows)
 set(CMAKE_SYSTEM_PROCESSOR x86_64)
 set(CMAKE_C_COMPILER   x86_64-w64-mingw32-gcc)

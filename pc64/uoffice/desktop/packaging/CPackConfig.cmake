@@ -63,19 +63,19 @@ set(CPACK_DEBIAN_FILE_NAME DEB-DEFAULT)
 set(CPACK_DEBIAN_PACKAGE_MAINTAINER "UnoDOS project <hmofet@users.noreply.github.com>")
 set(CPACK_DEBIAN_PACKAGE_SECTION "editors")
 set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON)
-# SDL is linked in, and it dlopen()s the display libraries at run time, so
-# the linker cannot see them: X11 is required, the rest widen what works.
-set(CPACK_DEBIAN_PACKAGE_DEPENDS "libx11-6, libxext6")
-set(CPACK_DEBIAN_PACKAGE_RECOMMENDS
-    "libxcursor1, libxi6, libxrandr2, libxss1, libxkbcommon0, libwayland-client0, libwayland-cursor0, libwayland-egl1, libdecor-0-0")
+# libX11 and libdbus are linked directly, so shlibdeps finds both itself.
+# The file picker is the desktop's portal (every GNOME/KDE install has one);
+# zenity is the fallback where there is none.
+set(CPACK_DEBIAN_PACKAGE_RECOMMENDS "xdg-desktop-portal")
+set(CPACK_DEBIAN_PACKAGE_SUGGESTS "zenity | kdialog")
 
 set(CPACK_RPM_PACKAGE_NAME "unooffice")
 set(CPACK_RPM_FILE_NAME RPM-DEFAULT)
 set(CPACK_RPM_PACKAGE_LICENSE "MPL-2.0")
 set(CPACK_RPM_PACKAGE_GROUP "Applications/Productivity")
 set(CPACK_RPM_PACKAGE_URL "${PROJECT_HOMEPAGE_URL}")
-set(CPACK_RPM_PACKAGE_REQUIRES "libX11, libXext")
-set(CPACK_RPM_PACKAGE_SUGGESTS "libXcursor, libXi, libXrandr, libXScrnSaver, libxkbcommon, libwayland-client, libwayland-cursor, libdecor")
+# libX11 / libdbus: rpmbuild's automatic requires find both
+set(CPACK_RPM_PACKAGE_SUGGESTS "xdg-desktop-portal, zenity")
 # directories the system owns, which the package must not claim
 set(CPACK_RPM_EXCLUDE_FROM_AUTO_FILELIST_ADDITION
     /usr/share/applications

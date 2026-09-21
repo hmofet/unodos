@@ -48,14 +48,11 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
-      - name: toolchain + SDL's display back-ends + rpmbuild
+      - name: toolchain - Xlib + libdbus are all we link - and rpmbuild
         run: |
           sudo apt-get update
-          sudo apt-get install -y libsdl2-dev xvfb rpm \
-            libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev \
-            libxss-dev libxkbcommon-dev libwayland-dev wayland-protocols \
-            libegl-dev libgl-dev libdecor-0-dev libdbus-1-dev desktop-file-utils
-      - name: build (ASan + UBSan, system SDL)
+          sudo apt-get install -y libx11-dev libdbus-1-dev xvfb rpm desktop-file-utils
+      - name: build (ASan + UBSan)
         working-directory: pc64/uoffice/desktop
         run: |
           cmake -S . -B build-asan -DCMAKE_BUILD_TYPE=Debug -DUODESK_SANITIZE=ON
@@ -65,10 +62,10 @@ jobs:
         env:
           ASAN_OPTIONS: detect_leaks=0
         run: xvfb-run -a tests/smoke.sh "$PWD/build-asan"
-      - name: build (release, SDL linked in)
+      - name: build (release)
         working-directory: pc64/uoffice/desktop
         run: |
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DUODESK_FETCH_SDL=ON
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
           cmake --build build -j
       - name: smoke (release)
         working-directory: pc64/uoffice/desktop
@@ -128,19 +125,20 @@ jobs:
           msystem: MINGW64
           install: >-
             mingw-w64-x86_64-gcc mingw-w64-x86_64-cmake mingw-w64-x86_64-ninja
-            mingw-w64-x86_64-SDL2 mingw-w64-x86_64-python git
+            mingw-w64-x86_64-python
       - name: NSIS
         shell: pwsh
         run: |
           if (-not (Test-Path "${env:ProgramFiles(x86)}\NSIS\makensis.exe")) { choco install nsis -y --no-progress }
-      - name: build (release, SDL linked in, static runtime)
+      - name: build (release, static C runtime)
         working-directory: pc64/uoffice/desktop
         run: |
-          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DUODESK_FETCH_SDL=ON \
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
                 -DCMAKE_EXE_LINKER_FLAGS="-static -static-libgcc"
           cmake --build build
           objdump -p build/UnoWord.exe | grep "DLL Name"
-          ! objdump -p build/UnoWord.exe | grep -iE "SDL2|libgcc|libwinpthread"
+          # nothing but Windows' own DLLs
+          ! objdump -p build/UnoWord.exe | grep "DLL Name" | grep -viE "kernel32|user32|gdi32|comdlg32|shell32|msvcrt|ucrt|api-ms-win"
       - name: smoke
         working-directory: pc64/uoffice/desktop
         run: tests/smoke.sh "$PWD/build" .exe
@@ -188,12 +186,10 @@ jobs:
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
-      # real SDL2 from source (UODESK_FETCH_SDL): Homebrew's sdl2 is the
-      # sdl2-compat shim over a dynamic SDL3 - see CMakeLists.txt
       - name: build (ASan + UBSan)
         working-directory: pc64/uoffice/desktop
         run: |
-          cmake -S . -B build-asan -DCMAKE_BUILD_TYPE=Debug -DUODESK_SANITIZE=ON -DUODESK_FETCH_SDL=ON
+          cmake -S . -B build-asan -DCMAKE_BUILD_TYPE=Debug -DUODESK_SANITIZE=ON
           cmake --build build-asan -j
       - name: smoke (sanitized)
         working-directory: pc64/uoffice/desktop
@@ -204,12 +200,13 @@ jobs:
       - name: build (release, universal)
         working-directory: pc64/uoffice/desktop
         run: |
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DUODESK_FETCH_SDL=ON \
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
                 -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
           cmake --build build -j
           lipo -info build/UnoWord.app/Contents/MacOS/UnoWord
           otool -L build/UnoWord.app/Contents/MacOS/UnoWord
-          ! otool -L build/UnoWord.app/Contents/MacOS/UnoWord | grep -qE "homebrew|libSDL"
+          # nothing but the system's own frameworks and libraries
+          ! otool -L build/UnoWord.app/Contents/MacOS/UnoWord | tail -n +2 | grep -vE "/System/Library/|/usr/lib/"
       - name: smoke (release)
         working-directory: pc64/uoffice/desktop
         run: tests/smoke.sh "$PWD/build"
