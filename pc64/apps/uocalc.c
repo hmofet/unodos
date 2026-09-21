@@ -67,7 +67,8 @@ static int  g_editing;
 static char g_edit[128];
 static int  g_dlg;                          /* DLG_* while one is up        */
 enum { DLG_NONE = 0, DLG_OPEN, DLG_SAVE, DLG_MSG };
-static char g_name[64];                     /* "" until saved or opened     */
+static char g_name[256];                    /* "" until saved or opened     */
+static int  g_vol;                          /* ...and the volume it lives on */
 static unsigned char *g_io;                 /* the file buffer              */
 static long g_iolen;
 static char g_statl[64], g_statr[64];
@@ -615,7 +616,10 @@ static void set_fmt_all(int fmt)
 static void do_command(int cmd)
 {
     switch (cmd) {
-    case C_NEW: BK = uxl_new(); g_cur_r = g_cur_c = 0; g_sel_r = g_sel_c = 0; break;
+    /* a new workbook has no file yet: without clearing the name, the next
+     * Save silently overwrote whatever was open before */
+    case C_NEW: BK = uxl_new(); g_cur_r = g_cur_c = 0; g_sel_r = g_sel_c = 0;
+                g_name[0] = 0; g_vol = 0; break;
     case C_OPEN:
         uof_set_fs(&kFs);
         uof_open(&DL, 0, kTypes, 2, pc64_shell_workarea_w(),
@@ -624,7 +628,7 @@ static void do_command(int cmd)
         break;
     case C_SAVE:
         if (g_name[0]) {
-            if (!save_book(0, g_name)) {
+            if (!save_book(g_vol, g_name)) {    /* back where it came from */
                 uod_msgbox(&DL, "UnoCalc", "Could not write the workbook.",
                            UOD_MB_OK, pc64_shell_workarea_w(),
                            pc64_shell_workarea_h());
@@ -715,7 +719,8 @@ static void dialog_closed(void)
     if (res != UOD_ID_OK) return;
     if (kind == DLG_OPEN) {
         a_cpy(g_name, uof_name(), (int)sizeof g_name);
-        if (!load_book(uof_volume(), g_name)) {
+        g_vol = uof_volume();
+        if (!load_book(g_vol, g_name)) {
             g_name[0] = 0;
             uod_msgbox(&DL, "UnoCalc", "That is not a workbook this build reads.",
                        UOD_MB_OK, pc64_shell_workarea_w(), pc64_shell_workarea_h());
@@ -724,7 +729,8 @@ static void dialog_closed(void)
     } else if (kind == DLG_SAVE) {
         a_cpy(g_name, uof_name(), (int)sizeof g_name);
         ensure_ext(g_name, (int)sizeof g_name, uof_type());
-        if (!save_book(uof_volume(), g_name)) {
+        g_vol = uof_volume();
+        if (!save_book(g_vol, g_name)) {
             uod_msgbox(&DL, "UnoCalc", "Could not write the workbook.",
                        UOD_MB_OK, pc64_shell_workarea_w(), pc64_shell_workarea_h());
             g_dlg = DLG_MSG;

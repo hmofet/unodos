@@ -45,4 +45,19 @@ int         uof_volume(void);
 const char *uof_name(void);
 int         uof_type(void);
 
+/* ---- the host's own file picker (optional) ---------------------------------
+ * A host that HAS a native Open/Save dialog - the desktop builds - installs
+ * one here, and uof_open then runs it instead of drawing the Office 97 one.
+ * The hook is synchronous: it returns 1 with *vol / name / *type filled for
+ * OK, 0 for Cancel, or -1 for "no picker available right now", which falls
+ * back to the drawn dialog.
+ *
+ * The app's side does not change.  uof_open still leaves `s` holding a
+ * dialog - already CLOSED, with uod_result() saying OK or Cancel - so the
+ * app's ordinary "dialog closed" path runs on the next event it sees, exactly
+ * as if the user had clicked the button.  pc64 never installs a hook. */
+typedef int (*uof_native_fn)(int save, const char *const *types, int ntypes,
+                             int *vol, char *name, int cap, int *type);
+void uof_set_native(uof_native_fn fn);
+
 #endif /* UOFILE_H */

@@ -28,6 +28,13 @@ static uod_dlg  g_dlg;
 static char     g_title[32];
 static int      g_result_vol;
 static int      g_result_type;
+/* the chosen name.  Wider than NAMELEN: a native picker reaches any file,
+ * and a long name cut to fit would name a different file. */
+static char     g_result_name[256];
+static uof_native_fn g_native;
+static int      g_native_done;       /* the open dialog was the host's picker */
+
+void uof_set_native(uof_native_fn fn) { g_native = fn; }
 
 static void f_cpy(char *d, const char *s, int cap)
 { int i = 0; if (!d || cap <= 0) return;
@@ -171,12 +178,34 @@ void uof_open(uod_ui *s, int save, const char *const *types, int ntypes,
     g_last_sel  = uod_value(s, ID_LIST);   /* whatever it opened on is not a pick */
     g_result_vol = 0;
     g_result_type = 0;
+    g_result_name[0] = 0;
+    g_native_done = 0;
+
+    /* The host's picker, if it has one (see uofile.h).  The drawn dialog was
+     * still opened above, so every accessor the app calls afterwards reads a
+     * real dialog; it is closed here before a single frame of it is drawn. */
+    if (g_native) {
+        int vol = 0, type = 0;
+        char name[sizeof g_result_name];
+        int r;
+        name[0] = 0;
+        r = g_native(save, types, ntypes, &vol, name, (int)sizeof name, &type);
+        if (r >= 0) {
+            g_native_done = 1;
+            s->result = (r > 0 && name[0]) ? UOD_ID_OK : UOD_ID_CANCEL;
+            uod_close(s);
+            g_result_vol  = vol;
+            g_result_type = (type >= 0 && type < ntypes) ? type : 0;
+            f_cpy(g_result_name, name, (int)sizeof g_result_name);
+        }
+    }
 }
 
 void uof_sync(uod_ui *s)
 {
     int vol, sel, i;
     if (!s || !s->d || s->d != &g_dlg) return;
+    if (g_native_done) return;      /* the picker already set the result */
 
     vol = uod_value(s, ID_LOOKIN);
     if (vol != g_shown_vol) {
@@ -222,10 +251,10 @@ void uof_sync(uod_ui *s)
     g_result_type = uod_value(s, ID_TYPE);
     if (uod_result(s) == UOD_ID_OK) {
         const char *t = uod_text(s, ID_NAME);
-        if (t && *t) f_cpy(g_fname[MAXFILE - 1], t, NAMELEN);
+        if (t && *t) f_cpy(g_result_name, t, (int)sizeof g_result_name);
     }
 }
 
 int uof_volume(void) { return g_result_vol; }
 int uof_type(void)   { return g_result_type; }
-const char *uof_name(void) { return g_fname[MAXFILE - 1]; }
+const char *uof_name(void) { return g_result_name; }
