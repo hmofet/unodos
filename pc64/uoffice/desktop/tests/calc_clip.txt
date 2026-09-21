@@ -1,0 +1,32 @@
+# UnoCalc and the clipboard: a 2x2 block goes out as tab-separated values,
+# and a relative formula pasted three rows down refers three rows down.
+# (Cell centres at 1000x680: column A x=76, B x=155; row n y=103+20n.)
+text 1
+key Tab
+text 2
+key Return
+key Left
+text 3
+key Tab
+text =A2*2
+key Return
+# A1:B2, by click and shift-click
+click 76 123
+click 155 143 shift
+key c ctrl
+expect clip 1\t2\n3\t6\n
+# paste at A4: B5 gets =A5*2, and A5 is the pasted 3, so it shows 6
+click 76 183
+key v ctrl
+click 155 203
+key c ctrl
+expect clip 6\n
+# text from another program: two rows of two, typed into A7:B8
+clip 10\t20\n30\t40
+click 76 243
+key v ctrl
+click 155 263
+key c ctrl
+expect clip 40\n
+expect dirty 1
+shot calc_clip.ppm

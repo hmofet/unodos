@@ -67,6 +67,28 @@ int  plat_wait(plat_event *e, int ms);
 void plat_present(const fb_px *px, int w, int h);
 
 unsigned plat_ticks(void);                  /* milliseconds, monotonic       */
+
+/* The program's arguments as UTF-8.  Windows hands main() its ANSI code page,
+ * which cannot spell most file names, so its backend rebuilds argv from the
+ * UTF-16 command line; elsewhere argv is already UTF-8 and this is a no-op. */
+void plat_args(int *argc, char ***argv);
+
+/* Files the OS asks us to open while we run (a Finder double click arrives
+ * as an Apple event, not as argv).  A backend posts each path; the shell
+ * takes them one at a time.  Both live in uodesk_plat_common.c. */
+void plat_post_open(const char *utf8_path);
+int  plat_take_open(char *path, int cap);   /* 1 = one was waiting           */
+
+/* The document has unsaved changes: the macOS close button's dot.  Windows
+ * and X11 have no such convention, and do nothing. */
+void plat_set_modified(int on);
+
+/* The OS clipboard, as UTF-8 text with '\n' line ends (a backend converts to
+ * its OS's own).  plat_clip_get copies at most cap - 1 bytes, always
+ * terminates, and returns the text's whole length: 0 when the clipboard is
+ * empty or holds no text. */
+int  plat_clip_set(const char *utf8);
+long plat_clip_get(char *buf, long cap);
 const char *plat_base_path(void);           /* our installed files, with a
                                                trailing separator            */
 void plat_set_title(const char *utf8);

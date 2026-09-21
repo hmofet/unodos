@@ -30,7 +30,7 @@ fi
 rm -f build/*.ppm
 
 # shellcheck disable=SC2086
-CORE="uochrome.c uoicons.c uodlg.c uobars.c uofile.c uow_doc.c uow_layout.c uxl_sheet.c uxl_calc.c uxl_numfmt.c uos_geom.c uos_model.c uos_render.c host_fbdim.c $FB/fb.c $FB/fb_aa.c"
+CORE="uochrome.c uoicons.c uodlg.c uobars.c uofile.c uoapp.c uow_doc.c uow_layout.c uxl_sheet.c uxl_calc.c uxl_numfmt.c uos_geom.c uos_model.c uos_render.c host_fbdim.c $FB/fb.c $FB/fb_aa.c"
 CC_ALL="$CC -O1 -g -std=c99 -Wall -Wextra -Werror -I. -I$FB -I$UI $SAN"
 
 # shellcheck disable=SC2086

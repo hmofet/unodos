@@ -1,0 +1,36 @@
+# The unsaved-changes guard.  Every way of dropping the document asks first:
+# the close box, File > Open, and a file the OS hands over.
+text Unsaved words.
+expect dirty 1
+# the close box: the prompt comes up, and Cancel keeps everything
+quit
+frames 2
+shot word_prompt.ppm
+key Escape
+frames 2
+expect dirty 1
+expect title UnoWord - Document1
+# File > Open with changes: No drops them, then the picker runs
+pick other/Letter.doc
+key o ctrl
+frames 2
+text n
+frames 3
+expect title UnoWord - Letter.doc
+expect dirty 0
+# a double-clicked file while Letter.doc has changes: Yes saves it in place
+text More.
+open docs/Document1.doc
+frames 2
+text y
+frames 3
+expect title UnoWord - Document1.doc
+expect dirty 0
+# the close box with changes, Yes: saved, and then the program ends
+text Changed again.
+quit
+frames 2
+text y
+frames 5
+# never reached: the program has quit
+expect title unreachable

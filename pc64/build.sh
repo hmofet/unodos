@@ -770,7 +770,7 @@ EOF
         # than a safety net, and a freestanding module must not import it.
         UWCF="$UCF -mno-stack-arg-probe -I../unoui -Iuoffice -I../unodoc"
         pc "$CC" $UWCF -DUNO_APP_SYM=uno_app_main               -c -o "build/apps/uoword.o" "apps/uoword.c"
-        for b in uochrome uoicons uodlg uobars uofile uow_doc uow_layout; do
+        for b in uochrome uoicons uodlg uobars uofile uoapp uow_doc uow_layout; do
             pc "$CC" $UWCF -c -o "build/apps/uo_$b.o" "uoffice/$b.c"
             WOBJ="$WOBJ build/apps/uo_$b.o"
         done
@@ -817,7 +817,7 @@ EOF
         # than a safety net, and a freestanding module must not import it.
         UWCF="$UCF -mno-stack-arg-probe -I../unoui -Iuoffice -I../unodoc"
         pc "$CC" $UWCF -DUNO_APP_SYM=uno_app_main               -c -o "build/apps/uocalc.o" "apps/uocalc.c"
-        for b in uochrome uoicons uodlg uobars uofile uxl_sheet uxl_calc uxl_numfmt; do
+        for b in uochrome uoicons uodlg uobars uofile uoapp uxl_sheet uxl_calc uxl_numfmt; do
             pc "$CC" $UWCF -c -o "build/apps/uo_$b.o" "uoffice/$b.c"
             WOBJ="$WOBJ build/apps/uo_$b.o"
         done
@@ -860,7 +860,7 @@ EOF
         # than a safety net, and a freestanding module must not import it.
         UWCF="$UCF -mno-stack-arg-probe -I../unoui -Iuoffice -I../unodoc"
         pc "$CC" $UWCF -DUNO_APP_SYM=uno_app_main               -c -o "build/apps/uoshow.o" "apps/uoshow.c"
-        for b in uochrome uoicons uodlg uobars uofile uos_geom uos_model uos_render; do
+        for b in uochrome uoicons uodlg uobars uofile uoapp uos_geom uos_model uos_render; do
             pc "$CC" $UWCF -c -o "build/apps/uo_$b.o" "uoffice/$b.c"
             WOBJ="$WOBJ build/apps/uo_$b.o"
         done

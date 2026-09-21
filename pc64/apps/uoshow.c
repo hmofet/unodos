@@ -30,6 +30,7 @@
 #include "uobars.h"
 #include "uofile.h"
 #include "uoshow.h"
+#include "uoapp.h"
 #include "unodoc.h"
 /* unomedia, for um_set_alloc alone: unodoc inflates an OOXML part with
  * um_inflate, which allocates its own working state. */
@@ -92,6 +93,8 @@ static unsigned char *g_io;
 static long g_iolen;
 static char g_statl[48], g_statr[48];
 static int  g_dlg;                     /* which dialog is up (a C_* code)    */
+#define DLG_GUARD 1000                 /* ...or the unsaved-changes prompt   */
+static char g_title[300] = "UnoShow - Presentation1";
 static uos_map g_map;
 
 /* the show */
@@ -644,36 +647,116 @@ static void open_picker(int which)
     g_dlg = which;
 }
 
+/* ---- the presentation's name, in the title bar --------------------------------- */
+static void set_title(void)
+{
+    const char *pre = "UnoShow - ", *nm = g_name;
+    int k = 0;
+    while (*pre) g_title[k++] = *pre++;
+    while (*nm && k < (int)sizeof g_title - 1) g_title[k++] = *nm++;
+    g_title[k] = 0;
+    if (g_win) g_win->title = g_title;
+}
+
+static void msg(const char *text)
+{
+    uod_msgbox(&DL, "UnoShow", text, UOD_MB_OK, pc64_shell_workarea_w(),
+               pc64_shell_workarea_h());
+    g_dlg = C_ABOUT;                      /* a message box, nothing to act on */
+}
+
+static void open_dialog(int save)
+{
+    uof_set_fs(&kFs);
+    uof_open(&DL, save, kTypes, 2, pc64_shell_workarea_w(),
+             pc64_shell_workarea_h());
+    g_dlg = save ? C_SAVE : C_OPEN;
+}
+
+/* Open (vol, name), or say why not.  load_pres replaces the deck only with
+ * one that parsed, so a failure leaves what was open, open. */
+static void open_file(int vol, const char *name)
+{
+    char m[320];
+    int k = 0;
+    const char *t;
+    if (load_pres(vol, name)) {
+        a_cpy(g_file, name, (int)sizeof g_file);
+        a_cpy(g_name, name, (int)sizeof g_name);
+        g_vol = vol;
+        set_title();
+        return;
+    }
+    for (t = name; *t && k < 250; t++) m[k++] = *t;
+    for (t = " is not a presentation UnoShow can open."; *t; t++) m[k++] = *t;
+    m[k] = 0;
+    msg(m);
+}
+
+static void new_pres(void)
+{
+    PR = uos_new(); g_cur = 0; g_sel = -1; g_editing = 0;
+    g_file[0] = 0; g_vol = 0;
+    a_cpy(g_name, "Presentation1", (int)sizeof g_name);
+    uos_set_dirty(PR, 0);
+    set_title();
+}
+
+/* ---- the unsaved-changes guard's hooks (uoapp.h) ------------------------------ */
+static int show_dirty(void) { return PR && uos_dirty(PR); }
+static const char *show_doc_name(void) { return g_name; }
+static int show_save(void)
+{
+    if (!g_file[0]) { open_dialog(1); return 2; }
+    if (save_pres(g_vol, g_file)) return 1;       /* back where it came from */
+    msg("Could not write the presentation.");
+    return 0;
+}
+static void show_proceed(int action)
+{
+    switch (action) {
+    case UOA_NEW:       new_pres(); break;
+    case UOA_OPEN_DLG:  open_dialog(0); break;
+    case UOA_OPEN_FILE: open_file(uoa_open_vol(), uoa_open_name()); break;
+    default: break;
+    }
+    pc64_shell_dirty();
+}
+static int show_frame_w(void) { return pc64_shell_workarea_w(); }
+static int show_frame_h(void) { return pc64_shell_workarea_h(); }
+static void show_prompted(void) { g_dlg = DLG_GUARD; pc64_shell_dirty(); }
+static const uoa_app kGuard = {
+    "UnoShow", show_dirty, show_doc_name, show_save, show_proceed,
+    &DL, show_frame_w, show_frame_h, show_prompted
+};
+
 static void dialog_closed(void)
 {
     int res = uod_result(&DL), which = g_dlg, pick = uod_value(&DL, ID_LIST);
     g_dlg = 0;
+    if (which == DLG_GUARD) { uoa_prompt_closed(); pc64_shell_dirty(); return; }
+    if (which == C_SAVE) {
+        int ok = 0;
+        if (res == UOD_ID_OK) {
+            char nm[256];
+            a_cpy(nm, uof_name(), (int)sizeof nm);
+            ensure_ext(nm, (int)sizeof nm, uof_type());
+            ok = save_pres(uof_volume(), nm);
+            if (ok) {
+                a_cpy(g_file, nm, (int)sizeof g_file);
+                a_cpy(g_name, nm, (int)sizeof g_name);
+                g_vol = uof_volume();
+                set_title();
+            } else msg("Could not write the presentation.");
+        }
+        uoa_save_as_done(ok);               /* the guard's Save As, if it was */
+        pc64_shell_dirty();
+        return;
+    }
     if (res != UOD_ID_OK) return;
     switch (which) {
     case C_OPEN:
-        a_cpy(g_file, uof_name(), (int)sizeof g_file);
-        a_cpy(g_name, g_file, (int)sizeof g_name);
-        g_vol = uof_volume();
-        if (!load_pres(g_vol, g_file)) {
-            g_file[0] = 0;
-            uod_msgbox(&DL, "UnoShow",
-                       "That is not a presentation this build reads.",
-                       UOD_MB_OK, pc64_shell_workarea_w(),
-                       pc64_shell_workarea_h());
-            g_dlg = C_ABOUT;              /* a message box, nothing to act on */
-        }
-        break;
-    case C_SAVE:
-        a_cpy(g_file, uof_name(), (int)sizeof g_file);
-        ensure_ext(g_file, (int)sizeof g_file, uof_type());
-        a_cpy(g_name, g_file, (int)sizeof g_name);
-        g_vol = uof_volume();
-        if (!save_pres(g_vol, g_file)) {
-            uod_msgbox(&DL, "UnoShow", "Could not write the presentation.",
-                       UOD_MB_OK, pc64_shell_workarea_w(),
-                       pc64_shell_workarea_h());
-            g_dlg = C_ABOUT;
-        }
+        open_file(uof_volume(), uof_name());
         break;
     case C_NEWSLIDE:
         g_cur = uos_slide_insert(PR, g_cur + 1, pick);
@@ -763,7 +846,7 @@ static int load_pres(int vol, const char *name)
     }
     if (p) {
         int n = ud_ppt_slides(p), i;
-        PR = uos_new();
+        PR = uos_new();    /* the old deck is replaced only by one that parsed */
         for (i = 0; i < n; i++) {
             const char *t = ud_ppt_slide_text(p, i);
             /* unodoc's .ppt writer has no layout concept - a slide is a
@@ -778,10 +861,11 @@ static int load_pres(int vol, const char *name)
         }
         ud_ppt_close(p);
         ok = 1;
+        uos_set_dirty(PR, 0);             /* loading the file is not an edit */
+        g_cur = 0; g_sel = -1; g_editing = 0;
     }
     ud_cfb_close(c);
     ud_zip_close(z);
-    g_cur = 0; g_sel = -1; g_editing = 0;
     return ok;
 }
 
@@ -871,35 +955,117 @@ static int edit_para_index(void)
     return n;                               /* the caret is always at the end */
 }
 
+/* ---- the clipboard ----------------------------------------------------------------
+ * What goes out is TEXT: a shape's paragraphs, one per line, which any other
+ * program can take.  A copied shape is also kept whole here, so pasting it
+ * back - while the clipboard still holds exactly the text it produced - adds
+ * the shape itself, a little offset, as PowerPoint does.  Text from anywhere
+ * else becomes a new text box, which is PowerPoint's answer to a paste on
+ * a slide too.  While a shape's text is being edited, a paste types the text
+ * in and a copy takes all of it. */
+static uos_shape     g_cb_shape;
+static int           g_cb_have;
+static unsigned char g_cb_lvl[24];
+static int           g_cb_nlvl;
+static char          g_cb_text[512];     /* CP-1252, '\n' between paragraphs */
+static char         *g_cb_u8;            /* what we put on the clipboard     */
+
+static int shape_text(int z, char *out, int cap)
+{
+    int n = uos_text_paras(PR, g_cur, z), i, k = 0;
+    out[0] = 0;
+    for (i = 0; i < n && k < cap - 2; i++) {
+        int len = 0, j;
+        const char *s = uos_para_text(PR, g_cur, z, i, &len);
+        if (i) out[k++] = '\n';
+        for (j = 0; j < len && k < cap - 2; j++) out[k++] = s[j];
+    }
+    out[k] = 0;
+    return k;
+}
+
+static int clip_put(const char *cp1252)
+{
+    long n = a_len(cp1252);
+    char *u = (char *)malloc((unsigned long)n * 3 + 1);
+    int ok;
+    if (!u) return 0;
+    uoa_to_utf8(cp1252, n, u, (int)(n * 3 + 1));
+    ok = uoa_clip_set(u);
+    if (g_cb_u8) free(g_cb_u8);
+    g_cb_u8 = u;
+    return ok;
+}
+
+static int copy_shape(void)
+{
+    const uos_shape *sh;
+    int i;
+    if (g_editing && g_sel >= 0) { g_cb_have = 0; return clip_put(g_edit); }
+    if (g_sel < 0 || !(sh = uos_shape_at_c(PR, g_cur, g_sel))) return 0;
+    g_cb_shape = *sh;
+    g_cb_nlvl = 0;
+    for (i = 0; i < uos_text_paras(PR, g_cur, g_sel) && i < 24; i++)
+        g_cb_lvl[g_cb_nlvl++] = uos_para_at(PR, g_cur, g_sel, i)->level;
+    shape_text(g_sel, g_cb_text, (int)sizeof g_cb_text);
+    g_cb_have = 1;
+    return clip_put(g_cb_text);
+}
+
+static void paste_shape(void)
+{
+    char *u = uoa_clip_get(), text[512];
+    int ours, z, i;
+    if (!u) return;
+    ours = g_cb_have && g_cb_u8;
+    for (i = 0; ours && (u[i] || g_cb_u8[i]); i++) if (u[i] != g_cb_u8[i]) ours = 0;
+    uoa_from_utf8(u, text, (long)sizeof text);
+    free(u);
+    if (g_editing && g_sel >= 0) {              /* typed into the text box */
+        int n = a_len(g_edit), k;
+        for (k = 0; text[k] && n < (int)sizeof g_edit - 2; k++) {
+            if (text[k] == '\n') {
+                if (g_nlvl < 24) { g_lvl[g_nlvl] = g_nlvl ? g_lvl[g_nlvl - 1] : 0; g_nlvl++; }
+            } else if ((unsigned char)text[k] < 32 && text[k] != '\t') continue;
+            g_edit[n++] = text[k];
+        }
+        g_edit[n] = 0;
+        if (!g_nlvl) { g_lvl[0] = 0; g_nlvl = 1; }
+        edit_flush();
+        return;
+    }
+    if (ours) {
+        const uos_shape *s = &g_cb_shape;
+        z = uos_shape_add(PR, g_cur, s->geom, s->x + 20, s->y + 20, s->w, s->h);
+        if (z < 0) return;
+        {   uos_shape *d = uos_shape_at(PR, g_cur, z);
+            d->adj = s->adj; d->fill = s->fill; d->line = s->line; d->shadow = s->shadow; }
+        if (g_cb_text[0]) {
+            uos_text_set(PR, g_cur, z, g_cb_text);
+            for (i = 0; i < uos_text_paras(PR, g_cur, z) && i < g_cb_nlvl; i++)
+                uos_para_set_level(PR, g_cur, z, i, g_cb_lvl[i]);
+        }
+    } else {
+        if (!text[0]) return;
+        z = uos_shape_add(PR, g_cur, UOS_G_RECT, 240, 220, 240, 60);
+        if (z < 0) return;
+        {   uos_shape *d = uos_shape_at(PR, g_cur, z);
+            d->fill.kind = UOS_F_NONE; d->line.kind = UOS_L_NONE; }
+        uos_text_set(PR, g_cur, z, text);
+    }
+    uos_set_dirty(PR, 1);
+    g_sel = z; g_editing = 0;
+}
+
 /* ---- commands ---------------------------------------------------------------------- */
 static void do_command(int cmd)
 {
     switch (cmd) {
-    case C_NEW: PR = uos_new(); g_cur = 0; g_sel = -1; g_editing = 0;
-                g_file[0] = 0; g_vol = 0;
-                a_cpy(g_name, "Presentation1", (int)sizeof g_name); break;
-    case C_EXIT: break;
-    case C_OPEN:
-        uof_set_fs(&kFs);
-        uof_open(&DL, 0, kTypes, 2, pc64_shell_workarea_w(),
-                 pc64_shell_workarea_h());
-        g_dlg = C_OPEN;
-        return;
-    case C_SAVE:
-        if (g_file[0]) {
-            if (!save_pres(g_vol, g_file)) {    /* back where it came from */
-                uod_msgbox(&DL, "UnoShow", "Could not write the presentation.",
-                           UOD_MB_OK, pc64_shell_workarea_w(),
-                           pc64_shell_workarea_h());
-                g_dlg = C_SAVE;
-            }
-            break;
-        }
-        uof_set_fs(&kFs);
-        uof_open(&DL, 1, kTypes, 2, pc64_shell_workarea_w(),
-                 pc64_shell_workarea_h());
-        g_dlg = C_SAVE;
-        return;
+    /* New, Open and Exit drop the deck: the guard asks first */
+    case C_NEW:  uoa_request(UOA_NEW); break;
+    case C_EXIT: uoa_exit(); break;
+    case C_OPEN: uoa_request(UOA_OPEN_DLG); return;
+    case C_SAVE: show_save(); return;
     case C_V_SLIDE:   g_view = 0; break;
     case C_V_OUTLINE: g_view = 1; break;
     case C_V_SORTER:  g_view = 2; break;
@@ -914,6 +1080,7 @@ static void do_command(int cmd)
             uos_shape *sh = uos_shape_at(PR, g_cur, z);
             sh->fill.kind = UOS_F_NONE;
             sh->line.kind = UOS_L_NONE;
+            uos_set_dirty(PR, 1);
             uos_text_set(PR, g_cur, z, "Text");
             g_sel = z; g_editing = 1; edit_load();
         }
@@ -935,11 +1102,22 @@ static void do_command(int cmd)
                 uos_shape *d = uos_shape_at(PR, g_cur, z);
                 uos_fill f = src->fill; uos_line l = src->line;
                 d->fill = f; d->line = l; d->shadow = src->shadow;
+                uos_set_dirty(PR, 1);
                 g_sel = z;
             }
         }
         break;
     case C_HIDE: uos_slide_hide(PR, g_cur, !uos_slide_hidden(PR, g_cur)); break;
+    case C_COPY:  copy_shape(); break;
+    case C_CUT:
+        if (g_editing && g_sel >= 0) {          /* all of the text, then none */
+            if (copy_shape()) { g_edit[0] = 0; g_nlvl = 0; edit_flush(); }
+        } else if (copy_shape() && g_sel >= 0) {
+            uos_shape_delete(PR, g_cur, g_sel);
+            g_sel = -1;
+        }
+        break;
+    case C_PASTE: paste_shape(); break;
     case C_SHOW:
         /* View Show starts at slide ONE, not at whatever you were editing -
          * PowerPoint's Shift+F5 is the "from current slide" one. */
@@ -966,6 +1144,7 @@ static void do_command(int cmd)
                 uos_para_at(PR, g_cur, g_sel, i)->align =
                     (unsigned char)(cmd == C_ALIGNL ? UOS_AL_LEFT :
                                     cmd == C_ALIGNC ? UOS_AL_CENTER : UOS_AL_RIGHT);
+            uos_set_dirty(PR, 1);
         }
         break;
     case C_ABOUT:
@@ -1081,8 +1260,17 @@ static int uw_key(int uni, int scan, int ctrl)
         return 1;
     }
     if (scan == 0x0F) { do_command(C_SHOW); return 1; }     /* F5 */
+    /* Ctrl+letter can arrive as its control code (Ctrl+C = 3), the way
+     * UnoWord and UnoCalc already allow for */
+    if (ctrl && uni >= 1 && uni <= 26) uni += 'a' - 1;
     if (ctrl && (uni == 'm' || uni == 'M')) { do_command(C_NEWSLIDE); return 1; }
     if (ctrl && (uni == 'n' || uni == 'N')) { do_command(C_NEW); return 1; }
+    if (ctrl && (uni == 'o' || uni == 'O')) { do_command(C_OPEN); return 1; }
+    if (ctrl && (uni == 's' || uni == 'S')) { do_command(C_SAVE); return 1; }
+    if (ctrl && (uni == 'c' || uni == 'C')) { do_command(C_COPY); return 1; }
+    if (ctrl && (uni == 'x' || uni == 'X')) { do_command(C_CUT); return 1; }
+    if (ctrl && (uni == 'v' || uni == 'V')) { do_command(C_PASTE); return 1; }
+    if (ctrl && (uni == 'd' || uni == 'D')) { do_command(C_DUP); return 1; }
 
     /* PageDown / PageUp / arrows move between slides when nothing is being
      * typed into - the same keys the show uses, which is what people expect */
@@ -1134,7 +1322,7 @@ static void uw_build(unoui_window *win)
     int w = pc64_shell_workarea_w() - 40, h = pc64_shell_workarea_h() - 60;
     if (w < 320) w = 320;
     if (h < 240) h = 240;
-    unoui_window_init(win, "UnoShow - Presentation1", 20, 16, w, h);
+    unoui_window_init(win, g_title, 20, 16, w, h);
     g_canvas.draw = app_draw;
     g_canvas.event = app_event;
     g_canvas.ctx = 0;
@@ -1151,7 +1339,7 @@ static void uw_closed(void)
 }
 static void uw_opened(void)
 {
-    if (!PR) PR = uos_new();
+    if (!PR) { PR = uos_new(); uos_set_dirty(PR, 0); }
     uoc_icons_install();
     uoc_init(&CH, kMenus, 8, kBars, 2, 0, 0, 400, 300);
     MET.text_w = mx_w; MET.height = mx_h; MET.draw = mx_draw; MET.ctx = 0;
@@ -1160,6 +1348,7 @@ static void uw_opened(void)
     ST.page = "Slide 1 of 1";
     ST.pos  = "Default";
     sync_status();
+    uoa_register(&kGuard);
 }
 
 /* what the shell shows for this app, carried in the module (uno_appdesc.h) */

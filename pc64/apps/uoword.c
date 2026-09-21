@@ -22,6 +22,7 @@
 #include "uobars.h"
 #include "uofile.h"
 #include "uoword.h"
+#include "uoapp.h"
 #include "unodoc.h"
 /* unomedia, for um_set_alloc alone: unodoc inflates an OOXML part with
  * um_inflate, which allocates its own working state. */
@@ -75,6 +76,9 @@ static int  g_dirty_layout = 1;
 static int  g_dlg_kind;              /* which dialog is up: 0 none           */
 static char g_name[256] = "Document1";
 static int  g_vol;            /* the volume g_name lives on: a plain Save goes BACK there */
+static int  g_have_file;      /* g_name is a file on g_vol, not just "Document1" */
+static unsigned g_saved_rev;  /* uow_revision() when the document last matched its file */
+static char g_title[300] = "UnoWord - Document1";
 static char g_status_l[64], g_status_r[64];
 static int  g_showruler = 1;
 
@@ -95,7 +99,7 @@ static int  g_showruler = 1;
 static unoui_rect g_rect;
 static int        g_have_rect;
 
-enum { DLG_NONE = 0, DLG_OPEN, DLG_SAVE, DLG_FONT, DLG_MSG };
+enum { DLG_NONE = 0, DLG_OPEN, DLG_SAVE, DLG_FONT, DLG_MSG, DLG_GUARD };
 
 static void a_cpy(char *d, const char *s, int cap)
 { int i = 0; while (s && s[i] && i < cap - 1) { d[i] = s[i]; i++; } d[i] = 0; }
@@ -553,6 +557,9 @@ static int load_doc(int vol, const char *name)
     }
     if (w) {
         const char *plain = ud_doc_plain(w);
+        /* the document being replaced goes only once its successor exists:
+         * a file that fails to parse leaves what was open, open */
+        if (DOC) uow_free(DOC);
         DOC = uow_new();
         if (plain && *plain) {
             /* .doc's paragraph mark is '\r'; ud_doc_plain hands back '\n' */
@@ -566,10 +573,13 @@ static int load_doc(int vol, const char *name)
         }
         ud_doc_close(w);
         ok = 1;
+        g_caret = g_anchor = 0;
+        g_scroll = 0;
+        /* what was just loaded IS the file: loading it is not an edit */
+        g_saved_rev = uow_revision(DOC);
     }
     ud_cfb_close(c);
     ud_zip_close(z);
-    g_caret = g_anchor = 0;
     touched();
     return ok;
 }
@@ -606,8 +616,98 @@ static int save_doc(int vol, const char *name)
         ok = uno_fs_write(vol, name, out, n);
         ud_free(out);
     }
+    if (ok) g_saved_rev = uow_revision(DOC);
     return ok;
 }
+
+/* ---- the document's name, in the title bar -------------------------------------
+ * pc64 draws the window title; the desktop shell copies it to the OS's title
+ * bar.  Both used to say "Document1" whatever was open. */
+static void set_title(void)
+{
+    const char *pre = "UnoWord - ";
+    int k = 0, i = 0;
+    while (*pre) g_title[k++] = *pre++;
+    while (g_name[i] && k < (int)sizeof g_title - 1) g_title[k++] = g_name[i++];
+    g_title[k] = 0;
+    if (g_win) g_win->title = g_title;
+}
+
+static int word_frame_w(void) { return pc64_shell_workarea_w(); }
+static int word_frame_h(void) { return pc64_shell_workarea_h(); }
+
+static void msg(const char *text)
+{
+    uod_msgbox(&DL, "UnoWord", text, UOD_MB_OK, pc64_shell_workarea_w(),
+               pc64_shell_workarea_h());
+    g_dlg_kind = DLG_MSG;
+}
+
+/* Open (vol, name) as the document, or say why not and keep what is open. */
+static void open_file(int vol, const char *name)
+{
+    char m[320];
+    int k = 0;
+    const char *t;
+    if (load_doc(vol, name)) {
+        a_cpy(g_name, name, (int)sizeof g_name);
+        g_vol = vol;
+        g_have_file = 1;
+        set_title();
+        return;
+    }
+    for (t = name; *t && k < 250; t++) m[k++] = *t;
+    for (t = " is not a document UnoWord can open."; *t; t++) m[k++] = *t;
+    m[k] = 0;
+    msg(m);
+}
+
+static void new_doc(void)
+{
+    if (DOC) uow_free(DOC);
+    DOC = uow_new();
+    g_caret = g_anchor = 0;
+    g_scroll = 0;
+    a_cpy(g_name, "Document1", (int)sizeof g_name);
+    g_vol = 0;
+    g_have_file = 0;
+    g_saved_rev = uow_revision(DOC);
+    set_title();
+    touched();
+}
+
+static void open_dialog(int save)
+{
+    uof_set_fs(&kFs);
+    uof_open(&DL, save, kDocTypes, 3, pc64_shell_workarea_w(),
+             pc64_shell_workarea_h());
+    g_dlg_kind = save ? DLG_SAVE : DLG_OPEN;
+}
+
+/* ---- the unsaved-changes guard's hooks (uoapp.h) ------------------------------ */
+static int word_dirty(void) { return DOC && uow_revision(DOC) != g_saved_rev; }
+static const char *word_doc_name(void) { return g_name; }
+static int word_save(void)
+{
+    if (!g_have_file) { open_dialog(1); return 2; }
+    if (save_doc(g_vol, g_name)) return 1;
+    msg("The document could not be saved.");
+    return 0;
+}
+static void word_proceed(int action)
+{
+    switch (action) {
+    case UOA_NEW:       new_doc(); break;
+    case UOA_OPEN_DLG:  open_dialog(0); break;
+    case UOA_OPEN_FILE: open_file(uoa_open_vol(), uoa_open_name()); break;
+    default: break;
+    }
+}
+static void word_prompted(void) { g_dlg_kind = DLG_GUARD; pc64_shell_dirty(); }
+static const uoa_app kGuard = {
+    "UnoWord", word_dirty, word_doc_name, word_save, word_proceed,
+    &DL, word_frame_w, word_frame_h, word_prompted
+};
 
 /* ---- the Font dialog, as a data table ------------------------------------- */
 enum { FD_SIZE = 300, FD_BOLD, FD_ITALIC, FD_UNDER, FD_PREVIEW };
@@ -648,45 +748,99 @@ static void apply_align(int align)
     touched();
 }
 
+/* ---- the selection and the clipboard ------------------------------------------ */
+static long sel_lo(void) { return g_anchor < g_caret ? g_anchor : g_caret; }
+static long sel_hi(void) { return g_anchor < g_caret ? g_caret : g_anchor; }
+
+/* Delete what is selected, leaving the caret where it began: what typing,
+ * Backspace, Delete, Cut and Paste all do to a selection first. */
+static int delete_sel(void)
+{
+    long a = sel_lo(), b = sel_hi();
+    if (b <= a) return 0;
+    uow_delete(DOC, a, b - a);
+    g_caret = g_anchor = a;
+    touched();
+    return 1;
+}
+
+/* The selection onto the clipboard as UTF-8 text.  The document is CP-1252
+ * with '\r' ending a paragraph; everything else in the world wants UTF-8
+ * and '\n' (the host turns that into its own line end). */
+static int copy_sel(void)
+{
+    long a = sel_lo(), b = sel_hi(), n = b - a, i;
+    char *cp, *u;
+    int ok = 0;
+    if (n <= 0) return 0;
+    cp = (char *)malloc((unsigned long)n + 1);
+    u  = (char *)malloc((unsigned long)n * 3 + 1);
+    if (cp && u) {
+        n = uow_read(DOC, a, n, cp);
+        for (i = 0; i < n; i++) if (cp[i] == '\r') cp[i] = '\n';
+        uoa_to_utf8(cp, n, u, (int)(n * 3 + 1));
+        ok = uoa_clip_set(u);
+    }
+    if (cp) free(cp);
+    if (u) free(u);
+    return ok;
+}
+
+/* The clipboard's text in place of the selection.  A character CP-1252 has
+ * no byte for arrives as '?' (the model's limit, uoapp.h), and control
+ * characters other than Tab and the line ends are dropped. */
+static void paste(void)
+{
+    char *u = uoa_clip_get(), *c;
+    long n = 0, m, i, k = 0;
+    if (!u) return;
+    while (u[n]) n++;
+    c = (char *)malloc((unsigned long)n + 1);
+    if (c) {
+        m = uoa_from_utf8(u, c, n + 1);
+        for (i = 0; i < m; i++) {
+            char ch = c[i] == '\n' ? '\r' : c[i];
+            if ((unsigned char)ch < 32 && ch != '\r' && ch != '\t') continue;
+            c[k++] = ch;
+        }
+        if (k > 0) {
+            delete_sel();
+            if (uow_insert(DOC, g_caret, c, k)) { g_caret += k; g_anchor = g_caret; }
+            else msg("The clipboard holds more text than the document has room for.");
+            touched();
+        }
+        free(c);
+    }
+    free(u);
+}
+
 static void do_command(int cmd)
 {
     switch (cmd) {
+    /* New, Open, Close and Exit all drop the document, so each goes through
+     * the guard: "Do you want to save the changes...?" first, when there are
+     * any.  Close is Word's "close the document", which in a one-document
+     * app leaves a blank one. */
     case C_NEW:
-        DOC = uow_new();
-        g_caret = g_anchor = 0;
-        a_cpy(g_name, "Document1", (int)sizeof g_name);
-        g_vol = 0;
-        touched();
-        break;
-    case C_OPEN:
-        uof_set_fs(&kFs);
-        uof_open(&DL, 0, kDocTypes, 3, pc64_shell_workarea_w(),
-                 pc64_shell_workarea_h());
-        g_dlg_kind = DLG_OPEN;
-        break;
-    case C_SAVEAS:
-        uof_set_fs(&kFs);
-        uof_open(&DL, 1, kDocTypes, 3, pc64_shell_workarea_w(),
-                 pc64_shell_workarea_h());
-        g_dlg_kind = DLG_SAVE;
-        break;
+    case C_CLOSE:  uoa_request(UOA_NEW); break;
+    case C_OPEN:   uoa_request(UOA_OPEN_DLG); break;
+    case C_EXIT:   uoa_exit(); break;
+    case C_SAVEAS: open_dialog(1); break;
     case C_SAVE:
         /* back where it came from: this was volume 0 unconditionally, so a
-         * document opened off a USB stick saved to the RAM disk instead */
-        if (!save_doc(g_vol, g_name))
-            uod_msgbox(&DL, "UnoWord", "The document could not be saved.",
-                       UOD_MB_OK, pc64_shell_workarea_w(),
-                       pc64_shell_workarea_h());
-        else
-            uod_msgbox(&DL, "UnoWord", "Saved.", UOD_MB_OK,
-                       pc64_shell_workarea_w(), pc64_shell_workarea_h());
-        g_dlg_kind = DLG_MSG;
+         * document opened off a USB stick saved to the RAM disk instead.  A
+         * document with no file yet asks for one, as Word does, rather than
+         * writing "Document1" with no extension into the first folder. */
+        word_save();
         break;
     case C_UNDO: uow_undo(DOC); if (g_caret > uow_len(DOC)) g_caret = uow_len(DOC);
                  g_anchor = g_caret; touched(); break;
     case C_REDO: uow_redo(DOC); if (g_caret > uow_len(DOC)) g_caret = uow_len(DOC);
                  g_anchor = g_caret; touched(); break;
     case C_SELALL: g_anchor = 0; g_caret = uow_len(DOC) - 1; touched(); break;
+    case C_COPY:   copy_sel(); break;
+    case C_CUT:    if (copy_sel()) delete_sel(); break;
+    case C_PASTE:  paste(); break;
     case C_BOLD:   apply_chp_bit(C_BOLD,   uoc_toggle(&CH, C_BOLD));   break;
     case C_ITALIC: apply_chp_bit(C_ITALIC, uoc_toggle(&CH, C_ITALIC)); break;
     case C_UNDER:  apply_chp_bit(C_UNDER,  uoc_toggle(&CH, C_UNDER));  break;
@@ -858,15 +1012,25 @@ static void dialog_closed(void)
 {
     int res = uod_result(&DL), kind = g_dlg_kind;
     g_dlg_kind = DLG_NONE;
-    if (res == UOD_ID_OK && kind == DLG_OPEN) {
-        a_cpy(g_name, uof_name(), (int)sizeof g_name);
-        g_vol = uof_volume();
-        load_doc(g_vol, g_name);
-    } else if (res == UOD_ID_OK && kind == DLG_SAVE) {
-        a_cpy(g_name, uof_name(), (int)sizeof g_name);
-        ensure_ext(g_name, (int)sizeof g_name, uof_type());
-        g_vol = uof_volume();
-        save_doc(g_vol, g_name);
+    if (kind == DLG_GUARD) {
+        uoa_prompt_closed();                /* may open Save As, or proceed */
+    } else if (res == UOD_ID_OK && kind == DLG_OPEN) {
+        open_file(uof_volume(), uof_name());
+    } else if (kind == DLG_SAVE) {
+        int ok = 0;
+        if (res == UOD_ID_OK) {
+            char nm[256];
+            a_cpy(nm, uof_name(), (int)sizeof nm);
+            ensure_ext(nm, (int)sizeof nm, uof_type());
+            ok = save_doc(uof_volume(), nm);
+            if (ok) {
+                a_cpy(g_name, nm, (int)sizeof g_name);
+                g_vol = uof_volume();
+                g_have_file = 1;
+                set_title();
+            } else msg("The document could not be saved.");
+        }
+        uoa_save_as_done(ok);               /* the guard's Save As, if it was */
     } else if (res == UOD_ID_OK && kind == DLG_FONT) {
         uow_chp c;
         long a = g_anchor < g_caret ? g_anchor : g_caret;
@@ -951,7 +1115,7 @@ static void uw_build(unoui_window *win)
     int w = pc64_shell_workarea_w() - 40, h = pc64_shell_workarea_h() - 60;
     if (w < 380) w = 380;
     if (h < 260) h = 260;
-    unoui_window_init(win, "UnoWord - Document1", 20, 16, w, h);
+    unoui_window_init(win, g_title, 20, 16, w, h);
     g_canvas.draw = app_draw;
     g_canvas.event = app_event;
     g_canvas.ctx = 0;
@@ -995,6 +1159,9 @@ static int uw_key(int uni, int scan, int ctrl)
         case 'z': do_command(C_UNDO); return 1;
         case 'y': do_command(C_REDO); return 1;
         case 'a': do_command(C_SELALL); return 1;
+        case 'c': do_command(C_COPY); return 1;
+        case 'x': do_command(C_CUT); return 1;
+        case 'v': do_command(C_PASTE); return 1;
         case 's': do_command(C_SAVE); return 1;
         case 'o': do_command(C_OPEN); return 1;
         case 'n': do_command(C_NEW); return 1;
@@ -1049,6 +1216,8 @@ static void uw_opened(void)
     MET.text_w = m_text_w; MET.height = m_height;
     MET.baseline = m_baseline; MET.space_w = m_space; MET.ctx = 0;
     g_dirty_layout = 1;
+    g_saved_rev = uow_revision(DOC);        /* a new document is not a change */
+    uoa_register(&kGuard);
 }
 static void uw_closed(void) { }
 static int  uw_canvas_index(void) { return g_cidx; }

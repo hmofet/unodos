@@ -4,9 +4,14 @@ key Return
 text Second line.
 frames 2
 shot word_typed.ppm
+expect dirty 1
+# a new document has no file: Save asks for one (the picker's answer)
+pick docs/Document1.doc
 key s ctrl
 frames 5
 shot word_saved.ppm
+expect title UnoWord - Document1.doc
+expect dirty 0
 key Escape
 click 20 12
 frames 2

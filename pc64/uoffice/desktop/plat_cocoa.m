@@ -196,7 +196,7 @@ static void mouse(NSView *v, NSEvent *ev, int type, int button)
 
 static UDDelegate *g_delegate;
 
-@interface UDApp : NSObject
+@interface UDApp : NSObject <NSApplicationDelegate>
 @end
 @implementation UDApp
 - (void)quit:(id)sender
@@ -204,6 +204,24 @@ static UDDelegate *g_delegate;
     plat_event e;
     (void)sender;
     memset(&e, 0, sizeof e); e.type = PE_QUIT; push(&e);
+}
+/* A document double-clicked in Finder, dropped on the Dock icon or opened
+ * with "Open With" arrives HERE, as an Apple event - never in argv, whether
+ * we were already running or were launched to open it. */
+- (void)application:(NSApplication *)app openURLs:(NSArray<NSURL *> *)urls
+{
+    (void)app;
+    for (NSURL *u in urls)
+        if (u.fileURL) plat_post_open(u.fileSystemRepresentation);
+}
+/* Logging out, or Quit from the Dock: the same question the close box asks.
+ * The shell quits by itself once the document is safe. */
+- (NSApplicationTerminateReply)applicationShouldTerminate:(NSApplication *)s
+{
+    plat_event e;
+    (void)s;
+    memset(&e, 0, sizeof e); e.type = PE_QUIT; push(&e);
+    return NSTerminateCancel;
 }
 @end
 static UDApp *g_app;
@@ -238,6 +256,7 @@ int plat_init(const char *title, int w, int h, int hidden)
         [NSApplication sharedApplication];
         [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
         g_app = [UDApp new];
+        NSApp.delegate = g_app;          /* before launch: the open-file event */
         build_menu(t);
         [NSApp finishLaunching];
 
@@ -332,6 +351,45 @@ void plat_set_title(const char *utf8)
 void plat_set_fullscreen(int on)
 {
     if (!!on != g_full) [g_win toggleFullScreen:nil];
+}
+
+/* the dot in the close button: unsaved changes */
+void plat_set_modified(int on) { g_win.documentEdited = on ? YES : NO; }
+
+void plat_args(int *argc, char ***argv) { (void)argc; (void)argv; }   /* UTF-8 already */
+
+/* ---- the clipboard: the general pasteboard, as plain text ------------------ */
+int plat_clip_set(const char *utf8)
+{
+    @autoreleasepool {
+        NSPasteboard *pb = [NSPasteboard generalPasteboard];
+        NSString *s = [NSString stringWithUTF8String:utf8 ? utf8 : ""];
+        if (!s) return 0;
+        [pb clearContents];
+        return [pb setString:s forType:NSPasteboardTypeString] ? 1 : 0;
+    }
+}
+
+long plat_clip_get(char *buf, long cap)
+{
+    @autoreleasepool {
+        NSString *s = [[NSPasteboard generalPasteboard] stringForType:NSPasteboardTypeString];
+        const char *u;
+        long n;
+        if (cap > 0) buf[0] = 0;
+        if (!s) return 0;
+        /* a Mac line end is LF already; CR LF from a Windows app is not */
+        s = [s stringByReplacingOccurrencesOfString:@"\r\n" withString:@"\n"];
+        u = s.UTF8String;
+        if (!u) return 0;
+        n = (long)strlen(u);
+        if (cap > 0) {
+            long m = n < cap - 1 ? n : cap - 1;
+            memcpy(buf, u, (size_t)m);
+            buf[m] = 0;
+        }
+        return n;
+    }
 }
 int plat_is_fullscreen(void) { return g_full; }
 
