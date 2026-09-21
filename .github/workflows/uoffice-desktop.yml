@@ -93,6 +93,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: brew install sdl2
+      - name: build (ASan + UBSan)
+        working-directory: pc64/uoffice/desktop
+        run: |
+          cmake -S . -B build-asan -DCMAKE_BUILD_TYPE=Debug -DUODESK_SANITIZE=ON
+          cmake --build build-asan -j
+      - name: smoke (sanitized)
+        working-directory: pc64/uoffice/desktop
+        env:
+          ASAN_OPTIONS: detect_leaks=0
+          UBSAN_OPTIONS: print_stacktrace=1
+        run: tests/smoke.sh "$PWD/build-asan"
       - name: build (SDL static, so the .app is self-contained)
         working-directory: pc64/uoffice/desktop
         run: |
