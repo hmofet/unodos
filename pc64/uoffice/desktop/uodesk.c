@@ -305,6 +305,7 @@ static void dispatch(const plat_event *e, int *running)
  *   clip TEXT             put TEXT on the OS clipboard, as another program
  *                         would ("\t" and "\n" spell a tab and a line end)
  *   expect clip TEXT      the OS clipboard must hold TEXT (same spelling)
+ *   passed FILE           write FILE if every expect so far has held
  *   # ...                 a comment
  *
  * The script ends the program when it runs out. */
@@ -420,6 +421,11 @@ static int script_step(void)
     /* "open PATH": the OS handing us a file (a double click); "quit": the
      * window's close box.  The two things a script cannot otherwise do. */
     else if (!strncmp(line, "open ", 5)) plat_post_open(line + 5);
+    else if (!strncmp(line, "passed ", 7)) {
+        /* proof for a harness that cannot see our exit code (macOS `open`) */
+        FILE *f = g_script_fail ? 0 : fopen(line + 7, "w");
+        if (f) { fputs("ok\n", f); fclose(f); }
+    }
     else if (!strncmp(line, "expect title ", 13)) {
         const char *t = g_win.title ? g_win.title : "";
         if (strcmp(t, line + 13)) {
