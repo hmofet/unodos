@@ -4,3 +4,4 @@
 sleep 1500
 expect title UnoWord - Document1.doc
 expect dirty 0
+passed /tmp/uoffice_assoc_ok
