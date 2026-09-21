@@ -81,6 +81,19 @@ static unsigned g_saved_rev;  /* uow_revision() when the document last matched i
 static char g_title[300] = "UnoWord - Document1";
 static char g_status_l[64], g_status_r[64];
 static int  g_showruler = 1;
+/* Up and Down keep the column they started from across short lines, as
+ * every editor does; any other move forgets it. */
+static int  g_goal_x = -1;
+/* FORMATTING WITH NOTHING SELECTED.  Bold, Italic, a font or a size chosen
+ * with only a caret applies to what is typed NEXT, which is Word's
+ * behaviour and the only one that makes Ctrl+B-then-type work.  It is held
+ * here, not in the document (there is no character to hang it on yet), and
+ * dropped as soon as the caret moves somewhere else. */
+static int     g_pend_on;
+static uow_chp g_pend;
+static int     g_view_h;           /* the page area's height, from the painter */
+static int     g_want_visible;     /* scroll the caret into view on next paint */
+static void    caret_chp(uow_chp *c);
 
 /* THE CANVAS RECT, TAKEN FROM THE PAINTER.
  *
@@ -367,7 +380,7 @@ static void sync_toggles(void)
     uow_pap p;
     char b[16];
     if (!DOC) return;
-    uow_chp_at(DOC, g_caret > 0 ? g_caret - 1 : 0, &c);
+    caret_chp(&c);
     uow_pap_at(DOC, g_caret, &p);
     uoc_toggle_set(&CH, C_BOLD,   c.bold);
     uoc_toggle_set(&CH, C_ITALIC, c.italic);
@@ -725,18 +738,41 @@ static const uod_item kFontItems[] = {
 static const uod_dlg kFontDlg = { "Font", kFontItems, 9, 0, 0, 210, 200, 1 };
 
 /* ---- commands -------------------------------------------------------------- */
-static void apply_chp_bit(int which, int on)
+/* The formatting typing would get right now: the pending choice if there is
+ * one, else the character before the caret's (which uow_insert inherits). */
+static void caret_chp(uow_chp *c)
+{
+    if (g_pend_on) { *c = g_pend; return; }
+    uow_chp_at(DOC, g_caret > 0 ? g_caret - 1 : 0, c);
+}
+
+/* Change the selection's character formatting through `set`, or, with no
+ * selection, the formatting the next typed text gets. */
+static void apply_chp(void (*set)(uow_chp *c, int v), int v)
 {
     uow_chp c;
     long a = g_anchor < g_caret ? g_anchor : g_caret;
     long b = g_anchor < g_caret ? g_caret : g_anchor;
-    if (a == b) return;                       /* nothing selected: no-op     */
+    if (a == b) {
+        caret_chp(&g_pend);
+        set(&g_pend, v);
+        g_pend_on = 1;
+        return;
+    }
     uow_chp_at(DOC, a, &c);
-    if (which == C_BOLD)   c.bold = (unsigned char)on;
-    if (which == C_ITALIC) c.italic = (unsigned char)on;
-    if (which == C_UNDER)  c.underline = (unsigned char)on;
+    set(&c, v);
     uow_format(DOC, a, b - a, &c);
     touched();
+}
+static void set_bold(uow_chp *c, int v)   { c->bold = (unsigned char)v; }
+static void set_italic(uow_chp *c, int v) { c->italic = (unsigned char)v; }
+static void set_under(uow_chp *c, int v)  { c->underline = (unsigned char)v; }
+static void set_face(uow_chp *c, int v)   { c->face = (unsigned short)v; }
+static void set_size(uow_chp *c, int v)   { c->size = (unsigned short)v; }
+
+static void apply_chp_bit(int which, int on)
+{
+    apply_chp(which == C_BOLD ? set_bold : which == C_ITALIC ? set_italic : set_under, on);
 }
 static void apply_align(int align)
 {
@@ -848,14 +884,13 @@ static void do_command(int cmd)
     case C_CENTER:  apply_align(UOW_AL_CENTER);  break;
     case C_RIGHT:   apply_align(UOW_AL_RIGHT);   break;
     case C_JUSTIFY: apply_align(UOW_AL_JUSTIFY); break;
-    case C_FONTNAME: {
-        int f = uoc_combo(&CH, C_FONTNAME);
-        long a = g_anchor < g_caret ? g_anchor : g_caret;
-        long b = g_anchor < g_caret ? g_caret : g_anchor;
-        uow_chp c;
-        uow_chp_at(DOC, a, &c);
-        c.face = (unsigned short)f;
-        if (b > a) uow_format(DOC, a, b - a, &c);
+    case C_FONTNAME: apply_chp(set_face, uoc_combo(&CH, C_FONTNAME)); touched(); break;
+    case C_FONTSIZE: {
+        /* the combo lists points; the model holds half-points */
+        const char *s = kSizeList[uoc_combo(&CH, C_FONTSIZE)];
+        int pt = 0;
+        while (*s >= '0' && *s <= '9') pt = pt * 10 + (*s++ - '0');
+        if (pt > 0) apply_chp(set_size, pt * 2);
         touched();
         break;
     }
@@ -871,7 +906,7 @@ static void do_command(int cmd)
         uod_open(&DL, &kFontDlg, pc64_shell_workarea_w(),
                  pc64_shell_workarea_h());
         {   uow_chp c;
-            uow_chp_at(DOC, g_caret > 0 ? g_caret - 1 : 0, &c);
+            caret_chp(&c);
             uod_set_value(&DL, FD_BOLD, c.bold);
             uod_set_value(&DL, FD_ITALIC, c.italic);
             uod_set_value(&DL, FD_UNDER, c.underline);
@@ -910,6 +945,171 @@ static void do_command(int cmd)
     default: break;
     }
     sync_toggles();
+}
+
+/* ---- where the caret is, measured -----------------------------------------------
+ * uow_caret_x interpolates across a run in proportion to its characters,
+ * which is right only for a monospace face: in proportional text the caret
+ * drew between the wrong letters and a click landed a character or two off.
+ * These measure the run's prefix with the same metrics the layout used.
+ * Both take the LINE explicitly, because a position at a wrapped line's end
+ * is also the next line's start and uow_line_of picks the latter. */
+static int x_in_line(int li, long cp)
+{
+    const uow_line *ln = &LAY->line[li];
+    int k;
+    for (k = 0; k < ln->nrun; k++) {
+        const uow_lrun *r = &LAY->run[ln->run0 + k];
+        if (cp >= r->cp && cp <= r->cp + r->n) {
+            char b[256];
+            long n = cp - r->cp;
+            int w;
+            if (n <= 0) return ln->x + r->x;
+            if (n > 255) n = 255;
+            n = uow_read(DOC, r->cp, n, b);
+            w = m_text_w(b, n, &r->chp, 0);
+            if (w > r->w) w = r->w;
+            return ln->x + r->x + w;
+        }
+    }
+    return ln->x + (cp <= ln->cp ? 0 : ln->w);
+}
+
+static int caret_x(long cp)
+{
+    int li = uow_line_of(LAY, cp);
+    return li < 0 ? 0 : x_in_line(li, cp);
+}
+
+/* the last position the caret may take on line li: before a wrapped line's
+ * trailing space, or at the paragraph mark of the paragraph's last line */
+static long line_end(int li)
+{
+    const uow_line *ln = &LAY->line[li];
+    if (ln->last_of_para || ln->n == 0) return ln->cp + ln->n;
+    return ln->cp + ln->n - 1;
+}
+
+/* the position on line li nearest to document x */
+static long cp_in_line(int li, int x)
+{
+    const uow_line *ln = &LAY->line[li];
+    long cp, best = ln->cp, end = line_end(li);
+    int bd = 1 << 30;
+    for (cp = ln->cp; cp <= end; cp++) {
+        int d = x_in_line(li, cp) - x;
+        if (d < 0) d = -d;
+        if (d < bd) { bd = d; best = cp; }
+        else if (d > bd) break;              /* x only grows along a line */
+    }
+    return best;
+}
+
+/* the position a click at document (x, y) means */
+static long cp_at(int x, int y)
+{
+    int i, li = LAY->nline - 1;
+    if (LAY->nline <= 0) return 0;
+    for (i = 0; i < LAY->nline; i++) {
+        const uow_line *ln = &LAY->line[i];
+        if (y < ln->y + ln->h) { li = i; break; }
+    }
+    return cp_in_line(li, x);
+}
+
+static long doc_last(void) { long n = uow_len(DOC) - 1; return n < 0 ? 0 : n; }
+
+static int is_word(int c) { return c > ' ' && c != '\r'; }
+
+/* Move the caret to `cp`; Shift extends the selection, anything else
+ * collapses it.  `keep_goal` is for Up/Down, which remember their column. */
+static void move_to(long cp, int keep_goal)
+{
+    if (cp < 0) cp = 0;
+    if (cp > doc_last()) cp = doc_last();
+    g_caret = cp;
+    if (!(uoa_key_mods() & UI_MOD_SHIFT)) g_anchor = g_caret;
+    if (!keep_goal) g_goal_x = -1;
+    g_pend_on = 0;
+    g_want_visible = 1;
+    touched();
+}
+
+/* The navigation keys, by UEFI scan code: Up 1, Down 2, Right 3, Left 4,
+ * Home 5, End 6, PgUp 9, PgDn 10.  Ctrl moves by word, or to the ends of the
+ * document.  1 = the key was one of them. */
+static int nav_key(int scan, int ctrl)
+{
+    long cp = g_caret, lo = sel_lo(), hi = sel_hi();
+    int li, shift = (uoa_key_mods() & UI_MOD_SHIFT) != 0;
+    if (g_dirty_layout) relayout();         /* the lines must be the current ones */
+    li = uow_line_of(LAY, g_caret);
+    switch (scan) {
+    case 0x03:                                                      /* Right */
+        if (hi > lo && !shift) { move_to(hi, 0); return 1; }
+        if (ctrl) {
+            while (cp < doc_last() && is_word(uow_char_at(DOC, cp))) cp++;
+            while (cp < doc_last() && !is_word(uow_char_at(DOC, cp))) cp++;
+        } else cp++;
+        move_to(cp, 0); return 1;
+    case 0x04:                                                      /* Left */
+        if (hi > lo && !shift) { move_to(lo, 0); return 1; }
+        if (ctrl) {
+            while (cp > 0 && !is_word(uow_char_at(DOC, cp - 1))) cp--;
+            while (cp > 0 && is_word(uow_char_at(DOC, cp - 1))) cp--;
+        } else cp--;
+        move_to(cp, 0); return 1;
+    case 0x01: case 0x02: case 0x09: case 0x0A: {                  /* Up, Down, PgUp, PgDn */
+        int x, target = li, page = scan == 0x09 || scan == 0x0A;
+        if (li < 0) return 1;
+        if (g_goal_x < 0) g_goal_x = caret_x(g_caret);
+        x = g_goal_x;
+        if (!page) target = li + (scan == 0x02 ? 1 : -1);
+        else {
+            int y = LAY->line[li].y + (scan == 0x0A ? 1 : -1) *
+                    (g_view_h > 64 ? g_view_h - 32 : 200);
+            for (target = 0; target < LAY->nline - 1; target++)
+                if (LAY->line[target].y + LAY->line[target].h > y) break;
+        }
+        if (target < 0) { move_to(0, 0); return 1; }        /* above the first */
+        if (target >= LAY->nline) { move_to(doc_last(), 0); return 1; }
+        move_to(cp_in_line(target, x), 1);
+        return 1;
+    }
+    case 0x05:                                                      /* Home */
+        move_to(ctrl || li < 0 ? 0 : LAY->line[li].cp, 0); return 1;
+    case 0x06:                                                      /* End */
+        move_to(ctrl || li < 0 ? doc_last() : line_end(li), 0); return 1;
+    default: return 0;
+    }
+}
+
+/* Keep the caret's line on screen: called by the painter after a relayout,
+ * because only then are the line positions the ones being drawn. */
+static void scroll_to_caret(void)
+{
+    int li = uow_line_of(LAY, g_caret), y, h;
+    if (li < 0 || g_view_h <= 0) return;
+    y = LAY->line[li].y; h = LAY->line[li].h;
+    if (y < g_scroll) g_scroll = y > 8 ? y - 8 : 0;
+    else if (y + h > g_scroll + g_view_h) g_scroll = y + h - g_view_h + 8;
+}
+
+/* Put `s` (n CP-1252 bytes) in place of the selection, at the caret, in the
+ * formatting typing gets: what every typed character goes through. */
+static void type_text(const char *s, long n)
+{
+    long at;
+    delete_sel();
+    at = g_caret;
+    if (!uow_insert(DOC, at, s, n)) return;
+    if (g_pend_on) uow_format(DOC, at, n, &g_pend);   /* then later text inherits */
+    g_pend_on = 0;
+    g_caret = at + n;
+    g_anchor = g_caret;
+    g_goal_x = -1;
+    g_want_visible = 1;
+    touched();
 }
 
 /* ---- painting -------------------------------------------------------------- */
@@ -964,7 +1164,7 @@ static void draw_doc(int cx, int cy, int cw, int ch)
     {
         int ln = uow_line_of(LAY, g_caret);
         if (ln >= 0 && ln < LAY->nline) {
-            int x = uow_caret_x(LAY, &MET, g_caret);
+            int x = caret_x(g_caret);
             int y = cy + LAY->line[ln].y - g_scroll;
             if (y >= cy && y + LAY->line[ln].h <= cy + ch)
                 fb_vline(cx + x, y, LAY->line[ln].h, FB_RGB(0,0,0));
@@ -980,6 +1180,7 @@ static void app_draw(struct unoui_widget *w, unoui_rect r, void *ctx)
     g_rect = r;
     g_have_rect = 1;
     if (g_dirty_layout) relayout();
+    if (g_want_visible) { scroll_to_caret(); g_want_visible = 0; }
     sync_toggles();
 
     CH.x = r.x; CH.y = r.y; CH.w = r.w; CH.h = r.h;
@@ -992,6 +1193,7 @@ static void app_draw(struct unoui_widget *w, unoui_rect r, void *ctx)
     cx = r.x; cy = top; cw = r.w;
     chh = r.h - (top - r.y) - uob_status_h();
     if (chh < 16) chh = 16;
+    g_view_h = chh;
     draw_doc(cx, cy, cw, chh);
     uob_status_render(&ST, r.x, r.y + r.h - uob_status_h(), r.w);
     uoc_render_popups(&CH);          /* an open menu goes OVER the page */
@@ -1035,12 +1237,14 @@ static void dialog_closed(void)
         uow_chp c;
         long a = g_anchor < g_caret ? g_anchor : g_caret;
         long b = g_anchor < g_caret ? g_caret : g_anchor;
-        uow_chp_at(DOC, a, &c);
+        if (b > a) uow_chp_at(DOC, a, &c);
+        else caret_chp(&c);
         c.bold      = (unsigned char)uod_value(&DL, FD_BOLD);
         c.italic    = (unsigned char)uod_value(&DL, FD_ITALIC);
         c.underline = (unsigned char)uod_value(&DL, FD_UNDER);
         c.size      = (unsigned short)(uod_value(&DL, FD_SIZE) * 2);
         if (b > a) uow_format(DOC, a, b - a, &c);
+        else { g_pend = c; g_pend_on = 1; }       /* for what is typed next */
     }
     touched();
 }
@@ -1094,9 +1298,12 @@ static int app_event(struct unoui_widget *w, const void *evp, void *ctx)
         int top = doc_top(r);
         if (e->kind == UI_EV_MOUSE_MOVE && !g_dragging) return 0;
         if (e->y >= top && LAY) {
-            long cp = uow_cp_at(LAY, &MET, e->x - r.x, e->y - top + g_scroll);
+            long cp = cp_at(e->x - r.x, e->y - top + g_scroll);
+            g_goal_x = -1;
+            g_pend_on = 0;
             if (e->kind == UI_EV_MOUSE_DOWN) {
-                g_caret = g_anchor = cp;
+                g_caret = cp;
+                if (!(e->mods & UI_MOD_SHIFT)) g_anchor = cp;   /* shift-click extends */
                 g_dragging = 1;
             } else {
                 g_caret = cp;                   /* dragging: extend           */
@@ -1146,6 +1353,21 @@ static int uw_key(int uni, int scan, int ctrl)
         pc64_shell_dirty();
         return 1;
     }
+    /* The caret keys.  They arrive as scan codes with uni 0, and the first
+     * cut of this function never looked at scan at all - the arrows, Home,
+     * End and the page keys fell through to unoui, which had nothing to move,
+     * so the caret could be placed only with the mouse.  Before the Ctrl
+     * letters: Ctrl+Left and Ctrl+End are navigation too. */
+    if (!uni && nav_key(scan, ctrl)) return 1;
+    if (scan == 0x08 && !uni) {                     /* Delete                 */
+        if (!delete_sel() && g_caret < doc_last()) {
+            uow_delete(DOC, g_caret, 1);
+            touched();
+        }
+        g_pend_on = 0;
+        g_want_visible = 1;
+        return 1;
+    }
     if (ctrl) {
         int c = uni;
         if (c >= 1 && c <= 26) c += 'a' - 1;       /* control codes to letters */
@@ -1169,25 +1391,22 @@ static int uw_key(int uni, int scan, int ctrl)
         }
     }
     if (uni == 8) {                                 /* backspace              */
-        if (g_caret > 0) { uow_delete(DOC, g_caret - 1, 1); g_caret--; }
-        g_anchor = g_caret;
-        touched();
+        if (!delete_sel() && g_caret > 0) {
+            uow_delete(DOC, g_caret - 1, 1);
+            g_caret--;
+            g_anchor = g_caret;
+            touched();
+        }
+        g_pend_on = 0;
+        g_goal_x = -1;
+        g_want_visible = 1;
         return 1;
     }
-    if (uni == '\r' || uni == '\n') {
-        char nl = '\r';
-        uow_insert(DOC, g_caret, &nl, 1);
-        g_caret++;
-        g_anchor = g_caret;
-        touched();
-        return 1;
-    }
-    if (uni >= ' ') {
+    if (uni == '\r' || uni == '\n') { type_text("\r", 1); return 1; }
+    if (uni == '\t')                { type_text("\t", 1); return 1; }
+    if (uni >= ' ' && uni < 127) {
         char ch = (char)uni;
-        uow_insert(DOC, g_caret, &ch, 1);
-        g_caret++;
-        g_anchor = g_caret;
-        touched();
+        type_text(&ch, 1);
         return 1;
     }
     return 0;

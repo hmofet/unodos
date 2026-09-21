@@ -21,6 +21,12 @@ run() {       # run APP SCRIPT [DOCUMENT]
 magic() { od -An -tx1 -N4 "$1" | tr -d ' \n'; }
 run UnoWord word_save.txt
 run UnoWord word_clip.txt
+run UnoWord word_keys.txt
+# Ctrl+B before typing: the new paragraph was saved bold
+if command -v unzip >/dev/null 2>&1; then
+    unzip -p "$OUT/docs/Keys.docx" word/document.xml | grep -q "<w:b/>" ||
+        { echo "FAIL: text typed after Ctrl+B was not saved bold"; exit 1; }
+fi
 [ "$(magic "$OUT/docs/Document1.doc")" = "d0cf11e0" ] || { echo "FAIL: UnoWord did not save a .doc"; exit 1; }
 # a document in a SECOND folder, for word_open.txt's plain Save to return to
 mkdir -p "$OUT/other" && cp "$OUT/docs/Document1.doc" "$OUT/other/Letter.doc"

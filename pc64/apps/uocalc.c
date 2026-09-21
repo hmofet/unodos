@@ -1115,9 +1115,11 @@ static int page_rows(void)
 }
 
 /* Move the cursor by (dr, dc), committing whatever was being typed first.
+ * With Shift held (an arrow key only), the range's anchor stays put and the
+ * selection grows, as in Excel.
  * Committing is what a spreadsheet does: an arrow out of a half-typed cell
  * means "that value, and now I am over there", not "throw it away". */
-static void move_cursor(int dr, int dc)
+static void move_cursor_ex(int dr, int dc, int extend)
 {
     commit_edit();
     g_cur_r += dr; g_cur_c += dc;
@@ -1125,15 +1127,17 @@ static void move_cursor(int dr, int dc)
     if (g_cur_c < 0) g_cur_c = 0;
     if (g_cur_r >= UXL_ROWS) g_cur_r = UXL_ROWS - 1;
     if (g_cur_c >= UXL_COLS) g_cur_c = UXL_COLS - 1;
-    g_sel_r = g_cur_r; g_sel_c = g_cur_c;
+    if (!extend) { g_sel_r = g_cur_r; g_sel_c = g_cur_c; }
     scroll_to_cursor();
     pc64_shell_dirty();
 }
 
+static void move_cursor(int dr, int dc) { move_cursor_ex(dr, dc, 0); }
+
 static int uw_key(int uni, int scan, int ctrl)
 {
     unoui_event e;
-    int i;
+    int i, shift = (uoa_key_mods() & UI_MOD_SHIFT) != 0;
     if (!BK) return 0;
     if (g_dlg) {
         for (i = 0; i < (int)sizeof e; i++) ((char *)&e)[i] = 0;
@@ -1152,10 +1156,10 @@ static int uw_key(int uni, int scan, int ctrl)
      * only ever move down, one Enter at a time. Ctrl+Home/End jump to the far
      * corners, the way every spreadsheet since Multiplan has. */
     switch (scan) {
-    case 0x01: move_cursor(-1, 0); return 1;                      /* up      */
-    case 0x02: move_cursor(+1, 0); return 1;                      /* down    */
-    case 0x03: move_cursor(0, +1); return 1;                      /* right   */
-    case 0x04: move_cursor(0, -1); return 1;                      /* left    */
+    case 0x01: move_cursor_ex(-1, 0, shift); return 1;            /* up      */
+    case 0x02: move_cursor_ex(+1, 0, shift); return 1;            /* down    */
+    case 0x03: move_cursor_ex(0, +1, shift); return 1;            /* right   */
+    case 0x04: move_cursor_ex(0, -1, shift); return 1;            /* left    */
     case 0x05:                                                    /* home    */
         move_cursor(ctrl ? -g_cur_r : 0, -g_cur_c); return 1;
     case 0x06:                                                    /* end     */
