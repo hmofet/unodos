@@ -5,13 +5,18 @@
 #   cd build && cpack          # installers: NSIS+ZIP / DMG / DEB+RPM+TGZ
 #
 # The apps and every library under them are compiled from the SAME files
-# pc64/build.sh links into APPS\UO*.UNO - nothing here is a copy.
+# pc64/build.sh links into APPS\UO*.UNO - nothing here is a copy.  Under
+# them sits one small backend per OS (uodesk_plat.h) on that OS's own API:
+# nothing third-party is linked at all.
 cmake_minimum_required(VERSION 3.16)
-project(UnoOffice VERSION 0.1.0 LANGUAGES C
+project(UnoOffice VERSION 0.2.0 LANGUAGES C
         DESCRIPTION "UnoWord, UnoCalc and UnoShow - an Office 97-style suite"
         HOMEPAGE_URL "https://github.com/hmofet/unooffice")
 if(WIN32)
     enable_language(RC)
+endif()
+if(APPLE)
+    enable_language(OBJC)
 endif()
 
 set(ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../../..)
@@ -20,43 +25,31 @@ set(PC64 ${ROOT}/pc64)
 set(UO   ${PC64}/uoffice)
 set(PKG  ${CMAKE_CURRENT_SOURCE_DIR}/packaging)
 
-option(UODESK_STATIC_SDL "link SDL2 statically (self-contained binaries)" OFF)
 option(UODESK_SANITIZE  "build with ASan + UBSan (development)" OFF)
-option(UODESK_FETCH_SDL "build SDL2 from source, statically (no system SDL needed)" OFF)
 
-# Homebrew's "sdl2" is sdl2-compat now - SDL2's API as a shim over a dynamic
-# SDL3 - so it can be neither linked statically into a portable .app nor
-# trusted to behave like SDL2 (it faults pushing a text event).  Fedora ships
-# the same shim.  Release packages therefore compile the real SDL2 from a
-# pinned release tag and link it in.
-if(UODESK_FETCH_SDL)
-    include(FetchContent)
-    set(SDL_SHARED OFF CACHE BOOL "" FORCE)
-    set(SDL_STATIC ON  CACHE BOOL "" FORCE)
-    set(SDL_TEST   OFF CACHE BOOL "" FORCE)
-    FetchContent_Declare(SDL2
-        GIT_REPOSITORY https://github.com/libsdl-org/SDL.git
-        GIT_TAG        release-2.30.9
-        GIT_SHALLOW    TRUE)
-    FetchContent_MakeAvailable(SDL2)
-    set(SDL2_FOUND TRUE)
-    set(UODESK_STATIC_SDL ON)
+# ---- the OS layer -------------------------------------------------------------
+if(WIN32)
+    set(UODESK_PLAT_SRC plat_win32.c)
+    set(UODESK_OS_LIBS user32 gdi32 comdlg32 shell32)
+elseif(APPLE)
+    set(UODESK_PLAT_SRC plat_cocoa.m)
+    set_source_files_properties(plat_cocoa.m PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+    set(UODESK_OS_LIBS "-framework Cocoa")
 else()
-    find_package(SDL2 CONFIG QUIET)
-endif()
-if(NOT SDL2_FOUND)
-    find_package(PkgConfig REQUIRED)
-    pkg_check_modules(SDL2 REQUIRED IMPORTED_TARGET sdl2)
-    add_library(SDL2::SDL2 ALIAS PkgConfig::SDL2)
-endif()
-if(UODESK_STATIC_SDL AND TARGET SDL2::SDL2-static)
-    set(UODESK_SDL SDL2::SDL2-static)
-else()
-    set(UODESK_SDL SDL2::SDL2)
-endif()
-# SDL2main supplies WinMain on Windows; elsewhere it is an empty shim
-if(TARGET SDL2::SDL2main)
-    set(UODESK_SDLMAIN SDL2::SDL2main)
+    find_package(X11 REQUIRED)
+    set(UODESK_PLAT_SRC plat_x11.c)
+    set(UODESK_OS_LIBS X11::X11)
+    # the desktop portal's file picker; without libdbus, zenity/kdialog only
+    find_package(PkgConfig QUIET)
+    if(PKG_CONFIG_FOUND)
+        pkg_check_modules(DBUS QUIET IMPORTED_TARGET dbus-1)
+    endif()
+    if(DBUS_FOUND)
+        list(APPEND UODESK_OS_LIBS PkgConfig::DBUS)
+        set(UODESK_HAVE_DBUS 1)
+    else()
+        message(STATUS "libdbus-1 not found: the file picker falls back to zenity/kdialog")
+    endif()
 endif()
 
 # fb.c's 8x8 fallback font, generated exactly as pc64/build.sh generates it
@@ -98,7 +91,9 @@ add_library(uodesk_platform STATIC
     ${ROOT}/unoui/unoui_anim.c
     ${ROOT}/unoui/unoui_wmanim.c
     ${THEMES}
-    uodesk_fs.c)
+    uodesk_fs.c
+    uodesk_plat_common.c
+    ${UODESK_PLAT_SRC})
 add_dependencies(uodesk_platform uodesk_font)
 
 # the framebuffer ceiling sizes a static array; a desktop can be a 4K monitor
@@ -127,7 +122,10 @@ function(uodesk_flags tgt)
     endif()
 endfunction()
 uodesk_flags(uodesk_platform)
-target_link_libraries(uodesk_platform PUBLIC ${UODESK_SDL})
+target_link_libraries(uodesk_platform PUBLIC ${UODESK_OS_LIBS})
+if(UODESK_HAVE_DBUS)
+    target_compile_definitions(uodesk_platform PRIVATE UODESK_HAVE_DBUS)
+endif()
 if(NOT WIN32)
     target_link_libraries(uodesk_platform PUBLIC m)
 endif()
@@ -176,7 +174,7 @@ function(add_uoapp tgt display app what lane doc)
     endif()
     uodesk_flags(${tgt})
     target_compile_definitions(${tgt} PRIVATE UNO_APP_SYM=uno_app_main)
-    target_link_libraries(${tgt} PRIVATE ${UODESK_SDLMAIN} uodesk_platform)
+    target_link_libraries(${tgt} PRIVATE uodesk_platform)
     if(WIN32)
         target_link_libraries(${tgt} PRIVATE shell32)
     endif()

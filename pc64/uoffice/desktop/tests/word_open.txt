@@ -1,11 +1,13 @@
-# UnoWord: reopen the Document1 word_save.txt wrote
-# (the file-name field is not focused when the dialog opens: click it,
-# or the letters are taken as dialog mnemonics)
+# UnoWord: open a document from a folder that is NOT the first volume, edit
+# it, and plain-Save it: it must go back to that folder, not to volume 0
+# (the pre-0.2 apps saved every plain Save to volume 0).
+# `pick` answers the OS file dialog, which a script cannot drive.
+pick other/Letter.doc
 key o ctrl
-frames 2
-shot word_opendlg.ppm
-click 497 328
-text Document1
-key Return
 frames 5
 shot word_reopened.ppm
+text  Edited.
+key s ctrl
+frames 5
+shot word_resaved.ppm
+key Escape

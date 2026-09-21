@@ -5,7 +5,9 @@
  * in that volume's root.  uofile's dialog is built on exactly that (a Look-in
  * combo of volumes, a flat list of names), so the desktop mapping is a list
  * of folders - Documents, Desktop and the home folder by default, or whatever
- * --dir named - each one a volume.
+ * --dir named - each one a volume.  Every folder the OS file picker opens a
+ * file in joins the list too (uodesk_fs_volume_of), which is how a document
+ * anywhere on disk becomes a (volume, name) the apps can load and save.
  *
  * What the listing shows is narrowed to what the suite can open.  uofile
  * holds 64 names of up to 31 characters and cannot descend into a folder, so
@@ -36,7 +38,7 @@
 
 #include "uodesk.h"
 
-#define MAXVOL   8
+#define MAXVOL   32         /* the defaults + every folder the OS picker opened */
 #define MAXLIST  256
 #define NAMECAP  32          /* uofile.c's NAMELEN: a name must fit, NUL too */
 #define PATHCAP  1024
@@ -107,8 +109,10 @@ void uodesk_fs_add_dir(const char *path, const char *label)
     for (i = 0; i < g_nvol; i++) if (!strcmp(g_vol[i].path, path)) return;
     v = &g_vol[g_nvol++];
     s_cpy(v->path, path, PATHCAP);
-    n = (int)strlen(v->path);             /* no trailing separator */
-    while (n > 1 && (v->path[n - 1] == '/' || v->path[n - 1] == '\\')) v->path[--n] = 0;
+    n = (int)strlen(v->path);    /* no trailing separator, except a root */
+    while (n > 1 && (v->path[n - 1] == '/' || v->path[n - 1] == '\\') &&
+           !(n == 3 && v->path[1] == ':'))                /* keep "C:\" whole */
+        v->path[--n] = 0;
     if (label) { s_cpy(v->label, label, sizeof v->label); return; }
     base = v->path;
     for (i = 0; v->path[i]; i++)
@@ -189,10 +193,41 @@ static int resolve(int vol, const char *name, char *out)
     if ((f = font_file(name)) != 0)
         return g_fontdir[0] && join(out, PATHCAP, g_fontdir, f);
     if (vol < 0 || vol >= g_nvol) return 0;
-    /* a name is a name in the volume's root: nothing climbs out of it */
-    if (strstr(name, "..") || name[0] == '/' || name[0] == '\\' || strchr(name, ':'))
+    /* a name is a name in the volume's root: nothing climbs out of it, and
+     * nothing else is refused ("Q3..final.doc" is a fine file name) */
+    if (strchr(name, '/') || strchr(name, '\\') || strchr(name, ':') ||
+        !strcmp(name, ".") || !strcmp(name, ".."))
         return 0;
     return join(out, PATHCAP, g_vol[vol].path, name);
+}
+
+/* A file the OS picker chose, as the (volume, name) the apps address files
+ * by: its folder becomes a volume (or is found among them) and the name is
+ * what is left.  Returns the volume, or -1. */
+int uodesk_fs_volume_of(const char *path, char *name, int cap)
+{
+    const char *base = path;
+    char dir[PATHCAP];
+    int i, n;
+    if (!path || !*path || !name || cap <= 0) return -1;
+    for (i = 0; path[i]; i++)
+        if (path[i] == '/' || path[i] == '\\') base = path + i + 1;
+    if (!*base || (int)strlen(base) >= cap || base - path >= PATHCAP) return -1;
+    n = (int)(base - path);
+    memcpy(dir, path, (size_t)n); dir[n] = 0;
+    while (n > 1 && (dir[n - 1] == '/' || dir[n - 1] == '\\')) dir[--n] = 0;
+    if (n == 2 && dir[1] == ':') { dir[2] = '\\'; dir[3] = 0; }   /* C: -> C:\ */
+    if (!n) s_cpy(dir, "/", PATHCAP);
+    for (i = 0; i < g_nvol; i++)
+        if (!strcmp(g_vol[i].path, dir)) break;
+    if (i == g_nvol) {
+        /* full: the newest picked folder replaces the previous picked one */
+        if (g_nvol >= MAXVOL) g_nvol = MAXVOL - 1;
+        uodesk_fs_add_dir(dir, 0);
+        if (g_nvol == i) return -1;               /* not a folder after all */
+    }
+    s_cpy(name, base, cap);
+    return i;
 }
 
 /* ---- listing ---------------------------------------------------------------- */

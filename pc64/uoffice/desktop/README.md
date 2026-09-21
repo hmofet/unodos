@@ -6,8 +6,8 @@ from **the same source files** pc64 links into `APPS\UO*.UNO`. Nothing under
 `[EXPERIMENTAL]`, part of the unoffice lane (see [`../UOFFICE.md`](../UOFFICE.md)).
 
 They're **standalone**. Each app is a single native program with its UnoDOS
-host built in. There's no UnoDOS, emulator or VM involved, and nothing else to
-install besides the app.
+host built in. There's no UnoDOS, emulator or VM involved, no third-party
+toolkit, and nothing else to install besides the app.
 
 ## Install
 
@@ -32,17 +32,38 @@ and only then attaches the packages to a GitHub release.
 
 ## How it works
 
+Two layers, with one rule between them:
+
+- **Ours, identical on every OS:** the window's *contents* and the place they
+  are drawn. `pc64/fb.c`'s software framebuffer, painted by unoui, the Office
+  97 chrome and the apps.
+- **The OS's own API, used directly:** everything that belongs to the OS.
+  That's the top-level window that shows our pixels, keyboard and mouse
+  input, the title bar, fullscreen, and the File › Open / Save As dialogs.
+
+The seam is [`uodesk_plat.h`](uodesk_plat.h), with one backend per OS:
+
+| | Windows `plat_win32.c` | macOS `plat_cocoa.m` | Linux `plat_x11.c` |
+|---|---|---|---|
+| window + blit | `CreateWindowExW` + `SetDIBitsToDevice` | `NSWindow` + an `NSBitmapImageRep` over the frame | `XCreateWindow` + `XPutImage` |
+| keyboard | `WM_KEYDOWN` / `WM_CHAR` | `keyDown:` | `KeyPress` via XIM (dead keys, compose) |
+| mouse | `WM_*BUTTON*`, `WM_MOUSEWHEEL` | `mouseDown:` ..., `scrollWheel:` | `ButtonPress`, `MotionNotify` |
+| title / fullscreen | `SetWindowTextW` / borderless monitor-sized window | `title` / `toggleFullScreen:` (its own Space) | `_NET_WM_NAME` / `_NET_WM_STATE_FULLSCREEN` |
+| Open / Save As | `GetOpenFileNameW` / `GetSaveFileNameW` | `NSOpenPanel` / `NSSavePanel` | the XDG desktop portal over D-Bus (GNOME's or KDE's own dialog), else zenity / kdialog |
+| links against | user32, gdi32, comdlg32, shell32 | Cocoa | libX11, libdbus-1 |
+
 `uodesk.c` is a **shell**, a small stand-in for `pc64_uui.c`. It gives a module
 what pc64 gives it:
 
 | pc64 provides | the desktop provides |
 |---|---|
-| the GOP framebuffer, sized at runtime | `pc64/fb.c` unchanged, sized to the OS window, sent to SDL2 each frame |
-| a unoui window with a title bar | the OS window. The app's unoui window stays in unoui's **fullscreen** mode, so its canvas gets the whole framebuffer and every event |
+| the GOP framebuffer, sized at runtime | `pc64/fb.c` unchanged, sized to the OS window, handed to the backend each frame |
+| a unoui window with a title bar | the OS window. The app's unoui window stays in unoui's **fullscreen** mode, so its canvas gets the whole framebuffer and every event. The app's title ("UnoWord - Document1") goes to the OS title bar |
 | `pc64_shell_*` services | `pc64_shell_dirty`, `_workarea_w/h` (= window size), `_fullscreen` (= the OS window going fullscreen, used by UnoShow's slide show) |
-| HID keyboard as UEFI `(uni, scan, ctrl)` | SDL keys translated into the same codes. The module gets each key first, and whatever it doesn't handle goes to unoui, same order as `pc64_uui.c`. Cmd is treated as Ctrl on a Mac |
-| `uno_fs_*` over FAT volumes | `uodesk_fs.c`: each **folder** is a volume (Documents, Desktop, home by default, or `--dir`) |
-| TTF faces on the ESP | `fonts/` beside the executable (`Contents/Resources/fonts` in a Mac bundle) |
+| HID keyboard as UEFI `(uni, scan, ctrl)` | the backend's keys translated into the same codes. The module gets each key first, and whatever it doesn't handle goes to unoui, same order as `pc64_uui.c`. Cmd is treated as Ctrl on a Mac |
+| the Office 97 Open / Save As dialog | the OS dialog, through `uof_set_native()` (see `../uofile.h`). The chosen file's folder becomes a volume, so the app still addresses it as (volume, name), and a plain Save goes back to that folder. If the OS has no picker, the Office 97 dialog is drawn as before |
+| `uno_fs_*` over FAT volumes | `uodesk_fs.c`: each **folder** is a volume (Documents, Desktop and home by default, or `--dir`, plus every folder the picker opens) |
+| TTF faces on the ESP | `fonts/` beside the executable (`Contents/Resources/fonts` in a Mac bundle, `share/unooffice/fonts` in the Linux packages) |
 
 The text engine (`pc64_font.c` + stb_truetype), unoui, unodoc and um_inflate
 are all linked unchanged, so the documents you save are the same `.doc` / `.xls`
@@ -50,27 +71,26 @@ are all linked unchanged, so the documents you save are the same `.doc` / `.xls`
 
 ## Build
 
-You need CMake 3.16+, a C99 compiler, SDL2 and Python 3 (Python generates the
-8x8 fallback font header, the same way `pc64/build.sh` does).
+You need CMake 3.16+, a C99 compiler, and Python 3 (Python generates the 8x8
+fallback font header, the same way `pc64/build.sh` does). There are no other
+dependencies beyond the OS's own development files:
 
 ```bash
 cmake -S pc64/uoffice/desktop -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ```
 
-- **Linux:** `apt install libsdl2-dev`. Produces `unoword`, `unocalc`, `unoshow`.
-- **macOS:** `-DUODESK_FETCH_SDL=ON` builds SDL2 2.30.9 from source and links
-  it statically, giving self-contained `UnoWord.app` / `UnoCalc.app` /
-  `UnoShow.app`. Avoid Homebrew's `sdl2`: it is now the sdl2-compat shim
-  over a dynamic SDL3, which can't be bundled and misbehaves.
-- **Windows:** MSYS2 MINGW64 with `mingw-w64-x86_64-SDL2`, plus
-  `-DUODESK_STATIC_SDL=ON -DCMAKE_EXE_LINKER_FLAGS="-static -static-libgcc"`.
-  That gives `UnoWord.exe` etc., each importing only system DLLs.
-  To cross-compile from Linux, use `-DCMAKE_TOOLCHAIN_FILE=cmake/mingw-w64.cmake
-  -DCMAKE_PREFIX_PATH=<SDL2 mingw devel>/x86_64-w64-mingw32`.
+- **Linux:** `apt install libx11-dev libdbus-1-dev` (Fedora: `libX11-devel
+  dbus-devel`). Produces `unoword`, `unocalc`, `unoshow`. Without libdbus the
+  picker falls back to zenity/kdialog.
+- **macOS:** Xcode's command-line tools. Add
+  `-DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"` for universal apps.
+- **Windows:** MSYS2 MINGW64 (`mingw-w64-x86_64-gcc`, `-cmake`, `-python`),
+  plus `-DCMAKE_EXE_LINKER_FLAGS="-static -static-libgcc"` so each `.exe`
+  imports only Windows' own DLLs. To cross-compile from Linux, use
+  `-DCMAKE_TOOLCHAIN_FILE=cmake/mingw-w64.cmake`.
 
-Release builds use `-DUODESK_FETCH_SDL=ON` on every OS, so SDL is linked in
-and no system SDL is needed at run time. Then, in the build directory:
+Then, in the build directory:
 
 ```bash
 cpack                  # Windows: NSIS + ZIP (NSIS must be installed)
@@ -91,10 +111,10 @@ emblems (`pc64/pc64_icons.c`) by `packaging/mkicons.c`. Regenerate them with
 ## Options
 
 ```
---dir PATH       a folder for Open/Save (repeatable; replaces the defaults)
+--dir PATH       a folder for the drawn Open/Save dialog (repeatable)
 --size WxH       initial window size
 --shot out.ppm   render one frame and exit
---script FILE    replay input (text / key / click / shot / frames / size), then exit
+--script FILE    replay input (text / key / click / shot / frames / pick), then exit
 ```
 
 F11 or Alt+Enter toggles fullscreen.
@@ -105,24 +125,23 @@ F11 or Alt+Enter toggles fullscreen.
 tests/smoke.sh <build dir> [.exe]      # under xvfb-run on Linux
 ```
 
-The smoke test drives each app through its real event pump: typing, saving,
-reopening, a formula, and the slide show in and out. It then checks that
-UnoWord and UnoCalc actually wrote compound-file documents. CI runs it on all
-three OSes; on Linux and macOS it also runs under ASan+UBSan.
+The smoke test drives each app through the shell's real dispatch path:
+typing, saving, a formula, and the slide show in and out. It opens a document
+from a *second* folder, edits it and plain-saves it, and checks the save went
+back to that folder. It then checks that UnoWord and UnoCalc wrote
+compound-file documents. The OS file dialog can't be scripted, so `pick`
+supplies its answer; everything after the dialog is the real code. CI runs the
+test on all three OSes, and under ASan+UBSan on Linux and macOS.
 
 ## Known limits
 
 These come from the apps or the pc64 contract they're written to. The
 desktop shell doesn't cause them, and it shouldn't hide them either.
 
-- **Open/Save shows one folder at a time, flat.** uofile lists a volume's
-  root, holds at most 64 names and truncates names at 31 characters. The shell
-  lists only Office documents and extensionless files, and skips names too long
-  to open. Use `--dir` to point it somewhere else.
-- **The file-name field isn't focused when the dialog opens.** Click it first;
-  otherwise the letters you type act as dialog mnemonics.
 - **ASCII text only.** The document model is single-byte, so non-ASCII typed
   characters are dropped instead of being inserted as raw UTF-8.
+- **No clipboard.** The apps' Cut/Copy/Paste aren't implemented yet, so there's
+  nothing to connect to the OS clipboard.
 - **UnoWord:** the arrow keys don't move the caret, and Bold/Italic apply to a
   selection, not to text typed afterwards. The pc64 build behaves the same.
 - **No unsaved-changes prompt** on close: the apps don't report whether a
@@ -132,8 +151,9 @@ desktop shell doesn't cause them, and it shouldn't hide them either.
   certificate.
 - **No file associations** yet: the apps can't open a file passed on the
   command line, so double-clicking a `.doc` won't launch UnoWord.
-- **No HiDPI.** A pixel on a Retina screen is scaled by the OS, because
-  the chrome's 16x16 icons and metrics are drawn at 1x.
+- **No HiDPI.** The chrome's 16x16 icons and metrics are drawn at 1x, so a
+  framebuffer pixel is one point: macOS doubles it crisply on Retina
+  (nearest-neighbour), while Windows at 150-200% scales it with some softness.
 - On Win64, the apps declare `malloc(unsigned long)`, which is 32-bit there.
   That's harmless for the allocation sizes involved, and pc64's own mingw
   build does the same.

@@ -1,4 +1,4 @@
-# UnoCalc: two numbers and a formula
+# UnoCalc: two numbers and a formula, then Save As through the picker
 text 12
 key Return
 text 30
@@ -10,10 +10,6 @@ text total
 key Return
 frames 2
 shot calc.ppm
+pick docs/Book1.xls
 key s ctrl
-frames 2
-shot calc_savedlg.ppm
-click 497 328
-text Book1.xls
-key Return
 frames 5
