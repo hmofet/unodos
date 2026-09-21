@@ -146,8 +146,20 @@ function(add_uoapp tgt display app what lane doc)
         list(APPEND src ${ROOT}/unodoc/${b}.c)
     endforeach()
 
+    # the documents this app opens: MIME types (Linux), UTIs (macOS)
+    set(UO_MIME "${UO_MIME_${tgt}}")
+    list(GET UO_DOCS_${tgt} 0 UO_DOC_97)
+    list(GET UO_DOCS_${tgt} 1 UO_UTI_97)
+    list(GET UO_DOCS_${tgt} 2 UO_EXT_97)
+    list(GET UO_DOCS_${tgt} 3 UO_DOC_X)
+    list(GET UO_DOCS_${tgt} 4 UO_UTI_X)
+    list(GET UO_DOCS_${tgt} 5 UO_EXT_X)
+
     if(APPLE)
         set(icns ${PKG}/icons/${lower}.icns)
+        # Info.plist: CMake's fields plus CFBundleDocumentTypes.  @ONLY
+        # leaves the ${MACOSX_BUNDLE_*} for CMake to fill at generate time.
+        configure_file(${PKG}/Info.plist.in ${CMAKE_CURRENT_BINARY_DIR}/${tgt}.Info.plist.in @ONLY)
         set_source_files_properties(${icns} PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
         add_executable(${tgt} MACOSX_BUNDLE ${src} ${icns})
         set_target_properties(${tgt} PROPERTIES
@@ -158,7 +170,8 @@ function(add_uoapp tgt display app what lane doc)
             MACOSX_BUNDLE_INFO_STRING "${display} ${PROJECT_VERSION}"
             MACOSX_BUNDLE_COPYRIGHT "UnoDOS project, MPL-2.0"
             MACOSX_BUNDLE_BUNDLE_VERSION ${PROJECT_VERSION}
-            MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION})
+            MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION}
+            MACOSX_BUNDLE_INFO_PLIST ${CMAKE_CURRENT_BINARY_DIR}/${tgt}.Info.plist.in)
     elseif(WIN32)
         # the icon and the version resource Explorer shows in Properties
         set(UO_ICON ${PKG}/icons/${lower}.ico)
@@ -212,6 +225,16 @@ function(add_uoapp tgt display app what lane doc)
         endforeach()
     endif()
 endfunction()
+
+# What each app opens, for the file associations.  Linux: MIME types for the
+# .desktop entry.  macOS: name;UTI;extension for the 97 binary, then OOXML.
+# (Windows' list is packaging/assoc.nsh.)
+set(UO_MIME_uoword "application/msword;application/vnd.openxmlformats-officedocument.wordprocessingml.document;")
+set(UO_MIME_uocalc "application/vnd.ms-excel;application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;")
+set(UO_MIME_uoshow "application/vnd.ms-powerpoint;application/vnd.openxmlformats-officedocument.presentationml.presentation;")
+set(UO_DOCS_uoword "Word 97 Document;com.microsoft.word.doc;doc;Word Document;org.openxmlformats.wordprocessingml.document;docx")
+set(UO_DOCS_uocalc "Excel 97 Workbook;com.microsoft.excel.xls;xls;Excel Workbook;org.openxmlformats.spreadsheetml.sheet;xlsx")
+set(UO_DOCS_uoshow "PowerPoint 97 Presentation;com.microsoft.powerpoint.ppt;ppt;PowerPoint Presentation;org.openxmlformats.presentationml.presentation;pptx")
 
 add_uoapp(uoword UnoWord uoword "Word processor" "uow_doc;uow_layout"
     "unodoc;ud_cfb;ud_doc;ud_docw;ud_zip;ud_xml;ud_docx;ud_ooxz;ud_docxw")
