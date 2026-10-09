@@ -35,8 +35,8 @@ with its stored passphrase, the password field only appears when it is needed
 and no longer carries one network's password over to another, the reveal eye
 is a target you can actually hit, and Scan no longer freezes the desktop. The
 tray chip names the medium and the network instead of saying "LAN" on a
-machine with no cable. The Network app is now the same summary, with its
-self-tests behind a Run tests button rather than running on open. Not yet
+machine with no cable. The separate Network app is no longer in the Start
+menu; the Control Panel pane is the one place for this. Not yet
 verified on hardware: the redesigned pane end to end. Clicking Join still
 blocks the desktop for the three or four seconds the association takes.
 
@@ -139,10 +139,12 @@ port for the same phone, is also in the tree. Details:
 
 #### Also in this release
 
-- **UnoWord's arrow keys move the caret.** Left/Right (Ctrl by word), Up/Down,
-  Home/End, Page Up/Down and Delete all work, Shift extends the selection, and
-  Bold, Italic, Underline, font and size chosen with nothing selected now apply
-  to what you type next. The Size box works at all.
+- **UnoWord's arrow keys move the caret.** Left/Right (Ctrl by word), Up/Down
+  and Delete work, and Bold, Italic, Underline, font and size chosen with
+  nothing selected now apply to what you type next. The Size box works at all.
+  Not yet on pc64: Home, End, Page Up and Page Down never reach any app (neither
+  keyboard driver maps them), Shift does not extend a selection, and the menus
+  cannot be opened from the keyboard.
 - **UnoOffice draws text beyond ASCII.** Accented letters in opened documents
   were drawn as broken glyphs; UnoWord, UnoCalc and UnoShow now keep CP-1252 in
   the document and convert to UTF-8 wherever text is drawn, typed or copied.
