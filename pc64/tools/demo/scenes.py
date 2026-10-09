@@ -1654,6 +1654,9 @@ def s08_pre(d):
     WAD is present, pre-launch Duum here (before the stream) so its WAD
     directory parse + first raycast frame - slow under TCG - are not dead air
     on camera. Returns True to record if the Duum window came up."""
+    # v3.35.0 opens Control Panel at boot. s08 recorded on its own boot sat
+    # beside it for the whole Duum scene (2026-10-09), so clear the desk first.
+    d.close_all()
     if not getattr(d, "wad_staged", None):
         print("  s08: SKIP - no WAD (pc64/wads on QEMU, the stick's root on "
               "metal), scene no-ops by design")
