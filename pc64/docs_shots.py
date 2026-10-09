@@ -39,14 +39,33 @@ of the wrong app under the right name), so proof-read a regenerated set rather
 than assuming it. The way to close this properly is URC on a production build,
 which needs a token typed at the console.
 """
-import json, os, socket, subprocess, sys, time
+import atexit, json, os, socket, subprocess, sys, time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 os.chdir(HERE)
 
 OVMF_CODE = "/usr/share/OVMF/OVMF_CODE_4M.fd"
 OVMF_VARS = "/usr/share/OVMF/OVMF_VARS_4M.fd"
-QMP_SOCK  = "/tmp/unodos-pc64-docs-qmp.sock"
+# THE QMP SOCKET AND THE NV VARS ARE PER RUN. Both used to be fixed paths
+# (/tmp/unodos-pc64-docs-qmp.sock, build/vars.fd), so a second run on the same
+# box - this script twice, or this beside harness.py/docs_shots.py in one tree -
+# unlinked the first run's socket and overwrote its pflash store. The pid
+# makes them private; UNO_QEMU_TMP moves them (default /tmp). Not under
+# build/: a Windows-mounted drvfs tree cannot host unix sockets.
+_QTMP     = os.environ.get("UNO_QEMU_TMP", "/tmp")
+QMP_SOCK  = os.path.join(_QTMP, "unodos-pc64-docs-qmp.%d.sock" % os.getpid())
+VARS      = os.path.join(_QTMP, "unodos-pc64-docs-vars.%d.fd" % os.getpid())
+
+
+def _rm_run_files():
+    for p in (QMP_SOCK, VARS):
+        try:
+            os.remove(p)
+        except OSError:
+            pass
+
+
+atexit.register(_rm_run_files)
 OUTDIR    = "shots/manual"
 W, H = 1280, 800                       # GOP surface (screendump size)
 
@@ -1197,13 +1216,13 @@ def main():
                 "-device", "usb-storage,drive=stick"]
     else:
         disk = ["-drive", "format=vvfat,file=fat:rw:build/esp"]
-    subprocess.run(["cp", OVMF_VARS, "build/vars.fd"], check=True)
+    subprocess.run(["cp", OVMF_VARS, VARS], check=True)
     if os.path.exists(QMP_SOCK):
         os.remove(QMP_SOCK)
     qemu = subprocess.Popen([
         "qemu-system-x86_64", "-machine", "q35", "-m", "256",
         "-drive", "if=pflash,format=raw,readonly=on,file=" + OVMF_CODE,
-        "-drive", "if=pflash,format=raw,file=build/vars.fd",
+        "-drive", "if=pflash,format=raw,file=" + VARS,
         "-device", "qemu-xhci", "-device", "usb-tablet",
         # an HD Audio device, so the System window's Audio line shows the real
         # PCM backend (the "none" audiodev just swallows the samples headless)

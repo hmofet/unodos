@@ -64,6 +64,8 @@ def sh(a):
 
 def build_disk_with_package():
     """remote_qemu.build_disk, at a size that fits the package beside the OS."""
+    for img in (RQ.DISK, RQ.DISK2, RQ.FAT):
+        RQ.claim_disk(img)                       # refuse if another run owns them
     need_mib = 128 + (os.path.getsize(APK) >> 20)
     disk_sectors = need_mib * 2048
     cfg = os.path.join(os.path.dirname(RQ.DISK), "remote_stress.cfg")

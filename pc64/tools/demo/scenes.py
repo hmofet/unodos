@@ -229,6 +229,8 @@ DEMO_KVM = os.environ.get("UNO_DEMO_KVM") == "1"
 def boot_qemu():
     if not DEMO_KVM:
         return RQ.boot_qemu()
+    RQ.claim_disk(RQ.DISK)
+    RQ.claim_disk(RQ.DISK2)
     subprocess.run(["cp", RQ.OVMF_VARS, RQ.VARS])
     cmd = [
         # 3 GB, NOT 4. With -m 4096 this guest's audio is SILENT: the sink
@@ -292,7 +294,7 @@ def build_diskB(docs):
                     RQ.DISK2], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     part_start = 2048
     part_sectors = disk_sectors - part_start - 2048
-    fat = "/tmp/demo_docs_fat.img"
+    fat = os.path.join(os.path.dirname(RQ.DISK), "demo_docs_fat.img")
     with open(fat, "wb") as f:
         f.truncate(part_sectors * SECTOR)
     subprocess.run(["mformat", "-i", fat, "-v", "DOCS", "-F",
@@ -316,7 +318,13 @@ def build_disk(docs_for_b=None):
     over the one it wrote. Keeping RQ's builder authoritative for the disk
     geometry means this file cannot drift from the harness everyone else
     boots. Disk B becomes the DOCS volume (or blank) - either way
-    deterministic, so a stale TESTVOL from a prior gate never leaks in."""
+    deterministic, so a stale TESTVOL from a prior gate never leaks in.
+
+    CLAIM FIRST. Disk B is rewritten here before RQ.build_disk() runs its
+    own claim, and a rewrite under another run's live QEMU is exactly what
+    killed a film take on 2026-10-09."""
+    for img in (RQ.DISK, RQ.DISK2, RQ.FAT):
+        RQ.claim_disk(img)
     if docs_for_b:
         build_diskB(docs_for_b)
     else:
@@ -748,7 +756,7 @@ class Demo(object):
         self.click(pt[0], pt[1], settle=1.5)
         time.sleep(2.0)
 
-    def raise_resolution(self, min_w=1024):
+    def raise_resolution(self, min_w=1024, want=None):
         """Pick a big mode and CONFIRM it, once, at session start - before any
         stream exists.
 
@@ -771,13 +779,30 @@ class Demo(object):
             solved when it was not.
 
         The 15 s auto-revert is the safety net: if a mode comes up unreadable,
-        or the click misses, doing NOTHING puts the old mode back."""
-        if self.w >= min_w:
+        or the click misses, doing NOTHING puts the old mode back.
+
+        THE REQUESTED MODE OR NOTHING. `want` is an exact (w, h) (--mode);
+        without it, the request is the first mode that clears `min_w`. A
+        missed Keep RETRIES THE SAME ROW (rows 0, 0, 0 before moving up):
+        this loop used to step to the next row on a miss, so one missed
+        click filmed a whole session at the next mode down - 1280x720
+        instead of 1280x800, 2026-10-09 - and still printed "raised +
+        confirmed" because 1280 cleared min_w. Once a mode is the request,
+        a different mode from a later row is reverted, never accepted, and
+        if the request is not confirmed the run STOPS (SystemExit) before a
+        single beat is filmed at the wrong size."""
+        def wanted(w, h):
+            return (w, h) == want if want else w >= min_w
+        if wanted(self.w, self.h):
             print("resolution: already %dx%d, leaving it" % (self.w, self.h))
             return True
         start = (self.w, self.h)
+        target = want                            # fixed once a row proposes one
         best = None
-        for k in range(6):                       # last row first, then upward
+        too_small = set()
+        for k in [0, 0, 0, 1, 1, 2, 2, 3, 4, 5]:
+            if k in too_small:
+                continue                         # same row, same answer
             try:
                 w, h = self._res_try(k)
             except Exception as e:               # noqa: BLE001
@@ -786,32 +811,43 @@ class Demo(object):
             if (w, h) == start:
                 print("resolution: row -%d changed nothing (Apply disabled?)" % k)
                 continue                         # no probation armed to undo
-            if w >= min_w:
-                self._res_confirm(keep=True)
-                # OUTLAST THE PROBATION before believing it. RES_CONFIRM_S is
-                # 15 s, and a mode that was applied but not confirmed reads as
-                # the NEW size right up until it snaps back - so a check made
-                # promptly cannot tell "kept" from "about to revert", and
-                # reports success either way. Ask again on the far side.
-                time.sleep(RES_CONFIRM_S + 4)
-                w2, h2 = self.screen_size()
-                if (w2, h2) == (w, h):
-                    best = (w, h)
-                    break
-                print("resolution: %dx%d did NOT stick (now %dx%d) - the Keep "
-                      "click missed and it auto-reverted" % (w, h, w2, h2))
+            if target is None and wanted(w, h):
+                target = (w, h)                  # THE request from here on
+            if (w, h) != target:
+                print("resolution: row -%d gave %dx%d, not the requested %s - "
+                      "reverting" % (k, w, h, "%dx%d" % target if target
+                                     else ">= %d wide" % min_w))
+                if target is None:
+                    too_small.add(k)
+                self._res_confirm(keep=False)
                 continue
-            print("resolution: row -%d gave %dx%d, too small - reverting" % (k, w, h))
-            self._res_confirm(keep=False)
+            self._res_confirm(keep=True)
+            # OUTLAST THE PROBATION before believing it. RES_CONFIRM_S is
+            # 15 s, and a mode that was applied but not confirmed reads as
+            # the NEW size right up until it snaps back - so a check made
+            # promptly cannot tell "kept" from "about to revert", and
+            # reports success either way. Ask again on the far side.
+            time.sleep(RES_CONFIRM_S + 4)
+            w2, h2 = self.screen_size()
+            if (w2, h2) == (w, h):
+                best = (w, h)
+                break
+            print("resolution: %dx%d did NOT stick (now %dx%d) - the Keep "
+                  "click missed and it auto-reverted; retrying the same row"
+                  % (w, h, w2, h2))
         self.close_all()
         w, h = self.screen_size()
         self.w, self.h = w, h
         self.px, self.py = w // 2, h // 2
-        ok = w >= min_w
-        print("resolution: now %dx%d (%s)"
-              % (w, h, "raised + confirmed" if ok
-                 else "NOT raised - beats will be small"))
-        return ok
+        if best is None or (w, h) != best:
+            raise SystemExit(
+                "resolution: FAIL - requested %s, confirmed mode is %dx%d. "
+                "Not filming at the wrong size; keep_probe.png in %s shows the "
+                "last Keep decision."
+                % ("%dx%d" % target if target else ">= %d wide" % min_w,
+                   w, h, PROBE))
+        print("resolution: now %dx%d (raised + confirmed)" % (w, h))
+        return True
 
     def reset(self):
         """Between scenes: every desktop back to empty, desktop 1 current."""
@@ -2727,6 +2763,10 @@ def main(argv):
     ap.add_argument("--min-width", type=int, default=1024,
                     help="raise the desktop to at least this width at session "
                          "start (0 = leave the resolution alone)")
+    ap.add_argument("--mode", metavar="WxH",
+                    type=lambda v: tuple(int(n) for n in v.lower().split("x")),
+                    help="require EXACTLY this mode (e.g. 1280x800); the run "
+                         "fails rather than film at any other size")
     ap.add_argument("--out-dir", metavar="DIR",
                     help="where the recordings go (default tools/demo/out); "
                          "use a fresh directory to keep an earlier cut intact")
@@ -2778,8 +2818,8 @@ def main(argv):
         d.boot()
         if MODE == "metal":
             d.probe_metal_assets()
-        if a.min_width:
-            d.raise_resolution(a.min_width)
+        if a.min_width or a.mode:
+            d.raise_resolution(a.min_width, a.mode)
         for i, (wname, (pre, fn)) in enumerate(SCENES):
             if wname not in want:
                 continue

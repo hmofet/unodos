@@ -25,7 +25,7 @@ into shots/*.png at each step.
   python3 harness.py usbhid_mods  usb stack gate: the HID modifier byte reaches
                                 uno_usb_hid_mods() as a live level (same build).
 """
-import json, os, socket, subprocess, sys, time
+import atexit, json, os, socket, subprocess, sys, time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 os.chdir(HERE)
@@ -34,8 +34,26 @@ import ppm2png                                # read_ppm/write_png, stdlib only
 
 OVMF_CODE = "/usr/share/OVMF/OVMF_CODE_4M.fd"
 OVMF_VARS = "/usr/share/OVMF/OVMF_VARS_4M.fd"
-QMP_SOCK  = "/tmp/unodos-pc64-qmp.sock"   # NOT under build/: a Windows-mounted
-                                          # drvfs tree cannot host unix sockets
+# THE QMP SOCKET AND THE NV VARS ARE PER RUN. Both used to be fixed paths
+# (/tmp/unodos-pc64-qmp.sock, build/vars.fd), so a second run on the same
+# box - this script twice, or this beside harness.py/docs_shots.py in one tree -
+# unlinked the first run's socket and overwrote its pflash store. The pid
+# makes them private; UNO_QEMU_TMP moves them (default /tmp). Not under
+# build/: a Windows-mounted drvfs tree cannot host unix sockets.
+_QTMP     = os.environ.get("UNO_QEMU_TMP", "/tmp")
+QMP_SOCK  = os.path.join(_QTMP, "unodos-pc64-qmp.%d.sock" % os.getpid())
+VARS      = os.path.join(_QTMP, "unodos-pc64-vars.%d.fd" % os.getpid())
+
+
+def _rm_run_files():
+    for p in (QMP_SOCK, VARS):
+        try:
+            os.remove(p)
+        except OSError:
+            pass
+
+
+atexit.register(_rm_run_files)
 
 
 class Qmp:
@@ -2190,7 +2208,7 @@ def qemu_argv(extra=None, log="build/ovmf.log", pointer="tablet"):
     argv = [
         "qemu-system-x86_64", "-machine", "q35", "-m", "256",
         "-drive", "if=pflash,format=raw,readonly=on,file=" + OVMF_CODE,
-        "-drive", "if=pflash,format=raw,file=build/vars.fd",
+        "-drive", "if=pflash,format=raw,file=" + VARS,
         "-drive", disk_arg,
         "-device", "qemu-xhci",
         "-nic", "none",
@@ -3097,7 +3115,7 @@ def start_qemu(extra=None, log="build/ovmf.log", pointer="tablet"):
     """Boot one QEMU and connect QMP. Returns (proc, Qmp). A scenario that needs
     a REBOOT (session restore) calls this twice; build/esp is the same vvfat
     tree both times, so what the guest wrote survives the power cycle."""
-    subprocess.run(["cp", OVMF_VARS, "build/vars.fd"], check=True)
+    subprocess.run(["cp", OVMF_VARS, VARS], check=True)
     if os.path.exists(QMP_SOCK):
         os.remove(QMP_SOCK)
     qemu = subprocess.Popen(qemu_argv(extra, log, pointer))
@@ -3163,7 +3181,7 @@ def main():
         return ssh_app()                       # ditto: it owns its own sshd                     # ditto: it boots twice
     if len(sys.argv) > 1 and sys.argv[1] == "unoapps":
         return unoapps()                       # ditto: URC, it owns its boot
-    subprocess.run(["cp", OVMF_VARS, "build/vars.fd"], check=True)
+    subprocess.run(["cp", OVMF_VARS, VARS], check=True)
     if os.path.exists(QMP_SOCK):
         os.remove(QMP_SOCK)
     argv = qemu_argv()

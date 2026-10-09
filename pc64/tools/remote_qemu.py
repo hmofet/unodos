@@ -14,7 +14,7 @@ Run under WSL (needs qemu-system-x86_64, sgdisk, mformat/mcopy, OVMF), so that
 the guest's SLIRP 10.0.2.2 maps to this process's loopback.  Exit 0 iff all
 four checks pass.
 """
-import os, sys, subprocess, time, threading
+import atexit, os, sys, subprocess, time, threading
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from unoauto_remote import UnoAutoLink
@@ -31,15 +31,133 @@ DISK2 = os.path.join(_TMP, "remote_disk2.img")   # a SECOND blank disk for the p
 FAT   = os.path.join(_TMP, "remote_fat.img")
 OVMF_CODE = "/usr/share/OVMF/OVMF_CODE_4M.fd"
 OVMF_VARS = "/usr/share/OVMF/OVMF_VARS_4M.fd"
-VARS = "/tmp/remote_vars.fd"
 SECTOR, MIB = 512, 1 << 20
-PORT = 5399
+
+
+# THE VARS FILE AND THE URC PORT ARE PER RUN. Both used to be fixed
+# (/tmp/remote_vars.fd, 5399), so two runs on one box - a demo-film
+# scenes.py session and a harness.py unoapps roster, 2026-10-09 - shared a
+# listener port and an NV store. The disk was shared too, and the roster's
+# build_disk rewrote it under the film's running QEMU, which killed the take
+# with no error anywhere. Now:
+#   - PORT is UNO_QEMU_PORT (URC_PORT, the name an ad-hoc patch used, also
+#     works) or else a free port the kernel picks. It is exported back into
+#     the environment so a child process that imports this module agrees with
+#     its parent about where the guest will dial.
+#   - VARS carries the pid, under UNO_QEMU_TMP, and is removed at exit.
+#   - the disk images keep their names (callers and docs name them) but are
+#     CLAIMED before anything writes or boots them: see claim_disk().
+def _free_port():
+    import socket
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+    finally:
+        s.close()
+
+
+PORT = int(os.environ.get("UNO_QEMU_PORT") or os.environ.get("URC_PORT")
+           or _free_port())
+os.environ["UNO_QEMU_PORT"] = str(PORT)
+VARS = os.path.join(_TMP, "remote_vars.%d.fd" % os.getpid())
+
+
+def _rm_vars():
+    try:
+        os.unlink(VARS)
+    except OSError:
+        pass
+
+
+atexit.register(_rm_vars)
+
+
+def _qemu_users(path):
+    """[(pid, cmdline)] of every live QEMU process with `path` on its command
+    line as a file= argument. Reads /proc, so it also sees QEMUs started by
+    other checkouts and older copies of this module that take no lock."""
+    want = os.path.realpath(path)
+    users = []
+    for pid in os.listdir("/proc") if os.path.isdir("/proc") else []:
+        if not pid.isdigit() or int(pid) == os.getpid():
+            continue
+        try:
+            # OUR OWN QEMU IS NOT A RIVAL. A caller that kill()s its guest and
+            # rebuilds at once (urcui's retry-on-a-fresh-guest) races the
+            # SIGKILL: the child can still be in /proc for a few ms.
+            with open("/proc/%s/stat" % pid) as f:
+                if int(f.read().rsplit(")", 1)[1].split()[1]) == os.getpid():
+                    continue
+            with open("/proc/%s/cmdline" % pid, "rb") as f:
+                argv = f.read().decode("utf-8", "replace").split("\0")
+            cwd = os.readlink("/proc/%s/cwd" % pid)
+        except OSError:
+            continue                              # gone, or not ours to read
+        if not argv or "qemu" not in os.path.basename(argv[0]):
+            continue
+        for a in argv:
+            for part in a.split(","):
+                if part.startswith("file="):
+                    f = part[5:]
+                    if f.startswith("fat:"):
+                        continue                  # vvfat: a directory, not an image
+                    if os.path.realpath(os.path.join(cwd, f)) == want:
+                        users.append((int(pid), " ".join(argv)))
+    return users
+
+
+_claims = {}                                       # realpath -> open lock fd
+
+
+def claim_disk(path=None):
+    """Take `path` (default DISK) for this run, or refuse to start.
+
+    Two checks, because each misses a case the other catches:
+      - an flock on `<path>.lock`, held until this process exits, so a second
+        run is refused even in the gap between build_disk() and its boot;
+      - a /proc scan for any QEMU that has the image open right now, which
+        catches runs that never took the lock (old checkouts, orphans).
+    Refusing is a SystemExit, not an exception, so a caller's broad
+    `except Exception` cannot swallow it and carry on against a disk
+    someone else is booted from."""
+    path = path or DISK
+    real = os.path.realpath(path)
+    if real in _claims:
+        return
+    users = _qemu_users(path)
+    if users:
+        raise SystemExit(
+            "remote_qemu: REFUSING to touch %s - it is open by another QEMU:\n%s\n"
+            "Another run (a demo film? a harness?) owns it. Wait for it, or "
+            "give this run its own UNO_QEMU_TMP=<dir>."
+            % (path, "\n".join("  pid %d: %s" % u for u in users)))
+    import fcntl
+    fd = os.open(path + ".lock", os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        try:
+            holder = os.read(fd, 64).decode("ascii", "replace").strip()
+        except OSError:
+            holder = "?"
+        os.close(fd)
+        raise SystemExit(
+            "remote_qemu: REFUSING to touch %s - another run holds %s.lock "
+            "(pid %s). Wait for it, or give this run its own UNO_QEMU_TMP=<dir>."
+            % (path, path, holder or "?"))
+    os.ftruncate(fd, 0)
+    os.write(fd, str(os.getpid()).encode())
+    _claims[real] = fd
 
 
 def sh(a, **k): return subprocess.run(a, **k)
 
 
 def build_disk():
+    claim_disk(DISK)
+    claim_disk(DISK2)
+    claim_disk(FAT)
     cfg = os.path.join(os.path.dirname(DISK), "remote_stress.cfg")
     # remote=<host>:<port> arms the dev-PC link; `nonet` skips the slow boot
     # net test (the link brings the NIC up itself); no `poweroff` so the guest
@@ -108,6 +226,8 @@ def build_disk():
 
 
 def boot_qemu():
+    claim_disk(DISK)
+    claim_disk(DISK2)
     sh(["cp", OVMF_VARS, VARS])
     cmd = [
         "qemu-system-x86_64", "-machine", "q35",

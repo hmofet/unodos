@@ -58,6 +58,21 @@ a fresh hello, which stream_recv treats as a reset and splits the mp4 into
 `-2.mp4`. QEMU boots at 640x400, which is too small to film; the raise takes it
 to 1280x800. Pass `--min-width 0` to leave it alone.
 
+`--mode WxH` (e.g. `--mode 1280x800`) requires that exact mode. Either way the
+first mode a row proposes that satisfies the request becomes THE request: a
+missed Keep click retries the same row (0, 0, 0, then upward), a different mode
+from a later row is reverted, and if the request is not confirmed the run
+**exits non-zero before filming anything**. (A missed click used to step down a
+row and film a whole session at 1280x720, 2026-10-09.)
+
+## Running beside another QEMU run
+
+Every run is private except the boot disk: the URC port is `UNO_QEMU_PORT`
+(else a free port), the NV vars and QMP sockets carry the pid, and the disk
+images live under `UNO_QEMU_TMP` (default `/tmp`). A run whose disk images are
+open by another QEMU, or locked by another run, refuses to start and names the
+owner. To run two sessions at once, give the second its own `UNO_QEMU_TMP`.
+
 It is driven entirely by keyboard, because the screen changes size underneath
 the sequence and any coordinate read beforehand would be stale halfway through.
 Three things about that flow are not what the layout suggests, and each one
@@ -259,7 +274,7 @@ The driver replaces the shipped DEBUG.CFG (via `remote_qemu.build_disk`, then
 its own mcopy) with:
 
 ```
-remote=10.0.2.2:5399
+remote=10.0.2.2:<RQ.PORT>    <- UNO_QEMU_PORT, else a free port
 nonet
 nostress          <- the fuzz driver's real off switch (it opens a random app
                      every few frames and would fight the choreography)

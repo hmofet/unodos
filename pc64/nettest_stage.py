@@ -29,11 +29,11 @@ def fresh_esp():
     shutil.copytree("build/esp", ESP)
 
 def boot_until_poweroff(tag, timeout_s):
-    subprocess.run(["cp", harness.OVMF_VARS, "build/vars.fd"], check=True)
+    subprocess.run(["cp", harness.OVMF_VARS, harness.VARS], check=True)
     qemu = subprocess.Popen([
         "qemu-system-x86_64", "-machine", "q35", "-m", "256", "-cpu", "max",
         "-drive", "if=pflash,format=raw,readonly=on,file=" + harness.OVMF_CODE,
-        "-drive", "if=pflash,format=raw,file=build/vars.fd",
+        "-drive", "if=pflash,format=raw,file=" + harness.VARS,
         "-drive", "format=vvfat,file=fat:rw:" + ESP,
         "-netdev", "user,id=n0", "-device", "e1000,netdev=n0",
         "-display", "none",

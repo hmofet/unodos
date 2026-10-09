@@ -16,7 +16,7 @@ if not os.path.exists(TT + "/server.crt"):
     subprocess.run(["sh", TT + "/gen.sh"], check=True)
     print("NOTE: regenerated tls_test cert; rebuild (build.sh) if the pin changed")
 
-subprocess.run(["cp", harness.OVMF_VARS, "build/vars.fd"], check=True)
+subprocess.run(["cp", harness.OVMF_VARS, harness.VARS], check=True)
 if os.path.exists(harness.QMP_SOCK):
     os.remove(harness.QMP_SOCK)
 
@@ -45,7 +45,7 @@ netdev = (
 qemu = subprocess.Popen([
     "qemu-system-x86_64", "-machine", "q35", "-m", "256", "-cpu", "max",
     "-drive", "if=pflash,format=raw,readonly=on,file=" + harness.OVMF_CODE,
-    "-drive", "if=pflash,format=raw,file=build/vars.fd",
+    "-drive", "if=pflash,format=raw,file=" + harness.VARS,
     "-drive", "format=vvfat,file=fat:rw:" + ESP,
     "-netdev", netdev, "-device", "e1000,netdev=n0",
     "-display", "none",
