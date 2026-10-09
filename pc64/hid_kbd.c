@@ -9,7 +9,13 @@
 #define K_DN 2
 #define K_RT 3
 #define K_LT 4
+#define K_HOME 5
+#define K_END  6
+#define K_INS  7
 #define K_DEL 8
+#define K_PGUP 9
+#define K_PGDN 0x0A
+#define K_F1  0x0B                             /* F1..F12 are contiguous   */
 #define K_ESC 0x17
 
 /* unoui's UI_MOD_* bits (unoui.h), mirrored the same way the scan codes above
@@ -83,7 +89,19 @@ static void emit_usage(unsigned char u, unsigned char mod, hid_kbd_state *s,
     case 0x50: scan = K_LT;  break;            /* Left       */
     case 0x51: scan = K_DN;  break;            /* Down       */
     case 0x52: scan = K_UP;  break;            /* Up         */
+    /* The editing block.  Every app that moves a caret already handles these
+     * as EFI scans 5/6/9/10 (pc64_uui.c turns them into UI_KEY_HOME..PGDN);
+     * without these four lines they simply never arrived from a USB keyboard. */
+    case 0x49: scan = K_INS;  break;           /* Insert     */
+    case 0x4A: scan = K_HOME; break;           /* Home       */
+    case 0x4B: scan = K_PGUP; break;           /* Page Up    */
+    case 0x4D: scan = K_END;  break;           /* End        */
+    case 0x4E: scan = K_PGDN; break;           /* Page Down  */
     default:
+        /* F1..F12 are usages 0x3A..0x45, and the EFI scans they map to are
+         * contiguous from F1 = 0x0B - the numbering pc64_native.c's PS/2
+         * tracker already uses (request filed 2026-08-20). */
+        if (u >= 0x3A && u <= 0x45) { scan = K_F1 + (u - 0x3A); break; }
         if (u < 0x39) {
             uni = shift ? kShift[u] : kUnshift[u];
             /* Caps Lock affects letters only, and inverts the shift choice */

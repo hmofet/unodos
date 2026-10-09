@@ -276,12 +276,18 @@ static const char kSet1Sh[128] = {
     'B', 'N', 'M', '<', '>', '?',   0, '*',   0, ' ',   0,   0,   0,   0,   0,   0,
 };
 
-/* EFI scan codes (uefi.h): UP 1 DOWN 2 RIGHT 3 LEFT 4 DELETE 8 F10 0x14 ESC 0x17 */
+/* EFI scan codes (uefi.h): UP 1 DOWN 2 RIGHT 3 LEFT 4 HOME 5 END 6 INSERT 7
+ * DELETE 8 PGUP 9 PGDN 0x0A F10 0x14 ESC 0x17 */
 #define K_UP 1
 #define K_DN 2
 #define K_RT 3
 #define K_LT 4
+#define K_HOME 5
+#define K_END  6
+#define K_INS  7
 #define K_DEL 8
+#define K_PGUP 9
+#define K_PGDN 0x0A
 #define K_F1  0x0B                             /* F1..F12 are contiguous       */
 #define K_F10 0x14
 #define K_ESC 0x17
@@ -395,6 +401,13 @@ static void kbd_byte(unsigned char b)
         case 0x4B: kq_push(K_LT,  0, md); break;
         case 0x4D: kq_push(K_RT,  0, md); break;
         case 0x53: kq_push(K_DEL, 0, md); break;
+        /* the rest of the editing block: apps already handle these scans
+         * (UnoWord, UnoCalc, Studio, UnoCode), they just never arrived */
+        case 0x47: kq_push(K_HOME, 0, md); break;
+        case 0x4F: kq_push(K_END,  0, md); break;
+        case 0x49: kq_push(K_PGUP, 0, md); break;
+        case 0x51: kq_push(K_PGDN, 0, md); break;
+        case 0x52: kq_push(K_INS,  0, md); break;
         }
         return;
     }
