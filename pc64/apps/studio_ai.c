@@ -535,7 +535,11 @@ static int draw_wrapped(int x, int y, int w, int lh, const char *s, int n,
             line[ll] = s[i]; line[ll + 1] = 0;
             if (s[i] == ' ') lastspace = ll;
             if (fb_text_w(line) > w && ll > 0) {
-                if (lastspace > 0) ll = lastspace;   /* break at the last space */
+                /* break at the last space - and rewind the SOURCE to it too.
+                 * Only the line was cut back once, so whatever had been read
+                 * past the space was dropped: "a question" wrapped as
+                 * "a" / "stion" (2026-10-09). */
+                if (lastspace > 0) { i -= ll - lastspace; ll = lastspace; }
                 break;
             }
             ll++; i++;
@@ -545,7 +549,7 @@ static int draw_wrapped(int x, int y, int w, int lh, const char *s, int n,
         y += lh;
         /* advance past the break point */
         if (i < n && s[i] == '\n') i++;
-        else if (lastspace > 0 && ll == lastspace) { i = i; while (i < n && s[i] == ' ') i++; }
+        else if (lastspace > 0 && ll == lastspace) { while (i < n && s[i] == ' ') i++; }
     }
     return y;
 }
