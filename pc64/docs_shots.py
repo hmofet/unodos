@@ -223,7 +223,8 @@ ROSTER_FILE = "build/apps_roster.txt"
 FALLBACK = ["control", "editor", "files", "system", "clock", "install",
             "music", "unoamp", "dostris", "pacman", "outlast", "tracker",
             "paint", "runner3d", "browser", "studio", "photos", "ssh",
-            "uoword", "uocalc", "uoshow", "logview", "vmgr", "unocode", "duum"]
+            "uoword", "uocalc", "uoshow", "logview", "xfer", "vmgr", "unocode",
+            "duum"]
 MENU = []                                    # ids in menu order, filled by main
 
 
@@ -942,6 +943,29 @@ def sc_uoword(q):
     time.sleep(0.4)
     shot(q, "uoword_typed")
 
+def sc_uoword_format(q):
+    """Formatting chosen with nothing selected applies to what is typed next
+    (2026-09-21, 535d1745). Before that, Ctrl+B with only a caret did nothing,
+    so the only way to get bold text was to type it and then select it.
+
+    Run it on a FRESH boot: UnoWord keeps its document across close and
+    reopen within one, so after `uoword` this lands on the end of that
+    scene's sentence. Italic goes LAST, with nothing typed after it: a space
+    typed straight after an italic run does not show (probe_uw_space,
+    2026-10-09 - "italicand"), and this figure is about formatting, not that
+    bug. The text is 10 pt because the Size box cannot be reached from here
+    (the menus take no Alt/F10 on pc64 and a QMP click does not land)."""
+    close_all(q); launch(q, A("uoword"), settle=3.0)
+    def fmt(k):
+        combo(q, "ctrl", k); time.sleep(0.7)
+    text(q, "Typed ")
+    fmt("b"); text(q, "bold"); fmt("b")
+    text(q, ", ")
+    fmt("u"); text(q, "underlined"); fmt("u")
+    text(q, " and ")
+    fmt("i"); text(q, "italic"); fmt("i")
+    time.sleep(0.8)
+    shot(q, "uoword_format")
 def sc_uocalc(q):
     close_all(q); launch(q, A("uocalc"), settle=3.0)
     shot(q, "uocalc")
@@ -962,6 +986,13 @@ def sc_unoamp(q):
     close_all(q); launch(q, A("unoamp"), settle=2.4)
     shot(q, "unoamp")
 
+def sc_transfer(q):
+    """UnoTransfer as it opens, on its Sites tab. No connection is made: a
+    figure of a transfer would need a server on the other end, and the
+    window's shape is what the page describes."""
+    close_all(q); launch(q, A("xfer"), settle=2.6)
+    shot(q, "transfer")
+
 def sc_appliances(q):
     """The appliance manager's list view (APPS\\VMGR.UNO).
 
@@ -977,8 +1008,8 @@ def sc_appliances(q):
 SCENES = {
     "winsnap": sc_winsnap, "desktops": sc_desktops, "switcher": sc_switcher,
     "ssh": sc_ssh,
-    "uoword": sc_uoword, "uocalc": sc_uocalc, "uoshow": sc_uoshow,
-    "unoamp": sc_unoamp, "appliances": sc_appliances,
+    "uoword": sc_uoword, "uoword_format": sc_uoword_format, "uocalc": sc_uocalc, "uoshow": sc_uoshow,
+    "unoamp": sc_unoamp, "appliances": sc_appliances, "transfer": sc_transfer,
     "desktop": sc_desktop, "startmenu": sc_startmenu, "controlpanel": sc_controlpanel,
     "personalization": sc_personalization,
     "themes": sc_themes, "fonts": sc_fonts, "resolution": sc_resolution,
@@ -1034,6 +1065,82 @@ def sc_probe_modes(q):
         time.sleep(17.0)                             # the countdown reverts it
         close_all(q)
 SCENES["probe_modes"] = sc_probe_modes
+
+def sc_probe_uoword_shift(q):
+    """Not a manual figure. Does Shift+Home extend a selection in UnoWord on
+    pc64? The app reads Shift through uoa_key_mods(), which asks a uoa_host,
+    and pc64 installs none. Type a line, Shift+Home, then Ctrl+B: a bold line
+    means Shift reached the app; a plain line with the caret at the start
+    means it did not. Then Home, Shift+End for the other direction."""
+    close_all(q); launch(q, A("uoword"), settle=3.0)
+    text(q, "Shift probe line")
+    combo(q, "shift", "home"); time.sleep(0.5)
+    shot(q, "probe_uw_shift_home")
+    combo(q, "ctrl", "b"); time.sleep(0.6)
+    shot(q, "probe_uw_shift_bold")
+    key(q, "ret")
+    text(q, "Caret keys work")
+    key(q, "home"); time.sleep(0.2)
+    combo(q, "ctrl", "right"); time.sleep(0.2)
+    text(q, "X")
+    time.sleep(0.5)
+    shot(q, "probe_uw_caret")
+    # UnoCalc reads Shift through the same seam: three numbers, then
+    # Shift+Up from the last. A two-cell range shows Sum=5 in the status bar;
+    # a single cell shows its own value.
+    close_all(q); launch(q, A("uocalc"), settle=3.0)
+    text(q, "1"); key(q, "ret", gap=0.25)
+    text(q, "2"); key(q, "ret", gap=0.25)
+    text(q, "3"); key(q, "ret", gap=0.25)
+    key(q, "up", gap=0.4)
+    combo(q, "shift", "up"); time.sleep(0.8)
+    shot(q, "probe_uc_shift")
+SCENES["probe_uoword_shift"] = sc_probe_uoword_shift
+
+def sc_probe_uw_keys(q):
+    """Not a manual figure. Which caret keys reach UnoWord on a detached
+    boot? Type "abcd", Left Left "X" (expect abXcd), Ctrl+Left "Y" (expect
+    YabXcd), then End "Z" and PgUp "W": if End and PgUp reach the app, Z
+    lands at the end; if the keyboard driver drops them, Z and W follow Y."""
+    close_all(q); launch(q, A("uoword"), settle=3.0)
+    combo(q, "ctrl", "n"); time.sleep(1.0)
+    text(q, "abcd")
+    key(q, "left", gap=0.3); key(q, "left", gap=0.3); text(q, "X")
+    combo(q, "ctrl", "left"); time.sleep(0.6); text(q, "Y")
+    key(q, "end", gap=0.4); text(q, "Z")
+    key(q, "pgup", gap=0.4); text(q, "W")
+    time.sleep(0.6)
+    shot(q, "probe_uw_keys")
+SCENES["probe_uw_keys"] = sc_probe_uw_keys
+
+def sc_probe_uw_size(q):
+    """Not a manual figure. Can the Size box be driven from here? Click its
+    arrow, then Down x4 + Enter (10 -> 24), then type."""
+    close_all(q); launch(q, A("uoword"), settle=3.0)
+    click(q, 444, 225); time.sleep(0.8)
+    shot(q, "probe_uw_size_open")
+    for _ in range(4):
+        key(q, "down", gap=0.3)
+    key(q, "ret"); time.sleep(0.8)
+    text(q, "Big")
+    time.sleep(0.6)
+    shot(q, "probe_uw_size_typed")
+SCENES["probe_uw_size"] = sc_probe_uw_size
+
+def sc_probe_uw_space(q):
+    """Not a manual figure. A space typed straight after turning italic OFF
+    went missing from the figure ("italicand"). Is it italic only, or any
+    format change? Line 1: B on "bold" B off " after". Line 2: I on "ital"
+    I off " after". Line 3: U on "under" U off " after". Line 4: plain."""
+    close_all(q); launch(q, A("uoword"), settle=3.0)
+    for k, w in (("b", "bold"), ("i", "ital"), ("u", "under")):
+        combo(q, "ctrl", k); time.sleep(0.7); text(q, w)
+        combo(q, "ctrl", k); time.sleep(0.7); text(q, " after")
+        key(q, "ret", gap=0.4)
+    text(q, "plain after")
+    time.sleep(0.6)
+    shot(q, "probe_uw_space")
+SCENES["probe_uw_space"] = sc_probe_uw_space
 
 # Scenes that leave something on screen, and therefore go LAST whatever order
 # they were asked for. `close_all` is Ctrl-W, which the shell refuses on a

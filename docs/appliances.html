@@ -88,7 +88,7 @@
 time - with a screen you can see, a keyboard it answers, and a connection of its own on your real
 network. Chromium runs in one.</p>
 
-<div class="note warn"><b>A preview, honestly labelled</b>This is the newest part of UnoDOS and the least finished. Everything described here works and none of it is simulated - but it runs one appliance at a time, it has only been proven on Intel machines, and the browser appliance is built on a Chromium with a known crash in it. Read <a href="#limits">What it cannot do yet</a> before you plan anything around it.</div>
+<div class="note warn"><b>A preview, honestly labelled</b>This is the newest part of UnoDOS and the least finished. Everything described here works and none of it is simulated - but it runs one appliance at a time, it needs an Intel processor, the results below were produced with UnoDOS itself running in a virtual machine, and the browser appliance is built on a Chromium with a known crash in it. Read <a href="#limits">What it cannot do yet</a> before you plan anything around it.</div>
 
 <h2 id="what">What it actually does</h2>
 <p>Open <strong>Appliances</strong> from the Start menu or its desktop icon. It has three views, and
@@ -116,13 +116,19 @@ same kernel and the same machinery run something else by naming it. <strong>GIMP
 one, and it needed nothing from the hypervisor that the browser had not already needed.</p>
 
 <h2 id="requires">What your machine needs</h2>
-<p>Hardware virtualisation, which most PCs made since about 2010 have but many ship with turned off. The
-status line above the buttons tells you which it is, in one sentence, when you try to start an
-appliance. If it is off, turn on <strong>Intel VT-x</strong> or <strong>AMD-V</strong> (sometimes
-<em>SVM Mode</em>) in the firmware setup and start again.</p>
-<p>Memory is the other requirement. UnoDOS sets aside a block of it for guests while it is starting up,
-and how much it can spare depends on the machine. On a machine with too little to set aside there is no
-guest at all, and the status line says so.</p>
+<p>An <strong>Intel processor with VT-x and EPT</strong> (Intel's hardware virtualisation and its
+second-level page tables), switched on in the firmware. Most Intel PCs made in the last decade or so have
+both, but many ship with VT-x turned off. The status line above the buttons tells you which it is, in
+one sentence, when you try to start an appliance. If it is off, turn on <strong>Intel VT-x</strong>
+(sometimes <em>Intel Virtualization Technology</em>) in the firmware setup and start again.</p>
+<div class="note warn"><b>Not on AMD</b>The AMD side (AMD-V, or <em>SVM Mode</em>) is written and builds, but its first entry into a guest has never returned, so <strong>an AMD machine cannot run appliances</strong> today.</div>
+<p>Memory is the other requirement: at least about <strong>1.8&nbsp;GB free</strong>. UnoDOS sets aside a block of memory for guests while it is starting up, and how much it can spare depends
+on the machine. On a machine with too little to set aside there is no guest at all, and the status line
+says so.</p>
+<p>The guest reaches your network through the machine's own network card. So far that has only worked on
+<strong>Intel wired network cards</strong>. On one real machine with a Realtek card the browser appliance
+booted but got no network; a fix is in but has not yet been seen carrying a guest. Realtek and ASIX
+<em>USB</em> adapters cannot carry a guest yet.</p>
 
 <h2 id="making">Making an appliance</h2>
 <p><strong>New</strong> adds a row, and each row is four things you can edit:</p>
@@ -145,7 +151,7 @@ understands, and it holds up to eight appliances.</p>
 <p>The same machinery is meant to end somewhere specific: you double-click an Android <code>.APK</code>
 in Files, an icon appears on the desktop, and opening it opens a window. No launcher, and nothing on
 screen that says "Android".</p>
-<div class="note warn"><b>Installing works, the runtime runs, opening does not yet</b><b>Installing works, and the runtime runs; the two are not joined yet.</b> Installing is real: UnoDOS reads the package, registers it, the icon appears without a reboot, and it is still there after a restart. The Android runtime is real too: the appliance boots, starts the Android container, installs the app it carries and puts it on screen full-size and on the network, from a cold boot with nobody driving it - the two figures below are that boot. What is missing is the channel between the desktop icon and that runtime, so <b>opening an installed foreign app today tells you the runtime is not connected</b>. Treat this section as a description of where it is going, not as a feature to use.</div>
+<div class="note warn"><b>Installing works, the runtime runs, opening does not yet</b><b>Installing works, and the runtime runs; the two are not joined yet.</b> Installing is real: UnoDOS reads the package, registers it, the icon appears without a reboot, and it is still there after a restart. The Android runtime is real too: the appliance boots, starts the Android container, installs the app it carries and puts it on screen full-size and on the network, from a cold boot with nobody driving it - the two figures below are that boot. That boot was under an ordinary PC emulator, not yet under UnoDOS's own hypervisor. What is missing is the channel between the desktop icon and that runtime, so <b>opening an installed foreign app today tells you the runtime is not connected</b>. Treat this section as a description of where it is going, not as a feature to use.</div>
 <figure><button type="button" class="zoom" data-full="assets/img/android_launch.png" aria-label="Enlarge: The Android appliance, booted with nobody driving it: Firefox full-screen, with no launcher and no status bar in sight."><img src="assets/img/android_launch.png" alt="The Android appliance, booted with nobody driving it: Firefox full-screen, with no launcher and no status bar in sight." loading="lazy"></button><figcaption>The Android appliance, booted with nobody driving it: Firefox full-screen, with no launcher and no status bar in sight.</figcaption></figure>
 <figure><button type="button" class="zoom" data-full="assets/img/android_firefox.png" aria-label="Enlarge: The same appliance a moment later: a real page over TLS, its address typed on the keyboard UnoDOS presents to the guest."><img src="assets/img/android_firefox.png" alt="The same appliance a moment later: a real page over TLS, its address typed on the keyboard UnoDOS presents to the guest." loading="lazy"></button><figcaption>The same appliance a moment later: a real page over TLS, its address typed on the keyboard UnoDOS presents to the guest.</figcaption></figure>
 <p>One consequence is worth knowing even at this stage: the package file is <strong>not copied</strong>
@@ -162,11 +168,15 @@ write to it. Writing needs a change further down in the filesystem code.</li>
 <li><strong>The pointer drifts.</strong> The emulated mouse reports movement rather than position, so
 the guest's pointer and yours gradually disagree and a target moves as you reach for it. The keyboard
 does not have this problem.</li>
-<li><strong>No kernel is included.</strong> UnoDOS does not ship a Linux to run, so a fresh appliance
-has nothing to boot until you put a kernel on the disk.</li>
-<li><strong>Proven on Intel.</strong> Everything above has been demonstrated on Intel VT-x. The AMD
-side is written and builds, but has not yet been seen to run a guest, so on an AMD machine treat this
-as untested rather than supported.</li>
+<li><strong>No kernel is included.</strong> UnoDOS does not ship a Linux to run, and the release images
+carry no appliance: the kernel and the Alpine system the browser and GIMP appliances run on are
+third-party GPL and MIT software. They are built from <code>pc64/guest/appliance/</code> in the source
+tree on a Linux machine and copied onto the disk yourself, so a fresh appliance has nothing to boot
+until you do.</li>
+<li><strong>Intel only.</strong> Everything above has been demonstrated on Intel VT-x, and every result
+on this page was produced with UnoDOS itself running in a virtual machine on an Intel host. The AMD
+side is written and builds, but its first guest entry has never returned, so an AMD machine cannot run
+an appliance.</li>
 <li><strong>The guest gets a slice, not a core.</strong> It runs a short budget of time each frame
 alongside the desktop, so it is unhurried by design. It is for a shell, a browser and a service, not
 for work you are timing.</li>

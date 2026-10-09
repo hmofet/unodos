@@ -879,7 +879,7 @@ is the real system, recorded off a running machine, in one take per scene.</p>
   <div class="card"><h4>Networking</h4><p>Connect over Ethernet, get an address automatically, and browse the web, including secure (HTTPS) sites.</p></div>
   <div class="card"><h4>Hardware support</h4><p>Your screen, keyboard, mouse and trackpad, and USB. Sound plays through the machine's audio hardware (HD&nbsp;Audio or AC'97), and UnoDOS drives SATA, NVMe and eMMC/SD storage with its own drivers.</p></div>
   <div class="card"><h4>Add your own apps</h4><p>Copy a <code>.UNO</code> file into the <code>APPS</code> folder and it becomes an app, with its own icon and menu row - no restart. Rename, hide or pin anything in the list. <a href="apps.html#installing">Installing an app</a>.</p></div>
-  <div class="card"><h4>Appliances <span class="pill">preview</span></h4><p>UnoDOS can boot a Linux kernel inside a window and give you a console to type at. It needs hardware virtualisation and a kernel you supply; the limits are on the <a href="appliances.html">Appliances</a> page.</p></div>
+  <div class="card"><h4>Appliances <span class="pill">preview</span></h4><p>UnoDOS can boot a Linux kernel inside a window and give you a console to type at. It needs an Intel processor with hardware virtualisation and a kernel you supply; the limits are on the <a href="appliances.html">Appliances</a> page.</p></div>
 </div>
 
 <p class="kv">New here? Start with <a href="getting-started.html">Getting started</a>, then take the
@@ -891,12 +891,13 @@ PAGES["try-browser.html"] = ("Try it in your browser", f"""
 <p class="lede">The quickest look at UnoDOS costs nothing and installs nothing:
 <a href="https://unodos.arinbakht.com/try/">open it in a browser tab</a>. It is the real release
 image running on an emulated PC compiled to WebAssembly, not a video and not a mock-up, and the
-desktop arrives in a few seconds on a current machine.</p>
+desktop arrives in a few seconds on a current machine. The image is rebuilt with each release; it is
+currently v3.35.0.</p>
 <p><a class="btn" href="https://unodos.arinbakht.com/try/"><strong>Boot UnoDOS in your browser</strong></a></p>
 
 <h2 id="what">What you are looking at</h2>
 <ul>
-  <li>The screen is <strong>1600x900</strong>, one desktop pixel to one screen pixel. The
+  <li>The screen is <strong>1600x900</strong>, the desktop's native size, one desktop pixel to one screen pixel. The
       <strong>Size</strong> control above it picks the zoom; whole multiples stay pixel-sharp.</li>
   <li>The disk is a RAM disk. You can write to it, and <strong>nothing survives a reload</strong> -
       which makes it a good place to try the things this manual warns about.</li>
@@ -1031,7 +1032,7 @@ menu) can put UnoDOS on the computer itself, so it boots without the stick:</p>
   <li>Press <kbd>I</kbd> to arm, then <kbd>I</kbd> again to commit.</li>
 </ol>
 {note('Typing <b>ERASE</b> is the only thing that unlocks a whole-disk install, and it applies to the selected row only - change the selection and you type it again. A row listed <b>[too small]</b>, <b>[read-only]</b> or <b>[not 512B/s]</b> cannot be installed to at all. If you change your mind, press <kbd>Esc</kbd> and close the window; nothing is written until the second <kbd>I</kbd>.', kind="warn", title="A whole-disk install erases everything on that disk")}
-{fig("install.png", "The <b>Install</b> app. The key line across the top is the whole procedure, and the <b>type ERASE</b> box above the buttons is the gate on a whole-disk install - until that word is typed, <kbd>I</kbd> does nothing. This shot is from the emulator, which offers no disk UnoDOS can install to, so the list is empty; on a real PC each eligible disk and EFI partition appears as a row.", cls="shot-sm")}
+{fig("install.png", "The <b>Install</b> app. The key line across the top is the whole procedure, and the <b>type ERASE</b> box above the buttons is the gate on a whole-disk install - until that word is typed, <kbd>I</kbd> does nothing. This shot is from the emulator, where the boot disk appears twice: as the UnoDOS volume it already holds, which an update keeps the files on, and as the whole disk, which a fresh install erases. On a real PC each eligible disk and EFI partition appears as a row.", cls="shot-sm")}
 
 <h2 id="firstboot">First boot</h2>
 <p>A splash screen with a loading bar appears while UnoDOS starts up, then a short start-up chime
@@ -1217,7 +1218,8 @@ UnoDOS machine can log in to others and run commands there. See
 
 <h2>What it does not do yet</h2>
 <ul>
-  <li>No file transfer (no SFTP or SCP) and no port forwarding.</li>
+  <li>No file transfer in this app, and no port forwarding. To copy files over SSH, use
+      <a href="transfer.html">UnoTransfer</a>, which does it over SCP with the same keys.</li>
   <li>The terminal shows plain text. Programs that draw with cursor-control codes -
       a full-screen text editor, for instance - will not display correctly.</li>
   <li>Connecting uses keys that have no passphrase; the app cannot prompt for one yet.</li>
@@ -1231,18 +1233,24 @@ PAGES["transfer.html"] = ("UnoTransfer", f"""
 volume on the left, a remote server on the right - and a queue that carries whole folders across
 without you watching it.</p>
 
-<p>UnoTransfer is in the Start menu under <strong>Transfer</strong>. It speaks several transfer
+<p>UnoTransfer is in the Start menu as <strong>UnoTransfer</strong>. It speaks several transfer
 protocols through one interface, so copying a folder off a web server and copying it off a Linux box
 over SSH are the same three actions with a different address typed in.</p>
 
-<h2 id="panes">The two panes</h2>
-<p>The left pane is always a volume on this machine. The right pane is wherever you connected to.
-<kbd>Tab</kbd> moves between them, the arrow keys move within one, and <kbd>Enter</kbd> opens a folder.
-Choosing a file or a folder and pressing the copy key puts a <strong>job</strong> on the queue that
-copies it to the other side, recursively, creating folders as it goes.</p>
-<p>The queue is the third part of the window. Each job shows what it is copying, how far along it is
-and what went wrong if anything did. Jobs run one file at a time and keep going while you use the
-rest of the window.</p>
+<h2 id="panes">The window</h2>
+<p>The window has four tabs: <strong>Sites</strong>, the connections you have saved and the editor that
+makes a new one; <strong>Transfer</strong>, the two panes; <strong>Queue</strong>; and
+<strong>Terminal</strong>.</p>
+{fig("transfer.png", "<b>UnoTransfer</b> as it first opens, on the <b>Sites</b> tab: no saved connections yet, and <kbd>N</kbd> adds one. The line along the bottom names the local volume the left pane starts on.")}
+<p>In the Transfer tab the left pane is always a volume on this machine. The right pane is wherever you
+connected to. <kbd>Tab</kbd> moves between them, the arrow keys move within one, and <kbd>Enter</kbd>
+opens a folder. Choosing a file or a folder and pressing the copy key puts a <strong>job</strong> on the
+queue that copies it to the other side, recursively, creating folders as it goes. A file arrives under a
+temporary name and takes its real one only once it is complete, so a transfer that stops halfway never
+leaves a truncated file looking like the real thing.</p>
+<p>The Queue tab lists every job: what it is copying, how far along it is and what went wrong if
+anything did. Jobs run one file at a time and keep going while you use the rest of the window, and a
+slow server never holds up the desktop.</p>
 
 <h2 id="protocols">What it can connect to</h2>
 <table>
@@ -1283,6 +1291,7 @@ the file is and goes and gets it itself, straight from the machine that has it. 
   <li><strong>One window.</strong> Like the browser and the SSH client, it is a single window with a
       single connection rather than tabs.</li>
 </ul>
+{note('SCP has been proven end to end against a real SSH server - a folder pulled recursively and checked byte for byte, a file pushed and read back on the server, and a changed host key refused - with UnoDOS running in a virtual machine. It has not yet been run that way on physical hardware.', title="How this is verified")}
 """)
 
 PAGES["appearance.html"] = ("Themes & appearance", f"""
@@ -1298,7 +1307,7 @@ the Start menu, and its settings are grouped into <strong>six tabs</strong>:</p>
 <tbody>
 <tr><td><strong>Display</strong></td><td>Resolution, system-wide Font, UI scale (100&ndash;200%), and an "Aurora lite" switch that turns off live compositing on slower machines.</td></tr>
 <tr><td><strong>Personalization</strong></td><td>Theme, Dark mode, Wallpaper, and how the desktop icons arrange themselves.</td></tr>
-<tr><td><strong>Network</strong></td><td>The connection summary in the Control Panel's words, and the network self-test behind a Run tests button. See <a href="networking.html#status">Networking</a>.</td></tr>
+<tr><td><strong>Network</strong></td><td>The connection summary, the Wi-Fi networks in range on a machine with Wi-Fi, and the addresses behind a Details button. See <a href="networking.html#status">Networking</a>.</td></tr>
 <tr><td><strong>Audio</strong></td><td>The Volume slider (it adjusts the output live, even mid-note, on HD&nbsp;Audio or AC'97 hardware) and the active output device.</td></tr>
 <tr><td><strong>Date &amp; Time</strong></td><td>Set the time and date, and choose a 24-hour or 12-hour clock.</td></tr>
 <tr><td><strong>System</strong></td><td>Battery display, session restore, lid-sleep, pointer speed, and buttons for accounts, licences and About.</td></tr>
@@ -1355,7 +1364,7 @@ screen rearranging itself at every step.</p>
 <p>A new resolution is then held <strong>on probation</strong> for fifteen seconds: a row appears asking
 <em>Keep this resolution?</em> with a countdown, a <strong>Keep</strong> button and <strong>Revert now</strong>.
 Do nothing and the desktop goes back by itself.</p>
-{fig("resolution.png", "A smaller desktop mode scaled to fit the panel. Apply commits it; the countdown puts it back if you say nothing.")}
+{fig("resolution.png", "A different mode picked in the <b>Resolution</b> list. Nothing changes until you press Apply, and after Apply a countdown puts the old mode back unless you keep the new one.")}
 
 {note("The countdown is there for the case where the new mode is unreadable - if you cannot see the screen you cannot click <strong>Keep</strong> either, so waiting is the answer. Just leave it alone for fifteen seconds and you are back where you started.", kind="tip", title="If the screen goes wrong")}
 
@@ -1582,12 +1591,26 @@ drag off into floating palettes, a status bar along the bottom, and the same
 <h2 id="unoword">UnoWord</h2>
 <p>A word processor with real page layout: it paginates, shows a ruler with indent markers, and
 tracks where you are (<i>Page 1 Sec 1, Ln 1 Col 30</i>) in the status bar. Text can be bold, italic
-or underlined, in a choice of faces and sizes, and paragraphs can be left, centred, right or
-justified.</p>
+or underlined, in a choice of faces and sizes - the <b>Font</b> and <b>Size</b> boxes on the Formatting
+toolbar - and paragraphs can be left, centred, right or justified.</p>
 <div class="grid cols-2">
   {fig("uoword.png", "<b>UnoWord</b> on an empty document: menu bar, the Standard and Formatting toolbars, the ruler, the page itself and the status bar.")}
   {fig("uoword_typed.png", "Typing straight onto the page. The status bar tracks the line and column as you go.")}
 </div>
+<p>The caret moves the way it does in any word processor. <kbd>Left</kbd> and <kbd>Right</kbd> move a
+character at a time, or a word at a time with <kbd>Ctrl</kbd> held; <kbd>Up</kbd> and <kbd>Down</kbd> move
+a line and keep the column you started from; <kbd>Home</kbd> and <kbd>End</kbd> go to the ends of the
+line, or of the whole document with <kbd>Ctrl</kbd>; <kbd>PgUp</kbd> and <kbd>PgDn</kbd> move a screen at
+a time; and <kbd>Delete</kbd> removes the character after the caret. The page scrolls to keep the caret
+in view. (See the note below about <kbd>Home</kbd>, <kbd>End</kbd> and the page keys on UnoDOS.) To select, drag across the text with the mouse, or press <kbd>Ctrl</kbd>+<kbd>A</kbd> for the
+whole document; typing then replaces the selection.</p>
+<p><strong>Formatting works before you type as well as after.</strong> Choose <b>Bold</b>
+(<kbd>Ctrl</kbd>+<kbd>B</kbd>), <b>Italic</b> (<kbd>Ctrl</kbd>+<kbd>I</kbd>), <b>Underline</b>
+(<kbd>Ctrl</kbd>+<kbd>U</kbd>), a font or a size with nothing selected, and it applies to the text you
+type next; the toolbar shows the choice waiting. Moving the caret somewhere else drops it. With text
+selected, the same controls change the selection.</p>
+{fig("uoword_format.png", "Formatting chosen with nothing selected: <kbd>Ctrl</kbd>+<kbd>B</kbd>, type, <kbd>Ctrl</kbd>+<kbd>B</kbd> again, and the same for underline and italic. Each word came out formatted as it was typed, and nothing was ever selected. The page is fitted to the window, so the text is small; enlarge the figure to read it.")}
+{note('Two gaps on UnoDOS today. <kbd>Shift</kbd> with a movement key does not extend a selection in UnoWord, and neither does <kbd>Shift</kbd>+click: the caret moves and the selection collapses, so drag with the mouse instead (the same goes for <kbd>Shift</kbd>+arrow over a range of cells in UnoCalc). And UnoDOS\'s own keyboard drivers do not yet pass on <kbd>Home</kbd>, <kbd>End</kbd>, <kbd>PgUp</kbd> or <kbd>PgDn</kbd>, so those keys do nothing in any app; the arrows, <kbd>Ctrl</kbd>+arrow and <kbd>Delete</kbd> work. Everything on this page works in the desktop editions of UnoOffice.', kind="warn", title="Keyboard gaps on UnoDOS")}
 
 <h2 id="unocalc">UnoCalc</h2>
 <p>A spreadsheet with a real calculation engine, not a grid of text. Type numbers into cells, type a
@@ -1600,7 +1623,8 @@ attached to it. Three sheets come with a new workbook, and the status bar keeps 
 </div>
 <p>Move around with the <strong>arrow keys</strong>, a page at a time with
 <kbd>PgUp</kbd>/<kbd>PgDn</kbd>, to the start of the row with <kbd>Home</kbd> and to the far corners
-with <kbd>Ctrl</kbd>+<kbd>Home</kbd> / <kbd>Ctrl</kbd>+<kbd>End</kbd>. <kbd>Enter</kbd> commits a cell
+with <kbd>Ctrl</kbd>+<kbd>Home</kbd> / <kbd>Ctrl</kbd>+<kbd>End</kbd> - though on UnoDOS the page keys,
+<kbd>Home</kbd> and <kbd>End</kbd> do not arrive yet; see the keyboard note above. <kbd>Enter</kbd> commits a cell
 and steps down, <kbd>Tab</kbd> commits and steps right; either way what you were typing is kept, so
 arrowing out of a half-typed cell stores it rather than throwing it away.</p>
 
@@ -1623,10 +1647,23 @@ written on the machine opens on a PC and a file from a PC opens here.</p>
 you want in the Save dialog, or leave the name bare and let the <strong>Files of type</strong> menu
 supply one. Opening works the other way round - the file is identified by its contents rather than
 its name, so a <code>.xlsx</code> that somebody renamed <code>.xls</code> still opens correctly.</p>
+<p><strong>Accented text comes through intact.</strong> Western European characters - accented letters,
+the euro sign, curly quotes and dashes - display correctly in a document you open, and are saved back
+as themselves, in all three apps and in both the old and the new formats. A character outside that set
+(Greek, Cyrillic, Chinese and so on) cannot be stored by these formats as UnoOffice writes them, and
+becomes <code>?</code>.</p>
 <p>Save and open through the suite's file dialog onto any writable volume, exactly as the Editor and
 Files do. In the Open dialog you can either click a file in the list or type its name in the
 <strong>File name</strong> box.</p>
 {note('Printing does not exist in UnoDOS yet, so every <strong>Print</strong> menu item is present but does nothing. Save the file and print it from another machine.', kind="warn", title="No printing")}
+
+<h2 id="desktop">UnoOffice on Windows, macOS and Linux</h2>
+<p>The same three apps also exist as ordinary programs for other operating systems, built from the same
+code. <a href="https://github.com/hmofet/unooffice/releases" target="_blank" rel="noopener">UnoOffice
+0.3.0</a> has an installer for Windows, a disk image for macOS, and packages for Linux, and each one
+registers the apps for the Office file types, so a document can be opened in them from the file manager's
+<b>Open with</b> menu. The builds are <strong>not code-signed</strong>, so Windows
+and macOS warn before the first run.</p>
 """)
 
 PAGES["code.html"] = ("UnoCode", f"""
@@ -1682,7 +1719,11 @@ the whole file down the right-hand edge so you can see where you are in somethin
   <li><kbd>Ctrl</kbd>+<kbd>D</kbd> selects the next copy of the word you are on, so you can rename
       several at once by typing once.</li>
   <li><kbd>Home</kbd> and <kbd>End</kbd> go to the ends of the line, <kbd>Ctrl</kbd>+<kbd>Home</kbd>
-      and <kbd>Ctrl</kbd>+<kbd>End</kbd> to the ends of the file.</li>
+      and <kbd>Ctrl</kbd>+<kbd>End</kbd> to the ends of the file - in UnoCode's desktop builds. On UnoDOS
+      today the system's own keyboard drivers do not pass on <kbd>Home</kbd>, <kbd>End</kbd>,
+      <kbd>PgUp</kbd> or <kbd>PgDn</kbd>, so those keys do nothing.</li>
+  <li>Text is UTF-8 throughout, so accented letters, curly quotes and box-drawing characters in a file
+      display, select and save as themselves.</li>
   <li>The status bar along the bottom shows the line and column, how the file is indented, how it is
       encoded and which line ending it uses. Click nothing: it is there to tell you, and it is the
       first place to look when a file behaves oddly on another machine.</li>
@@ -1750,9 +1791,9 @@ when the conversation started. It is not the folder: the other files are not rea
 that you do not have open. A file too large to fit is cut, and the assistant says it was cut.</p>
 <p>Two more things about it are deliberate. Every edit it proposes is shown to you as a
 <strong>diff first</strong> and applied only when you accept it, as a single step of undo. And it needs
-a key for whichever model service you use, which is stored in the machine's own secret store rather
-than in your settings file - <b>AI: Set API Key</b> in the palette, typed into a masked box, and the
-store it went into is named on screen when it is saved.</p>
+an Anthropic API key - <b>AI: Set API Key</b> in the palette, typed into a masked box. The key is kept
+out of your settings file, and the place it went is named on screen when it is saved.</p>
+{note('On UnoDOS that place is a plain text file, <code>UNOCODE\\SECRETS.TXT</code>, on a FAT volume - and FAT has no owners and no permissions, so anyone who can read the disk can read the key. UnoCode says so in a warning when you save it rather than pretending otherwise. <b>AI: Clear API Key</b> removes it.', kind="warn", title="Where the key is kept")}
 {note('The assistant talks to a service over the internet, which means the text it sends leaves this machine: your question, and the entire contents of the file you have open. The panel names that file every time it sends one, so you can see what went. If that is not appropriate for what you are working on, do not use it - there is nothing to configure to make a network request private.', kind="warn", title="It sends the open file, every time")}
 
 <h2 id="settings">Settings</h2>
@@ -1780,6 +1821,10 @@ UnoCode.</p>
       real formats and work as they are. Extensions that contain code are written against UnoCode's
       own smaller set of commands, so a complex VS Code extension will not simply run.</li>
   <li><strong>No debugger.</strong> The Run view launches things; it does not step through them.</li>
+  <li><strong>No hover help, go to definition or rename across files.</strong> In UnoCode's desktop
+      builds those come from a language server, a separate program running beside the editor. UnoDOS
+      has no way to run a separate program, so here they do nothing; suggestions come from the language's
+      keywords, the words in the file and snippets instead.</li>
 </ul>
 
 <p>Writing an extension, or want the file formats and the internals? That is the
@@ -1927,7 +1972,7 @@ A password box appears only when the highlighted network is locked and new to th
 are only the ones that can do something at that moment: <strong>Connect</strong>, <strong>Disconnect</strong>,
 <strong>Forget</strong>, <strong>Rescan</strong>. The wired line and Details follow underneath.</p>
 {fig("cp_wifi.png", "The same tab on a machine with Wi-Fi: the answer, the networks, the controls, then the wired line and Details. Captured in the emulator, which has no Wi-Fi card, with a debug switch that draws the pane and seeds example networks - the pane says so on screen. On a laptop the list is what the radio hears.")}
-{note('The <strong>Network</strong> app in the Start menu shows the same summary in the same words, and keeps the network self-test - DHCP, a ping, a small file fetch, a TCP echo and a TLS handshake - behind a <strong>Run tests</strong> button rather than running it every time the window opens. The echo and TLS steps only have a peer under QEMU, so on a real machine those two time out rather than pass; the rest are real.', title="The Network app")}
+{note('Earlier versions had a separate <strong>Network</strong> app with a network self-test. It is not in the Start menu of this release: the Control Panel tab above is the place to check the connection.', title="Looking for the Network app?")}
 
 <h2 id="tls">Secure sites</h2>
 <p>Secure (<code>https://</code>) pages load over an encrypted TLS connection, and UnoDOS checks the site's
@@ -1968,7 +2013,7 @@ point with protected management frames required will refuse a machine that canno
 The supplicant reads what the access point is actually offering and negotiates, rather than
 announcing WPA2 and hoping - WPA2-PSK or WPA3-SAE, with management-frame protection when it is asked
 for, and SAE preferred on a network that offers both.</p>
-{note('The WPA3 exchange authenticates against a real access point, but the handshake after it does not complete yet, so on a network that offers both WPA3 and WPA2 UnoDOS falls back to WPA2 and joins. A WPA3-only network cannot be joined today. Two more limits are worth knowing: changing to a different network after a successful join does not work reliably yet, and a reboot is the sure way to do it; and the join itself holds the desktop for the few seconds the association takes, with a spinner and a running description of each step.', kind="warn", title="What does not work yet")}
+{note('The WPA3 exchange authenticates against a real access point, but the handshake after it does not complete yet, so on a network that offers both WPA3 and WPA2 UnoDOS falls back to WPA2 and joins. A WPA3-only network cannot be joined today. Two more limits are worth knowing: changing to a different network after a successful join does not work reliably yet, and a reboot is the sure way to do it; and the join itself holds the desktop for the few seconds the association takes, with a spinner and a running description of each step. The joining itself is proven on a laptop; the redesigned Network tab described above has not yet been run end to end on one.', kind="warn", title="What does not work yet")}
 
 <h2 id="emulator">Networking in the browser</h2>
 <p>UnoDOS <a href="https://unodos.arinbakht.com/try/">running in a browser tab</a> has a working network
@@ -1998,7 +2043,7 @@ bottom and the view follows them as they arrive, so you can leave it open and wa
 the time, how serious it is, which part of the system wrote it, and the message.</p>
 <p><strong>Colour tells you where to look</strong>: errors are red, warnings amber, ordinary lines plain,
 and debug lines grey. You should be able to find the interesting line without reading every one.</p>
-{fig("logview.png", "The System Log. Three entries the browser wrote while opening documents, above the line the log itself wrote at startup. The footer shows the current level and how many records exist.")}
+{fig("logview.png", "The System Log. The two lines the log itself wrote at startup, then four the browser wrote as it opened documents - newest at the bottom. The footer shows the current level and how many records exist.")}
 
 <h2 id="level">How much is kept</h2>
 <p><strong>Less</strong> and <strong>More</strong> change how much the machine records. The scale runs
@@ -2052,7 +2097,7 @@ PAGES["appliances.html"] = ("Appliances", f"""
 time - with a screen you can see, a keyboard it answers, and a connection of its own on your real
 network. Chromium runs in one.</p>
 
-{note('This is the newest part of UnoDOS and the least finished. Everything described here works and none of it is simulated - but it runs one appliance at a time, it has only been proven on Intel machines, and the browser appliance is built on a Chromium with a known crash in it. Read <a href="#limits">What it cannot do yet</a> before you plan anything around it.', kind="warn", title="A preview, honestly labelled")}
+{note('This is the newest part of UnoDOS and the least finished. Everything described here works and none of it is simulated - but it runs one appliance at a time, it needs an Intel processor, the results below were produced with UnoDOS itself running in a virtual machine, and the browser appliance is built on a Chromium with a known crash in it. Read <a href="#limits">What it cannot do yet</a> before you plan anything around it.', kind="warn", title="A preview, honestly labelled")}
 
 <h2 id="what">What it actually does</h2>
 <p>Open <strong>Appliances</strong> from the Start menu or its desktop icon. It has three views, and
@@ -2080,13 +2125,19 @@ same kernel and the same machinery run something else by naming it. <strong>GIMP
 one, and it needed nothing from the hypervisor that the browser had not already needed.</p>
 
 <h2 id="requires">What your machine needs</h2>
-<p>Hardware virtualisation, which most PCs made since about 2010 have but many ship with turned off. The
-status line above the buttons tells you which it is, in one sentence, when you try to start an
-appliance. If it is off, turn on <strong>Intel VT-x</strong> or <strong>AMD-V</strong> (sometimes
-<em>SVM Mode</em>) in the firmware setup and start again.</p>
-<p>Memory is the other requirement. UnoDOS sets aside a block of it for guests while it is starting up,
-and how much it can spare depends on the machine. On a machine with too little to set aside there is no
-guest at all, and the status line says so.</p>
+<p>An <strong>Intel processor with VT-x and EPT</strong> (Intel's hardware virtualisation and its
+second-level page tables), switched on in the firmware. Most Intel PCs made in the last decade or so have
+both, but many ship with VT-x turned off. The status line above the buttons tells you which it is, in
+one sentence, when you try to start an appliance. If it is off, turn on <strong>Intel VT-x</strong>
+(sometimes <em>Intel Virtualization Technology</em>) in the firmware setup and start again.</p>
+{note('The AMD side (AMD-V, or <em>SVM Mode</em>) is written and builds, but its first entry into a guest has never returned, so <strong>an AMD machine cannot run appliances</strong> today.', kind="warn", title="Not on AMD")}
+<p>Memory is the other requirement: at least about <strong>1.8&nbsp;GB free</strong>. UnoDOS sets aside a block of memory for guests while it is starting up, and how much it can spare depends
+on the machine. On a machine with too little to set aside there is no guest at all, and the status line
+says so.</p>
+<p>The guest reaches your network through the machine's own network card. So far that has only worked on
+<strong>Intel wired network cards</strong>. On one real machine with a Realtek card the browser appliance
+booted but got no network; a fix is in but has not yet been seen carrying a guest. Realtek and ASIX
+<em>USB</em> adapters cannot carry a guest yet.</p>
 
 <h2 id="making">Making an appliance</h2>
 <p><strong>New</strong> adds a row, and each row is four things you can edit:</p>
@@ -2109,7 +2160,7 @@ understands, and it holds up to eight appliances.</p>
 <p>The same machinery is meant to end somewhere specific: you double-click an Android <code>.APK</code>
 in Files, an icon appears on the desktop, and opening it opens a window. No launcher, and nothing on
 screen that says "Android".</p>
-{note('<b>Installing works, and the runtime runs; the two are not joined yet.</b> Installing is real: UnoDOS reads the package, registers it, the icon appears without a reboot, and it is still there after a restart. The Android runtime is real too: the appliance boots, starts the Android container, installs the app it carries and puts it on screen full-size and on the network, from a cold boot with nobody driving it - the two figures below are that boot. What is missing is the channel between the desktop icon and that runtime, so <b>opening an installed foreign app today tells you the runtime is not connected</b>. Treat this section as a description of where it is going, not as a feature to use.', kind="warn", title="Installing works, the runtime runs, opening does not yet")}
+{note('<b>Installing works, and the runtime runs; the two are not joined yet.</b> Installing is real: UnoDOS reads the package, registers it, the icon appears without a reboot, and it is still there after a restart. The Android runtime is real too: the appliance boots, starts the Android container, installs the app it carries and puts it on screen full-size and on the network, from a cold boot with nobody driving it - the two figures below are that boot. That boot was under an ordinary PC emulator, not yet under UnoDOS\'s own hypervisor. What is missing is the channel between the desktop icon and that runtime, so <b>opening an installed foreign app today tells you the runtime is not connected</b>. Treat this section as a description of where it is going, not as a feature to use.', kind="warn", title="Installing works, the runtime runs, opening does not yet")}
 {fig("android_launch.png", "The Android appliance, booted with nobody driving it: Firefox full-screen, with no launcher and no status bar in sight.")}
 {fig("android_firefox.png", "The same appliance a moment later: a real page over TLS, its address typed on the keyboard UnoDOS presents to the guest.")}
 <p>One consequence is worth knowing even at this stage: the package file is <strong>not copied</strong>
@@ -2126,11 +2177,15 @@ write to it. Writing needs a change further down in the filesystem code.</li>
 <li><strong>The pointer drifts.</strong> The emulated mouse reports movement rather than position, so
 the guest's pointer and yours gradually disagree and a target moves as you reach for it. The keyboard
 does not have this problem.</li>
-<li><strong>No kernel is included.</strong> UnoDOS does not ship a Linux to run, so a fresh appliance
-has nothing to boot until you put a kernel on the disk.</li>
-<li><strong>Proven on Intel.</strong> Everything above has been demonstrated on Intel VT-x. The AMD
-side is written and builds, but has not yet been seen to run a guest, so on an AMD machine treat this
-as untested rather than supported.</li>
+<li><strong>No kernel is included.</strong> UnoDOS does not ship a Linux to run, and the release images
+carry no appliance: the kernel and the Alpine system the browser and GIMP appliances run on are
+third-party GPL and MIT software. They are built from <code>pc64/guest/appliance/</code> in the source
+tree on a Linux machine and copied onto the disk yourself, so a fresh appliance has nothing to boot
+until you do.</li>
+<li><strong>Intel only.</strong> Everything above has been demonstrated on Intel VT-x, and every result
+on this page was produced with UnoDOS itself running in a virtual machine on an Intel host. The AMD
+side is written and builds, but its first guest entry has never returned, so an AMD machine cannot run
+an appliance.</li>
 <li><strong>The guest gets a slice, not a core.</strong> It runs a short budget of time each frame
 alongside the desktop, so it is unhurried by design. It is for a shell, a browser and a service, not
 for work you are timing.</li>
@@ -2142,7 +2197,7 @@ finer, which is fine for everything above and wrong for anything that measures i
 PAGES["ports.html"] = ("The UnoDOS family", f"""
 <h1>The UnoDOS family</h1>
 <p class="lede">pc64 is one of many. The same GUI-first UnoDOS runs on more than 20 kinds of hardware,
-from 8-bit consoles to modern ARM boards. Here is how the others differ.</p>
+from 8-bit consoles to modern ARM boards and phones. Here is how the others differ.</p>
 
 <h2 id="pattern">One idea, many machines</h2>
 <p>The same UnoDOS desktop and apps run on machines as different as a Commodore 64 and a Raspberry Pi. On
@@ -2152,7 +2207,11 @@ every version consistent instead of drifting apart.</p>
 <h2 id="tiers">How much desktop each machine gets</h2>
 <p>It depends on how much memory the machine has:</p>
 <ul>
-  <li><strong>The full desktop:</strong> more capable machines (pc64, PlayStation&nbsp;2, Dreamcast, and the
+  <li><strong>The whole system:</strong> pc64's own desktop and its apps - including the browser with
+  secure sites, UnoOffice and the music players - also run on an ARM phone, the Planet Cosmo Communicator, as <strong>cosmo64</strong>,
+  with its keyboard, touch panel, SD card, USB, wired networking over a USB adapter, and sound. It has no
+  Wi-Fi or cellular, and it is source only: you build it and boot it from the phone's own boot menu.</li>
+  <li><strong>The full desktop:</strong> more capable machines (PlayStation&nbsp;2, Dreamcast, and the
   ARM and PowerPC boards) run the full desktop shown in this manual.</li>
   <li><strong>A simpler desktop:</strong> the smallest machines (NES, Game&nbsp;Boy, the C64) have very little
   memory, so they run a simpler icon-and-button desktop instead.</li>
@@ -2171,7 +2230,7 @@ every version consistent instead of drifting apart.</p>
 </div>
 
 <h2 id="table">The full lineup</h2>
-<p>Every port's ready-to-run image is committed in the repository, so each
+<p>Every port's ready-to-run image except cosmo64's is committed in the repository, so each
 <em>Download</em> link below always gets you the latest build - a ROM for a
 console runs in any emulator or on a flash cart, and each port's folder has a
 README with the details.</p>
@@ -2200,6 +2259,7 @@ README with the details.</p>
 <tr><td>PlayStation 2</td><td>Sony PS2</td><td>Emotion Engine</td><td>native</td><td><a href="https://github.com/hmofet/unodos/raw/master/ps2/build/unodos-ps2-uui.elf">ELF</a></td></tr>
 <tr><td>Raspberry Pi</td><td>Raspberry Pi</td><td>ARM Cortex-A (AArch64)</td><td>VideoCore mailbox FB</td><td><a href="https://github.com/hmofet/unodos/raw/master/rpi/build/kernel8.img">kernel8.img</a></td></tr>
 <tr><td>PinePhone</td><td>PinePhone</td><td>Allwinner A64 (AArch64)</td><td>DE2 display engine</td><td><a href="https://github.com/hmofet/unodos/raw/master/pinephone/build/unodos.bin">boot image</a></td></tr>
+<tr><td>cosmo64</td><td>Planet Cosmo Communicator</td><td>MediaTek MT6771 (AArch64)</td><td>framebuffer adopted from the phone's LK bootloader</td><td><a href="https://github.com/hmofet/unodos/blob/master/cosmo64/README.md">source only</a></td></tr>
 </tbody>
 </table></div>
 {note('Full details for every machine live in the repository: <a href="https://github.com/hmofet/unodos" target="_blank" rel="noopener">github.com/hmofet/unodos</a>.', title="Where to read more")}
@@ -2430,7 +2490,8 @@ design: nothing is wired to a key directly, so anything can be rebound.</p>
 shows where it came from.</p>
 {fig("unocode_editor.png", "A UnoC source file open beside the welcome document. Comments, preprocessor lines, types, numbers and strings are each coloured by the language's grammar; the <b>minimap</b> on the right is the whole file in miniature with the visible region marked; the bar down the left edge of the gutter marks lines changed since the file was opened.")}
 <p>The editing keys are the ones you already know - arrows and
-<kbd>Home</kbd>/<kbd>End</kbd>/<kbd>PgUp</kbd>/<kbd>PgDn</kbd> to move,
+<kbd>Home</kbd>/<kbd>End</kbd>/<kbd>PgUp</kbd>/<kbd>PgDn</kbd> to move (the last four not yet on UnoDOS,
+whose keyboard drivers do not pass them on),
 <kbd>Shift</kbd>+movement to select, <kbd>Ctrl</kbd>+<kbd>X</kbd>/<kbd>C</kbd>/<kbd>V</kbd>/<kbd>A</kbd>,
 <kbd>Ctrl</kbd>+<kbd>Z</kbd> to undo - plus the ones that make an editor worth using:</p>
 <div class="grid cols-2">
@@ -2482,7 +2543,7 @@ something:</p>
 <div class="grid cols-2">
   <div class="card"><h4>A theme</h4><p>One colour-theme file and a manifest naming it. No code runs, ever.</p></div>
   <div class="card"><h4>A language</h4><p>An id, the file extensions it claims and its comment syntax - and UnoCode knows a new language.</p></div>
-  <div class="card"><h4>A grammar</h4><p>A TextMate-style file of patterns that colours that language. Same shape as VS Code's.</p></div>
+  <div class="card"><h4>A grammar</h4><p>A TextMate-style file of patterns that colours that language. Same shape as VS Code's, and the pattern engine handles lookaround, backreferences and named groups, so a real VS Code grammar loads nearly whole.</p></div>
   <div class="card"><h4>Snippets</h4><p>A map of short prefixes to the text they expand to, offered in the suggestion list.</p></div>
 </div>
 <p>The manifest is <code>package.json</code>, with VS Code's keys:</p>
@@ -3005,7 +3066,7 @@ fill; and the board seeds
 <b>defensively</b>, stirring the cell coordinates into <code>Random()</code> so even a weak generator
 yields a live board. Note <code>opened()</code> can run again after a close and reopen - the board seeds
 only once.</p>
-{fig("samples_life.png", "LIFE.C after a minute: 66 generations in, 209 cells alive. Cells that have survived a while cool from green to blue.")}
+{fig("samples_life.png", "LIFE.C a few seconds after it opens: 65 generations in, 210 cells alive. Cells that have survived a while cool from green to blue.")}
 {sdk_source("LIFE.C")}
 
 <h2 id="todo">TODO.PY - a to-do list that survives reboots</h2>

@@ -87,18 +87,24 @@
 volume on the left, a remote server on the right - and a queue that carries whole folders across
 without you watching it.</p>
 
-<p>UnoTransfer is in the Start menu under <strong>Transfer</strong>. It speaks several transfer
+<p>UnoTransfer is in the Start menu as <strong>UnoTransfer</strong>. It speaks several transfer
 protocols through one interface, so copying a folder off a web server and copying it off a Linux box
 over SSH are the same three actions with a different address typed in.</p>
 
-<h2 id="panes">The two panes</h2>
-<p>The left pane is always a volume on this machine. The right pane is wherever you connected to.
-<kbd>Tab</kbd> moves between them, the arrow keys move within one, and <kbd>Enter</kbd> opens a folder.
-Choosing a file or a folder and pressing the copy key puts a <strong>job</strong> on the queue that
-copies it to the other side, recursively, creating folders as it goes.</p>
-<p>The queue is the third part of the window. Each job shows what it is copying, how far along it is
-and what went wrong if anything did. Jobs run one file at a time and keep going while you use the
-rest of the window.</p>
+<h2 id="panes">The window</h2>
+<p>The window has four tabs: <strong>Sites</strong>, the connections you have saved and the editor that
+makes a new one; <strong>Transfer</strong>, the two panes; <strong>Queue</strong>; and
+<strong>Terminal</strong>.</p>
+<figure><button type="button" class="zoom" data-full="assets/img/transfer.png" aria-label="Enlarge: UnoTransfer as it first opens, on the Sites tab: no saved connections yet, and N adds one. The line along the bottom names the local volume the left pane starts on."><img src="assets/img/transfer.png" alt="UnoTransfer as it first opens, on the Sites tab: no saved connections yet, and N adds one. The line along the bottom names the local volume the left pane starts on." loading="lazy"></button><figcaption><b>UnoTransfer</b> as it first opens, on the <b>Sites</b> tab: no saved connections yet, and <kbd>N</kbd> adds one. The line along the bottom names the local volume the left pane starts on.</figcaption></figure>
+<p>In the Transfer tab the left pane is always a volume on this machine. The right pane is wherever you
+connected to. <kbd>Tab</kbd> moves between them, the arrow keys move within one, and <kbd>Enter</kbd>
+opens a folder. Choosing a file or a folder and pressing the copy key puts a <strong>job</strong> on the
+queue that copies it to the other side, recursively, creating folders as it goes. A file arrives under a
+temporary name and takes its real one only once it is complete, so a transfer that stops halfway never
+leaves a truncated file looking like the real thing.</p>
+<p>The Queue tab lists every job: what it is copying, how far along it is and what went wrong if
+anything did. Jobs run one file at a time and keep going while you use the rest of the window, and a
+slow server never holds up the desktop.</p>
 
 <h2 id="protocols">What it can connect to</h2>
 <table>
@@ -139,6 +145,7 @@ the file is and goes and gets it itself, straight from the machine that has it. 
   <li><strong>One window.</strong> Like the browser and the SSH client, it is a single window with a
       single connection rather than tabs.</li>
 </ul>
+<div class="note"><b>How this is verified</b>SCP has been proven end to end against a real SSH server - a folder pulled recursively and checked byte for byte, a file pushed and read back on the server, and a changed host key refused - with UnoDOS running in a virtual machine. It has not yet been run that way on physical hardware.</div>
 
 <nav class="pagenav"><a href="ssh.html">&lsaquo; SSH client</a><a class="nxt" href="networking.html">Networking &rsaquo;</a></nav>
 </div></main>

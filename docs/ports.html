@@ -84,7 +84,7 @@
 
 <h1>The UnoDOS family</h1>
 <p class="lede">pc64 is one of many. The same GUI-first UnoDOS runs on more than 20 kinds of hardware,
-from 8-bit consoles to modern ARM boards. Here is how the others differ.</p>
+from 8-bit consoles to modern ARM boards and phones. Here is how the others differ.</p>
 
 <h2 id="pattern">One idea, many machines</h2>
 <p>The same UnoDOS desktop and apps run on machines as different as a Commodore 64 and a Raspberry Pi. On
@@ -94,7 +94,11 @@ every version consistent instead of drifting apart.</p>
 <h2 id="tiers">How much desktop each machine gets</h2>
 <p>It depends on how much memory the machine has:</p>
 <ul>
-  <li><strong>The full desktop:</strong> more capable machines (pc64, PlayStation&nbsp;2, Dreamcast, and the
+  <li><strong>The whole system:</strong> pc64's own desktop and its apps - including the browser with
+  secure sites, UnoOffice and the music players - also run on an ARM phone, the Planet Cosmo Communicator, as <strong>cosmo64</strong>,
+  with its keyboard, touch panel, SD card, USB, wired networking over a USB adapter, and sound. It has no
+  Wi-Fi or cellular, and it is source only: you build it and boot it from the phone's own boot menu.</li>
+  <li><strong>The full desktop:</strong> more capable machines (PlayStation&nbsp;2, Dreamcast, and the
   ARM and PowerPC boards) run the full desktop shown in this manual.</li>
   <li><strong>A simpler desktop:</strong> the smallest machines (NES, Game&nbsp;Boy, the C64) have very little
   memory, so they run a simpler icon-and-button desktop instead.</li>
@@ -113,7 +117,7 @@ every version consistent instead of drifting apart.</p>
 </div>
 
 <h2 id="table">The full lineup</h2>
-<p>Every port's ready-to-run image is committed in the repository, so each
+<p>Every port's ready-to-run image except cosmo64's is committed in the repository, so each
 <em>Download</em> link below always gets you the latest build - a ROM for a
 console runs in any emulator or on a flash cart, and each port's folder has a
 README with the details.</p>
@@ -142,6 +146,7 @@ README with the details.</p>
 <tr><td>PlayStation 2</td><td>Sony PS2</td><td>Emotion Engine</td><td>native</td><td><a href="https://github.com/hmofet/unodos/raw/master/ps2/build/unodos-ps2-uui.elf">ELF</a></td></tr>
 <tr><td>Raspberry Pi</td><td>Raspberry Pi</td><td>ARM Cortex-A (AArch64)</td><td>VideoCore mailbox FB</td><td><a href="https://github.com/hmofet/unodos/raw/master/rpi/build/kernel8.img">kernel8.img</a></td></tr>
 <tr><td>PinePhone</td><td>PinePhone</td><td>Allwinner A64 (AArch64)</td><td>DE2 display engine</td><td><a href="https://github.com/hmofet/unodos/raw/master/pinephone/build/unodos.bin">boot image</a></td></tr>
+<tr><td>cosmo64</td><td>Planet Cosmo Communicator</td><td>MediaTek MT6771 (AArch64)</td><td>framebuffer adopted from the phone's LK bootloader</td><td><a href="https://github.com/hmofet/unodos/blob/master/cosmo64/README.md">source only</a></td></tr>
 </tbody>
 </table></div>
 <div class="note"><b>Where to read more</b>Full details for every machine live in the repository: <a href="https://github.com/hmofet/unodos" target="_blank" rel="noopener">github.com/hmofet/unodos</a>.</div>

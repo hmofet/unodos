@@ -99,12 +99,26 @@ drag off into floating palettes, a status bar along the bottom, and the same
 <h2 id="unoword">UnoWord</h2>
 <p>A word processor with real page layout: it paginates, shows a ruler with indent markers, and
 tracks where you are (<i>Page 1 Sec 1, Ln 1 Col 30</i>) in the status bar. Text can be bold, italic
-or underlined, in a choice of faces and sizes, and paragraphs can be left, centred, right or
-justified.</p>
+or underlined, in a choice of faces and sizes - the <b>Font</b> and <b>Size</b> boxes on the Formatting
+toolbar - and paragraphs can be left, centred, right or justified.</p>
 <div class="grid cols-2">
   <figure><button type="button" class="zoom" data-full="assets/img/uoword.png" aria-label="Enlarge: UnoWord on an empty document: menu bar, the Standard and Formatting toolbars, the ruler, the page itself and the status bar."><img src="assets/img/uoword.png" alt="UnoWord on an empty document: menu bar, the Standard and Formatting toolbars, the ruler, the page itself and the status bar." loading="lazy"></button><figcaption><b>UnoWord</b> on an empty document: menu bar, the Standard and Formatting toolbars, the ruler, the page itself and the status bar.</figcaption></figure>
   <figure><button type="button" class="zoom" data-full="assets/img/uoword_typed.png" aria-label="Enlarge: Typing straight onto the page. The status bar tracks the line and column as you go."><img src="assets/img/uoword_typed.png" alt="Typing straight onto the page. The status bar tracks the line and column as you go." loading="lazy"></button><figcaption>Typing straight onto the page. The status bar tracks the line and column as you go.</figcaption></figure>
 </div>
+<p>The caret moves the way it does in any word processor. <kbd>Left</kbd> and <kbd>Right</kbd> move a
+character at a time, or a word at a time with <kbd>Ctrl</kbd> held; <kbd>Up</kbd> and <kbd>Down</kbd> move
+a line and keep the column you started from; <kbd>Home</kbd> and <kbd>End</kbd> go to the ends of the
+line, or of the whole document with <kbd>Ctrl</kbd>; <kbd>PgUp</kbd> and <kbd>PgDn</kbd> move a screen at
+a time; and <kbd>Delete</kbd> removes the character after the caret. The page scrolls to keep the caret
+in view. (See the note below about <kbd>Home</kbd>, <kbd>End</kbd> and the page keys on UnoDOS.) To select, drag across the text with the mouse, or press <kbd>Ctrl</kbd>+<kbd>A</kbd> for the
+whole document; typing then replaces the selection.</p>
+<p><strong>Formatting works before you type as well as after.</strong> Choose <b>Bold</b>
+(<kbd>Ctrl</kbd>+<kbd>B</kbd>), <b>Italic</b> (<kbd>Ctrl</kbd>+<kbd>I</kbd>), <b>Underline</b>
+(<kbd>Ctrl</kbd>+<kbd>U</kbd>), a font or a size with nothing selected, and it applies to the text you
+type next; the toolbar shows the choice waiting. Moving the caret somewhere else drops it. With text
+selected, the same controls change the selection.</p>
+<figure><button type="button" class="zoom" data-full="assets/img/uoword_format.png" aria-label="Enlarge: Formatting chosen with nothing selected: Ctrl+B, type, Ctrl+B again, and the same for underline and italic. Each word came out formatted as it was typed, and nothing was ever selected. The page is fitted to the window, so the text is small; enlarge the figure to read it."><img src="assets/img/uoword_format.png" alt="Formatting chosen with nothing selected: Ctrl+B, type, Ctrl+B again, and the same for underline and italic. Each word came out formatted as it was typed, and nothing was ever selected. The page is fitted to the window, so the text is small; enlarge the figure to read it." loading="lazy"></button><figcaption>Formatting chosen with nothing selected: <kbd>Ctrl</kbd>+<kbd>B</kbd>, type, <kbd>Ctrl</kbd>+<kbd>B</kbd> again, and the same for underline and italic. Each word came out formatted as it was typed, and nothing was ever selected. The page is fitted to the window, so the text is small; enlarge the figure to read it.</figcaption></figure>
+<div class="note warn"><b>Keyboard gaps on UnoDOS</b>Two gaps on UnoDOS today. <kbd>Shift</kbd> with a movement key does not extend a selection in UnoWord, and neither does <kbd>Shift</kbd>+click: the caret moves and the selection collapses, so drag with the mouse instead (the same goes for <kbd>Shift</kbd>+arrow over a range of cells in UnoCalc). And UnoDOS's own keyboard drivers do not yet pass on <kbd>Home</kbd>, <kbd>End</kbd>, <kbd>PgUp</kbd> or <kbd>PgDn</kbd>, so those keys do nothing in any app; the arrows, <kbd>Ctrl</kbd>+arrow and <kbd>Delete</kbd> work. Everything on this page works in the desktop editions of UnoOffice.</div>
 
 <h2 id="unocalc">UnoCalc</h2>
 <p>A spreadsheet with a real calculation engine, not a grid of text. Type numbers into cells, type a
@@ -117,7 +131,8 @@ attached to it. Three sheets come with a new workbook, and the status bar keeps 
 </div>
 <p>Move around with the <strong>arrow keys</strong>, a page at a time with
 <kbd>PgUp</kbd>/<kbd>PgDn</kbd>, to the start of the row with <kbd>Home</kbd> and to the far corners
-with <kbd>Ctrl</kbd>+<kbd>Home</kbd> / <kbd>Ctrl</kbd>+<kbd>End</kbd>. <kbd>Enter</kbd> commits a cell
+with <kbd>Ctrl</kbd>+<kbd>Home</kbd> / <kbd>Ctrl</kbd>+<kbd>End</kbd> - though on UnoDOS the page keys,
+<kbd>Home</kbd> and <kbd>End</kbd> do not arrive yet; see the keyboard note above. <kbd>Enter</kbd> commits a cell
 and steps down, <kbd>Tab</kbd> commits and steps right; either way what you were typing is kept, so
 arrowing out of a half-typed cell stores it rather than throwing it away.</p>
 
@@ -140,10 +155,23 @@ written on the machine opens on a PC and a file from a PC opens here.</p>
 you want in the Save dialog, or leave the name bare and let the <strong>Files of type</strong> menu
 supply one. Opening works the other way round - the file is identified by its contents rather than
 its name, so a <code>.xlsx</code> that somebody renamed <code>.xls</code> still opens correctly.</p>
+<p><strong>Accented text comes through intact.</strong> Western European characters - accented letters,
+the euro sign, curly quotes and dashes - display correctly in a document you open, and are saved back
+as themselves, in all three apps and in both the old and the new formats. A character outside that set
+(Greek, Cyrillic, Chinese and so on) cannot be stored by these formats as UnoOffice writes them, and
+becomes <code>?</code>.</p>
 <p>Save and open through the suite's file dialog onto any writable volume, exactly as the Editor and
 Files do. In the Open dialog you can either click a file in the list or type its name in the
 <strong>File name</strong> box.</p>
 <div class="note warn"><b>No printing</b>Printing does not exist in UnoDOS yet, so every <strong>Print</strong> menu item is present but does nothing. Save the file and print it from another machine.</div>
+
+<h2 id="desktop">UnoOffice on Windows, macOS and Linux</h2>
+<p>The same three apps also exist as ordinary programs for other operating systems, built from the same
+code. <a href="https://github.com/hmofet/unooffice/releases" target="_blank" rel="noopener">UnoOffice
+0.3.0</a> has an installer for Windows, a disk image for macOS, and packages for Linux, and each one
+registers the apps for the Office file types, so a document can be opened in them from the file manager's
+<b>Open with</b> menu. The builds are <strong>not code-signed</strong>, so Windows
+and macOS warn before the first run.</p>
 
 <nav class="pagenav"><a href="apps.html">&lsaquo; Applications</a><a class="nxt" href="code.html">UnoCode &rsaquo;</a></nav>
 </div></main>

@@ -134,7 +134,11 @@ the whole file down the right-hand edge so you can see where you are in somethin
   <li><kbd>Ctrl</kbd>+<kbd>D</kbd> selects the next copy of the word you are on, so you can rename
       several at once by typing once.</li>
   <li><kbd>Home</kbd> and <kbd>End</kbd> go to the ends of the line, <kbd>Ctrl</kbd>+<kbd>Home</kbd>
-      and <kbd>Ctrl</kbd>+<kbd>End</kbd> to the ends of the file.</li>
+      and <kbd>Ctrl</kbd>+<kbd>End</kbd> to the ends of the file - in UnoCode's desktop builds. On UnoDOS
+      today the system's own keyboard drivers do not pass on <kbd>Home</kbd>, <kbd>End</kbd>,
+      <kbd>PgUp</kbd> or <kbd>PgDn</kbd>, so those keys do nothing.</li>
+  <li>Text is UTF-8 throughout, so accented letters, curly quotes and box-drawing characters in a file
+      display, select and save as themselves.</li>
   <li>The status bar along the bottom shows the line and column, how the file is indented, how it is
       encoded and which line ending it uses. Click nothing: it is there to tell you, and it is the
       first place to look when a file behaves oddly on another machine.</li>
@@ -202,9 +206,9 @@ when the conversation started. It is not the folder: the other files are not rea
 that you do not have open. A file too large to fit is cut, and the assistant says it was cut.</p>
 <p>Two more things about it are deliberate. Every edit it proposes is shown to you as a
 <strong>diff first</strong> and applied only when you accept it, as a single step of undo. And it needs
-a key for whichever model service you use, which is stored in the machine's own secret store rather
-than in your settings file - <b>AI: Set API Key</b> in the palette, typed into a masked box, and the
-store it went into is named on screen when it is saved.</p>
+an Anthropic API key - <b>AI: Set API Key</b> in the palette, typed into a masked box. The key is kept
+out of your settings file, and the place it went is named on screen when it is saved.</p>
+<div class="note warn"><b>Where the key is kept</b>On UnoDOS that place is a plain text file, <code>UNOCODE\SECRETS.TXT</code>, on a FAT volume - and FAT has no owners and no permissions, so anyone who can read the disk can read the key. UnoCode says so in a warning when you save it rather than pretending otherwise. <b>AI: Clear API Key</b> removes it.</div>
 <div class="note warn"><b>It sends the open file, every time</b>The assistant talks to a service over the internet, which means the text it sends leaves this machine: your question, and the entire contents of the file you have open. The panel names that file every time it sends one, so you can see what went. If that is not appropriate for what you are working on, do not use it - there is nothing to configure to make a network request private.</div>
 
 <h2 id="settings">Settings</h2>
@@ -232,6 +236,10 @@ UnoCode.</p>
       real formats and work as they are. Extensions that contain code are written against UnoCode's
       own smaller set of commands, so a complex VS Code extension will not simply run.</li>
   <li><strong>No debugger.</strong> The Run view launches things; it does not step through them.</li>
+  <li><strong>No hover help, go to definition or rename across files.</strong> In UnoCode's desktop
+      builds those come from a language server, a separate program running beside the editor. UnoDOS
+      has no way to run a separate program, so here they do nothing; suggestions come from the language's
+      keywords, the words in the file and snippets instead.</li>
 </ul>
 
 <p>Writing an extension, or want the file formats and the internals? That is the
