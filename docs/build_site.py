@@ -1602,15 +1602,16 @@ character at a time, or a word at a time with <kbd>Ctrl</kbd> held; <kbd>Up</kbd
 a line and keep the column you started from; <kbd>Home</kbd> and <kbd>End</kbd> go to the ends of the
 line, or of the whole document with <kbd>Ctrl</kbd>; <kbd>PgUp</kbd> and <kbd>PgDn</kbd> move a screen at
 a time; and <kbd>Delete</kbd> removes the character after the caret. The page scrolls to keep the caret
-in view. (See the note below about <kbd>Home</kbd>, <kbd>End</kbd> and the page keys on UnoDOS.) To select, drag across the text with the mouse, or press <kbd>Ctrl</kbd>+<kbd>A</kbd> for the
-whole document; typing then replaces the selection.</p>
+in view. To select, hold <kbd>Shift</kbd> while you move the caret, drag across the text with the
+mouse, click at one end and <kbd>Shift</kbd>+click at the other, or press <kbd>Ctrl</kbd>+<kbd>A</kbd> for
+the whole document; typing then replaces the selection.</p>
 <p><strong>Formatting works before you type as well as after.</strong> Choose <b>Bold</b>
 (<kbd>Ctrl</kbd>+<kbd>B</kbd>), <b>Italic</b> (<kbd>Ctrl</kbd>+<kbd>I</kbd>), <b>Underline</b>
 (<kbd>Ctrl</kbd>+<kbd>U</kbd>), a font or a size with nothing selected, and it applies to the text you
 type next; the toolbar shows the choice waiting. Moving the caret somewhere else drops it. With text
 selected, the same controls change the selection.</p>
 {fig("uoword_format.png", "Formatting chosen with nothing selected: <kbd>Ctrl</kbd>+<kbd>B</kbd>, type, <kbd>Ctrl</kbd>+<kbd>B</kbd> again, and the same for underline and italic. Each word came out formatted as it was typed, and nothing was ever selected. The page is fitted to the window, so the text is small; enlarge the figure to read it.")}
-{note('Two gaps on UnoDOS today. <kbd>Shift</kbd> with a movement key does not extend a selection in UnoWord, and neither does <kbd>Shift</kbd>+click: the caret moves and the selection collapses, so drag with the mouse instead (the same goes for <kbd>Shift</kbd>+arrow over a range of cells in UnoCalc). And UnoDOS\'s own keyboard drivers do not yet pass on <kbd>Home</kbd>, <kbd>End</kbd>, <kbd>PgUp</kbd> or <kbd>PgDn</kbd>, so those keys do nothing in any app; the arrows, <kbd>Ctrl</kbd>+arrow and <kbd>Delete</kbd> work. Everything on this page works in the desktop editions of UnoOffice.', kind="warn", title="Keyboard gaps on UnoDOS")}
+{note('Every menu opens from the keyboard. Press <kbd>F10</kbd> and the menu bar takes the keyboard: <kbd>←</kbd>/<kbd>→</kbd> pick a menu, <kbd>↓</kbd> or <kbd>Enter</kbd> opens it, and <kbd>Esc</kbd> backs out a level at a time. Or hold <kbd>Alt</kbd> and press the underlined letter, so <kbd>Alt</kbd>+<kbd>F</kbd> opens <b>File</b> and <kbd>Alt</kbd>+<kbd>O</kbd> opens <b>Format</b>. Inside an open menu, the underlined letter alone picks the command. This works the same in UnoWord, UnoCalc and UnoShow.', kind="tip", title="Menus without the mouse")}
 
 <h2 id="unocalc">UnoCalc</h2>
 <p>A spreadsheet with a real calculation engine, not a grid of text. Type numbers into cells, type a
@@ -1623,8 +1624,8 @@ attached to it. Three sheets come with a new workbook, and the status bar keeps 
 </div>
 <p>Move around with the <strong>arrow keys</strong>, a page at a time with
 <kbd>PgUp</kbd>/<kbd>PgDn</kbd>, to the start of the row with <kbd>Home</kbd> and to the far corners
-with <kbd>Ctrl</kbd>+<kbd>Home</kbd> / <kbd>Ctrl</kbd>+<kbd>End</kbd> - though on UnoDOS the page keys,
-<kbd>Home</kbd> and <kbd>End</kbd> do not arrive yet; see the keyboard note above. <kbd>Enter</kbd> commits a cell
+with <kbd>Ctrl</kbd>+<kbd>Home</kbd> / <kbd>Ctrl</kbd>+<kbd>End</kbd>. Hold <kbd>Shift</kbd> with any of
+them, or <kbd>Shift</kbd>+click a cell, to select a range; the status bar sums it. <kbd>Enter</kbd> commits a cell
 and steps down, <kbd>Tab</kbd> commits and steps right; either way what you were typing is kept, so
 arrowing out of a half-typed cell stores it rather than throwing it away.</p>
 
@@ -1719,9 +1720,7 @@ the whole file down the right-hand edge so you can see where you are in somethin
   <li><kbd>Ctrl</kbd>+<kbd>D</kbd> selects the next copy of the word you are on, so you can rename
       several at once by typing once.</li>
   <li><kbd>Home</kbd> and <kbd>End</kbd> go to the ends of the line, <kbd>Ctrl</kbd>+<kbd>Home</kbd>
-      and <kbd>Ctrl</kbd>+<kbd>End</kbd> to the ends of the file - in UnoCode's desktop builds. On UnoDOS
-      today the system's own keyboard drivers do not pass on <kbd>Home</kbd>, <kbd>End</kbd>,
-      <kbd>PgUp</kbd> or <kbd>PgDn</kbd>, so those keys do nothing.</li>
+      and <kbd>Ctrl</kbd>+<kbd>End</kbd> to the ends of the file.</li>
   <li>Text is UTF-8 throughout, so accented letters, curly quotes and box-drawing characters in a file
       display, select and save as themselves.</li>
   <li>The status bar along the bottom shows the line and column, how the file is indented, how it is
@@ -1972,7 +1971,7 @@ A password box appears only when the highlighted network is locked and new to th
 are only the ones that can do something at that moment: <strong>Connect</strong>, <strong>Disconnect</strong>,
 <strong>Forget</strong>, <strong>Rescan</strong>. The wired line and Details follow underneath.</p>
 {fig("cp_wifi.png", "The same tab on a machine with Wi-Fi: the answer, the networks, the controls, then the wired line and Details. Captured in the emulator, which has no Wi-Fi card, with a debug switch that draws the pane and seeds example networks - the pane says so on screen. On a laptop the list is what the radio hears.")}
-{note('Earlier versions had a separate <strong>Network</strong> app with a network self-test. It is not in the Start menu of this release: the Control Panel tab above is the place to check the connection.', title="Looking for the Network app?")}
+{note('Earlier versions had a separate <strong>Network</strong> app with a network self-test. It has been removed: the Control Panel tab above is the place to check the connection.', title="Looking for the Network app?")}
 
 <h2 id="tls">Secure sites</h2>
 <p>Secure (<code>https://</code>) pages load over an encrypted TLS connection, and UnoDOS checks the site's
@@ -2490,8 +2489,7 @@ design: nothing is wired to a key directly, so anything can be rebound.</p>
 shows where it came from.</p>
 {fig("unocode_editor.png", "A UnoC source file open beside the welcome document. Comments, preprocessor lines, types, numbers and strings are each coloured by the language's grammar; the <b>minimap</b> on the right is the whole file in miniature with the visible region marked; the bar down the left edge of the gutter marks lines changed since the file was opened.")}
 <p>The editing keys are the ones you already know - arrows and
-<kbd>Home</kbd>/<kbd>End</kbd>/<kbd>PgUp</kbd>/<kbd>PgDn</kbd> to move (the last four not yet on UnoDOS,
-whose keyboard drivers do not pass them on),
+<kbd>Home</kbd>/<kbd>End</kbd>/<kbd>PgUp</kbd>/<kbd>PgDn</kbd> to move,
 <kbd>Shift</kbd>+movement to select, <kbd>Ctrl</kbd>+<kbd>X</kbd>/<kbd>C</kbd>/<kbd>V</kbd>/<kbd>A</kbd>,
 <kbd>Ctrl</kbd>+<kbd>Z</kbd> to undo - plus the ones that make an editor worth using:</p>
 <div class="grid cols-2">

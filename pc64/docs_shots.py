@@ -969,11 +969,11 @@ def sc_uoword_format(q):
 
     Run it on a FRESH boot: UnoWord keeps its document across close and
     reopen within one, so after `uoword` this lands on the end of that
-    scene's sentence. Italic goes LAST, with nothing typed after it: a space
-    typed straight after an italic run does not show (probe_uw_space,
-    2026-10-09 - "italicand"), and this figure is about formatting, not that
-    bug. The text is 10 pt because the Size box cannot be reached from here
-    (the menus take no Alt/F10 on pc64 and a QMP click does not land)."""
+    scene's sentence. Italic goes last, with nothing typed after it; until
+    2026-10-09 a space typed straight after italic text did not show
+    ("italicand", the font engine's shear, now fixed). The text is 10 pt:
+    Format > Font is reachable now (Alt+O, Enter - probe_uw_italic), but the
+    figure was always this size and the page says it is small."""
     close_all(q); launch(q, A("uoword"), settle=3.0)
     def fmt(k):
         combo(q, "ctrl", k); time.sleep(0.7)
