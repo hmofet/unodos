@@ -6254,8 +6254,30 @@ static void on_action(const unoui_action *a)
 }
 
 /* ---- UEFI input -> unoui_event ----------------------------------------- */
+/* The modifiers (UI_MOD_*) of the event being delivered.  While the key pump
+ * hands a key out, that key's own mask - the one captured when it went down,
+ * which a later poll cannot recover once it has been let go.  Otherwise the
+ * live level, which is what a click or a drag means by "Shift held".
+ *
+ * Exported to modules (pc64_modload.c): a module's key hook is
+ * (uni, scan, ctrl) and cannot see Shift or Alt any other way, which is why
+ * UnoWord's Shift+arrow and UnoOffice's Alt+letter menus did nothing here. */
+static int g_key_mods = -1;
+int pc64_shell_key_mods(void)
+{ return g_key_mods >= 0 ? g_key_mods : uno_pc64_mods(); }
+
+/* Every event leaves here with its modifiers.  Pointer and wheel events used
+ * to carry none, so Shift+click could not extend a selection, and a
+ * character event lost the Alt that made it a menu mnemonic. */
 static int feed(const unoui_event *ev)
-{ unoui_action a = unoui_handle(&UI, ev); on_action(&a); return 1; }
+{
+    unoui_event e = *ev;
+    unoui_action a;
+    if (!e.mods) e.mods = pc64_shell_key_mods();
+    a = unoui_handle(&UI, &e);
+    on_action(&a);
+    return 1;
+}
 
 /* 1 while an editable text widget owns the keyboard. Shell accelerators the
  * user could plausibly be typing stand down when this is set - the same rule
@@ -6396,6 +6418,7 @@ static int pump_input(void)
     }
     while (uno_pc64_next_key2(&scan, &uni, &mods)) {
         int vk = 0;
+        g_key_mods = mods;                /* pc64_shell_key_mods(), for this key */
         ctrl = (mods & UI_MOD_CTRL) != 0;
         any = 1; real = 1;
 #ifdef UNO_DEBUG
@@ -6403,7 +6426,7 @@ static int pump_input(void)
          * usable desktop.  FIRST in the loop and it also drops fullscreen, so
          * it works even while a fullscreen app (Runner3D) has focus - that is
          * precisely when the operator is otherwise trapped and can't reach
-         * Start > Shut Down.  F10 is taken by the platform (GOP mode cycle). */
+         * Start > Shut Down.  Ctrl+F10 is the platform's (GOP mode cycle). */
         if (scan == 0x16) {
             pc64_stress_stop();
             /* escape_ not leave_: dropping a native game out of fullscreen
@@ -6581,8 +6604,9 @@ static int pump_input(void)
         }
         memset(&ev, 0, sizeof ev);
         if (vk) { ev.kind = UI_EV_KEY; ev.key = vk; ev.mods = mods; feed(&ev); }
-        else if (uni >= 32 && uni < 127) { ev.kind = UI_EV_CHAR; ev.ch = uni; feed(&ev); }
+        else if (uni >= 32 && uni < 127) { ev.kind = UI_EV_CHAR; ev.ch = uni; ev.mods = mods; feed(&ev); }
     }
+    g_key_mods = -1;                      /* back to the live level */
     /* MRU: a pointer click that changed the front window has to reach the
        switcher's order too, and clicks land through unoui, not through a shell
        entry point we could hook. Sampling the front app once per pump is
