@@ -79,6 +79,8 @@ figure{margin:1.5em 0;background:var(--surface);border:1px solid var(--border);b
   overflow:hidden;box-shadow:var(--shadow)}
 figure img{display:block;width:100%;height:auto;background:#0b0d13}
 figure.film video{display:block;width:100%;height:auto;background:#0b0d13}
+figure.film .yt{position:relative;aspect-ratio:16/9;background:#0b0d13}
+figure.film .yt iframe{position:absolute;inset:0;width:100%;height:100%;border:0}
 figure.film .fallback{padding:15px;margin:0;color:var(--muted)}
 figcaption{padding:10px 15px;font-size:13.5px;color:var(--muted);border-top:1px solid var(--border);background:var(--surface)}
 

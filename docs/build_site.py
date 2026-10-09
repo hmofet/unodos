@@ -127,6 +127,8 @@ figure{margin:1.5em 0;background:var(--surface);border:1px solid var(--border);b
   overflow:hidden;box-shadow:var(--shadow)}
 figure img{display:block;width:100%;height:auto;background:#0b0d13}
 figure.film video{display:block;width:100%;height:auto;background:#0b0d13}
+figure.film .yt{position:relative;aspect-ratio:16/9;background:#0b0d13}
+figure.film .yt iframe{position:absolute;inset:0;width:100%;height:100%;border:0}
 figure.film .fallback{padding:15px;margin:0;color:var(--muted)}
 figcaption{padding:10px 15px;font-size:13.5px;color:var(--muted);border-top:1px solid var(--border);background:var(--surface)}
 
@@ -334,26 +336,27 @@ def fig(src, cap, cls=""):
             f'<img src="assets/img/{src}" alt="{alt}" loading="lazy">'
             f'</button><figcaption>{cap}</figcaption></figure>')
 
-DEMO_MP4 = "https://unodos.arinbakht.com/assets/unodos-demo.mp4"
-DUUM_MP4 = "https://unodos.arinbakht.com/assets/duum-demo.mp4"
+# The films live on YouTube (arin publishes them there, 2026-10-09) and are
+# embedded from youtube-nocookie.com, the same ids the website uses.
+DEMO_YT = "OCIYLjtTpu8"
+DUUM_YT = "WiO0zrotyeQ"
 
-def film(poster, cap, mp4=DEMO_MP4):
+def film(poster, cap, yt=DEMO_YT):
     """A demo film, embedded the way fig() embeds a screenshot.
 
-    The films are large and this manual is a small static site that also has to
-    read sensibly offline, so the video is streamed from the UnoDOS website
-    rather than committed here, while the poster frame IS local. An offline
-    reader still gets the figure, the poster and the caption; only playback
-    needs a connection. preload="none" means the page costs nothing extra
-    until the reader presses play. `mp4` picks which film (the whole-OS demo by
-    default, or the shorter Duum film on the Python page)."""
+    The films are published on YouTube and embedded from youtube-nocookie.com,
+    so nothing large is committed here and the player loads nothing until the
+    reader presses play. Offline, the iframe is empty but the caption still
+    reads, and its "Watch on YouTube" link says where the film is. `yt` picks
+    which film (the whole-OS demo by default, or the Duum film on the Python
+    page). `poster` is kept for the call sites and no longer used."""
     alt = html.escape(re.sub(r"<[^>]+>", "", cap))
-    return (f'<figure class="film"><video controls preload="none" '
-            f'poster="assets/img/{poster}" aria-label="{alt}">'
-            f'<source src="{mp4}" type="video/mp4">'
-            f'<p class="fallback">Your browser cannot play this video. '
-            f'<a href="{mp4}">Download the film</a> instead.</p>'
-            f'</video><figcaption>{cap}</figcaption></figure>')
+    return (f'<figure class="film"><div class="yt"><iframe '
+            f'src="https://www.youtube-nocookie.com/embed/{yt}?rel=0" title="{alt}" '
+            'loading="lazy" referrerpolicy="strict-origin-when-cross-origin" '
+            'allow="accelerometer; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" '
+            f'allowfullscreen></iframe></div><figcaption>{cap} '
+            f'<a href="https://youtu.be/{yt}">Watch on YouTube</a>.</figcaption></figure>')
 
 def note(body, kind="", title="Note"):
     k = f" {kind}" if kind else ""
@@ -862,7 +865,7 @@ on the same machines.</p>
 <p>Before you read any further, watch it work. Nothing in this film is a mock-up or an animation: it
 is the real system, recorded off a running machine, in one take per scene.</p>
 
-{film("demo-poster.jpg", 'pc64, recorded from the running system in one take per scene: a cold boot, a shipped game, then a level of Doom played by a renderer written in Python. After that the <a href="windows.html">window manager</a> snapping and switching windows, the <a href="appearance.html">ten themes</a> changing live, real Word and Excel documents opening in <a href="office.html">UnoOffice</a>, the <a href="browser.html">browser</a> swapping JavaScript engines mid-session and then loading Wikipedia over HTTPS, music and images decoded by the machine itself, <a href="studio.html">Studio</a> compiling and running the same app twice - once in UnoC and once in Python - and the <a href="ssh.html">SSH client</a> opening a shell on a Linux box across the network. The film streams from the UnoDOS website, so playing it needs a connection.')}
+{film("demo-poster.jpg", 'pc64, recorded from the running system in one take per scene: a cold boot, then a level of Doom played by a renderer written in Python, real Word and Excel documents opening in <a href="office.html">UnoOffice</a>, the <a href="browser.html">browser</a> swapping JavaScript engines mid-session and then loading Wikipedia over HTTPS, music and images decoded by the machine itself, <a href="studio.html">Studio</a> compiling and running the same app in UnoC and in Python, <a href="code.html">UnoCode</a> and its AI assistant answering a question about the open file, the <a href="ssh.html">SSH client</a> opening a shell on a Linux box, <a href="transfer.html">UnoTransfer</a> copying files to it, and the live <a href="logging.html">system log</a>.')}
 
 {note('Download <strong>unodos-pc64.iso</strong> and write it to a spare USB stick with Rufus or balenaEtcher (or boot it in a VM) - or use the one-click <strong>USB flasher</strong>. No building required. See <a href="getting-started.html">Getting started</a>.', kind="tip", title="Just want to try it?")}
 
@@ -2904,7 +2907,7 @@ and renders a first-person, BSP-traversed view of the level you can walk around,
 <code>uno</code> API. It exercises the whole platform at once: file I/O (it streams the multi-MB WAD with
 <code>uno.read_at</code>, never loading it whole), heavy compute (the BSP walk and the column renderer), the
 framebuffer, keyboard input, and floating-point math.</p>
-{film("duum-demo-poster.jpg", "Forty-eight seconds of Duum on the x86-64 build, recorded from the running system: the start room, a walk down the corridor drawn from the WAD, a firefight, and the status bar built from the game's own artwork. The film streams from the UnoDOS website, so playing it needs a connection.", DUUM_MP4)}
+{film("duum-demo-poster.jpg", "A minute of Duum on the x86-64 build, recorded from the running system: the game file's own music, a level streamed from the WAD, a firefight with the WAD's own sounds, the pause menu reading the machine's real key bindings, and the status bar built from the game's own artwork.", DUUM_YT)}
 {note('Duum needs a Doom-format IWAD on the disk as <code>DOOM1.WAD</code> - none ships with UnoDOS, game data belongs to its makers. Use <strong>Freedoom</strong> (freedoom.github.io, a free BSD-licensed IWAD; rename <code>freedoom1.wad</code> to <code>DOOM1.WAD</code>) or the freely distributable id Software shareware <code>DOOM1.WAD</code>. Put it next to the apps on the boot disk. Without a WAD, Duum opens and says it is missing.', title="Bring your own WAD")}
 <p>Walls, floors, ceilings and sky are all texture-mapped from the WAD (perspective-correct, distance-
 and orientation-shaded), with sprites for monsters, items and the weapon. It is a complete game rather
