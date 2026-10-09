@@ -40,6 +40,9 @@ SPINE = [
     # deliberately: Studio is the one with the compiler behind it, and leading
     # with the editor would read as though it were the better of the two.
     ("s16", "UnoCode"),
+    # s19, UnoCode's assistant (v3.35.0 cut, 2026-10-09): a question about
+    # the open file, answered by a real model over the machine's own TLS.
+    ("s19", "The UnoCode assistant"),
     # s12, the games and the tracker, is OUT of the cut (2026-08-17). Dostris,
     # Pac-Man and OutLast are driven by the machine's own sequencer, and under
     # QEMU the guest is too slow to keep the audio clean, so the music sounded

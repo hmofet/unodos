@@ -546,7 +546,9 @@ def main(argv):
         # actually took. A wrong answer here is a whole take recorded at the
         # wrong size, and the guest's own screen_info is the only witness that
         # cannot be argued with.
-        if gop[0] and (d.w, d.h) != (gop[0] // 2, gop[1] // 2):
+        # half the panel, or the whole panel on a UNO_DESKTOP=native build
+        # (how the v3.35.0 film was shot, 2026-10-09)
+        if gop[0] and (d.w, d.h) not in ((gop[0] // 2, gop[1] // 2), (gop[0], gop[1])):
             raise SystemExit(
                 "the desktop came up %dx%d, not the %dx%d that halving a "
                 "%dx%d panel should give - did OVMF refuse the EDID (check "

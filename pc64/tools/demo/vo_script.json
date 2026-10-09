@@ -20,7 +20,7 @@
         {
           "id": "s01b",
           "at": "desktop-first-paint",
-          "text": "It boots on an ordinary PC straight to a desktop. No install, no command line. Nineteen megabytes."
+          "text": "It boots on an ordinary PC straight to a desktop. No install, no command line. Twenty megabytes."
         }
       ]
     },
@@ -50,7 +50,7 @@
         {
           "id": "s08c",
           "at": "turn-back-left",
-          "text": "It walks real Doom level geometry, textured and perspective correct, on an operating system that also has to be a desktop."
+          "text": "Real Doom level geometry, textured and perspective correct."
         },
         {
           "id": "s08d",
