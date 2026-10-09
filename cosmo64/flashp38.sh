@@ -1,4 +1,5 @@
 #!/bin/sh
+NET="${UNO_LAB_NET:-192.0.2}"   # the lab LAN's /24 prefix; set UNO_LAB_NET to yours
 # cosmo64/flashp38.sh -- write the built boot image to the Cosmo's p38 slot.
 #
 #   ./build.sh shell && ./flashp38.sh
@@ -35,7 +36,7 @@ confirm() {          # $1 = user@addr; echoes it back only if it IS the Cosmo
 }
 
 find_dev() {
-    for a in 192.0.2.65 192.0.2.254 192.0.2.121 192.0.2.56; do
+    for a in ${NET}.65 ${NET}.254 ${NET}.121 ${NET}.56; do
         confirm "root@$a" && return 0
     done
     echo "flashp38: not at a known address, sweeping the LAN..." >&2
@@ -44,7 +45,7 @@ find_dev() {
     done
     wait 2>/dev/null
     for ip in $(arp -a | grep -oE "192\.168\.2\.[0-9]+" | sort -u); do
-        [ "$ip" = 192.0.2.255 ] && continue
+        [ "$ip" = ${NET}.255 ] && continue
         confirm "root@$ip" && return 0
     done
     return 1

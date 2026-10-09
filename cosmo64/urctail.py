@@ -21,12 +21,14 @@ serves one connection at a time and reclaims the slot only after a silent-
 link timeout.
 """
 import os, socket, struct, sys, threading, time, zlib
+import os as _os
+NET = _os.environ.get("UNO_LAB_NET", "192.0.2")   # the lab LAN's /24 prefix
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "..", "pc64", "tools"))
 from unoauto_remote import UnoAutoLink
 
-SKIP = {"192.0.2.100"}
+SKIP = {NET + ".100"}
 PORT = 5099
 
 
@@ -79,7 +81,7 @@ def main(argv):
     if ip:
         sock = socket.create_connection((ip, PORT), timeout=5)
     else:
-        print("sweeping 192.0.2.0/24 for a URC listener on :%d ..." % PORT, flush=True)
+        print("sweeping %s.0/24 for" % NET + " a URC listener on :%d ..." % PORT, flush=True)
         ip, sock = sweep()
         if not sock:
             sys.exit("no listener -- is UnoDOS up with the hub, and leased?")

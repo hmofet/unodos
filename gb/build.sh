@@ -45,4 +45,6 @@ echo "[3/4] assembling kernel.asm (Sharp SM83)..."
 echo "[4/4] linking + fixing (CGB-compatible, padded to 32 KB)..."
 "$RGBLINK" -o "$OUT" -n build/kernel.sym -m build/kernel.map build/kernel.o
 "$RGBFIX" -v -p 0xFF -c -t "UNODOS" "$OUT"
+# No Nintendo artwork in anything published: zero the logo rgbfix just wrote.
+python3 gbzero.py "$OUT" 2>/dev/null || python gbzero.py "$OUT"
 echo "done: gb/$OUT ($(wc -c < "$OUT") bytes)"

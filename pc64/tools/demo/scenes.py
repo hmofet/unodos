@@ -152,7 +152,7 @@ ASSETS = os.path.join(HERE, "assets")
 # It MUST have no passphrase - see sshstore.parse_openssh_ed25519.
 SSH_KEY = os.environ.get("UNO_DEMO_SSH_KEY",
                          os.path.join(ASSETS, "ssh_demo_key"))
-SSH_HOST, SSH_PORT, SSH_USER = "192.0.2.100", 22, "arin"
+SSH_HOST, SSH_PORT, SSH_USER = os.environ.get("UNO_DEMO_SSH_HOST", "192.0.2.100"), 22, os.environ.get("UNO_DEMO_SSH_USER", "arin")
 SSH_SESS, SSH_KEYNAME = "labhost", "demo"
 
 

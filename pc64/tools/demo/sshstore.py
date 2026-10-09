@@ -43,7 +43,7 @@ depend on a crypto package being installed on any of them.
     python3 sshstore.py KEYFILE OUT.DAT --name labhost \\
         --host 192.0.2.100 --user arin [--port 22]
 """
-import hashlib, hmac, struct, sys
+import hashlib, hmac, os, struct, sys
 
 # ---- struct geometry (must match unossh.h / unossh_store.c) ---------------
 NAMELEN, HOSTLEN = 32, 64
@@ -254,7 +254,7 @@ def main(argv):
     ap.add_argument("out", nargs="?")
     ap.add_argument("--name", default="labhost", help="saved-session name")
     ap.add_argument("--keyname", default="demo")
-    ap.add_argument("--host", default="192.0.2.100")
+    ap.add_argument("--host", default=os.environ.get("UNO_DEMO_SSH_HOST", "192.0.2.100"))
     ap.add_argument("--port", type=int, default=22)
     ap.add_argument("--user", default="arin")
     ap.add_argument("--selftest", action="store_true")

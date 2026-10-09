@@ -22,7 +22,7 @@ set -e
 cd "$(dirname "$0")"
 
 PY="${PY:-python3}"
-BUILDHOST="${BUILDHOST:-arin@192.0.2.114}"
+BUILDHOST="${BUILDHOST:-buildhost}"   # an ssh alias for the Linux build box
 QDIR="/work/unodos-pc64arm"
 LMBIN="/opt/llvm-mingw-20260826-ucrt-ubuntu-22.04-x86_64/bin"
 CC="$LMBIN/aarch64-w64-mingw32-clang"

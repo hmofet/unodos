@@ -12,8 +12,8 @@ set -e
 cd "$(dirname "$0")"
 
 PY="${PY:-python3}"
-BUILDHOST="${BUILDHOST:-arin@192.0.2.114}"
-AMAN="${AMAN:-arin@192.0.2.113}"
+BUILDHOST="${BUILDHOST:-buildhost}"   # an ssh alias for the Linux build box
+AMAN="${AMAN:-winhost}"   # an ssh alias for the Windows dev box
 REPO_WIN="C:/Users/arin/Documents/Github/unodos-cosmo"     # this worktree on winhost
 QDIR="/work/unodos-cosmo"                                    # build dir on buildhost
 

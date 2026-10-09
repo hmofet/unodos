@@ -1,4 +1,5 @@
 #!/bin/sh
+NET="${UNO_LAB_NET:-192.0.2}"   # the lab LAN's /24 prefix; set UNO_LAB_NET to yours
 # cosmo64/readlog.sh -- read the UnoDOS debug log back off the Cosmo.
 #
 # The loop:
@@ -36,7 +37,7 @@ set -e
 # galaxy's wired address, and this script's siblings write to /dev/mmcblk0.
 find_dev() {
     # addresses it has actually held, newest first
-    for a in 192.0.2.65 192.0.2.121 192.0.2.56; do
+    for a in ${NET}.65 ${NET}.121 ${NET}.56; do
         if [ "$(ssh -o BatchMode=yes -o ConnectTimeout=4 "root@$a" hostname \
                 2>/dev/null)" = cosmocom ]; then
             echo "root@$a"
@@ -53,7 +54,7 @@ find_dev() {
     wait 2>/dev/null
     found=
     for ip in $(arp -a | grep -oE "192\.168\.2\.[0-9]+" | sort -u); do
-        [ "$ip" = 192.0.2.255 ] && continue
+        [ "$ip" = ${NET}.255 ] && continue
         if [ "$(ssh -o BatchMode=yes -o ConnectTimeout=3 \
                 -o StrictHostKeyChecking=no "root@$ip" hostname \
                 2>/dev/null)" = cosmocom ]; then

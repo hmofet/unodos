@@ -22,13 +22,15 @@ phone), so it sweeps rather than remembers. 192.0.2.100 is skipped, as in
 urctail.py: that is labhost's own :5099, not the Cosmo.
 """
 import os, re, socket, sys, threading, time
+import os as _os
+NET = _os.environ.get("UNO_LAB_NET", "192.0.2")   # the lab LAN's /24 prefix
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "pc64", "tools"))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from unoauto_remote import UnoAutoLink
 
 PORT = 5099
-SKIP = {"192.0.2.100"}
+SKIP = {NET + ".100"}
 STORY = re.compile(r"sdmmc|msdc|blk|storage|card|vol |mount|fat|pmic|rail|afe:|snd|"
                    r"entering uno_main|modload|VERB", re.I)
 
