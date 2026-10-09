@@ -5,6 +5,38 @@ All notable changes to UnoDOS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **The v3.35.0 note "Not yet on pc64" is out of date: all three gaps are
+  closed.** Home, End, Page Up and Page Down now reach every app from both a
+  PS/2 and a USB keyboard (USB keyboards also gain F1 to F12, which they never
+  delivered before). Shift extends a selection in UnoWord and a cell range in
+  UnoCalc, from the arrows and from Shift+click: the shell now tells an app
+  which modifiers came with each key and click, where before it reported none.
+  And UnoWord, UnoCalc and UnoShow open their menus from the keyboard, with F10
+  or Alt plus the underlined letter.
+- **Italic text sits where it was measured.** Every italic glyph was drawn
+  about a quarter of the baseline height to the right of where it was
+  measured, so in UnoWord a space typed right after italic text vanished under
+  the last letter and the caret sat on top of it. Italic now leans about the
+  baseline, everywhere text is drawn italic (UnoWord, UnoShow, the Editor
+  and the browser).
+- **Studio's assistant panel no longer drops text when it wraps a line.**
+  The characters between the last space and the wrap point were lost, so "a
+  question" wrapped as "a" and "stion".
+- **The Up arrow counts up in a UnoOffice spin box.** In Format > Font, Up
+  took the size down.
+
+### Changed
+- **The screen-mode cycle moved from F10 to Ctrl+F10**, so pressing F10 for a
+  menu bar no longer also changes the display mode.
+
+### Removed
+- **The Network app.** It had been out of the Start menu since July, when
+  its status moved to Control Panel > Network, but its module still shipped
+  in `APPS\`. Control Panel > Network is the network UI.
+
 ## [v3.35.0: Wi-Fi on real hardware, file transfer, and Linux appliances] - 2026-10-09
 
 UnoDOS pc64 joined a real Wi-Fi network, gained a file transfer app with a
