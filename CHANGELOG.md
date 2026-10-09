@@ -5,6 +5,195 @@ All notable changes to UnoDOS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v3.35.0: Wi-Fi on real hardware, file transfer, and Linux appliances] - 2026-10-09
+
+UnoDOS pc64 joined a real Wi-Fi network, gained a file transfer app with a
+proper terminal in it, and learned to run a Linux guest under its own
+hypervisor: Chromium browsing the internet and GIMP, each in a native UnoDOS
+window. The same desktop now also runs on a phone, as source.
+
+**Wi-Fi joins on real hardware.** On a Surface Laptop Go (Intel AX201), UnoDOS
+now scans, joins a WPA2 network, completes the handshake and takes a DHCP
+lease. Getting there meant fixing a receive ring that went deaf after exactly
+one lap, a second firmware load that crashed the radio until reboot (now
+proven with four reloads in one boot, alternating between two networks), and a
+key exchange that could freeze the machine. On a WPA2/WPA3 transition network
+UnoDOS tries WPA3-SAE first and falls back to WPA2-PSK when SAE does not
+complete. Honest caveats: **WPA3-SAE authenticates against a real access point
+but its handshake does not complete**, so a WPA3-only network cannot be joined
+yet; **switching networks after a join is not reliable** (the fast path falls
+back to a firmware reload, which works but is slow); and **joining a remembered
+network automatically at boot is fixed but has not yet been seen working on
+hardware**. Intel Wi-Fi is the only Wi-Fi driver that joins.
+
+**The Network pane answers the question first.** The Control Panel's Network
+tab now opens with "Connected to ..." and the signal, then the networks, then
+the controls, with addresses behind a Details disclosure that is closed by
+default. Networks show a padlock, a signal meter and "Saved", and the one you
+are on sits at the top. There is a Disconnect button. A saved network rejoins
+with its stored passphrase, the password field only appears when it is needed
+and no longer carries one network's password over to another, the reveal eye
+is a target you can actually hit, and Scan no longer freezes the desktop. The
+tray chip names the medium and the network instead of saying "LAN" on a
+machine with no cable. The Network app is now the same summary, with its
+self-tests behind a Run tests button rather than running on open. Not yet
+verified on hardware: the redesigned pane end to end. Clicking Join still
+blocks the desktop for the three or four seconds the association takes.
+
+**UnoTransfer** is a new dual-pane file transfer app with a transfer queue and
+a terminal tab. It speaks SCP (over UnoDOS's own SSH client), HTTP and HTTPS,
+WebDAV and WebDAVS, and TFTP, plus local volume-to-volume copies. Directories
+transfer recursively, a file lands under a work name and is renamed only once
+complete, and a transfer never blocks the desktop. The terminal is a real
+VT100/xterm emulator (cursor motion, colour, scroll regions, the alternate
+screen), so programs like `top` draw a screen rather than escape-code soup.
+SCP is proven end to end against a real sshd, with a recursive pull checked
+byte for byte, a push read back on the server, and a changed host key refused.
+That test ran with UnoDOS in a virtual machine, not on physical hardware.
+Limits: SFTP is listed but marked unavailable until the SSH client gains
+subsystem channels; and each file is staged in memory (8 MB by
+default), so a large single file such as a disk image does not transfer yet,
+while a directory of ordinary files of any total size does.
+
+**Appliances: Linux software inside UnoDOS.** unovirt, the pc64 hypervisor,
+now boots a Linux appliance whose application appears in a native UnoDOS
+window. The first is **Chromium, browsing the internet over HTTPS** on a
+network address the guest leases for itself from the real network, with an
+address typed on the UnoDOS side navigating the guest's browser. The second is
+**GIMP**, running multi-window. GIMP is what exposed that unovirt never saved
+the guest's FPU/SSE registers, so the guest and UnoDOS were corrupting each
+other's floating-point state; it now saves them on every switch. Requirements
+and caveats, stated plainly:
+
+- It needs an **Intel CPU with VT-x and EPT, enabled in firmware**, and at
+  least about 1.8 GB of free memory. The AMD (SVM) backend is written and
+  compiles, but its first guest entry has never returned, so **AMD machines
+  cannot run appliances**.
+- Every appliance result above was produced with UnoDOS itself running under
+  nested KVM on Intel machines. On real hardware (a ZimaBlade), the browser
+  appliance booted but got no network, because the guest bridge only ever
+  worked on Intel network cards. The Realtek r8169 driver now switches to
+  promiscuous mode for exactly as long as a guest is on the wire, but that fix
+  has **not yet been seen carrying a guest**, and that board's uncached
+  framebuffer holds the appliance display near 4 fps. Realtek USB (rtl8152)
+  and ASIX (ax88179) adapters still cannot carry a guest.
+- The appliance payloads (a Linux kernel and an Alpine root filesystem) are
+  GPL and MIT third-party software and are **not on the release images**.
+  They are built from `pc64/guest/appliance/` on a Linux machine and staged
+  onto the disk yourself.
+- Chromium in the guest still aborts occasionally on an assertion in its
+  number-formatting library and is restarted automatically.
+
+**Android packages, first steps.** The Android runtime (Waydroid) boots on the
+appliance kernel, and an appliance built around it starts Firefox for Android
+full-screen, takes keystrokes and loads pages over HTTPS, from a cold boot with
+nobody driving it. That has been shown under plain QEMU, **not yet under
+unovirt**. On the UnoDOS side, **double-clicking an .APK in Files installs it as
+an ordinary app**: a desktop icon and a Start menu entry that survive a reboot.
+Opening that app today says, accurately, that no Android runtime is connected
+yet; the channel that would connect it is the next phase. The package is not
+copied on install, so moving or deleting the .APK breaks the app.
+
+**UnoCode** caught up with its desktop sibling, which now lives in its own
+repository ([hmofet/unocode-desktop](https://github.com/hmofet/unocode-desktop))
+and is vendored back here. On UnoDOS:
+
+- **UTF-8 end to end.** Accented letters, curly quotes and box-drawing
+  characters can be typed, drawn and selected; before this, anything outside
+  ASCII was unusable.
+- **Workspace search and replace across files** (one undo step per file),
+  Ctrl+D to add a cursor, Go to Symbol, split editors with independent views,
+  and indentation and line endings detected per file and kept on save.
+- **TextMate fidelity.** The regex engine now handles lookaround,
+  backreferences and named groups, so far more of a real grammar loads:
+  Microsoft's TypeScript grammar went from 36.7% of its patterns to 99.8%, and
+  C++ from 32.3% to 100%.
+- **An AI assistant view**: a streaming chat about the open file, with
+  proposed edits shown as a diff and applied as one undo step, and `vscode.lm`
+  for extensions behind a manifest permission. It needs an Anthropic API key.
+  On UnoDOS the key is kept in a plain file on the FAT volume, and the editor
+  says so when you save it, because FAT protects nothing.
+- Extensions get real Promises and `async`/`await`, because unojs, the
+  system's JavaScript engine, gained a microtask queue and a suspending
+  `await`.
+
+The language-server client (diagnostics, completions, hover, go to definition,
+find references, rename, format and format on save) is in the shared code too,
+but it starts a server as a separate process and **UnoDOS has no processes, so
+on UnoDOS it does nothing**. Those features work in UnoCode's desktop builds.
+Build errors do get squiggles under the word they name, on UnoDOS as well.
+
+**cosmo64: the full pc64 desktop on a phone.** A new platform in the tree
+carries the whole pc64 system to the Planet Cosmo Communicator (MediaTek
+MT6771, AArch64). Milestones M0 through M13 are proven on the device itself:
+the desktop at the panel's native resolution, the keyboard, the touch panel
+and the rear touchpad, the eMMC and a microSD card as a persistent volume, USB
+mouse and keyboard, a DHCP lease over USB Ethernet, remote control from a PC,
+`.UNO` apps loading from the SD card, the Office suite, the browser with HTTPS,
+the battery-backed clock, and audio, with MIDI, MP3 and AAC playing through
+the speakers. There is no Wi-Fi and no cellular. **It is source only in this
+release**: there is no binary asset, and it boots from a multiboot slot through
+the phone's own bootloader menu. `cosmo/`, a separate self-contained assembly
+port for the same phone, is also in the tree. Details:
+[cosmo64/README.md](https://github.com/hmofet/unodos/blob/v3.35.0/cosmo64/README.md).
+
+#### Also in this release
+
+- **UnoWord's arrow keys move the caret.** Left/Right (Ctrl by word), Up/Down,
+  Home/End, Page Up/Down and Delete all work, Shift extends the selection, and
+  Bold, Italic, Underline, font and size chosen with nothing selected now apply
+  to what you type next. The Size box works at all.
+- **UnoOffice draws text beyond ASCII.** Accented letters in opened documents
+  were drawn as broken glyphs; UnoWord, UnoCalc and UnoShow now keep CP-1252 in
+  the document and convert to UTF-8 wherever text is drawn, typed or copied.
+- **UnoOffice for Windows, macOS and Linux** ships separately:
+  [UnoOffice 0.3.0](https://github.com/hmofet/unooffice/releases/tag/uoffice-v0.3.0)
+  has installers for all three. The builds are not code-signed.
+- **Shutdown tries ACPI S5 before the firmware**, because on some machines the
+  firmware's power-off never returns, and a shutdown that fails now says on
+  screen which method was tried and why it failed. The Surface Laptop Go still
+  cannot power itself off: both methods hang there, and the screen now says so
+  instead of freezing on a blank splash.
+- **USB on real laptops.** The xHCI driver now takes the controller over from
+  the BIOS properly, gives ports real time to come up, and opens the controller
+  the boot device is on rather than the first one found. On the Surface Laptop
+  Go that is the difference between no keyboard and a working keyboard,
+  touchpad and boot stick after UnoDOS takes over from the firmware.
+- **A USB boot that loses its stick writes nothing.** Previously such a machine
+  could decide another operating system's boot partition was its own and write
+  to it; on one development laptop that left the machine unable to boot.
+- **The system log goes to the boot volume**, not to the first disk that will
+  take a LOGS folder, and finds it again after disks renumber when UnoDOS takes
+  over from the firmware. The boot log also gets a root copy.
+- **On Intel wired NICs**, which run promiscuous, a frame addressed to another
+  machine is now dropped before the network stack sees it; before, another
+  machine's DHCP reply could be taken for ours.
+- **Studio's AI pane** sends the whole conversation rather than only the last
+  message, and its default model is current.
+- An installed Python app's window and taskbar button use its name ("Duum")
+  rather than its file name ("DUUM.UNO").
+- **Text fields scroll back properly.** Moving left or backspacing used to
+  snap the view and hide text that would have fit, which in a password field
+  looked like the caret jumping around. The reveal eye's hit area is now the
+  full height of the field rather than a small square in its middle. Both were
+  reported from the Surface Laptop Go.
+
+#### Platforms
+
+The pc64 images (`unodos-pc64-hybrid.img.gz`, `unodos-pc64.iso`) are rebuilt
+from this tag. As before, they carry no Intel Wi-Fi firmware:
+`unodos-wifi-firmware-tool.zip` fetches it on your own machine if you want
+Wi-Fi. Freedoom (BSD-3-Clause) is on the disk as Duum's game data. Both USB
+flashers (`UnoDosFlasher.exe` for Windows, `UnoDosFlasher-macOS.zip`, signed)
+are rebuilt from this tag and embed these images.
+
+Every other port's artifact is carried from v3.34.0, because its source did not
+change. Two exceptions are worth stating: the PS2 and Dreamcast ports compile
+the shared unoui toolkit, which did change (only the text-field fix above).
+Those two artifacts were **not** rebuilt, so they do not have that fix.
+
+cosmo64 has no artifact in this release.
+
 ## [v3.34.0: an editor, the modern Office formats, and a pass over real hardware] - 2026-08-21
 
 Three things landed together and one exercise checked them. pc64 gained a

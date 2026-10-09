@@ -13,13 +13,15 @@ emulators or instruction-level harnesses.**
 distance between them is where operating systems actually break. They are kept
 in separate columns here for that reason.
 
-Last reconciled: 2026-08-21, against release
-[v3.34.0](https://github.com/hmofet/unodos/releases/tag/v3.34.0). Only the
-pc64 images were rebuilt for that release (UnoCode, OOXML in UnoOffice,
-WPA3-SAE, and the fixes an 86-item conformance pass on real hardware turned
-up). Every other artifact is byte-identical to v3.33.0, and through it to
-v3.32.0, whose binaries were all built from this tree in one pass on
-2026-08-08.
+Last reconciled: 2026-10-09, against release
+[v3.35.0](https://github.com/hmofet/unodos/releases/tag/v3.35.0). Only the
+pc64 images were rebuilt for that release (Wi-Fi joins on real hardware,
+UnoTransfer, Linux appliances under unovirt, and UnoCode catching up with its
+desktop sibling). Every other artifact is carried unchanged from v3.34.0, and
+through it from v3.32.0, whose binaries were all built from this tree in one
+pass on 2026-08-08. The PS2 and Dreamcast artifacts are carried too although
+the shared unoui toolkit they compile gained a text-field fix, so those two do
+not have it. One new platform, cosmo64, is in the tree as source only.
 
 **pc64 is the exception to the "nothing was re-tested on hardware" caveat
 below.** On 2026-08-20 the pc64 desktop was driven end to end on two physical
@@ -46,7 +48,7 @@ the port's profile).
 
 | Platform | CPU | Emulator / harness | Real hardware | Parity | Known gaps |
 |---|---|---|---|---|---|
-| **Modern PC (pc64)** | x86-64 | QEMU + OVMF (`harness.py`, `nettest.py`) | ✅ Lenovo ThinkPad X1 Carbon Gen 8; ✅ ZimaBlade (boots from USB, runs detached from firmware, and carried the 2026-08-20 conformance pass: 23/23 apps, 60 fps, 95-96% idle); ⚠️ Lenovo ThinkPad X13 Yoga (boots and runs, but its network path slows progressively - see gaps) | full + net/TLS/browser/3D | Wi-Fi firmware not redistributable, so published images ship without it (see below). On the X13 Yoga a LAN gateway ping degrades about 4x per round (267 ms, 1020 ms, 3806 ms) until the main loop stalls; DHCP timing out on that machine is very likely the same slowness. Unresolved, and Yoga-specific so far. AMD/SVM hypervisor backend written but never completed a VMRUN. |
+| **Modern PC (pc64)** | x86-64 | QEMU + OVMF (`harness.py`, `nettest.py`) | ✅ Lenovo ThinkPad X1 Carbon Gen 8; ✅ ZimaBlade (boots from USB, runs detached from firmware, and carried the 2026-08-20 conformance pass: 23/23 apps, 60 fps, 95-96% idle); ⚠️ Microsoft Surface Laptop Go (Intel AX201 Wi-Fi joins a WPA2 network and takes a DHCP lease; it cannot power itself off); ⚠️ Lenovo ThinkPad X13 Yoga (boots and runs, but its network path slows progressively - see gaps) | full + net/TLS/browser/3D | Wi-Fi firmware not redistributable, so published images ship without it (see below). On the X13 Yoga a LAN gateway ping degrades about 4x per round (267 ms, 1020 ms, 3806 ms) until the main loop stalls; DHCP timing out on that machine is very likely the same slowness. Unresolved, and Yoga-specific so far. AMD/SVM hypervisor backend written but never completed a VMRUN. Wi-Fi: WPA3-SAE authenticates against a real access point but its handshake does not complete, and switching networks after a join is unreliable. |
 
 ## Home computers
 
@@ -61,7 +63,7 @@ the port's profile).
 | **Apple IIgs** | 65C816 | From-scratch py65816 core, 9 suites green | ⏳ GSplus / KEGS / MAME pending | full | Audio never verified by ear. |
 | **Macintosh Plus (bare-metal OS)** | 68000 | Unicorn harness; Mini vMac | ✅ real Macintosh SE via Floppy Emu | full | — |
 | **Macintosh System 7 (hosted)** | 68K | Executor (ROM-free) | ⏳ Mac II-class pending | M3 | — |
-| **Macintosh System 1-6 (hosted)** | 68K | Executor | ⏳ Mac Plus pending | M3 minus colour Theme | **No binary in any release, v3.34.0 included.** The Retro68 toolchain on the build machine is incomplete; source builds once Retro68 is installed. |
+| **Macintosh System 1-6 (hosted)** | 68K | Executor | ⏳ Mac Plus pending | M3 minus colour Theme | **No binary in any release, v3.35.0 included.** The Retro68 toolchain on the build machine is incomplete; source builds once Retro68 is installed. |
 | **PowerPC Macintosh** | PowerPC 32 | Unicorn PPC32 big-endian core, Open Firmware client | ⏳ real Mac pending | 11 of 11 | Native ADB input and codec audio delivery unproven. |
 
 ## Consoles
@@ -90,6 +92,7 @@ the port's profile).
 | Platform | CPU | Emulator / harness | Real hardware | Parity | Known gaps |
 |---|---|---|---|---|---|
 | **Raspberry Pi** | ARM Cortex-A (AArch64) | Unicorn AArch64 core; PWM→WAV reconstruction | ✅ boots to the desktop on a **real Pi 3** (2026-06-17) | 11 of 11 | Two open faults on hardware: the background renders **brown** (an XRGB/BGR pixel-order swap), and input is **serial-only** (no USB HID). |
+| **Planet Cosmo Communicator (cosmo64)** | MediaTek MT6771 (AArch64) | QEMU virt gate | ✅ the full pc64 desktop on the phone itself, milestones M0-M13 (2026-08-31 to 2026-09-08): keyboard, touch panel, rear touchpad, eMMC + microSD, USB HID, USB Ethernet DHCP, `.UNO` apps, Office, HTTPS browser, RTC, audio | full pc64 roster as built for aarch64 | **Source only: no binary in any release, v3.35.0 included.** Boots from a multiboot slot through the phone's own bootloader. No Wi-Fi, no cellular. See `cosmo64/README.md`. |
 | **PinePhone** | Allwinner A64 | Unicorn AArch64 core; DE2 sink, I2S PCM→WAV | ❌ **does not boot on a real PinePhone** (2026-06-17) | 11 of 11 | Unresolved. Prime suspects are the U-Boot `go` cache-coherency caveat and DE2/DSI display bring-up. Needs a serial-console debugging pass. The published image is emulator-verified only and **should be treated as untested on hardware.** |
 
 ---
@@ -111,8 +114,9 @@ emulated NIC. To enable Wi-Fi on real hardware, use
 
 ## How to check any of this yourself
 
-Every row above corresponds to a downloadable binary in
-[v3.34.0](https://github.com/hmofet/unodos/releases/tag/v3.34.0), and the
+Every row above, cosmo64 and the hosted Mac rows excepted, corresponds to a
+downloadable binary in
+[v3.35.0](https://github.com/hmofet/unodos/releases/tag/v3.35.0), and the
 emulator named in each row is the one that was used. Load the file and see. If
 something here is wrong, that is a bug in this file and worth reporting.
 
@@ -129,7 +133,8 @@ Known limitations of this reconciliation, stated so nobody over-trusts it:
   C64 entry above is taken from `c64/README.md`, which records it as
   harness-verified only.
 - Hardware dates are as recorded at the time of the test. **pc64 is the one
-  row re-tested on physical hardware for this release** (2026-08-20, ZimaBlade
-  and X13 Yoga). Nothing else was. Only the pc64 binaries were rebuilt for
-  v3.34.0, and a rebuilt binary is not a re-verified one; every other artifact
-  is the same bytes that shipped in v3.32.0.
+  shipping row re-tested on physical hardware since v3.32.0** (2026-08-20,
+  ZimaBlade and X13 Yoga; the Surface Laptop Go Wi-Fi work in late August).
+  Only the pc64 binaries were rebuilt for v3.35.0, and a rebuilt binary is not
+  a re-verified one; every other artifact is the same bytes that shipped in
+  v3.32.0.
