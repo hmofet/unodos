@@ -551,8 +551,11 @@ int uod_handle(uod_ui *s, const unoui_event *e)
                     return 1;
                 }
                 case UOD_SPIN: {
+                    /* A spin counts UP on Up - the opposite of a list, whose
+                     * Down walks to the next row.  Sharing the list's `d`
+                     * made Font > Size fall from 10 to 6 on Up (2026-10-09). */
                     const uod_item *it = &s->d->item[s->focus];
-                    int v = s->val[s->focus] + d;
+                    int v = s->val[s->focus] - d;
                     if (v < it->lo) v = it->lo;
                     if (v > it->hi) v = it->hi;
                     s->val[s->focus] = v;

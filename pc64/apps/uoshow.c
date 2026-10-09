@@ -1261,6 +1261,14 @@ static int uw_key(int uni, int scan, int ctrl)
         pc64_shell_dirty();
         return 1;
     }
+    /* F10 and Alt+letter belong to the menu bar (uochrome.h), and must be
+     * caught before the active-menu pass-through below or F10 could never
+     * close what it opened */
+    switch (uoc_hook_key(&CH, uni, scan, uoa_key_mods())) {
+    case UOC_HK_TAKEN: pc64_shell_dirty(); return 1;
+    case UOC_HK_PASS:  return 0;
+    default: break;
+    }
     /* the menu bar has the keyboard (F10, Alt+letter): its keys go to it */
     if (uoc_menu_active(&CH)) return 0;
     if (scan == 0x0F) { do_command(C_SHOW); return 1; }     /* F5 */

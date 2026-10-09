@@ -89,7 +89,11 @@ void uoa_save_as_done(int ok)
     else g_pending = UOA_NONE;
 }
 
-int  uoa_key_mods(void) { return g_host && g_host->mods ? g_host->mods() : 0; }
+/* pc64 installs no host, but its shell exports the same answer (the
+ * fb_width() arrangement: the desktop and the host harness define it too) */
+int pc64_shell_key_mods(void);
+int  uoa_key_mods(void)
+{ return g_host && g_host->mods ? g_host->mods() : pc64_shell_key_mods(); }
 
 int  uoa_can_exit(void) { return g_host && g_host->quit; }
 void uoa_exit(void) { if (uoa_can_exit()) uoa_request(UOA_CLOSE); }

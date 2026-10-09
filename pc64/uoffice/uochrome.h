@@ -251,6 +251,18 @@ int  uoc_menu_open(const uoc_ui *u);
 int  uoc_menu_active(const uoc_ui *u);
 void uoc_dismiss(uoc_ui *u);
 
+/* The menu keyboard for a host whose only door into the app is its key hook
+ * (uni, scan, ctrl).  pc64's is: F10 reaches the hook as EFI scan 0x14 and
+ * nothing else, and Alt+F as a bare 'f' the app would type.  Call this at the
+ * top of the hook, after any modal dialog, with uoa_key_mods():
+ *   UOC_HK_TAKEN  F10 toggled the bar - the hook returns 1;
+ *   UOC_HK_PASS   Alt+letter - the hook returns 0, so the host delivers it to
+ *                 the canvas as a character carrying UI_MOD_ALT, which
+ *                 uoc_handle() turns into the menu;
+ *   UOC_HK_NONE   not the menu bar's. */
+enum { UOC_HK_NONE = 0, UOC_HK_TAKEN, UOC_HK_PASS };
+int  uoc_hook_key(uoc_ui *u, int uni, int scan, int mods);
+
 /* ---- the icon atlas (installed by uoicons.h) ------------------------------
  * One sprite sheet of `cell`x`cell` cells, `cols` across, in fb_px order.
  * Until artwork is installed every icon draws as a neutral placeholder, so

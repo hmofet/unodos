@@ -110,6 +110,9 @@ static void host_quit(void) { g_running = 0; }
 static void host_modified(int on) { plat_set_modified(on); }
 static int  g_key_mods;           /* the modifiers of the key being delivered */
 static int  host_mods(void) { return g_key_mods; }
+/* uoapp.c's fallback when no host answers - never reached here, since kHost
+ * has mods(), but the symbol is pc64's shell export and must link */
+int pc64_shell_key_mods(void) { return g_key_mods; }
 static const uoa_host kHost = { host_quit, plat_clip_set, plat_clip_get, host_modified,
                                 host_mods };
 

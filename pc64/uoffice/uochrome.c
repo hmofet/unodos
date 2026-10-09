@@ -1374,6 +1374,24 @@ static int handle_key(uoc_ui *u, const unoui_event *e, int *cmd)
     return 0;
 }
 
+int uoc_hook_key(uoc_ui *u, int uni, int scan, int mods)
+{
+    /* EFI scan 0x14 is F10.  Not with Ctrl (the platform's mode cycle) nor
+     * Alt; Shift+F10 is the context menu everywhere else, so not that either. */
+    if (scan == 0x14 && !uni && !(mods & (UI_MOD_CTRL | UI_MOD_ALT | UI_MOD_SHIFT))) {
+        unoui_event e;
+        int cmd = 0, i;
+        for (i = 0; i < (int)sizeof e; i++) ((char *)&e)[i] = 0;
+        e.kind = UI_EV_KEY; e.key = UOC_KEY_F10; e.mods = mods;
+        handle_key(u, &e, &cmd);
+        return UOC_HK_TAKEN;
+    }
+    /* Ctrl+Alt is AltGr on European layouts, which types */
+    if ((mods & (UI_MOD_ALT | UI_MOD_CTRL)) == UI_MOD_ALT && uni > ' ' && uni < 127)
+        return UOC_HK_PASS;
+    return UOC_HK_NONE;
+}
+
 static int handle_char(uoc_ui *u, const unoui_event *e, int *cmd)
 {
     int c = e->ch, i, n;

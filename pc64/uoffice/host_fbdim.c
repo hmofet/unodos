@@ -15,3 +15,7 @@
 
 int fb_width(void)  { return FB_W; }
 int fb_height(void) { return FB_H; }
+
+/* the same arrangement for the shell's key-modifier export (uoapp.c): the
+ * harness drives the apps without a keyboard, so nothing is ever held */
+int pc64_shell_key_mods(void) { return 0; }

@@ -236,6 +236,12 @@ int main(int argc, char **argv)
         streq("spin: the field followed", uod_text(&D, F_SIZE), "9");
         for (i = 0; i < 8; i++) click(x + 44, y + sh * 3 / 4);
         eq("spin: clamped at its floor", uod_value(&D, F_SIZE), 6);
+        /* the keyboard agrees with the steppers: Up counts up (it used to
+         * share a list's direction and count down) */
+        ev_key(UI_KEY_UP, 0); ev_key(UI_KEY_UP, 0);
+        eq("spin: Up counts up", uod_value(&D, F_SIZE), 8);
+        ev_key(UI_KEY_DOWN, 0);
+        eq("spin: Down counts down", uod_value(&D, F_SIZE), 7);
     }
 
     /* a combo drops a list and picks from it */

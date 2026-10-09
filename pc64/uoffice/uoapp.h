@@ -100,7 +100,8 @@ int         uoa_open_vol(void);
 const char *uoa_open_name(void);
 
 /* The modifiers (UI_MOD_*) held for the key being handled, so Shift+arrow
- * can extend a selection.  0 when the host cannot tell (pc64). */
+ * can extend a selection.  The host's mods() when it has one; otherwise the
+ * pc64 shell's pc64_shell_key_mods(), which every build provides. */
 int  uoa_key_mods(void);
 
 /* File > Exit: the same path the close box takes */

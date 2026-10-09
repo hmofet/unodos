@@ -1168,6 +1168,14 @@ static int uw_key(int uni, int scan, int ctrl)
         pc64_shell_dirty();
         return 1;
     }
+    /* F10 and Alt+letter belong to the menu bar (uochrome.h), and must be
+     * caught before the active-menu pass-through below or F10 could never
+     * close what it opened */
+    switch (uoc_hook_key(&CH, uni, scan, uoa_key_mods())) {
+    case UOC_HK_TAKEN: pc64_shell_dirty(); return 1;
+    case UOC_HK_PASS:  return 0;
+    default: break;
+    }
     /* the menu bar has the keyboard (F10, Alt+letter): the arrows, Enter
      * and Esc are its, and reach it through the canvas */
     if (uoc_menu_active(&CH)) return 0;
