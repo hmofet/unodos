@@ -1161,6 +1161,67 @@ def sc_probe_uw_space(q):
     shot(q, "probe_uw_space")
 SCENES["probe_uw_space"] = sc_probe_uw_space
 
+def sc_probe_uw_menu(q):
+    """Not a manual figure. Do F10 and Alt+letter reach UnoWord's menu bar?
+    F10 alone should put the bar in keyboard mode (File highlighted), Down
+    then opens File; Esc twice leaves.  Alt+O should open Format directly."""
+    close_all(q); launch(q, A("uoword"), settle=3.0)
+    key(q, "f10", gap=0.6)
+    shot(q, "probe_uw_f10")
+    key(q, "down", gap=0.6)
+    shot(q, "probe_uw_f10_down")
+    key(q, "esc", gap=0.4); key(q, "esc", gap=0.4)
+    combo(q, "alt", "o"); time.sleep(0.8)
+    shot(q, "probe_uw_alt_o")
+    key(q, "esc", gap=0.4); key(q, "esc", gap=0.4)
+    text(q, "typing still works")
+    time.sleep(0.5)
+    shot(q, "probe_uw_after_menu")
+SCENES["probe_uw_menu"] = sc_probe_uw_menu
+
+def sc_probe_uc_keys(q):
+    """Not a manual figure. UnoCalc: PgDn moves the selection a screen down
+    (the Name box says where), Ctrl+Home goes back to A1, Shift+Right x2 then
+    Shift+Down selects B..C over two rows; Alt+E opens Edit."""
+    close_all(q); launch(q, A("uocalc"), settle=3.0)
+    key(q, "pgdn", gap=0.6)
+    shot(q, "probe_uc_pgdn")
+    combo(q, "ctrl", "home"); time.sleep(0.6)
+    for v in ("1", "2", "3"):
+        text(q, v); key(q, "tab", gap=0.25)
+    combo(q, "ctrl", "home"); time.sleep(0.4)
+    combo(q, "shift", "right"); time.sleep(0.3)
+    combo(q, "shift", "right"); time.sleep(0.3)
+    combo(q, "shift", "down"); time.sleep(0.8)
+    shot(q, "probe_uc_range")
+    combo(q, "alt", "e"); time.sleep(0.8)
+    shot(q, "probe_uc_alt_e")
+    key(q, "esc", gap=0.4); key(q, "esc", gap=0.4)
+SCENES["probe_uc_keys"] = sc_probe_uc_keys
+
+def sc_probe_uw_italic(q):
+    """Not a manual figure. Large italic text, so the caret and the space
+    after it can be judged: Format > Font (Alt+O, Enter), size 28, then
+    Ctrl+I "italic" (shot: caret after the last italic letter), Ctrl+I off,
+    " and" (shot: the space must show)."""
+    close_all(q); launch(q, A("uoword"), settle=3.0)
+    combo(q, "ctrl", "n"); time.sleep(1.0)
+    combo(q, "alt", "o"); time.sleep(0.6)
+    key(q, "ret", gap=0.8)
+    shot(q, "probe_uw_fontdlg")
+    for _ in range(18):                       # the spin, 10 -> 28
+        key(q, "up", gap=0.12)
+    time.sleep(0.4)
+    shot(q, "probe_uw_fontdlg_28")
+    key(q, "ret", gap=0.8)
+    combo(q, "ctrl", "i"); time.sleep(0.6)
+    text(q, "Tilted"); time.sleep(0.6)
+    shot(q, "probe_uw_italic_caret")
+    combo(q, "ctrl", "i"); time.sleep(0.6)
+    text(q, " and"); time.sleep(0.6)
+    shot(q, "probe_uw_italic_space")
+SCENES["probe_uw_italic"] = sc_probe_uw_italic
+
 # Scenes that leave something on screen, and therefore go LAST whatever order
 # they were asked for. `close_all` is Ctrl-W, which the shell refuses on a
 # UI_WIN_BARE window - the rule that stops it closing the desktop and the
@@ -1231,7 +1292,11 @@ def main():
         "-display", "none",
         "-qmp", "unix:%s,server,nowait" % QMP_SOCK,
         "-debugcon", "file:build/ovmf.log", "-global", "isa-debugcon.iobase=0x402",
-    ] + disk + cpu + net)
+    ] + disk + cpu + net
+      # UNO_QEMU_EXTRA: more QEMU arguments, space-separated - e.g.
+      # "-device usb-kbd -machine q35,i8042=off" to drive the guest through
+      # the USB HID keyboard path instead of PS/2.
+      + os.environ.get("UNO_QEMU_EXTRA", "").split())
     try:
         q = Qmp(QMP_SOCK)
         print("qemu up; waiting for boot...", flush=True)
