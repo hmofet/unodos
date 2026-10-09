@@ -496,7 +496,7 @@ disabled. Validated on the X1 Carbon Gen 8; any 64-bit UEFI PC is in scope.
   maps, `gColMap`/`gRowMap`). So a *low* resolution fills the screen as a big
   chunky UI instead of sitting in a small letterboxed box. The core re-reads
   its screen rect via `uno_screen_changed()` and repaints, rescuing stranded
-  windows. Boot default is ~half the panel (fills exactly at 2×). **F10**
+  windows. Boot default is ~half the panel (fills exactly at 2×). **Ctrl+F10**
   cycles GOP modes for external monitors. `uno_pc64_lowres()` drops the fb to
   ~¼ the panel for full-screen 3D (Runner), then the same scaler upscales it -
   ~16× fewer pixels for the software rasteriser, the difference between a

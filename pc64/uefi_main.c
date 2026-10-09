@@ -785,8 +785,9 @@ void uno_pc64_lowres(int on)
     }
 }
 
-/* F10: cycle GOP modes (external monitors; a laptop panel may not sync a
-   non-native mode - keep pressing F10, the cycle returns to the native one) */
+/* Ctrl+F10: cycle GOP modes (external monitors; a laptop panel may not sync a
+   non-native mode - keep pressing it, the cycle returns to the native one).
+   Plain F10 belongs to the focused app's menu bar. */
 static void cycle_mode(void)
 {
     UINT32 next;
@@ -1786,6 +1787,11 @@ static void map_key(UINT16 scan, CHAR16 uni, short mods)
 #endif
     gLiveMods = uim;                  /* latch: the best "held now" a keystroke
                                          can tell us on the firmware path */
+    /* Ctrl+F10: the platform's GOP mode cycle (external monitors).  It used to
+       be bare F10, which is the key every Windows-style menu bar answers to -
+       UnoOffice's included - so a user opening a menu also changed the screen
+       mode.  Consumed here, before the ring, so no app sees it as well. */
+    if (scan == SCAN_F10 && (mods & cmdKey)) { cycle_mode(); return; }
     raw_push((int)scan, (int)uni, uim);
     mods = (short)(mods & ~UNO_GUIKEY);   /* the borrowed bit is ours, not Mac's */
     switch (scan) {                           /* Mac keycode + arrow ASCII */
@@ -1795,9 +1801,6 @@ static void map_key(UINT16 scan, CHAR16 uni, short mods)
     case SCAN_DOWN:  post_key_mod(0x7D, 0x1F, mods); return;
     case SCAN_ESC:   post_key_mod(0x35, 0x1B, mods); return;
     case SCAN_DELETE: post_key_mod(0x33, 0x08, mods); return;
-    case SCAN_F10:   cycle_mode();  return;   /* platform: GOP mode cycle
-                                                 (desktop resolution lives in
-                                                  the Settings app) */
     }
     /* Ctrl+letter arrives as a control code (^S = 0x13) - normalize. Gate on
        cmdKey specifically: Alt or Shift alone never produces a control code,

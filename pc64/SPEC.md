@@ -511,7 +511,7 @@ BROWSER, JS, STUDIO, PHOTOS, PAINT, GAME, INST, MAC, PY, LIBC, HV.
 - **S-BOOT-02** [manual] Boot MUST NOT call GOP SetMode: the firmware's
   native mode is kept (eDP panels accept 640×480 then stop scanning out);
   the desktop is a logical `modeW/2 × modeH/2` surface fill-scaled at
-  present. F10 mode cycling is the only SetMode and MUST be refused once
+  present. Ctrl+F10 mode cycling is the only SetMode and MUST be refused once
   detached (GOP dies with boot services).
 - **S-BOOT-03** [auto] Present-path selection MUST set `gUseBlt` when the
   pixel format is neither 8-bpp RGB nor BGR or there is no linear
