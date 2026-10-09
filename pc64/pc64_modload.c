@@ -70,6 +70,7 @@ int  pc64_shell_workarea_w(void);
 int  pc64_shell_workarea_h(void);
 void pc64_shell_fullscreen(unoui_window *w);   /* UnoShow's slide show mode */
 int  pc64_shell_is_fullscreen(void);
+int  pc64_shell_key_mods(void);    /* UI_MOD_* of the key being delivered */
 const struct unoui_theme *pc64_shell_theme(void);
 int  pc64_shell_run_user(int vol, const char *path);
 int  pc64_shell_can_run(void);
@@ -395,6 +396,10 @@ static const struct { const char *name; void *addr; } kExports[] = {
      * INSTALLER wrote and any widening here would be a widening of what an
      * installed foreign app can reach. */
     KX(uno_pkg_launch), KX(uno_pkg_runtime_str),
+    /* The modifiers of the key a module's hook is handling (UI_MOD_*).  The
+     * hook is (uni, scan, ctrl), so without this UnoOffice could not tell
+     * Shift+Right from Right, nor Alt+F from F. */
+    KX(pc64_shell_key_mods),
 };
 #define NEXPORT ((int)(sizeof kExports / sizeof kExports[0]))
 
