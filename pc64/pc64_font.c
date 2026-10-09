@@ -312,7 +312,17 @@ static int fdiv3(int v) { return v >= 0 ? v / 3 : -((-v + 2) / 3); }
  * x). In subpixel mode the pen's fraction is honored at 1/3-px resolution by
  * shifting the 5-tap LCD filter's sampling window; in grayscale mode the pen
  * rounds to the nearest pixel. Styles: bold = second strike at +1px, italic =
- * per-row shear (~14 deg) about the baseline. */
+ * per-row shear (~14 deg) about the baseline (shear_of). */
+/* Italic: a row's rightward shift is a quarter of its height ABOVE THE
+ * BASELINE, so the baseline row stays on the pen and descenders lean left.
+ * It was a quarter of the height above the cell's bottom-of-baseline-band
+ * (g_baseline - oy - r), which slid every italic glyph right by baseline/4
+ * as well as slanting it: the ink overran the advance the layout measured,
+ * so a space typed after italic text vanished under the last letter and the
+ * caret sat on top of it (UnoWord, 2026-10-09).  Arithmetic shift: a row
+ * below the baseline gives a small negative shift, which is the point. */
+static int shear_of(const gcache *gc, int r) { return (-(gc->oy + r)) >> 2; }
+
 static void paint_cov(int pen26, int y, gcache *gc, fb_px fg, int italic)
 {
     if (cur_sub()) {
@@ -327,7 +337,7 @@ static void paint_cov(int pen26, int y, gcache *gc, fb_px fg, int italic)
         for (r = 0; r < gc->h; r++) {
             const unsigned char *row = gc->cov + r * cw3;
             int Y = y + g_baseline + gc->oy + r;
-            int sk = italic ? ((g_baseline - gc->oy - r) >> 2) : 0;
+            int sk = italic ? shear_of(gc, r) : 0;
             /* Build the row's per-channel coverage once, then blend the whole
              * span with a single clip (fb_blend_row_sub) instead of a clip per
              * pixel. Zero-coverage pixels stay in the run - they blend to a
@@ -351,7 +361,7 @@ static void paint_cov(int pen26, int y, gcache *gc, fb_px fg, int italic)
         for (r = 0; r < gc->h; r++) {
             const unsigned char *row = gc->cov + r * gc->w;
             int Y = y + g_baseline + gc->oy + r;
-            int sk = italic ? ((g_baseline - gc->oy - r) >> 2) : 0;
+            int sk = italic ? shear_of(gc, r) : 0;
             /* grayscale: one coverage byte per pixel, same value on all three
              * channels - hand `row` to the R/G/B slots directly. */
             fb_blend_row_sub(xg + gc->ox + sk, Y, gc->w, fg, row, row, row);
