@@ -262,6 +262,14 @@ def boot_qemu():
         "-device", "e1000,netdev=n0",
         "-display", "none",
     ]
+    # BOOT STRAIGHT INTO A 1280x800 DESKTOP, the way scene_boot.py does: a
+    # 2560x1600 EDID panel that OVMF adopts and the shell halves. The Keep
+    # click that raise_resolution needs missed on every try on 2026-10-09
+    # (v3.35.0, KVM), so the film no longer depends on it. UNO_DEMO_GOP=0
+    # restores the old 640x400 boot.
+    if os.environ.get("UNO_DEMO_GOP", "1") != "0":
+        from demo_common import vga_args
+        cmd += vga_args()
     # UNO_DEMO_WAV=<path> attaches a capture sink, for a scene whose subject
     # now makes noise (Duum plays the WAD's own effects and score since
     # 2026-08-19). AC'97 AND NOT INTEL HDA: with an intel-hda device attached
@@ -1112,6 +1120,14 @@ class Demo(object):
 # ---------------------------------------------------------------------------
 # scenes
 # ---------------------------------------------------------------------------
+def s02_pre(d):
+    """v3.35.0 opens Control Panel at boot, and s02 is the session's first
+    scene: without this it sat in the corner of the whole WM scene."""
+    d.close_all()
+    time.sleep(1.0)
+    return True
+
+
 def s02_wm(d):
     """WM: Start menu rises, two apps, drag-to-edge snap, F2 switcher,
     'To desktop 2' via the title-bar menu, desktop switch back.
@@ -2204,10 +2220,23 @@ def s13_ssh(d):
     # No on-camera teardown: reset() closes the window after the stream stops.
 
 
+def s10_pre(d):
+    """Open the System readout BEFORE the stream: it takes ~16 s to appear."""
+    d.close_all()
+    t0 = time.time()
+    d.link.command("launch", "system", timeout=60)
+    print("  s10: system launch answered after %.1f s" % (time.time() - t0))
+    time.sleep(3.0)
+    return True
+
+
 def s10_system_log(d):
     """System readout, then the live log viewer with real navigations."""
     d.beat("open-system")
-    d.launch("system", settle=2.5)
+    # The System readout was opened in s10_pre: on v3.35.0 it takes ~16 s to
+    # appear (measured 15.9 s under KVM, 2026-10-09), which on camera is 16 s
+    # of an empty desktop. The scene opens on it instead.
+    time.sleep(2.5)
     time.sleep(2.0)                                  # hold on the readout
     d.beat("open-logview")
     d.launch("logview", settle=2.5)
@@ -2711,7 +2740,7 @@ def s19_assistant(d):
     time.sleep(16.0)
 
 SCENES = [
-    ("s02", (None, s02_wm)),
+    ("s02", (s02_pre, s02_wm)),
     ("s03", (None, s03_themes)),
     ("s04", (s04_pre, s04_office)),
     ("s05", (None, s05_browser)),
@@ -2725,7 +2754,7 @@ SCENES = [
     ("s08", (s08_pre, s08_duum)),
     ("s13", (s13_pre, s13_ssh)),
     ("s17", (s17_pre, s17_transfer)),
-    ("s10", (None, s10_system_log)),
+    ("s10", (s10_pre, s10_system_log)),
     # s14 (appliances) is LAST and out of the cut's spine: it is the only
     # scene that needs UNO_DEMO_KVM=1 plus a UNO_DETACH=1 build, so it skips
     # itself on every ordinary run. It kept the number it was recorded under
