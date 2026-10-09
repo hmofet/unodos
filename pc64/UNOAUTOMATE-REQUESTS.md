@@ -11632,3 +11632,34 @@ mixer -- is unchanged and is what the Cosmo now runs. Filed with the change
 rather than ahead of it because the seam is the shape the AUDIO-SURVEY
 predicted and it is three lines; say so if the sound lane wants it shaped
 differently.
+
+## 2026-10-09 - CLAIM + DONE (at arin's direction): the pc64 input defects from the v3.35.0 manual re-shoot
+
+One slice, `pc64-input-fixes`, across lanes I do not own, because each fix is
+small and they were found together. Filed here so every owner can see what
+moved in their files:
+
+- **usb stack / key bindings** (`hid_kbd.c`) and **native PS/2**
+  (`pc64_native.c`): Home/End/PgUp/PgDn/Insert mapped to EFI scans 5/6/9/0x0A/7,
+  which every app already handled. `hid_kbd.c` also maps F1..F12
+  (usages 0x3A..0x45), which closes the 2026-08-20 request above
+  ("HID keyboards deliver no F-keys").
+- **platform** (`uefi_main.c`): the GOP mode cycle moved from F10 to Ctrl+F10.
+  F10 is the menu-bar key in every Windows-style app, UnoOffice's included.
+- **shell** (`pc64_uui.c`): `pc64_shell_key_mods()`, the UI_MOD_* of the key
+  being delivered (else the live level), exported to modules as one appended
+  `KX()` line; `feed()` stamps it on every unoui event, so pointer, wheel and
+  character events carry modifiers at last (Shift+click).
+- **unoffice**: `uoa_key_mods()` falls back to that export when no host is
+  installed; `uoc_hook_key()` lets a module key hook hand F10 and Alt+letter to
+  its menu bar; a spin box's Up arrow counts up.
+- **toolkits** (`pc64_font.c`): the italic shear pivots on the baseline
+  (`shear_of`), so italic ink no longer overruns its measured advance.
+- **Studio** (`apps/studio_ai.c`): the assistant's word wrap rewinds to the
+  last space instead of dropping what it had read past it.
+- **app registry**: the Network app (`apps/network.c`, `APP_NETWORK`) is
+  REMOVED (arin's ruling); it had been unreachable since 2026-07-26.
+
+Verified in QEMU on buildhost with probe shots, over PS/2 and over a `usb-kbd`
+with the i8042 disabled (`docs_shots.py probe_uw_keys probe_uw_menu
+probe_uc_keys probe_uw_italic`, plus a URC Shift+click probe).
