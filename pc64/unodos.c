@@ -1244,23 +1244,6 @@ static void draw_icon(short i)
 #endif
         break;
     }
-    case APP_NETWORK: {                     /* globe / linked nodes */
-        Rect nd;
-        SetRect(&g, x, iy, x + 17, iy + 17); uno_box(&g, C_CYAN);
-        SetRect(&nd, x + 2, iy + 2, x + 6, iy + 6);   uno_fill(&nd, C_WHITE);
-        SetRect(&nd, x + 11, iy + 3, x + 15, iy + 7); uno_fill(&nd, C_MAG);
-        SetRect(&nd, x + 6, iy + 10, x + 10, iy + 14); uno_fill(&nd, C_WHITE);
-#if UNO_COLOR
-        RGBForeColor(&kPalette[C_WHITE]);
-#endif
-        MoveTo(x + 4, iy + 4); LineTo(x + 13, iy + 5);
-        MoveTo(x + 13, iy + 5); LineTo(x + 8, iy + 12);
-        MoveTo(x + 8, iy + 12); LineTo(x + 4, iy + 4);
-#if UNO_COLOR
-        RGBForeColor(&kBlack);
-#endif
-        break;
-    }
     case APP_MUSIC:                         /* eighth note */
         SetRect(&g, x + 2, iy + 11, x + 8, iy + 17);
         uno_fill(&g, C_CYAN);

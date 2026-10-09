@@ -209,8 +209,8 @@ static const AppInterface *iface(short proc)
 #include "pc64_uui_apps.h"
 
 /* Network removed as a standalone app (2026-07-26): its status/settings live in
- * the Control Panel's Network tab now. The APP_NETWORK proc stays in the module
- * table but is no longer surfaced as a launchable app. */
+ * the Control Panel's Network tab now. The module itself was deleted on
+ * 2026-10-09 (arin), after shipping unreachable in APPS\ for ten weeks. */
 static const short kProc[UNOAPP_COUNT] =
     { APP_DOSTRIS, APP_PACMAN, APP_OUTLAST, APP_TRACKER, APP_PAINT };
 static const signed char kGame[UNOAPP_COUNT] = { 1, 1, 1, 0, 0 };

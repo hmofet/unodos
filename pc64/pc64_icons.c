@@ -116,7 +116,7 @@ static const struct { const char *name; unsigned char id; } kIconNames[] = {
     { "setup",   PCI_SETUP   }, { "music",   PCI_MUSIC   },
     { "dostris", PCI_DOSTRIS }, { "pacman",  PCI_PACMAN  },
     { "outlast", PCI_OUTLAST }, { "tracker", PCI_TRACKER },
-    { "paint",   PCI_PAINT   }, { "network", PCI_NETWORK },
+    { "paint",   PCI_PAINT   },
     { "runner",  PCI_RUNNER  }, { "browser", PCI_BROWSER },
     { "studio",  PCI_STUDIO  }, { "photos",  PCI_PHOTOS  },
     { "uoword",  PCI_UOWORD  }, { "uocalc",  PCI_UOCALC  },

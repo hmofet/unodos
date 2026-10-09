@@ -426,7 +426,7 @@ if [ "$1" != "legacy" ]; then
       echo "};";
       echo "#define KEXPORTS_N ((int)(sizeof kKexports / sizeof kKexports[0]))";
     } > build/apps/ucc_kexports.h
-    for app in dostris pacman outlast music tracker paint network; do
+    for app in dostris pacman outlast music tracker paint; do
         "$CC" $UCF -DUNO_APP_SYM=uno_app_main_$app -c -o "build/apps/$app.o" "apps/$app.c"
         "$NM" -u "build/apps/$app.o" | awk '{print $2}' | sort -u > "build/apps/$app.syms"
         # decoupling assert: every import must be in the kernel export table
@@ -1078,7 +1078,7 @@ for c in $(find bearssl/src -name '*.c' | sort); do
     "$CC" $BSSLF -c -o "build/bssl_$base.o" "$c"
     OBJS="$OBJS build/bssl_$base.o"
 done
-for app in sysinfo clock files notepad music dostris outlast pacman tracker paint theme settings network runner; do
+for app in sysinfo clock files notepad music dostris outlast pacman tracker paint theme settings runner; do
     "$CC" $CFLAGS -DUNO_APP_SYM=uno_app_main_$app -c -o "build/app_$app.o" "apps/$app.c"
     OBJS="$OBJS build/app_$app.o"
 done

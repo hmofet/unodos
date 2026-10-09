@@ -414,7 +414,7 @@ def main():
 
     log("")
     log("Done. Firmware is on the stick under FIRMWARE\\  (%s)." % ", ".join(os.path.basename(x) for x in got))
-    log("Edit WIFI.CFG with your network, then boot UnoDOS and open Network > Connect WiFi.")
+    log("Edit WIFI.CFG with your network, then boot UnoDOS and open Control Panel > Network.")
 
 if __name__ == "__main__":
     main()

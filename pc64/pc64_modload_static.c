@@ -24,7 +24,6 @@ const AppInterface *uno_app_main_tracker(const KernelApi *k);
 const AppInterface *uno_app_main_paint(const KernelApi *k);
 const AppInterface *uno_app_main_theme(const KernelApi *k);
 const AppInterface *uno_app_main_settings(const KernelApi *k);
-const AppInterface *uno_app_main_network(const KernelApi *k);
 const AppInterface *uno_app_main_runner(const KernelApi *k);
 
 static const UnoAppEntry gEntry[APP_NAPPS] = {
@@ -40,7 +39,6 @@ static const UnoAppEntry gEntry[APP_NAPPS] = {
     uno_app_main_paint,             /* APP_PAINT   */
     uno_app_main_theme,             /* APP_THEME   */
     uno_app_main_settings,          /* APP_SETTINGS */
-    uno_app_main_network,           /* APP_NETWORK */
     uno_app_main_runner             /* APP_RUNNER */
 };
 

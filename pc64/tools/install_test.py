@@ -379,7 +379,7 @@ def make_esp_disk():
     os.remove(fat)
 
 
-APPS = ["DOSTRIS", "PACMAN", "OUTLAST", "MUSIC", "TRACKER", "PAINT", "NETWORK"]
+APPS = ["DOSTRIS", "PACMAN", "OUTLAST", "MUSIC", "TRACKER", "PAINT"]
 
 
 def verify_paths(label, paths):

@@ -425,7 +425,6 @@ static const char *kModFile[APP_NAPPS] = {
     "PAINT.UNO",                /* APP_PAINT   */
     "THEME.UNO",                /* APP_THEME   */
     "SETTINGS.UNO",             /* APP_SETTINGS */
-    "NETWORK.UNO",              /* APP_NETWORK */
     "RUNNER.UNO",               /* APP_RUNNER  */
 };
 

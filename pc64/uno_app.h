@@ -39,7 +39,7 @@ typedef struct UnoWin {
 
 enum { APP_SYSINFO = 0, APP_CLOCK, APP_FILES, APP_NOTEPAD, APP_MUSIC,
        APP_DOSTRIS, APP_OUTLAST, APP_PACMAN, APP_TRACKER, APP_PAINT,
-       APP_THEME, APP_SETTINGS, APP_NETWORK, APP_RUNNER, APP_NAPPS };
+       APP_THEME, APP_SETTINGS, APP_RUNNER, APP_NAPPS };
 
 typedef struct { unsigned char midi; unsigned char dur; } Note;
 typedef struct { const Note *notes; short count; const char *title; } Song;

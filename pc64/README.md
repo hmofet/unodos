@@ -81,7 +81,7 @@ and all the drivers; only the UI layer differs.
   See "unoui shell" and "Web browser" below.
 - **Legacy shell**: `unodos.c` (WM + icon desktop + module dispatch) +
   `mac_compat.c` (Mac-Toolbox/QuickDraw shim) + `app_loader.c` +
-  `pc64_modload.c` + `apps/*.c` (14 apps incl. `settings.c`, `network.c`,
+  `pc64_modload.c` + `apps/*.c` (13 apps incl. `settings.c`,
   `runner.c`). Built only by `./build.sh legacy`.
 - **Drivers (linked by the build that needs them)**: `e1000.c` (native NIC),
   `net.c` (TCP/IP stack), `tls.c` + `bearssl/` (TLS), `../uno3d/*` (3D),
